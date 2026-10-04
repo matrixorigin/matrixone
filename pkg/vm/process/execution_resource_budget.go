@@ -1159,6 +1159,52 @@ func (g *ExecutionResourceGeneration) ReleaseAllocationCapacity(size uint64) {
 	observeExecutionResourceBudget("memory", "release", "cn", size)
 }
 
+// ExecutionTransientMemoryReservation owns a bounded Go-heap scratch charge.
+// Physical MPool allocations continue to use AllocationAccount as their sole
+// owner; this token is only for temporary buffers that cannot carry one.
+type ExecutionTransientMemoryReservation struct {
+	budget     *ExecutionResourceBudget
+	generation *ExecutionResourceGeneration
+	size       uint64
+	state      atomic.Uint32
+}
+
+// ReserveTransientMemory admits non-MPool scratch against the same query and
+// CN memory ceilings as accounted execution allocations.
+func (g *ExecutionResourceGeneration) ReserveTransientMemory(
+	size uint64,
+) (*ExecutionTransientMemoryReservation, error) {
+	if size == 0 {
+		return &ExecutionTransientMemoryReservation{}, nil
+	}
+	if err := g.acquireMemory(size); err != nil {
+		return nil, err
+	}
+	return &ExecutionTransientMemoryReservation{
+		budget: g.budget, generation: g, size: size,
+	}, nil
+}
+
+func (r *ExecutionTransientMemoryReservation) Release() bool {
+	if r == nil || r.budget == nil || r.generation == nil || r.size == 0 ||
+		!r.state.CompareAndSwap(0, 1) {
+		return false
+	}
+	b := r.budget
+	b.mu.Lock()
+	if r.generation.used < r.size || b.aggregateUsed < r.size {
+		b.mu.Unlock()
+		panic("execution transient memory reservation release underflow")
+	}
+	r.generation.used -= r.size
+	b.aggregateUsed -= r.size
+	r.generation.releaseCount++
+	b.mu.Unlock()
+	observeExecutionResourceBudget("memory", "release", "query", r.size)
+	observeExecutionResourceBudget("memory", "release", "cn", r.size)
+	return true
+}
+
 // acquireMemory admits one physical MPool allocation. The allocation account
 // is the only owner of the charge and releases it from MPool.Free; there is no
 // parallel estimate/reservation token.

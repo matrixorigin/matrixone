@@ -42,7 +42,6 @@ import (
 type DiskCache struct {
 	path               string
 	cacheDataAllocator CacheDataAllocator
-	memoryCache        fscache.DataCache
 	perfCounterSets    []*perfcounter.CounterSet
 
 	updatingPaths struct {
@@ -54,6 +53,7 @@ type DiskCache struct {
 
 	cache        *fifocache.Cache[string, struct{}]
 	capacityFunc fscache.CapacityFunc
+	directoryMu  sync.RWMutex
 
 	async         diskCacheAsyncState
 	writeFailures diskCacheWriteFailureState
@@ -62,6 +62,10 @@ type DiskCache struct {
 		cancel context.CancelFunc
 		done   chan struct{}
 	}
+	// beforeLoadDirectoryCleanup and beforeCacheTempFileCreate are test-only
+	// phase barriers. Production instances leave them nil.
+	beforeLoadDirectoryCleanup func(path string)
+	beforeCacheTempFileCreate  func()
 	// beforeFilePublication is a test-only phase barrier. Production instances
 	// leave it nil, so the publication hot path pays only one predictable branch.
 	beforeFilePublication func()
@@ -258,10 +262,8 @@ func (d *DiskCache) loadCache(ctx context.Context) {
 		}
 
 		if entry.IsDir() {
-			// try remove if empty. for cleaning old structure
 			if path != d.path {
-				// os.Remove will not delete non-empty directory
-				_ = os.Remove(path)
+				d.removeEmptyDirectory(path)
 			}
 			return nil
 
@@ -482,20 +484,11 @@ func (d *DiskCache) Read(
 		}
 		LogEvent(ctx, str_disk_cache_update_states_end)
 
-		allocator := d.cacheDataAllocator
-		if entry.ToCacheData != nil && d.memoryCache != nil {
-			if _, ok := allocator.(capacityGuardedCacheDataAllocator); !ok {
-				allocator = cacheCapacityGuardedAllocator{
-					cache:     d.memoryCache,
-					allocator: allocator,
-				}
-			}
-		}
 		readOffset, readSize := int64(0), entry.Size
 		if diskPath == d.pathForFile(path.File) {
 			readOffset = entry.Offset
 		}
-		if err := entry.ReadFromOSFile(ctx, file, allocator); err != nil {
+		if err := entry.ReadFromOSFile(ctx, file, d.cacheDataAllocator); err != nil {
 			return err
 		}
 		fadviseDontNeed(file, readOffset, readSize)
@@ -625,6 +618,28 @@ func (d *DiskCache) writeFile(
 	return d.writeFileWithFinalizeMode(ctx, diskPath, openReader, false, nil)
 }
 
+func (d *DiskCache) removeEmptyDirectory(path string) {
+	if d.beforeLoadDirectoryCleanup != nil {
+		d.beforeLoadDirectoryCleanup(path)
+	}
+	d.directoryMu.Lock()
+	defer d.directoryMu.Unlock()
+	// os.Remove will not delete a non-empty directory.
+	_ = os.Remove(path)
+}
+
+func (d *DiskCache) createCacheTempFile(dir string) (*os.File, error) {
+	d.directoryMu.RLock()
+	defer d.directoryMu.RUnlock()
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, err
+	}
+	if d.beforeCacheTempFileCreate != nil {
+		d.beforeCacheTempFileCreate()
+	}
+	return os.CreateTemp(dir, "*"+cacheFileTempSuffix)
+}
+
 func (d *DiskCache) writeFileWithFinalizeMode(
 	ctx context.Context,
 	diskPath string,
@@ -694,12 +709,7 @@ func (d *DiskCache) writeFileWithFinalizeMode(
 	}
 
 	// write data
-	dir := filepath.Dir(diskPath)
-	err = os.MkdirAll(dir, 0755)
-	if err != nil {
-		return false, err
-	}
-	f, err := os.CreateTemp(dir, "*"+cacheFileTempSuffix)
+	f, err := d.createCacheTempFile(filepath.Dir(diskPath))
 	if err != nil {
 		return false, err
 	}

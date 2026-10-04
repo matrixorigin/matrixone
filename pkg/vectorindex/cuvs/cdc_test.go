@@ -24,6 +24,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
@@ -810,6 +812,63 @@ func TestSplitIncludeBytes_NoNulls(t *testing.T) {
 	}
 }
 
+func TestIncludeMetadataLoadAndSplit(t *testing.T) {
+	bindings := []IncludeBinding{
+		{Name: `tier"name`, Pos: 0, TypeCode: 0, SizeBytes: 4},
+		{Name: `hash\value`, Pos: 1, TypeCode: 4, SizeBytes: 8},
+	}
+	meta, err := MarshalColMetaJSON([]ColMetaEntry{
+		{Name: bindings[0].Name, Type: bindings[0].TypeCode},
+		{Name: bindings[1].Name, Type: bindings[1].TypeCode},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	includeBytesPerRow, err := CdcIncludeBytesPerRow(meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if includeBytesPerRow != 13 {
+		t.Fatalf("includeBytesPerRow: got %d, want 13", includeBytesPerRow)
+	}
+
+	row0, err := EncodeIncludeRow(bindings, []any{int32(-7), uint64(11)}, includeBytesPerRow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row1, err := EncodeIncludeRow(bindings, []any{int32(9), nil}, includeBytesPerRow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	include := append(row0, row1...)
+	cols, nulls, err := SplitIncludeBytes(meta, include, 2, includeBytesPerRow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cols) != 2 || len(nulls) != 2 {
+		t.Fatalf("unexpected col/null counts: %d/%d", len(cols), len(nulls))
+	}
+	if got := int32(binary.LittleEndian.Uint32(cols[0][0:4])); got != -7 {
+		t.Fatalf("col0 row0: got %d, want -7", got)
+	}
+	if got := int32(binary.LittleEndian.Uint32(cols[0][4:8])); got != 9 {
+		t.Fatalf("col0 row1: got %d, want 9", got)
+	}
+	if got := binary.LittleEndian.Uint64(cols[1][0:8]); got != 11 {
+		t.Fatalf("col1 row0: got %d, want 11", got)
+	}
+	if nulls[0] != nil {
+		t.Fatalf("col0 should have no nulls, got %v", nulls[0])
+	}
+	if nulls[1] == nil || nulls[1][0] != 1<<1 {
+		t.Fatalf("col1 null bitmap: got %v, want row 1 null", nulls[1])
+	}
+
+	if _, err := CdcIncludeBytesPerRow(meta + " trailing"); err == nil {
+		t.Fatal("expected malformed metadata error")
+	}
+}
+
 func TestNextChunkIdSql(t *testing.T) {
 	got := NextChunkIdSql(testTblcfg(), "idx-1", vectorindex.Tag_CdcEvents)
 	want := fmt.Sprintf(
@@ -1088,4 +1147,59 @@ func TestEncodeIncludeRow_LargerMask(t *testing.T) {
 	if out[maskStart] != 0xFF || out[maskStart+1] != 0x01 {
 		t.Fatalf("null mask bytes: got %#x %#x, want 0xFF 0x01", out[maskStart], out[maskStart+1])
 	}
+}
+
+// The tail's metadata rows say what the tail HOLDS, and admission sizes the CDC overflow from
+// them before Load allocates it. Deriving a flush's chunk span from its RECORD bytes is what
+// made that figure wrong: records are packed into MaxChunkSize minus the frame overhead and the
+// embedded header, and a record is never split, so the record total always divides into fewer
+// chunks than were written. Every fully described tail then read as partly undescribed and got
+// a chunk's worth of phantom rows added per missing chunk.
+func TestCdcChunkMetaDescribesEveryChunkExactly(t *testing.T) {
+	const dim = 4
+	insertSize := 9 + 4*dim
+	// A header big enough that the per-chunk payload budget is visibly under MaxChunkSize:
+	// this is the wide-INCLUDE shape where the old derivation was furthest off.
+	header := `{"pad":"` + strings.Repeat("x", 8192) + `"}`
+	// Enough chunks that the ~14% under-count the header forces exceeds one whole chunk;
+	// at a handful of chunks the ceilings round it away and the two figures agree by luck.
+	n := 12*vectorindex.MaxChunkSize/insertSize + 7
+	ops := make([]CdcOp, n)
+	pkids := make([]int64, n)
+	vecs := make([][]float32, n)
+	for i := range ops {
+		ops[i] = CdcOpInsert
+		pkids[i] = int64(i + 1)
+		vecs[i] = make([]float32, dim)
+	}
+	buf, sizes := encodeBatch(t, dim, 0, ops, pkids, vecs, nil)
+
+	const startChunkId = 11
+	sqls, metas, err := CdcAppendEventsSqlChecksummed(testTblcfg(), "idx-meta", startChunkId, buf, sizes, header)
+	require.NoError(t, err)
+	require.Greater(t, len(metas), 1, "the fixture must span several chunks")
+	require.Len(t, metas, len(extractUnhexBlobs(t, strings.Join(sqls, " ; "))),
+		"one meta per emitted chunk")
+
+	var records, framed int
+	for i, m := range metas {
+		require.Equal(t, int64(startChunkId+i), m.ChunkId, "chunk ids are contiguous, in order")
+		require.LessOrEqual(t, m.FrameLen, vectorindex.MaxChunkSize)
+		require.Positive(t, m.Records)
+		require.NotZero(t, m.Checksum)
+		records += m.Records
+		framed += m.FrameLen
+		// What the reader computes from ONE row: a row whose filesize is its own frame's
+		// stored length owns exactly one chunk, so the sum over rows is the true count.
+		require.Equal(t, 1, (m.FrameLen+vectorindex.MaxChunkSize-1)/vectorindex.MaxChunkSize)
+	}
+	require.Equal(t, n, records, "every record is accounted for exactly once")
+
+	// The counterexample: the old row recorded the flush's RECORD bytes, and the reader divided
+	// that by MaxChunkSize. It resolves to fewer chunks than exist, so a tail this flush fully
+	// described was read as having undescribed chunks.
+	derivedFromRecordBytes := (len(buf) + vectorindex.MaxChunkSize - 1) / vectorindex.MaxChunkSize
+	require.Less(t, derivedFromRecordBytes, len(metas),
+		"record bytes under-count the chunks written -- which is why filesize is the framed length")
+	require.GreaterOrEqual(t, framed, len(buf), "framed bytes include the overhead records do not")
 }

@@ -32,14 +32,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 )
 
 func genWriteReqs(
 	ctx context.Context,
 	txnCommit *Transaction,
 ) ([]txn.TxnRequest, error) {
-	writes, tablesInVain, op := txnCommit.writes, txnCommit.tablesInVain, txnCommit.op
+	writes, tablesInVain := txnCommit.writes, txnCommit.tablesInVain
+	var pendingDatabaseCreates map[databaseKey]uint64
+	if txnCommit.haveDDL.Load() {
+		pendingDatabaseCreates = txnCommit.pendingCreatedDatabaseWrites()
+	}
 	var pkChkByTN int8
 	if v := ctx.Value(defines.PkCheckByTN{}); v != nil {
 		pkChkByTN = v.(int8)
@@ -71,6 +74,12 @@ func genWriteReqs(
 		if err != nil {
 			return nil, err
 		}
+		if len(pendingDatabaseCreates) != 0 &&
+			e.typ == INSERT &&
+			e.databaseId == catalog.MO_CATALOG_ID &&
+			e.tableId == catalog.MO_DATABASE_ID {
+			consumeCreatedDatabaseWrites(pendingDatabaseCreates, e.bat)
+		}
 		// --sql
 		// create table t (a int);
 		// begin;
@@ -95,6 +104,9 @@ func genWriteReqs(
 	if err != nil {
 		return nil, err
 	}
+	if len(pendingDatabaseCreates) != 0 {
+		return nil, missingCreatedDatabaseWriteError(ctx, pendingDatabaseCreates)
+	}
 
 	requireAutoIncrEpochFence := requiresAutoIncrEpochFenceCommit(entries)
 	if requireAutoIncrEpochFence {
@@ -106,7 +118,7 @@ func genWriteReqs(
 	if len(entries) == 0 {
 		return nil, nil
 	}
-	trace.GetService(txnCommit.proc.GetService()).TxnCommit(op, entries)
+
 	reqs := make([]txn.TxnRequest, 0, len(entries))
 	payload, err := types.Encode(&api.PrecommitWriteCmd{
 		EntryList:           entries,

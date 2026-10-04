@@ -955,6 +955,7 @@ type CreateTable struct {
 	KafkaParam         *KafkaTableParam
 	AsSource           *Select
 	IsAsSelect         bool
+	CTASConflict       string
 	IsAsLike           bool
 	LikeTableName      TableName
 	SubscriptionOption *SubscriptionOption
@@ -1008,6 +1009,10 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 	}
 
 	if node.IsAsSelect {
+		if node.CTASConflict != "" {
+			ctx.WriteByte(' ')
+			ctx.WriteString(node.CTASConflict)
+		}
 		ctx.WriteString(" as ")
 		node.AsSource.Format(ctx)
 	}
@@ -1151,6 +1156,8 @@ func (node *CreateTable) reset() {
 	if node.Options != nil {
 		for _, item := range node.Options {
 			switch opt := item.(type) {
+			case *TableOptionAutoIDCache:
+				opt.Free()
 			case *TableOptionProperties:
 				opt.Free()
 			case *TableOptionEngine:
@@ -3930,6 +3937,8 @@ func (node *Partition) reset() {
 	if node.Options != nil {
 		for _, item := range node.Options {
 			switch opt := item.(type) {
+			case *TableOptionAutoIDCache:
+				opt.Free()
 			case *TableOptionProperties:
 				opt.Free()
 			case *TableOptionEngine:
@@ -4063,6 +4072,8 @@ func (node *SubPartition) reset() {
 	if node.Options != nil {
 		for _, item := range node.Options {
 			switch opt := item.(type) {
+			case *TableOptionAutoIDCache:
+				opt.Free()
 			case *TableOptionProperties:
 				opt.Free()
 			case *TableOptionEngine:

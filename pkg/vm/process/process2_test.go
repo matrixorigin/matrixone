@@ -39,6 +39,7 @@ func (*childProcessSession) GetSqlModeNoAutoValueOnZero() (bool, bool)  { return
 func TestChildProcessesInheritSession(t *testing.T) {
 	parent := NewTopProcess(context.Background(), mpool.MustNewZero(), nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	parent.Session = &childProcessSession{}
+	parent.WarningSink = &struct{ generation int }{1}
 
 	child := parent.NewNoContextChildProc(0)
 	channelChild := parent.NewNoContextChildProcWithChannel(1, []int32{1}, []int32{0})
@@ -47,6 +48,52 @@ func TestChildProcessesInheritSession(t *testing.T) {
 	require.Same(t, parent.Session, child.Session)
 	require.Same(t, parent.Session, channelChild.Session)
 	require.Same(t, parent.Session, contextChild.Session)
+	require.Same(t, parent.WarningSink, child.GetWarningSink())
+	require.Same(t, parent.WarningSink, channelChild.GetWarningSink())
+	require.Same(t, parent.WarningSink, contextChild.GetWarningSink())
+}
+
+func TestNewTopProcessDefaultsWarningRetention(t *testing.T) {
+	proc := NewTopProcess(context.Background(), mpool.MustNewZero(), nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	defer proc.Free()
+	require.Equal(t, WarningDiagnosticDefaultRetentionLimit, proc.Base.SessionInfo.MaxErrorCount)
+	require.True(t, proc.Base.SessionInfo.MaxErrorCountSet)
+}
+
+func TestNewTopProcessInheritsWarningRetentionLimitContext(t *testing.T) {
+	ctx := ContextWithWarningRetentionLimit(context.Background(), 0)
+	proc := NewTopProcess(ctx, mpool.MustNewZero(), nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	defer proc.Free()
+	require.Zero(t, proc.Base.SessionInfo.MaxErrorCount)
+	require.True(t, proc.Base.SessionInfo.MaxErrorCountSet)
+}
+
+func TestGroupConcatSourceRowProvenanceInheritedByChildren(t *testing.T) {
+	parent := NewTopProcess(context.Background(), mpool.MustNewZero(), nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	defer parent.Free()
+
+	parent.SetGroupConcatSourceRowProvenanceTrusted(false)
+	child := parent.NewNoContextChildProc(0)
+	require.False(t, parent.GroupConcatSourceRowProvenanceTrusted())
+	require.False(t, child.GroupConcatSourceRowProvenanceTrusted())
+
+	parent.SetGroupConcatSourceRowProvenanceTrusted(true)
+	require.True(t, child.GroupConcatSourceRowProvenanceTrusted())
+}
+
+func TestGroupConcatSourceRowProvenanceIndependentProcessesAreUntrusted(t *testing.T) {
+	producerA := NewTopProcess(context.Background(), mpool.MustNewZero(), nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	producerB := NewTopProcess(context.Background(), mpool.MustNewZero(), nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	defer producerA.Free()
+	defer producerB.Free()
+
+	producerA.SetGroupConcatSourceRowProvenanceTrusted(false)
+	producerB.SetGroupConcatSourceRowProvenanceTrusted(false)
+	require.False(t, producerA.GroupConcatSourceRowProvenanceTrusted())
+	require.False(t, producerB.GroupConcatSourceRowProvenanceTrusted())
+	require.Equal(t, uint64(0), producerA.NextGroupConcatInputRowBase(7, 1))
+	require.Equal(t, uint64(0), producerB.NextGroupConcatInputRowBase(7, 1),
+		"independent CN processes start their local row namespaces at the same ordinal")
 }
 
 func TestBuildPipelineContext(t *testing.T) {
@@ -314,6 +361,27 @@ func TestOwnedPrepareParamsLifecycle(t *testing.T) {
 	require.False(t, proc.Base.prepareParamsOwned)
 	require.Equal(t, 1, borrowed.Length(), "Process must not release borrowed params")
 	borrowed.Free(proc.Mp())
+}
+
+func TestSetPrepareParamsWithReusableMetaReusesPackedStorage(t *testing.T) {
+	proc := &Process{Base: &BaseProcess{mp: mpool.MustNewZero()}}
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("42"), false, proc.Mp()))
+	defer params.Free(proc.Mp())
+
+	metadata := proc.SetPrepareParamsWithReusableTypedMeta(
+		params, nil, []vector.PrepareParamKind{vector.PrepareParamInteger},
+		[]types.T{types.T_int64}, nil, []bool{true})
+	require.Equal(t, vector.PrepareParamInteger, proc.GetPrepareParamKind(0))
+	require.Equal(t, types.T_int64, proc.GetPrepareParamType(0))
+	require.True(t, proc.GetPrepareParamIsBinaryString(0))
+	first := &metadata[0]
+	metadata = proc.SetPrepareParamsWithReusableMeta(
+		params, nil, []vector.PrepareParamKind{vector.PrepareParamDecimal}, metadata)
+	require.Same(t, first, &metadata[0])
+	require.Equal(t, vector.PrepareParamDecimal, proc.GetPrepareParamKind(0))
+	require.Equal(t, types.T_any, proc.GetPrepareParamType(0))
+	require.False(t, proc.GetPrepareParamIsBinaryString(0))
 }
 
 func TestDetachAndRestorePrepareParams(t *testing.T) {

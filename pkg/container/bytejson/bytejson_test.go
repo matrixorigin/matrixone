@@ -26,6 +26,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/defines"
 )
 
 func TestMarshalBinarySubtypesRemainLegacyReadable(t *testing.T) {
@@ -94,6 +96,73 @@ func TestMarshalBinarySubtypesRemainLegacyReadable(t *testing.T) {
 			tc.check(t, got)
 		})
 	}
+}
+
+func TestMySQLOpaqueTaggedValue(t *testing.T) {
+	payload := []byte{0x00, 0xff, 0x41}
+	for _, tc := range []struct {
+		name      string
+		fieldType uint8
+		want      string
+	}{
+		{name: "varbinary", fieldType: 15, want: "base64:type15:AP9B"},
+		{name: "bit", fieldType: 16, want: "base64:type16:AP9B"},
+		{name: "blob", fieldType: 252, want: "base64:type252:AP9B"},
+		{name: "binary", fieldType: 254, want: "base64:type254:AP9B"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			value, err := NewMySQLOpaque(defines.MORPCLatestVersion, tc.fieldType, payload)
+			require.NoError(t, err)
+			require.Equal(t, TpCodeBlob, value.Type)
+			wantType := "BLOB"
+			if tc.fieldType == 16 {
+				wantType = "BIT"
+			}
+			require.Equal(t, wantType, value.TYPE())
+			require.Equal(t, strconv.Quote(tc.want), value.String())
+			require.Equal(t, tc.want, mustUnquote(t, value))
+			length, ok := BinaryJSONPayloadLen(value)
+			require.True(t, ok)
+			require.Equal(t, len(payload), length)
+
+			stored, err := value.Marshal()
+			require.NoError(t, err)
+			requireLegacyJSONReadable(t, stored)
+			var restored ByteJson
+			require.NoError(t, restored.Unmarshal(stored))
+			require.Equal(t, value.String(), restored.String())
+		})
+	}
+}
+
+func TestMySQLOpaqueRequiresRollingUpgradeAdmission(t *testing.T) {
+	require.Equal(t, int64(defines.MORPCVersion52), MySQLOpaqueProtocolVersion)
+
+	_, err := NewMySQLOpaque(defines.MORPCVersion49, 252, []byte{0x00})
+	require.ErrorContains(t, err, "MORPC protocol version "+strconv.FormatInt(MySQLOpaqueProtocolVersion, 10))
+
+	value, err := NewMySQLOpaque(MySQLOpaqueProtocolVersion, 252, []byte{0x00})
+	require.NoError(t, err)
+	require.Equal(t, `"base64:type252:AA=="`, value.String())
+}
+
+func TestMySQLOpaqueTypeDoesNotAllocatePayload(t *testing.T) {
+	payload := bytes.Repeat([]byte{0x01}, 1<<20)
+	value, err := NewMySQLOpaque(defines.MORPCLatestVersion, 16, payload)
+	require.NoError(t, err)
+
+	allocs := testing.AllocsPerRun(10, func() {
+		if typ := value.TYPE(); typ != "BIT" {
+			t.Fatalf("unexpected type: %s", typ)
+		}
+	})
+	require.Zero(t, allocs, "tagged BIT TYPE should not materialize the payload")
+}
+
+func TestUint64TypeRemainsInteger(t *testing.T) {
+	value, err := CreateByteJSON(uint64(2024))
+	require.NoError(t, err)
+	require.Equal(t, "INTEGER", value.TYPE())
 }
 
 func TestBinaryJSONPayloadLenLegacyBlobLargePayloadAllocations(t *testing.T) {

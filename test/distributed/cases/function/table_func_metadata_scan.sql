@@ -25,10 +25,23 @@ select count(*) from metadata_scan("table_func_metadata_scan.t", "*")g where cre
 select count(*) from metadata_scan("table_func_metadata_scan.t", "*")g where create_ts > 0;
 select count(*) from metadata_scan("table_func_metadata_scan.t", "*")g where create_ts > 9.9;
 select count(*) from metadata_scan("table_func_metadata_scan.t", "*")g where cast(create_ts as float) > 9.9;
-select count(*) from metadata_scan("table_func_metadata_scan.t", "*")g where cast(create_ts as TIMESTAMP) <= NOW();
-select count(*) from metadata_scan("table_func_metadata_scan.t", "*")g where ts_to_time(create_ts) <= NOW();
-select count(*) from metadata_scan("table_func_metadata_scan.t", "*")g where ts_to_time(create_ts, 2) <= NOW();
+select count(*) from metadata_scan("table_func_metadata_scan.t", "*")g where cast(create_ts as TIMESTAMP) = ts_to_time(create_ts, 0);
+select count(*) from metadata_scan("table_func_metadata_scan.t", "*")g where ts_to_time(create_ts) = cast(create_ts as TIMESTAMP(6));
+select count(*) from metadata_scan("table_func_metadata_scan.t", "*")g where ts_to_time(create_ts, 2) = cast(create_ts as TIMESTAMP(2));
 select count(*) from metadata_scan("table_func_metadata_scan.t", "*")g where ts_to_time(1) <= NOW();
+select count(*) from metadata_scan("table_func_metadata_scan.t", "*")g where ts_to_time(create_ts, null) is null;
+
+-- TS contains an absolute HLC physical instant. Changing the session time zone
+-- must not change the epoch value produced by either conversion entry point.
+set @metadata_scan_saved_time_zone = @@time_zone;
+set time_zone = '+08:00';
+set @metadata_scan_function_epoch = (select min(unix_timestamp(ts_to_time(create_ts))) from metadata_scan('table_func_metadata_scan.t', '*') g);
+set @metadata_scan_cast_epoch = (select min(unix_timestamp(cast(create_ts as timestamp(6)))) from metadata_scan('table_func_metadata_scan.t', '*') g);
+set time_zone = '-05:00';
+select min(unix_timestamp(ts_to_time(create_ts))) = @metadata_scan_function_epoch from metadata_scan('table_func_metadata_scan.t', '*') g;
+select min(unix_timestamp(cast(create_ts as timestamp(6)))) = @metadata_scan_cast_epoch from metadata_scan('table_func_metadata_scan.t', '*') g;
+set time_zone = @metadata_scan_saved_time_zone;
+
 select count(*) from metadata_scan('table_func_metadata_scan.t', '*') g;
 select count(*) from metadata_scan('table_func_metadata_scan.t', 'a') g;
 select count(*) from metadata_scan('table_func_metadata_scan.t', 'f') g;

@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"testing"
 	"time"
 
@@ -38,6 +39,7 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	pbstats "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -470,7 +472,13 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		table.EXPECT().TableDefs(gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{}).AnyTimes()
 		table.EXPECT().CopyTableDef(gomock.Any()).Return(&plan.TableDef{}).AnyTimes()
-		table.EXPECT().Stats(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+		var observedStats *pbstats.StatsInfo
+		statsCalls := 0
+		table.EXPECT().Stats(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(context.Context, bool) (*pbstats.StatsInfo, error) {
+				statsCalls++
+				return observedStats, nil
+			}).AnyTimes()
 		table.EXPECT().TableColumns(gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().GetTableID(gomock.Any()).Return(uint64(10)).AnyTimes()
 		table.EXPECT().GetEngineType().Return(engine.Disttae).AnyTimes()
@@ -512,6 +520,53 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		stats, err := tcc.Stats(&plan2.ObjectRef{SchemaName: "abc", ObjName: "t1"}, &plan2.Snapshot{TS: ts})
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(stats, convey.ShouldBeNil)
+
+		workspace := newTestWorkspace()
+		txnOperator.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
+		ses.proc.Base.TxnOperator = txnOperator
+		tcc.execCtx.proc = ses.proc
+		obj := &plan.ObjectRef{Obj: 10, SchemaName: "abc", ObjName: "t1"}
+		tableDef := &plan.TableDef{Version: 7}
+		current := &pbstats.StatsInfo{TableName: "t1", TableCnt: 5,
+			NdvMap: map[string]float64{"v": 5}, NullCntMap: map[string]uint64{"v": 1}}
+		observedStats = current
+		got, err := tcc.StatsWithTableDef(obj, tableDef, nil)
+		require.NoError(t, err)
+		require.Same(t, current, got)
+		before := statsCalls
+		got, err = tcc.StatsWithTableDef(obj, tableDef, nil)
+		require.NoError(t, err)
+		require.Same(t, current, got)
+		require.Equal(t, before, statsCalls, "completed readonly stats retain the 3s fast path")
+		snapshot := &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 1}}
+		for _, count := range []float64{2, 0} {
+			historical := &pbstats.StatsInfo{TableName: "t1", TableCnt: count,
+				NdvMap: map[string]float64{"v": count}, NullCntMap: map[string]uint64{"v": 0}}
+			observedStats = historical
+			got, err = tcc.StatsWithTableDef(obj, tableDef, snapshot)
+			require.NoError(t, err)
+			require.Same(t, historical, got, "snapshot named empty keeps its completed marker")
+			wrapper := ses.GetStatsCache().Get(10)
+			require.Equal(t, historical.NdvMap, wrapper.GetStats().NdvMap, "NDV consumers use this planning pass's snapshot maps")
+			require.Empty(t, wrapper.GetStats().TableName)
+			require.Equal(t, "t1", historical.TableName, "published input is immutable")
+			observedStats = current
+			before = statsCalls
+			got, err = tcc.StatsWithTableDef(obj, tableDef, nil)
+			require.NoError(t, err)
+			require.Same(t, current, got)
+			require.Equal(t, before+1, statsCalls, "snapshot wrapper cannot serve the current 3s fast hit")
+		}
+		workspace.readonly = false
+		observedStats = &pbstats.StatsInfo{TableCnt: 10, AccurateObjectNumber: 1}
+		got, err = tcc.StatsWithTableDef(obj, tableDef, nil)
+		require.NoError(t, err)
+		require.Same(t, observedStats, got, "own writes bypass old completed stats")
+		workspace.readonly = true
+		before = statsCalls
+		_, err = tcc.StatsWithTableDef(obj, tableDef, nil)
+		require.NoError(t, err)
+		require.Equal(t, before+1, statsCalls, "anonymous overlay is not cache-complete even with accurate objects")
 	})
 }
 
@@ -700,7 +755,7 @@ func TestSession_Migrate(t *testing.T) {
 			txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 			txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 			txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
-			txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+
 			txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 			txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 			txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
@@ -741,6 +796,7 @@ func TestSession_Migrate(t *testing.T) {
 			Tenant:   GetDefaultTenant(),
 			TenantID: GetSysTenantId(),
 		}
+		session.ruleCache = map[string]string{}
 		session.txnCompileCtx.execCtx = &ExecCtx{reqCtx: ctx, proc: testutil.NewProc(t), ses: session}
 		proto.ses = session
 		session.setRoutineManager(rm)
@@ -765,6 +821,8 @@ func TestSession_Migrate(t *testing.T) {
 		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{
 			DB:                      "d1",
 			LastAffectedRows:        7,
+			LastInsertID:            13,
+			LastInsertIDExported:    true,
 			FoundRows:               11,
 			UserDefinedVarsExported: true,
 			UserDefinedVars: []*query.MigrateUserDefinedVar{
@@ -801,6 +859,8 @@ func TestSession_Migrate(t *testing.T) {
 		}
 		assert.Equal(t, int64(7), s.GetLastAffectedRows())
 		assert.Equal(t, int64(7), s.GetProc().GetAffectedRows())
+		assert.Equal(t, uint64(13), s.GetLastInsertID())
+		assert.Equal(t, uint64(13), s.GetProc().GetLastInsertID())
 		assert.Equal(t, uint64(11), s.GetLastFoundRows())
 		assert.Equal(t, uint64(11), s.GetProc().GetFoundRows())
 
@@ -820,6 +880,23 @@ func TestSession_Migrate(t *testing.T) {
 		assert.Nil(t, resp)
 		assert.Equal(t, int64(0), s.GetLastAffectedRows())
 		assert.Equal(t, int64(0), s.GetProc().GetAffectedRows())
+	})
+
+	t.Run("rejects missing LAST_INSERT_ID snapshot", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		runtime.SetupServiceBasedRuntime(sid, runtime.DefaultRuntime())
+		InitServerLevelVars(sid)
+		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
+		s := genSession(ctrl, "d1", nil)
+		s.SetLastInsertID(9)
+		s.GetProc().SetLastInsertID(9)
+
+		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{DB: "d1"})
+		require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer))
+		require.Equal(t, uint64(9), s.GetLastInsertID())
+		require.Equal(t, uint64(9), s.GetProc().GetLastInsertID())
 	})
 
 	t.Run("typed user variables", func(t *testing.T) {
@@ -865,9 +942,10 @@ func TestSession_Migrate(t *testing.T) {
 
 		target := genSession(ctrl, "d1", nil)
 		require.NoError(t, Migrate(context.Background(), target, &query.MigrateConnToRequest{
-			ConnID:      88,
-			DB:          exported.DB,
-			SetVarStmts: []string{"set sql_mode = @mode"},
+			ConnID:               88,
+			DB:                   exported.DB,
+			LastInsertIDExported: true,
+			SetVarStmts:          []string{"set sql_mode = @mode"},
 			PrepareStmts: append(exported.PrepareStmts, &query.PrepareStmt{
 				Name: "pending_isolation_prepare",
 				SQL:  "select ?",
@@ -904,6 +982,7 @@ func TestSession_Migrate(t *testing.T) {
 		invalidTarget := genSession(ctrl, "d1", nil)
 		err = Migrate(context.Background(), invalidTarget, &query.MigrateConnToRequest{
 			DB:                      "d1",
+			LastInsertIDExported:    true,
 			UserDefinedVarsExported: true,
 			UserDefinedVars:         []*query.MigrateUserDefinedVar{{Name: "mode", Value: plan2.MakePlan2StringConstExprWithType("PIPES_AS_CONCAT")}},
 			SystemVariablesExported: true,
@@ -940,6 +1019,7 @@ func TestSession_Migrate(t *testing.T) {
 		}()
 		err := Migrate(context.Background(), target, &query.MigrateConnToRequest{
 			DB:                      "d1",
+			LastInsertIDExported:    true,
 			UserDefinedVarsExported: true,
 			UserDefinedVars: []*query.MigrateUserDefinedVar{{
 				Name:  "ts0",
@@ -953,6 +1033,7 @@ func TestSession_Migrate(t *testing.T) {
 		targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion22)
 		err = Migrate(context.Background(), target, &query.MigrateConnToRequest{
 			DB:                      "d1",
+			LastInsertIDExported:    true,
 			UserDefinedVarsExported: true,
 			UserDefinedVars: []*query.MigrateUserDefinedVar{{
 				Name:  "ts0",
@@ -963,6 +1044,38 @@ func TestSession_Migrate(t *testing.T) {
 		value, getErr := target.GetUserDefinedVar("ts0")
 		require.NoError(t, getErr)
 		require.Equal(t, "stable-value", value.Value)
+	})
+
+	t.Run("temporary tables require protocol v38", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		runtime.SetupServiceBasedRuntime(sid, runtime.DefaultRuntime())
+		InitServerLevelVars(sid)
+		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
+
+		target := genSession(ctrl, "d1", nil)
+		targetRuntime := runtime.ServiceRuntime(target.proc.GetService())
+		oldVersion, hadVersion := targetRuntime.GetGlobalVariables(runtime.MOProtocolVersion)
+		targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion36)
+		defer func() {
+			if hadVersion {
+				targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, oldVersion)
+			} else {
+				targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+			}
+		}()
+
+		err := Migrate(context.Background(), target, &query.MigrateConnToRequest{
+			DB:                   "d1",
+			LastInsertIDExported: true,
+			TempTables: []*query.MigrateTempTable{{
+				Database: "d1", Alias: "tmp", PhysicalName: "__mo_tmp_source_d1_tmp",
+			}},
+		})
+		require.ErrorContains(t, err, "temporary-table migration requires protocol version 38")
+		_, ok := target.GetTempTable("d1", "tmp")
+		require.False(t, ok)
 	})
 
 	t.Run("typed system variables preserve side effects", func(t *testing.T) {
@@ -1005,6 +1118,7 @@ func TestSession_Migrate(t *testing.T) {
 
 		err := Migrate(context.Background(), target, &query.MigrateConnToRequest{
 			DB:                        "d1",
+			LastInsertIDExported:      true,
 			SystemVariablesExported:   true,
 			SystemVariablesReplayable: true,
 			SystemVariables: []*query.MigrateSystemVariable{
@@ -1063,6 +1177,7 @@ func TestSession_Migrate(t *testing.T) {
 		// invalidate when restoring either cache-control variable.
 		err := Migrate(context.Background(), target, &query.MigrateConnToRequest{
 			DB:                        "d1",
+			LastInsertIDExported:      true,
 			SystemVariablesExported:   true,
 			SystemVariablesReplayable: true,
 			SystemVariables: []*query.MigrateSystemVariable{
@@ -1121,6 +1236,7 @@ func TestSession_Migrate(t *testing.T) {
 		require.True(t, target.GetTxnHandler().OptionBitsIsSet(OPTION_AUTOCOMMIT))
 
 		require.NoError(t, Migrate(context.Background(), target, &query.MigrateConnToRequest{
+			LastInsertIDExported:    true,
 			SystemVariablesExported: true,
 			SystemVariables:         exported,
 		}))
@@ -1154,8 +1270,9 @@ func TestSession_Migrate(t *testing.T) {
 		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
 		s := genSession(ctrl, "d1", nil)
 		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{
-			ConnID: 88,
-			DB:     "d1",
+			ConnID:               88,
+			DB:                   "d1",
+			LastInsertIDExported: true,
 			UserLevelLocks: []*query.UserLevelLock{
 				{Name: "restored_lock", Count: 2},
 			},
@@ -1178,7 +1295,10 @@ func TestSession_Migrate(t *testing.T) {
 		InitServerLevelVars(sid)
 		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
 		s := genSession(ctrl, "d2", context.Canceled)
-		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{DB: "d2"})
+		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{
+			DB:                   "d2",
+			LastInsertIDExported: true,
+		})
 		assert.Equal(t, "", s.GetDatabaseName())
 		assert.NoError(t, err)
 	})
@@ -1195,7 +1315,11 @@ func TestSession_Migrate(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		err := Migrate(ctx, s, &query.MigrateConnToRequest{DB: "d3", LastAffectedRows: 3})
+		err := Migrate(ctx, s, &query.MigrateConnToRequest{
+			DB:                   "d3",
+			LastAffectedRows:     3,
+			LastInsertIDExported: true,
+		})
 		assert.ErrorIs(t, err, context.Canceled)
 		assert.Equal(t, int64(9), s.GetLastAffectedRows())
 	})
@@ -1430,6 +1554,257 @@ func TestSessionTempTableMap(t *testing.T) {
 	assert.Equal(t, uint64(5), ses.GetTempTableVersion())
 }
 
+func TestSessionTempTableMigrationSnapshot(t *testing.T) {
+	ses := &Session{
+		tempTables:          make(map[string]string),
+		tempTablesRev:       make(map[string]string),
+		tempTableIdentities: make(map[string]tempTableIdentity),
+	}
+	ses.AddTempTable(
+		"db.with.dot", "alias.with.dot",
+		"__mo_tmp_source_db_with_dot_alias_with_dot",
+	)
+	ses.AddTempIndexTable(
+		"db.with.dot", "__mo_index_hidden",
+		"__mo_tmp_source_db_with_dot___mo_index_hidden",
+	)
+
+	snapshot := ses.snapshotTempTables()
+	require.Equal(t, []*query.MigrateTempTable{{
+		Database:     "db.with.dot",
+		Alias:        "alias.with.dot",
+		PhysicalName: "__mo_tmp_source_db_with_dot_alias_with_dot",
+	}}, snapshot)
+}
+
+func TestSessionDropDatabaseRemovesTempTableMappings(t *testing.T) {
+	newSession := func() *Session {
+		return &Session{
+			tempTables:          make(map[string]string),
+			tempTablesRev:       make(map[string]string),
+			tempTableIdentities: make(map[string]tempTableIdentity),
+		}
+	}
+	seed := func(ses *Session) {
+		ses.addTempTable("d", "t", "__mo_tmp_d_t_before_drop", "", "")
+		ses.addTempIndexTable("d", "__mo_index_t", "__mo_tmp_d_index_before_drop", "", "")
+		ses.addTempTable("other", "kept", "__mo_tmp_other_kept", "", "")
+	}
+	get := func(t *testing.T, ses *Session, dbName, alias string) string {
+		t.Helper()
+		realName, ok := ses.GetTempTable(dbName, alias)
+		require.True(t, ok)
+		return realName
+	}
+
+	t.Run("dropped database is absent from migration snapshot", func(t *testing.T) {
+		ses := newSession()
+		seed(ses)
+
+		ses.removeTempTablesByDatabase("d", "", "")
+
+		require.Equal(t, []*query.MigrateTempTable{{
+			Database: "other", Alias: "kept", PhysicalName: "__mo_tmp_other_kept",
+		}}, ses.snapshotTempTables())
+		_, ok := ses.GetTempTable("d", "t")
+		require.False(t, ok)
+	})
+
+	t.Run("statement rollback restores dropped aliases", func(t *testing.T) {
+		ses := newSession()
+		seed(ses)
+
+		ses.removeTempTablesByDatabase("d", "txn", "drop")
+		ses.rollbackTempTableStatement("txn", "drop")
+
+		require.Equal(t, "__mo_tmp_d_t_before_drop", get(t, ses, "d", "t"))
+		require.Equal(t, "__mo_tmp_d_index_before_drop", get(t, ses, "d", "__mo_index_t"))
+	})
+
+	t.Run("recreate does not retain the dropped physical table", func(t *testing.T) {
+		ses := newSession()
+		seed(ses)
+
+		ses.removeTempTablesByDatabase("d", "txn", "drop")
+		ses.commitTempTableStatement("txn", "drop")
+		ses.addTempTable("d", "t", "__mo_tmp_d_t_after_recreate", "txn", "create")
+		ses.commitTempTableStatement("txn", "create")
+		ses.commitTempTableTransaction("txn")
+
+		require.Equal(t, []*query.MigrateTempTable{
+			{Database: "d", Alias: "t", PhysicalName: "__mo_tmp_d_t_after_recreate"},
+			{Database: "other", Alias: "kept", PhysicalName: "__mo_tmp_other_kept"},
+		}, ses.snapshotTempTables())
+	})
+
+	t.Run("transaction rollback discards aliases recreated after drop", func(t *testing.T) {
+		ses := newSession()
+		seed(ses)
+
+		ses.removeTempTablesByDatabase("d", "txn", "drop")
+		ses.addTempTable("d", "t", "__mo_tmp_d_t_after_recreate", "txn", "create")
+		ses.rollbackTempTableTransaction("txn")
+
+		require.Equal(t, "__mo_tmp_d_t_before_drop", get(t, ses, "d", "t"))
+		require.Equal(t, "__mo_tmp_d_index_before_drop", get(t, ses, "d", "__mo_index_t"))
+	})
+}
+
+func TestMigrateTempTablesClonesIntoTargetOwnership(t *testing.T) {
+	newSession := func() *Session {
+		return &Session{
+			tempTables:          make(map[string]string),
+			tempTablesRev:       make(map[string]string),
+			tempTableIdentities: make(map[string]tempTableIdentity),
+		}
+	}
+	table := &query.MigrateTempTable{
+		Database:     "db.with.dot",
+		Alias:        "alias.with.dot",
+		PhysicalName: "__mo_tmp_source_db_alias",
+	}
+
+	t.Run("success removes borrowed source and keeps cloned destination", func(t *testing.T) {
+		ses := newSession()
+		committed := false
+		err := migrateTempTables(
+			context.Background(), ses, []*query.MigrateTempTable{table},
+			func(sql string) error {
+				if sql == "COMMIT" {
+					committed = true
+					return nil
+				}
+				require.Equal(t,
+					"CREATE TEMPORARY TABLE "+
+						sqlquote.QualifiedIdent(table.Database, table.Alias)+" CLONE "+
+						sqlquote.QualifiedIdent(table.Database, "__mo_migrate_source_0"),
+					sql)
+				source, ok := ses.GetTempTable(table.Database, "__mo_migrate_source_0")
+				require.True(t, ok)
+				require.Equal(t, table.PhysicalName, source)
+				ses.AddTempTable(table.Database, table.Alias, "__mo_tmp_target_db_alias")
+				return nil
+			},
+		)
+		require.NoError(t, err)
+		require.True(t, committed)
+		_, ok := ses.GetTempTable(table.Database, "__mo_migrate_source_0")
+		require.False(t, ok)
+		target, ok := ses.GetTempTable(table.Database, table.Alias)
+		require.True(t, ok)
+		require.Equal(t, "__mo_tmp_target_db_alias", target)
+	})
+
+	t.Run("failure removes borrowed source without claiming it", func(t *testing.T) {
+		ses := newSession()
+		err := migrateTempTables(
+			context.Background(), ses, []*query.MigrateTempTable{table},
+			func(string) error { return moerr.NewInternalErrorNoCtx("clone failed") },
+		)
+		require.ErrorContains(t, err, "clone failed")
+		require.Empty(t, ses.tempTables)
+		require.Empty(t, ses.tempTablesRev)
+		require.Empty(t, ses.tempTableIdentities)
+	})
+
+	t.Run("skips mappings made stale by another session dropping or recreating the database", func(t *testing.T) {
+		ses := newSession()
+		staleDroppedDB := &query.MigrateTempTable{
+			Database: "dropped", Alias: "t", PhysicalName: "__mo_tmp_dropped_t",
+		}
+		staleRecreatedDB := &query.MigrateTempTable{
+			Database: "recreated", Alias: "t", PhysicalName: "__mo_tmp_old_t",
+		}
+		live := &query.MigrateTempTable{
+			Database: "live", Alias: "t", PhysicalName: "__mo_tmp_live_t",
+		}
+		calls := 0
+		committed := false
+		err := migrateTempTables(
+			context.Background(), ses,
+			[]*query.MigrateTempTable{staleDroppedDB, staleRecreatedDB, live},
+			func(sql string) error {
+				if sql == "COMMIT" {
+					committed = true
+					return nil
+				}
+				calls++
+				switch calls {
+				case 1:
+					return moerr.NewBadDBNoCtx(staleDroppedDB.Database)
+				case 2:
+					return moerr.NewNoSuchTableNoCtx(staleRecreatedDB.Database, staleRecreatedDB.PhysicalName)
+				case 3:
+					ses.AddTempTable(live.Database, live.Alias, "__mo_tmp_target_live_t")
+					return nil
+				default:
+					return moerr.NewInternalErrorNoCtx("unexpected clone")
+				}
+			},
+		)
+		require.NoError(t, err)
+		require.Equal(t, 3, calls)
+		require.True(t, committed)
+		_, ok := ses.GetTempTable(staleDroppedDB.Database, staleDroppedDB.Alias)
+		require.False(t, ok)
+		_, ok = ses.GetTempTable(staleRecreatedDB.Database, staleRecreatedDB.Alias)
+		require.False(t, ok)
+		target, ok := ses.GetTempTable(live.Database, live.Alias)
+		require.True(t, ok)
+		require.Equal(t, "__mo_tmp_target_live_t", target)
+	})
+
+	t.Run("commit failure leaves only target-owned clone", func(t *testing.T) {
+		ses := newSession()
+		err := migrateTempTables(
+			context.Background(), ses, []*query.MigrateTempTable{table},
+			func(sql string) error {
+				if sql == "COMMIT" {
+					return moerr.NewInternalErrorNoCtx("commit failed")
+				}
+				ses.AddTempTable(table.Database, table.Alias, "__mo_tmp_target_db_alias")
+				return nil
+			},
+		)
+		require.ErrorContains(t, err, "commit failed")
+		require.Len(t, ses.tempTables, 1)
+		target, ok := ses.GetTempTable(table.Database, table.Alias)
+		require.True(t, ok)
+		require.Equal(t, "__mo_tmp_target_db_alias", target)
+	})
+
+	t.Run("invalid clone ownership cannot claim source physical table", func(t *testing.T) {
+		ses := newSession()
+		err := migrateTempTables(
+			context.Background(), ses, []*query.MigrateTempTable{table},
+			func(string) error {
+				ses.AddTempTable(table.Database, table.Alias, table.PhysicalName)
+				return nil
+			},
+		)
+		require.ErrorContains(t, err, "was not cloned into the target session")
+		require.Empty(t, ses.tempTables)
+		require.Empty(t, ses.tempTablesRev)
+		require.Empty(t, ses.tempTableIdentities)
+	})
+
+	t.Run("rejects malformed and duplicate snapshots before duplicate clone", func(t *testing.T) {
+		ses := newSession()
+		calls := 0
+		err := migrateTempTables(
+			context.Background(), ses,
+			[]*query.MigrateTempTable{table, table},
+			func(string) error {
+				calls++
+				ses.AddTempTable(table.Database, table.Alias, "__mo_tmp_target_db_alias")
+				return nil
+			},
+		)
+		require.ErrorContains(t, err, "duplicate temporary-table migration entry")
+		require.Zero(t, calls)
+	})
+}
+
 func TestSessionTempTableTransactionJournal(t *testing.T) {
 	newSession := func() *Session {
 		return &Session{
@@ -1437,6 +1812,19 @@ func TestSessionTempTableTransactionJournal(t *testing.T) {
 			tempTablesRev: make(map[string]string),
 		}
 	}
+
+	t.Run("statement rollback restores migration identity", func(t *testing.T) {
+		ses := newSession()
+		ses.addTempTable("db", "visible", "__mo_tmp_real_visible", "", "")
+		ses.addTempIndexTable("db", "visible", "__mo_tmp_real_visible", "txn", "stmt")
+		require.Empty(t, ses.snapshotTempTables())
+
+		ses.rollbackTempTableStatement("txn", "stmt")
+
+		require.Equal(t, []*query.MigrateTempTable{{
+			Database: "db", Alias: "visible", PhysicalName: "__mo_tmp_real_visible",
+		}}, ses.snapshotTempTables())
+	})
 
 	t.Run("statement rollback restores only that statement", func(t *testing.T) {
 		ses := newSession()
@@ -1523,6 +1911,63 @@ func (e *sessionCloseExecutor) ExecTxn(
 	return nil
 }
 
+func TestSessionTemporaryDDLLifetime(t *testing.T) {
+	newSession := func() *Session {
+		return &Session{tempTables: make(map[string]string), tempTablesRev: make(map[string]string)}
+	}
+	t.Run("published schema survives unrelated transaction rollback", func(t *testing.T) {
+		ses := newSession()
+		ses.addTempTable("db", "internal", "internal-physical", "txn", "stmt")
+		ses.PublishTemporaryTable("db", "public", "public-generation")
+		ses.rollbackTempTableTransaction("txn")
+		name, ok := ses.GetTempTable("db", "public")
+		require.True(t, ok)
+		require.Equal(t, "public-generation", name)
+		require.True(t, ses.OwnsTemporaryTable("db", name))
+		require.False(t, ses.OwnsTemporaryTable("other-db", name))
+		require.False(t, ses.OwnsTemporaryTable("db", "__mo_tmp_unowned"))
+		_, ok = ses.GetTempTable("db", "internal")
+		require.False(t, ok)
+	})
+	t.Run("retirement cannot be undone or overwrite replacement", func(t *testing.T) {
+		ses := newSession()
+		ses.addTempTable("db", "t", "old", "", "")
+		ses.removeTempTable("db", "t", "txn", "stmt")
+		ses.addTempTable("db", "t", "intermediate", "txn", "stmt")
+		ses.addTempIndexTable("db", "idx", "index-physical", "txn", "stmt")
+		ses.RetireTemporaryTable("db", "t", "intermediate", []string{"index-physical"})
+		require.False(t, ses.OwnsTemporaryTable("db", "intermediate"))
+		ses.rollbackTempTableStatement("txn", "stmt")
+		_, ok := ses.GetTempTable("db", "t")
+		require.False(t, ok)
+		ses.PublishTemporaryTable("db", "t", "new-generation")
+		ses.rollbackTempTableTransaction("txn")
+		name, ok := ses.GetTempTable("db", "t")
+		require.True(t, ok)
+		require.Equal(t, "new-generation", name)
+		snapshot := ses.snapshotTempTables()
+		require.Len(t, snapshot, 1)
+		require.Equal(t, "new-generation", snapshot[0].PhysicalName)
+		tables, _ := ses.takeTempTables()
+		require.Len(t, tables, 2)
+		require.Empty(t, ses.retiredTempTables)
+	})
+	t.Run("retired generations consume admission capacity", func(t *testing.T) {
+		ses := newSession()
+		for i := 0; i < maxSessionTemporaryTableGenerations; i++ {
+			name := fmt.Sprintf("generation-%d", i)
+			require.NoError(t, ses.CheckTemporaryTableCapacity(context.Background()))
+			ses.PublishTemporaryTable("db", "t", name)
+			ses.RetireTemporaryTable("db", "t", name, nil)
+		}
+		require.Error(t, ses.CheckTemporaryTableCapacity(context.Background()))
+		require.Empty(t, ses.snapshotTempTables())
+		tables, _ := ses.takeTempTables()
+		require.Len(t, tables, maxSessionTemporaryTableGenerations)
+		require.NoError(t, ses.CheckTemporaryTableCapacity(context.Background()))
+	})
+}
+
 func TestSessionCloseDropsTemporaryTablesAsOwningTenant(t *testing.T) {
 	const service = "session-close-temp-table"
 	sv := &config.FrontendParameters{}
@@ -1559,6 +2004,89 @@ func TestSessionCloseDropsTemporaryTablesAsOwningTenant(t *testing.T) {
 	require.Equal(t, uint32(42), statementOpts.AccountID())
 	require.Equal(t, uint32(7), statementOpts.UserID())
 	require.Equal(t, uint32(9), statementOpts.RoleID())
+}
+
+type resetTempTableExecutor struct {
+	sql      []string
+	failures int
+	failAt   int
+}
+
+func (e *resetTempTableExecutor) Exec(
+	_ context.Context, sql string, _ executor.Options,
+) (executor.Result, error) {
+	e.sql = append(e.sql, sql)
+	if e.failAt > 0 && len(e.sql) == e.failAt {
+		return executor.Result{}, assert.AnError
+	}
+	if e.failures > 0 {
+		e.failures--
+		return executor.Result{}, assert.AnError
+	}
+	return executor.Result{}, nil
+}
+
+func (e *resetTempTableExecutor) ExecTxn(
+	context.Context, func(executor.TxnExecutor) error, executor.Options,
+) error {
+	return nil
+}
+
+func TestSessionResetTempTablesIsSynchronousAndRetryable(t *testing.T) {
+	const service = "session-reset-temp-table"
+	sv := &config.FrontendParameters{}
+	sv.SetDefaultValues()
+	InitServerLevelVars(service)
+	setPu(service, config.NewParameterUnit(sv, nil, nil, nil))
+	runtime.SetupServiceBasedRuntime(service, runtime.DefaultRuntime())
+	exec := &resetTempTableExecutor{failures: 1}
+	runtime.ServiceRuntime(service).SetGlobalVariables(runtime.InternalSQLExecutor, exec)
+
+	ses := NewSession(context.Background(), service, &testMysqlWriter{}, nil)
+	ses.SetTenantInfo(&TenantInfo{Tenant: "tenant", TenantID: 42})
+	ses.AddTempTable("db", "alias", "physical")
+	t.Cleanup(ses.Close)
+
+	err := ses.resetTempTables(context.Background())
+	require.ErrorIs(t, err, assert.AnError)
+	realName, ok := ses.GetTempTable("db", "alias")
+	require.True(t, ok, "failed cleanup must retain an owner for retry")
+	require.Equal(t, "physical", realName)
+
+	require.NoError(t, ses.resetTempTables(context.Background()))
+	_, ok = ses.GetTempTable("db", "alias")
+	require.False(t, ok)
+	require.Equal(t, []string{
+		"DROP TABLE IF EXISTS " + sqlquote.QualifiedIdent("db", "physical"),
+		"DROP TABLE IF EXISTS " + sqlquote.QualifiedIdent("db", "physical"),
+	}, exec.sql)
+	// A failed reset preserves reclamation ownership, not logical visibility.
+	exec.failures = 1
+	ses.PublishTemporaryTable("db", "alias", "retired-generation")
+	ses.RetireTemporaryTable("db", "alias", "retired-generation", nil)
+	require.ErrorIs(t, ses.resetTempTables(context.Background()), assert.AnError)
+	_, ok = ses.GetTempTable("db", "alias")
+	require.False(t, ok)
+	require.Len(t, ses.retiredTempTables, 1)
+	require.Empty(t, ses.snapshotTempTables())
+	require.NoError(t, ses.resetTempTables(context.Background()))
+	require.Empty(t, ses.retiredTempTables)
+
+	// Idle cleanup keeps failed identities retryable and never removes a new
+	// generation. A cancelled user request does not discard cleanup ownership.
+	exec.failures = 1
+	ses.RetireTemporaryTable("db", "alias", "retired-again", nil)
+	ses.PublishTemporaryTable("db", "alias", "replacement")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	ses.cleanupRetiredTempTables(ctx)
+	require.Len(t, ses.retiredTempTables, 1)
+	ses.cleanupRetiredTempTables(ctx)
+	require.Empty(t, ses.retiredTempTables)
+	name, exists := ses.GetTempTable("db", "alias")
+	require.True(t, exists)
+	require.Equal(t, "replacement", name)
+	require.NoError(t, ses.resetTempTables(context.Background()))
 }
 
 func TestRemoveAllPrepareStmts(t *testing.T) {

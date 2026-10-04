@@ -32,6 +32,112 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
+// MeasureTar is the tar counterpart of MeasureComponents: same PackSizes, same
+// host/device classification, read from a packed archive instead of the component
+// directory it was built from.
+//
+// The load path needs this BEFORE Unpack: load_ids grows host_ids from ids.bin
+// while Unpack runs, and the admission for that allocation has to be taken first.
+// The artifact is the only authoritative source at that point -- idxcfg.IndexCapacity
+// is zero on every search-path load (it is resolved by the build operator and never
+// written back to algo_params), so sizing a claim from config would silently claim
+// nothing.
+//
+// ids.bin is a uint64 count header plus rows*sizeof(IdT), so Files["ids.bin"] is the
+// host_ids demand plus 8 bytes: no row count to model, and correct for legacy
+// artifacts and short final sub-indexes alike.
+//
+// Header scan only. Production archives are uncompressed (saveToFile names the file
+// without a .gz suffix) and tar headers carry the sizes, so this seeks past member
+// data rather than reading it.
+func MeasureTar(tarPath string) (PackSizes, error) {
+	out := PackSizes{Files: make(map[string]int64)}
+	in, err := os.Open(tarPath)
+	if err != nil {
+		return out, err
+	}
+	defer in.Close()
+
+	var tr *tar.Reader
+	if strings.HasSuffix(tarPath, ".gz") || strings.HasSuffix(tarPath, ".tgz") {
+		gr, gerr := gzip.NewReader(in)
+		if gerr != nil {
+			return out, gerr
+		}
+		defer gr.Close()
+		tr = tar.NewReader(gr)
+	} else {
+		tr = tar.NewReader(in)
+	}
+
+	for {
+		hdr, herr := tr.Next()
+		if herr == io.EOF {
+			break
+		}
+		if herr != nil {
+			return out, herr
+		}
+		if hdr.Typeflag != tar.TypeReg {
+			continue
+		}
+		name := filepath.Base(hdr.Name)
+		out.Files[name] = hdr.Size
+		out.Total += hdr.Size
+		if IsHostResidentComponent(name) {
+			out.Host += hdr.Size
+		} else {
+			out.Device += hdr.Size
+		}
+	}
+	return out, nil
+}
+
+// PackSizes reports what a save_dir wrote, split by where each component becomes
+// resident when the index is loaded again. Callers admitting VRAM want Device;
+// callers sizing a download or a temp file want Total.
+type PackSizes struct {
+	Total  int64            // every component -- the tar payload
+	Device int64            // index.bin / shard_N.bin, deserialized onto the GPU
+	Host   int64            // ids, INCLUDE blobs, quantizer, bitset, manifest
+	Files  map[string]int64 // per component, for diagnostics
+}
+
+// MeasureComponents stats a saved index directory and classifies every file.
+//
+// The tar total is the wrong number for a VRAM question: it also carries
+// host_ids and the INCLUDE blobs, which never reach the GPU. At 1M rows that is
+// ~8 MB each -- around 8% of an IVF-PQ tar and 11% of a narrow-vector one -- all
+// of it over-stating device demand.
+//
+// Measured from the component directory rather than by re-reading the tar,
+// because Pack already stats these files; see each index's Pack method.
+func MeasureComponents(dirPath string) (PackSizes, error) {
+	out := PackSizes{Files: make(map[string]int64)}
+	files, err := os.ReadDir(dirPath)
+	if err != nil {
+		return out, err
+	}
+	for _, f := range files {
+		if f.IsDir() {
+			continue
+		}
+		fi, err := os.Stat(filepath.Join(dirPath, f.Name()))
+		if err != nil {
+			return out, err
+		}
+		sz := fi.Size()
+		out.Files[f.Name()] = sz
+		out.Total += sz
+		if IsHostResidentComponent(f.Name()) {
+			out.Host += sz
+		} else {
+			out.Device += sz
+		}
+	}
+	return out, nil
+}
+
 // Pack archives all files in dirPath into a single .tar or .tar.gz file.
 // save_dir already writes manifest.json to dirPath, so it is included automatically.
 // If outputPath ends with .gz, gzip compression is used.
@@ -57,6 +163,7 @@ func Pack(dirPath string, outputPath string) error {
 		return err
 	}
 
+	logutil.Infof("cuvs.Pack: taring %d files from %s -> %s", len(files), dirPath, outputPath)
 	for _, file := range files {
 		if file.IsDir() {
 			continue
@@ -64,6 +171,7 @@ func Pack(dirPath string, outputPath string) error {
 		filePath := filepath.Join(dirPath, file.Name())
 		fi, err := os.Stat(filePath)
 		if err != nil {
+			logutil.Errorf("cuvs.Pack: Stat FAILED for %s: %v", filePath, err)
 			return err
 		}
 
@@ -79,10 +187,13 @@ func Pack(dirPath string, outputPath string) error {
 
 		f, err := os.Open(filePath)
 		if err != nil {
+			logutil.Errorf("cuvs.Pack: Open FAILED for %s: %v", filePath, err)
 			return err
 		}
+		logutil.Infof("cuvs.Pack: taring %s (%d bytes)", file.Name(), fi.Size())
 		if _, err := io.Copy(tw, f); err != nil {
 			f.Close()
+			logutil.Errorf("cuvs.Pack: io.Copy FAILED for %s after write: %v", file.Name(), err)
 			return err
 		}
 		f.Close()
@@ -215,6 +326,114 @@ func PeekManifestNShards(dir string) (uint32, error) {
 		return uint32(n), nil
 	}
 	return uint32(len(m.Components.Shards)), nil
+}
+
+// PeekTarManifestNShards is the tar-file counterpart of PeekManifestNShards:
+// it scans the archive at tarPath for manifest.json and returns the saved
+// shard count (0 for SINGLE / REPLICATED). Used by LoadIndex paths that hold
+// a tar path (not a pre-extracted dir) and need the topology before calling
+// NewGpu*Empty + Unpack.
+func PeekTarManifestNShards(tarPath string) (uint32, error) {
+	f, err := os.Open(tarPath)
+	if err != nil {
+		return 0, moerr.NewInternalErrorNoCtx(fmt.Sprintf("open tar %s: %v", tarPath, err))
+	}
+	defer f.Close()
+
+	var r io.Reader = f
+	if strings.HasSuffix(tarPath, ".gz") || strings.HasSuffix(tarPath, ".tgz") {
+		gz, gerr := gzip.NewReader(f)
+		if gerr != nil {
+			return 0, moerr.NewInternalErrorNoCtx(fmt.Sprintf("gzip reader %s: %v", tarPath, gerr))
+		}
+		defer gz.Close()
+		r = gz
+	}
+	tr := tar.NewReader(r)
+	for {
+		hdr, herr := tr.Next()
+		if herr == io.EOF {
+			break
+		}
+		if herr != nil {
+			return 0, moerr.NewInternalErrorNoCtx(fmt.Sprintf("tar next %s: %v", tarPath, herr))
+		}
+		if hdr.Name != "manifest.json" && !strings.HasSuffix(hdr.Name, "/manifest.json") {
+			continue
+		}
+		body, rerr := io.ReadAll(tr)
+		if rerr != nil {
+			return 0, moerr.NewInternalErrorNoCtx(fmt.Sprintf("read manifest from %s: %v", tarPath, rerr))
+		}
+		var m manifestPeek
+		if uerr := json.Unmarshal(body, &m); uerr != nil {
+			return 0, moerr.NewInternalErrorNoCtx(fmt.Sprintf("parse manifest from %s: %v", tarPath, uerr))
+		}
+		if n := len(m.BuildParams.ShardSizes); n > 0 {
+			return uint32(n), nil
+		}
+		return uint32(len(m.Components.Shards)), nil
+	}
+	return 0, moerr.NewInternalErrorNoCtx(fmt.Sprintf("manifest.json not found in %s", tarPath))
+}
+
+// ResolveDevicesForTarLoad returns the devices slice a SHARDED-aware LoadIndex
+// should hand to NewGpu*Empty, using the tar's manifest.json as the source of
+// truth for the saved shard count.
+//
+// Semantics:
+//
+//   - SINGLE / REPLICATED tar (no shards entry): returns devices unchanged,
+//     shardCount=0.
+//   - shardCount == len(devices): returns devices unchanged.
+//   - shardCount < len(devices): trims to devices[:shardCount] so we do not
+//     spawn worker threads / RMM pools on devices that will not host a shard.
+//   - shardCount > len(devices):
+//   - single-GPU host (len(devices) == 1): pads with copies of devices[0]
+//     so all shards land on the one physical GPU. This is the
+//     gpu_multi_simulation case: an index built under sim=N on a
+//     single-GPU host is queried on the same single-GPU host — the
+//     loader auto-detects and pads, so the operator does not need to
+//     also SET gpu_multi_simulation at search time.
+//   - multi-GPU host (len(devices) >= 2): ERROR. If the operator has
+//     multiple real GPUs and the saved index expects more shards than
+//     they exposed, that is a genuine deployment misconfig — silently
+//     piling shards onto some GPUs would just tank throughput. The
+//     error names the counts so the operator can pick a remedy (add
+//     GPUs, or query with gpu_multi_simulation=N so SimulateDevices
+//     produces a list of the right size).
+func ResolveDevicesForTarLoad(devices []int, tarPath string) ([]int, uint32, error) {
+	shardCount, err := PeekTarManifestNShards(tarPath)
+	if err != nil {
+		return devices, 0, err
+	}
+	if shardCount == 0 {
+		return devices, 0, nil
+	}
+	n := int(shardCount)
+	if n == len(devices) {
+		return devices, shardCount, nil
+	}
+	if n < len(devices) {
+		return devices[:n], shardCount, nil
+	}
+	// n > len(devices): single-GPU host is the sim path; multi-GPU is a misconfig.
+	if len(devices) == 1 {
+		expanded := make([]int, n)
+		for i := range expanded {
+			expanded[i] = devices[0]
+		}
+		return expanded, shardCount, nil
+	}
+	if len(devices) == 0 {
+		return devices, shardCount, moerr.NewInternalErrorNoCtx(fmt.Sprintf(
+			"SHARDED index at %s needs %d devices but none are available",
+			tarPath, shardCount))
+	}
+	return devices, shardCount, moerr.NewInternalErrorNoCtx(fmt.Sprintf(
+		"SHARDED index at %s needs %d devices (one per shard) but only %d GPUs available; "+
+			"add GPUs, or query with gpu_multi_simulation=%d",
+		tarPath, shardCount, len(devices), shardCount))
 }
 
 // devicesForLoad returns the slice of devices to pass to the C constructor

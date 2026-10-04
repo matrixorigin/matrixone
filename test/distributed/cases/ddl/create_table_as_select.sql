@@ -443,12 +443,21 @@ select * from time01;
 
 drop table if exists time02;
 create table time02 as select date_format(col2, '%W %M %Y') from time01;
--- @bvt:issue#24436
 show create table time02;
 desc time02;
--- @bvt:issue
 select * from time02;
 drop table time02;
+
+-- DATE_FORMAT/TIME_FORMAT metadata must cover every value that CTAS can
+-- materialize from MatrixOne's datetime and extended time domains.
+set @old_ctas_date_format_sql_mode = @@sql_mode;
+set sql_mode = '';
+drop table if exists time_format_bounds;
+create table time_format_bounds as select date_format(cast('0000-00-00' as date), '%U|%u|%V') as zero_weeks, time_format(cast('-2562047787:59:59' as time), '%H') as full_hour, time_format(cast('-2562047787:59:59' as time), '%T') as full_time, time_format(cast('-00:59:00' as time), '%i') as signed_minute;
+desc time_format_bounds;
+select * from time_format_bounds;
+drop table time_format_bounds;
+set sql_mode = @old_ctas_date_format_sql_mode;
 
 drop table if exists time03;
 create table time03 as select date(col1), date(col2), year(col1), day(col1), weekday(col1), dayofyear(col1) as dya from time01;
@@ -1510,3 +1519,28 @@ as select id, payload from source_ai;
 insert into target_explicit(payload) values ('explicit-default');
 select id, payload from target_explicit where payload = 'explicit-default';
 drop database ctas_auto_increment_24436;
+
+-- Unqualified DECIMAL uses MySQL's DECIMAL(10,0) default, and CTAS preserves it.
+drop database if exists ctas_default_decimal_24436;
+create database ctas_default_decimal_24436;
+use ctas_default_decimal_24436;
+create table src01 (col7 decimal);
+insert into src01 values (3232.000), (0.0001), (null);
+create table dst01 as select * from src01;
+show create table src01;
+show create table dst01;
+select table_name, column_name, column_type, is_nullable
+from information_schema.columns
+where table_schema = database() and table_name in ('src01', 'dst01')
+  and column_name <> '__mo_fake_pk_col'
+order by table_name, ordinal_position;
+drop database ctas_default_decimal_24436;
+
+-- UNION must use integer literal precision when joining a DECIMAL result domain.
+drop database if exists ctas_union_decimal_24436;
+create database ctas_union_decimal_24436;
+use ctas_union_decimal_24436;
+create table literal_union as select 1 as x union all select 2.5 as x;
+show create table literal_union;
+select * from literal_union order by x;
+drop database ctas_union_decimal_24436;

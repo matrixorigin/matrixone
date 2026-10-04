@@ -15,9 +15,6 @@
 package plan
 
 import (
-	"strings"
-
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
@@ -25,7 +22,7 @@ import (
 // mysqlFullGroupByRejectedColumn implements the MySQL ONLY_FULL_GROUP_BY
 // exceptions that are local to one query block: a projected column is valid
 // when it is constrained to one statement-stable value by WHERE, or when its
-// table's complete declared primary key is present in the active grouping set.
+// table's complete primary or eligible NOT NULL UNIQUE key is grouped.
 // It returns the first column that does not satisfy either exception.
 func (builder *QueryBuilder) mysqlFullGroupByRejectedColumn(ctx *BindContext, columns []boundColumn) (string, bool) {
 	for _, column := range columns {
@@ -71,7 +68,45 @@ func (builder *QueryBuilder) mysqlFullGroupByAllowsExprColumns(ctx *BindContext,
 
 func (builder *QueryBuilder) mysqlFullGroupByAllowsColumn(ctx *BindContext, binding *Binding, columnPos int32) bool {
 	return filterListHasSingleValueEqualityOnCol(ctx.whereFilters, binding.tag, columnPos) ||
-		builder.groupByIncludesPrimaryKey(ctx, binding)
+		builder.groupByIncludesPrimaryKey(ctx, binding) ||
+		builder.groupByIncludesNotNullUniqueKey(ctx, binding) ||
+		builder.fullGroupByDependencyAllows(ctx, binding.tag, columnPos)
+}
+
+// This is a binding-local acceptance proof, not a uniqueness property for
+// optimizer rewrites. In particular, it does not infer keys through joins or
+// derived relations, or turn filtered nullable keys into NOT NULL keys.
+func (builder *QueryBuilder) groupByIncludesNotNullUniqueKey(ctx *BindContext, binding *Binding) bool {
+	if binding.nodeId < 0 || int(binding.nodeId) >= len(builder.qry.Nodes) {
+		return false
+	}
+	node := builder.qry.Nodes[binding.nodeId]
+	if node == nil || node.NodeType != pbplan.Node_TABLE_SCAN || node.TableDef == nil {
+		return false
+	}
+	for _, index := range node.TableDef.Indexes {
+		positions, ok := fullGroupByUniqueKeyPositions(node.TableDef, index)
+		if !ok {
+			continue
+		}
+		complete := true
+		for _, pos := range positions {
+			if int(pos) >= len(binding.cols) || node.TableDef.Cols[pos].Default.NullAbility ||
+				!groupByContainsColumn(ctx, binding.tag, pos) {
+				complete = false
+				break
+			}
+		}
+		if complete {
+			return true
+		}
+	}
+	return false
+}
+
+// Eligibility independent of query-local non-null and grouping proofs.
+func fullGroupByUniqueKeyPositions(table *pbplan.TableDef, index *pbplan.IndexDef) ([]int32, bool) {
+	return sqlEqualityCompatibleUniqueIndexColumnPositions(table, index)
 }
 
 func (bc *BindContext) aggregateQueryForFullGroupBy() bool {
@@ -87,29 +122,17 @@ func (builder *QueryBuilder) groupByIncludesPrimaryKey(ctx *BindContext, binding
 		return false
 	}
 	tableDef := builder.qry.Nodes[binding.nodeId].TableDef
-	if tableDef == nil || tableDef.Pkey == nil || tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+	primaryKeyPositions, ok := sqlEqualityCompatiblePrimaryKeyColumnPositions(tableDef)
+	if !ok {
 		return false
 	}
-
-	primaryKeyNames := tableDef.Pkey.Names
-	if len(primaryKeyNames) > 0 {
-		for _, name := range primaryKeyNames {
-			colPos := binding.FindColumn(strings.ToLower(name))
-			if colPos == NotFound || colPos == AmbiguousName || !groupByContainsColumn(ctx, binding.tag, colPos) {
-				return false
-			}
+	for _, colPos := range primaryKeyPositions {
+		if colPos < 0 || int(colPos) >= len(binding.cols) ||
+			!groupByContainsColumn(ctx, binding.tag, colPos) {
+			return false
 		}
-		return len(primaryKeyNames) > 0
 	}
-
-	// Names is the planner's current source of the user-visible components of a
-	// composite primary key. PkeyColName is sufficient only for a single key;
-	// a composite key without Names cannot be proven safe from its hidden column.
-	if tableDef.Pkey.PkeyColName != "" && tableDef.Pkey.PkeyColName != catalog.CPrimaryKeyColName {
-		colPos := binding.FindColumn(strings.ToLower(tableDef.Pkey.PkeyColName))
-		return colPos != NotFound && colPos != AmbiguousName && groupByContainsColumn(ctx, binding.tag, colPos)
-	}
-	return false
+	return true
 }
 
 func filterListHasSingleValueEqualityOnCol(filters []*Expr, tag, columnPos int32) bool {

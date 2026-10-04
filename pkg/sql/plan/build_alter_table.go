@@ -26,8 +26,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -254,6 +256,11 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		return nil, moerr.NewNoSuchTable(ctx, schemaName, tableName)
 	}
 
+	if tableDef.IsTemporary {
+		tableDef = DeepCopyTableDef(tableDef, true)
+		tableDef.Name = tableName
+	}
+
 	isClusterTable := util.TableIsClusterTable(tableDef.GetTableType())
 	accountId, err := cctx.GetAccountId()
 	if err != nil {
@@ -307,10 +314,13 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		pkAffected             bool
 		hasAutoIncrementOption bool
 
-		affectedCols        = make([]string, 0, len(tableDef.Cols))
-		affectedIndexes     = make([]string, 0, len(tableDef.Indexes))
-		unsupportedErrorFmt = "unsupported alter option in copy mode: %s"
-		copyFakePKCol       = catalog.IsFakePkName(tableDef.Pkey.PkeyColName)
+		affectedCols             = make([]string, 0, len(tableDef.Cols))
+		affectedIndexes          = make([]string, 0, len(tableDef.Indexes))
+		pendingAddIndexes        = make([]tree.TableDef, 0)
+		generatedDependencySeeds = make(map[string]struct{})
+		pendingForeignKeys       = make([]*tree.ForeignKey, 0)
+		unsupportedErrorFmt      = "unsupported alter option in copy mode: %s"
+		copyFakePKCol            = catalog.IsFakePkName(tableDef.Pkey.PkeyColName)
 	)
 
 	affectedAllIdxCols := func() {
@@ -333,9 +343,17 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 			case *tree.PrimaryKeyIndex:
 				err = AddPrimaryKey(cctx, alterTablePlan, optionAdd, alterTableCtx)
 				affectedAllIdxCols()
+			case *tree.ForeignKey:
+				// Bind foreign keys after column mutations so the combined
+				// ADD COLUMN/ADD FOREIGN KEY form can resolve either clause order.
+				pendingForeignKeys = append(pendingForeignKeys, optionAdd)
+			case *tree.UniqueIndex, *tree.FullTextIndex, *tree.Index:
+				// Bind secondary indexes only after every COPY schema mutation has
+				// been applied. MySQL resolves an ADD INDEX against the final table
+				// shape, so an earlier index clause may reference a later ADD COLUMN.
+				pendingAddIndexes = append(pendingAddIndexes, optionAdd)
 			default:
 				// column adding is handled in *tree.AlterAddCol
-				// various indexes\fks adding are handled in inplace mode.
 				return nil, moerr.NewInvalidInputf(ctx,
 					unsupportedErrorFmt, formatTreeNode(option))
 			}
@@ -356,10 +374,28 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 			pkAffected, err = AddColumn(cctx, alterTablePlan, option, alterTableCtx)
 			affectedCols = append(affectedCols, option.Column.Name.ColName())
 		case *tree.AlterTableModifyColumnClause:
+			sourceColumn, hasSource, sourceErr := originalAlterSourceColumn(
+				ctx, tableDef, copyTableDef, alterTableCtx, option.NewColumn.Name.ColName(),
+			)
+			if sourceErr != nil {
+				return nil, sourceErr
+			}
 			pkAffected, err = ModifyColumn(cctx, alterTablePlan, option, alterTableCtx)
+			if err == nil && hasSource {
+				generatedDependencySeeds[sourceColumn] = struct{}{}
+			}
 			affectedCols = append(affectedCols, option.NewColumn.Name.ColName())
 		case *tree.AlterTableChangeColumnClause:
+			sourceColumn, hasSource, sourceErr := originalAlterSourceColumn(
+				ctx, tableDef, copyTableDef, alterTableCtx, option.OldColumnName.ColName(),
+			)
+			if sourceErr != nil {
+				return nil, sourceErr
+			}
 			pkAffected, err = ChangeColumn(cctx, alterTablePlan, option, alterTableCtx)
+			if err == nil && hasSource {
+				generatedDependencySeeds[sourceColumn] = struct{}{}
+			}
 			affectedCols = appendAffectedAlterColumnNames(
 				affectedCols,
 				option.OldColumnName.ColName(),
@@ -399,9 +435,38 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 			return nil, err
 		}
 	}
+	// Normalize the final COPY definition, after all ALTER clauses. Keeping a
+	// table cache policy without a visible auto column would make its internal
+	// CREATE invalid; normal SHOW must still faithfully report stored metadata.
+	if !tableHasAutoIncrementColumn(copyTableDef) {
+		copyTableDef.AutoIdCache = 0
+	}
+	if err := validateDefaultColumnDependencies(ctx, copyTableDef.Cols); err != nil {
+		return nil, err
+	}
 	if hasAutoIncrementOption && !tableHasAutoIncrementColumn(copyTableDef) {
 		return nil, moerr.NewInvalidInputf(ctx,
 			"Table '%s' does not have an AUTO_INCREMENT column", tableDef.Name)
+	}
+
+	// Generated values are recomputed from the original table rows under the
+	// final schema. Rebuild indexes on every generated dependent, not just the
+	// directly modified column; otherwise COPY could clone stale index entries.
+	// An all-index invalidation already covers these indexes and needs no closure
+	// walk.
+	if !pkAffected && len(affectedIndexes) == 0 && len(generatedDependencySeeds) > 0 {
+		var generatedPrimaryKeyAffected bool
+		affectedCols, generatedPrimaryKeyAffected, err = appendAlterGeneratedDependents(
+			ctx, tableDef, affectedCols, generatedDependencySeeds,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if generatedPrimaryKeyAffected {
+			// Secondary index entries carry the primary-key value. Recompute all
+			// indexes if a changed source can alter a generated primary-key part.
+			pkAffected = true
+		}
 	}
 
 	if pkAffected {
@@ -411,6 +476,44 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		if err != nil {
 			return nil, err
 		}
+	}
+
+	// Secondary indexes are bound against the final COPY schema. Keep newly
+	// added plugin-index identities separate from affected column/index names:
+	// plugin index names and column names share a string namespace otherwise,
+	// which can spuriously rebuild an unrelated existing plugin index.
+	currentIndexNames := make(map[string]bool, len(copyTableDef.Indexes)+len(pendingAddIndexes))
+	for _, indexDef := range copyTableDef.Indexes {
+		currentIndexNames[indexNameKey(indexDef.IndexName)] = true
+	}
+	newPluginIndexes := make(map[string]bool)
+	for _, definition := range pendingAddIndexes {
+		addIndex, pluginIndexName, buildErr := buildAlterCopyAddIndex(
+			cctx,
+			copyTableDef,
+			currentIndexNames,
+			schemaName,
+			tableName,
+			definition,
+		)
+		if buildErr != nil {
+			return nil, buildErr
+		}
+		copyTableDef.Indexes = append(copyTableDef.Indexes, addIndex.IndexInfo.TableDef.Indexes...)
+		alterTablePlan.Actions = append(alterTablePlan.Actions, &plan.AlterTable_Action{
+			Action: &plan.AlterTable_Action_AddIndex{AddIndex: addIndex},
+		})
+		if pluginIndexName != "" {
+			newPluginIndexes[pluginIndexName] = true
+		}
+	}
+	// Foreign keys bind to the final index set. Materialize every pending index
+	// first so a self-reference can use a UNIQUE index added by the same ALTER,
+	// independent of the SQL clause order.
+	if err = addAlterCopyForeignKeys(
+		cctx, alterTablePlan, alterTableCtx, pendingForeignKeys,
+	); err != nil {
+		return nil, err
 	}
 
 	createTmpDdl, _, err := constructCreateTableSQL(
@@ -427,6 +530,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		SkipPkDedup:        skipPkDedup(tableDef, copyTableDef, alterTableCtx.alterColMap),
 		TargetTableName:    copyTableDef.Name,
 		SkipUniqueIdxDedup: skipUniqueIdxDedup(tableDef, copyTableDef, alterTableCtx.alterColMap),
+		NewPluginIndexes:   newPluginIndexes,
 	}
 
 	opt.SkipIndexesCopy = make(map[string]bool)
@@ -472,6 +576,237 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 	}, nil
 }
 
+func addAlterCopyForeignKeys(
+	cctx CompilerContext,
+	alterTablePlan *plan.AlterTable,
+	alterTableCtx *AlterTableContext,
+	foreignKeys []*tree.ForeignKey,
+) error {
+	if len(foreignKeys) == 0 {
+		return nil
+	}
+	ctx := cctx.GetContext()
+	if alterTablePlan.CopyTableDef.GetIsTemporary() {
+		return moerr.NewNotSupported(ctx, "add foreign key for temporary table")
+	}
+
+	// Bind against a planner-owned view of the final schema. Keep the original
+	// relation name so self references are recognized even though the physical
+	// COPY target has a generated temporary name.
+	finalTableDef := DeepCopyTableDef(alterTablePlan.CopyTableDef, true)
+	finalTableDef.Name = alterTablePlan.TableDef.Name
+	finalTableDef.DbName = alterTablePlan.Database
+
+	foreignKeyNames := make(map[string]struct{}, len(finalTableDef.Fkeys)+len(foreignKeys))
+	for _, foreignKey := range finalTableDef.Fkeys {
+		if foreignKey != nil && foreignKey.Name != "" {
+			foreignKeyNames[strings.ToLower(foreignKey.Name)] = struct{}{}
+		}
+	}
+
+	for _, foreignKey := range foreignKeys {
+		if err := adjustConstraintName(ctx, foreignKey); err != nil {
+			return err
+		}
+		nameKey := strings.ToLower(foreignKey.ConstraintSymbol)
+		if _, exists := foreignKeyNames[nameKey]; exists {
+			return moerr.NewErrDuplicateKeyName(ctx, foreignKey.ConstraintSymbol)
+		}
+
+		fkData, err := getForeignKeyData(
+			cctx, alterTablePlan.Database, finalTableDef, foreignKey,
+		)
+		if err != nil {
+			return err
+		}
+		if fkData.IsSelfRefer {
+			if err = checkFkColsAreValid(cctx, fkData, finalTableDef); err != nil {
+				return err
+			}
+			fkData.UpdateSql = getSqlForAddFkWithCatalogLayout(
+				alterTablePlan.Database,
+				alterTablePlan.TableDef.Name,
+				fkData,
+				fkData.catalogLayout,
+			)
+		}
+		// Match the existing ALTER ADD FOREIGN KEY contract: unlike CREATE TABLE,
+		// ALTER does not retain an unresolved parent under foreign_key_checks=0.
+		if fkData.ForwardRefer {
+			return moerr.NewNoSuchTable(
+				ctx, fkData.ParentDbName, fkData.ParentTableName,
+			)
+		}
+
+		foreignKeyNames[nameKey] = struct{}{}
+		finalTableDef.Fkeys = append(finalTableDef.Fkeys, fkData.Def)
+		alterTablePlan.CopyTableDef.Fkeys = append(
+			alterTablePlan.CopyTableDef.Fkeys, fkData.Def,
+		)
+		alterTablePlan.Actions = append(alterTablePlan.Actions, &plan.AlterTable_Action{
+			Action: &plan.AlterTable_Action_AddFk{
+				AddFk: &plan.AlterTableAddFk{
+					DbName:    fkData.ParentDbName,
+					TableName: fkData.ParentTableName,
+					Cols:      slices.Clone(fkData.Cols.Cols),
+					Fkey:      fkData.Def,
+				},
+			},
+		})
+		alterTableCtx.UpdateSqls = append(alterTableCtx.UpdateSqls, fkData.UpdateSql)
+
+		if fkData.IsSelfRefer {
+			detectSQLs, err := genSqlsForCheckFKSelfRefer(
+				ctx,
+				alterTablePlan.Database,
+				alterTablePlan.TableDef.Name,
+				finalTableDef.Cols,
+				[]*plan.ForeignKeyDef{fkData.Def},
+			)
+			if err != nil {
+				return err
+			}
+			alterTablePlan.DetectSqls = append(alterTablePlan.DetectSqls, detectSQLs...)
+			continue
+		}
+
+		_, parentTableDef, err := cctx.Resolve(
+			fkData.ParentDbName, fkData.ParentTableName, nil,
+		)
+		if err != nil {
+			return err
+		}
+		if parentTableDef == nil {
+			return moerr.NewNoSuchTable(
+				ctx, fkData.ParentDbName, fkData.ParentTableName,
+			)
+		}
+		detectSQL, err := genSqlForCheckFKConstraints(
+			ctx,
+			fkData.Def,
+			alterTablePlan.Database,
+			alterTablePlan.TableDef.Name,
+			finalTableDef.Cols,
+			fkData.ParentDbName,
+			fkData.ParentTableName,
+			parentTableDef.Cols,
+		)
+		if err != nil {
+			return err
+		}
+		alterTablePlan.DetectSqls = append(alterTablePlan.DetectSqls, detectSQL)
+	}
+	return nil
+}
+
+// buildAlterCopyAddIndex applies the same index-definition builders used by
+// CREATE/INPLACE ALTER to the final COPY schema. The replacement table is
+// created with these definitions before data is inserted, so regular and
+// UNIQUE hidden tables are populated atomically by that INSERT; plugin indexes
+// are populated exactly once by the post-copy rebuild.
+func buildAlterCopyAddIndex(
+	ctx CompilerContext,
+	copyTableDef *TableDef,
+	currentIndexNames map[string]bool,
+	databaseName string,
+	tableName string,
+	definition tree.TableDef,
+) (*plan.AlterTableAddIndex, string, error) {
+	if err := checkCreateIndexTableType(ctx.GetContext(), copyTableDef); err != nil {
+		return nil, "", err
+	}
+
+	colMap := make(map[string]*ColDef, len(copyTableDef.Cols)+1)
+	for _, col := range copyTableDef.Cols {
+		colMap[col.Name] = col
+	}
+	if copyTableDef.Pkey != nil && copyTableDef.Pkey.CompPkeyCol != nil {
+		colMap[copyTableDef.Pkey.CompPkeyCol.Name] = copyTableDef.Pkey.CompPkeyCol
+	}
+
+	primaryKeyName := getTablePriKeyName(copyTableDef.Pkey)
+	indexInfo := &plan.CreateTable{TableDef: &TableDef{}}
+	var indexName string
+
+	switch index := definition.(type) {
+	case *tree.UniqueIndex:
+		if err := checkIndexKeypartSupportability(ctx.GetContext(), index.KeyParts); err != nil {
+			return nil, "", err
+		}
+		indexName = index.GetIndexName()
+		if err := checkDuplicateConstraint(currentIndexNames, indexName, false, ctx.GetContext()); err != nil {
+			return nil, "", err
+		}
+		if indexName == "" {
+			setEmptyUniqueIndexName(currentIndexNames, index)
+			indexName = index.GetIndexName()
+		}
+		if err := buildUniqueIndexTable(
+			indexInfo, []*tree.UniqueIndex{index}, colMap, primaryKeyName, ctx,
+		); err != nil {
+			return nil, "", err
+		}
+
+	case *tree.FullTextIndex:
+		if err := checkIndexKeypartSupportability(ctx.GetContext(), index.KeyParts); err != nil {
+			return nil, "", err
+		}
+		indexName = index.Name
+		if err := checkDuplicateConstraint(currentIndexNames, indexName, false, ctx.GetContext()); err != nil {
+			return nil, "", err
+		}
+		if indexName == "" {
+			setEmptyFullTextIndexName(currentIndexNames, index)
+			indexName = index.Name
+		}
+		if err := buildFullTextIndexTable(
+			indexInfo, []*tree.FullTextIndex{index}, colMap,
+			copyTableDef.Indexes, primaryKeyName, ctx,
+		); err != nil {
+			return nil, "", err
+		}
+
+	case *tree.Index:
+		if err := checkIndexKeypartSupportability(ctx.GetContext(), index.KeyParts); err != nil {
+			return nil, "", err
+		}
+		indexName = index.Name
+		if err := checkDuplicateConstraint(currentIndexNames, indexName, false, ctx.GetContext()); err != nil {
+			return nil, "", err
+		}
+		if indexName == "" {
+			setEmptyIndexName(currentIndexNames, index)
+			indexName = index.Name
+		}
+		if err := buildSecondaryIndexDef(
+			indexInfo, []*tree.Index{index}, colMap,
+			copyTableDef.Indexes, primaryKeyName, ctx,
+		); err != nil {
+			return nil, "", err
+		}
+
+	default:
+		return nil, "", moerr.NewInternalErrorf(
+			ctx.GetContext(), "invalid COPY ALTER index definition: %s", formatTreeNode(definition),
+		)
+	}
+
+	pluginIndexName := ""
+	if slices.ContainsFunc(indexInfo.TableDef.Indexes, func(indexDef *plan.IndexDef) bool {
+		return indexDef != nil && indexplugin.IsPluginAlgo(indexDef.IndexAlgo)
+	}) {
+		pluginIndexName = indexName
+	}
+
+	return &plan.AlterTableAddIndex{
+		DbName:                databaseName,
+		TableName:             tableName,
+		OriginTablePrimaryKey: primaryKeyName,
+		IndexInfo:             indexInfo,
+		IndexTableExist:       true,
+	}, pluginIndexName, nil
+}
+
 func appendAffectedAlterColumnNames(affectedCols []string, oldColName, newColName string) []string {
 	affectedCols = append(affectedCols, oldColName)
 	if newColName != oldColName {
@@ -503,18 +838,18 @@ func buildAlterInsertDataSQL(
 			continue
 		}
 		if isFirst {
-			insertBuffer.WriteString("`" + key + "`")
+			insertBuffer.WriteString(sqlquote.Ident(key))
 			if value.sexprType == exprColumnName {
-				selectBuffer.WriteString("`" + value.sexprStr + "`")
+				selectBuffer.WriteString(sqlquote.Ident(value.sexprStr))
 			} else {
 				selectBuffer.WriteString(value.sexprStr)
 			}
 			isFirst = false
 		} else {
-			insertBuffer.WriteString(", " + "`" + key + "`")
+			insertBuffer.WriteString(", " + sqlquote.Ident(key))
 
 			if value.sexprType == exprColumnName {
-				selectBuffer.WriteString(", " + "`" + value.sexprStr + "`")
+				selectBuffer.WriteString(", " + sqlquote.Ident(value.sexprStr))
 			} else {
 				selectBuffer.WriteString(", " + value.sexprStr)
 			}
@@ -536,14 +871,14 @@ func buildAlterInsertDataSQL(
 		// delete from t1 where a = 2;
 		// fails, cannot find this row by join index table and the primary table.
 		//
-		str := fmt.Sprintf(", `%s`", catalog.FakePrimaryKeyColName)
+		str := ", " + sqlquote.Ident(catalog.FakePrimaryKeyColName)
 		insertBuffer.WriteString(str)
 		selectBuffer.WriteString(str)
 	}
 
-	insertSQL := fmt.Sprintf("INSERT INTO `%s`.`%s` (%s) SELECT %s FROM `%s`.`%s`",
-		formatStr(schemaName), formatStr(copyTableName), insertBuffer.String(),
-		selectBuffer.String(), formatStr(schemaName), formatStr(originTableName))
+	insertSQL := fmt.Sprintf("INSERT INTO %s (%s) SELECT %s FROM %s",
+		sqlquote.QualifiedIdent(schemaName, copyTableName), insertBuffer.String(),
+		selectBuffer.String(), sqlquote.QualifiedIdent(schemaName, originTableName))
 
 	return insertSQL, nil
 }
@@ -560,6 +895,295 @@ type AlterTableContext struct {
 	// key oldColId -> new ColDef
 	changColDefMap map[uint64]*ColDef
 	UpdateSqls     []string
+}
+
+// originalAlterSourceColumn resolves the original source column currently
+// feeding a target column in a COPY ALTER. Added columns may have constant or
+// absent source mappings; those must not seed dependency invalidation against
+// an original column with the same name.
+func originalAlterSourceColumn(
+	ctx context.Context,
+	originalTableDef, copyTableDef *TableDef,
+	alterCtx *AlterTableContext,
+	targetColumnName string,
+) (string, bool, error) {
+	targetCol := FindColumn(copyTableDef.Cols, targetColumnName)
+	if targetCol == nil {
+		// Let the ALTER option return its normal unknown-column error.
+		return "", false, nil
+	}
+
+	source, ok := alterCtx.alterColMap[targetCol.Name]
+	if !ok || source.sexprType != exprColumnName {
+		return "", false, nil
+	}
+
+	originalCol := FindColumn(originalTableDef.Cols, source.sexprStr)
+	if originalCol == nil {
+		return "", false, moerr.NewInternalErrorf(ctx,
+			"cannot resolve original source column %q for altered column %q",
+			source.sexprStr, targetCol.Name)
+	}
+	return originalCol.Name, true, nil
+}
+
+// AlterCopyAffectedForeignKeyColumns returns the columns whose values or
+// comparison semantics can change during ALTER COPY. It includes both direct
+// foreign-key endpoints and the stored-generated closure of changed sources.
+// The original schema supplies dependency positions; the final copy schema
+// supplies the definitions after all ALTER options have been applied.
+//
+// The returned IDs are original column IDs. COPY remaps those IDs only after
+// the temporary relation has been populated, so the live FK guard must inspect
+// this set before that boundary.
+func AlterCopyAffectedForeignKeyColumns(
+	ctx context.Context,
+	originalTableDef, copyTableDef *TableDef,
+	changeColDefMap map[uint64]*ColDef,
+) (map[uint64]string, error) {
+	if originalTableDef == nil || copyTableDef == nil {
+		return nil, moerr.NewInternalError(ctx, "missing ALTER COPY table definition for foreign-key validation")
+	}
+
+	seeds := make(map[string]struct{})
+	affected := make(map[uint64]string)
+	copyColsByName := make(map[string]*ColDef, len(copyTableDef.Cols))
+	for _, copyCol := range copyTableDef.Cols {
+		if copyCol != nil {
+			copyColsByName[strings.ToLower(copyCol.Name)] = copyCol
+		}
+	}
+	findCopyColumn := func(name string) *ColDef {
+		if col := copyColsByName[strings.ToLower(name)]; col != nil {
+			return col
+		}
+		// Keep EqualFold behavior for unusual legacy identifiers that do not
+		// normalize through strings.ToLower.
+		return FindColumn(copyTableDef.Cols, name)
+	}
+	hasOriginalGeneratedColumns := false
+	hasStoredGeneratedColumns := false
+	for _, col := range originalTableDef.Cols {
+		if col != nil && col.GeneratedCol != nil {
+			hasOriginalGeneratedColumns = true
+			break
+		}
+	}
+	for _, tableDef := range []*TableDef{originalTableDef, copyTableDef} {
+		for _, col := range tableDef.Cols {
+			if col != nil && col.GeneratedCol != nil && col.GeneratedCol.IsStored {
+				hasStoredGeneratedColumns = true
+				break
+			}
+		}
+		if hasStoredGeneratedColumns {
+			break
+		}
+	}
+	for _, originalCol := range originalTableDef.Cols {
+		if originalCol == nil || originalCol.Hidden {
+			continue
+		}
+		mappedCol, ok := changeColDefMap[originalCol.ColId]
+		if !ok {
+			// A removed source can change every generated value that depends on
+			// it. Drop validation normally rejects that shape earlier; keeping it
+			// in the closure makes the live FK guard fail closed as well.
+			seeds[originalCol.Name] = struct{}{}
+			affected[originalCol.ColId] = originalCol.Name
+			continue
+		}
+		if mappedCol == nil {
+			return nil, moerr.NewInternalErrorf(ctx,
+				"nil ALTER COPY column mapping for source column %q", originalCol.Name)
+		}
+		copyCol := findCopyColumn(mappedCol.Name)
+		if copyCol == nil {
+			return nil, moerr.NewInternalErrorf(ctx,
+				"cannot resolve ALTER COPY target column %q for source column %q",
+				mappedCol.Name, originalCol.Name)
+		}
+		// A direct source column can itself be an FK endpoint. The generated
+		// dependency closure below is intentionally broader because it drives
+		// index invalidation; this map must use the narrower FK value-change
+		// predicate so safe widening and metadata-only edits remain legal.
+		if alterCopyForeignKeyColumnMayChangeValues(originalCol.Typ, copyCol.Typ) {
+			affected[originalCol.ColId] = originalCol.Name
+		}
+		generatedDefinitionChanged := alterCopyGeneratedDefinitionMayChangeValues(
+			originalCol.GeneratedCol, copyCol.GeneratedCol,
+		)
+		if generatedDefinitionChanged {
+			// The modified generated column itself may be an FK endpoint, and
+			// its dependents may also be recomputed by the copy INSERT.
+			seeds[originalCol.Name] = struct{}{}
+			if (originalCol.GeneratedCol != nil && originalCol.GeneratedCol.IsStored) ||
+				(copyCol.GeneratedCol != nil && copyCol.GeneratedCol.IsStored) {
+				affected[originalCol.ColId] = originalCol.Name
+			}
+		}
+		if alterCopyColumnTypeMayChangeValues(originalCol.Typ, copyCol.Typ) {
+			seeds[originalCol.Name] = struct{}{}
+		}
+	}
+	if len(seeds) == 0 || !hasOriginalGeneratedColumns || !hasStoredGeneratedColumns {
+		// Direct FK endpoints do not need dependency-graph metadata. This is
+		// also the normal path for legacy ordinary tables whose Name2ColIndex
+		// is absent; do not turn a direct type check into a spurious metadata
+		// failure merely because there are no generated dependents to expand.
+		return affected, nil
+	}
+
+	possiblyChanged, err := collectGeneratedColumnDependents(ctx, originalTableDef, seeds)
+	if err != nil {
+		return nil, err
+	}
+	for _, col := range originalTableDef.Cols {
+		if col == nil || col.GeneratedCol == nil {
+			continue
+		}
+		if _, changed := possiblyChanged[col.Name]; changed {
+			mappedCol := changeColDefMap[col.ColId]
+			var copyCol *ColDef
+			if mappedCol != nil {
+				copyCol = findCopyColumn(mappedCol.Name)
+			}
+			if col.GeneratedCol.IsStored ||
+				(copyCol != nil && copyCol.GeneratedCol != nil && copyCol.GeneratedCol.IsStored) {
+				affected[col.ColId] = col.Name
+			}
+		}
+	}
+	return affected, nil
+}
+
+// alterCopyForeignKeyColumnMayChangeValues classifies a direct source
+// conversion for FK validation. It deliberately differs from the broader
+// generated-dependency predicate: a proven capacity widening does not change
+// an existing endpoint value and must not turn a historically legal ALTER into
+// a blanket rejection. Scale, collation/padding, enum metadata, and all
+// narrowing or cross-type conversions remain conservative. A positive source
+// width is required before a capacity widening can be proven; zero/negative
+// legacy widths are intentionally treated as unknown.
+func alterCopyForeignKeyColumnMayChangeValues(source, target Type) bool {
+	if source.Id != target.Id ||
+		source.Scale != target.Scale ||
+		source.Enumvalues != target.Enumvalues ||
+		source.Charset != target.Charset ||
+		source.PadSpace != target.PadSpace {
+		return true
+	}
+	if source.Width == target.Width {
+		return false
+	}
+	if source.Width < target.Width {
+		if source.Width <= 0 || target.Width <= 0 {
+			return true
+		}
+		switch types.T(source.Id) {
+		case types.T_decimal64, types.T_decimal128, types.T_decimal256,
+			types.T_char, types.T_varchar, types.T_varbinary:
+			// Decimal precision and variable-length capacity widening preserve
+			// existing values when all semantic metadata above is unchanged.
+			// Ordinary COPY assignment does not pad CHAR; set-operation casts
+			// carry their own explicit padding mode and are outside this path.
+			return false
+		default:
+			// BINARY assignment pads with zero bytes; BIT, floating-point display
+			// metadata, and internal/array types need a representation-specific
+			// proof before they can be treated as value-preserving. Keep the FK
+			// guard closed for those conversions.
+			return true
+		}
+	}
+	return true
+}
+
+func alterCopyGeneratedDefinitionMayChangeValues(source, target *plan.GeneratedCol) bool {
+	if source == nil || target == nil {
+		return source != target
+	}
+	if source.IsStored != target.IsStored {
+		return true
+	}
+	// OriginString is the stable expression representation used to recreate
+	// generated columns for COPY. Missing text cannot prove the definitions are
+	// unchanged, so fail closed and validate the live FK endpoints.
+	return source.OriginString == "" || target.OriginString == "" ||
+		source.OriginString != target.OriginString
+}
+
+func alterCopyColumnTypeMayChangeValues(source, target Type) bool {
+	return source.Id != target.Id ||
+		source.Width != target.Width ||
+		source.Scale != target.Scale ||
+		source.Enumvalues != target.Enumvalues ||
+		source.Charset != target.Charset ||
+		source.PadSpace != target.PadSpace
+}
+
+func appendAlterGeneratedDependents(
+	ctx context.Context,
+	originalTableDef *TableDef,
+	affectedCols []string,
+	seeds map[string]struct{},
+) ([]string, bool, error) {
+	if len(seeds) == 0 {
+		return affectedCols, false, nil
+	}
+	// Ordinary tables have no generated dependencies to expand. Keep this path
+	// independent of Name2ColIndex, which is not needed for direct index impact
+	// and may be absent from legacy table metadata.
+	hasGeneratedColumns := false
+	for _, col := range originalTableDef.Cols {
+		if col != nil && col.GeneratedCol != nil {
+			hasGeneratedColumns = true
+			break
+		}
+	}
+	if !hasGeneratedColumns {
+		return affectedCols, false, nil
+	}
+
+	possiblyChangedCols, err := collectGeneratedColumnDependents(ctx, originalTableDef, seeds)
+	if err != nil {
+		return nil, false, err
+	}
+	for _, col := range originalTableDef.Cols {
+		if col == nil || col.GeneratedCol == nil {
+			continue
+		}
+		if _, changed := possiblyChangedCols[col.Name]; changed {
+			affectedCols = append(affectedCols, col.Name)
+		}
+	}
+	return affectedCols, generatedColumnDependenciesAffectPrimaryKey(originalTableDef, possiblyChangedCols), nil
+}
+
+func generatedColumnDependenciesAffectPrimaryKey(
+	tableDef *TableDef,
+	possiblyChangedCols map[string]struct{},
+) bool {
+	if tableDef == nil || tableDef.Pkey == nil || catalog.IsFakePkName(tableDef.Pkey.PkeyColName) {
+		return false
+	}
+
+	positions, ok := primaryKeyColumnPositions(tableDef)
+	if !ok {
+		// Incomplete key metadata is not evidence that the key is unaffected.
+		// Conservatively rebuild indexes instead of cloning entries whose
+		// primary-key payload may no longer identify the copied base row.
+		return true
+	}
+	for _, pos := range positions {
+		if pos < 0 || int(pos) >= len(tableDef.Cols) || tableDef.Cols[pos] == nil {
+			return true
+		}
+		if _, changed := possiblyChangedCols[tableDef.Cols[pos].Name]; changed {
+			return true
+		}
+	}
+	return false
 }
 
 func (ctx *AlterTableContext) renameColumnSource(oldName, newName string) {
@@ -618,6 +1242,10 @@ func buildCopyTableDef(ctx context.Context, tableDef *TableDef) (*TableDef, erro
 		return nil, moerr.NewInternalError(ctx, "new uuid failed")
 	}
 	replicaTableDef.Name = replicaTableDef.Name + "_copy_" + id.String()
+	if tableDef.IsTemporary {
+		// Physical session names can already exceed the SQL identifier limit.
+		replicaTableDef.Name = "__mo_alter_copy_" + id.String()
+	}
 	return replicaTableDef, nil
 }
 
@@ -681,9 +1309,8 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	}
 
 	if tableDef.IsTemporary {
-		// Only allow a safe subset of alter operations on temporary tables.
-		// For now: add index / drop index.
-		if !allowTempTableAlterForIndex(stmt) {
+		// Keep unsupported temporary-table DDL (e.g. foreign keys and partitions) closed.
+		if !allowTempTableAlter(stmt) {
 			return nil, moerr.NewNYI(ctx.GetContext(), "alter table for temporary table")
 		}
 	}
@@ -764,9 +1391,8 @@ func validateAlterTableIdentifierDestinations(ctx context.Context, options []tre
 	return nil
 }
 
-// allowTempTableAlterForIndex returns true if the alter table statement
-// is limited to add/drop index operations, which we support for temp tables.
-func allowTempTableAlterForIndex(stmt *tree.AlterTable) bool {
+// allowTempTableAlter limits temporary ALTER to supported column, name and index changes.
+func allowTempTableAlter(stmt *tree.AlterTable) bool {
 	// partition alter is not allowed for temp table
 	if stmt.PartitionOption != nil {
 		return false
@@ -784,11 +1410,15 @@ func allowTempTableAlterForIndex(stmt *tree.AlterTable) bool {
 			}
 		case *tree.AlterOptionDrop:
 			switch o.Typ {
-			case tree.AlterTableDropIndex, tree.AlterTableDropKey:
-				// supported drop index/key
+			case tree.AlterTableDropIndex, tree.AlterTableDropKey, tree.AlterTableDropColumn:
+				// supported drop index/key/column
 			default:
 				return false
 			}
+		case *tree.AlterAddCol, *tree.AlterTableModifyColumnClause,
+			*tree.AlterTableRenameColumnClause,
+			*tree.AlterOptionTableName:
+			// supported column and name changes
 		default:
 			return false
 		}

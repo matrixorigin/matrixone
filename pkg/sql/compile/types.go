@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -138,7 +139,9 @@ type Source struct {
 	FilterExpr      *plan.Expr   // todo: change this to []*plan.Expr,  is FilterList + RuntimeFilter
 	FilterList      []*plan.Expr //from node.FilterList, use for reader
 	BlockFilterList []*plan.Expr //from node.BlockFilterList, use for range
-	node            *plan.Node
+	// nil means not initialized; non-nil empty means this execution admitted no block filters.
+	remoteBlockFilters []*plan.Expr
+	node               *plan.Node
 	// vectorIndexScanTemplate retains the immutable prepared-plan expressions.
 	// Each execution folds a fresh copy into node.VectorIndexScan.
 	vectorIndexScanTemplate *plan.VectorIndexScan
@@ -199,6 +202,14 @@ type Scope struct {
 	// branch receiver is exhausted, so an outer LIMIT can leave later branches
 	// completely unstarted.
 	LazyPreScopes bool
+	// lazyRemote* pins one activated lazy branch to its own remote allocation
+	// generation. Deferred branches must not register or inflate this topology.
+	lazyRemoteFragmentCounts map[string]uint32
+	lazyRemoteExecutionID    uuid.UUID
+	// ConcurrentPreScopes forces producer/consumer concurrency for runtime
+	// scope trees whose bounded receiver channels would deadlock under the TP
+	// query's sequential fast path.
+	ConcurrentPreScopes bool
 	// parallelGenerations are execution-created scope trees retained only so
 	// post-run physical-plan analysis can observe their real DOP and stats.
 	// Compile.Reset releases the previous execution's trees before the template
@@ -278,6 +289,11 @@ type Compile struct {
 	siriusRead *siriusReadOwner
 
 	pn *plan.Plan
+	// Semantic values for a prepared CTAS follow-up INSERT. SQL text transport
+	// alone cannot recover the source type of each original parameter.
+	preparedParamValues []any
+	// Proof belongs to this bound execution and physical plan generation.
+	preparedJoinDiagnosticFree bool
 
 	execType plan2.ExecType
 
@@ -307,12 +323,34 @@ type Compile struct {
 
 	// proc stores the execution context.
 	proc *process.Process
-	// reusePlanSnapshot is set only when a retry recompiles pipelines from the
-	// same logical plan. Such a retry must retain the plan's original binding
-	// snapshot even if RC lock handling advanced the transaction snapshot.
-	reusePlanSnapshot bool
+	// planSnapshotTS is owned by the compiled plan generation, not by proc.
+	// A prepared Compile may be reset onto a newer transaction process while
+	// retaining the physical plan built at this timestamp.
+	planSnapshotTS    timestamp.Timestamp
+	hasPlanSnapshotTS bool
+	// planGenerationReused is true only when this execution admitted an
+	// existing session/prepared generation. A definition rebuild clears it;
+	// data-only retries retain it with the same logical generation.
+	planGenerationReused bool
+	// stringShuffleHashAlgorithm is selected once per execution. Retries keep
+	// it, while a prepared pipeline's next Reset selects again from the rollout
+	// gate. This prevents equal keys from changing owners mid-query.
+	stringShuffleHashAlgorithm       process.StringShuffleHashAlgorithm
+	stringShuffleHashAlgorithmFrozen bool
+	// resultMetadataFrozen is set once a streaming consumer has materialized or
+	// sent the current result schema. A definition retry may continue only when
+	// the rebuilt logical plan exposes identical result metadata.
+	resultMetadataFrozen bool
+	// planGenerationRebuilt is sticky for this Compile. Once a retry rebuilds
+	// its logical plan, any frontend-owned prepared plan or physical topology
+	// from the previous generation must not be reused.
+	planGenerationRebuilt bool
 	// runSqlToken tracks the current statement in txn operator coordination.
 	runSqlToken uint64
+	// sequenceState is the frontend-visible sequence state captured at the
+	// beginning of this statement. It is restored before a retry generation so
+	// a failed attempt cannot publish stale CURRVAL/LASTVAL values.
+	sequenceState sequenceStatementState
 	// TxnOffset read starting offset position within the transaction during the execute current statement
 	TxnOffset int
 
@@ -353,19 +391,42 @@ type Compile struct {
 
 	lockMeta   *LockMeta
 	lockTables map[uint64]*plan.LockTarget
+	// prePipelineLockTableID requests normal table-lock admission for one newly
+	// created target of an internal INSERT. It is not a proof of a held lock.
+	prePipelineLockTableID uint64
+	// loadUniqueIndexPromotion is coordinator-local execution state shared only
+	// with physical retry compiles. It is never serialized into a remote scope or
+	// written back into the canonical logical plan.
+	loadUniqueIndexPromotion      *loadUniqueIndexPromotionState
+	loadUniqueIndexPromotionOwner bool
 
+	// Lazy scopes may register folds while another scope evaluates block filters.
+	// Protect both the registry and its mutable executors for the whole operation.
+	filterExprMu   sync.Mutex
 	filterExprExes []colexec.ExpressionExecutor
 
-	// compiledRightSingleNodes records semantic right-SINGLE nodes actually
-	// visited by compilePlanScope. It is statement-local and remains empty for
-	// queries without right-SINGLE joins.
-	compiledRightSingleNodes []int32
+	// compiledLocalRuntimeFilterNodes records SINGLE nodes with current-CN
+	// runtime-filter producers which were actually visited by compilePlanScope.
+	// It is statement-local and excludes physically pruned subtrees.
+	compiledLocalRuntimeFilterNodes []int32
 
 	needLockMeta bool
 	needBlock    bool
 	isPrepare    bool
-	disableRetry bool
-	isInternal   bool
+	// Immutable PREPARE-time floor, inherited by every physical generation.
+	groupConcatMaxLenFloor uint64
+	disableRetry           bool
+	isInternal             bool
+	// temporaryDDLInExecutorTxn keeps temporary CREATE/DROP in the transaction
+	// owned by the SQL executor. It is intentionally separate from isInternal,
+	// which also controls routing and other execution policy.
+	temporaryDDLInExecutorTxn bool
+	// Shared by retry generations so a direct-client temporary DROP reached in
+	// an earlier attempt is published if retry setup later fails terminally.
+	temporaryDropRetryStage *temporaryDropRetireStage
+	// Run owns publication after every possible retry decision, including
+	// errors that occur after the DROP scope itself has returned successfully.
+	temporaryDropRetryActive bool
 	// resourceAttemptOwnerEligible is set only for the top-level statement
 	// Compile. The statement root still arbitrates the single actual owner.
 	resourceAttemptOwnerEligible bool
@@ -384,6 +445,7 @@ type Compile struct {
 
 	adjustTableExtraFunc     func(*api.SchemaExtra) error
 	disableDropAutoIncrement bool
+	skipDataBranchReclaim    bool
 	keepAutoIncrement        uint64
 	ignorePublish            bool
 	ignoreCheckExperimental  bool

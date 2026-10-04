@@ -58,6 +58,9 @@ func (p *Predicate) Validate(ctx context.Context) error {
 			return moerr.NewInvalidInput(ctx, "MongoDB AND predicate requires children")
 		}
 		for _, child := range p.Children {
+			if child == nil {
+				return moerr.NewInvalidInput(ctx, "MongoDB AND predicate requires non-nil children")
+			}
 			if err := child.Validate(ctx); err != nil {
 				return err
 			}
@@ -166,6 +169,13 @@ func ProjectionDocument(columns []ColumnMapping) bson.D {
 			return strings.HasPrefix(selected.Key, column.Path+".")
 		})
 		projection = append(projection, bson.E{Key: column.Path, Value: 1})
+	}
+	if len(projection) == 0 {
+		// An empty document with only _id: 0 is an exclusion projection, so it
+		// returns every large unmapped field. A zero-column scan still needs one
+		// bounded document per result to preserve cardinality for COUNT(*) and
+		// query-only scans.
+		return bson.D{{Key: "_id", Value: 1}}
 	}
 	includeID := false
 	for _, selected := range projection {

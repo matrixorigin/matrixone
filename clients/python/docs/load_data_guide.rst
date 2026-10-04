@@ -144,7 +144,7 @@ Load Parquet files using pandas-compatible ``read_parquet()``:
 
 - ✅ Fully supports: SNAPPY, GZIP, LZ4, ZSTD, Brotli compression
 - ✅ Fully supports: Parquet 1.0 and 2.0, statistics, nullable columns
-- ⚠️ **Must disable dictionary encoding**: ``use_dictionary=False``
+- ✅ **Dictionary encoding**: Supported for supported scalar types
 - ⚠️ **VARCHAR only**: Use ``VARCHAR`` in table schema, not ``TEXT``
 - ⚠️ **UTC timestamps**: Use ``pa.timestamp('ms', tz='UTC')``
 

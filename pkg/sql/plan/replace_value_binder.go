@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func NewReplaceValueBinder(sysCtx context.Context, builder *QueryBuilder, ctx *BindContext, typ plan.Type, tableDef *plan.TableDef) *ReplaceValueBinder {
@@ -61,7 +62,11 @@ func (b *ReplaceValueBinder) BindColRef(astExpr *tree.UnresolvedName, _ int32, _
 	if b.tableDef.Cols[colIdx].GeneratedCol != nil {
 		return nil, moerr.NewInvalidInputf(b.GetContext(), "cannot reference generated column '%s' in replace set value", astExpr.ColNameOrigin())
 	}
-	return getDefaultExpr(b.GetContext(), b.tableDef.Cols[colIdx])
+	var proc *process.Process
+	if b.builder != nil && b.builder.compCtx != nil {
+		proc = b.builder.compCtx.GetProcess()
+	}
+	return getDefaultExprForAssignment(b.GetContext(), b.tableDef.Cols[colIdx], proc, false)
 }
 
 func (b *ReplaceValueBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
@@ -73,7 +78,7 @@ func (b *ReplaceValueBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr
 }
 
 func (b *ReplaceValueBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
-	return nil, moerr.NewNYI(b.GetContext(), "subquery in replace set value")
+	return b.baseBindSubquery(astExpr, isRoot)
 }
 
 func (b *ReplaceValueBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {

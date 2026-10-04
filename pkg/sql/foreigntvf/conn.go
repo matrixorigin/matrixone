@@ -60,6 +60,16 @@ type Conn interface {
 
 var _ process.ForeignConn = (Conn)(nil)
 
+// NamedQuerier is the OPTIONAL capability a connection implements when it can
+// report what the source calls the columns of a result.  A foreign scan does
+// not normally care -- it maps the result positionally -- but a table that
+// pushes predicates down does: MO writes the declared column names into the
+// SQL it sends, so it has to check that they are the names the source actually
+// answered with.
+type NamedQuerier interface {
+	QueryNamed(ctx context.Context, queryText string) (io.ReadCloser, []string, error)
+}
+
 // MakeHandle derives the session cache handle for a (kind, config) pair. The
 // handle is deterministic, so reconnecting with the same config reuses the
 // cached connection. The config JSON is compacted first, so whitespace-only

@@ -40,7 +40,9 @@ Project  𝄀
   ->  Join  𝄀
         Join Type: INNER   hashOnPK  𝄀
         Join Cond: (t2.c0 = t1.c1)  𝄀
+        Runtime Filter Build: #[-1,0]  𝄀
         ->  Table Scan on d1.t2  𝄀
+              Runtime Filter Probe: t2.c0  𝄀
         ->  Join  𝄀
               Join Type: INDEX  𝄀
               Join Cond: (t1.c1 = __mo_index_pri_col)  𝄀
@@ -309,10 +311,11 @@ CREATE TABLE t14 (`pseudo` char(35) NOT NULL default '',`pseudo1` char(35) NOT N
 `same` tinyint(1) unsigned NOT NULL default '1',PRIMARY KEY  (`pseudo1`),KEY `pseudo` (`pseudo`));
 INSERT INTO t14 (pseudo,pseudo1,same) VALUES ('joce', 'testtt', 1),('joce', 'tsestset', 1),('dekad', 'joce', 1);
 explain SELECT pseudo1 FROM t14 WHERE pseudo='joce';
-➤ TP QUERY PLAN[12,0,0]  𝄀
+➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Index Table Scan on t14.pseudo  𝄀
-        Filter Cond: prefix_eq(__mo_index_idx_col), (serial_extract(__mo_index_idx_col, 0, CHAR)) = 'joce')
+        Filter Cond: prefix_eq(__mo_index_idx_col), (serial_extract(__mo_index_idx_col, 0, CHAR)) = 'joce')  𝄀
+        Block Filter Cond: prefix_eq(__mo_index_idx_col)
 SELECT pseudo1 FROM t14 WHERE pseudo='joce';
 ➤ pseudo1[1,35,0]  𝄀
 testtt  𝄀

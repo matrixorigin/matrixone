@@ -17,19 +17,27 @@ package compile
 import (
 	"reflect"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var (
-	planExprPtrType   = reflect.TypeOf((*plan.Expr)(nil))
-	operatorBaseType  = reflect.TypeOf(vm.OperatorBase{})
-	operatorBasePType = reflect.TypeOf((*vm.OperatorBase)(nil))
+	planExprPtrType      = reflect.TypeOf((*plan.Expr)(nil))
+	operatorBaseType     = reflect.TypeOf(vm.OperatorBase{})
+	operatorBasePType    = reflect.TypeOf((*vm.OperatorBase)(nil))
+	argGetterType        = reflect.TypeFor[argExpressionsGetter]()
+	argRewriterType      = reflect.TypeFor[argExpressionsRewriter]()
+	lockRowsGetterType   = reflect.TypeFor[lockRowsExpressionsGetter]()
+	lockRowsRewriterType = reflect.TypeFor[lockRowsExpressionsRewriter]()
 )
 
 type argExpressionsGetter interface {
@@ -46,6 +54,54 @@ type lockRowsExpressionsGetter interface {
 
 type lockRowsExpressionsRewriter interface {
 	RewriteLockRowsExpressions(func(*plan.Expr) (*plan.Expr, bool, error)) (bool, error)
+}
+
+// A remote worker has no access to the coordinator's variable binding. Only
+// the already-folded value and its existing literal domain may cross this
+// boundary. Qry and the duplicated logical filter/project lists are retained
+// plan metadata. Check the source fields reconstructed by generateScope plus
+// the schema and vector-scan contracts consumed by remote readers.
+func hasExecutableBoundStringVariable(owner any) bool {
+	found := false
+	_ = plan.VisitExpressionsInOwner(owner, func(root *plan.Expr) error {
+		return plan.VisitExprTree(root, func(expr *plan.Expr) error {
+			found = found || expr.GetV().GetBoundStringDomain() != 0
+			return nil
+		})
+	})
+	// Unlike migration admission, do not follow PreparedNumeric's compact
+	// StringDomainSource witnesses: workers never evaluate those planner-only
+	// expressions. The executable producer is checked separately above.
+	return found
+}
+
+func validateRemoteBoundStringVariables(p *pipeline.Pipeline) error {
+	if p == nil {
+		return nil
+	}
+	bound := hasExecutableBoundStringVariable(p.InstructionList)
+	if source := p.DataSource; source != nil {
+		bound = bound || hasExecutableBoundStringVariable(source.Expr) ||
+			hasExecutableBoundStringVariable(source.RuntimeFilterProbeList) ||
+			hasExecutableBoundStringVariable(source.TableDef)
+		if node := source.Node; node != nil {
+			bound = bound || hasExecutableBoundStringVariable(node.BlockFilterList) ||
+				hasExecutableBoundStringVariable(node.IndexReaderParam) ||
+				hasExecutableBoundStringVariable(node.VectorIndexScan)
+			if node.TableDef != source.TableDef {
+				bound = bound || hasExecutableBoundStringVariable(node.TableDef)
+			}
+		}
+	}
+	if bound {
+		return moerr.NewNotSupportedNoCtx("bound user-variable strings must be folded before remote execution")
+	}
+	for _, child := range p.Children {
+		if err := validateRemoteBoundStringVariables(child); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func scopeContainsVarExpr(s *Scope) bool {
@@ -127,17 +183,17 @@ func copyBlockFiltersForRemoteRun(s *Scope) *Scope {
 	preScopesCopied := false
 	var blockFilters []*plan.Expr
 	if s.DataSource != nil {
-		// DataSource.BlockFilterList contains coordinator-owned Fold IDs after
-		// InitAllDataSource. Send the original expressions from the plan node so
-		// the remote Compile can create and evaluate its own Fold executors. This
-		// also preserves empty scalar literals across protobuf serialization.
-		if s.DataSource.node != nil && len(s.DataSource.node.BlockFilterList) > 0 {
+		// Fold IDs belong to the coordinator. Send the current raw subset;
+		// a lazy source that has not initialized yet still carries its template.
+		if s.DataSource.remoteBlockFilters != nil {
+			blockFilters = s.DataSource.remoteBlockFilters
+		} else if s.DataSource.node != nil {
 			blockFilters = s.DataSource.node.BlockFilterList
 		} else {
 			blockFilters = s.DataSource.BlockFilterList
 		}
 	}
-	if len(blockFilters) > 0 {
+	if len(blockFilters) > 0 || (s.DataSource != nil && len(s.DataSource.BlockFilterList) > 0) {
 		value := *s
 		dataSource := *s.DataSource
 		dataSource.BlockFilterList = plan2.DeepCopyExprList(blockFilters)
@@ -320,7 +376,9 @@ func foldVarExprsInExprInPlace(expr *plan.Expr, proc *process.Process) (bool, er
 		}
 		defer free()
 
-		lit := rule.GetConstantValue(vec, false, 0)
+		// JSON carries encoded bytes, not SQL text. Its existing literal format
+		// is safe here because the copied expression retains the JSON type.
+		lit := rule.GetConstantValue(vec, vec.GetType().Oid == types.T_json, 0)
 		if lit == nil {
 			return false, nil
 		}
@@ -464,17 +522,20 @@ func foldVarExprsInValue(v reflect.Value, seen map[uintptr]struct{}, proc *proce
 	return folded, nil
 }
 
+// Check method ownership before Interface: boxing an unrelated struct copies
+// even its private mutable runtime fields, which expression traversal must not read.
 func foldVarExprsInHiddenExpressions(v reflect.Value, proc *process.Process) (bool, error) {
 	if !v.IsValid() {
 		return false, nil
 	}
-	if v.CanInterface() {
+	if v.CanInterface() && (v.Type().Implements(argRewriterType) || v.Type().Implements(lockRowsRewriterType)) {
 		folded, err := foldVarExprsInExpressionGetters(v.Interface(), proc)
 		if err != nil || folded {
 			return folded, err
 		}
 	}
-	if v.Kind() != reflect.Pointer && v.CanAddr() && v.Addr().CanInterface() {
+	if v.Kind() != reflect.Pointer && v.CanAddr() && v.Addr().CanInterface() &&
+		(v.Addr().Type().Implements(argRewriterType) || v.Addr().Type().Implements(lockRowsRewriterType)) {
 		return foldVarExprsInExpressionGetters(v.Addr().Interface(), proc)
 	}
 	return false, nil
@@ -507,12 +568,13 @@ func containsVarExprInHiddenExpressions(v reflect.Value) bool {
 	if !v.IsValid() {
 		return false
 	}
-	if v.CanInterface() {
+	if v.CanInterface() && (v.Type().Implements(argGetterType) || v.Type().Implements(lockRowsGetterType)) {
 		if containsVarExprInExpressionGetters(v.Interface()) {
 			return true
 		}
 	}
-	if v.Kind() != reflect.Pointer && v.CanAddr() && v.Addr().CanInterface() {
+	if v.Kind() != reflect.Pointer && v.CanAddr() && v.Addr().CanInterface() &&
+		(v.Addr().Type().Implements(argGetterType) || v.Addr().Type().Implements(lockRowsGetterType)) {
 		if containsVarExprInExpressionGetters(v.Addr().Interface()) {
 			return true
 		}
@@ -529,6 +591,95 @@ func containsVarExprInExpressionGetters(value any) bool {
 	if getter, ok := value.(lockRowsExpressionsGetter); ok {
 		if containsVarExprInValue(reflect.ValueOf(getter.GetLockRowsExpressions()), nil) {
 			return true
+		}
+	}
+	return false
+}
+
+type remoteFunctionPredicate func(functionID, overloadID int32) bool
+
+func pipelineContainsPadSpaceCast(p *pipeline.Pipeline) bool {
+	return pipelineContainsFunction(p, func(functionID, overloadID int32) bool {
+		return functionID == function.CAST && (overloadID == 2 || overloadID == 3)
+	})
+}
+
+func pipelineContainsFunction(p *pipeline.Pipeline, predicate remoteFunctionPredicate) bool {
+	return containsFunctionInValue(reflect.ValueOf(p), nil, predicate)
+}
+
+func containsFunctionInExpr(
+	expr *plan.Expr,
+	seen map[uintptr]struct{},
+	predicate remoteFunctionPredicate,
+) bool {
+	if expr == nil {
+		return false
+	}
+	if fn := expr.GetF(); fn != nil && fn.Func != nil {
+		functionID, overloadID := function.DecodeOverloadID(fn.Func.Obj)
+		if predicate(functionID, overloadID) {
+			return true
+		}
+	}
+	return containsFunctionInValue(reflect.ValueOf(expr.Expr), seen, predicate)
+}
+
+func containsFunctionInValue(
+	v reflect.Value,
+	seen map[uintptr]struct{},
+	predicate remoteFunctionPredicate,
+) bool {
+	if !v.IsValid() {
+		return false
+	}
+	if v.Kind() == reflect.Interface {
+		if v.IsNil() {
+			return false
+		}
+		return containsFunctionInValue(v.Elem(), seen, predicate)
+	}
+	if v.Kind() == reflect.Pointer {
+		if v.IsNil() {
+			return false
+		}
+		if v.Type() == planExprPtrType {
+			return containsFunctionInExpr(v.Interface().(*plan.Expr), seen, predicate)
+		}
+		if seen == nil {
+			seen = make(map[uintptr]struct{})
+		}
+		ptr := v.Pointer()
+		if _, ok := seen[ptr]; ok {
+			return false
+		}
+		seen[ptr] = struct{}{}
+		return containsFunctionInValue(v.Elem(), seen, predicate)
+	}
+
+	switch v.Kind() {
+	case reflect.Slice, reflect.Array:
+		for i := 0; i < v.Len(); i++ {
+			if containsFunctionInValue(v.Index(i), seen, predicate) {
+				return true
+			}
+		}
+	case reflect.Map:
+		iter := v.MapRange()
+		for iter.Next() {
+			if containsFunctionInValue(iter.Key(), seen, predicate) ||
+				containsFunctionInValue(iter.Value(), seen, predicate) {
+				return true
+			}
+		}
+	case reflect.Struct:
+		for i := 0; i < v.NumField(); i++ {
+			if !v.Type().Field(i).IsExported() {
+				continue
+			}
+			if containsFunctionInValue(v.Field(i), seen, predicate) {
+				return true
+			}
 		}
 	}
 	return false

@@ -16,6 +16,7 @@ package multi_update
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"time"
 
@@ -27,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
@@ -116,10 +118,19 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 	}
 
 	update.ctr.affectedRows = 0
+	update.ctr.s3AffectedRows = 0
 	update.ctr.flushed = false
 	update.getFlushableS3WriterFunc = update.getFlushableS3Writer
 	update.getS3WriterFunc = update.getS3Writer
 	update.addAffectedRowsFunc = update.doAddAffectedRows
+	update.takeS3AffectedRowsFunc = nil
+	if update.Action == UpdateWriteS3 && hasODKUAffectedRows(update.MultiUpdateCtx) {
+		// Writer operators can live below a merge PreScope, where Scope.affectedRows
+		// cannot see their counters. Transfer ODKU's logical count in-band and let
+		// the final FlushS3Info operator own the client-visible count.
+		update.addAffectedRowsFunc = update.doAddS3AffectedRows
+		update.takeS3AffectedRowsFunc = update.takeS3AffectedRows
+	}
 
 	switch update.Action {
 	case UpdateWriteS3:
@@ -302,6 +313,10 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 	}()
 
 	for i, action := range actions {
+		if actionType(action) == actionAffectedRows {
+			update.addAffectedRowsFunc(rowCounts[i])
+			continue
+		}
 		source, err := update.getSourceByID(tables[i], proc)
 		if err != nil {
 			return input, err
@@ -330,6 +345,7 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 
 			crs := analyzer.GetOpCounterSet()
 			newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+			newCtx = update.writeContext(newCtx, tables[i])
 			err = process.MeasureFilesystemWaitErr(analyzer, func() error {
 				return source.Delete(newCtx, batBufs[actionDelete], name)
 			})
@@ -359,6 +375,7 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 
 			crs := analyzer.GetOpCounterSet()
 			newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
+			newCtx = update.writeContext(newCtx, tables[i])
 			err = process.MeasureFilesystemWaitErr(analyzer, func() error {
 				return source.Write(newCtx, batBufs[actionInsert])
 			})
@@ -459,6 +476,9 @@ func filterTargetRows(
 	seen *hashmap.StrHashMap,
 ) (*batch.Batch, bool, uint64, error) {
 	if !updateCtx.DedupByTargetRowID {
+		if updateCtx.AffectedRowsWeightCol != nil || updateCtx.PhysicalChangedRowsCol != nil {
+			return filterODKUPhysicalRows(proc, updateCtx, input)
+		}
 		if len(updateCtx.AffectedRowsCols) > 0 {
 			affectedRows, err := countAffectedRowsBySelectors(proc, updateCtx, input)
 			return input, false, affectedRows, err
@@ -596,6 +616,62 @@ func filterTargetRows(
 	}
 	return filtered, true, filterReportedAffectedRows(
 		updateCtx, semanticAffectedRows, insertAffectedRows(updateCtx, filtered)), nil
+}
+
+func filterODKUPhysicalRows(
+	proc *process.Process,
+	updateCtx *MultiUpdateCtx,
+	input *batch.Batch,
+) (*batch.Batch, bool, uint64, error) {
+	var affectedRows uint64
+	if updateCtx.AffectedRowsWeightCol != nil {
+		col := *updateCtx.AffectedRowsWeightCol
+		if col < 0 || col >= len(input.Vecs) || input.Vecs[col].GetType().Oid != types.T_uint64 {
+			return nil, false, 0, moerr.NewInternalError(proc.Ctx, "invalid ODKU affected-row weight column")
+		}
+		vec := input.Vecs[col]
+		if vec.HasNull() {
+			return nil, false, 0, moerr.NewInternalError(proc.Ctx, "NULL ODKU affected-row weight")
+		}
+		for _, n := range vector.MustFixedColWithTypeCheck[uint64](vec)[:input.RowCount()] {
+			affectedRows += n
+		}
+	}
+	if updateCtx.PhysicalChangedRowsCol == nil {
+		return input, false, affectedRows, nil
+	}
+	col := *updateCtx.PhysicalChangedRowsCol
+	if col < 0 || col >= len(input.Vecs) || input.Vecs[col].GetType().Oid != types.T_bool {
+		return nil, false, 0, moerr.NewInternalError(proc.Ctx, "invalid ODKU physical-change column")
+	}
+	vec := input.Vecs[col]
+	if vec.HasNull() {
+		return nil, false, 0, moerr.NewInternalError(proc.Ctx, "NULL ODKU physical-change marker")
+	}
+	changed := vector.MustFixedColWithTypeCheck[bool](vec)
+	allChanged := true
+	for row := 0; row < input.RowCount(); row++ {
+		if !changed[row] {
+			allChanged = false
+			break
+		}
+	}
+	if allChanged {
+		return input, false, affectedRows, nil
+	}
+	selections := make([]int64, 0, input.RowCount())
+	for row := 0; row < input.RowCount(); row++ {
+		if changed[row] {
+			selections = append(selections, int64(row))
+		}
+	}
+	filtered, err := input.CloneWithoutAllocationAccount(proc.Mp(), true)
+	if err != nil {
+		return nil, false, 0, err
+	}
+	filtered.Shrink(selections, false)
+	filtered.SetRowCount(len(selections))
+	return filtered, true, affectedRows, nil
 }
 
 func filterReportedAffectedRows(
@@ -749,6 +825,16 @@ func targetTableID(ctx *MultiUpdateCtx) uint64 {
 		return ctx.TargetTableID
 	}
 	return ctx.TableDef.TblId
+}
+
+func (update *MultiUpdate) writeContext(ctx context.Context, tableID uint64) context.Context {
+	for _, updateCtx := range update.MultiUpdateCtx {
+		if updateCtx != nil && updateCtx.TableDef != nil &&
+			targetTableID(updateCtx) == tableID && updateCtx.TableDef.Name == catalog.MO_COLUMNS_UPDATE {
+			return context.WithValue(ctx, defines.MoColumnsUpdateKey{}, true)
+		}
+	}
+	return ctx
 }
 
 func (update *MultiUpdate) resetMultiUpdateCtxs() {

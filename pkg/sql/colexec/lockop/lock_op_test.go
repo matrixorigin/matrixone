@@ -69,7 +69,17 @@ var (
 	sid = ""
 )
 
+func TestWriterFairLockRequestContext(t *testing.T) {
+	require.False(t, isWriterFairLockRequest(context.Background()))
+	require.True(t, isWriterFairLockRequest(
+		defines.AttachLockWriterFair(context.Background())))
+}
+
 type immediateLockTimestampWaiter struct{}
+
+type failAfterInitialTimestampWaiter struct {
+	calls int
+}
 
 type lockServiceConfigOverride struct {
 	lockservice.LockService
@@ -93,6 +103,23 @@ func (immediateLockTimestampWaiter) LatestTS() timestamp.Timestamp {
 	return timestamp.Timestamp{}
 }
 
+func (w *failAfterInitialTimestampWaiter) GetTimestamp(
+	_ context.Context,
+	ts timestamp.Timestamp,
+) (timestamp.Timestamp, error) {
+	w.calls++
+	if w.calls > 1 {
+		return timestamp.Timestamp{}, assert.AnError
+	}
+	return ts.Next(), nil
+}
+
+func (*failAfterInitialTimestampWaiter) NotifyLatestCommitTS(timestamp.Timestamp) {}
+func (*failAfterInitialTimestampWaiter) Close()                                   {}
+func (*failAfterInitialTimestampWaiter) LatestTS() timestamp.Timestamp {
+	return timestamp.Timestamp{}
+}
+
 func forceLockRetryMemoryPressure(t *testing.T, level lockRetryMemoryPressureLevel) {
 	oldPressure := getLockRetryMemoryPressureLevel
 	getLockRetryMemoryPressureLevel = func() lockRetryMemoryPressureLevel {
@@ -101,6 +128,114 @@ func forceLockRetryMemoryPressure(t *testing.T, level lockRetryMemoryPressureLev
 	t.Cleanup(func() {
 		getLockRetryMemoryPressureLevel = oldPressure
 	})
+}
+
+func TestSetPlanSnapshotForLock(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := runtime.ServiceRuntime(proc.GetService())
+	originalVersion, hadOriginalVersion := rt.GetGlobalVariables(runtime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadOriginalVersion {
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, originalVersion)
+		} else {
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion32)
+
+	createTS := timestamp.Timestamp{PhysicalTime: 30}
+	options := lock.LockOptions{SnapShotTs: createTS}
+	require.NoError(t, setPlanSnapshotForLock(context.Background(), 42, true, proc, &options))
+	require.Nil(t, options.PlanSnapshotTs)
+	require.Equal(t, createTS, options.SnapShotTs)
+
+	planTS := timestamp.Timestamp{PhysicalTime: 10}
+	proc.SetPlanSnapshotTS(planTS)
+	proc.SetPlanGenerationReused(true)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion31)
+	err := setPlanSnapshotForLock(context.Background(), 42, true, proc, &options)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
+	require.Nil(t, options.PlanSnapshotTs)
+	err = setPlanSnapshotForLock(context.Background(), 42, false, proc, &options)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict), err)
+	require.Nil(t, options.PlanSnapshotTs)
+
+	// Production commonly sacrifices snapshot freshness. A plan freshly built
+	// for that transaction can therefore predate CreateTS; v31 must retain its
+	// legacy fence rather than retrying the same generation forever.
+	proc.SetPlanSnapshotTS(planTS)
+	require.NoError(t, setPlanSnapshotForLock(context.Background(), 42, true, proc, &options))
+	require.Nil(t, options.PlanSnapshotTs)
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion32)
+	proc.SetPlanGenerationReused(true)
+	require.NoError(t, setPlanSnapshotForLock(context.Background(), 42, true, proc, &options))
+	require.Equal(t, planTS, *options.PlanSnapshotTs)
+	// Transaction creation time keeps its independent rolling-restart meaning.
+	require.Equal(t, createTS, options.SnapShotTs)
+
+	encoded, err := options.Marshal()
+	require.NoError(t, err)
+	var decoded lock.LockOptions
+	require.NoError(t, decoded.Unmarshal(encoded))
+	require.Equal(t, createTS, decoded.SnapShotTs)
+	require.Equal(t, planTS, *decoded.PlanSnapshotTs)
+
+	// Mirror txn operators do not have a local CreateTS. Zero must not bypass
+	// either the v32 payload or the mixed-version compatibility gate.
+	options.SnapShotTs = timestamp.Timestamp{}
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion32)
+	require.NoError(t, setPlanSnapshotForLock(context.Background(), 42, true, proc, &options))
+	require.Equal(t, planTS, *options.PlanSnapshotTs)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion31)
+	err = setPlanSnapshotForLock(context.Background(), 42, true, proc, &options)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
+	err = setPlanSnapshotForLock(context.Background(), 42, false, proc, &options)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict), err)
+	options.SnapShotTs = createTS
+
+	// Plans built by the executing transaction need no extra request payload:
+	// CreateTS is already an exact or conservative server-side filter and CN
+	// performs the final comparison with its local plan snapshot.
+	proc.SetPlanSnapshotTS(createTS)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion31)
+	require.NoError(t, setPlanSnapshotForLock(context.Background(), 42, true, proc, &options))
+	require.Nil(t, options.PlanSnapshotTs)
+	proc.SetPlanSnapshotTS(createTS.Next())
+	require.NoError(t, setPlanSnapshotForLock(context.Background(), 42, true, proc, &options))
+	require.Nil(t, options.PlanSnapshotTs)
+}
+
+func TestLockOpProtocolDowngradeRebuildsBeforeLockRPC(t *testing.T) {
+	runLockNonBlockingOpTest(
+		t,
+		[]uint64{1},
+		[][]int32{{1}},
+		func(proc *process.Process, arg *LockOp) {
+			rt := runtime.ServiceRuntime(proc.GetService())
+			originalVersion, hadOriginalVersion := rt.GetGlobalVariables(runtime.MOProtocolVersion)
+			defer func() {
+				if hadOriginalVersion {
+					rt.SetGlobalVariables(runtime.MOProtocolVersion, originalVersion)
+				} else {
+					rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+				}
+			}()
+
+			// Model a statement that admitted a cached plan while v32 was active,
+			// then observed the rollout gate dropping before its first lock. The
+			// lock boundary must force a local definition rebuild instead of
+			// sending the optional v32 timestamp to a potentially old lock owner.
+			createTS := proc.GetTxnOperator().CreateTS()
+			proc.SetPlanSnapshotTS(createTS.Prev())
+			proc.SetPlanGenerationReused(true)
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion31)
+
+			require.NoError(t, arg.Prepare(proc))
+			_, err := vm.Exec(arg, proc)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
+		},
+	)
 }
 
 func TestLockWaitTimeoutUsesCurrentSessionValue(t *testing.T) {
@@ -177,12 +312,259 @@ func TestLockOpHelpers(t *testing.T) {
 		WithLockSharding(lock.Sharding_ByRow).
 		WithLockGroup(7).
 		WithLockMode(lock.LockMode_Shared).
-		WithLockTable(true, true)
+		WithLockTable(true, true).
+		WithTableSnapshotRefresh(true)
 	require.Equal(t, lock.Sharding_ByRow, opts.sharding)
 	require.Equal(t, uint32(7), opts.group)
 	require.Equal(t, lock.LockMode_Shared, opts.mode)
 	require.True(t, opts.lockTable)
 	require.True(t, opts.changeDef)
+	require.True(t, opts.refreshTableSnapshot)
+}
+
+func TestLockRefreshPolicy(t *testing.T) {
+	refreshTS := timestamp.Timestamp{PhysicalTime: 1}
+	require.NoError(t, lockRefreshError(false, timestamp.Timestamp{}, true))
+	require.ErrorIs(t, lockRefreshError(false, refreshTS, true), retryError)
+	require.NoError(t, lockRefreshError(false, refreshTS, false),
+		"a stronger caller-owned barrier will install the refreshed snapshot")
+	require.ErrorIs(t,
+		lockRefreshError(true, refreshTS, false),
+		retryWithDefChangedError,
+		"a freshness barrier cannot validate a stale logical definition")
+}
+
+func TestLockRowsForSnapshotRefresh(t *testing.T) {
+	tests := []struct {
+		name       string
+		preRead    bool
+		defChanged bool
+		useSI      bool
+		scanErr    error
+		waiter     func() client.TimestampWaiter
+		wantErr    error
+		advance    bool
+	}{
+		{name: "ordinary row lock retries", wantErr: retryError, advance: true},
+		{name: "pre-read row lock accepts refresh", preRead: true, advance: true},
+		{name: "definition change still retries", preRead: true, defChanged: true,
+			wantErr: retryWithDefChangedError, advance: true},
+		{name: "lower-layer retry propagates", preRead: true, scanErr: retryError,
+			wantErr: retryError},
+		{name: "SI conflict propagates", preRead: true, useSI: true},
+		{name: "logtail wait failure propagates", preRead: true,
+			waiter:  func() client.TimestampWaiter { return &failAfterInitialTimestampWaiter{} },
+			wantErr: assert.AnError},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			waiter := client.TimestampWaiter(immediateLockTimestampWaiter{})
+			if tt.waiter != nil {
+				waiter = tt.waiter()
+			}
+			runLockOpTest(t, func(proc *process.Process) {
+				if tt.useSI {
+					proc.GetTxnOperator().TxnRef().Isolation = txnpb.TxnIsolation_SI
+				}
+				ctrl := gomock.NewController(t)
+				rel := mock_frontend.NewMockRelation(ctrl)
+				rel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{DbName: "db"})
+				rel.EXPECT().GetTableName().Return("gate")
+				if !tt.defChanged && !tt.useSI && tt.waiter == nil {
+					rel.EXPECT().PrimaryKeysMayBeModified(gomock.Any(), gomock.Any(), gomock.Any(),
+						gomock.Any(), int32(0), int32(-1)).Return(true, tt.scanErr)
+				}
+
+				runtime.SetupServiceRuntimeTestingContext(proc.GetService())
+				testingContext := runtime.MustGetTestingContext(proc.GetService())
+				testingContext.SetBeforeLockFunc(func(_ []byte, _ uint64) {})
+				defer testingContext.SetBeforeLockFunc(nil)
+				snapshot := proc.GetTxnOperator().Txn().SnapshotTS
+				commitTS := snapshot.Next()
+				testingContext.SetAdjustLockResultFunc(func(_ []byte, _ uint64, result *lock.Result) {
+					result.NewLockAdd = true
+					result.HasConflict = tt.useSI
+					result.HasPrevCommit = tt.useSI
+					result.Timestamp = commitTS
+					if tt.defChanged {
+						result.TableDefChangedAt = &commitTS
+					}
+				})
+				defer testingContext.SetAdjustLockResultFunc(nil)
+
+				bat := batch.NewWithSize(1)
+				bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+				require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(1), false, proc.Mp()))
+				bat.SetRowCount(1)
+				defer bat.Clean(proc.Mp())
+
+				lockFn := LockRows
+				if tt.preRead {
+					lockFn = LockRowsForSnapshotRefresh
+				}
+				err := lockFn(nil, proc, rel, 1, bat, 0, types.T_int32.ToType(),
+					lock.LockMode_Shared, lock.Sharding_None, 0)
+				if tt.useSI {
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict), "%v", err)
+				} else if tt.wantErr == nil {
+					require.NoError(t, err)
+				} else {
+					require.ErrorIs(t, err, tt.wantErr)
+				}
+				require.True(t, proc.GetTxnOperator().HasLockTable(1))
+				if tt.advance {
+					require.False(t, proc.GetTxnOperator().Txn().SnapshotTS.Less(commitTS))
+				} else {
+					require.Equal(t, snapshot, proc.GetTxnOperator().Txn().SnapshotTS)
+				}
+			}, client.WithTimestampWaiter(waiter))
+		})
+	}
+}
+
+func TestLockTableRefreshesForNewerWholeTableCommit(t *testing.T) {
+	tests := []struct {
+		name            string
+		commitTS        func(timestamp.Timestamp) timestamp.Timestamp
+		waiter          func() client.TimestampWaiter
+		snapshotRefresh bool
+		useSI           bool
+		wantAdvance     bool
+		wantWWConflict  bool
+		wantErr         error
+	}{
+		{
+			name: "newer commit",
+			commitTS: func(snapshot timestamp.Timestamp) timestamp.Timestamp {
+				return snapshot.Next()
+			},
+			waiter: func() client.TimestampWaiter {
+				return immediateLockTimestampWaiter{}
+			},
+			snapshotRefresh: true,
+			wantAdvance:     true,
+		},
+		{
+			name: "commit visible at snapshot",
+			commitTS: func(snapshot timestamp.Timestamp) timestamp.Timestamp {
+				return snapshot
+			},
+			waiter: func() client.TimestampWaiter {
+				return immediateLockTimestampWaiter{}
+			},
+			snapshotRefresh: true,
+		},
+		{
+			name: "SI rejects a newer whole-table commit",
+			commitTS: func(snapshot timestamp.Timestamp) timestamp.Timestamp {
+				return snapshot.Next()
+			},
+			waiter:          func() client.TimestampWaiter { return immediateLockTimestampWaiter{} },
+			snapshotRefresh: true,
+			useSI:           true,
+			wantWWConflict:  true,
+		},
+		{
+			name: "SI accepts a commit already visible at snapshot",
+			commitTS: func(snapshot timestamp.Timestamp) timestamp.Timestamp {
+				return snapshot
+			},
+			waiter:          func() client.TimestampWaiter { return immediateLockTimestampWaiter{} },
+			snapshotRefresh: true,
+			useSI:           true,
+		},
+		{
+			name: "SI accepts an older whole-table commit",
+			commitTS: func(snapshot timestamp.Timestamp) timestamp.Timestamp {
+				return snapshot.Prev()
+			},
+			waiter:          func() client.TimestampWaiter { return immediateLockTimestampWaiter{} },
+			snapshotRefresh: true,
+			useSI:           true,
+		},
+		{
+			name: "logtail wait failure",
+			commitTS: func(snapshot timestamp.Timestamp) timestamp.Timestamp {
+				return snapshot.Next()
+			},
+			waiter: func() client.TimestampWaiter {
+				return &failAfterInitialTimestampWaiter{}
+			},
+			snapshotRefresh: true,
+			wantErr:         assert.AnError,
+		},
+		{
+			name: "ordinary table lock preserves snapshot",
+			commitTS: func(snapshot timestamp.Timestamp) timestamp.Timestamp {
+				return snapshot.Next()
+			},
+			waiter: func() client.TimestampWaiter {
+				return immediateLockTimestampWaiter{}
+			},
+		},
+		{
+			name: "ordinary SI table lock preserves policy",
+			commitTS: func(snapshot timestamp.Timestamp) timestamp.Timestamp {
+				return snapshot.Next()
+			},
+			waiter: func() client.TimestampWaiter { return immediateLockTimestampWaiter{} },
+			useSI:  true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runLockOpTest(
+				t,
+				func(proc *process.Process) {
+					if test.useSI {
+						proc.GetTxnOperator().TxnRef().Isolation = txnpb.TxnIsolation_SI
+					}
+					runtime.SetupServiceRuntimeTestingContext(proc.GetService())
+					testingContext := runtime.MustGetTestingContext(proc.GetService())
+					testingContext.SetBeforeLockFunc(func(_ []byte, _ uint64) {})
+					defer testingContext.SetBeforeLockFunc(nil)
+
+					snapshot := proc.GetTxnOperator().Txn().SnapshotTS
+					commitTS := test.commitTS(snapshot)
+					testingContext.SetAdjustLockResultFunc(func(
+						_ []byte,
+						_ uint64,
+						result *lock.Result,
+					) {
+						result.NewLockAdd = true
+						result.HasConflict = false
+						result.Timestamp = commitTS
+					})
+					defer testingContext.SetAdjustLockResultFunc(nil)
+
+					var err error
+					if test.snapshotRefresh {
+						err = LockTableForSnapshotRefreshWithContext(
+							proc.Ctx, nil, proc, 1, types.T_int32.ToType(), lock.LockMode_Exclusive, false)
+					} else {
+						err = LockTable(nil, proc, 1, types.T_int32.ToType(), false)
+					}
+					if test.wantErr != nil {
+						require.ErrorIs(t, err, test.wantErr)
+						return
+					}
+					if test.wantWWConflict {
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict), "%v", err)
+						require.Equal(t, snapshot, proc.GetTxnOperator().Txn().SnapshotTS)
+						return
+					}
+					require.NoError(t, err)
+					if test.wantAdvance {
+						require.False(t, proc.GetTxnOperator().Txn().SnapshotTS.Less(commitTS))
+					} else {
+						require.True(t, proc.GetTxnOperator().Txn().SnapshotTS.LessEq(snapshot))
+					}
+				},
+				client.WithTimestampWaiter(test.waiter()),
+			)
+		})
+	}
 }
 
 func TestRefreshLockWaitOptionsUsesRemainingDeadline(t *testing.T) {
@@ -202,6 +584,33 @@ func TestRefreshLockWaitOptionsReturnsTimeoutAfterDeadline(t *testing.T) {
 	options := lock.LockOptions{LockWaitDeadline: time.Now().Add(-time.Second).UnixNano()}
 
 	_, err := refreshLockWaitOptions(options)
+	require.ErrorIs(t, err, lockservice.ErrLockTimeout)
+}
+
+func TestApplyLockWaitDeadlineUsesOneAbsoluteBudget(t *testing.T) {
+	now := time.Now()
+	aggregateDeadline := now.Add(5 * time.Minute).UnixNano()
+
+	options, err := applyLockWaitDeadline(
+		lock.LockOptions{}, aggregateDeadline, 10*time.Minute, now)
+	require.NoError(t, err)
+	require.Equal(t, aggregateDeadline, options.LockWaitDeadline,
+		"a later per-table timeout must not restart the aggregate budget")
+
+	sessionDeadline := now.Add(time.Minute).UnixNano()
+	options, err = applyLockWaitDeadline(
+		lock.LockOptions{}, aggregateDeadline, time.Minute, now)
+	require.NoError(t, err)
+	require.Equal(t, sessionDeadline, options.LockWaitDeadline,
+		"the session timeout must still clamp a longer aggregate budget")
+
+	options, err = applyLockWaitDeadline(
+		lock.LockOptions{}, aggregateDeadline, 0, now)
+	require.NoError(t, err)
+	require.Equal(t, aggregateDeadline, options.LockWaitDeadline)
+
+	_, err = applyLockWaitDeadline(
+		lock.LockOptions{}, now.Add(-time.Second).UnixNano(), time.Minute, now)
 	require.ErrorIs(t, err, lockservice.ErrLockTimeout)
 }
 
@@ -630,6 +1039,46 @@ func TestLockWithRetryDoesNotRetryBackendErrorWhenLockTableAlreadyHeld(t *testin
 	)
 	require.ErrorIs(t, err, expectedErr)
 	require.Less(t, time.Since(start), defaultWaitTimeOnRetryLock)
+}
+
+// A stale admission can be retried, but the next request may discover that
+// this CN is already draining. That terminal rejection must not loop.
+func TestLockWithRetryStopsAfterBindChangedThenDrainRejection(t *testing.T) {
+	forceLockRetryMemoryPressure(t, lockRetryMemoryPressureNormal)
+	ctrl := gomock.NewController(t)
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	expected := moerr.NewNewTxnInCNRollingRestart()
+	gomock.InOrder(
+		lockSvc.EXPECT().Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), lock.LockOptions{}).
+			Return(lock.Result{}, moerr.NewLockTableBindChangedNoCtx()),
+		txnOp.EXPECT().HasLockTable(uint64(1)).Return(false),
+		lockSvc.EXPECT().Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), lock.LockOptions{}).
+			Return(lock.Result{}, expected),
+	)
+	_, err := lockWithRetry(ctx, lockSvc, 1, nil, []byte("txn1"), lock.LockOptions{},
+		txnOp, nil, nil, LockOptions{}, types.Type{})
+	require.ErrorIs(t, err, expected)
+}
+
+func TestLockWithRetryBindChangeHonorsCancellation(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	expected := moerr.NewLockTableBindChangedNoCtx()
+	lockSvc.EXPECT().Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), lock.LockOptions{}).
+		DoAndReturn(func(context.Context, uint64, [][]byte, []byte, lock.LockOptions) (lock.Result, error) {
+			cancel()
+			return lock.Result{}, expected
+		}).Times(1)
+	_, err := lockWithRetry(ctx, lockSvc, 1, nil, []byte("txn1"), lock.LockOptions{},
+		txnOp, nil, nil, LockOptions{}, types.Type{})
+	// Bounded retry preserves the bind failure for the existing txn rollback path.
+	require.ErrorIs(t, err, expected)
 }
 
 func TestLockWithRetryRetriesBindChangedInExplicitUserTxnBeforeLockHeld(t *testing.T) {
@@ -1281,6 +1730,7 @@ func TestDoLockSharedOversizedBatchKeepsExactRows(t *testing.T) {
 					DefaultLockOptions(packer).
 						WithLockMode(lock.LockMode_Shared).
 						WithHasNewVersionInRangeFunc(testFunc),
+					0,
 				)
 				require.NoError(t, err)
 				require.True(t, locked)

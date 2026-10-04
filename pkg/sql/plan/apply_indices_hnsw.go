@@ -17,7 +17,6 @@ package plan
 import (
 	"fmt"
 
-	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -74,12 +73,12 @@ func (builder *QueryBuilder) prepareHnswIndexContext(vecCtx *vectorSortContext, 
 		return nil, nil
 	}
 
-	opTypeAst, err := sonic.Get([]byte(metaDef.IndexAlgoParams), catalog.IndexAlgoParamOpType)
+	params, err := decodeVectorIndexAlgoParams(metaDef.IndexAlgoParams)
 	if err != nil {
 		return nil, nil
 	}
-	opType, err := opTypeAst.StrictString()
-	if err != nil {
+	opType, ok := vectorIndexStringParam(params, catalog.IndexAlgoParamOpType)
+	if !ok {
 		return nil, nil
 	}
 
@@ -188,6 +187,8 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, vecCtx *
 		BindingTags:     []int32{tableFuncTag},
 		Children:        vectorSearchProviderChildren(vecCtx),
 		TblFuncExprList: buildHnswTableFuncArgs(tblCfgStr, hnswCtx.vecLitArg),
+		// Named-snapshot read TS for the TVF; DeepCopySnapshot(nil) is nil (#27927).
+		ScanSnapshot: DeepCopySnapshot(vecCtx.scanNode.ScanSnapshot),
 	}
 	tableFuncNodeID := builder.appendNode(tableFuncNode, ctx)
 

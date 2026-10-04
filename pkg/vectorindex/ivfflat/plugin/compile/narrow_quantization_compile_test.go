@@ -446,8 +446,10 @@ func (f *fakeCachedIndex) Search(_ *sqlexec.SqlProcess, _ any, _ vectorindex.Run
 func (f *fakeCachedIndex) SearchFloat32(_ *sqlexec.SqlProcess, _ any, _ vectorindex.RuntimeConfig, _ []int64, _ []float32) error {
 	return nil
 }
-func (f *fakeCachedIndex) Load(_ *sqlexec.SqlProcess) error { return nil }
-func (f *fakeCachedIndex) Destroy()                         { f.destroyed.Store(true) }
+func (f *fakeCachedIndex) Load(_ *sqlexec.SqlProcess) error  { return nil }
+func (f *fakeCachedIndex) Destroy()                          { f.destroyed.Store(true) }
+func (f *fakeCachedIndex) Preload(*sqlexec.SqlProcess) error { return nil }
+func (f *fakeCachedIndex) GetIndexSize() (int64, int64)      { return 0, 0 }
 
 // seedCache parks a fake index under the given cache key and returns it.
 func seedCache(key string) *fakeCachedIndex {
@@ -601,7 +603,7 @@ func TestRunCreateOrReindex_BuildFailureAborts(t *testing.T) {
 func TestValidateReindexParams_EmptyOpTypeIsUnchanged(t *testing.T) {
 	for _, quant := range []string{"int8", "uint8"} {
 		got, err := Hooks{}.ValidateReindexParams(
-			map[string]string{catalog.IndexAlgoParamLists: "16"},
+			map[string]string{catalog.IndexAlgoParamLists: "16", catalog.Quantization: quant},
 			compileplugin.ReindexParamUpdate{Params: map[string]string{catalog.Quantization: quant}},
 		)
 		require.NoError(t, err, "empty op_type must mean unchanged, not invalid")
@@ -623,3 +625,6 @@ func TestValidateReindexParams_EmptyOpTypeIsUnchanged(t *testing.T) {
 func (f *fakeCachedIndex) SearchInto(_ *sqlexec.SqlProcess, _ any, _ vectorindex.RuntimeConfig, _ *vectorindex.SearchOutput) error {
 	return nil
 }
+
+// BuildTS stubs (fulltext2 async-freshness interface method).
+func (f *fakeCachedIndex) BuildTS() int64 { return 0 }

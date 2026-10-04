@@ -57,25 +57,27 @@ func TestValidateLifecycleTransferTableBoundsAndCount(t *testing.T) {
 	)
 	require.NoError(t, objectio.SetObjectStatsRowCnt(created, 2))
 	require.NoError(t, objectio.SetObjectStatsBlkCnt(created, 1))
-	table := mergesort.NewTransferTableFromMaps(api.TransferMaps{
+	table, err := mergesort.NewLifecycleTransferTable(api.TransferMaps{
 		{
 			{ObjIdx: 0, BlkIdx: 0, RowIdx: 0},
 			{ObjIdx: api.NoTransfer},
 			{ObjIdx: 0, BlkIdx: 0, RowIdx: 1},
 		},
 	})
+	require.NoError(t, err)
+	t.Cleanup(table.Release)
 	require.NoError(t, validateLifecycleTransferTable(
 		[][]byte{append([]byte(nil), created[:]...)},
 		table,
 		objectio.BlockMaxRows,
 	))
-	table.Maps[0][2] = api.TransferDestPos{ObjIdx: api.NoTransfer}
+	table.GetBlockMap(0)[2] = api.TransferDestPos{ObjIdx: api.NoTransfer}
 	require.Error(t, validateLifecycleTransferTable(
 		[][]byte{append([]byte(nil), created[:]...)},
 		table,
 		objectio.BlockMaxRows,
 	))
-	table.Maps[0][2] = api.TransferDestPos{
+	table.GetBlockMap(0)[2] = api.TransferDestPos{
 		ObjIdx: 0,
 		BlkIdx: 0,
 		RowIdx: objectio.BlockMaxRows,

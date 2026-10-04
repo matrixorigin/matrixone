@@ -36,6 +36,23 @@ type batchTestCase struct {
 	types []types.Type
 }
 
+type failAfterBatchWriter struct {
+	remaining int
+}
+
+func (w *failAfterBatchWriter) Write(p []byte) (int, error) {
+	if w.remaining <= 0 {
+		return 0, io.ErrClosedPipe
+	}
+	if len(p) > w.remaining {
+		n := w.remaining
+		w.remaining = 0
+		return n, io.ErrClosedPipe
+	}
+	w.remaining -= len(p)
+	return len(p), nil
+}
+
 var (
 	tcs []batchTestCase
 )
@@ -792,6 +809,10 @@ func TestPrepareParamKindTransportRoundTripAndReuse(t *testing.T) {
 		vector.PrepareParamFloat,
 		vector.PrepareParamNone,
 	})
+	require.NoError(t, source.Vecs[0].SetStringSourcesWithMP([]types.StringSource{
+		types.StringSourceCOMStmt,
+		types.StringSourceSQLPrepare,
+	}, mp))
 	require.NoError(t, source.Vecs[0].SetBinaryStringRows([]bool{true, false}))
 	source.SetRowCount(2)
 	defer source.Clean(mp)
@@ -821,13 +842,103 @@ func TestPrepareParamKindTransportRoundTripAndReuse(t *testing.T) {
 	require.Equal(t, vector.PrepareParamNone, decoded.Vecs[0].GetPrepareParamKindAt(1))
 	require.True(t, decoded.Vecs[0].GetIsBinaryStringAt(0))
 	require.False(t, decoded.Vecs[0].GetIsBinaryStringAt(1))
+	require.Equal(t, types.StringSourceCOMStmt, decoded.Vecs[0].GetStringSourceAt(0))
+	require.Equal(t, types.StringSourceSQLPrepare, decoded.Vecs[0].GetStringSourceAt(1))
+
+	var oldPeerWire bytes.Buffer
+	oldPeerEncoded, err := source.MarshalBinaryWithPrepareParamKindsForProtocol(&oldPeerWire, true, false)
+	require.NoError(t, err)
+	oldPeerDecoded := NewOffHeapEmpty()
+	require.NoError(t, oldPeerDecoded.UnmarshalBinaryWithPrepareParamKinds(oldPeerEncoded, mp))
+	require.False(t, oldPeerDecoded.Vecs[0].HasStringSourceMetadata())
+	oldPeerDecoded.Clean(mp)
+
+	corrupt := append([]byte(nil), encoded...)
+	const sourceRowsOffset = 4 + 4 + 8 + 1 + 4 + 2 + 1 + 4
+	corrupt[len(legacy)+sourceRowsOffset] = 255
+	corruptDecoded := NewOffHeapEmpty()
+	require.ErrorContains(t,
+		corruptDecoded.UnmarshalBinaryWithPrepareParamKinds(corrupt, mp),
+		"invalid string source metadata")
+	corruptDecoded.Clean(mp)
 
 	// Reusing the receiver with a legacy payload must clear the previous
 	// sidecar rather than leaking the first generation's provenance.
 	require.NoError(t, decoded.UnmarshalBinaryWithPrepareParamKinds(legacy, mp))
 	require.Equal(t, vector.PrepareParamNone, decoded.Vecs[0].GetPrepareParamKindAt(0))
 	require.False(t, decoded.Vecs[0].GetIsBinaryString())
+	require.False(t, decoded.Vecs[0].HasStringSourceMetadata())
 	decoded.Clean(mp)
+}
+
+func TestPrepareParamKindDecoderRejectsMixedConstStringSources(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewWithSize(1)
+	source.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytesList(
+		source.Vecs[0], [][]byte{[]byte("value"), []byte("value")}, nil, mp))
+	require.NoError(t, source.Vecs[0].SetStringSourcesWithMP([]types.StringSource{
+		types.StringSourceLiteral, types.StringSourceSQLPrepare,
+	}, mp))
+	// Construct a malformed wire witness that cannot be produced through the
+	// validated const-vector setter.
+	source.Vecs[0].SetClass(vector.CONSTANT)
+	source.SetRowCount(2)
+	defer source.Clean(mp)
+
+	var wire bytes.Buffer
+	encoded, err := source.MarshalBinaryWithPrepareParamKinds(&wire, true)
+	require.NoError(t, err)
+
+	buffered := NewOffHeapEmpty()
+	err = buffered.UnmarshalBinaryWithPrepareParamKinds(encoded, mp)
+	require.ErrorContains(t, err, "constant vector cannot have mixed string sources")
+	buffered.Clean(mp)
+
+	streaming := NewOffHeapEmpty()
+	err = streaming.UnmarshalFromReaderWithPrepareParamKinds(bytes.NewReader(encoded), int64(len(encoded)), mp)
+	require.ErrorContains(t, err, "constant vector cannot have mixed string sources")
+	streaming.Clean(mp)
+}
+
+func TestAllStringSourcesRoundTripBatchAndGroupingCodecs(t *testing.T) {
+	mp := mpool.MustNewZero()
+	sources := []types.StringSource{
+		types.StringSourceExpression,
+		types.StringSourceLiteral,
+		types.StringSourceUserVariable,
+		types.StringSourceSQLPrepare,
+		types.StringSourceCOMStmt,
+	}
+	bat := NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	for range sources {
+		require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("value"), false, mp))
+	}
+	require.NoError(t, bat.Vecs[0].SetStringSourcesWithMP(sources, mp))
+	bat.Vecs[0].GetGrouping().Add(1, 3)
+	bat.SetRowCount(len(sources))
+	defer bat.Clean(mp)
+
+	var wire bytes.Buffer
+	encoded, err := bat.MarshalBinaryWithPrepareParamKinds(&wire, true)
+	require.NoError(t, err)
+	decoded := NewOffHeapEmpty()
+	require.NoError(t, decoded.UnmarshalBinaryWithPrepareParamKinds(encoded, mp))
+	for row, source := range sources {
+		require.Equal(t, source, decoded.Vecs[0].GetStringSourceAt(row))
+	}
+	decoded.Clean(mp)
+
+	wire.Reset()
+	require.NoError(t, bat.MarshalBinaryWithGroupingTo(&wire))
+	grouped := NewOffHeapEmpty()
+	require.NoError(t, grouped.UnmarshalFromReaderWithGrouping(&wire, mp))
+	for row, source := range sources {
+		require.Equal(t, source, grouped.Vecs[0].GetStringSourceAt(row))
+	}
+	require.True(t, grouped.Vecs[0].GetGrouping().IsSame(bat.Vecs[0].GetGrouping()))
+	grouped.Clean(mp)
 }
 
 func TestPrepareParamKindTransportMixedBinaryKeepsUniformKind(t *testing.T) {
@@ -946,8 +1057,12 @@ func TestPrepareParamKindMetadataSizeMatchesTrailer(t *testing.T) {
 	require.NoError(t, vector.AppendBytes(plainStatic.Vecs[0], []byte("v"), false, mp))
 	plainStatic.SetRowCount(1)
 	require.False(t, plainStatic.HasBinaryStringMetadata())
+	require.NoError(t, plainStatic.Vecs[0].SetStringSource(types.StringSourceLiteral))
+	require.True(t, plainStatic.HasPrepareParamKindMetadata())
+	require.False(t, plainStatic.HasPrepareParamKindMetadataWithoutStringSources())
 	plainStatic.Vecs[0].SetPrepareParamKind(vector.PrepareParamInteger)
 	require.True(t, plainStatic.HasPrepareParamKindMetadata())
+	require.True(t, plainStatic.HasPrepareParamKindMetadataWithoutStringSources())
 	require.False(t, plainStatic.HasBinaryStringMetadata(),
 		"static binary semantics are already carried by the vector type")
 	plainStatic.Clean(mp)
@@ -977,6 +1092,33 @@ func TestPrepareParamKindMarshalInvalidBoundaryMatrix(t *testing.T) {
 	_, err = NewWithSize(0).MarshalBinaryWithPrepareParamKinds(nil, true)
 	require.ErrorIs(t, err, io.ErrClosedPipe)
 	require.Zero(t, mp.CurrNB())
+}
+
+func TestPrepareParamKindMetadataPropagatesEveryWriterFailure(t *testing.T) {
+	mp := mpool.MustNewZero()
+	bat := NewWithSize(3)
+	for column := range bat.Vecs {
+		bat.Vecs[column] = vector.NewVec(types.T_text.ToType())
+		for range 2 {
+			require.NoError(t, vector.AppendBytes(
+				bat.Vecs[column], []byte("value"), false, mp))
+		}
+	}
+	require.NoError(t, bat.Vecs[0].SetStringSourcesWithMP([]types.StringSource{
+		types.StringSourceLiteral, types.StringSourceCOMStmt,
+	}, mp))
+	require.NoError(t, bat.Vecs[1].SetStringSource(types.StringSourceSQLPrepare))
+	bat.SetRowCount(2)
+	defer bat.Clean(mp)
+
+	var encoded bytes.Buffer
+	require.NoError(t, bat.AppendPrepareParamKindMetadataTo(&encoded))
+	for failAfter := 0; failAfter < encoded.Len(); failAfter++ {
+		err := bat.AppendPrepareParamKindMetadataTo(&failAfterBatchWriter{
+			remaining: failAfter,
+		})
+		require.Error(t, err, "writer failure at byte %d must propagate", failAfter)
+	}
 }
 
 func TestPrepareParamKindTransportRejectsMalformedTrailer(t *testing.T) {

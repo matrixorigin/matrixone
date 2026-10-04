@@ -18,7 +18,7 @@ import "github.com/matrixorigin/matrixone/pkg/common/moerr"
 
 func BitAnd(result, v1, v2 []byte) error {
 	if len(v1) != len(v2) {
-		return moerr.NewInternalErrorNoCtx("Binary operands of bitwise operators must be of equal length")
+		return moerr.NewInvalidBitwiseOperandsSizeNoCtx()
 	}
 
 	for i := range v1 {
@@ -30,7 +30,7 @@ func BitAnd(result, v1, v2 []byte) error {
 
 func BitOr(result, v1, v2 []byte) error {
 	if len(v1) != len(v2) {
-		return moerr.NewInternalErrorNoCtx("Binary operands of bitwise operators must be of equal length")
+		return moerr.NewInvalidBitwiseOperandsSizeNoCtx()
 	}
 
 	for i := range v1 {
@@ -41,7 +41,7 @@ func BitOr(result, v1, v2 []byte) error {
 
 func BitXor(result, v1, v2 []byte) error {
 	if len(v1) != len(v2) {
-		return moerr.NewInternalErrorNoCtx("Binary operands of bitwise operators must be of equal length")
+		return moerr.NewInvalidBitwiseOperandsSizeNoCtx()
 	}
 
 	for i := range v1 {

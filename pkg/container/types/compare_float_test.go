@@ -15,6 +15,7 @@
 package types
 
 import (
+	"bytes"
 	"math"
 	"testing"
 
@@ -39,6 +40,76 @@ func TestFloatOrderComparators(t *testing.T) {
 	require.Zero(t, Float64OrderAscCompare(math.Float64frombits(0x8000000000000000), 0))
 	require.Zero(t, Float64OrderAscCompare(float64Values[6], float64Values[7]))
 	require.Zero(t, Float64OrderDescCompare(float64Values[6], float64Values[7]))
+}
+
+func TestFloatTupleComparatorsMatchPackerOrder(t *testing.T) {
+	float32Values := []float32{
+		math.Float32frombits(math.MaxUint32),
+		math.Float32frombits(0xffc00002),
+		math.Float32frombits(0xff800001),
+		float32(math.Inf(-1)),
+		-math.MaxFloat32,
+		math.Float32frombits(0x80000000),
+		0,
+		math.MaxFloat32,
+		float32(math.Inf(1)),
+		math.Float32frombits(0x7f800001),
+		math.Float32frombits(0x7fc00001),
+		math.Float32frombits(math.MaxInt32),
+	}
+	assertFloat32TupleComparatorMatchesPacker(t, float32Values)
+
+	float64Values := []float64{
+		math.Float64frombits(math.MaxUint64),
+		math.Float64frombits(0xfff8000000000002),
+		math.Float64frombits(0xfff0000000000001),
+		math.Inf(-1),
+		-math.MaxFloat64,
+		math.Float64frombits(0x8000000000000000),
+		0,
+		math.MaxFloat64,
+		math.Inf(1),
+		math.Float64frombits(0x7ff0000000000001),
+		math.Float64frombits(0x7ff8000000000001),
+		math.Float64frombits(math.MaxInt64),
+	}
+	assertFloat64TupleComparatorMatchesPacker(t, float64Values)
+}
+
+func assertFloat32TupleComparatorMatchesPacker(t *testing.T, values []float32) {
+	t.Helper()
+	xp := NewPacker()
+	defer xp.Close()
+	yp := NewPacker()
+	defer yp.Close()
+	for i, x := range values {
+		for j, y := range values {
+			xp.Reset()
+			xp.EncodeFloat32(x)
+			yp.Reset()
+			yp.EncodeFloat32(y)
+			require.Equal(t, bytes.Compare(xp.Bytes(), yp.Bytes()), Float32TupleAscCompare(x, y),
+				"pair %d,%d", i, j)
+		}
+	}
+}
+
+func assertFloat64TupleComparatorMatchesPacker(t *testing.T, values []float64) {
+	t.Helper()
+	xp := NewPacker()
+	defer xp.Close()
+	yp := NewPacker()
+	defer yp.Close()
+	for i, x := range values {
+		for j, y := range values {
+			xp.Reset()
+			xp.EncodeFloat64(x)
+			yp.Reset()
+			yp.EncodeFloat64(y)
+			require.Equal(t, bytes.Compare(xp.Bytes(), yp.Bytes()), Float64TupleAscCompare(x, y),
+				"pair %d,%d", i, j)
+		}
+	}
 }
 
 func assertFloat32ComparatorOrder(t *testing.T, values []float32) {

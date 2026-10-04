@@ -58,6 +58,11 @@ import (
 )
 
 var _ engine.Engine = new(Engine)
+var _ engine.TableVersionedStats = new(Engine)
+var _ engine.RemoteStatsExporter = new(Engine)
+var _ engine.StatsRefresher = new(Engine)
+var _ engine.StatsRefresherWithOptions = new(Engine)
+var _ engine.LogtailReadBarrier = new(Engine)
 
 const (
 	workspaceRSSCacheFamilyEvictTimeout   = 10 * time.Second
@@ -428,7 +433,11 @@ func (e *Engine) Database(
 	// check the database is deleted or not
 	key := genDatabaseKey(accountId, name)
 	if txn.databaseOps.existAndDeleted(key) {
-		return nil, moerr.NewParseErrorf(ctx, "database %q does not exist", name)
+		// Keep all authoritative "database does not exist" results on the same
+		// typed contract.  In particular, DROP DATABASE followed by CREATE
+		// DATABASE in the same transaction (used by PITR and snapshot restore)
+		// reaches this transaction-local tombstone before consulting the catalog.
+		return nil, moerr.GetOkExpectedEOB()
 	}
 
 	if v := txn.databaseOps.existAndActive(key); v != nil {
@@ -537,6 +546,7 @@ func loadNameByIdFromStorage(
 	if err != nil {
 		return "", "", err
 	}
+	defer result.Close()
 	for _, b := range result.Batches {
 		for i := 0; i < b.RowCount(); i++ {
 			tblanmes = append(tblanmes, b.Vecs[0].GetStringAt(i))
@@ -582,14 +592,24 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 	accountId, _ := defines.GetAccountId(ctx)
 	txn := op.GetWorkspace().(*Transaction)
 	dbName, tableName, deleted := txn.tableOps.queryNameByTid(tableId)
+	latestCatalogFallback := false
 	if tableName == "" && deleted {
-		return "", "", nil, moerr.NewInternalErrorf(ctx, "can not find table by id %d: accountId: %d. Deleted in txn", tableId, accountId)
+		return "", "", nil, moerr.NewNoSuchTablef(ctx, "can not find table by id %d: accountId: %d. Deleted in txn", tableId, accountId)
 	}
 
 	// not found in tableOps, try cache
 	if tableName == "" {
 		cache := e.GetLatestCatalogCache()
 		cacheItem := cache.GetTableByIdAndTime(accountId, 0 /*db is not specified */, tableId, txn.op.SnapshotTS())
+		if cacheItem == nil {
+			latest := cache.GetTableById(accountId, 0, tableId)
+			if latest != nil && isSessionTemporaryCatalogItem(
+				cache, latest, accountId, latest.DatabaseId, latest.DatabaseName,
+			) {
+				cacheItem = latest
+				latestCatalogFallback = true
+			}
+		}
 		if cacheItem != nil {
 			tableName = cacheItem.Name
 			dbName = cacheItem.DatabaseName
@@ -630,7 +650,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 
 	if tableName == "" {
 		accountId, _ := defines.GetAccountId(ctx)
-		return "", "", nil, moerr.NewInternalErrorf(
+		return "", "", nil, moerr.NewNoSuchTablef(
 			ctx,
 			"can not find table by id %d: accountId: %d",
 			tableId, accountId,
@@ -665,6 +685,19 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 			zap.Error(err),
 		)
 		return "", "", nil, err
+	}
+	if latestCatalogFallback {
+		var resolvedTableID uint64
+		if txnTable != nil {
+			resolvedTableID = txnTable.GetTableID(ctx)
+		}
+		if resolvedTableID != tableId {
+			return "", "", nil, moerr.NewInternalErrorf(
+				ctx,
+				"can not find table by id %d: accountId: %d. latest catalog name resolved to table id %d",
+				tableId, accountId, resolvedTableID,
+			)
+		}
 	}
 
 	return dbName, tableName, txnTable, nil
@@ -716,6 +749,7 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	if err != nil {
 		return err
 	}
+	defer res.Close()
 	if len(res.Batches) != 1 || res.Batches[0].Vecs[0].Length() != 1 {
 		logutil.Error(
 			"engine.delete.relation.bad",
@@ -1146,6 +1180,39 @@ func (e *Engine) BuildBlockReaders(
 	filterHint ...engine.FilterHint) ([]engine.Reader, error) {
 	var rds []engine.Reader
 	proc := p.(*process.Process)
+	if combined, ok := relData.(*CombinedRelData); ok {
+		if num <= 0 {
+			return nil, moerr.NewInvalidInputNoCtx("partition block reader count must be positive")
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if combined.DataCnt() == 0 {
+			return ensureReaders(nil, num), nil
+		}
+		hint := engine.FilterHint{}
+		if len(filterHint) > 0 {
+			hint = filterHint[0]
+		}
+		// Decode once. Recursive ordinary builders borrow this root and give
+		// each reader its own share; only this frame owns the decoded root.
+		hint, filter, owned, err := prepareMembershipFilter(hint, docfilter.AdmissionForService(e.service))
+		if err != nil {
+			return nil, err
+		}
+		if owned {
+			defer filter.Free()
+		}
+		if hint.BF != nil && filter == nil {
+			return nil, moerr.NewInvalidInputNoCtx("partition block readers require a shareable membership filter")
+		}
+		// CombinedRelData is a partition-to-range mapping, not a splittable
+		// block list. Keep each child's shipped tombstones and the caller's
+		// snapshot on the remote reader path, without a local relation reader.
+		return buildPartitionBlockReaders(ctx, combined.tables, num, func(data engine.RelData) ([]engine.Reader, error) {
+			return e.BuildBlockReaders(ctx, proc, ts, expr, def, data, num, hint)
+		})
+	}
 	blkCnt := relData.DataCnt()
 	newNum := num
 	if blkCnt < num {
@@ -1278,6 +1345,63 @@ func (e *Engine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.
 	return e.globalStats.Get(ctx, key, sync)
 }
 
+func (e *Engine) StatsForRemote(ctx context.Context, key pb.StatsInfoKey) *pb.StatsInfo {
+	return e.globalStats.GetForRemote(ctx, key)
+}
+
+func (e *Engine) StatsAtTableVersion(
+	ctx context.Context,
+	key pb.StatsInfoKey,
+	sync bool,
+	tableDefVersion uint32,
+) *pb.StatsInfo {
+	return e.globalStats.GetAtTableVersion(ctx, key, sync, tableDefVersion)
+}
+
+// RefreshTableStats synchronously replaces the local optimizer statistics for
+// key. The cache swap is the publication boundary observed by later plans.
+func (e *Engine) RefreshTableStats(ctx context.Context, key pb.StatsInfoKey) (*pb.StatsInfo, error) {
+	return e.RefreshTableStatsWithOptions(ctx, key, engine.StatsRefreshOptions{})
+}
+
+func (e *Engine) RefreshTableStatsWithOptions(
+	ctx context.Context,
+	key pb.StatsInfoKey,
+	options engine.StatsRefreshOptions,
+) (*pb.StatsInfo, error) {
+	return refreshTableStats(ctx, key, options, e.globalStats)
+}
+
+// PublishAnalyzedStats installs one successfully collected manual generation.
+// Collection and publication are separate so failed scans never expose a
+// partially populated statistics object.
+func (e *Engine) PublishAnalyzedStats(
+	ctx context.Context,
+	key pb.StatsInfoKey,
+	tableDefVersion uint32,
+	stats *pb.StatsInfo,
+) (*pb.StatsInfo, error) {
+	return e.globalStats.publishAnalyzedStats(ctx, key, tableDefVersion, stats)
+}
+
+type optimizerStatsStore interface {
+	refreshStatsWithMode(
+		context.Context,
+		pb.StatsInfoKey,
+		string,
+		engine.StatsRefreshOptions,
+	) (*pb.StatsInfo, error)
+}
+
+func refreshTableStats(
+	ctx context.Context,
+	key pb.StatsInfoKey,
+	options engine.StatsRefreshOptions,
+	store optimizerStatsStore,
+) (*pb.StatsInfo, error) {
+	return store.refreshStatsWithMode(ctx, key, "auto", options)
+}
+
 // GetGlobalStats returns the GlobalStats instance
 func (e *Engine) GetGlobalStats() *GlobalStats {
 	return e.globalStats
@@ -1303,6 +1427,12 @@ func (e *Engine) PackerPool() *fileservice.Pool[*types.Packer] {
 
 func (e *Engine) LatestLogtailAppliedTime() timestamp.Timestamp {
 	return e.pClient.LatestLogtailAppliedTime()
+}
+
+func (e *Engine) AcquireLogtailReadBarrier(
+	ctx context.Context,
+) (timestamp.Timestamp, error) {
+	return e.pClient.AcquireLogtailReadBarrier(ctx)
 }
 
 // RunGCScheduler runs all GC tasks in a single goroutine with different intervals

@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -46,7 +47,6 @@ var ErrMergeSchedulerStopped = moerr.NewInternalErrorNoCtx("merge scheduler stop
 
 type mergeTask struct {
 	objs        []*objectio.ObjectStats
-	kind        taskHostKind
 	isTombstone bool
 	level       int8
 	note        string
@@ -127,6 +127,7 @@ func NewMergeScheduler(
 	)
 
 	sched.stopped.Store(true)
+	sched.generation.Store(newMergeSchedulerGeneration())
 
 	// init priority queue
 	for table := range cata.InitSource() {
@@ -140,7 +141,6 @@ func NewMergeScheduler(
 			},
 		}
 	}
-
 	return sched
 
 }
@@ -161,8 +161,13 @@ func (a *MergeScheduler) Stop() {
 
 func (a *MergeScheduler) Start() {
 	if a.stopped.CompareAndSwap(true, false) {
-		generation := newMergeSchedulerGeneration()
-		a.generation.Store(generation)
+		generation := a.generation.Load()
+		select {
+		case <-generation.stopCh:
+			generation = newMergeSchedulerGeneration()
+			a.generation.Store(generation)
+		default:
+		}
 		if a.bootstrapMsg != nil {
 			generation.ioChan <- &MMsg{
 				Kind:       a.bootstrapMsg.Kind,
@@ -178,34 +183,34 @@ func (a *MergeScheduler) Start() {
 // region: on events
 
 func (a *MergeScheduler) OnCreateTableCommit(table catalog.MergeTable) {
-	a.msgChan <- &MMsg{
+	a.sendMsgForGeneration(a.generation.Load(), &MMsg{
 		Kind: MMsgKindTableChange,
 		Value: MMsgTableChange{
 			Table:  table,
 			Create: true,
 		},
-	}
+	})
 }
 
 func (a *MergeScheduler) OnCreateNonAppendObject(table catalog.MergeTable) {
-	a.msgChan <- &MMsg{
+	a.sendMsgForGeneration(a.generation.Load(), &MMsg{
 		Kind: MMsgKindTableChange,
 		Value: MMsgTableChange{
 			Table:     table,
 			ObjChange: true,
 		},
-	}
+	})
 }
 
 func (a *MergeScheduler) OnMergeDone(table catalog.MergeTable, esize int) {
-	a.msgChan <- &MMsg{
+	a.sendMsgForGeneration(a.generation.Load(), &MMsg{
 		Kind: MMsgKindTableChange,
 		Value: MMsgTableChange{
 			Table:    table,
 			DoneTask: true,
 			EstSize:  esize,
 		},
-	}
+	})
 }
 
 func (a *MergeScheduler) taskObserverFactory(
@@ -253,12 +258,6 @@ func (o *taskObserver) Admit() {
 		o.f()
 	}
 }
-
-func (a *MergeScheduler) CNActiveObjectsString() string { return "" }
-
-func (a *MergeScheduler) RemoveCNActiveObjects(ids []objectio.ObjectId) {}
-
-func (a *MergeScheduler) PruneCNActiveObjects(id uint64, ago time.Duration) {}
 
 // region: msg def & sender
 
@@ -321,8 +320,9 @@ type MMsgConfigBootstrap struct {
 }
 
 type MMsgConfig struct {
-	ID      uint64
-	Trigger *MMsgTaskTrigger
+	ID       uint64
+	Trigger  *MMsgTaskTrigger
+	CommitTS types.TS
 }
 
 var DefaultTrigger = &MMsgTaskTrigger{
@@ -644,20 +644,19 @@ func (a *MergeScheduler) SendTrigger(trigger *MMsgTaskTrigger) error {
 	return nil
 }
 
-func (a *MergeScheduler) SendConfig(id uint64, setting *MergeSettings) error {
+func (a *MergeScheduler) SendConfig(id uint64, setting *MergeSettings, commitTS types.TS) error {
 	var trigger *MMsgTaskTrigger
 	var err error
 	if setting != nil {
 		trigger, err = setting.ToMMsgTaskTrigger()
-		if err != nil {
-			return err
-		}
 	}
-	a.msgChan <- &MMsg{
+	if !a.sendMsgForGeneration(a.generation.Load(), &MMsg{
 		Kind:  MMsgKindConfig,
-		Value: MMsgConfig{ID: id, Trigger: trigger},
+		Value: MMsgConfig{ID: id, Trigger: trigger, CommitTS: commitTS},
+	}) {
+		return ErrMergeSchedulerStopped
 	}
-	return nil
+	return err
 }
 
 // region: priority queue
@@ -714,7 +713,8 @@ type todoSupporter struct {
 	// runtime triggers
 	triggers []*MMsgTaskTrigger
 	// this maybe loaded from config
-	baseTrigger *MMsgTaskTrigger
+	baseTrigger  *MMsgTaskTrigger
+	lastConfigTS types.TS
 }
 
 func (m *todoSupporter) DoneTask() {
@@ -1134,6 +1134,9 @@ func (a *MergeScheduler) handleQuery(msg MMsgQuery) {
 }
 
 func (a *MergeScheduler) handleAddTable(table catalog.MergeTable) {
+	if a.supps[table.ID()] != nil {
+		return
+	}
 	todo := &todoItem{
 		table:   table,
 		readyAt: a.clock.Now().Add(a.baseInterval),
@@ -1154,6 +1157,10 @@ func (a *MergeScheduler) handleConfig(msg MMsgConfig) {
 	if supp == nil {
 		return
 	}
+	if msg.CommitTS.LT(&supp.lastConfigTS) {
+		return
+	}
+	supp.lastConfigTS = msg.CommitTS
 	supp.baseTrigger = msg.Trigger
 	settings := "nil"
 	if msg.Trigger != nil {

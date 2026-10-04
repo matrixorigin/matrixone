@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"slices"
 	"sort"
 	"strings"
 
@@ -26,7 +27,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
+	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	planutil "github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -103,6 +106,20 @@ func (builder *QueryBuilder) makeUpdateChangedRowsExpr(
 	if proc == nil || !proc.Base.SessionInfo.CountUpdateChangedRows {
 		return nil, nil
 	}
+	return builder.makeUpdateChangedRowsPredicate(alias, selectNode, selectNodeTag, oldColName2Idx, newColName2Idx)
+}
+
+// makeUpdateChangedRowsPredicate is also used to guard automatic ON UPDATE
+// expressions. The changed-row marker is optional protocol metadata, but the
+// predicate itself is required for MySQL's rule that a no-op UPDATE must not
+// refresh CURRENT_TIMESTAMP columns.
+func (builder *QueryBuilder) makeUpdateChangedRowsPredicate(
+	alias string,
+	selectNode *plan.Node,
+	selectNodeTag int32,
+	oldColName2Idx map[string]int32,
+	newColName2Idx map[string]int32,
+) (*plan.Expr, error) {
 
 	updatedCols := make([]string, 0)
 	prefix := alias + "."
@@ -120,15 +137,28 @@ func (builder *QueryBuilder) makeUpdateChangedRowsExpr(
 			continue
 		}
 		newPos := newColName2Idx[qualifiedName]
+		if newPos < 0 || int(newPos) >= len(selectNode.ProjectList) {
+			continue
+		}
+		if oldPos < 0 || int(oldPos) >= len(selectNode.ProjectList) {
+			continue
+		}
+		oldTyp := selectNode.ProjectList[oldPos].Typ
+		var err error
 		oldExpr := &plan.Expr{
-			Typ:  selectNode.ProjectList[oldPos].Typ,
-			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectNodeTag, ColPos: oldPos}},
+			Typ: oldTyp,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: selectNodeTag,
+				ColPos: oldPos,
+			}},
 		}
 		newExpr := &plan.Expr{
-			Typ:  selectNode.ProjectList[newPos].Typ,
-			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectNodeTag, ColPos: newPos}},
+			Typ: oldTyp,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: selectNodeTag,
+				ColPos: newPos,
+			}},
 		}
-		var err error
 		if oldExpr.Typ.Id == int32(types.T_char) {
 			oldExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "rtrim", []*plan.Expr{oldExpr})
 			if err != nil {
@@ -156,6 +186,45 @@ func (builder *QueryBuilder) makeUpdateChangedRowsExpr(
 		return nil, nil
 	}
 	return BindFuncExprImplByPlanExpr(builder.GetContext(), "not", []*plan.Expr{allEqual})
+}
+
+// normalizeUpdateAssignment resolves the value owned by an explicit assignment.
+// Callers choose the input row image: preceding values for sequential UPDATE,
+// original values for simultaneous joined UPDATE.
+func (builder *QueryBuilder) normalizeUpdateAssignment(
+	rhs *plan.Expr, col *plan.ColDef, table *plan.TableDef,
+	defaultValues map[int32]*plan.Expr, ignore, validateNotNull bool,
+) (*plan.Expr, error) {
+	var err error
+	if isDefaultValExpr(rhs) {
+		rhs, err = getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), ignore)
+		if err != nil {
+			return nil, err
+		}
+		rhs, err = expandDefaultExprWithColumnExprs(builder.GetContext(), rhs, defaultValues)
+		if err != nil {
+			return nil, err
+		}
+	}
+	rhs, err = builder.wrapLegacyTimestampAssignment(col, rhs)
+	if err != nil {
+		return nil, err
+	}
+	if validateNotNull && !col.Typ.AutoIncr {
+		if err = checkNotNull(builder.GetContext(), rhs, table, col); err != nil {
+			return nil, err
+		}
+	}
+	if isEnumPlanType(&col.Typ) {
+		return funcCastForEnumType(builder.GetContext(), rhs, col.Typ)
+	}
+	if isSetPlanType(&col.Typ) {
+		return funcCastForSetType(builder.GetContext(), rhs, col.Typ)
+	}
+	if isGeometryPlanType(&col.Typ) {
+		return funcCastForGeometryType(builder.GetContext(), rhs, col.Typ)
+	}
+	return builder.forceProjectedAssignmentCastExpr(rhs, rhs, col.Typ, ignore)
 }
 
 // appendSequentialSingleTableUpdateAssignments materializes the current row in
@@ -210,7 +279,7 @@ func (builder *QueryBuilder) appendSequentialSingleTableUpdateAssignments(
 		rhsBindCtx, rhsBinder := builder.newSequentialUpdateProjectionBinder(
 			bindCtx, currentNodeID, currentTag, tableDef, alias, currentProjectList,
 		)
-		if isNumericAssignmentTarget(tableDef.Cols[columnIndex].Typ) {
+		if useNumericAssignmentContext(tableDef.Cols[columnIndex].Typ, ignore) && !isPreparedAssignmentParam(builder, astExpr) {
 			target := tableDef.Cols[columnIndex].Typ
 			rhsBinder.numericTargetType = &target
 		}
@@ -224,21 +293,28 @@ func (builder *QueryBuilder) appendSequentialSingleTableUpdateAssignments(
 		}
 
 		column := tableDef.Cols[columnIndex]
-		if isDefaultValExpr(rhs) {
-			rhs, err = getDefaultExpr(builder.GetContext(), column)
-			if err != nil {
-				return 0, nil, 0, err
+		if isNullAstExpr(astExpr) {
+			if legacyExpr, legacyErr := buildLegacyTimestampNullAssignment(builder.compCtx, column); legacyErr != nil {
+				return 0, nil, 0, legacyErr
+			} else if legacyExpr != nil {
+				rhs = legacyExpr
 			}
 		}
-		if isEnumPlanType(&column.Typ) {
-			rhs, err = funcCastForEnumType(builder.GetContext(), rhs, column.Typ)
-		} else if isSetPlanType(&column.Typ) {
-			rhs, err = funcCastForSetType(builder.GetContext(), rhs, column.Typ)
-		} else if isGeometryPlanType(&column.Typ) {
-			rhs, err = funcCastForGeometryType(builder.GetContext(), rhs, column.Typ)
-		} else {
-			rhs, err = builder.forceProjectedAssignmentCastExpr(rhs, rhs, column.Typ, ignore)
+		var currentValues map[int32]*plan.Expr
+		if isDefaultValExpr(rhs) {
+			currentValues = make(map[int32]*plan.Expr, len(tableDef.Cols))
+			for i := range tableDef.Cols {
+				if i < len(currentProjectList) {
+					currentValues[int32(i)] = &plan.Expr{
+						Typ: currentProjectList[i].Typ,
+						Expr: &plan.Expr_Col{Col: &plan.ColRef{
+							RelPos: currentTag, ColPos: int32(i),
+						}},
+					}
+				}
+			}
 		}
+		rhs, err = builder.normalizeUpdateAssignment(rhs, column, tableDef, currentValues, ignore, false)
 		if err != nil {
 			return 0, nil, 0, err
 		}
@@ -375,9 +451,13 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	// MySQL guarantees left-to-right evaluation only for single-table UPDATE.
 	// Keep the existing simultaneous projection path for multi-target and UPDATE
 	// FROM statements, whose assignment order is not guaranteed by MySQL.
+	hasOnUpdateColumn := len(dmlCtx.tableDefs) == 1 && len(dmlCtx.tableDefs[0].Cols) > 0 &&
+		slices.IndexFunc(dmlCtx.tableDefs[0].Cols, func(col *plan.ColDef) bool {
+			return col != nil && col.OnUpdate != nil && col.OnUpdate.Expr != nil
+		}) >= 0
 	sequentialAssignments := !updateHasMultipleSourceTables(stmt) && len(dmlCtx.tableDefs) == 1 &&
-		len(dmlCtx.updateAssignments) == 1 && len(dmlCtx.updateAssignments[0]) > 1 &&
-		stmt.From == nil
+		len(dmlCtx.updateAssignments) == 1 &&
+		(len(dmlCtx.updateAssignments[0]) > 1 || hasOnUpdateColumn) && stmt.From == nil
 	sequentialExprs := make([][]UpdateAssignment, len(dmlCtx.aliases))
 
 	for i, alias := range dmlCtx.aliases {
@@ -487,12 +567,14 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			}
 
 			oldPos := oldColName2Idx[alias+"."+colName]
-			if typ := tableDef.Cols[tableDef.Name2ColIndex[colName]].Typ; isNumericAssignmentTarget(typ) {
+			if typ := tableDef.Cols[tableDef.Name2ColIndex[colName]].Typ; useNumericAssignmentContext(typ, stmt.Ignore) && !isPreparedAssignmentParam(builder, updateExpr) {
 				updateNumericTargets[oldPos] = typ
 			}
 			newColName2Idx[alias+"."+colName] = oldPos
 			oldColName2Idx[alias+"."+colName] = int32(len(selectList))
-			selectList = append(selectList, selectList[oldPos])
+			selectList = append(selectList, tree.SelectExpr{
+				Expr: tree.NewUnresolvedName(tree.NewCStr(alias, bindCtx.lower), tree.NewCStr(colName, 1)),
+			})
 			selectList[oldPos] = tree.SelectExpr{Expr: updateExpr}
 		}
 	}
@@ -603,151 +685,169 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	}
 	hasReadOnlyUpdateSource := dmlCtx.hasReadOnlySource || len(dmlCtx.aliases) > updatedTargetCount
 	guardTargetAssignmentEvaluation := isMultiTargetUpdate || hasReadOnlyUpdateSource
-
+	// Normalize explicit values before automatic columns consume them. Joined
+	// assignments still bind against the original row; sequential assignments
+	// have already been materialized by their shared normalization owner.
+	castStoredValue := func(expr *plan.Expr, typ plan.Type) (*plan.Expr, error) {
+		if isEnumPlanType(&typ) {
+			return funcCastForEnumType(builder.GetContext(), expr, typ)
+		}
+		if isSetPlanType(&typ) {
+			return funcCastForSetType(builder.GetContext(), expr, typ)
+		}
+		if isGeometryPlanType(&typ) {
+			return funcCastForGeometryType(builder.GetContext(), expr, typ)
+		}
+		return expr, nil
+	}
 	for i, alias := range dmlCtx.aliases {
 		if len(dmlCtx.updateCol2Expr[i]) == 0 {
 			continue
 		}
-
 		tableDef := dmlCtx.tableDefs[i]
-
 		for _, col := range tableDef.Cols {
-			if colPos, ok := newColName2Idx[alias+"."+col.Name]; ok {
-				updateExpr := selectNode.ProjectList[colPos]
-				if isDefaultValExpr(updateExpr) { // set col = default
-					updateExpr, err = getDefaultExpr(builder.GetContext(), col)
-					if err != nil {
-						return 0, err
+			qualifiedName := alias + "." + col.Name
+			if newPos, updated := newColName2Idx[qualifiedName]; updated && !sequentialAssignments {
+				rhs := selectNode.ProjectList[newPos]
+				var oldValues map[int32]*plan.Expr
+				if isDefaultValExpr(rhs) {
+					oldValues = make(map[int32]*plan.Expr, len(tableDef.Cols))
+					for colIdx, refCol := range tableDef.Cols {
+						if oldPos, exists := oldColName2Idx[alias+"."+refCol.Name]; exists {
+							oldValues[int32(colIdx)] = selectNode.ProjectList[oldPos]
+						}
 					}
 				}
-				if !col.Typ.AutoIncr && !guardTargetAssignmentEvaluation {
-					err = checkNotNull(builder.GetContext(), updateExpr, tableDef, col)
-					if err != nil {
-						return 0, err
-					}
-				}
-				if col != nil && isEnumPlanType(&col.Typ) {
-					selectNode.ProjectList[colPos], err = funcCastForEnumType(builder.GetContext(), updateExpr, col.Typ)
-					if err != nil {
-						return 0, err
-					}
-				} else if col != nil && isSetPlanType(&col.Typ) {
-					selectNode.ProjectList[colPos], err = funcCastForSetType(builder.GetContext(), updateExpr, col.Typ)
-					if err != nil {
-						return 0, err
-					}
-				} else if col != nil && isGeometryPlanType(&col.Typ) {
-					selectNode.ProjectList[colPos], err = funcCastForGeometryType(builder.GetContext(), updateExpr, col.Typ)
-					if err != nil {
-						return 0, err
-					}
-				} else {
-					selectNode.ProjectList[colPos], err = builder.forceProjectedAssignmentCastExpr(
-						updateExpr, updateExpr, col.Typ, stmt.Ignore)
-					if err != nil {
-						return 0, err
-					}
-				}
-
-				// The updated column's OLD value was appended to the project list as
-				// the raw column scan, which for ENUM/SET/geometry columns is a
-				// VARCHAR display value (cast_index_to_value for ENUM). Index tables
-				// store the typed value (e.g. the T_enum index), and INSERT casts the
-				// value before building index keys (bind_insert.go). Cast the OLD
-				// value the same way so UPDATE index-maintenance joins build keys in
-				// the stored typed representation; otherwise the join compares VARCHAR
-				// against the typed index key and either fails to bind (nil-pointer
-				// panic) or silently misses the row (update does not take effect).
-				if oldPos, ok := oldColName2Idx[alias+"."+col.Name]; ok && oldPos != colPos {
-					oldExpr := selectNode.ProjectList[oldPos]
-					if isEnumPlanType(&col.Typ) {
-						selectNode.ProjectList[oldPos], err = funcCastForEnumType(builder.GetContext(), oldExpr, col.Typ)
-					} else if isSetPlanType(&col.Typ) {
-						selectNode.ProjectList[oldPos], err = funcCastForSetType(builder.GetContext(), oldExpr, col.Typ)
-					} else if isGeometryPlanType(&col.Typ) {
-						selectNode.ProjectList[oldPos], err = funcCastForGeometryType(builder.GetContext(), oldExpr, col.Typ)
-					}
-					if err != nil {
-						return 0, err
-					}
-				}
-			} else {
-				qualifiedName := alias + "." + col.Name
-				if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
-					newDefExpr := DeepCopyExpr(col.OnUpdate.Expr)
-					err = replaceFuncId(builder.GetContext(), newDefExpr)
-					if err != nil {
-						return 0, err
-					}
-
-					oldPos := oldColName2Idx[alias+"."+col.Name]
-					newColName2Idx[alias+"."+col.Name] = oldPos
-					oldColName2Idx[alias+"."+col.Name] = int32(len(selectNode.ProjectList))
-					selectNode.ProjectList = append(selectNode.ProjectList, selectNode.ProjectList[oldPos])
-					selectNode.ProjectList[oldPos] = newDefExpr
-				}
-
-				valuePos := oldColName2Idx[qualifiedName]
-				if newPos, updated := newColName2Idx[qualifiedName]; updated {
-					valuePos = newPos
-				}
-				if isEnumPlanType(&col.Typ) {
-					selectNode.ProjectList[valuePos], err = funcCastForEnumType(builder.GetContext(), selectNode.ProjectList[valuePos], col.Typ)
-					if err != nil {
-						return 0, err
-					}
-				} else if isSetPlanType(&col.Typ) {
-					selectNode.ProjectList[valuePos], err = funcCastForSetType(builder.GetContext(), selectNode.ProjectList[valuePos], col.Typ)
-					if err != nil {
-						return 0, err
-					}
-				} else if isGeometryPlanType(&col.Typ) {
-					selectNode.ProjectList[valuePos], err = funcCastForGeometryType(builder.GetContext(), selectNode.ProjectList[valuePos], col.Typ)
-					if err != nil {
-						return 0, err
-					}
+				selectNode.ProjectList[newPos], err = builder.normalizeUpdateAssignment(
+					rhs, col, tableDef, oldValues, stmt.Ignore, !guardTargetAssignmentEvaluation)
+				if err != nil {
+					return 0, err
 				}
 			}
+			// Index maintenance and comparisons consume the stored special-type
+			// domain, not its scan-time VARCHAR display representation.
+			oldPos := oldColName2Idx[qualifiedName]
+			selectNode.ProjectList[oldPos], err = castStoredValue(selectNode.ProjectList[oldPos], col.Typ)
+			if err != nil {
+				return 0, err
+			}
 		}
-
 	}
 
-	if guardTargetAssignmentEvaluation {
+	// Guard the entire conversion/legacy expression before materialization.
+	// Reuse the same selector owner for explicit and automatic values, while
+	// avoiding a second guard around already-materialized explicit values.
+	guardAssignments := func(assignments map[string]int32, publishBranchActive bool) error {
+		if !guardTargetAssignmentEvaluation {
+			return nil
+		}
 		for i, alias := range dmlCtx.aliases {
 			if len(dmlCtx.updateCol2Expr[i]) == 0 {
 				continue
 			}
 			targetSelected, buildErr := builder.buildTargetSelectedBelowAssignmentProject(
-				selectNode,
-				oldColName2Idx[alias+"."+catalog.Row_ID],
-				targetRowNumberPos[i],
-			)
+				selectNode, oldColName2Idx[alias+"."+catalog.Row_ID], targetRowNumberPos[i])
 			if buildErr != nil {
-				return 0, buildErr
+				return buildErr
 			}
 			for _, col := range dmlCtx.tableDefs[i].Cols {
 				qualifiedName := alias + "." + col.Name
-				newPos, updated := newColName2Idx[qualifiedName]
+				newPos, updated := assignments[qualifiedName]
 				if !updated {
 					continue
 				}
-				oldPos, ok := oldColName2Idx[qualifiedName]
-				if !ok {
+				oldPos, exists := oldColName2Idx[qualifiedName]
+				if !exists {
 					continue
 				}
 				selectNode.ProjectList[newPos], buildErr = builder.guardTargetLocalExpr(
-					targetSelected,
-					selectNode.ProjectList[newPos],
-					selectNode.ProjectList[oldPos],
-				)
+					targetSelected, selectNode.ProjectList[newPos], selectNode.ProjectList[oldPos])
 				if buildErr != nil {
-					return 0, buildErr
+					return buildErr
 				}
 			}
-			if targetBranchActivePos[i] >= 0 {
+			if publishBranchActive && targetBranchActivePos[i] >= 0 {
 				selectNode.ProjectList[targetBranchActivePos[i]] = DeepCopyExpr(targetSelected)
 			}
 		}
+		return nil
+	}
+	if err = guardAssignments(newColName2Idx, true); err != nil {
+		return 0, err
+	}
+
+	// Keep explicit OLD/NEW positions stable before automatic columns append
+	// OLD copies and change the working maps.
+	changedRowsOldColName2Idx := maps.Clone(oldColName2Idx)
+	changedRowsNewColName2Idx := maps.Clone(newColName2Idx)
+	changedPredicates := make(map[string]*plan.Expr)
+	needsAutomaticConsumer := false
+	for i, alias := range dmlCtx.aliases {
+		if len(dmlCtx.updateCol2Expr[i]) == 0 {
+			continue
+		}
+		for _, col := range dmlCtx.tableDefs[i].Cols {
+			_, assigned := newColName2Idx[alias+"."+col.Name]
+			if assigned || col.OnUpdate == nil || col.OnUpdate.Expr == nil {
+				continue
+			}
+			needsAutomaticConsumer = true
+			predicate, predicateErr := builder.makeUpdateChangedRowsPredicate(
+				alias, selectNode, selectNodeTag, changedRowsOldColName2Idx, changedRowsNewColName2Idx)
+			if predicateErr != nil {
+				return 0, predicateErr
+			}
+			changedPredicates[alias] = predicate
+			break
+		}
+	}
+	if needsAutomaticConsumer {
+		projectList := make([]*plan.Expr, len(selectNode.ProjectList))
+		for pos, expr := range selectNode.ProjectList {
+			projectList[pos] = &plan.Expr{Typ: expr.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: selectNodeTag, ColPos: int32(pos),
+			}}}
+		}
+		selectNodeTag = builder.genNewBindTag()
+		lastNodeID = builder.appendNode(&plan.Node{
+			NodeType: plan.Node_PROJECT, Children: []int32{lastNodeID},
+			ProjectList: projectList, BindingTags: []int32{selectNodeTag},
+		}, bindCtx)
+		selectNode = builder.qry.Nodes[lastNodeID]
+	}
+
+	automaticAssignments := make(map[string]int32)
+	for i, alias := range dmlCtx.aliases {
+		if len(dmlCtx.updateCol2Expr[i]) == 0 {
+			continue
+		}
+		for _, col := range dmlCtx.tableDefs[i].Cols {
+			qualifiedName := alias + "." + col.Name
+			if _, assigned := newColName2Idx[qualifiedName]; assigned || col.OnUpdate == nil || col.OnUpdate.Expr == nil {
+				continue
+			}
+			newDefExpr := DeepCopyExpr(col.OnUpdate.Expr)
+			if err = replaceFuncId(builder.GetContext(), newDefExpr); err != nil {
+				return 0, err
+			}
+			oldPos := oldColName2Idx[qualifiedName]
+			if changed := changedPredicates[alias]; changed != nil {
+				newDefExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "if", []*plan.Expr{
+					DeepCopyExpr(changed), newDefExpr, DeepCopyExpr(selectNode.ProjectList[oldPos]),
+				})
+				if err != nil {
+					return 0, err
+				}
+			}
+			newColName2Idx[qualifiedName] = oldPos
+			automaticAssignments[qualifiedName] = oldPos
+			oldColName2Idx[qualifiedName] = int32(len(selectNode.ProjectList))
+			selectNode.ProjectList = append(selectNode.ProjectList, DeepCopyExpr(selectNode.ProjectList[oldPos]))
+			selectNode.ProjectList[oldPos] = newDefExpr
+		}
+	}
+	if err = guardAssignments(automaticAssignments, false); err != nil {
+		return 0, err
 	}
 
 	if !isMultiTargetUpdate && hasReadOnlyUpdateSource {
@@ -930,10 +1030,13 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			if col.GeneratedCol == nil {
 				continue
 			}
-			genExpr := builder.applyGeneratedColumnAssignmentCast(
+			genExpr, err := builder.applyGeneratedColumnAssignmentCast(
 				DeepCopyExpr(col.GeneratedCol.Expr),
 				stmt.Ignore,
 			)
+			if err != nil {
+				return 0, err
+			}
 			genExpr = substituteColRefsInExpr(genExpr, selectNode.ProjectList, colOffsets[i])
 
 			oldPos := oldColName2Idx[alias+"."+col.Name]
@@ -943,7 +1046,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			}
 			assignedColsByTarget[i][col.Name] = struct{}{}
 			oldColName2Idx[alias+"."+col.Name] = int32(len(selectNode.ProjectList))
-			selectNode.ProjectList = append(selectNode.ProjectList, selectNode.ProjectList[oldPos])
+			selectNode.ProjectList = append(selectNode.ProjectList, DeepCopyExpr(selectNode.ProjectList[oldPos]))
 			selectNode.ProjectList[oldPos] = genExpr
 			if isMultiTargetUpdate {
 				targetSelected, buildErr := builder.buildTargetSelectedBelowAssignmentProject(
@@ -1721,10 +1824,13 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				if col.GeneratedCol == nil {
 					continue
 				}
-				genExpr := builder.applyGeneratedColumnAssignmentCast(
+				genExpr, err := builder.applyGeneratedColumnAssignmentCast(
 					DeepCopyExpr(col.GeneratedCol.Expr),
 					stmt.Ignore,
 				)
+				if err != nil {
+					return 0, err
+				}
 				genExpr = substituteColRefsInExpr(genExpr, selectNode.ProjectList, colOffsets[ownerIdx])
 				generatedPos, ok := newColName2Idx[ownerAlias+"."+col.Name]
 				if !ok || generatedPos < 0 || int(generatedPos) >= len(selectNode.ProjectList) {
@@ -2015,9 +2121,40 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			}
 		}
 		changedRowsExpr, err := builder.makeUpdateChangedRowsExpr(
-			alias, selectNode, selectNodeTag, oldColName2Idx, newColName2Idx)
+			alias, selectNode, selectNodeTag, changedRowsOldColName2Idx, changedRowsNewColName2Idx)
 		if err != nil {
 			return 0, err
+		}
+		// Several aliases can update the same physical table. Only the physical
+		// owner has an UpdateCtx, so its changed-row marker must represent every
+		// logical alias assigned to that table. Otherwise an alias whose update
+		// survives IGNORE while the owner's update is rejected is reported as a
+		// zero-row update.
+		if isMultiTargetUpdate && physicalTargetOwner[i] == i {
+			for targetIdx, owner := range physicalTargetOwner {
+				if targetIdx == i || owner != i || len(dmlCtx.updateCol2Expr[targetIdx]) == 0 {
+					continue
+				}
+				aliasChanged, aliasErr := builder.makeUpdateChangedRowsExpr(
+					dmlCtx.aliases[targetIdx], selectNode, selectNodeTag,
+					changedRowsOldColName2Idx, changedRowsNewColName2Idx)
+				if aliasErr != nil {
+					return 0, aliasErr
+				}
+				if aliasChanged == nil {
+					continue
+				}
+				if changedRowsExpr == nil {
+					changedRowsExpr = aliasChanged
+				} else {
+					changedRowsExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*plan.Expr{
+						changedRowsExpr, aliasChanged,
+					})
+					if err != nil {
+						return 0, err
+					}
+				}
+			}
 		}
 
 		updateCtx := &plan.UpdateCtx{
@@ -2291,6 +2428,20 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		}
 		return lockTargets[i].PrimaryColIdxInBat < lockTargets[j].PrimaryColIdxInBat
 	})
+	if !builder.hasExistingLockTargets() &&
+		isUnrestrictedSingleTargetUpdate(stmt, dmlCtx, updatedTargetCount) &&
+		lockTargetsCoverCompleteKeyspaces(lockTargets) {
+		if builder.fullTableUpdateLockTargets == nil {
+			builder.fullTableUpdateLockTargets = make(map[*plan.LockTarget]struct{}, len(lockTargets))
+		}
+		builder.fullTableUpdateSourceTableID = dmlCtx.tableDefs[0].TblId
+		builder.hasFullTableUpdateSourceTableID = true
+		for _, target := range lockTargets {
+			if target.Mode == lockpb.LockMode_Exclusive {
+				builder.fullTableUpdateLockTargets[target] = struct{}{}
+			}
+		}
+	}
 
 	// Synchronous irregular indexes share the exact final row image with the
 	// base-table MULTI_UPDATE. Their stale entries are deleted by the immutable
@@ -2366,7 +2517,11 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			localProjList[deletePkPos].Typ,
 			rowNumberPos,
 			activePos,
+			-1,
 			indexes,
+			nil,
+			-1,
+			nil,
 			tableDef,
 			dmlCtx.objRefs[i],
 		)
@@ -2376,13 +2531,16 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		builder.irregularUpdateMaints = append(
 			builder.irregularUpdateMaints,
 			irregularUpdateMaintenance{
-				sourceStep:  builder.irregularMaintSourceStep,
-				deleteStep:  builder.irregularMaintDeleteStep,
-				deletePkPos: builder.irregularMaintDeletePkPos,
-				deletePkTyp: builder.irregularMaintDeletePkTyp,
-				indexes:     builder.irregularMaintIndexes,
-				tableDef:    builder.irregularMaintTableDef,
-				objRef:      builder.irregularMaintObjRef,
+				sourceStep:              builder.irregularMaintSourceStep,
+				deleteStep:              builder.irregularMaintDeleteStep,
+				deletePkPos:             builder.irregularMaintDeletePkPos,
+				deletePkTyp:             builder.irregularMaintDeletePkTyp,
+				indexes:                 builder.irregularMaintIndexes,
+				insertOnlySourceStep:    builder.irregularMaintInsertOnlySourceStep,
+				insertOnlyIndexes:       builder.irregularMaintInsertOnlyIndexes,
+				valueChangedSourceSteps: builder.irregularMaintValueChangedSourceSteps,
+				tableDef:                builder.irregularMaintTableDef,
+				objRef:                  builder.irregularMaintObjRef,
 			},
 		)
 	}
@@ -2402,7 +2560,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			LockTargets: lockTargets,
 		}, bindCtx)
 	}
-	applySharedLockTableFallback(builder)
+	applyLockTableFallback(builder)
 
 	dmlNode.Children = append(dmlNode.Children, lastNodeID)
 	lastNodeID = builder.appendNode(dmlNode, bindCtx)
@@ -3400,10 +3558,13 @@ func (builder *QueryBuilder) recomputeMergedPhysicalTargetGeneratedColumns(
 				ownerAlias,
 			)
 		}
-		genExpr := builder.applyGeneratedColumnAssignmentCast(
+		genExpr, err := builder.applyGeneratedColumnAssignmentCast(
 			DeepCopyExpr(col.GeneratedCol.Expr),
 			true,
 		)
+		if err != nil {
+			return err
+		}
 		selectNode.ProjectList[generatedPos] = substituteColRefsInExpr(
 			genExpr,
 			generatedInputs,
@@ -4279,18 +4440,23 @@ func (builder *QueryBuilder) appendTargetRowNumberBelowAssignmentProject(
 		WinSpecList: []*plan.Expr{rowNumberExpr},
 		WindowIdx:   0,
 		BindingTags: []int32{windowTag},
+		SpillMem:    builder.sortSpillMem,
 	}, bindCtx)
 	selectNode.Children[0] = windowID
 
 	rowNumberPos := int32(len(selectNode.ProjectList))
-	selectNode.ProjectList = append(selectNode.ProjectList, &plan.Expr{
+	rowNumberProject, err := makePlan2CastExpr(builder.GetContext(), &plan.Expr{
 		Typ: rowNumberFunc.Typ,
 		Expr: &plan.Expr_Col{Col: &plan.ColRef{
 			RelPos: windowTag,
 			ColPos: 0,
 			Name:   "__mo_multi_target_update_row_number",
 		}},
-	})
+	}, plan.Type{Id: int32(types.T_int64)})
+	if err != nil {
+		return 0, 0, err
+	}
+	selectNode.ProjectList = append(selectNode.ProjectList, rowNumberProject)
 	return lastNodeID, rowNumberPos, nil
 }
 
@@ -4455,6 +4621,23 @@ func irregularIndexAffectedByUpdate(
 	idxDef *plan.IndexDef,
 	updateCols map[string]tree.Expr,
 ) (bool, error) {
+	updatedCols := make(map[string]struct{}, len(updateCols))
+	for colName := range updateCols {
+		updatedCols[colName] = struct{}{}
+	}
+	return irregularIndexAffectedByUpdatedColumnNames(tableDef, idxDef, updatedCols)
+}
+
+// irregularIndexAffectedByUpdatedColumnNames is the shared dependency check for
+// UPDATE and ON DUPLICATE KEY UPDATE. The latter has already bound its values to
+// plan expressions, so it cannot reuse the tree.Expr map accepted by the former.
+// Keeping the plugin hook here makes both paths honor algorithm-owned metadata
+// dependencies such as IVFFLAT INCLUDE columns.
+func irregularIndexAffectedByUpdatedColumnNames(
+	tableDef *plan.TableDef,
+	idxDef *plan.IndexDef,
+	updateCols map[string]struct{},
+) (bool, error) {
 	columnUpdated := func(colName string) bool {
 		colName = catalog.ResolveAlias(colName)
 		if _, ok := updateCols[colName]; ok {
@@ -4595,6 +4778,52 @@ func updateHasMultipleSourceTables(stmt *tree.Update) bool {
 	return len(stmt.Tables) == 1 && tableExprContainsJoin(stmt.Tables[0])
 }
 
+// isUnrestrictedSingleTargetUpdate proves the semantic precondition for the
+// large-UPDATE table-lock fast path. The proof deliberately stays narrower
+// than cardinality estimation: a predicate that happens to estimate to every
+// current row is still bounded and must preserve #26706's range-lock behavior.
+func isUnrestrictedSingleTargetUpdate(stmt *tree.Update, dmlCtx *DMLContext, updatedTargetCount int) bool {
+	if stmt == nil || dmlCtx == nil || updatedTargetCount != 1 || len(dmlCtx.tableDefs) != 1 ||
+		updateHasMultipleSourceTables(stmt) || len(stmt.OrderBy) != 0 || stmt.Limit != nil {
+		return false
+	}
+	if stmt.Where == nil {
+		return true
+	}
+	literal, ok := stmt.Where.Expr.(*tree.NumVal)
+	return ok && literal.ValType == tree.P_bool && literal.Bool()
+}
+
+// hasExistingLockTargets rejects plans that must lock another namespace before
+// the UPDATE's final base/index lock gate. Pulling only the final targets into
+// the compile-time table-lock phase would reverse that established order for
+// foreign-key checks/actions or an explicitly locking scalar subquery.
+func (builder *QueryBuilder) hasExistingLockTargets() bool {
+	for _, node := range builder.qry.Nodes {
+		if node.NodeType == plan.Node_LOCK_OP && len(node.LockTargets) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// lockTargetsCoverCompleteKeyspaces keeps table-lock admission atomic across
+// every namespace written by the UPDATE. A partial admission can invert lock
+// order against a bounded UPDATE.
+func lockTargetsCoverCompleteKeyspaces(lockTargets []*plan.LockTarget) bool {
+	foundExclusive := false
+	for _, target := range lockTargets {
+		if target == nil || target.Mode != lockpb.LockMode_Exclusive {
+			continue
+		}
+		foundExclusive = true
+		if !colexec.SupportsTotalLockTableRange(makeTypeByPlan2Type(target.PrimaryColTyp)) {
+			return false
+		}
+	}
+	return foundExclusive
+}
+
 func primaryKeyUpdated(tableDef *plan.TableDef, updateCols map[string]tree.Expr) bool {
 	if tableDef == nil || tableDef.Pkey == nil || len(updateCols) == 0 {
 		return false
@@ -4696,6 +4925,7 @@ func (builder *QueryBuilder) appendTargetRowNumberNode(
 		WinSpecList: []*plan.Expr{rowNumberExpr},
 		WindowIdx:   0,
 		BindingTags: []int32{windowTag},
+		SpillMem:    builder.sortSpillMem,
 	}, bindCtx)
 
 	rowNumberProjectPos := int32(len(selectNode.ProjectList))
@@ -4704,7 +4934,7 @@ func (builder *QueryBuilder) appendTargetRowNumberNode(
 	for pos := range selectNode.ProjectList {
 		projectList = append(projectList, childColExpr(int32(pos)))
 	}
-	projectList = append(projectList, &plan.Expr{
+	rowNumberProject, err := makePlan2CastExpr(builder.GetContext(), &plan.Expr{
 		Typ: rowNumberFunc.Typ,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
@@ -4713,7 +4943,11 @@ func (builder *QueryBuilder) appendTargetRowNumberNode(
 				Name:   "__mo_multi_target_update_row_number",
 			},
 		},
-	})
+	}, plan.Type{Id: int32(types.T_int64)})
+	if err != nil {
+		return 0, nil, 0, 0, err
+	}
+	projectList = append(projectList, rowNumberProject)
 	projectNode := &plan.Node{
 		NodeType:    plan.Node_PROJECT,
 		Children:    []int32{lastNodeID},
@@ -4906,6 +5140,7 @@ func (builder *QueryBuilder) appendRowNumberGuardNode(
 		WinSpecList: []*plan.Expr{rowNumberExpr},
 		WindowIdx:   rowNumberIdx,
 		BindingTags: []int32{windowTag},
+		SpillMem:    builder.sortSpillMem,
 	}, bindCtx)
 
 	windowProjectTag := builder.genNewBindTag()
@@ -4913,7 +5148,7 @@ func (builder *QueryBuilder) appendRowNumberGuardNode(
 	for pos := range selectNode.ProjectList {
 		windowProjectList = append(windowProjectList, childColExpr(int32(pos)))
 	}
-	windowProjectList = append(windowProjectList, &plan.Expr{
+	rowNumberProject, err := makePlan2CastExpr(builder.GetContext(), &plan.Expr{
 		Typ: rowNumberFunc.Typ,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
@@ -4922,7 +5157,11 @@ func (builder *QueryBuilder) appendRowNumberGuardNode(
 				Name:   "__mo_update_from_dedup_row_number",
 			},
 		},
-	})
+	}, plan.Type{Id: int32(types.T_int64)})
+	if err != nil {
+		return 0, nil, 0, err
+	}
+	windowProjectList = append(windowProjectList, rowNumberProject)
 	lastNodeID = builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_PROJECT,
 		Children:    []int32{lastNodeID},

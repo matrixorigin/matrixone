@@ -18,7 +18,6 @@ import (
 	"math"
 	"runtime"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -73,6 +72,7 @@ type HashmapBuilder struct {
 	DelRows                   *bitmap.Bitmap
 	budget                    *process.ExecutionResourceGeneration
 	keyExprs                  []*plan.Expr
+	joinDiagnostic            *colexec.DeferredJoinDiagnostic
 	// retainedSpillTailSelected is the logical spill materialization of the
 	// one partial CopyIntoBatches tail. It avoids rescanning that growing tail.
 	retainedSpillTailSelected uint64
@@ -184,6 +184,7 @@ func (hb *HashmapBuilder) Prepare(
 	dedupDeleteMarkerColIdx int32,
 	dedupDeleteKeepColIdxList []int32,
 	proc *process.Process,
+	foldOwnedConstantCasts ...bool,
 ) error {
 	if len(hb.executors) == 0 {
 		needDupVec := false
@@ -197,11 +198,13 @@ func (hb *HashmapBuilder) Prepare(
 			}
 			keyWidth += width
 		}
-		executors, err := newExpressionExecutorsWithCapacityClass(
+		executors, err := newExpressionExecutorsWithCapacityClassAndDiagnostic(
 			proc,
 			keyCols,
 			hb.mapAllocationAccount,
 			hb.recoveryCapacityClass,
+			len(foldOwnedConstantCasts) > 0 && foldOwnedConstantCasts[0],
+			hb.joinDiagnostic,
 		)
 		if err != nil {
 			return err
@@ -428,9 +431,33 @@ func (hb *HashmapBuilder) hasNonReflexiveFloatKey() bool {
 }
 
 func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, needUniqueVec bool, proc *process.Process) (retErr error) {
+	return hb.buildHashmapWithRuntimeFilterLimit(
+		hashOnPK, needAllocateSels, needUniqueVec, -1, proc)
+}
+
+// buildHashmapWithRuntimeFilterLimit bounds optional exact-runtime-filter key
+// retention independently of the mandatory JoinMap. A negative limit keeps
+// the legacy unbounded collection contract for callers that do not have a
+// RuntimeFilterSpec (including membership-filter consumers, which apply their
+// own policy). Exceeding the bound fails only the optional filter open; the
+// complete JoinMap continues to build.
+func (hb *HashmapBuilder) buildHashmapWithRuntimeFilterLimit(
+	hashOnPK bool,
+	needAllocateSels bool,
+	needUniqueVec bool,
+	runtimeFilterLimit int32,
+	proc *process.Process,
+) (retErr error) {
 	hb.runtimeFilterCollectionFallback = false
 	hb.retainedBatchRecoverySafe = true
-	return hb.buildHashmap(hashOnPK, needAllocateSels, needUniqueVec, hb.DedupBuildKeepLast, proc)
+	return hb.buildHashmap(
+		hashOnPK,
+		needAllocateSels,
+		needUniqueVec,
+		runtimeFilterLimit,
+		hb.DedupBuildKeepLast,
+		proc,
+	)
 }
 
 func (hb *HashmapBuilder) runtimeFilterFallbackState() (bool, bool) {
@@ -442,6 +469,21 @@ func (hb *HashmapBuilder) collectUniqueKeySlot(slot int) bool {
 	return len(hb.uniqueKeySlots) == 0 ||
 		(slot >= 0 && slot < len(hb.uniqueKeySlots) &&
 			hb.uniqueKeySlots[slot])
+}
+
+func (hb *HashmapBuilder) optionalRuntimeFilterKeysExceedLimit(limit int32) bool {
+	if limit < 0 {
+		return false
+	}
+	if hb.GetGroupCount() > uint64(limit) {
+		return true
+	}
+	for i, keys := range hb.UniqueJoinKeys {
+		if hb.collectUniqueKeySlot(i) && keys != nil && keys.Length() > int(limit) {
+			return true
+		}
+	}
+	return false
 }
 
 // RetainedBatchRecoverySafe reports whether the batches retained by this
@@ -458,10 +500,50 @@ func (hb *HashmapBuilder) buildHashmap(
 	hashOnPK bool,
 	needAllocateSels bool,
 	needUniqueVec bool,
+	runtimeFilterLimit int32,
 	dedupBuildKeepLast bool,
 	proc *process.Process,
 ) (retErr error) {
 	runtimeFilterRequested := needUniqueVec
+	warningsEnabled := proc != nil && proc.GetStmtProfile() != nil &&
+		proc.GetStmtProfile().GetStatementIgnore() && hb.IsDedup &&
+		hb.OnDuplicateAction == plan.Node_IGNORE
+	var duplicateWarnings process.WarningAccumulator
+	duplicateWarnings.SetWarningRetentionForProcess(proc)
+	defer func() {
+		// Warnings belong to a successfully completed statement.  If the build
+		// fails, the statement is rolled back and diagnostics from this partial
+		// execution must not leak into the next statement.
+		if retErr == nil && warningsEnabled {
+			duplicateWarnings.Flush(proc)
+		} else {
+			duplicateWarnings.Reset()
+		}
+	}()
+	recordDuplicateWarning := func(vec *vector.Vector, row int) {
+		if !warningsEnabled {
+			return
+		}
+		if !duplicateWarnings.NeedsDiagnostic() {
+			duplicateWarnings.AddCount()
+			return
+		}
+		if vec == nil {
+			duplicateWarnings.AddCount()
+			return
+		}
+		rowStr, err := colexec.FormatDedupEntry(vec, row, hb.DedupColName, hb.DedupColTypes)
+		if err != nil {
+			// IGNORE must preserve its historical data-path semantics even if a
+			// user-facing rendering of a corrupt internal key is unavailable.
+			duplicateWarnings.AddCount()
+			return
+		}
+		duplicateWarnings.Add(
+			moerr.ER_DUP_ENTRY,
+			moerr.FormatDuplicateEntry(rowStr, hb.DedupColName),
+		)
+	}
 	if err := checkHashBuildCanceled(proc); err != nil {
 		return err
 	}
@@ -766,28 +848,10 @@ buildUnits:
 							continue
 						}
 
-						var rowStr string
-						if len(hb.DedupColTypes) == 1 {
-							if hb.DedupColName == catalog.IndexTableIndexColName {
-								if hb.curVecs[0].GetType().Oid == types.T_varchar {
-									t, _, schema, err := types.DecodeTuple(hb.curVecs[0].GetBytesAt(vecIdx2 + k))
-									if err == nil && len(schema) > 1 {
-										rowStr = t.ErrString(make([]int32, len(schema)))
-									}
-								}
-							}
-
-							if len(rowStr) == 0 {
-								rowStr, err = colexec.FormatDedupKey(hb.curVecs[0], vecIdx2+k, hb.DedupColTypes)
-								if err != nil {
-									return err
-								}
-							}
-						} else {
-							rowStr, err = colexec.FormatDedupKey(hb.curVecs[0], vecIdx2+k, hb.DedupColTypes)
-							if err != nil {
-								return err
-							}
+						rowStr, err := colexec.FormatDedupEntry(
+							hb.curVecs[0], vecIdx2+k, hb.DedupColName, hb.DedupColTypes)
+						if err != nil {
+							return err
 						}
 						return moerr.NewDuplicateEntry(proc.Ctx, rowStr, hb.DedupColName)
 					case plan.Node_IGNORE:
@@ -795,11 +859,13 @@ buildUnits:
 							previousRow := ignoreSurvivorRows[v]
 							if previousRow > 0 {
 								hb.IgnoreRows.Add(uint64(previousRow - 1))
+								recordDuplicateWarning(hb.curVecs[0], vecIdx2+k)
 							}
 							ignoreSurvivorRows[v] = int64(i+k) + 1
 							ignoreSurvivorOwnsKey[v] = true
 						} else {
 							hb.IgnoreRows.Add(uint64(i + k))
+							recordDuplicateWarning(hb.curVecs[0], vecIdx2+k)
 						}
 					}
 				} else {
@@ -818,6 +884,15 @@ buildUnits:
 			} else if !hashOnPK && needAllocateSels {
 				hb.Sels.Insert(int32(v-1), int32(i+k))
 			}
+		}
+
+		if needUniqueVec &&
+			hb.optionalRuntimeFilterKeysExceedLimit(runtimeFilterLimit) {
+			if err := hb.abandonOptionalRuntimeFilterKeys(proc); err != nil {
+				return err
+			}
+			needUniqueVec = false
+			continue buildUnits
 		}
 
 		if needUniqueVec {
@@ -904,6 +979,13 @@ buildUnits:
 					}
 				}
 			}
+			if needUniqueVec &&
+				hb.optionalRuntimeFilterKeysExceedLimit(runtimeFilterLimit) {
+				if err := hb.abandonOptionalRuntimeFilterKeys(proc); err != nil {
+					return err
+				}
+				needUniqueVec = false
+			}
 		}
 	}
 
@@ -934,7 +1016,14 @@ buildUnits:
 		if err != nil {
 			return err
 		}
-		if err := hb.buildHashmap(hashOnPK, needAllocateSels, needUniqueVec, false, proc); err != nil {
+		if err := hb.buildHashmap(
+			hashOnPK,
+			needAllocateSels,
+			needUniqueVec,
+			runtimeFilterLimit,
+			false,
+			proc,
+		); err != nil {
 			return err
 		}
 		hb.InputBatchRowCount = totalRowCount
@@ -964,7 +1053,14 @@ buildUnits:
 		if err != nil {
 			return err
 		}
-		return hb.buildHashmap(hashOnPK, needAllocateSels, needUniqueVec, false, proc)
+		return hb.buildHashmap(
+			hashOnPK,
+			needAllocateSels,
+			needUniqueVec,
+			runtimeFilterLimit,
+			false,
+			proc,
+		)
 	}
 
 	if hb.delColIdx != -1 {

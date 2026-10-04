@@ -45,14 +45,26 @@ type container struct {
 	batAggs []aggexec.AggFuncExec
 
 	// runningAgg retains the one-group aggregate for cumulative and bounded
-	// sliding ROWS frames between output chunks. runningNextRow guards against
+	// sliding frames between output chunks. runningNextRow guards against
 	// accidentally reusing the state out of order; runningLeft/runningRight
-	// describe the current half-open sliding frame.
+	// describe the current half-open sliding frame. For RANGE frames,
+	// runningPeerEnd lets every row in one peer group reuse the same boundaries.
 	runningAgg       aggexec.AggFuncExec
 	runningNextRow   int
 	runningPartition int
 	runningLeft      int
 	runningRight     int
+	runningPeerEnd   int
+
+	// orderedSetPartitionResults retains one finalized scalar result per
+	// logical partition while a materialized input generation is emitted in
+	// bounded chunks. The compact cache avoids rebuilding an ordered-set
+	// aggregate for every output chunk. orderedSetNextRow and
+	// orderedSetPartition enforce sequential consumption and identify the
+	// cached scalar to broadcast next.
+	orderedSetPartitionResults *vector.Vector
+	orderedSetNextRow          int
+	orderedSetPartition        int
 
 	desc      []bool
 	nullsLast []bool
@@ -112,6 +124,10 @@ type Window struct {
 	// PartitionTopN allows the bounded ROW_NUMBER path to coalesce complete
 	// candidate partitions and evaluate their explicit boundaries once.
 	PartitionTopN bool
+	// SpillThreshold is the session sort_spill_mem value captured in the plan.
+	// Window uses it for the internal ordering pass when a partition exceeds
+	// the configured resident sort budget.
+	SpillThreshold int64
 
 	vm.OperatorBase
 }
@@ -160,6 +176,7 @@ func (window *Window) Reset(proc *process.Process, pipelineFailed bool, err erro
 	// hashes) in the mpool until the next reuse.
 	ctr.freeAggFun()
 	ctr.freeRunningAgg()
+	ctr.freeOrderedSetPartitionResults(proc.Mp())
 	if ctr.hasAccountedBufferedData() {
 		// AppendWithCopy and Dup preserve a source vector's allocation
 		// selection. Release inherited backing at the prepared-statement
@@ -181,6 +198,7 @@ func (window *Window) Free(proc *process.Process, pipelineFailed bool, err error
 	// the normal freeAggFun()) does not leak their mpool-held state.
 	ctr.freeAggFun()
 	ctr.freeRunningAgg()
+	ctr.freeOrderedSetPartitionResults(proc.Mp())
 	ctr.freeBatch(proc.Mp())
 	ctr.freeExes()
 	ctr.freeVector(proc.Mp())
@@ -250,6 +268,16 @@ func (ctr *container) freeRunningAgg() {
 	ctr.runningPartition = 0
 	ctr.runningLeft = 0
 	ctr.runningRight = 0
+	ctr.runningPeerEnd = 0
+}
+
+func (ctr *container) freeOrderedSetPartitionResults(mp *mpool.MPool) {
+	if ctr.orderedSetPartitionResults != nil {
+		ctr.orderedSetPartitionResults.Free(mp)
+		ctr.orderedSetPartitionResults = nil
+	}
+	ctr.orderedSetNextRow = 0
+	ctr.orderedSetPartition = 0
 }
 
 func (ctr *container) freeExes() {

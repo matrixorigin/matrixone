@@ -31,11 +31,11 @@ revoke show databases on account * from r1;
 
 -- @session:id=2&user=sys:u1:r1&password=111
 show variables like 'enable_privilege_cache';
--- success. has cache. the SHOW DATABASES privilege is in cache.
+-- fail. Revoked privileges must not survive across statements in the same session.
 show databases;
 show databases;
 
--- clear the cache.
+-- Clearing the cache must not change the denied result.
 set clear_privilege_cache = on;
 show variables like 'clear_privilege_cache';
 show variables like 'enable_privilege_cache';

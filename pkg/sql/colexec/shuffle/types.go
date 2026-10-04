@@ -41,6 +41,7 @@ type Shuffle struct {
 	RuntimeFilterSpec  *plan.RuntimeFilterSpec
 	ShuffleExpr        *plan.Expr
 	DrainAllBuckets    bool
+	StringHashKey      bool
 	vm.OperatorBase
 }
 
@@ -91,6 +92,7 @@ type container struct {
 	pendingOffset        int
 	shufflePool          *ShufflePool
 	runtimeFilterHandled bool
+	stableStringHash     bool
 	exprExec             colexec.ExpressionExecutor
 	held                 bool
 	writingStopped       bool
@@ -123,14 +125,14 @@ func (shuffle *Shuffle) GetShufflePool() *ShufflePool {
 }
 
 func (shuffle *Shuffle) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	if !shuffle.DrainAllBuckets {
-		if (pipelineFailed || err != nil) && shuffle.ctr.shufflePool != nil {
-			abortErr := err
-			if abortErr == nil {
-				abortErr = context.Canceled
-			}
-			shuffle.ctr.shufflePool.abortWithError(proc.Mp(), abortErr)
+	if (pipelineFailed || err != nil) && shuffle.ctr.shufflePool != nil {
+		abortErr := err
+		if abortErr == nil {
+			abortErr = context.Canceled
 		}
+		shuffle.ctr.shufflePool.abortWithError(proc.Mp(), abortErr)
+	}
+	if !shuffle.DrainAllBuckets {
 		if shuffle.ctr.held {
 			shuffle.ackDirectBatch()
 			if shuffle.ctr.buf != nil && shuffle.ctr.bufFromPool && shuffle.ctr.shufflePool != nil {
@@ -180,6 +182,7 @@ func (shuffle *Shuffle) Reset(proc *process.Process, pipelineFailed bool, err er
 	shuffle.ctr.pendingBucket = 0
 	shuffle.ctr.pendingOffset = 0
 	shuffle.ctr.runtimeFilterHandled = false
+	shuffle.ctr.stableStringHash = false
 	shuffle.ctr.held = false
 	shuffle.ctr.writingStopped = false
 	shuffle.ctr.producerOnce = sync.Once{}

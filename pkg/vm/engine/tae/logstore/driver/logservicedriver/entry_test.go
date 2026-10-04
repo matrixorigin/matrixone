@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func Test_SkipCmd(t *testing.T) {
@@ -41,6 +42,20 @@ func Test_SkipCmd(t *testing.T) {
 
 	assert.Equal(t, []uint64{1, 2, 3}, dsns)
 	assert.Equal(t, []uint64{3, 2, 1}, psns)
+}
+
+func Test_SkipCmdSortKeepsDSNPSNPairs(t *testing.T) {
+	dsns := []uint64{7, 2, 19, 4, 11, 0, 15, 6, 1, 18, 9, 3, 14, 8, 5, 17, 10, 13, 12, 16}
+	cmd := NewSkipCmd(len(dsns))
+	for i, dsn := range dsns {
+		cmd.Set(i, dsn, 100+dsn)
+	}
+
+	cmd.Sort()
+	for i, dsn := range cmd.GetDSNSlice() {
+		assert.Equal(t, uint64(i), dsn)
+		assert.Equal(t, 100+dsn, cmd.GetPSNSlice()[i])
+	}
 }
 
 func Test_LogEntry1(t *testing.T) {
@@ -117,11 +132,26 @@ func Test_LogEntry2(t *testing.T) {
 	assert.Equal(t, Cmd_SkipDSN, CmdType(e.GetCmdType()))
 	assert.Equal(t, IOET_WALRecord, e.GetType())
 	assert.Equal(t, IOET_WALRecord_CurrVer, e.GetVersion())
+	assert.Equal(t, SkipCmdVersionDSNPSN, e.GetSkipCmdVersion())
 
 	skipCmd := SkipCmd(e.GetEntry(0))
 	assert.Equal(t, []uint64{1, 2, 3}, skipCmd.GetDSNSlice())
 	assert.Equal(t, []uint64{3, 2, 1}, skipCmd.GetPSNSlice())
 	assert.Equal(t, 3, skipCmd.ElementCount())
+}
+
+func TestLogEntryWriterErrorCompletesOwnedEntriesExactlyOnce(t *testing.T) {
+	w := NewLogEntryWriter()
+	e := entry.NewEmptyEntry()
+	require.NoError(t, w.AppendEntry(e))
+
+	errExpected := fmt.Errorf("append failed")
+	w.NotifyDone(errExpected)
+	// A wait-loop cleanup may run after the fail-stop notification. The writer
+	// must treat that second terminal notification as a no-op.
+	w.NotifyDone(nil)
+	assert.ErrorIs(t, e.WaitDone(), errExpected)
+	e.Entry.Free()
 }
 
 func TestCompatibility1(t *testing.T) {
@@ -156,6 +186,7 @@ func TestCompatibility2(t *testing.T) {
 	t.Log(old.addr)
 	newEntry, err := DecodeLogEntry(buf, nil)
 	assert.NoError(t, err)
+	assert.Equal(t, SkipCmdVersionDSNPSN, newEntry.GetSkipCmdVersion())
 	skipCmd := SkipCmd(newEntry.GetEntry(0))
 	assert.Equal(t, []uint64{1, 2, 3}, skipCmd.GetDSNSlice())
 	assert.Equal(t, []uint64{2, 3, 4}, skipCmd.GetPSNSlice())

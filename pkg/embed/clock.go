@@ -46,8 +46,9 @@ func newLocalClock(
 	cfg ServiceConfig,
 	stopper *stopper.Stopper,
 ) clock.Clock {
-	return clock.NewUnixNanoHLCClockWithStopper(
+	return clock.NewUnixNanoHLCClockWithStopperAndCheck(
 		stopper,
 		cfg.Clock.MaxClockOffset.Duration,
+		cfg.Clock.EnableCheckMaxClockOffset,
 	)
 }

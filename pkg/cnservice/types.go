@@ -53,7 +53,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
-	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/udf/pythonservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
@@ -106,6 +105,13 @@ const (
 // CN -> Flight and sidecar -> CN read resolver.
 type SiriusConfig struct {
 	Enabled bool `toml:"enabled"`
+	// Backend defaults to Flight during migration. Embedded selection remains
+	// fail-closed until the native backend and its build capability are present.
+	Backend           string `toml:"backend"`
+	InputMode         string `toml:"input-mode"`
+	NativeConfigPath  string `toml:"native-config-path"`
+	GPUStreams        uint32 `toml:"gpu-streams"`
+	MaxWaitingQueries uint32 `toml:"max-waiting-queries"`
 	// BenchmarkNoGC enables the one-to-one CN/sidecar benchmark adapter. It
 	// must only be used together with TN GCCfg.DisableGC=true; normal Sirius
 	// startup keeps requiring durable GC-protected lease dependencies.
@@ -296,7 +302,11 @@ type Config struct {
 		// is less than PKDedupCount when txn commits. Default value is 0 , which means don't do deduplication.
 		PkDedupCount int `toml:"pk-dedup-count"`
 
-		// Trace trace
+		// Trace is retained for stopped-version rollback configuration.
+		// The transaction data collector is retired; every field is inert.
+		// TODO(retire-txn-trace, #29249): remove this block and its parsing tests
+		// after the rollback window excludes collector-bearing versions and
+		// deployed service TOMLs no longer contain these keys. Do not add readers.
 		Trace struct {
 			BufferSize    int           `toml:"buffer-size"`
 			FlushBytes    toml.ByteSize `toml:"flush-bytes"`
@@ -342,6 +352,9 @@ func (c *Config) Validate() error {
 	foundMachineHost := ""
 	if c.UUID == "" {
 		panic("missing cn store UUID")
+	}
+	if err := validateCNServiceUUID(c.UUID); err != nil {
+		return err
 	}
 	if c.ListenAddress == "" {
 		c.ListenAddress = defaultListenAddress
@@ -514,6 +527,16 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+func validateCNServiceUUID(serviceID string) error {
+	if serviceID == "" || serviceID == "." || serviceID == ".." || strings.ContainsAny(serviceID, `/\`) {
+		return moerr.NewBadConfigNoCtxf(
+			"CN service UUID %q must be a single path component",
+			serviceID,
+		)
+	}
+	return nil
+}
+
 func (c *SiriusConfig) validate() error {
 	if c == nil {
 		return nil
@@ -523,6 +546,9 @@ func (c *SiriusConfig) validate() error {
 	}
 	if !c.Enabled {
 		return nil
+	}
+	if err := c.validateBackend(); err != nil {
+		return err
 	}
 	if c.MaxBatchBytes == 0 {
 		c.MaxBatchBytes = 64 << 20
@@ -536,6 +562,9 @@ func (c *SiriusConfig) validate() error {
 	if c.MaxBatchBytes > 512<<20 || c.RequestTimeout.Duration <= 0 || c.CleanupTimeout.Duration <= 0 ||
 		c.RequestTimeout.Duration > time.Duration(1<<63-1)-c.CleanupTimeout.Duration {
 		return moerr.NewBadConfigNoCtx("invalid Sirius transport limits")
+	}
+	if c.Backend == "embedded" {
+		return validateSiriusEmbeddedConfig(c)
 	}
 	minimumLeaseTTL := c.RequestTimeout.Duration + c.CleanupTimeout.Duration
 	if c.LeaseTTL.Duration == 0 {
@@ -555,6 +584,19 @@ func (c *SiriusConfig) validate() error {
 		if setting.value == "" {
 			return moerr.NewBadConfigNoCtx("missing Sirius " + setting.name)
 		}
+	}
+	return nil
+}
+
+func (c *SiriusConfig) validateBackend() error {
+	switch c.Backend {
+	case "":
+		c.Backend = "flight"
+	case "flight":
+	case "embedded":
+		return validateSiriusEmbeddedBuild()
+	default:
+		return moerr.NewBadConfigNoCtx("invalid Sirius backend: expected flight or embedded")
 	}
 	return nil
 }
@@ -774,34 +816,62 @@ type service struct {
 	udfService       udf.Service
 	bootstrapMu      sync.RWMutex
 	bootstrapService bootstrap.Service
+
+	bootstrapUpgradeContext      context.Context
+	bootstrapUpgradeResult       chan error
+	bootstrapUpgradeStartupReady chan struct{}
+	bootstrapUpgradeReadyOnce    sync.Once
 	// beforeBootstrapClose is a deterministic test barrier.
 	beforeBootstrapClose func()
 	incrservice          incrservice.AutoIncrementService
-	txnTraceService      trace.Service
 	siriusRuntime        *compile.SiriusRuntime
 
-	stopper             *stopper.Stopper
-	heartbeatInFlight   atomic.Bool
-	commandPollNeeded   atomic.Bool
-	commandPollWakeup   chan struct{}
-	commandMu           sync.Mutex
-	lastCommandBatchID  uint64
-	ackedCommandBatchID atomic.Uint64
-	appliedCommandIDs   map[logservice.ScheduleCommandIdentity]struct{}
-	lastCommandHash     [32]byte
-	legacyDedupeArmed   bool
+	stopper                         *stopper.Stopper
+	heartbeatInFlight               atomic.Bool
+	commandPollNeeded               atomic.Bool
+	commandPollWakeup               chan struct{}
+	heartbeatWakeup                 chan struct{}
+	commandMu                       sync.Mutex
+	lastCommandBatchID              uint64
+	ackedCommandBatchID             atomic.Uint64
+	appliedCommandIDs               map[logservice.ScheduleCommandIdentity]struct{}
+	lastCommandHash                 [32]byte
+	legacyDedupeArmed               bool
+	catalogMetadataParticipant      logservicepb.CatalogMetadataParticipant
+	viewMetadataAdmissionGeneration uint64
+	viewMetadataAdmissionMu         sync.Mutex
+	viewMetadataAdmissionMuWaiters  atomic.Int32
+	viewMetadataAdmission           atomic.Pointer[logservicepb.ViewMetadataAdmission]
+	viewMetadataCatalogFencedEpoch  atomic.Uint64
+	viewMetadataEpochFence          *compile.ViewMetadataEpochFence
+	viewMetadataAdmissionUpdated    chan struct{}
+	viewMetadataCatalogFenceMu      sync.Mutex
+	viewMetadataCatalogFenceReady   atomic.Bool
+	viewMetadataIngressReady        atomic.Bool
+	viewMetadataGenerationRevoked   atomic.Bool
+	viewMetadataRevocationOnce      sync.Once
+
+	viewMetadataCatalogFenceStartupWaiting atomic.Bool
+	// beforeViewMetadataAdmissionHandoff is a deterministic test barrier.
+	beforeViewMetadataAdmissionHandoff func()
+	// viewMetadataCloseFn is a deterministic test hook for the asynchronous
+	// close request issued after synchronous ingress revocation.
+	viewMetadataCloseFn func() error
 	aicm                *defines.AutoIncrCacheManager
 	lifecycleMu         sync.Mutex
+	frontendLifecycleMu sync.Mutex
 	lifecycle           serviceLifecycleState
 	closeOnce           sync.Once
 	closeErr            error
+	closeComplete       bool
 
 	task struct {
 		sync.RWMutex
-		holder         taskservice.TaskServiceHolder
-		runner         taskservice.TaskRunner
-		runnerReady    atomic.Bool
-		storageFactory taskservice.TaskStorageFactory
+		holder            taskservice.TaskServiceHolder
+		runner            taskservice.TaskRunner
+		runnerReady       atomic.Bool
+		generationRevoked bool
+		storageFactory    taskservice.TaskStorageFactory
 	}
 
 	addressMgr address.AddressManager
@@ -810,7 +880,6 @@ type service struct {
 
 	options struct {
 		bootstrapOptions []bootstrap.Option
-		traceDataPath    string
 		siriusLeases     *substrait.LeaseManager
 		siriusAuditor    substrait.ResolveAuditRecorder
 	}

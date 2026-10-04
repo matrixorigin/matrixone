@@ -49,6 +49,8 @@ func (m *Request) DebugString() string {
 		buffer.WriteString(m.Lock.DebugString())
 	case Method_Unlock:
 		buffer.WriteString(m.Unlock.DebugString())
+	case Method_BatchUnlock:
+		buffer.WriteString(m.BatchUnlock.DebugString())
 	case Method_GetBind:
 		buffer.WriteString(m.GetBind.DebugString())
 	case Method_GetTxnLock:
@@ -86,6 +88,8 @@ func (m *Response) DebugString() string {
 		buffer.WriteString(m.Lock.DebugString())
 	case Method_Unlock:
 		buffer.WriteString(m.Unlock.DebugString())
+	case Method_BatchUnlock:
+		buffer.WriteString(m.BatchUnlock.DebugString())
 	case Method_GetBind:
 		buffer.WriteString(m.GetBind.DebugString())
 	case Method_GetTxnLock:
@@ -204,6 +208,14 @@ func (m *UnlockRequest) DebugString() string {
 }
 
 func (m *UnlockResponse) DebugString() string {
+	return ""
+}
+
+func (m *BatchUnlockRequest) DebugString() string {
+	return fmt.Sprintf("%s-%d", hex.EncodeToString(m.TxnID), len(m.LockTables))
+}
+
+func (m *BatchUnlockResponse) DebugString() string {
 	return ""
 }
 

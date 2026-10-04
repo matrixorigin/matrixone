@@ -1,0 +1,23 @@
+drop table if exists issue_28231_median;
+create table issue_28231_median(g int, v bigint);
+insert into issue_28231_median values
+(1, -9223372036854775808),
+(1,  9223372036854775807),
+(2, -1),
+(2,  0),
+(2,  1),
+(2,  2);
+select median(v) from issue_28231_median;
+➤ median(v)[8,53,31]  𝄀
+0.5
+select median(v) from issue_28231_median where g = 1;
+➤ median(v)[8,53,31]  𝄀
+-0.5
+select g, median(v) from issue_28231_median group by g order by g;
+➤ g[4,32,0]  ¦  median(v)[8,53,31]  𝄀
+1  ¦  -0.5  𝄀
+2  ¦  0.5
+select median(distinct v) from issue_28231_median where g = 1;
+➤ median(distinct v)[8,53,31]  𝄀
+-0.5
+drop table issue_28231_median;

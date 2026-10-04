@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -155,7 +156,7 @@ func (fill *Fill) Call(proc *process.Process) (vm.CallResult, error) {
 
 	result, err := ctr.process(ctr, fill, proc, analyzer)
 
-	return result, err
+	return result, hashbuild.TerminalBudgetErrorForOperator(proc.Ctx, "fill", err)
 }
 
 func cloneFillBatch(
@@ -770,6 +771,13 @@ func linearFillValue(ctr *container, proc *process.Process, idx int, preBatch *b
 	}
 	if preVec.GetType().Oid == types.T_decimal256 && curVec.GetType().Oid == types.T_decimal256 {
 		result := vector.NewVec(*preVec.GetType())
+		if ctr.expressionAllocation != nil {
+			result = vector.NewOffHeapVecWithType(*preVec.GetType())
+			if err := result.SetAllocationAccount(ctr.expressionAllocation); err != nil {
+				result.Free(proc.Mp())
+				return nil, false, err
+			}
+		}
 		left := vector.GetFixedAtNoTypeCheck[types.Decimal256](preVec, preRow)
 		right := vector.GetFixedAtNoTypeCheck[types.Decimal256](curVec, curRow)
 		value, err := linearExactValue256(left, right, 1, 2)

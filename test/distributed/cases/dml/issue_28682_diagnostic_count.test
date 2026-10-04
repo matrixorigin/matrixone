@@ -1,0 +1,43 @@
+-- @suite
+-- @case
+-- @desc: SHOW diagnostic counts and session diagnostic variables
+-- @label:bvt
+
+show count(*) warnings;
+show count(*) errors;
+select @@warning_count;
+select @@error_count;
+
+drop database if exists issue_28682_diagnostic_count;
+create database issue_28682_diagnostic_count;
+use issue_28682_diagnostic_count;
+
+create table warning_source(id int primary key);
+insert into warning_source values (1);
+insert ignore into warning_source values (1);
+show count(*) warnings;
+show warnings limit 1;
+select @@warning_count;
+insert ignore into warning_source values (1);
+select @@warning_count + 1 as warning_count_plus_one;
+show count(*) warnings;
+
+prepare issue_28682_warning_count from 'select @@warning_count';
+insert ignore into warning_source values (1);
+execute issue_28682_warning_count;
+show count(*) warnings;
+deallocate prepare issue_28682_warning_count;
+
+insert ignore into warning_source values (1), (1), (1);
+show count(*) warnings;
+show warnings limit 1, 1;
+select @@warning_count;
+show count(*) warnings;
+
+insert into warning_source values (1);
+show count(*) errors;
+show errors limit 1;
+select @@error_count;
+show count(*) errors;
+
+drop database issue_28682_diagnostic_count;

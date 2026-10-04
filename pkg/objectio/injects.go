@@ -27,9 +27,13 @@ const (
 )
 
 const (
-	FJ_CommitDelete               = "fj/commit/delete"
-	FJ_CommitSlowLog              = "fj/commit/slowlog"
-	FJ_CommitWait                 = "fj/commit/wait"
+	FJ_CommitDelete  = "fj/commit/delete"
+	FJ_CommitSlowLog = "fj/commit/slowlog"
+	FJ_CommitWait    = "fj/commit/wait"
+	// FJ_CommitWaitTargetTenant restricts FJ_CommitWait to one tenant in
+	// multi-tenant lifecycle tests. Without this selector, FJ_CommitWait keeps
+	// its original process-wide behavior.
+	FJ_CommitWaitTargetTenant     = "fj/commit/wait-target-tenant"
 	FJ_TransferSlow               = "fj/transfer/slow"
 	FJ_DataMergeAfterCollectTS    = "fj/merge/data/after-collect-ts"
 	FJ_TransferError              = "fj/transfer/error"
@@ -57,8 +61,9 @@ const (
 	FJ_CronJobsOpen = "fj/cronjobs/open"
 	FJ_CDCRecordTxn = "fj/cdc/recordtxn"
 
-	FJ_CDCExecutor  = "fj/cdc/executor"
-	FJ_CDCScanTable = "fj/cdc/scantable"
+	FJ_CDCExecutor      = "fj/cdc/executor"
+	FJ_CDCScanTable     = "fj/cdc/scantable"
+	FJ_TableChangesRead = "fj/table-changes/read"
 
 	FJ_ISCPIndexSendError     = "fj/iscp/index/send/error"
 	FJ_ISCPIndexSendBlock     = "fj/iscp/index/send/block"
@@ -91,11 +96,10 @@ const (
 
 	FJ_WALReplayFailed = "fj/wal/replay/failed"
 
-	FJ_CDCHandleSlow             = "fj/cdc/handleslow"
-	FJ_CDCHandleErr              = "fj/cdc/handleerr"
-	FJ_CDCScanTableErr           = "fj/cdc/scantableerr"
-	FJ_CDCAddExecErr             = "fj/cdc/addexecerr"
-	FJ_CDCAddExecConsumeTruncate = "fj/cdc/addexecconsumetruncate"
+	FJ_CDCHandleSlow   = "fj/cdc/handleslow"
+	FJ_CDCHandleErr    = "fj/cdc/handleerr"
+	FJ_CDCScanTableErr = "fj/cdc/scantableerr"
+	FJ_CDCAddExecErr   = "fj/cdc/addexecerr"
 
 	FJ_CNFlushSmallObjs      = "fj/cn/flush_small_objs"
 	FJ_CNSubscribeTableFail  = "fj/cn/subscribe_table_fail"
@@ -118,6 +122,12 @@ const (
 	// lock is re-acquired, so a test can deterministically mutate the
 	// workspace from another goroutine while the window is open.
 	FJ_CNDumpResolveWindowWait = "fj/cn/dump_resolve_window_wait"
+
+	// FJ_ArrowLoadRolloutWait is a test-only post-admission/pre-publication
+	// barrier. Arrow's reader triggers it after a range has been admitted and
+	// converted, but before the batch is published to the LOAD pipeline, so a
+	// lifecycle test can hold a real statement without relying on observer timing.
+	FJ_ArrowLoadRolloutWait = "fj/arrow/load/rollout_wait"
 )
 
 const (
@@ -444,7 +454,10 @@ func PrintFlushEntryInjected() (string, bool) {
 	return sarg, injected
 }
 
-func CommitWaitInjected() (string, bool) {
+func CommitWaitInjected(tenantID uint32) (string, bool) {
+	if target, _, selected := fault.TriggerFault(FJ_CommitWaitTargetTenant); selected && uint32(target) != tenantID {
+		return "", false
+	}
 	_, sarg, injected := fault.TriggerFault(FJ_CommitWait)
 	return sarg, injected
 }
@@ -483,6 +496,11 @@ func WaitForISCPExecutorFault(ctx context.Context, msg string) {
 func CDCScanTableInjected() (string, bool) {
 	_, sarg, injected := fault.TriggerFault(FJ_CDCScanTable)
 	return sarg, injected
+}
+
+func TableChangesReadInjected() (string, bool) {
+	_, point, injected := fault.TriggerFault(FJ_TableChangesRead)
+	return point, injected
 }
 
 func ISCPIndexSendErrorInjected() bool {
@@ -657,6 +675,24 @@ func InjectCDCScanTable(msg string) (rmFault func() (bool, error), err error) {
 	return
 }
 
+func InjectTableChangesRead(point string) (rmFault func() (bool, error), err error) {
+	if err = fault.AddFaultPoint(
+		context.Background(),
+		FJ_TableChangesRead,
+		":::",
+		"echo",
+		0,
+		point,
+		false,
+	); err != nil {
+		return
+	}
+	rmFault = func() (ok bool, err error) {
+		return fault.RemoveFaultPoint(context.Background(), FJ_TableChangesRead)
+	}
+	return
+}
+
 func Debug19524Injected() bool {
 	_, _, injected := fault.TriggerFault(FJ_Debug19524)
 	return injected
@@ -787,11 +823,6 @@ func CDCScanTableErrInjected() bool {
 
 func CDCAddExecErrInjected() bool {
 	_, _, injected := fault.TriggerFault(FJ_CDCAddExecErr)
-	return injected
-}
-
-func CDCAddExecConsumeTruncateInjected() bool {
-	_, _, injected := fault.TriggerFault(FJ_CDCAddExecConsumeTruncate)
 	return injected
 }
 

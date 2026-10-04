@@ -429,6 +429,7 @@ type SelectClause struct {
 	Where      *Where
 	GroupBy    *GroupByClause
 	Having     *Where
+	Windows    WindowDefinitions
 	Option     uint64
 	// OrderByOriginalExprs is planner-internal metadata for a generated
 	// projection whose derived-table columns must retain the original output
@@ -499,6 +500,10 @@ func (node *SelectClause) Format(ctx *FmtCtx) {
 	if node.Having != nil {
 		ctx.WriteByte(' ')
 		node.Having.Format(ctx)
+	}
+	if len(node.Windows) > 0 {
+		ctx.WriteString(" window ")
+		node.Windows.Format(ctx)
 	}
 }
 
@@ -879,7 +884,7 @@ func selectStatementHasNestedInto(stmt SelectStatement) bool {
 		if groupByHasInto(node.GroupBy) {
 			return true
 		}
-		return false
+		return windowDefinitionsHaveInto(node.Windows)
 	case *ParenSelect:
 		return selectStatementHasNestedInto(node.Select)
 	case *UnionClause:
@@ -1062,7 +1067,8 @@ func selectStatementHasUserVariableInto(stmt SelectStatement) bool {
 		if node.Having != nil && exprHasUserVariableInto(node.Having.Expr) {
 			return true
 		}
-		return groupByHasUserVariableInto(node.GroupBy)
+		return groupByHasUserVariableInto(node.GroupBy) ||
+			windowDefinitionsHaveUserVariableInto(node.Windows)
 	case *ParenSelect:
 		return selectStatementHasUserVariableInto(node.Select)
 	case *UnionClause:
@@ -1199,6 +1205,20 @@ func frameHasUserVariableInto(frame *FrameClause) bool {
 
 func frameBoundHasUserVariableInto(bound *FrameBound) bool {
 	return bound != nil && exprHasUserVariableInto(bound.Expr)
+}
+
+func windowDefinitionsHaveUserVariableInto(definitions WindowDefinitions) bool {
+	for _, definition := range definitions {
+		if definition == nil || definition.Spec == nil {
+			continue
+		}
+		if exprsHaveUserVariableInto(definition.Spec.PartitionBy) ||
+			orderByHasUserVariableInto(definition.Spec.OrderBy) ||
+			frameHasUserVariableInto(definition.Spec.Frame) {
+			return true
+		}
+	}
+	return false
 }
 
 func exprHasUserVariableInto(expr Expr) bool {
@@ -1398,6 +1418,20 @@ func frameHasInto(frame *FrameClause) bool {
 
 func frameBoundHasInto(bound *FrameBound) bool {
 	return bound != nil && exprHasNestedInto(bound.Expr)
+}
+
+func windowDefinitionsHaveInto(definitions WindowDefinitions) bool {
+	for _, definition := range definitions {
+		if definition == nil || definition.Spec == nil {
+			continue
+		}
+		if exprsHaveInto(definition.Spec.PartitionBy) ||
+			orderByHasInto(definition.Spec.OrderBy) ||
+			frameHasInto(definition.Spec.Frame) {
+			return true
+		}
+	}
+	return false
 }
 
 func selectStatementHasInto(stmt SelectStatement) bool {

@@ -272,7 +272,6 @@ func TestForwardLockUsesEffectiveLockDeadline(t *testing.T) {
 
 			options := newTestRowExclusiveOptions()
 			options.ForwardTo = owner.serviceID
-			options.LockWaitTimeout = 1
 			// Forwarded txns are normally created by the frontend txn lifecycle on
 			// the origin CN. Register both here so owner-side orphan detection sees
 			// the same liveness state as production while the waiter is blocked.
@@ -281,10 +280,13 @@ func TestForwardLockUsesEffectiveLockDeadline(t *testing.T) {
 
 			// A deadline-less background context previously reached morpc.Send
 			// unchanged and panicked. Service entry must inject and propagate the
-			// effective lock deadline to the forwarded RPC.
+			// effective safety deadline to the forwarded RPC. Establish this
+			// uncontended holder separately from the one-second budget asserted by
+			// the waiter below: each Lock call owns an independent wait budget.
 			_, err = origin.Lock(context.Background(), tableID, [][]byte{{1}}, holderTxn, options)
 			require.NoError(t, err)
 
+			options.LockWaitTimeout = 1
 			start := time.Now()
 			_, err = origin.Lock(context.Background(), tableID, [][]byte{{1}}, waiterTxn, options)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockWaitTimeout), "unexpected error: %v", err)

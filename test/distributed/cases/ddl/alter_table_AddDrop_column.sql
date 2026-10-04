@@ -133,7 +133,7 @@ drop table drop02;
 
 -- alter table after truncate table
 drop table if exists truncate01;
-create table truncate01(col1 int,col2 decimal);
+create table truncate01(col1 int,col2 decimal(38,0));
 insert into truncate01 values(1,8934245);
 insert into truncate01 values(2,-1924);
 insert into truncate01 values(3,18294234);
@@ -560,13 +560,13 @@ grant connect on account * to role_r1;
 grant select on table * to role_r1;
 grant show tables on database * to role_r1;
 
--- @session:id=2&user=sys:role_u1:role_r1&password=111
+-- @session:id=3&user=sys:role_u1:role_r1&password=111
 use test;
 alter table rename01 rename to newRename;
 -- @session
 grant alter table on database * to role_r1;
 
--- @session:id=2&user=sys:role_u1:role_r1&password=111
+-- @session:id=3&user=sys:role_u1:role_r1&password=111
 use test;
 alter table rename01 rename to newRename;
 alter table newRename rename to `newRename`;

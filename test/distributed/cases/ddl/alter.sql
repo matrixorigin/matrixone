@@ -183,7 +183,7 @@ show index from index04;
 drop table index04;
 
 drop table if exists index05;
-create table index05(col1 int, col2 bigint, col3 decimal);
+create table index05(col1 int, col2 bigint, col3 decimal(38,0));
 show index from index05;
 alter table index05 add unique key(col1,col2);
 show index from index05;
@@ -367,7 +367,7 @@ drop database if exists test;
 create database test;
 use test;
 drop table if exists test01;
-create table test01 (col1 int, col2 decimal, col3 varchar(50));
+create table test01 (col1 int, col2 decimal(38,0), col3 varchar(50));
 insert into test01 values (1, 3242434.423, '3224332r32r');
 insert into test01 values (2, 39304.3424, '343234343213124');
 insert into test01 values (3, 372.324, '00');

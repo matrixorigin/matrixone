@@ -127,7 +127,7 @@ func (builder *QueryBuilder) canSatisfyRuntimeFilterDelivery(node *plan.Node, po
 	return builder.optimizerHints == nil || builder.optimizerHints.forceOneCN == 0
 }
 
-func rightSingleLocalDeliveryIsSafe(node, build *plan.Node, upperLimit int32) bool {
+func (builder *QueryBuilder) rightSingleLocalDeliveryIsSafe(node, build *plan.Node, upperLimit int32) bool {
 	if node.JoinType != plan.Node_SINGLE {
 		return true
 	}
@@ -135,10 +135,17 @@ func rightSingleLocalDeliveryIsSafe(node, build *plan.Node, upperLimit int32) bo
 		return false
 	}
 	// DefaultStats is an unavailable-statistics sentinel, not evidence that the
-	// complete build contains 1,000 rows.  Treating it as an exact upper bound
-	// can serialize an arbitrarily large scan only for hashbuild to send PASS.
+	// complete build contains 1,000 rows.  It is still safe to let HashBuild
+	// decide IN versus PASS at runtime when the query would already execute on a
+	// single CN: local delivery then adds no placement downgrade, while the
+	// runtime upper limit bounds the optional exact-key collection.  Keep forced
+	// multi-CN diagnostics and naturally distributed plans on the old fallback.
 	if IsDefaultStats(build.Stats) {
-		return false
+		if builder == nil || builder.qry == nil ||
+			(builder.optimizerHints != nil && builder.optimizerHints.execType == 3) {
+			return false
+		}
+		return GetExecType(builder.qry, false, false) != ExecTypeAP_MULTICN
 	}
 	// LOCAL_COLOCATED applies to the whole preserved/build subtree. Phase 1
 	// accepts only a direct scan whose full table cardinality and filtered
@@ -177,7 +184,7 @@ func localProtocolEnablesSortedMembershipFilter(sid string) bool {
 		return false
 	}
 	version, ok := value.(int64)
-	return ok && version >= defines.MORPCVersion11
+	return ok && version >= defines.MORPCVersion10
 }
 
 func (builder *QueryBuilder) exactRuntimeFilterPlanEncoding(
@@ -638,7 +645,7 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 		probeExpr := GetColExpr(tableDef.Cols[cpkeyPos].Typ, leftChild.BindingTags[0], cpkeyPos)
 		probeExpr.GetCol().Name = catalog.CPrimaryKeyColName
 		inLimit := GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt)
-		if !rightSingleLocalDeliveryIsSafe(node, rightChild, inLimit) {
+		if !builder.rightSingleLocalDeliveryIsSafe(node, rightChild, inLimit) {
 			return
 		}
 		rfTag := builder.genNewMsgTag()
@@ -656,7 +663,6 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 	}
 
 	if len(probeExprs) == 1 {
-		convertToCPKey := false
 		tableDef := leftChild.TableDef
 		if tableDef == nil || tableDef.Pkey == nil {
 			return
@@ -666,6 +672,7 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 			return
 		}
 		sortOrder := GetSortOrder(tableDef, probeCol.ColPos)
+		componentFilter := false
 		// LOCAL_COLOCATED gives up multi-CN scan bandwidth.  In phase 1 only
 		// enable right-SINGLE on the leading PK/cluster key, where exact IN can
 		// prune ranges predictably.  A scattered non-key filter may still scan
@@ -687,8 +694,11 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 					return
 				}
 			} else {
-				if len(tableDef.Pkey.Names) > 1 && probeCol.Name != catalog.CPrimaryKeyColName {
-					convertToCPKey = true
+				componentFilter = len(tableDef.Pkey.Names) > 1 && probeCol.Name != catalog.CPrimaryKeyColName
+				// Newly admit component filtering only without a placement
+				// downgrade or suppressing fallible/volatile scan predicates.
+				if componentFilter && (policy.requiresLocalDelivery || !areTruncationSafePredicates(leftChild.FilterList)) {
+					return
 				}
 			}
 			//todo: need to fix this in the future
@@ -701,22 +711,28 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 			return
 		}
 
+		// A leading composite-key component can use its own zonemap and an
+		// ordinary column IN predicate. It is not the serialized full key:
+		// keep NotOnPk so the scan also applies exact row filtering, without
+		// routing this partial key through primary-key lookup or prefix IN.
 		notOnPk := probeCol.Name != tableDef.Pkey.PkeyColName
 		inLimit := GetInFilterCardLimit(sid)
-		if sortOrder == 0 {
+		if sortOrder == 0 && !componentFilter {
 			inLimit = GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt)
+		}
+		// Components need ordinary-column row filtering, not full-PK lookup.
+		// Keep its configured budget; a wrong low estimate still falls back to
+		// PASS when HashBuild observes more actual keys than this limit.
+		if componentFilter && node.Stats.HashmapStats.HashmapSize > float64(inLimit) {
+			return
 		}
 		// Placement is decided before hashbuild knows the actual number of
 		// unique keys.  If the planner already knows the build cannot fit in an
 		// exact IN, hashbuild would send PASS after both scans were forced onto
 		// one CN.  Reject that no-benefit topology up front for right-SINGLE.
-		if !rightSingleLocalDeliveryIsSafe(node, rightChild, inLimit) {
+		if !builder.rightSingleLocalDeliveryIsSafe(node, rightChild, inLimit) {
 			return
 		}
-		if convertToCPKey {
-			return
-		}
-
 		buildExpr := &plan.Expr{
 			Typ: buildExprs[0].Typ,
 			Expr: &plan.Expr_Col{

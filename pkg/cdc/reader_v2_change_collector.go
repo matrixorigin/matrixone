@@ -70,7 +70,8 @@ type ChangeData struct {
 	Hint engine.ChangesHandle_Hint
 
 	// snapshotPermit bounds initial-snapshot batches retained across all tables
-	// in one CDC task. Ownership follows InsertBatch into the sinker command.
+	// in one CDC task. Ownership follows InsertBatch and is cleared together
+	// with that field when the batch transfers to the processor or sinker.
 	snapshotPermit *snapshotPermit
 }
 

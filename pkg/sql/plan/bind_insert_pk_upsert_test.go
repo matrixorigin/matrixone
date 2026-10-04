@@ -1,0 +1,223 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package plan
+
+import (
+	"testing"
+
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/stretchr/testify/require"
+)
+
+func requireOnDupUpdateColumns(t *testing.T, logicPlan *planpb.Plan, included, excluded []int32) {
+	t.Helper()
+	found := false
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType != planpb.Node_JOIN || node.JoinType != planpb.Node_DEDUP ||
+			node.OnDuplicateAction != planpb.Node_UPDATE {
+			continue
+		}
+		found = true
+		for _, col := range included {
+			require.Contains(t, node.DedupJoinCtx.UpdateColIdxList, col)
+		}
+		for _, col := range excluded {
+			require.NotContains(t, node.DedupJoinCtx.UpdateColIdxList, col)
+		}
+	}
+	require.True(t, found, "expected an ON DUPLICATE KEY UPDATE dedup join")
+}
+
+func requireODKUBaseLockUsesResolvedTarget(
+	t *testing.T,
+	logicPlan *planpb.Plan,
+	tableDef *planpb.TableDef,
+) {
+	t.Helper()
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+
+	for _, node := range query.Nodes {
+		if node.NodeType != planpb.Node_LOCK_OP || len(node.Children) != 1 {
+			continue
+		}
+		for _, target := range node.LockTargets {
+			if target.TableId != tableDef.TblId {
+				continue
+			}
+			lockInput := query.Nodes[node.Children[0]]
+			require.Equal(t, planpb.Node_PRE_INSERT_UK, lockInput.NodeType)
+			require.True(t, lockInput.PreInsertUkCtx.GetOdkuTargetArbitration())
+			resolvedTargetPos := int32(len(lockInput.ProjectList) - 1)
+			require.Equal(t, resolvedTargetPos, target.PrimaryColIdxInBat,
+				"base-row lock must consume the arbiter's resolved target identity")
+			require.Equal(t, lockInput.ProjectList[resolvedTargetPos].Typ.Id, target.PrimaryColTyp.Id)
+			return
+		}
+	}
+	t.Fatal("expected an ODKU base-table lock on the resolved target identity")
+}
+
+func TestInsertOnDupIncomingPrimaryKeyNoop(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	logicPlan, err := runOneStmt(mock, t,
+		"insert into constraint_test.t1(a, b) values (1, 'x') "+
+			"on duplicate key update a = values(a), b = values(b)")
+	require.NoError(t, err)
+	requireOnDupUpdateColumns(t, logicPlan, []int32{1}, []int32{0})
+}
+
+func TestInsertOnDupIncomingPrimaryKeyOnlyNoop(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	logicPlan, err := runOneStmt(mock, t,
+		"insert into constraint_test.t1(a, b) values (1, 'x') "+
+			"on duplicate key update a = values(a)")
+	require.NoError(t, err)
+	requireOnDupUpdateColumns(t, logicPlan, nil, []int32{0})
+}
+
+func TestInsertOnDupIncomingCompositePrimaryKeyNoop(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	logicPlan, err := runOneStmt(mock, t,
+		"insert into tpch.partsupp values (1, 2, 3, 4.50, 'x') "+
+			"on duplicate key update ps_partkey = values(ps_partkey), "+
+			"ps_suppkey = values(ps_suppkey), ps_availqty = values(ps_availqty)")
+	require.NoError(t, err)
+	requireOnDupUpdateColumns(t, logicPlan, []int32{2}, []int32{0, 1})
+}
+
+func TestInsertOnDupPrimaryKeyMutationStillRejected(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	_, err := runOneStmt(mock, t,
+		"insert into constraint_test.t1(a, b) values (1, 'x') "+
+			"on duplicate key update a = a + 1, b = values(b)")
+	require.ErrorContains(t, err, "unsupported DML: update primary key on duplicate")
+}
+
+func TestInsertOnDupPrimaryKeyFromDifferentIncomingColumnStillRejected(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	_, err := runOneStmt(mock, t,
+		"insert into constraint_test.t1(a, b) values (1, '2') "+
+			"on duplicate key update a = values(b)")
+	require.ErrorContains(t, err, "unsupported DML: update primary key on duplicate")
+}
+
+func TestInsertOnDupCompositePrimaryKeyFromDifferentIncomingColumnStillRejected(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	_, err := runOneStmt(mock, t,
+		"insert into tpch.partsupp values (1, 2, 3, 4.50, 'x') "+
+			"on duplicate key update ps_partkey = values(ps_suppkey), "+
+			"ps_suppkey = values(ps_suppkey)")
+	require.ErrorContains(t, err, "unsupported DML: update primary key on duplicate")
+}
+
+func TestInsertOnDupWrappedIncomingPrimaryKeyStillRejected(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	_, err := runOneStmt(mock, t,
+		"insert into constraint_test.t1(a, b) values (1, 'x') "+
+			"on duplicate key update a = cast(values(a) as signed)")
+	require.ErrorContains(t, err, "unsupported DML: update primary key on duplicate")
+}
+
+func TestInsertOnDupIncomingPrimaryKeyWithSecondaryUniqueStillRejected(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	_, err := runOneStmt(mock, t,
+		"insert into constraint_test.dept(deptno, dname, loc) values (1, 'Sales', 'NY') "+
+			"on duplicate key update deptno = values(deptno), loc = values(loc)")
+	require.ErrorContains(t, err, "unsupported DML: update primary key on duplicate")
+}
+
+func TestIsOnDupIncomingColumn(t *testing.T) {
+	expr := &planpb.Expr{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 7, ColPos: 3}}}
+	require.True(t, isOnDupIncomingColumn(expr, 7, 3))
+	require.False(t, isOnDupIncomingColumn(expr, 8, 3))
+	require.False(t, isOnDupIncomingColumn(expr, 7, 4))
+	require.False(t, isOnDupIncomingColumn(&planpb.Expr{}, 7, 3))
+}
+
+func TestInsertOnDupPreservesAssignmentOrderAndDuplicates(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	logicPlan, err := runOneStmt(mock, t,
+		"insert into constraint_test.t1(a, b) values (1, 'Alice') "+
+			"on duplicate key update b = concat(b, 'x'), b = concat(b, 'y'), b = concat(b, 'z')")
+	require.NoError(t, err)
+
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType != planpb.Node_JOIN || node.JoinType != planpb.Node_DEDUP ||
+			node.OnDuplicateAction != planpb.Node_UPDATE {
+			continue
+		}
+		require.Equal(t, []int32{1, 1, 1}, node.DedupJoinCtx.UpdateColIdxList)
+		require.Len(t, node.DedupJoinCtx.UpdateColExprList, 3)
+		require.NotNil(t, node.DedupJoinCtx.AffectedRowsCol)
+		require.NotNil(t, node.DedupJoinCtx.PhysicalChangedRowsCol)
+		return
+	}
+	t.Fatal("expected ODKU dedup join")
+}
+
+func TestInsertOnDupLocksResolvedConflictTarget(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		tableName string
+		sql       string
+	}{
+		{
+			name:      "real primary key with secondary unique conflict",
+			tableName: "dept",
+			sql: "insert into constraint_test.dept(deptno, dname, loc) " +
+				"values (999, 'Sales', 'NY') on duplicate key update loc = 'LA'",
+		},
+		{
+			name:      "synthetic primary key with unique conflict",
+			tableName: "fake_pk_t",
+			sql: "insert into constraint_test.fake_pk_t(a, b) " +
+				"values (1, 'x') on duplicate key update b = 'y'",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			logicPlan, err := runOneStmt(mock, t, tc.sql)
+			require.NoError(t, err)
+			requireODKUBaseLockUsesResolvedTarget(t, logicPlan, mock.ctxt.tables[tc.tableName])
+		})
+	}
+}
+
+func TestInsertOnDupCarriesFoundRowsMode(t *testing.T) {
+	for _, tc := range []struct {
+		name                   string
+		countUpdateChangedRows bool
+		wantFoundRows          bool
+	}{
+		{name: "default changed rows", countUpdateChangedRows: true},
+		{name: "client found rows", wantFoundRows: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			mock.CurrentContext().GetProcess().Base.SessionInfo.CountUpdateChangedRows = tc.countUpdateChangedRows
+			logicPlan, err := runOneStmt(mock, t,
+				"insert into constraint_test.t1(a, b) values (1, 'x') on duplicate key update b = values(b)")
+			require.NoError(t, err)
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.DedupJoinCtx != nil && node.OnDuplicateAction == planpb.Node_UPDATE {
+					require.Equal(t, tc.wantFoundRows, node.DedupJoinCtx.CountFoundRows)
+					return
+				}
+			}
+			t.Fatal("expected ODKU dedup join")
+		})
+	}
+}

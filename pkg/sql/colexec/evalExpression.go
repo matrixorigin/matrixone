@@ -15,6 +15,7 @@
 package colexec
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"math"
@@ -172,8 +173,18 @@ func (expr *memoRootExpressionExecutor) IsColumnExpr() bool { return expr.execut
 func (expr *memoRootExpressionExecutor) TypeName() string   { return expr.executor.TypeName() }
 
 type expressionExecutorBuildContext struct {
-	memos  map[int32]*memoExpressionState
-	states []*memoExpressionState
+	memos                       map[int32]*memoExpressionState
+	states                      []*memoExpressionState
+	foldOwnedLiteralNumericCast bool
+	joinBuildDiagnosticOwner    *DeferredJoinDiagnostic
+	joinActivation              *[]ExpressionExecutor
+	conditionalJoinDepth        int
+}
+
+// NewOwnedConstantFilterExecutors is only for a single coordinator filter
+// whose diagnostic constant casts were excluded from storage pruning.
+func NewOwnedConstantFilterExecutors(proc *process.Process, exprs []*plan.Expr) ([]ExpressionExecutor, error) {
+	return NewExpressionExecutorsFromPlanExpressionsWithAllocation(proc, exprs, nil, true)
 }
 
 func NewExpressionExecutorsFromPlanExpressions(proc *process.Process, planExprs []*plan.Expr) (executors []ExpressionExecutor, err error) {
@@ -187,15 +198,83 @@ func NewExpressionExecutorsFromPlanExpressionsWithAllocation(
 	proc *process.Process,
 	planExprs []*plan.Expr,
 	selection *vector.AllocationAccountSelection,
+	foldOwnedConstantCasts ...bool,
+) (executors []ExpressionExecutor, err error) {
+	return newExpressionExecutorsWithDiagnosticOwner(
+		proc, planExprs, selection,
+		len(foldOwnedConstantCasts) > 0 && foldOwnedConstantCasts[0], nil,
+	)
+}
+
+// NewJoinBuildExpressionExecutors isolates diagnostics from statement-constant
+// subtrees while HashBuild speculatively computes its keys.
+func NewJoinBuildExpressionExecutors(
+	proc *process.Process,
+	planExprs []*plan.Expr,
+	selection *vector.AllocationAccountSelection,
+	owner *DeferredJoinDiagnostic,
+) ([]ExpressionExecutor, error) {
+	return newExpressionExecutorsWithDiagnosticOwner(proc, planExprs, selection, true, owner)
+}
+
+// NewJoinProbeExpressionExecutors returns borrowed references to the constant
+// subtrees that are unconditionally evaluated by the probe expression. The
+// returned roots alone own those executors and must be freed exactly once.
+func NewJoinProbeExpressionExecutors(
+	proc *process.Process,
+	planExprs []*plan.Expr,
+	selection *vector.AllocationAccountSelection,
+	owner *DeferredJoinDiagnostic,
+) ([]ExpressionExecutor, []ExpressionExecutor, error) {
+	if owner == nil {
+		execs, err := NewExpressionExecutorsFromPlanExpressionsWithAllocation(proc, planExprs, selection)
+		return execs, nil, err
+	}
+	activation := make([]ExpressionExecutor, 0)
+	execs := make([]ExpressionExecutor, len(planExprs))
+	for i, expr := range planExprs {
+		buildCtx := &expressionExecutorBuildContext{
+			foldOwnedLiteralNumericCast: true,
+			joinBuildDiagnosticOwner:    owner,
+			joinActivation:              &activation,
+		}
+		var err error
+		execs[i], err = newExpressionExecutorWithAllocation(proc, expr, selection, buildCtx)
+		if err != nil {
+			for j := 0; j < i; j++ {
+				execs[j].Free()
+			}
+			return nil, nil, err
+		}
+		if len(buildCtx.states) > 0 {
+			execs[i] = &memoRootExpressionExecutor{executor: execs[i], states: buildCtx.states}
+		}
+	}
+	return execs, activation, nil
+}
+
+func newExpressionExecutorsWithDiagnosticOwner(
+	proc *process.Process,
+	planExprs []*plan.Expr,
+	selection *vector.AllocationAccountSelection,
+	foldOwnedConstantCasts bool,
+	owner *DeferredJoinDiagnostic,
 ) (executors []ExpressionExecutor, err error) {
 	executors = make([]ExpressionExecutor, len(planExprs))
 	for i := range executors {
-		executors[i], err = NewExpressionExecutorWithAllocation(proc, planExprs[i], selection)
+		buildCtx := &expressionExecutorBuildContext{
+			foldOwnedLiteralNumericCast: foldOwnedConstantCasts,
+			joinBuildDiagnosticOwner:    owner,
+		}
+		executors[i], err = newExpressionExecutorWithAllocation(proc, planExprs[i], selection, buildCtx)
 		if err != nil {
 			for j := 0; j < i; j++ {
 				executors[j].Free()
 			}
 			return nil, err
+		}
+		if len(buildCtx.states) > 0 {
+			executors[i] = &memoRootExpressionExecutor{executor: executors[i], states: buildCtx.states}
 		}
 	}
 	return executors, err
@@ -287,6 +366,23 @@ func newExpressionExecutorWithAllocation(
 		typ := types.NewWithCharset(
 			types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale, uint8(planExpr.Typ.Charset),
 		)
+		if typ.Oid != types.T_any && !typ.Oid.IsMySQLString() {
+			// ParamRef describes the SQL source domain. The process transports
+			// values as TEXT; adapt that representation inside the executor so
+			// transport casts cannot influence SQL overload or key selection.
+			cast, err := function.GetFunctionByName(proc.Ctx, "cast", []types.Type{types.T_text.ToType(), typ})
+			if err != nil {
+				return nil, err
+			}
+			physical := &plan.Expr{Typ: planExpr.Typ, Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{ObjName: "cast", Obj: cast.GetEncodedOverloadID()},
+				Args: []*plan.Expr{
+					{Typ: plan.Type{Id: int32(types.T_text)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: t.P.Pos}}},
+					{Typ: planExpr.Typ, Expr: &plan.Expr_T{T: &plan.TargetType{}}},
+				},
+			}}}
+			return newExpressionExecutorWithAllocation(proc, physical, selection, buildCtx)
+		}
 		executor := NewParamExpressionExecutor(proc.Mp(), int(t.P.Pos), typ)
 		executor.allocation = selection
 		return executor, nil
@@ -295,14 +391,20 @@ func newExpressionExecutorWithAllocation(
 		typ := types.NewWithCharset(
 			types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale, uint8(planExpr.Typ.Charset),
 		)
+		// Validate the full wire value before converting to the uint8 domain.
+		if t.V.BoundStringDomain > uint32(types.RuntimeStringBinary)+1 ||
+			(t.V.BoundStringDomain != 0 && (t.V.System || !typ.Oid.IsMySQLString())) {
+			return nil, moerr.NewInvalidInputf(proc.Ctx, "invalid bound user variable string domain %d", t.V.BoundStringDomain)
+		}
 		ve := NewVarExpressionExecutor()
 		*ve = VarExpressionExecutor{
-			mp:         proc.Mp(),
-			name:       t.V.Name,
-			system:     t.V.System,
-			global:     t.V.Global,
-			typ:        typ,
-			allocation: selection,
+			mp:                proc.Mp(),
+			name:              t.V.Name,
+			system:            t.V.System,
+			global:            t.V.Global,
+			typ:               typ,
+			boundStringDomain: t.V.BoundStringDomain,
+			allocation:        selection,
 		}
 		return ve, nil
 
@@ -310,6 +412,19 @@ func newExpressionExecutorWithAllocation(
 		vec := vector.NewVec(types.T_any.ToType())
 		err := vec.UnmarshalBinary(t.Vec.Data)
 		if err != nil {
+			vec.Free(proc.Mp())
+			return nil, err
+		}
+		// The stable Vector payload does not carry runtime provenance. LiteralVec
+		// explicitly records its uniform owner because the same container is used
+		// for SQL constants and runtime-filter payloads.
+		rawSource := t.Vec.GetStringSource()
+		if rawSource > uint32(types.StringSourceCOMStmt) {
+			vec.Free(proc.Mp())
+			return nil, moerr.NewInvalidInputf(proc.Ctx, "invalid literal vector string source %d", rawSource)
+		}
+		source := types.StringSource(rawSource)
+		if err := vec.SetStringSource(source); err != nil {
 			vec.Free(proc.Mp())
 			return nil, err
 		}
@@ -350,11 +465,11 @@ func newExpressionExecutorWithAllocation(
 		{
 			// init function information for evaluation.
 			executor.overloadID = overloadID
-			// String-to-numeric casts can emit one warning for every logical
-			// output row.  Do not constant-fold them: a folded vector has only
-			// one physical value, so warning generation would depend on the
-			// physical batch layout rather than the rows evaluated by the query.
-			executor.volatile = overload.CannotFold() || isStringToNumericCast(planExpr)
+			// Dynamic casts retain row-level diagnostics. Only the designated
+			// coordinator filter may fold a literal cast once per execution.
+			executor.stringToNumericCast = !overload.CannotFold() &&
+				isStringToNumericCast(planExpr, buildCtx.foldOwnedLiteralNumericCast)
+			executor.volatile = overload.CannotFold() || executor.stringToNumericCast
 			executor.timeDependent = overload.IsRealTimeRelated()
 			executor.fid, _ = function.DecodeOverloadID(overloadID)
 			executor.evalFn, executor.resetFn, executor.freeFn, executor.retainedBytesFn = overload.GetExecuteMethod()
@@ -368,6 +483,20 @@ func newExpressionExecutorWithAllocation(
 			return nil, err
 		}
 
+		deferDiagnostic := buildCtx.joinBuildDiagnosticOwner != nil &&
+			function.IsStatementConstantInput(planExpr) &&
+			!function.ContainsRowScopedConversion(planExpr)
+		owner := buildCtx.joinBuildDiagnosticOwner
+		if deferDiagnostic {
+			buildCtx.joinBuildDiagnosticOwner = nil
+			defer func() { buildCtx.joinBuildDiagnosticOwner = owner }()
+		}
+		conditional := !deferDiagnostic &&
+			(executor.fid == function.IFF || executor.fid == function.CASE || executor.fid == function.COALESCE)
+		if conditional {
+			buildCtx.conditionalJoinDepth++
+			defer func() { buildCtx.conditionalJoinDepth-- }()
+		}
 		for i := range executor.parameterExecutor {
 			subExecutor, paramErr := newExpressionExecutorWithAllocation(proc, t.F.Args[i], selection, buildCtx)
 			if paramErr != nil {
@@ -376,13 +505,25 @@ func newExpressionExecutorWithAllocation(
 			}
 			executor.SetParameter(i, subExecutor)
 		}
+		if deferDiagnostic {
+			wrapped := &deferredJoinConstantExecutor{
+				executor:  executor,
+				owner:     owner,
+				typ:       typ,
+				selection: selection,
+			}
+			if buildCtx.joinActivation != nil && buildCtx.conditionalJoinDepth == 0 {
+				*buildCtx.joinActivation = append(*buildCtx.joinActivation, wrapped)
+			}
+			return wrapped, nil
+		}
 		return executor, nil
 	}
 
 	return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("unsupported expression executor for %v now", planExpr))
 }
 
-func isStringToNumericCast(expr *plan.Expr) bool {
+func isStringToNumericCast(expr *plan.Expr, foldOwnedLiteral bool) bool {
 	if expr == nil {
 		return false
 	}
@@ -390,14 +531,19 @@ func isStringToNumericCast(expr *plan.Expr) bool {
 	if f == nil || f.Func == nil || len(f.Args) == 0 {
 		return false
 	}
-	switch f.Func.GetObjName() {
+	name := f.Func.GetObjName()
+	switch name {
 	case "cast", "cast_strict", "cast_assign", "cast_ignore":
 	default:
 		return false
 	}
 	source := types.T(f.Args[0].Typ.Id)
 	target := types.T(expr.Typ.Id)
-	return source.IsMySQLString() && target.ToType().IsNumeric()
+	if !source.IsMySQLString() || !target.ToType().IsNumeric() {
+		return false
+	}
+	return name != "cast" || f.GetSyntaxExplicitCast() || !foldOwnedLiteral ||
+		!function.IsStatementConstantInput(f.Args[0])
 }
 
 func newExpressionOffHeapVector(
@@ -508,6 +654,7 @@ type FunctionExpressionExecutor struct {
 	flowControlKindSeen      bool
 	flowControlKinds         []vector.PrepareParamKind
 	flowControlStringDomains []types.RuntimeStringDomain
+	flowControlStringSources []types.StringSource
 	iffNullResults           [2]*vector.Vector
 }
 
@@ -586,6 +733,15 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 		}
 		expr.folded = true
 		expr.foldedNull = true
+		if params := proc.GetPrepareParams(); params != nil {
+			if err = expr.null.SetRuntimeStringDomainWithMP(
+				params.GetRuntimeStringDomainAt(expr.pos), proc.Mp()); err != nil {
+				return nil, err
+			}
+			if err = expr.null.SetStringSource(params.GetStringSourceAt(expr.pos)); err != nil {
+				return nil, err
+			}
+		}
 		expr.null.SetLength(rowCount)
 		return expr.null, nil
 	}
@@ -599,8 +755,25 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 	}
 	if err == nil {
 		expr.vec.SetIsBin(proc.GetPrepareParamIsBin(expr.pos))
-		expr.vec.SetIsBinaryString(proc.GetPrepareParamIsBinaryString(expr.pos))
+		runtimeDomain := types.RuntimeStringInherit
+		if params := proc.GetPrepareParams(); params != nil {
+			runtimeDomain = params.GetRuntimeStringDomainAt(expr.pos)
+		}
+		if runtimeDomain == types.RuntimeStringInherit && proc.GetPrepareParamIsBinaryString(expr.pos) {
+			runtimeDomain = types.RuntimeStringBinary
+		}
+		err = expr.vec.SetRuntimeStringDomainWithMP(runtimeDomain, proc.Mp())
+		if err != nil {
+			return nil, err
+		}
 		expr.vec.SetPrepareParamKind(proc.GetPrepareParamKind(expr.pos))
+		if params := proc.GetPrepareParams(); params != nil {
+			err = expr.vec.SetStringSource(params.GetStringSourceAt(expr.pos))
+		}
+		if err != nil {
+			return nil, err
+		}
+		expr.vec.SetPrepareParamType(proc.GetPrepareParamType(expr.pos))
 		expr.folded = true
 		expr.foldedNull = false
 		expr.vec.SetLength(rowCount)
@@ -656,10 +829,11 @@ type VarExpressionExecutor struct {
 	maskedNull *vector.Vector
 	vec        *vector.Vector
 
-	name   string
-	system bool
-	global bool
-	typ    types.Type
+	name              string
+	system            bool
+	global            bool
+	typ               types.Type
+	boundStringDomain uint32
 }
 
 func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
@@ -692,6 +866,24 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 			return nil, err
 		}
 	}
+	runtimeDomain := types.RuntimeStringInherit
+	// The binding owns both the static type and its independent row override.
+	// Later SET statements change only the value, not either binding axis.
+	if expr.boundStringDomain != 0 {
+		runtimeDomain = types.RuntimeStringDomain(expr.boundStringDomain - 1)
+		// Preserve explicit text charsets over the vector's legacy binary-OID
+		// fallback without rewriting the expression's static identity.
+		if runtimeDomain == types.RuntimeStringInherit &&
+			types.StaticStringDomain(expr.typ) == types.StringDomainText &&
+			types.CharsetType(expr.typ.Oid) == types.CharsetBinary {
+			runtimeDomain = types.RuntimeStringText
+		}
+	} else if resolveStringDomain := proc.GetResolveVariableStringDomainFunc(); resolveStringDomain != nil {
+		runtimeDomain, err = resolveStringDomain(expr.name, expr.system, expr.global)
+		if err != nil {
+			return nil, err
+		}
+	}
 	prepareParamKind := vector.PrepareParamNone
 	if resolveKind := proc.GetResolveVariablePrepareParamKindFunc(); resolveKind != nil {
 		prepareParamKind, err = resolveKind(expr.name, expr.system, expr.global)
@@ -708,7 +900,12 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 		}
 		if err == nil {
 			expr.null.SetIsBin(isBin)
+			err = expr.null.SetRuntimeStringDomainWithMP(runtimeDomain, proc.Mp())
+			if err != nil {
+				return nil, err
+			}
 			expr.null.SetPrepareParamKind(prepareParamKind)
+			err = expr.null.SetStringSource(types.StringSourceUserVariable)
 			expr.null.SetLength(rowCount)
 		}
 		return expr.null, err
@@ -741,7 +938,12 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 	}
 	if err == nil {
 		expr.vec.SetIsBin(isBin)
+		err = expr.vec.SetRuntimeStringDomainWithMP(runtimeDomain, proc.Mp())
+		if err != nil {
+			return nil, err
+		}
 		expr.vec.SetPrepareParamKind(prepareParamKind)
+		err = expr.vec.SetStringSource(types.StringSourceUserVariable)
 		expr.vec.SetLength(rowCount)
 	}
 	return expr.vec, err
@@ -1004,6 +1206,9 @@ func (expr *FunctionExpressionExecutor) resetFlowControlPrepareParamKind() {
 	if expr.flowControlStringDomains != nil {
 		expr.flowControlStringDomains = expr.flowControlStringDomains[:0]
 	}
+	if expr.flowControlStringSources != nil {
+		expr.flowControlStringSources = expr.flowControlStringSources[:0]
+	}
 }
 
 func (expr *FunctionExpressionExecutor) ensureFlowControlPrepareParamRows(rows int) {
@@ -1032,6 +1237,20 @@ func (expr *FunctionExpressionExecutor) ensureFlowControlBinaryStringRows(rows i
 	expr.flowControlStringDomains = append(expr.flowControlStringDomains, make([]types.RuntimeStringDomain, rows-old)...)
 }
 
+func (expr *FunctionExpressionExecutor) ensureFlowControlStringSourceRows(rows int) {
+	if rows <= len(expr.flowControlStringSources) {
+		return
+	}
+	old := len(expr.flowControlStringSources)
+	if rows <= cap(expr.flowControlStringSources) {
+		expr.flowControlStringSources = expr.flowControlStringSources[:rows]
+		clear(expr.flowControlStringSources[old:])
+		return
+	}
+	expr.flowControlStringSources = append(
+		expr.flowControlStringSources, make([]types.StringSource, rows-old)...)
+}
+
 // observeFlowControlPrepareParamKind inspects only rows that can reach one
 // IF/CASE/COALESCE arm. Column executors intentionally return their full input
 // vector even under a row mask, so checking value.AllNull() would incorrectly
@@ -1048,6 +1267,7 @@ func (expr *FunctionExpressionExecutor) observeFlowControlPrepareParamKind(
 	resultDomain := types.StaticStringDomain(expr.resultType)
 	if !value.HasNull() && !value.HasBinaryStringMetadata() &&
 		!value.HasPrepareParamKind() && len(value.GetPrepareParamKinds()) == 0 &&
+		!value.HasStringSourceMetadata() &&
 		types.StaticStringDomain(*value.GetType()) == resultDomain &&
 		len(expr.flowControlKinds) == 0 &&
 		(!expr.flowControlKindSeen || expr.flowControlKind == vector.PrepareParamNone) {
@@ -1056,8 +1276,20 @@ func (expr *FunctionExpressionExecutor) observeFlowControlPrepareParamKind(
 		return
 	}
 	for row, selected := range selection {
-		if selected && (value.IsConst() || row < value.Length()) &&
-			!value.IsNull(uint64(row)) {
+		if selected && (value.IsConst() || row < value.Length()) {
+			// Source follows selected-value only for COALESCE. IF/CASE (including
+			// IFNULL rewritten to CASE) are common-domain expressions and own it.
+			// Runtime domain and conversion kind remain independent axes.
+			if expr.fid == function.COALESCE {
+				source := value.GetStringSourceAt(row)
+				if source != types.StringSourceExpression || len(expr.flowControlStringSources) != 0 {
+					expr.ensureFlowControlStringSourceRows(len(selection))
+					expr.flowControlStringSources[row] = source
+				}
+			}
+			if value.IsNull(uint64(row)) {
+				continue
+			}
 			domain := value.GetRuntimeStringDomainAt(row)
 			if domain == types.RuntimeStringInherit {
 				switch staticDomain := types.StaticStringDomain(*value.GetType()); {
@@ -1125,6 +1357,12 @@ func (expr *FunctionExpressionExecutor) applyFlowControlPrepareParamKinds(
 			return err
 		}
 	}
+	if len(expr.flowControlStringSources) != 0 {
+		expr.ensureFlowControlStringSourceRows(rows)
+		if err := result.SetStringSourcesWithMP(expr.flowControlStringSources[:rows], mp); err != nil {
+			return err
+		}
+	}
 	if len(expr.flowControlKinds) == 0 {
 		if expr.flowControlKindSeen {
 			result.SetPrepareParamKind(expr.flowControlKind)
@@ -1136,6 +1374,81 @@ func (expr *FunctionExpressionExecutor) applyFlowControlPrepareParamKinds(
 		return err
 	}
 	return nil
+}
+
+func (expr *FunctionExpressionExecutor) isImplicitCast() bool {
+	if expr.fid != function.CAST {
+		return false
+	}
+	_, overload := function.DecodeOverloadID(expr.overloadID)
+	return overload == 0
+}
+
+// A prepared numeric parameter can pass through a runtime CAST before the
+// private integer-argument conversion. CAST may materialize a flat vector
+// even though its input is a scalar. Only follow CASTs here: an arbitrary
+// function of a scalar need not itself have scalar semantics.
+func scalarIntegerArgumentSource(executor ExpressionExecutor) bool {
+	switch source := executor.(type) {
+	case *memoExpressionExecutor:
+		return scalarIntegerArgumentSource(source.state.executor)
+	case *FixedVectorExpressionExecutor:
+		return source.resultVector.IsConst()
+	case *ParamExpressionExecutor, *VarExpressionExecutor:
+		return true
+	case *FunctionExpressionExecutor:
+		return source.fid == function.CAST && len(source.parameterExecutor) > 0 &&
+			scalarIntegerArgumentSource(source.parameterExecutor[0])
+	default:
+		return false
+	}
+}
+
+func (expr *FunctionExpressionExecutor) hasScalarIntegerArgumentSource() bool {
+	if expr.fid != function.CAST || len(expr.parameterExecutor) == 0 {
+		return false
+	}
+	_, overload := function.DecodeOverloadID(expr.overloadID)
+	if overload != function.IntegerArgumentCastOverload && overload != function.TruncatedIntegerArgumentCastOverload {
+		return false
+	}
+	return scalarIntegerArgumentSource(expr.parameterExecutor[0])
+}
+
+func (expr *FunctionExpressionExecutor) preserveIntegerArgumentScalar(rowCount int, selectList []bool) {
+	if rowCount == 0 || !expr.hasScalarIntegerArgumentSource() {
+		return
+	}
+	for row := 0; row < rowCount && selectList != nil; row++ {
+		if !selectList[row] {
+			return
+		}
+	}
+	expr.resultVector.GetResultVector().ToConst()
+}
+
+func applyTransparentStringSource(
+	result *vector.Vector,
+	source *vector.Vector,
+	rows int,
+	mp *mpool.MPool,
+) error {
+	if result == nil || source == nil || rows <= 0 {
+		return nil
+	}
+	// An implicit cast changes the physical result type but does not change
+	// the source SQL domain. Preserve that domain alongside StringSource so
+	// consumers such as JSON_STORAGE can reject an ENUM value that travelled
+	// through the text transport instead of accepting it as VARCHAR.
+	result.SetPrepareParamType(source.GetPrepareParamType())
+	if source.GetStringSources() == nil {
+		return result.SetStringSource(source.GetStringSource())
+	}
+	sources := make([]types.StringSource, rows)
+	for row := range sources {
+		sources[row] = source.GetStringSourceAt(row)
+	}
+	return result.SetStringSourcesWithMP(sources, mp)
 }
 
 func (expr *FunctionExpressionExecutor) getFlowControlPrepareParamKind() vector.PrepareParamKind {
@@ -1271,6 +1584,25 @@ func (expr *FunctionExpressionExecutor) makeNullResult(rowCount int) (*vector.Ve
 	return result, nil
 }
 
+// Memo executors only share evaluation; they do not change whether their
+// underlying result is aligned with the input batch rows.
+func isRowAlignedExpressionExecutor(executor ExpressionExecutor) bool {
+	for {
+		switch source := executor.(type) {
+		case *memoExpressionExecutor:
+			executor = source.state.executor
+		case *memoRootExpressionExecutor:
+			executor = source.executor
+		case *ColumnExpressionExecutor:
+			return true
+		case *FunctionExpressionExecutor:
+			return !source.folded.canFold
+		default:
+			return false
+		}
+	}
+}
+
 func (expr *FunctionExpressionExecutor) evalSelectedRows(
 	proc *process.Process,
 	rowCount int,
@@ -1292,13 +1624,7 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 		// Constants, folded vectors, and list/vector literals are not row-aligned.
 		// They must be passed through unchanged; only column and non-folded
 		// function results map one-to-one to the input batch rows.
-		rowAligned := false
-		switch executor := expr.parameterExecutor[i].(type) {
-		case *ColumnExpressionExecutor:
-			rowAligned = true
-		case *FunctionExpressionExecutor:
-			rowAligned = !executor.folded.canFold
-		}
+		rowAligned := isRowAlignedExpressionExecutor(expr.parameterExecutor[i])
 		if rowAligned && !parameter.IsConst() {
 			selected := expr.selectedParameterVectors[i]
 			if selected == nil {
@@ -1344,11 +1670,19 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 		expr.selectedParameterResults, expr.selectedResult, proc, selectedCount, nil); err != nil {
 		return nil, err
 	}
+	if expr.isImplicitCast() && len(expr.selectedParameterResults) > 0 {
+		if err := applyTransparentStringSource(
+			expr.selectedResult.GetResultVector(), expr.selectedParameterResults[0], selectedCount, proc.Mp()); err != nil {
+			return nil, err
+		}
+	}
 
 	selectedResult := expr.selectedResult.GetResultVector()
 	runtimeType := *selectedResult.GetType()
 	runtimeIsBin := selectedResult.GetIsBin()
 	runtimePrepareParamKind := selectedResult.GetPrepareParamKind()
+	runtimePreparedJSONComparisonParam := selectedResult.IsPreparedJSONComparisonParam()
+	runtimePrepareParamType := selectedResult.GetPrepareParamType()
 	if expr.fid == function.IFF || expr.fid == function.CASE || expr.fid == function.COALESCE {
 		runtimePrepareParamKind = expr.getFlowControlPrepareParamKind()
 	}
@@ -1357,6 +1691,20 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 	result.SetType(runtimeType)
 	result.SetIsBin(runtimeIsBin)
 	result.ResetWithSameType()
+	if selectedCount > 0 && expr.hasScalarIntegerArgumentSource() {
+		// The compact result was evaluated only for selected rows. A scalar
+		// source gives every selected row the same converted value; publish the
+		// first selected value through our owned result wrapper before widening
+		// its logical length. In particular row zero may have been skipped.
+		// Skipped rows are not evaluated or observed by the masked parent.
+		if err := result.UnionOne(selectedResult, 0, proc.Mp()); err != nil {
+			return nil, err
+		}
+		result.ToConst()
+		result.SetLength(rowCount)
+		result.SetPrepareParamKind(runtimePrepareParamKind)
+		return result, nil
+	}
 	if expr.selectedNullResult == nil {
 		var err error
 		expr.selectedNullResult, err = newExpressionConstNull(
@@ -1391,6 +1739,10 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 		// summary is only the compatibility fallback for uniform results.
 		if len(result.GetPrepareParamKinds()) == 0 {
 			result.SetPrepareParamKind(runtimePrepareParamKind)
+		}
+		if runtimePreparedJSONComparisonParam {
+			result.SetPrepareParamType(runtimePrepareParamType)
+			result.SetPreparedJSONComparisonParam()
 		}
 	}
 	return result, nil
@@ -1483,6 +1835,13 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 		expr.parameterResults, expr.resultVector, proc, rowCount, &expr.selectList); err != nil {
 		return nil, err
 	}
+	expr.preserveIntegerArgumentScalar(rowCount, selectList)
+	if expr.isImplicitCast() && len(expr.parameterResults) > 0 {
+		if err := applyTransparentStringSource(
+			expr.resultVector.GetResultVector(), expr.parameterResults[0], rowCount, proc.Mp()); err != nil {
+			return nil, err
+		}
+	}
 	if expr.fid == function.IFF || expr.fid == function.CASE || expr.fid == function.COALESCE {
 		if err := expr.applyFlowControlPrepareParamKinds(
 			expr.resultVector.GetResultVector(), rowCount, proc.Mp()); err != nil {
@@ -1563,9 +1922,12 @@ func (expr *ColumnExpressionExecutor) Eval(_ *process.Process, batches []*batch.
 	}
 
 	vec := batches[relIndex].Vecs[expr.colIndex]
-	if vec.IsConstNull() {
+	// A grouping-set sentinel has no value payload and therefore also satisfies
+	// IsConstNull, but its grouping bitmap is semantically distinct from SQL
+	// NULL. Preserve it instead of normalizing it into the ordinary NULL cache.
+	if vec.IsConstNull() && !vec.IsGrouping() {
 		var err error
-		vec, err = expr.getConstNullVec(expr.typ, vec.Length())
+		vec, err = expr.getConstNullVec(expr.typ, vec.Length(), vec.GetStringSourceAt(0))
 		if err != nil {
 			return nil, err
 		}
@@ -1573,7 +1935,11 @@ func (expr *ColumnExpressionExecutor) Eval(_ *process.Process, batches []*batch.
 	return vec, nil
 }
 
-func (expr *ColumnExpressionExecutor) getConstNullVec(typ types.Type, length int) (*vector.Vector, error) {
+func (expr *ColumnExpressionExecutor) getConstNullVec(
+	typ types.Type,
+	length int,
+	source types.StringSource,
+) (*vector.Vector, error) {
 	if expr.nullVecCache != nil {
 		expr.nullVecCache.SetType(typ)
 		expr.nullVecCache.SetLength(length)
@@ -1583,6 +1949,9 @@ func (expr *ColumnExpressionExecutor) getConstNullVec(typ types.Type, length int
 		if err != nil {
 			return nil, err
 		}
+	}
+	if err := expr.nullVecCache.SetStringSource(source); err != nil {
+		return nil, err
 	}
 	return expr.nullVecCache, nil
 }
@@ -1647,6 +2016,17 @@ func generateConstExpressionExecutor(
 	con *plan.Literal,
 	selection *vector.AllocationAccountSelection,
 ) (vec *vector.Vector, err error) {
+	source, err := DecodeLiteralStringSource(con)
+	if err != nil {
+		return nil, err
+	}
+	// Allocation belongs to this constructor until a successful return transfers it.
+	defer func() {
+		if err != nil && vec != nil {
+			vec.Free(proc.Mp())
+			vec = nil
+		}
+	}()
 	if con.GetIsnull() {
 		vec, err = newExpressionConstNull(typ, 1, selection)
 	} else {
@@ -1703,10 +2083,11 @@ func generateConstExpressionExecutor(
 			vec, err = newExpressionConstFixed(constTimestampTypes[scale], types.Timestamp(val.Timestampval), 1, proc.Mp(), selection)
 		case *plan.Literal_Sval:
 			sval := val.Sval
-			// Distinguish binary with non-binary string.
+			// A folded CAST keeps its resolved SQL binary subtype so downstream
+			// consumers such as JSON constructors can preserve MySQL type tags.
 			if typ.Oid == types.T_binary || typ.Oid == types.T_varbinary || typ.Oid == types.T_blob {
-				vec, err = newExpressionConstBytes(constBinType, []byte(sval), 1, proc.Mp(), selection)
-			} else if typ.Oid == types.T_geometry {
+				vec, err = newExpressionConstBytes(typ, []byte(sval), 1, proc.Mp(), selection)
+			} else if typ.Oid == types.T_geometry || typ.Oid == types.T_json {
 				vec, err = newExpressionConstBytes(typ, []byte(sval), 1, proc.Mp(), selection)
 			} else if typ.Oid == types.T_array_float32 {
 				array, err1 := types.StringToArray[float32](sval)
@@ -1781,13 +2162,35 @@ func generateConstExpressionExecutor(
 					}
 				}
 				if err = vec.SetRuntimeStringDomainWithMP(domain, proc.Mp()); err != nil {
-					vec.Free(proc.Mp())
-					return nil, err
+					return vec, err
 				}
 			}
 		}
 	}
+	if err == nil {
+		err = vec.SetStringSource(source)
+	}
 	return vec, err
+}
+
+// DecodeLiteralStringSource validates the protobuf-width encoding before
+// narrowing it to the runtime enum. Scalar literal consumers must share this
+// boundary so malformed plans cannot depend on the chosen execution path.
+func DecodeLiteralStringSource(literal *plan.Literal) (types.StringSource, error) {
+	if literal == nil || literal.GetStringSource() == 0 {
+		return types.StringSourceLiteral, nil
+	}
+	rawSource := literal.GetStringSource()
+	if rawSource > uint32(types.StringSourceCOMStmt)+1 {
+		return types.StringSourceExpression,
+			moerr.NewInvalidInputNoCtxf("invalid literal string source %d", rawSource)
+	}
+	source := types.StringSource(rawSource - 1)
+	if !source.Valid() {
+		return types.StringSourceExpression,
+			moerr.NewInvalidInputNoCtxf("invalid literal string source %d", literal.GetStringSource())
+	}
+	return source, nil
 }
 
 func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Expr) (*vector.Vector, error) {
@@ -1798,11 +2201,17 @@ func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Ex
 	if err != nil {
 		return nil, err
 	}
+	sources := make([]types.StringSource, lenList)
 	for i := 0; i < lenList; i++ {
 		expr := exprs[i]
 		t := expr.GetLit()
 		if t == nil {
 			return nil, moerr.NewInternalError(proc.Ctx, "args in list must be constant")
+		}
+		sources[i], err = DecodeLiteralStringSource(t)
+		if err != nil {
+			vec.Free(proc.Mp())
+			return nil, err
 		}
 		if t.GetIsnull() {
 			vec.GetNulls().Set(uint64(i))
@@ -1895,6 +2304,10 @@ func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Ex
 			}
 			vec.SetIsBin(t.IsBin)
 		}
+	}
+	if err := vec.SetStringSourcesWithMP(sources, proc.Mp()); err != nil {
+		vec.Free(proc.Mp())
+		return nil, err
 	}
 	return vec, nil
 }
@@ -2042,18 +2455,49 @@ func EvaluateFilterByZoneMap(
 	}
 
 	if len(columnMap) == 0 {
-		vec, free, err := GetReadonlyResultFromNoColumnExpression(proc, expr)
+		if fold := expr.GetFold(); fold != nil {
+			if types.T(expr.Typ.Id) != types.T_bool {
+				return true
+			}
+			data, available := foldedScalarBytes(expr)
+			return !available || types.DecodeBool(data)
+		}
+		if !function.IsStatementConstant(expr) {
+			return true
+		}
+		// A partially materialized subtree cannot be reconstructed from Fold IDs.
+		hasFold := false
+		_ = plan.VisitExprTree(expr, func(e *plan.Expr) error {
+			hasFold = hasFold || e.GetFold() != nil
+			return nil
+		})
+		if hasFold {
+			return true
+		}
+		selected = true
+		defer func() {
+			if recover() != nil {
+				selected = true
+			}
+		}()
+		probe := &process.WarningProbe{}
+		child := proc.NewNoContextChildProc(0)
+		child.Ctx = proc.Ctx
+		child.WarningSink = probe
+		vec, free, err := GetReadonlyResultFromNoColumnExpression(child, expr)
 		if err != nil {
+			return true
+		}
+		defer free()
+		if probe.Warned() || vec.GetType().Oid != types.T_bool || vec.IsConstNull() || vec.GetNulls().Any() {
 			return true
 		}
 		cols := vector.MustFixedColWithTypeCheck[bool](vec)
 		for _, isNeed := range cols {
 			if isNeed {
-				free()
 				return true
 			}
 		}
-		free()
 		return false
 	}
 
@@ -2075,6 +2519,216 @@ func EvaluateFilterByZoneMap(
 	return
 }
 
+// zoneMapInVector decodes an IN / prefix_in payload for zone-map pruning and
+// reports whether it may be used to prune.
+//
+// ZM.PrefixIn scans linearly, so prefix payload ordering does not affect
+// correctness. ZM.AnyIn binary-searches, except when the payload carries NULLs,
+// where it falls back to anyInNullableVec and order does not matter.
+//
+// For AnyIn, an out-of-order payload makes the search probe the wrong element
+// and silently drop blocks that hold matching rows, so it must not prune at all:
+// keeping a block is always safe.
+//
+// Normalizing here is not an option. EvaluateFilterByZoneMap frees its vector
+// cache on every call, and disttae calls it once per object and again for each
+// block, so sorting a private copy would clone and sort the payload per block.
+// Decoding is therefore zero-copy and the payload is only ever inspected.
+func zoneMapInVector(data []byte, prefixSearch bool) (*vector.Vector, bool) {
+	vec := vector.NewVec(types.T_any.ToType())
+	if err := vec.UnmarshalBinary(data); err != nil {
+		return nil, false
+	}
+	if !prefixSearch && vec.GetType().Oid == types.T_char {
+		// IN dispatches on the decoded item type; SQL CHAR trims spaces,
+		// whereas AnyIn searches persisted raw-byte metadata.
+		return nil, false
+	}
+	if prefixSearch {
+		// PrefixIn is defined on physical varlena bytes and does not require
+		// producer ordering.
+		if vec.GetType().Oid.IsArrayRelate() || !vec.GetType().IsVarlen() {
+			return nil, false
+		}
+		return vec, true
+	}
+	if vec.IsConst() {
+		return vec, true
+	}
+	if !prefixSearch && vec.GetNulls().Any() {
+		// AnyIn scans linearly for these, so order does not matter.
+		return vec, true
+	}
+	if zoneMapInVectorOrderIsKnown(vec) {
+		return vec, true
+	}
+	return nil, false
+}
+
+// zoneMapInVectorOrderIsKnown reports whether the payload's ascending order can be
+// relied on. It is not "is this sorted" -- an unflagged fixed-width payload may
+// well be ordered, but nothing here can establish that, and the caller must treat
+// unknown exactly as it treats unsorted.
+//
+// The sorted flag is authoritative when set: InplaceSortAndCompact sets it
+// unconditionally and it is marshalled with the payload, so a folded IN list that
+// went through it carries it. It is not a universal invariant, though: constant
+// folding marshals a function result verbatim, and deliberately leaves a nullable
+// IN list unsorted to keep its null bitmap aligned with its values (both in
+// pkg/sql/plan/rule/constant_fold.go), so an unordered payload arrives with no flag.
+//
+// For byte-string varlen types the order is verified directly, in the byte order
+// AnyIn and PrefixIn search, with a NULL slot's empty payload sorting first exactly
+// as they see it. Array payloads use value comparators and are handled separately.
+// A prefix search needs one condition more than order -- see the walk below --
+// which is why the flag does not short-circuit it. Fixed-width types would need a
+// per-type comparator, so absent the flag their order is unknown and the caller
+// fails open.
+//
+// Failing open only costs pruning. Trusting an unverified order costs rows:
+// needles [30,10] against a block zonemap [5,15] make AnyIn's binary search probe
+// 30, answer false, and drop a block holding the matching needle 10.
+func zoneMapInVectorOrderIsKnown(vec *vector.Vector) bool {
+	oid := vec.GetType().Oid
+	if oid.IsArrayRelate() {
+		// AnyIn supports float32/float64 arrays with ArrayCompare, so only the
+		// comparator-consistent flag produced by InplaceSort or
+		// InplaceSortAndCompact proves
+		// their order. Narrow arrays currently fail open in AnyIn and stay
+		// conservative here regardless of their metadata.
+		if vec.Length() < 2 {
+			return true
+		}
+		switch oid {
+		case types.T_array_float32, types.T_array_float64:
+			return vec.GetSorted()
+		default:
+			return false
+		}
+	}
+	if vec.Length() < 2 {
+		return true
+	}
+	if !vec.GetType().IsVarlen() {
+		// Fixed-width order can only come from the flag. PrefixIn never reaches
+		// these -- it reads varlena slots directly.
+		return vec.GetSorted()
+	}
+	switch oid {
+	case types.T_char, types.T_varchar, types.T_json,
+		types.T_binary, types.T_varbinary, types.T_blob,
+		types.T_text, types.T_datalink:
+	default:
+		return false
+	}
+
+	checkOrder := !vec.GetSorted()
+	if !checkOrder {
+		// The producer's sorted flag is authoritative for AnyIn.
+		return true
+	}
+	col, area := vector.MustVarlenaRawData(vec)
+	prev := col[0].GetByteSlice(area)
+	for i := 1; i < len(col); i++ {
+		cur := col[i].GetByteSlice(area)
+		if checkOrder && bytes.Compare(prev, cur) > 0 {
+			return false
+		}
+		prev = cur
+	}
+	return true
+}
+
+// foldedScalarBytes accepts only the scalar encoding owned by EvalFoldExpr.
+// Nil cannot distinguish NULL, an unavailable value, and an unsupported encoding.
+func foldedScalarBytes(expr *plan.Expr) ([]byte, bool) {
+	fold := expr.GetFold()
+	if fold == nil || !fold.IsConst || fold.Data == nil {
+		return nil, false
+	}
+	oid := types.T(expr.Typ.Id)
+	switch oid {
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
+		types.T_text, types.T_blob, types.T_datalink:
+		return fold.Data, true
+	case types.T_bool, types.T_bit, types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64, types.T_date, types.T_time, types.T_datetime,
+		types.T_timestamp, types.T_decimal64, types.T_decimal128:
+	default:
+		return nil, false
+	}
+	if len(fold.Data) != oid.TypeLen() {
+		return nil, false
+	}
+	switch oid {
+	case types.T_bool:
+		if fold.Data[0] > 1 {
+			return nil, false
+		}
+	case types.T_float32:
+		v := float64(types.DecodeFloat32(fold.Data))
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return nil, false
+		}
+	case types.T_float64:
+		v := types.DecodeFloat64(fold.Data)
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return nil, false
+		}
+	case types.T_timestamp, types.T_time, types.T_datetime:
+		if expr.Typ.Scale < 0 || expr.Typ.Scale > 6 {
+			return nil, false
+		}
+	case types.T_decimal64:
+		if expr.Typ.Scale < 0 || expr.Typ.Scale > 18 {
+			return nil, false
+		}
+	case types.T_decimal128:
+		if expr.Typ.Scale < 0 || expr.Typ.Scale > 38 {
+			return nil, false
+		}
+	}
+	return fold.Data, true
+}
+
+// prefixBoundBytes preserves the complete byte bound rather than a truncated ZM.
+func prefixBoundBytes(expr *plan.Expr) ([]byte, bool) {
+	if lit := expr.GetLit(); lit != nil && !lit.Isnull {
+		if value, ok := lit.Value.(*plan.Literal_Sval); ok {
+			return []byte(value.Sval), true
+		}
+	}
+	switch types.T(expr.Typ.Id) {
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
+		types.T_text, types.T_blob, types.T_datalink:
+		return foldedScalarBytes(expr)
+	}
+	return nil, false
+}
+
+// zoneMapMembershipVector shares the existing checked, read-only payload decoder.
+func zoneMapMembershipVector(expr *plan.Expr, prefix bool) (*vector.Vector, bool) {
+	if data := expr.GetVec(); data != nil {
+		return zoneMapInVector(data.Data, prefix)
+	}
+	fold := expr.GetFold()
+	if fold == nil || fold.IsConst || len(fold.Data) == 0 {
+		return nil, false
+	}
+	vec, ok := zoneMapInVector(fold.Data, prefix)
+	if !ok {
+		return nil, false
+	}
+	typ := vec.GetType()
+	if int32(typ.Oid) != expr.Typ.Id || typ.Scale != expr.Typ.Scale ||
+		(typ.Width != 0 && expr.Typ.Width != 0 && typ.Width != expr.Typ.Width) ||
+		(typ.Charset != 0 && expr.Typ.Charset != 0 && uint32(typ.Charset) != expr.Typ.Charset) {
+		return nil, false
+	}
+	return vec, true
+}
+
 func GetExprZoneMap(
 	ctx context.Context,
 	proc *process.Process,
@@ -2093,10 +2747,27 @@ func GetExprZoneMap(
 			}
 		}
 
+	case *plan.Expr_Fold:
+		zm := zms[expr.AuxId]
+		zm.Reset()
+		if data, ok := foldedScalarBytes(expr); ok {
+			typ := types.T(expr.Typ.Id)
+			if zm == nil || zm.GetType() != typ || zm.GetScale() != expr.Typ.Scale {
+				zm = index.NewZM(typ, expr.Typ.Scale)
+			}
+			index.UpdateZM(zm, data)
+		}
+		zms[expr.AuxId] = zm
+
 	case *plan.Expr_Col:
 		zms[expr.AuxId] = meta.MustGetColumn(uint16(columnMap[int(t.Col.ColPos)])).ZoneMap()
 
 	case *plan.Expr_F:
+		kind := function.GetZoneMapEvaluation(t.F)
+		if kind == function.ZoneMapUnsupported {
+			zms[expr.AuxId].Reset()
+			return zms[expr.AuxId]
+		}
 		id := t.F.GetFunc().GetObj()
 		if overload, errGetFunc := function.GetFunctionById(ctx, id); errGetFunc != nil {
 			zms[expr.AuxId].Reset()
@@ -2104,9 +2775,13 @@ func GetExprZoneMap(
 		} else {
 			args := t.F.Args
 
-			// Some expressions need to be handled specifically
-			switch t.F.Func.ObjName {
-			case "isnull", "is_null":
+			fid, _ := function.DecodeOverloadID(id)
+			if (fid == function.PLUS || fid == function.MINUS || fid == function.MULTI) && expr.Typ.Id != args[0].Typ.Id {
+				zms[expr.AuxId].Reset()
+				return zms[expr.AuxId]
+			}
+			switch fid {
+			case function.ISNULL:
 				switch exprImpl := args[0].Expr.(type) {
 				case *plan.Expr_Col:
 					nullCnt := meta.MustGetColumn(uint16(columnMap[int(exprImpl.Col.ColPos)])).NullCnt()
@@ -2116,7 +2791,7 @@ func GetExprZoneMap(
 					zms[expr.AuxId].Reset()
 					return zms[expr.AuxId]
 				}
-			case "isnotnull", "is_not_null":
+			case function.ISNOTNULL:
 				switch exprImpl := args[0].Expr.(type) {
 				case *plan.Expr_Col:
 					zm := meta.MustGetColumn(uint16(columnMap[int(exprImpl.Col.ColPos)])).ZoneMap()
@@ -2126,21 +2801,19 @@ func GetExprZoneMap(
 					zms[expr.AuxId].Reset()
 					return zms[expr.AuxId]
 				}
-			case "in":
+			case function.IN:
 				if list := args[1].GetList(); list != nil {
 					return foldNativeInListZoneMap(ctx, proc, meta, columnMap, zms, vecs, args, expr.AuxId, false)
 				}
 				rid := args[1].AuxId
 				if vecs[rid] == nil {
-					if data, ok := args[1].Expr.(*plan.Expr_Vec); ok {
-						vec := vector.NewVec(types.T_any.ToType())
-						vec.UnmarshalBinary(data.Vec.Data)
-						vecs[rid] = vec
-					} else {
+					vec, decoded := zoneMapMembershipVector(args[1], false)
+					if !decoded {
 						zms[expr.AuxId].Reset()
 						vecs[rid] = vector.NewConstNull(types.T_any.ToType(), math.MaxInt, proc.Mp())
 						return zms[expr.AuxId]
 					}
+					vecs[rid] = vec
 				}
 
 				if vecs[rid].IsConstNull() && vecs[rid].Length() == math.MaxInt {
@@ -2157,63 +2830,116 @@ func GetExprZoneMap(
 				zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], lhs.AnyIn(vecs[rid]))
 				return zms[expr.AuxId]
 
-			case "not_in":
+			case function.NOT_IN:
 				if list := args[1].GetList(); list != nil {
 					return foldNativeInListZoneMap(ctx, proc, meta, columnMap, zms, vecs, args, expr.AuxId, true)
 				}
 				zms[expr.AuxId].Reset()
 				return zms[expr.AuxId]
 
-			case "prefix_eq":
+			case function.PREFIX_EQ:
 				lhs := GetExprZoneMap(ctx, proc, args[0], meta, columnMap, zms, vecs)
 				if !lhs.IsInited() {
 					zms[expr.AuxId].Reset()
 					return zms[expr.AuxId]
 				}
 
-				s := []byte(args[1].GetLit().GetSval())
+				s, ok := prefixBoundBytes(args[1])
+				if !ok {
+					zms[expr.AuxId].Reset()
+					return zms[expr.AuxId]
+				}
 
 				zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], lhs.PrefixEq(s))
 				return zms[expr.AuxId]
 
-			case "prefix_between":
+			case function.PREFIX_BETWEEN:
 				lhs := GetExprZoneMap(ctx, proc, args[0], meta, columnMap, zms, vecs)
 				if !lhs.IsInited() {
 					zms[expr.AuxId].Reset()
 					return zms[expr.AuxId]
 				}
 
-				lb := []byte(args[1].GetLit().GetSval())
-				ub := []byte(args[2].GetLit().GetSval())
+				lb, lowerOK := prefixBoundBytes(args[1])
+				ub, upperOK := prefixBoundBytes(args[2])
+				if !lowerOK || !upperOK {
+					zms[expr.AuxId].Reset()
+					return zms[expr.AuxId]
+				}
 
 				zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], lhs.PrefixBetween(lb, ub))
 				return zms[expr.AuxId]
 
-			case "prefix_in_range":
+			case function.IN_RANGE:
+				if len(args) != 4 {
+					zms[expr.AuxId].Reset()
+					return zms[expr.AuxId]
+				}
+				lhs := GetExprZoneMap(ctx, proc, args[0], meta, columnMap, zms, vecs)
+				bounds := [3][]byte{}
+				valid := lhs.IsInited()
+				for i, arg := range args[1:] {
+					if arg.GetLit() == nil && arg.GetFold() == nil {
+						valid = false
+						break
+					}
+					bound := GetExprZoneMap(ctx, proc, arg, meta, columnMap, zms, vecs)
+					if !bound.IsInited() || (!bound.IsString() && !isSingleValueZoneMap(bound)) {
+						valid = false
+						break
+					}
+					if i < 2 {
+						if bound.GetType() != lhs.GetType() || bound.GetScale() != lhs.GetScale() {
+							valid = false
+							break
+						}
+						if bound.IsString() {
+							bounds[i], valid = prefixBoundBytes(arg)
+							if !valid {
+								break
+							}
+						} else {
+							bounds[i] = bound.GetMinBuf()
+						}
+					} else {
+						valid = bound.GetType() == types.T_uint8
+						bounds[i] = bound.GetMinBuf()
+					}
+				}
+				if !valid || len(bounds[2]) != 1 {
+					zms[expr.AuxId].Reset()
+				} else {
+					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], lhs.InRange(bounds[0], bounds[1], bounds[2][0]))
+				}
+				return zms[expr.AuxId]
+
+			case function.PREFIX_IN_RANGE:
 				lhs := GetExprZoneMap(ctx, proc, args[0], meta, columnMap, zms, vecs)
 				if !lhs.IsInited() {
 					zms[expr.AuxId].Reset()
 					return zms[expr.AuxId]
 				}
 
-				lb := []byte(args[1].GetLit().GetSval())
-				ub := []byte(args[2].GetLit().GetSval())
+				lb, lowerOK := prefixBoundBytes(args[1])
+				ub, upperOK := prefixBoundBytes(args[2])
+				if !lowerOK || !upperOK {
+					zms[expr.AuxId].Reset()
+					return zms[expr.AuxId]
+				}
 
 				zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], lhs.PrefixBetween(lb, ub))
 				return zms[expr.AuxId]
 
-			case "prefix_in":
+			case function.PREFIX_IN:
 				rid := args[1].AuxId
 				if vecs[rid] == nil {
-					if data, ok := args[1].Expr.(*plan.Expr_Vec); ok {
-						vec := vector.NewVec(types.T_any.ToType())
-						vec.UnmarshalBinary(data.Vec.Data)
-						vecs[rid] = vec
-					} else {
+					vec, decoded := zoneMapMembershipVector(args[1], true)
+					if !decoded {
 						zms[expr.AuxId].Reset()
 						vecs[rid] = vector.NewConstNull(types.T_any.ToType(), math.MaxInt, proc.Mp())
 						return zms[expr.AuxId]
 					}
+					vecs[rid] = vec
 				}
 
 				if vecs[rid].IsConstNull() && vecs[rid].Length() == math.MaxInt {
@@ -2243,8 +2969,8 @@ func GetExprZoneMap(
 			}
 
 			var res, ok bool
-			switch t.F.Func.ObjName {
-			case ">":
+			switch fid {
+			case function.GREAT_THAN:
 				if hasConstNullArg(args) {
 					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], false)
 					return zms[expr.AuxId]
@@ -2261,7 +2987,7 @@ func GetExprZoneMap(
 					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], res)
 				}
 
-			case "<":
+			case function.LESS_THAN:
 				if hasConstNullArg(args) {
 					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], false)
 					return zms[expr.AuxId]
@@ -2278,7 +3004,7 @@ func GetExprZoneMap(
 					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], res)
 				}
 
-			case ">=":
+			case function.GREAT_EQUAL:
 				if hasConstNullArg(args) {
 					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], false)
 					return zms[expr.AuxId]
@@ -2295,7 +3021,7 @@ func GetExprZoneMap(
 					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], res)
 				}
 
-			case "<=":
+			case function.LESS_EQUAL:
 				if hasConstNullArg(args) {
 					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], false)
 					return zms[expr.AuxId]
@@ -2312,7 +3038,7 @@ func GetExprZoneMap(
 					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], res)
 				}
 
-			case "=":
+			case function.EQUAL:
 				if hasConstNullArg(args) {
 					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], false)
 					return zms[expr.AuxId]
@@ -2329,7 +3055,7 @@ func GetExprZoneMap(
 					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], res)
 				}
 
-			case "!=", "<>":
+			case function.NOT_EQUAL:
 				if hasConstNullArg(args) {
 					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], false)
 					return zms[expr.AuxId]
@@ -2346,7 +3072,7 @@ func GetExprZoneMap(
 					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], res)
 				}
 
-			case "between":
+			case function.BETWEEN:
 				if hasConstNullArg(args) {
 					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], false)
 					return zms[expr.AuxId]
@@ -2363,105 +3089,130 @@ func GetExprZoneMap(
 					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], res)
 				}
 
-			case "and":
+			case function.AND:
 				if hasResult := foldAndZoneMap(ctx, proc, meta, columnMap, zms, vecs, args, expr.AuxId); hasResult {
 					return zms[expr.AuxId]
 				}
 
-			case "or":
+			case function.OR:
 				if hasResult := foldOrZoneMap(ctx, proc, meta, columnMap, zms, vecs, args, expr.AuxId); hasResult {
 					return zms[expr.AuxId]
 				}
 
-			case "+":
+			case function.PLUS:
 				if f() {
 					return zms[expr.AuxId]
 				}
 				zms[expr.AuxId] = index.ZMPlus(zms[args[0].AuxId], zms[args[1].AuxId], zms[expr.AuxId])
 
-			case "-":
+			case function.MINUS:
 				if f() {
 					return zms[expr.AuxId]
 				}
 				zms[expr.AuxId] = index.ZMMinus(zms[args[0].AuxId], zms[args[1].AuxId], zms[expr.AuxId])
 
-			case "*":
+			case function.MULTI:
 				if f() {
 					return zms[expr.AuxId]
 				}
 				zms[expr.AuxId] = index.ZMMulti(zms[args[0].AuxId], zms[args[1].AuxId], zms[expr.AuxId])
 
 			default:
-				ivecs := make([]*vector.Vector, len(args))
-				if isAllConst(args) { // constant fold
+				if kind == function.ZoneMapIndex {
+					zms[expr.AuxId].Reset()
+					return zms[expr.AuxId]
+				}
+				// Metadata is speculative. A failing argument or kernel cannot
+				// prove rows are absent; every temporary keeps its cleanup owner.
+				func() {
 					defer func() {
-						for _, v := range ivecs {
-							if v != nil {
-								v.Free(proc.Mp())
-							}
+						if recover() != nil {
+							zms[expr.AuxId].Reset()
 						}
 					}()
-					for i, arg := range args {
-						if vecs[arg.AuxId] != nil {
-							vecs[arg.AuxId].Free(proc.Mp())
+					allConst := isAllConst(args)
+					if !allConst {
+						if f() {
+							return
 						}
-						if vecs[arg.AuxId], _, err = GetReadonlyResultFromNoColumnExpression(proc, arg); err != nil {
+						// Paired endpoints need a current point-valued divisor.
+						if (fid == function.DIV || fid == function.INTEGER_DIV) && !isSingleValueZoneMap(zms[args[1].AuxId]) {
 							zms[expr.AuxId].Reset()
-							return zms[expr.AuxId]
-						}
-						if ivecs[i], err = vecs[arg.AuxId].Dup(proc.Mp()); err != nil {
-							zms[expr.AuxId].Reset()
-							return zms[expr.AuxId]
+							return
 						}
 					}
-				} else {
-					if f() {
-						return zms[expr.AuxId]
-					}
-					for i, arg := range args {
-						if vecs[arg.AuxId] != nil {
-							vecs[arg.AuxId].Free(proc.Mp())
+					probe := &process.WarningProbe{}
+					child := proc.NewNoContextChildProc(0)
+					child.Ctx = proc.Ctx
+					child.WarningSink = probe
+					ivecs := make([]*vector.Vector, len(args))
+					if allConst { // constant fold
+						defer func() {
+							for _, v := range ivecs {
+								if v != nil {
+									v.Free(proc.Mp())
+								}
+							}
+						}()
+						for i, arg := range args {
+							if arg.GetFold() != nil {
+								// Fold payloads are interpreted by their checked adapter,
+								// never by an executor reconstructed from a Fold ID.
+								zms[expr.AuxId].Reset()
+								return
+							}
+							input, evalErr := GetWritableResultFromNoColumnExpression(child, arg)
+							if evalErr != nil {
+								zms[expr.AuxId].Reset()
+								return
+							}
+							ivecs[i] = input
 						}
-						if vecs[arg.AuxId], err = index.ZMToVector(zms[arg.AuxId], vecs[arg.AuxId], proc.Mp()); err != nil {
-							zms[expr.AuxId].Reset()
-							return zms[expr.AuxId]
+					} else {
+						for i, arg := range args {
+							constant := isConst(arg)
+							if !finiteZoneMapEndpoints(zms[arg.AuxId]) {
+								zms[expr.AuxId].Reset()
+								return
+							}
+							// Registered kernels need exact constant bytes, never a
+							// truncated string interval substituted for that value.
+							if constant && zms[arg.AuxId].IsString() {
+								data, exact := prefixBoundBytes(arg)
+								if !exact || !bytes.Equal(data, zms[arg.AuxId].GetMinBuf()) || !bytes.Equal(data, zms[arg.AuxId].GetMaxBuf()) {
+									zms[expr.AuxId].Reset()
+									return
+								}
+							}
+							if vecs[arg.AuxId] != nil {
+								vecs[arg.AuxId].Free(proc.Mp())
+							}
+							if vecs[arg.AuxId], err = index.ZMToVector(zms[arg.AuxId], vecs[arg.AuxId], proc.Mp()); err != nil {
+								zms[expr.AuxId].Reset()
+								return
+							}
+							argType := *vecs[arg.AuxId].GetType()
+							argType.Width = arg.Typ.Width
+							argType.Charset = uint8(arg.Typ.Charset)
+							vecs[arg.AuxId].SetType(argType)
+							// Class is provenance, not a property of a point column ZM.
+							if constant && isSingleValueZoneMap(zms[arg.AuxId]) {
+								vecs[arg.AuxId].ToConst()
+							}
+							ivecs[i] = vecs[arg.AuxId]
 						}
-						ivecs[i] = vecs[arg.AuxId]
 					}
-				}
-				fn, _, fnFree, _ := overload.GetExecuteMethod()
-				typ := types.NewWithCharset(
-					types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale, uint8(expr.Typ.Charset),
-				)
+					fn, _, fnFree, _ := overload.GetExecuteMethod()
+					typ := types.NewWithCharset(
+						types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale, uint8(expr.Typ.Charset),
+					)
 
-				result := vector.NewFunctionResultWrapper(typ, proc.Mp())
-				if err = result.PreExtendAndReset(2); err != nil {
-					zms[expr.AuxId].Reset()
-					result.Free()
-					if fnFree != nil {
-						// NOTE: fnFree is only applicable for serial and serial_full.
-						// if fnFree is not nil, then make sure to call it after fn() is done.
-						_ = fnFree()
-					}
-					return zms[expr.AuxId]
-				}
-				if err = fn(ivecs, result, proc, 2, nil); err != nil {
-					zms[expr.AuxId].Reset()
-					result.Free()
-					if fnFree != nil {
-						// NOTE: fnFree is only applicable for serial and serial_full.
-						// if fnFree is not nil, then make sure to call it after fn() is done.
-						_ = fnFree()
-					}
-					return zms[expr.AuxId]
-				}
-				if fnFree != nil {
-					// NOTE: fnFree is only applicable for serial and serial_full.
-					// if fnFree is not nil, then make sure to call it after fn() is done.
-					_ = fnFree()
-				}
-				zms[expr.AuxId] = index.VectorToZM(result.GetResultVector(), zms[expr.AuxId])
-				result.Free()
+					zms[expr.AuxId] = evaluateZoneMapFunction(child, typ, zms[expr.AuxId], func(result vector.FunctionResultWrapper) error {
+						return fn(ivecs, result, child, 2, nil)
+					}, fnFree, func(output *vector.Vector) bool {
+						return !probe.Warned() && (kind != function.ZoneMapTemporal || zoneMapTemporalEndpoints(proc, args, ivecs, output))
+					})
+				}()
 			}
 		}
 
@@ -2470,6 +3221,140 @@ func GetExprZoneMap(
 	}
 
 	return zms[expr.AuxId]
+}
+
+// evaluateZoneMapFunction owns result cleanup and final publication. Its validator
+// borrows the completed output; argument vectors remain owned by its caller.
+func evaluateZoneMapFunction(proc *process.Process, typ types.Type, zm objectio.ZoneMap,
+	eval func(vector.FunctionResultWrapper) error, fnFree func() error, validate func(*vector.Vector) bool) objectio.ZoneMap {
+	if fnFree != nil {
+		defer func() { _ = fnFree() }()
+	}
+	result := vector.NewFunctionResultWrapper(typ, proc.Mp())
+	defer result.Free()
+	if err := result.PreExtendAndReset(2); err != nil {
+		zm.Reset()
+		return zm
+	}
+	err := func() (err error) {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				if arithmeticErr, ok := recovered.(*moerr.Error); ok && arithmeticErr != nil && arithmeticErr.ErrorCode() == moerr.ErrOutOfRange {
+					err = arithmeticErr
+				} else {
+					panic(recovered)
+				}
+			}
+		}()
+		return eval(result)
+	}()
+	if err != nil {
+		zm.Reset()
+		return zm
+	}
+	output := result.GetResultVector()
+	if output.IsConstNull() || output.GetNulls().Any() || !finiteVectorEndpoints(output) || validate != nil && !validate(output) {
+		zm.Reset()
+		return zm
+	}
+	return index.VectorToZM(output, zm)
+}
+
+func finiteZoneMapEndpoints(zm objectio.ZoneMap) bool {
+	if !zm.IsInited() {
+		return false
+	}
+	switch zm.GetType() {
+	case types.T_float32:
+		for _, data := range [][]byte{zm.GetMinBuf(), zm.GetMaxBuf()} {
+			v := float64(types.DecodeFloat32(data))
+			if math.IsNaN(v) || math.IsInf(v, 0) {
+				return false
+			}
+		}
+	case types.T_float64:
+		for _, data := range [][]byte{zm.GetMinBuf(), zm.GetMaxBuf()} {
+			v := types.DecodeFloat64(data)
+			if math.IsNaN(v) || math.IsInf(v, 0) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func finiteVectorEndpoints(v *vector.Vector) bool {
+	switch v.GetType().Oid {
+	case types.T_float32:
+		for _, x := range vector.MustFixedColNoTypeCheck[float32](v) {
+			if math.IsNaN(float64(x)) || math.IsInf(float64(x), 0) {
+				return false
+			}
+		}
+	case types.T_float64:
+		for _, x := range vector.MustFixedColNoTypeCheck[float64](v) {
+			if math.IsNaN(x) || math.IsInf(x, 0) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func zoneMapTemporalEndpoints(proc *process.Process, args []*plan.Expr, inputs []*vector.Vector, output *vector.Vector) bool {
+	zone := proc.GetSessionInfo().TimeZone
+	if zone == nil {
+		return false
+	}
+	if output.GetType().Oid == types.T_datetime {
+		values := vector.GenerateFunctionFixedTypeParameter[types.Datetime](output)
+		lo, _ := values.GetValue(0)
+		hi, _ := values.GetValue(1)
+		minTimestamp, maxTimestamp, ok := types.DatetimeRangeToTimestampRange(lo, hi, zone)
+		if !ok || len(inputs) != 1 {
+			return false
+		}
+		instant := func(row uint64) (types.Timestamp, bool) {
+			switch inputs[0].GetType().Oid {
+			case types.T_int64:
+				v, null := vector.GenerateFunctionFixedTypeParameter[int64](inputs[0]).GetValue(row)
+				return types.UnixToTimestamp(v), !null
+			case types.T_uint64:
+				v, null := vector.GenerateFunctionFixedTypeParameter[uint64](inputs[0]).GetValue(row)
+				return types.UnixToTimestamp(int64(v)), !null
+			case types.T_float64:
+				v, null := vector.GenerateFunctionFixedTypeParameter[float64](inputs[0]).GetValue(row)
+				sec, nsec, valid := function.FloatUnixTimeParts(v)
+				return types.UnixToTimestamp(sec) + types.Timestamp(nsec/1000), valid && !null
+			}
+			return 0, false
+		}
+		left, leftOK := instant(0)
+		right, rightOK := instant(1)
+		return leftOK && rightOK && minTimestamp == left && maxTimestamp == right
+	}
+	if output.GetType().Oid != types.T_timestamp {
+		return false
+	}
+	// Calendar shifts/truncation can extend below the original input. Certify
+	// their complete local input/result envelope using the existing TZ owner.
+	lo, hi := types.Datetime(math.MaxInt64), types.Datetime(math.MinInt64)
+	include := func(v *vector.Vector) {
+		values := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](v)
+		for i := uint64(0); i < 2; i++ {
+			x, _ := values.GetValue(i)
+			d := x.ToDatetime(zone)
+			lo, hi = min(lo, d), max(hi, d)
+		}
+	}
+	include(output)
+	for i, arg := range args {
+		if types.T(arg.Typ.Id) == types.T_timestamp {
+			include(inputs[i])
+		}
+	}
+	_, _, ok := types.DatetimeRangeToTimestampRange(lo, hi, zone)
+	return ok
 }
 
 func hasConstNullArg(args []*plan.Expr) bool {
@@ -2923,14 +3808,7 @@ func isAllConst(exprs []*plan.Expr) bool {
 }
 
 func isConst(expr *plan.Expr) bool {
-	switch t := expr.Expr.(type) {
-	case *plan.Expr_Col:
-		return false
-	case *plan.Expr_F:
-		return isAllConst(t.F.Args)
-	default:
-		return true
-	}
+	return function.IsStatementConstant(expr)
 }
 
 type ExprEvalVector struct {

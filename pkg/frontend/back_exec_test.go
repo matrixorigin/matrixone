@@ -45,7 +45,10 @@ func TestBindBackExecSession(t *testing.T) {
 	}
 	proc := &process.Process{Base: &process.BaseProcess{}}
 
-	bindBackExecSession(proc, backSes)
+	parentSink := &struct{}{}
+	ctx := process.ContextWithWarningSink(context.Background(), parentSink)
+	bindBackExecSession(proc, backSes, ctx)
+	require.Same(t, parentSink, proc.WarningSink)
 
 	require.Same(t, backSes, proc.GetSession())
 	require.Equal(t, clientSessionID, proc.Base.SessionInfo.SessionId)
@@ -53,6 +56,13 @@ func TestBindBackExecSession(t *testing.T) {
 	realName, ok := clientSession.GetTempTable("db1", "tmp1")
 	require.True(t, ok)
 	require.Equal(t, "real_tmp1", realName)
+	cleaner, ok := proc.GetSession().(interface {
+		RemoveTempTablesByDatabase(string)
+	})
+	require.True(t, ok)
+	cleaner.RemoveTempTablesByDatabase("db1")
+	_, ok = clientSession.GetTempTable("db1", "tmp1")
+	require.False(t, ok)
 }
 
 func TestBackSessionInheritsForeignKeyChecks(t *testing.T) {
@@ -67,6 +77,46 @@ func TestBackSessionInheritsForeignKeyChecks(t *testing.T) {
 	require.Equal(t, int8(0), value)
 }
 
+func TestBackSessionDelegatesWarningRetentionLimit(t *testing.T) {
+	ctx := context.Background()
+	ses := newFeatureLimitTestSession(t)
+	ses.errInfo = &errInfo{maxCnt: MoDefaultErrorCount}
+	require.NoError(t, ses.SetSessionSysVar(ctx, "max_error_count", int64(7)))
+	ses.beginWarningDiagnostics()
+	backSes := &backSession{feSessionImpl: feSessionImpl{upstream: ses}}
+
+	require.Equal(t, 7, backSes.GetWarningRetentionLimit())
+}
+
+func TestBackSessionWarningRetentionDelegationBoundaries(t *testing.T) {
+	ctx := context.Background()
+	ses := newFeatureLimitTestSession(t)
+	ses.errInfo = &errInfo{maxCnt: MoDefaultErrorCount}
+	require.NoError(t, ses.SetSessionSysVar(ctx, "max_error_count", int64(7)))
+	ses.beginWarningDiagnostics()
+
+	var nilBackSes *backSession
+	require.Equal(t, process.WarningDiagnosticDefaultRetentionLimit, nilBackSes.GetWarningRetentionLimit())
+	defaultBackSes := &backSession{}
+	require.Equal(t, process.WarningDiagnosticDefaultRetentionLimit, defaultBackSes.GetWarningRetentionLimit())
+
+	parent := &backSession{feSessionImpl: feSessionImpl{upstream: ses}}
+	child := &backSession{parentBackSession: parent}
+	require.Equal(t, 7, child.GetWarningRetentionLimit())
+	value, err := child.GetSessionSysVar("max_error_count")
+	require.NoError(t, err)
+	require.Equal(t, int64(7), value)
+
+	proc := &process.Process{Base: &process.BaseProcess{}}
+	refreshBackgroundStatementScopedSessionInfo(parent, nil, proc)
+	require.Equal(t, 7, proc.Base.SessionInfo.MaxErrorCount)
+	require.True(t, proc.Base.SessionInfo.MaxErrorCountSet)
+
+	value, err = defaultBackSes.GetSessionSysVar("max_error_count")
+	require.NoError(t, err)
+	require.Equal(t, int64(process.WarningDiagnosticDefaultRetentionLimit), value)
+}
+
 func TestBindBackExecSessionWithoutUpstream(t *testing.T) {
 	backSessionID := uuid.New()
 	backSes := &backSession{
@@ -74,7 +124,7 @@ func TestBindBackExecSessionWithoutUpstream(t *testing.T) {
 	}
 	proc := &process.Process{Base: &process.BaseProcess{}}
 
-	bindBackExecSession(proc, backSes)
+	bindBackExecSession(proc, backSes, context.Background())
 
 	require.Nil(t, proc.GetSession())
 	require.Equal(t, uuid.Nil, proc.Base.SessionInfo.SessionId)

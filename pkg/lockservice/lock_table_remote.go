@@ -135,6 +135,12 @@ func (l *remoteLockTable) lock(
 		req.Lock.Rows = opts.originalRows
 		req.Lock.Options = opts.originalOptions
 	}
+	writerFairAdmission := req.Lock.Options.Mode == pb.LockMode_Shared &&
+		req.Lock.Options.Granularity == pb.Granularity_Row &&
+		req.Lock.Options.WriterFair
+	if writerFairAdmission {
+		req.Method = pb.Method_LockWriterFair
+	}
 
 	if err := ctx.Err(); err != nil {
 		logRemoteLockFailed(l.logger, txn, rows, opts, l.bind, err)
@@ -164,6 +170,16 @@ func (l *remoteLockTable) lock(
 		}
 	}()
 	resp, err := l.client.Send(rpcCtx, req)
+	if writerFairAdmission && moerr.IsMoErrCode(err, moerr.ErrNotSupported) {
+		// The capability-bearing method is rejected by an old or locally
+		// downgraded owner before admission. Retrying as Exclusive is stronger
+		// than the requested Shared lock and preserves the legacy no-barging
+		// behavior without requiring a cluster-wide version oracle.
+		req.Method = pb.Method_Lock
+		req.Lock.Options.Mode = pb.LockMode_Exclusive
+		req.Lock.Options.WriterFair = false
+		resp, err = l.client.Send(rpcCtx, req)
+	}
 
 	txn.Lock()
 
@@ -199,9 +215,14 @@ func (l *remoteLockTable) lock(
 		}
 
 		txn.markRemoteUnlockRequiredLocked(l.bind.Group, l.bind.Table)
+		txn.setBatchUnlockSupportedLocked(
+			l.bind.Group,
+			l.bind.Table,
+			resp.Lock.BatchUnlockSupported,
+		)
 		ownerLocalSnapshot := resp.Lock.TxnWaitingListOnLockTableSupported
 		recordRows := rows
-		recordOptions := opts.LockOptions
+		recordOptions := req.Lock.Options
 		if opts.replaceTxnLocks && len(opts.originalRows) > 0 {
 			// A concurrent Shared/sharded acquisition can invalidate the same
 			// origin-side plan while the RPC is in flight. In that case the owner
@@ -637,6 +658,32 @@ func (l *remoteLockTable) doUnlock(
 		return l.maybeHandleBindChanged(ctx, resp)
 	}
 	return moerr.AttachCause(ctx, err)
+}
+
+func (l *remoteLockTable) doBatchUnlock(
+	parent context.Context,
+	txn *activeTxn,
+	binds []pb.LockTable,
+	commitTS timestamp.Timestamp,
+) error {
+	ctx, cancel := context.WithTimeoutCause(parent, defaultRPCTimeout, moerr.CauseDoUnlock)
+	defer cancel()
+
+	req := acquireRequest()
+	defer releaseRequest(req)
+
+	req.Method = pb.Method_BatchUnlock
+	req.LockTable = binds[0]
+	req.BatchUnlock.TxnID = txn.txnID
+	req.BatchUnlock.CommitTS = commitTS
+	req.BatchUnlock.LockTables = append(req.BatchUnlock.LockTables[:0], binds...)
+
+	resp, err := l.client.Send(ctx, req)
+	if err != nil {
+		return moerr.AttachCause(ctx, err)
+	}
+	releaseResponse(resp)
+	return nil
 }
 
 func (l *remoteLockTable) doGetLock(parent context.Context, key []byte, txn pb.WaitTxn) (Lock, bool, error) {

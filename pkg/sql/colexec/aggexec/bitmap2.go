@@ -259,6 +259,7 @@ const (
 	bitmapSerialCookieNoRun = uint32(12346)
 	bitmapSerialCookie      = uint32(12347)
 	bitmapNoOffsetThreshold = 4
+	bitmapMaxPosition       = uint64(1<<15 - 1)
 )
 
 type bitmapContainerDescriptor struct {
@@ -897,10 +898,19 @@ func (e *bmpConstructExec) BatchFill(offset int, groups []uint64, vectors []*vec
 		if vectors[0].IsNull(uint64(row)) {
 			continue
 		} else {
-			x, y := e.getXY(group - 1)
 			value := vector.GetFixedAtNoTypeCheck[uint64](vectors[0], row)
+			if value > bitmapMaxPosition {
+				return moerr.NewInvalidInputNoCtxf(
+					"bitmap_construct_agg: bit position %d is out of range [0, %d]",
+					value, bitmapMaxPosition)
+			}
+			x, y := e.getXY(group - 1)
 			if e.state[x].mobs[y] == nil {
-				e.state[x].mobs[y], _ = makeBmp(e.mp, e.allocation)
+				mob, err := makeBmp(e.mp, e.allocation)
+				if err != nil {
+					return err
+				}
+				e.state[x].mobs[y] = mob
 			}
 			mob := e.state[x].mobs[y].(*bmp)
 			if err := mob.add(uint32(value)); err != nil {

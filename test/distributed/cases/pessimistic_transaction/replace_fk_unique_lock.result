@@ -65,7 +65,7 @@ create table child_generated(id int primary key, parent_id int,
 foreign key(parent_id) references parent_generated(id) on delete cascade);
 insert into parent_generated(id, u) values (1, 10), (2, 20);
 insert into child_generated values (1, 1), (2, 2);
-replace into parent_generated values (3, 10);
+replace into parent_generated values (3, default, 10);
 replace into parent_generated(id, g, u) values (4, default, 20);
 select id, g, u from parent_generated order by id;
 ➤ id[4,32,0]  ¦  g[4,32,0]  ¦  u[4,32,0]  𝄀
@@ -128,7 +128,7 @@ select * from child_auto_zero;
 set session sql_mode = default;
 select @@sql_mode;
 ➤ @@sql_mode[12,0,0]  𝄀
-ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
+ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,ENABLE_BOOL_SUMAVG
 create table parent_cached(id int primary key, v int);
 create table child_cached(id int primary key, parent_id int,
 foreign key(parent_id) references parent_cached(id) on delete cascade);

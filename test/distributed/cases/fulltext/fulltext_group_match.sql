@@ -39,4 +39,10 @@ where match(body, title) against('aurora' in natural language mode)
 group by category
 order by category;
 
+-- #25890: DISTINCT without an explicit GROUP BY must still expose MATCH to the
+-- fulltext-index rewrite when an ORDER BY is present.
+select distinct category from ft_gap
+where match(body, title) against('+aurora' in boolean mode)
+order by category;
+
 drop database fulltext_group_match;

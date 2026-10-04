@@ -24,9 +24,43 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/stretchr/testify/require"
 )
+
+func TestInsertRolePrivilegeRestoreRows(t *testing.T) {
+	ctx := defines.AttachAccountId(t.Context(), 20)
+	for _, count := range []int{0, 255, 256, 257, 512} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			bh := &backgroundExecTest{}
+			bh.init()
+			rows := make([]rolePrivilegeRestoreRow, count)
+			for i := range rows {
+				rows[i] = rolePrivilegeRestoreRow{
+					roleID: int64(i + 1), roleName: "read'er", objectType: "table", objectID: 200,
+					privilegeID: 2, privilegeName: "select", privilegeLevel: "d.t", operationUserID: 3,
+					grantedTime: "2026-09-30 00:00:00", withGrantOption: true,
+				}
+			}
+			require.NoError(t, insertRolePrivilegeRestoreRows(ctx, bh, rows))
+			require.Len(t, bh.executedSQLs, (count+255)/256)
+			for i, query := range bh.executedSQLs {
+				require.Equal(t, min(256, count-i*256), strings.Count(query, "'read''er'"))
+				require.Contains(t, query, ",'table',200,2,'select','d.t',3,'2026-09-30 00:00:00',true)")
+			}
+			queries := slices.Clone(bh.executedSQLs)
+			for i, query := range queries {
+				bh.executedSQLs = nil
+				failure := errors.New("insert failed")
+				bh.sql2err[query] = failure
+				require.ErrorIs(t, insertRolePrivilegeRestoreRows(ctx, bh, rows), failure)
+				require.Equal(t, queries[:i+1], bh.executedSQLs)
+				delete(bh.sql2err, query)
+			}
+		})
+	}
+}
 
 func TestBuildCatalogRestoreIdentityMap(t *testing.T) {
 	identityMap, err := buildCatalogRestoreIdentityMap(
@@ -262,17 +296,21 @@ func TestRemapRolePrivilegeObjectID(t *testing.T) {
 	}
 }
 
-func TestSystemCatalogTransformPoliciesHaveHandlers(t *testing.T) {
+func TestSystemCatalogRebuildPoliciesHaveHandlers(t *testing.T) {
 	require.NoError(t, validateSystemCatalogRestoreHandlers(t.Context()))
 	handlers := make(map[string]struct{}, len(systemCatalogPostRestoreHandlers))
 	for _, entry := range systemCatalogPostRestoreHandlers {
-		require.Equal(t, systemCatalogRestoreCopyThenTransform, systemCatalogRestorePolicies[entry.tableName])
+		require.Equal(t, systemCatalogRestoreRebuild, systemCatalogRestorePolicies[entry.tableName])
+		require.True(t, needSkipTable(sysAccountID, moCatalog, entry.tableName))
+		require.True(t, needSkipSystemTable(sysAccountID, &tableInfo{
+			dbName: moCatalog, tblName: entry.tableName, typ: "BASE TABLE",
+		}))
 		_, duplicate := handlers[entry.tableName]
 		require.False(t, duplicate)
 		handlers[entry.tableName] = struct{}{}
 	}
 	for tableName, policy := range systemCatalogRestorePolicies {
-		if policy == systemCatalogRestoreCopyThenTransform {
+		if policy == systemCatalogRestoreRebuild {
 			_, ok := handlers[tableName]
 			require.Truef(t, ok, "missing restore handler for %s", tableName)
 		}
@@ -289,10 +327,10 @@ func TestValidateSystemCatalogRestoreHandlersRejectsIncompleteRegistry(t *testin
 		slices.Clone(originalHandlers),
 		systemCatalogPostRestoreHandler{tableName: "mo_user"},
 	)
-	require.ErrorContains(t, validateSystemCatalogRestoreHandlers(t.Context()), "has no transform policy")
+	require.ErrorContains(t, validateSystemCatalogRestoreHandlers(t.Context()), "has no rebuild policy")
 	require.ErrorContains(t,
 		restoreSystemCatalogsAfterObjects(t.Context(), "", nil, 0, 0, 0),
-		"has no transform policy",
+		"has no rebuild policy",
 	)
 
 	systemCatalogPostRestoreHandlers = append(slices.Clone(originalHandlers), originalHandlers[0])
@@ -309,7 +347,7 @@ func TestValidateSystemCatalogRestoreHandlersRejectsIncompleteRegistry(t *testin
 
 	systemCatalogPostRestoreHandlers = originalHandlers
 	originalPolicy := systemCatalogRestorePolicies["mo_user"]
-	systemCatalogRestorePolicies["mo_user"] = systemCatalogRestoreCopyThenTransform
+	systemCatalogRestorePolicies["mo_user"] = systemCatalogRestoreRebuild
 	t.Cleanup(func() {
 		systemCatalogRestorePolicies["mo_user"] = originalPolicy
 	})

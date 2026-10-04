@@ -270,8 +270,14 @@ func (s *morpcStream) write(
 		seg.MessageSize = int32(size)
 		seg.Sequence = int32(index + 1)
 		seg.MaxSequence = int32(len(chunks))
-		n := copy(seg.Payload, chunk)
-		seg.Payload = seg.Payload[:n]
+		if cap(seg.Payload) < len(chunk) {
+			// Grow only for actual payloads, without copying overwritten bytes.
+			// Retained capacity stays within the existing segment limit.
+			capacity := min(s.limit, max(len(chunk), 2*cap(seg.Payload)))
+			seg.Payload = make([]byte, capacity)
+		}
+		seg.Payload = seg.Payload[:len(chunk)]
+		copy(seg.Payload, chunk)
 
 		s.logger.Debug("real segment proto size", zap.Int("ProtoSize", seg.ProtoSize()))
 
@@ -778,12 +784,21 @@ func (ss *Session) SendSubscriptionResponse(
 	sendCtx context.Context, tail logtail.TableLogtail, closeCB func(),
 ) error {
 	ss.logger.Info("send subscription response", zap.Any("table", tail.Table), zap.String("To", tail.Ts.String()))
+	// Snapshot progress shares the incremental admission frontier: a delayed
+	// read barrier must not enqueue an older update after this subscription.
+	to := *tail.Ts
+	ss.publishMu.Lock()
+	defer ss.publishMu.Unlock()
 
 	resp := ss.responses.Acquire()
 	resp.closeCB = closeCB
 	resp.Response = newSubscritpionResponse(tail)
 	err := ss.sendResponse(sendCtx, resp, false)
 	if err == nil {
+		ss.publishInit.Do(func() { ss.exactFrom = to })
+		if ss.exactFrom.Less(to) {
+			ss.exactFrom = to
+		}
 		atomic.AddInt32(&ss.active, 1)
 	}
 	return err
@@ -832,6 +847,49 @@ func (ss *Session) TrySendUpdateResponse(
 	resp := ss.responses.Acquire()
 	resp.closeCB = closeCB
 	resp.Response = newUpdateResponse(from, to, tails...)
+	return ss.sendResponse(sendCtx, resp, false)
+}
+
+// TrySendProgressResponse makes to observable through the ordinary CN apply
+// pipeline even when every preceding logtail was filtered out for this
+// session. Responses are admitted by the global logtail sender, so holding
+// publishMu across the non-blocking hand-off preserves the same per-session
+// frontier order as Publish.
+func (ss *Session) TrySendProgressResponse(
+	sendCtx context.Context,
+	to timestamp.Timestamp,
+) error {
+	ss.publishMu.Lock()
+	defer ss.publishMu.Unlock()
+
+	// Subscription snapshots and incremental updates both initialize this
+	// frontier. A barrier can also be the session's first progress admission.
+	ss.publishInit.Do(func() {
+		ss.exactFrom = to
+	})
+	if to.LessEq(ss.exactFrom) {
+		return nil
+	}
+
+	resp := ss.responses.Acquire()
+	resp.Response = newUpdateResponse(ss.exactFrom, to)
+	if err := ss.sendResponse(sendCtx, resp, false); err != nil {
+		return err
+	}
+	ss.exactFrom = to
+	return nil
+}
+
+// TrySendReadBarrierResponse preserves global logtail progress: a congested
+// session reconnects instead of blocking every other subscriber behind its
+// barrier response.
+func (ss *Session) TrySendReadBarrierResponse(
+	sendCtx context.Context,
+	barrierID uint64,
+	ts timestamp.Timestamp,
+) error {
+	resp := ss.responses.Acquire()
+	resp.Response = newReadBarrierResponse(barrierID, ts)
 	return ss.sendResponse(sendCtx, resp, false)
 }
 
@@ -986,6 +1044,18 @@ func newUnsubscriptionResponse(
 	return &logtail.LogtailResponse_UnsubscribeResponse{
 		UnsubscribeResponse: &logtail.UnSubscribeResponse{
 			Table: &table,
+		},
+	}
+}
+
+func newReadBarrierResponse(
+	barrierID uint64,
+	ts timestamp.Timestamp,
+) *logtail.LogtailResponse_ReadBarrierResponse {
+	return &logtail.LogtailResponse_ReadBarrierResponse{
+		ReadBarrierResponse: &logtail.ReadBarrierResponse{
+			BarrierId: barrierID,
+			Timestamp: &ts,
 		},
 	}
 }

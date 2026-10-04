@@ -32,6 +32,10 @@ type container struct {
 	canFreeVecIdx     map[int]bool //auto incr & expand constant vecotr.need free
 	clusterByExecutor colexec.ExpressionExecutor
 	compPkExecutor    colexec.ExpressionExecutor
+	// autoIncrementGenerated is statement-row provenance captured before the
+	// allocator fills the AUTO_INCREMENT column. It is emitted as a transient
+	// bool vector only for the ordered INSERT IGNORE path.
+	autoIncrementGenerated []bool
 	// tblId is a local copy of TableDef.TblId, refreshed by
 	// refreshAutoIncrementTableID.  Storing it here avoids mutating the
 	// shared *plan.TableDef that other operators may read concurrently.
@@ -48,15 +52,17 @@ type PreInsert struct {
 	// letter case: origin
 	Attrs []string
 
-	EstimatedRowCount  int64
-	CompPkeyExpr       *plan.Expr
-	ClusterByExpr      *plan.Expr
-	ColOffset          int32
-	RejectZeroTemporal bool
-	HasTargetSelector  bool
-	TargetRowNumberCol int32
-	TargetActiveCol    int32
-	TargetRowIDCol     int32
+	EstimatedRowCount            int64
+	CompPkeyExpr                 *plan.Expr
+	ClusterByExpr                *plan.Expr
+	ColOffset                    int32
+	RejectZeroTemporal           bool
+	TrackAutoIncrementGenerated  bool
+	AutoIncrementGeneratedColumn int32
+	HasTargetSelector            bool
+	TargetRowNumberCol           int32
+	TargetActiveCol              int32
+	TargetRowIDCol               int32
 
 	vm.OperatorBase
 }
@@ -97,6 +103,7 @@ func (preInsert *PreInsert) Release() {
 }
 
 func (preInsert *PreInsert) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	preInsert.ctr.autoIncrementGenerated = nil
 	if preInsert.ctr.compPkExecutor != nil {
 		preInsert.ctr.compPkExecutor.ResetForNextQuery()
 	}
@@ -106,6 +113,7 @@ func (preInsert *PreInsert) Reset(proc *process.Process, pipelineFailed bool, er
 }
 
 func (preInsert *PreInsert) Free(proc *process.Process, pipelineFailed bool, err error) {
+	preInsert.ctr.autoIncrementGenerated = nil
 	if preInsert.ctr.compPkExecutor != nil {
 		preInsert.ctr.compPkExecutor.Free()
 		preInsert.ctr.compPkExecutor = nil

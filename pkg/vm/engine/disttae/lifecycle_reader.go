@@ -70,7 +70,7 @@ func (tbl *txnTable) LifecycleReadObject(
 	}
 	tbl.ensureSeqnumsAndTypesExpectRowid()
 	sortKeyPos, sortKeyIsPK := tbl.getSortKeyPosAndSortKeyIsPK()
-	host, err := newCNMergeTask(
+	host, err := newLifecycleRewriteTask(
 		ctx,
 		tbl,
 		snapshot,

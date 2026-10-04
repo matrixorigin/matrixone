@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -195,11 +196,6 @@ func (tTxnOp *testTxnOperator) AppendEventCallback(event client.EventType, callb
 }
 
 func (tTxnOp *testTxnOperator) Debug(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (tTxnOp *testTxnOperator) NextSequence() uint64 {
 	//TODO implement me
 	panic("implement me")
 }
@@ -1016,6 +1012,79 @@ func TestDoUpgrade(t *testing.T) {
 	)
 }
 
+func TestDoUpgradeWaitsForTenantSnapshotProtocol(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		protocol   string
+		wantErr    bool
+		wantPrefix []string
+	}{
+		{
+			name:       "older writer blocks snapshot",
+			protocol:   `{"method":"GETPROTOCOLVERSION","result":"cn-a:32,cn-b:31"}`,
+			wantErr:    true,
+			wantPrefix: []string{"SELECT mo_ctl('cn', 'GetProtocolVersion', '')"},
+		},
+		{
+			name:     "all writers ready before snapshot",
+			protocol: `{"method":"GETPROTOCOLVERSION","result":"cn-a:32,cn-b:32"}`,
+			wantPrefix: []string{
+				"SELECT mo_ctl('cn', 'GetProtocolVersion', '')",
+				"select account_id from mo_account where account_id > -1 order by account_id limit 16",
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sid := ""
+			runtime.RunTest(
+				sid,
+				func(rt runtime.Runtime) {
+					h := newTestVersionHandler("2.0.0", "1.2.0", versions.No, versions.Yes, 2)
+					h.metadata.RequiredProtocolVersion = defines.MORPCVersion32
+					var calls []string
+					b := newServiceForTest(
+						sid,
+						&memLocker{},
+						clock.NewHLCClock(func() int64 { return 0 }, 0),
+						nil,
+						executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+							return executor.Result{}, nil
+						}),
+						func(s *service) { s.handles = []VersionHandle{h} },
+					)
+					b.upgrade.upgradeTenantBatch = 16
+
+					txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+					txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+					txnExecutor := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+						calls = append(calls, sql)
+						if sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')" {
+							return newBootstrapStringResult(test.protocol), nil
+						}
+						return executor.Result{}, nil
+					}, txnOperator)
+
+					_, err := b.doUpgrade(context.Background(), versions.VersionUpgrade{
+						FromVersion:    "1.2.0",
+						ToVersion:      "2.0.0",
+						FinalVersion:   "2.0.0",
+						State:          versions.StateCreated,
+						UpgradeTenant:  versions.Yes,
+						UpgradeCluster: versions.No,
+					}, txnExecutor)
+					if test.wantErr {
+						require.ErrorContains(t, err, "node")
+					} else {
+						require.NoError(t, err)
+					}
+					require.GreaterOrEqual(t, len(calls), len(test.wantPrefix))
+					require.Equal(t, test.wantPrefix, calls[:len(test.wantPrefix)])
+				},
+			)
+		})
+	}
+}
+
 func TestPerformUpgradeReturnsWhenTenantUpgradeInProgress(t *testing.T) {
 	sid := ""
 	runtime.RunTest(
@@ -1179,4 +1248,54 @@ func (h *testVersionHandle) HandleTenantUpgrade(ctx context.Context, tenantID in
 
 func (h *testVersionHandle) HandleCreateFrameworkDeps(txn executor.TxnExecutor) error {
 	return nil
+}
+
+func TestInitSystemViewsRetryAndCancellation(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		first         error
+		retry, cancel bool
+	}{
+		{name: "success"},
+		{name: "uncertain commit", first: moerr.NewTxnUnknown(t.Context(), "test"), retry: true},
+		{name: "concurrent DDL", first: moerr.NewTxnNeedRetryNoCtx(), retry: true},
+		{name: "authoring rejected", first: moerr.NewNotSupportedNoCtx("protocol version 97")},
+		{name: "rollback does not mask body", first: errors.Join(errors.New("body failed"), moerr.NewTxnNeedRetryNoCtx())},
+		{name: "rollback failure is not retried", first: errors.Join(moerr.NewTxnNeedRetryNoCtx(), errors.New("rollback failed"))},
+		{name: "cancelled retry", first: moerr.NewTxnNeedRetryNoCtx(), cancel: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			attempts := 0
+			exec := mock_executor.NewMockSQLExecutor(gomock.NewController(t))
+			exec.EXPECT().ExecTxn(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+				func(ctx context.Context, body func(executor.TxnExecutor) error, _ executor.Options) error {
+					attempts++
+					if attempts == 1 && tc.first != nil {
+						if tc.cancel {
+							cancel()
+						}
+						return tc.first
+					}
+					return body(executor.NewMemTxnExecutor(func(string) (executor.Result, error) {
+						return newBootstrapStringResult(catalog.SystemViewRel), nil
+					}, nil))
+				}).AnyTimes()
+			err := InitSystemViews(ctx, exec)
+			switch {
+			case tc.cancel:
+				require.ErrorIs(t, err, context.Canceled)
+			case tc.first != nil && !tc.retry:
+				require.ErrorIs(t, err, tc.first)
+			default:
+				require.NoError(t, err)
+			}
+			want := 1
+			if tc.retry {
+				want = 2
+			}
+			require.Equal(t, want, attempts)
+		})
+	}
 }

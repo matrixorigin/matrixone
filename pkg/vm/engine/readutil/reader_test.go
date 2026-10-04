@@ -17,6 +17,7 @@ package readutil
 import (
 	"context"
 	"errors"
+	"math"
 	"sync/atomic"
 	"testing"
 
@@ -24,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -43,6 +45,100 @@ type singlePersistedBlockSource struct {
 	info       objectio.BlockInfo
 	emitted    bool
 	closeCount int32
+}
+
+type singleInMemoryVectorSource struct {
+	batch      int
+	closeCount int32
+}
+
+func (s *singleInMemoryVectorSource) Next(
+	_ context.Context,
+	_ []string,
+	_ []types.Type,
+	_ []uint16,
+	_ int32,
+	_ any,
+	mp *mpool.MPool,
+	out *batch.Batch,
+) (*objectio.BlockInfo, engine.DataState, error) {
+	if s.batch >= 2 {
+		return nil, engine.End, nil
+	}
+	rows := []struct {
+		id     int32
+		entry  []float32
+		bucket int32
+	}{
+		{id: 1, entry: []float32{0, 0}, bucket: 0},
+		{id: 2, entry: []float32{2, 0}, bucket: 1},
+	}
+	if s.batch == 1 {
+		rows = rows[:1]
+		rows[0] = struct {
+			id     int32
+			entry  []float32
+			bucket int32
+		}{id: 3, entry: []float32{3, 0}, bucket: 1}
+	}
+	for _, row := range rows {
+		if err := vector.AppendFixed(out.Vecs[0], row.id, false, mp); err != nil {
+			return nil, engine.InMem, err
+		}
+		if err := vector.AppendArray(out.Vecs[1], row.entry, false, mp); err != nil {
+			return nil, engine.InMem, err
+		}
+		if err := vector.AppendFixed(out.Vecs[2], row.bucket, false, mp); err != nil {
+			return nil, engine.InMem, err
+		}
+	}
+	out.SetRowCount(len(rows))
+	s.batch++
+	return nil, engine.InMem, nil
+}
+
+func (*singleInMemoryVectorSource) ApplyTombstones(
+	context.Context, *objectio.Blockid, []int64, engine.TombstoneApplyPolicy,
+) ([]int64, error) {
+	return nil, nil
+}
+func (*singleInMemoryVectorSource) GetTombstones(
+	context.Context, *objectio.Blockid,
+) (objectio.Bitmap, error) {
+	return objectio.Bitmap{}, nil
+}
+func (*singleInMemoryVectorSource) SetOrderBy([]*plan.OrderBySpec)  {}
+func (*singleInMemoryVectorSource) GetOrderBy() []*plan.OrderBySpec { return nil }
+func (*singleInMemoryVectorSource) SetFilterZM(objectio.ZoneMap)    {}
+func (s *singleInMemoryVectorSource) Close() {
+	atomic.AddInt32(&s.closeCount, 1)
+}
+func (*singleInMemoryVectorSource) String() string { return "singleInMemoryVectorSource" }
+
+func testVectorTopKParam(colPos int32, limit uint64) *plan.IndexReaderParam {
+	vectorType := plan.Type{Id: int32(types.T_array_float32), Width: 2}
+	vectorCol := &plan.Expr{
+		Typ: vectorType,
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			ColPos: colPos,
+		}},
+	}
+	query := &plan.Expr{
+		Typ: vectorType,
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_VecVal{VecVal: string(types.ArrayToBytes([]float32{0, 0}))},
+		}},
+	}
+	return &plan.IndexReaderParam{
+		OrderBy: []*plan.OrderBySpec{{Expr: &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_float64)},
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{ObjName: metric.DistFn_L2sqDistance},
+				Args: []*plan.Expr{vectorCol, query},
+			}},
+		}}},
+		Limit: plan2.MakePlan2Uint64ConstExprWithType(limit),
+	}
 }
 
 func (s *singlePersistedBlockSource) Next(
@@ -219,89 +315,179 @@ func TestNewReaderTransfersSourceAndFilterToReader(t *testing.T) {
 }
 
 func TestReaderLateMaterializationSkipsPersistedPayload(t *testing.T) {
-	ctx := context.Background()
-	fs := testutil.NewSharedFS()
-	writeMP := mpool.MustNewZero()
-	input := batch.NewWithSize(2)
-	input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	input.Vecs[1] = vector.NewVec(types.T_text.ToType())
-	for i := 0; i < 8; i++ {
-		require.NoError(t, vector.AppendFixed(input.Vecs[0], int32(i), false, writeMP))
-		require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte("persisted-payload"), false, writeMP))
-	}
-	input.SetRowCount(8)
-	writer := ioutil.ConstructWriter(0, []uint16{0, 1}, -1, false, false, fs)
-	_, err := writer.WriteBatch(input)
-	require.NoError(t, err)
-	_, _, err = writer.Sync(ctx)
-	require.NoError(t, err)
-	stats := writer.GetObjectStats()
-	input.Clean(writeMP)
-	require.Zero(t, writeMP.CurrNB())
-	mpool.DeleteMPool(writeMP)
+	for _, aboveThreshold := range []bool{false, true} {
+		t.Run(map[bool]string{false: "at_threshold", true: "above_threshold"}[aboveThreshold], func(t *testing.T) {
+			ctx := fileservice.WithFileServicePolicy(context.Background(), fileservice.SkipFullFilePreloads|fileservice.SkipDiskCacheWrites)
+			fs := testutil.NewSharedFS()
+			writeMP := mpool.MustNewZero()
+			input := batch.NewWithSize(2)
+			input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+			input.Vecs[1] = vector.NewVec(types.T_text.ToType())
+			for i := 0; i < 8; i++ {
+				require.NoError(t, vector.AppendFixed(input.Vecs[0], int32(i), false, writeMP))
+				require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte("persisted-payload"), false, writeMP))
+			}
+			input.SetRowCount(8)
+			writer := ioutil.ConstructWriter(0, []uint16{0, 1}, -1, false, false, fs)
+			_, err := writer.WriteBatch(input)
+			require.NoError(t, err)
+			_, _, err = writer.Sync(ctx)
+			require.NoError(t, err)
+			stats := writer.GetObjectStats()
+			input.Clean(writeMP)
+			require.Zero(t, writeMP.CurrNB())
+			mpool.DeleteMPool(writeMP)
 
-	tableDef := &plan.TableDef{
-		Name:          "late_reader_test",
-		Name2ColIndex: map[string]int32{"id": 0, "payload": 1},
-		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
-		Cols: []*plan.ColDef{{
-			Name:    "id",
-			Seqnum:  0,
-			Primary: true,
-			Typ:     plan.Type{Id: int32(types.T_int32)},
-		}, {
-			Name:   "payload",
-			Seqnum: 1,
-			Typ:    plan.Type{Id: int32(types.T_text)},
-		}},
+			tableDef := &plan.TableDef{
+				Name:          "late_reader_test",
+				Name2ColIndex: map[string]int32{"id": 0, "payload": 1},
+				Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+				Cols: []*plan.ColDef{{
+					Name:    "id",
+					Seqnum:  0,
+					Primary: true,
+					Typ:     plan.Type{Id: int32(types.T_int32)},
+				}, {
+					Name:   "payload",
+					Seqnum: 1,
+					Typ:    plan.Type{Id: int32(types.T_text)},
+				}},
+			}
+			source := &singlePersistedBlockSource{info: stats.ConstructBlockInfo(0)}
+			queryMP := mpool.MustNewZero()
+			r, err := NewReader(
+				ctx,
+				queryMP,
+				nil,
+				fs,
+				tableDef,
+				timestamp.Timestamp{},
+				nil,
+				source,
+				0,
+				engine.FilterHint{},
+			)
+			require.NoError(t, err)
+			r.readBlockCnt = r.threshHold
+			if aboveThreshold {
+				r.readBlockCnt++
+			}
+			observed := &policyObservingFS{FileService: fs}
+			r.fs = observed
+			mr := NewMergeReader([]engine.Reader{r})
+
+			output := batch.NewWithSize(2)
+			output.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int32.ToType())
+			output.Vecs[1] = vector.NewOffHeapVecWithType(types.T_text.ToType())
+			isEnd, err := mr.ReadWithFilter(
+				ctx,
+				[]string{"id", "payload"},
+				[]int{0},
+				func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
+					require.Equal(t, []int{0}, loaded)
+					require.Equal(t, 8, bat.Vecs[0].Length())
+					require.Zero(t, bat.Vecs[1].Length())
+					bat.Vecs[0].CleanOnlyData()
+					bat.SetRowCount(0)
+					return engine.ReaderFilterResult{}, nil
+				},
+				queryMP,
+				output,
+			)
+			require.NoError(t, err)
+			require.False(t, isEnd)
+			require.Zero(t, output.RowCount())
+			require.Zero(t, output.Vecs[0].Length())
+			require.Zero(t, output.Vecs[1].Length())
+
+			want := fileservice.Policy(fileservice.SkipFullFilePreloads | fileservice.SkipDiskCacheWrites)
+			if aboveThreshold {
+				want |= fileservice.SkipMemoryCacheWrites
+			}
+			require.Contains(t, observed.policies, want)
+			require.NoError(t, mr.Close())
+			require.Equal(t, int32(1), atomic.LoadInt32(&source.closeCount))
+
+			output.Clean(queryMP)
+			require.Zero(t, queryMP.CurrNB())
+			mpool.DeleteMPool(queryMP)
+		})
 	}
-	source := &singlePersistedBlockSource{info: stats.ConstructBlockInfo(0)}
+}
+
+func TestReaderAppliesInMemoryFilterBeforeVectorTopK(t *testing.T) {
+	ctx := context.Background()
 	queryMP := mpool.MustNewZero()
+	defer mpool.DeleteMPool(queryMP)
+	tableDef := &plan.TableDef{
+		Name:          "in_memory_filtered_topk",
+		Name2ColIndex: map[string]int32{"id": 0, "entry": 1, "bucket": 2},
+		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+		Cols: []*plan.ColDef{
+			{Name: "id", Seqnum: 0, Primary: true, Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "entry", Seqnum: 1, Typ: plan.Type{Id: int32(types.T_array_float32), Width: 2}},
+			{Name: "bucket", Seqnum: 2, Typ: plan.Type{Id: int32(types.T_int32)}},
+		},
+	}
+	source := &singleInMemoryVectorSource{}
 	r, err := NewReader(
-		ctx,
-		queryMP,
-		nil,
-		fs,
-		tableDef,
-		timestamp.Timestamp{},
-		nil,
-		source,
-		0,
-		engine.FilterHint{},
+		ctx, queryMP, nil, nil, tableDef, timestamp.Timestamp{}, nil, source, 0, engine.FilterHint{},
 	)
 	require.NoError(t, err)
-	mr := NewMergeReader([]engine.Reader{r})
 
-	output := batch.NewWithSize(2)
-	output.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int32.ToType())
-	output.Vecs[1] = vector.NewOffHeapVecWithType(types.T_text.ToType())
-	isEnd, err := mr.ReadWithFilter(
+	output := batch.NewWithSize(3)
+	for pos, typ := range []types.Type{
+		types.T_int32.ToType(), types.New(types.T_array_float32, 2, 0), types.T_int32.ToType(),
+	} {
+		output.Vecs[pos] = vector.NewOffHeapVecWithType(typ)
+	}
+	isEnd, topKApplied, err := r.ReadWithFilterAndTopK(
 		ctx,
-		[]string{"id", "payload"},
-		[]int{0},
+		[]string{"id", "entry", "bucket"},
+		[]int{0, 2},
 		func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
-			require.Equal(t, []int{0}, loaded)
-			require.Equal(t, 8, bat.Vecs[0].Length())
-			require.Zero(t, bat.Vecs[1].Length())
-			bat.Vecs[0].CleanOnlyData()
-			bat.SetRowCount(0)
-			return engine.ReaderFilterResult{}, nil
+			require.Nil(t, loaded, "in-memory rows are already fully materialized")
+			buckets := vector.MustFixedColWithTypeCheck[int32](bat.Vecs[2])
+			sels := make([]int64, 0, len(buckets))
+			for pos, bucket := range buckets {
+				if bucket == 1 {
+					sels = append(sels, int64(pos))
+				}
+			}
+			bat.Shrink(sels, false)
+			return engine.ReaderFilterResult{Sels: sels}, nil
 		},
+		testVectorTopKParam(1, 1),
 		queryMP,
 		output,
 	)
 	require.NoError(t, err)
 	require.False(t, isEnd)
-	require.Zero(t, output.RowCount())
-	require.Zero(t, output.Vecs[0].Length())
-	require.Zero(t, output.Vecs[1].Length())
+	require.True(t, topKApplied)
+	require.Equal(t, 1, output.RowCount())
+	require.Equal(t, int32(2), vector.GetFixedAtNoTypeCheck[int32](output.Vecs[0], 0),
+		"the nearest row fails the residual; filter-before-TopK must return the farther survivor")
+	require.Equal(t, []float64{4}, vector.MustFixedColWithTypeCheck[float64](output.Vecs[3]))
 
-	require.NoError(t, mr.Close())
+	isEnd, topKApplied, err = r.ReadWithFilterAndTopK(
+		ctx,
+		[]string{"id", "entry", "bucket"},
+		[]int{0, 2},
+		func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
+			return engine.ReaderFilterResult{All: true}, nil
+		},
+		testVectorTopKParam(1, 1),
+		queryMP,
+		output,
+	)
+	require.NoError(t, err)
+	require.False(t, isEnd)
+	require.True(t, topKApplied)
+	require.True(t, output.IsEmpty(), "the reader must retain its heap and reject a farther row from the next batch")
+	require.NoError(t, r.Close())
 	require.Equal(t, int32(1), atomic.LoadInt32(&source.closeCount))
-
 	output.Clean(queryMP)
 	require.Zero(t, queryMP.CurrNB())
-	mpool.DeleteMPool(queryMP)
 }
 
 func TestMergeReaderRejectsNilReaderFilter(t *testing.T) {
@@ -367,9 +553,126 @@ func TestReaderSetIndexParamDoesNotPreallocateDistHeap(t *testing.T) {
 	require.Equal(t, limit, r.orderByLimit.Limit)
 	require.Equal(t, plan.BoundType_UNBOUNDED, r.orderByLimit.LowerBoundType)
 	require.Equal(t, plan.BoundType_INCLUSIVE, r.orderByLimit.UpperBoundType)
-	require.Equal(t, float64(4), r.orderByLimit.UpperBound)
+	// The L2 upper bound (2) is widened to the next float32 before squaring so the squared-domain
+	// gate stays a superset of the float32 distance a row is gated on (#29040), not just 1 f64 ULP.
+	require.Equal(t, squareL2BoundOutward(2, math.Inf(1)), r.orderByLimit.UpperBound)
 	require.Zero(t, len(r.orderByLimit.DistHeap))
 	require.Zero(t, cap(r.orderByLimit.DistHeap))
+}
+
+// TestReaderSetIndexParamL2LowerBoundZeroBecomesUnbounded pins the #29040 boundary fix: an inclusive
+// L2 lower bound of exactly 0 (`l2_distance(...) >= 0`) must convert to UNBOUNDED, not to a squared
+// gate. squareL2BoundOutward widens 0 toward -Inf to -smallestFloat32, but squaring that turns it
+// POSITIVE (~1.96e-90), so the squared storage gate would reject an exact-zero distance (0 >= 1.96e-90
+// is false) even though `>= 0` must include it.
+func TestReaderSetIndexParamL2LowerBoundZeroBecomesUnbounded(t *testing.T) {
+	// The hazard the fix guards against: 0 widened+squared is strictly positive.
+	require.Positive(t, squareL2BoundOutward(0, math.Inf(-1)),
+		"squaring a 0 bound widened toward -Inf is positive, which would exclude an exact-zero distance")
+
+	r := &reader{}
+	vectorCol := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_array_float32), Width: 2},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 3}},
+	}
+	vectorLit := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_array_float32), Width: 2, NotNullable: true},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_VecVal{VecVal: string(types.ArrayToBytes[float32]([]float32{0, 0}))}}},
+	}
+	orderExpr := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_float64), NotNullable: true},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: metric.DistFn_L2Distance},
+			Args: []*plan.Expr{vectorCol, vectorLit},
+		}},
+	}
+	param := &plan.IndexReaderParam{
+		OrderBy:      []*plan.OrderBySpec{{Expr: orderExpr}},
+		Limit:        plan2.MakePlan2Uint64ConstExprWithType(10),
+		OrigFuncName: metric.DistFn_L2Distance,
+		DistRange: &plan.DistRange{
+			LowerBoundType: plan.BoundType_INCLUSIVE,
+			LowerBound: &plan.Expr{
+				Typ:  plan.Type{Id: int32(types.T_float64)},
+				Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Dval{Dval: 0}}},
+			},
+		},
+	}
+	require.NotPanics(t, func() { r.SetIndexParam(param) })
+	require.NotNil(t, r.orderByLimit)
+	require.Equal(t, plan.BoundType_UNBOUNDED, r.orderByLimit.LowerBoundType,
+		"an L2 lower bound of 0 must be unbounded so the squared gate keeps exact-zero-distance rows (#29040)")
+}
+
+func TestReaderSetIndexParamConservativelyConvertsL2UpperBounds(t *testing.T) {
+	vectorCol := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_array_float32), Width: 3},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{ColPos: 3},
+		},
+	}
+	vectorLit := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_array_float32), Width: 3, NotNullable: true},
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{Value: &plan.Literal_VecVal{
+				VecVal: string(types.ArrayToBytes[float32]([]float32{0, 0, 0})),
+			}},
+		},
+	}
+	orderExpr := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_float64), NotNullable: true},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: metric.DistFn_L2sqDistance},
+			Args: []*plan.Expr{vectorCol, vectorLit},
+		}},
+	}
+	floatLiteral := func(value float64) *plan.Expr {
+		return &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_float64)},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_Dval{Dval: value},
+			}},
+		}
+	}
+
+	tests := []struct {
+		name      string
+		boundType plan.BoundType
+		bound     float64
+		entry     []float32
+		distance  float64
+	}{
+		{name: "inclusive upper raw three", boundType: plan.BoundType_INCLUSIVE, bound: math.Sqrt(3), entry: []float32{1, 1, 1}, distance: 3},
+		{name: "exclusive upper widens gate", boundType: plan.BoundType_EXCLUSIVE, bound: 2, entry: []float32{2, 0, 0}, distance: 4},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			distRange := &plan.DistRange{
+				UpperBoundType: test.boundType,
+				UpperBound:     floatLiteral(test.bound),
+			}
+			r := &reader{}
+			r.SetIndexParam(&plan.IndexReaderParam{
+				OrderBy:      []*plan.OrderBySpec{{Expr: orderExpr}},
+				Limit:        plan2.MakePlan2Uint64ConstExprWithType(1),
+				OrigFuncName: metric.DistFn_L2Distance,
+				DistRange:    distRange,
+			})
+			require.NotNil(t, r.orderByLimit)
+			squared := test.bound * test.bound
+			require.Greater(t, r.orderByLimit.UpperBound, squared)
+
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+			entries := vector.NewVec(types.New(types.T_array_float32, 3, 0))
+			defer entries.Free(mp)
+			require.NoError(t, vector.AppendArray(entries, test.entry, false, mp))
+			rows, distances, err := objectio.TopNVector(context.Background(), nil, entries, r.orderByLimit)
+			require.NoError(t, err)
+			require.Equal(t, []int64{0}, rows)
+			require.Equal(t, []float64{test.distance}, distances)
+		})
+	}
 }
 
 func TestReaderSetIndexParamSupportsOrderedLimit(t *testing.T) {
@@ -455,6 +758,41 @@ type countingReader struct {
 	closeErr     error
 }
 
+type filteredTopKCountingReader struct {
+	*countingReader
+	topKApplied bool
+}
+
+func (r *filteredTopKCountingReader) ReadWithFilterAndTopK(
+	ctx context.Context,
+	cols []string,
+	earlyColumns []int,
+	filter engine.ReaderFilter,
+	indexParam *plan.IndexReaderParam,
+	mp *mpool.MPool,
+	outBatch *batch.Batch,
+) (bool, bool, error) {
+	isEnd, err := r.Read(ctx, cols, nil, mp, outBatch)
+	return isEnd, r.topKApplied, err
+}
+
+type lateMaterializedCountingReader struct {
+	*countingReader
+	filterCalls int
+}
+
+func (r *lateMaterializedCountingReader) ReadWithFilter(
+	ctx context.Context,
+	cols []string,
+	earlyColumns []int,
+	filter engine.ReaderFilter,
+	mp *mpool.MPool,
+	outBatch *batch.Batch,
+) (bool, error) {
+	r.filterCalls++
+	return r.Read(ctx, cols, nil, mp, outBatch)
+}
+
 func (r *countingReader) Read(_ context.Context, _ []string, _ *plan.Expr, _ *mpool.MPool, _ *batch.Batch) (bool, error) {
 	if r.readErr != nil && int(atomic.LoadInt32(&r.emit)) >= r.readErrAfter {
 		return false, r.readErr
@@ -474,6 +812,77 @@ func (r *countingReader) SetIndexParam(*plan.IndexReaderParam) {}
 func (r *countingReader) SetFilterZM(objectio.ZoneMap)         {}
 
 var _ engine.Reader = (*countingReader)(nil)
+
+func TestMergeReaderReadWithFilterAndTopKDelegatesAndFallsBack(t *testing.T) {
+	filter := func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
+		return engine.ReaderFilterResult{}, nil
+	}
+
+	t.Run("filtered topk reader", func(t *testing.T) {
+		var closeCount int32
+		child := &filteredTopKCountingReader{
+			countingReader: &countingReader{rows: 1, closeCount: &closeCount},
+			topKApplied:    true,
+		}
+		reader := NewMergeReader([]engine.Reader{child})
+
+		isEnd, topKApplied, err := reader.ReadWithFilterAndTopK(
+			context.Background(), nil, nil, filter, nil, nil, batch.New(nil),
+		)
+		require.NoError(t, err)
+		require.False(t, isEnd)
+		require.True(t, topKApplied)
+
+		isEnd, topKApplied, err = reader.ReadWithFilterAndTopK(
+			context.Background(), nil, nil, filter, nil, nil, batch.New(nil),
+		)
+		require.NoError(t, err)
+		require.True(t, isEnd)
+		require.False(t, topKApplied)
+		require.Equal(t, int32(1), atomic.LoadInt32(&closeCount))
+	})
+
+	t.Run("late materialization reader", func(t *testing.T) {
+		var closeCount int32
+		child := &lateMaterializedCountingReader{
+			countingReader: &countingReader{rows: 1, closeCount: &closeCount},
+		}
+		reader := NewMergeReader([]engine.Reader{child})
+		isEnd, topKApplied, err := reader.ReadWithFilterAndTopK(
+			context.Background(), nil, nil, filter, nil, nil, batch.New(nil),
+		)
+		require.NoError(t, err)
+		require.False(t, isEnd)
+		require.False(t, topKApplied)
+		require.Equal(t, 1, child.filterCalls)
+	})
+
+	t.Run("plain reader", func(t *testing.T) {
+		var closeCount int32
+		child := &countingReader{rows: 1, closeCount: &closeCount}
+		reader := NewMergeReader([]engine.Reader{child})
+		isEnd, topKApplied, err := reader.ReadWithFilterAndTopK(
+			context.Background(), nil, nil, filter, nil, nil, batch.New(nil),
+		)
+		require.NoError(t, err)
+		require.False(t, isEnd)
+		require.False(t, topKApplied)
+	})
+
+	t.Run("topk reader error closes child", func(t *testing.T) {
+		var closeCount int32
+		readErr := errors.New("topk reader failure")
+		child := &filteredTopKCountingReader{
+			countingReader: &countingReader{readErr: readErr, closeCount: &closeCount},
+		}
+		reader := NewMergeReader([]engine.Reader{child})
+		_, _, err := reader.ReadWithFilterAndTopK(
+			context.Background(), nil, nil, filter, nil, nil, batch.New(nil),
+		)
+		require.ErrorIs(t, err, readErr)
+		require.Equal(t, int32(1), atomic.LoadInt32(&closeCount))
+	})
+}
 
 func TestMergeReaderClosesEachChildOnExhaustion(t *testing.T) {
 	var closed int32
@@ -535,4 +944,69 @@ func TestMergeReaderReturnsCloseErrorAndDoesNotRetry(t *testing.T) {
 	require.ErrorIs(t, err, closeErr)
 	require.NoError(t, mr.Close())
 	require.Equal(t, int32(1), atomic.LoadInt32(&closed))
+}
+
+// TestReaderSetIndexParamL2sqBoundWidenedToFloat32 pins the l2_distance_sq half of #29040.
+//
+// l2_distance_sq exposes the squared distance float32-rounded (DistanceTransformIvfflat), while the
+// storage gate compares the raw float64 square. Without widening, a row whose exposed score is
+// exactly the bound -- raw 1+1e-10 rounds to 1.0, so `<= 1` holds -- is dropped by the gate before
+// the exact source-domain post-filter ever sees it. The bound is widened to the adjacent float32
+// and, unlike the l2_distance case, NOT squared: an l2sq bound is already in the squared domain.
+func TestReaderSetIndexParamL2sqBoundWidenedToFloat32(t *testing.T) {
+	const bound = 1.0
+	// the hazard: a raw square just above the bound whose exposed float32 score satisfies it
+	raw := math.Nextafter(bound, 2)
+	require.Greater(t, raw, bound, "raw square is outside the un-widened gate")
+	require.EqualValues(t, float32(bound), float32(raw), "but its exposed float32 score is not")
+
+	r := &reader{}
+	vectorCol := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_array_float32), Width: 2},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 3}},
+	}
+	vectorLit := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_array_float32), Width: 2, NotNullable: true},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_VecVal{
+			VecVal: string(types.ArrayToBytes[float32]([]float32{0, 0})),
+		}}},
+	}
+	orderExpr := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_float64), NotNullable: true},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: metric.DistFn_L2sqDistance},
+			Args: []*plan.Expr{vectorCol, vectorLit},
+		}},
+	}
+	param := &plan.IndexReaderParam{
+		OrderBy:      []*plan.OrderBySpec{{Expr: orderExpr}},
+		Limit:        plan2.MakePlan2Uint64ConstExprWithType(10),
+		OrigFuncName: metric.DistFn_L2sqDistance,
+		DistRange: &plan.DistRange{
+			UpperBoundType: plan.BoundType_INCLUSIVE,
+			UpperBound: &plan.Expr{
+				Typ:  plan.Type{Id: int32(types.T_float64)},
+				Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Dval{Dval: bound}}},
+			},
+		},
+	}
+	r.SetIndexParam(param)
+	require.NotNil(t, r.orderByLimit)
+
+	require.Equal(t, f32BoundOutward(bound, math.Inf(1)), r.orderByLimit.UpperBound)
+	require.GreaterOrEqual(t, r.orderByLimit.UpperBound, raw,
+		"the gate must keep a row whose exposed float32 score satisfies the predicate")
+	// and it is NOT squared: squaring would have widened a bound of 1 to ~1, but a bound of 0.5
+	// would collapse to 0.25 and drop valid rows.
+	require.Less(t, r.orderByLimit.UpperBound, 1.0000002, "bound must not be squared or over-widened")
+}
+
+type policyObservingFS struct {
+	fileservice.FileService
+	policies []fileservice.Policy
+}
+
+func (fs *policyObservingFS) Read(ctx context.Context, v *fileservice.IOVector) error {
+	fs.policies = append(fs.policies, v.Policy)
+	return fs.FileService.Read(ctx, v)
 }

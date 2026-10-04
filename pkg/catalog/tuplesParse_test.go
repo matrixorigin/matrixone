@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -161,6 +162,21 @@ func TestShowReqs(t *testing.T) {
 	t.Log(ShowReqs(reqs))
 }
 
+func TestParseMoColumnsUpdateEntry(t *testing.T) {
+	e := &api.Entry{
+		EntryType:  api.Entry_Insert,
+		DatabaseId: MO_CATALOG_ID,
+		TableId:    MO_COLUMNS_ID,
+		TableName:  MO_COLUMNS_UPDATE,
+		Bat:        &api.Batch{},
+	}
+
+	req, remaining, err := ParseEntryList([]*api.Entry{e})
+	require.NoError(t, err)
+	require.Same(t, e, req)
+	require.Empty(t, remaining)
+}
+
 func TestGenRowsGeometry(t *testing.T) {
 	mp := mpool.MustNewZero()
 
@@ -178,4 +194,91 @@ func TestGenRowsGeometry(t *testing.T) {
 	rows := GenRows(bat)
 	require.Equal(t, []byte("POINT(1 1)"), rows[0][0])
 	require.Equal(t, []byte("POINT(2 2)"), rows[1][0])
+}
+
+func TestParseDatabaseEntryRejectsMalformedTuple(t *testing.T) {
+	m := mpool.MustNew("test")
+	packer := types.NewPacker()
+	defer packer.Close()
+
+	newEntry := func(t *testing.T, kind api.Entry_EntryType) *api.Entry {
+		t.Helper()
+		var bat *batch.Batch
+		var err error
+		if kind == api.Entry_Insert {
+			bat, err = GenCreateDatabaseTuple("", 0, 0, 0, "catalog_guard_database_long_name", 123, "", m, packer)
+		} else {
+			bat, err = GenDropDatabaseTuple(types.Rowid{}, 0, 123, "catalog_guard_database_long_name", m, packer)
+		}
+		require.NoError(t, err)
+		defer bat.Clean(m)
+		protoBatch := mustToPBBatch(bat)
+		for i := range protoBatch.Vecs {
+			v := &protoBatch.Vecs[i]
+			v.Data = append([]byte(nil), v.Data...)
+			v.Area = append([]byte(nil), v.Area...)
+			v.Nsp = append([]byte(nil), v.Nsp...)
+		}
+		return &api.Entry{EntryType: kind, DatabaseId: MO_CATALOG_ID, TableId: MO_DATABASE_ID, Bat: protoBatch}
+	}
+
+	for _, kind := range []api.Entry_EntryType{api.Entry_Insert, api.Entry_Delete} {
+		e := newEntry(t, kind)
+		req, rest, err := ParseEntryList([]*api.Entry{e})
+		require.NoError(t, err)
+		require.Empty(t, rest)
+		if kind == api.Entry_Insert {
+			require.IsType(t, &CreateDatabaseReq{}, req)
+		} else {
+			require.IsType(t, &DropDatabaseReq{}, req)
+		}
+	}
+
+	for _, tc := range []struct {
+		name   string
+		mutate func(*api.Entry)
+	}{
+		{"nil batch", func(e *api.Entry) { e.Bat = nil }},
+		{"generic DML delete", func(e *api.Entry) { e.Bat.Vecs = e.Bat.Vecs[:2]; e.Bat.Attrs = e.Bat.Attrs[:2] }},
+		{"extra column", func(e *api.Entry) {
+			e.Bat.Vecs = append(e.Bat.Vecs, e.Bat.Vecs[0])
+			e.Bat.Attrs = append(e.Bat.Attrs, "extra")
+		}},
+		{"wrong column order", func(e *api.Entry) { e.Bat.Attrs[2] = "datname" }},
+		{"wrong type", func(e *api.Entry) { e.Bat.Vecs[2].Type.Id = int32(types.T_int64) }},
+		{"unknown type", func(e *api.Entry) { e.Bat.Vecs[2].Type.Id = 255 }},
+		{"malformed null bitmap", func(e *api.Entry) { e.Bat.Vecs[2].Nsp = []byte{1} }},
+		{"short data", func(e *api.Entry) { e.Bat.Vecs[2].Data = nil }},
+		{"uneven vectors", func(e *api.Entry) { e.Bat.Vecs[3].Len = 2 }},
+		{"constant vector", func(e *api.Entry) { e.Bat.Vecs[2].IsConst = true }},
+		{"null database id", func(e *api.Entry) { e.Bat.Vecs[2].Nsp, _ = nulls.Build(1, 0).Show() }},
+		{"invalid later row", func(e *api.Entry) {
+			for i := range e.Bat.Vecs {
+				v := &e.Bat.Vecs[i]
+				v.Data = append(v.Data, v.Data...)
+				v.Len = 2
+			}
+			e.Bat.Vecs[3].Nsp, _ = nulls.Build(2, 1).Show()
+		}},
+		{"invalid varlen area", func(e *api.Entry) {
+			nameIdx := MO_DATABASE_DAT_NAME_IDX
+			if e.EntryType == api.Entry_Delete {
+				nameIdx = 3
+			}
+			e.Bat.Vecs[nameIdx].Area = nil
+		}},
+		{"unsupported entry type", func(e *api.Entry) { e.EntryType = api.Entry_Alter }},
+	} {
+		for _, kind := range []api.Entry_EntryType{api.Entry_Insert, api.Entry_Delete} {
+			t.Run(kind.String()+"/"+tc.name, func(t *testing.T) {
+				e := newEntry(t, kind)
+				tc.mutate(e)
+				require.NotPanics(t, func() {
+					req, _, err := ParseEntryList([]*api.Entry{e})
+					require.Error(t, err)
+					require.Nil(t, req)
+				})
+			})
+		}
+	}
 }

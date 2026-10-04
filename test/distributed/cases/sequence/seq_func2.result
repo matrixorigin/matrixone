@@ -46,11 +46,11 @@ set @ch_var='abc',@varch_var=cast('def' as varchar),@bin_var=cast('1001' as bina
 select @ch_var,@varch_var,@bin_var,@varbin_var,@text_var,@blob_var;
 ➤ @ch_var[12,65535,0]  ¦  @varch_var[12,65535,0]  ¦  @bin_var[-3,65535,0]  ¦  @varbin_var[-3,65535,0]  ¦  @text_var[12,65535,0]  ¦  @blob_var[-3,65535,0]  𝄀
 abc  ¦  def  ¦  1001  ¦  1001  ¦  ghi  ¦  1010
-set @d64_var1 = cast(9223372036854775807 as decimal),@d64_var2 = cast(-9223372036854775808 as decimal);
+set @d64_var1 = cast(9223372036854775807 as decimal(38,0)),@d64_var2 = cast(-9223372036854775808 as decimal(38,0));
 select @d64_var1,@d64_var2;
 ➤ @d64_var1[3,38,0]  ¦  @d64_var2[3,38,0]  𝄀
 9223372036854775807  ¦  -9223372036854775808
-set @d128_var1 = cast(99999999999999999999999999999999999999 as decimal),@d128_var2 = cast(-99999999999999999999999999999999999999 as decimal);
+set @d128_var1 = cast(99999999999999999999999999999999999999 as decimal(38,0)),@d128_var2 = cast(-99999999999999999999999999999999999999 as decimal(38,0));
 select @d128_var1,@d128_var2;
 ➤ @d128_var1[3,38,0]  ¦  @d128_var2[3,38,0]  𝄀
 99999999999999999999999999999999999999  ¦  -99999999999999999999999999999999999999

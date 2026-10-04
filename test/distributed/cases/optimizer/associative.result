@@ -229,8 +229,8 @@ lineitem
 where
 l_partkey = p_partkey
 );
-➤ avg_yearly[3,38,8]  𝄀
-30.00000000
+➤ avg_yearly[3,42,6]  𝄀
+30.000000
 drop table if exists associative.lineitem;
 drop table if exists associative.part;
 drop table if exists associative.file;

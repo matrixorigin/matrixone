@@ -28,6 +28,30 @@ limit 2 by rank with option 'mode=include';
 ➤ id[4,32,0]  ¦  title[12,20,0]  ¦  category[4,32,0]  𝄀
 5  ¦  b0  ¦  20  𝄀
 6  ¦  b1  ¦  20
+explain analyze verbose select id, title, category
+from include_rounds_main
+where category = 20
+order by l2_distance(embedding, "[0,0,0]")
+limit 2 by rank with option 'mode=include';
+-- @regex("Vector Index Search Round 1: bucket_window=0:1", true)
+-- @regex("Vector Index Search Round 2: bucket_window=1:2", true)
+-- @regex("Vector Index Search Summary: search_count=[1-9][0-9]* round_count=([2-9]|[1-9][0-9]+) buckets_searched=([2-9]|[1-9][0-9]+)", true)
+➤ QUERY PLAN[12,-1,0]  𝄀
+Project[2] (cost=2.00 outcnt=2.00 selectivity=0.0020 dop=1 blockNum=1 rowsize=100.00)  𝄀
+  Output: #[0,0], #[0,1], #[0,2]  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=2 (min=2, max=2) InputSize=64 bytes OutputSize=64 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64 bytes (min=64 bytes, max=64 bytes)  𝄀
+  ->  Sort[1] (cost=2.00 outcnt=2.00 selectivity=0.0020 dop=1 blockNum=1 rowsize=100.00)  𝄀
+        Output: #[0,0], #[0,2], #[0,3]  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=2 (min=2, max=2) InputSize=80 bytes OutputSize=64 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64 bytes (min=64 bytes, max=64 bytes)  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 2  𝄀
+        ->  Vector Index Scan[0] on idx_ivf_include_rounds [l2_distance] (cost=500.00 outcnt=2.00 selectivity=0.0020 dop=1 blockNum=1 rowsize=92.00)  𝄀
+              Output: pkid, score, __mo_index_include_title, __mo_index_include_category  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=2 (min=2, max=2) InputSize=80 bytes OutputSize=80 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=160 bytes (min=160 bytes, max=160 bytes)  𝄀
+              Vector Index: idx_ivf_include_rounds, Metric: l2_distance, Candidate Limit: 2, NProbe: 1, Index Filter: (__mo_index_include_category = 20)  𝄀
+  Vector Index Search Round 1: bucket_window=0:1 row_limit=12 output_rows=0 exhausted=false  𝄀
+  Vector Index Search Round 2: bucket_window=1:2 row_limit=12 output_rows=4 exhausted=true  𝄀
+  Vector Index Search Summary: search_count=1 round_count=2 buckets_searched=2 bucket_windows=0:1, 1:2 row_limits=12, 12 empty_rounds=1
 set probe_limit = 10;
 explain select id, title, category
 from include_rounds_main

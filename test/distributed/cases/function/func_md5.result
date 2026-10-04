@@ -54,3 +54,17 @@ md5(2008-09-09)
 185e43039cc36b4fa960427d7c693b6c
 select md5(fsfsf);
 invalid input: column fsfsf does not exist
+drop table if exists md5_large_blob;
+create table md5_large_blob(payload longblob);
+insert into md5_large_blob values (concat(repeat('a', 32768), repeat('a', 32768)));
+select length(payload), md5(payload), md5(concat(repeat('a', 32768), repeat('a', 32768))) as expected from md5_large_blob;
+length(payload)	md5(payload)	expected
+65536	2d61aa54b58c2e94403fb092c3dbc027	2d61aa54b58c2e94403fb092c3dbc027
+drop table md5_large_blob;
+drop table if exists md5_large_text;
+create table md5_large_text(payload longtext);
+insert into md5_large_text values (concat(repeat('a', 32768), repeat('a', 32768)));
+select length(payload), md5(payload), md5(concat(repeat('a', 32768), repeat('a', 32768))) as expected from md5_large_text;
+length(payload)	md5(payload)	expected
+65536	2d61aa54b58c2e94403fb092c3dbc027	2d61aa54b58c2e94403fb092c3dbc027
+drop table md5_large_text;

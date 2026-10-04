@@ -273,20 +273,18 @@ func (h *Handle) HandleLifecycleCommit(
 			),
 			Level: entry.MergeLevel,
 		}
-		transferMaps, err := marshalTransferMapsWithOptions(
+		transferMaps, err := loadLifecycleTransferMaps(
 			ctx,
 			mergeEntry,
-			h.db.Runtime.SID(),
 			h.db.Runtime.Fs,
-			transferMapLoadOptions{
-				deleteAfterRead:    false,
-				strictSourceBounds: true,
-			},
 		)
 		if err != nil {
 			return err
 		}
-		transferTable := mergesort.NewTransferTableFromMaps(transferMaps)
+		transferTable, err := mergesort.NewLifecycleTransferTable(transferMaps)
+		if err != nil {
+			return err
+		}
 		if err := validateLifecycleTransferTable(
 			entry.CreatedObjectStats,
 			transferTable,

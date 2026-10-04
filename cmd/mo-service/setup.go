@@ -108,7 +108,11 @@ func getLogger(cfg *Config) (*zap.Logger, error) {
 }
 
 func newLocalClock(cfg *Config, stopper *stopper.Stopper) clock.Clock {
-	return clock.NewUnixNanoHLCClockWithStopper(stopper, cfg.Clock.MaxClockOffset.Duration)
+	return clock.NewUnixNanoHLCClockWithStopperAndCheck(
+		stopper,
+		cfg.Clock.MaxClockOffset.Duration,
+		cfg.Clock.EnableCheckMaxClockOffset,
+	)
 }
 
 func initLogger(cfg *Config) {

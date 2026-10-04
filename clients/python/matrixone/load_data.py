@@ -770,6 +770,7 @@ class LoadDataManager(BaseLoadDataManager):
             Fully Supported Features:
                 - All compression formats (NONE, SNAPPY, GZIP, LZ4, ZSTD, Brotli)
                 - Parquet 1.0 and 2.0 formats
+                - Dictionary encoding for supported scalar types
                 - Column statistics (write_statistics=True/False)
                 - Nullable columns (nullable=True/False, NULL values supported)
                 - Large files, wide tables, empty files
@@ -784,7 +785,6 @@ class LoadDataManager(BaseLoadDataManager):
                 - TIMESTAMP(tz='UTC') -> TIMESTAMP (UTC timezone required!)
 
             Not Supported:
-                - Dictionary encoding (use_dictionary must be False)
                 - INT8/INT16 types (use INT32 or INT64)
                 - large_string type (use pa.string())
                 - TIMESTAMP without timezone (must add tz='UTC')
@@ -793,13 +793,11 @@ class LoadDataManager(BaseLoadDataManager):
 
             Recommended Settings:
                 compression='snappy'        # Enable compression
-                use_dictionary=False        # Must disable dictionary encoding
+                use_dictionary=True         # Supported for supported scalar types
                 write_statistics=True       # Enable statistics
                 data_page_version='2.0'     # Use Parquet 2.0
 
             Common Errors:
-                - "indexed INT64 page is not yet implemented"
-                  -> Set use_dictionary=False
                 - "load STRING(required) to TEXT NULL is not yet implemented"
                   -> Use VARCHAR in table definition, not TEXT
                 - "load TIMESTAMP(isAdjustedToUTC=false..."
@@ -826,7 +824,7 @@ class LoadDataManager(BaseLoadDataManager):
                 pq.write_table(
                     table, 'data.parq',
                     compression='snappy',        # ✅ All compression supported!
-                    use_dictionary=False,        # ⚠️ Required! Dict not supported
+                    use_dictionary=True,         # ✅ Dictionary encoding supported!
                     write_statistics=True,       # ✅ Supported! (Double-checked)
                     data_page_version='2.0'      # ✅ Parquet 2.0 supported!
                 )

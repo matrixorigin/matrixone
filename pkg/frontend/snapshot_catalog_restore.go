@@ -35,10 +35,14 @@ const (
 	// systemCatalogRestoreCopy is safe only for catalog rows whose identifiers
 	// retain their meaning in the target account.
 	systemCatalogRestoreCopy
-	// systemCatalogRestoreCopyThenTransform copies the table first, then lets the
-	// table owner rebind identity-bearing columns after every object is restored.
-	systemCatalogRestoreCopyThenTransform
+	// systemCatalogRestoreRebuild skips the generic table copy and lets the table
+	// owner rebuild its rows after every referenced object is restored.
+	systemCatalogRestoreRebuild
 )
+
+func (policy systemCatalogRestorePolicy) skipsBulkRestore() bool {
+	return policy == systemCatalogRestoreSkip || policy == systemCatalogRestoreRebuild
+}
 
 type systemCatalogRestoreContext struct {
 	ctx           context.Context
@@ -63,7 +67,7 @@ type systemCatalogPostRestoreHandler struct {
 
 // The slice is deliberately ordered. To add another identity-bearing catalog:
 //
-//  1. mark it systemCatalogRestoreCopyThenTransform in the policy table;
+//  1. mark it systemCatalogRestoreRebuild in the policy table;
 //  2. register its owner-specific handler here, after any catalog it consumes;
 //  3. test both its ID semantics and every account-restore entry point.
 //
@@ -153,18 +157,18 @@ func restoreSystemCatalogsAfterObjects(
 func validateSystemCatalogRestoreHandlers(ctx context.Context) error {
 	registered := make(map[string]struct{}, len(systemCatalogPostRestoreHandlers))
 	for _, entry := range systemCatalogPostRestoreHandlers {
-		if systemCatalogRestorePolicies[entry.tableName] != systemCatalogRestoreCopyThenTransform {
-			return moerr.NewInternalErrorf(ctx, "catalog restore handler for %s has no transform policy", entry.tableName)
+		if systemCatalogRestorePolicies[entry.tableName] != systemCatalogRestoreRebuild {
+			return moerr.NewInternalErrorf(ctx, "catalog restore handler for %s has no rebuild policy", entry.tableName)
 		}
 		if _, exists := registered[entry.tableName]; exists {
-			return moerr.NewInternalErrorf(ctx, "catalog restore transform for %s has multiple handlers", entry.tableName)
+			return moerr.NewInternalErrorf(ctx, "catalog restore rebuild for %s has multiple handlers", entry.tableName)
 		}
 		registered[entry.tableName] = struct{}{}
 	}
 	for tableName, policy := range systemCatalogRestorePolicies {
-		if policy == systemCatalogRestoreCopyThenTransform {
+		if policy == systemCatalogRestoreRebuild {
 			if _, ok := registered[tableName]; !ok {
-				return moerr.NewInternalErrorf(ctx, "catalog restore transform for %s has no handler", tableName)
+				return moerr.NewInternalErrorf(ctx, "catalog restore rebuild for %s has no handler", tableName)
 			}
 		}
 	}
@@ -246,17 +250,17 @@ func restoreRolePrivilegesAfterObjects(restoreCtx *systemCatalogRestoreContext) 
 	if err = restoreCtx.bh.Exec(targetCtx, "delete from mo_catalog.mo_role_privs"); err != nil {
 		return err
 	}
-	if len(kept) == 0 {
-		return nil
-	}
+	return insertRolePrivilegeRestoreRows(targetCtx, restoreCtx.bh, kept)
+}
 
+func insertRolePrivilegeRestoreRows(ctx context.Context, bh BackgroundExec, rows []rolePrivilegeRestoreRow) error {
 	insertPrefix := "insert into mo_catalog.mo_role_privs(" +
 		"role_id,role_name,obj_type,obj_id,privilege_id,privilege_name," +
 		"privilege_level,operation_user_id,granted_time,with_grant_option) values "
-	for start := 0; start < len(kept); start += rolePrivilegeRestoreInsertBatchSize {
-		end := min(start+rolePrivilegeRestoreInsertBatchSize, len(kept))
+	for start := 0; start < len(rows); start += rolePrivilegeRestoreInsertBatchSize {
+		end := min(start+rolePrivilegeRestoreInsertBatchSize, len(rows))
 		values := make([]string, 0, end-start)
-		for _, row := range kept[start:end] {
+		for _, row := range rows[start:end] {
 			values = append(values, fmt.Sprintf(
 				"(%d,%s,%s,%d,%d,%s,%s,%d,%s,%t)",
 				row.roleID,
@@ -271,7 +275,7 @@ func restoreRolePrivilegesAfterObjects(restoreCtx *systemCatalogRestoreContext) 
 				row.withGrantOption,
 			))
 		}
-		if err = restoreCtx.bh.Exec(targetCtx, insertPrefix+strings.Join(values, ",")); err != nil {
+		if err := bh.Exec(ctx, insertPrefix+strings.Join(values, ",")); err != nil {
 			return err
 		}
 	}
@@ -552,13 +556,15 @@ func parseCatalogObjectIdentity(row []string) (catalogObjectIdentity, error) {
 	}, nil
 }
 
+const rolePrivilegeRestoreSelectSQL = "select cast(role_id as char), role_name, obj_type, cast(obj_id as char), " +
+	"cast(privilege_id as char), privilege_name, privilege_level, " +
+	"cast(coalesce(operation_user_id, 0) as char), cast(granted_time as char), " +
+	"cast(with_grant_option as char) from mo_catalog.mo_role_privs"
+
 func loadRolePrivilegesAtSnapshot(restoreCtx *systemCatalogRestoreContext) ([]rolePrivilegeRestoreRow, error) {
 	sourceCtx := defines.AttachAccountId(restoreCtx.ctx, restoreCtx.sourceAccount)
 	sql := fmt.Sprintf(
-		"select cast(role_id as char), role_name, obj_type, cast(obj_id as char), "+
-			"cast(privilege_id as char), privilege_name, privilege_level, "+
-			"cast(coalesce(operation_user_id, 0) as char), cast(granted_time as char), "+
-			"cast(with_grant_option as char) from mo_catalog.mo_role_privs {MO_TS = %d} "+
+		rolePrivilegeRestoreSelectSQL+" {MO_TS = %d} "+
 			"order by role_id, obj_type, obj_id, privilege_id, privilege_level",
 		restoreCtx.snapshotTS,
 	)
@@ -570,10 +576,14 @@ func loadRolePrivilegesAtSnapshot(restoreCtx *systemCatalogRestoreContext) ([]ro
 		return nil, err
 	}
 
+	return parseRolePrivilegeRestoreRows(restoreCtx.ctx, cols)
+}
+
+func parseRolePrivilegeRestoreRows(ctx context.Context, cols [][]string) ([]rolePrivilegeRestoreRow, error) {
 	rows := make([]rolePrivilegeRestoreRow, 0, len(cols))
 	for _, col := range cols {
 		if len(col) != 10 {
-			return nil, moerr.NewInternalError(restoreCtx.ctx, "invalid mo_role_privs restore row")
+			return nil, moerr.NewInternalError(ctx, "invalid mo_role_privs restore row")
 		}
 		roleID, err := strconv.ParseInt(col[0], 10, 64)
 		if err != nil {

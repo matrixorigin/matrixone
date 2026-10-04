@@ -168,7 +168,7 @@ select CAST(0xfffffffffffffffe as signed);
 select cast('-10a' as signed integer);
 select cast('a10' as unsigned integer);
 select 10+'a';
-select 10.0+cast('a' as decimal);
+select 10.0+cast('a' as decimal(38,0));
 select 10E+0+'a';
 
 # out-of-range cases
@@ -376,7 +376,7 @@ set time_zone='SYSTEM';
 
 CREATE TABLE t1 (v varchar(10), tt char(255), t char(255),mt char(255), lt char(255));
 INSERT INTO t1 VALUES ('1.01', '2.02', '3.03', '4.04', '5.05');
-SELECT CAST(v AS DECIMAL), CAST(tt AS DECIMAL), CAST(t AS DECIMAL), CAST(mt AS DECIMAL), CAST(lt AS DECIMAL) from t1;
+SELECT CAST(v AS DECIMAL(38,0)), CAST(tt AS DECIMAL(38,0)), CAST(t AS DECIMAL(38,0)), CAST(mt AS DECIMAL(38,0)), CAST(lt AS DECIMAL(38,0)) from t1;
 DROP TABLE t1;
 
 #

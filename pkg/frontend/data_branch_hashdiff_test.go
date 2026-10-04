@@ -141,6 +141,77 @@ func TestCompareTupleWithBatchRow(t *testing.T) {
 	require.Contains(t, err.Error(), "out of range")
 }
 
+func TestDataBranchUpdateRequiresNativeUpdate(t *testing.T) {
+	ses := newValidateSession(t)
+	mp := ses.proc.Mp()
+	tblStuff := tableStuff{}
+	tblStuff.def.colTypes = []types.Type{types.T_int64.ToType(), types.T_uint64.ToType()}
+	tblStuff.def.indexedSpecialUpdateIdxes = []int{1}
+
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_uint64.ToType())
+	defer bat.Clean(mp)
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[1], uint64(1), false, mp))
+	bat.SetRowCount(1)
+
+	requiresNativeUpdate, err := dataBranchUpdateRequiresNativeUpdateFromBatch(
+		tblStuff, types.Tuple{int64(1), uint64(2)}, bat, 0,
+	)
+	require.NoError(t, err)
+	require.True(t, requiresNativeUpdate)
+
+	requiresNativeUpdate, err = dataBranchUpdateRequiresNativeUpdateFromBatch(
+		tblStuff, types.Tuple{int64(1), uint64(1)}, bat, 0,
+	)
+	require.NoError(t, err)
+	require.False(t, requiresNativeUpdate)
+
+	requiresNativeUpdate, err = dataBranchUpdateRequiresNativeUpdateFromTuples(
+		tblStuff, types.Tuple{int64(1), uint64(2)}, types.Tuple{int64(1), uint64(1)},
+	)
+	require.NoError(t, err)
+	require.True(t, requiresNativeUpdate)
+
+	requiresNativeUpdate, err = dataBranchUpdateRequiresNativeUpdateFromTuples(
+		tblStuff, types.Tuple{int64(1), uint64(1)}, types.Tuple{int64(1), uint64(1)},
+	)
+	require.NoError(t, err)
+	require.False(t, requiresNativeUpdate)
+}
+
+func TestSplitDataBranchBatchForNativeUpdate(t *testing.T) {
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	tblStuff := newTestBranchTableStuff(ctrl)
+	bat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
+	defer tblStuff.retPool.releaseRetBatch(bat, false)
+	require.NoError(t, appendTupleToBat(
+		ses, bat, types.Tuple{int64(1), []byte("source-one"), []byte("h1")}, tblStuff,
+	))
+	require.NoError(t, appendTupleToBat(
+		ses, bat, types.Tuple{int64(2), []byte("source-two"), []byte("h2")}, tblStuff,
+	))
+
+	nativeKeys := map[string]struct{}{"1": {}}
+	nativeBat, err := splitDataBranchBatchForNativeUpdate(ses, tblStuff, bat, nativeKeys)
+	require.NoError(t, err)
+	require.NotNil(t, nativeBat)
+	defer tblStuff.retPool.releaseRetBatch(nativeBat, false)
+	require.Empty(t, nativeKeys)
+	require.Equal(t,
+		[][]any{{int64(1), "source-one", "h1"}},
+		decodeCapturedRows(t, nativeBat, tblStuff.def.colTypes),
+	)
+	require.Equal(t,
+		[][]any{{int64(2), "source-two", "h2"}},
+		decodeCapturedRows(t, bat, tblStuff.def.colTypes),
+	)
+}
+
 func TestCompareTupleValueWithVectorNormalizesValues(t *testing.T) {
 	ses := newValidateSession(t)
 	mp := ses.proc.Mp()

@@ -25,44 +25,53 @@ import (
 )
 
 var methodVersions = map[pb.CmdMethod]int64{
-	pb.CmdMethod_ShowProcessList:          defines.MORPCVersion1,
-	pb.CmdMethod_AlterAccount:             defines.MORPCVersion1,
-	pb.CmdMethod_KillConn:                 defines.MORPCVersion1,
-	pb.CmdMethod_TraceSpan:                defines.MORPCVersion1,
-	pb.CmdMethod_GetLockInfo:              defines.MORPCVersion1,
-	pb.CmdMethod_GetTxnInfo:               defines.MORPCVersion1,
-	pb.CmdMethod_GetCacheInfo:             defines.MORPCVersion1,
-	pb.CmdMethod_SyncCommit:               defines.MORPCVersion1,
-	pb.CmdMethod_GetCommit:                defines.MORPCVersion1,
-	pb.CmdMethod_RunTask:                  defines.MORPCVersion1,
-	pb.CmdMethod_RemoveRemoteLockTable:    defines.MORPCVersion1,
-	pb.CmdMethod_GetLatestBind:            defines.MORPCVersion1,
-	pb.CmdMethod_UnsubscribeTable:         defines.MORPCVersion1,
-	pb.CmdMethod_GetCacheData:             defines.MORPCVersion1,
-	pb.CmdMethod_GetStatsInfo:             defines.MORPCVersion1,
-	pb.CmdMethod_GetPipelineInfo:          defines.MORPCVersion1,
-	pb.CmdMethod_GetProtocolVersion:       defines.MORPCMinVersion, // To make sure these methods are compatible with all versions.
-	pb.CmdMethod_SetProtocolVersion:       defines.MORPCMinVersion,
-	pb.CmdMethod_CoreDumpConfig:           defines.MORPCMinVersion,
-	pb.CmdMethod_MigrateConnFrom:          defines.MORPCVersion1,
-	pb.CmdMethod_MigrateConnTo:            defines.MORPCVersion1,
-	pb.CmdMethod_ReloadAutoIncrementCache: defines.MORPCVersion1,
-	pb.CmdMethod_CtlReader:                defines.MORPCVersion1,
-	pb.CmdMethod_ResetSession:             defines.MORPCVersion1,
-	pb.CmdMethod_GOMAXPROCS:               defines.MORPCVersion3,
-	pb.CmdMethod_GOMEMLIMIT:               defines.MORPCVersion3,
-	pb.CmdMethod_FileServiceCache:         defines.MORPCVersion3,
-	pb.CmdMethod_FileServiceCacheEvict:    defines.MORPCVersion3,
-	pb.CmdMethod_MetadataCache:            defines.MORPCVersion4,
-	pb.CmdMethod_GOGCPercent:              defines.MORPCVersion4,
-	pb.CmdMethod_FaultInject:              defines.MORPCVersion4,
-	pb.CmdMethod_CtlMoTableStats:          defines.MORPCVersion4,
-	pb.CmdMethod_WorkspaceThreshold:       defines.MORPCVersion4,
-	pb.CmdMethod_MinTimestamp:             defines.MORPCVersion4,
-	pb.CmdMethod_CtlPrefetchOnSubscribed:  defines.MORPCVersion4,
-	pb.CmdMethod_ISCPDrainConsumer:        defines.MORPCVersion4,
-	pb.CmdMethod_IcebergCacheInvalidate:   defines.MORPCVersion4,
-	pb.CmdMethod_MongoDBClientRetire:      defines.MORPCVersion5,
+	pb.CmdMethod_ShowProcessList:       defines.MORPCVersion1,
+	pb.CmdMethod_AlterAccount:          defines.MORPCVersion1,
+	pb.CmdMethod_KillConn:              defines.MORPCVersion1,
+	pb.CmdMethod_TraceSpan:             defines.MORPCVersion1,
+	pb.CmdMethod_GetLockInfo:           defines.MORPCVersion1,
+	pb.CmdMethod_GetTxnInfo:            defines.MORPCVersion1,
+	pb.CmdMethod_GetCacheInfo:          defines.MORPCVersion1,
+	pb.CmdMethod_SyncCommit:            defines.MORPCVersion1,
+	pb.CmdMethod_GetCommit:             defines.MORPCVersion1,
+	pb.CmdMethod_RunTask:               defines.MORPCVersion1,
+	pb.CmdMethod_RemoveRemoteLockTable: defines.MORPCVersion1,
+	pb.CmdMethod_GetLatestBind:         defines.MORPCVersion1,
+	pb.CmdMethod_UnsubscribeTable:      defines.MORPCVersion1,
+	pb.CmdMethod_GetCacheData:          defines.MORPCVersion1,
+	pb.CmdMethod_GetStatsInfo:          defines.MORPCVersion1,
+	pb.CmdMethod_GetPipelineInfo:       defines.MORPCVersion1,
+	pb.CmdMethod_GetProtocolVersion:    defines.MORPCMinVersion, // To make sure these methods are compatible with all versions.
+	pb.CmdMethod_SetProtocolVersion:    defines.MORPCMinVersion,
+	// Sys-admin vector-index cache knobs: gated so a mixed-version cluster rejects the call
+	// cluster-wide until every CN is upgraded, instead of dispatching to a CN with no handler.
+	pb.CmdMethod_SetVectorIndexFreshnessInterval: defines.MORPCVersion102,
+	pb.CmdMethod_GetVectorIndexCacheInfo:         defines.MORPCVersion102,
+	pb.CmdMethod_EvictVectorIndexCache:           defines.MORPCVersion102,
+	pb.CmdMethod_GetVectorIndexCacheKeys:         defines.MORPCVersion102,
+	pb.CmdMethod_CoreDumpConfig:                  defines.MORPCMinVersion,
+	pb.CmdMethod_MigrateConnFrom:                 defines.MORPCVersion1,
+	pb.CmdMethod_MigrateConnTo:                   defines.MORPCVersion1,
+	pb.CmdMethod_ReloadAutoIncrementCache:        defines.MORPCVersion1,
+	pb.CmdMethod_CtlReader:                       defines.MORPCVersion1,
+	pb.CmdMethod_ResetSession:                    defines.MORPCVersion1,
+	// Cache reuse must revalidate against a CN that understands the refresh
+	// request; older protocol versions fail closed and route a fresh backend.
+	pb.CmdMethod_RefreshSessionAuth:      defines.MORPCVersion54,
+	pb.CmdMethod_GOMAXPROCS:              defines.MORPCVersion3,
+	pb.CmdMethod_GOMEMLIMIT:              defines.MORPCVersion3,
+	pb.CmdMethod_FileServiceCache:        defines.MORPCVersion3,
+	pb.CmdMethod_FileServiceCacheEvict:   defines.MORPCVersion3,
+	pb.CmdMethod_MetadataCache:           defines.MORPCVersion4,
+	pb.CmdMethod_GOGCPercent:             defines.MORPCVersion4,
+	pb.CmdMethod_FaultInject:             defines.MORPCVersion4,
+	pb.CmdMethod_CtlMoTableStats:         defines.MORPCVersion4,
+	pb.CmdMethod_WorkspaceThreshold:      defines.MORPCVersion4,
+	pb.CmdMethod_MinTimestamp:            defines.MORPCVersion4,
+	pb.CmdMethod_CtlPrefetchOnSubscribed: defines.MORPCVersion4,
+	pb.CmdMethod_ISCPDrainConsumer:       defines.MORPCVersion4,
+	pb.CmdMethod_IcebergCacheInvalidate:  defines.MORPCVersion4,
+	pb.CmdMethod_MongoDBClientRetire:     defines.MORPCVersion5,
 }
 
 type queryClient struct {
@@ -150,6 +159,12 @@ func (c *queryClient) Close() error {
 
 func (c *queryClient) unwrapResponseError(resp *pb.Response) (*pb.Response, error) {
 	if err := resp.UnwrapError(); err != nil {
+		if resp.CmdMethod == pb.CmdMethod_RefreshSessionAuth &&
+			resp.RefreshSessionAuthResponse != nil &&
+			(resp.RefreshSessionAuthResponse.AuthenticationFailed ||
+				resp.RefreshSessionAuthResponse.RequestRejected) {
+			return resp, err
+		}
 		c.pool.ReleaseResponse(resp)
 		return nil, err
 	}

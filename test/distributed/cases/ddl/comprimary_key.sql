@@ -58,6 +58,7 @@ select col6,col7,col8,col18,col16,col19 from cpk_table_5;
 -- @pattern
 insert into cpk_table_5 select * from ex_table_cpk;
 -- @bvt:issue
+select count(*) from cpk_table_5;
 show create table cpk_table_5;
 
 -- 复合主键19个
@@ -68,6 +69,7 @@ select * from cpk_table_6;
 -- @pattern
 insert into cpk_table_6 select * from ex_table_cpk;
 -- @bvt:issue
+select count(*) from cpk_table_6;
 -- 异常：复合主键列部分不存在
 create table cpk_table_7(a int,b float,c char(20),primary key(a,d));
 create table cpk_table_8(a int,b float,c char(20),primary key(e,f));

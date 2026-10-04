@@ -43,6 +43,24 @@ type releaseTrackingData struct {
 	bytes    []byte
 }
 
+func TestNewJsonVectorFromValuesUsesByteAdmission(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	values := []string{`{"a":1}`, `[1,2]`}
+	vec := NewVector(len(values), types.T_json.ToType(), mp, false, values)
+	require.NotNil(t, vec)
+	defer vec.Free(mp)
+
+	for i, value := range values {
+		parsed, err := types.ParseStringToByteJson(value)
+		require.NoError(t, err)
+		expected, err := parsed.Marshal()
+		require.NoError(t, err)
+		require.Equal(t, expected, vec.GetBytesAt(i))
+	}
+}
+
 func TestValidatedVectorCacheDataRehomePreservesValidation(t *testing.T) {
 	ctx := context.Background()
 	source := &validatedVectorCacheData{
@@ -604,6 +622,15 @@ func TestCopyCachedVectorRowsMaterializesOnlySelectedRows(t *testing.T) {
 	widerType := vector.NewOffHeapVecWithType(types.New(types.T_varchar, 512, 0))
 	require.NoError(t, CopyCachedVectorRows(widerType, cacheData, sels[:1], queryMP))
 	require.Equal(t, bytes.Repeat([]byte{'a'}, valueLen), widerType.GetBytesAt(0))
+	window, err := MaterializeCachedVectorWindow(cacheData, 7000, 3, queryMP)
+	require.NoError(t, err)
+	require.Equal(t, 3, window.Length())
+	require.Equal(t, bytes.Repeat([]byte{byte('a' + 7000%26)}, valueLen), window.GetBytesAt(0))
+	window.Free(queryMP)
+	_, err = MaterializeCachedVectorWindow(cacheData, rowCount-1, 2, queryMP)
+	require.Error(t, err)
+	_, err = MaterializeCachedVectorWindow(cacheData, 0, 1, nil)
+	require.Error(t, err)
 
 	needle := bytes.Repeat([]byte{'h'}, valueLen)
 	search := NewReadFilterSearch(types.T_varchar, [][]byte{needle})
@@ -1011,6 +1038,41 @@ func TestReadFilterPrefixSearchDoesNotAllocatePerBlockRow(t *testing.T) {
 	)
 }
 
+func TestCombinedReadFilterSearchDoesNotAllocatePerBlockRow(t *testing.T) {
+	const rowCount = 8192
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	source := vector.NewVec(types.T_varchar.ToType())
+	for row := 0; row < rowCount; row++ {
+		require.NoError(t, vector.AppendBytes(
+			source,
+			[]byte(fmt.Sprintf("key-%05d", row)),
+			false,
+			mp,
+		))
+	}
+	defer source.Free(mp)
+	search := CombineReadFilterSearch(
+		NewReadFilterSearch(types.T_varchar, [][]byte{[]byte("key-00123")}),
+		NewReadFilterSearch(types.T_varchar, [][]byte{[]byte("key-07111")}),
+	)
+
+	result := testing.Benchmark(func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			rows := search.search(source, true)
+			if len(rows) != 2 || rows[0] != 123 || rows[1] != 7111 {
+				b.Fatalf("unexpected exact hits: %v", rows)
+			}
+		}
+	})
+	require.Less(
+		t,
+		result.AllocedBytesPerOp(),
+		int64(16<<10),
+		"combined exact search must not allocate an int64 mark per source row",
+	)
+}
+
 func TestColumnCacheConstructorRejectsInvalidV2BeforeAdmission(t *testing.T) {
 	mp := mpool.MustNewZero()
 	source := vector.NewVec(types.T_varchar.ToType())
@@ -1310,4 +1372,55 @@ func TestReadOneBlockAllColumnsReleasesPartialReadOnError(t *testing.T) {
 	)
 	require.ErrorIs(t, err, readErr)
 	require.Equal(t, int32(1), releases.Load())
+}
+
+func TestReadOneBlockAllColumnsWindowMaterializesRequestedRows(t *testing.T) {
+	writerMP := mpool.MustNewZero()
+	source := vector.NewVec(types.T_int64.ToType())
+	for i := int64(0); i < 8; i++ {
+		require.NoError(t, vector.AppendFixed(source, i, false, writerMP))
+	}
+	payload, err := source.MarshalBinary()
+	require.NoError(t, err)
+	source.Free(writerMP)
+	encoded := append([]byte(nil), EncodeIOEntryHeader(&IOEntryHeader{
+		Type: IOET_ColData, Version: IOET_ColumnData_V2,
+	})...)
+	encoded = append(encoded, payload...)
+	var releases atomic.Int32
+	fs := &partialReadErrorFS{data: &releaseTrackingData{releases: &releases, bytes: encoded}}
+	meta := BuildMetaData(1, 1)
+	col := meta.GetBlockMeta(0).ColumnMeta(0)
+	col.setDataType(uint8(types.T_int64))
+	col.setLocation(NewExtent(1, 0, uint32(len(encoded)), uint32(len(encoded))))
+	queryMP := mpool.MustNewZero()
+	bat, err := ReadOneBlockAllColumnsWindow(
+		context.Background(), &meta, "test-object", 0, []uint16{0},
+		2, 3, fileservice.Policy(0), fs, queryMP, 0, nil,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []int64{2, 3, 4}, vector.MustFixedColWithTypeCheck[int64](bat.Vecs[0]))
+	bat.Clean(queryMP)
+	require.Equal(t, int32(1), releases.Load())
+	_, err = ReadOneBlockAllColumnsWindow(
+		context.Background(), &meta, "test-object", 0, []uint16{0},
+		0, 0, fileservice.Policy(0), fs, queryMP, 0, nil,
+	)
+	require.Error(t, err)
+
+	var errorReleases atomic.Int32
+	readErr := moerr.NewInternalErrorNoCtx("window read failed")
+	errorFS := &partialReadErrorFS{
+		data: &releaseTrackingData{releases: &errorReleases},
+		err:  readErr,
+	}
+	_, err = ReadOneBlockAllColumnsWindow(
+		context.Background(), &meta, "test-object", 0, []uint16{0},
+		0, 1, fileservice.Policy(0), errorFS, queryMP, 0, nil,
+	)
+	require.ErrorIs(t, err, readErr)
+	require.Equal(t, int32(1), errorReleases.Load())
+	require.Zero(t, queryMP.CurrNB())
+	mpool.DeleteMPool(queryMP)
+	mpool.DeleteMPool(writerMP)
 }

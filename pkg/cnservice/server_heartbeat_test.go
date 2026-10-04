@@ -22,11 +22,14 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
 type blockingCNHeartbeatCommandClient struct {
@@ -37,6 +40,41 @@ type blockingCNHeartbeatCommandClient struct {
 	pollEntered        chan struct{}
 	heartbeatCalls     atomic.Int32
 	commandBatch       pb.CommandBatch
+}
+
+type admissionFailureCNHeartbeatClient struct {
+	*testHAKClient
+	batch pb.CommandBatch
+}
+
+type recordingCNHeartbeatClient struct {
+	*testHAKClient
+	heartbeat pb.CNStoreHeartbeat
+}
+
+type failingWithdrawalHeartbeatClient struct {
+	*testHAKClient
+	err             error
+	returnNilOnDone bool
+}
+
+func (c *failingWithdrawalHeartbeatClient) SendCNHeartbeat(
+	ctx context.Context,
+	_ pb.CNStoreHeartbeat,
+) (pb.CommandBatch, error) {
+	if c.returnNilOnDone {
+		<-ctx.Done()
+		return pb.CommandBatch{}, nil
+	}
+	return pb.CommandBatch{}, c.err
+}
+
+func (c *recordingCNHeartbeatClient) SendCNHeartbeat(
+	_ context.Context,
+	hb pb.CNStoreHeartbeat,
+) (pb.CommandBatch, error) {
+	c.heartbeat = hb
+	return pb.CommandBatch{}, nil
 }
 
 type canceledCNResponseClient struct {
@@ -90,6 +128,13 @@ func (h *observingTaskHolder) Create(pb.CreateTaskService) error {
 	default:
 	}
 	return h.createErr
+}
+
+func (c *admissionFailureCNHeartbeatClient) SendCNHeartbeat(
+	context.Context,
+	pb.CNStoreHeartbeat,
+) (pb.CommandBatch, error) {
+	return c.batch, nil
 }
 
 func (c *canceledCNResponseClient) SendCNHeartbeat(
@@ -195,6 +240,76 @@ func Test_heartbeat(t *testing.T) {
 		logger:          logutil.GetPanicLogger(),
 	}
 	sv.heartbeat(ctx)
+}
+
+func TestWithdrawViewMetadataAdmissionPublishesFinalHeartbeat(t *testing.T) {
+	conf := &Config{UUID: "cleanly-stopping-cn"}
+	conf.HAKeeper.HeatbeatTimeout.Duration = time.Second
+	client := &recordingCNHeartbeatClient{testHAKClient: &testHAKClient{cfg: conf}}
+	s := &service{
+		cfg:                             conf,
+		_hakeeperClient:                 client,
+		config:                          util.NewConfigData(nil),
+		logger:                          logutil.GetPanicLogger(),
+		viewMetadataAdmissionGeneration: 17,
+		viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
+	}
+	require.NoError(t, s.viewMetadataEpochFence.Advance(context.Background(), 3))
+	s.viewMetadataCatalogFencedEpoch.Store(3)
+	s.viewMetadataIngressReady.Store(true)
+
+	require.NoError(t, s.withdrawViewMetadataAdmission())
+	require.False(t, s.viewMetadataIngressReady.Load())
+	require.Equal(t, conf.UUID, client.heartbeat.UUID)
+	require.True(t, client.heartbeat.ViewMetadataAdmissionSupported)
+	require.Equal(t, uint64(17), client.heartbeat.ViewMetadataAdmissionGeneration)
+	require.Equal(t, uint64(3), client.heartbeat.ViewMetadataObservedEpoch)
+	require.Equal(t, uint64(3), client.heartbeat.ViewMetadataCatalogFencedEpoch)
+	require.False(t, client.heartbeat.ViewMetadataIngressReady)
+}
+
+func TestWithdrawViewMetadataAdmissionFailureIsNotCleanHandoff(t *testing.T) {
+	t.Run("disabled admission has nothing to withdraw", func(t *testing.T) {
+		s := &service{}
+		require.NoError(t, s.withdrawViewMetadataAdmission())
+		s.viewMetadataAdmissionGeneration = 1
+		require.NoError(t, s.withdrawViewMetadataAdmission())
+	})
+
+	t.Run("heartbeat error is returned", func(t *testing.T) {
+		conf := &Config{UUID: "failing-cn"}
+		conf.HAKeeper.HeatbeatTimeout.Duration = time.Second
+		failure := errors.New("hakeeper unavailable")
+		s := &service{
+			cfg: conf,
+			_hakeeperClient: &failingWithdrawalHeartbeatClient{
+				testHAKClient: &testHAKClient{cfg: conf},
+				err:           failure,
+			},
+			config:                          util.NewConfigData(nil),
+			logger:                          zap.NewNop(),
+			viewMetadataAdmissionGeneration: 7,
+		}
+		s.viewMetadataIngressReady.Store(true)
+		require.ErrorIs(t, s.withdrawViewMetadataAdmission(), failure)
+		require.False(t, s.viewMetadataIngressReady.Load())
+	})
+
+	t.Run("deadline after send is returned", func(t *testing.T) {
+		conf := &Config{UUID: "timing-out-cn"}
+		conf.HAKeeper.HeatbeatTimeout.Duration = time.Millisecond
+		s := &service{
+			cfg: conf,
+			_hakeeperClient: &failingWithdrawalHeartbeatClient{
+				testHAKClient:   &testHAKClient{cfg: conf},
+				returnNilOnDone: true,
+			},
+			config:                          util.NewConfigData(nil),
+			logger:                          zap.NewNop(),
+			viewMetadataAdmissionGeneration: 8,
+		}
+		require.ErrorIs(t, s.withdrawViewMetadataAdmission(), context.DeadlineExceeded)
+	})
 }
 
 func TestCNCommandPollProgressesWhileHeartbeatIsBlocked(t *testing.T) {
@@ -480,6 +595,67 @@ func TestCNHeartbeatDropsResponseAfterRequestDeadline(t *testing.T) {
 	// A nil hakeeperConnected channel would panic if the successful-looking
 	// late response escaped the per-request deadline guard.
 	service.heartbeat(context.Background())
+}
+
+func TestCNHeartbeatHandlesCommandsWhenAdmissionApplyFails(t *testing.T) {
+	fenceErr := errors.New("catalog fence failed")
+	conf := &Config{UUID: "cn-1"}
+	conf.HAKeeper.HeatbeatTimeout.Duration = time.Second
+	command := pb.ScheduleCommand{
+		UUID:        conf.UUID,
+		ServiceType: pb.CNService,
+		CreateTaskService: &pb.CreateTaskService{
+			User: pb.TaskTableUser{Username: "command-after-admission-error"},
+		},
+	}
+	client := &admissionFailureCNHeartbeatClient{
+		testHAKClient: &testHAKClient{cfg: conf},
+		batch:         testCommandBatch(7, command),
+	}
+	client.batch.CatalogMetadataBarrier = &pb.CatalogMetadataBarrier{
+		RecipientGeneration: 13,
+		MembershipEpoch:     2,
+		RequiredGeneration:  3,
+		Phase:               pb.CATALOG_METADATA_BARRIER_SEALED,
+	}
+	client.batch.ViewMetadataAdmission = &pb.ViewMetadataAdmission{
+		Enabled:              true,
+		Epoch:                6,
+		RevalidationRequired: true,
+		Generation:           13,
+	}
+	connected := make(chan struct{})
+	close(connected)
+	holder := &observingTaskHolder{
+		createErr: errors.New("observe command application"),
+		created:   make(chan struct{}, 1),
+	}
+	service := &service{
+		cfg:                             conf,
+		_hakeeperClient:                 client,
+		config:                          util.NewConfigData(nil),
+		logger:                          zap.NewNop(),
+		hakeeperConnected:               connected,
+		viewMetadataAdmissionGeneration: 13,
+		viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
+		viewMetadataAdmissionUpdated:    make(chan struct{}, 1),
+	}
+	service.task.holder = holder
+	service.sqlExecutor = executor.NewMemExecutor(func(string) (executor.Result, error) {
+		return executor.Result{}, fenceErr
+	})
+	service.viewMetadataCatalogFenceReady.Store(true)
+
+	service.heartbeat(context.Background())
+	require.Equal(t, int32(1), holder.createCount.Load())
+	require.Zero(t, service.viewMetadataCatalogFencedEpoch.Load())
+	require.Equal(t, &pb.CatalogMetadataAck{
+		Generation:         13,
+		MembershipEpoch:    2,
+		RequiredGeneration: 3,
+		ObservedPhase:      pb.CATALOG_METADATA_BARRIER_SEALED,
+	}, service.newCNStoreHeartbeat().CatalogMetadataAck,
+		"旧 admission 失败不得阻止独立的 participant 观察确认")
 }
 
 func TestCNCommandGenerationRolloverDoesNotReplayInheritedCommands(t *testing.T) {

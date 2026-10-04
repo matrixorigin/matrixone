@@ -16,6 +16,7 @@ package sqlexec
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -27,6 +28,8 @@ import (
 // physical top-k parameters; the execution adapter opens readers in the
 // current transaction and returns owned batches.
 type RelationScanRequest struct {
+	// ReadPolicy augments the caller policy for this scan without changing session state.
+	ReadPolicy   fileservice.Policy
 	Schema       string
 	Table        string
 	Columns      []string
@@ -41,9 +44,15 @@ type RelationScanRequest struct {
 	// exact row filter/BatchTransform while retaining bounded Top-K compaction
 	// in the relation scanner.
 	PostFilterTopOnly bool
-	FilterHint        engine.FilterHint
-	PartitionCount    int32
-	PartitionIndex    int32
+	// FilterBeforeTopK asks capable readers to apply the exact row filter before
+	// storage vector Top-K. Readers without that capability fall back to the
+	// caller's local distance calculation and final Top-K compaction.
+	FilterBeforeTopK bool
+	// FilterHint.BF, when nonnil, transfers one owned reference to ScanRelation,
+	// which must release it on every return. BuildReaders borrows that reference.
+	FilterHint     engine.FilterHint
+	PartitionCount int32
+	PartitionIndex int32
 }
 
 type RelationScanExecutor interface {

@@ -24,9 +24,11 @@ package plugin
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	ft2coverage "github.com/matrixorigin/matrixone/pkg/fulltext2/plugin/coverage"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
+	coverageplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/coverage"
 	idxcronplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/idxcron"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 
@@ -58,6 +60,11 @@ func (p *Plugin) Catalog() catalogplugin.Hooks { return p.catalogHooks }
 func (p *Plugin) Compile() compileplugin.Hooks { return p.compileHooks }
 func (p *Plugin) Plan() planplugin.Hooks       { return p.planHooks }
 func (p *Plugin) Idxcron() idxcronplugin.Hooks { return p.idxcronHooks }
+
+// Coverage implements the OPTIONAL indexplugin.CoveragePlugin capability.
+// fulltext2 is always-async, so the optimizer may only use it as a mandatory
+// filter when its ISCP watermark has reached the read snapshot.
+func (*Plugin) Coverage() coverageplugin.Hooks { return ft2coverage.Hooks{} }
 
 var _ indexplugin.AlgoPlugin = (*Plugin)(nil)
 

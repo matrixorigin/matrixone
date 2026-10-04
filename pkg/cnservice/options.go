@@ -59,12 +59,6 @@ func WithBootstrapOptions(options ...bootstrap.Option) Option {
 	}
 }
 
-func WithTxnTraceData(traceDataPath string) Option {
-	return func(s *service) {
-		s.options.traceDataPath = traceDataPath
-	}
-}
-
 // WithSiriusReadDependencies supplies the storage-owned, GC-protected lease
 // authority and its durable resolve auditor. CN startup still constructs and
 // owns both mTLS endpoints. Keeping these dependencies explicit prevents an

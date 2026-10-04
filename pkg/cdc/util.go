@@ -29,6 +29,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -592,21 +593,54 @@ func floatArrayToString[T float32 | float64](arr []T) string {
 //	return
 //}
 
-var OpenDbConn = func(user, password string, ip string, port int, timeout string) (db *sql.DB, err error) {
+const openDbConnAttemptTimeout = 10 * time.Second
+
+var OpenDbConn = func(
+	ctx context.Context,
+	user, password string,
+	ip string,
+	port int,
+	timeout string,
+) (db *sql.DB, err error) {
 	logutil.Info("cdc.util.open_db_conn", zap.String("timeout", timeout))
 	cfg, err := makeMysqlConfig(user, password, ip, port, timeout)
 	if err != nil {
 		return nil, err
 	}
 	for i := 0; i < 3; i++ {
-		if db, err = tryConn(cfg); err == nil {
+		attemptCtx, cancelAttempt := context.WithTimeout(ctx, openDbConnAttemptTimeout)
+		db, err = tryConn(attemptCtx, cfg)
+		cancelAttempt()
+		if err == nil {
+			// The caller may lose lifecycle authority between tryConn's final
+			// check and this publication point. Close instead of handing the
+			// connection to an obsolete generation.
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				if db != nil {
+					_ = db.Close()
+				}
+				return nil, ctxErr
+			}
 			// TODO check table existence
 			return
 		}
 		v2.CdcMysqlConnErrorCounter.Inc()
-		time.Sleep(time.Second)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		if i == 2 {
+			break
+		}
+		timer := time.NewTimer(time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
 	}
 	logutil.Error("cdc.util.open_db_conn_failed", zap.Error(err))
+	err = newRetryableConnectionError(err)
 	return
 }
 
@@ -629,7 +663,7 @@ func makeMysqlConfig(user, password string, ip string, port int, timeout string)
 
 var openDbWithConnector = sql.OpenDB
 
-var tryConn = func(cfg *mysql.Config) (*sql.DB, error) {
+var tryConn = func(ctx context.Context, cfg *mysql.Config) (*sql.DB, error) {
 	connector, err := mysql.NewConnector(cfg)
 	if err != nil {
 		return nil, err
@@ -638,11 +672,25 @@ var tryConn = func(cfg *mysql.Config) (*sql.DB, error) {
 	db.SetConnMaxLifetime(time.Minute * 3)
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
-	time.Sleep(time.Millisecond * 100)
+	timer := time.NewTimer(time.Millisecond * 100)
+	select {
+	case <-ctx.Done():
+		timer.Stop()
+		_ = db.Close()
+		return nil, ctx.Err()
+	case <-timer.C:
+	}
 
 	//ping opens the connection
-	err = db.Ping()
+	err = db.PingContext(ctx)
 	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	// Cancellation can race a successful ping. Do not publish a connection to a
+	// generation that has already lost its lifecycle authority.
+	if err = ctx.Err(); err != nil {
+		_ = db.Close()
 		return nil, err
 	}
 	return db, err
@@ -690,7 +738,34 @@ var GetSnapshotTS = func(txnOp client.TxnOperator) timestamp.Timestamp {
 	return txnOp.SnapshotTS()
 }
 
+var collectBoundaryHook struct {
+	sync.RWMutex
+	fn func(types.TS, types.TS)
+}
+
+// SetCDCCollectBoundaryHookForTest observes the actual source collection
+// boundary used by a running CDC reader. It is intended for integration tests
+// that must distinguish durable-checkpoint recovery from a replay from the
+// original task creation boundary.
+func SetCDCCollectBoundaryHookForTest(fn func(types.TS, types.TS)) (restore func()) {
+	collectBoundaryHook.Lock()
+	previous := collectBoundaryHook.fn
+	collectBoundaryHook.fn = fn
+	collectBoundaryHook.Unlock()
+	return func() {
+		collectBoundaryHook.Lock()
+		collectBoundaryHook.fn = previous
+		collectBoundaryHook.Unlock()
+	}
+}
+
 var CollectChanges = func(ctx context.Context, rel engine.Relation, fromTs, toTs types.TS, mp *mpool.MPool) (engine.ChangesHandle, error) {
+	collectBoundaryHook.RLock()
+	hook := collectBoundaryHook.fn
+	collectBoundaryHook.RUnlock()
+	if hook != nil {
+		hook(fromTs, toTs)
+	}
 	return rel.CollectChanges(ctx, fromTs, toTs, true, mp)
 }
 
@@ -859,7 +934,11 @@ func AddSingleQuotesJoin(s []string) string {
 	if len(s) == 0 {
 		return ""
 	}
-	return "'" + strings.Join(s, "','") + "'"
+	escaped := make([]string, len(s))
+	for i, value := range s {
+		escaped[i] = escapeSQLString(value)
+	}
+	return "'" + strings.Join(escaped, "','") + "'"
 }
 
 func GenDbTblKey(dbName, tblName string) string {

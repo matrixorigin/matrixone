@@ -1,0 +1,29 @@
+# CBC requires an IV at runtime even though both AES functions also expose a
+# two-argument form for ECB. Keep each error statement isolated so the exact
+# MySQL error contract is covered without hiding later cases.
+SET block_encryption_mode = 'aes-256-cbc';
+
+#error ER_WRONG_PARAMCOUNT_TO_NATIVE_FCT
+SELECT AES_ENCRYPT('hello', 'key');
+#error ER_AES_INVALID_IV
+SELECT AES_ENCRYPT('hello', 'key', NULL);
+#error ER_AES_INVALID_IV
+SELECT AES_ENCRYPT('hello', 'key', 'short');
+
+#error ER_WRONG_PARAMCOUNT_TO_NATIVE_FCT
+SELECT AES_DECRYPT(UNHEX('00112233445566778899aabbccddeeff'), 'key');
+#error ER_AES_INVALID_IV
+SELECT AES_DECRYPT(UNHEX('00112233445566778899aabbccddeeff'), 'key', NULL);
+#error ER_AES_INVALID_IV
+SELECT AES_DECRYPT(UNHEX('00112233445566778899aabbccddeeff'), 'key', 'short');
+
+# NULL input still propagates NULL before CBC IV validation.
+SELECT AES_ENCRYPT(NULL, 'key') AS null_plaintext_missing_iv;
+SELECT AES_DECRYPT(NULL, 'key') AS null_ciphertext_missing_iv;
+
+SELECT LENGTH(AES_ENCRYPT('hello', 'key', '0123456789abcdef')) AS valid_ciphertext_length;
+SELECT AES_DECRYPT(
+    AES_ENCRYPT('hello', 'key', '0123456789abcdef'),
+    'key', '0123456789abcdef') AS valid_plaintext;
+
+SET block_encryption_mode = 'aes-128-ecb';

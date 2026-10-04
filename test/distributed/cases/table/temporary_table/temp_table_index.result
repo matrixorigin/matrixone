@@ -8,7 +8,7 @@ index idx_name (name)
 );
 show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    1    idx_name    1    name    A    0    NULL    NULL    YES                    YES    name
+t1    1    idx_name    1    name    A    0    NULL    NULL    YES    BTREE                YES    name
 show create table t1;
 Table    Create Table
 t1    CREATE TEMPORARY TABLE `t1` (\n  `id` int DEFAULT NULL,\n  `name` varchar(20) DEFAULT NULL,\n  KEY `idx_name` (`name`)\n)
@@ -25,7 +25,7 @@ insert into t2 values (1, 20), (2, 30), (3, 25);
 create index idx_age on t2(age);
 show index from t2;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t2    1    idx_age    1    age    A    0    NULL    NULL    YES                    YES    age
+t2    1    idx_age    1    age    A    0    NULL    NULL    YES    BTREE                YES    age
 show create table t2;
 Table    Create Table
 t2    CREATE TEMPORARY TABLE `t2` (\n  `id` int DEFAULT NULL,\n  `age` int DEFAULT NULL,\n  KEY `idx_age` (`age`)\n)
@@ -43,9 +43,9 @@ create index idx_c2_c3 on t3(c2, c3);
 insert into t3 values (1, 10, 'A'), (2, 20, 'B'), (3, 10, 'C');
 show index from t3;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t3    0    PRIMARY    1    c1    A    0    NULL    NULL                        YES    c1
-t3    1    idx_c2_c3    1    c2    A    0    NULL    NULL    YES                    YES    c2
-t3    1    idx_c2_c3    2    c3    A    0    NULL    NULL    YES                    YES    c3
+t3    0    PRIMARY    1    c1    A    0    NULL    NULL        BTREE                YES    c1
+t3    1    idx_c2_c3    1    c2    A    0    NULL    NULL    YES    BTREE                YES    c2
+t3    1    idx_c2_c3    2    c3    A    0    NULL    NULL    YES    BTREE                YES    c3
 select * from t3 where c2 = 10;
 c1    c2    c3
 1    10    A
@@ -80,14 +80,14 @@ drop table t_nullable_unique;
 drop index idx_c2_c3 on t3;
 show index from t3;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t3    0    PRIMARY    1    c1    A    0    NULL    NULL                        YES    c1
-t3    0    idx_unique_c3    1    c3    A    0    NULL    NULL    YES                    YES    c3
+t3    0    PRIMARY    1    c1    A    0    NULL    NULL        BTREE                YES    c1
+t3    0    idx_unique_c3    1    c3    A    0    NULL    NULL    YES    BTREE                YES    c3
 alter table t3 add index idx_new (c2);
 show index from t3;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t3    0    PRIMARY    1    c1    A    0    NULL    NULL                        YES    c1
-t3    0    idx_unique_c3    1    c3    A    0    NULL    NULL    YES                    YES    c3
-t3    1    idx_new    1    c2    A    0    NULL    NULL    YES                    YES    c2
+t3    0    PRIMARY    1    c1    A    0    NULL    NULL        BTREE                YES    c1
+t3    0    idx_unique_c3    1    c3    A    0    NULL    NULL    YES    BTREE                YES    c3
+t3    1    idx_new    1    c2    A    0    NULL    NULL    YES    BTREE                YES    c2
 create temporary table t4 (
 id int primary key,
 title varchar(50),

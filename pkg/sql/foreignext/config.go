@@ -40,8 +40,9 @@ const (
 	KindESQL = "esql"
 	KindSQL  = "sql"
 
-	optionConfig = "config"
-	optionQuery  = "query"
+	optionConfig   = "config"
+	optionQuery    = "query"
+	optionPushdown = "pushdown"
 )
 
 // Config is the validated content of the WITH (...) option list.
@@ -56,6 +57,12 @@ type Config struct {
 	// DefaultQuery is the query text used when a SELECT has no
 	// __mo_query = '...' predicate; "" means no default.
 	DefaultQuery string
+	// Pushdown false (the default) sends the query text verbatim and MO
+	// evaluates every predicate itself.  True wraps the text so the source
+	// applies the predicates MO can render, and MO then stops evaluating
+	// exactly those -- the source owns them.  Whatever could not be rendered
+	// stays local.  SQL only: ENGINE = ESQL rejects the option.
+	Pushdown bool
 }
 
 // ParseTableOptions validates the WITH (...) list of ENGINE = ESQL|SQL.
@@ -87,8 +94,26 @@ func ParseTableOptions(ctx context.Context, param *tree.ForeignTableParam) (Conf
 			cfg.ConfigJSON = value
 		case optionQuery:
 			cfg.DefaultQuery = value
+		case optionPushdown:
+			// Pushdown wraps the user's query text as a MySQL-dialect derived
+			// table; ES|QL has no such form, so ESQL stays on the verbatim
+			// path until it grows a pushdown of its own.
+			if cfg.Kind != KindSQL {
+				return Config{}, moerr.NewInvalidInputf(ctx,
+					"the 'pushdown' option is only supported by ENGINE = SQL, not %s", cfg.Kind)
+			}
+			pushdown, err := strconv.ParseBool(strings.ToLower(value))
+			if err != nil {
+				return Config{}, moerr.NewInvalidInputf(ctx,
+					"%s option 'pushdown' must be true or false, got '%s'", cfg.Kind, value)
+			}
+			cfg.Pushdown = pushdown
 		default:
-			return Config{}, moerr.NewInvalidInputf(ctx, "unknown %s option '%s' (supported: config, query)", cfg.Kind, key)
+			supported := "config, query"
+			if cfg.Kind == KindSQL {
+				supported = "config, query, pushdown"
+			}
+			return Config{}, moerr.NewInvalidInputf(ctx, "unknown %s option '%s' (supported: %s)", cfg.Kind, key, supported)
 		}
 	}
 	return cfg, nil
@@ -102,12 +127,13 @@ func BuildCreateSQLEnvelope(cfg Config) string {
 	// build_show_util.go). Every field is url-escaped so ';' and '*/' in a DSN
 	// cannot break the envelope.
 	return fmt.Sprintf(
-		"/* %s version=1; kind=%s; engine=%s; config=%s; query=%s */",
+		"/* %s version=1; kind=%s; engine=%s; config=%s; query=%s; pushdown=%t */",
 		CreateSQLEnvelopePrefix,
 		CreateSQLKindForeign,
 		url.QueryEscape(cfg.Kind),
 		url.QueryEscape(cfg.ConfigJSON),
 		url.QueryEscape(cfg.DefaultQuery),
+		cfg.Pushdown,
 	)
 }
 
@@ -153,6 +179,17 @@ func ParseCreateSQLEnvelope(ctx context.Context, createSQL string) (Config, bool
 		Kind:         fields["engine"],
 		ConfigJSON:   fields["config"],
 		DefaultQuery: fields["query"],
+	}
+	// pushdown is absent from envelopes written before it existed, and absent
+	// means the default, which is also the zero value: those tables keep
+	// getting the verbatim query.  (The reverse direction is safe too: an
+	// older binary ignores the field it does not know.)
+	if raw, ok := fields["pushdown"]; ok {
+		pushdown, err := strconv.ParseBool(raw)
+		if err != nil {
+			return Config{}, true, moerr.NewInvalidInput(ctx, "foreign table rel_createsql envelope has an invalid pushdown flag")
+		}
+		cfg.Pushdown = pushdown
 	}
 	if cfg.Kind != KindESQL && cfg.Kind != KindSQL {
 		return Config{}, true, moerr.NewInvalidInput(ctx, "foreign table rel_createsql envelope has an invalid engine")

@@ -369,8 +369,9 @@ func (ctr *container) handleRuntimeFilter(ap *IndexBuild, proc *process.Process)
 		return nil
 	}
 
-	// InplaceSort reorders data but NOT the null bitmap.
-	// NULLs are irrelevant for IN-filter: clear bitmap before sort.
+	// NULLs are irrelevant for IN-filter: clear the bitmap before sorting.
+	// InplaceSort preserves exact duplicate representations and marks supported
+	// payload types sorted for pruning.
 	vec.GetNulls().Reset()
 	vec.InplaceSort()
 	data, release, err := runtimefilter.MarshalExactFilterVector(

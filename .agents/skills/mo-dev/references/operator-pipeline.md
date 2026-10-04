@@ -88,7 +88,7 @@ signal / `CloseWithTimeout` mismatch.
 
 ### CGo Link Errors Are Usually Environment
 
-CGo link errors (`Undefined symbols`, `cannot find -lmo`) are environment issues until proven otherwise. The C shared libraries (`libmo.dylib`, `libusearch_c.dylib`) must be pre-built via `make cgo` and `make thirdparties`.
+CGo link errors (`Undefined symbols`, `cannot find -lmo`) are environment issues until proven otherwise. Build the C shared libraries (`libmo.dylib`, `libusearch_c.dylib`) once through the complete top-level owner: `make cgo` already builds and stages thirdparties.
 
 ### Pipeline Cleanup: Abort, Do Not Wait
 

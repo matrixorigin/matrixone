@@ -16,6 +16,7 @@ package plan
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -62,38 +63,98 @@ func TestApplyIndicesForSortUsingIvfflat_PostModeOffsetCompensationUsesCompensat
 	require.True(t, tableFuncNode.VectorIndexScan.GetPostFilterOverFetch())
 }
 
-func TestApplyIndicesForSortUsingIvfflat_DistRangeOnlyFilterCompensatesOffset(t *testing.T) {
-	builder, _, scanNode, scanNodeID, multiTableIndex := newIvfIncludeModeTestBuilder(t)
+func TestApplyIndicesForSortUsingIvfflat_DistancePredicateOwnership(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		source       types.T
+		quantization string
+		lossy        bool
+		mode         string
+		async        bool
+	}{
+		{"f32", types.T_array_float32, "", false, "post", false},
+		{"f64", types.T_array_float64, "", false, "post", false},
+		{"same_f32", types.T_array_float32, "float32", false, "post", false},
+		{"same_bf16", types.T_array_bf16, "bf16", false, "post", false},
+		{"bf16", types.T_array_float32, "bf16", true, "post", false},
+		{"f16", types.T_array_float32, "float16", true, "post", false},
+		{"f64_to_f32", types.T_array_float64, "float32", true, "post", false},
+		{"int8", types.T_array_float32, "int8", true, "post", false},
+		{"uint8", types.T_array_float32, "uint8", true, "post", false},
+		{"same_int8_affine", types.T_array_int8, "int8", true, "post", false},
+		{"int8_pre", types.T_array_float32, "int8", true, "pre", false},
+		{"int8_include", types.T_array_float32, "int8", true, "include", false},
+		{"int8_pre_async", types.T_array_float32, "int8", true, "pre", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			builder, _, scanNode, scanNodeID, multiTableIndex := newIvfIncludeModeTestBuilder(t)
 
-	vecCtx := newIvfIncludeModeVectorSortContext(scanNode, scanNodeID, "post", 0, 2, 4)
-	setIvfIncludeModeTestPagination(vecCtx, 2, 1)
-	scanNode.FilterList = []*planpb.Expr{
-		{
-			Typ: planpb.Type{Id: int32(types.T_bool)},
-			Expr: &planpb.Expr_F{
-				F: &planpb.Function{
-					Func: &planpb.ObjectRef{ObjName: "<="},
-					Args: []*planpb.Expr{
-						{
-							Typ:  planpb.Type{Id: int32(types.T_float64)},
-							Expr: &planpb.Expr_F{F: vecCtx.distFnExpr},
+			scanNode.TableDef.Cols[1].Typ.Id = int32(tc.source)
+			for _, def := range multiTableIndex.IndexDefs {
+				def.IndexAlgoParams = `{"op_type":"vector_l2_ops","quantization":"` + tc.quantization + `","async":"` + fmt.Sprint(tc.async) + `"}`
+			}
+			vecCtx := newIvfIncludeModeVectorSortContext(scanNode, scanNodeID, tc.mode, 0, 2)
+			setIvfIncludeModeTestPagination(vecCtx, 2, 1)
+			scanNode.FilterList = []*planpb.Expr{
+				{
+					Typ: planpb.Type{Id: int32(types.T_bool)},
+					Expr: &planpb.Expr_F{
+						F: &planpb.Function{
+							Func: &planpb.ObjectRef{ObjName: "<="},
+							Args: []*planpb.Expr{
+								{
+									Typ:  planpb.Type{Id: int32(types.T_float64)},
+									Expr: &planpb.Expr_F{F: vecCtx.distFnExpr},
+								},
+								MakePlan2Float64ConstExprWithType(0.5),
+							},
 						},
-						MakePlan2Float64ConstExprWithType(0.5),
 					},
 				},
-			},
-		},
+			}
+
+			if tc.mode != "post" {
+				scanNode.FilterList = append(scanNode.FilterList, makeIvfIncludeModeIsNotNullFilter(scanNode, 1))
+			}
+			original := DeepCopyExprList(scanNode.FilterList)
+			_, err := builder.applyIndicesForSortUsingIvfflat(scanNodeID, vecCtx, multiTableIndex, nil, nil)
+			require.NoError(t, err)
+
+			tableFuncNode := findIvfTableFunctionNode(builder, vecCtx.projNode.Children[0])
+			require.NotNil(t, tableFuncNode)
+			require.Equal(t, uint64(3), tableFuncNode.VectorIndexScan.GetCandidateLimit().GetLit().GetU64Val())
+			if tc.lossy {
+				require.Nil(t, tableFuncNode.VectorIndexScan.GetDistanceRange())
+				require.True(t, tableFuncNode.VectorIndexScan.GetPostFilterOverFetch())
+				require.Equal(t, original, scanNode.FilterList)
+				if tc.mode != "post" {
+					var membership *planpb.Node
+					for _, node := range builder.qry.Nodes {
+						if node.NodeType == planpb.Node_TABLE_SCAN && node != scanNode && node.TableDef.Name == scanNode.TableDef.Name {
+							require.Nil(t, membership, "one copied membership scan")
+							membership = node
+						}
+					}
+					require.NotNil(t, membership)
+					require.NotEqual(t, scanNode.BindingTags[0], membership.BindingTags[0])
+					expected := DeepCopyExprList(original)
+					if !tc.async {
+						expected = expected[:1]
+					}
+					for _, expr := range expected {
+						replaceColRefTag(expr, scanNode.BindingTags[0], membership.BindingTags[0])
+					}
+					require.Equal(t, expected, membership.FilterList)
+					require.Nil(t, membership.Limit)
+					require.Nil(t, membership.Offset)
+				}
+			} else {
+				require.NotNil(t, tableFuncNode.VectorIndexScan.GetDistanceRange().GetUpperBound())
+				require.False(t, tableFuncNode.VectorIndexScan.GetPostFilterOverFetch())
+				require.Empty(t, scanNode.FilterList)
+			}
+		})
 	}
-
-	_, err := builder.applyIndicesForSortUsingIvfflat(scanNodeID, vecCtx, multiTableIndex, nil, nil)
-	require.NoError(t, err)
-
-	sortNode := builder.qry.Nodes[vecCtx.projNode.Children[0]]
-	tableFuncNode := findIvfTableFunctionNode(builder, sortNode.Children[0])
-	require.NotNil(t, tableFuncNode)
-	require.Equal(t, uint64(3), tableFuncNode.VectorIndexScan.GetCandidateLimit().GetLit().GetU64Val())
-	require.NotNil(t, tableFuncNode.VectorIndexScan.GetDistanceRange())
-	require.NotNil(t, tableFuncNode.VectorIndexScan.GetDistanceRange().GetUpperBound())
 }
 
 func TestRenameColumnUpdatesAlterContextAndClusterMetadata(t *testing.T) {
@@ -319,7 +380,7 @@ func TestAppendAffectedAlterColumnNamesKeepsOldNameForChangeColumn(t *testing.T)
 	require.Equal(t, []string{"title"}, appendAffectedAlterColumnNames(nil, "title", "title"))
 }
 
-func TestUpdateRenameColumnInTableDefRenamesPrimaryKeyAlias(t *testing.T) {
+func TestUpdateRenameColumnInTableDefRenamesPrimaryKeyMetadata(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	tableDef := makeAlterCoverageTableDef()
 
@@ -335,8 +396,61 @@ func TestUpdateRenameColumnInTableDefRenamesPrimaryKeyAlias(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "row_id", tableDef.Pkey.PkeyColName)
 	require.Equal(t, []string{"row_id"}, tableDef.Pkey.Names)
+	require.Len(t, sqls, 2)
+	require.Contains(t, sqls[0], "set column_name = 'row_id'")
+	require.Contains(t, sqls[0], "column_name = 'id'")
+	require.Contains(t, sqls[1], catalog.CreateAlias("row_id"))
+	require.Contains(t, sqls[1], catalog.CreateAlias("id"))
+}
+
+func TestUpdateRenameColumnInTableDefPreservesSecondaryPrimaryKeyAlias(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef := makeAlterCoverageTableDef()
+	tableDef.Indexes = append(tableDef.Indexes, &planpb.IndexDef{
+		IndexName: "idx_title",
+		IndexAlgo: catalog.MoIndexDefaultAlgo.ToString(),
+		Parts:     []string{"title", catalog.CreateAlias("id")},
+	})
+
+	sqls, err := updateRenameColumnInTableDef(
+		mock.CurrentContext(),
+		tableDef.Cols[0],
+		tableDef,
+		&tree.AlterTableRenameColumnClause{
+			OldColumnName: tree.NewUnresolvedColName("id"),
+			NewColumnName: tree.NewUnresolvedColName("row_id"),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, []string{"title", catalog.CreateAlias("row_id")}, tableDef.Indexes[1].Parts)
+	require.Len(t, sqls, 2)
+	require.Contains(t, sqls[0], "set column_name = 'row_id'")
+	require.Contains(t, sqls[1], catalog.CreateAlias("row_id"))
+}
+
+func TestUpdateRenameColumnInTableDefRenamesCompositePrimaryKeyMetadata(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef := makeAlterCoverageTableDef()
+	tableDef.Pkey = &planpb.PrimaryKeyDef{
+		Names:       []string{"id", "title"},
+		PkeyColName: catalog.CPrimaryKeyColName,
+	}
+
+	sqls, err := updateRenameColumnInTableDef(
+		mock.CurrentContext(),
+		tableDef.Cols[0],
+		tableDef,
+		&tree.AlterTableRenameColumnClause{
+			OldColumnName: tree.NewUnresolvedColName("id"),
+			NewColumnName: tree.NewUnresolvedColName("row_id"),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, []string{"row_id", "title"}, tableDef.Pkey.Names)
+	require.Equal(t, catalog.CPrimaryKeyColName, tableDef.Pkey.PkeyColName)
 	require.Len(t, sqls, 1)
-	require.Contains(t, sqls[0], catalog.CreateAlias("row_id"))
+	require.Contains(t, sqls[0], "set column_name = 'row_id'")
+	require.Contains(t, sqls[0], "column_name = 'id'")
 }
 
 func TestUpdateRenameColumnInTableDefEscapesMoIndexesColumnNameUpdate(t *testing.T) {

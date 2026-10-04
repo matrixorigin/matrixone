@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	icebergsql "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
@@ -30,17 +31,22 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	addOrphanFileColumn("table_name", "varchar(1024) not null default ''", "namespace"),
 	addOrphanFileColumn("file_path", "varchar(4096) not null default ''", "table_location_hash"),
 	upgradeInformationSchemaView("TABLES", sysview.InformationSchemaTablesDDL),
-	upgradeInformationSchemaView("COLUMNS", sysview.InformationSchemaColumnsDDL),
+	upgradeInformationSchemaView("COLUMNS", sysview.InformationSchemaColumnsV46UpgradeDDL),
 	upgradeInformationSchemaView("STATISTICS", sysview.InformationSchemaStatisticsDDL),
 	upgradeInformationSchemaViewFromLegacyTable("TABLE_CONSTRAINTS", sysview.InformationSchemaTableConstraintsDDL),
 }
 
 func upgradeInformationSchemaView(viewName, viewDDL string) versions.UpgradeEntry {
+	requiredProtocol := int64(0)
+	if viewName == "TABLES" || viewName == "COLUMNS" {
+		requiredProtocol = defines.MORPCVersion46
+	}
 	return versions.UpgradeEntry{
-		Schema:    sysview.InformationDBConst,
-		TableName: viewName,
-		UpgType:   versions.MODIFY_VIEW,
-		UpgSql:    viewDDL,
+		Schema:                  sysview.InformationDBConst,
+		TableName:               viewName,
+		UpgType:                 versions.MODIFY_VIEW,
+		UpgSql:                  viewDDL,
+		RequiredProtocolVersion: requiredProtocol,
 		CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 			exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, viewName)
 			if err != nil {

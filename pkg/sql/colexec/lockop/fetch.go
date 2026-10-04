@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"golang.org/x/exp/constraints"
 )
 
@@ -47,58 +48,70 @@ var (
 		math.MaxUint8}
 )
 
-// GetFetchRowsFunc get FetchLockRowsFunc based on primary key type
-func GetFetchRowsFunc(t types.Type) FetchLockRowsFunc {
-	var fetcher FetchLockRowsFunc
+func getFetchRowsFunc(t types.Type) FetchLockRowsFunc {
 	switch t.Oid {
 	case types.T_bool:
-		fetcher = fetchBoolRows
+		return fetchBoolRows
 	case types.T_bit:
-		fetcher = fetchUint64Rows
+		return fetchUint64Rows
 	case types.T_int8:
-		fetcher = fetchInt8Rows
+		return fetchInt8Rows
 	case types.T_int16:
-		fetcher = fetchInt16Rows
+		return fetchInt16Rows
 	case types.T_int32:
-		fetcher = fetchInt32Rows
+		return fetchInt32Rows
 	case types.T_int64:
-		fetcher = fetchInt64Rows
+		return fetchInt64Rows
 	case types.T_uint8:
-		fetcher = fetchUint8Rows
+		return fetchUint8Rows
 	case types.T_uint16:
-		fetcher = fetchUint16Rows
+		return fetchUint16Rows
 	case types.T_uint32:
-		fetcher = fetchUint32Rows
+		return fetchUint32Rows
 	case types.T_uint64:
-		fetcher = fetchUint64Rows
+		return fetchUint64Rows
 	case types.T_float32:
-		fetcher = fetchFloat32Rows
+		return fetchFloat32Rows
 	case types.T_float64:
-		fetcher = fetchFloat64Rows
+		return fetchFloat64Rows
 	case types.T_date:
-		fetcher = fetchDateRows
+		return fetchDateRows
 	case types.T_year:
-		fetcher = fetchYearRows
+		return fetchYearRows
 	case types.T_time:
-		fetcher = fetchTimeRows
+		return fetchTimeRows
 	case types.T_datetime:
-		fetcher = fetchDateTimeRows
+		return fetchDateTimeRows
 	case types.T_timestamp:
-		fetcher = fetchTimestampRows
+		return fetchTimestampRows
 	case types.T_decimal64:
-		fetcher = fetchDecimal64Rows
+		return fetchDecimal64Rows
 	case types.T_decimal128:
-		fetcher = fetchDecimal128Rows
+		return fetchDecimal128Rows
 	case types.T_decimal256:
-		fetcher = fetchDecimal256Rows
+		return fetchDecimal256Rows
 	case types.T_uuid:
-		fetcher = fetchUUIDRows
+		return fetchUUIDRows
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary:
-		fetcher = fetchVarlenaRows
+		return fetchVarlenaRows
 		// T_json, T_blob, T_array_float32 etc. cannot be PK.
 	case types.T_enum:
-		fetcher = fetchEnumRows
+		return fetchEnumRows
 	default:
+		return nil
+	}
+}
+
+// SupportsTotalLockTableRange reports whether lockop's table range covers the
+// complete physical keyspace for the primary-key type.
+func SupportsTotalLockTableRange(t types.Type) bool {
+	return colexec.SupportsTotalLockTableRange(t)
+}
+
+// GetFetchRowsFunc get FetchLockRowsFunc based on primary key type
+func GetFetchRowsFunc(t types.Type) FetchLockRowsFunc {
+	fetcher := getFetchRowsFunc(t)
+	if fetcher == nil {
 		panic(fmt.Sprintf("not support for %s", t.String()))
 	}
 	return func(
@@ -382,15 +395,20 @@ func fetchFloat32Rows(
 		return parker.Bytes()
 	}
 	if lockTable {
-		min := fn(-math.MaxFloat32)
-		max := fn(math.MaxFloat32)
+		// Packer's physical total order covers every IEEE-754 bit pattern,
+		// including infinities, signed zeroes, and every NaN payload. The raw
+		// MaxUint32 and MaxInt32 bit patterns encode to the all-zero and all-one
+		// payload endpoints respectively.
+		min := fn(math.Float32frombits(math.MaxUint32))
+		max := fn(math.Float32frombits(math.MaxInt32))
 		return true, [][]byte{min, max},
 			lock.Granularity_Range
 	}
-	return fetchFixedRows(
+	return fetchFixedRowsWithCompare(
 		vec,
 		max,
 		fn,
+		types.Float32TupleAscCompare,
 		filter,
 		filterCols)
 }
@@ -409,15 +427,16 @@ func fetchFloat64Rows(
 		return parker.Bytes()
 	}
 	if lockTable {
-		min := fn(-math.MaxFloat64)
-		max := fn(math.MaxFloat64)
+		min := fn(math.Float64frombits(math.MaxUint64))
+		max := fn(math.Float64frombits(math.MaxInt64))
 		return true, [][]byte{min, max},
 			lock.Granularity_Range
 	}
-	return fetchFixedRows(
+	return fetchFixedRowsWithCompare(
 		vec,
 		max,
 		fn,
+		types.Float64TupleAscCompare,
 		filter,
 		filterCols)
 }

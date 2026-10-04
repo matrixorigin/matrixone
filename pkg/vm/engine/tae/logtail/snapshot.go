@@ -2047,8 +2047,16 @@ func (sm *SnapshotMeta) AccountToTableSnapshots(
 			)
 		}
 
-		// get the pitr for the table
-		ts := pitr.GetTS(info.accountID, info.dbID, tid)
+		// Every active PITR can require historical mo_catalog metadata during
+		// restore. Protect all catalog tables with the global PITR lower bound,
+		// even when a legacy sys_mo_catalog_pitr row is narrower than another
+		// active PITR. Non-catalog tables keep their scoped PITR lookup.
+		var ts types.TS
+		if info.dbID == catalog2.MO_CATALOG_ID {
+			ts = sysPitr
+		} else {
+			ts = pitr.GetTS(info.accountID, info.dbID, tid)
+		}
 		tablePitrs[tid] = &ts
 	}
 	return

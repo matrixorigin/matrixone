@@ -171,6 +171,98 @@ SearchResult cpu_topk_merge_sharded(const std::vector<SearchResult>& shard_resul
     return global_res;
 }
 
+// rows_fitting_gpu_mem caps requested_rows so that requested_rows * per_row_bytes fits in
+// ~60% of the FREE memory on the CURRENT device.
+//
+// 60% rather than 80%: the caller uploads the rows as ONE contiguous device allocation, and
+// a single block rarely fits 80% of free memory once the pool is fragmented, on top of which
+// cuVS needs its own scratch. This is the one implementation of that rule -- the quantizer
+// staging bound (cap_train_rows_to_gpu_mem) and the index-build capacity bound both derive
+// from it, so the two can never drift into disagreeing about what fits.
+//
+// THROWS on cudaMemGetInfo failure or per_row_bytes == 0; it never guesses. A caller that
+// cannot query the device cannot size an upload for it, and returning the request unchecked
+// would push the real fault into an opaque allocation failure later.
+//
+// A device must be current. `who` names the caller in the log line and the exception text.
+// out_free_bytes, when non-null, receives the free-memory reading that was used.
+// Pure query: how many rows of per_row_bytes fit ~60% of free VRAM. Does not log --
+// callers that are merely sizing something have capped nothing.
+// budget_percent is the caller's per-index fraction of free VRAM (index_cost.hpp,
+// index_cost_base::budget_percent). 0 falls back to the governor's default, for
+// callers with no cost class to ask.
+int64_t rows_fitting_gpu_mem(size_t per_row_bytes, const char* who, size_t* out_free_bytes,
+                             size_t budget_percent = 0);
+
+// Caps requested_rows to what fits, logging only when it actually caps.
+int64_t cap_rows_to_gpu_mem(int64_t requested_rows, size_t per_row_bytes, const char* who,
+                            size_t budget_percent = 0);
+
+// kDefaultQuantizerTrainLimit / quantizer_staging_rows own the int8/uint8
+// staging sample size. Both the index (staging_row_limit) and the Go planner
+// (gpu_quantizer_staging_rows -> cuvs.QuantizerStagingRows) go through this, so
+// the rule has ONE definition.
+//
+// Go needs it because the sample is HOST memory live at the same time as the
+// capacity allocation, so the host budget must charge it before deriving
+// capacity. Go computing min(limit, device_cap) itself would be a second
+// implementation of this function -- which is how this subsystem has gone wrong
+// before -- so it asks instead.
+//
+// 100k rows give a fine 0.99-quantile estimate at a few hundred MB of f32 even at
+// high dim; 1M would be ~3-4 GB and get capped by the device bound anyway.
+inline constexpr uint64_t kDefaultQuantizerTrainLimit = 100000;
+
+// kMaxQuantizerTrainLimit is a HARD ceiling on quantizer_train_limit, so the
+// setting cannot be made effectively unlimited.
+//
+// Without it the only bound is the device budget below, which on a large card is
+// millions of rows: `quantizer_train_limit = 100000000` is then taken literally,
+// and at dim 768 f32 that is 300 GB of raw base rows the host is asked to hold.
+// The host only discovers it when the capacity model refuses the whole build.
+//
+// 1M is ~3 GB at dim 768 f32 -- ten times the default sample, which the note
+// above already calls more than enough for the quantile estimate. It is a
+// guardrail against absurd settings, not a correctness bound: a host smaller
+// than the arena still refuses, and the capacity model reports that.
+//
+// Enforced HERE rather than at the CREATE INDEX parameter, because this is the
+// one function both the Go planner and the native index resolve the sample
+// through -- clamping at the parameter would leave the other entry points
+// unbounded.
+inline constexpr uint64_t kMaxQuantizerTrainLimit = 1000000;
+
+// per_train_row is dim * sizeof(BASE element): the sample retains RAW base rows,
+// not the storage type. train_limit 0 means the default. Requires a current
+// device, since cap_rows_to_gpu_mem reads cudaMemGetInfo.
+inline uint64_t quantizer_staging_rows(size_t per_train_row, uint64_t train_limit,
+                                       size_t budget_percent) {
+    if (train_limit == 0) train_limit = kDefaultQuantizerTrainLimit;
+    constexpr uint64_t kMaxRequestable =
+        static_cast<uint64_t>(std::numeric_limits<int64_t>::max());
+    uint64_t want = std::min<uint64_t>(train_limit, kMaxRequestable);
+    want = std::min<uint64_t>(want, kMaxQuantizerTrainLimit);
+    const int64_t rows = cap_rows_to_gpu_mem(static_cast<int64_t>(want), per_train_row,
+                                             "quantizer", budget_percent);
+    return static_cast<uint64_t>(rows < 1 ? 1 : rows);
+}
+
+// ---------------------------------------------------------------------------
+// Packed component classification -- ONE list, shared with Go.
+//
+// A component either stays in host memory when the index is loaded or is
+// deserialised onto the device, and the two governors divide the artifact on
+// exactly that line: the host claim in load_dir sums the host-resident files,
+// and the device gates sum everything else BY EXCLUSION. The same list decides
+// both, so a name present in one copy and missing from the other is either
+// charged twice or not at all.
+//
+// It lives here, beside quantizer_staging_rows, for the same reason that one
+// does: this header is where Go comes to ask the question rather than
+// reimplement it.
+// ---------------------------------------------------------------------------
+bool is_host_resident_component(const std::string& name);
+
 } // namespace matrixone
 #endif
 
@@ -183,6 +275,92 @@ extern "C" {
     int gpu_get_next_device_id();
     void gpu_convert_f32_to_f16(const float* src, void* dst, uint64_t total_elements, int device_id, void* errmsg);
 // Pinned memory management
+// gpu_host_resident_components hands Go the SAME list matrixone::
+// is_host_resident_component uses, comma-separated, so the Go side classifies
+// packed components without keeping a second literal in sync by hand.
+//
+// Points at static storage owned by the library: do not free it, and treat it
+// as valid for the life of the process.
+const char* gpu_host_resident_components(void);
+
+// gpu_max_quantizer_train_limit hands Go the same kMaxQuantizerTrainLimit the
+// sample resolution clamps to, so CREATE INDEX can REJECT an over-large setting
+// instead of silently clamping it -- and so the ceiling is not restated in a
+// second language.
+uint64_t gpu_max_quantizer_train_limit(void);
+
+// gpu_rows_fitting_free_mem exposes rows_fitting_gpu_mem to Go. It makes device_id current
+// first: cudaMemGetInfo reports the CURRENT device, and the Go caller runs on an arbitrary
+// thread with no device bound. Returns 0 on success, -1 on failure (errmsg set).
+//
+// budget_percent is the algorithm's own fraction of free VRAM
+// (index_cost_base::budget_percent, reachable from Go via gpu_index_budget_percent);
+// 0 uses the governor default. A Go-side pre-flight MUST pass the index's own value:
+// admitting against a larger fraction than the C++ load claim uses would let a load
+// through here only to have the first deserialize refuse it, after the whole artifact
+// had been downloaded.
+int gpu_rows_fitting_free_mem(int device_id, uint64_t per_row_bytes,
+                              int64_t* out_rows, uint64_t* out_free_bytes,
+                              uint64_t budget_percent, void* errmsg);
+
+// gpu_index_budget_percent reports an algorithm's VRAM budget fraction
+// (index_cost_base::budget_percent) without constructing an index. index_type is the
+// name IndexConfig.Type already carries ("IVFPQ", "CAGRA", ...); unknown names take
+// the default.
+uint64_t gpu_index_budget_percent(const char* index_type);
+
+// ---- device memory governor, exposed to Go ------------------------------
+// One ledger for the large device allocations listed in device_memory.hpp:
+// build peaks, index loads, row uploads and quantizer training. C++ index LOADS
+// claim through
+// it directly; BUILDS claim from Go, because Go owns the per-algo cost model
+// (CAGRA charges dataset+graph, IVF-PQ charges PQ codes and budgets the k-means
+// trainset as max(train,index) — restating that in C++ would fork it) and
+// because a Go-side claim can span the whole decided-but-not-yet-allocated
+// window, which a claim taken inside the C++ build cannot.
+
+// gpu_quantizer_staging_rows reports how many rows the int8/uint8 quantizer will
+// stage on device_id, i.e. matrixone::quantizer_staging_rows -- the SAME function
+// the index itself uses (staging_row_limit), so the Go planner that must charge
+// this host arena against the host budget cannot drift from the native rule.
+//
+// per_train_row is dim * sizeof(BASE element); train_limit 0 means the default;
+// budget_percent 0 means the governor default. Returns 0 with errmsg set on
+// failure. Binds device_id and restores the caller's device.
+uint64_t gpu_quantizer_staging_rows(int device_id, uint64_t per_train_row,
+                                    uint64_t train_limit, uint64_t budget_percent,
+                                    void* errmsg);
+
+// gpu_quantizer_staging_bytes reports the HOST bytes the int8/uint8 staging arena
+// will occupy -- the same expression prereserve_staging_arena() allocates, so the
+// build claim and the allocation cannot disagree.
+//
+// max_rows caps it the way staging_bound_rows() does with this->count; pass the
+// source row count, which is an upper bound on the capacity the planner has not
+// derived yet. device_id should be the PRIMARY gpu: the arena is reserved under
+// submit_main, so that is the device its size is measured against.
+uint64_t gpu_quantizer_staging_bytes(int device_id, uint64_t dim, uint64_t elem_size,
+                                     uint64_t train_limit, uint64_t max_rows,
+                                     uint64_t budget_percent, void* errmsg);
+
+// gpu_device_total_mem reports a device's TOTAL VRAM in bytes -- hardware
+// capacity, NOT free memory. Free is a moving target; total is a property of the
+// card, so an index whose resident footprint exceeds it can never be searched
+// there however much is evicted.
+// out_total: the device's total VRAM. out_max_admissible: the most any admission
+// could ever grant there (the budget fraction of total) -- a demand above it can
+// never load however empty the card is. Either out-param may be NULL.
+int gpu_device_total_mem(int device_id, uint64_t* out_total, uint64_t* out_max_admissible,
+                         uint64_t budget_percent, void* errmsg);
+
+// gpu_device_memory_reserve returns an opaque token, or NULL with errmsg set
+// when the device cannot accommodate the request. The caller MUST pass the
+// token to gpu_device_memory_release exactly once; releasing NULL is a no-op.
+void*    gpu_device_memory_reserve(int device_id, uint64_t bytes, void* errmsg);
+void     gpu_device_memory_release(void* token);
+// Bytes currently claimed on a device. For tests and diagnostics.
+uint64_t gpu_device_memory_reserved(int device_id);
+
 void* gpu_alloc_pinned(uint64_t size, void* errmsg);
 void gpu_free_pinned(void* ptr, void* errmsg);
 

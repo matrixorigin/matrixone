@@ -547,6 +547,10 @@ func TestParseIncludedColumnsFromParams(t *testing.T) {
 		{"drops_empties", `{"included_columns":"price,,cat,"}`, []string{"price", "cat"}},
 		{"json_array", `{"included_columns":"[\"price\",\"category_id\"]"}`, []string{"price", "category_id"}},
 		{"legacy_key", `{"include_columns":"price,category_id"}`, []string{"price", "category_id"}},
+		{"malformed_json", `not-json`, nil},
+		{"wrong_type", `{"included_columns":42}`, nil},
+		{"wrong_primary_does_not_use_legacy", `{"included_columns":42,"include_columns":"price"}`, nil},
+		{"nested_session_vars", `{"included_columns":"price","session_vars":{"cfg":{"probe_limit":5}}}`, []string{"price"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

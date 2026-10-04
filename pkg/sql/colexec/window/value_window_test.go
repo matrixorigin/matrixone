@@ -819,7 +819,19 @@ func TestAppendDefaultOrNull(t *testing.T) {
 	err := appendDefaultOrNull(result, nil, 0, mp)
 	require.NoError(t, err)
 	require.True(t, result.IsNull(0))
+	require.Equal(t, types.StringSourceExpression, result.GetStringSourceAt(0))
 	result.Free(mp)
+
+	// explicit const NULL default retains the selected default's source.
+	nullResult := vector.NewVec(types.T_int32.ToType())
+	nullDefault := vector.NewConstNull(types.T_int32.ToType(), 1, mp)
+	require.NoError(t, nullDefault.SetStringSource(types.StringSourceCOMStmt))
+	err = appendDefaultOrNull(nullResult, nullDefault, 0, mp)
+	require.NoError(t, err)
+	require.True(t, nullResult.IsNull(0))
+	require.Equal(t, types.StringSourceCOMStmt, nullResult.GetStringSourceAt(0))
+	nullResult.Free(mp)
+	nullDefault.Free(mp)
 
 	// const default
 	result2 := vector.NewVec(types.T_int32.ToType())

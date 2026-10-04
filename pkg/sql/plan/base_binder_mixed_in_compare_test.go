@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -43,16 +44,28 @@ func TestTupleMemoIdentityMarksStableVolatileSource(t *testing.T) {
 	}
 	first, firstSource := newCandidate(types.T_float64)
 	second, secondSource := newCandidate(types.T_decimal128)
-	binder := &baseBinder{ctx: &BindContext{}}
+	binder := &baseBinder{builder: &QueryBuilder{}, ctx: &BindContext{}}
 	var memoIDs []int32
 
-	binder.markTupleVolatileSources(first, &memoIDs)
-	binder.markTupleVolatileSources(second, &memoIDs)
+	require.NoError(t, binder.markTupleVolatileSources(first, &memoIDs))
+	require.NoError(t, binder.markTupleVolatileSources(second, &memoIDs))
 
 	require.Zero(t, first.AuxId)
 	require.Zero(t, second.AuxId)
 	require.Negative(t, firstSource.AuxId)
 	require.Equal(t, firstSource.AuxId, secondSource.AuxId)
+}
+
+func TestVolatileMemoIDExhaustionFailsWithoutWrapping(t *testing.T) {
+	builder := &QueryBuilder{nextVolatileExprMemoID: math.MinInt32 + 1}
+	binder := &baseBinder{sysCtx: context.Background(), builder: builder}
+
+	id, err := binder.allocateVolatileExprMemoID()
+	require.NoError(t, err)
+	require.Equal(t, int32(math.MinInt32), id)
+	_, err = binder.allocateVolatileExprMemoID()
+	require.ErrorContains(t, err, "too many memoized expressions")
+	require.Equal(t, int32(math.MinInt32), builder.nextVolatileExprMemoID)
 }
 
 func mixedStringNumericInList(t *testing.T, ctx context.Context) *planpb.Expr {
@@ -157,6 +170,84 @@ func TestMixedStringNumericNotInBindsAndFoldsToFalse(t *testing.T) {
 	require.False(t, result.Bval)
 }
 
+func TestPromotedPadSpaceStringInUsesCanonicalKey(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	for _, tc := range []struct {
+		name string
+		fn   string
+	}{
+		{name: "in", fn: "in"},
+		{name: "not in", fn: "not_in"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			left := makePlan2StringConstExprWithType("MO      ")
+			left.Typ.PadSpace = true
+			right := &planpb.Expr{
+				Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{
+					makePlan2StringConstExprWithType("MO"),
+					makePlan2StringConstExprWithType("XX"),
+				}}},
+			}
+
+			expr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), tc.fn, []*planpb.Expr{left, right})
+			require.NoError(t, err)
+			inFunction := expr.GetF()
+			require.NotNil(t, inFunction)
+			require.Equal(t, tc.fn, inFunction.Func.ObjName)
+			leftCast := inFunction.Args[0].GetF()
+			require.NotNil(t, leftCast)
+			require.Equal(t, "cast", leftCast.Func.ObjName)
+			_, overloadID := function.DecodeOverloadID(leftCast.Func.Obj)
+			require.Equal(t, int32(2), overloadID)
+		})
+	}
+}
+
+func TestPromotedPadSpaceComparisonBuiltinsUseCanonicalArguments(t *testing.T) {
+	value := "coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))"
+	for _, tc := range []struct {
+		name string
+		sql  string
+		fn   string
+	}{
+		{name: "strcmp", sql: "select strcmp(" + value + ", 'MO') from nation", fn: "strcmp"},
+		{name: "field", sql: "select field(" + value + ", 'MO', 'XX') from nation", fn: "field"},
+		{name: "least", sql: "select least(" + value + ", 'MO') from nation", fn: "least"},
+		{name: "greatest", sql: "select greatest(" + value + ", 'MO') from nation", fn: "greatest"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			require.NoError(t, err)
+
+			var found bool
+			var visit func(*planpb.Expr)
+			visit = func(expr *planpb.Expr) {
+				if expr == nil {
+					return
+				}
+				fn := expr.GetF()
+				if fn == nil {
+					return
+				}
+				if fn.Func.ObjName == tc.fn {
+					for _, arg := range fn.Args {
+						found = found || isCastOverload(arg, 2)
+					}
+				}
+				for _, arg := range fn.Args {
+					visit(arg)
+				}
+			}
+			for _, node := range logicPlan.GetQuery().Nodes {
+				for _, projection := range node.ProjectList {
+					visit(projection)
+				}
+			}
+			require.True(t, found)
+		})
+	}
+}
+
 func TestNumericInStringLiteralKeepsExactNumericComparison(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -197,5 +288,30 @@ func TestNumericInStringLiteralKeepsExactNumericComparison(t *testing.T) {
 			require.Equal(t, int32(tc.expected), comparison.Args[0].Typ.Id)
 			require.Equal(t, int32(tc.expected), comparison.Args[1].Typ.Id)
 		})
+	}
+}
+
+func TestIntegerColumnStringLiteralProof(t *testing.T) {
+	for _, tc := range []struct {
+		text string
+		oid  types.T
+		fits bool
+	}{
+		{"9223372036854775806", types.T_int64, true},
+		{"9223372036854775807", types.T_int64, true},
+		{"-9223372036854775808", types.T_int64, true},
+		{"9223372036854775808", types.T_int64, false},
+		{"18446744073709551615", types.T_uint64, true},
+		{"18446744073709551616", types.T_uint64, false},
+		{"-1", types.T_uint64, false}, {"256", types.T_uint8, false},
+		{"2.5", types.T_int32, false}, {"2x", types.T_int32, false},
+		{"2e0", types.T_int32, false}, {" \t+2\r\n", types.T_int32, true},
+	} {
+		column := &planpb.Expr{Typ: makeSimplePlan2Type(tc.oid), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
+		literal := makePlan2StringConstExprWithType(tc.text)
+		require.Equal(t, tc.fits, integerColumnStringLiteralFits(column, literal), tc.text)
+		require.False(t, integerColumnStringLiteralFits(makePlan2Int64ConstExprWithType(2), literal))
+		literal.GetLit().IsBin = true
+		require.False(t, integerColumnStringLiteralFits(column, literal))
 	}
 }

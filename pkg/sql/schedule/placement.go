@@ -36,6 +36,7 @@ const (
 	ReasonUnsupportedSchedulingIntent = "unsupported-scheduling-intent"
 	ReasonStrictPoolFallback          = "strict-pool-fallback"
 	ReasonRequiredCurrentOutsidePool  = "required-current-cn-outside-pool"
+	ReasonIngressConstraintConflict   = "ingress-constraint-conflicts-current-cn-policy"
 	ReasonDroppedUnroutableCN         = "unroutable-cn"
 	ReasonDroppedDrainingCN           = "draining-cn"
 	ReasonDroppedDrainedCN            = "drained-cn"
@@ -90,6 +91,11 @@ func (p CurrentCNPolicy) String() string {
 type QueryRequest struct {
 	ExecKind  QueryExecKind
 	CurrentCN Worker
+	// RequireCurrentCN and IngressOnly are internal execution invariants. They
+	// are derived from coordinator-owned state and must not be treated as
+	// user-selectable scheduling policy.
+	RequireCurrentCN bool
+	IngressOnly      bool
 	// Candidates contains workers after candidate discovery and pool/label
 	// resolution. Query placement only selects from this resolved set.
 	Candidates           Workers
@@ -101,8 +107,14 @@ type QueryRequest struct {
 }
 
 type QueryDecision struct {
-	ExecKind               QueryExecKind
-	CurrentCN              Worker
+	ExecKind  QueryExecKind
+	CurrentCN Worker
+	// These fields preserve the internal execution invariants that constrained
+	// this decision. They are deliberately separate from SchedulingIntent so a
+	// caller cannot accidentally clear a coordinator-owned safety boundary by
+	// changing a product scheduling preference.
+	RequireCurrentCN       bool
+	IngressOnly            bool
 	Workers                Workers
 	Dropped                DroppedWorkers
 	Reason                 string
@@ -246,11 +258,29 @@ func DecideQueryPlacement(req QueryRequest) QueryDecision {
 	if !req.CurrentCNPolicy.Valid() {
 		return queryDecision(req, nil, nil, ReasonInvalidCurrentCNPolicy, false)
 	}
+	if req.IngressOnly {
+		req.RequireCurrentCN = true
+	}
+	if req.RequireCurrentCN && req.CurrentCNPolicy == CurrentCNExcluded {
+		// The internal invariant is coordinator-owned, but it must not silently
+		// override an already materialized exclusion. Reject before discovery or
+		// any remote execution can occur.
+		return queryDecision(req, nil, nil, ReasonIngressConstraintConflict, false)
+	}
+	if req.RequireCurrentCN {
+		// A writable transaction workspace requires the ingress CN to
+		// participate so its uncommitted state remains visible. LOAD DATA LOCAL
+		// is stronger and is handled below as ingress-only execution.
+		req.CurrentCNPolicy = CurrentCNRequired
+	}
 	if reason := ValidateSchedulingIntent(req.Intent); reason != "" {
 		return queryDecision(req, nil, nil, reason, false)
 	}
 	if req.Intent.PoolFallback == PoolFallbackStrict && req.ResolvedPool.Fallback {
 		return queryDecision(req, nil, nil, ReasonStrictPoolFallback, false)
+	}
+	if req.IngressOnly {
+		return decideIngressOnlyPlacement(req)
 	}
 	if req.ExecKind == QueryExecTP || req.ExecKind == QueryExecAPOneCN {
 		// A max-worker policy is an upper bound, so a local query using one
@@ -262,11 +292,20 @@ func DecideQueryPlacement(req QueryRequest) QueryDecision {
 	}
 
 	resolved := resolvedWorkers(req)
-	workers, dropped := selectEligibleCandidateWorkers(resolved)
 	currentRejectReason, currentRejected := rejectedCurrentWorkerReason(req.CurrentCN)
-	if currentRejected {
-		workers = removeCurrentWorker(workers, req.CurrentCN)
+	resolvedCurrentStateChecked := false
+	if req.CurrentCNPolicy == CurrentCNRequired && !currentRejected {
+		currentRejectReason, currentRejected = rejectedIngressWorkerReason(req.CurrentCN, resolved)
+		resolvedCurrentStateChecked = true
 	}
+	if req.RequireCurrentCN {
+		// Candidate de-duplication treats either a repeated service ID or a
+		// repeated address as the same endpoint. Put the exact ingress identity
+		// first so an address alias cannot make the result depend on discovery
+		// order and discard the authoritative service-ID match.
+		resolved = prioritizeIngressCandidate(resolved, req.CurrentCN)
+	}
+	workers, dropped := selectEligibleCandidateWorkers(resolved)
 	eligibleCount := len(workers)
 	makeDecision := func(decisionWorkers Workers, reason string, satisfied bool) QueryDecision {
 		decision := queryDecision(req, decisionWorkers, dropped, reason, satisfied)
@@ -278,6 +317,21 @@ func DecideQueryPlacement(req QueryRequest) QueryDecision {
 	}
 	if req.CurrentCNPolicy == CurrentCNRequired && currentRejected {
 		return makeDecision(workers, currentRejectReason, false)
+	}
+	if req.RequireCurrentCN && hasAuthoritativeResolvedPool(req) {
+		// Internal ingress ownership requires positive membership proof from every
+		// authoritative resolution, including an explicitly empty result or one
+		// whose candidates were all filtered as runtime-ineligible.
+		var found bool
+		workers, dropped, found = canonicalizeIngressWorker(workers, dropped, req.CurrentCN)
+		eligibleCount = len(workers)
+		if !found {
+			return makeDecision(nil, ReasonRequiredCurrentOutsidePool, false)
+		}
+	}
+	if currentRejected {
+		workers = removeCurrentWorker(workers, req.CurrentCN)
+		eligibleCount = len(workers)
 	}
 	if req.CurrentCNPolicy == CurrentCNExcluded {
 		if !hasWorkerIdentity(req.CurrentCN) {
@@ -297,6 +351,9 @@ func DecideQueryPlacement(req QueryRequest) QueryDecision {
 
 	reason := ReasonMultiCN
 	if len(workers) == 0 {
+		if !currentRejected && !resolvedCurrentStateChecked {
+			currentRejectReason, currentRejected = rejectedIngressWorkerReason(req.CurrentCN, resolved)
+		}
 		if currentRejected {
 			return makeDecision(workers, currentRejectReason, false)
 		}
@@ -336,6 +393,139 @@ func DecideQueryPlacement(req QueryRequest) QueryDecision {
 		return makeDecision(nil, ReasonRequiredCurrentOutsidePool, false)
 	}
 	return makeDecision(selected, reason, true)
+}
+
+// decideIngressOnlyPlacement is the fail-closed path for execution whose
+// input stream belongs exclusively to the ingress CN. An authoritative pool
+// is never widened to make the request fit: it must prove ingress membership,
+// while the selected topology remains local-only.
+func decideIngressOnlyPlacement(req QueryRequest) QueryDecision {
+	if !hasWorkerIdentity(req.CurrentCN) {
+		return queryDecision(req, nil, nil, ReasonCurrentCNMissingIdentity, false)
+	}
+	if !hasAuthoritativeResolvedPool(req) {
+		if reason, rejected := rejectedCurrentWorkerReason(req.CurrentCN); rejected {
+			return queryDecision(req, nil, nil, reason, false)
+		}
+		return queryDecision(req, Workers{req.CurrentCN}, nil, ReasonRequiredCurrentCN, true)
+	}
+
+	resolved := prioritizeIngressCandidate(resolvedWorkers(req), req.CurrentCN)
+	currentRejectReason, currentRejected := rejectedIngressWorkerReason(req.CurrentCN, resolved)
+	workers, dropped := selectEligibleCandidateWorkers(resolved)
+	var found bool
+	workers, dropped, found = canonicalizeIngressWorker(workers, dropped, req.CurrentCN)
+	decision := func(selected Workers, reason string, satisfied bool) QueryDecision {
+		result := queryDecision(req, selected, dropped, reason, satisfied)
+		result.EligibleCount = len(workers)
+		return result
+	}
+	if currentRejected {
+		return decision(nil, currentRejectReason, false)
+	}
+	// Candidate discovery is intentionally skipped for the ordinary ingress
+	// path. An explicit resolved pool, however, is authoritative and must prove
+	// ingress membership before we return a local decision.
+	if len(workers) > 0 && found {
+		return decision(Workers{req.CurrentCN}, ReasonRequiredCurrentCN, true)
+	}
+	if len(workers) > 0 {
+		return decision(nil, ReasonRequiredCurrentOutsidePool, false)
+	}
+	return decision(nil, ReasonNoCandidateCN, false)
+}
+
+// prioritizeIngressCandidate makes service-ID-based ingress proof independent
+// of candidate order. It does not mutate the resolved pool, whose worker slice
+// is immutable input to placement.
+func prioritizeIngressCandidate(workers Workers, ingress Worker) Workers {
+	match := ingressCandidateIndex(workers, ingress)
+	if match <= 0 {
+		return workers
+	}
+	prioritized := make(Workers, 0, len(workers))
+	prioritized = append(prioritized, workers[match])
+	prioritized = append(prioritized, workers[:match]...)
+	prioritized = append(prioritized, workers[match+1:]...)
+	return prioritized
+}
+
+// canonicalizeIngressWorker proves internal ingress ownership with service ID
+// when both sides have one, falling back to address only for legacy identities.
+// It then replaces discovery aliases with the actual ingress route and drops
+// any duplicate alias so later subset selection cannot pin the wrong worker.
+func canonicalizeIngressWorker(
+	workers Workers,
+	dropped DroppedWorkers,
+	ingress Worker,
+) (Workers, DroppedWorkers, bool) {
+	match := ingressCandidateIndex(workers, ingress)
+	if match < 0 {
+		return workers, dropped, false
+	}
+
+	canonical := workers[match]
+	if ingress.ID != "" {
+		canonical.ID = ingress.ID
+	}
+	if ingress.Addr != "" {
+		canonical.Addr = ingress.Addr
+	}
+	canonical.Route = WorkerRouteLocal
+	workers[match] = canonical
+	next := 0
+	for i, worker := range workers {
+		if i != match && sameWorker(worker, canonical) {
+			dropped = append(dropped, DroppedWorker{
+				Worker: worker,
+				Reason: ReasonDroppedDuplicateCN,
+			})
+			continue
+		}
+		workers[next] = worker
+		next++
+	}
+	clear(workers[next:])
+	return workers[:next], dropped, true
+}
+
+func ingressCandidateIndex(workers Workers, ingress Worker) int {
+	if ingress.ID != "" {
+		for i := range workers {
+			if workers[i].ID == ingress.ID {
+				return i
+			}
+		}
+	}
+	if ingress.Addr == "" {
+		return -1
+	}
+	for i := range workers {
+		if (ingress.ID == "" || workers[i].ID == "") &&
+			workers[i].Addr == ingress.Addr {
+			return i
+		}
+	}
+	return -1
+}
+
+func hasAuthoritativeResolvedPool(req QueryRequest) bool {
+	// Candidates is already the output of the discovery+pool boundary. A
+	// non-nil empty slice is therefore an explicit empty resolution and must
+	// not be treated as "no resolution" (which would silently fall back local).
+	if req.Candidates != nil {
+		return true
+	}
+	if req.ResolvedPool.Workers != nil {
+		return true
+	}
+	resolution := req.ResolvedPool.Resolution
+	if resolution == "" {
+		resolution = req.CandidateResolution.PoolResolution
+	}
+	return resolution != "" &&
+		resolution != PoolResolutionUnspecified &&
+		resolution != PoolResolutionNotRequired
 }
 
 // ValidateSchedulingIntent checks the pure policy fields that do not require
@@ -521,6 +711,8 @@ func queryDecision(req QueryRequest, workers Workers, dropped DroppedWorkers, re
 	return QueryDecision{
 		ExecKind:               req.ExecKind,
 		CurrentCN:              req.CurrentCN,
+		RequireCurrentCN:       req.RequireCurrentCN,
+		IngressOnly:            req.IngressOnly,
 		Workers:                workers,
 		Dropped:                cloneDroppedWorkers(dropped),
 		Reason:                 reason,
@@ -704,6 +896,42 @@ func rejectedCurrentWorkerReason(worker Worker) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+// rejectedIngressWorkerReason combines the in-process view with the resolved
+// candidate snapshot. A caller that has not populated CurrentCN.State must not
+// be able to re-add an explicitly draining ingress through empty-worker
+// fallback after eligibility filtering removes it.
+func rejectedIngressWorkerReason(current Worker, resolved Workers) (string, bool) {
+	if reason, rejected := rejectedCurrentWorkerReason(current); rejected {
+		return reason, true
+	}
+	if current.ID != "" {
+		foundExact := false
+		for _, worker := range resolved {
+			if worker.ID != current.ID {
+				continue
+			}
+			foundExact = true
+			if reason, rejected := rejectedCurrentWorkerReason(worker); rejected {
+				return reason, true
+			}
+		}
+		if foundExact {
+			return "", false
+		}
+	}
+	if current.Addr == "" {
+		return "", false
+	}
+	for _, worker := range resolved {
+		if (current.ID == "" || worker.ID == "") && worker.Addr == current.Addr {
+			if reason, rejected := rejectedCurrentWorkerReason(worker); rejected {
+				return reason, true
+			}
+		}
+	}
+	return "", false
 }
 
 func containsWorker(workers Workers, target Worker) bool {

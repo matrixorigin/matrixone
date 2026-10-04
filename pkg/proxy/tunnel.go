@@ -149,6 +149,11 @@ type tunnel struct {
 	// the conn-cache path above and the non-cache path where COM_QUIT is
 	// forwarded to CN.
 	expectedClientQuit atomic.Bool
+	// cacheIdentityChanged permanently disables cache publication for this
+	// tunnel generation after a command changes the authenticated principal.
+	// COM_CHANGE_USER and SET ROLE alter CN-side identity that ResetSession does
+	// not reconstruct from the original handshake.
+	cacheIdentityChanged atomic.Bool
 	// requestBoundary is the authoritative request/response ownership state.
 	// It deliberately becomes permanently unsafe for this tunnel generation if
 	// a client pipelines commands: the MySQL command protocol is sequential and
@@ -161,6 +166,8 @@ type tunnel struct {
 		statementID              uint32
 		statementIDValid         bool
 		requestContinuation      bool
+		responseContinuation     bool
+		responseNextSequence     byte
 		localInfileUpload        bool
 		requestNextSequence      byte
 		phase                    responsePhase
@@ -358,6 +365,16 @@ func (t *tunnel) markCacheReuseReady() {
 	})
 }
 
+func (t *tunnel) markCacheIdentityChanged() {
+	if t != nil {
+		t.cacheIdentityChanged.Store(true)
+	}
+}
+
+func (t *tunnel) hasCacheIdentityChanged() bool {
+	return t != nil && t.cacheIdentityChanged.Load()
+}
+
 type responsePhase uint8
 
 const (
@@ -437,6 +454,11 @@ func (t *tunnel) trackClientRequest(msg []byte) clientRequestCommit {
 	switch cmd {
 	case frontend.COM_QUIT:
 		return commit
+	case frontend.COM_CHANGE_USER:
+		// COM_CHANGE_USER carries a new authenticated principal and database.
+		// The backend generation cannot be safely reconstructed by ResetSession,
+		// so never publish it to the cache after this command is observed.
+		t.cacheIdentityChanged.Store(true)
 	case frontend.COM_STMT_SEND_LONG_DATA:
 		if mysqlPacketPayloadLength(msg) < 7 || len(msg) < mysqlHeadLen+7 {
 			s.ambiguous = true
@@ -537,6 +559,36 @@ func (t *tunnel) hasUnsafeClientState() bool {
 		t.requestBoundary.pendingLongDataOverflow ||
 		len(t.requestBoundary.pendingLongData) > 0 ||
 		len(t.requestBoundary.closedStatements) > 0
+}
+
+// hasFenceableClosedStatementState reports whether the only remaining unsafe
+// client state is a completed COM_STMT_CLOSE. A successful COM_PING on the same
+// backend socket fences every packet sent before it, including an overflowed
+// close tombstone set. Other protocol states remain non-cacheable.
+func (t *tunnel) hasFenceableClosedStatementState() bool {
+	if t == nil {
+		return false
+	}
+	t.requestBoundary.Lock()
+	defer t.requestBoundary.Unlock()
+	s := &t.requestBoundary
+	if s.inFlight || s.requestContinuation || s.localInfileUpload || s.ambiguous ||
+		s.pendingLongDataOverflow || len(s.pendingLongData) > 0 {
+		return false
+	}
+	return s.closedStatementsOverflow || len(s.closedStatements) > 0
+}
+
+// completeClosedStatementFence clears only state proven delivered by the
+// same-backend PING. It deliberately leaves every other protocol state intact.
+func (t *tunnel) completeClosedStatementFence() {
+	if t == nil {
+		return
+	}
+	t.requestBoundary.Lock()
+	defer t.requestBoundary.Unlock()
+	clear(t.requestBoundary.closedStatements)
+	t.requestBoundary.closedStatementsOverflow = false
 }
 
 func (t *tunnel) hasUntransferableClientState() bool {
@@ -650,6 +702,8 @@ func (t *tunnel) resetTrackedRequestLocked() {
 	t.requestBoundary.statementID = 0
 	t.requestBoundary.statementIDValid = false
 	t.requestBoundary.phase = responsePhaseFirst
+	t.requestBoundary.responseContinuation = false
+	t.requestBoundary.responseNextSequence = 0
 	t.requestBoundary.legacyResultEOFSeen = false
 	t.requestBoundary.prepareMetadataRemaining = 0
 }
@@ -705,7 +759,7 @@ func (t *tunnel) trackServerResponse(msg []byte) {
 		return
 	}
 	msg = firstMySQLPacketPrefix(msg)
-	if len(msg) < preRecvLen {
+	if len(msg) < mysqlHeadLen {
 		return
 	}
 	t.requestBoundary.Lock()
@@ -719,6 +773,29 @@ func (t *tunnel) trackServerResponse(msg []byte) {
 		// request is still being framed or uploaded. Keep this generation
 		// permanently non-transferable rather than guessing packet ownership.
 		s.ambiguous = true
+		return
+	}
+	// MySQL splits one logical response packet into MaxPayloadSize wire
+	// packets followed by a shorter (possibly empty) continuation. A short
+	// continuation can have exactly the shape of an EOF/OK/ERR packet, but it
+	// is still row data. Do not interpret any fragment as a response boundary.
+	if s.responseContinuation {
+		if msg[3] != s.responseNextSequence {
+			s.ambiguous = true
+			return
+		}
+		s.responseNextSequence++
+		if mysqlPacketPayloadLength(msg) < int(frontend.MaxPayloadSize) {
+			s.responseContinuation = false
+		}
+		return
+	}
+	if mysqlPacketPayloadLength(msg) == int(frontend.MaxPayloadSize) {
+		s.responseContinuation = true
+		s.responseNextSequence = msg[3] + 1
+		return
+	}
+	if len(msg) < preRecvLen {
 		return
 	}
 	if isErrPacket(msg) {
@@ -752,6 +829,14 @@ func (t *tunnel) trackServerResponse(msg []byte) {
 			return
 		}
 		if !s.legacyResultEOFSeen {
+			// Cursor EXECUTE has no row stream: its sole EOF follows the column
+			// definitions and carries CURSOR_EXISTS. Ordinary result sets still
+			// have a second EOF after their rows.
+			if s.command == frontend.COM_STMT_EXECUTE &&
+				status&frontend.SERVER_STATUS_CURSOR_EXISTS != 0 {
+				t.finishTrackedResponseLocked(status, true)
+				return
+			}
 			s.legacyResultEOFSeen = true
 			return
 		}
@@ -774,6 +859,17 @@ func (t *tunnel) trackServerResponse(msg []byte) {
 		}
 		return
 	}
+	if s.command == frontend.COM_STMT_FETCH {
+		// FETCH returns binary rows without a result-set header. A row can
+		// begin with 0x00 and look like an OK packet, so only its actual EOF
+		// terminator may complete this response.
+		if status, ok := legacyEOFPacketStatus(msg); ok {
+			t.finishTrackedResponseLocked(status, true)
+		} else if status, ok := eofOKPacketStatus(msg); ok {
+			t.finishTrackedResponseLocked(status, true)
+		}
+		return
+	}
 	if status, ok := okPacketStatus(msg); ok {
 		t.finishTrackedResponseLocked(status, true)
 		return
@@ -782,7 +878,7 @@ func (t *tunnel) trackServerResponse(msg []byte) {
 		t.finishTrackedResponseLocked(0, true)
 		return
 	}
-	if s.command == frontend.COM_FIELD_LIST || s.command == frontend.COM_STMT_FETCH {
+	if s.command == frontend.COM_FIELD_LIST {
 		if status, ok := legacyEOFPacketStatus(msg); ok {
 			t.finishTrackedResponseLocked(status, true)
 		} else if status, ok := eofOKPacketStatus(msg); ok {
@@ -799,6 +895,28 @@ func (t *tunnel) trackServerResponse(msg []byte) {
 	// All other first packets begin a result set. Its terminal packet depends
 	// on CLIENT_DEPRECATE_EOF; row packets cannot release request ownership.
 	s.phase = responsePhaseResult
+}
+
+// FETCH binary rows can also resemble OK packets to the independent
+// transaction-status parser. Only a FETCH terminator supplies server status.
+func (t *tunnel) responseMayCarryTxnStatus(msg []byte) bool {
+	if t == nil {
+		return true
+	}
+	t.requestBoundary.Lock()
+	defer t.requestBoundary.Unlock()
+	s := &t.requestBoundary
+	if s.responseContinuation || mysqlPacketPayloadLength(msg) == int(frontend.MaxPayloadSize) {
+		return false
+	}
+	if !s.inFlight || s.command != frontend.COM_STMT_FETCH {
+		return true
+	}
+	if _, ok := legacyEOFPacketStatus(msg); ok {
+		return true
+	}
+	_, ok := eofOKPacketStatus(msg)
+	return ok
 }
 
 func wrapPipeSendError(name string, err error) error {
@@ -1411,9 +1529,11 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 				firstCond = false
 			}
 
-			inTxn, ok := checkTxnStatus(tempBuf, mustOK)
-			if ok {
-				p.mu.inTxn = inTxn
+			if p.tun.responseMayCarryTxnStatus(tempBuf) {
+				inTxn, ok := checkTxnStatus(tempBuf, mustOK)
+				if ok {
+					p.mu.inTxn = inTxn
+				}
 			}
 			p.tun.trackServerResponse(tempBuf)
 			if !p.mu.inTxn && p.tun.transferIntent.Load() && !rotated {

@@ -29,6 +29,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 )
 
+// UniqueJoinKeysStatus describes the terminal state of a unique-join-keys
+// runtime filter. PASS means that the producer could not safely construct an
+// exact filter and the consumer must fall back to an unfiltered plan. DROP
+// means that the build side is empty and the consumer can return no rows.
+type UniqueJoinKeysStatus uint8
+
+const (
+	UniqueJoinKeysNone UniqueJoinKeysStatus = iota
+	UniqueJoinKeysAvailable
+	UniqueJoinKeysPass
+	UniqueJoinKeysDrop
+)
+
 // WaitUniqueJoinKeys blocks until it receives a RuntimeFilter_UNIQUEJOINKEYS message
 // that matches sqlproc.RuntimeFilterSpecs (if any). It returns the raw serialized
 // unique join key bytes from the build side.
@@ -36,16 +49,32 @@ import (
 // The caller is responsible for deserializing the bytes and deciding how to use
 // them (e.g. exact pk IN filter vs a membership filter based on its own threshold).
 func WaitUniqueJoinKeys(sqlproc *SqlProcess) ([]byte, error) {
+	data, status, err := waitUniqueJoinKeys(sqlproc, false)
+	if status != UniqueJoinKeysAvailable {
+		return nil, err
+	}
+	return data, err
+}
+
+// WaitUniqueJoinKeysWithStatus is the status-preserving form used by consumers
+// whose correctness depends on knowing whether the producer sent PASS or DROP.
+// The legacy WaitUniqueJoinKeys API intentionally retains its old fail-open
+// behavior for callers that only use an optional membership filter.
+func WaitUniqueJoinKeysWithStatus(sqlproc *SqlProcess) ([]byte, UniqueJoinKeysStatus, error) {
+	return waitUniqueJoinKeys(sqlproc, true)
+}
+
+func waitUniqueJoinKeys(sqlproc *SqlProcess, preserveStatus bool) ([]byte, UniqueJoinKeysStatus, error) {
 	if sqlproc.Proc == nil {
-		return nil, nil
+		return nil, UniqueJoinKeysNone, nil
 	}
 
 	if len(sqlproc.RuntimeFilterSpecs) == 0 {
-		return nil, nil
+		return nil, UniqueJoinKeysNone, nil
 	}
 	spec := sqlproc.RuntimeFilterSpecs[0]
 	if !spec.UseMembershipFilter {
-		return nil, nil
+		return nil, UniqueJoinKeysNone, nil
 	}
 
 	msgReceiver := message.NewMessageReceiver(
@@ -55,7 +84,7 @@ func WaitUniqueJoinKeys(sqlproc *SqlProcess) ([]byte, error) {
 	)
 	msgs, ctxDone, err := msgReceiver.ReceiveMessage(true, sqlproc.GetContext())
 	if err != nil || ctxDone {
-		return nil, err
+		return nil, UniqueJoinKeysNone, err
 	}
 
 	for i := range msgs {
@@ -63,13 +92,23 @@ func WaitUniqueJoinKeys(sqlproc *SqlProcess) ([]byte, error) {
 		if !ok {
 			continue
 		}
-		if m.Typ != message.RuntimeFilter_UNIQUEJOINKEYS {
-			continue
+		switch m.Typ {
+		case message.RuntimeFilter_UNIQUEJOINKEYS:
+			return m.Data, UniqueJoinKeysAvailable, nil
+		case message.RuntimeFilter_PASS:
+			if !preserveStatus {
+				continue
+			}
+			return nil, UniqueJoinKeysPass, nil
+		case message.RuntimeFilter_DROP:
+			if !preserveStatus {
+				continue
+			}
+			return nil, UniqueJoinKeysDrop, nil
 		}
-		return m.Data, nil
 	}
 
-	return nil, nil
+	return nil, UniqueJoinKeysNone, nil
 }
 
 // BuildExactPkFilter converts a vector of primary key values into a comma-separated

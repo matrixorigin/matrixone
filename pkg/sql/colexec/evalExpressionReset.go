@@ -50,6 +50,9 @@ type functionInformationForEval struct {
 	// whether the function is volatile or time-dependent.
 	// they were used to determine whether the function can be folded.
 	volatile, timeDependent bool
+	// stringToNumericCast is volatile for ordinary text parameters, but a
+	// prepared parameter with integer provenance can be folded safely.
+	stringToNumericCast bool
 
 	// the function's evalFn and freeFn.
 	evalFn func(
@@ -278,6 +281,12 @@ func (expr *FunctionExpressionExecutor) finishFolding(proc *process.Process, exe
 	if err := expr.evalFn(expr.parameterResults, expr.resultVector, proc, execLen, nil); err != nil {
 		return err
 	}
+	if expr.isImplicitCast() && len(expr.parameterResults) > 0 {
+		if err := applyTransparentStringSource(
+			expr.resultVector.GetResultVector(), expr.parameterResults[0], execLen, proc.Mp()); err != nil {
+			return err
+		}
+	}
 	if expr.fid == function.IFF || expr.fid == function.CASE || expr.fid == function.COALESCE {
 		if err := expr.applyFlowControlPrepareParamKinds(
 			expr.resultVector.GetResultVector(), execLen, proc.Mp()); err != nil {
@@ -322,7 +331,11 @@ func (expr *FunctionExpressionExecutor) doFold(proc *process.Process, atRuntime 
 			allParametersFolded = false
 		}
 	}
-	if !allParametersFolded || expr.volatile || (!atRuntime && expr.timeDependent) {
+	canFold := !expr.volatile
+	if expr.stringToNumericCast && expr.canFoldPreparedIntegerStringCast() {
+		canFold = true
+	}
+	if !allParametersFolded || !canFold || (!atRuntime && expr.timeDependent) {
 		return nil
 	}
 
@@ -337,6 +350,20 @@ func (expr *FunctionExpressionExecutor) doFold(proc *process.Process, atRuntime 
 	}
 
 	return expr.finishFolding(proc, execLen)
+}
+
+// canFoldPreparedIntegerStringCast reports whether the prepared parameter's
+// protocol metadata establishes an integer source. Prepared numeric values are
+// materialized in a TEXT vector for compatibility with the parameter path, so
+// the cast still looks like TEXT -> numeric to the expression executor. The
+// integer provenance means the value cannot contain the trailing text that
+// requires row-level coercion warnings, making scalar folding safe.
+func (expr *FunctionExpressionExecutor) canFoldPreparedIntegerStringCast() bool {
+	if !expr.stringToNumericCast || len(expr.parameterResults) == 0 {
+		return false
+	}
+	parameter := expr.parameterResults[0]
+	return parameter != nil && parameter.GetPrepareParamKind() == vector.PrepareParamInteger
 }
 
 func (expr *ParamExpressionExecutor) ResetForNextQuery() {

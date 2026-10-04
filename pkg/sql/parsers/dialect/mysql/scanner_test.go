@@ -16,6 +16,7 @@ package mysql
 
 import (
 	"fmt"
+	"reflect"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
@@ -259,6 +260,32 @@ func TestScannerSQLModePipeConcat(t *testing.T) {
 	}
 }
 
+func TestScannerSQLModeIgnoreSpace(t *testing.T) {
+	tests := []struct {
+		name  string
+		mode  string
+		input string
+		want  int
+	}{
+		{name: "default rejects whitespace-sensitive function spacing", input: "NOW ()", want: ID},
+		{name: "ignore space accepts whitespace-sensitive function spacing", mode: sqlModeIgnoreSpace, input: "NOW ()", want: NOW},
+		{name: "comments count as whitespace", input: "NOW /* comment */ ()", want: ID},
+		{name: "non-sensitive function remains generic", input: "ABS ()", want: ID},
+		{name: "mod remains available with whitespace", input: "MOD ()", want: MOD},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			scanner := NewScannerWithSQLMode(dialect.MYSQL, test.input, ParseSQLModeFlags(test.mode))
+			defer PutScanner(scanner)
+			got, _ := scanner.Scan()
+			if got != test.want {
+				t.Fatalf("Scan(%q, %q) = %s, want %s", test.input, test.mode, tokenName(got), tokenName(test.want))
+			}
+		})
+	}
+}
+
 func TestScannerContextualOffset(t *testing.T) {
 	tests := []struct {
 		input string
@@ -457,6 +484,43 @@ func TestBuffer(t *testing.T) {
 }
 
 func TestComment(t *testing.T) {
+	t.Run("SQL_aware_comments", func(t *testing.T) {
+		for _, tc := range []struct {
+			sql, mode string
+			comments  []string
+		}{
+			{"select '/* literal */', `/* identifier */` /* real */", "", []string{"/* real */"}},
+			{"-- /* line */\nselect 1 # second\n// third\n/* block */", "", []string{"-- /* line */\n", "# second\n", "// third\n", "/* block */"}},
+			{"/*! select 1; select 'x/* literal */' */ /* real */", "", []string{"/* real */"}},
+			{"select 'a\\' /* literal */' /* real */", "", []string{"/* real */"}},
+			{"select 'a\\' /* real */", "NO_BACKSLASH_ESCAPES", []string{"/* real */"}},
+			{"select \"/* identifier */\" /* real */", "ANSI_QUOTES", []string{"/* real */"}},
+			{"select 1 /* incomplete", "", nil},
+		} {
+			t.Run(tc.sql+tc.mode, func(t *testing.T) {
+				scanner := NewScannerWithSQLMode(dialect.MYSQL, tc.sql, ParseSQLModeFlags(tc.mode))
+				defer PutScanner(scanner)
+				var got []string
+				for {
+					tok, value := scanner.ScanWithComments()
+					if tok == COMMENT {
+						got = append(got, value)
+					}
+					if tok == 0 || tok == EofChar() || tok == LEX_ERROR {
+						break
+					}
+				}
+				if !reflect.DeepEqual(tc.comments, got) {
+					t.Fatalf("comments: want %q, got %q", tc.comments, got)
+				}
+				// Returning comments is per call, not state retained across reuse.
+				scanner.setSql("/* skipped */ select 1")
+				if tok, _ := scanner.Scan(); tok != SELECT {
+					t.Fatalf("normal scan returned %d", tok)
+				}
+			})
+		}
+	})
 	testcases := []struct {
 		name  string
 		in    string

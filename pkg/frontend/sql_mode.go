@@ -31,3 +31,27 @@ func sqlModeHasOnlyFullGroupByValue(value interface{}) (bool, bool) {
 	}
 	return mysql.HasSQLMode(mode, "ONLY_FULL_GROUP_BY"), true
 }
+
+func sqlModeHasEnableBoolSumAvgValue(value interface{}) (bool, bool) {
+	mode, ok := value.(string)
+	if !ok {
+		return false, false
+	}
+	return mysql.HasEnableBoolSumAvgSQLMode(mode), true
+}
+
+func sqlModeHasHighNotPrecedenceValue(value interface{}) (bool, bool) {
+	mode, ok := value.(string)
+	if !ok {
+		return false, false
+	}
+	return mysql.HasSQLMode(mode, "HIGH_NOT_PRECEDENCE"), true
+}
+
+func sqlModeParserFlagsValue(value interface{}) (mysql.SQLModeFlags, bool) {
+	mode, ok := value.(string)
+	if !ok {
+		return 0, false
+	}
+	return mysql.ParseSQLModeFlags(mode), true
+}

@@ -38,4 +38,43 @@ t003  𝄀
 t004  𝄀
 t005
 deallocate prepare nested_or;
+create table column_probe (
+admission_token char(32) not null,
+owner_token char(32) not null,
+owner_generation bigint not null,
+owner_lease_expires_at datetime(6) not null,
+usage_status varchar(32) not null,
+provider_delivery_state varchar(32) not null
+);
+prepare columns_literal from 'select column_name from information_schema.columns where table_schema = ''pk_filter_nested_boolean'' and table_name = ''column_probe'' and column_name in (''admission_token'',''owner_token'',''owner_generation'',''owner_lease_expires_at'',''usage_status'',''provider_delivery_state'') order by ordinal_position';
+execute columns_literal;
+➤ column_name[12,256,0]  𝄀
+admission_token  𝄀
+owner_token  𝄀
+owner_generation  𝄀
+owner_lease_expires_at  𝄀
+usage_status  𝄀
+provider_delivery_state
+deallocate prepare columns_literal;
+set @column_table_name = 'column_probe';
+prepare columns_bind_only from 'select column_name from information_schema.columns where table_schema = ? and table_name = ? order by ordinal_position';
+execute columns_bind_only using @schema_name, @column_table_name;
+➤ column_name[12,256,0]  𝄀
+admission_token  𝄀
+owner_token  𝄀
+owner_generation  𝄀
+owner_lease_expires_at  𝄀
+usage_status  𝄀
+provider_delivery_state
+deallocate prepare columns_bind_only;
+prepare columns_bind_with_literal_in from 'select column_name from information_schema.columns where table_schema = ? and table_name = ? and column_name in (''admission_token'',''owner_token'',''owner_generation'',''owner_lease_expires_at'',''usage_status'',''provider_delivery_state'') order by ordinal_position';
+execute columns_bind_with_literal_in using @schema_name, @column_table_name;
+➤ column_name[12,256,0]  𝄀
+admission_token  𝄀
+owner_token  𝄀
+owner_generation  𝄀
+owner_lease_expires_at  𝄀
+usage_status  𝄀
+provider_delivery_state
+deallocate prepare columns_bind_with_literal_in;
 drop database pk_filter_nested_boolean;

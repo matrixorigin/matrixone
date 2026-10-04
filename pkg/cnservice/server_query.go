@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pblock "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/status"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -47,6 +48,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"go.uber.org/zap"
 )
@@ -64,6 +66,15 @@ type queryWorkLifecycle struct {
 	closing   bool
 	closeOnce sync.Once
 	closeErr  error
+}
+
+func (l *queryWorkLifecycle) beginClose() {
+	l.Lock()
+	l.closing = true
+	if l.cancel != nil {
+		l.cancel()
+	}
+	l.Unlock()
 }
 
 func (l *queryWorkLifecycle) admit() (func(), bool) {
@@ -98,13 +109,7 @@ func (l *queryWorkLifecycle) launch(executor taskservice.TaskExecutor, asyncTask
 
 func (l *queryWorkLifecycle) close(closeIngress func() error) error {
 	l.closeOnce.Do(func() {
-		l.Lock()
-		l.closing = true
-		if l.cancel != nil {
-			l.cancel()
-		}
-		l.Unlock()
-
+		l.beginClose()
 		l.closeErr = closeIngress()
 		l.wg.Wait()
 	})
@@ -158,6 +163,7 @@ func (s *service) initQueryCommandHandler() {
 	s.addQueryCommandHandler(query.CmdMethod_GetReplicaCount, s.handleGetReplicaCount)
 	s.addQueryCommandHandler(query.CmdMethod_CtlReader, s.handleCtlReader)
 	s.addQueryCommandHandler(query.CmdMethod_ResetSession, s.handleResetSession)
+	s.addQueryCommandHandler(query.CmdMethod_RefreshSessionAuth, s.handleRefreshSessionAuth)
 	s.addQueryCommandHandler(query.CmdMethod_GOMAXPROCS, s.handleGoMaxProcs)
 	s.addQueryCommandHandler(query.CmdMethod_GOMEMLIMIT, s.handleGoMemLimit)
 	s.addQueryCommandHandler(query.CmdMethod_GOGCPercent, s.handleGoGCPercent)
@@ -383,7 +389,13 @@ func waitISCPExecutorRuntime(ctx context.Context, cnUUID string) (*iscp.ISCPTask
 
 // handleGetLockInfo sends the lock info on current cn to another cn that needs.
 func (s *service) handleGetLockInfo(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
-	resp.GetLockInfoResponse = new(query.GetLockInfoResponse)
+	resp.GetLockInfoResponse = &query.GetLockInfoResponse{
+		CnId:          s.metadata.UUID,
+		LockServiceID: s.lockService.GetServiceID(),
+	}
+	if req.GetLockInfoRequest != nil && req.GetLockInfoRequest.IdentityOnly {
+		return nil
+	}
 
 	//get lock info from lock service in current cn
 	locks := make([]*query.LockInfo, 0)
@@ -413,7 +425,6 @@ func (s *service) handleGetLockInfo(ctx context.Context, req *query.Request, res
 	s.lockService.IterLocks(getAllLocks)
 
 	// fill the response
-	resp.GetLockInfoResponse.CnId = s.metadata.UUID
 	resp.GetLockInfoResponse.LockInfoList = locks
 	return nil
 }
@@ -424,9 +435,10 @@ func (s *service) handleGetTxnInfo(ctx context.Context, req *query.Request, resp
 
 	s._txnClient.IterTxns(func(view client.TxnOverview) bool {
 		info := &query.TxnInfo{
-			CreateAt: view.CreateAt,
-			Meta:     copyTxnMeta(view.Meta),
-			UserTxn:  view.UserTxn,
+			CreateAt:  view.CreateAt,
+			AccountID: view.AccountID,
+			Meta:      copyTxnMeta(view.Meta),
+			UserTxn:   view.UserTxn,
 		}
 
 		for _, lock := range view.WaitLocks {
@@ -633,13 +645,20 @@ func (s *service) handleGetCacheData(ctx context.Context, req *query.Request, re
 }
 
 func (s *service) handleGetStatsInfo(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
-	if req.GetStatsInfoRequest == nil {
+	if req.GetStatsInfoRequest == nil || req.GetStatsInfoRequest.StatsInfoKey == nil {
 		return moerr.NewInternalError(ctx, "bad request")
 	}
 	// The parameter sync is false, as the read request is from remote node,
 	// and we do not need wait for the data sync.
+	key := *req.GetStatsInfoRequest.StatsInfoKey
+	var info *statsinfo.StatsInfo
+	if exporter, ok := s.storeEngine.(engine.RemoteStatsExporter); ok {
+		info = exporter.StatsForRemote(ctx, key)
+	} else {
+		info = s.storeEngine.Stats(ctx, key, false)
+	}
 	resp.GetStatsInfoResponse = &query.GetStatsInfoResponse{
-		StatsInfo: s.storeEngine.Stats(ctx, *req.GetStatsInfoRequest.StatsInfoKey, false),
+		StatsInfo: info,
 	}
 	return nil
 }
@@ -731,6 +750,28 @@ func (s *service) handleResetSession(
 		return err
 	}
 	resp.ResetSessionResponse.Success = true
+	return nil
+}
+
+func (s *service) handleRefreshSessionAuth(
+	ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer,
+) error {
+	if req == nil || req.RefreshSessionAuthRequest == nil {
+		return moerr.NewInternalError(ctx, "bad request")
+	}
+	rm := s.mo.GetRoutineManager()
+	if rm == nil {
+		return moerr.NewInternalError(ctx, "routine manager not initialized")
+	}
+	resp.RefreshSessionAuthResponse = &query.RefreshSessionAuthResponse{}
+	if err := rm.RefreshSessionAuthWithContext(
+		ctx,
+		req.RefreshSessionAuthRequest,
+		resp.RefreshSessionAuthResponse,
+	); err != nil {
+		logutil.Errorf("failed to refresh session authentication: %v", err)
+		return err
+	}
 	return nil
 }
 

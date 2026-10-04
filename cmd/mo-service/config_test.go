@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -383,6 +384,109 @@ func TestMongoDBEnablementConfigDefaults(t *testing.T) {
 			require.Equal(t, tc.wantEnabled, cfg.CN.Frontend.MongoDB.Enable)
 		})
 	}
+}
+
+func TestArrowLoadConfigDefaults(t *testing.T) {
+	for _, test := range []struct {
+		name               string
+		input              string
+		enabled            bool
+		s3Enabled          bool
+		distributedEnabled bool
+	}{
+		{name: "omitted", enabled: true, s3Enabled: true, distributedEnabled: true},
+		{
+			name: "explicit disable", input: `[cn.frontend.arrow-load]
+enabled = false
+s3-enabled = false
+distributed-enabled = false
+`,
+		},
+		{
+			name: "distributed rollback", input: `[cn.frontend.arrow-load]
+enabled = true
+s3-enabled = true
+distributed-enabled = false
+`,
+			enabled: true, s3Enabled: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := NewConfig()
+			require.NoError(t, parseFromString(test.input, cfg))
+			require.NoError(t, cfg.setDefaultValue())
+			require.Equal(t, test.enabled, cfg.CN.Frontend.ArrowLoad.Enabled)
+			require.Equal(t, test.s3Enabled, cfg.CN.Frontend.ArrowLoad.S3Enabled)
+			require.Equal(t, test.distributedEnabled, cfg.CN.Frontend.ArrowLoad.DistributedEnabled)
+
+			// CN construction validates the frontend configuration again. Keep
+			// every explicit rollback value stable across that second pass.
+			cfg.CN.SetDefaultValue()
+			require.Equal(t, test.enabled, cfg.CN.Frontend.ArrowLoad.Enabled)
+			require.Equal(t, test.s3Enabled, cfg.CN.Frontend.ArrowLoad.S3Enabled)
+			require.Equal(t, test.distributedEnabled, cfg.CN.Frontend.ArrowLoad.DistributedEnabled)
+		})
+	}
+}
+
+func TestClockOffsetBoundRetainedWhenMonitoringDisabled(t *testing.T) {
+	validators := []struct {
+		name string
+		call func(*Config) error
+	}{
+		{name: "validate loaded config", call: (*Config).validate},
+		{name: "apply programmatic defaults", call: (*Config).setDefaultValue},
+	}
+	for _, validator := range validators {
+		t.Run(validator.name, func(t *testing.T) {
+			cfg := NewConfig()
+			cfg.ServiceType = metadata.ServiceType_CN.String()
+			require.False(t, cfg.Clock.EnableCheckMaxClockOffset)
+			require.NoError(t, validator.call(cfg))
+			require.Equal(t, defaultMaxClockOffset, cfg.Clock.MaxClockOffset.Duration)
+
+			cfg = NewConfig()
+			cfg.ServiceType = metadata.ServiceType_CN.String()
+			cfg.Clock.MaxClockOffset.Duration = -time.Nanosecond
+			require.ErrorContains(t, validator.call(cfg), "max-clock-offset must be positive")
+
+			cfg = NewConfig()
+			cfg.ServiceType = metadata.ServiceType_CN.String()
+			cfg.Clock.MaxClockOffset.Duration = time.Second
+			cfg.CN.Frontend.ConnectTimeout.Duration = 2*time.Second + time.Nanosecond
+			require.ErrorContains(t, validator.call(cfg), "authentication freshness clock budget 2.000000001s")
+
+			// Authentication uses the connection deadline directly. A short
+			// ordinary transaction-creation timeout must not make an otherwise
+			// valid CN fail startup.
+			cfg.CN.Frontend.ConnectTimeout.Duration = 2*time.Second + 2*time.Nanosecond
+			cfg.CN.Frontend.CreateTxnOpTimeout.Duration = time.Nanosecond
+			require.NoError(t, validator.call(cfg))
+
+			// Catalog authentication is unreachable when user checks are skipped,
+			// so its connection-timeout budget must not reject startup.
+			cfg = NewConfig()
+			cfg.ServiceType = metadata.ServiceType_CN.String()
+			cfg.Clock.MaxClockOffset.Duration = time.Second
+			cfg.CN.Frontend.ConnectTimeout.Duration = time.Nanosecond
+			cfg.CN.Frontend.SkipCheckUser = true
+			require.NoError(t, validator.call(cfg))
+
+			// Skipping authentication does not bypass the general clock contract.
+			cfg.Clock.MaxClockOffset.Duration = -time.Nanosecond
+			require.ErrorContains(t, validator.call(cfg), "max-clock-offset must be positive")
+		})
+	}
+}
+
+func TestNewLocalClockRetainsOffsetWhenMonitoringDisabled(t *testing.T) {
+	cfg := NewConfig()
+	cfg.Clock.MaxClockOffset.Duration = defaultMaxClockOffset
+	require.False(t, cfg.Clock.EnableCheckMaxClockOffset)
+
+	s := stopper.NewStopper("clock-offset-contract")
+	t.Cleanup(func() { s.Stop() })
+	require.Equal(t, defaultMaxClockOffset, newLocalClock(cfg, s).MaxOffset())
 }
 
 func TestObservabilityRetiresSpansByDefault(t *testing.T) {

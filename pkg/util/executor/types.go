@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
@@ -61,7 +62,6 @@ type Options struct {
 	timeZone                *time.Location
 	statementOptions        StatementOption
 	txnOpts                 []client.TxnOption
-	enableTrace             bool
 	lower                   *int64
 	streaming               bool
 	stream_chan             chan Result
@@ -73,6 +73,10 @@ type Options struct {
 	keepTxnAlive            bool
 	lockWaitTimeout         time.Duration
 	lockWaitTimeoutSet      bool
+	txnIsolation            txn.TxnIsolation
+	txnIsolationSet         bool
+	txnMode                 txn.TxnMode
+	txnModeSet              bool
 	// isFrontend records whether the caller is a frontend
 	// session-bound invocation. Go zero value (false) means
 	// background: every caller of the internal SQL executor is
@@ -97,11 +101,18 @@ type StatementOption struct {
 	ignoreCheckExperimental  bool
 	params                   []string
 	paramNulls               []bool
+	preparedParamValues      []ParamValue
 	alterCopyOpt             *plan.AlterCopyOpt
+	prePipelineLockTableID   uint64
 	disableDropAutoIncrement bool
+	skipDataBranchReclaim    bool
 	keepAutoIncrement        uint64
 	keepLogicalId            uint64
+	keepRelKind              string
+	hasKeepRelKind           bool
 	disableLock              bool
+	allowMoColumnsUpdate     bool
+	optimizerHints           string
 }
 
 // Result exec sql result

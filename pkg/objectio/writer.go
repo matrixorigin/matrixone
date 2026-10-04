@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"slices"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -32,9 +33,17 @@ import (
 	"go.uber.org/zap"
 )
 
-// arenaMaxSize caps WriteArena backing-array growth to bound memory use
+// ChunkedColumnPolicy is evaluated by the owning service at the point where a
+// large persisted column may be emitted. A nil policy is deliberately
+// fail-closed so standalone tools and writer paths without a service-specific
+// rollout owner retain the legacy format.
+type ChunkedColumnPolicy func() bool
+
+// arenaMaxSize caps WriteArena.data growth to bound off-heap memory use
 // for unusually large block write cycles.
-const arenaMaxSize = 128 * 1024 * 1024
+const arenaMaxSize = 200 * 1024 * 1024
+
+const arenaSerialRetainLimit = 16 << 20
 
 // arenaMPool is a dedicated off-heap allocator for WriteArena buffers.
 // Using mpool with offHeap=true routes through C.calloc/C.free, keeping
@@ -46,6 +55,7 @@ type WriteArena struct {
 	usedOffset     int
 	compressBuf    []byte
 	serialBuf      bytes.Buffer // reused for column serialization across write cycles
+	serialPeak     int          // largest serialized column in the current write cycle
 	totalRequested int          // sum of all Alloc sizes in the current cycle
 	sizeLimit      int          // max data growth; 0 means arenaMaxSize
 }
@@ -75,12 +85,17 @@ func (a *WriteArena) Alloc(size int) []byte {
 	return a.data[offset:a.usedOffset]
 }
 
-// Reset prepares the arena for a new write cycle.  If the previous
+// Reset prepares the arena for a new write cycle, dropping a serial buffer
+// that was oversized for the last cycle. If the previous
 // cycle overflowed (totalRequested > len(data)) and the required
 // capacity is within sizeLimit, the backing array is grown to a
 // power-of-two capacity large enough to hold an equivalent cycle
-// without any fallback allocations.
+// without fallback allocations.
 func (a *WriteArena) Reset() {
+	// Keep an oversized buffer while this owner writes similarly sized columns,
+	// but release a past peak once subsequent objects become small.
+	a.resetSerialBuf(a.serialBuf.Cap() > arenaSerialRetainLimit &&
+		a.serialPeak <= (a.serialBuf.Cap()-1)/2)
 	limit := a.sizeLimit
 	if limit <= 0 {
 		limit = arenaMaxSize
@@ -100,6 +115,15 @@ func (a *WriteArena) Reset() {
 	}
 	a.usedOffset = 0
 	a.totalRequested = 0
+}
+
+func (a *WriteArena) resetSerialBuf(drop bool) {
+	if drop {
+		a.serialBuf = bytes.Buffer{}
+	} else {
+		a.serialBuf.Reset()
+	}
+	a.serialPeak = 0
 }
 
 func arenaNextPow2(n int) int {
@@ -135,9 +159,10 @@ func (a *WriteArena) CompressBuf(minSize int) []byte {
 	return a.compressBuf[:minSize]
 }
 
-// FreeBuffers releases the off-heap data and compressBuf allocations.
+// FreeBuffers releases the off-heap allocations and serialization scratch.
 // Call this before dropping an arena that won't be returned to the pool.
 func (a *WriteArena) FreeBuffers() {
+	a.resetSerialBuf(true)
 	if a.data != nil {
 		arenaMPool.Free(a.data)
 		a.data = nil
@@ -150,27 +175,28 @@ func (a *WriteArena) FreeBuffers() {
 
 type objectWriterV1 struct {
 	sync.RWMutex
-	arena             *WriteArena
-	lz4c              lz4.Compressor
-	schemaVer         uint32
-	seqnums           *Seqnums
-	object            *Object
-	blocks            [][]blockData
-	tombstonesColmeta []ColumnMeta
-	totalRow          uint32
-	colmeta           []ColumnMeta
-	buffer            *ObjectBuffer
-	fileName          string
-	lastId            uint32
-	name              ObjectName
-	compressBuf       []byte
-	buf               bytes.Buffer
-	bloomFilter       []byte
-	objStats          ObjectStats
-	sortKeySeqnum     uint16
-	appendable        bool
-	originSize        uint32
-	size              uint32
+	arena               *WriteArena
+	lz4c                lz4.Compressor
+	schemaVer           uint32
+	seqnums             *Seqnums
+	object              *Object
+	blocks              [][]blockData
+	tombstonesColmeta   []ColumnMeta
+	totalRow            uint32
+	colmeta             []ColumnMeta
+	buffer              *ObjectBuffer
+	fileName            string
+	lastId              uint32
+	name                ObjectName
+	compressBuf         []byte
+	buf                 bytes.Buffer
+	bloomFilter         []byte
+	objStats            ObjectStats
+	sortKeySeqnum       uint16
+	appendable          bool
+	chunkedColumnPolicy ChunkedColumnPolicy
+	originSize          uint32
+	size                uint32
 }
 
 type blockData struct {
@@ -269,7 +295,7 @@ func describeObjectHelper(w *objectWriterV1, colmeta []ColumnMeta, idx DataMetaT
 	SetObjectStatsBlkCnt(ss, uint32(len(w.blocks[idx])))
 
 	if len(colmeta) > int(w.sortKeySeqnum) {
-		SetObjectStatsSortKeyZoneMap(ss, colmeta[w.sortKeySeqnum].ZoneMap())
+		SetObjectStatsSortKeyZoneMap(ss, colmeta[w.sortKeySeqnum].rawZoneMap())
 	}
 	SetObjectStatsSize(ss, w.size)
 	SetObjectStatsOriginSize(ss, w.originSize)
@@ -320,7 +346,9 @@ func (w *objectWriterV1) Write(batch *batch.Batch) (BlockObject, error) {
 		panic(fmt.Sprintf("Unmatched Write Batch, expect %d, get %d, %v", col, len(batch.Vecs), batch.Attrs))
 	}
 	block := NewBlock(w.seqnums)
-	w.AddBlock(block, batch, w.seqnums)
+	if _, err := w.AddBlock(block, batch, w.seqnums); err != nil {
+		return nil, err
+	}
 	return block, nil
 }
 
@@ -340,7 +368,9 @@ func (w *objectWriterV1) WriteWithoutSeqnum(batch *batch.Batch) (BlockObject, er
 	denseSeqnums := NewSeqnums(nil)
 	denseSeqnums.InitWithColCnt(len(batch.Vecs))
 	block := NewBlock(denseSeqnums)
-	w.AddBlock(block, batch, denseSeqnums)
+	if _, err := w.AddBlock(block, batch, denseSeqnums); err != nil {
+		return nil, err
+	}
 	return block, nil
 }
 
@@ -365,6 +395,13 @@ func (w *objectWriterV1) AllocFromArena(size int) []byte {
 
 func (w *objectWriterV1) SetAppendable() {
 	w.appendable = true
+}
+
+// SetChunkedColumnPolicy installs a service-specific, live rollout policy.
+// Callers must set it before Write. The policy is queried lazily only for
+// columns large enough to benefit from chunking.
+func (w *objectWriterV1) SetChunkedColumnPolicy(policy ChunkedColumnPolicy) {
+	w.chunkedColumnPolicy = policy
 }
 
 func (w *objectWriterV1) SetSortKeySeqnum(seqnum uint16) {
@@ -525,7 +562,7 @@ func (w *objectWriterV1) prepareZoneMapArea(blocks []blockData, blockCount uint3
 	buf.Write(zoneMapAreaIndex)
 	for _, block := range blocks {
 		for seqnum := uint16(0); seqnum < block.meta.GetMetaColumnCount(); seqnum++ {
-			buf.Write(block.meta.ColumnMeta(seqnum).ZoneMap())
+			buf.Write(block.meta.ColumnMeta(seqnum).rawZoneMap())
 		}
 	}
 	return w.WriteWithCompress(offset, buf.Bytes())
@@ -656,6 +693,15 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 	objMeta, extent, err := w.WriteWithCompress(start, buf.Bytes())
 	objectHeader.SetExtent(extent)
 
+	// Reserve entries from the prepared object rather than a fixed column budget.
+	entryCount := 3 + 2*len(bloomFilterDatas) // header, metadata, footer and schema indexes
+	for _, blocks := range w.blocks {
+		for _, block := range blocks {
+			entryCount += min(len(block.data), int(block.meta.BlockHeader().ColumnCount()))
+		}
+	}
+	w.buffer.vector.Entries = slices.Grow(w.buffer.vector.Entries, entryCount)
+
 	// begin write
 
 	// writer object header
@@ -778,6 +824,8 @@ func (w *objectWriterV1) addBlock(blocks *[]blockData, blockMeta BlockObject, ba
 	var data []byte
 	var rows int
 	var size int
+	var chunkedPolicyChecked bool
+	var chunkedColumnAllowed bool
 	for i, vec := range bat.Vecs {
 		if i == 0 {
 			rows = vec.Length()
@@ -798,20 +846,46 @@ func (w *objectWriterV1) addBlock(blocks *[]blockData, blockMeta BlockObject, ba
 			sbuf = &w.buf
 		}
 		sbuf.Reset()
-		// Pre-size buffer to avoid repeated growSlice during MarshalBinaryWithBuffer.
-		// vec.Size() ≈ data + area; add overhead for header, lengths, nsp, sorted flag.
-		if needed := vec.Size() + 64; needed > sbuf.Cap() {
+		plan, err := vec.PrepareMarshalBinary()
+		if err != nil {
+			return 0, err
+		}
+		needed := plan.Size() + IOEntryHeaderSize
+		if w.arena != nil && needed > w.arena.serialPeak {
+			w.arena.serialPeak = needed
+		}
+		if needed > sbuf.Cap() {
 			sbuf.Grow(needed)
 		}
 		h := IOEntryHeader{IOET_ColData, IOET_ColumnData_CurrVer}
 		sbuf.Write(EncodeIOEntryHeader(&h))
-		if err := vec.MarshalBinaryWithBuffer(sbuf); err != nil {
+		if err := plan.MarshalTo(sbuf); err != nil {
 			return 0, err
 		}
 		var ext Extent
-		var err error
-		if data, ext, err = w.WriteWithCompress(0, sbuf.Bytes()); err != nil {
-			return 0, err
+		useChunked := false
+		if sbuf.Len() > columnChunkTargetBytes && vec.Length() > 1 {
+			if !chunkedPolicyChecked {
+				chunkedPolicyChecked = true
+				chunkedColumnAllowed = w.chunkedColumnPolicy != nil && w.chunkedColumnPolicy()
+			}
+			if chunkedColumnAllowed {
+				var chunked bool
+				if data, chunked, err = encodeChunkedColumn(vec); err != nil {
+					return 0, err
+				}
+				if chunked {
+					useChunked = true
+					ext = NewExtent(
+						compress.Lz4Chunked, 0, uint32(len(data)), uint32(sbuf.Len()),
+					)
+				}
+			}
+		}
+		if !useChunked {
+			if data, ext, err = w.WriteWithCompress(0, sbuf.Bytes()); err != nil {
+				return 0, err
+			}
 		}
 		size += len(data)
 		block.data = append(block.data, data)

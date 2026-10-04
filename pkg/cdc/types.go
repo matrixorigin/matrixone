@@ -17,19 +17,26 @@ package cdc
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/tidwall/btree"
@@ -48,15 +55,176 @@ type ErrorContext struct {
 	IsPauseOrCancel bool // Whether this is a pause/cancel control signal (optional, auto-detected if not set)
 }
 
+// WatermarkCleanupMode separates stream progress ownership from diagnostic
+// ownership. A failed stream must retire its progress while retaining retry
+// metadata and its task-generation fence for a replacement pipeline in the
+// same daemon generation. Task deletion, successful completion, and
+// control-only shutdown still remove all state.
+type WatermarkCleanupMode uint8
+
+const (
+	WatermarkCleanupAll WatermarkCleanupMode = iota
+	WatermarkCleanupKeepDiagnostic
+)
+
 // WatermarkUpdater manages CDC watermarks
 type WatermarkUpdater interface {
-	RemoveCachedWM(ctx context.Context, key *WatermarkKey) (err error)
+	RemoveCachedWM(ctx context.Context, key *WatermarkKey, mode WatermarkCleanupMode) (err error)
 	UpdateWatermarkErrMsg(ctx context.Context, key *WatermarkKey, errMsg string, errorCtx *ErrorContext) (err error)
 	GetFromCache(ctx context.Context, key *WatermarkKey) (watermark types.TS, err error)
 	GetOrAddCommitted(ctx context.Context, key *WatermarkKey, watermark *types.TS) (ret types.TS, err error)
 	UpdateWatermarkOnly(ctx context.Context, key *WatermarkKey, watermark *types.TS) (err error)
 	IsCircuitBreakerOpen(key *WatermarkKey) bool
 	GetCommitFailureCount(key *WatermarkKey) uint32
+}
+
+// OwnerFence represents one immutable daemon-task claim generation. The
+// pointer identity is intentionally stable: all table pipelines created by the
+// same executor generation share it, which lets the asynchronous watermark
+// writer validate that claim once per task generation instead of once per
+// table.
+type OwnerFence struct {
+	check      func(context.Context) error
+	generation time.Time
+	sequence   uint64
+}
+
+var ownerFenceSequence atomic.Uint64
+
+// OwnerFenceLostError is a lifecycle result, not a table-data failure. It
+// means this execution generation is obsolete and must stop without publishing
+// its error into shared CDC table metadata.
+type OwnerFenceLostError struct{ err error }
+
+func (e *OwnerFenceLostError) Error() string { return e.err.Error() }
+func (e *OwnerFenceLostError) Unwrap() error { return e.err }
+
+// RetryableOwnerFenceError means ownership could not be verified because the
+// fencing backend failed. It does not prove supersession and may be retried.
+type RetryableOwnerFenceError struct{ err error }
+
+func (e *RetryableOwnerFenceError) Error() string { return e.err.Error() }
+func (e *RetryableOwnerFenceError) Unwrap() error { return e.err }
+
+func IsOwnerFenceLostError(err error) bool {
+	var target *OwnerFenceLostError
+	return errors.As(err, &target)
+}
+
+func IsRetryableOwnerFenceError(err error) bool {
+	var target *RetryableOwnerFenceError
+	return errors.As(err, &target)
+}
+
+// RetryableTargetLockError means target ownership could not be established
+// because the target lock service or its transport failed. It is distinct from
+// owner loss: the daemon claim may still be current, and a later attempt may
+// safely retry before any target effect has started.
+type RetryableTargetLockError struct{ err error }
+
+func (e *RetryableTargetLockError) Error() string { return e.err.Error() }
+func (e *RetryableTargetLockError) Unwrap() error { return e.err }
+
+func IsRetryableTargetLockError(err error) bool {
+	var target *RetryableTargetLockError
+	return errors.As(err, &target)
+}
+
+func newRetryableTargetLockError(err error) error {
+	if err == nil || IsRetryableTargetLockError(err) {
+		return err
+	}
+	return &RetryableTargetLockError{err: err}
+}
+
+// RetryableConnectionError identifies a transient target SQL connection error.
+// A retry rechecks durable admission state before any further target write.
+type RetryableConnectionError struct{ err error }
+
+func (e *RetryableConnectionError) Error() string { return e.err.Error() }
+func (e *RetryableConnectionError) Unwrap() error { return e.err }
+
+func IsRetryableConnectionError(err error) bool {
+	var target *RetryableConnectionError
+	return errors.As(err, &target)
+}
+
+func newRetryableConnectionError(err error) error {
+	if err == nil || IsRetryableConnectionError(err) {
+		return err
+	}
+	return &RetryableConnectionError{err: err}
+}
+
+func NewOwnerFence(check func(context.Context) error) *OwnerFence {
+	return NewOwnerFenceForGeneration(time.Time{}, check)
+}
+
+func NewOwnerFenceForGeneration(
+	generation time.Time,
+	check func(context.Context) error,
+) *OwnerFence {
+	if check == nil {
+		return nil
+	}
+	return &OwnerFence{
+		check:      check,
+		generation: generation,
+		sequence:   ownerFenceSequence.Add(1),
+	}
+}
+
+func (f *OwnerFence) Check(ctx context.Context) error {
+	if f == nil || f.check == nil {
+		return nil
+	}
+	err := f.check(ctx)
+	if err == nil || IsOwnerFenceLostError(err) || IsRetryableOwnerFenceError(err) {
+		return err
+	}
+	if errors.Is(err, context.Canceled) {
+		return err
+	}
+	var moError *moerr.Error
+	if errors.As(err, &moError) && moerr.IsMoErrCode(moError, moerr.ErrInvalidTask) {
+		return &OwnerFenceLostError{err: err}
+	}
+	return &RetryableOwnerFenceError{err: err}
+}
+
+// GenerationToken is the durable, strictly monotonic daemon-claim rank. Stable
+// snapshot admission persists it before touching the target, so an async
+// checkpoint from an older owner can be rejected in the same transaction that
+// reads the admission row.
+func (f *OwnerFence) GenerationToken() uint64 {
+	if f == nil || f.generation.IsZero() || f.generation.UnixMicro() <= 0 {
+		return 0
+	}
+	return uint64(f.generation.UnixMicro())
+}
+
+func (f *OwnerFence) supersedes(other *OwnerFence) bool {
+	if f == nil || f == other {
+		return false
+	}
+	if other == nil {
+		return true
+	}
+	if f.generation.IsZero() || other.generation.IsZero() {
+		if f.generation.IsZero() != other.generation.IsZero() {
+			return !f.generation.IsZero()
+		}
+		// Unranked legacy callers still receive a strict local publication order.
+		return f.sequence > other.sequence
+	}
+	if f.generation.Equal(other.generation) {
+		// LastRun is the durable rank, but two distinct claims can share its
+		// timestamp granularity. Creation order is a sufficient tie-breaker for
+		// caches inside this process; cross-process safety comes from the owner
+		// check and generation-aware SQL.
+		return f.sequence > other.sequence
+	}
+	return f.generation.After(other.generation)
 }
 
 const (
@@ -108,6 +276,20 @@ const (
 	CDCTaskExtraOptions_SendSqlTimeout       = CDCRequestOptions_SendSqlTimeout
 	CDCTaskExtraOptions_InitSnapshotSplitTxn = CDCRequestOptions_InitSnapshotSplitTxn
 	CDCTaskExtraOptions_Frequency            = CDCRequestOptions_Frequency
+
+	// CDCTaskExtraOptions_InitialSnapshotProtocol is an internal, persisted
+	// compatibility marker. It must not be exposed as a CREATE CDC user option.
+	CDCTaskExtraOptions_InitialSnapshotProtocol = "_InitialSnapshotProtocol"
+	CDCInitialSnapshotProtocolStableEpoch       = "stable-epoch-v1"
+	CDCInitialSnapshotProtocolNoFullHLC         = "no-full-hlc-v1"
+	// CDCTaskExtraOptions_SourcePatternProtocol marks tasks whose persisted
+	// source patterns require the new lossless identifier representation or
+	// source-case metadata. Legacy runners must not claim these tasks.
+	CDCTaskExtraOptions_SourcePatternProtocol = "_SourcePatternProtocol"
+	CDCSourcePatternProtocolV1                = "source-pattern-v1"
+	CDCTaskExtraOptions_GenerationProtocol    = "_GenerationProtocol"
+	CDCGenerationAwareProtocolV1              = "generation-aware-v1"
+	CDCGenerationAwareProtocolV2              = "generation-aware-v2"
 )
 
 var CDCRequestOptions = []string{
@@ -133,6 +315,113 @@ var CDCTaskExtraOptions = []string{
 var (
 	EnableConsoleSink = false
 )
+
+// FinalizeInitialSnapshotOptions encodes split mode so mixed-version clusters
+// remain correct. Old executors see false and use one atomic transaction; new
+// executors recognize the internal marker and use stable-epoch bounded groups.
+func FinalizeInitialSnapshotOptions(extraOpts map[string]any) {
+	if split, _ := extraOpts[CDCTaskExtraOptions_InitSnapshotSplitTxn].(bool); split {
+		extraOpts[CDCTaskExtraOptions_InitSnapshotSplitTxn] = false
+		extraOpts[CDCTaskExtraOptions_InitialSnapshotProtocol] =
+			CDCInitialSnapshotProtocolStableEpoch
+	}
+}
+
+// ValidateStableInitialSnapshotProtocol is the common creation barrier for all
+// frontend and compiler entry points. The stable executor depends on catalog
+// fields and reliable target collation metadata installed after protocol v58.
+func ValidateStableInitialSnapshotProtocol(
+	ctx context.Context,
+	stable bool,
+	protocolVersion int64,
+) error {
+	if !stable || protocolVersion >= defines.MORPCVersion58 {
+		return nil
+	}
+	return moerr.NewNotSupportedf(
+		ctx,
+		"bounded CDC initial snapshots require all CNs to support protocol version %d",
+		defines.MORPCVersion58,
+	)
+}
+
+func ValidateLosslessNoFullStartProtocol(ctx context.Context, protocolVersion int64) error {
+	if protocolVersion >= defines.MORPCVersion94 {
+		return nil
+	}
+	return moerr.NewNotSupportedf(ctx, "lossless NoFull CDC starts require all CNs to support protocol version %d", defines.MORPCVersion94)
+}
+
+func UsesLosslessNoFullStart(extraOpts string) bool {
+	var opts map[string]any
+	if err := json.Unmarshal([]byte(extraOpts), &opts); err != nil {
+		return false
+	}
+	protocol, _ := opts[CDCTaskExtraOptions_InitialSnapshotProtocol].(string)
+	return protocol == CDCInitialSnapshotProtocolNoFullHLC
+}
+
+// UsesStableEpochInitialSnapshot reports whether persisted task options require
+// the bounded stable-epoch executor. Invalid or legacy options fail closed to
+// the atomic executor.
+func UsesStableEpochInitialSnapshot(extraOptsJSON string) bool {
+	extraOpts := make(map[string]any)
+	if err := json.Unmarshal([]byte(extraOptsJSON), &extraOpts); err != nil {
+		return false
+	}
+	protocol, _ := extraOpts[CDCTaskExtraOptions_InitialSnapshotProtocol].(string)
+	return protocol == CDCInitialSnapshotProtocolStableEpoch
+}
+
+// RequiresSourcePatternProtocol reports whether persisted pattern data cannot
+// be interpreted correctly by legacy CDC runners. Mode 2 needs the
+// source_case_mode field, while invalid UTF-8 in source or sink identifiers
+// needs the auxiliary byte fields.
+func RequiresSourcePatternProtocol(patternsJSON string) bool {
+	var patterns PatternTuples
+	if err := JsonDecode(patternsJSON, &patterns); err != nil {
+		// Creation validates and encodes this value first. If a caller reaches
+		// this helper with an undecodable value, fail closed onto the capable
+		// executor instead of allowing a legacy reader to silently reinterpret it.
+		return true
+	}
+	if patterns.SourceCaseMode == 2 {
+		return true
+	}
+	for _, tuple := range patterns.Pts {
+		if tuple == nil {
+			continue
+		}
+		if !utf8.ValidString(tuple.Source.Database) ||
+			!utf8.ValidString(tuple.Source.Table) ||
+			!utf8.ValidString(tuple.Sink.Database) ||
+			!utf8.ValidString(tuple.Sink.Table) {
+			return true
+		}
+	}
+	return false
+}
+
+func UsesSourcePatternProtocol(extraOptsJSON string) bool {
+	extraOpts := make(map[string]any)
+	if err := json.Unmarshal([]byte(extraOptsJSON), &extraOpts); err != nil {
+		return false
+	}
+	protocol, _ := extraOpts[CDCTaskExtraOptions_SourcePatternProtocol].(string)
+	return protocol == CDCSourcePatternProtocolV1
+}
+
+// UsesGenerationAwareProtocol reports whether a task carries the V2 CDC
+// generation/target-identity contract. Such tasks must be claimed only by
+// executors that understand the durable target identity and generation fence.
+func UsesGenerationAwareProtocol(extraOptsJSON string) bool {
+	extraOpts := make(map[string]any)
+	if err := json.Unmarshal([]byte(extraOptsJSON), &extraOpts); err != nil {
+		return false
+	}
+	protocol, _ := extraOpts[CDCTaskExtraOptions_GenerationProtocol].(string)
+	return protocol == CDCGenerationAwareProtocolV2
+}
 
 type TaskId = uuid.UUID
 
@@ -297,51 +586,70 @@ type RowIterator interface {
 }
 
 type DbTableInfo struct {
-	SourceDbId      uint64
-	SourceDbName    string
-	SourceTblId     uint64
-	SourceTblName   string
-	SourceCreateSql string
+	SourceDbId        uint64
+	SourceDbName      string
+	SourceTblId       uint64
+	SourceTblName     string
+	SourceCreateSql   string
+	HasUserPrimaryKey bool
 
 	SinkDbName  string
 	SinkTblName string
 
-	IdChanged bool
+	// ownerFence is execution-local and deliberately excluded from Clone and
+	// all persisted table metadata. It protects target initialization DDL.
+	ownerFence  *OwnerFence
+	targetReady bool
+	// TargetIdentity is the durable identity from the acknowledged watermark.
+	// Empty is reserved for legacy callers that do not use the v2 protocol.
+	TargetIdentity    string
+	TargetPreIdentity string
+	TargetSinkType    string
+	targetIdentityAck func(context.Context, string) error
+}
+
+func (info *DbTableInfo) SetOwnerFence(fence *OwnerFence) {
+	info.ownerFence = fence
+}
+
+func (info *DbTableInfo) OwnerFence() *OwnerFence {
+	return info.ownerFence
+}
+
+func (info *DbTableInfo) SetTargetIdentityAdmission(ready bool, preIdentity, acknowledgedIdentity string, ack func(context.Context, string) error) {
+	info.targetReady = ready
+	info.TargetPreIdentity = preIdentity
+	info.TargetIdentity = acknowledgedIdentity
+	info.targetIdentityAck = ack
+}
+
+func (info *DbTableInfo) ClearTargetAdmissionCallbacks() {
+	info.targetReady = false
+	info.targetIdentityAck = nil
 }
 
 func (info DbTableInfo) String() string {
-	return fmt.Sprintf("%v(%v).%v(%v) -> %v.%v, %v",
+	return fmt.Sprintf("%v(%v).%v(%v) -> %v.%v",
 		info.SourceDbName,
 		info.SourceDbId,
 		info.SourceTblName,
 		info.SourceTblId,
 		info.SinkDbName,
 		info.SinkTblName,
-		info.IdChanged,
 	)
 }
 
 func (info DbTableInfo) Clone() *DbTableInfo {
 	return &DbTableInfo{
-		SourceDbId:      info.SourceDbId,
-		SourceDbName:    info.SourceDbName,
-		SourceTblId:     info.SourceTblId,
-		SourceTblName:   info.SourceTblName,
-		SourceCreateSql: info.SourceCreateSql,
-		SinkDbName:      info.SinkDbName,
-		SinkTblName:     info.SinkTblName,
-		IdChanged:       info.IdChanged,
+		SourceDbId:        info.SourceDbId,
+		SourceDbName:      info.SourceDbName,
+		SourceTblId:       info.SourceTblId,
+		SourceTblName:     info.SourceTblName,
+		SourceCreateSql:   info.SourceCreateSql,
+		HasUserPrimaryKey: info.HasUserPrimaryKey,
+		SinkDbName:        info.SinkDbName,
+		SinkTblName:       info.SinkTblName,
 	}
-}
-
-func (info DbTableInfo) OnlyDiffinTblId(t *DbTableInfo) bool {
-	if info.SourceDbId != t.SourceDbId ||
-		info.SourceDbName != t.SourceDbName ||
-		info.SourceTblName != t.SourceTblName ||
-		info.SourceCreateSql != t.SourceCreateSql {
-		return false
-	}
-	return info.SourceTblId != t.SourceTblId
 }
 
 // AtomicBatch holds batches from [Tail_wip,...,Tail_done] or [Tail_done].
@@ -550,6 +858,64 @@ type PatternTable struct {
 	Table    string `json:"table"`
 }
 
+// MarshalJSON keeps invalid UTF-8 identifier bytes round-trippable. Go's
+// encoding/json replaces invalid string bytes with U+FFFD, but MatrixOne can
+// receive identifiers encoded by a supported single-byte client charset. CDC
+// persists source patterns and later uses their original bytes to match catalog
+// entries, so those bytes must not be normalized by the persistence format.
+func (table PatternTable) MarshalJSON() ([]byte, error) {
+	type encodedPatternTable struct {
+		Database      string `json:"database"`
+		Table         string `json:"table"`
+		DatabaseBytes string `json:"database_bytes,omitempty"`
+		TableBytes    string `json:"table_bytes,omitempty"`
+	}
+
+	encoded := encodedPatternTable{Database: table.Database, Table: table.Table}
+	if !utf8.ValidString(table.Database) {
+		encoded.Database = ""
+		encoded.DatabaseBytes = base64.StdEncoding.EncodeToString([]byte(table.Database))
+	}
+	if !utf8.ValidString(table.Table) {
+		encoded.Table = ""
+		encoded.TableBytes = base64.StdEncoding.EncodeToString([]byte(table.Table))
+	}
+	return json.Marshal(encoded)
+}
+
+// UnmarshalJSON accepts the historical string-only representation and restores
+// the lossless byte fields emitted by MarshalJSON when present.
+func (table *PatternTable) UnmarshalJSON(data []byte) error {
+	type encodedPatternTable struct {
+		Database      string `json:"database"`
+		Table         string `json:"table"`
+		DatabaseBytes string `json:"database_bytes,omitempty"`
+		TableBytes    string `json:"table_bytes,omitempty"`
+	}
+
+	var encoded encodedPatternTable
+	if err := json.Unmarshal(data, &encoded); err != nil {
+		return err
+	}
+	if encoded.DatabaseBytes != "" {
+		bytes, err := base64.StdEncoding.DecodeString(encoded.DatabaseBytes)
+		if err != nil {
+			return moerr.NewInternalErrorNoCtxf("decode CDC source database bytes: %v", err)
+		}
+		encoded.Database = string(bytes)
+	}
+	if encoded.TableBytes != "" {
+		bytes, err := base64.StdEncoding.DecodeString(encoded.TableBytes)
+		if err != nil {
+			return moerr.NewInternalErrorNoCtxf("decode CDC source table bytes: %v", err)
+		}
+		encoded.Table = string(bytes)
+	}
+	table.Database = encoded.Database
+	table.Table = encoded.Table
+	return nil
+}
+
 func (table PatternTable) String() string {
 	return fmt.Sprintf("%s.%s", table.Database, table.Table)
 }
@@ -569,12 +935,85 @@ func (tuple *PatternTuple) String() string {
 }
 
 type PatternTuples struct {
-	Pts      []*PatternTuple `json:"pts"`
-	Reserved string          `json:"reserved"`
+	Pts            []*PatternTuple `json:"pts"`
+	Reserved       string          `json:"reserved"`
+	SourceCaseMode int64           `json:"source_case_mode,omitempty"`
 }
 
 func (pts *PatternTuples) Append(pt *PatternTuple) {
 	pts.Pts = append(pts.Pts, pt)
+}
+
+// NormalizeCDCSourcePatternCase applies MatrixOne's source-side identifier
+// policy before a CDC task persists or validates its source patterns. Mode 1
+// stores source identifiers in lowercase; mode 2 retains execution spelling
+// while still treating source identities case-insensitively for duplicate
+// detection. Sink identifiers intentionally retain the user's spelling because
+// their server can use a different case policy.
+func NormalizeCDCSourcePatternCase(pts *PatternTuples, lowerCaseTableNames int64) error {
+	if pts == nil {
+		return nil
+	}
+	pts.SourceCaseMode = lowerCaseTableNames
+	seen := make(map[string]struct{}, len(pts.Pts))
+	for _, pt := range pts.Pts {
+		if pt == nil {
+			continue
+		}
+		if lowerCaseTableNames == 1 && pt.Source.Database != CDCPitrGranularity_All {
+			pt.Source.Database = CDCSourceIdentifierKey(pt.Source.Database, lowerCaseTableNames)
+		}
+		if lowerCaseTableNames == 1 && pt.Source.Table != CDCPitrGranularity_All {
+			pt.Source.Table = CDCSourceIdentifierKey(pt.Source.Table, lowerCaseTableNames)
+		}
+		keyDB, keyTable := pt.Source.Database, pt.Source.Table
+		if lowerCaseTableNames != 0 {
+			if keyDB != CDCPitrGranularity_All {
+				keyDB = CDCSourceIdentifierKey(keyDB, lowerCaseTableNames)
+			}
+			if keyTable != CDCPitrGranularity_All {
+				keyTable = CDCSourceIdentifierKey(keyTable, lowerCaseTableNames)
+			}
+		}
+		key := GenDbTblKey(keyDB, keyTable)
+		if _, ok := seen[key]; ok {
+			return moerr.NewInternalErrorNoCtxf("one db/table: %s can't be used as multi sources in a cdc task", key)
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
+}
+
+// CDCSourceIdentifierKey returns the source-server identifier key used by
+// parser/catalog mode 1 and mode 2. Keep CDC source matching on this helper:
+// strings.EqualFold has a wider Unicode equivalence relation than MatrixOne's
+// identifier policy (for example, Greek sigma forms).
+func CDCSourceIdentifierKey(name string, lowerCaseTableNames int64) string {
+	return tree.NewCStr(name, lowerCaseTableNames).Compare()
+}
+
+// CDCSourceNameMatches applies the persisted source identifier policy to a
+// catalog name. Keep all CDC admission and scanner consumers on this helper so
+// a catalog candidate superset cannot become a source merely because it shares
+// a different Unicode case-folding relation.
+func CDCSourceNameMatches(name, pattern string, lowerCaseTableNames int64) bool {
+	if pattern == CDCPitrGranularity_All {
+		return true
+	}
+	if lowerCaseTableNames == 2 {
+		return CDCSourceIdentifierKey(name, lowerCaseTableNames) ==
+			CDCSourceIdentifierKey(pattern, lowerCaseTableNames)
+	}
+	return name == pattern
+}
+
+// CDCSourceNameNeedsCatalogSuperset reports whether SQL lower() cannot safely
+// prefilter this mode-2 identifier. The parser preserves malformed UTF-8 bytes
+// from supported single-byte client encodings, whereas SQL lower() replaces
+// those bytes. Such names must be matched locally after an unfiltered catalog
+// scan.
+func CDCSourceNameNeedsCatalogSuperset(name string, lowerCaseTableNames int64) bool {
+	return lowerCaseTableNames == 2 && !utf8.ValidString(name)
 }
 
 func (pts *PatternTuples) String() string {

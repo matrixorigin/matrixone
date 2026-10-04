@@ -71,6 +71,30 @@ func IsSnapshotNotFound(err error) bool {
 	return errors.As(err, &target)
 }
 
+func NewSnapshotNotFoundError(ctx context.Context, snapshotName string) error {
+	return moerr.NewInvalidInputf(ctx, "snapshot '%s' not found", snapshotName)
+}
+
+func resolveDivPrecisionIncrement(ctx CompilerContext) int32 {
+	value, err := ctx.ResolveVariable("div_precision_increment", true, false)
+	if err == nil {
+		if increment, ok := value.(int64); ok {
+			return int32(increment)
+		}
+	}
+	return function.DefaultDivPrecisionIncrement
+}
+
+// DDL expression binders are independent of QueryBuilder. Bind persisted
+// expressions with the same statement setting as ordinary SELECT expressions.
+func ddlExpressionContext(ctx CompilerContext, base context.Context) context.Context {
+	bound := function.WithDivPrecisionIncrement(base, resolveDivPrecisionIncrement(ctx))
+	if function.LegacySpecialConsumers(ctx.GetContext()) {
+		return function.WithLegacySpecialConsumers(bound)
+	}
+	return bound
+}
+
 func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, isPrepareStatement bool, skipStats bool) *QueryBuilder {
 	//
 	// There is a class of variables that controls SQL behavior.  To add such a variable, first
@@ -92,6 +116,9 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 
 	var mysqlCompatible bool
 	var mysqlFullGroupByCompat bool
+	var boolSumAvgCompat bool
+	var noUnsignedSubtraction bool
+	divPrecisionIncrement := resolveDivPrecisionIncrement(ctx)
 
 	mode, err := ctx.ResolveVariable("sql_mode", true, false)
 	if err == nil {
@@ -99,9 +126,10 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 			onlyFullGroupBy := mysql.HasSQLMode(modeStr, "ONLY_FULL_GROUP_BY")
 			mysqlCompatible = !onlyFullGroupBy
 			mysqlFullGroupByCompat = onlyFullGroupBy && !mysql.HasMatrixOneNativeSQLMode(modeStr)
+			boolSumAvgCompat = mysql.HasEnableBoolSumAvgSQLMode(modeStr)
+			noUnsignedSubtraction = mysql.HasSQLMode(modeStr, mysql.SQLModeNoUnsignedSubtraction)
 		}
 	}
-
 	var aggSpillMem int64
 	aggSpillMemInt, err := ctx.ResolveVariable("agg_spill_mem", true, false)
 	if err == nil {
@@ -147,10 +175,14 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		setBitmapByDisplayNode:   make(map[[2]int32]int32),
 		indexHintOwnerByNode:     make(map[int32]int32),
 		userWindowNodes:          make(map[int32]struct{}),
+		internalTopNWindows:      make(map[int32]struct{}),
 		partitionTopNWindowNodes: make(map[int32]struct{}),
 		nextBindTag:              0,
 		mysqlCompatible:          mysqlCompatible,
 		mysqlFullGroupByCompat:   mysqlFullGroupByCompat,
+		boolSumAvgCompat:         boolSumAvgCompat,
+		noUnsignedSubtraction:    noUnsignedSubtraction,
+		divPrecisionIncrement:    divPrecisionIncrement,
 		aggSpillMem:              aggSpillMem,
 		joinSpillMem:             joinSpillMem,
 		sortSpillMem:             sortSpillMem,
@@ -162,9 +194,10 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		optimizationHistory:      make([]string, 0),
 		// -1 means "no old-row delete maintenance" (set only on ODKU into an
 		// irregular-index table); step 0 is a valid index so it cannot be the zero value.
-		irregularMaintDeleteStep: -1,
-		returningSourceStep:      -1,
-		returningFilterPos:       -1,
+		irregularMaintDeleteStep:           -1,
+		irregularMaintInsertOnlySourceStep: -1,
+		returningSourceStep:                -1,
+		returningFilterPos:                 -1,
 	}
 }
 
@@ -383,22 +416,43 @@ func exprNotNullableWithColResolver(
 }
 
 func isIfNullCase(fn *plan.Function) bool {
-	if fn == nil || fn.Func == nil || fn.Func.ObjName != "case" || len(fn.Args) != 3 {
+	source, elseSource, ok := ifNullCaseSources(fn)
+	if !ok {
 		return false
 	}
+	if source.AuxId < 0 && source.AuxId == elseSource.AuxId {
+		return true
+	}
+	return exprStructuralEqual(source, elseSource)
+}
+
+func ifNullCaseSources(fn *plan.Function) (source, elseSource *plan.Expr, ok bool) {
+	if fn == nil || fn.Func == nil || fn.Func.ObjName != "case" || len(fn.Args) != 3 {
+		return nil, nil, false
+	}
 	condition := fn.Args[0].GetF()
-	return condition != nil && condition.Func != nil && condition.Func.ObjName == "isnull" &&
-		len(condition.Args) == 1 && ifNullCaseSourceMatches(condition.Args[0], fn.Args[2])
+	if condition == nil || condition.Func == nil || condition.Func.ObjName != "isnull" || len(condition.Args) != 1 {
+		return nil, nil, false
+	}
+	elseSource = ifNullCaseElseSource(fn.Args[2])
+	if condition.Args[0] == nil || elseSource == nil {
+		return nil, nil, false
+	}
+	return condition.Args[0], elseSource, true
 }
 
 // CASE type reconciliation can add CAST nodes around IFNULL's ELSE source.
-// Ignore those binder-introduced casts when recognizing the rewrite; the
-// initial IFNULL metadata calculation uses the same source relationship.
-func ifNullCaseSourceMatches(source, elseExpr *plan.Expr) bool {
+// Ignore those binder-introduced casts when recognizing the rewrite.
+func ifNullCaseElseSource(elseExpr *plan.Expr) *plan.Expr {
 	for {
 		fn := elseExpr.GetF()
-		if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || len(fn.Args) == 0 {
-			return exprStructuralEqual(source, elseExpr)
+		if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || len(fn.Args) == 0 ||
+			fn.GetSyntaxExplicitCast() {
+			return elseExpr
+		}
+		_, overload := function.DecodeOverloadID(fn.Func.Obj)
+		if overload != 0 {
+			return elseExpr
 		}
 		elseExpr = fn.Args[0]
 	}
@@ -514,12 +568,38 @@ func refreshExprNullabilityFromInputs(expr *plan.Expr, inputs ...[]*plan.Expr) {
 	if expr == nil {
 		return
 	}
-	if fn := expr.GetF(); fn != nil {
+	switch impl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		col := impl.Col
+		if col == nil {
+			expr.Typ.NotNullable = false
+			return
+		}
+		relPos, colPos := int(col.RelPos), int(col.ColPos)
+		expr.Typ.NotNullable = relPos >= 0 && relPos < len(inputs) &&
+			colPos >= 0 && colPos < len(inputs[relPos]) &&
+			inputs[relPos][colPos] != nil && inputs[relPos][colPos].Typ.NotNullable
+	case *plan.Expr_F:
+		fn := impl.F
+		if fn == nil || fn.Func == nil {
+			expr.Typ.NotNullable = false
+			return
+		}
 		for _, arg := range fn.Args {
+			if arg == nil {
+				expr.Typ.NotNullable = false
+				return
+			}
 			refreshExprNullabilityFromInputs(arg, inputs...)
 		}
+		// The children now carry their materialized input contracts. Deducing
+		// from them directly avoids recursively rescanning each subtree.
+		if isIfNullCase(fn) {
+			expr.Typ.NotNullable = fn.Args[1].Typ.NotNullable || fn.Args[2].Typ.NotNullable
+		} else {
+			expr.Typ.NotNullable = function.DeduceNotNullable(fn.Func.Obj, fn.Args)
+		}
 	}
-	expr.Typ.NotNullable = exprEffectivelyNotNullable(expr, inputs...)
 }
 
 // IsJoinExprEffectivelyNotNullable derives the runtime nullability of an
@@ -595,6 +675,32 @@ func setOperationOutputType(
 	return leftType
 }
 
+// setOperationPureCharCommonType keeps a set operation made exclusively from
+// CHAR expressions in the fixed-width CHAR domain. The conditional-expression
+// resolver intentionally promotes CHAR with VARCHAR/TEXT to a variable string,
+// but that rule is not valid for set-operation row materialization: changing
+// CHAR to VARCHAR loses the common PAD SPACE representation and lets equal
+// values with different declared widths survive DISTINCT operations.
+func setOperationPureCharCommonType(source []types.Type) (types.Type, bool) {
+	if len(source) == 0 {
+		return types.Type{}, false
+	}
+	result := source[0]
+	if result.Oid != types.T_char {
+		return types.Type{}, false
+	}
+	for _, typ := range source[1:] {
+		if typ.Oid != types.T_char {
+			return types.Type{}, false
+		}
+		if result.Width < typ.Width {
+			result.Width = typ.Width
+		}
+	}
+	result.Charset = types.MergeStringCharset(source, result.Charset)
+	return result, true
+}
+
 type ColRefRemapping struct {
 	globalToLocal map[[2]int32][2]int32
 	localToGlobal [][2]int32
@@ -634,6 +740,12 @@ func (builder *QueryBuilder) copyNode(ctx *BindContext, nodeId int32) int32 {
 		newNode.Children = append(newNode.Children, builder.copyNode(ctx, child))
 	}
 	newNodeId := builder.appendNode(newNode, ctx)
+	if _, protected := builder.existentialGateProjects[nodeId]; protected {
+		builder.existentialGateProjects[newNodeId] = struct{}{}
+	}
+	if aliases, ok := builder.scalarReaggAliases[nodeId]; ok {
+		builder.scalarReaggAliases[newNodeId] = append([]scalarReaggAlias(nil), aliases...)
+	}
 	return newNodeId
 }
 
@@ -908,6 +1020,23 @@ func (builder *QueryBuilder) remapRegularIndexPreInsert(
 	return remapping, nil
 }
 
+// externalScanTolerates reports whether the query still references one of the
+// columns that turn an external scan's parse errors into rows
+// (__mo_error_message / __mo_error_text). __mo_file_line is deliberately not
+// one of them: it is position metadata, and asking for it alone must not stop
+// a bad record from failing the query.
+func externalScanTolerates(node *plan.Node, colTag int32, colRefCnt map[[2]int32]int) bool {
+	for i, col := range node.TableDef.Cols {
+		if colRefCnt[[2]int32{colTag, int32(i)}] == 0 {
+			continue
+		}
+		if catalog.IsExternalErrorToleranceCol(col.Name, col.ColId) {
+			return true
+		}
+	}
+	return false
+}
+
 func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt map[[2]int32]int, colRefBool map[[2]int32]bool, sinkColRef map[[2]int32]int) (*ColRefRemapping, error) {
 	return builder.remapAllColRefsForConsumer(
 		nodeID, step, colRefCnt, colRefBool, sinkColRef, false)
@@ -941,7 +1070,106 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 	}
 
 	switch node.NodeType {
-	case plan.Node_FUNCTION_SCAN, plan.Node_VECTOR_INDEX_SCAN:
+	case plan.Node_ADAPTIVE_TOP, plan.Node_VECTOR_QUERY_TOP:
+		resultChildren := node.Children
+		outputChild := int32(0)
+		if node.NodeType == plan.Node_VECTOR_QUERY_TOP {
+			// Child 0 is control input, not the result schema. Keep the logical
+			// producer reference explicit for prepared type refresh and metadata.
+			outputChild = 1
+			if len(node.Children) != 3 {
+				return nil, moerr.NewInternalError(builder.GetContext(), "invalid scalar vector query topology")
+			}
+			provider := builder.qry.Nodes[node.Children[0]]
+			if len(provider.BindingTags) != 1 || len(provider.ProjectList) != 1 {
+				return nil, moerr.NewInternalError(builder.GetContext(), "invalid scalar vector provider projection")
+			}
+			colRefCnt[[2]int32{provider.BindingTags[0], 0}]++
+			if _, err := builder.remapAllColRefs(provider.NodeId, step, colRefCnt, colRefBool, sinkColRef); err != nil {
+				return nil, err
+			}
+			resultChildren = node.Children[1:]
+		}
+		if len(resultChildren) < 2 || len(node.BindingTags) > 1 {
+			return nil, moerr.NewInternalError(builder.GetContext(), "invalid adaptive top remapping topology")
+		}
+		needed := make([]int, 0, len(node.ProjectList))
+		if len(node.BindingTags) == 1 {
+			outputTag := node.BindingTags[0]
+			for i := range node.ProjectList {
+				if colRefCnt[[2]int32{outputTag, int32(i)}] > 0 {
+					needed = append(needed, i)
+				}
+			}
+		} else {
+			// A SORT-anchored region has no output binding tag. Preserve its complete
+			// positional schema; ancestors reference the underlying project tags.
+			for i := range node.ProjectList {
+				needed = append(needed, i)
+			}
+		}
+		if len(needed) == 0 && len(node.ProjectList) > 0 {
+			needed = append(needed, 0)
+		}
+		var first *ColRefRemapping
+		for _, childID := range resultChildren {
+			for _, pos := range needed {
+				increaseRefCnt(node.ProjectList[pos], 1, colRefCnt)
+			}
+			// SORT-anchored candidates expose constants only positionally; those
+			// expressions have no ColRef for increaseRefCnt to retain. Pin the
+			// corresponding output project columns explicitly.
+			for outputID := childID; outputID >= 0 && int(outputID) < len(builder.qry.Nodes); {
+				output := builder.qry.Nodes[outputID]
+				if output.NodeType == plan.Node_PROJECT && len(output.BindingTags) == 1 &&
+					len(output.ProjectList) >= len(node.ProjectList) {
+					for _, pos := range needed {
+						colRefCnt[[2]int32{output.BindingTags[0], int32(pos)}]++
+					}
+					break
+				}
+				if len(output.Children) != 1 {
+					break
+				}
+				outputID = output.Children[0]
+			}
+			childRemapping, err := builder.remapAllColRefs(childID, step, colRefCnt, colRefBool, sinkColRef)
+			if err != nil {
+				return nil, err
+			}
+			if first == nil {
+				first = childRemapping
+			} else if len(first.localToGlobal) != len(childRemapping.localToGlobal) {
+				return nil, moerr.NewInternalError(builder.GetContext(), "adaptive top candidate width changed during remapping")
+			}
+		}
+		if len(node.BindingTags) == 0 {
+			if first == nil {
+				return nil, moerr.NewInternalError(builder.GetContext(), "adaptive top has no candidate remapping")
+			}
+			node.ProjectList = make([]*plan.Expr, len(first.localToGlobal))
+			for i, globalRef := range first.localToGlobal {
+				node.ProjectList[i] = &plan.Expr{
+					Typ:  builder.qry.Nodes[resultChildren[0]].ProjectList[i].Typ,
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: outputChild, ColPos: int32(i)}},
+				}
+				remapping.addColRef(globalRef)
+			}
+			break
+		}
+		outputTag := node.BindingTags[0]
+		newProjectList := make([]*plan.Expr, 0, len(needed))
+		for _, pos := range needed {
+			globalRef := [2]int32{outputTag, int32(pos)}
+			remapping.addColRef(globalRef)
+			newProjectList = append(newProjectList, &plan.Expr{
+				Typ:  node.ProjectList[pos].Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: outputChild, ColPos: int32(len(newProjectList))}},
+			})
+		}
+		node.ProjectList = newProjectList
+
+	case plan.Node_FUNCTION_SCAN, plan.Node_VECTOR_INDEX_SCAN, plan.Node_VECTOR_QUERY_SOURCE:
 		for _, expr := range node.FilterList {
 			increaseRefCnt(expr, 1, colRefCnt)
 		}
@@ -1049,8 +1277,19 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			increaseRefCnt(expr, 1, colRefCnt)
 		}
 
-		for _, expr := range node.BlockFilterList {
-			increaseRefCnt(expr, 1, colRefCnt)
+		var blockColRefs map[[2]int32]int
+		if node.NodeType == plan.Node_TABLE_SCAN && len(node.BlockFilterList) > 0 {
+			// Block filters inspect relation metadata; they do not consume row
+			// vectors. Keep their columns out of the scan reader unless another
+			// expression also needs those columns as row data.
+			blockColRefs = make(map[[2]int32]int)
+			for _, expr := range node.BlockFilterList {
+				increaseRefCnt(expr, 1, blockColRefs)
+			}
+		} else {
+			for _, expr := range node.BlockFilterList {
+				increaseRefCnt(expr, 1, colRefCnt)
+			}
 		}
 
 		for _, rfSpec := range node.RuntimeFilterProbeList {
@@ -1075,12 +1314,23 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 		}
 
 		colTag := node.BindingTags[0]
+		originalCols := node.TableDef.Cols
 		newTableDef := CloneTableDefForPlan(node.TableDef, false)
+
+		// An external scan that reports parse errors must read the whole
+		// record. Whether a record failed is a property of the record, not of
+		// the projection: pruning the column that fails to convert would make
+		// `select __mo_error_message from t` -- the query that asks which
+		// records failed -- answer "none", because nothing was converted.
+		keepAllRecordCols := node.NodeType == plan.Node_EXTERNAL_SCAN &&
+			externalScanTolerates(node, colTag, colRefCnt)
 
 		for i, col := range node.TableDef.Cols {
 			globalRef := [2]int32{colTag, int32(i)}
 			if colRefCnt[globalRef] == 0 {
-				continue
+				if !keepAllRecordCols || col.Hidden || catalog.IsReservedExternalColName(col.Name) {
+					continue
+				}
 			}
 
 			internalRemapping.addColRef(globalRef)
@@ -1107,6 +1357,26 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 		for localIdx, global := range internalRemapping.localToGlobal {
 			colMap[[2]int32{0, int32(localIdx)}] = global
 		}
+		blockColMap := colMap
+		if blockColRefs != nil {
+			blockColMap = maps.Clone(colMap)
+			// Share positions with row columns. Give omitted metadata columns
+			// separate slots so combined runtime and block filters cannot map
+			// the same ColPos to different physical columns.
+			nextPos := int32(len(internalRemapping.localToGlobal))
+			for i := range originalCols {
+				globalRef := [2]int32{colTag, int32(i)}
+				if blockColRefs[globalRef] == 0 {
+					continue
+				}
+				if _, ok := blockColMap[globalRef]; ok {
+					continue
+				}
+				blockColMap[globalRef] = [2]int32{0, nextPos}
+				blockColMap[[2]int32{0, nextPos}] = globalRef
+				nextPos++
+			}
+		}
 
 		remapInfo.tip = "FilterList"
 		remapInfo.interRemapping = internalRemapping
@@ -1121,9 +1391,11 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 
 		remapInfo.tip = "BlockFilterList"
 		for idx, expr := range node.BlockFilterList {
-			increaseRefCnt(expr, -1, colRefCnt)
+			if blockColRefs == nil {
+				increaseRefCnt(expr, -1, colRefCnt)
+			}
 			remapInfo.srcExprIdx = idx
-			err := builder.remapColRefForExpr(expr, colMap, &remapInfo)
+			err := builder.remapColRefForExpr(expr, blockColMap, &remapInfo)
 			if err != nil {
 				return nil, err
 			}
@@ -1410,6 +1682,11 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			for _, expr := range node.DedupJoinCtx.UpdateColExprList {
 				increaseRefCnt(expr, 1, colRefCnt)
 			}
+			for _, col := range dedupJoinMetadataCols(node.DedupJoinCtx) {
+				if col != nil {
+					colRefCnt[[2]int32{col.RelPos, col.ColPos}]++
+				}
+			}
 
 			// OldColCaptureList: build_placeholder points to the build-side
 			// (right child) NULL column whose slot will receive the captured
@@ -1491,6 +1768,15 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 				remapInfo.srcExprIdx = idx
 				err := builder.remapColRefForExpr(expr, internalMap, &remapInfo)
 				if err != nil {
+					return nil, err
+				}
+			}
+			for _, col := range dedupJoinMetadataCols(node.DedupJoinCtx) {
+				if col == nil {
+					continue
+				}
+				colRefCnt[[2]int32{col.RelPos, col.ColPos}]--
+				if err := builder.remapSingleColRef(col, internalMap, &remapInfo); err != nil {
 					return nil, err
 				}
 			}
@@ -1617,11 +1903,16 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 		groupTag := node.BindingTags[0]
 		aggregateTag := node.BindingTags[1]
 		groupSize := int32(len(node.GroupBy))
-
 		// HAVING is evaluated inside the aggregate node, so its output refs are
 		// consumers even when the outer projection does not expose them.
 		for _, expr := range node.FilterList {
 			increaseRefCnt(expr, 1, colRefCnt)
+		}
+		// Child remapping consumes input references. Snapshot demand for
+		// passthrough aliases after all aggregate-local consumers are counted.
+		aliasDemand := make(map[[2]int32]bool)
+		for _, alias := range builder.scalarReaggAliases[nodeID] {
+			aliasDemand[alias.ref] = colRefCnt[alias.ref] > 0
 		}
 
 		neededAggCount := int32(0)
@@ -1709,6 +2000,13 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 
 		remapInfo.tip = "GroupBy"
 		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
+		var aliasesByGroup map[int32][][2]int32
+		if aliases := builder.scalarReaggAliases[nodeID]; len(aliases) > 0 {
+			aliasesByGroup = make(map[int32][][2]int32, len(aliases))
+			for _, alias := range aliases {
+				aliasesByGroup[alias.groupPos] = append(aliasesByGroup[alias.groupPos], alias.ref)
+			}
+		}
 		for idx, expr := range node.GroupBy {
 			increaseRefCnt(expr, -1, colRefCnt)
 			remapInfo.srcExprIdx = idx
@@ -1719,11 +2017,26 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			refreshExprNullabilityFromInputs(expr, childProjList)
 
 			globalRef := [2]int32{groupTag, int32(idx)}
-			if colRefCnt[globalRef] == 0 {
+			aliases := aliasesByGroup[int32(idx)]
+			canonicalRef := globalRef
+			for _, aliasRef := range aliases {
+				if aliasDemand[aliasRef] {
+					canonicalRef = aliasRef
+					break
+				}
+			}
+			if colRefCnt[globalRef] == 0 && canonicalRef == globalRef {
 				continue
 			}
 
-			remapping.addColRef(globalRef)
+			// The alias is the original output identity of a previously
+			// computed scalar. Use it as the canonical output when demanded so
+			// an enclosing JOIN carries it through its own column pruning.
+			remapping.addColRef(canonicalRef)
+			remapping.globalToLocal[globalRef] = remapping.globalToLocal[canonicalRef]
+			for _, aliasRef := range aliases {
+				remapping.globalToLocal[aliasRef] = remapping.globalToLocal[canonicalRef]
+			}
 
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
 				Typ: groupingFlagOutputType(expr.Typ, node.GroupingFlag, int32(idx)),
@@ -1731,7 +2044,7 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 					Col: &ColRef{
 						RelPos: -1,
 						ColPos: int32(idx),
-						Name:   builder.nameByColRef[globalRef],
+						Name:   builder.nameByColRef[canonicalRef],
 					},
 				},
 			})
@@ -2596,6 +2909,7 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 		if err != nil {
 			return nil, err
 		}
+		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
 
 		remapInfo.tip = "FilterList"
 		for idx, expr := range node.FilterList {
@@ -2605,9 +2919,9 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			if err != nil {
 				return nil, err
 			}
+			refreshExprNullabilityFromInputs(expr, childProjList)
 		}
 
-		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
 		for i, globalRef := range childRemapping.localToGlobal {
 			if colRefCnt[globalRef] == 0 {
 				continue
@@ -2754,12 +3068,18 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 
 	case plan.Node_PROJECT, plan.Node_MATERIAL:
 		projectTag := node.BindingTags[0]
+		_, groupingSetExpand := DecodeGroupingSetExpandOption(node.ExtraOptions)
 
 		var neededProj []int32
 
 		for i, expr := range node.ProjectList {
 			globalRef := [2]int32{projectTag, int32(i)}
-			if colRefCnt[globalRef] == 0 {
+			// A grouping-set expansion PROJECT has positional execution metadata:
+			// its penultimate column marks synthetic empty-input rows and is
+			// consumed directly by Group rather than by a plan expression. Keep
+			// the complete row image so column pruning cannot remove or relocate
+			// that marker (or the trailing set id).
+			if !groupingSetExpand && colRefCnt[globalRef] == 0 {
 				continue
 			}
 
@@ -3113,6 +3433,11 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			if updateCtx.ChangedRowsCol != nil {
 				colRefCnt[[2]int32{updateCtx.ChangedRowsCol.RelPos, updateCtx.ChangedRowsCol.ColPos}]++
 			}
+			for _, col := range []*plan.ColRef{updateCtx.AffectedRowsWeightCol, updateCtx.PhysicalChangedRowsCol} {
+				if col != nil {
+					colRefCnt[[2]int32{col.RelPos, col.ColPos}]++
+				}
+			}
 
 			for _, col := range updateCtx.AffectedRowsCols {
 				colRefCnt[[2]int32{col.RelPos, col.ColPos}]++
@@ -3155,6 +3480,15 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 				colRefCnt[[2]int32{col.RelPos, col.ColPos}]--
 				err := builder.remapSingleColRef(col, childRemapping.globalToLocal, &remapInfo)
 				if err != nil {
+					return nil, err
+				}
+			}
+			for _, col := range []*plan.ColRef{updateCtx.AffectedRowsWeightCol, updateCtx.PhysicalChangedRowsCol} {
+				if col == nil {
+					continue
+				}
+				colRefCnt[[2]int32{col.RelPos, col.ColPos}]--
+				if err := builder.remapSingleColRef(col, childRemapping.globalToLocal, &remapInfo); err != nil {
 					return nil, err
 				}
 			}
@@ -3374,12 +3708,27 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 				},
 			})
 		}
+		if node.PreInsertCtx.TrackAutoIncrementGenerated {
+			markerRef := [2]int32{
+				node.BindingTags[0],
+				node.PreInsertCtx.AutoIncrementGeneratedColumn,
+			}
+			remapping.addColRef(markerRef)
+			node.ProjectList = append(node.ProjectList, &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_bool)},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: -1,
+					ColPos: node.PreInsertCtx.AutoIncrementGeneratedColumn,
+				}},
+			})
+		}
 
 	case plan.Node_PRE_INSERT_UK:
 		if node.PreInsertUkCtx == nil {
 			return nil, moerr.NewInternalError(builder.GetContext(), "invalid PRE_INSERT_UK node in query plan")
 		}
-		if !node.PreInsertUkCtx.InsertIgnoreMultiDedup {
+		if !node.PreInsertUkCtx.InsertIgnoreMultiDedup &&
+			!node.PreInsertUkCtx.OdkuTargetArbitration {
 			return builder.remapRegularIndexPreInsert(
 				nodeID, step, colRefCnt, colRefBool, sinkColRef, node.PreInsertUkCtx,
 			)
@@ -3387,20 +3736,40 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 
 		child := builder.qry.Nodes[node.Children[0]]
 		if len(child.BindingTags) != 1 {
-			return nil, moerr.NewInternalError(builder.GetContext(), "invalid INSERT IGNORE dedup input")
+			return nil, moerr.NewInternalError(builder.GetContext(), "invalid ordered unique-key arbitration input")
 		}
 		childTag := child.BindingTags[0]
 		keyRefs := make([][2]int32, len(node.PreInsertUkCtx.KeyColumns))
-		conflictRefs := make([][2]int32, len(node.PreInsertUkCtx.ConflictColumns))
+		auxColumns := node.PreInsertUkCtx.ConflictColumns
+		if node.PreInsertUkCtx.OdkuTargetArbitration {
+			auxColumns = node.PreInsertUkCtx.TargetColumns
+		}
+		auxRefs := make([][2]int32, len(auxColumns))
 		for i, pos := range node.PreInsertUkCtx.KeyColumns {
 			keyRefs[i] = [2]int32{childTag, pos}
 			colRefCnt[keyRefs[i]]++
 		}
-		for i, pos := range node.PreInsertUkCtx.ConflictColumns {
-			conflictRefs[i] = [2]int32{childTag, pos}
-			colRefCnt[conflictRefs[i]]++
+		for i, pos := range auxColumns {
+			auxRefs[i] = [2]int32{childTag, pos}
+			colRefCnt[auxRefs[i]]++
+		}
+		var autoIncrementRef, autoIncrementGeneratedRef [2]int32
+		if node.PreInsertUkCtx.AutoIncrementReorder {
+			autoIncrementRef = [2]int32{childTag, node.PreInsertUkCtx.AutoIncrementColumn}
+			autoIncrementGeneratedRef = [2]int32{childTag, node.PreInsertUkCtx.AutoIncrementGeneratedColumn}
+			colRefCnt[autoIncrementRef]++
+			colRefCnt[autoIncrementGeneratedRef]++
+		}
+		var pkRef [2]int32
+		if node.PreInsertUkCtx.OdkuTargetArbitration {
+			pkRef = [2]int32{childTag, node.PreInsertUkCtx.PkColumn}
+			colRefCnt[pkRef]++
 		}
 		outputTag := node.BindingTags[0]
+		targetOutputPos := int32(-1)
+		if node.PreInsertUkCtx.OdkuTargetArbitration {
+			targetOutputPos = int32(len(node.ProjectList) - 1)
+		}
 		neededOutputs := make([]int32, 0, len(node.ProjectList))
 		for i, expr := range node.ProjectList {
 			if colRefCnt[[2]int32{outputTag, int32(i)}] == 0 {
@@ -3419,23 +3788,56 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			colRefCnt[ref]--
 			pos, ok := childRemapping.globalToLocal[ref]
 			if !ok {
-				return nil, moerr.NewInternalError(builder.GetContext(), "missing INSERT IGNORE dedup key column")
+				return nil, moerr.NewInternalError(builder.GetContext(), "missing ordered arbitration key column")
 			}
 			node.PreInsertUkCtx.KeyColumns[i] = pos[1]
 		}
-		for i, ref := range conflictRefs {
+		for i, ref := range auxRefs {
 			colRefCnt[ref]--
 			pos, ok := childRemapping.globalToLocal[ref]
 			if !ok {
-				return nil, moerr.NewInternalError(builder.GetContext(), "missing INSERT IGNORE conflict column")
+				return nil, moerr.NewInternalError(builder.GetContext(), "missing ordered arbitration auxiliary column")
 			}
-			node.PreInsertUkCtx.ConflictColumns[i] = pos[1]
+			if node.PreInsertUkCtx.OdkuTargetArbitration {
+				node.PreInsertUkCtx.TargetColumns[i] = pos[1]
+			} else {
+				node.PreInsertUkCtx.ConflictColumns[i] = pos[1]
+			}
+		}
+		if node.PreInsertUkCtx.OdkuTargetArbitration {
+			colRefCnt[pkRef]--
+			pos, ok := childRemapping.globalToLocal[pkRef]
+			if !ok {
+				return nil, moerr.NewInternalError(builder.GetContext(), "missing ODKU incoming primary key column")
+			}
+			node.PreInsertUkCtx.PkColumn = pos[1]
+		}
+		if node.PreInsertUkCtx.AutoIncrementReorder {
+			colRefCnt[autoIncrementRef]--
+			pos, ok := childRemapping.globalToLocal[autoIncrementRef]
+			if !ok {
+				return nil, moerr.NewInternalError(builder.GetContext(), "missing INSERT IGNORE auto-increment column")
+			}
+			node.PreInsertUkCtx.AutoIncrementColumn = pos[1]
+			colRefCnt[autoIncrementGeneratedRef]--
+			pos, ok = childRemapping.globalToLocal[autoIncrementGeneratedRef]
+			if !ok {
+				return nil, moerr.NewInternalError(builder.GetContext(), "missing INSERT IGNORE auto-increment provenance column")
+			}
+			node.PreInsertUkCtx.AutoIncrementGeneratedColumn = pos[1]
 		}
 
 		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
 		newProjectList := make([]*plan.Expr, 0, len(neededOutputs))
 		remapInfo.tip = "PreInsertUkCtx"
+		autoOutput := node.PreInsertUkCtx.AutoIncrementOutputColumn
+		if node.PreInsertUkCtx.AutoIncrementReorder {
+			node.PreInsertUkCtx.AutoIncrementOutputColumn = -1
+		}
 		for i, output := range neededOutputs {
+			if node.PreInsertUkCtx.AutoIncrementReorder && output == autoOutput {
+				node.PreInsertUkCtx.AutoIncrementOutputColumn = int32(i)
+			}
 			expr := node.ProjectList[output]
 			increaseRefCnt(expr, -1, colRefCnt)
 			remapInfo.srcExprIdx = i
@@ -3447,7 +3849,16 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			newProjectList = append(newProjectList, expr)
 		}
 		node.ProjectList = newProjectList
+		if node.PreInsertUkCtx.AutoIncrementReorder && node.PreInsertUkCtx.AutoIncrementOutputColumn < 0 {
+			return nil, moerr.NewInternalError(builder.GetContext(), "INSERT IGNORE auto-increment output was pruned")
+		}
 		node.PreInsertUkCtx.OutputColumns = int32(len(newProjectList))
+		if node.PreInsertUkCtx.OdkuTargetArbitration {
+			if len(neededOutputs) == 0 || neededOutputs[len(neededOutputs)-1] != targetOutputPos {
+				return nil, moerr.NewInternalError(builder.GetContext(), "ODKU target output was pruned")
+			}
+			node.PreInsertUkCtx.OutputColumns--
+		}
 
 	default:
 		return nil, moerr.NewInternalErrorf(builder.GetContext(), "unsupported node type %s", node.NodeType.String())
@@ -3579,6 +3990,9 @@ func (builder *QueryBuilder) removeUnnecessaryProjections(nodeID int32) int32 {
 	if node.NodeType != plan.Node_PROJECT {
 		return nodeID
 	}
+	if _, groupingSetExpand := DecodeGroupingSetExpandOption(node.ExtraOptions); groupingSetExpand {
+		return nodeID
+	}
 	childNodeID := node.Children[0]
 	childNode := builder.qry.Nodes[childNodeID]
 	if len(childNode.ProjectList) != 0 {
@@ -3592,6 +4006,14 @@ func (builder *QueryBuilder) removeUnnecessaryProjections(nodeID int32) int32 {
 }
 
 func (builder *QueryBuilder) createQuery() (*Query, error) {
+	if err := builder.bindPreparedPredicateDiagnostics(); err != nil {
+		return nil, err
+	}
+	if builder.hadPendingExistentials {
+		if err := builder.checkPendingExistentials(); err != nil {
+			return nil, err
+		}
+	}
 	var err error
 	colRefBool := make(map[[2]int32]bool)
 	sinkColRef := make(map[[2]int32]int)
@@ -3612,8 +4034,22 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		}
 		builder.skipStats = builder.canSkipStats()
 		builder.rewriteDistinctToAGG(rootID)
-		builder.rewriteEffectlessAggToProject(rootID)
-		rootID = builder.optimizeFilters(rootID)
+		rootID = builder.rewriteEffectlessAggToProject(rootID)
+		rootID, err = builder.optimizeFilters(rootID)
+		if err != nil {
+			return nil, err
+		}
+		// WHERE predicates are initially represented by a Filter between AGG
+		// and TABLE_SCAN.  Revisit the proof after filter pushdown so a unique
+		// grouped scan can be eliminated without moving LIMIT below HAVING.
+		rootID = builder.rewriteEffectlessAggToProject(rootID)
+		if !builder.outerAntiPlanningDisabled() {
+			var antiRewritten bool
+			rootID, antiRewritten = builder.rewriteLeftJoinNullFiltersToAnti(rootID, make(map[int32]int))
+			if antiRewritten {
+				ReCalcNodeStats(rootID, builder, true, true, true)
+			}
+		}
 		if err = builder.checkPlanningCanceled(); err != nil {
 			return nil, err
 		}
@@ -3624,6 +4060,17 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		colRefCnt := make(map[[2]int32]int)
 		builder.countColRefs(rootID, colRefCnt)
 		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, colRefCnt)
+		// Safe derived aliases now expose the existing singleton proof shape.
+		if err = builder.rewriteNumericDomainFilters(rootID, plan.Node_JOIN); err != nil {
+			return nil, err
+		}
+		rootID, _ = builder.fuseScalarAggregates(rootID)
+		clear(colRefCnt)
+		builder.countColRefs(rootID, colRefCnt)
+		// Removing a proof-eliminated aggregate can expose a direct Project ->
+		// TableScan edge only after the first limit-pushdown pass. Re-run the
+		// idempotent rule so the newly streaming path can honor source demand.
+		builder.pushdownLimitToTableScan(rootID)
 		// Seed base-relation statistics so the early vector access-path builder
 		// can cost the hidden entries work before replacing the source scan.
 		ReCalcNodeStats(rootID, builder, true, false, true)
@@ -3631,6 +4078,11 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		// passes. Build only those paths here; regular/fulltext index rewrites keep
 		// their established late placement below.
 		builder.prepareSpecialIndexGuards(rootID)
+		// Multiple adaptive regions can be mutually dependent through a JOIN or
+		// set-operation consumer. Until candidate scopes carry independent runtime
+		// filter/message generations, execute those regions exactly once with the
+		// existing FORCE path rather than replaying either side.
+		builder.forceMultipleAdaptiveVectorRegions(rootID)
 		earlyIndexColMap := make(map[[2]int32]*plan.Expr)
 		rootID, err = builder.applyVectorIndicesEarly(rootID, colRefCnt, earlyIndexColMap)
 		builder.resetSpecialIndexGuards()
@@ -3660,7 +4112,10 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		rootID = builder.aggPullup(rootID, rootID)
 		ReCalcNodeStats(rootID, builder, true, false, true)
 		rootID = builder.pushdownSemiAntiJoins(rootID)
-		builder.optimizeDistinctAgg(rootID)
+		rootID = builder.removeImpliedSemiJoins(rootID)
+		if err = builder.optimizeDistinctAgg(rootID); err != nil {
+			return nil, err
+		}
 		ReCalcNodeStats(rootID, builder, true, false, true)
 		builder.determineBuildAndProbeSide(rootID, true)
 		builder.disableMemoryUnsafeRightDedup(rootID)
@@ -3700,6 +4155,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.pushdownVectorIndexTopToTableScan(rootID)
 		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, colRefCnt)
 		reCalcNodeStatsAfterSwap(rootID, builder, true, false, false)
+		builder.determineWindowPartitionAlgorithms(rootID)
 		builder.deduplicateBlockFilters(rootID)
 		builder.forceJoinOnOneCN(rootID, false)
 		// after this ,never call ReCalcNodeStats again !!!
@@ -3717,7 +4173,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 			}
 		}
 	}
-	applySharedLockTableFallback(builder)
+	applyLockTableFallback(builder)
 
 	for i := range builder.qry.Steps {
 		rootID := builder.qry.Steps[i]
@@ -3739,6 +4195,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 			return nil, err
 		}
 		builder.qry.Steps[i] = builder.removeUnnecessaryProjections(rootID)
+		if !builder.subqueryPredicatePlanningDisabled() {
+			builder.generateScalarPredicateRuntimeFilters(builder.qry.Steps[i])
+		}
 	}
 
 	// Expose the SINK column remap so irregular-index maintenance sub-plans built
@@ -3770,11 +4229,28 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	//	builder.remapSinkScanColRefs(builder.qry.Steps[i], int32(i), sinkColRef)
 	//}
 	builder.hintQueryType()
+	for _, scan := range builder.windowValidationScans {
+		if scan == nil {
+			continue
+		}
+		scan.NodeId = int32(len(builder.qry.Nodes))
+		builder.qry.Nodes = append(builder.qry.Nodes, scan)
+	}
+	// Empty BlockFilterList can mean either a stats choice or an explicit
+	// blockFilter=2 hint. Preserve the latter in the prepared plan so physical
+	// compilation cannot backfill a block predicate for a later binding.
+	if builder.optimizerHints != nil && builder.optimizerHints.blockFilter == 2 {
+		for _, node := range builder.qry.Nodes {
+			if node.NodeType == plan.Node_TABLE_SCAN && node.ExtraOptions == "" {
+				node.ExtraOptions = PreparedBlockFilterDisabledScanOption
+			}
+		}
+	}
 	return builder.qry, nil
 }
 
 func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.OrderBy, astLimit *tree.Limit, astRankOption *tree.RankOption, ctx *BindContext, isRoot bool) (int32, error) {
-	return builder.buildUnionWithResultLen(stmt, astOrderBy, astLimit, astRankOption, ctx, isRoot, 0, nil, false)
+	return builder.buildUnionWithResultLen(stmt, astOrderBy, astLimit, astRankOption, ctx, isRoot, 0, nil, false, stmt.GeneratedByGroupingSet)
 }
 
 func (builder *QueryBuilder) buildUnionWithResultLen(
@@ -3796,6 +4272,10 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	// chain, applied by a DISTINCT node after PROJECT and before SORT. Used by the
 	// grouping-set SELECT DISTINCT path; ordinary UNION passes false.
 	distinct bool,
+	// shareGroupingInput is true only for the internal UNION ALL used to lower
+	// one grouping-set SELECT. It allows the branches to share one typed,
+	// deterministic input without changing ordinary UNION semantics.
+	shareGroupingInput bool,
 ) (int32, error) {
 	if builder.isForUpdate {
 		return 0, moerr.NewInternalError(builder.GetContext(), "not support select union for update")
@@ -3905,6 +4385,9 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		subCtxList[idx] = subCtx
 		nodes[idx] = nodeID
 	}
+	if shareGroupingInput {
+		builder.registerGroupingSetInput(nodes, subCtxList)
+	}
 	// Type coercion below mutates branch project expressions in place, including
 	// the ENUM display expression and the type attached to a literal NULL.
 	// Capture both kinds of provenance before that mutation so a bare NULL can
@@ -3912,13 +4395,18 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	// without mistaking an explicit CAST(NULL AS string) for a neutral branch.
 	setBranchPureNull := make([][]bool, len(subCtxList))
 	setBranchOrderTypes := make([][]*plan.Type, len(subCtxList))
+	setBranchPadSpaceProvenance := make([][]bool, len(subCtxList))
+	setOperationKeyRequired := make([]bool, projectLength)
 	for branchIdx, branchCtx := range subCtxList {
 		setBranchPureNull[branchIdx] = make([]bool, projectLength)
 		setBranchOrderTypes[branchIdx] = make([]*plan.Type, projectLength)
+		setBranchPadSpaceProvenance[branchIdx] = make([]bool, projectLength)
 		for colIdx := 0; colIdx < projectLength && colIdx < len(branchCtx.projects); colIdx++ {
 			setBranchPureNull[branchIdx][colIdx] =
 				branchCtx.outputColumnProvenanceForProject(int32(colIdx)).State == ProvenancePureNull
 			setBranchOrderTypes[branchIdx][colIdx] = branchCtx.mysqlSpecialOrderTypeForProject(int32(colIdx))
+			setBranchPadSpaceProvenance[branchIdx][colIdx] =
+				hasPadSpaceStringProvenance(builder.qry.Nodes[nodes[branchIdx]].ProjectList[colIdx])
 		}
 	}
 
@@ -3928,11 +4416,25 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		// we don't cast null as any type in function
 		// but we will cast null as some target type in union/intersect/minus
 		var tmpArgsType []types.Type
+		hasDecimalInput := false
+		for branchIdx, typ := range argsType {
+			if !setBranchPureNull[branchIdx][columnIdx] && typ.Oid.IsDecimal() {
+				hasDecimalInput = true
+				break
+			}
+		}
 		for branchIdx, typ := range argsType {
 			// A top-level NULL is carried as legacy T_text only so the binder has
 			// a concrete container. It has no collation or width of its own and
 			// must not change the common type chosen from real values.
 			if typ.Oid != types.T_any && !setBranchPureNull[branchIdx][columnIdx] {
+				if hasDecimalInput && columnIdx < len(subCtxList[branchIdx].results) {
+					if exact, ok := setOperationIntegerLiteralDecimalType(
+						subCtxList[branchIdx].results[columnIdx],
+					); ok {
+						typ = exact
+					}
+				}
 				tmpArgsType = append(tmpArgsType, typ)
 			}
 		}
@@ -3947,31 +4449,84 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		}
 
 		if len(tmpArgsType) > 0 {
-			fGet, err := function.GetFunctionByName(builder.GetContext(), "coalesce", tmpArgsType)
-			if err != nil {
-				return 0, moerr.NewParseErrorf(builder.GetContext(), "the %d column cann't cast to a same type", columnIdx)
-			}
-			argsCastType, _ := fGet.ShouldDoImplicitTypeCast()
-
-			if len(argsCastType) > 0 && int(argsCastType[0].Oid) == int(types.T_datetime) {
-				for i := 0; i < len(argsCastType); i++ {
-					argsCastType[i].Scale = 0
-				}
-			}
 			var targetType plan.Type
 			var targetArgType types.Type
-			if len(argsCastType) == 0 {
-				targetArgType = tmpArgsType[0]
-				// if string union string, different length may cause error.
-				if targetArgType.Oid == types.T_varchar || targetArgType.Oid == types.T_char {
-					for _, typ := range tmpArgsType {
-						if targetArgType.Width < typ.Width {
-							targetArgType.Width = typ.Width
+			if pureCharType, ok := setOperationPureCharCommonType(tmpArgsType); ok {
+				targetArgType = pureCharType
+			} else {
+				fGet, err := function.GetFunctionByName(builder.GetContext(), "coalesce", tmpArgsType)
+				if err != nil {
+					return 0, moerr.NewParseErrorf(builder.GetContext(), "the %d column cann't cast to a same type", columnIdx)
+				}
+				argsCastType, _ := fGet.ShouldDoImplicitTypeCast()
+
+				// Preserve the common temporal FSP selected by the coalesce type
+				// checker. Dropping it here makes UNION/CTAS values round to seconds
+				// while the expression metadata still claims fractional precision.
+				if len(argsCastType) > 0 && (argsCastType[0].Oid == types.T_datetime ||
+					argsCastType[0].Oid == types.T_time || argsCastType[0].Oid == types.T_timestamp) {
+					for i := 1; i < len(tmpArgsType); i++ {
+						if tmpArgsType[i].Scale > argsCastType[0].Scale {
+							argsCastType[0].Scale = tmpArgsType[i].Scale
 						}
 					}
+					argsCastType[0].Width = argsCastType[0].Scale
+					for i := range argsCastType {
+						argsCastType[i].Scale = argsCastType[0].Scale
+						argsCastType[i].Width = argsCastType[0].Width
+					}
 				}
-			} else {
-				targetArgType = argsCastType[0]
+				if len(argsCastType) == 0 {
+					targetArgType = tmpArgsType[0]
+					// if string union string, different length may cause error.
+					if targetArgType.Oid == types.T_varchar || targetArgType.Oid == types.T_char {
+						for _, typ := range tmpArgsType {
+							if targetArgType.Width < typ.Width {
+								targetArgType.Width = typ.Width
+							}
+						}
+					}
+				} else {
+					targetArgType = argsCastType[0]
+				}
+			}
+			allCharInputs := len(tmpArgsType) > 0
+			for _, typ := range tmpArgsType {
+				if typ.Oid != types.T_char {
+					allCharInputs = false
+					break
+				}
+			}
+			if allCharInputs &&
+				(targetArgType.Oid == types.T_varchar || targetArgType.Oid == types.T_text) {
+				// The common-type resolver may promote CHAR-only inputs to
+				// VARCHAR for ordinary value-selecting functions. A set operation
+				// must retain the fixed-width CHAR contract so PAD_CHAR_TO_FULL_LENGTH
+				// pads the visible representative to the common width as well as
+				// comparing the branches in the right equality domain.
+				for _, typ := range tmpArgsType {
+					if typ.Width > targetArgType.Width {
+						targetArgType.Width = typ.Width
+					}
+				}
+				targetArgType.Oid = types.T_char
+			}
+			if targetArgType.Oid == types.T_char ||
+				targetArgType.Oid == types.T_varchar || targetArgType.Oid == types.T_text {
+				hasChar, hasPromotedChar := false, false
+				for _, typ := range tmpArgsType {
+					switch typ.Oid {
+					case types.T_char:
+						hasChar = true
+					}
+				}
+				for branchIdx := range setBranchPadSpaceProvenance {
+					hasPromotedChar = hasPromotedChar || setBranchPadSpaceProvenance[branchIdx][columnIdx]
+				}
+				// CHAR equality is PAD SPACE even when every branch remains CHAR.
+				// Keep its physical equality key separate from the visible row so
+				// legacy H8/group hashing cannot compare representation-only padding.
+				setOperationKeyRequired[columnIdx] = hasPromotedChar || hasChar
 			}
 
 			preserveGroupingBinary := distinct && groupingOrderResolve != nil &&
@@ -3994,16 +4549,42 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			}
 			targetType = makePlan2Type(&targetArgType)
 
+			preparedDeferredColumn := false
+			if builder.isPrepareStatement {
+				for _, tmpID := range nodes {
+					if preparedNodeOutputContainsParam(builder.qry, tmpID, int32(columnIdx), make(map[[2]int32]struct{})) {
+						preparedDeferredColumn = true
+						break
+					}
+				}
+			}
 			for idx, tmpID := range nodes {
 				if !argsType[idx].Eq(targetArgType) {
 					node := builder.qry.Nodes[tmpID]
+					source := node.ProjectList[columnIdx]
 					if argsType[idx].Oid == types.T_any || setBranchPureNull[idx][columnIdx] {
 						node.ProjectList[columnIdx].Typ = targetType
+					} else if targetArgType.Oid == types.T_char {
+						node.ProjectList[columnIdx], err = appendSetOperationCastBeforeExpr(
+							builder.GetContext(), node.ProjectList[columnIdx], targetType,
+						)
+						if err != nil {
+							return 0, err
+						}
 					} else {
 						node.ProjectList[columnIdx], err = appendCastBeforeExpr(builder.GetContext(), node.ProjectList[columnIdx], targetType)
 						if err != nil {
 							return 0, err
 						}
+					}
+					if preparedDeferredColumn && targetArgType.Oid.IsMySQLString() &&
+						preparedNumericCommonOperandType(argsType[idx].Oid) {
+						attachPreparedRuntimeParamSource(node.ProjectList[columnIdx], DeepCopyExpr(source))
+						metadata := ensurePreparedNumericMetadata(node.ProjectList[columnIdx])
+						metadata.ProvisionalResultPeer = true
+						metadata.ProvisionalResultPeerTypeId = source.Typ.Id
+						metadata.ProvisionalResultPeerWidth = source.Typ.Width
+						metadata.ProvisionalResultPeerScale = source.Typ.Scale
 					}
 				}
 			}
@@ -4011,7 +4592,9 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	}
 
 	// set ctx's headings  projects  results
+	headingOffset := int32(len(ctx.headings))
 	ctx.headings = append(ctx.headings, subCtxList[0].headings...)
+	mergeHeadingProvenances(&ctx.headingProvenance, subCtxList[0].headingProvenance, headingOffset)
 
 	getProjectList := func(
 		nodeType plan.Node_NodeType,
@@ -4031,9 +4614,40 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 					},
 				},
 			}
+			if setOperationKeyRequired[i] &&
+				(types.T(projectList[i].Typ.Id) == types.T_varchar ||
+					types.T(projectList[i].Typ.Id) == types.T_text) {
+				projectList[i].Typ.PadSpace = true
+			}
 			builder.nameByColRef[[2]int32{thisTag, int32(i)}] = ctx.headings[i]
 		}
 		return projectList
+	}
+	getSetOperationKeyList := func(projectList []*plan.Expr) ([]*plan.Expr, error) {
+		return builder.buildPadSpacePhysicalKeyList(projectList, setOperationKeyRequired)
+	}
+	appendSetOperationNode := func(
+		nodeType plan.Node_NodeType,
+		leftNodeID, rightNodeID int32,
+		tag, thisTag int32,
+	) (int32, error) {
+		projectList := getProjectList(nodeType, leftNodeID, rightNodeID, tag, thisTag)
+		var keyList []*plan.Expr
+		var err error
+		switch nodeType {
+		case plan.Node_UNION, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL, plan.Node_MINUS, plan.Node_MINUS_ALL:
+			keyList, err = getSetOperationKeyList(projectList)
+			if err != nil {
+				return 0, err
+			}
+		}
+		return builder.appendNode(&plan.Node{
+			NodeType:                nodeType,
+			Children:                []int32{leftNodeID, rightNodeID},
+			BindingTags:             []int32{thisTag},
+			ProjectList:             projectList,
+			PhysicalEqualityKeyList: keyList,
+		}, ctx), nil
 	}
 
 	// build intersect node first.  because intersect has higher precedence then UNION and MINUS
@@ -4048,18 +4662,12 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			lastTag = builder.genNewBindTag()
 			leftNodeID := newNodes[lastNewNodeIdx]
 			leftNodeTag := builder.qry.Nodes[leftNodeID].BindingTags[0]
-			newNodeID := builder.appendNode(&plan.Node{
-				NodeType:    unionTypes[utIdx],
-				Children:    []int32{leftNodeID, nodes[i]},
-				BindingTags: []int32{lastTag},
-				ProjectList: getProjectList(
-					unionTypes[utIdx],
-					leftNodeID,
-					nodes[i],
-					leftNodeTag,
-					lastTag,
-				),
-			}, ctx)
+			newNodeID, err := appendSetOperationNode(
+				unionTypes[utIdx], leftNodeID, nodes[i], leftNodeTag, lastTag,
+			)
+			if err != nil {
+				return 0, err
+			}
 			newNodes[lastNewNodeIdx] = newNodeID
 		} else {
 			newNodes = append(newNodes, nodes[i])
@@ -4074,18 +4682,12 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		lastTag = builder.genNewBindTag()
 		leftNodeTag := builder.qry.Nodes[lastNodeID].BindingTags[0]
 
-		lastNodeID = builder.appendNode(&plan.Node{
-			NodeType:    newUnionType[utIdx],
-			Children:    []int32{lastNodeID, newNodes[i]},
-			BindingTags: []int32{lastTag},
-			ProjectList: getProjectList(
-				newUnionType[utIdx],
-				lastNodeID,
-				newNodes[i],
-				leftNodeTag,
-				lastTag,
-			),
-		}, ctx)
+		lastNodeID, err = appendSetOperationNode(
+			newUnionType[utIdx], lastNodeID, newNodes[i], leftNodeTag, lastTag,
+		)
+		if err != nil {
+			return 0, err
+		}
 	}
 
 	// set ctx base on selects[0] and it's ctx
@@ -4124,7 +4726,7 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			}
 		}
 		if allPureNull {
-			ctx.outputColumnProvenance[int32(colIdx)] = OutputColumnProvenance{State: ProvenancePureNull}
+			ctx.setOutputColumnProvenance(int32(colIdx), OutputColumnProvenance{State: ProvenancePureNull})
 		}
 	}
 	// A set-operation result keeps ENUM/SET definition-order provenance only
@@ -4325,6 +4927,9 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			if err != nil {
 				return 0, err
 			}
+			if err = rejectStandaloneIntervalOrderExpr(builder.GetContext(), expr); err != nil {
+				return 0, err
+			}
 
 			orderBy := &plan.OrderBySpec{
 				Expr: expr,
@@ -4371,7 +4976,10 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	// its grouping provenance is still available. This final aggregate therefore
 	// sees ordinary values and performs one global visible-tuple de-duplication.
 	if distinct {
-		lastNodeID = builder.appendDistinctNode(ctx, lastNodeID)
+		lastNodeID, err = builder.appendDistinctNode(ctx, lastNodeID)
+		if err != nil {
+			return 0, err
+		}
 	}
 
 	resultSourceTag := ctx.projectTag
@@ -4433,6 +5041,7 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	}
 
 	ctx.headings = ctx.headings[:resultLen]
+	truncateHeadingProvenances(&ctx.headingProvenance, int32(resultLen))
 
 	// set heading
 	if isRoot {
@@ -4440,6 +5049,69 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	}
 
 	return lastNodeID, nil
+}
+
+// setOperationIntegerLiteralDecimalType returns the value domain of a direct
+// integer literal when a set-operation column also contains DECIMAL values.
+// MySQL joins literal precision, not the full BIGINT/UNSIGNED BIGINT domain:
+// for example, 1 UNION 2.5 is DECIMAL(2,1), while an integer column or an
+// explicit CAST(... AS SIGNED) continues to contribute its complete domain.
+func setOperationIntegerLiteralDecimalType(expr *plan.Expr) (types.Type, bool) {
+	for expr != nil {
+		fn := expr.GetF()
+		if fn == nil || fn.GetFunc() == nil || len(fn.Args) != 1 {
+			break
+		}
+		switch fn.GetFunc().GetObjName() {
+		case "unary_minus", "unary_plus":
+			expr = fn.Args[0]
+		default:
+			return types.Type{}, false
+		}
+	}
+	if expr == nil {
+		return types.Type{}, false
+	}
+	literal := expr.GetLit()
+	if literal == nil || literal.Isnull {
+		return types.Type{}, false
+	}
+
+	var digits int
+	switch value := literal.Value.(type) {
+	case *plan.Literal_I8Val:
+		digits = signedIntegerLiteralDigits(int64(value.I8Val))
+	case *plan.Literal_I16Val:
+		digits = signedIntegerLiteralDigits(int64(value.I16Val))
+	case *plan.Literal_I32Val:
+		digits = signedIntegerLiteralDigits(int64(value.I32Val))
+	case *plan.Literal_I64Val:
+		digits = signedIntegerLiteralDigits(value.I64Val)
+	case *plan.Literal_U8Val:
+		digits = len(strconv.FormatUint(uint64(value.U8Val), 10))
+	case *plan.Literal_U16Val:
+		digits = len(strconv.FormatUint(uint64(value.U16Val), 10))
+	case *plan.Literal_U32Val:
+		digits = len(strconv.FormatUint(uint64(value.U32Val), 10))
+	case *plan.Literal_U64Val:
+		digits = len(strconv.FormatUint(value.U64Val, 10))
+	default:
+		return types.Type{}, false
+	}
+
+	oid := types.T_decimal64
+	if digits > 18 {
+		oid = types.T_decimal128
+	}
+	return types.New(oid, int32(digits), 0), true
+}
+
+func signedIntegerLiteralDigits(value int64) int {
+	formatted := strconv.FormatInt(value, 10)
+	if formatted[0] == '-' {
+		return len(formatted) - 1
+	}
+	return len(formatted)
 }
 
 func (builder *QueryBuilder) numericSetProjectionTypes(ctx *BindContext, stmts []tree.Statement) []Type {
@@ -4489,6 +5161,7 @@ func (builder *QueryBuilder) numericSetProjectionTypes(ctx *BindContext, stmts [
 
 const NameGroupConcat = "group_concat"
 const NameClusterCenters = "cluster_centers"
+const NameMedian = "median"
 const NameApproxPercentile = "approx_percentile"
 const NamePercentileCont = "percentile_cont"
 const NamePercentileDisc = "percentile_disc"
@@ -4500,7 +5173,12 @@ func (builder *QueryBuilder) bindNoRecursiveCte(
 	table string) (nodeID int32, err error) {
 	subCtx := NewBindContext(builder, cteRef.declarationCtx)
 	subCtx.cteName = table
-	subCtx.snapshot = cteRef.snapshot
+	// The CTE body is bound at its use site. A snapshot on the enclosing
+	// View/query must reach its catalog reads, not just the CTE scan itself.
+	subCtx.snapshot = ctx.snapshot
+	if cteRef.snapshot != nil {
+		subCtx.snapshot = cteRef.snapshot
+	}
 	if targets := ctx.numericTableProjectionTypes[strings.ToLower(table)]; len(targets) > 0 {
 		subCtx.numericProjectionTypes = targets
 	}
@@ -4546,35 +5224,24 @@ func (builder *QueryBuilder) bindNoRecursiveCte(
 	}
 
 	for i, col := range cols {
-		subCtx.headings[i] = string(col)
+		subCtx.setHeading(i, string(col), headingProvenance{})
 	}
 
 	if len(cteRef.occurrences) == 0 {
 		builder.cteRefs = append(builder.cteRefs, cteRef)
-	}
-	// CTE reuse currently rewrites consumers reachable from the main query
-	// root. A CTE referenced while another CTE is being bound can also have
-	// consumers in separately appended steps, especially recursive anchor and
-	// member steps. Keep such nested references inline until reuse can rewrite
-	// the complete step graph; otherwise the added producer and an unreplaced
-	// consumer share one mutable subtree and column remapping visits it twice.
-	if ctx.bindingCte() {
-		cteRef.hasNestedUse = true
-		if ctx.cteState.cte != nil {
-			ctx.cteState.cte.hasNestedRef = true
-		}
 	}
 	types := make([]plan.Type, len(builder.qry.Nodes[nodeID].ProjectList))
 	for i, expr := range builder.qry.Nodes[nodeID].ProjectList {
 		types[i] = expr.Typ
 	}
 	cteRef.occurrences = append(cteRef.occurrences, cteOccurrence{
-		rootID:       nodeID,
-		rootTag:      subCtx.rootTag(),
-		ctx:          subCtx,
-		headings:     append([]string(nil), subCtx.headings...),
-		types:        types,
-		isCorrelated: subCtx.isCorrelated,
+		rootID:            nodeID,
+		rootTag:           subCtx.rootTag(),
+		ctx:               subCtx,
+		headings:          append([]string(nil), subCtx.headings...),
+		headingProvenance: cloneHeadingProvenances(subCtx.headingProvenance),
+		types:             types,
+		isCorrelated:      subCtx.isCorrelated,
 	})
 	return nodeID, nil
 }
@@ -4823,7 +5490,7 @@ func (builder *QueryBuilder) bindRecursiveCte(
 		}
 
 		for i, col := range cols {
-			subCtx.headings[i] = string(col)
+			subCtx.setHeading(i, string(col), headingProvenance{})
 		}
 	}
 	// Record every column explicitly, including incompatible columns as nil.
@@ -4854,10 +5521,9 @@ func (builder *QueryBuilder) bindRecursiveCte(
 	nodeID = appendCTEScanNode(builder, ctx, initSourceStep, initCtx.sinkTag)
 	builder.qry.Nodes[nodeID].RecursiveUnionDistinct = distinct
 	setMaterializedProjectionNullability(builder.qry.Nodes[nodeID], recursiveNotNullable)
-	if limitExpr != nil || offsetExpr != nil {
-		node := builder.qry.Nodes[nodeID]
-		node.Limit = limitExpr
-		node.Offset = offsetExpr
+	builder.qry.Nodes[nodeID].Limit, err = recursiveCTEPrefixLimit(builder.GetContext(), limitExpr, offsetExpr)
+	if err != nil {
+		return 0, err
 	}
 	//4.1 make recursive parts as the source step of the CTE Scan Node besides initSourceStep of initial statement
 	for i := 0; i < len(recursiveSteps); i++ {
@@ -4885,6 +5551,9 @@ func (builder *QueryBuilder) bindRecursiveCte(
 	//5.1 add Sink Scan Node as the scan node of the recursive cte
 	sourceStep := builder.appendStep(unionAllLastNodeID)
 	nodeID = appendSinkScanNodeWithTag(builder, ctx, sourceStep, initCtx.sinkTag)
+	// Skipped result rows must still reach the recursive member through the
+	// shared sink. Apply OFFSET only on this non-feedback consumer.
+	builder.qry.Nodes[nodeID].Offset = offsetExpr
 	return
 }
 
@@ -4907,6 +5576,14 @@ func (bc *BindContext) bindingRecurCte() bool {
 // check if binding recursive part of recursive cte currently
 func (bc *BindContext) bindingRecurStmt() bool {
 	return bc.cteState.cteBindType == CteBindTypeRecurStmt
+}
+
+// bindingRecurQueryBlock reports whether the current context owns the
+// recursive query block itself. Nested SELECT contexts inherit the recursive
+// CTE state, but own an independent query block.
+func (bc *BindContext) bindingRecurQueryBlock() bool {
+	return bc.bindingRecurStmt() &&
+		bc.queryBlockOwner == bc.cteState.recursiveRefQueryBlock
 }
 
 func (builder *QueryBuilder) bindCte(
@@ -5111,6 +5788,13 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	switch selectClause := stmt.Select.(type) {
 	case *tree.SelectClause:
 		expandedSelectClause = selectClause
+		if err = validateQueryBlockWindowCount(builder.GetContext(), selectClause, astOrderBy); err != nil {
+			return 0, err
+		}
+		selectClause, astOrderBy, err = expandNamedWindowReferences(builder.GetContext(), selectClause, astOrderBy)
+		if err != nil {
+			return 0, err
+		}
 		// Keep the query-block aggregate state active while HAVING, SELECT
 		// projection, and ORDER BY are bound. bindSelectClause initializes the
 		// state after the pre-aggregation WHERE has been bound, so correlated
@@ -5168,7 +5852,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			}
 			selectClause.GroupBy.GroupByExprsList = groupByExprsList
 			if len(groupByExprsList) > 1 && !selectClause.GroupBy.Apart {
-				if rewrittenSelect, hasWindow := rewriteRollupWindowSelect(selectClause, astOrderBy, astLimit, astRankOption); hasWindow {
+				if rewrittenSelect, hasWindow := rewriteRollupWindowSelectWithHeadingProvenance(ctx, selectClause, astOrderBy, astLimit, astRankOption); hasWindow {
 					if rewrittenSelect == nil {
 						return 0, moerr.NewNotSupported(builder.GetContext(), "window functions with ROLLUP or CUBE for this expression")
 					}
@@ -5207,8 +5891,9 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 								Cube:             false,
 								Rollup:           false,
 							},
-							Having: selectClause.Having,
-							Option: selectClause.Option,
+							Having:  selectClause.Having,
+							Windows: selectClause.Windows,
+							Option:  selectClause.Option,
 						}
 					}
 				}
@@ -5225,6 +5910,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 					}
 					leftClause = &tree.UnionClause{Type: tree.UNION, Left: leftClause, Right: stmt, All: true}
 				}
+				leftClause.GeneratedByGroupingSet = true
 				if nodeID, err = builder.buildUnionWithResultLen(
 					leftClause,
 					unionOrderBy,
@@ -5235,6 +5921,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 					hiddenResultLen,
 					groupingOrderResolve,
 					selectClause.Distinct,
+					true,
 				); err != nil {
 					return
 				}
@@ -5419,6 +6106,11 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	}
 
 	if ctx.sampleFunc.hasSampleFunc {
+		for _, group := range ctx.groups {
+			if hasSubquery(group) {
+				return 0, moerr.NewNYI(builder.GetContext(), "subquery in GROUP BY with SAMPLE")
+			}
+		}
 		// return err if it's not a legal SAMPLE function.
 		if err = validSample(ctx, builder); err != nil {
 			return 0, err
@@ -5454,8 +6146,38 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		ctx.hasSingleRow = true
 	}
 
-	// Flatten aggregate argument subqueries before building the AGG node.
-	if !ctx.sampleFunc.hasSampleFunc && !ctx.bindingRecurStmt() {
+	// All aggregate consumers in this query block are bound now. Compact exact
+	// affine SUM families before aggregate arguments are flattened and the AGG
+	// node fixes their physical slot layout.
+	affineOrderBys := slices.Clone(boundOrderBys)
+	if boundTimeWindowOrderBy != nil {
+		affineOrderBys = append(affineOrderBys, boundTimeWindowOrderBy)
+	}
+	builder.rewriteAffineSumFamilies(
+		ctx,
+		[][]*plan.Expr{
+			ctx.projects,
+			ctx.windows,
+			ctx.times,
+			boundHavingList,
+			fillVals,
+			fillCols,
+		},
+		affineOrderBys,
+	)
+
+	// GROUP BY expressions are evaluated by the AGG over its input, so
+	// materialize scalar subqueries into that input before fixing the group-key
+	// layout. Projection, alias, and ordinal references already point at the
+	// corresponding group position and do not need to be rebound.
+	if !ctx.sampleFunc.hasSampleFunc && !ctx.bindingRecurQueryBlock() {
+		for i, group := range ctx.groups {
+			if nodeID, ctx.groups[i], err = builder.flattenSubqueries(nodeID, group, ctx); err != nil {
+				return
+			}
+		}
+
+		// Flatten aggregate argument subqueries before building the AGG node.
 		for i, agg := range ctx.aggregates {
 			if nodeID, ctx.aggregates[i], err = builder.flattenSubqueries(nodeID, agg, ctx); err != nil {
 				return
@@ -5539,14 +6261,17 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	// append DISTINCT node
 	resultSourceTag := ctx.projectTag
 	if ctx.isDistinct {
-		nodeID = builder.appendDistinctNode(ctx, nodeID)
+		nodeID, err = builder.appendDistinctNode(ctx, nodeID)
+		if err != nil {
+			return
+		}
 		if len(boundOrderBys) > 0 {
 			if nodeID, resultSourceTag, err = builder.appendDistinctOrderProjectionNode(ctx, nodeID, boundOrderBys); err != nil {
 				return
 			}
 		}
 	}
-	if len(ctx.groups) > 0 || ctx.isDistinct {
+	if len(ctx.groups) > 0 || ctx.isDistinct || boundCountExpr != nil || boundOffsetExpr != nil {
 		for i := 0; i < resultLen; i++ {
 			if typ := mysqlSpecialTypeFromProvenance(ctx.outputColumnProvenanceForProject(int32(i))); typ != nil {
 				ctx.setMySQLSpecialCanonicalType(int32(i), typ)
@@ -6185,6 +6910,7 @@ func numericPhysicalTableVisibleCols(builder *QueryBuilder, source numericProjec
 		if col == nil || col.Hidden || catalog.ContainExternalHidenCol(col.Name) ||
 			catalog.IsForeignQueryCol(col.Name, col.ColId) ||
 			catalog.IsKafkaHiddenCol(col.Name, col.ColId) ||
+			catalog.IsExternalErrorCol(col.Name, col.ColId) ||
 			(isTenantClusterTable && util.IsClusterTableAttribute(col.Name)) {
 			continue
 		}
@@ -6557,6 +7283,17 @@ func rewriteRollupWindowSelect(
 	astLimit *tree.Limit,
 	astRankOption *tree.RankOption,
 ) (*tree.Select, bool) {
+	return rewriteRollupWindowSelectWithHeadingProvenance(
+		nil, selectClause, astOrderBy, astLimit, astRankOption)
+}
+
+func rewriteRollupWindowSelectWithHeadingProvenance(
+	ctx *BindContext,
+	selectClause *tree.SelectClause,
+	astOrderBy tree.OrderBy,
+	astLimit *tree.Limit,
+	astRankOption *tree.RankOption,
+) (*tree.Select, bool) {
 	if selectClause == nil {
 		return nil, false
 	}
@@ -6619,9 +7356,10 @@ func rewriteRollupWindowSelect(
 		innerExprs = append(innerExprs, rewriteState.innerExprs...)
 		innerExprs = append(innerExprs, rewriteState.orderExprs...)
 		selectStmts[i] = &tree.SelectClause{
-			Exprs: innerExprs,
-			From:  selectClause.From,
-			Where: selectClause.Where,
+			Exprs:   innerExprs,
+			From:    selectClause.From,
+			Where:   selectClause.Where,
+			Windows: selectClause.Windows,
 			GroupBy: &tree.GroupByClause{
 				GroupByExprsList:             selectClause.GroupBy.GroupByExprsList,
 				GroupingSet:                  list,
@@ -6645,9 +7383,10 @@ func rewriteRollupWindowSelect(
 		}
 		leftClause = &tree.UnionClause{Type: tree.UNION, Left: leftClause, Right: stmt, All: true}
 	}
+	leftClause.GeneratedByGroupingSet = true
 
 	derived := &tree.Select{Select: leftClause}
-	return &tree.Select{
+	rewritten := &tree.Select{
 		Select: &tree.SelectClause{
 			Distinct:             selectClause.Distinct,
 			Exprs:                outerExprs,
@@ -6667,26 +7406,40 @@ func rewriteRollupWindowSelect(
 		OrderBy:    rewrittenOrderBy,
 		Limit:      astLimit,
 		RankOption: astRankOption,
-	}, true
+	}
+	if ctx != nil {
+		// The rewritten projection is bound immediately below this call. Reset
+		// any metadata left by a previous bind of the same context so an ordinal
+		// cannot accidentally describe a later, unrelated select list.
+		ctx.generatedHeadingProvenance = nil
+		if len(rewriteState.outputHeadingProvenance) > 0 {
+			ctx.generatedHeadingProvenance = make(headingProvenanceMap, len(rewriteState.outputHeadingProvenance))
+			for ordinal, provenance := range rewriteState.outputHeadingProvenance {
+				ctx.generatedHeadingProvenance[ordinal] = cloneHeadingProvenance(provenance)
+			}
+		}
+	}
+	return rewritten, true
 }
 
 const rollupWindowInternalAliasPrefix = "__mo_rollup_window_col_"
 
 type rollupWindowRewriteState struct {
-	innerExprs         tree.SelectExprs
-	orderExprs         tree.SelectExprs
-	exprAliases        map[tree.Expr]string
-	outputAliases      map[string]string
-	orderAliases       map[string][]tree.Expr
-	sourceProbeAliases map[string]string
-	sourceProbes       map[string]*tree.GroupingSetOrderSourceProbe
-	sourceNameAliases  map[string]string
-	branchSourceNames  map[string]struct{}
-	ambiguousSources   map[string]struct{}
-	activeNameAliases  map[string]string
-	activeOrderBy      bool
-	usedAliases        map[string]struct{}
-	nextAlias          int
+	innerExprs              tree.SelectExprs
+	orderExprs              tree.SelectExprs
+	exprAliases             map[tree.Expr]string
+	outputAliases           map[string]string
+	orderAliases            map[string][]tree.Expr
+	sourceProbeAliases      map[string]string
+	sourceProbes            map[string]*tree.GroupingSetOrderSourceProbe
+	sourceNameAliases       map[string]string
+	branchSourceNames       map[string]struct{}
+	ambiguousSources        map[string]struct{}
+	activeNameAliases       map[string]string
+	activeOrderBy           bool
+	usedAliases             map[string]struct{}
+	outputHeadingProvenance headingProvenanceMap
+	nextAlias               int
 }
 
 func newRollupWindowRewriteState(selectExprs tree.SelectExprs) *rollupWindowRewriteState {
@@ -6870,16 +7623,30 @@ func buildRollupWindowSelectExprs(selectExprs tree.SelectExprs, state *rollupWin
 			if !ok {
 				return nil, false
 			}
+			outputAlias, provenance := rollupWindowOutputAliasWithProvenance(selectExpr)
+			if len(provenance.parts) > 0 {
+				if state.outputHeadingProvenance == nil {
+					state.outputHeadingProvenance = make(headingProvenanceMap)
+				}
+				state.outputHeadingProvenance[int32(i)] = provenance
+			}
 			outerExprs = append(outerExprs, tree.SelectExpr{
 				Expr: rewrittenExpr,
-				As:   rollupWindowOutputAlias(selectExpr),
+				As:   outputAlias,
 			})
 			continue
 		}
 
+		outputAlias, provenance := rollupWindowOutputAliasWithProvenance(selectExpr)
+		if len(provenance.parts) > 0 {
+			if state.outputHeadingProvenance == nil {
+				state.outputHeadingProvenance = make(headingProvenanceMap)
+			}
+			state.outputHeadingProvenance[int32(i)] = provenance
+		}
 		outerExprs = append(outerExprs, tree.SelectExpr{
 			Expr: tree.NewUnresolvedColName(aliasesByIndex[i]),
-			As:   rollupWindowOutputAlias(selectExpr),
+			As:   outputAlias,
 		})
 	}
 
@@ -6901,11 +7668,16 @@ func (state *rollupWindowRewriteState) addSourceNameAlias(name, alias string) {
 }
 
 func rollupWindowOutputAlias(selectExpr tree.SelectExpr) *tree.CStr {
+	alias, _ := rollupWindowOutputAliasWithProvenance(selectExpr)
+	return alias
+}
+
+func rollupWindowOutputAliasWithProvenance(selectExpr tree.SelectExpr) (*tree.CStr, headingProvenance) {
 	if selectExpr.As != nil && !selectExpr.As.Empty() {
-		return selectExpr.As
+		return selectExpr.As, headingProvenance{}
 	}
 	if colName, ok := rollupWindowBareColumnName(selectExpr.Expr); ok {
-		return tree.NewCStr(colName, 1)
+		return tree.NewCStr(colName, 1), headingProvenance{}
 	}
 	expr := selectExpr.Expr
 	for {
@@ -6916,9 +7688,10 @@ func rollupWindowOutputAlias(selectExpr tree.SelectExpr) *tree.CStr {
 		expr = parenExpr.Expr
 	}
 	if heading, ok := nameConstHeading(expr); ok {
-		return tree.NewCStr(heading, 1)
+		return tree.NewCStr(heading, 1), headingProvenance{}
 	}
-	return tree.NewCStr(tree.String(expr, dialect.MYSQL), 1)
+	heading, provenance := formatSelectExpressionHeading(expr)
+	return tree.NewCStr(heading, 1), provenance
 }
 
 func rollupWindowBareColumnName(expr tree.Expr) (string, bool) {
@@ -7684,6 +8457,13 @@ func (builder *QueryBuilder) bindSelectClause(
 	boundHavingList []*plan.Expr,
 	err error,
 ) {
+	// The catalog-only shortcut belongs to this SELECT, not to its siblings
+	// or its nested View/CTE bodies. In particular, an inner LIMIT 0 must not
+	// let a later ordinary SELECT bypass semantic binding.
+	previousSkipResolve := builder.isSkipResolveTableDef
+	builder.isSkipResolveTableDef = false
+	defer func() { builder.isSkipResolveTableDef = previousSkipResolve }()
+
 	if ctx.bindingRecurStmt() && clause.Distinct {
 		err = moerr.NewParseError(builder.GetContext(), "not support DISTINCT in recursive cte")
 		return
@@ -7716,6 +8496,8 @@ func (builder *QueryBuilder) bindSelectClause(
 	}
 
 	// build FROM clause
+	ctx.fullGroupByInputReady = false
+	ctx.fullGroupByProof = nil
 	if nodeID, err = builder.buildFrom(clause.From.Tables, ctx, isRoot); err != nil {
 		return
 	}
@@ -7734,6 +8516,11 @@ func (builder *QueryBuilder) bindSelectClause(
 	// unfold stars and generate headings
 	if selectList, err = appendSelectList(builder, ctx, selectList, clause.Exprs...); err != nil {
 		return
+	}
+	if capture, metadataBinding := builder.compCtx.(viewDependencyScope); metadataBinding {
+		if err = capture.chargeViewColumns(len(selectList)); err != nil {
+			return
+		}
 	}
 	if len(selectList) == 0 {
 		err = moerr.NewParseError(builder.GetContext(), "No tables used")
@@ -7835,12 +8622,17 @@ func (builder *QueryBuilder) bindSelectClause(
 		queryBlockHasPendingAggregate(selectList, clause.Having, astOrderBy)
 
 	// bind HAVING clause
+	ctx.fullGroupByInputNode = nodeID
+	ctx.fullGroupByInputReady = true
 	havingBinder = NewHavingBinder(builder, ctx)
 	if clause.Having != nil {
 		boundHavingList, err = builder.bindHaving(ctx, clause.Having, havingBinder)
 		if err != nil {
 			return
 		}
+	}
+	if err = validateNamedWindowDefinitions(builder, ctx, clause.Windows); err != nil {
+		return
 	}
 
 	// distinct
@@ -7995,7 +8787,9 @@ func (builder *QueryBuilder) bindGroupBy(
 		return
 	}
 
-	groupBinder := NewGroupBinder(builder, ctx, selectList)
+	allowScalarSubquery := clause != nil && astTimeWindow == nil &&
+		!clause.Apart && !clause.Cube && !clause.GroupingSets && !clause.Rollup
+	groupBinder := NewGroupBinder(builder, ctx, selectList, allowScalarSubquery)
 
 	if clause != nil {
 		for _, list := range clause.GroupByExprsList {
@@ -8061,6 +8855,18 @@ func (builder *QueryBuilder) bindGroupBy(
 			},
 		}
 	}
+	if clause != nil && astTimeWindow == nil && !clause.Apart &&
+		!clause.Cube && !clause.GroupingSets && !clause.Rollup {
+		var logicalGroupByAst map[string]int32
+		if ctx.sampleFunc.hasSampleFunc {
+			logicalGroupByAst = make(map[string]int32, len(ctx.groupByAst))
+			for key, pos := range ctx.groupByAst {
+				logicalGroupByAst[key] = pos
+			}
+		}
+		elideStableLiteralGroupBy(ctx)
+		preserveElidedGroupByForSample(ctx, logicalGroupByAst)
+	}
 	return
 }
 
@@ -8102,6 +8908,9 @@ func (builder *QueryBuilder) bindProjection(
 	resultLen = len(ctx.projects)
 	ctx.projectSemanticKeys = ctx.projectSemanticKeys[:0]
 	for i, proj := range ctx.projects {
+		if err = rejectStandaloneIntervalExpr(builder.GetContext(), proj, "SELECT list"); err != nil {
+			return
+		}
 		exprKey, keyErr := projectExprKey(proj)
 		if keyErr != nil {
 			err = keyErr
@@ -9042,7 +9851,7 @@ func sampleStarColumnsForView(
 		if err != nil {
 			return nil, err
 		}
-		columns, _, err := ctx.unfoldStar(builder.GetContext(), "", accountID == catalog.System_Account)
+		columns, _, _, err := ctx.unfoldStar(builder.GetContext(), "", accountID == catalog.System_Account)
 		if err != nil {
 			return nil, err
 		}
@@ -9296,6 +10105,9 @@ func (builder *QueryBuilder) bindOrderBy(
 		if err != nil {
 			return nil, err
 		}
+		if err = rejectStandaloneIntervalOrderExpr(builder.GetContext(), expr); err != nil {
+			return nil, err
+		}
 
 		orderBy := &plan.OrderBySpec{
 			Expr: expr,
@@ -9334,6 +10146,11 @@ func (builder *QueryBuilder) rewriteMySQLSpecialOrderByExpr(ctx *BindContext, ex
 	}
 
 	projectExpr := ctx.projects[col.ColPos]
+	if storageType := ctx.mysqlSpecialOrderTypeForProject(col.ColPos); ctx.isDistinct && isSetPlanType(storageType) {
+		// Sort the surviving visible value after DISTINCT; adding raw identity
+		// to its input projection would change the equality tuple.
+		return makeCanonicalSetValue(builder.GetContext(), expr, storageType)
+	}
 	var orderKeyExpr *plan.Expr
 	if isEnumOrSetDisplayValueExpr(projectExpr) {
 		fn := projectExpr.GetF()
@@ -9346,7 +10163,7 @@ func (builder *QueryBuilder) rewriteMySQLSpecialOrderByExpr(ctx *BindContext, ex
 		orderKeyExpr = DeepCopyExpr(fn.Args[1])
 	} else if storageType := ctx.mysqlSpecialOrderTypeForProject(col.ColPos); storageType != nil {
 		var err error
-		orderKeyExpr, err = makeMySQLSpecialOrderKey(builder.GetContext(), projectExpr, storageType)
+		orderKeyExpr, err = builder.mysqlSpecialOrderKey(ctx, projectExpr, storageType)
 		if err != nil {
 			return nil, err
 		}
@@ -9462,16 +10279,20 @@ func (builder *QueryBuilder) bindValues(
 			Expr: tree.NewUnresolvedColName(colName),
 			As:   tree.NewCStr(colName, ctx.lower),
 		})
-		ctx.headings = append(ctx.headings, colName)
+		ctx.appendHeading(colName, headingProvenance{})
 		tableDef.Cols[i] = &plan.ColDef{
 			ColId: 0,
 			Name:  colName,
 		}
 
+		columnExprs := make([]*plan.Expr, rowCount)
+		pureNulls := make([]bool, rowCount)
 		for j := 0; j < rowCount; j++ {
 			var planExpr *plan.Expr
 			if i < len(ctx.numericProjectionTypes) &&
-				isNumericAssignmentTarget(ctx.numericProjectionTypes[i]) {
+				isNumericAssignmentTarget(ctx.numericProjectionTypes[i]) &&
+				!(types.T(ctx.numericProjectionTypes[i].Id) == types.T_bit &&
+					isPreparedAssignmentParam(builder, valuesClause.Rows[j][i])) {
 				target := ctx.numericProjectionTypes[i]
 				planExpr, err = valuesBinder.bindNumericExprWithContext(valuesClause.Rows[j][i], 0, &target)
 			} else {
@@ -9481,7 +10302,15 @@ func (builder *QueryBuilder) bindValues(
 				return
 			}
 
-			tableDef.Cols[i].Typ = planExpr.Typ
+			columnExprs[j] = planExpr
+			pureNulls[j] = isNullAstExpr(unwrapParenExpr(valuesClause.Rows[j][i]))
+		}
+
+		tableDef.Cols[i].Typ, err = builder.coerceValuesColumnToCommonType(columnExprs, pureNulls, i)
+		if err != nil {
+			return
+		}
+		for _, planExpr := range columnExprs {
 			rowSetData.Cols[i].Data = append(rowSetData.Cols[i].Data, &plan.RowsetExpr{
 				Expr: planExpr,
 			})
@@ -9499,6 +10328,125 @@ func (builder *QueryBuilder) bindValues(
 
 	err = builder.addBinding(nodeID, tree.AliasClause{Alias: "_valuescan"}, ctx)
 	return
+}
+
+// coerceValuesColumnToCommonType makes one VALUES column independent of row
+// order. VALUE_SCAN materializes one vector per column, so every row expression
+// must use the same complete type, including DECIMAL width and scale.
+func (builder *QueryBuilder) coerceValuesColumnToCommonType(
+	exprs []*plan.Expr,
+	pureNulls []bool,
+	columnIdx int,
+) (plan.Type, error) {
+	hasDecimal := false
+	hasPadSpace := false
+	allPureNull := len(exprs) > 0
+	for i, expr := range exprs {
+		pureNull := i < len(pureNulls) && pureNulls[i]
+		allPureNull = allPureNull && pureNull
+		if pureNull || expr == nil {
+			continue
+		}
+		hasDecimal = hasDecimal || types.T(expr.Typ.Id).IsDecimal()
+		hasPadSpace = hasPadSpace || types.T(expr.Typ.Id) == types.T_char || hasPadSpaceStringProvenance(expr)
+	}
+
+	commonInputs := make([]types.Type, 0, len(exprs))
+	for i, expr := range exprs {
+		if expr == nil || i < len(pureNulls) && pureNulls[i] {
+			continue
+		}
+		typ := makeTypeByPlan2Expr(expr)
+		if typ.Oid == types.T_any {
+			continue
+		}
+		if hasDecimal {
+			if exact, ok := setOperationIntegerLiteralDecimalType(expr); ok {
+				typ = exact
+			}
+		}
+		commonInputs = append(commonInputs, typ)
+	}
+
+	var commonType types.Type
+	switch {
+	case len(commonInputs) > 0:
+		if pureCharType, ok := setOperationPureCharCommonType(commonInputs); ok {
+			commonType = pureCharType
+		} else {
+			resolved, err := function.GetFunctionByName(builder.GetContext(), "coalesce", commonInputs)
+			if err != nil {
+				return plan.Type{}, moerr.NewParseErrorf(
+					builder.GetContext(), "the %d column cann't cast to a same type", columnIdx)
+			}
+			castTypes, _ := resolved.ShouldDoImplicitTypeCast()
+			if len(castTypes) > 0 {
+				commonType = castTypes[0]
+			} else {
+				commonType = commonInputs[0]
+				if commonType.Oid == types.T_varchar || commonType.Oid == types.T_char {
+					for _, typ := range commonInputs[1:] {
+						if typ.Width > commonType.Width {
+							commonType.Width = typ.Width
+						}
+					}
+				}
+			}
+		}
+	case allPureNull:
+		commonType = types.T_text.ToType()
+	default:
+		// Keep unresolved parameter-only columns in their existing domain. The
+		// prepared-plan specialization pass will assign their runtime type.
+		for i, expr := range exprs {
+			if expr != nil && !(i < len(pureNulls) && pureNulls[i]) {
+				commonType = makeTypeByPlan2Expr(expr)
+				break
+			}
+		}
+	}
+
+	commonPlanType := makePlan2Type(&commonType)
+	// Physical types do not carry CHAR-derived comparison provenance. Retain
+	// it on the column so comparisons and DISTINCT use the PAD SPACE domain.
+	if commonType.Oid == types.T_varchar || commonType.Oid == types.T_text {
+		commonPlanType.PadSpace = hasPadSpace
+	}
+	commonPlanType.NotNullable = len(exprs) > 0
+	for i, expr := range exprs {
+		pureNull := i < len(pureNulls) && pureNulls[i]
+		if expr == nil || pureNull || !expr.Typ.NotNullable {
+			commonPlanType.NotNullable = false
+		}
+	}
+
+	for i, expr := range exprs {
+		if expr == nil {
+			continue
+		}
+		pureNull := i < len(pureNulls) && pureNulls[i]
+		sourceType := makeTypeByPlan2Expr(expr)
+		if pureNull || sourceType.Oid == types.T_any {
+			expr.Typ = commonPlanType
+			expr.Typ.NotNullable = false
+			continue
+		}
+		if sourceType.Eq(commonType) {
+			continue
+		}
+
+		var err error
+		if commonType.Oid == types.T_char {
+			exprs[i], err = appendSetOperationCastBeforeExpr(builder.GetContext(), expr, commonPlanType)
+		} else {
+			exprs[i], err = appendCastBeforeExpr(builder.GetContext(), expr, commonPlanType)
+		}
+		if err != nil {
+			return plan.Type{}, err
+		}
+	}
+
+	return commonPlanType, nil
 }
 
 func (builder *QueryBuilder) appendWhereNode(
@@ -9584,19 +10532,46 @@ func (builder *QueryBuilder) appendAggNode(
 	boundHavingList []*plan.Expr,
 	rollupFilter bool,
 ) (newNodeID int32, postTimeWindowHavingList []*plan.Expr, err error) {
-	if ctx.bindingRecurStmt() {
+	if ctx.bindingRecurQueryBlock() {
 		err = moerr.NewInternalError(builder.GetContext(), "not support aggregate function recursive cte")
 		return
 	}
 
+	groupBy := ctx.groups
+	groupingFlag := ctx.groupingFlag
+	var groupByHashKey []int32
+	if !hasInactiveGroupingColumn(groupingFlag) {
+		required := make([]bool, len(groupBy))
+		for i, expr := range groupBy {
+			required[i] = hasPadSpaceStringProvenance(expr)
+		}
+		var physicalKeys []*plan.Expr
+		physicalKeys, err = builder.buildPadSpacePhysicalKeyList(groupBy, required)
+		if err != nil {
+			return
+		}
+		if len(physicalKeys) > 0 {
+			visibleCount := len(groupBy)
+			groupBy = append(slices.Clone(groupBy), physicalKeys...)
+			groupByHashKey = make([]int32, visibleCount)
+			for i := range groupByHashKey {
+				groupByHashKey[i] = int32(visibleCount + i)
+			}
+			if len(groupingFlag) > 0 {
+				groupingFlag = append(slices.Clone(groupingFlag), groupingFlag...)
+			}
+		}
+	}
+
 	nodeID = builder.appendNode(&plan.Node{
-		NodeType:     plan.Node_AGG,
-		Children:     []int32{nodeID},
-		GroupBy:      ctx.groups,
-		GroupingFlag: ctx.groupingFlag,
-		AggList:      ctx.aggregates,
-		BindingTags:  []int32{ctx.groupTag, ctx.aggregateTag},
-		SpillMem:     builder.aggSpillMem,
+		NodeType:       plan.Node_AGG,
+		Children:       []int32{nodeID},
+		GroupBy:        groupBy,
+		GroupingFlag:   groupingFlag,
+		GroupByHashKey: groupByHashKey,
+		AggList:        ctx.aggregates,
+		BindingTags:    []int32{ctx.groupTag, ctx.aggregateTag},
+		SpillMem:       builder.aggSpillMem,
 	}, ctx)
 
 	// Plan-level rewrite: count(not_null_col) -> starcount (ObjName + Obj) so compile uses countStarExec.
@@ -9775,6 +10750,7 @@ func (builder *QueryBuilder) appendWindowNode(
 			WinSpecList: []*Expr{w},
 			WindowIdx:   int32(i),
 			BindingTags: []int32{ctx.windowTag},
+			SpillMem:    builder.sortSpillMem,
 		}, ctx)
 		builder.userWindowNodes[nodeID] = struct{}{}
 	}
@@ -9921,11 +10897,54 @@ func (builder *QueryBuilder) appendGroupingSetDistinctProjectionNode(
 	return
 }
 
-func (builder *QueryBuilder) appendDistinctNode(ctx *BindContext, nodeID int32) int32 {
+func (builder *QueryBuilder) buildPadSpacePhysicalKeyList(
+	exprs []*plan.Expr,
+	required []bool,
+) ([]*plan.Expr, error) {
+	requiresKeyList := false
+	for _, needKey := range required {
+		requiresKeyList = requiresKeyList || needKey
+	}
+	if !requiresKeyList {
+		return nil, nil
+	}
+	if len(exprs) != len(required) {
+		return nil, moerr.NewInternalErrorNoCtx("physical equality key shape does not match projected row")
+	}
+
+	keyList := make([]*plan.Expr, len(exprs))
+	for i, expr := range exprs {
+		keyList[i] = DeepCopyExpr(expr)
+		if required[i] {
+			var err error
+			keyList[i], err = appendSetOperationCastBeforeExpr(
+				builder.GetContext(), keyList[i], keyList[i].Typ,
+			)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	return keyList, nil
+}
+
+func (builder *QueryBuilder) appendDistinctNode(ctx *BindContext, nodeID int32) (int32, error) {
+	projects := builder.qry.Nodes[nodeID].ProjectList
+	required := make([]bool, len(projects))
+	for i, project := range projects {
+		required[i] = hasPadSpaceStringProvenance(project)
+	}
+
+	physicalKeys, err := builder.buildPadSpacePhysicalKeyList(projects, required)
+	if err != nil {
+		return 0, err
+	}
+
 	return builder.appendNode(&plan.Node{
-		NodeType: plan.Node_DISTINCT,
-		Children: []int32{nodeID},
-	}, ctx)
+		NodeType:                plan.Node_DISTINCT,
+		Children:                []int32{nodeID},
+		PhysicalEqualityKeyList: physicalKeys,
+	}, ctx), nil
 }
 
 func (builder *QueryBuilder) appendSortNode(ctx *BindContext, nodeID int32, boundOrderBys []*plan.OrderBySpec) int32 {
@@ -10176,13 +11195,13 @@ func appendSelectListWithGroupingOrder(
 		}
 		switch expr := selectExpr.Expr.(type) {
 		case tree.UnqualifiedStar:
-			cols, names, err := ctx.unfoldStar(builder.GetContext(), "", accountId == catalog.System_Account)
+			cols, names, provenances, err := ctx.unfoldStar(builder.GetContext(), "", accountId == catalog.System_Account)
 			if err != nil {
 				return nil, err
 			}
 			for i, name := range names {
 				selectList = append(selectList, cols[i])
-				ctx.headings = append(ctx.headings, name)
+				ctx.appendHeading(name, provenances[int32(i)])
 			}
 
 		case *tree.SampleExpr:
@@ -10211,7 +11230,7 @@ func appendSelectListWithGroupingOrder(
 				if sampleCount != 1 {
 					return nil, moerr.NewSyntaxError(builder.GetContext(), "sample multi columns cannot have alias")
 				}
-				ctx.headings[len(ctx.headings)-1] = selectExpr.As.Origin()
+				ctx.setHeading(len(ctx.headings)-1, selectExpr.As.Origin(), headingProvenance{})
 				selectList[len(selectList)-1].As = selectExpr.As
 			}
 
@@ -10219,17 +11238,20 @@ func appendSelectListWithGroupingOrder(
 
 		case *tree.UnresolvedName:
 			if expr.Star {
-				cols, names, err := ctx.unfoldStar(builder.GetContext(), expr.ColName(), accountId == catalog.System_Account)
+				cols, names, provenances, err := ctx.unfoldStar(builder.GetContext(), expr.ColName(), accountId == catalog.System_Account)
 				if err != nil {
 					return nil, err
 				}
 				selectList = append(selectList, cols...)
-				ctx.headings = append(ctx.headings, names...)
+				for i, name := range names {
+					ctx.appendHeading(name, provenances[int32(i)])
+				}
 			} else {
 				if selectExpr.As != nil && !selectExpr.As.Empty() {
-					ctx.headings = append(ctx.headings, selectExpr.As.Origin())
+					provenance := ctx.generatedHeadingProvenance[int32(exprIdx)]
+					ctx.appendHeading(selectExpr.As.Origin(), provenance)
 				} else {
-					ctx.headings = append(ctx.headings, expr.ColNameOrigin())
+					ctx.appendHeading(expr.ColNameOrigin(), headingProvenance{})
 				}
 
 				newExpr, err := qualifyExpr(expr)
@@ -10244,13 +11266,17 @@ func appendSelectListWithGroupingOrder(
 			}
 		case *tree.NumVal:
 			if expr.ValType == tree.P_null {
-				expr.ValType = tree.P_nulltext
+				// Result transport uses TEXT, but the reusable source AST still
+				// denotes untyped NULL (including SET's synthetic SELECT).
+				copy := *expr
+				copy.ValType = tree.P_nulltext
+				expr = &copy
 			}
 
 			if selectExpr.As != nil && !selectExpr.As.Empty() {
-				ctx.headings = append(ctx.headings, selectExpr.As.Origin())
+				ctx.appendHeading(selectExpr.As.Origin(), headingProvenance{})
 			} else {
-				ctx.headings = append(ctx.headings, tree.String(expr, dialect.MYSQL))
+				ctx.appendHeading(tree.String(expr, dialect.MYSQL), headingProvenance{})
 			}
 
 			selectList = append(selectList, tree.SelectExpr{
@@ -10259,7 +11285,8 @@ func appendSelectListWithGroupingOrder(
 			})
 		default:
 			if selectExpr.As != nil && !selectExpr.As.Empty() {
-				ctx.headings = append(ctx.headings, selectExpr.As.Origin())
+				provenance := ctx.generatedHeadingProvenance[int32(exprIdx)]
+				ctx.appendHeading(selectExpr.As.Origin(), provenance)
 			} else {
 				for {
 					if parenExpr, ok := expr.(*tree.ParenExpr); ok {
@@ -10269,9 +11296,10 @@ func appendSelectListWithGroupingOrder(
 					}
 				}
 				if heading, ok := nameConstHeading(expr); ok {
-					ctx.headings = append(ctx.headings, heading)
+					ctx.appendHeading(heading, headingProvenance{})
 				} else {
-					ctx.headings = append(ctx.headings, tree.String(expr, dialect.MYSQL))
+					heading, provenance := formatSelectExpressionHeading(expr)
+					ctx.appendHeading(heading, provenance)
 				}
 			}
 
@@ -10415,6 +11443,77 @@ func nameConstHeading(expr tree.Expr) (string, bool) {
 		return "", false
 	}
 	return name.String(), true
+}
+
+// DATE_FORMAT and TIME_FORMAT patterns are case-sensitive SQL string literals.
+// Preserve their spelling in the default result heading; otherwise a pattern
+// such as %M would be displayed as the semantically different %m after CTAS
+// identifier normalization. The first formatter pass is the cheap common path
+// and detects the relevant function while rendering. Only expressions that
+// actually contain one are rendered again with literal positions enabled.
+func formatSelectExpressionHeading(expr tree.Expr) (string, headingProvenance) {
+	for {
+		paren, ok := expr.(*tree.ParenExpr)
+		if !ok {
+			break
+		}
+		expr = paren.Expr
+	}
+
+	detectCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithDateTimeFormatDetection())
+	expr.Format(detectCtx)
+	heading := detectCtx.String()
+	if !detectCtx.HasDateTimeFormatFunction() {
+		return heading, headingProvenance{}
+	}
+
+	var positions []tree.StringLiteralPosition
+	formattedCtx := tree.NewFmtCtx(
+		dialect.MYSQL,
+		tree.WithSingleQuoteString(),
+		tree.WithStringLiteralPositions(&positions),
+	)
+	expr.Format(formattedCtx)
+	if len(positions) == 0 {
+		// A dynamic format expression has no SQL string literal to preserve.
+		// Returning the first-pass heading keeps the established identifier
+		// normalization for the complete rendered heading.
+		return heading, headingProvenance{}
+	}
+	formatted := formattedCtx.String()
+	provenance := headingProvenanceFromLiteralPositions(formatted, positions)
+	if len(provenance.parts) == 0 {
+		return heading, headingProvenance{}
+	}
+	return formatted, provenance
+}
+
+func headingProvenanceFromLiteralPositions(
+	formatted string,
+	positions []tree.StringLiteralPosition,
+) headingProvenance {
+	parts := make([]headingPart, 0, len(positions)*2+1)
+	previous := 0
+	for _, position := range positions {
+		if position.Start < previous || position.Start < 0 || position.End < position.Start || position.End > len(formatted) {
+			return headingProvenance{}
+		}
+		if position.Start > previous {
+			parts = append(parts, headingPart{text: formatted[previous:position.Start]})
+		}
+		parts = append(parts, headingPart{
+			text:    formatted[position.Start:position.End],
+			literal: true,
+		})
+		previous = position.End
+	}
+	if previous < len(formatted) {
+		parts = append(parts, headingPart{text: formatted[previous:]})
+	}
+	if len(parts) == 0 {
+		return headingProvenance{}
+	}
+	return headingProvenance{parts: parts}
 }
 
 func validNameConstNameLiteral(name *tree.NumVal) bool {
@@ -10691,6 +11790,7 @@ func (builder *QueryBuilder) bindView(
 	snapshot *Snapshot,
 	obj *ObjectRef,
 	schema, table string,
+	metadataSubscription *SubscriptionMetadata,
 ) (nodeID int32, err error) {
 	viewDefString := tableDef.ViewSql.View
 	if viewDefString == "" {
@@ -10702,6 +11802,22 @@ func (builder *QueryBuilder) bindView(
 
 	viewData := ViewData{}
 	err = json.Unmarshal([]byte(viewDefString), &viewData)
+	if err != nil {
+		return 0, err
+	}
+	if viewData.RequiredProtocolVersion != nil {
+		if *viewData.RequiredProtocolVersion < 0 {
+			return 0, moerr.NewInvalidInput(
+				builder.GetContext(), "invalid persisted view protocol version")
+		}
+		if err = RequirePersistedProtocolVersion(
+			builder.GetContext(), builder.compCtx.GetProcess(),
+			*viewData.RequiredProtocolVersion); err != nil {
+			return 0, err
+		}
+	}
+
+	viewData.Stmt, err = builder.historicalViewColumnsSQL(schema, table, viewData.Stmt, snapshot)
 	if err != nil {
 		return 0, err
 	}
@@ -10737,6 +11853,21 @@ func (builder *QueryBuilder) bindView(
 		viewStmt.Name = alterstmt.Name
 		viewStmt.ColNames = alterstmt.ColNames
 		viewStmt.AsSource = alterstmt.AsSource
+	}
+
+	isSubscriptionStatistics := isSubscriptionStatisticsView(schema, table, metadataSubscription)
+	if isSubscriptionStatistics {
+		meta := metadataSubscription.Meta
+		if !rewriteSubscriptionStatisticsAccount(
+			viewStmt.AsSource, uint32(meta.AccountId),
+		) {
+			return 0, moerr.NewInternalError(
+				builder.GetContext(), "unsupported STATISTICS metadata visibility CTE",
+			)
+		}
+		previousMetadata := builder.queryingSubscriptionMetadata
+		builder.queryingSubscriptionMetadata = metadataSubscription
+		defer func() { builder.queryingSubscriptionMetadata = previousMetadata }()
 	}
 
 	defaultDatabase := viewData.DefaultDatabase
@@ -10790,13 +11921,34 @@ func (builder *QueryBuilder) bindView(
 	defer func() {
 		builder.isForUpdate = savedIsForUpdate
 	}()
+	previousWarningContext := builder.compCtx.GetContext()
+	builder.compCtx.SetContext(WithJSONMergeWarningOrigin(
+		previousWarningContext, JSONMergeWarningStoredView))
+	defer builder.compCtx.SetContext(previousWarningContext)
 
 	if capture, ok := builder.compCtx.(viewDependencyScope); ok {
-		capture.enterNestedView()
+		if err := capture.enterNestedView(); err != nil {
+			return 0, err
+		}
 		defer capture.leaveNestedView()
 	}
+	if isSubscriptionStatistics {
+		previousSubscription := builder.compCtx.GetQueryingSubscription()
+		builder.compCtx.SetQueryingSubscription(metadataSubscription.Meta)
+		defer builder.compCtx.SetQueryingSubscription(previousSubscription)
+	}
+	viewNodeStart := len(builder.qry.Nodes)
 	nodeID, err = builder.bindSelect(viewStmt.AsSource, viewCtx, false)
 	if err != nil {
+		return
+	}
+	// Views written before the protocol marker was introduced are still
+	// rebound from SQL. Recheck the finalized plan before exposing it to the
+	// outer query; the cluster admission floor protects older CN binaries, and
+	// this local check protects a capable reader with a stale catalog marker.
+	if err = RequirePersistedIPFunctionProtocol(
+		builder.GetContext(), builder.compCtx.GetProcess(),
+		builder.qry.Nodes[viewNodeStart:]); err != nil {
 		return
 	}
 	nodeID, err = builder.appendMySQLSpecialTypeBoundary(
@@ -10804,13 +11956,16 @@ func (builder *QueryBuilder) bindView(
 	if err != nil {
 		return
 	}
-	viewCtx.markViewCTASDefaultBoundary(tableDef.Cols)
+	if isSubscriptionStatistics {
+		rewriteSubscriptionStatisticsOutput(builder, nodeID, viewCtx, metadataSubscription.Meta.SubName)
+	}
+	viewCtx.markViewCTASDefaultBoundary()
 	if len(viewStmt.ColNames) > 0 {
 		if len(viewStmt.ColNames) != len(viewCtx.headings) {
 			return 0, moerr.NewViewWrongList(builder.GetContext())
 		}
 		for i, colName := range viewStmt.ColNames {
-			viewCtx.headings[i] = string(colName)
+			viewCtx.setHeading(i, string(colName), headingProvenance{})
 		}
 	}
 	// Expanding a view removes the view catalog object from the executable
@@ -10914,7 +12069,7 @@ func (builder *QueryBuilder) appendMySQLSpecialTypeBoundary(
 	}
 	if needsBoundary {
 		for i := 0; i < visibleProjects && i < len(provenance); i++ {
-			ctx.outputColumnProvenance[int32(i)] = provenance[i]
+			ctx.setOutputColumnProvenance(int32(i), provenance[i])
 		}
 		ctx.projectTag = builder.genNewBindTag()
 		ctx.resultTag = 0
@@ -11293,23 +12448,30 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 
 		var subMeta *SubscriptionMeta
 		subMeta, err = builder.compCtx.GetSubscriptionMeta(schema, snapshot)
-		if err == nil && builder.isSkipResolveTableDef && snapshot == nil && subMeta == nil {
+		if err == nil && builder.isSkipResolveTableDef && ctx.directView == "" && snapshot == nil && subMeta == nil {
 			var tableDef *TableDef
 			tableDef, err = builder.compCtx.BuildTableDefByMoColumns(schema, table)
 			if err != nil {
 				return 0, err
 			}
 
-			nodeID = builder.appendNode(&plan.Node{
-				NodeType:     plan.Node_TABLE_SCAN,
-				Stats:        nil,
-				ObjRef:       &plan.ObjectRef{DbName: schema, SchemaName: table},
-				TableDef:     tableDef,
-				BindingTags:  []int32{builder.genNewBindTag()},
-				ScanSnapshot: snapshot,
-			}, ctx)
-
-			return
+			// Both frontend and internal compiler contexts must identify Views.
+			// Their persisted columns are not an output schema, even for no rows.
+			if tableDef != nil && tableDef.TableType != catalog.SystemViewRel && tableDef.ViewSql == nil {
+				object := &plan.ObjectRef{DbName: schema, SchemaName: schema, ObjName: table,
+					Db: int64(tableDef.DbId), Obj: int64(tableDef.TblId)}
+				builder.qry.CatalogDependencies = appendPrepareSchemas(
+					builder.qry.CatalogDependencies, prepareSchemaRef(object, tableDef))
+				nodeID = builder.appendNode(&plan.Node{
+					NodeType:     plan.Node_TABLE_SCAN,
+					Stats:        nil,
+					ObjRef:       object,
+					TableDef:     tableDef,
+					BindingTags:  []int32{builder.genNewBindTag()},
+					ScanSnapshot: snapshot,
+				}, ctx)
+				return
+			}
 		}
 
 		// TODO
@@ -11326,6 +12488,12 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 		if err != nil {
 			return 0, err
 		}
+
+		// Empty-result rewrites can remove scans, not semantic dependencies.
+		// Capture evidence before optimization, including intermediate Views,
+		// snapshots, and ordinary tables that may later be replaced by Views.
+		builder.qry.CatalogDependencies = appendPrepareSchemas(
+			builder.qry.CatalogDependencies, prepareSchemaRefWithSnapshot(obj, tableDef, snapshot))
 
 		// Compiler contexts return immutable catalog metadata. Own the planner
 		// shell and column slice, which are replaced locally, without copying the
@@ -11433,6 +12601,10 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 					Kind:         foreignCfg.Kind,
 					Config:       foreignCfg.ConfigJSON,
 					DefaultQuery: foreignCfg.DefaultQuery,
+					// Both the option and the plan field are the positive
+					// form, so the zero value -- any path that forgets to set
+					// it -- is the safe "send the query verbatim".
+					Pushdown: foreignCfg.Pushdown,
 				}
 			} else if externType == plan.ExternType_KAFKA_TB {
 				// Read-control defaults; compileKafkaScan overwrites them from
@@ -11452,6 +12624,36 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			} else if tbl.IcebergRef != nil {
 				return 0, moerr.NewInvalidInput(builder.GetContext(), "FOR ICEBERG requires an Iceberg external table")
 			}
+			// Error-mode columns for the text-format scans (issue #27517). They
+			// are appended for every engine whose records go through the shared
+			// CSV/JSONL parsing, so a bad record can be reported instead of
+			// failing the query. Parquet/Iceberg/Mongo have their own typed
+			// readers and are excluded. For FOREIGN_TB they must come BEFORE
+			// __mo_query, which has to stay the last column.
+			if externType == plan.ExternType_EXTERNAL_TB ||
+				externType == plan.ExternType_KAFKA_TB ||
+				externType == plan.ExternType_DATASTREAM_TB ||
+				externType == plan.ExternType_FOREIGN_TB {
+				varcharT := plan.Type{
+					Id:      int32(types.T_varchar),
+					Width:   types.MaxVarcharLen,
+					Table:   table,
+					Charset: uint32(types.CharsetUTF8),
+				}
+				for _, ec := range []struct {
+					id   uint64
+					name string
+					typ  plan.Type
+				}{
+					{catalog.ExternalFileLineColId, catalog.ExternalFileLine, plan.Type{Id: int32(types.T_int64), Table: table}},
+					{catalog.ExternalErrorMessageColId, catalog.ExternalErrorMessage, varcharT},
+					{catalog.ExternalErrorTextColId, catalog.ExternalErrorText, varcharT},
+				} {
+					tableDef.Cols = append(tableDef.Cols, &ColDef{
+						ColId: ec.id, Name: ec.name, Typ: ec.typ,
+					})
+				}
+			}
 			if externType == plan.ExternType_EXTERNAL_TB {
 				col := &ColDef{
 					ColId: catalog.ExternalFilePathColId,
@@ -11464,23 +12666,35 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 					},
 				}
 				tableDef.Cols = append(tableDef.Cols, col)
-			} else if externType == plan.ExternType_FOREIGN_TB {
+			} else if externType == plan.ExternType_FOREIGN_TB || externType == plan.ExternType_MONGODB_TB {
 				// The hidden query-text column: `__mo_query = '<text>'`
-				// predicates select what is sent to the foreign source, and
+				// predicates select what is sent to the foreign/MongoDB source, and
 				// each returned row carries the text that produced it. Must
 				// stay the LAST column (the query-level filter classifier
-				// requires it).
-				col := &ColDef{
-					ColId: catalog.ExternalQueryColId,
-					Name:  catalog.ExternalQuery,
-					Typ: plan.Type{
-						Id:      int32(types.T_varchar),
-						Width:   types.MaxVarcharLen,
-						Table:   table,
-						Charset: uint32(types.CharsetUTF8),
-					},
+				// requires it). An older external table may already have a
+				// mapped, real column of the same name. Keep that legacy column
+				// addressable instead of making the binding ambiguous; the explicit
+				// query carrier is unavailable for that colliding schema.
+				hasLegacyQueryColumn := false
+				for _, existing := range tableDef.Cols {
+					if existing != nil && strings.EqualFold(existing.Name, catalog.ExternalQuery) {
+						hasLegacyQueryColumn = true
+						break
+					}
 				}
-				tableDef.Cols = append(tableDef.Cols, col)
+				if !hasLegacyQueryColumn {
+					col := &ColDef{
+						ColId: catalog.ExternalQueryColId,
+						Name:  catalog.ExternalQuery,
+						Typ: plan.Type{
+							Id:      int32(types.T_varchar),
+							Width:   types.MaxVarcharLen,
+							Table:   table,
+							Charset: uint32(types.CharsetUTF8),
+						},
+					}
+					tableDef.Cols = append(tableDef.Cols, col)
+				}
 			} else if externType == plan.ExternType_KAFKA_TB {
 				// Synthetic Kafka columns: four per-message metadata columns
 				// and three WHERE-only read controls (their conjuncts are
@@ -11532,7 +12746,16 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 				}
 			}
 
-			nodeID, err = builder.bindView(ctx, tableDef, snapshot, obj, schema, table)
+			if strings.EqualFold(schema, INFORMATION_SCHEMA) &&
+				strings.EqualFold(table, informationSchemaStatistics) {
+				nodeID, err = builder.bindSubscriptionStatisticsView(
+					ctx, tableDef, snapshot, obj, schema, table,
+				)
+			} else {
+				nodeID, err = builder.bindView(
+					ctx, tableDef, snapshot, obj, schema, table, nil,
+				)
+			}
 			if err != nil {
 				return 0, err
 			}
@@ -11650,65 +12873,36 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			if sub := builder.compCtx.GetQueryingSubscription(); sub != nil {
 				currentAccountID = uint32(sub.AccountId)
 				builder.qry.Nodes[nodeID].NotCacheable = true
-			}
-			if currentAccountID != catalog.System_Account {
-				// add account filter for system table scan
-				if dbName == catalog.MO_CATALOG && tableName == catalog.MO_DATABASE {
-					modatabaseFilter := util.BuildMoDataBaseFilter(uint64(currentAccountID))
-					ctx.binder = NewWhereBinder(builder, ctx)
-					accountFilterExprs, err := splitAndBindCondition(modatabaseFilter, NoAlias, ctx)
-					if err != nil {
-						return 0, err
-					}
-					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
-				} else if dbName == catalog.MO_SYSTEM_METRICS && (tableName == catalog.MO_METRIC || tableName == catalog.MO_SQL_STMT_CU) {
-					motablesFilter := util.BuildSysMetricFilter(uint64(currentAccountID))
-					ctx.binder = NewWhereBinder(builder, ctx)
-					accountFilterExprs, err := splitAndBindCondition(motablesFilter, NoAlias, ctx)
-					if err != nil {
-						return 0, err
-					}
-					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
-				} else if dbName == catalog.MO_SYSTEM && tableName == catalog.MO_STATEMENT {
-					motablesFilter := util.BuildSysStatementInfoFilter(uint64(currentAccountID))
-					ctx.binder = NewWhereBinder(builder, ctx)
-					accountFilterExprs, err := splitAndBindCondition(motablesFilter, NoAlias, ctx)
-					if err != nil {
-						return 0, err
-					}
-					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
-				} else if dbName == catalog.MO_CATALOG && tableName == catalog.MO_TABLES {
-					motablesFilter := util.BuildMoTablesFilter(uint64(currentAccountID))
-					ctx.binder = NewWhereBinder(builder, ctx)
-					accountFilterExprs, err := splitAndBindCondition(motablesFilter, NoAlias, ctx)
-					if err != nil {
-						return 0, err
-					}
-					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
-				} else if dbName == catalog.MO_CATALOG && tableName == catalog.MO_COLUMNS {
-					moColumnsFilter := util.BuildMoColumnsFilter(uint64(currentAccountID))
-					ctx.binder = NewWhereBinder(builder, ctx)
-					accountFilterExprs, err := splitAndBindCondition(moColumnsFilter, NoAlias, ctx)
-					if err != nil {
-						return 0, err
-					}
-					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
-				} else if util.TableIsClusterTable(midNode.GetTableDef().GetTableType()) {
-					ctx.binder = NewWhereBinder(builder, ctx)
-					left := tree.NewUnresolvedColName(util.GetClusterTableAttributeName())
-					right := tree.NewNumVal(uint64(currentAccountID), strconv.Itoa(int(currentAccountID)), false, tree.P_uint64)
-					//account_id = the accountId of the non-sys account
-					accountFilter := &tree.ComparisonExpr{
-						Op:    tree.EQUAL,
-						Left:  left,
-						Right: right,
-					}
-					accountFilterExprs, err := splitAndBindCondition(accountFilter, NoAlias, ctx)
-					if err != nil {
-						return 0, err
-					}
-					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
+				if dbName == catalog.MO_CATALOG && midNode.ObjRef != nil {
+					objRef := *midNode.ObjRef
+					midNode.ObjRef = &objRef
+					midNode.ObjRef.PubInfo = &plan.PubInfo{TenantId: sub.AccountId}
+					midNode.ObjRef.SubscriptionName = sub.SubName
 				}
+			}
+			accountFilter := util.BuildTableScanAccountFilter(
+				currentAccountID, dbName, tableName, midNode.GetTableDef().GetTableType(),
+			)
+			if dbName == catalog.MO_CATALOG && tableName == catalog.MO_TABLES {
+				subFilter, filterErr := builder.currentSubscriptionMoTablesFilter()
+				if filterErr != nil {
+					return 0, filterErr
+				}
+				if subFilter != nil {
+					if accountFilter == nil {
+						accountFilter = subFilter
+					} else {
+						accountFilter = tree.NewAndExpr(accountFilter, subFilter)
+					}
+				}
+			}
+			if accountFilter != nil {
+				ctx.binder = NewWhereBinder(builder, ctx)
+				accountFilterExprs, err := splitAndBindCondition(accountFilter, NoAlias, ctx)
+				if err != nil {
+					return 0, err
+				}
+				builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
 			}
 		}
 		return
@@ -11751,7 +12945,7 @@ func (builder *QueryBuilder) refreshMongoScanPushdown(node *plan.Node) error {
 	scan := node.ExternScan.MongodbScan
 	names := make([]string, 0, len(node.TableDef.Cols))
 	for _, column := range node.TableDef.Cols {
-		if column != nil && !column.Hidden {
+		if column != nil && !column.Hidden && !catalog.IsForeignQueryCol(column.Name, column.ColId) {
 			names = append(names, column.Name)
 		}
 	}
@@ -11785,6 +12979,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 	var mysqlSpecialOrderTypes []*plan.Type
 	var mysqlSpecialCanonicalTypes []*plan.Type
 	var outputColumnProvenance []OutputColumnProvenance
+	var headingMetadata headingProvenanceMap
 	var defaultVals []string
 	var binding *Binding
 	var bindingToReplace *Binding
@@ -11809,6 +13004,15 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 	if slices.Contains(scanNodes, node.NodeType) {
 		if (node.NodeType == plan.Node_VALUE_SCAN || node.NodeType == plan.Node_SINK_SCAN || node.NodeType == plan.Node_RECURSIVE_SCAN) && node.TableDef == nil {
 			return nil
+		}
+		if node.TableDef != nil {
+			// Defaults, generated columns, CHECK and ON UPDATE expressions are
+			// evaluated locally when a persisted TableDef is rebound. Keep this
+			// final read boundary in addition to the writer-side DDL checks.
+			if err := RequirePersistedIPFunctionProtocol(
+				builder.GetContext(), builder.compCtx.GetProcess(), node.TableDef); err != nil {
+				return err
+			}
 		}
 		if len(alias.Cols) > len(node.TableDef.Cols) {
 			return moerr.NewSyntaxErrorf(builder.GetContext(), "table %q has %d columns available but %d columns specified", alias.Alias, len(node.TableDef.Cols), len(alias.Cols))
@@ -11840,12 +13044,19 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		colIsHidden = make([]bool, colLength)
 		types = make([]*plan.Type, colLength)
 		defaultVals = make([]string, colLength)
+		if shared := builder.headingProvenanceByNode[nodeID]; len(shared) > 0 {
+			headingMetadata = cloneHeadingProvenances(shared)
+			delete(builder.headingProvenanceByNode, nodeID)
+		}
 
 		tag := node.BindingTags[0]
 
 		for i, col := range node.TableDef.Cols {
 			if i < len(alias.Cols) {
 				cols[i] = string(alias.Cols[i])
+				if headingMetadata != nil {
+					delete(headingMetadata, int32(i))
+				}
 			} else {
 				cols[i] = col.Name
 			}
@@ -11855,7 +13066,8 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			// star expansion (identified by its reserved ColId, so a real
 			// __mo_query column in a pre-existing schema stays visible).
 			colIsHidden[i] = col.Hidden || catalog.IsForeignQueryCol(col.Name, col.ColId) ||
-				catalog.IsKafkaHiddenCol(col.Name, col.ColId)
+				catalog.IsKafkaHiddenCol(col.Name, col.ColId) ||
+				catalog.IsExternalErrorCol(col.Name, col.ColId)
 			types[i] = &col.Typ
 			if col.Default != nil {
 				defaultVals[i] = col.Default.OriginString
@@ -11867,6 +13079,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		binding = NewBinding(tag, nodeID, node.TableDef.DbName, table, node.TableDef.TblId, cols, colIsHidden, types,
 			util.TableIsClusterTable(node.TableDef.TableType), defaultVals)
 		binding.originCols = originCols
+		binding.headingProvenance = headingMetadata
 		binding.outputColumnProvenance = make([]OutputColumnProvenance, colLength)
 		for i, col := range node.TableDef.Cols {
 			binding.outputColumnProvenance[i] = OutputColumnProvenance{
@@ -11910,12 +13123,16 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		colLength := len(headings)
 		cols = make([]string, colLength)
 		originCols := make([]string, colLength)
+		headingMetadata := cloneHeadingProvenances(subCtx.headingProvenance)
 		colIsHidden = make([]bool, colLength)
 		types = make([]*plan.Type, colLength)
 		defaultVals = make([]string, colLength)
 		for i, col := range headings {
 			if i < len(alias.Cols) {
 				cols[i] = string(alias.Cols[i])
+				if headingMetadata != nil {
+					delete(headingMetadata, int32(i))
+				}
 			} else {
 				cols[i] = col
 			}
@@ -11949,6 +13166,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 
 		binding = NewBinding(tag, nodeID, "", table, 0, cols, colIsHidden, types, false, defaultVals)
 		binding.originCols = originCols
+		binding.headingProvenance = headingMetadata
 		binding.mysqlSpecialOrderTypes = mysqlSpecialOrderTypes
 		binding.mysqlSpecialCanonicalTypes = mysqlSpecialCanonicalTypes
 		binding.outputColumnProvenance = outputColumnProvenance
@@ -12044,6 +13262,11 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	err = ctx.mergeContexts(builder.GetContext(), leftCtx, rightCtx)
 	if err != nil {
 		return 0, err
+	}
+	if ctx.bindingTree != nil {
+		_, hasUsingClause := tbl.Cond.(*tree.UsingJoinCond)
+		ctx.bindingTree.rightJoinUsingStar = joinType == plan.Node_RIGHT &&
+			(hasUsingClause || tbl.JoinType == tree.JOIN_TYPE_NATURAL_RIGHT)
 	}
 
 	node := &plan.Node{
@@ -12282,6 +13505,10 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 			nodeId, err = builder.buildMetaScan(tbl, ctx, exprs, nil)
 		case "current_account":
 			nodeId, err = builder.buildCurrentAccount(tbl, ctx, exprs, nil)
+		case "change_watermark":
+			nodeId, err = builder.buildChangeWatermark(tbl, ctx, exprs, nil)
+		case "table_changes":
+			nodeId, err = builder.buildTableChanges(tbl, ctx, exprs, nil)
 		case "metadata_scan":
 			nodeId = builder.buildMetadataScan(tbl, ctx, exprs, nil)
 		case "processlist", "mo_sessions":
@@ -12296,6 +13523,14 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 			nodeId, err = builder.buildMoCache(tbl, ctx, exprs, nil)
 		case "mo_check_constraints":
 			nodeId, err = builder.buildCheckConstraints(tbl, ctx, exprs, nil)
+		case "mo_current_roles":
+			nodeId, err = builder.buildCurrentRoles(tbl, ctx, exprs, nil)
+		case subscriptionTablesFunctionName:
+			nodeId, err = builder.buildSubscriptionTables(tbl, ctx, exprs, nil)
+		case ViewColumnsFunctionName, SubscriptionViewColumnsFunctionName:
+			nodeId, err = builder.buildViewColumns(tbl, ctx, exprs, nil)
+		case subscriptionColumnsFunctionName:
+			nodeId, err = builder.buildSubscriptionColumns(tbl, ctx, exprs, nil)
 		case "fulltext_index_scan":
 			nodeId, err = builder.buildFullTextIndexScan(tbl, ctx, exprs, nil)
 		case "fulltext_index_tokenize":
@@ -12364,7 +13599,8 @@ func (builder *QueryBuilder) GetContext() context.Context {
 	if builder == nil {
 		return context.TODO()
 	}
-	return builder.compCtx.GetContext()
+	ctx := function.WithNoUnsignedSubtraction(builder.compCtx.GetContext(), builder.noUnsignedSubtraction)
+	return function.WithDivPrecisionIncrement(ctx, builder.divPrecisionIncrement)
 }
 
 func (builder *QueryBuilder) checkPlanningCanceled() error {

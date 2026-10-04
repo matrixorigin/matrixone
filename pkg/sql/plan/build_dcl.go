@@ -19,7 +19,9 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -39,6 +41,7 @@ func getPreparePlan(ctx CompilerContext, stmt tree.Statement) (*Plan, *Query, er
 
 	switch stmt := stmt.(type) {
 	case *tree.Select, *tree.ParenSelect,
+		*tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan,
 		*tree.Update, *tree.Delete, *tree.Insert, *tree.MultiInsert,
 		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowSequences, *tree.ShowColumns,
 		*tree.ShowCreateDatabase, *tree.ShowCreateTable:
@@ -54,6 +57,34 @@ func getPreparePlan(ctx CompilerContext, stmt tree.Statement) (*Plan, *Query, er
 		}, nil, nil
 	case *tree.SetVar:
 		return buildSetVariablesWithQuery(stmt, ctx, true)
+	case *tree.ShowPublications:
+		if stmt.Like != nil {
+			switch pattern := stmt.Like.Right.(type) {
+			case *tree.ParamExpr:
+				if pattern.Offset != 1 {
+					return nil, nil, moerr.NewInvalidInput(ctx.GetContext(), "SHOW PUBLICATIONS requires one LIKE parameter")
+				}
+			case *tree.NumVal:
+				if pattern.Kind() != tree.Str {
+					return nil, nil, moerr.NewNotSupported(ctx.GetContext(),
+						"prepared SHOW PUBLICATIONS requires a string literal or parameter marker LIKE pattern")
+				}
+			default:
+				return nil, nil, moerr.NewNotSupported(ctx.GetContext(),
+					"prepared SHOW PUBLICATIONS requires a string literal or parameter marker LIKE pattern")
+			}
+		}
+		return &Plan{}, nil, nil
+	case *tree.AnalyzeStmt,
+		*tree.CreatePublication, *tree.AlterPublication, *tree.DropPublication,
+		*tree.ShowPublicationCoverage,
+		*tree.DataBranchCreateTable, *tree.DataBranchCreateDatabase,
+		*tree.DataBranchDiff, *tree.DataBranchMerge, *tree.DataBranchPick,
+		*tree.DataBranchDeleteTable, *tree.DataBranchDeleteDatabase:
+		// These statements are executed entirely by the frontend. Keep an inner
+		// plan as the prepared-statement carrier, but do not make the engine
+		// compile it.
+		return &Plan{}, nil, nil
 	default:
 		p, err := BuildPlan(ctx, stmt, true)
 		return p, nil, err
@@ -71,11 +102,13 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 	var transientQuery *Query
 	var err error
 	var stmtName string
+	var sourceParameterCount int
 
 	switch pstmt := stmt.(type) {
 	case *tree.PrepareStmt:
 		stmtName = string(pstmt.Name)
 		preparedStmt = pstmt.Stmt
+		sourceParameterCount = tree.ParameterCount(preparedStmt)
 		preparePlan, transientQuery, err = getPreparePlan(ctx, pstmt.Stmt)
 		if err != nil {
 			return nil, err
@@ -108,6 +141,7 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 		}
 		stmtName = string(pstmt.Name)
 		preparedStmt = stmts[0]
+		sourceParameterCount = tree.ParameterCount(preparedStmt)
 		preparePlan, transientQuery, err = getPreparePlan(ctx, stmts[0])
 		if err != nil {
 			return nil, err
@@ -115,9 +149,20 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 		preparePlan.IsPrepare = true
 	}
 
-	schemas, paramTypes, err := resetPreparePlan(ctx, preparePlan, transientQuery)
+	schemas, paramTypes, err := resetPreparePlan(ctx, preparePlan, transientQuery, sourceParameterCount)
 	if err != nil {
 		return nil, err
+	}
+	if dataBranchParamTypes, err := dataBranchPickPrepareParamTypes(ctx, preparedStmt); err != nil {
+		return nil, err
+	} else if dataBranchParamTypes != nil {
+		paramTypes = dataBranchParamTypes
+	}
+	// Frontend SHOW has no query plan for resetPreparePlan to inspect.
+	if show, ok := preparedStmt.(*tree.ShowPublications); ok && show.Like != nil {
+		if _, parameterized := show.Like.Right.(*tree.ParamExpr); parameterized {
+			paramTypes = []int32{int32(types.T_varchar)}
+		}
 	}
 	viewSchemas, err := collectPrepareViewSchemas(ctx)
 	if err != nil {
@@ -129,6 +174,11 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 		return nil, err
 	}
 	schemas = appendPrepareSchemas(schemas, ddlSchemas...)
+	analyzeSchemas, err := collectPrepareAnalyzeSchemas(ctx, preparedStmt)
+	if err != nil {
+		return nil, err
+	}
+	schemas = appendPrepareSchemas(schemas, analyzeSchemas...)
 	if len(paramTypes) > math.MaxUint16 {
 		return nil, moerr.NewErrTooManyParameter(ctx.GetContext())
 	}
@@ -150,6 +200,148 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 			},
 		},
 	}, nil
+}
+
+// dataBranchPickPrepareParamTypes returns the parameter metadata for DATA
+// BRANCH PICK value keys. These statements execute in the frontend and have no
+// query plan for resetPreparePlan to inspect.
+func dataBranchPickPrepareParamTypes(ctx CompilerContext, stmt tree.Statement) ([]int32, error) {
+	pick, ok := stmt.(*tree.DataBranchPick)
+	if !ok || pick.Keys == nil {
+		return nil, nil
+	}
+
+	if pick.Keys.Type == tree.PickKeysSubquery {
+		if dataBranchPickSubqueryHasParams(pick.Keys.Select) {
+			return nil, moerr.NewNotSupported(ctx.GetContext(),
+				"prepared DATA BRANCH PICK KEYS subqueries do not support parameter markers")
+		}
+		return nil, nil
+	}
+	if pick.Keys.Type != tree.PickKeysValues {
+		return nil, nil
+	}
+
+	paramTypes := make([]int32, 0, len(pick.Keys.KeyExprs))
+	for _, expr := range pick.Keys.KeyExprs {
+		if err := collectDataBranchPickValueParamTypes(ctx, expr, &paramTypes); err != nil {
+			return nil, err
+		}
+	}
+	return paramTypes, nil
+}
+
+// Value keys are materialized recursively: the outer expression list holds
+// rows and each tuple holds its primary-key components. Collect parameter
+// metadata in that same lexical order so its positions match execution.
+func collectDataBranchPickValueParamTypes(
+	ctx CompilerContext,
+	expr tree.Expr,
+	paramTypes *[]int32,
+) error {
+	switch expr := expr.(type) {
+	case *tree.ParenExpr:
+		return collectDataBranchPickValueParamTypes(ctx, expr.Expr, paramTypes)
+	case *tree.Tuple:
+		for _, elem := range expr.Exprs {
+			if err := collectDataBranchPickValueParamTypes(ctx, elem, paramTypes); err != nil {
+				return err
+			}
+		}
+	case *tree.ParamExpr:
+		if expr.Offset != len(*paramTypes)+1 {
+			return moerr.NewInternalError(ctx.GetContext(), "offset not match")
+		}
+		*paramTypes = append(*paramTypes, int32(types.T_varchar))
+	}
+	return nil
+}
+
+func dataBranchPickSubqueryHasParams(selectStmt *tree.Select) bool {
+	if selectStmt == nil {
+		return false
+	}
+	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithSingleQuoteString())
+	selectStmt.Format(fmtCtx)
+	scanner := mysql.NewScanner(dialect.MYSQL, fmtCtx.String())
+	defer mysql.PutScanner(scanner)
+	for {
+		token, _ := scanner.Scan()
+		switch token {
+		case mysql.VALUE_ARG:
+			return true
+		case 0, mysql.LEX_ERROR:
+			return false
+		}
+	}
+}
+
+func collectPrepareAnalyzeSchemas(ctx CompilerContext, stmt tree.Statement) ([]*plan.ObjectRef, error) {
+	analyze, ok := stmt.(*tree.AnalyzeStmt)
+	if !ok {
+		return nil, nil
+	}
+	if len(analyze.Entries) == 0 {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "ANALYZE TABLE requires at least one table")
+	}
+
+	var schemas []*plan.ObjectRef
+	for _, entry := range analyze.Entries {
+		if entry == nil || entry.Table == nil {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "ANALYZE TABLE requires a table")
+		}
+		databaseName := string(entry.Table.Schema())
+		if databaseName == "" {
+			databaseName = ctx.DefaultDatabase()
+		}
+		if databaseName == "" {
+			return nil, moerr.NewNoDB(ctx.GetContext())
+		}
+		tableName := string(entry.Table.Name())
+
+		var snapshot *Snapshot
+		var err error
+		if entry.Table.AtTsExpr != nil {
+			snapshot, err = getTimeStampByTsHint(ctx, entry.Table.AtTsExpr)
+			if err != nil {
+				return nil, err
+			}
+		}
+		objRef, tableDef, err := ctx.Resolve(databaseName, tableName, snapshot)
+		if err != nil {
+			return nil, err
+		}
+		if objRef == nil || tableDef == nil {
+			return nil, moerr.NewNoSuchTable(ctx.GetContext(), databaseName, tableName)
+		}
+
+		if len(entry.Cols) == 0 {
+			hasVisibleColumn := false
+			for _, col := range tableDef.Cols {
+				if !col.Hidden {
+					hasVisibleColumn = true
+					break
+				}
+			}
+			if !hasVisibleColumn {
+				return nil, moerr.NewInternalErrorf(ctx.GetContext(),
+					"ANALYZE TABLE: no visible columns found for table %s", tableName)
+			}
+		} else {
+			for _, column := range entry.Cols {
+				columnName := string(column)
+				colDef := FindColumn(tableDef.Cols, columnName)
+				if colDef == nil || colDef.Hidden {
+					return nil, moerr.NewBadFieldErrorf(ctx.GetContext(),
+						"invalid input: column %s does not exist", columnName)
+				}
+			}
+		}
+
+		schemas = appendPrepareSchemas(schemas,
+			prepareSchemaRefWithSnapshot(objRef, tableDef, snapshot))
+	}
+	return schemas, nil
 }
 
 func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, preparePlan *Plan) ([]*plan.ObjectRef, error) {

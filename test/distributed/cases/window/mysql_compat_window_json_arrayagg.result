@@ -48,7 +48,7 @@ from orders order by id;
 7  ¦  30  ¦  ["paid"]  𝄀
 8  ¦  30  ¦  ["paid", "refund"]
 select id, customer_id,
-json_objectagg(cast(id as char), status) over (partition by customer_id order by id) v
+json_objectagg(id, status) over (partition by customer_id order by id) v
 from orders order by id;
 ➤ id[4,32,0]  ¦  customer_id[4,32,0]  ¦  v[-1,2147483647,0]  𝄀
 1  ¦  10  ¦  {"1": "paid"}  𝄀
@@ -59,13 +59,26 @@ from orders order by id;
 6  ¦  20  ¦  {"4": "paid", "5": "paid", "6": "pending"}  𝄀
 7  ¦  30  ¦  {"7": "paid"}  𝄀
 8  ¦  30  ¦  {"7": "paid", "8": "refund"}
+select id, customer_id,
+json_objectagg(customer_id, status) over (partition by customer_id order by id
+rows between unbounded preceding and current row) v
+from orders order by id;
+➤ id[4,32,0]  ¦  customer_id[4,32,0]  ¦  v[-1,2147483647,0]  𝄀
+1  ¦  10  ¦  {"10": "paid"}  𝄀
+2  ¦  10  ¦  {"10": "paid"}  𝄀
+3  ¦  10  ¦  {"10": "refund"}  𝄀
+4  ¦  20  ¦  {"20": "paid"}  𝄀
+5  ¦  20  ¦  {"20": "paid"}  𝄀
+6  ¦  20  ¦  {"20": "pending"}  𝄀
+7  ¦  30  ¦  {"30": "paid"}  𝄀
+8  ¦  30  ¦  {"30": "refund"}
 select customer_id, json_arrayagg(status) v
 from orders where id in (1, 4, 7) group by customer_id order by customer_id;
 ➤ customer_id[4,32,0]  ¦  v[-1,2147483647,0]  𝄀
 10  ¦  ["paid"]  𝄀
 20  ¦  ["paid"]  𝄀
 30  ¦  ["paid"]
-select customer_id, json_objectagg(cast(id as char), status) v
+select customer_id, json_objectagg(id, status) v
 from orders where id in (1, 4, 7) group by customer_id order by customer_id;
 ➤ customer_id[4,32,0]  ¦  v[-1,2147483647,0]  𝄀
 10  ¦  {"1": "paid"}  𝄀

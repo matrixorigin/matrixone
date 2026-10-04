@@ -16,13 +16,70 @@ package plan
 
 import (
 	"context"
+	"math"
 	"strconv"
 	"testing"
 
+	"github.com/gogo/protobuf/proto"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
+
+func TestDecimalFloatComparisonUniqueValue(t *testing.T) {
+	decimal, err := makePlan2DecimalExprWithType(context.Background(), "12345.00")
+	require.NoError(t, err)
+	target := makeSimplePlan2Type(types.T_float64)
+	target.Scale = -1
+	cast, err := makePlan2CastExpr(context.Background(), decimal, target)
+	require.NoError(t, err)
+	value, ok := floatingComparisonConstant(cast)
+	require.True(t, ok)
+	require.Equal(t, float64(12345), value)
+	cast.Typ.Width, cast.Typ.Scale = 3, 1
+	_, ok = floatingComparisonConstant(cast)
+	require.False(t, ok, "DOUBLE(M,D) rounds before comparison")
+
+	precise, err := makePlan2DecimalExprWithType(context.Background(), "0.00000000000000000003")
+	require.NoError(t, err)
+	preciseCast, err := makePlan2CastExpr(context.Background(), precise, target)
+	require.NoError(t, err)
+	converted, ok := floatingComparisonConstant(preciseCast)
+	require.True(t, ok)
+	require.Equal(t, uint64(0x3be1b578c96db19b), math.Float64bits(converted))
+	for _, expr := range []*Expr{nil, {Typ: makeSimplePlan2Type(types.T_float64), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}, GetColExpr(makeSimplePlan2Type(types.T_float64), 0, 0)} {
+		_, ok := floatingComparisonConstant(expr)
+		require.False(t, ok, "only a known non-NULL constant can prove narrowing")
+	}
+
+	for _, test := range []struct {
+		name   string
+		value  float64
+		column types.Type
+		unique bool
+	}{
+		{"integral decimal64", 54321, types.New(types.T_decimal64, 12, 2), true},
+		{"fractional decimal64", 0.1, types.New(types.T_decimal64, 12, 2), true},
+		{"between scale points", 0.104, types.New(types.T_decimal64, 12, 2), false},
+		{"negative", -54321, types.New(types.T_decimal64, 12, 2), true},
+		{"outside width", 1e11, types.New(types.T_decimal64, 12, 2), false},
+		{"decimal128 collision", 9007199254740992, types.New(types.T_decimal128, 20, 0), false},
+		{"decimal128 ordinary", 54321, types.New(types.T_decimal128, 20, 2), true},
+		{"executor rounding mismatch", 2.9999999999999997e-20, types.New(types.T_decimal128, 20, 20), false},
+		{"infinity", math.Inf(1), types.New(types.T_decimal64, 12, 2), false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.unique, decimalFloatComparisonHasUniqueValue(test.value, test.column))
+		})
+	}
+}
 
 // TestComparisonTypeCastOptimization tests that comparison operators avoid casting columns
 // when comparing with constants to preserve index usage
@@ -49,16 +106,15 @@ func TestComparisonTypeCastOptimization(t *testing.T) {
 			expectedType:   types.T_int32,
 		},
 		// INT vs DECIMAL with zero fractional part - should optimize
-		// INT vs DECIMAL with zero fractional part - should NOT optimize
-		// We keep DECIMAL128 to preserve semantics
+		// Exact integral DECIMAL constants retain the native integer domain.
 		{
 			name:           "int32 = 9.0",
 			op:             "=",
 			colType:        types.T_int32,
 			constType:      types.T_decimal128,
 			constValue:     "9.0",
-			shouldOptimize: false,
-			expectedType:   types.T_decimal128,
+			shouldOptimize: true,
+			expectedType:   types.T_int32,
 		},
 		// INT vs DECIMAL with non-zero fractional part - should NOT optimize
 		{
@@ -92,7 +148,8 @@ func TestComparisonTypeCastOptimization(t *testing.T) {
 		},
 		// FLOAT vs FLOAT - should optimize
 		{
-			name:           "float32 = float64",
+			name:           "float32 = exactly representable float64",
+			constValue:     float64(0.5),
 			op:             "=",
 			colType:        types.T_float32,
 			constType:      types.T_float64,
@@ -136,6 +193,8 @@ func TestComparisonTypeCastOptimization(t *testing.T) {
 			// Set constant value based on type
 			if tt.constValue != nil {
 				switch v := tt.constValue.(type) {
+				case float64:
+					constExpr.Expr.(*plan.Expr_Lit).Lit.Value = &plan.Literal_Dval{Dval: v}
 				case int64:
 					constExpr.Expr.(*plan.Expr_Lit).Lit.Value = &plan.Literal_I64Val{I64Val: v}
 				case string:
@@ -172,6 +231,24 @@ func TestComparisonTypeCastOptimization(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestComparisonDoesNotNarrowWideDecimalExpressionToColumn(t *testing.T) {
+	ctx := context.Background()
+	wideExpr := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_decimal256), Width: 39, Scale: 0},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}},
+	}
+	columnExpr := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_decimal128), Width: 38, Scale: 0},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}},
+	}
+
+	result, err := BindFuncExprImplByPlanExpr(ctx, ">", []*plan.Expr{wideExpr, columnExpr})
+	require.NoError(t, err)
+	args := result.GetF().Args
+	require.Equal(t, int32(types.T_decimal256), args[0].Typ.Id)
+	require.Equal(t, int32(types.T_decimal256), args[1].Typ.Id)
 }
 
 // TestDecimalScaleCompatibilityInComparison tests that decimal comparison
@@ -723,6 +800,327 @@ func TestDecimalEarlyFalseDetection(t *testing.T) {
 	}
 }
 
+func TestDecimalComparisonKeepsWideZeroSuffixAndCarriesProtocolMarker(t *testing.T) {
+	ctx := context.Background()
+	columnType := types.New(types.T_decimal128, 38, 0)
+	column := &plan.Expr{
+		Typ:  makePlan2Type(&columnType),
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "d"}},
+	}
+	column.Typ.NotNullable = true
+
+	for _, operator := range []string{"=", "<>"} {
+		for _, tc := range []struct {
+			name       string
+			literal    string
+			wantFunc   bool
+			wantMarker bool
+		}{
+			{
+				name:       "18 digit zero suffix",
+				literal:    "12345678901234567890.000000000000000000",
+				wantFunc:   true,
+				wantMarker: false,
+			},
+			{
+				name:       "19 digit zero suffix",
+				literal:    "12345678901234567890.0000000000000000000",
+				wantFunc:   true,
+				wantMarker: true,
+			},
+			{
+				name:       "wide zero suffix",
+				literal:    "1234567890123456789012345678901234567890.000000000000000000000000000000",
+				wantFunc:   true,
+				wantMarker: true,
+			},
+			{
+				name:       "19 digit nonzero suffix",
+				literal:    "12345678901234567890.0000000000000000001",
+				wantFunc:   false,
+				wantMarker: true,
+			},
+		} {
+			t.Run(operator+"/"+tc.name, func(t *testing.T) {
+				literal, err := makePlan2DecimalExprWithType(ctx, tc.literal)
+				require.NoError(t, err)
+				result, err := BindFuncExprImplByPlanExpr(ctx, operator,
+					[]*plan.Expr{DeepCopyExpr(column), literal})
+				require.NoError(t, err)
+				require.Equal(t, tc.wantFunc, result.GetF() != nil,
+					"wide decimal comparison was folded unexpectedly")
+				requires, err := plan.RequiresMORPCVersion89DecimalLiteralSemantics(result)
+				require.NoError(t, err)
+				require.Equal(t, tc.wantMarker, requires)
+			})
+		}
+	}
+}
+
+func TestDecimalComparisonLegacyRemainderProtocolFence(t *testing.T) {
+	for _, tc := range []struct {
+		text             string
+		oldZero, newZero bool
+	}{
+		{"922337203685477581.0", false, true},
+		{"922337203685477581.6", true, false},
+		{"-1234567890123456789.0", false, true},
+		{"-1234567890123456789.6", true, false},
+		{"922337203685477581.1", false, false},
+		{"-1234567890123456789.1", false, false},
+		{"10.0", true, true},
+		{"1844674407370955162.0", true, true},
+	} {
+		t.Run(tc.text, func(t *testing.T) {
+			coefficient, scale, err := types.Parse128(tc.text)
+			require.NoError(t, err)
+			require.Equal(t, int32(1), scale)
+			require.Equal(t, tc.oldZero, decimal128HasTrailingZeros(int64(coefficient.B0_63), int64(coefficient.B64_127), 1))
+			for _, carrier := range []string{"string", "typed"} {
+				for _, op := range []string{"=", "<>", "<", "<=", ">", ">="} {
+					for _, reversed := range []bool{false, true} {
+						columnType := types.New(types.T_decimal128, 30, 0)
+						column := &plan.Expr{Typ: makePlan2Type(&columnType), Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "d"}}}
+						column.Typ.NotNullable = true
+						constantType := types.New(types.T_decimal128, 30, 1)
+						literal := &plan.Expr{Typ: makePlan2Type(&constantType), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Decimal128Val{Decimal128Val: &plan.Decimal128{A: int64(coefficient.B0_63), B: int64(coefficient.B64_127)}}}}}
+						if carrier == "string" {
+							literal, err = appendCastBeforeExpr(context.Background(), makePlan2StringConstExprWithType(tc.text), literal.Typ)
+							require.NoError(t, err)
+						}
+						args := []*plan.Expr{column, literal}
+						if reversed {
+							args[0], args[1] = args[1], args[0]
+						}
+						result, err := BindFuncExprImplByPlanExpr(context.Background(), op, args)
+						require.NoError(t, err)
+						marked, err := plan.RequiresMORPCVersion89DecimalLiteralSemantics(result)
+						require.NoError(t, err)
+						require.Equal(t, tc.oldZero != tc.newZero, marked, "%s %s reversed=%v: %s", carrier, op, reversed, result)
+						if op == "=" || op == "<>" {
+							if tc.newZero {
+								require.NotNil(t, result.GetF())
+							} else {
+								require.NotNil(t, result.GetLit())
+								require.Equal(t, op == "<>", result.GetLit().GetBval())
+							}
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestDecimalSuffixCoercionRecordsProtocolDependency(t *testing.T) {
+	for _, tc := range []struct {
+		text                 string
+		wantSafe, wantMarker bool
+	}{
+		{"922337203685477581.0", true, true},
+		{"922337203685477581.6", false, true},
+		{"-1234567890123456789.0", true, true},
+		{"-1234567890123456789.6", false, true},
+		{"10.0", true, false},
+		{"-1234567890123456789.1", false, false},
+	} {
+		t.Run(tc.text, func(t *testing.T) {
+			coefficient, scale, err := types.Parse128(tc.text)
+			require.NoError(t, err)
+			constantType := types.New(types.T_decimal128, 30, scale)
+			literal := &plan.Expr{
+				Typ: makePlan2Type(&constantType),
+				Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Decimal128Val{
+					Decimal128Val: &plan.Decimal128{A: int64(coefficient.B0_63), B: int64(coefficient.B64_127)},
+				}}},
+			}
+			require.Equal(t, tc.wantSafe, checkNoNeedCast(context.Background(), constantType, types.New(types.T_decimal128, 30, 0), literal))
+			require.Equal(t, tc.wantMarker, literal.GetLit().DecimalLiteralRequiresV82,
+				"record the dependency at the coercion decision, even when coercion is rejected")
+		})
+	}
+}
+
+func TestDecimalComparisonLegacyRemainderFenceBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name, text string
+		oid        types.T
+		scale      int32
+		want       bool
+	}{
+		{"string64", "-1.0", types.T_decimal64, 1, true},
+		{"positive64", "1.0", types.T_decimal64, 1, false},
+		{"eighteen", "-1.000000000000000000", types.T_decimal128, 18, true},
+		{"nineteen_handled_by_caller", "-1.0000000000000000000", types.T_decimal128, 19, false},
+		{"no_scale_reduction", "-1", types.T_decimal128, 0, false},
+		{"legacy_parse_overflow", "10000000000000000000000000000000000000000.0", types.T_decimal256, 1, true},
+		{"unknown_suffix", "invalid", types.T_decimal128, 1, true},
+		{"unsupported_target", "-1.0", types.T_float64, 1, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			literal := makePlan2StringConstExprWithType(tc.text)
+			constantType := types.New(tc.oid, tc.oid.ToType().Width, tc.scale)
+			hasZeros, proven := decimalTrailingZerosStatus(literal, constantType, 0)
+			require.Equal(t, tc.want, decimalComparisonUsesLegacyTrailingZeroSemantics(literal, constantType, 0, hasZeros, proven))
+		})
+	}
+	decimalType := types.New(types.T_decimal128, 30, 1)
+	for _, literal := range []*plan.Expr{
+		nil,
+		{},
+		{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}},
+		{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Decimal128Val{}}}},
+		{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Decimal64Val{Decimal64Val: &plan.Decimal64{A: -10}}}}},
+	} {
+		require.False(t, decimalComparisonUsesLegacyTrailingZeroSemantics(literal, decimalType, 0, false, false))
+	}
+}
+
+func TestDecimalComparisonNegativeDecimal128ZeroSuffixCarriesProtocolMarker(t *testing.T) {
+	ctx := context.Background()
+	columnType := types.New(types.T_decimal128, 30, 2)
+	column := &plan.Expr{
+		Typ:  makePlan2Type(&columnType),
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "d"}},
+	}
+	column.Typ.NotNullable = true
+
+	casted, err := appendCastBeforeExpr(ctx, makePlan2StringConstExprWithType("-50.500000"), plan.Type{
+		Id:          int32(types.T_decimal128),
+		Width:       30,
+		Scale:       6,
+		NotNullable: true,
+	})
+	require.NoError(t, err)
+	result, err := BindFuncExprImplByPlanExpr(ctx, "=", []*plan.Expr{column, casted})
+	require.NoError(t, err)
+	require.NotNil(t, result.GetF(), "negative zero suffix must remain an executable comparison")
+	requires, err := plan.RequiresMORPCVersion89DecimalLiteralSemantics(result)
+	require.NoError(t, err)
+	require.True(t, requires, result.String())
+	requiredVersion, err := RequiredPersistedExpressionProtocolVersion(result)
+	require.NoError(t, err)
+	require.Equal(t, int64(defines.MORPCVersion89), requiredVersion)
+
+	positive, err := appendCastBeforeExpr(ctx, makePlan2StringConstExprWithType("50.500000"), plan.Type{
+		Id:          int32(types.T_decimal128),
+		Width:       30,
+		Scale:       6,
+		NotNullable: true,
+	})
+	require.NoError(t, err)
+	positiveResult, err := BindFuncExprImplByPlanExpr(ctx, "=", []*plan.Expr{column, positive})
+	require.NoError(t, err)
+	positiveRequires, err := plan.RequiresMORPCVersion89DecimalLiteralSemantics(positiveResult)
+	require.NoError(t, err)
+	require.False(t, positiveRequires, positiveResult.String())
+
+	nonzero, err := appendCastBeforeExpr(ctx, makePlan2StringConstExprWithType("-50.500001"), plan.Type{
+		Id:          int32(types.T_decimal128),
+		Width:       30,
+		Scale:       6,
+		NotNullable: true,
+	})
+	require.NoError(t, err)
+	nonzeroResult, err := BindFuncExprImplByPlanExpr(ctx, "=", []*plan.Expr{column, nonzero})
+	require.NoError(t, err)
+	nonzeroRequires, err := plan.RequiresMORPCVersion89DecimalLiteralSemantics(nonzeroResult)
+	require.NoError(t, err)
+	require.False(t, nonzeroRequires, nonzeroResult.String())
+}
+
+func TestDecimalComparisonPreservesNullableColumnSemantics(t *testing.T) {
+	ctx := context.Background()
+	columnType := types.New(types.T_decimal128, 38, 0)
+	column := &plan.Expr{
+		Typ:  makePlan2Type(&columnType),
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "d"}},
+	}
+	literalText := "12345678901234567890123456789012345678.1"
+
+	for _, operator := range []string{"=", "<>"} {
+		t.Run(operator, func(t *testing.T) {
+			literal, err := makePlan2DecimalExprWithType(ctx, literalText)
+			require.NoError(t, err)
+			result, err := BindFuncExprImplByPlanExpr(ctx, operator,
+				[]*plan.Expr{DeepCopyExpr(column), literal})
+			require.NoError(t, err)
+			require.NotNil(t, result.GetF(), "nullable comparison must not fold to a constant")
+			require.False(t, result.Typ.NotNullable,
+				"comparison result must preserve SQL NULL semantics")
+			requires, err := plan.RequiresMORPCVersion89DecimalLiteralSemantics(result)
+			require.NoError(t, err)
+			require.True(t, requires,
+				"retained nullable comparison must preserve the v89 fence")
+		})
+	}
+}
+
+func TestDecimalComparisonDoesNotNarrowExplicitCastWithDifferentSourceScale(t *testing.T) {
+	ctx := context.Background()
+	columnType := types.New(types.T_decimal128, 18, 1)
+	column := &plan.Expr{
+		Typ:  makePlan2Type(&columnType),
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "d"}},
+	}
+	column.Typ.NotNullable = true
+
+	for _, operator := range []string{"=", "<>"} {
+		t.Run(operator, func(t *testing.T) {
+			source := makePlan2StringConstExprWithType("1.010000000000000000000")
+			casted, err := appendCastBeforeExpr(ctx, source, plan.Type{
+				Id:          int32(types.T_decimal128),
+				Width:       21,
+				Scale:       20,
+				NotNullable: true,
+			})
+			require.NoError(t, err)
+			result, err := BindFuncExprImplByPlanExpr(ctx, operator,
+				[]*plan.Expr{DeepCopyExpr(column), casted})
+			require.NoError(t, err)
+			require.NotNil(t, result.GetF(),
+				"a cast whose source scale differs must not be narrowed by tail analysis")
+		})
+	}
+}
+
+func TestDecimalComparisonFencesSmallExplicitCastSourceScaleMismatch(t *testing.T) {
+	ctx := context.Background()
+	columnType := types.New(types.T_decimal64, 10, 0)
+	column := &plan.Expr{
+		Typ:  makePlan2Type(&columnType),
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "d"}},
+	}
+	column.Typ.NotNullable = true
+
+	for _, operator := range []string{"=", "<>", "<", "<=", ">", ">="} {
+		for _, reversed := range []bool{false, true} {
+			t.Run(operator+"/reversed="+strconv.FormatBool(reversed), func(t *testing.T) {
+				source := makePlan2StringConstExprWithType("1.01")
+				casted, err := appendCastBeforeExpr(ctx, source, plan.Type{
+					Id:          int32(types.T_decimal64),
+					Width:       10,
+					Scale:       1,
+					NotNullable: true,
+				})
+				require.NoError(t, err)
+				args := []*plan.Expr{DeepCopyExpr(column), casted}
+				if reversed {
+					args[0], args[1] = args[1], args[0]
+				}
+				result, err := BindFuncExprImplByPlanExpr(ctx, operator, args)
+				require.NoError(t, err)
+				require.NotNil(t, result.GetF(),
+					"source-scale mismatch must retain the executable comparison")
+				requires, err := plan.RequiresMORPCVersion89DecimalLiteralSemantics(result)
+				require.NoError(t, err)
+				require.True(t, requires,
+					"source-scale mismatch must carry the v89 persisted-expression fence")
+			})
+		}
+	}
+}
+
 // TestUnwrapCast tests the unwrapCast helper function
 func TestUnwrapCast(t *testing.T) {
 	tests := []struct {
@@ -1025,9 +1423,10 @@ func TestDecimalNotEqualAlwaysTrue(t *testing.T) {
 			// Create column expression
 			colExpr := &plan.Expr{
 				Typ: plan.Type{
-					Id:    int32(types.T_decimal64),
-					Width: 10,
-					Scale: tt.colScale,
+					Id:          int32(types.T_decimal64),
+					Width:       10,
+					Scale:       tt.colScale,
+					NotNullable: true,
 				},
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
@@ -1330,5 +1729,181 @@ func TestFloatPrecisionCheck(t *testing.T) {
 					tt.description, tt.constValue, tt.colType)
 			}
 		})
+	}
+}
+
+func TestFloatComparisonConstantFolding(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	column := &Expr{Typ: makeSimplePlan2Type(types.T_float32), Expr: &plan.Expr_Col{Col: &plan.ColRef{}}}
+	bind := func(name string, args ...*Expr) *Expr {
+		expr, err := BindFuncExprImplByPlanExpr(proc.Ctx, name, args)
+		require.NoError(t, err)
+		return expr
+	}
+	param := &Expr{Typ: makeSimplePlan2Type(types.T_float64), Expr: &plan.Expr_P{P: &plan.ParamRef{}}}
+	dynamic := makePlan2Float64ConstExprWithType(-0.5)
+	dynamic.GetLit().Src = param
+	prepared := bind("abs", makePlan2Float64ConstExprWithType(-0.5))
+	prepared.PreparedNumeric = &plan.PreparedNumericMetadata{ProvisionalResultPeer: true}
+	null := makePlan2Float64ConstExprWithType(0)
+	null.GetLit().Isnull = true
+	for _, tc := range []struct {
+		name string
+		peer *Expr
+	}{
+		{"parameter", bind("abs", param)},
+		{"prepared provenance", prepared},
+		{"dynamic literal source", bind("abs", dynamic)},
+		{"column", bind("abs", column)},
+		{"volatile", bind("rand")},
+		{"null", bind("abs", null)},
+		{"error", bind("sqrt", makePlan2Float64ConstExprWithType(-1))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before := DeepCopyExpr(tc.peer)
+			args := []*Expr{column, tc.peer}
+			foldFloatComparisonConstants(proc, "=", args)
+			require.Same(t, tc.peer, args[1])
+			require.True(t, proto.Equal(before, tc.peer), "original expression must stay unchanged")
+		})
+	}
+	for _, peer := range []*Expr{
+		bind("abs", makePlan2Float32ConstExprWithType(-0.5)),
+		bind("abs", makePlan2Float64ConstExprWithType(-0.5)),
+	} {
+		before := DeepCopyExpr(peer)
+		args := []*Expr{column, peer}
+		foldFloatComparisonConstants(proc, "=", args)
+		require.Equal(t, before, peer, "folding must not mutate the original expression")
+		require.Equal(t, peer.Typ, args[1].Typ, "retain the source comparison domain")
+		require.NotNil(t, args[1].GetLit())
+		if peer.Typ.Id == int32(types.T_float32) {
+			require.Equal(t, float32(0.5), args[1].GetLit().GetFval())
+		} else {
+			require.Equal(t, 0.5, args[1].GetLit().GetDval())
+		}
+	}
+}
+
+// Materialize the row only after binding. This exercises the actual optimized
+// filter and CAST overload, without folding the column into another literal.
+func TestDecimalFloatOptimizedFilterResults(t *testing.T) {
+	for _, tc := range []struct {
+		name, row, peer     string
+		column              types.Type
+		equal, less, native bool
+	}{
+		{"collision", "9007199254740993", "9.007199254740992e15", types.New(types.T_decimal128, 20, 0), true, false, false},
+		{"off grid", "0.10", "1.04e-1", types.New(types.T_decimal128, 20, 2), false, true, false},
+		{"cast rounding", "0.00000000000000000003", "2.9999999999999997e-20", types.New(types.T_decimal128, 20, 20), false, false, false},
+		{"float explicit double", "0.8", "cast(0.8 as double)", types.T_float32.ToType(), false, false, false},
+		{"float decimal literal", "0.8", "0.8", types.T_float32.ToType(), true, false, true},
+		{"float decimal cast", "9", "cast(9.0 as decimal)", types.T_float32.ToType(), true, false, true},
+		{"float integer expression", "9", "abs(-9)", types.T_float32.ToType(), true, false, true},
+		{"bounded decimal exact", "0.5", "0.5", types.New(types.T_float32, 4, 1), true, false, true},
+		{"bounded double expression exact", "0.5", "abs(-5e-1)", types.New(types.T_float32, 4, 1), true, false, true},
+		{"bounded float expression exact", "0.5", "abs(cast(-0.5 as float))", types.New(types.T_float32, 4, 1), true, false, true},
+		{"float32 rounding", "0.1", "1e-1", types.T_float32.ToType(), false, false, false},
+		{"float32 expression rounding", "0.1", "abs(-1e-1)", types.T_float32.ToType(), false, false, false},
+		{"float32 expression", "16777216", "abs(cast(16777217 as signed))", types.T_float32.ToType(), false, true, false},
+		{"bounded float", "1.3", "1.25e0", types.New(types.T_float32, 4, 1), false, false, false},
+		{"bounded expression rounding", "1.3", "abs(-1.25e0)", types.New(types.T_float32, 4, 1), false, false, false},
+		{"bounded double", "1.3", "1.25e0", types.New(types.T_float64, 4, 1), false, false, true},
+		{"bounded integer", "1", "1", types.New(types.T_float32, 4, 1), true, false, true},
+		{"bounded exact", "0.5", "5e-1", types.New(types.T_float32, 4, 1), true, false, true},
+		{"bounded negative exact", "-0.5", "-5e-1", types.New(types.T_float32, 4, 1), true, false, true},
+		{"bounded source scale", "1.3", "1.2999999523162842e0", types.New(types.T_float32, 4, 1), false, false, false},
+		{"bounded negative source scale", "-1.3", "-1.2999999523162842e0", types.New(types.T_float32, 4, 1), false, true, false},
+		{"bounded width overflow", "999", "1000", types.New(types.T_float32, 4, 1), false, true, false},
+		{"bounded expression width overflow", "999", "abs(-1000e0)", types.New(types.T_float32, 4, 1), false, true, false},
+		{"bounded negative width overflow", "-999", "-1000", types.New(types.T_float32, 4, 1), false, false, false},
+		{"bounded double exact", "0.5", "5e-1", types.New(types.T_float64, 4, 1), true, false, true},
+		{"float32 exact", "0.5", "5e-1", types.T_float32.ToType(), true, false, true},
+		{"safe native", "0.10", "1e-1", types.New(types.T_decimal64, 12, 2), true, false, true},
+	} {
+		for _, predicate := range []struct {
+			sql  string
+			want bool
+		}{
+			{"c = " + tc.peer, tc.equal}, {"c <> " + tc.peer, !tc.equal},
+			{"c < " + tc.peer, tc.less}, {"c >= " + tc.peer, !tc.less},
+			{tc.peer + " < c", !tc.less && !tc.equal},
+			{"c <= " + tc.peer, tc.less || tc.equal},
+			{"c in (" + tc.peer + ", -9e20)", tc.equal},
+			{"c in (" + tc.peer + ", -5e-1)", tc.equal || tc.row == "-0.5"},
+			{"c between " + tc.peer + " and " + tc.peer, tc.equal},
+		} {
+			t.Run(tc.name+"/"+predicate.sql, func(t *testing.T) {
+				mock := NewMockOptimizer(false)
+				table := makeExprOptCompositeSortKeyTableDef()
+				table.Name, table.TblId = "decimal_float_filter", 99193
+				table.Cols[2].Typ = makePlan2Type(&tc.column)
+				mock.ctxt.tables[table.Name] = table
+				mock.ctxt.objects[table.Name] = &ObjectRef{ObjName: table.Name, Obj: int64(table.TblId)}
+				stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select c from decimal_float_filter where "+predicate.sql, 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+				query, err := mock.Optimize(stmt)
+				require.NoError(t, err)
+				proc := mock.ctxt.GetProcess()
+				input := batch.NewWithSize(1)
+				input.Vecs[0] = vector.NewVec(tc.column)
+				defer input.Clean(proc.Mp())
+				if tc.column.Oid == types.T_float32 {
+					value, err := strconv.ParseFloat(tc.row, 32)
+					require.NoError(t, err)
+					require.NoError(t, vector.AppendFixed(input.Vecs[0], float32(value), false, proc.Mp()))
+				} else if tc.column.Oid == types.T_float64 {
+					value, err := strconv.ParseFloat(tc.row, 64)
+					require.NoError(t, err)
+					require.NoError(t, vector.AppendFixed(input.Vecs[0], value, false, proc.Mp()))
+				} else if tc.column.Oid == types.T_decimal64 {
+					value, err := types.ParseDecimal64(tc.row, tc.column.Width, tc.column.Scale)
+					require.NoError(t, err)
+					require.NoError(t, vector.AppendFixed(input.Vecs[0], value, false, proc.Mp()))
+				} else {
+					value, err := types.ParseDecimal128(tc.row, tc.column.Width, tc.column.Scale)
+					require.NoError(t, err)
+					require.NoError(t, vector.AppendFixed(input.Vecs[0], value, false, proc.Mp()))
+				}
+				input.SetRowCount(1)
+				found, got, columnCast, nativeMembership := false, true, false, false
+				for _, node := range query.Nodes {
+					if node.NodeType != plan.Node_TABLE_SCAN {
+						continue
+					}
+					for _, filter := range node.FilterList {
+						found = true
+						expr := DeepCopyExpr(filter)
+						require.NoError(t, plan.VisitExprTree(expr, func(e *Expr) error {
+							if fn := e.GetF(); fn != nil && fn.Func.ObjName == "cast" && fn.Args[0].GetCol() != nil {
+								columnCast = true
+							}
+							if fn := e.GetF(); fn != nil && fn.Func.ObjName == "in" && fn.Args[0].GetCol() != nil {
+								nativeMembership = true
+							}
+							if col := e.GetCol(); col != nil {
+								col.RelPos, col.ColPos = 0, 0
+							}
+							return nil
+						}))
+						result, free, err := colexec.GetReadonlyResultFromExpression(proc, expr, []*batch.Batch{input})
+						require.NoError(t, err)
+						got = got && vector.GetFixedAtNoTypeCheck[bool](result, 0)
+						free()
+					}
+				}
+				require.True(t, found, query.String())
+				require.Equal(t, predicate.want, got, query.String())
+				if predicate.sql == "c = "+tc.peer {
+					require.Equal(t, !tc.native, columnCast)
+				}
+				if tc.column.Oid == types.T_float32 && tc.column.Width > 0 && tc.native && tc.row != "-0.5" &&
+					predicate.sql == "c in ("+tc.peer+", -5e-1)" {
+					require.False(t, columnCast)
+					require.True(t, nativeMembership, query.String())
+				}
+			})
+		}
 	}
 }

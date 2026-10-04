@@ -15,6 +15,7 @@
 package objectio
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"math"
@@ -30,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -216,6 +218,60 @@ func TestNewObjectWriter(t *testing.T) {
 	buf = zma.GetZoneMap(0, 0)
 	assert.Equal(t, uint8(0x1), buf[31])
 	assert.Equal(t, uint8(0xa), buf[63])
+}
+
+func TestChunkedColumnRolloutPolicyIsPerWriterAndLive(t *testing.T) {
+	first := &objectWriterV1{}
+	second := &objectWriterV1{}
+	enabled := false
+	first.SetChunkedColumnPolicy(func() bool { return enabled })
+
+	require.False(t, first.chunkedColumnPolicy())
+	require.Nil(t, second.chunkedColumnPolicy)
+	enabled = true
+	require.True(t, first.chunkedColumnPolicy())
+}
+
+func TestObjectWriterPropagatesMarshalError(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	fs, err := fileservice.NewMemoryFS(
+		defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil,
+	)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name  string
+		write func(*objectWriterV1, *batch.Batch) (BlockObject, error)
+	}{
+		{name: "Write", write: func(writer *objectWriterV1, bat *batch.Batch) (BlockObject, error) {
+			return writer.Write(bat)
+		}},
+		{name: "WriteWithoutSeqnum", write: func(writer *objectWriterV1, bat *batch.Batch) (BlockObject, error) {
+			return writer.WriteWithoutSeqnum(bat)
+		}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			objectID := NewObjectid()
+			writer, err := NewObjectWriter(
+				BuildObjectNameWithObjectID(&objectID), fs, 0, []uint16{0}, nil,
+			)
+			require.NoError(t, err)
+
+			invalid := vector.NewVec(types.T_text.ToType())
+			invalid.SetLength(1) // Deliberately omit the required varlena descriptor.
+			bat := batch.NewWithSize(1)
+			bat.SetVector(0, invalid)
+			bat.SetRowCount(1)
+			defer bat.Clean(mp)
+
+			block, err := test.write(writer, bat)
+			require.ErrorContains(t, err, "vector data is shorter than its marshal length")
+			require.Nil(t, block)
+		})
+	}
 }
 
 func getObjectMeta(ctx context.Context, t *testing.B) ObjectDataMeta {
@@ -478,6 +534,19 @@ func TestWriteArena(t *testing.T) {
 		require.Equal(t, 64, a.usedOffset)
 	})
 
+	t.Run("reset clamps growth to non-power-of-two limit", func(t *testing.T) {
+		a := NewArena(128)
+		t.Cleanup(a.FreeBuffers)
+		a.sizeLimit = 200 // scaled-down arenaMaxSize boundary
+		a.Alloc(129)
+		a.Reset()
+		require.Len(t, a.data, 200)
+
+		a.Alloc(201)
+		a.Reset()
+		require.Len(t, a.data, 200, "over-limit cycle must not grow the arena")
+	})
+
 	t.Run("serial buf is reused across Reset calls", func(t *testing.T) {
 		a := NewArena(256)
 		// First use: grow serialBuf to 100 bytes.
@@ -496,4 +565,107 @@ func TestWriteArena(t *testing.T) {
 		require.Equal(t, ptr1, &a.serialBuf) // pointer identity — same struct
 		require.GreaterOrEqual(t, a.serialBuf.Cap(), cap1)
 	})
+
+	t.Run("large serial buf follows current cycle", func(t *testing.T) {
+		a := NewArena(0)
+		t.Cleanup(a.FreeBuffers)
+		a.serialBuf.Grow(32 << 20)
+		largeCap := a.serialBuf.Cap()
+		require.NoError(t, a.serialBuf.WriteByte(1))
+		backing := &a.serialBuf.Bytes()[0]
+		a.serialPeak = 32 << 20
+		a.Reset()
+		require.Equal(t, largeCap, a.serialBuf.Cap(), "repeated large objects reuse scratch")
+		require.NoError(t, a.serialBuf.WriteByte(2))
+		require.Same(t, backing, &a.serialBuf.Bytes()[0])
+
+		a.serialPeak = 1 << 20
+		a.Reset()
+		require.Zero(t, a.serialBuf.Cap(), "a later small object releases the old peak")
+		a.FreeBuffers()
+		require.Zero(t, a.serialBuf.Cap())
+	})
+}
+
+func TestWriterUsesExactSerializedSize(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	vec, err := vector.NewConstFixed(types.T_int64.ToType(), int64(7), 8192, mp)
+	require.NoError(t, err)
+	t.Cleanup(func() { vec.Free(mp) })
+	bat := batch.NewWithSize(1)
+	bat.SetVector(0, vec)
+	bat.SetRowCount(vec.Length())
+	arena := NewArena(0)
+	t.Cleanup(arena.FreeBuffers)
+	fs, err := fileservice.NewMemoryFS(
+		defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil,
+	)
+	require.NoError(t, err)
+	objectID := NewObjectid()
+	writer, err := NewObjectWriter(BuildObjectNameWithObjectID(&objectID), fs, 0, []uint16{0}, arena)
+	require.NoError(t, err)
+	_, err = writer.Write(bat)
+	require.NoError(t, err)
+
+	var expected bytes.Buffer
+	h := IOEntryHeader{IOET_ColData, IOET_ColumnData_CurrVer}
+	_, err = expected.Write(EncodeIOEntryHeader(&h))
+	require.NoError(t, err)
+	require.NoError(t, vec.MarshalBinaryWithBuffer(&expected))
+	require.Equal(t, expected.Bytes(), arena.serialBuf.Bytes())
+	require.Equal(t, expected.Len(), arena.serialPeak)
+	require.Less(t, arena.serialBuf.Cap(), vec.Size())
+}
+
+func TestBoolZoneMapPersistence(t *testing.T) {
+	ctx := context.Background()
+	service, err := fileservice.NewFileService(ctx, fileservice.Config{Name: defines.LocalFileServiceName, Backend: "DISK", DataDir: t.TempDir(), Cache: fileservice.DisabledCacheConfig}, nil)
+	require.NoError(t, err)
+	defer service.Close(ctx)
+	mp := mpool.MustNewZero()
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_bool.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_int8.ToType())
+	defer bat.Clean(mp)
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []bool{false, true}, nil, mp))
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[1], []int8{0, 1}, nil, mp))
+	bat.SetRowCount(2)
+	writer, err := NewObjectWriterSpecial(WriterNormal, "bool.blk", service)
+	require.NoError(t, err)
+	writer.SetSortKeySeqnum(0)
+	for _, legacy := range []bool{true, false} {
+		block, err := writer.Write(bat)
+		require.NoError(t, err)
+		zm := index.NewZM(types.T_bool, 0)
+		if legacy {
+			index.UpdateZM(zm, []byte{0})
+		} else {
+			require.NoError(t, index.BatchUpdateZM(zm, bat.Vecs[0]))
+		}
+		require.Equal(t, !legacy, types.DecodeBool(zm.GetMaxBuf()))
+		block.ColumnMeta(0).SetZoneMap(zm)
+	}
+	_, err = writer.WriteEnd(ctx, WriteOptions{Type: WriteTS, Val: time.Now()})
+	require.NoError(t, err)
+	reader, err := NewObjectReaderWithStr("bool.blk", service)
+	require.NoError(t, err)
+	loaded, err := reader.ReadAllMeta(ctx, mp)
+	require.NoError(t, err)
+	meta, ok := loaded.DataMeta()
+	require.True(t, ok)
+	for i := uint32(0); i < 2; i++ {
+		col := meta.GetBlockMeta(i).MustGetColumn(0)
+		require.Equal(t, i == 1, types.DecodeBool(col.rawZoneMap().GetMaxBuf()), "writer must preserve physical bounds")
+		require.True(t, types.DecodeBool(col.ZoneMap().GetMaxBuf()), "reader must protect legacy bounds")
+	}
+	raw, err := reader.ReadExtent(ctx, meta.BlockHeader().ZoneMapArea())
+	require.NoError(t, err)
+	area := ZoneMapArea(raw)
+	// The existing area API exposes the block's metadata length from each index.
+	first := area.GetZoneMap(0, 0)
+	require.Len(t, first, 2*ZoneMapSize)
+	require.True(t, types.DecodeBool(first.GetMaxBuf()))
+	offset, _ := BlockIndex(raw).BlockMetaPos(0)
+	require.False(t, types.DecodeBool(ZoneMap(raw[offset:offset+ZoneMapSize]).GetMaxBuf()))
 }

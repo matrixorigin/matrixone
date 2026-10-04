@@ -186,19 +186,14 @@ func TestValidateLifecycleRewriteOwnership(t *testing.T) {
 
 func ptrInt32(value int32) *int32 { return &value }
 
-func TestCNMergeTaskLifecycleHooksPreserveOrdinaryDefaults(t *testing.T) {
+func TestLifecycleRewriteTaskHost(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 	first := objectio.NewObjectStats()
 	require.NoError(t, objectio.SetObjectStatsBlkCnt(first, 2))
 	require.NoError(t, objectio.SetObjectStatsRowCnt(first, 20))
 	require.NoError(t, objectio.SetObjectStatsOriginSize(first, 200))
-	second := objectio.NewObjectStats()
-	require.NoError(t, objectio.SetObjectStatsBlkCnt(second, 3))
-	require.NoError(t, objectio.SetObjectStatsRowCnt(second, 30))
-	require.NoError(t, objectio.SetObjectStatsOriginSize(second, 300))
-
-	task := &cnMergeTask{
+	task := &lifecycleRewriteTask{
 		taskId: 9,
 		host: &txnTable{
 			tableId:   42,
@@ -207,8 +202,8 @@ func TestCNMergeTaskLifecycleHooksPreserveOrdinaryDefaults(t *testing.T) {
 			typs:      []types.Type{types.T_int64.ToType()},
 		},
 		snapshot:      types.BuildTS(100, 2),
-		targets:       []objectio.ObjectStats{*first, *second},
-		blkCnts:       []int{2, 3},
+		targets:       []objectio.ObjectStats{*first},
+		blkCnts:       []int{2},
 		sortkeyPos:    0,
 		targetObjSize: 128 << 20,
 		mp:            mp,
@@ -218,25 +213,24 @@ func TestCNMergeTaskLifecycleHooksPreserveOrdinaryDefaults(t *testing.T) {
 	require.Contains(t, task.Name(), "42-events")
 	require.True(t, task.DoTransfer())
 	task.host.comment = catalog.MO_COMMENT_NO_DEL_HINT
-	require.False(t, task.DoTransfer())
-	require.Equal(t, 2, task.GetObjectCnt())
-	require.Equal(t, []int{2, 3}, task.GetBlkCnts())
-	require.Equal(t, []int{0, 2}, task.GetAccBlkCnts())
+	require.True(t, task.DoTransfer())
+	require.Equal(t, 1, task.GetObjectCnt())
+	require.Equal(t, []int{2}, task.GetBlkCnts())
+	require.Equal(t, []int{0}, task.GetAccBlkCnts())
 	require.Equal(t, uint32(objectio.BlockMaxRows), task.GetBlockMaxRows())
 	require.Equal(t, uint16(options.DefaultBlocksPerObject), task.GetObjectMaxBlocks())
 	require.Equal(t, uint32(128<<20), task.GetTargetObjSize())
 	require.Equal(t, types.T_int64.ToType(), task.GetSortKeyType())
-	require.Equal(t, uint64(500), task.GetTotalSize())
-	require.Equal(t, uint32(50), task.GetTotalRowCnt())
+	require.Equal(t, uint64(200), task.GetTotalSize())
+	require.Equal(t, uint32(20), task.GetTotalRowCnt())
 	require.Equal(t, uint64(7), task.GetCommitEntry().DbId)
 	require.Equal(t, uint64(42), task.GetCommitEntry().TblId)
-	require.Len(t, task.GetCommitEntry().MergedObjs, 2)
+	require.Len(t, task.GetCommitEntry().MergedObjs, 1)
 
 	vec, release := task.GetVector(ptrType(types.T_varchar.ToType()))
 	require.NotNil(t, vec)
 	release()
 	require.Equal(t, mp, task.GetMPool())
-	require.Equal(t, "CN", task.HostHintName())
 	require.NoError(t, task.admitLifecycleBlockRead(0, nil))
 	require.Error(t, task.configureLifecycleBlockReadBudget(
 		context.Background(),
@@ -249,6 +243,11 @@ func TestCNMergeTaskLifecycleHooksPreserveOrdinaryDefaults(t *testing.T) {
 	}
 	require.ErrorContains(t, task.admitLifecycleBlockRead(0, nil), "out of range")
 	task.Release()
+
+	for _, sources := range [][]objectio.ObjectStats{nil, {*first, *first}} {
+		_, err := newLifecycleRewriteTask(context.Background(), nil, types.TS{}, -1, false, sources, 0)
+		require.ErrorContains(t, err, "requires one source Object")
+	}
 }
 
 func ptrType(value types.Type) *types.Type { return &value }

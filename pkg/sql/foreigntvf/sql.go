@@ -46,6 +46,10 @@ type sqlConfig struct {
 // SqlConn is a connection to a foreign SQL database opened through database/sql.
 type SqlConn struct {
 	db *sql.DB
+	// driver is the registered database/sql driver name, kept because the
+	// dialect decides what MO may render against this source (see
+	// ProbeColumns).
+	driver string
 }
 
 var _ Conn = (*SqlConn)(nil)
@@ -89,7 +93,7 @@ func connectSQL(ctx context.Context, configJSON string) (Conn, error) {
 		db.Close()
 		return nil, moerr.NewInternalErrorf(ctx, "sql_tvf: cannot connect to %s: %v", driver, err)
 	}
-	return &SqlConn{db: db}, nil
+	return &SqlConn{db: db, driver: driver}, nil
 }
 
 func (c *SqlConn) Kind() Kind { return KindSQL }
@@ -100,6 +104,17 @@ func (c *SqlConn) Close() error { return c.db.Close() }
 // external CSV reader can materialize them: fields are double-quote enclosed
 // with backslash escaping, and SQL NULL is written as an unquoted \N.
 func (c *SqlConn) Query(ctx context.Context, queryText string) (io.ReadCloser, error) {
+	stream, _, err := c.QueryNamed(ctx, queryText)
+	return stream, err
+}
+
+// QueryNamed is Query, and additionally reports what the source calls the
+// columns of the result, in order.
+//
+// The names are free: database/sql has them the moment the query returns, well
+// before any row is read, so a caller that needs to check them against a
+// schema pays no round trip for the answer.
+func (c *SqlConn) QueryNamed(ctx context.Context, queryText string) (io.ReadCloser, []string, error) {
 	// The stream owns a derived context: closing the returned reader cancels
 	// it, which unblocks an encoder stalled inside rows.Next() on a slow or
 	// hung remote query (drivers watch the query context). Without this, an
@@ -110,7 +125,13 @@ func (c *SqlConn) Query(ctx context.Context, queryText string) (io.ReadCloser, e
 	rows, err := c.db.QueryContext(qctx, queryText)
 	if err != nil {
 		cancel()
-		return nil, moerr.NewInvalidInputf(ctx, "sql_tvf: query failed: %v", err)
+		return nil, nil, moerr.NewInvalidInputf(ctx, "sql_tvf: query failed: %v", err)
+	}
+	names, err := rows.Columns()
+	if err != nil {
+		_ = rows.Close()
+		cancel()
+		return nil, nil, moerr.NewInvalidInputf(ctx, "sql_tvf: query failed: %v", err)
 	}
 	pr, pw := io.Pipe()
 	go func() {
@@ -131,7 +152,7 @@ func (c *SqlConn) Query(ctx context.Context, queryText string) (io.ReadCloser, e
 		// A nil error closes the pipe with io.EOF for the reader.
 		_ = pw.CloseWithError(encErr)
 	}()
-	return &cancelOnCloseReader{pr: pr, cancel: cancel}, nil
+	return &cancelOnCloseReader{pr: pr, cancel: cancel}, names, nil
 }
 
 // cancelOnCloseReader ties the life of the SQL stream to its consumer: Close

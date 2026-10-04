@@ -16,7 +16,10 @@ package cdc
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -24,6 +27,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -64,6 +68,9 @@ type mysqlSinker2 struct {
 	accountId uint64
 	taskId    string
 	dbTblInfo *DbTableInfo
+	// Non-zero only for stable-epoch tasks. It makes watermark validation use
+	// the same generation-first ordering as the async writer.
+	watermarkGeneration uint64
 
 	// Dependencies
 	watermarkUpdater *CDCWatermarkUpdater
@@ -74,6 +81,11 @@ type mysqlSinker2 struct {
 	cmdCh chan *Command
 	// Channel closed during shutdown to unblock senders/listeners
 	closeCh chan struct{}
+	// consumerDone closes whenever the sole command consumer exits. Senders
+	// must observe it independently of Close: context or control cancellation
+	// can stop Run before the reader reaches its deferred sinker cleanup.
+	consumerDone     chan struct{}
+	consumerDoneOnce sync.Once
 
 	// Error state - atomic access, no panic risk
 	err atomic.Pointer[error]
@@ -99,6 +111,12 @@ const (
 	v2TxnStateRolledBack int32 = 3
 )
 
+var (
+	errMysqlSinkerPaused          = moerr.NewInternalErrorNoCtx("CDC sinker paused")
+	errMysqlSinkerCancelled       = moerr.NewInternalErrorNoCtx("CDC sinker cancelled")
+	errMysqlSinkerConsumerStopped = moerr.NewInternalErrorNoCtx("CDC sinker consumer stopped")
+)
+
 // Compile-time check that mysqlSinker2 implements Sinker interface
 var _ Sinker = (*mysqlSinker2)(nil)
 
@@ -106,6 +124,7 @@ var _ Sinker = (*mysqlSinker2)(nil)
 // This is the main entry point for creating CDC sink, replacing the old CreateMysqlSinker
 // Defined as var for test mocking
 var CreateMysqlSinker2 = func(
+	ctx context.Context,
 	sinkUri UriInfo,
 	accountId uint64,
 	taskId string,
@@ -118,6 +137,28 @@ var CreateMysqlSinker2 = func(
 	maxSqlLength uint64,
 	sendSqlTimeout string,
 ) (Sinker, error) {
+	return createMysqlSinker2(
+		ctx, sinkUri, accountId, taskId, dbTblInfo, watermarkUpdater, tableDef,
+		retryTimes, retryDuration, ar, maxSqlLength, sendSqlTimeout, nil,
+	)
+}
+
+func createMysqlSinker2(
+	ctx context.Context,
+	sinkUri UriInfo,
+	accountId uint64,
+	taskId string,
+	dbTblInfo *DbTableInfo,
+	watermarkUpdater *CDCWatermarkUpdater,
+	tableDef *plan.TableDef,
+	retryTimes int,
+	retryDuration time.Duration,
+	ar *ActiveRoutine,
+	maxSqlLength uint64,
+	sendSqlTimeout string,
+	ownerFence *OwnerFence,
+) (_ Sinker, resultErr error) {
+	defer func() { resultErr = classifyCDCTargetSQLError(resultErr) }()
 	// 1. Determine if we need to record transactions for debugging
 	var doRecord bool
 	if tableDef != nil {
@@ -126,6 +167,7 @@ var CreateMysqlSinker2 = func(
 
 	// 2. Create Executor (replaces Sink in old architecture)
 	executor, err := NewExecutor(
+		ctx,
 		sinkUri.User, sinkUri.Password,
 		sinkUri.Ip, sinkUri.Port,
 		retryTimes, retryDuration,
@@ -136,8 +178,68 @@ var CreateMysqlSinker2 = func(
 		return nil, err
 	}
 
-	// 3. Execute DDL initialization (same as old version)
-	ctx := context.Background()
+	// 3. Execute DDL initialization (same as old version). Stable tasks pass
+	// the table-callback lifecycle context so pause/cancel can interrupt target
+	// lock acquisition and initialization SQL.
+	var targetOwnerFence func(context.Context) error
+	var targetWaitCheck func(context.Context) error
+	if ownerFence != nil {
+		targetWaitCheck = func(waitCtx context.Context) error {
+			if err := waitCtx.Err(); err != nil {
+				return err
+			}
+			if ar != nil {
+				select {
+				case <-ar.Pause:
+					return moerr.NewInternalError(waitCtx, "task paused while waiting for target ownership")
+				case <-ar.Cancel:
+					return moerr.NewInternalError(waitCtx, "task cancelled while waiting for target ownership")
+				default:
+				}
+			}
+			return nil
+		}
+		targetOwnerFence = ownerFence.Check
+		lockIdentity := fmt.Sprintf(
+			"%d\x00%s\x00%s\x00%s",
+			accountId,
+			taskId,
+			dbTblInfo.SinkDbName,
+			dbTblInfo.SinkTblName,
+		)
+		if err = executor.AcquireTargetLock(
+			ctx, lockIdentity, targetOwnerFence, targetWaitCheck,
+		); err != nil {
+			executor.Close()
+			return nil, err
+		}
+	}
+	if sinkUri.SinkTyp == CDCSinkType_MO &&
+		(dbTblInfo.targetIdentityAck != nil || dbTblInfo.TargetIdentity != "") {
+		probeTx, beginErr := executor.targetLockConn.BeginTx(ctx, nil)
+		if beginErr != nil {
+			executor.Close()
+			return nil, beginErr
+		}
+		_, probeErr := probeTx.ExecContext(ctx, "CALL mo_cdc_target_guard_capability()")
+		rollbackErr := probeTx.Rollback()
+		if probeErr != nil {
+			executor.Close()
+			return nil, probeErr
+		}
+		if rollbackErr != nil {
+			executor.Close()
+			return nil, rollbackErr
+		}
+	} else if sinkUri.SinkTyp == CDCSinkType_MySQL &&
+		(dbTblInfo.targetIdentityAck != nil || dbTblInfo.TargetIdentity != "") {
+		if err = checkMySQLTargetIdentityCapability(ctx, executor.targetLockConn,
+			dbTblInfo.SinkDbName, dbTblInfo.SinkTblName,
+			dbTblInfo.TargetPreIdentity == absentCDCTargetIdentity); err != nil {
+			executor.Close()
+			return nil, err
+		}
+	}
 
 	// Helper function to add padding
 	addPadding := func(sql string) []byte {
@@ -145,31 +247,55 @@ var CreateMysqlSinker2 = func(
 		return []byte(padding + sql)
 	}
 
-	// CREATE DATABASE
-	createDbSQL := fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", dbTblInfo.SinkDbName)
-	err = executor.ExecSQL(ctx, ar, addPadding(createDbSQL), false)
-	if err != nil {
-		executor.Close()
-		return nil, err
+	// Only a first admission that observed an absent target may create its
+	// database. Resume must not mutate a replacement before identity checking.
+	if dbTblInfo.TargetPreIdentity == "" && dbTblInfo.TargetIdentity == "" ||
+		dbTblInfo.TargetPreIdentity == absentCDCTargetIdentity {
+		createDbSQL := fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", quoteSQLIdentifier(dbTblInfo.SinkDbName))
+		err = executor.ExecSQL(ctx, ar, addPadding(createDbSQL), false)
+		if err != nil {
+			executor.Close()
+			return nil, err
+		}
 	}
 
 	// USE DATABASE
-	useDbSQL := fmt.Sprintf("USE `%s`", dbTblInfo.SinkDbName)
+	useDbSQL := fmt.Sprintf("USE %s", quoteSQLIdentifier(dbTblInfo.SinkDbName))
 	err = executor.ExecSQL(ctx, ar, addPadding(useDbSQL), false)
 	if err != nil {
 		executor.Close()
 		return nil, err
 	}
 
-	// DROP TABLE if table ID changed (truncate scenario)
-	if dbTblInfo.IdChanged {
-		dropTableSQL := fmt.Sprintf("DROP TABLE IF EXISTS `%s`", dbTblInfo.SinkTblName)
-		err = executor.ExecSQL(ctx, ar, addPadding(dropTableSQL), false)
-		if err != nil {
+	// A durable generation acknowledgement owns target state. A detector hint
+	// must not drop a target that already belongs to this generation.
+	if dbTblInfo.targetReady {
+		if dbTblInfo.TargetIdentity != "" {
+			guardTx, beginErr := executor.targetLockConn.BeginTx(ctx, nil)
+			if beginErr != nil {
+				executor.Close()
+				return nil, beginErr
+			}
+			actual, guardErr := guardedCDCTargetIdentity(ctx, guardTx, sinkUri.SinkTyp, dbTblInfo.SinkDbName, dbTblInfo.SinkTblName)
+			if guardErr == nil && actual != dbTblInfo.TargetIdentity {
+				guardErr = moerr.NewInternalErrorf(ctx, "CDC target %s.%s was replaced; explicit rebuild is required", dbTblInfo.SinkDbName, dbTblInfo.SinkTblName)
+			}
+			if guardErr == nil {
+				guardErr = verifyCDCTargetTableWithQuery(ctx, guardTx, dbTblInfo, tableDef, sinkUri.SinkTyp)
+			}
+			rollbackErr := guardTx.Rollback()
+			if guardErr != nil {
+				executor.Close()
+				return nil, guardErr
+			}
+			if rollbackErr != nil {
+				executor.Close()
+				return nil, rollbackErr
+			}
+		} else if err = verifyCDCTargetTable(ctx, executor, dbTblInfo, tableDef, sinkUri.SinkTyp); err != nil {
 			executor.Close()
 			return nil, err
 		}
-		dbTblInfo.IdChanged = false
 	}
 
 	// CREATE TABLE
@@ -195,13 +321,58 @@ var CreateMysqlSinker2 = func(
 			executor.Close()
 			return nil, err
 		}
-		createSql = strings.Replace(createSql, "CREATE TABLE", "CREATE TABLE IF NOT EXISTS", 1)
+		if dbTblInfo.TargetPreIdentity != absentCDCTargetIdentity {
+			createSql = strings.Replace(createSql, "CREATE TABLE", "CREATE TABLE IF NOT EXISTS", 1)
+		}
 	}
 
-	err = executor.ExecSQL(ctx, ar, addPadding(createSql), false)
-	if err != nil {
-		executor.Close()
-		return nil, err
+	if !dbTblInfo.targetReady {
+		if dbTblInfo.TargetPreIdentity == "" || dbTblInfo.TargetPreIdentity == absentCDCTargetIdentity {
+			err = executor.ExecSQL(ctx, ar, addPadding(createSql), false)
+			if err != nil {
+				executor.Close()
+				return nil, err
+			}
+		}
+		if ownerFence != nil && dbTblInfo.targetIdentityAck == nil {
+			if err = verifyCDCTargetTable(ctx, executor, dbTblInfo, tableDef, sinkUri.SinkTyp); err != nil {
+				executor.Close()
+				return nil, err
+			}
+		}
+		if dbTblInfo.targetIdentityAck != nil {
+			guardTx, beginErr := executor.targetLockConn.BeginTx(ctx, nil)
+			if beginErr != nil {
+				executor.Close()
+				return nil, beginErr
+			}
+			actual, guardErr := guardedCDCTargetIdentity(ctx, guardTx, sinkUri.SinkTyp, dbTblInfo.SinkDbName, dbTblInfo.SinkTblName)
+			if guardErr == nil && dbTblInfo.TargetPreIdentity != absentCDCTargetIdentity && actual != dbTblInfo.TargetPreIdentity {
+				guardErr = moerr.NewInternalErrorf(ctx, "CDC target %s.%s changed before first acknowledgement; explicit recovery is required", dbTblInfo.SinkDbName, dbTblInfo.SinkTblName)
+			}
+			if guardErr == nil {
+				guardErr = verifyCDCTargetTableWithQuery(ctx, guardTx, dbTblInfo, tableDef, sinkUri.SinkTyp)
+			}
+			if guardErr == nil {
+				guardErr = dbTblInfo.targetIdentityAck(ctx, actual)
+			}
+			if guardErr == nil {
+				guardErr = guardTx.Commit()
+			} else {
+				_ = guardTx.Rollback()
+			}
+			if guardErr != nil {
+				executor.Close()
+				return nil, guardErr
+			}
+			dbTblInfo.TargetIdentity = actual
+		}
+	}
+	if targetOwnerFence != nil {
+		if err = executor.ReleaseTargetLock(); err != nil {
+			executor.Close()
+			return nil, err
+		}
 	}
 
 	// 4. Create SQL Statement Builder
@@ -227,6 +398,10 @@ var CreateMysqlSinker2 = func(
 		builder,
 		ar,
 	)
+	if ownerFence != nil {
+		sinker.watermarkGeneration = dbTblInfo.SourceTblId
+	}
+	sinker.dbTblInfo.TargetSinkType = sinkUri.SinkTyp
 
 	// Note: Run() will be started by the caller (e.g., cdc_executor.go)
 	// This maintains compatibility with the old mysqlSinker pattern
@@ -240,6 +415,295 @@ var CreateMysqlSinker2 = func(
 	)
 
 	return sinker, nil
+}
+
+func verifyCDCTargetTable(
+	ctx context.Context,
+	executor *Executor,
+	info *DbTableInfo,
+	tableDef *plan.TableDef,
+	sinkType string,
+) error {
+	if executor.targetLockConn == nil {
+		return moerr.NewInternalError(ctx, "CDC target verification requires the target lock")
+	}
+	return verifyCDCTargetTableWithQuery(ctx, executor.targetLockConn, info, tableDef, sinkType)
+}
+
+func verifyCDCTargetTableWithQuery(
+	ctx context.Context,
+	queryer interface {
+		QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	},
+	info *DbTableInfo,
+	tableDef *plan.TableDef,
+	sinkType string,
+) error {
+	if tableDef == nil || tableDef.Pkey == nil || len(tableDef.Pkey.Names) == 0 {
+		return moerr.NewInternalError(ctx, "CDC target verification requires source table metadata and a primary key")
+	}
+	visible := make([]*plan.ColDef, 0, len(tableDef.Cols))
+	origin := make(map[string]string, len(tableDef.Cols))
+	for _, col := range tableDef.Cols {
+		if col == nil {
+			return moerr.NewInternalError(ctx, "CDC source has a nil column")
+		}
+		if _, internal := catalog.InternalColumns[col.Name]; internal || col.Hidden {
+			continue
+		}
+		visible = append(visible, col)
+		origin[col.Name] = col.GetOriginCaseName()
+	}
+	rows, err := queryer.QueryContext(ctx,
+		"SELECT column_name, column_type, collation_name, numeric_scale FROM information_schema.columns "+
+			"WHERE table_schema = ? AND table_name = ? ORDER BY ordinal_position",
+		info.SinkDbName, info.SinkTblName)
+	if err != nil {
+		return retryableCDCTargetMetadataError(err)
+	}
+	columnCount := 0
+	for rows.Next() {
+		var name, typ string
+		var collation sql.NullString
+		var numericScale sql.NullInt64
+		if err = rows.Scan(&name, &typ, &collation, &numericScale); err != nil {
+			break
+		}
+		if columnCount >= len(visible) || name != visible[columnCount].GetOriginCaseName() ||
+			!cdcTargetColumnTypeMatches(visible[columnCount].Typ, typ, sinkType, numericScale) {
+			err = moerr.NewInternalErrorf(ctx, "CDC target %s.%s column %d differs from source generation %d",
+				info.SinkDbName, info.SinkTblName, columnCount+1, info.SourceTblId)
+			break
+		}
+		if expected := expectedCDCTargetCollation(visible[columnCount].Typ); expected != "" &&
+			(!collation.Valid || !strings.EqualFold(collation.String, expected)) {
+			err = moerr.NewInternalErrorf(ctx, "CDC target %s.%s column %d collation differs from source generation %d",
+				info.SinkDbName, info.SinkTblName, columnCount+1, info.SourceTblId)
+			break
+		}
+		columnCount++
+	}
+	if err == nil {
+		err = retryableCDCTargetMetadataError(rows.Err())
+	}
+	closeErr := rows.Close() //nolint:sqlclosecheck // Check the close error before the next metadata query.
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return retryableCDCTargetMetadataError(closeErr)
+	}
+	if columnCount != len(visible) {
+		return moerr.NewInternalErrorf(ctx, "CDC target %s.%s has %d columns; expected %d",
+			info.SinkDbName, info.SinkTblName, columnCount, len(visible))
+	}
+
+	indexRows, err := queryer.QueryContext(ctx,
+		"SELECT index_name, non_unique, seq_in_index, column_name, sub_part FROM information_schema.statistics "+
+			"WHERE table_schema = ? AND table_name = ? ORDER BY index_name, seq_in_index",
+		info.SinkDbName, info.SinkTblName)
+	if err != nil {
+		return retryableCDCTargetMetadataError(err)
+	}
+	actualPrimary := []string(nil)
+	actualUnique := make(map[string][]string)
+	for indexRows.Next() {
+		var name, column string
+		var nonUnique, sequence int64
+		var prefix sql.NullInt64
+		if err = indexRows.Scan(&name, &nonUnique, &sequence, &column, &prefix); err != nil {
+			break
+		}
+		if nonUnique != 0 {
+			continue
+		}
+		if prefix.Valid {
+			err = moerr.NewInternalErrorf(ctx, "CDC target %s.%s has a prefix unique key", info.SinkDbName, info.SinkTblName)
+			break
+		}
+		if strings.EqualFold(name, "PRIMARY") {
+			if sequence != int64(len(actualPrimary)+1) {
+				err = moerr.NewInternalError(ctx, "CDC target primary key order is invalid")
+				break
+			}
+			actualPrimary = append(actualPrimary, column)
+		} else {
+			parts := actualUnique[name]
+			if sequence != int64(len(parts)+1) {
+				err = moerr.NewInternalError(ctx, "CDC target unique key order is invalid")
+				break
+			}
+			actualUnique[name] = append(parts, column)
+		}
+	}
+	if err == nil {
+		err = retryableCDCTargetMetadataError(indexRows.Err())
+	}
+	closeErr = indexRows.Close() //nolint:sqlclosecheck // Check the close error before accepting the target.
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return retryableCDCTargetMetadataError(closeErr)
+	}
+	expectedPrimary := make([]string, 0, len(tableDef.Pkey.Names))
+	for _, name := range tableDef.Pkey.Names {
+		expectedPrimary = append(expectedPrimary, origin[name])
+	}
+	if strings.Join(actualPrimary, "\x00") != strings.Join(expectedPrimary, "\x00") {
+		return moerr.NewInternalErrorf(ctx, "CDC target %s.%s primary key differs from source generation %d",
+			info.SinkDbName, info.SinkTblName, info.SourceTblId)
+	}
+	expectedUnique := make(map[string]int)
+	for _, index := range tableDef.Indexes {
+		if index == nil || !index.Unique {
+			continue
+		}
+		parts := make([]string, 0, len(index.Parts))
+		for _, name := range index.Parts {
+			if catalog.IsAlias(name) {
+				continue
+			}
+			parts = append(parts, origin[name])
+		}
+		expectedUnique[strings.Join(parts, "\x00")]++
+	}
+	for _, parts := range actualUnique {
+		key := strings.Join(parts, "\x00")
+		if expectedUnique[key] == 0 {
+			return moerr.NewInternalErrorf(ctx, "CDC target %s.%s has an unexpected unique key",
+				info.SinkDbName, info.SinkTblName)
+		}
+		expectedUnique[key]--
+	}
+	for _, missing := range expectedUnique {
+		if missing != 0 {
+			return moerr.NewInternalErrorf(ctx, "CDC target %s.%s is missing a source unique key",
+				info.SinkDbName, info.SinkTblName)
+		}
+	}
+	return nil
+}
+
+func retryableCDCTargetMetadataError(err error) error {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return err
+	}
+	return NewRetryableSnapshotEpochError(err)
+}
+
+// VerifyOwnedTarget checks a completed historical generation without issuing
+// target DDL. The target lock excludes a concurrent claimant's reset.
+func VerifyOwnedTarget(
+	ctx context.Context, sinkUri UriInfo, accountID uint64, taskID string,
+	info *DbTableInfo, tableDef *plan.TableDef, fence *OwnerFence, timeout string,
+) (resultErr error) {
+	defer func() { resultErr = classifyCDCTargetSQLError(resultErr) }()
+	if fence == nil {
+		return moerr.NewInternalError(ctx, "CDC target verification requires an owner fence")
+	}
+	executor, err := NewExecutor(ctx, sinkUri.User, sinkUri.Password, sinkUri.Ip, sinkUri.Port,
+		CDCDefaultRetryTimes, CDCDefaultRetryDuration, timeout, false)
+	if err != nil {
+		return err
+	}
+	defer executor.Close()
+	identity := fmt.Sprintf("%d\x00%s\x00%s\x00%s", accountID, taskID, info.SinkDbName, info.SinkTblName)
+	if err = executor.AcquireTargetLock(ctx, identity, fence.Check, fence.Check); err != nil {
+		return err
+	}
+	if info.TargetIdentity != "" {
+		guardTx, beginErr := executor.targetLockConn.BeginTx(ctx, nil)
+		if beginErr != nil {
+			return beginErr
+		}
+		actual, guardErr := guardedCDCTargetIdentity(ctx, guardTx, sinkUri.SinkTyp, info.SinkDbName, info.SinkTblName)
+		if guardErr == nil && actual != info.TargetIdentity {
+			guardErr = moerr.NewInternalErrorf(ctx, "CDC target %s.%s was replaced; explicit rebuild is required", info.SinkDbName, info.SinkTblName)
+		}
+		if guardErr == nil {
+			guardErr = verifyCDCTargetTableWithQuery(ctx, guardTx, info, tableDef, sinkUri.SinkTyp)
+		}
+		rollbackErr := guardTx.Rollback()
+		if guardErr != nil {
+			return guardErr
+		}
+		if rollbackErr != nil {
+			return rollbackErr
+		}
+	} else if err = verifyCDCTargetTable(ctx, executor, info, tableDef, sinkUri.SinkTyp); err != nil {
+		return err
+	}
+	if err = fence.Check(ctx); err != nil {
+		return err
+	}
+	return executor.ReleaseTargetLock()
+}
+
+var (
+	cdcIntegerDisplayWidth = regexp.MustCompile(`(tinyint|smallint|mediumint|bigint|int)(unsigned)?\([0-9]+\)`)
+	cdcScalarZeroWidth     = regexp.MustCompile(`(float|double|date|datetime|timestamp|time|bool|json|uuid|datalink)\(0\)`)
+)
+
+func normalizeCDCTargetColumnType(raw string) string {
+	if at := strings.IndexByte(raw, '('); at >= 0 && strings.ContainsAny(raw[at:], "'\"") {
+		// ENUM/SET values are data. Folding spaces or aliases inside quoted
+		// elements could admit a different target domain.
+		return strings.ToLower(strings.TrimSpace(raw[:at])) + raw[at:]
+	}
+	typ := strings.ToLower(strings.Join(strings.Fields(raw), ""))
+	if strings.HasPrefix(typ, "integer") {
+		typ = "int" + strings.TrimPrefix(typ, "integer")
+	}
+	typ = cdcScalarZeroWidth.ReplaceAllString(typ, "$1")
+	if typ == "year(4)" {
+		return "year"
+	}
+	if typ == "boolean" {
+		return "bool"
+	}
+	return cdcIntegerDisplayWidth.ReplaceAllString(typ, "$1$2")
+}
+
+func cdcTargetColumnTypeMatches(source plan.Type, target, sinkType string, numericScale sql.NullInt64) bool {
+	want := normalizeCDCTargetColumnType(plan2.FormatColType(source))
+	got := normalizeCDCTargetColumnType(target)
+	if sinkType == CDCSinkType_MO && source.Width > 0 &&
+		(types.T(source.Id) == types.T_float32 || types.T(source.Id) == types.T_float64) {
+		// MO's COLUMN_TYPE prints FLOAT(M) and DOUBLE(M) without D. The
+		// independent NUMERIC_SCALE field distinguishes omitted D from an
+		// explicit scale, including D=0.
+		name := "float"
+		if types.T(source.Id) == types.T_float64 {
+			name = "double"
+		}
+		if got != fmt.Sprintf("%s(%d)", name, source.Width) {
+			return false
+		}
+		return source.Scale < 0 && !numericScale.Valid ||
+			source.Scale >= 0 && numericScale.Valid && numericScale.Int64 == int64(source.Scale)
+	}
+	if want == got {
+		return true
+	}
+	return types.T(source.Id) == types.T_bool && sinkType == CDCSinkType_MySQL &&
+		strings.EqualFold(strings.TrimSpace(target), "tinyint(1)")
+}
+
+func expectedCDCTargetCollation(typ plan.Type) string {
+	switch types.T(typ.Id) {
+	case types.T_char, types.T_varchar, types.T_text:
+		switch typ.Charset {
+		case uint32(types.CharsetLegacy), uint32(types.CharsetUTF8MB4Bin):
+			return "utf8mb4_bin"
+		case uint32(types.CharsetUTF8):
+			return "utf8mb4_general_ci"
+		case uint32(types.CharsetBinary):
+			return "binary"
+		}
+		return "unsupported source collation"
+	}
+	return ""
 }
 
 // NewMysqlSinker2 creates a new improved MySQL sinker
@@ -262,6 +726,7 @@ func NewMysqlSinker2(
 		ar:               ar,
 		cmdCh:            make(chan *Command), // Unbuffered for backpressure
 		closeCh:          make(chan struct{}),
+		consumerDone:     make(chan struct{}),
 		closed:           false,
 	}
 
@@ -293,6 +758,7 @@ func (s *mysqlSinker2) AttachProgressTracker(pt *ProgressTracker) {
 func (s *mysqlSinker2) Run(ctx context.Context, ar *ActiveRoutine) {
 	logutil.Info("cdc.mysql_sinker2.run_start",
 		zap.String("table", s.dbTblInfo.String()))
+	defer s.consumerDoneOnce.Do(func() { close(s.consumerDone) })
 
 	// Check if already closed before incrementing wait group
 	// This prevents data race with Close() calling wg.Wait()
@@ -315,12 +781,15 @@ func (s *mysqlSinker2) Run(ctx context.Context, ar *ActiveRoutine) {
 	for {
 		select {
 		case <-ctx.Done():
+			s.setErrorIfNil(context.Cause(ctx))
 			return
 		case <-s.closeCh:
 			return
 		case <-ar.Pause:
+			s.setErrorIfNil(errMysqlSinkerPaused)
 			return
 		case <-ar.Cancel:
+			s.setErrorIfNil(errMysqlSinkerCancelled)
 			return
 		case cmd, ok := <-s.cmdCh:
 			if !ok {
@@ -394,7 +863,8 @@ func (s *mysqlSinker2) processCommand(ctx context.Context, cmd *Command) {
 }
 
 // handleBegin handles BEGIN transaction command
-func (s *mysqlSinker2) handleBegin(ctx context.Context) error {
+func (s *mysqlSinker2) handleBegin(ctx context.Context) (resultErr error) {
+	defer func() { resultErr = classifyCDCTargetSQLError(resultErr) }()
 	// Check current state
 	currentState := s.txnState.Load()
 	if currentState != v2TxnStateIdle {
@@ -424,6 +894,17 @@ func (s *mysqlSinker2) handleBegin(ctx context.Context) error {
 			zap.String("table", s.dbTblInfo.String()),
 			zap.Error(err))
 		return err
+	}
+	if s.dbTblInfo.TargetIdentity != "" {
+		actual, err := guardedCDCTargetIdentity(ctx, s.executor.tx,
+			s.dbTblInfo.TargetSinkType, s.dbTblInfo.SinkDbName, s.dbTblInfo.SinkTblName)
+		if err == nil && actual != s.dbTblInfo.TargetIdentity {
+			err = moerr.NewInternalErrorf(ctx, "CDC target %s.%s was replaced; explicit rebuild is required", s.dbTblInfo.SinkDbName, s.dbTblInfo.SinkTblName)
+		}
+		if err != nil {
+			_ = s.executor.RollbackTx(ctx)
+			return err
+		}
 	}
 
 	// Update state
@@ -817,7 +1298,7 @@ func (s *mysqlSinker2) Sink(ctx context.Context, data *DecoderOutput) {
 		TableName: s.dbTblInfo.SourceTblName,
 	}
 
-	watermark, err := s.watermarkUpdater.GetFromCache(ctx, &key)
+	watermark, watermarkGeneration, err := s.watermarkUpdater.GetFromCacheWithGeneration(ctx, &key)
 	if err != nil {
 		logutil.Error("cdc.mysql_sinker2.get_watermark_failed",
 			zap.String("table", s.dbTblInfo.String()),
@@ -827,11 +1308,14 @@ func (s *mysqlSinker2) Sink(ctx context.Context, data *DecoderOutput) {
 		return
 	}
 
-	if data.toTs.LT(&watermark) {
+	if isWatermarkAheadOfOutput(
+		watermark, watermarkGeneration, data.toTs, s.watermarkGeneration) {
 		logutil.Error("cdc.mysql_sinker2.unexpected_watermark",
 			zap.String("table", s.dbTblInfo.String()),
 			zap.String("toTs", data.toTs.ToString()),
-			zap.String("watermark", watermark.ToString()))
+			zap.String("watermark", watermark.ToString()),
+			zap.Uint64("source-table-id", s.watermarkGeneration),
+			zap.Uint64("watermark-source-table-id", watermarkGeneration))
 		err := moerr.NewInternalError(ctx, "unexpected watermark")
 		s.SetError(err)
 		return
@@ -868,6 +1352,16 @@ func (s *mysqlSinker2) Sink(ctx context.Context, data *DecoderOutput) {
 	s.sendCommand(cmd)
 }
 
+func isWatermarkAheadOfOutput(
+	watermark types.TS,
+	watermarkGeneration uint64,
+	outputTS types.TS,
+	outputGeneration uint64,
+) bool {
+	return watermarkGeneration > outputGeneration ||
+		(watermarkGeneration == outputGeneration && outputTS.LT(&watermark))
+}
+
 // sendCommand sends a command to the consumer goroutine
 func (s *mysqlSinker2) sendCommand(cmd *Command) {
 	s.closeMutex.RLock()
@@ -879,6 +1373,7 @@ func (s *mysqlSinker2) sendCommand(cmd *Command) {
 	}
 	cmdCh := s.cmdCh
 	closeCh := s.closeCh
+	consumerDone := s.consumerDone
 	s.senderWG.Add(1)
 	s.closeMutex.RUnlock()
 
@@ -888,6 +1383,14 @@ func (s *mysqlSinker2) sendCommand(cmd *Command) {
 	case cmdCh <- cmd:
 	case <-closeCh:
 		// Clean up batch data in dropped commands
+		cmd.Close()
+		return
+	case <-consumerDone:
+		// Run can stop on context/pause/cancel before Close is reached by the
+		// producer. Republish a terminal error here because rollback deliberately
+		// clears an earlier error before sending its recovery commands. Otherwise
+		// a command dropped after consumer exit could be mistaken for success.
+		s.setErrorIfNil(errMysqlSinkerConsumerStopped)
 		cmd.Close()
 		return
 	}
@@ -916,6 +1419,13 @@ func (s *mysqlSinker2) SendDummy() {
 	s.sendCommand(NewDummyCommand())
 }
 
+// releaseTargetOwnership ends the current effect interval after the consumer
+// has synchronously completed COMMIT and the producer has accepted the related
+// watermark. The next BEGIN reacquires and revalidates the same target lock.
+func (s *mysqlSinker2) releaseTargetOwnership() error {
+	return s.executor.ReleaseTargetLock()
+}
+
 // Error returns the current error state
 //
 // Thread-safe and panic-free (unlike old implementation)
@@ -935,13 +1445,28 @@ func (s *mysqlSinker2) SetError(err error) {
 		s.err.Store(nil)
 		return
 	}
+	err = normalizeMysqlSinkerError(err)
+	s.err.Store(&err)
+}
 
-	// Convert to moerr.Error if needed
-	if _, ok := err.(*moerr.Error); !ok {
+func normalizeMysqlSinkerError(err error) error {
+	// Preserve typed owner-fence wrappers: stream lifecycle and retry policy
+	// depend on their identity, and converting them to a plain moerr would turn
+	// supersession into shared table failure metadata.
+	if _, ok := err.(*moerr.Error); !ok &&
+		!IsOwnerFenceLostError(err) && !IsRetryableOwnerFenceError(err) &&
+		!IsRetryableTargetLockError(err) && !IsRetryableConnectionError(err) {
 		err = moerr.ConvertGoError(context.Background(), err)
 	}
+	return err
+}
 
-	s.err.Store(&err)
+func (s *mysqlSinker2) setErrorIfNil(err error) {
+	if err == nil {
+		return
+	}
+	err = normalizeMysqlSinkerError(err)
+	s.err.CompareAndSwap(nil, &err)
 }
 
 // ClearError clears the error state

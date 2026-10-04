@@ -221,7 +221,14 @@ func NewFulltext2SqlWriter(algo string, jobID JobID, info *ConsumerInfo, tablede
 	cdc := fulltext2.NewCdc(int32(pkTyp.Id))
 	cdc.IncludeTypes = includeTypes
 	return &Fulltext2SqlWriter{
-		cfg:          fulltext2.TableConfig{DbName: info.DBName, IndexTable: storage, MetadataTable: meta, Parser: flat["parser"], PositionFree: flat[catalog.IndexAlgoParamPositionFree] == "true"},
+		cfg: fulltext2.TableConfig{
+			DbName: info.DBName, IndexTable: storage, MetadataTable: meta,
+			Parser:       flat["parser"],
+			PositionFree: flat[catalog.IndexAlgoParamPositionFree] == "true",
+			// json term shape, from the same persisted algo param the CREATE
+			// build reads, so both halves of the index emit identical terms.
+			JSONNoKeys: flat[catalog.IndexAlgoParamJSONIncludeKeys] == "false",
+		},
 		pkType:       int32(pkTyp.Id),
 		pkPos:        pkPos,
 		textPos:      textPos,
@@ -324,27 +331,47 @@ func ftRowDataBytes(pk any, include []any) int {
 	return n
 }
 
-// rowText joins the indexed columns with '\n' (matching fulltext2_create's build
-// tokenization). If ANY indexed column is NULL the doc yields no tokens — the
-// whole-doc-skip the create-TVF's rowTerms does — so CREATE and CDC tokenize a
-// row identically (a doc's searchability must not depend on which path indexed
-// it). For a json parser each column is flattened to its leaf values PER COLUMN
-// (FlattenJSONColumn), exactly as rowTerms does, so CdcTokenizer then just ngrams the
-// flattened text (it no longer re-flattens). A datalink column is resolved to its file
-// CONTENT via load_text (datalinkText) — parity with the sync build's GetPlainText, so
-// identical values index identically whether seen at CREATE or via CDC; a resolution error
-// is propagated (the CDC iteration retries), matching the sync build.
+// rowText joins the non-NULL indexed columns with '\n' (matching
+// fulltext2_create's build tokenization). A SQL NULL content column contributes no
+// text; the other indexed columns remain searchable. For a json parser each column
+// is flattened to its leaf values PER COLUMN (FlattenJSONColumn), exactly as rowTerms
+// does, so CdcTokenizer then just ngrams the flattened text (it no longer re-flattens).
+// A datalink column is resolved to its file CONTENT via load_text (datalinkText) —
+// parity with the sync build's GetPlainText, so identical values index identically
+// whether seen at CREATE or via CDC; a resolution error is propagated (the CDC
+// iteration retries), matching the sync build.
 func (w *Fulltext2SqlWriter) rowText(ctx context.Context, row []any) (string, error) {
-	for _, pos := range w.textPos {
-		if row[pos] == nil {
-			return "", nil
+	// Tuple json: emit the FINISHED terms in the length-prefixed carrier rather
+	// than flattened text. Flattening discards the keys, and the terms are raw
+	// packed bytes that a '\n'-joined text blob cannot carry. The CDC blob is
+	// itself length-prefixed and CRC-checked (Cdc.Encode), so binary rides
+	// through safely; CdcTokenizer just decodes it. This is the ISCP half of the
+	// CREATE/ISCP pair — fulltext2_create.rowTerms calls the same per-column
+	// encoder, in the same column order, with the same ordinal positions.
+	if w.cfg.UsesJSONTupleTerms() {
+		opt := w.cfg.JSONTermOptions()
+		var terms []string
+		for _, pos := range w.textPos {
+			if row[pos] == nil {
+				continue
+			}
+			ts, err := fulltext2.JSONTupleColumn(row[pos], opt)
+			if err != nil {
+				return "", err
+			}
+			terms = append(terms, ts...)
 		}
+		return fulltext2.EncodeJSONTermCarrier(terms), nil
 	}
+
 	isJSON := fulltext2.IsJSONParser(w.cfg.Parser)
 	jsonValue := fulltext2.IsJSONValueParser(w.cfg.Parser)
 	var b strings.Builder
 	for i, pos := range w.textPos {
-		if i > 0 {
+		if row[pos] == nil {
+			continue
+		}
+		if b.Len() > 0 {
 			b.WriteByte('\n')
 		}
 		if isJSON {

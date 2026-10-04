@@ -70,8 +70,8 @@ select row_count();
 insert into odku values (1,1) on duplicate key update v=v+1;
 select row_count();
 
--- on duplicate key update hitting an existing row with no real change (set to its
--- current value) reports 0.
+-- on duplicate key update hitting an existing row with no real change (set to
+-- its current value) reports 1 because mo-tester uses CLIENT_FOUND_ROWS.
 insert into odku values (1,100) on duplicate key update v=v;
 select row_count();
 

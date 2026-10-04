@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
+	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -135,6 +136,47 @@ func TestCompileUnionAllBuildsLazyBranchScopesWithDemand(t *testing.T) {
 	require.Equal(t, int32(0), mergeOp.StartIDX)
 	require.Equal(t, int32(1), mergeOp.EndIDX)
 
+	freeLazyUnionAllTestScope(c, root)
+}
+
+func TestLazyUnionAllLimitReleasesUnstartedMaterializedReader(t *testing.T) {
+	c := newLazyUnionAllTestCompile(t)
+	source := materialized.NewSource(2)
+	require.NoError(t, source.Begin(c.proc.Mp()))
+	input := newLazyUnionAllInt8Batch(c, 7)
+	for range 4 {
+		require.NoError(t, source.Append(input))
+	}
+	source.Finish(nil)
+	require.Positive(t, source.CurrentBytes())
+
+	newReader := func(readerID int) *Scope {
+		reader := merge.NewArgument().WithSinkScan(true)
+		reader.MaterializedSource = source
+		reader.MaterializedReaderID = readerID
+		return newLazyUnionAllLeaf(c, reader)
+	}
+	root := c.compileUnionAll(
+		&planpb.Node{}, []*Scope{newReader(0)}, []*Scope{newReader(1)}, true,
+	)[0]
+	root = c.compileLimit(&planpb.Node{
+		Limit: plan2.MakePlan2Uint64ConstExprWithType(1),
+	}, []*Scope{root})[0]
+	c.scopes = []*Scope{root}
+	c.InitPipelineContextToExecuteQuery()
+
+	// Four retained batches exceed the ordinary two-reader broadcast spool's
+	// two slots. LIMIT starts only reader 0; scope teardown must also release
+	// reader 1 even though its branch pipeline was never submitted.
+	require.NoError(t, root.MergeRun(c))
+	require.Zero(t, source.CurrentBytes())
+	require.NoError(t, source.Begin(c.proc.Mp()),
+		"all producer and reader owners must be retired before prepared reuse")
+	source.Finish(nil)
+	source.ReleaseReader(0)
+	source.ReleaseReader(1)
+
+	input.Clean(c.proc.Mp())
 	freeLazyUnionAllTestScope(c, root)
 }
 

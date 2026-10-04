@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -38,6 +39,8 @@ import (
 )
 
 const opName = "preinsert"
+
+const autoIncrementGeneratedAttr = "__mo_auto_increment_generated"
 
 func (preInsert *PreInsert) String(buf *bytes.Buffer) {
 	buf.WriteString(opName)
@@ -75,6 +78,9 @@ func (preInsert *PreInsert) Prepare(proc *process.Process) (err error) {
 		if err = preInsert.refreshAutoIncrementTableID(proc); err != nil {
 			return
 		}
+	}
+	if preInsert.TrackAutoIncrementGenerated && preInsert.AutoIncrementGeneratedColumn < 0 {
+		return moerr.NewInvalidInput(proc.Ctx, "invalid auto-increment provenance column")
 	}
 	return
 }
@@ -270,6 +276,9 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 		if shouldConvertZeroToNull(preInsert, proc) {
 			convertZeroToNull(workBat, preInsert)
 		}
+		if err = preInsert.captureAutoIncrementGeneratedRows(workBat); err != nil {
+			return result, err
+		}
 		start := time.Now()
 		err = genAutoIncrCol(workBat, proc, preInsert)
 		if err != nil {
@@ -305,9 +314,90 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 	if err = preInsert.constructHiddenColBuf(proc, bat, first); err != nil {
 		return result, err
 	}
+	if err = preInsert.constructAutoIncrementGeneratedCol(proc, bat, first); err != nil {
+		return result, err
+	}
 
 	result.Batch = preInsert.ctr.buf
 	return result, nil
+}
+
+func (preInsert *PreInsert) captureAutoIncrementGeneratedRows(bat *batch.Batch) error {
+	if !preInsert.TrackAutoIncrementGenerated {
+		return nil
+	}
+	autoCol := -1
+	for i, col := range preInsert.TableDef.Cols {
+		if !col.Typ.AutoIncr {
+			continue
+		}
+		if autoCol >= 0 {
+			return moerr.NewInvalidInputNoCtx("auto-increment provenance requires one auto-increment column")
+		}
+		autoCol = i
+	}
+	if autoCol < 0 {
+		return moerr.NewInvalidInputNoCtx("auto-increment provenance has no auto-increment column")
+	}
+	pos := int(preInsert.ColOffset) + autoCol
+	if pos < 0 || pos >= len(bat.Vecs) {
+		return moerr.NewInternalErrorNoCtxf(
+			"auto-increment provenance input column %d is outside batch width %d",
+			pos, len(bat.Vecs))
+	}
+	vec := bat.Vecs[pos]
+	generated := make([]bool, bat.RowCount())
+	for row := range generated {
+		generated[row] = vec.IsNull(uint64(row))
+	}
+	preInsert.ctr.autoIncrementGenerated = generated
+	return nil
+}
+
+func (preInsert *PreInsert) constructAutoIncrementGeneratedCol(
+	proc *proc,
+	bat *batch.Batch,
+	first bool,
+) error {
+	if !preInsert.TrackAutoIncrementGenerated {
+		return nil
+	}
+	markerPos := int(preInsert.AutoIncrementGeneratedColumn)
+	if markerPos < 0 {
+		return moerr.NewInvalidInput(proc.Ctx, "invalid auto-increment provenance column")
+	}
+	if first {
+		if markerPos != len(preInsert.ctr.buf.Vecs) {
+			return moerr.NewInternalErrorf(proc.Ctx,
+				"auto-increment provenance column %d does not follow PRE_INSERT output width %d",
+				markerPos, len(preInsert.ctr.buf.Vecs))
+		}
+		preInsert.ctr.canFreeVecIdx[markerPos] = true
+		preInsert.ctr.buf.Vecs = append(preInsert.ctr.buf.Vecs,
+			vector.NewOffHeapVecWithType(types.T_bool.ToType()))
+		preInsert.ctr.buf.Attrs = append(preInsert.ctr.buf.Attrs, autoIncrementGeneratedAttr)
+	} else {
+		if markerPos >= len(preInsert.ctr.buf.Vecs) {
+			return moerr.NewInternalErrorf(proc.Ctx,
+				"auto-increment provenance column %d is outside PRE_INSERT output width %d",
+				markerPos, len(preInsert.ctr.buf.Vecs))
+		}
+		preInsert.ctr.buf.Vecs[markerPos].CleanOnlyData()
+	}
+	generated := preInsert.ctr.autoIncrementGenerated
+	preInsert.ctr.autoIncrementGenerated = nil
+	if len(generated) != bat.RowCount() {
+		return moerr.NewInternalErrorf(proc.Ctx,
+			"auto-increment provenance rows %d do not match batch rows %d",
+			len(generated), bat.RowCount())
+	}
+	for _, value := range generated {
+		if err := vector.AppendFixed(
+			preInsert.ctr.buf.Vecs[markerPos], value, false, proc.Mp()); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (preInsert *PreInsert) targetSelectedRows(proc *proc, bat *batch.Batch) ([]int64, error) {
@@ -494,6 +584,7 @@ func genAutoIncrCol(bat *batch.Batch, proc *proc, preInsert *PreInsert) error {
 
 retryInsertValues:
 	tableID := preInsert.ctr.tblId
+	policyCtx := incrservice.WithAutoIDCachePolicy(proc.Ctx, preInsert.TableDef.TblId, preInsert.TableDef.AutoIdCache)
 	needReCheck := checkIfNeedReGenAutoIncrCol(bat, preInsert)
 
 	// Capture the oldest active range's allocation timestamp before InsertValues.
@@ -501,15 +592,21 @@ retryInsertValues:
 	// but conflict detection must still cover every value generated for this batch.
 	lastAllocateTSMap := make(map[string]timestamp.Timestamp)
 	for col := range needReCheck {
-		ts, err := proc.GetIncrService().GetLastAllocateTS(proc.Ctx, tableID, preInsert.TableDef.AutoIncrEpoch, currentTxn, col)
+		ts, err := proc.GetIncrService().GetLastAllocateTS(policyCtx, tableID, preInsert.TableDef.AutoIncrEpoch, currentTxn, col)
 		if err != nil {
 			return err
 		}
 		lastAllocateTSMap[col] = ts
 	}
 
+	options := incrservice.NormalizeAutoIncrementOptions(
+		proc.GetSessionInfo().AutoIncrementIncrement,
+		proc.GetSessionInfo().AutoIncrementOffset,
+	)
+	autoIncrementCtx := incrservice.WithAutoIncrementOptions(
+		policyCtx, options.Increment, options.Offset)
 	lastInsertValue, err := proc.GetIncrService().InsertValues(
-		proc.Ctx,
+		autoIncrementCtx,
 		tableID,
 		preInsert.TableDef.AutoIncrEpoch,
 		currentTxn,
@@ -572,7 +669,7 @@ retryInsertValues:
 		}
 	}
 
-	if lastInsertValue != 0 {
+	if lastInsertValue != 0 && !preInsert.TrackAutoIncrementGenerated {
 		// A parallel INSERT ... SELECT has one PreInsert operator per scope,
 		// all sharing the statement-wide process state.  Publish the smallest
 		// generated value through the shared coordinator so scheduling cannot make

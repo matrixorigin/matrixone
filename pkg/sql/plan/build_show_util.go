@@ -602,7 +602,11 @@ func constructCreateTableSQL(
 			fkRefDbName = schemaName
 		}
 		fkRefDbTblName := sqlquote.Ident(fkTableDef.Name)
-		if cloneStmt != nil || tableDef.DbName != fkTableDef.DbName {
+		// CREATE TABLE LIKE rewrites the target database into tableDef before
+		// rebuilding the source definition. Keep ordinary same-database references
+		// qualified so the recursive planner does not fall back to the session DB.
+		if cloneStmt != nil || tableDef.DbName != fkTableDef.DbName ||
+			(useDbName && sourceSubscription == nil && fkRefDbName != "") {
 			fkRefDbTblName = sqlquote.QualifiedIdent(fkRefDbName, fkTableDef.Name)
 		}
 		createStr += fmt.Sprintf("  CONSTRAINT %s FOREIGN KEY (%s) REFERENCES %s (%s) ON DELETE %s ON UPDATE %s",
@@ -640,6 +644,9 @@ func constructCreateTableSQL(
 	}
 
 	createStr += comment
+	if tableDef.AutoIdCache != 0 {
+		createStr += fmt.Sprintf(" AUTO_ID_CACHE=%d", tableDef.AutoIdCache)
+	}
 
 	if tableDef.Partition != nil {
 		ps := ctx.GetProcess().GetPartitionService()
@@ -1217,6 +1224,19 @@ func FormatColType(colType plan.Type) string {
 		case types.MaxLongTextLen:
 			ts = "LONGTEXT"
 		}
+	} else if typ.Oid == types.T_blob {
+		switch {
+		case colType.Width == 0:
+			// Legacy catalog BLOBs used width zero to mean unbounded. Emit the
+			// widest SQL family so recreation and dump/restore cannot narrow them.
+			ts = "LONGBLOB"
+		case colType.Width > 0 && colType.Width <= types.MaxTinyTextLen:
+			ts = "TINYBLOB"
+		case colType.Width > types.MaxStringSize && colType.Width <= types.MaxMediumTextLen:
+			ts = "MEDIUMBLOB"
+		case colType.Width > types.MaxMediumTextLen:
+			ts = "LONGBLOB"
+		}
 	}
 	// after decimal fix, remove this
 	if typ.Oid.IsDecimal() {
@@ -1448,6 +1468,11 @@ func formatForeignTableOptionsForShowCreate(cfg foreignext.Config, sqlMode strin
 	}
 	if cfg.DefaultQuery != "" {
 		options = append(options, struct{ key, value string }{"query", cfg.DefaultQuery})
+	}
+	if cfg.Pushdown {
+		// Only the non-default is rendered: a table that never opted into
+		// pushdown keeps showing exactly the options its owner wrote.
+		options = append(options, struct{ key, value string }{"pushdown", "true"})
 	}
 	if len(options) > 0 {
 		builder.WriteString(" WITH (")

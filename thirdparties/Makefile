@@ -60,6 +60,10 @@ JEMALLOC_CONFIGURE_FLAGS=--disable-shared --enable-static --enable-stats --with-
 ONNX_VERSION=1.26.0
 ONNX_REPO_COMMIT=655365097e21c4df0f82337063f9a12b66700593
 ONNX_BASE_URL=https://github.com/matrixorigin/thirdparty/raw/$(ONNX_REPO_COMMIT)/onnxrt/$(ONNX_VERSION)
+# GitHub's media endpoint serves the same immutable Git LFS objects directly.
+# It is used only after the primary endpoint times out and is still verified by
+# the platform-specific SHA-256 below.
+ONNX_FALLBACK_BASE_URL=https://media.githubusercontent.com/media/matrixorigin/thirdparty/$(ONNX_REPO_COMMIT)/onnxrt/$(ONNX_VERSION)
 # The MatrixOne CI builder image ships these pinned artifacts. Keep this a
 # versioned directory so a base-image update cannot accidentally satisfy a
 # different ONNX Runtime version. A local build simply falls back to DOWNLOAD.
@@ -98,7 +102,7 @@ init:
 	mkdir -p install
 	mkdir -p install/include install/lib
 
-usearch: stringzilla fp16 simsimd install/include/usearch.h
+usearch: install/include/usearch.h
 
 stringzilla: install/include/stringzilla/stringzilla.h
 
@@ -110,28 +114,28 @@ simsimd: install/include/simsimd/simsimd.h
 
 xxhash: install/include/xxhash.h
 
-install/include/xxhash.h:
+install/include/xxhash.h: | init
 	mkdir -p $(XXHASH_TMP)
-	tar zxvf $(XXHASH_TAR) -C $(XXHASH_TMP) --strip-components=1
+	tar zxf $(XXHASH_TAR) -C $(XXHASH_TMP) --strip-components=1
 	cp $(XXHASH_TMP)/xxhash.h install/include
 	rm -rf $(XXHASH_TMP)
 
-install/include/fp16.h:
+install/include/fp16.h: | init
 	rm -rf $(FP16_DIR)
 	mkdir -p $(FP16_DIR)
-	tar zxvf $(FP16_TAR) -C $(FP16_DIR) --strip-components=1
+	tar zxf $(FP16_TAR) -C $(FP16_DIR) --strip-components=1
 	cp -r $(FP16_DIR)/include/* install/include
 
-install/include/simsimd/simsimd.h:
+install/include/simsimd/simsimd.h: | init
 	rm -rf $(SIMSIMD_DIR)
 	mkdir -p $(SIMSIMD_DIR)
-	tar zxvf $(SIMSIMD_TAR) -C $(SIMSIMD_DIR) --strip-components=1
+	tar zxf $(SIMSIMD_TAR) -C $(SIMSIMD_DIR) --strip-components=1
 	cp -r $(SIMSIMD_DIR)/include/* install/include
 
-install/include/stringzilla/stringzilla.h:
+install/include/stringzilla/stringzilla.h: | init
 	rm -rf $(STRINGZILLA_DIR)
 	mkdir -p $(STRINGZILLA_DIR)
-	tar zxvf $(STRINGZILLA_TAR) -C $(STRINGZILLA_DIR) --strip-components=1
+	tar zxf $(STRINGZILLA_TAR) -C $(STRINGZILLA_DIR) --strip-components=1
 	cp -r $(STRINGZILLA_DIR)/include/* install/include
 
 USEARCH_CMAKE_FLAG := -DUSEARCH_BUILD_BENCH_CPP=OFF -DUSEARCH_BUILD_TEST_C=OFF -DUSEARCH_BUILD_TEST_CPP=OFF -DUSEARCH_BUILD_LIB_C=ON -DCMAKE_CXX_FLAGS=-I$(PWD)/install/include -DCMAKE_POLICY_VERSION_MINIMUM=3.5
@@ -151,10 +155,10 @@ ifeq ($(MO_CL_SIMSIMD),1)
   endif
 endif
 
-install/include/usearch.h:
+install/include/usearch.h: install/include/fp16.h install/include/simsimd/simsimd.h install/include/stringzilla/stringzilla.h | init
 	rm -rf $(USEARCH_DIR)
 	mkdir -p $(USEARCH_DIR)
-	tar zxvf $(USEARCH_TAR) -C $(USEARCH_DIR) --strip-components=1
+	tar zxf $(USEARCH_TAR) -C $(USEARCH_DIR) --strip-components=1
 	mkdir -p $(USEARCH_DIR)/fp16 $(USEARCH_DIR)/simsimd $(USEARCH_DIR)/stringzilla
 	cp -r $(FP16_DIR)/* $(USEARCH_DIR)/fp16
 	cp -r $(SIMSIMD_DIR)/* $(USEARCH_DIR)/simsimd
@@ -183,7 +187,7 @@ jemalloc: install/lib/libjemalloc.a
 # jemalloc is statically linked into mo-service and all public symbols are
 # prefixed with mo_je_. This keeps Memory Cache's allocator independent from
 # libc malloc and the C/C++ dependencies already linked into MatrixOne.
-install/lib/libjemalloc.a:
+install/lib/libjemalloc.a: | init
 	@actual="$$(shasum -a 256 $(JEMALLOC_TAR) | awk '{print $$1}')"; \
 	if [ "$$actual" != "$(JEMALLOC_SHA256)" ]; then \
 		echo "jemalloc tarball checksum mismatch: $$actual" >&2; \
@@ -200,7 +204,7 @@ install/lib/libjemalloc.a:
 
 # Build CRoaring as a static lib from its single-file amalgamation, and install
 # the amalgamated header. Used by the cgo doc_id filter (roaring64 bitset).
-install/lib/libroaring.a:
+install/lib/libroaring.a: | init
 	rm -rf $(CROARING_TMP)
 	mkdir -p $(CROARING_TMP)
 	tar zxf $(CROARING_TAR) -C $(CROARING_TMP) --strip-components=1
@@ -217,13 +221,22 @@ install/lib/libroaring.a:
 #   macOS arm64  -> onnxruntime_arm64.dylib
 ifeq ($(ONNX_SUPPORTED),1)
 onnxruntime: | init
-	@if test -r "$(ONNX_PREBUILT_DIR)/$(ONNX_LIB)"; then \
+	@installed="install/lib/$(ONNX_LIB)"; \
+	if test -r "$$installed"; then \
+		actual_sha256="$$(shasum -a 256 "$$installed" | awk '{print $$1}')"; \
+		if test "$$actual_sha256" = "$(ONNX_SHA256)"; then \
+			echo "using verified installed ONNX Runtime $(ONNX_VERSION) from $$installed"; \
+			exit 0; \
+		fi; \
+	fi; \
+	if test -r "$(ONNX_PREBUILT_DIR)/$(ONNX_LIB)"; then \
 		echo "using prebuilt ONNX Runtime $(ONNX_VERSION) from $(ONNX_PREBUILT_DIR)"; \
-		install -m 0644 "$(ONNX_PREBUILT_DIR)/$(ONNX_LIB)" "install/lib/$(ONNX_LIB)"; \
-		actual_sha256="$$(sha256sum "install/lib/$(ONNX_LIB)" | awk '{print $$1}')"; \
-		test "$$actual_sha256" = "$(ONNX_SHA256)" || { echo "ONNX Runtime checksum mismatch: got $$actual_sha256, expected $(ONNX_SHA256)" >&2; rm -f "install/lib/$(ONNX_LIB)"; exit 1; }; \
+		install -m 0644 "$(ONNX_PREBUILT_DIR)/$(ONNX_LIB)" "$$installed"; \
+		actual_sha256="$$(shasum -a 256 "$$installed" | awk '{print $$1}')"; \
+		test "$$actual_sha256" = "$(ONNX_SHA256)" || { echo "ONNX Runtime checksum mismatch: got $$actual_sha256, expected $(ONNX_SHA256)" >&2; rm -f "$$installed"; exit 1; }; \
 	else \
-		$(DOWNLOAD) "$(ONNX_BASE_URL)/$(ONNX_SRC)" "$(ONNX_SHA256)" "install/lib/$(ONNX_LIB)"; \
+		MO_DOWNLOAD_FALLBACK_URL="$(ONNX_FALLBACK_BASE_URL)/$(ONNX_SRC)" \
+			$(DOWNLOAD) "$(ONNX_BASE_URL)/$(ONNX_SRC)" "$(ONNX_SHA256)" "$$installed"; \
 	fi
 else
 onnxruntime:

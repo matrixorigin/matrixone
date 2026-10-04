@@ -17,7 +17,7 @@ drop table samecolumn01;
 
 -- rename column in empty table
 drop table if exists rename01;
-create table rename01 (col1 int, col2 decimal);
+create table rename01 (col1 int, col2 decimal(38,0));
 alter table rename01 rename column col1 to col1New;
 show create table rename01;
 show columns from rename01;
@@ -116,7 +116,7 @@ alter table mysql.procs_priv rename column grantor to newGrantor;
 
 -- rename primary key column
 drop table if exists primary01;
-create table primary01 (col1 int primary key , col2 decimal);
+create table primary01 (col1 int primary key , col2 decimal(38,0));
 insert into primary01 values (2389324, 32784329.4309403);
 insert into primary01 values (3287, 89384038);
 alter table primary01 rename column col1 to col1New;
@@ -237,7 +237,7 @@ drop table cluster01;
 
 -- rename temporary table column
 drop table if exists temporary01;
-create table temporary01 (col1 int, col2 decimal);
+create table temporary01 (col1 int, col2 decimal(38,0));
 insert into temporary01 (col1, col2) values (3728937, 37283.3232);
 alter table temporary01 rename column col1 to `UUUYGGBBJBJ`;
 insert into temporary01 (col1, col2) values (-32893, -89232);

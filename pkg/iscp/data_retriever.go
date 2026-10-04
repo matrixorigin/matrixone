@@ -155,6 +155,14 @@ func (r *DataRetrieverImpl) Next() *ISCPData {
 	return data
 }
 
+// GetToTS returns the iteration's upper bound, the same status.To that UpdateWatermark persists.
+func (r *DataRetrieverImpl) GetToTS() types.TS {
+	if r.status == nil {
+		return types.TS{}
+	}
+	return r.status.To
+}
+
 func (r *DataRetrieverImpl) UpdateWatermark(ctx context.Context,
 	cnUUID string,
 	txn client.TxnOperator) error {
@@ -181,6 +189,8 @@ func (r *DataRetrieverImpl) UpdateWatermark(ctx context.Context,
 		r.jobID,
 		r.status.To,
 		statusJson,
+		r.status.Stage,
+		r.status.LifecycleVersion,
 		ISCPJobState_Completed,
 		r.status.LSN,
 	)
@@ -189,6 +199,10 @@ func (r *DataRetrieverImpl) UpdateWatermark(ctx context.Context,
 		return err
 	}
 	defer res.Close()
+	if res.AffectedRows != 1 {
+		return newISCPStatusCASLostError(
+			"iscp update watermark", r.jobName, r.jobID, res.AffectedRows)
+	}
 	return nil
 }
 

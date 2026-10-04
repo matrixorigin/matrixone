@@ -23,6 +23,10 @@ select c1, c2, c3 from s_t1 where sample(c1, 1 percent) = 1;
 -- 6. cannot sample the group by column
 select sample(c1, 1 rows) from s_t1 group by c1;
 select sample(*, 1 rows) from s_t1 group by c1;
+-- A physical GROUP BY key optimization must not make a logical constant group
+-- disappear before SAMPLE validates its arguments.
+select c1, sample('x', 1 rows) from s_t1 group by c1, 2;
+select c1, sample('x', 1 rows) as sampled from s_t1 group by c1, sampled;
 
 -- expected succeed case
 -- 1. sample 2 rows from table by column c1

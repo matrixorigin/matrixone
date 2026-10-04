@@ -467,20 +467,8 @@ func (s *service) doTask(
 	ctx context.Context,
 ) {
 	if s.options.waitCNReported {
-		cs := clusterservice.GetMOCluster(s.cfg.ServiceID)
-		for {
-			reported := false
-			cs.GetCNServiceWithoutWorkingState(
-				clusterservice.NewServiceIDSelector(s.cfg.ServiceID),
-				func(_ metadata.CNService) bool {
-					reported = true
-					return false
-				},
-			)
-			if reported {
-				break
-			}
-			time.Sleep(time.Second)
+		if err := s.waitCNReported(ctx); err != nil {
+			return
 		}
 	}
 
@@ -528,6 +516,36 @@ func (s *service) doTask(
 					zap.Error(err))
 			}
 			checkChangedTimer.Reset(s.cfg.CheckChangedDuration.Duration)
+		}
+	}
+}
+
+func (s *service) waitCNReported(ctx context.Context) error {
+	retryTicker := time.NewTicker(time.Second)
+	defer retryTicker.Stop()
+
+	selector := clusterservice.NewServiceIDSelector(s.cfg.ServiceID)
+	for {
+		reported := false
+		if err := clusterservice.GetCNServiceWithoutWorkingStateWithContext(
+			ctx,
+			s.remote.cluster,
+			selector,
+			func(_ metadata.CNService) bool {
+				reported = true
+				return false
+			},
+		); err != nil {
+			return err
+		}
+		if reported {
+			return nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-retryTicker.C:
 		}
 	}
 }

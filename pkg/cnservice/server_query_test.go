@@ -50,9 +50,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
@@ -62,10 +64,27 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"go.uber.org/zap/zapcore"
 )
 
 var dummyBadRequestErr = moerr.NewInternalError(context.TODO(), "bad request")
 var dummyErr = moerr.NewInternalError(context.TODO(), "dummy error")
+
+type remoteStatsTestEngine struct {
+	engine.Engine
+	info  *statsinfo.StatsInfo
+	key   statsinfo.StatsInfoKey
+	calls int
+}
+
+func (e *remoteStatsTestEngine) StatsForRemote(
+	_ context.Context,
+	key statsinfo.StatsInfoKey,
+) *statsinfo.StatsInfo {
+	e.calls++
+	e.key = key
+	return e.info
+}
 
 func Test_service_handleISCPDrainConsumerRenewFenceOnly(t *testing.T) {
 	exec := &iscp.ISCPTaskExecutor{}
@@ -619,6 +638,13 @@ func Test_service_handleGetPipelineInfo(t *testing.T) {
 			want:    nil,
 		},
 		{
+			name:    "nil stats key",
+			fields:  fields{},
+			args:    args{req: &query.Request{GetStatsInfoRequest: &query.GetStatsInfoRequest{}}},
+			wantErr: dummyBadRequestErr,
+			want:    nil,
+		},
+		{
 			name:   "normal",
 			fields: fields{},
 			args: args{
@@ -653,6 +679,61 @@ func Test_service_handleGetPipelineInfo(t *testing.T) {
 				"handleGetPipelineInfo(%v, %v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp, nil)
 		})
 	}
+}
+
+func TestGetLockServiceIdentityDoesNotEnumerateLocks(t *testing.T) {
+	moruntime.RunTest("", func(_ moruntime.Runtime) {
+		// Reuse the smallest real lock fixture: Lock cannot be constructed outside
+		// lockservice with a valid holder/waiter queue. One row proves the legacy list.
+		lockservice.RunLockServicesForTest(zapcore.ErrorLevel, []string{"identity-cn"}, time.Hour,
+			func(_ lockservice.LockTableAllocator, services []lockservice.LockService) {
+				real := services[0]
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				txn := []byte("identity-holder")
+				_, err := real.Lock(ctx, 42, [][]byte{[]byte("key")}, txn,
+					lock.LockOptions{Granularity: lock.Granularity_Row, Mode: lock.LockMode_Exclusive})
+				require.NoError(t, err)
+				defer func() {
+					cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cleanupCancel()
+					require.NoError(t, real.Unlock(cleanupCtx, txn, timestamp.Timestamp{}))
+				}()
+				ctl := gomock.NewController(t)
+				lockSvc := mock_lock.NewMockLockService(ctl)
+				lockSvc.EXPECT().GetServiceID().Return(real.GetServiceID()).Times(2)
+				// The legacy request must return the actual holder and key.
+				iterations := 0
+				lockSvc.EXPECT().IterLocks(gomock.Any()).Do(func(fn func(uint64, [][]byte, lockservice.Lock) bool) {
+					iterations++
+					real.IterLocks(fn)
+				}).Times(1)
+				s := &service{metadata: metadata.CNStore{UUID: "cn"}, lockService: lockSvc}
+				for _, identityOnly := range []bool{true, false} {
+					resp := &query.Response{}
+					err := s.handleGetLockInfo(ctx, &query.Request{
+						GetLockInfoRequest: &query.GetLockInfoRequest{IdentityOnly: identityOnly},
+					}, resp, nil)
+					require.NoError(t, err)
+					require.Equal(t, "cn", resp.GetLockInfoResponse.CnId)
+					require.Equal(t, real.GetServiceID(), resp.GetLockInfoResponse.LockServiceID)
+					if identityOnly {
+						require.Zero(t, iterations)
+						require.Empty(t, resp.GetLockInfoResponse.LockInfoList)
+					} else {
+						require.Len(t, resp.GetLockInfoResponse.LockInfoList, 1)
+						info := resp.GetLockInfoResponse.LockInfoList[0]
+						require.Equal(t, uint64(42), info.TableId)
+						require.Equal(t, [][]byte{[]byte("key")}, info.Keys)
+						require.Equal(t, lock.LockMode_Exclusive, info.LockMode)
+						require.False(t, info.IsRangeLock)
+						require.Len(t, info.Holders, 1)
+						require.Equal(t, txn, info.Holders[0].TxnID)
+						require.Empty(t, info.Waiters)
+					}
+				}
+			}, nil)
+	})
 }
 
 func Test_service_handleRemoveRemoteLockTable(t *testing.T) {
@@ -874,6 +955,21 @@ func Test_service_handleGetStatsInfo(t *testing.T) {
 				"handleGetStatsInfo(%v, %v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp, nil)
 		})
 	}
+}
+
+func TestServiceHandleGetStatsInfoUsesRemoteExportBoundary(t *testing.T) {
+	key := statsinfo.StatsInfoKey{AccId: 7, DatabaseID: 8, TableID: 9}
+	want := &statsinfo.StatsInfo{TableCnt: 42}
+	exporter := &remoteStatsTestEngine{info: want}
+	s := &service{storeEngine: exporter}
+	resp := &query.Response{}
+
+	require.NoError(t, s.handleGetStatsInfo(context.Background(), &query.Request{
+		GetStatsInfoRequest: &query.GetStatsInfoRequest{StatsInfoKey: &key},
+	}, resp, nil))
+	require.Same(t, want, resp.GetStatsInfoResponse.StatsInfo)
+	require.Equal(t, 1, exporter.calls)
+	require.Equal(t, key, exporter.key)
 }
 
 func Test_service_handleTraceSpan(t *testing.T) {

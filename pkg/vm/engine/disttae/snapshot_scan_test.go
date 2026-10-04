@@ -66,7 +66,8 @@ func TestBuildSnapshotBlockFilter(t *testing.T) {
 		for _, v := range []int64{1, 3, 5} {
 			require.NoError(t, vector.AppendFixed(vec, v, false, mp))
 		}
-		expr := readutil.ConstructInExpr(context.Background(), "b", vec)
+		expr, cerr := readutil.ConstructInExpr(context.Background(), "b", vec)
+		require.NoError(t, cerr)
 
 		filter, seqnum, typ, ok, err := buildSnapshotBlockFilter(tableDef, expr, mp)
 		require.NoError(t, err)
@@ -83,7 +84,8 @@ func TestBuildSnapshotBlockFilter(t *testing.T) {
 			require.NoError(t, vector.AppendFixed(vec, v, false, mp))
 		}
 		vec.InplaceSort()
-		expr := readutil.ConstructInExpr(context.Background(), "a", vec)
+		expr, cerr := readutil.ConstructInExpr(context.Background(), "a", vec)
+		require.NoError(t, cerr)
 
 		filter, seqnum, typ, ok, err := buildSnapshotBlockFilter(tableDef, expr, mp)
 		if filter.Cleanup != nil {
@@ -276,7 +278,8 @@ func TestBuildSnapshotScanReaderConfig(t *testing.T) {
 	filterVec := vector.NewVec(types.T_int64.ToType())
 	defer filterVec.Free(mp)
 	require.NoError(t, vector.AppendFixed(filterVec, int64(3), false, mp))
-	filterExpr := readutil.ConstructInExpr(context.Background(), "id", filterVec)
+	filterExpr, cerr := readutil.ConstructInExpr(context.Background(), "id", filterVec)
+	require.NoError(t, cerr)
 
 	cfg, err := buildSnapshotScanReaderConfig(
 		tableDef,
@@ -620,7 +623,8 @@ func TestBuildSnapshotBlockFilter_MissingPrimaryKeyColumn(t *testing.T) {
 	filterVec := vector.NewVec(types.T_int64.ToType())
 	defer filterVec.Free(mp)
 	require.NoError(t, vector.AppendFixed(filterVec, int64(3), false, mp))
-	expr := readutil.ConstructInExpr(context.Background(), "missing_pk", filterVec)
+	expr, cerr := readutil.ConstructInExpr(context.Background(), "missing_pk", filterVec)
+	require.NoError(t, cerr)
 
 	_, _, _, _, err := buildSnapshotBlockFilter(tableDef, expr, mp)
 	require.Error(t, err)

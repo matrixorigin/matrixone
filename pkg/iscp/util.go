@@ -437,6 +437,35 @@ var CollectChanges = func(ctx context.Context, rel engine.Relation, fromTs, toTs
 	return rel.CollectChanges(ctx, fromTs, toTs, false, mp)
 }
 
+// finishISCPTransaction is the single commit/rollback boundary for ISCP-owned
+// transactions. Cleanup must remain possible after the operation context is
+// canceled, and neither commit nor rollback failures may be converted to
+// success.
+func finishISCPTransaction(ctx context.Context, txnOp client.TxnOperator, err error) error {
+	if txnOp == nil {
+		return err
+	}
+	// Cancellation before the commit point is a failed operation, even when the
+	// last statement happened to return first. Use the detached cleanup context
+	// below to roll back instead of accidentally committing canceled work.
+	if err == nil {
+		err = ctx.Err()
+	}
+	cleanupCtx, cancel := context.WithTimeoutCause(
+		context.WithoutCancel(ctx),
+		time.Minute*5,
+		moerr.CauseISCPTransactionFinishTimeout,
+	)
+	defer cancel()
+	if err != nil {
+		if rollbackErr := txnOp.Rollback(cleanupCtx); rollbackErr != nil {
+			return errors.Join(err, rollbackErr)
+		}
+		return err
+	}
+	return txnOp.Commit(cleanupCtx)
+}
+
 func batchRowCount(bat *batch.Batch) int {
 	if bat == nil || len(bat.Vecs) == 0 {
 		return 0
@@ -458,11 +487,11 @@ func getTxn(
 		0)
 	op, err := cnTxnClient.New(ctx, nowTs, createByOpt)
 	if err != nil {
-		return nil, err
+		return nil, finishISCPTransaction(ctx, op, err)
 	}
 	err = cnEngine.New(ctx, op)
 	if err != nil {
-		return nil, errors.Join(err, op.Rollback(ctx))
+		return nil, finishISCPTransaction(ctx, op, err)
 	}
 	return op, nil
 }
@@ -508,7 +537,12 @@ func checkLease(
 	if err != nil {
 		return
 	}
-	defer txn.Commit(ctxWithTimeout)
+	defer func() {
+		err = finishISCPTransaction(ctxWithTimeout, txn, err)
+		if err != nil {
+			ok = false
+		}
+	}()
 
 	var runner string
 	runner, err = GetTaskRunner(ctxWithTimeout, cnUUID, txn)
@@ -536,7 +570,7 @@ func GetTaskRunner(
 	txn client.TxnOperator,
 ) (string, error) {
 	ctxWithSysAccount := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	ctxWithTimeout, cancel := context.WithTimeoutCause(ctxWithSysAccount, time.Minute*5, moerr.NewInternalErrorNoCtx("iscp get task runner timeout"))
+	ctxWithTimeout, cancel := context.WithTimeoutCause(ctxWithSysAccount, time.Minute*5, moerr.CauseISCPGetTaskRunnerTimeout)
 	defer cancel()
 
 	sql := `select task_runner from mo_task.sys_daemon_task where task_type = "ISCP" and task_runner is not null`
@@ -548,23 +582,32 @@ func GetTaskRunner(
 	return readSingleTaskRunner(result)
 }
 
+// Result callbacks carry logical cardinality; a constant vector can encode
+// several rows in one physical value. Do not infer lease uniqueness from it.
 func readSingleTaskRunner(result executor.Result) (string, error) {
-	runners := make([]string, 0, 1)
+	var runner string
+	var rowCount int
 	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		if rows == 0 {
 			return true
 		}
-		runners = append(runners, executor.GetStringRows(cols[0])...)
-		return len(runners) < 2
+		rowCount += rows
+		if rowCount != 1 {
+			return false
+		}
+		if !cols[0].IsNull(0) {
+			runner = cols[0].GetStringAt(0)
+		}
+		return true
 	})
-	if len(runners) == 0 {
+	if rowCount == 0 {
 		return "", nil
 	}
-	if len(runners) != 1 {
-		return "", moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected rows count: %d", len(runners)))
+	if rowCount != 1 {
+		return "", moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected rows count: %d", rowCount))
 	}
-	if runners[0] == "" {
+	if runner == "" {
 		return "", moerr.NewInternalErrorNoCtx("task runner is null")
 	}
-	return runners[0], nil
+	return runner, nil
 }

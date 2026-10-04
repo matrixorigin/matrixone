@@ -62,6 +62,19 @@ message LockOptions {
   timestamp.Timestamp SnapShotTs        = 9 [(gogoproto.nullable) = false];
   int64               LockWaitTimeout   = 10;
   int64               LockWaitDeadline  = 11;
+  // Snapshot against which the SQL execution plan was compiled. This is
+  // separate from SnapShotTs, which is the transaction creation timestamp and
+  // is also used by rolling-restart admission. It is sent only when the plan
+  // predates transaction creation. Otherwise, and for older senders, the lock
+  // service falls back to SnapShotTs.
+  timestamp.Timestamp PlanSnapshotTs    = 12;
+  // WriterFair prevents a Shared row request from bypassing an already queued
+  // Exclusive waiter. It is opt-in because ordinary Shared locks rely on
+  // reader barging for throughput. Range locking retains its merge semantics.
+  bool                WriterFair        = 13;
+  // KeepRows prevents automatic coarsening for this transaction/table. All
+  // participating lock owners must support it before callers enable it.
+  bool                KeepRows          = 14;
 }
 
 // LockTable describes which CN manages a Table's Locks.
@@ -129,6 +142,17 @@ enum Method {
   // that physically owns the transaction's locks. Unlike GetWaitingList, the
   // handler is owner-local and never recursively calls another lock service.
   GetTxnWaitingListOnLockTable = 20;
+  // BatchUnlock releases several physical tables owned by the same lock
+  // service in one transaction-closure admission.
+  BatchUnlock = 21;
+  // LockWriterFair admits an opted-in Shared row lock only on owners that
+  // understand writer fairness. An older owner rejects this method before
+  // admission, allowing the caller to retry the request as Exclusive.
+  LockWriterFair = 22;
+  // Instance-bound drain protocol. Legacy UUID restart methods keep their
+  // wire semantics and cannot serve as a fallback for new controllers.
+  BeginDrain = 23;
+  QueryDrain = 24;
 }
 
 enum Status {
@@ -164,6 +188,9 @@ message Request {
   GetLockHolderRequest       GetLockHolder       = 19 [(gogoproto.nullable) = false];
   AbortRemoteDeadlockTxnRequest    AbortRemoteDeadlockTxn      = 20 [(gogoproto.nullable) = false];
   CheckActiveTxnRequest      CheckActiveTxn      = 21 [(gogoproto.nullable) = false];
+  BatchUnlockRequest         BatchUnlock         = 22 [(gogoproto.nullable) = false];
+  BeginDrainRequest          BeginDrain          = 23 [(gogoproto.nullable) = false];
+  QueryDrainRequest          QueryDrain          = 24 [(gogoproto.nullable) = false];
 }
 
 
@@ -195,6 +222,9 @@ message Response {
     AbortRemoteDeadlockTxnResponse    AbortRemoteDeadlockTxn      = 20 [(gogoproto.nullable) = false];
     GetLockHolderResponse      GetLockHolder       = 21 [(gogoproto.nullable) = false];
     CheckActiveTxnResponse     CheckActiveTxn      = 22 [(gogoproto.nullable) = false];
+    BatchUnlockResponse        BatchUnlock         = 23 [(gogoproto.nullable) = false];
+    BeginDrainResponse         BeginDrain          = 24 [(gogoproto.nullable) = false];
+    QueryDrainResponse         QueryDrain          = 25 [(gogoproto.nullable) = false];
 }
 
 // LockRequest lock request
@@ -213,6 +243,10 @@ message LockResponse {
   // An origin may compact its remote bookkeeping only after the physical owner
   // returned true for this successful Lock response.
   bool TxnWaitingListOnLockTableSupported = 2;
+  // BatchUnlockSupported is an explicit capability handshake. The origin uses
+  // BatchUnlock only for tables whose successful physical-owner Lock response
+  // advertised this bit.
+  bool BatchUnlockSupported = 3;
 }
 
 // GetTxnLockRequest get a waiting txn list on a special lock 
@@ -270,6 +304,18 @@ message UnlockResponse {
 
 }
 
+// BatchUnlockRequest releases a bounded set of tables that belong to one
+// physical owner. Mutating proxy handoffs continue to use table-scoped Unlock.
+message BatchUnlockRequest {
+  bytes                  TxnID      = 1;
+  timestamp.Timestamp    CommitTS   = 2 [(gogoproto.nullable) = false];
+  repeated LockTable     LockTables = 3 [(gogoproto.nullable) = false];
+}
+
+message BatchUnlockResponse {
+
+}
+
 // GetBindRequest get bind request from allocator request. CN -> TN
 message GetBindRequest {
   string   ServiceID   = 1;
@@ -292,6 +338,10 @@ message KeepLockTableBindRequest {
   Status Status = 2;
   repeated bytes TxnIDs = 3;
   repeated LockTable LockTables = 4 [(gogoproto.nullable) = false];
+  // Echo the allocator epoch observed by this CN. A replacement allocator
+  // accepts an in-progress drain only after the CN has observed its epoch.
+  string ObservedAllocatorID = 5;
+  uint64 ObservedAllocatorVersion = 6;
 }
 
 // KeepLockTableBindResponse keep lock table bind response. TN -> CN
@@ -320,6 +370,36 @@ message CanRestartServiceRequest {
 // CanRestartServiceResponse can restart lock service request from allocator response. TN -> operator
 message CanRestartServiceResponse {
   bool OK = 1;
+}
+
+// BeginDrain is accepted only for an exact, live lock-service incarnation.
+message BeginDrainRequest {
+  string ServiceID = 1;
+  string AttemptID = 2;
+}
+
+message BeginDrainResponse {
+  bool OK = 1;
+  string ServiceID = 2;
+  string AttemptID = 3;
+  string AllocatorID = 4;
+  uint64 AllocatorVersion = 5;
+}
+
+// QueryDrain never treats allocator replacement or missing state as success.
+message QueryDrainRequest {
+  string ServiceID = 1;
+  string AttemptID = 2;
+  string AllocatorID = 3;
+  uint64 AllocatorVersion = 4;
+}
+
+message QueryDrainResponse {
+  bool Safe = 1;
+  string ServiceID = 2;
+  string AttemptID = 3;
+  string AllocatorID = 4;
+  uint64 AllocatorVersion = 5;
 }
 
 // RemainTxnInServiceRequest get remain txn in service request from allocator request. operator -> TN
@@ -420,10 +500,7 @@ message Result {
   timestamp.Timestamp Timestamp       = 4 [(gogoproto.nullable) = false];
   // TableDefChanged conflict with ddl lock, need rebuild plan to get new table def
   bool                TableDefChanged = 5;
-  bytes               ConflictKey     = 6;
-  bytes               ConflictTxn     = 7;   
-  bytes               PrevWaiter      = 8; 
-  uint32              Waiters         = 9;  
+  reserved 6 to 9;
   // NewLockAdd if true means new lock added, false means lock is added before by current 
   // txn
   bool                NewLockAdd      = 10;

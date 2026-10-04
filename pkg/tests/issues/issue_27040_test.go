@@ -46,6 +46,7 @@ func TestIssue27040ConcurrentIfNotExistsDatabaseClone(t *testing.T) {
 
 		const (
 			sourceDatabase = "issue_27040_clone_source"
+			otherSource    = "issue_27040_clone_other_source"
 			targetDatabase = "issue_27040_clone_target"
 		)
 		defer func() {
@@ -53,17 +54,23 @@ func TestIssue27040ConcurrentIfNotExistsDatabaseClone(t *testing.T) {
 			defer cleanupCancel()
 			execSQLMaybe(t, cleanupCtx, db, "drop database if exists `"+targetDatabase+"`")
 			execSQLMaybe(t, cleanupCtx, db, "drop database if exists `"+sourceDatabase+"`")
+			execSQLMaybe(t, cleanupCtx, db, "drop database if exists `"+otherSource+"`")
 		}()
 
 		execSQLRequire(t, ctx, db, "set role moadmin")
 		execSQLRequire(t, ctx, db, "create database `"+sourceDatabase+"`")
 		execSQLRequire(t, ctx, db, "create table `"+sourceDatabase+"`.payload (id int primary key)")
 		execSQLRequire(t, ctx, db, "insert into `"+sourceDatabase+"`.payload values (1)")
+		execSQLRequire(t, ctx, db, "create database `"+otherSource+"`")
+		execSQLRequire(t, ctx, db, "create table `"+otherSource+"`.payload (id int primary key)")
+		execSQLRequire(t, ctx, db, "insert into `"+otherSource+"`.payload values (2)")
 
-		var moDatabaseTableID uint64
+		// Both clones claim the same target database identity. The second
+		// transaction must wait on that target key while the first is open.
+		var targetCatalogTableID uint64
 		require.NoError(t, db.QueryRowContext(ctx,
 			"select rel_id from mo_catalog.mo_tables where account_id = 0 and reldatabase = 'mo_catalog' and relname = 'mo_database'",
-		).Scan(&moDatabaseTableID))
+		).Scan(&targetCatalogTableID))
 
 		first, err := db.Conn(ctx)
 		require.NoError(t, err)
@@ -79,6 +86,7 @@ func TestIssue27040ConcurrentIfNotExistsDatabaseClone(t *testing.T) {
 		require.NoError(t, execConn(second, "set role moadmin"))
 
 		cloneSQL := "create database if not exists `" + targetDatabase + "` clone `" + sourceDatabase + "`"
+		otherCloneSQL := "create database if not exists `" + targetDatabase + "` clone `" + otherSource + "`"
 		require.NoError(t, execConn(first, "begin"))
 		firstOpen := true
 		secondDone := make(chan error, 1)
@@ -101,15 +109,15 @@ func TestIssue27040ConcurrentIfNotExistsDatabaseClone(t *testing.T) {
 		require.NoError(t, execConn(first, cloneSQL))
 
 		go func() {
-			secondDone <- execConn(second, cloneSQL)
+			secondDone <- execConn(second, otherCloneSQL)
 		}()
 		secondStarted = true
 		secondPending = true
 
 		require.Eventually(t, func() bool {
-			return clusterHasLockWaiter(c, moDatabaseTableID)
+			return clusterHasLockWaiter(c, targetCatalogTableID)
 		}, 30*time.Second, 10*time.Millisecond,
-			"second clone did not wait for the first clone's mo_database target lock")
+			"second clone did not wait for the first clone's target database lock")
 
 		select {
 		case cloneErr := <-secondDone:
@@ -138,6 +146,18 @@ func TestIssue27040ConcurrentIfNotExistsDatabaseClone(t *testing.T) {
 			"select count(*) from `"+targetDatabase+"`.payload",
 		).Scan(&payloadCount))
 		require.Equal(t, 1, payloadCount)
+		var payloadID int
+		require.NoError(t, db.QueryRowContext(ctx, "select id from `"+targetDatabase+"`.payload").Scan(&payloadID))
+		require.Equal(t, 1, payloadID)
+
+		// IF NOT EXISTS is a target decision even when the source has since
+		// disappeared. This must use the RC admission path as well.
+		execSQLRequire(t, ctx, db, "drop database `"+sourceDatabase+"`")
+		execSQLRequire(t, ctx, db, cloneSQL)
+		require.NoError(t, db.QueryRowContext(ctx,
+			"select count(*) from mo_catalog.mo_database where account_id = 0 and datname = ?", targetDatabase,
+		).Scan(&targetCount))
+		require.Equal(t, 1, targetCount)
 	})
 }
 

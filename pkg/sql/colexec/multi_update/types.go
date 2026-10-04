@@ -89,6 +89,10 @@ const (
 	actionInsert actionType = iota
 	actionDelete
 	actionUpdate
+	// actionAffectedRows is an internal WriteS3 -> FlushS3Info control record.
+	// It carries no storage batch; rowCount is the statement-semantic affected
+	// count accumulated by one or more ODKU writers.
+	actionAffectedRows
 )
 
 func init() {
@@ -121,6 +125,7 @@ type MultiUpdate struct {
 	getS3WriterFunc          func(sid string, id uint64) (*s3WriterDelegate, error)
 	getFlushableS3WriterFunc func() *s3WriterDelegate
 	addAffectedRowsFunc      func(uint64)
+	takeS3AffectedRowsFunc   func() uint64
 
 	vm.OperatorBase
 }
@@ -136,7 +141,11 @@ type updateCtxInfo struct {
 type container struct {
 	state        vm.CtrState
 	affectedRows uint64
-	action       actionType
+	// s3AffectedRows is pending semantic metadata. UpdateWriteS3 owns it only
+	// until it is transferred exactly once through the internal output stream;
+	// UpdateFlushS3Info is the sole owner of the client-visible count.
+	s3AffectedRows uint64
+	action         actionType
 
 	flushed        bool
 	s3Writer       *s3WriterDelegate
@@ -170,6 +179,12 @@ type MultiUpdateCtx struct {
 	// ChangedRowsCol is the input bool column containing the final row-image
 	// change marker. Nil requests the legacy matched-row count.
 	ChangedRowsCol *int
+	// AffectedRowsWeightCol is an ODKU-only uint64 column containing the
+	// logical affected rows accumulated before equal input keys collapse.
+	AffectedRowsWeightCol *int
+	// PhysicalChangedRowsCol independently controls whether the final row image
+	// needs storage/index maintenance. Logical counts are collected first.
+	PhysicalChangedRowsCol *int
 	// AffectedRowsCols contains one semantic selector for every writable alias
 	// coalesced into this physical target. DeleteCols[3] independently controls
 	// physical write eligibility, so implicit cascade rows can be written without
@@ -224,6 +239,7 @@ func (update *MultiUpdate) Reset(proc *process.Process, pipelineFailed bool, err
 	if update.ctr.s3Writer != nil {
 		update.ctr.s3Writer.reset(proc)
 	}
+	update.ctr.s3AffectedRows = 0
 	update.freeSeenTargetRows()
 	update.ctr.state = vm.Build
 }
@@ -294,10 +310,20 @@ func (update *MultiUpdate) addInsertAffectRows(tableType UpdateTableType, rowCou
 }
 
 func physicalInsertAffectedRows(updateCtx *MultiUpdateCtx, rowCount uint64) uint64 {
-	if updateCtx != nil && (len(updateCtx.AffectedRowsCols) > 0 || updateCtx.SuppressPhysicalAffectedRows) {
+	if updateCtx != nil && (len(updateCtx.AffectedRowsCols) > 0 ||
+		updateCtx.AffectedRowsWeightCol != nil || updateCtx.SuppressPhysicalAffectedRows) {
 		return 0
 	}
 	return rowCount
+}
+
+func hasODKUAffectedRows(updateCtxs []*MultiUpdateCtx) bool {
+	for _, updateCtx := range updateCtxs {
+		if updateCtx.AffectedRowsWeightCol != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func (update *MultiUpdate) insertAffectedRows(updateCtx *MultiUpdateCtx, input *batch.Batch) uint64 {
@@ -346,4 +372,17 @@ func (update *MultiUpdate) doAddAffectedRows(affectedRows uint64) {
 		return
 	}
 	update.ctr.affectedRows += affectedRows
+}
+
+func (update *MultiUpdate) doAddS3AffectedRows(affectedRows uint64) {
+	if len(update.MultiUpdateCtx) > 0 && update.MultiUpdateCtx[0].IgnoreAffectedRows {
+		return
+	}
+	update.ctr.s3AffectedRows += affectedRows
+}
+
+func (update *MultiUpdate) takeS3AffectedRows() uint64 {
+	affectedRows := update.ctr.s3AffectedRows
+	update.ctr.s3AffectedRows = 0
+	return affectedRows
 }

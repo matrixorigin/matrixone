@@ -31,6 +31,16 @@ import (
 
 func TestExportCanonicalTPCHPlans(t *testing.T) {
 	mock := planbuilder.NewMockOptimizer(false)
+	// Exact DECIMAL arithmetic and SUM widening make these plans contain
+	// Decimal256 expressions. Substrait decimal is capped at precision 38, so
+	// declining Sirius offload preserves MatrixOne's wider arithmetic semantics.
+	decimal256Plans := map[int]EligibilityReason{
+		1: EligibilityExpression, 3: EligibilityExpression, 5: EligibilityExpression,
+		6: EligibilityType, 7: EligibilityExpression, 8: EligibilityExpression,
+		9: EligibilityExpression, 10: EligibilityExpression, 11: EligibilityType,
+		14: EligibilityExpression, 15: EligibilityExpression, 17: EligibilityExpression,
+		19: EligibilityExpression, 20: EligibilityExpression,
+	}
 	for queryNumber := 1; queryNumber <= 22; queryNumber++ {
 		t.Run(fmt.Sprintf("q%d", queryNumber), func(t *testing.T) {
 			path := filepath.Join("..", "tpch", fmt.Sprintf("q%d.sql", queryNumber))
@@ -54,6 +64,17 @@ func TestExportCanonicalTPCHPlans(t *testing.T) {
 			}
 
 			candidate, err := Export(query)
+			if expectedReason, expectedIneligible := decimal256Plans[queryNumber]; expectedIneligible {
+				require.Error(t, err)
+				require.True(t, IsNotEligible(err))
+				reason, ok := NotEligibleReason(err)
+				require.True(t, ok)
+				require.Equal(t, expectedReason, reason)
+				if expectedReason == EligibilityType {
+					require.ErrorContains(t, err, "unsupported type DECIMAL256")
+				}
+				return
+			}
 			require.NoError(t, err)
 			readValues := make(map[int32][]byte, len(candidate.Reads()))
 			for _, read := range candidate.Reads() {
@@ -66,6 +87,48 @@ func TestExportCanonicalTPCHPlans(t *testing.T) {
 			require.NoError(t, proto.Unmarshal(wirePlan, plan))
 			require.Len(t, plan.Relations, len(query.Steps))
 			require.Equal(t, query.Headings, plan.Relations[len(plan.Relations)-1].GetRoot().Names)
+		})
+	}
+}
+
+func TestExportExtractSemanticBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		expression string
+		eligible   bool
+	}{
+		{"extract(year from l_shipdate)", true},
+		{"extract(month from l_shipdate)", true},
+		{"extract(day from l_shipdate)", true},
+		{"extract(quarter from l_shipdate)", true},
+		{"extract(week from l_shipdate)", false}, // MO mode 0, backend ISO
+		{"extract(year_month from l_shipdate)", false},
+		{"extract(year from l_comment)", false}, // tolerant text vs no overload
+		{"extract(week from l_comment)", false},
+	} {
+		t.Run(tc.expression, func(t *testing.T) {
+			mock := planbuilder.NewMockOptimizer(false)
+			statements, err := parsers.Parse(t.Context(), dialect.MYSQL,
+				"select "+tc.expression+" from lineitem", 1)
+			require.NoError(t, err)
+			defer statements[0].Free()
+			query, err := mock.Optimize(statements[0])
+			require.NoError(t, err)
+			for _, node := range query.Nodes {
+				if node != nil && node.TableDef != nil && node.ObjRef != nil {
+					node.TableDef.DbId, node.TableDef.TblId, node.ObjRef.Obj = 7, 42, 42
+				}
+			}
+			candidate, err := Export(query)
+			if tc.eligible {
+				require.NoError(t, err)
+				require.NotNil(t, candidate)
+			} else {
+				require.Nil(t, candidate)
+				require.True(t, IsNotEligible(err), "%v", err)
+				reason, ok := NotEligibleReason(err)
+				require.True(t, ok)
+				require.Equal(t, EligibilityExpression, reason)
+			}
 		})
 	}
 }

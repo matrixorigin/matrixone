@@ -20,12 +20,12 @@ select round(cast(-2 as unsigned), 1), round(18446744073709551614, 1), round(-2,
 ➤ round(cast(-2 as unsigned), 1)[-5,64,0]  ¦  round(18446744073709551614, 1)[-5,64,0]  ¦  round(-2, 1)[-5,64,0]  𝄀
 18446744073709551614  ¦  18446744073709551614  ¦  -2
 select round(4, cast(-2 as unsigned)), round(4, 18446744073709551614), round(4, -2);
-Data truncation: data out of range: data type int64, value '18446744073709551614'
+Data truncation: data out of range: data type int64, integer argument
 select round(1.5, -4294967296), round(1.5, 4294967296);
 ➤ round(1.5, -4294967296)[3,2,0]  ¦  round(1.5, 4294967296)[3,2,1]  𝄀
 0  ¦  1.5
 select round(1.5, -9223372036854775808), round(1.5, 9223372036854775808);
-Data truncation: data out of range: data type int64, value '9223372036854775808'
+Data truncation: data out of range: data type int64, integer argument
 CREATE TABLE t1 (a DOUBLE);
 INSERT INTO t1 VALUES (-1.1), (1.1),
 (-1.5), (1.5),
@@ -55,15 +55,16 @@ SELECT a, ROUND(a) FROM t1;
 1.0000000000000002E16  ¦  1.0000000000000002E16
 DROP TABLE t1;
 CREATE TABLE t1(f1 DECIMAL(22,1));
-[unknown result because it is related to issue#2302]
 INSERT INTO t1 VALUES (0),(1);
-[unknown result because it is related to issue#2302]
 SELECT ROUND(f1, f1) FROM t1;
-[unknown result because it is related to issue#2302]
+round(f1, f1)
+0.0
+1.0
 SELECT ROUND(f1, f1) FROM t1 GROUP BY 1;
-[unknown result because it is related to issue#2302]
+round(f1, f1)
+0.0
+1.0
 DROP TABLE t1;
-[unknown result because it is related to issue#2302]
 SELECT ROUND(sin(0.45), cos(0.8));
 ➤ ROUND(sin(0.45), cos(0.8))[8,54,0]  𝄀
 0.4
@@ -108,7 +109,7 @@ select round(cast(-2 as unsigned), 1), round(18446744073709551614, 1), round(-2,
 ➤ round(cast(-2 as unsigned), 1)[-5,64,0]  ¦  round(18446744073709551614, 1)[-5,64,0]  ¦  round(-2, 1)[-5,64,0]  𝄀
 18446744073709551614  ¦  18446744073709551614  ¦  -2
 select round(4, cast(-2 as unsigned)), round(4, 18446744073709551614), round(4, -2);
-Data truncation: data out of range: data type int64, value '18446744073709551614'
+Data truncation: data out of range: data type int64, integer argument
 select round(10000000000000000000, -19);
 ➤ round(10000000000000000000, -19)[-5,64,0]  𝄀
 10000000000000000000
@@ -137,9 +138,9 @@ select round(1.5, -4294967296), round(1.5, 4294967296);
 ➤ round(1.5, -4294967296)[3,2,0]  ¦  round(1.5, 4294967296)[3,2,1]  𝄀
 0  ¦  1.5
 select round(1.5, -9223372036854775808), round(1.5, 9223372036854775808);
-Data truncation: data out of range: data type int64, value '9223372036854775808'
+Data truncation: data out of range: data type int64, integer argument
 select round(1.5, 18446744073709551615);
-Data truncation: data out of range: data type int64, value '18446744073709551615'
+Data truncation: data out of range: data type int64, integer argument
 select round(18446744073709551614, -1);
 ➤ round(18446744073709551614, -1)[-5,64,0]  𝄀
 18446744073709551610
@@ -392,3 +393,263 @@ select a, b, round(b,2) from t1;
 13  ¦  20.89123  ¦  20.89  𝄀
 14  ¦  23.40123  ¦  23.40  𝄀
 15  ¦  123.45678  ¦  123.46
+
+drop table t1;
+drop table if exists round_signed_values;
+drop table if exists round_signed_ctas;
+drop table if exists round_mask_digits;
+create table round_signed_values(id int primary key,t tinyint,s smallint,i int,b bigint,d bigint);
+insert into round_signed_values values (1,-1,-1,-1,-1,-1),(2,-5,-5,-5,-5,-1),(3,-10,-10,-10,-10,-1),(4,-11,-11,-11,-11,-1),(5,-15,-15,-15,-15,-1),(6,-20,-20,-20,-20,-2),(7,null,null,null,null,-1),(8,15,15,15,15,0),(9,10,10,10,10,2),(10,-100,-100,-100,-100,-2),(11,-101,-101,-101,-101,-2),(12,-128,-128,-128,-128,-1),(13,-125,-125,-125,-125,-1),(14,-1,-1,-1,-1,null);
+select id,round(t,d) as r_t,round(s,d) as r_s,round(i,d) as r_i,round(b,d) as r_b from round_signed_values order by id;
+➤ id[4,32,0]  ¦  r_t[-5,64,0]  ¦  r_s[-5,64,0]  ¦  r_i[-5,64,0]  ¦  r_b[-5,64,0]  𝄀
+1  ¦  0  ¦  0  ¦  0  ¦  0  𝄀
+2  ¦  -10  ¦  -10  ¦  -10  ¦  -10  𝄀
+3  ¦  -10  ¦  -10  ¦  -10  ¦  -10  𝄀
+4  ¦  -10  ¦  -10  ¦  -10  ¦  -10  𝄀
+5  ¦  -20  ¦  -20  ¦  -20  ¦  -20  𝄀
+6  ¦  0  ¦  0  ¦  0  ¦  0  𝄀
+7  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+8  ¦  15  ¦  15  ¦  15  ¦  15  𝄀
+9  ¦  10  ¦  10  ¦  10  ¦  10  𝄀
+10  ¦  -100  ¦  -100  ¦  -100  ¦  -100  𝄀
+11  ¦  -100  ¦  -100  ¦  -100  ¦  -100  𝄀
+12  ¦  -130  ¦  -130  ¦  -130  ¦  -130  𝄀
+13  ¦  -130  ¦  -130  ¦  -130  ¦  -130  𝄀
+14  ¦  null  ¦  null  ¦  null  ¦  null
+create table round_signed_ctas as select id,round(b,d) as r from round_signed_values;
+select id,r from round_signed_ctas order by id;
+➤ id[4,32,0]  ¦  r[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  -10  𝄀
+3  ¦  -10  𝄀
+4  ¦  -10  𝄀
+5  ¦  -20  𝄀
+6  ¦  0  𝄀
+7  ¦  null  𝄀
+8  ¦  15  𝄀
+9  ¦  10  𝄀
+10  ¦  -100  𝄀
+11  ¦  -100  𝄀
+12  ¦  -130  𝄀
+13  ¦  -130  𝄀
+14  ¦  null
+select round(-11+1,-1) as expression_result,round(cast(-11 as decimal(6,0)),-1) as decimal_control,round(-11e0,-1) as float_control,truncate(-11,-1) as truncate_control;
+➤ expression_result[-5,64,0]  ¦  decimal_control[3,6,0]  ¦  float_control[8,53,31]  ¦  truncate_control[-5,64,0]  𝄀
+-10  ¦  -10  ¦  -10.0  ¦  -10
+prepare round_signed_parameter from 'select round(cast(? as signed),cast(? as signed)) as r';
+set @round_value=-11,@round_digits=-1;
+execute round_signed_parameter using @round_value,@round_digits;
+➤ r[-5,64,0]  𝄀
+-10
+set @round_value=-10,@round_digits=-1;
+execute round_signed_parameter using @round_value,@round_digits;
+➤ r[-5,64,0]  𝄀
+-10
+set @round_value=-1,@round_digits=-1;
+execute round_signed_parameter using @round_value,@round_digits;
+➤ r[-5,64,0]  𝄀
+0
+set @round_value=null,@round_digits=-1;
+execute round_signed_parameter using @round_value,@round_digits;
+➤ r[-5,64,0]  𝄀
+null
+set @round_value=-9223372036854775808,@round_digits=-18;
+execute round_signed_parameter using @round_value,@round_digits;
+➤ r[-5,64,0]  𝄀
+-9000000000000000000
+set @round_value=-9223372036854775808,@round_digits=-19;
+execute round_signed_parameter using @round_value,@round_digits;
+Data truncation: data out of range: data type int64, ROUND
+set @round_value=-11,@round_digits=-1;
+execute round_signed_parameter using @round_value,@round_digits;
+➤ r[-5,64,0]  𝄀
+-10
+deallocate prepare round_signed_parameter;
+select round(cast(-9223372036854775808 as signed),-1) as r;
+Data truncation: data out of range: data type int64, ROUND
+select round(cast(9223372036854775807 as signed),-1) as r;
+Data truncation: data out of range: data type int64, ROUND
+select round(cast(4999999999999999999 as signed),-19) as r;
+➤ r[-5,64,0]  𝄀
+0
+select round(cast(-4999999999999999999 as signed),-19) as r;
+➤ r[-5,64,0]  𝄀
+0
+select round(cast(5000000000000000000 as signed),-19) as r;
+Data truncation: data out of range: data type int64, ROUND
+select round(cast(-5000000000000000000 as signed),-19) as r;
+Data truncation: data out of range: data type int64, ROUND
+select round(cast(-9223372036854775808 as signed),-20) as r;
+➤ r[-5,64,0]  𝄀
+0
+select round(cast(9223372036854775807 as signed),-20) as r;
+➤ r[-5,64,0]  𝄀
+0
+select round(cast(-9223372036854775808 as signed),-9223372036854775808) as r;
+➤ r[-5,64,0]  𝄀
+0
+create table round_mask_digits(d bigint);
+insert into round_mask_digits values (-19),(-1),(0);
+select d,case when d<0 then 0 else round(cast(-9223372036854775808 as signed),d) end as r from round_mask_digits order by d;
+➤ d[-5,64,0]  ¦  r[-5,64,0]  𝄀
+-19  ¦  0  𝄀
+-1  ¦  0  𝄀
+0  ¦  -9223372036854775808
+select case when false then round(cast(5000000000000000000 as signed),-19) else 7 end as r;
+➤ r[-5,64,0]  𝄀
+7
+select case when true then 7 else round(cast(5000000000000000000 as signed),-19) end as r;
+➤ r[-5,64,0]  𝄀
+7
+select if(false,round(cast(5000000000000000000 as signed),-19),7) as r;
+➤ r[-5,64,0]  𝄀
+7
+select if(true,7,round(cast(5000000000000000000 as signed),-19)) as r;
+➤ r[-5,64,0]  𝄀
+7
+select coalesce(7,round(cast(5000000000000000000 as signed),-19)) as r;
+➤ r[-5,64,0]  𝄀
+7
+select case when null then round(cast(5000000000000000000 as signed),-19) else 7 end as r;
+➤ r[-5,64,0]  𝄀
+7
+select if(null,round(cast(5000000000000000000 as signed),-19),7) as r;
+➤ r[-5,64,0]  𝄀
+7
+select case when false then if(true,round(cast(5000000000000000000 as signed),-19),0) else 7 end as r;
+➤ r[-5,64,0]  𝄀
+7
+select case when true then round(cast(5000000000000000000 as signed),-19) else 7 end as r;
+Data truncation: data out of range: data type int64, ROUND
+select if(true,round(cast(5000000000000000000 as signed),-19),7) as r;
+Data truncation: data out of range: data type int64, ROUND
+select coalesce(null,round(cast(5000000000000000000 as signed),-19)) as r;
+Data truncation: data out of range: data type int64, ROUND
+select case when d=0 then 7 else round(cast(5000000000000000000 as signed),-19) end as r from round_mask_digits where d=0;
+➤ r[-5,64,0]  𝄀
+7
+select case when d=0 then 7 else round(cast(-9223372036854775808 as signed),-1) end as r from round_mask_digits where d=0;
+➤ r[-5,64,0]  𝄀
+7
+select if(d=0,7,round(cast(5000000000000000000 as signed),-19)) as r from round_mask_digits where d=0;
+➤ r[-5,64,0]  𝄀
+7
+select coalesce(d,round(cast(5000000000000000000 as signed),-19)) as r from round_mask_digits where d=0;
+➤ r[-5,64,0]  𝄀
+0
+select case when d<0 then round(cast(5000000000000000000 as signed),-19) else 7 end as r from round_mask_digits;
+Data truncation: data out of range: data type int64, ROUND
+prepare round_guarded_parameter from 'select case when ? then round(cast(5000000000000000000 as signed),-19) else 7 end as r';
+set @round_guard=false;
+execute round_guarded_parameter using @round_guard;
+➤ r[-5,64,0]  𝄀
+7
+set @round_guard=true;
+execute round_guarded_parameter using @round_guard;
+Data truncation: data out of range: data type int64, ROUND
+set @round_guard=false;
+execute round_guarded_parameter using @round_guard;
+➤ r[-5,64,0]  𝄀
+7
+deallocate prepare round_guarded_parameter;
+drop table round_mask_digits;
+drop table round_signed_ctas;
+drop table round_signed_values;
+drop database if exists round_pruning;
+create database round_pruning;
+use round_pruning;
+set optimizer_hints='blockFilter=1';
+create table t(id bigint primary key,v bigint,c1 char(8),c2 char(8));
+insert into t values (1,-5,'MO','MO '),(2,-10,'MO','MO ');
+select mo_ctl('dn','flush','round_pruning.t');
+OK
+insert into t values (3,-1000,'XX','XX '),(4,-1010,'XX','XX ');
+select mo_ctl('dn','flush','round_pruning.t');
+OK
+select count(*) as n from t where round(v,-1)=-10;
+➤ n[-5,64,0]  𝄀
+2
+explain analyze select id from t where round(v,-1)=-10;
+inputBlocks=1 inputRows=2
+select count(*) as n from t where round(v)=-10;
+➤ n[-5,64,0]  𝄀
+1
+explain analyze select id from t where round(v)=-10;
+inputBlocks=1 inputRows=2
+select count(*) as n from t where floor(v)=-10;
+➤ n[-5,64,0]  𝄀
+1
+explain analyze select id from t where floor(v)=-10;
+inputBlocks=1 inputRows=2
+select count(*) as n from t where ceil(v)=-10;
+➤ n[-5,64,0]  𝄀
+1
+explain analyze select id from t where ceil(v)=-10;
+inputBlocks=1 inputRows=2
+select count(*) as n from t where v+1=-9;
+➤ n[-5,64,0]  𝄀
+1
+explain analyze select id from t where v+1=-9;
+inputBlocks=1 inputRows=2
+select count(*) as n from t where truncate(v,-1)=-10;
+➤ n[-5,64,0]  𝄀
+1
+select count(*) as n from t where abs(v)=10;
+➤ n[-5,64,0]  𝄀
+1
+select count(*) as n from t where c1=cast('MO ' as char(8));
+➤ n[-5,64,0]  𝄀
+2
+select count(*) as n from t where c1=cast('MO ' as char(8)) or round(v,-1)=-9999;
+➤ n[-5,64,0]  𝄀
+2
+select count(*) as n from t where c1=c2 or round(v,-1)=-9999;
+➤ n[-5,64,0]  𝄀
+4
+select count(*) as n from t where c1 in (cast('MO ' as char(8)),cast('ZZ' as char(8))) or round(v,-1)=-9999;
+➤ n[-5,64,0]  𝄀
+2
+select count(*) as n from t where c1=cast('ZZ ' as char(8)) or round(v,-1)=-9999;
+➤ n[-5,64,0]  𝄀
+0
+select count(*) as n from t where cast(c1 as varchar(8))='MO ' or round(v,-1)=-9999;
+➤ n[-5,64,0]  𝄀
+0
+prepare round_pruning_stmt from 'select count(*) as n from t where round(v,?)=?';
+set @digits=-1,@bound=-10;
+execute round_pruning_stmt using @digits,@bound;
+➤ n[-5,64,0]  𝄀
+2
+set @digits=-1,@bound=-1000;
+execute round_pruning_stmt using @digits,@bound;
+➤ n[-5,64,0]  𝄀
+1
+set @digits=null,@bound=-10;
+execute round_pruning_stmt using @digits,@bound;
+➤ n[-5,64,0]  𝄀
+0
+set @digits=-1,@bound=-10;
+execute round_pruning_stmt using @digits,@bound;
+➤ n[-5,64,0]  𝄀
+2
+deallocate prepare round_pruning_stmt;
+select count(*) as n from t where round(v,case when id=1 then -1 else -3 end)=-10;
+➤ n[-5,64,0]  𝄀
+1
+insert into t values (5,5000000000000000000,'ZZ','ZZ');
+select mo_ctl('dn','flush','round_pruning.t');
+OK
+select count(*) as n from t where round(v,-19)=1;
+Data truncation: data out of range: data type int64, ROUND
+create table argument_bounds(v double);
+insert into argument_bounds values (-2),(1),(2);
+select mo_ctl('dn','flush','round_pruning.argument_bounds');
+OK
+select count(*) as n from argument_bounds where 1/v=1;
+➤ n[-5,64,0]  𝄀
+1
+select count(*) as n from argument_bounds where 1 div cast(v as signed)=1;
+➤ n[-5,64,0]  𝄀
+1
+set optimizer_hints='';
+drop database round_pruning;

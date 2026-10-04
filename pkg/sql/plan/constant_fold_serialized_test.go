@@ -16,16 +16,21 @@ package plan
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -116,6 +121,53 @@ func TestConstantFoldPreservesSerializedLiteralProvenance(t *testing.T) {
 	}
 }
 
+func TestOptimizerConstantFoldsNegativeSecToTime(t *testing.T) {
+	stmt, err := mysql.ParseOne(t.Context(), "select sec_to_time(-2378)", 1)
+	require.NoError(t, err)
+
+	query, err := NewBaseOptimizer(NewMockCompilerContext(true)).Optimize(stmt, false)
+	require.NoError(t, err)
+	require.NotEmpty(t, query.Steps)
+	root := query.Nodes[query.Steps[len(query.Steps)-1]]
+	require.NotEmpty(t, root.ProjectList)
+
+	literal := root.ProjectList[0].GetLit()
+	require.NotNil(t, literal)
+	require.Equal(t, int64(-2378*types.MicroSecsPerSec), literal.GetTimeval())
+}
+
+func TestConstantFoldDefersLegacyTimeAssignmentCast(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputType := types.T_varchar.ToType()
+	timeType := types.T_time.ToTypeWithScale(6)
+	registered, err := function.GetFunctionByName(
+		context.Background(), "cast_strict", []types.Type{inputType, timeType},
+	)
+	require.NoError(t, err)
+
+	expr := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_time), Scale: 6},
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{Obj: registered.GetEncodedOverloadID(), ObjName: "cast_strict"},
+			Args: []*planpb.Expr{
+				{
+					Typ:  planpb.Type{Id: int32(types.T_varchar)},
+					Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: "2562047788:00:00"}}},
+				},
+				{
+					Typ:  planpb.Type{Id: int32(types.T_time), Scale: 6},
+					Expr: &planpb.Expr_T{T: &planpb.TargetType{}},
+				},
+			},
+		}},
+	}
+
+	folded, err := ConstantFold(batch.EmptyForConstFoldBatch, expr, proc, false, true)
+	require.NoError(t, err)
+	require.NotNil(t, folded.GetF())
+	require.Equal(t, "cast_strict", folded.GetF().GetFunc().GetObjName())
+}
+
 func TestConstantFoldPreservesSerialCastSemantics(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	registered, err := function.GetFunctionByName(
@@ -171,6 +223,39 @@ func TestConstantFoldPreservesSerialCastSemantics(t *testing.T) {
 		rule.GetConstantValue(foldedResult, false, 0),
 		"constant folding changed the expression value",
 	)
+}
+
+func TestReplaceFoldExprKeepsChildWhenConstantFoldFails(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	target := types.New(types.T_decimal256, 65, 30)
+	badCast, err := makePlan2CastExpr(
+		context.Background(),
+		MakePlan2StringConstExprWithType("not-a-decimal"),
+		makePlan2Type(&target),
+	)
+	require.NoError(t, err)
+
+	column := &planpb.Expr{
+		Typ: makePlan2Type(&target),
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
+			Name: "d",
+		}},
+	}
+	filter, err := BindFuncExprImplByPlanExpr(
+		context.Background(), "=", []*planpb.Expr{column, badCast},
+	)
+	require.NoError(t, err)
+
+	var executors []colexec.ExpressionExecutor
+	t.Cleanup(func() {
+		for _, executor := range executors {
+			executor.Free()
+		}
+	})
+	_, err = ReplaceFoldExpr(proc, filter, &executors)
+	require.Error(t, err)
+	require.NotNil(t, filter.GetF().Args[1], "a failed fold must not replace its child with nil")
+	require.Equal(t, "cast", filter.GetF().Args[1].GetF().GetFunc().GetObjName())
 }
 
 func TestOptimizerPreservesByteIdenticalSerializedProvenance(t *testing.T) {
@@ -378,21 +463,117 @@ func TestConstantListFoldPreservesPerItemStringProvenance(t *testing.T) {
 	}
 
 	textType := planpb.Type{Id: int32(types.T_varchar)}
+	ordinaryLiteral := &planpb.Expr{
+		Typ: textType,
+		Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+			Value:       &planpb.Literal_Sval{Sval: "ordinary"},
+			LiteralForm: planpb.StringLiteralForm_STRING_LITERAL_TEXT,
+		}},
+	}
 	ordinaryList := &planpb.Expr{
 		Typ: textType,
-		Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{{
-			Typ: textType,
-			Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
-				Value:       &planpb.Literal_Sval{Sval: "ordinary"},
-				LiteralForm: planpb.StringLiteralForm_STRING_LITERAL_TEXT,
-			}},
-		}}}},
+		Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{
+			ordinaryLiteral, DeepCopyExpr(ordinaryLiteral),
+		}}},
 	}
 	foldedControl, err := ConstantFold(
 		batch.EmptyForConstFoldBatch, ordinaryList, proc, false, true,
 	)
 	require.NoError(t, err)
 	require.NotNil(t, foldedControl.GetVec(), "same-domain list keeps the existing fold fast path")
+	require.Equal(t, int32(1), foldedControl.GetVec().GetLen(), "duplicate literals compact to one row")
+	require.Equal(t, uint32(types.StringSourceLiteral), foldedControl.GetVec().GetStringSource())
+	require.Equal(t, foldedControl.GetVec().GetStringSource(),
+		DeepCopyExpr(foldedControl).GetVec().GetStringSource())
+	payload, err := proto.Marshal(foldedControl)
+	require.NoError(t, err)
+	decodedControl := new(planpb.Expr)
+	require.NoError(t, proto.Unmarshal(payload, decodedControl))
+	require.Equal(t, foldedControl.GetVec().GetStringSource(),
+		decodedControl.GetVec().GetStringSource())
+	result, free, evalErr := colexec.GetReadonlyResultFromExpression(
+		proc, foldedControl, []*batch.Batch{batch.EmptyForConstFoldBatch},
+	)
+	require.NoError(t, evalErr)
+	defer free()
+	require.Equal(t, types.StringSourceLiteral, result.GetStringSourceAt(0))
+}
+
+func TestConstantFoldPreservesExplicitCastSource(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	stmt, err := mysql.ParseOne(t.Context(), "select cast('x' as char)", 1)
+	require.NoError(t, err)
+	pl, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	query := pl.GetQuery()
+	root := query.Nodes[query.Steps[len(query.Steps)-1]]
+	require.Len(t, root.ProjectList, 1)
+	unfolded := root.ProjectList[0]
+	require.NotNil(t, unfolded.GetF())
+
+	node := &planpb.Node{ProjectList: []*planpb.Expr{DeepCopyExpr(unfolded)}}
+	rule.NewConstantFold(false).Apply(node, nil, ctx.GetProcess())
+	folded := node.ProjectList[0]
+	require.NotNil(t, folded.GetLit())
+	require.Equal(t, uint32(types.StringSourceExpression)+1, folded.GetLit().GetStringSource())
+
+	copied := DeepCopyExpr(folded)
+	require.Equal(t, folded.GetLit().GetStringSource(), copied.GetLit().GetStringSource())
+	require.Equal(t, exprStructuralHash(folded), exprStructuralHash(copied))
+	require.True(t, exprStructuralEqual(folded, copied))
+	payload, err := proto.Marshal(folded)
+	require.NoError(t, err)
+	decoded := new(planpb.Expr)
+	require.NoError(t, proto.Unmarshal(payload, decoded))
+	require.Equal(t, folded.GetLit().GetStringSource(), decoded.GetLit().GetStringSource())
+	require.Equal(t, exprStructuralHash(folded), exprStructuralHash(decoded))
+	require.True(t, exprStructuralEqual(folded, decoded))
+
+	result, free, err := colexec.GetReadonlyResultFromExpression(
+		ctx.GetProcess(), decoded, []*batch.Batch{batch.EmptyForConstFoldBatch})
+	require.NoError(t, err)
+	defer free()
+	require.Equal(t, types.StringSourceExpression, result.GetStringSourceAt(0))
+
+	plain := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_varchar)},
+		Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+			Value: &planpb.Literal_Sval{Sval: "x"},
+		}},
+	}
+	plainResult, plainFree, err := colexec.GetReadonlyResultFromExpression(
+		ctx.GetProcess(), plain, []*batch.Batch{batch.EmptyForConstFoldBatch})
+	require.NoError(t, err)
+	defer plainFree()
+	require.Equal(t, types.StringSourceLiteral, plainResult.GetStringSourceAt(0))
+}
+
+func TestMakeInExprRuntimePayloadKeepsExpressionSource(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	scanKeys := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(scanKeys, []byte("runtime-key"), false, proc.Mp()))
+	require.Equal(t, types.StringSourceExpression, scanKeys.GetStringSourceAt(0))
+	data, err := scanKeys.MarshalBinary()
+	require.NoError(t, err)
+	scanKeys.Free(proc.Mp())
+
+	typ := planpb.Type{Id: int32(types.T_varchar)}
+	inExpr := MakeInExpr(t.Context(), &planpb.Expr{
+		Typ: typ,
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
+			RelPos: 0,
+			ColPos: 0,
+		}},
+	}, 1, data, false)
+	runtimePayload := inExpr.GetF().Args[1]
+	require.Zero(t, runtimePayload.GetVec().GetStringSource())
+
+	result, free, evalErr := colexec.GetReadonlyResultFromExpression(
+		proc, runtimePayload, []*batch.Batch{batch.EmptyForConstFoldBatch},
+	)
+	require.NoError(t, evalErr)
+	defer free()
+	require.Equal(t, types.StringSourceExpression, result.GetStringSourceAt(0))
 }
 
 func TestConstantFoldPreservesSelectedStringDomain(t *testing.T) {
@@ -453,6 +634,31 @@ func TestConstantFoldPreservesSelectedStringDomain(t *testing.T) {
 	}
 }
 
+func TestConstantFoldDynamicIPFunctionLosesFunctionNode(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	stmt, err := mysql.ParseOne(t.Context(), "select inet_ntoa('1.6')", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	ast := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+	binder := NewGeneratedColBinder(ctx.GetProcess().Ctx, nil, nil)
+	bound, err := binder.BindExpr(ast, 0, false)
+	require.NoError(t, err)
+	require.NotNil(t, bound.GetF(), "the pre-optimization plan must retain the dynamic overload")
+	requiredBefore, err := RequiredPersistedExpressionProtocolVersion(bound)
+	require.NoError(t, err)
+	require.Equal(t, int64(defines.MORPCVersion86), requiredBefore)
+
+	folded, err := ConstantFold(
+		batch.EmptyForConstFoldBatch, DeepCopyExpr(bound), ctx.GetProcess(), false, true)
+	require.NoError(t, err)
+	require.NotNil(t, folded.GetLit(), "the optimizer can fold the constant dynamic overload")
+	requiredAfter, err := RequiredPersistedExpressionProtocolVersion(folded)
+	require.NoError(t, err)
+	require.Zero(t, requiredAfter,
+		"the folded literal no longer exposes the function node; view DDL must retain the pre-fold requirement")
+}
+
 func findFirstLiteralVecExpr(query *planpb.Query) *planpb.Expr {
 	var found *planpb.Expr
 	var visit func(*planpb.Expr)
@@ -481,4 +687,88 @@ func findFirstLiteralVecExpr(query *planpb.Query) *planpb.Expr {
 		}
 	}
 	return found
+}
+
+func TestConstantFoldDefersGuardedKernelFailure(t *testing.T) {
+	for _, selector := range []struct {
+		name     string
+		constant bool
+	}{{"case", false}, {"case", true}, {"if", false}, {"coalesce", false}} {
+		name := selector.name
+		for _, public := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/constant=%t/public=%t", name, selector.constant, public), func(t *testing.T) {
+				proc := testutil.NewProcess(t)
+				t.Cleanup(func() {
+					defer proc.Free()
+					require.Equal(t, [2]int64{}, [2]int64{proc.Mp().CurrNB(), proc.Mp().OnHeapCurrNB()})
+				})
+				bind := func(name string, args ...*planpb.Expr) *planpb.Expr {
+					expr, err := BindFuncExprImplByPlanExpr(proc.Ctx, name, args)
+					require.NoError(t, err)
+					return expr
+				}
+				bad := bind("round", MakePlan2Int64ConstExprWithType(5000000000000000000), MakePlan2Int64ConstExprWithType(-19))
+				safe := bind("abs", MakePlan2Int64ConstExprWithType(-7))
+				input := batch.NewWithSize(1)
+				input.SetRowCount(1)
+				conditionType := types.T_bool
+				input.Vecs[0] = testutil.MakeBoolVector([]bool{false}, nil, proc.Mp())
+				if name == "coalesce" {
+					input.Vecs[0].Free(proc.Mp())
+					conditionType = types.T_int64
+					input.Vecs[0] = testutil.MakeInt64Vector([]int64{7}, nil, proc.Mp())
+				}
+				t.Cleanup(func() { input.Clean(proc.Mp()) })
+				condition := &planpb.Expr{Typ: planpb.Type{Id: int32(conditionType)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
+				if selector.constant {
+					condition = makePlan2BoolConstExprWithType(false)
+				}
+				expr := bind(name, condition, bad, safe)
+				var folded *planpb.Expr
+				if public {
+					var err error
+					folded, err = ConstantFold(batch.EmptyForConstFoldBatch, expr, proc, false, true)
+					require.NoError(t, err)
+				} else {
+					node := &planpb.Node{ProjectList: []*planpb.Expr{expr}}
+					rule.NewConstantFold(false).Apply(node, nil, proc)
+					folded = node.ProjectList[0]
+				}
+				require.NotNil(t, folded.GetF())
+				require.NotNil(t, folded.GetF().Args[1].GetF())
+				fid, _ := function.DecodeOverloadID(folded.GetF().Args[1].GetF().Func.Obj)
+				require.Equal(t, int32(function.ROUND), fid, "retain the failing subtree")
+				require.Equal(t, int64(7), folded.GetF().Args[2].GetLit().GetI64Val(), "safe sibling still folds")
+				baseline := [2]int64{proc.Mp().CurrNB(), proc.Mp().OnHeapCurrNB()}
+				func() {
+					result, free, err := colexec.GetReadonlyResultFromExpression(proc, folded, []*batch.Batch{input})
+					require.NoError(t, err)
+					defer free()
+					require.Equal(t, int64(7), vector.MustFixedColNoTypeCheck[int64](result)[0])
+				}()
+				require.Equal(t, baseline, [2]int64{proc.Mp().CurrNB(), proc.Mp().OnHeapCurrNB()})
+				if selector.constant {
+					folded.GetF().Args[0].GetLit().Value.(*planpb.Literal_Bval).Bval = true
+				} else if name == "coalesce" {
+					input.Vecs[0].GetNulls().Add(0)
+				} else {
+					vector.MustFixedColNoTypeCheck[bool](input.Vecs[0])[0] = true
+				}
+				baseline = [2]int64{proc.Mp().CurrNB(), proc.Mp().OnHeapCurrNB()}
+				var escaped any
+				func() {
+					defer func() { escaped = recover() }()
+					_, free, err := colexec.GetReadonlyResultFromExpression(proc, folded, []*batch.Batch{input})
+					if free != nil {
+						defer free()
+					}
+					require.NoError(t, err)
+				}()
+				panicErr, ok := escaped.(error)
+				require.True(t, ok, "selected ROUND must still fail")
+				require.True(t, moerr.IsMoErrCode(panicErr, moerr.ErrOutOfRange))
+				require.Equal(t, baseline, [2]int64{proc.Mp().CurrNB(), proc.Mp().OnHeapCurrNB()})
+			})
+		}
+	}
 }

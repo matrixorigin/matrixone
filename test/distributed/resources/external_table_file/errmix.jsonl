@@ -1,0 +1,10 @@
+{"id":1,"name":"alpha","amount":10.50,"ts":"2024-01-01 00:00:00"}
+{"id":"abc","name":"beta","amount":20.50,"ts":"2024-01-02 00:00:00"}
+{"id":3,"name":"gamma","amount":"notanumber","ts":"2024-01-03 00:00:00"}
+{"id":4,"name":"delta","amount":40.50,"ts":"not-a-timestamp"}
+{"id":5,"name":"epsilon"}
+{"id":6,"name":"zeta","amount":60.50,"ts":"2024-01-06 00:00:00","extra":"ignored"}
+this line is not json at all
+{"id":8,"name":"theta","amount":80.50,
+{"id":9,"name":"iota","amount":90.50,"ts":"2024-02-30 00:00:00"}
+{"id":10,"name":"kappa","amount":100.50,"ts":"2024-01-10 00:00:00"}

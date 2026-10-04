@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -30,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -44,6 +46,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
+
+type restoreServiceBackgroundExec struct {
+	BackgroundExec
+	service string
+}
+
+func (b *restoreServiceBackgroundExec) Service() string { return b.service }
 
 func TestGetFkDepsFromTableInfos(t *testing.T) {
 	tableInfos := []*tableInfo{
@@ -405,7 +414,7 @@ func TestSequenceRestoreEntryPoints(t *testing.T) {
 			currentKind: catalog.SystemOrdinaryRel,
 			wantDropSQL: "drop table if exists `db1`.`seq1`",
 			run: func(bh BackgroundExec) error {
-				return recreateTable(accountCtx, "", bh, "snapshot1", sequence, 10, snapshotTS)
+				return recreateTable(accountCtx, "", bh, "snapshot1", sequence, 10, snapshotTS, false)
 			},
 		},
 		{
@@ -450,7 +459,7 @@ func TestSequenceRestoreEntryPoints(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		err := recreateTable(context.Background(), "", bh, "snapshot1", sequence, 10, snapshotTS)
+		err := recreateTable(context.Background(), "", bh, "snapshot1", sequence, 10, snapshotTS, false)
 		require.Error(t, err)
 		require.Empty(t, bh.executedSQLs)
 
@@ -489,20 +498,20 @@ func TestInvalidateAccountViewMetadataUsesSystemContextAndPropagatesErrors(t *te
 		bh.init()
 		require.NoError(t, invalidateAccountViewMetadata(context.Background(), ses, bh, 42))
 		require.Equal(t, compile.ViewMetadataRequireRevalidationSQL(), bh.executedSQLs)
-		require.Equal(t, []uint32{0, 0, 0}, bh.executionAccountIDs)
-		require.Equal(t, []bool{true, true, true}, bh.systemCTELimits)
-		require.Contains(t, bh.executedSQLs[1], "REVALIDATE_REQUIRED")
+		require.Equal(t, []uint32{0, 0, 0, 0}, bh.executionAccountIDs)
+		require.Equal(t, []bool{true, true, true, true}, bh.systemCTELimits)
+		require.Contains(t, bh.executedSQLs[2], "REVALIDATE_REQUIRED")
 	})
 
 	t.Run("success", func(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 		require.NoError(t, invalidateAccountViewMetadataEnabled(context.Background(), bh, 42))
-		require.Len(t, bh.executedSQLs, 2)
-		require.Equal(t, []uint32{catalog.System_Account, catalog.System_Account}, bh.executionAccountIDs)
-		require.Equal(t, []bool{false, true}, bh.systemCTELimits)
-		require.Contains(t, bh.executedSQLs[0], catalog.ViewMetadataLifecycleGateSQL)
-		require.Contains(t, bh.executedSQLs[1], "d.source_account_id=42")
+		require.Len(t, bh.executedSQLs, 3)
+		require.Equal(t, []uint32{0, 0, 0}, bh.executionAccountIDs)
+		require.Equal(t, []bool{false, false, true}, bh.systemCTELimits)
+		require.Equal(t, []string{catalog.SnapshotLifecycleGateSQL, catalog.ViewMetadataLifecycleGateSQL}, bh.executedSQLs[:2])
+		require.Contains(t, bh.executedSQLs[2], "d.source_account_id=42")
 	})
 
 	t.Run("gate failure", func(t *testing.T) {
@@ -511,16 +520,16 @@ func TestInvalidateAccountViewMetadataUsesSystemContextAndPropagatesErrors(t *te
 		testErr := moerr.NewInternalErrorNoCtx("gate failed")
 		bh.sql2err[catalog.ViewMetadataLifecycleGateSQL] = testErr
 		require.ErrorIs(t, invalidateAccountViewMetadataEnabled(context.Background(), bh, 42), testErr)
-		require.Len(t, bh.executedSQLs, 1)
+		require.Len(t, bh.executedSQLs, 2)
 	})
 
 	t.Run("closure failure", func(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 		testErr := moerr.NewInternalErrorNoCtx("closure failed")
-		// The generation is time-derived, so fail the second statement after the gate.
+		// The generation is time-derived, so fail the mutation after both gates.
 		bh.sql2err[catalog.ViewMetadataLifecycleGateSQL] = nil
-		bhFailure := &failSecondBackgroundExec{backgroundExecTest: bh, err: testErr}
+		bhFailure := &failViewMutationBackgroundExec{backgroundExecTest: bh, err: testErr}
 		require.ErrorIs(t, invalidateAccountViewMetadataEnabled(context.Background(), bhFailure, 42), testErr)
 	})
 }
@@ -531,25 +540,27 @@ func TestPrepareViewMetadataMutationCatalogCompatibilityAndFailures(t *testing.T
 	t.Cleanup(ses.Close)
 	statements := compile.ViewMetadataRequireRevalidationSQL()
 
-	t.Run("typed missing table remains compatible", func(t *testing.T) {
-		bh := &backgroundExecTest{}
-		bh.init()
-		bh.sql2err[statements[0]] = moerr.NewNoSuchTableNoCtx("mo_catalog", catalog.MO_VIEW_REFRESH)
-		enabled, err := prepareViewMetadataMutation(context.Background(), bh, ses.GetService())
-		require.NoError(t, err)
-		require.False(t, enabled)
-		require.Equal(t, statements[:1], bh.executedSQLs)
-	})
+	for i, table := range []string{catalog.MO_FEATURE_REGISTRY, catalog.MO_VIEW_REFRESH, catalog.MO_VIEW_DEPENDENCIES} {
+		t.Run("typed missing "+table+" remains compatible", func(t *testing.T) {
+			bh := &backgroundExecTest{}
+			bh.init()
+			bh.sql2err[statements[i]] = moerr.NewNoSuchTableNoCtx("mo_catalog", table)
+			enabled, err := prepareViewMetadataMutation(context.Background(), bh, ses.GetService())
+			require.NoError(t, err)
+			require.False(t, enabled)
+			require.Equal(t, statements[:i+1], bh.executedSQLs)
+		})
+	}
 
 	t.Run("ordinary failure aborts mutation", func(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 		testErr := moerr.NewInternalErrorNoCtx("marker failed")
-		bh.sql2err[statements[1]] = testErr
+		bh.sql2err[statements[2]] = testErr
 		enabled, err := prepareViewMetadataMutation(context.Background(), bh, ses.GetService())
 		require.False(t, enabled)
 		require.ErrorIs(t, err, testErr)
-		require.Equal(t, statements[:2], bh.executedSQLs)
+		require.Equal(t, statements[:3], bh.executedSQLs)
 	})
 }
 
@@ -574,25 +585,80 @@ func TestReconcileAccountViewMetadataUsesSystemContext(t *testing.T) {
 	bh := &backgroundExecTest{}
 	bh.init()
 	require.NoError(t, reconcileAccountViewMetadataEnabled(context.Background(), bh, 42))
-	require.Len(t, bh.executedSQLs, 4)
-	require.Equal(t, catalog.ViewMetadataLifecycleGateSQL, bh.executedSQLs[0])
-	require.Contains(t, bh.executedSQLs[1], "delete from mo_catalog.mo_view_dependencies")
-	require.Contains(t, bh.executedSQLs[2], "delete from mo_catalog.mo_view_refresh")
-	require.Contains(t, bh.executedSQLs[3], "where t.account_id=42")
-	require.Equal(t, []uint32{0, 0, 0, 0}, bh.executionAccountIDs)
-	require.Equal(t, []bool{true, true, true, true}, bh.systemCTELimits)
+	require.Len(t, bh.executedSQLs, 5)
+	require.Equal(t, []string{catalog.SnapshotLifecycleGateSQL, catalog.ViewMetadataLifecycleGateSQL}, bh.executedSQLs[:2])
+	require.Contains(t, bh.executedSQLs[2], "delete from mo_catalog.mo_view_dependencies")
+	require.Contains(t, bh.executedSQLs[3], "delete from mo_catalog.mo_view_refresh")
+	require.Contains(t, bh.executedSQLs[4], "where t.account_id=42")
+	require.Equal(t, []uint32{0, 0, 0, 0, 0}, bh.executionAccountIDs)
+	require.Equal(t, []bool{true, true, true, true, true}, bh.systemCTELimits)
 }
 
-type failSecondBackgroundExec struct {
+func TestLockViewMetadataLifecycleUsesSystemContextWithoutMutatingCaller(t *testing.T) {
+	callerCtx := defines.AttachAccountId(context.Background(), 42)
+	callerAccountID, err := defines.GetAccountId(callerCtx)
+	require.NoError(t, err)
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	require.NoError(t, lockViewMetadataLifecycle(callerCtx, bh))
+	require.Equal(t,
+		[]string{catalog.SnapshotLifecycleGateSQL, catalog.ViewMetadataLifecycleGateSQL},
+		bh.executedSQLs)
+	require.Equal(t, []uint32{uint32(sysAccountID), uint32(sysAccountID)}, bh.executionAccountIDs)
+
+	afterAccountID, err := defines.GetAccountId(callerCtx)
+	require.NoError(t, err)
+	require.Equal(t, callerAccountID, afterAccountID)
+}
+
+func TestSharedLifecycleLocksAcquireLocalGateBeforeSQL(t *testing.T) {
+	callerCtx := defines.AttachAccountId(context.Background(), 42)
+	var acquired [][]accountLifecycleGate
+	originalAcquire := acquireAccountLifecycleSharedGates
+	acquireAccountLifecycleSharedGates = func(
+		_ context.Context,
+		_ *Session,
+		_ BackgroundExec,
+		gates ...accountLifecycleGate,
+	) error {
+		acquired = append(acquired, append([]accountLifecycleGate(nil), gates...))
+		return nil
+	}
+	t.Cleanup(func() { acquireAccountLifecycleSharedGates = originalAcquire })
+
+	snapshotExec := &backgroundExecTest{}
+	snapshotExec.init()
+	require.NoError(t, lockSnapshotLifecycleShared(callerCtx, nil, snapshotExec))
+	require.Equal(t, []string{catalog.SnapshotLifecycleSharedGateSQL}, snapshotExec.executedSQLs)
+	require.Equal(t, []bool{false}, snapshotExec.lockWriterFair)
+
+	viewExec := &backgroundExecTest{}
+	viewExec.init()
+	require.NoError(t, lockViewMetadataLifecycleShared(callerCtx, nil, viewExec))
+	require.Equal(t,
+		[]string{catalog.SnapshotLifecycleSharedGateSQL, catalog.ViewMetadataLifecycleSharedGateSQL},
+		viewExec.executedSQLs)
+	require.Equal(t, []bool{false, false}, viewExec.lockWriterFair)
+	require.Equal(t, [][]accountLifecycleGate{
+		{accountLifecycleSnapshotGate},
+		{accountLifecycleSnapshotGate, accountLifecycleViewGate},
+	}, acquired)
+
+	require.False(t, defines.IsLockWriterFair(callerCtx),
+		"the lifecycle helper must not mutate the caller context")
+}
+
+type failViewMutationBackgroundExec struct {
 	*backgroundExecTest
 	err error
 }
 
-func (e *failSecondBackgroundExec) Exec(ctx context.Context, sql string) error {
+func (e *failViewMutationBackgroundExec) Exec(ctx context.Context, sql string) error {
 	if err := e.backgroundExecTest.Exec(ctx, sql); err != nil {
 		return err
 	}
-	if len(e.executedSQLs) == 2 {
+	if len(e.executedSQLs) == 3 {
 		return e.err
 	}
 	return nil
@@ -816,8 +882,8 @@ func TestRestoreExternalTableSnapshotAndFromTS(t *testing.T) {
 			snapshotTs   = int64(100)
 		)
 
-		bh.sql2result[fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {MO_TS = %d} where datname = '%s' and account_id = 0", snapshotTs, dbName)] =
-			newMrsForRestoreStringRows([]string{"datname", "dat_createsql"}, [][]interface{}{{dbName, "create database db1"}})
+		bh.sql2result[fmt.Sprintf("select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d} where datname = '%s' and account_id = 0", snapshotTs, dbName)] =
+			newMrsForRestoreStringRows([]string{"datname", "dat_createsql", "dat_type"}, [][]interface{}{{dbName, "create database db1", ""}})
 		bh.sql2result[fmt.Sprintf(checkDatabaseIsMasterFormat, quoteSQLStringLiteral(dbName), quoteSQLStringLiteral(dbName))] = newMrsForRestoreStringRows([]string{"db_name"}, nil)
 		bh.sql2result[fmt.Sprintf(getPubInfoSql, uint32(sysAccountID))+" and database_name = 'db1'"] = newMrsForRestoreStringRows([]string{"account_id"}, nil)
 		bh.sql2result[buildTableInfoListSQL(dbName, "", snapshotTs, uint32(sysAccountID))] =
@@ -831,7 +897,7 @@ func TestRestoreExternalTableSnapshotAndFromTS(t *testing.T) {
 			newMrsForRestoreStringRows([]string{"Table", "Create Table"}, [][]interface{}{{"hive_ext", "create external table hive_ext (id int)"}})
 		bh.sql2result[fmt.Sprintf(checkTableIsMasterFormat, quoteSQLStringLiteral(dbName), quoteSQLStringLiteral("base_t"))] = newMrsForRestoreStringRows([]string{"db_name"}, nil)
 
-		err := restoreToDatabaseOrTable(ctx, "", bh, snapshotName, dbName, "", uint32(sysAccountID), map[string]*tableInfo{}, map[string]*tableInfo{}, snapshotTs, uint32(sysAccountID), false, nil)
+		err := restoreToDatabaseOrTable(ctx, "", bh, snapshotName, dbName, "", uint32(sysAccountID), map[string]*tableInfo{}, map[string]*tableInfo{}, snapshotTs, uint32(sysAccountID), false, nil, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(restoreTestExecutedSQLContains(bh, restoreTableDataByTsSQL(dbName, "base_t", snapshotTs)), convey.ShouldBeTrue)
 		convey.So(restoreTestExecutedSQLContains(bh, "hive_ext` clone"), convey.ShouldBeFalse)
@@ -848,14 +914,14 @@ func TestRestoreExternalTableSnapshotAndFromTS(t *testing.T) {
 			snapshotTs   = int64(100)
 		)
 
-		bh.sql2result[fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {MO_TS = %d} where datname = '%s' and account_id = 0", snapshotTs, dbName)] =
-			newMrsForRestoreStringRows([]string{"datname", "dat_createsql"}, [][]interface{}{{dbName, "create database db1"}})
+		bh.sql2result[fmt.Sprintf("select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d} where datname = '%s' and account_id = 0", snapshotTs, dbName)] =
+			newMrsForRestoreStringRows([]string{"datname", "dat_createsql", "dat_type"}, [][]interface{}{{dbName, "create database db1", ""}})
 		bh.sql2result[buildTableInfoListSQL(dbName, tblName, snapshotTs, uint32(sysAccountID))] =
 			newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind", "viewdef"}, [][]interface{}{{tblName, "BASE TABLE", catalog.SystemExternalRel}})
 		bh.sql2result[fmt.Sprintf("show create table `%s`.`%s` {MO_TS = %d}", dbName, tblName, snapshotTs)] =
 			newMrsForRestoreStringRows([]string{"Table", "Create Table"}, [][]interface{}{{tblName, "create external table hive_ext (id int)"}})
 
-		err := restoreToDatabaseOrTable(ctx, "", bh, snapshotName, dbName, tblName, uint32(sysAccountID), map[string]*tableInfo{}, map[string]*tableInfo{}, snapshotTs, uint32(sysAccountID), false, nil)
+		err := restoreToDatabaseOrTable(ctx, "", bh, snapshotName, dbName, tblName, uint32(sysAccountID), map[string]*tableInfo{}, map[string]*tableInfo{}, snapshotTs, uint32(sysAccountID), false, nil, nil)
 		convey.So(err, convey.ShouldNotBeNil)
 		convey.So(err.Error(), convey.ShouldContainSubstring, "external table db1.hive_ext cannot be restored from snapshot")
 		convey.So(restoreTestExecutedSQLContains(bh, "hive_ext` clone"), convey.ShouldBeFalse)
@@ -872,8 +938,8 @@ func TestRestoreExternalTableSnapshotAndFromTS(t *testing.T) {
 			toAccount   = uint32(20)
 		)
 
-		bh.sql2result[fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {MO_TS = %d } where datname = '%s' and account_id = %d", snapshotTs, dbName, fromAccount)] =
-			newMrsForRestoreStringRows([]string{"datname", "dat_createsql"}, [][]interface{}{{dbName, "create database db1"}})
+		bh.sql2result[fmt.Sprintf("select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d } where datname = '%s' and account_id = %d", snapshotTs, dbName, fromAccount)] =
+			newMrsForRestoreStringRows([]string{"datname", "dat_createsql", "dat_type"}, [][]interface{}{{dbName, "create database db1", ""}})
 		bh.sql2result[fmt.Sprintf(checkDatabaseIsMasterFormat, quoteSQLStringLiteral(dbName), quoteSQLStringLiteral(dbName))] = newMrsForRestoreStringRows([]string{"db_name"}, nil)
 		bh.sql2result[fmt.Sprintf(getPubInfoSql, toAccount)+" and database_name = 'db1'"] = newMrsForRestoreStringRows([]string{"account_id"}, nil)
 		bh.sql2result[buildTableInfoListSQL(dbName, "", snapshotTs, fromAccount)] =
@@ -904,8 +970,8 @@ func TestRestorePitrExternalTable(t *testing.T) {
 			ts       = int64(100)
 		)
 
-		bh.sql2result[fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {MO_TS = %d} where datname = '%s' and account_id = 0", ts, dbName)] =
-			newMrsForRestoreStringRows([]string{"datname", "dat_createsql"}, [][]interface{}{{dbName, "create database db1"}})
+		bh.sql2result[fmt.Sprintf("select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d} where datname = '%s' and account_id = 0", ts, dbName)] =
+			newMrsForRestoreStringRows([]string{"datname", "dat_createsql", "dat_type"}, [][]interface{}{{dbName, "create database db1", ""}})
 		bh.sql2result[fmt.Sprintf(checkDatabaseIsMasterFormat, quoteSQLStringLiteral(dbName), quoteSQLStringLiteral(dbName))] = newMrsForRestoreStringRows([]string{"db_name"}, nil)
 		bh.sql2result[fmt.Sprintf(getPubInfoSql, uint32(sysAccountID))+" and database_name = 'db1'"] = newMrsForRestoreStringRows([]string{"account_id"}, nil)
 		bh.sql2result[buildTableInfoListSQL(dbName, "", ts, uint32(sysAccountID))] =
@@ -920,7 +986,7 @@ func TestRestorePitrExternalTable(t *testing.T) {
 		bh.sql2result[fmt.Sprintf(checkTableIsMasterFormat, quoteSQLStringLiteral(dbName), quoteSQLStringLiteral("base_t"))] = newMrsForRestoreStringRows([]string{"db_name"}, nil)
 		bh.sql2result[getPubInfoWithPitr(ts, uint32(sysAccountID), dbName)] = newMrsForRestoreStringRows([]string{"account_id"}, nil)
 
-		err := restoreToDatabaseOrTableWithPitr(ctx, "", bh, pitrName, ts, dbName, "", map[string]*tableInfo{}, map[string]*tableInfo{}, uint32(sysAccountID))
+		err := restoreToDatabaseOrTableWithPitr(ctx, "", bh, pitrName, ts, dbName, "", map[string]*tableInfo{}, map[string]*tableInfo{}, uint32(sysAccountID), nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(restoreTestExecutedSQLContains(bh, restoreTableDataByTsSQL(dbName, "base_t", ts)), convey.ShouldBeTrue)
 		convey.So(restoreTestExecutedSQLContains(bh, "hive_ext` clone"), convey.ShouldBeFalse)
@@ -937,18 +1003,362 @@ func TestRestorePitrExternalTable(t *testing.T) {
 			ts       = int64(100)
 		)
 
-		bh.sql2result[fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {MO_TS = %d} where datname = '%s' and account_id = 0", ts, dbName)] =
-			newMrsForRestoreStringRows([]string{"datname", "dat_createsql"}, [][]interface{}{{dbName, "create database db1"}})
+		bh.sql2result[fmt.Sprintf("select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d} where datname = '%s' and account_id = 0", ts, dbName)] =
+			newMrsForRestoreStringRows([]string{"datname", "dat_createsql", "dat_type"}, [][]interface{}{{dbName, "create database db1", ""}})
 		bh.sql2result[buildTableInfoListSQL(dbName, tblName, ts, uint32(sysAccountID))] =
 			newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind", "viewdef"}, [][]interface{}{{tblName, "BASE TABLE", catalog.SystemExternalRel}})
 		bh.sql2result[fmt.Sprintf("show create table `%s`.`%s` {MO_TS = %d}", dbName, tblName, ts)] =
 			newMrsForRestoreStringRows([]string{"Table", "Create Table"}, [][]interface{}{{tblName, "create external table hive_ext (id int)"}})
 
-		err := restoreToDatabaseOrTableWithPitr(ctx, "", bh, pitrName, ts, dbName, tblName, map[string]*tableInfo{}, map[string]*tableInfo{}, uint32(sysAccountID))
+		err := restoreToDatabaseOrTableWithPitr(ctx, "", bh, pitrName, ts, dbName, tblName, map[string]*tableInfo{}, map[string]*tableInfo{}, uint32(sysAccountID), nil)
 		convey.So(err, convey.ShouldNotBeNil)
 		convey.So(err.Error(), convey.ShouldContainSubstring, "external table db1.hive_ext cannot be restored from pitr")
 		convey.So(restoreTestExecutedSQLContains(bh, "hive_ext` clone"), convey.ShouldBeFalse)
 	})
+}
+
+func TestMarkedDatabaseRestoreRejectsBeforeDestructiveWorkBelowCapability(t *testing.T) {
+	setProtocolVersionForTest(t, "", defines.MORPCVersion74)
+	ctx := defines.AttachAccountId(context.Background(), uint32(sysAccountID))
+	const (
+		dbName       = "issue26068_restore"
+		snapshotName = "issue26068_snapshot"
+		pitrName     = "issue26068_pitr"
+		ts           = int64(100)
+	)
+
+	tests := []struct {
+		name  string
+		query string
+		run   func(BackgroundExec) error
+	}{
+		{
+			name: "snapshot",
+			query: fmt.Sprintf(
+				"select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d} where datname = '%s' and account_id = 0",
+				ts, dbName,
+			),
+			run: func(bh BackgroundExec) error {
+				return restoreToDatabaseOrTable(
+					ctx, "", bh, snapshotName, dbName, "", uint32(sysAccountID),
+					map[string]*tableInfo{}, map[string]*tableInfo{}, ts,
+					uint32(sysAccountID), false, nil, nil,
+				)
+			},
+		},
+		{
+			name: "timestamp restore",
+			query: fmt.Sprintf(
+				"select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d } where datname = '%s' and account_id = 0",
+				ts, dbName,
+			),
+			run: func(bh BackgroundExec) error {
+				return restoreDatabaseFromTS(
+					ctx, "", bh, dbName, ts, uint32(sysAccountID), uint32(sysAccountID),
+					map[string]*tableInfo{}, map[string]*tableInfo{}, false, nil,
+				)
+			},
+		},
+		{
+			name: "pitr",
+			query: fmt.Sprintf(
+				"select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d} where datname = '%s' and account_id = 0",
+				ts, dbName,
+			),
+			run: func(bh BackgroundExec) error {
+				return restoreToDatabaseOrTableWithPitr(
+					ctx, "", bh, pitrName, ts, dbName, "",
+					map[string]*tableInfo{}, map[string]*tableInfo{}, uint32(sysAccountID), nil,
+				)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			bh := &backgroundExecTest{}
+			bh.init()
+			bh.sql2result[test.query] = newMrsForRestoreStringRows(
+				[]string{"datname", "dat_createsql", "dat_type"},
+				[][]interface{}{{dbName, "create database " + dbName, catalog.SystemDBTypeDataBranch}},
+			)
+
+			err := test.run(bh)
+			require.ErrorContains(t, err, "requires MORPC protocol version 75")
+			require.Equal(t, []string{test.query}, bh.executedSQLs)
+		})
+	}
+}
+
+func TestMarkedAccountRestorePreflightsBeforeDestructiveWorkBelowCapability(t *testing.T) {
+	setProtocolVersionForTest(t, "", defines.MORPCVersion74)
+	ctx := defines.AttachAccountId(context.Background(), uint32(sysAccountID))
+	const (
+		dbName       = "issue26068_restore"
+		snapshotName = "issue26068_snapshot"
+		pitrName     = "issue26068_pitr"
+		ts           = int64(100)
+	)
+
+	tests := []struct {
+		name      string
+		showSQL   string
+		createSQL string
+		run       func(BackgroundExec) error
+	}{
+		{
+			name:      "snapshot account",
+			showSQL:   "show databases {snapshot = '" + snapshotName + "'}",
+			createSQL: fmt.Sprintf("select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d} where datname = '%s' and account_id = 0", ts, dbName),
+			run: func(bh BackgroundExec) error {
+				return preflightLogicalRestoreAccountFromSnapshot(
+					ctx, "", bh, snapshotName, ts, uint32(sysAccountID),
+				)
+			},
+		},
+		{
+			name:      "timestamp account",
+			showSQL:   fmt.Sprintf("show databases {MO_TS = %d}", ts),
+			createSQL: fmt.Sprintf("select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d } where datname = '%s' and account_id = 0", ts, dbName),
+			run: func(bh BackgroundExec) error {
+				return preflightLogicalRestoreAccountFromTS(
+					ctx, "", bh, ts, uint32(sysAccountID), uint32(sysAccountID),
+				)
+			},
+		},
+		{
+			name:      "pitr account",
+			showSQL:   fmt.Sprintf("show databases {MO_TS = %d}", ts),
+			createSQL: fmt.Sprintf("select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d} where datname = '%s' and account_id = 0", ts, dbName),
+			run: func(bh BackgroundExec) error {
+				return preflightRestorePitrEntry(
+					ctx, "", bh, pitrName, ts, tree.RESTORELEVELACCOUNT, "", uint32(sysAccountID),
+				)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			bh := &backgroundExecTest{}
+			bh.init()
+			bh.sql2result[test.showSQL] = newMrsForSqlForShowDatabases([][]interface{}{{dbName}})
+			bh.sql2result[test.createSQL] = newMrsForRestoreStringRows(
+				[]string{"datname", "dat_createsql", "dat_type"},
+				[][]interface{}{{dbName, "create database " + dbName, catalog.SystemDBTypeDataBranch}},
+			)
+
+			err := test.run(bh)
+			require.ErrorContains(t, err, "requires MORPC protocol version 75")
+			require.Equal(t, []string{test.showSQL, test.createSQL}, bh.executedSQLs)
+		})
+	}
+}
+
+func TestClusterRestorePreflightsBeforeAccountSideEffects(t *testing.T) {
+	setProtocolVersionForTest(t, "", defines.MORPCVersion74)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	const (
+		snapshotName = "issue26068_cluster"
+		dbName       = "marked_branch"
+		snapshotTS   = int64(100)
+		sourceID     = uint32(1)
+	)
+	ctx := defines.AttachAccountId(context.Background(), uint32(sysAccountID))
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	currentAccountsSQL := getCurrentExistsAccountsFmt
+	pastAccountsSQL := fmt.Sprintf(getPastAccountsFmt, snapshotTS)
+	showDatabasesSQL := fmt.Sprintf("show databases {MO_TS = %d}", snapshotTS)
+	createDatabaseSQL := fmt.Sprintf(
+		"select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d } where datname = '%s' and account_id = %d",
+		snapshotTS, dbName, sourceID,
+	)
+	bh.sql2result[currentAccountsSQL] = newMrsForRestoreStringRows(
+		[]string{"account_id", "account_name"},
+		[][]interface{}{{"1", "source"}, {"2", "must_not_be_dropped"}},
+	)
+	bh.sql2result[pastAccountsSQL] = newMrsForRestoreStringRows(
+		[]string{"account_id", "account_name", "admin_name", "comments"},
+		[][]interface{}{{"1", "source", "admin", ""}},
+	)
+	bh.sql2result[showDatabasesSQL] = newMrsForSqlForShowDatabases(
+		[][]interface{}{{dbName}},
+	)
+	bh.sql2result[createDatabaseSQL] = newMrsForRestoreStringRows(
+		[]string{"datname", "dat_createsql", "dat_type"},
+		[][]interface{}{{dbName, "create database " + dbName, catalog.SystemDBTypeDataBranch}},
+	)
+
+	var retiredAccountIDs []uint32
+	err := restoreToCluster(
+		ctx, ses, bh, snapshotName, snapshotTS, &retiredAccountIDs,
+	)
+	require.ErrorContains(t, err, "requires MORPC protocol version 75")
+	require.Empty(t, retiredAccountIDs)
+	require.Equal(t, []string{
+		currentAccountsSQL,
+		pastAccountsSQL,
+		showDatabasesSQL,
+		createDatabaseSQL,
+	}, bh.executedSQLs)
+}
+
+func TestMarkedTableSnapshotRestorePreflightsBeforeFkSideEffects(t *testing.T) {
+	setProtocolVersionForTest(t, "", defines.MORPCVersion74)
+	ses, bh, ctx := newPitrLifecycleTestSession(t)
+	const (
+		snapshotName = "issue26068_table_snapshot"
+		dbName       = "marked_branch"
+		tableName    = "child"
+		snapshotTS   = int64(100)
+	)
+
+	snapshotSQL := fmt.Sprintf("select * from mo_catalog.mo_snapshots where sname = '%s'", snapshotName)
+	createDatabaseSQL := fmt.Sprintf(
+		"select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d} where datname = '%s' and account_id = 0",
+		snapshotTS, dbName,
+	)
+	fkSQL := "select db_name, table_name, refer_db_name, refer_table_name from " +
+		"mo_catalog.mo_foreign_keys where db_name = 'marked_branch' and table_name = 'child'"
+	bh.sql2result[snapshotSQL] = newMrsForSnapshotRecord(
+		"snapshot-id", snapshotName, snapshotTS, tree.SNAPSHOTLEVELTABLE.String(),
+		sysAccountName, dbName, tableName, 1,
+	)
+	bh.sql2result[createDatabaseSQL] = newMrsForRestoreStringRows(
+		[]string{"datname", "dat_createsql", "dat_type"},
+		[][]interface{}{{dbName, "create database " + dbName, catalog.SystemDBTypeDataBranch}},
+	)
+	bh.sql2result[fkSQL] = newMrsForRestoreStringRows(
+		[]string{"db_name", "table_name", "refer_db_name", "refer_table_name"},
+		[][]interface{}{{dbName, tableName, dbName, "parent"}},
+	)
+
+	_, err := doRestoreSnapshot(ctx, ses, &tree.RestoreSnapShot{
+		Level:        tree.RESTORELEVELTABLE,
+		SnapShotName: tree.Identifier(snapshotName),
+		DatabaseName: tree.Identifier(dbName),
+		TableName:    tree.Identifier(tableName),
+	})
+	require.ErrorContains(t, err, "requires MORPC protocol version 75")
+	require.Contains(t, bh.executedSQLs, createDatabaseSQL)
+	require.Contains(t, bh.executedSQLs, "rollback;")
+	require.NotContains(t, bh.executedSQLs, "commit;")
+	require.NotContains(t, bh.executedSQLs, fkSQL)
+	for _, sql := range bh.executedSQLs {
+		require.NotContains(t, strings.ToLower(sql), "mo_foreign_keys")
+		require.NotContains(t, strings.ToLower(sql), "drop table")
+		require.NotContains(t, strings.ToLower(sql), "create database")
+	}
+}
+
+func TestMarkedDatabaseRestorePreservesIdentityAtCapability(t *testing.T) {
+	setProtocolVersionForTest(t, "", defines.MORPCVersion75)
+	ctx := defines.AttachAccountId(context.Background(), uint32(sysAccountID))
+	const (
+		dbName       = "issue26068_restore"
+		snapshotName = "issue26068_snapshot"
+		pitrName     = "issue26068_pitr"
+		ts           = int64(100)
+	)
+	createSQL := createDatabaseIfNotExistsSQL(dbName)
+	masterSQL := fmt.Sprintf(
+		checkDatabaseIsMasterFormat,
+		quoteSQLStringLiteral(dbName), quoteSQLStringLiteral(dbName),
+	)
+	publicationSQL := fmt.Sprintf(getPubInfoSql, uint32(sysAccountID)) +
+		" and database_name = '" + dbName + "'"
+
+	tests := []struct {
+		name      string
+		query     string
+		tablesSQL string
+		prepare   func(*backgroundExecTest)
+		run       func(BackgroundExec) error
+	}{
+		{
+			name: "snapshot",
+			query: fmt.Sprintf(
+				"select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d} where datname = '%s' and account_id = 0",
+				ts, dbName,
+			),
+			tablesSQL: buildTableInfoListSQL(dbName, "", ts, uint32(sysAccountID)),
+			run: func(bh BackgroundExec) error {
+				return restoreToDatabaseOrTable(
+					ctx, "", bh, snapshotName, dbName, "", uint32(sysAccountID),
+					map[string]*tableInfo{}, map[string]*tableInfo{}, ts,
+					uint32(sysAccountID), false, nil, nil,
+				)
+			},
+		},
+		{
+			name: "timestamp restore",
+			query: fmt.Sprintf(
+				"select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d } where datname = '%s' and account_id = 0",
+				ts, dbName,
+			),
+			tablesSQL: buildTableInfoListSQL(dbName, "", ts, uint32(sysAccountID)),
+			run: func(bh BackgroundExec) error {
+				return restoreDatabaseFromTS(
+					ctx, "", bh, dbName, ts, uint32(sysAccountID), uint32(sysAccountID),
+					map[string]*tableInfo{}, map[string]*tableInfo{}, false, nil,
+				)
+			},
+		},
+		{
+			name: "pitr",
+			query: fmt.Sprintf(
+				"select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d} where datname = '%s' and account_id = 0",
+				ts, dbName,
+			),
+			tablesSQL: buildTableInfoListSQL(dbName, "", ts, uint32(sysAccountID)),
+			prepare: func(bh *backgroundExecTest) {
+				bh.sql2result[getPubInfoWithPitr(ts, uint32(sysAccountID), dbName)] =
+					newMrsForRestoreStringRows([]string{"account_id"}, nil)
+			},
+			run: func(bh BackgroundExec) error {
+				return restoreToDatabaseOrTableWithPitr(
+					ctx, "", bh, pitrName, ts, dbName, "",
+					map[string]*tableInfo{}, map[string]*tableInfo{}, uint32(sysAccountID), nil,
+				)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			bh := &backgroundExecTest{}
+			bh.init()
+			bh.sql2result[test.query] = newMrsForRestoreStringRows(
+				[]string{"datname", "dat_createsql", "dat_type"},
+				[][]interface{}{{dbName, "create database " + dbName, catalog.SystemDBTypeDataBranch}},
+			)
+			bh.sql2result[masterSQL] = newMrsForRestoreStringRows([]string{"db_name"}, nil)
+			bh.sql2result[publicationSQL] = newMrsForRestoreStringRows([]string{"account_id"}, nil)
+			bh.sql2result[test.tablesSQL] = newMrsForRestoreStringRows(
+				[]string{"relname", "table_type", "relkind", "viewdef"}, nil,
+			)
+			if test.prepare != nil {
+				test.prepare(bh)
+			}
+
+			require.NoError(t, test.run(bh))
+			createIndex := -1
+			for i, sql := range bh.executedSQLs {
+				if sql == createSQL {
+					createIndex = i
+					break
+				}
+			}
+			require.NotEqual(t, -1, createIndex)
+			require.Equal(t, catalog.SystemDBTypeDataBranch, bh.executionDatabaseTypes[createIndex])
+		})
+	}
 }
 
 func TestRestoreExternalTableDefensiveCloneGuards(t *testing.T) {
@@ -958,7 +1368,7 @@ func TestRestoreExternalTableDefensiveCloneGuards(t *testing.T) {
 
 		bh := &backgroundExecTest{}
 		bh.init()
-		err := recreateTable(ctx, "", bh, "sp_ext", tblInfo, uint32(sysAccountID), 100)
+		err := recreateTable(ctx, "", bh, "sp_ext", tblInfo, uint32(sysAccountID), 100, false)
 		convey.So(err, convey.ShouldNotBeNil)
 		convey.So(err.Error(), convey.ShouldContainSubstring, "external table db1.hive_ext cannot be restored from snapshot")
 		convey.So(len(bh.executedSQLs), convey.ShouldEqual, 0)
@@ -977,6 +1387,223 @@ func TestRestoreExternalTableDefensiveCloneGuards(t *testing.T) {
 		convey.So(err.Error(), convey.ShouldContainSubstring, "external table db1.hive_ext cannot be restored from snapshot")
 		convey.So(len(bh.executedSQLs), convey.ShouldEqual, 0)
 	})
+}
+
+func TestRecreateTableReferencedByForeignKey(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), uint32(sysAccountID))
+	tblInfo := &tableInfo{
+		dbName:    "db1",
+		tblName:   "parent",
+		relKind:   catalog.SystemOrdinaryRel,
+		createSql: "create table `db1`.`parent` (`id` int primary key)",
+	}
+	masterSQL := fmt.Sprintf(
+		checkTableIsMasterFormat,
+		quoteSQLStringLiteral(tblInfo.dbName),
+		quoteSQLStringLiteral(tblInfo.tblName),
+	)
+
+	for _, tc := range []struct {
+		name              string
+		rejectMasterTable bool
+		wantErr           bool
+	}{
+		{name: "explicit table restore rejects the referenced table", rejectMasterTable: true, wantErr: true},
+		{name: "bulk restore keeps skipping the referenced table", rejectMasterTable: false, wantErr: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bh := &backgroundExecTest{}
+			bh.init()
+			bh.sql2result[masterSQL] = newMrsForRestoreStringRows(
+				[]string{"db_name"},
+				[][]interface{}{{"db1"}},
+			)
+
+			err := recreateTable(ctx, "", bh, "snapshot", tblInfo, uint32(sysAccountID), 100, tc.rejectMasterTable)
+			if tc.wantErr {
+				require.EqualError(t, err, "not supported: can not restore table 'db1.parent' referenced by some foreign key constraint")
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, []string{masterSQL}, bh.executedSQLs)
+		})
+	}
+
+	t.Run("propagates foreign key lookup errors", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		wantErr := errors.New("check foreign key failed")
+		bh.sql2err[masterSQL] = wantErr
+
+		err := recreateTable(ctx, "", bh, "snapshot", tblInfo, uint32(sysAccountID), 100, false)
+		require.ErrorIs(t, err, wantErr)
+		require.Equal(t, []string{masterSQL}, bh.executedSQLs)
+	})
+}
+
+func TestValidateRestoreTableTarget(t *testing.T) {
+	ctx := context.Background()
+	masterSQL := fmt.Sprintf(
+		checkTableIsMasterFormat,
+		quoteSQLStringLiteral("db1"),
+		quoteSQLStringLiteral("parent"),
+	)
+
+	t.Run("rejects referenced table", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[masterSQL] = newMrsForRestoreStringRows(
+			[]string{"db_name"},
+			[][]interface{}{{"db1"}},
+		)
+
+		err := validateRestoreTableTarget(ctx, "", bh, "snapshot", "db1", "parent", uint32(sysAccountID))
+		require.EqualError(t, err, "not supported: can not restore table 'db1.parent' referenced by some foreign key constraint")
+		require.Equal(t, []string{masterSQL}, bh.executedSQLs)
+		require.Equal(t, []uint32{uint32(sysAccountID)}, bh.executionAccountIDs)
+	})
+
+	t.Run("allows table without foreign key dependents", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[masterSQL] = newMrsForRestoreStringRows([]string{"db_name"}, nil)
+
+		err := validateRestoreTableTarget(ctx, "", bh, "snapshot", "db1", "parent", uint32(sysAccountID))
+		require.NoError(t, err)
+		require.Equal(t, []string{masterSQL}, bh.executedSQLs)
+		require.Equal(t, []uint32{uint32(sysAccountID)}, bh.executionAccountIDs)
+	})
+
+	t.Run("propagates foreign key lookup errors", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		wantErr := errors.New("check foreign key failed")
+		bh.sql2err[masterSQL] = wantErr
+
+		err := validateRestoreTableTarget(ctx, "", bh, "snapshot", "db1", "parent", uint32(sysAccountID))
+		require.ErrorIs(t, err, wantErr)
+		require.Equal(t, []string{masterSQL}, bh.executedSQLs)
+		require.Equal(t, []uint32{uint32(sysAccountID)}, bh.executionAccountIDs)
+	})
+}
+
+func TestRestoreTablesWithFkRejectsReferencedTable(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), uint32(sysAccountID))
+	tblInfo := &tableInfo{
+		dbName:  "db1",
+		tblName: "parent",
+		relKind: catalog.SystemOrdinaryRel,
+	}
+	key := genKey(tblInfo.dbName, tblInfo.tblName)
+	masterSQL := fmt.Sprintf(
+		checkTableIsMasterFormat,
+		quoteSQLStringLiteral(tblInfo.dbName),
+		quoteSQLStringLiteral(tblInfo.tblName),
+	)
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	bh.sql2result[masterSQL] = newMrsForRestoreStringRows(
+		[]string{"db_name"},
+		[][]interface{}{{tblInfo.dbName}},
+	)
+
+	err := restoreTablesWithFk(
+		ctx,
+		"",
+		bh,
+		"snapshot",
+		[]string{key},
+		map[string]*tableInfo{key: tblInfo},
+		uint32(sysAccountID),
+		100,
+		true,
+	)
+	require.EqualError(t, err, "not supported: can not restore table 'db1.parent' referenced by some foreign key constraint")
+	require.Equal(t, []string{masterSQL}, bh.executedSQLs)
+}
+
+func TestRestoreTableRejectsReferencedTableBeforeMutation(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	t.Cleanup(ses.Close)
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	const (
+		snapshotName = "snapshot"
+		snapshotTS   = int64(100)
+		dbName       = "db1"
+		tblName      = "parent"
+	)
+	snapshotSQL := fmt.Sprintf("%s where sname = '%s'", getSnapshotFormat, snapshotName)
+	accountSQL := fmt.Sprintf(
+		"select account_id from mo_catalog.mo_account {MO_TS = %d} where account_name = '%s'",
+		snapshotTS, sysAccountName,
+	)
+	masterSQL := fmt.Sprintf(
+		checkTableIsMasterFormat,
+		quoteSQLStringLiteral(dbName),
+		quoteSQLStringLiteral(tblName),
+	)
+	bh.sql2result[snapshotSQL] = newMrsForSnapshotRecord(
+		"snapshot-id",
+		snapshotName,
+		snapshotTS,
+		tree.SNAPSHOTLEVELTABLE.String(),
+		sysAccountName,
+		dbName,
+		tblName,
+		0,
+	)
+	bh.sql2result[accountSQL] = newMrsForRestoreStringRows(
+		[]string{"account_id"}, [][]interface{}{{int64(sysAccountID)}},
+	)
+	var lifecycleSQLs []string
+	for _, ts := range []int64{snapshotTS, 0} {
+		probes, err := lifecycleArchiveRestoreProbes(lifecycleArchiveRestoreScope{
+			level:        tree.RESTORELEVELTABLE,
+			accountID:    uint32(sysAccountID),
+			databaseName: dbName,
+			tableName:    tblName,
+			snapshotTS:   ts,
+		})
+		require.NoError(t, err)
+		require.Len(t, probes, 3)
+		for _, probe := range probes {
+			bh.sql2result[probe.sql] = newMrsForRestoreStringRows([]string{"id"}, nil)
+			lifecycleSQLs = append(lifecycleSQLs, probe.sql)
+		}
+	}
+	bh.sql2result[masterSQL] = newMrsForRestoreStringRows(
+		[]string{"db_name"},
+		[][]interface{}{{dbName}},
+	)
+
+	oldNewBackgroundExec := NewBackgroundExec
+	t.Cleanup(func() { NewBackgroundExec = oldNewBackgroundExec })
+	NewBackgroundExec = func(_ context.Context, _ FeSession, _ ...*BackgroundExecOption) BackgroundExec {
+		return bh
+	}
+
+	_, err := doRestoreSnapshot(context.Background(), ses, &tree.RestoreSnapShot{
+		Level:        tree.RESTORELEVELTABLE,
+		AccountName:  sysAccountName,
+		DatabaseName: dbName,
+		TableName:    tblName,
+		SnapShotName: snapshotName,
+	})
+	require.EqualError(t, err, "not supported: can not restore table 'db1.parent' referenced by some foreign key constraint")
+	wantSQLs := []string{
+		"begin;",
+		catalog.SnapshotLifecycleGateSQL,
+		catalog.ViewMetadataLifecycleGateSQL,
+		snapshotSQL,
+		accountSQL,
+	}
+	wantSQLs = append(wantSQLs, lifecycleSQLs...)
+	wantSQLs = append(wantSQLs, masterSQL, "rollback;")
+	require.Equal(t, wantSQLs, bh.executedSQLs)
 }
 
 func TestBuildTableInfoListSQLEscapesLiterals(t *testing.T) {
@@ -1175,6 +1802,35 @@ func restoreTestExecutedSQLContains(bh *backgroundExecTest, needle string) bool 
 	return false
 }
 
+func TestRestoreRejectsPersistedViewFromNewerProtocol(t *testing.T) {
+	const serviceID = "snapshot-persisted-view-protocol"
+	runtime.SetupServiceBasedRuntime(serviceID, runtime.DefaultRuntime())
+	rt := runtime.ServiceRuntime(serviceID)
+	old, exists := rt.GetGlobalVariables(runtime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if exists {
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, old)
+		} else {
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	viewDef, err := json.Marshal(plan.ViewData{
+		Stmt:                    "create view v as select 1",
+		RequiredProtocolVersion: func() *int64 { v := defines.MORPCVersion72; return &v }(),
+	})
+	require.NoError(t, err)
+	b := &restoreServiceBackgroundExec{service: serviceID}
+	tblInfo := &tableInfo{viewDef: string(viewDef), createSql: "create view v as select 1"}
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion71)
+	require.ErrorContains(t,
+		requirePersistedViewProtocolForRestore(context.Background(), b, tblInfo),
+		"protocol version 72")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion72)
+	require.NoError(t, requirePersistedViewProtocolForRestore(context.Background(), b, tblInfo))
+}
+
 func TestRestoreSQLQuotesEmbeddedBackticks(t *testing.T) {
 	const (
 		dbName       = "db`name"
@@ -1216,7 +1872,7 @@ func TestRecreateUserDefinedFunctionCatalogPreservesCurrentSchema(t *testing.T) 
 		bh := &backgroundExecTest{}
 		bh.init()
 		ctx := defines.AttachAccountId(t.Context(), sourceAccount)
-		require.NoError(t, recreateTable(ctx, "", bh, snapshotName, udfTable, sourceAccount, snapshotTS))
+		require.NoError(t, recreateTable(ctx, "", bh, snapshotName, udfTable, sourceAccount, snapshotTS, false))
 		require.Equal(t, []string{
 			dropTableIfExistsSQL(moCatalog, udfTable.tblName),
 			MoCatalogMoUserDefinedFunctionDDL,
@@ -1231,7 +1887,7 @@ func TestRecreateUserDefinedFunctionCatalogPreservesCurrentSchema(t *testing.T) 
 		bh := &backgroundExecTest{}
 		bh.init()
 		ctx := defines.AttachAccountId(t.Context(), sourceAccount)
-		require.NoError(t, recreateTable(ctx, "", bh, snapshotName, udfTable, targetAccount, snapshotTS))
+		require.NoError(t, recreateTable(ctx, "", bh, snapshotName, udfTable, targetAccount, snapshotTS, false))
 		require.Equal(t,
 			"insert into `mo_catalog`.`mo_user_defined_function` ("+userDefinedFunctionCatalogColumns+
 				") select "+userDefinedFunctionCatalogSourceColumns+
@@ -1499,6 +2155,7 @@ func Test_dropExistsAccount_InRestoreTransaction(t *testing.T) {
 		bh.sql2result["show databases;"] = newMrsForSqlForShowDatabases([][]interface{}{})
 
 		bh.sql2result["show tables from mo_catalog;"] = newMrsForShowTables([][]interface{}{})
+		registerEmptyBranchMetadataResult(bh.sql2result)
 
 		sql = fmt.Sprintf(getPubInfoSql, 1) + " order by update_time desc, created_time desc"
 		bh.sql2result[sql] = newMrsForSqlForGetPubs([][]interface{}{})
@@ -2308,6 +2965,46 @@ func Test_getAccountFromPublication(t *testing.T) {
 	})
 }
 
+func TestLockedPublicationRejectsRetiredSubscriber(t *testing.T) {
+	const (
+		liveSQL = "select account_id from mo_catalog.mo_account where account_name = 'subscriber'"
+		pubSQL  = "SELECT account_id, account_name, pub_name, database_name, database_id, table_list, account_list \n" +
+			"\t\t\tFROM mo_catalog.mo_pubs \n" +
+			"\t\t\tWHERE account_name = 'publisher' AND pub_name = 'pub' for update"
+	)
+	for _, test := range []struct {
+		name       string
+		liveID     uint64
+		liveExists bool
+		wantError  bool
+	}{
+		{name: "same generation", liveID: 27, liveExists: true},
+		{name: "recreated name", liveID: 28, liveExists: true, wantError: true},
+		{name: "dropped name", wantError: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			bh := &backgroundExecTest{}
+			bh.init()
+			if test.liveExists {
+				bh.sql2result[liveSQL] = newMrsForCheckTenant([][]interface{}{{test.liveID, "subscriber", "open", 0}})
+			} else {
+				bh.sql2result[liveSQL] = newMrsForCheckTenant(nil)
+			}
+			bh.sql2result[pubSQL] = newMrsForPublicationInfo(100, "publisher", "pub", "db", 1, "*", "all")
+			publisherID, _, err := lockAccountFromPublication(t.Context(), bh, "publisher", "pub", "subscriber", 27)
+			if test.wantError {
+				require.ErrorContains(t, err, "session is no longer active")
+				require.Equal(t, []string{liveSQL}, bh.executedSQLs)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, uint64(100), publisherID)
+				require.Equal(t, []string{liveSQL, pubSQL}, bh.executedSQLs)
+			}
+			require.Equal(t, uint32(sysAccountID), bh.executionAccountIDs[0])
+		})
+	}
+}
+
 // newMrsForMoIndexes creates a MysqlResultSet for mo_indexes query
 // columns: table_id, name, algo_table_type, index_table_name
 func newMrsForMoIndexes(records [][]interface{}) *MysqlResultSet {
@@ -2533,7 +3230,6 @@ func Test_handleInternalGetDdl_GoodPath(t *testing.T) {
 		mockTxnOp.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 		mockTxnOp.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		mockTxnOp.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
-		mockTxnOp.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 
 		// Setup TxnHandler with mock engine and txn
 		txnHandler := InitTxnHandler("", mockEng, ctx, mockTxnOp)
@@ -2622,6 +3318,71 @@ func newDdlBatchForTest(mp *mpool.MPool, records [][]interface{}) *batch.Batch {
 // lookup used by CLONE, snapshot restore, and PITR restore. Legal quoted
 // identifiers must survive the SQL literal boundary and still produce the
 // dependency order consumed by the restore path (issue #26144).
+func TestRestoreSnapshotUsesLifecycleOwnerTxn(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := context.Background()
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	bh := &backgroundExecTest{}
+	bh.init()
+	beginErr := errors.New("begin failed")
+	bh.sql2err["begin;"] = beginErr
+	oldNewBackgroundExec := NewBackgroundExec
+	defer func() { NewBackgroundExec = oldNewBackgroundExec }()
+	forcedPessimisticRC := false
+	NewBackgroundExec = func(_ context.Context, _ FeSession, opts ...*BackgroundExecOption) BackgroundExec {
+		for _, opt := range opts {
+			forcedPessimisticRC = forcedPessimisticRC || opt != nil && opt.forcePessimisticRC
+		}
+		return bh
+	}
+
+	_, err := doRestoreSnapshot(ctx, ses, &tree.RestoreSnapShot{})
+	require.ErrorIs(t, err, beginErr)
+	require.True(t, forcedPessimisticRC)
+}
+
+func TestDropSnapshotUsesLifecycleOwnerTxn(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := context.Background()
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ses.SetTenantInfo(&TenantInfo{
+		Tenant:      sysAccountName,
+		DefaultRole: moAdminRoleName,
+	})
+	bh := &backgroundExecTest{}
+	bh.init()
+	beginErr := errors.New("begin failed")
+	bh.sql2err["begin;"] = beginErr
+	oldNewBackgroundExec := NewBackgroundExec
+	defer func() { NewBackgroundExec = oldNewBackgroundExec }()
+	forcedPessimisticRC := false
+	NewBackgroundExec = func(_ context.Context, _ FeSession, opts ...*BackgroundExecOption) BackgroundExec {
+		for _, opt := range opts {
+			forcedPessimisticRC = forcedPessimisticRC || opt != nil && opt.forcePessimisticRC
+		}
+		return bh
+	}
+
+	err := doDropSnapshot(ctx, ses, &tree.DropSnapShot{})
+	require.ErrorIs(t, err, beginErr)
+	require.True(t, forcedPessimisticRC)
+}
+
+func TestValidateAccountLifecycleTxnRejectsOptimistic(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{Mode: txn.TxnMode_Optimistic})
+
+	err := validateAccountLifecycleTxn(context.Background(), txnOp)
+	require.ErrorContains(t, err, "require a pessimistic transaction")
+
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{Mode: txn.TxnMode_Pessimistic})
+	require.NoError(t, validateAccountLifecycleTxn(context.Background(), txnOp))
+	require.Error(t, validateAccountLifecycleTxn(context.Background(), nil))
+}
+
 func TestDataBranchAuditFkDepsEscapesQuotedNames(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

@@ -20,9 +20,9 @@ approx_percentile(v, 0.5) is null
 1
 drop table t_approx_percentile_empty;
 select approx_percentile(v, p) from t_approx_percentile_boundary where grp = 1;
-invalid input: percentile argument of approx_percentile must be a non-null constant
+invalid input: percentile argument of approx_percentile must be a non-null constant or parameter
 select approx_percentile(v, null) from t_approx_percentile_boundary where grp = 1;
-invalid input: percentile argument of approx_percentile must be a non-null constant
+invalid input: percentile argument of approx_percentile must be a non-null constant or parameter
 select approx_percentile(s, 0.5) from t_approx_percentile_boundary where grp = 1;
 invalid argument aggregate function approx_percentile, bad value [VARCHAR DECIMAL64]
 select 'AFTER_APPROX_PERCENTILE_ERRORS';

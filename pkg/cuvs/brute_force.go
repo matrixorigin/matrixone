@@ -70,7 +70,8 @@ func NewGpuBruteForce[B, Q VectorType](dataset []Q, countVectors uint64, dimensi
 	if cIndex == nil {
 		return nil, moerr.NewInternalErrorNoCtx("failed to create GpuBruteForce")
 	}
-	return &GpuBruteForce[B, Q]{cIndex: cIndex}, nil
+	return &GpuBruteForce[B, Q]{
+		cIndex: cIndex}, nil
 }
 
 // NewGpuBruteForceEmpty creates a new GpuBruteForce instance with pre-allocated buffer but no data yet.
@@ -103,7 +104,8 @@ func NewGpuBruteForceEmpty[B, Q VectorType](totalCount uint64, dimension uint32,
 		return nil, moerr.NewInternalErrorNoCtx("failed to create GpuBruteForce")
 	}
 
-	return &GpuBruteForce[B, Q]{cIndex: cBruteForce}, nil
+	return &GpuBruteForce[B, Q]{
+		cIndex: cBruteForce}, nil
 }
 
 // Start initializes the worker and resources

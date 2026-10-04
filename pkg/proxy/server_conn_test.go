@@ -143,9 +143,10 @@ type testCNServer struct {
 	started  bool
 	quit     chan interface{}
 
-	globalVars map[string]string
-	tlsCfg     tlsConfig
-	tlsConfig  *tls.Config
+	globalVarsMu sync.RWMutex
+	globalVars   map[string]string
+	tlsCfg       tlsConfig
+	tlsConfig    *tls.Config
 
 	beforeHandle func()
 	handle       func(*testHandler)
@@ -220,6 +221,23 @@ func startTestCNServer(t *testing.T, ctx context.Context, addr string, cfg *tlsC
 	return func() error {
 		return b.Stop()
 	}
+}
+
+func (s *testCNServer) setGlobalVar(name, value string) {
+	s.globalVarsMu.Lock()
+	defer s.globalVarsMu.Unlock()
+	s.globalVars[name] = value
+}
+
+func (s *testCNServer) globalVarsSnapshot() map[string]string {
+	s.globalVarsMu.RLock()
+	defer s.globalVarsMu.RUnlock()
+
+	vars := make(map[string]string, len(s.globalVars))
+	for name, value := range s.globalVars {
+		vars[name] = value
+	}
+	return vars
 }
 
 func (s *testCNServer) waitCNServerReady() bool {
@@ -329,7 +347,11 @@ func testHandle(h *testHandler) {
 	reader := bufio.NewReader(h.conn.RawConn())
 	_ = extraInfo.Decode(reader)
 	// server writes init handshake.
-	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeHandshakePayload())
+	handshake, err := h.mysqlProto.MakeHandshakePayload()
+	if err != nil {
+		return
+	}
+	_ = h.mysqlProto.WritePacket(handshake)
 	// server reads auth information from client.
 	_, _ = h.conn.Read(goetty.ReadOptions{})
 	// server writes ok packet.
@@ -382,7 +404,7 @@ func (h *testHandler) handleSetVar(packet *frontend.Packet) {
 }
 
 func (h *testHandler) handleKillConn() {
-	h.server.globalVars["killed"] = "yes"
+	h.server.setGlobalVar("killed", "yes")
 	h.mysqlProto.SetSequenceID(1)
 	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeOKPayload(0, uint64(h.connID), h.status, 0, ""))
 }
@@ -466,7 +488,7 @@ func (h *testHandler) handleShowGlobalVar() {
 		}
 	}
 	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeEOFPayload(0, h.status))
-	for k, v := range h.server.globalVars {
+	for k, v := range h.server.globalVarsSnapshot() {
 		row := make([]interface{}, 2)
 		row[0] = k
 		row[1] = v
@@ -540,6 +562,36 @@ func (s *testCNServer) Stop() error {
 	close(s.quit)
 	_ = s.listener.Close()
 	return nil
+}
+
+func TestCNServerGlobalVarsConcurrentAccess(t *testing.T) {
+	server := &testCNServer{globalVars: make(map[string]string)}
+	const workers = 8
+	const iterations = 16
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(workers * 2)
+	for i := 0; i < workers; i++ {
+		go func() {
+			defer wg.Done()
+			<-start
+			for j := 0; j < iterations; j++ {
+				server.setGlobalVar("killed", "yes")
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			for j := 0; j < iterations; j++ {
+				_ = server.globalVarsSnapshot()
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	require.Equal(t, map[string]string{"killed": "yes"}, server.globalVarsSnapshot())
 }
 
 func TestServerConn_Create(t *testing.T) {

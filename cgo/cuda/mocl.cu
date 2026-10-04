@@ -56,7 +56,7 @@ extern "C" __global__ void l2distance_f64(
         double *astart = (double *)(A + offA);
         double *bstart = (double *)(B + offB); 
         for (int j = 0; j < loop; j++) {
-            float diff = astart[j] - bstart[j];
+            double diff = astart[j] - bstart[j];
             res[i] += diff * diff;
         }
         if (!sq) {
@@ -76,7 +76,7 @@ extern "C" __global__ void l2distance_f64_const(
         uint32_t offA = offlenA[i * 6 + 1];
         double *astart = (double *)(A + offA);
         for (int j = 0; j < loop; j++) {
-            float diff = astart[j] - B[j];
+            double diff = astart[j] - B[j];
             res[i] += diff * diff;
         }
         if (!sq) {

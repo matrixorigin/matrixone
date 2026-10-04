@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -78,16 +79,27 @@ func (ses *Session) snapshotUserDefinedVars(ctx context.Context) ([]*query.Migra
 		if variable == nil {
 			return nil, moerr.NewInternalErrorf(ctx, "cannot migrate nil user variable %q", name)
 		}
+		if !variable.RuntimeStringDomain.Valid() {
+			return nil, moerr.NewInternalErrorf(
+				ctx, "invalid runtime string domain for user variable %q", name)
+		}
+		if variable.RuntimeStringDomain != types.RuntimeStringInherit &&
+			currentProtocolVersion(ses.proc) < defines.MORPCVersion58 {
+			return nil, moerr.NewNotSupportedf(
+				ctx, "user-variable runtime string domains require MORPC protocol version %d",
+				defines.MORPCVersion58)
+		}
 		value, err := encodeUserDefinedVarValue(ctx, variable.Value, variable.IsBin)
 		if err != nil {
 			return nil, err
 		}
 		item := &query.MigrateUserDefinedVar{
-			Name:             name,
-			Value:            value,
-			Sql:              variable.Sql,
-			IsBin:            variable.IsBin,
-			PrepareParamKind: uint32(variable.PrepareParamKind),
+			Name:                name,
+			Value:               value,
+			Sql:                 variable.Sql,
+			IsBin:               variable.IsBin,
+			PrepareParamKind:    uint32(variable.PrepareParamKind),
+			RuntimeStringDomain: uint32(variable.RuntimeStringDomain),
 			Type: &plan.Type{
 				Id:          variable.Type.Id,
 				NotNullable: variable.Type.NotNullable,
@@ -114,12 +126,19 @@ func (ses *Session) snapshotSessionSystemVars(ctx context.Context) ([]*query.Mig
 		if def.Scope == ScopeGlobal || !def.Dynamic {
 			continue
 		}
-		canonicalName := canonicalSystemVariableName(name)
-		if _, ok := seen[canonicalName]; ok {
+		exportName := canonicalSystemVariableName(name)
+		// Keep both read-only spellings on the wire. Older targets do not
+		// canonicalize tx_read_only, so dropping that entry would lose the
+		// session mode during a rolling upgrade. decodeSessionSystemVars
+		// collapses the pair again with the canonical value taking precedence.
+		if isTransactionReadOnlySystemVariable(name) {
+			exportName = strings.ToLower(name)
+		}
+		if _, ok := seen[exportName]; ok {
 			continue
 		}
-		seen[canonicalName] = struct{}{}
-		names = append(names, canonicalName)
+		seen[exportName] = struct{}{}
+		names = append(names, exportName)
 	}
 	sort.Strings(names)
 	var nextTxnIsolationValue string
@@ -203,6 +222,10 @@ func decodeUserDefinedVars(
 		if item.PrepareParamKind > uint32(vector.PrepareParamBoolean) {
 			return nil, moerr.NewInternalErrorf(ctx, "invalid prepare parameter kind for user variable %q", name)
 		}
+		runtimeDomain := types.RuntimeStringDomain(item.RuntimeStringDomain)
+		if !runtimeDomain.Valid() {
+			return nil, moerr.NewInternalErrorf(ctx, "invalid runtime string domain for user variable %q", name)
+		}
 		value, err := decodeUserDefinedVarValue(ctx, item.Value)
 		if err != nil {
 			return nil, err
@@ -215,12 +238,13 @@ func decodeUserDefinedVars(
 			typ = inferUserDefinedVarType(value)
 		}
 		result[name] = &UserDefinedVar{
-			Value:            value,
-			Sql:              item.Sql,
-			IsBin:            item.IsBin,
-			Type:             typ,
-			PrepareParamKind: vector.PrepareParamKind(item.PrepareParamKind),
-			Replayable:       replayable,
+			Value:               value,
+			Sql:                 item.Sql,
+			IsBin:               item.IsBin,
+			Type:                typ,
+			PrepareParamKind:    vector.PrepareParamKind(item.PrepareParamKind),
+			RuntimeStringDomain: runtimeDomain,
+			Replayable:          replayable,
 		}
 	}
 	return result, nil
@@ -240,6 +264,8 @@ func decodeSessionSystemVars(ctx context.Context, vars []*query.MigrateSystemVar
 	}
 	seen := make(map[string]struct{}, len(vars)*2)
 	result := make([]migratedSystemVariable, 0, len(vars))
+	readOnlyIndex := -1
+	readOnlySource := ""
 	for _, item := range vars {
 		if err := context.Cause(ctx); err != nil {
 			return nil, err
@@ -247,22 +273,29 @@ func decodeSessionSystemVars(ctx context.Context, vars []*query.MigrateSystemVar
 		if item == nil || item.Name == "" {
 			return nil, moerr.NewInternalError(ctx, "invalid session system variable in connection migration")
 		}
-		name := canonicalSystemVariableName(item.Name)
+		rawName := strings.ToLower(item.Name)
+		if _, ok := gSysVarsDefs[rawName]; !ok {
+			return nil, moerr.NewInternalErrorf(ctx,
+				"unknown session system variable %q in connection migration", rawName)
+		}
+		name := canonicalSystemVariableName(rawName)
 		if item.NextTransaction && name != transactionIsolationSystemVariable {
 			return nil, moerr.NewInternalErrorf(ctx,
 				"next transaction scope is invalid for session system variable %q", name)
 		}
 		seenKey := name
-		if item.NextTransaction {
+		if isTransactionReadOnlySystemVariable(name) {
+			// A canonical and a legacy read-only entry are the two accepted
+			// spellings of one value. Reject duplicate spellings, validate both
+			// payloads, and let the canonical spelling win regardless of order.
+			seenKey = rawName
+		} else if item.NextTransaction {
 			seenKey += ":next"
 		}
 		if _, exists := seen[seenKey]; exists {
 			return nil, moerr.NewInternalErrorf(ctx, "duplicate session system variable %q in connection migration", name)
 		}
 		seen[seenKey] = struct{}{}
-		if _, ok := gSysVarsDefs[name]; !ok {
-			return nil, moerr.NewInternalErrorf(ctx, "unknown session system variable %q in connection migration", name)
-		}
 		value, err := decodeUserDefinedVarValue(ctx, item.Value)
 		if err != nil {
 			return nil, err
@@ -284,13 +317,26 @@ func decodeSessionSystemVars(ctx context.Context, vars []*query.MigrateSystemVar
 				return nil, err
 			}
 		}
-		result = append(result, migratedSystemVariable{
+		migrated := migratedSystemVariable{
 			name:                name,
 			value:               value,
 			runtimeValue:        runtimeValue,
 			runtimeValuePresent: runtimeValuePresent,
 			nextTransaction:     item.NextTransaction,
-		})
+		}
+		if isTransactionReadOnlySystemVariable(name) {
+			if readOnlyIndex < 0 {
+				readOnlyIndex = len(result)
+				readOnlySource = rawName
+				result = append(result, migrated)
+			} else if rawName == transactionReadOnlySystemVariable &&
+				readOnlySource == transactionReadOnlySystemVariableAlias {
+				result[readOnlyIndex] = migrated
+				readOnlySource = rawName
+			}
+			continue
+		}
+		result = append(result, migrated)
 	}
 	return result, nil
 }

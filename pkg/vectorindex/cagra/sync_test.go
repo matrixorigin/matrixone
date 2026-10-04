@@ -19,6 +19,7 @@ package cagra
 import (
 	"encoding/hex"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -159,7 +160,11 @@ func TestCagraSync_Update_AllInsert(t *testing.T) {
 		"expected 2 INSERT records buffered")
 
 	require.NoError(t, s.Save(sqlproc))
+	// The chunk statement only: the frame's metadata row is written just once the table has the
+	// provenance columns, because a row an un-upgraded CN would read as a sub-index must not
+	// exist before every CN can exclude it. Here the probe answers narrow.
 	require.Len(t, rec.statements, 1)
+	require.Contains(t, rec.statements[0], "INSERT INTO `db`.`__storage` VALUES")
 	require.Contains(t, rec.statements[0], "INSERT INTO `db`.`__storage` VALUES")
 	require.Contains(t, rec.statements[0], "'cdc_tail', 0,")
 
@@ -199,7 +204,11 @@ func TestCagraSync_Update_DeleteAndInsert(t *testing.T) {
 	require.Len(t, s.pendingSizes, 2)
 
 	require.NoError(t, s.Save(sqlproc))
+	// The chunk statement only: the frame's metadata row is written just once the table has the
+	// provenance columns, because a row an un-upgraded CN would read as a sub-index must not
+	// exist before every CN can exclude it. Here the probe answers narrow.
 	require.Len(t, rec.statements, 1)
+	require.Contains(t, rec.statements[0], "INSERT INTO `db`.`__storage` VALUES")
 	// chunk_id == 7 (nextChunkId mock).
 	require.Contains(t, rec.statements[0], "'cdc_tail', 7,")
 
@@ -511,7 +520,154 @@ func TestCagraSync_MultiFlush(t *testing.T) {
 	require.NoError(t, s.Save(sqlproc))
 
 	// First flush at chunk_id=0, second at chunk_id=1.
-	require.GreaterOrEqual(t, len(rec.statements), 2)
-	require.Contains(t, rec.statements[0], "'cdc_tail', 0,")
-	require.Contains(t, rec.statements[1], "'cdc_tail', 1,")
+	var chunkStmts, metaStmts []string
+	for _, st := range rec.statements {
+		if strings.Contains(st, "__meta") {
+			metaStmts = append(metaStmts, st)
+		} else {
+			chunkStmts = append(chunkStmts, st)
+		}
+	}
+	require.Len(t, chunkStmts, 2)
+	require.Contains(t, chunkStmts[0], "'cdc_tail', 0,")
+	require.Contains(t, chunkStmts[1], "'cdc_tail', 1,")
+	require.Empty(t, metaStmts, "narrow table: no frame rows yet")
+}
+
+// On a WIDENED metadata table the flush also writes the frame's row: its bytes, its record
+// count, and the version ISCP applied. The row is gated on the table shape because an
+// un-upgraded CN reads this table with SELECT * and would treat 'cdc_tail:N' as a sub-index.
+func TestCagraSyncWritesTheFrameRowOnceTheTableHasIt(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	defer installNextChunkIdMock(t, proc, 0)()
+	rec := &recordingTxn{}
+	defer rec.install(t)()
+
+	// Its own metadata table name: provenanceShape is process-wide, so sharing "__meta" with
+	// the other sync tests would let them switch this one's shape out from under it.
+	const meta = "__meta_frame_row"
+	s, err := NewCagraSync(sqlproc, "db", "src", "idxname",
+		idxdefs(meta, "__storage"), 4, types.T_array_float32, "")
+	require.NoError(t, err)
+
+	sqlexec.MarkProvenanceColumns("db", meta)
+	t.Cleanup(func() { sqlexec.ForgetProvenanceShape("db", meta) })
+	s.SetBuildTS(4242)
+
+	cdc := &vectorindex.VectorIndexCdc[float32]{
+		Data: []vectorindex.VectorIndexCdcEntry[float32]{
+			{Type: vectorindex.CDC_INSERT, PKey: 1, Vec: []float32{1, 2, 3, 4}},
+		},
+	}
+	require.NoError(t, s.Update(sqlproc, cdc))
+	require.NoError(t, s.Save(sqlproc))
+
+	var metaSql string
+	for _, st := range rec.statements {
+		if strings.Contains(st, meta) {
+			metaSql += st
+		}
+	}
+	require.Contains(t, metaSql, "'cdc_tail:0'", "keyed by the chunk id the frame starts at")
+	require.Contains(t, metaSql, "4242", "and carrying the version this flush applied")
+}
+
+// A flush that spans SEVERAL chunks writes one metadata row per chunk, each carrying that
+// chunk's own stored length -- not one row carrying the flush's record total.
+//
+// The reader derives the chunks a row covers as ceil(filesize / MaxChunkSize) and compares the
+// sum against the chunks actually stored. Record bytes always divide into fewer chunks than were
+// written (records are packed under MaxChunkSize minus frame overhead and header, and never
+// split), so one row per flush reported a fully described tail as partly undescribed, and
+// CdcTailRowsUpperBound added a chunk's worth of phantom rows for every chunk it could not see.
+func TestCagraSyncWritesOneFrameRowPerChunk(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	defer installNextChunkIdMock(t, proc, 0)()
+	rec := &recordingTxn{}
+	defer rec.install(t)()
+
+	const meta = "__meta_frame_rows_per_chunk"
+	s, err := NewCagraSync(sqlproc, "db", "src", "idxname",
+		idxdefs(meta, "__storage"), 4, types.T_array_float32, "")
+	require.NoError(t, err)
+
+	sqlexec.MarkProvenanceColumns("db", meta)
+	t.Cleanup(func() { sqlexec.ForgetProvenanceShape("db", meta) })
+
+	// Records enough to fill several chunks: 9 + 4*4 bytes each.
+	const nrec = 4 * vectorindex.MaxChunkSize / 25
+	entries := make([]vectorindex.VectorIndexCdcEntry[float32], 0, nrec)
+	for i := 0; i < nrec; i++ {
+		entries = append(entries, vectorindex.VectorIndexCdcEntry[float32]{
+			Type: vectorindex.CDC_INSERT, PKey: int64(i + 1), Vec: []float32{1, 2, 3, 4},
+		})
+	}
+	require.NoError(t, s.Update(sqlproc, &vectorindex.VectorIndexCdc[float32]{Data: entries}))
+	require.NoError(t, s.Save(sqlproc))
+
+	var metaSql, chunkSql string
+	for _, st := range rec.statements {
+		if strings.Contains(st, meta) {
+			metaSql += st
+		} else if strings.Contains(st, "__storage") {
+			chunkSql += st
+		}
+	}
+	storedChunks := strings.Count(chunkSql, "'cdc_tail', ")
+	require.Greater(t, storedChunks, 1, "the fixture must span several chunks")
+
+	ids := regexp.MustCompile(`'cdc_tail:(\d+)'`).FindAllStringSubmatch(metaSql, -1)
+	require.Len(t, ids, storedChunks, "one metadata row per stored chunk, not one per flush")
+	for i, m := range ids {
+		require.Equal(t, strconv.Itoa(i), m[1], "keyed by its own chunk id, contiguous")
+	}
+
+	// Every row's filesize is one chunk's framed length, so the reader's ceil resolves to
+	// exactly one chunk per row and the coverage sum equals the chunks stored.
+	sizes := regexp.MustCompile(`'cdc_tail:\d+', '[^']*', \d+, (\d+),`).FindAllStringSubmatch(metaSql, -1)
+	require.Len(t, sizes, storedChunks)
+	covered := 0
+	for _, m := range sizes {
+		n, err := strconv.Atoi(m[1])
+		require.NoError(t, err)
+		require.Positive(t, n)
+		require.LessOrEqual(t, n, vectorindex.MaxChunkSize)
+		covered += (n + vectorindex.MaxChunkSize - 1) / vectorindex.MaxChunkSize
+	}
+	require.Equal(t, storedChunks, covered,
+		"the tail is fully described: no uncovered chunk, so no phantom rows in the estimate")
+
+	// The reader's other input: SUM(nrow) is the tail's record count, exactly.
+	nrows := regexp.MustCompile(`'cdc_tail:\d+', '[^']*', \d+, \d+, (\d+),`).FindAllStringSubmatch(metaSql, -1)
+	require.Len(t, nrows, storedChunks)
+	records := 0
+	for _, m := range nrows {
+		n, err := strconv.Atoi(m[1])
+		require.NoError(t, err)
+		records += n
+	}
+	require.Equal(t, nrec, records, "every record is described exactly once")
+
+	// END TO END, against what the OLD row produced from the same flush. Its filesize was the
+	// flush's RECORD bytes, and CdcTailRowsUpperBound derives coverage the same way it does
+	// here -- so run its arithmetic on both figures and compare the estimate each yields.
+	const recordBytes = nrec * 25 // op(1) + pkid(8) + vec(4*4)
+	oldCovered := (recordBytes + vectorindex.MaxChunkSize - 1) / vectorindex.MaxChunkSize
+	require.Less(t, oldCovered, storedChunks,
+		"record bytes divide into fewer chunks than were written: that is the whole defect")
+
+	perChunk := vectorindex.MaxChunkSize / (4 * 4) // a chunk's rows, bounded by the vector width
+	oldEstimate := records + (storedChunks-oldCovered)*perChunk
+	newEstimate := records + (storedChunks-covered)*perChunk
+	require.Equal(t, nrec, newEstimate, "the tail is sized at exactly what it holds")
+	require.Greater(t, oldEstimate, newEstimate,
+		"the old row inflated the reservation with rows the tail does not hold")
+	t.Logf("stored=%d chunks; covered old=%d new=%d; estimate old=%d new=%d (holds %d)",
+		storedChunks, oldCovered, covered, oldEstimate, newEstimate, nrec)
 }

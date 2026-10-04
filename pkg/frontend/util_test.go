@@ -794,9 +794,10 @@ func TestGetExprValue(t *testing.T) {
 			{"set @@x=(select 3.4028234663852886e+38)", false, float32(3.4028234663852886e+38)},
 			{"set @@x=(select  2.2250738585072014e-308)", false, float64(2.2250738585072014e-308)},
 			{"set @@x=(select  1.7976931348623157e+308)", false, float64(1.7976931348623157e+308)},
-			{"set @@x=(select cast(9223372036854775807 as decimal))", false, "9223372036854775807"},
-			{"set @@x=(select cast(99999999999999999999999999999999999999 as decimal))", false, "99999999999999999999999999999999999999"},
-			{"set @@x=(select cast(-99999999999999999999999999999999999999 as decimal))", false, "-99999999999999999999999999999999999999"},
+			{"set @@x=(select cast(9223372036854775807 as decimal))", false, "9999999999"},
+			{"set @@x=(select cast(9223372036854775807 as decimal(38,0)))", false, "9223372036854775807"},
+			{"set @@x=(select cast(99999999999999999999999999999999999999 as decimal(38,0)))", false, "99999999999999999999999999999999999999"},
+			{"set @@x=(select cast(-99999999999999999999999999999999999999 as decimal(38,0)))", false, "-99999999999999999999999999999999999999"},
 			{"set @@x=(select cast('{\"a\":1,\"b\":2}' as json))", false, "{\"a\": 1, \"b\": 2}"},
 			{"set @@x=(select cast('00000000-0000-0000-0000-000000000000' as uuid))", false, "00000000-0000-0000-0000-000000000000"},
 			{"set @@x=(select cast('00:00:00' as time))", false, "00:00:00"},
@@ -852,7 +853,7 @@ func TestGetExprValue(t *testing.T) {
 		txnOperator.EXPECT().GetWorkspace().Return(ws).AnyTimes()
 		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 		txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
-		txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+
 		txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
 		txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().GetWaitActiveCost().Return(time.Duration(0)).AnyTimes()
@@ -971,7 +972,7 @@ func TestGetExprValue(t *testing.T) {
 		txnOperator.EXPECT().GetWorkspace().Return(ws).AnyTimes()
 		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 		txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
-		txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+
 		txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
 		txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().GetWaitActiveCost().Return(time.Duration(0)).AnyTimes()
@@ -1097,13 +1098,24 @@ func TestRewriteError(t *testing.T) {
 			want2: "internal error: xxxx",
 		},
 		{
+			name: "canonical catalog rejection",
+			args: args{
+				err:      markAuthenticationRejected(moerr.NewInternalErrorNoCtx("there is no user dump")),
+				username: "tenant:dump",
+			},
+			want:  moerr.ER_ACCESS_DENIED_ERROR,
+			want1: "28000",
+			want2: "Access denied for user tenant:dump. internal error: there is no user dump",
+		},
+		{
 			name: "t8",
 			args: args{
 				err:      moerr.NewBadDBNoCtx("yyy"),
 				username: "abc",
 			},
-			want:  moerr.ER_BAD_DB_ERROR,
-			want1: "HY000",
+			want: moerr.ER_BAD_DB_ERROR,
+			// MySQL pairs ER_BAD_DB_ERROR with SQLSTATE 42000
+			want1: "42000",
 			want2: "Unknown database yyy",
 		},
 	}
@@ -1468,6 +1480,28 @@ func TestNormalizeViewDependencyKeyForRestoreTopology(t *testing.T) {
 	require.Equal(t, genKey("db#part", "view#part"), normalized)
 }
 
+func TestFrontendTextWireResultColumns(t *testing.T) {
+	for _, wireType := range []defines.MysqlType{
+		defines.MYSQL_TYPE_TINY_BLOB, defines.MYSQL_TYPE_BLOB,
+		defines.MYSQL_TYPE_MEDIUM_BLOB, defines.MYSQL_TYPE_LONG_BLOB,
+	} {
+		column := &MysqlColumn{}
+		column.SetName("text_result")
+		column.SetColumnType(wireType)
+		column.SetCharset(charsetVarchar)
+		result, columnTypes, names, err := mysqlColDef2PlanResultColDef([]Column{column})
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_text), result.ResultCols[0].Typ.Id)
+		require.Equal(t, types.T_text, columnTypes[0].Oid)
+		require.Equal(t, []string{"text_result"}, names)
+		require.Equal(t, wireType, column.ColumnType(), "conversion must not mutate wire metadata")
+
+		column.SetCharset(charsetBinary)
+		_, _, _, err = mysqlColDef2PlanResultColDef([]Column{column})
+		require.Error(t, err, "binary BLOB must not be silently treated as TEXT")
+	}
+}
+
 func Test_convertRowsIntoBatch(t *testing.T) {
 	colMysqlTyps := []defines.MysqlType{
 		defines.MYSQL_TYPE_VAR_STRING,
@@ -1588,6 +1622,40 @@ func Test_convertRowsIntoBatch(t *testing.T) {
 			assert.Equal(t, mrs.Data[i][j], row[j])
 		}
 
+	}
+}
+
+func TestGetValueFromVectorPreservesTemporalScale(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+
+	clock, err := types.ParseTime("00:00:02.654321", 6)
+	require.NoError(t, err)
+	datetime, err := types.ParseDatetime("2024-01-02 03:04:05.654321", 6)
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name  string
+		typ   types.Type
+		value any
+		want  string
+	}{
+		{name: "time", typ: types.T_time.ToTypeWithScale(6), value: clock, want: clock.String2(6)},
+		{name: "datetime", typ: types.New(types.T_datetime, 0, 6), value: datetime, want: datetime.String2(6)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			vec := vector.NewVec(tc.typ)
+			t.Cleanup(func() { vec.Free(mp) })
+			switch value := tc.value.(type) {
+			case types.Time:
+				require.NoError(t, vector.AppendFixed[types.Time](vec, value, false, mp))
+			case types.Datetime:
+				require.NoError(t, vector.AppendFixed[types.Datetime](vec, value, false, mp))
+			}
+			got, err := getValueFromVector(context.Background(), vec, nil, nil)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
 	}
 }
 
@@ -2124,19 +2192,23 @@ func TestResultColumnMetadataDistinguishesBlobFromText(t *testing.T) {
 
 func TestMysqlBlobMetadataPreservesKnownAndUnknownBounds(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		width  int32
-		length uint32
+		name      string
+		width     int32
+		length    uint32
+		mysqlType defines.MysqlType
 	}{
-		{name: "unknown expression bound", width: 0, length: math.MaxUint32},
-		{name: "N", width: math.MaxUint16, length: math.MaxUint16},
-		{name: "N plus one", width: math.MaxUint16 + 1, length: math.MaxUint16 + 1},
+		{name: "unknown expression bound", width: 0, length: math.MaxUint32, mysqlType: defines.MYSQL_TYPE_BLOB},
+		{name: "tiny", width: types.MaxTinyTextLen, length: types.MaxTinyTextLen, mysqlType: defines.MYSQL_TYPE_TINY_BLOB},
+		{name: "blob", width: types.MaxStringSize, length: types.MaxStringSize, mysqlType: defines.MYSQL_TYPE_BLOB},
+		{name: "medium", width: types.MaxMediumTextLen, length: types.MaxMediumTextLen, mysqlType: defines.MYSQL_TYPE_MEDIUM_BLOB},
+		{name: "long", width: types.MaxLongTextLen, length: types.MaxLongTextLen, mysqlType: defines.MYSQL_TYPE_LONG_BLOB},
+		{name: "N plus one", width: math.MaxUint16 + 1, length: math.MaxUint16 + 1, mysqlType: defines.MYSQL_TYPE_MEDIUM_BLOB},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			col := new(MysqlColumn)
 			require.NoError(t, setMysqlColumnTypeInfo(
 				context.Background(), types.New(types.T_blob, tc.width, 0), col))
-			require.Equal(t, defines.MYSQL_TYPE_BLOB, col.ColumnType())
+			require.Equal(t, tc.mysqlType, col.ColumnType())
 			require.Equal(t, uint16(charsetBinary), col.Charset())
 			require.Equal(t, tc.length, col.Length())
 			require.Equal(t, uint16(defines.BLOB_FLAG|defines.BINARY_FLAG), col.Flag())
@@ -2555,8 +2627,21 @@ func Test_BuildTableDefFromMoColumns(t *testing.T) {
 		})
 		bh.sql2result[sql] = mrs
 
-		_, err = buildTableDefFromMoColumns(ctx, uint64(tenant.TenantID), "db1", "t1", ses)
+		actual, err := buildTableDefFromMoColumns(ctx, uint64(tenant.TenantID), "db1", "t1", ses)
 		convey.So(err, convey.ShouldBeNil)
+		convey.So(len(actual.Cols), convey.ShouldEqual, 1)
+		convey.So(actual.TblId, convey.ShouldEqual, 100)
+		convey.So(actual.Version, convey.ShouldEqual, 3)
+		convey.So(actual.DbId, convey.ShouldEqual, 10)
+
+		// A View must be rebound, even if its persisted type blob is invalid.
+		bh.sql2result[sql] = newMrsForTableColumnDef([][]interface{}{{
+			"old", "invalid type", 1, 0, "invalid default", 0, 0, catalog.SystemViewRel,
+		}})
+		actual, err = buildTableDefFromMoColumns(ctx, uint64(tenant.TenantID), "db1", "t1", ses)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(actual.TableType, convey.ShouldEqual, catalog.SystemViewRel)
+		convey.So(len(actual.Cols), convey.ShouldEqual, 0)
 	})
 }
 
@@ -2598,8 +2683,24 @@ func newMrsForTableColumnDef(rows [][]interface{}) *MysqlResultSet {
 	mrs.AddColumn(col5)
 	mrs.AddColumn(col6)
 	mrs.AddColumn(col7)
+	kind := &MysqlColumn{}
+	kind.SetName("relkind")
+	kind.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(kind)
+	for _, name := range []string{"rel_id", "rel_version", "reldatabase_id"} {
+		column := &MysqlColumn{}
+		column.SetName(name)
+		column.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+		mrs.AddColumn(column)
+	}
 
 	for _, row := range rows {
+		if len(row) == 7 {
+			row = append(row, catalog.SystemOrdinaryRel)
+		}
+		if len(row) == 8 {
+			row = append(row, uint64(100), uint32(3), uint64(10))
+		}
 		mrs.AddRow(row)
 	}
 
@@ -2620,7 +2721,7 @@ func Test_getTableColumnDefSql(t *testing.T) {
 			accountId: 1,
 			dbName:    "db1",
 			tableName: "tbl1",
-			want:      fmt.Sprintf(getTableColumnDefFormat, 1, "db1", "tbl1"),
+			want:      fmt.Sprintf(getTableColumnDefFormat, 1, "'db1'", "'tbl1'"),
 			wantErr:   false,
 		},
 	}

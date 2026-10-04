@@ -517,7 +517,7 @@ func NewJsonVector(n int, typ types.Type, m *mpool.MPool, _ bool, vs []string) *
 				vec.Free(m)
 				return nil
 			}
-			if err := vector.AppendFixed(vec, jbytes, false, m); err != nil {
+			if err := vector.AppendBytes(vec, jbytes, false, m); err != nil {
 				vec.Free(m)
 				return nil
 			}

@@ -135,6 +135,23 @@ type SessionInfo struct {
 	// SqlMode is captured on the initiating CN and used when a remote process has
 	// no session variable resolver.
 	SqlMode string
+	// Captured per execution for one-argument WEEK on remote/forwarded CNs.
+	DefaultWeekFormat    uint8
+	DefaultWeekFormatSet bool
+	// Effective lc_time_names captured on the initiating CN and used when a
+	// remote process has no session-variable resolver.
+	LCTimeNames string
+	// AutoIncrementIncrement and AutoIncrementOffset are captured on the
+	// initiating CN and used by remote PRE_INSERT operators.  They are
+	// statement-scoped; zero means the default value one for compatibility with
+	// old process payloads and internal/background processes.
+	AutoIncrementIncrement uint64
+	AutoIncrementOffset    uint64
+	// MaxErrorCount is the statement-scoped capacity for retained diagnostic
+	// records. MaxErrorCountSet distinguishes an explicit zero from an older
+	// ProcessInfo payload which did not carry this field.
+	MaxErrorCount    int
+	MaxErrorCountSet bool
 	// ApplySQLSelectLimit distinguishes client statements from frontend
 	// background SQL, which may inherit a session-variable resolver but must not
 	// be affected by a client's row cap.
@@ -158,9 +175,12 @@ type SessionInfo struct {
 	SeqAddValues      map[uint64]string
 	SeqLastValue      []string
 	SqlHelper         sqlHelper
-	Buf               *buffer.Buffer
-	LogLevel          zapcore.Level
-	SessionId         uuid.UUID
+	// CompilerContext is request-local and never serialized. Origin-only metadata
+	// operators use it to bind View definitions in the executing transaction.
+	CompilerContext any
+	Buf             *buffer.Buffer
+	LogLevel        zapcore.Level
+	SessionId       uuid.UUID
 }
 
 type Session interface {
@@ -171,6 +191,16 @@ type Session interface {
 	// GetSqlModeNoAutoValueOnZero reports whether sql_mode contains NO_AUTO_VALUE_ON_ZERO.
 	// ok=false means the session doesn't support the cache.
 	GetSqlModeNoAutoValueOnZero() (bool, bool)
+}
+
+// TemporaryTableDDL is an optional capability of a user session. Internal
+// sessions deliberately keep temporary DDL in their shared transaction.
+// Physical cleanup is owned by the session after its data transaction ends.
+type TemporaryTableDDL interface {
+	CheckTemporaryTableCapacity(context.Context) error
+	OwnsTemporaryTable(database, physicalName string) bool
+	PublishTemporaryTable(database, alias, physicalName string)
+	RetireTemporaryTable(database, alias, physicalName string, indexNames []string)
 }
 
 // ForeignConn is a connection to a foreign data source (Elasticsearch, an
@@ -206,8 +236,10 @@ type ForeignConnCache interface {
 // interactive frontend session. The Kafka external-table reader records the
 // highest message offset a completed scan consumed, and the
 // LAST_KAFKA_MESSAGE_ID() builtin reads it back — the pair gives a consumer
-// exactly-once chaining (feed the last id as the next __mo_read_start_id).
-// Reached via proc.GetSession().(KafkaSessionState).
+// explicit gap-free chaining (feed the last id as the next
+// __mo_read_start_id). Transaction-consistent checkpoints live in an ordinary
+// MatrixOne table, not this session state. Reached via
+// proc.GetSession().(KafkaSessionState).
 type KafkaSessionState interface {
 	// SetLastKafkaMessageID records the offset of the last message a
 	// successfully completed Kafka scan returned in this session.
@@ -218,9 +250,8 @@ type KafkaSessionState interface {
 	// EnqueueKafkaProgress defers a drained Kafka scan's progress publication
 	// to the STATEMENT terminal: on split scopes the source pipeline resets
 	// before downstream pipelines consume the final batch, so source-pipeline
-	// success is not statement success. The session runs every queued
-	// finalizer exactly once with the statement's outcome (publish=false
-	// discards) when the whole statement completes.
+	// success is not statement success. The session runs every queued finalizer
+	// exactly once with the whole statement's outcome.
 	EnqueueKafkaProgress(finalize func(publish bool))
 }
 
@@ -444,8 +475,9 @@ type BaseProcess struct {
 	LoadLocalReader                     *io.PipeReader
 	Aicm                                *defines.AutoIncrCacheManager
 	resolveVariableFunc                 func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
+	resolveVariableTypeFunc             func(varName string, isSystemVar, isGlobalVar bool) (plan.Type, error)
 	resolveVariableIsBinFunc            func(varName string, isSystemVar, isGlobalVar bool) (bool, error)
-	resolveVariableBinaryStringFunc     func(varName string, isSystemVar, isGlobalVar bool) (bool, error)
+	resolveVariableStringDomainFunc     func(varName string, isSystemVar, isGlobalVar bool) (types.RuntimeStringDomain, error)
 	resolveVariablePrepareParamKindFunc func(varName string, isSystemVar, isGlobalVar bool) (vector.PrepareParamKind, error)
 	prepareParams                       *vector.Vector
 	prepareParamsIsBin                  []bool
@@ -458,6 +490,8 @@ type BaseProcess struct {
 	messageBoard                        *message.MessageBoard
 	executionResourceBudgetMu           sync.Mutex
 	executionResourceBudget             *ExecutionResourceGeneration
+	warningDiagnosticBudgetMu           sync.Mutex
+	warningDiagnosticBudget             *WarningDiagnosticBudget
 	cteMemoryBudgetMu                   sync.Mutex
 	cteMemoryBudget                     *CTEMemoryBudget
 	logger                              *log.MOLogger
@@ -470,6 +504,23 @@ type BaseProcess struct {
 	userLevelLockOwner      string
 	userLevelLockConnID     uint64
 	userLevelLockGeneration string
+	// sequenceGate serializes the complete sequence metadata operation and
+	// session-state publication across all child processes sharing this Base.
+	// It is intentionally not part of SessionInfo: remote/rebuilt session state
+	// must not copy or replace a live synchronization object.
+	sequenceGate sequenceGate
+	// groupConcatInputRowCounters gives each logical Group operator one
+	// statement-scoped source-row cursor. A BaseProcess is shared by local
+	// parallel child processes, so partial producers do not restart at row 1.
+	// The map is reset with the query context and is not serialized to remote
+	// processes; remote state keeps the source rows assigned by its producer.
+	groupConcatInputRowCountersMu sync.Mutex
+	groupConcatInputRowCounters   map[int]*atomic.Uint64
+	// groupConcatSourceRowProvenanceUntrusted is true on a remote process that
+	// cannot share the coordinator's input-row namespace. It is kept on the
+	// shared BaseProcess so child pipelines inherit the same decision. The
+	// negative form keeps zero-value test processes compatible with local use.
+	groupConcatSourceRowProvenanceUntrusted bool
 	// incrStatementDisabled marks a process that executes internal SQL on a
 	// caller-owned transaction without opening a statement of its own
 	// (executor.Options.WithDisableIncrStatement). Compiles on such a process
@@ -504,6 +555,16 @@ type BaseProcess struct {
 	IsFrontend bool
 }
 
+// StringShuffleHashAlgorithm identifies the exact owner mapping used for
+// string-key shuffle. It is execution metadata, not a service-local feature
+// flag: every local and remote pipeline in one execution must see one value.
+type StringShuffleHashAlgorithm uint32
+
+const (
+	StringShuffleHashLegacy   StringShuffleHashAlgorithm = 0
+	StringShuffleHashComplete StringShuffleHashAlgorithm = 1
+)
+
 // Process contains context used in query execution
 // one or more pipeline will be generated for one query,
 // and one pipeline has one process instance.
@@ -520,12 +581,26 @@ type Process struct {
 	// share this immutable object, keeping the per-pipeline footprint to one
 	// pointer rather than one protobuf timestamp.
 	planSnapshotTS *timestamp.Timestamp
+	// planGenerationReused distinguishes a cached/prepared generation admitted
+	// for this execution from a plan freshly built at the transaction's current
+	// snapshot. The distinction matters only during a protocol rollback: an old
+	// lock owner cannot consume the optional plan snapshot, so a reused
+	// generation must rebuild locally before its first lock RPC.
+	planGenerationReused bool
+	// stringShuffleHashAlgorithm is frozen before physical compilation and
+	// copied into every child and remote process. Keeping it on Process gives a
+	// reused prepared pipeline a fresh value per execution without allowing a
+	// mid-query protocol rollout to change the mapping.
+	stringShuffleHashAlgorithm StringShuffleHashAlgorithm
 
 	// Ctx and Cancel are pipeline's context and cancel function.
 	// Every pipeline has its own context, and the lifecycle of the pipeline is controlled by the context.
 	Ctx     context.Context
 	Cancel  context.CancelCauseFunc
 	Session Session
+	// WarningSink is an immutable execution-attempt destination. Children inherit
+	// the pointer; remote callbacks retain it after a failed attempt is sealed.
+	WarningSink any
 }
 
 type sqlHelper interface {
@@ -538,15 +613,22 @@ type sqlHelper interface {
 // WrapCs record information about pipeline's remote receiver.
 type WrapCs struct {
 	sync.RWMutex
-	ReceiverDone  bool
-	MsgId         uint64
-	Uid           uuid.UUID
-	Cs            morpc.ClientSession
-	Err           chan error
-	ReserveBatch  func(context.Context, uint64) (uint64, error)
-	RollbackBatch func(uint64)
-	BatchCredits  uint32
-	ByteCredits   uint64
+	ReceiverDone bool
+	// ReceiverStopped certifies an explicit StopSending while the registration
+	// connection and message remain live. It does not imply query success.
+	ReceiverStopped func() bool
+	// TerminalBacked marks registrations whose immutable terminal owns the
+	// generation result. Such registrations must not use Err for a second,
+	// competing terminal notification; Err is nil for that path.
+	TerminalBacked bool
+	MsgId          uint64
+	Uid            uuid.UUID
+	Cs             morpc.ClientSession
+	Err            chan error
+	ReserveBatch   func(context.Context, uint64) (uint64, error)
+	RollbackBatch  func(uint64)
+	BatchCredits   uint32
+	ByteCredits    uint64
 }
 
 // RemotePipelineInformationChannel used to deliver remote receiver pipeline's information.
@@ -573,6 +655,9 @@ func (proc *Process) SetStmtProfile(sp *StmtProfile) {
 		proc.Base.executionResourceBudget = nil
 	}
 	proc.Base.executionResourceBudgetMu.Unlock()
+	proc.Base.warningDiagnosticBudgetMu.Lock()
+	proc.Base.warningDiagnosticBudget = nil
+	proc.Base.warningDiagnosticBudgetMu.Unlock()
 	proc.Base.cteMemoryBudgetMu.Lock()
 	if proc.Base.cteMemoryBudget != nil {
 		proc.Base.cteMemoryBudget.Close()
@@ -641,6 +726,19 @@ func (proc *Process) GetPrepareParamKind(i int) vector.PrepareParamKind {
 	return kind
 }
 
+// GetPrepareParamType returns the concrete SQL type retained for a direct
+// prepared parameter. T_any means that the sender did not provide exact type
+// metadata, as is expected for legacy peers and parameters that do not need it.
+func (proc *Process) GetPrepareParamType(i int) types.T {
+	var typ types.T
+	for bit := 0; bit < 8; bit++ {
+		if proc.getPrepareParamMeta(i, 4+bit) {
+			typ |= types.T(1 << bit)
+		}
+	}
+	return typ
+}
+
 func (proc *Process) getPrepareParamMeta(i, section int) bool {
 	paramCount := 0
 	if proc.Base.prepareParams != nil {
@@ -676,6 +774,16 @@ func (proc *Process) GetResolveVariableFunc() func(varName string, isSystemVar, 
 	return proc.Base.resolveVariableFunc
 }
 
+func (proc *Process) SetResolveVariableTypeFunc(
+	f func(varName string, isSystemVar, isGlobalVar bool) (plan.Type, error),
+) {
+	proc.Base.resolveVariableTypeFunc = f
+}
+
+func (proc *Process) GetResolveVariableTypeFunc() func(string, bool, bool) (plan.Type, error) {
+	return proc.Base.resolveVariableTypeFunc
+}
+
 func (proc *Process) SetResolveVariableIsBinFunc(f func(varName string, isSystemVar, isGlobalVar bool) (bool, error)) {
 	proc.Base.resolveVariableIsBinFunc = f
 }
@@ -684,12 +792,41 @@ func (proc *Process) GetResolveVariableIsBinFunc() func(varName string, isSystem
 	return proc.Base.resolveVariableIsBinFunc
 }
 
-func (proc *Process) SetResolveVariableBinaryStringFunc(f func(varName string, isSystemVar, isGlobalVar bool) (bool, error)) {
-	proc.Base.resolveVariableBinaryStringFunc = f
+func (proc *Process) SetResolveVariableStringDomainFunc(
+	f func(varName string, isSystemVar, isGlobalVar bool) (types.RuntimeStringDomain, error),
+) {
+	proc.Base.resolveVariableStringDomainFunc = f
 }
 
-func (proc *Process) GetResolveVariableBinaryStringFunc() func(varName string, isSystemVar, isGlobalVar bool) (bool, error) {
-	return proc.Base.resolveVariableBinaryStringFunc
+func (proc *Process) GetResolveVariableStringDomainFunc() func(
+	varName string, isSystemVar, isGlobalVar bool,
+) (types.RuntimeStringDomain, error) {
+	return proc.Base.resolveVariableStringDomainFunc
+}
+
+// SetResolveVariableBinaryStringFunc is a compatibility adapter for callers
+// that still consume a binary boolean instead of the three-state domain.
+func (proc *Process) SetResolveVariableBinaryStringFunc(
+	f func(varName string, isSystemVar, isGlobalVar bool) (bool, error),
+) {
+	proc.SetResolveVariableStringDomainFunc(func(varName string, isSystemVar, isGlobalVar bool) (types.RuntimeStringDomain, error) {
+		binary, err := f(varName, isSystemVar, isGlobalVar)
+		if err != nil || !binary {
+			return types.RuntimeStringInherit, err
+		}
+		return types.RuntimeStringBinary, nil
+	})
+}
+
+func (proc *Process) GetResolveVariableBinaryStringFunc() func(string, bool, bool) (bool, error) {
+	f := proc.GetResolveVariableStringDomainFunc()
+	if f == nil {
+		return nil
+	}
+	return func(name string, system, global bool) (bool, error) {
+		domain, err := f(name, system, global)
+		return domain == types.RuntimeStringBinary, err
+	}
 }
 
 func (proc *Process) SetResolveVariablePrepareParamKindFunc(
@@ -867,12 +1004,26 @@ func (proc *Process) GetTxnOperator() client.TxnOperator {
 // Child pipeline processes inherit the immutable binding pointer.
 func (proc *Process) SetPlanSnapshotTS(ts timestamp.Timestamp) {
 	proc.planSnapshotTS = &ts
+	proc.planGenerationReused = false
+}
+
+// SetPlanGenerationReused records that the bound plan generation was admitted
+// from a session/prepared cache rather than built for this execution.
+func (proc *Process) SetPlanGenerationReused(reused bool) {
+	proc.planGenerationReused = reused
+}
+
+// PlanGenerationReused reports whether this execution admitted a reusable
+// logical-plan generation.
+func (proc *Process) PlanGenerationReused() bool {
+	return proc.planGenerationReused
 }
 
 // ClearPlanSnapshotTS removes the plan binding. Lock callers without a plan
 // then retain the legacy transaction-snapshot behavior.
 func (proc *Process) ClearPlanSnapshotTS() {
 	proc.planSnapshotTS = nil
+	proc.planGenerationReused = false
 }
 
 // GetPlanSnapshotTS returns the immutable plan snapshot for this execution
@@ -884,6 +1035,12 @@ func (proc *Process) GetPlanSnapshotTS() (timestamp.Timestamp, bool) {
 	return *proc.planSnapshotTS, true
 }
 
+// PlanSnapshotTSForTransport returns the immutable plan binding in the pointer
+// form used by protobuf transport. Callers must not mutate the returned value.
+func (proc *Process) PlanSnapshotTSForTransport() *timestamp.Timestamp {
+	return proc.planSnapshotTS
+}
+
 // CopyPlanSnapshotFrom propagates one execution generation's binding to a
 // child or reused pipeline process without exposing the presence bit.
 func (proc *Process) CopyPlanSnapshotFrom(parent *Process) {
@@ -892,6 +1049,47 @@ func (proc *Process) CopyPlanSnapshotFrom(parent *Process) {
 		return
 	}
 	proc.planSnapshotTS = parent.planSnapshotTS
+	proc.planGenerationReused = parent.planGenerationReused
+}
+
+// SetStringShuffleHashAlgorithm binds the immutable owner mapping for this
+// execution. Callers must set it before creating or preparing child pipelines.
+func (proc *Process) SetStringShuffleHashAlgorithm(algorithm StringShuffleHashAlgorithm) {
+	proc.stringShuffleHashAlgorithm = algorithm
+}
+
+// StringShuffleHashAlgorithm returns the owner mapping frozen for this
+// execution. The zero value intentionally preserves legacy wire behavior.
+func (proc *Process) StringShuffleHashAlgorithm() StringShuffleHashAlgorithm {
+	return proc.stringShuffleHashAlgorithm
+}
+
+// UsesCompleteStringShuffleHash reports whether string shuffle must hash the
+// complete logical key rather than the legacy sampled bytes.
+func (proc *Process) UsesCompleteStringShuffleHash() bool {
+	return proc.stringShuffleHashAlgorithm == StringShuffleHashComplete
+}
+
+// CopyStringShuffleHashAlgorithmFrom propagates one execution's immutable
+// owner mapping into a child or reused pipeline process.
+func (proc *Process) CopyStringShuffleHashAlgorithmFrom(parent *Process) {
+	if parent == nil {
+		proc.stringShuffleHashAlgorithm = StringShuffleHashLegacy
+		return
+	}
+	proc.stringShuffleHashAlgorithm = parent.stringShuffleHashAlgorithm
+}
+
+// DecodeStringShuffleHashAlgorithm rejects unknown wire values instead of
+// silently assigning equal keys to potentially different owners.
+func DecodeStringShuffleHashAlgorithm(value uint32) (StringShuffleHashAlgorithm, error) {
+	switch value {
+	case uint32(StringShuffleHashLegacy), uint32(StringShuffleHashComplete):
+		return StringShuffleHashAlgorithm(value), nil
+	default:
+		return StringShuffleHashLegacy, moerr.NewNotSupportedNoCtxf(
+			"string shuffle hash algorithm %d is not supported", value)
+	}
 }
 
 func (proc *Process) GetBaseProcessRunningStatus() bool {
@@ -986,4 +1184,12 @@ func (proc *Process) DebugBreakDump(cond bool) {
 	if proc.Base.SessionInfo.User == "dump" && cond {
 		logutil.GetGlobalLogger().Info("debug break dump")
 	}
+}
+
+// GetWarningSink preserves session diagnostics outside an execution attempt.
+func (proc *Process) GetWarningSink() any {
+	if proc.WarningSink != nil {
+		return proc.WarningSink
+	}
+	return proc.Session
 }

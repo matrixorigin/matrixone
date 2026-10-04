@@ -48,6 +48,9 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 		return nil, nil, nil
 	}
 	e := es[0]
+	if e == nil {
+		return nil, nil, moerr.NewInvalidInputNoCtx("nil catalog entry")
+	}
 	switch e.EntryType {
 	case api.Entry_Insert,
 		api.Entry_Delete,
@@ -73,21 +76,14 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 		)
 	}
 	if e.DatabaseId == MO_CATALOG_ID && e.TableId == MO_DATABASE_ID {
-		bat, err := batch.ProtoBatchToBatch(e.Bat)
+		bat, err := parseDatabaseEntryBatch(e)
 		if err != nil {
 			return nil, nil, err
 		}
 		if e.EntryType == api.Entry_Insert {
-			return &CreateDatabaseReq{
-				Bat:  bat,
-				Cmds: genCreateDatabases(GenRows(bat)),
-			}, es[1:], nil
-		} else {
-			return &DropDatabaseReq{
-				Bat:  bat,
-				Cmds: genDropDatabases(GenRows(bat)),
-			}, es[1:], nil
+			return &CreateDatabaseReq{Bat: bat, Cmds: genCreateDatabases(GenRows(bat))}, es[1:], nil
 		}
+		return &DropDatabaseReq{Bat: bat, Cmds: genDropDatabases(GenRows(bat))}, es[1:], nil
 	}
 
 	if e.DatabaseId == MO_CATALOG_ID && e.TableId == MO_TABLES_ID {
@@ -126,6 +122,9 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 	}
 
 	if e.DatabaseId == MO_CATALOG_ID && e.TableId == MO_COLUMNS_ID {
+		if e.TableName == MO_COLUMNS_UPDATE {
+			return e, es[1:], nil
+		}
 		bat, _ := batch.ProtoBatchToBatch(e.Bat)
 		batstr := ""
 		if bat != nil {
@@ -141,6 +140,71 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 		return genUpdateAltertable(GenRows(bat)), es[1:], nil
 	}
 	return e, es[1:], nil
+}
+
+// parseDatabaseEntryBatch verifies the specialized CREATE/DROP DATABASE tuple
+// before GenRows and its typed callers index into it. Generic SQL DML sends a
+// different batch layout and must never be interpreted as a database DDL.
+func parseDatabaseEntryBatch(e *api.Entry) (*batch.Batch, error) {
+	var attrs []string
+	var oids []types.T
+	switch e.EntryType {
+	case api.Entry_Insert:
+		attrs = MoDatabaseSchema
+		oids = make([]types.T, len(MoDatabaseTypes))
+		for i := range oids {
+			oids[i] = MoDatabaseTypes[i].Oid
+		}
+	case api.Entry_Delete:
+		attrs = []string{Row_ID, CPrimaryKeyColName, MoDatabaseSchema[MO_DATABASE_DAT_ID_IDX], MoDatabaseSchema[MO_DATABASE_DAT_NAME_IDX]}
+		oids = []types.T{types.T_Rowid, types.T_varchar, MoDatabaseTypes[MO_DATABASE_DAT_ID_IDX].Oid, MoDatabaseTypes[MO_DATABASE_DAT_NAME_IDX].Oid}
+	default:
+		return nil, moerr.NewInvalidInputNoCtxf("invalid mo_database entry type %d", e.EntryType)
+	}
+	if e.Bat == nil || len(e.Bat.Vecs) != len(attrs) || len(e.Bat.Attrs) != len(attrs) {
+		return nil, moerr.NewInvalidInputNoCtxf("invalid mo_database entry width: expected %d columns", len(attrs))
+	}
+	for i, attr := range attrs {
+		if e.Bat.Attrs[i] != attr {
+			return nil, moerr.NewInvalidInputNoCtxf("invalid mo_database entry column %d", i)
+		}
+		// ProtoBatchToBatch decodes types and null bitmaps with unchecked
+		// indexing. Reject malformed DDL vectors before that conversion.
+		vec := &e.Bat.Vecs[i]
+		if types.T(vec.Type.Id) != oids[i] || len(vec.Nsp) != 0 {
+			return nil, moerr.NewInvalidInputNoCtxf("invalid mo_database entry vector %d", i)
+		}
+	}
+	bat, err := batch.ProtoBatchToBatch(e.Bat)
+	if err != nil {
+		return nil, err
+	}
+	rows := bat.RowCount()
+	for i, oid := range oids {
+		vec := bat.Vecs[i]
+		if vec == nil || vec.GetType().Oid != oid || vec.IsConst() || vec.Length() != rows || vec.GetNulls().Any() {
+			return nil, moerr.NewInvalidInputNoCtxf("invalid mo_database entry vector %d", i)
+		}
+		size := vec.GetType().TypeSize()
+		data := vec.GetData()
+		if size <= 0 || rows > len(data)/size {
+			return nil, moerr.NewInvalidInputNoCtxf("short mo_database entry vector %d", i)
+		}
+		if oid == types.T_varchar {
+			area := vec.GetArea()
+			for row := 0; row < rows; row++ {
+				var value types.Varlena
+				copy(value[:], data[row*size:(row+1)*size])
+				if !value.IsSmall() {
+					offset, length := value.OffsetLen()
+					if uint64(offset)+uint64(length) > uint64(len(area)) {
+						return nil, moerr.NewInvalidInputNoCtxf("invalid mo_database entry value in column %d", i)
+					}
+				}
+			}
+		}
+	}
+	return bat, nil
 }
 
 func parseDeleteTable(es []*api.Entry) (any, []*api.Entry, error) {

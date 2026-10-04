@@ -1,0 +1,108 @@
+drop table if exists issue_28859_28860_canonical_distinct;
+create table issue_28859_28860_canonical_distinct(
+id int,
+c char(4),
+v varchar(4),
+j json
+);
+insert into issue_28859_28860_canonical_distinct values
+(1, 'a', 'a', '1'),
+(2, 'a ', 'a ', '1.0'),
+(3, 'a  ', 'a  ', '1e0'),
+(4, 'a   ', 'a   ', '{"n":1}'),
+(5, 'a', 'a', '{"n":1.0}'),
+(6, 'a ', 'a ', '[1]'),
+(7, 'a  ', 'a  ', '[1.0]'),
+(8, 'a   ', 'a   ', '"1"'),
+(9, 'a', 'a', 'true'),
+(10, null, null, null),
+(11, null, null, 'null');
+select count(distinct c) as exact_count,
+approx_count_distinct(c) as approx_count,
+hll_cardinality(hll_add_agg(c)) as hll_count
+from issue_28859_28860_canonical_distinct;
+➤ exact_count[-5,64,0]  ¦  approx_count[-5,64,0]  ¦  hll_count[-5,64,0]  𝄀
+1  ¦  1  ¦  1
+select count(*) as group_count
+from (select c from issue_28859_28860_canonical_distinct group by c) g;
+➤ group_count[-5,64,0]  𝄀
+2
+select count(*) as distinct_count
+from (select distinct c from issue_28859_28860_canonical_distinct) d;
+➤ distinct_count[-5,64,0]  𝄀
+2
+select count(distinct j) as exact_count,
+approx_count_distinct(j) as approx_count,
+hll_cardinality(hll_add_agg(j)) as hll_count
+from issue_28859_28860_canonical_distinct;
+➤ exact_count[-5,64,0]  ¦  approx_count[-5,64,0]  ¦  hll_count[-5,64,0]  𝄀
+6  ¦  6  ¦  6
+select count(*) as group_count
+from (select j from issue_28859_28860_canonical_distinct group by j) g;
+➤ group_count[-5,64,0]  𝄀
+7
+select count(*) as distinct_count
+from (select distinct j from issue_28859_28860_canonical_distinct) d;
+➤ distinct_count[-5,64,0]  𝄀
+7
+select count(distinct j) as exact_count,
+approx_count_distinct(j) as approx_count,
+hll_cardinality(hll_add_agg(j)) as hll_count
+from issue_28859_28860_canonical_distinct
+where id = 10;
+➤ exact_count[-5,64,0]  ¦  approx_count[-5,64,0]  ¦  hll_count[-5,64,0]  𝄀
+0  ¦  0  ¦  0
+select count(distinct j) as exact_count,
+approx_count_distinct(j) as approx_count,
+hll_cardinality(hll_add_agg(j)) as hll_count
+from issue_28859_28860_canonical_distinct
+where id = 11;
+➤ exact_count[-5,64,0]  ¦  approx_count[-5,64,0]  ¦  hll_count[-5,64,0]  𝄀
+1  ¦  1  ¦  1
+select count(distinct v) as exact_count,
+approx_count_distinct(v) as approx_count,
+hll_cardinality(hll_add_agg(v)) as hll_count
+from issue_28859_28860_canonical_distinct;
+➤ exact_count[-5,64,0]  ¦  approx_count[-5,64,0]  ¦  hll_count[-5,64,0]  𝄀
+4  ¦  4  ¦  4
+select count(distinct j) as exact_count,
+approx_count_distinct(j) as approx_count,
+hll_cardinality(hll_add_agg(j)) as hll_count
+from issue_28859_28860_canonical_distinct
+where id between 1 and 3;
+➤ exact_count[-5,64,0]  ¦  approx_count[-5,64,0]  ¦  hll_count[-5,64,0]  𝄀
+1  ¦  1  ¦  1
+select count(*) as group_count
+from (
+select j from issue_28859_28860_canonical_distinct
+where id between 1 and 3 group by j
+) g;
+➤ group_count[-5,64,0]  𝄀
+1
+select count(distinct j) as exact_count,
+approx_count_distinct(j) as approx_count,
+hll_cardinality(hll_add_agg(j)) as hll_count
+from issue_28859_28860_canonical_distinct
+where id between 4 and 7;
+➤ exact_count[-5,64,0]  ¦  approx_count[-5,64,0]  ¦  hll_count[-5,64,0]  𝄀
+2  ¦  2  ¦  2
+select count(*) as group_count
+from (
+select j from issue_28859_28860_canonical_distinct
+where id between 4 and 7 group by j
+) g;
+➤ group_count[-5,64,0]  𝄀
+2
+drop table if exists issue_28859_28860_canonical_sketch;
+create table issue_28859_28860_canonical_sketch(part int, sketch blob);
+insert into issue_28859_28860_canonical_sketch
+select id % 2, hll_add_agg(j)
+from issue_28859_28860_canonical_distinct
+where id between 1 and 3
+group by id % 2;
+select hll_cardinality(hll_merge_agg(sketch)) as merged_hll_count
+from issue_28859_28860_canonical_sketch;
+➤ merged_hll_count[-5,64,0]  𝄀
+1
+drop table issue_28859_28860_canonical_sketch;
+drop table issue_28859_28860_canonical_distinct;

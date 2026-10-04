@@ -4,24 +4,36 @@ on:
   pull_request:
     paths:
       - ".github/workflows/native-dependency-check.yml"
+      - ".github/workflows/sca-go-module-cache.yaml"
+      - ".agents/skills/mo-dev/**"
       - ".dockerignore"
       - "Makefile"
       - "cgo/**"
       - "go.mod"
       - "go.sum"
       - "optools/images/Dockerfile"
+      - "optools/images/gpu/**"
+      - "optools/run_ut.sh"
+      - "optools/gpu/**"
+      - "optools/ut_tools.bash"
       - "thirdparties/**"
   push:
     branches:
       - main
     paths:
       - ".github/workflows/native-dependency-check.yml"
+      - ".github/workflows/sca-go-module-cache.yaml"
+      - ".agents/skills/mo-dev/**"
       - ".dockerignore"
       - "Makefile"
       - "cgo/**"
       - "go.mod"
       - "go.sum"
       - "optools/images/Dockerfile"
+      - "optools/images/gpu/**"
+      - "optools/run_ut.sh"
+      - "optools/gpu/**"
+      - "optools/ut_tools.bash"
       - "thirdparties/**"
   workflow_dispatch:
 
@@ -33,6 +45,40 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  native-contract:
+    name: Native contract (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-22.04
+          - macos-14
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Validate native state, staging, and Make DAG
+        run: |
+          python3 -m unittest discover -s cgo -p 'test_gpu_toolchain.py' -v
+          python3 -m unittest discover -s optools/gpu -p 'test_sync_sirius_mo.py' -v
+          if [ "$RUNNER_OS" = Linux ]; then
+            python3 -m unittest discover -s optools/images/gpu -p 'test_stage_runtime_libs.py' -v
+          fi
+          sh -n \
+            cgo/mo-gpu-env \
+            cgo/mo-native-provenance \
+            cgo/mo-stage-native-libs \
+            optools/images/gpu/stage-runtime-libs.sh \
+            .agents/skills/mo-dev/scripts/mo-cgo-test \
+            .agents/skills/mo-dev/scripts/mo-cgo-test-tags-test \
+            .agents/skills/mo-dev/scripts/mo-cgo-test-worktree-artifacts-test \
+            .agents/skills/mo-dev/scripts/mo-native-build-contract-test \
+            .agents/skills/mo-dev/scripts/mo-native-provenance-test
+          .agents/skills/mo-dev/scripts/mo-native-provenance-test
+          .agents/skills/mo-dev/scripts/mo-native-build-contract-test
+          .agents/skills/mo-dev/scripts/mo-cgo-test-tags-test
+          .agents/skills/mo-dev/scripts/mo-cgo-test-worktree-artifacts-test
+
   downloader:
     name: Downloader (${{ matrix.os }})
     strategy:

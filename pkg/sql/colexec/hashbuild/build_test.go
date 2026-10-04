@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
@@ -40,6 +41,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -831,6 +833,131 @@ func TestHashmapBuilderUniqueGrowthFailureAbandonsOptionalKeysInPlace(
 	require.Zero(t, tc.proc.Mp().CurrNB())
 }
 
+func TestHashmapBuilderRuntimeFilterLimitAbandonsOptionalKeysInPlace(
+	t *testing.T,
+) {
+	for _, hashOnPK := range []bool{false, true} {
+		for _, test := range []struct {
+			name         string
+			limit        int32
+			rows         int
+			wantFallback bool
+		}{
+			{
+				name:  "at-limit",
+				limit: int32(hashmap.UnitLimit),
+				rows:  hashmap.UnitLimit,
+			},
+			{
+				name:         "over-limit",
+				limit:        int32(hashmap.UnitLimit + 1),
+				rows:         hashmap.UnitLimit * 3,
+				wantFallback: true,
+			},
+		} {
+			t.Run(fmt.Sprintf("hash-on-pk=%t/%s", hashOnPK, test.name), func(t *testing.T) {
+				typ := types.T_int32.ToType()
+				tc := newTestCase(
+					t,
+					[]bool{false},
+					[]types.Type{typ},
+					[]*plan.Expr{newExpr(0, typ)},
+				)
+				require.NoError(t, tc.arg.Prepare(tc.proc))
+
+				input := newBatch([]types.Type{typ}, tc.proc, int64(test.rows))
+				require.NoError(t,
+					tc.arg.ctr.hashmapBuilder.copyBuildBatch(input, tc.proc))
+				tc.arg.ctr.hashmapBuilder.InputBatchRowCount = test.rows
+				input.Clean(tc.proc.Mp())
+
+				require.NoError(t,
+					tc.arg.ctr.hashmapBuilder.buildHashmapWithRuntimeFilterLimit(
+						hashOnPK, false, true, test.limit, tc.proc))
+				fallback, rebuildSafe :=
+					tc.arg.ctr.hashmapBuilder.runtimeFilterFallbackState()
+				require.Equal(t, test.wantFallback, fallback)
+				require.True(t, rebuildSafe)
+				if test.wantFallback {
+					require.Nil(t, tc.arg.ctr.hashmapBuilder.UniqueJoinKeys)
+				} else {
+					require.Len(t, tc.arg.ctr.hashmapBuilder.UniqueJoinKeys, 1)
+					require.Equal(t, test.rows,
+						tc.arg.ctr.hashmapBuilder.UniqueJoinKeys[0].Length())
+				}
+				require.Equal(t, uint64(test.rows),
+					tc.arg.ctr.hashmapBuilder.GetGroupCount(),
+					"the mandatory JoinMap must still contain every key")
+
+				tc.arg.Free(tc.proc, false, nil)
+				tc.proc.Free()
+				require.Zero(t, tc.proc.Mp().CurrNB())
+			})
+		}
+	}
+}
+
+func TestHashBuildRuntimeFilterLimitFailsOpenWithoutLosingJoinKeys(
+	t *testing.T,
+) {
+	typ := types.T_int32.ToType()
+	tc := newTestCase(
+		t,
+		[]bool{false},
+		[]types.Type{typ},
+		[]*plan.Expr{newExpr(0, typ)},
+	)
+	tc.arg.RuntimeFilterSpec = rawRuntimeFilterSpec(
+		tc.arg.JoinMapTag+502, 5, typ)
+	tc.arg.SetChildren([]vm.Operator{tc.marg})
+	require.NoError(t, tc.marg.Prepare(tc.proc))
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+
+	input := newBatch([]types.Type{typ}, tc.proc, Rows)
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(input, nil, tc.proc.Mp())
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
+
+	result, err := vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecStop, result.Status)
+	require.Equal(t, int64(1),
+		tc.arg.OpAnalyzer.GetOpStats().ExtraStats["HashBuildRuntimeFilterCollectionFallbacks"])
+
+	receiver := message.NewMessageReceiver(
+		[]int32{tc.arg.RuntimeFilterSpec.Tag},
+		message.AddrBroadCastOnCurrentCN(),
+		tc.proc.GetMessageBoard(),
+	)
+	messages, done, err := receiver.ReceiveMessage(false, tc.proc.Ctx)
+	require.NoError(t, err)
+	require.False(t, done)
+	require.Len(t, messages, 1)
+	runtimeFilter, ok := messages[0].(message.RuntimeFilterMessage)
+	require.True(t, ok)
+	require.Equal(t, int32(message.RuntimeFilter_PASS), runtimeFilter.Typ)
+
+	joinResult, err := message.ReceiveJoinMapResult(
+		tc.arg.JoinMapTag,
+		false,
+		0,
+		tc.proc.GetMessageBoard(),
+		tc.proc.Ctx,
+	)
+	require.NoError(t, err)
+	require.True(t, joinResult.IsSuccess())
+	joinMap := joinResult.JoinMap()
+	require.NotNil(t, joinMap)
+	require.Equal(t, int64(Rows), joinMap.GetRowCount())
+	require.Equal(t, uint64(Rows), joinMap.GetGroupCount())
+	joinMap.Free()
+
+	tc.arg.Reset(tc.proc, false, nil)
+	tc.arg.Free(tc.proc, false, nil)
+	tc.marg.Reset(tc.proc, false, nil)
+	tc.proc.Free()
+	require.Zero(t, tc.proc.Mp().CurrNB())
+}
+
 func TestDedupBatchRewriteRecollectsOptionalKeysWithoutUnsafeReplay(
 	t *testing.T,
 ) {
@@ -1150,6 +1277,8 @@ func TestHashBuildFloatRuntimeFilterClosesSignedZero(t *testing.T) {
 			require.NoError(t, payload.UnmarshalBinary(runtimeFilter.Data))
 			require.Equal(t, test.typ.Oid, payload.GetType().Oid)
 			require.Equal(t, 3, payload.Length())
+			require.True(t, payload.GetSorted(),
+				"signed-zero closure must remain ordered without compaction")
 			var positiveZero, negativeZero bool
 			switch test.typ.Oid {
 			case types.T_float32:
@@ -1431,6 +1560,112 @@ func TestRuntimeFilterPayloadStateContract(t *testing.T) {
 	}
 }
 
+func TestScalarRuntimeFilterUsesActualCardinality(t *testing.T) {
+	tests := []struct {
+		name      string
+		values    []int32
+		nulls     []uint64
+		wantType  int32
+		wantValue int32
+	}{
+		{name: "empty drops", wantType: message.RuntimeFilter_DROP},
+		{name: "one value filters", values: []int32{7}, wantType: message.RuntimeFilter_IN, wantValue: 7},
+		{name: "one null drops", values: []int32{0}, nulls: []uint64{0}, wantType: message.RuntimeFilter_DROP},
+		{name: "multiple rows pass", values: []int32{7, 8}, wantType: message.RuntimeFilter_PASS},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tc := newTestCase(t, []bool{len(test.nulls) > 0},
+				[]types.Type{types.T_int32.ToType()}, nil)
+			tc.arg.NeedHashMap = false
+			tc.arg.NeedBatches = true
+			tc.arg.RuntimeFilterSpec = rawRuntimeFilterSpec(
+				tc.arg.JoinMapTag+7000, 1, types.T_int32.ToType())
+			tc.arg.RuntimeFilterSpec.ScalarPredicate = true
+			tc.arg.SetChildren([]vm.Operator{tc.marg})
+			require.NoError(t, tc.marg.Prepare(tc.proc))
+			require.NoError(t, tc.arg.Prepare(tc.proc))
+
+			if len(test.values) > 0 {
+				build := batch.NewWithSize(1)
+				build.Vecs[0] = testutil.MakeInt32Vector(
+					test.values, test.nulls, tc.proc.Mp())
+				build.SetRowCount(len(test.values))
+				tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(build, nil, tc.proc.Mp())
+			}
+			tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
+
+			result, err := vm.Exec(tc.arg, tc.proc)
+			require.NoError(t, err)
+			require.Equal(t, vm.ExecStop, result.Status)
+
+			receiver := message.NewMessageReceiver(
+				[]int32{tc.arg.RuntimeFilterSpec.Tag},
+				message.AddrBroadCastOnCurrentCN(),
+				tc.proc.GetMessageBoard())
+			msgs, done, err := receiver.ReceiveMessage(false, tc.proc.Ctx)
+			require.NoError(t, err)
+			require.False(t, done)
+			require.Len(t, msgs, 1)
+			runtimeFilter := msgs[0].(message.RuntimeFilterMessage)
+			require.Equal(t, test.wantType, runtimeFilter.Typ)
+			if test.wantType == message.RuntimeFilter_IN {
+				require.True(t, tc.arg.ctr.runtimeFilterIn)
+				require.Equal(t, int32(1), runtimeFilter.Card)
+				payload := vector.NewVec(types.T_any.ToType())
+				require.NoError(t, payload.UnmarshalBinary(runtimeFilter.Data))
+				require.Equal(t, []int32{test.wantValue},
+					vector.MustFixedColNoTypeCheck[int32](payload))
+				payload.Free(tc.proc.Mp())
+			} else {
+				require.False(t, tc.arg.ctr.runtimeFilterIn)
+			}
+
+			tc.arg.Free(tc.proc, false, nil)
+			tc.marg.Reset(tc.proc, false, nil)
+			tc.proc.GetMessageBoard().Reset()
+			tc.proc.Free()
+			require.Zero(t, tc.proc.Mp().CurrNB())
+		})
+	}
+}
+
+func TestScalarRuntimeFilterMalformedBuildShapeFailsOpen(t *testing.T) {
+	tc := newTestCase(t, []bool{false},
+		[]types.Type{types.T_int32.ToType()}, nil)
+	tc.arg.NeedHashMap = false
+	tc.arg.NeedBatches = false
+	tc.arg.RuntimeFilterSpec = rawRuntimeFilterSpec(
+		tc.arg.JoinMapTag+7100, 1, types.T_int32.ToType())
+	tc.arg.RuntimeFilterSpec.ScalarPredicate = true
+	tc.arg.SetChildren([]vm.Operator{tc.marg})
+	require.NoError(t, tc.marg.Prepare(tc.proc))
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
+
+	result, err := vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecStop, result.Status)
+
+	receiver := message.NewMessageReceiver(
+		[]int32{tc.arg.RuntimeFilterSpec.Tag},
+		message.AddrBroadCastOnCurrentCN(),
+		tc.proc.GetMessageBoard())
+	msgs, done, err := receiver.ReceiveMessage(false, tc.proc.Ctx)
+	require.NoError(t, err)
+	require.False(t, done)
+	require.Len(t, msgs, 1)
+	require.Equal(t, int32(message.RuntimeFilter_PASS),
+		msgs[0].(message.RuntimeFilterMessage).Typ)
+
+	tc.arg.Free(tc.proc, false, nil)
+	tc.marg.Reset(tc.proc, false, nil)
+	tc.proc.GetMessageBoard().Reset()
+	tc.proc.Free()
+	require.Zero(t, tc.proc.Mp().CurrNB())
+}
+
 func TestRuntimeFilterStaleProbeContractFailsOpen(t *testing.T) {
 	payloadType := types.New(types.T_decimal64, 18, 3)
 	probeType := types.New(types.T_decimal64, 18, 2)
@@ -1591,8 +1826,30 @@ func TestDirectRuntimeFilterUsesDeclaredHashSlot(t *testing.T) {
 
 	payload := vector.NewVec(types.T_any.ToType())
 	require.NoError(t, payload.UnmarshalBinary(runtimeFilter.Data))
+	require.True(t, payload.GetSorted(),
+		"the runtime-filter producer must publish comparator-ordered metadata")
 	require.Equal(t, []int32{11, 12},
 		vector.MustFixedColNoTypeCheck[int32](payload))
+
+	lo, hi := int32(100), int32(200)
+	dataMeta := objectio.BuildMetaData(1, 1)
+	meta := dataMeta.GetBlockMeta(0)
+	zm := index.NewZM(types.T_int32, 0)
+	index.UpdateZM(zm, types.EncodeInt32(&lo))
+	index.UpdateZM(zm, types.EncodeInt32(&hi))
+	meta.MustGetColumn(0).SetZoneMap(zm)
+	inExpr := plan2.MakeInExpr(
+		tc.proc.Ctx, newExpr(0, typ), runtimeFilter.Card, runtimeFilter.Data, false)
+	auxIDCount := plan2.AssignAuxIdForExpr(inExpr, 0)
+	require.False(t, colexec.EvaluateFilterByZoneMap(
+		tc.proc.Ctx,
+		tc.proc,
+		inExpr,
+		meta,
+		map[int]int{0: 0},
+		make([]objectio.ZoneMap, auxIDCount),
+		make([]*vector.Vector, auxIDCount),
+	), "the sorted runtime filter must still prune a disjoint block")
 	payload.Free(tc.proc.Mp())
 	runtimeFilter.Destroy()
 	require.Zero(t, generation.Used())
@@ -1925,6 +2182,8 @@ func TestSerializedRuntimeFilterUsesTightBudgetAndProducesIn(t *testing.T) {
 	payload := vector.NewVec(types.T_any.ToType())
 	require.NoError(t, payload.UnmarshalBinary(runtimeFilter.Data))
 	require.Equal(t, types.T_varchar, payload.GetType().Oid)
+	require.True(t, payload.GetSorted(),
+		"the serialized runtime-filter producer must publish sorted metadata")
 	require.Equal(t, rowCount, payload.Length())
 
 	expected := make(map[string]struct{}, 2)
@@ -2135,9 +2394,12 @@ func TestRuntimeFilterMarshalBudgetAdmissionFallsBackToPass(t *testing.T) {
 	tests := []struct {
 		name       string
 		membership bool
+		mustApply  bool
+		wantErr    bool
 	}{
 		{name: "in"},
 		{name: "unique join keys", membership: true},
+		{name: "required unique join keys", membership: true, mustApply: true, wantErr: true},
 	}
 
 	for _, test := range tests {
@@ -2149,6 +2411,7 @@ func TestRuntimeFilterMarshalBudgetAdmissionFallsBackToPass(t *testing.T) {
 				UpperLimit:          100,
 				BuildExpr:           newExpr(0, types.T_int32.ToType()),
 				UseMembershipFilter: test.membership,
+				MustApply:           test.mustApply,
 				KeyEncoding:         plan.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_RAW_V1,
 				ProbeType:           runtimeFilterPlanType(types.T_int32.ToType()),
 			}
@@ -2166,7 +2429,12 @@ func TestRuntimeFilterMarshalBudgetAdmissionFallsBackToPass(t *testing.T) {
 				testutil.MakeInt32Vector([]int32{1}, nil, tc.proc.Mp()),
 			}
 
-			require.NoError(t, tc.arg.handleRuntimeFilter(tc.proc))
+			handleErr := tc.arg.handleRuntimeFilter(tc.proc)
+			if test.wantErr {
+				require.Error(t, handleErr)
+			} else {
+				require.NoError(t, handleErr)
+			}
 			require.True(t, tc.arg.ctr.runtimeFilterDone)
 			require.False(t, tc.arg.ctr.runtimeFilterIn)
 			require.Nil(t, tc.arg.ctr.hashmapBuilder.UniqueJoinKeys)
@@ -2186,11 +2454,16 @@ func TestRuntimeFilterMarshalBudgetAdmissionFallsBackToPass(t *testing.T) {
 			require.Empty(t, runtimeFilter.Data)
 
 			extra := tc.arg.OpAnalyzer.GetOpStats().ExtraStats
-			require.Equal(t, int64(1), extra["HashBuildRuntimeFilterBudgetFallbacks"])
-			require.Zero(t, extra["HashBuildRuntimeFilterAllocationFallbacks"])
-			require.Greater(t, extra["HashBuildRuntimeFilterBudgetFallbackRequestedBytes"], int64(1))
-			require.Zero(t, extra["HashBuildRuntimeFilterBudgetFallbackUsedBytes"])
-			require.Equal(t, int64(1), extra["HashBuildRuntimeFilterBudgetFallbackCapBytes"])
+			if test.mustApply {
+				require.Zero(t, extra["HashBuildRuntimeFilterBudgetFallbacks"])
+				require.Zero(t, extra["HashBuildRuntimeFilterAllocationFallbacks"])
+			} else {
+				require.Equal(t, int64(1), extra["HashBuildRuntimeFilterBudgetFallbacks"])
+				require.Zero(t, extra["HashBuildRuntimeFilterAllocationFallbacks"])
+				require.Greater(t, extra["HashBuildRuntimeFilterBudgetFallbackRequestedBytes"], int64(1))
+				require.Zero(t, extra["HashBuildRuntimeFilterBudgetFallbackUsedBytes"])
+				require.Equal(t, int64(1), extra["HashBuildRuntimeFilterBudgetFallbackCapBytes"])
+			}
 
 			generation.Close()
 			tc.proc.Free()

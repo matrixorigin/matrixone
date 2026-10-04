@@ -29,10 +29,12 @@ import (
 func TestNewLifecycleRewriteEntryOwnsTransferTableOnValidationFailure(
 	t *testing.T,
 ) {
-	transferTable := mergesort.NewTransferTableFromMaps(api.TransferMaps{
+	transferTable, err := mergesort.NewLifecycleTransferTable(api.TransferMaps{
 		{{ObjIdx: api.NoTransfer}},
 	})
-	_, err := NewLifecycleRewriteObjectsEntry(
+	require.NoError(t, err)
+	t.Cleanup(transferTable.Release)
+	_, err = NewLifecycleRewriteObjectsEntry(
 		context.Background(),
 		nil,
 		"expired-lifecycle-rewrite",
@@ -48,6 +50,6 @@ func TestNewLifecycleRewriteEntryOwnsTransferTableOnValidationFailure(
 		nil,
 	)
 	require.Error(t, err)
-	require.Nil(t, transferTable.Maps)
+	require.Nil(t, transferTable.BlockActive)
 	require.Nil(t, transferTable.Slab)
 }

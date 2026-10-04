@@ -63,11 +63,10 @@ shape as `sqldatastream.ParseTableOptions`).
 |---|---|---|---|
 | `config` | optional | optional | The **same JSON** that `esql_tvf_connect(config)` / `sql_tvf_connect(config)` accept: a whitelisted elasticsearch config JSON for ESQL (`addresses`, `username`, `password`, `cloudid`, `apikey`, `servicetoken`, `certificatefingerprint`, `cacert` — lifecycle/global library knobs are rejected), `{"driver": "...", "dsn": "..."}` for SQL.  Passed verbatim to `foreigntvf.Connect(kind, configJSON)`.  All connection info comes from user input or the session — query processing never reads the CN process environment. If omitted, the scan uses `@esql_tvf_config` / `@sql_tvf_config` of the querying session (exactly `foreigntvf.ConfigFromSessionVar`); error if neither is set. |
 | `query` | optional | optional | Default query text, used when a `SELECT` has no `__mo_query` predicate (see §2).  Plain text, no placeholders. |
+| `pushdown` | rejected | optional | `false` (the default) sends the query text verbatim and MO evaluates every predicate itself; `true` wraps the text so the source applies the predicates MO can render, and MO then stops evaluating exactly those (§2.5).  Whatever could not be rendered stays local.  ESQL rejects the option. |
 
-No other options.  In particular there is **no** `recheck`: nothing but the
-query text is pushed to the source, so MO always evaluates every ordinary
-predicate locally (§2.4).  Any `URL`/`FORMAT`/`INFILE` clause is rejected for
-these engines, as for DATASTREAM.
+No other options.  Any `URL`/`FORMAT`/`INFILE` clause is rejected for these
+engines, as for DATASTREAM.
 
 
 2. `__mo_query`: the query is a pushed-down predicate
@@ -160,16 +159,203 @@ parameterize it:
   prepare parameter), but whatever it folds to is what the source receives;
 * the text must return the declared columns, in declared order (§3);
 * nothing else from the MO query (projections, other predicates, LIMIT) is
-  pushed into the text.
+  pushed into the text, unless the table opted into predicate pushdown (§2.5),
+  which wraps the text rather than rewriting it.
 
 ### 2.4 Ordinary predicates
 
-All conjuncts that touch a declared column stay in `node.FilterList` and are
-evaluated by MO on the returned rows, as for any external table.  There is no
-filter deparser / pushdown hint as in DATASTREAM: the user already wrote the
-foreign query, so pushing down is their job, in their dialect.  Consequently
-there is no `recheck` option and no cross-engine collation/time-zone
-correctness caveat.
+By default all conjuncts that touch a declared column stay in
+`node.FilterList` and are evaluated by MO on the returned rows, as for any
+external table.  The user already wrote the foreign query, so narrowing it is
+their job, in their dialect:
+
+```
+-- the selective way: the source never materializes the other rows
+select * from orders where __mo_query = 'select id, name from src where id > 3';
+
+-- the default way: the source returns every row and MO drops the rest
+select * from orders where __mo_query = 'select id, name from src' and id > 3;
+```
+
+### 2.5 Predicate pushdown (`pushdown` = `true`, SQL only)
+
+**Status: settled (revision 3).**  Revisions 1 and 2 are recorded at the end of
+this section with the reason each was abandoned; this text describes what the
+code does.
+
+`ENGINE = SQL` can push the second form's predicates down for you.  It is
+**opt-in**, off by default, and unavailable on `ENGINE = ESQL` (which rejects
+the option rather than accepting a knob that would do nothing):
+
+```
+create external table orders (id bigint, name varchar(64))
+engine = sql with ('config' = '...', 'pushdown' = 'true');
+```
+
+`compileForeignScan` renders the row-level conjuncts with
+`datastream.DeparseFiltersBareIdents` (column refs, literals, comparisons,
+`AND`/`OR`/`NOT`, `IN`, `BETWEEN`, `IS [NOT] NULL`, `LIKE` — anything else has
+nothing to send and keeps its conjunct local) and wraps each query text as a
+derived table:
+
+```
+select * from (
+select id, name from src
+) __mo_subq_1a2b3c4d where (id > 3)
+```
+
+#### The five contract points
+
+| | rule |
+|---|---|
+| **Local evaluation** | Exactly the rendered conjuncts **leave** `node.FilterList` — the source owns them, MO does not re-apply them. Everything unrenderable stays local. |
+| **Identifiers** | Written **bare**, never quoted. A name that cannot be written bare is not pushed. |
+| **Failure** | A source error is the error. There is no second, unfiltered attempt. |
+| **Result columns** | On success they must be the table's declared columns, in order, compared case-insensitively — or that is an error. |
+| **Compatibility** | Off by default and inert for every table that does not ask; nothing about a non-opted-in table changes. |
+
+#### Identifiers are never quoted
+
+This is a decision, not an omission.  The quoting character is
+dialect-specific — MySQL backticks, standard double quotes — and `sql_tvf`
+speaks to PostgreSQL as well as MySQL, so quoting would mean either knowing the
+dialect at render time (compile does not hold the connection) or serving only
+MySQL.  A bare identifier is accepted by both.
+
+The accepted cost is that a name which *cannot* be written bare is not pushed
+at all.  `isBareIdentifier` requires `[A-Za-z_][A-Za-z0-9_]*` **and** refuses
+the union of the words MySQL 8.0 and PostgreSQL 16 mark reserved, transcribed
+from the published keyword lists — the URLs are in `filter.go` beside the set —
+so a column called `order` keeps its conjunct local instead of producing
+`where order > 3`, which no dialect parses.
+
+Refusing rather than pushing-and-failing matters *because* pushed conjuncts
+leave `FilterList`: a conjunct that is sent and rejected has no local path left,
+so the predicate could never be answered at all.  A conjunct that is refused is
+merely unoptimized.  Refusing on the **union** of both dialects follows for the
+same reason — the renderer does not know which source the text is bound for.
+
+It also decides which way the set errs: **long, never short**.  An entry that
+is not really reserved anywhere costs one conjunct its pushdown; a MISSING
+entry costs the whole query.  Words that look like oversights — `_filename`,
+`x509`, `slow`, `any` — are in the published lists, and
+`TestReservedIdentsIsTranscribedNotGuessed` pins a sample of exactly those,
+because a hand-transcribed set is the kind of thing that silently rots.
+
+The derived-table alias is MO's own (`__mo_subq_` + crc32 hex), spelled from
+`[a-z0-9_]`, so it needs no quoting either.
+
+#### Opting in means the source returns the declared columns
+
+A foreign scan normally maps the result **positionally** (§3) and never reads
+the source's column names, which is what makes this legal:
+
+```
+select * from orders where __mo_query = 'select a_id, a_name from src';
+```
+
+Pushdown cannot live with that freedom: a `WHERE` clause has to *name* what it
+filters, and the only names MO has are its own.  So opting in is a statement
+about the source — **that its result columns are the declared ones, by name**.
+
+MO checks the claim rather than trusting it.  `database/sql` reports a result's
+column names the moment the query returns, before any row is read, so the
+reader gets them for free and compares them against the DDL, in order,
+case-insensitively.  A mismatch is an **error**:
+
+```
+predicate pushdown ('pushdown' = 'true') requires the query to return the
+table's declared columns, but column 1 is named "a_id" at the source and "id"
+in the table; alias it, or drop the option to keep the positional mapping
+```
+
+It has to be an error, not a fallback: the source has already run a query MO
+narrowed, and MO cannot tell whether the rows it is about to read were filtered
+on the columns it meant.  For the same reason a source error is just an error.
+
+The check reads `ColumnListLen` and each attr's `ColFieldIndex`, not
+`param.Cols`, because those survive column pruning: the map they come from is
+built before the synthetic columns are appended and before any pruning, so a
+scan reading one column of four still knows the table is four wide and checks
+its own column at its own position.  It runs for every scan of an opted-in
+table, including one whose predicates were all unrenderable, so the contract
+does not depend on which predicate a query happens to carry.
+
+The synthetic columns (`__mo_query`, `__mo_filepath`, the error-mode columns)
+are masked out of the deparser, so a conjunct touching one is never sent — the
+source has no counterpart for it.
+
+#### Dialect differences that remain, stated rather than papered over
+
+| | MySQL | PostgreSQL |
+|---|---|---|
+| bare identifier in the wrapper | as written | folded to lower case |
+| source projects `AS "ID"` for a column declared `id` | resolves; the case-insensitive check then passes | **fails at the source**: bare `id` folds to `id`, which does not match `ID` |
+| source projects `AS ID` or `AS id` | resolves | resolves (both fold to `id`) |
+| reserved-word column | not pushed (refused) | not pushed (refused) |
+
+So on PostgreSQL, project lower-case or unquoted aliases.  The case-insensitive
+check is a *post*-check and cannot repair a query that already failed; it exists
+for the MySQL case, where the query succeeds and the names still have to agree.
+
+#### Why it is opt-in
+
+A pushed predicate is **not provably superset-preserving across engines**: the
+source may drop a row MO would have kept under a different collation, time
+zone, or coercion, and local evaluation cannot bring back a row that never
+arrived.  This is the same reasoning as DATASTREAM's `recheck` option.
+
+Two more things change under the wrapper, which is why a table has to ask for
+it: a text that is a valid statement but an invalid derived table (a `SHOW`, a
+`CALL`, a projection with duplicate column names) now fails, and an `ORDER BY`
+inside a derived table is not guaranteed to survive.  A trailing `;` and a
+trailing `-- comment` are handled — `WrapPushdownQuery` trims the first and
+puts the closing paren on its own line for the second.
+
+#### Compatibility and rollback
+
+* the option defaults to **false**, and a `rel_createsql` envelope written
+  before it existed has no `pushdown` field, which decodes to false — a
+  pre-existing table keeps getting the verbatim query;
+* `ForeignScan.pushdown` is the positive form, so the plan field's zero value
+  is also "verbatim": a path that forgets to set it is safe;
+* an older binary reading a newer envelope ignores the field it does not know;
+* `SHOW CREATE TABLE` renders `"pushdown" = 'true'` only when a table opted in,
+  so tables that never did keep rendering exactly the options their owner
+  wrote;
+* rollback is `alter`/recreate without the option, or setting it to `false`;
+  nothing persists beyond the envelope field.
+
+#### Validation matrix
+
+| behaviour | where |
+|---|---|
+| wrapper shape, alias alphabet, `;` and `-- comment` tails | `pkg/sql/foreignext` unit |
+| bare vs quoted rendering; reserved words refused (both dialects' unions); sql-ish but legal names still pushed; string literals keep their own quoting | `pkg/sql/datastream` unit |
+| opted-in wraps and trims exactly the pushed conjunct; unrenderable stays local; nothing renderable ⇒ no wrapper; ESQL never wraps; synthetic column never sent | `pkg/sql/compile` unit |
+| column check: exact, case-insensitive, wrong order, arity, no column-reporting capability, **pruned scans** | `pkg/sql/colexec/external` unit |
+| end-to-end answers with and without pushdown, operators, query tails, `IN` lists, `SHOW CREATE`, option validation | BVT `function/foreign_exttab_pushdown.sql` (**MySQL only** — the BVT harness has no PostgreSQL source) |
+| transfer actually reduced | `EXPLAIN ANALYZE`: external scan `inputRows=1` (84 B) with pushdown vs `inputRows=100` (8.20 KiB) without, same answer |
+
+**Known gap:** PostgreSQL has no public-path BVT coverage, only unit coverage
+of the rendering rules and the table above.
+
+#### Revision history
+
+1. **`'recheck' = 'false'`, no local recheck.**  Rendered MO's *declared* names
+   and MySQL-quoted identifiers.  Abandoned: it broke the positional contract
+   (a source with no column of that name received ``where `id` > 3``) and sent
+   MySQL quoting to PostgreSQL sources.
+2. **Probe + source-name mapping, conjuncts kept local.**  Probed
+   `select * from (<text>) alias limit 0` for the source's own column names,
+   rendered in its vocabulary, and fell back to the verbatim query whenever
+   anything did not line up.  Correct, but it spent a round trip per query and
+   an optional connection capability to *discover* a contract instead of
+   stating one.
+3. **Current.**  State the contract (the source returns the declared columns),
+   check it against the names `database/sql` already hands back, and the
+   discovery machinery disappears: probe and capability deleted, rendering back
+   in compile, identifiers bare so both drivers are served.
 
 
 3. Schema and result mapping
@@ -282,8 +468,12 @@ Mirror DATASTREAM:
 7. Non-goals
 ------------
 
-* No predicate/projection/limit pushdown into the foreign query text; no
-  deparser; no `recheck`.
+* No projection or limit pushdown, and no rewriting of the foreign query text
+  itself: `pushdown` = `true` wraps the text as a derived table (§2.5), it
+  never edits it.  ESQL has no pushdown at all.  Both SQL drivers are served,
+  because the wrapper is written in the subset both accept — bare identifiers,
+  no quoting (§2.5); a column whose name cannot be written that way keeps its
+  conjunct local.
 * No runtime schema; no JSON-array no-schema mode.
 * No parameter binding (`?`) in the foreign text.
 * No writes (`INSERT INTO` an ESQL/SQL external table is an error); `INSERT ...

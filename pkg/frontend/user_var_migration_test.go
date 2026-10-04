@@ -23,12 +23,15 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
@@ -121,6 +124,32 @@ func TestUserDefinedVarMigrationPreservesType(t *testing.T) {
 	restored, err := decodeUserDefinedVars(context.Background(), snapshot, false)
 	require.NoError(t, err)
 	require.Equal(t, typ, restored["amount"].Type)
+}
+
+func TestUserDefinedVarMigrationPreservesRuntimeStringDomain(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	rt := runtime.ServiceRuntime(ses.service)
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	typ := plan.Type{Id: int32(types.T_varbinary), Charset: uint32(types.CharsetBinary)}
+	require.NoError(t, ses.setUserDefinedVarWithTypeAndKindAndReplayability(
+		"text_override", "你", "", false, typ, vector.PrepareParamNone,
+		false, types.RuntimeStringText))
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion57)
+	_, err := ses.snapshotUserDefinedVars(context.Background())
+	require.ErrorContains(t, err, "require MORPC protocol version 58")
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion58)
+	snapshot, err := ses.snapshotUserDefinedVars(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, uint32(types.RuntimeStringText), snapshot[0].RuntimeStringDomain)
+	restored, err := decodeUserDefinedVars(context.Background(), snapshot, false)
+	require.NoError(t, err)
+	require.Equal(t, types.RuntimeStringText, restored["text_override"].RuntimeStringDomain)
+	require.Equal(t, typ, restored["text_override"].Type)
 }
 
 func TestUserDefinedVarMigrationRoundTripsJSON(t *testing.T) {
@@ -361,6 +390,42 @@ func TestSessionSystemVariableMigrationValidation(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "transaction_isolation", vars[0].name)
 	require.Equal(t, "ANSI_QUOTES", vars[0].value)
+	readOnlyZero := plan2.MakePlan2Int64ConstExprWithType(0)
+	readOnlyOne := plan2.MakePlan2Int64ConstExprWithType(1)
+	vars, err = decodeSessionSystemVars(context.Background(), []*query.MigrateSystemVariable{
+		{Name: transactionReadOnlySystemVariableAlias, Value: readOnlyZero},
+		{Name: transactionReadOnlySystemVariable, Value: readOnlyOne},
+	})
+	require.NoError(t, err)
+	require.Len(t, vars, 1)
+	require.Equal(t, transactionReadOnlySystemVariable, vars[0].name)
+	require.Equal(t, int64(1), vars[0].value)
+	vars, err = decodeSessionSystemVars(context.Background(), []*query.MigrateSystemVariable{
+		{Name: transactionReadOnlySystemVariable, Value: readOnlyOne},
+		{Name: transactionReadOnlySystemVariableAlias, Value: readOnlyZero},
+	})
+	require.NoError(t, err)
+	require.Len(t, vars, 1)
+	require.Equal(t, int64(1), vars[0].value)
+	vars, err = decodeSessionSystemVars(context.Background(), []*query.MigrateSystemVariable{
+		{Name: transactionReadOnlySystemVariableAlias, Value: readOnlyOne},
+	})
+	require.NoError(t, err)
+	require.Len(t, vars, 1)
+	require.Equal(t, transactionReadOnlySystemVariable, vars[0].name)
+
+	ctrl := gomock.NewController(t)
+	session := newTestSession(t, ctrl)
+	defer session.Close()
+	exported, err := session.snapshotSessionSystemVars(context.Background())
+	require.NoError(t, err)
+	exportedNames := make(map[string]bool, len(exported))
+	for _, variable := range exported {
+		exportedNames[variable.Name] = true
+	}
+	require.True(t, exportedNames[transactionReadOnlySystemVariable])
+	require.True(t, exportedNames[transactionReadOnlySystemVariableAlias])
+
 	vars, err = decodeSessionSystemVars(context.Background(), []*query.MigrateSystemVariable{{
 		Name:         "optimizer_hints",
 		Value:        value,
@@ -385,6 +450,15 @@ func TestSessionSystemVariableMigrationValidation(t *testing.T) {
 		{Name: "transaction_isolation", Value: value},
 	})
 	require.ErrorContains(t, err, "duplicate session system variable")
+	_, err = decodeSessionSystemVars(context.Background(), []*query.MigrateSystemVariable{
+		{Name: transactionReadOnlySystemVariableAlias, Value: readOnlyZero},
+		{Name: transactionReadOnlySystemVariableAlias, Value: readOnlyOne},
+	})
+	require.ErrorContains(t, err, "duplicate session system variable")
+	_, err = decodeSessionSystemVars(context.Background(), []*query.MigrateSystemVariable{
+		{Name: transactionReadOnlySystemVariable, Value: readOnlyOne, NextTransaction: true},
+	})
+	require.ErrorContains(t, err, "next transaction scope is invalid")
 	_, err = decodeSessionSystemVars(context.Background(), []*query.MigrateSystemVariable{
 		{Name: "transaction_isolation", Value: nextValue, NextTransaction: true},
 		{Name: "tx_isolation", Value: nextValue, NextTransaction: true},
@@ -430,4 +504,27 @@ func TestUserDefinedVarRepeatedMigrationDoesNotReevaluateExpressions(t *testing.
 		require.Equal(t, "2026-08-07 04:20:01.123456", target.userDefinedVars["table_value"].Value)
 		source = target
 	}
+}
+
+func TestMigratedLegacyTextNullUsesPreparedSourceBinding(t *testing.T) {
+	ses, prepared, cw, ec := newPreparedExecuteEnvForSQL(t, 320, "select cast('00:00:01' as time(0)) * ?")
+	defer func() { cw.proc.SetPrepareParams(nil); prepared.Close() }()
+	value, err := encodeUserDefinedVarValue(ec.reqCtx, nil, false)
+	require.NoError(t, err)
+	snapshot := []*query.MigrateUserDefinedVar{{Name: "legacy_null", Value: value, Type: &plan.Type{Id: int32(types.T_text)}}}
+	restored, err := decodeUserDefinedVars(ec.reqCtx, snapshot, false)
+	require.NoError(t, err)
+	ses.userDefinedVars = restored
+	ec.input.isBinaryProtExecute = false
+	execute := &plan.Execute{Name: prepared.Name, Args: []*plan.Expr{{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "legacy_null"}}}}}
+	_, bound, _, _, _, err := initExecuteStmtParam(ec, ses, cw, execute, "")
+	require.NoError(t, err)
+	require.Equal(t, types.T_text, cw.paramBindings[0].Type.Oid)
+	q := bound.GetQuery()
+	result, free, err := colexec.GetReadonlyResultFromExpression(cw.proc, q.Nodes[q.Steps[0]].ProjectList[0], []*batch.Batch{batch.EmptyForConstFoldBatch})
+	if free != nil {
+		defer free()
+	}
+	require.NoError(t, err)
+	require.True(t, result.IsNull(0))
 }

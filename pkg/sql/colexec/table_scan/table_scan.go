@@ -17,15 +17,15 @@ package table_scan
 import (
 	"bytes"
 	"time"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -49,6 +49,9 @@ func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
 		tableScan.OpAnalyzer = process.NewAnalyzer(tableScan.GetIdx(), tableScan.IsFirst, tableScan.IsLast, "table_scan")
 	} else {
 		tableScan.OpAnalyzer.Reset()
+	}
+	if tableScan.ctr.padCharToFullLength, err = process.ResolvePadCharToFullLength(proc); err != nil {
+		return err
 	}
 
 	if tableScan.TopValueMsgTag > 0 {
@@ -103,38 +106,16 @@ func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
 }
 
 func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
-	var e error
 	start := time.Now()
-	txnOp := proc.GetTxnOperator()
-	seq := uint64(0)
-	if txnOp != nil {
-		seq = txnOp.NextSequence()
-	}
-
-	trace.GetService(proc.GetService()).AddTxnDurationAction(
-		txnOp,
-		client.TableScanEvent,
-		seq,
-		tableScan.TableID,
-		0,
-		nil)
 
 	analyzer := tableScan.OpAnalyzer
 	defer func() {
 		cost := time.Since(start)
 
-		trace.GetService(proc.GetService()).AddTxnDurationAction(
-			txnOp,
-			client.TableScanEvent,
-			seq,
-			tableScan.TableID,
-			cost,
-			e)
 		v2.TxnStatementScanDurationHistogram.Observe(cost.Seconds())
 	}()
 
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
-		e = err
 		return vm.CancelResult, err
 	}
 
@@ -161,9 +142,9 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 		isEnd, err := tableScan.readBatch(newCtx, proc)
 		if err != nil {
-			e = err
 			return vm.CancelResult, err
 		}
+		colexec.CollectReaderExplainDiagnostics(tableScan.Reader, analyzer)
 
 		// Record ReadSize metrics when scan completes all blocks (isEnd == true)
 		// This matches explain analyze output which shows total read size for the entire scan
@@ -175,7 +156,7 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 				v2.TxnS3ReadSizeHistogram.Observe(float64(opStats.S3ReadSize))
 				v2.TxnDiskReadSizeHistogram.Observe(float64(opStats.DiskReadSize))
 			}
-			e = err
+
 			return vm.CancelResult, err
 		}
 
@@ -186,14 +167,10 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 			if tableScan.ctr.buf.IsEmpty() {
 				continue
 			}
-			if tableScan.ctr.filterLateMaterialized {
-				tableScan.traceRead(proc, tableScan.ctr.buf)
-			}
 		} else {
 			if tableScan.ctr.buf.IsEmpty() {
 				continue
 			}
-			tableScan.traceRead(proc, tableScan.ctr.buf)
 
 			// record storage I/O metrics before filtering
 			analyzer.InputBlock()
@@ -205,12 +182,17 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 			// inline filter evaluation: filter rows before returning to caller
 			if len(tableScan.ctr.allFilterExecutors) > 0 {
 				if _, err = tableScan.evalFilter(proc, tableScan.ctr.buf, nil); err != nil {
-					e = err
 					return vm.CancelResult, err
 				}
 				if tableScan.ctr.buf.IsEmpty() {
 					continue // all rows filtered out, read next block
 				}
+			}
+		}
+
+		if tableScan.ctr.padCharToFullLength {
+			if err = padCharColumnsToFullLength(tableScan.ctr.buf, proc); err != nil {
+				return vm.CancelResult, err
 			}
 		}
 
@@ -222,14 +204,46 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 	return vm.CallResult{Batch: retBatch, Status: vm.ExecNext}, nil
 }
 
-func (tableScan *TableScan) traceRead(proc *process.Process, bat *batch.Batch) {
-	trace.GetService(proc.GetService()).TxnRead(
-		proc.GetTxnOperator(),
-		proc.GetTxnOperator().Txn().SnapshotTS,
-		tableScan.TableID,
-		tableScan.Attrs,
-		bat,
-	)
+func padCharColumnsToFullLength(bat *batch.Batch, proc *process.Process) error {
+	for _, vec := range bat.Vecs {
+		if vec == nil || vec.GetType().Oid != types.T_char || vec.IsConstNull() {
+			continue
+		}
+		// A late-materialized filter sees the full schema but only its early
+		// columns have values. Leave unloaded CHAR vectors for the post-read
+		// padding pass, after the reader has materialized them.
+		if bat.RowCount() != 0 && vec.Length() == 0 {
+			continue
+		}
+
+		width := int(vec.GetType().Width)
+		if width <= 0 {
+			continue
+		}
+		rowCount := bat.RowCount()
+		if vec.IsConst() {
+			rowCount = 1
+		}
+		for row := 0; row < rowCount; row++ {
+			if vec.GetNulls().Contains(uint64(row)) {
+				continue
+			}
+			value := vec.GetBytesAt(row)
+			missing := width - utf8.RuneCount(value)
+			if missing <= 0 {
+				continue
+			}
+			padded := make([]byte, len(value)+missing)
+			copy(padded, value)
+			for i := len(value); i < len(padded); i++ {
+				padded[i] = ' '
+			}
+			if err := vector.SetBytesAt(vec, row, padded, proc.Mp()); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // shrinkPopulatedVecs applies the surviving-row selection to every vector the reader
@@ -273,6 +287,12 @@ func (tableScan *TableScan) evalFilter(
 	bat *batch.Batch,
 	loadedColumns []int,
 ) (engine.ReaderFilterResult, error) {
+	if tableScan.ctr.padCharToFullLength {
+		if err := padCharColumnsToFullLength(bat, proc); err != nil {
+			return engine.ReaderFilterResult{}, err
+		}
+	}
+
 	analyzer := tableScan.OpAnalyzer
 	var sels []int64
 	defer func() {

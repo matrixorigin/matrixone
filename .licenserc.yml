@@ -15,6 +15,9 @@ header:
     - 'optools/'
     - 'cgo/external/'
     - 'thirdparties/'
+    # Sirius is an external Git submodule with its own source headers and license.
+    - 'third_party/sirius/'
+    - '.sca-go-module-cache/'
     - 'pkg/frontend/test/'
     - 'pkg/vm/engine/tae/mergesort/sort.go'
     - 'pkg/vm/engine/tae/mergesort/heap.go'

@@ -22,18 +22,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // Short varlen values are commonly cheaper to fetch with the predicate
-// columns in one I/O. At the standard 8192-row object block, a 256-byte
-// declared value can represent 2 MiB of logical payload, large enough to
-// justify a second selected-row read. Unbounded payload types are always
-// candidates.
-const lateMaterializationMinVarlenWidth = 256
+// columns in one I/O. For bounded values, use the logical payload of a full
+// object block instead of a field-width-only cutoff. A 96-byte value in the
+// standard 8192-row block represents 768 KiB, which is large enough to avoid
+// eagerly copying the whole output column for a selective filter. Unbounded
+// payload types are always candidates.
+const lateMaterializationMinVarlenBlockBytes = 768 << 10
 
 func isLateMaterializationCandidate(typ plan.Type) bool {
 	switch types.T(typ.Id) {
@@ -51,7 +52,8 @@ func isLateMaterializationCandidate(typ plan.Type) bool {
 		types.T_array_uint8:
 		return true
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary:
-		return typ.Width >= lateMaterializationMinVarlenWidth
+		return typ.Width > 0 &&
+			int64(typ.Width)*int64(objectio.BlockMaxRows) >= lateMaterializationMinVarlenBlockBytes
 	default:
 		return false
 	}
@@ -205,11 +207,6 @@ func (tableScan *TableScan) applyReaderFilter(
 	defer func() {
 		tableScan.ctr.filterActiveDuration += time.Since(start)
 	}()
-	if loadedColumns == nil {
-		// Eager fallbacks still have a complete pre-filter batch, so preserve the
-		// existing transaction data-trace boundary.
-		tableScan.traceRead(proc, bat)
-	}
 	tableScan.recordFilterInput(bat, loadedColumns)
 	tableScan.ctr.filterLateMaterialized = loadedColumns != nil
 	return tableScan.evalFilter(proc, bat, loadedColumns)
@@ -220,12 +217,9 @@ func (tableScan *TableScan) readBatch(
 	proc *process.Process,
 ) (bool, error) {
 	lateReader, ok := tableScan.Reader.(engine.LateMaterializationReader)
-	// Data tracing records complete pre-filter rows. Preserve that diagnostic
-	// contract by using the eager path while the feature is enabled. Reader
-	// summaries have the same pre-filter diagnostic contract.
-	traceDataEnabled := trace.GetService(proc.GetService()).Enabled(trace.FeatureTraceData)
+	// Reader summaries require the complete pre-filter batch.
 	readerSummaryEnabled := ctx.Value(defines.ReaderSummaryKey{}) != nil
-	if !ok || tableScan.ctr.readerFilter == nil || traceDataEnabled || readerSummaryEnabled {
+	if !ok || tableScan.ctr.readerFilter == nil || readerSummaryEnabled {
 		return process.MeasureFilesystemWait(tableScan.OpAnalyzer, func() (bool, error) {
 			return tableScan.Reader.Read(
 				ctx,

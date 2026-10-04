@@ -186,7 +186,7 @@ func validateLifecycleRewriteOptions(options LifecycleRewriteOptions) error {
 }
 
 // validateLifecycleRewriteLayout keeps the first GA inside the layout already
-// produced by cnMergeTask. Supporting a non-default physical layout requires a
+// produced by lifecycleRewriteTask. Supporting a non-default physical layout requires a
 // common Merge change; Lifecycle must fail before reading instead of growing a
 // second producer or guessing a different transfer-slab shape.
 func validateLifecycleRewriteLayout(extra *api.SchemaExtra) error {
@@ -231,7 +231,7 @@ func (tbl *txnTable) LifecycleRewriteObject(
 
 	tbl.ensureSeqnumsAndTypesExpectRowid()
 	sortKeyPos, sortKeyIsPK := tbl.getSortKeyPosAndSortKeyIsPK()
-	base, err := newCNMergeTask(
+	base, err := newLifecycleRewriteTask(
 		ctx,
 		tbl,
 		options.SourceSnapshot,
@@ -300,15 +300,7 @@ func (tbl *txnTable) LifecycleRewriteObject(
 		base.commitEntry.CreatedObjs,
 		base.transferTable,
 	)
-	commitEntry, err := dumpTransferInfoWithOptions(
-		ctx,
-		base,
-		&lifecycleTransferBookingWriteOptions{
-			forceExternal:                true,
-			preservePhysicalFilesOnError: true,
-			pathAllocator:                options.BookingPath,
-		},
-	)
+	commitEntry, err := dumpLifecycleTransferInfo(ctx, base, options.BookingPath)
 	if err != nil {
 		return LifecycleRewriteResult{}, err
 	}

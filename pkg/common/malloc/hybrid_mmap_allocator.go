@@ -20,7 +20,6 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"golang.org/x/sys/unix"
 )
 
 const (
@@ -63,13 +62,7 @@ func NewHybridMmapAllocator() *HybridMmapAllocator {
 	ret.deallocatorPool = NewClosureDeallocatorPool(
 		func(_ Hints, args *hybridMmapDeallocatorArgs) {
 			slice := unsafe.Slice((*byte)(args.ptr), args.length)
-			if err := unix.Munmap(slice); err != nil {
-				panic(moerr.NewInternalErrorNoCtxf(
-					"failed to unmap %d-byte cache allocation: %v",
-					args.length,
-					err,
-				))
-			}
+			unmapMemory(slice)
 		},
 	)
 	return ret
@@ -116,13 +109,7 @@ func (h *HybridMmapAllocator) Allocate(size uint64, hints Hints) ([]byte, Deallo
 	if backingSize > uint64(int(^uint(0)>>1)) {
 		return nil, nil, moerr.NewInternalErrorNoCtxf("cannot allocate %v bytes: platform int overflow", size)
 	}
-	slice, err := unix.Mmap(
-		-1,
-		0,
-		int(backingSize),
-		unix.PROT_READ|unix.PROT_WRITE,
-		unix.MAP_PRIVATE|unix.MAP_ANONYMOUS,
-	)
+	slice, err := mmapMemory(int(backingSize))
 	if err != nil {
 		return nil, nil, err
 	}

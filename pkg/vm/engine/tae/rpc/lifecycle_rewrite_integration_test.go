@@ -160,7 +160,9 @@ func newLifecycleRPCRewriteFixture(
 	bookingHeader = append(bookingHeader, bookingLocation)
 
 	createdStats := [][]byte{append([]byte(nil), created[:]...)}
-	transferTable := mergesort.NewTransferTableFromMaps(transferMaps)
+	transferTable, err := mergesort.NewLifecycleTransferTable(transferMaps)
+	require.NoError(t, err)
+	t.Cleanup(transferTable.Release)
 	transferDigest := mergesort.TransferMappingDigest(
 		createdStats,
 		transferTable,

@@ -12,6 +12,7 @@ server_id  ¦  dd1dccb4-4d3c-41f8-b482-5251dc7a41bf
 select @@server_id;
 ➤ @@server_id[12,0,0]  𝄀
 dd1dccb4-4d3c-41f8-b482-5251dc7a41bf
+set @saved_auto_increment_increment = @@session.auto_increment_increment;
 show variables like 'auto%';
 ➤ Variable_name[12,0,0]  ¦  Value[12,0,0]  𝄀
 auto_generate_certs  ¦  on  𝄀
@@ -34,6 +35,7 @@ set auto_increment_increment = 2*3;
 show variables like 'auto_increment_increment';
 ➤ Variable_name[12,0,0]  ¦  Value[12,0,0]  𝄀
 auto_increment_increment  ¦  6
+set auto_increment_increment = @saved_auto_increment_increment;
 show variables like 'init%';
 ➤ Variable_name[12,0,0]  ¦  Value[12,0,0]  𝄀
 init_connect  ¦    𝄀
@@ -160,7 +162,7 @@ primary key(a)
 );
 show indexes from t;
 ➤ Table[12,1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,64,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,256,0]  ¦  Collation[12,1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,4,0]  ¦  Packed[12,4,0]  ¦  Null[12,3,0]  ¦  Index_type[12,11,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,2048,0]  ¦  Index_params[12,2048,0]  ¦  Visible[12,3,0]  ¦  Expression[12,256,0]  𝄀
-t  ¦  0  ¦  PRIMARY  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  a
+t  ¦  0  ¦  PRIMARY  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  a
 create account acc_idx ADMIN_NAME 'root' IDENTIFIED BY '123456';
 create database db1;
 use db1;
@@ -173,7 +175,7 @@ primary key(a)
 );
 show indexes from t;
 ➤ Table[12,1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,64,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,256,0]  ¦  Collation[12,1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,4,0]  ¦  Packed[12,4,0]  ¦  Null[12,3,0]  ¦  Index_type[12,11,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,2048,0]  ¦  Index_params[12,2048,0]  ¦  Visible[12,3,0]  ¦  Expression[12,256,0]  𝄀
-t  ¦  0  ¦  PRIMARY  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  a
+t  ¦  0  ¦  PRIMARY  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  a
 drop database db1;
 drop account acc_idx;
 use information_schema;
@@ -215,11 +217,11 @@ table_schema  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 table_name  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 column_name  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 ordinal_position  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-position_in_unique_constraint  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-referenced_table_schema  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-referenced_table_name  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-referenced_column_name  ¦  VARCHAR(64)  ¦  NO  ¦    ¦  null  ¦    ¦  
-select table_name, column_name from key_column_usage limit 2;
+position_in_unique_constraint  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+referenced_table_schema  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+referenced_table_name  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+referenced_column_name  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select table_name, column_name from key_column_usage where table_schema = '__nonexistent_schema__' limit 2;
 ➤ table_name[12,64,0]  ¦  column_name[12,64,0]
 desc columns;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
@@ -227,24 +229,24 @@ table_catalog  ¦  VARCHAR(3)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 table_schema  ¦  VARCHAR(256)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 table_name  ¦  VARCHAR(256)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 column_name  ¦  VARCHAR(256)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-ordinal_position  ¦  INT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ordinal_position  ¦  INT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 column_default  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 is_nullable  ¦  VARCHAR(3)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 data_type  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-character_maximum_length  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-character_octet_length  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-numeric_precision  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-numeric_scale  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-datetime_precision  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-character_set_name  ¦  VARCHAR(4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-collation_name  ¦  VARCHAR(8)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+character_maximum_length  ¦  BIGINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+character_octet_length  ¦  BIGINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+numeric_precision  ¦  BIGINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+numeric_scale  ¦  BIGINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+datetime_precision  ¦  BIGINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+character_set_name  ¦  VARCHAR(7)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+collation_name  ¦  VARCHAR(18)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 column_type  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 column_key  ¦  VARCHAR(3)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 extra  ¦  VARCHAR(24)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 privileges  ¦  VARCHAR(31)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 column_comment  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 generation_expression  ¦  VARCHAR(500)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-srs_id  ¦  BIGINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+srs_id  ¦  BIGINT  ¦  YES  ¦    ¦  null  ¦    ¦  
 select table_name, column_name from columns where table_schema = 'mo_catalog' and column_name != '__mo_index_idx_col' and column_name != '__mo_index_pri_col' order by table_name, column_name limit 5;
 ➤ table_name[12,256,0]  ¦  column_name[12,256,0]  𝄀
 mo_account  ¦  account_id  𝄀
@@ -257,10 +259,10 @@ desc views;
 table_catalog  ¦  VARCHAR(3)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 table_schema  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 table_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-view_definition  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-check_option  ¦  VARCHAR(4)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+view_definition  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+check_option  ¦  VARCHAR(9)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 is_updatable  ¦  VARCHAR(3)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-definer  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+definer  ¦  VARCHAR(401)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 security_type  ¦  VARCHAR(7)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 character_set_client  ¦  VARCHAR(7)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 collation_connection  ¦  VARCHAR(18)  ¦  NO  ¦    ¦  null  ¦    ¦  
@@ -321,7 +323,7 @@ MAXLEN  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦
 select character_set_name, description, maxlen from character_sets limit 5;
 ➤ character_set_name[12,64,0]  ¦  description[12,2048,0]  ¦  maxlen[4,32,0]  𝄀
 binary  ¦  Binary pseudo charset  ¦  1  𝄀
-utf8  ¦  UTF-8 Unicode  ¦  4  𝄀
+utf8  ¦  UTF-8 Unicode  ¦  3  𝄀
 utf8mb4  ¦  UTF-8 Unicode  ¦  4
 desc triggers;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
@@ -480,7 +482,7 @@ show variables like 'tx_isolation';
 tx_isolation  ¦  REPEATABLE-READ
 select @@sql_mode;
 ➤ @@sql_mode[12,0,0]  𝄀
-ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
+ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,ENABLE_BOOL_SUMAVG
 set @@sql_mode ='';
 select @@sql_mode;
 ➤ @@sql_mode[12,0,0]  𝄀

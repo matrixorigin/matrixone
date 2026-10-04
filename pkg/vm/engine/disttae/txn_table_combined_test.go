@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
@@ -30,6 +31,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	splan "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
@@ -821,18 +824,6 @@ func newMixedTimestampChangesHandle(
 	return &combinedChangesHandle{handles: handles, mp: mp}, children
 }
 
-func TestCombinedTxnTable_MergeObjects(t *testing.T) {
-	table := newMockCombinedTxnTable()
-
-	assert.PanicsWithValue(t, "not implemented", func() {
-		table.MergeObjects(
-			context.Background(),
-			[]objectio.ObjectStats{},
-			1024,
-		)
-	})
-}
-
 func TestCombinedTxnTable_UpdateConstraint(t *testing.T) {
 	table := newMockCombinedTxnTable()
 
@@ -1205,161 +1196,6 @@ func TestCombinedTxnTable_GetColumMetadataScanInfo(t *testing.T) {
 		assert.Equal(t, mockInfo1, result[0])
 		assert.Equal(t, mockInfo2, result[1])
 		assert.Equal(t, mockInfo3, result[2])
-	})
-}
-
-func TestCombinedTxnTable_GetNonAppendableObjectStats(t *testing.T) {
-	// Test case 1: Success case with multiple tables
-	t.Run("Success with multiple tables", func(t *testing.T) {
-		// Create mock object stats
-		mockStats1 := objectio.NewObjectStats()
-		objectio.SetObjectStatsSize(mockStats1, 1024)
-		objectio.SetObjectStatsOriginSize(mockStats1, 2048)
-		objectio.SetObjectStatsRowCnt(mockStats1, 100)
-
-		mockStats2 := objectio.NewObjectStats()
-		objectio.SetObjectStatsSize(mockStats2, 2048)
-		objectio.SetObjectStatsOriginSize(mockStats2, 4096)
-		objectio.SetObjectStatsRowCnt(mockStats2, 200)
-
-		// Create mock relations that return object stats
-		mockRel1 := &mockRelation{
-			getNonAppendableObjectStatsFunc: func(ctx context.Context) ([]objectio.ObjectStats, error) {
-				return []objectio.ObjectStats{*mockStats1}, nil
-			},
-		}
-		mockRel2 := &mockRelation{
-			getNonAppendableObjectStatsFunc: func(ctx context.Context) ([]objectio.ObjectStats, error) {
-				return []objectio.ObjectStats{*mockStats2}, nil
-			},
-		}
-
-		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
-				return []engine.Relation{mockRel1, mockRel2}, nil
-			},
-		}
-
-		result, err := table.GetNonAppendableObjectStats(context.Background())
-		assert.NoError(t, err)
-		assert.Len(t, result, 2)
-		assert.Equal(t, *mockStats1, result[0])
-		assert.Equal(t, *mockStats2, result[1])
-	})
-
-	// Test case 2: Error when tablesFunc returns error
-	t.Run("Error from tablesFunc", func(t *testing.T) {
-		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
-				return nil, assert.AnError
-			},
-		}
-
-		result, err := table.GetNonAppendableObjectStats(context.Background())
-		assert.Error(t, err)
-		assert.Nil(t, result)
-		assert.Equal(t, assert.AnError, err)
-	})
-
-	// Test case 3: Error from individual table's GetNonAppendableObjectStats
-	t.Run("Error from individual table", func(t *testing.T) {
-		mockRel := &mockRelation{
-			getNonAppendableObjectStatsFunc: func(ctx context.Context) ([]objectio.ObjectStats, error) {
-				return nil, assert.AnError
-			},
-		}
-
-		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
-				return []engine.Relation{mockRel}, nil
-			},
-		}
-
-		result, err := table.GetNonAppendableObjectStats(context.Background())
-		assert.Error(t, err)
-		assert.Nil(t, result)
-		assert.Equal(t, assert.AnError, err)
-	})
-
-	// Test case 4: Empty tables list
-	t.Run("Empty tables list", func(t *testing.T) {
-		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
-				return []engine.Relation{}, nil
-			},
-		}
-
-		result, err := table.GetNonAppendableObjectStats(context.Background())
-		assert.NoError(t, err)
-		assert.Len(t, result, 0)
-	})
-
-	// Test case 5: Multiple tables with mixed results
-	t.Run("Multiple tables with mixed results", func(t *testing.T) {
-		mockStats1 := objectio.NewObjectStats()
-		objectio.SetObjectStatsSize(mockStats1, 1024)
-		objectio.SetObjectStatsRowCnt(mockStats1, 100)
-
-		mockStats2 := objectio.NewObjectStats()
-		objectio.SetObjectStatsSize(mockStats2, 2048)
-		objectio.SetObjectStatsRowCnt(mockStats2, 200)
-
-		mockStats3 := objectio.NewObjectStats()
-		objectio.SetObjectStatsSize(mockStats3, 3072)
-		objectio.SetObjectStatsRowCnt(mockStats3, 300)
-
-		mockRel1 := &mockRelation{
-			getNonAppendableObjectStatsFunc: func(ctx context.Context) ([]objectio.ObjectStats, error) {
-				return []objectio.ObjectStats{*mockStats1}, nil
-			},
-		}
-		mockRel2 := &mockRelation{
-			getNonAppendableObjectStatsFunc: func(ctx context.Context) ([]objectio.ObjectStats, error) {
-				return []objectio.ObjectStats{*mockStats2, *mockStats3}, nil
-			},
-		}
-
-		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
-				return []engine.Relation{mockRel1, mockRel2}, nil
-			},
-		}
-
-		result, err := table.GetNonAppendableObjectStats(context.Background())
-		assert.NoError(t, err)
-		assert.Len(t, result, 3)
-		assert.Equal(t, *mockStats1, result[0])
-		assert.Equal(t, *mockStats2, result[1])
-		assert.Equal(t, *mockStats3, result[2])
-	})
-
-	// Test case 6: Single table with multiple object stats
-	t.Run("Single table with multiple object stats", func(t *testing.T) {
-		mockStats1 := objectio.NewObjectStats()
-		objectio.SetObjectStatsSize(mockStats1, 1024)
-		objectio.SetObjectStatsRowCnt(mockStats1, 100)
-
-		mockStats2 := objectio.NewObjectStats()
-		objectio.SetObjectStatsSize(mockStats2, 2048)
-		objectio.SetObjectStatsRowCnt(mockStats2, 200)
-
-		mockRel := &mockRelation{
-			getNonAppendableObjectStatsFunc: func(ctx context.Context) ([]objectio.ObjectStats, error) {
-				return []objectio.ObjectStats{*mockStats1, *mockStats2}, nil
-			},
-		}
-
-		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
-				return []engine.Relation{mockRel}, nil
-			},
-		}
-
-		result, err := table.GetNonAppendableObjectStats(context.Background())
-		assert.NoError(t, err)
-		assert.Len(t, result, 2)
-		assert.Equal(t, *mockStats1, result[0])
-		assert.Equal(t, *mockStats2, result[1])
 	})
 }
 
@@ -1940,6 +1776,114 @@ func TestCombinedTxnTable_Stats(t *testing.T) {
 	assert.Equal(t, stats.BlockNumber, result.BlockNumber)
 	assert.Equal(t, stats.ApproxObjectNumber, result.ApproxObjectNumber)
 	assert.Equal(t, stats.TableCnt, result.TableCnt)
+	partial := newCombinedTxnTable(nil, func() ([]engine.Relation, error) {
+		return []engine.Relation{
+			&mockRelation{statsFunc: func(context.Context, bool) (*statsinfo.StatsInfo, error) { return stats, nil }},
+			&mockRelation{statsFunc: func(context.Context, bool) (*statsinfo.StatsInfo, error) { return nil, nil }},
+		}, nil
+	}, nil, nil)
+	result, err = partial.Stats(context.Background(), false)
+	require.NoError(t, err)
+	require.Equal(t, float64(^uint64(0)), result.TableCnt, "missing child cannot publish a partial small bound")
+	require.Empty(t, result.TableName)
+	require.Equal(t, stats.BlockNumber, result.BlockNumber, "known metadata remains available")
+}
+
+// relationStatsContext feeds the actual relation observation to the public planner.
+type relationStatsContext struct {
+	*splan.MockCompilerContext
+	observed *statsinfo.StatsInfo
+}
+
+func (c *relationStatsContext) StatsWithTableDef(*plan.ObjectRef, *plan.TableDef, *plan.Snapshot) (*statsinfo.StatsInfo, error) {
+	return c.observed, nil
+}
+
+func (c *relationStatsContext) Resolve(string, string, *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+	return &plan.ObjectRef{Obj: 42, ObjName: "t"}, &plan.TableDef{TblId: 42, Name: "t", Cols: []*plan.ColDef{{Name: "v", Typ: plan.Type{Id: int32(types.T_int64)}}}, Name2ColIndex: map[string]int32{"v": 0}}, nil
+}
+
+func assertRelationScanWidth(t *testing.T, observed *statsinfo.StatsInfo, want float64) {
+	t.Helper()
+	ctx := &relationStatsContext{MockCompilerContext: splan.NewMockCompilerContext(false), observed: observed}
+
+	stmt, err := mysql.ParseOne(t.Context(), "select v from t where v > 0", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := splan.BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	for _, node := range built.GetQuery().Nodes {
+		if node.NodeType == plan.Node_TABLE_SCAN {
+			require.Equal(t, observed.TableCnt, node.Stats.TableCnt)
+			require.InDelta(t, want, node.Stats.Rowsize, 1e-10)
+			return
+		}
+	}
+	t.Fatal("expected a table scan")
+}
+
+type namedStatsRelation struct {
+	mockRelation
+	name string
+}
+
+func (r *namedStatsRelation) GetTableName() string { return r.name }
+
+func TestCombinedStatsPreserveByteCoverage(t *testing.T) {
+	known := &statsinfo.StatsInfo{TableName: "p0", TableCnt: 5, SizeMap: map[string]uint64{"v": 40}, BlockNumber: 1}
+	for _, tc := range []struct {
+		name     string
+		children []*statsinfo.StatsInfo
+		rows     float64
+		bytes    map[string]uint64
+		width    float64
+	}{
+		{"unknown last", []*statsinfo.StatsInfo{known, nil}, float64(math.MaxUint64), nil, 6.4},
+		{"unknown first", []*statsinfo.StatsInfo{nil, known}, float64(math.MaxUint64), nil, 6.4},
+		{"missing bytes last", []*statsinfo.StatsInfo{known, {TableName: "p1", TableCnt: 5}}, 10, nil, 6.4},
+		{"missing bytes first", []*statsinfo.StatsInfo{{TableName: "p1", TableCnt: 5}, known}, 10, nil, 6.4},
+		{"column overflow", []*statsinfo.StatsInfo{{TableName: "p0", TableCnt: 5, SizeMap: map[string]uint64{"v": math.MaxUint64}}, known, known}, 15, nil, 6.4},
+		{"invalid then complete", []*statsinfo.StatsInfo{known, nil, known}, float64(math.MaxUint64), nil, 6.4},
+		{"complementary columns", []*statsinfo.StatsInfo{known, {TableName: "p1", TableCnt: 5, SizeMap: map[string]uint64{"other": 40}}}, 10, nil, 6.4},
+		{"empty child", []*statsinfo.StatsInfo{{TableName: "empty"}, known}, 5, map[string]uint64{"v": 40}, 8},
+		{"complete", []*statsinfo.StatsInfo{known, known}, 10, map[string]uint64{"v": 80}, 8},
+		{"transient complete", []*statsinfo.StatsInfo{known, {TableCnt: 5, SizeMap: map[string]uint64{"v": 40}}}, 10, map[string]uint64{"v": 80}, 8},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rels := make([]engine.Relation, len(tc.children))
+			for i, child := range tc.children {
+				name := "p"
+				if child != nil && child.TableName != "" {
+					name = child.TableName
+				}
+				rels[i] = &namedStatsRelation{name: name, mockRelation: mockRelation{statsFunc: func(context.Context, bool) (*statsinfo.StatsInfo, error) { return child, nil }}}
+			}
+			table := newCombinedTxnTable(nil, func() ([]engine.Relation, error) { return rels, nil }, nil, nil)
+			got, err := table.Stats(t.Context(), false)
+			require.NoError(t, err)
+			require.Equal(t, tc.rows, got.TableCnt)
+			cacheable := true
+			for _, child := range tc.children {
+				cacheable = cacheable && splan.StatsInfoUsableForCache(child)
+			}
+			require.Equal(t, cacheable, splan.StatsInfoUsableForCache(got), "byte coverage and cache completion are separate contracts")
+			assert.Equal(t, tc.bytes, got.SizeMap)
+			assertRelationScanWidth(t, got, tc.width)
+			require.Equal(t, map[string]uint64{"v": 40}, known.SizeMap, "published child map stays immutable")
+		})
+	}
+	t.Run("unknown child does not hide later error", func(t *testing.T) {
+		failure := errors.New("partition stats failed")
+		table := newCombinedTxnTable(nil, func() ([]engine.Relation, error) {
+			return []engine.Relation{
+				&mockRelation{statsFunc: func(context.Context, bool) (*statsinfo.StatsInfo, error) { return nil, nil }},
+				&mockRelation{statsFunc: func(context.Context, bool) (*statsinfo.StatsInfo, error) { return nil, failure }},
+			}, nil
+		}, nil, nil)
+		got, err := table.Stats(t.Context(), false)
+		require.Nil(t, got)
+		require.ErrorIs(t, err, failure)
+	})
 }
 
 // Test CombinedRelData panic methods
@@ -2196,7 +2140,7 @@ func (m *mockTombstoner) UnmarshalBinary(buf []byte) error {
 	return nil
 }
 
-func (m *mockTombstoner) PrefetchTombstones(srvId string, fs fileservice.FileService, bid []objectio.Blockid) {
+func (m *mockTombstoner) PrefetchTombstones(ctx context.Context, srvId string, fs fileservice.FileService, bid []objectio.Blockid) {
 }
 
 func (m *mockTombstoner) ApplyInMemTombstones(bid *types.Blockid, rowsOffset []int64, deleted *objectio.Bitmap) (left []int64) {
@@ -2246,7 +2190,6 @@ func (m *mockReader) SetFilterZM(objectio.ZoneMap) {}
 type mockRelation struct {
 	rangesFunc                          func(ctx context.Context, param engine.RangesParam) (engine.RelData, error)
 	getColumMetadataScanInfoFunc        func(ctx context.Context, name string, visitTombstone bool) ([]*plan.MetadataScanInfo, error)
-	getNonAppendableObjectStatsFunc     func(ctx context.Context) ([]objectio.ObjectStats, error)
 	approxObjectsNumFunc                func(ctx context.Context) int
 	collectTombstonesFunc               func(ctx context.Context, txnOffset int, policy engine.TombstoneCollectPolicy) (engine.Tombstoner, error)
 	sizeFunc                            func(ctx context.Context, columnName string) (uint64, error)
@@ -2332,17 +2275,6 @@ func (m *mockRelation) ApproxObjectsNum(ctx context.Context) int {
 		return m.approxObjectsNumFunc(ctx)
 	}
 	return 0
-}
-
-func (m *mockRelation) MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, targetObjSize uint32) (*api.MergeCommitEntry, error) {
-	return nil, nil
-}
-
-func (m *mockRelation) GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error) {
-	if m.getNonAppendableObjectStatsFunc != nil {
-		return m.getNonAppendableObjectStatsFunc(ctx)
-	}
-	return nil, nil
 }
 
 func (m *mockRelation) GetColumMetadataScanInfo(ctx context.Context, name string, visitTombstone bool) ([]*plan.MetadataScanInfo, error) {

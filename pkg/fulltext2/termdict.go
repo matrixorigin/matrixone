@@ -132,6 +132,42 @@ func (d *termDict) prefixTerms(prefix string) ([]string, error) {
 	return out, nil
 }
 
+// forEachTermInRange streams every term in the inclusive [lo,hi] range through fn
+// WITHOUT materializing the range as a []string the way rangeTerms does. For a
+// high-cardinality key an inequality's range IS most of that key's vocabulary,
+// so the materializing form is only safe when the caller already bounds it.
+func (d *termDict) forEachTermInRange(lo, hi string, fn func(term string) (bool, error)) error {
+	if lo > hi {
+		return nil
+	}
+	// vellum's upper bound is exclusive; one 0x00 past hi makes it inclusive,
+	// since no term sorts between hi and hi+"\x00".
+	end := append([]byte(hi), 0x00)
+	it, err := d.fst.Iterator([]byte(lo), end)
+	if err == vellum.ErrIteratorDone {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer func() { _ = it.Close() }()
+	for {
+		term, _ := it.Current()
+		goOn, err := fn(string(term))
+		if err != nil {
+			return err
+		}
+		if !goOn {
+			return nil
+		}
+		if err := it.Next(); err == vellum.ErrIteratorDone {
+			return nil
+		} else if err != nil {
+			return err
+		}
+	}
+}
+
 // forEachTerm streams every term (ascending) through fn WITHOUT materializing the whole
 // vocabulary as a []string the way prefixTerms("") does — so a large high-cardinality
 // index's MERGE reconstruction (forEachPosting) doesn't spike O(vocabulary) of strings.
