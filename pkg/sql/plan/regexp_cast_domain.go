@@ -88,9 +88,13 @@ func regexpDeclaredStringType(expr *Expr) types.Type {
 		return typ
 	}
 	name := strings.ToLower(fn.Func.ObjName)
+	parameters := make([]types.Type, len(fn.Args))
+	for i, arg := range fn.Args {
+		parameters[i] = regexpDeclaredStringType(arg)
+	}
 	if name == "cast" && len(fn.Args) > 0 && !isExplicitPreparedCast(expr) {
 		// Overload alignment is not a user-declared maximum length.
-		if source := regexpDeclaredStringType(fn.Args[0]); source.Oid.IsMySQLString() {
+		if source := parameters[0]; source.Oid.IsMySQLString() {
 			return source
 		}
 	}
@@ -98,7 +102,7 @@ func regexpDeclaredStringType(expr *Expr) types.Type {
 		binary, varchar, unbounded := false, false, false
 		var maxBytes uint64
 		for _, index := range indexes {
-			value := regexpDeclaredStringType(fn.Args[index])
+			value := parameters[index]
 			if value.Oid == types.T_any {
 				continue // Only bare NULL is domainless, not a typed NULL branch.
 			}
@@ -118,10 +122,6 @@ func regexpDeclaredStringType(expr *Expr) types.Type {
 			return types.NewWithCharset(types.T_binary, int32(maxBytes), 0, types.CharsetBinary)
 		}
 	}
-	parameters := make([]types.Type, len(fn.Args))
-	for i, arg := range fn.Args {
-		parameters[i] = regexpDeclaredStringType(arg)
-	}
 	if result, ok := function.GetFunctionByNameWithoutError(name, parameters); ok {
 		typ = result.GetReturnType()
 	}
@@ -131,6 +131,18 @@ func regexpDeclaredStringType(expr *Expr) types.Type {
 	case "substring", "substr", "sub_str":
 		if len(fn.Args) == 3 {
 			lengthIndex = 2
+		} else if len(fn.Args) == 2 {
+			if position, signed, known := regexpConstantInteger(fn.Args[1]); known && signed && int64(position) < 0 {
+				// A negative start can retain at most its distance from the end.
+				// Unsigned subtraction also handles MinInt64 without overflow.
+				bound := uint64(0) - position
+				if bound <= uint64(types.MaxVarcharLen) {
+					if types.StaticStringDomain(typ) == types.StringDomainBinary {
+						return regexpBinaryTypeForBound(bound, true)
+					}
+					return types.NewWithCharset(types.T_varchar, int32(bound), 0, typ.Charset)
+				}
+			}
 		}
 	case "left", "right":
 		if len(fn.Args) == 2 {
@@ -177,6 +189,10 @@ func regexpConstantInteger(expr *Expr) (value uint64, signed, known bool) {
 			return uint64(number.I64Val), true, true
 		case *planpb.Literal_U64Val:
 			return number.U64Val, false, true
+		case *planpb.Literal_Dval:
+			return regexpFloatingInteger(number.Dval)
+		case *planpb.Literal_Fval:
+			return regexpFloatingInteger(float64(number.Fval))
 		case *planpb.Literal_Sval:
 			integer, err := function.ParsePreparedStringToInt64(number.Sval)
 			return uint64(integer), true, err == nil
@@ -194,6 +210,17 @@ func regexpConstantInteger(expr *Expr) (value uint64, signed, known bool) {
 			return uint64(integer), true, err == nil
 		}
 		return 0, false, false
+	}
+	if fn := expr.GetF(); fn != nil && fn.Func != nil &&
+		strings.EqualFold(fn.Func.ObjName, "abs") && len(fn.Args) == 1 {
+		value, signed, known = regexpConstantInteger(fn.Args[0])
+		if known && signed && int64(value) < 0 {
+			if int64(value) == math.MinInt64 {
+				return 0, false, false // ABS can fail; do not change error timing.
+			}
+			value = uint64(0) - value
+		}
+		return value, signed, known
 	}
 	if fn := expr.GetF(); fn != nil && fn.Func != nil &&
 		strings.EqualFold(fn.Func.ObjName, "cast") && len(fn.Args) > 0 {
@@ -231,6 +258,14 @@ func regexpConstantInteger(expr *Expr) (value uint64, signed, known bool) {
 		}
 	}
 	return 0, false, false
+}
+
+func regexpFloatingInteger(value float64) (uint64, bool, bool) {
+	rounded := math.RoundToEven(value)
+	if math.IsNaN(rounded) || math.IsInf(rounded, 0) || rounded < -math.Exp2(63) || rounded >= math.Exp2(63) {
+		return 0, false, false
+	}
+	return uint64(int64(rounded)), true, true
 }
 
 func regexpExpressionByteBound(expr *Expr) (uint64, bool) {

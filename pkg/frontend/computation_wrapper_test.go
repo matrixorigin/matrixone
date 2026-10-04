@@ -1203,19 +1203,29 @@ func TestBuildPlanRegexpUserVariableNullHistory(t *testing.T) {
 					require.NoError(t, err)
 					ses.installUserDefinedVars(restored)
 				}
-				for _, prepare := range []bool{false, true} {
-					statements, err := mysql.Parse(ctx, "select regexp_like(cast(@history as binary), 'a')", 1)
-					require.NoError(t, err)
-					var stmt tree.Statement = statements[0]
-					if prepare {
-						stmt = tree.NewPrepareString(tree.Identifier("history_cast"), "select regexp_like(cast(@history as binary), 'a')")
-					}
-					_, err = buildPlan(ctx, nil, compiler, stmt)
-					statements[0].Free()
-					if tc.wantErr {
-						require.True(t, moerr.IsMoErrCode(err, moerr.ErrCharacterSetMismatch), err)
-					} else {
+				for _, sql := range []string{
+					"select regexp_like(cast(@history as binary), 'a')",
+					"select regexp_like(cast((select @history) as binary), 'a')",
+					"select regexp_like(cast(v as binary), 'a') from (select @history v) s",
+					"select regexp_like(cast(v as binary), 'a') from (select v from (select @history v) s) t",
+				} {
+					for _, prepare := range []bool{false, true} {
+						statements, err := mysql.Parse(ctx, sql, 1)
 						require.NoError(t, err)
+						var stmt tree.Statement = statements[0]
+						if prepare {
+							stmt = tree.NewPrepareString(tree.Identifier("history_cast"), sql)
+						}
+						_, err = buildPlan(ctx, nil, compiler, stmt)
+						if prepare {
+							stmt.Free()
+						}
+						statements[0].Free()
+						if tc.wantErr {
+							require.True(t, moerr.IsMoErrCode(err, moerr.ErrCharacterSetMismatch), err, sql)
+						} else {
+							require.NoError(t, err, sql)
+						}
 					}
 				}
 			}

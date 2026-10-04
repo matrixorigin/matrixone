@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 	"unsafe"
@@ -397,6 +398,12 @@ func TestRegexpBinaryCastAcrossQueryBoundaries(t *testing.T) {
 		{"select regexp_like(cast(substring(@v, 1, cast(cast(3 as unsigned) as signed)) as binary), 'a')", true},
 		{"select regexp_like(cast(substring(@v, 1, cast('3' as signed)) as binary), 'a')", true},
 		{"select regexp_like(cast(substring(@v, 1, cast(3.0 as signed)) as binary), 'a')", true},
+		{"select regexp_like(cast(substring(@v, 1, 3e0) as binary), 'a')", true},
+		{"select regexp_like(cast(substring(@v, 1, cast(3e0 as signed)) as binary), 'a')", true},
+		{"select regexp_like(cast(left(@v, abs(3)) as binary), 'a')", true},
+		{"select regexp_like(cast(left(@v, abs(-3)) as binary), 'a')", true},
+		{"select regexp_like(cast(substring(@v, -3) as binary), 'a')", true},
+		{"select regexp_like(cast(substring(@v, 3) as binary), 'a')", false},
 		{"select regexp_like(cast((select substring(rel_createsql, 1, 3) from mo_catalog.mo_tables limit 1) as binary), 'a')", true},
 		{"select regexp_like(cast(v as binary), 'a') from (select left(rel_createsql, 3) v from mo_catalog.mo_tables) s", true},
 		{"select regexp_like(cast(substring(@v, 1, cast(9223372036854775808 as unsigned)) as binary), 'a')", false},
@@ -451,6 +458,81 @@ func TestRegexpBinaryCastAcrossQueryBoundaries(t *testing.T) {
 			_, err := runOneStmt(NewMockOptimizer(false), t, sql)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrCharacterSetMismatch), err)
 		})
+	}
+}
+
+func TestRegexpTextControlFlowNesting(t *testing.T) {
+	for _, kind := range []string{"if", "case", "coalesce"} {
+		expr := "@str_var"
+		for range 24 {
+			switch kind {
+			case "if":
+				expr = "if(true," + expr + ",'a')"
+			case "case":
+				expr = "case when true then " + expr + " else 'a' end"
+			default:
+				expr = "coalesce(" + expr + ",'a')"
+			}
+		}
+		query := "select regexp_like(cast(" + expr + " as binary),'a')"
+		for _, prepare := range []bool{false, true} {
+			query := query
+			if prepare {
+				query = "prepare nested_text from '" + strings.ReplaceAll(query, "'", "''") + "'"
+			}
+			t.Run(kind+fmt.Sprint(prepare), func(t *testing.T) {
+				_, err := runOneStmt(NewMockOptimizer(false), t, query)
+				require.NoError(t, err)
+			})
+		}
+	}
+}
+
+func BenchmarkRegexpTextControlFlowDeclaration(b *testing.B) {
+	for _, depth := range []int{8, 16, 24} {
+		b.Run(fmt.Sprint(depth), func(b *testing.B) {
+			expr := &Expr{Typ: makeSimplePlan2Type(types.T_text), Expr: &planpb.Expr_V{V: &planpb.VarRef{Name: "text"}}}
+			for range depth {
+				expr = &Expr{Typ: makeSimplePlan2Type(types.T_text), Expr: &planpb.Expr_F{F: &planpb.Function{
+					Func: &planpb.ObjectRef{ObjName: "if"}, Args: []*Expr{makePlan2BoolConstExprWithType(true), expr, makePlan2StringConstExprWithType("a")},
+				}}}
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				_ = regexpDeclaredStringType(expr)
+			}
+		})
+	}
+}
+
+func TestRegexpConstantLengthBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		value float64
+		want  int64
+		known bool
+	}{
+		{3, 3, true}, {2.5, 2, true}, {-3.5, -4, true},
+		{math.Inf(1), 0, false}, {math.NaN(), 0, false}, {math.Exp2(63), 0, false},
+	} {
+		expr := &Expr{Typ: makeSimplePlan2Type(types.T_float64), Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+			Value: &planpb.Literal_Dval{Dval: tc.value},
+		}}}
+		value, _, known := regexpConstantInteger(expr)
+		require.Equal(t, tc.known, known)
+		if known {
+			require.Equal(t, tc.want, int64(value))
+		}
+	}
+	for _, number := range []int64{-3, math.MinInt64} {
+		expr := &Expr{Typ: makeSimplePlan2Type(types.T_int64), Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{ObjName: "abs"}, Args: []*Expr{makePlan2Int64ConstExprWithType(number)},
+		}}}
+		value, _, known := regexpConstantInteger(expr)
+		require.Equal(t, number != math.MinInt64, known)
+		if known {
+			require.Equal(t, uint64(3), value)
+		}
 	}
 }
 

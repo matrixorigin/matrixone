@@ -201,29 +201,6 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		} else {
 			expr, err = appendSyntaxExplicitCastBeforeExpr(b.GetContext(), expr, typ)
 		}
-		if err == nil && types.T(typ.Id) == types.T_binary && typ.Width < 0 &&
-			preparedBindingState(b.GetContext()) == nil {
-			if variable, ok := unwrapParenExpr(exprImpl.Expr).(*tree.VarExpr); ok && !variable.System {
-				sourceType, resolved := b.resolveUserVariableType(variable)
-				stringResult := false
-				if resolved && types.T(sourceType.Id) == types.T_any && b.builder != nil {
-					if resolver, ok := b.builder.compCtx.(UserVariableRegexpCastResolver); ok {
-						stringResult, err = resolver.ResolveVariableRegexpStringResult(variable.Name)
-						if err != nil {
-							return
-						}
-					}
-				}
-				if resolved && types.T(sourceType.Id) == types.T_any && !stringResult {
-					// Binding normally envelopes a NULL variable in TEXT. Preserve
-					// its zero-bound CAST classification before that envelope can
-					// falsely confer the unbounded string-variable exemption.
-					ensurePreparedNumericMetadata(expr).StringDomainSource = &Expr{
-						Typ: typ, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}},
-					}
-				}
-			}
-		}
 
 	case *tree.BitCastExpr:
 		expr, err = b.bindFuncExprImplByAstExpr("bit_cast", []tree.Expr{astExpr}, depth)
@@ -440,11 +417,24 @@ func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot 
 func (b *baseBinder) baseBindVar(astExpr *tree.VarExpr, depth int32, isRoot bool) (expr *plan.Expr, err error) {
 	typ := types.T_text.ToType()
 	var boundStringDomain uint32
+	var nonStringNull bool
 	if !astExpr.System {
 		if resolved, ok := b.resolveUserVariableType(astExpr); ok {
 			typ = makeTypeByPlan2Type(resolved)
 		}
 		if typ.Oid == types.T_any {
+			if preparedBindingState(b.GetContext()) == nil {
+				stringResult := false
+				if b.builder != nil {
+					if resolver, ok := b.builder.compCtx.(UserVariableRegexpCastResolver); ok {
+						stringResult, err = resolver.ResolveVariableRegexpStringResult(astExpr.Name)
+						if err != nil {
+							return nil, err
+						}
+					}
+				}
+				nonStringNull = !stringResult
+			}
 			// A domainless user-variable NULL is still a TEXT expression in
 			// ordinary SQL. Prepared marker binding keeps the untyped source
 			// separately and lets each consumer choose its domain.
@@ -481,6 +471,15 @@ func (b *baseBinder) baseBindVar(astExpr *tree.VarExpr, depth int32, isRoot bool
 				BoundStringDomain: boundStringDomain,
 			},
 		},
+	}
+	if nonStringNull {
+		// Retain the zero-bound declaration before the ordinary TEXT envelope
+		// crosses projection/folding boundaries. This NULL witness is metadata
+		// only: it never supplies a value or changes numeric conversion types.
+		ensurePreparedNumericMetadata(variable).StringDomainSource = &Expr{
+			Typ:  makeSimplePlan2Type(types.T_varchar),
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}},
+		}
 	}
 	if !astExpr.System && b.numericParamType != nil {
 		// User variables are text-backed when their assignment came from a

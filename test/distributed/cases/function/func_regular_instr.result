@@ -402,6 +402,22 @@ SELECT REGEXP_LIKE(CAST(SUBSTRING(@regexp_cast_variable, 1, CAST('3' AS SIGNED))
 Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
 SELECT REGEXP_LIKE(CAST(SUBSTRING(@regexp_cast_variable, 1, CAST(3.5 AS SIGNED)) AS BINARY), 'a');
 Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(CAST(SUBSTRING(@regexp_cast_variable, 1, 3e0) AS BINARY), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(CAST(SUBSTRING(@regexp_cast_variable, 1, CAST(3e0 AS SIGNED)) AS BINARY), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(CAST(LEFT(@regexp_cast_variable, ABS(3)) AS BINARY), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(CAST(SUBSTRING(@regexp_cast_variable, -3) AS BINARY), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+PREPARE regexp_float_length_rejected FROM 'SELECT REGEXP_LIKE(CAST(SUBSTRING(@regexp_cast_variable, 1, 3e0) AS BINARY), ''a'')';
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+PREPARE regexp_float_cast_length_rejected FROM 'SELECT REGEXP_LIKE(CAST(SUBSTRING(@regexp_cast_variable, 1, CAST(3e0 AS SIGNED)) AS BINARY), ''a'')';
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+PREPARE regexp_abs_length_rejected FROM 'SELECT REGEXP_LIKE(CAST(LEFT(@regexp_cast_variable, ABS(3)) AS BINARY), ''a'')';
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+PREPARE regexp_negative_start_rejected FROM 'SELECT REGEXP_LIKE(CAST(SUBSTRING(@regexp_cast_variable, -3) AS BINARY), ''a'')';
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
 CREATE TABLE regexp_static_text_source(v TEXT);
 INSERT INTO regexp_static_text_source VALUES ('abc');
 SELECT REGEXP_LIKE(CAST((SELECT SUBSTRING(v, 1, 3) FROM regexp_static_text_source) AS BINARY), 'a');
@@ -456,6 +472,24 @@ SELECT REGEXP_LIKE(CAST(@regexp_cast_numeric AS BINARY), '1');
 Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
 PREPARE regexp_numeric_null_cast_rejected FROM 'SELECT REGEXP_LIKE(CAST(@regexp_cast_numeric AS BINARY), ''1'')';
 Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(CAST((SELECT @regexp_cast_numeric) AS BINARY), '1');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(CAST(v AS BINARY), '1') FROM (SELECT @regexp_cast_numeric v) s;
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+PREPARE regexp_numeric_null_scalar_rejected FROM 'SELECT REGEXP_LIKE(CAST((SELECT @regexp_cast_numeric) AS BINARY), ''1'')';
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+PREPARE regexp_numeric_null_derived_rejected FROM 'SELECT REGEXP_LIKE(CAST(v AS BINARY), ''1'') FROM (SELECT @regexp_cast_numeric v) s';
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SET @regexp_history_text = 'abc';
+SET @regexp_history_text = NULL;
+SELECT REGEXP_LIKE(CAST((SELECT @regexp_history_text) AS BINARY), 'a') AS string_history_scalar;
+➤ string_history_scalar[-7,1,0]  𝄀
+null
+PREPARE regexp_text_null_derived FROM 'SELECT REGEXP_LIKE(CAST(v AS BINARY), ''a'') AS string_history_derived FROM (SELECT @regexp_history_text v) s';
+EXECUTE regexp_text_null_derived;
+➤ string_history_derived[-7,1,0]  𝄀
+null
+DEALLOCATE PREPARE regexp_text_null_derived;
 PREPARE regexp_expression_cast_rebind FROM 'SELECT REGEXP_LIKE(CAST(CONCAT(@regexp_cast_variable, '''') AS BINARY), ''a'') AS concat_match, REGEXP_LIKE(CAST(LOWER(@regexp_cast_variable) AS BINARY), ''a'') AS lower_match, REGEXP_LIKE(CAST(v AS BINARY), ''a'') AS derived_match FROM (SELECT @regexp_cast_variable v) s';
 EXECUTE regexp_expression_cast_rebind;
 ➤ concat_match[-7,1,0]  ¦  lower_match[-7,1,0]  ¦  derived_match[-7,1,0]  𝄀
