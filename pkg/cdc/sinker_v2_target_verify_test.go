@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"fmt"
 	"regexp"
 	"testing"
 
@@ -36,15 +37,20 @@ func TestCDCTargetGuardSQLRetryClassification(t *testing.T) {
 		err       error
 		retryable bool
 	}{
+		{"success", nil, false},
 		{"bad connection", driver.ErrBadConn, true},
 		{"lost MySQL connection", &gomysql.MySQLError{Number: 2013}, true},
 		{"MO RC definition changed over SQL wire", &gomysql.MySQLError{Number: moerr.ErrTxnNeedRetryWithDefChanged}, true},
 		{"missing SELECT privilege", &gomysql.MySQLError{Number: 1142}, false},
 		{"cancelled", context.Canceled, false},
+		{"wrapped MO definition changed", fmt.Errorf("source guard: %w", moerr.NewTxnNeedRetryWithDefChangedNoCtx()), true},
+		{"unsupported with retry keyword", moerr.NewNotSupportedNoCtx("server UUID is unavailable"), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			classified := classifyCDCTargetSQLError(tc.err)
 			require.Equal(t, tc.retryable, IsRetryableConnectionError(classified))
+			require.ErrorIs(t, classified, tc.err)
+			require.Equal(t, tc.retryable, (&TableChangeStream{}).determineRetryable(classified))
 		})
 	}
 }
@@ -256,6 +262,7 @@ func TestCDCTargetIdentityAdmissionAndGuard(t *testing.T) {
 				require.NoError(t, err)
 				_, err = guardedCDCTargetIdentity(ctx, tx, CDCSinkType_MySQL, "db", "t")
 				require.ErrorContains(t, err, tc.want)
+				require.True(t, IsRetryableConnectionError(err))
 				require.NoError(t, tx.Rollback())
 				require.NoError(t, mock.ExpectationsWereMet())
 			})
@@ -548,4 +555,69 @@ func TestNormalizeCDCTargetColumnTypeFromMOAndMySQL(t *testing.T) {
 	require.False(t, cdcTargetColumnTypeMatches(plan.Type{Id: int32(types.T_int8)}, "BOOL(0)", CDCSinkType_MO, sql.NullInt64{}))
 	require.True(t, cdcTargetColumnTypeMatches(plan.Type{Id: int32(types.T_bool)}, "tinyint(1)", CDCSinkType_MySQL, sql.NullInt64{}))
 	require.False(t, cdcTargetColumnTypeMatches(plan.Type{Id: int32(types.T_bool)}, "tinyint(1)", CDCSinkType_MO, sql.NullInt64{}))
+}
+
+func TestCDCTargetIdentityRetryContract(t *testing.T) {
+	for _, point := range []string{"capability", "guard_metadata", "guard_lock_control"} {
+		for _, code := range []uint16{2013, 1205, 1142, 1227} {
+			t.Run(fmt.Sprintf("%s_%d", point, code), func(t *testing.T) {
+				ctx := context.Background()
+				db, mock, err := sqlmock.New()
+				require.NoError(t, err)
+				defer db.Close()
+				transient := &gomysql.MySQLError{Number: code, Message: "permission on relation unavailable_timeout"}
+				var got error
+				if point == "capability" {
+					conn, err := db.Conn(ctx)
+					require.NoError(t, err)
+					defer conn.Close()
+					mock.ExpectQuery(regexp.QuoteMeta("SELECT TABLE_ID FROM information_schema.INNODB_TABLES WHERE NAME = ?")).WithArgs("__mo_cdc_capability_probe__/__absent__").WillReturnError(transient)
+					got = checkMySQLTargetIdentityCapability(ctx, conn, "db", "t", false)
+				} else {
+					mock.ExpectBegin()
+					q := mock.ExpectQuery(regexp.QuoteMeta("SELECT 1 FROM `db`.`t` LIMIT 0"))
+					if point == "guard_lock_control" {
+						q.WillReturnError(transient)
+					} else {
+						q.WillReturnRows(sqlmock.NewRows([]string{"one"}))
+						mock.ExpectQuery(regexp.QuoteMeta("SELECT @@server_uuid, TABLE_ID FROM information_schema.INNODB_TABLES WHERE NAME = ?")).WithArgs("db/t").WillReturnError(transient)
+					}
+					mock.ExpectRollback()
+					tx, err := db.BeginTx(ctx, nil)
+					require.NoError(t, err)
+					_, got = guardedCDCTargetIdentity(ctx, tx, CDCSinkType_MySQL, "db", "t")
+					require.NoError(t, tx.Rollback())
+				}
+				require.Error(t, got)
+				require.NoError(t, mock.ExpectationsWereMet())
+				// Same retry contract as the actual admission consumer. A transient
+				// target failure must not become permanent watermark error metadata.
+				require.ErrorIs(t, got, transient)
+				require.Equal(t, code == 2013 || code == 1205, IsRetryableConnectionError(got), "retry classification must survive the query boundary")
+				require.Equal(t, code == 2013 || code == 1205, (&TableChangeStream{}).determineRetryable(got))
+			})
+		}
+	}
+}
+
+func TestCDCStreamSQLClassificationFallback(t *testing.T) {
+	for _, tc := range []struct {
+		code      uint16
+		message   string
+		retryable bool
+	}{
+		{1159, "Got timeout reading communication packets", true},
+		{1161, "Got timeout writing communication packets", true},
+		{moerr.ErrRPCTimeout, "rpc timeout", true},
+		{moerr.ErrServiceUnavailable, "service unavailable", true},
+		{1044, "permission on relation unavailable_timeout", false},
+		{1045, "permission on relation unavailable_timeout", false},
+		{1143, "permission on relation unavailable_timeout", false},
+		{moerr.ErrNotSupported, "unsupported relation unavailable_timeout", false},
+	} {
+		t.Run(fmt.Sprint(tc.code), func(t *testing.T) {
+			err := fmt.Errorf("target guard: %w", &gomysql.MySQLError{Number: tc.code, Message: tc.message})
+			require.Equal(t, tc.retryable, (&TableChangeStream{}).determineRetryable(err))
+		})
+	}
 }

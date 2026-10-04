@@ -36,8 +36,12 @@ var cdcTargetSQLRetryClassifier = retry.MultiClassifier{
 }
 
 func classifyCDCTargetSQLError(err error) error {
-	if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
-		moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+	if err == nil {
+		return nil
+	}
+	var moErr *moerr.Error
+	if errors.As(err, &moErr) && (moerr.IsMoErrCode(moErr, moerr.ErrTxnNeedRetry) ||
+		moerr.IsMoErrCode(moErr, moerr.ErrTxnNeedRetryWithDefChanged)) {
 		return newRetryableConnectionError(err)
 	}
 	var mysqlErr *gomysql.MySQLError
@@ -68,7 +72,7 @@ func checkMySQLTargetIdentityCapability(ctx context.Context, conn *sql.Conn, db,
 	rows, err := conn.QueryContext(ctx,
 		"SELECT TABLE_ID FROM information_schema.INNODB_TABLES WHERE NAME = ?", "__mo_cdc_capability_probe__/__absent__")
 	if err != nil {
-		return moerr.NewNotSupportedf(ctx, "CDC target InnoDB table identity is unavailable (PROCESS privilege required): %v", err)
+		return fmt.Errorf("CDC target InnoDB table identity is unavailable (PROCESS privilege required): %w", err)
 	}
 	defer func() {
 		if closeErr := rows.Close(); err == nil {
@@ -152,7 +156,7 @@ func guardedCDCTargetIdentity(ctx context.Context, tx *sql.Tx, sinkType, db, tab
 			"SELECT @@server_uuid, TABLE_ID FROM information_schema.INNODB_TABLES WHERE NAME = ?",
 			db+"/"+table)
 		if err != nil {
-			return "", moerr.NewNotSupportedf(ctx, "CDC target InnoDB table identity is unavailable (PROCESS privilege required): %v", err)
+			return "", fmt.Errorf("CDC target InnoDB table identity is unavailable (PROCESS privilege required): %w", err)
 		}
 		defer rows.Close()
 		var uuid string

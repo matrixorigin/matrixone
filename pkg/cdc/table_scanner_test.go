@@ -124,7 +124,7 @@ func TestTableScanner1(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 
-	bat := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId", "constraint"})
+	bat := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId", "constraint", "has_pk"})
 	bat.Vecs[0] = testutil.MakeUint64Vector([]uint64{1}, nil, proc.Mp())
 	bat.Vecs[1] = testutil.MakeVarcharVector([]string{"tblName"}, nil, proc.Mp())
 	bat.Vecs[2] = testutil.MakeUint64Vector([]uint64{1}, nil, proc.Mp())
@@ -132,6 +132,7 @@ func TestTableScanner1(t *testing.T) {
 	bat.Vecs[4] = testutil.MakeVarcharVector([]string{"createSql"}, nil, proc.Mp())
 	bat.Vecs[5] = testutil.MakeUint32Vector([]uint32{1}, nil, proc.Mp())
 	bat.Vecs[6] = testutil.MakeVarcharVector([]string{""}, nil, proc.Mp())
+	bat.Vecs[7] = testutil.MakeBoolVector([]bool{true}, nil, proc.Mp())
 	bat.SetRowCount(1)
 	res := executor.Result{
 		Mp:      proc.Mp(),
@@ -223,7 +224,7 @@ func TestAuditTableScannerSkipsForeignKeyTable(t *testing.T) {
   FOREIGN KEY (parent_id) REFERENCES parent(id)
 )`
 
-	bat := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId", "constraint"})
+	bat := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId", "constraint", "has_pk"})
 	bat.Vecs[0] = testutil.MakeUint64Vector([]uint64{1001}, nil, proc.Mp())
 	bat.Vecs[1] = testutil.MakeVarcharVector([]string{"child"}, nil, proc.Mp())
 	bat.Vecs[2] = testutil.MakeUint64Vector([]uint64{10}, nil, proc.Mp())
@@ -231,6 +232,7 @@ func TestAuditTableScannerSkipsForeignKeyTable(t *testing.T) {
 	bat.Vecs[4] = testutil.MakeVarcharVector([]string{createSQL}, nil, proc.Mp())
 	bat.Vecs[5] = testutil.MakeUint32Vector([]uint32{1}, nil, proc.Mp())
 	bat.Vecs[6] = testutil.MakeVarcharVector([]string{makeForeignKeyConstraintSQLValue(t)}, nil, proc.Mp())
+	bat.Vecs[7] = testutil.MakeBoolVector([]bool{true}, nil, proc.Mp())
 	bat.SetRowCount(1)
 	res := executor.Result{
 		Mp:      proc.Mp(),
@@ -279,7 +281,7 @@ func TestTableScannerDoesNotSkipForeignKeyTextLiteral(t *testing.T) {
 
 	createSQL := "CREATE TABLE child (note VARCHAR(32) DEFAULT 'foreign key')"
 
-	bat := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId", "constraint"})
+	bat := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId", "constraint", "has_pk"})
 	bat.Vecs[0] = testutil.MakeUint64Vector([]uint64{1001}, nil, proc.Mp())
 	bat.Vecs[1] = testutil.MakeVarcharVector([]string{"child"}, nil, proc.Mp())
 	bat.Vecs[2] = testutil.MakeUint64Vector([]uint64{10}, nil, proc.Mp())
@@ -287,6 +289,7 @@ func TestTableScannerDoesNotSkipForeignKeyTextLiteral(t *testing.T) {
 	bat.Vecs[4] = testutil.MakeVarcharVector([]string{createSQL}, nil, proc.Mp())
 	bat.Vecs[5] = testutil.MakeUint32Vector([]uint32{1}, nil, proc.Mp())
 	bat.Vecs[6] = testutil.MakeVarcharVector([]string{""}, nil, proc.Mp())
+	bat.Vecs[7] = testutil.MakeBoolVector([]bool{true}, nil, proc.Mp())
 	bat.SetRowCount(1)
 	res := executor.Result{
 		Mp:      proc.Mp(),
@@ -336,7 +339,7 @@ func TestTableScannerSkipsForeignKeyMetadataWithoutCreateSQLText(t *testing.T) {
 
 	createSQL := "CREATE TABLE child (id BIGINT PRIMARY KEY, parent_id BIGINT)"
 
-	bat := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId", "constraint"})
+	bat := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId", "constraint", "has_pk"})
 	bat.Vecs[0] = testutil.MakeUint64Vector([]uint64{1001}, nil, proc.Mp())
 	bat.Vecs[1] = testutil.MakeVarcharVector([]string{"child"}, nil, proc.Mp())
 	bat.Vecs[2] = testutil.MakeUint64Vector([]uint64{10}, nil, proc.Mp())
@@ -344,6 +347,7 @@ func TestTableScannerSkipsForeignKeyMetadataWithoutCreateSQLText(t *testing.T) {
 	bat.Vecs[4] = testutil.MakeVarcharVector([]string{createSQL}, nil, proc.Mp())
 	bat.Vecs[5] = testutil.MakeUint32Vector([]uint32{1}, nil, proc.Mp())
 	bat.Vecs[6] = testutil.MakeVarcharVector([]string{makeForeignKeyConstraintSQLValue(t)}, nil, proc.Mp())
+	bat.Vecs[7] = testutil.MakeBoolVector([]bool{true}, nil, proc.Mp())
 	bat.SetRowCount(1)
 	res := executor.Result{
 		Mp:      proc.Mp(),
@@ -390,7 +394,7 @@ func TestTableScannerConstraintDecodeErrorPreservesOldTableMap(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 
-	bat := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId", "constraint"})
+	bat := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId", "constraint", "has_pk"})
 	bat.Vecs[0] = testutil.MakeUint64Vector([]uint64{1001, 1002}, nil, proc.Mp())
 	bat.Vecs[1] = testutil.MakeVarcharVector([]string{"child", "broken"}, nil, proc.Mp())
 	bat.Vecs[2] = testutil.MakeUint64Vector([]uint64{10, 10}, nil, proc.Mp())
@@ -401,6 +405,7 @@ func TestTableScannerConstraintDecodeErrorPreservesOldTableMap(t *testing.T) {
 	}, nil, proc.Mp())
 	bat.Vecs[5] = testutil.MakeUint32Vector([]uint32{1, 1}, nil, proc.Mp())
 	bat.Vecs[6] = testutil.MakeVarcharVector([]string{"", string([]byte{byte(engine.ForeignKey)})}, nil, proc.Mp())
+	bat.Vecs[7] = testutil.MakeBoolVector([]bool{true, true}, nil, proc.Mp())
 	bat.SetRowCount(2)
 	res := executor.Result{
 		Mp:      proc.Mp(),
@@ -420,7 +425,6 @@ func TestTableScannerConstraintDecodeErrorPreservesOldTableMap(t *testing.T) {
 		SourceTblId:     9001,
 		SourceTblName:   "child",
 		SourceCreateSql: "CREATE TABLE child (old_id BIGINT PRIMARY KEY)",
-		IdChanged:       false,
 	}
 	td := &TableDetector{
 		Mp:                   map[uint32]TblMap{1: {GenDbTblKey("source_db", "child"): oldInfo}},
@@ -451,7 +455,7 @@ func TestTableScannerConstraintDecodeErrorPreservesOldTableMap(t *testing.T) {
 	assert.Equal(t, uint64(9), gotInfo.SourceDbId)
 	assert.Equal(t, uint64(9001), gotInfo.SourceTblId)
 	assert.Equal(t, "CREATE TABLE child (old_id BIGINT PRIMARY KEY)", gotInfo.SourceCreateSql)
-	assert.False(t, gotInfo.IdChanged)
+
 	assert.NotContains(t, td.Mp[1], GenDbTblKey("source_db", "broken"))
 }
 
@@ -637,135 +641,22 @@ func TestTableDetectorProcessCallbackUsesIndependentSnapshots(t *testing.T) {
 
 	var first, second bool
 	consume := func(tables map[uint32]TblMap) error {
-		tables[1]["db.tbl"].IdChanged = false
+		tables[1]["db.tbl"].SourceTblId = 8
 		first = true
 		return nil
 	}
 	observe := func(tables map[uint32]TblMap) error {
-		second = tables[1]["db.tbl"].IdChanged
+		second = tables[1]["db.tbl"].SourceTblId == 7
 		return nil
 	}
 	require.True(t, td.RegisterIfAbsent("first", 1, []string{"db"}, []string{"tbl"}, consume))
 	require.True(t, td.RegisterIfAbsent("second", 1, []string{"db"}, []string{"tbl"}, observe))
 
 	td.processCallback(context.Background(), map[uint32]TblMap{
-		1: {"db.tbl": {SourceDbName: "db", SourceTblName: "tbl", IdChanged: true}},
+		1: {"db.tbl": {SourceDbName: "db", SourceTblName: "tbl", SourceTblId: 7}},
 	})
 	require.True(t, first)
-	require.True(t, second, "one subscriber must not consume another subscriber's generation marker")
-}
-
-func TestTableDetectorProcessCallbackRetainsMarkerUntilAllSubscribersSucceed(t *testing.T) {
-	td := &TableDetector{
-		Mp:                   make(map[uint32]TblMap),
-		Callbacks:            make(map[string]TableCallback),
-		CallBackAccountId:    make(map[string]uint32),
-		SubscribedAccountIds: make(map[uint32][]string),
-		CallBackDbName:       make(map[string][]string),
-		SubscribedDbNames:    make(map[string][]string),
-		CallBackTableName:    make(map[string][]string),
-		SubscribedTableNames: make(map[string][]string),
-		cleanupPeriod:        time.Second,
-		cleanupWarn:          time.Second,
-		nowFn:                time.Now,
-	}
-	defer td.Close()
-
-	tables := map[uint32]TblMap{
-		1: {"db.tbl": {SourceTblId: 7, IdChanged: true}},
-	}
-	td.Mp = tables
-	td.lastMp = tables
-
-	var observed []bool
-	var consumeCalls atomic.Int32
-	retry := true
-	consume := func(snapshot map[uint32]TblMap) error {
-		if consumeCalls.Add(1) == 1 {
-			td.ClearTableIdChanged(1, "db.tbl", 7)
-		}
-		return nil
-	}
-	flaky := func(snapshot map[uint32]TblMap) error {
-		observed = append(observed, snapshot[1]["db.tbl"].IdChanged)
-		if retry {
-			retry = false
-			return moerr.NewInternalErrorNoCtx("transient subscriber failure")
-		}
-		return nil
-	}
-	require.True(t, td.RegisterIfAbsent("consume", 1, []string{"db"}, []string{"tbl"}, consume))
-	require.True(t, td.RegisterIfAbsent("flaky", 1, []string{"db"}, []string{"tbl"}, flaky))
-
-	td.processCallback(context.Background(), tables)
-	require.True(t, tables[1]["db.tbl"].IdChanged, "failed fan-out must retain the marker")
-	td.processCallback(context.Background(), tables)
-	require.Equal(t, []bool{true, true}, observed)
-	require.False(t, tables[1]["db.tbl"].IdChanged, "marker clears after all subscribers succeed")
-}
-
-func TestTableDetectorProcessCallbackPrunesObsoleteMarkerAcknowledgements(t *testing.T) {
-	td := &TableDetector{
-		Mp:                   make(map[uint32]TblMap),
-		Callbacks:            make(map[string]TableCallback),
-		CallBackAccountId:    make(map[string]uint32),
-		SubscribedAccountIds: make(map[uint32][]string),
-		CallBackDbName:       make(map[string][]string),
-		SubscribedDbNames:    make(map[string][]string),
-		CallBackTableName:    make(map[string][]string),
-		SubscribedTableNames: make(map[string][]string),
-		cleanupPeriod:        time.Second,
-		cleanupWarn:          time.Second,
-		nowFn:                time.Now,
-	}
-	defer td.Close()
-
-	consume := func(snapshot map[uint32]TblMap) error {
-		info := snapshot[1]["db.tbl"]
-		td.ClearTableIdChanged(1, "db.tbl", info.SourceTblId)
-		return nil
-	}
-	flaky := func(map[uint32]TblMap) error {
-		return moerr.NewInternalErrorNoCtx("persistent subscriber failure")
-	}
-	require.True(t, td.RegisterIfAbsent("consume", 1, []string{"db"}, []string{"tbl"}, consume))
-	require.True(t, td.RegisterIfAbsent("flaky", 1, []string{"db"}, []string{"tbl"}, flaky))
-
-	for sourceTableID := uint64(1); sourceTableID <= 1000; sourceTableID++ {
-		tables := map[uint32]TblMap{
-			1: {"db.tbl": {SourceTblId: sourceTableID, IdChanged: true}},
-		}
-		td.mu.Lock()
-		td.Mp = tables
-		td.lastMp = tables
-		td.mu.Unlock()
-		td.processCallback(context.Background(), tables)
-	}
-
-	td.mu.Lock()
-	defer td.mu.Unlock()
-	require.LessOrEqual(t, len(td.markerAcks), 1, "obsolete generation acknowledgements must be pruned")
-}
-
-func TestReconcileTableSnapshotMarkersDoesNotResurrectConsumedMarker(t *testing.T) {
-	current := map[uint32]TblMap{
-		1: {"db.tbl": {SourceTblId: 7, IdChanged: false}},
-	}
-	next := map[uint32]TblMap{
-		1: {"db.tbl": {SourceTblId: 7, IdChanged: true}},
-	}
-	reconcileTableSnapshotMarkers(current, next)
-	require.False(t, next[1]["db.tbl"].IdChanged)
-
-	current[1]["db.tbl"].IdChanged = true
-	next[1]["db.tbl"].IdChanged = false
-	reconcileTableSnapshotMarkers(current, next)
-	require.True(t, next[1]["db.tbl"].IdChanged)
-
-	next[1]["db.tbl"].SourceTblId = 8
-	next[1]["db.tbl"].IdChanged = true
-	reconcileTableSnapshotMarkers(current, next)
-	require.True(t, next[1]["db.tbl"].IdChanged)
+	require.True(t, second, "one subscriber must not mutate another subscriber's source identity")
 }
 
 func TestTableDetectorRegisterDuringCallback(t *testing.T) {
@@ -1256,7 +1147,6 @@ func TestScanAndProcess(t *testing.T) {
 				SourceTblId:     1001,
 				SourceTblName:   "tbl1",
 				SourceCreateSql: "create table tbl1 (a int)",
-				IdChanged:       false,
 			},
 		},
 	}
@@ -1312,7 +1202,6 @@ func TestProcessCallBack(t *testing.T) {
 				SourceTblId:     1001,
 				SourceTblName:   "tbl1",
 				SourceCreateSql: "create table tbl1 (a int)",
-				IdChanged:       false,
 			},
 		},
 	}
@@ -1460,8 +1349,7 @@ func TestTableScanner_UpdateTableInfo(t *testing.T) {
 	tblInfo, ok := accountMap["db1.tbl1"]
 	assert.True(t, ok)
 	assert.Equal(t, uint64(1001), tblInfo.SourceTblId)
-	assert.False(t, tblInfo.IdChanged)
-	assert.True(t, tblInfo.PrimaryKeyChecked)
+
 	assert.True(t, tblInfo.HasUserPrimaryKey)
 
 	err = td.scanTable()
@@ -1471,8 +1359,7 @@ func TestTableScanner_UpdateTableInfo(t *testing.T) {
 	accountMap = td.Mp[1]
 	tblInfo = accountMap["db1.tbl1"]
 	assert.Equal(t, uint64(1002), tblInfo.SourceTblId)
-	assert.True(t, tblInfo.IdChanged)
-	assert.True(t, tblInfo.PrimaryKeyChecked)
+
 	assert.False(t, tblInfo.HasUserPrimaryKey)
 }
 
@@ -1484,7 +1371,6 @@ func TestTableScanner_PrintActiveRunners(t *testing.T) {
 		SourceTblId:     1001,
 		SourceTblName:   "tbl1",
 		SourceCreateSql: "create table tbl1 (a int)",
-		IdChanged:       false,
 	}
 	cdcStateManager.AddActiveRunner(tableInfo)
 	cdcStateManager.PrintActiveRunners(0)

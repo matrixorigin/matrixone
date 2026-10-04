@@ -26,6 +26,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -40,6 +41,60 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
+
+type cdcCandidateRow struct {
+	database, table string
+	constraint      []byte
+	hasPK           bool
+}
+
+func cdcCandidateTestResult(t *testing.T, mp *mpool.MPool, rows ...cdcCandidateRow) executor.Result {
+	t.Helper()
+	result := executor.NewMemResult([]types.Type{
+		types.T_uint64.ToType(), types.T_varchar.ToType(), types.T_uint64.ToType(),
+		types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_uint32.ToType(), types.T_blob.ToType(), types.T_bool.ToType(),
+	}, mp)
+	result.NewBatchWithRowCount(len(rows))
+	ids, dbIDs, accounts := make([]uint64, len(rows)), make([]uint64, len(rows)), make([]uint32, len(rows))
+	tables, databases, ddl := make([]string, len(rows)), make([]string, len(rows)), make([]string, len(rows))
+	constraints, keys := make([][]byte, len(rows)), make([]bool, len(rows))
+	for i, row := range rows {
+		ids[i], dbIDs[i], accounts[i] = uint64(i+1), 1, 7
+		tables[i], databases[i], constraints[i], keys[i] = row.table, row.database, row.constraint, row.hasPK
+	}
+	require.NoError(t, executor.AppendFixedRows(result, 0, ids))
+	require.NoError(t, executor.AppendStringRows(result, 1, tables))
+	require.NoError(t, executor.AppendFixedRows(result, 2, dbIDs))
+	require.NoError(t, executor.AppendStringRows(result, 3, databases))
+	require.NoError(t, executor.AppendStringRows(result, 4, ddl))
+	require.NoError(t, executor.AppendFixedRows(result, 5, accounts))
+	require.NoError(t, executor.AppendBytesRows(result, 6, constraints))
+	require.NoError(t, executor.AppendFixedRows(result, 7, keys))
+	return result.GetResult()
+}
+
+func cdcPitrTestResult(t *testing.T, mp *mpool.MPool) executor.Result {
+	t.Helper()
+	result := executor.NewMemResult([]types.Type{types.T_uint8.ToType(), types.T_varchar.ToType()}, mp)
+	result.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendFixedRows(result, 0, []uint8{24}))
+	require.NoError(t, executor.AppendStringRows(result, 1, []string{"h"}))
+	return result.GetResult()
+}
+
+func setCDCOptionTestExecutor(t *testing.T, service string, exec *recordingInternalSQLExecutor) {
+	t.Helper()
+	rt := moruntime.ServiceRuntime(service)
+	previous, hadPrevious := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, exec)
+	t.Cleanup(func() {
+		if hadPrevious {
+			rt.SetGlobalVariables(moruntime.InternalSQLExecutor, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, exec)
+		}
+	})
+}
 
 func TestValidateCDCTargetIdentityCatalog(t *testing.T) {
 	const query = "SELECT pending_source_table_id, target_identity FROM mo_catalog.mo_cdc_watermark LIMIT 0"
@@ -93,37 +148,11 @@ func TestCheckPitrGranularityWildcardRejectsNoPrimaryKey(t *testing.T) {
 
 	exec := &recordingInternalSQLExecutor{mocker: func(sql string) (executor.Result, error) {
 		if strings.Contains(sql, catalog.MO_TABLES) {
-			result := executor.NewMemResult([]types.Type{
-				types.T_uint64.ToType(), types.T_varchar.ToType(), types.T_uint64.ToType(),
-				types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_uint32.ToType(), types.T_blob.ToType(), types.T_bool.ToType(),
-			}, proc.Mp())
-			result.NewBatchWithRowCount(1)
-			require.NoError(t, executor.AppendFixedRows(result, 0, []uint64{1}))
-			require.NoError(t, executor.AppendStringRows(result, 1, []string{"without_pk"}))
-			require.NoError(t, executor.AppendFixedRows(result, 2, []uint64{1}))
-			require.NoError(t, executor.AppendStringRows(result, 3, []string{"db"}))
-			require.NoError(t, executor.AppendStringRows(result, 4, []string{""}))
-			require.NoError(t, executor.AppendFixedRows(result, 5, []uint32{7}))
-			require.NoError(t, executor.AppendBytesRows(result, 6, [][]byte{{}}))
-			require.NoError(t, executor.AppendFixedRows(result, 7, []bool{false}))
-			return result.GetResult(), nil
+			return cdcCandidateTestResult(t, proc.Mp(), cdcCandidateRow{"db", "without_pk", nil, false}), nil
 		}
-		result := executor.NewMemResult([]types.Type{types.T_uint8.ToType(), types.T_varchar.ToType()}, proc.Mp())
-		result.NewBatchWithRowCount(1)
-		require.NoError(t, executor.AppendFixedRows(result, 0, []uint8{24}))
-		require.NoError(t, executor.AppendStringRows(result, 1, []string{"h"}))
-		return result.GetResult(), nil
+		return cdcPitrTestResult(t, proc.Mp()), nil
 	}}
-	rt := moruntime.ServiceRuntime(proc.GetService())
-	previous, hadPrevious := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
-	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, exec)
-	t.Cleanup(func() {
-		if hadPrevious {
-			rt.SetGlobalVariables(moruntime.InternalSQLExecutor, previous)
-		} else {
-			rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, exec)
-		}
-	})
+	setCDCOptionTestExecutor(t, proc.GetService(), exec)
 
 	c := NewCompile("", "", "create cdc", "", "", nil, proc, nil, false, nil, time.Now())
 	defer c.Release()
@@ -147,37 +176,11 @@ func TestCheckPitrGranularityMalformedUTF8FiltersCatalogSupersetLocally(t *testi
 
 	exec := &recordingInternalSQLExecutor{mocker: func(sql string) (executor.Result, error) {
 		if strings.Contains(sql, catalog.MO_TABLES) {
-			result := executor.NewMemResult([]types.Type{
-				types.T_uint64.ToType(), types.T_varchar.ToType(), types.T_uint64.ToType(),
-				types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_uint32.ToType(), types.T_blob.ToType(), types.T_bool.ToType(),
-			}, proc.Mp())
-			result.NewBatchWithRowCount(2)
-			require.NoError(t, executor.AppendFixedRows(result, 0, []uint64{1, 2}))
-			require.NoError(t, executor.AppendStringRows(result, 1, []string{"orders", "orders"}))
-			require.NoError(t, executor.AppendFixedRows(result, 2, []uint64{1, 1}))
-			require.NoError(t, executor.AppendStringRows(result, 3, []string{"unrelated", string([]byte{'1', 0xe9, 'a'})}))
-			require.NoError(t, executor.AppendStringRows(result, 4, []string{"", ""}))
-			require.NoError(t, executor.AppendFixedRows(result, 5, []uint32{7, 7}))
-			require.NoError(t, executor.AppendBytesRows(result, 6, [][]byte{{}, {}}))
-			require.NoError(t, executor.AppendFixedRows(result, 7, []bool{false, true}))
-			return result.GetResult(), nil
+			return cdcCandidateTestResult(t, proc.Mp(), cdcCandidateRow{"unrelated", "orders", nil, false}, cdcCandidateRow{string([]byte{'1', 0xe9, 'a'}), "orders", nil, true}), nil
 		}
-		result := executor.NewMemResult([]types.Type{types.T_uint8.ToType(), types.T_varchar.ToType()}, proc.Mp())
-		result.NewBatchWithRowCount(1)
-		require.NoError(t, executor.AppendFixedRows(result, 0, []uint8{24}))
-		require.NoError(t, executor.AppendStringRows(result, 1, []string{"h"}))
-		return result.GetResult(), nil
+		return cdcPitrTestResult(t, proc.Mp()), nil
 	}}
-	rt := moruntime.ServiceRuntime(proc.GetService())
-	previous, hadPrevious := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
-	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, exec)
-	t.Cleanup(func() {
-		if hadPrevious {
-			rt.SetGlobalVariables(moruntime.InternalSQLExecutor, previous)
-		} else {
-			rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, exec)
-		}
-	})
+	setCDCOptionTestExecutor(t, proc.GetService(), exec)
 
 	c := NewCompile("", "", "create cdc", "", "", nil, proc, nil, false, nil, time.Now())
 	defer c.Release()
@@ -197,24 +200,10 @@ func TestCheckPitrGranularityWildcardExcludeAndPrimaryKey(t *testing.T) {
 	proc.ReplaceTopCtx(ctx)
 
 	candidateResult := func(table string) executor.Result {
-		result := executor.NewMemResult([]types.Type{types.T_uint64.ToType(), types.T_varchar.ToType(), types.T_uint64.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_uint32.ToType(), types.T_blob.ToType(), types.T_bool.ToType()}, proc.Mp())
-		result.NewBatchWithRowCount(1)
-		require.NoError(t, executor.AppendFixedRows(result, 0, []uint64{1}))
-		require.NoError(t, executor.AppendStringRows(result, 1, []string{table}))
-		require.NoError(t, executor.AppendFixedRows(result, 2, []uint64{1}))
-		require.NoError(t, executor.AppendStringRows(result, 3, []string{"db"}))
-		require.NoError(t, executor.AppendStringRows(result, 4, []string{""}))
-		require.NoError(t, executor.AppendFixedRows(result, 5, []uint32{7}))
-		require.NoError(t, executor.AppendBytesRows(result, 6, [][]byte{{}}))
-		require.NoError(t, executor.AppendFixedRows(result, 7, []bool{table == "with_pk"}))
-		return result.GetResult()
+		return cdcCandidateTestResult(t, proc.Mp(), cdcCandidateRow{"db", table, nil, table == "with_pk"})
 	}
 	validPitrResult := func() executor.Result {
-		result := executor.NewMemResult([]types.Type{types.T_uint8.ToType(), types.T_varchar.ToType()}, proc.Mp())
-		result.NewBatchWithRowCount(1)
-		require.NoError(t, executor.AppendFixedRows(result, 0, []uint8{24}))
-		require.NoError(t, executor.AppendStringRows(result, 1, []string{"h"}))
-		return result.GetResult()
+		return cdcPitrTestResult(t, proc.Mp())
 	}
 
 	for _, tc := range []struct{ name, table, exclude string }{
@@ -228,16 +217,7 @@ func TestCheckPitrGranularityWildcardExcludeAndPrimaryKey(t *testing.T) {
 				}
 				return validPitrResult(), nil
 			}}
-			rt := moruntime.ServiceRuntime(proc.GetService())
-			previous, hadPrevious := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
-			rt.SetGlobalVariables(moruntime.InternalSQLExecutor, exec)
-			t.Cleanup(func() {
-				if hadPrevious {
-					rt.SetGlobalVariables(moruntime.InternalSQLExecutor, previous)
-				} else {
-					rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, exec)
-				}
-			})
+			setCDCOptionTestExecutor(t, proc.GetService(), exec)
 			c := NewCompile("", "", "create cdc", "", "", nil, proc, nil, false, nil, time.Now())
 			defer c.Release()
 			pts := &cdc.PatternTuples{Pts: []*cdc.PatternTuple{{Source: cdc.PatternTable{Database: "db", Table: cdc.CDCPitrGranularity_All}}}}
@@ -260,34 +240,11 @@ func TestCheckPitrGranularityConcreteForeignKeyIsSkipped(t *testing.T) {
 	require.NoError(t, err)
 	exec := &recordingInternalSQLExecutor{mocker: func(sql string) (executor.Result, error) {
 		if !strings.Contains(sql, catalog.MO_TABLES) {
-			result := executor.NewMemResult([]types.Type{types.T_uint8.ToType(), types.T_varchar.ToType()}, proc.Mp())
-			result.NewBatchWithRowCount(1)
-			require.NoError(t, executor.AppendFixedRows(result, 0, []uint8{24}))
-			require.NoError(t, executor.AppendStringRows(result, 1, []string{"h"}))
-			return result.GetResult(), nil
+			return cdcPitrTestResult(t, proc.Mp()), nil
 		}
-		result := executor.NewMemResult([]types.Type{types.T_uint64.ToType(), types.T_varchar.ToType(), types.T_uint64.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_uint32.ToType(), types.T_blob.ToType(), types.T_bool.ToType()}, proc.Mp())
-		result.NewBatchWithRowCount(1)
-		require.NoError(t, executor.AppendFixedRows(result, 0, []uint64{1}))
-		require.NoError(t, executor.AppendStringRows(result, 1, []string{"child"}))
-		require.NoError(t, executor.AppendFixedRows(result, 2, []uint64{1}))
-		require.NoError(t, executor.AppendStringRows(result, 3, []string{"db"}))
-		require.NoError(t, executor.AppendStringRows(result, 4, []string{""}))
-		require.NoError(t, executor.AppendFixedRows(result, 5, []uint32{7}))
-		require.NoError(t, executor.AppendBytesRows(result, 6, [][]byte{constraint}))
-		require.NoError(t, executor.AppendFixedRows(result, 7, []bool{false}))
-		return result.GetResult(), nil
+		return cdcCandidateTestResult(t, proc.Mp(), cdcCandidateRow{"db", "child", constraint, false}), nil
 	}}
-	rt := moruntime.ServiceRuntime(proc.GetService())
-	previous, hadPrevious := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
-	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, exec)
-	t.Cleanup(func() {
-		if hadPrevious {
-			rt.SetGlobalVariables(moruntime.InternalSQLExecutor, previous)
-		} else {
-			rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, exec)
-		}
-	})
+	setCDCOptionTestExecutor(t, proc.GetService(), exec)
 	c := NewCompile("", "", "create cdc", "", "", nil, proc, nil, false, nil, time.Now())
 	defer c.Release()
 	pts := &cdc.PatternTuples{Pts: []*cdc.PatternTuple{{Source: cdc.PatternTable{Database: "db", Table: "child"}}}}
@@ -302,27 +259,10 @@ func TestCheckPitrGranularityConcretePrimaryKeyBranches(t *testing.T) {
 	proc.ReplaceTopCtx(ctx)
 
 	candidateResult := func(dbName, tableName string, hasPK bool) executor.Result {
-		result := executor.NewMemResult([]types.Type{
-			types.T_uint64.ToType(), types.T_varchar.ToType(), types.T_uint64.ToType(),
-			types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_uint32.ToType(), types.T_blob.ToType(), types.T_bool.ToType(),
-		}, proc.Mp())
-		result.NewBatchWithRowCount(1)
-		require.NoError(t, executor.AppendFixedRows(result, 0, []uint64{1}))
-		require.NoError(t, executor.AppendStringRows(result, 1, []string{tableName}))
-		require.NoError(t, executor.AppendFixedRows(result, 2, []uint64{1}))
-		require.NoError(t, executor.AppendStringRows(result, 3, []string{dbName}))
-		require.NoError(t, executor.AppendStringRows(result, 4, []string{""}))
-		require.NoError(t, executor.AppendFixedRows(result, 5, []uint32{7}))
-		require.NoError(t, executor.AppendBytesRows(result, 6, [][]byte{{}}))
-		require.NoError(t, executor.AppendFixedRows(result, 7, []bool{hasPK}))
-		return result.GetResult()
+		return cdcCandidateTestResult(t, proc.Mp(), cdcCandidateRow{dbName, tableName, nil, hasPK})
 	}
 	validPitrResult := func() executor.Result {
-		result := executor.NewMemResult([]types.Type{types.T_uint8.ToType(), types.T_varchar.ToType()}, proc.Mp())
-		result.NewBatchWithRowCount(1)
-		require.NoError(t, executor.AppendFixedRows(result, 0, []uint8{24}))
-		require.NoError(t, executor.AppendStringRows(result, 1, []string{"h"}))
-		return result.GetResult()
+		return cdcPitrTestResult(t, proc.Mp())
 	}
 
 	for _, tc := range []struct {
@@ -340,16 +280,7 @@ func TestCheckPitrGranularityConcretePrimaryKeyBranches(t *testing.T) {
 				}
 				return validPitrResult(), nil
 			}}
-			rt := moruntime.ServiceRuntime(proc.GetService())
-			previous, hadPrevious := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
-			rt.SetGlobalVariables(moruntime.InternalSQLExecutor, exec)
-			t.Cleanup(func() {
-				if hadPrevious {
-					rt.SetGlobalVariables(moruntime.InternalSQLExecutor, previous)
-				} else {
-					rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, exec)
-				}
-			})
+			setCDCOptionTestExecutor(t, proc.GetService(), exec)
 			c := NewCompile("", "", "create cdc", "", "", nil, proc, nil, false, nil, time.Now())
 			defer c.Release()
 			pts := &cdc.PatternTuples{Pts: []*cdc.PatternTuple{{Source: cdc.PatternTable{Database: "db", Table: "table"}}}}
@@ -371,16 +302,7 @@ func TestCheckPitrGranularityConcretePrimaryKeyBranches(t *testing.T) {
 			}
 			return validPitrResult(), nil
 		}}
-		rt := moruntime.ServiceRuntime(proc.GetService())
-		previous, hadPrevious := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
-		rt.SetGlobalVariables(moruntime.InternalSQLExecutor, exec)
-		t.Cleanup(func() {
-			if hadPrevious {
-				rt.SetGlobalVariables(moruntime.InternalSQLExecutor, previous)
-			} else {
-				rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, exec)
-			}
-		})
+		setCDCOptionTestExecutor(t, proc.GetService(), exec)
 		c := NewCompile("", "", "create cdc", "", "", nil, proc, nil, false, nil, time.Now())
 		defer c.Release()
 		pts := &cdc.PatternTuples{
@@ -397,16 +319,7 @@ func TestCheckPitrGranularityConcretePrimaryKeyBranches(t *testing.T) {
 			}
 			return validPitrResult(), nil
 		}}
-		rt := moruntime.ServiceRuntime(proc.GetService())
-		previous, hadPrevious := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
-		rt.SetGlobalVariables(moruntime.InternalSQLExecutor, exec)
-		t.Cleanup(func() {
-			if hadPrevious {
-				rt.SetGlobalVariables(moruntime.InternalSQLExecutor, previous)
-			} else {
-				rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, exec)
-			}
-		})
+		setCDCOptionTestExecutor(t, proc.GetService(), exec)
 		c := NewCompile("", "", "create cdc", "", "", nil, proc, nil, false, nil, time.Now())
 		defer c.Release()
 		pts := &cdc.PatternTuples{Pts: []*cdc.PatternTuple{{Source: cdc.PatternTable{Database: "db", Table: "table"}}}}

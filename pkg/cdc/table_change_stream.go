@@ -23,6 +23,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	gomysql "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -1133,6 +1134,24 @@ func (s *TableChangeStream) determineRetryable(err error) bool {
 
 	// Control signals (pause/cancel) are not retryable
 	if IsPauseOrCancelError(errMsg) {
+		return false
+	}
+
+	// Known permission/unsupported errors must not become retryable because
+	// identifiers or diagnostics contain retry keywords. A negative result
+	// from the transient classifier means unknown, not necessarily permanent.
+	var mysqlErr *gomysql.MySQLError
+	if errors.As(err, &mysqlErr) {
+		switch mysqlErr.Number {
+		case 1044, 1045, 1142, 1143, 1227, moerr.ErrNotSupported:
+			return false
+		}
+		if IsRetryableConnectionError(classifyCDCTargetSQLError(err)) {
+			return true
+		}
+	}
+	var moErr *moerr.Error
+	if errors.As(err, &moErr) && moerr.IsMoErrCode(moErr, moerr.ErrNotSupported) {
 		return false
 	}
 

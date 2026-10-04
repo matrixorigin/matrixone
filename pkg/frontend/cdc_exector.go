@@ -269,15 +269,13 @@ type CDCTaskExecutor struct {
 	mp         *mpool.MPool
 	packerPool *fileservice.Pool[*types.Packer]
 
-	sinkUri               cdc.UriInfo
-	tables                cdc.PatternTuples
-	exclude               *regexp.Regexp
-	startTs, endTs        types.TS
-	stableInitialSnapshot bool
-	generationAware       bool
-	explicitStart         bool
-	noFull                bool
-	additionalConfig      map[string]interface{}
+	sinkUri          cdc.UriInfo
+	tables           cdc.PatternTuples
+	exclude          *regexp.Regexp
+	startTs, endTs   types.TS
+	explicitStart    bool
+	noFull           bool
+	additionalConfig map[string]interface{}
 	// initialSnapshotLimiter bounds retained initial-snapshot batches across all
 	// CDC tasks in this CN while allowing tables to make progress independently.
 	initialSnapshotLimiter *cdc.InitialSnapshotLimiter
@@ -760,7 +758,6 @@ type cdcGenerationAdmission struct {
 	recovery           bool
 	recoveryStart      types.TS
 	targetReady        bool
-	resetTarget        bool
 	complete           bool
 	completeAfterCheck bool
 	deferred           bool
@@ -776,7 +773,7 @@ type cdcHistoricalCompletion struct {
 }
 
 // prepareGenerationAdmission classifies durable per-table state after claiming
-// the watermark owner. The detector's IdChanged bit is only a wake-up hint.
+// the watermark owner. The detector only publishes source metadata.
 func (exec *CDCTaskExecutor) prepareGenerationAdmission(
 	ctx context.Context,
 	key *cdc.WatermarkKey,
@@ -848,10 +845,9 @@ func (exec *CDCTaskExecutor) prepareGenerationAdmission(
 	}
 
 	state.targetReady = false
-	state.resetTarget = generation > 0
 	state.admissionWatermark = watermark
 	currentSnapshot := types.TimestampToTS(txnOp.SnapshotTS())
-	if state.resetTarget {
+	if generation > 0 {
 		if !exec.endTs.IsEmpty() && currentSnapshot.GT(&exec.endTs) {
 			visible, visibilityErr := exec.sourceGenerationVisibleAt(ctx, sourceTableID, exec.endTs)
 			if visibilityErr != nil {
@@ -3039,7 +3035,7 @@ func (exec *CDCTaskExecutor) handleNewTablesForGeneration(
 		// them. A new task is rejected at admission; an active wildcard task
 		// must stop and fail rather than silently losing a table after its key is
 		// dropped. Check this before the already-running fast path.
-		if newTableInfo.PrimaryKeyChecked && !newTableInfo.HasUserPrimaryKey {
+		if !newTableInfo.HasUserPrimaryKey {
 			if val, ok := exec.runningReaders.Load(key); ok {
 				if reader, ok := val.(cdc.ChangeReader); ok {
 					exec.stopRemovedReader(key, key, reader)
@@ -3112,14 +3108,9 @@ func (exec *CDCTaskExecutor) handleNewTablesForGeneration(
 			zap.String("source-db", newTableInfo.SourceDbName),
 			zap.String("source-table", newTableInfo.SourceTblName),
 		)
-		var pipelineOwnerFence *cdc.OwnerFence
-		if exec.stableInitialSnapshot {
-			// Capture one immutable identity for both pipeline effects and any
-			// diagnostic produced while constructing that pipeline. Re-reading the
-			// current fence after a failure could lend a replacement generation's
-			// identity to obsolete work.
-			pipelineOwnerFence = exec.currentDaemonClaimFence()
-		}
+		// Capture one immutable owner for pipeline effects and failure reporting.
+		// Obsolete work must not borrow a replacement generation's authority.
+		pipelineOwnerFence := exec.currentDaemonClaimFence()
 		if err = exec.addExecPipelineForTable(
 			ctx, newTableInfo, txnOp, pipelineOwnerFence, sourceKeys); err != nil {
 			logutil.Error(
@@ -3146,7 +3137,7 @@ func (exec *CDCTaskExecutor) handleNewTablesForGeneration(
 			// fall back to the legacy upsert and escape generation ownership. If the
 			// fence itself is missing, leave reporting to the task-level startup error.
 			if exec.watermarkUpdater != nil &&
-				(!exec.stableInitialSnapshot || pipelineOwnerFence != nil) {
+				pipelineOwnerFence != nil {
 				watermarkKey := cdc.WatermarkKey{
 					AccountId: uint64(exec.spec.Accounts[0].GetId()),
 					TaskId:    exec.spec.TaskId,
@@ -3175,13 +3166,6 @@ func (exec *CDCTaskExecutor) handleNewTablesForGeneration(
 			continue
 		}
 
-		// IdChanged is a one-shot marker owned by the detector. Clear it by
-		// replacing the published descriptor under the detector lock; never write
-		// through the callback snapshot while a scanner can clone it.
-		if detector := cdc.GetTableDetector(exec.cnUUID); detector != nil {
-			detector.ClearTableIdChanged(
-				uint32(exec.spec.Accounts[0].GetId()), key, newTableInfo.SourceTblId)
-		}
 		successCount++
 		logutil.Info(
 			"cdc.frontend.task.add_exec_pipeline_success",
@@ -3520,12 +3504,6 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 	// ordering without changing production scheduling.
 	runCDCTestAdmissionHook()
 
-	// for ut
-	if objectio.CDCAddExecConsumeTruncateInjected() {
-		info.IdChanged = false
-		return nil
-	}
-
 	if objectio.CDCAddExecErrInjected() {
 		return moerr.NewInternalErrorNoCtx("CDC_AddExecPipelineForTable_ERR")
 	}
@@ -3542,16 +3520,6 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 	if sourceKeys == nil {
 		sourceKeys = &cdcSourceKeyIndex{}
 	}
-	if !exec.generationAware {
-		_, legacyGeneration, found, readErr := exec.watermarkUpdater.GetWatermarkProgressIfExists(ctx, &watermarkKey)
-		if readErr != nil {
-			return readErr
-		}
-		if !found || legacyGeneration == 0 || !exec.stableInitialSnapshot {
-			return exec.failTaskForPermanentTableError(ctx, info,
-				"legacy CDC target generation is unknown; verify or rebuild the target before migration")
-		}
-	}
 	if exec.noFull && watermark.IsEmpty() {
 		// A missing durable start is malformed; a later snapshot is not a
 		// valid replacement for the task's admission boundary.
@@ -3560,7 +3528,7 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 	if ownerFence == nil {
 		return moerr.NewInternalErrorNoCtx("CDC executor has no daemon claim fence")
 	}
-	if !exec.endTs.IsEmpty() && exec.generationAware {
+	if !exec.endTs.IsEmpty() {
 		if cached, ok := exec.completedHistoricalTargets.Load(watermarkKey); ok {
 			completion := cached.(cdcHistoricalCompletion)
 			if completion.sourceID == info.SourceTblId &&
@@ -3616,7 +3584,6 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 	if admission.complete || admission.deferred {
 		return nil
 	}
-	info.IdChanged = admission.resetTarget
 
 	streamStartTs := exec.startTs
 
@@ -3645,17 +3612,12 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 		info.SetTargetIdentityAdmission(true, "", admission.targetIdentity, nil)
 	} else {
 		info.SetTargetIdentityAdmission(false, admission.preIdentity, "", func(ackCtx context.Context, targetIdentity string) error {
-			guardErr := exec.withCDCSourceGenerationGuard(ackCtx, uint32(watermarkKey.AccountId),
+			return exec.withCDCSourceGenerationGuard(ackCtx, uint32(watermarkKey.AccountId),
 				info.SourceDbName, info.SourceTblName, info.SourceTblId, func() error {
 					return exec.watermarkUpdater.AcknowledgeTargetIdentity(
 						ackCtx, &watermarkKey, ownerFence, info.SourceTblId,
 						admission.preIdentity, targetIdentity, admission.admissionWatermark)
 				})
-			if moerr.IsMoErrCode(guardErr, moerr.ErrTxnNeedRetry) ||
-				moerr.IsMoErrCode(guardErr, moerr.ErrTxnNeedRetryWithDefChanged) {
-				return cdc.NewRetryableSnapshotEpochError(guardErr)
-			}
-			return guardErr
 		})
 	}
 
@@ -3854,15 +3816,7 @@ func (exec *CDCTaskExecutor) retrieveCdcTask(ctx context.Context) error {
 		return moerr.NewNotSupportedf(ctx,
 			"CDC target identity catalog columns are not available: %v", capabilityErr)
 	}
-	exec.generationAware = true
 	exec.explicitStart = !exec.startTs.IsEmpty() &&
 		(!exec.noFull || protocol != cdc.CDCInitialSnapshotProtocolNoFullHLC)
-	// Lossless NoFull tasks use the same owner-fenced watermark path as stable
-	// snapshot tasks. Without this, their buffered checkpoints use the legacy
-	// unfenced updater and an obsolete executor can overwrite a replacement
-	// generation's durable progress after claim loss.
-	exec.stableInitialSnapshot = exec.generationAware ||
-		protocol == cdc.CDCInitialSnapshotProtocolStableEpoch ||
-		protocol == cdc.CDCInitialSnapshotProtocolNoFullHLC
 	return nil
 }

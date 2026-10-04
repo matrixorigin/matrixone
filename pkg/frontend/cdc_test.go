@@ -2895,7 +2895,7 @@ func TestCDCTaskExecutorMatchesModeTwoSourcePatterns(t *testing.T) {
 			Sink:   cdc.PatternTable{Database: "sink", Table: "target"},
 		}},
 	}}
-	info := &cdc.DbTableInfo{}
+	info := &cdc.DbTableInfo{HasUserPrimaryKey: true}
 	localInfo := info.Clone()
 	require.True(t, exec.matchAnyPattern("sourcedb.orders", localInfo))
 	require.True(t, exec.matchesAnySourcePattern("SOURCEDB.ORDERS"))
@@ -2907,7 +2907,7 @@ func TestCDCTaskExecutorMatchesModeTwoSourcePatterns(t *testing.T) {
 	require.Empty(t, info.SinkTblName)
 
 	exec.tables.SourceCaseMode = 0
-	require.False(t, exec.matchAnyPattern("sourcedb.orders", &cdc.DbTableInfo{}))
+	require.False(t, exec.matchAnyPattern("sourcedb.orders", &cdc.DbTableInfo{HasUserPrimaryKey: true}))
 	require.False(t, exec.matchesAnySourcePattern("SOURCEDB.ORDERS"))
 
 	// The shared detector deliberately scans a mode-2 candidate superset. A
@@ -3936,7 +3936,6 @@ func TestCdcTaskClaimLossDelayedCancelPreservesReplacementWatermark(t *testing.T
 		exec.watermarkUpdater = updater
 		exec.runningReaders = &sync.Map{}
 		exec.noFull = true
-		exec.stableInitialSnapshot = true
 		exec.setActiveRoutine(cdc.NewCdcActiveRoutine())
 		exec.UpdateDaemonTaskClaim(claim)
 		require.NoError(t, exec.stateMachine.Transition(TransitionStart))
@@ -4122,7 +4121,7 @@ func TestCdcTaskCancelFromPausingStillStopsReaders(t *testing.T) {
 		holdCh:         make(chan int, 1),
 	}
 	executor.runningReaders.Store("db.table", &mockChangeReader{
-		info:       &cdc.DbTableInfo{SourceDbName: "db", SourceTblName: "table"},
+		info:       &cdc.DbTableInfo{HasUserPrimaryKey: true, SourceDbName: "db", SourceTblName: "table"},
 		closeCalls: &closeCalls,
 		waitCalls:  &waitCalls,
 	})
@@ -4182,12 +4181,12 @@ func TestCdcTaskReaderShutdownDoesNotHideLaterPublication(t *testing.T) {
 		runningReaders: &sync.Map{},
 	}
 	oldReader := &mockChangeReader{
-		info:       &cdc.DbTableInfo{SourceDbName: "db", SourceTblName: "table"},
+		info:       &cdc.DbTableInfo{HasUserPrimaryKey: true, SourceDbName: "db", SourceTblName: "table"},
 		waitCh:     oldReaderDone,
 		closeCalls: &oldCloseCalls,
 	}
 	lateReader := &mockChangeReader{
-		info:       &cdc.DbTableInfo{SourceDbName: "db", SourceTblName: "table"},
+		info:       &cdc.DbTableInfo{HasUserPrimaryKey: true, SourceDbName: "db", SourceTblName: "table"},
 		closeCalls: &lateCloseCalls,
 	}
 	executor.runningReaders.Store("db.table", oldReader)
@@ -4275,7 +4274,7 @@ func TestCdcTaskRestartCallbackDrainTimeoutRestoresRetryableState(t *testing.T) 
 		restartStartupTimeout: 20 * time.Millisecond,
 	}
 	executor.runningReaders.Store("db.table", &mockChangeReader{
-		info:   &cdc.DbTableInfo{SourceDbName: "db", SourceTblName: "table"},
+		info:   &cdc.DbTableInfo{HasUserPrimaryKey: true, SourceDbName: "db", SourceTblName: "table"},
 		waitCh: readerDone,
 	})
 	require.NoError(t, executor.stateMachine.Transition(TransitionStart))
@@ -4324,7 +4323,7 @@ func TestCdcTaskReclaimDeletedWatermarkStopsReaderPublishedAfterFirstSnapshot(t 
 	// Cancel's bounded first snapshot. Closing callbacksDone models the real
 	// RegistrationDone -> callback completion ordering.
 	executor.runningReaders.Store("db.table", &mockChangeReader{
-		info:       &cdc.DbTableInfo{SourceDbName: "db", SourceTblName: "table"},
+		info:       &cdc.DbTableInfo{HasUserPrimaryKey: true, SourceDbName: "db", SourceTblName: "table"},
 		closeCalls: &closeCalls,
 		waitCalls:  &waitCalls,
 	})
@@ -4493,7 +4492,6 @@ func TestCdcTask_retrieveCdcTask(t *testing.T) {
 			}
 			err := cdc.retrieveCdcTask(tt.args.ctx)
 			assert.NoError(t, err, fmt.Sprintf("retrieveCdcTask(%v)", tt.args.ctx))
-			assert.True(t, cdc.stableInitialSnapshot)
 		})
 	}
 
@@ -4898,8 +4896,8 @@ func TestCdcTask_handleNewTables(t *testing.T) {
 
 	mp := map[uint32]cdc.TblMap{
 		0: {
-			"db1.tb1": &cdc.DbTableInfo{},
-			"db2.tb1": &cdc.DbTableInfo{},
+			"db1.tb1": &cdc.DbTableInfo{HasUserPrimaryKey: true},
+			"db2.tb1": &cdc.DbTableInfo{HasUserPrimaryKey: true},
 		},
 	}
 	cdcTask.handleNewTables(mp)
@@ -4947,48 +4945,24 @@ func TestCdcTask_handleNewTables_addpipeline(t *testing.T) {
 				},
 			},
 		},
-		exclude:               regexp.MustCompile("db1.tb1"),
-		cnEngine:              eng,
-		runningReaders:        &sync.Map{},
-		stableInitialSnapshot: true,
+		exclude:        regexp.MustCompile("db1.tb1"),
+		cnEngine:       eng,
+		runningReaders: &sync.Map{},
 		claimFence: cdc.NewOwnerFenceForGeneration(
 			time.UnixMicro(123), func(context.Context) error { return nil }),
 	}
-	detector := &cdc.TableDetector{Mp: make(map[uint32]cdc.TblMap)}
-	stubDetector := gostub.Stub(&cdc.GetTableDetector, func(string) *cdc.TableDetector {
-		return detector
-	})
-	defer stubDetector.Reset()
-
 	mp := map[uint32]cdc.TblMap{
 		0: {
-			"db1.tb1": &cdc.DbTableInfo{},
-			"db1.tb2": &cdc.DbTableInfo{IdChanged: true},
+			"db1.tb1": &cdc.DbTableInfo{HasUserPrimaryKey: true},
+			"db1.tb2": &cdc.DbTableInfo{HasUserPrimaryKey: true},
 		},
 	}
-	// The detector publishes immutable callback snapshots. Keep its owned
-	// descriptors separate from the callback map so clearing IdChanged cannot
-	// mutate the snapshot passed to handleNewTables.
-	detector.Mp = map[uint32]cdc.TblMap{
-		0: {
-			"db1.tb1": &cdc.DbTableInfo{},
-			"db1.tb2": &cdc.DbTableInfo{IdChanged: true},
-		},
-	}
-
 	fault.Enable()
 	objectio.SimpleInject(objectio.FJ_CDCAddExecErr)
 	err := cdcTask.handleNewTables(mp)
 	require.Error(t, err)
 	fault.Disable()
 
-	fault.Enable()
-	objectio.SimpleInject(objectio.FJ_CDCAddExecConsumeTruncate)
-	err = cdcTask.handleNewTables(mp)
-	require.NoError(t, err)
-	require.True(t, mp[0]["db1.tb2"].IdChanged, "callback snapshot is immutable")
-	require.False(t, detector.Mp[0]["db1.tb2"].IdChanged, "detector-owned marker is consumed")
-	fault.Disable()
 }
 
 func TestCdcTask_handleNewTables_PermanentTableErrorFailsTask(t *testing.T) {
@@ -5042,7 +5016,7 @@ func TestCdcTask_handleNewTables_PermanentTableErrorFailsTask(t *testing.T) {
 
 	mp := map[uint32]cdc.TblMap{
 		0: {
-			"db1.tb1": &cdc.DbTableInfo{
+			"db1.tb1": &cdc.DbTableInfo{HasUserPrimaryKey: true,
 				SourceDbName:  "db1",
 				SourceTblName: "tb1",
 			},
@@ -5111,7 +5085,7 @@ func TestCdcTask_PermanentTableErrorDoesNotFailWhilePausing(t *testing.T) {
 	require.NoError(t, cdcTask.stateMachine.Transition(TransitionStartSuccess))
 	require.NoError(t, cdcTask.stateMachine.Transition(TransitionPause))
 
-	err := cdcTask.failTaskForPermanentTableError(context.Background(), &cdc.DbTableInfo{
+	err := cdcTask.failTaskForPermanentTableError(context.Background(), &cdc.DbTableInfo{HasUserPrimaryKey: true,
 		SourceDbName:  "db1",
 		SourceTblName: "tb1",
 	})
@@ -5178,7 +5152,7 @@ func TestCdcTask_StaleCallbackDoesNotFailRestartGeneration(t *testing.T) {
 
 	err := cdcTask.handleNewTablesForGeneration(staleGeneration, map[uint32]cdc.TblMap{
 		0: {
-			"db1.tb1": &cdc.DbTableInfo{
+			"db1.tb1": &cdc.DbTableInfo{HasUserPrimaryKey: true,
 				SourceDbName:  "db1",
 				SourceTblName: "tb1",
 			},
@@ -5249,7 +5223,7 @@ func TestCdcTask_RestartDrainsInflightHandleNewTablesCallback(t *testing.T) {
 	go func() {
 		callbackDone <- cdcTask.handleNewTablesForGeneration(cdcTask.callbackGeneration.Load(), map[uint32]cdc.TblMap{
 			0: {
-				"db1.tb1": &cdc.DbTableInfo{
+				"db1.tb1": &cdc.DbTableInfo{HasUserPrimaryKey: true,
 					SourceDbName:  "db1",
 					SourceTblName: "tb1",
 				},
@@ -5338,7 +5312,7 @@ func TestCdcTask_RestartFromFailedUpdatesFailedMetrics(t *testing.T) {
 	require.NoError(t, cdcTask.stateMachine.Transition(TransitionStart))
 	require.NoError(t, cdcTask.stateMachine.Transition(TransitionStartSuccess))
 
-	err := cdcTask.failTaskForPermanentTableError(context.Background(), &cdc.DbTableInfo{
+	err := cdcTask.failTaskForPermanentTableError(context.Background(), &cdc.DbTableInfo{HasUserPrimaryKey: true,
 		SourceDbName:  "db1",
 		SourceTblName: "tb1",
 	})
@@ -5348,143 +5322,6 @@ func TestCdcTask_RestartFromFailedUpdatesFailedMetrics(t *testing.T) {
 	require.NoError(t, cdcTask.Restart())
 	<-started
 	require.Equal(t, failedBefore, readFrontendGaugeValue(t, failedGauge))
-}
-
-func TestCdcTask_RestartKeepsAmbiguousLegacyTaskFailed(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	eng := mock_frontend.NewMockEngine(ctrl)
-	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-
-	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
-	txnOperator.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
-
-	stubGetTxnOp := gostub.Stub(&cdc.GetTxnOp, func(context.Context, engine.Engine, client.TxnClient, string) (client.TxnOperator, error) {
-		return txnOperator, nil
-	})
-	defer stubGetTxnOp.Reset()
-
-	stubFinishTxnOp := gostub.Stub(&cdc.FinishTxnOp, func(context.Context, error, client.TxnOperator, engine.Engine) {})
-	defer stubFinishTxnOp.Reset()
-
-	executor := &captureCDCExecutor{}
-	stubGetTableErrMsg := gostub.Stub(&GetTableErrMsg, func(context.Context, uint32, ie.InternalExecutor, string, *cdc.DbTableInfo) (bool, error) {
-		return !executor.tableErrorsAreCleared(), nil
-	})
-	defer stubGetTableErrMsg.Reset()
-
-	cdcStubs := setupCDCTestStubs(t)
-	defer func() {
-		for _, s := range cdcStubs {
-			s.Reset()
-		}
-	}()
-
-	stubSinker := gostub.Stub(
-		&cdc.NewSinker,
-		func(
-			context.Context,
-			cdc.UriInfo,
-			uint64,
-			string,
-			*cdc.DbTableInfo,
-			*cdc.CDCWatermarkUpdater,
-			*plan.TableDef,
-			int,
-			time.Duration,
-			*cdc.ActiveRoutine,
-			uint64,
-			string,
-		) (cdc.Sinker, error) {
-			return &mockSinker{}, nil
-		})
-	defer stubSinker.Reset()
-
-	u := cdc.NewCDCWatermarkUpdater(t.Name(), &claimLossWatermarkCatalog{deleted: true})
-
-	tableMap := map[uint32]cdc.TblMap{
-		0: {
-			"db1.tb1": &cdc.DbTableInfo{
-				SourceDbName:  "db1",
-				SourceTblName: "tb1",
-				SourceTblId:   1,
-			},
-		},
-	}
-
-	cdcTask := &CDCTaskExecutor{
-		spec: &task.CreateCdcDetails{
-			TaskId:   "task-1",
-			TaskName: "task-name",
-			Accounts: []*task.Account{
-				{Id: 0},
-			},
-		},
-		tables: cdc.PatternTuples{
-			Pts: []*cdc.PatternTuple{
-				{
-					Source: cdc.PatternTable{
-						Database: "db1",
-						Table:    cdc.CDCPitrGranularity_All,
-					},
-				},
-			},
-		},
-		ie:               executor,
-		cnEngine:         eng,
-		runningReaders:   &sync.Map{},
-		stateMachine:     NewExecutorStateMachine(),
-		activeRoutine:    cdc.NewCdcActiveRoutine(),
-		holdCh:           make(chan int, 1),
-		watermarkUpdater: u,
-		startTs:          types.BuildTS(200, 3),
-		noFull:           true,
-		additionalConfig: map[string]interface{}{
-			cdc.CDCTaskExtraOptions_MaxSqlLength:         float64(cdc.CDCDefaultTaskExtra_MaxSQLLen),
-			cdc.CDCTaskExtraOptions_SendSqlTimeout:       cdc.CDCDefaultSendSqlTimeout,
-			cdc.CDCTaskExtraOptions_InitSnapshotSplitTxn: cdc.CDCDefaultTaskExtra_InitSnapshotSplitTxn,
-			cdc.CDCTaskExtraOptions_Frequency:            "",
-		},
-	}
-	require.NoError(t, cdcTask.stateMachine.Transition(TransitionStart))
-	require.NoError(t, cdcTask.stateMachine.Transition(TransitionStartSuccess))
-
-	err := cdcTask.handleNewTables(tableMap)
-	require.Error(t, err)
-	require.Equal(t, StateFailed, cdcTask.stateMachine.State())
-	require.False(t, executor.tableErrorsAreCleared())
-
-	restartDone := make(chan error, 1)
-	cdcTask.startFunc = func(context.Context) error {
-		err := cdcTask.handleNewTables(tableMap)
-		restartDone <- err
-		return err
-	}
-
-	require.Error(t, cdcTask.Restart())
-	require.Error(t, <-restartDone)
-	require.Equal(t, StateFailed, cdcTask.stateMachine.State())
-	require.True(t, executor.tableErrorsAreCleared())
-
-	sqls := executor.capturedExecSQLs()
-	require.GreaterOrEqual(t, len(sqls), 3)
-	require.Contains(t, sqls[0], "SET state = 'failed'")
-	// The retry explicitly reopens the failure state before it clears table
-	// errors, so a prior timed-out/retried restart cannot remain admitted as
-	// restarting with its original failure cause lost.
-	require.Contains(t, sqls[1], "SET state = 'restarting'")
-	require.Contains(t, sqls[1], "AND state = 'failed'")
-	require.Contains(t, sqls[2], "UPDATE `mo_catalog`.`mo_cdc_watermark` SET err_msg = ''")
-	require.Contains(t, sqls[2], "task-1")
-	require.Contains(t, strings.Join(sqls, "\n"), "legacy CDC target generation is unknown")
-
-	cdcTask.activeRoutine.CloseCancel()
-	if val, ok := cdcTask.runningReaders.Load("db1.tb1"); ok {
-		if reader, ok := val.(cdc.ChangeReader); ok {
-			reader.Wait()
-		}
-	}
 }
 
 func TestCdcTask_handleNewTables_GetTxnOpErr(t *testing.T) {
@@ -5531,8 +5368,8 @@ func TestCdcTask_handleNewTables_GetTxnOpErr(t *testing.T) {
 
 	mp := map[uint32]cdc.TblMap{
 		0: {
-			"db1.tb1": &cdc.DbTableInfo{},
-			"db2.tb1": &cdc.DbTableInfo{},
+			"db1.tb1": &cdc.DbTableInfo{HasUserPrimaryKey: true},
+			"db2.tb1": &cdc.DbTableInfo{HasUserPrimaryKey: true},
 		},
 	}
 	err := cdcTask.handleNewTables(mp)
@@ -5583,8 +5420,8 @@ func TestCdcTask_handleNewTables_NewEngineFailed(t *testing.T) {
 
 	mp := map[uint32]cdc.TblMap{
 		0: {
-			"db1.tb1": &cdc.DbTableInfo{},
-			"db2.tb1": &cdc.DbTableInfo{},
+			"db1.tb1": &cdc.DbTableInfo{HasUserPrimaryKey: true},
+			"db2.tb1": &cdc.DbTableInfo{HasUserPrimaryKey: true},
 		},
 	}
 	fault.Enable()
@@ -5612,7 +5449,7 @@ func TestCdcTask_handleNewTables_existingReaderWithDifferentTableID(t *testing.T
 	wg := &sync.WaitGroup{}
 	wg.Add(1)
 	oldReader := &mockChangeReader{
-		info: &cdc.DbTableInfo{SourceTblId: 100},
+		info: &cdc.DbTableInfo{HasUserPrimaryKey: true, SourceTblId: 100},
 		wg:   wg,
 	}
 
@@ -5639,7 +5476,7 @@ func TestCdcTask_handleNewTables_existingReaderWithDifferentTableID(t *testing.T
 		wg.Done()
 	}()
 
-	newTable := &cdc.DbTableInfo{SourceTblId: 200}
+	newTable := &cdc.DbTableInfo{HasUserPrimaryKey: true, SourceTblId: 200}
 	mp := map[uint32]cdc.TblMap{
 		0: {"db1.important_table": newTable},
 	}
@@ -5663,7 +5500,7 @@ func TestCdcTask_handleNewTablesStopsReaderRemovedFromScan(t *testing.T) {
 	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 	closeCh := make(chan struct{})
-	readerInfo := &cdc.DbTableInfo{
+	readerInfo := &cdc.DbTableInfo{HasUserPrimaryKey: true,
 		SourceDbName:  "db1",
 		SourceTblName: "child",
 		SourceTblId:   1001,
@@ -5733,7 +5570,7 @@ func TestCdcTask_handleNewTablesFailsWhenRunningTableLosesPrimaryKey(t *testing.
 
 	closeCh := make(chan struct{})
 	reader := &mockChangeReader{
-		info:    &cdc.DbTableInfo{SourceDbName: "db1", SourceTblName: "orders", SourceTblId: 1001},
+		info:    &cdc.DbTableInfo{HasUserPrimaryKey: true, SourceDbName: "db1", SourceTblName: "orders", SourceTblId: 1001},
 		closeCh: closeCh,
 	}
 	executor := &captureCDCExecutor{}
@@ -5757,7 +5594,7 @@ func TestCdcTask_handleNewTablesFailsWhenRunningTableLosesPrimaryKey(t *testing.
 	err := cdcTask.handleNewTables(map[uint32]cdc.TblMap{0: {
 		"db1.orders": {
 			SourceDbName: "db1", SourceTblName: "orders", SourceTblId: 1001,
-			PrimaryKeyChecked: true, HasUserPrimaryKey: false,
+			HasUserPrimaryKey: false,
 		},
 	}})
 	require.Error(t, err)
@@ -5789,7 +5626,7 @@ func TestCdcTask_handleNewTablesKeepsBlockedRemovedReaderOwnership(t *testing.T)
 	var closeCalls atomic.Int32
 	var waitCalls atomic.Int32
 	oldReader := &mockChangeReader{
-		info:       &cdc.DbTableInfo{SourceDbName: "db1", SourceTblName: "child", SourceTblId: 1001},
+		info:       &cdc.DbTableInfo{HasUserPrimaryKey: true, SourceDbName: "db1", SourceTblName: "child", SourceTblId: 1001},
 		closeCh:    closeCh,
 		waitCh:     waitCh,
 		closeCalls: &closeCalls,
@@ -5855,7 +5692,7 @@ func TestCdcTask_handleNewTablesKeepsBlockedRemovedReaderOwnership(t *testing.T)
 	start = time.Now()
 	err = cdcTask.handleNewTables(map[uint32]cdc.TblMap{
 		0: {
-			"db1.child": &cdc.DbTableInfo{SourceDbName: "db1", SourceTblName: "child", SourceTblId: 2002},
+			"db1.child": &cdc.DbTableInfo{HasUserPrimaryKey: true, SourceDbName: "db1", SourceTblName: "child", SourceTblId: 2002},
 		},
 	})
 	require.NoError(t, err)
@@ -5868,7 +5705,7 @@ func TestCdcTask_handleNewTablesKeepsBlockedRemovedReaderOwnership(t *testing.T)
 
 	err = cdcTask.handleNewTables(map[uint32]cdc.TblMap{
 		0: {
-			"db1.child": &cdc.DbTableInfo{SourceDbName: "db1", SourceTblName: "child", SourceTblId: 1001},
+			"db1.child": &cdc.DbTableInfo{HasUserPrimaryKey: true, SourceDbName: "db1", SourceTblName: "child", SourceTblId: 1001},
 		},
 	})
 	require.NoError(t, err)
@@ -5897,7 +5734,7 @@ func TestCdcTask_handleNewTablesDoesNotWaitForBlockedRemovedReaderClose(t *testi
 	var closeCalls atomic.Int32
 	var waitCalls atomic.Int32
 	oldReader := &mockChangeReader{
-		info:         &cdc.DbTableInfo{SourceDbName: "db1", SourceTblName: "child", SourceTblId: 1001},
+		info:         &cdc.DbTableInfo{HasUserPrimaryKey: true, SourceDbName: "db1", SourceTblName: "child", SourceTblId: 1001},
 		closeCh:      closeCh,
 		closeBlockCh: closeBlockCh,
 		closeCalls:   &closeCalls,
@@ -6003,7 +5840,7 @@ func TestCdcTask_handleNewTablesStartsRemovedReaderShutdownsWithoutWaiting(t *te
 	for i := 0; i < readerCount; i++ {
 		tableName := fmt.Sprintf("child_%d", i)
 		reader := &mockChangeReader{
-			info: &cdc.DbTableInfo{
+			info: &cdc.DbTableInfo{HasUserPrimaryKey: true,
 				SourceDbName:  "db1",
 				SourceTblName: tableName,
 				SourceTblId:   uint64(1000 + i),
@@ -6082,7 +5919,7 @@ func TestCdcTask_handleNewTablesDoesNotWaitAcrossTaskCallbacks(t *testing.T) {
 			runningReaders: &sync.Map{},
 		}
 		reader := &mockChangeReader{
-			info: &cdc.DbTableInfo{
+			info: &cdc.DbTableInfo{HasUserPrimaryKey: true,
 				SourceDbName:  "db1",
 				SourceTblName: fmt.Sprintf("child_%d", i),
 				SourceTblId:   uint64(1000 + i),
@@ -6233,32 +6070,6 @@ func (m mockSinker) Close() {
 }
 
 func (m mockSinker) ClearError() {}
-
-func TestLegacyCDCAdmissionRequiresGeneration(t *testing.T) {
-	catalog := &claimLossWatermarkCatalog{deleted: true}
-	updater := cdc.NewCDCWatermarkUpdater(t.Name(), catalog)
-	taskExecutor := &CDCTaskExecutor{
-		spec: &task.CreateCdcDetails{
-			TaskId: "legacy-task", TaskName: "legacy-task",
-			Accounts: []*task.Account{{Id: 0}},
-		},
-		ie:               &captureCDCExecutor{},
-		watermarkUpdater: updater,
-		activeRoutine:    cdc.NewCdcActiveRoutine(),
-		runningReaders:   &sync.Map{},
-		stateMachine:     NewExecutorStateMachine(),
-		startTs:          types.BuildTS(100, 1),
-		noFull:           true,
-	}
-	info := &cdc.DbTableInfo{SourceDbName: "db", SourceTblName: "t", SourceTblId: 42}
-	require.NoError(t, taskExecutor.stateMachine.Transition(TransitionStart))
-	require.NoError(t, taskExecutor.stateMachine.Transition(TransitionStartSuccess))
-	err := taskExecutor.addExecPipelineForTable(context.Background(), info, nil, nil, nil)
-	require.ErrorContains(t, err, "legacy CDC target generation is unknown")
-	require.Equal(t, StateFailed, taskExecutor.stateMachine.State())
-	_, hasReader := taskExecutor.runningReaders.Load("db.t")
-	require.False(t, hasReader)
-}
 
 func TestCdcTask_checkPitr(t *testing.T) {
 	pts := &cdc.PatternTuples{

@@ -16,9 +16,12 @@ package frontend
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -33,7 +36,17 @@ import (
 func (exec *CDCTaskExecutor) withCDCSourceGenerationGuard(
 	ctx context.Context, accountID uint32, databaseName, tableName string,
 	expectedID uint64, acknowledge func() error,
-) error {
+) (err error) {
+	defer func() {
+		if err == nil {
+			return
+		}
+		var cause *moerr.Error
+		if errors.As(err, &cause) && (moerr.IsMoErrCode(cause, moerr.ErrTxnNeedRetry) ||
+			moerr.IsMoErrCode(cause, moerr.ErrTxnNeedRetryWithDefChanged)) {
+			err = cdc.NewRetryableSnapshotEpochError(err)
+		}
+	}()
 	tenantCtx := defines.AttachAccountId(ctx, accountID)
 	op, err := exec.cnTxnClient.New(tenantCtx, types.TS{}.ToTimestamp(),
 		client.WithSkipPushClientReady(),
@@ -73,20 +86,20 @@ func (exec *CDCTaskExecutor) withCDCSourceGenerationGuard(
 			return relErr
 		}
 		if err = lockCDCCatalogName(proc, tenantCtx, exec.cnEngine, rel, accountID, target.parts...); err != nil {
-			return moerr.NewInternalErrorf(ctx, "CDC source guard lock %s: %v", target.name, err)
+			return fmt.Errorf("CDC source guard lock %s: %w", target.name, err)
 		}
 	}
 	now, _ := moruntime.ServiceRuntime(exec.cnUUID).Clock().Now()
 	if err = op.GetWorkspace().AdvanceSnapshot(tenantCtx, now); err != nil {
-		return moerr.NewInternalErrorf(ctx, "CDC source guard advance snapshot: %v", err)
+		return fmt.Errorf("CDC source guard advance snapshot: %w", err)
 	}
 	db, err := exec.cnEngine.Database(tenantCtx, databaseName, op)
 	if err != nil {
-		return moerr.NewInternalErrorf(ctx, "CDC source guard resolve database: %v", err)
+		return fmt.Errorf("CDC source guard resolve database: %w", err)
 	}
 	rel, err := db.Relation(tenantCtx, tableName, nil)
 	if err != nil {
-		return moerr.NewInternalErrorf(ctx, "CDC source guard resolve table: %v", err)
+		return fmt.Errorf("CDC source guard resolve table: %w", err)
 	}
 	if actual := rel.GetTableID(tenantCtx); actual != expectedID {
 		return moerr.NewInternalErrorf(ctx,

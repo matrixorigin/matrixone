@@ -1720,44 +1720,6 @@ func (u *CDCWatermarkUpdater) SetWatermarkPending(ctx context.Context, key *Wate
 	return nil
 }
 
-// AcknowledgeTargetGeneration is called while the sink still owns its target
-// DDL lock. It advances the durable generation and installs its replay point
-// together, before any reader for the new generation can publish.
-func (u *CDCWatermarkUpdater) AcknowledgeTargetGeneration(
-	ctx context.Context,
-	key *WatermarkKey,
-	fence *OwnerFence,
-	previousGeneration, sourceGeneration uint64,
-	replayPoint types.TS,
-) error {
-	if sourceGeneration == 0 || previousGeneration >= sourceGeneration || fence == nil {
-		return moerr.NewInternalErrorf(ctx, "invalid CDC target generation transition %d -> %d for %s",
-			previousGeneration, sourceGeneration, key.String())
-	}
-	if err := fence.Check(ctx); err != nil {
-		return err
-	}
-	ackCtx, cancel := context.WithTimeoutCause(ctx, snapshotEpochPersistenceTimeout, moerr.CauseWatermarkUpdate)
-	defer cancel()
-	ackCtx = defines.AttachAccountId(ackCtx, catalog.System_Account)
-	if err := u.ie.Exec(ackCtx,
-		CDCSQLBuilder.AcknowledgeTargetGenerationSQL(
-			key, fence.GenerationToken(), previousGeneration, sourceGeneration, replayPoint),
-		ie.SessionOverrideOptions{}); err != nil {
-		return classifySnapshotEpochBackendError(err)
-	}
-	actual, generation, err := u.ClaimWatermarkOwner(ctx, key, fence)
-	if err != nil {
-		return err
-	}
-	if generation != sourceGeneration || !actual.Equal(&replayPoint) {
-		return NewRetryableSnapshotEpochError(moerr.NewInternalErrorf(ctx,
-			"CDC target generation acknowledgement for %s was not durable (wanted %d/%s, got %d/%s)",
-			key.String(), sourceGeneration, replayPoint.ToString(), generation, actual.ToString()))
-	}
-	return u.finishTargetAcknowledgement(ctx, key, fence, actual, generation)
-}
-
 func (u *CDCWatermarkUpdater) AcknowledgeTargetIdentity(
 	ctx context.Context, key *WatermarkKey, fence *OwnerFence,
 	sourceGeneration uint64, preIdentity, newIdentity string, replayPoint types.TS,

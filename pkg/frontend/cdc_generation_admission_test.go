@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -285,4 +286,32 @@ func TestCDCMode2SourceKeyIndexReadsOnceAndTracksNewKeys(t *testing.T) {
 	require.True(t, ambiguous)
 	require.ErrorContains(t, err, "case-only rename")
 	require.Equal(t, 1, catalog.queries)
+}
+
+// The guard owns retry classification before its caller persists a table error.
+// Wrapping at a backend boundary must preserve both retryability and cause.
+func TestCDCSourceGuardRetryContract(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		cause error
+		retry bool
+	}{
+		{"snapshot advanced", moerr.NewTxnNeedRetryNoCtx(), true},
+		{"definition changed", moerr.NewTxnNeedRetryWithDefChangedNoCtx(), true},
+		{"unsupported", moerr.NewNotSupportedNoCtx("guard unavailable"), false},
+		{"cancelled", context.Canceled, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			client := frontendmock.NewMockTxnClient(ctrl)
+			client.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, fmt.Errorf("backend: %w", tc.cause))
+			exec := &CDCTaskExecutor{cnTxnClient: client}
+			err := exec.withCDCSourceGenerationGuard(context.Background(), 1, "db", "t", 42, func() error {
+				t.Fatal("failed source guard must never acknowledge target identity")
+				return nil
+			})
+			require.ErrorIs(t, err, tc.cause)
+			require.Equal(t, tc.retry, cdc.IsRetryableSnapshotEpochError(err))
+		})
+	}
 }

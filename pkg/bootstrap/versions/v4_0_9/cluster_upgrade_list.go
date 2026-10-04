@@ -25,14 +25,12 @@ const snapshotQuotaTargetIndex = "idx_snapshot_quota_target"
 
 // Only sys stores ACCOUNT snapshots for other tenants. The index keeps the
 // second quota count bounded without adding an index to every tenant catalog.
-var clusterUpgEntries = []versions.UpgradeEntry{
-	{
-		Schema:    catalog.MO_CATALOG,
-		TableName: catalog.MO_SNAPSHOTS,
-		UpgType:   versions.ADD_INDEX,
-		UpgSql:    frontend.MoCatalogSysSnapshotQuotaIndexDDL,
-		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
-			return versions.CheckIndexDefinition(txn, accountID, catalog.MO_CATALOG, catalog.MO_SNAPSHOTS, snapshotQuotaTargetIndex)
-		},
+var clusterUpgEntries = []versions.UpgradeEntry{{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_SNAPSHOTS,
+	UpgType:   versions.ADD_INDEX,
+	UpgSql:    frontend.MoCatalogSysSnapshotQuotaIndexDDL,
+	CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+		return versions.CheckIndexDefinition(txn, accountID, catalog.MO_CATALOG, catalog.MO_SNAPSHOTS, snapshotQuotaTargetIndex)
 	},
-}
+}}

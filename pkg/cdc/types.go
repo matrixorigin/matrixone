@@ -586,30 +586,20 @@ type RowIterator interface {
 }
 
 type DbTableInfo struct {
-	SourceDbId      uint64
-	SourceDbName    string
-	SourceTblId     uint64
-	SourceTblName   string
-	SourceCreateSql string
-	// PrimaryKeyChecked is true only for metadata returned by TableDetector.
-	// It preserves compatibility with manually constructed table descriptions
-	// while allowing a running wildcard task to fail closed if a user key is
-	// dropped after startup.
-	PrimaryKeyChecked bool
+	SourceDbId        uint64
+	SourceDbName      string
+	SourceTblId       uint64
+	SourceTblName     string
+	SourceCreateSql   string
 	HasUserPrimaryKey bool
 
 	SinkDbName  string
 	SinkTblName string
 
-	IdChanged bool
-
 	// ownerFence is execution-local and deliberately excluded from Clone and
 	// all persisted table metadata. It protects target initialization DDL.
-	ownerFence *OwnerFence
-	// targetInitAck runs while the sink owns the target DDL lock, before a
-	// generation-aware reader can be published.
-	targetInitAck func(context.Context) error
-	targetReady   bool
+	ownerFence  *OwnerFence
+	targetReady bool
 	// TargetIdentity is the durable identity from the acknowledged watermark.
 	// Empty is reserved for legacy callers that do not use the v2 protocol.
 	TargetIdentity    string
@@ -626,11 +616,6 @@ func (info *DbTableInfo) OwnerFence() *OwnerFence {
 	return info.ownerFence
 }
 
-func (info *DbTableInfo) SetTargetAdmission(ready bool, ack func(context.Context) error) {
-	info.targetReady = ready
-	info.targetInitAck = ack
-}
-
 func (info *DbTableInfo) SetTargetIdentityAdmission(ready bool, preIdentity, acknowledgedIdentity string, ack func(context.Context, string) error) {
 	info.targetReady = ready
 	info.TargetPreIdentity = preIdentity
@@ -640,19 +625,17 @@ func (info *DbTableInfo) SetTargetIdentityAdmission(ready bool, preIdentity, ack
 
 func (info *DbTableInfo) ClearTargetAdmissionCallbacks() {
 	info.targetReady = false
-	info.targetInitAck = nil
 	info.targetIdentityAck = nil
 }
 
 func (info DbTableInfo) String() string {
-	return fmt.Sprintf("%v(%v).%v(%v) -> %v.%v, %v",
+	return fmt.Sprintf("%v(%v).%v(%v) -> %v.%v",
 		info.SourceDbName,
 		info.SourceDbId,
 		info.SourceTblName,
 		info.SourceTblId,
 		info.SinkDbName,
 		info.SinkTblName,
-		info.IdChanged,
 	)
 }
 
@@ -663,22 +646,10 @@ func (info DbTableInfo) Clone() *DbTableInfo {
 		SourceTblId:       info.SourceTblId,
 		SourceTblName:     info.SourceTblName,
 		SourceCreateSql:   info.SourceCreateSql,
-		PrimaryKeyChecked: info.PrimaryKeyChecked,
 		HasUserPrimaryKey: info.HasUserPrimaryKey,
 		SinkDbName:        info.SinkDbName,
 		SinkTblName:       info.SinkTblName,
-		IdChanged:         info.IdChanged,
 	}
-}
-
-func (info DbTableInfo) OnlyDiffinTblId(t *DbTableInfo) bool {
-	if info.SourceDbId != t.SourceDbId ||
-		info.SourceDbName != t.SourceDbName ||
-		info.SourceTblName != t.SourceTblName ||
-		info.SourceCreateSql != t.SourceCreateSql {
-		return false
-	}
-	return info.SourceTblId != t.SourceTblId
 }
 
 // AtomicBatch holds batches from [Tail_wip,...,Tail_done] or [Tail_done].

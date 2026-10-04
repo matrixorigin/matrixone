@@ -30,7 +30,7 @@ var Handler = &versionHandle{metadata: versions.Version{
 	UpgradeCluster:          versions.Yes,
 	UpgradeTenant:           versions.No,
 	VersionOffset:           uint32(len(clusterUpgEntries)),
-	RequiredProtocolVersion: defines.MORPCVersion97,
+	RequiredProtocolVersion: defines.MORPCVersion41,
 }}
 
 type versionHandle struct{ metadata versions.Version }

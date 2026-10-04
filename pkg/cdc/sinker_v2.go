@@ -296,14 +296,6 @@ func createMysqlSinker2(
 			executor.Close()
 			return nil, err
 		}
-	} else if dbTblInfo.IdChanged && dbTblInfo.TargetPreIdentity == "" {
-		dropTableSQL := fmt.Sprintf("DROP TABLE IF EXISTS %s", quoteSQLIdentifier(dbTblInfo.SinkTblName))
-		err = executor.ExecSQL(ctx, ar, addPadding(dropTableSQL), false)
-		if err != nil {
-			executor.Close()
-			return nil, err
-		}
-		dbTblInfo.IdChanged = false
 	}
 
 	// CREATE TABLE
@@ -374,11 +366,6 @@ func createMysqlSinker2(
 				return nil, guardErr
 			}
 			dbTblInfo.TargetIdentity = actual
-		} else if dbTblInfo.targetInitAck != nil {
-			if err = dbTblInfo.targetInitAck(ctx); err != nil {
-				executor.Close()
-				return nil, err
-			}
 		}
 	}
 	if targetOwnerFence != nil {

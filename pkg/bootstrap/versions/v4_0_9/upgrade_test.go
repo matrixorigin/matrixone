@@ -30,8 +30,8 @@ func TestSnapshotQuotaIndexUpgrade(t *testing.T) {
 	require.Equal(t, versions.Yes, metadata.UpgradeCluster)
 	require.Equal(t, versions.No, metadata.UpgradeTenant)
 	require.Len(t, clusterUpgEntries, 1)
-	indexEntry := clusterUpgEntries[0]
-	require.Equal(t, catalog.MO_SNAPSHOTS, indexEntry.TableName)
-	require.Equal(t, versions.ADD_INDEX, indexEntry.UpgType)
-	require.Contains(t, indexEntry.UpgSql, "(account_name, level, obj_id, kind)")
+	entry := clusterUpgEntries[0]
+	require.Equal(t, catalog.MO_SNAPSHOTS, entry.TableName)
+	require.Equal(t, versions.ADD_INDEX, entry.UpgType)
+	require.Contains(t, entry.UpgSql, "(account_name, level, obj_id, kind)")
 }
