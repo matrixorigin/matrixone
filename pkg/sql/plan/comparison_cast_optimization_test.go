@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -28,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1730,6 +1732,59 @@ func TestFloatPrecisionCheck(t *testing.T) {
 	}
 }
 
+func TestFloatComparisonConstantFolding(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	column := &Expr{Typ: makeSimplePlan2Type(types.T_float32), Expr: &plan.Expr_Col{Col: &plan.ColRef{}}}
+	bind := func(name string, args ...*Expr) *Expr {
+		expr, err := BindFuncExprImplByPlanExpr(proc.Ctx, name, args)
+		require.NoError(t, err)
+		return expr
+	}
+	param := &Expr{Typ: makeSimplePlan2Type(types.T_float64), Expr: &plan.Expr_P{P: &plan.ParamRef{}}}
+	dynamic := makePlan2Float64ConstExprWithType(-0.5)
+	dynamic.GetLit().Src = param
+	prepared := bind("abs", makePlan2Float64ConstExprWithType(-0.5))
+	prepared.PreparedNumeric = &plan.PreparedNumericMetadata{ProvisionalResultPeer: true}
+	null := makePlan2Float64ConstExprWithType(0)
+	null.GetLit().Isnull = true
+	for _, tc := range []struct {
+		name string
+		peer *Expr
+	}{
+		{"parameter", bind("abs", param)},
+		{"prepared provenance", prepared},
+		{"dynamic literal source", bind("abs", dynamic)},
+		{"column", bind("abs", column)},
+		{"volatile", bind("rand")},
+		{"null", bind("abs", null)},
+		{"error", bind("sqrt", makePlan2Float64ConstExprWithType(-1))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before := DeepCopyExpr(tc.peer)
+			args := []*Expr{column, tc.peer}
+			foldFloatComparisonConstants(proc, "=", args)
+			require.Same(t, tc.peer, args[1])
+			require.True(t, proto.Equal(before, tc.peer), "original expression must stay unchanged")
+		})
+	}
+	for _, peer := range []*Expr{
+		bind("abs", makePlan2Float32ConstExprWithType(-0.5)),
+		bind("abs", makePlan2Float64ConstExprWithType(-0.5)),
+	} {
+		before := DeepCopyExpr(peer)
+		args := []*Expr{column, peer}
+		foldFloatComparisonConstants(proc, "=", args)
+		require.Equal(t, before, peer, "folding must not mutate the original expression")
+		require.Equal(t, peer.Typ, args[1].Typ, "retain the source comparison domain")
+		require.NotNil(t, args[1].GetLit())
+		if peer.Typ.Id == int32(types.T_float32) {
+			require.Equal(t, float32(0.5), args[1].GetLit().GetFval())
+		} else {
+			require.Equal(t, 0.5, args[1].GetLit().GetDval())
+		}
+	}
+}
+
 // Materialize the row only after binding. This exercises the actual optimized
 // filter and CAST overload, without folding the column into another literal.
 func TestDecimalFloatOptimizedFilterResults(t *testing.T) {
@@ -1746,9 +1801,13 @@ func TestDecimalFloatOptimizedFilterResults(t *testing.T) {
 		{"float decimal cast", "9", "cast(9.0 as decimal)", types.T_float32.ToType(), true, false, true},
 		{"float integer expression", "9", "abs(-9)", types.T_float32.ToType(), true, false, true},
 		{"bounded decimal exact", "0.5", "0.5", types.New(types.T_float32, 4, 1), true, false, true},
+		{"bounded double expression exact", "0.5", "abs(-5e-1)", types.New(types.T_float32, 4, 1), true, false, true},
+		{"bounded float expression exact", "0.5", "abs(cast(-0.5 as float))", types.New(types.T_float32, 4, 1), true, false, true},
 		{"float32 rounding", "0.1", "1e-1", types.T_float32.ToType(), false, false, false},
+		{"float32 expression rounding", "0.1", "abs(-1e-1)", types.T_float32.ToType(), false, false, false},
 		{"float32 expression", "16777216", "abs(cast(16777217 as signed))", types.T_float32.ToType(), false, true, false},
 		{"bounded float", "1.3", "1.25e0", types.New(types.T_float32, 4, 1), false, false, false},
+		{"bounded expression rounding", "1.3", "abs(-1.25e0)", types.New(types.T_float32, 4, 1), false, false, false},
 		{"bounded double", "1.3", "1.25e0", types.New(types.T_float64, 4, 1), false, false, true},
 		{"bounded integer", "1", "1", types.New(types.T_float32, 4, 1), true, false, true},
 		{"bounded exact", "0.5", "5e-1", types.New(types.T_float32, 4, 1), true, false, true},
@@ -1756,6 +1815,7 @@ func TestDecimalFloatOptimizedFilterResults(t *testing.T) {
 		{"bounded source scale", "1.3", "1.2999999523162842e0", types.New(types.T_float32, 4, 1), false, false, false},
 		{"bounded negative source scale", "-1.3", "-1.2999999523162842e0", types.New(types.T_float32, 4, 1), false, true, false},
 		{"bounded width overflow", "999", "1000", types.New(types.T_float32, 4, 1), false, true, false},
+		{"bounded expression width overflow", "999", "abs(-1000e0)", types.New(types.T_float32, 4, 1), false, true, false},
 		{"bounded negative width overflow", "-999", "-1000", types.New(types.T_float32, 4, 1), false, false, false},
 		{"bounded double exact", "0.5", "5e-1", types.New(types.T_float64, 4, 1), true, false, true},
 		{"float32 exact", "0.5", "5e-1", types.T_float32.ToType(), true, false, true},

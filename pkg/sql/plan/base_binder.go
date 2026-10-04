@@ -9560,7 +9560,7 @@ func foldFloatComparisonConstants(proc *process.Process, name string, args []*Ex
 			return candidate
 		}
 		oid := types.T(candidate.Typ.Id)
-		if (!oid.IsInteger() && oid != types.T_decimal64 && oid != types.T_decimal128) ||
+		if (!oid.IsInteger() && !oid.IsFloat() && oid != types.T_decimal64 && oid != types.T_decimal128) ||
 			!staticIntegerComparisonPeer(candidate) {
 			return candidate
 		}
