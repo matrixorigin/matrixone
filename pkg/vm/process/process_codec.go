@@ -188,6 +188,7 @@ func (proc *Process) BuildProcessInfo(
 		}
 		procInfo.SessionInfo.DefaultWeekFormat = uint32(weekMode)
 		procInfo.SessionInfo.DefaultWeekFormatSet = weekModeSet
+		procInfo.SessionInfo.LcTimeNames = resolveLCTimeNames(proc)
 		nullifyZeroTemporal, err := ResolveExplicitZeroTemporalCastReturnsNull(proc)
 		if err != nil {
 			return procInfo, err
@@ -493,6 +494,7 @@ func ConvertToProcessSessionInfo(
 		SqlMode:                             sei.SqlMode,
 		DefaultWeekFormat:                   uint8(sei.DefaultWeekFormat),
 		DefaultWeekFormatSet:                sei.DefaultWeekFormatSet,
+		LCTimeNames:                         sei.LcTimeNames,
 		AutoIncrementIncrement:              sei.AutoIncrementIncrement,
 		AutoIncrementOffset:                 sei.AutoIncrementOffset,
 		MaxErrorCount:                       int(sei.MaxErrorCount),
@@ -516,6 +518,25 @@ func ConvertToProcessSessionInfo(
 	}
 	sessionInfo.TimeZone = t.Location()
 	return sessionInfo, nil
+}
+
+func resolveLCTimeNames(proc *Process) string {
+	if proc == nil {
+		return ""
+	}
+	if f := proc.GetResolveVariableFunc(); f != nil {
+		if v, err := f("lc_time_names", true, false); err == nil {
+			if s, ok := v.(string); ok && s != "" {
+				return s
+			}
+		}
+	}
+	if proc.Base == nil {
+		return ""
+	}
+	// The resolver is intentionally absent on remote CN processes. Preserve
+	// the already effective value when a process is forwarded again.
+	return proc.Base.SessionInfo.LCTimeNames
 }
 
 func resolveSqlMode(proc *Process) string {
