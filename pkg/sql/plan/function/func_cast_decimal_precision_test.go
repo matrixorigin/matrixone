@@ -270,44 +270,45 @@ func TestDecimalCastCrossWidthSafeScaleGrowth(t *testing.T) {
 
 func BenchmarkDecimalSafeScaleGrowth(b *testing.B) {
 	proc := testutil.NewProcess(b)
+	defer proc.Free()
 	values64 := make([]types.Decimal64, 256)
 	values128 := make([]types.Decimal128, 256)
 	values256 := make([]types.Decimal256, 256)
+	wanted64 := make([]types.Decimal64, 256)
+	wanted128 := make([]types.Decimal128, 256)
+	wanted256 := make([]types.Decimal256, 256)
 	for i := range values64 {
 		values64[i] = 1234
 		values128[i] = types.Decimal128{B0_63: 1234}
 		values256[i] = types.Decimal256{B0_63: 1234}
+		// 12.34 represented at scale four has the literal coefficient 123400.
+		wanted64[i] = 123400
+		wanted128[i] = types.Decimal128{B0_63: 123400}
+		wanted256[i] = types.Decimal256{B0_63: 123400}
 	}
 	for _, tc := range []struct {
-		name         string
-		source       types.Type
-		target       types.Type
-		values       any
-		targetValues any
+		name   string
+		source types.Type
+		target types.Type
+		values any
+		wanted any
 	}{
-		{"decimal64", types.New(types.T_decimal64, 12, 2), types.New(types.T_decimal64, 14, 4), values64, values64},
-		{"decimal128", types.New(types.T_decimal128, 20, 2), types.New(types.T_decimal128, 22, 4), values128, values128},
-		{"decimal256", types.New(types.T_decimal256, 40, 2), types.New(types.T_decimal256, 42, 4), values256, values256},
-		{"64-to-128", types.New(types.T_decimal64, 12, 2), types.New(types.T_decimal128, 14, 4), values64, values128},
-		{"64-to-256", types.New(types.T_decimal64, 12, 2), types.New(types.T_decimal256, 14, 4), values64, values256},
-		{"128-to-256", types.New(types.T_decimal128, 20, 2), types.New(types.T_decimal256, 22, 4), values128, values256},
+		{"decimal64", types.New(types.T_decimal64, 12, 2), types.New(types.T_decimal64, 14, 4), values64, wanted64},
+		{"decimal128", types.New(types.T_decimal128, 20, 2), types.New(types.T_decimal128, 22, 4), values128, wanted128},
+		{"decimal256", types.New(types.T_decimal256, 40, 2), types.New(types.T_decimal256, 42, 4), values256, wanted256},
+		{"64-to-128", types.New(types.T_decimal64, 12, 2), types.New(types.T_decimal128, 14, 4), values64, wanted128},
+		{"64-to-256", types.New(types.T_decimal64, 12, 2), types.New(types.T_decimal256, 14, 4), values64, wanted256},
+		{"128-to-256", types.New(types.T_decimal128, 20, 2), types.New(types.T_decimal256, 22, 4), values128, wanted256},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			fc := NewFunctionTestCase(proc, []FunctionTestInput{
 				NewFunctionTestInput(tc.source, tc.values, nil),
-				NewFunctionTestInput(tc.target, tc.targetValues, nil),
-			}, NewFunctionTestResult(tc.target, false, nil, nil), NewCast)
+				NewFunctionTestInput(tc.target, emptyCastTargetValues(tc.target), nil),
+			}, NewFunctionTestResult(tc.target, false, tc.wanted, nil), NewCast)
 			defer fc.Free()
-			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				if err := fc.result.PreExtendAndReset(fc.fnLength); err != nil {
-					b.Fatal(err)
-				}
-				if _, err := fc.DebugRun(); err != nil {
-					b.Fatal(err)
-				}
-			}
+			fc.Benchmark(b)
+			require.Equal(b, tc.source, *fc.parameters[0].GetType())
+			require.Equal(b, tc.target, *fc.GetResultVectorDirectly().GetType())
 		})
 	}
 }
@@ -367,7 +368,6 @@ func TestDecimal128WideningCastDoesNotRetypeSource(t *testing.T) {
 		},
 		NewFunctionTestResult(targetType, false, []types.Decimal128{value, {}}, []bool{false, true}), NewCast)
 	defer testCase.Free()
-	require.NoError(t, testCase.result.PreExtendAndReset(testCase.fnLength))
 	result, err := testCase.DebugRun()
 	require.NoError(t, err)
 	require.Equal(t, sourceType, *testCase.parameters[0].GetType())

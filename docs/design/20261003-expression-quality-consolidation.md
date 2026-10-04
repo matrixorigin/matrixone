@@ -188,3 +188,293 @@ cache completed the same checks in 68s. MO-specific lint has no incremental
 finding: its two unsafe diagnostics exactly match prior accepted evidence in
 unchanged files. Formatting and patch checks pass. No new BVT is required for
 this fixture-only change; existing production/public-path evidence is unchanged.
+
+## Decimal256 scalar cast oracle consolidation (Refs #29249)
+
+The dispatcher test now owns 21 original numeric/string destination routes and
+five rejection cases. Eight former NULL-only evaluations share the corresponding
+positive evaluations, with exact NULL publication assertions. Seven helper smoke
+calls are absorbed into these real dispatch routes; a separate `(76,0) → (65,0)`
+case preserves the helper parsing path, distinct from `(76,0) → (76,0)` copying.
+Thus 41 evaluations become 27; no measured speedup is claimed for this closure.
+
+Independent typed coefficient/value literals replace ignored errors and unchecked
+results. Binary padding is checked byte for byte. Successful results retain full
+destination metadata and source metadata; rejected casts assert error classes,
+diagnostics and no NULL publication; binary width rejection also checks empty
+variable output. Fixed result length is preallocated, so it is not an error
+publication oracle. Both pool accounts must return to baseline after
+each child, including early assertion failure. Existing FunctionTestCase owns
+construction, result comparison and cleanup; one existing Process constructor
+supplies context and memory without unnecessary file or SQL services.
+
+Public CAST scale normalization, fractional assignment, precision rejection,
+rounding, YEAR SQL modes and Datalink validation remain in their existing tests.
+The bare numeric Datalink route is not a public validation claim. The current YEAR
+route was absent from the old matrix and is outside this bounded consolidation.
+Production code, shared framework and dependencies are unchanged; BVT is not
+applicable to this test-only scalar fixture closure. Focused normal/race runs
+pass all 27 children; 11 related public CAST tests pass. Vet and configured
+incremental lint pass; two unchanged baseline MO lint diagnostics remain.
+Six task-private producer mutations survive the old tests and are rejected by
+the strengthened assertions, with both accounts restored. A forced FailNow
+restores both accounts; omitting cleanup retains 32 heap bytes and is detected.
+The initial diagnostic classifier incorrectly demanded simultaneous native and
+heap leakage; the existing runtime logs were reclassified without rerunning.
+Full function race remains failed under #29592 and unwaived; #29593 and #29594
+remain unresolved. This local checkpoint cannot clear those gates; #29249 stays
+open.
+
+## Decimal multiplication/modulo kernel consolidation (Refs #29249)
+
+Baseline: `83b47281b875a549eb21460282c920273109ffe4`. One connected test file
+consolidates 15 overlapping wrappers into existing kernel owners. Production,
+shared framework, dependencies and public BVT are unchanged. There are 101 kernel
+calls and 205 logical positions, formerly 110 and 8,366, excluding unchanged
+exceptional owners. Single-purpose batches stay direct; tables contain only
+varying policy fields. `d256MulRef` remains the existing benchmark baseline.
+
+| Retired responsibilities | Retained owners and independent witnesses |
+| --- | --- |
+| D128 multiplication, scales, constants and NULLs | `TestD128Mul`: int64/inline routes, both broadcast orientations, four separate signed-admission boundary identities, rounding and typed overflow |
+| D256 multiplication tiers and large operands | `TestD256Mul`: actual int32/int64/generic routes, MaxInt64 squared, full-width carry, NULL-first mixed batches and scaled generic overflow suppression |
+| Misnamed high-scale/int64 smokes | Reduction 8 is `TestD256Mul_Int32ScaleDown`; the former int64 fixture actually sampled int32. Actual high-scale, declared-width and raw-overflow recovery owners remain in `arith_decimal_wide_test.go` |
+| Modulo helper argument matrices | `TestD256Mod`: caller-derived admission/length/bitmap, both scale directions/chunks, narrowing fallback, dividend sign and full-width remainders |
+| Modulo zero/NULL policies | `TestD256Mod_DivByZeroPaths`: strict typed errors, permissive NULL publication followed by a live row, pre-existing NULL followed by a live row, all-NULL vector-divisor control |
+
+All 105 former named children have concrete retained destinations in the local
+review evidence. Original large-modulo operands, carry and alignment-overflow
+owners remain. The original multi-step helper rounding oracles remain, with four
+caller batches added. Inline adjustments retain their operands but use reachable
+scales `(8,8)` and `(12,12)`. NULL payloads are undefined: compare every live
+coefficient and the complete bitmap. Public wholly-NULL/constant-zero bypass
+remains in its existing public owner. No scratch-result publication is assumed
+on raw errors.
+
+Final focused normal and race runs pass 18 owners and 125 children, zero skips.
+The owning function package passed 2,096 ordinary tests and its fuzz seeds; the
+last three added NULL positions change only two pure test bodies, covered by the
+final focused runs. Unchanged owners reuse that complete-package evidence.
+Vet and configured incremental lint pass (0 incremental issues); MO lint retains
+two byte-identical baseline unsafe-import diagnostics. BVT is not applicable.
+Ten task-private producer variants are rejected by 26 expected runtime assertion
+failures, including NULL early returns, rounded/high-limb values, fallback,
+whole-batch admission and zero policy/class. Formal production is untouched.
+
+Three alternating pairs use the same diagnostic binary and untouched production
+kernels. Summed synchronous test-body medians: wall 4.731ms -> 1.391ms (-70.6%),
+process CPU 5.153ms -> 1.734ms (-66.3%), Go TotalAlloc 1,330,960 -> 326,272 bytes
+(-75.5%), allocations 14,273 -> 4,181 (-70.7%). CPU includes background threads;
+Go allocation excludes native memory and RSS. These exclude initialization,
+fixtures, build/link and queue time; they are not whole-CI or machine gains. An
+initial broad selector accidentally included eight unmeasured wide tests; that
+pair is uncredited. Six corrected exact-scope runs reuse the same built binary.
+These focused results do not clear the failed/unwaived full function race gate
+under #29592. This checkpoint remains local; #29249 is an ongoing task.
+
+### Decimal Add/Sub consolidation — local work in progress
+
+Starting at `a7033da65d`, the six existing batch-kernel owners use independent
+literal coefficients, complete NULL bitmaps and required error codes. Alias
+bindings, helper indices, singleton decimal-minus-integer Format oracles and
+wrapper error translation retain separate owners. The six scalar Decimal64
+method cases move intact into the existing types owner. Thirteen duplicate
+batch-test owners, two mixed-owner children and their exclusive reference/data
+helpers retire. Shared helper and benchmark consumers remain.
+
+NULL witnesses preserve the intended scaling admission: fast-path masked
+coefficients stay within the prescan domain; separate checked-scaling cases
+verify suppressed overflow and continuation. Scaling helper tests now compare
+full signed coefficients. The error-mapping test registers cleanup immediately
+after each allocation and checks both memory accounts after release.
+
+The canonical tables contain 143 calls and 381 logical positions, excluding
+retained/helper owners. Cost measurement below covers the mapped fast-file owners.
+The normal candidate executes 139 passing cases and four separately failing
+scale-39 vector-upscaling cases. The latter are correct-result expectations,
+not expected-panic tests. Actual SQL parsing, planning and expression execution
+also reproduce this defect; this is not full-server BVT evidence.
+
+The promoted sources pass the types package and the function package excluding
+those four independently recorded failures. Focused race passes 14 owners and
+192 subtests, with the same four known failures excluded and recorded separately.
+Scoped vet and incremental lint pass (0 new lint issues); molint exits zero with
+two byte-identical baseline unsafe-import diagnostics. Comment cleanup changes
+no executable text. Three private producer variants (zeroed scaling result,
+wrong error class, first-row-only admission) survive the selected old tests;
+the strengthened tests reject all three with 14 runtime assertion failures.
+Both normal control groups pass for every variant. This evidence covers these
+three counterexamples, not exhaustive correctness. Final gpt-6.1-sol xhigh
+read-only review found no additional defects or checkpoint blockers and accepted
+only an explicitly known-red local checkpoint. The scale-39 production defect
+and full-function race gate #29592 are unresolved. This work is local and is
+neither a green delivery nor completion of #29249.
+
+Three alternating same-binary pairs measure 23 original versus 10 current
+fast-file owners, using untouched production arithmetic. Test-body median wall
+8.360ms -> 2.189ms, process CPU 8.856ms -> 2.679ms, Go TotalAlloc 1,217,176 ->
+516,360 bytes and allocations 29,157 -> 6,512. The mapped scope includes unchanged
+mixed NULL/downscale siblings on both sides; moved types rows, wrapper cleanup
+and unchanged alias/Format owners are outside this measurement. Four new known-red
+scale-39 literals are omitted only from the diagnostic snapshot; their formal
+regressions remain unchanged and failed. This is a passing-closure cost comparison,
+not evidence that all new tests pass. CPU includes background threads; allocation
+excludes native memory/RSS; build/link/init/queue are outside the measured bodies.
+Root-body measurements include child test-harness work and verbose output.
+An initial unequal-filter run and a subsequent equal-filter run are uncredited:
+Go 1.26.4 testdeps caches one regex, so alternating run/skip patterns recompiles
+regexes and distorts test-body cost. The final comparison has no skip filter.
+
+### Decimal64 multiplication — validated local checkpoint
+
+`d64Mul` owns scale/shape dispatch through `d64MulScaled` and `d64MulInline`.
+Six test owners consolidate into the existing `TestD64Mul`: 20 old scenarios map
+to 24 cases, with 3,712 rows reduced to 78. Five duplicate owners and orphan
+comments retire. All 164 other function bodies, including benchmarks, remain
+identical. Test delta: -143 lines/-2,715 bytes; production delta: zero.
+
+The old `LargeValues_SlowPath` actually stayed inside signed-int32 admission.
+Independent literal coefficients now cover real wide scaling, both admission
+operands, late-wide-row rejection, signed endpoints/high limbs, half rounding,
+NULL-prefix continuation, scalar broadcasting and scale-policy boundaries.
+Review found that wide fast-path quotients must be preserved separately in VV,
+SV and VS loops; each now has positive and negative results exceeding int32.
+A left-int32/right-wide case independently verifies the right admission gate.
+No artificial overflow-error matrix is added: signed D64 products fit D128.
+
+All 24 controls pass. Six private wrong implementations are rejected by 12 new
+runtime assertions; two original broadcast tests also reject narrowed quotients,
+proving those obligations were retained. Selected old NoError-only groups miss
+NULL/rounding faults; all six old owners miss the admission faults. Both controls
+pass for every variant. This is scoped sensitivity evidence, not exhaustive QA.
+
+Three alternating same-binary pairs use untouched kernels: root-body medians
+wall 1.562ms -> 0.355ms, process CPU 1.665ms -> 0.431ms, Go TotalAlloc 276,312 ->
+68,512 bytes and allocations 4,761 -> 954. Child harness/verbose output are
+included; build/link/init/queue and native memory/RSS are excluded. These are
+mapped test costs, not whole-CI or query gains. Current go vet and incremental
+lint pass; molint exits zero with the same two recorded unsafe-import diagnostics.
+The gpt-6.1-sol xhigh follow-up review closes both findings without additional
+concrete defects. Current focused race exits zero with all 24 cases passing and no skipped cases.
+The earlier superseded race build was cancelled after the review findings, not
+counted as passed. Four scale-39 failures and full-function
+race #29592 remain unchanged and unwaived; #29249 remains unfinished.
+
+### Decimal division — proposed next closure, review changes open
+
+Production `divFn` reads the bound result scale and uses the three AtScale
+adapters/kernels. The old three factories, three default-scale entry points and
+`legacyDecimalDivisionScale` have only test/benchmark consumers. The proposed
+retirement migrates 137 call sites at their original numerical scales before
+removing those seven symbols. This preserves workload semantics; the frozen
+raw scales do not define current SQL type inference. A focused control checkpoint
+separates migration mistakes from later fixture/oracle replacement.
+
+Then consolidate batch contracts into existing `TestD64Div`, `TestD128Div` and
+`TestD256Div` typed tables. Map every old scenario by physical shape, scale
+adjustment, admission operand, actual fallback, signed quotient range, rounding,
+NULL and typed error before deletion. Preserve strong Format/cross-width/integer
+oracles, mixed non-division children and benchmark workloads. Expected limbs
+come from independent integer arithmetic with one final half-away-from-zero
+rounding; production helpers must not calculate expected values.
+
+Names are not branch evidence: D64 inline scaling cannot overflow because
+`2^63 * 10^19 < 2^127`; its six overflow-fallback sites are retirement candidates
+requiring explicit review. Two D128 fallback owners also use numerators too small
+to reach their claimed inline rejection. Preserve their useful value/NULL domains
+and add genuine intermediate-overflow and final-overflow witnesses. Keep the
+D128 fallback and D64 out-of-inline scale paths, which remain reachable.
+
+Existing adapters own all-masked admission, public error translation and result
+precision; existing direct-call/executor owners publish constant results. Reuse
+these consumer tests and strengthen only missing metadata/error assertions.
+Raw singleton cases do not establish arbitrary logical-length broadcasting.
+Require actual normal/race/static terminal results, independent QA rejection and
+matched body-cost measurements. No query-speed or whole-CI gain is claimed.
+This proposal does not resolve scale-39 or #29592, and does not complete #29249.
+
+Independent gpt-6.1-sol xhigh review required typed final-overflow assertions
+in all six D128 inline-fallback loops and named deletion mappings. These design
+conditions are now closed: three D64 no-NULL destinations were corrected, and
+two D128 masked generic scenarios also map to existing high-limb continuation
+oracles. All 130 original scenarios, three benchmarks and eight direct helper
+calls have named dispositions; mixed siblings and strong independent owners stay.
+
+Phase A was committed as `1494ca5612`: 137 explicit-scale caller migrations and
+seven unused definitions removed. All 37 controls, vet and incremental lint pass;
+molint has two unchanged baseline diagnostics. Its review accepted that mechanical
+checkpoint only.
+
+Phase B is applied locally. The three concrete division tables have 157 cases;
+18 selected test roots pass with no skips, including retained independent owners
+and strengthened metadata/constant-publication consumers. Six private mutations,
+each swallowing one D128 fallback error, are rejected by the corresponding typed
+assertion; both real and unmutated-clone controls pass all 80 D128 cases. The D64
+change removes only six proven-unreachable fallbacks and corrects their obsolete
+scale-policy comment. Other scale paths and all D128 fallbacks remain.
+
+The fast-test consolidation removes 470 lines while adding about 8.1 KB of
+literal data and exact assertions; 138 other function bodies, including benchmarks,
+are byte-identical. Line reduction alone is not a cost claim. Public precision
+checks now cover the nearest accepted bound, exact bound, rounding carry and the
+original legal-input overflow with typed errors and immediate fixture cleanup;
+all four cases pass with no skips. The 19 selected roots pass with race. After
+moving four constant-constructor cleanup registrations before error assertions,
+both affected consumer roots pass with race again. Vet, molint and incremental
+lint also pass after that cleanup at the current source hashes. The independent implementation
+review accepts this nonfinal checkpoint. Its maintenance suggestions are applied:
+wide literal rows are split by field, the K boundary formula is documented, and
+the unused D256 error field/branch is removed. Its 41 cases pass with race again. Molint retains only its two baseline diagnostics. No push or whole-goal completion
+is approved; scale-39 and full-function race #29592 remain failed and unwaived.
+
+
+Three alternating same-binary profile pairs compare 27 original owners against
+the three canonical tables plus the retained mixed Mod child. Both groups use
+the same current producers and pass. Median summed test-body wall time is
+5.706 ms versus 1.979 ms, CPU 6.170 ms versus 2.477 ms, Go allocation 919,816 B
+versus 481,312 B, and allocation count 18,750 versus 6,496. These counters exclude
+compile/link/init, between-root framework costs and public precision/metadata
+additions. They establish a local test-body improvement, not query or whole-CI
+speedup. Two additional private mutations independently omit the left/right
+D256 admission predicate; each is rejected in VV/SV/VS, while both 41-case
+real/cloned controls pass.
+
+## 2026-10-04: full-scale alignment and current-main validation
+
+The Decimal256 alignment defect found during consolidation is tracked in
+[#29607](https://github.com/matrixorigin/matrixone/issues/29607). All eight fused
+vector Add/Sub preparations now preserve the complete exponent and reuse checked
+chunked multiplication beyond 38. Modulo narrowing proves both coefficient fit
+and the bounded scale domain, retaining generic intermediate-overflow recovery.
+The common one/two-factor paths, NULL ordering, error contracts and scalar paths
+remain intact. The four previously failing scale39 result cases now pass.
+
+The fix retains 112 original arithmetic table rows with unchanged inputs and
+oracles. New cells cover signed wide alignment, the remaining vector branches,
+masked overflow, modulo shapes/zero continuation and late-chunk failure. The
+real planner/executor checks bound operand scales, exact coefficients, NULLs and
+metadata. SQL BVT shares three rows across grouped operator checks and includes
+precision65 success/error, continuation and table teardown. Four private wrong
+implementations are rejected by their intended tests.
+
+The branch was rebased onto main `3eab55f2ab`, including the merged #29595
+corrections for #29592–#29594. Decimal64 rebase conflicts preserve all 15 main
+boundary rows. Existing exact downscale and diagnostic oracles share the current
+scale table; failures additionally assert that the original operand is retained.
+The five separately reviewed alignment-fix files are byte-identical across rebase.
+
+On this rebased source, complete types/function/plan normal tests pass, as do
+complete types/function race tests, including the former #29592 failure. The
+exact SQL BVT passes twice on one ready, test-owned CN: 33 checks per run, zero
+ignored/abnormal checks, metadata comparison and zero-residue teardown. CN/TN
+memory caches are configured at 32MB; Java uses a 256MB heap ceiling. Final
+incremental static validation passes for the three changed Go package closures:
+vet, molint and configured incremental lint all exit zero.
+
+Pre-rebase matched measurements of the unchanged alignment owners cover 96
+Add/Sub and 32 modulo cases, three samples per implementation, with zero Go
+allocations and no material common-path regression. These measurements do not
+establish whole-query, complete-package CPU or whole-CI improvements. Earlier
+failed race evidence is retained as historical evidence; its gate is closed by
+validation of the corrected dependency, rather than by repeating the old code.
+The wider #29249 task remains ongoing.
