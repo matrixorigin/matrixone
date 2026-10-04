@@ -800,3 +800,41 @@ changes 30,526.5 → 5.465 ns and 69,918.5 → 3.264 ns. These deliberately boun
 internal-API controls demonstrate removal of exponent-proportional zero work;
 they are not SQL, query or CI performance claims. No production benchmark or
 server fixture is added to the delivered tests.
+
+## D256 integer division dispatch contract checkpoint
+
+The integer result has no result scale. `d256IntDivViaD128` never reads its
+`scale` argument: one production caller and fifteen direct test calls only pass
+it through the signature. Remove that argument and the caller's constant-zero
+local; retain the adjustment, source scales and initial mask snapshot. No
+arithmetic, admission, result, error or NULL publication rule changes.
+
+Before replacement, eight `TestD256IntDivViaD128_AllPaths` children are mapped
+individually in `dispatch-retirement-ledger.json`. Their three shapes, mask
+states and zero/negative adjustments remain; exact literal quotients and
+untouched masked scratch slots replace `NoError` alone. The former comment
+claimed positive adjustment above 19, but no old call used it. One additional
+named row supplies that missing cell with a 10^20 divisor and representable
+signed quotients. Input slices are shared only after proving the kernels read
+coefficients by value; each child gets fresh result and NULL state. Cardinality
+plus the sole expected member proves the whole NULL bitmap. This owner shrinks
+95 → 56 lines and 128 → 27 processed rows. All fifty benchmark bodies and the
+independent scale-alignment overflow owner are unchanged.
+
+Seven D256 roots/34 children pass normally and with race; the full function
+package passes 2,042 roots/8,239 children. Incremental vet, molint and lint pass.
+A private independent signed-coefficient model checks all 23 evaluated results.
+Two producer mutants (wrong quotient and masked-slot overwrite) pass the old
+mapped owner, then fail real final assertions; this is not a claim about the
+entire old suite. Evidence lives in `29249-d256-intdiv-20261004`.
+
+Eight alternating same-binary samples measure owner bodies, child fixtures and
+assertions, excluding outer roots, GC preconditioning, build/link/init and
+queueing. Median wall time is 83.903 → 88.509 µs (+5.5%), process CPU 108 →
+115.5 µs (+6.9%), bytes 25,216 → 24,376 (-3.3%), allocations 234 → 274.5
+(+17.3%). These small measurements establish no runtime saving. An initial
+version cost more and was simplified without weakening its oracle. The extra
+semantic cell and exact assertions have a disclosed cost; consolidate the
+remaining duplicate D256 owners before claiming an overall improvement. No
+server/BVT is needed for unused internal argument retirement and UT-only work;
+prior SQL repairs retain their separate open BVT gate. #29249 remains active.
