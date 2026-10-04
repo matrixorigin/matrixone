@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
@@ -43,4 +44,66 @@ func TestDecimal256HighScaleMultiplicationPublicPath(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, result.IsNull(0))
 	require.Equal(t, types.Decimal256{}, vector.GetFixedAtWithTypeCheck[types.Decimal256](result, 0))
+}
+
+// Scan vectors prevent constant folding from bypassing the batch arithmetic owner.
+func TestDecimal256ScaleAlignmentPublicPath(t *testing.T) {
+	for _, tc := range []struct {
+		name, sql                    string
+		scale, leftScale, rightScale int32
+		want                         []types.Decimal256
+	}{
+		{"add_38_left", "select cast(n_nationkey as decimal(20,0)) + cast('3e-38' as decimal(65,38)) from nation", 38, 0, 38, []types.Decimal256{{B0_63: 0x98a224000000003, B64_127: 0x4b3b4ca85a86c47a}, {B0_63: 0x1314448000000003, B64_127: 0x96769950b50d88f4}}},
+		{"add_38_right", "select cast('3e-38' as decimal(65,38)) + cast(n_nationkey as decimal(20,0)) from nation", 38, 38, 0, []types.Decimal256{{B0_63: 0x98a224000000003, B64_127: 0x4b3b4ca85a86c47a}, {B0_63: 0x1314448000000003, B64_127: 0x96769950b50d88f4}}},
+		{"sub_38_left", "select cast(n_nationkey as decimal(20,0)) - cast('3e-38' as decimal(65,38)) from nation", 38, 0, 38, []types.Decimal256{{B0_63: 0x98a223ffffffffd, B64_127: 0x4b3b4ca85a86c47a}, {B0_63: 0x1314447ffffffffd, B64_127: 0x96769950b50d88f4}}},
+		{"sub_38_right", "select cast('3e-38' as decimal(65,38)) - cast(n_nationkey as decimal(20,0)) from nation", 38, 38, 0, []types.Decimal256{{B0_63: 0xf675ddc000000003, B64_127: 0xb4c4b357a5793b85, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}, {B0_63: 0xecebbb8000000003, B64_127: 0x698966af4af2770b, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}},
+		{"mod_38_left", "select cast(n_nationkey as decimal(20,0)) % cast('3e-38' as decimal(65,38)) from nation", 38, 0, 38, []types.Decimal256{{B0_63: 0x1}, {B0_63: 0x2}}},
+		{"mod_38_right", "select cast('3e-38' as decimal(65,38)) % cast(n_nationkey as decimal(20,0)) from nation", 38, 38, 0, []types.Decimal256{{B0_63: 0x3}, {B0_63: 0x3}}},
+		{"add_39_left", "select cast(n_nationkey as decimal(20,0)) + cast('3e-39' as decimal(65,39)) from nation", 39, 0, 39, []types.Decimal256{{B0_63: 0x5f65568000000003, B64_127: 0xf050fe938943acc4, B128_191: 0x2}, {B0_63: 0xbecaad0000000003, B64_127: 0xe0a1fd2712875988, B128_191: 0x5}}},
+		{"add_39_right", "select cast('3e-39' as decimal(65,39)) + cast(n_nationkey as decimal(20,0)) from nation", 39, 39, 0, []types.Decimal256{{B0_63: 0x5f65568000000003, B64_127: 0xf050fe938943acc4, B128_191: 0x2}, {B0_63: 0xbecaad0000000003, B64_127: 0xe0a1fd2712875988, B128_191: 0x5}}},
+		{"sub_39_left", "select cast(n_nationkey as decimal(20,0)) - cast('3e-39' as decimal(65,39)) from nation", 39, 0, 39, []types.Decimal256{{B0_63: 0x5f65567ffffffffd, B64_127: 0xf050fe938943acc4, B128_191: 0x2}, {B0_63: 0xbecaacfffffffffd, B64_127: 0xe0a1fd2712875988, B128_191: 0x5}}},
+		{"sub_39_right", "select cast('3e-39' as decimal(65,39)) - cast(n_nationkey as decimal(20,0)) from nation", 39, 39, 0, []types.Decimal256{{B0_63: 0xa09aa98000000003, B64_127: 0xfaf016c76bc533b, B128_191: 0xfffffffffffffffd, B192_255: 0xffffffffffffffff}, {B0_63: 0x4135530000000003, B64_127: 0x1f5e02d8ed78a677, B128_191: 0xfffffffffffffffa, B192_255: 0xffffffffffffffff}}},
+		{"mod_39_left", "select cast(n_nationkey as decimal(20,0)) % cast('3e-39' as decimal(65,39)) from nation", 39, 0, 39, []types.Decimal256{{B0_63: 0x1}, {B0_63: 0x2}}},
+		{"mod_39_right", "select cast('3e-39' as decimal(65,39)) % cast(n_nationkey as decimal(20,0)) from nation", 39, 39, 0, []types.Decimal256{{B0_63: 0x3}, {B0_63: 0x3}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := runOneExprStmt(NewMockOptimizer(false), t, tc.sql)
+			require.NoError(t, err)
+			var expr *pb.Expr
+			for _, node := range stmt.GetQuery().Nodes {
+				if node.NodeType == pb.Node_PROJECT {
+					require.Len(t, node.ProjectList, 1)
+					expr = node.ProjectList[0]
+				}
+			}
+			require.NotNil(t, expr)
+			require.Equal(t, int32(types.T_decimal256), expr.Typ.Id)
+			require.Equal(t, tc.scale, expr.Typ.Scale)
+			args := expr.GetF().Args
+			require.Len(t, args, 2)
+			require.Equal(t, tc.leftScale, args[0].Typ.Scale)
+			require.Equal(t, tc.rightScale, args[1].Typ.Scale)
+			proc := testutil.NewProc(t)
+			defer proc.Free()
+			input := batch.NewWithSize(1)
+			defer input.Clean(proc.Mp())
+			input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+			require.NoError(t, vector.AppendFixedList(input.Vecs[0], []int32{1, 2, 0}, []bool{false, false, true}, proc.Mp()))
+			input.SetRowCount(3)
+			executor, err := colexec.NewExpressionExecutor(proc, expr)
+			require.NoError(t, err)
+			defer executor.Free()
+			result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+			require.NoError(t, err)
+			require.Equal(t, 3, result.Length())
+			require.Equal(t, types.T_decimal256, result.GetType().Oid)
+			require.Equal(t, expr.Typ.Width, result.GetType().Width)
+			require.Equal(t, tc.scale, result.GetType().Scale)
+			for i, want := range tc.want {
+				require.False(t, result.IsNull(uint64(i)))
+				require.Equal(t, want, vector.GetFixedAtWithTypeCheck[types.Decimal256](result, i))
+			}
+			require.True(t, result.IsNull(2))
+		})
+	}
 }

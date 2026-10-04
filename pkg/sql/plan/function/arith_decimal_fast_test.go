@@ -3483,7 +3483,7 @@ func TestD256Add(t *testing.T) {
 			0, 2, nil,
 			nil, moerr.ErrInvalidInput,
 		},
-		// known vector-upscale defect at39
+		// Vector alignment at the bounded-factorization boundary.
 		{
 			"scale_boundary_38_left_vector",
 			[]types.Decimal256{{B0_63: 0x1}, {B0_63: 0x2}},
@@ -3491,7 +3491,7 @@ func TestD256Add(t *testing.T) {
 			0, 38, nil,
 			[]types.Decimal256{{B0_63: 0x98a224000000003, B64_127: 0x4b3b4ca85a86c47a}, {B0_63: 0x1314448000000003, B64_127: 0x96769950b50d88f4}}, 0,
 		},
-		// known vector-upscale defect at39
+		// Vector alignment at the bounded-factorization boundary.
 		{
 			"scale_boundary_38_right_vector",
 			[]types.Decimal256{{B0_63: 0x3}},
@@ -3507,7 +3507,7 @@ func TestD256Add(t *testing.T) {
 			0, 38, nil,
 			[]types.Decimal256{{B0_63: 0x98a224000000003, B64_127: 0x4b3b4ca85a86c47a}, {B0_63: 0x98a224000000007, B64_127: 0x4b3b4ca85a86c47a}}, 0,
 		},
-		// known vector-upscale defect at39
+		// Vector alignment at the bounded-factorization boundary.
 		{
 			"scale_boundary_39_left_vector",
 			[]types.Decimal256{{B0_63: 0x1}, {B0_63: 0x2}},
@@ -3515,7 +3515,7 @@ func TestD256Add(t *testing.T) {
 			0, 39, nil,
 			[]types.Decimal256{{B0_63: 0x5f65568000000003, B64_127: 0xf050fe938943acc4, B128_191: 0x2}, {B0_63: 0xbecaad0000000003, B64_127: 0xe0a1fd2712875988, B128_191: 0x5}}, 0,
 		},
-		// known vector-upscale defect at39
+		// Vector alignment at the bounded-factorization boundary.
 		{
 			"scale_boundary_39_right_vector",
 			[]types.Decimal256{{B0_63: 0x3}},
@@ -3531,6 +3531,16 @@ func TestD256Add(t *testing.T) {
 			0, 39, nil,
 			[]types.Decimal256{{B0_63: 0x5f65568000000003, B64_127: 0xf050fe938943acc4, B128_191: 0x2}, {B0_63: 0x5f65568000000007, B64_127: 0xf050fe938943acc4, B128_191: 0x2}}, 0,
 		},
+		// Raw signed-256 domain: coefficients at scale76 may exceed SQL precision65.
+		{"scale_39_VV_left", []types.Decimal256{{B0_63: 0x1}, {B0_63: 0xffffffffffffffff, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, []types.Decimal256{{B0_63: 0x3}, {B0_63: 0xfffffffffffffff9, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, 0, 39, nil, []types.Decimal256{{B0_63: 0x5f65568000000003, B64_127: 0xf050fe938943acc4, B128_191: 0x2}, {B0_63: 0xa09aa97ffffffff9, B64_127: 0xfaf016c76bc533b, B128_191: 0xfffffffffffffffd, B192_255: 0xffffffffffffffff}}, 0},
+		{"scale_39_VV_right", []types.Decimal256{{B0_63: 0x3}, {B0_63: 0xfffffffffffffff9, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, []types.Decimal256{{B0_63: 0x1}, {B0_63: 0xffffffffffffffff, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, 39, 0, nil, []types.Decimal256{{B0_63: 0x5f65568000000003, B64_127: 0xf050fe938943acc4, B128_191: 0x2}, {B0_63: 0xa09aa97ffffffff9, B64_127: 0xfaf016c76bc533b, B128_191: 0xfffffffffffffffd, B192_255: 0xffffffffffffffff}}, 0},
+		{"scale_57_VV_left", []types.Decimal256{{B0_63: 0x1}, {B0_63: 0xffffffffffffffff, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, []types.Decimal256{{B0_63: 0x3}, {B0_63: 0xfffffffffffffff9, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, 0, 57, nil, []types.Decimal256{{B0_63: 0x4a00000000000003, B64_127: 0xebfdcb54864ada83, B128_191: 0x28c87cb5c89a2571}, {B0_63: 0xb5fffffffffffff9, B64_127: 0x140234ab79b5257c, B128_191: 0xd737834a3765da8e, B192_255: 0xffffffffffffffff}}, 0},
+		{"scale_57_VV_right", []types.Decimal256{{B0_63: 0x3}, {B0_63: 0xfffffffffffffff9, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, []types.Decimal256{{B0_63: 0x1}, {B0_63: 0xffffffffffffffff, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, 57, 0, nil, []types.Decimal256{{B0_63: 0x4a00000000000003, B64_127: 0xebfdcb54864ada83, B128_191: 0x28c87cb5c89a2571}, {B0_63: 0xb5fffffffffffff9, B64_127: 0x140234ab79b5257c, B128_191: 0xd737834a3765da8e, B192_255: 0xffffffffffffffff}}, 0},
+		{"scale_65_VV_left", []types.Decimal256{{B0_63: 0x1}, {B0_63: 0xffffffffffffffff, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, []types.Decimal256{{B0_63: 0x3}, {B0_63: 0xfffffffffffffff9, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, 0, 65, nil, []types.Decimal256{{B0_63: 0x3, B64_127: 0x4e3945ef7a25360a, B128_191: 0x1c7fc3908a8bef46, B192_255: 0xf31627}, {B0_63: 0xfffffffffffffff9, B64_127: 0xb1c6ba1085dac9f5, B128_191: 0xe3803c6f757410b9, B192_255: 0xffffffffff0ce9d8}}, 0},
+		{"scale_65_VV_right", []types.Decimal256{{B0_63: 0x3}, {B0_63: 0xfffffffffffffff9, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, []types.Decimal256{{B0_63: 0x1}, {B0_63: 0xffffffffffffffff, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, 65, 0, nil, []types.Decimal256{{B0_63: 0x3, B64_127: 0x4e3945ef7a25360a, B128_191: 0x1c7fc3908a8bef46, B192_255: 0xf31627}, {B0_63: 0xfffffffffffffff9, B64_127: 0xb1c6ba1085dac9f5, B128_191: 0xe3803c6f757410b9, B192_255: 0xffffffffff0ce9d8}}, 0},
+		{"scale_76_VV_left", []types.Decimal256{{B0_63: 0x1}, {B0_63: 0xffffffffffffffff, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, []types.Decimal256{{B0_63: 0x3}, {B0_63: 0xfffffffffffffff9, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, 0, 76, nil, []types.Decimal256{{B0_63: 0x3, B64_127: 0x7775a5f171951000, B128_191: 0x764b4abe8652979, B192_255: 0x161bcca7119915b5}, {B0_63: 0xfffffffffffffff9, B64_127: 0x888a5a0e8e6aefff, B128_191: 0xf89b4b54179ad686, B192_255: 0xe9e43358ee66ea4a}}, 0},
+		{"scale_76_VV_right", []types.Decimal256{{B0_63: 0x3}, {B0_63: 0xfffffffffffffff9, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, []types.Decimal256{{B0_63: 0x1}, {B0_63: 0xffffffffffffffff, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, 76, 0, nil, []types.Decimal256{{B0_63: 0x3, B64_127: 0x7775a5f171951000, B128_191: 0x764b4abe8652979, B192_255: 0x161bcca7119915b5}, {B0_63: 0xfffffffffffffff9, B64_127: 0x888a5a0e8e6aefff, B128_191: 0xf89b4b54179ad686, B192_255: 0xe9e43358ee66ea4a}}, 0},
+		{"scale_76_masked_alignment_overflow", []types.Decimal256{maxCoefficient, {B0_63: 1}}, []types.Decimal256{{B0_63: 0x3}}, 0, 76, []uint64{0}, []types.Decimal256{{}, {B0_63: 0x3, B64_127: 0x7775a5f171951000, B128_191: 0x764b4abe8652979, B192_255: 0x161bcca7119915b5}}, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			length := max(len(tc.left), len(tc.right))
@@ -3778,7 +3788,7 @@ func TestD256Sub(t *testing.T) {
 			0, 2, nil,
 			nil, moerr.ErrInvalidInput,
 		},
-		// known vector-upscale defect at39
+		// Vector alignment at the bounded-factorization boundary.
 		{
 			"scale_boundary_38_left_vector",
 			[]types.Decimal256{{B0_63: 0x1}, {B0_63: 0x2}},
@@ -3786,7 +3796,7 @@ func TestD256Sub(t *testing.T) {
 			0, 38, nil,
 			[]types.Decimal256{{B0_63: 0x98a223ffffffffd, B64_127: 0x4b3b4ca85a86c47a}, {B0_63: 0x1314447ffffffffd, B64_127: 0x96769950b50d88f4}}, 0,
 		},
-		// known vector-upscale defect at39
+		// Vector alignment at the bounded-factorization boundary.
 		{
 			"scale_boundary_38_right_vector",
 			[]types.Decimal256{{B0_63: 0x3}},
@@ -3802,7 +3812,7 @@ func TestD256Sub(t *testing.T) {
 			0, 38, nil,
 			[]types.Decimal256{{B0_63: 0x98a223ffffffffd, B64_127: 0x4b3b4ca85a86c47a}, {B0_63: 0x98a223ffffffff9, B64_127: 0x4b3b4ca85a86c47a}}, 0,
 		},
-		// known vector-upscale defect at39
+		// Vector alignment at the bounded-factorization boundary.
 		{
 			"scale_boundary_39_left_vector",
 			[]types.Decimal256{{B0_63: 0x1}, {B0_63: 0x2}},
@@ -3810,7 +3820,7 @@ func TestD256Sub(t *testing.T) {
 			0, 39, nil,
 			[]types.Decimal256{{B0_63: 0x5f65567ffffffffd, B64_127: 0xf050fe938943acc4, B128_191: 0x2}, {B0_63: 0xbecaacfffffffffd, B64_127: 0xe0a1fd2712875988, B128_191: 0x5}}, 0,
 		},
-		// known vector-upscale defect at39
+		// Vector alignment at the bounded-factorization boundary.
 		{
 			"scale_boundary_39_right_vector",
 			[]types.Decimal256{{B0_63: 0x3}},
@@ -3826,6 +3836,18 @@ func TestD256Sub(t *testing.T) {
 			0, 39, nil,
 			[]types.Decimal256{{B0_63: 0x5f65567ffffffffd, B64_127: 0xf050fe938943acc4, B128_191: 0x2}, {B0_63: 0x5f65567ffffffff9, B64_127: 0xf050fe938943acc4, B128_191: 0x2}}, 0,
 		},
+		// Raw signed-256 domain: coefficients at scale76 may exceed SQL precision65.
+		{"scale_39_VV_left", []types.Decimal256{{B0_63: 0x1}, {B0_63: 0xffffffffffffffff, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, []types.Decimal256{{B0_63: 0x3}, {B0_63: 0xfffffffffffffff9, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, 0, 39, nil, []types.Decimal256{{B0_63: 0x5f65567ffffffffd, B64_127: 0xf050fe938943acc4, B128_191: 0x2}, {B0_63: 0xa09aa98000000007, B64_127: 0xfaf016c76bc533b, B128_191: 0xfffffffffffffffd, B192_255: 0xffffffffffffffff}}, 0},
+		{"scale_39_VV_right", []types.Decimal256{{B0_63: 0x3}, {B0_63: 0xfffffffffffffff9, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, []types.Decimal256{{B0_63: 0x1}, {B0_63: 0xffffffffffffffff, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, 39, 0, nil, []types.Decimal256{{B0_63: 0xa09aa98000000003, B64_127: 0xfaf016c76bc533b, B128_191: 0xfffffffffffffffd, B192_255: 0xffffffffffffffff}, {B0_63: 0x5f65567ffffffff9, B64_127: 0xf050fe938943acc4, B128_191: 0x2}}, 0},
+		{"scale_57_VV_left", []types.Decimal256{{B0_63: 0x1}, {B0_63: 0xffffffffffffffff, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, []types.Decimal256{{B0_63: 0x3}, {B0_63: 0xfffffffffffffff9, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, 0, 57, nil, []types.Decimal256{{B0_63: 0x49fffffffffffffd, B64_127: 0xebfdcb54864ada83, B128_191: 0x28c87cb5c89a2571}, {B0_63: 0xb600000000000007, B64_127: 0x140234ab79b5257c, B128_191: 0xd737834a3765da8e, B192_255: 0xffffffffffffffff}}, 0},
+		{"scale_57_VV_right", []types.Decimal256{{B0_63: 0x3}, {B0_63: 0xfffffffffffffff9, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, []types.Decimal256{{B0_63: 0x1}, {B0_63: 0xffffffffffffffff, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, 57, 0, nil, []types.Decimal256{{B0_63: 0xb600000000000003, B64_127: 0x140234ab79b5257c, B128_191: 0xd737834a3765da8e, B192_255: 0xffffffffffffffff}, {B0_63: 0x49fffffffffffff9, B64_127: 0xebfdcb54864ada83, B128_191: 0x28c87cb5c89a2571}}, 0},
+		{"scale_65_VV_left", []types.Decimal256{{B0_63: 0x1}, {B0_63: 0xffffffffffffffff, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, []types.Decimal256{{B0_63: 0x3}, {B0_63: 0xfffffffffffffff9, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, 0, 65, nil, []types.Decimal256{{B0_63: 0xfffffffffffffffd, B64_127: 0x4e3945ef7a253609, B128_191: 0x1c7fc3908a8bef46, B192_255: 0xf31627}, {B0_63: 0x7, B64_127: 0xb1c6ba1085dac9f6, B128_191: 0xe3803c6f757410b9, B192_255: 0xffffffffff0ce9d8}}, 0},
+		{"scale_65_VV_right", []types.Decimal256{{B0_63: 0x3}, {B0_63: 0xfffffffffffffff9, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, []types.Decimal256{{B0_63: 0x1}, {B0_63: 0xffffffffffffffff, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, 65, 0, nil, []types.Decimal256{{B0_63: 0x3, B64_127: 0xb1c6ba1085dac9f6, B128_191: 0xe3803c6f757410b9, B192_255: 0xffffffffff0ce9d8}, {B0_63: 0xfffffffffffffff9, B64_127: 0x4e3945ef7a253609, B128_191: 0x1c7fc3908a8bef46, B192_255: 0xf31627}}, 0},
+		{"scale_76_VV_left", []types.Decimal256{{B0_63: 0x1}, {B0_63: 0xffffffffffffffff, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, []types.Decimal256{{B0_63: 0x3}, {B0_63: 0xfffffffffffffff9, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, 0, 76, nil, []types.Decimal256{{B0_63: 0xfffffffffffffffd, B64_127: 0x7775a5f171950fff, B128_191: 0x764b4abe8652979, B192_255: 0x161bcca7119915b5}, {B0_63: 0x7, B64_127: 0x888a5a0e8e6af000, B128_191: 0xf89b4b54179ad686, B192_255: 0xe9e43358ee66ea4a}}, 0},
+		{"scale_76_VV_right", []types.Decimal256{{B0_63: 0x3}, {B0_63: 0xfffffffffffffff9, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, []types.Decimal256{{B0_63: 0x1}, {B0_63: 0xffffffffffffffff, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, 76, 0, nil, []types.Decimal256{{B0_63: 0x3, B64_127: 0x888a5a0e8e6af000, B128_191: 0xf89b4b54179ad686, B192_255: 0xe9e43358ee66ea4a}, {B0_63: 0xfffffffffffffff9, B64_127: 0x7775a5f171950fff, B128_191: 0x764b4abe8652979, B192_255: 0x161bcca7119915b5}}, 0},
+		{"scale_76_masked_alignment_overflow", []types.Decimal256{maxCoefficient, {B0_63: 1}}, []types.Decimal256{{B0_63: 0x3}}, 0, 76, []uint64{0}, []types.Decimal256{{}, {B0_63: 0xfffffffffffffffd, B64_127: 0x7775a5f171950fff, B128_191: 0x764b4abe8652979, B192_255: 0x161bcca7119915b5}}, 0},
+		// The final chunk crosses the signed bound after a successful first row.
+		{"scale_76_late_alignment_overflow", []types.Decimal256{{B0_63: 1}, {B0_63: 6}}, []types.Decimal256{{B0_63: 3}}, 0, 76, nil, nil, moerr.ErrInvalidInput},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			length := max(len(tc.left), len(tc.right))
@@ -4922,6 +4944,24 @@ func TestD256Mod(t *testing.T) {
 			s2:     0,
 			masked: []uint64{0},
 		},
+		{name: "scale_38_SS_left", x: []decimal{{B0_63: 0x6}}, y: []decimal{{B0_63: 0x7}}, want: []decimal{{B0_63: 0x5}}, s1: 0, s2: 38},
+		{name: "scale_38_SS_right", x: []decimal{{B0_63: 0x3}}, y: []decimal{{B0_63: 0x1}}, want: []decimal{{B0_63: 0x3}}, s1: 38, s2: 0},
+		{name: "scale_38_SV_left", x: []decimal{{B0_63: 0x6}}, y: []decimal{{B0_63: 0x7}, {B0_63: 0x7}}, want: []decimal{{B0_63: 0x5}, {B0_63: 0x5}}, s1: 0, s2: 38},
+		{name: "scale_38_SV_right", x: []decimal{{B0_63: 0x3}}, y: []decimal{{B0_63: 0x1}, {B0_63: 0xffffffffffffffff, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, want: []decimal{{B0_63: 0x3}, {B0_63: 0x3}}, s1: 38, s2: 0},
+		{name: "scale_38_VS_left", x: []decimal{{B0_63: 0x6}, {B0_63: 0xfffffffffffffffe, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, y: []decimal{{B0_63: 0x7}}, want: []decimal{{B0_63: 0x5}, {B0_63: 0xfffffffffffffffc, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, s1: 0, s2: 38},
+		{name: "scale_38_VS_right", x: []decimal{{B0_63: 0x3}, {B0_63: 0x7}}, y: []decimal{{B0_63: 0x1}}, want: []decimal{{B0_63: 0x3}, {B0_63: 0x7}}, s1: 38, s2: 0},
+		{name: "scale_38_VV_left", x: []decimal{{B0_63: 0x6}, {B0_63: 0xfffffffffffffffe, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, y: []decimal{{B0_63: 0x7}, {B0_63: 0x7}}, want: []decimal{{B0_63: 0x5}, {B0_63: 0xfffffffffffffffc, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, s1: 0, s2: 38},
+		{name: "scale_38_VV_right", x: []decimal{{B0_63: 0x3}, {B0_63: 0x7}}, y: []decimal{{B0_63: 0x1}, {B0_63: 0xffffffffffffffff, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, want: []decimal{{B0_63: 0x3}, {B0_63: 0x7}}, s1: 38, s2: 0},
+		{name: "scale_39_SS_left", x: []decimal{{B0_63: 0x6}}, y: []decimal{{B0_63: 0x7}}, want: []decimal{{B0_63: 0x1}}, s1: 0, s2: 39},
+		{name: "scale_39_SS_right", x: []decimal{{B0_63: 0x3}}, y: []decimal{{B0_63: 0x1}}, want: []decimal{{B0_63: 0x3}}, s1: 39, s2: 0},
+		{name: "scale_39_SV_left", x: []decimal{{B0_63: 0x6}}, y: []decimal{{B0_63: 0x7}, {B0_63: 0x7}}, want: []decimal{{B0_63: 0x1}, {B0_63: 0x1}}, s1: 0, s2: 39},
+		{name: "scale_39_SV_right", x: []decimal{{B0_63: 0x3}}, y: []decimal{{B0_63: 0x1}, {B0_63: 0xffffffffffffffff, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, want: []decimal{{B0_63: 0x3}, {B0_63: 0x3}}, s1: 39, s2: 0},
+		{name: "scale_39_VS_left", x: []decimal{{B0_63: 0x6}, {B0_63: 0xfffffffffffffffe, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, y: []decimal{{B0_63: 0x7}}, want: []decimal{{B0_63: 0x1}, {B0_63: 0xfffffffffffffffb, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, s1: 0, s2: 39},
+		{name: "scale_39_VS_right", x: []decimal{{B0_63: 0x3}, {B0_63: 0x7}}, y: []decimal{{B0_63: 0x1}}, want: []decimal{{B0_63: 0x3}, {B0_63: 0x7}}, s1: 39, s2: 0},
+		{name: "scale_39_VV_left", x: []decimal{{B0_63: 0x6}, {B0_63: 0xfffffffffffffffe, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, y: []decimal{{B0_63: 0x7}, {B0_63: 0x7}}, want: []decimal{{B0_63: 0x1}, {B0_63: 0xfffffffffffffffb, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, s1: 0, s2: 39},
+		{name: "scale_39_VV_right", x: []decimal{{B0_63: 0x3}, {B0_63: 0x7}}, y: []decimal{{B0_63: 0x1}, {B0_63: 0xffffffffffffffff, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, want: []decimal{{B0_63: 0x3}, {B0_63: 0x7}}, s1: 39, s2: 0},
+		{name: "scale_65_alignment_recovery", x: []decimal{{B0_63: 0x6}, {B0_63: 0xfffffffffffffffe, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, y: []decimal{{B0_63: 0x7}}, want: []decimal{{B0_63: 0x2}, {B0_63: 0xfffffffffffffffd, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, s1: 0, s2: 65},
+		{name: "scale_76_alignment_recovery", x: []decimal{{B0_63: 0x6}, {B0_63: 0xfffffffffffffffe, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, y: []decimal{{B0_63: 0x7}}, want: []decimal{{B0_63: 0x3}, {B0_63: 0xffffffffffffffff, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}}, s1: 0, s2: 76},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			nul := nulls.NewWithSize(len(tc.want))
@@ -6058,23 +6098,45 @@ func TestD128ScaleDown_Coverage(t *testing.T) {
 }
 
 func TestD256ScalePow10_Coverage(t *testing.T) {
+	// Literal limbs are independently derived from integer coefficients times 10^n.
+	for _, tc := range []struct {
+		name    string
+		n       int32
+		x, want types.Decimal256
+	}{
+		{"scale_19", 19, types.Decimal256{B0_63: 0x1}, types.Decimal256{B0_63: 0x8ac7230489e80000}},
+		{"scale_20", 20, types.Decimal256{B0_63: 0xffffffffffffffff, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}, types.Decimal256{B0_63: 0x9438a1d29cf00000, B64_127: 0xfffffffffffffffa, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}},
+		{"scale_38", 38, types.Decimal256{B0_63: 0x1}, types.Decimal256{B0_63: 0x98a224000000000, B64_127: 0x4b3b4ca85a86c47a}},
+		{"scale_39", 39, types.Decimal256{B0_63: 0xffffffffffffffff, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}, types.Decimal256{B0_63: 0xa09aa98000000000, B64_127: 0xfaf016c76bc533b, B128_191: 0xfffffffffffffffd, B192_255: 0xffffffffffffffff}},
+		{"scale_57", 57, types.Decimal256{}, types.Decimal256{}},
+		{"scale_65", 65, types.Decimal256{B0_63: 0xffffffffffffffff, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}, types.Decimal256{B64_127: 0xb1c6ba1085dac9f6, B128_191: 0xe3803c6f757410b9, B192_255: 0xffffffffff0ce9d8}},
+		{"scale_76", 76, types.Decimal256{B0_63: 0x1}, types.Decimal256{B64_127: 0x7775a5f171951000, B128_191: 0x764b4abe8652979, B192_255: 0x161bcca7119915b5}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, remaining, b := d256ScaleUpFactors(tc.n)
+			x := tc.x
+			require.True(t, d256ScaleUpPow10(&x, a, remaining, b))
+			require.Equal(t, tc.want, x)
+		})
+	}
+
 	t.Run("ScaleUpPow10_OneStep", func(t *testing.T) {
 		x := types.Decimal256{B0_63: 42}
-		ok := d256ScaleUpPow10(&x, types.Pow10[3], false, 0)
+		ok := d256ScaleUpPow10(&x, types.Pow10[3], 0, 0)
 		require.True(t, ok)
 		require.Equal(t, types.Decimal256{B0_63: 0xa410}, x)
 	})
 
 	t.Run("ScaleUpPow10_TwoStep", func(t *testing.T) {
 		x := types.Decimal256{B0_63: 1}
-		ok := d256ScaleUpPow10(&x, types.Pow10[19], true, types.Pow10[5])
+		ok := d256ScaleUpPow10(&x, types.Pow10[19], 5, types.Pow10[5])
 		require.True(t, ok)
 		require.Equal(t, types.Decimal256{B0_63: 0x1bcecceda1000000, B64_127: 0xd3c2}, x)
 	})
 
 	t.Run("ScaleUpPow10_Negative", func(t *testing.T) {
 		x := types.Decimal256{B0_63: ^uint64(42) + 1, B64_127: ^uint64(0), B128_191: ^uint64(0), B192_255: ^uint64(0)}
-		ok := d256ScaleUpPow10(&x, types.Pow10[3], false, 0)
+		ok := d256ScaleUpPow10(&x, types.Pow10[3], 0, 0)
 		require.True(t, ok)
 		require.Equal(t, types.Decimal256{B0_63: 0xffffffffffff5bf0, B64_127: 0xffffffffffffffff, B128_191: 0xffffffffffffffff, B192_255: 0xffffffffffffffff}, x)
 	})
@@ -7678,6 +7740,9 @@ func TestD256Mod_DivByZeroPaths(t *testing.T) {
 			s2:     0,
 			masked: []uint64{0, 1},
 		},
+		{name: "scale_39_zero_strict", x: []decimal{{B0_63: 0x6}, {B0_63: 0x2}}, y: []decimal{{}, {B0_63: 0x7}}, want: []decimal{{}, {B0_63: 0x5}}, s1: 0, s2: 39, masked: []uint64{}, errorCode: moerr.ErrDivByZero, permissive: false},
+		{name: "scale_39_zero_permissive", x: []decimal{{B0_63: 0x6}, {B0_63: 0x2}}, y: []decimal{{}, {B0_63: 0x7}}, want: []decimal{{}, {B0_63: 0x5}}, s1: 0, s2: 39, masked: []uint64{}, errorCode: 0, permissive: true},
+		{name: "scale_39_zero_masked", x: []decimal{{B0_63: 0x6}, {B0_63: 0x2}}, y: []decimal{{}, {B0_63: 0x7}}, want: []decimal{{}, {B0_63: 0x5}}, s1: 0, s2: 39, masked: []uint64{0}, errorCode: 0, permissive: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			nul := nulls.NewWithSize(len(tc.want))

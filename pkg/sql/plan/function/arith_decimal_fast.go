@@ -427,7 +427,7 @@ func d128SubDiffScale(v1, v2, rs []types.Decimal128, scale1, scale2 int32, rsnul
 	return d128SubSameScale(v1, rs[:len2], rs, rsnull), nil
 }
 
-// scalePow10Factors returns pre-computed pow10 factors for scaling by 10^n.
+// scalePow10Factors returns pre-computed factors for 10^n, with 0 <= n <= 38.
 // For n ≤ 19: returns (Pow10[n], false, 0). For n > 19: returns (Pow10[19], true, Pow10[n-19]).
 func scalePow10Factors(n int32) (pow10a uint64, twoStep bool, pow10b uint64) {
 	if n > 19 {
@@ -1998,13 +1998,30 @@ func d256ScaleUp(x *types.Decimal256, n int32) bool {
 	return ok
 }
 
-// d256ScaleUpPow10 scales a signed D256 by pre-computed pow10 factor(s).
-// Eliminates d256ScaleUp→d256MulPow10 wrapper chain; d256Abs/d256Negate inline.
-func d256ScaleUpPow10(x *types.Decimal256, pow10a uint64, twoStep bool, pow10b uint64) bool {
+// d256ScaleUpFactors prepares checked D256 scaling for a non-negative exponent.
+// Up to 38 digits use precomputed factors; larger exponents reuse chunked scaling.
+func d256ScaleUpFactors(n int32) (pow10a uint64, remaining int32, pow10b uint64) {
+	if n <= 19 {
+		return types.Pow10[n], 0, 0
+	}
+	remaining = n - 19
+	if remaining <= 19 {
+		pow10b = types.Pow10[remaining]
+	}
+	return types.Pow10[19], remaining, pow10b
+}
+
+// d256ScaleUpPow10 scales a signed D256 using d256ScaleUpFactors' preparation.
+// Returns false on overflow; callers retain the original coefficient for errors.
+func d256ScaleUpPow10(x *types.Decimal256, pow10a uint64, remaining int32, pow10b uint64) bool {
 	sign := d256Abs(x)
 	ok := d256Mul1Limb(x, pow10a)
-	if ok && twoStep {
-		ok = d256Mul1Limb(x, pow10b)
+	if ok && remaining != 0 {
+		if remaining <= 19 {
+			ok = d256Mul1Limb(x, pow10b)
+		} else {
+			ok = d256MulPow10(x, remaining)
+		}
 	}
 	d256Negate(x, sign)
 	return ok
@@ -2312,8 +2329,8 @@ func d256AddDiffScale(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnul
 		a := v1[0]
 		signA := a.B192_255 >> 63
 		scaleDiff := scale1 - scale2
-		pow10a, twoStep, pow10b := scalePow10Factors(scaleDiff)
-		if !twoStep && d256AllFitInt64(v2, len2) {
+		pow10a, remaining, pow10b := d256ScaleUpFactors(scaleDiff)
+		if remaining == 0 && d256AllFitInt64(v2, len2) {
 			for i := 0; i < len2; i++ {
 				if hasNull && bmp.Contains(uint64(i)) {
 					continue
@@ -2341,7 +2358,7 @@ func d256AddDiffScale(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnul
 				continue
 			}
 			b := v2[i]
-			if !d256ScaleUpPow10(&b, pow10a, twoStep, pow10b) {
+			if !d256ScaleUpPow10(&b, pow10a, remaining, pow10b) {
 				return -1, moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: %s", v2[i].Format(0))
 			}
 			signB := b.B192_255 >> 63
@@ -2369,8 +2386,8 @@ func d256AddDiffScale(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnul
 		b := v2[0]
 		signB := b.B192_255 >> 63
 		scaleDiff := scale2 - scale1
-		pow10a, twoStep, pow10b := scalePow10Factors(scaleDiff)
-		if !twoStep && d256AllFitInt64(v1, len1) {
+		pow10a, remaining, pow10b := d256ScaleUpFactors(scaleDiff)
+		if remaining == 0 && d256AllFitInt64(v1, len1) {
 			for i := 0; i < len1; i++ {
 				if hasNull && bmp.Contains(uint64(i)) {
 					continue
@@ -2398,7 +2415,7 @@ func d256AddDiffScale(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnul
 				continue
 			}
 			a := v1[i]
-			if !d256ScaleUpPow10(&a, pow10a, twoStep, pow10b) {
+			if !d256ScaleUpPow10(&a, pow10a, remaining, pow10b) {
 				return -1, moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: %s", v1[i].Format(0))
 			}
 			signA := a.B192_255 >> 63
@@ -2418,11 +2435,11 @@ func d256AddDiffScale(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnul
 	// len1 == len2: fuse scale + add per element.
 	// Prescan: when all scaled values fit in int64 and scaleDiff ≤ 19,
 	// inline the scale-up as a single bits.Mul64 instead of calling
-	// d256ScaleUpPow10 (cost 287) which does 3 wasted Mul64 on zero limbs.
+	// d256ScaleUpPow10, avoiding multiplications of the upper zero limbs.
 	if scale1 < scale2 {
 		scaleDiff := scale2 - scale1
-		pow10a, twoStep, pow10b := scalePow10Factors(scaleDiff)
-		if !twoStep && d256AllFitInt64(v1, len1) {
+		pow10a, remaining, pow10b := d256ScaleUpFactors(scaleDiff)
+		if remaining == 0 && d256AllFitInt64(v1, len1) {
 			for i := 0; i < len1; i++ {
 				if hasNull && bmp.Contains(uint64(i)) {
 					continue
@@ -2452,7 +2469,7 @@ func d256AddDiffScale(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnul
 				continue
 			}
 			a := v1[i]
-			if !d256ScaleUpPow10(&a, pow10a, twoStep, pow10b) {
+			if !d256ScaleUpPow10(&a, pow10a, remaining, pow10b) {
 				return -1, moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: %s", v1[i].Format(0))
 			}
 			y := v2[i]
@@ -2470,8 +2487,8 @@ func d256AddDiffScale(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnul
 		}
 	} else {
 		scaleDiff := scale1 - scale2
-		pow10a, twoStep, pow10b := scalePow10Factors(scaleDiff)
-		if !twoStep && d256AllFitInt64(v2, len1) {
+		pow10a, remaining, pow10b := d256ScaleUpFactors(scaleDiff)
+		if remaining == 0 && d256AllFitInt64(v2, len1) {
 			for i := 0; i < len1; i++ {
 				if hasNull && bmp.Contains(uint64(i)) {
 					continue
@@ -2501,7 +2518,7 @@ func d256AddDiffScale(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnul
 				continue
 			}
 			b := v2[i]
-			if !d256ScaleUpPow10(&b, pow10a, twoStep, pow10b) {
+			if !d256ScaleUpPow10(&b, pow10a, remaining, pow10b) {
 				return -1, moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: %s", v2[i].Format(0))
 			}
 			x := v1[i]
@@ -2631,8 +2648,8 @@ func d256SubDiffScale(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnul
 		a := v1[0]
 		signA := a.B192_255 >> 63
 		scaleDiff := scale1 - scale2
-		pow10a, twoStep, pow10b := scalePow10Factors(scaleDiff)
-		if !twoStep && d256AllFitInt64(v2, len2) {
+		pow10a, remaining, pow10b := d256ScaleUpFactors(scaleDiff)
+		if remaining == 0 && d256AllFitInt64(v2, len2) {
 			for i := 0; i < len2; i++ {
 				if hasNull && bmp.Contains(uint64(i)) {
 					continue
@@ -2660,7 +2677,7 @@ func d256SubDiffScale(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnul
 				continue
 			}
 			b := v2[i]
-			if !d256ScaleUpPow10(&b, pow10a, twoStep, pow10b) {
+			if !d256ScaleUpPow10(&b, pow10a, remaining, pow10b) {
 				return -1, moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: %s", v2[i].Format(0))
 			}
 			signB := b.B192_255 >> 63
@@ -2688,8 +2705,8 @@ func d256SubDiffScale(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnul
 		b := v2[0]
 		signB := b.B192_255 >> 63
 		scaleDiff := scale2 - scale1
-		pow10a, twoStep, pow10b := scalePow10Factors(scaleDiff)
-		if !twoStep && d256AllFitInt64(v1, len1) {
+		pow10a, remaining, pow10b := d256ScaleUpFactors(scaleDiff)
+		if remaining == 0 && d256AllFitInt64(v1, len1) {
 			for i := 0; i < len1; i++ {
 				if hasNull && bmp.Contains(uint64(i)) {
 					continue
@@ -2717,7 +2734,7 @@ func d256SubDiffScale(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnul
 				continue
 			}
 			a := v1[i]
-			if !d256ScaleUpPow10(&a, pow10a, twoStep, pow10b) {
+			if !d256ScaleUpPow10(&a, pow10a, remaining, pow10b) {
 				return -1, moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: %s", v1[i].Format(0))
 			}
 			signA := a.B192_255 >> 63
@@ -2737,11 +2754,11 @@ func d256SubDiffScale(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnul
 	// len1 == len2: fuse scale + sub per element.
 	// Prescan: when all scaled values fit in int64 and scaleDiff ≤ 19,
 	// inline the scale-up as a single bits.Mul64 instead of calling
-	// d256ScaleUpPow10 (cost 287) which does 3 wasted Mul64 on zero limbs.
+	// d256ScaleUpPow10, avoiding multiplications of the upper zero limbs.
 	if scale1 < scale2 {
 		scaleDiff := scale2 - scale1
-		pow10a, twoStep, pow10b := scalePow10Factors(scaleDiff)
-		if !twoStep && d256AllFitInt64(v1, len1) {
+		pow10a, remaining, pow10b := d256ScaleUpFactors(scaleDiff)
+		if remaining == 0 && d256AllFitInt64(v1, len1) {
 			for i := 0; i < len1; i++ {
 				if hasNull && bmp.Contains(uint64(i)) {
 					continue
@@ -2771,7 +2788,7 @@ func d256SubDiffScale(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnul
 				continue
 			}
 			a := v1[i]
-			if !d256ScaleUpPow10(&a, pow10a, twoStep, pow10b) {
+			if !d256ScaleUpPow10(&a, pow10a, remaining, pow10b) {
 				return -1, moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: %s", v1[i].Format(0))
 			}
 			y := v2[i]
@@ -2789,8 +2806,8 @@ func d256SubDiffScale(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnul
 		}
 	} else {
 		scaleDiff := scale1 - scale2
-		pow10a, twoStep, pow10b := scalePow10Factors(scaleDiff)
-		if !twoStep && d256AllFitInt64(v2, len1) {
+		pow10a, remaining, pow10b := d256ScaleUpFactors(scaleDiff)
+		if remaining == 0 && d256AllFitInt64(v2, len1) {
 			for i := 0; i < len1; i++ {
 				if hasNull && bmp.Contains(uint64(i)) {
 					continue
@@ -2820,7 +2837,7 @@ func d256SubDiffScale(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnul
 				continue
 			}
 			b := v2[i]
-			if !d256ScaleUpPow10(&b, pow10a, twoStep, pow10b) {
+			if !d256ScaleUpPow10(&b, pow10a, remaining, pow10b) {
 				return -1, moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: %s", v2[i].Format(0))
 			}
 			x := v1[i]
@@ -3597,8 +3614,12 @@ func d256Mod(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.
 		bmp = rsnull.GetBitmap()
 	}
 
-	// Pre-scan: if all elements fit in D128, use fast D128 mod path.
-	if d256AllFitD128(v1) && d256AllFitD128(v2) {
+	// Narrowing also requires the bounded factorization's scale domain.
+	scaleDiff := scale1 - scale2
+	if scaleDiff < 0 {
+		scaleDiff = -scaleDiff
+	}
+	if scaleDiff <= 38 && d256AllFitD128(v1) && d256AllFitD128(v2) {
 		return d256ModViaD128(v1, v2, rs, scale1, scale2, rsnull, shouldError, len1, len2, hasNull, bmp)
 	}
 
@@ -3666,6 +3687,7 @@ func d256Mod(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.
 // d256ModViaD128 handles D256 mod via D128 narrowing.
 // Unified path for both same-scale and diff-scale: when scales match,
 // scaleAx=scaleAy=0 makes d128MulPow10 a no-op, eliminating the branch.
+// The caller proves that both coefficients fit D128 and the scale difference is at most 38.
 func d256ModViaD128(v1, v2, rs []types.Decimal256, scale1, scale2 int32,
 	rsnull *nulls.Nulls, shouldError bool, len1, len2 int, hasNull bool, bmp *bitmap.Bitmap) error {
 
