@@ -1125,7 +1125,7 @@ positive-length BCE and constant replication, while existing result reset owns
 length/NULL cleanup. Do not add generic executor/CAST short-circuit policy or
 another validation/storage path. Remove the adjacent obsolete comments claiming
 D128 scale is below 18 and its now-optimized conversion is temporary/too slow.
-Physically empty constants can fail in the parameter wrapper before this owner;
+Physically empty constants are handled as scalar NULL by `IsConstNull`;
 that distinct representation contract is explicitly outside this checkpoint.
 
 Map all six old vector calls into the existing precision holder (now 42 cells),
@@ -1154,3 +1154,45 @@ Final medians observe wall +4.3%, CPU +5.7%, allocated bytes +15.5% and allocati
 the newly verified empty/error and metadata contracts justify the measured cost.
 The issue draft is preserved; GitHub creation returned 403 (integration access),
 so no published issue is claimed. Current-head service BVT remains open.
+
+
+## Parameter acquisition and reuse contract (2026-10-04)
+
+Repeated acquisition must preserve the complete effective type, source, values,
+and NULL semantics of initial acquisition. Before repair, a D64 constant acquired
+as D128 succeeds once and panics on the next acquisition: reuse decodes physical
+D64 storage as D128 instead of invoking the existing conversion owner. Changing
+same-OID input metadata also leaves the old wrapper metadata behind.
+
+Both fixed and string reuse owners now compare the complete Type before decoding
+or mutating the wrapper. A mismatch returns false to the existing Generate
+fallback. Conversion remains owned by Generate; no conversion buffer, alternate
+state machine, or per-branch metadata update is introduced. Converted inputs are
+reconstructed on subsequent acquisition; the previous panic is not a valid
+performance baseline for that path.
+
+The two old reuse test roots map to a shared transition fixture. It preserves
+plain/nullable/constant-NULL reuse decisions, rejected constant append, and the
+original fixed length 1 versus string length 0. It adds exact payload, complete
+metadata, source and cleanup oracles. A real same-slot OptGet replacement uses a
+changed type and different payload, checking both the fresh wrapper and the
+unchanged rejected wrapper. The frame-growth identity test remains separate.
+Six conversion cells cover D64/F32/F64 and normal/constant storage with independent
+literal coefficients. A production plusFn consumer checks two exact 3.23 results.
+This proves the function API contract, not a normal SQL binding counterexample:
+the current D64+F64 resolver converts to F64.
+
+Final focused normal/race, vet and incremental lint passed. Molint exited zero
+with two unsafe import diagnostics at source sites unchanged from main; this
+is not a zero-diagnostic claim. A private overlay removing both guards fails both
+transition cells, confirming that type rejection is actually tested. Evidence
+and final source hashes are in `29249-empty-parameter-20261004`.
+
+Eight alternating same-binary fixture pairs compare the old two reuse roots with
+the new transition holder. Median wall rises from 40.5 to 69.2 microseconds, CPU
+from 45.5 to 80.5 microseconds, bytes from 8,392 to 15,512 and allocations from 94
+to 159. Additional metadata/cache/value/cleanup coverage has a small absolute
+cost, but this is not a resource reduction. These measurements exclude the six
+conversion cells and the function consumer. No total-suite speedup, service BVT,
+or normal SQL reproduction is claimed. Issue publication remains unavailable
+through the integration (earlier HTTP 403); no new issue or PR was created.

@@ -173,6 +173,11 @@ func GenerateFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vect
 }
 
 func ReuseFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vector, f FunctionParameterWrapper[T]) bool {
+	// A different effective type must be rebuilt by the parameter conversion owner.
+	if f.GetType() != *v.GetType() {
+		return false
+	}
+
 	if v.IsConstNull() {
 		r, ok := f.(*FunctionParameterScalarNull[T])
 		if !ok {
@@ -262,6 +267,11 @@ func GenerateFunctionStrParameter(v *Vector) FunctionParameterWrapper[types.Varl
 }
 
 func ReuseFunctionStrParameter(v *Vector, f FunctionParameterWrapper[types.Varlena]) bool {
+	// A different effective type must be rebuilt by the parameter conversion owner.
+	if f.GetType() != *v.GetType() {
+		return false
+	}
+
 	if v.IsConstNull() {
 		r, ok := f.(*FunctionParameterScalarNull[types.Varlena])
 		if !ok {
