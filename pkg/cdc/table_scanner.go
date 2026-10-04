@@ -190,6 +190,21 @@ type TblMap map[string]*DbTableInfo
 
 type TableCallback func(map[uint32]TblMap) error
 
+// cloneTableSnapshot copies only the subscribed account. Each callback gets
+// independent descriptors while unrelated tenants add no fan-out cost.
+func cloneTableSnapshot(src TblMap) TblMap {
+	if src == nil {
+		return nil
+	}
+	dst := make(TblMap, len(src))
+	for key, info := range src {
+		if info != nil {
+			dst[key] = info.Clone()
+		}
+	}
+	return dst
+}
+
 type TableIterationState struct {
 	CreateAt time.Time
 	EndAt    time.Time
@@ -336,8 +351,6 @@ type TableDetector struct {
 	currentLoop uint64
 }
 
-// RegisterIfAbsent registers the task only if it has not been registered before.
-// Returns true when registration succeeds, false if the task already exists.
 func (s *TableDetector) RegisterIfAbsent(id string, accountId uint32, dbs []string, tables []string, cb TableCallback) bool {
 	s.mu.Lock()
 	if _, exists := s.Callbacks[id]; exists {
@@ -607,9 +620,18 @@ func (s *TableDetector) processCallback(ctx context.Context, tables map[uint32]T
 		return
 	}
 	s.handling = true
-	callbacks := make([]TableCallback, 0, len(s.Callbacks))
-	for _, cb := range s.Callbacks {
-		callbacks = append(callbacks, cb)
+	type subscriber struct {
+		callback TableCallback
+		account  uint32
+	}
+	callbacks := make([]subscriber, 0, len(s.Callbacks))
+	tablesSnapshot := make(map[uint32]TblMap, len(s.SubscribedAccountIds))
+	for id, cb := range s.Callbacks {
+		account := s.CallBackAccountId[id]
+		if _, copied := tablesSnapshot[account]; !copied {
+			tablesSnapshot[account] = cloneTableSnapshot(tables[account])
+		}
+		callbacks = append(callbacks, subscriber{cb, account})
 	}
 	s.mu.Unlock()
 
@@ -641,8 +663,11 @@ func (s *TableDetector) processCallback(ctx context.Context, tables map[uint32]T
 		}
 	}()
 
-	for _, cb := range callbacks {
-		if cbErr := cb(tables); cbErr != nil {
+	for _, subscriber := range callbacks {
+		view := map[uint32]TblMap{
+			subscriber.account: cloneTableSnapshot(tablesSnapshot[subscriber.account]),
+		}
+		if cbErr := subscriber.callback(view); cbErr != nil {
 			err = cbErr
 		}
 	}
@@ -764,7 +789,14 @@ func (s *TableDetector) scanTable() error {
 			dbNames = "*"
 			break
 		}
-		dbNamesSlice = append(dbNamesSlice, dbName)
+		if CDCSourceNameNeedsCatalogSuperset(dbName, 2) {
+			dbNames = "*"
+			break
+		}
+		// The detector serves tasks with different persisted case modes. Scan a
+		// case-insensitive candidate superset; each task applies its own mode in
+		// matchAnyPattern before it can create a pipeline.
+		dbNamesSlice = append(dbNamesSlice, CDCSourceIdentifierKey(dbName, 2))
 	}
 	if dbNames != "*" {
 		dbNames = AddSingleQuotesJoin(dbNamesSlice)
@@ -775,7 +807,11 @@ func (s *TableDetector) scanTable() error {
 			tableNames = "*"
 			break
 		}
-		tableNamesSlice = append(tableNamesSlice, tableName)
+		if CDCSourceNameNeedsCatalogSuperset(tableName, 2) {
+			tableNames = "*"
+			break
+		}
+		tableNamesSlice = append(tableNamesSlice, CDCSourceIdentifierKey(tableName, 2))
 	}
 	if tableNames != "*" {
 		tableNames = AddSingleQuotesJoin(tableNamesSlice)
@@ -784,7 +820,7 @@ func (s *TableDetector) scanTable() error {
 
 	result, err := s.exec.Exec(
 		ctx,
-		CDCSQLBuilder.CollectTableInfoSQL(accountIds, dbNames, tableNames),
+		CDCSQLBuilder.CollectTableInfoSQLCaseInsensitive(accountIds, dbNames, tableNames),
 		executor.Options{}.WithStatementOption(executor.StatementOption{}.WithDisableLog()),
 	)
 	if err != nil {
@@ -801,7 +837,7 @@ func (s *TableDetector) scanTable() error {
 			dbName := cols[3].GetStringAt(i)
 			createSql := cols[4].GetStringAt(i)
 			accountId := vector.MustFixedColWithTypeCheck[uint32](cols[5])[i]
-			hasForeignKey, decodeErr := tableHasForeignKeyConstraint(cols[6].GetBytesAt(i))
+			hasForeignKey, decodeErr := TableHasForeignKeyConstraint(cols[6].GetBytesAt(i))
 			if decodeErr != nil {
 				scanErr = decodeErr
 				logutil.Warn(
@@ -825,27 +861,18 @@ func (s *TableDetector) scanTable() error {
 
 			key := GenDbTblKey(dbName, tblName)
 
-			oldInfo, exists := s.Mp[accountId][key]
-			newInfo := &DbTableInfo{
-				SourceDbId:      dbId,
-				SourceDbName:    dbName,
-				SourceTblId:     tblId,
-				SourceTblName:   tblName,
-				SourceCreateSql: createSql,
+			// The callback may clear one-shot metadata while a scan is building
+			// its next snapshot. Protect the shared map lookup and clone with the
+			// same mutex used by publication/cleanup.
+			mp[accountId][key] = &DbTableInfo{
+				SourceDbId:        dbId,
+				SourceDbName:      dbName,
+				SourceTblId:       tblId,
+				SourceTblName:     tblName,
+				SourceCreateSql:   createSql,
+				HasUserPrimaryKey: vector.MustFixedColNoTypeCheck[bool](cols[7])[i],
 			}
-			if !exists {
-				mp[accountId][key] = newInfo
-			} else {
-				idChanged := oldInfo.OnlyDiffinTblId(newInfo)
-				updatedInfo := oldInfo.Clone()
-				updatedInfo.SourceDbId = dbId
-				updatedInfo.SourceDbName = dbName
-				updatedInfo.SourceTblId = tblId
-				updatedInfo.SourceTblName = tblName
-				updatedInfo.SourceCreateSql = createSql
-				updatedInfo.IdChanged = updatedInfo.IdChanged || idChanged
-				mp[accountId][key] = updatedInfo
-			}
+
 		}
 		return true
 	})
@@ -853,14 +880,16 @@ func (s *TableDetector) scanTable() error {
 		return scanErr
 	}
 
-	// replace the old table map
 	s.mu.Lock()
 	s.Mp = mp
 	s.mu.Unlock()
 	return nil
 }
 
-func tableHasForeignKeyConstraint(data []byte) (hasForeignKey bool, err error) {
+// TableHasForeignKeyConstraint decodes the persisted constraint metadata used
+// by the runtime table scanner. CREATE CDC admission uses the same check so it
+// does not reject foreign-key children that the scanner will never consume.
+func TableHasForeignKeyConstraint(data []byte) (hasForeignKey bool, err error) {
 	if len(data) == 0 {
 		return false, nil
 	}
