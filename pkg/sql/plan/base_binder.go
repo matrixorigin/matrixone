@@ -11910,13 +11910,18 @@ func (b *baseBinder) defaultValueBindType() plan.Type {
 	if b.integerArgumentSourceContext || b.suppressDefaultValueBindType {
 		return plan.Type{}
 	}
+	var typ plan.Type
 	if d, ok := b.impl.(*DefaultBinder); ok {
-		return d.typ
+		typ = d.typ
+	} else if r, ok := b.impl.(*ReplaceValueBinder); ok {
+		typ = r.typ
 	}
-	if r, ok := b.impl.(*ReplaceValueBinder); ok {
-		return r.typ
+	// A numeric, hex or bit literal is not a vector value: a vector column type is not
+	// its binding type, so CAST(X'...' AS BLOB) keeps the BLOB binary vector input.
+	if types.T(typ.Id).IsArray() {
+		return plan.Type{}
 	}
-	return plan.Type{}
+	return typ
 }
 
 func (b *baseBinder) defaultNumericOuterType() *plan.Type {

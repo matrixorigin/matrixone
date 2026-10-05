@@ -7014,6 +7014,20 @@ func TestLowPrecisionFloatColumnsStayNarrow(t *testing.T) {
 	}
 }
 
+// TestInsertValuesBlobVector checks that a vector column type is not the binding type of a
+// literal in VALUES, so CAST(X'...' AS BLOB) binds as the binary vector input.
+func TestInsertValuesBlobVector(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	for _, sql := range []string{
+		"INSERT INTO docs_ft (id, embedding) VALUES (1, CAST(X'0000803F0000004000004040' AS BLOB))",
+		"INSERT INTO vecblock_t (id, a, b) VALUES (1, CAST(X'0000803F000000400000404000008040' AS BLOB), CAST(X'0000803F000000400000404000008040' AS BLOB))",
+		"REPLACE INTO vecblock_t (id, a) VALUES (2, CAST(X'0000803F000000400000404000008040' AS BLOB))",
+	} {
+		_, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err, sql)
+	}
+}
+
 // TestUpdateChangedRowsBlockScaledVector checks that counting changed rows plans an UPDATE
 // of vecf8/vecf4 columns, which have no equality operator.
 func TestUpdateChangedRowsBlockScaledVector(t *testing.T) {

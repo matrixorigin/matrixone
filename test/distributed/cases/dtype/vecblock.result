@@ -306,4 +306,18 @@ invalid input: expected vector dimension 2 != actual dimension 1.
 select * from bin order by id;
 ➤ id[4,32,0]  ¦  b[12,2,0]  ¦  e[12,2,0]  ¦  a[12,2,0]  𝄀
 1  ¦  [1, 2]  ¦  [1, 2]  ¦  [1, 2]
+create table hexin (id int primary key, a vecf32(2), h vecbf16(2), e vecf8(2), b vecf4(2));
+insert into hexin values (1, cast(X'0000803F00000040' as blob), cast(X'803F0040' as blob), cast(X'0000803F00000040' as blob), cast(X'0000803F00000040' as blob));
+insert into hexin (id, a, b) values (2, cast(X'00004040000080C0' as blob), cast(X'00004040000080C0' as blob)), (3, cast(X'0000003F0000A040' as blob), cast(X'0000003F0000A040' as blob));
+replace into hexin (id, e) values (3, cast(X'0000803F00000040' as blob));
+select * from hexin order by id;
+➤ id[4,32,0]  ¦  a[12,2,0]  ¦  h[12,2,0]  ¦  e[12,2,0]  ¦  b[12,2,0]  𝄀
+1  ¦  [1, 2]  ¦  [1, 2]  ¦  [1, 2]  ¦  [1, 2]  𝄀
+2  ¦  [3, -4]  ¦  null  ¦  null  ¦  [2.6666667, -4]  𝄀
+3  ¦  null  ¦  null  ¦  [1, 2]  ¦  null
+create table hexkeep (id int, c varchar(10), d decimal(5,2));
+insert into hexkeep values (1, cast(X'3132' as signed), cast(1.005 as double));
+select * from hexkeep;
+➤ id[4,32,0]  ¦  c[12,10,0]  ¦  d[3,5,2]  𝄀
+1  ¦  12  ¦  1.01
 drop database vecblock_db;

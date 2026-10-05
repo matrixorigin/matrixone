@@ -146,4 +146,15 @@ insert into bin (id, b) values (2, cast(unhex('0000803F000000') as blob));
 insert into bin (id, e) values (3, cast(unhex('0000803F') as blob));
 select * from bin order by id;
 
+-- CAST(X'...' AS BLOB) in VALUES is the binary vector input for every vector type
+create table hexin (id int primary key, a vecf32(2), h vecbf16(2), e vecf8(2), b vecf4(2));
+insert into hexin values (1, cast(X'0000803F00000040' as blob), cast(X'803F0040' as blob), cast(X'0000803F00000040' as blob), cast(X'0000803F00000040' as blob));
+insert into hexin (id, a, b) values (2, cast(X'00004040000080C0' as blob), cast(X'00004040000080C0' as blob)), (3, cast(X'0000003F0000A040' as blob), cast(X'0000003F0000A040' as blob));
+replace into hexin (id, e) values (3, cast(X'0000803F00000040' as blob));
+select * from hexin order by id;
+-- a literal cast in VALUES for a non-vector column keeps the column as its binding type
+create table hexkeep (id int, c varchar(10), d decimal(5,2));
+insert into hexkeep values (1, cast(X'3132' as signed), cast(1.005 as double));
+select * from hexkeep;
+
 drop database vecblock_db;
