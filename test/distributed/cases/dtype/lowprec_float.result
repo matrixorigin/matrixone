@@ -231,6 +231,53 @@ CREATE TABLE kb (id INT, k float8) CLUSTER BY (k);
 not supported: FLOAT8 column 'k' cannot be a cluster by key
 CREATE INDEX ia ON t2 (a);
 not supported: BF16 column 'a' cannot be in index
+CREATE TABLE tx (e float8, f bf16, h float16);
+INSERT INTO tx VALUES ('0.3', '0.1', '0.1');
+SELECT count(*) FROM tx WHERE e = '0.3';
+➤ count(*)[-5,64,0]  𝄀
+1
+SELECT count(*) FROM tx WHERE f = '0.1';
+➤ count(*)[-5,64,0]  𝄀
+1
+SELECT count(*) FROM tx WHERE h = '0.1';
+➤ count(*)[-5,64,0]  𝄀
+1
+SELECT count(*) FROM tx WHERE e BETWEEN '0.3' AND '0.3';
+➤ count(*)[-5,64,0]  𝄀
+1
+SELECT count(*) FROM tx WHERE e IN ('0.3', '7');
+➤ count(*)[-5,64,0]  𝄀
+1
+SELECT count(*) FROM tx WHERE e NOT IN ('0.3', '7');
+➤ count(*)[-5,64,0]  𝄀
+0
+SELECT count(*) FROM tx WHERE e IN ('abc', '7');
+➤ count(*)[-5,64,0]  𝄀
+0
+CREATE TABLE tw (id INT, f bf16, e float8);
+INSERT INTO tw VALUES (1, 0.99, 0.3), (2, 1.5, 2), (3, 1e30, 4);
+SELECT count(*) FROM tw WHERE f IN (0.99, 1e39);
+➤ count(*)[-5,64,0]  𝄀
+1
+PREPARE pw FROM 'SELECT count(*) FROM tw WHERE f IN (?, ?)';
+PREPARE nw FROM 'SELECT count(*) FROM tw WHERE f NOT IN (?, ?)';
+PREPARE ew FROM 'SELECT count(*) FROM tw WHERE e IN (?, ?)';
+SET @x = 0.99;
+SET @y = 1e39;
+EXECUTE pw USING @x, @y;
+➤ count(*)[-5,64,0]  𝄀
+1
+EXECUTE nw USING @x, @y;
+➤ count(*)[-5,64,0]  𝄀
+2
+SET @a = 0.3;
+SET @b = 1000;
+EXECUTE ew USING @a, @b;
+➤ count(*)[-5,64,0]  𝄀
+1
+DEALLOCATE PREPARE pw;
+DEALLOCATE PREPARE nw;
+DEALLOCATE PREPARE ew;
 CREATE TABLE pp (id INT, b bf16, h float16, e float8, q float4);
 INSERT INTO pp VALUES (1, 0.3, 0.3, 0.3, 0.5), (2, 1.5, 1.5, 1.5, 1.5);
 PREPARE pb FROM 'SELECT id FROM pp WHERE b IN (?, 9) ORDER BY id';

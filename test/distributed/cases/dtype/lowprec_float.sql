@@ -126,6 +126,34 @@ CREATE TABLE ki (id INT PRIMARY KEY, k float8, KEY ik (k));
 CREATE TABLE kb (id INT, k float8) CLUSTER BY (k);
 CREATE INDEX ia ON t2 (a);
 
+-- a numeral text literal rounds to the column type, as a numeric literal does
+CREATE TABLE tx (e float8, f bf16, h float16);
+INSERT INTO tx VALUES ('0.3', '0.1', '0.1');
+SELECT count(*) FROM tx WHERE e = '0.3';
+SELECT count(*) FROM tx WHERE f = '0.1';
+SELECT count(*) FROM tx WHERE h = '0.1';
+SELECT count(*) FROM tx WHERE e BETWEEN '0.3' AND '0.3';
+SELECT count(*) FROM tx WHERE e IN ('0.3', '7');
+SELECT count(*) FROM tx WHERE e NOT IN ('0.3', '7');
+SELECT count(*) FROM tx WHERE e IN ('abc', '7');
+-- a prepared IN list with one value outside the type's range
+CREATE TABLE tw (id INT, f bf16, e float8);
+INSERT INTO tw VALUES (1, 0.99, 0.3), (2, 1.5, 2), (3, 1e30, 4);
+SELECT count(*) FROM tw WHERE f IN (0.99, 1e39);
+PREPARE pw FROM 'SELECT count(*) FROM tw WHERE f IN (?, ?)';
+PREPARE nw FROM 'SELECT count(*) FROM tw WHERE f NOT IN (?, ?)';
+PREPARE ew FROM 'SELECT count(*) FROM tw WHERE e IN (?, ?)';
+SET @x = 0.99;
+SET @y = 1e39;
+EXECUTE pw USING @x, @y;
+EXECUTE nw USING @x, @y;
+SET @a = 0.3;
+SET @b = 1000;
+EXECUTE ew USING @a, @b;
+DEALLOCATE PREPARE pw;
+DEALLOCATE PREPARE nw;
+DEALLOCATE PREPARE ew;
+
 -- prepared parameters round to the column type when the value is in range
 CREATE TABLE pp (id INT, b bf16, h float16, e float8, q float4);
 INSERT INTO pp VALUES (1, 0.3, 0.3, 0.3, 0.5), (2, 1.5, 1.5, 1.5, 1.5);

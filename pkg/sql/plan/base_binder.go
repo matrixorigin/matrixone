@@ -5848,6 +5848,11 @@ func bindMixedInListComparison(
 	stringLeftNumericRight := leftType.Oid.IsMySQLString() && (rightType.IsNumeric() || rightType.Oid == types.T_bool)
 	numericLeftStringRight := rightType.Oid.IsMySQLString() && (leftType.IsNumeric() || leftType.Oid == types.T_bool)
 	_, directStringRight := decimalStringLiteralValue(right)
+	// a bf16/float16/float8/float4 operand binds as a single comparison, which rounds a
+	// numeral text literal to the column type
+	if leftType.Oid.IsLowPrecisionFloat() {
+		numericLeftStringRight = false
+	}
 	if stringLeftNumericRight || (!exactSingleComparison && numericLeftStringRight && directStringRight) {
 		targetType := types.T_float64.ToType()
 		operands = []*Expr{left, right}
@@ -7519,10 +7524,17 @@ func bindFuncExprImplByPlanExpr(
 					// range compares in the column's precision, rounded as a stored value is,
 					// so a value equals the literal it was inserted from
 					if colOid.IsLowPrecisionFloat() {
-						if otherExpr == nil || !(otherOid.IsFloat() || otherOid.IsDecimal() || otherOid.IsInteger()) {
+						if otherExpr == nil {
 							return false
 						}
-						v, ok := numericLiteralFloat64(otherExpr)
+						var v float64
+						var ok bool
+						switch {
+						case otherOid.IsFloat() || otherOid.IsDecimal() || otherOid.IsInteger():
+							v, ok = numericLiteralFloat64(otherExpr)
+						case otherOid.IsMySQLString():
+							v, ok = decimalNumeralLiteralFloat64(otherExpr)
+						}
 						return ok && types.RejectNonFiniteNarrowFloat(float32(v), colOid) == nil
 					}
 

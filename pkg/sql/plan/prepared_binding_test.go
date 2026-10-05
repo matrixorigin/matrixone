@@ -1361,6 +1361,8 @@ func TestPreparedLowPrecisionFloatMarkerNarrowing(t *testing.T) {
 		{"equal hex float text", "f = ?", []param{{"0x1p0", types.T_varchar.ToType()}}, true, 0},
 		{"equal out of range", "f = ?", []param{{"1e300", types.T_float64.ToType()}}, true, 0},
 		{"in out of range", "f in (?, 9)", []param{{"1e300", types.T_float64.ToType()}}, true, 0},
+		{"in one sql value out of range", "f in (?, ?)", []param{sqlDecimal, {"1e39", types.T_float64.ToType()}}, false, 1},
+		{"not in one sql value out of range", "f not in (?, ?)", []param{sqlDecimal, {"1e39", types.T_float64.ToType()}}, false, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := NewMockOptimizer(false)

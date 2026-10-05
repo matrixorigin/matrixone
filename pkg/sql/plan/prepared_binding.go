@@ -450,6 +450,9 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 		}
 	}
 	args = append([]*Expr(nil), args...)
+	// an IN list on a bf16/float16/float8/float4 operand expands to one comparison per item,
+	// each binding its own marker; the list keeps the narrowed items
+	lowPrecisionList := false
 	for i, source := range args {
 		if source == nil {
 			continue
@@ -457,6 +460,7 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 		if source.GetP() == nil {
 			if list := source.GetList(); list != nil && i == 1 && args[0] != nil &&
 				(name == "in" || name == "not_in") {
+				lowPrecisionList = types.T(args[0].Typ.Id).IsLowPrecisionFloat()
 				var items []*Expr
 				for j, item := range list.List {
 					converted, narrowed, err := narrowPreparedLowPrecisionOperand(ctx, state, item, args[0].Typ)
@@ -695,6 +699,9 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 			}
 		}
 	}
+	if lowPrecisionList {
+		return args, nil
+	}
 	positions := make(map[int]types.StringConversionKind)
 	prefixArgs := make([]bool, len(args))
 	prefixKinds := make([]types.StringConversionKind, len(args))
@@ -788,6 +795,21 @@ func narrowPreparedLowPrecisionOperand(ctx context.Context, state *preparedSourc
 }
 
 var preparedDecimalNumeral = regexp.MustCompile(`^\s*[+-]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][+-]?[0-9]+)?\s*$`)
+
+// decimalNumeralLiteralFloat64 returns the value of a text literal that is a decimal numeral,
+// as preparedLowPrecisionValue reads a text parameter.
+func decimalNumeralLiteralFloat64(expr *Expr) (float64, bool) {
+	lit := expr.GetLit()
+	if lit == nil || lit.Isnull {
+		return 0, false
+	}
+	sval, ok := lit.Value.(*plan.Literal_Sval)
+	if !ok || !preparedDecimalNumeral.MatchString(sval.Sval) {
+		return 0, false
+	}
+	v, err := strconv.ParseFloat(strings.TrimSpace(sval.Sval), 64)
+	return v, err == nil
+}
 
 // preparedLowPrecisionValue reads this execution's value of a marker as a float64: a
 // float, a signed or unsigned integer, or text holding a decimal numeral.
