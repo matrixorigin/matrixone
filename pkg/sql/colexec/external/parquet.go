@@ -3384,15 +3384,16 @@ func isPlainOrSignedIntegerLogical(st parquet.Type) bool {
 }
 
 // parquetLowPrecFloatMapper loads a numeric parquet column into a bf16, float16, float8 or
-// float4 column through float32, with the range and finiteness checks of a SQL cast.
+// float4 column, rounding each value once, with the range and finiteness checks of a SQL cast.
 func parquetLowPrecFloatMapper[T types.LowPrecFloat](st parquet.Type, oid types.T, ctor func(float32) T) func(*columnMapper, parquet.Page, *process.Process, *vector.Vector) error {
 	return func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 		var zero T
 		return processParquetValuesToFixed(proc.Ctx, mp, page, proc, vec, zero, func(v parquet.Value) (T, error) {
-			f, err := parquetValueToFloat32(proc.Ctx, st, v)
+			f64, err := parquetValueToFloat64(proc.Ctx, st, v)
 			if err != nil {
 				return zero, err
 			}
+			f := types.Float32RoundToOdd(f64)
 			if err := types.RejectNonFiniteNarrowFloat(f, oid); err != nil {
 				return zero, err
 			}

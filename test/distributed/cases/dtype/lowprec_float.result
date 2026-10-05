@@ -231,6 +231,18 @@ CREATE TABLE kb (id INT, k float8) CLUSTER BY (k);
 not supported: FLOAT8 column 'k' cannot be a cluster by key
 CREATE INDEX ia ON t2 (a);
 not supported: BF16 column 'a' cannot be in index
+SELECT cast('1.0039062500001' AS bf16), cast(1.0039062500001 AS bf16), cast(cast(1.0039062500001 AS double) AS bf16);
+➤ cast(1.0039062500001 as bf16)[7,24,0]  ¦  cast(1.0039062500001 as bf16)[7,24,0]  ¦  cast(cast(1.0039062500001 as double) as bf16)[7,24,0]  𝄀
+1.0078125  ¦  1.0078125  ¦  1.0078125
+SELECT cast('1.00048828125001' AS float16), cast('1.0625000001' AS float8), cast('1.2500000001' AS float4);
+➤ cast(1.00048828125001 as float16)[7,24,0]  ¦  cast(1.0625000001 as float8)[7,24,0]  ¦  cast(1.2500000001 as float4)[7,24,0]  𝄀
+1.0009766  ¦  1.125  ¦  1.5
+CREATE TABLE tr (b bf16);
+INSERT INTO tr VALUES ('1.0039062500001'), (1.0039062500001);
+SELECT b FROM tr;
+➤ b[7,24,0]  𝄀
+1.0078125  𝄀
+1.0078125
 CREATE TABLE tx (e float8, f bf16, h float16);
 INSERT INTO tx VALUES ('0.3', '0.1', '0.1');
 SELECT count(*) FROM tx WHERE e = '0.3';

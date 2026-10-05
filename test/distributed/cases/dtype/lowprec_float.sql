@@ -126,6 +126,12 @@ CREATE TABLE ki (id INT PRIMARY KEY, k float8, KEY ik (k));
 CREATE TABLE kb (id INT, k float8) CLUSTER BY (k);
 CREATE INDEX ia ON t2 (a);
 
+-- a value wider than float32 rounds once: just above a tie rounds up
+SELECT cast('1.0039062500001' AS bf16), cast(1.0039062500001 AS bf16), cast(cast(1.0039062500001 AS double) AS bf16);
+SELECT cast('1.00048828125001' AS float16), cast('1.0625000001' AS float8), cast('1.2500000001' AS float4);
+CREATE TABLE tr (b bf16);
+INSERT INTO tr VALUES ('1.0039062500001'), (1.0039062500001);
+SELECT b FROM tr;
 -- a numeral text literal rounds to the column type, as a numeric literal does
 CREATE TABLE tx (e float8, f bf16, h float16);
 INSERT INTO tx VALUES ('0.3', '0.1', '0.1');

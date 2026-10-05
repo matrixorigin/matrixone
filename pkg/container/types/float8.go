@@ -27,6 +27,20 @@ import (
 // narrowing; float8/float4 saturate, so their input magnitude is range-checked). This
 // mirrors the narrow-vector element parser's rejectNonFiniteArrayElem. oid must be one
 // of T_bf16/T_float16/T_float8/T_float4.
+// Float32RoundToOdd rounds v to float32 toward zero and sets the last significand bit when
+// the result is inexact. Rounding the result to bf16, float16, float8 or float4 rounds v
+// once: the float32 keeps at least two bits beyond each of their significands.
+func Float32RoundToOdd(v float64) float32 {
+	f := float32(v)
+	if float64(f) == v || v != v || math.IsInf(float64(f), 0) {
+		return f
+	}
+	if math.Abs(float64(f)) > math.Abs(v) {
+		f = math.Nextafter32(f, 0)
+	}
+	return math.Float32frombits(math.Float32bits(f) | 1)
+}
+
 func RejectNonFiniteNarrowFloat(v float32, oid T) error {
 	f := float64(v)
 	if math.IsNaN(f) || math.IsInf(f, 0) {

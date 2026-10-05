@@ -1880,15 +1880,16 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		// Low-precision floats: parse as float32 then round to the target format.
 		// Reject NaN/Inf and out-of-range values (strict, like the narrow-vector
 		// element parser) instead of silently saturating.
-		d, err := strconv.ParseFloat(field.Val, 32)
+		d64, err := strconv.ParseFloat(field.Val, 64)
 		if err != nil {
 			logutil.Errorf("parse field[%v] err:%v", field.Val, err)
 			return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not %s type for column %d", field.Val, vec.GetType().Oid, colIdx)
 		}
-		if err := types.RejectNonFiniteNarrowFloat(float32(d), vec.GetType().Oid); err != nil {
+		d := types.Float32RoundToOdd(d64)
+		if err := types.RejectNonFiniteNarrowFloat(d, vec.GetType().Oid); err != nil {
 			return err
 		}
-		if err := appendLowPrecFloatFromFloat32(vec, float32(d), mp); err != nil {
+		if err := appendLowPrecFloatFromFloat32(vec, d, mp); err != nil {
 			return err
 		}
 	case types.T_float64:
