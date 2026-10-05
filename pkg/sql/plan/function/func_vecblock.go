@@ -192,3 +192,17 @@ func VecBlockJSON(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 	}
 	return nil
 }
+
+// VecBlockBinary returns the stored cell of each vecf8/vecf4 value, which casts back to the
+// same cell.
+func VecBlockBinary(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	p := vector.GenerateFunctionStrParameter(ivecs[0])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := p.GetStrValue(i)
+		if err := rs.AppendBytes(v, null); err != nil {
+			return err
+		}
+	}
+	return nil
+}

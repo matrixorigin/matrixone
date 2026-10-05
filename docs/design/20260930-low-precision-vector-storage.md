@@ -101,6 +101,18 @@ offset  size  field       vecf8 (MXFP8)               vecf4 (NVFP4)
 `Size ≠ N × elemSize`: the logical dimension is authoritative from the column type /
 header, never derived from byte length.
 
+The cell is also the exact binary form at the SQL surface: `vecblock_binary(v)` returns it
+as a `BLOB`, and a `BLOB` of a valid cell casts back to the same bytes. A cell is valid when
+the version is 1, the format names the target type, the reserved bytes are 0, `N` is in
+range and matches a declared dimension, the length is exactly `12 + S + E`, the vecf8
+global is 1.0 and the vecf4 global finite and non-negative, no scale or element is a NaN
+code, a vecf4 scale is non-negative, an odd-`N` vecf4 padding nibble is 0, and every
+element decodes finite. A `BLOB` of float32 elements is `4N` bytes, which is never the cell
+length of `N` (vecf8 would need `3N = 12 + ceil(N/32)`, vecf4 `4N − ceil(N/2) − ceil(N/16)
+= 12`; neither has an integer solution), so the length selects the form for a declared
+dimension; without one a `BLOB` is a cell when its header names the target format and its
+length is the cell length of its `N`.
+
 GPU transfer: the packed-element bytes of consecutive rows form the cuBLASLt operand
 directly (memcpy). The block scales are re-laid out into cuBLASLt's tiled scale tensor
 (§GPU engine) — a per-byte gather, because a scale tile spans 128 vectors and cannot be
@@ -337,6 +349,7 @@ only when it is stored into a `vecf8`/`vecf4` column (assignment cast).
 | `LOAD` | CSV text `"[…]"`, JSONL arrays; Parquet `LIST<FLOAT/DOUBLE>` and text columns, quantized per row. The exact text (CSV text, or a JSONL object value) loads without quantization |
 | `INTO OUTFILE`, external-table writes | the exact text, in CSV as a quoted field and in JSONL as an object value, so an export reloads to the same cells |
 | binary input | a `BLOB` of little-endian float32 elements, as for `vecf32` (`CAST(UNHEX('0000803F…') AS BLOB)` or a BLOB parameter), quantized per row; a length that is not a multiple of 4 or another dimension is rejected |
+| exact binary | `vecblock_binary(v)` returns the stored cell as a `BLOB` (§Cell format); a `BLOB` of a cell casts, inserts or binds back to the same bytes without quantization, and a `BLOB` of cell length that is not a valid cell of the target is an error |
 | exact text | `vecblock_json(v)` returns the cell as stored, `{"g": g, "b": [{"s": scale, "v": [values]}, …]}` (no `"g"` for `vecf8`, whose global is 1); casting that text (or inserting it, or `LOAD`ing it) builds the same cell bytes without quantization. Each element is `v · s · g`; `s` must be a scale code's value (E8M0 / UE4M3), `v` an element code's value (E4M3 / E2M1), 32 / 16 values per block and fewer only in the last; anything else is an error, never rounded |
 
 The promotion is implemented in these operations only: function resolution dequantizes a

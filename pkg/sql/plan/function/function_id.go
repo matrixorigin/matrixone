@@ -862,9 +862,12 @@ const (
 	// VECBLOCK_JSON returns the exact text of a vecf8/vecf4 value: its blocks as stored.
 	VECBLOCK_JSON = 587
 
+	// VECBLOCK_BINARY returns the stored cell of a vecf8/vecf4 value as a BLOB.
+	VECBLOCK_BINARY = 588
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 588
+	FUNCTION_END_NUMBER = 589
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1467,6 +1470,7 @@ var functionIdRegister = map[string]int32{
 	"vector_dims":       VECTOR_DIMS,
 	"normalize_l2":      NORMALIZE_L2,
 	"vecblock_json":     VECBLOCK_JSON,
+	"vecblock_binary":   VECBLOCK_BINARY,
 	"l1_distance":       L1_DISTANCE,
 	"l2_distance":       L2_DISTANCE,
 	"l2_distance_xc":    L2_DISTANCE_XC,

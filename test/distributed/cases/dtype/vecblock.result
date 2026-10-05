@@ -399,6 +399,32 @@ select a.id, b.id, vecblock_json(a.v) = vecblock_json(b.v), vecblock_json(a.e) =
 select count(*) from uv where v = @v and e = @e;
 ➤ count(*)[-5,64,0]  𝄀
 2
+create table vbin (id int, v vecf4(17), e vecf8(2));
+insert into vbin values (1, '[8.7649145,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5.7432985]', '[447, -1.5]');
+select hex(vecblock_binary(v)), hex(vecblock_binary(e)), length(vecblock_binary(v)), length(vecblock_binary(e)) from vbin;
+➤ hex(vecblock_binary(v))[-1,16383,0]  ¦  hex(vecblock_binary(e))[-1,16383,0]  ¦  length(vecblock_binary(v))[-5,64,0]  ¦  length(vecblock_binary(e))[-5,64,0]  𝄀
+01020000110000006CB2553B7E7A070000000000000007  ¦  01010000020000000000803F7F7EBC  ¦  23  ¦  15
+insert into vbin select 2, cast(vecblock_binary(v) as vecf4(17)), cast(vecblock_binary(e) as vecf8(2)) from vbin where id = 1;
+insert into vbin values (3, cast(unhex('01020000110000006CB2553B7E7A070000000000000007') as blob), cast(unhex('01010000020000000000803F7F7EBC') as blob));
+select id, vecblock_json(v), vecblock_json(e) from vbin order by id;
+➤ id[4,32,0]  ¦  vecblock_json(v)[-1,16383,0]  ¦  vecblock_json(e)[-1,16383,0]  𝄀
+1  ¦  {"g":0.0032607568,"b":[{"s":448,"v":[6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]},{"s":320,"v":[6]}]}  ¦  {"b":[{"s":1,"v":[448,-1.5]}]}  𝄀
+2  ¦  {"g":0.0032607568,"b":[{"s":448,"v":[6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]},{"s":320,"v":[6]}]}  ¦  {"b":[{"s":1,"v":[448,-1.5]}]}  𝄀
+3  ¦  {"g":0.0032607568,"b":[{"s":448,"v":[6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]},{"s":320,"v":[6]}]}  ¦  {"b":[{"s":1,"v":[448,-1.5]}]}
+select count(distinct vecblock_binary(v)), count(distinct vecblock_binary(e)) from vbin;
+➤ count(distinct vecblock_binary(v))[-5,64,0]  ¦  count(distinct vecblock_binary(e))[-5,64,0]  𝄀
+1  ¦  1
+select vecblock_binary(cast(vecblock_binary(e) as vecf8)) = vecblock_binary(e) from vbin where id = 1;
+➤ vecblock_binary(cast(vecblock_binary(e) as vecf8)) = vecblock_binary(e)[-7,1,0]  𝄀
+1
+select cast(cast(unhex('02010000020000000000803F7F7EBC') as blob) as vecf8(2));
+invalid input: unsupported block-scaled vector version 2
+select cast(cast(unhex('01020000020000000000803F7F7EBC') as blob) as vecf8(2));
+invalid input: vecf4(2) cell is 15 bytes, want 14
+select cast(cast(unhex('01010000020000000000803F7F7EBC') as blob) as vecf8(3));
+invalid input: vector payload is not aligned to its element size
+select vecblock_binary(cast('[1,2]' as vecf32(2)));
+invalid argument function vecblock_binary, bad value [VECF32]
 create table expt (id int, v vecf4(17), e vecf8(2));
 insert into expt values (1, '[8.7649145,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5.7432985]', '[447, -1.5]'), (2, null, '[0.001, 3]');
 select * from expt order by id into outfile '$resources/into_outfile/vecblock.csv';

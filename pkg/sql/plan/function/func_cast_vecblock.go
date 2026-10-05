@@ -25,8 +25,8 @@ import (
 
 // vecf8/vecf4 casts: text "[...]", a BLOB of little-endian float32 elements (the binary
 // vector input of vecf32), vecf32 and vecf8/vecf4 sources quantize into the target cell
-// format; the exact text (a JSON object, types.BlockScaledToJSON) builds the cell as
-// written; vecf8/vecf4 sources dequantize to vecf32. Text targets are not
+// format; the exact text (a JSON object, types.BlockScaledToJSON) and the stored cell as a
+// BLOB (vecblock_binary) build the cell as written; vecf8/vecf4 sources dequantize to vecf32. Text targets are not
 // casts, as for vecf32; values render as text through the output path.
 
 func init() {
@@ -52,6 +52,21 @@ func checkVectorCastDim(to types.Type, dim int) error {
 	return nil
 }
 
+// isBlockScaledBinary reports whether a BLOB is a stored cell rather than float32 elements.
+// With a declared dimension d it is a cell when its length is the cell size of d, which is
+// never 4*d. Without one it is a cell when its header names the target format and its
+// length is the cell size of the header's dimension.
+func isBlockScaledBinary(f types.BlockScaledFormat, to types.Type, v []byte) bool {
+	if w := int(to.Width); w > 0 && w != types.MaxArrayDimension {
+		return len(v) == types.BlockScaledCellSize(f, w)
+	}
+	if len(v) < types.BlockScaledHeaderSize || v[0] != 1 || v[1] != byte(f) || v[2] != 0 || v[3] != 0 {
+		return false
+	}
+	dim := types.BlockScaledDim(v)
+	return dim > 0 && dim <= types.MaxArrayDimension && len(v) == types.BlockScaledCellSize(f, dim)
+}
+
 // castToBlockScaled casts text, vecf32, vecf8 or vecf4 to a vecf8/vecf4 target.
 func castToBlockScaled(proc *process.Process, from *vector.Vector, toType types.Type,
 	result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
@@ -70,6 +85,22 @@ func castToBlockScaled(proc *process.Process, from *vector.Vector, toType types.
 		}
 		var arr []float32
 		switch {
+		case fromOid == types.T_blob && isBlockScaledBinary(f, toType, v):
+			// the stored cell (vecblock_binary), not quantized
+			c, err := types.ParseBlockScaledCell(v)
+			if err != nil {
+				return err
+			}
+			if c.Format != f {
+				return moerr.NewInvalidInputNoCtxf("%s cell is not a %s cell", c.Format, f)
+			}
+			if err := checkVectorCastDim(toType, c.Dim); err != nil {
+				return err
+			}
+			if err := rs.AppendBytes(v, false); err != nil {
+				return err
+			}
+			continue
 		case fromOid == types.T_blob:
 			if len(v)%4 != 0 {
 				return moerr.NewInvalidInputNoCtx("vector payload is not aligned to its element size")

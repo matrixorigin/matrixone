@@ -7828,6 +7828,28 @@ var supportedArrayOperations = []FuncNew{
 			},
 		},
 	},
+	// function `vecblock_binary`: the stored cell of a vecf8/vecf4 value
+	{
+		functionId: VECBLOCK_BINARY,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_array_float8},
+				retType:    func(parameters []types.Type) types.Type { return types.T_blob.ToType() },
+				newOp:      func() executeLogicOfOverload { return VecBlockBinary },
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_array_float4},
+				retType:    func(parameters []types.Type) types.Type { return types.T_blob.ToType() },
+				newOp:      func() executeLogicOfOverload { return VecBlockBinary },
+			},
+		},
+	},
 
 	// function `normalize_l2`
 	{

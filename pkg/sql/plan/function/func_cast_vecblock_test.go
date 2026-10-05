@@ -204,3 +204,75 @@ func TestCastVecBlockExactText(t *testing.T) {
 		require.Error(t, err, "malformed")
 	}
 }
+
+// TestVecBlockBinary checks the binary exact form: vecblock_binary returns the stored cell,
+// a BLOB of the cell casts back to the same bytes with or without a declared dimension, and
+// a BLOB of cell length that is not a valid cell of the target is an error.
+func TestVecBlockBinary(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	blob := func(values ...[]byte) *vector.Vector {
+		v := vector.NewVec(types.T_blob.ToType())
+		for _, b := range values {
+			require.NoError(t, vector.AppendBytes(v, b, false, proc.Mp()))
+		}
+		return v
+	}
+	values := []float32{0.44547153, 1.7, -3.1, 0.02, 5.5}
+	for _, oid := range []types.T{types.T_array_float8, types.T_array_float4} {
+		f, _ := oid.BlockScaledFormat()
+		cells := vecBlockCellVector(t, oid, 5, [][]float32{values}, []bool{false})
+		require.NoError(t, vector.AppendBytes(cells, nil, true, proc.Mp()))
+		cell := cells.GetBytesAt(0)
+
+		bin := vector.NewFunctionResultWrapper(types.T_blob.ToType(), proc.Mp())
+		require.NoError(t, bin.PreExtendAndReset(2))
+		require.NoError(t, VecBlockBinary([]*vector.Vector{cells}, bin, proc, 2, nil))
+		require.Equal(t, cell, bin.GetResultVector().GetBytesAt(0), oid.String())
+		require.True(t, bin.GetResultVector().IsNull(1))
+
+		for _, to := range []types.Type{types.New(oid, 5, 0), types.New(oid, types.MaxArrayDimension, 0)} {
+			out, err := runVecBlockCast(t, proc, blob(cell), to)
+			require.NoError(t, err, "%s width %d", oid, to.Width)
+			require.Equal(t, cell, out.GetBytesAt(0), "%s width %d", oid, to.Width)
+		}
+		// float32 elements of the same dimension still quantize
+		out, err := runVecBlockCast(t, proc, blob(types.ArrayToBytes(values)), types.New(oid, 5, 0))
+		require.NoError(t, err)
+		require.Equal(t, cell, out.GetBytesAt(0))
+		require.NotEqual(t, len(cell), 4*len(values))
+
+		other := types.T_array_float4
+		if oid == types.T_array_float4 {
+			other = types.T_array_float8
+		}
+		otherCell := vecBlockCellVector(t, other, 5, [][]float32{values}, []bool{false}).GetBytesAt(0)
+		bad := func(mutate func(b []byte)) []byte {
+			b := append([]byte(nil), cell...)
+			mutate(b)
+			return b
+		}
+		for name, c := range map[string]struct {
+			src []byte
+			to  types.Type
+		}{
+			"version":  {bad(func(b []byte) { b[0] = 2 }), types.New(oid, 5, 0)},
+			"format":   {bad(func(b []byte) { b[1] = 3 - b[1] }), types.New(oid, 5, 0)},
+			"reserved": {bad(func(b []byte) { b[2] = 1 }), types.New(oid, 5, 0)},
+			"dim":      {bad(func(b []byte) { b[4] = 4 }), types.New(oid, 5, 0)},
+			"global":   {bad(func(b []byte) { b[11] = 0xff }), types.New(oid, 5, 0)},
+			"declared": {cell, types.New(oid, 6, 0)},
+		} {
+			_, err := runVecBlockCast(t, proc, blob(c.src), c.to)
+			require.Error(t, err, "%s %s", oid, name)
+		}
+		if types.BlockScaledCellSize(f, 5) == len(otherCell) {
+			_, err := runVecBlockCast(t, proc, blob(otherCell), types.New(oid, 5, 0))
+			require.Error(t, err, "%s from the other format", oid)
+		}
+	}
+	// a float32 BLOB never has the cell size of its dimension
+	for d := 1; d <= types.MaxArrayDimension; d++ {
+		require.NotEqual(t, 4*d, types.BlockScaledCellSize(types.BlockScaledMXFP8, d), d)
+		require.NotEqual(t, 4*d, types.BlockScaledCellSize(types.BlockScaledNVFP4, d), d)
+	}
+}

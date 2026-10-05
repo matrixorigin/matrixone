@@ -201,6 +201,21 @@ insert into uv values (2, @v, @e);
 select a.id, b.id, vecblock_json(a.v) = vecblock_json(b.v), vecblock_json(a.e) = vecblock_json(b.e) from uv a, uv b where a.id = 1 and b.id = 2;
 select count(*) from uv where v = @v and e = @e;
 
+-- vecblock_binary returns the stored cell; a BLOB of a cell casts back to the same bytes
+create table vbin (id int, v vecf4(17), e vecf8(2));
+insert into vbin values (1, '[8.7649145,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5.7432985]', '[447, -1.5]');
+select hex(vecblock_binary(v)), hex(vecblock_binary(e)), length(vecblock_binary(v)), length(vecblock_binary(e)) from vbin;
+insert into vbin select 2, cast(vecblock_binary(v) as vecf4(17)), cast(vecblock_binary(e) as vecf8(2)) from vbin where id = 1;
+insert into vbin values (3, cast(unhex('01020000110000006CB2553B7E7A070000000000000007') as blob), cast(unhex('01010000020000000000803F7F7EBC') as blob));
+select id, vecblock_json(v), vecblock_json(e) from vbin order by id;
+select count(distinct vecblock_binary(v)), count(distinct vecblock_binary(e)) from vbin;
+select vecblock_binary(cast(vecblock_binary(e) as vecf8)) = vecblock_binary(e) from vbin where id = 1;
+-- a BLOB of cell length that is not a valid cell is an error
+select cast(cast(unhex('02010000020000000000803F7F7EBC') as blob) as vecf8(2));
+select cast(cast(unhex('01020000020000000000803F7F7EBC') as blob) as vecf8(2));
+select cast(cast(unhex('01010000020000000000803F7F7EBC') as blob) as vecf8(3));
+select vecblock_binary(cast('[1,2]' as vecf32(2)));
+
 -- export writes the exact text; CSV and JSONL reload to the same cells
 create table expt (id int, v vecf4(17), e vecf8(2));
 insert into expt values (1, '[8.7649145,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5.7432985]', '[447, -1.5]'), (2, null, '[0.001, 3]');
