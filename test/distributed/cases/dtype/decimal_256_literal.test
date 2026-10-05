@@ -107,3 +107,12 @@ select id, cast('2000000000000000000' as decimal(65,0)) % y as remainder from de
 select count(*) as rows_after_zero from decimal_high_bit_mod_t;
 drop table decimal_high_bit_mod_t;
 select count(*) as remaining_mod_tables from information_schema.tables where table_schema=database() and table_name='decimal_high_bit_mod_t';
+
+-- #29615: the -2^255 carrier coefficient cannot escape under precision 65.
+select cast('-57896044618658097711785492504343953926634992332820282019728792003' as decimal(65,0)) + cast('-0.956564819968' as decimal(65,12));
+-- First rejected coefficient and last valid coefficient at scale 12.
+select cast('-1e53' as decimal(65,0)) + cast('0' as decimal(65,12));
+-- @metacmp(true)
+select cast('-1e53' as decimal(65,0)) + cast('0.000000000001' as decimal(65,12)) as precision65_valid;
+-- @metacmp(true)
+select cast('-57896044618658097711785492504343953926634992332820282019728792003' as decimal(65,0)) + cast(NULL as decimal(65,12)) as precision65_null;

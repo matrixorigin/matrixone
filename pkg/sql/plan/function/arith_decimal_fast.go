@@ -3368,9 +3368,8 @@ func d256DivAtScale(v1, v2, rs []types.Decimal256, scale1, scale2, resultScale i
 }
 
 // d256DivAdjusted divides unsigned magnitudes with one final half-up rounding.
-// Div256 doubles the numerator and shifts the divisor using signed comparisons.
-// Keeping the scaled numerator below 2^253 leaves headroom for both operations;
-// values outside that domain use the bounded wide fallback.
+// The magnitude owner handles the full fixed-width domain; only an overflowing
+// scale adjustment needs the bounded wide fallback.
 func d256DivAdjusted(a, b types.Decimal256, scaleAdj int32, negative bool, dst *types.Decimal256) error {
 	scaledA, scaledB := a, b
 	fits := true
@@ -3379,10 +3378,14 @@ func d256DivAdjusted(a, b types.Decimal256, scaleAdj int32, negative bool, dst *
 	} else if scaleAdj < 0 {
 		fits = d256MulPow10(&scaledB, -scaleAdj)
 	}
-	if fits && scaledA.B192_255>>61 == 0 && scaledB.B192_255>>63 == 0 {
+	if fits {
 		quotient, err := scaledA.Div256(scaledB)
 		if err != nil {
 			return err
+		}
+		// Preserve the signed result range also enforced by d256DivBig.
+		if quotient.B192_255>>63 != 0 {
+			return moerr.NewOutOfRangeNoCtx("DECIMAL256", "")
 		}
 		if negative {
 			quotient = quotient.Minus()
@@ -3712,14 +3715,7 @@ func d256ModViaD128(v1, v2, rs []types.Decimal256, scale1, scale2 int32,
 
 	// Prescan: when y is not scaled up (scaleX scales x, or same-scale scales by 1),
 	// check if all |v2| narrowed to D128 fit in 64 bits for inline fast 64-bit mod.
-	canInline64 := false
-	if scaleX || scaleDiff == 0 {
-		var acc uint64
-		for i := 0; i < len2; i++ {
-			acc |= v2[i].B64_127 + 1
-		}
-		canInline64 = acc <= 1
-	}
+	canInline64 := (scaleX || scaleDiff == 0) && d256NarrowAllAbsFit64(v2)
 
 	if len1 == len2 {
 		if canInline64 {
@@ -3973,12 +3969,11 @@ func d256IntDiv(v1, v2 []types.Decimal256, rs []int64, scale1, scale2 int32, rsn
 
 	// For integer division (DIV), result scale is 0; we want trunc(v1/v2) with no decimal places.
 	// scaleAdj compensates for input scales: scaleAdj = scale2 - scale1.
-	scale := int32(0)
-	scaleAdj := scale - scale1 + scale2
+	scaleAdj := scale2 - scale1
 
 	// Pre-scan: if all elements fit in D128, use the fast D128 division path.
 	if d256AllFitD128(v1) && d256AllFitD128(v2) {
-		return d256IntDivViaD128(v1, v2, rs, scale, scaleAdj, rsnull, shouldError, scale1, scale2, hasNull, bmp)
+		return d256IntDivViaD128(v1, v2, rs, scaleAdj, rsnull, shouldError, scale1, scale2, hasNull, bmp)
 	}
 
 	// Slow path: generic D256 integer division.
@@ -4077,7 +4072,7 @@ func d256IntDiv(v1, v2 []types.Decimal256, rs []int64, scale1, scale2 int32, rsn
 }
 
 // d256IntDivViaD128 runs D256 integer division through the D128 fast path.
-func d256IntDivViaD128(v1, v2 []types.Decimal256, rs []int64, scale, scaleAdj int32, rsnull *nulls.Nulls, shouldError bool, scale1, scale2 int32, hasNull bool, bmp *bitmap.Bitmap) error {
+func d256IntDivViaD128(v1, v2 []types.Decimal256, rs []int64, scaleAdj int32, rsnull *nulls.Nulls, shouldError bool, scale1, scale2 int32, hasNull bool, bmp *bitmap.Bitmap) error {
 	len1, len2 := len(v1), len(v2)
 
 	d256toD128 := func(d types.Decimal256) types.Decimal128 {

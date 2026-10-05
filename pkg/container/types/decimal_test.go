@@ -352,6 +352,20 @@ func TestDecimal128ScaleMinimumAndExtremeNegativeScale(t *testing.T) {
 	inplace := Decimal128Min
 	require.NoError(t, inplace.ScaleInplace(math.MinInt32))
 	require.Equal(t, Decimal128{}, inplace)
+	for _, n := range []int32{math.MinInt32, math.MaxInt32} {
+		t.Run(fmt.Sprintf("zero/%d", n), func(t *testing.T) {
+			inplace := Decimal128{}
+			require.NoError(t, inplace.ScaleInplace(n))
+			require.Equal(t, Decimal128{}, inplace)
+			truncated, err := (Decimal128{}).ScaleTruncate(n)
+			require.NoError(t, err)
+			require.Equal(t, Decimal128{}, truncated)
+			wide, err := (Decimal256{}).ScaleTruncate(n)
+			require.NoError(t, err)
+			require.Equal(t, Decimal256{}, wide)
+		})
+	}
+
 }
 
 func TestDecimal256ScaleMultiStepRoundingAndMinimum(t *testing.T) {
@@ -904,8 +918,8 @@ func TestDecimal128OverDiv(t *testing.T) {
 func TestDecimal128Div128HalfUpLargeDivisor(t *testing.T) {
 	fromBig := func(value *big.Int) Decimal128 {
 		t.Helper()
-		if value.Sign() < 0 || value.BitLen() > 127 {
-			t.Fatalf("value does not fit a positive Decimal128: %s", value)
+		if value.Sign() < 0 || value.BitLen() > 128 {
+			t.Fatalf("value does not fit an unsigned Decimal128 magnitude: %s", value)
 		}
 		hi := new(big.Int).Rsh(new(big.Int).Set(value), 64).Uint64()
 		return Decimal128{B0_63: value.Uint64(), B64_127: hi}
@@ -947,6 +961,34 @@ func TestDecimal128Div128HalfUpLargeDivisor(t *testing.T) {
 				})
 			}
 		}
+	}
+
+	magnitudeLimit := new(big.Int).Lsh(big.NewInt(1), 127)
+	for _, tc := range []struct {
+		name string
+		x, y *big.Int
+	}{
+		{"minimum_magnitudes_equal", magnitudeLimit, magnitudeLimit},
+		{"below_minimum_divisor", new(big.Int).Sub(new(big.Int).Set(magnitudeLimit), big.NewInt(1)), magnitudeLimit},
+		{"minimum_dividend_wide_divisor", magnitudeLimit, new(big.Int).Add(new(big.Int).Lsh(big.NewInt(1), 64), big.NewInt(3))},
+		{"unsigned_rounded_quotient_carry", new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 128), big.NewInt(1)), new(big.Int).Lsh(big.NewInt(1), 64)},
+		{"minimum_divisor_below_half", new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 126), big.NewInt(1)), magnitudeLimit},
+		{"minimum_divisor_at_half", new(big.Int).Lsh(big.NewInt(1), 126), magnitudeLimit},
+		{"minimum_divisor_above_half", new(big.Int).Add(new(big.Int).Lsh(big.NewInt(1), 126), big.NewInt(1)), magnitudeLimit},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			want, remainder := new(big.Int), new(big.Int)
+			want.QuoRem(tc.x, tc.y, remainder)
+			got, err := fromBig(tc.x).Div128Trunc(fromBig(tc.y))
+			require.NoError(t, err)
+			require.Equal(t, want, toBig(got))
+			if new(big.Int).Lsh(remainder, 1).Cmp(tc.y) >= 0 {
+				want.Add(want, big.NewInt(1))
+			}
+			got, err = fromBig(tc.x).Div128(fromBig(tc.y))
+			require.NoError(t, err)
+			require.Equal(t, want, toBig(got))
+		})
 	}
 
 	t.Run("odd half threshold carries into high limb", func(t *testing.T) {
@@ -1055,6 +1097,40 @@ func TestDecimal256UnsignedDivision(t *testing.T) {
 	for range 200 {
 		check(new(big.Int).Rand(rng, limit), new(big.Int).Rand(rng, limit))
 	}
+
+	// Rounding has a distinct consumer contract; avoid repeating the floor matrix.
+	top := new(big.Int).Lsh(big.NewInt(1), 255)
+	half := new(big.Int).Rsh(new(big.Int).Set(top), 1)
+	for _, tc := range []struct {
+		name string
+		x, y *big.Int
+	}{
+		{"rounded_scaled_boundary", new(big.Int).Mul(big.NewInt(3), new(big.Int).Exp(big.NewInt(10), big.NewInt(76), nil)), new(big.Int).Exp(big.NewInt(10), big.NewInt(64), nil)},
+		{"rounded_full_magnitude", top, big.NewInt(1)},
+		{"rounded_quotient_carry", new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1)), big.NewInt(2)},
+		{"rounded_even_below_half", new(big.Int).Sub(new(big.Int).Set(half), big.NewInt(1)), top},
+		{"rounded_even_at_half", half, top},
+		{"rounded_odd_below_half", half, new(big.Int).Add(new(big.Int).Set(top), big.NewInt(1))},
+		{"rounded_odd_above_half", new(big.Int).Add(new(big.Int).Set(half), big.NewInt(1)), new(big.Int).Add(new(big.Int).Set(top), big.NewInt(1))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			want, rem := new(big.Int), new(big.Int)
+			want.QuoRem(tc.x, tc.y, rem)
+			if new(big.Int).Lsh(rem, 1).Cmp(tc.y) >= 0 {
+				want.Add(want, big.NewInt(1))
+			}
+			got, err := fromBig(tc.x).Div256(fromBig(tc.y))
+			require.NoError(t, err)
+			require.Zero(t, want.Cmp(toBig(got)))
+		})
+	}
+	t.Run("rounded_zero_error", func(t *testing.T) {
+		x := Decimal256{B0_63: 7}
+		got, err := x.Div256(Decimal256{})
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+		require.Equal(t, "invalid input: Decimal256 Div by Zero", err.Error())
+		require.Equal(t, x, got)
+	})
 }
 
 func TestDecimal256ModHighMagnitude(t *testing.T) {

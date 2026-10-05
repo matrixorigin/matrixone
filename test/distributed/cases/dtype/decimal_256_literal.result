@@ -141,3 +141,13 @@ drop table decimal_high_bit_mod_t;
 select count(*) as remaining_mod_tables from information_schema.tables where table_schema=database() and table_name='decimal_high_bit_mod_t';
 ➤ remaining_mod_tables[-5,64,0]  𝄀
 0
+select cast('-57896044618658097711785492504343953926634992332820282019728792003' as decimal(65,0)) + cast('-0.956564819968' as decimal(65,12));
+Data truncation: data out of range: data type decimal256, value '-57896044618658097711785492504343953926634992332820282019728792003.956564819968' exceeds DECIMAL(65,12)
+select cast('-1e53' as decimal(65,0)) + cast('0' as decimal(65,12));
+Data truncation: data out of range: data type decimal256, value '-100000000000000000000000000000000000000000000000000000.000000000000' exceeds DECIMAL(65,12)
+select cast('-1e53' as decimal(65,0)) + cast('0.000000000001' as decimal(65,12)) as precision65_valid;
+➤ precision65_valid[3,65,12]  𝄀
+-99999999999999999999999999999999999999999999999999999.999999999999
+select cast('-57896044618658097711785492504343953926634992332820282019728792003' as decimal(65,0)) + cast(NULL as decimal(65,12)) as precision65_null;
+➤ precision65_null[3,65,12]  𝄀
+null
