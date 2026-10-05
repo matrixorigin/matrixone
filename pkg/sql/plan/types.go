@@ -82,16 +82,7 @@ type DataStreamScan = plan.DataStreamScan
 type ForeignScan = plan.ForeignScan
 type KafkaScan = plan.KafkaScan
 
-const ViewSnapshotKeySuffix = "@ts="
 const viewDependencyKeyPrefix = "\x00mo_view_dependency\x00"
-
-// FormatViewKeyWithSnapshot appends snapshot information to a view key for privilege checks.
-func FormatViewKeyWithSnapshot(viewKey string, snapshot *Snapshot) string {
-	if !IsSnapshotValid(snapshot) || snapshot.TS == nil {
-		return viewKey
-	}
-	return fmt.Sprintf("%s%s%d", viewKey, ViewSnapshotKeySuffix, snapshot.TS.PhysicalTime)
-}
 
 // FormatViewDependencyKey preserves database and view identifiers separately,
 // plus the complete optional table-level snapshot used to resolve the view.
@@ -1038,10 +1029,8 @@ type BindContext struct {
 	views []string
 	//view in binding or already bound
 	boundViews map[[2]string]*tree.CreateView
-	// viewChain tracks view lineage for the current bind context.
-	viewChain []string
-	// directView tracks the outermost view referenced by the user.
-	directView string
+	// viewPath contains immutable per-view binding contexts, in authorization order.
+	viewPath []*plan.ViewStep
 
 	// lower is sys var lower_case_table_names
 	lower int64
