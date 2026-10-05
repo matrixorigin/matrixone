@@ -833,6 +833,10 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 				if err != nil {
 					return err
 				}
+				err = setVecBlockExactText(tmpBatch, j, mrs.Data[0])
+				if err != nil {
+					return err
+				}
 				err = exportDataFromResultSetToCSVFile(exportParam)
 				if err != nil {
 					return err

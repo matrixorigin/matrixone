@@ -2890,6 +2890,13 @@ func appendCSVQuotedVecValue(w *bytes.Buffer, vec *vector.Vector, rowIdx int) {
 		appendEscapedSQLLoadString(w, types.DecodeJson(vec.GetBytesAt(rowIdx)).String(), '"')
 	case types.T_bit:
 		appendEscapedSQLLoadBytes(w, bitValueToLoadBytes(vector.MustFixedColWithTypeCheck[uint64](vec)[rowIdx], vec.GetType().Width), '"')
+	case types.T_array_float8, types.T_array_float4:
+		// the exact text, which LOAD rebuilds into the same cell
+		text, err := types.BlockScaledToJSON(vec.GetBytesAt(rowIdx))
+		if err != nil {
+			text = vecValueToString(vec, rowIdx)
+		}
+		appendEscapedSQLLoadString(w, text, '"')
 	default:
 		appendEscapedSQLLoadString(w, vecValueToString(vec, rowIdx), '"')
 	}

@@ -2263,8 +2263,9 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 		}
 		f, _ := types.T(dt.Id).BlockScaledFormat()
 		encode := func(row []float32) ([]byte, error) { return types.AppendBlockScaled(nil, f, row) }
+		exact := func(text string) ([]byte, error) { return types.BlockScaledFromJSON(f, text) }
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			return processStringToArrayEnc[float32](proc.Ctx, mp, page, proc, vec, width, encode)
+			return processStringToArrayEnc[float32](proc.Ctx, mp, page, proc, vec, width, encode, exact)
 		}
 	case types.T_array_bf16:
 		if !isPlainStringLikeType(st) {
@@ -2757,7 +2758,7 @@ func processStringToArray[T types.ArrayElement](
 	vec *vector.Vector,
 	width int,
 ) error {
-	return processStringToArrayEnc[T](ctx, mp, page, proc, vec, width, nil)
+	return processStringToArrayEnc[T](ctx, mp, page, proc, vec, width, nil, nil)
 }
 
 // processStringToArrayEnc is processStringToArray with an optional row encoder; nil
@@ -2770,6 +2771,7 @@ func processStringToArrayEnc[T types.ArrayElement](
 	vec *vector.Vector,
 	width int,
 	encode func([]T) ([]byte, error),
+	exact func(string) ([]byte, error),
 ) error {
 	numRows, err := parquetPageCount(ctx, "NumRows()", page.NumRows())
 	if err != nil {
@@ -2842,6 +2844,19 @@ func processStringToArrayEnc[T types.ArrayElement](
 			data = loader.loadAt(idx)
 		}
 
+		if text := util.UnsafeBytesToString(data); exact != nil && types.IsBlockScaledJSON(text) {
+			cell, err := exact(text)
+			if err != nil {
+				return rollback(wrapParseError(ctx, i, err))
+			}
+			if dim := types.BlockScaledDim(cell); width != types.MaxArrayDimension && dim != width {
+				return rollback(moerr.NewArrayDefMismatchNoCtx(width, dim))
+			}
+			if err := vector.AppendBytes(vec, cell, false, proc.Mp()); err != nil {
+				return rollback(err)
+			}
+			continue
+		}
 		val, parseErr := parseStringArrayValue[T](data)
 		if parseErr != nil {
 			return rollback(wrapParseError(ctx, i, parseErr))

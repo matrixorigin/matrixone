@@ -154,3 +154,33 @@ func TestJSONLineVecBlockExactText(t *testing.T) {
 		})
 	}
 }
+
+func TestParquetStringExactTextToVecBlock(t *testing.T) {
+	proc := testutil.NewProc(t)
+	for _, oid := range vecBlockTestOids {
+		t.Run(oid.String(), func(t *testing.T) {
+			bf, _ := oid.BlockScaledFormat()
+			cell, err := types.StringToBlockScaled(bf, "[0.44547153, 1.7, -3.1, 0.02]")
+			require.NoError(t, err)
+			text, err := types.BlockScaledToJSON(cell)
+			require.NoError(t, err)
+			f, page := writeColumnAndGetPage(t, parquet.Optional(parquet.String()), []parquet.Row{
+				{parquet.ByteArrayValue([]byte(text)).Level(0, 1, 0)},
+				{parquet.NullValue().Level(0, 0, 0)},
+			})
+			vec := vector.NewVec(types.New(oid, 4, 0))
+			var h ParquetHandler
+			mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(oid), Width: 4})
+			require.NotNil(t, mp)
+			require.NoError(t, mp.mapping(page, proc, vec))
+			require.Equal(t, 2, vec.Length())
+			require.Equal(t, cell, vec.GetBytesAt(0))
+			require.True(t, vec.IsNull(1))
+
+			// declared dimension mismatch
+			mp = h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(oid), Width: 3})
+			require.NotNil(t, mp)
+			require.Error(t, mp.mapping(page, proc, vector.NewVec(types.New(oid, 3, 0))))
+		})
+	}
+}

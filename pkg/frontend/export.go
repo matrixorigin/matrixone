@@ -627,6 +627,22 @@ func addEscapeToString(s []byte, escape byte) []byte {
 	return s
 }
 
+// setVecBlockExactText replaces the decoded values of row j's vecf8/vecf4 cells in row with
+// their exact text, which LOAD rebuilds into the same cells.
+func setVecBlockExactText(bat *batch.Batch, j int, row []any) error {
+	for i, vec := range bat.Vecs {
+		if !vec.GetType().Oid.IsBlockScaledArray() || vec.IsNull(uint64(j)) {
+			continue
+		}
+		text, err := types.BlockScaledToJSON(vec.GetBytesAt(j))
+		if err != nil {
+			return err
+		}
+		row[i] = []byte(text)
+	}
+	return nil
+}
+
 func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
 	symbol := oq.Symbol
 	closeby := oq.userConfig.Fields.EnclosedBy.Value
