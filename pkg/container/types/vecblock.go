@@ -94,6 +94,12 @@ func BlockScaledCellSize(f BlockScaledFormat, dim int) int {
 	return BlockScaledHeaderSize + BlockScaledScaleCount(f, dim) + BlockScaledElemBytes(f, dim)
 }
 
+// BlockScaledValue is a vecf8/vecf4 cell held outside a vector, as a user variable value.
+type BlockScaledValue struct {
+	Oid  T
+	Cell []byte
+}
+
 // BlockScaledCell is a validated view of a cell; Scales and Elems alias the cell bytes.
 type BlockScaledCell struct {
 	Format BlockScaledFormat

@@ -290,6 +290,8 @@ func blockScaledUserVariableValueToBytes(typ types.Type, val any) ([]byte, error
 		cell, err = types.AppendBlockScaled(nil, f, v)
 	case []byte:
 		cell = v
+	case types.BlockScaledValue:
+		cell = v.Cell
 	default:
 		return nil, moerr.NewInvalidArgNoCtx("array user variable value", fmt.Sprintf("%T", val))
 	}
@@ -442,11 +444,12 @@ func SetBytesToAnyVector(ctx context.Context, val string, row int,
 		}
 		return vector.SetFixedAtNoTypeCheck(vec, row, float64(v))
 	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
-		v, err := strconv.ParseFloat(val, 32)
+		v64, err := strconv.ParseFloat(val, 64)
 		if err != nil {
 			return moerr.NewOutOfRangef(ctx, vec.GetType().Oid.String(), "value '%v'", val)
 		}
-		if err := types.RejectNonFiniteNarrowFloat(float32(v), vec.GetType().Oid); err != nil {
+		v := types.Float32RoundToOdd(v64)
+		if err := types.RejectNonFiniteNarrowFloat(v, vec.GetType().Oid); err != nil {
 			return err
 		}
 		switch vec.GetType().Oid {

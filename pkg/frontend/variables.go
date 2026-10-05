@@ -4642,6 +4642,8 @@ func inferUserDefinedVarType(value interface{}) planpb.Type {
 		return planpb.Type{Id: int32(types.T_array_float16), Width: int32(len(v))}
 	case []int8:
 		return planpb.Type{Id: int32(types.T_array_int8), Width: int32(len(v))}
+	case types.BlockScaledValue:
+		return planpb.Type{Id: int32(v.Oid), Width: int32(types.BlockScaledDim(v.Cell))}
 	case nil:
 		oid = types.T_any
 	default:

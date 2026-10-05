@@ -24,6 +24,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -113,5 +116,48 @@ func TestQueryResultDumpVecBlockExactText(t *testing.T) {
 			require.Equal(t, vec.GetBytesAt(0), cell)
 		}
 		bat.Clean(mp)
+	}
+}
+
+// TestUserVarVecBlockKeepsCell checks that a vecf8/vecf4 user variable holds the cell: its
+// type is the column's, its value survives connection migration, it displays the decoded
+// values and it rebuilds the same cell bytes.
+func TestUserVarVecBlockKeepsCell(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	for _, oid := range []types.T{types.T_array_float8, types.T_array_float4} {
+		f, _ := oid.BlockScaledFormat()
+		cell, err := types.StringToBlockScaled(f, "[0.44547153, 1.7, -3.1, 0.02, 5.5]")
+		require.NoError(t, err)
+		vec := vector.NewVec(types.New(oid, 5, 0))
+		require.NoError(t, vector.AppendBytes(vec, cell, false, mp))
+
+		value, err := getValueFromVector(ctx, vec, nil, &plan.Expr{Typ: plan.Type{Id: int32(oid), Width: 5}})
+		require.NoError(t, err)
+		vec.Free(mp)
+		v, ok := value.(types.BlockScaledValue)
+		require.True(t, ok)
+		require.Equal(t, oid, v.Oid)
+		require.Equal(t, cell, v.Cell)
+		require.Equal(t, plan.Type{Id: int32(oid), Width: 5}, inferUserDefinedVarType(value))
+
+		encoded, err := encodeUserDefinedVarValue(ctx, value, false)
+		require.NoError(t, err)
+		decoded, err := decodeUserDefinedVarValue(ctx, encoded)
+		require.NoError(t, err)
+		require.Equal(t, value, decoded)
+
+		mrs := &MysqlResultSet{Data: [][]any{{value}}, Columns: make([]Column, 1)}
+		text, err := mrs.GetString(ctx, 0, 0)
+		require.NoError(t, err)
+		want, err := types.BlockScaledToString(cell)
+		require.NoError(t, err)
+		require.Equal(t, want, text)
+
+		proc := testutil.NewProcess(t)
+		got, err := util.GenVectorByVarValue(proc, types.New(oid, 5, 0), value)
+		require.NoError(t, err)
+		require.Equal(t, cell, got.GetBytesAt(0))
+		got.Free(proc.Mp())
 	}
 }

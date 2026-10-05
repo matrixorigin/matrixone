@@ -421,6 +421,8 @@ func encodeUserDefinedVarValue(ctx context.Context, value any, isBin bool) (*pla
 		return makeUserVarVectorLiteral(types.T_array_float16, types.ArrayToBytes(v), len(v)), nil
 	case []int8:
 		return makeUserVarVectorLiteral(types.T_array_int8, types.ArrayToBytes(v), len(v)), nil
+	case types.BlockScaledValue:
+		return makeUserVarVectorLiteral(v.Oid, v.Cell, types.BlockScaledDim(v.Cell)), nil
 	case []uint8:
 		return makeUserVarVectorLiteral(types.T_array_uint8, types.ArrayToBytes(v), len(v)), nil
 	default:
@@ -625,6 +627,20 @@ func decodeUserDefinedVarValue(ctx context.Context, expr *plan.Expr) (any, error
 			return nil, err
 		}
 		return types.BytesToArray[uint8](value), nil
+	case types.T_array_float8, types.T_array_float4:
+		value, ok := lit.Value.(*plan.Literal_VecVal)
+		if !ok {
+			return nil, moerr.NewInternalError(ctx, "invalid vector user variable value in connection migration")
+		}
+		cell := []byte(value.VecVal)
+		c, err := types.ParseBlockScaledCell(cell)
+		if err != nil {
+			return nil, err
+		}
+		if f, _ := types.T(expr.Typ.Id).BlockScaledFormat(); c.Format != f || expr.Typ.Width != int32(c.Dim) {
+			return nil, moerr.NewInternalError(ctx, "invalid vector user variable length in connection migration")
+		}
+		return types.BlockScaledValue{Oid: types.T(expr.Typ.Id), Cell: cell}, nil
 	default:
 		return nil, moerr.NewInternalErrorf(ctx, "unsupported user variable type %s in connection migration", types.T(expr.Typ.Id).String())
 	}

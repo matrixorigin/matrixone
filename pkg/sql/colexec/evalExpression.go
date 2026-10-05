@@ -915,7 +915,7 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 		expr.vec, err = util.GenVectorByVarValueWithAllocation(
 			proc, expr.typ, val, expr.allocation,
 		)
-	} else if !expr.typ.IsVarlen() || expr.typ.Oid == types.T_json || expr.typ.Oid.IsArrayRelate() {
+	} else if !expr.typ.IsVarlen() || expr.typ.Oid == types.T_json || expr.typ.Oid.IsArray() {
 		// Fixed-width user-variable values (including DECIMAL), JSON values, and
 		// array/vector values need typed reconstruction on every evaluation.
 		// Reusing the generic varlena update path would either reinterpret a

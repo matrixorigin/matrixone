@@ -191,6 +191,16 @@ insert into peer values (2, '{"b":[{"s":1,"v":[1]}]}'), (1, '{"b":[{"s":2,"v":[0
 select id from peer order by v, id;
 select id, rank() over (order by v) r, count(*) over (partition by v) c from peer order by id;
 
+-- a user variable keeps the cell
+create table uv (id int, v vecf4(17), e vecf8(2));
+insert into uv values (1, '[8.7649145,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5.7432985]', '[447, -1.5]');
+set @v = (select v from uv where id = 1);
+set @e = (select e from uv where id = 1);
+select @v, @e;
+insert into uv values (2, @v, @e);
+select a.id, b.id, vecblock_json(a.v) = vecblock_json(b.v), vecblock_json(a.e) = vecblock_json(b.e) from uv a, uv b where a.id = 1 and b.id = 2;
+select count(*) from uv where v = @v and e = @e;
+
 -- export writes the exact text; CSV and JSONL reload to the same cells
 create table expt (id int, v vecf4(17), e vecf8(2));
 insert into expt values (1, '[8.7649145,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5.7432985]', '[447, -1.5]'), (2, null, '[0.001, 3]');
