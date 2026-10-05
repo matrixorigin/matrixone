@@ -48,6 +48,7 @@ func TestWasmVarlenaProducerMatrix(t *testing.T) {
 			NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil),
 			op.tryWasm,
 		)
+		defer testCase.Free()
 		require.NoError(t, testCase.result.PreExtendAndReset(0))
 		require.NoError(t, op.tryWasm(testCase.parameters, testCase.result, proc, 0, nil))
 		require.Zero(t, testCase.GetResultVectorDirectly().Length())
@@ -67,6 +68,7 @@ func TestWasmVarlenaProducerMatrix(t *testing.T) {
 		NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil),
 		op.tryWasm,
 	)
+	defer testCase.Free()
 	require.NoError(t, testCase.result.PreExtendAndReset(testCase.fnLength))
 	require.NoError(t, op.tryWasm(
 		testCase.parameters,
@@ -119,6 +121,7 @@ func TestWasmVarlenaProducerMatrix(t *testing.T) {
 					NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil),
 					evalFn,
 				)
+				defer testCase.Free()
 				require.NoError(t, testCase.result.PreExtendAndReset(1))
 				require.Error(t, evalFn(testCase.parameters, testCase.result, proc, 1, nil))
 				require.Zero(t, testCase.GetResultVectorDirectly().Length())
@@ -137,6 +140,7 @@ func TestWasmVarlenaProducerMatrix(t *testing.T) {
 			NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil),
 			op.wasm,
 		)
+		defer testCase.Free()
 		require.NoError(t, testCase.result.PreExtendAndReset(1))
 		require.Error(t, op.wasm(testCase.parameters, testCase.result, proc, 1, nil))
 		require.Zero(t, testCase.GetResultVectorDirectly().Length())
@@ -156,6 +160,7 @@ func TestWasmVarlenaProducerMatrix(t *testing.T) {
 			NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil),
 			op.tryWasm,
 		)
+		defer testCase.Free()
 		require.NoError(t, testCase.result.PreExtendAndReset(1))
 		require.Error(t, op.tryWasm(testCase.parameters, testCase.result, proc, 1, nil))
 		require.Zero(t, testCase.GetResultVectorDirectly().Length())

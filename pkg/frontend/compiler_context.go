@@ -188,6 +188,14 @@ func (tcc *TxnCompilerContext) InitExecuteStmtParam(execPlan *plan.Execute) (*pl
 		execPlan,
 		"",
 	)
+	if err == nil && !tcc.execCtx.ses.IsBackgroundSession() {
+		// EXPLAIN delegates EXECUTE binding here rather than through the ordinary
+		// Execute wrapper. Authorize the resolved AST before releasing ownership.
+		authStats, authErr := authenticateUserCanExecutePrepareOrExecute(
+			tcc.execCtx.reqCtx, owner, st, p, tcc.execCtx.effectiveTxnDefaultDatabase)
+		statistic.StatsInfoFromContext(tcc.execCtx.reqCtx).PermissionAuth.Add(&authStats)
+		err = authErr
+	}
 	if owned && st != nil {
 		st.Free()
 		st = nil
@@ -1324,7 +1332,7 @@ func (tcc *TxnCompilerContext) statsWithTableDefVersion(
 	if w := statsCache.Get(tableID); w.Exists() {
 		if time.Now().Unix()-w.GetLastVisit() < 3 {
 			s := w.GetStats()
-			if plan2.StatsInfoUsable(s) {
+			if plan2.StatsCacheEligible(tcc.GetProcess(), snapshot) && plan2.StatsInfoUsableForCache(s) {
 				return s, nil
 			}
 			// Stats is nil or empty, need to re-check
@@ -1337,13 +1345,21 @@ func (tcc *TxnCompilerContext) statsWithTableDefVersion(
 		return nil, err
 	}
 
-	// A refresh may have completed while the slow path was reading storage. Do
-	// not let work from the old generation repopulate the new session cache.
+	// NDV/range consumers read the table-ID wrapper during this planning pass.
+	// Keep snapshot maps there without permitting a later ordinary fast hit;
+	// return the completed observation itself so named empty remains usable.
+	cachedResult := result
+	if plan2.IsSnapshotValid(snapshot) && result != nil {
+		copy := *result
+		copy.TableName = ""
+		cachedResult = &copy
+	}
+	// A refresh may have completed while storage was reading. Preserve the
+	// existing generation fence for both current and historical wrappers.
 	if ses == nil {
-		statsCache.Set(tableID, result)
+		statsCache.Set(tableID, cachedResult)
 	} else {
-		ses.cacheStatsForTableDefVersionIfCurrent(
-			statsKey, statsVersion, tableDefVersion, result)
+		ses.cacheStatsForTableDefVersionIfCurrent(statsKey, statsVersion, tableDefVersion, cachedResult)
 	}
 
 	return result, nil

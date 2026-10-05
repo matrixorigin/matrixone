@@ -2412,6 +2412,10 @@ func bindLegacyChecks(
 	}
 	defer stmt.Free()
 
+	if _, ok := stmt.(*tree.CloneTable); ok {
+		// CLONE stores provenance SQL; structured constraints are already persisted.
+		return nil, true, nil
+	}
 	createStmt, ok := stmt.(*tree.CreateTable)
 	if !ok {
 		return nil, true, moerr.NewInvalidInput(
@@ -2492,7 +2496,7 @@ func equalCheckDefs(left, right []*plan.CheckDef) bool {
 // silently choose between two valid but semantically different parses.
 func recoverLegacyChecks(ctx CompilerContext, tableDef *plan.TableDef) error {
 	if tableDef == nil || len(tableDef.Checks) > 0 || tableDef.Createsql == "" ||
-		tableDef.TableType == catalog.SystemExternalRel ||
+		(tableDef.TableType == catalog.SystemExternalRel || tableDef.TableType == catalog.SystemViewRel) ||
 		!strings.Contains(strings.ToUpper(tableDef.Createsql), "CHECK") {
 		return nil
 	}
@@ -3365,6 +3369,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	}
 
 	genColIdx := 0 // tracks the current column's position in allColDefs
+	// The legacy implicit-TIMESTAMP exception belongs to the first TIMESTAMP
+	// definition, even when that column has an explicit NULL, DEFAULT, or
+	// ON UPDATE clause. Do not consume the exception only after synthesis.
+	legacyTimestampFirstSeen := false
+	legacyTimestampDefaults := legacyImplicitTimestampDefaults(ctx)
 	for _, item := range stmt.Defs {
 		switch def := item.(type) {
 		case *tree.ColumnTableDef:
@@ -3375,6 +3384,10 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			colType.Charset = uint32(types.CharsetType(types.T(colType.Id)))
 			if err = applyDefaultAndColumnAttributesToType(ctx.GetContext(), &colType, tableCharset, def.Attributes); err != nil {
 				return err
+			}
+			firstLegacyTimestamp := types.T(colType.Id) == types.T_timestamp && !legacyTimestampFirstSeen
+			if firstLegacyTimestamp {
+				legacyTimestampFirstSeen = true
 			}
 			if colType.Id == int32(types.T_char) || colType.Id == int32(types.T_varchar) ||
 				colType.Id == int32(types.T_binary) || colType.Id == int32(types.T_varbinary) {
@@ -3510,7 +3523,47 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				if preserved != nil && preserved.defaultExpr != nil {
 					defaultValue = proto.Clone(preserved.defaultExpr).(*plan.Default)
 				} else {
-					defaultValue, err = buildDefaultExprWithColumns(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), def, colType, ctx.GetProcess(), allColDefs)
+					explicitOnUpdate := false
+					for _, attr := range def.Attributes {
+						if _, ok := attr.(*tree.AttributeOnUpdate); ok {
+							explicitOnUpdate = true
+							break
+						}
+					}
+					legacyImplicit := firstLegacyTimestamp &&
+						!hasExplicitNullableAttribute(def) &&
+						!hasExplicitDefaultAttribute(def) &&
+						!explicitOnUpdate &&
+						legacyTimestampDefaults
+					if legacyImplicit {
+						defaultValue, err = buildImplicitCurrentTimestampDefault(colType, ctx.GetProcess())
+						if err != nil {
+							return err
+						}
+						implicitExpr, implicitErr := buildImplicitCurrentTimestampExpr(colType, ctx.GetProcess())
+						if implicitErr != nil {
+							return implicitErr
+						}
+						onUpdateExpr = &plan.OnUpdate{Expr: implicitExpr, OriginString: "CURRENT_TIMESTAMP()"}
+					} else {
+						defaultDef := def
+						if colType.Id == int32(types.T_timestamp) && legacyTimestampDefaults && !hasExplicitNullableAttribute(def) {
+							// Nullability applies to every legacy TIMESTAMP, independently
+							// of first-column automation. Do not mutate the parser's AST.
+							copy := *def
+							copy.Attributes = append([]tree.ColumnAttribute(nil), def.Attributes...)
+							if getColumnNullAbility(def) {
+								copy.Attributes = append(copy.Attributes, &tree.AttributeNull{Is: false})
+							}
+							if !hasExplicitDefaultAttribute(def) {
+								copy.Attributes = append(copy.Attributes, &tree.AttributeDefault{
+									Expr: tree.NewNumVal("0000-00-00 00:00:00", "0000-00-00 00:00:00", false, tree.P_char),
+								})
+							}
+							defaultDef = &copy
+						}
+						defaultValue, err = buildDefaultExprWithColumns(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), defaultDef, colType, ctx.GetProcess(), allColDefs)
+					}
 				}
 				if err != nil {
 					return err
@@ -3522,10 +3575,13 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				if preserved != nil && preserved.onUpdate != nil {
 					onUpdateExpr = proto.Clone(preserved.onUpdate).(*plan.OnUpdate)
 				} else {
-					onUpdateExpr, err = buildOnUpdate(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), def, colType, ctx.GetProcess())
-				}
-				if err != nil {
-					return err
+					explicitOnUpdate, updateErr := buildOnUpdate(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), def, colType, ctx.GetProcess())
+					if updateErr != nil {
+						return updateErr
+					}
+					if explicitOnUpdate != nil {
+						onUpdateExpr = explicitOnUpdate
+					}
 				}
 			}
 

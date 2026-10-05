@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"slices"
 	"strings"
 	"time"
@@ -43,7 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_clone"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -379,24 +377,7 @@ func shouldAdvanceAlterDataBranchLineageSnapshot(pessimistic, rcIsolation bool) 
 }
 
 func (c *Compile) advanceAlterDataBranchLineageSnapshot() (int64, error) {
-	op := c.proc.GetTxnOperator()
-	physicalTime := op.SnapshotTS().PhysicalTime
-	if physicalTime > math.MaxInt64-int64(time.Microsecond) {
-		return 0, moerr.NewInternalErrorNoCtx(
-			"cannot advance ALTER data-branch lineage snapshot past the timestamp limit",
-		)
-	}
-	requested := physicalTime + int64(time.Microsecond)
-	if err := op.UpdateSnapshot(c.proc.Ctx, timestamp.Timestamp{PhysicalTime: requested}); err != nil {
-		return 0, err
-	}
-	updated := op.SnapshotTS().PhysicalTime
-	if updated <= requested {
-		return 0, moerr.NewInternalErrorNoCtx(
-			"failed to advance ALTER data-branch lineage snapshot",
-		)
-	}
-	return updated - int64(time.Nanosecond), nil
+	return databranchutils.AdvanceLineageSnapshot(c.proc.Ctx, c.proc.GetTxnOperator())
 }
 
 type alterDataBranchQuery func(string) (executor.Result, error)
@@ -1170,13 +1151,6 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 	lineageSnapshotAdvanced := false
 	lineageCloneTS := int64(0)
 	lineageTxnOp := c.proc.GetTxnOperator()
-	lineageOriginalSnapshot := timestamp.Timestamp{}
-	lineageRestoreSnapshot := false
-	defer func() {
-		if lineageRestoreSnapshot {
-			lineageTxnOp.SetSnapshotTS(lineageOriginalSnapshot)
-		}
-	}()
 	if lineageTxnOp.Txn().IsPessimistic() {
 		var retryErr error
 		if !isTemp {
@@ -1264,8 +1238,6 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 			// Under RC, advance the statement snapshot while holding it so a branch
 			// that committed just before lock acquisition is visible to the lineage
 			// probe below, even when lock acquisition itself did not wait.
-			lineageOriginalSnapshot = lineageTxnOp.SnapshotTS()
-			lineageRestoreSnapshot = true
 			if lineageCloneTS, err = c.advanceAlterDataBranchLineageSnapshot(); err != nil {
 				return err
 			}

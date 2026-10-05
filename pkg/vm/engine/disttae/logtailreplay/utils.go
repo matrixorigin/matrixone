@@ -15,15 +15,10 @@
 package logtailreplay
 
 import (
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"regexp"
-	"strings"
-)
-
-var (
-	dataObjectListPattern      = regexp.MustCompile(`_\d+_data_meta`)
-	tombstoneObjectListPattern = regexp.MustCompile(`_\d+_tombstone_meta`)
 )
 
 func IsMetaEntry(tblName string) bool {
@@ -31,11 +26,34 @@ func IsMetaEntry(tblName string) bool {
 }
 
 func IsDataObjectList(tblName string) bool {
-	return dataObjectListPattern.MatchString(tblName)
+	return matchesObjectListName(tblName, "_data_meta")
 }
 
 func IsTombstoneObjectList(tblName string) bool {
-	return tombstoneObjectListPattern.MatchString(tblName)
+	return matchesObjectListName(tblName, "_tombstone_meta")
+}
+
+// Object-list labels match an underscore, ASCII digits and a fixed suffix
+// anywhere in the name. Keep the containing-match contract of logtail replay.
+func matchesObjectListName(name, suffix string) bool {
+	// A match needs an underscore and at least one digit before the suffix.
+	if len(name) < len(suffix)+2 {
+		return false
+	}
+	for {
+		end := strings.Index(name, suffix)
+		if end < 0 {
+			return false
+		}
+		start := end
+		for start > 0 && name[start-1] >= '0' && name[start-1] <= '9' {
+			start--
+		}
+		if start < end && start > 0 && name[start-1] == '_' {
+			return true
+		}
+		name = name[end+len(suffix):]
+	}
 }
 
 func IsTransferredDels(name string) bool {

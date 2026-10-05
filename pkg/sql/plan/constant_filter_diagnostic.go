@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"errors"
+	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -324,7 +325,11 @@ func PreparedDirectImplicitIntegerCastParam(expr *plan.Expr) (int32, types.T, bo
 		return 0, types.T_any, false
 	}
 	id, _ := function.DecodeOverloadID(fn.Func.Obj)
-	if id != function.CAST || !types.T(fn.Args[0].Typ.Id).IsMySQLString() {
+	source, target := types.T(fn.Args[0].Typ.Id), types.T(expr.Typ.Id)
+	// A target-domain proof must also certify the inner semantic parameter
+	// conversion. Only a strictly narrower signed domain implies that proof.
+	typedNarrowing := source.IsSignedInt() && target.IsSignedInt() && target.TypeLen() < source.TypeLen()
+	if id != function.CAST || (!source.IsMySQLString() && !typedNarrowing) {
 		return 0, types.T_any, false
 	}
 	param := fn.Args[0].GetP()
@@ -350,18 +355,8 @@ func ProbeStatementParameterDiagnosticFree(proc *process.Process, expr *plan.Exp
 			free()
 		}
 		if err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return false, err
-			}
-			for _, code := range [...]uint16{
-				moerr.ErrDivByZero, moerr.ErrOutOfRange, moerr.ErrDataTruncated,
-				moerr.ErrInvalidArg, moerr.ErrTruncatedWrongValueForField,
-				moerr.ErrTruncatedWrongValue, moerr.ErrInvalidInput,
-				moerr.ErrWrongDatetimeSpec, moerr.ErrWrongArguments,
-			} {
-				if moerr.IsMoErrCode(err, code) {
-					return false, nil
-				}
+			if isStatementConversionError(err) {
+				return false, nil
 			}
 			return false, err
 		}
@@ -419,4 +414,26 @@ func containsConstantFilterDiagnostic(proc *process.Process, expr *plan.Expr) bo
 // diagnostics without publishing the probe's warning or changing the plan.
 func isExecutionConstant(expr *plan.Expr) bool {
 	return function.IsStatementConstantInput(expr) && !function.ContainsParameter(expr)
+}
+
+// isStatementConversionError identifies SQL diagnostics that must retain their
+// runtime owner. Cancellation, memory and internal failures are not diagnostics.
+func isStatementConversionError(err error) bool {
+	if errors.Is(err, strconv.ErrSyntax) || errors.Is(err, strconv.ErrRange) {
+		return true
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	for _, code := range [...]uint16{
+		moerr.ErrDivByZero, moerr.ErrOutOfRange, moerr.ErrDataTruncated,
+		moerr.ErrInvalidArg, moerr.ErrTruncatedWrongValueForField,
+		moerr.ErrTruncatedWrongValue, moerr.ErrInvalidInput,
+		moerr.ErrWrongDatetimeSpec, moerr.ErrWrongArguments,
+	} {
+		if moerr.IsMoErrCode(err, code) {
+			return true
+		}
+	}
+	return false
 }

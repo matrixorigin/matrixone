@@ -30,14 +30,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -3609,8 +3613,80 @@ func TestConstructBlockPKFilterMarksOnlyExactMembership(t *testing.T) {
 			})
 			require.NoError(t, err)
 			require.Equal(t, test.exact, filter.ExactMembership)
+			require.Nil(t, filter.CachedMembership, "unknown implementations must keep snapshot isolation")
 		})
 	}
+}
+
+func TestConstructBlockPKFilterScopedMembership(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	vec := vector.NewVec(types.T_int64.ToType())
+	defer vec.Free(mp)
+	require.NoError(t, vector.AppendFixedList(vec, []int64{1, 2, 3}, nil, mp))
+	data, err := docfilter.Build(vec)
+	require.NoError(t, err)
+	member, err := docfilter.New(data)
+	require.NoError(t, err)
+	defer member.Free()
+	fs := testutil.NewSharedFS()
+	t.Cleanup(func() { fs.Close(context.Background()) })
+	input := batch.NewWithSize(3)
+	input.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	input.Vecs[1], err = vec.Dup(mp)
+	require.NoError(t, err)
+	input.Vecs[2] = vector.NewVec(types.T_array_float32.ToType())
+	defer input.Clean(mp)
+	for i, key := range []string{"a0", "b0", "b1"} {
+		require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte(key), false, mp))
+		require.NoError(t, vector.AppendArray(input.Vecs[2], []float32{float32(i), 0}, false, mp))
+	}
+	input.SetRowCount(3)
+	id := objectio.NewObjectid()
+	name := objectio.BuildObjectNameWithObjectID(&id)
+	writer, err := objectio.NewObjectWriter(name, fs, 0, []uint16{0, 1, 2}, nil)
+	require.NoError(t, err)
+	_, err = writer.Write(input)
+	require.NoError(t, err)
+	blocks, err := writer.WriteEnd(t.Context())
+	require.NoError(t, err)
+	location := objectio.BuildLocation(name, blocks[0].GetExtent(), 3, 0)
+	for _, tc := range []struct {
+		name string
+		fake bool
+		base BasePKFilter
+		want bool
+		rows []int64
+	}{
+		{name: "membership only", want: true, rows: []int64{0, 1, 2}},
+		{name: "invalid varchar base must not become empty equality", base: BasePKFilter{Oid: types.T_varchar}, want: true, rows: []int64{0, 1, 2}},
+		{name: "compound prefix", base: BasePKFilter{Valid: true, Op: function.PREFIX_EQ, Oid: types.T_varchar, LB: []byte("a")}, want: true, rows: []int64{0}},
+		{name: "fixed PK stays owned", base: BasePKFilter{Valid: true, Op: function.EQUAL, Oid: types.T_int64, LB: types.EncodeFixed(int64(1))}},
+		{name: "fake PK stays owned", fake: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			filter, err := ConstructBlockPKFilter(tc.fake, tc.base, member)
+			require.NoError(t, err)
+			if filter.Cleanup != nil {
+				defer filter.Cleanup()
+			}
+			require.Equal(t, tc.want, filter.CachedMembership != nil)
+			require.True(t, filter.ExactMembership)
+			if filter.CachedMembership != nil {
+				top := &objectio.IndexReaderTopOp{Typ: types.T_array_float32,
+					NumVec: types.ArrayToBytes([]float32{0, 0}), Limit: 3,
+					MetricType: metric.Metric_L2Distance, DistHeap: make(objectio.Float64Heap, 0, 3)}
+				rows, _, _, err := objectio.ReadBlockByMembershipAndTopN(t.Context(),
+					[]uint16{0, 1}, []types.Type{types.T_varchar.ToType(), types.T_int64.ToType()},
+					nil, nil, nil, 2, types.T_array_float32.ToType(), filter.CachedMembership, false,
+					func(rows []int64, _ int) ([]int64, error) { return rows, nil },
+					top, fs, location, mp, fileservice.SkipFullFilePreloads)
+				require.NoError(t, err)
+				require.Equal(t, tc.rows, rows)
+			}
+		})
+	}
+	require.True(t, member.Valid())
 }
 
 func TestConstructBlockPKFilterIntersectsPrimaryKeyAndBloomFilter(t *testing.T) {
@@ -4454,4 +4530,50 @@ func TestConstructBlockPKFilterValidEmptyEquality(t *testing.T) {
 	}
 	require.Equal(t, []int64{0}, filter.SortedSearchFunc(containers.Vectors{*keys}))
 	require.Equal(t, []int64{0}, filter.UnSortedSearchFunc(containers.Vectors{*keys}))
+}
+
+func TestCompileFilterExprCharComparisonDomain(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(func() { require.Zero(t, proc.Mp().CurrNB()); proc.Free() })
+	var executors []colexec.ExpressionExecutor
+	t.Cleanup(func() {
+		for _, executor := range executors {
+			executor.Free()
+		}
+	})
+	materialize := func(expr *plan.Expr) {
+		_, err := plan2.ReplaceFoldExpr(proc, expr, &executors)
+		require.NoError(t, err)
+		require.NoError(t, plan2.EvalFoldExpr(proc, expr, &executors))
+	}
+	table := &plan.TableDef{Name: "t", Name2ColIndex: map[string]int32{"c": 0, "v": 1}, Cols: []*plan.ColDef{
+		{Name: "c", Seqnum: 0, Typ: plan.Type{Id: int32(types.T_char), Width: 8}},
+		{Name: "v", Seqnum: 1, Typ: plan.Type{Id: int32(types.T_int64)}},
+	}}
+	char := MakeFunctionExprForTest("=", []*plan.Expr{MakeColExprForTest(0, types.T_char, "c"), plan2.MakePlan2StringConstExprWithType("MO ")})
+	materialize(char)
+	_, _, _, _, _, compiled, _ := CompileFilterExpr(char, table, nil)
+	require.False(t, compiled)
+	charType := plan.Type{Id: int32(types.T_char), Width: 8}
+	item := plan2.MakePlan2StringConstExprWithType("MO ")
+	item.Typ = charType
+	otherItem := plan2.MakePlan2StringConstExprWithType("ZZ")
+	otherItem.Typ = charType
+	list := &plan.Expr{Typ: plan.Type{Id: int32(types.T_tuple)}, Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{item, otherItem}}}}
+	charIn, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, "in", []*plan.Expr{MakeColExprForTest(0, types.T_char, "c"), list})
+	require.NoError(t, err)
+	functionID, _ := function.DecodeOverloadID(charIn.GetF().Func.GetObj())
+	require.Equal(t, int32(function.IN), functionID, "exercise membership rather than singleton equality")
+	materialize(charIn)
+	_, _, _, _, _, compiled, _ = CompileFilterExpr(charIn, table, nil)
+	require.False(t, compiled, "native membership cannot use raw CHAR keys")
+	numeric := MakeFunctionExprForTest("=", []*plan.Expr{MakeColExprForTest(1, types.T_int64, "v"), plan2.MakePlan2Int64ConstExprWithType(-10)})
+	materialize(numeric)
+	_, _, _, _, _, compiled, _ = CompileFilterExpr(numeric, table, nil)
+	require.True(t, compiled, "nearby native numeric control")
+	_, _, _, _, _, compiled, _ = CompileFilterExprs([]*plan.Expr{char, numeric}, table, nil)
+	require.True(t, compiled, "a compatible independent conjunct remains usable")
+	disjunction := MakeFunctionExprForTest("or", []*plan.Expr{char, numeric})
+	_, _, _, _, _, compiled, _ = CompileFilterExpr(disjunction, table, nil)
+	require.False(t, compiled, "an unsupported disjunct cannot prove absence")
 }

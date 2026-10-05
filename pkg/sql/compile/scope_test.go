@@ -1747,42 +1747,7 @@ func TestCompileExternScanParquetLoadDefaultFanoutContextCancellationTerminatesA
 	}
 }
 
-func TestSplitIcebergDataFileShardsBalancesFiles(t *testing.T) {
-	tasks := []*pipeline.IcebergDataFileTask{
-		{FilePath: "warehouse/iceberg/part-0.parquet", FileSize: 100, RecordCount: 10},
-		{FilePath: "warehouse/iceberg/part-1.parquet", FileSize: 60, RecordCount: 6},
-		{FilePath: "warehouse/iceberg/part-2.parquet", FileSize: 40, RecordCount: 4},
-		{FilePath: "warehouse/iceberg/part-3.parquet", FileSize: 20, RecordCount: 2},
-	}
-	nodes := engine.Nodes{{Addr: "cn1:6001", Mcpu: 1}, {Addr: "cn2:6001", Mcpu: 1}}
-
-	shards := splitIcebergDataFileShards(tasks, nodes)
-	require.Len(t, shards, 2)
-
-	seen := make(map[string]bool)
-	loads := make(map[string]int64)
-	for _, shard := range shards {
-		require.NotEmpty(t, shard.dataTasks)
-		require.Len(t, shard.fileList, len(shard.dataTasks))
-		require.Len(t, shard.fileSize, len(shard.dataTasks))
-		for i, task := range shard.dataTasks {
-			require.Equal(t, task.FilePath, shard.fileList[i])
-			require.Equal(t, task.FileSize, shard.fileSize[i])
-			seen[task.FilePath] = true
-			loads[shard.node.Addr] += task.FileSize
-		}
-	}
-	require.Equal(t, map[string]bool{
-		"warehouse/iceberg/part-0.parquet": true,
-		"warehouse/iceberg/part-1.parquet": true,
-		"warehouse/iceberg/part-2.parquet": true,
-		"warehouse/iceberg/part-3.parquet": true,
-	}, seen)
-	require.Equal(t, int64(120), loads["cn1:6001"])
-	require.Equal(t, int64(100), loads["cn2:6001"])
-}
-
-func TestCompileExternScanIcebergFileFanout(t *testing.T) {
+func TestCompileExternScanIcebergCoordinator(t *testing.T) {
 	testCompile := NewMockCompile(t)
 	enableProtectedIcebergCNToCNForTest(t, testCompile)
 	testCompile.cnList = engine.Nodes{{Addr: "cn1:6001", Mcpu: 2}, {Addr: "cn2:6001", Mcpu: 2}}
@@ -1831,7 +1796,7 @@ func TestCompileExternScanIcebergFileFanout(t *testing.T) {
 		needRowOrdinal: true,
 	}
 
-	ss, err := testCompile.compileExternScanIcebergFileFanout(n, param, runtime, true)
+	ss, err := testCompile.compileExternScanIcebergCoordinator(n, param, runtime, true)
 	require.NoError(t, err)
 	require.Len(t, ss, 1)
 	require.True(t, param.Parallel)

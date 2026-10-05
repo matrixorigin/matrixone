@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -346,7 +345,6 @@ func (op *operator) startCNServiceLocked(
 		cnservice.WithLogger(op.reset.logger),
 		cnservice.WithMessageHandle(compile.CnServerMessageHandler),
 		cnservice.WithConfigData(commonConfigKVMap),
-		cnservice.WithTxnTraceData(filepath.Join(op.cfg.DataDir, c.Txn.Trace.Dir)),
 	)
 	if err != nil {
 		return err

@@ -1204,7 +1204,7 @@ func TestAssignStreamSequenceProgressesWhileCloseWaitsOnFullQueue(t *testing.T) 
 
 func TestFinishStreamPoisonsSessionWithPendingCache(t *testing.T) {
 	cs := newClientSession(nil, newTestIOSession(nil, nil), nil, func() *Future { return &Future{} }, nil)
-	cs.receivedStreamSequences[11] = 2
+	cs.receivedStreamSequences[11] = receivedStreamState{sequence: 2}
 	require.True(t, cs.sentStreams.start(11))
 	_, stream, open := cs.sentStreams.next(11)
 	require.True(t, open)

@@ -99,8 +99,8 @@ Project  𝄀
   ->  Aggregate  𝄀
         Aggregate Functions: starcount(1)  𝄀
         ->  Table Scan on issue_29511_filters.lookup_key  𝄀
-              Filter Cond: (cast(lookup_key.u AS DECIMAL128(38, 0)) = cast(cast('9007199254740993' AS BIGINT) AS DECIMAL128(38, 0)))
-              -- HINT: Cast expression may prevent index usage
+              Filter Cond: (lookup_key.u = cast(cast(cast('9007199254740993' AS BIGINT) AS DECIMAL128(38, 0)) AS BIGINT UNSIGNED))  𝄀
+              Block Filter Cond: (lookup_key.u = cast(cast(cast('9007199254740993' AS BIGINT) AS DECIMAL128(38, 0)) AS BIGINT UNSIGNED))
 execute unsigned_key using @key;
 ➤ count(*)[-5,64,0]  𝄀
 0

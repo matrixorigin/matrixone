@@ -23,7 +23,9 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
+	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/prashantv/gostub"
+	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -922,12 +924,9 @@ func TestDispatchResetSendsHealthyLocalRegWhenEarlierRegIsFull(t *testing.T) {
 }
 
 func TestDispatchResetAbortsSpoolWhenSomeLocalRegIsFull(t *testing.T) {
-	oldSignalSendTimeout := process.PipelineSignalSendTimeout
-	process.PipelineSignalSendTimeout = 10 * time.Millisecond
-	t.Cleanup(func() {
-		process.PipelineSignalSendTimeout = oldSignalSendTimeout
-	})
-
+	warnings := metricv2.PipelineCleanupEventCounter.WithLabelValues("dispatch_cleanup_send_terminal_signal")
+	before := promtestutil.ToFloat64(warnings)
+	t.Cleanup(func() { require.Equal(t, before, promtestutil.ToFloat64(warnings)) })
 	mp := mpool.MustNewZeroNoFixed()
 	t.Cleanup(func() {
 		mpool.DeleteMPool(mp)
@@ -990,6 +989,30 @@ func TestDispatchResetAbortsSpoolWhenSomeLocalRegIsFull(t *testing.T) {
 		require.True(t, signal.IsTerminal())
 	default:
 		t.Fatal("Dispatch.Reset did not notify the healthy local receiver")
+	}
+
+	// End after an existing failure must abort the shared spool with the
+	// substantive cause, not synthetic delivery fallout on an earlier edge.
+	sp = pSpool.InitMyPipelineSpool(mp, 2)
+	_, err = sp.SendBatch(context.Background(), pSpool.SendToAllLocal, src, nil)
+	require.NoError(t, err)
+	firstReg := process.NewPipelineEdge(1, 1)
+	secondReg := process.NewPipelineEdge(1, 1)
+	firstReg.Ch2 <- process.NewPipelineSignalToGetFromSpool(sp, 0)
+	secondReg.Ch2 <- process.NewPipelineSignalToGetFromSpool(sp, 1)
+	require.False(t, process.TrySendPipelineSignal(firstReg, process.NewErrorSignal(process.ErrPipelineEndSignalDeliveryFailed)))
+	require.False(t, process.TrySendPipelineSignal(secondReg, process.NewErrorSignal(sourceErr)))
+	d = &Dispatch{ctr: &container{sp: sp}, LocalRegs: []*process.WaitRegister{firstReg, secondReg}}
+	d.Reset(nil, false, nil)
+	require.Same(t, process.ErrPipelineEndSignalDeliveryFailed, firstReg.Err())
+	require.Same(t, sourceErr, secondReg.Err())
+	require.Nil(t, d.ctr)
+	require.Equal(t, int64(0), mp.CurrNB())
+	for _, reg := range []*process.WaitRegister{firstReg, secondReg} {
+		signal := <-reg.Ch2
+		got, cause := signal.Action()
+		require.Nil(t, got)
+		require.Same(t, sourceErr, cause)
 	}
 }
 
@@ -1102,6 +1125,9 @@ func TestDispatchResetEndDoesNotWaitForChannelCapacity(t *testing.T) {
 }
 
 func TestDispatchResetNilLocalRegAbortsSpoolWithoutPanic(t *testing.T) {
+	warnings := metricv2.PipelineCleanupEventCounter.WithLabelValues("dispatch_cleanup_send_terminal_signal")
+	before := promtestutil.ToFloat64(warnings)
+	t.Cleanup(func() { require.Equal(t, before+1, promtestutil.ToFloat64(warnings)) })
 	mp := mpool.MustNewZeroNoFixed()
 	t.Cleanup(func() {
 		mpool.DeleteMPool(mp)

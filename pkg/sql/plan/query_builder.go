@@ -29,7 +29,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/objectkey"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -4035,7 +4034,10 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.skipStats = builder.canSkipStats()
 		builder.rewriteDistinctToAGG(rootID)
 		rootID = builder.rewriteEffectlessAggToProject(rootID)
-		rootID = builder.optimizeFilters(rootID)
+		rootID, err = builder.optimizeFilters(rootID)
+		if err != nil {
+			return nil, err
+		}
 		// WHERE predicates are initially represented by a Filter between AGG
 		// and TABLE_SCAN.  Revisit the proof after filter pushdown so a unique
 		// grouped scan can be eliminated without moving LIMIT below HAVING.
@@ -4057,12 +4059,13 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		colRefCnt := make(map[[2]int32]int)
 		builder.countColRefs(rootID, colRefCnt)
 		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, colRefCnt)
-		var fusedScalarAggs bool
-		rootID, fusedScalarAggs = builder.fuseScalarAggregates(rootID)
-		if fusedScalarAggs {
-			colRefCnt = make(map[[2]int32]int)
-			builder.countColRefs(rootID, colRefCnt)
+		// Safe derived aliases now expose the existing singleton proof shape.
+		if err = builder.rewriteNumericDomainFilters(rootID, plan.Node_JOIN); err != nil {
+			return nil, err
 		}
+		rootID, _ = builder.fuseScalarAggregates(rootID)
+		clear(colRefCnt)
+		builder.countColRefs(rootID, colRefCnt)
 		// Removing a proof-eliminated aggregate can expose a direct Project ->
 		// TableScan edge only after the first limit-pushdown pass. Re-run the
 		// idempotent rule so the newly streaming path can honor source demand.
@@ -4456,9 +4459,20 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 				}
 				argsCastType, _ := fGet.ShouldDoImplicitTypeCast()
 
-				if len(argsCastType) > 0 && int(argsCastType[0].Oid) == int(types.T_datetime) {
-					for i := 0; i < len(argsCastType); i++ {
-						argsCastType[i].Scale = 0
+				// Preserve the common temporal FSP selected by the coalesce type
+				// checker. Dropping it here makes UNION/CTAS values round to seconds
+				// while the expression metadata still claims fractional precision.
+				if len(argsCastType) > 0 && (argsCastType[0].Oid == types.T_datetime ||
+					argsCastType[0].Oid == types.T_time || argsCastType[0].Oid == types.T_timestamp) {
+					for i := 1; i < len(tmpArgsType); i++ {
+						if tmpArgsType[i].Scale > argsCastType[0].Scale {
+							argsCastType[0].Scale = tmpArgsType[i].Scale
+						}
+					}
+					argsCastType[0].Width = argsCastType[0].Scale
+					for i := range argsCastType {
+						argsCastType[i].Scale = argsCastType[0].Scale
+						argsCastType[i].Width = argsCastType[0].Width
 					}
 				}
 				if len(argsCastType) == 0 {
@@ -11575,13 +11589,8 @@ func (builder *QueryBuilder) appendStep(nodeID int32) int32 {
 
 func (builder *QueryBuilder) appendNode(node *plan.Node, ctx *BindContext) int32 {
 	nodeID := int32(len(builder.qry.Nodes))
-	if ctx != nil && len(ctx.viewChain) > 0 {
-		if len(node.OriginViews) == 0 {
-			node.OriginViews = append([]string{}, ctx.viewChain...)
-		}
-		if node.DirectView == "" {
-			node.DirectView = ctx.directView
-		}
+	if ctx != nil && len(node.ViewPath) == 0 {
+		node.ViewPath = append([]*plan.ViewStep(nil), ctx.viewPath...)
 	}
 	node.NodeId = nodeID
 	builder.qry.Nodes = append(builder.qry.Nodes, node)
@@ -11872,25 +11881,41 @@ func (builder *QueryBuilder) bindView(
 		defer builder.compCtx.SetQueryingSubscription(previousSubscription)
 	}
 	viewCtx.defaultDatabase = defaultDatabase
-	viewKey := objectkey.Encode(schema, table)
-	viewKeyWithSnapshot := viewKey
-	if IsSnapshotValid(snapshot) {
-		viewKeyWithSnapshot = FormatViewKeyWithSnapshot(viewKey, snapshot)
-	}
 	viewDependencyKey, err := FormatViewDependencyKey(schema, table, snapshot)
 	if err != nil {
 		return 0, err
 	}
-	if ctx != nil && ctx.directView != "" {
-		viewCtx.directView = ctx.directView
-	} else {
-		viewCtx.directView = viewKeyWithSnapshot
+	accountID, err := builder.compCtx.GetAccountId()
+	if err != nil {
+		return 0, err
 	}
-	if ctx != nil && len(ctx.viewChain) > 0 {
-		viewCtx.viewChain = append(append([]string{}, ctx.viewChain...), viewKey)
-	} else {
-		viewCtx.viewChain = []string{viewKey}
+	if resolver, ok := builder.compCtx.(ViewDependencyIdentityResolver); ok {
+		accountID, err = resolver.ResolveViewDependencyAccount(obj, tableDef, snapshot)
+		if err != nil {
+			return 0, err
+		}
+	} else if snapshot != nil && snapshot.Tenant != nil {
+		accountID = snapshot.Tenant.TenantID
 	}
+	viewSnapshot := DeepCopySnapshot(snapshot)
+	if viewSnapshot == nil {
+		viewSnapshot = &plan.Snapshot{}
+	}
+	if viewSnapshot.Tenant == nil {
+		viewSnapshot.Tenant = &plan.SnapshotTenant{}
+	}
+	viewSnapshot.Tenant.TenantID = accountID
+	step := &plan.ViewStep{
+		DatabaseName: schema, ViewName: table, Snapshot: viewSnapshot,
+		SubscriptionName: obj.SubscriptionName,
+	}
+	if obj.SchemaName != "" {
+		step.DatabaseName = obj.SchemaName
+	}
+	if obj.ObjName != "" {
+		step.ViewName = obj.ObjName
+	}
+	viewCtx.viewPath = append(append([]*plan.ViewStep(nil), ctx.viewPath...), step)
 
 	if viewCtx.viewInBinding(schema, table, viewStmt) {
 		return 0, moerr.NewParseErrorf(builder.GetContext(), "view %s reference itself", table)
@@ -11961,6 +11986,11 @@ func (builder *QueryBuilder) bindView(
 		builder.qry.CatalogDependencies,
 		prepareSchemaRefWithSnapshot(obj, tableDef, snapshot),
 	)
+	// Authorization belongs to the bound query, including views whose entire
+	// executable subtree is removed by optimization.
+	builder.qry.ViewReferences = append(builder.qry.ViewReferences, &plan.ViewReference{
+		ViewPath: append([]*plan.ViewStep(nil), viewCtx.viewPath...),
+	})
 	ctx.recordViews([]string{viewDependencyKey})
 	ctx.recordViews(viewCtx.views)
 	return
@@ -12433,7 +12463,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 
 		var subMeta *SubscriptionMeta
 		subMeta, err = builder.compCtx.GetSubscriptionMeta(schema, snapshot)
-		if err == nil && builder.isSkipResolveTableDef && ctx.directView == "" && snapshot == nil && subMeta == nil {
+		if err == nil && builder.isSkipResolveTableDef && len(ctx.viewPath) == 0 && snapshot == nil && subMeta == nil {
 			var tableDef *TableDef
 			tableDef, err = builder.compCtx.BuildTableDefByMoColumns(schema, table)
 			if err != nil {

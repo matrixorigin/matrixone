@@ -55,7 +55,7 @@ func TestSpecialIntegerProtocolPlacementAndSend(t *testing.T) {
 		client.version = version
 		c.execType = plan2.ExecTypeAP_MULTICN
 		c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-		require.NoError(t, c.constrainIntegerArgumentWorkers(qry))
+		require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 	}
 	place(defines.MORPCVersion98 - 1)
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
@@ -69,7 +69,7 @@ func TestSpecialIntegerProtocolPlacementAndSend(t *testing.T) {
 	_, err = encodeRemoteScope(scope, c.proc)
 	require.ErrorContains(t, err, "version 98")
 	require.Equal(t, client.calls, client.releases)
-	require.ErrorContains(t, validateIntegerArgumentDestination(c.proc, nil), "versioned remote destination")
+	require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, nil, planpb.RemoteExpressionFeatures{IntegerParameterCoercion: true}), "versioned remote destination")
 	p := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}}}
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion98-1)
@@ -104,7 +104,7 @@ func TestMakeTimeIntegerOverloadAlsoRequiresTemporalProtocol(t *testing.T) {
 	client.version = defines.MORPCVersion97
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-	require.NoError(t, c.constrainTemporalResultWorkers(qry))
+	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 	op := projection.NewArgument()
 	defer op.Release()
