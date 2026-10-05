@@ -47,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
@@ -495,20 +496,6 @@ type sequentialBranchLifecycle interface {
 	DeferFirstBranch() bool
 }
 
-type receiverWaitStartFailureDisabler interface {
-	DisableReceiverWaitForStartFailure(*process.Process)
-}
-
-func cleanLazyScopeStartFailure(s *Scope, c *Compile, err error) {
-	_ = vm.HandleAllOp(s.RootOp, func(_ vm.Operator, op vm.Operator) error {
-		if disabler, ok := op.(receiverWaitStartFailureDisabler); ok {
-			disabler.DisableReceiverWaitForStartFailure(s.Proc)
-		}
-		return nil
-	})
-	cleanScopeTreeWithStartFail(s, err, c.isPrepare)
-}
-
 func installSequentialBranchStarter(root vm.Operator, start, wait func(int) error) (func(), bool, error) {
 	var target sequentialBranchStarter
 	err := vm.HandleAllOp(root, func(_ vm.Operator, op vm.Operator) error {
@@ -654,12 +641,12 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 	if s.LazyPreScopes {
 		if len(s.PreScopes) < 2 || len(s.RemoteReceivRegInfos) != 0 {
 			err = moerr.NewInternalErrorNoCtx("invalid lazy union all scope topology")
-			cleanLazyScopeStartFailure(s, c, err)
+			cleanScopeTreeWithStartFail(s, err, c.isPrepare)
 			return err
 		}
 		clearStarter, deferFirst, installErr := installSequentialBranchStarter(s.RootOp, startPreScope, waitPreScope)
 		if installErr != nil {
-			cleanLazyScopeStartFailure(s, c, installErr)
+			cleanScopeTreeWithStartFail(s, installErr, c.isPrepare)
 			return installErr
 		}
 		defer clearStarter()
@@ -802,16 +789,10 @@ func assignLazyRemoteGeneration(scope *Scope, rootAddress string) {
 	assign(scope)
 }
 
-// cleanPipelineWitchStartFail is used to clean up the pipelines that has failed to start due to a certain reasons.
-func cleanPipelineWitchStartFail(sp *Scope, fail error, isPrepare bool) {
-	p := pipeline.New(0, nil, sp.RootOp)
-	p.Cleanup(sp.Proc, fail != nil, isPrepare, fail)
-}
-
 // cleanScopeTreeWithStartFail retires a scope tree that was never submitted.
-// Children must publish their terminal signals before a parent Merge cleanup
-// waits on them. This also releases materialized readers owned by lazy UNION
-// ALL branches that an early LIMIT never starts.
+// Its input producers (including DOP clones and remote notifiers) may never
+// exist. Disable input waits, but still reset every operator to release owned
+// resources and publish the actual outcome to the containing scope's consumers.
 func cleanScopeTreeWithStartFail(sp *Scope, fail error, isPrepare bool) {
 	if sp == nil {
 		return
@@ -822,25 +803,23 @@ func cleanScopeTreeWithStartFail(sp *Scope, fail error, isPrepare bool) {
 	for _, preScope := range sp.PreScopes {
 		cleanScopeTreeWithStartFail(preScope, fail, isPrepare)
 	}
-	// A never-submitted remote merge has no notify goroutine to publish terminal
-	// signals into its local receivers. Publish them here before Merge cleanup;
-	// otherwise cleanup waits the full timeout for a producer that never existed.
-	for i := range sp.RemoteReceivRegInfos {
-		idx := sp.RemoteReceivRegInfos[i].Idx
-		if idx >= 0 && idx < len(sp.Proc.Reg.MergeReceivers) {
-			sendRemoteNotifyCleanupTerminal(sp.Proc, sp.Proc.Reg.MergeReceivers[idx], fail)
+	_ = vm.HandleAllOp(sp.RootOp, func(_ vm.Operator, op vm.Operator) error {
+		if m, ok := op.(*merge.Merge); ok {
+			m.DisableReceiverWaitForStartFailure(sp.Proc)
 		}
-	}
-	cleanPipelineWitchStartFail(sp, fail, isPrepare)
+		return nil
+	})
+	p := pipeline.New(0, nil, sp.RootOp)
+	p.Cleanup(sp.Proc, fail != nil, isPrepare, fail)
 }
 
-// finalizeRemoteResult shares terminal arbitration between remote scopes and
-// notify streams. A stopped consumer still waits for an unfinished producer's
-// terminal; a declared Error can never be inferred to be successful cleanup.
-func (s *Scope) finalizeRemoteResult(err error, sender *messageSenderOnClient) error {
-	runErr, _ := normalizeScopeRunError(err, s.Proc.Ctx, scopeRunQueryContext(s.Proc))
-	if runErr != nil {
-		return runErr
+// finalizeRemoteResult retains late producer failures after local terminals have
+// been published. A remote Merge may itself wait for those terminals during
+// cleanup, so waiting before releasing local consumers creates a wait cycle.
+// MergeRun joins these results before the statement can report success.
+func finalizeRemoteResult(err error, sender *messageSenderOnClient) error {
+	if err != nil {
+		return err
 	}
 	if sender != nil {
 		if terminalErr := sender.waitingTheStopResponse(); terminalErr != nil {
@@ -881,12 +860,12 @@ func (s *Scope) RemoteRun(c *Compile) error {
 
 	p := pipeline.New(0, nil, s.RootOp)
 	sender, err := s.remoteRun(c)
-	runErr := s.finalizeRemoteResult(err, sender)
-	// The retained local root is the hand-off boundary from RemoteRun to its
-	// consumer. Publish its durable Error terminal before canceling this scope;
-	// otherwise the consumer can observe cancellation first and finish without
-	// the remote execution error that caused it.
+	runErr, _ := normalizeScopeRunError(err, s.Proc.Ctx, scopeRunQueryContext(s.Proc))
+	// Publish the immediate outcome before waiting for remote cleanup or
+	// canceling this scope. Consumers can participate in that cleanup; late
+	// failures remain in the joined scope result below.
 	p.CleanRootOperator(s.Proc, runErr != nil, c.isPrepare, runErr)
+	runErr = finalizeRemoteResult(runErr, sender)
 	if runErr != nil && s.Proc.Cancel != nil {
 		s.Proc.Cancel(runErr)
 	}
@@ -1657,9 +1636,10 @@ func (s *Scope) sendNotifyMessageWithFactoryAndWait(
 ) {
 	// if context has done, it means the user or other part of the pipeline stops this query.
 	closeWithError := func(err error, reg *process.WaitRegister, sender *messageSenderOnClient) {
-		err = s.finalizeRemoteResult(err, sender)
+		err, _ = normalizeScopeRunError(err, s.Proc.Ctx, scopeRunQueryContext(s.Proc))
 		// Publish durable terminal evidence before waking canceled consumers.
 		sendRemoteNotifyCleanupTerminal(s.Proc, reg, err)
+		err = finalizeRemoteResult(err, sender)
 		s.cancelMergeSiblingsOnError(err)
 		resultChan <- notifyMessageResult{err: err, sender: sender}
 		wg.Done()

@@ -6194,6 +6194,13 @@ func TestNotifyLateErrorSurvivesSuccessfulStop(t *testing.T) {
 						responses <- makeRemoteBatchMessage(t, batch.NewWithSize(0))
 					}
 				case pipeline.Method_StopSending:
+					// Remote cleanup depends on the local Merge receiving its End.
+					// This dependency must be released before waiting for our reply.
+					select {
+					case <-reg.Done():
+					default:
+						return moerr.NewInternalErrorNoCtx("local terminal is still pending")
+					}
 					stops++
 					terminal := &pipeline.Message{Sid: pipeline.Status_MessageEnd}
 					terminal.SetMoError(context.Background(), moerr.NewQueryInterrupted(context.Background()))
@@ -6210,24 +6217,19 @@ func TestNotifyLateErrorSurvivesSuccessfulStop(t *testing.T) {
 			scope.sendNotifyMessageWithFactory(&wg, results, factory)
 			select {
 			case result := <-results:
-				result.clean(scopeProc)
-				var me *moerr.Error
-				require.ErrorAs(t, result.err, &me)
-				require.Equal(t, uint16(moerr.ErrQueryInterrupted), me.ErrorCode())
-				require.True(t, process.IsPipelineFailure(result.err))
+				results <- result
 			case <-time.After(time.Second):
 				t.Fatal("notify late terminal did not reach scheduler")
 			}
 			wg.Wait()
+			err := (&Compile{}).collectMergeRunResults(scopeProc, scopeRunResult{}, nil, results)
+			var me *moerr.Error
+			require.ErrorAs(t, err, &me)
+			require.Equal(t, uint16(moerr.ErrQueryInterrupted), me.ErrorCode())
+			require.True(t, process.IsPipelineFailure(err))
 			require.Equal(t, 1, stops)
 			require.NoError(t, queryCtx.Err())
-			var me *moerr.Error
-			if earlyReturn == "canceled receive" {
-				require.ErrorAs(t, reg.Err(), &me)
-				require.Equal(t, uint16(moerr.ErrQueryInterrupted), me.ErrorCode())
-			} else {
-				require.NoError(t, reg.Err(), "already retired consumer stays complete; scheduler retains producer error")
-			}
+			require.NoError(t, reg.Err(), "local consumer is released before the scheduler receives the late failure")
 			require.Zero(t, proc.Mp().CurrNB())
 		})
 	}

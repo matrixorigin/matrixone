@@ -104,6 +104,7 @@ func TestRemotePipelineFailureSQLContract(t *testing.T) {
 				require.Equal(t, "70100", string(sqlErr.SQLState[:]))
 				require.NoError(t, ctx.Err(), "user context remains live")
 				require.Empty(t, queryStringRows(t, ctx, db, query))
+				require.Equal(t, [][]string{{"1"}}, queryStringRows(t, ctx, db, "select 1 from src limit 1"))
 				require.Equal(t, [][]string{{"1"}}, queryStringRows(t, ctx, db, "select k from src order by k limit 1"))
 				require.Equal(t, [][]string{{"1"}, {"2"}}, queryStringRows(t, ctx, db, "select k from src order by k"))
 			})

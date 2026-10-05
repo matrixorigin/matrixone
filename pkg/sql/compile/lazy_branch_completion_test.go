@@ -28,10 +28,12 @@ import (
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/adaptivetop"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -101,20 +103,40 @@ func TestOrdinaryMergeDoesNotReinitializeSources(t *testing.T) {
 	require.NoError(t, root.initLazyPreScope(&Scope{PreScopes: []*Scope{{}}}, &Compile{}))
 }
 
-func TestUnstartedRemoteMergeCleanupPublishesTerminalWithoutTimeout(t *testing.T) {
-	parent := testutil.NewProcess(t)
-	parent.BuildPipelineContext(context.Background())
-	proc := parent.NewContextChildProc(1)
-	root := merge.NewArgument()
-	scope := &Scope{
-		Proc:                 proc,
-		RootOp:               root,
-		RemoteReceivRegInfos: []RemoteReceivRegInfo{{Idx: 0}},
+func TestUnstartedMergeCleanupDoesNotWaitForProducers(t *testing.T) {
+	for _, cause := range []error{process.ErrPipelineStopped, context.Canceled} {
+		t.Run(cause.Error(), func(t *testing.T) {
+			parent := testutil.NewProcess(t)
+			parent.BuildPipelineContext(context.Background())
+			proc := parent.NewContextChildProc(1)
+			// DOP expansion has not run: the planned receiver count can exceed
+			// the number of source scopes whose cleanup will publish End.
+			proc.Reg.MergeReceivers[0] = process.NewPipelineEdge(3, 2)
+			input := merge.NewArgument()
+			defer input.Release()
+			output := connector.NewArgument().WithReg(process.NewPipelineEdge(1, 1))
+			defer output.Release()
+			output.AppendChild(input)
+			scope := &Scope{
+				Proc:                 proc,
+				RootOp:               output,
+				RemoteReceivRegInfos: []RemoteReceivRegInfo{{Idx: 0}},
+			}
+			start := time.Now()
+			cleanScopeTreeWithStartFail(scope, cause, false)
+			require.Less(t, time.Since(start), time.Second)
+			select {
+			case <-output.Reg.Done():
+			default:
+				t.Fatal("unstarted scope did not release its downstream consumer")
+			}
+			if cause == process.ErrPipelineStopped {
+				require.NoError(t, output.Reg.Err())
+			} else {
+				require.ErrorIs(t, output.Reg.Err(), cause)
+			}
+		})
 	}
-
-	start := time.Now()
-	cleanScopeTreeWithStartFail(scope, context.Canceled, false)
-	require.Less(t, time.Since(start), time.Second)
 }
 
 func TestLazyBranchCompletionWaitsForCleanup(t *testing.T) {

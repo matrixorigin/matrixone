@@ -577,6 +577,7 @@ func TestRemoteRunNormalizesPipelineCancellationCause(t *testing.T) {
 		closeStopResponse          bool
 		timeoutStopResponse        bool
 		assertTerminalBeforeCancel bool
+		stopWaitsForLocalEnd       bool
 		wantErr                    error
 		wantErrCode                uint16
 		wantStopSendingCount       int
@@ -606,6 +607,18 @@ func TestRemoteRunNormalizesPipelineCancellationCause(t *testing.T) {
 			cancelCause:          duplicateErr,
 			timeoutStopResponse:  true,
 			wantErr:              duplicateErr,
+			wantStopSendingCount: 1,
+		},
+		{
+			name:                 "remote terminal waits for local cleanup",
+			stopWaitsForLocalEnd: true,
+			wantStopSendingCount: 1,
+		},
+		{
+			name:                 "late failure after local cleanup remains terminal",
+			stopWaitsForLocalEnd: true,
+			stopResponseErr:      moerr.NewQueryInterrupted(context.Background()),
+			wantErrCode:          moerr.ErrQueryInterrupted,
 			wantStopSendingCount: 1,
 		},
 		{
@@ -707,9 +720,12 @@ func TestRemoteRunNormalizesPipelineCancellationCause(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if tt.timeoutStopResponse {
+			if tt.timeoutStopResponse || tt.stopWaitsForLocalEnd {
 				oldTimeout := pipelineStopSendingClientTimeout
 				pipelineStopSendingClientTimeout = 10 * time.Millisecond
+				if tt.stopWaitsForLocalEnd {
+					pipelineStopSendingClientTimeout = time.Second
+				}
 				defer func() { pipelineStopSendingClientTimeout = oldTimeout }()
 			}
 			ctrl := gomock.NewController(t)
@@ -728,6 +744,7 @@ func TestRemoteRunNormalizesPipelineCancellationCause(t *testing.T) {
 			proc.Base.TxnClient = txnCli
 			proc.Base.TxnOperator = txnOp
 
+			reg := process.NewPipelineEdge(1, 0)
 			responses := make(chan morpc.Message, 1)
 			stream := mock_morpc.NewMockStream(ctrl)
 			stream.EXPECT().Receive().Return(responses, nil)
@@ -769,7 +786,16 @@ func TestRemoteRunNormalizesPipelineCancellationCause(t *testing.T) {
 						if tt.stopResponseErr != nil {
 							response.SetMoError(context.Background(), tt.stopResponseErr)
 						}
-						responses <- response
+						if tt.stopWaitsForLocalEnd {
+							// The remote Merge cannot finish until this retained local
+							// sender releases its input. Model that dependency explicitly.
+							go func() {
+								<-reg.Done()
+								responses <- response
+							}()
+						} else {
+							responses <- response
+						}
 					}
 					return nil
 				}).AnyTimes()
@@ -795,7 +821,6 @@ func TestRemoteRunNormalizesPipelineCancellationCause(t *testing.T) {
 			)
 			c.anal = &AnalyzeModule{qry: &plan.Query{}}
 
-			reg := process.NewPipelineEdge(1, 0)
 			root := connector.NewArgument().WithReg(reg)
 			defer root.Release()
 			if tt.assertTerminalBeforeCancel {
@@ -827,7 +852,9 @@ func TestRemoteRunNormalizesPipelineCancellationCause(t *testing.T) {
 			select {
 			case signal := <-reg.Ch2:
 				_, terminalErr := signal.Action()
-				if tt.wantErrCode == 0 && tt.wantErr == nil {
+				if tt.remoteErr == nil && tt.cancelCause == nil && !tt.cancelQuery && !tt.deadlineQuery {
+					// Late handshake failures are retained by RemoteRun, after the
+					// local terminal has released consumers needed for remote cleanup.
 					require.Equal(t, process.EventEnd, signal.EventType)
 					require.NoError(t, terminalErr)
 				} else {

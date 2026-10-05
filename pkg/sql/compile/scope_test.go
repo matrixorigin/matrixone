@@ -2721,25 +2721,6 @@ func TestScopeHoldAnyCannotRemoteOperator(t *testing.T) {
 	require.Nil(t, s2.holdAnyCannotRemoteOperator())
 }
 
-func TestCleanPipelineWitchStartFail(t *testing.T) {
-	s := &Scope{
-		Proc: testutil.NewProcess(t),
-	}
-	s.Proc.BuildPipelineContext(context.Background())
-	op := connector.NewArgument()
-	op.Reg = &process.WaitRegister{
-		Ch2: make(chan process.PipelineSignal, 1),
-	}
-	s.RootOp = op
-
-	cleanPipelineWitchStartFail(s, moerr.NewInternalErrorNoCtx("test cleanPipelineWitchStartFail"), false)
-
-	require.Equal(t, 1, len(op.Reg.Ch2))
-	signal := <-op.Reg.Ch2
-	_, err := signal.Action()
-	require.Error(t, err)
-}
-
 func TestRemoteRunMalformedAddressTerminatesReceiver(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
