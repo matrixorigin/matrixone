@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package v4_0_11
+package v4_0_12
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
@@ -30,7 +30,7 @@ func refreshInformationSchemaCharacterSets() versions.UpgradeEntry {
 		UpgType:                 versions.MODIFY_METADATA,
 		PreSql:                  "DELETE FROM information_schema.CHARACTER_SETS",
 		UpgSql:                  sysview.InformationSchemaCharacterSetsData,
-		RequiredProtocolVersion: defines.MORPCVersion100,
+		RequiredProtocolVersion: defines.MORPCVersion106,
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
 			return versions.CheckTableDataExist(txn, accountID, sysview.InformationSchemaCharacterSetsCheckSQL())
 		},

@@ -49,6 +49,33 @@ SHOW COLLATION WHERE Charset = 'utf8mb4' AND Collation LIKE '%bin%';
 utf8mb4_bin  ¦  utf8mb4  ¦  46  ¦    ¦  Yes  ¦  1  ¦  PAD SPACE
 CREATE DATABASE charset_test;
 USE charset_test;
+CREATE TABLE t_utf32_alias (
+ci VARCHAR(1) CHARACTER SET utf32 COLLATE utf32_general_ci,
+bin VARCHAR(1) CHARACTER SET utf32 COLLATE utf32_bin
+) DEFAULT CHARSET=utf32;
+SHOW CREATE TABLE t_utf32_alias;
+➤ Table[12,13,0]  ¦  Create Table[12,116,0]  𝄀
+t_utf32_alias  ¦  CREATE TABLE `t_utf32_alias` (
+  `ci` varchar(1) DEFAULT NULL,
+  `bin` varchar(1) COLLATE utf8mb4_bin DEFAULT NULL
+)
+INSERT INTO t_utf32_alias VALUES ('😀', '😀');
+SELECT HEX(ci), HEX(bin) FROM t_utf32_alias;
+➤ HEX(ci)[12,8,0]  ¦  HEX(bin)[12,8,0]  𝄀
+F09F9880  ¦  F09F9880
+SELECT column_name, character_set_name, collation_name FROM information_schema.columns
+WHERE table_schema = 'charset_test' AND table_name = 't_utf32_alias'
+ORDER BY ordinal_position;
+➤ column_name[12,256,0]  ¦  character_set_name[12,7,0]  ¦  collation_name[12,18,0]  𝄀
+ci  ¦  utf8mb4  ¦  utf8mb4_general_ci  𝄀
+bin  ¦  utf8mb4  ¦  utf8mb4_bin
+DROP TABLE t_utf32_alias;
+SET NAMES utf32;
+invalid input: unsupported character set 'utf32'
+SET NAMES utf32 COLLATE utf32_general_ci;
+invalid input: unsupported character set 'utf32'
+SET collation_connection = 'utf32_bin';
+invalid input: unsupported collation 'utf32_bin'
 CREATE TABLE charset_metadata_repro (
 c_char CHAR(8),
 c_varchar VARCHAR(128),

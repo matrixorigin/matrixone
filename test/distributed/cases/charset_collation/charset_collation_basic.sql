@@ -29,6 +29,24 @@ CREATE DATABASE charset_test;
 USE charset_test;
 
 -- @case
+-- @desc: UTF32 DDL compatibility uses existing UTF8MB4 identities only
+-- @label:bvt
+CREATE TABLE t_utf32_alias (
+    ci VARCHAR(1) CHARACTER SET utf32 COLLATE utf32_general_ci,
+    bin VARCHAR(1) CHARACTER SET utf32 COLLATE utf32_bin
+) DEFAULT CHARSET=utf32;
+SHOW CREATE TABLE t_utf32_alias;
+INSERT INTO t_utf32_alias VALUES ('😀', '😀');
+SELECT HEX(ci), HEX(bin) FROM t_utf32_alias;
+SELECT column_name, character_set_name, collation_name FROM information_schema.columns
+WHERE table_schema = 'charset_test' AND table_name = 't_utf32_alias'
+ORDER BY ordinal_position;
+DROP TABLE t_utf32_alias;
+SET NAMES utf32;
+SET NAMES utf32 COLLATE utf32_general_ci;
+SET collation_connection = 'utf32_bin';
+
+-- @case
 -- @desc: Test information_schema character metadata used by ODBC SQLColumns
 -- @label:bvt
 -- information_schema metadata used by ODBC SQLColumns

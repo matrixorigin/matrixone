@@ -321,18 +321,19 @@ func Test_PlusFn_Float32(t *testing.T) {
 // Test_PlusFn_Float64 tests float64 addition
 func Test_PlusFn_Float64(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	defer proc.Free()
 
 	{
 		tc := tcTemp{
 			info: "select float64_col1 + float64_col2",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_float64.ToType(),
-					[]float64{10.5, -5.25, 0.0, 3.14159265359, 1.23456789}, []bool{false, false, false, false, false}),
+					[]float64{10.5, -5.25, 0.0, 3.14159265359, 1.23456789, 3728193}, []bool{false, false, false, false, false, false}),
 				NewFunctionTestInput(types.T_float64.ToType(),
-					[]float64{5.25, -2.75, 0.0, 2.71828182846, 9.87654321}, []bool{false, false, false, false, false}),
+					[]float64{5.25, -2.75, 0.0, 2.71828182846, 9.87654321, 3.141593}, []bool{false, false, false, false, false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{15.75, -8.0, 0.0, 5.85987448205, 11.1111111}, []bool{false, false, false, false, false}),
+				[]float64{15.75, -8.0, 0.0, 5.85987448205, 11.1111111, 3728196.141593}, []bool{false, false, false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, plusFn)
 		succeed, info := tcc.RunAndFree()

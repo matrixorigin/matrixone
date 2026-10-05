@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -955,14 +956,20 @@ func TestWindowValidationPrivilegeCarriersAreCompactAndDeduplicated(t *testing.T
 	// A different view path is a distinct authorization context, even for the
 	// same relation and snapshot.
 	validation.qry.Nodes = []*planpb.Node{{
-		NodeType:    planpb.Node_TABLE_SCAN,
-		ObjRef:      ordinary.ObjRef,
-		TableDef:    wideTable,
-		OriginViews: []string{"tpch.region_view"},
-		DirectView:  "tpch.region_view",
+		NodeType: planpb.Node_TABLE_SCAN,
+		ObjRef:   ordinary.ObjRef,
+		TableDef: wideTable,
+		ViewPath: []*planpb.ViewStep{{DatabaseName: "tpch", ViewName: "region_view", Snapshot: &planpb.Snapshot{Tenant: &planpb.SnapshotTenant{}}}},
 	}}
 	appendWindowValidationPrivilegeScans(owner, validation)
 	require.Len(t, owner.windowValidationScans, 4)
+	// An inner snapshot difference cannot disappear when compacting carriers.
+	validation.qry.Nodes[0].ViewPath[0].Snapshot.TS = &timestamp.Timestamp{PhysicalTime: 42, LogicalTime: 7}
+	appendWindowValidationPrivilegeScans(owner, validation)
+	require.Len(t, owner.windowValidationScans, 5)
+	validation.qry.Nodes[0].ViewPath[0].Snapshot.TS.LogicalTime = 8
+	require.Equal(t, uint32(7), owner.windowValidationScans[4].ViewPath[0].Snapshot.TS.LogicalTime)
+
 }
 
 func namedWindowsSQL(prefix string, count int) string {

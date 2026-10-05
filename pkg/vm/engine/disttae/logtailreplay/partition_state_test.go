@@ -79,6 +79,26 @@ func TestSourceCommitTSMax(t *testing.T) {
 	require.Equal(t, types.BuildTS(30, 1), info.Max())
 }
 
+func TestPartitionDataVersion(t *testing.T) {
+	state := NewPartitionState("", false, 42, false)
+	require.False(t, state.DataVersion().VisibleAt(types.MaxTs()), "unapplied state is not a proof")
+	state.UpdateAppliedTo(types.BuildTS(10, 0))
+	version := state.DataVersion()
+	require.False(t, version.VisibleAt(types.BuildTS(10, 0)))
+	require.True(t, version.VisibleAt(types.BuildTS(10, 1)))
+
+	copy := state.Copy()
+	copy.UpdateDuration(types.BuildTS(9, 0), types.MaxTs())
+	copy.UpdateAppliedTo(types.BuildTS(9, 0))
+	require.Equal(t, version, copy.DataVersion(), "copy/GC and older delivery preserve the version")
+	copy.UpdateAppliedTo(types.BuildTS(11, 0))
+	require.NotEqual(t, version, copy.DataVersion())
+	require.Equal(t, version, state.DataVersion(), "published snapshots stay immutable")
+	rebuilt := NewPartitionState("", false, 42, false)
+	rebuilt.UpdateAppliedTo(types.BuildTS(10, 0))
+	require.False(t, version == rebuilt.DataVersion(), "same watermark in another subscription is not the same catalog")
+}
+
 func TestSourceCommitTSAtIncludesPartitionStateStart(t *testing.T) {
 	state := NewPartitionState("", false, 42, false)
 	state.UpdateDuration(types.BuildTS(100, 1), types.MaxTs())

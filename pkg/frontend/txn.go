@@ -708,6 +708,14 @@ func requiresPessimisticObjectLifecycleTxn(
 	defaultDatabase string,
 ) bool {
 	switch st := stmt.(type) {
+	case *tree.CreateTable:
+		// An explicit optimistic transaction must not publish a persistent
+		// catalog mapping outside the CDC lifecycle guard.  Autocommit CREATE
+		// TABLE statements already get their own transaction and must retain
+		// the normal DDL path; forcing every such statement through the CDC
+		// target protocol would also serialize unrelated DDL.  The admission
+		// check in TxnHandler.Create rejects an active non-pessimistic txn.
+		return !st.Temporary && ses != nil && ses.GetTxnHandler().InActiveTxn()
 	case *tree.TruncateTable, *tree.CreatePitr, *tree.DropPitr, *tree.AlterPitr,
 		*tree.DropDatabase, *tree.DropView, *tree.DropSequence, *tree.AlterView,
 		*tree.AlterSequence, *tree.DataBranchDeleteTable, *tree.DataBranchDeleteDatabase,

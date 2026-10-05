@@ -95,6 +95,22 @@ type PartitionState struct {
 	shared *sharedStates
 }
 
+// DataVersion identifies the contents of one subscribed partition without
+// retaining its rows or objects. GC/copy preserve it; reconstruction does not.
+type DataVersion struct {
+	generation *sharedStates
+	appliedTo  types.TS
+}
+
+func (p *PartitionState) DataVersion() DataVersion {
+	return DataVersion{generation: p.shared, appliedTo: p.appliedTo}
+}
+
+// VisibleAt excludes mutations ahead of an exclusive transaction snapshot.
+func (v DataVersion) VisibleAt(snapshot types.TS) bool {
+	return v.generation != nil && !v.appliedTo.IsEmpty() && v.appliedTo.LT(&snapshot)
+}
+
 // SourceCommitTS is the timestamp an async index watermark must cover at a
 // snapshot. It combines the partition-state retention boundary with user-data
 // commit timestamps; it deliberately does not use an ordinary TN object's

@@ -307,3 +307,5 @@ replace (
 )
 
 replace github.com/shoenig/go-m1cpu => github.com/shoenig/go-m1cpu v0.1.7
+
+replace github.com/dlclark/regexp2 => github.com/XuPeng-SH/regexp2 v1.10.1-0.20261004024751-718f43e031fe
