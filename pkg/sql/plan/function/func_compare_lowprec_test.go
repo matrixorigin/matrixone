@@ -292,3 +292,52 @@ func TestBlockScaledComparisonKernels(t *testing.T) {
 		}
 	}
 }
+
+// TestNarrowCastHonorsSelectList checks that casting text to bf16/float16/float8/float4 and
+// to vecf8/vecf4, and vecf8/vecf4 to vecf32, leaves a row outside the select list NULL
+// without converting it, so an invalid value there is not an error.
+func TestNarrowCastHonorsSelectList(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	run := func(from *vector.Vector, to types.Type) vector.FunctionResultWrapper {
+		target := vector.NewConstNull(to, 2, proc.Mp())
+		defer target.Free(proc.Mp())
+		result := vector.NewFunctionResultWrapper(to, proc.Mp())
+		require.NoError(t, result.PreExtendAndReset(2))
+		selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}
+		require.NoError(t, NewCast([]*vector.Vector{from, target}, result, proc, 2, selectList), to.String())
+		return result
+	}
+	text := func(values ...string) *vector.Vector {
+		v := vector.NewVec(types.T_varchar.ToType())
+		for _, s := range values {
+			require.NoError(t, vector.AppendBytes(v, []byte(s), false, proc.Mp()))
+		}
+		return v
+	}
+	for _, oid := range []types.T{types.T_bf16, types.T_float16, types.T_float8, types.T_float4} {
+		from := text("1.5", "invalid")
+		result := run(from, oid.ToType())
+		out := result.GetResultVector()
+		require.False(t, out.IsNull(0), oid.String())
+		require.True(t, out.IsNull(1), oid.String())
+		f, ok := vector.GetLowPrecisionFloatAt(out, 0)
+		require.True(t, ok, oid.String())
+		require.Equal(t, float32(1.5), f, oid.String())
+		result.Free()
+		from.Free(proc.Mp())
+	}
+	for _, oid := range []types.T{types.T_array_float8, types.T_array_float4} {
+		from := text("[1,2]", "[1,2,3]")
+		result := run(from, types.New(oid, 2, 0))
+		out := result.GetResultVector()
+		require.False(t, out.IsNull(0), oid.String())
+		require.True(t, out.IsNull(1), oid.String())
+		back := run(out, types.New(types.T_array_float32, 2, 0))
+		require.Equal(t, []float32{1, 2}, types.BytesToArray[float32](back.GetResultVector().GetBytesAt(0)), oid.String())
+		require.True(t, back.GetResultVector().IsNull(1), oid.String())
+		back.Free()
+		result.Free()
+		from.Free(proc.Mp())
+	}
+}

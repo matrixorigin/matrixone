@@ -360,7 +360,10 @@ private:
         if (n > max_rows_) {
             throw std::invalid_argument("blockscaled_matmul: tile exceeds the row capacity");
         }
-        const size_t M = roundup(n, 128);
+        // the smallest row bucket holding n: its algorithm was found at construction
+        size_t b = 0;
+        while (algos_[b].first < n) ++b;
+        const size_t M = algos_[b].first;
         std::fill(h_a_.begin(), h_a_.begin() + M * row_bytes_, 0);
         std::fill(h_sa_.begin(), h_sa_.begin() + M * Sp_, 0);
         pack_rows(cells, n, h_a_.data(), h_sa_.data(), g_row_.data(), sum_row_.data());
@@ -379,20 +382,12 @@ private:
                                                       : CUDA_R_32F;
         cudaDataType_t dt = integer(format_) ? CUDA_R_32I : CUDA_R_32F;
         layout la(et, K_, M), lb(et, K_, nq_pad_), lc(dt, M, nq_pad_);
-        cublasLtMatmulHeuristicResult_t heur{};
-        int nres = 0;
-        check_lt(cublasLtMatmulAlgoGetHeuristic(lt_, desc_, la.h, lb.h, lc.h, lc.h, pref_, 1,
-                                                &heur, &nres),
-                 "cublasLtMatmulAlgoGetHeuristic");
-        if (nres == 0) {
-            throw std::runtime_error("blockscaled_matmul: no cuBLASLt algorithm for this shape");
-        }
         float alpha = 1.0f, beta = 0.0f;
         int32_t ialpha = 1, ibeta = 0;
         const void* pa = integer(format_) ? static_cast<const void*>(&ialpha) : &alpha;
         const void* pb = integer(format_) ? static_cast<const void*>(&ibeta) : &beta;
         check_lt(cublasLtMatmul(lt_, desc_, pa, d_a_, la.h, d_b_, lb.h, pb, d_d_, lc.h,
-                                d_d_, lc.h, &heur.algo, d_work_, kWorkspace, stream_),
+                                d_d_, lc.h, &algos_[b].second, d_work_, kWorkspace, stream_),
                  "cublasLtMatmul");
         return M;
     }
@@ -472,6 +467,32 @@ private:
         check_lt(cublasLtMatmulPreferenceSetAttribute(
                      pref_, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES, &wsz, sizeof(wsz)),
                  "cublasLtMatmulPreferenceSetAttribute");
+
+        // a tile of n rows runs as the smallest bucket 128 * 2^i (or max_rows) holding n;
+        // every bucket needs a cuBLASLt algorithm, found here so a shape the device cannot
+        // run fails at construction
+        cudaDataType_t et = format_ == kFormatMXFP8   ? CUDA_R_8F_E4M3
+                            : format_ == kFormatNVFP4 ? CUDA_R_4F_E2M1
+                            : format_ == kFormatF16   ? CUDA_R_16F
+                            : format_ == kFormatBF16  ? CUDA_R_16BF
+                            : integer(format_)        ? CUDA_R_8I
+                                                      : CUDA_R_32F;
+        cudaDataType_t dt = integer(format_) ? CUDA_R_32I : CUDA_R_32F;
+        for (size_t M = 128;; M = std::min(M * 2, max_rows_)) {
+            layout la(et, K_, M), lb(et, K_, nq_pad_), lc(dt, M, nq_pad_);
+            cublasLtMatmulHeuristicResult_t heur{};
+            int nres = 0;
+            check_lt(cublasLtMatmulAlgoGetHeuristic(lt_, desc_, la.h, lb.h, lc.h, lc.h, pref_, 1,
+                                                    &heur, &nres),
+                     "cublasLtMatmulAlgoGetHeuristic");
+            if (nres == 0) {
+                throw std::runtime_error("blockscaled_matmul: no cuBLASLt algorithm for " +
+                                        std::to_string(M) + " x " + std::to_string(K_) +
+                                        " x " + std::to_string(nq_pad_));
+            }
+            algos_.emplace_back(M, heur.algo);
+            if (M == max_rows_) break;
+        }
     }
 
     void cleanup() {
@@ -593,6 +614,8 @@ private:
          *d_sum_query_ = nullptr, *d_top_val_ = nullptr, *d_top_idx_ = nullptr,
          *d_tied_ = nullptr;
     raft::resources res_;
+    // row bucket -> cuBLASLt algorithm, ascending
+    std::vector<std::pair<size_t, cublasLtMatmulAlgo_t>> algos_;
     std::vector<uint8_t> h_a_, h_sa_;
     std::vector<float> h_d_, g_row_, g_query_;
     std::vector<int64_t> sum_row_, sum_query_;

@@ -623,8 +623,13 @@ type; normalization changes the ranking, independent of the format.
   internal choice bounded by the allocation account, not a user setting.
 - Non-finite values are rejected at build, including finite inputs that would decode to
   ±Inf, and cell parsing rejects any cell that decodes to a non-finite value.
-- The GPU engine runs only on compute capability 10.0 or newer, checked once per process;
-  other devices fall back to the CPU.
-- The engine's native host memory and the tile buffers are admitted by the aggregate's
-  allocation account before allocation; a denial falls back to the CPU, as does an engine
-  that cannot be created for lack of device memory.
+- The GPU engine runs only on compute capability 10.0 or newer, checked once per process.
+  Rows are scored on the CPU only when the session has `gpu_mode` off or the box has no
+  such device; the CPU path is the reference for verification and benchmarks.
+- With an eligible device enabled there is no CPU fallback: every row is scored on the
+  GPU or the query fails. The engine's native host memory and the tile buffers are
+  admitted by the aggregate's allocation account before allocation, and a denial fails the
+  query; so do device memory, CUDA and cuBLASLt errors at creation or while scoring.
+- The engine looks up a cuBLASLt algorithm for every tile shape it can run (rows in
+  buckets of 128 × 2^i up to the tile capacity) when it is created, so a shape the device
+  has no algorithm for fails before any row is scored.

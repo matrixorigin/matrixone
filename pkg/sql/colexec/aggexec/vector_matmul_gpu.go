@@ -28,7 +28,11 @@ func init() {
 		available: func() bool { return devices() > 0 },
 		hostBytes: cuvs.BlockScaledMatmulHostBytes,
 		create: func(format, dim, nq int, queryCells []byte, cellBytes, maxRows, topk int) (vectorMatmulEngine, error) {
-			return cuvs.NewBlockScaledMatmul(format, dim, nq, queryCells, cellBytes, maxRows, topk)
+			engine, err := cuvs.NewBlockScaledMatmul(format, dim, nq, queryCells, cellBytes, maxRows, topk)
+			if err != nil {
+				return nil, err
+			}
+			return engine, nil
 		},
 	}
 }

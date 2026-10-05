@@ -347,4 +347,10 @@ by2  ¦  INSERT  ¦  1  ¦  3.5  ¦  1  𝄀
 bx  ¦  INSERT  ¦  1  ¦  1.5  ¦  1
 DATA BRANCH MERGE by2 INTO bx;
 internal error: conflict: by2 INSERT and bx INSERT on pk(1) with different values
+CREATE TABLE sel (a INT, s VARCHAR(20));
+INSERT INTO sel VALUES (1, '1.5'), (0, 'invalid');
+SELECT a, CASE WHEN a = 1 THEN CAST(s AS bf16) END, CASE WHEN a = 1 THEN CAST(s AS float8) END FROM sel ORDER BY a;
+➤ a[4,32,0]  ¦  case when a = 1 then cast(s as bf16) end[7,24,0]  ¦  case when a = 1 then cast(s as float8) end[7,24,0]  𝄀
+0  ¦  null  ¦  null  𝄀
+1  ¦  1.5  ¦  1.5
 DROP DATABASE lowprec_float;

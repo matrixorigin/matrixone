@@ -1050,10 +1050,10 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	// the generic array paths, which decode fixed-size elements. A NULL literal (T_any)
 	// still reaches scalarNullToOthers below.
 	if toType.Oid.IsBlockScaledArray() && fromType.Oid != types.T_any {
-		return castToBlockScaled(proc, from, *toType, result, length)
+		return castToBlockScaled(proc, from, *toType, result, length, selectList)
 	}
 	if fromType.Oid.IsBlockScaledArray() {
-		return blockScaledToOthers(proc, from, *toType, result, length)
+		return blockScaledToOthers(proc, from, *toType, result, length, selectList)
 	}
 	if mode.isAssignment() && toType.Oid.IsInteger() {
 		switch fromType.Oid {

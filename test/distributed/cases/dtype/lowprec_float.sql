@@ -198,4 +198,9 @@ INSERT INTO by2 VALUES (1, 3.5, 1), (2, 2.5, 2);
 DATA BRANCH DIFF by2 AGAINST bx;
 DATA BRANCH MERGE by2 INTO bx;
 
+-- a CASE branch casts only the rows it selects
+CREATE TABLE sel (a INT, s VARCHAR(20));
+INSERT INTO sel VALUES (1, '1.5'), (0, 'invalid');
+SELECT a, CASE WHEN a = 1 THEN CAST(s AS bf16) END, CASE WHEN a = 1 THEN CAST(s AS float8) END FROM sel ORDER BY a;
+
 DROP DATABASE lowprec_float;

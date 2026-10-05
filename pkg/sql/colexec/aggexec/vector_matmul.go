@@ -969,10 +969,10 @@ func (exec *vectorMatmulExec) fillRow(group uint64, row int, vectors []*vector.V
 }
 
 // ensureEngine creates the GPU engine on first use when the session allows the GPU and
-// the build has a device meeting the baseline; otherwise rows are scored on the CPU. The
-// engine's native host memory and the tile buffers are charged to the allocation account
-// before they are allocated; when the account has no room, or the engine cannot be created,
-// the rows are scored on the CPU.
+// the build has a device meeting the baseline; otherwise rows are scored on the CPU. With a
+// device in play the GPU scores every row: the engine's native host memory and the tile
+// buffers are charged to the allocation account before they are allocated, and a denial
+// or an engine error (including a shape the device has no algorithm for) fails the query.
 func (exec *vectorMatmulExec) ensureEngine() error {
 	if exec.engineTried || exec.cfg == nil {
 		return nil
@@ -989,13 +989,12 @@ func (exec *vectorMatmulExec) ensureEngine() error {
 	hostBytes := gpu.hostBytes(exec.cfg.engineFormat, dim, nq, rows)
 	reservation, err := exec.allocation.reserveCapacity(hostBytes)
 	if err != nil {
-		return nil
+		return err
 	}
 	engine, err := gpu.create(exec.cfg.engineFormat, dim, nq, exec.cfg.queryCells, cellBytes, rows, exec.cfg.topk)
-	if err != nil || engine == nil {
-		// no device memory for the engine: the rows are scored on the CPU
+	if err != nil {
 		reservation.Abort()
-		return nil
+		return err
 	}
 	var lease *mpool.CapacityLease
 	if reservation != nil {
@@ -1012,7 +1011,7 @@ func (exec *vectorMatmulExec) ensureEngine() error {
 	if err := exec.allocTile(engine.MaxRows(), engine.CellBytes(), nq, k); err != nil {
 		engine.Close()
 		lease.Release()
-		return nil
+		return err
 	}
 	exec.engine, exec.engineLease = engine, lease
 	return nil

@@ -37,6 +37,11 @@ func init() {
 	}
 }
 
+// castRowSkipped reports a row outside the select list; it is NULL and not converted.
+func castRowSkipped(selectList *FunctionSelectList, i uint64) bool {
+	return selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(i)
+}
+
 // checkVectorCastDim enforces a declared target dimension; MaxArrayDimension is unsized.
 func checkVectorCastDim(to types.Type, dim int) error {
 	if w := int(to.Width); w > 0 && w != types.MaxArrayDimension && w != dim {
@@ -47,7 +52,7 @@ func checkVectorCastDim(to types.Type, dim int) error {
 
 // castToBlockScaled casts text, vecf32, vecf8 or vecf4 to a vecf8/vecf4 target.
 func castToBlockScaled(proc *process.Process, from *vector.Vector, toType types.Type,
-	result vector.FunctionResultWrapper, length int) error {
+	result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
 	f, _ := toType.Oid.BlockScaledFormat()
 	src := vector.GenerateFunctionStrParameter(from)
 	rs := vector.MustFunctionResult[types.Varlena](result)
@@ -55,7 +60,7 @@ func castToBlockScaled(proc *process.Process, from *vector.Vector, toType types.
 	var cell []byte
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := src.GetStrValue(i)
-		if null || (len(v) == 0 && fromOid.IsMySQLString()) {
+		if null || (len(v) == 0 && fromOid.IsMySQLString()) || castRowSkipped(selectList, i) {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -109,7 +114,7 @@ func castToBlockScaled(proc *process.Process, from *vector.Vector, toType types.
 
 // blockScaledToOthers casts a vecf8/vecf4 source to vecf32.
 func blockScaledToOthers(proc *process.Process, from *vector.Vector, toType types.Type,
-	result vector.FunctionResultWrapper, length int) error {
+	result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
 	if toType.Oid != types.T_array_float32 {
 		return moerr.NewInternalError(proc.Ctx, fmt.Sprintf("unsupported cast from %s to %s", from.GetType(), toType))
 	}
@@ -118,7 +123,7 @@ func blockScaledToOthers(proc *process.Process, from *vector.Vector, toType type
 	var arr []float32
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := src.GetStrValue(i)
-		if null {
+		if null || castRowSkipped(selectList, i) {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}

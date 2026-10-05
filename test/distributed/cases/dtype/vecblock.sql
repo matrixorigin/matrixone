@@ -134,4 +134,9 @@ update vb set v = '[4,3,2,1]', u = '[3,2,1]' where id = 1;
 data branch merge vb into vc;
 select * from vc;
 
+-- a case branch casts only the rows it selects
+create table sel (a int, s varchar(20));
+insert into sel values (1, '[1,2]'), (0, '[1,2,3]'), (2, 'invalid');
+select a, case when a = 1 then cast(s as vecf4(2)) end, case when a = 1 then cast(s as vecf8(2)) end from sel order by a;
+
 drop database vecblock_db;

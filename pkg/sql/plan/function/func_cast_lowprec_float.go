@@ -165,20 +165,31 @@ func anyToLowPrecFloat[Tr types.LowPrecFloat](
 		}, selectList)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_datalink:
-		return strToLowPrecFloat(proc.Ctx, from, result, length, ctor)
+		return strToLowPrecFloat(proc.Ctx, from, result, length, ctor, selectList)
 	}
 	return moerr.NewInternalError(proc.Ctx, fmt.Sprintf("unsupported cast from %s to %s", from.GetType(), result.GetResultVector().GetType()))
 }
 
-// strToLowPrecFloat parses each string to a float then rounds it to Tr. A malformed
-// value errors, matching a strict numeric cast.
+// strToLowPrecFloat parses each selected string to a float then rounds it to Tr. A
+// malformed value errors, matching a strict numeric cast.
 func strToLowPrecFloat[Tr types.LowPrecFloat](
 	ctx context.Context, from *vector.Vector, result vector.FunctionResultWrapper, length int, ctor func(float32) Tr,
+	selectList *FunctionSelectList,
 ) error {
 	src := vector.GenerateFunctionStrParameter(from)
 	rs := vector.MustFunctionResult[Tr](result)
+	if selectList != nil && selectList.IgnoreAllRow() {
+		rs.SetNullResult(uint64(length))
+		return nil
+	}
 	var zero Tr
 	for i := 0; i < length; i++ {
+		if castRowSkipped(selectList, uint64(i)) {
+			if err := rs.Append(zero, true); err != nil {
+				return err
+			}
+			continue
+		}
 		bs, isnull := src.GetStrValue(uint64(i))
 		if isnull {
 			if err := rs.Append(zero, true); err != nil {

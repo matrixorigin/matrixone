@@ -829,7 +829,8 @@ func (e *vmFakeEngine) RunTopK(cells []byte, top []float32, rows []int32, full [
 
 // TestVectorMatmulGPUMemoryAdmission checks that the engine's native host memory and the
 // tile buffers are charged to the allocation account before they are allocated, counted in
-// Size, released by Free, and that an account without room scores on the CPU instead.
+// Size and released by Free, and that with a device in play an account without room or an
+// engine error fails the fill instead of scoring on the CPU.
 func TestVectorMatmulGPUMemoryAdmission(t *testing.T) {
 	saved := vectorMatmulGPU
 	defer func() { vectorMatmulGPU = saved }()
@@ -849,7 +850,7 @@ func TestVectorMatmulGPUMemoryAdmission(t *testing.T) {
 	}
 	q, _ := json.Marshal([][]float32{{1, 0, 0, 0}})
 	gpuCfg := EncodeVectorMatmulConfig(1, string(q), "", true)
-	run := func(limit uint64) (*vectorMatmulExec, *mpool.AllocationAccount, []*vector.Vector, *mpool.MPool) {
+	run := func(limit uint64) (*vectorMatmulExec, *mpool.AllocationAccount, []*vector.Vector, *mpool.MPool, error) {
 		mp := mpool.MustNewZero()
 		registry, err := mpool.NewAllocationAccountRegistry(1, 512)
 		require.NoError(t, err)
@@ -867,54 +868,50 @@ func TestVectorMatmulGPUMemoryAdmission(t *testing.T) {
 		require.NoError(t, exec.GroupGrow(1))
 		vecs := vmVectors(t, mp, []int64{1, 2}, [][]float32{{1, 0, 0, 0}, {2, 0, 0, 0}})
 		groups := []uint64{1, 1}
-		require.NoError(t, exec.PreflightBatchFill(0, groups, vecs))
-		require.NoError(t, exec.BatchFill(0, groups, vecs))
-		return exec, account, vecs, mp
+		if err := exec.PreflightBatchFill(0, groups, vecs); err != nil {
+			return exec, account, vecs, mp, err
+		}
+		return exec, account, vecs, mp, exec.BatchFill(0, groups, vecs)
+	}
+	release := func(exec *vectorMatmulExec, account *mpool.AllocationAccount, vecs []*vector.Vector, mp *mpool.MPool) {
+		exec.Free()
+		vmFree(mp, vecs)
+		require.Zero(t, account.Snapshot().Used)
+		require.Zero(t, mp.CurrNB())
 	}
 
 	// room for the engine: native memory and tile are charged and counted
-	exec, account, vecs, mp := run(256 << 20)
+	exec, account, vecs, mp, err := run(256 << 20)
+	require.NoError(t, err)
 	require.Equal(t, 1, created)
 	require.NotNil(t, exec.engine)
 	tile := exec.tileSize()
 	require.Greater(t, tile, int64(hostBytes))
 	require.GreaterOrEqual(t, account.Snapshot().Used, uint64(tile))
 	require.GreaterOrEqual(t, exec.Size(), tile)
-	exec.Free()
-	vmFree(mp, vecs)
+	release(exec, account, vecs, mp)
 	require.Equal(t, 1, closed)
-	require.Zero(t, account.Snapshot().Used)
-	require.Zero(t, mp.CurrNB())
 
-	// no room for the native memory: no engine, rows scored on the CPU
-	exec, account, vecs, mp = run(hostBytes / 2)
+	// no room for the native memory: the fill fails before an engine is created
+	exec, account, vecs, mp, err = run(hostBytes / 2)
+	require.Error(t, err)
 	require.Equal(t, 1, created)
 	require.Nil(t, exec.engine)
-	require.Equal(t, []string{`[[["2",2]]]`}, vmFlush(t, mp, exec))
-	exec.Free()
-	vmFree(mp, vecs)
-	require.Zero(t, account.Snapshot().Used)
-	require.Zero(t, mp.CurrNB())
+	release(exec, account, vecs, mp)
 
-	// room for the native memory but not the tile: the engine is closed, its charge released
-	exec, account, vecs, mp = run(hostBytes + 64<<10)
+	// room for the native memory but not the tile: the fill fails, the engine is closed
+	exec, account, vecs, mp, err = run(hostBytes + 64<<10)
+	require.Error(t, err)
 	require.Equal(t, 2, created)
 	require.Equal(t, 2, closed)
 	require.Nil(t, exec.engine)
-	require.Equal(t, []string{`[[["2",2]]]`}, vmFlush(t, mp, exec))
-	exec.Free()
-	vmFree(mp, vecs)
-	require.Zero(t, account.Snapshot().Used)
-	require.Zero(t, mp.CurrNB())
+	release(exec, account, vecs, mp)
 
-	// the engine cannot be created (no device memory): rows scored on the CPU, charge released
-	createErr = moerr.NewInternalErrorNoCtx("no device memory")
-	exec, account, vecs, mp = run(256 << 20)
+	// an engine error (no algorithm for the shape, device memory, CUDA) fails the fill
+	createErr = moerr.NewInternalErrorNoCtx("blockscaled_matmul: no cuBLASLt algorithm")
+	exec, account, vecs, mp, err = run(256 << 20)
+	require.ErrorContains(t, err, "no cuBLASLt algorithm")
 	require.Equal(t, 3, created)
 	require.Nil(t, exec.engine)
-	require.Equal(t, []string{`[[["2",2]]]`}, vmFlush(t, mp, exec))
-	exec.Free()
-	vmFree(mp, vecs)
-	require.Zero(t, account.Snapshot().Used)
-	require.Zero(t, mp.CurrNB())
+	release(exec, account, vecs, mp)
 }
