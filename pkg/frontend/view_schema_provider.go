@@ -16,7 +16,6 @@ package frontend
 
 import (
 	"context"
-	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -163,25 +162,25 @@ func (p *viewSchemaProvider) OpenViewSchemaBinding(ctx context.Context) (result 
 		parent.mu.Unlock()
 		currentFloor, currentFloorPresent := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor)
 		if ses.GetAccountId() != accountID || floorPresent != currentFloorPresent || !reflect.DeepEqual(floor, currentFloor) || !proc.UsesExecutionResourceGeneration(generation) || !childProc.UsesExecutionResourceGeneration(generation) {
-			return fmt.Errorf("%w: execution environment", plan.ErrViewSchemaChanged)
+			return plan.ErrViewSchemaChanged
 		}
 		if !same || generation.Closed() || ses.GetTxnHandler().GetTxn() != op || proc.GetStmtProfile().GetStmtId() != statementID || currentProtocolVersion(proc) != protocol || ses.GetTempTableVersion() != tempVersion || ses.getDDLVersion() != ddlVersion || ses.GetPrivilegeCache().getActiveRoleGrantGeneration() != roleGeneration {
-			return fmt.Errorf("%w: statement ownership", plan.ErrViewSchemaChanged)
+			return plan.ErrViewSchemaChanged
 		}
 		currentIdentity := ses.GetTenantInfo()
 		if currentIdentity == nil || !reflect.DeepEqual(identity, currentIdentity.Copy()) {
-			return fmt.Errorf("%w: authorization identity", plan.ErrViewSchemaChanged)
+			return plan.ErrViewSchemaChanged
 		}
 		current, stampErr := stampReader.CatalogReadStamp()
 		if stampErr != nil {
 			return stampErr
 		}
 		if current.TransactionID != stamp.TransactionID || current.Revision != stamp.Revision || current.Workspace != stamp.Workspace || !reflect.DeepEqual(current.Snapshot, stamp.Snapshot) {
-			return fmt.Errorf("%w: transaction stamp", plan.ErrViewSchemaChanged)
+			return plan.ErrViewSchemaChanged
 		}
 		currentVisibility, currentStable := workspace.CatalogVisibility()
 		if !currentStable || currentVisibility != visibility {
-			return fmt.Errorf("%w: workspace visibility", plan.ErrViewSchemaChanged)
+			return plan.ErrViewSchemaChanged
 		}
 		return nil
 	}

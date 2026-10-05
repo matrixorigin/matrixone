@@ -16,8 +16,8 @@ package mysql
 
 import (
 	"context"
-	"errors"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/util"
 )
 
@@ -35,7 +35,7 @@ type parseAbort struct {
 	err     error
 }
 
-var ErrParseLimit = errors.New("SQL parse resource limit exceeded")
+var ErrParseLimit error = moerr.NewResourceExhaustedf(context.Background(), "SQL parse resource limit exceeded")
 
 func WithParseLimits(ctx context.Context, limits ParseLimits) context.Context {
 	return context.WithValue(ctx, parseLimitsKey{}, limits)

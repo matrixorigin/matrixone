@@ -18,7 +18,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
-	"errors"
 	"sync"
 	"time"
 
@@ -38,10 +37,10 @@ const (
 )
 
 var (
-	ErrViewSchemaChanged = errors.New("view schema visibility changed; retry the statement")
-	ErrViewSchemaClosed  = errors.New("view schema request is closed")
-	ErrViewSchemaBusy    = errors.New("view schema request already has an active binder")
-	ErrViewSchemaLimit   = errors.New("view schema request resource limit exceeded")
+	ErrViewSchemaChanged error = moerr.NewInvalidStateNoCtx("view schema visibility changed; retry the statement")
+	ErrViewSchemaClosed  error = moerr.NewInvalidStateNoCtx("view schema request is closed")
+	ErrViewSchemaBusy    error = moerr.NewInvalidStateNoCtx("view schema request already has an active binder")
+	ErrViewSchemaLimit   error = moerr.NewResourceExhaustedf(context.Background(), "view schema request resource limit exceeded")
 )
 
 // ViewSchemaBinding belongs to one statement. Check must reject a change of
@@ -187,7 +186,7 @@ func (r *ViewSchemaRequest) open() error {
 		return moerr.NewInternalError(r.ctx, "view schema provider is unavailable")
 	}
 	if r.workCtx == nil {
-		r.workCtx, r.stopDeadline = context.WithTimeout(r.ctx, 30*time.Second)
+		r.workCtx, r.stopDeadline = context.WithTimeoutCause(r.ctx, 30*time.Second, context.DeadlineExceeded)
 	}
 	ctx := r.workCtx
 	binding, err := r.provider.OpenViewSchemaBinding(ctx)
