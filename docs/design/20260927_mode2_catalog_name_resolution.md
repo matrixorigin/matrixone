@@ -1,100 +1,149 @@
-# Case preserving, case insensitive catalog lookup for mode 2
+# Case preserving catalog name resolution
 
-Status: revision 7 closes physical-name consumer gaps found by independent review of revision 6. The no-mixed-version deployment contract and sparse folded indexes remain unchanged; measured cache-write and mode-2 read costs are stated below. Owner: issue #29418. Implementation PR: #29422. Revision 4 independent G-FEATURE-DESIGN decision: PASS on content SHA-256 `41eb074706231fd7a2458967417c3516f60024a30e9b64e805c1b4b1ae178ccb`. Revision 6 GPT-6 medium solution-design review examined PR head `32589837c0` and approved the direction before implementation.
+Revision 8. Owner: issue #29418; implementation: PR #29422.
+This revision follows the rebase onto main `37ba071297` and replaces the
+previous implementation-specific design narrative. Deployment uses a stopped
+cluster upgrade: CNs and Proxy run the same version. Mixed-version operation
+is outside the contract, as confirmed by the operator.
 
-## Problem and evidence
+## Contract
 
-`lower_case_table_names=2` preserves `QaMode2Base` in `mo_database`, but `DROP DATABASE QaMode2Base` currently passes `qamode2base` to an exact catalog lookup and fails. The pre-#29414 real-service reproduction in #29418 proves this is a base defect. At revision `5a96035fc792`, a separate isolated service also showed that `USE qamode2alias29418` could not open a created `QaMode2Alias29418` (1049), and `SELECT * FROM mixedtable` could not read a created `MixedTable` (1146). The parser and frontend spelling fix in this branch only proves same-spelling CREATE/DROP/USE/SHOW, not case-insensitive lookup.
+`lower_case_table_names=0` preserves and compares physical spelling exactly;
+mode 1 lowercases names; mode 2 preserves spelling and compares
+`identifier.Fold(name)`. The fold is shared with parser `CStr.Compare()`:
+Unicode lowercase for valid UTF-8, ASCII-only lowercase for malformed bytes.
+The dynamic variable's existing scope and persistence are unchanged.
 
-MySQL's mode 2 keeps original spelling but compares table and database names without case sensitivity. Its setting is initialization-only. MatrixOne currently declares this variable dynamic and has tests for switching; this proposal retains that behavior. Changing the configuration lifecycle belongs to a separate design.
+At a tenant, database and transaction snapshot, resolution returns zero, one,
+or multiple visible physical objects. Zero preserves the typed absent error;
+one returns physical name and immutable ID together; multiple returns ambiguity
+for **every** spelling, including an exact spelling. Transaction-local inserts
+and deletes override committed versions before uniqueness is decided.
+`IF EXISTS` / `IF NOT EXISTS` suppress absence / duplicates respectively,
+never ambiguity, cancellation, or storage errors. Physical generation IDs and
+logical privilege IDs have different owners and must not be interchanged.
 
-References: [MySQL identifier case sensitivity](https://dev.mysql.com/doc/refman/8.4/en/identifier-case-sensitivity.html), `pkg/sql/parsers/tree/cstr.go`, `pkg/vm/engine/disttae/{engine,txn_database}.go`, `pkg/vm/engine/disttae/cache/{catalog,types}.go`, `test/distributed/cases/system_variable/lower_case_table_names.sql`.
+Database/table SQL, temporary tables, publications, SHOW, privilege checks,
+Snapshot/PITR and recovery consume the same identity. Column, alias, index,
+publication and routine comparison semantics are not changed. Public consumers
+must not reconstruct an exact catalog predicate from the original alias after
+resolution. Reserved system names are canonicalized before tenant routing.
 
-## Contract and scope
+## Ownership and implementation
 
-For a database or table name `n` at a statement's effective mode:
-
-| Mode | Stored physical spelling | Lookup identity |
-|---|---|---|
-| 0 | as created | exact bytes |
-| 1 | lowercased | lowercased |
-| 2 | as created | the same fold as `CStr.Compare()` |
-
-Every successful name lookup yields one visible physical object, its stored spelling and its immutable ID. Publication database checks, privileges, FK/PITR metadata, table keys, locks, deletion, and remote plans must use that resolved object. A missing name has the existing not-found outcome. More than one visible physical object with the same mode-2 identity is an explicit ambiguity error for every spelling, including an exact spelling. `IF EXISTS` and `IF NOT EXISTS` do not suppress ambiguity. No path chooses an arbitrary row or rebinds a publication's **database** by name; `mo_pubs.table_list` currently stores only table names, so table reincarnation binding remains its pre-existing separate contract.
-
-The target includes database and table names reached through SQL CREATE, USE, SHOW, SELECT, DML, DDL, session temporary tables, and publication target lookup. Snapshot/PITR DDL and historical snapshots use the same resolver when they target these objects. It excludes changes to account, publication, column, index, alias, and routine comparison rules. It does not change the dynamic variable's scope or persistence, migrate existing catalog names, or rewrite stored publication IDs.
-
-Every consumer of a resolved mode-2 object must carry the physical name and ID together. Direct `mo_columns` and `mo_subs` probes, SHOW rewrites, subscription table lists, statistics functions and view recovery cannot re-apply the user's raw spelling to an exact catalog predicate. A publication's explicit table list is checked against the resolved publisher relation name. Subscription database resolution must include the complete owner database namespace, so an ordinary database and a subscription with the same folded name are ambiguous even if only one has a `mo_subs` row. Temporary aliases never shadow publisher relations. Reserved system-table routing and `mo_*` function guards compare folded names before any tenant switch or data access.
-
-PITR creation stores the target's physical spelling and physical generation ID (`rel_id`); `rel_logical_id` remains the separate privilege identity. Duplicate checks use folded names only in mode 2 after uniquely resolving the target, including active PITR rows written by the prior mode-2 implementation with folded names. Restore resolves database/table names at the requested historical time, rejects ambiguity there, and accepts an older folded PITR policy name only for the same folded identity and account. It does not infer the source from today's object, which may have been dropped or recreated. Historical lineage still uses the stored physical generation ID; no catalog migration or mixed-version execution protocol is added.
-
-The smallest counterexample is `CREATE DATABASE Qa; USE qa` in mode 2. The nearest controls are `USE Qa` in mode 2, `USE qa` after `CREATE DATABASE Qa` in mode 0, and `USE qa` after mode-1 creation. For a table, use `CREATE TABLE MixT(id INT); SELECT * FROM mixt`. A mode-0 `Foo`/`foo` pair followed by a new mode-2 session must report ambiguity without changing either object.
-
-## Owners and transitions
-
-1. The frontend captures the effective session mode at statement admission and attaches it to the request and process contexts through a typed key. Mode-2 resolution activates when that effective mode is 2. Internal callers with no session mode keep exact lookup; no global mutable mode is read inside the engine. Snapshot/tenant override is applied before resolving names. A distributed plan carries resolved physical names and IDs; remote execution need not infer the session mode. Deployment replaces CNs and Proxy together, with no mixed-version execution interval.
-2. A single catalog identifier-folding function defines mode-2 identity and is shared with `CStr.Compare()`: valid UTF-8 uses Unicode lowercase; malformed UTF-8 receives ASCII-only folding to preserve raw client bytes. No second normalization algorithm is permitted.
-3. **Revision 6 implementation:** the disttae catalog cache retains the exact indexes plus two sparse folded-name indexes, by `(account, folded database name, physical name, timestamp)` and `(account, database ID, folded table name, physical name, timestamp)`. The folded indexes contain only entries whose stored physical spelling differs from `Fold(physicalName)`, regardless of active mode. A mode-2 lookup takes the canonical physical-name candidate from the exact index and visits case variants in the sparse index, merging them in physical-name order. Each index selects the newest snapshot-visible version of its physical name; tombstones hide older versions. Logtail insert, tombstone and GC maintain the sparse entry exactly when physical spelling differs from its fold. Existing logtail-applied waits cover both tree writes before publishing the watermark; GC advances the cache start watermark before retiring either tree. Transaction-local overlays still apply before zero/one/ambiguity is decided. Exact spelling is never a tie-breaker.
-4. Transaction-local database and table operations are part of the same resolver. Their creates and tombstones override committed candidates at the transaction's statement boundary. A rollback or statement retry removes those operations through existing workspace cleanup; the folded view must be derived or updated with the same owner. A drop followed by recreate at the same fold returns the new ID only after the old generation is tombstoned.
-5. The cache is authoritative only when `CatalogCache.CanServe(snapshot)` is true. When false, even a positive folded cache hit may omit a second historical candidate that GC retired; all mode-2 candidate enumeration must therefore come from one storage snapshot. The storage reader makes one streaming SQL scan of only physical names scoped to the tenant (and physical parent database name and ID for tables). It applies the shared identifier fold in Go because SQL name collation may differ, and overlays transaction-local create/delete by physical identity before counting candidates. This avoids mistaking two committed matches for ambiguity when one is deleted in the current transaction. The producer closes the result and error channels after `Exec` returns; the consumer continuously drains both channels, closes every returned batch, and joins the producer before returning, including on error and cancellation. The executor can synchronously send an error before `Exec` returns and some wrappers send it twice; cancellation alone cannot unblock a full error channel. No `SELECT *`, `ORDER BY` or repeated paged rescan, and no materialization of all `mo_tables` rows. `mo_database` has no `dat_id` index and `mo_tables` has no `rel_id` index, so ID-keyset SQL pagination is forbidden. Historical lookup performs one scoped scan. Its memory ceiling includes the queued, consumer-owned, and producer-owned cloned result batches plus execution pipeline state; measure the peak rather than excluding executor buffers. If measured latency or memory exceeds the budget, this design returns for review with a persisted folded key/index proposal; the common current-snapshot path cannot silently become a scan.
-6. The returned `txnDatabase.databaseName` and table item `Name` are set to stored physical spelling. All subsequent relation, CPKey, column and cleanup work uses these names. Copy helpers must copy the physical name when a folded match is returned.
-7. The API is an error-bearing `ResolveDatabase(ctx, input, snapshot) -> (physicalName, databaseID, found, error)` and `ResolveTable(ctx, databaseID, input, snapshot) -> (physicalName, tableID, found, error)`; a typed ambiguity error is distinct from typed absent and storage/authorization/timeout errors. Existing `Engine.Database/txnDatabase.Relation` call the resolver and return the physical object. Virtual/system databases such as `mo_catalog`, `information_schema` and `mysql` are recognized using the mode's identity before normal lookup and return their protected canonical physical name/ID; system DB deny-lists and publication validation use the same canonical identity, so `MO_CATALOG` cannot bypass a guard. Every caller currently using `CompilerContext.DatabaseExists(name) bool` for DDL must move to an error-bearing probe; the bool interface may remain only for optimizer hints that cannot suppress a statement error. `compile/ddl.go` `DROP IF EXISTS` catches only typed absent. `USE`, SHOW, planner `Resolve`, ObjectRef construction, table metadata and remote execution use the returned physical spelling/ID. Direct SQL catalog probes (including `checkDatabaseExistsOrNotWithLock`, publication and recovery/PITR helpers) either consume that result or prove they already operate on a physical ID.
-8. CREATE of a database or `mo_tables` object under the active mode-2 lookup contract takes a folded namespace lock before rechecking uniqueness. Using the existing typed serial lock batch, database namespace is `serial(accountID, reservedTag, foldedName)` and table namespace is `serial(accountID, reservedTag, decimalDatabaseID, foldedName)`; different tuple arities separate them from physical DB and table row keys. Mode-0/1 DDL keeps its existing locking and lookup path. A separate per-database hidden-index prefix gate is `serial(accountID, reservedTag, decimalDatabaseID, "__mo_index_", "all")`. Known prospective names take this gate in S mode; COPY ALTER and TRUNCATE take it in X mode because nested CREATE may generate fresh hidden UUID names after the original table X lock. Its five-component tuple is disjoint from every per-name namespace key. Every mode-2 creator of a name whose folded spelling begins `__mo_index_`, including a user-created table, view, or sequence, obtains the S gate before any table namespace or physical table row lock. Per-name folded namespace locks remain X, so known same-name creators serialize while independent index creators share the gate. A statement that will generate hidden index names obtains it at top-level preflight even when those names are not known yet. The mode-2 per-statement order is: database lifecycle/view gate if applicable, DB namespace X, physical DB row X; table paths take physical DB row S, hidden-index prefix gate S for known names or X for unknown nested names, all known prospective table namespace X locks in sorted `(databaseID, foldedName)` order, then physical table row X locks. Top-level mode-2 DDL preflight enumerates every known name it may create from its plan: table, view, sequence, replacement, `ALTER TABLE COPY` copy table, CREATE/ALTER INDEX hidden tables, and partition-derived names. It takes this set before its first physical table X. `ALTER TABLE COPY` holds original table X before nested CREATE, and its nested CREATE replans hidden UUID names. COPY therefore obtains the prefix gate in X mode and its known copy-table namespace before original table X; TRUNCATE also obtains X before original table X because it replans CREATE after that lock. Nested CREATE may then take newly generated `__mo_index_` per-name locks while reentering the held gate; an X-to-S reentry keeps X. No competing S-gate creator can hold such a per-name lock while COPY/TRUNCATE holds X, so this late acquisition cannot reverse the single-statement lock order. This exception applies only to newly generated names under that prefix; every other nested or plugin-generated name must be finalized during preflight, and an unenumerated name outside the gated prefix is an internal plan error before mutation. `CreateIndex` holds base table X before hidden-table CREATE, normal CREATE holds main table X before hidden-index CREATE, and CREATE VIEW/SEQUENCE may lock their row before Create; each uses the preflight locks and gate where applicable. `TableClone` has no pre-held table X and uses the normal order. Transactions that span several DDL statements may already hold an unrelated row X before the next statement's preflight; existing deadlock detection and retry must resolve such cross-statement cycles, and the new lock never suppresses that signal. After lock acquisition under RC, advance snapshot and resolve again before writing. Locks release through transaction commit/rollback and failed statement cleanup, including cancel/timeout; the lock key is stable across object reincarnation. Cross-mode concurrent creation during runtime changes of `lower_case_table_names` is part of the separately deferred dynamic-switch design; this patch does not promise to serialize mode-0/1 creators with mode-2 creators.
-9. In mode 2, DROP resolves an alias to physical name and ID before publication, privilege and FK checks. Under the existing physical database/table lock and after any RC snapshot advance, it checks that physical ID still equals resolved ID; if changed, it returns a typed conflict for statement retry rather than deleting a reincarnated object. `DROP IF EXISTS` is a no-op only for a verified absent object. Within one statement, a creator's namespace lock is taken before any physical table X; across multiple statements in one transaction, existing deadlock detection/retry resolves cycles as described above.
-10. The frontend owns session temporary names. The error-bearing `ResolveTempTable` runs under the session mutex; mode-2 lookup checks folded aliases and reports ambiguity, and temp shadows a permanent table only after unique resolution. A folded `(physicalDatabaseName, foldedAlias) -> set of exact aliases` map is updated with the exact map during add, removal, database cleanup and transaction journal rollback. The map grows with live temporary aliases. Existing exported-temp limits still apply. Because `lower_case_table_names` is global-only, the typed session-variable migration snapshot omits it, yet live sessions may retain a different initialization snapshot from new sessions. Both migration messages therefore carry `ModeAtSource int32` and `ModeAtSourceExported bool`; Proxy forwards them unchanged. Every same-version handoff requires the marker and a mode in 0/1/2. The target installs the source mode into its frozen session sysvar snapshot before USE replay, prepared-state installation and temp clone SQL. Missing/invalid mode rejects transfer before the source is released; partial target clones follow existing cleanup. No persisted table metadata changes.
-11. In mode 2, CREATE/ALTER/DROP PUBLICATION enter the publication/view lifecycle gate first when that capability is active, then lock physical DB rows in shared mode before any publication/subscription catalog write lock. The lifecycle gate is currently inactive, so correctness and deadlock avoidance rely on the sorted physical DB locks and their lock-after-snapshot identity checks. CREATE locks target DB S; ALTER changing target locks old and new DB S in sorted `(ownerAccountID, physicalName)` order; DROP PUBLICATION locks its current DB S. Use the existing `lockop.LockRows` physical DB key form (`serial(ownerAccountID, physicalName)`) from frontend clone. The target is resolved under the correct tenant before locking; after the lock, advance RC snapshot and revalidate physical ID/name. A publication's `mo_pubs.account_id` is the *publisher* and may differ from the database owner (the resolver can find an allowed target account's DB), so both owner account and globally unique database ID must be carried explicitly. For explicit `TABLE` lists, replace `genPubTablesStr`'s exact SHOW-name map probe with `ResolveTable` inside that owner account and physical DB ID; reject absent or ambiguous entries, deduplicate by physical table ID, lock each selected physical table row in shared mode in sorted order, refresh the RC snapshot and revalidate table IDs before the publication write, and store physical table names in `mo_pubs.table_list`. The DB S lock protects the database identity, while table S locks serialize with DROP/CREATE of each selected table. ALTER TABLE-list changes use the same rule, and SHOW/subscription readers receive the stored physical names. This fixes mode-2 alias lookup at publication authoring; `table_list` has no table IDs and keeps its existing table reincarnation semantics. An ALTER without a new DB name still validates its current physical ID. The `DATABASE *` special case has no physical DB row and retains its account-level gate. In mode 2, DROP DATABASE takes physical DB X after its lifecycle gate, advances RC snapshot and checks publication protection by global `database_id = ID` across publishers; it verifies each matching row's physical name and fails closed on mismatch. It separately checks `database_id = 0 AND database_name = physicalName` across publishers: any ordinary legacy row with unknown owner is a catalog-consistency error that conservatively blocks DROP until explicit operator repair, never a name-based binding to the new ID. The `DATABASE *`/ID-0 row retains its existing account-level handling by exact `database_name='*'`. Publication rows always store the resolved physical spelling and nonzero ID for ordinary databases. The global order is active lifecycle gate (if any) → DB S/X in sorted `(ownerAccountID, physicalName)` order → table S in sorted `(ownerAccountID, databaseName, tableName)` order → publication row writes; no publication row write lock precedes the physical DB or table locks.
-12. Authorization at statement admission happens before planning. For an existing database/table target, the pre-plan database privilege check resolves under the same tenant/snapshot and authorizes its physical identity; the plan-stage table check consumes physical table ID. `CREATE DATABASE` authorizes account-level create privilege first, then performs its mode-2 folded namespace uniqueness check when applicable; `CREATE TABLE` authorizes create privilege on the resolved parent database before any target-table lookup. Modes 0 and 1 retain their existing create checks and lock path. A missing existing target returns the statement's typed absent outcome, while ambiguity and lookup/privilege errors fail closed. No cross-tenant candidate enters the resolver, including when a snapshot explicitly changes tenant; caller authorization for that snapshot remains the existing separate gate. An alias lookup must not reveal another tenant's object in errors or logs.
-
-No new background worker, timer, queue, or persistent catalog column is introduced. Each sparse folded index entry is owned by a retained noncanonical catalog version and removed by the existing GC watermark, including deleted versions. Canonical versions remain in the exact index and are subject to the same GC. A failed lookup returns no borrowed handle and allocates no retained state. The namespace lock cannot wait on a resource acquired while holding that same lock; this ordering is part of implementation review.
-
-## Compatibility and performance
-
-Modes 0 and 1 keep exact catalog lookup and existing on-disk names. Existing mode-2 names need no migration. On restart, sparse folded indexes rebuild from logtail/catalog versions; no persisted new state is required. The deployment contract is a coordinated replacement of CNs and Proxy; mixed-version behavior is outside scope. Same-version session migration carries the effective mode with an explicit presence marker for all modes. Rollback to the prior binary restores its prior mode-2 lookup behavior without changing catalog rows or publication IDs. The implementation fails closed on ambiguity.
-
-Mode-0/1 lookup and DDL add no catalog scan, SQL, namespace lock, or snapshot refresh. Catalog writes do classify the physical name once to decide whether the sparse index needs an entry. A mode-2 current-snapshot lookup costs one fold of the input plus an exact-index seek and a sparse-index seek, examining only physical names and retained versions sharing the fold: `O(log V + K)` time. Only noncanonical physical spellings contribute an extra tree entry and folded string payload. GC bounds tree entries and strings by retained catalog history. The historical fallback makes one streaming SQL scan with a channel capacity of one result batch; it has no `ORDER BY` workspace or repeated rescans. Its incremental peak process resident memory, including executor pipeline and all queued/in-flight/consumer result batches, must be at most 32 MiB for 10,000 real catalog names. Measure that with the same process immediately before and after a forced historical scan run: `VmHWM_after - VmRSS_before` is a conservative upper bound. Benchmark the 10,000-name account case and require p95 below 100 ms on local storage or return for design review. A prior same-scanner 10,000-name run measured p95 19.45 ms and a 10.27 MiB high-water increase. A controlled 100,000-name stream of equal-length names exercised the production scanner and batch close/drain path with bounded memory growth; it does not establish a 100,000-row real catalog memory or latency guarantee. The unmeasured real-catalog 100,000-name scale remains a delivery risk; if it exceeds operational budgets, return for review of a persisted folded key/index. Query row processing is unchanged.
-
-Benchmarks compare exact mode 0/1 and unique mode 2 lookup before/after at 1, 100, and 10,000 names, with allocations and retained bytes. The necessary per-name classification scan makes a zero-cost default-mode write target impossible without an additional stateful index lifecycle. The accepted gate is no new default-mode allocation, no second tree insertion for canonical names, and no more than a 20% median 10,000-name lowercase update regression against the exact-only merge base on an identical harness. Unbounded sparse-index retention or a full-account scan on a current-snapshot cache hit blocks delivery. Revision 4's full-index cache measured a 241.3 → 413.7 ns/op lowercase update regression and failed this gate. The same-harness merge-base exact-only update took 156.5–196.0 ns/op (median 170.5); revision 6 with a lowercase-ASCII fast path took 186.2–203.4 ns/op (median 187.0), 352 B/op and one allocation in both. This is a measured ~10% median update cost versus merge base, down from the original full-index PR head's 327.4–358.4 ns/op. Exact 10,000-name table lookup took 185.5–203.4 ns/op on merge base and 200.1–207.9 ns/op on revision 6, the same 352 B/op and one allocation. The full-index PR head's unique mode-2 table lookup took 121.3–123.6 ns/op; the sparse implementation took 223.8–226.0 ns/op, zero allocations, due to the extra exact-index seek. The equivalent 10,000-name post-GC incremental cache-heap probe with preallocated names kept alive measured 390.7 B/name for lowercase names on both merge base and candidate; 10,000 mixed-case names retained 425.2 B/name here. This accepts a bounded catalog-cache tradeoff without claiming measured end-to-end SQL latency. A DDL lock-contention test must confirm independent ordinary folded names that do not use the hidden-index prefix gate do not serialize. Separately measure concurrent index-creating DDL within one database: known hidden names share the S prefix gate and should retain concurrency while different names remain protected by per-name X locks. Record statement latency, throughput and approximate contention wait against mode 1; a material regression blocks delivery. COPY ALTER and TRUNCATE intentionally take X and must exclude concurrent S creators, then release the gate on commit, rollback or cancellation. No per-row benchmark substitutes for catalog lookup evidence.
-
-## QA and unhappy paths
-
-| Path | Required oracle |
+| Responsibility | Owner and rule |
 |---|---|
-| modes 0/1/2, quoted and unquoted, exact and variant spelling | name and ID of the one selected object; mode 0 variant is absent |
-| database and table CREATE/USE/SHOW/SELECT/DML/DROP | public SQL result plus physical catalog spelling |
-| mode-2 duplicate CREATE, including concurrent mode-2 spelling variants | one object, other operation gets duplicate; no leaked lock |
-| mode-0 `Foo`/`foo`, new mode-2 session | ambiguity for all spellings; neither ID changes |
-| transaction create, drop, rollback, drop/recreate | visibility and ID are correct before/after each terminal path |
-| mode-2 publication-protected DROP and reincarnation | protected ID survives; stale publication never protects or binds the new ID |
-| mode-2 publication explicit TABLE alias, duplicate alias, ambiguity, cross-owner DB | one physical table name per ID stored, or typed error before publication write |
-| mode-2 explicit TABLE publication racing DROP/recreate of that table | publication commits only for the locked table ID and stored physical name, or fails before write; no stale table entry or leaked lock |
-| two mode-2 ALTER PUBLICATION operations swapping old and new databases | sorted DB S lock order, bounded completion or typed retry, and publication rows reference the final physical IDs |
-| temporary shadowing, duplicate alias, journal rollback and session migration | same physical DB/temp identity and original spelling before and after migration |
-| same-version migration, with/without temp and differing source/target mode | exported mode is installed before replay; missing or invalid mode is rejected for every mode, including source mode 2 against target default 0/1 |
-| coordinated CN and Proxy replacement | all serving components use the same mode-2 resolution contract; mixed-version serving is outside scope |
-| pre-plan privilege under alias, another tenant and snapshot tenant | authorize only the physical object in permitted tenant; errors fail closed |
-| upper-case system database alias | resolves to protected canonical system ID; guards cannot be bypassed |
-| non-sys `mo_table_col_max('MO_CATALOG','MO_DATABASE',...)` in mode 2 | same invalid-input rejection as the lowercase spelling; no sys catalog value leaks |
-| pre-fix folded PITR metadata for a mixed-case physical table | new frontend and INTERNAL PITR reject a second active policy; restore at historical time returns only historical rows |
-| ordinary DB and subscription DB from mode 0 colliding under mode 2 | view recovery reports ambiguity across the complete database namespace, even if catalog results are split into batches |
-| current cache, historical fallback, restart and two independent CNs | same zero/one/ambiguity result at the same snapshot |
-| GC retires one of two historical colliding names while one survives in cache | storage still returns ambiguity at old snapshot |
-| sparse index with canonical and mixed-case versions | canonical-only lookup, mixed-only lookup, coexistence ambiguity, tombstone and recreate at each spelling, and GC preserve the same visible name/ID at every served snapshot; mode-0/1 exact lookup remains unchanged |
-| error, timeout, cancellation during lookup/lock | transaction cleanup releases locks and partial index work is not published |
-| malformed identifier bytes | fold does not corrupt catalog key bytes |
+| Effective mode | The session system-variable snapshot; statement admission attaches the mode to context. No session mode means exact internal lookup. Do not maintain a second cached mode and initialization flag. |
+| Committed visibility | disttae catalog cache, its existing version order, logtail watermark and GC. No separate visibility state machine. |
+| Transaction visibility | Existing database/table operation chains. A lazily built folded membership index follows the same create/delete/rollback mutations. |
+| Temporary aliases | Existing session alias map, mutation journal and mutex. One folded membership map; derive zero/one/ambiguity from that group instead of caching a second summary map. |
+| Database locking | `openDDLDatabaseWithLock`: resolve physical name, acquire existing DB lock, refresh RC visibility, and verify the generation. Share it across DDL consumers. |
+| Snapshot freshness | Reuse main's `advanceLifecycleAdmissionSnapshot` and engine TN-ordered logtail barrier. A local CN clock does not establish the ordering of a preceding owner's commit. |
+| DROP / COPY / TRUNCATE lifecycle | Main's complete-domain or broad admission owns ordering and identity revalidation. Do not repeat its DB lock, snapshot refresh and generation check in a mode-2 branch. |
+| Uniqueness | Existing transaction lock service with folded namespace keys; no separate lock manager or cleanup protocol. |
+| Session migration | Existing migration RPC and lifecycle; carry effective mode before USE, temporary replay and PREPARE. A global-only setting is not an ordinary `SET SESSION` variable, so retain the small dedicated payload rather than changing variable replay semantics. |
 
-Use focused cache/transaction unit tests with deterministic barriers for concurrent CREATE and GC, then SQL BVT on one isolated service. Add a two-CN or restart test only where a cache rebuild/cross-process invariant is otherwise unproved. Reuse existing mode-0/1 BVT and add the smallest mode-2 public regression. Run incremental static checks over parser, frontend, disttae cache/engine and direct consumers, then exact linked package tests. Preserve the pre-fix service witness and verify the same SQL after the change. Avoid generated result acceptance without normal comparison and same-instance cleanup rerun.
+### Catalog index decision
 
-## Alternatives and decisions
+Keep the exact name trees and sparse folded trees. Canonical physical names
+live only in the exact tree; other spellings additionally enter the folded
+tree. Mode 2 merges the canonical candidate with noncanonical variants in
+physical-name order. Within each name, the first snapshot-visible version is
+authoritative; a tombstone hides older live versions. Existing insert/GC owners
+maintain both indexes before their corresponding visibility boundaries.
 
-- Parser-only spelling fix solves the reported exact-spelling DROP but leaves case-variant USE, tables, duplicates and publications incorrect.
-- SQL `lower(name)` for every lookup avoids new cache indexes but adds catalog I/O and account scans to common queries; it also differs from the byte-preserving fold on malformed UTF-8.
-- The rare PITR duplicate and view recovery catalog probes may use SQL `lower(name)` only to find a superset of candidates. They compare every returned physical name with `identifier.Fold` before deciding identity or ambiguity, without a limit that can hide a later match.
-- Revision 4's full folded index gives one mode-2 seek but doubles index insertion for every catalog version, including lowercase names common in mode 1. Its measured default-mode update regression exceeds the acceptance gate. Revision 6 uses a sparse folded index with one extra exact seek for mode-2 reads and merges canonical with variant candidates. Candidate merge, GC, and production-cache benchmarks are required before approval; the standalone B-tree probe only motivated the change.
-- A persisted folded catalog key would make historical fallback indexed, but changes the catalog format and migration/upgrade protocol. It is disproportionate until the measured fallback path requires it.
-- Choosing an exact match among ambiguous mode-0 names would make mode-2 identity depend on input spelling and could target the wrong physical ID. Return ambiguity instead.
+A prototype with one tree ordered by `(tenant, database ID, fold, physical
+name, version)` passed the catalog UTs, but failed the default-path cost gate.
+Three serial, alternating benchmark runs on the same rebased source/toolchain,
+GOMAXPROCS=2, 10,000 names, produced these medians:
 
-## Decision log and implementation gate
+| Operation | Sparse trees | Unified tree prototype |
+|---|---:|---:|
+| Exact mixed-case table lookup | 159.6 ns, 1 allocation | 262.8 ns, 2 allocations |
+| Unique mode-2 table lookup | 302.9 ns, 0 allocations | 180.8 ns, 0 allocations |
+| Lowercase table version update | 233.8 ns | 263.4 ns |
+| Mixed-case table version update | 441.9 ns | 318.3 ns |
+| Retained bytes per mixed-case name | 425.5 | 407.0 |
 
-This is a feature design: it crosses parser/frontend/planner/engine/cache/authorization and adds an indexed catalog view, concurrency keys, and temporary-session semantics. The exact reviewed revision must be committed before extending production code beyond the initial parser/frontend spelling correction. The independent reviewer must approve the typed error path, historical completeness, namespace and publication lock orders, tenant boundary, temp migration, and performance bound. If implementation finds a reversed lock order or publication ID-0 rows that invalidate the above contract, revise this document and repeat review before delivery.
+The extra fold on every exact query and comparator work outweigh the code and
+heap reduction for default workloads. These are microbenchmarks on a shared
+machine, not SQL throughput claims. Keep a zero-new-allocation exact path and
+one tree update for canonical names. Recheck the final lowercase write cost
+against current main; the existing acceptance budget is a 20% median increase.
+Do not introduce a custom Unicode comparator to rescue the prototype.
 
-The dynamic setting remains supported. This document defines ambiguity at lookup while deferring any change to `SET GLOBAL` semantics. The implementation must not claim that mode-2 aliases are fully supported until database and table paths, publications, transaction-local state, and historical snapshots all pass their mapped checks.
+### Historical resolution
+
+Cache completeness must hold both before and after visiting candidates because
+GC publishes its new start watermark before removing versions. If completeness
+is lost, discard the partial result and scan storage at the fixed transaction
+snapshot. One streaming catalog query is scoped by tenant and database ID;
+filter with the common fold in Go. Database and table scans share their
+stream-consumption and snapshot-validation code. No whole-result buffering,
+SQL collation approximation, repeated pagination scan, or extra persistent key.
+The existing stream owner cancels, drains/closes result batches, and joins the
+producer on all terminal paths. Early uniqueness failure must still finish
+cleanup. Only the historical fallback scans the scoped catalog.
+
+### DDL ordering and identity
+
+Mode-2 creators serialize the absence-to-create transition on
+`serial(account, reservedTag, foldedDatabase)` or
+`serial(account, reservedTag, databaseID, foldedTable)` before rechecking.
+Physical catalog row locks still use the resolved spelling, shared with
+publication and ordinary DDL. A positive CREATE existence check needs no new
+namespace wait. Internal callers that disable locking must still receive the
+physical database name.
+
+Known hidden-index names take the existing prefix gate in shared mode before
+sorted per-name exclusive locks. COPY ALTER and TRUNCATE take the prefix gate
+exclusively before table locks because nested CREATE generates fresh names.
+The tuple arity separates the prefix gate from physical and namespace keys.
+Retain this gate until a common lifecycle owner proves it redundant for every
+creator, including user names with the internal prefix and SI/internal paths.
+Ordinary unrelated names must not serialize on it.
+
+Physical database generation must survive locking; table generation must match
+the plan before mutation. Public RC destructive paths reuse main's admission;
+SI keeps its fixed snapshot. Propagate lookup errors; only a demonstrated
+generation change becomes a definition-change retry. A dropped/recreated name
+must not inherit an old publication, privilege, temporary alias, or PITR target.
+Publication database and table locks precede publication-row writes and are
+ordered by tenant and physical name across multiple databases.
+
+### Migration and recovery
+
+The effective mode is captured from the source session, not the current global
+value. Install it into a private target session-variable snapshot before any
+name-dependent replay. Missing or invalid payload fails before replay; target
+global defaults remain unchanged. Reuse ordinary migration cancellation and
+target cleanup. No additional mixed-version negotiation or compatibility path.
+
+Historical Snapshot/PITR resolution uses historical names and physical IDs,
+not today's same-named object. Legacy folded PITR names may match only the same
+folded identity and tenant; physical generation still decides lineage.
+Subscription membership is checked after resolving the publisher's physical
+table and cannot be shadowed by a session temporary table. SHOW and direct
+catalog consumers use physical database/table names returned by resolution.
+
+## Validation and delivery
+
+Implementation, tests and documentation are reviewed separately. A new helper
+must replace repeated responsibility, not add a parallel execution path.
+Remove replaced branches, summaries and assertions about index internals in
+the same change. Preserve distinct behavioral oracles and reuse fixture owners.
+No review report is committed with production changes.
+
+- Cache UTs: exact controls; zero/one/ambiguity; Unicode and malformed bytes;
+  physical ordering and visitor stop; tombstones, reincarnation and GC boundaries.
+- Workspace / temporary UTs: create/drop/rollback/replacement and concurrent
+  lookup/mutation under `-race`; migration with different defaults and bad payload.
+- DDL UTs: physical lock key, generation change, lookup/cancellation/barrier error,
+  disabled locks, SI, and reuse of already admitted RC paths.
+- Public SQL BVT: modes 0/1 controls and all three mode-2 suites, including
+  publications, temporary names, SHOW, recovery and transaction rollback.
+  Compare real results and rerun on the same service to verify cleanup.
+- Incremental gofmt/vet/lint cover all changed packages and affected consumers.
+  Use bounded local builds/tests; no simultaneous performance contenders.
+- Final review requires terminal UT/race/SCA/BVT evidence. A successful build or
+  a prior revision's report is not a pass for a changed semantic boundary.
