@@ -195,6 +195,95 @@ func TestPitrCases(t *testing.T) {
 	)
 }
 
+// TestCDCNoPrimaryKeyRejected exercises the public CREATE CDC SQL path. It is
+// intentionally independent of the external sink used by TestCDCCases: a
+// source without a user-visible primary key must be rejected before a task is
+// persisted or any sink connection is attempted.
+func TestCDCNoPrimaryKeyRejected(t *testing.T) {
+	stubOpenDbConn := gostub.Stub(&cdc.OpenDbConn, func(_ context.Context, _, _, _ string, _ int, _ string) (*sql.DB, error) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		mock.ExpectClose()
+		return db, nil
+	})
+	defer stubOpenDbConn.Reset()
+
+	runSQLIntegration(t, func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		exec := testutils.GetSQLExecutor(cn)
+		db := testutils.GetDatabaseName(t)
+		defer cleanupSQLIntegration(t, cn, "drop database if exists "+db)
+
+		res, err := exec.Exec(ctx, "create database "+db, executor.Options{})
+		require.NoError(t, err)
+		res.Close()
+
+		execSQL := func(sql string) {
+			res, execErr := exec.Exec(ctx, sql, executor.Options{}.WithDatabase(db))
+			require.NoError(t, execErr)
+			res.Close()
+		}
+		execSQL("create pitr if not exists cdc_pitr for account range 3 'h' internal")
+		execSQL("create table with_pk (id int primary key, value int)")
+		execSQL("create table composite_pk (id1 int, id2 int, value int, primary key (id1, id2))")
+
+		conn := "mysql://user:password@127.0.0.1:1"
+		execCDC := func(sql string) {
+			res, execErr := exec.Exec(ctx, sql, executor.Options{}.WithDatabase(db))
+			require.NoError(t, execErr)
+			res.Close()
+		}
+		verifyTask := func(name string, want bool) {
+			res, queryErr := exec.Exec(ctx,
+				"select count(*) from mo_catalog.mo_cdc_task where task_name='"+name+"'",
+				executor.Options{}.WithDatabase(db))
+			require.NoError(t, queryErr)
+			defer res.Close()
+			require.Equal(t, want, testutils.ReadCount(res) > 0)
+		}
+
+		execCDC(
+			"create cdc accepted_table '" + conn + "' 'matrixone' '" + conn + "' '" + db + ".with_pk' {'Level'='table'}",
+		)
+		verifyTask("accepted_table", true)
+		execCDC(
+			"create cdc accepted_composite '" + conn + "' 'matrixone' '" + conn + "' '" + db + ".composite_pk' {'Level'='table'}",
+		)
+		verifyTask("accepted_composite", true)
+		execCDC(
+			"create cdc accepted_database '" + conn + "' 'matrixone' '" + conn + "' '" + db + "' {'Level'='database'}",
+		)
+		verifyTask("accepted_database", true)
+
+		badDB := db + "_bad"
+		res, err = exec.Exec(ctx, "create database "+badDB, executor.Options{})
+		require.NoError(t, err)
+		res.Close()
+		defer cleanupSQLIntegration(t, cn, "drop database if exists "+badDB)
+		res, err = exec.Exec(ctx, "create table no_pk (value int)", executor.Options{}.WithDatabase(badDB))
+		require.NoError(t, err)
+		res.Close()
+		_, err = exec.Exec(ctx,
+			"create cdc rejected_no_pk '"+conn+"' 'matrixone' '"+conn+"' '"+badDB+"' {'Level'='database'}",
+			executor.Options{}.WithDatabase(badDB))
+		require.Error(t, err)
+
+		res, err = exec.Exec(ctx,
+			"select count(*) from mo_catalog.mo_cdc_task where task_name='rejected_no_pk'",
+			executor.Options{}.WithDatabase(db))
+		require.NoError(t, err)
+		defer res.Close()
+		require.Equal(t, 0, testutils.ReadCount(res))
+		res, err = exec.Exec(ctx, "drop cdc all internal", executor.Options{})
+		require.NoError(t, err)
+		res.Close()
+	})
+}
+
 func TestCDCCases(t *testing.T) {
 	if os.Getenv("GITHUB_ACTIONS") == "true" {
 		t.Skip("skipping CDC integration test on GitHub Actions; it requires an external MySQL endpoint")
@@ -230,9 +319,11 @@ func TestCDCCases(t *testing.T) {
 			db := testutils.GetDatabaseName(t)
 			defer cleanupSQLIntegration(t, cn1, "drop database if exists "+db)
 			table := "table01"
+			noPKTable := "table_no_pk"
 			cdcTaskDB := "cdc_task_db"
 			cdcTaskTbl := "cdc_task_tbl"
 			cdcTaskAcc := "cdc_task_acc"
+			cdcTaskNoPK := "cdc_task_no_pk"
 			port := fmt.Sprintf("%d", c.ID()+199)
 
 			conn := "mysql://dump:#admin:111@127.0.0.1:" + port
@@ -252,7 +343,7 @@ func TestCDCCases(t *testing.T) {
 
 			// setup schema
 			mustExec("", "create database "+db)
-			mustExec(db, "create table "+table+" (col1 int)")
+			mustExec(db, "create table "+table+" (col1 int primary key)")
 
 			// ensure PITR for CDC precondition
 			mustExec(db, "create pitr if not exists pitr_db for database "+db+" range 3 'h' internal")
@@ -399,6 +490,13 @@ func TestCDCCases(t *testing.T) {
 			// Case 5: duplicate create should error
 			_, err = exec.Exec(ctx, "create cdc "+cdcTaskDB+" '"+conn+"' 'matrixone' '"+conn+"' '"+db+"' {'Level'='database'} internal", executor.Options{}.WithDatabase(db))
 			require.Error(t, err)
+
+			// A source without a user-visible primary key is not supported: reject
+			// it on the normal frontend SQL path before a CDC task is persisted.
+			mustExec(db, "create table "+noPKTable+" (col1 int)")
+			_, err = exec.Exec(ctx, "create cdc "+cdcTaskNoPK+" '"+conn+"' 'matrixone' '"+conn+"' '"+db+"."+noPKTable+"' {'Level'='table'}", executor.Options{}.WithDatabase(db))
+			require.Error(t, err)
+			verifyTaskPresent(cdcTaskNoPK, false)
 
 			// Validation selects for presence
 			require.Greater(t, rows("", "select * from mo_catalog.mo_cdc_task"), 0)

@@ -123,19 +123,24 @@ func PutScanner(scanner *Scanner) {
 
 const skippedScannerToken = -1
 
-func (s *Scanner) Scan() (int, string) {
+func (s *Scanner) Scan() (int, string) { return s.scan(false) }
+
+// ScanWithComments retains the authoritative lexer rules while exposing ordinary comments.
+func (s *Scanner) ScanWithComments() (int, string) { return s.scan(true) }
+
+func (s *Scanner) scan(comments bool) (int, string) {
 	for {
 		s.scanCheckpoint()
-		token, value := s.scanToken()
+		token, value := s.scanToken(comments)
 		if token != skippedScannerToken {
 			return token, value
 		}
 	}
 }
-func (s *Scanner) scanToken() (int, string) {
+func (s *Scanner) scanToken(comments bool) (int, string) {
 	if s.MysqlSpecialComment != nil {
 		msc := s.MysqlSpecialComment
-		tok, val := msc.Scan()
+		tok, val := msc.scan(comments)
 		if tok != 0 {
 			return tok, val
 		}
@@ -255,7 +260,7 @@ func (s *Scanner) scanToken() (int, string) {
 		case '/':
 			s.inc()
 			id, str := s.scanCommentTypeLine(2)
-			if id == LEX_ERROR {
+			if comments || id == LEX_ERROR {
 				return id, str
 			}
 			return skippedScannerToken, ""
@@ -271,7 +276,7 @@ func (s *Scanner) scanToken() (int, string) {
 				return skippedScannerToken, ""
 			default:
 				id, str := s.scanCommentTypeBlock()
-				if id == LEX_ERROR {
+				if comments || id == LEX_ERROR {
 					return id, str
 				}
 				return skippedScannerToken, ""
@@ -281,7 +286,7 @@ func (s *Scanner) scanToken() (int, string) {
 		}
 	case ch == '*':
 		if !s.CommentFlag {
-			return s.stepBackOneChar(ch)
+			return s.stepBackOneChar(ch, comments)
 		}
 		s.inc()
 		switch s.cur() {
@@ -293,11 +298,11 @@ func (s *Scanner) scanToken() (int, string) {
 			}
 			return skippedScannerToken, ""
 		default:
-			return s.stepBackOneChar(ch)
+			return s.stepBackOneChar(ch, comments)
 		}
 	case ch == '\'':
 		if !s.CommentFlag {
-			return s.stepBackOneChar(ch)
+			return s.stepBackOneChar(ch, comments)
 		}
 		s.inc()
 		switch {
@@ -325,12 +330,12 @@ func (s *Scanner) scanToken() (int, string) {
 	case ch == '#':
 		s.inc()
 		id, str := s.scanCommentTypeLine(1)
-		if id == LEX_ERROR {
+		if comments || id == LEX_ERROR {
 			return id, str
 		}
 		return skippedScannerToken, ""
 	default:
-		return s.stepBackOneChar(ch)
+		return s.stepBackOneChar(ch, comments)
 	}
 }
 
@@ -410,7 +415,7 @@ func (s *Scanner) readVersion() bool {
 	return true
 }
 
-func (s *Scanner) stepBackOneChar(ch uint16) (int, string) {
+func (s *Scanner) stepBackOneChar(ch uint16, comments bool) (int, string) {
 	s.inc()
 	switch ch {
 	case eofChar:
@@ -450,7 +455,7 @@ func (s *Scanner) stepBackOneChar(ch uint16) (int, string) {
 			if nextChar == ' ' || nextChar == '\n' || nextChar == '\t' || nextChar == '\r' || nextChar == eofChar {
 				s.inc()
 				id, str := s.scanCommentTypeLine(2)
-				if id == LEX_ERROR {
+				if comments || id == LEX_ERROR {
 					return id, str
 				}
 				return skippedScannerToken, ""

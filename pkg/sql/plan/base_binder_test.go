@@ -834,10 +834,9 @@ func TestBinaryLiteralComparisonKeepsVarbinaryColumnUncast(t *testing.T) {
 	testCases := []struct {
 		name   string
 		filter string
-		colArg int
 	}{
-		{name: "column on left", filter: "a = binary x'41'", colArg: 0},
-		{name: "column on right", filter: "binary x'41' = a", colArg: 1},
+		{name: "column on left", filter: "a = binary x'41'"},
+		{name: "column on right", filter: "binary x'41' = a"},
 	}
 
 	for _, tc := range testCases {
@@ -866,8 +865,12 @@ func TestBinaryLiteralComparisonKeepsVarbinaryColumnUncast(t *testing.T) {
 			require.NotNil(t, eq)
 			require.Equal(t, "=", eq.Func.ObjName)
 			require.Len(t, eq.Args, 2)
-			require.NotNil(t, eq.Args[tc.colArg].GetCol(),
+			require.NotNil(t, eq.Args[0].GetCol(),
 				"the indexed VARBINARY column must not be wrapped in a cast")
+			require.Equal(t, int32(types.T_varbinary), eq.Args[0].Typ.Id)
+			require.Equal(t, int32(8), eq.Args[0].Typ.Width)
+			require.Equal(t, uint32(types.CharsetBinary), eq.Args[0].Typ.Charset)
+			require.Equal(t, int32(types.T_varbinary), eq.Args[1].Typ.Id)
 		})
 	}
 }
@@ -1436,7 +1439,7 @@ func TestBuildPlan_DatetimeTimestampComparisonIsZonemappable(t *testing.T) {
 	require.Len(t, filterArgs, 2)
 	require.NotNil(t, filterArgs[0].GetCol())
 	require.Equal(t, int32(types.T_datetime), filterArgs[0].Typ.Id)
-	require.Equal(t, int32(types.T_timestamp), filterArgs[1].Typ.Id)
+	require.Equal(t, int32(types.T_datetime), filterArgs[1].Typ.Id)
 	require.True(t, ExprIsZonemappable(compilerCtx.GetContext(), scan.FilterList[0]))
 }
 

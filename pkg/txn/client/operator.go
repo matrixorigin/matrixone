@@ -209,14 +209,6 @@ func WithTxnEnableCheckDup() TxnOption {
 	}
 }
 
-func WithDisableTrace(value bool) TxnOption {
-	return func(tc *txnOperator) {
-		if value {
-			tc.opts.options = tc.opts.options.WithDisableTrace()
-		}
-	}
-}
-
 func WithDisableWaitPaused() TxnOption {
 	return func(tc *txnOperator) {
 		tc.opts.options = tc.opts.options.WithDisableWaitPaused()
@@ -292,8 +284,6 @@ type txnOperator struct {
 		parent                             atomic.Pointer[txnOperator]
 		waiter                             *activeTxnWaiter
 		waitActiveCost                     time.Duration
-		sequence                           atomic.Uint64
-		commitSeq                          uint64
 		createAt                           time.Time
 		commitAt                           time.Time
 		createTs                           timestamp.Timestamp
@@ -733,8 +723,6 @@ func (tc *txnOperator) initReset(sealRunSQL bool) {
 	tc.reset.parent.Store(nil)
 	tc.reset.waiter = nil
 	tc.reset.waitActiveCost = 0
-	tc.reset.sequence.Store(0)
-	tc.reset.commitSeq = 0
 	tc.reset.createAt = time.Time{}
 	tc.reset.commitAt = time.Time{}
 	tc.reset.createTs = timestamp.Timestamp{}
@@ -844,14 +832,11 @@ func (tc *txnOperator) waitActive(ctx context.Context) error {
 		tc.setWaitActive(false)
 	}()
 
-	cost, err := tc.doCostAction(
-		ctx,
-		time.Time{},
-		WaitActiveEvent,
-		func() error {
-			return tc.reset.waiter.wait(ctx)
-		},
-		false)
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+	start := time.Now()
+	err := tc.reset.waiter.wait(ctx)
+	cost := time.Since(start)
 	tc.reset.waitActiveCost = cost
 	v2.TxnWaitActiveDurationHistogram.Observe(cost.Seconds())
 	return err
@@ -992,29 +977,21 @@ func (tc *txnOperator) updateSnapshot(
 		return nil
 	}
 
-	_, err := tc.doCostAction(
-		ctx,
-		time.Time{},
-		UpdateSnapshotEvent,
-		func() error {
-			var (
-				next timestamp.Timestamp
-				err  error
-			)
-			if waiter, ok := tc.timestampWaiter.(closeAwareTimestampWaiter); ok {
-				next, err = waiter.GetTimestampWithClose(ctx, ts, closeC)
-			} else {
-				next, err = tc.timestampWaiter.GetTimestamp(ctx, ts)
-			}
-			if err != nil {
-				return err
-			}
-			tc.catalogReadRevision.Add(1)
-			tc.mu.txn.SnapshotTS = next
-			return nil
-		},
-		true)
-	return err
+	var (
+		next timestamp.Timestamp
+		err  error
+	)
+	if waiter, ok := tc.timestampWaiter.(closeAwareTimestampWaiter); ok {
+		next, err = waiter.GetTimestampWithClose(ctx, ts, closeC)
+	} else {
+		next, err = tc.timestampWaiter.GetTimestamp(ctx, ts)
+	}
+	if err != nil {
+		return err
+	}
+	tc.catalogReadRevision.Add(1)
+	tc.mu.txn.SnapshotTS = next
+	return nil
 }
 
 func (tc *txnOperator) ApplySnapshot(data []byte) error {
@@ -1149,17 +1126,16 @@ func (tc *txnOperator) commitOwned(ctx context.Context) (err error) {
 
 	readonly := tc.reset.workspace != nil && tc.reset.workspace.Readonly()
 	if !readonly {
-		tc.reset.commitSeq = tc.NextSequence()
 		tc.reset.commitAt = time.Now()
 
-		err = tc.triggerEvent(ctx, newEvent(CommitEvent, txnMeta, tc.reset.commitSeq, nil))
+		err = tc.triggerEvent(ctx, newEvent(CommitEvent, txnMeta, nil))
 		if err != nil {
 			return
 		}
 		defer func() {
 			cost := time.Since(tc.reset.commitAt)
 			v2.TxnCNCommitDurationHistogram.Observe(cost.Seconds())
-			e := tc.triggerEvent(ctx, newCostEvent(CommitEvent, tc.getTxnMeta(false), tc.reset.commitSeq, err, cost))
+			e := tc.triggerEvent(ctx, newCompletionEvent(CommitEvent, tc.getTxnMeta(false), err))
 			if e != nil {
 				err = errors.Join(e, err)
 			}
@@ -1255,12 +1231,9 @@ func (tc *txnOperator) rollbackOwned(ctx context.Context) (err error) {
 		return workspaceErr
 	}
 
-	seq := tc.NextSequence()
-	start := time.Now()
-	tc.triggerEventLocked(ctx, newEvent(RollbackEvent, txnMeta, seq, nil))
+	tc.triggerEventLocked(ctx, newEvent(RollbackEvent, txnMeta, nil))
 	defer func() {
-		cost := time.Since(start)
-		tc.triggerEventLocked(ctx, newCostEvent(RollbackEvent, txnMeta, seq, err, cost))
+		tc.triggerEventLocked(ctx, newCompletionEvent(RollbackEvent, txnMeta, err))
 	}()
 
 	defer func() {
@@ -1830,15 +1803,6 @@ func (tc *txnOperator) handleErrorResponse(ctx context.Context, resp txn.TxnResp
 		}
 		return tc.checkTxnError(resp.TxnError, writeTxnErrors)
 	case txn.TxnMethod_Commit, txn.TxnMethod_CommitAutoIncrEpochFence:
-		tc.triggerEventLocked(
-			ctx,
-			newCostEvent(
-				CommitResponseEvent,
-				tc.mu.txn,
-				tc.reset.commitSeq,
-				nil,
-				time.Since(tc.reset.commitAt)))
-
 		if err := tc.checkResponseTxnStatusForCommit(resp); err != nil {
 			return err
 		}
@@ -2038,15 +2002,9 @@ func (tc *txnOperator) unlock(ctx context.Context) error {
 	// rc mode need to see the committed value, so wait logtail applied
 	if tc.mu.txn.IsRCIsolation() &&
 		tc.timestampWaiter != nil {
-		cost, err := tc.doCostAction(
-			ctx,
-			time.Time{},
-			CommitWaitApplyEvent,
-			func() error {
-				_, err := tc.timestampWaiter.GetTimestamp(ctx, tc.mu.txn.CommitTS)
-				return err
-			},
-			true)
+		start := time.Now()
+		_, err := tc.timestampWaiter.GetTimestamp(ctx, tc.mu.txn.CommitTS)
+		cost := time.Since(start)
 		v2.TxnCNCommitWaitLogtailDurationHistogram.Observe(cost.Seconds())
 
 		if err != nil {
@@ -2056,17 +2014,7 @@ func (tc *txnOperator) unlock(ctx context.Context) error {
 		}
 	}
 
-	_, err := tc.doCostAction(
-		ctx,
-		time.Time{},
-		UnlockEvent,
-		func() error {
-			return tc.lockService.Unlock(
-				ctx,
-				tc.mu.txn.ID,
-				tc.mu.txn.CommitTS)
-		},
-		true)
+	err := tc.lockService.Unlock(ctx, tc.mu.txn.ID, tc.mu.txn.CommitTS)
 	if err != nil {
 		tc.logger.Error("failed to unlock txn",
 			util.TxnField(tc.mu.txn),
@@ -2282,47 +2230,6 @@ func (tc *txnOperator) LockSkipped(
 
 func (tc *txnOperator) TxnOptions() txn.TxnOptions {
 	return tc.opts.options
-}
-
-func (tc *txnOperator) NextSequence() uint64 {
-	return tc.reset.sequence.Add(1)
-}
-
-func (tc *txnOperator) doCostAction(
-	ctx context.Context,
-	startAt time.Time,
-	event EventType,
-	action func() error,
-	locked bool) (time.Duration, error) {
-	if !locked {
-		tc.mu.RLock()
-		defer tc.mu.RUnlock()
-	}
-
-	seq := tc.NextSequence()
-	if startAt == (time.Time{}) {
-		startAt = time.Now()
-	}
-
-	tc.triggerEventLocked(
-		ctx,
-		newEvent(
-			event,
-			tc.mu.txn,
-			seq,
-			nil))
-
-	err := action()
-	cost := time.Since(startAt)
-	tc.triggerEventLocked(
-		ctx,
-		newCostEvent(
-			event,
-			tc.mu.txn,
-			seq,
-			err,
-			time.Since(startAt)))
-	return cost, err
 }
 
 func (tc *txnOperator) EnterRunSqlWithTokenAndSQL(cancel context.CancelFunc, sql string) uint64 {

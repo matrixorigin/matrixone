@@ -708,6 +708,14 @@ func requiresPessimisticObjectLifecycleTxn(
 	defaultDatabase string,
 ) bool {
 	switch st := stmt.(type) {
+	case *tree.CreateTable:
+		// An explicit optimistic transaction must not publish a persistent
+		// catalog mapping outside the CDC lifecycle guard.  Autocommit CREATE
+		// TABLE statements already get their own transaction and must retain
+		// the normal DDL path; forcing every such statement through the CDC
+		// target protocol would also serialize unrelated DDL.  The admission
+		// check in TxnHandler.Create rejects an active non-pessimistic txn.
+		return !st.Temporary && ses != nil && ses.GetTxnHandler().InActiveTxn()
 	case *tree.TruncateTable, *tree.CreatePitr, *tree.DropPitr, *tree.AlterPitr,
 		*tree.DropDatabase, *tree.DropView, *tree.DropSequence, *tree.AlterView,
 		*tree.AlterSequence, *tree.DataBranchDeleteTable, *tree.DataBranchDeleteDatabase,
@@ -794,23 +802,6 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 	if execCtx.ses.GetFromRealUser() {
 		opts = append(opts,
 			txnclient.WithUserTxn())
-	}
-
-	if execCtx.ses.IsBackgroundSession() ||
-		execCtx.ses.DisableTrace() {
-		opts = append(opts, txnclient.WithDisableTrace(true))
-	} else {
-		varVal, err := execCtx.ses.GetSessionSysVar("disable_txn_trace")
-		if err != nil {
-			return err
-		}
-		if def, ok := gSysVarsDefs["disable_txn_trace"]; ok {
-			if boolType, ok := def.GetType().(SystemVariableBoolType); ok {
-				if boolType.IsTrue(varVal) {
-					opts = append(opts, txnclient.WithDisableTrace(true))
-				}
-			}
-		}
 	}
 
 	// Attach session-level lock_wait_timeout to the txn so the lock service

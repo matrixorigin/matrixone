@@ -29,7 +29,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/objectkey"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -1070,8 +1069,27 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 	}
 
 	switch node.NodeType {
-	case plan.Node_ADAPTIVE_TOP:
-		if len(node.Children) < 2 || len(node.BindingTags) > 1 {
+	case plan.Node_ADAPTIVE_TOP, plan.Node_VECTOR_QUERY_TOP:
+		resultChildren := node.Children
+		outputChild := int32(0)
+		if node.NodeType == plan.Node_VECTOR_QUERY_TOP {
+			// Child 0 is control input, not the result schema. Keep the logical
+			// producer reference explicit for prepared type refresh and metadata.
+			outputChild = 1
+			if len(node.Children) != 3 {
+				return nil, moerr.NewInternalError(builder.GetContext(), "invalid scalar vector query topology")
+			}
+			provider := builder.qry.Nodes[node.Children[0]]
+			if len(provider.BindingTags) != 1 || len(provider.ProjectList) != 1 {
+				return nil, moerr.NewInternalError(builder.GetContext(), "invalid scalar vector provider projection")
+			}
+			colRefCnt[[2]int32{provider.BindingTags[0], 0}]++
+			if _, err := builder.remapAllColRefs(provider.NodeId, step, colRefCnt, colRefBool, sinkColRef); err != nil {
+				return nil, err
+			}
+			resultChildren = node.Children[1:]
+		}
+		if len(resultChildren) < 2 || len(node.BindingTags) > 1 {
 			return nil, moerr.NewInternalError(builder.GetContext(), "invalid adaptive top remapping topology")
 		}
 		needed := make([]int, 0, len(node.ProjectList))
@@ -1093,7 +1111,7 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			needed = append(needed, 0)
 		}
 		var first *ColRefRemapping
-		for _, childID := range node.Children {
+		for _, childID := range resultChildren {
 			for _, pos := range needed {
 				increaseRefCnt(node.ProjectList[pos], 1, colRefCnt)
 			}
@@ -1131,8 +1149,8 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			node.ProjectList = make([]*plan.Expr, len(first.localToGlobal))
 			for i, globalRef := range first.localToGlobal {
 				node.ProjectList[i] = &plan.Expr{
-					Typ:  builder.qry.Nodes[node.Children[0]].ProjectList[i].Typ,
-					Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: int32(i)}},
+					Typ:  builder.qry.Nodes[resultChildren[0]].ProjectList[i].Typ,
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: outputChild, ColPos: int32(i)}},
 				}
 				remapping.addColRef(globalRef)
 			}
@@ -1145,12 +1163,12 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			remapping.addColRef(globalRef)
 			newProjectList = append(newProjectList, &plan.Expr{
 				Typ:  node.ProjectList[pos].Typ,
-				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: int32(len(newProjectList))}},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: outputChild, ColPos: int32(len(newProjectList))}},
 			})
 		}
 		node.ProjectList = newProjectList
 
-	case plan.Node_FUNCTION_SCAN, plan.Node_VECTOR_INDEX_SCAN:
+	case plan.Node_FUNCTION_SCAN, plan.Node_VECTOR_INDEX_SCAN, plan.Node_VECTOR_QUERY_SOURCE:
 		for _, expr := range node.FilterList {
 			increaseRefCnt(expr, 1, colRefCnt)
 		}
@@ -4016,7 +4034,10 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.skipStats = builder.canSkipStats()
 		builder.rewriteDistinctToAGG(rootID)
 		rootID = builder.rewriteEffectlessAggToProject(rootID)
-		rootID = builder.optimizeFilters(rootID)
+		rootID, err = builder.optimizeFilters(rootID)
+		if err != nil {
+			return nil, err
+		}
 		// WHERE predicates are initially represented by a Filter between AGG
 		// and TABLE_SCAN.  Revisit the proof after filter pushdown so a unique
 		// grouped scan can be eliminated without moving LIMIT below HAVING.
@@ -4038,12 +4059,13 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		colRefCnt := make(map[[2]int32]int)
 		builder.countColRefs(rootID, colRefCnt)
 		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, colRefCnt)
-		var fusedScalarAggs bool
-		rootID, fusedScalarAggs = builder.fuseScalarAggregates(rootID)
-		if fusedScalarAggs {
-			colRefCnt = make(map[[2]int32]int)
-			builder.countColRefs(rootID, colRefCnt)
+		// Safe derived aliases now expose the existing singleton proof shape.
+		if err = builder.rewriteNumericDomainFilters(rootID, plan.Node_JOIN); err != nil {
+			return nil, err
 		}
+		rootID, _ = builder.fuseScalarAggregates(rootID)
+		clear(colRefCnt)
+		builder.countColRefs(rootID, colRefCnt)
 		// Removing a proof-eliminated aggregate can expose a direct Project ->
 		// TableScan edge only after the first limit-pushdown pass. Re-run the
 		// idempotent rule so the newly streaming path can honor source demand.
@@ -4437,9 +4459,20 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 				}
 				argsCastType, _ := fGet.ShouldDoImplicitTypeCast()
 
-				if len(argsCastType) > 0 && int(argsCastType[0].Oid) == int(types.T_datetime) {
-					for i := 0; i < len(argsCastType); i++ {
-						argsCastType[i].Scale = 0
+				// Preserve the common temporal FSP selected by the coalesce type
+				// checker. Dropping it here makes UNION/CTAS values round to seconds
+				// while the expression metadata still claims fractional precision.
+				if len(argsCastType) > 0 && (argsCastType[0].Oid == types.T_datetime ||
+					argsCastType[0].Oid == types.T_time || argsCastType[0].Oid == types.T_timestamp) {
+					for i := 1; i < len(tmpArgsType); i++ {
+						if tmpArgsType[i].Scale > argsCastType[0].Scale {
+							argsCastType[0].Scale = tmpArgsType[i].Scale
+						}
+					}
+					argsCastType[0].Width = argsCastType[0].Scale
+					for i := range argsCastType {
+						argsCastType[i].Scale = argsCastType[0].Scale
+						argsCastType[i].Width = argsCastType[0].Width
 					}
 				}
 				if len(argsCastType) == 0 {
@@ -8428,6 +8461,13 @@ func (builder *QueryBuilder) bindSelectClause(
 	boundHavingList []*plan.Expr,
 	err error,
 ) {
+	// The catalog-only shortcut belongs to this SELECT, not to its siblings
+	// or its nested View/CTE bodies. In particular, an inner LIMIT 0 must not
+	// let a later ordinary SELECT bypass semantic binding.
+	previousSkipResolve := builder.isSkipResolveTableDef
+	builder.isSkipResolveTableDef = false
+	defer func() { builder.isSkipResolveTableDef = previousSkipResolve }()
+
 	if ctx.bindingRecurStmt() && clause.Distinct {
 		err = moerr.NewParseError(builder.GetContext(), "not support DISTINCT in recursive cte")
 		return
@@ -11554,13 +11594,8 @@ func (builder *QueryBuilder) appendStep(nodeID int32) int32 {
 
 func (builder *QueryBuilder) appendNode(node *plan.Node, ctx *BindContext) int32 {
 	nodeID := int32(len(builder.qry.Nodes))
-	if ctx != nil && len(ctx.viewChain) > 0 {
-		if len(node.OriginViews) == 0 {
-			node.OriginViews = append([]string{}, ctx.viewChain...)
-		}
-		if node.DirectView == "" {
-			node.DirectView = ctx.directView
-		}
+	if ctx != nil && len(node.ViewPath) == 0 {
+		node.ViewPath = append([]*plan.ViewStep(nil), ctx.viewPath...)
 	}
 	node.NodeId = nodeID
 	builder.qry.Nodes = append(builder.qry.Nodes, node)
@@ -11791,6 +11826,11 @@ func (builder *QueryBuilder) bindView(
 		}
 	}
 
+	viewData.Stmt, err = builder.historicalViewColumnsSQL(schema, table, viewData.Stmt, snapshot)
+	if err != nil {
+		return 0, err
+	}
+
 	parserSQLMode := legacyViewParserSQLMode
 	if viewData.SQLMode != nil {
 		parserSQLMode = *viewData.SQLMode
@@ -11879,25 +11919,41 @@ func (builder *QueryBuilder) bindView(
 		defer builder.compCtx.SetQueryingSubscription(previousSubscription)
 	}
 	viewCtx.defaultDatabase = defaultDatabase
-	viewKey := objectkey.Encode(schema, table)
-	viewKeyWithSnapshot := viewKey
-	if IsSnapshotValid(snapshot) {
-		viewKeyWithSnapshot = FormatViewKeyWithSnapshot(viewKey, snapshot)
-	}
 	viewDependencyKey, err := FormatViewDependencyKey(schema, table, snapshot)
 	if err != nil {
 		return 0, err
 	}
-	if ctx != nil && ctx.directView != "" {
-		viewCtx.directView = ctx.directView
-	} else {
-		viewCtx.directView = viewKeyWithSnapshot
+	accountID, err := builder.compCtx.GetAccountId()
+	if err != nil {
+		return 0, err
 	}
-	if ctx != nil && len(ctx.viewChain) > 0 {
-		viewCtx.viewChain = append(append([]string{}, ctx.viewChain...), viewKey)
-	} else {
-		viewCtx.viewChain = []string{viewKey}
+	if resolver, ok := builder.compCtx.(ViewDependencyIdentityResolver); ok {
+		accountID, err = resolver.ResolveViewDependencyAccount(obj, tableDef, snapshot)
+		if err != nil {
+			return 0, err
+		}
+	} else if snapshot != nil && snapshot.Tenant != nil {
+		accountID = snapshot.Tenant.TenantID
 	}
+	viewSnapshot := DeepCopySnapshot(snapshot)
+	if viewSnapshot == nil {
+		viewSnapshot = &plan.Snapshot{}
+	}
+	if viewSnapshot.Tenant == nil {
+		viewSnapshot.Tenant = &plan.SnapshotTenant{}
+	}
+	viewSnapshot.Tenant.TenantID = accountID
+	step := &plan.ViewStep{
+		DatabaseName: schema, ViewName: table, Snapshot: viewSnapshot,
+		SubscriptionName: obj.SubscriptionName,
+	}
+	if obj.SchemaName != "" {
+		step.DatabaseName = obj.SchemaName
+	}
+	if obj.ObjName != "" {
+		step.ViewName = obj.ObjName
+	}
+	viewCtx.viewPath = append(append([]*plan.ViewStep(nil), ctx.viewPath...), step)
 
 	if viewCtx.viewInBinding(schema, table, viewStmt) {
 		return 0, moerr.NewParseErrorf(builder.GetContext(), "view %s reference itself", table)
@@ -11968,6 +12024,11 @@ func (builder *QueryBuilder) bindView(
 		builder.qry.CatalogDependencies,
 		prepareSchemaRefWithSnapshot(obj, tableDef, snapshot),
 	)
+	// Authorization belongs to the bound query, including views whose entire
+	// executable subtree is removed by optimization.
+	builder.qry.ViewReferences = append(builder.qry.ViewReferences, &plan.ViewReference{
+		ViewPath: append([]*plan.ViewStep(nil), viewCtx.viewPath...),
+	})
 	ctx.recordViews([]string{viewDependencyKey})
 	ctx.recordViews(viewCtx.views)
 	return
@@ -12445,23 +12506,30 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 
 		var subMeta *SubscriptionMeta
 		subMeta, err = builder.compCtx.GetSubscriptionMeta(schema, snapshot)
-		if err == nil && builder.isSkipResolveTableDef && snapshot == nil && subMeta == nil {
+		if err == nil && builder.isSkipResolveTableDef && len(ctx.viewPath) == 0 && snapshot == nil && subMeta == nil {
 			var tableDef *TableDef
 			tableDef, err = builder.compCtx.BuildTableDefByMoColumns(schema, table)
 			if err != nil {
 				return 0, err
 			}
 
-			nodeID = builder.appendNode(&plan.Node{
-				NodeType:     plan.Node_TABLE_SCAN,
-				Stats:        nil,
-				ObjRef:       &plan.ObjectRef{DbName: schema, SchemaName: table},
-				TableDef:     tableDef,
-				BindingTags:  []int32{builder.genNewBindTag()},
-				ScanSnapshot: snapshot,
-			}, ctx)
-
-			return
+			// Both frontend and internal compiler contexts must identify Views.
+			// Their persisted columns are not an output schema, even for no rows.
+			if tableDef != nil && tableDef.TableType != catalog.SystemViewRel && tableDef.ViewSql == nil {
+				object := &plan.ObjectRef{DbName: schema, SchemaName: schema, ObjName: table,
+					Db: int64(tableDef.DbId), Obj: int64(tableDef.TblId)}
+				builder.qry.CatalogDependencies = appendPrepareSchemas(
+					builder.qry.CatalogDependencies, prepareSchemaRef(object, tableDef))
+				nodeID = builder.appendNode(&plan.Node{
+					NodeType:     plan.Node_TABLE_SCAN,
+					Stats:        nil,
+					ObjRef:       object,
+					TableDef:     tableDef,
+					BindingTags:  []int32{builder.genNewBindTag()},
+					ScanSnapshot: snapshot,
+				}, ctx)
+				return
+			}
 		}
 
 		// TODO
@@ -12478,6 +12546,12 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 		if err != nil {
 			return 0, err
 		}
+
+		// Empty-result rewrites can remove scans, not semantic dependencies.
+		// Capture evidence before optimization, including intermediate Views,
+		// snapshots, and ordinary tables that may later be replaced by Views.
+		builder.qry.CatalogDependencies = appendPrepareSchemas(
+			builder.qry.CatalogDependencies, prepareSchemaRefWithSnapshot(obj, tableDef, snapshot))
 
 		// Compiler contexts return immutable catalog metadata. Own the planner
 		// shell and column slice, which are replaced locally, without copying the

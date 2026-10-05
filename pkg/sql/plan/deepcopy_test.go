@@ -368,6 +368,14 @@ func TestDeepCopyNodePreservesPreparedExecutionState(t *testing.T) {
 
 func TestDeepCopyQueryPreservesExecutionMetadata(t *testing.T) {
 	source := &planpb.Query{
+		ViewReferences: []*planpb.ViewReference{{
+			ViewPath: []*planpb.ViewStep{{DatabaseName: "db", ViewName: "inner", SubscriptionName: "sub",
+				Snapshot: &planpb.Snapshot{
+					TS:        &timestamp.Timestamp{PhysicalTime: 42, LogicalTime: 7},
+					Tenant:    &planpb.SnapshotTenant{TenantID: 9, TenantName: "tenant"},
+					ExtraInfo: &planpb.SnapshotExtraInfo{Name: "historical", Level: "account", ObjId: 9},
+				}}},
+		}},
 		UnresolvedIndexHints: []*planpb.UnresolvedIndexHint{
 			{Table: &planpb.ObjectRef{SchemaName: "db", ObjName: "t"}, IndexName: "idx_missing"},
 			nil,
@@ -383,7 +391,21 @@ func TestDeepCopyQueryPreservesExecutionMetadata(t *testing.T) {
 		}},
 	}
 
+	encoded, err := (&planpb.Query{ViewReferences: source.ViewReferences}).Marshal()
+	require.NoError(t, err)
+	var decoded planpb.Query
+	require.NoError(t, decoded.Unmarshal(encoded))
+	require.Equal(t, source.ViewReferences, decoded.ViewReferences)
 	cloned := DeepCopyQuery(source)
+	require.Equal(t, source.ViewReferences, cloned.ViewReferences)
+	cloned.ViewReferences[0].ViewPath[0].ViewName = "changed"
+	cloned.ViewReferences[0].ViewPath[0].Snapshot.TS.PhysicalTime = 99
+	cloned.ViewReferences[0].ViewPath[0].Snapshot.Tenant.TenantID = 99
+	cloned.ViewReferences[0].ViewPath[0].Snapshot.ExtraInfo.Name = "changed"
+	require.Equal(t, "inner", source.ViewReferences[0].ViewPath[0].ViewName)
+	require.Equal(t, int64(42), source.ViewReferences[0].ViewPath[0].Snapshot.TS.PhysicalTime)
+	require.Equal(t, uint32(9), source.ViewReferences[0].ViewPath[0].Snapshot.Tenant.TenantID)
+	require.Equal(t, "historical", source.ViewReferences[0].ViewPath[0].Snapshot.ExtraInfo.Name)
 	require.Equal(t, source.UnresolvedIndexHints, cloned.UnresolvedIndexHints)
 	require.NotSame(t, source.UnresolvedIndexHints[0], cloned.UnresolvedIndexHints[0])
 	require.NotSame(t, source.UnresolvedIndexHints[0].Table, cloned.UnresolvedIndexHints[0].Table)

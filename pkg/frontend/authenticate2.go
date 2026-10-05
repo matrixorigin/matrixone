@@ -150,6 +150,7 @@ var checkPrivilegeInCache = func(ctx context.Context, ses *Session, priv *privil
 					allTrue := true
 					//multi privileges take effect together
 					for _, mi := range entry.compound.items {
+						yes = false
 						if mi.privilegeTyp == PrivilegeTypeCanGrantRoleToOthersInCreateUser {
 							//TODO: normalize the name
 							//TODO: simplify the logic
@@ -175,11 +176,14 @@ var checkPrivilegeInCache = func(ctx context.Context, ses *Session, priv *privil
 							// }
 							yes = false
 						} else {
-							if len(mi.originViews) > 0 || mi.directView != "" {
+							if len(mi.viewPath) > 0 {
 								// View chains require metadata checks; skip cache-only evaluation.
 								return false, nil
 							}
 							tempEntry := privilegeEntriesMap[mi.privilegeTyp]
+							if mi.objType == objectTypeTable || mi.objType == objectTypeView {
+								tempEntry.objType = mi.objType
+							}
 							tempEntry.databaseName = mi.dbName
 							tempEntry.tableName = mi.tableName
 							tempEntry.privilegeEntryTyp = privilegeEntryTypeGeneral
@@ -201,9 +205,19 @@ var checkPrivilegeInCache = func(ctx context.Context, ses *Session, priv *privil
 
 							if yes2 {
 								//At least there is one success
-								yes, err = verifyPrivilegeEntryInMultiPrivilegeLevelsInCache(ses, cache, tempEntry, pls)
-								if err != nil {
-									return false, err
+								yes = false
+								for i, typ := range [3]PrivilegeType{mi.privilegeTyp, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership} {
+									if i > 0 && mi.objType != objectTypeTable {
+										break
+									}
+									tempEntry.privilegeId = typ
+									yes, err = verifyPrivilegeEntryInMultiPrivilegeLevelsInCache(ses, cache, tempEntry, pls)
+									if err != nil {
+										return false, err
+									}
+									if yes {
+										break
+									}
 								}
 							}
 						}
@@ -241,22 +255,35 @@ var privilegeCacheIsEnabled = func(ctx context.Context, ses *Session) (bool, err
 	return newValue, err
 }
 
-// hasMoCtrl checks whether the plan has mo_ctrl
+// hasMoCtrl checks whether the plan has mo_ctrl / fault_inject anywhere it can be evaluated.
+// It scans EVERY node's executable expressions (not just the SELECT projection) across every query
+// statement type, so a call placed in a WHERE/HAVING filter, a JOIN condition, GROUP BY / aggregate
+// / window / ORDER BY / LIMIT, a table-function argument, an ON UPDATE assignment, or an INSERT
+// VALUES row cannot bypass the sys-admin gate. Subqueries add their own nodes to the flat node list,
+// so nested placements are covered too.
 func hasMoCtrl(p *plan2.Plan) bool {
-	if p != nil && p.GetQuery() != nil { //select,insert select, update, delete
-		q := p.GetQuery()
-		if q.StmtType == plan.Query_INSERT || q.StmtType == plan.Query_SELECT {
-			for _, node := range q.Nodes {
-				if node != nil && node.NodeType == plan.Node_PROJECT {
-					//restrict :
-					//	select mo_ctrl ...
-					//	insert into ... select mo_ctrl ...
-					for _, proj := range node.ProjectList {
-						if plan2.HasMoCtrl(proj) {
-							return true
-						}
-					}
-				}
+	if p == nil {
+		return false
+	}
+	if q := p.GetQuery(); q != nil {
+		for _, node := range q.Nodes {
+			if plan2.NodeHasMoCtrl(node) {
+				return true
+			}
+		}
+		return false
+	}
+	// A prepared SET stores its bound value expression in the DCL plan and EXECUTE evaluates it
+	// directly (getPreparedPlanExprValueWithMeta), never through the synthetic SELECT whose Query
+	// plan the branch above scans. Scan those expressions here so `PREPARE s FROM 'set @v =
+	// mo_ctl(...)'; EXECUTE s` cannot reach the cluster-wide handler as an ordinary tenant.
+	if sv := p.GetDcl().GetSetVariables(); sv != nil {
+		for _, item := range sv.Items {
+			if item == nil {
+				continue
+			}
+			if plan2.HasMoCtrl(item.Value) || plan2.HasMoCtrl(item.Reserved) {
+				return true
 			}
 		}
 	}

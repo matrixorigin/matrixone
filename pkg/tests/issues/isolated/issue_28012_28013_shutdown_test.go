@@ -97,6 +97,8 @@ func TestIssue28012And28013AcceptedCommitDuringStandaloneShutdown(t *testing.T) 
 	var accountID uint32
 	require.NoError(t, sysDB.QueryRowContext(ctx,
 		"select account_id from mo_catalog.mo_account where account_name = ?", accountName).Scan(&accountID))
+	// Close the setup-only pool before shutting down its cluster generation.
+	require.NoError(t, sysDB.Close())
 	db := openIssue28012And28013DB(t, ctx, cluster, accountName+"#root#accountadmin:111", &dbs)
 	dbName := fmt.Sprintf("issue_28012_28013_%d", time.Now().UnixNano())
 	mustExecIssue28012And28013(t, ctx, db, "create database "+dbName)

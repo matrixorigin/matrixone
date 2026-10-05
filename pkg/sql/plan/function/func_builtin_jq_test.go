@@ -55,6 +55,7 @@ func TestJqConstResultPreservesCardinalityMaskAndReuse(t *testing.T) {
 		op.tryJq,
 	)
 
+	defer testCase.Free()
 	succeed, info := testCase.Run()
 	require.True(t, succeed, info)
 
@@ -120,6 +121,8 @@ func evalJqForTest(
 		NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil),
 		op.jq,
 	)
+	// The result remains borrowed through the current test scope.
+	t.Cleanup(testCase.Free)
 	require.NoError(t, testCase.result.PreExtendAndReset(testCase.fnLength))
 	fn := op.jq
 	if isTry {

@@ -47,7 +47,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/util/gpumode"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/floor"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/format"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -204,43 +203,47 @@ func CeilStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 }
 
 func ceilInt64(x, digits int64) int64 {
-	switch {
-	case digits >= 0:
+	if digits >= 0 {
 		return x
-	case digits > -floor.MaxInt64digits:
-		scale := int64(floor.ScaleTable[-digits])
-		t := x % scale
-		s := x
-		if t != 0 {
-			s -= t
-			if s >= 0 && x > 0 {
-				x = (s + scale) / scale * scale
-			} else {
-				x = s
-			}
-		}
-	case digits <= -floor.MaxInt64digits:
-		x = 0
 	}
-	return x
+	if digits <= -MaxInt64digits {
+		if x > 0 {
+			panic(moerr.NewOutOfRangeNoCtx("int64", "CEIL"))
+		}
+		return 0
+	}
+	scale := int64(ScaleTable[-digits])
+	remainder := x % scale
+	base := x - remainder
+	if remainder > 0 {
+		if base > math.MaxInt64-scale {
+			panic(moerr.NewOutOfRangeNoCtx("int64", "CEIL"))
+		}
+		base += scale
+	}
+	return base
 }
 
 func ceilUint64(x uint64, digits int64) uint64 {
-	switch {
-	case digits >= 0:
+	if digits >= 0 {
 		return x
-	case digits > -floor.MaxUint64digits:
-		scale := floor.ScaleTable[-digits]
-		t := x % scale
-		s := x
-		if t != 0 {
-			s -= t
-			x = (s + scale) / scale * scale
-		}
-	case digits <= -floor.MaxUint64digits:
-		x = 0
 	}
-	return x
+	if digits <= -MaxUint64digits {
+		if x != 0 {
+			panic(moerr.NewOutOfRangeNoCtx("uint64", "CEIL"))
+		}
+		return 0
+	}
+	scale := ScaleTable[-digits]
+	remainder := x % scale
+	base := x - remainder
+	if remainder != 0 {
+		if base > math.MaxUint64-scale {
+			panic(moerr.NewOutOfRangeNoCtx("uint64", "CEIL"))
+		}
+		base += scale
+	}
+	return base
 }
 
 func ceilFloat64(x float64, digits int64) float64 {
@@ -391,20 +394,25 @@ func FloorUInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 }
 
 func floorInt64(x int64, digits int64) int64 {
-	switch {
-	case digits >= 0:
+	if digits >= 0 {
 		return x
-	case digits > -MaxInt64digits:
-		scale := int64(ScaleTable[-digits])
-		value := x
-		if value < 0 {
-			value -= scale - 1
-		}
-		x = value / scale * scale
-	case digits <= -MaxInt64digits:
-		x = 0
 	}
-	return x
+	if digits <= -MaxInt64digits {
+		if x < 0 {
+			panic(moerr.NewOutOfRangeNoCtx("int64", "FLOOR"))
+		}
+		return 0
+	}
+	scale := int64(ScaleTable[-digits])
+	remainder := x % scale
+	base := x - remainder
+	if remainder < 0 {
+		if base < math.MinInt64+scale {
+			panic(moerr.NewOutOfRangeNoCtx("int64", "FLOOR"))
+		}
+		base -= scale
+	}
+	return base
 }
 
 func FloorInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
@@ -563,7 +571,7 @@ func roundInt64(x int64, digits int64) int64 {
 		} else if x < 0 {
 			step1 := x / scale * scale
 			step2 := x % scale // module operation with negative numbers, the result is negative
-			if step2 <= scale/2 {
+			if step2 <= -scale/2 {
 				x = step1 - scale
 				if x > step1 {
 					panic(moerr.NewOutOfRangeNoCtx("int64", "ROUND"))
@@ -574,7 +582,15 @@ func roundInt64(x int64, digits int64) int64 {
 		} else {
 			x = 0
 		}
-	case digits <= MaxInt64digits:
+	case digits <= -MaxInt64digits:
+		// At 10^19, rounding a magnitude of at least 5e18 would produce
+		// +/-10^19, outside BIGINT. Coarser scales always round to zero.
+		if digits == -MaxInt64digits {
+			half := int64(ScaleTable[MaxInt64digits] / 2)
+			if x >= half || x <= -half {
+				panic(moerr.NewOutOfRangeNoCtx("int64", "ROUND"))
+			}
+		}
 		x = 0
 	}
 	return x
@@ -1330,7 +1346,29 @@ func ConvertTz(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	dates := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
 	fromTzs := vector.GenerateFunctionStrParameter(ivecs[1])
 	toTzs := vector.GenerateFunctionStrParameter(ivecs[2])
-	rs := vector.MustFunctionResult[types.Varlena](result)
+	resultIsDatetime := result.GetResultVector().GetType().Oid == types.T_datetime
+	var rsString *vector.FunctionResult[types.Varlena]
+	var rsDatetime *vector.FunctionResult[types.Datetime]
+	if resultIsDatetime {
+		rsDatetime = vector.MustFunctionResult[types.Datetime](result)
+		rsDatetime.TempSetType(types.New(types.T_datetime, result.GetResultVector().GetType().Scale, result.GetResultVector().GetType().Scale))
+	} else {
+		rsString = vector.MustFunctionResult[types.Varlena](result)
+	}
+	appendValue := func(value time.Time) error {
+		if resultIsDatetime {
+			dt := types.DatetimeFromClock(int32(value.Year()), uint8(value.Month()), uint8(value.Day()),
+				uint8(value.Hour()), uint8(value.Minute()), uint8(value.Second()), uint32(value.Nanosecond()/1000))
+			return rsDatetime.Append(dt, false)
+		}
+		return rsString.AppendBytes([]byte(value.Format(time.DateTime)), false)
+	}
+	appendNull := func() error {
+		if resultIsDatetime {
+			return rsDatetime.Append(types.ZeroDatetime, true)
+		}
+		return rsString.AppendBytes(nil, true)
+	}
 
 	var fromLoc, toLoc *time.Location
 	if ivecs[1].IsConst() && !ivecs[1].IsConstNull() {
@@ -1348,12 +1386,12 @@ func ConvertTz(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 		toTz, null3 := toTzs.GetStrValue(i)
 
 		if null1 || null2 || null3 || date == types.ZeroDatetime {
-			if err = rs.AppendBytes(nil, true); err != nil {
+			if err = appendNull(); err != nil {
 				return err
 			}
 			continue
 		} else if len(fromTz) == 0 || len(toTz) == 0 {
-			if err = rs.AppendBytes(nil, true); err != nil {
+			if err = appendNull(); err != nil {
 				return err
 			}
 			continue
@@ -1365,7 +1403,7 @@ func ConvertTz(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 				toLoc = convertTimezone(string(toTz))
 			}
 			if fromLoc == nil || toLoc == nil {
-				if err = rs.AppendBytes(nil, true); err != nil {
+				if err = appendNull(); err != nil {
 					return err
 				}
 				continue
@@ -1376,21 +1414,21 @@ func ConvertTz(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 			minEndTime := time.Date(0001, 1, 1, 0, 0, 0, 0, toLoc)
 			startTime := date.ConvertToGoTime(fromLoc)
 			if startTime.After(maxStartTime) { // if startTime > maxTime, return maxTime
-				if err = rs.AppendBytes([]byte(maxStartTime.Format(time.DateTime)), false); err != nil {
+				if err = appendValue(maxStartTime); err != nil {
 					return err
 				}
 			} else if startTime.Before(minStartTime) { // if startTime < minTime, return minTime
-				if err = rs.AppendBytes([]byte(minStartTime.Format(time.DateTime)), false); err != nil {
+				if err = appendValue(minStartTime); err != nil {
 					return err
 				}
 			} else { // if minTime <= startTime <= maxTime
 				endTime := startTime.In(toLoc)
 				if endTime.After(maxEndTime) || endTime.Before(minEndTime) { // if endTime > maxTime or endTime < maxTime, return startTime
-					if err = rs.AppendBytes([]byte(startTime.Format(time.DateTime)), false); err != nil {
+					if err = appendValue(startTime); err != nil {
 						return err
 					}
 				} else {
-					if err = rs.AppendBytes([]byte(endTime.Format(time.DateTime)), false); err != nil {
+					if err = appendValue(endTime); err != nil {
 						return err
 					}
 				}
@@ -1419,14 +1457,20 @@ func convertTimezone(tz string) *time.Location {
 		hours, err := strconv.Atoi(parts[0])
 		if err != nil {
 			return nil
-		} else if hours < -13 || hours > 14 { // timezone should be in [-13, 14]
+		} else if hours < -13 || hours > 14 { // timezone should be in [-13:59, +14:00]
 			return nil
 		}
 		minutes, err := strconv.Atoi(parts[1])
+		if err != nil || minutes < 0 || minutes > 59 {
+			return nil
+		}
+		if (hours == 14 && minutes != 0) || (hours == -13 && minutes > 59) || hours < -13 {
+			return nil
+		}
 		if tz[0] == '-' {
 			minutes = -minutes
 		}
-		if err != nil {
+		if tz[0] == '-' && hours == -14 {
 			return nil
 		}
 
@@ -1441,18 +1485,12 @@ func convertTimezone(tz string) *time.Location {
 // outside the result domain. Both are row NULL; only the latter warns.
 var invalidTemporalArithmeticInput = moerr.NewInvalidInputNoCtx("invalid temporal arithmetic input")
 
-func isDateOverflowMaxError(err error) bool { return isDatetimeOverflowMaxError(err) }
-
-func doDateAdd(start types.Date, diff int64, iTyp types.IntervalType) (types.Date, error) {
-	dt, err := doCalendarInterval(start.ToDatetime(), diff, iTyp, false)
+func doDateInterval(start types.Date, diff int64, iTyp types.IntervalType, subtract bool) (types.Date, error) {
+	dt, err := doCalendarInterval(start.ToDatetime(), diff, iTyp, subtract)
 	if err != nil {
 		return 0, err
 	}
 	return dt.ToDate(), nil
-}
-
-func doTimeAdd(start types.Time, diff int64, iTyp types.IntervalType) (types.Time, bool, error) {
-	return doTimeInterval(start, diff, iTyp, false)
 }
 
 // doTimeInterval keeps DATE_ADD and DATE_SUB's TIME range policy in one place.
@@ -1551,10 +1589,6 @@ func doCalendarInterval(start types.Datetime, diff int64, unit types.IntervalTyp
 	return dt, nil
 }
 
-func doDatetimeAdd(start types.Datetime, diff int64, iTyp types.IntervalType) (types.Datetime, error) {
-	return doCalendarInterval(start, diff, iTyp, false)
-}
-
 func isAllDigits(s string) bool {
 	for _, r := range s {
 		if r < '0' || r > '9' {
@@ -1564,22 +1598,22 @@ func isAllDigits(s string) bool {
 	return len(s) > 0
 }
 
-func doDateStringAdd(startStr string, diff int64, iTyp types.IntervalType) (types.Datetime, error) {
+func doDateStringInterval(startStr string, diff int64, iTyp types.IntervalType, subtract bool) (types.Datetime, error) {
 	start, err := types.ParseDatetime(startStr, 6)
 	if err != nil {
 		return 0, invalidTemporalArithmeticInput
 	}
-	return doCalendarInterval(start, diff, iTyp, false)
+	return doCalendarInterval(start, diff, iTyp, subtract)
 }
 
-func doTimestampAdd(loc *time.Location, start types.Timestamp, diff int64, iTyp types.IntervalType) (types.Timestamp, error) {
+func doTimestampInterval(loc *time.Location, start types.Timestamp, diff int64, iTyp types.IntervalType, subtract bool) (types.Timestamp, error) {
 	if start == types.ZeroTimestamp {
 		return 0, invalidTemporalArithmeticInput
 	}
 	if loc == nil {
 		loc = time.Local
 	}
-	dt, err := doCalendarInterval(start.ToDatetime(loc), diff, iTyp, false)
+	dt, err := doCalendarInterval(start.ToDatetime(loc), diff, iTyp, subtract)
 	if err != nil {
 		return 0, err
 	}
@@ -2200,7 +2234,11 @@ func Divisor(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 	return nil
 }
 
-func DateAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func DateAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return dateInterval(ivecs, result, proc, length, selectList, false)
+}
+
+func dateInterval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, subtract bool) (err error) {
 	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
 	iTyp := types.IntervalType(unit)
 
@@ -2212,6 +2250,10 @@ func DateAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 	rsVec := rs.GetResultVector()
 	rss := vector.MustFixedColNoTypeCheck[types.Date](rsVec)
 	rsNull := rsVec.GetNulls()
+	if selectList != nil && selectList.IgnoreAllRow() {
+		nulls.AddRange(rsNull, 0, uint64(length))
+		return nil
+	}
 
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
@@ -2223,7 +2265,7 @@ func DateAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 		if null1 || null2 {
 			rsNull.Add(i)
 		} else {
-			resultDate, err := doDateAdd(v1, v2, iTyp)
+			resultDate, err := doDateInterval(v1, v2, iTyp, subtract)
 			if err != nil {
 				if handleTemporalArithmeticError(proc, err) {
 					// Simplified behavior: overflow/underflow returns NULL
@@ -2239,7 +2281,11 @@ func DateAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 	return nil
 }
 
-func DatetimeAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func DatetimeAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return datetimeInterval(ivecs, result, proc, length, selectList, false)
+}
+
+func datetimeInterval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, subtract bool) (err error) {
 	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
 	scale := ivecs[0].GetType().Scale
 	iTyp := types.IntervalType(unit)
@@ -2267,7 +2313,7 @@ func DatetimeAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 		if null1 || null2 {
 			rsNull.Add(i)
 		} else {
-			resultDt, err := doDatetimeAdd(v1, v2, iTyp)
+			resultDt, err := doCalendarInterval(v1, v2, iTyp, subtract)
 			if err != nil {
 				if handleTemporalArithmeticError(proc, err) {
 					// MySQL behavior: maximum overflow returns NULL
@@ -2283,18 +2329,23 @@ func DatetimeAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 	return nil
 }
 
-func DateStringAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func DateStringAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return dateStringInterval(ivecs, result, proc, length, selectList, false)
+}
+
+// String calendar arithmetic owns one row/mask/warning and formatting path.
+// The checked calendar owner applies subtraction without negating MinInt64.
+func dateStringInterval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, subtract bool) error {
 	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
 	iTyp := types.IntervalType(unit)
-	// Return VARCHAR type (string) to match MySQL behavior when input is string literal
 	rs := vector.MustFunctionResult[types.Varlena](result)
-
 	dateStrings := vector.GenerateFunctionStrParameter(ivecs[0])
 	intervals := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	isTimeUnit := iTyp == types.MicroSecond || iTyp == types.Second || iTyp == types.Minute || iTyp == types.Hour
 
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
-			if err = rs.AppendBytes(nil, true); err != nil {
+			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 			continue
@@ -2302,64 +2353,49 @@ func DateStringAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 		dateStr, null1 := dateStrings.GetStrValue(i)
 		interval, null2 := intervals.GetValue(i)
 		if null1 || null2 {
-			if err = rs.AppendBytes(nil, true); err != nil {
+			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
-		} else {
-			dateStrVal := functionUtil.QuickBytesToStr(dateStr)
-			resultDt, err := doDateStringAdd(dateStrVal, interval, iTyp)
-			if err != nil {
-				if handleTemporalArithmeticError(proc, err) {
-					// MySQL behavior: overflow or invalid input should return NULL
-					if err = rs.AppendBytes(nil, true); err != nil {
-						return err
-					}
-					continue
-				} else {
-					return err
-				}
-			} else {
-				// Format output based on input format and interval type
-				// Check if input is date-only format (no time part)
-				// For numeric format like '20071108181000' (14+ digits), it contains time part
-				isNumericFormat := len(dateStrVal) >= 14 && isAllDigits(dateStrVal)
-				hasTimePart := strings.Contains(dateStrVal, " ") || strings.Contains(dateStrVal, ":") || isNumericFormat
-
-				// Check if interval type affects time part
-				isTimeUnit := iTyp == types.MicroSecond || iTyp == types.Second ||
-					iTyp == types.Minute || iTyp == types.Hour
-
-				// Extract scale from input string to preserve precision
-				// MySQL behavior: DATE_ADD with string input that has fractional seconds
-				// should pad zeros to 6 digits (e.g., '.9999' -> '.999900')
-				scale := int32(0)
-				if dotIdx := strings.Index(dateStrVal, "."); dotIdx >= 0 {
-					// Input string has fractional seconds, use scale 6 to pad zeros
-					// MySQL behavior: pad fractional seconds to 6 digits
-					scale = 6
-				} else if iTyp == types.MicroSecond {
-					// For MICROSECOND unit, use scale 6 if input has no fractional part
-					scale = 6
-				}
-				resultStr := resultDt.String2(scale)
-
-				// If input was date-only and interval doesn't affect time, return date-only format
-				if !hasTimePart && !isTimeUnit {
-					// Extract date part only (YYYY-MM-DD)
-					resultDate := resultDt.ToDate()
-					resultStr = resultDate.String()
-				}
-
-				if err = rs.AppendBytes([]byte(resultStr), false); err != nil {
-					return err
-				}
+			continue
+		}
+		text := functionUtil.QuickBytesToStr(dateStr)
+		dt, err := doDateStringInterval(text, interval, iTyp, subtract)
+		if err != nil {
+			if !handleTemporalArithmeticError(proc, err) {
+				return err
 			}
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		// Compact 14-digit calendars carry a clock even without separators.
+		hasTimePart := strings.ContainsAny(text, " :") || len(text) >= 14 && isAllDigits(text)
+		var formatted string
+		if !hasTimePart && !isTimeUnit {
+			formatted = dt.ToDate().String()
+		} else {
+			scale := int32(0)
+			if strings.Contains(text, ".") || iTyp == types.MicroSecond {
+				scale = 6
+			}
+			formatted = dt.String2(scale)
+		}
+		if err := rs.AppendBytes([]byte(formatted), false); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-func TimestampAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func TimestampAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return timestampInterval(ivecs, result, proc, length, selectList, false)
+}
+
+func timestampInterval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, subtract bool) (err error) {
+	if result.GetResultVector().GetType().Oid == types.T_datetime {
+		return timestampAddTimestampAsDatetime(ivecs, result, proc, length, selectList, subtract, 2, 0)
+	}
 	rs := vector.MustFunctionResult[types.Timestamp](result)
 	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
 	scale := ivecs[0].GetType().Scale
@@ -2395,7 +2431,7 @@ func TimestampAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 			rsNull.Add(i)
 			continue
 		}
-		resultTs, err := doTimestampAdd(loc, v1, v2, iTyp)
+		resultTs, err := doTimestampInterval(loc, v1, v2, iTyp, subtract)
 		if err != nil {
 			if handleTemporalArithmeticError(proc, err) {
 				rsNull.Add(i)
@@ -2408,7 +2444,79 @@ func TimestampAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 	return nil
 }
 
-func TimeAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func timestampAddTimestampAsDatetime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, subtract bool, unitIndex, timestampIndex int) error {
+	var iTyp types.IntervalType
+	if ivecs[unitIndex].GetType().Oid == types.T_varchar || ivecs[unitIndex].GetType().Oid == types.T_char ||
+		ivecs[unitIndex].GetType().Oid == types.T_text {
+		if !ivecs[unitIndex].IsConst() {
+			return moerr.NewInvalidArg(proc.Ctx, "timestampadd unit", "not constant")
+		}
+		unitStr, null := vector.GenerateFunctionStrParameter(ivecs[unitIndex]).GetStrValue(0)
+		if null {
+			return moerr.NewInvalidArg(proc.Ctx, "timestampadd unit", "null")
+		}
+		parsed, err := types.IntervalTypeOf(functionUtil.QuickBytesToStr(unitStr))
+		if err != nil {
+			return err
+		}
+		iTyp = parsed
+	} else {
+		unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[unitIndex]).GetValue(0)
+		iTyp = types.IntervalType(unit)
+	}
+	rs := vector.MustFunctionResult[types.Datetime](result)
+	scale := max(rs.GetType().Scale, ivecs[timestampIndex].GetType().Scale)
+	if iTyp == types.MicroSecond {
+		scale = 6
+	}
+	rs.TempSetType(types.New(types.T_datetime, scale, scale))
+	result.UseOptFunctionParamFrame(2)
+	p1 := vector.OptGetParamFromWrapper[types.Timestamp](rs, 0, ivecs[timestampIndex])
+	p2 := vector.OptGetParamFromWrapper[int64](rs, 1, ivecs[1])
+	loc := proc.GetSessionInfo().TimeZone
+	if loc == nil {
+		loc = time.Local
+	}
+	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := rs.Append(types.ZeroDatetime, true); err != nil {
+				return err
+			}
+			continue
+		}
+		ts, null1 := p1.GetValue(i)
+		interval, null2 := p2.GetValue(i)
+		if null1 || null2 {
+			if err := rs.Append(types.ZeroDatetime, true); err != nil {
+				return err
+			}
+			continue
+		}
+		// DATETIME results are local wall-clock values. Keep the calculation in
+		// the DATETIME domain so valid pre-1970 results are not rejected by the
+		// TIMESTAMP epoch bound.
+		value, err := doCalendarInterval(ts.ToDatetime(loc), interval, iTyp, subtract)
+		if err != nil {
+			if handleTemporalArithmeticError(proc, err) {
+				if err := rs.Append(types.ZeroDatetime, true); err != nil {
+					return err
+				}
+				continue
+			}
+			return err
+		}
+		if err := rs.Append(value, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func TimeAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return timeInterval(ivecs, result, proc, length, selectList, false)
+}
+
+func timeInterval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, subtract bool) (err error) {
 	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
 	scale := ivecs[0].GetType().Scale
 	iTyp := types.IntervalType(unit)
@@ -2439,7 +2547,7 @@ func TimeAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 			nullsVec.Add(i)
 			continue
 		}
-		raw, overflow, err := doTimeAdd(v1, v2, iTyp)
+		raw, overflow, err := doTimeInterval(v1, v2, iTyp, subtract)
 		if err != nil {
 			return err
 		}
@@ -2505,13 +2613,7 @@ func timeIntervalRaw(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 			appendTimeIntervalOverflowWarning(proc)
 			continue
 		}
-		var value types.Time
-		var overflow bool
-		if subtract {
-			value, overflow, err = doTimeSub(start, interval.value, interval.unit)
-		} else {
-			value, overflow, err = doTimeAdd(start, interval.value, interval.unit)
-		}
+		value, overflow, err := doTimeInterval(start, interval.value, interval.unit, subtract)
 		if err != nil {
 			return err
 		}
@@ -2525,360 +2627,175 @@ func timeIntervalRaw(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 	return nil
 }
 
-// TimestampAddDate: TIMESTAMPADD(unit, interval, date)
-// Parameters: ivecs[0] = unit (string), ivecs[1] = interval (int64), ivecs[2] = date (Date)
-// MySQL behavior: Returns DATE for date units (DAY, WEEK, MONTH, QUARTER, YEAR)
-//
-//	Returns DATETIME for time units (HOUR, MINUTE, SECOND, MICROSECOND)
-//
-// Supports both constant and non-constant unit parameters
-func TimestampAddDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+// TimestampAddDate resolves the batch result metadata before evaluating rows.
+// Dynamic units retain their internal-call contract; ordinary SQL binds a constant unit.
+func TimestampAddDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	dates := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[2])
 	intervals := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
-	unitStrings := vector.GenerateFunctionStrParameter(ivecs[0])
-
-	// Check result wrapper type: it can be DATE (from BindFuncExprImplByPlanExpr) or DATETIME (from retType)
-	vec := result.GetResultVector()
-	resultType := vec.GetType().Oid
-
-	// Handle constant unit (optimized path)
-	if ivecs[0].IsConst() {
-		unitStr, _ := unitStrings.GetStrValue(0)
-		iTyp, err := types.IntervalTypeOf(functionUtil.QuickBytesToStr(unitStr))
+	units := vector.GenerateFunctionStrParameter(ivecs[0])
+	constant := ivecs[0].IsConst()
+	unit := types.IntervalType(0)
+	hasTime := false
+	scale := int32(0)
+	// Unit admission precedes operand NULL handling because it also determines metadata.
+	if constant {
+		text, _ := units.GetStrValue(0)
+		var err error
+		unit, err = types.IntervalTypeOf(functionUtil.QuickBytesToStr(text))
 		if err != nil {
 			return err
 		}
-
-		// Check if interval type is a time unit (HOUR, MINUTE, SECOND, MICROSECOND)
-		isTimeUnit := iTyp == types.Hour || iTyp == types.Minute || iTyp == types.Second || iTyp == types.MicroSecond
-
-		if isTimeUnit {
-			// Return DATETIME for time units (MySQL compatible)
-			// When input is DATE but unit is time unit, MySQL returns DATETIME
-			// Set scale based on interval type:
-			// - MICROSECOND: scale=6 (microsecond precision)
-			// - HOUR, MINUTE, SECOND: scale=0 (no fractional seconds)
-			scale := int32(0)
-			if iTyp == types.MicroSecond {
+		hasTime = unit == types.Hour || unit == types.Minute || unit == types.Second || unit == types.MicroSecond
+		if unit == types.MicroSecond {
+			scale = 6
+		}
+	} else {
+		for i := uint64(0); i < uint64(length); i++ {
+			if functionRowSkipped(selectList, i) {
+				continue
+			}
+			text, null := units.GetStrValue(i)
+			if null {
+				continue
+			}
+			var err error
+			unit, err = types.IntervalTypeOf(functionUtil.QuickBytesToStr(text))
+			if err != nil {
+				return err
+			}
+			if unit == types.Hour || unit == types.Minute || unit == types.Second || unit == types.MicroSecond {
+				hasTime = true
+			}
+			if unit == types.MicroSecond {
 				scale = 6
 			}
-
-			if resultType == types.T_date {
-				// Result wrapper is DATE, but we need to return DATETIME
-				// Convert to DATETIME type
-				vec.SetTypeAndFixData(types.New(types.T_datetime, scale, scale), proc.GetMPool())
-				rss := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
-				rsNull := vec.GetNulls()
-
-				for i := uint64(0); i < uint64(length); i++ {
-					if functionRowSkipped(selectList, i) {
-						rsNull.Add(i)
-						continue
-					}
-
-					date, null1 := dates.GetValue(i)
-					interval, null2 := intervals.GetValue(i)
-					if null1 || null2 {
-						rsNull.Add(i)
-					} else {
-						// Convert DATE to DATETIME, add interval, return DATETIME
-						dt := date.ToDatetime()
-						resultDt, err := doDatetimeAdd(dt, interval, iTyp)
-						if err != nil {
-							if handleTemporalArithmeticError(proc, err) {
-								// MySQL behavior: maximum overflow returns NULL
-								rsNull.Add(i)
-							} else {
-								return err
-							}
-						} else {
-							rss[i] = resultDt
-						}
-					}
-				}
-			} else {
-				// Result wrapper is DATETIME (backward compatibility)
-				rsDatetime := vector.MustFunctionResult[types.Datetime](result)
-				rsDatetime.TempSetType(types.New(types.T_datetime, scale, scale))
-				rss := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
-				rsNull := vec.GetNulls()
-
-				for i := uint64(0); i < uint64(length); i++ {
-					if functionRowSkipped(selectList, i) {
-						rsNull.Add(i)
-						continue
-					}
-
-					date, null1 := dates.GetValue(i)
-					interval, null2 := intervals.GetValue(i)
-					if null1 || null2 {
-						rsNull.Add(i)
-					} else {
-						// Convert DATE to DATETIME, add interval, return DATETIME
-						dt := date.ToDatetime()
-						resultDt, err := doDatetimeAdd(dt, interval, iTyp)
-						if err != nil {
-							if handleTemporalArithmeticError(proc, err) {
-								// MySQL behavior: maximum overflow returns NULL
-								rsNull.Add(i)
-							} else {
-								return err
-							}
-						} else {
-							rss[i] = resultDt
-						}
-					}
-				}
-			}
-		} else {
-			// Return DATE for date units (DAY, WEEK, MONTH, QUARTER, YEAR)
-			// MySQL behavior: DATE input + date unit → DATE output
-			if resultType == types.T_date {
-				// Result wrapper is already DATE (from BindFuncExprImplByPlanExpr)
-				rss := vector.MustFixedColNoTypeCheck[types.Date](vec)
-				rsNull := vec.GetNulls()
-
-				for i := uint64(0); i < uint64(length); i++ {
-					if functionRowSkipped(selectList, i) {
-						rsNull.Add(i)
-						continue
-					}
-
-					date, null1 := dates.GetValue(i)
-					interval, null2 := intervals.GetValue(i)
-					if null1 || null2 {
-						rsNull.Add(i)
-					} else {
-						resultDate, err := doDateAdd(date, interval, iTyp)
-						if err != nil {
-							if handleTemporalArithmeticError(proc, err) {
-								// MySQL behavior: maximum overflow returns NULL
-								rsNull.Add(i)
-							} else {
-								return err
-							}
-						} else {
-							rss[i] = resultDate
-						}
-					}
-				}
-			} else {
-				// Result wrapper is DATETIME (backward compatibility)
-				// Use SetType to change vector type to DATE
-				vec.SetTypeAndFixData(types.New(types.T_date, 0, 0), proc.GetMPool())
-				rss := vector.MustFixedColNoTypeCheck[types.Date](vec)
-				rsNull := vec.GetNulls()
-
-				for i := uint64(0); i < uint64(length); i++ {
-					if functionRowSkipped(selectList, i) {
-						rsNull.Add(i)
-						continue
-					}
-
-					date, null1 := dates.GetValue(i)
-					interval, null2 := intervals.GetValue(i)
-					if null1 || null2 {
-						rsNull.Add(i)
-					} else {
-						resultDate, err := doDateAdd(date, interval, iTyp)
-						if err != nil {
-							if handleTemporalArithmeticError(proc, err) {
-								// MySQL behavior: maximum overflow returns NULL
-								rsNull.Add(i)
-							} else {
-								return err
-							}
-						} else {
-							rss[i] = resultDate
-						}
-					}
-				}
-			}
 		}
-		return nil
 	}
-
-	// Handle non-constant unit (runtime processing)
-	// First pass: check all units to determine result type
-	// MySQL behavior: if any unit is time unit, return DATETIME; otherwise return DATE
-	hasTimeUnit := false
-	maxScale := int32(0)
-
-	for i := uint64(0); i < uint64(length); i++ {
-		if functionRowSkipped(selectList, i) {
-			continue
-		}
-
-		unitStr, null := unitStrings.GetStrValue(i)
-		if null {
-			continue
-		}
-		iTyp, err := types.IntervalTypeOf(functionUtil.QuickBytesToStr(unitStr))
-		if err != nil {
+	typ := types.New(types.T_date, 0, 0)
+	if hasTime {
+		typ = types.New(types.T_datetime, scale, scale)
+	}
+	vec := result.GetResultVector()
+	if vec.GetType().Oid != typ.Oid {
+		if err := vec.SetTypeAndFixData(typ, proc.Mp()); err != nil {
 			return err
 		}
-		isTimeUnit := iTyp == types.Hour || iTyp == types.Minute || iTyp == types.Second || iTyp == types.MicroSecond
-		if isTimeUnit {
-			hasTimeUnit = true
-			if iTyp == types.MicroSecond {
-				maxScale = 6
-			}
-		}
+	} else if hasTime {
+		vec.SetType(typ)
 	}
-
-	// Second pass: process data based on determined result type
-	if hasTimeUnit {
-		// Return DATETIME for time units (MySQL compatible)
-		scale := maxScale
-		if resultType == types.T_date {
-			// Result wrapper is DATE, but we need to return DATETIME
-			vec.SetTypeAndFixData(types.New(types.T_datetime, scale, scale), proc.GetMPool())
-			rss := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
-			rsNull := vec.GetNulls()
-
+	nsp := vec.GetNulls()
+	// Both choices are batch invariants. Dispatch before the hot loops, while
+	// sharing NULL publication, error policy and checked calendar arithmetic.
+	if constant {
+		if hasTime {
+			values := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
 			for i := uint64(0); i < uint64(length); i++ {
-				if functionRowSkipped(selectList, i) {
-					rsNull.Add(i)
+				if timestampAddDateNull(nsp, i, functionRowSkipped(selectList, i)) {
 					continue
 				}
-
-				date, null1 := dates.GetValue(i)
-				interval, null2 := intervals.GetValue(i)
-				unitStr, null3 := unitStrings.GetStrValue(i)
-				if null1 || null2 || null3 {
-					rsNull.Add(i)
-				} else {
-					iTyp, err := types.IntervalTypeOf(functionUtil.QuickBytesToStr(unitStr))
-					if err != nil {
+				date, nullDate := dates.GetValue(i)
+				count, nullCount := intervals.GetValue(i)
+				if timestampAddDateNull(nsp, i, nullDate || nullCount) {
+					continue
+				}
+				dt, err := doCalendarInterval(date.ToDatetime(), count, unit, false)
+				if err != nil {
+					if err = timestampAddDateError(proc, nsp, i, err); err != nil {
 						return err
 					}
-					// Convert DATE to DATETIME, add interval, return DATETIME
-					dt := date.ToDatetime()
-					resultDt, err := doDatetimeAdd(dt, interval, iTyp)
-					if err != nil {
-						if handleTemporalArithmeticError(proc, err) {
-							// MySQL behavior: maximum overflow returns NULL
-							rsNull.Add(i)
-						} else {
-							return err
-						}
-					} else {
-						rss[i] = resultDt
-					}
+					continue
 				}
+				values[i] = dt
 			}
 		} else {
-			// Result wrapper is DATETIME
-			rsDatetime := vector.MustFunctionResult[types.Datetime](result)
-			rsDatetime.TempSetType(types.New(types.T_datetime, scale, scale))
-			rss := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
-			rsNull := vec.GetNulls()
-
+			values := vector.MustFixedColNoTypeCheck[types.Date](vec)
 			for i := uint64(0); i < uint64(length); i++ {
-				if functionRowSkipped(selectList, i) {
-					rsNull.Add(i)
+				if timestampAddDateNull(nsp, i, functionRowSkipped(selectList, i)) {
 					continue
 				}
-
-				date, null1 := dates.GetValue(i)
-				interval, null2 := intervals.GetValue(i)
-				unitStr, null3 := unitStrings.GetStrValue(i)
-				if null1 || null2 || null3 {
-					rsNull.Add(i)
-				} else {
-					iTyp, err := types.IntervalTypeOf(functionUtil.QuickBytesToStr(unitStr))
-					if err != nil {
+				date, nullDate := dates.GetValue(i)
+				count, nullCount := intervals.GetValue(i)
+				if timestampAddDateNull(nsp, i, nullDate || nullCount) {
+					continue
+				}
+				dt, err := doCalendarInterval(date.ToDatetime(), count, unit, false)
+				if err != nil {
+					if err = timestampAddDateError(proc, nsp, i, err); err != nil {
 						return err
 					}
-					// Convert DATE to DATETIME, add interval, return DATETIME
-					dt := date.ToDatetime()
-					resultDt, err := doDatetimeAdd(dt, interval, iTyp)
-					if err != nil {
-						if handleTemporalArithmeticError(proc, err) {
-							// MySQL behavior: maximum overflow returns NULL
-							rsNull.Add(i)
-						} else {
-							return err
-						}
-					} else {
-						rss[i] = resultDt
-					}
+					continue
 				}
+				values[i] = dt.ToDate()
 			}
 		}
 	} else {
-		// Return DATE for date units (all units are date units)
-		if resultType == types.T_date {
-			// Result wrapper is already DATE
-			rss := vector.MustFixedColNoTypeCheck[types.Date](vec)
-			rsNull := vec.GetNulls()
-
+		if hasTime {
+			values := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
 			for i := uint64(0); i < uint64(length); i++ {
-				if functionRowSkipped(selectList, i) {
-					rsNull.Add(i)
+				if timestampAddDateNull(nsp, i, functionRowSkipped(selectList, i)) {
 					continue
 				}
-
-				date, null1 := dates.GetValue(i)
-				interval, null2 := intervals.GetValue(i)
-				unitStr, null3 := unitStrings.GetStrValue(i)
-				if null1 || null2 || null3 {
-					rsNull.Add(i)
-				} else {
-					iTyp, err := types.IntervalTypeOf(functionUtil.QuickBytesToStr(unitStr))
-					if err != nil {
+				date, nullDate := dates.GetValue(i)
+				count, nullCount := intervals.GetValue(i)
+				text, nullUnit := units.GetStrValue(i)
+				if timestampAddDateNull(nsp, i, nullDate || nullCount || nullUnit) {
+					continue
+				}
+				unit, err := types.IntervalTypeOf(functionUtil.QuickBytesToStr(text))
+				if err != nil {
+					return err
+				}
+				dt, err := doCalendarInterval(date.ToDatetime(), count, unit, false)
+				if err != nil {
+					if err = timestampAddDateError(proc, nsp, i, err); err != nil {
 						return err
 					}
-					resultDate, err := doDateAdd(date, interval, iTyp)
-					if err != nil {
-						if handleTemporalArithmeticError(proc, err) {
-							// MySQL behavior: maximum overflow returns NULL
-							rsNull.Add(i)
-						} else {
-							return err
-						}
-					} else {
-						rss[i] = resultDate
-					}
+					continue
 				}
+				values[i] = dt
 			}
 		} else {
-			// Result wrapper is DATETIME, but all units are date units, so return DATE
-			vec.SetTypeAndFixData(types.New(types.T_date, 0, 0), proc.GetMPool())
-			rss := vector.MustFixedColNoTypeCheck[types.Date](vec)
-			rsNull := vec.GetNulls()
-
+			values := vector.MustFixedColNoTypeCheck[types.Date](vec)
 			for i := uint64(0); i < uint64(length); i++ {
-				if functionRowSkipped(selectList, i) {
-					rsNull.Add(i)
+				if timestampAddDateNull(nsp, i, functionRowSkipped(selectList, i)) {
 					continue
 				}
-
-				date, null1 := dates.GetValue(i)
-				interval, null2 := intervals.GetValue(i)
-				unitStr, null3 := unitStrings.GetStrValue(i)
-				if null1 || null2 || null3 {
-					rsNull.Add(i)
-				} else {
-					iTyp, err := types.IntervalTypeOf(functionUtil.QuickBytesToStr(unitStr))
-					if err != nil {
+				date, nullDate := dates.GetValue(i)
+				count, nullCount := intervals.GetValue(i)
+				text, nullUnit := units.GetStrValue(i)
+				if timestampAddDateNull(nsp, i, nullDate || nullCount || nullUnit) {
+					continue
+				}
+				unit, err := types.IntervalTypeOf(functionUtil.QuickBytesToStr(text))
+				if err != nil {
+					return err
+				}
+				dt, err := doCalendarInterval(date.ToDatetime(), count, unit, false)
+				if err != nil {
+					if err = timestampAddDateError(proc, nsp, i, err); err != nil {
 						return err
 					}
-					resultDate, err := doDateAdd(date, interval, iTyp)
-					if err != nil {
-						if handleTemporalArithmeticError(proc, err) {
-							// MySQL behavior: maximum overflow returns NULL
-							rsNull.Add(i)
-						} else {
-							return err
-						}
-					} else {
-						rss[i] = resultDate
-					}
+					continue
 				}
+				values[i] = dt.ToDate()
 			}
 		}
 	}
+	return nil
+}
+
+func timestampAddDateNull(nsp *nulls.Nulls, row uint64, null bool) bool {
+	if null {
+		nsp.Add(row)
+	}
+	return null
+}
+
+func timestampAddDateError(proc *process.Process, nsp *nulls.Nulls, row uint64, err error) error {
+	if !handleTemporalArithmeticError(proc, err) {
+		return err
+	}
+	nsp.Add(row)
 	return nil
 }
 
@@ -2921,7 +2838,7 @@ func TimestampAddDatetime(ivecs []*vector.Vector, result vector.FunctionResultWr
 				return err
 			}
 		} else {
-			resultDt, err := doDatetimeAdd(dt, interval, iTyp)
+			resultDt, err := doCalendarInterval(dt, interval, iTyp, false)
 			if err != nil {
 				if handleTemporalArithmeticError(proc, err) {
 					// MySQL behavior: maximum overflow returns NULL
@@ -2944,6 +2861,9 @@ func TimestampAddDatetime(ivecs []*vector.Vector, result vector.FunctionResultWr
 // TimestampAddTimestamp: TIMESTAMPADD(unit, interval, timestamp)
 // Parameters: ivecs[0] = unit (string), ivecs[1] = interval (int64), ivecs[2] = timestamp (Timestamp)
 func TimestampAddTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	if result.GetResultVector().GetType().Oid == types.T_datetime {
+		return timestampAddTimestampAsDatetime(ivecs, result, proc, length, selectList, false, 0, 2)
+	}
 	if !ivecs[0].IsConst() {
 		return moerr.NewInvalidArg(proc.Ctx, "timestampadd unit", "not constant")
 	}
@@ -2982,7 +2902,7 @@ func TimestampAddTimestamp(ivecs []*vector.Vector, result vector.FunctionResultW
 				return err
 			}
 		} else {
-			resultTs, err := doTimestampAdd(loc, ts, interval, iTyp)
+			resultTs, err := doTimestampInterval(loc, ts, interval, iTyp, false)
 			if err != nil {
 				if handleTemporalArithmeticError(proc, err) {
 					// MySQL behavior: maximum overflow returns NULL
@@ -3043,7 +2963,7 @@ func TimestampAddString(ivecs []*vector.Vector, result vector.FunctionResultWrap
 					return err
 				}
 			} else {
-				resultDt, err := doDateStringAdd(functionUtil.QuickBytesToStr(dateStr), interval, iTyp)
+				resultDt, err := doDateStringInterval(functionUtil.QuickBytesToStr(dateStr), interval, iTyp, false)
 				if err != nil {
 					if handleTemporalArithmeticError(proc, err) {
 						// TIMESTAMPADD behavior: maximum overflow returns NULL (different from date_add)
@@ -3095,7 +3015,7 @@ func TimestampAddString(ivecs []*vector.Vector, result vector.FunctionResultWrap
 				date, err1 := types.ParseDateCast(dateStrVal)
 				if err1 == nil {
 					// Successfully parsed as DATE, process as DATE format
-					resultDate, err2 := doDateAdd(date, interval, iTyp)
+					resultDate, err2 := doDateInterval(date, interval, iTyp, false)
 					if err2 != nil {
 						if handleTemporalArithmeticError(proc, err2) {
 							// TIMESTAMPADD behavior: maximum overflow returns NULL (different from date_add)
@@ -3116,7 +3036,7 @@ func TimestampAddString(ivecs []*vector.Vector, result vector.FunctionResultWrap
 				}
 			}
 			// Fallback to DATETIME format processing
-			resultDt, err := doDateStringAdd(dateStrVal, interval, iTyp)
+			resultDt, err := doDateStringInterval(dateStrVal, interval, iTyp, false)
 			if err != nil {
 				if handleTemporalArithmeticError(proc, err) {
 					// TIMESTAMPADD behavior: maximum overflow returns NULL (different from date_add)
@@ -4200,8 +4120,52 @@ func addTimeToDatetime(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 func addTimeToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	timestamps := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[0])
 	time2Param := vector.GenerateFunctionStrParameter(ivecs[1])
-	rs := vector.MustFunctionResult[types.Timestamp](result)
 	loc := proc.GetSessionInfo().TimeZone
+	if result.GetResultVector().GetType().Oid == types.T_datetime {
+		rs := vector.MustFunctionResult[types.Datetime](result)
+		if loc == nil {
+			loc = time.Local
+		}
+		scale := max(rs.GetType().Scale, ivecs[0].GetType().Scale)
+		if scale2 := int32(ivecs[1].GetType().Scale); scale2 > scale {
+			scale = scale2
+		}
+		rs.TempSetType(types.New(types.T_datetime, 0, scale))
+		timestamps := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[0])
+		time2Param := vector.GenerateFunctionStrParameter(ivecs[1])
+		for i := uint64(0); i < uint64(length); i++ {
+			if functionRowSkipped(selectList, i) {
+				if err := rs.Append(types.ZeroDatetime, true); err != nil {
+					return err
+				}
+				continue
+			}
+			ts, null1 := timestamps.GetValue(i)
+			time2Str, null2 := time2Param.GetStrValue(i)
+			if null1 || null2 || ts == types.ZeroTimestamp {
+				if err := rs.Append(types.ZeroDatetime, true); err != nil {
+					return err
+				}
+				continue
+			}
+			time2, err := parseTimeOperand(functionUtil.QuickBytesToStr(time2Str), scale)
+			if err != nil {
+				if err := rs.Append(types.ZeroDatetime, true); err != nil {
+					return err
+				}
+				continue
+			}
+			resultDt, overflow := datetimeArithmeticResult(ts.ToDatetime(loc), time2, false)
+			if overflow {
+				appendTimeIntervalOverflowWarning(proc)
+			}
+			if err := rs.Append(resultDt, overflow); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	rs := vector.MustFunctionResult[types.Timestamp](result)
 
 	// Determine scale from input
 	scale := max(rs.GetType().Scale, ivecs[0].GetType().Scale)
@@ -4570,8 +4534,52 @@ func subTimeFromDatetime(ivecs []*vector.Vector, result vector.FunctionResultWra
 func subTimeFromTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	timestamps := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[0])
 	time2Param := vector.GenerateFunctionStrParameter(ivecs[1])
-	rs := vector.MustFunctionResult[types.Timestamp](result)
 	loc := proc.GetSessionInfo().TimeZone
+	if result.GetResultVector().GetType().Oid == types.T_datetime {
+		rs := vector.MustFunctionResult[types.Datetime](result)
+		if loc == nil {
+			loc = time.Local
+		}
+		scale := max(rs.GetType().Scale, ivecs[0].GetType().Scale)
+		if scale2 := int32(ivecs[1].GetType().Scale); scale2 > scale {
+			scale = scale2
+		}
+		rs.TempSetType(types.New(types.T_datetime, 0, scale))
+		timestamps := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[0])
+		time2Param := vector.GenerateFunctionStrParameter(ivecs[1])
+		for i := uint64(0); i < uint64(length); i++ {
+			if functionRowSkipped(selectList, i) {
+				if err := rs.Append(types.ZeroDatetime, true); err != nil {
+					return err
+				}
+				continue
+			}
+			ts, null1 := timestamps.GetValue(i)
+			time2Str, null2 := time2Param.GetStrValue(i)
+			if null1 || null2 || ts == types.ZeroTimestamp {
+				if err := rs.Append(types.ZeroDatetime, true); err != nil {
+					return err
+				}
+				continue
+			}
+			time2, err := parseTimeOperand(functionUtil.QuickBytesToStr(time2Str), scale)
+			if err != nil {
+				if err := rs.Append(types.ZeroDatetime, true); err != nil {
+					return err
+				}
+				continue
+			}
+			resultDt, overflow := datetimeArithmeticResult(ts.ToDatetime(loc), time2, true)
+			if overflow {
+				appendTimeIntervalOverflowWarning(proc)
+			}
+			if err := rs.Append(resultDt, overflow); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	rs := vector.MustFunctionResult[types.Timestamp](result)
 
 	// Determine scale from input
 	scale := max(rs.GetType().Scale, ivecs[0].GetType().Scale)
@@ -4719,6 +4727,7 @@ func dateFormatOperator(format string) DateFormatFunc {
 
 func DateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
+	locale := temporalLocaleForProcess(proc)
 
 	dates := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
 	formats := vector.GenerateFunctionStrParameter(ivecs[1])
@@ -4729,8 +4738,8 @@ func DateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	if constantFormat {
 		fmtBytes, null := formats.GetStrValue(0)
 		constFmt = functionUtil.QuickBytesToStr(fmtBytes)
-		constNull = null
-		if !constNull && len(constFmt) > 0 {
+		constNull = null || len(constFmt) == 0
+		if !constNull {
 			constOperator = dateFormatOperator(constFmt)
 		}
 	}
@@ -4763,7 +4772,12 @@ func DateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 			if !constantFormat {
 				operator = dateFormatOperator(fmt)
 			}
-			if isNull, err = operator(proc.Ctx, d, fmt, &buf); err != nil {
+			if locale.name != "en_US" {
+				isNull, err = datetimeFormatWithLocale(locale, proc.Ctx, d, fmt, &buf)
+			} else {
+				isNull, err = operator(proc.Ctx, d, fmt, &buf)
+			}
+			if err != nil {
 				return err
 			}
 			if isNull {
@@ -5001,10 +5015,14 @@ func date_format_combine_pattern7(_ context.Context, t types.Datetime, format st
 
 // datetimeFormat: format the datetime value according to the format string.
 func datetimeFormat(ctx context.Context, datetime types.Datetime, format string, buf *bytes.Buffer) (bool, error) {
+	return datetimeFormatWithLocale(temporalLocales["en_US"], ctx, datetime, format, buf)
+}
+
+func datetimeFormatWithLocale(locale *temporalLocale, ctx context.Context, datetime types.Datetime, format string, buf *bytes.Buffer) (bool, error) {
 	inPatternMatch := false
 	for _, b := range format {
 		if inPatternMatch {
-			isNull, err := makeDateFormat(ctx, datetime, b, buf)
+			isNull, err := makeDateFormatWithLocale(locale, ctx, datetime, b, buf)
 			if err != nil {
 				return false, err
 			}
@@ -5058,34 +5076,26 @@ var (
 		"November",
 		"December",
 	}
-
-	// AbbrevWeekdayName lists Abbreviation of week names, which are used int builtin function 'date_format'
-	AbbrevWeekdayName = []string{
-		"Sun",
-		"Mon",
-		"Tue",
-		"Wed",
-		"Thu",
-		"Fri",
-		"Sat",
-	}
 )
 
-// makeDateFormat: Get the format string corresponding to the date according to a single format character
-func makeDateFormat(_ context.Context, t types.Datetime, b rune, buf *bytes.Buffer) (bool, error) {
+func makeDateFormat(ctx context.Context, t types.Datetime, b rune, buf *bytes.Buffer) (bool, error) {
+	return makeDateFormatWithLocale(temporalLocales["en_US"], ctx, t, b, buf)
+}
+
+func makeDateFormatWithLocale(locale *temporalLocale, _ context.Context, t types.Datetime, b rune, buf *bytes.Buffer) (bool, error) {
 	switch b {
 	case 'b':
 		m := t.Month()
 		if m == 0 || m > 12 {
 			return true, nil
 		}
-		buf.WriteString(MonthNames[m-1][:3])
+		buf.WriteString(locale.localizedMonthAbbrev(int(m)))
 	case 'M':
 		m := t.Month()
 		if m == 0 || m > 12 {
 			return true, nil
 		}
-		buf.WriteString(MonthNames[m-1])
+		buf.WriteString(locale.localizedMonth(int(m)))
 	case 'm':
 		FormatInt2BufByWidth(int(t.Month()), 2, buf)
 		//buf.WriteString(FormatIntByWidth(int(t.Month()), 2))
@@ -5181,12 +5191,12 @@ func makeDateFormat(_ context.Context, t types.Datetime, b rune, buf *bytes.Buff
 			return true, nil
 		}
 		weekday := t.DayOfWeek()
-		buf.WriteString(AbbrevWeekdayName[weekday])
+		buf.WriteString(locale.localizedWeekdayAbbrev(int(weekday)))
 	case 'W':
 		if t.Year() == 0 && t.Month() == 0 {
 			return true, nil
 		}
-		buf.WriteString(t.DayOfWeek().String())
+		buf.WriteString(locale.localizedWeekday(int(t.DayOfWeek())))
 	case 'w':
 		if t.Year() == 0 && t.Month() == 0 {
 			return true, nil
@@ -5411,82 +5421,8 @@ func AbbrDayOfMonth(day int) string {
 	return str
 }
 
-func doDateSub(start types.Date, diff int64, iTyp types.IntervalType) (types.Date, error) {
-	dt, err := doCalendarInterval(start.ToDatetime(), diff, iTyp, true)
-	if err != nil {
-		return 0, err
-	}
-	return dt.ToDate(), nil
-}
-
-func doTimeSub(start types.Time, diff int64, iTyp types.IntervalType) (types.Time, bool, error) {
-	return doTimeInterval(start, diff, iTyp, true)
-}
-
-func doDatetimeSub(start types.Datetime, diff int64, iTyp types.IntervalType) (types.Datetime, error) {
-	return doCalendarInterval(start, diff, iTyp, true)
-}
-
-func doDateStringSub(startStr string, diff int64, iTyp types.IntervalType) (types.Datetime, error) {
-	start, err := types.ParseDatetime(startStr, 6)
-	if err != nil {
-		return 0, invalidTemporalArithmeticInput
-	}
-	return doCalendarInterval(start, diff, iTyp, true)
-}
-
-func doTimestampSub(loc *time.Location, start types.Timestamp, diff int64, iTyp types.IntervalType) (types.Timestamp, error) {
-	if start == types.ZeroTimestamp {
-		return 0, invalidTemporalArithmeticInput
-	}
-	if loc == nil {
-		loc = time.Local
-	}
-	dt, err := doCalendarInterval(start.ToDatetime(loc), diff, iTyp, true)
-	if err != nil {
-		return 0, err
-	}
-	return calendarArithmeticTimestamp(dt, loc)
-}
-
-func DateSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
-	iTyp := types.IntervalType(unit)
-
-	result.UseOptFunctionParamFrame(2)
-	rs := vector.MustFunctionResult[types.Date](result)
-	p1 := vector.OptGetParamFromWrapper[types.Date](rs, 0, ivecs[0])
-	p2 := vector.OptGetParamFromWrapper[int64](rs, 1, ivecs[1])
-	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedColNoTypeCheck[types.Date](rsVec)
-	rsNull := rsVec.GetNulls()
-	if selectList != nil && selectList.IgnoreAllRow() {
-		nulls.AddRange(rsNull, 0, uint64(length))
-		return nil
-	}
-
-	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(i) {
-			rsNull.Add(i)
-			continue
-		}
-		v1, null1 := p1.GetValue(i)
-		v2, null2 := p2.GetValue(i)
-		if null1 || null2 {
-			rsNull.Add(i)
-			continue
-		}
-		resultDate, err := doDateSub(v1, v2, iTyp)
-		if err != nil {
-			if handleTemporalArithmeticError(proc, err) {
-				rsNull.Add(i)
-				continue
-			}
-			return err
-		}
-		rss[i] = resultDate
-	}
-	return nil
+func DateSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return dateInterval(ivecs, result, proc, length, selectList, true)
 }
 
 func intToDate(v int32) (types.Date, error) {
@@ -5504,7 +5440,15 @@ func dateToInt(d types.Date) int32 {
 	return year*10000 + int32(month)*100 + int32(day)
 }
 
-func DateIntSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func DateIntSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return dateIntInterval(ivecs, result, proc, length, selectList, true)
+}
+
+func DateIntAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return dateIntInterval(ivecs, result, proc, length, selectList, false)
+}
+
+func dateIntInterval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, subtract bool) (err error) {
 	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
 	iTyp := types.IntervalType(unit)
 	if !types.UnitIsDayOrLarger(iTyp) {
@@ -5534,7 +5478,7 @@ func DateIntSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 				rsNull.Add(i)
 				continue
 			}
-			resultDt, err := doDateSub(d, v2, iTyp)
+			resultDt, err := doDateInterval(d, v2, iTyp, subtract)
 			if err != nil {
 				if handleTemporalArithmeticError(proc, err) {
 					rsNull.Add(i)
@@ -5548,261 +5492,20 @@ func DateIntSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	return nil
 }
 
-func DateIntAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
-	iTyp := types.IntervalType(unit)
-	if !types.UnitIsDayOrLarger(iTyp) {
-		return moerr.NewInvalidInputNoCtx("INT date does not support sub-day interval (HOUR/MINUTE/SECOND); cast to DATETIME first")
-	}
-
-	rs := vector.MustFunctionResult[int32](result)
-	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedColNoTypeCheck[int32](rsVec)
-	rsNull := rsVec.GetNulls()
-
-	p1 := vector.GenerateFunctionFixedTypeParameter[int32](ivecs[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
-
-	for i := uint64(0); i < uint64(length); i++ {
-		if functionRowSkipped(selectList, i) {
-			rsNull.Add(i)
-			continue
-		}
-		v1, null1 := p1.GetValue(i)
-		v2, null2 := p2.GetValue(i)
-		if null1 || null2 {
-			rsNull.Add(i)
-		} else {
-			d, err := intToDate(v1)
-			if err != nil {
-				rsNull.Add(i)
-				continue
-			}
-			resultDt, err := doDateAdd(d, v2, iTyp)
-			if err != nil {
-				if handleTemporalArithmeticError(proc, err) {
-					rsNull.Add(i)
-					continue
-				}
-				return err
-			}
-			rss[i] = dateToInt(resultDt)
-		}
-	}
-	return nil
+func DatetimeSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return datetimeInterval(ivecs, result, proc, length, selectList, true)
 }
 
-func DatetimeSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
-	scale := ivecs[0].GetType().Scale
-	iTyp := types.IntervalType(unit)
-	if iTyp == types.MicroSecond {
-		scale = 6
-	}
-	rs := vector.MustFunctionResult[types.Datetime](result)
-	rs.TempSetType(types.New(types.T_datetime, scale, scale))
-
-	// Use custom implementation to handle maximum overflow (return NULL)
-	result.UseOptFunctionParamFrame(2)
-	p1 := vector.OptGetParamFromWrapper[types.Datetime](rs, 0, ivecs[0])
-	p2 := vector.OptGetParamFromWrapper[int64](rs, 1, ivecs[1])
-	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedColNoTypeCheck[types.Datetime](rsVec)
-	rsNull := rsVec.GetNulls()
-
-	for i := uint64(0); i < uint64(length); i++ {
-		if functionRowSkipped(selectList, i) {
-			rsNull.Add(i)
-			continue
-		}
-		v1, null1 := p1.GetValue(i)
-		v2, null2 := p2.GetValue(i)
-		if null1 || null2 {
-			rsNull.Add(i)
-		} else {
-			resultDt, err := doDatetimeSub(v1, v2, iTyp)
-			if err != nil {
-				if handleTemporalArithmeticError(proc, err) {
-					// MySQL behavior: maximum overflow returns NULL
-					rsNull.Add(i)
-				} else {
-					return err
-				}
-			} else {
-				rss[i] = resultDt
-			}
-		}
-	}
-	return nil
+func DateStringSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return dateStringInterval(ivecs, result, proc, length, selectList, true)
 }
 
-func DateStringSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
-	iTyp := types.IntervalType(unit)
-	// Return VARCHAR type (string) to match MySQL behavior when input is string literal
-	rs := vector.MustFunctionResult[types.Varlena](result)
-
-	dateStrings := vector.GenerateFunctionStrParameter(ivecs[0])
-	intervals := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
-
-	for i := uint64(0); i < uint64(length); i++ {
-		if functionRowSkipped(selectList, i) {
-			if err = rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-		dateStr, null1 := dateStrings.GetStrValue(i)
-		interval, null2 := intervals.GetValue(i)
-		if null1 || null2 {
-			if err = rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-		} else {
-			dateStrVal := functionUtil.QuickBytesToStr(dateStr)
-			resultDt, err := doDateStringSub(dateStrVal, interval, iTyp)
-			if err != nil {
-				if handleTemporalArithmeticError(proc, err) {
-					// MySQL behavior: overflow or invalid input should return NULL
-					if err = rs.AppendBytes(nil, true); err != nil {
-						return err
-					}
-					continue
-				} else {
-					return err
-				}
-			} else {
-				// Format output based on input format and interval type
-				// Check if input is date-only format (no time part)
-				// For numeric format like '20071108181000' (14+ digits), it contains time part
-				isNumericFormat := len(dateStrVal) >= 14 && isAllDigits(dateStrVal)
-				hasTimePart := strings.Contains(dateStrVal, " ") || strings.Contains(dateStrVal, ":") || isNumericFormat
-
-				// Check if interval type affects time part
-				isTimeUnit := iTyp == types.MicroSecond || iTyp == types.Second ||
-					iTyp == types.Minute || iTyp == types.Hour
-
-				// Extract scale from input string to preserve precision
-				// MySQL behavior: DATE_SUB with string input that has fractional seconds
-				// should pad zeros to 6 digits (e.g., '.9999' -> '.999900')
-				scale := int32(0)
-				if dotIdx := strings.Index(dateStrVal, "."); dotIdx >= 0 {
-					// Input string has fractional seconds, use scale 6 to pad zeros
-					// MySQL behavior: pad fractional seconds to 6 digits
-					scale = 6
-				} else if iTyp == types.MicroSecond {
-					// For MICROSECOND unit, use scale 6 if input has no fractional part
-					scale = 6
-				}
-				resultStr := resultDt.String2(scale)
-
-				// If input was date-only and interval doesn't affect time, return date-only format
-				if !hasTimePart && !isTimeUnit {
-					// Extract date part only (YYYY-MM-DD)
-					resultDate := resultDt.ToDate()
-					resultStr = resultDate.String()
-				}
-
-				if err = rs.AppendBytes([]byte(resultStr), false); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	return nil
+func TimestampSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return timestampInterval(ivecs, result, proc, length, selectList, true)
 }
 
-func TimestampSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
-	iTyp := types.IntervalType(unit)
-
-	scale := ivecs[0].GetType().Scale
-	if iTyp == types.MicroSecond {
-		scale = 6
-	}
-	rs := vector.MustFunctionResult[types.Timestamp](result)
-	rs.TempSetType(types.New(types.T_timestamp, scale, scale))
-
-	// Use custom implementation to handle maximum overflow (return NULL)
-	result.UseOptFunctionParamFrame(2)
-	p1 := vector.OptGetParamFromWrapper[types.Timestamp](rs, 0, ivecs[0])
-	p2 := vector.OptGetParamFromWrapper[int64](rs, 1, ivecs[1])
-	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedColNoTypeCheck[types.Timestamp](rsVec)
-	rsNull := rsVec.GetNulls()
-	loc := proc.GetSessionInfo().TimeZone
-	if loc == nil {
-		loc = time.Local
-	}
-
-	for i := uint64(0); i < uint64(length); i++ {
-		if functionRowSkipped(selectList, i) {
-			rsNull.Add(i)
-			continue
-		}
-		v1, null1 := p1.GetValue(i)
-		v2, null2 := p2.GetValue(i)
-		if null1 || null2 {
-			rsNull.Add(i)
-		} else {
-			resultTs, err := doTimestampSub(loc, v1, v2, iTyp)
-			if err != nil {
-				if handleTemporalArithmeticError(proc, err) {
-					// MySQL behavior: maximum overflow returns NULL
-					rsNull.Add(i)
-				} else {
-					return err
-				}
-			} else {
-				rss[i] = resultTs
-			}
-		}
-	}
-	return nil
-}
-
-func TimeSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
-	scale := ivecs[0].GetType().Scale
-	iTyp := types.IntervalType(unit)
-	if iTyp == types.MicroSecond {
-		scale = 6
-	}
-	rs := vector.MustFunctionResult[types.Time](result)
-	rs.TempSetType(types.New(types.T_time, scale, scale))
-	result.UseOptFunctionParamFrame(2)
-	p1 := vector.OptGetParamFromWrapper[types.Time](rs, 0, ivecs[0])
-	p2 := vector.OptGetParamFromWrapper[int64](rs, 1, ivecs[1])
-	rsv := rs.GetResultVector()
-	values := vector.MustFixedColNoTypeCheck[types.Time](rsv)
-	nullsVec := rsv.GetNulls()
-	if selectList != nil && selectList.IgnoreAllRow() {
-		nulls.AddRange(nullsVec, 0, uint64(length))
-		return nil
-	}
-	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(i) {
-			nullsVec.Add(i)
-			continue
-		}
-		v1, null1 := p1.GetValue(i)
-		v2, null2 := p2.GetValue(i)
-		if null1 || null2 {
-			nullsVec.Add(i)
-			continue
-		}
-		raw, overflow, err := doTimeSub(v1, v2, iTyp)
-		if err != nil {
-			return err
-		}
-		if overflow {
-			nullsVec.Add(i)
-			appendTimeIntervalOverflowWarning(proc)
-			continue
-		}
-		values[i] = raw
-	}
-	return nil
+func TimeSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return timeInterval(ivecs, result, proc, length, selectList, true)
 }
 
 type number interface {
@@ -7156,7 +6859,8 @@ func FromUnixTimeUint64(ivecs []*vector.Vector, result vector.FunctionResultWrap
 	return nil
 }
 
-func floatUnixTimeParts(v float64) (sec int64, nsec int64, ok bool) {
+// FloatUnixTimeParts is the scalar conversion shared with temporal metadata proof.
+func FloatUnixTimeParts(v float64) (sec int64, nsec int64, ok bool) {
 	if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 {
 		return 0, 0, false
 	}
@@ -7310,7 +7014,7 @@ func FromUnixTimeFloat64(ivecs []*vector.Vector, result vector.FunctionResultWra
 			if err = rs.Append(d, true); err != nil {
 				return err
 			}
-		} else if sec, nsec, ok := floatUnixTimeParts(v); !ok {
+		} else if sec, nsec, ok := FloatUnixTimeParts(v); !ok {
 			if err = rs.Append(d, true); err != nil {
 				return err
 			}
@@ -7437,7 +7141,7 @@ func FromUnixTimeFloat64Format(ivecs []*vector.Vector, result vector.FunctionRes
 		v, null := vs.GetValue(i)
 		formatMask, null1 := formats.GetStrValue(i)
 
-		sec, nsec, ok := floatUnixTimeParts(v)
+		sec, nsec, ok := FloatUnixTimeParts(v)
 		if null || !ok || null1 {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
@@ -10942,7 +10646,7 @@ func StBufferQS(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 }
 
 // overlayBinary builds an eval function for a polygon Boolean operation.
-func overlayBinary(functionName string, op geo.BoolOp) fEvalFn {
+func overlayBinary(functionName string, op geo.BoolOp) executeLogicOfOverload {
 	return func(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 		emptyBatch, err := checkBinaryGeometryTypeSRID(functionName, ivecs, length, selectList)
 		if err != nil {
@@ -11557,7 +11261,7 @@ func bboxOverlaps(a, b geo.BBox) bool {
 	return !bboxCovers(a, b) && !bboxCovers(b, a)
 }
 
-func mbrBinary(name string, pred func(a, b geo.BBox) bool) fEvalFn {
+func mbrBinary(name string, pred func(a, b geo.BBox) bool) executeLogicOfOverload {
 	return func(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 		emptyBatch, err := checkBinaryGeometryTypeSRID(name, ivecs, length, selectList)
 		if err != nil {
@@ -12402,27 +12106,6 @@ func lineStringDistanceToLineString(left, right []geometryPoint2D) (float64, err
 	return minDistance, nil
 }
 
-func lineStringDistanceToPolygon(line, polygon []geometryPoint2D) (float64, error) {
-	if len(line) < 2 {
-		return 0, moerr.NewInvalidInputNoCtx("invalid linestring payload")
-	}
-	if len(polygon) < 3 {
-		return 0, moerr.NewInvalidInputNoCtx("invalid polygon payload")
-	}
-	if lineStringIntersectsPolygon(line, polygon) {
-		return 0, nil
-	}
-
-	minDistance := lineSegmentDistance(line[0], line[1], polygon[0], polygon[1])
-	for i := 0; i < len(line)-1; i++ {
-		for j := 0; j < len(polygon); j++ {
-			next := (j + 1) % len(polygon)
-			minDistance = math.Min(minDistance, lineSegmentDistance(line[i], line[i+1], polygon[j], polygon[next]))
-		}
-	}
-	return minDistance, nil
-}
-
 func lineStringDistanceToPolygonGeometry(line []geometryPoint2D, polygon geometryPolygon2D) (float64, error) {
 	if len(line) < 2 {
 		return 0, moerr.NewInvalidInputNoCtx("invalid linestring payload")
@@ -12469,25 +12152,6 @@ func polygonGeometryRings(polygon geometryPolygon2D) [][]geometryPoint2D {
 	return rings
 }
 
-func polygonDistanceToPolygon(left, right []geometryPoint2D) (float64, error) {
-	if len(left) < 3 || len(right) < 3 {
-		return 0, moerr.NewInvalidInputNoCtx("invalid polygon payload")
-	}
-	if polygonIntersectsPolygon(left, right) {
-		return 0, nil
-	}
-
-	minDistance := lineSegmentDistance(left[0], left[1], right[0], right[1])
-	for i := 0; i < len(left); i++ {
-		leftNext := (i + 1) % len(left)
-		for j := 0; j < len(right); j++ {
-			rightNext := (j + 1) % len(right)
-			minDistance = math.Min(minDistance, lineSegmentDistance(left[i], left[leftNext], right[j], right[rightNext]))
-		}
-	}
-	return minDistance, nil
-}
-
 func polygonDistanceToPolygonGeometry(left, right geometryPolygon2D) (float64, error) {
 	if err := validatePolygonGeometry(left); err != nil {
 		return 0, err
@@ -12512,22 +12176,6 @@ func polygonDistanceToPolygonGeometry(left, right geometryPolygon2D) (float64, e
 				}
 			}
 		}
-	}
-	return minDistance, nil
-}
-
-func pointDistanceToPolygon(point geometryPoint2D, polygon []geometryPoint2D) (float64, error) {
-	if len(polygon) < 3 {
-		return 0, moerr.NewInvalidInputNoCtx("invalid polygon payload")
-	}
-	if pointIntersectsPolygon(point, polygon) {
-		return 0, nil
-	}
-
-	minDistance := pointDistanceToLineSegment(point, polygon[0], polygon[1])
-	for i := 1; i < len(polygon); i++ {
-		next := (i + 1) % len(polygon)
-		minDistance = math.Min(minDistance, pointDistanceToLineSegment(point, polygon[i], polygon[next]))
 	}
 	return minDistance, nil
 }
@@ -14025,10 +13673,6 @@ func collinearSegmentsOverlapWithLength(a, b, c, d geometryPoint2D) bool {
 	return overlap > 1e-9
 }
 
-func pointIntersectsPolygon(point geometryPoint2D, polygon []geometryPoint2D) bool {
-	return pointOnPolygonBoundary(polygon, point.x, point.y) || pointInPolygon(polygon, point.x, point.y)
-}
-
 func pointIntersectsPolygonGeometry(point geometryPoint2D, polygon geometryPolygon2D) bool {
 	if pointOnPolygonBoundaryGeometry(polygon, point.x, point.y) {
 		return true
@@ -14048,23 +13692,6 @@ func lineStringIntersectsLineString(left, right []geometryPoint2D) bool {
 	for i := 0; i < len(left)-1; i++ {
 		for j := 0; j < len(right)-1; j++ {
 			if lineSegmentsIntersect(left[i], left[i+1], right[j], right[j+1]) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func lineStringIntersectsPolygon(line []geometryPoint2D, polygon []geometryPoint2D) bool {
-	for _, point := range line {
-		if pointIntersectsPolygon(point, polygon) {
-			return true
-		}
-	}
-	for i := 0; i < len(line)-1; i++ {
-		for j := 0; j < len(polygon); j++ {
-			next := (j + 1) % len(polygon)
-			if lineSegmentsIntersect(line[i], line[i+1], polygon[j], polygon[next]) {
 				return true
 			}
 		}
@@ -14094,29 +13721,6 @@ func lineStringIntersectsPolygonGeometry(line []geometryPoint2D, polygon geometr
 	}
 	for _, hole := range polygon.holes {
 		if checkRing(hole) {
-			return true
-		}
-	}
-	return false
-}
-
-func polygonIntersectsPolygon(left, right []geometryPoint2D) bool {
-	for i := 0; i < len(left); i++ {
-		leftNext := (i + 1) % len(left)
-		for j := 0; j < len(right); j++ {
-			rightNext := (j + 1) % len(right)
-			if lineSegmentsIntersect(left[i], left[leftNext], right[j], right[rightNext]) {
-				return true
-			}
-		}
-	}
-	for _, point := range left {
-		if pointIntersectsPolygon(point, right) {
-			return true
-		}
-	}
-	for _, point := range right {
-		if pointIntersectsPolygon(point, left) {
 			return true
 		}
 	}

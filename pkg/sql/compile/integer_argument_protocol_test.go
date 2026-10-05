@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -56,6 +57,17 @@ func TestIntegerArgumentProtocolBoundaries(t *testing.T) {
 	for id := int32(0); id <= function.TemporalIntegerArgumentCastOverload; id++ {
 		t.Run(fmt.Sprint(id), func(t *testing.T) {
 			expr := integerProtocolExpr(id)
+			var executors []colexec.ExpressionExecutor
+			t.Cleanup(func() {
+				for _, executor := range executors {
+					executor.Free()
+				}
+			})
+			canFold, err := plan2.ReplaceFoldExpr(c.proc, expr, &executors)
+			require.NoError(t, err)
+			require.False(t, canFold, "a column-dependent CAST cannot fold as a whole")
+			require.NotNil(t, expr.GetF().Args[1].GetT(), "scan folding must preserve every CAST target")
+			require.Empty(t, executors, "a type marker must not acquire an executor")
 			p := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}}}
 			features, err := planpb.RequiredRemoteExpressionFeatures(p)
 			require.NoError(t, err)
@@ -127,6 +139,13 @@ func TestIntegerArgumentReceiverRejectsInvalidSignatures(t *testing.T) {
 			name: "target marker",
 			mutate: func(expr *planpb.Expr) {
 				expr.GetF().Args[1].Expr = &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}
+			},
+			want: "target marker",
+		},
+		{
+			name: "folded target marker",
+			mutate: func(expr *planpb.Expr) {
+				expr.GetF().Args[1].Expr = &planpb.Expr_Fold{Fold: &planpb.FoldVal{IsConst: true}}
 			},
 			want: "target marker",
 		},
@@ -211,7 +230,7 @@ func TestIntegerArgumentProtocolPlacementAndSend(t *testing.T) {
 		client.version = version
 		c.execType = plan2.ExecTypeAP_MULTICN
 		c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-		require.NoError(t, c.constrainIntegerArgumentWorkers(qry))
+		require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 	}
 	place(defines.MORPCVersion84)
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
@@ -226,10 +245,10 @@ func TestIntegerArgumentProtocolPlacementAndSend(t *testing.T) {
 	client.version = defines.MORPCVersion84
 	_, err = encodeRemoteScope(scope, c.proc)
 	require.ErrorContains(t, err, "remote destination")
-	require.Error(t, validateIntegerArgumentDestination(c.proc, nil))
+	require.Error(t, validateRemoteExpressionDestination(c.proc, nil, planpb.RemoteExpressionFeatures{IntegerParameterCoercion: true}))
 	require.Equal(t, client.calls, client.releases)
 	ctx, cancel := context.WithCancel(c.proc.Ctx)
 	cancel()
 	c.proc.Ctx = ctx
-	require.ErrorIs(t, validateIntegerArgumentDestination(c.proc, &pipeline.Pipeline{Node: &pipeline.NodeInfo{Id: "old-worker", Addr: "remote:6001"}}), context.Canceled)
+	require.ErrorIs(t, validateRemoteExpressionDestination(c.proc, &pipeline.Pipeline{Node: &pipeline.NodeInfo{Id: "old-worker", Addr: "remote:6001"}}, planpb.RemoteExpressionFeatures{IntegerParameterCoercion: true}), context.Canceled)
 }

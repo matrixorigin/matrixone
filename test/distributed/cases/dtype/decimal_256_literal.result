@@ -65,3 +65,89 @@ select * from decimal_suffix_v order by d;
 -9  ¦  0  ¦  1  ¦  0
 drop view decimal_suffix_v;
 drop table decimal_suffix_t;
+drop table if exists decimal_scale_alignment_t;
+create table decimal_scale_alignment_t (id int primary key, x int);
+insert into decimal_scale_alignment_t values (1,1),(2,2),(3,NULL);
+select id,
+(cast(x as decimal(20,0)) + cast('3e-38' as decimal(65,38))) = cast(case id when 1 then '1.00000000000000000000000000000000000003' when 2 then '2.00000000000000000000000000000000000003' end as decimal(65,38)) as add_left,
+(cast('3e-38' as decimal(65,38)) + cast(x as decimal(20,0))) = cast(case id when 1 then '1.00000000000000000000000000000000000003' when 2 then '2.00000000000000000000000000000000000003' end as decimal(65,38)) as add_right,
+(cast(x as decimal(20,0)) - cast('3e-38' as decimal(65,38))) = cast(case id when 1 then '0.99999999999999999999999999999999999997' when 2 then '1.99999999999999999999999999999999999997' end as decimal(65,38)) as sub_left,
+(cast('3e-38' as decimal(65,38)) - cast(x as decimal(20,0))) = cast(case id when 1 then '-0.99999999999999999999999999999999999997' when 2 then '-1.99999999999999999999999999999999999997' end as decimal(65,38)) as sub_right,
+(cast(x as decimal(20,0)) % cast('3e-38' as decimal(65,38))) = cast(case id when 1 then '0.00000000000000000000000000000000000001' when 2 then '0.00000000000000000000000000000000000002' end as decimal(65,38)) as mod_left,
+(cast('3e-38' as decimal(65,38)) % cast(x as decimal(20,0))) = cast(case id when 1 then '0.00000000000000000000000000000000000003' when 2 then '0.00000000000000000000000000000000000003' end as decimal(65,38)) as mod_right
+from decimal_scale_alignment_t order by id;
+➤ id[4,32,0]  ¦  add_left[-7,1,0]  ¦  add_right[-7,1,0]  ¦  sub_left[-7,1,0]  ¦  sub_right[-7,1,0]  ¦  mod_left[-7,1,0]  ¦  mod_right[-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1  𝄀
+2  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1  𝄀
+3  ¦  NULL  ¦  NULL  ¦  NULL  ¦  NULL  ¦  NULL  ¦  NULL
+select id,
+(cast(x as decimal(20,0)) + cast('3e-39' as decimal(65,39))) = cast(case id when 1 then '1.000000000000000000000000000000000000003' when 2 then '2.000000000000000000000000000000000000003' end as decimal(65,39)) as add_left,
+(cast('3e-39' as decimal(65,39)) + cast(x as decimal(20,0))) = cast(case id when 1 then '1.000000000000000000000000000000000000003' when 2 then '2.000000000000000000000000000000000000003' end as decimal(65,39)) as add_right,
+(cast(x as decimal(20,0)) - cast('3e-39' as decimal(65,39))) = cast(case id when 1 then '0.999999999999999999999999999999999999997' when 2 then '1.999999999999999999999999999999999999997' end as decimal(65,39)) as sub_left,
+(cast('3e-39' as decimal(65,39)) - cast(x as decimal(20,0))) = cast(case id when 1 then '-0.999999999999999999999999999999999999997' when 2 then '-1.999999999999999999999999999999999999997' end as decimal(65,39)) as sub_right,
+(cast(x as decimal(20,0)) % cast('3e-39' as decimal(65,39))) = cast(case id when 1 then '0.000000000000000000000000000000000000001' when 2 then '0.000000000000000000000000000000000000002' end as decimal(65,39)) as mod_left,
+(cast('3e-39' as decimal(65,39)) % cast(x as decimal(20,0))) = cast(case id when 1 then '0.000000000000000000000000000000000000003' when 2 then '0.000000000000000000000000000000000000003' end as decimal(65,39)) as mod_right
+from decimal_scale_alignment_t order by id;
+➤ id[4,32,0]  ¦  add_left[-7,1,0]  ¦  add_right[-7,1,0]  ¦  sub_left[-7,1,0]  ¦  sub_right[-7,1,0]  ¦  mod_left[-7,1,0]  ¦  mod_right[-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1  𝄀
+2  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1  𝄀
+3  ¦  NULL  ¦  NULL  ¦  NULL  ¦  NULL  ¦  NULL  ¦  NULL
+select (-cast(x as decimal(20,0)) + cast('3e-65' as decimal(65,65))) = cast('-0.99999999999999999999999999999999999999999999999999999999999999997' as decimal(65,65)) as add_limit,
+(cast(x as decimal(20,0)) - cast('3e-65' as decimal(65,65))) = cast('0.99999999999999999999999999999999999999999999999999999999999999997' as decimal(65,65)) as sub_limit
+from decimal_scale_alignment_t where id=1;
+➤ add_limit[-7,1,0]  ¦  sub_limit[-7,1,0]  𝄀
+1  ¦  1
+select cast(x as decimal(20,0)) + cast('3e-65' as decimal(65,65)) from decimal_scale_alignment_t where id=1;
+Data truncation: data out of range: data type decimal256, value '1.00000000000000000000000000000000000000000000000000000000000000003' exceeds DECIMAL(65,65)
+select count(*) as rows_after_error from decimal_scale_alignment_t;
+➤ rows_after_error[-5,64,0]  𝄀
+3
+drop table decimal_scale_alignment_t;
+select count(*) as remaining_alignment_tables from information_schema.tables where table_schema=database() and table_name='decimal_scale_alignment_t';
+➤ remaining_alignment_tables[-5,64,0]  𝄀
+0
+drop table if exists decimal_high_bit_mod_t;
+create table decimal_high_bit_mod_t (id int primary key, x decimal(65,0), y decimal(65,58));
+insert into decimal_high_bit_mod_t values
+(1, 2000000000000000000, cast('85070591730234615865843651857942052864e-58' as decimal(65,58))),
+(2, 4000000000000000000, cast('-85070591730234615865843651857942052864e-58' as decimal(65,58))),
+(3, -2000000000000000000, cast('85070591730234615865843651857942052864e-58' as decimal(65,58))),
+(4, NULL, 0), (5, 4000000000000000000, 0);
+select id, x % y as remainder from decimal_high_bit_mod_t order by id;
+➤ id[4,32,0]  ¦  remainder[3,65,58]  𝄀
+1  ¦  6.2366216724450839974898480449551597568E-21  𝄀
+2  ¦  3.9661841718667064083953309041161142272E-21  𝄀
+3  ¦  -6.2366216724450839974898480449551597568E-21  𝄀
+4  ¦  null  𝄀
+5  ¦  null
+select id, x % cast('85070591730234615865843651857942052864e-58' as decimal(65,58)) as remainder from decimal_high_bit_mod_t order by id;
+➤ id[4,32,0]  ¦  remainder[3,65,58]  𝄀
+1  ¦  6.2366216724450839974898480449551597568E-21  𝄀
+2  ¦  3.9661841718667064083953309041161142272E-21  𝄀
+3  ¦  -6.2366216724450839974898480449551597568E-21  𝄀
+4  ¦  null  𝄀
+5  ¦  3.9661841718667064083953309041161142272E-21
+select id, cast('2000000000000000000' as decimal(65,0)) % y as remainder from decimal_high_bit_mod_t order by id;
+➤ id[4,32,0]  ¦  remainder[3,65,58]  𝄀
+1  ¦  6.2366216724450839974898480449551597568E-21  𝄀
+2  ¦  6.2366216724450839974898480449551597568E-21  𝄀
+3  ¦  6.2366216724450839974898480449551597568E-21  𝄀
+4  ¦  null  𝄀
+5  ¦  null
+select count(*) as rows_after_zero from decimal_high_bit_mod_t;
+➤ rows_after_zero[-5,64,0]  𝄀
+5
+drop table decimal_high_bit_mod_t;
+select count(*) as remaining_mod_tables from information_schema.tables where table_schema=database() and table_name='decimal_high_bit_mod_t';
+➤ remaining_mod_tables[-5,64,0]  𝄀
+0
+select cast('-57896044618658097711785492504343953926634992332820282019728792003' as decimal(65,0)) + cast('-0.956564819968' as decimal(65,12));
+Data truncation: data out of range: data type decimal256, value '-57896044618658097711785492504343953926634992332820282019728792003.956564819968' exceeds DECIMAL(65,12)
+select cast('-1e53' as decimal(65,0)) + cast('0' as decimal(65,12));
+Data truncation: data out of range: data type decimal256, value '-100000000000000000000000000000000000000000000000000000.000000000000' exceeds DECIMAL(65,12)
+select cast('-1e53' as decimal(65,0)) + cast('0.000000000001' as decimal(65,12)) as precision65_valid;
+➤ precision65_valid[3,65,12]  𝄀
+-99999999999999999999999999999999999999999999999999999.999999999999
+select cast('-57896044618658097711785492504343953926634992332820282019728792003' as decimal(65,0)) + cast(NULL as decimal(65,12)) as precision65_null;
+➤ precision65_null[3,65,12]  𝄀
+null
