@@ -1696,7 +1696,6 @@ func TestTimestampAddComprehensiveFromExpectResult(t *testing.T) {
 
 func TestTimestampAddStringFormats(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	t.Cleanup(proc.Free)
 	native, heap := proc.Mp().CurrNB(), proc.Mp().OnHeapCurrNB()
 	t.Cleanup(func() {
 		require.Equal(t, native, proc.Mp().CurrNB())
@@ -1744,7 +1743,6 @@ func TestTimestampAddStringFormats(t *testing.T) {
 
 func TestTimestampAddErrorHandling(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	t.Cleanup(proc.Free)
 	native, heap := proc.Mp().CurrNB(), proc.Mp().OnHeapCurrNB()
 	t.Cleanup(func() {
 		require.Equal(t, native, proc.Mp().CurrNB())
@@ -13618,7 +13616,6 @@ func TestTemporalMicrosecondBoundaryOverflowIsNull(t *testing.T) {
 	timestampInputs := func(t *testing.T, dateAddSyntax bool) (*process.Process, []*vector.Vector, vector.FunctionResultWrapper) {
 		t.Helper()
 		proc := testutil.NewProcess(t)
-		t.Cleanup(proc.Free)
 		proc.GetSessionInfo().TimeZone = time.UTC
 		timestampVec := vector.NewVec(types.New(types.T_timestamp, 0, 6))
 		t.Cleanup(func() { timestampVec.Free(proc.Mp()) })
@@ -13677,7 +13674,6 @@ func TestTemporalMicrosecondBoundaryOverflowIsNull(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
-			t.Cleanup(proc.Free)
 			stringVec := vector.NewVec(types.T_varchar.ToType())
 			t.Cleanup(func() { stringVec.Free(proc.Mp()) })
 			require.NoError(t, vector.AppendStringList(stringVec, []string{
@@ -17070,7 +17066,6 @@ func TestTimestampAddDateWarningsPerSelectedRow(t *testing.T) {
 		for _, constant := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/constant=%t", unitText, constant), func(t *testing.T) {
 				proc := testutil.NewProcess(t)
-				t.Cleanup(proc.Free)
 				warnings := &numericWarningSession{}
 				proc.WarningSink = warnings
 				var unit *vector.Vector

@@ -226,7 +226,6 @@ func TestCombinedRemoteMembershipFilterOwnership(t *testing.T) {
 	for _, mode := range []string{"transported", "caller-owned", "unshareable"} {
 		t.Run(mode, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
-			t.Cleanup(proc.Free)
 			admission := new(remoteMembershipFilterAdmission)
 			rt := moruntime.ServiceRuntime(proc.GetService())
 			previous, hadPrevious := rt.GetGlobalVariables(moruntime.CNMemoryThrottler)
