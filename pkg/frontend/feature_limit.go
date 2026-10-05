@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
@@ -269,49 +268,7 @@ func advanceFeatureLimitSnapshot(
 	if txnOp == nil {
 		return moerr.NewInternalErrorNoCtx("missing transaction for feature-limit snapshot refresh")
 	}
-	return advanceFeatureLimitTxnSnapshot(ctx, ses, txnOp)
-}
-
-func advanceFeatureLimitTxnSnapshot(
-	ctx context.Context,
-	ses *Session,
-	txnOp TxnOperator,
-) error {
-	if txnOp == nil {
-		return moerr.NewInternalErrorNoCtx("missing transaction for feature-limit snapshot refresh")
-	}
-	var (
-		frontier timestamp.Timestamp
-		err      error
-	)
-
-	if logtailReadBarrierSupported(ses) {
-		frontier, err = ses.acquireLogtailReadBarrier(ctx)
-	} else {
-		var minimum timestamp.Timestamp
-		minimum, err = ses.legacyLogtailReadFence(ctx)
-		if err == nil {
-			pu := getPuIfPresent(ses.GetService())
-			if pu == nil || pu.TxnClient == nil {
-				return moerr.NewInternalError(
-					ctx, "missing transaction client for feature-limit snapshot refresh")
-			}
-			frontier, err = pu.TxnClient.WaitLogTailAppliedAt(ctx, minimum)
-			if err == nil && frontier.Less(minimum) {
-				return moerr.NewInternalError(
-					ctx, "feature-limit snapshot did not reach the required timestamp")
-			}
-		}
-	}
-	if err != nil {
-		return err
-	}
-
-	workspace := txnOp.GetWorkspace()
-	if workspace == nil {
-		return moerr.NewInternalErrorNoCtx("missing workspace for feature-limit snapshot refresh")
-	}
-	return workspace.AdvanceSnapshot(ctx, frontier)
+	return advanceCatalogTxnSnapshot(ctx, ses, txnOp)
 }
 
 func lockFeatureQuota(

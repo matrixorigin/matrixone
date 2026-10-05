@@ -2493,11 +2493,16 @@ func Test_getSqlForCheckPitrDup(t *testing.T) {
 			OriginAccountName: origin,
 		}
 	}
-	assert.Contains(t, getSqlForCheckPitrDup(mk(int32(tree.PITRLEVELCLUSTER), false)), "obj_id")
-	assert.Contains(t, getSqlForCheckPitrDup(mk(int32(tree.PITRLEVELACCOUNT), true)), "account_name = 'acc'")
-	assert.Contains(t, getSqlForCheckPitrDup(mk(int32(tree.PITRLEVELACCOUNT), false)), "account_name = 'curacc'")
-	assert.Contains(t, getSqlForCheckPitrDup(mk(int32(tree.PITRLEVELDATABASE), false)), "database_name = 'db'")
-	assert.Contains(t, getSqlForCheckPitrDup(mk(int32(tree.PITRLEVELTABLE), false)), "table_name = 'tb'")
+	assert.Contains(t, getSqlForCheckPitrDup(mk(int32(tree.PITRLEVELCLUSTER), false), false), "obj_id")
+	assert.Contains(t, getSqlForCheckPitrDup(mk(int32(tree.PITRLEVELACCOUNT), true), false), "account_name = 'acc'")
+	assert.Contains(t, getSqlForCheckPitrDup(mk(int32(tree.PITRLEVELACCOUNT), false), false), "account_name = 'curacc'")
+	assert.Contains(t, getSqlForCheckPitrDup(mk(int32(tree.PITRLEVELDATABASE), false), false), "database_name = 'db'")
+	assert.Contains(t, getSqlForCheckPitrDup(mk(int32(tree.PITRLEVELTABLE), false), false), "table_name = 'tb'")
+	assert.Contains(t, getSqlForCheckPitrDup(mk(int32(tree.PITRLEVELTABLE), false), true), "lower(table_name) = lower('tb')")
+	assert.Contains(t, getSqlForCheckPitrDup(mk(int32(tree.PITRLEVELTABLE), false), true), "SELECT pitr_id,database_name,table_name")
+	assert.True(t, mode2PitrNamesMatch(tree.PITRLEVELTABLE, "\xc0A", "Tb", "\xc0a", "tb"))
+	assert.False(t, mode2PitrNamesMatch(tree.PITRLEVELTABLE, "\xc0a", "Tb", "\xc1a", "tb"))
+	assert.True(t, mode2PitrNamesMatch(tree.PITRLEVELDATABASE, "\xc0A", "", "\xc0a", ""))
 }
 
 func TestPitrInternalSQLEscapesStringLiterals(t *testing.T) {
@@ -2513,7 +2518,7 @@ func TestPitrInternalSQLEscapesStringLiterals(t *testing.T) {
 		DatabaseName:     "db'name",
 		TableName:        "tb\\name",
 	}
-	sql := getSqlForCheckPitrDup(p)
+	sql := getSqlForCheckPitrDup(p, false)
 	assert.Contains(t, sql, "database_name = 'db''name'")
 	assert.Contains(t, sql, "table_name = 'tb\\\\name'")
 }
@@ -2581,14 +2586,17 @@ func TestResolveCurrentPitrObjectIDRefreshesPlannedTableID(t *testing.T) {
 	eng.dbs["db"] = db
 	c := &Compile{e: eng, proc: testutil.NewProc(t)}
 
-	objectID, err := c.resolveCurrentPitrObjectID(&plan2.CreatePitr{
+	createPitr := &plan2.CreatePitr{
 		Level:        int32(tree.PITRLEVELTABLE),
 		DatabaseName: "db",
 		TableName:    "tbl",
 		TableId:      99,
-	})
+	}
+	objectID, err := c.resolveCurrentPitrObjectID(createPitr)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), objectID)
+	require.Equal(t, "db", createPitr.DatabaseName)
+	require.Equal(t, "tbl", createPitr.TableName)
 }
 
 func TestCheckSysMoCatalogPitrResult(t *testing.T) {
@@ -3167,6 +3175,76 @@ func stubPublicationGuardForDropTests(t *testing.T) {
 	stub := gostub.Stub(&ensureDatabaseNotPublished,
 		func(_ *Compile, _ engine.Database, _ string) error { return nil })
 	t.Cleanup(stub.Reset)
+}
+
+type publicationCheckSession struct {
+	testInternalExecutorSession
+	publishing bool
+	checkErr   error
+	calls      int
+}
+
+func (s *publicationCheckSession) CheckDatabasePublishing(context.Context, string) (bool, error) {
+	s.calls++
+	return s.publishing, s.checkErr
+}
+
+func TestEnsureDatabaseNotPublishedMode2LegacyIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		indexed    bool
+		publishing bool
+		checkErr   error
+		wantErr    string
+		wantCalls  int
+	}{
+		{"legacy_id_zero_named_publication", false, false,
+			moerr.NewInternalError(t.Context(), "publication catalog has inconsistent database identity"),
+			"inconsistent database identity", 1},
+		{"database_star_does_not_block_unrelated_database", false, false, nil, "", 1},
+		{"current_physical_id_is_protected", true, false, nil, "is publishing", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			proc := testutil.NewProcess(t)
+			ctx := defines.AttachMode2NameResolution(t.Context(), true)
+			proc.Ctx = ctx
+			proc.ReplaceTopCtx(ctx)
+			ses := &publicationCheckSession{publishing: tc.publishing, checkErr: tc.checkErr}
+			proc.Session = ses
+
+			query := "select 1 from mo_catalog.mo_pubs where database_id = 42 limit 1"
+			exec := &mongoDBMappingTestExecutor{results: make(map[string]executor.Result)}
+			if tc.indexed {
+				result := executor.NewMemResult([]types.Type{types.T_int64.ToType()}, proc.Mp())
+				result.NewBatchWithRowCount(1)
+				require.NoError(t, executor.AppendFixedRows(result, 0, []int64{1}))
+				exec.results[query] = result.GetResult()
+			}
+			rt := moruntime.ServiceRuntime(proc.GetService())
+			previous, hadPrevious := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+			rt.SetGlobalVariables(moruntime.InternalSQLExecutor, exec)
+			t.Cleanup(func() {
+				if hadPrevious {
+					rt.SetGlobalVariables(moruntime.InternalSQLExecutor, previous)
+				} else {
+					rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, exec)
+				}
+			})
+
+			db := mock_frontend.NewMockDatabase(ctrl)
+			db.EXPECT().IsSubscription(gomock.Any()).Return(false)
+			db.EXPECT().GetDatabaseId(gomock.Any()).Return("42")
+			err := ensureDatabaseNotPublished(&Compile{proc: proc}, db, "QaPhysical")
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, tc.wantErr)
+			}
+			require.Equal(t, tc.wantCalls, ses.calls)
+			require.Equal(t, []string{query}, exec.sqls)
+		})
+	}
 }
 
 func TestDropDatabaseLookupErrorIsNotMissing(t *testing.T) {
@@ -3887,4 +3965,113 @@ func TestTruncateTemporaryTableRebuildsTemporaryRelation(t *testing.T) {
 	physical, ok := session.GetTempTable("test", "t")
 	require.True(t, ok)
 	require.Equal(t, "physical_t_replacement", physical)
+}
+
+// The engine returns a stored spelling independently of the caller's alias.
+type namedDDLDatabase struct {
+	engine.Database
+	physical string
+}
+
+func (db namedDDLDatabase) GetPhysicalName() string { return db.physical }
+
+func TestOpenDDLDatabaseUsesPhysicalIdentityAndOrderedSnapshot(t *testing.T) {
+	frontier := timestamp.Timestamp{PhysicalTime: 80, LogicalTime: 9}
+	for _, tc := range []struct {
+		name       string
+		mode2      bool
+		takeLock   bool
+		isolation  txn.TxnIsolation
+		lookupErr  error
+		lockErr    error
+		barrierErr error
+		refreshErr error
+		replaced   bool
+		wantEvents []string
+	}{
+		{name: "exact control", takeLock: true, isolation: txn.TxnIsolation_RC,
+			wantEvents: []string{"lock:alias", "lookup:alias"}},
+		{name: "physical name without locks", mode2: true,
+			wantEvents: []string{"lookup:alias"}},
+		{name: "RC uses TN frontier after physical lock", mode2: true, takeLock: true, isolation: txn.TxnIsolation_RC,
+			wantEvents: []string{"lookup:alias", "lock:Stored", "barrier", "advance", "lookup:Stored"}},
+		{name: "SI keeps its snapshot", mode2: true, takeLock: true, isolation: txn.TxnIsolation_SI,
+			wantEvents: []string{"lookup:alias", "lock:Stored", "lookup:Stored"}},
+		{name: "ambiguous name never locks", mode2: true, takeLock: true,
+			lookupErr: moerr.NewAmbiguousIdentifier(context.Background(), "database", "alias"), wantEvents: []string{"lookup:alias"}},
+		{name: "lock cancellation stops refresh", mode2: true, takeLock: true, isolation: txn.TxnIsolation_RC,
+			lockErr: context.Canceled, wantEvents: []string{"lookup:alias", "lock:Stored"}},
+		{name: "barrier cancellation stops lookup", mode2: true, takeLock: true, isolation: txn.TxnIsolation_RC,
+			barrierErr: context.Canceled, wantEvents: []string{"lookup:alias", "lock:Stored", "barrier"}},
+		{name: "refresh failure stops lookup", mode2: true, takeLock: true, isolation: txn.TxnIsolation_RC,
+			refreshErr: context.DeadlineExceeded, wantEvents: []string{"lookup:alias", "lock:Stored", "barrier", "advance"}},
+		{name: "reincarnation rejects stale identity", mode2: true, takeLock: true, isolation: txn.TxnIsolation_RC, replaced: true,
+			wantEvents: []string{"lookup:alias", "lock:Stored", "barrier", "advance", "lookup:Stored"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			proc := testutil.NewProcess(t)
+			proc.Ctx = defines.AttachMode2NameResolution(proc.Ctx, tc.mode2)
+			op := mock_frontend.NewMockTxnOperator(ctrl)
+			op.EXPECT().Txn().Return(txn.TxnMeta{Mode: txn.TxnMode_Pessimistic, Isolation: tc.isolation}).AnyTimes()
+			proc.Base.TxnOperator = op
+			var events []string
+			workspace := mock_frontend.NewMockWorkspace(ctrl)
+			op.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
+			workspace.EXPECT().AdvanceSnapshot(gomock.Any(), frontier).DoAndReturn(func(context.Context, timestamp.Timestamp) error {
+				events = append(events, "advance")
+				return tc.refreshErr
+			}).AnyTimes()
+			before, after := mock_frontend.NewMockDatabase(ctrl), mock_frontend.NewMockDatabase(ctrl)
+			before.EXPECT().GetDatabaseId(gomock.Any()).Return("1").AnyTimes()
+			afterID := "1"
+			if tc.replaced {
+				afterID = "2"
+			}
+			after.EXPECT().GetDatabaseId(gomock.Any()).Return(afterID).AnyTimes()
+			eng := mock_frontend.NewMockEngine(ctrl)
+			eng.EXPECT().Database(gomock.Any(), gomock.Any(), op).DoAndReturn(func(_ context.Context, name string, _ client.TxnOperator) (engine.Database, error) {
+				events = append(events, "lookup:"+name)
+				if tc.lookupErr != nil {
+					return nil, tc.lookupErr
+				}
+				if name == "Stored" {
+					return namedDDLDatabase{Database: after, physical: "Stored"}, nil
+				}
+				return namedDDLDatabase{Database: before, physical: "Stored"}, nil
+			}).AnyTimes()
+			barrier := &testCreateIndexLogtailBarrier{Engine: eng, acquire: func(context.Context) (timestamp.Timestamp, error) {
+				events = append(events, "barrier")
+				return frontier, tc.barrierErr
+			}}
+			stub := gostub.Stub(&lockMoDatabase, func(_ *Compile, name string, mode lock.LockMode) error {
+				require.Equal(t, lock.LockMode_Shared, mode)
+				events = append(events, "lock:"+name)
+				return tc.lockErr
+			})
+			t.Cleanup(stub.Reset)
+			db, physical, err := openDDLDatabaseWithLock(&Compile{proc: proc, e: barrier}, "alias", tc.takeLock)
+			require.Equal(t, tc.wantEvents, events)
+			if tc.lookupErr != nil || tc.lockErr != nil || tc.barrierErr != nil || tc.refreshErr != nil {
+				for _, want := range []error{tc.lookupErr, tc.lockErr, tc.barrierErr, tc.refreshErr} {
+					if want != nil {
+						require.ErrorIs(t, err, want)
+					}
+				}
+				require.Nil(t, db)
+				require.Equal(t, "alias", physical, "diagnostics retain the requested name")
+			} else if tc.replaced {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged))
+				require.Nil(t, db)
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, db)
+				if tc.mode2 {
+					require.Equal(t, "Stored", physical)
+				} else {
+					require.Equal(t, "alias", physical)
+				}
+			}
+		})
+	}
 }

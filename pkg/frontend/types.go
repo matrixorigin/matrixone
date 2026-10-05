@@ -769,6 +769,7 @@ type BackgroundExec interface {
 	Exec(context.Context, string) error
 	ExecWithSQLMode(context.Context, string, string) error
 	ExecRestore(context.Context, string, uint32, uint32) error
+	// ExecStmt borrows the caller-owned statement until it returns.
 	ExecStmt(context.Context, tree.Statement) error
 	GetExecResultSet() []interface{}
 	ClearExecResultSet()

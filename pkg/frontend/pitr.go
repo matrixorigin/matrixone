@@ -25,6 +25,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/identifier"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -198,7 +199,7 @@ func getSqlForGetLengthAndUnitFmt(accountId uint32, level, accName, dbName, tblN
 }
 
 func checkPitrDup(ctx context.Context, bh BackgroundExec, createAccount string, createAccountId uint64, stmt *tree.CreatePitr) (bool, error) {
-	sql := getSqlForCheckPitrDup(createAccount, createAccountId, stmt)
+	sql := getSqlForCheckPitrDup(createAccount, createAccountId, stmt, defines.Mode2NameResolutionEnabled(ctx))
 
 	var newCtx = ctx
 	if createAccountId != sysAccountID {
@@ -217,9 +218,38 @@ func checkPitrDup(ctx context.Context, bh BackgroundExec, createAccount string, 
 	}
 
 	if execResultArrayHasData(erArray) {
+		if defines.Mode2NameResolutionEnabled(ctx) &&
+			(stmt.Level == tree.PITRLEVELDATABASE || stmt.Level == tree.PITRLEVELTABLE) {
+			for _, result := range erArray {
+				for row := uint64(0); row < result.GetRowCount(); row++ {
+					databaseName, err := result.GetString(newCtx, row, 1)
+					if err != nil {
+						return false, err
+					}
+					tableName := ""
+					if stmt.Level == tree.PITRLEVELTABLE {
+						tableName, err = result.GetString(newCtx, row, 2)
+						if err != nil {
+							return false, err
+						}
+					}
+					if mode2PitrNamesMatch(stmt.Level, string(stmt.DatabaseName), string(stmt.TableName), databaseName, tableName) {
+						return true, nil
+					}
+				}
+			}
+			return false, nil
+		}
 		return true, nil
 	}
 	return false, nil
+}
+
+func mode2PitrNamesMatch(level tree.PitrLevel, expectedDB, expectedTable, actualDB, actualTable string) bool {
+	if identifier.Fold(expectedDB) != identifier.Fold(actualDB) {
+		return false
+	}
+	return level == tree.PITRLEVELDATABASE || identifier.Fold(expectedTable) == identifier.Fold(actualTable)
 }
 
 // @param pitrLevel
@@ -228,8 +258,17 @@ func checkPitrDup(ctx context.Context, bh BackgroundExec, createAccount string, 
 // if level is database, check whether has a pitr which account_name and db_name is the same
 // if level is table, check whether has a pitr which account_name db_name and tbl_name is the same
 // @return sql
-func getSqlForCheckPitrDup(createAccount string, createAccountId uint64, stmt *tree.CreatePitr) string {
+func getSqlForCheckPitrDup(createAccount string, createAccountId uint64, stmt *tree.CreatePitr, mode2 bool) string {
 	sql := "select pitr_id from mo_catalog.mo_pitr where create_account = %d"
+	databaseName := fmt.Sprintf("database_name = '%s'", sqlquote.EscapeString(string(stmt.DatabaseName)))
+	tableName := fmt.Sprintf("table_name = '%s'", sqlquote.EscapeString(string(stmt.TableName)))
+	if mode2 {
+		if stmt.Level == tree.PITRLEVELDATABASE || stmt.Level == tree.PITRLEVELTABLE {
+			sql = "select pitr_id,database_name,table_name from mo_catalog.mo_pitr where create_account = %d"
+		}
+		databaseName = fmt.Sprintf("lower(database_name) = lower('%s')", sqlquote.EscapeString(string(stmt.DatabaseName)))
+		tableName = fmt.Sprintf("lower(table_name) = lower('%s')", sqlquote.EscapeString(string(stmt.TableName)))
+	}
 	switch stmt.Level {
 	case tree.PITRLEVELCLUSTER:
 		return getSqlForCheckDupPitrFormat(createAccountId, math.MaxUint64)
@@ -240,9 +279,9 @@ func getSqlForCheckPitrDup(createAccount string, createAccountId uint64, stmt *t
 			return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and account_name = '%s' and level = 'account' and pitr_status = 1;", sqlquote.EscapeString(createAccount))
 		}
 	case tree.PITRLEVELDATABASE:
-		return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and database_name = '%s' and level = 'database' and pitr_status = 1;", sqlquote.EscapeString(string(stmt.DatabaseName)))
+		return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and %s and level = 'database' and pitr_status = 1;", databaseName)
 	case tree.PITRLEVELTABLE:
-		return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and database_name = '%s' and table_name = '%s' and level = 'table' and pitr_status = 1;", sqlquote.EscapeString(string(stmt.DatabaseName)), sqlquote.EscapeString(string(stmt.TableName)))
+		return fmt.Sprintf(sql, createAccountId) + fmt.Sprintf(" and %s and %s and level = 'table' and pitr_status = 1;", databaseName, tableName)
 	}
 	return sql
 }
@@ -277,6 +316,16 @@ func checkPitrExistOrNot(ctx context.Context, bh BackgroundExec, pitrName string
 		return true, nil
 	}
 	return false, nil
+}
+
+// Resolve within the background transaction that holds the lineage barrier.
+// The foreground session can have a different snapshot from the PITR write.
+func resolvePitrCreateNames(ctx context.Context, bh BackgroundExec, dbName, tableName string) (string, string, error) {
+	if !defines.Mode2NameResolutionEnabled(ctx) {
+		return dbName, tableName, nil
+	}
+	physicalDB, physicalTable, _, err := resolveCatalogObjectInBackgroundTxn(ctx, bh, dbName, tableName)
+	return physicalDB, physicalTable, err
 }
 
 func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) (err error) {
@@ -505,6 +554,14 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) (err
 		if len(databaseName) > 0 && needSkipDb(databaseName) {
 			return moerr.NewInternalError(ctx, fmt.Sprintf("can not create pitr for current database %s", databaseName))
 		}
+		databaseName, _, err = resolvePitrCreateNames(ctx, bh, databaseName, "")
+		if err != nil {
+			return err
+		}
+		if needSkipDb(databaseName) {
+			return moerr.NewInternalErrorf(ctx, "can not create pitr for current database %s", databaseName)
+		}
+		stmt.DatabaseName = tree.Identifier(databaseName)
 		getDatabaseIdFunc := func(dbName string) (dbId uint64, rtnErr error) {
 			var erArray []ExecResult
 			sql, rtnErr = getSqlForCheckDatabase(ctx, dbName)
@@ -574,12 +631,22 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) (err
 		if len(databaseName) > 0 && needSkipDb(databaseName) {
 			return moerr.NewInternalError(ctx, fmt.Sprintf("can not create pitr for current table %s.%s", databaseName, tableName))
 		}
+		databaseName, tableName, err = resolvePitrCreateNames(ctx, bh, databaseName, tableName)
+		if err != nil {
+			return err
+		}
+		if needSkipDb(databaseName) {
+			return moerr.NewInternalErrorf(ctx, "can not create pitr for current table %s.%s", databaseName, tableName)
+		}
+		stmt.DatabaseName = tree.Identifier(databaseName)
+		stmt.TableName = tree.Identifier(tableName)
 		getTableIdFunc := func(dbName, tblName string) (tblId uint64, rtnErr error) {
 			var erArray []ExecResult
-			sql, rtnErr = getSqlForCheckDatabaseTable(ctx, dbName, tblName)
-			if rtnErr != nil {
-				return 0, rtnErr
-			}
+			// PITR follows the physical table generation. The shared privilege
+			// helper selects rel_logical_id, which survives ALTER and does not
+			// match the ID used by INTERNAL PITR or DROP TABLE invalidation.
+			sql = fmt.Sprintf("select rel_id from mo_catalog.mo_tables where reldatabase = '%s' and relname = '%s' and account_id = %d",
+				sqlquote.EscapeString(dbName), sqlquote.EscapeString(tblName), tenantInfo.GetTenantID())
 			bh.ClearExecResultSet()
 			rtnErr = bh.Exec(ctx, sql)
 			if rtnErr != nil {
@@ -1029,7 +1096,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 	}
 
 	// check if the database can be restore
-	if len(dbName) != 0 && needSkipDb(dbName) {
+	if len(dbName) != 0 && isProtectedRecoveryDatabase(ctx, dbName) {
 		return stats, moerr.NewInternalErrorf(ctx, "database %s can not be restore", dbName)
 	}
 
@@ -1040,13 +1107,43 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 	}
 
 	// check the restore level and the pitr level
-	if err = checkPitrValidOrNot(pitr, stmt, tenantInfo); err != nil {
+	if err = checkPitrValidOrNot(pitr, stmt, tenantInfo, defines.Mode2NameResolutionEnabled(ctx)); err != nil {
 		return stats, err
 	}
 
 	// check the ts is valid or not
 	if err = checkPitrInValidDurtion(ts, pitr); err != nil {
 		return stats, err
+	}
+	if defines.Mode2NameResolutionEnabled(ctx) && (stmt.Level == tree.RESTORELEVELDATABASE || stmt.Level == tree.RESTORELEVELTABLE) {
+		physicalDB, physicalTable, sourceID, resolveErr := resolveCatalogObjectAtSnapshot(
+			ctx, bh, uint32(pitr.accountId), ts, dbName, tblName)
+		if resolveErr != nil {
+			return stats, resolveErr
+		}
+		if pitr.level == tree.PITRLEVELDATABASE.String() && stmt.Level == tree.RESTORELEVELTABLE {
+			_, _, sourceID, resolveErr = resolveCatalogObjectAtSnapshot(
+				ctx, bh, uint32(pitr.accountId), ts, dbName, "")
+			if resolveErr != nil {
+				return stats, resolveErr
+			}
+		}
+		identityMatches := sourceID == pitr.objId
+		if !identityMatches && pitr.level == tree.PITRLEVELTABLE.String() {
+			identityMatches, resolveErr = historicalTableIDMatchesPitr(
+				ctx, bh, uint32(pitr.accountId), ts, dbName, tblName, sourceID, pitr.objId)
+			if resolveErr != nil {
+				return stats, resolveErr
+			}
+		}
+		if (pitr.level == tree.PITRLEVELDATABASE.String() || pitr.level == tree.PITRLEVELTABLE.String()) && !identityMatches {
+			return stats, moerr.NewInternalError(ctx, "PITR source object identity changed")
+		}
+		if isProtectedRecoveryDatabase(ctx, physicalDB) {
+			return stats, moerr.NewInternalErrorf(ctx, "database %s can not be restore", physicalDB)
+		}
+		dbName, tblName = physicalDB, physicalTable
+		stmt.DatabaseName, stmt.TableName = tree.Identifier(physicalDB), tree.Identifier(physicalTable)
 	}
 
 	if stmt.Level == tree.RESTORELEVELACCOUNT && len(accountName) > 0 {
@@ -1835,6 +1932,13 @@ func deleteCurFkTableInPitrRestore(ctx context.Context,
 		curFkTableMap map[string]*tableInfo
 		isMasterTable bool
 	)
+	if dbName != "" {
+		var found bool
+		dbName, tblName, found, err = resolveCurrentRestoreTarget(ctx, bh, dbName, tblName)
+		if err != nil || !found {
+			return err
+		}
+	}
 
 	// get topo sorted tables with foreign key
 	sortedFkTbls, err = fkTablesTopoSortInPitrRestore(ctx, bh, 0, dbName, tblName, nil)
@@ -2253,7 +2357,13 @@ func addTimeSpan(pivot time.Time, length int, unit string) (time.Time, error) {
 	return time.Unix(0, lower).UTC(), nil
 }
 
-func checkPitrValidOrNot(pitrRecord *pitrRecord, stmt *tree.RestorePitr, tenantInfo *TenantInfo) (err error) {
+func checkPitrValidOrNot(pitrRecord *pitrRecord, stmt *tree.RestorePitr, tenantInfo *TenantInfo, mode2 bool) (err error) {
+	nameMatches := func(stored string, physical tree.Identifier) bool {
+		if mode2 {
+			return identifier.Fold(stored) == identifier.Fold(string(physical))
+		}
+		return stored == string(physical)
+	}
 	restoreLevel := stmt.Level
 	switch restoreLevel {
 	case tree.RESTORELEVELCLUSTER:
@@ -2329,7 +2439,7 @@ func checkPitrValidOrNot(pitrRecord *pitrRecord, stmt *tree.RestorePitr, tenantI
 		if pitrRecord.level == tree.PITRLEVELACCOUNT.String() && pitrRecord.accountId != uint64(tenantInfo.TenantID) {
 			return moerr.NewInternalErrorNoCtxf("pitr %s is not allowed to restore account %v database %v", pitrRecord.pitrName, tenantInfo.GetTenant(), string(stmt.DatabaseName))
 		}
-		if pitrRecord.level == tree.PITRLEVELDATABASE.String() && (pitrRecord.accountId != uint64(tenantInfo.TenantID) || pitrRecord.databaseName != string(stmt.DatabaseName)) {
+		if pitrRecord.level == tree.PITRLEVELDATABASE.String() && (pitrRecord.accountId != uint64(tenantInfo.TenantID) || !nameMatches(pitrRecord.databaseName, stmt.DatabaseName)) {
 			return moerr.NewInternalErrorNoCtxf("pitr %s is not allowed to restore database %v", pitrRecord.pitrName, string(stmt.DatabaseName))
 		}
 	case tree.RESTORELEVELTABLE:
@@ -2343,10 +2453,10 @@ func checkPitrValidOrNot(pitrRecord *pitrRecord, stmt *tree.RestorePitr, tenantI
 		if pitrRecord.level == tree.PITRLEVELACCOUNT.String() && pitrRecord.accountId != uint64(tenantInfo.TenantID) {
 			return moerr.NewInternalErrorNoCtxf("pitr %s is not allowed to restore account %v database %v table %v", pitrRecord.pitrName, tenantInfo.GetTenant(), string(stmt.DatabaseName), string(stmt.TableName))
 		}
-		if pitrRecord.level == tree.PITRLEVELDATABASE.String() && (pitrRecord.accountId != uint64(tenantInfo.TenantID) || pitrRecord.databaseName != string(stmt.DatabaseName)) {
+		if pitrRecord.level == tree.PITRLEVELDATABASE.String() && (pitrRecord.accountId != uint64(tenantInfo.TenantID) || !nameMatches(pitrRecord.databaseName, stmt.DatabaseName)) {
 			return moerr.NewInternalErrorNoCtxf("pitr %s is not allowed to restore database %v table %v", pitrRecord.pitrName, string(stmt.DatabaseName), string(stmt.TableName))
 		}
-		if pitrRecord.level == tree.PITRLEVELTABLE.String() && (pitrRecord.accountId != uint64(tenantInfo.TenantID) || pitrRecord.databaseName != string(stmt.DatabaseName) || pitrRecord.tableName != string(stmt.TableName)) {
+		if pitrRecord.level == tree.PITRLEVELTABLE.String() && (pitrRecord.accountId != uint64(tenantInfo.TenantID) || !nameMatches(pitrRecord.databaseName, stmt.DatabaseName) || !nameMatches(pitrRecord.tableName, stmt.TableName)) {
 			return moerr.NewInternalErrorNoCtxf("pitr %s is not allowed to restore table %v.%v", pitrRecord.pitrName, string(stmt.DatabaseName), string(stmt.TableName))
 		}
 	default:

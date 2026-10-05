@@ -121,7 +121,20 @@ func BatchDataNotNullCheck(vecs []*vector.Vector, attrs []string, tableDef *plan
 func getRelationByObjRef(ctx context.Context, proc *process.Process, eg engine.Engine, ref *plan.ObjectRef) (engine.Relation, error) {
 	objName := ref.ObjName
 	if ses := proc.GetSession(); ses != nil {
-		if real, ok := ses.GetTempTable(ref.SchemaName, objName); ok {
+		var real string
+		var found bool
+		if resolver, ok := ses.(interface {
+			ResolveTempTable(context.Context, string, string) (string, bool, error)
+		}); ok {
+			var err error
+			real, found, err = resolver.ResolveTempTable(ctx, ref.SchemaName, objName)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			real, found = ses.GetTempTable(ref.SchemaName, objName)
+		}
+		if found {
 			objName = real
 		}
 	}

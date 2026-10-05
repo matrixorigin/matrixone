@@ -12104,7 +12104,7 @@ func Test_doDropAccount(t *testing.T) {
 
 		sql = "show databases;"
 		bh.sql2result[sql] = newMrsForSqlForShowDatabases([][]interface{}{{"db1"}})
-		bh.sql2result["drop database if exists `db1`;"] = nil
+		bh.sql2result["drop database if exists db1"] = nil
 
 		bh.sql2result["show tables from mo_catalog;"] = newMrsForShowTables([][]interface{}{})
 		registerEmptyBranchMetadataResult(bh.sql2result)
@@ -12907,8 +12907,7 @@ type backgroundExecTest struct {
 }
 
 func (bt *backgroundExecTest) ExecStmt(ctx context.Context, statement tree.Statement) error {
-	//TODO implement me
-	panic("implement me")
+	return bt.Exec(ctx, tree.String(statement, dialect.MYSQL))
 }
 
 func TestInheritViewMetadataRevalidation(t *testing.T) {
@@ -18353,7 +18352,7 @@ func Test_checkPitrDup(t *testing.T) {
 			Level: tree.PITRLEVELACCOUNT,
 		}
 
-		sql := getSqlForCheckPitrDup(tenant.Tenant, 0, stmt)
+		sql := getSqlForCheckPitrDup(tenant.Tenant, 0, stmt, false)
 		mrs := newMrsForPasswordOfUser([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
@@ -18396,7 +18395,7 @@ func Test_checkPitrDup(t *testing.T) {
 			Level: tree.PITRLEVELACCOUNT,
 		}
 
-		sql := getSqlForCheckPitrDup(tenant.Tenant, 0, stmt)
+		sql := getSqlForCheckPitrDup(tenant.Tenant, 0, stmt, false)
 		mrs := newMrsForPasswordOfUser([][]interface{}{
 			{1},
 		})

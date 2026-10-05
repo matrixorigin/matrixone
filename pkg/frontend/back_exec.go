@@ -143,17 +143,17 @@ func installBackExecStatsInfo(
 }
 
 func (back *backExec) Exec(ctx context.Context, sql string) (retErr error) {
-	return back.exec(ctx, sql, "", false)
+	return back.exec(ctx, sql, "", false, nil)
 }
 
 // ExecWithSQLMode executes sql using sqlMode to parse it. The original SQL text
 // is retained so DDL which persists its source text, such as CREATE VIEW, is
 // not rewritten during execution.
 func (back *backExec) ExecWithSQLMode(ctx context.Context, sql string, sqlMode string) (retErr error) {
-	return back.exec(ctx, sql, sqlMode, true)
+	return back.exec(ctx, sql, sqlMode, true, nil)
 }
 
-func (back *backExec) exec(ctx context.Context, sql string, sqlMode string, useSQLMode bool) (retErr error) {
+func (back *backExec) exec(ctx context.Context, sql string, sqlMode string, useSQLMode bool, statement tree.Statement) (retErr error) {
 	back.backSes.EnterFPrint(FPBackExecExec)
 	defer back.backSes.ExitFPrint(FPBackExecExec)
 	defer func() {
@@ -174,24 +174,25 @@ func (back *backExec) exec(ctx context.Context, sql string, sqlMode string, useS
 	// For determine this is a background sql.
 	ctx = context.WithValue(ctx, defines.BgKey{}, true)
 
-	//logutil.Debugf("-->bh:%s", sql)
-	v, err := back.backSes.GetSessionSysVar("lower_case_table_names")
-	if err != nil {
-		v = int64(1)
-	}
-
 	var statements []tree.Statement
-	if useSQLMode {
-		statements, err = parsers.ParseWithSQLMode(ctx, dialect.MYSQL, sql, v.(int64), sqlMode)
+	if statement != nil {
+		statements = []tree.Statement{statement}
 	} else {
-		statements, err = mysql.Parse(ctx, sql, v.(int64))
+		mode := parserLowerCaseTableNames(back.backSes)
+		if useSQLMode {
+			statements, err = parsers.ParseWithSQLMode(ctx, dialect.MYSQL, sql, mode, sqlMode)
+		} else {
+			statements, err = mysql.Parse(ctx, sql, mode)
+		}
 	}
 	if err != nil {
 		return err
 	}
 	defer func() {
-		for _, stmt := range statements {
-			stmt.Free()
+		if statement == nil {
+			for _, stmt := range statements {
+				stmt.Free()
+			}
 		}
 	}()
 
@@ -235,6 +236,7 @@ func (back *backExec) exec(ctx context.Context, sql string, sqlMode string, useS
 
 	userInput := &UserInput{
 		sql:              sql,
+		stmt:             statement,
 		parserSQLMode:    sqlMode,
 		useParserSQLMode: useSQLMode,
 		isRestore:        isRestore,
@@ -335,11 +337,13 @@ func (back *backExec) ExecRestore(ctx context.Context, sql string, opAccount uin
 	return doComQueryInBack(back.backSes, tmpStatsArray, &execCtx, userInput)
 }
 
+// ExecStmt borrows statement for synchronous execution. The caller retains its
+// ownership; catalog-generated ASTs must not be reparsed as user identifiers.
 func (back *backExec) ExecStmt(ctx context.Context, statement tree.Statement) error {
-	if ctx == nil {
-		return moerr.NewInternalError(context.Background(), "context is nil")
+	if statement == nil {
+		return moerr.NewInternalError(ctx, "background statement is nil")
 	}
-	return nil
+	return back.exec(ctx, tree.String(statement, dialect.MYSQL), "", false, statement)
 }
 
 func (back *backExec) GetExecResultSet() []interface{} {
@@ -840,7 +844,9 @@ var GetComputationWrapperInBack = func(execCtx *ExecCtx, db string, input *UserI
 	}
 
 	for _, stmt := range stmts {
-		cw = append(cw, InitTxnComputationWrapper(ses, stmt, proc))
+		wrapper := InitTxnComputationWrapper(ses, stmt, proc)
+		wrapper.stmtBorrowed = input.getStmt() != nil
+		cw = append(cw, wrapper)
 	}
 	return cw, nil
 }
@@ -1308,6 +1314,10 @@ func (backSes *backSession) GetSqlHelper() *SqlHelper {
 	return nil
 }
 
+func (backSes *backSession) CheckDatabasePublishing(ctx context.Context, physicalName string) (bool, error) {
+	return isDbPublishing(ctx, physicalName, backSes)
+}
+
 func (backSes *backSession) GetProc() *process.Process {
 	return nil
 }
@@ -1612,6 +1622,20 @@ func (backSes *backSession) GetTempTable(dbName, alias string) (string, bool) {
 		return "", false
 	}
 	return backSes.upstream.GetTempTable(dbName, alias)
+}
+
+func (backSes *backSession) ResolveTempTable(ctx context.Context, dbName, alias string) (string, bool, error) {
+	if backSes == nil || backSes.upstream == nil {
+		return "", false, nil
+	}
+	return backSes.upstream.ResolveTempTable(ctx, dbName, alias)
+}
+
+func (backSes *backSession) GetTempTableAliasByRealName(dbName, realName string) (string, bool) {
+	if owner := upstreamUserSession(backSes); owner != nil {
+		return owner.GetTempTableAliasByRealName(dbName, realName)
+	}
+	return "", false
 }
 
 func (backSes *backSession) AddTempTable(dbName, alias, realName string) {

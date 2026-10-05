@@ -667,6 +667,7 @@ func TestResolveIndexTableByRefUsesPublisherDatabase(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ctx := defines.AttachAccountId(context.Background(), 7)
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 	storage := mock_frontend.NewMockEngine(ctrl)
 	database := mock_frontend.NewMockDatabase(ctrl)
 	relation := mock_frontend.NewMockRelation(ctrl)
@@ -681,11 +682,16 @@ func TestResolveIndexTableByRefUsesPublisherDatabase(t *testing.T) {
 	).Times(1)
 	database.EXPECT().Relation(gomock.Any(), "__mo_index_secondary_events", gomock.Nil()).
 		Return(relation, nil)
+	relation.EXPECT().GetTableName().Return("__mo_index_secondary_events")
 	relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(99))
 	relation.EXPECT().GetTableDef(gomock.Any()).Return(&pbplan.TableDef{Name: "__mo_index_secondary_events"})
 
 	ses, _ := newObservedProtocolSession()
 	ses.txnHandler = InitTxnHandler("", storage, ctx, txnOp)
+	ses.tempTables = make(map[string]string)
+	ses.tempTablesRev = make(map[string]string)
+	// A local temporary alias must not replace the publisher's index table.
+	ses.AddTempTable("publisher_db", "__mo_index_secondary_events", "mo_temp_shadow")
 	tcc := &TxnCompilerContext{execCtx: &ExecCtx{reqCtx: ctx, ses: ses}}
 	ref := &plan2.ObjectRef{
 		SchemaName:       "publisher_db",

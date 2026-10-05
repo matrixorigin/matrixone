@@ -3502,6 +3502,23 @@ type viewDatabaseExistenceChecker interface {
 	CheckViewDatabase(name string, snapshot *Snapshot) (bool, error)
 }
 
+// resolveDatabaseForPlan keeps the error-bearing physical-name contract for
+// frontend contexts while retaining the older mock-only CompilerContext API.
+func resolveDatabaseForPlan(
+	ctx CompilerContext, name string, snapshot *Snapshot,
+) (physicalName string, id uint64, found bool, err error) {
+	if resolver, ok := ctx.(interface {
+		ResolveDatabase(string, *Snapshot) (string, uint64, bool, error)
+	}); ok {
+		return resolver.ResolveDatabase(name, snapshot)
+	}
+	if !ctx.DatabaseExists(name, snapshot) {
+		return name, 0, false, nil
+	}
+	id, err = ctx.GetDatabaseId(name, snapshot)
+	return name, id, err == nil, err
+}
+
 // databaseIsValid checks whether the database exists or not.
 func databaseIsValid(dbName string, ctx CompilerContext, snapshot *Snapshot) (string, error) {
 	connectDBFirst := false
@@ -3520,23 +3537,32 @@ func databaseIsValid(dbName string, ctx CompilerContext, snapshot *Snapshot) (st
 	if len(dbName) == 0 {
 		return "", moerr.NewNoDB(ctx.GetContext())
 	}
-	exists := false
+	physicalName := dbName
+	found := false
 	if checker, ok := ctx.(viewDatabaseExistenceChecker); ok {
 		var err error
-		exists, err = checker.CheckViewDatabase(dbName, snapshot)
+		found, err = checker.CheckViewDatabase(dbName, snapshot)
 		if err != nil {
 			return "", err
 		}
+	} else if resolver, ok := ctx.(interface {
+		ResolveDatabase(string, *Snapshot) (string, uint64, bool, error)
+	}); ok {
+		name, _, exists, resolveErr := resolver.ResolveDatabase(dbName, snapshot)
+		if resolveErr != nil {
+			return "", resolveErr
+		}
+		physicalName, found = name, exists
 	} else {
-		exists = ctx.DatabaseExists(dbName, snapshot)
+		found = ctx.DatabaseExists(dbName, snapshot)
 	}
-	if !exists {
+	if !found {
 		if connectDBFirst {
 			return "", moerr.NewNoDB(ctx.GetContext())
 		}
 		return "", moerr.NewBadDB(ctx.GetContext(), dbName)
 	}
-	return dbName, nil
+	return physicalName, nil
 }
 
 /*

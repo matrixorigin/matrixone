@@ -1,0 +1,263 @@
+set @mode2_previous = @@global.lower_case_table_names;
+set global lower_case_table_names = 2;
+select @@session.lower_case_table_names;
+➤ @@lower_case_table_names[-1,16383,0]  𝄀
+2
+drop publication if exists qa_mode2_issue29418_pub;
+drop database if exists QaMode2Issue29418;
+drop database if exists QaMode2AliasIssue29418;
+create database QaMode2Issue29418;
+select datname from mo_catalog.mo_database where account_id = 0 and datname = 'QaMode2Issue29418';
+➤ datname[12,5000,0]  𝄀
+QaMode2Issue29418
+use QaMode2Issue29418;
+create table T1 (id int);
+show tables from QaMode2Issue29418;
+➤ Tables_in_QaMode2Issue29418[12,5000,0]  𝄀
+T1
+set @first_id = (select dat_id from mo_catalog.mo_database where account_id = 0 and datname = 'QaMode2Issue29418');
+drop schema if exists `QaMode2Issue29418`;
+select count(*) from mo_catalog.mo_database where account_id = 0 and datname = 'QaMode2Issue29418';
+➤ count(*)[-5,64,0]  𝄀
+0
+create database QaMode2Issue29418;
+select dat_id <> @first_id as new_physical_database from mo_catalog.mo_database where account_id = 0 and datname = 'QaMode2Issue29418';
+➤ new_physical_database[-7,1,0]  𝄀
+1
+begin;
+drop database QaMode2Issue29418;
+rollback;
+select count(*) from mo_catalog.mo_database where account_id = 0 and datname = 'QaMode2Issue29418';
+➤ count(*)[-5,64,0]  𝄀
+1
+create publication qa_mode2_issue29418_pub database QaMode2Issue29418 account all;
+drop database QaMode2Issue29418;
+internal error: can not drop database 'QaMode2Issue29418' which is publishing
+select count(*) from mo_catalog.mo_database where account_id = 0 and datname = 'QaMode2Issue29418';
+➤ count(*)[-5,64,0]  𝄀
+1
+drop publication qa_mode2_issue29418_pub;
+drop database QaMode2Issue29418;
+select count(*) from mo_catalog.mo_database where account_id = 0 and datname = 'QaMode2Issue29418';
+➤ count(*)[-5,64,0]  𝄀
+0
+create database QaMode2AliasIssue29418;
+use qamode2aliasissue29418;
+begin;
+create table TxnMix (id int);
+insert into txnmix values (9);
+select id from TXNMIX;
+➤ id[4,32,0]  𝄀
+9
+select relname from mo_catalog.mo_tables where reldatabase = 'QaMode2AliasIssue29418' and relname = 'TxnMix';
+➤ relname[12,5000,0]  𝄀
+TxnMix
+rollback;
+select count(*) from mo_catalog.mo_tables where reldatabase = 'QaMode2AliasIssue29418' and relname = 'TxnMix';
+➤ count(*)[-5,64,0]  𝄀
+0
+create table MixT (id int comment 'id');
+insert into mixt values (7);
+select id from MIXT;
+➤ id[4,32,0]  𝄀
+7
+create index idx_mix_id on MIXT(id);
+alter table mixt add column v int comment 'v';
+show column_number from qamode2aliasissue29418.mixt;
+➤ Number of columns in MixT[-5,64,0]  𝄀
+2
+show full columns from qamode2aliasissue29418.mixt;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Collation[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Privileges[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  INT(32)  ¦  null  ¦  YES  ¦  MUL  ¦  null  ¦    ¦  select,insert,update,references  ¦  id  𝄀
+v  ¦  INT(32)  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦  v
+show index from qamode2aliasissue29418.mixt;
+➤ Table[12,4,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,64,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,256,0]  ¦  Collation[12,1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,4,0]  ¦  Packed[12,4,0]  ¦  Null[12,3,0]  ¦  Index_type[12,11,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,2048,0]  ¦  Index_params[12,2048,0]  ¦  Visible[12,3,0]  ¦  Expression[12,256,0]  𝄀
+mixt  ¦  1  ¦  idx_mix_id  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  id
+show table_values from qamode2aliasissue29418.mixt;
+➤ max(id)[4,32,0]  ¦  min(id)[4,32,0]  ¦  max(v)[4,32,0]  ¦  min(v)[4,32,0]  𝄀
+7  ¦  7  ¦  null  ¦  null
+select relname from mo_catalog.mo_tables where reldatabase = 'QaMode2AliasIssue29418' and relname = 'MixT';
+➤ relname[12,5000,0]  𝄀
+MixT
+drop index idx_mix_id on mixt;
+rename table QaMode2AliasIssue29418.MixT to qamode2aliasissue29418.MixU;
+alter table mixu rename to QAMODE2ALIASISSUE29418.MixT;
+select relname from mo_catalog.mo_tables where reldatabase = 'QaMode2AliasIssue29418' and relname = 'MixT';
+➤ relname[12,5000,0]  𝄀
+MixT
+create view MixV as select id from MIXT;
+alter view mixv as select id from mixt;
+create or replace view MIXV as select id from mixt;
+select id from mixv;
+➤ id[4,32,0]  𝄀
+7
+create sequence MixS increment 1 start with 1;
+alter sequence mixs increment 2;
+select relname from mo_catalog.mo_tables where reldatabase = 'QaMode2AliasIssue29418' and relname = 'MixS';
+➤ relname[12,5000,0]  𝄀
+MixS
+drop sequence mixs;
+drop view mixv;
+create temporary table TempMix(id int primary key, v int);
+insert into tempmix values (1, 2);
+create index idx_temp_v on TEMPMIX(v);
+alter table tempmix add column x int;
+select id, v, x from TEMPMIX;
+➤ id[4,32,0]  ¦  v[4,32,0]  ¦  x[4,32,0]  𝄀
+1  ¦  2  ¦  null
+truncate table tEMpMix;
+select count(*) from tempmix;
+➤ count(*)[-5,64,0]  𝄀
+0
+drop index idx_temp_v on TEMPMIX;
+drop temporary table tempmix;
+set foreign_key_checks = 0;
+create table ForwardChild(id int primary key, pid int, constraint fk_forward_parent foreign key(pid) references forwardparent(id));
+create table ForwardParent(id int primary key);
+select refer_table_name from mo_catalog.mo_foreign_keys where db_name = 'QaMode2AliasIssue29418' and table_name = 'ForwardChild';
+➤ refer_table_name[12,5000,0]  𝄀
+ForwardParent
+drop table forwardchild;
+drop table forwardparent;
+set foreign_key_checks = 1;
+show tables from QAMODE2ALIASISSUE29418;
+➤ Tables_in_QaMode2AliasIssue29418[12,5000,0]  𝄀
+MixT
+create publication qa_mode2_issue29418_table_pub database qamode2aliasissue29418 table mixt,MIXT account all;
+select table_list = 'MixT' as canonical_table from mo_catalog.mo_pubs where pub_name = 'qa_mode2_issue29418_table_pub';
+➤ canonical_table[-7,1,0]  𝄀
+1
+create database QaMode2PubTargetIssue29418;
+create table QaMode2PubTargetIssue29418.NextT(id int);
+alter publication qa_mode2_issue29418_table_pub database qamode2pubtargetissue29418 table nextt;
+select database_name = 'QaMode2PubTargetIssue29418' and table_list = 'NextT' as canonical_target from mo_catalog.mo_pubs where pub_name = 'qa_mode2_issue29418_table_pub';
+➤ canonical_target[-7,1,0]  𝄀
+1
+alter publication qa_mode2_issue29418_table_pub database QAMODE2ALIASISSUE29418 table MIXT;
+select database_name = 'QaMode2AliasIssue29418' and table_list = 'MixT' as canonical_target from mo_catalog.mo_pubs where pub_name = 'qa_mode2_issue29418_table_pub';
+➤ canonical_target[-7,1,0]  𝄀
+1
+drop publication qa_mode2_issue29418_table_pub;
+select rel_id <> rel_logical_id as new_physical_generation from mo_catalog.mo_tables
+where reldatabase = 'QaMode2AliasIssue29418' and relname = 'MixT';
+➤ new_physical_generation[-7,1,0]  𝄀
+1
+create pitr qa29418_frontend_pitr for table qamode2aliasissue29418 mixt range 1 'h';
+select p.database_name = t.reldatabase and p.table_name = t.relname as physical_pitr
+from mo_catalog.mo_pitr p left join mo_catalog.mo_tables t on p.obj_id = t.rel_id
+where p.pitr_name = 'qa29418_frontend_pitr';
+➤ physical_pitr[-7,1,0]  𝄀
+1
+create pitr qa29418_duplicate_pitr for table QAMODE2ALIASISSUE29418 MIXT range 1 'h';
+internal error: database `QaMode2AliasIssue29418` table `MixT` already has a pitr
+drop pitr qa29418_frontend_pitr;
+create pitr qa29418_internal_pitr for table qamode2aliasissue29418 mixt range 1 'h' internal;
+select p.database_name = t.reldatabase and p.table_name = t.relname as physical_pitr
+from mo_catalog.mo_pitr p left join mo_catalog.mo_tables t on p.obj_id = t.rel_id
+where p.pitr_name = 'qa29418_internal_pitr';
+➤ physical_pitr[-7,1,0]  𝄀
+1
+drop pitr qa29418_internal_pitr;
+create table PitrDropT(id int);
+alter table pitrDropT add column v int;
+create pitr qa29418_drop_pitr for table qamode2aliasissue29418 pitrDropT range 1 'h';
+select p.obj_id = t.rel_id as physical_pitr from mo_catalog.mo_pitr p
+left join mo_catalog.mo_tables t on p.obj_id = t.rel_id where p.pitr_name = 'qa29418_drop_pitr';
+➤ physical_pitr[-7,1,0]  𝄀
+1
+drop table PITRDROPT;
+select pitr_status = 0 as expired_after_drop from mo_catalog.mo_pitr where pitr_name = 'qa29418_drop_pitr';
+➤ expired_after_drop[-7,1,0]  𝄀
+1
+drop pitr qa29418_drop_pitr;
+create table ViewSrc(code varchar(5));
+create view ViewAlias as select code from ViewSrc;
+alter table viewsrc modify column code varchar(60);
+select column_name, character_maximum_length from information_schema.columns
+where table_schema = 'QaMode2AliasIssue29418' and table_name = 'ViewAlias';
+➤ column_name[12,256,0]  ¦  character_maximum_length[-5,64,0]  𝄀
+code  ¦  60
+drop view viewalias;
+drop table viewsrc;
+drop database QaMode2PubTargetIssue29418;
+drop database qamode2aliasissue29418;
+select count(*) from mo_catalog.mo_database where account_id = 0 and datname = 'QaMode2AliasIssue29418';
+➤ count(*)[-5,64,0]  𝄀
+0
+create account qa29418owner ADMIN_NAME 'admin' IDENTIFIED BY 'test123';
+set global lower_case_table_names = 2;
+create database Qa29418Owned;
+create table Qa29418Owned.OwnedT(id int);
+create database Qa29418Read;
+create table Qa29418Read.MixedT(id int primary key, v int, index idx_v(v));
+insert into Qa29418Read.MixedT values (1, 7);
+create table Qa29418Read.HiddenT(id int);
+create publication qa29418_read_pub database Qa29418Read table MixedT account qa29418owner;
+create publication qa29418_cross_owner_pub database qa29418owned table ownedt account qa29418owner;
+select database_name = 'Qa29418Owned' and table_list = 'OwnedT' and database_id <> 0 as physical_owner_target from mo_catalog.mo_pubs where pub_name = 'qa29418_cross_owner_pub';
+➤ physical_owner_target[-7,1,0]  𝄀
+1
+set global lower_case_table_names = 2;
+select @@session.lower_case_table_names;
+➤ @@lower_case_table_names[-1,16383,0]  𝄀
+2
+create database Sub29418 from sys publication qa29418_read_pub;
+select id, v from sub29418.mixedt;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  7
+show column_number from sub29418.mixedt;
+➤ Number of columns in MixedT[-5,64,0]  𝄀
+2
+show table_values from sub29418.mixedt;
+➤ max(id)[4,32,0]  ¦  min(id)[4,32,0]  ¦  max(v)[4,32,0]  ¦  min(v)[4,32,0]  𝄀
+1  ¦  1  ¦  7  ¦  7
+select mo_table_rows('Sub29418', 'MixedT') = mo_table_rows('sub29418', 'mixedt') as same_rows;
+➤ same_rows[-7,1,0]  𝄀
+1
+create table sub29418.forbidden_t(id int);
+internal error: cannot create table in subscription database
+create index forbidden_idx on sub29418.mixedt(v);
+internal error: cannot create index in subscription database
+select * from sub29418.hiddent;
+SQL parser error: table "hiddent" does not exist
+select 1 from SYSTEM.STATEMENT_INFO limit 0;
+➤ 1[-5,64,0]
+select 1 from SYSTEM_METRICS.METRIC limit 0;
+➤ 1[-5,64,0]
+select mo_table_col_max('mo_catalog', 'mo_database', 'dat_id');
+invalid input: mo_table_col_max has bad input table mo_database
+select mo_table_col_max('MO_CATALOG', 'MO_DATABASE', 'dat_id');
+invalid input: mo_table_col_max has bad input table MO_DATABASE
+drop database Sub29418;
+drop publication qa29418_read_pub;
+drop publication qa29418_cross_owner_pub;
+drop database Qa29418Read;
+set global lower_case_table_names = 0;
+create database Qa29418Collision;
+create database qa29418collision;
+create database `Qa29418-Ä`;
+create table `Qa29418-Ä`.T(id int);
+drop account qa29418owner;
+select count(*) from mo_catalog.mo_database where lower(datname) like 'qa29418%';
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from mo_catalog.mo_tables where lower(reldatabase) like 'qa29418%';
+➤ count(*)[-5,64,0]  𝄀
+0
+set global lower_case_table_names = 1;
+set global lower_case_table_names = 0;
+drop database if exists QaMode2Collision29418;
+drop database if exists qamode2collision29418;
+create database QaMode2Collision29418;
+create database qamode2collision29418;
+set global lower_case_table_names = 2;
+use QaMode2Collision29418;
+ambiguous database name QaMode2Collision29418
+use qamode2collision29418;
+ambiguous database name qamode2collision29418
+drop database if exists QaMode2Collision29418;
+ambiguous database name QaMode2Collision29418
+set global lower_case_table_names = 0;
+drop database QaMode2Collision29418;
+drop database qamode2collision29418;
+set global lower_case_table_names = @mode2_previous;
