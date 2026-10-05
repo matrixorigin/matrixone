@@ -306,6 +306,8 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	if err != nil {
 		return err
 	}
+	txn.beginCatalogMutation()
+	defer txn.endCatalogMutation()
 	typ := getTyp(ctx)
 	sql := getSql(ctx)
 	accountId, userId, _, err := getAccessInfo(ctx)
@@ -717,6 +719,8 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	if err != nil {
 		return err
 	}
+	txn.beginCatalogMutation()
+	defer txn.endCatalogMutation()
 
 	// Get the database to be deleted
 	toDelDB, err := e.Database(ctx, name, op)

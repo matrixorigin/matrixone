@@ -19,6 +19,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -247,4 +248,35 @@ func TestJqVarlenaProducerMatrix(t *testing.T) {
 		require.Error(t, err)
 		require.Zero(t, result.Length())
 	})
+}
+
+func TestJsonRowPropagatesResultAllocationFailureAndResetsEncoder(t *testing.T) {
+	for _, masked := range []bool{false, true} {
+		t.Run(strconv.FormatBool(masked), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			memory, err := mpool.NewMPool("json-row-result-failure", 1<<20, mpool.NoFixed)
+			require.NoError(t, err)
+			defer mpool.DeleteMPool(memory)
+			held, err := memory.Alloc(1<<20, true)
+			require.NoError(t, err)
+			defer memory.Free(held)
+			failed := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), memory)
+			defer failed.Free()
+			require.NoError(t, failed.PreExtendAndReset(0))
+			op := newOpBuiltInJsonRow()
+			var mask *FunctionSelectList
+			if masked {
+				mask = &FunctionSelectList{AnyNull: true, SelectList: []bool{false}}
+			}
+			require.Error(t, op.jsonRow(nil, failed, proc, 1, mask))
+			result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(1))
+			require.NoError(t, op.jsonRow(nil, result, proc, 1, nil))
+			value, isNull := vector.GenerateFunctionStrParameter(result.GetResultVector()).GetStrValue(0)
+			require.False(t, isNull)
+			require.Equal(t, "[]", string(value))
+		})
+	}
 }

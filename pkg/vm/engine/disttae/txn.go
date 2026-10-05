@@ -137,6 +137,8 @@ func (txn *Transaction) unaccountWorkspaceEntryLocked(entry *Entry) {
 }
 
 func (txn *Transaction) appendWorkspaceEntryLocked(entry Entry) {
+	txn.beginCatalogMutation()
+	defer txn.endCatalogMutation()
 	txn.accountWorkspaceEntryLocked(&entry)
 	txn.writes = append(txn.writes, entry)
 }
@@ -146,6 +148,8 @@ func (txn *Transaction) releaseWorkspaceEntryBatchLocked(idx int) {
 	if entry.bat == nil {
 		return
 	}
+	txn.beginCatalogMutation()
+	defer txn.endCatalogMutation()
 
 	bat := entry.bat
 	txn.unaccountWorkspaceEntryLocked(entry)
@@ -159,6 +163,8 @@ func (txn *Transaction) shrinkWorkspaceEntryBatchLocked(idx int, sels []int64) {
 	if entry.bat == nil {
 		return
 	}
+	txn.beginCatalogMutation()
+	defer txn.endCatalogMutation()
 	bat := entry.bat
 	if len(sels) == 0 {
 		delete(txn.batchSelectList, bat)
@@ -180,6 +186,8 @@ func (txn *Transaction) mergeWorkspaceEntryBatchesLocked(
 ) error {
 	dst := &txn.writes[dstIdx]
 	src := &txn.writes[srcIdx]
+	txn.beginCatalogMutation()
+	defer txn.endCatalogMutation()
 	txn.unaccountWorkspaceEntryLocked(dst)
 	txn.unaccountWorkspaceEntryLocked(src)
 
@@ -310,6 +318,8 @@ func (txn *Transaction) writeBatchWithAutoIncrEpochKnown(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	txn.beginCatalogMutation()
+	defer txn.endCatalogMutation()
 	if err := txn.requireAutoIncrEpochFenceCommit(autoIncrEpoch, autoIncrEpochKnown); err != nil {
 		return nil, err
 	}
@@ -880,6 +890,8 @@ func (txn *Transaction) scanInMemInsertSize(from int) uint64 {
 }
 
 func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
+	txn.beginCatalogMutation()
+	defer txn.endCatalogMutation()
 	var size uint64
 	var pkCount int
 
@@ -1617,6 +1629,8 @@ func (txn *Transaction) writeFileLockedWithAutoIncrEpochKnown(
 	autoIncrEpoch uint32,
 	autoIncrEpochKnown bool,
 ) (err error) {
+	txn.beginCatalogMutation()
+	defer txn.endCatalogMutation()
 	if err := txn.requireAutoIncrEpochFenceCommit(autoIncrEpoch, autoIncrEpochKnown); err != nil {
 		return err
 	}
@@ -1731,6 +1745,8 @@ func (txn *Transaction) writeFileLockedSkipTransferWithAutoIncrEpochKnown(
 	autoIncrEpoch uint32,
 	autoIncrEpochKnown bool,
 ) (err error) {
+	txn.beginCatalogMutation()
+	defer txn.endCatalogMutation()
 	if err := txn.requireAutoIncrEpochFenceCommit(autoIncrEpoch, autoIncrEpochKnown); err != nil {
 		return err
 	}
@@ -1857,6 +1873,8 @@ func (txn *Transaction) deleteBatch(
 	bat *batch.Batch,
 	databaseId, tableId uint64,
 ) *batch.Batch {
+	txn.beginCatalogMutation()
+	defer txn.endCatalogMutation()
 	start := time.Now()
 	seq := txn.op.NextSequence()
 	trace.GetService(txn.proc.GetService()).AddTxnDurationAction(
@@ -1954,6 +1972,8 @@ func (txn *Transaction) deleteTableWrites(
 	min, max uint32,
 	mp map[types.Rowid]uint8,
 ) {
+	txn.beginCatalogMutation()
+	defer txn.endCatalogMutation()
 	txn.Lock()
 	defer txn.Unlock()
 
@@ -2985,6 +3005,8 @@ func skipTransfer(ctx context.Context, txn *Transaction) bool {
 }
 
 func (txn *Transaction) Rollback(ctx context.Context) error {
+	txn.beginCatalogMutation()
+	defer txn.endCatalogMutation()
 	if !txn.ReadOnly() && len(txn.writes) > 0 {
 		logutil.Info(
 			"Transaction.Rollback",
@@ -3010,6 +3032,8 @@ func (txn *Transaction) Rollback(ctx context.Context) error {
 }
 
 func (txn *Transaction) delTransaction() {
+	txn.beginCatalogMutation()
+	defer txn.endCatalogMutation()
 	if txn.removed {
 		return
 	}
@@ -3103,6 +3127,8 @@ func (txn *Transaction) GetSnapshotWriteOffset() int {
 // compile of a user statement); internal SQL must never advance the
 // boundary, or a mid-statement dump can compact entries covered by it.
 func (txn *Transaction) UpdateSnapshotWriteOffset() {
+	txn.beginCatalogMutation()
+	defer txn.endCatalogMutation()
 	txn.Lock()
 	defer txn.Unlock()
 	txn.snapshotWriteOffset.Store(int64(len(txn.writes)))

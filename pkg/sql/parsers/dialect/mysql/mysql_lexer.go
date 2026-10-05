@@ -137,9 +137,32 @@ func Parse(ctx context.Context, sql string, lower int64) ([]tree.Statement, erro
 	return ParseWithSQLMode(ctx, sql, lower, "")
 }
 
-func ParseWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode string) ([]tree.Statement, error) {
+func ParseWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode string) (statements []tree.Statement, err error) {
 	lexer := NewLexerWithSQLMode(dialect.MYSQL, sql, lower, ParseSQLModeFlags(sqlMode))
 	defer PutScanner(lexer.scanner)
+	if limits, ok := ctx.Value(parseLimitsKey{}).(ParseLimits); ok {
+		if cause := context.Cause(ctx); cause != nil {
+			return nil, cause
+		}
+		if len(sql) > limits.Input {
+			return nil, ErrParseLimit
+		}
+		control := &parseControl{ctx: ctx, limits: limits}
+		lexer.scanner.parseControl = control
+		defer func() {
+			if failure := recover(); failure != nil {
+				abort, own := failure.(parseAbort)
+				if !own || abort.control != control {
+					panic(failure)
+				}
+				for _, statement := range lexer.stmts {
+					statement.Free()
+				}
+				statements, err = nil, abort.err
+			}
+		}()
+	}
+
 	if yyParse(lexer) != 0 {
 		for _, s := range lexer.stmts {
 			s.Free()
@@ -309,6 +332,7 @@ func (l *Lexer) GetParamIndex() int {
 }
 
 func (l *Lexer) Lex(lval *yySymType) int {
+	l.scanner.parseControl.token()
 	if l.stopLexing {
 		return 0
 	}

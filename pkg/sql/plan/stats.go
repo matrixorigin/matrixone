@@ -1378,6 +1378,9 @@ func sortFilterListByStats(ctx context.Context, nodeID int32, builder *QueryBuil
 }
 
 func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNode bool, needResetHashMapStats bool) {
+	if builder.isViewSchemaMemoScan(nodeID) {
+		return
+	}
 	node := builder.qry.Nodes[nodeID]
 	if recursive {
 		if len(node.Children) > 0 {

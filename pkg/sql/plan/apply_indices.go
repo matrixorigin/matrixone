@@ -612,6 +612,9 @@ func containsInt32(list []int32, target int32) bool {
 }
 
 func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
+	if builder.isViewSchemaMemoScan(nodeID) {
+		return nodeID, nil
+	}
 	var err error
 
 	if builder.optimizerHints != nil && builder.optimizerHints.applyIndices != 0 {

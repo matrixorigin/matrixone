@@ -485,6 +485,7 @@ type BaseProcess struct {
 	UdfService                          udf.Service
 	WaitPolicy                          lock.WaitPolicy
 	messageBoard                        *message.MessageBoard
+	executionResourceBudgetBorrowed     bool
 	executionResourceBudgetMu           sync.Mutex
 	executionResourceBudget             *ExecutionResourceGeneration
 	warningDiagnosticBudgetMu           sync.Mutex
@@ -648,8 +649,11 @@ func (proc *Process) SetMessageBoard(mb *message.MessageBoard) {
 func (proc *Process) SetStmtProfile(sp *StmtProfile) {
 	proc.Base.executionResourceBudgetMu.Lock()
 	if proc.Base.executionResourceBudget != nil {
-		proc.Base.executionResourceBudget.Close()
+		if !proc.Base.executionResourceBudgetBorrowed {
+			proc.Base.executionResourceBudget.Close()
+		}
 		proc.Base.executionResourceBudget = nil
+		proc.Base.executionResourceBudgetBorrowed = false
 	}
 	proc.Base.executionResourceBudgetMu.Unlock()
 	proc.Base.warningDiagnosticBudgetMu.Lock()

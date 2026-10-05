@@ -1,6 +1,6 @@
 # 普通 View 按需元数据：完整系列契约与消费者迁移设计
 
-- 修订：**v2.0-draft.1，2026-09-28，待审批**。
+- 修订：**v2.0-draft.1，2026-09-28，待审批**。S2 内存上限与实现方式已由用户于 2026-10-05 调整；以 [v2.1 S2 修订](CLAUDE_20261005-view-s2-scope-revision.md) 为准，原 §11 中逐对象先准入、128 MiB 硬证明及对应性能目标不再是 S2 验收条件。其余语义与安全边界保持。
 - 设计所有者：[S1 #29436](https://github.com/matrixorigin/matrixone/issues/29436)；完整系列：[#29433](https://github.com/matrixorigin/matrixone/issues/29433)，S2–S9 见第 15 节。
 - 核查基线：`d99187d7b3bfda8744088b3ae8cf16739b690aa0`，包含已合入的 [#29139](https://github.com/matrixorigin/matrixone/pull/29139)。本次仅修改设计，不修改生产行为。
 - 精确修订摘要、自审和审批记录：[S1 审查记录](CLAUDE_20260928-view-metadata-s1-review.md)。**同意执行设计整理不等于批准本修订。未经对精确修订的明确批准，后续生产修改仍阻塞。**

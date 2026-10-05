@@ -82,6 +82,7 @@ type TxnCompilerContext struct {
 	tcw     ComputationWrapper
 	execCtx *ExecCtx
 	// cached backExec for subscription meta queries, reused within the same transaction
+	viewSchemaRead bool
 	cachedBackExec BackgroundExec
 	mu             sync.Mutex
 }
@@ -1462,6 +1463,15 @@ func (tcc *TxnCompilerContext) GetSubscriptionMeta(dbName string, snapshot *plan
 		}
 	}
 
+	if tcc.viewSchemaRead && plan2.IsSnapshotValid(snapshot) && snapshot.TS.Less(tcc.GetTxnHandler().GetTxn().SnapshotTS()) {
+		ses := tcc.GetSession()
+		bh := ses.InitBackExec(txn, ses.GetDatabaseName(), fakeDataSetFetcher2)
+		if back, ok := bh.(*backExec); ok {
+			back.backSes.ReplaceDerivedStmt(true)
+		}
+		defer bh.Close()
+		return getSubscriptionMeta(tempCtx, dbName, ses, txn, bh)
+	}
 	bh := tcc.getOrCreateBackExec(tempCtx)
 	bh.ClearExecResultSet()
 	return getSubscriptionMeta(tempCtx, dbName, tcc.GetSession(), txn, bh)

@@ -5636,6 +5636,11 @@ func (builder *QueryBuilder) preprocessCte(stmt *tree.Select, ctx *BindContext) 
 }
 
 func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isRoot bool) (nodeID int32, err error) {
+	leaveBinding, bindErr := enterViewSchemaBinding(builder.GetContext())
+	if bindErr != nil {
+		return 0, bindErr
+	}
+	defer leaveBinding()
 	ctx.queryBlockOwner = ctx
 	if ctx.bindingRecurStmt() && ctx.cteState.recursiveRefQueryBlock == nil {
 		ctx.cteState.recursiveRefQueryBlock = ctx
@@ -11751,6 +11756,16 @@ func (builder *QueryBuilder) bindView(
 	schema, table string,
 	metadataSubscription *SubscriptionMetadata,
 ) (nodeID int32, err error) {
+	if state, _ := builder.GetContext().Value(viewSchemaContextKey{}).(*viewSchemaDerivation); state != nil {
+		leave, enterErr := state.enter(obj, tableDef, snapshot)
+		if enterErr != nil {
+			return 0, enterErr
+		}
+		defer leave()
+	}
+
+	var memoFrame *viewSchemaMemoFrame
+
 	viewDefString := tableDef.ViewSql.View
 	if viewDefString == "" {
 		return 0, nil
@@ -11795,6 +11810,10 @@ func (builder *QueryBuilder) bindView(
 	if err != nil {
 		return 0, err
 	}
+	if builder.GetContext().Value(viewSchemaContextKey{}) != nil && len(originStmts) != 1 {
+		return 0, moerr.NewParseError(builder.GetContext(), "persisted View must contain one statement")
+	}
+
 	viewStmt, ok := originStmts[0].(*tree.CreateView)
 
 	// No createview stmt, check alterview stmt.
@@ -11807,6 +11826,25 @@ func (builder *QueryBuilder) bindView(
 		viewStmt.Name = alterstmt.Name
 		viewStmt.ColNames = alterstmt.ColNames
 		viewStmt.AsSource = alterstmt.AsSource
+	}
+
+	if state, _ := builder.GetContext().Value(viewSchemaContextKey{}).(*viewSchemaDerivation); state != nil {
+		previousLower := state.lower
+		state.lower = viewLowerCaseTableNames
+		defer func() { state.lower = previousLower }()
+		memoFrame = state.beginMemo(obj, tableDef, snapshot, viewLowerCaseTableNames)
+		if viewData.RequiredProtocolVersion != nil {
+			memoFrame.requiredProtocol = *viewData.RequiredProtocolVersion
+			state.observeProtocol(*viewData.RequiredProtocolVersion)
+		}
+		state.memoEligible = state.memoEligible && transparentViewProjection(viewStmt.AsSource) && obj.PubInfo == nil && builder.compCtx.GetQueryingSubscription() == nil && metadataSubscription == nil
+		if cached, hit, loadErr := memoFrame.load(builder, viewCtx, obj, tableDef, snapshot, table); loadErr != nil {
+			return 0, loadErr
+		} else if hit {
+			return cached, nil
+		}
+		state.memoFrames = append(state.memoFrames, memoFrame)
+		defer func() { memoFrame.finish(viewCtx, err) }()
 	}
 
 	isSubscriptionStatistics := isSubscriptionStatisticsView(schema, table, metadataSubscription)
@@ -12221,6 +12259,11 @@ func transparentDerivedCorrelationTargetsNearestAncestor(ctx *BindContext, corr 
 }
 
 func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, tableInput *tableFunctionInput) (nodeID int32, err error) {
+	leaveBinding, bindErr := enterViewSchemaBinding(builder.GetContext())
+	if bindErr != nil {
+		return 0, bindErr
+	}
+	defer leaveBinding()
 	switch tbl := stmt.(type) {
 	case *tree.Select:
 		subCtx := NewBindContext(builder, ctx)
