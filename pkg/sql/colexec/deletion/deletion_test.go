@@ -217,6 +217,8 @@ func TestRemoteDeleteFlushTransfersOwnershipBeforeReset(t *testing.T) {
 			proc := testutil.NewProc(t)
 			defer proc.Free()
 			ctr, objectName := flushTombstoneObjectForTest(t, proc)
+			fs, err := colexec.GetSharedFSFromProc(proc)
+			require.NoError(t, err)
 			workspace := proc.GetTxnOperator().GetWorkspace().(*deletionS3CleanupWorkspace)
 			require.Len(t, workspace.owners, 1)
 			require.Empty(t, ctr.s3Writers, "completed writer buffers must be released")
@@ -228,10 +230,10 @@ func TestRemoteDeleteFlushTransfersOwnershipBeforeReset(t *testing.T) {
 			// objects alone. Only the workspace knows which names registered.
 			arg.Reset(proc, false, nil)
 			arg.Free(proc, true, errors.New("consumer failed"))
-			_, err := ctr.fs.StatFile(proc.Ctx, objectName)
+			_, err = fs.StatFile(proc.Ctx, objectName)
 			require.NoError(t, err)
 			require.NoError(t, workspace.Cleanup(proc.Ctx))
-			_, err = ctr.fs.StatFile(proc.Ctx, objectName)
+			_, err = fs.StatFile(proc.Ctx, objectName)
 			if accepted {
 				require.NoError(t, err)
 			} else {
@@ -400,7 +402,9 @@ func flushTombstoneObjectForTest(t *testing.T, proc *process.Process, missingWor
 	data, area := vector.MustVarlenaRawData(statsBat.Vecs[0])
 	stats := objectio.ObjectStats(data[0].GetByteSlice(area))
 	objectName := stats.ObjectName().String()
-	_, err = ctr.fs.StatFile(proc.Ctx, objectName)
+	fs, err := colexec.GetSharedFSFromProc(proc)
+	require.NoError(t, err)
+	_, err = fs.StatFile(proc.Ctx, objectName)
 	require.NoError(t, err)
 	return ctr, objectName
 }

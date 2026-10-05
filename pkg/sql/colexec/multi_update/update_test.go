@@ -1158,7 +1158,6 @@ func checkMultiUpdateFreeTransfersFailedCleanupWithBorrowedBuffer(t *testing.T, 
 	require.Len(t, workspace.cleanups, 1)
 	require.Nil(t, delegate.insertFreeLists, "retry must not retain the shared buffer pool")
 	require.Nil(t, delegate.insertSinkers, "retry must not retain the delegate")
-	require.Nil(t, delegate.cleanupMP, "retry must not retain the session mpool")
 	_, err = baseFS.StatFile(proc.Ctx, objectName)
 	require.NoError(t, err)
 	// A second storage outage during transaction teardown retains the name-only
@@ -1193,15 +1192,20 @@ func TestMultiUpdateFailedOneShotWriterCleanupRetries(t *testing.T) {
 	require.NoError(t, err)
 	stats := objectio.ObjectStats(blockInfo.Vecs[1].GetBytesAt(0))
 	name := stats.ObjectName().String()
-	blockInfo.Clean(proc.Mp())
-
 	delegate := &s3WriterDelegate{failedWriters: []*colexec.CNS3Writer{nil, writer}}
-	require.ErrorIs(t, delegate.cleanupUnpublishedS3Objects(proc.Ctx), deleteErr)
-	require.Same(t, writer, delegate.failedWriters[1])
+	update := &MultiUpdate{}
+	update.ctr.s3Writer = delegate
+	update.Free(proc, true, deleteErr)
+	workspace := proc.GetTxnOperator().GetWorkspace().(*multiUpdateS3CleanupWorkspace)
+	require.Nil(t, update.ctr.s3Writer)
+	require.Len(t, workspace.cleanups, 1)
+	require.Zero(t, proc.Mp().CurrNB(), "queued one-shot cleanup must not retain writer buffers")
 	_, err = baseFS.StatFile(proc.Ctx, name)
 	require.NoError(t, err)
-	require.NoError(t, delegate.cleanupUnpublishedS3Objects(proc.Ctx))
-	require.Empty(t, delegate.failedWriters)
+	fs.failed = false
+	require.ErrorIs(t, workspace.cleanups[0](proc.Ctx), deleteErr)
+	require.NoError(t, workspace.cleanups[0](proc.Ctx))
+	require.False(t, writer.PendingUnpublishedCleanup())
 	_, err = baseFS.StatFile(proc.Ctx, name)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "%v", err)
 }
@@ -1292,7 +1296,6 @@ func TestMultiUpdateRetryTaskSkipsReusableSinkers(t *testing.T) {
 	require.Empty(t, task.insertSinkers, "a reusable writer with no ticket must not enter the retry task")
 	delegate.releaseBuffers(proc.Mp())
 	require.Nil(t, delegate.insertSinkers[0])
-	require.Nil(t, delegate.cleanupMP)
 }
 
 func TestPartitionMultiUpdateFreeTransfersFailedCleanup(t *testing.T) {

@@ -82,11 +82,12 @@ type UnpublishedS3CleanupRetainer interface {
 // retained after the writer's buffers are released, then either accept names
 // as workspace entries are appended or delete the remainder on abort.
 type UnpublishedS3ObjectOwner struct {
-	mu        sync.Mutex
-	fs        fileservice.FileService
-	names     map[string]struct{}
+	mu sync.Mutex
+	fs fileservice.FileService
+	// The value marks this owner's ticket; received duplicate names can be
+	// owned elsewhere and must not release that owner's admission charge.
+	names     map[string]bool
 	admission *unpublishedS3Admission
-	charged   map[string]struct{}
 }
 
 func NewUnpublishedS3ObjectOwner(
@@ -124,22 +125,21 @@ func newUnpublishedS3ObjectOwner(
 	}
 	owner := &UnpublishedS3ObjectOwner{
 		fs:        fs,
-		names:     make(map[string]struct{}, len(names)),
+		names:     make(map[string]bool, len(names)),
 		admission: admission,
 	}
 	for _, name := range names {
 		if name != "" {
-			owner.names[strings.Clone(name)] = struct{}{}
+			owner.names[strings.Clone(name)] = false
 		}
 	}
 	if len(owner.names) == 0 {
 		return nil, nil
 	}
 	if admission != nil {
-		owner.charged = make(map[string]struct{}, len(charged))
 		for _, name := range charged {
 			if _, exists := owner.names[name]; exists {
-				owner.charged[name] = struct{}{}
+				owner.names[name] = true
 			}
 		}
 	}
@@ -160,25 +160,23 @@ func (owner *UnpublishedS3ObjectOwner) Accept(names ...string) {
 	owner.mu.Lock()
 	defer owner.mu.Unlock()
 	for _, name := range names {
-		delete(owner.names, name)
 		owner.release(name)
 	}
 }
 
 func (owner *UnpublishedS3ObjectOwner) AcceptAll() {
 	owner.mu.Lock()
-	clear(owner.names)
-	for name := range owner.charged {
+	for name := range owner.names {
 		owner.release(name)
 	}
 	owner.mu.Unlock()
 }
 
 func (owner *UnpublishedS3ObjectOwner) release(name string) {
-	if _, charged := owner.charged[name]; charged {
+	if owner.names[name] {
 		owner.admission.release(name)
-		delete(owner.charged, name)
 	}
+	delete(owner.names, name)
 }
 
 func (owner *UnpublishedS3ObjectOwner) Pending() bool {
@@ -199,7 +197,6 @@ func (owner *UnpublishedS3ObjectOwner) Cleanup(ctx context.Context) error {
 	}
 	completed, _, err := ioutil.DeleteUnpublishedObjectsWithProgress(ctx, owner.fs, names...)
 	for _, name := range completed {
-		delete(owner.names, name)
 		owner.release(name)
 	}
 	return err
