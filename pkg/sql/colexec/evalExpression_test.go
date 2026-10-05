@@ -15,6 +15,7 @@
 package colexec
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"testing"
@@ -3992,9 +3993,10 @@ func TestLastDayPersistedVarcharABI(t *testing.T) {
 }
 
 func TestDecimalCastSelectionAndErrorReuse(t *testing.T) {
-	proc := testutil.NewProcess(nil)
+	fs := testutil.NewFS(nil)
+	t.Cleanup(func() { fs.Close(context.Background()) })
+	proc := testutil.NewProcess(t, testutil.WithFileService(fs))
 	t.Cleanup(func() {
-		proc.Base.FileService.Close(proc.Ctx)
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
 	})
@@ -4052,9 +4054,10 @@ func TestDecimalCastSelectionAndErrorReuse(t *testing.T) {
 }
 
 func TestDecimalWideningEmptyBatchReuse(t *testing.T) {
-	proc := testutil.NewProcess(nil)
+	fs := testutil.NewFS(nil)
+	t.Cleanup(func() { fs.Close(context.Background()) })
+	proc := testutil.NewProcess(t, testutil.WithFileService(fs))
 	t.Cleanup(func() {
-		proc.Base.FileService.Close(proc.Ctx)
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
 	})

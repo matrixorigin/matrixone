@@ -1480,7 +1480,6 @@ func (*filteredTopKRelationReader) SetFilterZM(objectio.ZoneMap) {}
 func TestRelationScannerExecutesTypedReaderLifecycle(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
 	proc.Ctx = fileservice.WithFileServicePolicy(proc.Ctx, fileservice.SkipDiskCacheWrites)
 	checkPolicy := func(ctx context.Context) {
 		require.Equal(t, fileservice.Policy(fileservice.SkipDiskCacheWrites|fileservice.SkipFullFilePreloads), fileservice.GetFileServicePolicy(ctx))
@@ -1539,7 +1538,6 @@ func TestRelationScannerExecutesTypedReaderLifecycle(t *testing.T) {
 func TestRelationScannerPropagatesStorageFailure(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
 	eng := mock_frontend.NewMockEngine(ctrl)
 	proc.Base.SessionInfo.StorageEngine = eng
 	eng.EXPECT().Database(gomock.Any(), "db", nil).Return(nil, errors.New("database unavailable"))
@@ -1552,7 +1550,6 @@ func TestRelationScannerPropagatesStorageFailure(t *testing.T) {
 func TestRelationScannerUsesSnapshotCloneAndPublisherAccount(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
 	original := mock_frontend.NewMockTxnOperator(ctrl)
 	clone := mock_frontend.NewMockTxnOperator(ctrl)
 	proc.Base.TxnOperator = original
@@ -1598,7 +1595,6 @@ func TestRelationScannerKeepsCurrentTxnForEqualAndAheadSnapshots(t *testing.T) {
 		t.Run(snapshotTS.DebugString(), func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			proc := testutil.NewProc(t)
-			t.Cleanup(proc.Free)
 			original := mock_frontend.NewMockTxnOperator(ctrl)
 			proc.Base.TxnOperator = original
 			original.EXPECT().Txn().Return(txn.TxnMeta{
@@ -1672,7 +1668,6 @@ func TestRelationScannerPropagatesRelationSetupFailures(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			proc := testutil.NewProc(t)
-			t.Cleanup(proc.Free)
 			eng := mock_frontend.NewMockEngine(ctrl)
 			db := mock_frontend.NewMockDatabase(ctrl)
 			rel := mock_frontend.NewMockRelation(ctrl)
@@ -1687,7 +1682,6 @@ func TestRelationScannerPropagatesRelationSetupFailures(t *testing.T) {
 func TestRelationScannerFiltersBeforeApplyingTopLimit(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
 	eng := mock_frontend.NewMockEngine(ctrl)
 	db := mock_frontend.NewMockDatabase(ctrl)
 	rel := mock_frontend.NewMockRelation(ctrl)
@@ -1750,7 +1744,6 @@ func TestRelationScannerFiltersBeforeApplyingTopLimit(t *testing.T) {
 func TestRelationScannerDefersWideVectorUntilAfterIncludeFilter(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
 	eng := mock_frontend.NewMockEngine(ctrl)
 	db := mock_frontend.NewMockDatabase(ctrl)
 	rel := mock_frontend.NewMockRelation(ctrl)
@@ -1820,7 +1813,6 @@ func TestRelationScannerDefersWideVectorUntilAfterIncludeFilter(t *testing.T) {
 func TestRelationScannerUsesFilterBeforeStorageTopKCapability(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
 	eng := mock_frontend.NewMockEngine(ctrl)
 	db := mock_frontend.NewMockDatabase(ctrl)
 	rel := mock_frontend.NewMockRelation(ctrl)
@@ -1881,7 +1873,6 @@ func TestRelationScannerUsesFilterBeforeStorageTopKCapability(t *testing.T) {
 func TestRelationScannerFallsBackWhenReaderCannotDelayVectorLoading(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
 	eng := mock_frontend.NewMockEngine(ctrl)
 	db := mock_frontend.NewMockDatabase(ctrl)
 	rel := mock_frontend.NewMockRelation(ctrl)
@@ -2268,7 +2259,6 @@ func testTypedPlanReaders(t *testing.T, parallelism int, identity ...searchplugi
 	t.Cleanup(func() { cache.Cache.Remove("centroids_init:991") })
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
 	// The search caches the loaded index under "<centroid table>:<version>", in a cache that is
 	// process-global. Left behind, the SECOND -count pass is served from it and never opens the
 	// relations this test exists to watch -- metadataReader.closed stays 0 and the assertions
@@ -2618,7 +2608,6 @@ func TestNewPlanReaderOwnsItsExecutionState(t *testing.T) {
 
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
 	proc.Base.TxnOperator = mock_frontend.NewMockTxnOperator(ctrl)
 	proc.Base.SessionInfo.StorageEngine = mock_frontend.NewMockEngine(ctrl)
 	_, err := NewPlanReader(proc, nil, searchplugin.Request{})
@@ -2686,7 +2675,6 @@ func TestNewPlanReaderOwnsItsExecutionState(t *testing.T) {
 func TestNewPlanReaderExecutionRouteOwnsMemory(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
 	proc.Base.TxnOperator = mock_frontend.NewMockTxnOperator(ctrl)
 	proc.Base.SessionInfo.StorageEngine = mock_frontend.NewMockEngine(ctrl)
 	for _, tc := range []struct {

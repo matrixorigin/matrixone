@@ -460,8 +460,13 @@ func TestMergeSortBatches(t *testing.T) {
 func TestS3Writer_SortAndSync(t *testing.T) {
 	pool, err := mpool.NewMPool("", mpool.GB, mpool.NoFixed)
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		defer mpool.DeleteMPool(pool)
+		require.Zero(t, pool.CurrNB())
+	})
 
 	bat := batch.NewWithSize(2)
+	t.Cleanup(func() { bat.Clean(pool) })
 	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
 	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
 
@@ -484,6 +489,7 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 		require.NoError(t, err)
 
 		s3writer := NewCNS3TombstoneWriter(proc.Mp(), fs, types.T_int32.ToType(), -1)
+		t.Cleanup(func() { require.NoError(t, s3writer.Close()) })
 
 		s, err := s3writer.Sync(ctx)
 		require.NoError(t, err)
@@ -498,6 +504,7 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 		ctx := proc.Ctx
 
 		s3writer := NewCNS3TombstoneWriter(proc.Mp(), proc.GetFileService(), types.T_int32.ToType(), -1)
+		t.Cleanup(func() { require.NoError(t, s3writer.Close()) })
 		err = s3writer.Write(ctx, bat)
 		require.NoError(t, err)
 
@@ -516,6 +523,7 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 		require.NoError(t, err)
 
 		s3writer := NewCNS3TombstoneWriter(proc.Mp(), fs, types.T_int32.ToType(), -1)
+		t.Cleanup(func() { require.NoError(t, s3writer.Close()) })
 
 		err = s3writer.Write(ctx, bat)
 		require.NoError(t, err)
@@ -528,8 +536,12 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 
 	// test data size larger than object size limit
 	{
-		pool, err = mpool.NewMPool("", mpool.GB, mpool.NoFixed)
+		pool, err := mpool.NewMPool("", mpool.GB, mpool.NoFixed)
 		require.NoError(t, err)
+		t.Cleanup(func() {
+			defer mpool.DeleteMPool(pool)
+			require.Zero(t, pool.CurrNB())
+		})
 
 		proc := testutil.NewProc(
 			t,
@@ -537,10 +549,13 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 		ctx := proc.Ctx
 
 		bat2 := batch.NewWithSize(2)
+		t.Cleanup(func() { bat2.Clean(pool) })
 		bat2.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
 		bat2.Vecs[1] = vector.NewVec(types.T_int32.ToType())
 
+		previousLimit := objectio.ObjectSizeLimit
 		objectio.SetObjectSizeLimit(mpool.KB)
+		t.Cleanup(func() { objectio.SetObjectSizeLimit(previousLimit) })
 		cnt := (objectio.ObjectSizeLimit) / types.RowidSize * 3
 
 		for i := 0; i < cnt; i++ {
@@ -556,6 +571,7 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 		fs, err := fileservice.Get[fileservice.FileService](proc.Base.FileService, defines.SharedFileServiceName)
 		require.NoError(t, err)
 		s3writer := NewCNS3TombstoneWriter(proc.Mp(), fs, types.T_int32.ToType(), -1)
+		t.Cleanup(func() { require.NoError(t, s3writer.Close()) })
 
 		err = s3writer.Write(ctx, bat2)
 		require.NoError(t, err)

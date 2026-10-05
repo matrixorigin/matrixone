@@ -250,7 +250,6 @@ func TestDecodedRemoteScopePreservesReaderContract(t *testing.T) {
 			}
 
 			senderProc := testutil.NewProcess(t)
-			t.Cleanup(senderProc.Free)
 			if len(test.membershipFilter) > 0 {
 				senderProc.Ctx = context.WithValue(
 					senderProc.Ctx,
@@ -282,7 +281,6 @@ func TestDecodedRemoteScopePreservesReaderContract(t *testing.T) {
 			require.NoError(t, err)
 
 			remoteProc := testutil.NewProcess(t)
-			t.Cleanup(remoteProc.Free)
 			remoteProc.Ctx = defines.AttachAccountId(remoteProc.Ctx, 99)
 			txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 			txnOperator.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()

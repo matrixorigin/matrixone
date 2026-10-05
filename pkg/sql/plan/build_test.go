@@ -5793,7 +5793,7 @@ func TestReplaceRewritesLegacyGeneratedColumnCast(t *testing.T) {
 }
 
 func TestAssignmentCastRollingUpgradePlanGate(t *testing.T) {
-	proc := testutil.NewProc(nil)
+	proc := newPlanTestProcess(t)
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
 
@@ -5878,7 +5878,7 @@ func TestInsertAddsCheckConstraintFilter(t *testing.T) {
 	t.Run("replace rejects mixed-version cluster", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
 		addPositiveCheck(t, mock, "dept", "deptno")
-		proc := testutil.NewProc(nil)
+		proc := newPlanTestProcess(t)
 		rt := moruntime.ServiceRuntime(proc.GetService())
 		defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion6)

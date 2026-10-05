@@ -18,15 +18,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 	"testing"
 )
 
 func TestUnaryInactiveExecutionContracts(t *testing.T) {
-	proc := testutil.NewProcess(nil)
-	t.Cleanup(func() { proc.Base.FileService.Close(proc.Ctx); proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 	cases := []struct {
 		name    string
 		input   FunctionTestInput
