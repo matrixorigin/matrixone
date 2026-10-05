@@ -161,7 +161,7 @@ internal error: there is a recursive reference to the view history_v
 select * from history_v;
 a
 22
-create or replace view history_v as select * from history_v {as of timestamp '2262-04-11 23:47:16'};
+create or replace view history_v as select * from history_v {as of timestamp '2262-04-10 00:00:00'};
 internal error: there is a recursive reference to the view history_v
 select * from history_v;
 a

@@ -168,6 +168,12 @@ create table QaMode2AccountRestore.Parent(id int primary key);
 insert into QaMode2AccountRestore.Parent values (7);
 create snapshot qa_mode2_account_restore_snapshot for cluster;
 drop account qa_mode2_account_restore;
+select count(*) from mo_catalog.mo_database where datname = 'QaMode2AccountRestore';
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from mo_catalog.mo_tables where reldatabase = 'QaMode2AccountRestore';
+➤ count(*)[-5,64,0]  𝄀
+0
 restore account qa_mode2_account_restore{snapshot='qa_mode2_account_restore_snapshot'};
 select @@session.lower_case_table_names;
 ➤ @@lower_case_table_names[-1,16383,0]  𝄀
@@ -178,4 +184,10 @@ select id from QaMode2AccountRestore.Parent;
 7
 drop snapshot qa_mode2_account_restore_snapshot;
 drop account qa_mode2_account_restore;
+select count(*) from mo_catalog.mo_database where datname = 'QaMode2AccountRestore';
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from mo_catalog.mo_tables where reldatabase = 'QaMode2AccountRestore';
+➤ count(*)[-5,64,0]  𝄀
+0
 set global lower_case_table_names = @mode2_previous;

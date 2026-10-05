@@ -15,7 +15,6 @@
 package frontend
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -4114,9 +4113,6 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 
 	var sql, db, table string
 	var erArray []ExecResult
-	var databases map[string]int8
-	var dbSql, prefix string
-	var sqlsForDropDatabases = make([]string, 0, 5)
 
 	var deleteCtx context.Context
 	var accountId int64
@@ -4260,8 +4256,7 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 		}
 
 		// drop databases created by user
-		databases = make(map[string]int8)
-		dbSql = "show databases;"
+		dbSql := "show databases;"
 		bh.ClearExecResultSet()
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dbSql)
 		rtnErr = bh.Exec(deleteCtx, dbSql)
@@ -4274,34 +4269,26 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 			return rtnErr
 		}
 
+		// Read the complete name set before executing DDL replaces the result set.
+		databases := make([]string, 0, erArray[0].GetRowCount())
 		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
 			db, rtnErr = erArray[0].GetString(ctx, i, 0)
 			if rtnErr != nil {
 				return rtnErr
 			}
-			databases[db] = 0
-		}
-
-		prefix = "drop database if exists "
-
-		for db = range databases {
-			if db == "mo_catalog" {
-				continue
+			if db != catalog.MO_CATALOG {
+				databases = append(databases, db)
 			}
-			bb := &bytes.Buffer{}
-			bb.WriteString(prefix)
-			// handle the database annotated by '`'
-			bb.WriteString("`")
-			bb.WriteString(db)
-			bb.WriteString("`")
-
-			bb.WriteString(";")
-			sqlsForDropDatabases = append(sqlsForDropDatabases, bb.String())
 		}
 
-		for _, sql = range sqlsForDropDatabases {
-			ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
-			rtnErr = bh.Exec(deleteCtx, sql)
+		// Catalog names are already physical identities. Neither the SYS
+		// session's mode nor background mode-1 parsing may reinterpret them.
+		dropCtx := defines.AttachMode2NameResolution(deleteCtx, false)
+		for _, db = range databases {
+			stmt := tree.NewDropDatabase(tree.Identifier(db), true)
+			ses.Infof(ctx, "dropAccount %s database: %s", da.Name, db)
+			rtnErr = bh.ExecStmt(dropCtx, stmt)
+			stmt.Free()
 			if rtnErr != nil {
 				return rtnErr
 			}

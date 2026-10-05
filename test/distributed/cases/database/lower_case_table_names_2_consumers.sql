@@ -122,6 +122,8 @@ insert into QaMode2AccountRestore.Parent values (7);
 -- @session
 create snapshot qa_mode2_account_restore_snapshot for cluster;
 drop account qa_mode2_account_restore;
+select count(*) from mo_catalog.mo_database where datname = 'QaMode2AccountRestore';
+select count(*) from mo_catalog.mo_tables where reldatabase = 'QaMode2AccountRestore';
 restore account qa_mode2_account_restore{snapshot='qa_mode2_account_restore_snapshot'};
 -- @session:id=7&user=qa_mode2_account_restore:admin&password=test123
 -- Account recreation currently resets compatibility variables to defaults;
@@ -134,4 +136,6 @@ select id from QaMode2AccountRestore.Parent;
 -- @session
 drop snapshot qa_mode2_account_restore_snapshot;
 drop account qa_mode2_account_restore;
+select count(*) from mo_catalog.mo_database where datname = 'QaMode2AccountRestore';
+select count(*) from mo_catalog.mo_tables where reldatabase = 'QaMode2AccountRestore';
 set global lower_case_table_names = @mode2_previous;
