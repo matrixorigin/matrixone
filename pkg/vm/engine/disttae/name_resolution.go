@@ -34,7 +34,8 @@ import (
 func (e *Engine) resolveMode2Database(
 	ctx context.Context, name string, op client.TxnOperator, txn *Transaction,
 ) (engine.Database, error) {
-	if identifier.Fold(name) == catalog.MO_CATALOG {
+	folded := identifier.Fold(name)
+	if folded == catalog.MO_CATALOG {
 		return &txnDatabase{
 			op: op, databaseId: catalog.MO_CATALOG_ID,
 			databaseName: catalog.MO_CATALOG,
@@ -44,7 +45,6 @@ func (e *Engine) resolveMode2Database(
 	if err != nil {
 		return nil, err
 	}
-	folded := identifier.Fold(name)
 	local := txn.databaseOps.foldedSnapshot(accountID, folded)
 	var own *txnDatabase
 	for _, operation := range local {
@@ -127,42 +127,11 @@ func scanHistoricalDatabaseNames(
 	ctx context.Context, op client.TxnOperator, accountID uint32, folded string,
 	visit func(string) bool,
 ) error {
-	snapshot := op.SnapshotTS()
-	if !op.SnapshotTS().Equal(snapshot) {
-		return moerr.NewTxnNeedRetryWithDefChanged(ctx)
-	}
 	sql := fmt.Sprintf(
 		"select datname from mo_catalog.mo_database where account_id = %d",
 		accountID,
 	)
-	stop := false
-	err := scanReadSql(ctx, op, sql, func(result executor.Result) error {
-		if !op.SnapshotTS().Equal(snapshot) {
-			return moerr.NewTxnNeedRetryWithDefChanged(ctx)
-		}
-		if !stop {
-			for _, bat := range result.Batches {
-				for i := 0; i < bat.RowCount(); i++ {
-					physicalName := bat.Vecs[0].GetStringAt(i)
-					if identifier.Fold(physicalName) == folded && !visit(physicalName) {
-						stop = true
-						break
-					}
-				}
-				if stop {
-					break
-				}
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-	if !op.SnapshotTS().Equal(snapshot) {
-		return moerr.NewTxnNeedRetryWithDefChanged(ctx)
-	}
-	return nil
+	return scanHistoricalCatalogNames(ctx, op, sql, folded, visit)
 }
 
 func (db *txnDatabase) resolveMode2TableName(
@@ -230,14 +199,19 @@ func scanHistoricalTableNames(
 	ctx context.Context, op client.TxnOperator, accountID uint32, databaseName string, databaseID uint64,
 	folded string, visit func(string) bool,
 ) error {
-	snapshot := op.SnapshotTS()
-	if !op.SnapshotTS().Equal(snapshot) {
-		return moerr.NewTxnNeedRetryWithDefChanged(ctx)
-	}
 	sql := fmt.Sprintf(
 		"select relname from mo_catalog.mo_tables where account_id = %d and reldatabase = %s and reldatabase_id = %d",
 		accountID, sqlquote.String(databaseName), databaseID,
 	)
+	return scanHistoricalCatalogNames(ctx, op, sql, folded, visit)
+}
+
+// scanHistoricalCatalogNames owns the fixed-snapshot name filter for both
+// catalogs. scanReadSql owns cancellation, result release and producer join.
+func scanHistoricalCatalogNames(
+	ctx context.Context, op client.TxnOperator, sql, folded string, visit func(string) bool,
+) error {
+	snapshot := op.SnapshotTS()
 	stop := false
 	err := scanReadSql(ctx, op, sql, func(result executor.Result) error {
 		if !op.SnapshotTS().Equal(snapshot) {
