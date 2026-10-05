@@ -120,7 +120,7 @@ func TestAdvanceFeatureLimitTxnSnapshotUsesTNOrderedBarrier(t *testing.T) {
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOp.EXPECT().GetWorkspace().Return(workspace)
 
-	require.NoError(t, advanceFeatureLimitTxnSnapshot(t.Context(), ses, txnOp))
+	require.NoError(t, advanceCatalogTxnSnapshot(t.Context(), ses, txnOp))
 }
 
 func TestFeatureLimitTxnUsesIndependentSnapshotForSI(t *testing.T) {
@@ -162,7 +162,7 @@ func TestAdvanceFeatureLimitTxnSnapshotUsesRollingUpgradeFence(t *testing.T) {
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOp.EXPECT().GetWorkspace().Return(workspace)
 
-	require.NoError(t, advanceFeatureLimitTxnSnapshot(t.Context(), ses, txnOp))
+	require.NoError(t, advanceCatalogTxnSnapshot(t.Context(), ses, txnOp))
 }
 
 func TestAdvanceFeatureLimitTxnSnapshotFailsClosed(t *testing.T) {
@@ -177,7 +177,7 @@ func TestAdvanceFeatureLimitTxnSnapshotFailsClosed(t *testing.T) {
 	t.Run("missing transaction", func(t *testing.T) {
 		ses := newFeatureLimitTestSession(t)
 		require.ErrorContains(t,
-			advanceFeatureLimitTxnSnapshot(t.Context(), ses, nil),
+			advanceCatalogTxnSnapshot(t.Context(), ses, nil),
 			"missing transaction",
 		)
 	})
@@ -200,7 +200,7 @@ func TestAdvanceFeatureLimitTxnSnapshotFailsClosed(t *testing.T) {
 		txnOp.EXPECT().GetWorkspace().Return(nil)
 
 		require.ErrorContains(t,
-			advanceFeatureLimitTxnSnapshot(t.Context(), ses, txnOp),
+			advanceCatalogTxnSnapshot(t.Context(), ses, txnOp),
 			"missing workspace",
 		)
 	})
@@ -222,7 +222,7 @@ func TestAdvanceFeatureLimitTxnSnapshotFailsClosed(t *testing.T) {
 		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 
 		require.ErrorIs(t,
-			advanceFeatureLimitTxnSnapshot(t.Context(), ses, txnOp),
+			advanceCatalogTxnSnapshot(t.Context(), ses, txnOp),
 			wantErr,
 		)
 	})
@@ -246,7 +246,7 @@ func TestAdvanceFeatureLimitTxnSnapshotFailsClosed(t *testing.T) {
 		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 
 		require.ErrorContains(t,
-			advanceFeatureLimitTxnSnapshot(t.Context(), ses, txnOp),
+			advanceCatalogTxnSnapshot(t.Context(), ses, txnOp),
 			"did not reach the required timestamp",
 		)
 	})
@@ -272,7 +272,7 @@ func TestAdvanceFeatureLimitTxnSnapshotFailsClosed(t *testing.T) {
 		txnOp.EXPECT().GetWorkspace().Return(workspace)
 
 		require.ErrorIs(t,
-			advanceFeatureLimitTxnSnapshot(t.Context(), ses, txnOp),
+			advanceCatalogTxnSnapshot(t.Context(), ses, txnOp),
 			wantErr,
 		)
 	})

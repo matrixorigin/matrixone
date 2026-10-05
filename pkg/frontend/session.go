@@ -122,6 +122,50 @@ func (ses *Session) acquireLogtailReadBarrier(
 	return barrier.AcquireLogtailReadBarrier(ctx)
 }
 
+// advanceCatalogTxnSnapshot refreshes a locked catalog reader from the existing
+// logtail barrier. The caller's transaction keeps its locks and owns cleanup.
+func advanceCatalogTxnSnapshot(
+	ctx context.Context,
+	ses *Session,
+	txnOp TxnOperator,
+) error {
+	if txnOp == nil {
+		return moerr.NewInternalErrorNoCtx("missing transaction for catalog snapshot refresh")
+	}
+	var (
+		frontier timestamp.Timestamp
+		err      error
+	)
+
+	if logtailReadBarrierSupported(ses) {
+		frontier, err = ses.acquireLogtailReadBarrier(ctx)
+	} else {
+		var minimum timestamp.Timestamp
+		minimum, err = ses.legacyLogtailReadFence(ctx)
+		if err == nil {
+			pu := getPuIfPresent(ses.GetService())
+			if pu == nil || pu.TxnClient == nil {
+				return moerr.NewInternalError(
+					ctx, "missing transaction client for catalog snapshot refresh")
+			}
+			frontier, err = pu.TxnClient.WaitLogTailAppliedAt(ctx, minimum)
+			if err == nil && frontier.Less(minimum) {
+				return moerr.NewInternalError(
+					ctx, "catalog snapshot did not reach the required timestamp")
+			}
+		}
+	}
+	if err != nil {
+		return err
+	}
+
+	workspace := txnOp.GetWorkspace()
+	if workspace == nil {
+		return moerr.NewInternalErrorNoCtx("missing workspace for catalog snapshot refresh")
+	}
+	return workspace.AdvanceSnapshot(ctx, frontier)
+}
+
 // reusablePlanGenerationSupported reports whether every live service in the
 // rollout understands the logical-plan generation snapshot carried by remote
 // pipeline and lock requests. Deployment keeps MOProtocolVersion at the oldest

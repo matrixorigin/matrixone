@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/identifier"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -2692,10 +2691,7 @@ func lockPublicationDatabaseCatalogRow(ctx context.Context, bh BackgroundExec, a
 	}
 	txnOp := back.backSes.GetTxnHandler().GetTxn()
 	if txnOp.Txn().IsPessimistic() && txnOp.Txn().IsRCIsolation() {
-		now, _ := moruntime.ServiceRuntime(bh.Service()).Clock().Now()
-		if err := txnOp.GetWorkspace().AdvanceSnapshot(ctx, now); err != nil {
-			return err
-		}
+		return advanceCatalogTxnSnapshot(ctx, owner, txnOp)
 	}
 	return nil
 }
@@ -2807,8 +2803,11 @@ func genMode2PubTablesStr(ctx context.Context, bh BackgroundExec, physicalDBName
 		}
 	}
 	if txnOp.Txn().IsPessimistic() && txnOp.Txn().IsRCIsolation() {
-		now, _ := moruntime.ServiceRuntime(bh.Service()).Clock().Now()
-		if err := txnOp.GetWorkspace().AdvanceSnapshot(ctx, now); err != nil {
+		owner := upstreamUserSession(back.backSes)
+		if owner == nil {
+			return "", moerr.NewInternalError(ctx, "publication table lock requires a user session")
+		}
+		if err := advanceCatalogTxnSnapshot(ctx, owner, txnOp); err != nil {
 			return "", err
 		}
 	}
