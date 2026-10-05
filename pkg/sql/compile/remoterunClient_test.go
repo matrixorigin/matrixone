@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"encoding/json"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -35,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
@@ -254,14 +256,14 @@ func TestNewMessageSenderOnClientReturnsErrorOnNilStream(t *testing.T) {
 }
 
 func TestMessageSenderOnClientNegotiatedStreamTeardown(t *testing.T) {
-	t.Run("negotiated retry terminal needs explicit cleanup authorization", func(t *testing.T) {
+	t.Run("negotiated failed terminal needs explicit cleanup authorization", func(t *testing.T) {
 		sender := &messageSenderOnClient{expectedEnd: pipeline.Method_PrepareDoneNotifyMessage}
 		message := &pipeline.Message{
 			Cmd:                  pipeline.Method_PrepareDoneNotifyMessage,
 			Sid:                  pipeline.Status_MessageEnd,
 			AcceptedTeardownMode: pipeline.StreamTeardownMode_FinishAck,
 		}
-		sender.markTerminal(message, false)
+		sender.markTerminal(message, false, true)
 		require.True(t, sender.terminalNegotiated)
 		require.False(t, sender.reuseEligible)
 		sender.prepareForLocalCleanup()
@@ -572,6 +574,9 @@ func TestRemoteRunNormalizesPipelineCancellationCause(t *testing.T) {
 		cancelQuery                bool
 		deadlineQuery              bool
 		remoteErr                  error
+		receiveRemoteTerminal      bool
+		terminalAnalysis           []byte
+		wantErrorContains          string
 		stopResponseErr            error
 		stopSendErr                error
 		closeStopResponse          bool
@@ -620,6 +625,27 @@ func TestRemoteRunNormalizesPipelineCancellationCause(t *testing.T) {
 			stopResponseErr:      moerr.NewQueryInterrupted(context.Background()),
 			wantErrCode:          moerr.ErrQueryInterrupted,
 			wantStopSendingCount: 1,
+		},
+		{
+			name:                 "malformed terminal cannot complete parent successfully",
+			stopWaitsForLocalEnd: true, terminalAnalysis: []byte("{"),
+			wantErrorContains: "unexpected end of JSON input", wantStopSendingCount: 1,
+		},
+		{
+			name:                  "malformed normal terminal fails parent",
+			receiveRemoteTerminal: true, terminalAnalysis: []byte("{"),
+			wantErrorContains: "unexpected end of JSON input",
+		},
+		{
+			name:                  "normal terminal retry survives malformed analysis",
+			receiveRemoteTerminal: true, terminalAnalysis: []byte("{"),
+			remoteErr: moerr.NewTxnNeedRetry(context.Background()), wantErrCode: moerr.ErrTxnNeedRetry,
+		},
+		{
+			name:                 "stop terminal retry survives malformed analysis",
+			stopWaitsForLocalEnd: true, terminalAnalysis: []byte("{"),
+			stopResponseErr: moerr.NewTxnNeedRetry(context.Background()),
+			wantErrCode:     moerr.ErrTxnNeedRetry, wantStopSendingCount: 1,
 		},
 		{
 			name:                 "normal internal cancellation remains secondary",
@@ -740,7 +766,7 @@ func TestRemoteRunNormalizesPipelineCancellationCause(t *testing.T) {
 			_, cancelQuery := process.GetQueryCtxFromProc(proc)
 			t.Cleanup(cancelQuery)
 			proc.BuildPipelineContext(queryCtx)
-			txnCli, txnOp := newTestTxnClientAndOp(ctrl)
+			txnCli, txnOp := newTestTxnClientAndOpWithIsolation(ctrl, txn.TxnIsolation_RC)
 			proc.Base.TxnClient = txnCli
 			proc.Base.TxnOperator = txnOp
 
@@ -755,9 +781,10 @@ func TestRemoteRunNormalizesPipelineCancellationCause(t *testing.T) {
 					message := request.(*pipeline.Message)
 					switch message.GetCmd() {
 					case pipeline.Method_PipelineMessage:
-						if tt.remoteErr != nil {
+						if tt.remoteErr != nil || tt.receiveRemoteTerminal {
 							response := &pipeline.Message{Sid: pipeline.Status_MessageEnd}
 							response.SetMessageType(pipeline.Method_PipelineMessage)
+							response.Analyse = tt.terminalAnalysis
 							response.SetMoError(context.Background(), tt.remoteErr)
 							responses <- response
 						} else if tt.cancelQuery {
@@ -783,6 +810,7 @@ func TestRemoteRunNormalizesPipelineCancellationCause(t *testing.T) {
 						}
 						response := &pipeline.Message{Sid: pipeline.Status_MessageEnd}
 						response.SetMessageType(pipeline.Method_PipelineMessage)
+						response.Analyse = tt.terminalAnalysis
 						if tt.stopResponseErr != nil {
 							response.SetMoError(context.Background(), tt.stopResponseErr)
 						}
@@ -840,7 +868,9 @@ func TestRemoteRunNormalizesPipelineCancellationCause(t *testing.T) {
 			}
 
 			err := s.RemoteRun(c)
-			if tt.wantErrCode != 0 {
+			if tt.wantErrorContains != "" {
+				require.ErrorContains(t, err, tt.wantErrorContains)
+			} else if tt.wantErrCode != 0 {
 				require.True(t, moerr.IsMoErrCode(process.UnwrapPipelineFailure(err), tt.wantErrCode), err)
 			} else if tt.wantErr == nil {
 				require.NoError(t, err)
@@ -848,18 +878,32 @@ func TestRemoteRunNormalizesPipelineCancellationCause(t *testing.T) {
 				require.ErrorIs(t, err, tt.wantErr)
 			}
 			require.Equal(t, tt.wantStopSendingCount, stopSendingCount)
+			if tt.terminalAnalysis != nil {
+				results := make(chan scopeRunResult, 1)
+				results <- newScopeRunResult(err, s)
+				parentErr := c.collectMergeRunResults(proc, scopeRunResult{}, results, nil)
+				require.Error(t, parentErr, "parent must not consume malformed completion as success")
+				require.NoError(t, queryCtx.Err(), "fault is independent of user cancellation")
+				if tt.wantErrCode == moerr.ErrTxnNeedRetry {
+					require.True(t, c.canRetry(parentErr), "parent must preserve actual RC retry policy")
+				} else {
+					require.ErrorContains(t, parentErr, tt.wantErrorContains)
+				}
+			}
 
 			select {
 			case signal := <-reg.Ch2:
 				_, terminalErr := signal.Action()
-				if tt.remoteErr == nil && tt.cancelCause == nil && !tt.cancelQuery && !tt.deadlineQuery {
+				if tt.remoteErr == nil && !tt.receiveRemoteTerminal && tt.cancelCause == nil && !tt.cancelQuery && !tt.deadlineQuery {
 					// Late handshake failures are retained by RemoteRun, after the
 					// local terminal has released consumers needed for remote cleanup.
 					require.Equal(t, process.EventEnd, signal.EventType)
 					require.NoError(t, terminalErr)
 				} else {
 					require.Equal(t, process.EventError, signal.EventType)
-					if tt.wantErrCode != 0 {
+					if tt.wantErrorContains != "" {
+						require.ErrorContains(t, terminalErr, tt.wantErrorContains)
+					} else if tt.wantErrCode != 0 {
 						require.True(t, moerr.IsMoErrCode(process.UnwrapPipelineFailure(terminalErr), tt.wantErrCode), terminalErr)
 					} else {
 						require.ErrorIs(t, terminalErr, tt.wantErr)
@@ -922,11 +966,11 @@ func TestRemoteRunFailureReleasesPendingRetainedDispatchAttach(t *testing.T) {
 	registrations, err := registerLocalDispatchReceivers([]*Scope{s}, c.addr)
 	require.NoError(t, err)
 	defer registrations.cleanup()
-	registeredProc, notifyCh, err := (&messageReceiverOnServer{
+	registeredProc, notifyCh, _, err := (&messageReceiverOnServer{
 		colexecServer: colexec.GetServer(""),
 		connectionCtx: context.Background(),
 		messageCtx:    context.Background(),
-	}).TryGetProcByUuid(uid)
+	}).getRemoteDispatchReceiver(uid, nil)
 	require.NoError(t, err)
 	require.Same(t, proc, registeredProc)
 
@@ -935,7 +979,7 @@ func TestRemoteRunFailureReleasesPendingRetainedDispatchAttach(t *testing.T) {
 	go func() {
 		close(started)
 		select {
-		case notifyCh <- &process.WrapCs{Uid: uid, Err: make(chan error, 1)}:
+		case notifyCh <- &process.WrapCs{Uid: uid}:
 			pendingDone <- "attached"
 		case <-proc.Ctx.Done():
 			pendingDone <- "canceled"
@@ -961,8 +1005,81 @@ func TestRemoteRunFailureReleasesPendingRetainedDispatchAttach(t *testing.T) {
 		t.Fatal("RemoteRun failure did not release the pending retained-root attach")
 	}
 	registrations.cleanup()
-	registeredProc, notifyCh, ok := colexec.GetServer("").GetProcByUuid(uid, false)
-	require.False(t, ok)
+	registeredProc, notifyCh, attachState, lookupWaiter, _ := colexec.GetServer("").AttachProcByUuidOrWait(uid)
+	lookupWaiter.Close()
+	require.Equal(t, colexec.RemoteReceiverMissing, attachState)
 	require.Nil(t, registeredProc)
 	require.Nil(t, notifyCh)
+}
+
+// Exercise the two real terminal consumers with the same protocol faults.
+func TestRemoteTerminalValidationAndReuse(t *testing.T) {
+	for _, stop := range []bool{false, true} {
+		for _, outcome := range []string{"valid", "bad analysis", "retry", "bad analysis plus retry", "bad error bytes", "closed transport"} {
+			name := "receive/" + outcome
+			if stop {
+				name = "stop/" + outcome
+			}
+			t.Run(name, func(t *testing.T) {
+				stream := mock_morpc.NewMockStream(gomock.NewController(t))
+				responses := make(chan morpc.Message, 1)
+				terminal := &pipeline.Message{Id: 7, Cmd: pipeline.Method_PipelineMessage,
+					Sid: pipeline.Status_MessageEnd, Analyse: []byte("{}"),
+					AcceptedTeardownMode: pipeline.StreamTeardownMode_FinishAck}
+				malformed := outcome == "bad analysis" || outcome == "bad analysis plus retry" || outcome == "bad error bytes"
+				if outcome == "bad analysis" || outcome == "bad analysis plus retry" {
+					terminal.Analyse = []byte("{")
+				}
+				if outcome == "retry" || outcome == "bad analysis plus retry" {
+					terminal.SetMoError(context.Background(), moerr.NewTxnNeedRetry(context.Background()))
+				}
+				if outcome == "bad error bytes" {
+					terminal.Err = []byte{255}
+				}
+				if outcome == "closed transport" {
+					close(responses)
+				} else {
+					responses <- terminal
+				}
+				stream.EXPECT().ID().Return(uint64(7)).AnyTimes()
+				if stop {
+					stream.EXPECT().Send(gomock.Any(), gomock.Any()).Return(nil)
+				}
+				sender := &messageSenderOnClient{ctx: context.Background(), streamSender: stream,
+					receiveCh: responses, expectedEnd: pipeline.Method_PipelineMessage}
+				// Local cleanup authorization must not bless a malformed response,
+				// including when it precedes reception (the StopSending path).
+				if stop {
+					sender.prepareForLocalCleanup()
+				}
+				var err error
+				if stop {
+					err = finalizeRemoteResult(nil, sender)
+				} else {
+					_, _, err = sender.receiveBatch()
+				}
+				if outcome == "valid" {
+					require.NoError(t, err)
+				} else {
+					require.Error(t, err)
+				}
+				if outcome == "retry" || outcome == "bad analysis plus retry" {
+					require.True(t, moerr.IsMoErrCode(process.UnwrapPipelineFailure(err), moerr.ErrTxnNeedRetry))
+				} else if outcome == "bad analysis" {
+					var syntax *json.SyntaxError
+					require.ErrorAs(t, err, &syntax)
+				}
+				sender.prepareForLocalCleanup()
+				if malformed || outcome == "closed transport" {
+					require.False(t, sender.terminalNegotiated)
+					require.False(t, sender.reuseEligible)
+					stream.EXPECT().Close(true).Return(nil).Times(1)
+					sender.close()
+					sender.close()
+				} else {
+					require.True(t, sender.reuseEligible, "valid negotiated completion retains reuse")
+				}
+			})
+		}
+	}
 }

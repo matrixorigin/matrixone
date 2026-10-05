@@ -89,7 +89,6 @@ func TestCancelPipelineSending_ShouldNotCancelDispatchReceiver(t *testing.T) {
 		MsgId:        streamID,
 		Uid:          receiverUid,
 		Cs:           session,
-		Err:          make(chan error, 1),
 	}
 
 	// Step 1: Register the dispatch receiver
@@ -136,7 +135,6 @@ func TestRecordDispatchPipeline(t *testing.T) {
 		MsgId:        streamID,
 		Uid:          receiverUid,
 		Cs:           session,
-		Err:          make(chan error, 1),
 	}
 
 	srv.RecordDispatchPipeline(session, streamID, dispatchReceiver)
@@ -167,7 +165,6 @@ func TestRecordDispatchPipeline(t *testing.T) {
 		MsgId:        streamID2,
 		Uid:          receiverUid2,
 		Cs:           session,
-		Err:          make(chan error, 1),
 	}
 
 	srv.RecordDispatchPipeline(session, streamID2, dispatchReceiver2)
@@ -190,7 +187,6 @@ func TestRecordDispatchPipeline(t *testing.T) {
 		MsgId:        streamID3,
 		Uid:          oldReceiverUid,
 		Cs:           session,
-		Err:          make(chan error, 1),
 	}
 	srv.receivedRunningPipeline.Lock()
 	srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[generateRecordKey(session, streamID3)] = runningPipelineInfo{
@@ -205,7 +201,6 @@ func TestRecordDispatchPipeline(t *testing.T) {
 		MsgId:        streamID3,
 		Uid:          newReceiverUid,
 		Cs:           session,
-		Err:          make(chan error, 1),
 	}
 
 	srv.RecordDispatchPipeline(session, streamID3, newDispatchReceiver)
@@ -228,7 +223,6 @@ func TestRecordDispatchPipeline(t *testing.T) {
 		MsgId:        streamID4,
 		Uid:          sameReceiverUid,
 		Cs:           session,
-		Err:          make(chan error, 1),
 	}
 	srv.receivedRunningPipeline.Lock()
 	srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[generateRecordKey(session, streamID4)] = runningPipelineInfo{
@@ -341,7 +335,6 @@ func TestCancelPipelineSending(t *testing.T) {
 		MsgId:        streamID2,
 		Uid:          receiverUid,
 		Cs:           session,
-		Err:          make(chan error, 1),
 	}
 
 	srv.RecordDispatchPipeline(session, streamID2, dispatchReceiver)
@@ -384,7 +377,6 @@ func TestRemoveRelatedPipeline(t *testing.T) {
 		MsgId:        streamID,
 		Uid:          receiverUid,
 		Cs:           session,
-		Err:          make(chan error, 1),
 	}
 
 	srv.RecordDispatchPipeline(session, streamID, dispatchReceiver)
@@ -424,7 +416,6 @@ func TestCancelPipelineSending_TombstoneAllowsDispatchRegistration(t *testing.T)
 		MsgId:        streamID,
 		Uid:          receiverUid,
 		Cs:           session,
-		Err:          make(chan error, 1),
 	}
 
 	srv.RecordDispatchPipeline(session, streamID, dispatchReceiver)
@@ -563,7 +554,6 @@ func TestRecordDispatchPipeline_MarksReceiverDoneOnSessionClose(t *testing.T) {
 		MsgId:        streamID,
 		Uid:          uuid.Must(uuid.NewV7()),
 		Cs:           session,
-		Err:          make(chan error, 1),
 	}
 
 	srv.RecordDispatchPipeline(session, streamID, dispatchReceiver)

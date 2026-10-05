@@ -113,7 +113,6 @@ const (
 	remoteReceiverReady remoteReceiverRegistryState = iota
 	remoteReceiverAttached
 	remoteReceiverClosed
-	remoteReceiverTombstone
 	remoteReceiverFinished
 )
 

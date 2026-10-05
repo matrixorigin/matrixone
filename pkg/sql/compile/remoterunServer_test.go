@@ -687,7 +687,6 @@ func TestPipelineStopBeforeLifecycleRegistrationIsReconciled(t *testing.T) {
 		MsgId: streamID,
 		Uid:   uuid.Must(uuid.NewV7()),
 		Cs:    session,
-		Err:   make(chan error, 1),
 	}
 	server.RecordDispatchPipeline(session, streamID, dispatchReceiver)
 	require.False(t, dispatchReceiver.ReceiverDone,
@@ -881,8 +880,6 @@ func TestRemoteNotifyCancellationReleasesCreditWaitAndRegistration(t *testing.T)
 			case <-time.After(5 * time.Second):
 				t.Fatal("notify did not attach")
 			}
-			require.True(t, info.TerminalBacked)
-			require.Nil(t, info.Err)
 			_, err := info.ReserveBatch(proc.Ctx, 1)
 			require.NoError(t, err)
 			observed := &observedDoneContext{Context: proc.Ctx, entered: make(chan struct{})}
@@ -945,8 +942,9 @@ func TestRemoteNotifyCancellationReleasesCreditWaitAndRegistration(t *testing.T)
 			}
 			require.ErrorIs(t, terminal.Err(), cause)
 			require.ErrorIs(t, context.Cause(proc.Ctx), cause)
-			_, _, registered = server.GetProcByUuid(uid, false)
-			require.False(t, registered)
+			_, _, state, lookupWaiter, _ := server.AttachProcByUuidOrWait(uid)
+			lookupWaiter.Close()
+			require.Equal(t, colexec.RemoteReceiverMissing, state)
 			require.NoError(t, handlePipelineBatchAck(&pipeline.Message{Id: id, BatchAckSequence: 1}, session))
 		})
 	}

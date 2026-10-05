@@ -77,6 +77,7 @@ func TestRemotePipelineFailureSQLContract(t *testing.T) {
 				physical, err := testutils.QueryTextResult(ctx, db, "explain phyplan analyze "+query)
 				require.NoError(t, err)
 				require.Contains(t, physical.Text, readiness.peerAddr)
+
 				require.Empty(t, queryStringRows(t, ctx, db, query))
 				rt := runtime.ServiceRuntime(cn.ServiceID())
 				original := cnclient.GetPipelineClient(cn.ServiceID())
@@ -99,44 +100,51 @@ func TestRemotePipelineFailureSQLContract(t *testing.T) {
 					for _, svc := range []string{cn.ServiceID(), peer.ServiceID()} {
 						runtime.ServiceRuntime(svc).SetGlobalVariables(runtime.EnablePipelineStreamReuse, reuse)
 					}
-					for _, target := range []string{
-						"select k from src",
-						"select k from src union all select k from src limit 1",
-						"select k from src union all select k from src limit 2",
-						query,
+					for _, scenario := range []struct {
+						fault   string
+						targets []string
+					}{
+						{"execution", []string{"select k from src", "select k from src union all select k from src limit 1", "select k from src union all select k from src limit 2", query}},
+						{"malformed", []string{"select k from src", "select k from src union all select k from src limit 1"}},
+						{"execution malformed", []string{"select k from src", "select k from src union all select k from src limit 1"}},
 					} {
-						injected := &terminalFailureClient{PipelineClient: original, sql: target, connectionID: connectionID, allowEmpty: target != "select k from src"}
-						rt.SetGlobalVariables(runtime.PipelineClient, injected)
-						// A different real remote request must neither fail nor
-						// consume the target statement's one-shot fault.
-						require.Equal(t, [][]string{{"2"}}, queryStringRows(t, ctx, db, "select count(*) from src"))
-						require.Zero(t, injected.failures.Load())
-						func() {
-							rows, queryErr := db.QueryContext(ctx, target)
-							if queryErr == nil {
-								defer rows.Close()
-								for rows.Next() {
-									var value int
-									require.NoError(t, rows.Scan(&value))
+						for _, target := range scenario.targets {
+							injected := &terminalFailureClient{PipelineClient: original, sql: target, connectionID: connectionID, allowEmpty: target != "select k from src", fault: scenario.fault}
+							rt.SetGlobalVariables(runtime.PipelineClient, injected)
+							// A different real remote request must neither fail nor
+							// consume the target statement's one-shot fault.
+							require.Equal(t, [][]string{{"2"}}, queryStringRows(t, ctx, db, "select count(*) from src"))
+							require.Zero(t, injected.failures.Load())
+							func() {
+								rows, queryErr := db.QueryContext(ctx, target)
+								if queryErr == nil {
+									defer rows.Close()
+									for rows.Next() {
+										var value int
+										require.NoError(t, rows.Scan(&value))
+									}
+									queryErr = rows.Err()
 								}
-								queryErr = rows.Err()
-							}
-							require.Equal(t, int32(1), injected.failures.Load(), "reuse=%t sql=%s", reuse, target)
-							var sqlErr *mysql.MySQLError
-							require.ErrorAs(t, queryErr, &sqlErr)
-							require.Equal(t, uint16(moerr.ER_QUERY_INTERRUPTED), sqlErr.Number)
-							require.Equal(t, "70100", string(sqlErr.SQLState[:]))
-						}()
-						require.NoError(t, ctx.Err(), "user context remains live")
-						require.Equal(t, [][]string{{"1"}, {"2"}}, queryStringRows(t, ctx, db, "select k from src order by k"))
-						require.Equal(t, int32(1), injected.failures.Load())
-						var currentConnectionID uint64
-						require.NoError(t, db.QueryRowContext(ctx, "select connection_id()").Scan(&currentConnectionID))
-						require.Equal(t, connectionID, currentConnectionID)
-						rt.SetGlobalVariables(runtime.PipelineClient, original)
+								require.Equal(t, int32(1), injected.failures.Load(), "reuse=%t sql=%s", reuse, target)
+								var sqlErr *mysql.MySQLError
+								require.ErrorAs(t, queryErr, &sqlErr)
+								if scenario.fault == "malformed" {
+									require.Contains(t, sqlErr.Message, "unexpected end of JSON input")
+								} else {
+									require.Equal(t, uint16(moerr.ER_QUERY_INTERRUPTED), sqlErr.Number)
+									require.Equal(t, "70100", string(sqlErr.SQLState[:]))
+								}
+							}()
+							require.NoError(t, ctx.Err(), "user context remains live")
+							require.Equal(t, [][]string{{"1"}, {"2"}}, queryStringRows(t, ctx, db, "select k from src order by k"))
+							require.Equal(t, int32(1), injected.failures.Load())
+							var currentConnectionID uint64
+							require.NoError(t, db.QueryRowContext(ctx, "select connection_id()").Scan(&currentConnectionID))
+							require.Equal(t, connectionID, currentConnectionID)
+							rt.SetGlobalVariables(runtime.PipelineClient, original)
+						}
 					}
 				}
-
 				require.Empty(t, queryStringRows(t, ctx, db, query))
 				require.Equal(t, [][]string{{"1"}}, queryStringRows(t, ctx, db, "select 1 from src limit 1"))
 				require.Equal(t, [][]string{{"1"}}, queryStringRows(t, ctx, db, "select k from src order by k limit 1"))
@@ -152,6 +160,7 @@ type terminalFailureClient struct {
 	sql          string
 	connectionID uint64
 	allowEmpty   bool
+	fault        string
 	statement    atomic.Pointer[[16]byte]
 }
 
@@ -232,7 +241,12 @@ func (s *terminalFailureStream) Receive() (chan morpc.Message, error) {
 				}
 				if request != nil && m.GetID() == s.ID() && m.GetCmd() == request.method &&
 					m.IsEndMessage() && (sawData || s.client.allowEmpty) && s.client.failures.CompareAndSwap(0, 1) {
-					m.SetMoError(context.Background(), moerr.NewQueryInterrupted(context.Background()))
+					if s.client.fault == "malformed" || s.client.fault == "execution malformed" {
+						m.Analyse = []byte("{")
+					}
+					if s.client.fault != "malformed" {
+						m.SetMoError(context.Background(), moerr.NewQueryInterrupted(context.Background()))
+					}
 				}
 			}
 			select {

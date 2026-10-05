@@ -724,14 +724,36 @@ func (sender *messageSenderOnClient) markReceiveClosed() {
 	sender.terminalNegotiated = false
 }
 
-func (sender *messageSenderOnClient) markTerminal(message *pipeline.Message, successful bool) {
+func (sender *messageSenderOnClient) markTerminal(message *pipeline.Message, successful, valid bool) {
 	sender.stateMu.Lock()
 	defer sender.stateMu.Unlock()
 	sender.safeToClose = true
-	sender.terminalNegotiated = message.GetCmd() == sender.expectedEnd &&
+	sender.terminalNegotiated = valid && message.GetCmd() == sender.expectedEnd &&
 		message.GetAcceptedTeardownMode() == pipeline.StreamTeardownMode_FinishAck
 	sender.reuseEligible = sender.terminalNegotiated &&
 		(successful || sender.allowCleanupCancellation)
+}
+
+// finishRemoteTerminal arbitrates both normal and StopSending completion.
+// Execution failures keep their identity even when auxiliary terminal data is
+// malformed. Invalid data cannot authorize backend reuse during later cleanup.
+func (sender *messageSenderOnClient) finishRemoteTerminal(message *pipeline.Message) error {
+	analysisErr := sender.dealRemoteTerminal(message.GetAnalyse())
+	var remoteErr error
+	valid := analysisErr == nil
+	if data := message.GetErr(); len(data) > 0 {
+		decoded := new(moerr.Error)
+		if remoteErr = decoded.UnmarshalBinary(data); remoteErr != nil {
+			valid = false
+		} else {
+			remoteErr = decoded
+		}
+	}
+	sender.markTerminal(message, remoteErr == nil && valid, valid)
+	if remoteErr != nil {
+		return process.MarkPipelineFailure(remoteErr)
+	}
+	return analysisErr
 }
 
 func (sender *messageSenderOnClient) prepareForLocalCleanup() {
@@ -784,18 +806,9 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 			}
 			batchSequence = sequence
 		}
-		if m.IsEndMessage() {
-			if err = sender.dealRemoteTerminal(m.GetAnalyse()); err != nil {
-				return nil, false, err
-			}
-		}
-		if info, get := m.TryToGetMoErr(); get {
-			sender.markTerminal(m, false)
-			return nil, false, process.MarkPipelineFailure(info)
-		}
-		if m.IsEndMessage() {
-			sender.markTerminal(m, true)
-			return nil, true, nil
+		if m.IsEndMessage() || len(m.GetErr()) > 0 {
+			err = sender.finishRemoteTerminal(m)
+			return nil, err == nil, err
 		}
 
 		if dataBuffer == nil {
@@ -936,18 +949,7 @@ func (sender *messageSenderOnClient) waitingTheStopResponse() error {
 			message := val.(*pipeline.Message)
 
 			if message.IsEndMessage() || len(message.GetErr()) > 0 {
-				_ = sender.dealRemoteTerminal(message.GetAnalyse())
-				if terminalErr, ok := message.TryToGetMoErr(); ok {
-					sender.markTerminal(message, false)
-					return process.MarkPipelineFailure(terminalErr)
-				}
-				// StopSending is also a clean teardown when the original server
-				// worker answers with its negotiated terminal response. The later FIN
-				// still waits for the same server cleanup barrier. Unnegotiated or
-				// mismatched terminal responses remain poisoned.
-				sender.markTerminal(message, true)
-				// in fact, we should deal the cost analysis information here.
-				return nil
+				return sender.finishRemoteTerminal(message)
 			}
 
 		case <-maxWaitingTime.Done():

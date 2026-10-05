@@ -428,12 +428,12 @@ func TestRemoteNotifyStopsBeforeRegistration(t *testing.T) {
 				// Retiring this attempt must not consume or tombstone a later producer.
 				proc := &process.Process{}
 				ch := make(process.RemotePipelineInformationChannel, 1)
-				require.NoError(t, server.PutProcIntoUuidMap(uid, proc, ch))
+				require.NoError(t, server.PutProcIntoUuidMapWithTerminal(uid, proc, ch, colexec.NewRemoteReceiverTerminal(nil)))
 				p, _, state, waiter, _ := server.AttachProcByUuidOrWait(uid)
 				waiter.Close()
 				require.Equal(t, colexec.RemoteReceiverAttachedNow, state)
 				require.Same(t, proc, p)
-				server.DeleteUuids([]uuid.UUID{uid})
+				server.RemoveUuidsOwned([]uuid.UUID{uid}, ch)
 			})
 		})
 	}

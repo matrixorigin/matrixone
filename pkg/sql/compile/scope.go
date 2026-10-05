@@ -1577,11 +1577,6 @@ type notifyMessageResult struct {
 	err    error
 }
 
-const (
-	notifyMessageRetryInitialInterval = 100 * time.Millisecond
-	notifyMessageRetryMaxInterval     = time.Second
-)
-
 type notifyMessageSenderFactory func(
 	ctx context.Context,
 	sid string,
@@ -1614,61 +1609,6 @@ func (s *Scope) sendNotifyMessageWithFactory(
 	resultChan chan notifyMessageResult,
 	newSender notifyMessageSenderFactory,
 ) {
-	s.sendNotifyMessageWithFactoryAndWait(
-		wg,
-		resultChan,
-		newSender,
-		waitRemoteDispatchRetry,
-	)
-}
-
-type notifyMessageRetryWait func(context.Context, int, uuid.UUID) error
-
-func waitRemoteDispatchRetry(
-	ctx context.Context,
-	attempt int,
-	uid uuid.UUID,
-) error {
-	delay := notifyMessageRetryDelay(attempt, uid)
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return remoteRegistrationContextError(ctx)
-	case <-timer.C:
-		return nil
-	}
-}
-
-func notifyMessageRetryDelay(attempt int, uid uuid.UUID) time.Duration {
-	if attempt < 0 {
-		attempt = 0
-	}
-	delay := notifyMessageRetryInitialInterval
-	for i := 0; i < attempt && delay < notifyMessageRetryMaxInterval; i++ {
-		delay *= 2
-	}
-	if delay > notifyMessageRetryMaxInterval {
-		delay = notifyMessageRetryMaxInterval
-	}
-
-	// Stable per-receiver jitter avoids synchronizing thousands of legacy-peer
-	// compatibility retries while keeping tests and behavior deterministic.
-	seed := uint32(uid[12])<<24 |
-		uint32(uid[13])<<16 |
-		uint32(uid[14])<<8 |
-		uint32(uid[15])
-	seed ^= uint32(attempt+1) * 0x9e3779b9
-	jitterPercent := int(seed%41) - 20 // [-20%, +20%]
-	return delay + time.Duration(int64(delay)*int64(jitterPercent)/100)
-}
-
-func (s *Scope) sendNotifyMessageWithFactoryAndWait(
-	wg *sync.WaitGroup,
-	resultChan chan notifyMessageResult,
-	newSender notifyMessageSenderFactory,
-	waitRetry notifyMessageRetryWait,
-) {
 	// if context has done, it means the user or other part of the pipeline stops this query.
 	closeWithError := func(err error, reg *process.WaitRegister, sender *messageSenderOnClient) {
 		err, _ = normalizeScopeRunError(err, s.Proc.Ctx, scopeRunQueryContext(s.Proc))
@@ -1695,50 +1635,33 @@ func (s *Scope) sendNotifyMessageWithFactoryAndWait(
 
 		errSubmit := ants.Submit(
 			func() {
-				attempt := 0
-				for {
-					sender, err := newSender(
-						s.Proc.Ctx,
-						s.Proc.GetService(),
-						fromAddr,
-						s.Proc.Mp(),
-						nil,
-					)
-					if err != nil {
-						closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], nil)
-						return
-					}
-					message := cnclient.AcquireMessage()
-					message.SetID(sender.streamSender.ID())
-					message.SetMessageType(pbpipeline.Method_PrepareDoneNotifyMessage)
-					sender.requestStreamProtocols(message)
-					message.NeedNotReply = false
-					message.Uuid = uuid
-
-					sender.markReportingRequestStarted()
-					if errSend := sender.streamSender.Send(sender.ctx, message); errSend != nil {
-						closeWithError(errSend, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
-						return
-					}
-					sender.markStreamActive(pbpipeline.Method_PrepareDoneNotifyMessage)
-
-					err = receiveMsgAndForward(sender, s.Proc.Reg.MergeReceivers[receiverIdx])
-					if !isRemoteDispatchNotRegisteredYetError(err) {
-						closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
-						return
-					}
-					// "not registered yet" is an expected retry response. The
-					// negotiated terminal response proves the old attempt can use
-					// FIN/ACK after its server cleanup barrier.
-					sender.prepareForLocalCleanup()
-					sender.close()
-					metricv2.PipelineRemoteNotifyRetryCounter.Inc()
-					if err = waitRetry(s.Proc.Ctx, attempt, op.Uuid); err != nil {
-						closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], nil)
-						return
-					}
-					attempt++
+				sender, err := newSender(
+					s.Proc.Ctx,
+					s.Proc.GetService(),
+					fromAddr,
+					s.Proc.Mp(),
+					nil,
+				)
+				if err != nil {
+					closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], nil)
+					return
 				}
+				message := cnclient.AcquireMessage()
+				message.SetID(sender.streamSender.ID())
+				message.SetMessageType(pbpipeline.Method_PrepareDoneNotifyMessage)
+				sender.requestStreamProtocols(message)
+				message.NeedNotReply = false
+				message.Uuid = uuid
+
+				sender.markReportingRequestStarted()
+				if errSend := sender.streamSender.Send(sender.ctx, message); errSend != nil {
+					closeWithError(errSend, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
+					return
+				}
+				sender.markStreamActive(pbpipeline.Method_PrepareDoneNotifyMessage)
+
+				err = receiveMsgAndForward(sender, s.Proc.Reg.MergeReceivers[receiverIdx])
+				closeWithError(err, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
 			},
 		)
 

@@ -544,16 +544,6 @@ func sendBatchToClientSessionOutcome(
 		} else {
 			// Tolerant mode: acceptable for SendToAny scenarios
 			// We can try other receivers
-			// Use non-blocking send to avoid potential deadlock
-			if !wcs.TerminalBacked {
-				select {
-				case wcs.Err <- nil:
-					// Error notification sent successfully
-				default:
-					// Channel full or no receiver, that's acceptable
-					// Receiver will eventually timeout or get canceled via context
-				}
-			}
 			return sendBatchOutcome{receiverDone: true}, nil
 		}
 	}
@@ -634,15 +624,6 @@ func sendBatchToClientSessionOutcome(
 func retireStoppedReceiver(ctx context.Context, wcs *process.WrapCs) bool {
 	if ctx.Err() != nil || wcs.ReceiverStopped == nil || !wcs.ReceiverStopped() {
 		return false
-	}
-	// The caller removes this receiver, so Reset will no longer notify its
-	// registration handler. Legacy registrations need a completion signal;
-	// terminal-backed registrations wait on their immutable generation result.
-	if !wcs.TerminalBacked {
-		select {
-		case wcs.Err <- nil:
-		default:
-		}
 	}
 	return true
 }
