@@ -30,15 +30,6 @@ import (
 // ---- helpers ----
 
 const benchN = 8192
-const testBatchSize = 256
-
-func makeNulls(n int) *nulls.Nulls {
-	nul := nulls.NewWithSize(n)
-	for i := 0; i < n; i += 4 {
-		nul.Add(uint64(i))
-	}
-	return nul
-}
 
 func BenchmarkBitsMul64(b *testing.B) {
 	x := uint64(123456789)
