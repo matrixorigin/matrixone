@@ -162,11 +162,16 @@ original fp32 vectors because the storage is quantized. `vecf8` is the quality f
 
 ## GPU engine: cuBLASLt in `cgo/cuvs`
 
-The engine computes one thing: the fp32 **dot-product matrix** `S = D × Qᵀ` of a packed
-dataset tile `D` and packed queries `Q`, with `cublasLtMatmul`: a block-scaled matmul for
+The engine computes the fp32 **dot-product matrix** `S = D × Qᵀ` of a packed dataset tile
+`D` and packed queries `Q` with `cublasLtMatmul` (a block-scaled matmul for
 `vecf8`/`vecf4`, a plain matmul for `vecf32`, `vecf16`, `vecbf16`, `vecint8` and
-`vecuint8`. It has no metric or filter logic; per tile it can also keep the `k` best rows
-of each query on the device (`run_topk`, below).
+`vecuint8`), and turns it into scores of a **metric** on the device: inner product,
+cosine distance or squared L2 distance. The distances decompose into the dot product and
+squared norms, `1 − x·q / (‖x‖‖q‖)` and `‖x‖² + ‖q‖² − 2 x·q` (clamped at 0), so the
+matmul stays on the tensor cores and a norm kernel adds one pass over the tile. The scores
+are rank scores, the negated distance (largest is nearest); per tile the engine can also
+keep the `k` best rows of each query on the device (`run_topk`, below). It has no filter
+logic.
 
 | Column type | Engine format | Element type | Compute | Output |
 |-------------|---------------|--------------|---------|--------|
@@ -180,21 +185,30 @@ of each query on the device (`run_topk`, below).
 
 Plain rows are the column's raw element bytes, copied into the padded tile with no header,
 scales or global. `vecuint8` has no cuBLASLt integer path: each element is shifted to int8
-on the host (`x ^ 0x80` = x − 128), the row and query sums of the shifted values are kept,
-and the int32 result is corrected as `x·q = x′·q′ + 128 (Σx′ + Σq′) + 128² · dim` in int64.
-Integer dot products are exact; they are rounded once to fp32 when written out.
+when the tile is packed (`x ^ 0x80` = x − 128), and the int32 result is corrected as
+`x·q = x′·q′ + 128 (Σx′ + Σq′) + 128² · dim` in int64. Integer dot products are exact.
 
-Two ways to read a tile's scores:
+Device kernels around the matmul, on the engine's stream:
 
-- `run` copies the whole score matrix to the host and applies the global scales and the
-  uint8 correction there: `n × nq` fp32 values per tile.
-- `run_topk` keeps the result on the device. A fix-up kernel applies the global scales
-  (in double, rounded once, as `run` does), the uint8 correction and int32 → fp32, and
-  writes −Inf for NaN and for the padding rows. `cuvs::selection::select_k` then keeps
-  the `k` best rows per query, and `nq × k` scores and row indices are copied back. A
-  second kernel counts, per query, the rows equal to the `k`-th score. When more rows tie
-  there than `select_k` kept, that query's whole score column is copied back as well, so
-  the host applies the `id` tie-break exactly as on the CPU.
+- A row-statistics kernel reads the packed tile after the upload (one block per row) and
+  computes each row's squared norm from the values the matmul multiplies (decoded
+  elements × block scales × global, in double; exact integers for `vecint8`/`vecuint8`),
+  and the `vecuint8` shifted-element sums. It runs once on the query matrix when the
+  engine is created, and on each tile when the metric is cosine or squared L2 or the
+  format is `vecuint8`. The host only packs bytes and reads cell headers.
+- A fix-up kernel turns the matmul output into rank scores: the dot product from the
+  global scales in double (or the corrected int64 sums), then the metric over the squared
+  norms, rounded once to fp32; −Inf for NaN and for the padding rows. A zero vector has
+  cosine distance 1, as `cosine_distance` returns.
+
+Two ways to read a tile's scores, both after the fix-up kernel:
+
+- `run` copies the whole score matrix to the host: `n × nq` fp32 values per tile.
+- `run_topk` keeps the result on the device: `cuvs::selection::select_k` keeps the `k`
+  best rows per query, and `nq × k` scores and row indices are copied back. A second
+  kernel counts, per query, the rows equal to the `k`-th score. When more rows tie there
+  than `select_k` kept, that query's whole score column is copied back as well, so the
+  host applies the `id` tie-break exactly as on the CPU.
 
 Code layout — the engine lives with the other GPU code in `cgo/cuvs` + `pkg/cuvs`:
 
@@ -223,8 +237,8 @@ cuBLASLt call sequence:
 | 3 | `cublasLtMatmulDescSetAttribute` | `TRANSA=T`, `TRANSB=N`; block-scaled formats only: `A/B_SCALE_MODE` = `VEC32_UE8M0` (vecf8) or `VEC16_UE4M3` (vecf4), `A/B_SCALE_POINTER` = tiled scale tensors |
 | 4 | `cublasLtMatrixLayoutCreate` | A: element type, K × rows(D), ld = K; B: K × rows(Q), ld = K; D: `CUDA_R_32F` (`CUDA_R_32I` for integer formats), rows(D) × rows(Q) |
 | 5 | `cublasLtMatmulPreferenceCreate` / `SetAttribute` | workspace limit (32 MiB) |
-| 6 | `cublasLtMatmulAlgoGetHeuristic` | per tile |
-| 7 | `cublasLtMatmul` | alpha = 1, beta = 0; the per-vector `g` of row and query is applied in double when the scores are copied out, then rounded once to fp32 (plain formats have `g` = 1) |
+| 6 | `cublasLtMatmulAlgoGetHeuristic` | at construction, for each tile row bucket (128 × 2^i up to the tile capacity); a bucket without an algorithm fails the engine's creation |
+| 7 | `cublasLtMatmul` | alpha = 1, beta = 0, the bucket's cached algorithm; the per-vector `g` of row and query is applied in double by the fix-up kernel (plain formats have `g` = 1) |
 
 Contract (each point measured on sm_120 with cuBLASLt 13.6):
 
@@ -354,7 +368,7 @@ non-finite contract, the inner product and cosine distances map NaN to +Inf (the
 distance); L2 and L1 are sums of non-negative terms and cannot produce NaN. The SQL
 functions report any non-finite result as an overflow error.
 
-### Batch dot-product search
+### Batch nearest-neighbour search
 
 #### `vector_matmul` (aggregate)
 
@@ -368,7 +382,7 @@ vector_matmul(topk, src_id, src_vec, queries [, options]) → JSON
 | `src_id` | column | the row key: an integer, `char`/`varchar`/`text` or `uuid` column |
 | `src_vec` | column | `vecf8(N)`, `vecf4(N)`, `vecf32(N)`, `vecf16(N)`, `vecbf16(N)`, `vecint8(N)` or `vecuint8(N)`; `vecf64` is rejected |
 | `queries` | constant string or JSON, or `BLOB` | array of query vectors `[[…], …]`, each of length `N`; or a `BLOB` of little-endian float32 values, `N` per query back to back (`CAST(? AS BLOB)` for a client's bytes), whose length must be a non-zero multiple of `4·N` and whose values must be finite. Converted once to the column's type (quantized for `vecf8`/`vecf4`); for `vecint8`/`vecuint8` every value is an integer in the type's range, otherwise an error |
-| `options` | optional constant string | accepted and not interpreted; dispatch follows the session's `gpu_mode` |
+| `options` | optional constant JSON object | `"metric"`: `inner_product` (the default), `cosine` or `l2sq`; other keys are ignored; text that is not a JSON object, or another metric, is an error. Dispatch follows the session's `gpu_mode` |
 
 An aggregate: one result per group (one row without `GROUP BY`), of MO's `JSON` type.
 `topk`, `queries` and `options` are constants, prepared parameters or user variables; the
@@ -396,26 +410,28 @@ handle/workspace, and host and device tile memory scale with the instance count
 On the CPU (gpu_mode off, a CPU build, or no visible device) the dot products come from the
 CPU distance kernels: `VecBlockInnerProduct` over the quantized cells for `vecf8`/`vecf4`,
 the column type's inner-product kernel (`metric.ResolveDistanceFn`) for the other types;
-results match the GPU within fp32 summation-order tolerance. An overflowing dot product (NaN, mapped to the +Inf distance)
-ranks last; a non-finite score in the result is an overflow error, since JSON has no
-infinity.
+the squared norms are the same kernels' `x·x`, and the metric is the formula of the GPU
+fix-up kernel. Results match the GPU within fp32 summation-order tolerance. An overflowing
+score (NaN) ranks last; a non-finite score in the result is an overflow error, since JSON
+has no infinity.
 
 #### Result format
 
 ```json
 [
-  [ ["17", 0.93], ["4",  0.91] ],
-  [ ["8",  0.88], ["17", 0.85] ]
+  [ ["17", -0.93], ["4",  -0.91] ],
+  [ ["8",  -0.88], ["17", -0.85] ]
 ]
 ```
 
 - Outer array: one entry per query, in input order (position = query id).
-- Inner array: that query's hits, score descending, ties by the id text in byte order
-  (so `"10"` before `"9"`); at most `topk` entries, `[]` when there is no input row.
+- Inner array: that query's hits, nearest first (score ascending), ties by the id text in
+  byte order (so `"10"` before `"9"`); at most `topk` entries, `[]` when there is no input
+  row.
 - Hit: a pair `[id, score]`.
   - Position 0, `id`: the source key as a JSON string (exact for 64-bit integers and
     non-integer keys).
-  - Position 1, `score`: the dot product, a JSON number.
+  - Position 1, `score`: the distance of the metric, a JSON number.
   - A field added later takes position 2; positions 0 and 1 keep their meaning.
 
 #### Usage
@@ -441,9 +457,18 @@ FROM m CROSS APPLY unnest(m.result, '$') q
 
 #### Scores
 
-The score is the dot product. Cosine similarity equals the dot product for unit-normalized
-vectors, the usual form of embeddings. L2, cosine on non-normalized vectors and L1 are not
-provided by these functions.
+The score is the distance of the `metric` option, the value of the matching SQL function:
+
+| `metric` | Score | SQL function |
+|----------|-------|--------------|
+| `inner_product` (default) | `−x·q` | `inner_product(v, q)` |
+| `cosine` | `1 − x·q / (‖x‖‖q‖)`, 1 with a zero vector | `cosine_distance(v, q)` |
+| `l2sq` | `‖x − q‖²`, as `‖x‖² + ‖q‖² − 2 x·q` clamped at 0 | `l2_distance_sq(v, q)` |
+
+The hits are the same rows, in the same order, as `ORDER BY <function>(v, q), id LIMIT
+topk`. The squared-L2 expansion loses digits relative to the norms when `x` is close to
+`q` (as in cuVS and FAISS); a row equal to a query has distance 0 up to that rounding. L1
+and L2 (the square root) are not provided.
 
 ## Hardware & toolchain
 
@@ -465,8 +490,9 @@ provided by these functions.
   to the element packing is a storage-format change and bumps the header version.
 - Every stored vector is independent (no cross-vector or global state); `INSERT`/`UPDATE`
   needs no column-wide statistics.
-- The engine returns dot products, or per tile the `k` best per query with every row tied
-  at the `k`-th score; metric, filtering and the final top-k live in the aggregate.
+- The engine returns rank scores of the metric (the negated distance), or per tile the `k`
+  best per query with every row tied at the `k`-th score; filtering and the final top-k
+  live in the aggregate, which reports the distance.
 - Merging partial states is order-independent: the final result does not depend on how
   rows were split across pipelines and CNs (ties are broken by `id`).
 
@@ -519,12 +545,18 @@ summation-order tolerance.
   through the real preflight/fill path under an allocation account): with room, the native
   host bytes and tile buffers are charged, counted in `Size` and released by `Free` (account
   and pool back to zero); without room for the native memory, or for the tile after the
-  native memory, no engine is kept (the created one is closed and its charge released) and
-  the result comes from the CPU.
+  native memory, or when the engine cannot be created, the fill fails (the created engine is
+  closed and its charge released).
 - **Unit, plain types** (`aggexec/vector_matmul_test.go`): `vecf32`, `vecf16`, `vecbf16`,
   `vecint8`, `vecuint8` against a brute-force dot-product reference; integer queries out
   of range or fractional are rejected. Function resolution and binder tests accept the
   plain types and reject `vecf64`.
+- **Unit, metrics** (`aggexec/vector_matmul_test.go`): the options parse (`metric` values,
+  ignored keys, non-object text and unknown metrics rejected); the reported distances of
+  each metric over `vecf32`, `vecf8` and `vecint8` against a float64 reference computed
+  directly (`−dot`, `1 − cos` with 1 for a zero vector, `Σ(x − q)²`), nearest first, a row
+  equal to a query at distance 0. The GPU-against-CPU tests run every metric: block-scaled
+  data within fp32 tolerance with equal id sets, small-integer plain types byte for byte.
 - **GPU engine** (`cgo/cuvs/test/blockscaled_matmul_test.cu`, the `test_blockscaled_matmul`
   executable): both block-scaled formats against a double-precision dequantized reference,
   dimensions 4–768 (K padding), 1 to 300 rows (row padding, a 1-row tile, tile reuse), 1
@@ -532,8 +564,10 @@ summation-order tolerance.
   double-precision reference (integer formats exact), dimensions 4, 33, 768, 1 to 300
   rows, 1 and 3 queries; `run_topk` against the full scores of `run` for MXFP8, NVFP4,
   F32, int8 and uint8 (exact kept scores, every row above the `k`-th score kept, ties at
-  the `k`-th score flagged with the full column, `k` above the tile size); the C API and
-  its errors; the device baseline (compute capability 7–9 rejected, 10–12 accepted), the
+  the `k`-th score flagged with the full column, `k` above the tile size); cosine and
+  squared L2 for all seven formats against a double-precision reference computed directly
+  (a zero vector, a row equal to a query, partial last tiles), and `run_topk` under both;
+  the C API and its errors (an unknown metric included); the device baseline (compute capability 7–9 rejected, 10–12 accepted), the
   eligible-device count against the visible devices, and `host_bytes` for two shapes
   computed by hand.
 - **GPU binding** (`pkg/cuvs/blockscaled_matmul_test.go`): engine scores equal the CPU
@@ -602,7 +636,12 @@ type; normalization changes the ranking, independent of the format.
 - Element codecs = the scalar `Float8`/`Float4`; scale codecs = new E8M0 + `Float8` e4m3.
 - Cells store scales per row in block order; the GPU engine re-lays them into the tiled
   scale tensor.
-- The GPU engine is dot-product matmul only, via cuBLASLt, with the dataset as operand A.
+- The GPU engine is a cuBLASLt matmul with the dataset as operand A, plus device kernels
+  for the row statistics and the metric; the host packs bytes and reads cell headers, and
+  does no score arithmetic.
+- Metrics: `inner_product`, `cosine` and `l2sq`, each reporting the value of the matching
+  SQL function (`inner_product` = `−dot`, `cosine_distance`, `l2_distance_sq`), nearest
+  first; plain L2 and L1 are not provided.
 - `vector_matmul` also takes `vecf32`, `vecf16`, `vecbf16`, `vecint8` and `vecuint8`,
   through the same engine with plain formats; `vecf64` is rejected (the engine has no fp64
   format). `vecuint8` runs on the int8 path with the shift correction.
@@ -619,9 +658,9 @@ type; normalization changes the ranking, independent of the format.
 - Result = JSON with string ids.
 - CPU dot-product accumulation = fp32 within a 16-element unit, fp64 across units; the
   GPU accumulates in fp32 (cuBLASLt `CUBLAS_COMPUTE_32F`).
-- GPU dispatch follows the session's `gpu_mode` only. The `options` argument is kept in
-  the signature and the configuration and is not parsed or checked; a tile size is an
-  internal choice bounded by the allocation account, not a user setting.
+- GPU dispatch follows the session's `gpu_mode` only. The `options` argument is a JSON
+  object of which only `metric` is read; a tile size is an internal choice bounded by the
+  allocation account, not a user setting.
 - Non-finite values are rejected at build, including finite inputs that would decode to
   ±Inf, and cell parsing rejects any cell that decodes to a non-finite value.
 - The GPU engine runs only on compute capability 10.0 or newer, checked once per process.

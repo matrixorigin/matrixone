@@ -33,7 +33,7 @@ uint64_t gpu_blockscaled_matmul_host_bytes(int format, uint32_t dim, uint32_t nq
 
 gpu_blockscaled_matmul_c gpu_blockscaled_matmul_new(int format, uint32_t dim, uint32_t nq,
                                                     const uint8_t* query_cells, uint64_t max_rows,
-                                                    uint32_t topk, void* errmsg) {
+                                                    uint32_t topk, int metric, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {
         int device_id = matrixone::blockscaled_matmul::next_device();
@@ -42,7 +42,7 @@ gpu_blockscaled_matmul_c gpu_blockscaled_matmul_new(int format, uint32_t dim, ui
                 "no visible GPU with compute capability 10.0 or newer for block-scaled matmul");
         }
         return new matrixone::blockscaled_matmul(device_id, format, dim, nq, query_cells, max_rows,
-                                                 topk);
+                                                 topk, metric);
     } catch (const std::exception& e) {
         matrixone::set_errmsg(errmsg, "Error in gpu_blockscaled_matmul_new", e.what());
     } catch (...) {

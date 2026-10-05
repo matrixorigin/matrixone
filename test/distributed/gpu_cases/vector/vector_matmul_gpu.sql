@@ -65,6 +65,23 @@ with m as (select vector_matmul(20, id, a, '[[1,2,3,4]]') r from big),
                     order by s desc, cast(id as varchar) limit 20) r)
 select (select count(*) from got) as got_rows,
        (select count(*) from (select id, rnk from got except select id, rnk from want) d) as mismatches;
+-- cosine and squared L2: the same ids and ranks as ORDER BY cosine_distance / l2_distance_sq
+with m as (select vector_matmul(20, id, a, '[[1,2,3,4]]', '{"metric":"cosine"}') r from big),
+     got as (select json_unquote(json_extract(h.value, '$[0]')) as id, h.`index` as rnk
+             from m cross apply unnest(m.r, '$[0]') h),
+     want as (select cast(id as varchar) as id, row_number() over (order by s desc, cast(id as varchar)) - 1 as rnk
+              from (select id, -cosine_distance(a, cast('[1,2,3,4]' as vecf8(4))) s from big
+                    order by s desc, cast(id as varchar) limit 20) r)
+select (select count(*) from got) as got_rows,
+       (select count(*) from (select id, rnk from got except select id, rnk from want) d) as mismatches;
+with m as (select vector_matmul(20, id, a, '[[1,2,3,4]]', '{"metric":"l2sq"}') r from big),
+     got as (select json_unquote(json_extract(h.value, '$[0]')) as id, h.`index` as rnk
+             from m cross apply unnest(m.r, '$[0]') h),
+     want as (select cast(id as varchar) as id, row_number() over (order by s desc, cast(id as varchar)) - 1 as rnk
+              from (select id, -l2_distance_sq(a, cast('[1,2,3,4]' as vecf8(4))) s from big
+                    order by s desc, cast(id as varchar) limit 20) r)
+select (select count(*) from got) as got_rows,
+       (select count(*) from (select id, rnk from got except select id, rnk from want) d) as mismatches;
 select vector_matmul(3, id, f, '[[1,0,0,0],[1,-1,2,1]]') from p;
 select vector_matmul(3, id, h, '[[1,0,0,0],[1,-1,2,1]]') from p;
 select vector_matmul(3, id, bf, '[[1,0,0,0],[1,-1,2,1]]') from p;

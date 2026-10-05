@@ -10,28 +10,28 @@ insert into t values
 (5, 'x', null, null);
 select vector_matmul(2, id, a, '[[1,0,0,0],[0,1,0,0]]') from t;
 ➤ vector_matmul(2, id, a, [[1,0,0,0],[0,1,0,0]])[-1,2147483647,0]  𝄀
-[[["1", 1], ["3", 1]], [["2", 1], ["3", 1]]]
+[[["1", -1], ["3", -1]], [["2", -1], ["3", -1]]]
 select vector_matmul(10, id, b, '[[1,1,0,0]]') from t;
 ➤ vector_matmul(10, id, b, [[1,1,0,0]])[-1,2147483647,0]  𝄀
-[[["3", 2], ["1", 1], ["2", 1], ["4", -1]]]
+[[["3", -2], ["1", -1], ["2", -1], ["4", 1]]]
 select vector_matmul(3, id, a, '[[1,1,0,0]]', '{"mode":"cpu"}') from t where cat = 'x';
 ➤ vector_matmul(3, id, a, [[1,1,0,0]], {"mode":"cpu"})[-1,2147483647,0]  𝄀
-[[["1", 1], ["2", 1]]]
+[[["1", -1], ["2", -1]]]
 select cat, vector_matmul(1, id, a, '[[1,0,0,0]]') r from t group by cat order by cat;
 ➤ cat[12,10,0]  ¦  r[-1,2147483647,0]  𝄀
-x  ¦  [[["1", 1]]]  𝄀
-y  ¦  [[["3", 1]]]
+x  ¦  [[["1", -1]]]  𝄀
+y  ¦  [[["3", -1]]]
 select vector_matmul(2, id, a, '[[1,0,0,0],[0,0,1,0]]', '{"mode":"auto","tile_bytes":1048576}') from t where id > 100;
 ➤ vector_matmul(2, id, a, [[1,0,0,0],[0,0,1,0]], {"mode":"auto","tile_bytes":1048576})[-1,2147483647,0]  𝄀
 [[], []]
 select vector_matmul(2, cat, a, '[[1,0,0,0]]') from t;
 ➤ vector_matmul(2, cat, a, [[1,0,0,0]])[-1,2147483647,0]  𝄀
-[[["x", 1], ["y", 1]]]
+[[["x", -1], ["y", -1]]]
 create table u (k uuid primary key, a vecf8(2));
 insert into u values ('6ba7b810-9dad-11d1-80b4-00c04fd430c8', '[1,2]'), ('6ba7b811-9dad-11d1-80b4-00c04fd430c8', '[2,1]');
 select vector_matmul(2, k, a, '[[1,0],[0,1]]') from u;
 ➤ vector_matmul(2, k, a, [[1,0],[0,1]])[-1,2147483647,0]  𝄀
-[[["6ba7b811-9dad-11d1-80b4-00c04fd430c8", 2], ["6ba7b810-9dad-11d1-80b4-00c04fd430c8", 1]], [["6ba7b810-9dad-11d1-80b4-00c04fd430c8", 2], ["6ba7b811-9dad-11d1-80b4-00c04fd430c8", 1]]]
+[[["6ba7b811-9dad-11d1-80b4-00c04fd430c8", -2], ["6ba7b810-9dad-11d1-80b4-00c04fd430c8", -1]], [["6ba7b810-9dad-11d1-80b4-00c04fd430c8", -2], ["6ba7b811-9dad-11d1-80b4-00c04fd430c8", -1]]]
 select q.`index` as q_id, h.`index` as rnk,
 json_unquote(json_extract(h.value, '$[0]')) as src_id,
 cast(json_extract(h.value, '$[1]') as double) as score
@@ -40,29 +40,59 @@ cross apply unnest(m.r, '$') q
 cross apply unnest(q.value, '$') h
 order by q_id, rnk;
 ➤ q_id[4,32,0]  ¦  rnk[4,32,0]  ¦  src_id[12,65535,0]  ¦  score[8,53,31]  𝄀
-0  ¦  0  ¦  1  ¦  1.0  𝄀
-0  ¦  1  ¦  3  ¦  1.0  𝄀
-1  ¦  0  ¦  2  ¦  1.0  𝄀
-1  ¦  1  ¦  3  ¦  1.0
+0  ¦  0  ¦  1  ¦  -1.0  𝄀
+0  ¦  1  ¦  3  ¦  -1.0  𝄀
+1  ¦  0  ¦  2  ¦  -1.0  𝄀
+1  ¦  1  ¦  3  ¦  -1.0
 prepare s from 'select vector_matmul(?, id, b, ?) from t';
 set @p = 1;
 set @q = '[[0,1,0,0]]';
 execute s using @p, @q;
 ➤ vector_matmul(?, t.id, t.b, ?)[-1,2147483647,0]  𝄀
-[[["2", 1]]]
+[[["2", -1]]]
 deallocate prepare s;
 create table qv (qid int primary key, v vecf32(4));
 insert into qv values (1, '[1,0,0,0]'), (2, '[0,0,1,1]');
 set @qs = (select json_arrayagg(v) from qv);
 select vector_matmul(1, id, a, @qs) from t;
 ➤ vector_matmul(1, id, a, @qs)[-1,2147483647,0]  𝄀
-[[["1", 1]], [["1", 0]]]
-select vector_matmul(2, id, a, '[[1,0,0,0]]', '{"bogus":1}') from t;
-➤ vector_matmul(2, id, a, [[1,0,0,0]], {"bogus":1})[-1,2147483647,0]  𝄀
-[[["1", 1], ["3", 1]]]
+[[["1", -1]], [["1", 0]]]
+select vector_matmul(2, id, a, '[[1,0,0,0]]', '{"metric":"inner_product","x":1}') from t;
+➤ vector_matmul(2, id, a, [[1,0,0,0]], {"metric":"inner_product","x":1})[-1,2147483647,0]  𝄀
+[[["1", -1], ["3", -1]]]
 select vector_matmul(2, id, a, '[[1,0,0,0]]', 'not json') from t;
-➤ vector_matmul(2, id, a, [[1,0,0,0]], not json)[-1,2147483647,0]  𝄀
-[[["1", 1], ["3", 1]]]
+invalid input: vector_matmul: options must be a JSON object
+select vector_matmul(2, id, a, '[[1,0,0,0]]', '{"metric":"l2"}') from t;
+invalid input: vector_matmul: metric "l2" is not inner_product, cosine or l2sq
+create table mt (id int, v vecf32(3));
+insert into mt values (1, '[1,2,2]'), (2, '[0,0,0]'), (3, '[3,0,4]'), (4, '[1,1,1]');
+select vector_matmul(4, id, v, '[[1,2,2],[0,1,0]]') from mt;
+➤ vector_matmul(4, id, v, [[1,2,2],[0,1,0]])[-1,2147483647,0]  𝄀
+[[["3", -11], ["1", -9], ["4", -5], ["2", 0]], [["1", -2], ["4", -1], ["2", 0], ["3", 0]]]
+select id, inner_product(v, '[1,2,2]') d from mt order by d, id;
+➤ id[4,32,0]  ¦  d[8,53,31]  𝄀
+3  ¦  -11.0  𝄀
+1  ¦  -9.0  𝄀
+4  ¦  -5.0  𝄀
+2  ¦  -0.0
+select vector_matmul(4, id, v, '[[1,2,2],[0,1,0]]', '{"metric":"cosine"}') from mt;
+➤ vector_matmul(4, id, v, [[1,2,2],[0,1,0]], {"metric":"cosine"})[-1,2147483647,0]  𝄀
+[[["1", 0], ["4", 0.03774955], ["3", 0.26666668], ["2", 1]], [["1", 0.33333334], ["4", 0.42264974], ["2", 1], ["3", 1]]]
+select id, cosine_distance(v, '[1,2,2]') d from mt order by d, id;
+➤ id[4,32,0]  ¦  d[8,53,31]  𝄀
+1  ¦  0.0  𝄀
+4  ¦  0.037749551236629486  𝄀
+3  ¦  0.2666666805744171  𝄀
+2  ¦  1.0
+select vector_matmul(4, id, v, '[[1,2,2],[0,1,0]]', '{"metric":"l2sq"}') from mt;
+➤ vector_matmul(4, id, v, [[1,2,2],[0,1,0]], {"metric":"l2sq"})[-1,2147483647,0]  𝄀
+[[["1", 0], ["4", 2], ["2", 9], ["3", 12]], [["2", 1], ["4", 2], ["1", 6], ["3", 26]]]
+select id, l2_distance_sq(v, '[1,2,2]') d from mt order by d, id;
+➤ id[4,32,0]  ¦  d[8,53,31]  𝄀
+1  ¦  0.0  𝄀
+4  ¦  2.0  𝄀
+2  ¦  9.0  𝄀
+3  ¦  12.0
 select vector_matmul('abc', id, a, '[[1,0,0,0]]') from t;
 invalid argument cast to int, bad value abc
 select vector_matmul(0, id, a, '[[1,0,0,0]]') from t;
@@ -118,18 +148,18 @@ create table bq (id int, v vecf4(4), w vecf32(4));
 insert into bq values (1, '[1,0,0,0]', '[1,0,0,0]'), (2, '[0,1,0,0]', '[0,1,0,0]'), (3, '[2,2,0,0]', '[2,2,0,0]');
 select vector_matmul(2, id, w, '[[1,0,-0.5,2],[0,3,0,-1]]') from bq;
 ➤ vector_matmul(2, id, w, [[1,0,-0.5,2],[0,3,0,-1]])[-1,2147483647,0]  𝄀
-[[["3", 2], ["1", 1]], [["3", 6], ["2", 3]]]
+[[["3", -2], ["1", -1]], [["3", -6], ["2", -3]]]
 select vector_matmul(2, id, w, cast(unhex('0000803F00000000000000BF00000040000000000000404000000000000080BF') as blob)) from bq;
 ➤ vector_matmul(2, id, w, cast(unhex(0000803F00000000000000BF00000040000000000000404000000000000080BF) as blob))[-1,2147483647,0]  𝄀
-[[["3", 2], ["1", 1]], [["3", 6], ["2", 3]]]
+[[["3", -2], ["1", -1]], [["3", -6], ["2", -3]]]
 select vector_matmul(2, id, v, cast(unhex('0000803F00000000000000BF00000040000000000000404000000000000080BF') as blob)) from bq;
 ➤ vector_matmul(2, id, v, cast(unhex(0000803F00000000000000BF00000040000000000000404000000000000080BF) as blob))[-1,2147483647,0]  𝄀
-[[["3", 2], ["1", 1]], [["3", 6], ["2", 3]]]
+[[["3", -2], ["1", -1]], [["3", -6], ["2", -3]]]
 set @bq = cast(unhex('0000803F00000000000000BF00000040000000000000404000000000000080BF') as blob);
 prepare pbq from 'select vector_matmul(2, id, w, cast(? as blob)) from bq';
 execute pbq using @bq;
 ➤ vector_matmul(2, bq.id, bq.w, cast(? as blob))[-1,2147483647,0]  𝄀
-[[["3", 2], ["1", 1]], [["3", 6], ["2", 3]]]
+[[["3", -2], ["1", -1]], [["3", -6], ["2", -3]]]
 deallocate prepare pbq;
 select vector_matmul(2, id, w, cast(unhex('0000803F000000000000') as blob)) from bq;
 invalid input: vector_matmul: binary queries are 10 bytes, want a non-zero multiple of 16 (float32 x dimension 4)

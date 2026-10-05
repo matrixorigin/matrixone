@@ -50,6 +50,14 @@ const (
 	BlockScaledMatmulBF16  = int(C.GPU_BLOCKSCALED_BF16)
 )
 
+// Engine metrics, as in cgo/cuvs/blockscaled_matmul_c.h. The scores are the negated
+// distances (largest is nearest): the dot product, -(cosine distance) or -(squared L2).
+const (
+	BlockScaledMatmulInnerProduct = int(C.GPU_BLOCKSCALED_METRIC_INNER_PRODUCT)
+	BlockScaledMatmulCosine       = int(C.GPU_BLOCKSCALED_METRIC_COSINE)
+	BlockScaledMatmulL2sq         = int(C.GPU_BLOCKSCALED_METRIC_L2SQ)
+)
+
 // BlockScaledMatmulDeviceCount returns the number of visible devices meeting the engine's
 // baseline, compute capability 10.0 or newer; it is queried once per process.
 func BlockScaledMatmulDeviceCount() int {
@@ -65,15 +73,16 @@ func BlockScaledMatmulHostBytes(format, dim, nq, maxRows int) uint64 {
 // NewBlockScaledMatmul creates an engine for nq query cells of format and dim, each
 // cellBytes long and packed back to back in queryCells; a tile holds at most maxRows cells
 // (rounded up to 128). topk > 0 enables RunTopK, which keeps min(topk, MaxRows) hits per
-// query.
-func NewBlockScaledMatmul(format, dim, nq int, queryCells []byte, cellBytes, maxRows, topk int) (*BlockScaledMatmul, error) {
+// query. metric is BlockScaledMatmulInnerProduct, BlockScaledMatmulCosine or
+// BlockScaledMatmulL2sq.
+func NewBlockScaledMatmul(format, dim, nq int, queryCells []byte, cellBytes, maxRows, topk, metric int) (*BlockScaledMatmul, error) {
 	if dim <= 0 || nq <= 0 || maxRows <= 0 || cellBytes <= 0 || topk < 0 || len(queryCells) != nq*cellBytes {
 		return nil, moerr.NewInvalidInputNoCtxf("block-scaled matmul: invalid dim %d, query count %d, tile %d or query bytes %d",
 			dim, nq, maxRows, len(queryCells))
 	}
 	var errmsg *C.char
 	ptr := C.gpu_blockscaled_matmul_new(C.int(format), C.uint32_t(dim), C.uint32_t(nq),
-		(*C.uint8_t)(unsafe.Pointer(&queryCells[0])), C.uint64_t(maxRows), C.uint32_t(topk), unsafe.Pointer(&errmsg))
+		(*C.uint8_t)(unsafe.Pointer(&queryCells[0])), C.uint64_t(maxRows), C.uint32_t(topk), C.int(metric), unsafe.Pointer(&errmsg))
 	runtime.KeepAlive(queryCells)
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
@@ -97,7 +106,8 @@ func (m *BlockScaledMatmul) MaxRows() int { return m.maxRows }
 func (m *BlockScaledMatmul) CellBytes() int { return m.cellBytes }
 
 // Run scores the cells packed back to back in cells (at most MaxRows) into scores, row
-// major: scores[r*nq+q] is the dot product of cell r and query q.
+// major: scores[r*nq+q] is the rank score of cell r and query q, the negated distance of
+// the metric (NaN as -Inf).
 func (m *BlockScaledMatmul) Run(cells []byte, scores []float32) error {
 	if len(cells)%m.cellBytes != 0 {
 		return moerr.NewInvalidInputNoCtxf("block-scaled matmul: %d bytes is not a whole number of %d-byte cells", len(cells), m.cellBytes)

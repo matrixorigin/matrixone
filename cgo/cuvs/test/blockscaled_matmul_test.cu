@@ -186,9 +186,10 @@ void check_plain(int format, uint32_t dim, size_t rows, uint32_t nq, uint64_t ma
 // whose rows tied at the k-th score were not all kept is flagged with its full scores.
 void check_topk(int format, uint32_t dim, const std::vector<uint8_t>& queries,
                 const std::vector<uint8_t>& cells, size_t rows, uint32_t nq, uint32_t k,
-                uint64_t max_rows, bool expect_tied) {
+                uint64_t max_rows, bool expect_tied,
+                int metric = blockscaled_matmul::kInnerProduct) {
     const size_t cell_bytes = cells.size() / rows;
-    blockscaled_matmul e(0, format, dim, nq, queries.data(), max_rows, k);
+    blockscaled_matmul e(0, format, dim, nq, queries.data(), max_rows, k, metric);
     const size_t kk = std::min<uint64_t>(k, e.max_rows());
     bool saw_tied = false;
     for (size_t off = 0; off < rows; off += e.max_rows()) {
@@ -243,7 +244,131 @@ std::vector<uint8_t> small_int_cells(uint32_t dim, size_t n, std::mt19937& rng) 
     return cells;
 }
 
+// make_plain builds n random raw vectors of a plain format and their values.
+std::vector<uint8_t> make_plain(int format, uint32_t dim, size_t n, std::mt19937& rng,
+                                std::vector<double>& vals) {
+    const size_t esize = format == GPU_BLOCKSCALED_F32 ? 4
+                         : format == GPU_BLOCKSCALED_F16 || format == GPU_BLOCKSCALED_BF16 ? 2
+                                                                                          : 1;
+    std::vector<uint8_t> cells(n * dim * esize);
+    vals.resize(n * dim);
+    std::normal_distribution<float> nd(0.0f, 1.0f);
+    for (size_t i = 0; i < n * dim; i++) {
+        if (format == GPU_BLOCKSCALED_F32) {
+            float v = nd(rng);
+            std::memcpy(&cells[i * 4], &v, 4);
+            vals[i] = v;
+        } else if (format == GPU_BLOCKSCALED_F16) {
+            __half h = __float2half(nd(rng));
+            std::memcpy(&cells[i * 2], &h, 2);
+            vals[i] = double(__half2float(h));
+        } else if (format == GPU_BLOCKSCALED_BF16) {
+            __nv_bfloat16 h = __float2bfloat16(nd(rng));
+            std::memcpy(&cells[i * 2], &h, 2);
+            vals[i] = double(__bfloat162float(h));
+        } else if (format == GPU_BLOCKSCALED_I8) {
+            int8_t v = int8_t(int(rng() % 256) - 128);
+            cells[i] = uint8_t(v);
+            vals[i] = v;
+        } else {
+            uint8_t v = uint8_t(rng() % 256);
+            cells[i] = v;
+            vals[i] = v;
+        }
+    }
+    return cells;
+}
+
+// zero_vector makes cell r of a format all-zero elements (a block-scaled cell keeps its header
+// and scales) and its values zero.
+void zero_vector(int format, uint32_t dim, std::vector<uint8_t>& cells, size_t cell_bytes,
+                 size_t r, std::vector<double>& vals) {
+    size_t from = 0;
+    if (format == GPU_BLOCKSCALED_MXFP8 || format == GPU_BLOCKSCALED_NVFP4) {
+        const size_t block = format == GPU_BLOCKSCALED_MXFP8 ? 32 : 16;
+        from = 12 + (dim + block - 1) / block;
+    }
+    std::fill(cells.begin() + r * cell_bytes + from, cells.begin() + (r + 1) * cell_bytes, 0);
+    std::fill(vals.begin() + r * dim, vals.begin() + (r + 1) * dim, 0.0);
+}
+
+// check_metric compares run's rank scores for a distance metric with a double-precision
+// reference computed directly: -(1 - x.q / (|x||q|)) (a zero vector has distance 1) or
+// -sum (x - q)^2. Row 0 is a zero vector and row 1 equals query 0.
+void check_metric(int format, uint32_t dim, size_t rows, uint32_t nq, uint64_t max_rows,
+                  int metric) {
+    std::mt19937 rng(format * 31 + dim * 7 + rows + metric);
+    const bool block = format == GPU_BLOCKSCALED_MXFP8 || format == GPU_BLOCKSCALED_NVFP4;
+    std::vector<double> qv, rv;
+    std::vector<uint8_t> queries = block ? make_cells(format, dim, nq, rng, qv)
+                                         : make_plain(format, dim, nq, rng, qv);
+    std::vector<uint8_t> cells = block ? make_cells(format, dim, rows, rng, rv)
+                                       : make_plain(format, dim, rows, rng, rv);
+    const size_t cell_bytes = cells.size() / rows, qbytes = queries.size() / nq;
+    zero_vector(format, dim, cells, cell_bytes, 0, rv);
+    std::memcpy(cells.data() + cell_bytes, queries.data(), qbytes);
+    std::copy(qv.begin(), qv.begin() + dim, rv.begin() + dim);
+
+    blockscaled_matmul e(0, format, dim, nq, queries.data(), max_rows, 0, metric);
+    std::vector<float> scores(rows * nq);
+    for (size_t off = 0; off < rows; off += e.max_rows()) {
+        size_t n = std::min<size_t>(e.max_rows(), rows - off);
+        e.run(cells.data() + off * cell_bytes, n, scores.data() + off * nq);
+    }
+    for (size_t r = 0; r < rows; r++) {
+        for (uint32_t q = 0; q < nq; q++) {
+            double dot = 0, nr = 0, nqq = 0, l2 = 0;
+            for (uint32_t k = 0; k < dim; k++) {
+                const double x = rv[r * dim + k], y = qv[q * dim + k];
+                dot += x * y;
+                nr += x * x;
+                nqq += y * y;
+                l2 += (x - y) * (x - y);
+            }
+            const double got = scores[r * nq + q];
+            if (metric == blockscaled_matmul::kCosine) {
+                const double ref = nr > 0 && nqq > 0 ? -(1 - dot / std::sqrt(nr * nqq)) : -1.0;
+                ASSERT_TRUE(std::fabs(got - ref) <= 1e-5);
+            } else {
+                // the expansion |x|^2 + |q|^2 - 2 x.q loses digits relative to the norms
+                ASSERT_TRUE(std::fabs(got + l2) <= 1e-5 * std::max(1.0, nr + nqq));
+                ASSERT_TRUE(got <= 0);
+            }
+        }
+    }
+    // row 1 equals query 0: distance 0 up to the rounding relative to its squared norm
+    double n0 = 0;
+    for (uint32_t k = 0; k < dim; k++) n0 += qv[k] * qv[k];
+    ASSERT_TRUE(std::fabs(scores[1 * nq + 0]) <= 1e-5 * std::max(1.0, 2 * n0));
+}
+
 } // namespace
+
+TEST(BlockScaledMatmulTest, DistanceMetricsMatchReference) {
+    for (int metric : {blockscaled_matmul::kCosine, blockscaled_matmul::kL2sq}) {
+        for (int format : {GPU_BLOCKSCALED_MXFP8, GPU_BLOCKSCALED_NVFP4, GPU_BLOCKSCALED_F32,
+                           GPU_BLOCKSCALED_F16, GPU_BLOCKSCALED_BF16, GPU_BLOCKSCALED_I8,
+                           GPU_BLOCKSCALED_U8}) {
+            // 300 rows over 128-row tiles: two full tiles and a partial one
+            check_metric(format, 96, 300, 5, 128, metric);
+            check_metric(format, 32, 7, 2, 512, metric);
+        }
+    }
+}
+
+TEST(BlockScaledMatmulTest, DistanceMetricTopK) {
+    std::mt19937 rng(23);
+    std::vector<double> qv, rv;
+    for (int metric : {blockscaled_matmul::kCosine, blockscaled_matmul::kL2sq}) {
+        std::vector<uint8_t> queries = make_cells(GPU_BLOCKSCALED_NVFP4, 96, 3, rng, qv);
+        std::vector<uint8_t> cells = make_cells(GPU_BLOCKSCALED_NVFP4, 96, 300, rng, rv);
+        check_topk(GPU_BLOCKSCALED_NVFP4, 96, queries, cells, 300, 3, 10, 256, false, metric);
+        std::vector<uint8_t> iq = small_int_cells(4, 2, rng);
+        iq[0] = iq[4] = 1;
+        std::vector<uint8_t> ic = small_int_cells(4, 1000, rng);
+        check_topk(GPU_BLOCKSCALED_U8, 4, iq, ic, 1000, 2, 5, 512, true, metric);
+    }
+}
 
 TEST(BlockScaledMatmulTest, TopKMatchesFullScores) {
     std::mt19937 rng(11);
@@ -348,11 +473,11 @@ TEST(BlockScaledMatmulTest, DeviceBaselineAndHostBytes) {
     ASSERT_EQ(gpu_blockscaled_matmul_device_count(), int(want));
 
     // MXFP8, dim 768, 3 queries, 256 rows: K 768, 24 scales padded to 24, 128 padded queries
-    const uint64_t mx = 256 * 768 + 256 * 24 + 256 * 3 * 4 + 256 * 12 + 3 * 12 + 128 * (768 + 24);
+    const uint64_t mx = 256 * 768 + 256 * 24 + 256 * 3 * 4 + 256 * 4 + 3 * 4 + 128 * (768 + 24);
     ASSERT_EQ(blockscaled_matmul::host_bytes(GPU_BLOCKSCALED_MXFP8, 768, 3, 200), mx);
     ASSERT_EQ(gpu_blockscaled_matmul_host_bytes(GPU_BLOCKSCALED_MXFP8, 768, 3, 200), mx);
     // F32, dim 33: K 64, 4-byte elements, no scales
-    const uint64_t f32 = 128 * 256 + 128 * 2 * 4 + 128 * 12 + 2 * 12 + 128 * 256;
+    const uint64_t f32 = 128 * 256 + 128 * 2 * 4 + 128 * 4 + 2 * 4 + 128 * 256;
     ASSERT_EQ(blockscaled_matmul::host_bytes(GPU_BLOCKSCALED_F32, 33, 2, 1), f32);
 }
 
@@ -363,7 +488,7 @@ TEST(BlockScaledMatmulTest, CWrapper) {
     std::vector<uint8_t> cells = make_cells(GPU_BLOCKSCALED_MXFP8, 64, 5, rng, rv);
     char* err = nullptr;
     gpu_blockscaled_matmul_c e =
-        gpu_blockscaled_matmul_new(GPU_BLOCKSCALED_MXFP8, 64, 2, queries.data(), 10, 3, &err);
+        gpu_blockscaled_matmul_new(GPU_BLOCKSCALED_MXFP8, 64, 2, queries.data(), 10, 3, GPU_BLOCKSCALED_METRIC_INNER_PRODUCT, &err);
     ASSERT_TRUE(e != nullptr);
     ASSERT_TRUE(err == nullptr);
     ASSERT_EQ(gpu_blockscaled_matmul_max_rows(e), uint64_t(128));
@@ -383,7 +508,7 @@ TEST(BlockScaledMatmulTest, CWrapper) {
     gpu_blockscaled_matmul_destroy(e);
 
     err = nullptr;
-    e = gpu_blockscaled_matmul_new(GPU_BLOCKSCALED_MXFP8, 64, 2, queries.data(), 10, 0, &err);
+    e = gpu_blockscaled_matmul_new(GPU_BLOCKSCALED_MXFP8, 64, 2, queries.data(), 10, 0, GPU_BLOCKSCALED_METRIC_INNER_PRODUCT, &err);
     ASSERT_TRUE(e != nullptr);
     gpu_blockscaled_matmul_run_topk(e, cells.data(), 5, top.data(), rows.data(), full.data(),
                                     tied.data(), &err);
@@ -392,7 +517,15 @@ TEST(BlockScaledMatmulTest, CWrapper) {
     gpu_blockscaled_matmul_destroy(e);
 
     err = nullptr;
-    ASSERT_TRUE(gpu_blockscaled_matmul_new(8, 64, 2, queries.data(), 10, 0, &err) == nullptr);
+    ASSERT_TRUE(gpu_blockscaled_matmul_new(8, 64, 2, queries.data(), 10, 0,
+                                           GPU_BLOCKSCALED_METRIC_INNER_PRODUCT, &err) == nullptr);
+    ASSERT_TRUE(err != nullptr);
+    free(err);
+
+    // an unknown metric
+    err = nullptr;
+    ASSERT_TRUE(gpu_blockscaled_matmul_new(GPU_BLOCKSCALED_MXFP8, 64, 2, queries.data(), 10, 0, 3,
+                                           &err) == nullptr);
     ASSERT_TRUE(err != nullptr);
     free(err);
 }

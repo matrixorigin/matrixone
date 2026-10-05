@@ -162,6 +162,63 @@ type vectorMatmulConfig struct {
 	score func(cell []byte, out []float64) error
 	// gpu reports that the session allows the GPU.
 	gpu bool
+	// metric is the distance: vectorMatmulInnerProduct, vectorMatmulCosine or
+	// vectorMatmulL2sq.
+	metric int
+}
+
+// Metrics of vector_matmul. The executors rank by the negated distance (largest is
+// nearest) and report the distance: -dot, 1 - cos or the squared L2 distance, as the
+// inner_product, cosine_distance and l2_distance_sq functions.
+const (
+	vectorMatmulInnerProduct = iota
+	vectorMatmulCosine
+	vectorMatmulL2sq
+)
+
+// parseVectorMatmulMetric reads the "metric" of the options JSON object; empty options or
+// no "metric" is the inner product, other keys are ignored.
+func parseVectorMatmulMetric(options string) (int, error) {
+	if options == "" {
+		return vectorMatmulInnerProduct, nil
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(options), &fields); err != nil || fields == nil {
+		return 0, moerr.NewInvalidInputNoCtx("vector_matmul: options must be a JSON object")
+	}
+	raw, ok := fields["metric"]
+	if !ok {
+		return vectorMatmulInnerProduct, nil
+	}
+	var name string
+	if err := json.Unmarshal(raw, &name); err == nil {
+		switch name {
+		case "inner_product":
+			return vectorMatmulInnerProduct, nil
+		case "cosine":
+			return vectorMatmulCosine, nil
+		case "l2sq":
+			return vectorMatmulL2sq, nil
+		}
+	}
+	return 0, moerr.NewInvalidInputNoCtxf("vector_matmul: metric %s is not inner_product, cosine or l2sq", raw)
+}
+
+// vectorMatmulRank is the rank score, the negated distance, of a dot product and the
+// squared norms of the row and the query (used by cosine and l2sq); a zero vector has
+// cosine distance 1. The GPU fix-up kernel computes the same.
+func vectorMatmulRank(metric int, dot, rowNorm, queryNorm float64) float64 {
+	switch metric {
+	case vectorMatmulCosine:
+		if den := math.Sqrt(rowNorm * queryNorm); den > 0 {
+			return -(1 - dot/den)
+		}
+		return -1
+	case vectorMatmulL2sq:
+		return -math.Max(0, rowNorm+queryNorm-2*dot)
+	default:
+		return dot
+	}
 }
 
 // vectorMatmulConfigs shares a parsed configuration between the executors holding the same
@@ -215,8 +272,11 @@ func acquireVectorMatmulConfig(raw []byte, vecType types.Type) (cfg *vectorMatmu
 }
 
 func parseVectorMatmulConfig(raw []byte, vecType types.Type) (*vectorMatmulConfig, error) {
-	// the options argument is carried in the configuration and not interpreted
-	topk, queriesText, _, gpu, binaryQueries, err := decodeVectorMatmulConfig(raw)
+	topk, queriesText, options, gpu, binaryQueries, err := decodeVectorMatmulConfig(raw)
+	if err != nil {
+		return nil, err
+	}
+	metric, err := parseVectorMatmulMetric(options)
 	if err != nil {
 		return nil, err
 	}
@@ -243,7 +303,7 @@ func parseVectorMatmulConfig(raw []byte, vecType types.Type) (*vectorMatmulConfi
 			return nil, moerr.NewArrayInvalidOpNoCtx(dim, len(q))
 		}
 	}
-	cfg := &vectorMatmulConfig{topk: int(topk), nq: len(queries), gpu: gpu}
+	cfg := &vectorMatmulConfig{topk: int(topk), nq: len(queries), gpu: gpu, metric: metric}
 	switch oid := vecType.Oid; oid {
 	case types.T_array_float8, types.T_array_float4:
 		err = cfg.setBlockScaled(oid, dim, queries)
@@ -317,19 +377,37 @@ func (cfg *vectorMatmulConfig) setBlockScaled(oid types.T, dim int, queries [][]
 			return err
 		}
 	}
+	// the inner product distance is -dot; an overflow NaN ranks last
+	queryNorms := make([]float64, len(ops))
+	if cfg.metric != vectorMatmulInnerProduct {
+		for i := range ops {
+			dist, err := metric.VecBlockInnerProduct(&ops[i], &ops[i])
+			if err != nil {
+				return err
+			}
+			queryNorms[i] = -dist
+		}
+	}
 	cfg.score = func(cell []byte, out []float64) error {
 		c, err := types.ParseBlockScaledCell(cell)
 		if err != nil {
 			return err
 		}
 		row := metric.VecBlockOperand{Cell: c}
+		var rowNorm float64
+		if cfg.metric != vectorMatmulInnerProduct {
+			dist, err := metric.VecBlockInnerProduct(&row, &row)
+			if err != nil {
+				return err
+			}
+			rowNorm = -dist
+		}
 		for j := range ops {
-			// the inner product distance is -dot; an overflow NaN is +Inf, which ranks last
 			dist, err := metric.VecBlockInnerProduct(&row, &ops[j])
 			if err != nil {
 				return err
 			}
-			out[j] = -dist
+			out[j] = vectorMatmulRank(cfg.metric, -dist, rowNorm, queryNorms[j])
 		}
 		return nil
 	}
@@ -356,17 +434,36 @@ func setVectorMatmulPlain[T types.ArrayElement](cfg *vectorMatmulConfig, engineF
 	}
 	cfg.engineFormat = engineFormat
 	cfg.cellBytes = len(cfg.queryCells) / len(queries)
+	// the inner product distance is -dot
+	queryNorms := make([]float64, len(typed))
+	if cfg.metric != vectorMatmulInnerProduct {
+		for i, q := range typed {
+			dist, err := fn(q, q)
+			if err != nil {
+				return err
+			}
+			queryNorms[i] = -dist
+		}
+	}
 	cfg.score = func(cell []byte, out []float64) error {
 		if len(cell) != cfg.cellBytes {
 			return moerr.NewInvalidInputNoCtxf("vector_matmul: cell is %d bytes, want %d", len(cell), cfg.cellBytes)
 		}
 		row := types.BytesToArray[T](cell)
+		var rowNorm float64
+		if cfg.metric != vectorMatmulInnerProduct {
+			dist, err := fn(row, row)
+			if err != nil {
+				return err
+			}
+			rowNorm = -dist
+		}
 		for j, q := range typed {
 			dist, err := fn(row, q)
 			if err != nil {
 				return err
 			}
-			out[j] = -dist
+			out[j] = vectorMatmulRank(cfg.metric, -dist, rowNorm, queryNorms[j])
 		}
 		return nil
 	}
@@ -772,12 +869,17 @@ func (s *vectorMatmulState) appendJSON(out []byte) ([]byte, error) {
 				return nil, err
 			}
 			if math.IsInf(e.score, 0) || math.IsNaN(e.score) {
-				return nil, moerr.NewInvalidInputNoCtx("vector_matmul: dot product overflows the float32 domain")
+				return nil, moerr.NewInvalidInputNoCtx("vector_matmul: the distance overflows the float32 domain")
+			}
+			// the rank score is the negated distance
+			dist := -e.score
+			if dist == 0 {
+				dist = 0
 			}
 			out = append(out, '[')
 			out = append(out, id...)
 			out = append(out, ',')
-			out = strconv.AppendFloat(out, e.score, 'g', -1, 32)
+			out = strconv.AppendFloat(out, dist, 'g', -1, 32)
 			out = append(out, ']')
 		}
 		out = append(out, ']')
@@ -835,7 +937,7 @@ type vectorMatmulEngine interface {
 type vectorMatmulGPUHooks struct {
 	available func() bool
 	hostBytes func(format, dim, nq, maxRows int) uint64
-	create    func(format, dim, nq int, queryCells []byte, cellBytes, maxRows, topk int) (vectorMatmulEngine, error)
+	create    func(format, dim, nq int, queryCells []byte, cellBytes, maxRows, topk, metric int) (vectorMatmulEngine, error)
 }
 
 // vectorMatmulGPU is nil in builds without GPU support.
@@ -1043,7 +1145,7 @@ func (exec *vectorMatmulExec) ensureEngine() error {
 	if err != nil {
 		return err
 	}
-	engine, err := gpu.create(exec.cfg.engineFormat, dim, nq, exec.cfg.queryCells, cellBytes, rows, exec.cfg.topk)
+	engine, err := gpu.create(exec.cfg.engineFormat, dim, nq, exec.cfg.queryCells, cellBytes, rows, exec.cfg.topk, exec.cfg.metric)
 	if err != nil {
 		reservation.Abort()
 		return err

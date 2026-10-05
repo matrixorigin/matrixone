@@ -33,6 +33,11 @@ extern "C" {
 #define GPU_BLOCKSCALED_U8 6
 #define GPU_BLOCKSCALED_BF16 7
 
+/* Metrics; the scores are the negated distances (largest is nearest). */
+#define GPU_BLOCKSCALED_METRIC_INNER_PRODUCT 0
+#define GPU_BLOCKSCALED_METRIC_COSINE 1
+#define GPU_BLOCKSCALED_METRIC_L2SQ 2
+
 typedef void* gpu_blockscaled_matmul_c;
 
 /**
@@ -61,12 +66,14 @@ uint64_t gpu_blockscaled_matmul_host_bytes(int format, uint32_t dim, uint32_t nq
  * @param query_cells nq cells packed back to back.
  * @param max_rows Tile row capacity.
  * @param topk Hits per query kept by gpu_blockscaled_matmul_run_topk; 0 disables it.
+ * @param metric GPU_BLOCKSCALED_METRIC_INNER_PRODUCT, _COSINE or _L2SQ: the scores are the
+ *               negated distances (the dot product, -(cosine distance), -(squared L2)).
  * @param errmsg Pointer to store an error message, if any.
  * @return The engine, or NULL with errmsg set.
  */
 gpu_blockscaled_matmul_c gpu_blockscaled_matmul_new(int format, uint32_t dim, uint32_t nq,
                                                     const uint8_t* query_cells, uint64_t max_rows,
-                                                    uint32_t topk, void* errmsg);
+                                                    uint32_t topk, int metric, void* errmsg);
 
 /** @brief Returns the tile row capacity (max_rows rounded up to 128). */
 uint64_t gpu_blockscaled_matmul_max_rows(gpu_blockscaled_matmul_c e);

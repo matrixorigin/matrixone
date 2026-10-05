@@ -1,4 +1,4 @@
--- #20567: vector_matmul(topk, id, vec, queries [, options]), the top-k dot-product aggregate over vecf8/vecf4.
+-- #20567: vector_matmul(topk, id, vec, queries [, options]), the top-k nearest-rows aggregate (inner product, cosine or squared L2).
 drop database if exists vector_matmul_db;
 create database vector_matmul_db;
 use vector_matmul_db;
@@ -45,9 +45,19 @@ insert into qv values (1, '[1,0,0,0]'), (2, '[0,0,1,1]');
 set @qs = (select json_arrayagg(v) from qv);
 select vector_matmul(1, id, a, @qs) from t;
 
--- the options argument is accepted and not interpreted
-select vector_matmul(2, id, a, '[[1,0,0,0]]', '{"bogus":1}') from t;
+-- options: a JSON object whose "metric" is inner_product (the default), cosine or l2sq;
+-- other keys are ignored; the scores are distances, nearest first: -dot, 1 - cos, |x - q|^2
+select vector_matmul(2, id, a, '[[1,0,0,0]]', '{"metric":"inner_product","x":1}') from t;
 select vector_matmul(2, id, a, '[[1,0,0,0]]', 'not json') from t;
+select vector_matmul(2, id, a, '[[1,0,0,0]]', '{"metric":"l2"}') from t;
+create table mt (id int, v vecf32(3));
+insert into mt values (1, '[1,2,2]'), (2, '[0,0,0]'), (3, '[3,0,4]'), (4, '[1,1,1]');
+select vector_matmul(4, id, v, '[[1,2,2],[0,1,0]]') from mt;
+select id, inner_product(v, '[1,2,2]') d from mt order by d, id;
+select vector_matmul(4, id, v, '[[1,2,2],[0,1,0]]', '{"metric":"cosine"}') from mt;
+select id, cosine_distance(v, '[1,2,2]') d from mt order by d, id;
+select vector_matmul(4, id, v, '[[1,2,2],[0,1,0]]', '{"metric":"l2sq"}') from mt;
+select id, l2_distance_sq(v, '[1,2,2]') d from mt order by d, id;
 
 -- errors
 select vector_matmul('abc', id, a, '[[1,0,0,0]]') from t;

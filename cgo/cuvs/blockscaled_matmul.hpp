@@ -30,14 +30,22 @@
 //   - K padded to a multiple of 32, with zero elements;
 //   - scales in the tiled layout: 128-row x 4-block tiles of 512 bytes,
 //     off = ((r/128)*(Sp/4) + s/4)*512 + (r%32)*16 + ((r%128)/32)*4 + s%4.
-// run applies the per-vector global scales on the host when the scores are copied out:
-// scores[r * nq + q] = g_r * g_q * D[r, q]. run_topk applies them on the device, selects
-// the k best rows per query with cuvs::selection::select_k and copies only those back.
+// The scores are computed on the device for a metric: inner product, cosine distance or
+// squared L2 distance. bsmm_row_stats_kernel computes each row's squared norm from the
+// packed tile (the values the matmul multiplies) and the uint8 element sums;
+// bsmm_fixup_kernel turns the dot products into rank scores, the negated distance (largest
+// is nearest): dot, -(1 - dot / sqrt(|x|^2 |q|^2)) or -max(0, |x|^2 + |q|^2 - 2 dot). run
+// copies the rank scores of every row; run_topk selects the k best rows per query with
+// cuvs::selection::select_k and copies only those back.
 
 #include "device_memory.hpp"
 
 #include <cub/block/block_reduce.cuh>
 #include <cublasLt.h>
+#include <cuda_bf16.h>
+#include <cuda_fp16.h>
+#include <cuda_fp4.h>
+#include <cuda_fp8.h>
 #include <cuda_runtime.h>
 #include <cuvs/selection/select_k.hpp>
 #include <raft/core/device_mdspan.hpp>
@@ -57,13 +65,21 @@ namespace matrixone {
 
 namespace {
 
+// Metrics of the rank scores.
+constexpr int kMetricInnerProduct = 0;
+constexpr int kMetricCosine = 1;
+constexpr int kMetricL2sq = 2;
+
 // bsmm_fixup_kernel turns the raw matmul output d (query major, M rows per query) into
-// final scores in place: global scales in double (float formats), int32 sums with the
-// uint8 shift correction (integer formats), NaN and padding rows r >= n as -Inf.
-__global__ void bsmm_fixup_kernel(float* d, int kind, uint64_t M, uint64_t n, uint64_t nq,
-                                  const float* g_row, const float* g_query,
+// rank scores in place, the negated distance of the metric (largest is nearest): the dot
+// product from the global scales in double (float formats) or the int32 sums with the
+// uint8 shift correction (integer formats), then the metric over the squared norms, rounded
+// once to float; NaN and padding rows r >= n are -Inf. A zero vector has cosine distance 1.
+__global__ void bsmm_fixup_kernel(float* d, int kind, int metric, uint64_t M, uint64_t n,
+                                  uint64_t nq, const float* g_row, const float* g_query,
                                   const int64_t* sum_row, const int64_t* sum_query,
-                                  int64_t base) {
+                                  int64_t base, const double* norm_row,
+                                  const double* norm_query) {
     const uint64_t total = M * nq;
     for (uint64_t i = uint64_t(blockIdx.x) * blockDim.x + threadIdx.x; i < total;
          i += uint64_t(gridDim.x) * blockDim.x) {
@@ -71,15 +87,119 @@ __global__ void bsmm_fixup_kernel(float* d, int kind, uint64_t M, uint64_t n, ui
         float v;
         if (r >= n) {
             v = -INFINITY;
-        } else if (kind == 0) {
-            v = float(double(d[i]) * double(g_row[r]) * double(g_query[q]));
         } else {
-            int64_t dot = int64_t(__float_as_int(d[i]));
-            if (kind == 2) dot += 128 * (sum_row[r] + sum_query[q]) + base;
-            v = float(dot);
+            double dot;
+            if (kind == 0) {
+                dot = double(d[i]) * double(g_row[r]) * double(g_query[q]);
+            } else {
+                int64_t s = int64_t(__float_as_int(d[i]));
+                if (kind == 2) s += 128 * (sum_row[r] + sum_query[q]) + base;
+                dot = double(s);
+            }
+            double rank = dot;
+            if (metric == kMetricCosine) {
+                const double den = sqrt(norm_row[r] * norm_query[q]);
+                rank = den > 0 ? -(1.0 - dot / den) : -1.0;
+            } else if (metric == kMetricL2sq) {
+                rank = -fmax(0.0, norm_row[r] + norm_query[q] - 2.0 * dot);
+            }
+            v = float(rank);
         }
         if (isnan(v)) v = -INFINITY;
         d[i] = v;
+    }
+}
+
+// bsmm_scale_off is the offset of block s of row r in the tiled scale layout.
+__device__ inline uint64_t bsmm_scale_off(uint64_t r, uint64_t s, uint64_t Sp) {
+    const uint64_t tile = (r / 128) * (Sp / 4) + s / 4;
+    const uint64_t rr = r % 128;
+    return tile * 512 + (rr % 32) * 16 + (rr / 32) * 4 + s % 4;
+}
+
+// bsmm_row_stats_kernel computes, for each of the n packed rows (one block per row), the
+// squared norm of the values the matmul multiplies (elements times block scales times the
+// row's global scale, in double; exact integers for int8/uint8) into norm, and for uint8
+// the sum of the shifted elements x' = x - 128 into sum. The format constants are those of
+// blockscaled_matmul.
+template <int kThreads>
+__global__ void bsmm_row_stats_kernel(const uint8_t* elem, const uint8_t* scale,
+                                      const float* global, uint64_t n, int format,
+                                      uint64_t row_bytes, uint64_t dim, uint64_t Sp,
+                                      double* norm, int64_t* sum) {
+    using reduce_d = cub::BlockReduce<double, kThreads>;
+    using reduce_i = cub::BlockReduce<long long, kThreads>;
+    __shared__ union {
+        typename reduce_d::TempStorage d;
+        typename reduce_i::TempStorage i;
+    } tmp;
+    const uint64_t r = blockIdx.x;
+    if (r >= n) return;
+    const uint8_t* row = elem + r * row_bytes;
+    double acc = 0;
+    long long iacc = 0, isum = 0;
+    for (uint64_t k = threadIdx.x; k < dim; k += kThreads) {
+        switch (format) {
+        case 1: { // MXFP8: E4M3 element, E8M0 scale per 32
+            __nv_fp8_e4m3 e;
+            e.__x = row[k];
+            const double v = double(float(e)) *
+                             ldexp(1.0, int(scale[bsmm_scale_off(r, k / 32, Sp)]) - 127);
+            acc += v * v;
+            break;
+        }
+        case 2: { // NVFP4: E2M1 nibble (element 2i low), UE4M3 scale per 16
+            __nv_fp4_e2m1 e;
+            e.__x = (k & 1) ? (row[k / 2] >> 4) : (row[k / 2] & 0x0f);
+            __nv_fp8_e4m3 sc;
+            sc.__x = scale[bsmm_scale_off(r, k / 16, Sp)];
+            const double v = double(float(e)) * double(float(sc));
+            acc += v * v;
+            break;
+        }
+        case 3: { // F32
+            const double v = double(reinterpret_cast<const float*>(row)[k]);
+            acc += v * v;
+            break;
+        }
+        case 4: { // F16
+            const double v = double(__half2float(reinterpret_cast<const __half*>(row)[k]));
+            acc += v * v;
+            break;
+        }
+        case 7: { // BF16
+            const double v =
+                double(__bfloat162float(reinterpret_cast<const __nv_bfloat16*>(row)[k]));
+            acc += v * v;
+            break;
+        }
+        case 5: { // I8
+            const long long v = reinterpret_cast<const int8_t*>(row)[k];
+            iacc += v * v;
+            break;
+        }
+        case 6: { // U8, stored shifted: x' = x - 128
+            const long long x = reinterpret_cast<const int8_t*>(row)[k];
+            iacc += (x + 128) * (x + 128);
+            isum += x;
+            break;
+        }
+        }
+    }
+    if (format >= 5 && format <= 6) {
+        iacc = reduce_i(tmp.i).Sum(iacc);
+        __syncthreads();
+        isum = reduce_i(tmp.i).Sum(isum);
+        if (threadIdx.x == 0) {
+            norm[r] = double(iacc);
+            if (sum != nullptr) sum[r] = isum;
+        }
+        return;
+    }
+    acc = reduce_d(tmp.d).Sum(acc);
+    if (threadIdx.x == 0) {
+        const double g = double(global[r]);
+        norm[r] = acc * g * g;
     }
 }
 
@@ -137,6 +257,10 @@ public:
     static constexpr int kFormatBF16 = 7;
     static constexpr size_t kHeader = 12;
     static constexpr size_t kWorkspace = size_t(32) << 20;
+    // Metrics: the scores are the negated distances (largest is nearest).
+    static constexpr int kInnerProduct = kMetricInnerProduct;
+    static constexpr int kCosine = kMetricCosine;
+    static constexpr int kL2sq = kMetricL2sq;
     // kMinComputeMajor is the supported GPU baseline: compute capability 10.0 or newer
     // (Blackwell, sm_100 / sm_120), which the MXFP8 and NVFP4 block-scaled modes need.
     // The engine runs only on such devices, for every format.
@@ -177,25 +301,30 @@ public:
     }
 
     // host_bytes returns the host memory an engine of this shape allocates: the tile
-    // staging and score copy, per-row and per-query globals and sums, and the query
-    // packing buffers used while it is constructed.
+    // staging and score copy, per-row and per-query globals, and the query packing buffers
+    // used while it is constructed.
     static uint64_t host_bytes(int format, uint32_t dim, uint32_t nq, uint64_t max_rows) {
         const shape sh = shape::of(format, dim);
         const uint64_t M = roundup(max_rows, 128), nq_pad = roundup(nq, 128);
-        return M * sh.row_bytes + M * sh.Sp + M * nq * sizeof(float) +
-               M * (sizeof(float) + sizeof(int64_t)) + nq * (sizeof(float) + sizeof(int64_t)) +
-               nq_pad * (sh.row_bytes + sh.Sp);
+        return M * sh.row_bytes + M * sh.Sp + M * nq * sizeof(float) + M * sizeof(float) +
+               nq * sizeof(float) + nq_pad * (sh.row_bytes + sh.Sp);
     }
 
-    // topk > 0 sizes the buffers of run_topk; 0 allows run only.
+    // topk > 0 sizes the buffers of run_topk; 0 allows run only. metric is kInnerProduct,
+    // kCosine or kL2sq.
     blockscaled_matmul(int device_id, int format, uint32_t dim, uint32_t nq,
-                       const uint8_t* query_cells, uint64_t max_rows, uint32_t topk = 0)
+                       const uint8_t* query_cells, uint64_t max_rows, uint32_t topk = 0,
+                       int metric = kInnerProduct)
         : device_id_(device_id) {
         if (format < kFormatMXFP8 || format > kFormatBF16 || dim == 0 || nq == 0 ||
             max_rows == 0) {
             throw std::invalid_argument(
                 "blockscaled_matmul: invalid format, dimension, query count or tile size");
         }
+        if (metric < kInnerProduct || metric > kL2sq) {
+            throw std::invalid_argument("blockscaled_matmul: invalid metric");
+        }
+        metric_ = metric;
         format_ = format;
         dim_ = dim;
         const shape sh = shape::of(format, dim);
@@ -226,37 +355,20 @@ public:
 
     uint64_t max_rows() const { return max_rows_; }
 
-    // run scores n cells packed back to back (n <= max_rows) into n * nq row-major scores.
+    // run scores n cells packed back to back (n <= max_rows) into n * nq row-major rank
+    // scores (NaN as -Inf).
     void run(const uint8_t* cells, uint64_t n, float* scores) {
         if (n == 0) return;
         const size_t M = matmul(cells, n);
+        fixup(M, n);
         // D is column major M x nq_pad; the first nq columns hold the queries
         check(cudaMemcpy2DAsync(h_d_.data(), n * sizeof(float), d_d_, M * sizeof(float),
                                 n * sizeof(float), nq_, cudaMemcpyDeviceToHost, stream_),
               "cudaMemcpy2DAsync");
         check(cudaStreamSynchronize(stream_), "cudaStreamSynchronize");
-
-        // h_d is query major (nq x n); write row major with the global scales applied in
-        // double, rounded once
-        if (integer(format_)) {
-            // h_d holds int32 sums; uint8 adds the shift correction
-            const int64_t base = format_ == kFormatU8 ? int64_t(128) * 128 * dim_ : 0;
-            for (size_t r = 0; r < n; r++) {
-                for (size_t q = 0; q < nq_; q++) {
-                    int32_t v;
-                    std::memcpy(&v, &h_d_[q * n + r], sizeof(v));
-                    int64_t dot = int64_t(v);
-                    if (format_ == kFormatU8) dot += 128 * (sum_row_[r] + sum_query_[q]) + base;
-                    scores[r * nq_ + q] = float(dot);
-                }
-            }
-            return;
-        }
+        // h_d is query major (nq x n); scores are row major
         for (size_t r = 0; r < n; r++) {
-            for (size_t q = 0; q < nq_; q++) {
-                scores[r * nq_ + q] =
-                    float(double(h_d_[q * n + r]) * double(g_row_[r]) * double(g_query_[q]));
-            }
+            for (size_t q = 0; q < nq_; q++) scores[r * nq_ + q] = h_d_[q * n + r];
         }
     }
 
@@ -273,23 +385,7 @@ public:
         if (n == 0) return;
         const size_t M = matmul(cells, n);
         float* d = static_cast<float*>(d_d_);
-        check(cudaMemcpyAsync(d_g_row_, g_row_.data(), n * sizeof(float), cudaMemcpyHostToDevice,
-                              stream_),
-              "cudaMemcpyAsync");
-        if (format_ == kFormatU8) {
-            check(cudaMemcpyAsync(d_sum_row_, sum_row_.data(), n * sizeof(int64_t),
-                                  cudaMemcpyHostToDevice, stream_),
-                  "cudaMemcpyAsync");
-        }
-        const int kind = format_ == kFormatU8 ? 2 : format_ == kFormatI8 ? 1 : 0;
-        const int64_t base = format_ == kFormatU8 ? int64_t(128) * 128 * dim_ : 0;
-        const uint64_t total = uint64_t(M) * nq_;
-        const unsigned blocks = unsigned(std::min<uint64_t>((total + 255) / 256, 65535));
-        bsmm_fixup_kernel<<<blocks, 256, 0, stream_>>>(
-            d, kind, M, n, nq_, static_cast<const float*>(d_g_row_),
-            static_cast<const float*>(d_g_query_), static_cast<const int64_t*>(d_sum_row_),
-            static_cast<const int64_t*>(d_sum_query_), base);
-        check(cudaGetLastError(), "bsmm_fixup_kernel");
+        fixup(M, n);
 
         const int64_t kk = int64_t(std::min<uint64_t>(topk_, M));
         float* tv = static_cast<float*>(d_top_val_);
@@ -366,13 +462,17 @@ private:
         const size_t M = algos_[b].first;
         std::fill(h_a_.begin(), h_a_.begin() + M * row_bytes_, 0);
         std::fill(h_sa_.begin(), h_sa_.begin() + M * Sp_, 0);
-        pack_rows(cells, n, h_a_.data(), h_sa_.data(), g_row_.data(), sum_row_.data());
+        pack_rows(cells, n, h_a_.data(), h_sa_.data(), g_row_.data());
 
         check(cudaSetDevice(device_id_), "cudaSetDevice");
         check(cudaMemcpyAsync(d_a_, h_a_.data(), M * row_bytes_, cudaMemcpyHostToDevice, stream_),
               "cudaMemcpyAsync");
         check(cudaMemcpyAsync(d_sa_, h_sa_.data(), M * Sp_, cudaMemcpyHostToDevice, stream_),
               "cudaMemcpyAsync");
+        check(cudaMemcpyAsync(d_g_row_, g_row_.data(), n * sizeof(float), cudaMemcpyHostToDevice,
+                              stream_),
+              "cudaMemcpyAsync");
+        row_stats(d_a_, d_sa_, d_g_row_, n, d_norm_row_, d_sum_row_);
 
         cudaDataType_t et = format_ == kFormatMXFP8   ? CUDA_R_8F_E4M3
                             : format_ == kFormatNVFP4 ? CUDA_R_4F_E2M1
@@ -392,26 +492,55 @@ private:
         return M;
     }
 
+    // needs_stats reports whether the scores use the row and query statistics: the squared
+    // norms of a distance metric, the element sums of uint8.
+    bool needs_stats() const { return metric_ != kInnerProduct || format_ == kFormatU8; }
+
+    // row_stats enqueues the squared norms and uint8 sums of n packed rows.
+    void row_stats(const void* elem, const void* scale, const void* global, uint64_t n,
+                   void* norm, void* sum) {
+        if (!needs_stats() || n == 0) return;
+        bsmm_row_stats_kernel<128><<<unsigned(n), 128, 0, stream_>>>(
+            static_cast<const uint8_t*>(elem), static_cast<const uint8_t*>(scale),
+            static_cast<const float*>(global), n, format_, row_bytes_, dim_, Sp_,
+            static_cast<double*>(norm), static_cast<int64_t*>(sum));
+        check(cudaGetLastError(), "bsmm_row_stats_kernel");
+    }
+
+    // fixup enqueues the rank scores of the matmul output of an M-row tile holding n rows.
+    void fixup(size_t M, uint64_t n) {
+        const int kind = format_ == kFormatU8 ? 2 : format_ == kFormatI8 ? 1 : 0;
+        const int64_t base = format_ == kFormatU8 ? int64_t(128) * 128 * dim_ : 0;
+        const uint64_t total = uint64_t(M) * nq_;
+        const unsigned blocks = unsigned(std::min<uint64_t>((total + 255) / 256, 65535));
+        bsmm_fixup_kernel<<<blocks, 256, 0, stream_>>>(
+            static_cast<float*>(d_d_), kind, metric_, M, n, nq_,
+            static_cast<const float*>(d_g_row_), static_cast<const float*>(d_g_query_),
+            static_cast<const int64_t*>(d_sum_row_), static_cast<const int64_t*>(d_sum_query_),
+            base, static_cast<const double*>(d_norm_row_),
+            static_cast<const double*>(d_norm_query_));
+        check(cudaGetLastError(), "bsmm_fixup_kernel");
+    }
+
     void init(const uint8_t* query_cells) {
         h_a_.assign(max_rows_ * row_bytes_, 0);
         h_sa_.assign(max_rows_ * Sp_, 0);
         h_d_.resize(max_rows_ * nq_);
         g_row_.resize(max_rows_);
         g_query_.resize(nq_);
-        sum_row_.resize(max_rows_);
-        sum_query_.resize(nq_);
         std::vector<uint8_t> h_b(nq_pad_ * row_bytes_, 0), h_sb(nq_pad_ * Sp_, 0);
-        pack_rows(query_cells, nq_, h_b.data(), h_sb.data(), g_query_.data(), sum_query_.data());
+        pack_rows(query_cells, nq_, h_b.data(), h_sb.data(), g_query_.data());
 
         check(cudaSetDevice(device_id_), "cudaSetDevice");
-        const size_t topk_bytes = topk_ == 0 ? 0
-                                             : max_rows_ * (sizeof(float) + sizeof(int64_t)) +
-                                                   nq_ * (sizeof(float) + sizeof(int64_t)) +
-                                                   nq_ * topk_ * (sizeof(float) + sizeof(int)) +
-                                                   nq_;
+        // per-row and per-query globals, uint8 sums and squared norms
+        const size_t stats_bytes = (max_rows_ + nq_) * (sizeof(float) + sizeof(int64_t) +
+                                                        sizeof(double));
+        const size_t topk_bytes =
+            topk_ == 0 ? 0 : nq_ * topk_ * (sizeof(float) + sizeof(int)) + nq_;
         const size_t device_bytes = max_rows_ * row_bytes_ + max_rows_ * Sp_ +
                                     nq_pad_ * row_bytes_ + nq_pad_ * Sp_ +
-                                    max_rows_ * nq_pad_ * sizeof(float) + kWorkspace + topk_bytes;
+                                    max_rows_ * nq_pad_ * sizeof(float) + kWorkspace +
+                                    stats_bytes + topk_bytes;
         {
             // the claim covers the window until the buffers are resident
             auto claim = device_memory_governor::reserve_on(device_id_, device_bytes,
@@ -422,11 +551,13 @@ private:
             d_sb_ = device_alloc(nq_pad_ * Sp_);
             d_d_ = device_alloc(max_rows_ * nq_pad_ * sizeof(float));
             d_work_ = device_alloc(kWorkspace);
+            d_g_row_ = device_alloc(max_rows_ * sizeof(float));
+            d_sum_row_ = device_alloc(max_rows_ * sizeof(int64_t));
+            d_norm_row_ = device_alloc(max_rows_ * sizeof(double));
+            d_g_query_ = device_alloc(nq_ * sizeof(float));
+            d_sum_query_ = device_alloc(nq_ * sizeof(int64_t));
+            d_norm_query_ = device_alloc(nq_ * sizeof(double));
             if (topk_ != 0) {
-                d_g_row_ = device_alloc(max_rows_ * sizeof(float));
-                d_sum_row_ = device_alloc(max_rows_ * sizeof(int64_t));
-                d_g_query_ = device_alloc(nq_ * sizeof(float));
-                d_sum_query_ = device_alloc(nq_ * sizeof(int64_t));
                 d_top_val_ = device_alloc(nq_ * topk_ * sizeof(float));
                 d_top_idx_ = device_alloc(nq_ * topk_ * sizeof(int));
                 d_tied_ = device_alloc(nq_);
@@ -435,13 +566,12 @@ private:
         check(cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking), "cudaStreamCreate");
         check(cudaMemcpy(d_b_, h_b.data(), h_b.size(), cudaMemcpyHostToDevice), "cudaMemcpy");
         check(cudaMemcpy(d_sb_, h_sb.data(), h_sb.size(), cudaMemcpyHostToDevice), "cudaMemcpy");
+        check(cudaMemcpy(d_g_query_, g_query_.data(), nq_ * sizeof(float), cudaMemcpyHostToDevice),
+              "cudaMemcpy");
+        // the queries' squared norms and uint8 sums, from the packed query matrix
+        row_stats(d_b_, d_sb_, d_g_query_, nq_, d_norm_query_, d_sum_query_);
+        check(cudaStreamSynchronize(stream_), "cudaStreamSynchronize");
         if (topk_ != 0) {
-            check(cudaMemcpy(d_g_query_, g_query_.data(), nq_ * sizeof(float),
-                             cudaMemcpyHostToDevice),
-                  "cudaMemcpy");
-            check(cudaMemcpy(d_sum_query_, sum_query_.data(), nq_ * sizeof(int64_t),
-                             cudaMemcpyHostToDevice),
-                  "cudaMemcpy");
             raft::resource::set_cuda_stream(res_, rmm::cuda_stream_view(stream_));
         }
 
@@ -501,7 +631,8 @@ private:
         if (desc_ != nullptr) cublasLtMatmulDescDestroy(desc_);
         if (lt_ != nullptr) cublasLtDestroy(lt_);
         if (stream_ != nullptr) cudaStreamDestroy(stream_);
-        for (void* p : {d_a_, d_sa_, d_b_, d_sb_, d_d_, d_work_, d_g_row_, d_sum_row_, d_g_query_,
+        for (void* p : {d_a_, d_sa_, d_b_, d_sb_, d_d_, d_work_, d_g_row_, d_sum_row_, d_norm_row_,
+                        d_g_query_, d_norm_query_,
                         d_sum_query_, d_top_val_, d_top_idx_, d_tied_}) {
             if (p != nullptr) cudaFree(p);
         }
@@ -510,8 +641,8 @@ private:
         lt_ = nullptr;
         stream_ = nullptr;
         d_a_ = d_sa_ = d_b_ = d_sb_ = d_d_ = d_work_ = nullptr;
-        d_g_row_ = d_sum_row_ = d_g_query_ = d_sum_query_ = d_top_val_ = d_top_idx_ = d_tied_ =
-            nullptr;
+        d_g_row_ = d_sum_row_ = d_norm_row_ = d_g_query_ = d_sum_query_ = d_norm_query_ =
+            d_top_val_ = d_top_idx_ = d_tied_ = nullptr;
     }
 
     struct layout {
@@ -564,26 +695,20 @@ private:
 
     // pack_rows writes n cells as padded element rows and tiled scales into zeroed buffers.
     void pack_rows(const uint8_t* cells, size_t n, uint8_t* elem, uint8_t* scale,
-                   float* global, int64_t* sum) const {
+                   float* global) const {
         if (format_ == kFormatU8) {
             // x' = x - 128 as int8 is x ^ 0x80; padding stays 0 (x' = 0)
             for (size_t r = 0; r < n; r++) {
                 global[r] = 1.0f;
                 const uint8_t* src = cells + r * cell_bytes_;
                 uint8_t* dst = elem + r * row_bytes_;
-                int64_t acc = 0;
-                for (size_t k = 0; k < elem_bytes_; k++) {
-                    dst[k] = src[k] ^ 0x80;
-                    acc += int64_t(src[k]) - 128;
-                }
-                sum[r] = acc;
+                for (size_t k = 0; k < elem_bytes_; k++) dst[k] = src[k] ^ 0x80;
             }
             return;
         }
         if (plain(format_)) {
             for (size_t r = 0; r < n; r++) {
                 global[r] = 1.0f;
-                sum[r] = 0;
                 std::memcpy(elem + r * row_bytes_, cells + r * cell_bytes_, elem_bytes_);
             }
             return;
@@ -601,6 +726,7 @@ private:
 
     int device_id_;
     int format_ = 0;
+    int metric_ = kInnerProduct;
     size_t dim_ = 0, block_ = 0, nscale_ = 0, elem_bytes_ = 0, cell_bytes_ = 0;
     size_t K_ = 0, Sp_ = 0, row_bytes_ = 0;
     size_t nq_ = 0, nq_pad_ = 0, max_rows_ = 0, topk_ = 0;
@@ -610,15 +736,14 @@ private:
     cublasLtMatmulPreference_t pref_ = nullptr;
     void *d_a_ = nullptr, *d_sa_ = nullptr, *d_b_ = nullptr, *d_sb_ = nullptr, *d_d_ = nullptr,
          *d_work_ = nullptr;
-    void *d_g_row_ = nullptr, *d_sum_row_ = nullptr, *d_g_query_ = nullptr,
-         *d_sum_query_ = nullptr, *d_top_val_ = nullptr, *d_top_idx_ = nullptr,
-         *d_tied_ = nullptr;
+    void *d_g_row_ = nullptr, *d_sum_row_ = nullptr, *d_norm_row_ = nullptr,
+         *d_g_query_ = nullptr, *d_sum_query_ = nullptr, *d_norm_query_ = nullptr,
+         *d_top_val_ = nullptr, *d_top_idx_ = nullptr, *d_tied_ = nullptr;
     raft::resources res_;
     // row bucket -> cuBLASLt algorithm, ascending
     std::vector<std::pair<size_t, cublasLtMatmulAlgo_t>> algos_;
     std::vector<uint8_t> h_a_, h_sa_;
     std::vector<float> h_d_, g_row_, g_query_;
-    std::vector<int64_t> sum_row_, sum_query_;
 };
 
 } // namespace matrixone

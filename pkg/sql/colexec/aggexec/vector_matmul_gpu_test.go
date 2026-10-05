@@ -47,12 +47,15 @@ func vmGPUParse(t *testing.T, out string) [][]vmGPUHit {
 	return res
 }
 
+// vmMetricOptions selects each metric.
+var vmMetricOptions = []string{"", `{"metric":"cosine"}`, `{"metric":"l2sq"}`}
+
 // vmGPURun fills an executor with the rows split over groups, merging a second executor
 // that still holds rows in its tile, and returns the flushed JSON per group.
 func vmGPURun(t *testing.T, mp *mpool.MPool, vt types.Type, toCell func([]float32) []byte, gpu bool,
-	queries [][]float32, topk, groups int, ids []int64, rows [][]float32) []string {
+	queries [][]float32, options string, topk, groups int, ids []int64, rows [][]float32) []string {
 	q, _ := json.Marshal(queries)
-	cfg := EncodeVectorMatmulConfig(int64(topk), string(q), "", gpu)
+	cfg := EncodeVectorMatmulConfig(int64(topk), string(q), options, gpu)
 	mk := func() *vectorMatmulExec {
 		exec, err := makeVectorMatmul(mp, AggIdOfVectorMatmul, false, []types.Type{types.T_int64.ToType(), vt})
 		require.NoError(t, err)
@@ -151,27 +154,29 @@ func TestVectorMatmulGPUMatchesCPU(t *testing.T) {
 					queries[j][k] = float32(r.NormFloat64())
 				}
 			}
-			cpu := vmGPURun(t, mp, vt, toCell, false, queries, topk, groups, ids, rows)
-			gpu := vmGPURun(t, mp, vt, toCell, true, queries, topk, groups, ids, rows)
-			require.Len(t, gpu, groups)
-			for g := range cpu {
-				want, got := vmGPUParse(t, cpu[g]), vmGPUParse(t, gpu[g])
-				require.Len(t, got, len(want))
-				for q := range want {
-					require.Len(t, got[q], len(want[q]))
-					for i := range want[q] {
-						require.InDelta(t, want[q][i].score, got[q][i].score, 1e-4*math.Max(1, math.Abs(want[q][i].score)),
-							"%s dim %d group %d query %d rank %d", format, dim, g, q, i)
+			for _, options := range vmMetricOptions {
+				cpu := vmGPURun(t, mp, vt, toCell, false, queries, options, topk, groups, ids, rows)
+				gpu := vmGPURun(t, mp, vt, toCell, true, queries, options, topk, groups, ids, rows)
+				require.Len(t, gpu, groups)
+				for g := range cpu {
+					want, got := vmGPUParse(t, cpu[g]), vmGPUParse(t, gpu[g])
+					require.Len(t, got, len(want))
+					for q := range want {
+						require.Len(t, got[q], len(want[q]))
+						for i := range want[q] {
+							require.InDelta(t, want[q][i].score, got[q][i].score, 1e-4*math.Max(1, math.Abs(want[q][i].score)),
+								"%s %s dim %d group %d query %d rank %d", options, format, dim, g, q, i)
+						}
 					}
-				}
-				// summation order may swap near-equal scores; the id sets of each query agree
-				for q := range want {
-					ws, gs := map[string]bool{}, map[string]bool{}
-					for i := range want[q] {
-						ws[want[q][i].id] = true
-						gs[got[q][i].id] = true
+					// summation order may swap near-equal scores; the id sets of each query agree
+					for q := range want {
+						ws, gs := map[string]bool{}, map[string]bool{}
+						for i := range want[q] {
+							ws[want[q][i].id] = true
+							gs[got[q][i].id] = true
+						}
+						require.Equal(t, ws, gs, "%s %s dim %d group %d query %d", options, format, dim, g, q)
 					}
-					require.Equal(t, ws, gs, "%s dim %d group %d query %d", format, dim, g, q)
 				}
 			}
 		}
@@ -205,9 +210,11 @@ func TestVectorMatmulGPUPlainTypesMatchCPU(t *testing.T) {
 	for _, c := range vmPlainCases() {
 		vt := types.New(c.oid, dim, 0)
 		for _, groups := range []int{1, 3} {
-			cpu := vmGPURun(t, mp, vt, c.toCell, false, queries, topk, groups, ids, rows)
-			gpu := vmGPURun(t, mp, vt, c.toCell, true, queries, topk, groups, ids, rows)
-			require.Equal(t, cpu, gpu, "%s groups %d", c.oid, groups)
+			for _, options := range vmMetricOptions {
+				cpu := vmGPURun(t, mp, vt, c.toCell, false, queries, options, topk, groups, ids, rows)
+				gpu := vmGPURun(t, mp, vt, c.toCell, true, queries, options, topk, groups, ids, rows)
+				require.Equal(t, cpu, gpu, "%s %s groups %d", options, c.oid, groups)
+			}
 		}
 	}
 }

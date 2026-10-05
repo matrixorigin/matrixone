@@ -27,8 +27,13 @@ func init() {
 	vectorMatmulGPU = &vectorMatmulGPUHooks{
 		available: func() bool { return devices() > 0 },
 		hostBytes: cuvs.BlockScaledMatmulHostBytes,
-		create: func(format, dim, nq int, queryCells []byte, cellBytes, maxRows, topk int) (vectorMatmulEngine, error) {
-			engine, err := cuvs.NewBlockScaledMatmul(format, dim, nq, queryCells, cellBytes, maxRows, topk)
+		create: func(format, dim, nq int, queryCells []byte, cellBytes, maxRows, topk, metric int) (vectorMatmulEngine, error) {
+			engineMetric := [...]int{
+				vectorMatmulInnerProduct: cuvs.BlockScaledMatmulInnerProduct,
+				vectorMatmulCosine:       cuvs.BlockScaledMatmulCosine,
+				vectorMatmulL2sq:         cuvs.BlockScaledMatmulL2sq,
+			}[metric]
+			engine, err := cuvs.NewBlockScaledMatmul(format, dim, nq, queryCells, cellBytes, maxRows, topk, engineMetric)
 			if err != nil {
 				return nil, err
 			}

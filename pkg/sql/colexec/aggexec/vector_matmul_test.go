@@ -102,7 +102,7 @@ func TestVectorMatmulTopK(t *testing.T) {
 	require.NoError(t, exec.BulkFill(0, vecs))
 	// query 0: ids 10 and 30 tie at 1, ordered by id text ("10" < "30")
 	// query 1: ids 2 and 30 tie at 1 ("2" < "30")
-	require.Equal(t, []string{`[[["10",1],["30",1]],[["2",1],["30",1]]]`}, vmFlush(t, mp, exec))
+	require.Equal(t, []string{`[[["10",-1],["30",-1]],[["2",-1],["30",-1]]]`}, vmFlush(t, mp, exec))
 }
 
 func TestVectorMatmulEmptyGroupAndGroups(t *testing.T) {
@@ -116,9 +116,9 @@ func TestVectorMatmulEmptyGroupAndGroups(t *testing.T) {
 	require.NoError(t, exec.BatchFill(0, []uint64{1, GroupNotMatched, 3}, vecs))
 	require.NoError(t, exec.Fill(0, 1, vecs))
 	require.Equal(t, []string{
-		`[[["1",1]],[["2",1]]]`,
+		`[[["1",-1]],[["2",-1]]]`,
 		`[[],[]]`,
-		`[[["3",2]],[["3",0]]]`,
+		`[[["3",-2]],[["3",0]]]`,
 	}, vmFlush(t, mp, exec))
 }
 
@@ -154,7 +154,8 @@ func vmReference(ids []int64, rows [][]float32, queries [][]float32, k int) stri
 		hits = hits[:min(k, len(hits))]
 		parts := make([]string, len(hits))
 		for i, h := range hits {
-			parts[i] = `["` + h.id + `",` + strconv.FormatFloat(h.score, 'g', -1, 32) + `]`
+			// the inner product distance is -dot
+			parts[i] = `["` + h.id + `",` + strconv.FormatFloat(-h.score+0, 'g', -1, 32) + `]`
 		}
 		out = append(out, "["+strings.Join(parts, ",")+"]")
 	}
@@ -232,7 +233,7 @@ func TestVectorMatmulIntermediateRoundTrip(t *testing.T) {
 	require.NoError(t, dst.SetExtraInformation(cfg, 0))
 	require.NoError(t, dst.UnmarshalFromReader(bytes.NewReader(buf.Bytes()), mp))
 	require.Equal(t, want, vmFlush(t, mp, dst))
-	require.Equal(t, []string{`[[["8",2],["7",1],["9",0]]]`, `[[]]`}, want)
+	require.Equal(t, []string{`[[["8",-2],["7",-1],["9",0]]]`, `[[]]`}, want)
 }
 
 func TestVectorMatmulAccountedFill(t *testing.T) {
@@ -328,7 +329,7 @@ func TestVectorMatmulIDText(t *testing.T) {
 	require.NoError(t, vector.AppendBytes(vv, cell, false, mp))
 	defer vmFree(mp, []*vector.Vector{idv, vv})
 	require.NoError(t, exec.BulkFill(0, []*vector.Vector{idv, vv}))
-	require.Equal(t, []string{`[[["a\"b",1]]]`}, vmFlush(t, mp, exec))
+	require.Equal(t, []string{`[[["a\"b",-1]]]`}, vmFlush(t, mp, exec))
 }
 
 func TestVectorMatmulConfigErrors(t *testing.T) {
@@ -351,10 +352,22 @@ func TestVectorMatmulConfigErrors(t *testing.T) {
 	many := "[" + strings.TrimSuffix(strings.Repeat(`[1,0,0,0],`, vectorMatmulMaxEntries/vectorMatmulMaxTopK+1), ",") + "]"
 	_, err := parseVectorMatmulConfig(EncodeVectorMatmulConfig(vectorMatmulMaxTopK, many, "", false), vt)
 	require.ErrorContains(t, err, "queries x topk exceeds")
-	// the options argument is not interpreted: any text is accepted
-	for _, options := range []string{``, `{"mode":"auto"}`, `{"mode":"gpu","tile_bytes":-1}`, `{"bogus":1}`, `not json`} {
-		_, err := parseVectorMatmulConfig(EncodeVectorMatmulConfig(1, `[[1,0,0,0]]`, options, false), vt)
+	// the options are a JSON object; only "metric" is read, other keys are ignored
+	for options, metric := range map[string]int{
+		``: vectorMatmulInnerProduct, `{"mode":"auto"}`: vectorMatmulInnerProduct, `{"mode":"gpu","tile_bytes":-1}`: vectorMatmulInnerProduct,
+		`{"metric":"inner_product"}`: vectorMatmulInnerProduct, `{"metric":"cosine","x":[1]}`: vectorMatmulCosine, `{"metric":"l2sq"}`: vectorMatmulL2sq,
+	} {
+		cfg, err := parseVectorMatmulConfig(EncodeVectorMatmulConfig(1, `[[1,0,0,0]]`, options, false), vt)
 		require.NoError(t, err, options)
+		require.Equal(t, metric, cfg.metric, options)
+	}
+	for options, want := range map[string]string{
+		`not json`: "JSON object", `[1]`: "JSON object", `null`: "JSON object",
+		`{"metric":"l2"}`: "not inner_product, cosine or l2sq", `{"metric":1}`: "not inner_product, cosine or l2sq",
+		`{"metric":"COSINE"}`: "not inner_product, cosine or l2sq",
+	} {
+		_, err := parseVectorMatmulConfig(EncodeVectorMatmulConfig(1, `[[1,0,0,0]]`, options, false), vt)
+		require.ErrorContains(t, err, want, options)
 	}
 	badFlag := EncodeVectorMatmulConfig(1, `[[1]]`, "", true)
 	badFlag[len(badFlag)-1] = 4
@@ -424,7 +437,7 @@ func TestVectorMatmulAccountedMerge(t *testing.T) {
 	merge := []uint64{2, 1}
 	require.NoError(t, dst.PreflightBatchMerge(src, 0, merge))
 	require.NoError(t, dst.BatchMerge(src, 0, merge))
-	require.Equal(t, []string{`[[],[]]`, `[[["1",1],["3",1]],[["2",1],["3",1]]]`}, vmFlush(t, mp, dst))
+	require.Equal(t, []string{`[[],[]]`, `[[["1",-1],["3",-1]],[["2",-1],["3",-1]]]`}, vmFlush(t, mp, dst))
 
 	require.ErrorIs(t, dst.PreflightBatchMerge(nil, 0, merge), mpool.ErrAllocationAccountInvalid)
 	require.ErrorIs(t, dst.PreflightBatchMerge(src, 5, merge), mpool.ErrAllocationAccountInvalid)
@@ -470,7 +483,7 @@ func TestVectorMatmulStateCodec(t *testing.T) {
 	want, err := s.appendJSON(nil)
 	require.NoError(t, err)
 	require.Equal(t, string(want), string(got))
-	require.Equal(t, `[[["bb",2],["a",1]],[["a",5],["bb",4]]]`, string(got))
+	require.Equal(t, `[[["bb",-2],["a",-1]],[["a",-5],["bb",-4]]]`, string(got))
 
 	for _, bad := range [][]byte{
 		{},
@@ -504,7 +517,7 @@ func TestVectorMatmulNullAndConstInputs(t *testing.T) {
 	require.NoError(t, err)
 	defer vmFree(mp, []*vector.Vector{idv, constVec})
 	require.NoError(t, exec.BulkFill(0, []*vector.Vector{idv, constVec}))
-	require.Equal(t, []string{`[[["2",2]]]`}, vmFlush(t, mp, exec))
+	require.Equal(t, []string{`[[["2",-2]]]`}, vmFlush(t, mp, exec))
 
 	// a malformed cell is an error
 	bad := vector.NewVec(vmVecType())
@@ -729,7 +742,7 @@ func TestVectorMatmulPlainTypes(t *testing.T) {
 			require.Len(t, got[j], k, c.oid.String())
 			for i := 0; i < k; i++ {
 				require.Equal(t, strconv.Itoa(hits[i].id), got[j][i][0], "%s query %d rank %d", c.oid, j, i)
-				require.InDelta(t, hits[i].score, got[j][i][1], 1e-4*math.Max(1, math.Abs(hits[i].score)), c.oid.String())
+				require.InDelta(t, -hits[i].score, got[j][i][1], 1e-4*math.Max(1, math.Abs(hits[i].score)), c.oid.String())
 			}
 		}
 	}
@@ -843,7 +856,7 @@ func TestVectorMatmulGPUMemoryAdmission(t *testing.T) {
 	vectorMatmulGPU = &vectorMatmulGPUHooks{
 		available: func() bool { return true },
 		hostBytes: func(format, dim, nq, maxRows int) uint64 { return hostBytes },
-		create: func(format, dim, nq int, queryCells []byte, cellBytes, maxRows, topk int) (vectorMatmulEngine, error) {
+		create: func(format, dim, nq int, queryCells []byte, cellBytes, maxRows, topk, metric int) (vectorMatmulEngine, error) {
 			created++
 			if createErr != nil {
 				return nil, createErr
@@ -977,4 +990,106 @@ func TestVectorMatmulBinaryQueries(t *testing.T) {
 	bad[len(bad)-1] = 4
 	_, err := parseVectorMatmulConfig(bad, vt)
 	require.ErrorContains(t, err, "malformed configuration")
+}
+
+// TestVectorMatmulMetrics checks the reported distances of each metric against a float64
+// reference on the stored values: -dot, 1 - cos (1 with a zero vector) and the squared L2
+// distance computed directly, nearest first; a row equal to a query has distance 0.
+func TestVectorMatmulMetrics(t *testing.T) {
+	const dim = 8
+	rng := rand.New(rand.NewSource(3))
+	queries := [][]float32{make([]float32, dim), make([]float32, dim)}
+	rows := make([][]float32, 40)
+	for q := range queries {
+		for d := range queries[q] {
+			queries[q][d] = float32(rng.Intn(9) - 4)
+		}
+	}
+	for i := range rows {
+		rows[i] = make([]float32, dim)
+		for d := range rows[i] {
+			rows[i][d] = float32(rng.Intn(9) - 4)
+		}
+	}
+	rows[0] = make([]float32, dim) // zero vector
+	copy(rows[1], queries[0])      // equal to query 0
+	qtext, err := json.Marshal(queries)
+	require.NoError(t, err)
+	mp := mpool.MustNewZero()
+	for name, m := range map[string]int{"inner_product": vectorMatmulInnerProduct, "cosine": vectorMatmulCosine, "l2sq": vectorMatmulL2sq} {
+		for _, vt := range []types.Type{types.New(types.T_array_float32, dim, 0), types.New(types.T_array_float8, dim, 0), types.New(types.T_array_int8, dim, 0)} {
+			const k = 6
+			cfg := EncodeVectorMatmulConfig(k, string(qtext), `{"metric":"`+name+`"}`, false)
+			agg, err := makeVectorMatmul(mp, AggIdOfVectorMatmul, false, []types.Type{types.T_int64.ToType(), vt})
+			require.NoError(t, err)
+			exec := agg.(*vectorMatmulExec)
+			require.NoError(t, exec.GroupGrow(1))
+			require.NoError(t, exec.SetExtraInformation(cfg, 0))
+			idv, vv := vector.NewVec(types.T_int64.ToType()), vector.NewVec(vt)
+			for i, r := range rows {
+				require.NoError(t, vector.AppendFixed(idv, int64(i), false, mp))
+				switch vt.Oid {
+				case types.T_array_float32:
+					require.NoError(t, vector.AppendArray(vv, r, false, mp))
+				case types.T_array_int8:
+					b := make([]int8, dim)
+					for d, x := range r {
+						b[d] = int8(x)
+					}
+					require.NoError(t, vector.AppendArray(vv, b, false, mp))
+				default:
+					cell, err := types.AppendBlockScaled(nil, types.BlockScaledMXFP8, r)
+					require.NoError(t, err)
+					require.NoError(t, vector.AppendBytes(vv, cell, false, mp))
+				}
+			}
+			require.NoError(t, exec.BulkFill(0, []*vector.Vector{idv, vv}))
+			out := vmFlush(t, mp, exec)
+			exec.Free()
+			vmFree(mp, []*vector.Vector{idv, vv})
+
+			var got [][][]any
+			require.NoError(t, json.Unmarshal([]byte(out[0]), &got))
+			for q, qv := range queries {
+				type hit struct {
+					id   int
+					dist float64
+				}
+				hits := make([]hit, len(rows))
+				for i, r := range rows {
+					var dot, nr, nq, l2 float64
+					for d := range r {
+						x, y := float64(r[d]), float64(qv[d])
+						dot, nr, nq, l2 = dot+x*y, nr+x*x, nq+y*y, l2+(x-y)*(x-y)
+					}
+					dist := -dot
+					switch m {
+					case vectorMatmulCosine:
+						dist = 1
+						if nr > 0 && nq > 0 {
+							dist = 1 - dot/math.Sqrt(nr*nq)
+						}
+					case vectorMatmulL2sq:
+						dist = l2
+					}
+					hits[i] = hit{i, float64(float32(dist))}
+				}
+				sort.Slice(hits, func(a, b int) bool {
+					if hits[a].dist != hits[b].dist {
+						return hits[a].dist < hits[b].dist
+					}
+					return strconv.Itoa(hits[a].id) < strconv.Itoa(hits[b].id)
+				})
+				require.Len(t, got[q], k)
+				for i := 0; i < k; i++ {
+					require.InDelta(t, hits[i].dist, got[q][i][1], 1e-5*math.Max(1, math.Abs(hits[i].dist)), "%s %s query %d rank %d", name, vt.Oid, q, i)
+				}
+				if m == vectorMatmulL2sq {
+					require.Equal(t, "1", got[0][0][0], "a row equal to the query is nearest")
+					require.Equal(t, float64(0), got[0][0][1])
+				}
+			}
+		}
+	}
+	require.Zero(t, mp.CurrNB())
 }
