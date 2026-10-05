@@ -84,14 +84,11 @@ func TestMetricRecoversLaneCancellation29496(t *testing.T) {
 		require.InDelta(t, 0.0, d, 1e-9, "lane cancellation must recover the in-order 0, got %v", d)
 	})
 
-	// NARROW COSINE is intentionally NOT recovered here: real (f32/f64) cosine recovers via its
-	// f64 norm recompute (cosineNormsOK/cosineRecomputeF64), but the narrow cosine kernels have no
-	// such guard and still map the lane-cancellation NaN to +Inf. Recovering it is a separate
-	// follow-up (out of the inner-product/spherical scope of this change); the +Inf is well-ordered
-	// and rejected at the serve boundary, never a wrong finite winner.
-	t.Run("cosine_bf16_still_posinf", func(t *testing.T) {
+	// Narrow cosine recovers too: the SIMD dot lanes cancel to NaN (cosineDistClamped -> +Inf), then the
+	// metric owner recomputes via the scalar reference. The dot cancels to 0, so the cosine distance is 1.
+	t.Run("cosine_bf16", func(t *testing.T) {
 		d, err := cosineDistanceBF16SIMD(ab, bb)
 		require.NoError(t, err)
-		require.Truef(t, math.IsInf(d, 1), "narrow cosine lane cancellation still maps to +Inf, got %v", d)
+		require.InDeltaf(t, 1.0, d, 1e-9, "lane cancellation must recover cosine distance 1, got %v", d)
 	})
 }

@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
@@ -117,4 +118,47 @@ func TestBruteForceRecoversLostWinner29496(t *testing.T) {
 		vectorindex.RuntimeConfig{Limit: 1, NThreads: 1}, keys, dists))
 	require.Equalf(t, int64(0), keys[0],
 		"nearest must be candidate 0 (distance 0); the lane-cancellation candidate must not be dropped (got key=%v dist=%v)", keys[0], dists[0])
+}
+
+// TestBruteForceRecoversNarrowCosineWinner29496 is the public SELECTION oracle for narrow (BF16)
+// cosine: the SIMD dot lanes overflow before cancellation and map to +Inf, which would drop the true
+// nearest. Witness (dim 32, BF16): query 2^60; candidate 0 alternates +/-2^67 (orthogonal to the query
+// -> cosine distance 1); candidate 1 is all -1 (antiparallel -> cosine distance 2). Every stored value
+// is a finite, admissible BF16 and every product is a finite +/-2^127. Without recovery NEON returns
+// +Inf for candidate 0 and wrongly selects candidate 1 (distance ~2); with the metric owner recovering
+// the in-order reference, candidate 0 scores 1 and correctly wins (#29496).
+func TestBruteForceRecoversNarrowCosineWinner29496(t *testing.T) {
+	const dim = 32
+	q := make([]types.BF16, dim)
+	cand0 := make([]types.BF16, dim) // alternating +/-2^67: orthogonal to q -> cosine distance 1
+	cand1 := make([]types.BF16, dim) // all -1: antiparallel -> cosine distance 2
+	hi := types.BF16FromFloat32(1 << 67)
+	negHi := types.BF16FromFloat32(-(1 << 67))
+	one := types.BF16FromFloat32(1 << 60)
+	negOne := types.BF16FromFloat32(-1)
+	for i := range q {
+		q[i] = one
+		if i%2 == 0 {
+			cand0[i] = hi
+		} else {
+			cand0[i] = negHi
+		}
+		cand1[i] = negOne
+	}
+
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	sqlproc := sqlexec.NewSqlProcess(proc)
+	idx := &GoBruteForceIndex[types.BF16, float64]{
+		Dataset:   [][]types.BF16{cand0, cand1},
+		Metric:    metric.Metric_CosineDistance,
+		Dimension: dim,
+		Count:     2,
+	}
+
+	keys := make([]int64, 1)
+	dists := make([]float32, 1)
+	require.NoError(t, idx.SearchFloat32(sqlproc, [][]types.BF16{q},
+		vectorindex.RuntimeConfig{Limit: 1, NThreads: 1}, keys, dists))
+	require.Equalf(t, int64(0), keys[0],
+		"nearest must be candidate 0 (cosine distance 1); narrow-cosine lane cancellation must not drop it (got key=%v dist=%v)", keys[0], dists[0])
 }

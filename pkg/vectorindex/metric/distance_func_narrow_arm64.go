@@ -192,7 +192,7 @@ func cosineDistanceBF16SIMD(a, b []types.BF16) (float64, error) {
 	if denom == 0 {
 		return 1.0, nil
 	}
-	return cosineDistClamped(float64(dot), denom), nil
+	return recoverCosineBF16(cosineDistClamped(float64(dot), denom), a, b)
 }
 
 // ---- f16 ----
@@ -347,5 +347,5 @@ func cosineDistanceF16SIMD(a, b []types.Float16) (float64, error) {
 	if denom == 0 {
 		return 1.0, nil
 	}
-	return cosineDistClamped(float64(dot), denom), nil
+	return recoverCosineF16(cosineDistClamped(float64(dot), denom), a, b)
 }

@@ -54,6 +54,25 @@ func recoverInnerProductF16(res float64, a, b []types.Float16) (float64, error) 
 	return innerProductF16(a, b)
 }
 
+// recoverCosineBF16/F16 recover narrow cosine the same way: the SIMD lanes sum dot/norms in separated
+// float32 accumulators, so a bf16 run whose products are each finite (e.g. +/-2^127) can overflow a
+// lane to +/-Inf before the reduction cancels, mapping to +Inf via cosineDistClamped. On a non-finite
+// result, recompute via the scalar reference (in source order, with its own f64 norm recompute), which
+// recovers the finite cosine. f16 cannot overflow float32 so its recover is a no-op guard.
+func recoverCosineBF16(res float64, a, b []types.BF16) (float64, error) {
+	if isFinite(res) {
+		return res, nil
+	}
+	return cosineDistanceBF16(a, b)
+}
+
+func recoverCosineF16(res float64, a, b []types.Float16) (float64, error) {
+	if isFinite(res) {
+		return res, nil
+	}
+	return cosineDistanceF16(a, b)
+}
+
 func recoverSpherical[T types.RealNumbers](res T, p, q []T) (T, error) {
 	if isFinite(res) {
 		return res, nil
