@@ -3992,8 +3992,12 @@ func TestLastDayPersistedVarcharABI(t *testing.T) {
 }
 
 func TestDecimalCastSelectionAndErrorReuse(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
+	proc := testutil.NewProcess(nil)
+	t.Cleanup(func() {
+		proc.Base.FileService.Close(proc.Ctx)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
 	t.Run("registered cast", func(t *testing.T) {
 		sourceType := types.New(types.T_decimal128, 38, 30)
 		targetType := types.New(types.T_decimal64, 3, 2)
@@ -4048,8 +4052,12 @@ func TestDecimalCastSelectionAndErrorReuse(t *testing.T) {
 }
 
 func TestDecimalWideningEmptyBatchReuse(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
+	proc := testutil.NewProcess(nil)
+	t.Cleanup(func() {
+		proc.Base.FileService.Close(proc.Ctx)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
 	for _, nullable := range []bool{false, true} {
 		t.Run(fmt.Sprintf("nullable=%v", nullable), func(t *testing.T) {
 			sourceType := types.New(types.T_decimal64, 18, 2)
