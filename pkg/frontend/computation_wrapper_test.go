@@ -6572,7 +6572,6 @@ func TestBuildExecuteUserParamsPreservesExplicitTextOverride(t *testing.T) {
 
 func TestPreparedBinaryIntegerCastDiagnosticProofBoundary(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	t.Cleanup(proc.Free)
 	for _, tc := range []struct {
 		name      string
 		value     string
@@ -6646,7 +6645,6 @@ func TestPreparedBinaryIntegerCastDiagnosticProofBoundary(t *testing.T) {
 
 func TestPreparedBinaryIntegerSerialDiagnosticProofBoundary(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	t.Cleanup(proc.Free)
 	params := vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(params, []byte("1"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(params, []byte("2"), false, proc.Mp()))

@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -36,8 +35,8 @@ func TestDecimal256HighScaleMultiplicationPublicPath(t *testing.T) {
 	require.Equal(t, int32(65), expr.Typ.Width)
 	require.Equal(t, int32(65), expr.Typ.Scale)
 
-	proc := testutil.NewProc(nil)
-	t.Cleanup(func() { proc.Base.FileService.Close(proc.Ctx); proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	proc := newPlanTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 	executor, err := colexec.NewExpressionExecutor(proc, expr)
 	require.NoError(t, err)
 	defer executor.Free()
@@ -98,8 +97,8 @@ func TestDecimal256ScaleAlignmentPublicPath(t *testing.T) {
 			require.Len(t, args, 2)
 			require.Equal(t, tc.leftScale, args[0].Typ.Scale)
 			require.Equal(t, tc.rightScale, args[1].Typ.Scale)
-			proc := testutil.NewProc(nil)
-			t.Cleanup(func() { proc.Base.FileService.Close(proc.Ctx); proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+			proc := newPlanTestProcess(t)
+			t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 			input := batch.NewWithSize(1)
 			t.Cleanup(func() { input.Clean(proc.Mp()) })
 			input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
@@ -148,8 +147,8 @@ func TestDecimal256ArithmeticPrecisionPublicPath(t *testing.T) {
 	require.Equal(t, int32(types.T_decimal256), expr.Typ.Id)
 	require.Equal(t, int32(65), expr.Typ.Width)
 	require.Equal(t, int32(12), expr.Typ.Scale)
-	proc := testutil.NewProc(nil)
-	t.Cleanup(func() { proc.Base.FileService.Close(proc.Ctx); proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	proc := newPlanTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 	executor, err := colexec.NewExpressionExecutor(proc, expr)
 	require.NoError(t, err)
 	defer executor.Free()

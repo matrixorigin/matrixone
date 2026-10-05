@@ -236,7 +236,6 @@ func TestXMLUpdateOracle(t *testing.T) {
 
 func TestXMLUpdateTextTargets(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	t.Cleanup(proc.Free)
 	for _, tc := range []struct {
 		name, xml, path, want string
 	}{
