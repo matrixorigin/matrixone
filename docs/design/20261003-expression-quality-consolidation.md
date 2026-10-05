@@ -478,3 +478,177 @@ establish whole-query, complete-package CPU or whole-CI improvements. Earlier
 failed race evidence is retained as historical evidence; its gate is closed by
 validation of the corrected dependency, rather than by repeating the old code.
 The wider #29249 task remains ongoing.
+
+
+## Final decimal and expression contracts (PR #29618)
+
+This section consolidates the PR's added design and evidence. Earlier sections
+are the inherited design record. The delivery fixes #29614 and #29615 and relates
+to #29249. Validation claims below identify their scope; internal API probes do
+not establish SQL reachability or workload throughput.
+
+### Production responsibilities
+
+| Contract | Existing owner and correction | Boundaries retained |
+| --- | --- | --- |
+| Unsigned rounded division (#29614) | `Div256` reuses `div256TruncQuoRem`, compares the unsigned remainder against the parity-aware half divisor, and propagates quotient carry | Signed callers restore sign; SQL adapters check signed range and retain BigInt only for scale overflow. Ordinary SQL already protected this primitive failure. |
+| Declared precision (#29615) | `decimal256BatchArith` rejects a remaining magnitude sign bit after absolute-value normalization, before its precision comparison | Common add/sub/mul/div publication owner; constrained widths 1..75; internal width-76 carrier bypass preserved. No per-kernel precision checks. |
+| Bounded rescaling | `ScaleInplace` reuses `Div128`; `ScaleInplace`/`ScaleTruncate` return immediately for zero coefficients | Remove unused `Div128InPlace`; nonzero rounding and error-state semantics retained. Unknown external Go API consumers are outside the compatibility claim. |
+| Decimal CAST reduction | Six D128/D256 adapters reuse source `Scale`, then existing target parser at scale zero | Remove six-caller BigInt helper and discarded formatting; growth, explicit CAST clamping, target precision and executor-owned selection retained. |
+| Empty widening | `decimal64ToDecimal128Array` returns for zero logical rows | Existing result reset owns length/NULL cleanup; positive-length BCE and constant replication retained. |
+| Parameter acquisition | Fixed/string reuse requires complete Type equality; fixed reuse also admits wrapper shape before decoding | Rejected reuse does not decode or mutate. `GenerateFunctionFixedTypeParameter` remains the conversion owner; no new cache, state or buffer. |
+| Unary and decimal-prefix admission | Shared bounded mask publication and existing string conversion templates | Preserve row indexes, NULL/error policy and historical binary-input distinction. See [unary design](20261004-unary-selection-execution.md). |
+
+The #29614 primitive regression includes seven independent rounding boundaries,
+exact zero errors, half parity and quotient carry. A scan-expression row retains
+operand/result metadata and NULL checks. Existing AVG, interpolation and CU
+accounting consumers remain covered. The former alternative division algorithm
+was retired when main supplied the canonical quotient/remainder owner.
+
+For #29615, legal SQL inputs can produce coefficient -2^255 while carrying
+DECIMAL(65,12), which cannot represent it. The shared 11-cell arithmetic precision
+holder preserves the old 65-digit product/66-digit overflow cases and adds
+minimum-output VV/SV/VS, selection, NULL and width-76 controls. Four distinct
+rounded-division precision cases remain separate. The existing planner/executor
+root and service BVT check the exact SQL; BVT also checks the last valid and first
+invalid declared coefficients, recovery after errors and a typed NULL.
+
+Converted parameter tests exercise D64/F32/F64 constant and flat inputs through
+NULL, values, changed payload, nullable flat values and recovery in one frame
+slot. Native D128 is the successful-reuse control. Direct rejected reuse leaves
+the cached wrapper intact; acquisition replaces it via the existing conversion
+owner. The real `plusFn` consumer checks left/right NULL recovery, complete result
+type and exact coefficients. D64+F64 ordinary SQL binds to F64: the panic evidence
+is at the function API, not a claimed SQL crash.
+
+### Test ownership and retirement
+
+Expected coefficients use literal limbs or an independent integer oracle.
+Masks assert exact membership/cardinality and untouched initially masked scratch
+outputs. Strict errors assert their category; scratch rollback is not promised.
+VV/SV/VS denote the actual physical loops. Scale-route witnesses use real source
+scales and distinguish inline success from checked fallback. Pure helpers retain
+separate argument/status assertions rather than being replaced by batch success.
+
+The following complete maps retain the old modulo and D64/D128 IntDiv contracts.
+In modulo names S/X/Y mean equal/dividend/divisor scaling, 64/W distinguish D128
+small/wide divisors, and N/M/P/E/Z mean ordinary, initial mask, permissive zero,
+strict error and scalar zero. IntDiv additionally uses H for a wide dividend and
+numeric suffixes for actual scale differences.
+
+#### Modulo retirement map
+
+| Old owner | Old children → retained named destinations |
+| --- | --- |
+| `TestModByZero_NullBehavior` | `(root)` → `128:S64_VV_N`, `64:S_VV_N` |
+| `TestNullHandling` | `D128Mod_WithNulls` → `128:X64_VV_M` |
+| `TestD64Mod` | `VecVec` → `64:S_VV_N`; `ScalarVec` → `64:S_SV_N`; `VecScalar` → `64:S_VS_N`; `Kernel` → `64:Kernel`; `DiffScale_VecVec` → `64:X_VV_N`; `DiffScale_ScalarVec` → `64:X_SV_N`; `DiffScale_VecScalar` → `64:Y_VS_N` |
+| `TestD128Mod` | `VecVec` → `128:S64_VV_N`; `ScalarVec` → `128:S64_SV_N`; `VecScalar` → `128:S64_VS_N`; `Kernel` → `128:Kernel`; `DiffScale_VecVec` → `128:X64_VV_N`; `DiffScale_ScalarVec` → `128:X64_SV_N`; `DiffScale_VecScalar` → `128:Y_VS_N` |
+| `TestD128Mod_DiffScale` | `VecVec_Scale1GT` → `128:Y_VV_N`; `VecVec_Scale1LT` → `128:X64_VV_N`; `ScalarVec` → `128:Y_SV_N`; `VecScalar` → `128:Y_VS_N` |
+| `TestD64Mod_DiffScale` | `VecVec_Scale1GT` → `64:Y_VV_N`; `VecVec_Scale1LT` → `64:X_VV_N`; `ScalarVec` → `64:Y_SV_N`; `VecScalar` → `64:Y_VS_N` |
+| `TestD128Mod_NullPaths` | `SameScale_VecVec_Nulls` → `128:S64_VV_M`; `SameScale_ConstDiv_Nulls` → `128:S64_VS_M`; `DiffScale_VecVec_Nulls` → `128:Y_VV_M`; `DiffScale_ConstDiv_Nulls` → `128:Y_VS_M`; `LargeDivisor_SameScale_Nulls` → `128:SW_VV_M` |
+| `TestD64Mod_ScaleXPath` | `VecVec_NoNull` → `64:X_VV_N`; `VecVec_Nulls` → `64:X_VV_M`; `ConstLeft_NoNull` → `64:X_SV_N`; `ConstLeft_Nulls` → `64:X_SV_M`; `ConstRight_NoNull` → `64:X_VS_N`; `ConstRight_Nulls` → `64:X_VS_M` |
+| `TestD128Mod_SameScale_LargeDivisors` | `VecVec_LargeBoth` → `128:SW_VV_N`; `ConstDiv_Large` → `128:SW_VS_N`; `ConstDividend_Large` → `128:SW_SV_N`; `VecVec_LargeBoth_Nulls` → `128:SW_VV_M` |
+| `TestD128Mod_DiffScale_AllDispatches` | `ConstDividend_DiffScale_Large` → `128:Y_SV_N`; `ConstDivisor_DiffScale_Large` → `128:YW_VS_N`; `VecVec_DiffScale_Large_Nulls` → `128:Y_VV_M` |
+| `TestD128Mod_AllDispatches_Extra` | `SameScale_ConstDividend_NoNull` → `128:S64_SV_N`; `SameScale_ConstDividend_Nulls` → `128:S64_SV_M`; `SameScale_ConstDivisor_NoNull` → `128:S64_VS_N`; `SameScale_VecVec_NoNull` → `128:S64_VV_N`; `DiffScale_ConstDividend_NoNull` → `128:Y_SV_N`; `DiffScale_ConstDividend_Nulls` → `128:Y_SV_M`; `DiffScale_ConstDivisor_NoNull` → `128:Y_VS_N` |
+| `TestD64Mod_SameScale_AllDispatches` | `ConstLeft_NoNull` → `64:S_SV_N`; `ConstLeft_Nulls` → `64:S_SV_M`; `ConstRight_NoNull` → `64:S_VS_N`; `ConstRight_Nulls` → `64:S_VS_M` |
+| `TestD64Mod_ConstPaths_Extra` | `ScaleX_ConstLeft_Nulls` → `64:X_SV_M`; `ScaleX_ConstRight_Nulls` → `64:X_VS_M`; `NotScaleX_ConstLeft_NoNull` → `64:Y_SV_N`; `NotScaleX_ConstLeft_Nulls` → `64:Y_SV_M`; `NotScaleX_ConstRight_Nulls` → `64:Y_VS_M`; `NotScaleX_VecVec_Nulls` → `64:Y_VV_M` |
+| `TestMiscEdgePaths` | `D128IntDiv_ZeroConst_ShouldError` → `retained unchanged`; `D256IntDiv_ZeroConst_ShouldError` → `retained unchanged`; `D64Mod_SameScale_VecVec_Nulls` → `64:S_VV_M` |
+| `TestD128Mod_DivByZeroPaths` | `VecVec_DiffScale_DivByZero` → `128:XW_VV_N`; `VecVec_DiffScale_DivByZero_WithNull` → `128:XW_VV_P`; `ConstVec_DiffScale_DivByZero` → `128:XW_SV_N`; `VecConst_ZeroDivisor` → `128:X64_VS_Z`; `VecConst_SameScale_ZeroDivisor` → `128:S64_VS_Z`; `VecVec_SameScale_DivByZero` → `128:SW_VV_N` |
+| `TestD64Mod_DivByZeroPaths` | `VecVec_SameScale_DivByZero` → `64:S_VV_N`; `VecVec_DiffScale_DivByZero` → `64:X_VV_N`; `VecVec_DiffScale_DivByZero_WithNull` → `64:X_VV_P`; `ConstVec_DivByZero` → `64:S_SV_N`; `VecConst_ZeroDivisor` → `64:S_VS_Z`; `ScaleX_DivByZero` → `64:X_VV_N`; `ScaleX_DivByZero_WithNull` → `64:X_VV_P` |
+| `TestD64Mod_ConstAndScalePaths` | `ConstVec_ScaleX` → `64:X_SV_N`; `VecConst_ScaleX` → `64:X_VS_N`; `ConstVec_DiffScale_NotScaleX` → `64:Y_SV_N`; `VecConst_DiffScale_NotScaleX` → `64:Y_VS_N`; `ConstVec_SameScale` → `64:S_SV_N` |
+| `TestD128Mod_ConstAndLargeScalePaths` | `ConstVec_DiffScale_ScaleX` → `128:XW_SV_N`; `VecConst_DiffScale_ScaleX` → `128:XW_VS_N`; `ConstVec_SameScale` → `128:SW_SV_N`; `VecConst_SameScale` → `128:SW_VS_N`; `VecConst_SameScale_Large` → `128:SW_VS_N` |
+| `TestD64Mod_ScaleXConstPaths` | `ScaleX_VecVec_NoNull` → `64:X_VV_N`; `ScaleX_ConstVec_NoNull` → `64:X_SV_N`; `ScaleX_ConstVec_WithNull` → `64:X_SV_M`; `ScaleX_VecConst_NoNull` → `64:X_VS_N`; `ScaleX_VecConst_WithNull` → `64:X_VS_M`; `ScaleX_VecVec_DivZero_Error` → `64:X_VV_E`; `ScaleX_ConstVec_DivZero_Nullify` → `64:X_SV_N`; `ScaleX_ConstVec_DivZero_Error` → `64:X_SV_E`; `ScaleX_VecConst_Zero_Nullify` → `64:X_VS_Z`; `ScaleX_VecConst_Zero_Error` → `64:X_VS_E`; `SameScale_VecVec_DivZero_Error` → `64:S_VV_E`; `SameScale_ConstVec_DivZero_Error` → `64:S_SV_E`; `SameScale_VecConst_Zero_Error` → `64:S_VS_E` |
+| `TestD64Mod_NonScaleXConstPaths` | `NonScaleX_VecVec_NoNull` → `64:Y_VV_N`; `NonScaleX_ConstVec_NoNull` → `64:Y_SV_N`; `NonScaleX_ConstVec_WithNull` → `64:Y_SV_M`; `NonScaleX_VecConst_NoNull` → `64:Y_VS_N`; `NonScaleX_VecConst_WithNull` → `64:Y_VS_M`; `NonScaleX_DivZero_ConstVec_Error` → `64:Y_SV_E`; `NonScaleX_DivZero_VecConst_Error` → `64:Y_VS_E`; `NonScaleX_DivZero_VecConst_Nullify` → `64:Y_VS_Z`; `NonScaleX_DivZero_ConstVec_Nullify` → `64:Y_SV_N`; `NonScaleX_DivZero_VecVec_Error` → `64:Y_VV_E` |
+| `TestD128Mod_ConstAndShouldError` | `SameScale_VecVec_DivZero_Error` → `128:S64_VV_E`; `SameScale_ConstVec_DivZero_Error` → `128:S64_SV_E`; `SameScale_VecConst_Zero_Error` → `128:S64_VS_E`; `DiffScale_ConstVec_NoNull` → `128:Y_SV_N`; `DiffScale_ConstVec_WithNull` → `128:Y_SV_M`; `DiffScale_VecConst_NoNull` → `128:Y_VS_N`; `DiffScale_VecConst_WithNull` → `128:Y_VS_M`; `DiffScale_DivZero_ConstVec_Error` → `128:Y_SV_E`; `DiffScale_DivZero_VecConst_Error` → `128:Y_VS_E`; `DiffScale_DivZero_VecConst_Nullify` → `128:Y_VS_Z`; `DiffScale_DivZero_ConstVec_Nullify` → `128:Y_SV_N`; `DiffScale_DivZero_VecVec_Error` → `128:Y_VV_E` |
+
+#### D64/D128 integer-division retirement map
+
+| Old owner | Old children → retained children |
+| --- | --- |
+| `TestD64IntDiv` | `VecVec` → `64:S_VV_N`, `64:S_VV_E`; `ScalarVec` → `64:S_SV_N`, `64:S_SV_E`; `VecScalar` → `64:S_VS_N`, `64:S_VS_E`; `DivByZero_Null` → `64:S_VV_P`; `DiffScale` → `64:Y2_VV_N` |
+| `TestD128IntDiv` | `VecVec` → `128:S_VV_N`, `128:S_VV_E`; `ScalarVec` → `128:S_SV_N`, `128:S_SV_E`; `VecScalar` → `128:S_VS_N`, `128:S_VS_E`; `DivByZero_Null` → `128:S_VV_P`, `128:H_VV_N`; `DiffScale` → `128:Y2_VV_N`; `LargeValues_Fallback` → `128:W_VV_P` |
+| `TestD128IntDiv_LargeValues` | `VecVec_Large` → `128:W_VV_P`; `ConstDiv_Large` → `128:W_VS_N`; `ConstDividend_Large` → `128:W_SV_P`; `DiffScale_Large` → `128:Y4W_VV_N`, `128:Y16W_VV_N` |
+| `TestD64IntDiv_NotCanInline` | `VecVec_NoNull` → `64:X14_VV_N`; `VecVec_Nulls` → `64:X14_VV_M`; `ConstLeft_NoNull` → `64:X14_SV_N`; `ConstLeft_Nulls` → `64:X14_SV_M`; `ConstRight_NoNull` → `64:X14_VS_N`; `ConstRight_Nulls` → `64:X14_VS_M` |
+| `TestD128IntDiv_SameScale_AllDispatches` | `VecVec_NoNull` → `128:S_VV_P`, `128:H_VV_N`; `ConstDividend_Large` → `128:W_SV_P`; `ConstDividend_NoNull` → `128:S_SV_P`, `128:H_SV_N`; `VecVec_Nulls` → `128:S_VV_M`; `VecVec_Large_Nulls` → `128:W_VV_M` |
+| `TestD128IntDiv_AllDispatches_Extra` | `SameScale_ConstLeft_NoNull` → `128:S_SV_P`, `128:H_SV_N`; `DiffScale_ConstLeft_NoNull` → `128:Y4_SV_N`; `DiffScale_ConstLeft_Nulls` → `128:Y4_SV_M`; `DiffScale_ConstRight_NoNull` → `128:Y4_VS_N`; `DiffScale_ConstRight_Nulls` → `128:Y4_VS_M`; `DiffScale_VecVec_Nulls` → `128:Y4_VV_M`; `SameScale_ConstLeft_Nulls` → `128:S_SV_M` |
+| `TestD64IntDiv_ConstPaths` | `ConstLeft_NoNull` → `64:S_SV_P`; `ConstLeft_Nulls` → `64:S_SV_M`, `64:S_SV_P`; `ConstRight_Nulls` → `64:S_VS_M`; `VecVec_Nulls` → `64:S_VV_M`, `64:S_VV_P` |
+| `TestD128IntDiv_DivByZeroPaths` | `VecVec_DivByZero` → `128:W_VV_P`; `ConstVec_DivByZero` → `128:W_SV_P`; `HighScale_ScaleLtScale1` → `128:Y4W_VV_N`, `128:Y16W_VV_N`; `ConstVec_DivByZero_WithNull` → `128:W_SV_M`; `VecConst_ZeroDivisor` → `128:S_VS_Z`, `128:H_VS_N` |
+| `TestD64IntDiv_DivByZeroPaths` | `VecVec_DivByZero` → `64:S_VV_P`; `ConstVec_DivByZero` → `64:S_SV_P`; `ConstVec_DivByZero_WithNull` → `64:S_SV_M`, `64:S_SV_P`; `VecVec_DivByZero_WithNull` → `64:S_VV_M`, `64:S_VV_P`; `VecConst_ZeroDivisor` → `64:S_VS_Z`; `HighScale_ScaleLtScale1` → `64:Y16_VV_N`, `64:Y8_VV_N` |
+| `TestD64IntDiv_InlineFallbackPaths` | `VecVec_LargeValues` → `64:Y16_VV_N`, `64:Y8_VV_N`; `ConstVec_LargeValues` → `64:Y8_SV_N`, `64:Y4_SV_N`; `VecConst_LargeValues` → `64:Y8_VS_N`, `64:Y4_VS_N`, `64:Y4_VS_Z` |
+| `TestD128IntDiv_InlineFallbackPaths` | `VecVec_NoNull` → `128:S_VV_P`, `128:H_VV_N`; `ConstVec_NoNull` → `128:S_SV_P`, `128:H_SV_N`; `VecConst_NoNull` → `128:S_VS_Z`, `128:H_VS_N`; `VecConst_WithNull` → `128:H_VS_M` |
+| `TestD128IntDiv_ShouldErrorAndConst` | `SameScale_VecVec_DivZero_Error` → `128:S_VV_N`, `128:S_VV_E`; `SameScale_ConstVec_DivZero_Error` → `128:S_SV_N`, `128:S_SV_E`; `SameScale_VecConst_Zero_Error` → `128:S_VS_N`, `128:S_VS_E`; `DiffScale_ConstVec_NoNull` → `128:Y4_SV_N`; `DiffScale_ConstVec_WithNull` → `128:Y4_SV_M`; `DiffScale_VecConst_NoNull` → `128:Y4_VS_N`; `DiffScale_DivZero_ConstVec_Error` → `128:Y4_SV_E`; `DiffScale_DivZero_VecConst_Error` → `128:Y4_VS_E` |
+| `TestD64IntDiv_ShouldErrorPaths` | `VecVec_DivZero_Error` → `64:S_VV_N`, `64:S_VV_E`; `ConstVec_DivZero_Error` → `64:S_SV_N`, `64:S_SV_E`; `VecConst_Zero_Error` → `64:S_VS_N`, `64:S_VS_E` |
+| `TestD64IntDiv_ConstDivZeroShouldError` | `ConstVec_DivZero_Error` → `64:S_SV_N`, `64:S_SV_E`; `ConstVec_DivZero_Nullify` → `64:S_SV_P`; `VecConst_Zero_Nullify` → `64:S_VS_Z`; `DiffScale_ConstVec_NoNull` → `64:Y8_SV_N`, `64:Y4_SV_N`; `DiffScale_VecConst_NoNull` → `64:Y8_VS_N`, `64:Y4_VS_N`, `64:Y4_VS_Z`; `DiffScale_VecConst_Zero_Nullify` → `64:Y8_VS_N`, `64:Y4_VS_N`, `64:Y4_VS_Z`; `DiffScale_ConstVec_DivZero_Error` → `64:Y4_SV_E`; `DiffScale_VecConst_Zero_Error` → `64:Y4_VS_E`; `DiffScale_ConstVec_WithNull` → `64:Y4_SV_M` |
+
+#### Other retained families
+
+| Former coverage | Retained owner and independent additions |
+| --- | --- |
+| Eight direct D256 narrow-dispatch children | All nine strengthened dispatch rows are retained within `TestD256IntDiv`; remove unused `scale` argument. Exact quotients and masks replace success-only checks; add genuine positive adjustment above 19. |
+| Six D256 roots, 45 calls/1,261 rows | Existing `TestD256IntDiv`: 42 named calls/109 rows; real narrow/generic VV/SV/VS, signed/truncated results, scale direction, late pre-scan, masks, strict/permissive zero and six nearest inline-rejection controls. Retire `refD256IntDiv`, its sole helper and `hugeD256`. HighMagnitude, widening consumer, ScaleAlignmentOverflow and 50 benchmark bodies remain. |
+| Five CAST roots, 27 calls | Shared precision holder initially 33 cells: preserve every input/type/shape/NULL contract; add half-neighbors, 19-digit chunk boundaries, positive carry and negative precision rejection. Admission's 13 Boolean assertions and retyping root remain independent. |
+| Six widening-vector and four constant calls | Precision holder expands to 42 cells: retain all metadata/NULL maps and three-row replication; add empty narrowing control. Registered colexec consumer checks both NULL shapes, 0→2→0→2 reuse and cleanup. |
+| Two parameter-reuse roots | Shared `TestFunctionParameterReuseTransitions` preserves plain/nullable/constant-NULL, rejected append and fixed length 1 versus string length 0. Complete-type replacement and unchanged rejected-wrapper assertions remain; fixed and string scalar values now participate. Frame-growth identity remains separate. |
+| Four metadata-retyping roots, six calls | Preserve temporal subtraction, raw intervals, string add/sub and LEAST/GREATEST initial-result challenges; independently declare full expected Type. |
+| Fixed expected-vector construction | Existing generic literal comparator covers 23 fixed OIDs; float64 retains epsilon/NaN policy and float32 exactness. Keep row count, full Type, wrong expectation-type and bounds failures, five empty/short-mask/NULL extent controls. Variable encodings retain vector comparison. |
+| Three integer-assignment roots, 83 calls | `TestIntegerAssignmentContracts`: 79 preserved calls; three decimal overflows and float64 uint8 upper tie move into batches with identical offending literals/type/scale/destination. 101 total calls/12 exact errors; five source types add mask/NULL/reuse transitions (22 executions). |
+| Eight string and nine JSON width rows | `TestCastStringWidthContracts` retains all 17 representations/literals/flags/VARCHAR(3) policies; six exact error categories and eleven full-metadata successes. Pure UTF8/trailing-space/width helpers remain. |
+| Nine assignment-ignore roots, 64 children | Preserve literals, warnings/history, NULL, selection, binary inputs and errors. One runner accepts selection directly; remove nil-only forwarding wrapper. Each call keeps a private Process/warning session. |
+| Numeric round/ceil/floor/truncate fixtures | Keep all 11 roots in each of `func_math_complex_test.go` and `func_binary_test.go`, their cases and reuse ordering; replace unused disk FS with existing MemoryFS. Temporal/format/IO tests excluded. |
+
+All fixture-owned vectors/results are released before FileService.Close and
+Process.Free, followed by a zero-pool assertion. A Process does not own service
+closure. Shared parent fixtures are serial and have no mutable configuration
+between children. Warning sessions remain isolated. The arithmetic reuse consumer
+also uses the existing MemoryFS fixture instead of building disk services.
+
+The shared result oracle compares complete Type before decoding, including empty
+and all-NULL results. Its dedicated corruption checks independently vary OID,
+Size, Width, Scale, Charset and notNull. Expected fixed slices are never broadcast;
+NULL payload can be absent, but missing non-NULL payload remains an error.
+
+### Validation and measured costs
+
+The durable evidence ledger retains commands, source hashes, selections, terminal
+statuses, original snapshots and private mutant controls. Package normal/race,
+incremental vet/configured lint and directly affected planner/colexec regressions
+cover the final code. Unchanged arithmetic evidence includes full-width integer
+oracles and a 1,122-pair boundary challenge. These pairs are not test-node counts.
+Molint baseline diagnostics are disclosed; an exit-zero result is not a claim of
+zero diagnostics. Unrelated skipped plan children do not count as coverage.
+
+Service BVT runs `decimal_256_literal` twice on one isolated instance with ordinary
+expected-result comparison, catalog teardown checks and owned service/port release.
+The original 42-check runs did not include #29615's exact SQL; the amended case
+adds four boundary statements. Internal unary/API probes remain separate from
+service reachability claims.
+
+Historical matched measurements below use the same native binary and alternating
+old/new order. Test-family measurements include fixtures/assertions/cleanup and
+exclude build/link/init, queueing and GC preparation. Production microbenchmarks
+exclude setup unless stated. They establish neither full-CI savings nor SQL/TPCC
+throughput gains. Extra regression coverage sometimes costs more.
+
+| Scope / evidence directory | Measured result and limitation |
+| --- | --- |
+| Modulo test owners / `29249-modulo-owners-20261004` | 119→91 calls; 7,612→307 rows; median wall/CPU/bytes/allocations down 66.8%/63.0%/46.1%/60.7%. D256 production same/different-scale controls -0.8%/+0.2%, zero allocations. |
+| D64/D128 IntDiv family / `29249-intdiv-owners-20261004` | 75→82 calls closes real gaps; 3,288→241 rows. Test wall/CPU/bytes/allocations down 60.9%/55.5%/29.4%/50.3%. |
+| Initial D256 dispatch table / `29249-d256-intdiv-20261004` | Wall +5.5%, CPU +6.9%, bytes -3.3%, allocations +17.3%; no saving claimed for this intermediate holder. Final family below supersedes it. |
+| Final D256 family / `29249-d256-intdiv-20261004/canonical/latest-main` | Test wall/CPU/bytes/allocations down 44.3%/38.9%/24.6%/44.5%. Rounded primitive one-word 12.351→9.317ns, wide 3,171.099→287.595ns; two adapters eliminate 432–448B/15–17 allocations. |
+| Zero scaling / `29249-scale-owner-20261004` | Nonzero controls within 1.8%; zero work becomes independent of exponent. At exponent 190,000: in-place 28,969→3.469ns, D128/D256 truncation 30,526.5/69,918.5→5.465/3.264ns. Bounded internal-API controls only. |
+| CAST / `29249-cast-contract-20261004` | Six 256-row scale-delta-30 adapters improve 90.3–98.7%; 77–373KB/2,561–17,921 allocations→96B/1. Expanded test family wall/CPU -11.0%/-8.4%, bytes/allocations +13.9%/+10.4%. |
+| Empty widening / `29249-empty-cast-20261004` | Expanded tests wall +4.3%, CPU +5.7%, bytes +15.5%, allocations +3.3%; stronger empty/error contracts justify added cost. |
+| Parameter holder / `29249-empty-parameter-20261004` | Before this follow-up: wall 40.5→69.2µs, CPU 45.5→80.5µs, bytes 8,392→15,512, allocations 94→159. Excludes converted cells and consumer; not a saving claim. |
+| Numeric fixtures / `29249-rounding-fixture-20261004`, `29249-rounding-binary-fixture-20261004` | Wall/CPU/bytes/allocations down 72.4%/68.8%/24.8%/34.5% and 59.6%/56.7%/20.1%/18.9%; avoids 30 and 42 per-service TempDir requests. |
+| Fixed-result oracle / `29249-fixed-result-oracle-20261004` | Six CAST cases: wall/CPU -66.6%, bytes -74.5%, allocations -61.5%; variable encodings excluded. |
+| Integer assignment / `29249-integer-assignment-family-20261004/final-main-37ba071` | Wall/CPU/bytes/allocations down 48.4%/47.5%/13.5%/11.8%, with added error and reuse coverage. |
+| Width / `29249-width-family-20261004` | The 17-case family wall/CPU/bytes/allocations down 86.2%/84.4%/62.3%/63.2%. |
+| Assignment-ignore / `29249-assignment-ignore-family-20261004` | Wall/CPU/bytes/allocations down 77.5%/78.0%/38.4%/46.6%, preserving warning isolation. |
+| Prefix / `29249-prefix-constant-selection-20261004` | D128 constant wall/CPU -70.4%/-69.6%, flat -5.0%/-4.9%; unary-string controls within 0.4%. Median zero allocations, four noisy samples at 48–80B. |
+
+Private producer mutations challenge exact errors, masked writes, scale fallback,
+rounding parity/carry, metadata and inactive callbacks. A mutant failing the new
+holder proves that holder's contract; it does not imply the entire old suite
+missed the defect. Regression tests do not construct expected values with the
+production routine under test.

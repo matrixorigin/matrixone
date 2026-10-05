@@ -28,7 +28,12 @@ import (
 )
 
 func TestTernaryStrFixedStrToFixedPreservesNullAndSelectionSemantics(t *testing.T) {
-	proc := testutil.NewProcess(t)
+	proc := testutil.NewProcess(nil)
+	t.Cleanup(func() {
+		proc.Base.FileService.Close(proc.Ctx)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
 	eval := func(
 		parameters []*vector.Vector,
 		result vector.FunctionResultWrapper,
@@ -125,7 +130,12 @@ func TestTernaryStrFixedStrToFixedPreservesNullAndSelectionSemantics(t *testing.
 }
 
 func TestUnaryFixedToStrConstNullPreservesResultCardinality(t *testing.T) {
-	proc := testutil.NewProcess(t)
+	proc := testutil.NewProcess(nil)
+	t.Cleanup(func() {
+		proc.Base.FileService.Close(proc.Ctx)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
 	testCase := NewFunctionTestCase(
 		proc,
 		[]FunctionTestInput{
@@ -158,7 +168,12 @@ func TestUnaryFixedToStrConstNullPreservesResultCardinality(t *testing.T) {
 }
 
 func TestBinaryStrFixedToStrMixedNullPreservesRowPositions(t *testing.T) {
-	proc := testutil.NewProcess(t)
+	proc := testutil.NewProcess(nil)
+	t.Cleanup(func() {
+		proc.Base.FileService.Close(proc.Ctx)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
 	tests := []struct {
 		name     string
 		inputs   []FunctionTestInput
@@ -228,7 +243,12 @@ func TestBinaryStrFixedToStrMixedNullPreservesRowPositions(t *testing.T) {
 }
 
 func TestVarlenaConstResultsShareNonInlinePayload(t *testing.T) {
-	proc := testutil.NewProcess(t)
+	proc := testutil.NewProcess(nil)
+	t.Cleanup(func() {
+		proc.Base.FileService.Close(proc.Ctx)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
 	payload := strings.Repeat("x", types.VarlenaInlineSize+17)
 	constString := NewFunctionTestConstInput(
 		types.T_varchar.ToType(), []string{"input", "input", "input"}, nil)
@@ -357,6 +377,7 @@ func TestVarlenaConstResultsShareNonInlinePayload(t *testing.T) {
 			))
 
 			result := testCase.result.GetResultVector()
+			require.Equal(t, testCase.expected.typ, *result.GetType())
 			require.Equal(t, 3, result.Length())
 			require.Len(t, result.GetArea(), len(payload))
 			parameter := vector.GenerateFunctionStrParameter(result)
@@ -372,7 +393,12 @@ func TestVarlenaConstResultsShareNonInlinePayload(t *testing.T) {
 }
 
 func TestVarlenaConstNullTemplatesPreserveResultCardinality(t *testing.T) {
-	proc := testutil.NewProcess(t)
+	proc := testutil.NewProcess(nil)
+	t.Cleanup(func() {
+		proc.Base.FileService.Close(proc.Ctx)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
 	constNullString := NewFunctionTestConstInput(
 		types.T_varchar.ToType(), []string{"", ""}, []bool{true, true})
 	constString := NewFunctionTestConstInput(
@@ -542,7 +568,12 @@ func TestVarlenaConstNullTemplatesPreserveResultCardinality(t *testing.T) {
 }
 
 func TestVarlenaTemplatesIgnoreAllRowsPreserveResultCardinality(t *testing.T) {
-	proc := testutil.NewProcess(t)
+	proc := testutil.NewProcess(nil)
+	t.Cleanup(func() {
+		proc.Base.FileService.Close(proc.Ctx)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
 	stringInput := []FunctionTestInput{
 		NewFunctionTestInput(types.T_varchar.ToType(), []string{"a", "b"}, nil),
 	}
@@ -691,6 +722,7 @@ func TestVarlenaTemplatesIgnoreAllRowsPreserveResultCardinality(t *testing.T) {
 			))
 
 			result := testCase.result.GetResultVector()
+			require.Equal(t, testCase.expected.typ, *result.GetType())
 			require.Equal(t, testCase.fnLength, result.Length())
 			for row := uint64(0); row < uint64(testCase.fnLength); row++ {
 				require.Truef(t, result.IsNull(row), "row %d should be NULL", row)
@@ -700,7 +732,12 @@ func TestVarlenaTemplatesIgnoreAllRowsPreserveResultCardinality(t *testing.T) {
 }
 
 func TestVarlenaConstErrorAndInvalidInputsPreserveResultCardinality(t *testing.T) {
-	proc := testutil.NewProcess(t)
+	proc := testutil.NewProcess(nil)
+	t.Cleanup(func() {
+		proc.Base.FileService.Close(proc.Ctx)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
 	tests := []struct {
 		name       string
 		input      FunctionTestInput
@@ -753,7 +790,12 @@ func TestVarlenaConstErrorAndInvalidInputsPreserveResultCardinality(t *testing.T
 }
 
 func TestMoTupleExprMixedNullPreservesRowPositions(t *testing.T) {
-	proc := testutil.NewProcess(t)
+	proc := testutil.NewProcess(nil)
+	t.Cleanup(func() {
+		proc.Base.FileService.Close(proc.Ctx)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
 	testCase := NewFunctionTestCase(
 		proc,
 		[]FunctionTestInput{
@@ -785,6 +827,7 @@ func TestMoTupleExprMixedNullPreservesRowPositions(t *testing.T) {
 		&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, true, true}},
 	))
 	result := testCase.GetResultVectorDirectly()
+	require.Equal(t, testCase.expected.typ, *result.GetType())
 	require.Equal(t, 4, result.Length())
 	parameter := vector.GenerateFunctionStrParameter(result)
 	for row, wantNull := range []bool{true, true, false, true} {
@@ -797,7 +840,12 @@ func TestMoTupleExprMixedNullPreservesRowPositions(t *testing.T) {
 }
 
 func TestMoTupleExprConstNonInlineResultSharesPayload(t *testing.T) {
-	proc := testutil.NewProcess(t)
+	proc := testutil.NewProcess(nil)
+	t.Cleanup(func() {
+		proc.Base.FileService.Close(proc.Ctx)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
 	payload := strings.Repeat("t", types.VarlenaInlineSize+17)
 	packer := types.NewPacker()
 	defer packer.Close()
@@ -821,6 +869,7 @@ func TestMoTupleExprConstNonInlineResultSharesPayload(t *testing.T) {
 	))
 
 	result := testCase.GetResultVectorDirectly()
+	require.Equal(t, testCase.expected.typ, *result.GetType())
 	require.Equal(t, 3, result.Length())
 	require.Len(t, result.GetArea(), len(payload))
 	parameter := vector.GenerateFunctionStrParameter(result)
