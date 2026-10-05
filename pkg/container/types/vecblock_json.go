@@ -21,6 +21,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/bytedance/sonic"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
@@ -89,6 +91,9 @@ func blockScaledElemValue(c *BlockScaledCell, i int) float32 {
 	return f4e2m1Pairs[c.Elems[i/2]][i%2]
 }
 
+// blockScaledJSONAPI decodes the exact text; an unknown key is an error.
+var blockScaledJSONAPI = sonic.Config{DisallowUnknownFields: true}.Froze()
+
 type blockScaledJSONBlock struct {
 	S json.RawMessage   `json:"s"`
 	V []json.RawMessage `json:"v"`
@@ -105,14 +110,9 @@ func BlockScaledFromJSON(f BlockScaledFormat, s string) ([]byte, error) {
 	invalid := func(format string, args ...any) error {
 		return moerr.NewInvalidInputNoCtxf("%s exact text: "+format, append([]any{f}, args...)...)
 	}
-	dec := json.NewDecoder(strings.NewReader(s))
-	dec.DisallowUnknownFields()
 	var doc blockScaledJSON
-	if err := dec.Decode(&doc); err != nil {
+	if err := blockScaledJSONAPI.UnmarshalFromString(s, &doc); err != nil {
 		return nil, invalid("%v", err)
-	}
-	if dec.More() {
-		return nil, invalid("text after the object")
 	}
 	if len(doc.B) == 0 {
 		return nil, invalid(`"b" must list at least one block`)

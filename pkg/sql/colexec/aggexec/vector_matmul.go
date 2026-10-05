@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"sync"
 
+	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -33,9 +34,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
-// vector_matmul(topk, id, vec, queries [, options]): per group, the top `topk` dot
-// products of each query against the group's vectors, as JSON
-// [[["id", score], ...], ...] with one inner array per query. topk, queries and options
+// vector_matmul(topk, id, vec, queries [, options]): per group, the `topk` rows nearest to
+// each query under the options' metric, as JSON [[["id", distance], ...], ...] with one
+// inner array per query. topk, queries and options
 // are compile-time configuration; the executor receives [id, vec].
 
 const (
@@ -183,7 +184,7 @@ func parseVectorMatmulMetric(options string) (int, error) {
 		return vectorMatmulInnerProduct, nil
 	}
 	var fields map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(options), &fields); err != nil || fields == nil {
+	if err := sonic.UnmarshalString(options, &fields); err != nil || fields == nil {
 		return 0, moerr.NewInvalidInputNoCtx("vector_matmul: options must be a JSON object")
 	}
 	raw, ok := fields["metric"]
@@ -191,7 +192,7 @@ func parseVectorMatmulMetric(options string) (int, error) {
 		return vectorMatmulInnerProduct, nil
 	}
 	var name string
-	if err := json.Unmarshal(raw, &name); err == nil {
+	if err := sonic.Unmarshal(raw, &name); err == nil {
 		switch name {
 		case "inner_product":
 			return vectorMatmulInnerProduct, nil
@@ -288,7 +289,7 @@ func parseVectorMatmulConfig(raw []byte, vecType types.Type) (*vectorMatmulConfi
 		if queries, err = decodeVectorMatmulBinaryQueries(queriesText, int(vecType.Width)); err != nil {
 			return nil, err
 		}
-	} else if err := json.Unmarshal([]byte(queriesText), &queries); err != nil {
+	} else if err := sonic.UnmarshalString(queriesText, &queries); err != nil {
 		return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: queries must be a JSON array of vectors: %v", err)
 	}
 	if len(queries) == 0 || len(queries) > vectorMatmulMaxQueries {
