@@ -18,6 +18,7 @@
 #include "blockscaled_matmul_c.h"
 #include "test_framework.hpp"
 
+#include <cublasLt.h>
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <cuda_fp4.h>
@@ -25,6 +26,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <random>
@@ -342,6 +344,204 @@ void check_metric(int format, uint32_t dim, size_t rows, uint32_t nq, uint64_t m
     ASSERT_TRUE(std::fabs(scores[1 * nq + 0]) <= 1e-5 * std::max(1.0, 2 * n0));
 }
 
+
+// nvidia_gemm computes D = alpha * X Q^T with cuBLASLt's block-scaled GEMM on operands in
+// NVIDIA's layout, as a framework calls it outside MO: x (rows) and q (nq) row major, K
+// elements per row (E4M3 bytes, or E2M1 two per byte with element 2i in the low nibble),
+// sx and sq row-major block scales (UE8M0 per 32 or UE4M3 per 16), and the per-tensor
+// global scales folded into alpha. out receives rows x nq scores, row major.
+void nvidia_gemm(int format, const std::vector<uint8_t>& x, const std::vector<uint8_t>& sx,
+                 size_t rows, const std::vector<uint8_t>& q, const std::vector<uint8_t>& sq,
+                 size_t nq, size_t K, float alpha, std::vector<float>& out) {
+    const bool fp8 = format == GPU_BLOCKSCALED_MXFP8;
+    const size_t block = fp8 ? 32 : 16, row_bytes = fp8 ? K : K / 2, S = K / block;
+    const size_t M = (rows + 127) / 128 * 128, N = (nq + 127) / 128 * 128;
+    const size_t Sp = (S + 3) / 4 * 4;
+    // the scale tensor of an operand: 128 x 4 tiles, rows (r % 32, r / 32 % 4) interleaved
+    auto tiled = [&](const std::vector<uint8_t>& s, size_t n, size_t padded) {
+        std::vector<uint8_t> t(padded * Sp, 0);
+        for (size_t r = 0; r < n; r++) {
+            for (size_t j = 0; j < S; j++) {
+                t[((r / 128) * (Sp / 4) + j / 4) * 512 + (r % 32) * 16 + (r % 128) / 32 * 4 +
+                  j % 4] = s[r * S + j];
+            }
+        }
+        return t;
+    };
+    std::vector<uint8_t> hx(M * row_bytes, 0), hq(N * row_bytes, 0);
+    std::copy(x.begin(), x.end(), hx.begin());
+    std::copy(q.begin(), q.end(), hq.begin());
+    std::vector<uint8_t> hsx = tiled(sx, rows, M), hsq = tiled(sq, nq, N);
+
+    void *d_x, *d_q, *d_sx, *d_sq, *d_d, *d_w;
+    const size_t ws = 32 << 20;
+    ASSERT_TRUE(cudaMalloc(&d_x, hx.size()) == cudaSuccess);
+    ASSERT_TRUE(cudaMalloc(&d_q, hq.size()) == cudaSuccess);
+    ASSERT_TRUE(cudaMalloc(&d_sx, hsx.size()) == cudaSuccess);
+    ASSERT_TRUE(cudaMalloc(&d_sq, hsq.size()) == cudaSuccess);
+    ASSERT_TRUE(cudaMalloc(&d_d, M * N * sizeof(float)) == cudaSuccess);
+    ASSERT_TRUE(cudaMalloc(&d_w, ws) == cudaSuccess);
+    cudaMemcpy(d_x, hx.data(), hx.size(), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_q, hq.data(), hq.size(), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_sx, hsx.data(), hsx.size(), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_sq, hsq.data(), hsq.size(), cudaMemcpyHostToDevice);
+
+    cublasLtHandle_t lt;
+    cublasLtMatmulDesc_t desc;
+    cublasLtMatrixLayout_t la, lb, lc;
+    cublasLtMatmulPreference_t pref;
+    ASSERT_TRUE(cublasLtCreate(&lt) == CUBLAS_STATUS_SUCCESS);
+    ASSERT_TRUE(cublasLtMatmulDescCreate(&desc, CUBLAS_COMPUTE_32F, CUDA_R_32F) ==
+                CUBLAS_STATUS_SUCCESS);
+    cublasOperation_t ta = CUBLAS_OP_T, tb = CUBLAS_OP_N;
+    cublasLtMatmulMatrixScale_t mode =
+        fp8 ? CUBLASLT_MATMUL_MATRIX_SCALE_VEC32_UE8M0 : CUBLASLT_MATMUL_MATRIX_SCALE_VEC16_UE4M3;
+    cublasLtMatmulDescSetAttribute(desc, CUBLASLT_MATMUL_DESC_TRANSA, &ta, sizeof(ta));
+    cublasLtMatmulDescSetAttribute(desc, CUBLASLT_MATMUL_DESC_TRANSB, &tb, sizeof(tb));
+    cublasLtMatmulDescSetAttribute(desc, CUBLASLT_MATMUL_DESC_A_SCALE_MODE, &mode, sizeof(mode));
+    cublasLtMatmulDescSetAttribute(desc, CUBLASLT_MATMUL_DESC_B_SCALE_MODE, &mode, sizeof(mode));
+    cublasLtMatmulDescSetAttribute(desc, CUBLASLT_MATMUL_DESC_A_SCALE_POINTER, &d_sx, sizeof(d_sx));
+    cublasLtMatmulDescSetAttribute(desc, CUBLASLT_MATMUL_DESC_B_SCALE_POINTER, &d_sq, sizeof(d_sq));
+    const cudaDataType_t et = fp8 ? CUDA_R_8F_E4M3 : CUDA_R_4F_E2M1;
+    cublasLtMatrixLayoutCreate(&la, et, K, M, K);
+    cublasLtMatrixLayoutCreate(&lb, et, K, N, K);
+    cublasLtMatrixLayoutCreate(&lc, CUDA_R_32F, M, N, M);
+    cublasLtMatmulPreferenceCreate(&pref);
+    cublasLtMatmulPreferenceSetAttribute(pref, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES, &ws,
+                                         sizeof(ws));
+    cublasLtMatmulHeuristicResult_t heur{};
+    int nres = 0;
+    ASSERT_TRUE(cublasLtMatmulAlgoGetHeuristic(lt, desc, la, lb, lc, lc, pref, 1, &heur, &nres) ==
+                    CUBLAS_STATUS_SUCCESS &&
+                nres == 1);
+    const float beta = 0.0f;
+    ASSERT_TRUE(cublasLtMatmul(lt, desc, &alpha, d_x, la, d_q, lb, &beta, d_d, lc, d_d, lc,
+                               &heur.algo, d_w, ws, nullptr) == CUBLAS_STATUS_SUCCESS);
+    std::vector<float> d(M * N);
+    ASSERT_TRUE(cudaMemcpy(d.data(), d_d, d.size() * sizeof(float), cudaMemcpyDeviceToHost) ==
+                cudaSuccess);
+    out.assign(rows * nq, 0);
+    for (size_t r = 0; r < rows; r++) {
+        for (size_t j = 0; j < nq; j++) out[r * nq + j] = d[r + j * M];
+    }
+    cublasLtMatmulPreferenceDestroy(pref);
+    cublasLtMatrixLayoutDestroy(la);
+    cublasLtMatrixLayoutDestroy(lb);
+    cublasLtMatrixLayoutDestroy(lc);
+    cublasLtMatmulDescDestroy(desc);
+    cublasLtDestroy(lt);
+    for (void* p : {d_x, d_q, d_sx, d_sq, d_d, d_w}) cudaFree(p);
+}
+
+// check_matches_nvidia quantizes nothing: it draws element codes, block scales and one
+// global scale per operand in NVIDIA's layout, scores them with nvidia_gemm, and scores the
+// same bytes as MO cells (every row carrying the operand's global scale, as vecblock JSON or
+// vecblock_binary stores it) with the engine. The scores agree to the float32 rounding of the
+// two runs, and so do the top-10 rows of each query.
+void check_matches_nvidia(int format, size_t K, size_t rows, size_t nq) {
+    std::mt19937 rng(uint32_t(format * 1009 + K + rows));
+    const bool fp8 = format == GPU_BLOCKSCALED_MXFP8;
+    const size_t block = fp8 ? 32 : 16, row_bytes = fp8 ? K : K / 2, S = K / block;
+    const float gx = fp8 ? 1.0f : 0.0123f, gq = fp8 ? 1.0f : 3.7f;
+    auto operand = [&](size_t n, std::vector<uint8_t>& el, std::vector<uint8_t>& sc,
+                       std::vector<double>& vals, float g) {
+        el.assign(n * row_bytes, 0);
+        sc.resize(n * S);
+        vals.assign(n * K, 0);
+        for (auto& s : sc) s = fp8 ? uint8_t(127 - 3 + rng() % 7) : uint8_t(0x30 + rng() % 0x19);
+        for (size_t r = 0; r < n; r++) {
+            for (size_t k = 0; k < K; k++) {
+                double v, scale;
+                if (fp8) {
+                    uint8_t c;
+                    do {
+                        c = uint8_t(rng());
+                    } while ((c & 0x7f) == 0x7f);
+                    el[r * row_bytes + k] = c;
+                    v = e4m3(c);
+                    scale = std::ldexp(1.0, int(sc[r * S + k / 32]) - 127);
+                } else {
+                    uint8_t c = uint8_t(rng() & 0xf);
+                    el[r * row_bytes + k / 2] |= k % 2 == 0 ? c : uint8_t(c << 4);
+                    v = e2m1(c);
+                    scale = e4m3(sc[r * S + k / 16]);
+                }
+                vals[r * K + k] = double(g) * scale * v;
+            }
+        }
+    };
+    // the same bytes as cells: header, the row's block scales, its elements
+    auto cells = [&](size_t n, const std::vector<uint8_t>& el, const std::vector<uint8_t>& sc,
+                     float g) {
+        const size_t cell_bytes = 12 + S + row_bytes;
+        std::vector<uint8_t> out(n * cell_bytes, 0);
+        const uint32_t dim = uint32_t(K);
+        for (size_t r = 0; r < n; r++) {
+            uint8_t* c = out.data() + r * cell_bytes;
+            c[0] = 1;
+            c[1] = uint8_t(format);
+            std::memcpy(c + 4, &dim, 4);
+            std::memcpy(c + 8, &g, 4);
+            std::memcpy(c + 12, sc.data() + r * S, S);
+            std::memcpy(c + 12 + S, el.data() + r * row_bytes, row_bytes);
+        }
+        return out;
+    };
+    std::vector<uint8_t> xe, xs, qe, qs;
+    std::vector<double> xv, qv;
+    operand(rows, xe, xs, xv, gx);
+    operand(nq, qe, qs, qv, gq);
+
+    std::vector<float> nv;
+    nvidia_gemm(format, xe, xs, rows, qe, qs, nq, K, gx * gq, nv);
+    ASSERT_EQ(nv.size(), rows * nq);
+
+    std::vector<uint8_t> qcells = cells(nq, qe, qs, gq), xcells = cells(rows, xe, xs, gx);
+    blockscaled_matmul e(0, format, uint32_t(K), uint32_t(nq), qcells.data(), 512);
+    std::vector<float> mo(rows * nq);
+    const size_t cell_bytes = xcells.size() / rows;
+    for (size_t off = 0; off < rows; off += e.max_rows()) {
+        size_t n = std::min<size_t>(e.max_rows(), rows - off);
+        e.run(xcells.data() + off * cell_bytes, n, mo.data() + off * nq);
+    }
+
+    size_t identical = 0;
+    int64_t max_ulps = 0;
+    for (size_t r = 0; r < rows; r++) {
+        for (size_t j = 0; j < nq; j++) {
+            double mag = 0;
+            for (size_t k = 0; k < K; k++) mag += std::fabs(xv[r * K + k] * qv[j * K + k]);
+            const float a = nv[r * nq + j], b = mo[r * nq + j];
+            ASSERT_TRUE(std::fabs(double(a) - double(b)) <= 1e-6 * std::max(mag, 1e-30));
+            identical += a == b;
+            int32_t ia, ib;
+            std::memcpy(&ia, &a, 4);
+            std::memcpy(&ib, &b, 4);
+            if ((ia < 0) == (ib < 0)) max_ulps = std::max<int64_t>(max_ulps, std::llabs(int64_t(ia) - ib));
+        }
+    }
+    // the same rows lead every query, unless the 10th and 11th scores are within rounding
+    for (size_t j = 0; j < nq; j++) {
+        std::vector<size_t> on(rows), om(rows);
+        for (size_t r = 0; r < rows; r++) on[r] = om[r] = r;
+        auto by = [&](const std::vector<float>& s) {
+            return [&s, j, nq](size_t a, size_t b) { return s[a * nq + j] > s[b * nq + j]; };
+        };
+        std::sort(on.begin(), on.end(), by(nv));
+        std::sort(om.begin(), om.end(), by(mo));
+        const float gap = nv[on[9] * nq + j] - nv[on[10] * nq + j];
+        if (gap > 1e-5f * std::fabs(nv[on[9] * nq + j])) {
+            std::vector<size_t> tn(on.begin(), on.begin() + 10), tm(om.begin(), om.begin() + 10);
+            std::sort(tn.begin(), tn.end());
+            std::sort(tm.begin(), tm.end());
+            ASSERT_TRUE(tn == tm);
+        }
+    }
+    printf("    %s K=%zu rows=%zu nq=%zu: %zu of %zu scores bit-identical to the NVIDIA call, "
+           "largest difference %lld ulp\n",
+           fp8 ? "MXFP8" : "NVFP4", K, rows, nq, identical, rows * nq, (long long)max_ulps);
+}
+
 } // namespace
 
 TEST(BlockScaledMatmulTest, DistanceMetricsMatchReference) {
@@ -422,6 +622,17 @@ TEST(BlockScaledMatmulTest, TopKMatchesFullScores) {
     std::vector<uint8_t> queries = small_int_cells(8, 1, rng);
     std::vector<uint8_t> cells = small_int_cells(8, 50, rng);
     check_topk(GPU_BLOCKSCALED_I8, 8, queries, cells, 50, 1, 500, 128, false);
+}
+
+// With one global scale per operand, MO's cells hold exactly NVIDIA's NVFP4 / MXFP8 operands,
+// and vector_matmul's engine scores them as cuBLASLt does outside MO.
+TEST(BlockScaledMatmulTest, MatchesNvidiaBlockScaledGemm) {
+    for (int format : {GPU_BLOCKSCALED_NVFP4, GPU_BLOCKSCALED_MXFP8}) {
+        check_matches_nvidia(format, 768, 300, 5);
+        check_matches_nvidia(format, 1024, 1000, 16);
+        // one 512-row tile: the shape of the engine's GEMM
+        check_matches_nvidia(format, 1024, 512, 16);
+    }
 }
 
 TEST(BlockScaledMatmulTest, MXFP8MatchesReference) {
