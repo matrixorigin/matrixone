@@ -297,4 +297,13 @@ select a, case when a = 1 then cast(s as vecf4(2)) end, case when a = 1 then cas
 0  ¦  null  ¦  null  𝄀
 1  ¦  [1, 2]  ¦  [1, 2]  𝄀
 2  ¦  null  ¦  null
+create table bin (id int, b vecf4(2), e vecf8(2), a vecf32(2));
+insert into bin values (1, cast(unhex('0000803F00000040') as blob), cast(unhex('0000803F00000040') as blob), cast(unhex('0000803F00000040') as blob));
+insert into bin (id, b) values (2, cast(unhex('0000803F000000') as blob));
+invalid input: vector payload is not aligned to its element size
+insert into bin (id, e) values (3, cast(unhex('0000803F') as blob));
+invalid input: expected vector dimension 2 != actual dimension 1.
+select * from bin order by id;
+➤ id[4,32,0]  ¦  b[12,2,0]  ¦  e[12,2,0]  ¦  a[12,2,0]  𝄀
+1  ¦  [1, 2]  ¦  [1, 2]  ¦  [1, 2]
 drop database vecblock_db;

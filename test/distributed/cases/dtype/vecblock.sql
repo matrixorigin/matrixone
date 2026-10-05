@@ -139,4 +139,11 @@ create table sel (a int, s varchar(20));
 insert into sel values (1, '[1,2]'), (0, '[1,2,3]'), (2, 'invalid');
 select a, case when a = 1 then cast(s as vecf4(2)) end, case when a = 1 then cast(s as vecf8(2)) end from sel order by a;
 
+-- binary vector input: a BLOB of little-endian float32 elements, as for vecf32
+create table bin (id int, b vecf4(2), e vecf8(2), a vecf32(2));
+insert into bin values (1, cast(unhex('0000803F00000040') as blob), cast(unhex('0000803F00000040') as blob), cast(unhex('0000803F00000040') as blob));
+insert into bin (id, b) values (2, cast(unhex('0000803F000000') as blob));
+insert into bin (id, e) values (3, cast(unhex('0000803F') as blob));
+select * from bin order by id;
+
 drop database vecblock_db;

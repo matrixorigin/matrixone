@@ -2752,8 +2752,8 @@ func strTypeToOthers(proc *process.Process,
 	}
 	if fromType.Oid == types.T_blob {
 		// For handling BLOB to ARRAY implicit casting.
-		// This is used for VECTOR FAST/BINARY IO.
-		// SQL: insert into t2 values(2, decode("7e98b23e9e10383b2f41133f", "hex"));
+		// This is used for VECTOR FAST/BINARY IO: the BLOB holds little-endian elements.
+		// SQL: insert into t2 values(2, cast(unhex("7e98b23e9e10383b2f41133f") as blob));
 		switch toType.Oid {
 		case types.T_array_float32:
 			rs := vector.MustFunctionResult[types.Varlena](result)

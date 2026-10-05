@@ -319,6 +319,7 @@ only when it is stored into a `vecf8`/`vecf4` column (assignment cast).
 | `hex`, `to_base64` | not supported, as for the other narrow vector types (`vecf32` only) |
 | primary key, partition key, secondary/unique index, vector index | rejected at DDL |
 | `LOAD` | CSV text `"[…]"`; Parquet `LIST<FLOAT/DOUBLE>` and text columns, quantized per row |
+| binary input | a `BLOB` of little-endian float32 elements, as for `vecf32` (`CAST(UNHEX('0000803F…') AS BLOB)` or a BLOB parameter), quantized per row; a length that is not a multiple of 4 or another dimension is rejected |
 
 The promotion is implemented in these operations only: function resolution dequantizes a
 `vecf8`/`vecf4` argument to `vecf32` for the functions listed above, and every other

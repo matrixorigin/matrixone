@@ -15,6 +15,7 @@
 package function
 
 import (
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -115,16 +116,47 @@ func TestCastToVecBlock(t *testing.T) {
 	}
 }
 
+// TestCastBlobToVecBlock checks the binary vector input: a BLOB of little-endian float32
+// elements quantizes as the same vecf32 value does.
+func TestCastBlobToVecBlock(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	blob := func(values ...[]byte) *vector.Vector {
+		v := vector.NewVec(types.T_blob.ToType())
+		for _, b := range values {
+			require.NoError(t, vector.AppendBytes(v, b, false, proc.Mp()))
+		}
+		return v
+	}
+	values := []float32{1, -3, 0.1, 6}
+	for _, oid := range []types.T{types.T_array_float8, types.T_array_float4} {
+		to := types.New(oid, 4, 0)
+		out, err := runVecBlockCast(t, proc, blob(types.ArrayToBytes(values), nil), to)
+		require.NoError(t, err, oid.String())
+		want, err := runVecBlockCast(t, proc, vecBlockF32Vector(t, proc, 4, [][]float32{values}), to)
+		require.NoError(t, err)
+		require.Equal(t, want.GetBytesAt(0), out.GetBytesAt(0), oid.String())
+		require.True(t, out.IsNull(1), "an empty BLOB is NULL")
+
+		for name, src := range map[string]*vector.Vector{
+			"misaligned": blob([]byte{0, 0, 128}),
+			"dimension":  blob(types.ArrayToBytes([]float32{1, 2, 3})),
+			"non-finite": blob(types.ArrayToBytes([]float32{1, 2, 3, float32(math.Inf(1))})),
+		} {
+			_, err := runVecBlockCast(t, proc, src, to)
+			require.Error(t, err, "%s %s", oid, name)
+		}
+	}
+}
+
 func TestCastVecBlockRegistered(t *testing.T) {
 	for _, oid := range []types.T{types.T_array_float8, types.T_array_float4} {
-		for _, src := range []types.T{types.T_any, types.T_char, types.T_varchar, types.T_text,
+		for _, src := range []types.T{types.T_any, types.T_char, types.T_varchar, types.T_text, types.T_blob,
 			types.T_array_float32, types.T_array_float8, types.T_array_float4} {
 			require.Contains(t, supportedTypeCast[src], oid, "%s -> %s", src, oid)
 		}
 		require.Contains(t, supportedTypeCast[oid], types.T_array_float32)
 		require.NotContains(t, supportedTypeCast[oid], types.T_varchar)
 		require.NotContains(t, supportedTypeCast[oid], types.T_array_float64)
-		require.NotContains(t, supportedTypeCast[types.T_blob], oid)
 	}
 }
 

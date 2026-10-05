@@ -23,13 +23,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// vecf8/vecf4 casts: text "[...]", vecf32 and vecf8/vecf4 sources quantize into the
-// target cell format; vecf8/vecf4 sources dequantize to vecf32. Text targets are not
+// vecf8/vecf4 casts: text "[...]", a BLOB of little-endian float32 elements (the binary
+// vector input of vecf32), vecf32 and vecf8/vecf4 sources quantize into the target cell
+// format; vecf8/vecf4 sources dequantize to vecf32. Text targets are not
 // casts, as for vecf32; values render as text through the output path.
 
 func init() {
 	blockScaled := []types.T{types.T_array_float8, types.T_array_float4}
-	for _, s := range []types.T{types.T_any, types.T_char, types.T_varchar, types.T_text, types.T_array_float32} {
+	for _, s := range []types.T{types.T_any, types.T_char, types.T_varchar, types.T_text, types.T_blob, types.T_array_float32} {
 		supportedTypeCast[s] = append(supportedTypeCast[s], blockScaled...)
 	}
 	for _, s := range blockScaled {
@@ -68,6 +69,14 @@ func castToBlockScaled(proc *process.Process, from *vector.Vector, toType types.
 		}
 		var arr []float32
 		switch {
+		case fromOid == types.T_blob:
+			if len(v)%4 != 0 {
+				return moerr.NewInvalidInputNoCtx("vector payload is not aligned to its element size")
+			}
+			if len(v)/4 > types.MaxArrayDimension {
+				return moerr.NewInvalidInputNoCtx("vector dimension exceeds maximum dimension")
+			}
+			arr = types.BytesToArray[float32](v)
 		case fromOid.IsMySQLString():
 			a, err := types.StringToArray[float32](convertByteSliceToString(v))
 			if err != nil {

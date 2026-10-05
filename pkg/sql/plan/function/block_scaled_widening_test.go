@@ -30,6 +30,7 @@ func TestBlockScaledVectorParity(t *testing.T) {
 	ref := types.New(types.T_array_bf16, 4, 0)
 	str := types.T_varchar.ToType()
 	i64 := types.T_int64.ToType()
+	blob := types.T_blob.ToType()
 	for _, oid := range []types.T{types.T_array_float8, types.T_array_float4} {
 		bs := types.New(oid, 4, 0)
 		var missing []string
@@ -42,6 +43,8 @@ func TestBlockScaledVectorParity(t *testing.T) {
 				{"(v,v)", []types.Type{ref, ref}, []types.Type{bs, bs}},
 				{"(v,'s')", []types.Type{ref, str}, []types.Type{bs, str}},
 				{"('s',v)", []types.Type{str, ref}, []types.Type{str, bs}},
+				{"(v,blob)", []types.Type{ref, blob}, []types.Type{bs, blob}},
+				{"(blob,v)", []types.Type{blob, ref}, []types.Type{blob, bs}},
 				{"(v,i)", []types.Type{ref, i64}, []types.Type{bs, i64}},
 				{"(v,v,v)", []types.Type{ref, ref, ref}, []types.Type{bs, bs, bs}},
 			} {
