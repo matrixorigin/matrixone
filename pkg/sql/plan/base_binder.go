@@ -5439,6 +5439,7 @@ func bindFuncExprAndConstFoldInternal(
 	if err != nil {
 		return nil, err
 	}
+	annotateStringLengthSource(retExpr, proc)
 	if observer != nil {
 		if err := observer(retExpr); err != nil {
 			return nil, err
@@ -5896,7 +5897,7 @@ func (b *baseBinder) annotateStringDomainSource(
 			return
 		}
 		var source *Expr
-		if b.ctx != nil && col.RelPos == b.ctx.groupTag {
+		if b.ctx != nil && (col.RelPos == b.ctx.groupTag || col.RelPos == b.ctx.aggregateTag) {
 			source = b.pendingColumnSource(col)
 		} else {
 			nodeID, ok := b.builder.tag2NodeID[col.RelPos]
@@ -5908,13 +5909,23 @@ func (b *baseBinder) annotateStringDomainSource(
 				return
 			}
 			outputs := node.ProjectList
-			if node.NodeType == plan.Node_AGG && len(node.BindingTags) > 0 && col.RelPos == node.BindingTags[0] {
-				outputs = node.GroupBy
+			if node.NodeType == plan.Node_AGG && len(node.BindingTags) > 0 {
+				if col.RelPos == node.BindingTags[0] {
+					outputs = node.GroupBy
+				} else if len(node.BindingTags) > 1 && col.RelPos == node.BindingTags[1] {
+					outputs = node.AggList
+				}
 			}
 			if int(col.ColPos) >= len(outputs) {
 				return
 			}
 			source = outputs[col.ColPos]
+		}
+		if fn := source.GetF(); fn != nil && fn.Func != nil && len(fn.Args) == 1 &&
+			(strings.EqualFold(fn.Func.ObjName, "max") || strings.EqualFold(fn.Func.ObjName, "min")) {
+			// MIN/MAX preserve the selected input's domain and CAST ownership.
+			// Do not summarize an aggregate as an unrelated generic function.
+			source = fn.Args[0]
 		}
 		key := [2]int32{col.RelPos, col.ColPos}
 		if witness, ok := memo[key]; ok {
@@ -8086,7 +8097,7 @@ func bindFuncExprImplByPlanExpr(
 			}
 		}
 	}
-	return &Expr{
+	result := &Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
 				Func: getFunctionObjRef(funcID, name),
@@ -8094,7 +8105,8 @@ func bindFuncExprImplByPlanExpr(
 			},
 		},
 		Typ: Typ,
-	}, nil
+	}
+	return result, nil
 }
 
 // XPath configuration is execution-invariant, not merely constant within one

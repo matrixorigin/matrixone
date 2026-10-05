@@ -418,6 +418,63 @@ PREPARE regexp_abs_length_rejected FROM 'SELECT REGEXP_LIKE(CAST(LEFT(@regexp_ca
 Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
 PREPARE regexp_negative_start_rejected FROM 'SELECT REGEXP_LIKE(CAST(SUBSTRING(@regexp_cast_variable, -3) AS BINARY), ''a'')';
 Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(COALESCE(NULL, CAST('abc' AS BINARY)), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(CASE WHEN TRUE THEN NULL ELSE CAST('abc' AS BINARY) END, 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(NULLIF(CAST('abc' AS BINARY), NULL), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(IFNULL(NULL, CAST('abc' AS BINARY)), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+PREPARE regexp_null_branch_rejected FROM 'SELECT REGEXP_LIKE(COALESCE(NULL, CAST(''abc'' AS BINARY)), ''a'')';
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(CAST(LEFT(@regexp_cast_variable, CEIL(2.1)) AS BINARY), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(CAST(LEFT(@regexp_cast_variable, GREATEST(2,3)) AS BINARY), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(CAST(LEFT(@regexp_cast_variable, CAST(3 AS DOUBLE)) AS BINARY), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(CAST(LPAD(@regexp_cast_variable, 3, 'x') AS BINARY), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(CAST(RPAD(@regexp_cast_variable, 3, 'x') AS BINARY), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(CAST(MID(@regexp_cast_variable, 1, 3) AS BINARY), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(CAST(REPEAT('a', 3) AS BINARY), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+PREPARE regexp_ceil_length_rejected FROM 'SELECT REGEXP_LIKE(CAST(LEFT(@regexp_cast_variable, CEIL(2.1)) AS BINARY), ''a'')';
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+PREPARE regexp_greatest_length_rejected FROM 'SELECT REGEXP_LIKE(CAST(LEFT(@regexp_cast_variable, GREATEST(2,3)) AS BINARY), ''a'')';
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+PREPARE regexp_double_length_rejected FROM 'SELECT REGEXP_LIKE(CAST(LEFT(@regexp_cast_variable, CAST(3 AS DOUBLE)) AS BINARY), ''a'')';
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+PREPARE regexp_pad_length_rejected FROM 'SELECT REGEXP_LIKE(CAST(LPAD(@regexp_cast_variable, 3, ''x'') AS BINARY), ''a'')';
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+PREPARE regexp_mid_length_rejected FROM 'SELECT REGEXP_LIKE(CAST(MID(@regexp_cast_variable, 1, 3) AS BINARY), ''a'')';
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+PREPARE regexp_repeat_length_rejected FROM 'SELECT REGEXP_LIKE(CAST(REPEAT(''a'', 3) AS BINARY), ''a'')';
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(MAX(CAST('abc' AS BINARY)), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(MIN(CAST('abc' AS BINARY)), 'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(v, 'a') FROM (SELECT MAX(CAST('abc' AS BINARY)) v) s;
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+PREPARE regexp_max_cast_rejected FROM 'SELECT REGEXP_LIKE(MAX(CAST(''abc'' AS BINARY)), ''a'')';
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+PREPARE regexp_min_cast_rejected FROM 'SELECT REGEXP_LIKE(MIN(CAST(''abc'' AS BINARY)), ''a'')';
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+CREATE TABLE regexp_physical_aggregate(v BINARY(3), b BLOB);
+INSERT INTO regexp_physical_aggregate VALUES ('abc', 'abc');
+SELECT REGEXP_LIKE(MAX(v), 'a') AS physical_max, REGEXP_LIKE(MIN(b), 'a') AS physical_min FROM regexp_physical_aggregate;
+➤ physical_max[-7,1,0]  ¦  physical_min[-7,1,0]  𝄀
+1  ¦  1
+PREPARE regexp_physical_aggregate_control FROM 'SELECT REGEXP_LIKE(MAX(v), ''a'') AS physical_max FROM regexp_physical_aggregate';
+EXECUTE regexp_physical_aggregate_control;
+➤ physical_max[-7,1,0]  𝄀
+1
+DEALLOCATE PREPARE regexp_physical_aggregate_control;
+DROP TABLE regexp_physical_aggregate;
 CREATE TABLE regexp_static_text_source(v TEXT);
 INSERT INTO regexp_static_text_source VALUES ('abc');
 SELECT REGEXP_LIKE(CAST((SELECT SUBSTRING(v, 1, 3) FROM regexp_static_text_source) AS BINARY), 'a');

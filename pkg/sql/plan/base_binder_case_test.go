@@ -404,6 +404,24 @@ func TestRegexpBinaryCastAcrossQueryBoundaries(t *testing.T) {
 		{"select regexp_like(cast(left(@v, abs(-3)) as binary), 'a')", true},
 		{"select regexp_like(cast(substring(@v, -3) as binary), 'a')", true},
 		{"select regexp_like(cast(substring(@v, 3) as binary), 'a')", false},
+		{"select regexp_like(coalesce(null,cast('abc' as binary)), 'a')", true},
+		{"select regexp_like(case when true then null else cast('abc' as binary) end, 'a')", true},
+		{"select regexp_like(nullif(cast('abc' as binary),null), 'a')", true},
+		{"select regexp_like(ifnull(null,cast('abc' as binary)), 'a')", true},
+		{"select regexp_like(cast(left(@v,ceil(2.1)) as binary), 'a')", true},
+		{"select regexp_like(cast(left(@v,greatest(2,3)) as binary), 'a')", true},
+		{"select regexp_like(cast(left(@v,cast(3 as double)) as binary), 'a')", true},
+		{"select regexp_like(cast(lpad(@v,3,'x') as binary), 'a')", true},
+		{"select regexp_like(cast(rpad(@v,3,'x') as binary), 'a')", true},
+		{"select regexp_like(cast(mid(@v,1,3) as binary), 'a')", true},
+		{"select regexp_like(cast(repeat('a',3) as binary), 'a')", true},
+		{"select regexp_like(cast(repeat('a',ceil(2.1)) as binary), 'a')", true},
+		{"select regexp_like(cast(repeat(@v,0) as binary), 'a')", true},
+		{"select regexp_like(cast(repeat(@v,3) as binary), 'a')", false},
+		{"select regexp_like(max(cast('abc' as binary)), 'a')", true},
+		{"select regexp_like(min(cast('abc' as binary)), 'a')", true},
+		{"select regexp_like(v,'a') from (select max(cast('abc' as binary)) v) s", true},
+		{"select regexp_like(max(cast(@v as binary)), 'a')", false},
 		{"select regexp_like(cast((select substring(rel_createsql, 1, 3) from mo_catalog.mo_tables limit 1) as binary), 'a')", true},
 		{"select regexp_like(cast(v as binary), 'a') from (select left(rel_createsql, 3) v from mo_catalog.mo_tables) s", true},
 		{"select regexp_like(cast(substring(@v, 1, cast(9223372036854775808 as unsigned)) as binary), 'a')", false},
@@ -533,6 +551,30 @@ func TestRegexpConstantLengthBoundaries(t *testing.T) {
 		if known {
 			require.Equal(t, uint64(3), value)
 		}
+	}
+}
+
+func TestStringLengthConstantMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		source string
+		width  int32
+	}{
+		{"ceil(2.1)", 3}, {"floor(2.9)", 2}, {"greatest(2,3)", 3},
+		{"cast(3 as double)", 3}, {"ceil(2.0000000000000000001)", 3},
+	} {
+		p, err := runOneStmt(NewMockOptimizer(false), t, "select left(@str_var,"+tc.source+")")
+		require.NoError(t, err)
+		expr := findPlanFunctionExpr(p, "left")
+		require.NotNil(t, expr)
+		require.Equal(t, tc.width, regexpDeclaredStringType(expr).Width)
+		require.NotNil(t, expr.GetF().Args[1].GetF(), "the execution expression must not be replaced")
+	}
+	for _, expr := range []*Expr{
+		nil, makePlan2NullConstExprWithType(),
+		{Typ: makeSimplePlan2Type(types.T_int64), Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}},
+		{Typ: makeSimplePlan2Type(types.T_int64), Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{ObjName: "arbitrary_udf"}}}},
+	} {
+		require.False(t, stringLengthConstantCandidate(expr))
 	}
 }
 

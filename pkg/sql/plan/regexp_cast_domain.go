@@ -94,7 +94,7 @@ func regexpDeclaredStringType(expr *Expr) types.Type {
 	}
 	if name == "cast" && len(fn.Args) > 0 && !isExplicitPreparedCast(expr) {
 		// Overload alignment is not a user-declared maximum length.
-		if source := parameters[0]; source.Oid.IsMySQLString() {
+		if source := parameters[0]; source.Oid.IsMySQLString() || regexpBareNull(fn.Args[0]) {
 			return source
 		}
 	}
@@ -122,13 +122,23 @@ func regexpDeclaredStringType(expr *Expr) types.Type {
 			return types.NewWithCharset(types.T_binary, int32(maxBytes), 0, types.CharsetBinary)
 		}
 	}
+	if (name == "max" || name == "min") && len(parameters) == 1 {
+		return parameters[0] // An aggregate retains its input declaration.
+	}
 	if result, ok := function.GetFunctionByNameWithoutError(name, parameters); ok {
-		typ = result.GetReturnType()
+		declared := result.GetReturnType()
+		// The binder can refine static literal functions (for example REPEAT).
+		// A generic overload must not erase that already proven finite bound.
+		oldBound, oldKnown := function.StringResultByteBound(typ)
+		newBound, newKnown := function.StringResultByteBound(declared)
+		if !oldKnown || (newKnown && newBound < oldBound) || preparedExprStringDomainDependsOnRuntime(expr) {
+			typ = declared
+		}
 	}
 	// A constant substring/LEFT/RIGHT length limits an unbounded input too.
 	lengthIndex := -1
 	switch name {
-	case "substring", "substr", "sub_str":
+	case "substring", "substr", "sub_str", "mid":
 		if len(fn.Args) == 3 {
 			lengthIndex = 2
 		} else if len(fn.Args) == 2 {
@@ -148,6 +158,37 @@ func regexpDeclaredStringType(expr *Expr) types.Type {
 		if len(fn.Args) == 2 {
 			lengthIndex = 1
 		}
+	case "lpad", "rpad":
+		if len(fn.Args) == 3 {
+			lengthIndex = 1
+		}
+	case "repeat":
+		if len(fn.Args) == 2 {
+			count, signed, known := regexpConstantInteger(fn.Args[1])
+			if known && signed && int64(count) < 0 {
+				count = 0
+			}
+			source := parameters[0]
+			if known && count == 0 {
+				if types.StaticStringDomain(source) == types.StringDomainBinary {
+					return regexpBinaryTypeForBound(0, true)
+				}
+				return types.NewWithCharset(types.T_varchar, 0, 0, typ.Charset)
+			}
+			bound, bounded := function.StringResultByteBound(source)
+			if known && bounded && (count == 0 || bound <= math.MaxUint64/count) {
+				if types.StaticStringDomain(source) == types.StringDomainBinary {
+					return regexpBinaryTypeForBound(bound*count, true)
+				}
+				// Text declaration widths are characters, not formatted bytes.
+				if source.Oid == types.T_char || source.Oid == types.T_varchar || source.Oid == types.T_text {
+					bound = uint64(source.Width)
+				}
+				if count == 0 || bound <= uint64(types.MaxVarcharLen)/count {
+					return types.NewWithCharset(types.T_varchar, int32(bound*count), 0, typ.Charset)
+				}
+			}
+		}
 	}
 	if lengthIndex >= 0 {
 		if length, signed, known := regexpConstantInteger(fn.Args[lengthIndex]); known {
@@ -163,6 +204,24 @@ func regexpDeclaredStringType(expr *Expr) types.Type {
 		}
 	}
 	return typ
+}
+
+// regexpBareNull ignores only alignment casts, never explicit typed NULLs.
+func regexpBareNull(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if lit := expr.GetLit(); lit != nil {
+		if lit.Src != nil {
+			return regexpBareNull(lit.Src)
+		}
+		return lit.Isnull && types.T(expr.Typ.Id) == types.T_any
+	}
+	if fn := expr.GetF(); fn != nil && fn.Func != nil && strings.EqualFold(fn.Func.ObjName, "cast") &&
+		!isExplicitPreparedCast(expr) && len(fn.Args) > 0 {
+		return regexpBareNull(fn.Args[0])
+	}
+	return false
 }
 
 // regexpConstantInteger recognizes values, not witness payloads or current
