@@ -566,8 +566,8 @@ func TestCeil(t *testing.T) {
 	testCases := initCeilTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess(nil)
-	t.Cleanup(func() { proc.GetFileService().Close(proc.Ctx); proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 	for _, tc := range testCases {
 		var fcTC FunctionTestCase
 		switch tc.typ {
@@ -587,8 +587,8 @@ func TestCeil(t *testing.T) {
 }
 
 func TestCeilFloorDecimal128Int64Boundaries(t *testing.T) {
-	proc := testutil.NewProcess(nil)
-	t.Cleanup(func() { proc.GetFileService().Close(proc.Ctx); proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 	decimalType := types.New(types.T_decimal128, 19, 0)
 	values := make([]types.Decimal128, 0, 6)
 	for _, value := range []string{
@@ -674,8 +674,8 @@ func TestFloor(t *testing.T) {
 	testCases := initFloorTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess(nil)
-	t.Cleanup(func() { proc.GetFileService().Close(proc.Ctx); proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 	for _, tc := range testCases {
 		var fcTC FunctionTestCase
 		switch tc.typ {
@@ -695,8 +695,8 @@ func TestFloor(t *testing.T) {
 }
 
 func TestFloorStrSkipsNullAndMaskedRows(t *testing.T) {
-	proc := testutil.NewProcess(nil)
-	t.Cleanup(func() { proc.GetFileService().Close(proc.Ctx); proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 
 	for _, tc := range []struct {
 		name       string
@@ -784,8 +784,8 @@ func TestFloorStrSkipsNullAndMaskedRows(t *testing.T) {
 }
 
 func TestFloorStrDecimalPlacesMustBeConstant(t *testing.T) {
-	proc := testutil.NewProcess(nil)
-	t.Cleanup(func() { proc.GetFileService().Close(proc.Ctx); proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 
 	for _, tc := range []struct {
 		name   string
@@ -876,8 +876,8 @@ func TestRound(t *testing.T) {
 	testCases := initRoundTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess(nil)
-	t.Cleanup(func() { proc.GetFileService().Close(proc.Ctx); proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 	for _, tc := range testCases {
 		var fcTC FunctionTestCase
 		switch tc.typ {
@@ -6398,8 +6398,8 @@ func initTruncateTestCase() []tcTemp {
 func TestTruncate(t *testing.T) {
 	testCases := initTruncateTestCase()
 
-	proc := testutil.NewProcess(nil)
-	t.Cleanup(func() { proc.GetFileService().Close(proc.Ctx); proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, TruncateFloat64)
 		s, info := fcTC.RunAndFree()
@@ -6419,8 +6419,8 @@ func TestMathPrecisionNullContract(t *testing.T) {
 		{"truncate", TruncateFloat64, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcess(nil)
-			t.Cleanup(func() { proc.GetFileService().Close(proc.Ctx); proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+			proc := newMemoryFunctionTestProcess(t)
+			t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 			for _, nullValue := range []bool{false, true} {
 				fc := NewFunctionTestCase(proc, []FunctionTestInput{
 					NewFunctionTestConstInput(types.T_float64.ToType(), []float64{123.342}, []bool{nullValue}),
@@ -6451,8 +6451,8 @@ func TestRoundAndTruncateReusePrecisionFrame(t *testing.T) {
 		{"truncate", TruncateFloat64, []float64{140, 149}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcess(nil)
-			t.Cleanup(func() { proc.GetFileService().Close(proc.Ctx); proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+			proc := newMemoryFunctionTestProcess(t)
+			t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 			result := vector.NewFunctionResultWrapper(types.T_float64.ToType(), proc.Mp())
 			defer result.Free()
 			values := vector.NewVec(types.T_float64.ToType())
@@ -6498,8 +6498,8 @@ func TestRoundAndTruncateReusePrecisionFrame(t *testing.T) {
 }
 
 func TestRoundAndTruncateWithDynamicDigits(t *testing.T) {
-	proc := testutil.NewProcess(nil)
-	t.Cleanup(func() { proc.GetFileService().Close(proc.Ctx); proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 	values := NewFunctionTestInput(types.T_float64.ToType(), []float64{123.4567, 123.4567, 123.4567, 123.4567, -123.4567, 123.4567}, nil)
 	digits := NewFunctionTestInput(types.T_int64.ToType(), []int64{0, 1, 2, -1, 1, 0}, []bool{false, false, false, false, false, true})
 	expectedRound := NewFunctionTestResult(types.T_float64.ToType(), false,
