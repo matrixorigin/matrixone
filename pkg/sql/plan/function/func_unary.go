@@ -1062,7 +1062,7 @@ func BitCountBinaryString(ivecs []*vector.Vector, result vector.FunctionResultWr
 }
 
 func BitLengthFunc(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryStrToFixed[int64](ivecs, result, proc, length, func(v string) int64 {
+	return opUnaryBytesToFixed[int64](ivecs, result, proc, length, func(v []byte) int64 {
 		return int64(len(v) * 8)
 	}, selectList)
 }
@@ -8002,7 +8002,7 @@ func ConnectionID(_ []*vector.Vector, result vector.FunctionResultWrapper, proc 
 // HexString returns a hexadecimal string representation of a string.
 // See https://dev.mysql.com/doc/refman/5.7/en/string-functions.html#function_hex
 func HexString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToStr(ivecs, result, proc, length, hexEncodeString, selectList)
+	return opUnaryBytesToBytes(ivecs, result, proc, length, hexEncodeBytes, selectList)
 }
 
 func HexInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -8188,8 +8188,8 @@ func HexArray(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	}, selectList)
 }
 
-func hexEncodeString(xs []byte) string {
-	return strings.ToUpper(hex.EncodeToString(xs))
+func hexEncodeBytes(xs []byte) []byte {
+	return functionUtil.QuickStrToBytes(strings.ToUpper(hex.EncodeToString(xs)))
 }
 
 func hexEncodeInt64(xs int64) string {
@@ -9718,11 +9718,7 @@ func Uncompress(parameters []*vector.Vector, result vector.FunctionResultWrapper
 }
 
 func Length(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryStrToFixed[int64](ivecs, result, proc, length, strLength, selectList)
-}
-
-func strLength(xs string) int64 {
-	return int64(len(xs))
+	return opUnaryBytesToFixed[int64](ivecs, result, proc, length, func(v []byte) int64 { return int64(len(v)) }, selectList)
 }
 
 func LengthUTF8(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
