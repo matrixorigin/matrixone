@@ -835,7 +835,7 @@ func TestMessageSenderOnClientReceive(t *testing.T) {
 }
 
 func TestMessageSenderOnClientReceiveBatchContextDone(t *testing.T) {
-	t.Run("cancel returns query interrupted", func(t *testing.T) {
+	t.Run("cancel preserves context identity", func(t *testing.T) {
 		sender := new(messageSenderOnClient)
 		sender.receiveCh = make(chan morpc.Message, 1)
 		ctx, cancel := context.WithCancel(context.Background())
@@ -847,10 +847,10 @@ func TestMessageSenderOnClientReceiveBatchContextDone(t *testing.T) {
 		require.Nil(t, bat)
 		require.False(t, over)
 		require.Error(t, err)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted))
+		require.ErrorIs(t, err, ctx.Err())
 	})
 
-	t.Run("upstream deadline returns query interrupted", func(t *testing.T) {
+	t.Run("upstream deadline preserves context identity", func(t *testing.T) {
 		sender := new(messageSenderOnClient)
 		sender.receiveCh = make(chan morpc.Message, 1)
 		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
@@ -864,7 +864,7 @@ func TestMessageSenderOnClientReceiveBatchContextDone(t *testing.T) {
 		require.Nil(t, bat)
 		require.False(t, over)
 		require.Error(t, err)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted))
+		require.ErrorIs(t, err, ctx.Err())
 	})
 
 	t.Run("internal deadline returns rpc timeout", func(t *testing.T) {
@@ -885,7 +885,7 @@ func TestMessageSenderOnClientReceiveBatchContextDone(t *testing.T) {
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrRPCTimeout))
 	})
 
-	t.Run("cancel during merge loop returns query interrupted", func(t *testing.T) {
+	t.Run("cancel during merge loop preserves context identity", func(t *testing.T) {
 		sender := new(messageSenderOnClient)
 		sender.receiveCh = make(chan morpc.Message, 1)
 		ctx, cancel := context.WithCancel(context.Background())
@@ -903,7 +903,7 @@ func TestMessageSenderOnClientReceiveBatchContextDone(t *testing.T) {
 		require.Nil(t, bat)
 		require.False(t, over)
 		require.Error(t, err)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted))
+		require.ErrorIs(t, err, ctx.Err())
 	})
 }
 
@@ -1735,9 +1735,8 @@ func TestCompileExternScanParquetLoadDefaultFanoutContextCancellationTerminatesA
 	cancelQuery()
 	select {
 	case err := <-runDone:
-		// Scope cancellation is normalized at this execution boundary; the
-		// frontend request context reports the client-visible cancellation.
-		require.NoError(t, err)
+		// A client cancellation must survive scope cleanup.
+		require.ErrorIs(t, err, context.Canceled)
 	case <-time.After(time.Second):
 		t.Fatal("client cancellation did not terminate admitted parquet fanout")
 	}
@@ -2698,10 +2697,10 @@ func TestNotifyMessageClean(t *testing.T) {
 		err:    nil,
 	}
 
-	n1.clean(proc)
+	n1.clean(proc, context.Background())
 	require.Equal(t, 1, ff.number)
 
-	n2.clean(proc)
+	n2.clean(proc, context.Background())
 	require.Equal(t, 1, ff.number)
 }
 
@@ -2720,25 +2719,6 @@ func TestScopeHoldAnyCannotRemoteOperator(t *testing.T) {
 	require.NotNil(t, s1.holdAnyCannotRemoteOperator())
 	require.NotNil(t, s0.holdAnyCannotRemoteOperator())
 	require.Nil(t, s2.holdAnyCannotRemoteOperator())
-}
-
-func TestCleanPipelineWitchStartFail(t *testing.T) {
-	s := &Scope{
-		Proc: testutil.NewProcess(t),
-	}
-	s.Proc.BuildPipelineContext(context.Background())
-	op := connector.NewArgument()
-	op.Reg = &process.WaitRegister{
-		Ch2: make(chan process.PipelineSignal, 1),
-	}
-	s.RootOp = op
-
-	cleanPipelineWitchStartFail(s, moerr.NewInternalErrorNoCtx("test cleanPipelineWitchStartFail"), false)
-
-	require.Equal(t, 1, len(op.Reg.Ch2))
-	signal := <-op.Reg.Ch2
-	_, err := signal.Action()
-	require.Error(t, err)
 }
 
 func TestRemoteRunMalformedAddressTerminatesReceiver(t *testing.T) {
@@ -2834,6 +2814,8 @@ func TestMergeRunReturnsWhenRemotePreScopeAddressIsMalformed(t *testing.T) {
 }
 
 func TestCollectMergeRunResultsPrefersProducerError(t *testing.T) {
+	stoppedCtx, stop := context.WithCancelCause(context.Background())
+	stop(process.ErrPipelineStopped)
 	cleanupErr := process.ErrPipelineEndSignalDeliveryFailed
 	producerErr := moerr.NewDuplicateEntryNoCtx("1000000", "")
 	notifyErr := moerr.NewInternalErrorNoCtx("remote producer failed")
@@ -2852,7 +2834,7 @@ func TestCollectMergeRunResultsPrefersProducerError(t *testing.T) {
 		{
 			name:     "producer error replaces cleanup fallback",
 			current:  scopeRunResult{err: cleanupErr},
-			preScope: []scopeRunResult{{err: context.Canceled}, {err: producerErr}},
+			preScope: []scopeRunResult{newScopeRunResultForContext(context.Canceled, stoppedCtx, context.Background()), {err: producerErr}},
 			want:     producerErr,
 		},
 		{
@@ -2869,19 +2851,19 @@ func TestCollectMergeRunResultsPrefersProducerError(t *testing.T) {
 		},
 		{
 			name:     "internally canceled merge resolves to producer error",
-			current:  scopeRunResult{err: context.Canceled, ctx: internalCancelCtx},
+			current:  newScopeRunResultForContext(context.Canceled, internalCancelCtx, nil),
 			preScope: []scopeRunResult{{err: producerErr}},
 			want:     producerErr,
 		},
 		{
 			name:     "internally interrupted merge resolves to producer error",
-			current:  scopeRunResult{err: moerr.NewQueryInterrupted(context.Background()), ctx: internalCancelCtx},
+			current:  newScopeRunResultForContext(moerr.ConvertGoError(context.Background(), context.Canceled), internalCancelCtx, nil),
 			preScope: []scopeRunResult{{err: producerErr}},
 			want:     producerErr,
 		},
 		{
 			name:     "externally canceled merge remains canceled",
-			current:  scopeRunResult{err: context.Canceled, ctx: externalCancelCtx},
+			current:  newScopeRunResultForContext(context.Canceled, externalCancelCtx, nil),
 			preScope: []scopeRunResult{{err: producerErr}},
 			want:     context.Canceled,
 		},
@@ -2898,13 +2880,13 @@ func TestCollectMergeRunResultsPrefersProducerError(t *testing.T) {
 				notifyResults <- notifyMessageResult{err: err}
 			}
 
-			got := collectMergeRunResults(
+			got := (&Compile{}).collectMergeRunResults(
 				testutil.NewProcess(t),
 				tt.current,
 				preScopeResults,
-				notifyResults)
+				notifyResults, context.Background())
 
-			require.Same(t, tt.want, got)
+			require.Same(t, tt.want, process.UnwrapPipelineFailure(got))
 			require.Empty(t, preScopeResults)
 			require.Empty(t, notifyResults)
 		})
