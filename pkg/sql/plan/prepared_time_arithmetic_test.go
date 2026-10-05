@@ -389,7 +389,6 @@ func TestPreparedTimeArithmeticFallbackPreservesIntegerBoundary(t *testing.T) {
 						require.NoError(t, err)
 						actual := filled.GetQuery().Nodes[len(filled.GetQuery().Nodes)-1].ProjectList[0]
 						proc := testutil.NewProc(t)
-						t.Cleanup(proc.Free)
 						eval := func(expr *planpb.Expr) (*vector.Vector, error) {
 							executor, err := colexec.NewExpressionExecutor(proc, expr)
 							require.NoError(t, err)

@@ -409,7 +409,6 @@ func Test_convertToVmInstruction(t *testing.T) {
 
 func TestStringShuffleHashRemoteWireContract(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	t.Cleanup(proc.Free)
 	arg := shuffle.NewArgument()
 	t.Cleanup(arg.Release)
 	arg.ShuffleType = int32(planpb.ShuffleType_Hash)
@@ -459,7 +458,6 @@ func TestStringShuffleHashRemoteWireContract(t *testing.T) {
 
 	decode := func(algorithm process.StringShuffleHashAlgorithm, data []byte) (*Scope, error) {
 		receiverProc := testutil.NewProcess(t)
-		t.Cleanup(receiverProc.Free)
 		receiverProc.SetStringShuffleHashAlgorithm(algorithm)
 		return decodeScope(data, receiverProc, true, nil)
 	}

@@ -331,7 +331,6 @@ func TestCreateIndexBackfillScopesPrePipelineLockToInsert(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
-			t.Cleanup(proc.Free)
 			c := &Compile{proc: proc, pn: &planpb.Plan{}}
 			tableDef := &planpb.TableDef{
 				Name: "source", TblId: 7,
