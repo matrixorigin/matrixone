@@ -161,19 +161,15 @@ func TestSign(t *testing.T) {
 }
 
 func BenchmarkAbsInt64(b *testing.B) {
-	testCases := initAbsTestCase()
 	proc := testutil.NewProcess(b)
-
-	b.StartTimer()
-	for _, tc := range testCases {
-		func() {
-			fcTC := NewFunctionTestCase(proc,
-				tc.inputs, tc.expect, AbsInt64)
-			defer fcTC.Free()
-			_ = fcTC.BenchMarkRun()
-		}()
+	defer proc.Free()
+	for _, tc := range initAbsTestCase() {
+		b.Run(tc.info, func(b *testing.B) {
+			fc := NewFunctionTestCase(proc, tc.inputs, tc.expect, AbsInt64)
+			defer fc.Free()
+			fc.Benchmark(b)
+		})
 	}
-	b.StopTimer()
 }
 
 func initAbsArrayTestCase() []tcTemp {
@@ -7509,7 +7505,6 @@ func TestVecFromBase64InvalidInputClass(t *testing.T) {
 			[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{input}, nil)},
 			NewFunctionTestResult(resultType, true, nil, nil), decode)
 		defer fc.Free()
-		require.NoError(t, fc.result.PreExtendAndReset(fc.fnLength))
 		_, err := fc.DebugRun()
 		return err
 	}

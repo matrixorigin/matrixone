@@ -1797,10 +1797,12 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 		}
 	}
 	for uuid, info := range s.state.CNState.Stores {
+		// Capability acknowledgements are reset by an admission barrier, not
+		// the registered CN generation. Keep that internal owner
+		// discoverable while public SQL routing remains gated by readiness.
 		if s.viewMetadataAdmissionActive() &&
 			!info.ViewMetadataAdmissionReady &&
-			(!info.ViewMetadataAdmissionSupported ||
-				info.ViewMetadataAdmissionGeneration == 0) {
+			info.ViewMetadataAdmissionGeneration == 0 {
 			continue
 		}
 		state := pb.NormalState

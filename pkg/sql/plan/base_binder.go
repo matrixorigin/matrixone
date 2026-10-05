@@ -5439,6 +5439,7 @@ func bindFuncExprAndConstFoldInternal(
 	allowInternalFunctionArgs bool,
 	observer func(*plan.Expr) error,
 ) (*plan.Expr, error) {
+	foldFloatComparisonConstants(proc, name, args)
 	if err := foldDecimalStringComparisonConstants(ctx, proc, name, args); err != nil {
 		return nil, err
 	}
@@ -5508,11 +5509,14 @@ func bindFuncExprAndConstFoldInternal(
 			}
 		}
 
-		rangeCheckFn, _ := BindFuncExprImplByPlanExpr(ctx, "<=", []*plan.Expr{arg1, arg2})
-		rangeCheckRes, _ := ConstantFold(batch.EmptyForConstFoldBatch, rangeCheckFn, proc, false, true)
-		rangeCheckVal := rangeCheckRes.GetLit()
-		if rangeCheckVal == nil || !rangeCheckVal.GetBval() {
-			if !containsDynamicParam(arg1) && !containsDynamicParam(arg2) {
+		// Only static bounds can establish their order at bind time. A
+		// throwaway comparison of markers cannot fold and must not add a
+		// value dependency to an otherwise reusable closed range.
+		if !containsDynamicParam(arg1) && !containsDynamicParam(arg2) {
+			rangeCheckFn, _ := BindFuncExprImplByPlanExpr(ctx, "<=", []*plan.Expr{arg1, arg2})
+			rangeCheckRes, _ := ConstantFold(batch.EmptyForConstFoldBatch, rangeCheckFn, proc, false, true)
+			rangeCheckVal := rangeCheckRes.GetLit()
+			if rangeCheckVal == nil || !rangeCheckVal.GetBval() {
 				goto between_fallback
 			}
 		}
@@ -7315,9 +7319,11 @@ func bindFuncExprImplByPlanExpr(
 				inExpr, guardedInteger := rightVal, false
 				if !partitionIn && len(rightList.List) > 1 && !exactIntegerList &&
 					!checkNoNeedCast(ctx, makeTypeByPlan2Expr(rightVal), typLeft, rightVal) {
-					inExpr, guardedInteger, err = bindPreparedIntegerInValue(ctx, args[0], rightVal)
-					if err != nil {
-						return nil, err
+					if state := preparedBindingState(ctx); state != nil && state.selectStatement {
+						inExpr, guardedInteger, err = bindPreparedIntegerValue(ctx, args[0], rightVal)
+						if err != nil {
+							return nil, err
+						}
 					}
 				}
 				if partitionIn || exactIntegerList || guardedInteger || checkNoNeedCast(ctx, makeTypeByPlan2Expr(rightVal), typLeft, rightVal) {
@@ -7572,6 +7578,13 @@ func bindFuncExprImplByPlanExpr(
 						return exactDecimalIntegerFits(otherExpr, colOid)
 					}
 
+					if (colOid == types.T_float32 && otherOid != types.T_float32) ||
+						((colOid == types.T_float32 || colOid == types.T_float64) && colType.Width > 0 && colType.Scale >= 0) {
+						// Mixed numeric comparisons resolve to DOUBLE. A row-dependent
+						// peer cannot prove that narrowing it to FLOAT preserves results.
+						return checkNoNeedCast(ctx, otherType, colType, otherExpr)
+					}
+
 					// For float types, check if conversion is safe
 					if (colOid == types.T_float32 || colOid == types.T_float64) &&
 						(otherOid == types.T_float32 || otherOid == types.T_float64 || otherOid.IsDecimal() || otherOid.IsInteger()) {
@@ -7605,10 +7618,8 @@ func bindFuncExprImplByPlanExpr(
 						}
 						return false
 					}
-					if colOid.IsDecimal() && otherOid == types.T_float64 && otherExpr != nil {
-						if value, ok := decimalFloatComparisonConstant(otherExpr); ok {
-							return decimalFloatComparisonHasUniqueValue(value, colType)
-						}
+					if colOid.IsDecimal() && (otherOid == types.T_float32 || otherOid == types.T_float64) {
+						return checkNoNeedCast(ctx, otherType, colType, otherExpr)
 					}
 
 					return false
@@ -9561,17 +9572,34 @@ func integerMetadataWidth(oid types.T) int32 {
 	}
 }
 
-func decimalFloatComparisonConstant(expr *Expr) (float64, bool) {
-	if expr == nil || expr.Typ.Id != int32(types.T_float64) {
+// decimalComparisonFloat64 matches the executor's DECIMAL-to-DOUBLE CAST.
+// The approximate types conversion helpers are suitable for estimates, not
+// proofs that change the comparison domain.
+func decimalComparisonFloat64[T interface {
+	types.Decimal64 | types.Decimal128
+	Format(int32) string
+}](value T, scale int32) float64 {
+	result, err := strconv.ParseFloat(value.Format(scale), 64)
+	if err != nil {
+		return math.NaN()
+	}
+	return result
+}
+
+func floatingComparisonConstant(expr *Expr) (float64, bool) {
+	if expr == nil || (expr.Typ.Id != int32(types.T_float64) && expr.Typ.Id != int32(types.T_float32)) {
 		return 0, false
 	}
-	if literal := expr.GetLit(); literal != nil {
+	if literal := expr.GetLit(); literal != nil && !literal.Isnull {
+		if value, ok := literal.GetValue().(*plan.Literal_Fval); ok {
+			return float64(value.Fval), true
+		}
 		if value, ok := literal.GetValue().(*plan.Literal_Dval); ok {
 			return value.Dval, true
 		}
 	}
 	fn := expr.GetF()
-	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) != 2 {
+	if expr.Typ.Id != int32(types.T_float64) || fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) != 2 {
 		return 0, false
 	}
 	if expr.Typ.Width != 0 || expr.Typ.Scale >= 0 {
@@ -9588,18 +9616,18 @@ func decimalFloatComparisonConstant(expr *Expr) (float64, bool) {
 			case types.T_decimal64:
 				decimal, err := types.ParseDecimal64(text.GetSval(), source.Typ.Width, source.Typ.Scale)
 				if err == nil {
-					return types.Decimal64ToFloat64(decimal, source.Typ.Scale), true
+					return decimalComparisonFloat64(decimal, source.Typ.Scale), true
 				}
 			case types.T_decimal128:
 				decimal, err := types.ParseDecimal128(text.GetSval(), source.Typ.Width, source.Typ.Scale)
 				if err == nil {
-					return types.Decimal128ToFloat64(decimal, source.Typ.Scale), true
+					return decimalComparisonFloat64(decimal, source.Typ.Scale), true
 				}
 			}
 		}
 	}
 	literal := source.GetLit()
-	if literal == nil {
+	if literal == nil || literal.Isnull {
 		return 0, false
 	}
 	switch value := literal.GetValue().(type) {
@@ -9611,12 +9639,12 @@ func decimalFloatComparisonConstant(expr *Expr) (float64, bool) {
 		return value.Dval, true
 	case *plan.Literal_Decimal64Val:
 		if value.Decimal64Val != nil {
-			return types.Decimal64ToFloat64(types.Decimal64(value.Decimal64Val.A), fn.Args[0].Typ.Scale), true
+			return decimalComparisonFloat64(types.Decimal64(value.Decimal64Val.A), fn.Args[0].Typ.Scale), true
 		}
 	case *plan.Literal_Decimal128Val:
 		if value.Decimal128Val != nil {
 			coefficient := types.Decimal128{B0_63: uint64(value.Decimal128Val.A), B64_127: uint64(value.Decimal128Val.B)}
-			return types.Decimal128ToFloat64(coefficient, fn.Args[0].Typ.Scale), true
+			return decimalComparisonFloat64(coefficient, fn.Args[0].Typ.Scale), true
 		}
 	}
 	return 0, false
@@ -9633,24 +9661,64 @@ func decimalFloatComparisonHasUniqueValue(value float64, column types.Type) bool
 	switch column.Oid {
 	case types.T_decimal64:
 		candidate, err := types.Decimal64FromFloat64(value, column.Width, column.Scale)
-		if err != nil || types.Decimal64ToFloat64(candidate, column.Scale) != value {
+		if err != nil || decimalComparisonFloat64(candidate, column.Scale) != value {
 			return false
 		}
-		return types.Decimal64ToFloat64(candidate-1, column.Scale) != value &&
-			types.Decimal64ToFloat64(candidate+1, column.Scale) != value
+		return decimalComparisonFloat64(candidate-1, column.Scale) != value &&
+			decimalComparisonFloat64(candidate+1, column.Scale) != value
 	case types.T_decimal128:
 		candidate, err := types.Decimal128FromFloat64(value, column.Width, column.Scale)
-		if err != nil || types.Decimal128ToFloat64(candidate, column.Scale) != value {
+		if err != nil || decimalComparisonFloat64(candidate, column.Scale) != value {
 			return false
 		}
 		previous, err := candidate.Add128(types.Decimal128{B0_63: 1}.Minus())
-		if err != nil || types.Decimal128ToFloat64(previous, column.Scale) == value {
+		if err != nil || decimalComparisonFloat64(previous, column.Scale) == value {
 			return false
 		}
 		next, err := candidate.Add128(types.Decimal128{B0_63: 1})
-		return err == nil && types.Decimal128ToFloat64(next, column.Scale) != value
+		return err == nil && decimalComparisonFloat64(next, column.Scale) != value
 	default:
 		return false
+	}
+}
+
+// foldFloatComparisonConstants lets the shared admission check inspect numeric
+// constants without treating arbitrary expressions as safe narrowing conversions.
+// Reuse the executor-backed folder; prepared and volatile sources stay intact.
+func foldFloatComparisonConstants(proc *process.Process, name string, args []*Expr) {
+	if proc == nil {
+		return
+	}
+	fold := func(column, candidate *Expr) *Expr {
+		if column.GetCol() == nil ||
+			(types.T(column.Typ.Id) != types.T_float32 && types.T(column.Typ.Id) != types.T_float64) ||
+			candidate.GetLit() != nil {
+			return candidate
+		}
+		oid := types.T(candidate.Typ.Id)
+		if (!oid.IsInteger() && !oid.IsFloat() && oid != types.T_decimal64 && oid != types.T_decimal128) ||
+			!staticIntegerComparisonPeer(candidate) {
+			return candidate
+		}
+		folded, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(candidate), proc, false, true)
+		if err == nil && folded != nil && folded.Typ.Id == candidate.Typ.Id &&
+			folded.GetLit() != nil && !folded.GetLit().Isnull {
+			return folded
+		}
+		return candidate
+	}
+	if isDecimalComparisonOperator(name) && len(args) == 2 {
+		args[1] = fold(args[0], args[1])
+		args[0] = fold(args[1], args[0])
+	} else if (name == "in" || name == "not_in") && len(args) == 2 {
+		if list := args[1].GetList(); list != nil {
+			for i, item := range list.List {
+				list.List[i] = fold(args[0], item)
+			}
+		}
+	} else if (name == "between" && len(args) == 3) || (name == "in_range" && len(args) == 4) {
+		args[1] = fold(args[0], args[1])
+		args[2] = fold(args[0], args[2])
 	}
 }
 

@@ -62,13 +62,12 @@ func PreparedPlanDependsOnSubscriptionMetadata(p *Plan) bool {
 	if query == nil {
 		return false
 	}
-	statisticsView := objectkey.Encode(INFORMATION_SCHEMA, informationSchemaStatistics)
 	for _, node := range query.GetNodes() {
 		if node == nil {
 			continue
 		}
-		for _, originView := range node.GetOriginViews() {
-			if strings.EqualFold(originView, statisticsView) {
+		for _, step := range node.GetViewPath() {
+			if step != nil && strings.EqualFold(step.DatabaseName, INFORMATION_SCHEMA) && strings.EqualFold(step.ViewName, informationSchemaStatistics) {
 				return true
 			}
 		}
@@ -326,8 +325,7 @@ func (builder *QueryBuilder) unionSubscriptionStatistics(nodes []int32) (int32, 
 		unionCtx.snapshot = firstCtx.snapshot
 		unionCtx.defaultDatabase = firstCtx.defaultDatabase
 		unionCtx.cteName = firstCtx.cteName
-		unionCtx.directView = firstCtx.directView
-		unionCtx.viewChain = append([]string{}, firstCtx.viewChain...)
+		unionCtx.viewPath = append([]*planpb.ViewStep(nil), firstCtx.viewPath...)
 		unionCtx.restoreViewMySQLSpecialTypes = firstCtx.restoreViewMySQLSpecialTypes
 		unionCtx.headings = append([]string{}, firstCtx.headings...)
 		unionCtx.projectTag = unionTag
@@ -774,9 +772,11 @@ func requireSubscriptionMetadataView(
 	functionName string,
 ) error {
 	for current := bindCtx; current != nil; current = current.parent {
-		if len(current.viewChain) > 0 &&
-			subscriptionMetadataOwnerAllowed(current.viewChain[len(current.viewChain)-1], functionName) {
-			return nil
+		if len(current.viewPath) > 0 {
+			step := current.viewPath[len(current.viewPath)-1]
+			if step != nil && subscriptionMetadataOwnerAllowed(objectkey.Encode(step.DatabaseName, step.ViewName), functionName) {
+				return nil
+			}
 		}
 	}
 	if persistedViewTarget != "" &&

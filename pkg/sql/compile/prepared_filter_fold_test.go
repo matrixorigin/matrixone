@@ -21,16 +21,73 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
 
 type filterFoldWarningCounter struct{ count int }
 
 func (c *filterFoldWarningCounter) AppendWarningDiagnostic(uint16, string) { c.count++ }
+
+func TestFoldedHexBitFilterRemoteRoundTrip(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	t.Cleanup(c.proc.Free)
+	client.version = defines.MORPCLatestVersion
+	column := &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_bit), Width: 8},
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{Name: "v"}},
+	}
+	hex, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "hex", []*planpb.Expr{column})
+	require.NoError(t, err)
+	filter, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "=", []*planpb.Expr{
+		hex, plan2.MakePlan2StringConstExprWithType("AA"),
+	})
+	require.NoError(t, err)
+	_, err = planpb.RequiredRemoteExpressionFeatures(filter)
+	require.NoError(t, err, "the public binder must produce a valid expression")
+
+	var executors []colexec.ExpressionExecutor
+	t.Cleanup(func() {
+		for _, executor := range executors {
+			executor.Free()
+		}
+	})
+	folded, nextExecutors, rebuilt, err := prepareFoldedFilterExprs(
+		c.proc, []*planpb.Expr{filter}, nil, executors, true)
+	executors = nextExecutors
+	require.NoError(t, err)
+	require.True(t, rebuilt)
+	require.False(t, plan2.HasFoldValExpr(filter), "the logical filter must stay unchanged")
+	require.NotNil(t, folded[0].GetF().Args[1].GetFold(), "runtime constants still fold")
+
+	op := value_scan.NewArgument()
+	t.Cleanup(op.Release)
+	scope := &Scope{
+		Magic: Remote, Proc: c.proc, RootOp: op,
+		NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"},
+		DataSource: &Source{
+			node:       &planpb.Node{FilterList: []*planpb.Expr{filter}},
+			FilterExpr: folded[0],
+		},
+	}
+	data, err := encodeRemoteScope(scope, c.proc)
+	require.NoError(t, err, "scan folding must not invalidate private CAST metadata")
+	remote := new(pipeline.Pipeline)
+	require.NoError(t, remote.Unmarshal(data))
+	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, remote))
+	remoteHex := remote.DataSource.Expr.GetF().Args[0].GetF()
+	require.NotNil(t, remoteHex.Args[0].GetF().Args[1].GetT())
+	decoded, err := decodeScope(data, c.proc, true, nil)
+	require.NoError(t, err)
+	t.Cleanup(decoded.release)
+}
 
 func TestDiagnosticFilterClassificationExcludesStorageCopy(t *testing.T) {
 	proc := testutil.NewProcess(t)

@@ -19,6 +19,7 @@ import (
 	"context"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -970,7 +971,8 @@ func preparedBinaryIntegerCastDiagnosticFree(
 
 // ParseExecuteData has already decoded the integer packet and normalized its
 // bytes. Long data is excluded because it bypasses that decoder. Width and sign
-// therefore suffice to prove this widening conversion, including typed NULL.
+// suffice for widening; signed narrowing also checks the current decoded value.
+// Unsupported provenance or a range miss stays with the isolated probe.
 func preparedDirectBinaryIntegerCastDiagnosticFree(
 	prepareStmt *PrepareStmt, expr *plan.Expr, binaryExecute bool,
 ) bool {
@@ -996,7 +998,20 @@ func preparedDirectBinaryIntegerCastDiagnosticFree(
 		return false
 	}
 	sourceUnsigned := prepareStmt.ParamTypes[int(position)*2+1]&0x80 != 0
-	return target.IsInteger() && sourceUnsigned == target.IsUnsignedInt() && target.TypeLen() >= sourceBytes
+	if !target.IsInteger() || sourceUnsigned != target.IsUnsignedInt() {
+		return false
+	}
+	if target.TypeLen() >= sourceBytes {
+		return true
+	}
+	if !target.IsSignedInt() {
+		return false
+	}
+	if prepareStmt.params.GetNulls().Contains(uint64(position)) {
+		return true
+	}
+	_, err := strconv.ParseInt(string(prepareStmt.params.GetBytesAt(int(position))), 10, target.TypeLen()*8)
+	return err == nil
 }
 
 // binaryProtocolPrepareParamConcreteType retains the protocol's SQL domain
@@ -1330,6 +1345,13 @@ func initExecuteStmtParamWithResolverInSession(
 		preparePlan.GetSchemas(), preparedMetadataTS, prepareStmt.Ts, prepareStmt.preparedMetadataCheckTS)
 	if validateNamedSnapshots {
 		change = true
+	}
+	// A prepared EXPLAIN EXECUTE embeds another mutable prepared handle. Its
+	// cached query alone cannot prove the current AST/plan binding or grants.
+	if inner := unwrapExecutableExplainStatement(prepareStmt.PrepareStmt); inner != prepareStmt.PrepareStmt {
+		if _, execute := inner.(*tree.Execute); execute {
+			change = true
+		}
 	}
 	rebuildEveryExecute := shouldRebuildPreparePlan(false, executionPlan)
 	schemaChanged, schemasValidated, err := validateCapturedPrepareSchemas(

@@ -3575,6 +3575,9 @@ func TestPreparedSignedNarrowingCacheGuard(t *testing.T) {
 		{"update", "update nation set n_regionkey = ? where n_nationkey = ?", []string{"1", "7"}, []int{1}},
 		{"delete", "delete from nation where n_nationkey = ?", []string{"7"}, []int{0}},
 		{"multiple predicates", "update nation set n_name = 'updated' where n_nationkey = ? and n_regionkey = ?", []string{"7", "1"}, []int{0, 1}},
+		{"SELECT comparison", "select n_name from nation where n_nationkey=?", []string{"7"}, []int{0}},
+		{"BETWEEN", "select n_name from nation where n_nationkey between ? and ?", []string{"1", "127"}, []int{0, 1}},
+		{"OR BETWEEN", "select n_name from nation where n_nationkey between ? and ? or n_nationkey between ? and ?", []string{"1", "127", "8", "9"}, []int{0, 1, 2, 3}},
 		{"IN", "select n_name from nation where n_nationkey in (?,?)", []string{"127", "1"}, []int{0, 1}},
 		{"NOT IN", "select n_name from nation where n_nationkey not in (?,?)", []string{"127", "1"}, []int{0, 1}},
 		{"no narrowing", "select ?", []string{"127"}, nil},
@@ -3825,6 +3828,7 @@ func BenchmarkPreparedNarrowingCacheAdmission(b *testing.B) {
 		{"guarded_narrowing", "update nation set n_regionkey=1 where n_nationkey=?", defines.MYSQL_TYPE_LONGLONG},
 		{"IN_same_width", "select n_name from nation where n_nationkey in (?,?)", defines.MYSQL_TYPE_LONG},
 		{"IN_guarded_narrowing", "select n_name from nation where n_nationkey in (?,?)", defines.MYSQL_TYPE_LONGLONG},
+		{"ranges_guarded_narrowing", "select count(n_nationkey) from nation where " + strings.TrimSuffix(strings.Repeat("n_nationkey between ? and ? or ", 10), " or "), defines.MYSQL_TYPE_LONGLONG},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			optimizer := plan2.NewMockOptimizer(false)
@@ -4838,7 +4842,7 @@ func TestValidateCapturedPrepareSchemasSkipsPlansRebuiltEveryExecute(t *testing.
 		PubInfo:          &plan.PubInfo{TenantId: 11},
 	}}
 	metadataPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{
-		OriginViews: []string{"information_schema#statistics"},
+		ViewPath: []*plan.ViewStep{{DatabaseName: "information_schema", ViewName: "statistics", Snapshot: &plan.Snapshot{Tenant: &plan.SnapshotTenant{}}}},
 	}}}}}
 	rebuildEveryExecute := shouldRebuildPreparePlan(false, metadataPlan)
 	require.True(t, rebuildEveryExecute)
@@ -6587,7 +6591,15 @@ func TestPreparedBinaryIntegerCastDiagnosticProofBoundary(t *testing.T) {
 		{"unsigned long widening", "4294967295", defines.MYSQL_TYPE_LONG, true, types.T_uint64, false, false, true, true},
 		{"unsigned long long max", "18446744073709551615", defines.MYSQL_TYPE_LONGLONG, true, types.T_uint64, false, false, true, true},
 		{"sign mismatch", "1", defines.MYSQL_TYPE_LONG, false, types.T_uint32, false, false, true, false},
-		{"narrowing", "1", defines.MYSQL_TYPE_LONG, false, types.T_int16, false, false, true, false},
+		{"narrowing", "1", defines.MYSQL_TYPE_LONG, false, types.T_int16, false, false, true, true},
+		{"narrow min", "-2147483648", defines.MYSQL_TYPE_LONGLONG, false, types.T_int32, false, false, true, true},
+		{"narrow max", "2147483647", defines.MYSQL_TYPE_LONGLONG, false, types.T_int32, false, false, true, true},
+		{"narrow underflow", "-2147483649", defines.MYSQL_TYPE_LONGLONG, false, types.T_int32, false, false, true, false},
+		{"narrow overflow", "2147483648", defines.MYSQL_TYPE_LONGLONG, false, types.T_int32, false, false, true, false},
+		{"narrow invalid bytes", "invalid", defines.MYSQL_TYPE_LONGLONG, false, types.T_int32, false, false, true, false},
+		{"narrow NULL", "", defines.MYSQL_TYPE_LONGLONG, false, types.T_int32, true, false, true, true},
+		{"narrow long data", "1", defines.MYSQL_TYPE_LONGLONG, false, types.T_int32, false, true, true, false},
+		{"unsigned narrow stays probed", "1", defines.MYSQL_TYPE_LONGLONG, true, types.T_uint32, false, false, true, false},
 		{"tiny bool heuristic", "1", defines.MYSQL_TYPE_TINY, false, types.T_int32, false, false, true, false},
 		{"long data", "1", defines.MYSQL_TYPE_LONG, false, types.T_int32, false, true, true, false},
 		{"sql prepare", "1", defines.MYSQL_TYPE_LONG, false, types.T_int32, false, false, false, false},
@@ -6612,6 +6624,22 @@ func TestPreparedBinaryIntegerCastDiagnosticProofBoundary(t *testing.T) {
 				prepared.getFromSendLongData = map[int]struct{}{0: {}}
 			}
 			require.Equal(t, tc.want, preparedBinaryIntegerCastDiagnosticFree(prepared, cast, tc.binary))
+			if tc.mysqlType == defines.MYSQL_TYPE_LONGLONG && !tc.unsigned && tc.target == types.T_int32 {
+				// This is the actual signed admission shape: a semantic BIGINT
+				// marker cast to INT, not just the text transport conversion.
+				param.Typ.Id = int32(types.T_int64)
+				typed, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "cast", []*plan.Expr{param, target})
+				require.NoError(t, err)
+				require.Equal(t, tc.want, preparedBinaryIntegerCastDiagnosticFree(prepared, typed, tc.binary))
+				typed.GetF().SyntaxExplicitCast = true
+				require.False(t, preparedBinaryIntegerCastDiagnosticFree(prepared, typed, tc.binary))
+				// Certifying the outer INT must never hide an inner TINYINT
+				// conversion: its smaller source domain remains independently probed.
+				param.Typ.Id = int32(types.T_int8)
+				inner, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "cast", []*plan.Expr{param, target})
+				require.NoError(t, err)
+				require.False(t, preparedBinaryIntegerCastDiagnosticFree(prepared, inner, tc.binary))
+			}
 		})
 	}
 }
@@ -6674,7 +6702,7 @@ func TestPreparedBinaryIntegerSerialDiagnosticProofBoundary(t *testing.T) {
 			serial.GetF().Args[0] = first.GetF().Args[0]
 			check(false)
 			serial.GetF().Args[0] = castAt(0, types.T_int16)
-			check(false)
+			check(true)
 			serial.GetF().Args[0] = first
 			serial.GetF().Args[0].GetF().SyntaxExplicitCast = false
 			check(true)
