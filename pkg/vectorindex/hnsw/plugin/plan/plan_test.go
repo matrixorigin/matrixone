@@ -27,6 +27,7 @@ import (
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
 // init wires the planplugin helper vars BuildSecondaryIndexDefs calls. Production
@@ -103,7 +104,10 @@ func (b *stubPlanBuilder) CanApplyIvfflat(_ *planplugin.VectorSortContext, _ *pl
 
 var _ planplugin.PlanBuilder = (*stubPlanBuilder)(nil)
 
-func newStubCompilerContext() vecViewCtx { return vecViewCtx{} }
+func newStubCompilerContext(t testing.TB) vecViewCtx {
+	t.Helper()
+	return vecViewCtx{proc: testutil.NewProcess(t, testutil.WithMPool(nil), testutil.WithFileService(nil))}
+}
 
 // vecColMap returns a colMap with an int64 pk and a vecf32 vector column, the
 // shape BuildSecondaryIndexDefs expects on the happy path.
@@ -145,7 +149,7 @@ func TestHooks_Redirects(t *testing.T) {
 // The happy path builds the two HNSW tables (metadata + storage).
 func TestBuildSecondaryIndexDefs_OK(t *testing.T) {
 	idxDefs, tblDefs, err := Hooks{}.BuildSecondaryIndexDefs(
-		newStubCompilerContext(), indexOn("vec"), vecColMap("id", "vec"), nil, "id")
+		newStubCompilerContext(t), indexOn("vec"), vecColMap("id", "vec"), nil, "id")
 	require.NoError(t, err)
 	require.Len(t, idxDefs, 2)
 	require.Len(t, tblDefs, 2)
@@ -162,7 +166,7 @@ func TestBuildSecondaryIndexDefs_OK(t *testing.T) {
 // The metadata table carries the provenance columns (nrow, build_ts) as int64.
 func TestBuildSecondaryIndexDefs_MetadataProvenanceColumns(t *testing.T) {
 	_, tblDefs, err := Hooks{}.BuildSecondaryIndexDefs(
-		newStubCompilerContext(), indexOn("vec"), vecColMap("id", "vec"), nil, "id")
+		newStubCompilerContext(t), indexOn("vec"), vecColMap("id", "vec"), nil, "id")
 	require.NoError(t, err)
 
 	names := make(map[string]planpb.Type, len(tblDefs[0].Cols))
@@ -181,13 +185,13 @@ func TestBuildSecondaryIndexDefs_MetadataProvenanceColumns(t *testing.T) {
 
 func TestBuildSecondaryIndexDefs_EmptyPkey(t *testing.T) {
 	_, _, err := Hooks{}.BuildSecondaryIndexDefs(
-		newStubCompilerContext(), indexOn("vec"), vecColMap("id", "vec"), nil, "")
+		newStubCompilerContext(t), indexOn("vec"), vecColMap("id", "vec"), nil, "")
 	require.Error(t, err)
 }
 
 func TestBuildSecondaryIndexDefs_FakePkey(t *testing.T) {
 	_, _, err := Hooks{}.BuildSecondaryIndexDefs(
-		newStubCompilerContext(), indexOn("vec"), vecColMap("id", "vec"), nil, catalog.FakePrimaryKeyColName)
+		newStubCompilerContext(t), indexOn("vec"), vecColMap("id", "vec"), nil, catalog.FakePrimaryKeyColName)
 	require.Error(t, err)
 }
 
@@ -195,7 +199,7 @@ func TestBuildSecondaryIndexDefs_FakePkey(t *testing.T) {
 func TestBuildSecondaryIndexDefs_NonBigintPkey(t *testing.T) {
 	colMap := vecColMap("id", "vec")
 	colMap["id"].Typ.Id = int32(types.T_varchar)
-	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(), indexOn("vec"), colMap, nil, "id")
+	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(t), indexOn("vec"), colMap, nil, "id")
 	require.Error(t, err)
 }
 
@@ -205,27 +209,27 @@ func TestBuildSecondaryIndexDefs_IncludeRefused(t *testing.T) {
 	idx.IndexOption = &tree.IndexOption{
 		IncludeColumns: []*tree.UnresolvedName{tree.NewUnresolvedName(tree.NewCStr("payload", 0))},
 	}
-	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(), idx, vecColMap("id", "vec"), nil, "id")
+	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(t), idx, vecColMap("id", "vec"), nil, "id")
 	require.Error(t, err)
 }
 
 func TestBuildSecondaryIndexDefs_MultiColumn(t *testing.T) {
 	idx := indexOn("vec")
 	idx.KeyParts = append(idx.KeyParts, &tree.KeyPart{ColName: tree.NewUnresolvedName(tree.NewCStr("vec2", 0))})
-	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(), idx, vecColMap("id", "vec"), nil, "id")
+	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(t), idx, vecColMap("id", "vec"), nil, "id")
 	require.Error(t, err)
 }
 
 func TestBuildSecondaryIndexDefs_ColumnNotExist(t *testing.T) {
 	_, _, err := Hooks{}.BuildSecondaryIndexDefs(
-		newStubCompilerContext(), indexOn("nope"), vecColMap("id", "vec"), nil, "id")
+		newStubCompilerContext(t), indexOn("nope"), vecColMap("id", "vec"), nil, "id")
 	require.Error(t, err)
 }
 
 func TestBuildSecondaryIndexDefs_NotAVector(t *testing.T) {
 	colMap := vecColMap("id", "vec")
 	colMap["vec"].Typ.Id = int32(types.T_int64)
-	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(), indexOn("vec"), colMap, nil, "id")
+	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(t), indexOn("vec"), colMap, nil, "id")
 	require.Error(t, err)
 }
 
@@ -233,7 +237,7 @@ func TestBuildSecondaryIndexDefs_NotAVector(t *testing.T) {
 func TestBuildSecondaryIndexDefs_F64Base(t *testing.T) {
 	colMap := vecColMap("id", "vec")
 	colMap["vec"].Typ.Id = int32(types.T_array_float64)
-	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(), indexOn("vec"), colMap, nil, "id")
+	_, _, err := Hooks{}.BuildSecondaryIndexDefs(newStubCompilerContext(t), indexOn("vec"), colMap, nil, "id")
 	require.NoError(t, err)
 }
 
@@ -244,7 +248,7 @@ func TestBuildSecondaryIndexDefs_DuplicateColumn(t *testing.T) {
 		Parts:     []string{"vec"},
 	}}
 	_, _, err := Hooks{}.BuildSecondaryIndexDefs(
-		newStubCompilerContext(), indexOn("vec"), vecColMap("id", "vec"), existed, "id")
+		newStubCompilerContext(t), indexOn("vec"), vecColMap("id", "vec"), existed, "id")
 	require.Error(t, err)
 }
 
@@ -253,7 +257,7 @@ func TestBuildSecondaryIndexDefs_DuplicateColumn(t *testing.T) {
 // The fulltext hook errors for a vector plugin.
 func TestBuildFullTextIndexDefs_NotSupported(t *testing.T) {
 	_, _, err := Hooks{}.BuildFullTextIndexDefs(
-		newStubCompilerContext(), &tree.FullTextIndex{}, vecColMap("id", "body"), nil, "id")
+		newStubCompilerContext(t), &tree.FullTextIndex{}, vecColMap("id", "body"), nil, "id")
 	require.Error(t, err)
 }
 
