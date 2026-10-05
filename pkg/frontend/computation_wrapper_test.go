@@ -4842,7 +4842,7 @@ func TestValidateCapturedPrepareSchemasSkipsPlansRebuiltEveryExecute(t *testing.
 		PubInfo:          &plan.PubInfo{TenantId: 11},
 	}}
 	metadataPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{
-		OriginViews: []string{"information_schema#statistics"},
+		ViewPath: []*plan.ViewStep{{DatabaseName: "information_schema", ViewName: "statistics", Snapshot: &plan.Snapshot{Tenant: &plan.SnapshotTenant{}}}},
 	}}}}}
 	rebuildEveryExecute := shouldRebuildPreparePlan(false, metadataPlan)
 	require.True(t, rebuildEveryExecute)

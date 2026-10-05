@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
@@ -8896,10 +8897,35 @@ func TestBoundViewReferencesSurviveNodeCompaction(t *testing.T) {
 	})
 	require.Len(t, builder.qry.ViewReferences, 1)
 	reference := builder.qry.ViewReferences[0]
-	require.Equal(t, []string{"db#constant"}, reference.OriginViews)
-	require.Equal(t, "db#constant", reference.DirectView)
+	require.Len(t, reference.ViewPath, 1)
+	require.Equal(t, "db", reference.ViewPath[0].DatabaseName)
+	require.Equal(t, "constant", reference.ViewPath[0].ViewName)
+	require.NotNil(t, reference.ViewPath[0].Snapshot.Tenant)
 	builder.qry.Steps = []int32{root}
 	optimizer := &BaseOptimizer{qry: builder.qry}
 	optimizer.pruneUsedNodes(builder.qry)
 	require.Equal(t, []*plan.ViewReference{reference}, builder.qry.ViewReferences)
+	// One nested hint overrides only its own view step; its sibling inherits
+	// the outer snapshot. The compiler snapshots themselves remain unchanged.
+	compiler := builder.compCtx.(*MockCompilerContext2)
+	compiler.EXPECT().GetSnapshot().Return(nil).AnyTimes()
+	outerSnapshot := &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 2}, Tenant: &plan.SnapshotTenant{TenantID: 9, TenantName: "outer"}}
+	innerSnapshot := &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 42, LogicalTime: 7}, Tenant: &plan.SnapshotTenant{TenantID: 9, TenantName: "inner"}}
+	compiler.EXPECT().ResolveSnapshotWithSnapshotName("inner").Return(innerSnapshot, nil).AnyTimes()
+	definition, err := json.Marshal(ViewData{Stmt: "create view wrapper as select id from db.constant {snapshot='inner'} union all select id from db.constant", DefaultDatabase: "db"})
+	require.NoError(t, err)
+	builder.qry.ViewReferences = nil
+	_, err = builder.bindView(NewBindContext(builder, nil), &plan.TableDef{ViewSql: &plan.ViewDef{View: string(definition)}}, outerSnapshot, &plan.ObjectRef{SchemaName: "db", ObjName: "wrapper"}, "db", "wrapper", nil)
+	require.NoError(t, err)
+	require.Len(t, builder.qry.ViewReferences, 3)
+	for i, want := range []*plan.Snapshot{innerSnapshot, outerSnapshot} {
+		path := builder.qry.ViewReferences[i].ViewPath
+		require.Len(t, path, 2)
+		require.Equal(t, "wrapper", path[0].ViewName)
+		require.Equal(t, outerSnapshot, path[0].Snapshot)
+		require.Equal(t, "constant", path[1].ViewName)
+		require.Equal(t, want, path[1].Snapshot)
+		require.NotSame(t, want, path[1].Snapshot)
+	}
+
 }

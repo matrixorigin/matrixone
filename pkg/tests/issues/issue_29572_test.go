@@ -149,5 +149,109 @@ func TestIssue29572LogicalViewAuthorization(t *testing.T) {
 				require.NoError(t, err)
 			})
 		}
+		// A live wrapper must retain each nested reference's historical security
+		// definition. Reuse the account/data and vary only the leaf scan shape.
+		adminConn, err := admin.Conn(ctx)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, adminConn.Close()) })
+		execAdmin := func(query string) {
+			t.Helper()
+			_, err := adminConn.ExecContext(ctx, query)
+			require.NoError(t, err, query)
+		}
+		execAdmin("use app")
+		for _, shape := range []string{"const", "table"} {
+			execAdmin("set view_security_type='INVOKER'")
+			execAdmin("create view app.hist_" + shape + "_inv as select id from app.v_" + shape)
+			execAdmin("set view_security_type='DEFINER'")
+			execAdmin("create view app.hist_" + shape + "_def as select id from app.v_" + shape)
+			for _, mode := range []string{"inv", "def"} {
+				execAdmin("grant select on view app.hist_" + shape + "_" + mode + " to reader")
+			}
+		}
+		execAdmin("create snapshot issue29572_nested for account " + account)
+		t.Cleanup(func() {
+			cleanup, stop := context.WithTimeout(context.Background(), 30*time.Second)
+			defer stop()
+			_, err := admin.ExecContext(cleanup, "drop snapshot if exists issue29572_nested")
+			require.NoError(t, err)
+		})
+		for _, shape := range []string{"const", "table"} {
+			execAdmin("set view_security_type='DEFINER'")
+			execAdmin("alter view app.hist_" + shape + "_inv as select 7 as id")
+			execAdmin("set view_security_type='INVOKER'")
+			execAdmin("alter view app.hist_" + shape + "_def as select id from app.v_" + shape)
+			for _, mode := range []string{"inv", "def"} {
+				execAdmin("create view app.wrap_" + shape + "_" + mode + " as select id from app.hist_" + shape + "_" + mode + " {snapshot='issue29572_nested'}")
+				execAdmin("grant select on view app.wrap_" + shape + "_" + mode + " to reader")
+			}
+		}
+		execAdmin("create view app.mixed_history as select id from app.hist_const_inv union all select id from app.hist_const_inv {snapshot='issue29572_nested'}")
+		execAdmin("grant select on view app.mixed_history to reader")
+		execAdmin("set view_security_type='DEFINER'")
+		for _, cache := range []string{"off", "on"} {
+			t.Run("nested_snapshot/cache="+cache, func(t *testing.T) {
+				db := open(t, account+"#observer#reader")
+				conn, err := db.Conn(ctx)
+				require.NoError(t, err)
+				t.Cleanup(func() { require.NoError(t, conn.Close()) })
+				_, err = conn.ExecContext(ctx, "set enable_privilege_cache="+cache)
+				require.NoError(t, err)
+				read := func(query string, want int) {
+					t.Helper()
+					var value int
+					require.NoError(t, conn.QueryRowContext(ctx, query).Scan(&value), query)
+					require.Equal(t, want, value, query)
+				}
+				for _, shape := range []string{"const", "table"} {
+					read("select id from app.hist_"+shape+"_inv", 7)
+					read("select id from app.hist_"+shape+"_def {snapshot='issue29572_nested'}", 42)
+					read("select id from app.wrap_"+shape+"_def", 42)
+					var value int
+					for _, query := range []string{
+						"select id from app.hist_" + shape + "_inv {snapshot='issue29572_nested'}",
+						"select id from app.wrap_" + shape + "_inv",
+						"select id from app.hist_" + shape + "_def",
+					} {
+						denied(t, conn.QueryRowContext(ctx, query).Scan(&value))
+					}
+				}
+				var value int
+				denied(t, conn.QueryRowContext(ctx, "select id from app.mixed_history").Scan(&value))
+				for _, query := range []string{
+					"explain select id from app.wrap_const_inv",
+					"insert into app.dest select id from app.wrap_const_inv",
+					"create table app.blocked_snapshot as select id from app.wrap_const_inv",
+				} {
+					_, err := conn.ExecContext(ctx, query)
+					denied(t, err)
+				}
+				read("select 42", 42)
+				require.NoError(t, admin.QueryRowContext(ctx, "select count(*) from app.dest").Scan(&value))
+				require.Zero(t, value)
+				require.NoError(t, admin.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where reldatabase='app' and relname='blocked_snapshot'").Scan(&value))
+				require.Zero(t, value)
+				binary, err := conn.PrepareContext(ctx, "select id from app.wrap_const_def where id=?")
+				require.NoError(t, err)
+				t.Cleanup(func() { require.NoError(t, binary.Close()) })
+				require.NoError(t, binary.QueryRowContext(ctx, 42).Scan(&value))
+				require.Equal(t, 42, value)
+				_, err = conn.ExecContext(ctx, "prepare history_text from 'select id from app.wrap_const_def where id=?'")
+				require.NoError(t, err)
+				_, err = conn.ExecContext(ctx, "set @history_id=42")
+				require.NoError(t, err)
+				read("execute history_text using @history_id", 42)
+				execAdmin("revoke select on view app.hist_const_def from reader")
+				denied(t, binary.QueryRowContext(ctx, 42).Scan(&value))
+				denied(t, conn.QueryRowContext(ctx, "execute history_text using @history_id").Scan(&value))
+				execAdmin("grant select on view app.hist_const_def to reader")
+				require.NoError(t, binary.QueryRowContext(ctx, 42).Scan(&value))
+				require.Equal(t, 42, value)
+				read("execute history_text using @history_id", 42)
+				_, err = conn.ExecContext(ctx, "deallocate prepare history_text")
+				require.NoError(t, err)
+			})
+		}
+
 	})
 }

@@ -176,7 +176,7 @@ var checkPrivilegeInCache = func(ctx context.Context, ses *Session, priv *privil
 							// }
 							yes = false
 						} else {
-							if len(mi.originViews) > 0 || mi.directView != "" {
+							if len(mi.viewPath) > 0 {
 								// View chains require metadata checks; skip cache-only evaluation.
 								return false, nil
 							}
