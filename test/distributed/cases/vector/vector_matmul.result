@@ -165,4 +165,37 @@ select vector_matmul(2, id, w, cast(unhex('0000803F000000000000') as blob)) from
 invalid input: vector_matmul: binary queries are 10 bytes, want a non-zero multiple of 16 (float32 x dimension 4)
 select vector_matmul(2, id, w, 'x', cast(unhex('00') as blob)) from bq;
 invalid argument aggregate function vector_matmul, bad value [BIGINT INT VECF32 VARCHAR BLOB]
+create table vq (id int, v vecf4(17), w vecf32(17));
+insert into vq values
+(1, '[8.7649145,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5.7432985]', '[8.7649145,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5.7432985]'),
+(2, '[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17]', '[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17]'),
+(3, '[8,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,6]', '[8,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,6]');
+set @qc = (select vecblock_binary(v) from vq where id = 1);
+set @qc2 = (select concat(vecblock_binary(v), (select vecblock_binary(v) from vq where id = 2)) from vq where id = 1);
+set @qj = (select concat('[', group_concat(vecblock_json(v) order by id), ']') from vq where id in (1, 2));
+select vector_matmul(2, id, v, @qc, '{"query_format":"vecblock","metric":"l2sq"}') from vq;
+➤ vector_matmul(2, id, v, @qc, {"query_format":"vecblock","metric":"l2sq"})[-1,2147483647,0]  𝄀
+[[["1", 0], ["3", 0.5857187]]]
+select vector_matmul(1, id, v, @qc2, '{"query_format":"vecblock","metric":"l2sq"}') from vq;
+➤ vector_matmul(1, id, v, @qc2, {"query_format":"vecblock","metric":"l2sq"})[-1,2147483647,0]  𝄀
+[[["1", 0]], [["2", 0]]]
+select vector_matmul(1, id, v, @qj, '{"query_format":"vecblock","metric":"l2sq"}') from vq;
+➤ vector_matmul(1, id, v, @qj, {"query_format":"vecblock","metric":"l2sq"})[-1,2147483647,0]  𝄀
+[[["1", 0]], [["2", 0]]]
+select vector_matmul(2, id, v, '[[8.764914,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,6.2606535]]', '{"metric":"l2sq"}') from vq;
+➤ vector_matmul(2, id, v, [[8.764914,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,6.2606535]], {"metric":"l2sq"})[-1,2147483647,0]  𝄀
+[[["1", 0.3919571], ["3", 0.94629604]]]
+select vector_matmul(1, id, v, @qc, '{"query_format":"float32"}') from vq;
+invalid input: vector_matmul: binary queries are 23 bytes, want a non-zero multiple of 68 (float32 x dimension 17)
+select vector_matmul(1, id, w, @qc, '{"query_format":"vecblock"}') from vq;
+invalid input: vector_matmul: query_format vecblock needs a vecf8 or vecf4 column, not VECF32
+select vector_matmul(1, id, v, '[[1,2,3]]', '{"query_format":"vecblock"}') from vq;
+invalid input: vector_matmul: query 0: vecf4 exact text: Mismatch type types.blockScaledJSON with value array "at index 0: mismatched type with value\n\n\t[1,2,3]\n\t^......\n"
+select vector_matmul(1, id, v, @qj, '{"query_format":"cells"}') from vq;
+invalid input: vector_matmul: query_format "cells" is not float32 or vecblock
+prepare pvq from 'select vector_matmul(1, id, v, ?, ''{"query_format":"vecblock","metric":"l2sq"}'') from vq';
+execute pvq using @qc;
+➤ vector_matmul(1, vq.id, vq.v, ?, {"query_format":"vecblock","metric":"l2sq"})[-1,2147483647,0]  𝄀
+[[["1", 0]]]
+deallocate prepare pvq;
 drop database vector_matmul_db;

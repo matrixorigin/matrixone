@@ -23,6 +23,7 @@ import (
 	"math"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/bytedance/sonic"
@@ -177,32 +178,43 @@ const (
 	vectorMatmulL2sq
 )
 
-// parseVectorMatmulMetric reads the "metric" of the options JSON object; empty options or
-// no "metric" is the inner product, other keys are ignored.
-func parseVectorMatmulMetric(options string) (int, error) {
+// parseVectorMatmulOptions reads the options JSON object: "metric" (inner_product, the
+// default, cosine or l2sq) and "query_format" (float32, the default: float values; vecblock:
+// vecf8/vecf4 cells as stored). Other keys are ignored.
+func parseVectorMatmulOptions(options string) (metric int, vecblockQueries bool, err error) {
 	if options == "" {
-		return vectorMatmulInnerProduct, nil
+		return vectorMatmulInnerProduct, false, nil
 	}
 	var fields map[string]json.RawMessage
 	if err := sonic.UnmarshalString(options, &fields); err != nil || fields == nil {
-		return 0, moerr.NewInvalidInputNoCtx("vector_matmul: options must be a JSON object")
+		return 0, false, moerr.NewInvalidInputNoCtx("vector_matmul: options must be a JSON object")
 	}
-	raw, ok := fields["metric"]
-	if !ok {
-		return vectorMatmulInnerProduct, nil
-	}
-	var name string
-	if err := sonic.Unmarshal(raw, &name); err == nil {
+	metric = vectorMatmulInnerProduct
+	if raw, ok := fields["metric"]; ok {
+		var name string
+		_ = sonic.Unmarshal(raw, &name)
 		switch name {
 		case "inner_product":
-			return vectorMatmulInnerProduct, nil
 		case "cosine":
-			return vectorMatmulCosine, nil
+			metric = vectorMatmulCosine
 		case "l2sq":
-			return vectorMatmulL2sq, nil
+			metric = vectorMatmulL2sq
+		default:
+			return 0, false, moerr.NewInvalidInputNoCtxf("vector_matmul: metric %s is not inner_product, cosine or l2sq", raw)
 		}
 	}
-	return 0, moerr.NewInvalidInputNoCtxf("vector_matmul: metric %s is not inner_product, cosine or l2sq", raw)
+	if raw, ok := fields["query_format"]; ok {
+		var name string
+		_ = sonic.Unmarshal(raw, &name)
+		switch name {
+		case "float32":
+		case "vecblock":
+			vecblockQueries = true
+		default:
+			return 0, false, moerr.NewInvalidInputNoCtxf("vector_matmul: query_format %s is not float32 or vecblock", raw)
+		}
+	}
+	return metric, vecblockQueries, nil
 }
 
 // vectorMatmulRank is the rank score, the negated distance, of a dot product and the
@@ -277,12 +289,26 @@ func parseVectorMatmulConfig(raw []byte, vecType types.Type) (*vectorMatmulConfi
 	if err != nil {
 		return nil, err
 	}
-	metric, err := parseVectorMatmulMetric(options)
+	metric, vecblockQueries, err := parseVectorMatmulOptions(options)
 	if err != nil {
 		return nil, err
 	}
 	if topk < 1 || topk > vectorMatmulMaxTopK {
 		return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: topk %d out of range [1, %d]", topk, vectorMatmulMaxTopK)
+	}
+	if vecblockQueries {
+		cells, err := decodeVectorMatmulCells(queriesText, binaryQueries, vecType)
+		if err != nil {
+			return nil, err
+		}
+		if len(cells)*int(topk) > vectorMatmulMaxEntries {
+			return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: queries x topk exceeds %d", vectorMatmulMaxEntries)
+		}
+		cfg := &vectorMatmulConfig{topk: int(topk), nq: len(cells), gpu: gpu, metric: metric}
+		if err := cfg.setBlockScaledCells(vecType.Oid, int(vecType.Width), cells); err != nil {
+			return nil, err
+		}
+		return cfg, nil
 	}
 	var queries [][]float32
 	if binaryQueries {
@@ -358,23 +384,94 @@ func decodeVectorMatmulBinaryQueries(b string, dim int) ([][]float32, error) {
 	return queries, nil
 }
 
+// decodeVectorMatmulCells reads query_format vecblock queries for a vecf8/vecf4 column of
+// vecType: a BLOB of cells back to back, or a JSON array of vecblock JSON objects. Every
+// cell must be a valid cell of the column's format and dimension.
+func decodeVectorMatmulCells(queries string, binaryQueries bool, vecType types.Type) ([][]byte, error) {
+	format, ok := vecType.Oid.BlockScaledFormat()
+	if !ok {
+		return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: query_format vecblock needs a vecf8 or vecf4 column, not %s", vecType.Oid)
+	}
+	dim := int(vecType.Width)
+	size := types.BlockScaledCellSize(format, dim)
+	var cells [][]byte
+	if binaryQueries {
+		if len(queries) == 0 || len(queries)%size != 0 {
+			return nil, moerr.NewInvalidInputNoCtxf(
+				"vector_matmul: vecblock queries are %d bytes, want a non-zero multiple of %d (a %s(%d) cell)", len(queries), size, vecType.Oid, dim)
+		}
+		if n := len(queries) / size; n > vectorMatmulMaxQueries {
+			return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: query count %d out of range [1, %d]", n, vectorMatmulMaxQueries)
+		}
+		b := []byte(queries)
+		for off := 0; off < len(b); off += size {
+			cells = append(cells, b[off:off+size:off+size])
+		}
+	} else {
+		var texts []json.RawMessage
+		if err := sonic.UnmarshalString(queries, &texts); err != nil {
+			return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: vecblock queries must be a JSON array of vecblock JSON objects: %v", err)
+		}
+		if len(texts) == 0 || len(texts) > vectorMatmulMaxQueries {
+			return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: query count %d out of range [1, %d]", len(texts), vectorMatmulMaxQueries)
+		}
+		for i, text := range texts {
+			cell, err := types.BlockScaledFromJSON(format, string(text))
+			if err != nil {
+				return nil, vectorMatmulQueryError(i, err)
+			}
+			cells = append(cells, cell)
+		}
+	}
+	for i, cell := range cells {
+		c, err := types.ParseBlockScaledCell(cell)
+		if err != nil {
+			return nil, vectorMatmulQueryError(i, err)
+		}
+		if c.Format != format || c.Dim != dim {
+			return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: query %d is a %s(%d) cell, want %s(%d)", i, c.Format, c.Dim, vecType.Oid, dim)
+		}
+	}
+	return cells, nil
+}
+
+// vectorMatmulQueryError reports the invalid input err of query i.
+func vectorMatmulQueryError(i int, err error) error {
+	return moerr.NewInvalidInputNoCtxf("vector_matmul: query %d: %s", i, strings.TrimPrefix(err.Error(), "invalid input: "))
+}
+
 // setBlockScaled quantizes the queries to the vecf8/vecf4 format and scores cells with the
 // block-scaled CPU kernel.
 func (cfg *vectorMatmulConfig) setBlockScaled(oid types.T, dim int, queries [][]float32) error {
+	format, _ := oid.BlockScaledFormat()
+	cells := make([][]byte, len(queries))
+	for i, q := range queries {
+		var err error
+		if cells[i], err = types.AppendBlockScaled(nil, format, q); err != nil {
+			return err
+		}
+	}
+	return cfg.setBlockScaledCells(oid, dim, cells)
+}
+
+// setBlockScaledCells takes the queries as vecf8/vecf4 cells and scores cells with the
+// block-scaled CPU kernel.
+func (cfg *vectorMatmulConfig) setBlockScaledCells(oid types.T, dim int, cells [][]byte) error {
 	format, _ := oid.BlockScaledFormat()
 	cfg.engineFormat = vectorMatmulEngineMXFP8
 	if format == types.BlockScaledNVFP4 {
 		cfg.engineFormat = vectorMatmulEngineNVFP4
 	}
 	cfg.cellBytes = types.BlockScaledCellSize(format, dim)
-	ops := make([]metric.VecBlockOperand, len(queries))
-	for i, q := range queries {
-		start := len(cfg.queryCells)
+	cfg.queryCells = make([]byte, 0, len(cells)*cfg.cellBytes)
+	for _, c := range cells {
+		cfg.queryCells = append(cfg.queryCells, c...)
+	}
+	ops := make([]metric.VecBlockOperand, len(cells))
+	for i := range cells {
+		q := cfg.queryCells[i*cfg.cellBytes : (i+1)*cfg.cellBytes : (i+1)*cfg.cellBytes]
 		var err error
-		if cfg.queryCells, err = types.AppendBlockScaled(cfg.queryCells, format, q); err != nil {
-			return err
-		}
-		if ops[i].Cell, err = types.ParseBlockScaledCell(cfg.queryCells[start:len(cfg.queryCells):len(cfg.queryCells)]); err != nil {
+		if ops[i].Cell, err = types.ParseBlockScaledCell(q); err != nil {
 			return err
 		}
 	}

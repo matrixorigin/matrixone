@@ -398,8 +398,8 @@ vector_matmul(topk, src_id, src_vec, queries [, options]) → JSON
 | `topk` | constant integer | the hits kept per query, 1–16384 |
 | `src_id` | column | the row key: an integer, `char`/`varchar`/`text` or `uuid` column |
 | `src_vec` | column | `vecf8(N)`, `vecf4(N)`, `vecf32(N)`, `vecf16(N)`, `vecbf16(N)`, `vecint8(N)` or `vecuint8(N)`; `vecf64` is rejected |
-| `queries` | constant string or JSON, or `BLOB` | array of query vectors `[[…], …]`, each of length `N`; or a `BLOB` of little-endian float32 values, `N` per query back to back (`CAST(? AS BLOB)` for a client's bytes), whose length must be a non-zero multiple of `4·N` and whose values must be finite. Converted once to the column's type (quantized for `vecf8`/`vecf4`); for `vecint8`/`vecuint8` every value is an integer in the type's range, otherwise an error |
-| `options` | optional constant JSON object | `"metric"`: `inner_product` (the default), `cosine` or `l2sq`; other keys are ignored; text that is not a JSON object, or another metric, is an error. Dispatch follows the session's `gpu_mode` |
+| `queries` | constant string or JSON, or `BLOB` | array of query vectors `[[…], …]`, each of length `N`; or a `BLOB` of little-endian float32 values, `N` per query back to back (`CAST(? AS BLOB)` for a client's bytes), whose length must be a non-zero multiple of `4·N` and whose values must be finite. Converted once to the column's type (quantized for `vecf8`/`vecf4`); for `vecint8`/`vecuint8` every value is an integer in the type's range, otherwise an error. With `"query_format":"vecblock"` (a `vecf8`/`vecf4` column only) the queries are cells used as given: a `BLOB` of cells back to back (`vecblock_binary`), its length a non-zero multiple of the cell size, or a JSON array of vecblock JSON objects; every cell must be a valid cell of the column's format and dimension |
+| `options` | optional constant JSON object | `"metric"`: `inner_product` (the default), `cosine` or `l2sq`; `"query_format"`: `float32` (the default, float values) or `vecblock` (cells); other keys are ignored; text that is not a JSON object, or another value of either key, is an error. Dispatch follows the session's `gpu_mode` |
 
 An aggregate: one result per group (one row without `GROUP BY`), of MO's `JSON` type.
 `topk`, `queries` and `options` are constants, prepared parameters or user variables; the
@@ -676,7 +676,7 @@ type; normalization changes the ranking, independent of the format.
 - CPU dot-product accumulation = fp32 within a 16-element unit, fp64 across units; the
   GPU accumulates in fp32 (cuBLASLt `CUBLAS_COMPUTE_32F`).
 - GPU dispatch follows the session's `gpu_mode` only. The `options` argument is a JSON
-  object of which only `metric` is read; a tile size is an internal choice bounded by the
+  object of which only `metric` and `query_format` are read; a tile size is an internal choice bounded by the
   allocation account, not a user setting.
 - Transport keeps the stored cell: CDC and ISCP replication SQL, `data branch` merge SQL
   and `INTO OUTFILE` / external-table writes (CSV and JSONL) carry `vecf8`/`vecf4` values

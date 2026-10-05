@@ -112,4 +112,27 @@ deallocate prepare pbq;
 select vector_matmul(2, id, w, cast(unhex('0000803F000000000000') as blob)) from bq;
 select vector_matmul(2, id, w, 'x', cast(unhex('00') as blob)) from bq;
 
+-- query_format vecblock: the queries are vecf8/vecf4 cells, a BLOB back to back
+-- (vecblock_binary) or a JSON array of vecblock JSON objects, used without quantization
+create table vq (id int, v vecf4(17), w vecf32(17));
+insert into vq values
+  (1, '[8.7649145,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5.7432985]', '[8.7649145,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5.7432985]'),
+  (2, '[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17]', '[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17]'),
+  (3, '[8,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,6]', '[8,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,6]');
+set @qc = (select vecblock_binary(v) from vq where id = 1);
+set @qc2 = (select concat(vecblock_binary(v), (select vecblock_binary(v) from vq where id = 2)) from vq where id = 1);
+set @qj = (select concat('[', group_concat(vecblock_json(v) order by id), ']') from vq where id in (1, 2));
+select vector_matmul(2, id, v, @qc, '{"query_format":"vecblock","metric":"l2sq"}') from vq;
+select vector_matmul(1, id, v, @qc2, '{"query_format":"vecblock","metric":"l2sq"}') from vq;
+select vector_matmul(1, id, v, @qj, '{"query_format":"vecblock","metric":"l2sq"}') from vq;
+-- the displayed (decoded) values of row 1 quantize to another cell: not at distance 0
+select vector_matmul(2, id, v, '[[8.764914,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,6.2606535]]', '{"metric":"l2sq"}') from vq;
+select vector_matmul(1, id, v, @qc, '{"query_format":"float32"}') from vq;
+select vector_matmul(1, id, w, @qc, '{"query_format":"vecblock"}') from vq;
+select vector_matmul(1, id, v, '[[1,2,3]]', '{"query_format":"vecblock"}') from vq;
+select vector_matmul(1, id, v, @qj, '{"query_format":"cells"}') from vq;
+prepare pvq from 'select vector_matmul(1, id, v, ?, ''{"query_format":"vecblock","metric":"l2sq"}'') from vq';
+execute pvq using @qc;
+deallocate prepare pvq;
+
 drop database vector_matmul_db;

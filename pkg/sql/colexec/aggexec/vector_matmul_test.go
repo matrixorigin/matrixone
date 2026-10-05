@@ -1102,3 +1102,100 @@ func TestVectorMatmulMetrics(t *testing.T) {
 	}
 	require.Zero(t, mp.CurrNB())
 }
+
+// TestVectorMatmulVecBlockQueries checks query_format vecblock: queries given as vecf8/vecf4
+// cells, a BLOB back to back or a JSON array of vecblock JSON objects, are used as given.
+func TestVectorMatmulVecBlockQueries(t *testing.T) {
+	queries := [][]float32{{1, 0, -0.5, 2}, {0, 3, 0, -1}}
+	const vecblock = `{"query_format":"vecblock","metric":"l2sq"}`
+	forms := func(t *testing.T, f types.BlockScaledFormat, qs [][]float32) (blob []byte, text string, cells [][]byte) {
+		var texts []string
+		for _, q := range qs {
+			cell, err := types.AppendBlockScaled(nil, f, q)
+			require.NoError(t, err)
+			cells = append(cells, cell)
+			blob = append(blob, cell...)
+			j, err := types.BlockScaledToJSON(cell)
+			require.NoError(t, err)
+			texts = append(texts, j)
+		}
+		return blob, "[" + strings.Join(texts, ",") + "]", cells
+	}
+	for _, oid := range []types.T{types.T_array_float8, types.T_array_float4} {
+		vt := types.New(oid, vmDim, 0)
+		f, _ := oid.BlockScaledFormat()
+		blob, text, _ := forms(t, f, queries)
+		q, _ := json.Marshal(queries)
+		want, err := parseVectorMatmulConfig(EncodeVectorMatmulConfig(3, string(q), `{"metric":"l2sq"}`, false), vt)
+		require.NoError(t, err)
+		for name, raw := range map[string][]byte{
+			"blob": EncodeVectorMatmulBinaryConfig(3, blob, vecblock, false),
+			"json": EncodeVectorMatmulConfig(3, text, vecblock, false),
+		} {
+			got, err := parseVectorMatmulConfig(raw, vt)
+			require.NoError(t, err, "%s %s", oid, name)
+			require.Equal(t, want.nq, got.nq, "%s %s", oid, name)
+			require.Equal(t, want.queryCells, got.queryCells, "%s %s", oid, name)
+			require.Equal(t, want.cellBytes, got.cellBytes, "%s %s", oid, name)
+			require.Equal(t, vectorMatmulL2sq, got.metric)
+		}
+	}
+
+	// a vecf4 cell whose decoded values quantize to another cell is kept as given
+	review := make([]float32, 17)
+	review[0], review[16] = 8.7649145, 5.7432985
+	vt := types.New(types.T_array_float4, 17, 0)
+	blob, _, cells := forms(t, types.BlockScaledNVFP4, [][]float32{review})
+	decoded, err := types.BlockScaledToFloat32(cells[0])
+	require.NoError(t, err)
+	exact, err := parseVectorMatmulConfig(EncodeVectorMatmulBinaryConfig(1, blob, vecblock, false), vt)
+	require.NoError(t, err)
+	require.Equal(t, cells[0], exact.queryCells)
+	q, _ := json.Marshal([][]float32{decoded})
+	requantized, err := parseVectorMatmulConfig(EncodeVectorMatmulConfig(1, string(q), "", false), vt)
+	require.NoError(t, err)
+	require.NotEqual(t, cells[0], requantized.queryCells)
+
+	// a row equal to the query is at distance 0, from either form
+	mp := mpool.MustNewZero()
+	rows := [][]float32{{1, 0, 0, 0}, {1, 0, -0.5, 2}, {2, 2, 0, 0}}
+	blob8, text8, _ := forms(t, types.BlockScaledMXFP8, [][]float32{{1, 0, -0.5, 2}})
+	var results []string
+	for _, cfg := range [][]byte{
+		EncodeVectorMatmulBinaryConfig(1, blob8, vecblock, false),
+		EncodeVectorMatmulConfig(1, text8, vecblock, false),
+	} {
+		exec := vmExec(t, mp, types.T_int64.ToType(), 1, cfg)
+		vecs := vmVectors(t, mp, []int64{1, 2, 3}, rows)
+		require.NoError(t, exec.BulkFill(0, vecs))
+		results = append(results, vmFlush(t, mp, exec)...)
+		exec.Free()
+		vmFree(mp, vecs)
+	}
+	require.Equal(t, []string{`[[["2",0]]]`, `[[["2",0]]]`}, results)
+	require.Zero(t, mp.CurrNB())
+
+	f8 := types.New(types.T_array_float8, vmDim, 0)
+	blob4, text4, _ := forms(t, types.BlockScaledNVFP4, queries)
+	blob8, text8, _ = forms(t, types.BlockScaledMXFP8, queries)
+	_, otherDim, _ := forms(t, types.BlockScaledMXFP8, [][]float32{{1, 2, 3}})
+	for name, tc := range map[string]struct {
+		raw  []byte
+		vt   types.Type
+		want string
+	}{
+		"plain column":   {EncodeVectorMatmulBinaryConfig(1, blob8, vecblock, false), types.New(types.T_array_float32, vmDim, 0), "needs a vecf8 or vecf4 column"},
+		"length":         {EncodeVectorMatmulBinaryConfig(1, blob8[:len(blob8)-1], vecblock, false), f8, "non-zero multiple"},
+		"empty":          {EncodeVectorMatmulBinaryConfig(1, nil, vecblock, false), f8, "non-zero multiple"},
+		"other format":   {EncodeVectorMatmulBinaryConfig(1, blob4, vecblock, false), types.New(types.T_array_float4, 5, 0), "cell"},
+		"json format":    {EncodeVectorMatmulConfig(1, text4, vecblock, false), f8, "query 0"},
+		"json dimension": {EncodeVectorMatmulConfig(1, otherDim, vecblock, false), f8, "want VECF8(4)"},
+		"json floats":    {EncodeVectorMatmulConfig(1, `[[1,0,0,0]]`, vecblock, false), f8, "query 0"},
+		"json not array": {EncodeVectorMatmulConfig(1, text8[1:], vecblock, false), f8, "JSON array"},
+		"json empty":     {EncodeVectorMatmulConfig(1, `[]`, vecblock, false), f8, "query count"},
+		"format value":   {EncodeVectorMatmulConfig(1, `[[1,0,0,0]]`, `{"query_format":"cells"}`, false), f8, "query_format"},
+	} {
+		_, err := parseVectorMatmulConfig(tc.raw, tc.vt)
+		require.ErrorContains(t, err, tc.want, name)
+	}
+}

@@ -47,12 +47,23 @@ select g.result,
        cast(concat('[', g.result % 251, ',', g.result % 11, ',', g.result % 13, ',', g.result % 256, ']') as vecuint8(4))
 from generate_series(1, 200000) g;
 
+create table vq (id int primary key, v vecf4(17));
+insert into vq values
+  (1, '[8.7649145,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5.7432985]'),
+  (2, '[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17]'),
+  (3, '[8,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,6]');
+set @vqc = (select vecblock_binary(v) from vq where id = 1);
+set @vqj = (select concat('[', group_concat(vecblock_json(v) order by id), ']') from vq where id in (1, 2));
+
 create table qv (qid int primary key, v vecf32(4));
 insert into qv values (1, '[1,0,0,0]'), (2, '[0,0,1,1]');
 set @qs = (select json_arrayagg(v) from qv);
 
 -- ---- gpu_mode = 1 (cuBLASLt) ----
 SET gpu_mode = 1;
+-- query_format vecblock: exact query cells
+select vector_matmul(1, id, v, @vqc, '{"query_format":"vecblock","metric":"l2sq"}') from vq;
+select vector_matmul(1, id, v, @vqj, '{"query_format":"vecblock","metric":"l2sq"}') from vq;
 select vector_matmul(2, id, a, '[[1,0,0,0],[0,1,0,0]]') from t;
 select vector_matmul(10, id, b, '[[1,1,0,0],[1,-0.5,0.5,1]]') from t;
 select cat, vector_matmul(1, id, a, '[[1,0,0,0]]') r from t group by cat order by cat;
@@ -114,6 +125,9 @@ select (select count(*) from got) as got_rows,
 
 -- ---- gpu_mode = 0 (CPU) — identical results ----
 SET gpu_mode = 0;
+-- query_format vecblock: exact query cells
+select vector_matmul(1, id, v, @vqc, '{"query_format":"vecblock","metric":"l2sq"}') from vq;
+select vector_matmul(1, id, v, @vqj, '{"query_format":"vecblock","metric":"l2sq"}') from vq;
 select vector_matmul(2, id, a, '[[1,0,0,0],[0,1,0,0]]') from t;
 select vector_matmul(10, id, b, '[[1,1,0,0],[1,-0.5,0.5,1]]') from t;
 select cat, vector_matmul(1, id, a, '[[1,0,0,0]]') r from t group by cat order by cat;
