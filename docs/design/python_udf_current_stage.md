@@ -2,10 +2,10 @@
 
 | Field | Value |
 | --- | --- |
-| Design revision | `python-udf-current-stage-r1-2026-09-24` |
+| Design revision | `python-udf-current-stage-r2-2026-09-25` |
 | Applies to | MatrixOne PR #29152, test/development-stage Python UDF |
-| Implementation baseline reviewed | `9847da80d6c7096cb0460e46a5cf710e9714af3a` |
-| Approval | Feature owner `iamlinjunhong` approved this exact revision for the current test/development stage on 2026-09-24 in [PR comment](https://github.com/matrixorigin/matrixone/pull/29152#issuecomment-5809313638). The immutable artifact and independent-review status are recorded in the [design approval record](python_udf_current_stage_approval.md). |
+| Implementation baseline reviewed | `9847da80d6c7096cb0460e46a5cf710e10714af3a` |
+| Approval | Feature owner approved the r1 current-stage contract on 2026-09-24 in [PR comment](https://github.com/matrixorigin/matrixone/pull/29152#issuecomment-5809313638). This r2 addendum is a conservative mixed-version safety repair: it narrows revision admission and adds no production or security scope. The immutable approval artifact and independent-review status remain recorded in the [design approval record](python_udf_current_stage_approval.md). |
 | Not covered | Production tenant isolation, sandbox, Operator rollout, or cross-version rollback/restore |
 
 This is the approved governing contract for the current PR stage. It consolidates
@@ -67,23 +67,31 @@ revision or takes source from an executable plan.
 
 The shared revision catalog is additive to the existing SQL UDF contract.
 During a rolling tenant upgrade, SQL UDF writers continue using the legacy
-`mo_user_defined_function` row while `mo_function_revisions` is absent. Once the
-revision catalog is available, SQL writers publish the compatibility row and
-revision in the same transaction. Readers use the legacy SQL row only when the
-revision schema/head is absent or both head fields are zero. A non-zero but
-missing or malformed revision is a catalog error; it never silently falls back.
-The SQL UDF language, body, security, and evaluation semantics remain owned by
-the existing SQL path. The Python demo's old execution behavior is not a
-compatibility promise.
+`mo_user_defined_function` row while `mo_function_revisions` is absent. The
+revision-aware writer and reader contract is admitted only at the active common
+MORPC protocol floor `107` (`latest + 1` for this PR). Below that floor, a new
+binary creates ordinary SQL UDFs in the legacy row only, and readers explicitly
+use that row so an old writer and a new reader observe the same body. Replacing
+a function that already has a non-zero shared revision head is rejected below
+the floor; this prevents a legacy-only write from leaving a stale immutable
+revision that would become authoritative later. At protocol 107 and above,
+writers publish the compatibility row, immutable revision, and active head in
+the same caller-owned transaction, and readers use the selected revision.
+A non-zero head with a missing or malformed revision is a catalog error; it is
+never silently repaired or synthesized. The SQL UDF language, body, security,
+and evaluation semantics remain owned by the existing SQL path. The Python
+demo's old execution behavior is not a compatibility promise.
 
 Upgrade `4.0.7` (minimum source `4.0.6`) changes the shared function identity
 columns/index and creates `mo_function_revisions`. The upgrade handler is gated
 on common MORPC protocol 61 so a tenant migration does not widen catalog tables
 while an old writer can still serve them. Python DDL independently probes the
 required tenant schema and refuses creation/replacement until it is present;
-worker capability negotiation is a separate exact-contract gate. This is
-feature-level admission, not a requirement that every component have the same
-software version string.
+shared revision publication and Python revision reads additionally require the
+common protocol floor 107. The read-only `GetPythonUdfStatus` query method uses
+the same new wire capability. Worker capability negotiation is a separate
+exact-contract gate. This is feature-level admission, not a requirement that
+every component have the same software version string.
 
 The migration has no down handler. Do not manually remove the revision table,
 columns, or index, and do not claim that restoring an old binary restores Python
@@ -221,12 +229,12 @@ test/development correctness and backpressure, not hostile-code containment.
 
 | Contract | Evidence on the reviewed branch/head | Status |
 | --- | --- | --- |
-| Shared revision schema and SQL legacy fallback | `pkg/bootstrap/versions/v4_0_7/upgrade_test.go`; `pkg/frontend/python_udf_catalog_test.go` | Unit/schema contract covered; upgrade-compatibility CI was skipped. |
+| Shared revision schema, protocol-107 admission, and SQL legacy fallback | `pkg/bootstrap/versions/v4_0_7/upgrade_test.go`; `pkg/frontend/python_udf_catalog_test.go` | Unit/schema contract, immediate-predecessor rollback gate, and old-writer/new-reader legacy-row contract covered; upgrade-compatibility CI was skipped. |
 | Exact FunctionRef and overload invalidation | `pkg/frontend/routine_plan_validation_test.go`; `pkg/frontend/routine_namespace_test.go`; `test/distributed/cases/udf_python/overload_namespace.sql` | Unit and SQL prepared-plan cases present. |
 | SQL expression placement and result semantics | `pkg/sql/colexec/external_routine_eval.go`; `test/distributed/cases/udf_python/relational_positions.sql`, `dml_positions.sql`, `vector_mode.sql` | Physical evaluator and ordinary BVT cases present. |
 | Current-contract restore | `pkg/frontend/clone_database_source.go`; `pkg/frontend/snapshot_catalog_restore.go`; `snapshot_restore.sql` | Same-contract account restore case present; cross-version restore not verified. |
 | Flight state, ACK, cancellation, resource limits | `pkg/udf/python/gateway_test.go`, `gateway_admission_test.go`, `capability_lifecycle_test.go`, `gateway_integration_test.go`, `pkg/udf/python/worker/test_worker.py`, `test_watchdog.py` | Unit, process, and real Flight cases present; this design does not substitute for implementation/lifecycle review. |
-| Historical CI at the reviewed implementation baseline | PR #29152 baseline `9847da80d6c7096cb0460e46a5cf710e9714af3a`; [MatrixOne ALL CI run 35953275189](https://github.com/matrixorigin/matrixone/actions/runs/35953275189) passed | Exact-head run 35988821412 is tracked separately; its UT coverage producer failed, so it is not passing coverage evidence. Upgrade-compatibility checks skipped; no downgrade evidence. |
+| Historical CI at the reviewed implementation baseline | PR #29152 baseline `9847da80d6c7096cb0460e46a5cf710e10714af3a`; [MatrixOne ALL CI run 35953275189](https://github.com/matrixorigin/matrixone/actions/runs/35953275189) passed | Exact-head run 35988821412 is tracked separately; its UT coverage producer failed, so it is not passing coverage evidence. Upgrade-compatibility checks skipped; no downgrade evidence. |
 
 The reviewed change is not declared production-ready. Artifact GC/total-storage
 quota, cross-version migration rollback/restore, authenticated transport, and
