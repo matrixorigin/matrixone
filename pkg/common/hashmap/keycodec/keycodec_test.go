@@ -462,6 +462,7 @@ func TestComputeXXHashCanonicalVarlenaShapes(t *testing.T) {
 	jsonType := types.T_json.ToType()
 	vecType := types.T_array_float32.ToType()
 	charType := types.New(types.T_char, 4, 0)
+	unicodeType := types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetUTF8MB4UnicodeCI)
 	jsonOne := mustEncodeJSON(t, "1")
 	jsonOnePointZero := mustEncodeJSON(t, "1.0")
 	negativeZero := float32(math.Copysign(0, -1))
@@ -471,6 +472,7 @@ func TestComputeXXHashCanonicalVarlenaShapes(t *testing.T) {
 	jsonFlat := vector.NewVec(jsonType)
 	vecFlat := vector.NewVec(vecType)
 	charFlat := vector.NewVec(charType)
+	unicodeFlat := vector.NewVec(unicodeType)
 	jsonConst, err := vector.NewConstBytes(jsonType, jsonOnePointZero, 3, mp)
 	require.NoError(t, err)
 	vecConst, err := vector.NewConstBytes(vecType, vecNegativeZero, 3, mp)
@@ -480,6 +482,7 @@ func TestComputeXXHashCanonicalVarlenaShapes(t *testing.T) {
 		jsonFlat.Free(mp)
 		vecFlat.Free(mp)
 		charFlat.Free(mp)
+		unicodeFlat.Free(mp)
 		jsonConst.Free(mp)
 		vecConst.Free(mp)
 		jsonConstNull.Free(mp)
@@ -495,6 +498,9 @@ func TestComputeXXHashCanonicalVarlenaShapes(t *testing.T) {
 	require.NoError(t, vector.AppendBytes(charFlat, []byte("a"), false, mp))
 	require.NoError(t, vector.AppendBytes(charFlat, []byte("a "), false, mp))
 	require.NoError(t, vector.AppendBytes(charFlat, []byte("b"), true, mp))
+	require.NoError(t, vector.AppendBytes(unicodeFlat, []byte("Straße"), false, mp))
+	require.NoError(t, vector.AppendBytes(unicodeFlat, []byte("STRASSE"), false, mp))
+	require.NoError(t, vector.AppendBytes(unicodeFlat, []byte{0xff}, false, mp))
 
 	jsonHashes := make([]uint64, 3)
 	ComputeXXHash([]*vector.Vector{jsonFlat}, jsonHashes, 17)
@@ -529,6 +535,10 @@ func TestComputeXXHashCanonicalVarlenaShapes(t *testing.T) {
 	ComputeXXHash([]*vector.Vector{charFlat}, charHashes, 17)
 	require.Equal(t, charHashes[0], charHashes[1])
 	require.Equal(t, HashCombine(17, 0), charHashes[2])
+
+	unicodeHashes := make([]uint64, 3)
+	ComputeXXHash([]*vector.Vector{unicodeFlat}, unicodeHashes, 17)
+	require.Equal(t, unicodeHashes[0], unicodeHashes[1])
 }
 
 func TestCanonicalBytesAtUsesGroupingEquality(t *testing.T) {
@@ -539,11 +549,13 @@ func TestCanonicalBytesAtUsesGroupingEquality(t *testing.T) {
 	doubles := vector.NewVec(types.T_float64.ToType())
 	chars := vector.NewVec(types.New(types.T_char, 4, 0))
 	jsonValues := vector.NewVec(types.T_json.ToType())
+	unicodeValues := vector.NewVec(types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetUTF8MB4UnicodeCI))
 	defer func() {
 		floats.Free(mp)
 		doubles.Free(mp)
 		chars.Free(mp)
 		jsonValues.Free(mp)
+		unicodeValues.Free(mp)
 		require.Zero(t, mp.CurrNB())
 	}()
 
@@ -555,12 +567,20 @@ func TestCanonicalBytesAtUsesGroupingEquality(t *testing.T) {
 	require.NoError(t, vector.AppendBytes(chars, []byte("a "), false, mp))
 	require.NoError(t, vector.AppendBytes(jsonValues, mustEncodeJSON(t, "1"), false, mp))
 	require.NoError(t, vector.AppendBytes(jsonValues, mustEncodeJSON(t, "1.0"), false, mp))
+	require.NoError(t, vector.AppendBytes(unicodeValues, []byte("Straße"), false, mp))
+	require.NoError(t, vector.AppendBytes(unicodeValues, []byte("STRASSE"), false, mp))
+	require.NoError(t, vector.AppendBytes(unicodeValues, []byte{0xff}, false, mp))
 
 	for _, vec := range []*vector.Vector{floats, doubles, chars, jsonValues} {
 		left, _ := CanonicalBytesAt(vec, 0, nil)
 		right, _ := CanonicalBytesAt(vec, 1, nil)
 		require.Equal(t, left, right)
 	}
+	left, reusable := CanonicalBytesAt(unicodeValues, 0, nil)
+	right, _ := CanonicalBytesAt(unicodeValues, 1, reusable[:0])
+	require.Equal(t, left, right)
+	invalid, _ := CanonicalBytesAt(unicodeValues, 2, nil)
+	require.Equal(t, []byte{0xff}, invalid)
 }
 
 func TestAppendCanonicalValueSizeMatchesEncoding(t *testing.T) {
