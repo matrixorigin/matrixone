@@ -208,10 +208,18 @@ Device kernels around the matmul, on the engine's stream:
   and the `vecuint8` shifted-element sums. It runs once on the query matrix when the
   engine is created, and on each tile when the metric is cosine or squared L2 or the
   format is `vecuint8`. The host only packs bytes and reads cell headers.
-- A fix-up kernel turns the matmul output into rank scores: the dot product from the
-  global scales in double (or the corrected int64 sums), then the metric over the squared
-  norms, rounded once to fp32; −Inf for NaN and for the padding rows. A zero vector has
-  cosine distance 1, as `cosine_distance` returns.
+- A fix-up kernel turns the matmul output into rank scores. The inner product is
+  `acc × fp32(g_row × g_query)` in fp32, as cuBLASLt applies `alpha = G_a × G_b` to a GEMM
+  with per-tensor global scales; cosine and squared L2 take the dot product with the
+  global scales in double, with the squared norms, so a row equal to a query is at
+  distance 0 (integer formats take the corrected int64 sums). The rank is rounded once to
+  fp32; −Inf for NaN and for the padding rows. A zero vector has cosine distance 1, as
+  `cosine_distance` returns.
+- With one global scale for all rows and one for all queries, the cells are exactly
+  NVIDIA's NVFP4 / MXFP8 operands, and the inner-product scores equal a direct cuBLASLt
+  block-scaled GEMM on the same bytes bit for bit at the same GEMM shape (another shape
+  can select another cuBLASLt algorithm and fp32 summation order);
+  `MatchesNvidiaBlockScaledGemm` in `cgo/cuvs/test/blockscaled_matmul_test.cu` checks it.
 
 Two ways to read a tile's scores, both after the fix-up kernel:
 
@@ -250,7 +258,7 @@ cuBLASLt call sequence:
 | 4 | `cublasLtMatrixLayoutCreate` | A: element type, K × rows(D), ld = K; B: K × rows(Q), ld = K; D: `CUDA_R_32F` (`CUDA_R_32I` for integer formats), rows(D) × rows(Q) |
 | 5 | `cublasLtMatmulPreferenceCreate` / `SetAttribute` | workspace limit (32 MiB) |
 | 6 | `cublasLtMatmulAlgoGetHeuristic` | at construction, for each tile row bucket (128 × 2^i up to the tile capacity); a bucket without an algorithm fails the engine's creation |
-| 7 | `cublasLtMatmul` | alpha = 1, beta = 0, the bucket's cached algorithm; the per-vector `g` of row and query is applied in double by the fix-up kernel (plain formats have `g` = 1) |
+| 7 | `cublasLtMatmul` | alpha = 1, beta = 0, the bucket's cached algorithm; the per-vector `g` of row and query is applied by the fix-up kernel, in fp32 for the inner product and in double for cosine and squared L2 (plain formats have `g` = 1) |
 
 Contract (each point measured on sm_120 with cuBLASLt 13.6):
 

@@ -437,8 +437,9 @@ void nvidia_gemm(int format, const std::vector<uint8_t>& x, const std::vector<ui
 // global scale per operand in NVIDIA's layout, scores them with nvidia_gemm, and scores the
 // same bytes as MO cells (every row carrying the operand's global scale, as vecblock JSON or
 // vecblock_binary stores it) with the engine. The scores agree to the float32 rounding of the
-// two runs, and so do the top-10 rows of each query.
-void check_matches_nvidia(int format, size_t K, size_t rows, size_t nq) {
+// two runs, and so do the top-10 rows of each query; at the GEMM shape of the engine's tile
+// (same_shape), where cuBLASLt runs the same algorithm, they are bit-identical.
+void check_matches_nvidia(int format, size_t K, size_t rows, size_t nq, bool same_shape = false) {
     std::mt19937 rng(uint32_t(format * 1009 + K + rows));
     const bool fp8 = format == GPU_BLOCKSCALED_MXFP8;
     const size_t block = fp8 ? 32 : 16, row_bytes = fp8 ? K : K / 2, S = K / block;
@@ -520,6 +521,7 @@ void check_matches_nvidia(int format, size_t K, size_t rows, size_t nq) {
             if ((ia < 0) == (ib < 0)) max_ulps = std::max<int64_t>(max_ulps, std::llabs(int64_t(ia) - ib));
         }
     }
+    if (same_shape) ASSERT_EQ(identical, rows * nq);
     // the same rows lead every query, unless the 10th and 11th scores are within rounding
     for (size_t j = 0; j < nq; j++) {
         std::vector<size_t> on(rows), om(rows);
@@ -625,13 +627,14 @@ TEST(BlockScaledMatmulTest, TopKMatchesFullScores) {
 }
 
 // With one global scale per operand, MO's cells hold exactly NVIDIA's NVFP4 / MXFP8 operands,
-// and vector_matmul's engine scores them as cuBLASLt does outside MO.
+// and vector_matmul's engine scores them as cuBLASLt does outside MO: bit for bit at the same
+// GEMM shape.
 TEST(BlockScaledMatmulTest, MatchesNvidiaBlockScaledGemm) {
     for (int format : {GPU_BLOCKSCALED_NVFP4, GPU_BLOCKSCALED_MXFP8}) {
         check_matches_nvidia(format, 768, 300, 5);
         check_matches_nvidia(format, 1024, 1000, 16);
         // one 512-row tile: the shape of the engine's GEMM
-        check_matches_nvidia(format, 1024, 512, 16);
+        check_matches_nvidia(format, 1024, 512, 16, true);
     }
 }
 
