@@ -354,7 +354,7 @@ create table exact (id int primary key, v vecf4(17), e vecf8(3));
 insert into exact values (1, '[8.7649145,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5.7432985]', '[447,1,-2]');
 select vecblock_json(v), vecblock_json(e) from exact;
 ➤ vecblock_json(v)[-1,16383,0]  ¦  vecblock_json(e)[-1,16383,0]  𝄀
-{"g":0.0032607568,"b":[{"s":448,"v":[6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]},{"s":320,"v":[6]}]}  ¦  {"b":[{"s":1,"v":[448,1,-2]}]}
+{"g":0.0032607568,"s":[448,320],"v":[6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,6]}  ¦  {"g":1,"s":[1],"v":[448,1,-2]}
 insert into exact select 2, vecblock_json(v), vecblock_json(e) from exact where id = 1;
 insert into exact values (3, '[8.764914, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6.2606535]', '[448, 1, -2]');
 select id, v, vecblock_json(v) = (select vecblock_json(v) from exact where id = 1) same_cell from exact order by id;
@@ -365,14 +365,18 @@ select id, v, vecblock_json(v) = (select vecblock_json(v) from exact where id = 
 select vecblock_json(cast(null as vecf8(2)));
 ➤ vecblock_json(cast(null as vecf8(2)))[-1,16383,0]  𝄀
 null
-select cast('{"g":1,"b":[{"s":1,"v":[1,2]}]}' as vecf4(3));
+select cast('{"g":1,"s":[1],"v":[1,2]}' as vecf4(3));
 invalid input: expected vector dimension 3 != actual dimension 2.
-select cast('{"b":[{"s":3,"v":[1]}]}' as vecf8(1));
-invalid input: vecf8 exact text: block 0 scale 3 is not a power of two in [2^-127, 2^127]
-select cast('{"g":1,"b":[{"s":1,"v":[2.5]}]}' as vecf4(1));
-invalid input: vecf4 exact text: block 0 value 2.5 is not an E2M1 value
+select cast('{"g":1,"s":[3],"v":[1]}' as vecf8(1));
+invalid input: vecf8 exact text: scale 0 (3) is not a power of two in [2^-127, 2^127]
+select cast('{"g":1,"s":[1],"v":[2.5]}' as vecf4(1));
+invalid input: vecf4 exact text: value 0 (2.5) is not an E2M1 value
+select cast('{"s":[1],"v":[1]}' as vecf8(1));
+invalid input: vecf8 exact text: "g" is required
+select cast('{"g":1,"s":[1],"v":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]}' as vecf4(17));
+invalid input: vecf4 exact text: "s" has 1 scales, want 2 for 17 values
 create table peer (id int, v vecf8(1));
-insert into peer values (2, '{"b":[{"s":1,"v":[1]}]}'), (1, '{"b":[{"s":2,"v":[0.5]}]}'), (0, '{"b":[{"s":1,"v":[1]}]}'), (3, '[2]');
+insert into peer values (2, '{"g":1,"s":[1],"v":[1]}'), (1, '{"g":1,"s":[2],"v":[0.5]}'), (0, '{"g":1,"s":[1],"v":[1]}'), (3, '[2]');
 select id from peer order by v, id;
 ➤ id[4,32,0]  𝄀
 0  𝄀
@@ -408,9 +412,9 @@ insert into vbin select 2, cast(vecblock_binary(v) as vecf4(17)), cast(vecblock_
 insert into vbin values (3, cast(unhex('01020000110000006CB2553B7E7A070000000000000007') as blob), cast(unhex('01010000020000000000803F7F7EBC') as blob));
 select id, vecblock_json(v), vecblock_json(e) from vbin order by id;
 ➤ id[4,32,0]  ¦  vecblock_json(v)[-1,16383,0]  ¦  vecblock_json(e)[-1,16383,0]  𝄀
-1  ¦  {"g":0.0032607568,"b":[{"s":448,"v":[6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]},{"s":320,"v":[6]}]}  ¦  {"b":[{"s":1,"v":[448,-1.5]}]}  𝄀
-2  ¦  {"g":0.0032607568,"b":[{"s":448,"v":[6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]},{"s":320,"v":[6]}]}  ¦  {"b":[{"s":1,"v":[448,-1.5]}]}  𝄀
-3  ¦  {"g":0.0032607568,"b":[{"s":448,"v":[6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]},{"s":320,"v":[6]}]}  ¦  {"b":[{"s":1,"v":[448,-1.5]}]}
+1  ¦  {"g":0.0032607568,"s":[448,320],"v":[6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,6]}  ¦  {"g":1,"s":[1],"v":[448,-1.5]}  𝄀
+2  ¦  {"g":0.0032607568,"s":[448,320],"v":[6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,6]}  ¦  {"g":1,"s":[1],"v":[448,-1.5]}  𝄀
+3  ¦  {"g":0.0032607568,"s":[448,320],"v":[6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,6]}  ¦  {"g":1,"s":[1],"v":[448,-1.5]}
 select count(distinct vecblock_binary(v)), count(distinct vecblock_binary(e)) from vbin;
 ➤ count(distinct vecblock_binary(v))[-5,64,0]  ¦  count(distinct vecblock_binary(e))[-5,64,0]  𝄀
 1  ¦  1
@@ -458,14 +462,14 @@ select * from expt order by id into outfile '$resources/into_outfile/vecblock.cs
 select load_file(cast('file://$resources/into_outfile/vecblock.csv' as datalink)) as csv_content;
 ➤ csv_content[-1,16383,0]  𝄀
 id,v,e
-1,"{""g"":0.0032607568,""b"":[{""s"":448,""v"":[6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]},{""s"":320,""v"":[6]}]}","{""b"":[{""s"":1,""v"":[448,-1.5]}]}"
-2,\N,"{""b"":[{""s"":0.0078125,""v"":[0.125,384]}]}"
+1,"{""g"":0.0032607568,""s"":[448,320],""v"":[6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,6]}","{""g"":1,""s"":[1],""v"":[448,-1.5]}"
+2,\N,"{""g"":1,""s"":[0.0078125],""v"":[0.125,384]}"
 
 select * from expt order by id into outfile '$resources/into_outfile/vecblock.jsonl';
 select load_file(cast('file://$resources/into_outfile/vecblock.jsonl' as datalink)) as jsonl_content;
 ➤ jsonl_content[-1,16383,0]  𝄀
-{"e":{"b":[{"s":1,"v":[448,-1.5]}]},"id":1,"v":{"g":0.0032607568,"b":[{"s":448,"v":[6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]},{"s":320,"v":[6]}]}}
-{"e":{"b":[{"s":0.0078125,"v":[0.125,384]}]},"id":2,"v":null}
+{"e":{"g":1,"s":[1],"v":[448,-1.5]},"id":1,"v":{"g":0.0032607568,"s":[448,320],"v":[6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,6]}}
+{"e":{"g":1,"s":[0.0078125],"v":[0.125,384]},"id":2,"v":null}
 
 create table expt_csv like expt;
 load data infile '$resources/into_outfile/vecblock.csv' into table expt_csv fields terminated by ',' enclosed by '"' ignore 1 lines;

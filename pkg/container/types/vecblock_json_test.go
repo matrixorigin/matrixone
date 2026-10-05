@@ -16,6 +16,7 @@ package types
 
 import (
 	"math/rand"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -79,44 +80,53 @@ func TestBlockScaledJSONForm(t *testing.T) {
 	text, err := BlockScaledToJSON(cell)
 	require.NoError(t, err)
 	// the global scale is amax / (6 * 448); the block scale 448 and the codes decode to the input
-	require.Equal(t, `{"g":0.002232143,"b":[{"s":448,"v":[1,-3,0,6,0.5]}]}`, text)
+	require.Equal(t, `{"g":0.002232143,"s":[448],"v":[1,-3,0,6,0.5]}`, text)
 	cell, err = AppendBlockScaled(nil, BlockScaledMXFP8, []float32{1, 2})
 	require.NoError(t, err)
 	text, err = BlockScaledToJSON(cell)
 	require.NoError(t, err)
-	require.Equal(t, `{"b":[{"s":0.0078125,"v":[128,256]}]}`, text)
+	require.Equal(t, `{"g":1,"s":[0.0078125],"v":[128,256]}`, text)
 }
 
 func TestBlockScaledJSONRejects(t *testing.T) {
-	block32 := `[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]`
+	ones := func(n int) string {
+		return "[" + strings.TrimSuffix(strings.Repeat("1,", n), ",") + "]"
+	}
 	for _, tc := range []struct {
 		f    BlockScaledFormat
 		text string
 	}{
-		{BlockScaledNVFP4, `{"b":[{"s":1,"v":[1]}]}`},                                 // no global
-		{BlockScaledMXFP8, `{"g":2,"b":[{"s":1,"v":[1]}]}`},                           // vecf8 global is 1
-		{BlockScaledMXFP8, `{"b":[]}`},                                                // no block
-		{BlockScaledMXFP8, `{"b":[{"v":[1]}]}`},                                       // no scale
-		{BlockScaledMXFP8, `{"b":[{"s":3,"v":[1]}]}`},                                 // scale not a power of two
-		{BlockScaledNVFP4, `{"g":1,"b":[{"s":-1,"v":[1]}]}`},                          // negative scale
-		{BlockScaledNVFP4, `{"g":1,"b":[{"s":1,"v":[2.5]}]}`},                         // not an E2M1 value
-		{BlockScaledMXFP8, `{"b":[{"s":1,"v":[1.0625]}]}`},                            // not an E4M3 value
-		{BlockScaledMXFP8, `{"b":[{"s":1,"v":[1]},{"s":1,"v":[1]}]}`},                 // a short block before the last
-		{BlockScaledMXFP8, `{"b":[{"s":1,"v":` + block32[:len(block32)-1] + `,1]}]}`}, // 33 values
-		{BlockScaledMXFP8, `{"b":[{"s":1,"v":[]}]}`},                                  // empty block
-		{BlockScaledMXFP8, `{"b":[{"s":1,"v":[1]}],"x":1}`},                           // unknown key
-		{BlockScaledMXFP8, `{"b":[{"s":1,"v":[1]}]} x`},                               // trailing text
-		{BlockScaledMXFP8, `{"b":[{"s":1,"v":["1"]}]}`},                               // not a number
-		{BlockScaledNVFP4, `{"g":1e38,"b":[{"s":448,"v":[6]}]}`},                      // decodes to infinity
-		{BlockScaledNVFP4, `{"g":1e39,"b":[{"s":1,"v":[1]}]}`},                        // not a finite float32
+		{BlockScaledNVFP4, `{"s":[1],"v":[1]}`},                    // no global
+		{BlockScaledMXFP8, `{"s":[1],"v":[1]}`},                    // no global
+		{BlockScaledMXFP8, `{"g":2,"s":[1],"v":[1]}`},              // vecf8 global is 1
+		{BlockScaledMXFP8, `{"g":1,"s":[],"v":[]}`},                // no value
+		{BlockScaledMXFP8, `{"g":1,"v":[1]}`},                      // no scale
+		{BlockScaledMXFP8, `{"g":1,"s":[1,1],"v":[1]}`},            // a scale per block: 1
+		{BlockScaledMXFP8, `{"g":1,"s":[1],"v":` + ones(33) + `}`}, // 33 values need 2 scales
+		{BlockScaledNVFP4, `{"g":1,"s":[1],"v":` + ones(17) + `}`}, // 17 values need 2 scales
+		{BlockScaledMXFP8, `{"g":1,"s":[3],"v":[1]}`},              // scale not a power of two
+		{BlockScaledNVFP4, `{"g":1,"s":[-1],"v":[1]}`},             // negative scale
+		{BlockScaledNVFP4, `{"g":1,"s":[1],"v":[2.5]}`},            // not an E2M1 value
+		{BlockScaledMXFP8, `{"g":1,"s":[1],"v":[1.0625]}`},         // not an E4M3 value
+		{BlockScaledMXFP8, `{"g":1,"s":[1],"v":[1],"x":1}`},        // unknown key
+		{BlockScaledMXFP8, `{"b":[{"s":1,"v":[1]}]}`},              // the former per-block form
+		{BlockScaledMXFP8, `{"g":1,"s":[1],"v":[1]} x`},            // trailing text
+		{BlockScaledMXFP8, `{"g":1,"s":[1],"v":["1"]}`},            // not a number
+		{BlockScaledMXFP8, `{"g":1,"s":["1"],"v":[1]}`},            // not a number
+		{BlockScaledNVFP4, `{"g":1e38,"s":[448],"v":[6]}`},         // decodes to infinity
+		{BlockScaledNVFP4, `{"g":1e39,"s":[1],"v":[1]}`},           // not a finite float32
+		{BlockScaledMXFP8, `{"g":1,"s":[1],"v":[[1]]}`},            // nested values
 	} {
 		_, err := BlockScaledFromJSON(tc.f, tc.text)
 		require.Error(t, err, "%s %s", tc.f, tc.text)
 	}
 	// -0 is stored as code 0
-	a, err := BlockScaledFromJSON(BlockScaledMXFP8, `{"b":[{"s":1,"v":[-0,2]}]}`)
+	a, err := BlockScaledFromJSON(BlockScaledMXFP8, `{"g":1,"s":[1],"v":[-0,2]}`)
 	require.NoError(t, err)
-	b, err := BlockScaledFromJSON(BlockScaledMXFP8, `{"b":[{"s":1,"v":[0,2]}]}`)
+	b, err := BlockScaledFromJSON(BlockScaledMXFP8, `{"g":1,"s":[1],"v":[0,2]}`)
 	require.NoError(t, err)
 	require.Equal(t, a, b)
+	// 33 values in two blocks, the last of one value
+	_, err = BlockScaledFromJSON(BlockScaledMXFP8, `{"g":1,"s":[1,2],"v":`+ones(33)+`}`)
+	require.NoError(t, err)
 }

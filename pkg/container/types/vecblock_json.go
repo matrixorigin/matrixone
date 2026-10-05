@@ -26,15 +26,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
-// The exact text of a vecf8/vecf4 cell is a JSON object with its blocks as stored:
+// The exact text of a vecf8/vecf4 cell is a JSON object with its parts as stored:
 //
-//	{"g": 0.0032617, "b": [{"s": 0.5, "v": [1, 3, 4, 5, ...]}, {"s": 2, "v": [2, 3, ...]}]}
+//	{"g": 0.0032617, "s": [0.5, 2], "v": [1, 3, 4, 5, ..., 2, 3, ...]}
 //
-// "s" is a block's scale value (E8M0 for vecf8, UE4M3 for vecf4), "v" its element values
-// (E4M3 for vecf8, E2M1 for vecf4), 32 (vecf8) or 16 (vecf4) per block and fewer in the
-// last block, and "g" the vecf4 global scale; vecf8's global is 1 and "g" is omitted. Each
-// element decodes as v * s * g. Every number is the shortest float32 text, so parsing the
-// text rebuilds the same cell bytes, without quantization.
+// "v" holds the element values (E4M3 for vecf8, E2M1 for vecf4), "s" one scale value per
+// block of 32 (vecf8) or 16 (vecf4) elements, the last block shorter (E8M0 for vecf8, UE4M3
+// for vecf4), and "g" the global scale, always 1 for vecf8.
+// Element i decodes as v[i] * s[i/blockSize] * g. Every number is the shortest float32
+// text, so parsing the text rebuilds the same cell bytes, without quantization.
 
 // IsBlockScaledJSON reports whether s is the exact text form (a JSON object) rather than a
 // "[...]" list of values.
@@ -48,29 +48,22 @@ func BlockScaledToJSON(cell []byte) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	bs := c.Format.BlockSize()
-	out := make([]byte, 0, 16+len(c.Scales)*12+c.Dim*6)
-	out = append(out, '{')
-	if c.Format == BlockScaledNVFP4 {
-		out = append(out, `"g":`...)
-		out = strconv.AppendFloat(out, float64(c.Global), 'g', -1, 32)
-		out = append(out, ',')
-	}
-	out = append(out, `"b":[`...)
+	out := make([]byte, 0, 16+len(c.Scales)*8+c.Dim*6)
+	out = append(out, `{"g":`...)
+	out = strconv.AppendFloat(out, float64(c.Global), 'g', -1, 32)
+	out = append(out, `,"s":[`...)
 	for b := range c.Scales {
 		if b > 0 {
 			out = append(out, ',')
 		}
-		out = append(out, `{"s":`...)
 		out = strconv.AppendFloat(out, float64(blockScaleValue(c.Format, c.Scales[b])), 'g', -1, 32)
-		out = append(out, `,"v":[`...)
-		for i := b * bs; i < min((b+1)*bs, c.Dim); i++ {
-			if i > b*bs {
-				out = append(out, ',')
-			}
-			out = strconv.AppendFloat(out, float64(blockScaledElemValue(&c, i)), 'g', -1, 32)
+	}
+	out = append(out, `],"v":[`...)
+	for i := 0; i < c.Dim; i++ {
+		if i > 0 {
+			out = append(out, ',')
 		}
-		out = append(out, "]}"...)
+		out = strconv.AppendFloat(out, float64(blockScaledElemValue(&c, i)), 'g', -1, 32)
 	}
 	return string(append(out, "]}"...)), nil
 }
@@ -94,14 +87,10 @@ func blockScaledElemValue(c *BlockScaledCell, i int) float32 {
 // blockScaledJSONAPI decodes the exact text; an unknown key is an error.
 var blockScaledJSONAPI = sonic.Config{DisallowUnknownFields: true}.Froze()
 
-type blockScaledJSONBlock struct {
-	S json.RawMessage   `json:"s"`
-	V []json.RawMessage `json:"v"`
-}
-
 type blockScaledJSON struct {
-	G json.RawMessage        `json:"g"`
-	B []blockScaledJSONBlock `json:"b"`
+	G json.RawMessage   `json:"g"`
+	S []json.RawMessage `json:"s"`
+	V []json.RawMessage `json:"v"`
 }
 
 // BlockScaledFromJSON builds the cell of format f from its exact text: every scale and
@@ -114,70 +103,58 @@ func BlockScaledFromJSON(f BlockScaledFormat, s string) ([]byte, error) {
 	if err := blockScaledJSONAPI.UnmarshalFromString(s, &doc); err != nil {
 		return nil, invalid("%v", err)
 	}
-	if len(doc.B) == 0 {
-		return nil, invalid(`"b" must list at least one block`)
-	}
-	global := float32(1)
-	switch {
-	case f == BlockScaledNVFP4 && doc.G == nil:
-		return nil, invalid(`"g" is required`)
-	case doc.G != nil:
-		g, err := parseBlockScaledNumber(doc.G)
-		if err != nil {
-			return nil, invalid(`"g": %v`, err)
-		}
-		if f == BlockScaledMXFP8 && g != 1 {
-			return nil, invalid(`"g" is %v, vecf8's global scale is 1`, g)
-		}
-		global = g
-	}
-	bs := f.BlockSize()
-	dim := 0
-	for i, b := range doc.B {
-		if b.S == nil {
-			return nil, invalid(`block %d has no "s"`, i)
-		}
-		if len(b.V) == 0 || len(b.V) > bs || (i < len(doc.B)-1 && len(b.V) != bs) {
-			return nil, invalid("block %d has %d values, want %d (fewer only in the last block)", i, len(b.V), bs)
-		}
-		dim += len(b.V)
+	dim := len(doc.V)
+	if dim == 0 {
+		return nil, invalid(`"v" must list at least one value`)
 	}
 	if dim > MaxArrayDimension {
 		return nil, invalid("dimension %d exceeds %d", dim, MaxArrayDimension)
 	}
-
+	nScales := BlockScaledScaleCount(f, dim)
+	if len(doc.S) != nScales {
+		return nil, invalid(`"s" has %d scales, want %d for %d values`, len(doc.S), nScales, dim)
+	}
+	if doc.G == nil {
+		return nil, invalid(`"g" is required`)
+	}
+	global, err := parseBlockScaledNumber(doc.G)
+	if err != nil {
+		return nil, invalid(`"g": %v`, err)
+	}
+	if f == BlockScaledMXFP8 && global != 1 {
+		return nil, invalid(`"g" is %v, vecf8's global scale is 1`, global)
+	}
 	cell := make([]byte, BlockScaledCellSize(f, dim))
 	cell[0] = blockScaledVersion
 	cell[1] = byte(f)
 	binary.LittleEndian.PutUint32(cell[4:8], uint32(dim))
 	binary.LittleEndian.PutUint32(cell[8:12], math.Float32bits(global))
-	scales := cell[BlockScaledHeaderSize : BlockScaledHeaderSize+len(doc.B)]
-	elems := cell[BlockScaledHeaderSize+len(doc.B):]
-	for b, blk := range doc.B {
-		sv, err := parseBlockScaledNumber(blk.S)
+	scales := cell[BlockScaledHeaderSize : BlockScaledHeaderSize+nScales]
+	elems := cell[BlockScaledHeaderSize+nScales:]
+	for b, num := range doc.S {
+		sv, err := parseBlockScaledNumber(num)
 		if err != nil {
-			return nil, invalid("block %d scale: %v", b, err)
+			return nil, invalid("scale %d: %v", b, err)
 		}
 		code, ok := blockScaleCode(f, sv)
 		if !ok {
-			return nil, invalid("block %d scale %v is not a %s", b, sv, map[BlockScaledFormat]string{BlockScaledMXFP8: "power of two in [2^-127, 2^127]", BlockScaledNVFP4: "non-negative E4M3 value"}[f])
+			return nil, invalid("scale %d (%v) is not a %s", b, sv, map[BlockScaledFormat]string{BlockScaledMXFP8: "power of two in [2^-127, 2^127]", BlockScaledNVFP4: "non-negative E4M3 value"}[f])
 		}
 		scales[b] = code
-		for k, num := range blk.V {
-			v, err := parseBlockScaledNumber(num)
-			if err != nil {
-				return nil, invalid("block %d value %d: %v", b, k, err)
-			}
-			c, ok := blockElemCode(f, v)
-			if !ok {
-				return nil, invalid("block %d value %v is not an %s value", b, v, map[BlockScaledFormat]string{BlockScaledMXFP8: "E4M3", BlockScaledNVFP4: "E2M1"}[f])
-			}
-			i := b*bs + k
-			if f == BlockScaledMXFP8 {
-				elems[i] = c
-			} else {
-				elems[i/2] |= c << (4 * (i % 2))
-			}
+	}
+	for i, num := range doc.V {
+		v, err := parseBlockScaledNumber(num)
+		if err != nil {
+			return nil, invalid("value %d: %v", i, err)
+		}
+		c, ok := blockElemCode(f, v)
+		if !ok {
+			return nil, invalid("value %d (%v) is not an %s value", i, v, map[BlockScaledFormat]string{BlockScaledMXFP8: "E4M3", BlockScaledNVFP4: "E2M1"}[f])
+		}
+		if f == BlockScaledMXFP8 {
+			elems[i] = c
+		} else {
+			elems[i/2] |= c << (4 * (i % 2))
 		}
 	}
 	// the cell rules of a stored cell: scales, global, decoded values finite

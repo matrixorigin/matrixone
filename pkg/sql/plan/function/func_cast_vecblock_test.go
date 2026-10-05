@@ -200,7 +200,7 @@ func TestCastVecBlockExactText(t *testing.T) {
 		}
 		_, err = runVecBlockCast(t, proc, vecBlockStrVector(t, proc, []string{text}, nil), types.New(oid, 16, 0))
 		require.Error(t, err, "dimension")
-		_, err = runVecBlockCast(t, proc, vecBlockStrVector(t, proc, []string{`{"b":[{"s":3,"v":[1]}]}`}, nil), oid.ToType())
+		_, err = runVecBlockCast(t, proc, vecBlockStrVector(t, proc, []string{`{"g":1,"s":[-1],"v":[1]}`}, nil), oid.ToType())
 		require.Error(t, err, "malformed")
 	}
 }

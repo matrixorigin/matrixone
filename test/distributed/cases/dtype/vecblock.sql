@@ -181,13 +181,15 @@ insert into exact select 2, vecblock_json(v), vecblock_json(e) from exact where 
 insert into exact values (3, '[8.764914, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6.2606535]', '[448, 1, -2]');
 select id, v, vecblock_json(v) = (select vecblock_json(v) from exact where id = 1) same_cell from exact order by id;
 select vecblock_json(cast(null as vecf8(2)));
-select cast('{"g":1,"b":[{"s":1,"v":[1,2]}]}' as vecf4(3));
-select cast('{"b":[{"s":3,"v":[1]}]}' as vecf8(1));
-select cast('{"g":1,"b":[{"s":1,"v":[2.5]}]}' as vecf4(1));
+select cast('{"g":1,"s":[1],"v":[1,2]}' as vecf4(3));
+select cast('{"g":1,"s":[3],"v":[1]}' as vecf8(1));
+select cast('{"g":1,"s":[1],"v":[2.5]}' as vecf4(1));
+select cast('{"s":[1],"v":[1]}' as vecf8(1));
+select cast('{"g":1,"s":[1],"v":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]}' as vecf4(17));
 
 -- cells with equal values and different bytes are peers in ORDER BY and windows
 create table peer (id int, v vecf8(1));
-insert into peer values (2, '{"b":[{"s":1,"v":[1]}]}'), (1, '{"b":[{"s":2,"v":[0.5]}]}'), (0, '{"b":[{"s":1,"v":[1]}]}'), (3, '[2]');
+insert into peer values (2, '{"g":1,"s":[1],"v":[1]}'), (1, '{"g":1,"s":[2],"v":[0.5]}'), (0, '{"g":1,"s":[1],"v":[1]}'), (3, '[2]');
 select id from peer order by v, id;
 select id, rank() over (order by v) r, count(*) over (partition by v) c from peer order by id;
 
