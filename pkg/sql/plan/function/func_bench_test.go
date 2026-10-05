@@ -26,12 +26,7 @@ func benchmarkDateFormat(b *testing.B, scenario dateFormatScenario) {
 	for _, tc := range cases {
 		func() {
 			testCase := NewFunctionTestCase(proc, tc.inputs, tc.expect, DateFormat)
-			defer func() {
-				testCase.result.Free()
-				for _, parameter := range testCase.parameters {
-					parameter.Free(proc.Mp())
-				}
-			}()
+			defer testCase.Free()
 			testCase.BenchMarkRun()
 			_, _ = testCase.Run()
 		}()

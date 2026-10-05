@@ -48,6 +48,8 @@
 
 ### 2.2 历史别名和新请求
 
+2026-10-05 合并上游 #29590：`utf32`、`utf32_general_ci`、`utf32_bin` 仅作为 DDL 兼容拼写，由现有能力 registry 的 DDL 专用入口归一化到既有 utf8mb4 general-ci/bin 身份。它们不增加原生身份、编码转换、协议编号或目录广告；SHOW CREATE 继续输出支持的 utf8mb4 身份。普通 session/SET 准入仍拒绝 UTF32 请求，避免把上游的 DDL 兼容修复扩大成原生能力启用。
+
 `utf8mb4_0900_ai_ci` 的现有默认拼写在 legacy 准入策略下仍解析成身份 3、修订 0，effective metadata 为 general-ci/PAD SPACE；native 查找结果则是身份 4、修订 1、NO PAD，两者由明确的 API 和修订区分。旧对象没有保存原始拼写，不能凭空恢复。
 
 latin1/latin1_* 一律拒绝新增 DDL、会话/全局设置、握手/change-user 和 CONVERT 请求。SET NAMES/SET CHARACTER SET 在赋值前检查字符集及显式 collation；本任务不顺带重构其既有赋值/转码行为。保留 collation_connection 的既有 `default` 占位值。已验证的历史 session snapshot 使用独立恢复入口保留原设置，仍执行既有变量校验及 runtime hooks，不重新按新请求解析名称；这不是 C11 的新格式迁移或激活机制。不会猜测历史 latin1 字节，也不将它们重编码。

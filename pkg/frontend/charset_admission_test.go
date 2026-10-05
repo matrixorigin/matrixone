@@ -22,6 +22,10 @@ import (
 func TestCharsetAdmissionParsedRequests(t *testing.T) {
 	for _, tc := range []struct{ sql, value, errorText string }{
 		{"set names latin1", "latin1", "unsupported character set"},
+		{"set names utf32", "utf32", "unsupported character set"},
+		{"set charset utf32", "utf32", "unsupported character set"},
+		{"set names utf8mb4 collate utf32_bin", "utf8mb4", "unsupported collation"},
+		{"set names utf8mb4 collate utf32_general_ci", "utf8mb4", "unsupported collation"},
 		{"set character set latin1", "latin1", "unsupported character set"},
 		{"set charset latin1", "latin1", "unsupported character set"},
 		{"set char set latin1", "latin1", "unsupported character set"},

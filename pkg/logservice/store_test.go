@@ -1520,6 +1520,16 @@ func TestWaitHAKeeperLeaderReady(t *testing.T) {
 		ready, err := store.waitHAKeeperLeaderReady(context.Background(), 0)
 		require.ErrorIs(t, err, dragonboat.ErrShardNotFound)
 		require.False(t, ready)
+		// State assertions retain the same missing-shard failure as full reads.
+		func() {
+			ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
+			defer cancel()
+			for _, query := range []*hakeeper.StateQuery{{}, {StateOnly: true}} {
+				state, err := store.readCheckerState(ctx, query)
+				require.ErrorIs(t, err, dragonboat.ErrShardNotFound)
+				require.Equal(t, &pb.CheckerState{}, state)
+			}
+		}()
 
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()

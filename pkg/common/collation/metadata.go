@@ -181,6 +181,25 @@ func ResolveSQL(name string) (Identity, bool) {
 	return d.LegacyIdentity, ok && d.LegacyIdentity != LegacyIdentity
 }
 
+// ResolveDDLCollation preserves DDL-only compatibility spellings without
+// advertising a native UTF-32 domain or enabling them for session requests.
+func ResolveDDLCollation(name string) (Identity, bool) {
+	switch strings.ToLower(name) {
+	case "utf32_bin":
+		name = "utf8mb4_bin"
+	case "utf32_general_ci":
+		name = "utf8mb4_general_ci"
+	}
+	return ResolveSQL(name)
+}
+
+func ResolveDDLCharset(name string) (Identity, bool) {
+	if strings.EqualFold(name, "utf32") {
+		name = "utf8mb4"
+	}
+	return ResolveCharset(name)
+}
+
 func ResolveCharset(name string) (Identity, bool) {
 	name = CanonicalCharsetName(name)
 	for _, d := range definitions {

@@ -1864,23 +1864,8 @@ func (ses *Session) setSessionSysVar(ctx context.Context, name string, val inter
 	name = strings.ToLower(name)
 	groupConcatMaxLenOriginalValue := val
 	groupConcatMaxLenWasTruncated := false
-	oldMatrixOneNative := false
-	oldOnlyFullGroupBy := false
-	oldBoolSumAvg := false
-	oldHighNotPrecedence := false
-	oldNoUnsignedSubtraction := false
-	oldParserFlags := mysql.SQLModeFlags(0)
-	oldIgnoreSpace := false
 	oldDivPrecisionIncrement := int64(function.DefaultDivPrecisionIncrement)
-	if name == "sql_mode" {
-		oldMatrixOneNative = ses.sqlModeHasMatrixOneNative()
-		oldOnlyFullGroupBy = ses.sqlModeHasOnlyFullGroupBy()
-		oldBoolSumAvg = ses.sqlModeHasEnableBoolSumAvg()
-		oldHighNotPrecedence = ses.sqlModeHasHighNotPrecedence()
-		oldNoUnsignedSubtraction = ses.sqlModeHasNoUnsignedSubtraction()
-		oldParserFlags = ses.sqlModeParserFlags()
-		oldIgnoreSpace = ses.sqlModeHasIgnoreSpace()
-	} else if name == "div_precision_increment" {
+	if name == "div_precision_increment" {
 		oldDivPrecisionIncrement = ses.currentDivPrecisionIncrement()
 	}
 
@@ -1907,6 +1892,21 @@ func (ses *Session) setSessionSysVar(ctx context.Context, name string, val inter
 		if err = validateCharsetSystemVariable(name, val); err != nil {
 			return err
 		}
+	}
+	// These values shape bound defaults or constant-folded expressions.
+	// Compare converted values so equivalent SET spellings retain warm plans.
+	planDependencyVariable := name == "sql_mode" || name == "lc_time_names" || name == "explicit_defaults_for_timestamp"
+	var oldPlanDependency interface{}
+	if planDependencyVariable {
+		oldValue, getErr := ses.GetSessionSysVar(name)
+		if getErr != nil {
+			return getErr
+		}
+		oldValue, getErr = def.GetType().Convert(oldValue)
+		if getErr != nil {
+			return getErr
+		}
+		oldPlanDependency = oldValue
 	}
 
 	// Both defaults affect the physical vector plan. Compare normalized values
@@ -1963,7 +1963,20 @@ func (ses *Session) setSessionSysVar(ctx context.Context, name string, val inter
 		ses.sesSysVars.Set(canonicalName, val)
 	}
 	if err == nil && name == "sql_mode" {
-		ses.updateSqlModeCaches(oldMatrixOneNative, oldOnlyFullGroupBy, oldBoolSumAvg, oldHighNotPrecedence, oldNoUnsignedSubtraction, oldParserFlags, oldIgnoreSpace, val)
+		ses.updateSqlModeNoAutoValueOnZero(val)
+	}
+	if err == nil && planDependencyVariable {
+		newValue, getErr := ses.GetSessionSysVar(name)
+		if getErr != nil {
+			return getErr
+		}
+		newValue, getErr = def.GetType().Convert(newValue)
+		if getErr != nil {
+			return getErr
+		}
+		if oldPlanDependency != newValue {
+			ses.invalidateCachedPlans(true)
+		}
 	}
 	if err == nil && name == "div_precision_increment" {
 		if increment, ok := val.(int64); ok && increment != oldDivPrecisionIncrement {
@@ -1973,14 +1986,7 @@ func (ses *Session) setSessionSysVar(ctx context.Context, name string, val inter
 	if err == nil && vectorModeVariable {
 		// val has already passed the BOOL variable conversion.
 		if (val.(int8) != 0) != oldVectorMode {
-			ses.cleanCache()
-			// Preserve prepared handles and runtime buffers; EXECUTE owns rebuilding
-			// their existing plan through the established needsRebuild path.
-			ses.mu.Lock()
-			for _, prepared := range ses.prepareStmts {
-				prepared.needsRebuild = true
-			}
-			ses.mu.Unlock()
+			ses.invalidateCachedPlans(true)
 		}
 	}
 	if err == nil && setTxnIsolation {

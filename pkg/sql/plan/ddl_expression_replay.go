@@ -162,8 +162,11 @@ func WithPersistedDDLReplay(ctx context.Context, original, target *planpb.TableD
 			continue
 		}
 		entry := &replayedColumnExpressions{}
-		if oldCol.Default != nil && oldCol.Default.Expr != nil && newCol.Default != nil {
-			if expr := copyExpr(oldCol.Default.Expr, rawPositions); expr != nil && proto.Equal(expr, newCol.Default.Expr) {
+		if oldCol.Default != nil && newCol.Default != nil {
+			expr := copyExpr(oldCol.Default.Expr, rawPositions)
+			unchangedAbsentDefault := oldCol.Default.Expr == nil && newCol.Default.Expr == nil &&
+				proto.Equal(&oldCol.Typ, &newCol.Typ) && proto.Equal(oldCol.Default, newCol.Default)
+			if unchangedAbsentDefault || expr != nil && proto.Equal(expr, newCol.Default.Expr) {
 				entry.defaultExpr = proto.Clone(newCol.Default).(*planpb.Default)
 				entry.defaultExpr.Expr = copyExpr(oldCol.Default.Expr, visiblePositions)
 			}

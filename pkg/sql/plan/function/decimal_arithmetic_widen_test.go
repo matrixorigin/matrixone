@@ -158,12 +158,11 @@ func TestDecimal256MultiplyHonorsPublishedPrecision(t *testing.T) {
 			rightType := types.New(types.T_decimal256, int32(test.rightSize), 0)
 			right, parseErr := types.ParseDecimal256(strings.Repeat("9", test.rightSize), rightType.Width, rightType.Scale)
 			require.NoError(t, parseErr)
-			want, mulErr := left.Mul256(right)
-			require.NoError(t, mulErr)
-
-			var expected any = []types.Decimal256{want}
-			if test.wantErr {
-				expected = nil
+			var expected any
+			if !test.wantErr {
+				want, parseErr := types.ParseDecimal256("99999999999999999999999999899999999999000000000000000000000000001", resultType.Width, resultType.Scale)
+				require.NoError(t, parseErr)
+				expected = []types.Decimal256{want}
 			}
 			testCase := NewFunctionTestCase(proc,
 				[]FunctionTestInput{
@@ -172,6 +171,7 @@ func TestDecimal256MultiplyHonorsPublishedPrecision(t *testing.T) {
 				},
 				NewFunctionTestResult(resultType, test.wantErr, expected, nil),
 				multiFn)
+			defer testCase.Free()
 			if test.wantErr {
 				require.NoError(t, testCase.result.PreExtendAndReset(testCase.fnLength))
 				evalErr := multiFn(testCase.parameters, testCase.result, proc, testCase.fnLength, nil)
@@ -236,7 +236,7 @@ func TestDecimal256MultiplyPreservesWideSignedOperand(t *testing.T) {
 						},
 						NewFunctionTestResult(resultType, false, []types.Decimal256{expected, expected}, nil),
 						multiFn)
-					succeeded, info := testCase.Run()
+					succeeded, info := testCase.RunAndFree()
 					require.True(t, succeeded, info)
 				})
 			}

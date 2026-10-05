@@ -149,6 +149,10 @@ enum Method {
   // understand writer fairness. An older owner rejects this method before
   // admission, allowing the caller to retry the request as Exclusive.
   LockWriterFair = 22;
+  // Instance-bound drain protocol. Legacy UUID restart methods keep their
+  // wire semantics and cannot serve as a fallback for new controllers.
+  BeginDrain = 23;
+  QueryDrain = 24;
 }
 
 enum Status {
@@ -185,6 +189,8 @@ message Request {
   AbortRemoteDeadlockTxnRequest    AbortRemoteDeadlockTxn      = 20 [(gogoproto.nullable) = false];
   CheckActiveTxnRequest      CheckActiveTxn      = 21 [(gogoproto.nullable) = false];
   BatchUnlockRequest         BatchUnlock         = 22 [(gogoproto.nullable) = false];
+  BeginDrainRequest          BeginDrain          = 23 [(gogoproto.nullable) = false];
+  QueryDrainRequest          QueryDrain          = 24 [(gogoproto.nullable) = false];
 }
 
 
@@ -217,6 +223,8 @@ message Response {
     GetLockHolderResponse      GetLockHolder       = 21 [(gogoproto.nullable) = false];
     CheckActiveTxnResponse     CheckActiveTxn      = 22 [(gogoproto.nullable) = false];
     BatchUnlockResponse        BatchUnlock         = 23 [(gogoproto.nullable) = false];
+    BeginDrainResponse         BeginDrain          = 24 [(gogoproto.nullable) = false];
+    QueryDrainResponse         QueryDrain          = 25 [(gogoproto.nullable) = false];
 }
 
 // LockRequest lock request
@@ -330,6 +338,10 @@ message KeepLockTableBindRequest {
   Status Status = 2;
   repeated bytes TxnIDs = 3;
   repeated LockTable LockTables = 4 [(gogoproto.nullable) = false];
+  // Echo the allocator epoch observed by this CN. A replacement allocator
+  // accepts an in-progress drain only after the CN has observed its epoch.
+  string ObservedAllocatorID = 5;
+  uint64 ObservedAllocatorVersion = 6;
 }
 
 // KeepLockTableBindResponse keep lock table bind response. TN -> CN
@@ -358,6 +370,36 @@ message CanRestartServiceRequest {
 // CanRestartServiceResponse can restart lock service request from allocator response. TN -> operator
 message CanRestartServiceResponse {
   bool OK = 1;
+}
+
+// BeginDrain is accepted only for an exact, live lock-service incarnation.
+message BeginDrainRequest {
+  string ServiceID = 1;
+  string AttemptID = 2;
+}
+
+message BeginDrainResponse {
+  bool OK = 1;
+  string ServiceID = 2;
+  string AttemptID = 3;
+  string AllocatorID = 4;
+  uint64 AllocatorVersion = 5;
+}
+
+// QueryDrain never treats allocator replacement or missing state as success.
+message QueryDrainRequest {
+  string ServiceID = 1;
+  string AttemptID = 2;
+  string AllocatorID = 3;
+  uint64 AllocatorVersion = 4;
+}
+
+message QueryDrainResponse {
+  bool Safe = 1;
+  string ServiceID = 2;
+  string AttemptID = 3;
+  string AllocatorID = 4;
+  uint64 AllocatorVersion = 5;
 }
 
 // RemainTxnInServiceRequest get remain txn in service request from allocator request. operator -> TN

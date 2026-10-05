@@ -85,6 +85,44 @@ func TestCollationIdentityAndCompatibility(t *testing.T) {
 	require.Equal(t, BinaryIdentity, id, "callers cannot mutate admission")
 }
 
+func TestDDLCompatibilityAliasesDoNotActivateSessionDomains(t *testing.T) {
+	for _, name := range []string{"utf32", "UTF32", "utf8mb4", "utf8mb3"} {
+		identity, ok := ResolveDDLCharset(name)
+		require.True(t, ok)
+		require.Equal(t, UTF8MB4GeneralCIIdentity, identity)
+	}
+	for _, tc := range []struct {
+		name string
+		want Identity
+	}{
+		{"utf32_bin", UTF8MB4BinIdentity},
+		{"UTF32_GENERAL_CI", UTF8MB4GeneralCIIdentity},
+		{"utf8mb4_bin", UTF8MB4BinIdentity},
+	} {
+		identity, ok := ResolveDDLCollation(tc.name)
+		require.True(t, ok)
+		require.Equal(t, tc.want, identity)
+		require.NoError(t, RequireLegacy(uint32(identity), 0, 0))
+	}
+	_, ok := ResolveCharset("utf32")
+	require.False(t, ok)
+	for _, name := range []string{"utf32_bin", "utf32_general_ci", "utf32_unicode_ci"} {
+		_, ok := ResolveSQL(name)
+		require.False(t, ok)
+		_, ok = Lookup(name)
+		require.False(t, ok)
+	}
+	for _, name := range []string{"latin1", "ascii", "utf16", "unknown"} {
+		_, ok := ResolveDDLCharset(name)
+		require.False(t, ok)
+	}
+	for _, name := range []string{"utf32_unicode_ci", "utf8mb4_unicode_ci", "unknown"} {
+		_, ok := ResolveDDLCollation(name)
+		require.False(t, ok)
+	}
+	require.Len(t, Definitions(), 12)
+}
+
 func TestCollationMetadataClosedDomain(t *testing.T) {
 	for _, pair := range [][2]uint32{{0, 1}, {4, 0}, {13, 1}, {255, 0}, {257, 0}, {3, 256}, {3, 2}} {
 		require.Error(t, ValidateMetadata(pair[0], pair[1]), "%v", pair)
