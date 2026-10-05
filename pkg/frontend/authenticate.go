@@ -74,6 +74,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 )
 
 type TenantInfo struct {
@@ -2648,6 +2649,8 @@ const (
 
 // privilegeCache cache privileges on table
 type privilegeCache struct {
+	catalogVersion disttae.PrivilegeCacheVersion
+	cachedScopes   int
 	// For objectType table
 	// For objectType table *, *.*
 	storeForTable [int(privilegeLevelEnd)]btree.Set[PrivilegeType]
@@ -2669,8 +2672,6 @@ type privilegeCache struct {
 	storeForDatabase2 btree.Map[string, *btree.Set[PrivilegeType]]
 	// For objectType account *
 	storeForAccount [int(privilegeLevelEnd)]btree.Set[PrivilegeType]
-	total           atomic.Uint64
-	hit             atomic.Uint64
 
 	// The active primary role is session state, while its grant to the user is
 	// catalog state. Keep the validation in the same cache generation as the
@@ -2738,12 +2739,10 @@ func (pc *privilegeCache) setActiveRoleGrantForGeneration(
 
 // has checks the cache has privilege on a table
 func (pc *privilegeCache) has(objTyp objectType, plt privilegeLevelType, dbName, tableName string, priv PrivilegeType) bool {
-	pc.total.Add(1)
-	privSet := pc.getPrivilegeSet(objTyp, plt, dbName, tableName)
+	privSet := pc.getPrivilegeSet(objTyp, plt, dbName, tableName, false)
 	if privSet != nil {
 		for _, p := range privilegeTypeWithCoveringPrivileges(objTyp, priv) {
 			if privSet.Contains(p) {
-				pc.hit.Add(1)
 				return true
 			}
 		}
@@ -2751,57 +2750,27 @@ func (pc *privilegeCache) has(objTyp objectType, plt privilegeLevelType, dbName,
 	return false
 }
 
-func (pc *privilegeCache) getPrivilegeSet(objTyp objectType, plt privilegeLevelType, dbName, tableName string) *btree.Set[PrivilegeType] {
+// Only successful grants allocate a scoped entry. Negative lookups are read-only.
+// Bound the retained scope count independently of catalog/connection lifetime.
+const maxPrivilegeCacheScopes = 1024
+
+func (pc *privilegeCache) getPrivilegeSet(objTyp objectType, plt privilegeLevelType, dbName, tableName string, create bool) *btree.Set[PrivilegeType] {
+	var databases *btree.Map[string, *btree.Set[PrivilegeType]]
+	var relations *btree.Map[string, *btree.Map[string, *btree.Set[PrivilegeType]]]
 	switch objTyp {
-	case objectTypeTable:
-		switch plt {
-		case privilegeLevelStarStar, privilegeLevelStar:
-			return &pc.storeForTable[plt]
-		case privilegeLevelDatabaseStar:
-			dbStore, ok1 := pc.storeForTable2.Get(dbName)
-			if !ok1 {
-				dbStore = &btree.Set[PrivilegeType]{}
-				pc.storeForTable2.Set(dbName, dbStore)
-			}
-			return dbStore
-		case privilegeLevelDatabaseTable, privilegeLevelTable:
-			tableStore, ok1 := pc.storeForTable3.Get(dbName)
-			if !ok1 {
-				tableStore = &btree.Map[string, *btree.Set[PrivilegeType]]{}
-				pc.storeForTable3.Set(dbName, tableStore)
-			}
-			privSet, ok2 := tableStore.Get(tableName)
-			if !ok2 {
-				privSet = &btree.Set[PrivilegeType]{}
-				tableStore.Set(tableName, privSet)
-			}
-			return privSet
-		default:
-			return nil
+	case objectTypeTable, objectTypeView:
+		levels := &pc.storeForTable
+		databases, relations = &pc.storeForTable2, &pc.storeForTable3
+		if objTyp == objectTypeView {
+			levels = &pc.storeForView
+			databases, relations = &pc.storeForView2, &pc.storeForView3
 		}
-	case objectTypeView:
 		switch plt {
 		case privilegeLevelStarStar, privilegeLevelStar:
-			return &pc.storeForView[plt]
+			return &levels[plt]
 		case privilegeLevelDatabaseStar:
-			dbStore, ok1 := pc.storeForView2.Get(dbName)
-			if !ok1 {
-				dbStore = &btree.Set[PrivilegeType]{}
-				pc.storeForView2.Set(dbName, dbStore)
-			}
-			return dbStore
+			relations = nil
 		case privilegeLevelDatabaseTable, privilegeLevelTable:
-			viewStore, ok1 := pc.storeForView3.Get(dbName)
-			if !ok1 {
-				viewStore = &btree.Map[string, *btree.Set[PrivilegeType]]{}
-				pc.storeForView3.Set(dbName, viewStore)
-			}
-			privSet, ok2 := viewStore.Get(tableName)
-			if !ok2 {
-				privSet = &btree.Set[PrivilegeType]{}
-				viewStore.Set(tableName, privSet)
-			}
-			return privSet
 		default:
 			return nil
 		}
@@ -2810,12 +2779,7 @@ func (pc *privilegeCache) getPrivilegeSet(objTyp objectType, plt privilegeLevelT
 		case privilegeLevelStar, privilegeLevelStarStar:
 			return &pc.storeForDatabase[plt]
 		case privilegeLevelDatabase:
-			dbStore, ok1 := pc.storeForDatabase2.Get(dbName)
-			if !ok1 {
-				dbStore = &btree.Set[PrivilegeType]{}
-				pc.storeForDatabase2.Set(dbName, dbStore)
-			}
-			return dbStore
+			databases = &pc.storeForDatabase2
 		default:
 			return nil
 		}
@@ -2824,23 +2788,38 @@ func (pc *privilegeCache) getPrivilegeSet(objTyp objectType, plt privilegeLevelT
 	default:
 		return nil
 	}
-
-}
-
-// set replaces the privileges by new ones
-func (pc *privilegeCache) set(objTyp objectType, plt privilegeLevelType, dbName, tableName string, priv ...PrivilegeType) {
-	privSet := pc.getPrivilegeSet(objTyp, plt, dbName, tableName)
-	if privSet != nil {
-		privSet.Clear()
-		for _, p := range priv {
-			privSet.Insert(p)
-		}
+	if create && pc.cachedScopes >= maxPrivilegeCacheScopes {
+		pc.invalidate()
 	}
+	if relations == nil {
+		set, found := databases.Get(dbName)
+		if !found && create {
+			set = &btree.Set[PrivilegeType]{}
+			databases.Set(dbName, set)
+			pc.cachedScopes++
+		}
+		return set
+	}
+	tables, found := relations.Get(dbName)
+	if !found {
+		if !create {
+			return nil
+		}
+		tables = &btree.Map[string, *btree.Set[PrivilegeType]]{}
+		relations.Set(dbName, tables)
+	}
+	set, found := tables.Get(tableName)
+	if !found && create {
+		set = &btree.Set[PrivilegeType]{}
+		tables.Set(tableName, set)
+		pc.cachedScopes++
+	}
+	return set
 }
 
 // add puts the privileges without replacing existed ones
 func (pc *privilegeCache) add(objTyp objectType, plt privilegeLevelType, dbName, tableName string, priv ...PrivilegeType) {
-	privSet := pc.getPrivilegeSet(objTyp, plt, dbName, tableName)
+	privSet := pc.getPrivilegeSet(objTyp, plt, dbName, tableName, true)
 	if privSet != nil {
 		for _, p := range priv {
 			privSet.Insert(p)
@@ -2853,11 +2832,11 @@ func (pc *privilegeCache) invalidate() {
 	if pc == nil {
 		return
 	}
+	pc.catalogVersion = disttae.PrivilegeCacheVersion{}
+	pc.cachedScopes = 0
 	// Advance first so a validation that started in the old generation can
 	// never become visible even if its atomic Store races with the clear below.
 	pc.activeRoleGrantGeneration.Add(1)
-	// total := pc.total.Swap(0)
-	// hit := pc.hit.Swap(0)
 	for i := privilegeLevelStar; i < privilegeLevelEnd; i++ {
 		pc.storeForTable[i].Clear()
 		pc.storeForView[i].Clear()
@@ -2870,13 +2849,6 @@ func (pc *privilegeCache) invalidate() {
 	pc.storeForView3.Clear()
 	pc.storeForDatabase2.Clear()
 	pc.activeRoleGrant.Store(nil)
-	// ratio := float64(0)
-	// if total == 0 {
-	//	ratio = 0
-	// } else {
-	//	ratio = float64(hit) / float64(total)
-	// }
-	// logutil.Debugf("-->hit %d total %d ratio %f", hit, total, ratio)
 }
 
 // verifiedRole holds the role info that has been checked
@@ -8204,6 +8176,11 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 		return false, stats, nil
 	}
 
+	// Freshness belongs to authorization consumption, including nested plans.
+	if err = ses.refreshPrivilegeCache(ctx); err != nil {
+		return false, stats, err
+	}
+
 	enableCache, err = privilegeCacheIsEnabled(ctx, ses)
 	if err != nil {
 		return false, stats, err
@@ -8505,6 +8482,11 @@ func validateActiveRoleGrantForAuthorization(
 	tenant := ses.GetTenantInfo()
 	if !activeRoleGrantNeedsCheck(tenant) {
 		return true, stats, nil
+	}
+
+	// Freshness belongs to authorization consumption, including nested plans.
+	if err = ses.refreshPrivilegeCache(ctx); err != nil {
+		return false, stats, err
 	}
 
 	enableCache, err := privilegeCacheIsEnabled(ctx, ses)
@@ -12237,6 +12219,9 @@ func doInterpretCall(
 	callerAffectedRows int64,
 	affectedRows *int64,
 ) ([]ExecResult, error) {
+	if result, ok, err := executeCDCTargetGuardCall(ctx, ses, call); ok || err != nil {
+		return result, err
+	}
 	if parsed, ok, err := parseIcebergBuiltinCall(ctx, call); ok || err != nil {
 		if err != nil {
 			return nil, err

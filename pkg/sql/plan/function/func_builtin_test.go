@@ -1707,7 +1707,6 @@ func Test_BuiltIn_Serial(t *testing.T) {
 		tcc := NewFunctionTestCase(proc, tc.inputs,
 			NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil), opSerial.BuiltInSerial)
 		defer tcc.Free()
-		require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
 		_, err := tcc.DebugRun()
 		require.NoError(t, err, tc.info)
 
@@ -1758,7 +1757,6 @@ func Test_BuiltIn_Serial(t *testing.T) {
 		tcc := NewFunctionTestCase(proc, tc.inputs,
 			NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil), opSerial.BuiltInSerial)
 		defer tcc.Free()
-		require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
 		_, err := tcc.DebugRun()
 		require.NoError(t, err, tc.info)
 
@@ -1812,7 +1810,6 @@ func Test_BuiltIn_Serial(t *testing.T) {
 		tcc := NewFunctionTestCase(proc, tc.inputs,
 			NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil), opSerial.BuiltInSerial)
 		defer tcc.Free()
-		require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
 		_, err := tcc.DebugRun()
 		require.NoError(t, err, tc.info)
 
@@ -1903,7 +1900,6 @@ func Test_BuiltIn_SerialFull(t *testing.T) {
 		tcc := NewFunctionTestCase(proc, tc.inputs,
 			NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil), opSerial.BuiltInSerialFull)
 		defer tcc.Free()
-		require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
 		_, err := tcc.DebugRun()
 		require.NoError(t, err, tc.info)
 
@@ -1969,7 +1965,6 @@ func Test_BuiltIn_SerialFull(t *testing.T) {
 		tcc := NewFunctionTestCase(proc, tc.inputs,
 			NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil), opSerial.BuiltInSerialFull)
 		defer tcc.Free()
-		require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
 		_, err := tcc.DebugRun()
 		require.NoError(t, err, tc.info)
 
@@ -2023,7 +2018,6 @@ func Test_BuiltIn_SerialFull(t *testing.T) {
 		tcc := NewFunctionTestCase(proc, tc.inputs,
 			NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil), opSerial.BuiltInSerialFull)
 		defer tcc.Free()
-		require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
 		_, err := tcc.DebugRun()
 		require.NoError(t, err, tc.info)
 
@@ -2072,7 +2066,6 @@ func Test_BuiltIn_SerialFullGeometry(t *testing.T) {
 	tcc := NewFunctionTestCase(proc, tc.inputs,
 		NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil), opSerial.BuiltInSerialFull)
 	defer tcc.Free()
-	require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
 	_, err := tcc.DebugRun()
 	require.NoError(t, err, tc.info)
 
@@ -2496,7 +2489,6 @@ func testSerialExtractNamedType[T types.Enum | types.MoYear | types.Decimal256](
 				builtInSerialExtract,
 			)
 			defer testCase.Free()
-			require.NoError(t, testCase.result.PreExtendAndReset(testCase.fnLength))
 			result, err := testCase.DebugRun()
 			require.NoError(t, err)
 			require.Equal(t, typ.Oid, result.GetType().Oid)
@@ -2972,7 +2964,6 @@ func TestBuiltInExpAndCotInvalidResultReturnsNull(t *testing.T) {
 				tc.fn,
 			)
 			defer tcc.Free()
-			require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
 			_, err := tcc.DebugRun()
 			require.NoError(t, err)
 			param := vector.GenerateFunctionFixedTypeParameter[float64](tcc.result.GetResultVector())
@@ -3233,7 +3224,6 @@ func TestBuiltInTimestampScaleValidation(t *testing.T) {
 						[]FunctionTestInput{NewFunctionTestInput(types.T_int64.ToType(), []int64{scale}, nil)},
 						NewFunctionTestResult(types.T_timestamp.ToType(), false, nil, nil), function.fn)
 					defer caseUnderTest.Free()
-					require.NoError(t, caseUnderTest.result.PreExtendAndReset(1))
 					result, err := caseUnderTest.DebugRun()
 					if scale < 0 || scale > 6 {
 						require.Error(t, err)

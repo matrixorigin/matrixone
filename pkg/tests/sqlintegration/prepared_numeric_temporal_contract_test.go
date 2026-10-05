@@ -95,6 +95,96 @@ func TestPreparedNumericTemporalContracts(t *testing.T) {
 				})
 			}
 		})
+		t.Run("guarded integer ranges", func(t *testing.T) {
+			exec(t, "create table range_keys(id int primary key,k int,v int,key k_1(k),key kv_1(k,v))")
+			exec(t, "insert into range_keys values(1,-2147483648,0),(2,-1,0),(3,null,0),(4,0,0),(5,1,0),(6,1,0),(7,8,0),(8,2147483647,0)")
+			for _, path := range []struct{ name, projection, table, column string }{
+				{"covering", "id", "range_keys force index(k_1)", "k"},
+				{"backfill", "id+v", "range_keys force index(k_1)", "k"},
+				{"composite", "id", "range_keys force index(kv_1)", "k"},
+				{"explicit cast", "id", "range_keys", "cast(k as signed)"},
+				{"base scan", "id", "range_keys ignore index(k_1,kv_1)", "k"},
+			} {
+				t.Run(path.name, func(t *testing.T) {
+					q := fmt.Sprintf("select %s from %s where %s between ? and ? or %s between ? and ? order by id", path.projection, path.table, path.column, path.column)
+					explained, err := conn.QueryContext(ctx, "explain "+q, int64(0), int64(1), int64(8), int64(8))
+					require.NoError(t, err)
+					defer explained.Close()
+					var planText strings.Builder
+					for explained.Next() {
+						var line string
+						require.NoError(t, explained.Scan(&line))
+						planText.WriteString(line)
+						planText.WriteByte('\n')
+					}
+					require.NoError(t, explained.Err())
+					if strings.Contains(path.table, "force index") {
+						require.Contains(t, planText.String(), "Index Table Scan")
+						if path.name == "backfill" {
+							require.Contains(t, planText.String(), "Join Type: INDEX")
+							require.Contains(t, planText.String(), "Table Scan on "+schema+".range_keys")
+						}
+					} else {
+						require.NotContains(t, planText.String(), "Index Table Scan")
+					}
+					p, err := conn.PrepareContext(ctx, q)
+					require.NoError(t, err)
+					defer p.Close()
+					for _, tc := range []struct {
+						name   string
+						bounds []any
+						want   []int64
+					}{
+						{"closed endpoints", []any{int64(-2147483648), int64(-2147483648), int64(2147483647), int64(2147483647)}, []int64{1, 8}},
+						{"overlap and duplicate keys", []any{int64(0), int64(1), int64(1), int64(8)}, []int64{4, 5, 6, 7}},
+						{"reversed", []any{int64(8), int64(1), int64(9), int64(10)}, []int64{}},
+						{"lower outside domain", []any{int64(-2147483649), int64(-1), int64(2147483648), int64(2147483650)}, []int64{1, 2}},
+						{"upper outside domain", []any{int64(0), int64(2147483648), int64(1), int64(1)}, []int64{4, 5, 6, 7, 8}},
+						{"safe recovery", []any{int64(1), int64(1), int64(8), int64(8)}, []int64{5, 6, 7}},
+						{"NULL bound", []any{nil, int64(1), int64(8), int64(8)}, []int64{7}},
+						{"unsigned", []any{uint64(1), ^uint64(0), ^uint64(0), ^uint64(0)}, []int64{5, 6, 7, 8}},
+						{"fractional", []any{float64(0.5), float64(1.5), float64(8), float64(8)}, []int64{5, 6, 7}},
+						{"text fractions", []any{"0.5", "1.5", int64(8), int64(8)}, []int64{5, 6, 7}},
+						{"recovery after category changes", []any{int64(0), int64(0), int64(8), int64(8)}, []int64{4, 7}},
+					} {
+						got, err := readPreparedContractIDs(p.QueryContext(ctx, tc.bounds...))
+						if tc.name == "unsigned" && path.name != "explicit cast" {
+							// The existing unsigned comparison domain rejects negative
+							// column values. Signed admission must not hide that error.
+							require.ErrorContains(t, err, "data out of range")
+							continue
+						}
+						require.NoError(t, err, tc.name)
+						require.Equal(t, tc.want, got, tc.name)
+					}
+				})
+			}
+			for _, tc := range []struct {
+				name, predicate string
+				want            []int64
+				warn            bool
+			}{
+				{"active warning", "k between ? and ?", []int64{5, 6}, true},
+				{"inactive warning", "case when false then k between ? and ? else false end", []int64{}, false},
+				{"empty warning", "id<0 and k between ? and ?", []int64{}, false},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					p, err := conn.PrepareContext(ctx, "select id from range_keys where "+tc.predicate+" order by id")
+					require.NoError(t, err)
+					defer p.Close()
+					got, err := readPreparedContractIDs(p.QueryContext(ctx, "1tail", int64(2)))
+					require.NoError(t, err, tc.name)
+					require.Equal(t, tc.want, got, tc.name)
+					count, err := strconv.Atoi(scalar(t, "select @@warning_count"))
+					require.NoError(t, err)
+					wantWarnings := 0
+					if tc.warn {
+						wantWarnings = 1
+					}
+					require.Equal(t, wantWarnings, count, tc.name)
+				})
+			}
+		})
 		t.Run("persisted signed DML read budget", func(t *testing.T) {
 			// Same fixture, connection and tiny layout for public results and
 			// fresh-execution work. EXPLAIN does not prove cached reader work.

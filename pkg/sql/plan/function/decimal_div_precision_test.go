@@ -21,6 +21,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -208,8 +209,10 @@ func TestDecimal256DivisionExecutionUsesBoundResultScale(t *testing.T) {
 		NewFunctionTestResult(resultType, false, []types.Decimal256{want}, nil),
 		divFn,
 	)
-	passed, info := caseUnderTest.RunAndFree()
+	defer caseUnderTest.Free()
+	passed, info := caseUnderTest.Run()
 	require.True(t, passed, info)
+	require.Equal(t, resultType, *caseUnderTest.GetResultVectorDirectly().GetType())
 }
 
 func TestDecimal256DivisionAvoidsScaledNumeratorOverflow(t *testing.T) {
@@ -268,8 +271,10 @@ func TestDecimalDivisionScaleCapBelowInputScale(t *testing.T) {
 			NewFunctionTestResult(resultType, false, []types.Decimal128{want}, nil),
 			divFn,
 		)
-		passed, info := caseUnderTest.RunAndFree()
+		defer caseUnderTest.Free()
+		passed, info := caseUnderTest.Run()
 		require.True(t, passed, info)
+		require.Equal(t, resultType, *caseUnderTest.GetResultVectorDirectly().GetType())
 	})
 
 	t.Run("decimal256", func(t *testing.T) {
@@ -291,8 +296,10 @@ func TestDecimalDivisionScaleCapBelowInputScale(t *testing.T) {
 			NewFunctionTestResult(resultType, false, []types.Decimal256{want}, nil),
 			divFn,
 		)
-		passed, info := caseUnderTest.RunAndFree()
+		defer caseUnderTest.Free()
+		passed, info := caseUnderTest.Run()
 		require.True(t, passed, info)
+		require.Equal(t, resultType, *caseUnderTest.GetResultVectorDirectly().GetType())
 	})
 }
 
@@ -443,33 +450,47 @@ func TestDecimalDivisionNegativeScaleWideFallback(t *testing.T) {
 
 func TestDecimal256DivisionDeclaredPrecision(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	leftType := types.New(types.T_decimal256, 38, 0)
-	rightType := types.New(types.T_decimal256, 38, 30)
 	resultType := types.New(types.T_decimal256, 65, 0)
-	left, err := types.ParseDecimal256("1"+strings.Repeat("0", 37), 38, 0)
-	require.NoError(t, err)
-	right, err := types.ParseDecimal256("0."+strings.Repeat("0", 29)+"1", 38, 30)
-	require.NoError(t, err)
-	test := NewFunctionTestCase(proc,
-		[]FunctionTestInput{NewFunctionTestInput(leftType, []types.Decimal256{left}, nil),
-			NewFunctionTestInput(rightType, []types.Decimal256{right}, nil)},
-		NewFunctionTestResult(resultType, true, nil, nil), divFn)
-	passed, info := test.RunAndFree()
-	require.True(t, passed, info)
-
-	// A true half-up carry across the bound can be made at this typed physical
-	// boundary even though the corresponding numerator exceeds a legal SQL type.
-	physicalLeft := types.New(types.T_decimal256, 76, 0)
-	carry, err := types.ParseDecimal256("2"+strings.Repeat("0", 65), 76, 0)
-	require.NoError(t, err)
-	carry, err = carry.Sub256(types.Decimal256{B0_63: 1})
-	require.NoError(t, err)
-	test = NewFunctionTestCase(proc,
-		[]FunctionTestInput{NewFunctionTestInput(physicalLeft, []types.Decimal256{carry}, nil),
-			NewFunctionTestInput(physicalLeft, []types.Decimal256{{B0_63: 2}}, nil)},
-		NewFunctionTestResult(resultType, true, nil, nil), divFn)
-	passed, info = test.RunAndFree()
-	require.True(t, passed, info)
+	physicalType := types.New(types.T_decimal256, 76, 0)
+	for _, tc := range []struct {
+		name                string
+		leftType, rightType types.Type
+		left, right, want   string
+	}{
+		{"legal operands overflow", types.New(types.T_decimal256, 38, 0), types.New(types.T_decimal256, 38, 30), "1" + strings.Repeat("0", 37), "0." + strings.Repeat("0", 29) + "1", ""},
+		{"below bound", resultType, resultType, strings.Repeat("9", 65), "1", strings.Repeat("9", 65)},
+		// These physical inputs isolate the precision guard and rounding carry;
+		// their numerators exceed the precision of a legal SQL decimal type.
+		{"at bound", physicalType, physicalType, "1" + strings.Repeat("0", 65), "1", ""},
+		{"rounding crosses bound", physicalType, physicalType, "1" + strings.Repeat("9", 65), "2", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			left, err := types.ParseDecimal256(tc.left, tc.leftType.Width, tc.leftType.Scale)
+			require.NoError(t, err)
+			right, err := types.ParseDecimal256(tc.right, tc.rightType.Width, tc.rightType.Scale)
+			require.NoError(t, err)
+			var want []types.Decimal256
+			if tc.want != "" {
+				value, err := types.ParseDecimal256(tc.want, resultType.Width, resultType.Scale)
+				require.NoError(t, err)
+				want = []types.Decimal256{value}
+			}
+			test := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(tc.leftType, []types.Decimal256{left}, nil),
+				NewFunctionTestInput(tc.rightType, []types.Decimal256{right}, nil),
+			}, NewFunctionTestResult(resultType, tc.want == "", want, nil), divFn)
+			defer test.Free()
+			if tc.want == "" {
+				_, err = test.DebugRun()
+				require.Error(t, err)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), "error: %v", err)
+			} else {
+				passed, info := test.Run()
+				require.True(t, passed, info)
+				require.Equal(t, resultType, *test.GetResultVectorDirectly().GetType())
+			}
+		})
+	}
 }
 
 func BenchmarkDecimalDivisionScaleCap(b *testing.B) {

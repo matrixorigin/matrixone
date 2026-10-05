@@ -3458,6 +3458,15 @@ func integerToFixFloat[T1, T2 constraints.Integer | constraints.Float](
 	return nil
 }
 
+// ConvertToFixedFloat applies the bounded floating CAST's rounding and range
+// check. Callers prepare the scale factor and maximum once per vector; the
+// planner also uses this primitive to prove that a constant CAST is harmless.
+func ConvertToFixedFloat(value, factor, maxValue float64) (rounded float64, outOfRange bool) {
+	floor := math.Floor(value)
+	rounded = floor + math.Round((value-floor)*factor)/factor
+	return rounded, rounded < -maxValue || rounded > maxValue
+}
+
 func floatToFixFloat[T1, T2 constraints.Float](
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[T1], to *vector.FunctionResult[T2], length int, selectList *FunctionSelectList) error {
@@ -3474,10 +3483,8 @@ func floatToFixFloat[T1, T2 constraints.Float](
 				return err
 			}
 		} else {
-			v2 := float64(v)
-			tmp := math.Round((v2-math.Floor(v2))*pow) / pow
-			v2 = math.Floor(v2) + tmp
-			if v2 < -max_value || v2 > max_value {
+			v2, outOfRange := ConvertToFixedFloat(float64(v), pow, max_value)
+			if outOfRange {
 				return moerr.NewOutOfRangef(ctx, "float", "value '%v'", v)
 			}
 			if err := to.Append(T2(v2), false); err != nil {
@@ -3495,9 +3502,8 @@ func floatNumToFixFloat[T1 constraints.Float](
 	max_value := math.Pow10(int(to.GetType().Width - to.GetType().Scale))
 	max_value -= 1.0 / pow
 
-	tmp := math.Round((from-math.Floor(from))*pow) / pow
-	v := math.Floor(from) + tmp
-	if v < -max_value || v > max_value {
+	v, outOfRange := ConvertToFixedFloat(from, pow, max_value)
+	if outOfRange {
 		if originStr == "" {
 			return 0, moerr.NewOutOfRangef(ctx, "float", "value '%v'", from)
 		} else {
@@ -6081,6 +6087,10 @@ func decimal64ToDecimal64(
 func decimal64ToDecimal128Array(
 	from vector.FunctionParameterWrapper[types.Decimal64],
 	to *vector.FunctionResult[types.Decimal128], length int, selectList *FunctionSelectList) error {
+	if length == 0 {
+		return nil
+	}
+
 	fromtype := from.GetType()
 	totype := to.GetType()
 	safeGrowth := canWidenDecimalScale(fromtype, totype)
@@ -6283,8 +6293,6 @@ func decimal64ToDecimal256Array(
 	return nil
 }
 
-// the scale of decimal128 is guaranteed to be less than 18
-// this cast function is too slow, and therefore only temporary, rewrite needed
 func decimal128ToDecimal64(
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Decimal128],
@@ -6301,9 +6309,16 @@ func decimal128ToDecimal64(
 				return err
 			}
 		} else {
-			dec, scale := v.Format(fromtype.Scale), totype.Scale
+			var dec string
+			scale := totype.Scale
 			if totype.Scale < fromtype.Scale {
-				dec, scale = roundDecimalCoefficient(v.Format(0), fromtype.Scale-totype.Scale), 0
+				scaled, err := v.Scale(totype.Scale - fromtype.Scale)
+				if err != nil {
+					return err
+				}
+				dec, scale = scaled.Format(0), 0
+			} else {
+				dec = v.Format(fromtype.Scale)
 			}
 			result, err := types.ParseDecimal64(dec, totype.Width, scale)
 			if err != nil {
@@ -6315,24 +6330,6 @@ func decimal128ToDecimal64(
 		}
 	}
 	return nil
-}
-
-// roundDecimalCoefficient divides the exact unscaled coefficient only once.
-// Formatting a fractional Decimal128 before rounding can round a discarded
-// digit while extracting it, and then ParseDecimal128 rounds it a second time.
-func roundDecimalCoefficient(coefficient string, scaleDifference int32) string {
-	value, _ := new(big.Int).SetString(coefficient, 10)
-	negative := value.Sign() < 0
-	value.Abs(value)
-	divisor := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scaleDifference)), nil)
-	quotient, remainder := new(big.Int).QuoRem(value, divisor, new(big.Int))
-	if remainder.Mul(remainder, big.NewInt(2)).Cmp(divisor) >= 0 {
-		quotient.Add(quotient, big.NewInt(1))
-	}
-	if negative {
-		quotient.Neg(quotient)
-	}
-	return quotient.String()
 }
 
 func decimal128ToDecimal128(
@@ -6355,8 +6352,11 @@ func decimal128ToDecimal128(
 			if canWidenDecimalScale(fromtype, totype) {
 				result, err = v.Scale(totype.Scale - fromtype.Scale)
 			} else if totype.Scale < fromtype.Scale {
-				result, err = types.ParseDecimal128(
-					roundDecimalCoefficient(v.Format(0), fromtype.Scale-totype.Scale), totype.Width, 0)
+				var scaled types.Decimal128
+				scaled, err = v.Scale(totype.Scale - fromtype.Scale)
+				if err == nil {
+					result, err = types.ParseDecimal128(scaled.Format(0), totype.Width, 0)
+				}
 			} else {
 				result, err = types.ParseDecimal128(v.Format(fromtype.Scale), totype.Width, totype.Scale)
 			}
@@ -6405,9 +6405,16 @@ func decimal128ToDecimal256(
 				return err
 			}
 		} else if totype.Width < fromtype.Width || totype.Scale != fromtype.Scale {
-			dec, scale := result.Format(fromtype.Scale), totype.Scale
+			var dec string
+			scale := totype.Scale
 			if totype.Scale < fromtype.Scale {
-				dec, scale = roundDecimalCoefficient(result.Format(0), fromtype.Scale-totype.Scale), 0
+				scaled, err := v.Scale(totype.Scale - fromtype.Scale)
+				if err != nil {
+					return err
+				}
+				dec, scale = scaled.Format(0), 0
+			} else {
+				dec = result.Format(fromtype.Scale)
 			}
 			parsed, err := types.ParseDecimal256(dec, totype.Width, scale)
 			if err != nil {
@@ -6439,9 +6446,16 @@ func decimal256ToDecimal64(
 			}
 			continue
 		}
-		dec, scale := v.Format(fromtype.Scale), totype.Scale
+		var dec string
+		scale := totype.Scale
 		if totype.Scale < fromtype.Scale {
-			dec, scale = roundDecimalCoefficient(v.Format(0), fromtype.Scale-totype.Scale), 0
+			scaled, err := v.Scale(totype.Scale - fromtype.Scale)
+			if err != nil {
+				return err
+			}
+			dec, scale = scaled.Format(0), 0
+		} else {
+			dec = v.Format(fromtype.Scale)
 		}
 		result, err := types.ParseDecimal64(dec, totype.Width, scale)
 		if err != nil {
@@ -6470,9 +6484,16 @@ func decimal256ToDecimal128(
 			}
 			continue
 		}
-		dec, scale := v.Format(fromtype.Scale), totype.Scale
+		var dec string
+		scale := totype.Scale
 		if totype.Scale < fromtype.Scale {
-			dec, scale = roundDecimalCoefficient(v.Format(0), fromtype.Scale-totype.Scale), 0
+			scaled, err := v.Scale(totype.Scale - fromtype.Scale)
+			if err != nil {
+				return err
+			}
+			dec, scale = scaled.Format(0), 0
+		} else {
+			dec = v.Format(fromtype.Scale)
 		}
 		result, err := types.ParseDecimal128(dec, totype.Width, scale)
 		if err != nil {
@@ -6506,8 +6527,11 @@ func decimal256ToDecimal256(
 		if canWidenDecimalScale(fromtype, totype) {
 			result, err = v.Scale(totype.Scale - fromtype.Scale)
 		} else if totype.Scale < fromtype.Scale {
-			result, err = types.ParseDecimal256(
-				roundDecimalCoefficient(v.Format(0), fromtype.Scale-totype.Scale), totype.Width, 0)
+			var scaled types.Decimal256
+			scaled, err = v.Scale(totype.Scale - fromtype.Scale)
+			if err == nil {
+				result, err = types.ParseDecimal256(scaled.Format(0), totype.Width, 0)
+			}
 		} else {
 			result, err = types.ParseDecimal256(v.Format(fromtype.Scale), totype.Width, totype.Scale)
 		}
@@ -6741,13 +6765,6 @@ func decimal128ToBitWithIgnore(
 		}
 	}
 	return nil
-}
-
-func decimal256ToBit(
-	ctx context.Context,
-	from vector.FunctionParameterWrapper[types.Decimal256],
-	to *vector.FunctionResult[uint64], bitSize int, length int, selectList *FunctionSelectList) error {
-	return decimal256ToBitWithIgnore(ctx, nil, from, to, bitSize, length, selectList)
 }
 
 func decimal256ToBitWithIgnore(
@@ -7950,22 +7967,11 @@ func strToDecimal64(
 	var dft types.Decimal64
 	totype := to.GetType()
 	isb := from.GetSourceVector().GetIsBin()
-	if totype.Charset == 255 && from.GetSourceVector().IsConst() {
-		v, null := from.GetStrValue(0)
-		var result types.Decimal64
-		var err error
-		if !null {
-			result, err = parseMySQLDecimal64Prefix(convertByteSliceToString(v), totype.Width, totype.Scale)
-			if err != nil {
-				return err
-			}
-		}
-		for i = 0; i < l; i++ {
-			if err = to.Append(result, null); err != nil {
-				return err
-			}
-		}
-		return nil
+	if totype.Charset == 255 && (!isb || from.GetSourceVector().IsConst()) {
+		return opUnaryStrToFixedWithErrorCheck([]*vector.Vector{from.GetSourceVector()}, to, proc, length,
+			func(s string) (types.Decimal64, error) {
+				return parseMySQLDecimal64Prefix(s, totype.Width, totype.Scale)
+			}, selectList)
 	}
 	for i = 0; i < l; i++ {
 		if functionRowSkipped(selectList, i) {
@@ -7985,9 +7991,7 @@ func strToDecimal64(
 				isExplicit := mode == castModeExplicit
 				var result types.Decimal64
 				var err error
-				if totype.Charset == 255 {
-					result, err = parseMySQLDecimal64Prefix(s, totype.Width, totype.Scale)
-				} else if isExplicit {
+				if isExplicit {
 					result, err = ParseExplicitDecimal64CastString(s, totype.Width, totype.Scale)
 				} else {
 					result, err = parseDecimal64CastString(s, totype.Width, totype.Scale)
@@ -8282,22 +8286,11 @@ func strToDecimal128(
 	var dft types.Decimal128
 	totype := to.GetType()
 	isb := from.GetSourceVector().GetIsBin()
-	if totype.Charset == 255 && from.GetSourceVector().IsConst() {
-		v, null := from.GetStrValue(0)
-		var result types.Decimal128
-		var err error
-		if !null {
-			result, err = parseMySQLDecimal128Prefix(convertByteSliceToString(v), totype.Width, totype.Scale)
-			if err != nil {
-				return err
-			}
-		}
-		for i = 0; i < l; i++ {
-			if err = to.Append(result, null); err != nil {
-				return err
-			}
-		}
-		return nil
+	if totype.Charset == 255 && (!isb || from.GetSourceVector().IsConst()) {
+		return opUnaryStrToFixedWithErrorCheck([]*vector.Vector{from.GetSourceVector()}, to, proc, length,
+			func(s string) (types.Decimal128, error) {
+				return parseMySQLDecimal128Prefix(s, totype.Width, totype.Scale)
+			}, selectList)
 	}
 	for i = 0; i < l; i++ {
 		if functionRowSkipped(selectList, i) {
@@ -8317,9 +8310,7 @@ func strToDecimal128(
 				isExplicit := mode == castModeExplicit
 				var result types.Decimal128
 				var err error
-				if totype.Charset == 255 {
-					result, err = parseMySQLDecimal128Prefix(s, totype.Width, totype.Scale)
-				} else if isExplicit {
+				if isExplicit {
 					result, err = ParseExplicitDecimal128CastString(s, totype.Width, totype.Scale)
 				} else {
 					result, err = parseDecimal128CastString(s, totype.Width, totype.Scale)
@@ -8387,22 +8378,11 @@ func strToDecimal256(
 	var dft types.Decimal256
 	totype := to.GetType()
 	isb := from.GetSourceVector().GetIsBin()
-	if totype.Charset == 255 && from.GetSourceVector().IsConst() {
-		v, null := from.GetStrValue(0)
-		var result types.Decimal256
-		var err error
-		if !null {
-			result, err = parseMySQLDecimal256Prefix(convertByteSliceToString(v), totype.Width, totype.Scale)
-			if err != nil {
-				return err
-			}
-		}
-		for i = 0; i < l; i++ {
-			if err = to.Append(result, null); err != nil {
-				return err
-			}
-		}
-		return nil
+	if totype.Charset == 255 && (!isb || from.GetSourceVector().IsConst()) {
+		return opUnaryStrToFixedWithErrorCheck([]*vector.Vector{from.GetSourceVector()}, to, proc, length,
+			func(s string) (types.Decimal256, error) {
+				return parseMySQLDecimal256Prefix(s, totype.Width, totype.Scale)
+			}, selectList)
 	}
 	for i = 0; i < l; i++ {
 		if functionRowSkipped(selectList, i) {
@@ -8422,9 +8402,7 @@ func strToDecimal256(
 				isExplicit := mode == castModeExplicit
 				var result types.Decimal256
 				var err error
-				if totype.Charset == 255 {
-					result, err = parseMySQLDecimal256Prefix(s, totype.Width, totype.Scale)
-				} else if isExplicit {
+				if isExplicit {
 					result, err = ParseExplicitDecimal256CastString(s, totype.Width, totype.Scale)
 				} else {
 					result, err = parseDecimal256CastString(s, totype.Width, totype.Scale)

@@ -42,6 +42,31 @@ func TestGetFunctionByIdRejectsUnknownOverload(t *testing.T) {
 	require.False(t, GetFunctionIsWinOrderFunById(unknown))
 }
 
+func TestDecimalFloatAdditionResolvesToDouble(t *testing.T) {
+	decimal := types.New(types.T_decimal64, 10, 2)
+	double := types.T_float64.ToType()
+	doubleScale2 := types.T_float64.ToTypeWithScale(2)
+	for _, test := range []struct {
+		name string
+		in   [2]types.Type
+		want [2]types.Type
+	}{
+		{"double control", [2]types.Type{decimal, double}, [2]types.Type{doubleScale2, double}},
+		{"float32 promotes", [2]types.Type{decimal, types.T_float32.ToType()}, [2]types.Type{doubleScale2, double}},
+		{"float32 first", [2]types.Type{types.T_float32.ToType(), decimal}, [2]types.Type{double, doubleScale2}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(context.Background(), "+", test.in[:])
+			require.NoError(t, err)
+			targets, shouldCast := resolved.ShouldDoImplicitTypeCast()
+			require.True(t, shouldCast)
+			require.Equal(t, test.want[:], targets)
+			require.Equal(t, test.want[0], resolved.GetReturnType())
+			require.Equal(t, int32(0), resolved.overloadId)
+		})
+	}
+}
+
 func Test_fixedTypeCastRule1(t *testing.T) {
 	inputs := []struct {
 		shouldCast bool

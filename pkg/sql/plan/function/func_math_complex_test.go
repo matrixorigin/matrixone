@@ -28,7 +28,8 @@ import (
 // Test_RoundUint64 tests ROUND function for uint64
 // This complex function handles different precision levels and calls multiple helper functions
 func Test_RoundUint64(t *testing.T) {
-	proc := testutil.NewProcess(t)
+	proc := testutil.NewProcess(nil)
+	t.Cleanup(func() { proc.GetFileService().Close(proc.Ctx); proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 
 	// Round to 0 decimal places (no change for integers)
 	{
@@ -89,8 +90,8 @@ func Test_RoundUint64(t *testing.T) {
 
 // Test_RoundInt64 tests ROUND function for int64
 func Test_RoundInt64(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	proc := testutil.NewProcess(nil)
+	t.Cleanup(func() { proc.GetFileService().Close(proc.Ctx); proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 
 	{
 		tc := tcTemp{
@@ -185,8 +186,8 @@ func TestRoundInt64Boundaries(t *testing.T) {
 }
 
 func TestRoundInt64DynamicPrecisionAndNull(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	proc := testutil.NewProcess(nil)
+	t.Cleanup(func() { proc.GetFileService().Close(proc.Ctx); proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 	values := NewFunctionTestConstInput(types.T_int64.ToType(), []int64{math.MinInt64}, nil)
 	digits := NewFunctionTestInput(types.T_int64.ToType(), []int64{0, -18, math.MinInt64, math.MaxInt64, -1}, []bool{false, false, false, false, true})
 	expected := NewFunctionTestResult(types.T_int64.ToType(), false, []int64{math.MinInt64, -9000000000000000000, 0, math.MinInt64, 0}, []bool{false, false, false, false, true})
@@ -201,7 +202,8 @@ func TestRoundInt64DynamicPrecisionAndNull(t *testing.T) {
 // Test_RoundFloat64 tests ROUND function for float64
 // This is particularly complex as it handles both positive and negative precision
 func Test_RoundFloat64(t *testing.T) {
-	proc := testutil.NewProcess(t)
+	proc := testutil.NewProcess(nil)
+	t.Cleanup(func() { proc.GetFileService().Close(proc.Ctx); proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 
 	// Round to 0 decimal places
 	{
@@ -261,7 +263,8 @@ func Test_RoundFloat64(t *testing.T) {
 
 // Test_CeilFloat64 tests CEIL function for float64
 func Test_CeilFloat64(t *testing.T) {
-	proc := testutil.NewProcess(t)
+	proc := testutil.NewProcess(nil)
+	t.Cleanup(func() { proc.GetFileService().Close(proc.Ctx); proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 
 	// Ceil with 0 decimal places
 	{
@@ -302,7 +305,8 @@ func Test_CeilFloat64(t *testing.T) {
 
 // Test_FloorFloat64 tests FLOOR function for float64
 func Test_FloorFloat64(t *testing.T) {
-	proc := testutil.NewProcess(t)
+	proc := testutil.NewProcess(nil)
+	t.Cleanup(func() { proc.GetFileService().Close(proc.Ctx); proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 
 	// Floor with 0 decimal places
 	{
@@ -361,7 +365,8 @@ func Test_FloorFloat64(t *testing.T) {
 
 // Test_CeilInt64 tests CEIL function for int64
 func Test_CeilInt64(t *testing.T) {
-	proc := testutil.NewProcess(t)
+	proc := testutil.NewProcess(nil)
+	t.Cleanup(func() { proc.GetFileService().Close(proc.Ctx); proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 
 	{
 		tc := tcTemp{
@@ -384,7 +389,8 @@ func Test_CeilInt64(t *testing.T) {
 
 // Test_FloorInt64 tests FLOOR function for int64
 func Test_FloorInt64(t *testing.T) {
-	proc := testutil.NewProcess(t)
+	proc := testutil.NewProcess(nil)
+	t.Cleanup(func() { proc.GetFileService().Close(proc.Ctx); proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 
 	{
 		tc := tcTemp{
@@ -425,7 +431,8 @@ func Test_FloorInt64(t *testing.T) {
 
 // Test_FloorUint64 tests FLOOR function for uint64
 func Test_FloorUint64(t *testing.T) {
-	proc := testutil.NewProcess(t)
+	proc := testutil.NewProcess(nil)
+	t.Cleanup(func() { proc.GetFileService().Close(proc.Ctx); proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 
 	{
 		tc := tcTemp{
@@ -467,7 +474,8 @@ func Test_FloorUint64(t *testing.T) {
 
 // Test_CeilUint64 tests CEIL function for uint64
 func Test_CeilUint64(t *testing.T) {
-	proc := testutil.NewProcess(t)
+	proc := testutil.NewProcess(nil)
+	t.Cleanup(func() { proc.GetFileService().Close(proc.Ctx); proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 
 	{
 		tc := tcTemp{
