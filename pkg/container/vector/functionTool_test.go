@@ -576,6 +576,17 @@ func exerciseParameterReuse[T types.FixedSizeT](t *testing.T, typ types.Type, sc
 		parameter = generate(scalar)
 		require.True(t, reuse(scalar, parameter))
 		check(parameter, scalar, 0, true, false)
+		// A NULL wrapper rejects both value shapes without changing its source.
+		constant := NewVec(typ)
+		defer constant.Free(mp)
+		require.NoError(t, appendValue(constant, false, false, mp))
+		constant.SetClass(CONSTANT)
+		require.False(t, reuse(constant, parameter))
+		require.False(t, reuse(v, parameter))
+		check(parameter, scalar, 0, true, false)
+		parameter = generate(constant)
+		require.True(t, reuse(constant, parameter))
+		check(parameter, constant, 0, false, false)
 		changed := typ
 		changed.Width++
 		other := NewVec(changed)

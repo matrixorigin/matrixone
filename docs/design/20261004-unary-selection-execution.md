@@ -81,9 +81,9 @@ Measure unmasked and partial-mask const/flat paths at the same binary/toolchain,
 with prior owner code, alternating pairs and controlled setup/reset accounting.
 No new allocations, second mask scan or material healthy-path regression is
 acceptable without a concrete benefit and recorded decision. Review production,
-test and documentation increments separately. Service SQL reachability/BVT remain
-unverified and cannot be inferred from callback injection. Issue publication is
-unavailable through the known integration403; local drafts remain drafts.
+test and documentation increments separately. SQL reachability of the internal admission counterexamples cannot be inferred
+from callback injection. Focused decimal service BVT is separate evidence; it
+does not make these internal mask combinations SQL-reachable.
 
 ## Complete entry inventory
 
@@ -117,4 +117,5 @@ to the base. The prior owners fail the permanent callback, NULL and reuse oracle
 Representative fixed and string owners were compared in eight alternating pairs
 for one-row controls and 1024-row unmasked/partially masked batches: no material
 regression or allocation-median increase was measured. These are internal template
-contracts and owner microbenchmarks; SQL reachability and service BVT remain open.
+contracts and owner microbenchmarks; SQL reachability of the injected mask
+combinations is not claimed.

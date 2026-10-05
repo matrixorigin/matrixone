@@ -178,6 +178,8 @@ func ReuseFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vector,
 		return false
 	}
 
+	// Admit the cached shape before decoding: a NULL wrapper may retain a
+	// source type that requires conversion when values become available.
 	if v.IsConstNull() {
 		r, ok := f.(*FunctionParameterScalarNull[T])
 		if !ok {
@@ -186,12 +188,12 @@ func ReuseFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vector,
 		r.sourceVector = v
 		return true
 	}
-	cols := MustFixedColWithTypeCheck[T](v)
 	if v.IsConst() {
 		r, ok := f.(*FunctionParameterScalar[T])
 		if !ok {
 			return false
 		}
+		cols := MustFixedColWithTypeCheck[T](v)
 		r.sourceVector = v
 		r.scalarValue = cols[0]
 		return true
@@ -201,6 +203,7 @@ func ReuseFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vector,
 		if !ok {
 			return false
 		}
+		cols := MustFixedColWithTypeCheck[T](v)
 		r.sourceVector = v
 		r.values = cols
 		r.nullMap = v.GetNulls().GetBitmap()
@@ -210,6 +213,7 @@ func ReuseFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vector,
 	if !ok {
 		return false
 	}
+	cols := MustFixedColWithTypeCheck[T](v)
 	r.sourceVector = v
 	r.values = cols
 	return true

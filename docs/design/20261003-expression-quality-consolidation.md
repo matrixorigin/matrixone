@@ -480,56 +480,63 @@ validation of the corrected dependency, rather than by repeating the old code.
 The wider #29249 task remains ongoing.
 
 
-## 2026-10-04: modulo owner consolidation and magnitude repair
+## Final decimal and expression contracts (PR #29618)
 
-This is a local checkpoint. #29249 remains ongoing. User instructions restrict
-current work to local investigation, fixes and tests; no new external review,
-GitHub update or push is performed. The requested external model review was
-terminated, not approved. Live BVT and production performance remain open for
-the SQL-visible magnitude repair recorded locally in commit `08adf47b10`.
+This section consolidates the PR's added design and evidence. Earlier sections
+are the inherited design record. The delivery fixes #29614 and #29615 and relates
+to #29249. Validation claims below identify their scope; internal API probes do
+not establish SQL reachability or workload throughput.
 
-### Ownership and independent contracts
+### Production responsibilities
 
-The separate repair keeps unsigned magnitude comparison and logical shift
-normalization inside `Decimal128.Mod128`. Signed arithmetic callers retain sign
-restoration. D256 modulo reuses existing `d256NarrowAllAbsFit64` admission, which
-rejects the negative power-of-two divisor whose absolute value exceeds uint64.
-No new predicate, execution path, state, allocation or fixture is introduced.
-The public planner/executor table now checks minimum-magnitude reduction, its
-second correction, negative-power divisors, metadata and NULL propagation.
-Normal types/function/plan and incremental vet/molint/lint passed this repair.
-A private independent integer oracle passed 90 selected magnitude boundaries.
+| Contract | Existing owner and correction | Boundaries retained |
+| --- | --- | --- |
+| Unsigned rounded division (#29614) | `Div256` reuses `div256TruncQuoRem`, compares the unsigned remainder against the parity-aware half divisor, and propagates quotient carry | Signed callers restore sign; SQL adapters check signed range and retain BigInt only for scale overflow. Ordinary SQL already protected this primitive failure. |
+| Declared precision (#29615) | `decimal256BatchArith` rejects a remaining magnitude sign bit after absolute-value normalization, before its precision comparison | Common add/sub/mul/div publication owner; constrained widths 1..75; internal width-76 carrier bypass preserved. No per-kernel precision checks. |
+| Bounded rescaling | `ScaleInplace` reuses `Div128`; `ScaleInplace`/`ScaleTruncate` return immediately for zero coefficients | Remove unused `Div128InPlace`; nonzero rounding and error-state semantics retained. Unknown external Go API consumers are outside the compatibility claim. |
+| Decimal CAST reduction | Six D128/D256 adapters reuse source `Scale`, then existing target parser at scale zero | Remove six-caller BigInt helper and discarded formatting; growth, explicit CAST clamping, target precision and executor-owned selection retained. |
+| Empty widening | `decimal64ToDecimal128Array` returns for zero logical rows | Existing result reset owns length/NULL cleanup; positive-length BCE and constant replication retained. |
+| Parameter acquisition | Fixed/string reuse requires complete Type equality; fixed reuse also admits wrapper shape before decoding | Rejected reuse does not decode or mutate. `GenerateFunctionFixedTypeParameter` remains the conversion owner; no new cache, state or buffer. |
+| Unary and decimal-prefix admission | Shared bounded mask publication and existing string conversion templates | Preserve row indexes, NULL/error policy and historical binary-input distinction. See [unary design](20261004-unary-selection-execution.md). |
 
-Batch modulo tests now live in existing `TestD64Mod` and `TestD128Mod` typed
-tables. Each named row makes one call. Only `Kernel` uses the live factory;
-other rows target the batch owner. Coefficients are reviewed literal limbs:
-production Mod/Scale/Minus/parse/format methods do not construct expectations.
-Each row owns fresh output and bitmap state. Assertions cover full coefficients,
-exact NULL count/membership and untouched initially masked output. New NULL
-payload is unspecified. Strict errors assert `ErrDivByZero` and the unchanged
-bitmap, without promising rollback of scratch results.
+The #29614 primitive regression includes seven independent rounding boundaries,
+exact zero errors, half parity and quotient carry. A scan-expression row retains
+operand/result metadata and NULL checks. Existing AVG, interpolation and CU
+accounting consumers remain covered. The former alternative division algorithm
+was retired when main supplied the canonical quotient/remainder owner.
 
-`S` is same scale; `X`/`Y` scale dividend/divisor; `64`/`W` distinguish D128
-small/wide divisor admission. `N` starts with an empty bitmap, `M` proves strict
-masked success, `P` combines old masks and evaluated-zero continuation, `E`/`Z`
-prove strict/permissive zero. VV/SV/VS name the real physical loops. The raw
-strict scalar-zero precheck remains distinct from public all-masked admission.
+For #29615, legal SQL inputs can produce coefficient -2^255 while carrying
+DECIMAL(65,12), which cannot represent it. The shared 11-cell arithmetic precision
+holder preserves the old 65-digit product/66-digit overflow cases and adds
+minimum-output VV/SV/VS, selection, NULL and width-76 controls. Four distinct
+rounded-division precision cases remain separate. The existing planner/executor
+root and service BVT check the exact SQL; BVT also checks the last valid and first
+invalid declared coefficients, recovery after errors and a typed NULL.
 
-Original generated D128 alignment remained below 2^95, so it could not prove
-checked D128 overflow. Retained literal rows preserve successful one-factor
-alignment, signs, wide divisors and nonzero high remainders. Factor differences
-19/20/38, second-factor carry, signed-range rejection and fallback from original
-operands now have separate exact witnesses. Strict/permissive policies have
-identical nonzero arithmetic; their distinct zero outcomes are tested separately.
-All 50 benchmark bodies and shared generators remain byte-identical. The two
-mixed IntDiv children and preceding shared RNG consumption are unchanged.
+Converted parameter tests exercise D64/F32/F64 constant and flat inputs through
+NULL, values, changed payload, nullable flat values and recovery in one frame
+slot. Native D128 is the successful-reuse control. Direct rejected reuse leaves
+the cached wrapper intact; acquisition replaces it via the existing conversion
+owner. The real `plusFn` consumer checks left/right NULL recovery, complete result
+type and exact coefficients. D64+F64 ordinary SQL binds to F64: the panic evidence
+is at the function API, not a claimed SQL crash.
 
-### Complete retirement map
+### Test ownership and retirement
 
-The following maps every old batch child before deletion. `64:` and `128:`
-refer to the retained typed owners above. The two direct helper owners remain
-separate, with strengthened complete-limb assertions; their argument/status
-contracts are not replaced by batch success assertions.
+Expected coefficients use literal limbs or an independent integer oracle.
+Masks assert exact membership/cardinality and untouched initially masked scratch
+outputs. Strict errors assert their category; scratch rollback is not promised.
+VV/SV/VS denote the actual physical loops. Scale-route witnesses use real source
+scales and distinguish inline success from checked fallback. Pure helpers retain
+separate argument/status assertions rather than being replaced by batch success.
+
+The following complete maps retain the old modulo and D64/D128 IntDiv contracts.
+In modulo names S/X/Y mean equal/dividend/divisor scaling, 64/W distinguish D128
+small/wide divisors, and N/M/P/E/Z mean ordinary, initial mask, permissive zero,
+strict error and scalar zero. IntDiv additionally uses H for a wide dividend and
+numeric suffixes for actual scale differences.
+
+#### Modulo retirement map
 
 | Old owner | Old children → retained named destinations |
 | --- | --- |
@@ -555,153 +562,7 @@ contracts are not replaced by batch success assertions.
 | `TestD64Mod_NonScaleXConstPaths` | `NonScaleX_VecVec_NoNull` → `64:Y_VV_N`; `NonScaleX_ConstVec_NoNull` → `64:Y_SV_N`; `NonScaleX_ConstVec_WithNull` → `64:Y_SV_M`; `NonScaleX_VecConst_NoNull` → `64:Y_VS_N`; `NonScaleX_VecConst_WithNull` → `64:Y_VS_M`; `NonScaleX_DivZero_ConstVec_Error` → `64:Y_SV_E`; `NonScaleX_DivZero_VecConst_Error` → `64:Y_VS_E`; `NonScaleX_DivZero_VecConst_Nullify` → `64:Y_VS_Z`; `NonScaleX_DivZero_ConstVec_Nullify` → `64:Y_SV_N`; `NonScaleX_DivZero_VecVec_Error` → `64:Y_VV_E` |
 | `TestD128Mod_ConstAndShouldError` | `SameScale_VecVec_DivZero_Error` → `128:S64_VV_E`; `SameScale_ConstVec_DivZero_Error` → `128:S64_SV_E`; `SameScale_VecConst_Zero_Error` → `128:S64_VS_E`; `DiffScale_ConstVec_NoNull` → `128:Y_SV_N`; `DiffScale_ConstVec_WithNull` → `128:Y_SV_M`; `DiffScale_VecConst_NoNull` → `128:Y_VS_N`; `DiffScale_VecConst_WithNull` → `128:Y_VS_M`; `DiffScale_DivZero_ConstVec_Error` → `128:Y_SV_E`; `DiffScale_DivZero_VecConst_Error` → `128:Y_VS_E`; `DiffScale_DivZero_VecConst_Nullify` → `128:Y_VS_Z`; `DiffScale_DivZero_ConstVec_Nullify` → `128:Y_SV_N`; `DiffScale_DivZero_VecVec_Error` → `128:Y_VV_E` |
 
-### Matched cost and validation scope
-
-In one native test binary with identical production/native inputs, eight samples
-per mode alternate old/new execution order. The scope includes the same unchanged
-mixed IntDiv and direct helper owners. Measurements sum owner function bodies,
-including their child assertions/harness; outer root/sample harness, GC
-preconditioning, build/link/init and queue time are excluded.
-
-| Median | Before | After | Reduction |
-| --- | ---: | ---: | ---: |
-| Test body wall time | 3.853 ms | 1.281 ms | 66.8% |
-| Process CPU within measured bodies | 4.338 ms | 1.606 ms | 63.0% |
-| Go allocated bytes | 638,072 | 344,176 | 46.1% |
-| Go allocations | 12,895.5 | 5,064.5 | 60.7% |
-
-Batch invocations decrease from 119 to 91 and output rows from 7,612 to 307,
-with stronger independent oracles. This shared-host measurement establishes the
-mapped test-body improvement, not whole-package, query or CI speedup. Final function-package normal validation passes 2,054 roots and 8,231 children.
-Complete types/function race passes 2,269 roots and 8,980 children; the public
-planner/executor race owner passes one root and 15 children. Final incremental
-vet, molint and configured lint all exit zero. Unchanged types/plan normal and
-static evidence from the isolated magnitude repair is reused.
-
-Three task-private producer mutations—masked output clobber, wrong strict-zero
-error class and dropped high remainder—each survive all 21 old owners. The new
-typed tables reject all three with the intended runtime assertions, without
-build failure or panic. Matched old/new controls also pass. The earlier direct
-helper oracle mutation evidence remains valid because those helper bodies,
-inputs and full-coefficient assertions are unchanged by this consolidation.
-
-This proves the local test-consolidation checkpoint. The SQL-visible repair still
-requires live BVT and production-performance evidence; external review and
-publication remain constrained by the user's local-only instruction. The full
-#29249 objective is not complete.
-
-
-The local production benchmark checkpoint uses unchanged existing D256 modulo
-same-scale/different-scale bodies and the unchanged D128 control, each over 8,192
-rows. Before/after/after/before ordering supplies six measurements per mode/name.
-Median D256 same-scale batch time changes from 61,759.5 to 61,261.5 ns (-0.8%);
-different-scale changes from 61,563 to 61,708 ns (+0.2%). The unchanged D128
-control changes from 40,352 to 40,101 ns (-0.6%). All samples report zero bytes
-and allocations per batch. This small shared-host experiment shows no material
-common-path regression in those workloads; it does not establish a query/TPCC
-speedup. Live SQL BVT and requested external review remain unperformed under the
-local-only instruction. No new PR, PR update or push has been made for this repair.
-
-
-## IntDiv inventory and unsigned division owner correction
-
-The next batch inventory finds 14 D64/D128 IntDiv roots, 75 children and 912
-function-span lines. All 75 kernel calls pass unchanged. An independent integer
-oracle agrees with 3,108 representable result rows, but no retained input rejects
-checked dividend scaling. Several names incorrectly claim inline rejection or
-non-inline execution. This is an inventory checkpoint, not permission to delete
-those owners; their complete retirement mapping and cost comparison remain open.
-
-The boundary challenge additionally proves a public DECIMAL(65) DIV failure:
-positive 2^127-1 and 2^127-2 divided by negative 2^127 return an internal quotient
-correction error rather than zero. The narrowed D128 quotient/remainder owner
-uses signed comparisons on unsigned absolute magnitudes. Direct equal 2^127
-magnitudes also panic in the original normalized estimator. The ordinary `/`
-zero-result SQL control passes before repair; no SQL-visible panic is claimed.
-
-The correction stays in `div128TruncQuoRem` and `Div128`'s half-up decision.
-Comparison, normalization, product and remainder consistently use unsigned
-limbs. A logical half dividend keeps bits.Div64's high limb below its normalized
-divisor. This produces the same quotient estimate because the original
-normalized effective divisor is even. The wide divisor bounds the truncated
-quotient to one limb. Its full product retains an overflow limb; a high estimate
-is corrected by subtracting the divisor once, rather than repeating signed
-multiplication. Remainder must still be below the divisor. The rounding threshold
-uses ceil(y/2) without signed shifts or doubling, and carries into the quotient's
-high limb. Zero error behavior and the existing small-divisor path are preserved.
-No new kernel, fallback, conversion owner or runtime allocation is introduced.
-The historical IntDiv diagnostic compatibility owner remains live and unchanged.
-
-Seven boundary rows extend the existing independent math/big half-up owner,
-covering the magnitude minimum, half-threshold neighbors, wide-divisor correction
-and rounded quotient carry. Two literal SQL result rows extend the existing
-planner/executor table rather than adding another fixture owner. That table now
-checks both int64 and Decimal256 results with exact values, type/scale/width and
-NULL membership. Cleanup is registered immediately for the process, input and
-executor. A private 4,096-sample full-width probe independently checks quotient,
-remainder and rounding; it is evidence, not a new delivery test suite.
-
-This correction does not complete IntDiv consolidation or the full #29249 goal.
-The local issue draft and terminal evidence live under
-`/home/xupeng/matrixone-qa-evidence/29249-intdiv-owners-20261004`.
-Live-server BVT, external review and publication remain unperformed under the
-user's local-only instruction.
-
-
-The repaired production owner passes complete types/function/plan normal tests
-and complete types/function race tests. The final shared SQL table separately
-passes normal and race validation (two roots, 17 children); final source hashes
-remain unchanged across those checks. The broader normal plan suite has two
-unrelated pre-existing skipped children; neither is counted as coverage. Vet,
-molint and configured incremental lint pass for all three affected packages,
-with the final plan test adjustment checked again. Two partial-fix mutations
-(signed half threshold and signed remainder guard) survive the previous
-independent boundary table but are rejected by the extended table's actual
-runtime assertions. No build failure or panic is used for those mutation results.
-
-A private same-native-binary microbenchmark alternates before/after order with
-six samples per mode for each fixed operand pair, checking exact quotient and
-remainder before timing. Median small-divisor cost is 4.397 → 4.398 ns; ordinary
-wide-divisor cost is 13.825 → 5.052 ns; below-divisor cost is 2.898 → 1.812 ns.
-The high-estimate correction sample falls from 3,752 → 6.221 ns and from 1,096
-bytes/47 allocations to zero: signed overflow diagnostics are no longer created
-while correcting an otherwise valid unsigned product. Other samples allocate
-zero bytes in both modes. This shared-host primitive measurement excludes
-build/link/init and establishes no SQL, package or CI speedup. All 50 existing
-batch benchmarks and the 14 inventoried IntDiv test owners remain byte-identical.
-
-
-## IntDiv typed contract consolidation
-
-The complete map below precedes retirement of the 14 inventoried owners (75
-children). The existing D64/D128 roots retain literal, signed int64 quotients,
-exact error categories, exact NULL count/membership and masked-output sentinels.
-Raw kernels own the selected arithmetic/mask/zero contracts; SQL metadata,
-selection, diagnostics and memory lifecycle remain with the existing public
-owners in `div_issue_test.go` and the planner/executor table. D256, direct helper
-and mixed IntDiv owners remain unchanged. The private `refD128IntDiv` oracle is
-retired with all its callers; the shared D256 reference and benchmark input
-conversions remain live and unchanged.
-
-Rows use S for equal scales, X for dividend scaling, Y for divisor scaling,
-W for wide divisors and H for wide dividends with one-limb divisors. VV/SV/VS
-name the physical input shapes; N/P/M/E/Z distinguish ordinary values,
-permissive zero, initial masks, strict errors and scalar zero admission. Numeric
-suffixes record the actual scale difference. Previous inaccurate branch labels
-are replaced by actual runtime route/range evidence, not preserved as truth.
-
-Nearest checked-scaling controls use K=floor((2^127-1)/10^18): -K scales inline,
--(K+1) rejects scaling and still returns -2^63 after the D256 fallback with
-divisor 2^64-1. VV, SV and VS all exercise that real fallback, including masking
-an otherwise overflowing row. Other independent gaps cover late wide-divisor
-admission, signed minimum coefficients, BIGINT overflow, positive non-inline
-scale adjustment and strict masked-zero versus scalar-zero admission. No row
-uses production arithmetic to derive its expected quotient. Error paths do not
-assert rollback of scratch results. Existing mask and newly admitted NULLs are
-combined in the same permissive rows so bitmap interaction is observable.
-
-`64:` and `128:` below refer to children of the retained typed roots. Multiple
-destinations preserve different outcomes formerly present within one route.
+#### D64/D128 integer-division retirement map
 
 | Old owner | Old children → retained children |
 | --- | --- |
@@ -720,687 +581,74 @@ destinations preserve different outcomes formerly present within one route.
 | `TestD64IntDiv_ShouldErrorPaths` | `VecVec_DivZero_Error` → `64:S_VV_N`, `64:S_VV_E`; `ConstVec_DivZero_Error` → `64:S_SV_N`, `64:S_SV_E`; `VecConst_Zero_Error` → `64:S_VS_N`, `64:S_VS_E` |
 | `TestD64IntDiv_ConstDivZeroShouldError` | `ConstVec_DivZero_Error` → `64:S_SV_N`, `64:S_SV_E`; `ConstVec_DivZero_Nullify` → `64:S_SV_P`; `VecConst_Zero_Nullify` → `64:S_VS_Z`; `DiffScale_ConstVec_NoNull` → `64:Y8_SV_N`, `64:Y4_SV_N`; `DiffScale_VecConst_NoNull` → `64:Y8_VS_N`, `64:Y4_VS_N`, `64:Y4_VS_Z`; `DiffScale_VecConst_Zero_Nullify` → `64:Y8_VS_N`, `64:Y4_VS_N`, `64:Y4_VS_Z`; `DiffScale_ConstVec_DivZero_Error` → `64:Y4_SV_E`; `DiffScale_VecConst_Zero_Error` → `64:Y4_VS_E`; `DiffScale_ConstVec_WithNull` → `64:Y4_SV_M` |
 
-
-The candidate contains 36 D64 and 46 D128 calls over 241 result rows, replacing
-75 calls over 3,288 rows. The seven additional calls close genuine gaps above;
-they are not a claim of reduced batch invocation count. Both retained function
-bodies total 176 lines, replacing 925 owner/helper lines. All 50 benchmark
-bodies and every non-inventoried surviving function body remain byte-identical. The
-now-unused `largeD128` fixture retires with its complete caller set; it adds six
-retired lines to the 925 owner/helper lines above. Validation
-and matched test-body cost evidence are required before claiming this stage.
-
-
-Validation passes the full function package normal and race suites before the
-final fixture retirement/masked-input adjustment. The final affected typed
-owners separately pass normal and race (two roots, 82 children), with unchanged
-other function bodies verified for evidence reuse. Final function-package vet,
-molint and configured incremental lint exit zero. A private independent integer
-probe agrees with all 163 evaluated representable quotient rows and identifies
-six actual checked-scaling rejection rows, replacing zero in the old inventory.
-The final source hashes remain unchanged across validation and mutation runs.
-
-Three real producer mutations—masked output clobber, incorrect strict-zero
-error category and false inline success after rejected scaling—each pass all
-14 old mapped owners and fail the new table's intended runtime assertions.
-There are no build failures or panics in that matrix. The false-inline mutation
-is already rejected by existing direct-helper tests; the new batch coverage
-adds the missing end-to-end arithmetic/result-conversion contract, rather than
-claiming the whole old test suite missed the helper status error.
-
-Eight alternately ordered samples per mode run in one native binary using
-identical production code. Median summed test-body wall time falls from 2.275
-to 0.889 ms (60.9%); process CPU within measured bodies from 2,525 to 1,124 us
-(55.5%); allocated bytes from 330,112 to 232,944 (29.4%); allocations from 5,930
-to 2,945 (50.3%). The measured bodies include child assertions/harness and all
-new gaps; outer root/sample harness, GC preconditioning, build/link/init and
-queue time are excluded. This proves improvement for the mapped test bodies,
-not whole-package or CI speedup. Production/SQL bodies are unchanged at this
-checkpoint, so their still-valid preceding evidence is reused; no new BVT or
-external publication is claimed. The broader #29249 goal remains incomplete.
-
-
-## Scale owner cleanup and bounded zero coefficient work
-
-`Div128InPlace` has one repository caller: `Decimal128.ScaleInplace`, passing
-only a temporary one-limb power of ten after chunk reduction (exponent 1..19).
-The divisor's scratch mutation cannot escape that temporary; its wide-divisor
-branch has no repository consumer. ScaleInplace now uses the existing rounded
-`Div128` owner and the duplicated exported method is removed. This removes a
-kernel API with no surviving repository callers, not a SQL/protocol API; no
-compatibility claim is made for unknown external Go consumers.
-
-The value `Scale` owners already treat zero as an identity for every exponent.
-That existing invariant now also applies at entry to D128 ScaleInplace and
-D128/D256 ScaleTruncate. Zero does not enter the multiplier chunk loop. All
-nonzero paths, result rounding and error-state rules remain unchanged. Existing
-multi-chunk rounding, minimum coefficient and typed overflow owners remain
-intact. Two signed exponent extremes extend the existing boundary owner with
-exact zero coefficients for the three formerly inconsistent entry points;
-redundant ordinary zero exponent permutations are omitted. A private 50-input
-old/new comparison checks in-place result/error state and D128 truncation;
-independent integer half-up checks cover the successful scale-down results.
-
-Full types/function/plan normal tests and full types/function race tests pass.
-The full run has the same two unrelated skipped plan children, not counted as
-coverage. All three affected packages pass incremental vet, molint and lint.
-The final two-extreme boundary table is checked separately after trimming the
-ordinary zero duplicates. This internal identity/owner cleanup changes no SQL
-result, error or metadata contract, so an additional live BVT would repeat the
-internal claim; earlier SQL-visible repairs still have their own open BVT gate.
-
-A private same-binary, alternately ordered microbenchmark provides six samples
-per mode with exact final result assertions and zero allocations throughout.
-Median nonzero in-place scale-down changes 10.265 → 10.360 ns (+0.9%); nonzero
-D128 truncation 9.628 → 9.453 ns (-1.8%); D256 truncation 17.460 → 17.365 ns
-(-0.5%). No material common-path change is established by these small samples.
-For bounded positive exponents 190 and 190,000, zero in-place work changes
-34.015 → 3.374 ns and 28,969 → 3.469 ns. At 190,000, zero D128/D256 truncation
-changes 30,526.5 → 5.465 ns and 69,918.5 → 3.264 ns. These deliberately bounded
-internal-API controls demonstrate removal of exponent-proportional zero work;
-they are not SQL, query or CI performance claims. No production benchmark or
-server fixture is added to the delivered tests.
-
-## D256 integer division dispatch contract checkpoint
-
-The integer result has no result scale. `d256IntDivViaD128` never reads its
-`scale` argument: one production caller and fifteen direct test calls only pass
-it through the signature. Remove that argument and the caller's constant-zero
-local; retain the adjustment, source scales and initial mask snapshot. No
-arithmetic, admission, result, error or NULL publication rule changes.
-
-Before replacement, eight `TestD256IntDivViaD128_AllPaths` children are mapped
-individually in `dispatch-retirement-ledger.json`. Their three shapes, mask
-states and zero/negative adjustments remain; exact literal quotients and
-untouched masked scratch slots replace `NoError` alone. The former comment
-claimed positive adjustment above 19, but no old call used it. One additional
-named row supplies that missing cell with a 10^20 divisor and representable
-signed quotients. Input slices are shared only after proving the kernels read
-coefficients by value; each child gets fresh result and NULL state. Cardinality
-plus the sole expected member proves the whole NULL bitmap. This owner shrinks
-95 → 56 lines and 128 → 27 processed rows. All fifty benchmark bodies and the
-independent scale-alignment overflow owner are unchanged.
-
-Seven D256 roots/34 children pass normally and with race; the full function
-package passes 2,042 roots/8,239 children. Incremental vet, molint and lint pass.
-A private independent signed-coefficient model checks all 23 evaluated results.
-Two producer mutants (wrong quotient and masked-slot overwrite) pass the old
-mapped owner, then fail real final assertions; this is not a claim about the
-entire old suite. Evidence lives in `29249-d256-intdiv-20261004`.
-
-Eight alternating same-binary samples measure owner bodies, child fixtures and
-assertions, excluding outer roots, GC preconditioning, build/link/init and
-queueing. Median wall time is 83.903 → 88.509 µs (+5.5%), process CPU 108 →
-115.5 µs (+6.9%), bytes 25,216 → 24,376 (-3.3%), allocations 234 → 274.5
-(+17.3%). These small measurements establish no runtime saving. An initial
-version cost more and was simplified without weakening its oracle. The extra
-semantic cell and exact assertions have a disclosed cost; consolidate the
-remaining duplicate D256 owners before claiming an overall improvement. No
-server/BVT is needed for unused internal argument retirement and UT-only work;
-prior SQL repairs retain their separate open BVT gate. #29249 remains active.
-
-
-## Current goal: historical bug families and independent repair challenges
-
-The user changed the priority: group previous bugs by shared ownership and
-failure mechanism, reorganize their unit tests, independently challenge the
-repairs, identify new problems, file issues, repair the common owner, validate,
-and add minimal independent regressions. Test consolidation and cost reduction
-support this lifecycle. A stage is not completion of #29249. The unit of test
-redesign is a class of behavior, rather than a test per issue.
-
-The active decimal family spans signed values versus unsigned coefficients,
-scale admission, rounded/truncated division and remainder, narrowing bounds,
-and vector NULL/zero/error policy. Existing D64/D128 consolidation and scale
-cleanup are earlier parts of this family; D256 dispatch consolidation remains
-open and requires a renewed old-to-retained map after the upstream changes.
-
-## Latest-main D256 rounded consumer checkpoint
-
-With the explicitly permitted Git fetch, rebase the seven unpublished commits
-onto main c3fbe9ce744aa877ec944c86258916fc5e45b63b. Preserve the upstream
-quotient/remainder owner and its floor, modulo, format and high-magnitude tests.
-Do not reapply the saved alternate pre-rebase algorithm: latest main already
-fixes the old DIV/modulo counterexamples. A pre-rebase failure is not evidence
-of an outstanding current-main defect.
-
-A separate current-baseline native assertion proves that unsigned rounded
-Div256 returns zero for 3*10^76 / 10^64 instead of 3*10^12. Rounded division
-still duplicates the former doubled-dividend/signed-comparison algorithm.
-Ordinary SQL division previously protected this domain with an allocation-heavy
-headroom fallback, so this primitive failure does not establish wrong SQL
-results for that protected adapter. Reuse the existing div256TruncQuoRem owner
-byte-for-byte. Compare the remainder with floor(divisor/2) using unsigned borrow
-and divisor parity, then propagate quotient carry with unsigned addition. No
-new division algorithm, state or helper is introduced. Rounding cannot overflow
-the unsigned quotient: divisor one has remainder zero; larger divisors leave at
-least one quotient bit of capacity.
-
-Remove the private truncate forwarding wrapper with its sole caller. The SQL
-adapter now admits all fixed-width scale-adjusted magnitudes; retain its signed
-quotient range check and the bounded BigInt path for actual scale overflow.
-Trace the other rounded consumers (Decimal128 wide fallback, Decimal256.Div,
-AVG finalization, linear interpolation and CU accounting); their sign/scale
-responsibilities remain at their existing callers.
-
-Seven distinct rounding boundary cells plus exact zero-error/result assertions
-extend the existing unsigned owner rather than introducing a new test root or
-repeating its floor matrix. One scan-expression row reuses the binder/executor
-fixture for two values and NULL, output type/width/scale and operand scales.
-Existing cases are retained. Production changes add 35/delete 50 lines (net -15),
-unit/public tests add 35 lines, and documentation is accounted separately.
-
-All seven validation steps finish with zero exits and unchanged source hashes:
-independent 2,048 full-width pairs, vet, molint, incremental lint, full normal
-(types/function/plan), full race (types/function), and public-expression race.
-Normal tests select 219/2,044/3,490 roots; race selects 219/2,043 roots (one
-existing race-mode exclusion). Existing AVG, interpolation and accounting
-consumer tests also pass. Half-parity and top-word carry mutants fail real
-assertions in the new boundaries, without build failure or panic.
-
-Six alternating samples per mode in the same binary measure the primitive and
-adapter separately. Median one-word rounding is 12.351 to 9.317 ns; wide
-rounding is 3,171.099 to 287.595 ns. Truncation/below-divisor controls differ by
-less than 1%, with zero allocations for every primitive sample. Two adapter
-controls change 565.583 to 184.713 ns (432 B/15 allocations to zero) and 578.264
-to 233.388 ns (448 B/17 allocations to zero). These fixed-input microbenchmarks
-exclude build/fixture/queueing cost; no end-to-end SQL, CI savings or broad
-workload claim follows. Evidence, current-main issue draft and new-family
-inventory live in `29249-d256-intdiv-20261004/canonical/latest-main`.
-
-The real-service BVT gate for earlier SQL-visible repairs remains open. The new
-rounded-owner checkpoint preserves protected ordinary SQL results while
-removing the allocation-heavy fallback; its exact primitive and real expression
-consumer evidence do not substitute for the separate earlier BVT obligation.
-Independent gpt-6.1-sol xhigh stage review approves this checkpoint with no
-blockers after checking the final source hashes, independent models/mutations,
-shared owner, callers, test purpose and cost limits. Family consolidation and
-the earlier real-service BVT obligation remain open. Publication was pending at this checkpoint. The subsequent explicit user
-permission to file sufficiently proven issues authorizes issue creation; the
-verified primitive defect is now recorded in issue #29614. Push/PR publication
-remains unperformed.
-
-
-## D256 integer division family consolidation
-
-Review the class, not one issue at a time. Fresh current-baseline observation
-maps 45 actual D256 calls/1,261 processed rows before deleting any owner. Six
-weak or duplicate roots become the existing TestD256IntDiv contract table with
-42 named calls/109 rows. All nine earlier exact dispatch rows remain, along
-with real narrow/generic VV/SV/VS admission, sign/truncation, two-limb divisors,
-positive/negative scale adjustments, late generic pre-scan, combined initial
-masks and new zero NULLs, and strict error categories. The initially large
-random fixture actually selected narrow dispatch; the replacement names and
-coefficients state the path they exercise. Fifteen synthetic direct narrow
-calls with adjustment six but source scales 4/4 become real batch calls with
-source scales 0/6, preserving their mechanism without bypassing admission.
-
-Six neighboring inline-rejection cells distinguish a representable negative
-MinInt64 quotient from its unrepresentable positive counterpart for all three
-shapes. The independently derived coefficient is ceil(2^127/10); scaling it by
-ten yields 2^127+2, rejected by the signed128 inline admission. Division by
-MaxUint64 truncates to 2^63. Add generic masks and strict vector masked-zero
-versus scalar-zero all-masked rejection as separate policies. Expected values
-are literals, not calls to a decimal producer. Cardinality plus all expected
-NULL members proves the bitmap; initial masked outputs keep their sentinels.
-Do not demand rollback of scratch results when an error is returned.
-
-HighMagnitude (including its D128 widening consumer) and ScaleAlignmentOverflow
-remain byte-identical, as do all fifty benchmark bodies. Retire refD256IntDiv,
-its sole reference-owner helper and hugeD256 with their only callers. The final
-Go test delta is +101/-415 lines (net -314); no production code changes in this
-stage. Documentation additions and private evidence are accounted separately.
-The named retirement ledger explains each old call, independent retained
-contract, metadata correction and strengthened oracle before removal.
-
-All nine serial gates are terminal with unchanged source hashes: independent
-math/big observer, matched family costs, truncation-to-rounding and masked-write
-mutants, incremental vet/molint/lint, full function normal and race. The full
-D256 subset now exercises 53 calls/128 rows and independently checks 80 success
-results, of which the central table supplies 64. Full normal selects 2,039
-roots/8,250 children; race selects 2,038/8,250. Both mutants fail actual final
-assertions, without build failure or panic. Their failure proves retained
-contracts, not that the complete old suite would let both mutations survive.
-An initial focused compile exposed the now-unused slices import; cleanup and
-successful rerun supersede that build failure, whose evidence is retained.
-
-Eight alternating samples in one binary compare the six frozen old owner
-bodies and their helpers with the retained class, under the same production
-implementation. Medians: wall 838.255 to 467.225 microseconds (-44.3%); process
-CPU 963 to 588 microseconds (-38.9%); bytes 164,560 to 124,144 (-24.6%);
-allocations 2,708 to 1,502.5 (-44.5%). Measurements include owner children,
-fixtures, assertions and consolidation of the six former root invocations;
-they exclude build/init/queueing, outer measurement groups and GC preconditioning.
-They support a test-family cost reduction, not whole-package/CI or SQL speedup.
-
-Independent gpt-6.1-sol xhigh review APPROVE confirms the map, exact boundary
-arithmetic, protected owners/benchmarks, caller retirement, source hashes,
-mutants and cost provenance. Issue #29614 covers the prior production repair;
-this test-only consolidation needs no separate product-bug issue or extra
-server BVT. Existing SQL repairs still retain their distinct real-service BVT
-gate. The broader historical-bug-family challenge remains active.
-
-
-## Historical decimal repair class: SQL consumers and precision policy
-
-Independent native SQL-expression challenges cover 18 constant/scan cases from
-previous decimal division/scale-reduction failure mechanisms: narrow widening,
-wide control, D128/D256 source widths, positive/negative half-neighbors, ROUND
-and CAST, two scan values and NULL. Results are decoded from coefficient words
-with independent math/big rational arithmetic; no production Format or decimal
-producer computes the oracle. All corrected cases pass. Three initial failures
-were invalid historical expectations: current default div_precision_increment
-is four, so scale-zero division already rounds to 0.1235 before outer CAST(65,6).
-Retain that control; never report this policy change as a fresh arithmetic bug.
-
-Source scale three makes division scale seven and adjustment 22; the numerator
-then exceeds signed128. Private route observation proves d128DivOneToD256 runs
-for both constant and scan variants, while the actual wide control does not use
-that route. The intermediate coefficient 1234568 reduces once more on the
-explicit outer CAST, yielding 123457 at scale six. The minimum missing consumer
-contract is added as one row to the existing scan-expression owner, retaining
-values, outer scale/type, inner scale, target operand metadata and NULL. Do not
-deliver all 18 discovery cases as overlapping new test roots. Existing signed,
-half-boundary and Scale owners retain their distinct primitive contracts.
-
-Six validation gates finish with zero exits and unchanged relevant hashes:
-focused consumer, vet/molint/incremental lint, full plan normal and focused
-public-path race. gpt-6.1-sol xhigh independently approves the corrected
-historical oracle, actual widening path, one-row regression and evidence.
-Production delta is zero, test delta is one table row; report additions are
-separate. Two existing unrelated skipped plan subcases are not claimed as
-executed coverage. This remains in-process SQL evidence, not server BVT.
-
-
-## Shared declared-precision boundary: signed minimum (2026-10-04)
-
-This stage follows the amended historical-bug-family goal: organize tests by
-shared ownership and failure mechanism, challenge the fixes, file proven new
-issues, repair their common owner, and retain minimal independent regressions.
-
-- Current-main baseline `c3fbe9ce744aa877ec944c86258916fc5e45b63b` reproduces
-  [#29615](https://github.com/matrixorigin/matrixone/issues/29615): two legal
-  operands produce `MinInt256` under `DECIMAL(65,12)`, leaking a 77-digit
-  coefficient. The nearest negative coefficient and positive counterpart reject.
-- `decimal256BatchArith` owns post-kernel precision enforcement for addition,
-  subtraction, multiplication and division. The absolute magnitude of the
-  minimum signed coefficient retains its high bit; signed `Less` mistakenly
-  treats it as smaller than a positive precision limit. After normalization,
-  reject a remaining sign bit before the existing comparison. Constrained
-  widths 1..75 have positive limits below 2^255; internal width-76 bypass stays.
-  No new state, helper, allocation, per-kernel check or execution path is added.
-- Replace the existing multiplication-only precision holder with one shared
-  arithmetic precision holder. Preserve its exact 65-digit product and 66-digit
-  overflow oracles; add signed precision boundaries, legal minimum outputs
-  through VV/SV/VS, NULL/filtered rows, and a raw four-limb width-76 compatibility
-  control. The four division precision cases remain: their scale and rounding
-  contracts are distinct. One public binder/executor regression proves SQL
-  reachability; the discovery matrix is not copied wholesale into delivery.
-- The final holder uses 11 cells with at most two rows, existing function
-  fixtures, per-child vector cleanup, and one shared process with cleanup. Exact
-  literal outputs, metadata, NULL bits and `ErrOutOfRange` are checked. No sleep,
-  random scheduling, server or extra framework is needed. Before the production
-  fix, the three minimum-output shape cells failed with a missing error while
-  all seven original/new controls passed. This is direct sensitivity evidence.
-- D128 add/sub/multiply SQL coercion widens from original operand domains before
-  choosing its kernel when the aligned result exceeds precision 38; a legal
-  SQL result reaching the physical signed minimum does not remain in that
-  carrier. This does not claim unrelated D128 paths have been fully audited.
-- Evidence is retained under `canonical/latest-main/logical-range`: baseline
-  SQL terminal/log, `precision-family-map.json`, before/after regression logs,
-  and `regression-validation-terminal.json`. Whole-thread server BVT and broader
-  historical-family closure remain separate open requirements.
-
-Final stage validation: all seven serial checks terminated with exit 0 and
-unchanged source hashes: focused family/public tests, incremental vet, molint,
-incremental lint, full function/plan normal tests, full function race, and
-public-path race. Lint reports zero new issues. Molint has six existing
-diagnostics in five source files unchanged from the verified main base;
-its terminal is zero, and no new diagnostic is introduced. Plan normal has
-two existing skipped children, which are not claimed as executed coverage.
-6.1-sol xhigh approved the design and delivered code; final evidence selection
-and source binding are retained separately from broader uncompleted QA/BVT.
-
-## Decimal CAST contracts and rescale ownership (2026-10-04)
-
-Ordinary/implicit decimal CAST precision and rescaling form one contract family;
-issue numbers and individual adapter names do not define separate fixtures.
-Six D128/D256 reduction adapters now reuse the source carrier's existing `Scale`
-owner, then format the reduced coefficient and use the existing target precision
-parser at scale zero. Remove the sole six-caller BigInt rounding helper and four
-discarded formats. Growth, target precision/error categories and explicit SQL
-CAST's separate clamp entry remain unchanged. Selection remains owned by the
-expression executor; no second masking implementation is introduced.
-
-Five repeated test roots (27 calls) become one 33-cell holder with shared process
-cleanup and per-child vector cleanup. The retirement ledger preserves every old
-input, metadata, oracle, constant shape and NULL contract. Seven old reduction
-cells also cover exact half/below-half, negative and NULL rows, including 19-digit
-chunk boundaries; six added cells cover carry/nearest-valid and negative precision
-rejection previously hidden behind the first error. Admission's 13 exact Boolean
-assertions and the independent source-retyping root retain separate ownership;
-the growth benchmark body is unchanged. Expected coefficients are exact literals
-or raw limbs, not computed by the production scaling owner.
-
-One registered colexec consumer covers selected overflow suppression, NULL,
-unmasked precision error, shrinking-batch reuse, complete metadata and zero
-remaining pool bytes. It exercises the real ordinary CAST; no fake evaluator,
-service, sleep or new test framework is required.
-
-Evidence: `29249-cast-contract-20261004` retains the 27-call retirement ledger,
-33-cell selection audit, original source snapshots, independent discovery probes,
-seven-gate terminal/hash binding and same-condition measurements. All seven
-serial gates passed: focused tests, vet, molint, incremental lint, full function/
-plan/colexec normal tests, full function race, and public consumer race. Lint has
-zero new issues; molint diagnostics are in seven unchanged base source files.
-Two pre-existing plan skips are excluded from coverage claims.
-
-Six alternating paired microbenchmark samples use actual `NewCast`, prebuilt
-256-row vectors and scale delta 30. Median adapter time falls 90.3–98.7%; each
-batch now uses 96 bytes/one allocation instead of 77–373 KB/2,561–17,921 allocations.
-This is not SQL-throughput, explicit-CAST or short-delta evidence. In the same
-binary, eight alternating old/new test-family samples include all added function-family coverage, excluding the
-new colexec consumer:
-wall time falls 11.0%, CPU 8.4%, but allocated bytes rise 13.9% and allocations
-10.4%. The extra precision/error coverage has a measured cost; fixture sharing
-alone is not claimed to reduce all resource dimensions. Build/link/startup and
-GC preparation are excluded from those test-body comparisons.
-The final holder kills a private mutant that parses the reduced D128→D64
-coefficient using target scale: both the original reduction cell and positive
-carry rejection fail their exact assertions. Permanent source remains unchanged.
-
-## Widening batch row-domain contracts (2026-10-04)
-
-Rebase the existing local series onto freshly fetched main `a3aece1894` before
-this stage. The pre-fix D64→D128 batch owner is byte-identical to that main revision.
-A registered ColumnRef CAST on a zero-row batch reaches both same-scale BCE
-paths and reads index -1. A physically empty normal vector reproduces it too. Separately, a stored
-constant coefficient 10000000000 at (18,2), narrowed to (10,2), reports precision
-failure even when no row is requested. Both NULL shapes and the constant error
-were demonstrated before the fix; these are batch/expression API findings, not
-a claimed server SQL reproducer.
-
-Return immediately for zero length at `decimal64ToDecimal128Array`. This keeps
-positive-length BCE and constant replication, while existing result reset owns
-length/NULL cleanup. Do not add generic executor/CAST short-circuit policy or
-another validation/storage path. Remove the adjacent obsolete comments claiming
-D128 scale is below 18 and its now-optimized conversion is temporary/too slow.
-Physically empty constants are handled as scalar NULL by `IsConstNull`;
-that distinct representation contract is explicitly outside this checkpoint.
-
-Map all six old vector calls into the existing precision holder (now 42 cells),
-retaining their metadata, inputs and NULL maps, including the old misleadingly
-named negative case that actually has no NULL. Replace four verbose constant
-cases with literal-limb three-row replication cases, adding one empty narrowing
-failure-boundary control. A real registered consumer checks both NULL shapes,
-0→2→0→2 reuse, complete metadata, fresh payload after NULL reset, and pool cleanup.
-Full bitmap emptiness subsumes per-row non-NULL checks; comparable whole-Type
-checks retain every metadata field without reflection. No extra fixture framework
-is introduced. Test code falls by 77 lines; implementation grows by two net lines.
-
-Evidence is under `29249-empty-cast-20261004`: fresh-main replay, complete ten-call
-retirement ledger, before/after logs and source-bound validation terminals. Seven
-initial gates pass, including full function/plan/colexec normal, full function
-race and public consumer race. The subsequent assertion-only cleanup changes no
-production or consumer byte; five focused normal/race and incremental static
-gates bind the final test source. Reuse the broader gates under that explicit
-semantic freshness argument. Two pre-existing plan skips are not executed
-coverage; lint has zero new issues and molint diagnoses only unchanged files.
-
-Eight alternating paired same-binary samples include all function-family
-coverage and exclude the new colexec consumer, build/link and GC preparation.
-Final medians observe wall +4.3%, CPU +5.7%, allocated bytes +15.5% and allocations
-+3.3% versus the old family. This stage does not claim a resource reduction;
-the newly verified empty/error and metadata contracts justify the measured cost.
-The issue draft is preserved; GitHub creation returned 403 (integration access),
-so no published issue is claimed. Current-head service BVT remains open.
-
-
-## Parameter acquisition and reuse contract (2026-10-04)
-
-Repeated acquisition must preserve the complete effective type, source, values,
-and NULL semantics of initial acquisition. Before repair, a D64 constant acquired
-as D128 succeeds once and panics on the next acquisition: reuse decodes physical
-D64 storage as D128 instead of invoking the existing conversion owner. Changing
-same-OID input metadata also leaves the old wrapper metadata behind.
-
-Both fixed and string reuse owners now compare the complete Type before decoding
-or mutating the wrapper. A mismatch returns false to the existing Generate
-fallback. Conversion remains owned by Generate; no conversion buffer, alternate
-state machine, or per-branch metadata update is introduced. Converted inputs are
-reconstructed on subsequent acquisition; the previous panic is not a valid
-performance baseline for that path.
-
-The two old reuse test roots map to a shared transition fixture. It preserves
-plain/nullable/constant-NULL reuse decisions, rejected constant append, and the
-original fixed length 1 versus string length 0. It adds exact payload, complete
-metadata, source and cleanup oracles. A real same-slot OptGet replacement uses a
-changed type and different payload, checking both the fresh wrapper and the
-unchanged rejected wrapper. The frame-growth identity test remains separate.
-Six conversion cells cover D64/F32/F64 and normal/constant storage with independent
-literal coefficients. A production plusFn consumer checks two exact 3.23 results.
-This proves the function API contract, not a normal SQL binding counterexample:
-the current D64+F64 resolver converts to F64.
-
-Final focused normal/race, vet and incremental lint passed. Molint exited zero
-with two unsafe import diagnostics at source sites unchanged from main; this
-is not a zero-diagnostic claim. A private overlay removing both guards fails both
-transition cells, confirming that type rejection is actually tested. Evidence
-and final source hashes are in `29249-empty-parameter-20261004`.
-
-Eight alternating same-binary fixture pairs compare the old two reuse roots with
-the new transition holder. Median wall rises from 40.5 to 69.2 microseconds, CPU
-from 45.5 to 80.5 microseconds, bytes from 8,392 to 15,512 and allocations from 94
-to 159. Additional metadata/cache/value/cleanup coverage has a small absolute
-cost, but this is not a resource reduction. These measurements exclude the six
-conversion cells and the function consumer. No total-suite speedup, service BVT,
-or normal SQL reproduction is claimed. Issue publication remains unavailable
-through the integration (earlier HTTP 403); no new issue or PR was created.
-
-
-## Numeric rounding fixture family (2026-10-04)
-
-The 11 roots in func_math_complex_test.go contain 10 Process construction sites;
-the integer boundary helper needs no Process. These numeric functions do not use
-file services, yet NewProcess(t) constructs three disk services via TempDir.
-Reuse existing NewProcess(nil), whose three named services use disabled-cache
-MemoryFS with the same Process configuration. Each root retains its independent
-fixture. No new fixture API, cache, worker, or shared global state is introduced.
-
-Register cleanup immediately: close fixture-owned file services, Free the Process,
-and verify pool zero. Process.Free does not own file-service closure; runtime
-services remain runtime-owned. Original inputs, expected values, NULL/error
-contracts, and assertions are preserved after normalizing the fixture edits.
-
-Eight alternating same-binary paired measurements over all 11 roots include
-per-root cleanup and exclude build/link and pre-sample GC. Median wall falls
-1.496ms to 0.413ms (-72.4%), CPU 1.581ms to 0.494ms (-68.8%), allocated bytes
-239,492 to 179,984 (-24.8%) and allocations 2,444.5 to 1,600 (-34.5%). The change
-avoids 30 per-service TempDir calls per family run; this is not a physical total
-directory count or a whole-CI speedup. Disk/IO tests are outside this change.
-Evidence is in 29249-rounding-fixture-20261004. Final focused normal/race, vet
-and incremental lint passed; molint exits zero with two unsafe-import diagnostics
-in unchanged main files. This fixture-only change needs no service BVT.
-
-
-The same fixture rule applies to the 11 numeric ceil/floor/round/truncate roots
-in func_binary_test.go, including numeric string parsing, NULL/selection,
-precision-frame reuse and dynamic digits. Temporal/format/IO tests are excluded.
-Ten construction sites execute 14 Processes per full family run, avoiding 42
-per-service TempDir requests. Each Process remains independent at its existing
-scope, including parent-scoped shared Processes whose nested tests finish before
-cleanup. The pure integer boundary root still requires no fixture.
-
-Eight alternating same-binary pairs, including per-root cleanup and excluding
-build/link and pre-sample GC, reduce median wall 2.677ms to 1.081ms (-59.6%), CPU
-2.835ms to 1.226ms (-56.7%), allocated bytes 517,124 to 413,220 (-20.1%) and
-allocations 6,178.5 to 5,012 (-18.9%). Inputs, oracles and reuse order remain
-unchanged. Evidence is in 29249-rounding-binary-fixture-20261004. Final focused
-normal/race, vet and incremental lint passed. Molint exits zero with two unsafe
-import diagnostics at unchanged main source sites; no zero-diagnostic claim.
-
-
-## Shared result metadata oracle (2026-10-04)
-
-FunctionTestCase.Run previously compared only OID, accepting an exact coefficient
-with a corrupted decimal scale. Compare the complete Type after row-count checks
-and before value decoding; diagnostics use %#v to expose field differences.
-NewFunctionTestResult already provides an explicit Type, without a wildcard
-contract. No new option or alternative comparator is introduced.
-
-Four existing retyping roots (six function calls) preserve their original result
-initialization and independently declare the final expected metadata after case
-construction: temporal subtraction and raw intervals publish width=scale; string
-add/sub publishes scale 6; LEAST/GREATEST retains the initial Time(64,0) challenge
-and expects Time(64,2). Values, NULL, warnings, errors and reuse behavior remain.
-Production retyping is unchanged.
-
-One shared lightweight fixture verifies a correct result and isolated OID, Size,
-Width, Scale, Charset and notNull corruptions, plus empty-row and all-NULL
-metadata errors. A literal coefficient is written at an existing row before
-metadata mutation, avoiding row-count interference. RunAndFree releases every
-case, with pool zero asserted per cell. The owning function package full normal
-suite passed, as did full race, vet and incremental lint. Molint exits zero with
-existing unsafe-import source diagnostics. The old OID-only guard mutation passes
-the correct/OID controls but fails seven remaining metadata cells. Final source
-hashes and actual test selection are bound in 29249-function-oracle-20261004. This test-only change requires no
-service BVT and makes no production performance claim.
-
-### Fixed-result literal expectations
-
-The shared `FunctionTestCase.Run` oracle now compares all 24 supported fixed
-OID branches directly against their literal Go slices and NULL flags. The
-existing generic comparator covers 23 OID branches (22 Go types); float64 keeps
-its epsilon/NaN policy, while float32 remains exact. Complete result metadata
-and row count are checked before value decoding. Actual constants still use the
-production parameter wrapper; expected slices do not broadcast.
-
-Expected NULL is checked before indexing its payload. A short NULL mask implies
-non-NULL for remaining rows; a NULL row may have no payload. A missing non-NULL
-payload still panics, and wrong Go expectation types still raise a type assertion
-error, including empty results. The existing ownership suite retains mismatch,
-reuse, float, filtering, allocation rejection, and cleanup checks. Five extent
-cells cover typed empty, short masks, trailing NULL without payload, all NULL
-without payload, and non-NULL bounds failure using that same fixture.
-
-Only the redundant fixed expected vector and bitmap construction are removed.
-Variable encodings retain their existing vector comparison path; fixed vector
-constructors remain necessary for actual input construction. No SQL behavior or
-production implementation changes.
-
-A private same-binary comparison used six real CAST cases and eight alternating
-pairs of 3,000 evaluations, with case setup outside timing and expected-vector
-cleanup inside the old path. Median wall/CPU fell 66.6%, allocated bytes 74.5%,
-and allocations 61.5%. These are measurements of the selected fixed-result
-oracle workload, not whole-package, CI, or production throughput gains. Evidence:
-`29249-fixed-result-oracle-20261004/cost-summary.json`. The retained variable
-encoding paths are checked by the owning function package, not included in that
-performance estimate.
-
-### Integer assignment test family
-
-Three former roots now share one existing lightweight Process under
-`TestIntegerAssignmentContracts`. The groups have identical session/configuration
-and run serially; numeric assignment reads SQL mode but does not modify it.
-Vectors remain case-owned, each group checks pool zero, and the outer root closes
-its MemoryFS and Process. Target-only subtest layers had no independent fixture
-and are replaced with typed rows carrying source/target/operation diagnostics.
-
-All 83 old calls map to retained or enhanced coverage: 79 remain, while three
-decimal overflow calls and the float64 uint8 upper tie move to batches containing
-the same source type, scale, destination and offending literal. Errors now require
-`ErrOutOfRange`. Five physical source types cover overflow, partial mask, source
-NULL and valid reuse; the common all-mask/uint8 reset owner uses a float64 control.
-These are 22 state executions, not 22 subtests. Error checks inspect only the
-written first row, without claiming rollback or a shortened result domain.
-Successful comparisons retain complete metadata, length, literal values and NULL.
-
-The final family executes 101 calls with 12 errors versus the old 83/10.
-Same-binary measurements use eight alternating pairs with setup and cleanup
-included; old cleanup is normalized to the same explicit resource release.
-Median wall/CPU fell 48.4%/47.5%, allocated bytes 13.5%, and allocations 11.8%.
-The earlier extra-subtest candidates increased allocations and were rejected.
-These are test-family costs, not CI or production throughput estimates. Coverage,
-mutation and validation evidence is in
-`29249-integer-assignment-family-20261004/final-main-37ba071`.
-No production implementation or SQL contract changes in this stage.
-
-### String and JSON width-owner test family
-
-`TestCastStringWidthContracts` replaces two roots and their single-use helpers.
-All eight string and nine JSON rows retain their source representation, literals,
-VARCHAR(3) target, strict flag and trailing-space policy. The actual `strToStr`
-and `jsonToStr` owners receive the original flags; no production path changes.
-The shared lightweight Process has no mutable configuration in this family.
-Each case immediately registers vector release and pool-baseline verification;
-the root closes its MemoryFS and Process and verifies pool zero.
-
-Six failures require their exact `ErrInternal` or `ErrCastWidthExceeded` category.
-Eleven successes additionally check complete Type, length one and non-NULL output.
-The old string oracle accepted any error; no production defect is claimed from
-that test weakness. Existing pure width-bound and UTF8/trailing-space tests remain
-separate because they prove different contracts. No target cross-product is added.
-
-Eight alternating same-binary pairs include encoding, fixture and cleanup; old
-resource release is normalized. Median wall/CPU decrease 86.2%/84.4%, allocated
-bytes 62.3%, allocations 63.2%. These are costs of the selected 17-case family,
-not package, CI or production performance. Mapping and terminal evidence live in
-`29249-width-family-20261004`. This test-only stage does not require a service BVT;
-earlier production-stage BVT obligations remain open.
-
-### Assignment-ignore string conversion test family
-
-All nine roots and 64 children keep their literal results, warning contents and
-counts, NULL, selection, binary-input and error oracles. One common runner now
-accepts selection explicitly; the nil-only forwarding wrapper is retired.
-Each call retains its own Process and warning session because several children
-perform consecutive conversions and their warning histories must stay isolated.
-`NewProcess(nil)` preserves the default timezone/configuration without disk FS
-setup; these numeric and temporal conversion paths do not access files.
-Case cleanup frees vectors before closing the FileService and Process and checks
-pool zero. Successful results additionally require complete destination Type and
-the original input row domain. Error tails and rollback are not asserted.
-
-Eight alternating same-binary pairs include the entire family, fixtures and
-cleanup, with old resource release normalized. Median wall/CPU fall 77.5%/78.0%,
-allocated bytes 38.4% and allocations 46.6%. These are selected test-family costs,
-not CI or production throughput. Test source gains one line overall; the benefit
-is removal of disk setup and stricter shared ownership/oracles, not source-size
-reduction. Evidence is in `29249-assignment-ignore-family-20261004`.
-This stage changes no production behavior and needs no service BVT; earlier
-production-stage BVT obligations remain pending.
-
-### Inactive unary conversion and decimal-prefix execution ownership
-
-The existing string/bytes-to-fixed error-check templates now return before reading
-or converting input for zero rows, and recognize a fully inactive bitmap within
-the existing bounded mask scan. AllNull remains owned by its original early return.
-Partial constant evaluation still invokes its conversion once; selected NULLs are
-published by the common execution owner. No new execution template or callback
-adapter is introduced. Three duplicated decimal-prefix constant branches and their
-row-loop prefix dispatches are retired in favor of the existing string template.
-The admission condition preserves the prior binary decoder distinction; binary
-constant/flat conversion inconsistency is not silently changed by this patch.
-
-Two regression roots cover literal prefix parsing, all three physical decimal
-widths, constant/flat input, mask flags and bitmaps, NULL, empty batches, binary
-controls with legal precision, and same-wrapper shape/payload reuse. The shared
-owner tests inject a failing conversion, proving zero calls for inactive rows and
-one original error for active constants. Long and short masks challenge the actual
-row domain. Private parser-entry instrumentation additionally verifies empty and
-fully masked prefix constants do no parsing. Old-owner overlays fail the new
-literal NULL/error assertions; no parser counter or product test hook is added.
-
-Production code decreases 17 lines. New regression code is reviewed separately;
-its value is the common callback and real CAST contracts, not its size. Eight
-alternating same-binary pairs at 1,024 rows and 500 evaluations measure only the
-selected healthy kernels, with setup/warmup outside timing and resets inside.
-DECIMAL128 constant wall/CPU decrease 70.4%/69.6%; flat decrease 5.0%/4.9%.
-Existing unary-string flat costs are within 0.4%, treated as unchanged. Both old
-and new loops have median zero measured allocations; four samples contain one
-48–80-byte allocation. No CI or SQL throughput claim follows.
-Evidence: `29249-prefix-constant-selection-20261004`.
-Planner production sites create Charset=255 targets, but an externally visible
-SQL reproduction and service BVT remain unverified; internal NewCast and shared
-kernel behavior are the proved scope. The issue report is drafted locally, with
-publication unavailable due to the known integration403.
+#### Other retained families
+
+| Former coverage | Retained owner and independent additions |
+| --- | --- |
+| Eight direct D256 narrow-dispatch children | All nine strengthened dispatch rows are retained within `TestD256IntDiv`; remove unused `scale` argument. Exact quotients and masks replace success-only checks; add genuine positive adjustment above 19. |
+| Six D256 roots, 45 calls/1,261 rows | Existing `TestD256IntDiv`: 42 named calls/109 rows; real narrow/generic VV/SV/VS, signed/truncated results, scale direction, late pre-scan, masks, strict/permissive zero and six nearest inline-rejection controls. Retire `refD256IntDiv`, its sole helper and `hugeD256`. HighMagnitude, widening consumer, ScaleAlignmentOverflow and 50 benchmark bodies remain. |
+| Five CAST roots, 27 calls | Shared precision holder initially 33 cells: preserve every input/type/shape/NULL contract; add half-neighbors, 19-digit chunk boundaries, positive carry and negative precision rejection. Admission's 13 Boolean assertions and retyping root remain independent. |
+| Six widening-vector and four constant calls | Precision holder expands to 42 cells: retain all metadata/NULL maps and three-row replication; add empty narrowing control. Registered colexec consumer checks both NULL shapes, 0→2→0→2 reuse and cleanup. |
+| Two parameter-reuse roots | Shared `TestFunctionParameterReuseTransitions` preserves plain/nullable/constant-NULL, rejected append and fixed length 1 versus string length 0. Complete-type replacement and unchanged rejected-wrapper assertions remain; fixed and string scalar values now participate. Frame-growth identity remains separate. |
+| Four metadata-retyping roots, six calls | Preserve temporal subtraction, raw intervals, string add/sub and LEAST/GREATEST initial-result challenges; independently declare full expected Type. |
+| Fixed expected-vector construction | Existing generic literal comparator covers 23 fixed OIDs; float64 retains epsilon/NaN policy and float32 exactness. Keep row count, full Type, wrong expectation-type and bounds failures, five empty/short-mask/NULL extent controls. Variable encodings retain vector comparison. |
+| Three integer-assignment roots, 83 calls | `TestIntegerAssignmentContracts`: 79 preserved calls; three decimal overflows and float64 uint8 upper tie move into batches with identical offending literals/type/scale/destination. 101 total calls/12 exact errors; five source types add mask/NULL/reuse transitions (22 executions). |
+| Eight string and nine JSON width rows | `TestCastStringWidthContracts` retains all 17 representations/literals/flags/VARCHAR(3) policies; six exact error categories and eleven full-metadata successes. Pure UTF8/trailing-space/width helpers remain. |
+| Nine assignment-ignore roots, 64 children | Preserve literals, warnings/history, NULL, selection, binary inputs and errors. One runner accepts selection directly; remove nil-only forwarding wrapper. Each call keeps a private Process/warning session. |
+| Numeric round/ceil/floor/truncate fixtures | Keep all 11 roots in each of `func_math_complex_test.go` and `func_binary_test.go`, their cases and reuse ordering; replace unused disk FS with existing MemoryFS. Temporal/format/IO tests excluded. |
+
+All fixture-owned vectors/results are released before FileService.Close and
+Process.Free, followed by a zero-pool assertion. A Process does not own service
+closure. Shared parent fixtures are serial and have no mutable configuration
+between children. Warning sessions remain isolated. The arithmetic reuse consumer
+also uses the existing MemoryFS fixture instead of building disk services.
+
+The shared result oracle compares complete Type before decoding, including empty
+and all-NULL results. Its dedicated corruption checks independently vary OID,
+Size, Width, Scale, Charset and notNull. Expected fixed slices are never broadcast;
+NULL payload can be absent, but missing non-NULL payload remains an error.
+
+### Validation and measured costs
+
+The durable evidence ledger retains commands, source hashes, selections, terminal
+statuses, original snapshots and private mutant controls. Package normal/race,
+incremental vet/configured lint and directly affected planner/colexec regressions
+cover the final code. Unchanged arithmetic evidence includes full-width integer
+oracles and a 1,122-pair boundary challenge. These pairs are not test-node counts.
+Molint baseline diagnostics are disclosed; an exit-zero result is not a claim of
+zero diagnostics. Unrelated skipped plan children do not count as coverage.
+
+Service BVT runs `decimal_256_literal` twice on one isolated instance with ordinary
+expected-result comparison, catalog teardown checks and owned service/port release.
+The original 42-check runs did not include #29615's exact SQL; the amended case
+adds four boundary statements. Internal unary/API probes remain separate from
+service reachability claims.
+
+Historical matched measurements below use the same native binary and alternating
+old/new order. Test-family measurements include fixtures/assertions/cleanup and
+exclude build/link/init, queueing and GC preparation. Production microbenchmarks
+exclude setup unless stated. They establish neither full-CI savings nor SQL/TPCC
+throughput gains. Extra regression coverage sometimes costs more.
+
+| Scope / evidence directory | Measured result and limitation |
+| --- | --- |
+| Modulo test owners / `29249-modulo-owners-20261004` | 119→91 calls; 7,612→307 rows; median wall/CPU/bytes/allocations down 66.8%/63.0%/46.1%/60.7%. D256 production same/different-scale controls -0.8%/+0.2%, zero allocations. |
+| D64/D128 IntDiv family / `29249-intdiv-owners-20261004` | 75→82 calls closes real gaps; 3,288→241 rows. Test wall/CPU/bytes/allocations down 60.9%/55.5%/29.4%/50.3%. |
+| Initial D256 dispatch table / `29249-d256-intdiv-20261004` | Wall +5.5%, CPU +6.9%, bytes -3.3%, allocations +17.3%; no saving claimed for this intermediate holder. Final family below supersedes it. |
+| Final D256 family / `29249-d256-intdiv-20261004/canonical/latest-main` | Test wall/CPU/bytes/allocations down 44.3%/38.9%/24.6%/44.5%. Rounded primitive one-word 12.351→9.317ns, wide 3,171.099→287.595ns; two adapters eliminate 432–448B/15–17 allocations. |
+| Zero scaling / `29249-scale-owner-20261004` | Nonzero controls within 1.8%; zero work becomes independent of exponent. At exponent 190,000: in-place 28,969→3.469ns, D128/D256 truncation 30,526.5/69,918.5→5.465/3.264ns. Bounded internal-API controls only. |
+| CAST / `29249-cast-contract-20261004` | Six 256-row scale-delta-30 adapters improve 90.3–98.7%; 77–373KB/2,561–17,921 allocations→96B/1. Expanded test family wall/CPU -11.0%/-8.4%, bytes/allocations +13.9%/+10.4%. |
+| Empty widening / `29249-empty-cast-20261004` | Expanded tests wall +4.3%, CPU +5.7%, bytes +15.5%, allocations +3.3%; stronger empty/error contracts justify added cost. |
+| Parameter holder / `29249-empty-parameter-20261004` | Before this follow-up: wall 40.5→69.2µs, CPU 45.5→80.5µs, bytes 8,392→15,512, allocations 94→159. Excludes converted cells and consumer; not a saving claim. |
+| Numeric fixtures / `29249-rounding-fixture-20261004`, `29249-rounding-binary-fixture-20261004` | Wall/CPU/bytes/allocations down 72.4%/68.8%/24.8%/34.5% and 59.6%/56.7%/20.1%/18.9%; avoids 30 and 42 per-service TempDir requests. |
+| Fixed-result oracle / `29249-fixed-result-oracle-20261004` | Six CAST cases: wall/CPU -66.6%, bytes -74.5%, allocations -61.5%; variable encodings excluded. |
+| Integer assignment / `29249-integer-assignment-family-20261004/final-main-37ba071` | Wall/CPU/bytes/allocations down 48.4%/47.5%/13.5%/11.8%, with added error and reuse coverage. |
+| Width / `29249-width-family-20261004` | The 17-case family wall/CPU/bytes/allocations down 86.2%/84.4%/62.3%/63.2%. |
+| Assignment-ignore / `29249-assignment-ignore-family-20261004` | Wall/CPU/bytes/allocations down 77.5%/78.0%/38.4%/46.6%, preserving warning isolation. |
+| Prefix / `29249-prefix-constant-selection-20261004` | D128 constant wall/CPU -70.4%/-69.6%, flat -5.0%/-4.9%; unary-string controls within 0.4%. Median zero allocations, four noisy samples at 48–80B. |
+
+Private producer mutations challenge exact errors, masked writes, scale fallback,
+rounding parity/carry, metadata and inactive callbacks. A mutant failing the new
+holder proves that holder's contract; it does not imply the entire old suite
+missed the defect. Regression tests do not construct expected values with the
+production routine under test.
