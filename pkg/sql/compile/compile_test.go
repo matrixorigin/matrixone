@@ -2052,6 +2052,7 @@ func TestDebugLogFor19288(t *testing.T) {
 }
 
 func TestPreferPrimaryScopeResult(t *testing.T) {
+	c := NewMockCompile(t)
 	cleanupErr := process.ErrPipelineEndSignalDeliveryFailed
 	executionErr := moerr.NewDuplicateEntryNoCtx("1000000", "")
 	joinedExecutionErr := errors.Join(executionErr, context.Canceled)
@@ -2107,7 +2108,7 @@ func TestPreferPrimaryScopeResult(t *testing.T) {
 		{name: "causal cancellation replaces cleanup fallback with execution error", current: scopeRunResult{err: cleanupErr}, candidate: newScopeRunResultForContext(context.Canceled, internalCancelCtx, nil), want: executionErr},
 		{name: "external cancellation replaces cleanup fallback with external cause", current: scopeRunResult{err: cleanupErr}, candidate: newScopeRunResultForContext(context.Canceled, externalCauseCtx, nil), want: externalCause},
 		{name: "cleanup fallback does not replace execution error", current: scopeRunResult{err: executionErr}, candidate: scopeRunResult{err: cleanupErr}, want: executionErr},
-		{name: "unresolved canceled sibling is secondary", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: context.Canceled}, want: cleanupErr},
+		{name: "independent canceled failure replaces cleanup fallback", current: scopeRunResult{err: cleanupErr}, candidate: newScopeRunResultForProcess(context.Canceled, nil), want: context.Canceled},
 		{name: "independent interruption replaces cleanup fallback", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: queryInterrupted}, want: queryInterrupted},
 		{name: "joined independent interruption replaces cleanup fallback", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: joinedCancellationErr}, want: joinedCancellationErr},
 		{name: "internally canceled sibling resolves to execution error", current: newScopeRunResultForContext(context.Canceled, internalCancelCtx, nil), candidate: scopeRunResult{err: executionErr}, want: executionErr},
@@ -2129,8 +2130,7 @@ func TestPreferPrimaryScopeResult(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := preferPrimaryScopeResult(tt.current, tt.candidate)
-			got, _ = got.resolveCancelCause()
+			got := c.preferPrimaryScopeResult(tt.current, tt.candidate)
 			if errors.Is(tt.want, context.Canceled) || errors.Is(tt.want, context.DeadlineExceeded) {
 				require.ErrorIs(t, got.err, tt.want)
 			} else {

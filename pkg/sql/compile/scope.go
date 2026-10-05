@@ -697,7 +697,7 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 	defer func() {
 		// should wait all the notify-message-routine and preScopes done.
 		wg.Wait()
-		err = collectMergeRunResults(
+		err = c.collectMergeRunResults(
 			s.Proc,
 			newScopeRunResultForProcess(err, s.Proc),
 			preScopeResultReceiveChan,
@@ -719,7 +719,6 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 	if remoteScopeCount == 0 {
 		for i := 0; i < preScopeCount; i++ {
 			result := <-preScopeResultReceiveChan
-			result, _ = result.resolveCancelCause()
 			if err = result.err; err != nil {
 				return err
 			}
@@ -730,7 +729,6 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 	for {
 		select {
 		case result := <-preScopeResultReceiveChan:
-			result, _ = result.resolveCancelCause()
 			err := result.err
 			if err != nil {
 				return s.cancelMergeSiblingsOnError(err)
@@ -755,21 +753,20 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 // early. A terminal-signal delivery fallback from the merge pipeline is
 // secondary when a producer or remote notifier reports the execution error
 // that caused cleanup to race a full pipeline channel.
-func collectMergeRunResults(
+func (c *Compile) collectMergeRunResults(
 	proc *process.Process,
 	current scopeRunResult,
 	preScopeResults <-chan scopeRunResult,
 	notifyResults <-chan notifyMessageResult,
 ) error {
 	for len(preScopeResults) > 0 {
-		current = preferPrimaryScopeResult(current, <-preScopeResults)
+		current = c.preferPrimaryScopeResult(current, <-preScopeResults)
 	}
 	for len(notifyResults) > 0 {
 		result := <-notifyResults
-		current = preferPrimaryScopeResult(current, newScopeRunResultForProcess(result.err, proc))
+		current = c.preferPrimaryScopeResult(current, newScopeRunResultForProcess(result.err, proc))
 		result.clean(proc)
 	}
-	current, _ = current.resolveCancelCause()
 	return current.err
 }
 

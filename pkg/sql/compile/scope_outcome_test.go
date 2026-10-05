@@ -17,9 +17,12 @@ package compile
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
+	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -32,7 +35,7 @@ func TestScopeRunResultFrozenBeforeCleanup(t *testing.T) {
 	result := newScopeRunResultForContext(original, ctx, query)
 	// Cleanup cancels after execution returned; publication must not reread it.
 	cancel(process.ErrPipelineStopped)
-	got, _ := result.resolveCancelCause()
+	got := result
 	require.Same(t, original, process.UnwrapPipelineFailure(got.err))
 	require.True(t, process.IsPipelineFailure(got.err))
 
@@ -40,7 +43,7 @@ func TestScopeRunResultFrozenBeforeCleanup(t *testing.T) {
 	defer activeCancel(nil)
 	independent := newScopeRunResultForContext(context.Canceled, activeCtx, query)
 	activeCancel(process.ErrPipelineStopped)
-	got, _ = independent.resolveCancelCause()
+	got = independent
 	require.ErrorIs(t, got.err, context.Canceled)
 	require.True(t, process.IsPipelineFailure(got.err))
 
@@ -66,6 +69,16 @@ func TestScopeRunResultFrozenBeforeCleanup(t *testing.T) {
 }
 
 func TestJoinMapFailureSnapshotSurvivesSuccessfulStop(t *testing.T) {
+	t.Run("message board receive retains declared failure", func(t *testing.T) {
+		ctx, cancel := context.WithCancelCause(context.Background())
+		cancel(process.ErrPipelineStopped)
+		board := message.NewMessageBoard()
+		require.True(t, message.FinalizeJoinMapBuildError(board, 91, false, 0, process.MarkPipelineFailure(context.Canceled)))
+		_, err := message.ReceiveJoinMap(91, false, 0, board, ctx)
+		result := newScopeRunResultForContext(err, ctx, context.Background())
+		require.ErrorIs(t, result.err, context.Canceled)
+		require.True(t, process.IsPipelineFailure(result.err))
+	})
 	for _, terminal := range []error{context.Canceled, errors.Join(context.Canceled, context.DeadlineExceeded)} {
 		t.Run(terminal.Error(), func(t *testing.T) {
 			snapshot := message.NewJoinMapBuildError(process.MarkPipelineFailure(terminal))
@@ -91,5 +104,50 @@ func TestJoinMapFailureSnapshotSurvivesSuccessfulStop(t *testing.T) {
 			require.ErrorIs(t, publicErr, context.Canceled)
 			require.Equal(t, errors.Is(terminal, context.DeadlineExceeded), errors.Is(publicErr, context.DeadlineExceeded))
 		})
+	}
+}
+
+func TestCollectMergeRunResultsPreservesRetryPolicy(t *testing.T) {
+	for _, isolation := range []txn.TxnIsolation{txn.TxnIsolation_RC, txn.TxnIsolation_SI} {
+		for _, retry := range []error{moerr.NewTxnNeedRetry(context.Background()), moerr.NewTxnNeedRetryWithDefChanged(context.Background())} {
+			for _, retryFirst := range []bool{false, true} {
+				for _, notify := range []bool{false, true} {
+					t.Run(fmt.Sprintf("%s/%v/first=%t/notify=%t", isolation, retry, retryFirst, notify), func(t *testing.T) {
+						c := NewMockCompile(t)
+						_, c.proc.Base.TxnOperator = newTestTxnClientAndOpWithIsolation(gomock.NewController(t), isolation)
+						query := c.proc.Base.GetContextBase().BuildQueryCtx(c.proc.GetTopContext())
+						c.proc.BuildPipelineContext(query)
+						edge := process.NewPipelineEdge(1, 1)
+						edge.PublishTerminal(process.NewErrorSignal(context.Canceled))
+						receiver := process.InitPipelineSignalReceiverFromProcess(c.proc, []*process.WaitRegister{edge})
+						_, err := receiver.GetNextBatch(nil)
+						require.ErrorIs(t, err, context.Canceled)
+						current := newScopeRunResultForProcess(err, c.proc)
+						// The producer reports retry after the receiver froze its own error.
+						c.proc.Cancel(retry)
+						candidate := newScopeRunResultForProcess(retry, c.proc)
+						if retryFirst {
+							current, candidate = candidate, current
+						}
+						preScopes := make(chan scopeRunResult, 1)
+						notifiers := make(chan notifyMessageResult, 1)
+						if notify {
+							notifiers <- notifyMessageResult{err: candidate.err}
+						} else {
+							preScopes <- candidate
+						}
+						got := c.collectMergeRunResults(c.proc, current, preScopes, notifiers)
+						if isolation == txn.TxnIsolation_RC || retryFirst {
+							require.Same(t, retry, got, "retry keeps its direct moerr identity")
+						} else {
+							require.Same(t, current.err, got, "SI retains its first failure")
+						}
+						require.Empty(t, preScopes)
+						require.Empty(t, notifiers)
+						require.NoError(t, query.Err())
+					})
+				}
+			}
+		}
 	}
 }

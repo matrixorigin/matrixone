@@ -17,6 +17,7 @@ package process
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -122,6 +123,7 @@ func TestPipelineSignalReceiverCancellationPreservesDurableEdgeFailure(t *testin
 func TestPipelineSignalReceiverDurableFailureSelectionIsOrderIndependent(t *testing.T) {
 	duplicateErr := moerr.NewDuplicateEntryNoCtx("5", "primary")
 	interruptedErr := moerr.NewQueryInterrupted(context.Background())
+	mixedErr := errors.Join(context.Canceled, duplicateErr)
 
 	for _, test := range []struct {
 		name               string
@@ -136,6 +138,24 @@ func TestPipelineSignalReceiverDurableFailureSelectionIsOrderIndependent(t *test
 		{
 			name:               "execution failure before cancellation",
 			errs:               []error{duplicateErr, interruptedErr},
+			wantSubstantiveErr: true,
+		},
+		{
+			name:               "cancellation before mixed execution failure",
+			errs:               []error{context.Canceled, mixedErr},
+			wantSubstantiveErr: true,
+		},
+		{
+			name:               "mixed execution failure before cancellation",
+			errs:               []error{mixedErr, context.Canceled},
+			wantSubstantiveErr: true,
+		},
+		{
+			name: "wrapped mixed failure after joined interruption",
+			errs: []error{
+				MarkPipelineFailure(errors.Join(context.Canceled, interruptedErr)),
+				fmt.Errorf("reader: %w", errors.Join(duplicateErr, moerr.ConvertGoError(context.Background(), context.Canceled))),
+			},
 			wantSubstantiveErr: true,
 		},
 		{
@@ -162,10 +182,28 @@ func TestPipelineSignalReceiverDurableFailureSelectionIsOrderIndependent(t *test
 				if !errors.Is(err, duplicateErr) {
 					t.Fatalf("durable failure selection depended on edge order: got %v, want %v", err, duplicateErr)
 				}
+				for _, declared := range test.errs {
+					if errors.Is(declared, duplicateErr) && !errors.Is(err, declared) {
+						t.Fatalf("durable failure lost its complete error tree: got %v, want %v", err, declared)
+					}
+				}
 			} else if !IsPipelineFailure(err) || IsPipelineCancellationError(err) {
 				t.Fatalf("declared Error terminal lost failure provenance: %v", err)
 			}
 		})
+	}
+}
+
+func TestPipelineSignalReceiverKnownCausePrecedesInterruptedEdge(t *testing.T) {
+	for _, cause := range []error{moerr.NewTxnNeedRetry(context.Background()), moerr.NewDuplicateEntryNoCtx("1", "primary")} {
+		ctx, cancel := context.WithCancelCause(context.Background())
+		cancel(cause)
+		edge := NewPipelineEdge(1, 1)
+		edge.PublishTerminal(NewErrorSignal(context.Canceled))
+		receiver := InitPipelineSignalReceiver(ctx, []*WaitRegister{edge})
+		if got := receiver.contextDoneError(); got != cause {
+			t.Fatalf("known execution cause lost: got %v, want %v", got, cause)
+		}
 	}
 }
 

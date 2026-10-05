@@ -703,13 +703,12 @@ func (c *Compile) isRetryErr(err error) bool {
 }
 
 type scopeRunResult struct {
-	err        error
-	normalized bool
+	err error
 }
 
 func newScopeRunResult(err error, scope *Scope) scopeRunResult {
 	if scope == nil {
-		return scopeRunResult{err: err}
+		return newScopeRunResultForProcess(err, nil)
 	}
 	return newScopeRunResultForProcess(err, scope.Proc)
 }
@@ -723,8 +722,8 @@ func newScopeRunResultForProcess(err error, proc *process.Process) scopeRunResul
 
 // Capture before publication: cleanup must never change an already owned result.
 func newScopeRunResultForContext(err error, pipelineCtx, queryCtx context.Context) scopeRunResult {
-	err, normalized := normalizeScopeRunError(err, pipelineCtx, queryCtx)
-	return scopeRunResult{err: err, normalized: normalized}
+	err, _ = normalizeScopeRunError(err, pipelineCtx, queryCtx)
+	return scopeRunResult{err: err}
 }
 
 func scopeRunQueryContext(proc *process.Process) context.Context {
@@ -808,32 +807,22 @@ func normalizeScopeRunError(
 	return process.MarkPipelineFailure(err), false
 }
 
-func (r scopeRunResult) resolveCancelCause() (scopeRunResult, bool) {
-	return r, r.normalized
-}
-
-// preferPrimaryScopeResult keeps cleanup fallout from masking the execution
-// error that caused another scope to stop consuming its pipeline input. A
-// cancellation result is first resolved through that scope's CancelCauseFunc:
-// internally canceled siblings therefore report the triggering execution
-// error, while an externally canceled query keeps its external cause.
-func preferPrimaryScopeResult(current, candidate scopeRunResult) scopeRunResult {
-	current, _ = current.resolveCancelCause()
-	candidate, candidateNormalized := candidate.resolveCancelCause()
-
+// preferPrimaryScopeResult arbitrates frozen results at every scope boundary.
+// Retry selection belongs to the Compile's transaction policy; cleanup fallout
+// must not hide a retry merely because it crosses a nested MergeRun first.
+func (c *Compile) preferPrimaryScopeResult(current, candidate scopeRunResult) scopeRunResult {
 	if current.err == nil {
 		return candidate
 	}
-	if candidate.err == nil ||
-		!errors.Is(current.err, process.ErrPipelineEndSignalDeliveryFailed) ||
-		errors.Is(candidate.err, process.ErrPipelineEndSignalDeliveryFailed) {
+	if candidate.err == nil {
 		return current
 	}
-	// An unresolved pure cancellation does not prove that the cleanup fallback
-	// was secondary. A mixed error tree is substantive, however, and must not be
-	// rejected merely because one leaf is context.Canceled.
-	if !candidateNormalized &&
-		isScopeCancellationFrom(candidate.err, context.Canceled) {
+	if c.isRetryErr(candidate.err) {
+		return candidate
+	}
+	if c.isRetryErr(current.err) ||
+		!errors.Is(current.err, process.ErrPipelineEndSignalDeliveryFailed) ||
+		errors.Is(candidate.err, process.ErrPipelineEndSignalDeliveryFailed) {
 		return current
 	}
 	return candidate
@@ -1117,7 +1106,6 @@ func (c *Compile) runOnce() (err error) {
 		var resultToThrowOut scopeRunResult
 		for i := 0; i < cap(errC); i++ {
 			result := <-errC
-			result, _ = result.resolveCancelCause()
 			e := result.err
 
 			// cancel this query if the first error occurs.
@@ -1130,17 +1118,10 @@ func (c *Compile) runOnce() (err error) {
 					}
 				}
 			}
-			resultToThrowOut = preferPrimaryScopeResult(resultToThrowOut, result)
-
-			// if any error already return is retryable, we should throw this one
-			// to make sure query will retry.
-			if e != nil && c.isRetryErr(e) {
-				resultToThrowOut = result
-			}
+			resultToThrowOut = c.preferPrimaryScopeResult(resultToThrowOut, result)
 		}
 		close(errC)
 
-		resultToThrowOut, _ = resultToThrowOut.resolveCancelCause()
 		if resultToThrowOut.err != nil {
 			return resultToThrowOut.err
 		}

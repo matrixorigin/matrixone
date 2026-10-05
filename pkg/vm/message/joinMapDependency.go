@@ -82,9 +82,6 @@ func NewJoinMapBuildError(err error) *JoinMapBuildError {
 			return &JoinMapBuildError{err: cloneMoErr(me), pipelineFailure: marked}
 		}
 	}
-	if me, ok := err.(*moerr.Error); ok {
-		return &JoinMapBuildError{err: cloneMoErr(me), pipelineFailure: marked}
-	}
 	return &JoinMapBuildError{err: moerr.NewInternalErrorNoCtx(err.Error())}
 }
 

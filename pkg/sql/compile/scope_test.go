@@ -2833,6 +2833,8 @@ func TestMergeRunReturnsWhenRemotePreScopeAddressIsMalformed(t *testing.T) {
 }
 
 func TestCollectMergeRunResultsPrefersProducerError(t *testing.T) {
+	stoppedCtx, stop := context.WithCancelCause(context.Background())
+	stop(process.ErrPipelineStopped)
 	cleanupErr := process.ErrPipelineEndSignalDeliveryFailed
 	producerErr := moerr.NewDuplicateEntryNoCtx("1000000", "")
 	notifyErr := moerr.NewInternalErrorNoCtx("remote producer failed")
@@ -2851,7 +2853,7 @@ func TestCollectMergeRunResultsPrefersProducerError(t *testing.T) {
 		{
 			name:     "producer error replaces cleanup fallback",
 			current:  scopeRunResult{err: cleanupErr},
-			preScope: []scopeRunResult{{err: context.Canceled}, {err: producerErr}},
+			preScope: []scopeRunResult{newScopeRunResultForContext(context.Canceled, stoppedCtx, context.Background()), {err: producerErr}},
 			want:     producerErr,
 		},
 		{
@@ -2897,7 +2899,7 @@ func TestCollectMergeRunResultsPrefersProducerError(t *testing.T) {
 				notifyResults <- notifyMessageResult{err: err}
 			}
 
-			got := collectMergeRunResults(
+			got := (&Compile{}).collectMergeRunResults(
 				testutil.NewProcess(t),
 				tt.current,
 				preScopeResults,

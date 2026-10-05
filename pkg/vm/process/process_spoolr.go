@@ -546,6 +546,10 @@ func (receiver *PipelineSignalReceiver) contextDoneError() error {
 	if errors.Is(receiver.usrCtx.Err(), context.DeadlineExceeded) {
 		return context.DeadlineExceeded
 	}
+	cause := context.Cause(receiver.usrCtx)
+	if cause != nil && !isPipelineInterruption(cause) {
+		return MarkPipelineFailure(cause)
+	}
 	// A durable Error is execution evidence even when successful stopping won
 	// the context cancellation first. Inspect edges before accepting that stop.
 	var edgeErr error
@@ -554,8 +558,7 @@ func (receiver *PipelineSignalReceiver) contextDoneError() error {
 			if edgeErr == nil {
 				edgeErr = err
 			}
-			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) &&
-				!moerr.IsMoErrCode(UnwrapPipelineFailure(err), moerr.ErrQueryInterrupted) {
+			if !isPipelineInterruption(err) {
 				return MarkPipelineFailure(err)
 			}
 		}
@@ -563,7 +566,6 @@ func (receiver *PipelineSignalReceiver) contextDoneError() error {
 	if edgeErr != nil {
 		return MarkPipelineFailure(edgeErr)
 	}
-	cause := context.Cause(receiver.usrCtx)
 	if cause == ErrPipelineStopped {
 		return nil
 	}

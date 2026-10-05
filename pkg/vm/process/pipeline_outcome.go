@@ -15,6 +15,7 @@
 package process
 
 import (
+	"context"
 	"errors"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -22,7 +23,41 @@ import (
 
 // ErrPipelineStopped is a successful consumer retirement, not an execution error.
 // Only the owner that no longer needs input may use it as a cancellation cause.
-var ErrPipelineStopped = errors.New("pipeline consumer finished")
+var ErrPipelineStopped error = &pipelineStoppedError{message: "pipeline consumer finished"}
+
+// Keep this control cause outside moerr: dependency receivers recover
+// substantive moerr causes, while a successful stop has no failure to recover.
+type pipelineStoppedError struct{ message string }
+
+func (e *pipelineStoppedError) Error() string { return e.message }
+
+// isPipelineInterruption classifies error shape only for choosing between
+// failures. Unlike IsPipelineCancellationError, it ignores failure provenance:
+// an interrupted Error still fails, but must not hide a substantive cause.
+func isPipelineInterruption(err error) bool {
+	if err == nil {
+		return false
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		children := joined.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			if !isPipelineInterruption(child) {
+				return false
+			}
+		}
+		return true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		if child := wrapped.Unwrap(); child != nil {
+			return isPipelineInterruption(child)
+		}
+	}
+	return err == ErrPipelineStopped || errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) || moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted)
+}
 
 type pipelineFailure struct{ err error }
 
