@@ -187,6 +187,9 @@ func ParseOneWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode s
 		return nil, err
 	}
 	if len(lexer.stmts) != 1 {
+		for _, s := range lexer.stmts {
+			s.Free()
+		}
 		return nil, moerr.NewParseError(ctx, "syntax error, or too many sql to parse")
 	}
 	return lexer.stmts[0], nil
