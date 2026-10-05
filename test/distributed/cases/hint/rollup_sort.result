@@ -51,6 +51,23 @@ null  ¦  null  ¦  2  ¦  30  ¦  0  ¦  1  𝄀
 1  ¦  null  ¦  2  ¦  70  ¦  0  ¦  1  𝄀
 2  ¦  null  ¦  1  ¦  50  ¦  0  ¦  1  𝄀
 null  ¦  null  ¦  5  ¦  150  ¦  1  ¦  1
+select distinct a
+from t_rollup_sort
+group by a with rollup
+order by a;
+➤ a[4,32,0]  𝄀
+null  𝄀
+1  𝄀
+2
+select distinct a, grouping(a) as grouping_a
+from t_rollup_sort
+group by a with rollup
+order by a, grouping_a;
+➤ a[4,32,0]  ¦  grouping_a[-5,64,0]  𝄀
+null  ¦  0  𝄀
+null  ¦  1  𝄀
+1  ¦  0  𝄀
+2  ¦  0
 truncate table t_rollup_sort;
 select a, b, count(*) as cnt, sum(amount) as total,
 grouping(a) as grouping_a, grouping(b) as grouping_b

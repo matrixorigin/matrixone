@@ -45,6 +45,18 @@ from t_rollup_sort
 group by a, b with rollup
 order by grouping_a, grouping_b, a, b;
 
+-- DISTINCT compares SQL values: source NULL and rollup NULL collapse unless
+-- the grouping provenance is explicitly part of the projected key.
+select distinct a
+from t_rollup_sort
+group by a with rollup
+order by a;
+
+select distinct a, grouping(a) as grouping_a
+from t_rollup_sort
+group by a with rollup
+order by a, grouping_a;
+
 truncate table t_rollup_sort;
 
 select a, b, count(*) as cnt, sum(amount) as total,
