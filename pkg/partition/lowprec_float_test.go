@@ -73,3 +73,38 @@ func TestLowPrecisionFloatPartition(t *testing.T) {
 		vec.Free(mp)
 	}
 }
+
+// TestBlockScaledPartition checks peer groups of vecf8/vecf4 keys: cells with equal decoded
+// values and different bytes are peers, as = compares them.
+func TestBlockScaledPartition(t *testing.T) {
+	mp := mpool.MustNewZero()
+	for _, oid := range []types.T{types.T_array_float8, types.T_array_float4} {
+		f, _ := oid.BlockScaledFormat()
+		g := ""
+		if f == types.BlockScaledNVFP4 {
+			g = `"g":1,`
+		}
+		cell := func(s string) []byte {
+			c, err := types.BlockScaledFromJSON(f, s)
+			require.NoError(t, err)
+			return c
+		}
+		x := cell(`{` + g + `"b":[{"s":1,"v":[1]}]}`)
+		y := cell(`{` + g + `"b":[{"s":2,"v":[0.5]}]}`)
+		z := cell(`{` + g + `"b":[{"s":1,"v":[2]}]}`)
+		require.NotEqual(t, x, y)
+
+		vec := vector.NewVec(types.New(oid, 1, 0))
+		for _, c := range [][]byte{x, y, x, z} {
+			require.NoError(t, vector.AppendBytes(vec, c, false, mp))
+		}
+		require.NoError(t, vector.AppendBytes(vec, nil, true, mp))
+		require.NoError(t, vector.AppendBytes(vec, nil, true, mp))
+		sels := []int64{0, 1, 2, 3, 4, 5}
+		for _, part := range []func([]int64, []bool, []int64, *vector.Vector) []int64{Partition, PartitionForOrder} {
+			got := part(sels, make([]bool, len(sels)), nil, vec)
+			require.Equal(t, []int64{0, 3, 4}, got, oid.String())
+		}
+		vec.Free(mp)
+	}
+}

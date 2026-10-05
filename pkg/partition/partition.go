@@ -251,15 +251,55 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		types.T_binary, types.T_varbinary, types.T_blob,
 		types.T_array_float32, types.T_array_float64,
 		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
-		types.T_array_float8, types.T_array_float4,
 		types.T_datalink:
 		return bytesPartition(sels, diffs, partitions, vec)
 		//Used by ORDER_BY SQL clause.
 		//Byte partition logic doesn't use byte.Compare or Str.
 		//Hence, we can use bytesPartition here.
+	case types.T_array_float8, types.T_array_float4:
+		return blockScaledPartition(sels, diffs, partitions, vec)
 	default:
 		panic(moerr.NewNotSupportedNoCtx(vec.GetType().Oid.String()))
 	}
+}
+
+// blockScaledPartition is bytesPartition for vecf8/vecf4 cells, which are equal when their
+// decoded values are, as = compares them.
+func blockScaledPartition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vector) []int64 {
+	partitions = partitions[:0]
+	if len(sels) == 0 {
+		return partitions
+	}
+	diffs[0] = true
+	diffs = diffs[:len(sels)]
+
+	// See genericPartition: diffs is accumulated; never overwrite to false.
+	if !vec.IsConst() {
+		var n bool
+		var v []byte
+
+		vs, area := vector.MustVarlenaRawData(vec)
+		nsp := vec.GetNulls()
+		for i, sel := range sels {
+			w := vs[sel].GetByteSlice(area)
+			isNull := nulls.Contains(nsp, uint64(sel))
+			if n != isNull {
+				diffs[i] = true
+			} else if !isNull && i > 0 {
+				diffs[i] = diffs[i] || types.CompareBlockScaledFromBytes(v, w, false) != 0
+			}
+			n = isNull
+			v = w
+		}
+	}
+
+	for i, j := int64(0), int64(len(diffs)); i < j; i++ {
+		if diffs[i] {
+			partitions = append(partitions, i)
+		}
+	}
+
+	return partitions
 }
 
 // PartitionForOrder returns peer-group boundaries for SQL ORDER BY. Generic

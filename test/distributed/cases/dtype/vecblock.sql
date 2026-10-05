@@ -52,7 +52,8 @@ select l2_distance(a, '[1,2,3]') from t where id = 1;
 select cosine_similarity(a, '[0,0,0,0]') from t where id = 1;
 select cosine_distance(a, '[0,0,0,0]') from t where id = 1;
 
--- float32 lane overflow: +Inf and -Inf lanes would sum to NaN; the distance is +Inf, an overflow error
+-- float32 lane overflow: +Inf and -Inf lanes would sum to NaN; inner product and L2 are +Inf, an
+-- overflow error; cosine recomputes in float64
 select inner_product(cast('[3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38]' as vecf8(32)), cast('[3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38]' as vecf8(32)));
 select cosine_distance(cast('[3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38]' as vecf4(32)), cast('[3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38]' as vecf4(32)));
 select l2_distance(cast('[3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38]' as vecf8(32)), cast('[3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38]' as vecf8(32)));
@@ -183,6 +184,12 @@ select vecblock_json(cast(null as vecf8(2)));
 select cast('{"g":1,"b":[{"s":1,"v":[1,2]}]}' as vecf4(3));
 select cast('{"b":[{"s":3,"v":[1]}]}' as vecf8(1));
 select cast('{"g":1,"b":[{"s":1,"v":[2.5]}]}' as vecf4(1));
+
+-- cells with equal values and different bytes are peers in ORDER BY and windows
+create table peer (id int, v vecf8(1));
+insert into peer values (2, '{"b":[{"s":1,"v":[1]}]}'), (1, '{"b":[{"s":2,"v":[0.5]}]}'), (0, '{"b":[{"s":1,"v":[1]}]}'), (3, '[2]');
+select id from peer order by v, id;
+select id, rank() over (order by v) r, count(*) over (partition by v) c from peer order by id;
 
 -- export writes the exact text; CSV and JSONL reload to the same cells
 create table expt (id int, v vecf4(17), e vecf8(2));
