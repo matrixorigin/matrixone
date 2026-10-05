@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -27,17 +28,21 @@ import (
 	"go.uber.org/zap"
 )
 
-// Already-upgraded tenants must run the charset metadata refresh. An offset
-// change is insufficient: old tenant workers compare only ToVersion. Keep the
-// preceding semantic upgrade and its protocol floor; no new key format is enabled.
+// 4.0.12 is a repair version, not a new schema contract.  Some clusters have
+// already persisted 4.0.7 or 4.0.8 while an older upgrade worker skipped the
+// shared Python UDF catalog entries.  A new semantic version is required so
+// those clusters cannot finish the task with the old, empty handler.  The
+// entries are the original idempotent checks, so a normal 4.0.6 -> 4.0.7 ->
+// 4.0.8 -> 4.0.12 upgrade and a repair of an existing 4.0.8 cluster converge
+// on the same catalog state.
 var Handler = &versionHandle{
 	metadata: versions.Version{
 		Version:                 "4.0.12",
 		MinUpgradeVersion:       "4.0.11",
 		UpgradeCluster:          versions.No,
 		UpgradeTenant:           versions.Yes,
-		VersionOffset:           uint32(len(tenantUpgEntries)),
-		RequiredProtocolVersion: defines.MORPCVersion106,
+		VersionOffset:           uint32(len(v4_0_7.PythonRevisionUpgradeEntries())),
+		RequiredProtocolVersion: defines.MORPCVersion107,
 	},
 }
 
@@ -56,7 +61,7 @@ func (v *versionHandle) Prepare(ctx context.Context, txn executor.TxnExecutor, f
 
 func (v *versionHandle) HandleTenantUpgrade(ctx context.Context, tenantID int32, txn executor.TxnExecutor) error {
 	logger := runtime.ServiceRuntime(txn.Txn().TxnOptions().CN).Logger()
-	for _, entry := range tenantUpgEntries {
+	for _, entry := range v4_0_7.PythonRevisionUpgradeEntries() {
 		start := time.Now()
 		if err := entry.Upgrade(txn, uint32(tenantID)); err != nil {
 			logger.Error("tenant upgrade entry execute error",
