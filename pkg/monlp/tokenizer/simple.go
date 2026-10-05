@@ -186,6 +186,26 @@ func TruncateLatinToken(bs []byte) []byte {
 // is sized for the maximum fold expansion of a MAX_TOKEN_SIZE run.
 func normalizeLatinTokenInto(dst, raw []byte) int {
 	bs := TruncateLatinToken(raw)
+	// Fast path: an all-ASCII run never changes length on fold, so lowercase byte-wise straight into
+	// dst -- no rune decode/encode, no scratch, no re-cap (bs is already <= MAX_TOKEN_SIZE). This is
+	// the common case (ordinary English), including already-lowercase input.
+	allASCII := true
+	for i := 0; i < len(bs); i++ {
+		c := bs[i]
+		if c >= utf8.RuneSelf {
+			allASCII = false
+			break
+		}
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		dst[i] = c
+	}
+	if allASCII {
+		return len(bs)
+	}
+	// Unicode path: fold into a stack scratch (folding can EXPAND, e.g. U+023A -> U+2C65), then re-cap
+	// with the exact TruncateLatinToken rule. Byte-identical to TruncateLatinToken(ToLower(bs)).
 	var folded [4 * MAX_TOKEN_SIZE]byte
 	m := 0
 	for _, r := range string(bs) {

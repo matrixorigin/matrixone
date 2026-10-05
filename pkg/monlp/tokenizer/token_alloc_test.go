@@ -21,6 +21,37 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+var benchTokenSink int64
+
+// BenchmarkSimpleTokenize tracks tokenization throughput for the common ASCII paths (already-lowercase
+// and uppercase) and a CJK control. The ASCII cases must stay on the byte-wise fast path, not the
+// rune decode/ToLower/encode path (#29271 P2).
+func BenchmarkSimpleTokenize(b *testing.B) {
+	for _, tc := range []struct{ name, text string }{
+		{"ascii_lower", strings.Repeat("hello world database search ", 64)},
+		{"ascii_upper", strings.Repeat("HELLO WORLD DATABASE SEARCH ", 64)},
+		{"cjk", strings.Repeat("苹果香蕉水果数据库", 64)},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			tok := NewSimpleTokenizer()
+			input := []byte(tc.text)
+			b.SetBytes(int64(len(input)))
+			b.ReportAllocs()
+			b.ResetTimer()
+			var sum int64
+			for i := 0; i < b.N; i++ {
+				for tk, err := range tok.Tokenize(input) {
+					if err != nil {
+						b.Fatal(err)
+					}
+					sum += int64(tk.TokenBytes[0])
+				}
+			}
+			benchTokenSink = sum
+		})
+	}
+}
+
 // TestSimpleTokenizeAllocations guards against a per-token heap allocation: outputLatin must write the
 // lowercased token into the fixed TokenBytes buffer, not materialize a fresh slice per token (#29271).
 // Tokenizing 256 words must cost a small constant number of allocations (the iterator closure + the
