@@ -3932,7 +3932,7 @@ func TestSendNotifyMessageReportsStreamSendError(t *testing.T) {
 
 	select {
 	case result := <-resultCh:
-		result.clean(scopeProc)
+		result.clean(scopeProc, context.Background())
 		require.ErrorIs(t, result.err, testErr)
 	case <-time.After(time.Second):
 		t.Fatal("notify stream send error did not finish")
@@ -3987,7 +3987,7 @@ func TestSendNotifyMessageSuccessfulAttachUsesQueryContext(t *testing.T) {
 
 	select {
 	case result := <-resultCh:
-		result.clean(scopeProc)
+		result.clean(scopeProc, context.Background())
 		require.NoError(t, result.err)
 	case <-time.After(time.Second):
 		t.Fatal("successful notify stream did not finish")
@@ -5493,7 +5493,7 @@ func TestNotifyLateErrorSurvivesSuccessfulStop(t *testing.T) {
 				t.Fatal("notify late terminal did not reach scheduler")
 			}
 			wg.Wait()
-			err := (&Compile{}).collectMergeRunResults(scopeProc, scopeRunResult{}, nil, results)
+			err := (&Compile{}).collectMergeRunResults(scopeProc, scopeRunResult{}, nil, results, context.Background())
 			if tc.terminal == "malformed" {
 				require.ErrorContains(t, err, "unexpected end of JSON input")
 			} else {

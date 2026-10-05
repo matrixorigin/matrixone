@@ -140,7 +140,7 @@ func TestCollectMergeRunResultsPreservesRetryPolicy(t *testing.T) {
 						} else {
 							preScopes <- candidate
 						}
-						got := c.collectMergeRunResults(c.proc, current, preScopes, notifiers)
+						got := c.collectMergeRunResults(c.proc, current, preScopes, notifiers, context.Background())
 						if isolation == txn.TxnIsolation_RC || retryFirst {
 							require.Same(t, retry, got, "retry keeps its direct moerr identity")
 						} else {

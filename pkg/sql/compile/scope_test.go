@@ -2697,10 +2697,10 @@ func TestNotifyMessageClean(t *testing.T) {
 		err:    nil,
 	}
 
-	n1.clean(proc)
+	n1.clean(proc, context.Background())
 	require.Equal(t, 1, ff.number)
 
-	n2.clean(proc)
+	n2.clean(proc, context.Background())
 	require.Equal(t, 1, ff.number)
 }
 
@@ -2884,7 +2884,7 @@ func TestCollectMergeRunResultsPrefersProducerError(t *testing.T) {
 				testutil.NewProcess(t),
 				tt.current,
 				preScopeResults,
-				notifyResults)
+				notifyResults, context.Background())
 
 			require.Same(t, tt.want, process.UnwrapPipelineFailure(got))
 			require.Empty(t, preScopeResults)

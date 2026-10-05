@@ -681,14 +681,31 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 	}
 
 	// step 3.
+	var cleanupCtx context.Context
+	var cleanupCancel context.CancelFunc
+	cleanupContext := func() context.Context {
+		if cleanupCtx == nil {
+			cleanupCtx, cleanupCancel = newRemoteCleanupContext(s.Proc)
+		}
+		return cleanupCtx
+	}
 	defer func() {
+		defer func() {
+			if cleanupCancel != nil {
+				cleanupCancel()
+			}
+		}()
 		// should wait all the notify-message-routine and preScopes done.
 		wg.Wait()
+		if len(notifyMessageResultReceiveChan) > 0 {
+			cleanupContext()
+		}
 		err = c.collectMergeRunResults(
 			s.Proc,
 			newScopeRunResultForProcess(err, s.Proc),
 			preScopeResultReceiveChan,
-			notifyMessageResultReceiveChan)
+			notifyMessageResultReceiveChan,
+			cleanupCtx)
 	}()
 
 	remoteScopeCount := len(s.RemoteReceivRegInfos)
@@ -723,7 +740,7 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 			preScopeCount--
 
 		case result := <-notifyMessageResultReceiveChan:
-			result.clean(s.Proc)
+			result.clean(s.Proc, cleanupContext())
 			if result.err != nil {
 				return s.cancelMergeSiblingsOnError(result.err)
 			}
@@ -745,6 +762,7 @@ func (c *Compile) collectMergeRunResults(
 	current scopeRunResult,
 	preScopeResults <-chan scopeRunResult,
 	notifyResults <-chan notifyMessageResult,
+	cleanupCtx context.Context,
 ) error {
 	for len(preScopeResults) > 0 {
 		current = c.preferPrimaryScopeResult(current, <-preScopeResults)
@@ -752,7 +770,7 @@ func (c *Compile) collectMergeRunResults(
 	for len(notifyResults) > 0 {
 		result := <-notifyResults
 		current = c.preferPrimaryScopeResult(current, newScopeRunResultForProcess(result.err, proc))
-		result.clean(proc)
+		result.clean(proc, cleanupCtx)
 	}
 	return current.err
 }
@@ -854,7 +872,7 @@ func finalizeRemoteResult(err error, sender *messageSenderOnClient) error {
 		return err
 	}
 	if sender != nil {
-		if terminalErr := sender.waitingTheStopResponse(); terminalErr != nil {
+		if terminalErr := sender.waitingTheStopResponse(context.Background()); terminalErr != nil {
 			return process.MarkPipelineFailure(terminalErr)
 		}
 	}
@@ -904,10 +922,9 @@ func (s *Scope) RemoteRun(c *Compile) error {
 
 	// sender should be closed after cleanup (tell the children-pipeline that query was done).
 	if sender != nil {
-		if runErr == nil {
-			sender.prepareForLocalCleanup()
-		}
-		sender.close()
+		cleanupCtx, cancel := newRemoteCleanupContext(s.Proc)
+		defer cancel()
+		sender.close(cleanupCtx)
 	}
 	return runErr
 }
@@ -1585,13 +1602,21 @@ type notifyMessageSenderFactory func(
 	analyzeModule *AnalyzeModule,
 ) (*messageSenderOnClient, error)
 
-// clean do final work for a notifyMessageResult.
-func (r *notifyMessageResult) clean(proc *process.Process) {
+// newRemoteCleanupContext bounds optional teardown by the original query.
+func newRemoteCleanupContext(proc *process.Process) (context.Context, context.CancelFunc) {
+	queryCtx := scopeRunQueryContext(proc)
+	if queryCtx == nil && proc != nil {
+		queryCtx = proc.Ctx
+	}
+	if queryCtx == nil {
+		queryCtx = context.Background()
+	}
+	return context.WithTimeout(queryCtx, pipelineStreamFinishClientTimeout)
+}
+
+func (r *notifyMessageResult) clean(proc *process.Process, cleanupCtx context.Context) {
 	if r.sender != nil {
-		if r.err == nil {
-			r.sender.prepareForLocalCleanup()
-		}
-		r.sender.close()
+		r.sender.close(cleanupCtx)
 	}
 	if r.err != nil {
 		proc.Infof(proc.Ctx, "send notify message failed : %s", r.err)

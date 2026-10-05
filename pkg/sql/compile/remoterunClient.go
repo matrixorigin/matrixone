@@ -507,7 +507,6 @@ type messageSenderOnClient struct {
 	// close must still call Stream.Close.
 	receiveClosed           bool
 	reuseEligible           bool
-	terminalNegotiated      bool
 	stopResponseTried       bool
 	expectedEnd             pipeline.Method
 	reportingRequestStarted bool
@@ -515,12 +514,6 @@ type messageSenderOnClient struct {
 	closeOnce               sync.Once
 	requestFinishAck        bool
 	pendingBatchAck         uint64
-	// allowCleanupCancellation is set after successful local cleanup. Pipeline
-	// and query contexts may be intentionally cancelled by that cleanup; FIN
-	// then runs on its own bounded context. Cancellation before this transition
-	// still poisons reuse.
-	allowCleanupCancellation bool
-
 	// gaugeDecOnce ensures PipelineMessageSenderGauge.Dec() is called at most once when close() runs.
 	gaugeDecOnce sync.Once
 	terminalMu   sync.Mutex
@@ -709,9 +702,7 @@ func (sender *messageSenderOnClient) markStreamActive(method pipeline.Method) {
 	sender.safeToClose = false
 	sender.receiveClosed = false
 	sender.reuseEligible = false
-	sender.terminalNegotiated = false
 	sender.stopResponseTried = false
-	sender.allowCleanupCancellation = false
 	sender.expectedEnd = method
 }
 
@@ -721,17 +712,14 @@ func (sender *messageSenderOnClient) markReceiveClosed() {
 	sender.safeToClose = true
 	sender.receiveClosed = true
 	sender.reuseEligible = false
-	sender.terminalNegotiated = false
 }
 
 func (sender *messageSenderOnClient) markTerminal(message *pipeline.Message, successful, valid bool) {
 	sender.stateMu.Lock()
 	defer sender.stateMu.Unlock()
 	sender.safeToClose = true
-	sender.terminalNegotiated = valid && message.GetCmd() == sender.expectedEnd &&
+	sender.reuseEligible = successful && valid && message.GetCmd() == sender.expectedEnd &&
 		message.GetAcceptedTeardownMode() == pipeline.StreamTeardownMode_FinishAck
-	sender.reuseEligible = sender.terminalNegotiated &&
-		(successful || sender.allowCleanupCancellation)
 }
 
 // finishRemoteTerminal arbitrates both normal and StopSending completion.
@@ -754,15 +742,6 @@ func (sender *messageSenderOnClient) finishRemoteTerminal(message *pipeline.Mess
 		return process.MarkPipelineFailure(remoteErr)
 	}
 	return analysisErr
-}
-
-func (sender *messageSenderOnClient) prepareForLocalCleanup() {
-	sender.stateMu.Lock()
-	defer sender.stateMu.Unlock()
-	sender.allowCleanupCancellation = true
-	if sender.terminalNegotiated {
-		sender.reuseEligible = true
-	}
 }
 
 func (sender *messageSenderOnClient) receiveMessage() (morpc.Message, error) {
@@ -904,7 +883,7 @@ func forwardRemoteBatchWithContext(
 // its terminal response. The terminal error remains part of execution state:
 // cancellation may have won the caller's receive select immediately before the
 // remote pipeline reported its actual failure.
-func (sender *messageSenderOnClient) waitingTheStopResponse() error {
+func (sender *messageSenderOnClient) waitingTheStopResponse(parentCtx context.Context) error {
 	sender.stateMu.Lock()
 	if sender.receiveClosed || sender.safeToClose || sender.stopResponseTried {
 		sender.stateMu.Unlock()
@@ -915,10 +894,13 @@ func (sender *messageSenderOnClient) waitingTheStopResponse() error {
 	// second full timeout to the same statement.
 	sender.stopResponseTried = true
 	sender.stateMu.Unlock()
+	if err := parentCtx.Err(); err != nil {
+		return err
+	}
 
 	// cannot use sender.ctx here, because ctx maybe done.
 	maxWaitingTime, cancel := context.WithTimeoutCause(
-		context.Background(), pipelineStopSendingClientTimeout, moerr.CauseWaitingTheStopResponse)
+		parentCtx, pipelineStopSendingClientTimeout, moerr.CauseWaitingTheStopResponse)
 	defer cancel()
 
 	// send a stop sending message to message-receiver.
@@ -967,42 +949,45 @@ func generatePipelineStreamFinishMessage(streamID uint64) *pipeline.Message {
 	return message
 }
 
-func (sender *messageSenderOnClient) finishStreamForReuse() bool {
+func (sender *messageSenderOnClient) finishStreamForReuse(cleanupCtx context.Context) bool {
+	if cleanupCtx.Err() != nil {
+		return false
+	}
 	var senderDone <-chan struct{}
-	sender.stateMu.Lock()
-	allowCleanupCancellation := sender.allowCleanupCancellation
-	sender.stateMu.Unlock()
-	cancelCtx := sender.ctx
-	if allowCleanupCancellation {
-		cancelCtx = nil
-	}
-	if cancelCtx != nil && cancelCtx.Err() != nil {
-		return false
-	}
-	if cancelCtx != nil {
-		senderDone = cancelCtx.Done()
-	}
-	finishCtx, cancel := context.WithTimeout(context.Background(), pipelineStreamFinishClientTimeout)
-	defer cancel()
-	streamID := sender.streamSender.ID()
-	if err := sender.streamSender.Send(finishCtx, generatePipelineStreamFinishMessage(streamID)); err != nil {
-		return false
-	}
-	select {
-	case value, ok := <-sender.receiveCh:
-		if !ok || value == nil {
-			sender.markReceiveClosed()
+	if sender.ctx != nil {
+		if sender.ctx.Err() != nil && context.Cause(sender.ctx) != process.ErrPipelineStopped {
 			return false
 		}
-		message, ok := value.(*pipeline.Message)
-		return ok && message.GetID() == streamID &&
-			message.GetCmd() == pipeline.Method_PipelineStreamFinishAck &&
-			message.GetSid() == pipeline.Status_MessageEnd && len(message.GetErr()) == 0 &&
-			message.GetAcceptedTeardownMode() == pipeline.StreamTeardownMode_FinishAck
-	case <-finishCtx.Done():
+		senderDone = sender.ctx.Done()
+	}
+	streamID := sender.streamSender.ID()
+	if err := sender.streamSender.Send(cleanupCtx, generatePipelineStreamFinishMessage(streamID)); err != nil {
 		return false
-	case <-senderDone:
-		return false
+	}
+	for {
+		select {
+		case value, ok := <-sender.receiveCh:
+			if !ok || value == nil {
+				sender.markReceiveClosed()
+				return false
+			}
+			if cleanupCtx.Err() != nil || (sender.ctx != nil && sender.ctx.Err() != nil &&
+				context.Cause(sender.ctx) != process.ErrPipelineStopped) {
+				return false
+			}
+			message, ok := value.(*pipeline.Message)
+			return ok && message.GetID() == streamID &&
+				message.GetCmd() == pipeline.Method_PipelineStreamFinishAck &&
+				message.GetSid() == pipeline.Status_MessageEnd && len(message.GetErr()) == 0 &&
+				message.GetAcceptedTeardownMode() == pipeline.StreamTeardownMode_FinishAck
+		case <-cleanupCtx.Done():
+			return false
+		case <-senderDone:
+			if context.Cause(sender.ctx) != process.ErrPipelineStopped {
+				return false
+			}
+			senderDone = nil
+		}
 	}
 }
 
@@ -1092,17 +1077,17 @@ func (sender *messageSenderOnClient) dealRemoteTerminal(data []byte) error {
 	return nil
 }
 
-func (sender *messageSenderOnClient) close() {
+func (sender *messageSenderOnClient) close(cleanupCtx context.Context) {
 	sender.closeOnce.Do(func() {
 		// Ensure Gauge is decremented exactly once when this sender is torn down.
 		defer sender.gaugeDecOnce.Do(func() { v2.PipelineMessageSenderGauge.Dec() })
 
-		_ = sender.waitingTheStopResponse()
+		_ = sender.waitingTheStopResponse(cleanupCtx)
 		sender.markMissingGroupConcatTerminal()
 		sender.stateMu.Lock()
 		receiveClosed, reuseEligible := sender.receiveClosed, sender.reuseEligible
 		sender.stateMu.Unlock()
-		if !receiveClosed && reuseEligible && sender.finishStreamForReuse() {
+		if !receiveClosed && reuseEligible && sender.finishStreamForReuse(cleanupCtx) {
 			v2.PipelineStreamTeardownCounter.WithLabelValues("client_reuse").Inc()
 			if sender.ctxCancel != nil {
 				sender.ctxCancel()
