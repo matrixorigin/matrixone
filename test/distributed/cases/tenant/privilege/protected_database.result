@@ -123,9 +123,12 @@ select a from protected_bvt_db.t1;
 ➤ a[4,32,0]  𝄀
 1
 select a from protected_bvt_db.v1;
+internal error: do not have privilege to execute the statement
+set enable_privilege_cache = off;
+grant select on view protected_bvt_db.v1 to protected_bvt_writer;
+select a from protected_bvt_db.v1;
 ➤ a[4,32,0]  𝄀
 1
-set enable_privilege_cache = off;
 create sequence protected_bvt_db.s1;
 create function protected_bvt_db.f1(a int) returns int language sql as '$1 + 1';
 create procedure protected_bvt_db.p1() 'begin select 1; end';

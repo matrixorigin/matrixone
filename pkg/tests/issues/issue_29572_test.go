@@ -252,6 +252,65 @@ func TestIssue29572LogicalViewAuthorization(t *testing.T) {
 				require.NoError(t, err)
 			})
 		}
-
+		// Cross-account DEFINER identity must follow the publisher, while the
+		// root VIEW grant belongs to the subscriber. Reuse this authenticated
+		// cluster and reader to contrast constant and scanned views.
+		src, err := sys.Conn(ctx)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, src.Close()) })
+		t.Cleanup(func() {
+			cleanup, stop := context.WithTimeout(context.Background(), 30*time.Second)
+			defer stop()
+			for _, q := range []string{"drop publication if exists issue29572_pub", "drop snapshot if exists issue29572_clone", "drop database if exists issue29572_src"} {
+				_, err := sys.ExecContext(cleanup, q)
+				require.NoError(t, err)
+			}
+		})
+		for _, q := range []string{
+			"create database issue29572_src", "use issue29572_src",
+			"create table t(id int)", "insert into t values(42)",
+			"create view scanned as select id from t", "create view constant as select 42 as id",
+			"create snapshot issue29572_clone for account",
+			"create database cloned clone issue29572_src {snapshot='issue29572_clone'} to account " + account,
+			"create publication issue29572_pub database issue29572_src account " + account,
+		} {
+			_, err := src.ExecContext(ctx, q)
+			require.NoError(t, err, q)
+		}
+		var invalidOwners int
+		require.NoError(t, admin.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where reldatabase='cloned' and (owner<>2 or creator<>2)").Scan(&invalidOwners))
+		require.Zero(t, invalidOwners, "clone creations must belong to the target administrator")
+		execAdmin("create database subscribed from sys publication issue29572_pub")
+		execAdmin("grant all on table subscribed.* to reader")
+		for _, mode := range []string{"off", "on"} {
+			db := open(t, account+"#observer#reader")
+			conn, err := db.Conn(ctx)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, conn.Close()) })
+			_, err = conn.ExecContext(ctx, "set enable_privilege_cache="+mode)
+			require.NoError(t, err)
+			for _, view := range []string{"constant", "scanned"} {
+				var value int
+				denied(t, conn.QueryRowContext(ctx, "select id from subscribed."+view).Scan(&value))
+			}
+			execAdmin("grant select on view subscribed.* to reader")
+			for _, view := range []string{"constant", "scanned"} {
+				var value int
+				require.NoError(t, conn.QueryRowContext(ctx, "select id from subscribed."+view).Scan(&value))
+				require.Equal(t, 42, value)
+			}
+			execAdmin("revoke select on view subscribed.* from reader")
+			var value int
+			denied(t, conn.QueryRowContext(ctx, "select id from subscribed.scanned").Scan(&value))
+		}
+		_, err = src.ExecContext(ctx, "drop publication issue29572_pub")
+		require.NoError(t, err)
+		_, err = src.ExecContext(ctx, "drop database issue29572_src")
+		require.NoError(t, err)
+		for _, view := range []string{"constant", "scanned"} {
+			var value int
+			require.NoError(t, admin.QueryRowContext(ctx, "select id from cloned."+view).Scan(&value))
+			require.Equal(t, 42, value, "clone must not borrow the deleted source principal/catalog")
+		}
 	})
 }

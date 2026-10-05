@@ -2462,6 +2462,7 @@ type privilegeItem struct {
 	privilegeTyp          PrivilegeType
 	objType               objectType
 	viewPath              []*plan.ViewStep
+	objectRef             *plan.ObjectRef
 	role                  *tree.Role
 	users                 []*tree.User
 	dbName                string
@@ -5560,8 +5561,15 @@ func getViewSecurityInfoWithSnapshot(ctx context.Context, bh BackgroundExec, dbN
 	}, true, nil
 }
 
+// Role IDs are account-local. A DEFINER transition must change both parts of
+// the principal, including the namespace used for grants and cache eligibility.
+type viewPrivilegePrincipal struct {
+	accountID uint32
+	roleID    int64
+}
+
 // resolveViewChainPrivilegeContext verifies view privileges in order and returns
-// the effective role to use for underlying object checks.
+// the effective principal to use for underlying object checks.
 func resolveViewChainPrivilegeContext(
 	ctx context.Context,
 	bh BackgroundExec,
@@ -5571,60 +5579,66 @@ func resolveViewChainPrivilegeContext(
 	privType PrivilegeType,
 	viewPath []*plan.ViewStep,
 	enableCache bool,
-) (int64, bool, bool, error) {
+) (viewPrivilegePrincipal, bool, bool, error) {
+	accountID, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return viewPrivilegePrincipal{}, false, false, err
+	}
+	caller := viewPrivilegePrincipal{accountID: accountID, roleID: roleId}
 	if len(viewPath) == 0 {
-		return roleId, true, false, nil
+		return caller, true, false, nil
 	}
 	if err := validateViewPath(viewPath); err != nil {
-		return 0, false, false, err
+		return caller, false, false, err
 	}
 	if isSystemViewDatabase(viewPath[0].DatabaseName) {
-		return roleId, true, true, nil
+		return caller, true, true, nil
 	}
 
-	currentRoleId := roleId
+	principal := caller
 	for _, step := range viewPath {
 		viewDb, viewName, snapshot := step.DatabaseName, step.ViewName, step.Snapshot
 		grantDb := viewDb
-		if step.SubscriptionName != "" {
+		if step.SubscriptionName != "" && principal.accountID != snapshot.Tenant.TenantID {
 			grantDb = step.SubscriptionName
 		}
 
-		useCache := enableCache && cache != nil && currentRoleId == roleId
+		useCache := enableCache && cache != nil && principal == caller
 		cacheToUse := cache
 		if !useCache {
 			cacheToUse = nil
 		}
-		viewAllowed, err := verifyViewPrivilegeForRole(ctx, bh, ses, cacheToUse, currentRoleId, privType, grantDb, viewName, useCache)
+		grantCtx := defines.AttachAccountId(ctx, principal.accountID)
+		viewAllowed, err := verifyViewPrivilegeForRole(grantCtx, bh, ses, cacheToUse, principal.roleID, privType, grantDb, viewName, useCache)
 		if err != nil {
-			return 0, false, false, err
+			return principal, false, false, err
 		}
 		if !viewAllowed {
-			return 0, false, false, nil
+			return principal, false, false, nil
 		}
 
 		viewInfo, found, err := getViewSecurityInfoWithSnapshot(ctx, bh, viewDb, viewName, snapshot)
 		if err != nil {
-			return 0, false, false, err
+			return principal, false, false, err
 		}
 		if !found {
 			if snapshot != nil && snapshot.TS != nil {
-				return 0, false, false, moerr.NewInternalErrorf(ctx, `there is no view "%s" in database "%s"`, viewName, viewDb)
+				return principal, false, false, moerr.NewInternalErrorf(ctx, `there is no view "%s" in database "%s"`, viewName, viewDb)
 			}
-			if !ses.GetTxnHandler().InActiveTxn() {
-				return 0, false, false, moerr.NewInternalErrorf(ctx, `there is no view "%s" in database "%s"`, viewName, viewDb)
+			if principal.accountID != snapshot.Tenant.TenantID || !ses.GetTxnHandler().InActiveTxn() {
+				return principal, false, false, moerr.NewInternalErrorf(ctx, `there is no view "%s" in database "%s"`, viewName, viewDb)
 			}
 			viewInfo = viewSecurityInfo{
 				securityType:  viewSecurityDefiner,
-				definerRoleId: currentRoleId,
+				definerRoleId: principal.roleID,
 			}
 		}
 		if viewInfo.securityType == viewSecurityDefiner {
-			currentRoleId = viewInfo.definerRoleId
+			principal = viewPrivilegePrincipal{accountID: snapshot.Tenant.TenantID, roleID: viewInfo.definerRoleId}
 		}
 	}
 
-	return currentRoleId, true, false, nil
+	return principal, true, false, nil
 }
 
 // convertAstObjectTypeToObjectType gets the object type from the ast
@@ -6996,6 +7010,7 @@ type privilegeTips struct {
 	typ                   PrivilegeType
 	objType               objectType
 	viewPath              []*plan.ViewStep
+	objectRef             *plan.ObjectRef
 	databaseName          string
 	tableName             string
 	isClusterTable        bool
@@ -7194,6 +7209,7 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) (privilegeTipsArray, error) {
 							typ:                   scanTyp,
 							objType:               objectTypeTable,
 							databaseName:          getDbNameForPrivilege(node.ObjRef),
+							objectRef:             node.ObjRef,
 							tableName:             node.ObjRef.GetObjName(),
 							isClusterTable:        clusterTable,
 							clusterTableOperation: scanOperation,
@@ -7204,6 +7220,7 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) (privilegeTipsArray, error) {
 							typ:                   scanTyp,
 							objType:               objectTypeTable,
 							databaseName:          getDbNameForPrivilege(node.ParentObjRef),
+							objectRef:             node.ParentObjRef,
 							tableName:             node.ParentObjRef.GetObjName(),
 							isClusterTable:        clusterTable,
 							clusterTableOperation: scanOperation,
@@ -7737,6 +7754,7 @@ func convertPrivilegeTipsToPrivilege(priv *privilege, arr privilegeTipsArray) {
 			privilegeTyp:          tips.typ,
 			objType:               tips.objType,
 			viewPath:              tips.viewPath,
+			objectRef:             tips.objectRef,
 			dbName:                tips.databaseName,
 			tableName:             tips.tableName,
 			isClusterTable:        tips.isClusterTable,
@@ -7926,7 +7944,11 @@ func verifyViewPrivilegeForRole(
 	enableCache bool,
 ) (bool, error) {
 	// Admin roles bypass view privilege checks to keep grants output stable.
-	if roleId == moAdminRoleID || roleId == accountAdminRoleID {
+	accountID, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return false, err
+	}
+	if (accountID == sysAccountID && roleId == moAdminRoleID) || (accountID != sysAccountID && roleId == accountAdminRoleID) {
 		return true, nil
 	}
 	privTypes := []PrivilegeType{privType, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership}
@@ -8054,10 +8076,13 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 							viewPath := mi.viewPath
 
 							checkRoleId := roleId
+							checkCtx := ctx
+							useCache := usePrivilegeCache && cache != nil
 							viewAllowed := true
 							skipBaseCheck := false
 							if len(viewPath) > 0 {
-								checkRoleId, viewAllowed, skipBaseCheck, err = resolveViewChainPrivilegeContext(
+								var principal viewPrivilegePrincipal
+								principal, viewAllowed, skipBaseCheck, err = resolveViewChainPrivilegeContext(
 									ctx,
 									bh,
 									ses,
@@ -8070,13 +8095,19 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 								if err != nil {
 									return false, 0, err
 								}
+								checkRoleId = principal.roleID
+								checkCtx = defines.AttachAccountId(ctx, principal.accountID)
+								callerAccount, _ := defines.GetAccountId(ctx) // validated by the resolver
+								useCache = useCache && principal.roleID == roleId && principal.accountID == callerAccount
+								if mi.objectRef != nil && mi.objectRef.GetPubInfo() != nil && principal.accountID == uint32(mi.objectRef.GetPubInfo().TenantId) {
+									tempEntry.databaseName = mi.objectRef.GetSchemaName()
+								}
 							}
 
 							if viewAllowed {
 								if skipBaseCheck || (tempEntry.objType == objectTypeView && len(viewPath) > 0) {
 									yes = true
 								} else {
-									useCache := usePrivilegeCache && cache != nil && checkRoleId == roleId
 									cacheToUse := cache
 									if !useCache {
 										cacheToUse = nil
@@ -8086,7 +8117,7 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 											break
 										}
 										tempEntry.privilegeId = typ
-										yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, cacheToUse, checkRoleId, tempEntry, pls, useCache)
+										yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(checkCtx, bh, ses, cacheToUse, checkRoleId, tempEntry, pls, useCache)
 										if err != nil {
 											return false, 0, err
 										}
@@ -8096,7 +8127,7 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 									}
 								}
 								if yes && matchedRoleID == 0 {
-									matchedRoleID = checkRoleId
+									matchedRoleID = roleId
 								}
 							}
 						}
