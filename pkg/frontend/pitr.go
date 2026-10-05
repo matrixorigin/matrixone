@@ -324,23 +324,8 @@ func resolvePitrCreateNames(ctx context.Context, bh BackgroundExec, dbName, tabl
 	if !defines.Mode2NameResolutionEnabled(ctx) {
 		return dbName, tableName, nil
 	}
-	back, ok := bh.(*backExec)
-	if !ok || back.backSes.GetTxnHandler() == nil || back.backSes.GetTxnHandler().GetTxn() == nil {
-		return "", "", moerr.NewInternalError(ctx, "PITR name resolution requires a transaction")
-	}
-	db, err := back.backSes.GetStorage().Database(ctx, dbName, back.backSes.GetTxnHandler().GetTxn())
-	if err != nil {
-		return "", "", err
-	}
-	dbName = resolvedDatabaseName(db, dbName)
-	if tableName != "" {
-		rel, err := db.Relation(ctx, tableName, nil)
-		if err != nil {
-			return "", "", err
-		}
-		tableName = rel.GetTableName()
-	}
-	return dbName, tableName, nil
+	physicalDB, physicalTable, _, err := resolveCatalogObjectInBackgroundTxn(ctx, bh, dbName, tableName)
+	return physicalDB, physicalTable, err
 }
 
 func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) (err error) {
@@ -610,9 +595,6 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) (err
 		if err != nil {
 			return err
 		}
-		if needSkipDb(databaseName) {
-			return moerr.NewInternalErrorf(ctx, "can not create pitr for current database %s", databaseName)
-		}
 
 		isDup, err = checkPitrDup(ctx, bh, currentAccount, uint64(createAcc), stmt)
 		if err != nil {
@@ -691,9 +673,6 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) (err
 		tblId, err = getTableIdFunc(databaseName, tableName)
 		if err != nil {
 			return err
-		}
-		if needSkipDb(databaseName) {
-			return moerr.NewInternalErrorf(ctx, "can not create pitr for current table %s.%s", databaseName, tableName)
 		}
 
 		isDup, err = checkPitrDup(ctx, bh, currentAccount, uint64(createAcc), stmt)

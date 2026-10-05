@@ -487,23 +487,6 @@ func (cc *CatalogCache) GetTable(tbl *TableItem) bool {
 	return find
 }
 
-// GetFoldedTable resolves a mode-2 table name at tbl.Ts. The caller must first
-// establish that this cache can serve that timestamp; otherwise GC may have
-// retired a second historical name with the same folded identity.
-func (cc *CatalogCache) GetFoldedTable(tbl *TableItem) (found, ambiguous bool) {
-	cc.VisitFoldedTables(tbl.AccountId, tbl.DatabaseId, tbl.Name, tbl.Ts,
-		func(item *TableItem) bool {
-			if found {
-				ambiguous = true
-				return false
-			}
-			copyTableItem(tbl, item)
-			found = true
-			return true
-		})
-	return found && !ambiguous, ambiguous
-}
-
 // VisitFoldedTables visits each visible physical table with the same mode-2
 // identity. It preserves physical-name order so transaction-local tombstones
 // can be overlaid before a caller decides whether the name is ambiguous.
@@ -681,22 +664,6 @@ func (cc *CatalogCache) GetDatabase(db *DatabaseItem) bool {
 	})
 
 	return find
-}
-
-// GetFoldedDatabase resolves a mode-2 database name at db.Ts. The caller must
-// establish that this cache can serve that timestamp before using its result.
-func (cc *CatalogCache) GetFoldedDatabase(db *DatabaseItem) (found, ambiguous bool) {
-	cc.VisitFoldedDatabases(db.AccountId, db.Name, db.Ts,
-		func(item *DatabaseItem) bool {
-			if found {
-				ambiguous = true
-				return false
-			}
-			copyDatabaseItem(db, item)
-			found = true
-			return true
-		})
-	return found && !ambiguous, ambiguous
 }
 
 // VisitFoldedDatabases visits each visible physical database with the same
