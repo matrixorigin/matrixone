@@ -334,7 +334,8 @@ only when it is stored into a `vecf8`/`vecf4` column (assignment cast).
 | comparison operators (`=`, `<>`, `<`, `<=`, `>`, `>=`, `<=>`, `IN`, `BETWEEN`) | as for `vecbf16`: a text literal is quantized to the column's type, as a stored value is, so a row matches the text it was inserted from (`'[3000, -12, 0.001, 1000000]'` matches the cell that displays as `[3072, -16, 0, 983040]`), and text of another dimension is rejected; cells compare by their dequantized values, element-wise |
 | `hex`, `to_base64` | not supported, as for the other narrow vector types (`vecf32` only) |
 | primary key, partition key, secondary/unique index, vector index | rejected at DDL |
-| `LOAD` | CSV text `"[…]"`; Parquet `LIST<FLOAT/DOUBLE>` and text columns, quantized per row |
+| `LOAD` | CSV text `"[…]"`, JSONL arrays; Parquet `LIST<FLOAT/DOUBLE>` and text columns, quantized per row. The exact text (CSV text, or a JSONL object value) loads without quantization |
+| `INTO OUTFILE`, external-table writes | the exact text, in CSV as a quoted field and in JSONL as an object value, so an export reloads to the same cells |
 | binary input | a `BLOB` of little-endian float32 elements, as for `vecf32` (`CAST(UNHEX('0000803F…') AS BLOB)` or a BLOB parameter), quantized per row; a length that is not a multiple of 4 or another dimension is rejected |
 | exact text | `vecblock_json(v)` returns the cell as stored, `{"g": g, "b": [{"s": scale, "v": [values]}, …]}` (no `"g"` for `vecf8`, whose global is 1); casting that text (or inserting it, or `LOAD`ing it) builds the same cell bytes without quantization. Each element is `v · s · g`; `s` must be a scale code's value (E8M0 / UE4M3), `v` an element code's value (E4M3 / E2M1), 32 / 16 values per block and fewer only in the last; anything else is an error, never rounded |
 
@@ -664,12 +665,12 @@ type; normalization changes the ranking, independent of the format.
 - GPU dispatch follows the session's `gpu_mode` only. The `options` argument is a JSON
   object of which only `metric` is read; a tile size is an internal choice bounded by the
   allocation account, not a user setting.
-- Transport keeps the stored cell: CDC and ISCP replication SQL and `data branch` merge SQL
-  carry `vecf8`/`vecf4` values as the exact text, which replays to the same bytes. The
+- Transport keeps the stored cell: CDC and ISCP replication SQL, `data branch` merge SQL
+  and `INTO OUTFILE` / external-table writes (CSV and JSONL) carry `vecf8`/`vecf4` values
+  as the exact text, which replays or reloads to the same bytes. The
   decoded values (`'[…]'`) would be quantized again: a `vecf4` global scale follows the
   decoded maximum, so a replayed value can move (an element stored as `6.2606535` became
-  `6.8867183`). Query output and `INTO OUTFILE` keep the decoded values; reloading an
-  export quantizes them again.
+  `6.8867183`). Query output keeps the decoded values.
 - Non-finite values are rejected at build, including finite inputs that would decode to
   ±Inf, and cell parsing rejects any cell that decodes to a non-finite value.
 - The GPU engine runs only on compute capability 10.0 or newer, checked once per process.

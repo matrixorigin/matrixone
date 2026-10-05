@@ -16,6 +16,7 @@ package externalwrite
 
 import (
 	"bytes"
+	"encoding/json"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -35,18 +36,29 @@ func vecBlockTestVector(t *testing.T, oid types.T, mp *mpool.MPool) *vector.Vect
 	return vec
 }
 
+// TestExternalWriteVecBlock checks that CSV and JSON-lines output carry a vecf8/vecf4
+// cell exactly: the written text builds back into the same cell bytes.
 func TestExternalWriteVecBlock(t *testing.T) {
 	mp := mpool.MustNewZero()
 	var w externalWriter
 	for _, oid := range []types.T{types.T_array_float8, types.T_array_float4} {
+		f, _ := oid.BlockScaledFormat()
 		vec := vecBlockTestVector(t, oid, mp)
+		want, err := types.BlockScaledToJSON(vec.GetBytesAt(0))
+		require.NoError(t, err)
+
 		val, quote, err := w.csvValue(vec, 0)
 		require.NoError(t, err)
 		require.True(t, quote)
-		require.Equal(t, "[1, -3, 0, 6]", string(val))
+		require.Equal(t, want, string(val))
+		cell, err := types.StringToBlockScaled(f, string(val))
+		require.NoError(t, err)
+		require.Equal(t, vec.GetBytesAt(0), cell)
 
 		var buf bytes.Buffer
 		require.NoError(t, w.appendJSONValue(&buf, vec, 0))
-		require.Equal(t, "[1,-3,0,6]", buf.String())
+		require.Equal(t, want, buf.String())
+		require.True(t, json.Valid(buf.Bytes()))
+		vec.Free(mp)
 	}
 }

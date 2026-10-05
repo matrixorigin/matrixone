@@ -184,4 +184,18 @@ select cast('{"g":1,"b":[{"s":1,"v":[1,2]}]}' as vecf4(3));
 select cast('{"b":[{"s":3,"v":[1]}]}' as vecf8(1));
 select cast('{"g":1,"b":[{"s":1,"v":[2.5]}]}' as vecf4(1));
 
+-- export writes the exact text; CSV and JSONL reload to the same cells
+create table expt (id int, v vecf4(17), e vecf8(2));
+insert into expt values (1, '[8.7649145,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5.7432985]', '[447, -1.5]'), (2, null, '[0.001, 3]');
+select * from expt order by id into outfile '$resources/into_outfile/vecblock.csv';
+select load_file(cast('file://$resources/into_outfile/vecblock.csv' as datalink)) as csv_content;
+select * from expt order by id into outfile '$resources/into_outfile/vecblock.jsonl';
+select load_file(cast('file://$resources/into_outfile/vecblock.jsonl' as datalink)) as jsonl_content;
+create table expt_csv like expt;
+load data infile '$resources/into_outfile/vecblock.csv' into table expt_csv fields terminated by ',' enclosed by '"' ignore 1 lines;
+create table expt_jsonl like expt;
+load data infile {'filepath'='$resources/into_outfile/vecblock.jsonl', 'format'='jsonline', 'jsondata'='object'} into table expt_jsonl;
+select x.id, vecblock_json(x.v) <=> vecblock_json(c.v), vecblock_json(x.e) = vecblock_json(c.e), vecblock_json(x.v) <=> vecblock_json(j.v), vecblock_json(x.e) = vecblock_json(j.e) from expt x join expt_csv c on x.id = c.id join expt_jsonl j on x.id = j.id order by x.id;
+select id, v, e from expt_jsonl order by id;
+
 drop database vecblock_db;

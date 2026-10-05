@@ -339,6 +339,12 @@ func (r *CsvReader) transJsonObject2Lines(ctx context.Context, str string, attrs
 			res[attr.ColFieldIndex] = csvparser.Field{Val: string(data)}
 			continue
 		}
+		if text, ok, err := vecBlockJSONText(tp, valN); err != nil {
+			return nil, err
+		} else if ok {
+			res[attr.ColFieldIndex] = csvparser.Field{Val: text}
+			continue
+		}
 
 		val := fmt.Sprint(valN)
 		res[attr.ColFieldIndex] = csvparser.Field{Val: val, IsNull: val == JsonNull}
@@ -396,11 +402,33 @@ func (r *CsvReader) transJsonArray2Lines(ctx context.Context, str string, attrs 
 			res = append(res, csvparser.Field{Val: string(data)})
 			continue
 		}
+		if text, ok, err := vecBlockJSONText(tp, valN); err != nil {
+			return nil, err
+		} else if ok {
+			res = append(res, csvparser.Field{Val: text})
+			continue
+		}
 
 		val := fmt.Sprint(valN)
 		res = append(res, csvparser.Field{Val: val, IsNull: val == JsonNull})
 	}
 	return res, nil
+}
+
+// vecBlockJSONText returns the JSON text of an object value of a vecf8/vecf4 column, the
+// exact form of the cell.
+func vecBlockJSONText(tp int32, valN bytejson.Node) (string, bool, error) {
+	if !types.T(tp).IsBlockScaledArray() {
+		return "", false, nil
+	}
+	if g, ok := valN.V.(*bytejson.Group); !ok || !g.Obj {
+		return "", false, nil
+	}
+	bj, err := valN.ByteJson()
+	if err != nil {
+		return "", false, err
+	}
+	return bj.String(), true, nil
 }
 
 // isExternalErrorAttr reports whether an attribute is one of the synthesized

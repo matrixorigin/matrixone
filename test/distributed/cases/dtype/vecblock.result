@@ -370,4 +370,31 @@ select cast('{"b":[{"s":3,"v":[1]}]}' as vecf8(1));
 invalid input: vecf8 exact text: block 0 scale 3 is not a power of two in [2^-127, 2^127]
 select cast('{"g":1,"b":[{"s":1,"v":[2.5]}]}' as vecf4(1));
 invalid input: vecf4 exact text: block 0 value 2.5 is not an E2M1 value
+create table expt (id int, v vecf4(17), e vecf8(2));
+insert into expt values (1, '[8.7649145,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5.7432985]', '[447, -1.5]'), (2, null, '[0.001, 3]');
+select * from expt order by id into outfile '$resources/into_outfile/vecblock.csv';
+select load_file(cast('file://$resources/into_outfile/vecblock.csv' as datalink)) as csv_content;
+➤ csv_content[-1,16383,0]  𝄀
+id,v,e
+1,"{""g"":0.0032607568,""b"":[{""s"":448,""v"":[6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]},{""s"":320,""v"":[6]}]}","{""b"":[{""s"":1,""v"":[448,-1.5]}]}"
+2,\N,"{""b"":[{""s"":0.0078125,""v"":[0.125,384]}]}"
+
+select * from expt order by id into outfile '$resources/into_outfile/vecblock.jsonl';
+select load_file(cast('file://$resources/into_outfile/vecblock.jsonl' as datalink)) as jsonl_content;
+➤ jsonl_content[-1,16383,0]  𝄀
+{"e":{"b":[{"s":1,"v":[448,-1.5]}]},"id":1,"v":{"g":0.0032607568,"b":[{"s":448,"v":[6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]},{"s":320,"v":[6]}]}}
+{"e":{"b":[{"s":0.0078125,"v":[0.125,384]}]},"id":2,"v":null}
+
+create table expt_csv like expt;
+load data infile '$resources/into_outfile/vecblock.csv' into table expt_csv fields terminated by ',' enclosed by '"' ignore 1 lines;
+create table expt_jsonl like expt;
+load data infile {'filepath'='$resources/into_outfile/vecblock.jsonl', 'format'='jsonline', 'jsondata'='object'} into table expt_jsonl;
+select x.id, vecblock_json(x.v) <=> vecblock_json(c.v), vecblock_json(x.e) = vecblock_json(c.e), vecblock_json(x.v) <=> vecblock_json(j.v), vecblock_json(x.e) = vecblock_json(j.e) from expt x join expt_csv c on x.id = c.id join expt_jsonl j on x.id = j.id order by x.id;
+➤ id[4,32,0]  ¦  vecblock_json(x.v) <=> vecblock_json(c.v)[-7,1,0]  ¦  vecblock_json(x.e) = vecblock_json(c.e)[-7,1,0]  ¦  vecblock_json(x.v) <=> vecblock_json(j.v)[-7,1,0]  ¦  vecblock_json(x.e) = vecblock_json(j.e)[-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  ¦  1  𝄀
+2  ¦  1  ¦  1  ¦  1  ¦  1
+select id, v, e from expt_jsonl order by id;
+➤ id[4,32,0]  ¦  v[12,17,0]  ¦  e[12,2,0]  𝄀
+1  ¦  [8.764914, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6.2606535]  ¦  [448, -1.5]  𝄀
+2  ¦  null  ¦  [0.0009765625, 3]
 drop database vecblock_db;

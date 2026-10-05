@@ -127,3 +127,30 @@ func TestIsLegalLineVecBlock(t *testing.T) {
 		require.False(t, isLegalLine(param, cols, []csvparser.Field{{Val: "[1,2,nan]"}}))
 	}
 }
+
+func TestJSONLineVecBlockExactText(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(proc.Free)
+	for _, oid := range vecBlockTestOids {
+		t.Run(oid.String(), func(t *testing.T) {
+			f, _ := oid.BlockScaledFormat()
+			cell, err := types.StringToBlockScaled(f, "[8.7649145,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5.7432985,-1e-3]")
+			require.NoError(t, err)
+			text, err := types.BlockScaledToJSON(cell)
+			require.NoError(t, err)
+
+			attrs := []plan.ExternAttr{{ColName: "v", ColIndex: 0, ColFieldIndex: 0}}
+			cols := []*plan.ColDef{{Name: "v", Typ: plan.Type{Id: int32(oid), Width: 18}}}
+			r := &CsvReader{}
+			obj, err := r.transJson2Lines(proc.Ctx, `{"v":`+text+`}`, attrs, cols, tree.OBJECT)
+			require.NoError(t, err)
+			arr, err := r.transJsonArray2Lines(proc.Ctx, `[`+text+`]`, attrs, cols)
+			require.NoError(t, err)
+			for _, line := range [][]csvparser.Field{obj, arr} {
+				got, err := types.StringToBlockScaled(f, line[0].Val)
+				require.NoError(t, err)
+				require.Equal(t, cell, got)
+			}
+		})
+	}
+}

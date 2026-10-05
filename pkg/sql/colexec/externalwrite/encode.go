@@ -256,9 +256,10 @@ func (w *externalWriter) csvValue(vec *vector.Vector, i int) (val []byte, quote 
 	case types.T_array_float64:
 		return []byte(types.BytesToArrayToString[float64](vec.GetBytesAt(i))), true, nil
 	// Narrow vector element types — BytesToArrayToString is generic over
-	// types.ArrayElement and already formats BF16/Float16/int8/uint8.
+	// types.ArrayElement and already formats BF16/Float16/int8/uint8. vecf8/vecf4
+	// write their exact text, which the reader builds back into the same cell.
 	case types.T_array_float8, types.T_array_float4:
-		text, err := types.BlockScaledToString(vec.GetBytesAt(i))
+		text, err := types.BlockScaledToJSON(vec.GetBytesAt(i))
 		if err != nil {
 			return nil, false, err
 		}
@@ -434,11 +435,13 @@ func (w *externalWriter) appendJSONValue(buf *bytes.Buffer, vec *vector.Vector, 
 	// float32|float64, so widen first: BF16/Float16 via ToFloat32 (exact), and
 	// int8/uint8 are small integers that float32 represents exactly.
 	case types.T_array_float8, types.T_array_float4:
-		values, err := types.BlockScaledToFloat32(vec.GetBytesAt(i))
+		// the exact text, a compact JSON object the reader builds back into the same cell
+		text, err := types.BlockScaledToJSON(vec.GetBytesAt(i))
 		if err != nil {
 			return err
 		}
-		return appendJSONFloatArray(w, buf, values, 32)
+		buf.WriteString(text)
+		return nil
 	case types.T_array_bf16:
 		return appendJSONFloatArray(w, buf,
 			types.BF16ToFloat32Slice(types.BytesToArray[types.BF16](vec.GetBytesAt(i))), 32)
