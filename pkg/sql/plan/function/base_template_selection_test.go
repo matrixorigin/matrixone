@@ -420,3 +420,69 @@ func TestUnaryStringDecimalPrefixCastConsumer(t *testing.T) {
 		})
 	}
 }
+
+func TestBinaryFixedExecutionContracts(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(func() {
+		proc.GetFileService().Close(proc.Ctx)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+		require.Zero(t, proc.Mp().OnHeapCurrNB())
+	})
+	calls := 0
+	fn := func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selection *FunctionSelectList) error {
+		return opBinaryFixedFixedToFixed(parameters, result, proc, length, func(left, right int64) int64 { calls++; return left + right }, selection)
+	}
+	flat := NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 2, 3}, nil)
+	right := NewFunctionTestInput(types.T_int64.ToType(), []int64{10, 20, 30}, nil)
+	constant := NewFunctionTestConstInput(types.T_int64.ToType(), []int64{7}, nil)
+	for _, tc := range []struct {
+		name        string
+		left, right FunctionTestInput
+		wanted      []int64
+		nulls       []bool
+		selection   *FunctionSelectList
+		calls       int
+	}{
+		{"empty constants", constant, constant, []int64{}, nil, nil, 0},
+		{"all bitmap constants", constant, constant, []int64{0, 0}, []bool{true, true}, &FunctionSelectList{AnyNull: true, SelectList: []bool{false, false, false}}, 0},
+		{"all flag", flat, right, []int64{0, 0, 0}, []bool{true, true, true}, &FunctionSelectList{AllNull: true}, 0},
+		{"left constant partial", constant, right, []int64{17, 0, 37}, []bool{false, true, false}, &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}}, 2},
+		{"right constant short mask", flat, constant, []int64{0, 9, 10}, []bool{true, false, false}, &FunctionSelectList{AnyNull: true, SelectList: []bool{false}}, 2},
+		{"source null and mask union", NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 2, 3}, []bool{false, true, false}), right, []int64{0, 0, 33}, []bool{true, true, false}, &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, true}}, 1},
+		{"stale bitmap ignored", constant, constant, []int64{14, 14}, nil, &FunctionSelectList{SelectList: []bool{false, false, false}}, 1},
+		{"tail outside batch", flat, right, []int64{11, 22}, nil, &FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, false}}, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls = 0
+			c := NewFunctionTestCase(proc, []FunctionTestInput{tc.left, tc.right}, NewFunctionTestResult(types.T_int64.ToType(), false, tc.wanted, tc.nulls), fn).WithSelectList(tc.selection)
+			t.Cleanup(c.Free)
+			c.fnLength = len(tc.wanted)
+			ok, info := c.Run()
+			require.True(t, ok, info)
+			require.Equal(t, tc.calls, calls)
+			require.False(t, c.GetResultVectorDirectly().GetNulls().Contains(uint64(c.fnLength)), "mask tail must not escape the batch")
+		})
+	}
+
+	t.Run("masked to active with changed constant", func(t *testing.T) {
+		calls = 0
+		c := NewFunctionTestCase(proc, []FunctionTestInput{constant, right}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0, 0}, []bool{true, true}), fn)
+		t.Cleanup(c.Free)
+		c.fnLength = 2
+		c.selectList = &FunctionSelectList{AnyNull: true, SelectList: []bool{false, false, false}}
+		ok, info := c.Run()
+		require.True(t, ok, info)
+		require.Zero(t, calls)
+		c.selectList = nil
+		c.expected.wanted, c.expected.nullList = []int64{17, 27}, nil
+		ok, info = c.Run()
+		require.True(t, ok, info)
+		require.Equal(t, 2, calls)
+		vector.MustFixedColNoTypeCheck[int64](c.parameters[0])[0] = 9
+		c.expected.wanted = []int64{19, 29}
+		ok, info = c.Run()
+		require.True(t, ok, info)
+		require.Equal(t, 4, calls)
+	})
+}
