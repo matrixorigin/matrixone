@@ -577,7 +577,8 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			// vector_matmul(topk, id, vec, queries [, options])
+			// vector_matmul(topk, id, vec, queries [, options]); queries is a JSON array of
+			// vectors or a BLOB of little-endian float32 values
 			if len(inputs) != 4 && len(inputs) != 5 {
 				return newCheckResultWithFailure(failedAggParametersWrong)
 			}
@@ -597,6 +598,11 @@ var supportedAggInNewFramework = []FuncNew{
 				case types.T_char, types.T_varchar, types.T_text:
 				case types.T_json:
 					if i == 4 {
+						return newCheckResultWithFailure(failedAggParametersWrong)
+					}
+				case types.T_blob:
+					// queries as little-endian float32 values
+					if i != 3 {
 						return newCheckResultWithFailure(failedAggParametersWrong)
 					}
 				case types.T_any:

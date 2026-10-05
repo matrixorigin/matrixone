@@ -113,4 +113,26 @@ select (select count(*) from got) as got_rows,
 (select count(*) from (select id, rnk from got except select id, rnk from want) d) as mismatches;
 ➤ got_rows[-5,64,0]  ¦  mismatches[-5,64,0]  𝄀
 20  ¦  0
+set gpu_mode = 0;
+create table bq (id int, v vecf4(4), w vecf32(4));
+insert into bq values (1, '[1,0,0,0]', '[1,0,0,0]'), (2, '[0,1,0,0]', '[0,1,0,0]'), (3, '[2,2,0,0]', '[2,2,0,0]');
+select vector_matmul(2, id, w, '[[1,0,-0.5,2],[0,3,0,-1]]') from bq;
+➤ vector_matmul(2, id, w, [[1,0,-0.5,2],[0,3,0,-1]])[-1,2147483647,0]  𝄀
+[[["3", 2], ["1", 1]], [["3", 6], ["2", 3]]]
+select vector_matmul(2, id, w, cast(unhex('0000803F00000000000000BF00000040000000000000404000000000000080BF') as blob)) from bq;
+➤ vector_matmul(2, id, w, cast(unhex(0000803F00000000000000BF00000040000000000000404000000000000080BF) as blob))[-1,2147483647,0]  𝄀
+[[["3", 2], ["1", 1]], [["3", 6], ["2", 3]]]
+select vector_matmul(2, id, v, cast(unhex('0000803F00000000000000BF00000040000000000000404000000000000080BF') as blob)) from bq;
+➤ vector_matmul(2, id, v, cast(unhex(0000803F00000000000000BF00000040000000000000404000000000000080BF) as blob))[-1,2147483647,0]  𝄀
+[[["3", 2], ["1", 1]], [["3", 6], ["2", 3]]]
+set @bq = cast(unhex('0000803F00000000000000BF00000040000000000000404000000000000080BF') as blob);
+prepare pbq from 'select vector_matmul(2, id, w, cast(? as blob)) from bq';
+execute pbq using @bq;
+➤ vector_matmul(2, bq.id, bq.w, cast(? as blob))[-1,2147483647,0]  𝄀
+[[["3", 2], ["1", 1]], [["3", 6], ["2", 3]]]
+deallocate prepare pbq;
+select vector_matmul(2, id, w, cast(unhex('0000803F000000000000') as blob)) from bq;
+invalid input: vector_matmul: binary queries are 10 bytes, want a non-zero multiple of 16 (float32 x dimension 4)
+select vector_matmul(2, id, w, 'x', cast(unhex('00') as blob)) from bq;
+invalid argument aggregate function vector_matmul, bad value [BIGINT INT VECF32 VARCHAR BLOB]
 drop database vector_matmul_db;

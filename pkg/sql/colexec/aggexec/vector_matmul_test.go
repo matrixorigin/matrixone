@@ -357,15 +357,18 @@ func TestVectorMatmulConfigErrors(t *testing.T) {
 		require.NoError(t, err, options)
 	}
 	badFlag := EncodeVectorMatmulConfig(1, `[[1]]`, "", true)
-	badFlag[len(badFlag)-1] = 2
+	badFlag[len(badFlag)-1] = 4
 	for _, bad := range [][]byte{{1, 2}, EncodeVectorMatmulConfig(1, `[[1]]`, "", false)[:12], append(EncodeVectorMatmulConfig(1, `[[1]]`, "", false), 0), badFlag} {
-		_, _, _, _, err := decodeVectorMatmulConfig(bad)
+		_, _, _, _, _, err := decodeVectorMatmulConfig(bad)
 		require.Error(t, err)
 	}
 	for _, gpu := range []bool{false, true} {
-		topk, queries, options, got, err := decodeVectorMatmulConfig(EncodeVectorMatmulConfig(7, `[[1]]`, `{}`, gpu))
+		topk, queries, options, got, _, err := decodeVectorMatmulConfig(EncodeVectorMatmulConfig(7, `[[1]]`, `{}`, gpu))
 		require.NoError(t, err)
 		require.Equal(t, []any{int64(7), `[[1]]`, `{}`, gpu}, []any{topk, queries, options, got})
+		_, queries, _, got, binaryQueries, err := decodeVectorMatmulConfig(EncodeVectorMatmulBinaryConfig(7, []byte{1, 2, 3, 4}, ``, gpu))
+		require.NoError(t, err)
+		require.Equal(t, []any{"\x01\x02\x03\x04", gpu, true}, []any{queries, got, binaryQueries})
 	}
 
 	mp := mpool.MustNewZero()
@@ -914,4 +917,64 @@ func TestVectorMatmulGPUMemoryAdmission(t *testing.T) {
 	require.Equal(t, 3, created)
 	require.Nil(t, exec.engine)
 	release(exec, account, vecs, mp)
+}
+
+// TestVectorMatmulBinaryQueries checks that queries given as a BLOB of little-endian float32
+// values configure the same queries as the JSON array, and its malformed forms.
+func TestVectorMatmulBinaryQueries(t *testing.T) {
+	queries := [][]float32{{1, 0, -0.5, 2}, {0, 3, 0, -1}}
+	blob := func(qs [][]float32) []byte {
+		var b []byte
+		for _, q := range qs {
+			b = append(b, types.ArrayToBytes(q)...)
+		}
+		return b
+	}
+	for _, vt := range []types.Type{
+		types.New(types.T_array_float8, vmDim, 0), types.New(types.T_array_float4, vmDim, 0),
+		types.New(types.T_array_float32, vmDim, 0), types.New(types.T_array_bf16, vmDim, 0),
+	} {
+		text, err := parseVectorMatmulConfig(vmConfig(3, queries), vt)
+		require.NoError(t, err, vt.String())
+		bin, err := parseVectorMatmulConfig(EncodeVectorMatmulBinaryConfig(3, blob(queries), "", false), vt)
+		require.NoError(t, err, vt.String())
+		require.Equal(t, text.nq, bin.nq, vt.String())
+		require.Equal(t, text.queryCells, bin.queryCells, vt.String())
+		require.Equal(t, text.cellBytes, bin.cellBytes, vt.String())
+	}
+
+	// the same rows give the same result
+	mp := mpool.MustNewZero()
+	rows := [][]float32{{1, 0, 0, 0}, {0, 1, 0, 0}, {2, 2, 0, 0}}
+	results := make([][]string, 2)
+	for i, cfg := range [][]byte{vmConfig(2, queries), EncodeVectorMatmulBinaryConfig(2, blob(queries), "", false)} {
+		exec := vmExec(t, mp, types.T_int64.ToType(), 1, cfg)
+		vecs := vmVectors(t, mp, []int64{1, 2, 3}, rows)
+		require.NoError(t, exec.BulkFill(0, vecs))
+		results[i] = vmFlush(t, mp, exec)
+		exec.Free()
+		vmFree(mp, vecs)
+	}
+	require.Equal(t, results[0], results[1])
+	require.Zero(t, mp.CurrNB())
+
+	vt := vmVecType()
+	for name, tc := range map[string]struct {
+		b    []byte
+		want string
+	}{
+		"empty":      {nil, "non-zero multiple"},
+		"misaligned": {blob(queries)[:13], "non-zero multiple"},
+		"other dim":  {blob([][]float32{{1, 2, 3}}), "non-zero multiple"},
+		"non-finite": {blob([][]float32{{1, float32(math.NaN()), 0, 0}}), "not finite"},
+		"infinite":   {blob([][]float32{{1, 0, float32(math.Inf(-1)), 0}}), "not finite"},
+		"too many":   {make([]byte, 4*vmDim*(vectorMatmulMaxQueries+1)), "query count"},
+	} {
+		_, err := parseVectorMatmulConfig(EncodeVectorMatmulBinaryConfig(3, tc.b, "", false), vt)
+		require.ErrorContains(t, err, tc.want, name)
+	}
+	bad := EncodeVectorMatmulConfig(3, `[[1,0,0,0]]`, "", false)
+	bad[len(bad)-1] = 4
+	_, err := parseVectorMatmulConfig(bad, vt)
+	require.ErrorContains(t, err, "malformed configuration")
 }

@@ -87,4 +87,19 @@ with m as (select vector_matmul(20, id, b, '[[-2,1,0,3]]') r from big),
 select (select count(*) from got) as got_rows,
        (select count(*) from (select id, rnk from got except select id, rnk from want) d) as mismatches;
 
+-- queries as a BLOB of little-endian float32 values give the JSON result; the CPU
+-- kernel (the cuBLASLt result is in gpu_cases/vector/vector_matmul_gpu.sql)
+set gpu_mode = 0;
+create table bq (id int, v vecf4(4), w vecf32(4));
+insert into bq values (1, '[1,0,0,0]', '[1,0,0,0]'), (2, '[0,1,0,0]', '[0,1,0,0]'), (3, '[2,2,0,0]', '[2,2,0,0]');
+select vector_matmul(2, id, w, '[[1,0,-0.5,2],[0,3,0,-1]]') from bq;
+select vector_matmul(2, id, w, cast(unhex('0000803F00000000000000BF00000040000000000000404000000000000080BF') as blob)) from bq;
+select vector_matmul(2, id, v, cast(unhex('0000803F00000000000000BF00000040000000000000404000000000000080BF') as blob)) from bq;
+set @bq = cast(unhex('0000803F00000000000000BF00000040000000000000404000000000000080BF') as blob);
+prepare pbq from 'select vector_matmul(2, id, w, cast(? as blob)) from bq';
+execute pbq using @bq;
+deallocate prepare pbq;
+select vector_matmul(2, id, w, cast(unhex('0000803F000000000000') as blob)) from bq;
+select vector_matmul(2, id, w, 'x', cast(unhex('00') as blob)) from bq;
+
 drop database vector_matmul_db;

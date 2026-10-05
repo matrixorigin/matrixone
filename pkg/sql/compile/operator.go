@@ -2071,7 +2071,7 @@ func constructAggregateConfigWithError(
 		if err != nil {
 			return nil, nil, err
 		}
-		queries, err := evaluateAggregateConfigString(proc, args[3])
+		queries, queriesOid, err := evaluateAggregateConfigValue(proc, args[3])
 		if err != nil {
 			return nil, nil, err
 		}
@@ -2082,6 +2082,10 @@ func constructAggregateConfigWithError(
 			}
 		}
 		gpu := gpumode.EffectiveGpuMode(proc.GetResolveVariableFunc())
+		if queriesOid == types.T_blob {
+			// a BLOB holds the queries as little-endian float32 values
+			return []*plan.Expr{args[1], args[2]}, aggexec.EncodeVectorMatmulBinaryConfig(topk, []byte(queries), options, gpu), nil
+		}
 		return []*plan.Expr{args[1], args[2]}, aggexec.EncodeVectorMatmulConfig(topk, queries, options, gpu), nil
 
 	case plan2.NamePercentileCont, plan2.NamePercentileDisc:
@@ -2215,18 +2219,26 @@ func normalizeAggregateConfigExpr(proc *process.Process, expr *plan.Expr) (*plan
 }
 
 func evaluateAggregateConfigString(proc *process.Process, expr *plan.Expr) (string, error) {
+	s, _, err := evaluateAggregateConfigValue(proc, expr)
+	return s, err
+}
+
+// evaluateAggregateConfigValue evaluates a string configuration argument and returns its
+// value with the evaluated type; NULL is the empty string.
+func evaluateAggregateConfigValue(proc *process.Process, expr *plan.Expr) (string, types.T, error) {
 	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, expr)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	defer free()
+	oid := vec.GetType().Oid
 	if vec.Length() == 0 || vec.IsConstNull() || vec.IsNull(0) {
-		return "", nil
+		return "", oid, nil
 	}
-	if vec.GetType().Oid == types.T_json {
-		return types.DecodeJson(vec.GetBytesAt(0)).String(), nil
+	if oid == types.T_json {
+		return types.DecodeJson(vec.GetBytesAt(0)).String(), oid, nil
 	}
-	return vec.GetStringAt(0), nil
+	return vec.GetStringAt(0), oid, nil
 }
 
 // evaluateAggregateConfigInt64 evaluates an int64 configuration argument; NULL is an error.

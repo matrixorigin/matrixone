@@ -84,22 +84,42 @@ func VectorMatmulReturnType(_ []types.Type) types.Type {
 	return types.T_json.ToType()
 }
 
-// EncodeVectorMatmulConfig packs topk, the queries and options JSON strings and whether
-// the session allows the GPU (gpu_mode).
+// EncodeVectorMatmulConfig packs topk, the queries as a JSON array, the options JSON
+// string and whether the session allows the GPU (gpu_mode).
 func EncodeVectorMatmulConfig(topk int64, queries, options string, gpu bool) []byte {
+	return encodeVectorMatmulConfig(topk, queries, options, gpu, false)
+}
+
+// EncodeVectorMatmulBinaryConfig packs topk, the queries as little-endian float32 values
+// back to back (a BLOB argument), the options JSON string and whether the session allows
+// the GPU (gpu_mode).
+func EncodeVectorMatmulBinaryConfig(topk int64, queries []byte, options string, gpu bool) []byte {
+	return encodeVectorMatmulConfig(topk, string(queries), options, gpu, true)
+}
+
+const (
+	vectorMatmulFlagGPU byte = 1 << iota
+	vectorMatmulFlagBinaryQueries
+)
+
+func encodeVectorMatmulConfig(topk int64, queries, options string, gpu, binaryQueries bool) []byte {
 	out := make([]byte, 0, 17+len(queries)+len(options))
 	out = binary.LittleEndian.AppendUint64(out, uint64(topk))
 	out = binary.LittleEndian.AppendUint32(out, uint32(len(queries)))
 	out = append(out, queries...)
 	out = binary.LittleEndian.AppendUint32(out, uint32(len(options)))
 	out = append(out, options...)
+	var flags byte
 	if gpu {
-		return append(out, 1)
+		flags |= vectorMatmulFlagGPU
 	}
-	return append(out, 0)
+	if binaryQueries {
+		flags |= vectorMatmulFlagBinaryQueries
+	}
+	return append(out, flags)
 }
 
-func decodeVectorMatmulConfig(b []byte) (topk int64, queries, options string, gpu bool, err error) {
+func decodeVectorMatmulConfig(b []byte) (topk int64, queries, options string, gpu, binaryQueries bool, err error) {
 	read := func() (string, bool) {
 		if len(b) < 4 {
 			return "", false
@@ -112,18 +132,19 @@ func decodeVectorMatmulConfig(b []byte) (topk int64, queries, options string, gp
 		b = b[4+n:]
 		return s, true
 	}
+	malformed := moerr.NewInternalErrorNoCtx("vector_matmul: malformed configuration")
 	if len(b) < 8 {
-		return 0, "", "", false, moerr.NewInternalErrorNoCtx("vector_matmul: malformed configuration")
+		return 0, "", "", false, false, malformed
 	}
 	topk = int64(binary.LittleEndian.Uint64(b))
 	b = b[8:]
 	var ok1, ok2 bool
 	queries, ok1 = read()
 	options, ok2 = read()
-	if !ok1 || !ok2 || len(b) != 1 || b[0] > 1 {
-		return 0, "", "", false, moerr.NewInternalErrorNoCtx("vector_matmul: malformed configuration")
+	if !ok1 || !ok2 || len(b) != 1 || b[0]&^(vectorMatmulFlagGPU|vectorMatmulFlagBinaryQueries) != 0 {
+		return 0, "", "", false, false, malformed
 	}
-	return topk, queries, options, b[0] == 1, nil
+	return topk, queries, options, b[0]&vectorMatmulFlagGPU != 0, b[0]&vectorMatmulFlagBinaryQueries != 0, nil
 }
 
 // vectorMatmulConfig is the parsed configuration shared by all groups and, through
@@ -195,7 +216,7 @@ func acquireVectorMatmulConfig(raw []byte, vecType types.Type) (cfg *vectorMatmu
 
 func parseVectorMatmulConfig(raw []byte, vecType types.Type) (*vectorMatmulConfig, error) {
 	// the options argument is carried in the configuration and not interpreted
-	topk, queriesText, _, gpu, err := decodeVectorMatmulConfig(raw)
+	topk, queriesText, _, gpu, binaryQueries, err := decodeVectorMatmulConfig(raw)
 	if err != nil {
 		return nil, err
 	}
@@ -203,7 +224,11 @@ func parseVectorMatmulConfig(raw []byte, vecType types.Type) (*vectorMatmulConfi
 		return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: topk %d out of range [1, %d]", topk, vectorMatmulMaxTopK)
 	}
 	var queries [][]float32
-	if err := json.Unmarshal([]byte(queriesText), &queries); err != nil {
+	if binaryQueries {
+		if queries, err = decodeVectorMatmulBinaryQueries(queriesText, int(vecType.Width)); err != nil {
+			return nil, err
+		}
+	} else if err := json.Unmarshal([]byte(queriesText), &queries); err != nil {
 		return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: queries must be a JSON array of vectors: %v", err)
 	}
 	if len(queries) == 0 || len(queries) > vectorMatmulMaxQueries {
@@ -243,6 +268,33 @@ func parseVectorMatmulConfig(raw []byte, vecType types.Type) (*vectorMatmulConfi
 		return nil, err
 	}
 	return cfg, nil
+}
+
+// decodeVectorMatmulBinaryQueries reads queries packed as little-endian float32 values,
+// dim per query, back to back; every value must be finite.
+func decodeVectorMatmulBinaryQueries(b string, dim int) ([][]float32, error) {
+	if dim <= 0 || len(b) == 0 || len(b)%(4*dim) != 0 {
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"vector_matmul: binary queries are %d bytes, want a non-zero multiple of %d (float32 x dimension %d)", len(b), 4*dim, dim)
+	}
+	nq := len(b) / (4 * dim)
+	if nq > vectorMatmulMaxQueries {
+		return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: query count %d out of range [1, %d]", nq, vectorMatmulMaxQueries)
+	}
+	values := make([]float32, nq*dim)
+	for i := range values {
+		j := 4 * i
+		v := math.Float32frombits(uint32(b[j]) | uint32(b[j+1])<<8 | uint32(b[j+2])<<16 | uint32(b[j+3])<<24)
+		if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
+			return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: query %d element %d is not finite", i/dim, i%dim)
+		}
+		values[i] = v
+	}
+	queries := make([][]float32, nq)
+	for q := range queries {
+		queries[q] = values[q*dim : (q+1)*dim : (q+1)*dim]
+	}
+	return queries, nil
 }
 
 // setBlockScaled quantizes the queries to the vecf8/vecf4 format and scores cells with the

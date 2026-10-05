@@ -367,7 +367,7 @@ vector_matmul(topk, src_id, src_vec, queries [, options]) → JSON
 | `topk` | constant integer | the hits kept per query, 1–16384 |
 | `src_id` | column | the row key: an integer, `char`/`varchar`/`text` or `uuid` column |
 | `src_vec` | column | `vecf8(N)`, `vecf4(N)`, `vecf32(N)`, `vecf16(N)`, `vecbf16(N)`, `vecint8(N)` or `vecuint8(N)`; `vecf64` is rejected |
-| `queries` | constant string or JSON | array of query vectors `[[…], …]`, each of length `N`; converted once to the column's type (quantized for `vecf8`/`vecf4`); for `vecint8`/`vecuint8` every value is an integer in the type's range, otherwise an error |
+| `queries` | constant string or JSON, or `BLOB` | array of query vectors `[[…], …]`, each of length `N`; or a `BLOB` of little-endian float32 values, `N` per query back to back (`CAST(? AS BLOB)` for a client's bytes), whose length must be a non-zero multiple of `4·N` and whose values must be finite. Converted once to the column's type (quantized for `vecf8`/`vecf4`); for `vecint8`/`vecuint8` every value is an integer in the type's range, otherwise an error |
 | `options` | optional constant string | accepted and not interpreted; dispatch follows the session's `gpu_mode` |
 
 An aggregate: one result per group (one row without `GROUP BY`), of MO's `JSON` type.
