@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -91,7 +92,7 @@ func transferTombstoneObjects(
 
 	return txn.forEachTableHasDeletesLocked(
 		tables, 1,
-		func(tbl *txnTable, writeName string) error {
+		func(tbl *txnTable, writeName string) (retErr error) {
 			if fs == nil {
 				if fs, err = colexec.GetSharedFSFromProc(txn.proc); err != nil {
 					return err
@@ -106,7 +107,10 @@ func transferTombstoneObjects(
 				return nil
 			}
 
-			defer flow.Close()
+			registered := false
+			defer func() {
+				retErr = txn.closeTransferFlowWithError(ctx, flow, !registered, retErr)
+			}()
 
 			if err = flow.Process(ctx); err != nil {
 				return err
@@ -116,6 +120,18 @@ func transferTombstoneObjects(
 			if len(tail) > 0 {
 				logutil.Fatal("tombstone sinker tail size is not zero",
 					zap.Int("tail", len(tail)))
+			}
+			if len(slist) > 0 {
+				names := make([]string, 0, len(slist))
+				for i := range slist {
+					names = append(names, slist[i].ObjectName().String())
+				}
+				owner, ownerErr := colexec.NewUnpublishedS3ObjectOwnerForService(txn.engine.service, flow.fs, names...)
+				if ownerErr != nil {
+					return ownerErr
+				}
+				txn.RetainUnpublishedS3ObjectOwner(owner)
+				flow.ownerTransferred = true
 			}
 
 			bat := colexec.AllocCNS3ResultBat(true)
@@ -152,6 +168,7 @@ func transferTombstoneObjects(
 					return err
 				}
 			}
+			registered = true
 
 			logs = append(logs,
 				zap.String("txn-id", txn.op.Txn().DebugString()),
@@ -168,6 +185,23 @@ func transferTombstoneObjects(
 
 			return nil
 		})
+}
+
+func (txn *Transaction) closeTransferFlowWithError(
+	ctx context.Context,
+	flow *TransferFlow,
+	failed bool,
+	originalErr error,
+) error {
+	cleanupErr := txn.closeTransferFlow(ctx, flow, failed)
+	if cleanupErr == nil {
+		return originalErr
+	}
+	if originalErr != nil {
+		logutil.Warn("tombstone transfer cleanup retained by transaction", zap.Error(cleanupErr))
+		return originalErr
+	}
+	return errors.Join(originalErr, cleanupErr)
 }
 
 func transferTombstones(

@@ -22,10 +22,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 func updateCtxKey(ctx *MultiUpdateCtx) string {
@@ -209,6 +212,9 @@ func NewArgument() *MultiUpdate {
 
 func (update *MultiUpdate) Release() {
 	if update != nil {
+		if update.ctr.s3Writer != nil {
+			return
+		}
 		reuse.Free[MultiUpdate](update, nil)
 	}
 }
@@ -237,7 +243,9 @@ func (update *MultiUpdate) Reset(proc *process.Process, pipelineFailed bool, err
 		}
 	}
 	if update.ctr.s3Writer != nil {
-		update.ctr.s3Writer.reset(proc)
+		if resetErr := update.ctr.s3Writer.reset(proc, pipelineFailed); resetErr != nil {
+			update.retainPendingS3Writer(proc)
+		}
 	}
 	update.ctr.s3AffectedRows = 0
 	update.freeSeenTargetRows()
@@ -261,13 +269,39 @@ func (update *MultiUpdate) Free(proc *process.Process, pipelineFailed bool, err 
 	update.ctr.deleteBuf = nil
 
 	if update.ctr.s3Writer != nil {
-		update.ctr.s3Writer.free(proc)
-		update.ctr.s3Writer = nil
+		if freeErr := update.ctr.s3Writer.free(proc, pipelineFailed); freeErr != nil {
+			logutil.Warn("failed to clean multi-update S3 writer delegate", zap.Error(freeErr))
+			update.retainPendingS3Writer(proc)
+		} else {
+			update.ctr.s3Writer = nil
+		}
 	}
 	update.freeSeenTargetRows()
 
 	update.ctr.updateCtxInfos = nil
 	update.ctr.sources = nil
+}
+
+func (update *MultiUpdate) retainPendingS3Writer(proc *process.Process) bool {
+	writer := update.ctr.s3Writer
+	if writer == nil {
+		return false
+	}
+	task := writer.retryTask()
+	if task.empty() {
+		writer.releaseBuffers(proc.Mp())
+		update.ctr.s3Writer = nil
+		return true
+	}
+	if colexec.RetainUnpublishedS3Cleanup(proc, task.cleanup) {
+		writer.releaseBuffers(proc.Mp())
+		writer.syncedObjectOwners = nil
+		writer.failedWriters = nil
+		writer.insertSinkers = nil
+		update.ctr.s3Writer = nil
+		return true
+	}
+	return false
 }
 
 func (update *MultiUpdate) freeSeenTargetRows() {

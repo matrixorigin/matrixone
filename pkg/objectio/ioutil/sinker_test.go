@@ -206,6 +206,43 @@ type persistThenErrorFS struct {
 	persisted string
 }
 
+type failSecondUnpublishedDeleteBatchFS struct {
+	fileservice.FileService
+	batchSizes []int
+}
+
+func (fs *failSecondUnpublishedDeleteBatchFS) Delete(_ context.Context, names ...string) error {
+	fs.batchSizes = append(fs.batchSizes, len(names))
+	if len(fs.batchSizes) == 2 {
+		return errors.New("second Delete batch failed")
+	}
+	return nil
+}
+
+func TestDeleteUnpublishedObjectsReportsOnlyConfirmedBatches(t *testing.T) {
+	names := make([]string, 1001)
+	for i := range names {
+		names[i] = fmt.Sprintf("unpublished-%d", i)
+	}
+	fs := &failSecondUnpublishedDeleteBatchFS{}
+	completed, remaining, err := DeleteUnpublishedObjectsWithProgress(
+		context.Background(), fs, append(names, "", names[0])...)
+	require.ErrorContains(t, err, "second Delete batch failed")
+	require.Len(t, completed, 1000)
+	require.Len(t, remaining, 1)
+	require.Equal(t, []int{1000, 1}, fs.batchSizes)
+	retried, stillPending, err := DeleteUnpublishedObjectsWithProgress(context.Background(), fs, remaining...)
+	require.NoError(t, err)
+	require.Len(t, retried, 1)
+	require.Empty(t, stillPending)
+	require.Equal(t, []int{1000, 1, 1}, fs.batchSizes)
+
+	legacyFS := &failSecondUnpublishedDeleteBatchFS{}
+	count, err := DeleteUnpublishedObjects(context.Background(), legacyFS, names...)
+	require.ErrorContains(t, err, "second Delete batch failed")
+	require.Equal(t, len(names), count, "the existing cleanup count keeps its full-snapshot contract")
+}
+
 func (fs *persistThenErrorFS) Write(ctx context.Context, vector fileservice.IOVector) error {
 	if err := fs.FileService.Write(ctx, vector); err != nil {
 		return err
@@ -236,4 +273,32 @@ func TestSinkerDeletePersistedAfterAmbiguousSyncFailure(t *testing.T) {
 	require.Equal(t, []string{fs.persisted}, files)
 	_, err = baseFS.StatFile(ctx, fs.persisted)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+}
+
+func TestSinkerAdmissionRetainsAmbiguousSyncUntilDelete(t *testing.T) {
+	ctx := context.Background()
+	proc := testutil.NewProc(t)
+	baseFS, err := fileservice.NewMemoryFS("shared", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	fs := &persistThenErrorFS{FileService: baseFS}
+	attrs, typs, seqnums := mockSchema(3, 2)
+	reserved := make(map[string]struct{})
+	sinker := NewSinker(2, attrs, typs, NewFSinkerImplFactory(seqnums, 2, true, false, 0), proc.Mp(), fs,
+		WithObjectSyncAdmission(func(name string) error {
+			if len(reserved) == 1 {
+				return errors.New("cleanup capacity exhausted")
+			}
+			reserved[name] = struct{}{}
+			return nil
+		}, func(name string) { delete(reserved, name) }),
+	)
+	t.Cleanup(func() { require.NoError(t, sinker.Close()) })
+	bat := containers.MockBatch(typs, 1000, 2, nil)
+	require.NoError(t, sinker.Write(ctx, containers.ToCNBatch(bat)))
+	require.ErrorContains(t, sinker.Sync(ctx), "injected post-persist sync failure")
+	require.Contains(t, reserved, fs.persisted, "reservation must precede persistence")
+	files, err := sinker.DeletePersisted(ctx)
+	require.NoError(t, err)
+	require.Equal(t, []string{fs.persisted}, files)
+	require.Empty(t, reserved, "successful deletion releases the ticket")
 }

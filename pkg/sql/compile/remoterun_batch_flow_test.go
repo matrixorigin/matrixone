@@ -40,6 +40,47 @@ func TestPipelineBatchFlowNegotiation(t *testing.T) {
 	require.Zero(t, bytes)
 }
 
+func TestPipelineBatchFlowOwnershipReceipts(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		seqs   []uint64
+		marked []bool
+		want   uint64
+	}{
+		{"marked success", []uint64{1, 2}, []bool{true, true}, 2},
+		{"old coordinator", []uint64{1, 2}, []bool{false, false}, 0},
+		{"mixed receipts", []uint64{1, 2}, []bool{false, true}, 0},
+		{"cumulative gap", []uint64{2}, []bool{true}, 0},
+		{"duplicate cannot upgrade", []uint64{1, 1, 2}, []bool{false, true, true}, 0},
+		{"stale cannot repair gap", []uint64{2, 1}, []bool{true, true}, 0},
+		{"duplicate marked", []uint64{1, 1, 2}, []bool{true, true, true}, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			flow := newPipelineBatchFlow(8, 1024)
+			for i := 0; i < 2; i++ {
+				_, err := flow.reserve(context.Background(), context.Background(), 10)
+				require.NoError(t, err)
+			}
+			for i, seq := range tc.seqs {
+				require.NoError(t, flow.acknowledgeOwnership(seq, tc.marked[i]))
+			}
+			require.Equal(t, tc.want, flow.ownershipAckedSeq)
+			require.Equal(t, uint64(2), flow.ackedSeq)
+			require.Empty(t, flow.pending, "credit ACKs remain cumulative")
+			require.Zero(t, flow.bytes)
+		})
+	}
+	flow := newPipelineBatchFlow(8, 1024)
+	_, err := flow.reserve(context.Background(), context.Background(), 10)
+	require.NoError(t, err)
+	require.NoError(t, flow.acknowledgeOwnership(0, true))
+	require.Error(t, flow.acknowledgeOwnership(2, true))
+	require.Zero(t, flow.ownershipAckedSeq)
+	flow.abort(context.Canceled)
+	require.NoError(t, flow.acknowledgeOwnership(1, true))
+	require.Zero(t, flow.ownershipAckedSeq)
+}
+
 func TestPipelineBatchFlowBoundsAndReleasesCredits(t *testing.T) {
 	flow := newPipelineBatchFlow(1, 10)
 	seq, err := flow.reserve(context.Background(), context.Background(), 8)
@@ -260,6 +301,20 @@ func TestHandlePipelineBatchAck(t *testing.T) {
 		require.Zero(t, session.closeCalls)
 	})
 
+	t.Run("marked ack records ownership receipt", func(t *testing.T) {
+		session := &lifecycleTestSession{ctx: context.Background()}
+		lifecycle, err := registerPipelineStreamLifecycle(session, 305, newPipelineBatchFlow(1, 1024))
+		require.NoError(t, err)
+		t.Cleanup(lifecycle.remove)
+		seq, err := lifecycle.batchFlow.reserve(context.Background(), context.Background(), 10)
+		require.NoError(t, err)
+		require.NoError(t, handlePipelineBatchAck(&pipeline.Message{
+			Id: 305, BatchAckSequence: seq, BatchAckS3OwnershipRetained: true,
+		}, session))
+		require.Equal(t, seq, lifecycle.batchFlow.ownershipAckedSeq)
+		require.Empty(t, lifecycle.batchFlow.pending)
+	})
+
 	t.Run("ack without negotiation poisons the session", func(t *testing.T) {
 		session := &lifecycleTestSession{ctx: context.Background()}
 		lifecycle, err := registerPipelineStreamLifecycle(session, 302, nil)
@@ -286,6 +341,7 @@ func TestHandlePipelineBatchAck(t *testing.T) {
 		require.NoError(t, lifecycle.batchFlow.waitUntilDrained(
 			context.Background(), context.Background(), nil))
 		require.Zero(t, session.closeCalls)
+		require.Zero(t, lifecycle.batchFlow.ownershipAckedSeq, "legacy ACK only releases credit")
 	})
 
 	t.Run("ack ahead of sent data poisons the session", func(t *testing.T) {

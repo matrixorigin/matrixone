@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
+	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
@@ -105,6 +106,47 @@ func WithChunkedColumnPolicy(policy objectio.ChunkedColumnPolicy) SinkerOption {
 	return func(sinker *Sinker) {
 		sinker.config.chunkedColumnPolicy = policy
 	}
+}
+
+// WithObjectSyncAdmission reserves cleanup capacity before each file Sync.
+// Release runs only after this sinker successfully deletes an object.
+func WithObjectSyncAdmission(reserve func(string) error, release func(string)) SinkerOption {
+	return func(sinker *Sinker) {
+		sinker.config.reserveObject = reserve
+		sinker.config.releaseObject = release
+	}
+}
+
+type admittedFileSinker struct {
+	FileSinker
+	reserve func(string) error
+}
+
+// objectSyncAdmissionError means no object write began. The ordinary Sync
+// error path must retain the name because persistence may be ambiguous.
+type objectSyncAdmissionError struct{ cause error }
+
+func (e *objectSyncAdmissionError) Error() string { return e.cause.Error() }
+func (e *objectSyncAdmissionError) Unwrap() error { return e.cause }
+
+func objectSyncWasNotStarted(err error) bool {
+	var admissionErr *objectSyncAdmissionError
+	return errors.As(err, &admissionErr)
+}
+
+func (s *admittedFileSinker) ActiveObjectName() string {
+	return activeFileSinkerObjectName(s.FileSinker)
+}
+
+func (s *admittedFileSinker) Sync(ctx context.Context) (*objectio.ObjectStats, error) {
+	name := s.ActiveObjectName()
+	if name == "" {
+		return nil, &objectSyncAdmissionError{moerr.NewInvalidStateNoCtx("file sinker has no object name before Sync")}
+	}
+	if err := s.reserve(name); err != nil {
+		return nil, &objectSyncAdmissionError{err}
+	}
+	return s.FileSinker.Sync(ctx)
 }
 
 type FileSinker interface {
@@ -353,6 +395,12 @@ func NewSinker(
 			return fileSinker
 		}
 	}
+	if reserve := sinker.config.reserveObject; reserve != nil {
+		factory := sinker.fSinker.factory
+		sinker.fSinker.factory = func(mp *mpool.MPool, fs fileservice.FileService) FileSinker {
+			return &admittedFileSinker{FileSinker: factory(mp, fs), reserve: reserve}
+		}
+	}
 
 	sinker.fillDefaults()
 	return sinker
@@ -406,6 +454,8 @@ type Sinker struct {
 		tailSizeCap         int
 		offHeap             bool
 		chunkedColumnPolicy objectio.ChunkedColumnPolicy
+		reserveObject       func(string) error
+		releaseObject       func(string)
 	}
 	fSinker struct {
 		executor FileSinker
@@ -493,8 +543,33 @@ func DeleteUnpublishedObjects(
 	fs fileservice.FileService,
 	files ...string,
 ) (int, error) {
+	unique, _, err := deleteUnpublishedObjectBatches(ctx, fs, files)
+	return len(unique), err
+}
+
+// DeleteUnpublishedObjectsWithProgress reports only names in fully confirmed
+// Delete batches. A failed batch can have partial effects, so it and every
+// unattempted batch remain owned. The remaining slice does not retain the
+// backing array of completed names after the caller stores it for retry.
+func DeleteUnpublishedObjectsWithProgress(
+	ctx context.Context,
+	fs fileservice.FileService,
+	files ...string,
+) (completed, remaining []string, err error) {
+	unique, completedCount, err := deleteUnpublishedObjectBatches(ctx, fs, files)
+	if err != nil {
+		return unique[:completedCount], append([]string(nil), unique[completedCount:]...), err
+	}
+	return unique, nil, nil
+}
+
+func deleteUnpublishedObjectBatches(
+	ctx context.Context,
+	fs fileservice.FileService,
+	files []string,
+) (unique []string, completed int, err error) {
 	seen := make(map[string]struct{}, len(files))
-	unique := make([]string, 0, len(files))
+	unique = make([]string, 0, len(files))
 	for _, file := range files {
 		if file == "" {
 			continue
@@ -513,14 +588,15 @@ func DeleteUnpublishedObjects(
 		err := fs.Delete(deleteCtx, unique[start:end]...)
 		cancel()
 		if err != nil && !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-			return len(unique), errors.Join(
+			metricv2.UnpublishedS3DeleteFailuresCounter.Inc()
+			return unique, start, errors.Join(
 				moerr.NewInternalErrorf(
 					ctx, "delete unpublished objects [%d:%d]", start, end),
 				err,
 			)
 		}
 	}
-	return len(unique), nil
+	return unique, len(unique), nil
 }
 
 // DeletePersisted deletes every object that this sinker has persisted, or may
@@ -556,6 +632,11 @@ func (sinker *Sinker) DeletePersisted(ctx context.Context) ([]string, error) {
 	_, err := DeleteUnpublishedObjects(ctx, sinker.fs, files...)
 	if err != nil {
 		return files, err
+	}
+	if sinker.config.releaseObject != nil {
+		for _, name := range files {
+			sinker.config.releaseObject(name)
+		}
 	}
 
 	sinker.staged.persisted = sinker.staged.persisted[:0]
@@ -795,7 +876,7 @@ func (sinker *Sinker) syncFileSinker(ctx context.Context, fSinker FileSinker) er
 	stats, err := fSinker.Sync(ctx)
 	atomic.AddInt64(&sinker.timing.syncNs, int64(time.Since(syncStart)))
 	if err != nil {
-		if name := activeFileSinkerObjectName(fSinker); name != "" {
+		if name := activeFileSinkerObjectName(fSinker); name != "" && !objectSyncWasNotStarted(err) {
 			sinker.staged.unpublished = append(sinker.staged.unpublished, name)
 		}
 		return err

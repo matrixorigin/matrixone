@@ -16,14 +16,18 @@ package multi_update
 
 import (
 	"bytes"
+	"errors"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/partitionprune"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 type PartitionMultiUpdate struct {
@@ -85,6 +89,10 @@ func (op *PartitionMultiUpdate) OpType() vm.OpType {
 func (op *PartitionMultiUpdate) Prepare(
 	proc *process.Process,
 ) error {
+	if err := op.freePartitionWriters(proc, true); err != nil {
+		return err
+	}
+
 	if op.OpAnalyzer == nil {
 		op.OpAnalyzer = process.NewAnalyzer(op.GetIdx(), op.IsFirst, op.IsLast, "partition_multi_update")
 	} else {
@@ -515,10 +523,16 @@ func (op *PartitionMultiUpdate) Free(
 	err error,
 ) {
 	op.raw.Free(proc, pipelineFailed, err)
-	op.freePartitionWriters(proc)
+	if cleanupErr := op.freePartitionWriters(proc, pipelineFailed); cleanupErr != nil {
+		logutil.Warn("failed to clean partition multi-update writers", zap.Error(cleanupErr))
+		op.retainPendingPartitionWriters(proc)
+	}
 }
 
 func (op *PartitionMultiUpdate) Release() {
+	if len(op.writers) != 0 || len(op.freeWriters) != 0 {
+		return
+	}
 	op.raw.Release()
 }
 
@@ -530,7 +544,10 @@ func (op *PartitionMultiUpdate) Reset(
 	op.raw.MultiUpdateCtx = op.rawContexts
 	op.raw.Reset(proc, pipelineFailed, err)
 	op.raw.resetMultiUpdateCtxs()
-	op.freePartitionWriters(proc)
+	if cleanupErr := op.freePartitionWriters(proc, pipelineFailed); cleanupErr != nil {
+		logutil.Warn("failed to clean partition multi-update writers", zap.Error(cleanupErr))
+		op.retainPendingPartitionWriters(proc)
+	}
 	op.s3AffectedRows = 0
 	for _, target := range op.targets {
 		clear(target.writerIDs)
@@ -538,15 +555,64 @@ func (op *PartitionMultiUpdate) Reset(
 	op.nextWriterID = 0
 }
 
-func (op *PartitionMultiUpdate) freePartitionWriters(proc *process.Process) {
+func (op *PartitionMultiUpdate) freePartitionWriters(proc *process.Process, pipelineFailed bool) error {
+	var cleanupErrs []error
 	for id, writer := range op.writers {
-		_ = writer.free(proc)
-		delete(op.writers, id)
+		if err := writer.free(proc, pipelineFailed); err == nil {
+			delete(op.writers, id)
+		} else {
+			cleanupErrs = append(cleanupErrs, err)
+		}
 	}
+	pending := op.freeWriters[:0]
 	for _, writer := range op.freeWriters {
-		_ = writer.free(proc)
+		if err := writer.free(proc, pipelineFailed); err != nil {
+			pending = append(pending, writer)
+			cleanupErrs = append(cleanupErrs, err)
+		}
 	}
-	op.freeWriters = nil
+	if len(pending) == 0 {
+		op.freeWriters = nil
+	} else {
+		op.freeWriters = pending
+	}
+	return errors.Join(cleanupErrs...)
+}
+
+func (op *PartitionMultiUpdate) retainPendingPartitionWriters(proc *process.Process) {
+	for id, writer := range op.writers {
+		if writer == nil {
+			continue
+		}
+		task := writer.retryTask()
+		if task.empty() || colexec.RetainUnpublishedS3Cleanup(proc, task.cleanup) {
+			writer.releaseBuffers(proc.Mp())
+			writer.syncedObjectOwners = nil
+			writer.failedWriters = nil
+			writer.insertSinkers = nil
+			delete(op.writers, id)
+		}
+	}
+	pending := op.freeWriters[:0]
+	for _, writer := range op.freeWriters {
+		if writer == nil {
+			continue
+		}
+		task := writer.retryTask()
+		if task.empty() || colexec.RetainUnpublishedS3Cleanup(proc, task.cleanup) {
+			writer.releaseBuffers(proc.Mp())
+			writer.syncedObjectOwners = nil
+			writer.failedWriters = nil
+			writer.insertSinkers = nil
+			continue
+		}
+		pending = append(pending, writer)
+	}
+	if len(pending) == 0 {
+		op.freeWriters = nil
+	} else {
+		op.freeWriters = pending
+	}
 }
 
 func (op *PartitionMultiUpdate) GetOperatorBase() *vm.OperatorBase {

@@ -77,6 +77,9 @@ message Message {
   uint64 batch_ack_sequence = 18;
   // Request: minimum required version. Response: actual receiver version.
   int64 protocol_version = 19;
+  // ACK only: the receiving workspace retained cleanup ownership for this
+  // batch's S3 objects. This receipt is not cumulative like batch credits.
+  bool batch_ack_s3_ownership_retained = 20;
 }
 
 message Connector {

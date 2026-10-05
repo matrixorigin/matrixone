@@ -18,6 +18,7 @@ import (
 	"context"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -51,12 +52,31 @@ func TestNewViewBindingProcessOwnsContextAndSessionState(t *testing.T) {
 	parent.GetSessionInfo().SeqCurValues = map[uint64]string{1: "parent"}
 	parent.GetSessionInfo().QueryId = []string{"parent"}
 
-	childCtx := defines.AttachAccountId(parentCtx, 20)
+	BeginPipelineCleanup(parent.Ctx)
+	parentCleanupDeadline, _ := PipelineCleanupDeadline(parent.Ctx)
+	childCtx, cancel := context.WithDeadline(defines.AttachAccountId(parent.Ctx, 20), time.Now().Add(time.Minute))
+	defer cancel()
 	child := parent.NewViewBindingProcess(childCtx)
 	defer child.Free()
 	require.NotSame(t, parent.Base, child.Base)
 	require.Same(t, childCtx, child.GetTopContext())
-	require.Same(t, childCtx, child.Ctx)
+	// The execution context may add private state, but must preserve the caller's
+	// identity, deadline and cancellation while keeping its cleanup budget private.
+	account, err := defines.GetAccountId(child.Ctx)
+	require.NoError(t, err)
+	require.Equal(t, uint32(20), account)
+	deadline, ok := child.Ctx.Deadline()
+	wantDeadline, _ := childCtx.Deadline()
+	require.True(t, ok)
+	require.Equal(t, wantDeadline, deadline)
+	_, started := PipelineCleanupDeadline(child.Ctx)
+	require.False(t, started)
+	BeginPipelineCleanup(child.Ctx)
+	unchanged, _ := PipelineCleanupDeadline(parent.Ctx)
+	require.Equal(t, parentCleanupDeadline, unchanged)
+	cancel()
+	require.ErrorIs(t, child.Ctx.Err(), context.Canceled)
+	require.NoError(t, parent.Ctx.Err())
 	child.ReplaceTopCtx(context.WithValue(childCtx, struct{}{}, "nested"))
 	require.Equal(t, "parent", child.GetSessionInfo().Account)
 	require.Nil(t, child.GetSessionInfo().SeqCurValues)

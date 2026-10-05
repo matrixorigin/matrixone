@@ -15,9 +15,13 @@
 package insert
 
 import (
+	"context"
+	"errors"
+
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -25,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 var _ vm.Operator = new(Insert)
@@ -96,9 +101,18 @@ func NewArgument() *Insert {
 }
 
 func (insert *Insert) Release() {
-	if insert != nil {
-		reuse.Free[Insert](insert, nil)
+	if insert == nil {
+		return
 	}
+	if insert.ctr.s3Writer != nil {
+		return
+	}
+	for _, writer := range insert.ctr.partitionS3Writers {
+		if writer != nil {
+			return
+		}
+	}
+	reuse.Free[Insert](insert, nil)
 }
 
 type InsertCtx struct {
@@ -115,18 +129,12 @@ type InsertCtx struct {
 }
 
 func (insert *Insert) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	//@todo need add Reset method for s3Writer
-	if insert.ctr.s3Writer != nil {
-		insert.ctr.s3Writer.Close()
-		insert.ctr.s3Writer = nil
+	if closeErr := insert.closeS3Writers(proc, pipelineFailed); closeErr != nil {
+		logutil.Warn("failed to clean insert S3 writers", zap.Error(closeErr))
+		// Prepared executions skip Free: rollback must own failed cleanup now.
+		insert.retainPendingS3Writers(proc)
 	}
 	insert.releaseS3MemGrant()
-	if insert.ctr.partitionS3Writers != nil {
-		for _, writer := range insert.ctr.partitionS3Writers {
-			writer.Close()
-		}
-		insert.ctr.partitionS3Writers = nil
-	}
 	// A non-nil extWriter here means the input stream never reached its clean
 	// end (insert_external nils it after a successful Close), i.e. the pipeline
 	// failed or was cancelled: discard the half-written file rather than
@@ -141,22 +149,74 @@ func (insert *Insert) Reset(proc *process.Process, pipelineFailed bool, err erro
 	}
 }
 
+func (insert *Insert) retryPendingS3Writers(proc *process.Process) error {
+	return insert.closeS3Writers(proc, false)
+}
+
+func (insert *Insert) closeS3Writers(proc *process.Process, pipelineFailed bool) error {
+	var cleanupErrs []error
+	if insert.ctr.s3Writer != nil {
+		if closeErr := insert.ctr.s3Writer.CloseWithCleanup(proc.Ctx, pipelineFailed); closeErr != nil {
+			cleanupErrs = append(cleanupErrs, closeErr)
+			logutil.Warn("failed to clean insert S3 writer", zap.Error(closeErr))
+		} else {
+			insert.ctr.s3Writer = nil
+		}
+	}
+	if insert.ctr.partitionS3Writers != nil {
+		pendingCleanup := false
+		for i, writer := range insert.ctr.partitionS3Writers {
+			if writer == nil {
+				continue
+			}
+			if closeErr := writer.CloseWithCleanup(proc.Ctx, pipelineFailed); closeErr != nil {
+				cleanupErrs = append(cleanupErrs, closeErr)
+				pendingCleanup = true
+				logutil.Warn("failed to clean partition insert S3 writer", zap.Error(closeErr))
+			} else {
+				insert.ctr.partitionS3Writers[i] = nil
+			}
+		}
+		if !pendingCleanup {
+			insert.ctr.partitionS3Writers = nil
+		}
+	}
+	return errors.Join(cleanupErrs...)
+}
+
+func (insert *Insert) retainPendingS3Writers(proc *process.Process) {
+	retain := func(writer *colexec.CNS3Writer) bool {
+		return colexec.RetainUnpublishedS3Cleanup(proc, func(ctx context.Context) error {
+			return writer.CloseWithCleanup(ctx, true)
+		})
+	}
+	if writer := insert.ctr.s3Writer; writer != nil && retain(writer) {
+		insert.ctr.s3Writer = nil
+	}
+	for i, writer := range insert.ctr.partitionS3Writers {
+		if writer != nil && retain(writer) {
+			insert.ctr.partitionS3Writers[i] = nil
+		}
+	}
+	if len(insert.ctr.partitionS3Writers) != 0 {
+		pending := false
+		for _, writer := range insert.ctr.partitionS3Writers {
+			pending = pending || writer != nil
+		}
+		if !pending {
+			insert.ctr.partitionS3Writers = nil
+		}
+	}
+}
+
 // The Argument for insert data directly to s3 can not be free when this function called as some datastructure still needed.
 // therefore, those argument in remote CN will be free in connector operator, and local argument will be free in mergeBlock operator
 func (insert *Insert) Free(proc *process.Process, pipelineFailed bool, err error) {
-	if insert.ctr.s3Writer != nil {
-		insert.ctr.s3Writer.Close()
-		insert.ctr.s3Writer = nil
+	if closeErr := insert.closeS3Writers(proc, pipelineFailed); closeErr != nil {
+		logutil.Warn("failed to clean insert S3 writers", zap.Error(closeErr))
+		insert.retainPendingS3Writers(proc)
 	}
 	insert.releaseS3MemGrant()
-
-	// Free the partition table S3writer object resources
-	if insert.ctr.partitionS3Writers != nil {
-		for _, writer := range insert.ctr.partitionS3Writers {
-			writer.Close()
-		}
-		insert.ctr.partitionS3Writers = nil
-	}
 
 	// See Reset: a writer still alive at Free means the stream did not end
 	// cleanly; abort instead of persisting a partial file.

@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/require"
 )
@@ -82,6 +83,118 @@ func TestTableMetaReaderRecordsCloneObjectOwnership(t *testing.T) {
 	require.True(t, txn.engine.cloneTxnCache.IsSharedFile(txnID, stats[0].ObjectName().String()))
 	require.False(t, txn.engine.cloneTxnCache.IsSharedFile(txnID, stats[1].ObjectName().String()))
 	require.True(t, txn.engine.cloneTxnCache.IsTxnLocalSharedFile(txnID, stats[1].ObjectName().String()))
+}
+
+func TestTableMetaReaderRetainsCloneObjectOwnershipUntilAccepted(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		accepted bool
+	}{
+		{name: "unaccepted clone object is cleaned on close"},
+		{name: "accepted clone object survives close", accepted: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProc(t)
+			defer proc.Free()
+			baseFS, err := colexec.GetSharedFSFromProc(proc)
+			require.NoError(t, err)
+			var fs fileservice.FileService = baseFS
+			var failingFS *failOnceCloneDeleteFS
+			if !tc.accepted {
+				failingFS = &failOnceCloneDeleteFS{
+					FileService: baseFS,
+					failErr:     errors.New("injected clone cleanup failure"),
+				}
+				fs = failingFS
+			}
+			writer, objectName := newCloneTombstoneObjectForTest(t, proc, fs)
+			reader := &TableMetaReader{
+				ctx:                    proc.Ctx,
+				pendingTombstoneWriter: writer,
+			}
+
+			if tc.accepted {
+				require.NoError(t, reader.AcceptTombstoneObjects())
+			}
+			if tc.accepted {
+				require.NoError(t, reader.Close())
+				_, err = baseFS.StatFile(proc.Ctx, objectName)
+				require.NoError(t, err, "accepted object must remain available to the destination transaction")
+			} else {
+				err = reader.Close()
+				require.ErrorIs(t, err, failingFS.failErr)
+				require.Same(t, writer, reader.pendingTombstoneWriter, "failed deletion must retain its writer for retry")
+				_, err = baseFS.StatFile(proc.Ctx, objectName)
+				require.NoError(t, err, "the first failed cleanup must not discard the object reference")
+				require.NoError(t, reader.Close())
+				_, err = baseFS.StatFile(proc.Ctx, objectName)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "unaccepted object should be deleted, got %v", err)
+			}
+		})
+	}
+}
+
+func TestTableMetaReaderCleanupUsesFreshAttemptContext(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	baseFS, err := colexec.GetSharedFSFromProc(proc)
+	require.NoError(t, err)
+	writer, name := newCloneTombstoneObjectForTest(t, proc, baseFS)
+	expiredCtx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	reader := &TableMetaReader{ctx: expiredCtx, pendingTombstoneWriter: writer}
+
+	require.Error(t, reader.Close(), "the original request deadline prevents cleanup")
+	_, err = baseFS.StatFile(context.Background(), name)
+	require.NoError(t, err)
+	require.NoError(t, reader.CloseWithCleanup(context.Background()))
+	_, err = baseFS.StatFile(context.Background(), name)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+}
+
+type failOnceCloneDeleteFS struct {
+	fileservice.FileService
+	failErr      error
+	failed       bool
+	retryStarted chan struct{}
+	retryRelease <-chan struct{}
+}
+
+func (fs *failOnceCloneDeleteFS) Delete(ctx context.Context, names ...string) error {
+	if !fs.failed {
+		fs.failed = true
+		return fs.failErr
+	}
+	if fs.retryStarted != nil {
+		close(fs.retryStarted)
+		<-fs.retryRelease
+		fs.retryStarted = nil
+	}
+	return fs.FileService.Delete(ctx, names...)
+}
+
+func newCloneTombstoneObjectForTest(
+	t *testing.T,
+	proc *process.Process,
+	fs fileservice.FileService,
+) (*colexec.CNS3Writer, string) {
+	t.Helper()
+	writer := colexec.NewCNS3TombstoneWriter(proc.Mp(), fs, types.T_int64.ToType(), 1)
+	bat := batch.NewWithSize(2)
+	bat.SetAttributes([]string{objectio.PhysicalAddr_Attr, "pk"})
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.RandomRowid(), false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(1), false, proc.Mp()))
+	bat.SetRowCount(1)
+	defer bat.Clean(proc.Mp())
+	require.NoError(t, writer.Write(proc.Ctx, bat))
+	blockInfo, err := writer.SyncAndFillBlockInfoBat(proc.Ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, blockInfo.RowCount())
+	data, area := vector.MustVarlenaRawData(blockInfo.Vecs[0])
+	stats := objectio.ObjectStats(data[0].GetByteSlice(area))
+	return writer, stats.ObjectName().String()
 }
 
 func TestNewImmutableTableMetaReader(t *testing.T) {
