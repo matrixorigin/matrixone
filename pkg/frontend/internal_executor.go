@@ -211,7 +211,7 @@ func (ie *internalExecutor) ExecWithStatus(ctx context.Context, sql string, opts
 		ses:    sess,
 	}
 	defer tempExecCtx.Close()
-	err = doComQuery(sess, &tempExecCtx, &UserInput{sql: sql})
+	err = doComQuery(sess, &tempExecCtx, &UserInput{sql: sql, internalSQLSource: ie.usesDefaultSystemPrincipal(sess, opts)})
 	res := ie.proto.swapOutResult()
 	status.AffectedRows = res.affectedRows
 	if err != nil {
@@ -240,7 +240,7 @@ func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.Sessi
 		ses:    sess,
 	}
 	defer tempExecCtx.Close()
-	err = doComQuery(sess, &tempExecCtx, &UserInput{sql: sql})
+	err = doComQuery(sess, &tempExecCtx, &UserInput{sql: sql, internalSQLSource: ie.usesDefaultSystemPrincipal(sess, opts)})
 	res := ie.proto.swapOutResult()
 	res.err = moerr.AttachCause(ctx, err)
 	return res
@@ -294,7 +294,20 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 	now, _ := runtime.ServiceRuntime(ie.service).Clock().Now()
 	sess.lastCommitTS = now
 
-	if ie.baseSessOpts.Username != nil || opts.Username != nil {
+	if ie.usesDefaultSystemPrincipal(sess, opts) {
+		// The unnamed system administrator uses reserved user ID 0, whose catalog
+		// name is root, not the synthetic SQL-source name "internal". Bind
+		// after both override layers without changing explicit definers or
+		// bypassing current-principal/role authorization. Other selected roles
+		// keep their existing fail-closed identity rather than borrowing moadmin.
+		t.mu.Lock()
+		t.Tenant = sysAccountName
+		t.User = rootName
+		if t.DefaultRoleID == moAdminRoleID {
+			t.DefaultRole = moAdminRoleName
+		}
+		t.mu.Unlock()
+	} else if ie.baseSessOpts.Username != nil || opts.Username != nil {
 		if err := bindInternalSessionPrincipal(ctx, sess); err != nil {
 			sess.Close()
 			return nil, err
@@ -303,6 +316,13 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 
 	sess.initLogger()
 	return sess, nil
+}
+
+func (ie *internalExecutor) usesDefaultSystemPrincipal(sess *Session, opts ie.SessionOverrideOptions) bool {
+	principal := sess.GetTenantInfo()
+	return ie.baseSessOpts.Username == nil && opts.Username == nil &&
+		principal.GetTenantID() == sysAccountID && principal.GetUserID() == rootID &&
+		principal.GetDefaultRoleID() == moAdminRoleID
 }
 
 func (ie *internalExecutor) ApplySessionOverride(opts ie.SessionOverrideOptions) {

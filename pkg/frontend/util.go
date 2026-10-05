@@ -1835,6 +1835,9 @@ type UserInput struct {
 	// replace old logic: (stmt != nil)
 	// cc isInternal()
 	isInternalInput bool
+	// internalSQLSource preserves unnamed system-executor provenance without
+	// changing isInternalInput's parser, diagnostics or query-ID semantics.
+	internalSQLSource bool
 	// operator account, the account executes restoration
 	// e.g. sys takes a snapshot sn1 for acc1, then restores acc1 from snapshot sn1. In this scenario, sys is the operator account
 	isRestoreByTs bool
@@ -1899,7 +1902,7 @@ func (ui *UserInput) genSqlSourceType(ses FeSession) {
 
 func (ui *UserInput) isInternalSQLSource(ses FeSession) bool {
 	tenant := ses.GetTenantInfo()
-	internal := ui.isInternal() || tenant == nil || strings.HasPrefix(ui.getSql(), cmdFieldListSql)
+	internal := ui.internalSQLSource || ui.isInternal() || tenant == nil || strings.HasPrefix(ui.getSql(), cmdFieldListSql)
 	if tenant != nil {
 		special, _, _ := isSpecialUser(tenant.GetUser())
 		internal = internal || special || tenant.GetTenant() == sysAccountName && tenant.GetUser() == "internal"

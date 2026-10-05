@@ -1396,6 +1396,9 @@ func executeAnalyzeDerivedQuery(ses *Session, outerExecCtx *ExecCtx, sql string)
 		rewritePolicy:             policy,
 		rewritePolicyMaterialized: true,
 	}
+	if outerExecCtx.input != nil {
+		derivedInput.internalSQLSource = outerExecCtx.input.internalSQLSource
+	}
 	if err := doComQuery(ses, &tempExecCtx, derivedInput); err != nil {
 		return nil, err
 	}
