@@ -159,8 +159,21 @@ drop database Sub29418;
 drop publication qa29418_read_pub;
 drop publication qa29418_cross_owner_pub;
 drop database Qa29418Read;
+-- Legacy physical names, including folded collisions and quoted identifiers, must all be
+-- retired even when SYS's DROP ACCOUNT runs in mode 2.
+-- @session:id=10&user=qa29418owner:admin&password=test123
+set global lower_case_table_names = 0;
 -- @session
+-- @session:id=11&user=qa29418owner:admin&password=test123
+create database Qa29418Collision;
+create database qa29418collision;
+create database `Qa29418-Ä`;
+create table `Qa29418-Ä`.T(id int);
+-- @session:id=7&user=sys:root&password=111
 drop account qa29418owner;
+select count(*) from mo_catalog.mo_database where lower(datname) like 'qa29418%';
+select count(*) from mo_catalog.mo_tables where lower(reldatabase) like 'qa29418%';
+-- @session
 
 set global lower_case_table_names = 1;
 

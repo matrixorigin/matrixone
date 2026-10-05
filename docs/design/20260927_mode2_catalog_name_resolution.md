@@ -126,6 +126,14 @@ Subscription membership is checked after resolving the publisher's physical
 table and cannot be shadowed by a session temporary table. SHOW and direct
 catalog consumers use physical database/table names returned by resolution.
 
+Account teardown consumes the physical database names returned by its catalog
+scan as ASTs through the existing background executor. It must not stringify and
+reparse them using the operator's naming mode, or silently skip mixed-case names
+under `IF EXISTS`. The synchronous AST API borrows its input and uses the same
+transaction checks, compiler and execution cleanup as ordinary background SQL.
+Account deletion selects exact physical identities even when a SYS session uses
+mode 2 and the target tenant contains legacy folded-name collisions.
+
 ## Validation and delivery
 
 Implementation, tests and documentation are reviewed separately. A new helper

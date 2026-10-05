@@ -120,7 +120,9 @@ create or replace view history_v as select * from history_v {timestamp = 9223372
 select * from history_v;
 create or replace view history_v as select * from history_v {MO_TS = '9223372036854775807-0'};
 select * from history_v;
-create or replace view history_v as select * from history_v {as of timestamp '2262-04-11 23:47:16'};
+-- AS OF uses the machine timezone; leave margin below the UnixNano ceiling
+-- so this exercises future self-reference in every timezone.
+create or replace view history_v as select * from history_v {as of timestamp '2262-04-10 00:00:00'};
 select * from history_v;
 
 drop view history_v;

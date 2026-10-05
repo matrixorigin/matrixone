@@ -232,7 +232,18 @@ drop database Sub29418;
 drop publication qa29418_read_pub;
 drop publication qa29418_cross_owner_pub;
 drop database Qa29418Read;
+set global lower_case_table_names = 0;
+create database Qa29418Collision;
+create database qa29418collision;
+create database `Qa29418-Ä`;
+create table `Qa29418-Ä`.T(id int);
 drop account qa29418owner;
+select count(*) from mo_catalog.mo_database where lower(datname) like 'qa29418%';
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from mo_catalog.mo_tables where lower(reldatabase) like 'qa29418%';
+➤ count(*)[-5,64,0]  𝄀
+0
 set global lower_case_table_names = 1;
 set global lower_case_table_names = 0;
 drop database if exists QaMode2Collision29418;
