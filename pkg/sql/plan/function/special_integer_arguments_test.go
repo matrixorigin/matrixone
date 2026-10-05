@@ -27,7 +27,7 @@ func TestSpecialIntegerKernelsSelection(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		inputs []FunctionTestInput
-		run    fEvalFn
+		run    executeLogicOfOverload
 		want   []string
 	}{
 		{"format numeric", []FunctionTestInput{
@@ -46,7 +46,7 @@ func TestSpecialIntegerKernelsSelection(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			test := NewFunctionTestCase(proc, tc.inputs, NewFunctionTestResult(types.T_varchar.ToType(), false, tc.want, []bool{true, false, true}), tc.run).WithSelectList(mask)
-			ok, info := test.Run()
+			ok, info := test.RunAndFree()
 			require.True(t, ok, info)
 		})
 	}

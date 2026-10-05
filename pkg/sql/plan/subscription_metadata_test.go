@@ -1257,7 +1257,7 @@ func TestBuildSubscriptionMetadataProtocolAndViewGate(t *testing.T) {
 
 	tableFunction := &tree.TableFunction{Func: &tree.FuncExpr{}}
 	tablesCtx := NewBindContext(builder, nil)
-	tablesCtx.viewChain = []string{objectkey.Encode("information_schema", "TABLES")}
+	tablesCtx.viewPath = []*plan.ViewStep{{DatabaseName: "information_schema", ViewName: "TABLES"}}
 
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion45)
 	_, err := builder.buildSubscriptionTables(tableFunction, tablesCtx, nil, nil)
@@ -1279,15 +1279,12 @@ func TestBuildSubscriptionMetadataProtocolAndViewGate(t *testing.T) {
 	require.ErrorContains(t, err, "private to information_schema metadata views")
 
 	userViewCtx := NewBindContext(builder, nil)
-	userViewCtx.viewChain = []string{objectkey.Encode("app", "metadata")}
+	userViewCtx.viewPath = []*plan.ViewStep{{DatabaseName: "app", ViewName: "metadata"}}
 	_, err = builder.buildSubscriptionTables(tableFunction, userViewCtx, nil, nil)
 	require.ErrorContains(t, err, "private to information_schema metadata views")
 
 	columnsCtx := NewBindContext(builder, nil)
-	columnsCtx.viewChain = []string{
-		objectkey.Encode("app", "wrapper"),
-		objectkey.Encode("INFORMATION_SCHEMA", "columns"),
-	}
+	columnsCtx.viewPath = []*plan.ViewStep{{DatabaseName: "app", ViewName: "wrapper"}, {DatabaseName: "INFORMATION_SCHEMA", ViewName: "columns"}}
 	columnsNodeID, err := builder.buildSubscriptionColumns(tableFunction, columnsCtx, nil, nil)
 	require.NoError(t, err)
 	columnsNode := builder.qry.Nodes[columnsNodeID]

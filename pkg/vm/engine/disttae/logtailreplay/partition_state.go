@@ -40,7 +40,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
 	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -94,6 +93,22 @@ type PartitionState struct {
 	// should have been in the Partition structure, but doing that requires much more codes changes
 	// so just put it here.
 	shared *sharedStates
+}
+
+// DataVersion identifies the contents of one subscribed partition without
+// retaining its rows or objects. GC/copy preserve it; reconstruction does not.
+type DataVersion struct {
+	generation *sharedStates
+	appliedTo  types.TS
+}
+
+func (p *PartitionState) DataVersion() DataVersion {
+	return DataVersion{generation: p.shared, appliedTo: p.appliedTo}
+}
+
+// VisibleAt excludes mutations ahead of an exclusive transaction snapshot.
+func (v DataVersion) VisibleAt(snapshot types.TS) bool {
+	return v.generation != nil && !v.appliedTo.IsEmpty() && v.appliedTo.LT(&snapshot)
 }
 
 // SourceCommitTS is the timestamp an async index watermark must cover at a
@@ -601,7 +616,6 @@ func (p *PartitionState) HandleLogtailEntry(
 	packer *types.Packer,
 	pool *mpool.MPool,
 ) {
-	txnTrace.GetService(p.service).ApplyLogtail(entry, 1)
 	switch entry.EntryType {
 	case api.Entry_Insert:
 		if IsDataObjectList(entry.TableName) {

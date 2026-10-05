@@ -332,8 +332,8 @@ func TestBitwiseAggregateCastRegistration(t *testing.T) {
 	testCase := NewFunctionTestCase(proc, []FunctionTestInput{
 		NewFunctionTestInput(decimalType, []types.Decimal128{value}, nil),
 		NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, nil),
-	}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{math.MinInt64}, nil), fEvalFn(eval))
-	success, info := testCase.Run()
+	}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{math.MinInt64}, nil), executeLogicOfOverload(eval))
+	success, info := testCase.RunAndFree()
 	require.True(t, success, info)
 }
 
@@ -350,6 +350,7 @@ func TestBitwiseAggregateCastDispatchAndErrors(t *testing.T) {
 		NewFunctionTestInput(types.NewWithCharset(types.T_varchar, 8, 0, types.CharsetBinary), []string{"1"}, nil),
 		NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, nil),
 	}, NewFunctionTestResult(types.T_int64.ToType(), true, nil, nil), NewBitwiseAggregateCast)
+	defer binaryTextCase.Free()
 	binaryTextCase.parameters[0].SetIsBin(true)
 	success, info := binaryTextCase.Run()
 	require.True(t, success, info)
@@ -564,6 +565,7 @@ func assertBitwiseAggregateCastFails(
 	t.Helper()
 	testCase := NewFunctionTestCase(proc, inputs,
 		NewFunctionTestResult(types.T_int64.ToType(), true, nil, nil), NewBitwiseAggregateCast)
+	defer testCase.Free()
 	if selectList != nil {
 		testCase = testCase.WithSelectList(selectList)
 	}
@@ -625,6 +627,7 @@ func assertBitwiseAggregateCast(
 	}
 	expected := NewFunctionTestResult(resultType, false, want, wantNulls)
 	testCase := NewFunctionTestCase(proc, inputs, expected, NewBitwiseAggregateCast)
+	defer testCase.Free()
 	if selectList != nil {
 		testCase = testCase.WithSelectList(selectList)
 	}

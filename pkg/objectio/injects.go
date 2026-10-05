@@ -96,11 +96,10 @@ const (
 
 	FJ_WALReplayFailed = "fj/wal/replay/failed"
 
-	FJ_CDCHandleSlow             = "fj/cdc/handleslow"
-	FJ_CDCHandleErr              = "fj/cdc/handleerr"
-	FJ_CDCScanTableErr           = "fj/cdc/scantableerr"
-	FJ_CDCAddExecErr             = "fj/cdc/addexecerr"
-	FJ_CDCAddExecConsumeTruncate = "fj/cdc/addexecconsumetruncate"
+	FJ_CDCHandleSlow   = "fj/cdc/handleslow"
+	FJ_CDCHandleErr    = "fj/cdc/handleerr"
+	FJ_CDCScanTableErr = "fj/cdc/scantableerr"
+	FJ_CDCAddExecErr   = "fj/cdc/addexecerr"
 
 	FJ_CNFlushSmallObjs      = "fj/cn/flush_small_objs"
 	FJ_CNSubscribeTableFail  = "fj/cn/subscribe_table_fail"
@@ -824,11 +823,6 @@ func CDCScanTableErrInjected() bool {
 
 func CDCAddExecErrInjected() bool {
 	_, _, injected := fault.TriggerFault(FJ_CDCAddExecErr)
-	return injected
-}
-
-func CDCAddExecConsumeTruncateInjected() bool {
-	_, _, injected := fault.TriggerFault(FJ_CDCAddExecConsumeTruncate)
 	return injected
 }
 

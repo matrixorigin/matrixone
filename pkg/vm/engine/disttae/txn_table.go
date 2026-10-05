@@ -46,7 +46,6 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -1288,9 +1287,7 @@ func (tbl *txnTable) getObjList(ctx context.Context, rangesParam engine.RangesPa
 }
 
 func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesParam) (data engine.RelData, err error) {
-	sid := tbl.proc.Load().GetService()
 	start := time.Now()
-	seq := tbl.db.op.NextSequence()
 
 	var part *logtailreplay.PartitionState
 	var uncommittedObjects []objectio.ObjectStats
@@ -1299,14 +1296,6 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 		rangesParam.Policy&engine.Policy_CollectUncommittedInmemData != 0 {
 		blocks.AppendBlockInfo(&objectio.EmptyBlockInfo)
 	}
-
-	trace.GetService(sid).AddTxnDurationAction(
-		tbl.db.op,
-		client.RangesEvent,
-		seq,
-		tbl.tableId,
-		0,
-		nil)
 
 	defer func() {
 		cost := time.Since(start)
@@ -1360,23 +1349,6 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 				zap.Error(err),
 			)
 		}
-
-		trace.GetService(sid).AddTxnAction(
-			tbl.db.op,
-			client.RangesEvent,
-			seq,
-			tbl.tableId,
-			int64(blocks.Len()),
-			"blocks",
-			err)
-
-		trace.GetService(sid).AddTxnDurationAction(
-			tbl.db.op,
-			client.RangesEvent,
-			seq,
-			tbl.tableId,
-			cost,
-			err)
 
 		v2.TxnTableRangeDurationHistogram.Observe(cost.Seconds())
 		if err != nil {

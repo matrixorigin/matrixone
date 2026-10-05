@@ -821,7 +821,7 @@ func TestRecreatedTableFreshOwnerResetsRetiredGeneration(t *testing.T) {
 	require.False(t, gen11Watermark.updateCalled)
 
 	// The first CN disappears and the logical source table is recreated. A
-	// fresh detector has no IdChanged memory, so only the retired durable epoch
+	// reader restart has no local history, so only the retired durable epoch
 	// can require the target reset.
 	freshUpdater := NewCDCWatermarkUpdater(t.Name()+"-fresh", epochExecutor)
 	gen12Epoch, reset, err := freshUpdater.GetOrCreateInitialSnapshotEpochForGeneration(

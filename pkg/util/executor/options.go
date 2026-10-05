@@ -233,6 +233,19 @@ func (opts StatementOption) AlterCopyDedupOpt() *plan.AlterCopyOpt {
 	return opts.alterCopyOpt
 }
 
+// WithPrePipelineLockTable requests an Exclusive table-range lock before an
+// internal INSERT starts. The caller must own the newly created physical target
+// in the same transaction. This requests normal lock acquisition; it does not
+// assert that the lock is already held or disable locking. Zero means no request.
+func (opts StatementOption) WithPrePipelineLockTable(tableID uint64) StatementOption {
+	opts.prePipelineLockTableID = tableID
+	return opts
+}
+
+func (opts StatementOption) PrePipelineLockTable() uint64 {
+	return opts.prePipelineLockTableID
+}
+
 func (opts StatementOption) AccountID() uint32 {
 	return opts.accountId
 }
@@ -303,11 +316,6 @@ func (opts StatementOption) OptimizerHints() string {
 
 func (opts StatementOption) IgnoreForeignKey() bool {
 	return opts.ignoreForeignKey
-}
-
-func (opts Options) WithDisableTrace() Options {
-	opts.txnOpts = append(opts.txnOpts, client.WithDisableTrace(true))
-	return opts
 }
 
 func (opts Options) WithDisableWaitPaused() Options {
@@ -389,15 +397,6 @@ func (opts Options) HasLockWaitTimeout() bool {
 // check HasLockWaitTimeout before treating a zero value as an explicit budget.
 func (opts Options) LockWaitTimeout() time.Duration {
 	return opts.lockWaitTimeout
-}
-
-func (opts Options) WithEnableTrace() Options {
-	opts.enableTrace = true
-	return opts
-}
-
-func (opts Options) EnableTrace() bool {
-	return opts.enableTrace
 }
 
 func (opts Options) WithLowerCaseTableNames(lower *int64) Options {

@@ -512,10 +512,10 @@ func charsetForName(name string) (uint32, bool) {
 	switch strings.ToLower(name) {
 	case "binary":
 		return uint32(types.CharsetBinary), true
-	case "utf8", "utf8mb3", "utf8mb4", "latin1", "ascii":
-		// MatrixOne stores text as UTF-8. Accept MySQL's single-byte charset
-		// spellings for DDL compatibility and normalize them to the supported
-		// general-ci text identity rather than pretending to preserve encoding.
+	case "utf8", "utf8mb3", "utf8mb4", "latin1", "ascii", "utf32":
+		// MatrixOne stores text as UTF-8. Accept MySQL charset spellings for DDL
+		// compatibility and normalize them to the supported text identity rather
+		// than pretending to preserve an encoding that MatrixOne does not store.
 		return uint32(types.CharsetUTF8), true
 	default:
 		return 0, false
@@ -526,13 +526,14 @@ func collationForName(name string) (uint32, bool) {
 	switch strings.ToLower(name) {
 	case "binary":
 		return uint32(types.CharsetBinary), true
-	case "utf8_bin", "utf8mb3_bin", "utf8mb4_bin":
+	case "utf8_bin", "utf8mb3_bin", "utf8mb4_bin", "utf32_bin":
 		return uint32(types.CharsetUTF8MB4Bin), true
 	case "utf8_general_ci", "utf8mb3_general_ci", "utf8mb4_general_ci", "utf8mb4_0900_ai_ci",
-		"latin1_swedish_ci", "ascii_general_ci":
+		"latin1_swedish_ci", "ascii_general_ci", "utf32_general_ci":
 		// MySQL 8 uses utf8mb4_0900_ai_ci by default. Accept that exact spelling
-		// as a DDL compatibility alias, but normalize it to MatrixOne's existing
-		// general-ci identity instead of claiming native UCA 9.0 semantics.
+		// as a DDL compatibility alias. The utf32 spellings are handled the same
+		// way: normalize to MatrixOne's existing identity instead of claiming
+		// native UCA or UTF-32 storage semantics.
 		return uint32(types.CharsetUTF8), true
 	default:
 		// Do not silently alias other advertised UCA/0900 collations to either
@@ -653,6 +654,130 @@ func buildDefaultExpr(bindCtx context.Context, col *tree.ColumnTableDef, typ pla
 	return buildDefaultExprWithColumns(bindCtx, col, typ, proc, nil)
 }
 
+func legacyImplicitTimestampDefaults(ctx CompilerContext) bool {
+	if ctx == nil {
+		return false
+	}
+	value, err := ctx.ResolveVariable("explicit_defaults_for_timestamp", true, false)
+	if err != nil {
+		return false
+	}
+	switch value := value.(type) {
+	case int:
+		return value == 0
+	case int8:
+		return value == 0
+	case int32:
+		return value == 0
+	case int64:
+		return value == 0
+	case uint:
+		return value == 0
+	case uint8:
+		return value == 0
+	case uint32:
+		return value == 0
+	case uint64:
+		return value == 0
+	case bool:
+		return !value
+	default:
+		return false
+	}
+}
+
+func hasExplicitNullableAttribute(col *tree.ColumnTableDef) bool {
+	for _, attr := range col.Attributes {
+		if nullAttr, ok := attr.(*tree.AttributeNull); ok && nullAttr.Is {
+			return true
+		}
+	}
+	return false
+}
+
+func hasExplicitDefaultAttribute(col *tree.ColumnTableDef) bool {
+	for _, attr := range col.Attributes {
+		if defaultAttr, ok := attr.(*tree.AttributeDefault); ok && defaultAttr.Expr != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func buildImplicitCurrentTimestampExpr(typ plan.Type, proc *process.Process) (*plan.Expr, error) {
+	ast := &tree.FuncExpr{
+		Func:  tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName("current_timestamp")),
+		Exprs: tree.Exprs{tree.NewNumVal(int64(typ.Scale), fmt.Sprint(typ.Scale), false, tree.P_int64)},
+	}
+	binder := NewDefaultBinder(proc.Ctx, nil, nil, typ, nil)
+	bound, err := binder.BindExpr(ast, 0, false)
+	if err != nil {
+		return nil, err
+	}
+	return makePlan2AssignmentCastExpr(proc.Ctx, bound, typ)
+}
+
+func buildImplicitCurrentTimestampDefault(typ plan.Type, proc *process.Process) (*plan.Default, error) {
+	expr, err := buildImplicitCurrentTimestampExpr(typ, proc)
+	if err != nil {
+		return nil, err
+	}
+	return &plan.Default{NullAbility: false, Expr: expr, OriginString: "CURRENT_TIMESTAMP()"}, nil
+}
+
+// isLegacyImplicitTimestampColumn identifies a non-nullable TIMESTAMP under
+// the legacy explicit_defaults_for_timestamp=OFF assignment rule. The rule is
+// about the effective column policy, not the exact CURRENT_TIMESTAMP strings
+// produced by one DDL path; persisted and explicitly-defaulted definitions
+// must follow the same NULL assignment semantics.
+func isLegacyImplicitTimestampColumn(ctx CompilerContext, col *plan.ColDef) bool {
+	return legacyImplicitTimestampDefaults(ctx) && col != nil &&
+		types.T(col.Typ.Id) == types.T_timestamp &&
+		col.Default != nil && !col.Default.NullAbility
+}
+
+// buildLegacyTimestampNullAssignment implements the legacy MySQL assignment
+// rule. NULL assigned to a non-nullable TIMESTAMP is the current timestamp;
+// it is not the column's literal DEFAULT value. Keep this policy at the DML
+// assignment boundary so INSERT, UPDATE and duplicate-key UPDATE agree.
+func buildLegacyTimestampNullAssignment(ctx CompilerContext, col *plan.ColDef) (*plan.Expr, error) {
+	if !isLegacyImplicitTimestampColumn(ctx, col) {
+		return nil, nil
+	}
+	return buildImplicitCurrentTimestampExpr(col.Typ, ctx.GetProcess())
+}
+
+// wrapLegacyTimestampAssignment applies the same rule to runtime NULLs (for
+// example a source-column or prepared parameter), which cannot be recognized
+// from the AST. Repeated volatile operands share the existing expression-local
+// memo owner; deterministic column/literal operands need no additional state.
+func (builder *QueryBuilder) wrapLegacyTimestampAssignment(col *plan.ColDef, expr *plan.Expr) (*plan.Expr, error) {
+	ctx := builder.compCtx
+	if !isLegacyImplicitTimestampColumn(ctx, col) || expr == nil {
+		return expr, nil
+	}
+	source := DeepCopyExpr(expr)
+	if containsVolatileFunction(source) {
+		binder := &baseBinder{builder: builder, sysCtx: ctx.GetContext()}
+		memoID, err := binder.allocateVolatileExprMemoID()
+		if err != nil {
+			return nil, err
+		}
+		source.AuxId = memoID
+	}
+	nullExpr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "isnull", []*plan.Expr{DeepCopyExpr(source)})
+	if err != nil {
+		return nil, err
+	}
+	currentExpr, err := buildImplicitCurrentTimestampExpr(col.Typ, ctx.GetProcess())
+	if err != nil {
+		return nil, err
+	}
+	return BindFuncExprImplByPlanExpr(ctx.GetContext(), "if", []*plan.Expr{
+		nullExpr, currentExpr, source,
+	})
+}
+
 // buildDefaultExprWithColumns is the scoped form of buildDefaultExpr.  The
 // unscoped form remains for call sites that bind an expression which is not a
 // table-row default (for example internal compatibility expressions).
@@ -747,6 +872,19 @@ func buildDefaultExprWithColumns(
 	newExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(defaultExpr), proc, false, true)
 	if err != nil {
 		return nil, mapDDLAssignmentCastError(bindCtx, typ, colNameOrigin, err)
+	}
+	if typ.Id == int32(types.T_timestamp) && newExpr.GetLit() != nil &&
+		!newExpr.GetLit().Isnull && newExpr.GetLit().GetTimestampval() == int64(types.ZeroTimestamp) {
+		var mode interface{} = proc.GetSessionInfo().SqlMode
+		if resolve := proc.GetResolveVariableFunc(); resolve != nil {
+			mode, err = resolve("sql_mode", true, false)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if process.IsStrictNoZeroDateMode(mode) {
+			return nil, moerr.NewErrInvalidDefault(bindCtx, colNameOrigin)
+		}
 	}
 
 	if lit := newExpr.GetLit(); lit != nil && exprContainsHexOverload(defaultExpr, 0) {

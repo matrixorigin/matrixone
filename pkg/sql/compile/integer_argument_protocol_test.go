@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -56,6 +57,17 @@ func TestIntegerArgumentProtocolBoundaries(t *testing.T) {
 	for id := int32(0); id <= function.TemporalIntegerArgumentCastOverload; id++ {
 		t.Run(fmt.Sprint(id), func(t *testing.T) {
 			expr := integerProtocolExpr(id)
+			var executors []colexec.ExpressionExecutor
+			t.Cleanup(func() {
+				for _, executor := range executors {
+					executor.Free()
+				}
+			})
+			canFold, err := plan2.ReplaceFoldExpr(c.proc, expr, &executors)
+			require.NoError(t, err)
+			require.False(t, canFold, "a column-dependent CAST cannot fold as a whole")
+			require.NotNil(t, expr.GetF().Args[1].GetT(), "scan folding must preserve every CAST target")
+			require.Empty(t, executors, "a type marker must not acquire an executor")
 			p := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}}}
 			features, err := planpb.RequiredRemoteExpressionFeatures(p)
 			require.NoError(t, err)
@@ -127,6 +139,13 @@ func TestIntegerArgumentReceiverRejectsInvalidSignatures(t *testing.T) {
 			name: "target marker",
 			mutate: func(expr *planpb.Expr) {
 				expr.GetF().Args[1].Expr = &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}
+			},
+			want: "target marker",
+		},
+		{
+			name: "folded target marker",
+			mutate: func(expr *planpb.Expr) {
+				expr.GetF().Args[1].Expr = &planpb.Expr_Fold{Fold: &planpb.FoldVal{IsConst: true}}
 			},
 			want: "target marker",
 		},
@@ -226,12 +245,12 @@ func TestIntegerArgumentProtocolPlacementAndSend(t *testing.T) {
 	client.version = defines.MORPCVersion84
 	_, err = encodeRemoteScope(scope, c.proc)
 	require.ErrorContains(t, err, "remote destination")
-	require.Error(t, validateIntegerArgumentDestination(c.proc, nil))
+	require.Error(t, validateRemoteExpressionDestination(c.proc, nil, planpb.RemoteExpressionFeatures{IntegerParameterCoercion: true}))
 	require.Equal(t, client.calls, client.releases)
 	ctx, cancel := context.WithCancel(c.proc.Ctx)
 	cancel()
 	c.proc.Ctx = ctx
-	require.ErrorIs(t, validateIntegerArgumentDestination(c.proc, &pipeline.Pipeline{Node: &pipeline.NodeInfo{Id: "old-worker", Addr: "remote:6001"}}), context.Canceled)
+	require.ErrorIs(t, validateRemoteExpressionDestination(c.proc, &pipeline.Pipeline{Node: &pipeline.NodeInfo{Id: "old-worker", Addr: "remote:6001"}}, planpb.RemoteExpressionFeatures{IntegerParameterCoercion: true}), context.Canceled)
 }
 
 func TestLowPrecisionFloatIntegerArgumentProtocol(t *testing.T) {
@@ -247,23 +266,23 @@ func TestLowPrecisionFloatIntegerArgumentProtocol(t *testing.T) {
 			require.True(t, features.LowPrecisionFloatIntegerArguments)
 			require.True(t, features.Any())
 
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion104)
-			require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 105")
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion106)
+			require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 107")
 			table := &planpb.TableDef{Cols: []*planpb.ColDef{{Default: &planpb.Default{Expr: expr}}}}
 			required, err := plan2.RequiredPersistedExpressionProtocolVersion(table)
 			require.NoError(t, err)
-			require.Equal(t, defines.MORPCVersion105, required)
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion105)
+			require.Equal(t, defines.MORPCVersion107, required)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion107)
 			require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
 
 			op := projection.NewArgument()
 			defer op.Release()
 			op.ProjectList = []*planpb.Expr{expr}
 			scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
-			client.version = defines.MORPCVersion104
+			client.version = defines.MORPCVersion106
 			_, err = encodeRemoteScope(scope, c.proc)
 			require.ErrorContains(t, err, "remote destination")
-			client.version = defines.MORPCVersion105
+			client.version = defines.MORPCVersion107
 			_, err = encodeRemoteScope(scope, c.proc)
 			require.NoError(t, err)
 		})

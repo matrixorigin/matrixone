@@ -359,8 +359,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		IndexReaderParam:           DeepCopyIndexReaderParam(node.IndexReaderParam),
 		ScanSnapshot:               DeepCopySnapshot(node.ScanSnapshot),
 		VectorIndexScan:            DeepCopyVectorIndexScan(node.VectorIndexScan),
-		OriginViews:                slices.Clone(node.OriginViews),
-		DirectView:                 node.DirectView,
+		ViewPath:                   DeepCopyViewPath(node.ViewPath),
 		RankOption:                 DeepCopyRankOption(node.RankOption),
 		WindowIdx:                  node.WindowIdx,
 		RecursiveCte:               node.RecursiveCte,
@@ -836,6 +835,23 @@ func DeepCopyColData(col *plan.ColData) *plan.ColData {
 	return newCol
 }
 
+// DeepCopyViewPath isolates query-owned binding contexts from plan copies.
+func DeepCopyViewPath(path []*plan.ViewStep) []*plan.ViewStep {
+	if path == nil {
+		return nil
+	}
+	out := make([]*plan.ViewStep, len(path))
+	for i, step := range path {
+		if step != nil {
+			out[i] = &plan.ViewStep{
+				DatabaseName: step.DatabaseName, ViewName: step.ViewName,
+				SubscriptionName: step.SubscriptionName, Snapshot: DeepCopySnapshot(step.Snapshot),
+			}
+		}
+	}
+	return out
+}
+
 func DeepCopyQuery(qry *plan.Query) *plan.Query {
 	backgroundQueries := make([]*plan.Query, len(qry.BackgroundQueries))
 	for idx, query := range qry.BackgroundQueries {
@@ -866,6 +882,16 @@ func DeepCopyQuery(qry *plan.Query) *plan.Query {
 	}
 	for idx, dependency := range qry.CatalogDependencies {
 		newQry.CatalogDependencies[idx] = DeepCopyObjectRef(dependency)
+	}
+	if qry.ViewReferences != nil {
+		newQry.ViewReferences = make([]*plan.ViewReference, len(qry.ViewReferences))
+		for i, reference := range qry.ViewReferences {
+			if reference != nil {
+				newQry.ViewReferences[i] = &plan.ViewReference{
+					ViewPath: DeepCopyViewPath(reference.ViewPath),
+				}
+			}
+		}
 	}
 	if qry.UnresolvedIndexHints != nil {
 		newQry.UnresolvedIndexHints = make([]*plan.UnresolvedIndexHint, len(qry.UnresolvedIndexHints))

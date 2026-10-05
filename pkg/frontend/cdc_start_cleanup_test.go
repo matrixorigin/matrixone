@@ -774,8 +774,16 @@ func (e *blockingRestartPublicationExecutor) Query(
 			"2026-09-16T00:00:00Z",
 			"",
 			"true",
-			fmt.Sprintf(`{"%s":"%s"}`, cdc.CDCTaskExtraOptions_InitialSnapshotProtocol, cdc.CDCInitialSnapshotProtocolNoFullHLC),
+			fmt.Sprintf(`{"%s":"%s","%s":"%s"}`,
+				cdc.CDCTaskExtraOptions_InitialSnapshotProtocol,
+				cdc.CDCInitialSnapshotProtocolNoFullHLC,
+				cdc.CDCTaskExtraOptions_GenerationProtocol,
+				cdc.CDCGenerationAwareProtocolV2),
 		}}
+	}
+	if strings.Contains(sql, "SELECT pending_source_table_id, target_identity FROM mo_catalog.mo_cdc_watermark LIMIT 0") {
+		// The capability probe is deliberately an empty successful result.
+		return &cdcStateQueryResult{rows: 0}
 	}
 	e.stateMu.Lock()
 	defer e.stateMu.Unlock()

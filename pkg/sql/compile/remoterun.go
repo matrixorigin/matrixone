@@ -136,69 +136,15 @@ func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requir
 	if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
-	if err = validateRemoteExpressionPipelineProtocol(proc, p); err != nil {
-		return nil, err
-	}
 	features, err := plan.RequiredRemoteExpressionFeatures(p)
 	if err != nil {
 		return nil, err
 	}
-	if features.IntegerArithmeticDomains {
-		if err = validateIntegerDomainDestination(proc, p); err != nil {
-			return nil, err
-		}
+	if err = validateRemoteExpressionFeatures(proc, features); err != nil {
+		return nil, err
 	}
-	if features.RowDependentConvBases {
-		if err = validateConvBasesDestination(proc, p); err != nil {
-			return nil, err
-		}
-	}
-	if features.IntegerParameterCoercion || features.SpecialIntegerConsumers {
-		if err = validateIntegerArgumentDestination(proc, p); err != nil {
-			return nil, err
-		}
-	}
-	if features.PreparedPrecisionScalar {
-		if err = validatePreparedPrecisionDestination(proc, p); err != nil {
-			return nil, err
-		}
-	}
-	if features.DecimalDivisionSemantics {
-		if err = validateDecimalDivisionDestination(proc, p); err != nil {
-			return nil, err
-		}
-	}
-	if required := temporalExpressionProtocolVersion(features); required != 0 {
-		if err = validateTemporalResultDestination(proc, p, required); err != nil {
-			return nil, err
-		}
-	}
-	if features.IPFunctionSemantics || features.TOBase64ResultContracts || features.IPFunctionResultContracts ||
-		features.ExpressionResultMetadataContracts || features.JSONInputContracts || features.YearBitCast || features.JSONScalarLiteralContracts ||
-		features.LowPrecisionFloatIntegerArguments {
-		if err = validateIPFunctionDestination(proc, p); err != nil {
-			return nil, err
-		}
-	}
-	if features.StringNumericResultContracts {
-		if err = validateStringNumericResultDestination(proc, p); err != nil {
-			return nil, err
-		}
-	}
-	if features.BoundedConditionalStringDomains {
-		if err = validateBoundedConditionalStringDestination(proc, p); err != nil {
-			return nil, err
-		}
-	}
-	if features.SpatialDistanceSemantics {
-		if err = validateSpatialDistanceDestination(proc, p); err != nil {
-			return nil, err
-		}
-	}
-	if features.DecimalLiteralSemantics {
-		if err = validateDecimalLiteralDestination(proc, p); err != nil {
-			return nil, err
-		}
+	if err = validateRemoteExpressionDestination(proc, p, features); err != nil {
+		return nil, err
 	}
 	if err = validateStrictWriteDestination(proc, p); err != nil {
 		return nil, err
@@ -2284,6 +2230,12 @@ func validateRemoteExpressionPipelineProtocol(
 	if err != nil {
 		return err
 	}
+	return validateRemoteExpressionFeatures(proc, features)
+}
+
+// The sender reuses analysis of its current pipeline; the receiver computes
+// features independently after decoding before calling this same source fence.
+func validateRemoteExpressionFeatures(proc *process.Process, features plan.RemoteExpressionFeatures) error {
 	if !features.Any() {
 		return nil
 	}
@@ -2301,8 +2253,8 @@ func validateRemoteExpressionPipelineProtocol(
 	if proc != nil {
 		protocolVersion, hasProtocolVersion = remoteMORPCProtocolVersion(proc.GetService())
 	}
-	if features.LowPrecisionFloatIntegerArguments && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion105) {
-		return moerr.NewNotSupportedNoCtx("low-precision float integer arguments require MORPC protocol version 105")
+	if features.LowPrecisionFloatIntegerArguments && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion107) {
+		return moerr.NewNotSupportedNoCtx("low-precision float integer arguments require MORPC protocol version 107")
 	}
 	if features.JSONScalarLiteralContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion104) {
 		return moerr.NewNotSupportedNoCtx("typed JSON scalar literals require MORPC protocol version 104")

@@ -1128,7 +1128,7 @@ func TestMigrateConnectionFromMarksTypedSystemSnapshotTooLargeForLegacyReplay(t 
 	require.True(t, resp.SystemVariablesReplayable)
 }
 
-func TestClearPrivilegeCacheRefreshesActiveRoleGrant(t *testing.T) {
+func TestClearPrivilegeCacheDefersActiveRoleValidation(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		catalogErr error
@@ -1174,6 +1174,11 @@ func TestClearPrivilegeCacheRefreshesActiveRoleGrant(t *testing.T) {
 			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "set session clear_privilege_cache = on", 1)
 			require.NoError(t, err)
 			err = doSetVar(ses, newTestExecCtx(ctx, ctrl), stmt.(*tree.SetVar), "", false)
+			require.NoError(t, err)
+			require.Empty(t, bh.executedSQLs, "clearing must not read the catalog")
+			_, cached := ses.GetPrivilegeCache().getActiveRoleGrant(2, 3)
+			require.False(t, cached)
+			_, _, err = validateActiveRoleGrantForAuthorization(ctx, ses)
 			require.True(t, forcedPessimisticRC)
 			require.Contains(t, bh.executedSQLs, roleGrantSQL)
 			if tc.catalogErr != nil {

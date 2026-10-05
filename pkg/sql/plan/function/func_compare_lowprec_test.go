@@ -58,7 +58,7 @@ func TestLowPrecisionFloatComparisonKernels(t *testing.T) {
 	for _, oid := range []types.T{types.T_bf16, types.T_float16, types.T_float8, types.T_float4} {
 		for _, test := range []struct {
 			name      string
-			fn        fEvalFn
+			fn        executeLogicOfOverload
 			want      []bool
 			wantNulls []bool
 		}{
@@ -270,7 +270,7 @@ func TestBlockScaledComparisonKernels(t *testing.T) {
 		}
 		for _, test := range []struct {
 			name string
-			fn   fEvalFn
+			fn   executeLogicOfOverload
 			want []bool
 		}{
 			{"equal", equalFn, []bool{true, false, false}},

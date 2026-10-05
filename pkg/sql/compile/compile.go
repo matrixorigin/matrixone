@@ -51,6 +51,7 @@ import (
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -99,7 +100,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -558,6 +558,7 @@ func (c *Compile) clear() {
 	c.skipDataBranchReclaim = false
 	c.keepAutoIncrement = 0
 	c.disableLock = false
+	c.prePipelineLockTableID = 0
 	c.icebergScanPlanner = nil
 
 	for _, exe := range c.filterExprExes {
@@ -3967,13 +3968,6 @@ func (c *Compile) compileExternScanArrowRecordBatchFanout(
 	return scopes, nil
 }
 
-type icebergDataFileScopeShard struct {
-	node      engine.Node
-	fileList  []string
-	fileSize  []int64
-	dataTasks []*pipeline.IcebergDataFileTask
-}
-
 type icebergExternalScanRuntime struct {
 	dataTasks            []*pipeline.IcebergDataFileTask
 	deleteTasks          []*pipeline.IcebergDeleteFileTask
@@ -4156,7 +4150,7 @@ func s3ParamOptions(option []string, s3 *tree.S3Parameter) []string {
 	return out
 }
 
-func (c *Compile) compileExternScanIcebergFileFanout(
+func (c *Compile) compileExternScanIcebergCoordinator(
 	node *plan.Node,
 	param *tree.ExternParam,
 	runtime icebergExternalScanRuntime,
@@ -4167,35 +4161,21 @@ func (c *Compile) compileExternScanIcebergFileFanout(
 	shardParam := new(tree.ExternParam)
 	*shardParam = *param
 	shardParam.Parallel = false
-	return c.compileExternScanIcebergShard(node, shardParam, runtime, icebergDataFileScopeShard{
-		node:      engine.Node{Addr: c.addr, Mcpu: 1},
-		fileList:  fileList,
-		fileSize:  fileSize,
-		dataTasks: runtime.dataTasks,
-	}, strictSqlMode)
-}
 
-func (c *Compile) compileExternScanIcebergShard(
-	node *plan.Node,
-	param *tree.ExternParam,
-	runtime icebergExternalScanRuntime,
-	shard icebergDataFileScopeShard,
-	strictSqlMode bool,
-) ([]*Scope, error) {
 	ss := make([]*Scope, 1)
-	ss[0] = c.constructScopeForExternal(shard.node.Addr, param.Parallel)
+	ss[0] = c.constructScopeForExternal(c.addr, shardParam.Parallel)
 	ss[0].NodeInfo.Mcpu = 1
 	ss[0].IsLoad = true
 
 	currentFirstFlag := c.anal.isFirst
 	op := constructExternal(
-		node, param, c.proc.Ctx,
-		shard.fileList, shard.fileSize,
-		makeWholeFileOffsets(len(shard.fileList)),
+		node, shardParam, c.proc.Ctx,
+		fileList, fileSize,
+		makeWholeFileOffsets(len(fileList)),
 		strictSqlMode,
-		c.arrowExecutionScope(node, param),
+		c.arrowExecutionScope(node, shardParam),
 	)
-	if err := attachIcebergRuntimeToExternal(c.proc.Ctx, op, runtime, shard.dataTasks); err != nil {
+	if err := attachIcebergRuntimeToExternal(c.proc.Ctx, op, runtime, runtime.dataTasks); err != nil {
 		return nil, err
 	}
 	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
@@ -4577,58 +4557,6 @@ func splitHiveFileShards(fileList []string, fileSize []int64, nodes []engine.Nod
 	return nonEmpty
 }
 
-func splitIcebergDataFileShards(tasks []*pipeline.IcebergDataFileTask, nodes []engine.Node) []icebergDataFileScopeShard {
-	if len(tasks) == 0 || len(nodes) == 0 {
-		return nil
-	}
-	shardCount := len(nodes)
-	if shardCount > len(tasks) {
-		shardCount = len(tasks)
-	}
-	shards := make([]icebergDataFileScopeShard, shardCount)
-	loads := make([]int64, shardCount)
-	for i := range shards {
-		shards[i].node = nodes[i]
-	}
-
-	indices := make([]int, len(tasks))
-	for i := range indices {
-		indices[i] = i
-	}
-	slices.SortStableFunc(indices, func(leftIdx, rightIdx int) int {
-		left := icebergDataTaskLoad(tasks[leftIdx])
-		right := icebergDataTaskLoad(tasks[rightIdx])
-		if left != right {
-			return cmp.Compare(right, left)
-		}
-		return cmp.Compare(tasks[leftIdx].FilePath, tasks[rightIdx].FilePath)
-	})
-
-	for _, taskIdx := range indices {
-		shardIdx := 0
-		for i := 1; i < shardCount; i++ {
-			if loads[i] < loads[shardIdx] ||
-				(loads[i] == loads[shardIdx] && len(shards[i].dataTasks) < len(shards[shardIdx].dataTasks)) {
-				shardIdx = i
-			}
-		}
-		task := tasks[taskIdx]
-		shards[shardIdx].dataTasks = append(shards[shardIdx].dataTasks, task)
-		shards[shardIdx].fileList = append(shards[shardIdx].fileList, task.FilePath)
-		size := task.FileSize
-		shards[shardIdx].fileSize = append(shards[shardIdx].fileSize, size)
-		loads[shardIdx] += icebergDataTaskLoad(task)
-	}
-
-	nonEmpty := shards[:0]
-	for _, shard := range shards {
-		if len(shard.dataTasks) > 0 {
-			nonEmpty = append(nonEmpty, shard)
-		}
-	}
-	return nonEmpty
-}
-
 func compactIcebergDataTasks(tasks []*pipeline.IcebergDataFileTask) []*pipeline.IcebergDataFileTask {
 	if len(tasks) == 0 {
 		return nil
@@ -4640,19 +4568,6 @@ func compactIcebergDataTasks(tasks []*pipeline.IcebergDataFileTask) []*pipeline.
 		}
 	}
 	return out
-}
-
-func icebergDataTaskLoad(task *pipeline.IcebergDataFileTask) int64 {
-	if task == nil {
-		return 1
-	}
-	if task.FileSize > 0 {
-		return task.FileSize
-	}
-	if task.RecordCount > 0 {
-		return task.RecordCount
-	}
-	return 1
 }
 
 func icebergDataTaskFiles(tasks []*pipeline.IcebergDataFileTask) ([]string, []int64) {
@@ -9319,7 +9234,8 @@ func (c *Compile) compileDelete(node *plan.Node, ss []*Scope) ([]*Scope, error) 
 
 func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 	lockRows := make([]*plan.LockTarget, 0, len(node.LockTargets))
-	localizeLoadPlan := c.loadUniqueIndexPromotion != nil
+	localizeLockPlan := c.loadUniqueIndexPromotion != nil || c.prePipelineLockTableID != 0
+	promotedNewTable := false
 	filterPromotedRows := false
 	if state := c.loadUniqueIndexPromotion; state != nil &&
 		state.phase == loadUniqueIndexPromotionFenced {
@@ -9332,8 +9248,20 @@ func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 		if filterPromotedRows && c.loadUniqueIndexPromotion.coversRowTarget(canonicalTarget) {
 			continue
 		}
+		if c.canPrePipelineLockNewTable(canonicalTarget) {
+			// The DDL owner supplied the newly created physical ID. Acquire its
+			// total range through the ordinary pre-pipeline lock path, before any
+			// source starts; failures still abort or retry the complete DDL. The
+			// physical disposition must not modify a reusable logical plan.
+			tableTarget := *canonicalTarget
+			tableTarget.LockTable = true
+			tableTarget.LockTableAtTheEnd = false
+			c.lockTables[tableTarget.TableId] = &tableTarget
+			promotedNewTable = true
+			continue
+		}
 		tbl := canonicalTarget
-		if localizeLoadPlan && (canonicalTarget.LockTable || canonicalTarget.LockTableAtTheEnd) {
+		if localizeLockPlan && (canonicalTarget.LockTable || canonicalTarget.LockTableAtTheEnd) {
 			// Only table-lock disposition is annotated during physical compile. A
 			// shallow value copy keeps the canonical generation immutable without
 			// changing allocation or mutation behavior for non-candidate statements.
@@ -9348,12 +9276,18 @@ func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 			}
 		}
 	}
-	if !localizeLoadPlan {
+	if !localizeLockPlan {
 		// Preserve exact-main compile behavior outside the positively admitted
-		// LOAD path, including its existing canonical-node reuse contract.
+		// internal INSERT and LOAD paths, including canonical-node reuse.
 		node.LockTargets = lockRows
 	}
 	if len(lockRows) == 0 {
+		if promotedNewTable && (!c.IsTpQuery() || len(ss) > 1 || len(c.pn.GetQuery().Steps) > 1) {
+			// Keep the original input merge and downstream writer placement/DOP.
+			// Only remove row-key preparation; attaching writers to reader scopes
+			// would also change object fanout and I/O behavior during backfill.
+			ss = []*Scope{c.newMergeScope(ss)}
+		}
 		return ss, nil
 	}
 
@@ -9378,7 +9312,7 @@ func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 	var err error
 	var lockOpArg *lockop.LockOp
 	lockNode := node
-	if localizeLoadPlan {
+	if localizeLockPlan {
 		localNode := *node
 		localNode.LockTargets = lockRows
 		lockNode = &localNode
@@ -9391,6 +9325,16 @@ func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 	ss[0].doSetRootOperator(lockOpArg)
 	c.anal.isFirst = false
 	return ss, nil
+}
+
+func (c *Compile) canPrePipelineLockNewTable(target *plan.LockTarget) bool {
+	if c.prePipelineLockTableID == 0 || target.TableId != c.prePipelineLockTableID ||
+		target.Mode != lock.LockMode_Exclusive || target.HasPartitionCol {
+		return false
+	}
+	qry := c.pn.GetQuery()
+	return qry != nil && qry.StmtType == plan.Query_INSERT && !qry.LoadTag &&
+		lockop.SupportsTotalLockTableRange(plan2.MakeTypeByPlan2Type(target.PrimaryColTyp))
 }
 
 func (c *Compile) compileRecursiveCte(node *plan.Node, curNodeIdx int32) ([]*Scope, error) {
@@ -10988,8 +10932,6 @@ func (c *Compile) fatalLog(retry int, err error) {
 			moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)) {
 		return
 	}
-
-	txnTrace.GetService(c.proc.GetService()).TxnError(c.proc.GetTxnOperator(), err)
 
 	v, ok := moruntime.ServiceRuntime(c.proc.GetService()).
 		GetGlobalVariables(moruntime.EnableCheckInvalidRCErrors)

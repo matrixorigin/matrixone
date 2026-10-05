@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -105,24 +104,20 @@ func TestDecimalArithmeticErrorMapping(t *testing.T) {
 
 	decimalType := types.T_decimal128.ToType()
 	decimalType.Width = 38
-	inputs := []*vector.Vector{
-		mustNewConstFixed(t, decimalType, types.Decimal128{B0_63: math.MaxUint64, B64_127: math.MaxInt64}, proc),
-		mustNewConstFixed(t, decimalType, types.Decimal128{B0_63: 1}, proc),
-	}
-	defer inputs[0].Free(proc.Mp())
-	defer inputs[1].Free(proc.Mp())
+	baseline := [2]int64{proc.Mp().CurrNB(), proc.Mp().OnHeapCurrNB()}
+	defer func() { require.Equal(t, baseline, [2]int64{proc.Mp().CurrNB(), proc.Mp().OnHeapCurrNB()}) }()
+	left, err := vector.NewConstFixed(decimalType, types.Decimal128{B0_63: math.MaxUint64, B64_127: math.MaxInt64}, 1, proc.Mp())
+	require.NoError(t, err)
+	defer left.Free(proc.Mp())
+	right, err := vector.NewConstFixed(decimalType, types.Decimal128{B0_63: 1}, 1, proc.Mp())
+	require.NoError(t, err)
+	defer right.Free(proc.Mp())
+	inputs := []*vector.Vector{left, right}
 	result := vector.NewFunctionResultWrapper(decimalType, proc.Mp())
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(1))
 
-	err := decimalBatchArith[types.Decimal128, types.Decimal128](inputs, result, proc, 1, d128Add, nil)
+	err = decimalBatchArith[types.Decimal128, types.Decimal128](inputs, result, proc, 1, d128Add, nil)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange))
-}
-
-func mustNewConstFixed[T any](t *testing.T, typ types.Type, value T, proc *process.Process) *vector.Vector {
-	t.Helper()
-	vec, err := vector.NewConstFixed(typ, value, 1, proc.Mp())
-	require.NoError(t, err)
-	return vec
 }

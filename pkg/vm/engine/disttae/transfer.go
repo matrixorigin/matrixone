@@ -34,7 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
@@ -59,13 +58,6 @@ func transferInmemTombstones(
 			}
 
 			deleteObjs, createObjs := state.GetChangedObjsBetween(start, end)
-
-			trace.GetService(txn.proc.GetService()).ApplyFlush(
-				tbl.db.op.Txn().ID,
-				tbl.tableId,
-				start.ToTimestamp(),
-				tbl.db.op.SnapshotTS(),
-				len(deleteObjs))
 
 			if len(deleteObjs) > 0 {
 				if err := transferTombstones(
