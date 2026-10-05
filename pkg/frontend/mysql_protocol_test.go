@@ -3785,65 +3785,6 @@ func TestPrepareStmtCloseReleasesPendingLongData(t *testing.T) {
 	require.False(t, stmt.hasPendingLongData())
 }
 
-/* FIXME The prepare process has undergone some modifications,
-  	so the unit tests for prepare need to be refactored, and the subsequent pr I will resubmit a reasonable ut
-func TestParseExecuteData(t *testing.T) {
-	ctx := context.TODO()
-	convey.Convey("parseExecuteData succ", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-		ioses := mock_frontend.NewMockIOSession(ctrl)
-
-		ioses.EXPECT().OutBuf().Return(goetty_buf.NewByteBuf(1024)).AnyTimes()
-		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
-		ioses.EXPECT().Ref().AnyTimes()
-		ioses.EXPECT().Flush(gomock.Any()).AnyTimes()
-		sv, err := getSystemVariables("test/system_vars_config.toml")
-		if err != nil {
-			t.Error(err)
-		}
-
-		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
-		proc := testutil.NewProcess()
-
-		st := tree.NewPrepareString(tree.Identifier(getPrepareStmtName(1)), "select ?, 1")
-		stmts, err := mysql.Parse(ctx, st.Sql, 1)
-		if err != nil {
-			t.Error(err)
-		}
-		compCtx := plan.NewEmptyCompilerContext()
-		preparePlan, err := buildPlan(context.TODO(), nil, compCtx, st)
-		if err != nil {
-			t.Error(err)
-		}
-		prepareStmt := &PrepareStmt{
-			Name:        preparePlan.GetDcl().GetPrepare().GetName(),
-			PreparePlan: preparePlan,
-			PrepareStmt: stmts[0],
-			params:      vector.NewVec(types.T_varchar.ToType()),
-		}
-
-		var testData []byte
-		testData = append(testData, 0)          //flag
-		testData = append(testData, 0, 0, 0, 0) // skip iteration-count
-		nullBitmapLen := (1 + 7) >> 3
-		//nullBitmapLen
-		for i := 0; i < nullBitmapLen; i++ {
-			testData = append(testData, 0)
-		}
-		testData = append(testData, 1)                              // new param bound flag
-		testData = append(testData, uint8(defines.MYSQL_TYPE_TINY)) // type
-		testData = append(testData, 0)                              //is unsigned
-		testData = append(testData, 10)                             //tiny value
-
-		err = proto.ParseExecuteData(ctx, proc, prepareStmt, testData, 0)
-		convey.So(err, convey.ShouldBeNil)
-	})
-
-}
-*/
-
 func Test_resultset(t *testing.T) {
 	ctx := context.TODO()
 	convey.Convey("send result set batch row succ", t, func() {

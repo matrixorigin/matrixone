@@ -879,7 +879,7 @@ func TestPreparedNtileParameter(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
 			t.Cleanup(stmt.Free)
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			proc := mock.ctxt.GetProcess()
 			params := vector.NewVec(types.T_text.ToType())
 			t.Cleanup(func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) })

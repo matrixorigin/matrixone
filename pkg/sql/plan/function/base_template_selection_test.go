@@ -417,9 +417,8 @@ func TestUnaryStringDecimalPrefixCastConsumer(t *testing.T) {
 }
 
 func TestBinaryFixedExecutionContracts(t *testing.T) {
-	proc := testutil.NewProcess(t)
+	proc := newMemoryFunctionTestProcess(t)
 	t.Cleanup(func() {
-		proc.GetFileService().Close(proc.Ctx)
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
 		require.Zero(t, proc.Mp().OnHeapCurrNB())
