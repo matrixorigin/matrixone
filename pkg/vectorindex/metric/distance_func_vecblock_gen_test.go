@@ -129,6 +129,8 @@ func vbGenLoad(w *bytes.Buffer, o vbGenOperand, v string) {
 }
 
 // vbGenElems emits the decode of elements [g, g+4) of vbGenOperand v into v0..v3 and returns their names.
+// Each decoded element is an explicit float32 conversion, which rounds the product as the
+// stored value is rounded and keeps the compiler from fusing it into a later add or subtract.
 func vbGenElems(w *bytes.Buffer, o vbGenOperand, v string, g int) []string {
 	names := make([]string, 4)
 	for k := 0; k < 4; k++ {
@@ -137,14 +139,14 @@ func vbGenElems(w *bytes.Buffer, o vbGenOperand, v string, g int) []string {
 	switch o.name {
 	case "F8":
 		for k := 0; k < 4; k++ {
-			fmt.Fprintf(w, "%s := f8[%se[%d]] * %ss\n", names[k], v, g+k, v)
+			fmt.Fprintf(w, "%s := float32(f8[%se[%d]] * %ss)\n", names[k], v, g+k, v)
 		}
 	case "F4":
 		fmt.Fprintf(w, "%sp%d, %sp%d := &f4[%se[%d]], &f4[%se[%d]]\n", v, g, v, g+2, v, g/2, v, g/2+1)
-		fmt.Fprintf(w, "%s := %sp%d[0] * %ss\n", names[0], v, g, v)
-		fmt.Fprintf(w, "%s := %sp%d[1] * %ss\n", names[1], v, g, v)
-		fmt.Fprintf(w, "%s := %sp%d[0] * %ss\n", names[2], v, g+2, v)
-		fmt.Fprintf(w, "%s := %sp%d[1] * %ss\n", names[3], v, g+2, v)
+		fmt.Fprintf(w, "%s := float32(%sp%d[0] * %ss)\n", names[0], v, g, v)
+		fmt.Fprintf(w, "%s := float32(%sp%d[1] * %ss)\n", names[1], v, g, v)
+		fmt.Fprintf(w, "%s := float32(%sp%d[0] * %ss)\n", names[2], v, g+2, v)
+		fmt.Fprintf(w, "%s := float32(%sp%d[1] * %ss)\n", names[3], v, g+2, v)
 	case "F32":
 		for k := 0; k < 4; k++ {
 			fmt.Fprintf(w, "%s := %sv[%d]\n", names[k], v, g+k)

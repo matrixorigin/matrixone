@@ -288,3 +288,31 @@ func TestVecBlockOverflowNaNMapsToPosInf(t *testing.T) {
 	require.Equal(t, 1.0, vecBlockNaNToPosInf(1))
 	require.True(t, math.IsInf(vecBlockNaNToPosInf(math.Inf(-1)), -1))
 }
+
+// TestVecBlockSelfDistance checks that a stored vector is at distance 0 from itself, with
+// decoded values near the float32 limit and at several magnitudes: each decoded element is
+// rounded once, as stored, on targets that fuse multiply-add (arm64) as on the others.
+func TestVecBlockSelfDistance(t *testing.T) {
+	r := rand.New(rand.NewSource(29554))
+	vectors := [][]float32{
+		{9.9999994e29, 9.9999994e29, 9.9999994e29, 9.9999994e29, 9.9999994e29, 9.9999994e29, 9.9999994e29, 9.9999994e29,
+			9.9999994e29, 9.9999994e29, 9.9999994e29, 9.9999994e29, 9.9999994e29, 9.9999994e29, 9.9999994e29, 9.9999994e29},
+	}
+	for _, scale := range []float64{1e-30, 1e-3, 1, 1e3, 1e20} {
+		for _, dim := range []int{16, 17, 70} {
+			vectors = append(vectors, vecBlockRandom(r, dim, scale))
+		}
+	}
+	for _, f := range []types.BlockScaledFormat{types.BlockScaledMXFP8, types.BlockScaledNVFP4} {
+		for i, v := range vectors {
+			x, _ := vecBlockTestOperand(t, f, v)
+			y, _ := vecBlockTestOperand(t, f, v)
+			l2, err := VecBlockL2DistanceSq(x, y)
+			require.NoError(t, err)
+			require.Equal(t, float64(0), l2, "%s vector %d", f, i)
+			l1, err := VecBlockL1Distance(x, y)
+			require.NoError(t, err)
+			require.Equal(t, float64(0), l1, "%s vector %d", f, i)
+		}
+	}
+}
