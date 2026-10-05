@@ -72,7 +72,7 @@ var methodVersions = map[pb.CmdMethod]int64{
 	pb.CmdMethod_ISCPDrainConsumer:       defines.MORPCVersion4,
 	pb.CmdMethod_IcebergCacheInvalidate:  defines.MORPCVersion4,
 	pb.CmdMethod_MongoDBClientRetire:     defines.MORPCVersion5,
-	pb.CmdMethod_GetPythonUdfStatus:      defines.MORPCVersion72,
+	pb.CmdMethod_GetPythonUdfStatus:      defines.MORPCVersion107,
 }
 
 type queryClient struct {

@@ -15,143 +15,200 @@
 package v4_0_12
 
 import (
-	"errors"
+	"context"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
-	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/stretchr/testify/require"
 )
 
-func TestCharacterSetsUpgradeMetadata(t *testing.T) {
-	m := Handler.Metadata()
-	require.Equal(t, "4.0.12", m.Version)
-	require.Equal(t, "4.0.11", m.MinUpgradeVersion)
-	require.Equal(t, versions.Yes, m.UpgradeTenant)
-	require.Equal(t, versions.No, m.UpgradeCluster)
-	require.Equal(t, defines.MORPCVersion106, m.RequiredProtocolVersion)
-	require.Equal(t, uint32(1), m.VersionOffset)
-	check := sysview.InformationSchemaCharacterSetsCheckSQL()
-	require.Contains(t, check, "(SELECT COUNT(*) FROM information_schema.CHARACTER_SETS) = 3")
-	require.Contains(t, check, "CHARACTER_SET_NAME = 'utf8' AND DEFAULT_COLLATE_NAME = 'utf8_general_ci' AND MAXLEN = 4")
-	require.NotContains(t, check, "MAXLEN = 3")
+func TestPythonRevisionRepairUpgradePath(t *testing.T) {
+	metadata := Handler.Metadata()
+	require.Equal(t, "4.0.12", metadata.Version)
+	require.Equal(t, "4.0.11", metadata.MinUpgradeVersion)
+	require.Equal(t, versions.No, metadata.UpgradeCluster)
+	require.Equal(t, versions.Yes, metadata.UpgradeTenant)
+	require.Equal(t, int64(107), metadata.RequiredProtocolVersion)
+	require.Equal(t, uint32(len(v4_0_7.PythonRevisionUpgradeEntries())), metadata.VersionOffset)
+	require.True(t, metadata.CanDirectUpgrade("4.0.11"))
+	require.False(t, metadata.CanDirectUpgrade("4.0.7"))
+	require.Len(t, v4_0_7.PythonRevisionUpgradeEntries(), 9)
 }
 
-type scopedTxn struct {
-	executor.TxnExecutor
-	t         *testing.T
-	accountID uint32
-}
-
-func (txn scopedTxn) Exec(sql string, options executor.StatementOption) (executor.Result, error) {
-	if sql != "SELECT mo_ctl('cn', 'GetProtocolVersion', '')" {
-		require.True(txn.t, options.HasAccountID())
-		require.Equal(txn.t, txn.accountID, options.AccountID())
-	}
-	return txn.TxnExecutor.Exec(sql, options)
-}
-
-func TestCharacterSetsUpgradeAdmissionAndRetry(t *testing.T) {
-	entry := refreshInformationSchemaCharacterSets()
-	const protocolSQL = "SELECT mo_ctl('cn', 'GetProtocolVersion', '')"
-	checkSQL := sysview.InformationSchemaCharacterSetsCheckSQL()
-	injected := errors.New("injected charset metadata upgrade failure")
-	for _, tc := range []struct {
-		name     string
-		ready    bool
-		protocol string
-		failSQL  string
-		wantErr  bool
-		wantSQL  []string
+func TestPythonRevisionRepairIsIdempotentForPersisted407And408(t *testing.T) {
+	for _, test := range []struct {
+		name             string
+		persistedVersion string
+		columns          []string
+		newIndex         bool
+		legacyIndex      bool
+		revisionTable    bool
+		wantFirstDDL     int
 	}{
-		{name: "legacy utf8 maxlen three", protocol: `{"result":"cn0:106,cn1:106"}`,
-			wantSQL: []string{checkSQL, protocolSQL, entry.PreSql, entry.UpgSql}},
-		{name: "fresh canonical catalog", ready: true, wantSQL: []string{checkSQL}},
-		{name: "failed check", failSQL: checkSQL, wantErr: true, wantSQL: []string{checkSQL}},
-		{name: "mixed protocol", protocol: `{"result":"cn0:106,cn1:105"}`, wantErr: true,
-			wantSQL: []string{checkSQL, protocolSQL}},
-		{name: "failed protocol", failSQL: protocolSQL, wantErr: true,
-			wantSQL: []string{checkSQL, protocolSQL}},
-		{name: "failed delete", protocol: `{"result":"cn0:106"}`, failSQL: entry.PreSql, wantErr: true,
-			wantSQL: []string{checkSQL, protocolSQL, entry.PreSql}},
-		{name: "failed insert", protocol: `{"result":"cn0:106"}`, failSQL: entry.UpgSql, wantErr: true,
-			wantSQL: []string{checkSQL, protocolSQL, entry.PreSql, entry.UpgSql}},
+		{
+			name:             "persisted_4.0.7_missed_catalog",
+			persistedVersion: "4.0.7",
+			legacyIndex:      true,
+			wantFirstDDL:     9,
+		},
+		{
+			name:             "persisted_4.0.8_partial_catalog",
+			persistedVersion: "4.0.8",
+			columns: []string{
+				"active_revision", "namespace_version", "canonical_input_descriptor",
+				"return_descriptor", "signature_key_schema_version", "signature_fingerprint",
+			},
+			legacyIndex:  true,
+			wantFirstDDL: 3,
+		},
+		{
+			name:             "persisted_4.0.8_complete_catalog",
+			persistedVersion: "4.0.8",
+			columns: []string{
+				"active_revision", "namespace_version", "canonical_input_descriptor",
+				"return_descriptor", "signature_key_schema_version", "signature_fingerprint",
+			},
+			newIndex:      true,
+			revisionTable: true,
+			wantFirstDDL:  0,
+		},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
+		t.Run(test.name, func(t *testing.T) {
 			runtime.RunTest("", func(runtime.Runtime) {
-				operator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
-				operator.EXPECT().TxnOptions().Return(pbtxn.TxnOptions{}).AnyTimes()
-				mp := mpool.MustNewZero()
-				defer func() {
-					require.Zero(t, mp.CurrNB())
-					mpool.DeleteMPool(mp)
-				}()
-				result := func(value string) executor.Result {
-					r := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, mp)
-					if value != "" {
-						r.NewBatchWithRowCount(1)
-						require.NoError(t, executor.AppendStringRows(r, 0, []string{value}))
-					}
-					return r.GetResult()
+				state := &pythonRevisionCatalogState{
+					columns:       make(map[string]bool),
+					newIndex:      test.newIndex,
+					legacyIndex:   test.legacyIndex,
+					revisionTable: test.revisionTable,
 				}
-				var calls []string
-				ready := tc.ready
-				failSQL := tc.failSQL
-				protocol := tc.protocol
-				txn := scopedTxn{t: t, accountID: 7, TxnExecutor: executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
-					calls = append(calls, sql)
-					if sql == failSQL {
-						return executor.Result{}, injected
-					}
-					switch sql {
-					case checkSQL:
-						if ready {
-							return result("1"), nil
-						}
-						return result(""), nil
-					case protocolSQL:
-						return result(protocol), nil
-					case entry.PreSql:
-						ready = false
-					case entry.UpgSql:
-						ready = true
-					default:
-						t.Fatalf("unexpected SQL: %s", sql)
-					}
-					return executor.Result{}, nil
-				}, operator)}
-				require.NoError(t, Handler.Prepare(t.Context(), txn, true))
-				require.NoError(t, Handler.HandleClusterUpgrade(t.Context(), txn))
-				require.Error(t, Handler.HandleCreateFrameworkDeps(txn))
-				err := Handler.HandleTenantUpgrade(t.Context(), 7, txn)
-				if tc.failSQL != "" {
-					require.ErrorIs(t, err, injected)
-				} else if tc.wantErr {
-					require.Error(t, err)
-				} else {
-					require.NoError(t, err)
+				for _, column := range test.columns {
+					state.columns[column] = true
 				}
-				require.Equal(t, tc.wantSQL, calls)
-				if tc.wantErr {
-					// The owner transaction rolls back failed entries. On retry the
-					// handler must execute the repair, not treat MAXLEN=3 as ready.
-					ready, failSQL, protocol = false, "", `{"result":"cn0:106"}`
-					calls = nil
-					require.NoError(t, Handler.HandleTenantUpgrade(t.Context(), 7, txn))
-					require.Equal(t, []string{checkSQL, protocolSQL, entry.PreSql, entry.UpgSql}, calls)
-				}
-				calls = nil
-				require.NoError(t, Handler.HandleTenantUpgrade(t.Context(), 7, txn))
-				require.Equal(t, []string{checkSQL}, calls, "a completed refresh must be idempotent")
+				txn := newRepairTxnExecutor(t, state)
+				require.NoError(t, Handler.Prepare(context.Background(), txn, true))
+				require.NoError(t, Handler.HandleTenantUpgrade(context.Background(), 7, txn))
+				require.Len(t, state.ddl, test.wantFirstDDL,
+					"repair from persisted %s must apply only missing catalog objects", test.persistedVersion)
+				firstDDL := append([]string(nil), state.ddl...)
+				require.NoError(t, Handler.HandleTenantUpgrade(context.Background(), 7, txn))
+				require.Equal(t, firstDDL, state.ddl,
+					"a restart/retry from persisted %s must not repeat DDL", test.persistedVersion)
 			})
 		})
 	}
+}
+
+type pythonRevisionCatalogState struct {
+	columns       map[string]bool
+	newIndex      bool
+	legacyIndex   bool
+	revisionTable bool
+	ddl           []string
+}
+
+func newRepairTxnExecutor(t *testing.T, state *pythonRevisionCatalogState) executor.TxnExecutor {
+	t.Helper()
+	txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
+	return executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+		lower := strings.ToLower(sql)
+		switch {
+		case strings.Contains(lower, "from mo_catalog.mo_columns"):
+			for column := range state.columns {
+				if strings.Contains(sql, fmt.Sprintf("attname = '%s'", column)) {
+					return repairColumnResult(t), nil
+				}
+			}
+			return executor.Result{}, nil
+		case strings.Contains(lower, "from `mo_catalog`.`mo_indexes`"):
+			if strings.Contains(sql, "name_db_arg_types_descriptor") && state.newIndex {
+				return repairStringResult(t, "name_db_arg_types_descriptor"), nil
+			}
+			if strings.Contains(sql, "name_db_arg_types'") && state.legacyIndex {
+				return repairStringResult(t, "name_db_arg_types"), nil
+			}
+			return executor.Result{}, nil
+		case strings.Contains(lower, "from mo_catalog.mo_tables"):
+			if state.revisionTable && strings.Contains(sql, "relname = 'mo_function_revisions'") {
+				return repairStringResult(t, "mo_function_revisions"), nil
+			}
+			return executor.Result{}, nil
+		case sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')":
+			return repairStringResult(t, `{"method":"GETPROTOCOLVERSION","result":"cn-a:107"}`), nil
+		case strings.Contains(lower, "alter table mo_catalog.mo_user_defined_function add column"):
+			for column := range state.columns {
+				if strings.Contains(sql, "add column "+column+" ") {
+					return executor.Result{}, nil
+				}
+			}
+			for _, column := range []string{
+				"active_revision", "namespace_version", "canonical_input_descriptor",
+				"return_descriptor", "signature_key_schema_version", "signature_fingerprint",
+			} {
+				if strings.Contains(sql, "add column "+column+" ") {
+					state.columns[column] = true
+					state.ddl = append(state.ddl, sql)
+					return executor.Result{}, nil
+				}
+			}
+		case strings.Contains(lower, "create unique index name_db_arg_types_descriptor"):
+			state.newIndex = true
+			state.ddl = append(state.ddl, sql)
+			return executor.Result{}, nil
+		case strings.Contains(lower, "drop index name_db_arg_types"):
+			state.legacyIndex = false
+			state.ddl = append(state.ddl, sql)
+			return executor.Result{}, nil
+		case strings.Contains(lower, "create table mo_catalog.mo_function_revisions"):
+			state.revisionTable = true
+			state.ddl = append(state.ddl, sql)
+			return executor.Result{}, nil
+		default:
+			return executor.Result{}, fmt.Errorf("unexpected repair SQL: %s", sql)
+		}
+		return executor.Result{}, nil
+	}, txnOperator)
+}
+
+func repairStringResult(t *testing.T, value string) executor.Result {
+	t.Helper()
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	result := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, mp)
+	result.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendStringRows(result, 0, []string{value}))
+	return result.GetResult()
+}
+
+func repairColumnResult(t *testing.T) executor.Result {
+	t.Helper()
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	result := executor.NewMemResult([]types.Type{
+		types.T_varchar.ToType(), types.T_varchar.ToType(),
+		types.T_int64.ToType(), types.T_int64.ToType(), types.T_int64.ToType(), types.T_int64.ToType(),
+		types.T_int32.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(),
+	}, mp)
+	result.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendStringRows(result, 0, []string{"BIGINT UNSIGNED"}))
+	require.NoError(t, executor.AppendStringRows(result, 1, []string{"NO"}))
+	require.NoError(t, executor.AppendFixedRows(result, 2, []int64{0}))
+	require.NoError(t, executor.AppendFixedRows(result, 3, []int64{0}))
+	require.NoError(t, executor.AppendFixedRows(result, 4, []int64{0}))
+	require.NoError(t, executor.AppendFixedRows(result, 5, []int64{0}))
+	require.NoError(t, executor.AppendFixedRows(result, 6, []int32{1}))
+	require.NoError(t, executor.AppendStringRows(result, 7, []string{"0"}))
+	require.NoError(t, executor.AppendStringRows(result, 8, []string{""}))
+	require.NoError(t, executor.AppendStringRows(result, 9, []string{""}))
+	return result.GetResult()
 }
