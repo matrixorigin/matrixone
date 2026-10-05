@@ -26,6 +26,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -519,6 +520,97 @@ func TestPersistSQLCreateKeepsRollingCatalogCompatibility(t *testing.T) {
 	require.Equal(t, functionRevisionCatalogSchemaCheck, bh.executedSqls[0])
 	require.NotContains(t, bh.executedSqls[1], "canonical_input_descriptor")
 	require.NotContains(t, bh.executedSqls[1], "mo_function_revisions")
+}
+
+func setSharedRoutineRevisionProtocolForTest(t *testing.T, version int64) {
+	t.Helper()
+	rt := moruntime.ServiceRuntime("")
+	previous, hadPrevious := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadPrevious {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, version)
+		}
+	})
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+}
+
+func TestSharedRoutineRevisionProtocolGatesMixedVersionSQLUdfWrites(t *testing.T) {
+	setSharedRoutineRevisionProtocolForTest(t, defines.MORPCVersion106)
+
+	create := &backgroundExecTestWithHistory{}
+	create.init()
+	create.sql2result[functionRevisionCatalogSchemaCheck] = emptyCatalogProbeResult(20)
+	err := persistUserDefinedFunction(context.Background(), create, &TenantInfo{User: "owner"}, 7, userDefinedFunctionDefinition{
+		name:     "legacy_until_ready",
+		args:     `[{"name":"value","type":"bigint"}]`,
+		argTypes: `["bigint"]`,
+		retType:  "bigint",
+		body:     "select value + 1",
+		lang:     string(tree.SQL),
+		dbName:   "db1",
+	}, nil)
+	require.NoError(t, err)
+	require.Len(t, create.executedSqls, 2)
+	require.NotContains(t, create.executedSqls[1], "mo_function_revisions")
+
+	functionID := int64(92)
+	replace := &backgroundExecTestWithHistory{}
+	replace.init()
+	replace.sql2result[functionRevisionCatalogSchemaCheck] = emptyCatalogProbeResult(20)
+	replace.sql2result[fmt.Sprintf(
+		"select language from mo_catalog.mo_user_defined_function where function_id = %d;", functionID,
+	)] = singleStringResult("language", string(tree.SQL))
+	replace.sql2result[fmt.Sprintf(
+		"select active_revision, namespace_version from mo_catalog.mo_user_defined_function where function_id = %d;", functionID,
+	)] = func() *MysqlResultSet {
+		result := &MysqlResultSet{}
+		for _, name := range []string{"active_revision", "namespace_version"} {
+			column := &MysqlColumn{}
+			column.SetName(name)
+			column.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+			result.AddColumn(column)
+		}
+		result.AddRow([]interface{}{int64(1), int64(1)})
+		return result
+	}()
+	err = persistUserDefinedFunction(context.Background(), replace, &TenantInfo{User: "owner"}, 7, userDefinedFunctionDefinition{
+		name:     "legacy_until_ready",
+		args:     `[{"name":"value","type":"bigint"}]`,
+		argTypes: `["bigint"]`,
+		retType:  "bigint",
+		body:     "select value + 2",
+		lang:     string(tree.SQL),
+		dbName:   "db1",
+	}, &functionID)
+	require.ErrorContains(t, err, "SQL UDF revision replacement requires MORPC protocol version 107")
+	for _, sql := range replace.executedSqls {
+		require.NotContains(t, sql, "update mo_catalog.mo_user_defined_function")
+	}
+}
+
+func TestReadSQLRevisionUsesLegacyBodyBeforeRevisionProtocol(t *testing.T) {
+	setSharedRoutineRevisionProtocolForTest(t, defines.MORPCVersion106)
+
+	background := &backgroundExecTestWithHistory{}
+	background.init()
+	got, found, err := readSQLRevision(context.Background(), background, 92, nil)
+	require.NoError(t, err)
+	require.False(t, found)
+	require.Equal(t, sqlRevisionCatalogRow{}, got)
+	require.Empty(t, background.executedSqls,
+		"ResolveUdf keeps the already-read legacy compatibility row while the shared revision contract is gated")
+}
+
+func TestPythonUdfRevisionProtocolRejectsImmediatePredecessor(t *testing.T) {
+	setSharedRoutineRevisionProtocolForTest(t, defines.MORPCVersion106)
+
+	background := &backgroundExecTestWithHistory{}
+	background.init()
+	err := ensurePythonUdfCatalogReady(context.Background(), background)
+	require.ErrorContains(t, err, "Python UDF catalog contract requires MORPC protocol version 107")
+	require.Empty(t, background.executedSqls)
 }
 
 func TestFunctionRevisionCatalogAvailablePropagatesMalformedProbeResult(t *testing.T) {
