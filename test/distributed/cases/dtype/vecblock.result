@@ -320,4 +320,33 @@ insert into hexkeep values (1, cast(X'3132' as signed), cast(1.005 as double));
 select * from hexkeep;
 ➤ id[4,32,0]  ¦  c[12,10,0]  ¦  d[3,5,2]  𝄀
 1  ¦  12  ¦  1.01
+create table eqk (id int, v4 vecf4(1), v8 vecf8(1));
+insert into eqk values (1, '[1.2031566]', '[447]'), (2, '[1.2031565]', '[449]');
+select v8 = (select v8 from eqk where id = 1), v4 = (select v4 from eqk where id = 1) from eqk where id = 2;
+➤ v8 = (select v8 from eqk where id = 1)[-7,1,0]  ¦  v4 = (select v4 from eqk where id = 1)[-7,1,0]  𝄀
+1  ¦  1
+select v8, count(*) from eqk group by v8;
+➤ v8[12,1,0]  ¦  count(*)[-5,64,0]  𝄀
+[448]  ¦  2
+select count(*) from (select v4 from eqk group by v4) x;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(distinct v4), count(distinct v8), approx_count_distinct(v8) from eqk;
+➤ count(distinct v4)[-5,64,0]  ¦  count(distinct v8)[-5,64,0]  ¦  approx_count_distinct(v8)[-5,64,0]  𝄀
+1  ¦  1  ¦  1
+select count(*) from eqk a join eqk b on a.v8 = b.v8;
+➤ count(*)[-5,64,0]  𝄀
+4
+select count(*) from eqk a join eqk b on a.v4 = b.v4;
+➤ count(*)[-5,64,0]  𝄀
+4
+select count(*) from (select v8 from eqk where id = 1 union select v8 from eqk where id = 2) u;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from eqk where v8 in (select v8 from eqk where id = 2);
+➤ count(*)[-5,64,0]  𝄀
+2
+select count(*) from (select sample(v8, 1 rows) from eqk) s;
+➤ count(*)[-5,64,0]  𝄀
+1
 drop database vecblock_db;

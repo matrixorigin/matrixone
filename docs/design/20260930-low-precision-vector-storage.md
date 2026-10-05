@@ -327,7 +327,8 @@ only when it is stored into a `vecf8`/`vecf4` column (assignment cast).
 | `case`/`coalesce` mixing vector types, `greatest`, `least`, `json_object`, `json_array`, `JSON_ARRAYAGG`, `JSON_OBJECTAGG` | on the values dequantized to `vecf32`; results as for `vecf32` |
 | `SUM`/`AVG`/`MIN`/`MAX` over vectors | not supported (no vector type has them) |
 | `ORDER BY`, window `ORDER BY` | as for `vecf32`: by the dequantized values, element-wise |
-| `GROUP BY`, `DISTINCT`, window `PARTITION BY` | by cell bytes (the encoding of a given input is deterministic) |
+| `GROUP BY`, `DISTINCT`, hash joins, set operations, `IN (subquery)`, `COUNT(DISTINCT)`, `approx_count_distinct` | by the decoded values, as `=` compares: the equality key (`keycodec.AppendCanonicalVecBlock`) is the cell's decoded float32 values, so cells that encode equal values with other block or global scales (vecf8 `[447]` and `[449]` both store 448) are one key |
+| window `PARTITION BY`, `ORDER BY` | by the decoded values, element-wise |
 | `subvector` | not supported (as for the other narrow vector types) |
 | comparison operators (`=`, `<>`, `<`, `<=`, `>`, `>=`, `<=>`, `IN`, `BETWEEN`) | as for `vecbf16`: a text literal is quantized to the column's type, as a stored value is, so a row matches the text it was inserted from (`'[3000, -12, 0.001, 1000000]'` matches the cell that displays as `[3072, -16, 0, 983040]`), and text of another dimension is rejected; cells compare by their dequantized values, element-wise |
 | `hex`, `to_base64` | not supported, as for the other narrow vector types (`vecf32` only) |

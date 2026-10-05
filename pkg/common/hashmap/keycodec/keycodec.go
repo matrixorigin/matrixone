@@ -258,6 +258,8 @@ func CanonicalValueSize(typ types.Type, value []byte) int {
 		return len(CanonicalCharValue(value))
 	case types.T_json:
 		return CanonicalJSONSize(value)
+	case types.T_array_float8, types.T_array_float4:
+		return canonicalVecBlockSize(value)
 	case types.T_array_float32, types.T_array_float64,
 		types.T_array_bf16, types.T_array_float16,
 		types.T_float32, types.T_float64:
@@ -283,6 +285,8 @@ func AppendCanonicalValue(dst []byte, typ types.Type, value []byte) []byte {
 		return AppendCanonicalVecF64(dst, value)
 	case types.T_array_bf16, types.T_array_float16:
 		return AppendCanonicalVecF16(dst, value)
+	case types.T_array_float8, types.T_array_float4:
+		return AppendCanonicalVecBlock(dst, value)
 	case types.T_float32:
 		if len(value) == types.T_float32.TypeLen() {
 			decoded := types.DecodeFixed[float32](value)
@@ -337,6 +341,9 @@ func CanonicalValuesEqual(typ types.Type, left, right []byte) bool {
 		return canonicalVecEqual(left, right, 8)
 	case types.T_array_bf16, types.T_array_float16:
 		return canonicalVecEqual(left, right, 2)
+	case types.T_array_float8, types.T_array_float4:
+		// the decoded values compared element-wise; malformed cells by bytes
+		return types.CompareBlockScaledFromBytes(left, right, false) == 0
 	default:
 		return bytes.Equal(left, right)
 	}
@@ -553,6 +560,34 @@ func AppendCanonicalVecF16(dst, value []byte) []byte {
 	return dst
 }
 
+// AppendCanonicalVecBlock appends the equality key of a vecf8/vecf4 cell: its decoded
+// float32 values, little endian, with signed zero mapped to zero. Cells that encode the
+// same values (another block or global scale) get one key, as SQL equality compares the
+// decoded values. A malformed cell keeps its bytes.
+func AppendCanonicalVecBlock(dst, value []byte) []byte {
+	cell, err := types.ParseBlockScaledCell(value)
+	if err != nil {
+		return append(dst, value...)
+	}
+	var buf [32]float32
+	for off := 0; off < cell.Dim; off += len(buf) {
+		n := min(len(buf), cell.Dim-off)
+		cell.DequantizeRange(off, buf[:n])
+		for _, v := range buf[:n] {
+			dst = binary.LittleEndian.AppendUint32(dst, CanonicalFloat32Bits(v))
+		}
+	}
+	return dst
+}
+
+// canonicalVecBlockSize is the length of AppendCanonicalVecBlock's key.
+func canonicalVecBlockSize(value []byte) int {
+	if cell, err := types.ParseBlockScaledCell(value); err == nil {
+		return 4 * cell.Dim
+	}
+	return len(value)
+}
+
 // HashCombine merges one column hash into the hash state for a composite key.
 func HashCombine(hash, columnHash uint64) uint64 {
 	return hash ^ (columnHash + 0x9e3779b97f4a7c15 + (hash << 6) + (hash >> 2))
@@ -600,6 +635,9 @@ func ComputeXXHash(keyVecs []*vector.Vector, hashValues []uint64, seed uint64) {
 			continue
 		case types.T_array_bf16, types.T_array_float16:
 			computeCanonicalVarlenaXXHash(vec, hashValues, AppendCanonicalVecF16)
+			continue
+		case types.T_array_float8, types.T_array_float4:
+			computeCanonicalVarlenaXXHash(vec, hashValues, AppendCanonicalVecBlock)
 			continue
 		}
 		if vec.IsConst() {
@@ -758,6 +796,9 @@ func CanonicalBytesAt(vec *vector.Vector, row int, scratch []byte) (canonical, r
 		return scratch, scratch
 	case types.T_array_bf16, types.T_array_float16:
 		scratch = AppendCanonicalVecF16(scratch, vec.GetRawBytesAt(row))
+		return scratch, scratch
+	case types.T_array_float8, types.T_array_float4:
+		scratch = AppendCanonicalVecBlock(scratch, vec.GetRawBytesAt(row))
 		return scratch, scratch
 	default:
 		return vec.GetRawBytesAt(row), scratch

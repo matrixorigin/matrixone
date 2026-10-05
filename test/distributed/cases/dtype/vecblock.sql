@@ -157,4 +157,18 @@ create table hexkeep (id int, c varchar(10), d decimal(5,2));
 insert into hexkeep values (1, cast(X'3132' as signed), cast(1.005 as double));
 select * from hexkeep;
 
+-- cells that encode equal values with other scales are one key: GROUP BY, DISTINCT, joins
+-- and set operations agree with = (447 and 449 both store 448 in vecf8)
+create table eqk (id int, v4 vecf4(1), v8 vecf8(1));
+insert into eqk values (1, '[1.2031566]', '[447]'), (2, '[1.2031565]', '[449]');
+select v8 = (select v8 from eqk where id = 1), v4 = (select v4 from eqk where id = 1) from eqk where id = 2;
+select v8, count(*) from eqk group by v8;
+select count(*) from (select v4 from eqk group by v4) x;
+select count(distinct v4), count(distinct v8), approx_count_distinct(v8) from eqk;
+select count(*) from eqk a join eqk b on a.v8 = b.v8;
+select count(*) from eqk a join eqk b on a.v4 = b.v4;
+select count(*) from (select v8 from eqk where id = 1 union select v8 from eqk where id = 2) u;
+select count(*) from eqk where v8 in (select v8 from eqk where id = 2);
+select count(*) from (select sample(v8, 1 rows) from eqk) s;
+
 drop database vecblock_db;

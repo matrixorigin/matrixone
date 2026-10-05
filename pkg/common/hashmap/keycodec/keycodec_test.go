@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"math"
+	"math/rand"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -1006,4 +1007,62 @@ func TestComputeXXHashDoesNotTreatStaleGroupingAsFull(t *testing.T) {
 	left.Free(mp)
 	right.Free(mp)
 	require.Zero(t, mp.CurrNB())
+}
+
+// TestCanonicalVecBlockKeyMatchesEquality checks that vecf8/vecf4 equality keys agree with
+// SQL equality (the decoded values compared element-wise): cells that encode the same
+// values with other block or global scales share a key, and unequal cells do not.
+func TestCanonicalVecBlockKeyMatchesEquality(t *testing.T) {
+	cell := func(f types.BlockScaledFormat, v ...float32) []byte {
+		c, err := types.AppendBlockScaled(nil, f, v)
+		require.NoError(t, err)
+		return c
+	}
+	check := func(typ types.Type, a, b []byte) bool {
+		equal := types.CompareBlockScaledFromBytes(a, b, false) == 0
+		ka, kb := AppendCanonicalValue(nil, typ, a), AppendCanonicalValue(nil, typ, b)
+		require.Equal(t, equal, bytes.Equal(ka, kb), "%s %x %x", typ.Oid, a, b)
+		require.Equal(t, equal, CanonicalValuesEqual(typ, a, b))
+		require.Equal(t, len(ka), CanonicalValueSize(typ, a))
+		return equal
+	}
+	f8, f4 := types.T_array_float8.ToType(), types.T_array_float4.ToType()
+	// MXFP8: 447 is code 448 at scale 1, 449 is code 224 at scale 2; both decode to 448
+	a, b := cell(types.BlockScaledMXFP8, 447), cell(types.BlockScaledMXFP8, 449)
+	require.NotEqual(t, a, b)
+	require.True(t, check(f8, a, b))
+	// NVFP4: the globals differ by one ulp and the decoded values are equal
+	a, b = cell(types.BlockScaledNVFP4, 1.2031566), cell(types.BlockScaledNVFP4, 1.2031565)
+	require.NotEqual(t, a, b)
+	require.True(t, check(f4, a, b))
+	require.False(t, check(f8, cell(types.BlockScaledMXFP8, 1, 2), cell(types.BlockScaledMXFP8, 1, 3)))
+	require.False(t, check(f8, cell(types.BlockScaledMXFP8, 1, 2), cell(types.BlockScaledMXFP8, 1, 2, 0)))
+
+	// near-identical inputs often quantize to equal values under other scales
+	r := rand.New(rand.NewSource(20567))
+	for _, f := range []types.BlockScaledFormat{types.BlockScaledMXFP8, types.BlockScaledNVFP4} {
+		typ := f8
+		if f == types.BlockScaledNVFP4 {
+			typ = f4
+		}
+		equal := 0
+		for i := 0; i < 2000; i++ {
+			dim := 1 + r.Intn(40)
+			x := make([]float32, dim)
+			for k := range x {
+				x[k] = float32(r.NormFloat64() * math.Pow(10, float64(r.Intn(5)-2)))
+			}
+			y := append([]float32(nil), x...)
+			k := r.Intn(dim)
+			y[k] = math.Nextafter32(y[k], float32(math.Inf(1+r.Intn(2)*-2)))
+			if check(typ, cell(f, x...), cell(f, y...)) {
+				equal++
+			}
+		}
+		require.Positive(t, equal, "%s: the property is exercised with equal pairs", f)
+	}
+
+	// a malformed cell keeps its bytes
+	require.Equal(t, []byte{1, 2, 3}, AppendCanonicalValue(nil, f8, []byte{1, 2, 3}))
+	require.Equal(t, 3, CanonicalValueSize(f8, []byte{1, 2, 3}))
 }

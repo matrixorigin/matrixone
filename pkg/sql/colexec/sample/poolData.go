@@ -178,7 +178,8 @@ func init() {
 		types.T_json, types.T_blob, types.T_text, types.T_datalink,
 		types.T_array_float32, types.T_array_float64,
 		types.T_array_bf16, types.T_array_float16,
-		types.T_array_int8, types.T_array_uint8} {
+		types.T_array_int8, types.T_array_uint8,
+		types.T_array_float8, types.T_array_float4} {
 		replaceMethods[oid] = func(toVec, fromVec *vector.Vector, row1, row2 int, mp *mpool.MPool) error {
 			return vector.SetBytesAtFrom(toVec, row1, fromVec, row2, mp)
 		}
