@@ -178,6 +178,11 @@ func contextCancellationTreeKind(err error) (contextCancellationKind, bool) {
 			return contextCancellationTreeKind(child)
 		}
 	}
+	// Snapshot consumer retirement as cancellation fallout. The scope still
+	// owns success certification; declared failure provenance is kept separately.
+	if stopped, ok := err.(interface{ IsPipelineStopped() bool }); ok && stopped.IsPipelineStopped() {
+		return contextCanceled, true
+	}
 	var me *moerr.Error
 	if errors.As(err, &me) {
 		if kind, ok := contextCancellationMoErrKind(me); ok {

@@ -31,6 +31,10 @@ type pipelineStoppedError struct{ message string }
 
 func (e *pipelineStoppedError) Error() string { return e.message }
 
+// IsPipelineStopped exposes immutable control shape to dependency snapshots
+// without an import cycle. Only the scope's cancel cause certifies success.
+func (e *pipelineStoppedError) IsPipelineStopped() bool { return true }
+
 // isPipelineInterruption classifies error shape only for choosing between
 // failures. Unlike IsPipelineCancellationError, it ignores failure provenance:
 // an interrupted Error still fails, but must not hide a substantive cause.

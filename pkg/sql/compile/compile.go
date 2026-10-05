@@ -798,8 +798,10 @@ func normalizeScopeRunError(
 		return process.MarkPipelineFailure(err), false
 	}
 	cause := context.Cause(pipelineCtx)
-	if cause == process.ErrPipelineStopped && queryCtx != nil && queryCtx.Err() == nil {
-		return nil, true
+	if cause == process.ErrPipelineStopped && queryCtx != nil {
+		// A first-wins consumer stop can outlive its query's deadline. It is
+		// successful only while that query remains live.
+		return process.MarkPipelineFailure(queryCtx.Err()), true
 	}
 	if cause != nil {
 		return process.MarkPipelineFailure(cause), true

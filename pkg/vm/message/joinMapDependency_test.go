@@ -129,7 +129,29 @@ type emptyWrappedError struct{}
 func (emptyWrappedError) Error() string { return "empty wrapped error" }
 func (emptyWrappedError) Unwrap() error { return nil }
 
+type stopShapeError struct{ stopped bool }
+
+func (e stopShapeError) Error() string           { return "pipeline consumer finished" }
+func (e stopShapeError) IsPipelineStopped() bool { return e.stopped }
+
+type stopShapeWrapper struct{ error }
+
+func (e stopShapeWrapper) IsPipelineStopped() bool { return true }
+func (e stopShapeWrapper) Unwrap() error           { return e.error }
+
 func TestJoinMapBuildErrorDefensiveCompatibility(t *testing.T) {
+	t.Run("only a marked control leaf is cancellation", func(t *testing.T) {
+		for _, source := range []error{
+			stopShapeError{stopped: false},
+			errors.New("pipeline consumer finished"),
+			stopShapeWrapper{error: errors.New("storage failed")},
+		} {
+			got := NewJoinMapBuildError(source).AsError()
+			require.True(t, moerr.IsMoErrCode(got, moerr.ErrInternal))
+			require.NotErrorIs(t, got, context.Canceled)
+		}
+		require.ErrorIs(t, NewJoinMapBuildError(stopShapeError{stopped: true}).AsError(), context.Canceled)
+	})
 	t.Run("nil receiver", func(t *testing.T) {
 		var buildErr *JoinMapBuildError
 		require.Equal(t, "hash build failed", buildErr.Error())
