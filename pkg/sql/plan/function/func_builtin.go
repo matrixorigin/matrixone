@@ -1395,6 +1395,14 @@ func makeIntervalParam(v *vector.Vector) (intervalParam, error) {
 			v, null := fp.GetValue(idx)
 			return float64(v), null, nil
 		}
+	case types.T_bf16:
+		p.float = lowPrecisionIntervalFloat[types.BF16](v)
+	case types.T_float16:
+		p.float = lowPrecisionIntervalFloat[types.Float16](v)
+	case types.T_float8:
+		p.float = lowPrecisionIntervalFloat[types.Float8](v)
+	case types.T_float4:
+		p.float = lowPrecisionIntervalFloat[types.Float4](v)
 	case types.T_int64:
 		fp := vector.GenerateFunctionFixedTypeParameter[int64](v)
 		p.float = func(idx uint64) (float64, bool, error) {
@@ -1522,6 +1530,14 @@ func makeIntervalParam(v *vector.Vector) (intervalParam, error) {
 		return p, moerr.NewInvalidInputNoCtxf("interval function have invalid input args type %s", typ.Oid.String())
 	}
 	return p, nil
+}
+
+func lowPrecisionIntervalFloat[T types.LowPrecFloat](v *vector.Vector) func(uint64) (float64, bool, error) {
+	fp := vector.GenerateFunctionFixedTypeParameter[T](v)
+	return func(idx uint64) (float64, bool, error) {
+		v, null := fp.GetValue(idx)
+		return float64(v.ToFloat32()), null, nil
+	}
 }
 
 func (p intervalParam) useDecimalComparison() bool {

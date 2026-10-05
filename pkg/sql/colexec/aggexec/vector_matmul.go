@@ -971,7 +971,8 @@ func (exec *vectorMatmulExec) fillRow(group uint64, row int, vectors []*vector.V
 // ensureEngine creates the GPU engine on first use when the session allows the GPU and
 // the build has a device meeting the baseline; otherwise rows are scored on the CPU. The
 // engine's native host memory and the tile buffers are charged to the allocation account
-// before they are allocated; when the account has no room the rows are scored on the CPU.
+// before they are allocated; when the account has no room, or the engine cannot be created,
+// the rows are scored on the CPU.
 func (exec *vectorMatmulExec) ensureEngine() error {
 	if exec.engineTried || exec.cfg == nil {
 		return nil
@@ -992,8 +993,9 @@ func (exec *vectorMatmulExec) ensureEngine() error {
 	}
 	engine, err := gpu.create(exec.cfg.engineFormat, dim, nq, exec.cfg.queryCells, cellBytes, rows, exec.cfg.topk)
 	if err != nil || engine == nil {
+		// no device memory for the engine: the rows are scored on the CPU
 		reservation.Abort()
-		return err
+		return nil
 	}
 	var lease *mpool.CapacityLease
 	if reservation != nil {

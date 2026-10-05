@@ -111,4 +111,27 @@ create unique index uidx on t(b);
 create table t2 (a vecf8(4) primary key);
 create table t3 (id int primary key, v vecf4(65536));
 
+-- a string compared with vecf8/vecf4 is cast to the column's dimension
+create table dimchk (x vecf8(4), y vecf4(4));
+insert into dimchk values ('[1,2,3,4]', '[1,2,3,4]');
+select count(*) from dimchk where x = '[1,2,3]';
+select count(*) from dimchk where y in ('[1,2,3,4,5]');
+select count(*) from dimchk where x = '[1,2,3,4]';
+-- IF/CASE/COALESCE keep the type; a multi-table UPDATE stores the cells
+create table mu1 (id int primary key, e vecf8(4), f vecf4(4));
+insert into mu1 values (1, '[1,2,3,4]', '[1,2,3,4]');
+create table mu2 (k int, e vecf8(4), f vecf4(4));
+insert into mu2 values (1, '[4,3,2,1]', '[6,4,2,1]');
+update mu1 join mu2 on mu1.id = mu2.k set mu1.e = mu2.e, mu1.f = mu2.f;
+select * from mu1;
+select if(id > 0, e, null), coalesce(null, f), case when id > 0 then e end from mu1;
+-- data branch merge of an updated vecf8/vecf4 row
+create table va (id int primary key, v vecf8(4), u vecf4(3));
+insert into va values (1, '[1,2,3,4]', '[1,2,3]');
+data branch create table vb from va;
+data branch create table vc from va;
+update vb set v = '[4,3,2,1]', u = '[3,2,1]' where id = 1;
+data branch merge vb into vc;
+select * from vc;
+
 drop database vecblock_db;

@@ -58,6 +58,21 @@ of every bit pattern plus every rounding midpoint ±1 ulp, saturation and ±Inf 
 bit for bit. The only difference is NaN encoding (Go keeps the sign for FP8 and maps FP4
 NaN to +0; CUDA returns `0x7f` / `0x7`); non-finite values are never stored.
 
+**Quantizer (ours, not NVIDIA's).** NVFP4 and MXFP8 define how a cell decodes, not how
+its scales are chosen; a cell written here decodes identically on the CPU and the tensor
+cores, but it is not byte-identical to what NVIDIA's quantizers (TensorRT Model
+Optimizer, Transformer Engine) or the OCP MX reference produce for the same input:
+
+- Block scales round up: the smallest unsigned E4M3 (vecf4) or E8M0 (vecf8) scale whose
+  product with the element maximum (6 or 448) covers the block's largest magnitude, so no
+  element saturates. The references round the scale to nearest (NVFP4) or take
+  `2^(floor(log2 amax) − 8)` (OCP MX) and let the block maximum saturate.
+- The vecf4 global scale is stored as the decode multiplier `amax/(6*448)`; vecf8 stores 1.
+- Each element is the exact quotient `v / (global × scale)` rounded once,
+  round-to-nearest-even with the CUDA tie and saturation rules: the float64 quotient
+  cannot fall on an E2M1/E4M3 midpoint unless the exact quotient is that midpoint.
+- Encoding is deterministic: equal inputs give equal cells.
+
 ## Cell format
 
 Each value is one varlena cell:
@@ -294,12 +309,13 @@ only when it is stored into a `vecf8`/`vecf4` column (assignment cast).
 | `inner_product`, `l2_distance`, `l2_distance_sq`, `l1_distance`, `cosine_distance`, `cosine_similarity` | over the dequantized values; `a`/`b` each `vecf8`, `vecf4` or `vecf32`, a text literal binds as `vecf32`; results as for `vecf32` |
 | `vector_dims`, `normalize_l2` | as for `vecf32`; `normalize_l2` returns the argument's type |
 | `summation`, `l1_norm`, `l2_norm`, `abs`, `sqrt` | on the values dequantized to `vecf32`; results as for `vecf32` |
-| `coalesce`, `case`, `greatest`, `least`, `json_object`, `json_array`, `JSON_ARRAYAGG`, `JSON_OBJECTAGG` | on the values dequantized to `vecf32`; results as for `vecf32` |
+| `if`, `case`, `coalesce`, `ifnull` over one `vecf8(N)`/`vecf4(N)` type (text branches are quantized to it) | the column's type, cells copied as stored |
+| `case`/`coalesce` mixing vector types, `greatest`, `least`, `json_object`, `json_array`, `JSON_ARRAYAGG`, `JSON_OBJECTAGG` | on the values dequantized to `vecf32`; results as for `vecf32` |
 | `SUM`/`AVG`/`MIN`/`MAX` over vectors | not supported (no vector type has them) |
 | `ORDER BY`, window `ORDER BY` | as for `vecf32`: by the dequantized values, element-wise |
 | `GROUP BY`, `DISTINCT`, window `PARTITION BY` | by cell bytes (the encoding of a given input is deterministic) |
 | `subvector` | not supported (as for the other narrow vector types) |
-| comparison operators (`=`, `<>`, `<`, `<=`, `>`, `>=`, `<=>`, `IN`, `BETWEEN`) | as for `vecbf16`: a text literal is quantized to the column's type, as a stored value is, so a row matches the text it was inserted from (`'[3000, -12, 0.001, 1000000]'` matches the cell that displays as `[3072, -16, 0, 983040]`); cells compare by their dequantized values, element-wise |
+| comparison operators (`=`, `<>`, `<`, `<=`, `>`, `>=`, `<=>`, `IN`, `BETWEEN`) | as for `vecbf16`: a text literal is quantized to the column's type, as a stored value is, so a row matches the text it was inserted from (`'[3000, -12, 0.001, 1000000]'` matches the cell that displays as `[3072, -16, 0, 983040]`), and text of another dimension is rejected; cells compare by their dequantized values, element-wise |
 | `hex`, `to_base64` | not supported, as for the other narrow vector types (`vecf32` only) |
 | primary key, partition key, secondary/unique index, vector index | rejected at DDL |
 | `LOAD` | CSV text `"[…]"`; Parquet `LIST<FLOAT/DOUBLE>` and text columns, quantized per row |
@@ -610,4 +626,5 @@ type; normalization changes the ranking, independent of the format.
 - The GPU engine runs only on compute capability 10.0 or newer, checked once per process;
   other devices fall back to the CPU.
 - The engine's native host memory and the tile buffers are admitted by the aggregate's
-  allocation account before allocation; a denial falls back to the CPU.
+  allocation account before allocation; a denial falls back to the CPU, as does an engine
+  that cannot be created for lack of device memory.

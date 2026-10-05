@@ -163,4 +163,39 @@ DEALLOCATE PREPARE nb;
 DEALLOCATE PREPARE eb;
 DEALLOCATE PREPARE lb;
 
+-- NOT IN, !=, <=> and BETWEEN round literals to the column type as = and IN do
+CREATE TABLE cmp (a bf16, q float4, h float16);
+INSERT INTO cmp VALUES (1.5, 1.1, 1.1);
+SELECT a = 1.501, a IN (1.501), a <> 1.501, a != 1.501, a NOT IN (1.501), a NOT IN (1.501, 7), a <=> 1.501, a BETWEEN 1.501 AND 2 FROM cmp;
+SELECT h BETWEEN 1.1 AND 2, h >= 1.1 AND h <= 2 FROM cmp;
+-- literals rounding to the same value are equal constants
+SELECT COUNT(*) FROM cmp WHERE q = 1.1 AND q = 1;
+SELECT COUNT(*) FROM cmp WHERE q = 1.1 AND q <> 1;
+-- integer and decimal user variables round as literals
+SET @i = 1, @d = 1.1, @s = '0x1p0';
+PREPARE pi FROM 'SELECT COUNT(*) FROM cmp WHERE q = ?';
+EXECUTE pi USING @i;
+PREPARE pl FROM 'SELECT COUNT(*) FROM cmp WHERE q IN (?, ?)';
+EXECUTE pl USING @d, @i;
+EXECUTE pi USING @s;
+DEALLOCATE PREPARE pi;
+DEALLOCATE PREPARE pl;
+-- IF/CASE/COALESCE keep the type; a multi-table UPDATE stores the values
+CREATE TABLE m1 (id INT PRIMARY KEY, a float16, b float8, c float4, d bf16);
+INSERT INTO m1 VALUES (1, 1.5, 1.5, 1.5, 1.5);
+CREATE TABLE m2 (k INT, a float16, b float8, c float4, d bf16);
+INSERT INTO m2 VALUES (1, 3.5, 3.5, 3, 3.5);
+UPDATE m1 JOIN m2 ON m1.id = m2.k SET m1.a = m2.a, m1.b = m2.b, m1.c = m2.c, m1.d = m2.d;
+SELECT * FROM m1;
+SELECT IF(a > 1, a, b), COALESCE(NULL, d), IFNULL(d, a), CASE WHEN a > 0 THEN d END, NULLIF(d, 1) FROM m1;
+SELECT IF(d, 'y', 'n'), INTERVAL(d, 1, 4), CONV(b, 10, 2) FROM m1;
+SELECT BIT_AND(d), BIT_OR(c) FROM m1;
+-- data branch diff and merge see a conflicting bf16 value
+CREATE TABLE bx (id INT PRIMARY KEY, v bf16, w INT);
+CREATE TABLE by2 (id INT PRIMARY KEY, v bf16, w INT);
+INSERT INTO bx VALUES (1, 1.5, 1), (2, 2.5, 2);
+INSERT INTO by2 VALUES (1, 3.5, 1), (2, 2.5, 2);
+DATA BRANCH DIFF by2 AGAINST bx;
+DATA BRANCH MERGE by2 INTO bx;
+
 DROP DATABASE lowprec_float;

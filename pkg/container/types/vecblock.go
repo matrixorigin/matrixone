@@ -16,8 +16,10 @@ package types
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/binary"
 	"math"
+	"sort"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -208,13 +210,14 @@ func AppendBlockScaled(dst []byte, f BlockScaledFormat, v []float32) ([]byte, er
 		}
 		div := float64(global) * float64(blockScaleValue(f, scales[b]))
 		for i := lo; i < hi; i++ {
-			// a zero of either sign is stored as code 0, so equal cells have equal bytes
-			q := float32(float64(v[i]) / div)
+			// one rounding of the quotient; a zero of either sign is stored as code 0, so
+			// equal cells have equal bytes
+			q := float64(v[i]) / div
 			if f == BlockScaledMXFP8 {
-				if c := uint8(Float8FromFloat32(q)); c&0x7f != 0 {
+				if c := uint8(float8FromFloat64(q)); c&0x7f != 0 {
 					elems[i] = c
 				}
-			} else if c := uint8(Float4FromFloat32(q)); c&0x07 != 0 {
+			} else if c := uint8(float4FromFloat64(q)); c&0x07 != 0 {
 				elems[i/2] |= c << (4 * (i % 2))
 			}
 		}
@@ -330,6 +333,9 @@ var (
 	f8e4m3Values [256]float32
 	e8m0Values   [256]float32
 	f4e2m1Pairs  [256][2]float32
+	// non-negative finite magnitudes in code order: E4M3 codes 0..0x7e, E2M1 codes 0..7
+	f8e4m3Mags64 [f8e4m3MaxBits + 1]float64
+	f4e2m1Mags64 [8]float64
 )
 
 func init() {
@@ -338,6 +344,57 @@ func init() {
 		e8m0Values[i] = E8M0ToFloat32(uint8(i))
 		f4e2m1Pairs[i] = [2]float32{Float4(uint8(i)).ToFloat32(), Float4(uint8(i) >> 4).ToFloat32()}
 	}
+	for i := range f8e4m3Mags64 {
+		f8e4m3Mags64[i] = float64(f8e4m3Values[i])
+	}
+	for i := range f4e2m1Mags64 {
+		f4e2m1Mags64[i] = float64(f4e2m1Mags[i])
+	}
+}
+
+// nearestEvenCode returns the code of the magnitude nearest to a >= 0, the even code on a
+// tie, saturating at the largest magnitude. Midpoints of these magnitudes are exact in float64.
+func nearestEvenCode(a float64, mags []float64) uint8 {
+	last := len(mags) - 1
+	if a >= mags[last] {
+		return uint8(last)
+	}
+	hi := sort.SearchFloat64s(mags, a)
+	if mags[hi] == a {
+		return uint8(hi)
+	}
+	lo := hi - 1
+	mid := (mags[lo] + mags[hi]) / 2
+	switch {
+	case a < mid:
+		return uint8(lo)
+	case a > mid:
+		return uint8(hi)
+	case lo%2 == 0:
+		return uint8(lo)
+	default:
+		return uint8(hi)
+	}
+}
+
+// float8FromFloat64 rounds a finite float64 to E4M3 once, round-to-nearest-even with
+// saturation at 448, as Float8FromFloat32 rounds a float32.
+func float8FromFloat64(v float64) Float8 {
+	var sign uint8
+	if math.Signbit(v) {
+		sign, v = 0x80, -v
+	}
+	return Float8(sign | nearestEvenCode(v, f8e4m3Mags64[:]))
+}
+
+// float4FromFloat64 rounds a finite float64 to E2M1 once, round-to-nearest-even with
+// saturation at 6, as Float4FromFloat32 rounds a float32.
+func float4FromFloat64(v float64) Float4 {
+	var sign uint8
+	if math.Signbit(v) {
+		sign, v = 0x08, -v
+	}
+	return Float4(sign | nearestEvenCode(v, f4e2m1Mags64[:]))
 }
 
 // BlockScaledTables returns the decode tables: E4M3 code to value, E8M0 code to value, and an
@@ -441,16 +498,36 @@ func StringToBlockScaled(f BlockScaledFormat, s string) ([]byte, error) {
 // CompareBlockScaledFromBytes orders two cells by their dequantized values with the
 // vecf32 ordering (ArrayCompare). A cell that fails to parse orders by its bytes.
 func CompareBlockScaledFromBytes(x, y []byte, desc bool) int {
-	vx, errx := BlockScaledToFloat32(x)
-	vy, erry := BlockScaledToFloat32(y)
+	cx, errx := ParseBlockScaledCell(x)
+	cy, erry := ParseBlockScaledCell(y)
 	var c int
 	if errx != nil || erry != nil {
 		c = bytes.Compare(x, y)
 	} else {
-		c = ArrayCompare(vx, vy)
+		c = compareBlockScaledCells(&cx, &cy)
 	}
 	if desc {
 		return -c
 	}
 	return c
+}
+
+// compareBlockScaledCells compares the dequantized elements in order, then the
+// dimensions, as ArrayCompare does, decoding 32 elements at a time.
+func compareBlockScaledCells(x, y *BlockScaledCell) int {
+	var bx, by [32]float32
+	n := min(x.Dim, y.Dim)
+	for off := 0; off < n; off += 32 {
+		m := min(32, n-off)
+		x.DequantizeRange(off, bx[:m])
+		y.DequantizeRange(off, by[:m])
+		for i := 0; i < m; i++ {
+			if bx[i] < by[i] {
+				return -1
+			} else if bx[i] > by[i] {
+				return 1
+			}
+		}
+	}
+	return cmp.Compare(x.Dim, y.Dim)
 }

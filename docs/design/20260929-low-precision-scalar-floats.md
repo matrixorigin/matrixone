@@ -47,15 +47,21 @@ GPU kernels agree on the encoding.
   overload for these types resolves by casting the argument to `float32` (the
   implicit-cast table ranks `float32` first, then `float64`), and the JSON aggregates,
   percentiles and RANGE frames with an offset take the argument as `float32`.
-  `COUNT`, `MIN`/`MAX`, `SUM`/`AVG` and the value window functions (`FIRST_VALUE`,
-  `LAG`, ...) keep the column type.
+  `COUNT`, `MIN`/`MAX`, `SUM`/`AVG`, the value window functions (`FIRST_VALUE`,
+  `LAG`, ...) and `IF`/`CASE`/`COALESCE`/`IFNULL`/`NULLIF` over one of these types keep
+  the column type, so the projections a multi-table `UPDATE` or `INSERT ... ON DUPLICATE
+  KEY UPDATE` builds from them write cells of the column's width. Branches of two
+  different narrow types widen to `float32`.
 - **Comparison with a literal.** A numeric literal compared with a column of these types
-  (`=`, `<>`, `<`, `<=`, `>`, `>=`, `IN`) is rounded to the column's type, as the stored
+  (`=`, `<>`, `!=`, `<=>`, `<`, `<=`, `>`, `>=`, `IN`, `NOT IN`, `BETWEEN`) is rounded to
+  the column's type, as the stored
   value was, and the column is compared without a cast, as for `float` and `vecbf16`: a
   row inserted as `-0.1` (stored as `-0.100097656` in `bf16`) matches `WHERE a = -0.1`. A
-  prepared parameter (binary protocol or `EXECUTE ... USING @v`) is rounded the same way
-  when the executed value is inside the type's finite range, including inside an `IN`
-  list; such a plan depends on the value and is not cached by parameter type. A literal
+  prepared parameter (binary protocol or `EXECUTE ... USING @v` with a numeric or
+  decimal-numeral value) is rounded the same way when the executed value is inside the
+  type's finite range, including inside an `IN` list; such a plan depends on the value
+  and is not cached by parameter type. Two literals that round to the same value are the
+  same constant for filter simplification (`a = 1.1 AND a = 1` on a `float4` column). A literal
   or parameter outside the finite range, and any other expression, keeps the comparison
   in `float32`/`float64`. For `<`/`>` this follows the column's grid: a literal that
   rounds down compares as its rounded value.

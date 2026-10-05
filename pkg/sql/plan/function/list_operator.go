@@ -3125,6 +3125,62 @@ var supportedOperators = []FuncNew{
 					return CoalesceStr
 				},
 			},
+			{
+				overloadId: 32,
+				args:       []types.T{types.T_bf16},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bf16.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CoalesceGeneral[types.BF16]
+				},
+			},
+			{
+				overloadId: 33,
+				args:       []types.T{types.T_float16},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float16.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CoalesceGeneral[types.Float16]
+				},
+			},
+			{
+				overloadId: 34,
+				args:       []types.T{types.T_float8},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float8.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CoalesceGeneral[types.Float8]
+				},
+			},
+			{
+				overloadId: 35,
+				args:       []types.T{types.T_float4},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float4.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CoalesceGeneral[types.Float4]
+				},
+			},
+			{
+				overloadId: 36,
+				args:       []types.T{types.T_array_float8},
+				retType:    coalesceVectorReturnType,
+				newOp: func() executeLogicOfOverload {
+					return CoalesceStr
+				},
+			},
+			{
+				overloadId: 37,
+				args:       []types.T{types.T_array_float4},
+				retType:    coalesceVectorReturnType,
+				newOp: func() executeLogicOfOverload {
+					return CoalesceStr
+				},
+			},
 		},
 	},
 

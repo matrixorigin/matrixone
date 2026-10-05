@@ -80,7 +80,7 @@ func fixedTypeCastRule1(s1, s2 types.Type) (bool, types.Type, types.Type) {
 			}
 		}
 
-		if t1.Oid.IsArrayRelate() {
+		if t1.Oid.IsArray() {
 			if t1.Oid == t2.Oid {
 				if s1.Oid == t1.Oid {
 					return true, s1, s1

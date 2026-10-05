@@ -15,6 +15,7 @@
 package function
 
 import (
+	"context"
 	"sort"
 	"testing"
 
@@ -63,5 +64,55 @@ func TestBlockScaledVectorParity(t *testing.T) {
 		require.True(t, ok)
 		require.True(t, r.needCast)
 		require.Equal(t, oid, r.targetTypes[1].Oid, "a string literal is cast to the column type")
+	}
+}
+
+// TestControlFlowKeepsNarrowTypes checks that IF/IFF/CASE/COALESCE over one
+// bf16/float16/float8/float4/vecf8/vecf4 type return that type, so a DML projection
+// built from them writes cells of the column's width.
+func TestControlFlowKeepsNarrowTypes(t *testing.T) {
+	ctx := context.Background()
+	cond := types.T_bool.ToType()
+	null := types.T_any.ToType()
+	for _, typ := range []types.Type{
+		types.T_bf16.ToType(), types.T_float16.ToType(), types.T_float8.ToType(), types.T_float4.ToType(),
+		types.New(types.T_array_float8, 4, 0), types.New(types.T_array_float4, 4, 0),
+	} {
+		for _, c := range []struct {
+			name string
+			args []types.Type
+		}{
+			{"if", []types.Type{cond, typ, typ}},
+			{"if", []types.Type{cond, typ, null}},
+			{"iff", []types.Type{cond, typ, typ}},
+			{"case", []types.Type{cond, typ, typ}},
+			{"case", []types.Type{cond, typ}},
+			{"coalesce", []types.Type{typ, typ}},
+			{"coalesce", []types.Type{null, typ}},
+		} {
+			fn, err := GetFunctionByName(ctx, c.name, c.args)
+			require.NoError(t, err, "%s%v", c.name, c.args)
+			require.Equal(t, typ.Oid, fn.GetReturnType().Oid, "%s%v", c.name, c.args)
+			require.Equal(t, typ.Width, fn.GetReturnType().Width, "%s%v", c.name, c.args)
+		}
+	}
+	// mixed narrow scalar types still widen to float32
+	fn, err := GetFunctionByName(ctx, "coalesce", []types.Type{types.T_bf16.ToType(), types.T_float16.ToType()})
+	require.NoError(t, err)
+	require.Equal(t, types.T_float32, fn.GetReturnType().Oid)
+	// conv takes the float32 value of a narrow scalar
+	_, err = GetFunctionByName(ctx, "conv", []types.Type{types.T_float8.ToType(), types.T_int64.ToType(), types.T_int64.ToType()})
+	require.NoError(t, err)
+}
+
+// TestBlockScaledStringComparisonKeepsDimension checks that a string compared with a
+// vecf8/vecf4 column is cast to the column's dimension, as for vecbf16.
+func TestBlockScaledStringComparisonKeepsDimension(t *testing.T) {
+	for _, oid := range []types.T{types.T_array_float8, types.T_array_float4, types.T_array_bf16} {
+		col := types.New(oid, 4, 0)
+		ok, left, right := fixedTypeCastRule1(col, types.T_varchar.ToType())
+		require.True(t, ok)
+		require.Equal(t, col, left)
+		require.Equal(t, col, right)
 	}
 }

@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"bytes"
 	"context"
 	"testing"
 
@@ -50,5 +51,25 @@ func TestFrontendVecBlockOutput(t *testing.T) {
 		col := new(MysqlColumn)
 		require.NoError(t, convertEngineTypeToMysqlType(ctx, oid, col))
 		require.Equal(t, defines.MYSQL_TYPE_VARCHAR, col.ColumnType())
+	}
+}
+
+// TestDataBranchFormatVecBlock checks that the data branch SQL text renders vecf8/vecf4
+// values as extracted from a row (dequantized) and as raw cells.
+func TestDataBranchFormatVecBlock(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	for _, oid := range []types.T{types.T_array_float8, types.T_array_float4} {
+		vec := vecBlockTestVector(t, oid, mp)
+		row := make([]any, 1)
+		require.NoError(t, extractRowFromVector(ctx, nil, vec, 0, row, 0, false))
+		for _, val := range []any{row[0], vec.GetBytesAt(0)} {
+			var buf bytes.Buffer
+			require.NoError(t, formatValIntoString(nil, val, *vec.GetType(), &buf))
+			require.Equal(t, "'[1, -3, 0, 6]'", buf.String())
+		}
+		var buf bytes.Buffer
+		require.Error(t, formatValIntoString(nil, "x", *vec.GetType(), &buf))
+		vec.Free(mp)
 	}
 }

@@ -18,6 +18,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"math"
+	"math/big"
 	"math/rand"
 	"testing"
 
@@ -421,6 +422,43 @@ func TestCompareBlockScaledFromBytes(t *testing.T) {
 	}
 }
 
+func TestCompareBlockScaledMatchesArrayCompare(t *testing.T) {
+	r := rand.New(rand.NewSource(11))
+	dims := []int{1, 15, 16, 17, 31, 32, 33, 64, 65, 100}
+	for _, f := range blockScaledFormats {
+		for _, dx := range dims {
+			for _, dy := range dims {
+				x := make([]float32, dx)
+				for i := range x {
+					x[i] = float32(r.Intn(5) - 2)
+				}
+				y := make([]float32, dy)
+				copy(y, x)
+				if dy > 0 && r.Intn(2) == 0 {
+					y[r.Intn(dy)] += 1
+				}
+				for i := len(x); i < dy; i++ {
+					y[i] = float32(r.Intn(5) - 2)
+				}
+				a, b := mustBlockScaled(t, f, x), mustBlockScaled(t, f, y)
+				va, _ := BlockScaledToFloat32(a)
+				vb, _ := BlockScaledToFloat32(b)
+				require.Equal(t, ArrayCompare(va, vb), CompareBlockScaledFromBytes(a, b, false), "%v %d %d", f, dx, dy)
+			}
+		}
+		a := mustBlockScaled(t, f, make([]float32, 768))
+		b := mustBlockScaled(t, f, make([]float32, 768))
+		require.Zero(t, testing.AllocsPerRun(10, func() { CompareBlockScaledFromBytes(a, b, false) }))
+	}
+}
+
+func TestCompareValueLowPrecisionFloat(t *testing.T) {
+	require.Equal(t, -1, CompareValue(BF16FromFloat32(1), BF16FromFloat32(2)))
+	require.Equal(t, 1, CompareValue(Float16FromFloat32(-1), Float16FromFloat32(-2)))
+	require.Equal(t, 0, CompareValue(Float8FromFloat32(1.5), Float8FromFloat32(1.5)))
+	require.Equal(t, 1, CompareValue(Float4FromFloat32(6), Float4FromFloat32(-6)))
+}
+
 func TestBlockScaledDecodePaths(t *testing.T) {
 	r := rand.New(rand.NewSource(5))
 	for _, f := range blockScaledFormats {
@@ -545,5 +583,55 @@ func TestCanonicalZero(t *testing.T) {
 		neg, err := AppendBlockScaled(nil, f, []float32{negZero, 1, -1e-9})
 		require.NoError(t, err)
 		require.Equal(t, pos, neg, f.String())
+	}
+}
+
+// TestBlockScaledElementsRoundExactQuotient checks every element code against the exact
+// quotient v / (global * scale), rounded to nearest-even in rational arithmetic.
+func TestBlockScaledElementsRoundExactQuotient(t *testing.T) {
+	exactCode := func(q *big.Rat, mags []float64) uint8 {
+		neg := q.Sign() < 0
+		a := new(big.Rat).Abs(q)
+		code := len(mags) - 1
+		for i := 1; i < len(mags); i++ {
+			mid := new(big.Rat).SetFloat64((mags[i-1] + mags[i]) / 2)
+			if c := a.Cmp(mid); c < 0 || (c == 0 && (i-1)%2 == 0) {
+				code = i - 1
+				break
+			}
+		}
+		if neg && code != 0 {
+			return uint8(code) | 0x80
+		}
+		return uint8(code)
+	}
+	r := rand.New(rand.NewSource(17))
+	for _, f := range blockScaledFormats {
+		for n := 0; n < 300; n++ {
+			v := make([]float32, 48)
+			for i := range v {
+				v[i] = float32(r.NormFloat64() * math.Pow(10, float64(r.Intn(7)-3)))
+			}
+			cell, err := ParseBlockScaledCell(mustBlockScaled(t, f, v))
+			require.NoError(t, err)
+			for i, x := range v {
+				scale := blockScaleValue(f, cell.Scales[i/f.BlockSize()])
+				if scale == 0 {
+					continue
+				}
+				div := new(big.Rat).Mul(new(big.Rat).SetFloat64(float64(cell.Global)), new(big.Rat).SetFloat64(float64(scale)))
+				q := new(big.Rat).Quo(new(big.Rat).SetFloat64(float64(x)), div)
+				if f == BlockScaledMXFP8 {
+					require.Equal(t, exactCode(q, f8e4m3Mags64[:]), cell.Elems[i], "%v %d %v", f, i, x)
+				} else {
+					want := exactCode(q, f4e2m1Mags64[:])
+					if want&0x80 != 0 {
+						want = want&0x07 | 0x08
+					}
+					got := cell.Elems[i/2] >> (4 * (i % 2)) & 0x0f
+					require.Equal(t, want, got, "%v %d %v", f, i, x)
+				}
+			}
+		}
 	}
 }

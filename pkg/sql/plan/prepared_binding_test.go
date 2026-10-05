@@ -1094,58 +1094,71 @@ func TestSingletonProjectedPeerAdmission(t *testing.T) {
 
 func TestPreparedLowPrecisionFloatMarkerNarrowing(t *testing.T) {
 	decimalSource := types.New(types.T_decimal64, 1, 1)
+	type param struct {
+		value   any
+		binding types.Type
+	}
+	sqlDecimal := param{"0.3", decimalSource}
 	for _, tc := range []struct {
 		name      string
 		predicate string
-		value     string
-		binding   types.Type
+		params    []param
 		binary    bool
-		narrowed  bool
+		narrowed  int
 	}{
-		{"equal sql decimal", "f = ?", "0.3", decimalSource, false, true},
-		{"in sql decimal", "f in (?, 9)", "0.3", decimalSource, false, true},
-		{"not in sql decimal", "f not in (?, 9)", "0.3", decimalSource, false, true},
-		{"less equal sql decimal", "f <= ?", "0.3", decimalSource, false, true},
-		{"in binary double", "f in (?, 9)", "0.3", types.T_float64.ToType(), true, true},
-		{"in binary text", "f in (?, 9)", "0.3", types.T_varchar.ToType(), true, true},
-		{"equal out of range", "f = ?", "1e300", types.T_float64.ToType(), true, false},
-		{"in out of range", "f in (?, 9)", "1e300", types.T_float64.ToType(), true, false},
+		{"equal sql decimal", "f = ?", []param{sqlDecimal}, false, 1},
+		{"in sql decimal", "f in (?, 9)", []param{sqlDecimal}, false, 1},
+		{"not in sql decimal", "f not in (?, 9)", []param{sqlDecimal}, false, 1},
+		{"less equal sql decimal", "f <= ?", []param{sqlDecimal}, false, 1},
+		{"between sql decimal", "f between ? and ?", []param{sqlDecimal, {"2", decimalSource}}, false, 2},
+		{"equal sql integer", "f = ?", []param{{int64(257), types.T_int64.ToType()}}, false, 1},
+		{"in sql decimal and integer", "f in (?, ?)", []param{sqlDecimal, {int64(6), types.T_int64.ToType()}}, false, 2},
+		{"in binary double", "f in (?, 9)", []param{{"0.3", types.T_float64.ToType()}}, true, 1},
+		{"in binary text", "f in (?, 9)", []param{{"0.3", types.T_varchar.ToType()}}, true, 1},
+		{"equal hex float text", "f = ?", []param{{"0x1p0", types.T_varchar.ToType()}}, true, 0},
+		{"equal out of range", "f = ?", []param{{"1e300", types.T_float64.ToType()}}, true, 0},
+		{"in out of range", "f in (?, 9)", []param{{"1e300", types.T_float64.ToType()}}, true, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := NewMockOptimizer(false)
 			proc := mock.ctxt.GetProcess()
 			params := vector.NewVec(types.T_text.ToType())
 			defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
-			require.NoError(t, vector.AppendBytes(params, []byte(tc.value), false, proc.Mp()))
+			bindings := make([]PreparedSourceBinding, len(tc.params))
+			values := make([]any, len(tc.params))
+			for i, p := range tc.params {
+				require.NoError(t, vector.AppendBytes(params, []byte(fmt.Sprint(p.value)), false, proc.Mp()))
+				bindings[i] = PreparedSourceBinding{Position: int32(i), Type: p.binding}
+				value := ParamValue{Value: p.value, IsBinaryProtocol: tc.binary}
+				if !tc.binary {
+					value.EnableNumericPrefix = true
+					value.SourceType, value.HasSourceType = p.binding, true
+				}
+				values[i] = value
+			}
 			proc.SetPrepareParams(params)
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
 				"select id from vecblock_t where "+tc.predicate, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			value := ParamValue{Value: tc.value, IsBinaryProtocol: tc.binary}
-			if !tc.binary {
-				value.EnableNumericPrefix = true
-				value.SourceType, value.HasSourceType = tc.binding, true
-			}
-			bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
-				[]PreparedSourceBinding{{Position: 0, Type: tc.binding}}, []any{value})
+			bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, bindings, values)
 			require.NoError(t, err)
-			markerNarrowed, filters := false, 0
+			narrowed, filters := 0, 0
 			for _, node := range bound.Plan.GetQuery().Nodes {
 				for _, filter := range node.FilterList {
 					filters++
 					require.NoError(t, planpb.VisitExprTree(filter, func(expr *Expr) error {
 						if fn := expr.GetF(); fn != nil && fn.Func.ObjName == "cast" &&
 							expr.Typ.Id == int32(types.T_bf16) && function.ContainsParameter(fn.Args[0]) {
-							markerNarrowed = true
+							narrowed++
 						}
 						return nil
 					}))
 				}
 			}
 			require.Positive(t, filters)
-			require.Equal(t, tc.narrowed, markerNarrowed, bound.Plan.String())
-			if tc.narrowed {
+			require.Equal(t, tc.narrowed, narrowed, bound.Plan.String())
+			if tc.narrowed > 0 {
 				require.True(t, bound.ValueDependent, "a narrowed marker must not enter the type-only cache")
 			}
 		})

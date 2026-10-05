@@ -25,6 +25,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -834,11 +835,15 @@ func TestVectorMatmulGPUMemoryAdmission(t *testing.T) {
 	defer func() { vectorMatmulGPU = saved }()
 	const hostBytes = 1 << 20
 	created, closed := 0, 0
+	var createErr error
 	vectorMatmulGPU = &vectorMatmulGPUHooks{
 		available: func() bool { return true },
 		hostBytes: func(format, dim, nq, maxRows int) uint64 { return hostBytes },
 		create: func(format, dim, nq int, queryCells []byte, cellBytes, maxRows, topk int) (vectorMatmulEngine, error) {
 			created++
+			if createErr != nil {
+				return nil, createErr
+			}
 			return &vmFakeEngine{maxRows: (maxRows + 127) / 128 * 128, cellBytes: cellBytes, topk: min(topk, maxRows), closed: &closed}, nil
 		},
 	}
@@ -895,6 +900,17 @@ func TestVectorMatmulGPUMemoryAdmission(t *testing.T) {
 	exec, account, vecs, mp = run(hostBytes + 64<<10)
 	require.Equal(t, 2, created)
 	require.Equal(t, 2, closed)
+	require.Nil(t, exec.engine)
+	require.Equal(t, []string{`[[["2",2]]]`}, vmFlush(t, mp, exec))
+	exec.Free()
+	vmFree(mp, vecs)
+	require.Zero(t, account.Snapshot().Used)
+	require.Zero(t, mp.CurrNB())
+
+	// the engine cannot be created (no device memory): rows scored on the CPU, charge released
+	createErr = moerr.NewInternalErrorNoCtx("no device memory")
+	exec, account, vecs, mp = run(256 << 20)
+	require.Equal(t, 3, created)
 	require.Nil(t, exec.engine)
 	require.Equal(t, []string{`[[["2",2]]]`}, vmFlush(t, mp, exec))
 	exec.Free()

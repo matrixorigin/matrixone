@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -644,12 +645,53 @@ func narrowPreparedLowPrecisionOperand(ctx context.Context, state *preparedSourc
 	if !ok || !(binding.Type.IsNumeric() || binding.Type.Oid.IsMySQLString()) {
 		return nil, false, nil
 	}
-	value, ok := preparedBoundDoubleValue(ctx, source)
+	value, ok := preparedLowPrecisionValue(ctx, source)
 	if !ok || types.RejectNonFiniteNarrowFloat(float32(value), peerOid) != nil {
 		return nil, false, nil
 	}
 	converted, err := makePlan2CastExpr(ctx, source, peer)
 	return converted, err == nil, err
+}
+
+var preparedDecimalNumeral = regexp.MustCompile(`^\s*[+-]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][+-]?[0-9]+)?\s*$`)
+
+// preparedLowPrecisionValue reads this execution's value of a marker as a float64: a
+// float, a signed or unsigned integer, or text holding a decimal numeral.
+func preparedLowPrecisionValue(ctx context.Context, expr *Expr) (float64, bool) {
+	raw, present := preparedConfigurationValue(ctx, expr)
+	if !present {
+		return 0, false
+	}
+	switch value := raw.(type) {
+	case float64:
+		return value, true
+	case float32:
+		return float64(value), true
+	case int64:
+		return float64(value), true
+	case int32:
+		return float64(value), true
+	case int:
+		return float64(value), true
+	case uint64:
+		return float64(value), true
+	case uint32:
+		return float64(value), true
+	case string:
+		if !preparedDecimalNumeral.MatchString(value) {
+			return 0, false
+		}
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+		return parsed, err == nil
+	case []byte:
+		if !preparedDecimalNumeral.Match(value) {
+			return 0, false
+		}
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(string(value)), 64)
+		return parsed, err == nil
+	default:
+		return 0, false
+	}
 }
 
 func (state *preparedSourceBindingState) bindingForPosition(position int32) (PreparedSourceBinding, bool) {

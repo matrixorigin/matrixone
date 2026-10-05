@@ -1492,7 +1492,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		outcnt:    4,
 	}
 
-	// vecf8/vecf4 columns, which have no equality operator.
+	// vecf8/vecf4 and bf16 columns.
 	constraintTestSchema["vecblock_t"] = &Schema{
 		tblId: 88970,
 		cols: []col{

@@ -15,6 +15,7 @@
 package types
 
 import (
+	"github.com/stretchr/testify/require"
 	"math"
 	"testing"
 )
@@ -63,4 +64,51 @@ func TestNarrowFloatEncodeMatchesCUDA(t *testing.T) {
 			t.Errorf("Float4FromFloat32(%v 0x%08x) = 0x%x, CUDA 0x%x", in, tc.in, got, tc.f4)
 		}
 	}
+}
+
+// TestNarrowFloatFromFloat64MatchesCUDA checks that the float64 encoders the block
+// quantizer uses round every float32 input as CUDA does: the golden inputs and a strided
+// sweep of finite float32 bit patterns, compared with the CUDA-pinned float32 encoders.
+func TestNarrowFloatFromFloat64MatchesCUDA(t *testing.T) {
+	for _, tc := range cudaNarrowEncode {
+		in := math.Float32frombits(tc.in)
+		if in != in {
+			continue
+		}
+		require.Equal(t, tc.f8, uint8(float8FromFloat64(float64(in))), "0x%08x", tc.in)
+		require.Equal(t, tc.f4, uint8(float4FromFloat64(float64(in))), "0x%08x", tc.in)
+	}
+	for bits := uint64(0); bits <= math.MaxUint32; bits += 997 {
+		in := math.Float32frombits(uint32(bits))
+		if in != in {
+			continue
+		}
+		if Float8FromFloat32(in) != float8FromFloat64(float64(in)) ||
+			Float4FromFloat32(in) != float4FromFloat64(float64(in)) {
+			t.Fatalf("0x%08x: float32 %x/%x, float64 %x/%x", bits, Float8FromFloat32(in), Float4FromFloat32(in),
+				float8FromFloat64(float64(in)), float4FromFloat64(float64(in)))
+		}
+	}
+}
+
+// TestNarrowFloatFromFloat64RoundsOnce checks values just above a midpoint, which a
+// float32 intermediate would round onto the midpoint and then to the even code.
+func TestNarrowFloatFromFloat64RoundsOnce(t *testing.T) {
+	above := 2.5 + math.Ldexp(1, -30) // between E2M1 2 and 3
+	require.Equal(t, float32(2.5), float32(above))
+	require.Equal(t, float32(2), Float4FromFloat32(float32(above)).ToFloat32())
+	require.Equal(t, float32(3), float4FromFloat64(above).ToFloat32())
+	require.Equal(t, float32(-3), float4FromFloat64(-above).ToFloat32())
+
+	above = 1.0625 + math.Ldexp(1, -40) // between E4M3 1 and 1.125
+	require.Equal(t, float32(1), Float8FromFloat32(float32(above)).ToFloat32())
+	require.Equal(t, float32(1.125), float8FromFloat64(above).ToFloat32())
+
+	// exact midpoints still tie to the even code; overflow saturates
+	require.Equal(t, float32(2), float4FromFloat64(2.5).ToFloat32())
+	require.Equal(t, float32(4), float4FromFloat64(3.5).ToFloat32())
+	require.Equal(t, float32(6), float4FromFloat64(1e9).ToFloat32())
+	require.Equal(t, float32(448), float8FromFloat64(1e9).ToFloat32())
+	require.Equal(t, float32(math.Ldexp(1, -9)), float8FromFloat64(math.Ldexp(1, -9)).ToFloat32())
+	require.Equal(t, uint8(0x80), uint8(float8FromFloat64(math.Copysign(0, -1))))
 }

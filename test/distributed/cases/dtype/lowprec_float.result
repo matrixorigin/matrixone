@@ -175,7 +175,7 @@ SELECT COALESCE(a, 0), IFNULL(b, 1), GREATEST(c, 1), IF(d > 1, 'y', 'n'), JSON_O
 0.0  ¦  1.0  ¦  null  ¦  n  ¦  {"k": null}  𝄀
 1.5  ¦  1.5  ¦  1.5  ¦  y  ¦  {"k": 1.5}
 SELECT a FROM lp INTERSECT SELECT a FROM lp WHERE id < 3 ORDER BY 1;
-➤ a[7,23,31]  𝄀
+➤ a[7,24,0]  𝄀
 1.0  𝄀
 2.0
 SET @v = (SELECT b FROM lp WHERE id = 2);
@@ -293,4 +293,58 @@ DEALLOCATE PREPARE pq;
 DEALLOCATE PREPARE nb;
 DEALLOCATE PREPARE eb;
 DEALLOCATE PREPARE lb;
+CREATE TABLE cmp (a bf16, q float4, h float16);
+INSERT INTO cmp VALUES (1.5, 1.1, 1.1);
+SELECT a = 1.501, a IN (1.501), a <> 1.501, a != 1.501, a NOT IN (1.501), a NOT IN (1.501, 7), a <=> 1.501, a BETWEEN 1.501 AND 2 FROM cmp;
+➤ a = 1.501[-7,1,0]  ¦  a in (1.501)[-7,1,0]  ¦  a != 1.501[-7,1,0]  ¦  a != 1.501[-7,1,0]  ¦  a not in (1.501)[-7,1,0]  ¦  a not in (1.501, 7)[-7,1,0]  ¦  a <=> 1.501[-7,1,0]  ¦  a between 1.501 and 2[-7,1,0]  𝄀
+1  ¦  1  ¦  0  ¦  0  ¦  0  ¦  0  ¦  1  ¦  1
+SELECT h BETWEEN 1.1 AND 2, h >= 1.1 AND h <= 2 FROM cmp;
+➤ h between 1.1 and 2[-7,1,0]  ¦  h >= 1.1 and h <= 2[-7,1,0]  𝄀
+1  ¦  1
+SELECT COUNT(*) FROM cmp WHERE q = 1.1 AND q = 1;
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT COUNT(*) FROM cmp WHERE q = 1.1 AND q <> 1;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+SET @i = 1, @d = 1.1, @s = '0x1p0';
+PREPARE pi FROM 'SELECT COUNT(*) FROM cmp WHERE q = ?';
+EXECUTE pi USING @i;
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+PREPARE pl FROM 'SELECT COUNT(*) FROM cmp WHERE q IN (?, ?)';
+EXECUTE pl USING @d, @i;
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+EXECUTE pi USING @s;
+invalid input: "1p0" is invalid numeric string
+DEALLOCATE PREPARE pi;
+DEALLOCATE PREPARE pl;
+CREATE TABLE m1 (id INT PRIMARY KEY, a float16, b float8, c float4, d bf16);
+INSERT INTO m1 VALUES (1, 1.5, 1.5, 1.5, 1.5);
+CREATE TABLE m2 (k INT, a float16, b float8, c float4, d bf16);
+INSERT INTO m2 VALUES (1, 3.5, 3.5, 3, 3.5);
+UPDATE m1 JOIN m2 ON m1.id = m2.k SET m1.a = m2.a, m1.b = m2.b, m1.c = m2.c, m1.d = m2.d;
+SELECT * FROM m1;
+➤ id[4,32,0]  ¦  a[7,24,0]  ¦  b[7,24,0]  ¦  c[7,24,0]  ¦  d[7,24,0]  𝄀
+1  ¦  3.5  ¦  3.5  ¦  3.0  ¦  3.5
+SELECT IF(a > 1, a, b), COALESCE(NULL, d), IFNULL(d, a), CASE WHEN a > 0 THEN d END, NULLIF(d, 1) FROM m1;
+➤ IF(a > 1, a, b)[7,23,31]  ¦  COALESCE(null, d)[7,24,0]  ¦  IFNULL(d, a)[7,23,31]  ¦  case when a > 0 then d end[7,24,0]  ¦  NULLIF(d, 1)[7,24,0]  𝄀
+3.5  ¦  3.5  ¦  3.5  ¦  3.5  ¦  3.5
+SELECT IF(d, 'y', 'n'), INTERVAL(d, 1, 4), CONV(b, 10, 2) FROM m1;
+➤ IF(d, y, n)[12,1,0]  ¦  INTERVAL(d, 1, 4)[-5,64,0]  ¦  CONV(b, 10, 2)[12,65,0]  𝄀
+y  ¦  1  ¦  11
+SELECT BIT_AND(d), BIT_OR(c) FROM m1;
+➤ BIT_AND(d)[-5,64,0]  ¦  BIT_OR(c)[-5,64,0]  𝄀
+4  ¦  3
+CREATE TABLE bx (id INT PRIMARY KEY, v bf16, w INT);
+CREATE TABLE by2 (id INT PRIMARY KEY, v bf16, w INT);
+INSERT INTO bx VALUES (1, 1.5, 1), (2, 2.5, 2);
+INSERT INTO by2 VALUES (1, 3.5, 1), (2, 2.5, 2);
+DATA BRANCH DIFF by2 AGAINST bx;
+➤ diff by2 against bx[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,32,0]  ¦  v[7,24,0]  ¦  w[4,32,0]  𝄀
+by2  ¦  INSERT  ¦  1  ¦  3.5  ¦  1  𝄀
+bx  ¦  INSERT  ¦  1  ¦  1.5  ¦  1
+DATA BRANCH MERGE by2 INTO bx;
+internal error: conflict: by2 INSERT and bx INSERT on pk(1) with different values
 DROP DATABASE lowprec_float;

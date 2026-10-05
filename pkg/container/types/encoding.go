@@ -440,6 +440,14 @@ func CompareValue(left, right any) int {
 		return cmp.Compare(lVal, right.(float32))
 	case float64:
 		return cmp.Compare(lVal, right.(float64))
+	case BF16:
+		return cmp.Compare(lVal.ToFloat32(), right.(BF16).ToFloat32())
+	case Float16:
+		return cmp.Compare(lVal.ToFloat32(), right.(Float16).ToFloat32())
+	case Float8:
+		return cmp.Compare(lVal.ToFloat32(), right.(Float8).ToFloat32())
+	case Float4:
+		return cmp.Compare(lVal.ToFloat32(), right.(Float4).ToFloat32())
 	case Decimal64:
 		return lVal.Compare(right.(Decimal64))
 	case Decimal128:

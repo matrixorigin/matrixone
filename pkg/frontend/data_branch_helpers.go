@@ -729,13 +729,17 @@ func formatValIntoStringWithFloatCast(
 		buf.WriteString(types.ArrayToString[float64](val.([]float64)))
 		buf.WriteString("'")
 	case types.T_array_float8, types.T_array_float4:
-		cell, ok := val.([]byte)
-		if !ok {
+		var text string
+		switch cell := val.(type) {
+		case []float32:
+			text = types.ArrayToString[float32](cell)
+		case []byte:
+			var err error
+			if text, err = types.BlockScaledToString(cell); err != nil {
+				return err
+			}
+		default:
 			return moerr.NewInternalErrorNoCtxf("formatValIntoString: unexpected %s type %T", t.Oid, val)
-		}
-		text, err := types.BlockScaledToString(cell)
-		if err != nil {
-			return err
 		}
 		buf.WriteString("'")
 		buf.WriteString(text)

@@ -6588,6 +6588,15 @@ func preparedBetweenHasMixedNumericText(ctx context.Context, args []*Expr) bool 
 	return hasText && hasNumericMarker || hasTextMarker && hasNumeric
 }
 
+func anyLowPrecisionFloat(argsType []types.Type) bool {
+	for _, typ := range argsType {
+		if typ.Oid.IsLowPrecisionFloat() {
+			return true
+		}
+	}
+	return false
+}
+
 func bindBetweenAsComparisons(ctx context.Context, args []*Expr) (*Expr, error) {
 	left, err := BindFuncExprImplByPlanExpr(ctx, ">=", []*Expr{DeepCopyExpr(args[0]), args[1]})
 	if err != nil {
@@ -6627,7 +6636,8 @@ func bindFuncExprImplByPlanExpr(
 	originalBoundExpr *Expr,
 	allowInternalFunctionArgs bool,
 ) (*plan.Expr, error) {
-	if name == "between" && preparedBetweenHasMixedNumericText(ctx, args) &&
+	if name == "between" && len(args) == 3 &&
+		(preparedBetweenHasMixedNumericText(ctx, args) || types.T(args[0].Typ.Id).IsLowPrecisionFloat()) &&
 		(!containsVolatileFunction(args[0]) || args[0].AuxId < 0) {
 		return bindBetweenAsComparisons(ctx, args)
 	}
@@ -7446,7 +7456,11 @@ func bindFuncExprImplByPlanExpr(
 
 	// Optimization: avoid casting columns in comparisons to preserve index usage
 	switch name {
-	case "=", "<", "<=", ">", ">=", "<>":
+	case "=", "<", "<=", ">", ">=", "<>", "!=", "<=>":
+		// != and <=> take this rounding only for bf16/float16/float8/float4 operands
+		if (name == "!=" || name == "<=>") && !anyLowPrecisionFloat(argsType) {
+			break
+		}
 		if len(args) == 2 && len(argsType) == 2 {
 			if len(argsCastType) == 0 {
 				argsCastType = []types.Type{argsType[0], argsType[1]}
@@ -10507,6 +10521,7 @@ func isBitwiseAggregateConversionInput(t types.Type) bool {
 	case types.T_any,
 		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_float32, types.T_float64,
+		types.T_bf16, types.T_float16, types.T_float8, types.T_float4,
 		types.T_char, types.T_varchar, types.T_text,
 		types.T_date, types.T_datetime, types.T_timestamp, types.T_time, types.T_year:
 		return true

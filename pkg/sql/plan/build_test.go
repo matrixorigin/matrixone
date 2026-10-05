@@ -6964,6 +6964,56 @@ func TestLowPrecisionFloatLiteralNarrowing(t *testing.T) {
 	require.Equal(t, int32(types.T_float64), args[0].Typ.Id)
 }
 
+// TestLowPrecisionFloatColumnsStayNarrow checks that NOT IN, !=, <=> and BETWEEN round
+// in-range literals to the column type as = and IN do, that two literals rounding to the
+// same value are not folded as different constants, and that a multi-table UPDATE
+// projects bf16/vecf8/vecf4 values in the column types.
+func TestLowPrecisionFloatColumnsStayNarrow(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	columnWidened := func(sql string) (bool, string) {
+		p, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err, sql)
+		widened := false
+		for _, n := range p.GetQuery().Nodes {
+			exprs := append(append([]*plan.Expr{}, n.FilterList...), n.ProjectList...)
+			for _, e := range exprs {
+				require.NoError(t, plan.VisitExprTree(e, func(expr *plan.Expr) error {
+					fn := expr.GetF()
+					if fn != nil && fn.Func.ObjName == "cast" && len(fn.Args) > 0 && fn.Args[0].GetCol() != nil {
+						switch types.T(fn.Args[0].Typ.Id) {
+						case types.T_bf16, types.T_array_float8, types.T_array_float4:
+							widened = widened || expr.Typ.Id != fn.Args[0].Typ.Id
+						}
+					}
+					return nil
+				}))
+			}
+		}
+		return widened, p.String()
+	}
+	for _, sql := range []string{
+		"SELECT id FROM vecblock_t WHERE f NOT IN (1.501)",
+		"SELECT id FROM vecblock_t WHERE f NOT IN (1.501, 7)",
+		"SELECT id FROM vecblock_t WHERE f != 1.501",
+		"SELECT id FROM vecblock_t WHERE f <=> 1.501",
+		"SELECT id FROM vecblock_t WHERE f BETWEEN 1.501 AND 2",
+		"SELECT id FROM vecblock_t WHERE f = 0.3 AND f = 0.30078125",
+		"UPDATE vecblock_t t1 JOIN vecblock_t t2 ON t1.id = t2.id + 1 SET t1.f = t2.f, t1.a = t2.a, t1.b = t2.b",
+	} {
+		widened, plan := columnWidened(sql)
+		require.False(t, widened, "%s\n%s", sql, plan)
+	}
+	p, err := runOneStmt(mock, t, "SELECT id FROM vecblock_t WHERE f = 0.3 AND f = 0.30078125")
+	require.NoError(t, err)
+	for _, n := range p.GetQuery().Nodes {
+		for _, filter := range n.FilterList {
+			if lit := filter.GetLit(); lit != nil {
+				require.False(t, !lit.Isnull && !lit.GetBval(), "equal rounded literals must not fold to false")
+			}
+		}
+	}
+}
+
 // TestUpdateChangedRowsBlockScaledVector checks that counting changed rows plans an UPDATE
 // of vecf8/vecf4 columns, which have no equality operator.
 func TestUpdateChangedRowsBlockScaledVector(t *testing.T) {
