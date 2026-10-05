@@ -2671,6 +2671,237 @@ func TestToSubIfUnsubscribed_Concurrent(t *testing.T) {
 	assert.True(t, exists)
 }
 
+func TestToSubIfUnsubscribedPreservesStateInstalledWhileWaitingReady(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		state SubscribeState
+	}{
+		{name: "subscribing", state: Subscribing},
+		{name: "response received", state: SubRspReceived},
+		{name: "subscribed", state: Subscribed},
+		{name: "unsubscribing", state: Unsubscribing},
+		{name: "table not found", state: SubRspTableNotExist},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const dbID, tableID = uint64(1000), uint64(100)
+			var c PushClient
+			c.subscribed.m = make(map[uint64]*subEntry)
+			c.subscriber = newLogTailSubscriber()
+			var sendCount atomic.Int32
+			c.subscriber.sendSubscribe = func(context.Context, api.TableID) error {
+				sendCount.Add(1)
+				return nil
+			}
+
+			baseCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			ctx := &waitReadyObservedContext{Context: baseCtx, checked: make(chan struct{})}
+			type result struct {
+				state SubscribeState
+				err   error
+			}
+			done := make(chan result, 1)
+			var workers sync.WaitGroup
+			defer func() {
+				cancel()
+				c.subscriber.setReady()
+				workers.Wait()
+			}()
+			workers.Add(1)
+			go func() {
+				defer workers.Done()
+				state, err := c.toSubIfUnsubscribed(ctx, dbID, tableID)
+				done <- result{state, err}
+			}()
+			select {
+			case <-ctx.checked:
+			case <-baseCtx.Done():
+				t.Fatal("subscription never reached waitReady")
+			}
+
+			// Install another owner's entry after this caller released the lock.
+			c.subscribed.rw.Lock()
+			entry := c.subscribed.newEntry(dbID, tableID, tc.state)
+			entry.lastTs.Store(1234)
+			if tc.state == Subscribed || tc.state == Unsubscribing {
+				entry.partition = &logtailreplay.Partition{}
+				entry.pendingTo.Store(&timestamp.Timestamp{PhysicalTime: 42})
+			}
+			c.subscribed.m[tableID] = entry
+			incarnation := c.subscribed.nextIncarnation
+			partition, pending := entry.partition, entry.pendingTo.Load()
+			c.subscribed.rw.Unlock()
+			c.subscriber.setReady()
+
+			select {
+			case res := <-done:
+				require.NoError(t, res.err)
+				require.Equal(t, tc.state, res.state)
+			case <-baseCtx.Done():
+				t.Fatal("subscription did not return after readiness")
+			}
+			workers.Wait()
+			require.Zero(t, sendCount.Load())
+			c.subscribed.rw.RLock()
+			got, nextIncarnation := c.subscribed.m[tableID], c.subscribed.nextIncarnation
+			c.subscribed.rw.RUnlock()
+			require.Same(t, entry, got)
+			require.Equal(t, incarnation, nextIncarnation)
+			require.Equal(t, incarnation, got.incarnation)
+			require.Equal(t, int64(1234), got.lastTs.Load())
+			require.Same(t, partition, got.partition)
+			require.Same(t, pending, got.pendingTo.Load())
+
+			if tc.state == SubRspReceived {
+				state, err := c.waitUntilSubscribingChanged(baseCtx, dbID, tableID)
+				require.NoError(t, err)
+				require.Equal(t, SubRspReceived, state)
+				state, err = c.toSubIfUnsubscribed(baseCtx, dbID, tableID)
+				require.NoError(t, err)
+				require.Equal(t, SubRspReceived, state)
+				require.Zero(t, sendCount.Load())
+			}
+		})
+	}
+}
+
+func TestToSubIfUnsubscribedConcurrentWaitReadySingleSend(t *testing.T) {
+	const dbID, tableID, goroutines = uint64(1000), uint64(100), 8
+	var c PushClient
+	c.subscribed.m = make(map[uint64]*subEntry)
+	c.subscriber = newLogTailSubscriber()
+	requests := make(chan api.TableID, goroutines)
+	c.subscriber.sendSubscribe = func(_ context.Context, id api.TableID) error {
+		requests <- id
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	type result struct {
+		state SubscribeState
+		err   error
+	}
+	results := make(chan result, goroutines)
+	var workers sync.WaitGroup
+	defer func() {
+		cancel()
+		c.subscriber.setReady()
+		workers.Wait()
+	}()
+	contexts := make([]*waitReadyObservedContext, 0, goroutines)
+	for range goroutines {
+		observed := &waitReadyObservedContext{Context: ctx, checked: make(chan struct{})}
+		contexts = append(contexts, observed)
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			state, err := c.toSubIfUnsubscribed(observed, dbID, tableID)
+			results <- result{state, err}
+		}()
+	}
+	for _, observed := range contexts {
+		select {
+		case <-observed.checked:
+		case <-ctx.Done():
+			t.Fatal("not all subscriptions reached waitReady")
+		}
+	}
+	c.subscriber.setReady()
+	for range goroutines {
+		select {
+		case res := <-results:
+			require.NoError(t, res.err)
+			require.Equal(t, Subscribing, res.state)
+		case <-ctx.Done():
+			t.Fatal("subscription did not return after readiness")
+		}
+	}
+	workers.Wait()
+	require.Len(t, requests, 1)
+	require.Equal(t, api.TableID{DbId: dbID, TbId: tableID}, <-requests)
+	require.Len(t, c.subscribed.m, 1)
+	require.Equal(t, Subscribing, c.subscribed.m[tableID].state)
+	require.Equal(t, uint64(1), c.subscribed.m[tableID].incarnation)
+	require.Equal(t, uint64(1), c.subscribed.nextIncarnation)
+}
+
+func TestToSubIfUnsubscribedCanceledWaitCanRetry(t *testing.T) {
+	var c PushClient
+	c.subscribed.m = make(map[uint64]*subEntry)
+	c.subscriber = newLogTailSubscriber()
+	var sends atomic.Int32
+	c.subscriber.sendSubscribe = func(context.Context, api.TableID) error {
+		sends.Add(1)
+		return nil
+	}
+	base, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx := &waitReadyObservedContext{Context: base, checked: make(chan struct{})}
+	type result struct {
+		state SubscribeState
+		err   error
+	}
+	done := make(chan result, 1)
+	var workers sync.WaitGroup
+	defer func() {
+		cancel()
+		c.subscriber.setReady()
+		workers.Wait()
+	}()
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		state, err := c.toSubIfUnsubscribed(ctx, 1000, 100)
+		done <- result{state, err}
+	}()
+	select {
+	case <-ctx.checked:
+	case <-base.Done():
+		t.Fatal("subscription never reached waitReady")
+	}
+	cancel()
+	select {
+	case res := <-done:
+		require.ErrorIs(t, res.err, context.Canceled)
+		require.Equal(t, InvalidSubState, res.state)
+	case <-time.After(10 * time.Second):
+		t.Fatal("subscription did not observe cancellation")
+	}
+	workers.Wait()
+	require.Empty(t, c.subscribed.m)
+	require.Zero(t, c.subscribed.nextIncarnation)
+	require.Zero(t, sends.Load())
+	c.subscriber.setReady()
+	state, err := c.toSubIfUnsubscribed(context.Background(), 1000, 100)
+	require.NoError(t, err)
+	require.Equal(t, Subscribing, state)
+	require.Equal(t, int32(1), sends.Load())
+	require.Equal(t, uint64(1), c.subscribed.m[100].incarnation)
+}
+
+func TestToSubIfUnsubscribedSendFailureCanRetry(t *testing.T) {
+	var c PushClient
+	c.subscribed.m = make(map[uint64]*subEntry)
+	c.subscriber = newLogTailSubscriber()
+	c.subscriber.setReady()
+	failure := moerr.NewInternalErrorNoCtx("subscribe send failed")
+	var sends int
+	c.subscriber.sendSubscribe = func(context.Context, api.TableID) error {
+		sends++
+		if sends == 1 {
+			return failure
+		}
+		return nil
+	}
+	state, err := c.toSubIfUnsubscribed(context.Background(), 1000, 100)
+	require.ErrorIs(t, err, failure)
+	require.Equal(t, Unsubscribed, state)
+	require.Empty(t, c.subscribed.m)
+	require.Equal(t, uint64(1), c.subscribed.nextIncarnation)
+	state, err = c.toSubIfUnsubscribed(context.Background(), 1000, 100)
+	require.NoError(t, err)
+	require.Equal(t, Subscribing, state)
+	require.Equal(t, 2, sends)
+	require.Equal(t, uint64(2), c.subscribed.m[100].incarnation)
+}
+
 // TestIsNotSubscribing_Concurrent tests concurrent isNotSubscribing calls
 func TestIsNotSubscribing_Concurrent(t *testing.T) {
 	ctx := context.Background()

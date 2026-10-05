@@ -15,12 +15,15 @@
 package issues
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/require"
 )
 
@@ -33,6 +36,32 @@ const (
 func runAuthenticatedClusterTest(t *testing.T, fn func(embed.Cluster)) {
 	t.Helper()
 	embed.RunBaseClusterTests(t, fn)
+}
+
+// Fence cross-CN assertions through the actual fixture services, not a possibly
+// incomplete service-discovery view. Wait under the test deadline before calling
+// the existing commit sync, whose own timeout is longer than these tests.
+func syncAuthenticatedClusterCommit(t *testing.T, ctx context.Context, c embed.Cluster) {
+	t.Helper()
+	var services []cnservice.Service
+	var committed timestamp.Timestamp
+	c.ForeachServices(func(service embed.ServiceOperator) bool {
+		if service.ServiceType() == metadata.ServiceType_CN {
+			cn := service.RawService().(cnservice.Service)
+			services = append(services, cn)
+			if ts := cn.GetTxnClient().GetLatestCommitTS(); committed.Less(ts) {
+				committed = ts
+			}
+		}
+		return true
+	})
+	require.NotEmpty(t, services)
+	require.False(t, committed.IsEmpty(), "commit fence requires a committed transaction")
+	for _, cn := range services {
+		_, err := cn.GetTimestampWaiter().GetTimestamp(ctx, committed)
+		require.NoError(t, err, "wait for commit %s on CN %s", committed.DebugString(), cn.ID())
+		cn.GetTxnClient().SyncLatestCommitTS(committed)
+	}
 }
 
 func TestAuthenticatedTestsReuseBaseCluster(t *testing.T) {
