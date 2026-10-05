@@ -63,10 +63,16 @@ func (s *Scope) createAndInsertForUniqueOrRegularIndexTable(c *Compile, indexDef
 	if err != nil {
 		return err
 	}
+	// Both callers have just created this hidden target in the current DDL
+	// transaction. indexTableBuild resolves its actual physical ID, so request
+	// one ordinary range lock for that ID rather than preparing every row's
+	// key again during backfill. The base-table lock is not used as proof of
+	// ownership of the new target's keyspace.
+	stmtOpt := executor.StatementOption{}.WithPrePipelineLockTable(indexInfo.GetIndexTables()[0].GetTblId())
 	if indexDef.Unique {
-		return c.precheckAndInsertUniqueIndexTable(qryDatabase, originalTableDef, indexDef, insertSQL)
+		return c.precheckAndInsertUniqueIndexTable(qryDatabase, originalTableDef, indexDef, insertSQL, stmtOpt)
 	}
-	return c.runSql(insertSQL)
+	return c.runSqlWithOptions(insertSQL, stmtOpt)
 }
 
 func buildCreateUniqueIndexDuplicateCheckSQL(dbName string, tableDef *plan.TableDef, indexDef *plan.IndexDef) (string, error) {
@@ -102,6 +108,7 @@ func (c *Compile) precheckAndInsertUniqueIndexTable(
 	tableDef *plan.TableDef,
 	indexDef *plan.IndexDef,
 	insertSQL string,
+	stmtOpt executor.StatementOption,
 ) error {
 	// Unique indexes allow NULL keys, so the check mirrors the hidden-index
 	// backfill filter and only groups non-NULL keys.
@@ -126,7 +133,7 @@ func (c *Compile) precheckAndInsertUniqueIndexTable(
 		TargetTableName: indexDef.IndexTableName,
 		SkipPkDedup:     true,
 	}
-	stmtOpt := executor.StatementOption{}.WithAlterCopyOpt(opt)
+	stmtOpt = stmtOpt.WithAlterCopyOpt(opt)
 
 	restoreCtx := c.proc.Ctx
 	if restoreCtx == nil {

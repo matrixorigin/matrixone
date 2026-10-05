@@ -63,18 +63,42 @@ func (d *testDriver) close(ctx context.Context) error {
 }
 
 type testQuery struct {
-	entered   chan struct{}
-	cancelled chan struct{}
-	once      sync.Once
-	closed    atomic.Bool
-	fill      bool
-	nextErr   error
-	starts    atomic.Int32
-	cancels   atomic.Int32
-	closes    atomic.Int32
-	source    inputDriver
-	cancelFn  func() error
-	closeFn   func(context.Context) error
+	entered    chan struct{}
+	cancelled  chan struct{}
+	once       sync.Once
+	closed     atomic.Bool
+	fill       bool
+	nextErr    error
+	nextFn     func(func(Result) error) error
+	starts     atomic.Int32
+	cancels    atomic.Int32
+	closes     atomic.Int32
+	source     inputDriver
+	cancelFn   func() error
+	closeFn    func(context.Context) error
+	statistics ExecutionStats
+}
+
+func (q *testQuery) statisticsSnapshot() ExecutionStats { return q.statistics }
+
+func TestTerminalStatisticsSurviveQueryDestruction(t *testing.T) {
+	r, d := testRuntime()
+	t.Cleanup(func() { _ = r.Close(context.Background()) })
+	q, err := r.Prepare(t.Context(), testRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ready := q.Statistics(); ready {
+		t.Fatal("unclosed query advertised terminal statistics")
+	}
+	d.q.statistics = ExecutionStats{Terminal: true, SourceMask: 1, GPUTasksStarted: 4, GPUTasksCompleted: 4, ResultRows: 3}
+	if err := q.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	stats, ready := q.Statistics()
+	if !ready || stats != d.q.statistics {
+		t.Fatalf("statistics after close: ready=%v stats=%+v", ready, stats)
+	}
 }
 
 func (q *testQuery) start() error { q.starts.Add(1); return nil }
@@ -88,6 +112,9 @@ func (q *testQuery) cancel() error {
 }
 func (q *testQuery) next(fill func(Result) error) error {
 	close(q.entered)
+	if q.nextFn != nil {
+		return q.nextFn(fill)
+	}
 	if q.nextErr != nil {
 		return q.nextErr
 	}

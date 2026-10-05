@@ -145,7 +145,7 @@ func TestEvaluateZoneMapFunctionCleanup(t *testing.T) {
 						panic(tc.panicked)
 					}
 					return nil
-				})
+				}, nil)
 			}()
 			require.Equal(t, 1, frees)
 			require.Equal(t, baseline, proc.Mp().CurrNB(), "assert before process teardown")
@@ -174,7 +174,7 @@ func TestEvaluateZoneMapFunctionCleanup(t *testing.T) {
 		result := evaluateZoneMapFunction(proc, types.T_int64.ToType(), index.NewZM(types.T_int64, 0), func(vector.FunctionResultWrapper) error {
 			t.Error("callback must not run after allocation failure")
 			return nil
-		}, func() error { frees++; return nil })
+		}, func() error { frees++; return nil }, nil)
 		require.False(t, result.IsInited())
 		require.Equal(t, 1, frees)
 		require.Equal(t, baseline, mp.CurrNB())

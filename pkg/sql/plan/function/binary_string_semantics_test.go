@@ -1007,7 +1007,7 @@ func TestByteLikeGlobalDirectBudgetBoundsMultiSegmentVerification(t *testing.T) 
 	require.LessOrEqual(t, patternLength, types.MaxBlobLen)
 	require.Greater(t, directVerificationWork, budget.remaining)
 
-	const denseSegmentCount, denseSegmentLength = 32, 8_192
+	const denseSegmentCount, denseSegmentLength = 32, 4_352
 	denseValue, densePattern := makeDenseDirectMultiSegmentByteLike(denseSegmentCount, denseSegmentLength)
 	localCursor := 0
 	for segment := 0; segment < denseSegmentCount; segment++ {
@@ -1149,7 +1149,7 @@ func TestByteLikeSparseEqualFrequencyAdversary(t *testing.T) {
 }
 
 func TestByteLikeConvolutionUsesSegmentSizedBlocks(t *testing.T) {
-	const segmentLength = 1_000
+	const segmentLength = 8_192
 	pattern := append([]byte{'a'}, bytes.Repeat([]byte{'_'}, segmentLength-2)...)
 	pattern = append(pattern, 'b')
 	value := bytes.Repeat([]byte{'a'}, 20_000)
@@ -1162,8 +1162,13 @@ func TestByteLikeConvolutionUsesSegmentSizedBlocks(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, used)
 	require.Equal(t, -1, matchedAt)
-	require.Less(t, cap(compiled.convolutionScratch), 100_000,
-		"scratch must follow one segment-sized block, not the full remaining value")
+	require.Equal(t, 401_408, cap(compiled.convolutionScratch),
+		"three 32768-element transforms and one 8192-candidate block")
+	value[len(value)-1] = 'b'
+	matchedAt, used, err = compiled.findSegmentByConvolution(0, len(pattern), value, 0, len(value))
+	require.NoError(t, err)
+	require.True(t, used)
+	require.Equal(t, len(value)-segmentLength, matchedAt)
 }
 
 func TestByteLikeConvolutionUsesBothModuliForExactResult(t *testing.T) {

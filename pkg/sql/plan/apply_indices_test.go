@@ -774,6 +774,42 @@ func TestIndexHintAffectsRegularIndexChoice(t *testing.T) {
 	require.Equal(t, "idx_ab", findFirstIndexScanName(plan))
 }
 
+func TestIndexHintRuntimeConstantSelectors(t *testing.T) {
+	for _, tc := range []struct {
+		name, rhs string
+		indexed   bool
+	}{
+		{"literal", "1", true},
+		{"constant case", "case when true then 1 else 2 end", true},
+		{"constant else", "case when false then 2 else 1 end", true},
+		{"nested case", "abs(case when true then -1 else -2 end)", true},
+		{"if control", "if(true,1,2)", true},
+		{"row dependent", "case when b=1 then 1 else 2 end", false},
+	} {
+		for _, reverse := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/reverse=%t", tc.name, reverse), func(t *testing.T) {
+				mock := NewMockOptimizer(true)
+				t.Cleanup(mock.ctxt.GetProcess().Free)
+				addIndexHintChoiceTableForTest(mock)
+				// Avoid an implicit widening cast on the indexed column.
+				mock.ctxt.tables["index_hint_t"].Cols[1].Typ = planpb.Type{Id: int32(types.T_int64)}
+				predicate := "a = " + tc.rhs
+				if reverse {
+					predicate = tc.rhs + " = a"
+				}
+				p, err := runOneStmt(mock, t, "select b from index_hint_t force index(idx_a) where "+predicate)
+				require.NoError(t, err)
+				if tc.indexed {
+					require.Equal(t, "idx_a", findFirstIndexScanName(p))
+					require.True(t, planHasIndexJoin(p))
+				} else {
+					require.Empty(t, findFirstIndexScanName(p))
+				}
+			})
+		}
+	}
+}
+
 func TestIndexHintUseEmptyDisablesRegularIndexChoice(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	addIndexHintChoiceTableForTest(mock)
@@ -1158,11 +1194,11 @@ func TestIndexHintGroupScopeSelectsAndIgnoresCoveringIndex(t *testing.T) {
 	require.Equal(t, "idx_a", findFirstIndexScanName(queryPlan))
 	require.True(t, planHasIndexJoin(queryPlan))
 
-	queryPlan, err = runOneStmt(mock, t, "select a,b from index_hint_t force index for order by(uk_ab) order by a,b")
+	queryPlan, err = runOneStmt(mock, t, "select a,b from index_hint_t force index for order by(uk_ab) where a is not null and b is not null order by a,b")
 	require.NoError(t, err)
 	require.Equal(t, "uk_ab", findFirstIndexScanName(queryPlan))
 
-	queryPlan, err = runOneStmt(mock, t, "select a,b,count(*) from index_hint_t force index for group by(uk_ab) group by a,b")
+	queryPlan, err = runOneStmt(mock, t, "select a,b,count(*) from index_hint_t force index for group by(uk_ab) where a is not null and b is not null group by a,b")
 	require.NoError(t, err)
 	require.Equal(t, "uk_ab", findFirstIndexScanName(queryPlan))
 }
@@ -1542,6 +1578,69 @@ func TestIndexJoinBuildsVersionedSerializedRuntimeFilter(t *testing.T) {
 	indexScan := builder.qry.Nodes[indexJoin.Children[1]]
 	require.Len(t, indexScan.RuntimeFilterProbeList, 1)
 	require.Equal(t, buildSpec.Tag, indexScan.RuntimeFilterProbeList[0].Tag)
+}
+
+func TestIndexJoinBackfillRuntimeFilterUsesBasePrimaryKey(t *testing.T) {
+	for _, pkName := range []string{"id", catalog.FakePrimaryKeyColName} {
+		t.Run(pkName, func(t *testing.T) {
+			builder, _, scanID, tableDef := makeIndexHintJoinBuilder(t)
+			scan := builder.qry.Nodes[scanID]
+			if pkName == catalog.FakePrimaryKeyColName {
+				tableDef.Cols = append(tableDef.Cols, &planpb.ColDef{
+					Name: pkName, Typ: planpb.Type{Id: int32(types.T_uint64)},
+				})
+				tableDef.Name2ColIndex[pkName] = int32(len(tableDef.Cols) - 1)
+				tableDef.Pkey = &planpb.PrimaryKeyDef{PkeyColName: pkName, Names: []string{pkName}}
+			}
+			indexDef := tableDef.Indexes[0]
+			indexDef.Parts = []string{"a"}
+			indexTable := builder.compCtx.(*fullTextJoinMockCompilerContext).tables["idx_join_a_table"]
+			indexTable.Cols[1].Typ = tableDef.Cols[tableDef.Name2ColIndex[pkName]].Typ
+			scan.FilterList = []*planpb.Expr{ftjMakeEqExpr(t,
+				ftjColExpr(tableDef, scan.BindingTags[0], tableDef.Name2ColIndex["a"]),
+				makePlan2Int32ConstExprWithType(7))}
+
+			joinID, indexScanID := builder.applyIndexJoin(
+				indexDef, scan, EqualIndexCondition, []int32{0}, nil)
+			require.NotEqual(t, scanID, joinID)
+			indexScan := builder.qry.Nodes[indexScanID]
+			require.Equal(t, catalog.IndexTableIndexColName,
+				indexScan.FilterList[0].GetF().Args[0].GetCol().Name)
+			join := builder.qry.Nodes[joinID]
+			join.Stats = &planpb.Stats{HashmapStats: &planpb.HashMapStats{HashmapSize: 1, HashOnPK: true}}
+			builder.generateRuntimeFilters(joinID)
+
+			require.Len(t, scan.RuntimeFilterProbeList, 1)
+			probe := scan.RuntimeFilterProbeList[0]
+			require.False(t, probe.NotOnPk)
+			require.Equal(t, pkName, probe.Expr.GetCol().Name)
+		})
+	}
+}
+
+func TestNoPKIndexJoinPrefixInNamesIndexTablePrimaryKey(t *testing.T) {
+	builder, _, scanID, tableDef := makeIndexHintJoinBuilder(t)
+	scan := builder.qry.Nodes[scanID]
+	tableDef.Cols = append(tableDef.Cols, &planpb.ColDef{
+		Name: catalog.FakePrimaryKeyColName, Typ: planpb.Type{Id: int32(types.T_uint64)},
+	})
+	tableDef.Name2ColIndex[catalog.FakePrimaryKeyColName] = int32(len(tableDef.Cols) - 1)
+	tableDef.Pkey = &planpb.PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName}
+	idxDef := tableDef.Indexes[0]
+	idxDef.Parts = []string{"a", catalog.FakePrimaryKeyColName}
+	indexTable := builder.compCtx.(*fullTextJoinMockCompilerContext).tables["idx_join_a_table"]
+	indexTable.Pkey = &planpb.PrimaryKeyDef{PkeyColName: catalog.IndexTableIndexColName}
+	scan.FilterList = []*planpb.Expr{makeParamInFilterExpr(
+		scan.BindingTags[0], tableDef.Name2ColIndex["a"], 10)}
+
+	joinID, indexScanID := builder.applyIndexJoin(
+		idxDef, scan, NonEqualIndexCondition, []int32{0}, nil)
+	require.NotEqual(t, scanID, joinID)
+	indexScan := builder.qry.Nodes[indexScanID]
+	require.Equal(t, "prefix_in", indexScan.FilterList[0].GetF().Func.ObjName)
+	probeCol := indexScan.FilterList[0].GetF().Args[0].GetCol()
+	require.Equal(t, int32(0), probeCol.ColPos)
+	require.Equal(t, indexScan.TableDef.Pkey.PkeyColName, probeCol.Name)
 }
 
 func TestEnumIndexJoinsRemainEligible(t *testing.T) {
@@ -2880,7 +2979,7 @@ func TestTryIndexOnlyScanRejectsBroadEncodedEquality(t *testing.T) {
 	scanID := builder.appendNode(node, ctx)
 	builder.qry.Nodes[scanID].Stats = &planpb.Stats{TableCnt: 800_000, Outcnt: 720_000, Selectivity: 0.9, Cost: 800_000}
 	builder.qry.Nodes[scanID].FilterList[0].Selectivity = 0.9
-	leadingPos, _ := findLeadingFilter(idxDef, builder.qry.Nodes[scanID])
+	leadingPos := []int32{0}
 	require.True(t, builder.shouldSkipEncodedIndexOnlyScan(idxDef, builder.qry.Nodes[scanID], map[[2]int32]int{{bindTag, 1}: 1, {bindTag, 2}: 1}, leadingPos, false))
 
 	idxNodeID := builder.tryIndexOnlyScan(
@@ -3327,7 +3426,7 @@ func TestEncodedIndexCostBoundaryControls(t *testing.T) {
 				builder, scanID, idxDef, colRefCnt := newBroadCase(t, 800_000)
 				node := builder.qry.Nodes[scanID]
 				test.mutate(node)
-				leadingPos, _ := findLeadingFilter(idxDef, node)
+				leadingPos := []int32{0}
 				require.False(t, builder.shouldSkipEncodedIndexOnlyScan(idxDef, node, colRefCnt, leadingPos, false))
 			})
 		}
@@ -7176,29 +7275,31 @@ func TestApplyIndicesForProjectSkipsOrderedLimitForOffsetOrRank(t *testing.T) {
 		})
 	}
 }
-func TestTryMatchMoreLeadingFiltersRequiresContiguousPrefix(t *testing.T) {
-	idxDef := &IndexDef{
-		Parts: []string{"uid", "typ", "flag", "__mo_alias_id"},
-	}
-	node := &planpb.Node{
-		TableDef: &planpb.TableDef{
-			Name2ColIndex: map[string]int32{
-				"uid":  1,
-				"typ":  2,
-				"flag": 3,
-				"id":   0,
-			},
-		},
-		// Filters only on uid and flag, missing typ.
-		FilterList: []*planpb.Expr{
-			makeEqFilterExpr(1),
-			makeEqFilterExpr(3),
-		},
-	}
-
-	leadingPos := tryMatchMoreLeadingFilters(idxDef, node, 0)
-	if !reflect.DeepEqual([]int32{0}, leadingPos) {
-		t.Fatalf("unexpected leading positions, got=%v, want=%v", leadingPos, []int32{0})
+func TestRegularIndexOnlyMatchRequiresContiguousPrefix(t *testing.T) {
+	builder, scanID, idxDef, refs := newEncodedIndexCostTestCase(t,
+		[]string{"tenant_id", "event_id", "category", "event_time", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
+		[]*planpb.Expr{makeParamEqFilterExpr(0, 0, 0), makeParamEqFilterExpr(0, 3, 1)},
+		&planpb.Stats{TableCnt: 800000, Outcnt: 1, Selectivity: 0.000001, Cost: 800000},
+		map[int32]int{0: 1, 3: 1}, true)
+	node := builder.qry.Nodes[scanID]
+	for _, tc := range []struct {
+		name string
+		add  []*planpb.Expr
+		want []int32
+	}{
+		{"missing second part", nil, []int32{0}},
+		{"missing third part", []*planpb.Expr{makeParamEqFilterExpr(0, 1, 2)}, []int32{0, 2}},
+		{"complete prefix", []*planpb.Expr{makeParamEqFilterExpr(0, 1, 2), makeStringEqFilterExpr(0, 2, "HOT")}, []int32{0, 2, 3, 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			node.FilterList = append([]*planpb.Expr{makeParamEqFilterExpr(0, 0, 0), makeParamEqFilterExpr(0, 3, 1)}, tc.add...)
+			for _, expr := range node.FilterList {
+				expr.GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
+			}
+			match, ok := builder.matchRegularIndexOnlyScan(idxDef, node, builder.newEncodedRegularIndexCostContext(node, refs))
+			require.True(t, ok)
+			require.Equal(t, tc.want, match.filterIdx)
+		})
 	}
 }
 
@@ -7658,6 +7759,7 @@ func TestReplaceEqualConditionTruncatesPrefixIndexLookupPart(t *testing.T) {
 
 	require.NotNil(t, expr.GetF())
 	require.Equal(t, "prefix_eq", expr.GetF().Func.ObjName)
+	require.Equal(t, catalog.IndexTableIndexColName, expr.GetF().Args[0].GetCol().Name)
 	require.True(t, exprContainsFuncName(expr, "substring"))
 	serialFn := expr.GetF().Args[1].GetF()
 	require.NotNil(t, serialFn)
@@ -7693,6 +7795,7 @@ func TestReplaceEqualConditionTruncatesSinglePartPrefixIndexLookup(t *testing.T)
 
 	require.NotNil(t, expr.GetF())
 	require.Equal(t, "=", expr.GetF().Func.ObjName)
+	require.Equal(t, catalog.IndexTableIndexColName, expr.GetF().Args[0].GetCol().Name)
 	require.True(t, exprContainsFuncName(expr.GetF().Args[1], "substring"))
 }
 
@@ -8649,6 +8752,7 @@ func TestReplaceRangePairCondition_UsesPrefixBetweenForSecondaryIndex(t *testing
 	require.NoError(t, err)
 	require.NotNil(t, expr.GetF())
 	require.Equal(t, "prefix_between", expr.GetF().Func.ObjName)
+	require.Equal(t, catalog.IndexTableIndexColName, expr.GetF().Args[0].GetCol().Name)
 	assert.Equal(t, "serial", wrappedSerialFuncName(t, expr.GetF().Args[1]))
 	assert.Equal(t, "serial", wrappedSerialFuncName(t, expr.GetF().Args[2]))
 	require.InDelta(t, 0.12, expr.Selectivity, 1e-9)

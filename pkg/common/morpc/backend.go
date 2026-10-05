@@ -573,6 +573,33 @@ func (rb *remoteBackend) Locked() bool {
 	return rb.stateMu.locked
 }
 
+// markIdle seals admission only if the backend is still idle. The state lock
+// serializes this decision with doSend and NewStream; the future lock covers
+// requests registered before they reach doSend. Physical Close runs separately.
+func (rb *remoteBackend) markIdle(maxIdle time.Duration) bool {
+	rb.stateMu.Lock()
+	defer rb.stateMu.Unlock()
+	rb.mu.RLock()
+	defer rb.mu.RUnlock()
+
+	lastActive := rb.LastActiveTime()
+	if rb.stateMu.locked || time.Since(lastActive) <= maxIdle ||
+		(rb.atomic.draining.Load() && !lastActive.IsZero()) {
+		return false
+	}
+	if rb.stateMu.state == stateRunning {
+		for _, f := range rb.mu.futures {
+			if f.isUserUnary() && f.send.Ctx.Err() == nil {
+				return false
+			}
+		}
+		rb.stateMu.state = stateStopping
+		rb.atomic.unavailable.Store(true)
+		rb.inactive()
+	}
+	return true
+}
+
 func (rb *remoteBackend) active() {
 	if rb.atomic.unavailable.Load() {
 		return

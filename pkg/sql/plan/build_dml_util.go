@@ -6056,7 +6056,9 @@ var fkBannedDatabase = map[string]bool{
 	catalog.MOTaskDB:           true,
 	sysview.InformationDBConst: true,
 	sysview.MysqlDBConst:       true,
-	trace.DebugDB:              true,
+	// Retired trace catalog remains protected while its rollback declarations exist.
+	// Remove with pkg/txn/trace after its rollback gate closes.
+	trace.DebugDB: true,
 }
 
 // IsFkBannedDatabase denotes the database should not have any

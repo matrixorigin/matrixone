@@ -32,8 +32,6 @@ const (
 	AutoIncrementService = "auto-increment-service"
 	// StatusServer is the global server of status of cluster.
 	StatusServer = "status-server"
-	// TxnTraceService txn trance service
-	TxnTraceService = "txn-trace-service"
 	// ShardService shard service
 	ShardService = "shard-service"
 	// ProcessCodecService process codec service

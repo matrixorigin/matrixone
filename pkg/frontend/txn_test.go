@@ -1902,10 +1902,6 @@ func (txnop *testTxnOp) Debug(ctx context.Context, ops []txn.TxnRequest) (*rpc.S
 	panic("implement me")
 }
 
-func (txnop *testTxnOp) NextSequence() uint64 {
-	return 0
-}
-
 func (txnop *testTxnOp) EnterRunSqlWithTokenAndSQL(_ context.CancelFunc, _ string) uint64 {
 	return 1
 }
@@ -2375,6 +2371,8 @@ func TestRequiresPessimisticObjectLifecycleTxn(t *testing.T) {
 	} {
 		require.True(t, requiresPessimisticObjectLifecycleTxn(nil, stmt, ""))
 	}
+	require.False(t, requiresPessimisticObjectLifecycleTxn(nil, &tree.CreateTable{}, ""))
+	require.False(t, requiresPessimisticObjectLifecycleTxn(nil, &tree.CreateTable{Temporary: true}, ""))
 	require.False(t, requiresPessimisticObjectLifecycleTxn(nil, &tree.CreateView{}, ""))
 	require.False(t, requiresPessimisticObjectLifecycleTxn(nil, &tree.DropTable{Temporary: true}, ""))
 	require.False(t, requiresPessimisticObjectLifecycleTxn(nil, &tree.Select{}, ""))

@@ -49,6 +49,36 @@ select v from except_all_right
 v	count(*)
 2	2
 NULL	1
+select v, count(*) from (
+select v from except_all_left
+intersect all
+select v from except_all_right
+) q group by v order by v is null, v;
+v	count(*)
+1	2
+NULL	1
+select count(*), count(v), sum(v) from (
+select v from except_all_left
+intersect all
+select v from except_all_right
+) q;
+count(*)	count(v)	sum(v)
+3	2	2
+select v, count(*) from (
+select v from except_all_right
+intersect all
+select v from except_all_left
+) q group by v order by v is null, v;
+v	count(*)
+1	2
+NULL	1
+select count(*) from (
+select v from except_all_left where v = 99
+intersect all
+select v from except_all_right
+) q;
+count(*)
+0
 drop table except_all_left;
 drop table except_all_right;
 set max_allowed_packet = cast('2048' as unsigned);

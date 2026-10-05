@@ -14,20 +14,28 @@ Provide `GRANT/REVOKE ... ON VIEW` with correct authorization semantics so users
 - View object id is `mo_catalog.mo_tables.rel_logical_id` with `relkind='v'`.
 - Store privileges in `mo_catalog.mo_role_privs` with `obj_type="view"` and `obj_id=rel_logical_id`.
 - View privileges are read and checked through the same pipeline as table privileges, but with `obj_type` distinguishing view vs table.
+- A table wildcard grant does not grant access to views; use `GRANT ... ON VIEW db.*` for view wildcard access.
 
 ### 4. Plan-Time View Lineage
-Compiler records view lineage into plan nodes:
-- `origin_views`: the view chain in `db#view` format, ordered from the outermost view to the innermost view.
-- `direct_view`: the outermost view referenced by the user (optional, mostly for diagnostics).
+The binder records typed `ViewStep` paths, ordered outermost to innermost. Each
+step preserves its catalog tenant, complete snapshot timestamp, database/view
+name and subscriber grant namespace. Query-level `ViewReferences` retain
+authorization obligations for constant views and optimized-away scans; physical
+node `ViewPath` checks cover matching logical prefixes without duplicate work.
 
 ### 5. Runtime Authorization Flow
 For each plan node:
-1. If `origin_views` is present, verify view privileges in chain order (outermost to innermost).
+1. Verify every logical/physical view path in chain order (outermost to innermost).
 2. For each view in the chain, apply its `SQL SECURITY` to decide the effective role for the next hop:
-   - `DEFINER`: switch to the view definer role for the next hop.
-   - `INVOKER`: keep the current role for the next hop.
-3. After the chain, check base-table privileges using the effective role.
-4. If `origin_views` is empty, fall back to standard table privilege checks.
+   - `DEFINER`: switch to the view catalog account and its definer role for the next hop.
+   - `INVOKER`: keep the current account and role for the next hop.
+3. After the chain, check base-table privileges using that effective principal.
+   Subscriber grants use the subscription alias; publisher principals use the
+   physical publisher database. Foreign-principal checks never use or populate
+   the caller's privilege cache, even when numeric role IDs coincide.
+4. Without a view path, use standard table privilege checks. Every object must
+   pass independently; SELECT/ALL/OWNERSHIP alternatives apply to that object,
+   never to the entire statement.
 
 ### 6. SQL SECURITY Semantics
 - Session variable `view_security_type` controls `DEFINER` or `INVOKER` (default `DEFINER`).
@@ -37,6 +45,13 @@ For each plan node:
 ### 7. Special Cases and Compatibility
 - System view databases (`information_schema`, `mysql`) skip view privilege checks and remain read-only.
 - Fully qualified `db.view` queries can run without `USE <db>` if view privilege passes.
+- Role IDs are account-local: moadmin is role 0 in sys, accountadmin is role 2
+  in a non-sys account.
+- Cross-account CLONE assigns newly created objects to the target administrator;
+  same-account CLONE keeps the caller's ownership. RESTORE retains its separate
+  historical ownership policy. Invalid owners already persisted by older clones
+  are not guessed or remapped at read time; an authorized owner must repair those
+  definitions explicitly.
 
 ### 8. Testable Behaviors
 - `GRANT/REVOKE ... ON VIEW` syntax and `SHOW GRANTS` output.
@@ -52,7 +67,8 @@ For each plan node:
 
 ### 2. Metadata and Plan Structures
 - Extend plan proto and generated code to carry view lineage fields.
-- Record `origin_views` and `direct_view` during view binding and plan construction.
+- Record per-hop `ViewPath` and query-level `ViewReferences` during binding and
+  preserve them through plan copies and prepared execution.
 
 ### 3. Authorization Logic
 - Extract view privilege tips from plan nodes and check them before table privileges.

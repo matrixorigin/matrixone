@@ -20,6 +20,15 @@ import (
 	"unicode/utf8"
 )
 
+// WarningProbe retains only diagnostic presence during speculative evaluation.
+// A borrowed child process owns the destination; statement warnings stay intact.
+type WarningProbe struct{ warned bool }
+
+func (s *WarningProbe) AppendWarningDiagnostic(uint16, string) { s.warned = true }
+func (s *WarningProbe) AppendWarningCount(n uint64)            { s.warned = s.warned || n != 0 }
+func (s *WarningProbe) GetWarningRetentionLimit() int          { return 0 }
+func (s *WarningProbe) Warned() bool                           { return s.warned }
+
 const (
 	// WarningDiagnosticDefaultRetentionLimit is the capacity used by newly
 	// created local executions when no session-specific value is available.

@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/stretchr/testify/require"
@@ -464,7 +465,7 @@ func TestCompileFilterExprJSONZoneMapsFailOpen(t *testing.T) {
 func TestCompileFilterExprJSONIsNullUsesNullCount(t *testing.T) {
 	jsonType := plan.Type{Id: int32(types.T_json)}
 	tableDef := decimalTableDef(jsonType, false)
-	expr := sortedUnknownFilter(t, jsonType, "isnull", []string{`"unused"`}, 0)
+	expr := sortedUnknownFilter(t, jsonType, "isnull", nil, 0)
 	_, _, _, blockFilter, _, canCompile, _ := CompileFilterExpr(expr, tableDef, nil)
 	require.True(t, canCompile)
 	require.NotNil(t, blockFilter)
@@ -1323,10 +1324,26 @@ func encodeSortedUnknownValue(t *testing.T, typ plan.Type, value string) []byte 
 }
 
 func foldedFunction(name string, args []*plan.Expr) *plan.Expr {
+	// These direct native-owner tests intentionally retain mismatched scales
+	// rather than asking the binder to insert casts. Identity is still resolved.
+	ids := map[string]int32{
+		"=": function.EQUAL, "!=": function.NOT_EQUAL, "<>": function.NOT_EQUAL,
+		">": function.GREAT_THAN, ">=": function.GREAT_EQUAL,
+		"<": function.LESS_THAN, "<=": function.LESS_EQUAL,
+		"between": function.BETWEEN, "in": function.IN, "in_range": function.IN_RANGE,
+		"prefix_eq": function.PREFIX_EQ, "prefix_between": function.PREFIX_BETWEEN,
+		"prefix_in": function.PREFIX_IN, "prefix_in_range": function.PREFIX_IN_RANGE,
+		"and": function.AND, "or": function.OR,
+		"isnull": function.ISNULL,
+	}
+	fid, exists := ids[name]
+	if !exists {
+		panic("unresolved test function " + name)
+	}
 	return &plan.Expr{
 		Typ: plan.Type{Id: int32(types.T_bool)},
 		Expr: &plan.Expr_F{F: &plan.Function{
-			Func: &plan.ObjectRef{ObjName: name}, Args: args,
+			Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(fid, 0), ObjName: name}, Args: args,
 		}},
 	}
 }

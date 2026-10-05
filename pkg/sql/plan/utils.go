@@ -1835,43 +1835,27 @@ func ExprIsZonemappable(ctx context.Context, expr *plan.Expr) bool {
 }
 
 func exprIsZonemappable(ctx context.Context, expr *plan.Expr) bool {
-	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_F:
-		isConst := true
-		for _, arg := range exprImpl.F.Args {
-			if isRuntimeConstExpr(arg) {
-				continue
-			} else {
-				isConst = false
-			}
-			isZonemappable := exprIsZonemappable(ctx, arg)
-			if !isZonemappable {
+	if expr == nil {
+		return false
+	}
+	if fn := expr.GetF(); fn != nil {
+		kind := function.GetZoneMapEvaluation(fn)
+		if kind == function.ZoneMapUnsupported {
+			return false
+		}
+		if kind != function.ZoneMapConstant && kind != function.ZoneMapTemporal {
+			candidate, _ := function.GetFunctionIsZonemappableById(ctx, fn.Func.GetObj())
+			if !candidate {
 				return false
 			}
 		}
-		if isConst {
-			return true
-		}
-
-		if exprImpl.F.Func.ObjName == "cast" {
-			switch exprImpl.F.Args[0].Typ.Id {
-			case int32(types.T_date), int32(types.T_time), int32(types.T_datetime), int32(types.T_timestamp), int32(types.T_year):
-				if exprImpl.F.Args[1].Typ.Id == int32(types.T_timestamp) {
-					//this cast is monotonic, can safely pushdown to block filters
-					return true
-				}
+		for _, arg := range fn.Args {
+			if !exprIsZonemappable(ctx, arg) {
+				return false
 			}
 		}
-
-		isZonemappable, _ := function.GetFunctionIsZonemappableById(ctx, exprImpl.F.Func.GetObj())
-		if !isZonemappable {
-			return false
-		}
-
-		return true
-	default:
-		return true
 	}
+	return true
 }
 
 func GetSortOrderByName(tableDef *plan.TableDef, colName string) int {
@@ -1941,7 +1925,7 @@ func normalizeNativeRangeDirection(expr *plan.Expr, proc *process.Process) (*pla
 			return BindFuncExprImplByPlanExpr(proc.Ctx, fn.Func.ObjName, args)
 		}
 		// Scan consumers interpret native comparisons with the column on the left.
-		if (isRangeOp(fn) || fn.Func.ObjName == "=") && fn.Args[1].GetCol() != nil && isScanInvariantRuntimeConstExpr(fn.Args[0]) {
+		if (isRangeOp(fn) || fn.Func.ObjName == "=") && fn.Args[1].GetCol() != nil && isRuntimeConstExpr(fn.Args[0]) {
 			return BindFuncExprImplByPlanExpr(proc.Ctx, canonicalRangeOp(fn), []*plan.Expr{fn.Args[1], fn.Args[0]})
 		}
 	}
@@ -2077,7 +2061,7 @@ func constantFoldWithPreparedExactSource(
 		foldExpr, errFold := constantFoldWithPreparedExactSource(
 			bat, fn.Args[i], proc, varAndParamIsConst, foldInExpr, preservePreparedExactSource)
 		if errFold != nil {
-			if functionID == function.CASE {
+			if functionID == function.CASE || functionID == function.IFF || functionID == function.COALESCE {
 				// Selection owns branch errors. Retain the failing subtree for
 				// runtime masking, but still fold safe constants in other branches
 				// so const-only consumers do not lose their input contract.
@@ -2450,7 +2434,63 @@ func unwrapCast(expr *plan.Expr) *plan.Expr {
 	return expr
 }
 
+// decimalComparisonLiteralFloat uses the same decimal text conversion as CAST,
+// including its target floating range check. Unknown expressions are not proofs.
+func decimalComparisonLiteralFloat(expr *plan.Expr, bits int) (float64, bool) {
+	literal := expr.GetLit()
+	if literal == nil || literal.Isnull || !staticIntegerComparisonPeer(expr) {
+		return 0, false
+	}
+	var text string
+	switch value := literal.Value.(type) {
+	case *plan.Literal_Decimal64Val:
+		text = types.Decimal64(value.Decimal64Val.A).Format(expr.Typ.Scale)
+	case *plan.Literal_Decimal128Val:
+		text = (types.Decimal128{B0_63: uint64(value.Decimal128Val.A), B64_127: uint64(value.Decimal128Val.B)}).Format(expr.Typ.Scale)
+	default:
+		return 0, false
+	}
+	value, err := strconv.ParseFloat(text, bits)
+	return value, err == nil
+}
+
+// boundedFloatComparisonPreservesValue is an additional storage-metadata proof,
+// not a replacement for the source-domain checks in checkNoNeedCast.
+func boundedFloatComparisonPreservesValue(columnT types.Type, expr *plan.Expr) bool {
+	value, known := floatingComparisonConstant(expr)
+	if !known {
+		value, known = decimalComparisonLiteralFloat(expr, 64)
+	}
+	if literal := expr.GetLit(); !known && literal != nil && !literal.Isnull {
+		switch v := literal.Value.(type) {
+		case *plan.Literal_I64Val:
+			value, known = float64(v.I64Val), true
+		case *plan.Literal_U64Val:
+			value, known = float64(v.U64Val), true
+		}
+	}
+	if !known || math.IsNaN(value) || math.IsInf(value, 0) {
+		return false
+	}
+	if columnT.Oid == types.T_float32 && float64(float32(value)) != value {
+		return false
+	}
+	factor := math.Pow10(int(columnT.Scale))
+	maximum := math.Pow10(int(columnT.Width-columnT.Scale)) - 1/factor
+	rounded, outOfRange := function.ConvertToFixedFloat(value, factor, maximum)
+	if outOfRange || rounded != value {
+		return false
+	}
+	// A bounded FLOAT's promotion to DOUBLE uses the same CAST arithmetic.
+	// Keep its native comparison normalization invariant as well.
+	return columnT.Oid != types.T_float32 ||
+		types.NewFloat32ScaleNormalizer(columnT.Scale).Normalize(float32(value)) == float32(value)
+}
+
 func checkNoNeedCast(ctx context.Context, constT, columnT types.Type, constExpr *plan.Expr) bool {
+	if columnT.Oid.IsInteger() && constT.Oid.IsDecimal() {
+		return exactDecimalIntegerFits(constExpr, columnT.Oid)
+	}
 	if constExpr.GetP() != nil && columnT.IsNumeric() {
 		// An unresolved PREPARE marker has a provisional TEXT transport type.
 		// A resolved execution marker must satisfy the same source-domain
@@ -2464,6 +2504,23 @@ func checkNoNeedCast(ctx context.Context, constT, columnT types.Type, constExpr 
 	// row-dependent expressions merely because their declared types match.
 	if constT.Eq(columnT) && (rule.IsConstant(constExpr, false) || isCastOfConstant(constExpr)) {
 		return true
+	}
+
+	// Bounded floating CASTs must preserve the peer before the ordinary
+	// numeric-domain proof can justify keeping the column's native type.
+	if (columnT.Oid == types.T_float32 || columnT.Oid == types.T_float64) && columnT.Width > 0 && columnT.Scale >= 0 &&
+		!boundedFloatComparisonPreservesValue(columnT, constExpr) {
+		return false
+	}
+
+	if columnT.Oid.IsDecimal() && (constT.Oid == types.T_float32 || constT.Oid == types.T_float64) {
+		value, ok := floatingComparisonConstant(constExpr)
+		return ok && decimalFloatComparisonHasUniqueValue(value, columnT)
+	}
+
+	if columnT.Oid == types.T_float32 && constT.Oid == types.T_float64 {
+		value, ok := floatingComparisonConstant(constExpr)
+		return ok && !math.IsNaN(value) && !math.IsInf(value, 0) && float64(float32(value)) == value
 	}
 
 	lit := constExpr.GetLit()
@@ -2591,22 +2648,23 @@ func checkNoNeedCast(ctx context.Context, constT, columnT types.Type, constExpr 
 
 			return false
 		}
-		// Allow casting decimal constants to float columns only if precision is acceptable
-		// For FLOAT32: only allow if value has <= 7 significant digits
-		// For FLOAT64: only allow if value has <= 15 significant digits
+		// Preserve the established DECIMAL-constant coercion into a floating
+		// column's domain. This is distinct from narrowing an explicit DOUBLE
+		// peer, which must pass the exactness proof above. Bounded metadata
+		// has already passed its additional value-preservation check.
 		if columnT.Oid == types.T_float32 || columnT.Oid == types.T_float64 {
-			// TODO: Add precision check based on decimal value
-			// For now, conservatively return false to avoid precision loss
-			return false
+			bits := 64
+			if columnT.Oid == types.T_float32 {
+				bits = 32
+			}
+			_, ok := decimalComparisonLiteralFloat(constExpr, bits)
+			return ok
 		}
 		return false
 
 	case types.T_float32, types.T_float64:
-		// Allow casting float constants to float/decimal columns
+		// Float-to-decimal narrowing was checked by the shared proof above.
 		if columnT.Oid == types.T_float32 || columnT.Oid == types.T_float64 {
-			return true
-		}
-		if columnT.Oid == types.T_decimal64 || columnT.Oid == types.T_decimal128 {
 			return true
 		}
 		return false
@@ -7604,11 +7662,17 @@ func preparedSetOperationCommonType(
 	targetType := argTypes[0]
 	if len(castTypes) > 0 {
 		targetType = castTypes[0]
-		if targetType.Oid == types.T_datetime {
-			for i := range castTypes {
-				castTypes[i].Scale = 0
+		if targetType.Oid == types.T_datetime || targetType.Oid == types.T_time || targetType.Oid == types.T_timestamp {
+			for _, typ := range argTypes {
+				if typ.Scale > targetType.Scale {
+					targetType.Scale = typ.Scale
+				}
 			}
-			targetType = castTypes[0]
+			targetType.Width = targetType.Scale
+			for i := range castTypes {
+				castTypes[i].Scale = targetType.Scale
+				castTypes[i].Width = targetType.Width
+			}
 		}
 	} else if targetType.Oid == types.T_varchar || targetType.Oid == types.T_char {
 		for _, typ := range argTypes {
@@ -8467,6 +8531,12 @@ func ReplaceFoldExpr(proc *process.Process, expr *Expr, exes *[]colexec.Expressi
 	} else {
 		for i, canFold := range argFold {
 			if canFold {
+				// CAST target types are structural metadata, not runtime values.
+				// Keep them intact when only some arguments can fold; a wholly
+				// constant CAST remains foldable through the allCanFold path above.
+				if _, isTargetType := fn.Args[i].Expr.(*plan.Expr_T); isTargetType {
+					continue
+				}
 				folded, foldErr := ConstantFold(batch.EmptyForConstFoldBatch, fn.Args[i], proc, false, true)
 				if foldErr != nil {
 					return false, foldErr

@@ -75,11 +75,12 @@ func millis(ctx context.Context) C.uint32_t {
 
 type engine struct{ handle *C.sirius_engine_handle }
 type nativeQuery struct {
-	handle   *C.sirius_query_handle
-	inputs   map[uint64]*nativeInput
-	columns  int
-	mu       sync.Mutex
-	retained []*C.sirius_batch_handle
+	handle     *C.sirius_query_handle
+	inputs     map[uint64]*nativeInput
+	columns    int
+	mu         sync.Mutex
+	retained   []*C.sirius_batch_handle
+	statistics ExecutionStats
 }
 type nativeInput struct {
 	handle  *C.sirius_input_handle
@@ -270,7 +271,8 @@ func (q *nativeQuery) cancel() error {
 	var e C.sirius_error
 	return status(C.sirius_query_cancel(q.handle, &e), &e)
 }
-func (q *nativeQuery) input(id uint64) inputDriver { return q.inputs[id] }
+func (q *nativeQuery) input(id uint64) inputDriver        { return q.inputs[id] }
+func (q *nativeQuery) statisticsSnapshot() ExecutionStats { return q.statistics }
 func (q *nativeQuery) close(ctx context.Context) error {
 	var e C.sirius_error
 	for len(q.retained) > 0 {
@@ -293,6 +295,26 @@ func (q *nativeQuery) close(ctx context.Context) error {
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		// query_wait can return TIMEOUT as either a wait or an execution
+		// outcome. The terminal bit is authoritative. The worker sets it
+		// only after finishing native work (or declaring a fatal failure).
+		C.sirius_query_wait(q.handle, millis(ctx), &e)
+		stats := C.sirius_query_execution_stats{struct_size: C.sizeof_sirius_query_execution_stats, abi_version: 1}
+		if err := status(C.sirius_query_get_execution_stats(q.handle, &stats, &e), &e); err != nil {
+			return err
+		}
+		if stats.terminal == 0 {
+			continue
+		}
+		q.statistics = ExecutionStats{
+			SourceMask: uint32(stats.source_mask), Terminal: true, TerminalStatus: uint32(stats.terminal_status), Fatal: stats.fatal != 0,
+			GPUTasksStarted: uint64(stats.gpu_tasks_started), GPUTasksCompleted: uint64(stats.gpu_tasks_completed),
+			MOInputUnits: uint64(stats.mo_input_units), MOInputRetainedBytes: uint64(stats.mo_input_retained_charged_bytes),
+			MOInputPeakBytes: uint64(stats.mo_input_peak_charged_bytes), MOInputBlockedAcquires: uint64(stats.mo_input_blocked_acquires),
+			ResultRows: uint64(stats.result_rows), ResultPayloadBytes: uint64(stats.result_payload_bytes),
+			ResultRetainedBytes: uint64(stats.result_retained_charged_bytes), ResultPeakBytes: uint64(stats.result_peak_charged_bytes),
+			ResultBlockedPublications: uint64(stats.result_blocked_publications), ResultParkedPublications: uint64(stats.result_parked_publications),
 		}
 		code := C.sirius_query_close(&q.handle, millis(ctx), &e)
 		if code != C.SIRIUS_TIMEOUT {
@@ -338,6 +360,7 @@ func (q *nativeQuery) next(fill func(Result) error) (err error) {
 	// The only extra result copy is bounded by the native 64 MiB window. The
 	// lease stays live while the normal MO output callback consumes these bytes.
 	payload := make([]byte, int(info.payload_bytes))
+	result.Backing = payload
 	if len(payload) > 0 {
 		if err = status(C.sirius_result_read(handle, 0, unsafe.Pointer(&payload[0]), info.payload_bytes, &e), &e); err != nil {
 			return err

@@ -300,6 +300,10 @@ func checkMethodVersion(
 		return moerr.NewNotSupportedNoCtx(
 			"writer-fair lock admission is unavailable in the current protocol version")
 	}
+	if err != nil && (req.Method == pb.Method_BeginDrain || req.Method == pb.Method_QueryDrain) {
+		return moerr.NewNotSupportedNoCtx(
+			"instance-bound lock-service drain is unavailable in the current protocol version")
+	}
 	return err
 }
 

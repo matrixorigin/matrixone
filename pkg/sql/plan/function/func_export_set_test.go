@@ -33,7 +33,7 @@ func runExportSetTestCase(t *testing.T, inputs []FunctionTestInput, wanted []str
 		NewFunctionTestResult(types.T_varchar.ToType(), false, wanted, nullList),
 		ExportSet,
 	)
-	succeeded, errInfo := testCase.Run()
+	succeeded, errInfo := testCase.RunAndFree()
 	require.True(t, succeeded, errInfo)
 }
 

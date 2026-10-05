@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -2881,6 +2882,10 @@ func TestPreparedComparisonExactIntegerExpr(t *testing.T) {
 		want   int64
 	}{
 		{name: "signed text", value: "-54321.0", target: int64Type, want: -54321},
+		{name: "positive identity", value: "9007199254740993", target: int64Type, want: 9007199254740993},
+		{name: "negative identity", value: "-9007199254740993", target: int64Type, want: -9007199254740993},
+		{name: "signed maximum", value: "9223372036854775807", target: int64Type, want: 9223372036854775807},
+		{name: "signed minimum", value: "-9223372036854775808", target: int64Type, want: -9223372036854775808},
 		{name: "signed exponent", value: "5.4321e4", target: int64Type, want: 54321},
 		{name: "last safe positive", value: "9007199254740991", target: int64Type, want: 9007199254740991},
 		{name: "last safe negative", value: "-9007199254740991", target: int64Type, want: -9007199254740991},
@@ -2902,8 +2907,6 @@ func TestPreparedComparisonExactIntegerExpr(t *testing.T) {
 		{name: "uint64 overflow", value: "18446744073709551616", target: uint64Type},
 		{name: "negative unsigned", value: "-1", target: uint64Type},
 		{name: "int64 overflow", value: "9223372036854775808", target: int64Type},
-		{name: "double collision positive", value: "9007199254740992", target: int64Type},
-		{name: "double collision negative", value: "-9007199254740992", target: int64Type},
 		{name: "signed fractional", value: "54321.5", target: int64Type},
 		{name: "signed suffix", value: "54321tail", target: int64Type},
 		{name: "nonnumeric", value: "tail", target: bit64Type},
@@ -3601,4 +3604,39 @@ func TestVisitPlanDeduplicatesAliasedWindowPartitionExpr(t *testing.T) {
 		require.Equal(t, int64(13), window.PartitionBy[0].GetLit().GetI64Val())
 		require.Same(t, partitionNode.OrderBy[0].Expr, window.PartitionBy[0])
 	})
+}
+
+func TestRestorePreparedExactIntegerTextExecutesNormalization(t *testing.T) {
+	ctx := context.Background()
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	for _, sourceType := range []types.T{types.T_text, types.T_int64} {
+		func() {
+			source := &planpb.Expr{Typ: planpb.Type{Id: int32(sourceType)}, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+			witness := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: 9007199254740993}, Src: source}}}
+			prepared := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{Steps: []int32{0}, Nodes: []*planpb.Node{{NodeType: planpb.Node_VALUE_SCAN, ProjectList: []*planpb.Expr{witness}}}}}}
+			require.NoError(t, RestorePreparedRuntimeParamRefs(ctx, prepared))
+			restored := prepared.GetQuery().Nodes[0].ProjectList[0]
+			require.Equal(t, int32(types.T_int64), restored.Typ.Id)
+			if sourceType == types.T_text {
+				require.Equal(t, int32(types.T_decimal128), restored.GetF().Args[0].Typ.Id)
+			} else {
+				require.NotNil(t, restored.GetF().Args[0].GetP())
+			}
+			params := vector.NewVec(types.T_text.ToType())
+			proc.SetPrepareParams(params)
+			defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
+			value := "9007199254740993"
+			if sourceType == types.T_text {
+				value += strings.Repeat("0", 60) + "E-60"
+			}
+			require.NoError(t, vector.AppendBytes(params, []byte(value), false, proc.Mp()))
+			executor, err := colexec.NewExpressionExecutor(proc, restored)
+			require.NoError(t, err)
+			defer executor.Free()
+			result, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+			require.NoError(t, err)
+			require.Equal(t, int64(9007199254740993), vector.GetFixedAtNoTypeCheck[int64](result, 0))
+		}()
+	}
 }

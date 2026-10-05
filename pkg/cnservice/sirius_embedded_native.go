@@ -36,7 +36,7 @@ func (s *service) startEmbeddedSiriusRuntime(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	runtime := &compile.SiriusRuntime{EmbeddedMO: true, Backend: &embeddedBackend{native: native}, CleanupTimeout: c.CleanupTimeout.Duration}
+	runtime := &compile.SiriusRuntime{EmbeddedMO: true, Backend: &embeddedBackend{native: native, streams: c.GPUStreams}, CleanupTimeout: c.CleanupTimeout.Duration, RequestTimeout: c.RequestTimeout.Duration}
 	if err = runtime.Validate(); err != nil {
 		return errors.Join(err, native.Close(ctx))
 	}

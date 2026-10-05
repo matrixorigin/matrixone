@@ -17,7 +17,6 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -105,7 +104,32 @@ func (back *backExec) GetExecStatsArray() statistic.StatsArray {
 	}
 }
 
-var restoreSqlRegx = regexp.MustCompile("MO_TS.*=")
+// Only restore-capable statements need the SQL annotation check.
+func isBackgroundRestoreSQL(stmt tree.Statement, sql string) bool {
+	switch stmt.(type) {
+	case *tree.Insert, *tree.CloneTable:
+	default:
+		return false
+	}
+	// Preserve the unanchored, case-sensitive MO_TS.*= language. Only LF
+	// interrupts the match; SQL comments, quoting and other line separators do not.
+	for {
+		marker := strings.Index(sql, "MO_TS")
+		if marker < 0 {
+			return false
+		}
+		sql = sql[marker+len("MO_TS"):]
+		lineEnd := strings.IndexByte(sql, '\n')
+		if lineEnd < 0 {
+			return strings.Contains(sql, "=")
+		}
+		if strings.Contains(sql[:lineEnd], "=") {
+			return true
+		}
+		// No later marker on this line can have an equals after it either.
+		sql = sql[lineEnd+1:]
+	}
+}
 
 func installBackExecStatsInfo(
 	ctx context.Context,
@@ -205,13 +229,8 @@ func (back *backExec) exec(ctx context.Context, sql string, sqlMode string, useS
 	}
 
 	var isRestore bool
-	if restoreSqlRegx.MatchString(sql) {
-		switch statements[0].(type) {
-		case *tree.Insert:
-			isRestore = true
-		case *tree.CloneTable:
-			isRestore = true
-		}
+	if len(statements) == 1 {
+		isRestore = isBackgroundRestoreSQL(statements[0], sql)
 	}
 
 	userInput := &UserInput{

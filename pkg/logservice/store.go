@@ -145,8 +145,9 @@ type store struct {
 
 	// The ticker (and its task scheduler) lives until store.close, including
 	// across local HAKeeper replica stop/start and voting-role changes.
-	hakeeperTickerOnce sync.Once
-	hakeeperTickerErr  error
+	hakeeperTickerOnce  sync.Once
+	hakeeperTickerErr   error
+	hakeeperCheckWakeup chan struct{}
 
 	bootstrapCheckDeadline time.Time
 	bootstrapMgr           *bootstrap.Manager
@@ -190,14 +191,15 @@ func newLogStore(cfg Config,
 		zap.Int64("CNStoreTimeout", int64(hakeeperConfig.CNStoreTimeout)),
 	)
 	ls := &store{
-		cfg:           cfg,
-		nh:            nh,
-		checker:       checkers.NewCoordinator(cfg.UUID, hakeeperConfig),
-		taskScheduler: task.NewScheduler(cfg.UUID, taskServiceGetter, hakeeperConfig),
-		alloc:         newIDAllocator(),
-		stopper:       stopper.NewStopper("log-store"),
-		tickerStopper: stopper.NewStopper("hakeeper-ticker"),
-		runtime:       rt,
+		cfg:                 cfg,
+		nh:                  nh,
+		checker:             checkers.NewCoordinator(cfg.UUID, hakeeperConfig),
+		taskScheduler:       task.NewScheduler(cfg.UUID, taskServiceGetter, hakeeperConfig),
+		alloc:               newIDAllocator(),
+		stopper:             stopper.NewStopper("log-store"),
+		tickerStopper:       stopper.NewStopper("hakeeper-ticker"),
+		hakeeperCheckWakeup: make(chan struct{}, 1),
+		runtime:             rt,
 
 		shardSnapshotInfo: newShardSnapshotInfo(),
 		snapshotMgr:       newSnapshotManager(&cfg),
@@ -947,6 +949,9 @@ func (l *store) addLogStoreHeartbeat(ctx context.Context,
 	} else {
 		var cb pb.CommandBatch
 		MustUnmarshal(&cb, result.Data)
+		if result.Value == hakeeper.HeartbeatCheckNeeded {
+			l.notifyHAKeeperCheck()
+		}
 		return cb, nil
 	}
 }
@@ -962,6 +967,9 @@ func (l *store) addCNStoreHeartbeat(ctx context.Context,
 	} else {
 		var cb pb.CommandBatch
 		MustUnmarshal(&cb, result.Data)
+		if result.Value == hakeeper.HeartbeatCheckNeeded {
+			l.notifyHAKeeperCheck()
+		}
 		return cb, nil
 	}
 }
@@ -992,6 +1000,9 @@ func (l *store) addTNStoreHeartbeat(ctx context.Context,
 	} else {
 		var cb pb.CommandBatch
 		MustUnmarshal(&cb, result.Data)
+		if result.Value == hakeeper.HeartbeatCheckNeeded {
+			l.notifyHAKeeperCheck()
+		}
 		return cb, nil
 	}
 }
@@ -1655,6 +1666,16 @@ func (l *store) startTaskScheduleTicker(
 	)
 }
 
+// Committed bootstrap/readiness changes may need work before the next health
+// tick. Coalesce hints; the existing checker remains the only execution owner.
+// The channel is never closed, so late proposals during shutdown are harmless.
+func (l *store) notifyHAKeeperCheck() {
+	select {
+	case l.hakeeperCheckWakeup <- struct{}{}:
+	default:
+	}
+}
+
 func (l *store) ticker(ctx context.Context) {
 	if l.cfg.HAKeeperTickInterval.Duration <= 0 {
 		panic("invalid HAKeeperTickInterval")
@@ -1681,6 +1702,10 @@ func (l *store) ticker(ctx context.Context) {
 	haTicker := time.NewTicker(initialCheckInterval)
 	defer haTicker.Stop()
 	checkInterval := initialCheckInterval
+	check := func() {
+		state := l.hakeeperCheck()
+		checkInterval = l.updateHAKeeperCheckTicker(haTicker.Reset, checkInterval, state)
+	}
 
 	// moving task schedule from the ticker normal routine to a
 	// separate goroutine can avoid the hakeeper's health check and tick update
@@ -1695,8 +1720,9 @@ func (l *store) ticker(ctx context.Context) {
 		case <-ticker.C:
 			l.hakeeperTick()
 		case <-haTicker.C:
-			state := l.hakeeperCheck()
-			checkInterval = l.updateHAKeeperCheckTicker(haTicker.Reset, checkInterval, state)
+			check()
+		case <-l.hakeeperCheckWakeup:
+			check()
 		case <-ctx.Done():
 			return
 		}
