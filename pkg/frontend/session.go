@@ -203,9 +203,6 @@ type Session struct {
 
 	// the process of the session
 	proc *process.Process
-	// This is a frozen per-connection copy of the global identifier mode.
-	identifierModeInitialized atomic.Bool
-	identifierMode2           atomic.Bool
 
 	isInternal bool
 
@@ -230,8 +227,7 @@ type Session struct {
 	// user-visible table; cloning that table recreates its hidden index tables.
 	tempTableIdentities map[string]tempTableIdentity
 	// Built on first mode-2 lookup, then updated with each alias mutation.
-	tempTableFolded        map[string]tempTableFoldedEntry
-	tempTableFoldedMembers map[string]map[string]string
+	tempTableFolded map[string]map[string]string
 	// tempTableVersion changes whenever the session's temporary-table name
 	// resolution changes. Prepared statements use it to invalidate plans that
 	// were built against an older temporary-table mapping.
@@ -434,11 +430,6 @@ type tempTableIdentity struct {
 	internal bool
 }
 
-type tempTableFoldedEntry struct {
-	realName  string
-	ambiguous bool
-}
-
 // A migration snapshot carries identifiers only, not table data. Keep its
 // count bounded nevertheless: every entry becomes a CREATE ... CLONE statement
 // on the target and all entries share the fixed connection-transfer deadline.
@@ -528,12 +519,9 @@ func (ses *Session) initSystemVariablesFromGlobal(ctx context.Context, sv *Syste
 		}
 	}
 
-	mode := sessionVars.Get("lower_case_table_names")
 	ses.mu.Lock()
 	ses.gSysVars = sv
 	ses.sesSysVars = sessionVars
-	ses.identifierMode2.Store(mode == int64(2))
-	ses.identifierModeInitialized.Store(true)
 	if ses.errInfo != nil {
 		ses.errInfo.setMaxCnt(maxErrorCount)
 	}
@@ -846,7 +834,7 @@ func (ses *Session) snapshotTempTablesForMigration(ctx context.Context) ([]*quer
 
 // GetTempTable gets the real name of the temporary table
 func (ses *Session) GetTempTable(dbName, alias string) (string, bool) {
-	if !ses.mode2TemporaryLookupEnabled() {
+	if parserLowerCaseTableNames(ses) != 2 {
 		ses.mu.Lock()
 		defer ses.mu.Unlock()
 		realName, found := ses.tempTables[dbName+"."+alias]
@@ -874,13 +862,6 @@ func (ses *Session) GetTempTableAliasByRealName(dbName, realName string) (string
 	return identity.alias, true
 }
 
-func (ses *Session) mode2TemporaryLookupEnabled() bool {
-	if ses.identifierModeInitialized.Load() {
-		return ses.identifierMode2.Load()
-	}
-	return parserLowerCaseTableNames(ses) == 2
-}
-
 func tempTableFoldKey(dbName, alias string) string {
 	return identifier.Fold(dbName) + "\x00" + identifier.Fold(alias)
 }
@@ -889,8 +870,7 @@ func (ses *Session) rebuildTempTableFoldedLocked() {
 	if ses.tempTableFolded != nil {
 		return
 	}
-	ses.tempTableFolded = make(map[string]tempTableFoldedEntry, len(ses.tempTables))
-	ses.tempTableFoldedMembers = make(map[string]map[string]string, len(ses.tempTables))
+	ses.tempTableFolded = make(map[string]map[string]string, len(ses.tempTables))
 	for key, realName := range ses.tempTables {
 		ses.updateTempTableFoldedLocked(key, ses.tempTableIdentityLocked(key), realName, true)
 	}
@@ -901,30 +881,19 @@ func (ses *Session) updateTempTableFoldedLocked(key string, identity tempTableId
 		return
 	}
 	foldedKey := tempTableFoldKey(identity.dbName, identity.alias)
-	members := ses.tempTableFoldedMembers[foldedKey]
+	members := ses.tempTableFolded[foldedKey]
 	if add {
 		if members == nil {
 			members = make(map[string]string)
-			ses.tempTableFoldedMembers[foldedKey] = members
+			ses.tempTableFolded[foldedKey] = members
 		}
 		members[key] = realName
 	} else {
 		delete(members, key)
 	}
 	if len(members) == 0 {
-		delete(ses.tempTableFoldedMembers, foldedKey)
 		delete(ses.tempTableFolded, foldedKey)
-		return
 	}
-	entry := tempTableFoldedEntry{}
-	for _, physical := range members {
-		if entry.realName != "" && entry.realName != physical {
-			entry.ambiguous = true
-			break
-		}
-		entry.realName = physical
-	}
-	ses.tempTableFolded[foldedKey] = entry
 }
 
 // ResolveTempTable reports ambiguity left by an older mode-0 session rather
@@ -938,14 +907,15 @@ func (ses *Session) ResolveTempTable(ctx context.Context, dbName, alias string) 
 		return val, ok, nil
 	}
 	ses.rebuildTempTableFoldedLocked()
-	entry, ok := ses.tempTableFolded[tempTableFoldKey(dbName, alias)]
-	if !ok {
-		return "", false, nil
+	var physical string
+	found := false
+	for _, name := range ses.tempTableFolded[tempTableFoldKey(dbName, alias)] {
+		if found && physical != name {
+			return "", false, moerr.NewAmbiguousIdentifier(ctx, "temporary table", alias)
+		}
+		physical, found = name, true
 	}
-	if entry.ambiguous {
-		return "", false, moerr.NewAmbiguousIdentifier(ctx, "temporary table", alias)
-	}
-	return entry.realName, true, nil
+	return physical, found, nil
 }
 
 // GetTempTableVersion returns the version of the session's temporary-table
@@ -2113,7 +2083,6 @@ func NewSession(
 	ses.tempTablesRev = make(map[string]string)
 	ses.tempTableIdentities = make(map[string]tempTableIdentity)
 	ses.tempTableFolded = nil
-	ses.tempTableFoldedMembers = nil
 	ses.prepareStmts = make(map[string]*PrepareStmt)
 	// For seq init values.
 	ses.seqCurValues = make(map[uint64]string)
@@ -2203,7 +2172,6 @@ func (ses *Session) takeTempTables() ([]sessionTempTable, *TenantInfo) {
 	ses.tempTablesRev = nil
 	ses.tempTableIdentities = nil
 	ses.tempTableFolded = nil
-	ses.tempTableFoldedMembers = nil
 	ses.tempTableTxnJournals = nil
 	tenant := ses.tenant
 	ses.mu.Unlock()
@@ -2270,7 +2238,6 @@ func (ses *Session) resetTempTables(ctx context.Context) error {
 		ses.tempTablesRev = make(map[string]string, len(tempTables))
 		ses.tempTableIdentities = make(map[string]tempTableIdentity, len(tempTables))
 		ses.tempTableFolded = nil
-		ses.tempTableFoldedMembers = nil
 		for _, tbl := range tempTables {
 			if tbl.retired {
 				if ses.retiredTempTables == nil {
@@ -4630,8 +4597,6 @@ func (ses *Session) installMigratedIdentifierMode(mode int64) error {
 		ses.sesSysVars = ses.gSysVars.Clone()
 	}
 	ses.sesSysVars.Set("lower_case_table_names", mode)
-	ses.identifierMode2.Store(mode == 2)
-	ses.identifierModeInitialized.Store(true)
 	return nil
 }
 

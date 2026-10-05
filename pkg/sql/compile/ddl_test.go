@@ -3966,3 +3966,112 @@ func TestTruncateTemporaryTableRebuildsTemporaryRelation(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, "physical_t_replacement", physical)
 }
+
+// The engine returns a stored spelling independently of the caller's alias.
+type namedDDLDatabase struct {
+	engine.Database
+	physical string
+}
+
+func (db namedDDLDatabase) GetPhysicalName() string { return db.physical }
+
+func TestOpenDDLDatabaseUsesPhysicalIdentityAndOrderedSnapshot(t *testing.T) {
+	frontier := timestamp.Timestamp{PhysicalTime: 80, LogicalTime: 9}
+	for _, tc := range []struct {
+		name       string
+		mode2      bool
+		takeLock   bool
+		isolation  txn.TxnIsolation
+		lookupErr  error
+		lockErr    error
+		barrierErr error
+		refreshErr error
+		replaced   bool
+		wantEvents []string
+	}{
+		{name: "exact control", takeLock: true, isolation: txn.TxnIsolation_RC,
+			wantEvents: []string{"lock:alias", "lookup:alias"}},
+		{name: "physical name without locks", mode2: true,
+			wantEvents: []string{"lookup:alias"}},
+		{name: "RC uses TN frontier after physical lock", mode2: true, takeLock: true, isolation: txn.TxnIsolation_RC,
+			wantEvents: []string{"lookup:alias", "lock:Stored", "barrier", "advance", "lookup:Stored"}},
+		{name: "SI keeps its snapshot", mode2: true, takeLock: true, isolation: txn.TxnIsolation_SI,
+			wantEvents: []string{"lookup:alias", "lock:Stored", "lookup:Stored"}},
+		{name: "ambiguous name never locks", mode2: true, takeLock: true,
+			lookupErr: moerr.NewAmbiguousIdentifier(context.Background(), "database", "alias"), wantEvents: []string{"lookup:alias"}},
+		{name: "lock cancellation stops refresh", mode2: true, takeLock: true, isolation: txn.TxnIsolation_RC,
+			lockErr: context.Canceled, wantEvents: []string{"lookup:alias", "lock:Stored"}},
+		{name: "barrier cancellation stops lookup", mode2: true, takeLock: true, isolation: txn.TxnIsolation_RC,
+			barrierErr: context.Canceled, wantEvents: []string{"lookup:alias", "lock:Stored", "barrier"}},
+		{name: "refresh failure stops lookup", mode2: true, takeLock: true, isolation: txn.TxnIsolation_RC,
+			refreshErr: context.DeadlineExceeded, wantEvents: []string{"lookup:alias", "lock:Stored", "barrier", "advance"}},
+		{name: "reincarnation rejects stale identity", mode2: true, takeLock: true, isolation: txn.TxnIsolation_RC, replaced: true,
+			wantEvents: []string{"lookup:alias", "lock:Stored", "barrier", "advance", "lookup:Stored"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			proc := testutil.NewProcess(t)
+			proc.Ctx = defines.AttachMode2NameResolution(proc.Ctx, tc.mode2)
+			op := mock_frontend.NewMockTxnOperator(ctrl)
+			op.EXPECT().Txn().Return(txn.TxnMeta{Mode: txn.TxnMode_Pessimistic, Isolation: tc.isolation}).AnyTimes()
+			proc.Base.TxnOperator = op
+			var events []string
+			workspace := mock_frontend.NewMockWorkspace(ctrl)
+			op.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
+			workspace.EXPECT().AdvanceSnapshot(gomock.Any(), frontier).DoAndReturn(func(context.Context, timestamp.Timestamp) error {
+				events = append(events, "advance")
+				return tc.refreshErr
+			}).AnyTimes()
+			before, after := mock_frontend.NewMockDatabase(ctrl), mock_frontend.NewMockDatabase(ctrl)
+			before.EXPECT().GetDatabaseId(gomock.Any()).Return("1").AnyTimes()
+			afterID := "1"
+			if tc.replaced {
+				afterID = "2"
+			}
+			after.EXPECT().GetDatabaseId(gomock.Any()).Return(afterID).AnyTimes()
+			eng := mock_frontend.NewMockEngine(ctrl)
+			eng.EXPECT().Database(gomock.Any(), gomock.Any(), op).DoAndReturn(func(_ context.Context, name string, _ client.TxnOperator) (engine.Database, error) {
+				events = append(events, "lookup:"+name)
+				if tc.lookupErr != nil {
+					return nil, tc.lookupErr
+				}
+				if name == "Stored" {
+					return namedDDLDatabase{Database: after, physical: "Stored"}, nil
+				}
+				return namedDDLDatabase{Database: before, physical: "Stored"}, nil
+			}).AnyTimes()
+			barrier := &testCreateIndexLogtailBarrier{Engine: eng, acquire: func(context.Context) (timestamp.Timestamp, error) {
+				events = append(events, "barrier")
+				return frontier, tc.barrierErr
+			}}
+			stub := gostub.Stub(&lockMoDatabase, func(_ *Compile, name string, mode lock.LockMode) error {
+				require.Equal(t, lock.LockMode_Shared, mode)
+				events = append(events, "lock:"+name)
+				return tc.lockErr
+			})
+			t.Cleanup(stub.Reset)
+			db, physical, err := openDDLDatabaseWithLock(&Compile{proc: proc, e: barrier}, "alias", tc.takeLock)
+			require.Equal(t, tc.wantEvents, events)
+			if tc.lookupErr != nil || tc.lockErr != nil || tc.barrierErr != nil || tc.refreshErr != nil {
+				for _, want := range []error{tc.lookupErr, tc.lockErr, tc.barrierErr, tc.refreshErr} {
+					if want != nil {
+						require.ErrorIs(t, err, want)
+					}
+				}
+				require.Nil(t, db)
+				require.Equal(t, "alias", physical, "diagnostics retain the requested name")
+			} else if tc.replaced {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged))
+				require.Nil(t, db)
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, db)
+				if tc.mode2 {
+					require.Equal(t, "Stored", physical)
+				} else {
+					require.Equal(t, "alias", physical)
+				}
+			}
+		})
+	}
+}

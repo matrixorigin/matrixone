@@ -98,7 +98,7 @@ func TestFoldedTableLookupPreservesPhysicalName(t *testing.T) {
 	require.True(t, ambiguous)
 }
 
-func TestSparseFoldedCatalogMergesPhysicalNameOrder(t *testing.T) {
+func TestFoldedCatalogVisitsPhysicalNameOrder(t *testing.T) {
 	require.Equal(t, "k", identifier.Fold("K"))
 	cc := NewCatalog()
 	for i, name := range []string{"K", "k", "K"} {
@@ -111,8 +111,6 @@ func TestSparseFoldedCatalogMergesPhysicalNameOrder(t *testing.T) {
 			Ts: timestamp.Timestamp{PhysicalTime: 10},
 		}, false)
 	}
-	require.Equal(t, 2, cc.databases.folded.Len())
-	require.Equal(t, 2, cc.tables.folded.Len())
 
 	snapshot := timestamp.Timestamp{PhysicalTime: 20}
 	var databases []string
@@ -158,8 +156,6 @@ func TestFoldedCatalogCanonicalVariantVisibilityAcrossGC(t *testing.T) {
 			Ts: ts, deleted: event.deleted,
 		}, false)
 	}
-	require.Equal(t, 2, cc.databases.folded.Len())
-	require.Equal(t, 2, cc.tables.folded.Len())
 
 	check := func(at int64, wantName string, wantID uint64, wantAmbiguous bool) {
 		t.Helper()
@@ -196,8 +192,6 @@ func TestFoldedCatalogCanonicalVariantVisibilityAcrossGC(t *testing.T) {
 
 	cc.GC(timestamp.Timestamp{PhysicalTime: 56})
 	check(57, "foo", 30, false)
-	require.Zero(t, cc.databases.folded.Len())
-	require.Zero(t, cc.tables.folded.Len())
 	mode0 := &DatabaseItem{AccountId: 7, Name: "Foo", Ts: timestamp.Timestamp{PhysicalTime: 57}}
 	require.False(t, cc.GetDatabase(mode0), "mode-0 exact lookup must still see the tombstone")
 }

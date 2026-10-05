@@ -1195,20 +1195,24 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 				}
 			}
 		}
-		// 0. lock origin database metadata in catalog
-		if err = lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
-			return err
-		}
-		if defines.Mode2NameResolutionEnabled(c.proc.Ctx) {
-			if lineageTxnOp.Txn().IsRCIsolation() {
-				now, _ := moruntime.ServiceRuntime(c.proc.GetService()).Clock().Now()
-				if err := lineageTxnOp.GetWorkspace().AdvanceSnapshot(c.proc.Ctx, now); err != nil {
+		// Persistent RC COPY has already acquired D and refreshed the catalog
+		// through broad lifecycle admission. Temporary and SI paths still own
+		// their database lock here.
+		if isTemp || !c.isLifecycleRC() {
+			if err = lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+				return err
+			}
+			if defines.Mode2NameResolutionEnabled(c.proc.Ctx) && c.isLifecycleRC() {
+				if err := c.advanceLifecycleAdmissionSnapshot(); err != nil {
 					return err
 				}
-			}
-			currentDB, lookupErr := c.e.Database(c.proc.Ctx, dbName, lineageTxnOp)
-			if lookupErr != nil || currentDB.GetDatabaseId(c.proc.Ctx) != resolvedDatabaseID {
-				return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+				currentDB, lookupErr := c.e.Database(c.proc.Ctx, dbName, lineageTxnOp)
+				if lookupErr != nil {
+					return lookupErr
+				}
+				if currentDB.GetDatabaseId(c.proc.Ctx) != resolvedDatabaseID {
+					return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+				}
 			}
 		}
 		if defines.Mode2NameResolutionEnabled(c.proc.Ctx) && !c.disableLock {
@@ -1260,7 +1264,10 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		}
 		if defines.Mode2NameResolutionEnabled(c.proc.Ctx) {
 			currentRel, lookupErr := dbSource.Relation(c.proc.Ctx, tblName, nil)
-			if lookupErr != nil || currentRel.GetTableID(c.proc.Ctx) != oldId ||
+			if lookupErr != nil {
+				return lookupErr
+			}
+			if currentRel.GetTableID(c.proc.Ctx) != oldId ||
 				(qry.TableDef.TblId != 0 && qry.TableDef.TblId != oldId) {
 				return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
 			}

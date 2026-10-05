@@ -109,8 +109,7 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 		return err
 	}
 	if txnOp := c.proc.GetTxnOperator(); defines.Mode2NameResolutionEnabled(c.proc.Ctx) && txnOp.Txn().IsPessimistic() && txnOp.Txn().IsRCIsolation() {
-		now, _ := moruntime.ServiceRuntime(c.proc.GetService()).Clock().Now()
-		if err := txnOp.GetWorkspace().AdvanceSnapshot(c.proc.Ctx, now); err != nil {
+		if err := c.advanceLifecycleAdmissionSnapshot(); err != nil {
 			return err
 		}
 	}
@@ -175,10 +174,7 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		if s.Plan.GetDdl().GetDropDatabase().GetIfExists() {
 			return nil
 		}
-		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-			return moerr.NewErrDropNonExistsDB(c.proc.Ctx, dbName)
-		}
-		return err
+		return moerr.NewErrDropNonExistsDB(c.proc.Ctx, dbName)
 	}
 	if named, ok := db.(interface{ GetPhysicalName() string }); ok {
 		dbName = named.GetPhysicalName()
@@ -708,13 +704,8 @@ func (s *Scope) AlterView(c *Compile) error {
 	dbName := c.db
 	tblName := qry.GetTableDef().GetName()
 	mode2DDL := defines.Mode2NameResolutionEnabled(c.proc.Ctx)
-	if !mode2DDL {
-		if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
-			return err
-		}
-	}
 
-	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
+	dbSource, dbName, err := openDDLDatabaseWithLock(c, dbName, true)
 	if err != nil {
 		if qry.GetIfExists() && moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 			return nil
@@ -722,32 +713,11 @@ func (s *Scope) AlterView(c *Compile) error {
 		return convertDBEOB(c.proc.Ctx, err, dbName)
 	}
 	if mode2DDL {
-		resolvedDatabaseID := dbSource.GetDatabaseId(c.proc.Ctx)
-		if named, ok := dbSource.(interface{ GetPhysicalName() string }); ok {
-			dbName = named.GetPhysicalName()
-		}
-		if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
-			return err
-		}
-		if txnOp := c.proc.GetTxnOperator(); txnOp.Txn().IsPessimistic() && txnOp.Txn().IsRCIsolation() {
-			now, _ := moruntime.ServiceRuntime(c.proc.GetService()).Clock().Now()
-			if err := txnOp.GetWorkspace().AdvanceSnapshot(c.proc.Ctx, now); err != nil {
-				return err
-			}
-		}
-		dbSource, err = c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
-		if err != nil {
-			return err
-		}
-		if dbSource.GetDatabaseId(c.proc.Ctx) != resolvedDatabaseID {
-			return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
-		}
 		if err := lockTableCreationNamespaces(c, dbSource, []string{tblName}); err != nil {
 			return err
 		}
 		if txnOp := c.proc.GetTxnOperator(); txnOp.Txn().IsPessimistic() && txnOp.Txn().IsRCIsolation() {
-			now, _ := moruntime.ServiceRuntime(c.proc.GetService()).Clock().Now()
-			if err := txnOp.GetWorkspace().AdvanceSnapshot(c.proc.Ctx, now); err != nil {
+			if err := c.advanceLifecycleAdmissionSnapshot(); err != nil {
 				return err
 			}
 		}
@@ -767,7 +737,10 @@ func (s *Scope) AlterView(c *Compile) error {
 	}
 	if mode2DDL {
 		current, lookupErr := dbSource.Relation(c.proc.Ctx, tblName, nil)
-		if lookupErr != nil || current.GetTableID(c.proc.Ctx) != oldRelationID {
+		if lookupErr != nil {
+			return lookupErr
+		}
+		if current.GetTableID(c.proc.Ctx) != oldRelationID {
 			return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
 		}
 	}
@@ -1050,13 +1023,15 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 		if defines.Mode2NameResolutionEnabled(c.proc.Ctx) {
 			txnOp := c.proc.GetTxnOperator()
 			if txnOp.Txn().IsRCIsolation() {
-				now, _ := moruntime.ServiceRuntime(c.proc.GetService()).Clock().Now()
-				if err := txnOp.GetWorkspace().AdvanceSnapshot(c.proc.Ctx, now); err != nil {
+				if err := c.advanceLifecycleAdmissionSnapshot(); err != nil {
 					return err
 				}
 			}
 			currentDB, lookupErr := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
-			if lookupErr != nil || currentDB.GetDatabaseId(c.proc.Ctx) != databaseId {
+			if lookupErr != nil {
+				return lookupErr
+			}
+			if currentDB.GetDatabaseId(c.proc.Ctx) != databaseId {
 				return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
 			}
 		}
@@ -1091,8 +1066,7 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 				return err
 			}
 			if txnOp := c.proc.GetTxnOperator(); txnOp.Txn().IsRCIsolation() {
-				now, _ := moruntime.ServiceRuntime(c.proc.GetService()).Clock().Now()
-				if err := txnOp.GetWorkspace().AdvanceSnapshot(c.proc.Ctx, now); err != nil {
+				if err := c.advanceLifecycleAdmissionSnapshot(); err != nil {
 					return err
 				}
 			}
@@ -1152,7 +1126,10 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 		}
 		if defines.Mode2NameResolutionEnabled(c.proc.Ctx) {
 			currentRel, lookupErr := dbSource.Relation(c.proc.Ctx, tblName, nil)
-			if lookupErr != nil || currentRel.GetTableID(c.proc.Ctx) != tblId ||
+			if lookupErr != nil {
+				return lookupErr
+			}
+			if currentRel.GetTableID(c.proc.Ctx) != tblId ||
 				(qry.TableDef.TblId != 0 && qry.TableDef.TblId != tblId) {
 				return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
 			}
@@ -2048,39 +2025,12 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 
 	tblName := qry.GetTableDef().GetName()
 	mode2DDL := defines.Mode2NameResolutionEnabled(c.proc.Ctx)
-	if !c.disableLock && !mode2DDL {
-		if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
-			return err
-		}
-	}
-	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
+	dbSource, dbName, err := openDDLDatabaseWithLock(c, dbName, !c.disableLock)
 	if err != nil {
 		if dbName == "" {
 			return moerr.NewNoDB(c.proc.Ctx)
 		}
 		return convertDBEOB(c.proc.Ctx, err, dbName)
-	}
-	if mode2DDL && !c.disableLock {
-		resolvedDatabaseID := dbSource.GetDatabaseId(c.proc.Ctx)
-		if named, ok := dbSource.(interface{ GetPhysicalName() string }); ok {
-			dbName = named.GetPhysicalName()
-		}
-		if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
-			return err
-		}
-		if txnOp := c.proc.GetTxnOperator(); txnOp.Txn().IsPessimistic() && txnOp.Txn().IsRCIsolation() {
-			now, _ := moruntime.ServiceRuntime(c.proc.GetService()).Clock().Now()
-			if err := txnOp.GetWorkspace().AdvanceSnapshot(c.proc.Ctx, now); err != nil {
-				return err
-			}
-		}
-		dbSource, err = c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
-		if err != nil {
-			return err
-		}
-		if dbSource.GetDatabaseId(c.proc.Ctx) != resolvedDatabaseID {
-			return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
-		}
 	}
 
 	exists, err := dbSource.RelationExists(c.proc.Ctx, tblName, nil)
@@ -2108,8 +2058,7 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 			return err
 		}
 		if txnOp := c.proc.GetTxnOperator(); txnOp.Txn().IsPessimistic() && txnOp.Txn().IsRCIsolation() {
-			now, _ := moruntime.ServiceRuntime(c.proc.GetService()).Clock().Now()
-			if err := txnOp.GetWorkspace().AdvanceSnapshot(c.proc.Ctx, now); err != nil {
+			if err := c.advanceLifecycleAdmissionSnapshot(); err != nil {
 				return err
 			}
 		}
@@ -3214,39 +3163,12 @@ func (s *Scope) CreateView(c *Compile) error {
 		dbName = qry.GetDatabase()
 	}
 	mode2DDL := defines.Mode2NameResolutionEnabled(c.proc.Ctx)
-	if !mode2DDL {
-		if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
-			return err
-		}
-	}
-	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
+	dbSource, dbName, err := openDDLDatabaseWithLock(c, dbName, true)
 	if err != nil {
 		if dbName == "" {
 			return moerr.NewNoDB(c.proc.Ctx)
 		}
 		return convertDBEOB(c.proc.Ctx, err, dbName)
-	}
-	if mode2DDL {
-		resolvedDatabaseID := dbSource.GetDatabaseId(c.proc.Ctx)
-		if named, ok := dbSource.(interface{ GetPhysicalName() string }); ok {
-			dbName = named.GetPhysicalName()
-		}
-		if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
-			return err
-		}
-		if txnOp := c.proc.GetTxnOperator(); txnOp.Txn().IsPessimistic() && txnOp.Txn().IsRCIsolation() {
-			now, _ := moruntime.ServiceRuntime(c.proc.GetService()).Clock().Now()
-			if err := txnOp.GetWorkspace().AdvanceSnapshot(c.proc.Ctx, now); err != nil {
-				return err
-			}
-		}
-		dbSource, err = c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
-		if err != nil {
-			return err
-		}
-		if dbSource.GetDatabaseId(c.proc.Ctx) != resolvedDatabaseID {
-			return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
-		}
 	}
 
 	viewName := qry.GetTableDef().GetName()
@@ -3255,8 +3177,7 @@ func (s *Scope) CreateView(c *Compile) error {
 	}
 	if mode2DDL {
 		if txnOp := c.proc.GetTxnOperator(); txnOp.Txn().IsPessimistic() && txnOp.Txn().IsRCIsolation() {
-			now, _ := moruntime.ServiceRuntime(c.proc.GetService()).Clock().Now()
-			if err := txnOp.GetWorkspace().AdvanceSnapshot(c.proc.Ctx, now); err != nil {
+			if err := c.advanceLifecycleAdmissionSnapshot(); err != nil {
 				return err
 			}
 		}
@@ -3419,36 +3340,12 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	}
 	tblName := qry.GetTableDef().GetName()
 	mode2DDL := defines.Mode2NameResolutionEnabled(c.proc.Ctx)
-	var resolvedDatabaseID string
-	if mode2DDL {
-		resolved, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
-		if err != nil {
-			return convertDBEOBToNoSuchTable(c.proc.Ctx, err, dbName, tblName)
-		}
-		resolvedDatabaseID = resolved.GetDatabaseId(c.proc.Ctx)
-		if named, ok := resolved.(interface{ GetPhysicalName() string }); ok {
-			dbName = named.GetPhysicalName()
-		}
-		qry.Database = dbName
-	}
-	if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+	dbSource, dbName, err := openDDLDatabaseWithLock(c, dbName, true)
+	if err != nil {
 		return convertDBEOBToNoSuchTable(c.proc.Ctx, err, dbName, tblName)
 	}
 	if mode2DDL {
-		txnOp := c.proc.GetTxnOperator()
-		if txnOp.Txn().IsPessimistic() && txnOp.Txn().IsRCIsolation() {
-			now, _ := moruntime.ServiceRuntime(c.proc.GetService()).Clock().Now()
-			if err := txnOp.GetWorkspace().AdvanceSnapshot(c.proc.Ctx, now); err != nil {
-				return err
-			}
-		}
-		current, err := c.e.Database(c.proc.Ctx, dbName, txnOp)
-		if err != nil {
-			return err
-		}
-		if current.GetDatabaseId(c.proc.Ctx) != resolvedDatabaseID {
-			return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
-		}
+		qry.Database = dbName
 	}
 	// A CREATE INDEX can create several hidden relations, including one set per
 	// partition. Acquire their mode-2 namespaces before the base table X lock.
@@ -3457,11 +3354,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	var preflightTableID uint64
 	preflightPartitioned := false
 	if mode2DDL && !c.disableLock {
-		preflightDB, err := c.e.Database(c.proc.Ctx, qry.Database, c.proc.GetTxnOperator())
-		if err != nil {
-			return convertDBEOBToNoSuchTable(c.proc.Ctx, err, qry.Database, qry.Table)
-		}
-		preflightRel, err := preflightDB.Relation(c.proc.Ctx, qry.Table, nil)
+		preflightRel, err := dbSource.Relation(c.proc.Ctx, qry.Table, nil)
 		if err != nil {
 			return err
 		}
@@ -3485,7 +3378,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 				names = append(names, def.Name)
 			}
 		}
-		if err := lockTableCreationNamespaces(c, preflightDB, names); err != nil {
+		if err := lockTableCreationNamespaces(c, dbSource, names); err != nil {
 			return err
 		}
 	}
@@ -3497,7 +3390,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		return err
 	}
 
-	dbSource, err := c.e.Database(c.proc.Ctx, qry.Database, c.proc.GetTxnOperator())
+	dbSource, err = c.e.Database(c.proc.Ctx, qry.Database, c.proc.GetTxnOperator())
 	if err != nil {
 		return convertDBEOBToNoSuchTable(c.proc.Ctx, err, qry.Database, qry.Table)
 	}
@@ -4416,19 +4309,10 @@ func (s *Scope) TruncateTable(c *Compile) error {
 			}
 		}
 		if mode2DDL {
-			if err := lockMoDatabase(c, db, lock.LockMode_Shared); err != nil {
-				return err
-			}
-			txnOp := c.proc.GetTxnOperator()
-			if txnOp.Txn().IsRCIsolation() {
-				now, _ := moruntime.ServiceRuntime(c.proc.GetService()).Clock().Now()
-				if err := txnOp.GetWorkspace().AdvanceSnapshot(c.proc.Ctx, now); err != nil {
+			if !c.isLifecycleRC() {
+				if err := lockMoDatabase(c, db, lock.LockMode_Shared); err != nil {
 					return err
 				}
-			}
-			currentDB, lookupErr := c.e.Database(c.proc.Ctx, db, txnOp)
-			if lookupErr != nil || currentDB.GetDatabaseId(c.proc.Ctx) != resolvedDatabaseID {
-				return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
 			}
 			// The index set can change between the first lookup and table X.
 			// TRUNCATE replans CREATE after that X, so reserve the prefix even
@@ -4465,7 +4349,10 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		}
 		if mode2DDL {
 			currentRel, lookupErr := dbSource.Relation(c.proc.Ctx, table, nil)
-			if lookupErr != nil || currentRel.GetTableID(c.proc.Ctx) != oldID {
+			if lookupErr != nil {
+				return lookupErr
+			}
+			if currentRel.GetTableID(c.proc.Ctx) != oldID {
 				return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
 			}
 			rel = currentRel
@@ -4709,7 +4596,10 @@ func (s *Scope) DropSequence(c *Compile) error {
 	}
 	if defines.Mode2NameResolutionEnabled(c.proc.Ctx) {
 		current, lookupErr := dbSource.Relation(c.proc.Ctx, tblName, nil)
-		if lookupErr != nil || current.GetTableID(c.proc.Ctx) != resolvedTableID {
+		if lookupErr != nil {
+			return lookupErr
+		}
+		if current.GetTableID(c.proc.Ctx) != resolvedTableID {
 			return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
 		}
 		rel = current
@@ -5144,7 +5034,10 @@ func (s *Scope) dropTableSingleResolved(
 		}
 		if defines.Mode2NameResolutionEnabled(c.proc.Ctx) {
 			current, lookupErr := dbSource.Relation(c.proc.Ctx, tblName, nil)
-			if lookupErr != nil || current.GetTableID(c.proc.Ctx) != droppedRelationID {
+			if lookupErr != nil {
+				return lookupErr
+			}
+			if current.GetTableID(c.proc.Ctx) != droppedRelationID {
 				return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
 			}
 			rel = current
@@ -5440,7 +5333,7 @@ func (s *Scope) CreateSequence(c *Compile) error {
 		dbName = qry.GetDatabase()
 	}
 	tblName := qry.GetTableDef().GetName()
-	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
+	dbSource, dbName, err := openDDLDatabaseWithLock(c, dbName, defines.Mode2NameResolutionEnabled(c.proc.Ctx))
 	if err != nil {
 		if dbName == "" {
 			return moerr.NewNoDB(c.proc.Ctx)
@@ -5448,32 +5341,11 @@ func (s *Scope) CreateSequence(c *Compile) error {
 		return err
 	}
 	if defines.Mode2NameResolutionEnabled(c.proc.Ctx) {
-		resolvedDatabaseID := dbSource.GetDatabaseId(c.proc.Ctx)
-		if named, ok := dbSource.(interface{ GetPhysicalName() string }); ok {
-			dbName = named.GetPhysicalName()
-		}
-		if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
-			return err
-		}
-		if txnOp := c.proc.GetTxnOperator(); txnOp.Txn().IsPessimistic() && txnOp.Txn().IsRCIsolation() {
-			now, _ := moruntime.ServiceRuntime(c.proc.GetService()).Clock().Now()
-			if err := txnOp.GetWorkspace().AdvanceSnapshot(c.proc.Ctx, now); err != nil {
-				return err
-			}
-		}
-		dbSource, err = c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
-		if err != nil {
-			return err
-		}
-		if dbSource.GetDatabaseId(c.proc.Ctx) != resolvedDatabaseID {
-			return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
-		}
 		if err := lockTableCreationNamespaces(c, dbSource, []string{tblName}); err != nil {
 			return err
 		}
 		if txnOp := c.proc.GetTxnOperator(); txnOp.Txn().IsPessimistic() && txnOp.Txn().IsRCIsolation() {
-			now, _ := moruntime.ServiceRuntime(c.proc.GetService()).Clock().Now()
-			if err := txnOp.GetWorkspace().AdvanceSnapshot(c.proc.Ctx, now); err != nil {
+			if err := c.advanceLifecycleAdmissionSnapshot(); err != nil {
 				return err
 			}
 		}
@@ -5547,7 +5419,7 @@ func (s *Scope) AlterSequence(c *Compile) error {
 		dbName = qry.GetDatabase()
 	}
 	tblName := qry.GetTableDef().GetName()
-	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
+	dbSource, dbName, err := openDDLDatabaseWithLock(c, dbName, defines.Mode2NameResolutionEnabled(c.proc.Ctx))
 	if err != nil {
 		if dbName == "" {
 			return moerr.NewNoDB(c.proc.Ctx)
@@ -5555,32 +5427,11 @@ func (s *Scope) AlterSequence(c *Compile) error {
 		return err
 	}
 	if defines.Mode2NameResolutionEnabled(c.proc.Ctx) {
-		resolvedDatabaseID := dbSource.GetDatabaseId(c.proc.Ctx)
-		if named, ok := dbSource.(interface{ GetPhysicalName() string }); ok {
-			dbName = named.GetPhysicalName()
-		}
-		if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
-			return err
-		}
-		if txnOp := c.proc.GetTxnOperator(); txnOp.Txn().IsPessimistic() && txnOp.Txn().IsRCIsolation() {
-			now, _ := moruntime.ServiceRuntime(c.proc.GetService()).Clock().Now()
-			if err := txnOp.GetWorkspace().AdvanceSnapshot(c.proc.Ctx, now); err != nil {
-				return err
-			}
-		}
-		dbSource, err = c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
-		if err != nil {
-			return err
-		}
-		if dbSource.GetDatabaseId(c.proc.Ctx) != resolvedDatabaseID {
-			return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
-		}
 		if err := lockTableCreationNamespaces(c, dbSource, []string{tblName}); err != nil {
 			return err
 		}
 		if txnOp := c.proc.GetTxnOperator(); txnOp.Txn().IsPessimistic() && txnOp.Txn().IsRCIsolation() {
-			now, _ := moruntime.ServiceRuntime(c.proc.GetService()).Clock().Now()
-			if err := txnOp.GetWorkspace().AdvanceSnapshot(c.proc.Ctx, now); err != nil {
+			if err := c.advanceLifecycleAdmissionSnapshot(); err != nil {
 				return err
 			}
 		}
@@ -6853,7 +6704,7 @@ func openDDLDatabaseWithLock(c *Compile, input string, takeLock bool) (engine.Da
 	if !defines.Mode2NameResolutionEnabled(c.proc.Ctx) {
 		if takeLock {
 			if err := lockMoDatabase(c, input, lock.LockMode_Shared); err != nil {
-				return nil, "", err
+				return nil, input, err
 			}
 		}
 		db, err := c.e.Database(c.proc.Ctx, input, txnOp)
@@ -6861,30 +6712,29 @@ func openDDLDatabaseWithLock(c *Compile, input string, takeLock bool) (engine.Da
 	}
 	db, err := c.e.Database(c.proc.Ctx, input, txnOp)
 	if err != nil {
-		return nil, "", err
+		return nil, input, err
 	}
 	named, ok := db.(interface{ GetPhysicalName() string })
 	if !ok || named.GetPhysicalName() == "" {
-		return nil, "", moerr.NewInternalError(c.proc.Ctx, "database resolver did not return physical name")
+		return nil, input, moerr.NewInternalError(c.proc.Ctx, "database resolver did not return physical name")
 	}
 	physical := named.GetPhysicalName()
 	id := db.GetDatabaseId(c.proc.Ctx)
 	if takeLock {
 		if err := lockMoDatabase(c, physical, lock.LockMode_Shared); err != nil {
-			return nil, "", err
+			return nil, input, err
 		}
 		if txnOp.Txn().IsPessimistic() && txnOp.Txn().IsRCIsolation() {
-			now, _ := moruntime.ServiceRuntime(c.proc.GetService()).Clock().Now()
-			if err := txnOp.GetWorkspace().AdvanceSnapshot(c.proc.Ctx, now); err != nil {
-				return nil, "", err
+			if err := c.advanceLifecycleAdmissionSnapshot(); err != nil {
+				return nil, input, err
 			}
 		}
 		db, err = c.e.Database(c.proc.Ctx, physical, txnOp)
 		if err != nil {
-			return nil, "", err
+			return nil, input, err
 		}
 		if db.GetDatabaseId(c.proc.Ctx) != id {
-			return nil, "", moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+			return nil, input, moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
 		}
 	}
 	return db, physical, nil
