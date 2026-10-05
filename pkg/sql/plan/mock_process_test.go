@@ -22,10 +22,19 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+// newPlanTestProcess owns memory-backed dependencies for the test lifetime.
+func newPlanTestProcess(t testing.TB) *process.Process {
+	t.Helper()
+	fs := testutil.NewFS(nil)
+	t.Cleanup(func() { fs.Close(context.Background()) })
+	return testutil.NewProcess(t, testutil.WithFileService(fs))
+}
 
 func TestMockCompilerContextReusesProcess(t *testing.T) {
 	tests := []struct {
