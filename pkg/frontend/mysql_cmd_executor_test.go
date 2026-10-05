@@ -2614,6 +2614,29 @@ func TestSQLModeStagingDefersRewriteWithRequestSnapshot(t *testing.T) {
 	bindSource(third)
 	require.Equal(t, constant.CloudNoUserSql, third.getSqlSourceType(0))
 	require.Nil(t, input.sqlSourceType, "the unexecuted remainder must not be classified under the old mode")
+	for _, internalSource := range []bool{false, true} {
+		t.Run(fmt.Sprintf("source provenance %v", internalSource), func(t *testing.T) {
+			request := &UserInput{sql: "select * from src.t", rewritePolicy: policy, internalSQLSource: internalSource}
+			statement := newSQLStatementInput(request, request.sql)
+			require.NotSame(t, request, statement)
+			rewritten, err := rewriteSQLStatementInput(ctx, ses, statement)
+			require.NoError(t, err)
+			require.NotSame(t, statement, rewritten)
+			assertMaterializedRemap(t, ctx, rewritten.sql, map[string]string{"src": "dst"})
+			want := constant.ExternSql
+			if internalSource {
+				want = constant.InternalSql
+			}
+			for _, copied := range []*UserInput{statement, rewritten} {
+				require.Equal(t, internalSource, copied.internalSQLSource)
+				require.False(t, copied.isInternal(), "source propagation must not enable internal-input authorization")
+				copied.genSqlSourceType(ses)
+				require.Equal(t, []string{want}, copied.getSqlSourceTypes())
+			}
+			require.False(t, ses.GetIsInternal())
+			require.Nil(t, request.sqlSourceType, "derived source classification must not mutate the request")
+		})
+	}
 }
 
 func assertMaterializedRemap(t *testing.T, ctx context.Context, sql string, want map[string]string) {
@@ -3459,11 +3482,12 @@ func TestExecuteAnalyzeDerivedQueryRestoresResponderOnSuccess(t *testing.T) {
 	defer ctrl.Finish()
 
 	ses := newTestSession(t, ctrl)
+	defer ses.Close()
 	writer := &countingMysqlWriter{testMysqlWriter: &testMysqlWriter{}}
 	live := NewMysqlResp(writer)
 	ses.ReplaceResponser(live)
 	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
-	outerExecCtx := &ExecCtx{reqCtx: ctx, ses: ses}
+	outerExecCtx := &ExecCtx{reqCtx: ctx, ses: ses, input: &UserInput{internalSQLSource: true}}
 	eng := mock_frontend.NewMockEngine(ctrl)
 	eng.EXPECT().Hints().Return(engine.Hints{CommitOrRollbackTimeout: time.Second}).AnyTimes()
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
@@ -3471,7 +3495,17 @@ func TestExecuteAnalyzeDerivedQueryRestoresResponderOnSuccess(t *testing.T) {
 	txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
 	txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).AnyTimes()
 	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
-	txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0), nil).AnyTimes()
+	observedDerivedSource := false
+	txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).DoAndReturn(func(context.CancelFunc, string) (uint64, error) {
+		derived := ses.GetTxnCompileCtx().execCtx.input
+		require.NotNil(t, derived)
+		require.True(t, derived.internalSQLSource)
+		require.False(t, derived.isInternal())
+		require.False(t, ses.GetIsInternal())
+		require.Equal(t, constant.InternalSql, derived.getSqlSourceType(0))
+		observedDerivedSource = true
+		return 0, nil
+	}).AnyTimes()
 	txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).AnyTimes()
 	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
@@ -3482,6 +3516,7 @@ func TestExecuteAnalyzeDerivedQueryRestoresResponderOnSuccess(t *testing.T) {
 
 	result, err := executeAnalyzeDerivedQuery(ses, outerExecCtx, "select 1")
 	require.NoError(t, err)
+	require.True(t, observedDerivedSource, "derived execution must exercise the provenance assertion")
 	require.NotNil(t, result)
 	require.Equal(t, uint64(1), result.GetColumnCount())
 	require.Equal(t, uint64(1), result.GetRowCount())
