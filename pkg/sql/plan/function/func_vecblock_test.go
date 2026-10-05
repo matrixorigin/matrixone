@@ -337,7 +337,9 @@ func TestVectorMatmulResolution(t *testing.T) {
 	}
 }
 
-func TestVecBlockDistanceOverflowIsAnError(t *testing.T) {
+// TestVecBlockDistanceOverflow checks float32 overflow: inner product is an error, cosine
+// recomputes in float64 (the vectors are orthogonal).
+func TestVecBlockDistanceOverflow(t *testing.T) {
 	const m = 3e38
 	x, y := make([]float32, 32), make([]float32, 32)
 	for i := range x {
@@ -349,12 +351,16 @@ func TestVecBlockDistanceOverflowIsAnError(t *testing.T) {
 	for _, oid := range vecBlockOids {
 		a := vecBlockCellVector(t, oid, 32, [][]float32{x}, nil)
 		b := vecBlockCellVector(t, oid, 32, [][]float32{y}, nil)
+		_, err := runVecBlockFn(t, InnerProductVecBlock, types.T_float64.ToType(), a, b)
+		require.Error(t, err, "inner_product %s", oid)
 		for _, d := range []struct {
 			name string
 			op   executeLogicOfOverload
-		}{{"inner_product", InnerProductVecBlock}, {"cosine_distance", CosineDistanceVecBlock}, {"cosine_similarity", CosineSimilarityVecBlock}} {
-			_, err := runVecBlockFn(t, d.op, types.T_float64.ToType(), a, b)
-			require.Error(t, err, "%s %s", d.name, oid)
+			want float64
+		}{{"cosine_distance", CosineDistanceVecBlock, 1}, {"cosine_similarity", CosineSimilarityVecBlock, 0}} {
+			res, err := runVecBlockFn(t, d.op, types.T_float64.ToType(), a, b)
+			require.NoError(t, err, "%s %s", d.name, oid)
+			require.InDelta(t, d.want, vector.MustFixedColNoTypeCheck[float64](res)[0], 1e-9, "%s %s", d.name, oid)
 		}
 	}
 }
