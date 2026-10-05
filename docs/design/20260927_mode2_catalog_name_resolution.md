@@ -1,6 +1,6 @@
 # Case preserving catalog name resolution
 
-Revision 8. Owner: issue #29418; implementation: PR #29422.
+Revision 9. Owner: issue #29418; implementation: PR #29422.
 This revision follows the rebase onto main `37ba071297` and replaces the
 previous implementation-specific design narrative. Deployment uses a stopped
 cluster upgrade: CNs and Proxy run the same version. Mixed-version operation
@@ -68,8 +68,9 @@ GOMAXPROCS=2, 10,000 names, produced these medians:
 The extra fold on every exact query and comparator work outweigh the code and
 heap reduction for default workloads. These are microbenchmarks on a shared
 machine, not SQL throughput claims. Keep a zero-new-allocation exact path and
-one tree update for canonical names. Recheck the final lowercase write cost
-against current main; the existing acceptance budget is a 20% median increase.
+one tree update for canonical names. The final serial comparison against main `37ba071297` measured 226.5 ns/op
+for main and 229.2 ns/op here (three-run medians, +1.2%); both allocated
+352 B/op once. This meets the preselected 20% median-increase budget.
 Do not introduce a custom Unicode comparator to rescue the prototype.
 
 ### Historical resolution
