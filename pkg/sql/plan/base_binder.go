@@ -4152,6 +4152,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	}
 	isIfNull := name == "ifnull"
 	isNullIf := name == "nullif"
+	var nullIfPeerSyntax tree.Expr
 
 	// rewrite some ast Exprs before binding
 	switch name {
@@ -4160,6 +4161,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		if len(astArgs) != 2 {
 			return nil, moerr.NewInvalidArg(b.GetContext(), "nullif need two args", len(astArgs))
 		}
+		nullIfPeerSyntax = unwrapParenExpr(astArgs[1])
 		elseExpr := astArgs[0]
 		thenExpr := tree.NewNumVal("", "", false, tree.P_null)
 		whenExpr := tree.NewComparisonExpr(tree.EQUAL, astArgs[0], astArgs[1])
@@ -4703,7 +4705,8 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 					// Comparison casts are not SQL source boundaries. Recover the
 					// original peer without rebinding its AST (which would duplicate
 					// nested NULLIF work and scalar-subquery query nodes).
-					for {
+					_, explicitPeer := nullIfPeerSyntax.(*tree.CastExpr)
+					for !explicitPeer {
 						cast := peer.GetF()
 						if cast == nil || cast.Func == nil || cast.Func.ObjName != "cast" || cast.SyntaxExplicitCast || len(cast.Args) == 0 {
 							break
@@ -4711,6 +4714,18 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 						peer = cast.Args[0]
 					}
 					b.markPreparedStringDomainSubquerySource(peer, make(map[[2]int32]struct{}))
+					peerWitness := preparedNullifDomainWitness(peer)
+					if castSyntax, ok := nullIfPeerSyntax.(*tree.CastExpr); ok {
+						declared, typeErr := getTypeFromAst(b.GetContext(), castSyntax.Type)
+						if typeErr != nil {
+							return nil, typeErr
+						}
+						// Authored casts own the domain even if comparison binding or
+						// constant folding has normalized their executable wrapper.
+						peerWitness = preparedNullifDomainWitness(&Expr{
+							Typ: declared, Expr: &plan.Expr_Lit{Lit: &plan.Literal{StringSource: 1}},
+						})
+					}
 					// Preserve NULLIF's comparison-domain operands before its CASE
 					// shape becomes indistinguishable from a user-written CASE.
 					// This witness is metadata only; CASE remains the executable.
@@ -4719,7 +4734,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 							Func: &plan.ObjectRef{ObjName: "coalesce"},
 							Args: []*Expr{
 								preparedNullifDomainWitness(args[2]),
-								preparedNullifDomainWitness(peer),
+								peerWitness,
 							},
 						}},
 					}
@@ -6120,12 +6135,23 @@ func (b *baseBinder) markPreparedStringDomainSubquerySource(
 // Every expression returned here is metadata only; it is never executed as a
 // query expression.
 func preparedNullifDomainWitness(source *Expr) *Expr {
-	if witness := stringDomainSourceWitness(source, possibleStringDomainsForExpr(source)); witness != nil {
+	domains := possibleStringDomainsForExpr(source)
+	if lit := source.GetLit(); lit != nil && lit.StringSource != 0 {
+		// Folded SQL casts own their declared type. The input's literal form
+		// and NULL value cannot erase an explicit BINARY/text boundary.
+		domains = possibleStringDomainsForType(makeTypeByPlan2Expr(source))
+	}
+	if witness := stringDomainSourceWitness(source, domains); witness != nil {
 		return witness
 	}
-	// Non-string peers contribute no charset. Keep their type/NULL boundary
-	// without retaining an executable subtree or an extra marker value role.
-	return &Expr{Typ: source.Typ, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}
+	// Preserve an actual untyped NULL, not an invented NULL selector. A typed
+	// non-string peer needs only its type; this atom is never executed.
+	if source.Typ.Id == int32(types.T_any) && source.GetLit().GetIsnull() {
+		return makePlan2NullConstExprWithType()
+	}
+	return &Expr{Typ: source.Typ, Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+		Value: &plan.Literal_I64Val{I64Val: 0},
+	}}}
 }
 
 func stringDomainSourceWitness(source *Expr, domains uint8) *Expr {
@@ -6153,10 +6179,9 @@ func stringDomainSourceWitness(source *Expr, domains uint8) *Expr {
 		witness := &Expr{Typ: source.Typ, Expr: &plan.Expr_F{F: &plan.Function{
 			Func: &plan.ObjectRef{ObjName: "coalesce"}, Args: args,
 		}}}
-		if preparedFieldNullCaseHasDynamicCondition(source) {
+		if controlSource := preparedFieldNullCaseCondition(source); controlSource != nil {
 			// CASE's unresolved predicate defers its NULL-only result domain to
 			// bound value markers. Preserve that contract, not the predicate AST.
-			fn := source.GetF()
 			controls := stringDomainWitnessCollector{seen: make(map[string]struct{})}
 			visited := make(map[*Expr]struct{})
 			var collectControl func(*Expr) error
@@ -6171,9 +6196,7 @@ func stringDomainSourceWitness(source *Expr, domains uint8) *Expr {
 				}
 				return nil
 			}
-			for i := 0; i+1 < len(fn.Args); i += 2 {
-				_ = plan.VisitExprTree(fn.Args[i], collectControl)
-			}
+			_ = plan.VisitExprTree(controlSource, collectControl)
 			if len(controls.args) == 0 {
 				return witness
 			}

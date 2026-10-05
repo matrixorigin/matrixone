@@ -175,6 +175,50 @@ deallocate prepare field_nullif_fixed_value;
 set @field_condition = null;
 set @field_peer = null;
 
+-- Nested selectors compose CASE's prepared value domain without using its condition as a value.
+set @field_subject = 'A';
+set @field_candidate = 'a';
+set @field_condition = 0;
+prepare field_nested_case from 'select field(coalesce(case when ? then null else ? end,null),?) as nested_case';
+execute field_nested_case using @field_condition, @field_subject, @field_candidate;
+set @field_condition = 1;
+execute field_nested_case using @field_condition, @field_subject, @field_candidate;
+set @field_condition = 0;
+execute field_nested_case using @field_condition, @field_subject, @field_candidate;
+deallocate prepare field_nested_case;
+
+-- Numeric and typed NULL peers are type boundaries, not untyped NULL-selector values.
+prepare field_numeric_peer from 'select field(nullif(?,1),?) as numeric_peer';
+execute field_numeric_peer using @field_subject, @field_candidate;
+deallocate prepare field_numeric_peer;
+prepare field_numeric_null_peer from 'select field(nullif(?,cast(null as signed)),?) as numeric_null_peer';
+execute field_numeric_null_peer using @field_subject, @field_candidate;
+deallocate prepare field_numeric_null_peer;
+prepare field_text_null_peer from 'select field(nullif(?,cast(null as char)),?) as text_null_peer';
+execute field_text_null_peer using @field_subject, @field_candidate;
+deallocate prepare field_text_null_peer;
+prepare field_explicit_binary_peer from 'select field(nullif(?,cast(''B'' as binary)),?) as binary_peer';
+execute field_explicit_binary_peer using @field_subject, @field_candidate;
+deallocate prepare field_explicit_binary_peer;
+set @field_subject = X'41';
+set @field_candidate = X'61';
+prepare field_nested_case from 'select field(coalesce(case when ? then null else ? end,null),?) as binary_nested_case';
+execute field_nested_case using @field_condition, @field_subject, @field_candidate;
+deallocate prepare field_nested_case;
+prepare field_numeric_peer from 'select field(nullif(?,1),?) as binary_numeric_peer';
+execute field_numeric_peer using @field_subject, @field_candidate;
+deallocate prepare field_numeric_peer;
+prepare field_numeric_null_peer from 'select field(nullif(?,cast(null as signed)),?) as binary_numeric_null_peer';
+execute field_numeric_null_peer using @field_subject, @field_candidate;
+deallocate prepare field_numeric_null_peer;
+prepare field_text_null_peer from 'select field(nullif(?,cast(null as char)),?) as binary_text_null_peer';
+execute field_text_null_peer using @field_subject, @field_candidate;
+deallocate prepare field_text_null_peer;
+prepare field_explicit_binary_peer from 'select field(nullif(?,cast(''B'' as binary)),?) as binary_binary_peer';
+execute field_explicit_binary_peer using @field_subject, @field_candidate;
+deallocate prepare field_explicit_binary_peer;
+set @field_condition = null;
+
 -- Explicit binary subjects retain byte equality across prepared executions.
 set @field_subject = _binary 'a';
 prepare field_binary_stmt from 'select field(cast(? as binary), ''A'', ''a'', X''FE'', X''FF'') as prepared_field';

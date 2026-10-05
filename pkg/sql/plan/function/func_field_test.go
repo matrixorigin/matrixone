@@ -83,7 +83,7 @@ func TestFieldStringSubjectDomain(t *testing.T) {
 			}
 			fc := NewFunctionTestCase(proc, inputs,
 				NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{tc.want, tc.want, 2, 2, 0, 0}, nil), FieldString)
-			ok, info := fc.Run()
+			ok, info := fc.RunAndFree()
 			require.True(t, ok, info)
 		})
 	}
@@ -125,6 +125,7 @@ func TestFieldStringConstantSubject(t *testing.T) {
 	}
 	fc := NewFunctionTestCase(proc, inputs,
 		NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{2, 1, 2}, nil), FieldString)
+	defer fc.Free()
 	// A constant subject has one physical row but broadcasts to the batch.
 	fc.fnLength = 3
 	ok, info := fc.Run()

@@ -479,6 +479,10 @@ func TestPreparedFieldComparisonExecution(t *testing.T) {
 			{"nullif", "nullif(?, '')", 1},
 			{"wrapped nullif", "nullif(coalesce(?, 'A'), '')", 1},
 			{"binary nullif peer", "nullif(?, _binary '')", 0},
+			{"numeric nullif peer", "nullif(?, 1)", 1},
+			{"numeric NULL nullif peer", "nullif(?, cast(null as signed))", 1},
+			{"text NULL nullif peer", "nullif(?, cast(null as char))", 1},
+			{"explicit binary nullif peer", "nullif(?, cast('B' as binary))", 0},
 			{"greatest", "greatest(?, '@')", 1},
 			{"coalesce text", "coalesce(?, 'fallback')", 1},
 			{"if text", "if(true, ?, 'B')", 1},
@@ -494,10 +498,11 @@ func TestPreparedFieldComparisonExecution(t *testing.T) {
 				require.NoError(t, err)
 				template := prepared.GetDcl().GetPrepare().Plan
 				before := template.String()
-				filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), template, []any{
+				values := []any{
 					ParamValue{Value: "A", SourceType: source.ToType(), HasSourceType: true},
 					ParamValue{Value: map[bool]string{true: "z", false: "a"}[tc.name == "nonmatching text"], SourceType: source.ToType(), HasSourceType: true},
-				})
+				}
+				filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), template, values)
 				require.NoError(t, err)
 				require.Equal(t, before, template.String(), "cached PREPARE template changed")
 				consumer := findPlanFunctionExpr(filled, "field")
@@ -509,6 +514,21 @@ func TestPreparedFieldComparisonExecution(t *testing.T) {
 				out, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 				require.NoError(t, err)
 				require.Equal(t, tc.want, vector.GetFixedAtWithTypeCheck[int64](out, 0), consumer.String())
+				mock := NewMockOptimizer(false)
+				mock.ctxt.SetContext(withPreparedSourceBindings(context.Background(), []PreparedSourceBinding{
+					{Position: 0, Type: source.ToType()}, {Position: 1, Type: source.ToType()},
+				}, values))
+				bound, err := runOneStmt(mock, t, query)
+				require.NoError(t, err)
+				bound, _, err = FillValuesOfParamsInPlanWithSpecialization(context.Background(), bound, values)
+				require.NoError(t, err)
+				boundConsumer := findPlanFunctionExpr(bound, "field")
+				boundExecutor, err := colexec.NewExpressionExecutor(proc, boundConsumer)
+				require.NoError(t, err)
+				defer boundExecutor.Free()
+				boundOut, err := boundExecutor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+				require.NoError(t, err)
+				require.Equal(t, tc.want, vector.GetFixedAtWithTypeCheck[int64](boundOut, 0), boundConsumer.String())
 			})
 		}
 	}
@@ -592,49 +612,52 @@ func TestPreparedNullifDomainWitnessBudget(t *testing.T) {
 }
 
 func TestPreparedFieldTextCaseReuse(t *testing.T) {
-	p, err := runOneStmt(NewMockOptimizer(false), t, "prepare p from 'select field(case when ? then null else ? end, ?)'")
-	require.NoError(t, err)
-	template := p.GetDcl().GetPrepare().Plan
-	before := template.String()
-	for _, source := range []types.T{types.T_varchar, types.T_varbinary, types.T_varchar} {
-		for _, condition := range []int64{0, 1, 0} {
-			func() {
-				values := []any{
-					ParamValue{Value: condition, SourceType: types.T_int64.ToType(), HasSourceType: true},
-					ParamValue{Value: "A", SourceType: source.ToType(), HasSourceType: true},
-					ParamValue{Value: "a", SourceType: source.ToType(), HasSourceType: true},
-				}
-				filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), template, values)
-				require.NoError(t, err)
-				proc := testutil.NewProcess(t)
-				executor, err := colexec.NewExpressionExecutor(proc, findPlanFunctionExpr(filled, "field"))
-				require.NoError(t, err)
-				defer executor.Free()
-				out, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
-				require.NoError(t, err)
-				want := int64(1 - condition)
-				if source == types.T_varbinary {
-					want = 0
-				}
-				require.Equal(t, want, vector.GetFixedAtWithTypeCheck[int64](out, 0))
-				mock := NewMockOptimizer(false)
-				mock.ctxt.SetContext(withPreparedSourceBindings(context.Background(), []PreparedSourceBinding{
-					{Position: 0, Type: types.T_int64.ToType()}, {Position: 1, Type: source.ToType()}, {Position: 2, Type: source.ToType()},
-				}, values))
-				bound, err := runOneStmt(mock, t, "select field(case when ? then null else ? end, ?)")
-				require.NoError(t, err)
-				bound, _, err = FillValuesOfParamsInPlanWithSpecialization(context.Background(), bound, values)
-				require.NoError(t, err)
-				boundExecutor, err := colexec.NewExpressionExecutor(proc, findPlanFunctionExpr(bound, "field"))
-				require.NoError(t, err)
-				defer boundExecutor.Free()
-				boundOut, err := boundExecutor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
-				require.NoError(t, err)
-				require.Equal(t, want, vector.GetFixedAtWithTypeCheck[int64](boundOut, 0))
-			}()
+	for _, operand := range []string{"case when ? then null else ? end", "coalesce(case when ? then null else ? end,null)"} {
+		query := "select field(" + operand + ", ?)"
+		p, err := runOneStmt(NewMockOptimizer(false), t, "prepare p from '"+query+"'")
+		require.NoError(t, err)
+		template := p.GetDcl().GetPrepare().Plan
+		before := template.String()
+		for _, source := range []types.T{types.T_varchar, types.T_varbinary, types.T_varchar} {
+			for _, condition := range []int64{0, 1, 0} {
+				func() {
+					values := []any{
+						ParamValue{Value: condition, SourceType: types.T_int64.ToType(), HasSourceType: true},
+						ParamValue{Value: "A", SourceType: source.ToType(), HasSourceType: true},
+						ParamValue{Value: "a", SourceType: source.ToType(), HasSourceType: true},
+					}
+					filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), template, values)
+					require.NoError(t, err)
+					proc := testutil.NewProcess(t)
+					executor, err := colexec.NewExpressionExecutor(proc, findPlanFunctionExpr(filled, "field"))
+					require.NoError(t, err)
+					defer executor.Free()
+					out, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+					require.NoError(t, err)
+					want := int64(1 - condition)
+					if source == types.T_varbinary {
+						want = 0
+					}
+					require.Equal(t, want, vector.GetFixedAtWithTypeCheck[int64](out, 0))
+					mock := NewMockOptimizer(false)
+					mock.ctxt.SetContext(withPreparedSourceBindings(context.Background(), []PreparedSourceBinding{
+						{Position: 0, Type: types.T_int64.ToType()}, {Position: 1, Type: source.ToType()}, {Position: 2, Type: source.ToType()},
+					}, values))
+					bound, err := runOneStmt(mock, t, query)
+					require.NoError(t, err)
+					bound, _, err = FillValuesOfParamsInPlanWithSpecialization(context.Background(), bound, values)
+					require.NoError(t, err)
+					boundExecutor, err := colexec.NewExpressionExecutor(proc, findPlanFunctionExpr(bound, "field"))
+					require.NoError(t, err)
+					defer boundExecutor.Free()
+					boundOut, err := boundExecutor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+					require.NoError(t, err)
+					require.Equal(t, want, vector.GetFixedAtWithTypeCheck[int64](boundOut, 0))
+				}()
+			}
 		}
+		require.Equal(t, before, template.String())
 	}
-	require.Equal(t, before, template.String())
 }
 
 func TestPreparedFieldTextNullSelectorSourceBinding(t *testing.T) {

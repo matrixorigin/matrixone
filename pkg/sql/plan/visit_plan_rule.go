@@ -3275,8 +3275,10 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			} else {
 				var applyErr error
 				disablePrefix := sharedControlParam && paramPos >= 0 &&
-					paramPos < len(rule.numericPrefixParamPositions) && rule.numericPrefixParamPositions[paramPos] &&
-					paramPos < len(rule.sqlExecuteStringBackedParams) && rule.sqlExecuteStringBackedParams[paramPos]
+					paramPos < len(rule.numericComparisonTextParamPositions) &&
+					(rule.numericComparisonTextParamPositions[paramPos] ||
+						paramPos < len(rule.numericPrefixParamPositions) && rule.numericPrefixParamPositions[paramPos] &&
+							paramPos < len(rule.sqlExecuteStringBackedParams) && rule.sqlExecuteStringBackedParams[paramPos])
 				if disablePrefix && paramPos < len(rule.params) && paramPos < len(rule.paramValues) &&
 					rule.params[paramPos] != nil {
 					// NULLIF-style rewrites share one marker between comparison and
@@ -5228,30 +5230,43 @@ func preparedFieldOnlyMarkerAndNull(expr *Expr) bool {
 }
 
 func preparedFieldNullCaseHasDynamicCondition(expr *Expr) bool {
-	for expr != nil {
-		if source := expr.GetPreparedNumeric().GetStringDomainSource(); source != nil {
-			expr = source
-			continue
-		}
-		fn := expr.GetF()
-		if fn == nil || fn.Func == nil {
-			return false
-		}
-		if fn.Func.ObjName == "cast" && !isExplicitPreparedCast(expr) && len(fn.Args) > 0 {
-			expr = fn.Args[0]
-			continue
-		}
-		if fn.Func.ObjName != "case" {
-			return false
-		}
-		for i := 0; i+1 < len(fn.Args); i += 2 {
-			if preparedExprContainsParam(fn.Args[i]) {
-				return true
-			}
-		}
-		return false
+	return preparedFieldNullCaseCondition(expr) != nil
+}
+
+// NULL-only selectors compose through value roles. A containing COALESCE must
+// not erase the unresolved CASE boundary, or treat its predicate as a value.
+func preparedFieldNullCaseCondition(expr *Expr) *Expr {
+	if expr == nil || isExplicitPreparedCast(expr) {
+		return nil
 	}
-	return false
+	if source := expr.GetPreparedNumeric().GetStringDomainSource(); source != nil {
+		return preparedFieldNullCaseCondition(source)
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return nil
+	}
+	name := strings.ToLower(fn.Func.ObjName)
+	switch name {
+	case "cast", "max", "min", "any_value", "coalesce", "ifnull", "if", "iff", "case":
+	default:
+		return nil
+	}
+	for i, arg := range fn.Args {
+		if name == "case" && !numericFunctionArgKeepsContext(name, i, len(fn.Args)) {
+			if preparedExprContainsParam(arg) {
+				return arg
+			}
+			continue
+		}
+		if (name == "if" || name == "iff") && i == 0 || name == "cast" && i != 0 {
+			continue
+		}
+		if condition := preparedFieldNullCaseCondition(arg); condition != nil {
+			return condition
+		}
+	}
+	return nil
 }
 
 func preparedFieldMarkerNullValues(expr *Expr, collectors ...*stringDomainWitnessCollector) (marker, nullValue, other bool) {
@@ -5268,7 +5283,9 @@ func preparedFieldMarkerNullValues(expr *Expr, collectors ...*stringDomainWitnes
 		return true, false, false
 	}
 	if lit := expr.GetLit(); lit != nil {
-		return false, lit.GetIsnull(), !lit.GetIsnull()
+		untypedNull := lit.Isnull && lit.StringSource == 0 &&
+			(expr.Typ.Id == int32(types.T_any) || lit.Src != nil)
+		return false, untypedNull, !untypedNull
 	}
 	fn := expr.GetF()
 	if fn == nil || fn.Func == nil {
