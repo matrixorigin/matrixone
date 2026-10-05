@@ -135,7 +135,6 @@ type s3WriterDelegate struct {
 		throttler   rscthrottler.RSCThrottler
 	}
 	cleanupErr error
-	cleanupMP  *mpool.MPool
 }
 
 func newS3Writer(
@@ -1108,7 +1107,6 @@ func (writer *s3WriterDelegate) free(proc *process.Process, pipelineFailed bool)
 
 	writer.cleanDeleteBatches(proc.Mp())
 	mp := proc.Mp()
-	writer.cleanupMP = mp
 	var cleanupErrs []error
 	if cleanupErr := writer.finalizeSyncedObjects(proc.Ctx, pipelineFailed); cleanupErr != nil {
 		cleanupErrs = append(cleanupErrs, cleanupErr)
@@ -1167,7 +1165,6 @@ func (writer *s3WriterDelegate) releaseBuffers(mp *mpool.MPool) {
 		}
 	}
 	writer.insertFreeLists = nil
-	writer.cleanupMP = nil
 
 	for _, bat := range writer.insertBlockInfo {
 		if bat != nil {
@@ -1259,45 +1256,6 @@ func (task *unpublishedS3RetryTask) cleanup(ctx context.Context) error {
 		*writers = pending
 	}
 	return errors.Join(errs...)
-}
-
-func (writer *s3WriterDelegate) cleanupUnpublishedS3Objects(ctx context.Context) error {
-	var cleanupErrs []error
-	if err := writer.finalizeSyncedObjects(ctx, true); err != nil {
-		cleanupErrs = append(cleanupErrs, err)
-	}
-	for i, s3w := range writer.failedWriters {
-		if s3w == nil {
-			continue
-		}
-		if err := s3w.CloseWithCleanup(ctx, true); err != nil {
-			cleanupErrs = append(cleanupErrs, err)
-		} else {
-			writer.failedWriters[i] = nil
-		}
-	}
-	for i, s3w := range writer.insertSinkers {
-		if s3w == nil {
-			continue
-		}
-		if err := s3w.CloseWithCleanup(ctx, true); err != nil {
-			cleanupErrs = append(cleanupErrs, err)
-		} else {
-			writer.insertSinkers[i] = nil
-		}
-	}
-	if err := errors.Join(cleanupErrs...); err != nil {
-		return err
-	}
-	writer.failedWriters = nil
-	writer.insertSinkers = nil
-	for _, freeList := range writer.insertFreeLists {
-		if freeList != nil {
-			freeList.Close(writer.cleanupMP)
-		}
-	}
-	writer.insertFreeLists = nil
-	return nil
 }
 
 func (writer *s3WriterDelegate) addBatchToOutput(

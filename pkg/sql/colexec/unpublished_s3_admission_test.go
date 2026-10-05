@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"runtime"
 	"sync"
 	"testing"
 
@@ -54,8 +53,10 @@ func TestUnpublishedS3AdmissionBoundsUploadsAndRemoteReceipt(t *testing.T) {
 
 	fs, err := fileservice.NewMemoryFS("shared", fileservice.DisabledCacheConfig, nil)
 	require.NoError(t, err)
-	owner, err := newUnpublishedS3ObjectOwner(fs, a, charged, "remote")
+	owner, err := newUnpublishedS3ObjectOwner(fs, a, charged, "local", "remote")
 	require.NoError(t, err)
+	owner.Accept("local")
+	require.Equal(t, 2, a.count(), "a duplicate received name must not release the first owner's ticket")
 	owner.Accept("remote")
 	require.Equal(t, 1, a.count())
 	owner.Accept("remote")
@@ -281,24 +282,4 @@ func BenchmarkUnpublishedS3AdmissionReserveRelease(b *testing.B) {
 		}
 		a.release(name)
 	}
-}
-
-func BenchmarkUnpublishedS3AdmissionRetainedBytes(b *testing.B) {
-	const tickets = 65_536
-	names := make([]string, tickets)
-	for i := range names {
-		names[i] = fmt.Sprintf("bench-object-%020d", i)
-	}
-	runtime.GC()
-	var before, after runtime.MemStats
-	runtime.ReadMemStats(&before)
-	a := newUnpublishedS3Admission(tickets)
-	for _, name := range names {
-		if err := a.reserveUpload(name); err != nil {
-			b.Fatal(err)
-		}
-	}
-	runtime.ReadMemStats(&after)
-	b.ReportMetric(float64(int64(after.HeapAlloc)-int64(before.HeapAlloc))/tickets, "ledger-bytes/ticket")
-	runtime.KeepAlive(a)
 }

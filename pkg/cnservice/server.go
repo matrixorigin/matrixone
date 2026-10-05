@@ -894,7 +894,8 @@ func (s *service) handleRequest(
 	}
 	// The connection read loop calls handleRequest in wire order. Ownership
 	// receipts are per batch, so ACKs must not be processed out of order by
-	// separate handler goroutines.
+	// separate handler goroutines. Valid ACK handling must remain an in-memory
+	// flow-state update: no I/O or blocking wait in the connection read loop.
 	if msg.GetCmd() == pipeline.Method_PipelineBatchAck {
 		invoke()
 		return nil

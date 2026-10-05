@@ -73,7 +73,6 @@ type container struct {
 	blockId_bitmap                       map[types.Blockid]*nulls.Nulls
 	partitionId_blockId_rowIdBatch       map[int]map[types.Blockid]*batch.Batch // PartitionId -> blockId -> RowIdBatch
 	partitionId_tombstoneObjectStatsBats map[int][]*batch.Batch                 // PartitionId -> tombstone object stats
-	fs                                   fileservice.FileService
 	s3Writers                            []*colexec.CNS3Writer
 	// don't flush cn block rowId and rawBatch
 	// we just do compaction for cn block in the
@@ -318,7 +317,6 @@ func (ctr *container) flush(proc *process.Process, analyzer process.Analyzer) (u
 	if err != nil {
 		return 0, err
 	}
-	ctr.fs = fs
 
 	resSize := uint32(0)
 	for pidx, blockId_rowIdBatch := range ctr.partitionId_blockId_rowIdBatch {
