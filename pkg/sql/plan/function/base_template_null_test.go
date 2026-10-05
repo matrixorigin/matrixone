@@ -280,22 +280,6 @@ func TestVarlenaConstResultsShareNonInlinePayload(t *testing.T) {
 			},
 		},
 		{
-			name:   "unary bytes to string",
-			inputs: []FunctionTestInput{constString},
-			fn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-				return opUnaryBytesToStr(parameters, result, proc, length,
-					func([]byte) string { return payload }, selectList)
-			},
-		},
-		{
-			name:   "unary string to string",
-			inputs: []FunctionTestInput{constString},
-			fn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-				return opUnaryStrToStr(parameters, result, proc, length,
-					func(string) string { return payload }, selectList)
-			},
-		},
-		{
 			name:   "unary fixed to string",
 			inputs: []FunctionTestInput{constFixed},
 			fn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -468,20 +452,6 @@ func TestVarlenaConstNullTemplatesPreserveResultCardinality(t *testing.T) {
 			},
 		},
 		{
-			name:   "unary bytes to string",
-			inputs: []FunctionTestInput{constNullString},
-			fn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-				return opUnaryBytesToStr(parameters, result, proc, length, func(value []byte) string { return string(value) }, selectList)
-			},
-		},
-		{
-			name:   "unary string to string",
-			inputs: []FunctionTestInput{constNullString},
-			fn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-				return opUnaryStrToStr(parameters, result, proc, length, func(value string) string { return value }, selectList)
-			},
-		},
-		{
 			name:   "unary fixed to string with error",
 			inputs: []FunctionTestInput{constNullFixed},
 			fn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -620,20 +590,6 @@ func TestVarlenaTemplatesIgnoreAllRowsPreserveResultCardinality(t *testing.T) {
 			inputs: stringInput,
 			fn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 				return opUnaryBytesToBytes(parameters, result, proc, length, func(value []byte) []byte { return value }, selectList)
-			},
-		},
-		{
-			name:   "unary bytes to string",
-			inputs: stringInput,
-			fn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-				return opUnaryBytesToStr(parameters, result, proc, length, func(value []byte) string { return string(value) }, selectList)
-			},
-		},
-		{
-			name:   "unary string to string",
-			inputs: stringInput,
-			fn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-				return opUnaryStrToStr(parameters, result, proc, length, func(value string) string { return value }, selectList)
 			},
 		},
 		{

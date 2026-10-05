@@ -35,11 +35,6 @@ type templateTr1 interface {
 	bool
 }
 
-// For sca.
-var _ = opBinaryFixedStrToFixedWithErrorCheck[bool, bool]
-var _ = opNoneParamToBytesWithErrorCheck
-var _ = opBinaryStrFixedToStrWithErrorCheck[bool]
-
 func appendRepeatedBytesResult(
 	rs *vector.FunctionResult[types.Varlena],
 	value []byte,
@@ -2827,62 +2822,6 @@ func opUnaryBytesToFixed[
 	return nil
 }
 
-func opUnaryStrToFixed[
-	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	resultFn func(v string) Tr, selectList *FunctionSelectList) error {
-	if length == 0 {
-		return nil
-	}
-
-	result.UseOptFunctionParamFrame(1)
-	rs := vector.MustFunctionResult[Tr](result)
-	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, parameters[0])
-	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedColNoTypeCheck[Tr](rsVec)
-
-	c1 := parameters[0].IsConst()
-	rsNull := rsVec.GetNulls()
-	rsAnyNull, allMasked := applyUnarySelection(rsNull, selectList, length)
-	if allMasked {
-		nulls.AddRange(rsNull, 0, uint64(length))
-		return nil
-	}
-	if c1 {
-		v1, null1 := p1.GetStrValue(0)
-		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
-		} else {
-			r := resultFn(functionUtil.QuickBytesToStr(v1))
-			rowCount := uint64(length)
-			for i := uint64(0); i < rowCount; i++ {
-				rss[i] = r
-			}
-		}
-		return nil
-	}
-
-	// basic case.
-	if p1.WithAnyNullValue() || rsAnyNull {
-		nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
-		rowCount := uint64(length)
-		for i := uint64(0); i < rowCount; i++ {
-			if rsNull.Contains(i) {
-				continue
-			}
-			v1, _ := p1.GetStrValue(i)
-			rss[i] = resultFn(functionUtil.QuickBytesToStr(v1))
-		}
-		return nil
-	}
-
-	rowCount := uint64(length)
-	for i := uint64(0); i < rowCount; i++ {
-		v1, _ := p1.GetStrValue(i)
-		rss[i] = resultFn(functionUtil.QuickBytesToStr(v1))
-	}
-	return nil
-}
-
 func opUnaryBytesToBytes(
 	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v []byte) []byte, selectList *FunctionSelectList) error {
@@ -2940,134 +2879,6 @@ func opUnaryBytesToBytes(
 		v1, _ := p1.GetStrValue(i)
 		r := resultFn(v1)
 		if err := rs.AppendMustBytesValue(r); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func opUnaryBytesToStr(
-	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	resultFn func(v []byte) string, selectList *FunctionSelectList) error {
-	if length == 0 {
-		return nil
-	}
-
-	result.UseOptFunctionParamFrame(1)
-	rs := vector.MustFunctionResult[types.Varlena](result)
-	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, parameters[0])
-	rsVec := rs.GetResultVector()
-
-	c1 := parameters[0].IsConst()
-	rsNull := rsVec.GetNulls()
-	rsAnyNull, allMasked := applyUnarySelection(rsNull, selectList, length)
-	if allMasked {
-		rs.SetNullResult(uint64(length))
-		return nil
-	}
-	if c1 {
-		v1, null1 := p1.GetStrValue(0)
-		if null1 {
-			rs.SetNullResult(uint64(length))
-		} else {
-			r := resultFn(v1)
-			if err := appendRepeatedBytesResult(
-				rs, functionUtil.QuickStrToBytes(r), length); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-
-	// basic case.
-	if p1.WithAnyNullValue() || rsAnyNull {
-		nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
-		rowCount := uint64(length)
-		for i := uint64(0); i < rowCount; i++ {
-			if rsNull.Contains(i) {
-				if err := rs.AppendMustNullForBytesResult(); err != nil {
-					return err
-				}
-				continue
-			}
-			v1, _ := p1.GetStrValue(i)
-			r := resultFn(v1)
-			if err := rs.AppendMustBytesValue(functionUtil.QuickStrToBytes(r)); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-
-	rowCount := uint64(length)
-	for i := uint64(0); i < rowCount; i++ {
-		v1, _ := p1.GetStrValue(i)
-		r := resultFn(v1)
-		if err := rs.AppendMustBytesValue(functionUtil.QuickStrToBytes(r)); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func opUnaryStrToStr(
-	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	resultFn func(v string) string, selectList *FunctionSelectList) error {
-	if length == 0 {
-		return nil
-	}
-
-	result.UseOptFunctionParamFrame(1)
-	rs := vector.MustFunctionResult[types.Varlena](result)
-	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, parameters[0])
-	rsVec := rs.GetResultVector()
-
-	c1 := parameters[0].IsConst()
-	rsNull := rsVec.GetNulls()
-	rsAnyNull, allMasked := applyUnarySelection(rsNull, selectList, length)
-	if allMasked {
-		rs.SetNullResult(uint64(length))
-		return nil
-	}
-	if c1 {
-		v1, null1 := p1.GetStrValue(0)
-		if null1 {
-			rs.SetNullResult(uint64(length))
-		} else {
-			r := resultFn(functionUtil.QuickBytesToStr(v1))
-			if err := appendRepeatedBytesResult(
-				rs, functionUtil.QuickStrToBytes(r), length); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-
-	// basic case.
-	if p1.WithAnyNullValue() || rsAnyNull {
-		nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
-		rowCount := uint64(length)
-		for i := uint64(0); i < rowCount; i++ {
-			if rsNull.Contains(i) {
-				if err := rs.AppendMustNullForBytesResult(); err != nil {
-					return err
-				}
-				continue
-			}
-			v1, _ := p1.GetStrValue(i)
-			r := resultFn(functionUtil.QuickBytesToStr(v1))
-			if err := rs.AppendMustBytesValue(functionUtil.QuickStrToBytes(r)); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-
-	rowCount := uint64(length)
-	for i := uint64(0); i < rowCount; i++ {
-		v1, _ := p1.GetStrValue(i)
-		r := resultFn(functionUtil.QuickBytesToStr(v1))
-		if err := rs.AppendMustBytesValue(functionUtil.QuickStrToBytes(r)); err != nil {
 			return err
 		}
 	}
@@ -3972,22 +3783,6 @@ func opNoneParamToBytes(
 
 	for i := 0; i < length; i++ {
 		if err := rs.AppendMustBytesValue(resultFn()); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func opNoneParamToBytesWithErrorCheck(
-	result vector.FunctionResultWrapper, proc *process.Process, length int, resultFn func() ([]byte, error)) error {
-	rs := vector.MustFunctionResult[types.Varlena](result)
-
-	for i := 0; i < length; i++ {
-		r, err := resultFn()
-		if err != nil {
-			return err
-		}
-		if err = rs.AppendMustBytesValue(r); err != nil {
 			return err
 		}
 	}

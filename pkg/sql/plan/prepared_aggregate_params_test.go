@@ -24,6 +24,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
@@ -852,8 +854,8 @@ func TestPreparedDMLRuntimeSpecializationPreservesWriteParameters(t *testing.T) 
 }
 
 func TestPreparedNtileParameter(t *testing.T) {
-	prepare := buildPreparedAggregatePlan(t,
-		"select n_nationkey, ntile(?) over (partition by n_regionkey order by n_nationkey) from nation")
+	const sql = "select n_nationkey, ntile(?) over (partition by n_regionkey order by n_nationkey) from nation"
+	prepare := buildPreparedAggregatePlan(t, sql)
 	require.Equal(t, []int32{int32(types.T_any)}, prepare.ParamTypes)
 	require.Equal(t, []int32{0}, preparedParamPositions(prepare))
 
@@ -867,6 +869,51 @@ func TestPreparedNtileParameter(t *testing.T) {
 	require.NotSame(t, first, second)
 	require.Equal(t, []int32{0}, preparedParamPositions(prepare))
 	require.Equal(t, originalTypes, preparedEffectiveParamTypes(t, prepare))
+
+	// EXECUTE now binds the current source type before optimization instead
+	// of merely filling the PREPARE template. Its integer consumer must keep
+	// the string ParamRef and perform a strict conversion at execution time.
+	template := prepare.Plan.String()
+	for _, source := range []types.T{types.T_text, types.T_varchar} {
+		t.Run("runtime_source/"+source.String(), func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+			mock := NewMockOptimizer(false)
+			proc := mock.ctxt.GetProcess()
+			params := vector.NewVec(types.T_text.ToType())
+			t.Cleanup(func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) })
+			require.NoError(t, vector.AppendBytes(params, []byte("2"), false, proc.Mp()))
+			proc.SetPrepareParams(params)
+			sourceType := source.ToType()
+			bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
+				[]PreparedSourceBinding{{Position: 0, Type: sourceType}},
+				[]any{ParamValue{Value: "2", SourceType: sourceType, HasSourceType: true, IsBinaryProtocol: true}})
+			require.NoError(t, err)
+			var argument *planpb.Expr
+			require.NoError(t, planpb.VisitExpressionsInOwner(bound.Plan, func(root *planpb.Expr) error {
+				return planpb.VisitExprTree(root, func(expr *planpb.Expr) error {
+					if fn := expr.GetF(); fn != nil && fn.Func.GetObjName() == "ntile" {
+						require.Len(t, fn.Args, 1)
+						argument = fn.Args[0]
+					}
+					return nil
+				})
+			}))
+			require.NotNil(t, argument, "execution plan must contain NTILE")
+			require.Equal(t, int32(types.T_int64), argument.Typ.Id)
+			cast := argument.GetF()
+			require.NotNil(t, cast)
+			require.Equal(t, "cast", cast.Func.GetObjName())
+			require.False(t, cast.GetSyntaxExplicitCast(), "implicit bucket conversion must not use explicit CAST prefix semantics")
+			require.Len(t, cast.Args, 2)
+			require.Equal(t, int32(source), cast.Args[0].Typ.Id)
+			require.NotNil(t, cast.Args[0].GetP(), "a cached plan must read each EXECUTE's current parameter")
+			require.Zero(t, cast.Args[0].GetP().Pos)
+			require.False(t, bound.ValueDependent, "bucket conversion must not depend on the current string value")
+			require.Equal(t, template, prepare.Plan.String(), "EXECUTE must not mutate the PREPARE template")
+		})
+	}
 }
 
 func TestPreparedLagLeadOffsetParameter(t *testing.T) {
