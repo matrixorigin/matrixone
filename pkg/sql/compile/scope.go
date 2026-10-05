@@ -805,9 +805,6 @@ func assignLazyRemoteGeneration(scope *Scope, rootAddress string) {
 // cleanPipelineWitchStartFail is used to clean up the pipelines that has failed to start due to a certain reasons.
 func cleanPipelineWitchStartFail(sp *Scope, fail error, isPrepare bool) {
 	p := pipeline.New(0, nil, sp.RootOp)
-	if fail == process.ErrPipelineStopped {
-		fail = nil
-	}
 	p.Cleanup(sp.Proc, fail != nil, isPrepare, fail)
 }
 
