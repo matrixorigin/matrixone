@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
@@ -923,6 +924,96 @@ func TestPreparedRoundAndTruncateKeepRuntimeValueDomain(t *testing.T) {
 				require.False(t, bound.ValueDependent,
 					"an explicit numeric cast fixes the overload without inspecting text: %s", valueExpr)
 				stmt.Free()
+			}
+
+			// A result cast may narrow the function's answer, not its input.
+			// Inspect source casts instead of snapshotting a complete plan: a
+			// premature scale=1 conversion destroys 1.46 before TRUNCATE sees it.
+			for _, tc := range []struct {
+				name, sql      string
+				explicitNarrow bool
+			}{
+				{"outer_cast", "select cast(" + name + "(?,1) as decimal(20,1))", false},
+				{"scalar_input", "select cast(" + name + "((select ?),1) as decimal(20,1))", false},
+				{"scalar_result", "select cast((select " + name + "(?,1)) as decimal(20,1))", false},
+				{"derived_input", "select cast(" + name + "(v,1) as decimal(20,1)) from (select ? as v) s", false},
+				{"explicit_decimal_input", "select cast(" + name + "(cast(? as decimal(20,1)),1) as decimal(20,2))", true},
+				{"explicit_double_input", "select cast(" + name + "(cast(? as double),1) as decimal(20,1))", false},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, tc.sql, 1)
+					require.NoError(t, err)
+					t.Cleanup(stmt.Free)
+					mock := NewMockOptimizer(false)
+					proc := mock.ctxt.GetProcess()
+					params := vector.NewVec(types.T_text.ToType())
+					t.Cleanup(func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) })
+					require.NoError(t, vector.AppendBytes(params, []byte("1.46"), false, proc.Mp()))
+					proc.SetPrepareParams(params)
+					source := types.T_varchar.ToType()
+					bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
+						[]PreparedSourceBinding{{Position: 0, Type: source}},
+						[]any{ParamValue{Value: "1.46", SourceType: source, HasSourceType: true, IsBinaryProtocol: true}})
+					require.NoError(t, err)
+					require.NotNil(t, findPlanFunctionExpr(bound.Plan, name))
+					narrowSourceCast := false
+					require.NoError(t, planpb.VisitExpressionsInOwner(bound.Plan, func(root *Expr) error {
+						return planpb.VisitExprTree(root, func(expr *Expr) error {
+							fn := expr.GetF()
+							if fn != nil && fn.Func.GetObjName() == "cast" && len(fn.Args) > 0 &&
+								fn.Args[0].GetP() != nil && types.T(expr.Typ.Id).IsDecimal() && expr.Typ.Scale < 2 {
+								narrowSourceCast = true
+							}
+							return nil
+						})
+					}))
+					require.Equal(t, tc.explicitNarrow, narrowSourceCast,
+						"only an explicit input cast may narrow the original decimal spelling: %s\n%s", tc.sql, bound.Plan.String())
+				})
+			}
+
+			for _, tc := range []struct {
+				name, precision string
+				value           any
+				wantErr         bool
+			}{
+				{"value", "1", "1.46", false},
+				{"null", "1", nil, false},
+				{"precision_error", "missing_precision_column", "1.46", true},
+			} {
+				t.Run("context_restored/"+tc.name, func(t *testing.T) {
+					mock := NewMockOptimizer(false)
+					source := types.T_varchar.ToType()
+					ctx := withPreparedSourceBindings(context.Background(),
+						[]PreparedSourceBinding{{Position: 0, Type: source}},
+						[]any{ParamValue{Value: tc.value, SourceType: source, HasSourceType: true, IsBinaryProtocol: true}})
+					mock.ctxt.SetContext(ctx)
+					builder := NewQueryBuilder(planpb.Query_SELECT, &mock.ctxt, false, true)
+					binder := NewDefaultBinder(ctx, builder, NewBindContext(builder, nil), Type{}, nil)
+					outer := Type{Id: int32(types.T_decimal128), Width: 20, Scale: 1}
+					subquery := Type{Id: int32(types.T_decimal128), Width: 22, Scale: 1}
+					binder.numericParamType, binder.numericSubqueryTarget = &outer, &subquery
+					binder.numericFunctionTarget = true
+					stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select "+name+"(?,"+tc.precision+")", 1)
+					require.NoError(t, err)
+					t.Cleanup(stmt.Free)
+					ast := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.FuncExpr)
+					_, err = binder.bindPreparedNumericPrecisionFuncExpr(name, ast.Exprs, 0, nil, -1)
+					if tc.wantErr {
+						require.Error(t, err)
+					} else {
+						require.NoError(t, err)
+					}
+					require.Same(t, &outer, binder.numericParamType)
+					require.Same(t, &subquery, binder.numericSubqueryTarget)
+					require.True(t, binder.numericFunctionTarget)
+					// The next arithmetic sibling must still see its own outer
+					// target after success, NULL fallback, or a precision error.
+					sibling, err := binder.BindExpr(ast.Exprs[0], 0, false)
+					require.NoError(t, err)
+					require.Equal(t, outer.Id, sibling.Typ.Id)
+					require.Equal(t, outer.Scale, sibling.Typ.Scale)
+				})
 			}
 		})
 	}
