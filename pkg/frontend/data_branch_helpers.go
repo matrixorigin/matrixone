@@ -734,8 +734,9 @@ func formatValIntoStringWithFloatCast(
 		case []float32:
 			text = types.ArrayToString[float32](cell)
 		case []byte:
+			// the exact text of the cell, which casts back to the same cell
 			var err error
-			if text, err = types.BlockScaledToString(cell); err != nil {
+			if text, err = types.BlockScaledToJSON(cell); err != nil {
 				return err
 			}
 		default:
@@ -800,6 +801,10 @@ func extractDataBranchSQLRowValue(
 		return nil
 	case types.T_array_uint8:
 		row[colIdx] = vector.GetArrayAt[uint8](vec, rowIdx)
+		return nil
+	case types.T_array_float8, types.T_array_float4:
+		// the cell as stored: the SQL carries its exact text
+		row[colIdx] = append([]byte(nil), vec.GetBytesAt(rowIdx)...)
 		return nil
 	default:
 		return extractRowFromVector(ctx, ses, vec, colIdx, row, rowIdx, false)

@@ -327,7 +327,9 @@ func convertColIntoSql(
 		value := data.([]types.BF16)
 		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", types.ArrayToString(value), typ.DescString()))
 	case types.T_array_float8, types.T_array_float4:
-		text, err := types.BlockScaledToString(data.([]byte))
+		// the exact text: replaying it stores the same cell, where the decoded values would
+		// be quantized again (a vecf4 global scale follows the decoded maximum)
+		text, err := types.BlockScaledToJSON(data.([]byte))
 		if err != nil {
 			return nil, err
 		}

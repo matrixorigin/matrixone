@@ -1940,17 +1940,14 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			return err
 		}
 	case types.T_array_float8, types.T_array_float4:
-		arr, err := types.StringToArray[float32](field.Val)
-		if err != nil {
-			return err
-		}
-		if int(vec.GetType().Width) != types.MaxArrayDimension && int(vec.GetType().Width) != len(arr) {
-			return moerr.NewArrayDefMismatchNoCtx(int(vec.GetType().Width), len(arr))
-		}
+		// "[...]" is quantized; the exact form (a JSON object) is the cell as written
 		f, _ := vec.GetType().Oid.BlockScaledFormat()
-		cell, err := types.AppendBlockScaled(nil, f, arr)
+		cell, err := types.StringToBlockScaled(f, field.Val)
 		if err != nil {
 			return err
+		}
+		if dim := types.BlockScaledDim(cell); int(vec.GetType().Width) != types.MaxArrayDimension && int(vec.GetType().Width) != dim {
+			return moerr.NewArrayDefMismatchNoCtx(int(vec.GetType().Width), dim)
 		}
 		if err = vector.AppendBytes(vec, cell, false, mp); err != nil {
 			return err

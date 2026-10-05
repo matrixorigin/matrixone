@@ -486,8 +486,12 @@ func BlockScaledToString(cell []byte) (string, error) {
 	return buf.String(), nil
 }
 
-// StringToBlockScaled parses "[v1, v2, ...]" with the vecf32 text format and quantizes it.
+// StringToBlockScaled builds a cell from text: the exact form (a JSON object, see
+// BlockScaledToJSON) as stored, or "[v1, v2, ...]" with the vecf32 text format, quantized.
 func StringToBlockScaled(f BlockScaledFormat, s string) ([]byte, error) {
+	if IsBlockScaledJSON(s) {
+		return BlockScaledFromJSON(f, s)
+	}
 	v, err := StringToArray[float32](s)
 	if err != nil {
 		return nil, err

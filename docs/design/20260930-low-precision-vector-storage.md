@@ -274,13 +274,14 @@ Memory admission:
   `select_k` temporary workspace is allocated per call from the default device resource
   and is not claimed.
 - The engine's native host memory (`gpu_blockscaled_matmul_host_bytes`: tile staging,
-  score copy, per-row globals and sums, query packing) is reserved against the
+  score copy, per-row and per-query globals, query packing) is reserved against the
   aggregate's allocation account (`ReserveCapacity`, committed to a `CapacityLease`)
   before the engine is created.
 - The Go tile buffers (cells, ids, groups, scores and the top-k buffers) are allocated
   from the same account; the id buffer grows in preflight to hold the batch.
 - Both count in the aggregate's `Size` and are released by `Free`. When the account has
-  no room for either, the executor scores on the CPU, which needs no tile.
+  no room for either, the query fails: with an eligible device enabled there is no CPU
+  fallback (see Decisions).
 - The engine is created in preflight, so a fill never allocates tile memory.
 
 Dispatch: the compiler reads the session's `gpu_mode` and stores it in the aggregate's
@@ -335,6 +336,7 @@ only when it is stored into a `vecf8`/`vecf4` column (assignment cast).
 | primary key, partition key, secondary/unique index, vector index | rejected at DDL |
 | `LOAD` | CSV text `"[…]"`; Parquet `LIST<FLOAT/DOUBLE>` and text columns, quantized per row |
 | binary input | a `BLOB` of little-endian float32 elements, as for `vecf32` (`CAST(UNHEX('0000803F…') AS BLOB)` or a BLOB parameter), quantized per row; a length that is not a multiple of 4 or another dimension is rejected |
+| exact text | `vecblock_json(v)` returns the cell as stored, `{"g": g, "b": [{"s": scale, "v": [values]}, …]}` (no `"g"` for `vecf8`, whose global is 1); casting that text (or inserting it, or `LOAD`ing it) builds the same cell bytes without quantization. Each element is `v · s · g`; `s` must be a scale code's value (E8M0 / UE4M3), `v` an element code's value (E4M3 / E2M1), 32 / 16 values per block and fewer only in the last; anything else is an error, never rounded |
 
 The promotion is implemented in these operations only: function resolution dequantizes a
 `vecf8`/`vecf4` argument to `vecf32` for the functions listed above, and every other
@@ -662,6 +664,12 @@ type; normalization changes the ranking, independent of the format.
 - GPU dispatch follows the session's `gpu_mode` only. The `options` argument is a JSON
   object of which only `metric` is read; a tile size is an internal choice bounded by the
   allocation account, not a user setting.
+- Transport keeps the stored cell: CDC and ISCP replication SQL and `data branch` merge SQL
+  carry `vecf8`/`vecf4` values as the exact text, which replays to the same bytes. The
+  decoded values (`'[…]'`) would be quantized again: a `vecf4` global scale follows the
+  decoded maximum, so a replayed value can move (an element stored as `6.2606535` became
+  `6.8867183`). Query output and `INTO OUTFILE` keep the decoded values; reloading an
+  export quantizes them again.
 - Non-finite values are rejected at build, including finite inputs that would decode to
   ±Inf, and cell parsing rejects any cell that decodes to a non-finite value.
 - The GPU engine runs only on compute capability 10.0 or newer, checked once per process.

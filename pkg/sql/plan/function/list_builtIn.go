@@ -7806,6 +7806,29 @@ var supportedArrayOperations = []FuncNew{
 			},
 		}, vecBlockBinaryOverloads(6, CosineDistanceVecBlock)...),
 	},
+	// function `vecblock_json`: the exact text of a vecf8/vecf4 value
+	{
+		functionId: VECBLOCK_JSON,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_array_float8},
+				retType:    func(parameters []types.Type) types.Type { return types.T_text.ToType() },
+				newOp:      func() executeLogicOfOverload { return VecBlockJSON },
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_array_float4},
+				retType:    func(parameters []types.Type) types.Type { return types.T_text.ToType() },
+				newOp:      func() executeLogicOfOverload { return VecBlockJSON },
+			},
+		},
+	},
+
 	// function `normalize_l2`
 	{
 		functionId: NORMALIZE_L2,

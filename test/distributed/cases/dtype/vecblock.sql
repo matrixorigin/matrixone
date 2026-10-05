@@ -171,4 +171,17 @@ select count(*) from (select v8 from eqk where id = 1 union select v8 from eqk w
 select count(*) from eqk where v8 in (select v8 from eqk where id = 2);
 select count(*) from (select sample(v8, 1 rows) from eqk) s;
 
+-- the exact text: vecblock_json returns the cell as stored and casts back to the same cell;
+-- the decoded text is quantized again (a vecf4 global scale follows the decoded maximum)
+create table exact (id int primary key, v vecf4(17), e vecf8(3));
+insert into exact values (1, '[8.7649145,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5.7432985]', '[447,1,-2]');
+select vecblock_json(v), vecblock_json(e) from exact;
+insert into exact select 2, vecblock_json(v), vecblock_json(e) from exact where id = 1;
+insert into exact values (3, '[8.764914, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6.2606535]', '[448, 1, -2]');
+select id, v, vecblock_json(v) = (select vecblock_json(v) from exact where id = 1) same_cell from exact order by id;
+select vecblock_json(cast(null as vecf8(2)));
+select cast('{"g":1,"b":[{"s":1,"v":[1,2]}]}' as vecf4(3));
+select cast('{"b":[{"s":3,"v":[1]}]}' as vecf8(1));
+select cast('{"g":1,"b":[{"s":1,"v":[2.5]}]}' as vecf4(1));
+
 drop database vecblock_db;

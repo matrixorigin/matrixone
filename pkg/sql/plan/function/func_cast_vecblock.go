@@ -25,7 +25,8 @@ import (
 
 // vecf8/vecf4 casts: text "[...]", a BLOB of little-endian float32 elements (the binary
 // vector input of vecf32), vecf32 and vecf8/vecf4 sources quantize into the target cell
-// format; vecf8/vecf4 sources dequantize to vecf32. Text targets are not
+// format; the exact text (a JSON object, types.BlockScaledToJSON) builds the cell as
+// written; vecf8/vecf4 sources dequantize to vecf32. Text targets are not
 // casts, as for vecf32; values render as text through the output path.
 
 func init() {
@@ -77,6 +78,19 @@ func castToBlockScaled(proc *process.Process, from *vector.Vector, toType types.
 				return moerr.NewInvalidInputNoCtx("vector dimension exceeds maximum dimension")
 			}
 			arr = types.BytesToArray[float32](v)
+		case fromOid.IsMySQLString() && types.IsBlockScaledJSON(convertByteSliceToString(v)):
+			// the exact form: the cell as written, not quantized
+			exact, err := types.BlockScaledFromJSON(f, convertByteSliceToString(v))
+			if err != nil {
+				return err
+			}
+			if err := checkVectorCastDim(toType, types.BlockScaledDim(exact)); err != nil {
+				return err
+			}
+			if err := rs.AppendBytes(exact, false); err != nil {
+				return err
+			}
+			continue
 		case fromOid.IsMySQLString():
 			a, err := types.StringToArray[float32](convertByteSliceToString(v))
 			if err != nil {

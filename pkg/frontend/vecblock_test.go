@@ -54,21 +54,30 @@ func TestFrontendVecBlockOutput(t *testing.T) {
 	}
 }
 
-// TestDataBranchFormatVecBlock checks that the data branch SQL text renders vecf8/vecf4
-// values as extracted from a row (dequantized) and as raw cells.
+// TestDataBranchFormatVecBlock checks that the data branch SQL text carries a vecf8/vecf4
+// cell exactly: the extracted row keeps the cell and its text parses back to the same bytes.
 func TestDataBranchFormatVecBlock(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
 	for _, oid := range []types.T{types.T_array_float8, types.T_array_float4} {
 		vec := vecBlockTestVector(t, oid, mp)
 		row := make([]any, 1)
-		require.NoError(t, extractRowFromVector(ctx, nil, vec, 0, row, 0, false))
-		for _, val := range []any{row[0], vec.GetBytesAt(0)} {
-			var buf bytes.Buffer
-			require.NoError(t, formatValIntoString(nil, val, *vec.GetType(), &buf))
-			require.Equal(t, "'[1, -3, 0, 6]'", buf.String())
-		}
+		require.NoError(t, extractDataBranchSQLRowValue(ctx, nil, vec, 0, row, 0))
+		require.Equal(t, vec.GetBytesAt(0), row[0])
 		var buf bytes.Buffer
+		require.NoError(t, formatValIntoString(nil, row[0], *vec.GetType(), &buf))
+		text := buf.String()
+		require.True(t, len(text) > 2 && text[0] == '\'' && text[len(text)-1] == '\'')
+		f, _ := oid.BlockScaledFormat()
+		cell, err := types.StringToBlockScaled(f, text[1:len(text)-1])
+		require.NoError(t, err)
+		require.Equal(t, vec.GetBytesAt(0), cell)
+		// a decoded row (the display path) renders its values
+		require.NoError(t, extractRowFromVector(ctx, nil, vec, 0, row, 0, false))
+		buf.Reset()
+		require.NoError(t, formatValIntoString(nil, row[0], *vec.GetType(), &buf))
+		require.Equal(t, "'[1, -3, 0, 6]'", buf.String())
+		buf.Reset()
 		require.Error(t, formatValIntoString(nil, "x", *vec.GetType(), &buf))
 		vec.Free(mp)
 	}

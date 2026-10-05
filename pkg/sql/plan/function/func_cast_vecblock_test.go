@@ -170,3 +170,37 @@ func TestCastNullToVecBlock(t *testing.T) {
 		require.Equal(t, "null", out.RowToString(1))
 	}
 }
+
+// TestCastVecBlockExactText checks that the exact text (vecblock_json) casts back to the
+// same cell for both formats, enforces the declared dimension, and that a malformed text
+// is an error rather than a rounded value.
+func TestCastVecBlockExactText(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	review := make([]float32, 17)
+	review[0], review[16] = 8.7649145, 5.7432985
+	for _, oid := range []types.T{types.T_array_float8, types.T_array_float4} {
+		f, _ := oid.BlockScaledFormat()
+		cell, err := types.AppendBlockScaled(nil, f, review)
+		require.NoError(t, err)
+		src := vector.NewVec(types.New(oid, 17, 0))
+		require.NoError(t, vector.AppendBytes(src, cell, false, proc.Mp()))
+		require.NoError(t, vector.AppendBytes(src, nil, true, proc.Mp()))
+
+		// vecblock_json
+		result := vector.NewFunctionResultWrapper(types.T_text.ToType(), proc.Mp())
+		require.NoError(t, result.PreExtendAndReset(2))
+		require.NoError(t, VecBlockJSON([]*vector.Vector{src}, result, proc, 2, nil))
+		text := result.GetResultVector().GetStringAt(0)
+		require.True(t, result.GetResultVector().IsNull(1))
+
+		for _, to := range []types.Type{types.New(oid, 17, 0), oid.ToType()} {
+			out, err := runVecBlockCast(t, proc, vecBlockStrVector(t, proc, []string{text}, nil), to)
+			require.NoError(t, err, to.String())
+			require.Equal(t, cell, out.GetBytesAt(0), to.String())
+		}
+		_, err = runVecBlockCast(t, proc, vecBlockStrVector(t, proc, []string{text}, nil), types.New(oid, 16, 0))
+		require.Error(t, err, "dimension")
+		_, err = runVecBlockCast(t, proc, vecBlockStrVector(t, proc, []string{`{"b":[{"s":3,"v":[1]}]}`}, nil), oid.ToType())
+		require.Error(t, err, "malformed")
+	}
+}

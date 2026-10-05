@@ -328,7 +328,9 @@ func convertColIntoSql(
 	// types.ArrayElement, so each decodes to its own slice type and formats the
 	// same way. Quoted like the f32/f64 cases.
 	case types.T_array_float8, types.T_array_float4:
-		text, err := types.BlockScaledToString(data.([]byte))
+		// the exact text: replaying it stores the same cell, where the decoded values would
+		// be quantized again (a vecf4 global scale follows the decoded maximum)
+		text, err := types.BlockScaledToJSON(data.([]byte))
 		if err != nil {
 			return nil, err
 		}

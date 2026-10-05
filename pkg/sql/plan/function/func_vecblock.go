@@ -168,3 +168,27 @@ func vecBlockBinaryOverloads(first int, op executeLogicOfOverload) []overload {
 	}
 	return ret
 }
+
+// VecBlockJSON returns the exact text of each vecf8/vecf4 value (types.BlockScaledToJSON),
+// which casts back to the same cell.
+func VecBlockJSON(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	p := vector.GenerateFunctionStrParameter(ivecs[0])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := p.GetStrValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		text, err := types.BlockScaledToJSON(v)
+		if err != nil {
+			return err
+		}
+		if err := rs.AppendBytes([]byte(text), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
