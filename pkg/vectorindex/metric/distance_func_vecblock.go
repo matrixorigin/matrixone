@@ -146,6 +146,10 @@ func VecBlockL2DistanceSq(x, y *VecBlockOperand) (float64, error) {
 		d := x.at(i) - y.at(i)
 		r += d * d
 	}
+	// as the float32 kernels: a sum beyond the float32 range is +Inf
+	if r > math.MaxFloat32 {
+		r = math.Inf(1)
+	}
 	return r, nil
 }
 
@@ -202,6 +206,18 @@ func VecBlockCosineParts(x, y *VecBlockOperand) (dot, nx, ny float64, err error)
 		dot += a * b
 		nx += a * a
 		ny += b * b
+	}
+	// A unit accumulates in float32: a squared norm that overflows to +Inf or underflows
+	// below the smallest normal is recomputed in float64, where the squares of float32
+	// values are always finite and normal.
+	if units > 0 && !(cosineNormsOK(nx, ny, smallestNormalFloat32) && isFiniteF64(dot)) {
+		dot, nx, ny = 0, 0, 0
+		for i := 0; i < n; i++ {
+			a, b := x.at(i), y.at(i)
+			dot += a * b
+			nx += a * a
+			ny += b * b
+		}
 	}
 	if swapped {
 		nx, ny = ny, nx

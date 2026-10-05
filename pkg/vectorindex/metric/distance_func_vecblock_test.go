@@ -15,6 +15,7 @@
 package metric
 
 import (
+	"fmt"
 	"math"
 	"math/rand"
 	"strconv"
@@ -267,9 +268,10 @@ func TestVecBlockOverflowNaNMapsToPosInf(t *testing.T) {
 			d, err := VecBlockInnerProduct(x, y)
 			require.NoError(t, err)
 			require.True(t, math.IsInf(d, 1), msg)
+			// cosine recomputes in float64
 			d, err = VecBlockCosineDistance(x, y)
 			require.NoError(t, err)
-			require.True(t, math.IsInf(d, 1), msg)
+			require.True(t, d >= 0 && d <= 2, msg)
 
 			// L2 and L1 are sums of non-negative terms: never NaN
 			for _, fn := range []func(x, y *VecBlockOperand) (float64, error){VecBlockL2DistanceSq, VecBlockL1Distance} {
@@ -313,6 +315,45 @@ func TestVecBlockSelfDistance(t *testing.T) {
 			l1, err := VecBlockL1Distance(x, y)
 			require.NoError(t, err)
 			require.Equal(t, float64(0), l1, "%s vector %d", f, i)
+		}
+	}
+}
+
+// TestVecBlockCosineFloat32Range checks cosine and L2 when a unit's float32 sums leave the
+// float32 range: the result does not depend on whether elements fall in a unit or the tail.
+func TestVecBlockCosineFloat32Range(t *testing.T) {
+	fill := func(dim int, lead, rest float32) []float32 {
+		v := make([]float32, dim)
+		for i := range v {
+			v[i] = rest
+		}
+		v[0] = lead
+		return v
+	}
+	for _, dim := range []int{15, 16, 33} {
+		for _, f := range vecBlockKinds[1:] {
+			for _, c := range []struct {
+				name string
+				x, y []float32
+			}{
+				{"overflow", fill(dim, 2e19, 0), fill(dim, 1, 0)},
+				{"underflow", fill(dim, 1e-25, 1e-25), fill(dim, 2e-25, 2e-25)},
+			} {
+				msg := fmt.Sprintf("%s %s dim %d", c.name, f, dim)
+				x, _ := vecBlockTestOperand(t, f, c.x)
+				y, _ := vecBlockTestOperand(t, f, c.y)
+				d, err := VecBlockCosineDistance(x, y)
+				require.NoError(t, err, msg)
+				require.InDelta(t, 0, d, 1e-6, msg)
+				s, err := VecBlockCosineSimilarity(x, y)
+				require.NoError(t, err, msg)
+				require.InDelta(t, 1, s, 1e-6, msg)
+			}
+			x, _ := vecBlockTestOperand(t, f, fill(dim, 2e19, 0))
+			y, _ := vecBlockTestOperand(t, f, fill(dim, 0, 0))
+			sq, err := VecBlockL2DistanceSq(x, y)
+			require.NoError(t, err)
+			require.True(t, math.IsInf(sq, 1), "l2sq %s dim %d", f, dim)
 		}
 	}
 }
