@@ -41,7 +41,7 @@ func TestFoldedDatabaseLookupHonorsSnapshotAndAmbiguity(t *testing.T) {
 		query := DatabaseItem{
 			AccountId: 7, Name: "FOO", Ts: timestamp.Timestamp{PhysicalTime: at},
 		}
-		found, ambiguous := cc.GetFoldedDatabase(&query)
+		found, ambiguous := lookupFoldedDatabase(cc, &query)
 		return query, found, ambiguous
 	}
 	beforeCollision, found, ambiguous := lookup(150)
@@ -63,7 +63,7 @@ func TestFoldedDatabaseLookupHonorsSnapshotAndAmbiguity(t *testing.T) {
 	exact := &DatabaseItem{AccountId: 7, Name: "FOO", Ts: timestamp.Timestamp{PhysicalTime: 350}}
 	require.False(t, cc.GetDatabase(exact), "mode-0 exact lookup must stay case-sensitive")
 	otherTenant := &DatabaseItem{AccountId: 8, Name: "FOO", Ts: timestamp.Timestamp{PhysicalTime: 350}}
-	found, ambiguous = cc.GetFoldedDatabase(otherTenant)
+	found, ambiguous = lookupFoldedDatabase(cc, otherTenant)
 	require.False(t, found)
 	require.False(t, ambiguous)
 }
@@ -78,7 +78,7 @@ func TestFoldedTableLookupPreservesPhysicalName(t *testing.T) {
 		AccountId: 7, DatabaseId: 9, Name: "mixt",
 		Ts: timestamp.Timestamp{PhysicalTime: 150},
 	}
-	found, ambiguous := cc.GetFoldedTable(query)
+	found, ambiguous := lookupFoldedTable(cc, query)
 	require.True(t, found)
 	require.False(t, ambiguous)
 	require.Equal(t, "MixT", query.Name)
@@ -93,7 +93,7 @@ func TestFoldedTableLookupPreservesPhysicalName(t *testing.T) {
 		AccountId: 7, DatabaseId: 9, Name: "MIXT",
 		Ts: timestamp.Timestamp{PhysicalTime: 250},
 	}
-	found, ambiguous = cc.GetFoldedTable(query)
+	found, ambiguous = lookupFoldedTable(cc, query)
 	require.False(t, found)
 	require.True(t, ambiguous)
 }
@@ -162,7 +162,7 @@ func TestFoldedCatalogCanonicalVariantVisibilityAcrossGC(t *testing.T) {
 		snapshot := timestamp.Timestamp{PhysicalTime: at}
 		require.True(t, cc.CanServe(types.TimestampToTS(snapshot)))
 		db := &DatabaseItem{AccountId: 7, Name: "FOO", Ts: snapshot}
-		found, ambiguous := cc.GetFoldedDatabase(db)
+		found, ambiguous := lookupFoldedDatabase(cc, db)
 		require.Equal(t, wantAmbiguous, ambiguous)
 		require.Equal(t, !wantAmbiguous, found)
 		if found {
@@ -170,7 +170,7 @@ func TestFoldedCatalogCanonicalVariantVisibilityAcrossGC(t *testing.T) {
 			require.Equal(t, wantID, db.Id)
 		}
 		table := &TableItem{AccountId: 7, DatabaseId: 9, Name: "FOO", Ts: snapshot}
-		found, ambiguous = cc.GetFoldedTable(table)
+		found, ambiguous = lookupFoldedTable(cc, table)
 		require.Equal(t, wantAmbiguous, ambiguous)
 		require.Equal(t, !wantAmbiguous, found)
 		if found {
@@ -232,7 +232,7 @@ func BenchmarkCatalogDatabaseNameLookup(b *testing.B) {
 					AccountId: 7, Name: "targetdb",
 					Ts: timestamp.Timestamp{PhysicalTime: 150},
 				}
-				found, ambiguous := cc.GetFoldedDatabase(&query)
+				found, ambiguous := lookupFoldedDatabase(cc, &query)
 				if !found || ambiguous || query.Name != "TargetDB" {
 					b.Fatal("folded database lookup lost target")
 				}
@@ -277,7 +277,7 @@ func BenchmarkCatalogTableNameLookup(b *testing.B) {
 					AccountId: 7, DatabaseId: 9, Name: "targettbl",
 					Ts: timestamp.Timestamp{PhysicalTime: 150},
 				}
-				found, ambiguous := cc.GetFoldedTable(&query)
+				found, ambiguous := lookupFoldedTable(cc, &query)
 				if !found || ambiguous || query.Name != "TargetTbl" {
 					b.Fatal("folded table lookup lost target")
 				}
@@ -353,4 +353,34 @@ func BenchmarkCatalogFoldedIndexRetainedBytes(b *testing.B) {
 			b.ReportMetric(float64(int64(after.HeapAlloc)-int64(before.HeapAlloc))/size, "retained-B/name")
 		})
 	}
+}
+
+// Tests and benchmarks collapse the visitor output; production overlays its
+// transaction operations before deciding uniqueness in disttae.
+func lookupFoldedTable(cc *CatalogCache, tbl *TableItem) (found, ambiguous bool) {
+	cc.VisitFoldedTables(tbl.AccountId, tbl.DatabaseId, tbl.Name, tbl.Ts,
+		func(item *TableItem) bool {
+			if found {
+				ambiguous = true
+				return false
+			}
+			copyTableItem(tbl, item)
+			found = true
+			return true
+		})
+	return found && !ambiguous, ambiguous
+}
+
+func lookupFoldedDatabase(cc *CatalogCache, db *DatabaseItem) (found, ambiguous bool) {
+	cc.VisitFoldedDatabases(db.AccountId, db.Name, db.Ts,
+		func(item *DatabaseItem) bool {
+			if found {
+				ambiguous = true
+				return false
+			}
+			copyDatabaseItem(db, item)
+			found = true
+			return true
+		})
+	return found && !ambiguous, ambiguous
 }
