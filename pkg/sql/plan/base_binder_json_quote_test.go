@@ -27,7 +27,7 @@ import (
 
 func TestJsonQuotePreparedParameterMetadataDoesNotCastRuntimeValue(t *testing.T) {
 	prepared, err := runOneStmt(
-		NewMockOptimizer(false), t,
+		NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare json_quote_stmt from 'select json_quote(?) as result'")
 	require.NoError(t, err)
 	preparePlan := prepared.GetDcl().GetPrepare().GetPlan()
@@ -49,7 +49,7 @@ func TestJsonQuotePreparedParameterMetadataDoesNotCastRuntimeValue(t *testing.T)
 }
 
 func TestJsonQuoteStaticNullHasZeroCharacterBound(t *testing.T) {
-	query, err := runOneStmt(NewMockOptimizer(false), t, "select json_quote(null) as result")
+	query, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "select json_quote(null) as result")
 	require.NoError(t, err)
 	quoted := findPlanFunctionExpr(query, "json_quote")
 	require.NotNil(t, quoted)

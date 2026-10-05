@@ -208,9 +208,9 @@ func (o subscriptionMetadataTestOptimizer) CurrentContext() CompilerContext {
 	return o.ctx
 }
 
-func newSubscriptionMetadataTestOptimizer() (Optimizer, *subscriptionMetadataTestContext) {
+func newSubscriptionMetadataTestOptimizer(t testing.TB) (Optimizer, *subscriptionMetadataTestContext) {
 	ctx := &subscriptionMetadataTestContext{
-		MockCompilerContext: NewMockCompilerContext(true),
+		MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t)),
 		lowerCaseTableNames: 1,
 		subscription: &SubscriptionMeta{
 			AccountId: 0,
@@ -231,7 +231,7 @@ func newSubscriptionMetadataTestOptimizer() (Optimizer, *subscriptionMetadataTes
 }
 
 func TestSubscriptionStatisticsRoutesCatalogScansToPublisher(t *testing.T) {
-	optimizer, ctx := newSubscriptionMetadataTestOptimizer()
+	optimizer, ctx := newSubscriptionMetadataTestOptimizer(t)
 	queryPlan, err := runOneStmt(optimizer, t,
 		"select table_schema, index_schema, table_name, index_name "+
 			"from information_schema.statistics "+
@@ -284,7 +284,7 @@ func TestSubscriptionStatisticsUsesResolvedPublisherAccountIdentity(t *testing.T
 	util.InitPredefinedTables([]string{catalog.MO_USER})
 	defer util.InitPredefinedTables(nil)
 
-	optimizer, ctx := newSubscriptionMetadataTestOptimizer()
+	optimizer, ctx := newSubscriptionMetadataTestOptimizer(t)
 	ctx.metadata = []*SubscriptionMetadata{{
 		Meta: &SubscriptionMeta{
 			Name:        "publication",
@@ -334,7 +334,7 @@ func TestSubscriptionStatisticsUsesResolvedPublisherAccountIdentity(t *testing.T
 }
 
 func TestSubscriptionShowIndexRoutesCatalogScansToPublisher(t *testing.T) {
-	optimizer, ctx := newSubscriptionMetadataTestOptimizer()
+	optimizer, ctx := newSubscriptionMetadataTestOptimizer(t)
 	queryPlan, err := runOneStmt(optimizer, t, "show index from sub_db.nation")
 	require.NoError(t, err)
 	require.Nil(t, ctx.GetQueryingSubscription(), "SHOW INDEX must restore the session compiler context")
@@ -357,7 +357,7 @@ func TestSubscriptionShowIndexRoutesCatalogScansToPublisher(t *testing.T) {
 }
 
 func TestSubscriptionStatisticsPreservesSourcesAcrossQueryShapes(t *testing.T) {
-	optimizer, ctx := newSubscriptionMetadataTestOptimizer()
+	optimizer, ctx := newSubscriptionMetadataTestOptimizer(t)
 	for _, test := range []struct {
 		name string
 		sql  string
@@ -404,7 +404,7 @@ func TestSubscriptionStatisticsPreservesSourcesAcrossQueryShapes(t *testing.T) {
 }
 
 func TestSubscriptionStatisticsExpandsEachOccurrence(t *testing.T) {
-	optimizer, ctx := newSubscriptionMetadataTestOptimizer()
+	optimizer, ctx := newSubscriptionMetadataTestOptimizer(t)
 
 	nestedPlan, err := runOneStmt(optimizer, t,
 		"select s.index_name from information_schema.statistics s "+
@@ -426,7 +426,7 @@ func TestSubscriptionStatisticsExpandsEachOccurrence(t *testing.T) {
 }
 
 func TestPreparedSubscriptionMetadataPreservesAllSources(t *testing.T) {
-	_, ctx := newSubscriptionMetadataTestOptimizer()
+	_, ctx := newSubscriptionMetadataTestOptimizer(t)
 	statements, err := mysql.Parse(context.Background(),
 		"select index_name from information_schema.statistics "+
 			"where table_schema = ? and table_name = ?", 1)
@@ -444,7 +444,7 @@ func TestPreparedSubscriptionMetadataPreservesAllSources(t *testing.T) {
 }
 
 func TestSubscriptionStatisticsZeroSubscriptionsRetainsMetadataDependency(t *testing.T) {
-	optimizer, ctx := newSubscriptionMetadataTestOptimizer()
+	optimizer, ctx := newSubscriptionMetadataTestOptimizer(t)
 	ctx.metadata = []*SubscriptionMetadata{}
 
 	queryPlan, err := runOneStmt(optimizer, t,
@@ -464,7 +464,7 @@ func TestSubscriptionStatisticsZeroSubscriptionsRetainsMetadataDependency(t *tes
 }
 
 func TestSubscriptionStatisticsSupportsManyVisibleSubscriptions(t *testing.T) {
-	optimizer, ctx := newSubscriptionMetadataTestOptimizer()
+	optimizer, ctx := newSubscriptionMetadataTestOptimizer(t)
 	ctx.metadata = subscriptionMetadataTestSet(64)
 	ctx.metadata = append(ctx.metadata, nil, ctx.metadata[10])
 
@@ -481,7 +481,7 @@ func TestSubscriptionStatisticsSupportsManyVisibleSubscriptions(t *testing.T) {
 }
 
 func TestSubscriptionStatisticsPlanningBudget(t *testing.T) {
-	optimizer, ctx := newSubscriptionMetadataTestOptimizer()
+	optimizer, ctx := newSubscriptionMetadataTestOptimizer(t)
 	ctx.metadata = subscriptionMetadataTestSet(64)
 
 	queryPlan, err := runOneStmt(optimizer, t,
@@ -504,7 +504,7 @@ func TestSubscriptionStatisticsPlanningBudget(t *testing.T) {
 }
 
 func TestSubscriptionStatisticsMetadataCacheIsSnapshotScoped(t *testing.T) {
-	_, ctx := newSubscriptionMetadataTestOptimizer()
+	_, ctx := newSubscriptionMetadataTestOptimizer(t)
 	snapshotA := &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 1}}
 	snapshotB := &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 2}}
 	keyA, err := subscriptionMetadataSnapshotKey(snapshotA)
@@ -533,7 +533,7 @@ func TestSubscriptionStatisticsMetadataCacheIsSnapshotScoped(t *testing.T) {
 }
 
 func TestSubscriptionStatisticsBudgetIgnoresRejectedAndDuplicateMetadata(t *testing.T) {
-	optimizer, ctx := newSubscriptionMetadataTestOptimizer()
+	optimizer, ctx := newSubscriptionMetadataTestOptimizer(t)
 	ctx.metadata = subscriptionMetadataTestSet(maxSubscriptionStatisticsPublisherBranches)
 	ctx.metadata = append(ctx.metadata,
 		nil,
@@ -581,7 +581,7 @@ func TestSubscriptionStatisticsBudgetUsesIdentifierCaseMode(t *testing.T) {
 	)
 
 	t.Run("case-sensitive names are distinct", func(t *testing.T) {
-		_, ctx := newSubscriptionMetadataTestOptimizer()
+		_, ctx := newSubscriptionMetadataTestOptimizer(t)
 		ctx.lowerCaseTableNames = 0
 		ctx.metadata = metadata
 		statements, err := mysql.Parse(context.Background(),
@@ -598,7 +598,7 @@ func TestSubscriptionStatisticsBudgetUsesIdentifierCaseMode(t *testing.T) {
 
 	for _, mode := range []int64{1, 2} {
 		t.Run(fmt.Sprintf("case-insensitive mode %d deduplicates", mode), func(t *testing.T) {
-			optimizer, ctx := newSubscriptionMetadataTestOptimizer()
+			optimizer, ctx := newSubscriptionMetadataTestOptimizer(t)
 			ctx.lowerCaseTableNames = mode
 			ctx.metadata = metadata
 
@@ -614,7 +614,7 @@ func TestSubscriptionStatisticsBudgetUsesIdentifierCaseMode(t *testing.T) {
 }
 
 func TestSubscriptionStatisticsBudgetDoesNotLeakAcrossBuilds(t *testing.T) {
-	_, ctx := newSubscriptionMetadataTestOptimizer()
+	_, ctx := newSubscriptionMetadataTestOptimizer(t)
 	ctx.metadata = subscriptionMetadataTestSet(129)
 	statements, err := mysql.Parse(context.Background(),
 		"select count(*) from information_schema.statistics", 1)
@@ -635,7 +635,7 @@ func TestSubscriptionStatisticsBudgetDoesNotLeakAcrossBuilds(t *testing.T) {
 func TestSubscriptionStatisticsPublicationTableBudget(t *testing.T) {
 	build := func(t *testing.T, tables, sql string) (*Plan, error, *subscriptionMetadataTestContext) {
 		t.Helper()
-		_, ctx := newSubscriptionMetadataTestOptimizer()
+		_, ctx := newSubscriptionMetadataTestOptimizer(t)
 		ctx.metadata = []*SubscriptionMetadata{{Meta: &SubscriptionMeta{
 			AccountId: 0, DbName: "tpch", SubName: "table_budget", Tables: tables,
 		}, AllTablesVisible: true}}
@@ -686,7 +686,7 @@ func TestSubscriptionStatisticsPublicationTableBudget(t *testing.T) {
 	})
 
 	t.Run("failed admission neither caches nor charges a retried snapshot", func(t *testing.T) {
-		_, ctx := newSubscriptionMetadataTestOptimizer()
+		_, ctx := newSubscriptionMetadataTestOptimizer(t)
 		ctx.metadata = []*SubscriptionMetadata{{Meta: &SubscriptionMeta{
 			AccountId: 0, DbName: "tpch", SubName: "table_budget",
 			Tables: subscriptionMetadataTestTableList(maxSubscriptionStatisticsPublicationTableEntries + 1),
@@ -710,7 +710,7 @@ func TestSubscriptionStatisticsPublicationTableBudget(t *testing.T) {
 	})
 
 	t.Run("cached admission failure does not partially consume budget", func(t *testing.T) {
-		_, ctx := newSubscriptionMetadataTestOptimizer()
+		_, ctx := newSubscriptionMetadataTestOptimizer(t)
 		ctx.metadata = []*SubscriptionMetadata{{Meta: &SubscriptionMeta{
 			AccountId: 0, DbName: "tpch", SubName: "table_budget",
 			Tables: subscriptionMetadataTestTableList(maxSubscriptionStatisticsPublicationTableEntries / 2),
@@ -782,7 +782,7 @@ func subscriptionMetadataTestTableList(count int) string {
 
 func TestSubscriptionStatisticsRejectsPublisherExpansionOverBudget(t *testing.T) {
 	t.Run("single occurrence", func(t *testing.T) {
-		_, ctx := newSubscriptionMetadataTestOptimizer()
+		_, ctx := newSubscriptionMetadataTestOptimizer(t)
 		ctx.metadata = subscriptionMetadataTestSet(maxSubscriptionStatisticsPublisherBranches + 1)
 		statements, err := mysql.Parse(context.Background(),
 			"select count(*) from information_schema.statistics where table_name = 'nation'", 1)
@@ -798,7 +798,7 @@ func TestSubscriptionStatisticsRejectsPublisherExpansionOverBudget(t *testing.T)
 	})
 
 	t.Run("cumulative occurrences", func(t *testing.T) {
-		_, ctx := newSubscriptionMetadataTestOptimizer()
+		_, ctx := newSubscriptionMetadataTestOptimizer(t)
 		ctx.metadata = subscriptionMetadataTestSet(64)
 		statements, err := mysql.Parse(context.Background(),
 			"select count(*) from information_schema.statistics a "+
@@ -823,7 +823,7 @@ func TestSubscriptionStatisticsPlanningObservesCancellation(t *testing.T) {
 	const sql = "select count(*) from information_schema.statistics where table_name = 'nation'"
 
 	t.Run("pre-canceled", func(t *testing.T) {
-		_, ctx := newSubscriptionMetadataTestOptimizer()
+		_, ctx := newSubscriptionMetadataTestOptimizer(t)
 		ctx.metadata = subscriptionMetadataTestSet(4)
 		statements, err := mysql.Parse(context.Background(), sql, 1)
 		require.NoError(t, err)
@@ -843,7 +843,7 @@ func TestSubscriptionStatisticsPlanningObservesCancellation(t *testing.T) {
 	})
 
 	t.Run("during publisher binding", func(t *testing.T) {
-		_, ctx := newSubscriptionMetadataTestOptimizer()
+		_, ctx := newSubscriptionMetadataTestOptimizer(t)
 		ctx.metadata = subscriptionMetadataTestSet(4)
 		statements, err := mysql.Parse(context.Background(), sql, 1)
 		require.NoError(t, err)
@@ -886,7 +886,7 @@ func BenchmarkSubscriptionStatisticsPlanning(b *testing.B) {
 	for _, subscriptionCount := range []int{0, 16, 64} {
 		for _, query := range queries {
 			b.Run(fmt.Sprintf("subscriptions-%d/%s", subscriptionCount, query.name), func(b *testing.B) {
-				_, ctx := newSubscriptionMetadataTestOptimizer()
+				_, ctx := newSubscriptionMetadataTestOptimizer(b)
 				ctx.metadata = subscriptionMetadataTestSet(subscriptionCount)
 				b.ReportMetric(float64(subscriptionCount), "subscriptions")
 				b.ResetTimer()
@@ -930,7 +930,7 @@ func subscriptionMetadataTestSet(count int) []*SubscriptionMetadata {
 }
 
 func TestSubscriptionStatisticsHonorsSubscriptionNameCaseMode(t *testing.T) {
-	optimizer, ctx := newSubscriptionMetadataTestOptimizer()
+	optimizer, ctx := newSubscriptionMetadataTestOptimizer(t)
 	ctx.metadata = []*SubscriptionMetadata{
 		{Meta: &SubscriptionMeta{AccountId: 0, DbName: "tpch", SubName: "SubCase", Tables: "nation"}, AllTablesVisible: true},
 		{Meta: &SubscriptionMeta{AccountId: 0, DbName: "tpch", SubName: "subcase", Tables: "nation"}, AllTablesVisible: true},
@@ -968,7 +968,7 @@ func TestSubscriptionStatisticsHonorsSubscriptionNameCaseMode(t *testing.T) {
 }
 
 func TestSubscriptionStatisticsAppliesSubscriberRBACBeforePublisherScan(t *testing.T) {
-	optimizer, ctx := newSubscriptionMetadataTestOptimizer()
+	optimizer, ctx := newSubscriptionMetadataTestOptimizer(t)
 
 	queryPlan, err := runOneStmt(optimizer, t,
 		"select index_name from information_schema.statistics "+
@@ -995,7 +995,7 @@ func TestSubscriptionStatisticsAppliesSubscriberRBACBeforePublisherScan(t *testi
 }
 
 func TestSubscriptionStatisticsOmitsSubscriberInvisibleBranches(t *testing.T) {
-	optimizer, ctx := newSubscriptionMetadataTestOptimizer()
+	optimizer, ctx := newSubscriptionMetadataTestOptimizer(t)
 	ctx.metadata = []*SubscriptionMetadata{
 		{Meta: ctx.subscription},
 		{Meta: ctx.subscriptions["sub_b"], AllTablesVisible: true},
@@ -1011,7 +1011,7 @@ func TestSubscriptionStatisticsOmitsSubscriberInvisibleBranches(t *testing.T) {
 }
 
 func TestSubscriptionStatisticsOmitsInvalidPublicationScopes(t *testing.T) {
-	optimizer, ctx := newSubscriptionMetadataTestOptimizer()
+	optimizer, ctx := newSubscriptionMetadataTestOptimizer(t)
 	ctx.metadata = []*SubscriptionMetadata{
 		{Meta: &SubscriptionMeta{AccountId: 7, SubName: "missing_db", Tables: "*"}, AllTablesVisible: true},
 		{Meta: &SubscriptionMeta{AccountId: 7, DbName: "publisher_db", SubName: "missing_tables"}, AllTablesVisible: true},
@@ -1028,7 +1028,7 @@ func TestSubscriptionStatisticsOmitsInvalidPublicationScopes(t *testing.T) {
 }
 
 func TestInvalidDirectSubscriptionScopeFailsClosed(t *testing.T) {
-	optimizer, ctx := newSubscriptionMetadataTestOptimizer()
+	optimizer, ctx := newSubscriptionMetadataTestOptimizer(t)
 	ctx.SetQueryingSubscription(&SubscriptionMeta{
 		AccountId: 7,
 		SubName:   "invalid_subscription",
@@ -1088,7 +1088,7 @@ func TestSubscriptionMoTablesFilterIntersectsPublicationAndSubscriberRBAC(t *tes
 	}
 	require.Nil(t, subscriptionMoTablesFilter(nil))
 
-	_, ctx := newSubscriptionMetadataTestOptimizer()
+	_, ctx := newSubscriptionMetadataTestOptimizer(t)
 	ctx.SetQueryingSubscription(meta)
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, true)
 	directFilter, err := builder.currentSubscriptionMoTablesFilter()
@@ -1222,7 +1222,7 @@ func TestBuildSubscriptionMetadataPersistedSystemViews(t *testing.T) {
 		sysview.InformationSchemaTablesDDL,
 		sysview.InformationSchemaColumnsDDL,
 	} {
-		logicPlan, err := runOneStmt(NewMockOptimizer(false), t, ddl)
+		logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, ddl)
 		require.NoError(t, err)
 		require.NotNil(t, logicPlan.GetDdl())
 	}
@@ -1230,7 +1230,7 @@ func TestBuildSubscriptionMetadataPersistedSystemViews(t *testing.T) {
 
 func TestBuildSubscriptionTablesUsesOneReachableProducer(t *testing.T) {
 	logicPlan, err := runOneStmt(
-		NewMockOptimizer(false),
+		NewMockOptimizer(false, newPlanTestProcess(t)),
 		t,
 		"SELECT * FROM information_schema.TABLES",
 	)
@@ -1242,7 +1242,7 @@ func TestBuildSubscriptionTablesUsesOneReachableProducer(t *testing.T) {
 }
 
 func TestBuildSubscriptionMetadataProtocolAndViewGate(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	builder := NewQueryBuilder(plan.Query_SELECT, mock.CurrentContext(), false, true)
 	proc := builder.compCtx.GetProcess()
 	rt := runtime.ServiceRuntime(proc.GetService())

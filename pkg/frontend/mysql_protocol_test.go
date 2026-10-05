@@ -2658,7 +2658,7 @@ func TestSendPrepareResponse(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-		compCtx := plan.NewEmptyCompilerContext()
+		compCtx := plan.NewEmptyCompilerContext(newPlanTestProcess(t))
 		preparePlan, err := buildPlan(context.TODO(), nil, compCtx, st)
 		if err != nil {
 			t.Error(err)
@@ -2720,7 +2720,7 @@ func TestSendPrepareResponse(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-		compCtx := plan.NewEmptyCompilerContext()
+		compCtx := plan.NewEmptyCompilerContext(newPlanTestProcess(t))
 		preparePlan, err := buildPlan(context.TODO(), nil, compCtx, st)
 		if err != nil {
 			t.Error(err)
@@ -2922,14 +2922,14 @@ func TestJsonQuoteBinaryProtocolMetadata(t *testing.T) {
 			resultIndex: 1,
 			typ:         defines.MYSQL_TYPE_LONG_BLOB,
 			length:      uint32(types.MaxLongTextLen),
-			compilerCtx: plan.NewMockCompilerContext(false),
+			compilerCtx: plan.NewMockCompilerContext(false, newPlanTestProcess(t)),
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			conn := &prepareResponseCaptureConn{}
 			compilerCtx := test.compilerCtx
 			if compilerCtx == nil {
-				compilerCtx = plan.NewEmptyCompilerContext()
+				compilerCtx = plan.NewEmptyCompilerContext(newPlanTestProcess(t))
 			}
 			proto, proc, prepareStmt := newBinaryPrepareProtocolTestCaseWithConnAndContext(
 				t, test.sql, conn, compilerCtx)
@@ -3062,7 +3062,7 @@ func FuzzParseExecuteData(f *testing.F) {
 	if err != nil {
 		f.Error(err)
 	}
-	compCtx := plan.NewEmptyCompilerContext()
+	compCtx := plan.NewEmptyCompilerContext(newPlanTestProcess(f))
 	preparePlan, err := buildPlan(context.TODO(), nil, compCtx, st)
 	if err != nil {
 		f.Error(err)
@@ -3113,7 +3113,7 @@ func newBinaryPrepareProtocolTestCase(t *testing.T, sql string) (*MysqlProtocolI
 }
 
 func newBinaryPrepareProtocolTestCaseWithConn(t *testing.T, sql string, conn net.Conn) (*MysqlProtocolImpl, *process.Process, *PrepareStmt) {
-	return newBinaryPrepareProtocolTestCaseWithConnAndContext(t, sql, conn, plan.NewEmptyCompilerContext())
+	return newBinaryPrepareProtocolTestCaseWithConnAndContext(t, sql, conn, plan.NewEmptyCompilerContext(newPlanTestProcess(t)))
 }
 
 func newBinaryPrepareProtocolTestCaseWithConnAndContext(

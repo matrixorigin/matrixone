@@ -503,7 +503,7 @@ func TestSendPrepareResponseForExplainUsesExplainColumn(t *testing.T) {
 			prepare := tree.NewPrepareString(tree.Identifier(getPrepareStmtName(uint32(105+i))), tc.sql)
 			stmts, err := mysql.Parse(ctx, prepare.Sql, 1)
 			require.NoError(t, err)
-			preparePlan, err := buildPlan(ctx, nil, plan2.NewEmptyCompilerContext(), prepare)
+			preparePlan, err := buildPlan(ctx, nil, plan2.NewEmptyCompilerContext(newPlanTestProcess(t)), prepare)
 			require.NoError(t, err)
 			prepareStmt := &PrepareStmt{
 				Name:        preparePlan.GetDcl().GetPrepare().GetName(),

@@ -32,7 +32,7 @@ import (
 
 func buildPreparedAggregatePlan(t *testing.T, sql string) *planpb.Prepare {
 	t.Helper()
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t, fmt.Sprintf("prepare stmt1 from '%s'", sql))
 	require.NoError(t, err)
 	prepare := logicPlan.GetDcl().GetPrepare()
@@ -86,7 +86,7 @@ func TestPreparedPercentileParameters(t *testing.T) {
 		"select percentile_disc(0.5) within group (order by n_name) from nation")
 	require.False(t, PreparedPlanHasPercentileParams(literal.Plan))
 
-	_, err := runOneStmt(NewMockOptimizer(false), t,
+	_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"select percentile_disc(n_regionkey) within group (order by n_name) from nation")
 	require.ErrorContains(t, err, "non-null constant or parameter")
 }
@@ -169,7 +169,7 @@ func TestPreparedPercentileParameterExpressionsRejectRowDependentOrArbitraryFunc
 		"prepare stmt_string_cast from 'select percentile_cont(cast(? as char) / 100.0) within group (order by n_nationkey) from nation'",
 	} {
 		t.Run(sql, func(t *testing.T) {
-			_, err := runOneStmt(NewMockOptimizer(false), t, sql)
+			_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, sql)
 			require.ErrorContains(t, err, "non-null constant or parameter")
 		})
 	}
@@ -767,7 +767,7 @@ func TestPreparedBitwiseAggregateProjectionRefreshPreservesPrivateCast(t *testin
 }
 
 func TestPreparedRuntimeSpecializationCoversBinaryStringSemantics(t *testing.T) {
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare binary_domains from 'select charset(left(?, 1)), char_length(?), ord(?)'")
 	require.NoError(t, err)
 	preparedPlan := prepared.GetDcl().GetPrepare().Plan
@@ -969,7 +969,7 @@ func TestNtileRequiresIntegerArgument(t *testing.T) {
 		"select ntile(cast(? as char)) over (order by n_nationkey) from nation",
 	} {
 		t.Run(sql, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			_, err := runOneStmt(mock, t, fmt.Sprintf("prepare stmt1 from '%s'", sql))
 			require.ErrorContains(t, err, "invalid argument function ntile")
 		})
@@ -986,7 +986,7 @@ func TestPreparedNumericAggregateDoesNotCoerceStrings(t *testing.T) {
 	}
 	for _, sql := range tests {
 		t.Run(sql, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			_, err := runOneStmt(mock, t, fmt.Sprintf("prepare stmt1 from '%s'", sql))
 			require.ErrorContains(t, err, "invalid argument aggregate function")
 		})

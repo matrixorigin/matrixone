@@ -158,7 +158,7 @@ func TestApplyIndicesForSortUsingIvfflat_DistancePredicateOwnership(t *testing.T
 }
 
 func TestRenameColumnUpdatesAlterContextAndClusterMetadata(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	origin := makeAlterCoverageTableDef()
 	copyTable := DeepCopyTableDef(origin, true)
 	alterCtx := initAlterTableContext(origin, copyTable, origin.DbName)
@@ -188,7 +188,7 @@ func TestRenameColumnUpdatesAlterContextAndClusterMetadata(t *testing.T) {
 }
 
 func TestRenameColumnRejectsMissingColumn(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	origin := makeAlterCoverageTableDef()
 	copyTable := DeepCopyTableDef(origin, true)
 	alterCtx := initAlterTableContext(origin, copyTable, origin.DbName)
@@ -212,7 +212,7 @@ func TestRenameColumnRejectsMissingColumn(t *testing.T) {
 }
 
 func TestChangeColumnRenamesClusterByAndTracksIvfIncludeMetadata(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	origin := makeAlterCoverageTableDef()
 	copyTable := DeepCopyTableDef(origin, true)
 	alterCtx := initAlterTableContext(origin, copyTable, origin.DbName)
@@ -240,7 +240,7 @@ func TestChangeColumnRenamesClusterByAndTracksIvfIncludeMetadata(t *testing.T) {
 }
 
 func TestChangeColumnRewritesCheckOriginSQL(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	origin := makeAlterCoverageTableDef()
 	origin.Checks = []*planpb.CheckDef{
 		{
@@ -279,7 +279,7 @@ func TestChangeColumnRenamesPrefixLengthMetadata(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	origin := makeAlterCoverageTableDef()
 	origin.Indexes = append(origin.Indexes, &planpb.IndexDef{
 		IndexName:       "uq_title",
@@ -316,7 +316,7 @@ func TestChangeColumnEncodesDelimiterBearingPrefixLengthMetadata(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	origin := makeAlterCoverageTableDef()
 	origin.Indexes = append(origin.Indexes, &planpb.IndexDef{
 		IndexName:       "uq_title",
@@ -355,7 +355,7 @@ func TestInternalAliasPrefixIsRejectedForUserColumns(t *testing.T) {
 	require.False(t, checkTableColumnNameValid(aliasName))
 	require.True(t, checkTableColumnNameValid("payload"))
 
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	require.Error(t, checkColumnNameValid(mock.CurrentContext().GetContext(), aliasName))
 	require.NoError(t, checkColumnNameValid(mock.CurrentContext().GetContext(), "payload"))
 }
@@ -381,7 +381,7 @@ func TestAppendAffectedAlterColumnNamesKeepsOldNameForChangeColumn(t *testing.T)
 }
 
 func TestUpdateRenameColumnInTableDefRenamesPrimaryKeyMetadata(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	tableDef := makeAlterCoverageTableDef()
 
 	sqls, err := updateRenameColumnInTableDef(
@@ -404,7 +404,7 @@ func TestUpdateRenameColumnInTableDefRenamesPrimaryKeyMetadata(t *testing.T) {
 }
 
 func TestUpdateRenameColumnInTableDefPreservesSecondaryPrimaryKeyAlias(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	tableDef := makeAlterCoverageTableDef()
 	tableDef.Indexes = append(tableDef.Indexes, &planpb.IndexDef{
 		IndexName: "idx_title",
@@ -429,7 +429,7 @@ func TestUpdateRenameColumnInTableDefPreservesSecondaryPrimaryKeyAlias(t *testin
 }
 
 func TestUpdateRenameColumnInTableDefRenamesCompositePrimaryKeyMetadata(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	tableDef := makeAlterCoverageTableDef()
 	tableDef.Pkey = &planpb.PrimaryKeyDef{
 		Names:       []string{"id", "title"},
@@ -454,7 +454,7 @@ func TestUpdateRenameColumnInTableDefRenamesCompositePrimaryKeyMetadata(t *testi
 }
 
 func TestUpdateRenameColumnInTableDefEscapesMoIndexesColumnNameUpdate(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	tableDef := &planpb.TableDef{
 		TblId: 7,
 		Cols: []*ColDef{
@@ -496,7 +496,7 @@ func TestUpdateRenameColumnInTableDefRenamesPrefixLengthMetadata(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	tableDef := &planpb.TableDef{
 		TblId: 42,
 		Cols: []*ColDef{
@@ -566,7 +566,7 @@ func TestUpdateRenameColumnInTableDefEncodesDelimiterBearingPrefixName(t *testin
 	})
 	require.NoError(t, err)
 
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	tableDef := &planpb.TableDef{
 		TblId: 7,
 		Cols: []*ColDef{
@@ -649,7 +649,7 @@ func TestRenameIndexPrefixLengthMetadataBoundaryCases(t *testing.T) {
 				Parts:           []string{"title"},
 			}},
 		}
-		mock := NewMockOptimizer(false)
+		mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
 		_, err := updateRenameColumnInTableDef(
 			mock.CurrentContext(),
@@ -691,7 +691,7 @@ func TestRenamePrefixIndexV2ProtocolGate(t *testing.T) {
 			},
 		},
 	}
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	proc := mock.CurrentContext().GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -734,7 +734,7 @@ func TestRenamePrefixIndexV2ProtocolGate(t *testing.T) {
 }
 
 func TestUpdateRenameColumnInTableDefRejectsDuplicateTargetName(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	tableDef := makeAlterCoverageTableDef()
 
 	_, err := updateRenameColumnInTableDef(
@@ -751,7 +751,7 @@ func TestUpdateRenameColumnInTableDefRejectsDuplicateTargetName(t *testing.T) {
 }
 
 func TestUpdateRenameColumnInTableDefRewritesCheckOriginSQL(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	tableDef := makeAlterCoverageTableDef()
 	tableDef.Checks = []*planpb.CheckDef{
 		{
@@ -777,7 +777,7 @@ func TestUpdateRenameColumnInTableDefRewritesCheckOriginSQL(t *testing.T) {
 }
 
 func TestAlterColumnSetDefaultUpdatesCopiedColumn(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	origin := makeAlterCoverageTableDef()
 	copyTable := DeepCopyTableDef(origin, true)
 	alterCtx := initAlterTableContext(origin, copyTable, origin.DbName)
@@ -833,7 +833,7 @@ func TestAlterColumnSetDefaultRejectsUnsupportedColumns(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			origin := makeAlterCoverageTableDef()
 			tc.configure(origin.Cols[3])
 			copyTable := DeepCopyTableDef(origin, true)
@@ -859,7 +859,7 @@ func TestAlterColumnSetDefaultRejectsUnsupportedColumns(t *testing.T) {
 }
 
 func TestOrderByColumnRejectsUnknownColumn(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	origin := makeAlterCoverageTableDef()
 	copyTable := DeepCopyTableDef(origin, true)
 	alterCtx := initAlterTableContext(origin, copyTable, origin.DbName)

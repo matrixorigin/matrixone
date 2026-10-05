@@ -25,7 +25,7 @@ import (
 )
 
 func TestBuildCurrentRolesProtocolGate(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	builder := NewQueryBuilder(planpb.Query_SELECT, mock.CurrentContext(), false, true)
 	ctx := NewBindContext(builder, nil)
 	proc := builder.compCtx.GetProcess()
