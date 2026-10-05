@@ -301,9 +301,9 @@ select a, case when a = 1 then cast(s as vecf4(2)) end, case when a = 1 then cas
 create table bin (id int, b vecf4(2), e vecf8(2), a vecf32(2));
 insert into bin values (1, cast(unhex('0000803F00000040') as blob), cast(unhex('0000803F00000040') as blob), cast(unhex('0000803F00000040') as blob));
 insert into bin (id, b) values (2, cast(unhex('0000803F000000') as blob));
-invalid input: vector payload is not aligned to its element size
+invalid input: 7-byte value is neither a vecf4(2) cell (14 bytes) nor 2 float32 elements (8 bytes)
 insert into bin (id, e) values (3, cast(unhex('0000803F') as blob));
-invalid input: expected vector dimension 2 != actual dimension 1.
+invalid input: 4-byte value is neither a vecf8(2) cell (15 bytes) nor 2 float32 elements (8 bytes)
 select * from bin order by id;
 ➤ id[4,32,0]  ¦  b[12,2,0]  ¦  e[12,2,0]  ¦  a[12,2,0]  𝄀
 1  ¦  [1, 2]  ¦  [1, 2]  ¦  [1, 2]
@@ -422,9 +422,36 @@ invalid input: unsupported block-scaled vector version 2
 select cast(cast(unhex('01020000020000000000803F7F7EBC') as blob) as vecf8(2));
 invalid input: vecf4(2) cell is 15 bytes, want 14
 select cast(cast(unhex('01010000020000000000803F7F7EBC') as blob) as vecf8(3));
-invalid input: vector payload is not aligned to its element size
+invalid input: 15-byte value is neither a vecf8(3) cell (16 bytes) nor 3 float32 elements (12 bytes)
 select vecblock_binary(cast('[1,2]' as vecf32(2)));
 invalid argument function vecblock_binary, bad value [VECF32]
+create table pq (id int, v4_bin vecf4(17), v8_bin vecf8(33), v4_f32 vecf4(17), v4_json vecf4(17), v8_text vecf8(33), v4_list vecf4(17), v8_list vecf8(33));
+load data infile {'filepath'='$resources/parquet/vecblock.parquet', 'format'='parquet'} into table pq;
+select id, v4_bin, v8_bin from pq order by id;
+➤ id[4,32,0]  ¦  v4_bin[12,17,0]  ¦  v8_bin[12,33,0]  𝄀
+1  ¦  [8.764914, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6.2606535]  ¦  [-6, -5.5, -5, -5, -4.5, -4, -3.75, -3.25, -3, -2.5, -2.25, -1.875, -1.5, -1.125, -0.75, -0.375, 0, 0.375, 0.75, 1.125, 1.5, 1.875, 2.25, 2.5, 3, 3.25, 3.75, 4, 4.5, 5, 5, 5.5, 6]  𝄀
+2  ¦  [0, -1.0416666, 1.0416666, -2.0833333, 3.125, -4.1666665, 6.25, 0, 0, 0, 2.0833333, 6.25, -8.333333, 12.5, 0, 0, 100]  ¦  [-12, -11, -10, -10, -9, -8, -7.5, -6.5, -6, -5, -4.5, -3.75, -3, -2.25, -1.5, -0.75, 0, 0.75, 1.5, 2.25, 3, 3.75, 4.5, 5, 6, 6.5, 7.5, 8, 9, 10, 10, 11, 12]  𝄀
+3  ¦  null  ¦  null
+select id, vecblock_binary(v4_bin) = vecblock_binary(v4_f32), vecblock_binary(v4_bin) = vecblock_binary(v4_json), vecblock_binary(v8_bin) = vecblock_binary(v8_text) from pq order by id;
+➤ id[4,32,0]  ¦  vecblock_binary(v4_bin) = vecblock_binary(v4_f32)[-7,1,0]  ¦  vecblock_binary(v4_bin) = vecblock_binary(v4_json)[-7,1,0]  ¦  vecblock_binary(v8_bin) = vecblock_binary(v8_text)[-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  𝄀
+2  ¦  1  ¦  1  ¦  1  𝄀
+3  ¦  null  ¦  null  ¦  null
+select id, vecblock_binary(v4_list) = vecblock_binary(v4_bin), vecblock_binary(v8_list) = vecblock_binary(v8_bin), v4_list is null, v8_list is null from pq order by id;
+➤ id[4,32,0]  ¦  vecblock_binary(v4_list) = vecblock_binary(v4_bin)[-7,1,0]  ¦  vecblock_binary(v8_list) = vecblock_binary(v8_bin)[-7,1,0]  ¦  v4_list is null[-7,1,0]  ¦  v8_list is null[-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  0  ¦  0  𝄀
+2  ¦  1  ¦  1  ¦  0  ¦  0  𝄀
+3  ¦  null  ¦  null  ¦  0  ¦  0
+select count(*) from pq where v4_bin = cast('[8.7649145,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5.7432985]' as vecf4(17));
+➤ count(*)[-5,64,0]  𝄀
+1
+create external table pqx (id int, v4_bin vecf4(17), v8_bin vecf8(33), v4_f32 vecf4(17), v4_json vecf4(17), v8_text vecf8(33), v4_list vecf4(17), v8_list vecf8(33)) infile{'filepath'='$resources/parquet/vecblock.parquet', 'format'='parquet'};
+select count(*) from pqx x join pq p on x.id = p.id where vecblock_binary(x.v4_bin) = vecblock_binary(p.v4_bin) and vecblock_binary(x.v8_bin) = vecblock_binary(p.v8_bin);
+➤ count(*)[-5,64,0]  𝄀
+2
+create table pqbad (id int, v4_bin vecf4(16), v8_bin vecf8(33), v4_f32 vecf4(17), v4_json vecf4(17), v8_text vecf8(33), v4_list vecf4(17), v8_list vecf8(33));
+load data infile {'filepath'='$resources/parquet/vecblock.parquet', 'format'='parquet'} into table pqbad;
+invalid input: 23-byte value is neither a vecf4(16) cell (21 bytes) nor 16 float32 elements (64 bytes)
 create table expt (id int, v vecf4(17), e vecf8(2));
 insert into expt values (1, '[8.7649145,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5.7432985]', '[447, -1.5]'), (2, null, '[0.001, 3]');
 select * from expt order by id into outfile '$resources/into_outfile/vecblock.csv';

@@ -2264,8 +2264,13 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 		f, _ := types.T(dt.Id).BlockScaledFormat()
 		encode := func(row []float32) ([]byte, error) { return types.AppendBlockScaled(nil, f, row) }
 		exact := func(text string) ([]byte, error) { return types.BlockScaledFromJSON(f, text) }
+		var binary func([]byte) ([]byte, error)
+		if st.LogicalType() == nil {
+			// a column without a logical type is binary: the stored cell or float32 elements
+			binary = func(b []byte) ([]byte, error) { return types.BlockScaledFromBinary(f, width, b) }
+		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			return processStringToArrayEnc[float32](proc.Ctx, mp, page, proc, vec, width, encode, exact)
+			return processStringToArrayEnc[float32](proc.Ctx, mp, page, proc, vec, width, encode, exact, binary)
 		}
 	case types.T_array_bf16:
 		if !isPlainStringLikeType(st) {
@@ -2758,11 +2763,12 @@ func processStringToArray[T types.ArrayElement](
 	vec *vector.Vector,
 	width int,
 ) error {
-	return processStringToArrayEnc[T](ctx, mp, page, proc, vec, width, nil, nil)
+	return processStringToArrayEnc[T](ctx, mp, page, proc, vec, width, nil, nil, nil)
 }
 
 // processStringToArrayEnc is processStringToArray with an optional row encoder; nil
-// stores the row as a typed element array.
+// stores the row as a typed element array. exact builds a row given as the vecblock JSON
+// text; binary, when set, builds every row from its bytes instead of text.
 func processStringToArrayEnc[T types.ArrayElement](
 	ctx context.Context,
 	mp *columnMapper,
@@ -2772,6 +2778,7 @@ func processStringToArrayEnc[T types.ArrayElement](
 	width int,
 	encode func([]T) ([]byte, error),
 	exact func(string) ([]byte, error),
+	binary func([]byte) ([]byte, error),
 ) error {
 	numRows, err := parquetPageCount(ctx, "NumRows()", page.NumRows())
 	if err != nil {
@@ -2844,6 +2851,16 @@ func processStringToArrayEnc[T types.ArrayElement](
 			data = loader.loadAt(idx)
 		}
 
+		if binary != nil {
+			cell, err := binary(data)
+			if err != nil {
+				return rollback(wrapParseError(ctx, i, err))
+			}
+			if err := vector.AppendBytes(vec, cell, false, proc.Mp()); err != nil {
+				return rollback(err)
+			}
+			continue
+		}
 		if text := util.UnsafeBytesToString(data); exact != nil && types.IsBlockScaledJSON(text) {
 			cell, err := exact(text)
 			if err != nil {

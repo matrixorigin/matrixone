@@ -244,3 +244,44 @@ func blockElemCode(f BlockScaledFormat, v float32) (uint8, bool) {
 	c, ok := f4e2m1CodeOf[math.Float32bits(v)]
 	return c, ok
 }
+
+// BlockScaledFromBinary builds the f cell of a binary value: the stored cell
+// (vecblock_binary) as is, or little-endian float32 elements quantized. dim is the declared
+// dimension, MaxArrayDimension or 0 when unsized. With a declared dimension the value is a
+// cell when its length is the cell size of dim, which is never 4*dim; without one, when its
+// header names f and its length is the cell size of its dimension. The returned cell aliases
+// b when b is a cell.
+func BlockScaledFromBinary(f BlockScaledFormat, dim int, b []byte) ([]byte, error) {
+	sized := dim > 0 && dim != MaxArrayDimension
+	isCell := false
+	if sized {
+		isCell = len(b) == BlockScaledCellSize(f, dim)
+	} else if len(b) >= BlockScaledHeaderSize && b[0] == blockScaledVersion && b[1] == byte(f) && b[2] == 0 && b[3] == 0 {
+		d := BlockScaledDim(b)
+		isCell = d > 0 && d <= MaxArrayDimension && len(b) == BlockScaledCellSize(f, d)
+	}
+	if isCell {
+		c, err := ParseBlockScaledCell(b)
+		if err != nil {
+			return nil, err
+		}
+		if c.Format != f {
+			return nil, moerr.NewInvalidInputNoCtxf("%s cell is not a %s cell", c.Format, f)
+		}
+		if sized && c.Dim != dim {
+			return nil, moerr.NewArrayDefMismatchNoCtx(dim, c.Dim)
+		}
+		return b, nil
+	}
+	if sized && len(b) != 4*dim {
+		return nil, moerr.NewInvalidInputNoCtxf("%d-byte value is neither a %s(%d) cell (%d bytes) nor %d float32 elements (%d bytes)",
+			len(b), f, dim, BlockScaledCellSize(f, dim), dim, 4*dim)
+	}
+	if len(b)%4 != 0 {
+		return nil, moerr.NewInvalidInputNoCtx("vector payload is not aligned to its element size")
+	}
+	if len(b)/4 > MaxArrayDimension {
+		return nil, moerr.NewInvalidInputNoCtx("vector dimension exceeds maximum dimension")
+	}
+	return AppendBlockScaled(nil, f, BytesToArray[float32](b))
+}

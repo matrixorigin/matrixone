@@ -216,6 +216,20 @@ select cast(cast(unhex('01020000020000000000803F7F7EBC') as blob) as vecf8(2));
 select cast(cast(unhex('01010000020000000000803F7F7EBC') as blob) as vecf8(3));
 select vecblock_binary(cast('[1,2]' as vecf32(2)));
 
+-- Parquet: binary columns (no logical type) hold the stored cell or float32 elements,
+-- STRING columns the vecblock JSON or '[...]' text, LIST columns float arrays
+create table pq (id int, v4_bin vecf4(17), v8_bin vecf8(33), v4_f32 vecf4(17), v4_json vecf4(17), v8_text vecf8(33), v4_list vecf4(17), v8_list vecf8(33));
+load data infile {'filepath'='$resources/parquet/vecblock.parquet', 'format'='parquet'} into table pq;
+select id, v4_bin, v8_bin from pq order by id;
+select id, vecblock_binary(v4_bin) = vecblock_binary(v4_f32), vecblock_binary(v4_bin) = vecblock_binary(v4_json), vecblock_binary(v8_bin) = vecblock_binary(v8_text) from pq order by id;
+select id, vecblock_binary(v4_list) = vecblock_binary(v4_bin), vecblock_binary(v8_list) = vecblock_binary(v8_bin), v4_list is null, v8_list is null from pq order by id;
+select count(*) from pq where v4_bin = cast('[8.7649145,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5.7432985]' as vecf4(17));
+create external table pqx (id int, v4_bin vecf4(17), v8_bin vecf8(33), v4_f32 vecf4(17), v4_json vecf4(17), v8_text vecf8(33), v4_list vecf4(17), v8_list vecf8(33)) infile{'filepath'='$resources/parquet/vecblock.parquet', 'format'='parquet'};
+select count(*) from pqx x join pq p on x.id = p.id where vecblock_binary(x.v4_bin) = vecblock_binary(p.v4_bin) and vecblock_binary(x.v8_bin) = vecblock_binary(p.v8_bin);
+-- a binary column is not read as text, and a cell must match the declared dimension
+create table pqbad (id int, v4_bin vecf4(16), v8_bin vecf8(33), v4_f32 vecf4(17), v4_json vecf4(17), v8_text vecf8(33), v4_list vecf4(17), v8_list vecf8(33));
+load data infile {'filepath'='$resources/parquet/vecblock.parquet', 'format'='parquet'} into table pqbad;
+
 -- export writes the exact text; CSV and JSONL reload to the same cells
 create table expt (id int, v vecf4(17), e vecf8(2));
 insert into expt values (1, '[8.7649145,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5.7432985]', '[447, -1.5]'), (2, null, '[0.001, 3]');
