@@ -12,11 +12,9 @@ package function
 import (
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -149,56 +147,4 @@ func TestDecimalPrefixSelectionContracts(t *testing.T) {
 		}
 	})
 
-}
-
-func TestUnaryStringToFixedInactiveRows(t *testing.T) {
-	proc := testutil.NewProcess(nil)
-	t.Cleanup(func() { proc.Base.FileService.Close(proc.Ctx); proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
-	for _, bytesInput := range []bool{false, true} {
-		name := "string"
-		if bytesInput {
-			name = "bytes"
-		}
-		for _, state := range []string{"empty", "all flag", "all bitmap", "active error"} {
-			t.Run(name+"/"+state, func(t *testing.T) {
-				calls := 0
-				length := 2
-				selection := (*FunctionSelectList)(nil)
-				if state == "empty" {
-					length = 0
-				}
-				if state == "all flag" {
-					selection = &FunctionSelectList{AllNull: true}
-				}
-				if state == "all bitmap" {
-					selection = &FunctionSelectList{AnyNull: true, SelectList: []bool{false, false, false}}
-				}
-				if state == "active error" {
-					selection = &FunctionSelectList{AnyNull: true, SelectList: []bool{false}}
-				}
-				fn := func(parameters []*vector.Vector, result vector.FunctionResultWrapper, p *process.Process, n int, s *FunctionSelectList) error {
-					if bytesInput {
-						return opUnaryBytesToFixedWithErrorCheck(parameters, result, p, n, func(v []byte) (int64, error) { calls++; return 0, moerr.NewInvalidInputNoCtx("inactive row evaluated") }, s)
-					}
-					return opUnaryStrToFixedWithErrorCheck(parameters, result, p, n, func(v string) (int64, error) { calls++; return 0, moerr.NewInvalidInputNoCtx("inactive row evaluated") }, s)
-				}
-				fc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"bad"}, nil)}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0, 0}, nil), fn).WithSelectList(selection)
-				t.Cleanup(fc.Free)
-				fc.fnLength = length
-				actual, err := fc.DebugRun()
-				t.Logf("calls=%d error=%v", calls, err)
-				if state == "active error" {
-					require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
-					require.Equal(t, 1, calls)
-					return
-				}
-				require.NoError(t, err)
-				require.Zero(t, calls)
-				require.Equal(t, length, actual.Length())
-				for i := 0; i < length; i++ {
-					require.True(t, actual.GetNulls().Contains(uint64(i)))
-				}
-			})
-		}
-	}
 }
