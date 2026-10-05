@@ -15,6 +15,8 @@
 package colexec
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -34,8 +36,11 @@ func (srv *Server) RecordDispatchPipeline(
 	srv.receivedRunningPipeline.Lock()
 	defer srv.receivedRunningPipeline.Unlock()
 
+	// Carry the stream-local wait owner through attachment. Ordinary dispatch
+	// registrations have no such callback and retain their shared ownership.
+	previous, registered := srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key]
 	// check if sender has sent a stop running message.
-	if v, ok := srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key]; ok && v.alreadyDone {
+	if v := previous; registered && v.alreadyDone {
 		// Fix: Check if this is a stale record created by CancelPipelineSending
 		// before RecordDispatchPipeline was called (race condition).
 		// If receiver is nil, it means CancelPipelineSending created this record
@@ -64,7 +69,7 @@ func (srv *Server) RecordDispatchPipeline(
 	value := runningPipelineInfo{
 		alreadyDone:    false,
 		isDispatch:     true,
-		pipelineCancel: nil,
+		pipelineCancel: previous.pipelineCancel,
 		receiver:       dispatchReceiver,
 	}
 
@@ -78,13 +83,15 @@ func (srv *Server) RecordDispatchPipeline(
 func (srv *Server) RecordBuiltPipeline(
 	session morpc.ClientSession, streamID uint64, proc *process.Process) {
 
+	// StopSending owns the remote pipeline tree, not its query context.
+	srv.RecordPipelineCancellation(session, streamID, proc.Cancel)
+}
+
+// RecordPipelineCancellation also owns a notify's wait before its Dispatch
+// exists. Reuse the stream tombstone and session cleanup for both owners.
+func (srv *Server) RecordPipelineCancellation(
+	session morpc.ClientSession, streamID uint64, pipelineCancel context.CancelCauseFunc) {
 	key := generateRecordKey(session, streamID)
-
-	// The compile process context is the parent of every scope in this remote
-	// pipeline tree. Cancel that tree on StopSending without canceling the query
-	// context, whose lifetime is owned by the query/client cancellation path.
-	pipelineCancel := proc.Cancel
-
 	srv.receivedRunningPipeline.Lock()
 	defer srv.receivedRunningPipeline.Unlock()
 
@@ -124,11 +131,12 @@ func (srv *Server) CancelPipelineSending(
 			zap.Bool("hasReceiver", v.receiver != nil),
 			zap.Bool("isDispatch", v.isDispatch))
 
-		if !v.isDispatch {
-			// Only cancel non-dispatch pipelines (query execution pipelines)
-			logutil.Debug("CancelPipelineSending canceling non-dispatch pipeline",
+		if v.pipelineCancel != nil {
+			// A notify's callback retires only its subscription after the
+			// handoff; it never cancels the shared Dispatch producer.
+			logutil.Debug("CancelPipelineSending canceling stream owner",
 				zap.Uint64("streamID", streamID))
-			v.cancelPipeline(process.ErrPipelineStopped)
+			v.pipelineCancel(process.ErrPipelineStopped)
 		}
 		return
 	}

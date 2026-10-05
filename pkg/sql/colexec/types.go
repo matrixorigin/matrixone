@@ -76,8 +76,8 @@ type rpcClientItem struct {
 
 type runningPipelineInfo struct {
 	alreadyDone bool
-	// StopSending is a downstream early-stop signal. It owns this remote
-	// pipeline tree, not the query that may still have other active pipelines.
+	// StopSending owns one remote pipeline tree or an unconsumed notify
+	// wait, not the query that may still have other active pipelines.
 	pipelineCancel context.CancelCauseFunc
 
 	isDispatch bool

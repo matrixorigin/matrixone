@@ -809,8 +809,40 @@ func cleanScopeTreeWithStartFail(sp *Scope, fail error, isPrepare bool) {
 		}
 		return nil
 	})
+	if fail == nil {
+		sp.publishUnstartedOutputEnds()
+	}
 	p := pipeline.New(0, nil, sp.RootOp)
 	p.Cleanup(sp.Proc, fail != nil, isPrepare, fail)
+}
+
+// The original sender's Reset publishes one End. Before DOP workers exist,
+// their remaining output obligations still belong to this scope. Retire only
+// its share: a shared edge may also contain live siblings, while ordered gathers
+// and remote handoffs expose just one output even with a larger scan DOP.
+func (s *Scope) publishUnstartedOutputEnds() {
+	if s.NodeInfo.Mcpu <= 1 {
+		return
+	}
+	publish := func(reg *process.WaitRegister) {
+		if reg == nil {
+			return
+		}
+		count := min(s.NodeInfo.Mcpu, max(1, reg.NilBatchCnt))
+		for i := 1; i < count; i++ {
+			reg.PublishTerminal(process.NewEndSignal())
+		}
+	}
+	switch root := s.RootOp.(type) {
+	case *connector.Connector:
+		publish(root.Reg)
+	case *dispatch.Dispatch:
+		if root.MaterializedSource == nil {
+			for _, reg := range root.LocalRegs {
+				publish(reg)
+			}
+		}
+	}
 }
 
 // finalizeRemoteResult retains late producer failures after local terminals have
@@ -1004,6 +1036,9 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 			)
 			if isScopeCancellationError(rawErr) {
 				reportParallelScopeBuildCancellation(s, rawErr, err, normalized, queryCtx)
+			}
+			if err == nil {
+				s.publishUnstartedOutputEnds()
 			}
 			pipeline.NewMerge(s.RootOp).Cleanup(s.Proc, err != nil, c.isPrepare, err)
 		}

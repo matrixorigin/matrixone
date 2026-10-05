@@ -592,3 +592,30 @@ func TestRecordDispatchPipeline_MarksReceiverDoneOnSessionClose(t *testing.T) {
 		return !exists && !waiterExists && receiverDone
 	}, time.Second, 10*time.Millisecond, "Session close should remove and mark registered dispatch receivers done")
 }
+
+func TestPipelineCancellationSurvivesDispatchHandoff(t *testing.T) {
+	for _, phase := range []string{"before handoff", "after handoff"} {
+		t.Run(phase, func(t *testing.T) {
+			server := NewServer("")
+			ctx, cancel := context.WithCancelCause(context.Background())
+			defer cancel(context.Canceled)
+			siblingCtx, cancelSibling := context.WithCancelCause(context.Background())
+			defer cancelSibling(context.Canceled)
+			server.RecordPipelineCancellation(nil, 7, cancel)
+			server.RecordPipelineCancellation(nil, 8, cancelSibling)
+			defer server.RemoveRelatedPipeline(nil, 7)
+			defer server.RemoveRelatedPipeline(nil, 8)
+			if phase == "before handoff" {
+				server.CancelPipelineSending(nil, 7)
+			}
+			receiver := &process.WrapCs{Uid: uuid.Must(uuid.NewV7())}
+			server.RecordDispatchPipeline(nil, 7, receiver)
+			if phase == "after handoff" {
+				server.CancelPipelineSending(nil, 7)
+			}
+			require.ErrorIs(t, context.Cause(ctx), process.ErrPipelineStopped)
+			require.NoError(t, siblingCtx.Err(), "StopSending must remain subscription-local")
+			require.False(t, receiver.ReceiverDone, "the certificate, not shared producer cancellation, retires this receiver")
+		})
+	}
+}
