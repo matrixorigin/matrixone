@@ -185,6 +185,12 @@ the new variable is left at `COST`.
 Aggregates whose result observes input order (`GROUP_CONCAT`, `JSON_ARRAYAGG`,
 and `JSON_OBJECTAGG`) are also kept on the legacy path because the grouping-key
 sort is not their user-requested intra-group order.
+`SELECT DISTINCT` also stays on the legacy path in every algorithm mode.
+Streaming ROLLUP preserves source-NULL and subtotal grouping provenance, while
+DISTINCT over projected SQL values must normalize both to the same NULL key.
+The legacy grouping-set projection already performs that normalization after
+materializing explicit `GROUPING()` outputs. The fallback therefore collapses
+duplicate NULL values while retaining different projected grouping bits.
 
 The planner adds an internal SORT over visible equality keys only when the
 input-order property is not already proven. A uniqueness-derived subset hash
