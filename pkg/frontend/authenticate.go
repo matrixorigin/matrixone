@@ -11639,6 +11639,12 @@ func Upload(ses FeSession, execCtx *ExecCtx, localPath string, storageDir string
 }
 
 func ensurePythonUdfCatalogReady(ctx context.Context, bh BackgroundExec) error {
+	if !sharedRoutineRevisionProtocolReady(bh.Service()) {
+		return moerr.NewNotSupportedNoCtxf(
+			"Python UDF catalog contract requires MORPC protocol version %d",
+			sharedRoutineRevisionProtocolVersion,
+		)
+	}
 	probes := []struct {
 		query        string
 		expectedCols uint64
@@ -11679,11 +11685,20 @@ func ensurePythonUdfCatalogReady(ctx context.Context, bh BackgroundExec) error {
 	return nil
 }
 
+const sharedRoutineRevisionProtocolVersion = defines.MORPCVersion107
+
+// sharedRoutineRevisionProtocolReady reports whether the deployment has
+// reached the protocol floor at which every live CN understands the shared
+// routine revision writer/reader contract. The protocol value is the active
+// rollout floor, not merely the binary's compiled-in maximum.
+func sharedRoutineRevisionProtocolReady(service string) bool {
+	return currentProtocolVersionForService(service) >= sharedRoutineRevisionProtocolVersion
+}
+
 // functionRevisionCatalogAvailable reports whether the current shared
-// revision table can be used by the SQL UDF writer. Ordinary SQL UDFs remain
-// writable during a rolling upgrade before v4_0_7 reaches every tenant; once
-// the table is present, revision publication is part of the same caller-owned
-// transaction as the legacy compatibility row.
+// revision table exists. Ordinary SQL UDFs remain writable during a rolling
+// upgrade before v4_0_7 reaches every tenant; revision publication is enabled
+// only after both the table and the shared routine protocol floor are ready.
 func functionRevisionCatalogAvailable(ctx context.Context, bh BackgroundExec) (bool, error) {
 	bh.ClearExecResultSet()
 	if err := bh.Exec(ctx, functionRevisionCatalogSchemaCheck); err != nil {
@@ -12373,6 +12388,19 @@ func persistUserDefinedFunction(
 			if readErr != nil {
 				return readErr
 			}
+			if (previousRevision == 0) != (previousNamespace == 0) {
+				return moerr.NewInvalidInputNoCtxf(
+					"UNSUPPORTED_ROUTINE_VERSION: function identity %d has an invalid revision head",
+					*functionID,
+				)
+			}
+			if (previousRevision != 0 || previousNamespace != 0) &&
+				!sharedRoutineRevisionProtocolReady(bh.Service()) {
+				return moerr.NewNotSupportedNoCtxf(
+					"SQL UDF revision replacement requires MORPC protocol version %d",
+					sharedRoutineRevisionProtocolVersion,
+				)
+			}
 			previousReturnType, returnErr := readUserDefinedFunctionReturnType(ctx, bh, *functionID)
 			if returnErr != nil {
 				return returnErr
@@ -12401,7 +12429,7 @@ func persistUserDefinedFunction(
 			}
 			return activateFunctionRevision(ctx, bh, *functionID, nextRevision, nextNamespace)
 		}
-		if !revisionCatalogReady {
+		if !revisionCatalogReady || !sharedRoutineRevisionProtocolReady(bh.Service()) {
 			return nil
 		}
 		nextRevision := previousRevision + 1
@@ -12462,7 +12490,7 @@ func persistUserDefinedFunction(
 		}
 		return activateFunctionRevision(ctx, bh, functionIDValue, 1, 1)
 	}
-	if !revisionCatalogReady {
+	if !revisionCatalogReady || !sharedRoutineRevisionProtocolReady(bh.Service()) {
 		return nil
 	}
 	functionIDValue, err := findPersistedSQLFunctionID(ctx, bh, definition)

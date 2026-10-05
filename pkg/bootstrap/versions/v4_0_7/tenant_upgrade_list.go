@@ -72,6 +72,13 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	},
 }
 
+// PythonRevisionUpgradeEntries returns the idempotent shared-routine catalog
+// migrations so a later repair version can replay them for clusters that
+// already recorded 4.0.7 or 4.0.8 without executing the original handler.
+func PythonRevisionUpgradeEntries() []versions.UpgradeEntry {
+	return append([]versions.UpgradeEntry(nil), tenantUpgEntries...)
+}
+
 // addPythonSignatureIndex makes the shared function namespace distinguish the
 // exact current Python descriptor while preserving the historical logical
 // arg_types column for SQL UDFs and catalog readers.
