@@ -310,6 +310,148 @@ func TestPreparedNumericTemporalContracts(t *testing.T) {
 				})
 			}
 		})
+		t.Run("ROUND TRUNCATE output cast", func(t *testing.T) {
+			type binding struct {
+				name, sqlValue string
+				value          any
+				want           [2]string
+			}
+			text := binding{"text", "'1.46'", "1.46", [2]string{"1.5", "1.4"}}
+			negative := binding{"negative text", "'-1.46'", "-1.46", [2]string{"-1.5", "-1.4"}}
+			exec(t, "create table output_cast_keys(c bigint primary key)")
+			exec(t, "insert into output_cast_keys values(-9999),(9999),(54321)")
+			typedReuse := []binding{
+				{"integer", "3", int64(3), [2]string{"3.0", "3.0"}},
+				text,
+				{"double", "cast(1.46 as double)", float64(1.46), [2]string{"1.5", "1.4"}},
+				negative,
+				{"NULL", "NULL", nil, [2]string{"NULL", "NULL"}},
+				{"text recovery", "'1.46'", "1.46", [2]string{"1.5", "1.4"}},
+			}
+			// Output scale must not be pushed through TRUNCATE into its input.
+			// Conversely an explicit input scale is part of the user's semantics:
+			// rounding 1.46 to DECIMAL(20,1) before TRUNCATE legitimately yields 1.5.
+			for _, protocol := range []string{"binary", "SQL"} {
+				t.Run(protocol, func(t *testing.T) {
+					for _, tc := range []struct {
+						name, input, output string
+						precision           int
+						bindings            []binding
+					}{
+						{"text first", "?", "decimal(20,1)", 1, []binding{text}},
+						{"typed reuse", "?", "decimal(20,1)", 1, typedReuse},
+						{"scalar input", "(select ?)", "decimal(20,1)", 1, []binding{text, negative}},
+						{"outer double", "?", "double", 1, []binding{text, negative}},
+						{"outer scale 2", "?", "decimal(20,2)", 1, []binding{
+							{"text", "'1.46'", "1.46", [2]string{"1.50", "1.40"}},
+							{"negative text", "'-1.46'", "-1.46", [2]string{"-1.50", "-1.40"}},
+						}},
+						{"explicit input scale 1", "cast(? as decimal(20,1))", "decimal(20,1)", 1, []binding{
+							{"text", "'1.46'", "1.46", [2]string{"1.5", "1.5"}},
+							{"negative text", "'-1.46'", "-1.46", [2]string{"-1.5", "-1.5"}},
+						}},
+						{"explicit input scale 2", "cast(? as decimal(20,2))", "decimal(20,1)", 1, []binding{text}},
+						{"explicit input double", "cast(? as double)", "decimal(20,1)", 1, []binding{text}},
+						{"double rounding", "?", "decimal(20,1)", 2, []binding{
+							{"text", "'1.449'", "1.449", [2]string{"1.5", "1.4"}},
+							{"negative text", "'-1.449'", "-1.449", [2]string{"-1.5", "-1.4"}},
+						}},
+					} {
+						t.Run(tc.name, func(t *testing.T) {
+							q := fmt.Sprintf("select cast(round(%s,%d) as %s),cast(truncate(%s,%d) as %s)", tc.input, tc.precision, tc.output, tc.input, tc.precision, tc.output)
+							var queryRow func(*testing.T, binding) *sql.Row
+							if protocol == "binary" {
+								stmt, err := conn.PrepareContext(ctx, q)
+								require.NoError(t, err)
+								defer stmt.Close()
+								queryRow = func(_ *testing.T, b binding) *sql.Row {
+									return stmt.QueryRowContext(ctx, b.value, b.value)
+								}
+							} else {
+								exec(t, "prepare output_cast_contract from '"+q+"'")
+								defer func() {
+									cleanup, stop := context.WithTimeout(context.Background(), 10*time.Second)
+									defer stop()
+									_, err := conn.ExecContext(cleanup, "deallocate prepare output_cast_contract")
+									require.NoError(t, err)
+									_, err = conn.ExecContext(cleanup, "set @output_cast_value=NULL")
+									require.NoError(t, err)
+								}()
+								queryRow = func(t *testing.T, b binding) *sql.Row {
+									exec(t, "set @output_cast_value="+b.sqlValue)
+									return conn.QueryRowContext(ctx, "execute output_cast_contract using @output_cast_value,@output_cast_value")
+								}
+							}
+							for _, b := range tc.bindings {
+								t.Run(b.name, func(t *testing.T) {
+									// QueryRow.Scan closes its rows on both success and failure;
+									// no result can outlive the next binding on this connection.
+									var round, truncate sql.NullString
+									require.NoError(t, queryRow(t, b).Scan(&round, &truncate))
+									got := [2]string{"NULL", "NULL"}
+									for i, value := range []sql.NullString{round, truncate} {
+										if value.Valid {
+											got[i] = value.String
+										}
+									}
+									require.Equal(t, b.want, got, q)
+								})
+							}
+							if tc.name == "typed reuse" {
+								t.Run("recovery after invalid text", func(t *testing.T) {
+									invalid := binding{sqlValue: "'not-a-number'", value: "not-a-number"}
+									var round, truncate sql.NullString
+									err := queryRow(t, invalid).Scan(&round, &truncate)
+									var sqlErr *mysql.MySQLError
+									require.ErrorAs(t, err, &sqlErr, "invalid numeric text must be rejected by the server")
+									// Reuse the same handle after the server error; neither the
+									// failed value nor its conversion may poison the next execution.
+									require.NoError(t, queryRow(t, text).Scan(&round, &truncate))
+									require.True(t, round.Valid && truncate.Valid)
+									require.Equal(t, text.want, [2]string{round.String, truncate.String})
+								})
+							}
+						})
+					}
+					t.Run("explicit result narrowing predicate", func(t *testing.T) {
+						// Key lowering may use a proven result, but must still execute
+						// the explicit DECIMAL cast after ROUND (including saturation).
+						const q = "select c from output_cast_keys where c=cast(round(?,0) as decimal(4,0))"
+						var query func(*testing.T, string) (*sql.Rows, error)
+						if protocol == "binary" {
+							stmt, err := conn.PrepareContext(ctx, q)
+							require.NoError(t, err)
+							defer stmt.Close()
+							query = func(_ *testing.T, value string) (*sql.Rows, error) {
+								return stmt.QueryContext(ctx, value)
+							}
+						} else {
+							exec(t, "prepare output_cast_predicate from '"+q+"'")
+							defer func() {
+								cleanup, stop := context.WithTimeout(context.Background(), 10*time.Second)
+								defer stop()
+								_, err := conn.ExecContext(cleanup, "deallocate prepare output_cast_predicate")
+								require.NoError(t, err)
+								_, err = conn.ExecContext(cleanup, "set @output_cast_predicate_value=NULL")
+								require.NoError(t, err)
+							}()
+							query = func(t *testing.T, value string) (*sql.Rows, error) {
+								exec(t, "set @output_cast_predicate_value='"+value+"'")
+								return conn.QueryContext(ctx, "execute output_cast_predicate using @output_cast_predicate_value")
+							}
+						}
+						for _, tc := range []struct {
+							value string
+							want  int64
+						}{{"54321.0", 9999}, {"-54321.0", -9999}, {"54321.0", 9999}} {
+							got, err := readPreparedContractIDs(query(t, tc.value))
+							require.NoError(t, err)
+							require.Equal(t, []int64{tc.want}, got)
+						}
+					})
+				})
+			}
+		})
 		t.Run("decimal scientific values and persistence", func(t *testing.T) {
 			exec(t, "create table source(v varchar(128))")
 			exec(t, "insert into source values ('1E-2'),('-1E-2'),('0E2')")

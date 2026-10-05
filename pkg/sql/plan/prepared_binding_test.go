@@ -108,7 +108,9 @@ func TestPreparedNumericPredicateFiltering(t *testing.T) {
 		{"round nonzero precision", "c=round(?,?)", []string{"54321.0", "1"}, true, true},
 		{"round negative precision", "c=round(?,?)", []string{"54321.0", "-1"}, true, true},
 		{"explicit column cast", "cast(c as decimal(5,0))=round(?,0)", []string{"54321.0"}, false, true},
-		{"explicit value cast", "c=cast(round(?,0) as decimal(4,0))", []string{"54321.0"}, false, true},
+		// ROUND sees the source before the explicit result cast clamps it to
+		// 9999. The full expression is safe to lower, but the cast must remain.
+		{"explicit value cast", "c=cast(round(?,0) as decimal(4,0))", []string{"54321.0"}, true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := NewMockOptimizer(false)
@@ -173,6 +175,7 @@ func TestPreparedNumericPredicateFiltering(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, bound.ValueDependent, "runtime value proof must not enter the type-only cache")
 			foundScan, columnCast, executableParam := false, false, false
+			explicitResultCast := false
 			for _, node := range bound.Plan.GetQuery().Nodes {
 				if node.NodeType != planpb.Node_TABLE_SCAN || node.TableDef.Name != table.Name {
 					continue
@@ -190,6 +193,15 @@ func TestPreparedNumericPredicateFiltering(t *testing.T) {
 							fn.Args[0].GetCol() != nil && fn.Args[0].Typ.Id == table.Cols[2].Typ.Id {
 							columnCast = true
 						}
+						if tc.name == "explicit value cast" && types.T(expr.Typ.Id).IsDecimal() &&
+							expr.Typ.Width == 4 && expr.Typ.Scale == 0 {
+							if fn := expr.GetF(); fn != nil && fn.Func.ObjName == "cast" {
+								_, overload := function.DecodeOverloadID(fn.Func.Obj)
+								require.EqualValues(t, 1, overload, "retain the explicit, not implicit, cast")
+								require.True(t, function.ContainsParameter(expr))
+								explicitResultCast = true
+							}
+						}
 						return nil
 					}))
 				}
@@ -197,6 +209,9 @@ func TestPreparedNumericPredicateFiltering(t *testing.T) {
 			require.True(t, foundScan)
 			require.Equal(t, !tc.native, columnCast, bound.Plan.String())
 			require.True(t, executableParam, "proof witnesses must not replace executable parameters")
+			if tc.name == "explicit value cast" {
+				require.True(t, explicitResultCast, "safe key lowering must still execute the user's narrowing cast")
+			}
 		})
 	}
 }
