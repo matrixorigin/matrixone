@@ -929,6 +929,15 @@ func TestVectorMatmulGPUMemoryAdmission(t *testing.T) {
 	require.ErrorContains(t, err, "no cuBLASLt algorithm")
 	require.Equal(t, 3, created)
 	require.Nil(t, exec.engine)
+	// a retry of the batch on the same executor creates the engine again, not the CPU path
+	groups := []uint64{1, 1}
+	err = exec.PreflightBatchFill(0, groups, vecs)
+	if err == nil {
+		err = exec.BatchFill(0, groups, vecs)
+	}
+	require.ErrorContains(t, err, "no cuBLASLt algorithm")
+	require.Equal(t, 4, created)
+	require.Nil(t, exec.engine)
 	release(exec, account, vecs, mp)
 }
 

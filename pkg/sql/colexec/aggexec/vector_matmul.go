@@ -978,6 +978,8 @@ type vectorMatmulExec struct {
 	engine vectorMatmulEngine
 	// engineLease holds the account's charge for the engine's native host memory.
 	engineLease *mpool.CapacityLease
+	// engineTried is set once the engine is created or no device is in play; a failed
+	// creation leaves it unset, so a retry creates the engine again.
 	engineTried bool
 	tile        vectorMatmulTile
 }
@@ -1132,9 +1134,9 @@ func (exec *vectorMatmulExec) ensureEngine() error {
 	if exec.engineTried || exec.cfg == nil {
 		return nil
 	}
-	exec.engineTried = true
 	gpu := vectorMatmulGPU
 	if !exec.cfg.gpu || gpu == nil || !gpu.available() {
+		exec.engineTried = true
 		return nil
 	}
 	dim := int(exec.argTypes[1].Width)
@@ -1169,6 +1171,7 @@ func (exec *vectorMatmulExec) ensureEngine() error {
 		return err
 	}
 	exec.engine, exec.engineLease = engine, lease
+	exec.engineTried = true
 	return nil
 }
 
@@ -1646,6 +1649,7 @@ func (exec *vectorMatmulExec) Free() {
 	exec.freeTile()
 	exec.engineLease.Release()
 	exec.engineLease = nil
+	exec.engineTried = false
 	exec.aggExec.Free()
 	exec.state = nil
 	if exec.releaseCfg != nil {
