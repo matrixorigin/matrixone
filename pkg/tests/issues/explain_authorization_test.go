@@ -49,6 +49,8 @@ func TestExplainAuthorizationUsesExecutedStatement(t *testing.T) {
 			require.ErrorContains(t, err, "do not have privilege", query)
 		}
 		sys := connect("dump", 0)
+		// A commit on one CN does not fence another CN's next read snapshot.
+		syncCommit := func() { syncAuthenticatedClusterCommit(t, ctx, c) }
 		exec(sys, "create account explain_auth_case admin_name 'admin' identified by '111'")
 		defer func() {
 			cleanup, done := context.WithTimeout(context.Background(), 30*time.Second)
@@ -64,6 +66,7 @@ func TestExplainAuthorizationUsesExecutedStatement(t *testing.T) {
 		} {
 			exec(admin, query)
 		}
+		syncCommit()
 		reader, writer := connect("explain_auth_case#u#reader", 1), connect("explain_auth_case#w#writer", 2)
 		// A cached source SELECT cannot authorize a forbidden catalog target,
 		// even when the INSERT would produce no rows.
@@ -96,6 +99,7 @@ func TestExplainAuthorizationUsesExecutedStatement(t *testing.T) {
 		exec(writer, "prepare raw_write from 'delete from app.t'")
 		exec(admin, "revoke select on table app.t from reader")
 		exec(admin, "revoke delete on table app.t from writer")
+		syncCommit()
 		deny(reader, "select id from app.t")
 		_, err = read.ExecContext(ctx)
 		require.ErrorContains(t, err, "do not have privilege")
@@ -117,6 +121,7 @@ func TestExplainAuthorizationUsesExecutedStatement(t *testing.T) {
 		}
 		exec(admin, "grant select on table app.t to reader")
 		exec(admin, "grant delete on table app.t to writer")
+		syncCommit()
 		for i, prefix := range prefixes {
 			exec(reader, prefix+"select id from app.t")
 			exec(reader, fmt.Sprintf("execute r%d", i))
@@ -125,21 +130,27 @@ func TestExplainAuthorizationUsesExecutedStatement(t *testing.T) {
 		exec(writer, "explain delete from app.t")
 		rowsRemain(1)
 		exec(writer, "execute w1")
+		syncCommit()
 		rowsRemain(0)
 		exec(admin, "insert into app.t values(1)")
+		syncCommit()
 		exec(writer, "execute w3")
+		syncCommit()
 		rowsRemain(0)
 		exec(admin, "insert into app.t values(1)")
+		syncCommit()
 		_, err = read.ExecContext(ctx)
 		require.NoError(t, err)
 		_, err = write.ExecContext(ctx)
 		require.NoError(t, err)
+		syncCommit()
 		rowsRemain(0)
 		// Authorization must not depend on whether unrelated grants were warmed
 		// under different enabled roles in earlier statements.
 		for _, query := range []string{"create table app.other(id int)", "insert into app.other values(1)", "create role other_reader", "grant select on table app.other to other_reader", "grant other_reader to u"} {
 			exec(admin, query)
 		}
+		syncCommit()
 		exec(reader, "set secondary role all")
 		exec(reader, "set enable_privilege_cache = off")
 		combined := "select a.id from app.t a join app.other b on a.id = b.id"
@@ -158,6 +169,7 @@ func TestExplainAuthorizationUsesExecutedStatement(t *testing.T) {
 		for _, query := range []string{"create role combined_reader", "grant reader,other_reader to combined_reader", "grant combined_reader to u"} {
 			exec(admin, query)
 		}
+		syncCommit()
 		exec(reader, "set secondary role none")
 		exec(reader, "set role combined_reader")
 		exec(reader, "select id from app.t")
@@ -165,12 +177,14 @@ func TestExplainAuthorizationUsesExecutedStatement(t *testing.T) {
 		deny(reader, combined)
 		// One inherited role with both facts satisfies the unchanged SQL rule.
 		exec(admin, "grant select on table app.other to reader")
+		syncCommit()
 		exec(reader, combined)
 		exec(reader, combined)
 		exec(reader, "set enable_privilege_cache = off")
 		exec(reader, combined)
 		exec(reader, "set enable_privilege_cache = on")
 		exec(admin, "revoke select on table app.other from reader")
+		syncCommit()
 		deny(reader, combined)
 
 	})

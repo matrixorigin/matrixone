@@ -288,6 +288,8 @@ func TestIssue29399AccountPITRRebindsPrivileges(t *testing.T) {
 		sysDB, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
 		require.NoError(t, err)
 		defer sysDB.Close()
+		// Restore and grant/revoke commit on CN0; assertions also run on CN1.
+		syncCommit := func() { syncAuthenticatedClusterCommit(t, ctx, c) }
 
 		const (
 			accountName  = "issue_29399_pitr"
@@ -367,6 +369,7 @@ func TestIssue29399AccountPITRRebindsPrivileges(t *testing.T) {
 		require.Equal(t, restoredLogicalID, restoredPrivilegeID)
 
 		// Keep the reader on another CN to cover remote revocation and restore.
+		syncCommit()
 		readerCN, err := c.GetCNService(1)
 		require.NoError(t, err)
 		readerDB, err := sql.Open("mysql", fmt.Sprintf(
@@ -387,18 +390,21 @@ func TestIssue29399AccountPITRRebindsPrivileges(t *testing.T) {
 		require.NoError(t, err)
 		defer reader.Close()
 		execSQLRequire(t, ctx, adminDB, "grant delete on table `"+databaseName+"`.orders to pitr_reader")
+		syncCommit()
 		prepared, err := reader.PrepareContext(ctx, "delete from `"+databaseName+"`.orders where id = ?")
 		require.NoError(t, err)
 		defer prepared.Close()
 		_, err = prepared.ExecContext(ctx, -1)
 		require.NoError(t, err)
 		execSQLRequire(t, ctx, adminDB, "revoke delete on table `"+databaseName+"`.orders from pitr_reader")
+		syncCommit()
 		_, err = prepared.ExecContext(ctx, -1)
 		require.ErrorContains(t, err, "do not have privilege")
 
 		for _, scope := range []string{"database `" + databaseName + "` table orders", "database `" + databaseName + "`"} {
 			for range 2 {
 				execSQLRequire(t, ctx, adminDB, "restore "+scope+" from pitr "+pitrName+" '"+restoreAt+"'")
+				syncCommit()
 				require.NoError(t, reader.QueryRowContext(ctx, "select count(*) from `"+databaseName+"`.orders").Scan(&count))
 				require.Equal(t, 1, count)
 				_, err = prepared.ExecContext(ctx, -1)
@@ -406,9 +412,11 @@ func TestIssue29399AccountPITRRebindsPrivileges(t *testing.T) {
 			}
 		}
 		execSQLRequire(t, ctx, adminDB, "grant delete on table `"+databaseName+"`.orders to pitr_reader")
+		syncCommit()
 		_, err = prepared.ExecContext(ctx, -1)
 		require.NoError(t, err)
 		execSQLRequire(t, ctx, adminDB, "restore from pitr "+pitrName+" '"+restoreAt+"'")
+		syncCommit()
 		_, err = prepared.ExecContext(ctx, -1)
 		require.ErrorContains(t, err, "do not have privilege", "account PITR left a stale prepared privilege")
 	})
