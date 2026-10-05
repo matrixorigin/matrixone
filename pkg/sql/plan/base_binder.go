@@ -3304,6 +3304,18 @@ func (b *baseBinder) bindPreparedNumericPrecisionFuncExpr(
 		return b.bindFuncExprImplByAstExpr(name, astArgs, depth)
 	}
 
+	// A surrounding result cast must not round the source before this function
+	// applies its own precision. Bind in the value consumer's domain, including
+	// scalar subqueries, while preserving explicit casts within the argument.
+	parentParamType, parentSubqueryTarget := b.numericParamType, b.numericSubqueryTarget
+	parentFunctionTarget := b.numericFunctionTarget
+	b.numericParamType, b.numericSubqueryTarget = nil, nil
+	b.numericFunctionTarget = false
+	defer func() {
+		b.numericParamType, b.numericSubqueryTarget = parentParamType, parentSubqueryTarget
+		b.numericFunctionTarget = parentFunctionTarget
+	}()
+
 	doubleType := types.T_float64.ToType()
 	target := makePlan2Type(&doubleType)
 	hasExplicitFloatCast := containsExplicitFloatCast(astArgs[0])
