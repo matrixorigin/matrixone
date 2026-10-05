@@ -5855,6 +5855,12 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		sortRollupCandidate := isRoot &&
 			selectClause.GroupBy != nil &&
 			selectClause.GroupBy.Rollup &&
+			// DISTINCT must stay on the legacy grouping-set path until its
+			// pre-dedup normalization converts grouping sentinels to SQL NULL.
+			// Sort rollup preserves the grouping bitmap for GROUPING(), so
+			// sending it directly to DISTINCT would keep source NULL and
+			// rollup NULL as different hash keys.
+			!selectClause.Distinct &&
 			builder.sortRollupMode() != 2 &&
 			len(selectClause.GroupBy.GroupByExprsList) == 1 &&
 			(sortRollupSimpleBaseTableSource(selectClause.From.Tables) ||

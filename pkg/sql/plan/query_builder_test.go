@@ -1374,6 +1374,54 @@ func TestQueryBuilderDirectSortRollupPlanModes(t *testing.T) {
 	}
 }
 
+func TestQueryBuilderSortRollupFallsBackForDistinct(t *testing.T) {
+	rt := moruntime.ServiceRuntime("")
+	oldHints, hadHints := rt.GetGlobalVariables("optimizer_hints")
+	defer func() {
+		if hadHints {
+			rt.SetGlobalVariables("optimizer_hints", oldHints)
+		} else {
+			rt.SetGlobalVariables("optimizer_hints", "")
+		}
+	}()
+
+	queries := []string{
+		`select distinct a from select_test.bind_select
+			group by a with rollup`,
+		`select distinct a, grouping(a) from select_test.bind_select
+			group by a with rollup`,
+	}
+	for _, algorithm := range []string{"SORT", "HASH"} {
+		t.Run(algorithm, func(t *testing.T) {
+			hint := "rollupSort=1"
+			if algorithm == "HASH" {
+				hint = "rollupSort=2"
+			}
+			rt.SetGlobalVariables("optimizer_hints", hint)
+			for i, sql := range queries {
+				t.Run(fmt.Sprintf("query-%d", i), func(t *testing.T) {
+					stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1)
+					require.NoError(t, err)
+					queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+					require.NoError(t, err)
+					require.False(t, planHasSortRollup(queryPlan.GetQuery()),
+						"SELECT DISTINCT must use the legacy NULL-normalizing rollup path under %s", algorithm)
+					if algorithm == "SORT" {
+						var unionAll int
+						for _, node := range queryPlan.GetQuery().Nodes {
+							if node.NodeType == plan.Node_UNION_ALL {
+								unionAll++
+							}
+						}
+						require.NotZero(t, unionAll,
+							"SORT hint must fall back to legacy grouping-set expansion")
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestQueryBuilderSortRollupFailsClosed(t *testing.T) {
 	rt := moruntime.ServiceRuntime("")
 	oldHints, hadHints := rt.GetGlobalVariables("optimizer_hints")
