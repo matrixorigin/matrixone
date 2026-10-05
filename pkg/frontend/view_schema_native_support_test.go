@@ -73,6 +73,7 @@ func WithNativeViewSchemaCompilerForTest(
 // 使用 production 的 derived shared-transaction catalog SELECT，验证其不会
 // 推进外层 statement/catalog 代号，且 Close 不回滚调用者事务。
 func ReadNativeViewSchemaCatalogForTest(ctx context.Context, compiler *TxnCompilerContext) error {
+	ctx = withViewSchemaCatalogRead(ctx)
 	bh := compiler.getOrCreateBackExec(ctx)
 	bh.ClearExecResultSet()
 	return bh.Exec(ctx, "select relname from mo_catalog.mo_tables where relname = 'mo_tables'")

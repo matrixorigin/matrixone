@@ -53,11 +53,15 @@ func encodeViewSchemaProvenance(origins []OutputColumnProvenance, columns []*Col
 			value.Origins[i].HasSource = true
 			value.Origins[i].TableID = origin.Source.TableID
 			value.Origins[i].Policy = ctasViewDefaultPolicy(metadata)
-			def := DeepCopyDefault(metadata.Default)
 			// The explicit-default presence is carried separately by the metadata
 			// source: an absent default must stay absent for CTAS policy decisions.
-			sources.Cols[i] = &ColDef{Typ: metadata.Typ, Default: def, NotNull: !metadata.NullAbility}
+			// Marshal only reads the binder-owned graph; the encoded result owns
+			// its bytes, so copying shared defaults before admission is unnecessary.
+			sources.Cols[i] = &ColDef{Typ: metadata.Typ, Default: metadata.Default, NotNull: !metadata.NullAbility}
 		}
+	}
+	if sources.ProtoSize() > viewSchemaResultLimit {
+		return nil, ErrViewSchemaLimit
 	}
 	var err error
 	value.Sources, err = sources.Marshal()

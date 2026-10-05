@@ -44,4 +44,6 @@
 
 结果包含完整有序列、来源元数据与View边界CTAS default策略、完整依赖、推导及持久化定义要求的最大协议版本。返回的各字段图独立持有；不导出旧QueryBuilder槽位。句柄须Release，Close等待句柄退场；调用者已取得的独立列/依赖/来源副本在请求关闭后仍有效。取消不破坏已发布结果，错误不进入memo。nested memo键还包括实际继承的名称大小写模式；复杂形状完整支持但旁路nested memo。
 
+共享目录SQL及入口授权中的目录读只在本请求上下文设置既有内部statement标记，读取当前写集但不推进父workspace边界；普通SQL没有该标记。临时跨账户解析上下文传给私有child，返回或失败时恢复，依赖账户与实际物理读取一致。可选nested memo先检查列/来源的protobuf编码大小，超限直接旁路；避免宽中间View把同一大default在准入前重复复制和序列化。
+
 单元测试使用权威CREATE VIEW差分、cache-off对照及实际binder/查询预算边界。真实目录验证位于frontend的integration标签测试，复用单CN fixture，通过真实引擎、同事务DDL、历史快照、共享目录SELECT及订阅/RBAC校验所有权；fixture接线只编译入_test产物。公共入口虽未激活S2，保留的scanner/数值范围错误、JSON_ROW错误传播及共用View推导需要现有公共View/解析BVT回归。最终证据须以合并mo/main后的源码为准，未运行检查不得标成通过。

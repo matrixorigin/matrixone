@@ -115,17 +115,23 @@ func (f *viewSchemaMemoFrame) finish(ctx *BindContext, err error) {
 		}
 		cols[i] = &ColDef{Name: name, Typ: typ}
 		source := origin.Source
-		sources[i] = &ColDef{Typ: source.Metadata.Typ, Default: DeepCopyDefault(source.Metadata.Default)}
+		// Encoding is synchronous and read-only. Repeated projections may share
+		// a large default; do not copy or serialize it before the size check.
+		sources[i] = &ColDef{Typ: source.Metadata.Typ, Default: source.Metadata.Default}
 		metadata[i] = viewSchemaMemoColumn{State: origin.State, Policy: origin.CTASDefaultPolicy, SourceTable: source.TableID}
 		for _, part := range ctx.headingProvenance[int32(i)].parts {
 			metadata[i].Heading = append(metadata[i].Heading, viewSchemaHeadingPart{part.text, part.literal})
 		}
 	}
-	columnBytes, marshalErr := (&TableDef{Cols: cols}).Marshal()
+	columnsTable, sourcesTable := &TableDef{Cols: cols}, &TableDef{Cols: sources}
+	if columnsTable.ProtoSize()+sourcesTable.ProtoSize() > viewSchemaMemoLimit {
+		return
+	}
+	columnBytes, marshalErr := columnsTable.Marshal()
 	if marshalErr != nil {
 		return
 	}
-	sourceBytes, marshalErr := (&TableDef{Cols: sources}).Marshal()
+	sourceBytes, marshalErr := sourcesTable.Marshal()
 	if marshalErr != nil {
 		return
 	}

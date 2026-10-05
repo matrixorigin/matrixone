@@ -343,6 +343,11 @@ func (tcc *TxnCompilerContext) resolvePhysicalObjectAccount(
 	snapshot *plan2.Snapshot,
 ) uint32 {
 	accountID := tcc.execCtx.ses.GetAccountId()
+	if tcc.viewSchemaRead {
+		if current, err := defines.GetAccountId(tcc.GetContext()); err == nil {
+			accountID = current
+		}
+	}
 	if snapshot != nil && snapshot.Tenant != nil {
 		accountID = snapshot.Tenant.TenantID
 	}

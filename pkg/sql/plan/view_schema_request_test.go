@@ -823,6 +823,47 @@ func TestViewSchemaRequestFailureAndPanicReturnBinderOwnership(t *testing.T) {
 	}
 }
 
+func TestViewSchemaRequestReleasesUnpublishedResultOnFinalCheckFailure(t *testing.T) {
+	for _, panicFailure := range []bool{false, true} {
+		t.Run(fmt.Sprint(panicFailure), func(t *testing.T) {
+			f := newViewSchemaTestFixture(t)
+			f.addView(t, "root_v", "select n_name from nation")
+			r := f.request(t)
+			r.memoDisabled = true
+			failure := errors.New("final result visibility check failed")
+			visited := false
+			f.binding.Check = func() error {
+				// Input leases exist only while the derivation context is installed.
+				// With memo disabled, retained bytes after restoration belong to the
+				// admitted result that Describe has not yet published.
+				if f.compiler.GetContext().Value(viewSchemaContextKey{}) == nil && f.generation.Used() > 0 {
+					visited = true
+					if panicFailure {
+						panic(failure)
+					}
+					return failure
+				}
+				return nil
+			}
+			if panicFailure {
+				require.PanicsWithValue(t, failure, func() { _, _ = r.Describe("tpch", "root_v", nil) })
+			} else {
+				result, err := r.Describe("tpch", "root_v", nil)
+				require.Nil(t, result)
+				require.ErrorIs(t, err, failure)
+			}
+			require.True(t, visited)
+			require.Zero(t, f.generation.Used(), "unpublished results must return their reservation on error and panic")
+			require.Empty(t, r.memo)
+			f.binding.Check = func() error { return nil }
+			viewSchemaTestResult(t, r, "root_v").Release()
+			r.Close()
+			require.Equal(t, int64(1), f.closes.Load())
+			require.Zero(t, f.generation.Used())
+		})
+	}
+}
+
 func TestViewSchemaRequestRejectsInvalidRootsAndRecovers(t *testing.T) {
 	for _, kind := range []string{"missing", "table", "json", "sql"} {
 		t.Run(kind, func(t *testing.T) {

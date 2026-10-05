@@ -118,14 +118,10 @@ func (r *ViewSchemaRequest) Describe(database, name string, snapshot *Snapshot) 
 	default:
 		return nil, ErrViewSchemaBusy
 	}
+	completed := false
 	defer func() {
-		if err != nil {
+		if !completed {
 			r.clearMemo()
-		}
-		if failure := recover(); failure != nil {
-			r.clearMemo()
-			r.gate <- struct{}{}
-			panic(failure)
 		}
 		r.gate <- struct{}{}
 	}()
@@ -166,12 +162,17 @@ func (r *ViewSchemaRequest) Describe(database, name string, snapshot *Snapshot) 
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		if !completed {
+			lease.Release()
+		}
+	}()
 	if err = r.check(); err != nil {
-		lease.Release()
 		return nil, err
 	}
 	result = &ViewSchemaResult{columns: append([]byte(nil), value.columns...), dependencies: append([]byte(nil), value.dependencies...), provenance: append([]byte(nil), value.provenance...), requiredProtocol: value.requiredProtocol, lease: lease, request: r}
 	r.readers.Add(1)
+	completed = true
 	return result, nil
 }
 

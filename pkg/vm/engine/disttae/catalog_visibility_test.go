@@ -15,6 +15,7 @@
 package disttae
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -77,4 +78,16 @@ func TestCatalogVisibilityIgnoresReadOnlyWorkspaceAdjustment(t *testing.T) {
 	require.NoError(t, txn.adjustUpdateOrderLocked(0))
 	empty, _ := txn.CatalogVisibility()
 	require.Equal(t, after, empty)
+}
+
+func TestCatalogVisibilityIgnoresNoopWorkspaceDump(t *testing.T) {
+	txn := &Transaction{writeWorkspaceThreshold: 1024, commitWorkspaceThreshold: 1024, engine: &Engine{}}
+	txn.engine.config.insertEntryMaxCount = 100
+	before, _ := txn.CatalogVisibility()
+	for _, offset := range []int{0, -1} {
+		require.NoError(t, txn.dumpBatchLocked(context.Background(), offset))
+		after, stable := txn.CatalogVisibility()
+		require.True(t, stable)
+		require.Equal(t, before, after)
+	}
 }

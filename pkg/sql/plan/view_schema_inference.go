@@ -46,21 +46,26 @@ type viewSchemaDerivation struct {
 }
 type viewSchemaCompiler struct {
 	CompilerContext
-	ctx   context.Context
-	state *viewSchemaDerivation
+	ctx, previousContext context.Context
+	state                *viewSchemaDerivation
 }
 
 func newViewSchemaDerivation(request *ViewSchemaRequest) *viewSchemaDerivation {
 	state := &viewSchemaDerivation{lower: request.binding.Compiler.GetLowerCaseTableNames(), request: request, stack: make(map[[32]byte]bool)}
 	ctx := mysql.WithParseLimits(request.workCtx, mysql.ParseLimits{Input: viewSchemaInputLimit, Tokens: 32768, Work: 64 << 20})
 	compiler := &viewSchemaCompiler{CompilerContext: request.binding.Compiler, state: state, ctx: context.WithValue(ctx, viewSchemaContextKey{}, state)}
+	compiler.previousContext = compiler.CompilerContext.GetContext()
+	compiler.CompilerContext.SetContext(compiler.ctx)
 	state.compiler = compiler
 	state.capture = newViewDependencyCaptureContext(compiler.CompilerContext)
 	return state
 }
-func (c *viewSchemaCompiler) GetLowerCaseTableNames() int64  { return c.state.lower }
-func (c *viewSchemaCompiler) GetContext() context.Context    { return c.ctx }
-func (c *viewSchemaCompiler) SetContext(ctx context.Context) { c.ctx = ctx }
+func (c *viewSchemaCompiler) GetLowerCaseTableNames() int64 { return c.state.lower }
+func (c *viewSchemaCompiler) GetContext() context.Context   { return c.ctx }
+func (c *viewSchemaCompiler) SetContext(ctx context.Context) {
+	c.ctx = ctx
+	c.CompilerContext.SetContext(ctx)
+}
 func (c *viewSchemaCompiler) Resolve(database, name string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
 	if err := c.state.request.check(); err != nil {
 		return nil, nil, err
@@ -270,6 +275,7 @@ func enterViewSchemaBinding(ctx context.Context) (func(), error) {
 }
 
 func (s *viewSchemaDerivation) close() {
+	s.compiler.CompilerContext.SetContext(s.compiler.previousContext)
 	for _, lease := range s.leases {
 		lease.Release()
 	}

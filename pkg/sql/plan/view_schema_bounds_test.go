@@ -20,10 +20,21 @@ import (
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
+
+func TestResultScanWithoutQueryIDReturnsArgumentError(t *testing.T) {
+	f := newViewSchemaTestFixture(t)
+	statements, err := mysql.Parse(t.Context(), "select * from result_scan() as missing_query", 1)
+	require.NoError(t, err)
+	defer statements[0].Free()
+	_, err = BuildPlan(f.compiler, statements[0], false)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidArg), "missing query ID must be rejected before catalog or execution: %v", err)
+}
 
 func TestViewSchemaActualBinderWorkAndRecursionBoundaries(t *testing.T) {
 	for _, depth := range []int{256, 257} {

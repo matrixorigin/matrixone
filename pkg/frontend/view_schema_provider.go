@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -36,6 +37,17 @@ import (
 // and query execution privileges are different contracts. There is no implicit
 // allow policy, and this callback is invoked before every root catalog read.
 type ViewSchemaAuthorizer func(context.Context, string, string, *plan.Snapshot) error
+
+// Shared catalog SQL belongs to the same statement. The existing compiler's
+// internal-read flag prevents it from advancing the caller's workspace boundary.
+type viewSchemaCatalogReadKey struct{}
+
+func withViewSchemaCatalogRead(ctx context.Context) context.Context {
+	if active, _ := ctx.Value(viewSchemaCatalogReadKey{}).(bool); active {
+		return ctx
+	}
+	return context.WithValue(ctx, viewSchemaCatalogReadKey{}, true)
+}
 
 type viewSchemaProvider struct {
 	parent    *TxnCompilerContext
@@ -104,7 +116,7 @@ func (p *viewSchemaProvider) OpenViewSchemaBinding(ctx context.Context) (result 
 	tempVersion, ddlVersion := ses.GetTempTableVersion(), ses.getDDLVersion()
 	roleGeneration := ses.GetPrivilegeCache().getActiveRoleGrantGeneration()
 	defaultDatabase := parent.DefaultDatabase()
-	compiler, cleanup, err := parent.NewViewDescriptionCompilerContext(withResolveUdfInCallerTxn(ctx))
+	compiler, cleanup, err := parent.NewViewDescriptionCompilerContext(withViewSchemaCatalogRead(withResolveUdfInCallerTxn(ctx)))
 	if err != nil {
 		return nil, err
 	}
@@ -151,32 +163,34 @@ func (p *viewSchemaProvider) OpenViewSchemaBinding(ctx context.Context) (result 
 		parent.mu.Unlock()
 		currentFloor, currentFloorPresent := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor)
 		if ses.GetAccountId() != accountID || floorPresent != currentFloorPresent || !reflect.DeepEqual(floor, currentFloor) || !proc.UsesExecutionResourceGeneration(generation) || !childProc.UsesExecutionResourceGeneration(generation) {
-			return plan.ErrViewSchemaChanged
+			return fmt.Errorf("%w: execution environment", plan.ErrViewSchemaChanged)
 		}
 		if !same || generation.Closed() || ses.GetTxnHandler().GetTxn() != op || proc.GetStmtProfile().GetStmtId() != statementID || currentProtocolVersion(proc) != protocol || ses.GetTempTableVersion() != tempVersion || ses.getDDLVersion() != ddlVersion || ses.GetPrivilegeCache().getActiveRoleGrantGeneration() != roleGeneration {
-			return plan.ErrViewSchemaChanged
+			return fmt.Errorf("%w: statement ownership", plan.ErrViewSchemaChanged)
 		}
 		currentIdentity := ses.GetTenantInfo()
 		if currentIdentity == nil || !reflect.DeepEqual(identity, currentIdentity.Copy()) {
-			return plan.ErrViewSchemaChanged
+			return fmt.Errorf("%w: authorization identity", plan.ErrViewSchemaChanged)
 		}
 		current, stampErr := stampReader.CatalogReadStamp()
 		if stampErr != nil {
 			return stampErr
 		}
 		if current.TransactionID != stamp.TransactionID || current.Revision != stamp.Revision || current.Workspace != stamp.Workspace || !reflect.DeepEqual(current.Snapshot, stamp.Snapshot) {
-			return plan.ErrViewSchemaChanged
+			return fmt.Errorf("%w: transaction stamp", plan.ErrViewSchemaChanged)
 		}
 		currentVisibility, currentStable := workspace.CatalogVisibility()
 		if !currentStable || currentVisibility != visibility {
-			return plan.ErrViewSchemaChanged
+			return fmt.Errorf("%w: workspace visibility", plan.ErrViewSchemaChanged)
 		}
 		return nil
 	}
 	if err = check(); err != nil {
 		return nil, err
 	}
-	result = &plan.ViewSchemaBinding{Compiler: frozen, Generation: generation, Authorize: p.authorize, Check: check, Close: cleanup}
+	result = &plan.ViewSchemaBinding{Compiler: frozen, Generation: generation, Authorize: func(ctx context.Context, database, name string, snapshot *plan.Snapshot) error {
+		return p.authorize(withViewSchemaCatalogRead(ctx), database, name, snapshot)
+	}, Check: check, Close: cleanup}
 	transferred = true
 	return result, nil
 }
@@ -270,6 +284,12 @@ type viewSchemaCompilerContext struct {
 }
 
 func (c *viewSchemaCompilerContext) DefaultDatabase() string { return c.database }
+func (c *viewSchemaCompilerContext) SetContext(ctx context.Context) {
+	if !resolvesUdfInCallerTxn(ctx) {
+		ctx = withResolveUdfInCallerTxn(ctx)
+	}
+	c.TxnCompilerContext.SetContext(withViewSchemaCatalogRead(ctx))
+}
 func (c *viewSchemaCompilerContext) GetLowerCaseTableNames() int64 {
 	return c.variables.GetLowerCaseTableNames()
 }

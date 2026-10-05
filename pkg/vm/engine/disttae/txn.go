@@ -870,8 +870,6 @@ func (txn *Transaction) scanInMemInsertSize(from int) uint64 {
 }
 
 func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
-	txn.beginCatalogMutation()
-	defer txn.endCatalogMutation()
 	var size uint64
 	var pkCount int
 
@@ -945,6 +943,8 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 			}
 		}
 	}
+	txn.beginCatalogMutation()
+	defer txn.endCatalogMutation()
 	if offset < txn.adjustWriteOffset {
 		txn.adjustWriteOffset = offset
 	}
