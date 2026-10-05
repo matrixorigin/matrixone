@@ -15,6 +15,7 @@
 package colexec
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -90,7 +91,7 @@ func (srv *Server) RecordBuiltPipeline(
 	// check if sender has sent a stop running message.
 	if v, ok := srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key]; ok && v.alreadyDone {
 		if pipelineCancel != nil {
-			pipelineCancel(nil)
+			pipelineCancel(process.ErrPipelineStopped)
 		}
 		return
 	}
@@ -127,7 +128,7 @@ func (srv *Server) CancelPipelineSending(
 			// Only cancel non-dispatch pipelines (query execution pipelines)
 			logutil.Debug("CancelPipelineSending canceling non-dispatch pipeline",
 				zap.Uint64("streamID", streamID))
-			v.cancelPipeline()
+			v.cancelPipeline(process.ErrPipelineStopped)
 		}
 		return
 	}
@@ -192,6 +193,6 @@ func (srv *Server) cleanupPipelinesForSession(session morpc.ClientSession) {
 	srv.receivedRunningPipeline.Unlock()
 
 	for i := range infos {
-		infos[i].cancelPipeline()
+		infos[i].cancelPipeline(moerr.NewStreamClosedNoCtx())
 	}
 }

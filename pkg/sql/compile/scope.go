@@ -360,6 +360,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 				zap.String("sql", commonutil.Abbreviate(c.sql, 500)),
 				zap.String("error", err.Error()))
 		}
+		err, _ = normalizeScopeRunError(err, s.Proc.Ctx, scopeRunQueryContext(s.Proc))
 		if p != nil {
 			p.Cleanup(s.Proc, err != nil, c.isPrepare, err)
 			// The pipeline owns and closes the execution reader. A prepared
@@ -415,7 +416,6 @@ func (s *Scope) Run(c *Compile) (err error) {
 			_, err = p.RunWithReader(s.DataSource.R, tag, s.Proc)
 		}
 	}
-	err, _ = normalizeScopeRunError(err, s.Proc.Ctx, scopeRunQueryContext(s.Proc))
 	return err
 }
 
@@ -808,7 +808,10 @@ func assignLazyRemoteGeneration(scope *Scope, rootAddress string) {
 // cleanPipelineWitchStartFail is used to clean up the pipelines that has failed to start due to a certain reasons.
 func cleanPipelineWitchStartFail(sp *Scope, fail error, isPrepare bool) {
 	p := pipeline.New(0, nil, sp.RootOp)
-	p.Cleanup(sp.Proc, true, isPrepare, fail)
+	if fail == process.ErrPipelineStopped {
+		fail = nil
+	}
+	p.Cleanup(sp.Proc, fail != nil, isPrepare, fail)
 }
 
 // cleanScopeTreeWithStartFail retires a scope tree that was never submitted.
@@ -818,6 +821,9 @@ func cleanPipelineWitchStartFail(sp *Scope, fail error, isPrepare bool) {
 func cleanScopeTreeWithStartFail(sp *Scope, fail error, isPrepare bool) {
 	if sp == nil {
 		return
+	}
+	if fail == process.ErrPipelineStopped {
+		fail = nil
 	}
 	for _, preScope := range sp.PreScopes {
 		cleanScopeTreeWithStartFail(preScope, fail, isPrepare)
@@ -832,6 +838,22 @@ func cleanScopeTreeWithStartFail(sp *Scope, fail error, isPrepare bool) {
 		}
 	}
 	cleanPipelineWitchStartFail(sp, fail, isPrepare)
+}
+
+// finalizeRemoteResult shares terminal arbitration between remote scopes and
+// notify streams. A stopped consumer still waits for an unfinished producer's
+// terminal; a declared Error can never be inferred to be successful cleanup.
+func (s *Scope) finalizeRemoteResult(err error, sender *messageSenderOnClient) error {
+	runErr, _ := normalizeScopeRunError(err, s.Proc.Ctx, scopeRunQueryContext(s.Proc))
+	if runErr != nil {
+		return runErr
+	}
+	if sender != nil {
+		if terminalErr := sender.waitingTheStopResponse(); terminalErr != nil {
+			return process.MarkPipelineFailure(terminalErr)
+		}
+	}
+	return nil
 }
 
 // RemoteRun send the scope to a remote node for execution.
@@ -865,28 +887,7 @@ func (s *Scope) RemoteRun(c *Compile) error {
 
 	p := pipeline.New(0, nil, s.RootOp)
 	sender, err := s.remoteRun(c)
-	queryCtx := scopeRunQueryContext(s.Proc)
-	var terminalErr error
-	if sender != nil && isScopeCancellationError(err) {
-		// An internal cancellation can win the receive select just before the
-		// remote execution publishes its terminal response. Stop the producer
-		// through the existing cleanup handshake and retain its terminal for
-		// arbitration after resolving the cancellation's primary cause.
-		terminalErr = sender.waitingTheStopResponse()
-	}
-
-	runErr, _ := normalizeScopeRunError(
-		err,
-		s.Proc.Ctx,
-		queryCtx,
-	)
-	if runErr == nil && terminalErr != nil {
-		// A query-owned terminal or substantive pipeline cancellation cause is
-		// primary. StopSending supplies the result only when the original
-		// cancellation was secondary; this still makes a terminal-less handshake
-		// fail closed without allowing teardown fallout to hide execution failure.
-		runErr, _ = normalizeScopeRunError(terminalErr, s.Proc.Ctx, queryCtx)
-	}
+	runErr := s.finalizeRemoteResult(err, sender)
 	// The retained local root is the hand-off boundary from RemoteRun to its
 	// consumer. Publish its durable Error terminal before canceling this scope;
 	// otherwise the consumer can observe cancellation first and finish without
@@ -1662,13 +1663,10 @@ func (s *Scope) sendNotifyMessageWithFactoryAndWait(
 ) {
 	// if context has done, it means the user or other part of the pipeline stops this query.
 	closeWithError := func(err error, reg *process.WaitRegister, sender *messageSenderOnClient) {
-		err, _ = normalizeScopeRunError(
-			err,
-			s.Proc.Ctx,
-			scopeRunQueryContext(s.Proc),
-		)
-		s.cancelMergeSiblingsOnError(err)
+		err = s.finalizeRemoteResult(err, sender)
+		// Publish durable terminal evidence before waking canceled consumers.
 		sendRemoteNotifyCleanupTerminal(s.Proc, reg, err)
+		s.cancelMergeSiblingsOnError(err)
 		resultChan <- notifyMessageResult{err: err, sender: sender}
 		wg.Done()
 	}

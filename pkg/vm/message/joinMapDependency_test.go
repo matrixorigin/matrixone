@@ -77,10 +77,9 @@ func TestJoinMapBuildErrorPreservesCancellationSemantics(t *testing.T) {
 			wantCode:     moerr.ErrQueryTimeout,
 		},
 		{
-			name:         "query interrupted moerr",
-			buildErr:     moerr.NewQueryInterrupted(context.Background()),
-			wantCanceled: true,
-			wantCode:     moerr.ErrQueryInterrupted,
+			name:     "query interrupted moerr",
+			buildErr: moerr.NewQueryInterrupted(context.Background()),
+			wantCode: moerr.ErrQueryInterrupted,
 		},
 		{
 			name:         "query timeout moerr",
@@ -98,7 +97,6 @@ func TestJoinMapBuildErrorPreservesCancellationSemantics(t *testing.T) {
 		{
 			name:         "joined moerr cancellation and deadline",
 			buildErr:     errors.Join(moerr.NewQueryInterrupted(context.Background()), context.DeadlineExceeded),
-			wantCanceled: true,
 			wantDeadline: true,
 			wantCode:     moerr.ErrQueryTimeout,
 		},
@@ -190,7 +188,8 @@ func TestJoinMapBuildErrorDefensiveCompatibility(t *testing.T) {
 		queryInterrupted.SetDetail("canceled by sibling target")
 		buildErr := NewJoinMapBuildError(queryInterrupted)
 
-		require.ErrorIs(t, buildErr.AsError(), context.Canceled)
+		require.NotErrorIs(t, buildErr.AsError(), context.Canceled)
+		require.True(t, buildErr.IsPipelineFailure())
 		require.Equal(t, queryInterrupted.Detail(), buildErr.Detail())
 		copyErr := buildErr.AsMoErr()
 		require.Equal(t, queryInterrupted.Detail(), copyErr.Detail())

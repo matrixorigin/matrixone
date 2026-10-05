@@ -629,7 +629,7 @@ func TestHandlePipelineStopSendingAbortsOutstandingBatchFlow(t *testing.T) {
 
 	select {
 	case err = <-drainDone:
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted), err)
+		require.ErrorIs(t, err, process.ErrPipelineStopped)
 	case <-time.After(time.Second):
 		t.Fatal("StopSending did not release the terminal-response drain barrier")
 	}
@@ -678,9 +678,9 @@ func TestPipelineStopBeforeLifecycleRegistrationIsReconciled(t *testing.T) {
 	pipelineReceiver.abortBatchFlowForPendingStop()
 
 	err = flow.waitUntilDrained(context.Background(), context.Background(), nil)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted), err)
+	require.ErrorIs(t, err, process.ErrPipelineStopped)
 	_, err = flow.reserve(context.Background(), context.Background(), 1)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted), err)
+	require.ErrorIs(t, err, process.ErrPipelineStopped)
 	require.NoError(t, flow.acknowledge(seq), "a late ACK must be harmless after reconciliation")
 
 	dispatchReceiver := &process.WrapCs{

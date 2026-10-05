@@ -281,7 +281,7 @@ func (receiver *messageReceiverOnServer) abortBatchFlowForPendingStop() {
 		receiver.clientSession, receiver.messageId,
 	) {
 		receiver.streamLifecycle.batchFlow.stop(
-			moerr.NewQueryInterrupted(receiver.messageCtx),
+			process.ErrPipelineStopped,
 		)
 	}
 }
@@ -638,7 +638,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 		abortPipelineBatchFlow(
 			receiver.clientSession,
 			receiver.messageId,
-			moerr.NewQueryInterrupted(receiver.messageCtx),
+			process.ErrPipelineStopped,
 		)
 
 	default:
@@ -1200,7 +1200,7 @@ func (receiver *messageReceiverOnServer) sendError(
 	message.SetMessageType(receiver.messageTyp)
 	message.AcceptedTeardownMode = receiver.acceptedTeardownMode
 	if errInfo != nil {
-		message.SetMoError(receiver.messageCtx, errInfo)
+		message.SetMoError(receiver.messageCtx, process.UnwrapPipelineFailure(errInfo))
 	}
 	if err = receiver.setTerminalAnalysis(message); err != nil {
 		return err

@@ -791,7 +791,7 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 		}
 		if info, get := m.TryToGetMoErr(); get {
 			sender.markTerminal(m, false)
-			return nil, false, info
+			return nil, false, process.MarkPipelineFailure(info)
 		}
 		if m.IsEndMessage() {
 			sender.markTerminal(m, true)
@@ -854,7 +854,7 @@ func (sender *messageSenderOnClient) contextDoneError() error {
 	if errors.Is(err, context.DeadlineExceeded) && sender.useInternalTimeout {
 		return moerr.NewRPCTimeout(sender.ctx)
 	}
-	return moerr.NewQueryInterrupted(sender.ctx)
+	return sender.ctx.Err()
 }
 
 func forwardRemoteBatchWithContext(
@@ -939,7 +939,7 @@ func (sender *messageSenderOnClient) waitingTheStopResponse() error {
 				_ = sender.dealRemoteTerminal(message.GetAnalyse())
 				if terminalErr, ok := message.TryToGetMoErr(); ok {
 					sender.markTerminal(message, false)
-					return terminalErr
+					return process.MarkPipelineFailure(terminalErr)
 				}
 				// StopSending is also a clean teardown when the original server
 				// worker answers with its negotiated terminal response. The later FIN

@@ -675,8 +675,9 @@ func TestRemoteRunNormalizesPipelineCancellationCause(t *testing.T) {
 			wantStopSendingCount: 1,
 		},
 		{
-			name:                 "remote cancellation returned after internal cancellation remains secondary",
+			name:                 "remote interrupted Error survives successful stop",
 			stopResponseErr:      moerr.NewQueryInterrupted(context.Background()),
+			wantErrCode:          moerr.ErrQueryInterrupted,
 			wantStopSendingCount: 1,
 		},
 		{
@@ -745,7 +746,11 @@ func TestRemoteRunNormalizesPipelineCancellationCause(t *testing.T) {
 						} else if tt.cancelQuery {
 							cancelQuery()
 						} else {
-							proc.Cancel(tt.cancelCause)
+							cause := tt.cancelCause
+							if cause == nil {
+								cause = process.ErrPipelineStopped
+							}
+							proc.Cancel(cause)
 						}
 					case pipeline.Method_StopSending:
 						stopSendingCount++
@@ -811,7 +816,7 @@ func TestRemoteRunNormalizesPipelineCancellationCause(t *testing.T) {
 
 			err := s.RemoteRun(c)
 			if tt.wantErrCode != 0 {
-				require.True(t, moerr.IsMoErrCode(err, tt.wantErrCode), err)
+				require.True(t, moerr.IsMoErrCode(process.UnwrapPipelineFailure(err), tt.wantErrCode), err)
 			} else if tt.wantErr == nil {
 				require.NoError(t, err)
 			} else {
@@ -828,7 +833,7 @@ func TestRemoteRunNormalizesPipelineCancellationCause(t *testing.T) {
 				} else {
 					require.Equal(t, process.EventError, signal.EventType)
 					if tt.wantErrCode != 0 {
-						require.True(t, moerr.IsMoErrCode(terminalErr, tt.wantErrCode), terminalErr)
+						require.True(t, moerr.IsMoErrCode(process.UnwrapPipelineFailure(terminalErr), tt.wantErrCode), terminalErr)
 					} else {
 						require.ErrorIs(t, terminalErr, tt.wantErr)
 					}

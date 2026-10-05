@@ -4254,14 +4254,14 @@ func TestSendNotifyMessageNormalizesPipelineCancellationCause(t *testing.T) {
 			name:        "query interruption recovers substantive cancellation cause",
 			cancelCause: duplicateErr,
 			factoryErr: func(ctx context.Context) error {
-				return moerr.NewQueryInterrupted(ctx)
+				return ctx.Err()
 			},
 			wantErr: duplicateErr,
 		},
 		{
 			name: "normal query interruption remains secondary",
 			factoryErr: func(ctx context.Context) error {
-				return moerr.NewQueryInterrupted(ctx)
+				return ctx.Err()
 			},
 		},
 		{
@@ -4306,7 +4306,11 @@ func TestSendNotifyMessageNormalizesPipelineCancellationCause(t *testing.T) {
 				require.NotNil(t, cancelQuery)
 				cancelQuery()
 			} else if !tt.keepPipelineActive {
-				scopeProc.Cancel(tt.cancelCause)
+				cause := tt.cancelCause
+				if cause == nil {
+					cause = process.ErrPipelineStopped
+				}
+				scopeProc.Cancel(cause)
 			}
 
 			uid, err := uuid.NewV7()
@@ -5445,7 +5449,7 @@ func TestReceiveMessageFromCnServerIfConnector_ReturnsOnBlockedReceiverCancel(t 
 	select {
 	case err := <-done:
 		require.Error(t, err)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted))
+		require.ErrorIs(t, err, context.Canceled)
 	case <-time.After(time.Second):
 		<-s.RootOp.(*connector.Connector).Reg.Ch2
 		require.Fail(t, "receiveMessageFromCnServerIfConnector did not unblock after cancellation")
@@ -5476,7 +5480,7 @@ func TestReceiveMsgAndForward_ReturnsOnBlockedReceiverCancel(t *testing.T) {
 	select {
 	case err := <-done:
 		require.Error(t, err)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted))
+		require.ErrorIs(t, err, context.Canceled)
 	case <-time.After(time.Second):
 		<-forwardReg.Ch2
 		require.Fail(t, "receiveMsgAndForward did not unblock after cancellation")
@@ -6162,4 +6166,69 @@ func TestCoordinatorLocalShuffleAttachesRemoteDispatchSource(t *testing.T) {
 	require.Contains(t, receivers[0].PreScopes, remoteSource)
 	require.True(t, checkPipelineStandaloneExecutableAtRemote(remoteSource),
 		"remote source only has remote receiver routes and must remain remotely executable")
+}
+
+func TestNotifyLateErrorSurvivesSuccessfulStop(t *testing.T) {
+	for _, earlyReturn := range []string{"canceled receive", "nil forwarding result"} {
+		t.Run(earlyReturn, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			proc := testutil.NewProcess(t)
+			queryCtx := proc.Base.GetContextBase().BuildQueryCtx(proc.GetTopContext())
+			proc.BuildPipelineContext(queryCtx)
+			scopeProc := proc.NewContextChildProc(1)
+			reg := scopeProc.Reg.MergeReceivers[0]
+			uid := uuid.Must(uuid.NewV7())
+			scope := &Scope{Proc: scopeProc, RemoteReceivRegInfos: []RemoteReceivRegInfo{{Idx: 0, Uuid: uid, FromAddr: "remote-cn"}}}
+			responses := make(chan morpc.Message, 1)
+			stream := mock_morpc.NewMockStream(ctrl)
+			stream.EXPECT().ID().Return(uint64(91)).AnyTimes()
+			stops := 0
+			stream.EXPECT().Send(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, request morpc.Message) error {
+				switch request.(*pipeline.Message).GetCmd() {
+				case pipeline.Method_PrepareDoneNotifyMessage:
+					if earlyReturn == "canceled receive" {
+						scopeProc.Cancel(process.ErrPipelineStopped)
+					} else {
+						require.True(t, reg.SendEnd())
+						<-reg.Ch2
+						responses <- makeRemoteBatchMessage(t, batch.NewWithSize(0))
+					}
+				case pipeline.Method_StopSending:
+					stops++
+					terminal := &pipeline.Message{Sid: pipeline.Status_MessageEnd}
+					terminal.SetMoError(context.Background(), moerr.NewQueryInterrupted(context.Background()))
+					responses <- terminal
+				}
+				return nil
+			}).AnyTimes()
+			stream.EXPECT().Close(true).Return(nil)
+			factory := func(ctx context.Context, _, _ string, mp *mpool.MPool, _ *AnalyzeModule) (*messageSenderOnClient, error) {
+				return &messageSenderOnClient{ctx: ctx, mp: mp, receiveCh: responses, streamSender: stream, safeToClose: true}, nil
+			}
+			var wg sync.WaitGroup
+			results := make(chan notifyMessageResult, 1)
+			scope.sendNotifyMessageWithFactory(&wg, results, factory)
+			select {
+			case result := <-results:
+				result.clean(scopeProc)
+				var me *moerr.Error
+				require.ErrorAs(t, result.err, &me)
+				require.Equal(t, uint16(moerr.ErrQueryInterrupted), me.ErrorCode())
+				require.True(t, process.IsPipelineFailure(result.err))
+			case <-time.After(time.Second):
+				t.Fatal("notify late terminal did not reach scheduler")
+			}
+			wg.Wait()
+			require.Equal(t, 1, stops)
+			require.NoError(t, queryCtx.Err())
+			var me *moerr.Error
+			if earlyReturn == "canceled receive" {
+				require.ErrorAs(t, reg.Err(), &me)
+				require.Equal(t, uint16(moerr.ErrQueryInterrupted), me.ErrorCode())
+			} else {
+				require.NoError(t, reg.Err(), "already retired consumer stays complete; scheduler retains producer error")
+			}
+			require.Zero(t, proc.Mp().CurrNB())
+		})
+	}
 }

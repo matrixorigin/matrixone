@@ -703,9 +703,8 @@ func (c *Compile) isRetryErr(err error) bool {
 }
 
 type scopeRunResult struct {
-	err      error
-	ctx      context.Context
-	queryCtx context.Context
+	err        error
+	normalized bool
 }
 
 func newScopeRunResult(err error, scope *Scope) scopeRunResult {
@@ -716,13 +715,16 @@ func newScopeRunResult(err error, scope *Scope) scopeRunResult {
 }
 
 func newScopeRunResultForProcess(err error, proc *process.Process) scopeRunResult {
-	result := scopeRunResult{err: err}
 	if proc == nil {
-		return result
+		return scopeRunResult{err: process.MarkPipelineFailure(err)}
 	}
-	result.ctx = proc.Ctx
-	result.queryCtx = scopeRunQueryContext(proc)
-	return result
+	return newScopeRunResultForContext(err, proc.Ctx, scopeRunQueryContext(proc))
+}
+
+// Capture before publication: cleanup must never change an already owned result.
+func newScopeRunResultForContext(err error, pipelineCtx, queryCtx context.Context) scopeRunResult {
+	err, normalized := normalizeScopeRunError(err, pipelineCtx, queryCtx)
+	return scopeRunResult{err: err, normalized: normalized}
 }
 
 func scopeRunQueryContext(proc *process.Process) context.Context {
@@ -744,7 +746,7 @@ func isScopeCancellationError(err error) bool {
 // to the same canceled context. A joined error is attributable only as a whole;
 // one matching cancellation leaf must not hide an independent deadline leaf.
 func isScopeCancellationFrom(err error, contextErr error) bool {
-	if err == nil || contextErr == nil {
+	if err == nil || contextErr == nil || process.IsPipelineFailure(err) {
 		return false
 	}
 	if joined, ok := err.(interface{ Unwrap() []error }); ok {
@@ -765,7 +767,7 @@ func isScopeCancellationFrom(err error, contextErr error) bool {
 		}
 	}
 	return errors.Is(err, contextErr) ||
-		moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted)
+		(errors.Is(contextErr, context.Canceled) && errors.Is(err, process.ErrPipelineStopped))
 }
 
 // normalizeScopeRunError distinguishes a substantive execution failure from
@@ -778,51 +780,36 @@ func normalizeScopeRunError(
 	pipelineCtx context.Context,
 	queryCtx context.Context,
 ) (error, bool) {
-	if err == nil || !isScopeCancellationError(err) ||
-		pipelineCtx == nil || pipelineCtx.Err() == nil {
-		return err, false
+	if err == nil {
+		return nil, false
 	}
-	// Query cancellation owns the terminal classification. In particular,
-	// context.WithTimeoutCause reports DeadlineExceeded through Err while Cause
-	// carries diagnostic detail. Replacing the former with the latter would make
-	// callers misclassify a timeout as an ordinary execution failure; they can
-	// attach the cause after observing DeadlineExceeded.
-	if queryCtx != nil {
-		if queryErr := queryCtx.Err(); queryErr != nil {
-			if errors.Is(queryErr, context.DeadlineExceeded) {
-				return queryErr, true
-			}
-			if !isScopeCancellationFrom(err, queryErr) {
-				return err, false
-			}
-			if cause := context.Cause(queryCtx); cause != nil {
-				return cause, true
-			}
-			return queryErr, true
+	if !isScopeCancellationError(err) {
+		return process.MarkPipelineFailure(err), false
+	}
+	if queryCtx != nil && queryCtx.Err() != nil && isScopeCancellationFrom(err, queryCtx.Err()) {
+		if errors.Is(queryCtx.Err(), context.DeadlineExceeded) {
+			return process.MarkPipelineFailure(queryCtx.Err()), true
 		}
+		if cause := context.Cause(queryCtx); cause != nil {
+			return process.MarkPipelineFailure(cause), true
+		}
+		return process.MarkPipelineFailure(queryCtx.Err()), true
 	}
-
-	// A context-shaped error is secondary only when every leaf was derived from
-	// this pipeline's cancellation. Preserve an independent operator timeout
-	// that merely raced a different pipeline cancellation, including when the
-	// two errors were joined.
-	if !isScopeCancellationFrom(err, pipelineCtx.Err()) {
-		return err, false
+	if pipelineCtx == nil || pipelineCtx.Err() == nil || !isScopeCancellationFrom(err, pipelineCtx.Err()) {
+		return process.MarkPipelineFailure(err), false
 	}
-
-	if cause := context.Cause(pipelineCtx); cause != nil {
-		err = cause
-	}
-	if isScopeCancellationError(err) && queryCtx != nil && queryCtx.Err() == nil {
+	cause := context.Cause(pipelineCtx)
+	if cause == process.ErrPipelineStopped && queryCtx != nil && queryCtx.Err() == nil {
 		return nil, true
 	}
-	return err, true
+	if cause != nil {
+		return process.MarkPipelineFailure(cause), true
+	}
+	return process.MarkPipelineFailure(err), false
 }
 
 func (r scopeRunResult) resolveCancelCause() (scopeRunResult, bool) {
-	var normalized bool
-	r.err, normalized = normalizeScopeRunError(r.err, r.ctx, r.queryCtx)
-	return r, normalized
+	return r, r.normalized
 }
 
 // preferPrimaryScopeResult keeps cleanup fallout from masking the execution

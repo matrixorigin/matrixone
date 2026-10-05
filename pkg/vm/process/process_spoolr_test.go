@@ -37,7 +37,7 @@ func TestPipelineSignalReceiverCancellationPreservesExecutionCause(t *testing.T)
 		},
 		{
 			name:  "graceful pipeline cancellation",
-			cause: nil,
+			cause: ErrPipelineStopped,
 		},
 		{
 			name:      "joined execution failure and cancellation",
@@ -139,7 +139,7 @@ func TestPipelineSignalReceiverDurableFailureSelectionIsOrderIndependent(t *test
 			wantSubstantiveErr: true,
 		},
 		{
-			name: "cancellation only",
+			name: "interrupted and canceled Error terminals",
 			errs: []error{interruptedErr, context.Canceled},
 		},
 	} {
@@ -162,8 +162,8 @@ func TestPipelineSignalReceiverDurableFailureSelectionIsOrderIndependent(t *test
 				if !errors.Is(err, duplicateErr) {
 					t.Fatalf("durable failure selection depended on edge order: got %v, want %v", err, duplicateErr)
 				}
-			} else if !IsPipelineCancellationError(err) {
-				t.Fatalf("cancellation-only edges returned non-cancellation error: %v", err)
+			} else if !IsPipelineFailure(err) || IsPipelineCancellationError(err) {
+				t.Fatalf("declared Error terminal lost failure provenance: %v", err)
 			}
 		})
 	}

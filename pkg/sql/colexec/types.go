@@ -84,7 +84,7 @@ type runningPipelineInfo struct {
 	receiver   *process.WrapCs
 }
 
-func (info *runningPipelineInfo) cancelPipeline() {
+func (info *runningPipelineInfo) cancelPipeline(cause error) {
 	// If this was a pipeline responsible for distributing data, we cannot end this
 	// because we are just one of the receivers.
 	if info.isDispatch {
@@ -94,7 +94,7 @@ func (info *runningPipelineInfo) cancelPipeline() {
 
 	} else {
 		if info.pipelineCancel != nil {
-			info.pipelineCancel(nil)
+			info.pipelineCancel(cause)
 		}
 	}
 }

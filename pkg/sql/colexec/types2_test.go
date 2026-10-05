@@ -22,6 +22,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -299,6 +300,7 @@ func TestRecordBuiltPipeline(t *testing.T) {
 	require.True(t, record2.alreadyDone, "Record should still be marked as done")
 	require.ErrorIs(t, proc2.Ctx.Err(), context.Canceled,
 		"Pipeline should be canceled when a tombstone already exists")
+	require.ErrorIs(t, context.Cause(proc2.Ctx), process.ErrPipelineStopped)
 	require.NoError(t, proc2.GetQueryContextError(),
 		"A pre-registration StopSending must not cancel the query context")
 }
@@ -327,6 +329,7 @@ func TestCancelPipelineSending(t *testing.T) {
 	// Verify only the remote pipeline tree is canceled. The query may still be
 	// consuming other pipelines after a normal downstream early stop.
 	require.ErrorIs(t, proc.Ctx.Err(), context.Canceled)
+	require.ErrorIs(t, context.Cause(proc.Ctx), process.ErrPipelineStopped)
 	require.NoError(t, proc.GetQueryContextError(),
 		"StopSending must not cancel the query context")
 
@@ -502,6 +505,8 @@ func TestCleanupPipelinesForSession_CancelsRegisteredPipelines(t *testing.T) {
 	require.Equal(t, 0, waiterCount, "Session cleanup should remove the waiter registration")
 	require.ErrorIs(t, proc.Ctx.Err(), context.Canceled,
 		"Session cleanup should cancel registered non-dispatch pipelines")
+	require.True(t, moerr.IsMoErrCode(context.Cause(proc.Ctx), moerr.ErrStreamClosed))
+	require.NotErrorIs(t, context.Cause(proc.Ctx), process.ErrPipelineStopped)
 	require.NoError(t, proc.GetQueryContextError(),
 		"Session cleanup should not take ownership of the query context")
 }

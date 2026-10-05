@@ -563,7 +563,7 @@ func sendBatchToClientSessionOutcome(
 	if wcs.ReserveBatch != nil {
 		batchSequence, err = wcs.ReserveBatch(ctx, uint64(len(encodeBatData)))
 		if err != nil {
-			if (errors.Is(err, context.Canceled) || moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted)) &&
+			if (errors.Is(err, context.Canceled) || errors.Is(err, process.ErrPipelineStopped)) &&
 				retireStoppedReceiver(ctx, wcs) {
 				return sendBatchOutcome{
 					receiverDone:      true,

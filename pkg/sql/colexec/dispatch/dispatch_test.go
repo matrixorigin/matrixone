@@ -1990,11 +1990,12 @@ func TestSendBatchRetiresOnlyCertifiedReceiverStop(t *testing.T) {
 	}{
 		{"stop before send", true, true, false, nil, true},
 		{"stop wakes reserve", false, true, false, context.Canceled, true},
-		{"stop interrupts reserve", false, true, false, moerr.NewQueryInterrupted(context.Background()), true},
+		{"stop interrupts reserve", false, true, false, process.ErrPipelineStopped, true},
 		{"uncertified done", true, false, false, nil, false},
 		{"uncertified cancellation", false, false, false, context.Canceled, false},
 		{"query cancellation wins", false, true, true, context.Canceled, false},
 		{"query cancellation with done", true, true, true, nil, false},
+		{"interrupted reserve error wins", false, true, false, moerr.NewQueryInterrupted(context.Background()), false},
 		{"real reserve error wins", false, true, false, moerr.NewInternalErrorNoCtx("reserve failure"), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
