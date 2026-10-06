@@ -2489,7 +2489,7 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 		// SEMI join must fully consume their build input. Preserve that proof: a
 		// right-sided choice would turn the marked reader into the probe input,
 		// which may stop without draining it.
-		if (node.JoinType == plan.Node_LEFT || node.JoinType == plan.Node_SEMI) &&
+		if (node.JoinType == plan.Node_LEFT || node.JoinType == plan.Node_SEMI || node.JoinType == plan.Node_SINGLE) &&
 			builder.joinInputContainsCTEHashBuildScan(node.Children[1], make(map[int32]bool)) {
 			node.IsRightJoin = false
 			break

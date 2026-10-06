@@ -48,7 +48,7 @@ func TestUnionDistinctChainKeepsFinalDedup(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			logicPlan, err := BuildPlan(mock.CurrentContext(), stmt, test.prepare)
 			require.NoError(t, err)
 			query := logicPlan.GetQuery()

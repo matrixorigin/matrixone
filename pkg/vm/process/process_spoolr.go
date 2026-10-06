@@ -330,6 +330,7 @@ func WaitPipelineSignalCapacity(ctx context.Context, reg *WaitRegister) bool {
 		default:
 		}
 		if len(reg.Ch2) < cap(reg.Ch2) {
+			reg.notifyCapacityAvailable()
 			return true
 		}
 		capacityReady := reg.capacityNotification()
@@ -337,6 +338,7 @@ func WaitPipelineSignalCapacity(ctx context.Context, reg *WaitRegister) bool {
 		// before capacityNotification was initialized, observe that capacity
 		// here instead of waiting for another receive.
 		if len(reg.Ch2) < cap(reg.Ch2) {
+			reg.notifyCapacityAvailable()
 			return true
 		}
 		select {
@@ -345,6 +347,13 @@ func WaitPipelineSignalCapacity(ctx context.Context, reg *WaitRegister) bool {
 		case <-reg.Done():
 			return false
 		case <-capacityReady:
+			// This is a hint, not a reserved channel slot. Pass it on while
+			// capacity remains: pulling upstream can itself wait for other
+			// producers (e.g. shuffle EOF). Also forward before rechecking
+			// cancellation so a departing waiter cannot consume the last hint.
+			if len(reg.Ch2) < cap(reg.Ch2) {
+				reg.notifyCapacityAvailable()
+			}
 		}
 	}
 }

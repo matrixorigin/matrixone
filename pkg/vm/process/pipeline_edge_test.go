@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/require"
@@ -183,34 +184,37 @@ func TestPipelineEdgeSendDataNilContextDoesNotPanic(t *testing.T) {
 }
 
 func TestWaitPipelineSignalCapacityWaitsUntilChannelDrains(t *testing.T) {
-	edge := NewPipelineEdge(1, 1)
-	edge.Ch2 <- NewPipelineSignalToDirectly(nil, nil, nil)
-	receiver := InitPipelineSignalReceiver(context.Background(), []*WaitRegister{edge})
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-
-	done := make(chan bool, 1)
-	go func() {
-		done <- WaitPipelineSignalCapacity(ctx, edge)
-	}()
-
-	select {
-	case got := <-done:
-		t.Fatalf("WaitPipelineSignalCapacity returned before channel drained: %v", got)
-	case <-time.After(10 * time.Millisecond):
-	}
-
-	_, err := receiver.GetNextBatch(nil)
-	if err != nil {
-		t.Fatalf("receiver failed while draining channel: %v", err)
-	}
-	select {
-	case got := <-done:
-		if !got {
-			t.Fatal("WaitPipelineSignalCapacity returned false after channel drained")
-		}
-	case <-time.After(time.Second):
-		t.Fatal("WaitPipelineSignalCapacity did not return after channel drained")
+	for _, senders := range []int{1, 4} {
+		t.Run(fmt.Sprintf("senders=%d", senders), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				edge := NewPipelineEdge(1, senders)
+				input := batch.NewWithSize(0)
+				input.SetRowCount(1)
+				edge.Ch2 <- NewPipelineSignalToDirectly(input, nil, nil)
+				receiver := InitPipelineSignalReceiver(context.Background(), []*WaitRegister{edge})
+				defer receiver.releaseCurrent()
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				done := make(chan bool, senders)
+				for range senders {
+					go func() { done <- WaitPipelineSignalCapacity(ctx, edge) }()
+				}
+				// Every sender is durably blocked on a full channel, not merely
+				// launched. No sleep or scheduler-dependent subscribe race.
+				synctest.Wait()
+				require.Empty(t, done)
+				_, err := receiver.GetNextBatch(nil)
+				require.NoError(t, err)
+				synctest.Wait()
+				// A capacity hint does not reserve a slot. All senders must be
+				// able to pull upstream: the first may wait for those peers at
+				// a shared shuffle's EOF instead of sending another signal.
+				require.Len(t, done, senders)
+				for range senders {
+					require.True(t, <-done)
+				}
+			})
+		})
 	}
 }
 

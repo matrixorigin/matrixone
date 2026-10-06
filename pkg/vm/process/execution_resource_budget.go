@@ -295,14 +295,13 @@ type ExecutionResourceBudget struct {
 	memoryHeadroomNow      func() time.Time
 	memoryHeadroomAt       time.Time
 	memoryHeadroomBytes    uint64
-	// memoryHeadroomAccountedUsed is the aggregate ledger value at the exact
-	// headroom sample boundary. Cached admission subtracts subsequent net
-	// accounted growth so concurrent allocations cannot each spend the same
-	// physical headroom during the sampling TTL.
-	memoryHeadroomAccountedUsed  uint64
-	memoryHeadroomRecoveryUnused uint64
-	memoryHeadroomMeasured       bool
-	memoryHeadroomCached         bool
+	// Only backing acquired before the physical sample may be included in its
+	// baseline. Outstanding admissions, unused recovery floors and non-MPool
+	// scratch promises must still consume the observed free space. This is an
+	// observation of existing allocation ownership, not a second cap/ledger.
+	memoryHeadroomBacking  mpool.AllocationBackingSnapshot
+	memoryHeadroomMeasured bool
+	memoryHeadroomCached   bool
 	// memoryHeadroomSafety is the free working-set margin retained while a
 	// query is already running. It is deliberately smaller than the startup
 	// reserve: current physical usage already includes the runtime, allocator,
@@ -311,7 +310,7 @@ type ExecutionResourceBudget struct {
 	memoryHeadroomSafety uint64
 
 	allocationRegistryOnce sync.Once
-	allocationRegistry     *mpool.AllocationAccountRegistry
+	allocationRegistry     atomic.Pointer[mpool.AllocationAccountRegistry]
 	allocationRegistryErr  error
 }
 
@@ -1230,13 +1229,14 @@ func (g *ExecutionResourceGeneration) AllocationAccountRegistry() (
 			return
 		}
 		allocationSlots := min(capBytes, executionResourceAllocationMetadataMaxSlots)
-		b.allocationRegistry, b.allocationRegistryErr =
-			mpool.NewAllocationAccountRegistry(
-				executionResourceAllocationGenerationSlots,
-				allocationSlots,
-			)
+		registry, err := mpool.NewAllocationAccountRegistry(
+			executionResourceAllocationGenerationSlots,
+			allocationSlots,
+		)
+		b.allocationRegistryErr = err
+		b.allocationRegistry.Store(registry)
 	})
-	return b.allocationRegistry, b.allocationRegistryErr
+	return b.allocationRegistry.Load(), b.allocationRegistryErr
 }
 
 // Close rejects future reservations for this generation while allowing all

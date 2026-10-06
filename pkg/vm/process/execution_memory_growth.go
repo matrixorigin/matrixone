@@ -17,6 +17,8 @@ package process
 import (
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 )
 
 // ExecutionMemoryGrowthParticipant is an advisory, work-conserving share of
@@ -75,6 +77,14 @@ func (b *ExecutionResourceBudget) sampleMemoryHeadroom() (uint64, bool) {
 		return bytes, measured
 	}
 	b.mu.Lock()
+	// Observe committed backing BEFORE reading the OS. An allocator may finish
+	// while the sample is read; counting it twice for this sample is safe, but
+	// reading backing after the OS could omit it from both observations. The
+	// budget lock prevents new admitted growth until the checkpoint is stored.
+	var backing mpool.AllocationBackingSnapshot
+	if registry := b.allocationRegistry.Load(); registry != nil {
+		backing = registry.SnapshotBacking()
+	}
 	// Keep the physical sample and the aggregate-ledger checkpoint in one
 	// admission critical section. Otherwise an allocation between those two
 	// observations would be absent from both the sampled usage and the cached
@@ -82,8 +92,7 @@ func (b *ExecutionResourceBudget) sampleMemoryHeadroom() (uint64, bool) {
 	bytes, measured := b.memoryHeadroomProvider()
 	b.memoryHeadroomBytes = bytes
 	b.memoryHeadroomMeasured = measured
-	b.memoryHeadroomAccountedUsed = b.aggregateUsed
-	b.memoryHeadroomRecoveryUnused = b.recoveryCapacityUnused
+	b.memoryHeadroomBacking = backing
 	b.memoryHeadroomAt = current
 	b.memoryHeadroomCached = true
 	b.mu.Unlock()
@@ -109,19 +118,16 @@ func (b *ExecutionResourceBudget) memoryHeadroomRefreshNeededLocked() bool {
 
 // physicalGrowthHeadroomLocked returns the bytes which may still increase the
 // process working set while preserving the runtime safety margin. It adjusts a
-// cached OS sample by all net accounted growth admitted since that sample, so
-// the sample remains safe under concurrent allocation. b.mu must be held.
+// cached OS sample by all charged bytes not backed before that sample. Freed
+// backing loses its credit even if a new allocation replaces it. b.mu must be held.
 func (b *ExecutionResourceBudget) physicalGrowthHeadroomLocked() (uint64, bool) {
 	if b == nil || !b.memoryHeadroomMeasured {
 		return 0, false
 	}
 	remaining := b.memoryHeadroomBytes
-	if b.memoryHeadroomRecoveryUnused >= remaining {
-		return 0, true
-	}
-	remaining -= b.memoryHeadroomRecoveryUnused
-	if b.aggregateUsed > b.memoryHeadroomAccountedUsed {
-		growth := b.aggregateUsed - b.memoryHeadroomAccountedUsed
+	committed := b.memoryHeadroomBacking.RetainedCapacity()
+	if b.aggregateUsed > committed {
+		growth := b.aggregateUsed - committed
 		if growth >= remaining {
 			return 0, true
 		}

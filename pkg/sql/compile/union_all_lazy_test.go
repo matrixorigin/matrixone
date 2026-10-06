@@ -455,7 +455,7 @@ func TestScalarUnionAllRunsBranchesInStatementOrder(t *testing.T) {
 }
 
 func TestUnionNestedTopClearsAllocationOwners(t *testing.T) {
-	compilerCtx := plan2.NewMockCompilerContext(true)
+	compilerCtx := plan2.NewMockCompilerContext(true, newPlanTestProcess(t))
 	statements, err := mysql.Parse(compilerCtx.GetContext(),
 		"select count(*), cast(sum(x) as signed) from ((select 1 x union select 1+0 union select 2 order by x limit 2) union select 3 union select 4) u", 1)
 	require.NoError(t, err)

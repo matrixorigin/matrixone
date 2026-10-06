@@ -490,3 +490,15 @@ DROP TABLE union_signed_unsigned_28233;
 SELECT COUNT(*) AS row_count, CAST(SUM(x) AS SIGNED) AS total
 FROM ((SELECT 1 AS x UNION SELECT 1+0 UNION SELECT 2 ORDER BY x LIMIT 2)
       UNION SELECT 3 UNION SELECT 4) u;
+
+-- Both LIMIT 0 consumers skip their blocking aggregates. Sharing their CTE
+-- must not eagerly evaluate a producer that would otherwise raise an error.
+CREATE TABLE cte_zero_limit (k INT, v VARCHAR(20));
+INSERT INTO cte_zero_limit VALUES (1, 'not-an-integer');
+WITH c AS (
+    SELECT k, SUM(CAST(v AS BIGINT)) AS total FROM cte_zero_limit GROUP BY k
+)
+SELECT x FROM (SELECT SUM(total) AS x FROM c LIMIT 0) a
+UNION ALL
+SELECT x FROM (SELECT SUM(total) AS x FROM c LIMIT 0) b;
+DROP TABLE cte_zero_limit;

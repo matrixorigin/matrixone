@@ -485,7 +485,7 @@ func TestCTEMultiReferenceReusesExpensiveProducer(t *testing.T) {
 }
 
 func TestCTEReuseKeepsIndependentNestedHashBuildRequirements(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t, `
 		with expensive_keys as (
 			select l_suppkey as k, sum(l_extendedprice) as total
@@ -711,7 +711,7 @@ func TestCTEMultiReferenceReusesHashSemiBuildConsumers(t *testing.T) {
 }
 
 func TestCTEMultiReferenceReusesBelowBlockingAggregateLimit(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t, `
 		with expensive_keys as (
 			select l_suppkey, sum(l_extendedprice) as total
@@ -1384,6 +1384,15 @@ func TestCTEDrainProofRejectsZeroAndStreamingLimits(t *testing.T) {
 	_, ok = builder.cteConsumerDrainRequirements(2, []cteOccurrence{{rootID: 0}})
 	require.True(t, ok,
 		"a blocking descendant drains its input before a transparent parent can apply LIMIT")
+	for _, limit := range []*planpb.Expr{
+		MakePlan2Uint64ConstExprWithType(0),
+		{Typ: planpb.Type{Id: int32(types.T_uint64)}, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}},
+	} {
+		builder.qry.Nodes[2].Limit = limit
+		_, ok = builder.cteConsumerDrainRequirements(2, []cteOccurrence{{rootID: 0}})
+		require.False(t, ok,
+			"zero or dynamic LIMIT may skip the blocking descendant without starting it")
+	}
 
 	// A blocking branch is not enough when a lazy multi-input ancestor can
 	// satisfy LIMIT from another branch without starting this occurrence.
@@ -1396,6 +1405,21 @@ func TestCTEDrainProofRejectsZeroAndStreamingLimits(t *testing.T) {
 	_, ok = builder.cteConsumerDrainRequirements(5, []cteOccurrence{{rootID: 0}})
 	require.False(t, ok,
 		"LIMIT above a lazy multi-input boundary may skip a blocking branch entirely")
+
+	logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, `
+		with c as (
+			select l_suppkey as k, sum(cast(l_comment as bigint)) as total
+			from lineitem group by l_suppkey
+		)
+		select x from (select sum(total) as x from c limit 0) a
+		union all
+		select x from (select sum(total) as x from c limit 0) b`)
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	for id := range cteReachablePlanNodes(query) {
+		require.NotEqual(t, planpb.Node_SINK, query.Nodes[id].NodeType,
+			"skipped consumers must not publish an eager CTE producer")
+	}
 }
 
 func TestCTEDrainProofRejectsSamplingConsumer(t *testing.T) {

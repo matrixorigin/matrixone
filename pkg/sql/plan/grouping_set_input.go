@@ -342,6 +342,21 @@ func (builder *QueryBuilder) shareGroupingSetInput(
 	// supposedly small shared result into a multi-GB spill stage. Compare
 	// byte-work, branch count and the bounded-spill ceiling; unknown or marginal
 	// estimates fail closed.
+	// Cost the joined relation, not the binder's Cartesian product with WHERE
+	// join predicates still in a FILTER above it. Normalize only the original
+	// aggregate inputs: the branch output/drain proofs above remain unchanged,
+	// and a genuine Cartesian join retains its multiplicative row estimate.
+	for i := range branches {
+		inputID, remaining := builder.pushdownFilters(branches[i].agg.Children[0], nil, false)
+		if len(remaining) > 0 {
+			inputID = builder.appendNode(&planpb.Node{
+				NodeType:   planpb.Node_FILTER,
+				Children:   []int32{inputID},
+				FilterList: remaining,
+			}, nil)
+		}
+		branches[i].agg.Children[0] = inputID
+	}
 	producerID := first.Children[0]
 	// A grouping sentinel belongs to the grouping extension that created it.
 	// Legacy outer aggregates intentionally hash an inherited sentinel like SQL

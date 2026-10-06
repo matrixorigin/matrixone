@@ -15,14 +15,15 @@
 package spillio
 
 import (
-	"errors"
 	"math"
 	"os"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 const retainedWriteCacheBytes = int64(256 << 10)
 
-var errInvalidSequentialWrite = errors.New("invalid sequential spill write")
+var errInvalidSequentialWrite = moerr.NewInternalErrorNoCtx("invalid sequential spill write")
 
 // SequentialWriteCache bounds clean and writeback page-cache residency for one
 // append-only spill file. Spill durability across a process crash is not part

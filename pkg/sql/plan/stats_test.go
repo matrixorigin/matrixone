@@ -2049,6 +2049,12 @@ func TestDetermineBuildSidePreservesCTEHashBuildDrainProof(t *testing.T) {
 		builder.determineBuildAndProbeSide(2, false)
 		require.False(t, builder.qry.Nodes[2].IsRightJoin)
 	})
+	t.Run("marked SINGLE build remains logical right", func(t *testing.T) {
+		builder := makeBuilder(materialized.CTEHashBuildScanOption)
+		builder.qry.Nodes[2].JoinType = planpb.Node_SINGLE
+		builder.determineBuildAndProbeSide(2, false)
+		require.False(t, builder.qry.Nodes[2].IsRightJoin)
+	})
 }
 
 func TestDetermineInnerBuildSidePreservesCTEHashBuildDrainProof(t *testing.T) {

@@ -520,11 +520,12 @@ func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch,
 							"HashBuildSpillMinimumUnitErrors",
 							1,
 						)
-						return fmt.Errorf("%w; last capacity refusal: %v", NewMinimumAllocationPressureError(
+						return NewMinimumAllocationPressureError(
 							"hashbuild",
 							"spill-selected-or-codec",
 							ctr.hashmapBuilder.mapAllocationAccount,
-						), spillErr)
+							spillErr,
+						)
 					}
 					analyzer.GetOpStats().AddExtraStat(
 						"HashBuildSpillOptionalReclaims",
@@ -536,11 +537,12 @@ func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch,
 					"HashBuildSpillMinimumUnitErrors",
 					1,
 				)
-				return fmt.Errorf("%w; last capacity refusal: %v", NewMinimumAllocationPressureError(
+				return NewMinimumAllocationPressureError(
 					"hashbuild",
 					"spill-selected-or-codec",
 					ctr.hashmapBuilder.mapAllocationAccount,
-				), spillErr)
+					spillErr,
+				)
 			}
 		}
 	}
@@ -708,11 +710,12 @@ func (ctr *container) spillBatchWithPressure(
 					OptionalDisabled: ctr.spillCoalesceDisabled,
 				}
 				if guard.Advance(next) != nil {
-					return fmt.Errorf("%w; last capacity refusal: %v", NewMinimumAllocationPressureError(
+					return NewMinimumAllocationPressureError(
 						"hashbuild",
 						"spill-hash-or-expression",
 						ctr.hashmapBuilder.mapAllocationAccount,
-					), err)
+						err,
+					)
 				}
 				minimumRetried = true
 				analyzer.GetOpStats().AddExtraStat(
@@ -723,11 +726,12 @@ func (ctr *container) spillBatchWithPressure(
 			}
 			// Preserve the terminal classification; the original retryable cause
 			// is diagnostic text, not another error in the unwrap chain.
-			return fmt.Errorf("%w; last capacity refusal: %v", NewMinimumAllocationPressureError(
+			return NewMinimumAllocationPressureError(
 				"hashbuild",
 				"spill-hash-or-expression",
 				ctr.hashmapBuilder.mapAllocationAccount,
-			), err)
+				err,
+			)
 		}
 		chunk = (attempted + 1) / 2
 		if err := guard.Advance(PressureProgress{

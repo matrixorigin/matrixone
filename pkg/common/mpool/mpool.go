@@ -1181,6 +1181,7 @@ func (mp *MPool) allocAccounted(
 	globalHeld := false
 	poolHeld := false
 	physicalHeld := false
+	backingCommitted := false
 	published := false
 	defer func() {
 		if published {
@@ -1188,6 +1189,9 @@ func (mp *MPool) allocAccounted(
 		}
 		if physicalHeld {
 			simpleCAllocator().Deallocate(bs, uint64(sz))
+		}
+		if backingCommitted {
+			request.account.registry.releaseCommittedCapacity(uint64(sz))
 		}
 		if poolHeld {
 			mp.stats.RecordFree(mp.tag, sz)
@@ -1252,6 +1256,8 @@ func (mp *MPool) allocAccounted(
 			"physical allocator rejected %d bytes: %v", sz, err)
 	}
 	physicalHeld = true
+	request.account.registry.addCommittedCapacity(uint64(sz))
+	backingCommitted = true
 
 	ptr := unsafe.Pointer(&bs[0])
 	if err = mp.recordAccountedPtrMetadata(

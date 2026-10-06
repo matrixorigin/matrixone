@@ -1180,7 +1180,8 @@ func (builder *QueryBuilder) proveCTEConsumerDrainRequirements(
 			// literal limit on a proven blocking operator is a witness: LIMIT 0 is
 			// compiled without its input steps, and a dynamic limit may be zero at
 			// execution time. OFFSET alone does not shorten a fully consumed stream.
-			if node.Limit != nil && !path.inputDrained && !cteLimitPreservesFullInput(node) {
+			if node.Limit != nil &&
+				(!cteLimitIsPositive(node.Limit) || !path.inputDrained && !cteLimitPreservesFullInput(node)) {
 				continue
 			}
 			// APPLY may skip its right input when the left side is empty. Block
@@ -1231,8 +1232,8 @@ func (builder *QueryBuilder) proveCTEConsumerDrainRequirements(
 					}
 					requiredBuildChildByJoin[path.nodeID] = path.childID
 					path.requiresHashBuild = true
-				case planpb.Node_LEFT:
-					// Fully consuming a normal LEFT join necessarily consumes its
+				case planpb.Node_LEFT, planpb.Node_SINGLE:
+					// Fully consuming a normal LEFT/SINGLE join consumes its
 					// preserved logical-left input, even when the right build is
 					// empty. Keep walking toward the root; only the nullable/right
 					// input needs a pinned build-side proof at this boundary.
@@ -1367,7 +1368,11 @@ func cteLimitPreservesFullInput(node *planpb.Node) bool {
 	if node.NodeType != planpb.Node_AGG && node.NodeType != planpb.Node_SORT {
 		return false
 	}
-	literal := node.Limit.GetLit()
+	return cteLimitIsPositive(node.Limit)
+}
+
+func cteLimitIsPositive(limit *planpb.Expr) bool {
+	literal := limit.GetLit()
 	if literal == nil || literal.Isnull {
 		return false
 	}
@@ -1808,7 +1813,7 @@ func (builder *QueryBuilder) cteMarkedHashBuildBoundary(
 	case planpb.Node_INNER:
 		return (childID == node.Children[0] || childID == node.Children[1]) &&
 			(builder.IsEquiJoin(node) || builder.cteInnerJoinGetsEquiCondition(nodeID, parents))
-	case planpb.Node_LEFT:
+	case planpb.Node_LEFT, planpb.Node_SINGLE:
 		return !node.IsRightJoin && childID == node.Children[1]
 	case planpb.Node_SEMI:
 		return !node.IsRightJoin && childID == node.Children[1] && builder.IsEquiJoin(node)

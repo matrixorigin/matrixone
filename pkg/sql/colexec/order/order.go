@@ -33,9 +33,20 @@ import (
 
 const opName = "order"
 
+type orderCapacityPhaseError struct {
+	detail string
+	cause  error
+}
+
+func (e *orderCapacityPhaseError) Error() string { return e.detail }
+func (e *orderCapacityPhaseError) Unwrap() error { return e.cause }
+
 func orderPhaseError(phase string, err error, retained, incoming *batch.Batch) error {
-	if err == nil {
-		return nil
+	// Only account-capacity failures need retained-run diagnostics. Expression
+	// errors and existing MO errors must keep their public code and message.
+	if mpool.AllocationFailureReasonOf(err) != mpool.AllocationFailureCapacity ||
+		mpool.IsMPoolCapacityFailure(err) {
+		return err
 	}
 	retainedBytes, retainedRows := 0, 0
 	if retained != nil {
@@ -45,10 +56,13 @@ func orderPhaseError(phase string, err error, retained, incoming *batch.Batch) e
 	if incoming != nil {
 		incomingBytes, incomingRows = incoming.Size(), incoming.RowCount()
 	}
-	return fmt.Errorf(
-		"order phase=%s retained-bytes=%d retained-rows=%d incoming-bytes=%d incoming-rows=%d: %w",
-		phase, retainedBytes, retainedRows, incomingBytes, incomingRows, err,
-	)
+	return &orderCapacityPhaseError{
+		detail: fmt.Sprintf(
+			"order phase=%s retained-bytes=%d retained-rows=%d incoming-bytes=%d incoming-rows=%d: %v",
+			phase, retainedBytes, retainedRows, incomingBytes, incomingRows, err,
+		),
+		cause: err,
+	}
 }
 
 func addOrderBytes(left, right uint64) uint64 {
