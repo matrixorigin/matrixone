@@ -56,11 +56,30 @@ func (t *IndexDef) ValidateCollation() error {
 	return collation.ValidateKeyFormat(t.KeyFormat)
 }
 
-// RequireLegacyCollations is the final local/remote admission boundary for
-// plans and pipeline protobuf owners. It covers schema-only plans and direct
-// Type fields as well as expressions; an expression-only walk misses both.
-// This is per-plan work, never per row. Byte payloads/unknown fields are opaque.
+func requireLegacyType(value Type) error {
+	if err := value.ValidateCollation(); err != nil {
+		return err
+	}
+	if isPlanMySQLStringType(value.Id) {
+		return collation.RequireLegacy(value.Charset, value.CollationVersion, 0)
+	}
+	return nil
+}
+
+func requireLegacySchema(charset, revision, keyFormat uint32) error {
+	return collation.RequireLegacy(charset, revision, keyFormat)
+}
+
+// RequireLegacyCollations admits mutable plans and foreign pipeline owners.
+// Generated paths visit only metadata-bearing protobuf fields; foreign wrappers
+// retain a reflective fallback. Each call owns its cycle state, so mutation
+// between planner publication and direct compilation is checked again.
+// Byte payloads remain opaque and are admitted by their actual decode owner.
 func RequireLegacyCollations(owner any) error {
+	visitor := legacyCollationVisitor{}
+	if handled, err := visitor.typed(owner); handled {
+		return err
+	}
 	seen := make(map[uintptr]struct{})
 	var walk func(reflect.Value) error
 	walk = func(v reflect.Value) error {
@@ -77,22 +96,24 @@ func RequireLegacyCollations(owner any) error {
 			if v.IsNil() {
 				return nil
 			}
+			if v.CanInterface() {
+				if handled, err := visitor.typed(v.Interface()); handled {
+					return err
+				}
+			}
 			if _, ok := seen[v.Pointer()]; ok {
 				return nil
 			}
 			seen[v.Pointer()] = struct{}{}
 			return walk(v.Elem())
 		}
-		if v.CanInterface() {
+		// Foreign wrappers retain their admission boundary. Only metadata
+		// structs are boxed here; scalar fields and opaque bytes are not.
+		if v.Kind() == reflect.Struct && v.CanInterface() &&
+			(v.Type() == reflect.TypeOf(Type{}) || v.Type() == reflect.TypeOf(TableDef{}) || v.Type() == reflect.TypeOf(IndexDef{})) {
 			switch value := v.Interface().(type) {
 			case Type:
-				if err := value.ValidateCollation(); err != nil {
-					return err
-				}
-				if isPlanMySQLStringType(value.Id) {
-					return collation.RequireLegacy(value.Charset, value.CollationVersion, 0)
-				}
-				return nil
+				return requireLegacyType(value)
 			case TableDef:
 				if err := collation.RequireLegacy(value.DefaultCharset, value.CollationVersion, value.KeyFormat); err != nil {
 					return err

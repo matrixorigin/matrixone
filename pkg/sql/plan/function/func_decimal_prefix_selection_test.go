@@ -14,13 +14,12 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
 func TestDecimalPrefixSelectionContracts(t *testing.T) {
-	proc := testutil.NewProcess(nil)
-	t.Cleanup(func() { proc.Base.FileService.Close(proc.Ctx); proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 	for _, oid := range []types.T{types.T_decimal64, types.T_decimal128, types.T_decimal256} {
 		target := types.New(oid, 2, 0)
 		target.Charset = 255

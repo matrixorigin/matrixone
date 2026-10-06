@@ -47,6 +47,18 @@ SET NAMES utf32 COLLATE utf32_general_ci;
 SET collation_connection = 'utf32_bin';
 
 -- @case
+-- @desc: Expression and durable view admission must not use DDL-only UTF32 compatibility
+-- @label:bvt
+SELECT CONVERT('😀' USING utf32);
+CREATE VIEW v_utf32_expr AS SELECT CONVERT('😀' USING utf32) AS c;
+SELECT COUNT(*) AS rejected_view_count FROM information_schema.views
+WHERE table_schema = 'charset_test' AND table_name = 'v_utf32_expr';
+SELECT HEX(CONVERT('😀' USING utf8)) AS utf8_hex, HEX(CONVERT('😀' USING utf8mb3)) AS utf8mb3_hex;
+CREATE VIEW v_utf8mb3_expr AS SELECT CONVERT('😀' USING utf8mb3) AS c;
+SELECT HEX(c) AS view_hex FROM v_utf8mb3_expr;
+DROP VIEW v_utf8mb3_expr;
+
+-- @case
 -- @desc: Test information_schema character metadata used by ODBC SQLColumns
 -- @label:bvt
 -- information_schema metadata used by ODBC SQLColumns

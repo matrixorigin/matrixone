@@ -659,7 +659,7 @@ func TestConstructAggregateConfigOrderedPercentileNormalizesStaticCast(t *testin
 		{name: "discrete descending", fn: plan2.NamePercentileDisc, desc: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := plan2.NewMockCompilerContext(false)
+			ctx := plan2.NewMockCompilerContext(false, newPlanTestProcess(t))
 			direction := ""
 			if tc.desc {
 				direction = " desc"
@@ -701,7 +701,7 @@ func TestConstructAggregateConfigOrderedPercentileNormalizesStaticCast(t *testin
 }
 
 func TestConstructAggregateConfigApproxPercentileNormalizesStaticCast(t *testing.T) {
-	ctx := plan2.NewMockCompilerContext(false)
+	ctx := plan2.NewMockCompilerContext(false, newPlanTestProcess(t))
 	stmt, err := parsers.ParseOne(
 		context.Background(), dialect.MYSQL,
 		"select approx_percentile(0.5) within group (order by n_nationkey) from nation", 1)

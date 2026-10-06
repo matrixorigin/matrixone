@@ -99,7 +99,7 @@ execute hex_runtime using @hex_arg;
 10
 set @hex_arg = null;
 execute hex_runtime using @hex_arg;
-➤ hex(?)[12,16,0]  𝄀
+➤ hex(?)[-1,16383,0]  𝄀
 null
 deallocate prepare hex_runtime;
 prepare hex_explicit_real from 'select hex(cast(? as double))';
@@ -111,5 +111,9 @@ set @hex_arg = -15.5;
 execute hex_explicit_real using @hex_arg;
 ➤ hex(cast(? as double))[12,16,0]  𝄀
 FFFFFFFFFFFFFFF1
+set @hex_arg = null;
+execute hex_explicit_real using @hex_arg;
+➤ hex(cast(? as double))[12,16,0]  𝄀
+null
 deallocate prepare hex_explicit_real;
 drop database hex_issue_28457;

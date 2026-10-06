@@ -175,6 +175,9 @@ func (hashBuild *HashBuild) sendJoinMap(proc *process.Process) error {
 		)
 	}
 	if atomic.LoadUint32(&ctr.terminalPublished) != 0 {
+		if proc.Ctx.Err() != nil {
+			return proc.Ctx.Err()
+		}
 		return moerr.NewQueryInterrupted(proc.Ctx)
 	}
 
@@ -222,6 +225,9 @@ func (hashBuild *HashBuild) sendJoinMap(proc *process.Process) error {
 	}
 
 	if !hashBuild.publishJoinMap(proc, jm) {
+		if proc.Ctx.Err() != nil {
+			return proc.Ctx.Err()
+		}
 		return moerr.NewQueryInterrupted(proc.Ctx)
 	}
 	joinMapOwned = false

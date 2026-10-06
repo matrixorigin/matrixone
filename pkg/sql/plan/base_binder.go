@@ -24,6 +24,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -3303,6 +3304,18 @@ func (b *baseBinder) bindPreparedNumericPrecisionFuncExpr(
 		!isPreparedNumericPrecisionFunction(name, len(astArgs)) {
 		return b.bindFuncExprImplByAstExpr(name, astArgs, depth)
 	}
+
+	// A surrounding result cast must not round the source before this function
+	// applies its own precision. Bind in the value consumer's domain, including
+	// scalar subqueries, while preserving explicit casts within the argument.
+	parentParamType, parentSubqueryTarget := b.numericParamType, b.numericSubqueryTarget
+	parentFunctionTarget := b.numericFunctionTarget
+	b.numericParamType, b.numericSubqueryTarget = nil, nil
+	b.numericFunctionTarget = false
+	defer func() {
+		b.numericParamType, b.numericSubqueryTarget = parentParamType, parentSubqueryTarget
+		b.numericFunctionTarget = parentFunctionTarget
+	}()
 
 	doubleType := types.T_float64.ToType()
 	target := makePlan2Type(&doubleType)
@@ -8654,7 +8667,7 @@ func bindConvertUsingCharset(ctx context.Context, args []*plan.Expr) error {
 		return moerr.NewInvalidInput(ctx, "CONVERT USING requires a constant character set")
 	}
 
-	charset, ok := charsetForName(charsetLiteral.GetSval())
+	charset, ok := collation.ResolveCharset(charsetLiteral.GetSval())
 	if !ok {
 		return moerr.NewInvalidInputf(ctx, "unsupported character set '%s' for CONVERT USING", charsetLiteral.GetSval())
 	}
@@ -8662,7 +8675,7 @@ func bindConvertUsingCharset(ctx context.Context, args []*plan.Expr) error {
 	// The parser lowers the USING name to a synthetic string literal. Record the
 	// selected charset on that argument so the overload's return-type callback
 	// can carry it into the bound result without inspecting expression values.
-	args[1].Typ.Charset = charset
+	args[1].Typ.Charset = uint32(charset)
 	return nil
 }
 

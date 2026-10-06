@@ -51,7 +51,7 @@ func TestSingleSQLQuery(t *testing.T) {
 
 	sql := "update emp, (select deptno from dept) as tx set emp.sal = 3333 where tx.deptno = emp.empno"
 
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t, sql)
 	if err != nil {
 		t.Fatalf("%+v", err)
@@ -72,12 +72,12 @@ func TestRegularIndexDMLRejectsStalePrefixMetadata(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name+"/valid", func(t *testing.T) {
-			_, err := runOneStmt(NewMockOptimizer(true), t, test.sql)
+			_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, test.sql)
 			require.NoError(t, err)
 		})
 
 		t.Run(test.name+"/stale", func(t *testing.T) {
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			tableDef := mock.ctxt.tables["dept"]
 			require.NotNil(t, tableDef)
 			require.NotEmpty(t, tableDef.Indexes)
@@ -92,7 +92,7 @@ func TestRegularIndexDMLRejectsStalePrefixMetadata(t *testing.T) {
 
 // Single column unique index
 func TestSingleTableDeleteSQL(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 
 	sqls := []string{
 		"DELETE FROM emp where sal > 2000",
@@ -111,7 +111,7 @@ func TestSingleTableDeleteSQL(t *testing.T) {
 
 // Composite unique index
 func TestCompositeUniqueIndexTableInsertSQL(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 
 	sqls := []string{
 		"insert into dept values(), (), ()",
@@ -126,7 +126,7 @@ func TestCompositeUniqueIndexTableInsertSQL(t *testing.T) {
 }
 
 func TestAppendDedupAndMultiUpdateNodesForBindInsert_CompositeUniqueLockKeyMaterialized(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	sql := "insert into constraint_test.emp values (1, 'SMITH', 'CLERK', 7788, '2024-01-01', 3000, 0, 10)"
 
 	stmts, err := mysql.Parse(mock.CurrentContext().GetContext(), sql, 1)
@@ -169,7 +169,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_CompositeUniqueLockKeyMater
 }
 
 func TestAppendDedupAndMultiUpdateNodesForBindInsert_SingleUniqueMissingCol(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	sql := "insert into constraint_test.dept values (10, 'RESEARCH', 'NEW YORK')"
 
 	stmts, err := mysql.Parse(mock.CurrentContext().GetContext(), sql, 1)
@@ -202,7 +202,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_SingleUniqueMissingCol(t *t
 }
 
 func TestAppendDedupAndMultiUpdateNodesForBindInsert_CompositeUniqueMissingPartInProjection(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	sql := "insert into constraint_test.emp values (1, 'SMITH', 'CLERK', 7788, '2024-01-01', 3000, 0, 10)"
 
 	stmts, err := mysql.Parse(mock.CurrentContext().GetContext(), sql, 1)
@@ -243,7 +243,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_CompositeUniqueMissingPartI
 }
 
 func TestAppendDedupAndMultiUpdateNodesForBindInsert_CompositeUniqueMissingPartInLockMaterialization(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	sql := "insert into constraint_test.emp values (1, 'SMITH', 'CLERK', 7788, '2024-01-01', 3000, 0, 10)"
 
 	stmts, err := mysql.Parse(mock.CurrentContext().GetContext(), sql, 1)
@@ -282,7 +282,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_CompositeUniqueMissingPartI
 }
 
 func TestAppendDedupAndMultiUpdateNodesForBindInsert_SecondaryIndexMissingPart(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	sql := "insert into constraint_test.dept values (10, 'RESEARCH', 'NEW YORK')"
 
 	stmts, err := mysql.Parse(mock.CurrentContext().GetContext(), sql, 1)
@@ -315,7 +315,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_SecondaryIndexMissingPart(t
 }
 
 func TestCompositeUniqueIndexTableDeleteSQL(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 
 	sqls := []string{
 		"delete from employees where sal > 2000",
@@ -335,7 +335,7 @@ func TestCompositeUniqueIndexTableDeleteSQL(t *testing.T) {
 
 // Single column unique index
 func TestMultiTableDeleteSQL(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	sqls := []string{
 		"delete emp,dept from emp ,dept where emp.deptno = dept.deptno and emp.deptno = 10",
 		"delete emp,dept from emp ,dept where emp.deptno = dept.deptno and sal > 2000",
@@ -354,7 +354,7 @@ func TestMultiTableDeleteSQL(t *testing.T) {
 
 // Delete without index table
 func TestWithoutIndexTableDeleteSQL(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 
 	sqls := []string{
 		"delete from nation",
@@ -369,7 +369,7 @@ func TestWithoutIndexTableDeleteSQL(t *testing.T) {
 }
 
 func TestSingleTableUpdate(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 
 	sqls := []string{
 		"update dept set dname = 'XXX' where deptno = 10",
@@ -386,7 +386,7 @@ func TestSingleTableUpdate(t *testing.T) {
 }
 
 func TestSingleTableWithAliasUpdate(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 
 	sqls := []string{
 		"update emp t1 set t1.sal = t1.sal + 500, t1.comm = 1200 where t1.deptno = 10",
@@ -406,7 +406,7 @@ func TestSingleTableWithAliasUpdate(t *testing.T) {
 }
 
 func TestMultiTableUpdate(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 
 	sqls := []string{
 		//1.-----------------
@@ -445,7 +445,7 @@ func TestMultiTableUpdate(t *testing.T) {
 // with both an AUTO_INCREMENT PK and a unique secondary index uses independent
 // equality lookup branches instead of an OR join over the base table.
 func TestBindReplaceWithUniqueSecondaryIndex(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	sql := "replace into constraint_test.dept(dname, loc) values ('SALES', 'CHICAGO')"
 
 	stmts, err := mysql.Parse(mock.CurrentContext().GetContext(), sql, 1)
@@ -490,7 +490,7 @@ func TestBindReplaceWithUniqueSecondaryIndex(t *testing.T) {
 // composite unique secondary index the planner probes the serialized hidden
 // index key through the same equality-only conflict lookup path.
 func TestBindReplaceWithCompositeUniqueIndex(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	sql := "replace into constraint_test.dept_composite_uk(dname, loc) values ('SALES', 'CHICAGO')"
 
 	stmts, err := mysql.Parse(mock.CurrentContext().GetContext(), sql, 1)
@@ -523,7 +523,7 @@ func TestBindReplaceWithCompositeUniqueIndex(t *testing.T) {
 }
 
 func TestBindReplaceSkipsUniqueIndexForStaticNull(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	sql := "replace into constraint_test.fake_pk_t(a, b) values (null, 'nullable')"
 
 	stmts, err := mysql.Parse(mock.CurrentContext().GetContext(), sql, 1)
@@ -586,7 +586,7 @@ func TestBindReplaceSkipsCompositeUniqueIndexForAnyStaticNull(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 
 			stmts, err := mysql.Parse(mock.CurrentContext().GetContext(), tt.sql, 1)
 			require.NoError(t, err)

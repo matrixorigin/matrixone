@@ -125,12 +125,11 @@ func runJSONNumericAgg(
 
 func TestJSONNumericAggExecUsesExistingCastDomain(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
-	proc := testutil.NewProcess(t, testutil.WithMPool(mp))
 	t.Cleanup(func() {
-		proc.Free()
+		defer mpool.DeleteMPool(mp)
 		require.Zero(t, mp.CurrNB())
-		mpool.DeleteMPool(mp)
 	})
+	proc := testutil.NewProcess(t, testutil.WithMPool(mp))
 
 	jsonTexts := []string{`1`, `2.5`, `3`, `null`, ``}
 	nullList := []bool{false, false, false, false, true}
@@ -227,12 +226,11 @@ func TestJSONNumericAggExecUsesExistingCastDomain(t *testing.T) {
 
 func TestJSONNumericAggExecDistinctAndGrouped(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
-	proc := testutil.NewProcess(t, testutil.WithMPool(mp))
 	t.Cleanup(func() {
-		proc.Free()
+		defer mpool.DeleteMPool(mp)
 		require.Zero(t, mp.CurrNB())
-		mpool.DeleteMPool(mp)
 	})
+	proc := testutil.NewProcess(t, testutil.WithMPool(mp))
 
 	// Four distinct JSON representations of one must be equal after the
 	// JSON-to-DOUBLE boundary. This also challenges placement of DISTINCT before
@@ -306,12 +304,11 @@ func TestJSONNumericAggExecDistinctAndGrouped(t *testing.T) {
 
 func TestJSONNumericAggMySQLWarningConversion(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
-	proc := testutil.NewProcess(t, testutil.WithMPool(mp))
 	t.Cleanup(func() {
-		proc.Free()
+		defer mpool.DeleteMPool(mp)
 		require.Zero(t, mp.CurrNB())
-		mpool.DeleteMPool(mp)
 	})
+	proc := testutil.NewProcess(t, testutil.WithMPool(mp))
 	cases := []struct {
 		text     string
 		want     float64
@@ -369,12 +366,11 @@ func TestJSONNumericAggMySQLWarningConversion(t *testing.T) {
 
 func TestJSONNumericAggCastErrorsDoNotPoisonRetry(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
-	proc := testutil.NewProcess(t, testutil.WithMPool(mp))
 	t.Cleanup(func() {
-		proc.Free()
+		defer mpool.DeleteMPool(mp)
 		require.Zero(t, mp.CurrNB())
-		mpool.DeleteMPool(mp)
 	})
+	proc := testutil.NewProcess(t, testutil.WithMPool(mp))
 	// SQL NULL inputs remain skipped; a later non-null value still aggregates.
 	got, gotNull := runJSONNumericAgg(t, proc, "sum", []string{``, `2.5`}, []bool{true, false}, false)
 	require.False(t, gotNull)
@@ -396,14 +392,13 @@ func jsonAggValueFromText(t *testing.T, text string) bytejson.ByteJson {
 
 func TestJSONNumericAggScalarConversionBranches(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		defer mpool.DeleteMPool(mp)
+		require.Zero(t, mp.CurrNB())
+	})
 	proc := testutil.NewProcess(t, testutil.WithMPool(mp))
 	session := &numericWarningSession{}
 	proc.Session = session
-	t.Cleanup(func() {
-		proc.Free()
-		require.Zero(t, mp.CurrNB())
-		mpool.DeleteMPool(mp)
-	})
 
 	intData := make([]byte, 8)
 	negative := int64(-7)
@@ -476,12 +471,11 @@ func TestJSONNumericAggSelectionAndArity(t *testing.T) {
 
 func TestJSONNumericAggDoublePrecisionBoundary(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
-	proc := testutil.NewProcess(t, testutil.WithMPool(mp))
 	t.Cleanup(func() {
-		proc.Free()
+		defer mpool.DeleteMPool(mp)
 		require.Zero(t, mp.CurrNB())
-		mpool.DeleteMPool(mp)
 	})
+	proc := testutil.NewProcess(t, testutil.WithMPool(mp))
 
 	// The JSON-to-DOUBLE contract rounds both positive values to 2^53 and
 	// rounds the negative value to -2^53. The expected values are written in
@@ -498,12 +492,11 @@ func TestJSONNumericAggDoublePrecisionBoundary(t *testing.T) {
 
 func TestJSONNumericAggFractionExponentAndNegative(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
-	proc := testutil.NewProcess(t, testutil.WithMPool(mp))
 	t.Cleanup(func() {
-		proc.Free()
+		defer mpool.DeleteMPool(mp)
 		require.Zero(t, mp.CurrNB())
-		mpool.DeleteMPool(mp)
 	})
+	proc := testutil.NewProcess(t, testutil.WithMPool(mp))
 
 	// Keep the expected values independent of both JSON encoding and the
 	// aggregate implementation. The input exercises signed, fractional and

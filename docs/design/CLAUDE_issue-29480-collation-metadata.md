@@ -157,3 +157,12 @@ r1 把“能独立表示严格 utf8mb3 身份”误解成“必须立即改变�
 - **聚合 opaque 状态**：普通聚合状态、兼容结果和参数向量在实际解码后校验内层 type，早于重排、merge 和发布；通用 vector codec 继续结构保真。compact spill 不携带 type tag，继承执行器声明，其参数在共享聚合工厂准入。reader 保持既有错误清理 owner；真实 MergeGroup 的 ExtraBuf 反例包含先成功的聚合、后拒绝的聚合及 legacy 重试，普通 bat.Vecs 校验不替代它。
 
 历史验证补充（当时分支的 4.0.11，不能视为当前 4.0.12 验收）：Go 1.26.4 全部 37 个受影响包完整测试通过，整个 C01 修改可执行行覆盖率 `800/850=94.12%`，本轮修复 `81/83=97.59%`；mo-tester 修改用例 `207/207`、邻域 `709/709`。干净旧 main `76862df5c8` 生成真实 `4.0.10/MAXLEN=3` 系统及普通租户，当前二进制原数据升级后均为 `4.0.11/MAXLEN=4`，SHOW 与目录一致，四字节用户数据保持不变，再次重启结果不变。此证据是展示元数据升级，不声称原生格式混合版本激活或回滚验收通过。
+
+## 10. 2026-10-06 review 边界与升级前置要求
+
+- **表达式不是 DDL**：CONVERT USING 绑定直接复用非 DDL `ResolveCharset`，与 evaluator 一致；SELECT 和 CREATE VIEW 均不能借 UTF32 的 DDL 兼容入口获得执行/持久化许可。utf8/utf8mb3/utf8mb4/binary 表达式兼容不变。
+- **准入成本**：从实际 protobuf Go owner graph 确定性生成 typed visitor，只沿能到达 Type/TableDef/IndexDef 的字段、slice/map 和 oneof 遍历；未来 metadata 字段及新递归形状随生成纳入。外部 pipeline/custom wrapper 保留 fallback，但不逐标量 Interface boxing。调用独占32项内联访问集合，超过后扩为调用内 map；只记录能形成循环的根，保留共享/循环终止。不新增全局缓存或后台生命周期。BuildPlan 发布与 Compile 再准入不删除：mutable/direct compile 仍需独立重查。不透明 payload 的实际解码准入也保留。
+- **实测范围**：Darwin/Go1.26.4 同一 point/wide owner 连续两次准入（producer+compile），8列约88µs/49,888B/1,400alloc→1.74µs/0B/0alloc；512列约3.95–4.09ms/2.47MB/62,962alloc→193–197µs/211KB/30alloc。测量是实际 fence，不以 ProtoSize 代理，也不是整个 SQL 的端到端时延；Linux 与完整 SQL 吞吐仍以适用环境验证。
+- **历史 GLOBAL 默认值不是新请求**：`getGlobalSysVars` 从账户的 `mo_mysql_compatibility` 读回 string，历史解码仍不做新请求准入，也没有在 C01 4.0.12 自动迁移这些值。因此升级前已持久化 latin1/ascii/其它禁用域的账户，可能在无显式 charset 的 CREATE 或 SET NAMES DEFAULT 等继承默认值路径被拒绝。这是发布前置条件，不宣称透明修复。
+- **管理员升级前操作**：逐个账户检查 `SHOW GLOBAL VARIABLES LIKE 'character_set_%'` 和 `SHOW GLOBAL VARIABLES LIKE 'collation_%'`；在旧版本用正常、账户级 SET GLOBAL 将持久默认统一为受支持名称（例如 `SET GLOBAL character_set_server='utf8mb4'`、`SET GLOBAL character_set_database='utf8mb4'`、`SET GLOBAL collation_server='utf8mb4_general_ci'`、`SET GLOBAL collation_database='utf8mb4_general_ci'`）。如其它动态 client/connection/results 默认也有旧禁用域，逐项用其正常 SET GLOBAL 接口处理；不要 UPDATE 受保护系统目录或绕过权限。新建会话核对继承值后再升级，已有会话与全局缓存按既有刷新/重连所有者处理。该操作只规范兼容默认值，不转换用户数据或激活原生 latin1/ascii。
+- **后续所有者**：若需要透明历史默认迁移，应由适用 tenant upgrade 事务与完成谓词共同拥有，补普通/系统租户、缓存发布、失败重试/回滚与新显式请求仍拒绝的测试；不是通过扩大运行期 ResolveCharset 白名单解决。C01 当前交付保留以上明确的前置操作及限制。

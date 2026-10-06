@@ -38,7 +38,7 @@ func TestLegacyTimestampRuntimeNullAssignment(t *testing.T) {
 		{name: "explicit defaults enabled"},
 	} {
 		t.Run(policy.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			mock.ctxt.ResolveVariableFunc = func(name string, _, _ bool) (interface{}, error) {
 				if name == "explicit_defaults_for_timestamp" {
 					return !policy.legacy, nil
@@ -89,7 +89,7 @@ func TestLegacyTimestampRuntimeNullAssignment(t *testing.T) {
 }
 
 func TestLegacyTimestampVolatileWrapperSharesMemoOwner(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	mock.ctxt.ResolveVariableFunc = func(string, bool, bool) (interface{}, error) { return int8(0), nil }
 	builder := NewQueryBuilder(planpb.Query_UPDATE, &mock.ctxt, false, false)
 	col := &planpb.ColDef{Typ: planpb.Type{Id: int32(types.T_timestamp)}, Default: &planpb.Default{}}
@@ -125,7 +125,7 @@ func TestLegacyFirstTimestampDefinitionPolicy(t *testing.T) {
 		{"explicit defaults enabled", "first_ts TIMESTAMP(6)", false, false, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			mock.ctxt.ResolveVariableFunc = func(name string, _, _ bool) (interface{}, error) {
 				if name == "explicit_defaults_for_timestamp" {
 					return !tc.legacy, nil
@@ -169,7 +169,7 @@ func TestLegacyFirstTimestampDefinitionPolicy(t *testing.T) {
 }
 
 func TestLegacyTimestampZeroAdmissionAndReplay(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	legacy, mode := true, "STRICT_TRANS_TABLES,NO_ZERO_DATE"
 	resolve := func(name string, _, _ bool) (interface{}, error) {
 		if name == "explicit_defaults_for_timestamp" {

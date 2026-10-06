@@ -228,35 +228,6 @@ func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err 
 			if dispatch.ctr.remoteTerminal != nil {
 				dispatch.ctr.remoteTerminal.Finish(terminalErr)
 			}
-			for _, r := range dispatch.ctr.remoteReceivers {
-				if r != nil && r.TerminalBacked {
-					// The generation terminal above is the only terminal owner.
-					// A legacy Err write here would race the immutable result and
-					// can fill the compatibility channel during cleanup.
-					continue
-				}
-				if r == nil || r.Err == nil {
-					process.WarnPipelineCleanupf(
-						proc,
-						"dispatch_cleanup_remote_receiver_nil",
-						"dispatch cleanup skipped remote receiver error notification because receiver is nil: pipeline_failed=%t err=%v",
-						pipelineFailed,
-						terminalErr)
-					continue
-				}
-				select {
-				case r.Err <- terminalErr:
-				default:
-					process.WarnPipelineCleanupf(
-						proc,
-						"dispatch_cleanup_remote_err_channel_full",
-						"dispatch cleanup skipped remote receiver error notification because channel is full: receiver_uuid=%s msg_id=%d pipeline_failed=%t err=%v",
-						r.Uid.String(),
-						r.MsgId,
-						pipelineFailed,
-						terminalErr)
-				}
-			}
 
 			uuids := make([]uuid.UUID, 0, len(dispatch.RemoteRegs))
 			for i := range dispatch.RemoteRegs {

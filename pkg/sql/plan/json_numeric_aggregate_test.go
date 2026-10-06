@@ -231,7 +231,7 @@ func TestJSONNumericAggregateWindowUsesDoubleDomain(t *testing.T) {
 		"variance", "std", "stddev",
 	} {
 		t.Run(name, func(t *testing.T) {
-			optimizer := NewMockOptimizer(true)
+			optimizer := NewMockOptimizer(true, newPlanTestProcess(t))
 			table := DeepCopyTableDef(optimizer.ctxt.tables["nation"], true)
 			table.Cols[1].Typ = planpb.Type{Id: int32(types.T_json)}
 			optimizer.ctxt.tables["nation"] = table
@@ -274,7 +274,7 @@ func TestJSONNumericAggregateWindowUsesDoubleDomain(t *testing.T) {
 func TestJSONNumericAggregateSQLAliases(t *testing.T) {
 	for _, name := range []string{"var_pop", "variance", "stddev_pop", "std", "stddev"} {
 		t.Run(name, func(t *testing.T) {
-			optimizer := NewMockOptimizer(true)
+			optimizer := NewMockOptimizer(true, newPlanTestProcess(t))
 			table := DeepCopyTableDef(optimizer.ctxt.tables["nation"], true)
 			table.Cols[1].Typ = planpb.Type{Id: int32(types.T_json)}
 			optimizer.ctxt.tables["nation"] = table

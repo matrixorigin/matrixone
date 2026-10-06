@@ -22,15 +22,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
 func TestTernaryStrFixedStrToFixedPreservesNullAndSelectionSemantics(t *testing.T) {
-	proc := testutil.NewProcess(nil)
+	proc := newMemoryFunctionTestProcess(t)
 	t.Cleanup(func() {
-		proc.Base.FileService.Close(proc.Ctx)
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
 	})
@@ -130,9 +128,8 @@ func TestTernaryStrFixedStrToFixedPreservesNullAndSelectionSemantics(t *testing.
 }
 
 func TestUnaryFixedToStrConstNullPreservesResultCardinality(t *testing.T) {
-	proc := testutil.NewProcess(nil)
+	proc := newMemoryFunctionTestProcess(t)
 	t.Cleanup(func() {
-		proc.Base.FileService.Close(proc.Ctx)
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
 	})
@@ -168,9 +165,8 @@ func TestUnaryFixedToStrConstNullPreservesResultCardinality(t *testing.T) {
 }
 
 func TestBinaryStrFixedToStrMixedNullPreservesRowPositions(t *testing.T) {
-	proc := testutil.NewProcess(nil)
+	proc := newMemoryFunctionTestProcess(t)
 	t.Cleanup(func() {
-		proc.Base.FileService.Close(proc.Ctx)
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
 	})
@@ -243,9 +239,8 @@ func TestBinaryStrFixedToStrMixedNullPreservesRowPositions(t *testing.T) {
 }
 
 func TestVarlenaConstResultsShareNonInlinePayload(t *testing.T) {
-	proc := testutil.NewProcess(nil)
+	proc := newMemoryFunctionTestProcess(t)
 	t.Cleanup(func() {
-		proc.Base.FileService.Close(proc.Ctx)
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
 	})
@@ -282,22 +277,6 @@ func TestVarlenaConstResultsShareNonInlinePayload(t *testing.T) {
 			fn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 				return opUnaryBytesToBytes(parameters, result, proc, length,
 					func([]byte) []byte { return []byte(payload) }, selectList)
-			},
-		},
-		{
-			name:   "unary bytes to string",
-			inputs: []FunctionTestInput{constString},
-			fn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-				return opUnaryBytesToStr(parameters, result, proc, length,
-					func([]byte) string { return payload }, selectList)
-			},
-		},
-		{
-			name:   "unary string to string",
-			inputs: []FunctionTestInput{constString},
-			fn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-				return opUnaryStrToStr(parameters, result, proc, length,
-					func(string) string { return payload }, selectList)
 			},
 		},
 		{
@@ -393,9 +372,8 @@ func TestVarlenaConstResultsShareNonInlinePayload(t *testing.T) {
 }
 
 func TestVarlenaConstNullTemplatesPreserveResultCardinality(t *testing.T) {
-	proc := testutil.NewProcess(nil)
+	proc := newMemoryFunctionTestProcess(t)
 	t.Cleanup(func() {
-		proc.Base.FileService.Close(proc.Ctx)
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
 	})
@@ -471,20 +449,6 @@ func TestVarlenaConstNullTemplatesPreserveResultCardinality(t *testing.T) {
 			inputs: []FunctionTestInput{constNullString},
 			fn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 				return opUnaryBytesToBytes(parameters, result, proc, length, func(value []byte) []byte { return value }, selectList)
-			},
-		},
-		{
-			name:   "unary bytes to string",
-			inputs: []FunctionTestInput{constNullString},
-			fn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-				return opUnaryBytesToStr(parameters, result, proc, length, func(value []byte) string { return string(value) }, selectList)
-			},
-		},
-		{
-			name:   "unary string to string",
-			inputs: []FunctionTestInput{constNullString},
-			fn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-				return opUnaryStrToStr(parameters, result, proc, length, func(value string) string { return value }, selectList)
 			},
 		},
 		{
@@ -568,9 +532,8 @@ func TestVarlenaConstNullTemplatesPreserveResultCardinality(t *testing.T) {
 }
 
 func TestVarlenaTemplatesIgnoreAllRowsPreserveResultCardinality(t *testing.T) {
-	proc := testutil.NewProcess(nil)
+	proc := newMemoryFunctionTestProcess(t)
 	t.Cleanup(func() {
-		proc.Base.FileService.Close(proc.Ctx)
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
 	})
@@ -627,20 +590,6 @@ func TestVarlenaTemplatesIgnoreAllRowsPreserveResultCardinality(t *testing.T) {
 			inputs: stringInput,
 			fn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 				return opUnaryBytesToBytes(parameters, result, proc, length, func(value []byte) []byte { return value }, selectList)
-			},
-		},
-		{
-			name:   "unary bytes to string",
-			inputs: stringInput,
-			fn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-				return opUnaryBytesToStr(parameters, result, proc, length, func(value []byte) string { return string(value) }, selectList)
-			},
-		},
-		{
-			name:   "unary string to string",
-			inputs: stringInput,
-			fn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-				return opUnaryStrToStr(parameters, result, proc, length, func(value string) string { return value }, selectList)
 			},
 		},
 		{
@@ -732,9 +681,8 @@ func TestVarlenaTemplatesIgnoreAllRowsPreserveResultCardinality(t *testing.T) {
 }
 
 func TestVarlenaConstErrorAndInvalidInputsPreserveResultCardinality(t *testing.T) {
-	proc := testutil.NewProcess(nil)
+	proc := newMemoryFunctionTestProcess(t)
 	t.Cleanup(func() {
-		proc.Base.FileService.Close(proc.Ctx)
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
 	})
@@ -790,9 +738,8 @@ func TestVarlenaConstErrorAndInvalidInputsPreserveResultCardinality(t *testing.T
 }
 
 func TestMoTupleExprMixedNullPreservesRowPositions(t *testing.T) {
-	proc := testutil.NewProcess(nil)
+	proc := newMemoryFunctionTestProcess(t)
 	t.Cleanup(func() {
-		proc.Base.FileService.Close(proc.Ctx)
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
 	})
@@ -840,9 +787,8 @@ func TestMoTupleExprMixedNullPreservesRowPositions(t *testing.T) {
 }
 
 func TestMoTupleExprConstNonInlineResultSharesPayload(t *testing.T) {
-	proc := testutil.NewProcess(nil)
+	proc := newMemoryFunctionTestProcess(t)
 	t.Cleanup(func() {
-		proc.Base.FileService.Close(proc.Ctx)
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
 	})

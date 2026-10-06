@@ -26,7 +26,6 @@ import (
 func runExportSetTestCase(t *testing.T, inputs []FunctionTestInput, wanted []string, nullList []bool) {
 	t.Helper()
 	proc := testutil.NewProcess(t)
-	t.Cleanup(proc.Free)
 	testCase := NewFunctionTestCase(
 		proc,
 		inputs,

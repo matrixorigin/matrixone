@@ -21,7 +21,7 @@ import (
 )
 
 func TestCollationMetadataShowCharsetUsesCatalog(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	ctx.dbs["information_schema"] = true
 	ctx.objects["character_sets"] = &pb.ObjectRef{SchemaName: "information_schema", ObjName: "character_sets", Obj: 1001}
 	ctx.tables["character_sets"] = &pb.TableDef{TblId: 1001, Name: "character_sets", Cols: []*pb.ColDef{
@@ -48,7 +48,7 @@ func TestCollationMetadataShowCharsetUsesCatalog(t *testing.T) {
 }
 
 func TestCollationMetadataPlannerAdmission(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	col := FindColumn(ctx.tables["nation"].Cols, "n_name")
 	require.NotNil(t, col)
 	col.Typ.Charset, col.Typ.CollationVersion = 4, 1

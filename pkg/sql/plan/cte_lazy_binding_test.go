@@ -20,7 +20,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
@@ -144,7 +144,7 @@ func requireSharedCTEGroupingFlags(t *testing.T, logicPlan *Plan, expected [][]b
 }
 
 func TestCTELazyBindingDeclarationScope(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
 	t.Run("unused invalid body is not bound", func(t *testing.T) {
 		_, err := runOneStmt(mock, t, `
@@ -180,7 +180,7 @@ func TestCTELazyBindingDeclarationScope(t *testing.T) {
 }
 
 func TestCTELazyBindingRollupSingleExpansion(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	useLegacyGroupingSetPlan(t, mock)
 	logicPlan, err := runOneStmt(mock, t, `
 		with totals as (
@@ -197,7 +197,7 @@ func TestCTELazyBindingRollupSingleExpansion(t *testing.T) {
 }
 
 func TestCTELazyBindingRepeatedGroupingSets(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	useLegacyGroupingSetPlan(t, mock)
 
 	t.Run("rollup keeps both variants for each reference", func(t *testing.T) {
@@ -233,7 +233,7 @@ func TestCTELazyBindingRepeatedGroupingSets(t *testing.T) {
 }
 
 func TestCTELazyBindingVisibilityGuards(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
 	t.Run("forward reference stays rejected", func(t *testing.T) {
 		_, err := runOneStmt(mock, t, `
@@ -263,7 +263,7 @@ func TestCTELazyBindingVisibilityGuards(t *testing.T) {
 }
 
 func TestRecursiveCTEQueryBlockReferenceScope(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
 	for _, test := range []struct {
 		name string
@@ -395,7 +395,7 @@ func TestRecursiveCTEQueryBlockReferenceScope(t *testing.T) {
 }
 
 func TestCTELazyBindingKeepsRootContextOwnership(t *testing.T) {
-	ctx := &cteViewTrackingContext{CompilerContext: NewMockCompilerContext(false)}
+	ctx := &cteViewTrackingContext{CompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t))}
 	mock := &cteViewTrackingOptimizer{ctx: ctx}
 
 	_, err := runOneStmt(mock, t, `
@@ -411,7 +411,7 @@ func TestCTELazyBindingKeepsRootContextOwnership(t *testing.T) {
 }
 
 func TestCTEMultiReferenceReusesExpensiveProducer(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t, `
 		with q15_revenue0 as (
 			select l_suppkey as supplier_no,
@@ -509,7 +509,7 @@ func TestCTEReuseHonorsPostOptimizerSQLSelectLimit(t *testing.T) {
 		{name: "prepared dynamic", limit: ^uint64(0), prepare: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			ctx := mock.CurrentContext()
 			resolver := func(name string, _, _ bool) (interface{}, error) {
 				if name == SQLSelectLimitVariable {
@@ -534,7 +534,7 @@ func TestCTEReuseHonorsPostOptimizerSQLSelectLimit(t *testing.T) {
 }
 
 func TestCTEMultiReferenceReusesProducerContainingCTE(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t, `
 		with base_rows as (
 			select l_suppkey, l_extendedprice from lineitem
@@ -578,7 +578,7 @@ func TestCTEMultiReferenceReusesProducerContainingCTE(t *testing.T) {
 }
 
 func TestCTEMultiReferenceMergesLocalConsumerPredicates(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t, `
 		with customer_totals as (
 			select o_custkey, max(c_name) as customer_name,
@@ -612,7 +612,7 @@ func TestCTEMultiReferenceMergesLocalConsumerPredicates(t *testing.T) {
 }
 
 func TestCTEMultiReferenceReusesHashSemiBuildConsumers(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t, `
 		with expensive_keys as (
 			select l_suppkey, sum(l_extendedprice) as total
@@ -658,7 +658,7 @@ func TestCTEMultiReferenceReusesHashSemiBuildConsumers(t *testing.T) {
 }
 
 func TestCTEMultiReferencePrunesUnusedVariableWidthPayload(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t, `
 		with c as (
 			select l_suppkey, max(l_comment) as comment
@@ -680,7 +680,7 @@ func TestCTEMultiReferencePrunesUnusedVariableWidthPayload(t *testing.T) {
 }
 
 func TestCTEMultiReferenceRejectsExpandedUnsafeOutputEvaluation(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t, `
 		with c as (
 			select l_suppkey as k,
@@ -700,7 +700,7 @@ func TestCTEMultiReferenceRejectsExpandedUnsafeOutputEvaluation(t *testing.T) {
 }
 
 func TestCTEMultiReferenceRejectsExpandedUnsafeOutputRowDomain(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t, `
 		with c as (
 			select l_suppkey as k, l_orderkey as x,
@@ -722,7 +722,7 @@ func TestCTEMultiReferenceRejectsExpandedUnsafeOutputRowDomain(t *testing.T) {
 }
 
 func TestCTEMultiReferenceRejectsHiddenDerivedTablePredicate(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t, `
 		with c as (
 			select l_suppkey as k, l_orderkey as x,
@@ -740,7 +740,7 @@ func TestCTEMultiReferenceRejectsHiddenDerivedTablePredicate(t *testing.T) {
 }
 
 func TestCTEMultiReferenceRejectsExpandedFallibleProducerPredicate(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t, `
 		with c as (
 			select l_orderkey as k
@@ -757,7 +757,7 @@ func TestCTEMultiReferenceRejectsExpandedFallibleProducerPredicate(t *testing.T)
 }
 
 func TestCTEMultiReferenceRejectsExpandedFallibleHaving(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t, `
 		with c as (
 			select l_suppkey as k from lineitem group by l_suppkey
@@ -774,7 +774,7 @@ func TestCTEMultiReferenceRejectsExpandedFallibleHaving(t *testing.T) {
 }
 
 func TestCTEMultiReferenceRejectsExpandedFallibleGroupingKey(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t, `
 		with c as (
 			select l_suppkey as k from lineitem
@@ -791,7 +791,7 @@ func TestCTEMultiReferenceRejectsExpandedFallibleGroupingKey(t *testing.T) {
 }
 
 func TestCTEMultiReferenceRejectsOmittedFallibleConsumerPredicate(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t, `
 		with c as (
 			select l_suppkey as k, l_shipmode as x,
@@ -813,7 +813,7 @@ func TestCTEMultiReferenceRejectsOmittedFallibleConsumerPredicate(t *testing.T) 
 }
 
 func TestCTEMultiReferenceRejectsFallibleOutputBeforeConsumerJoin(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t, `
 		with c as (
 			select l_shipmode as region, l_suppkey as k,
@@ -837,7 +837,7 @@ func TestCTEMultiReferenceRejectsFallibleOutputBeforeConsumerJoin(t *testing.T) 
 }
 
 func TestCTEMultiReferenceRejectsProjectedFallibleDomainAboveHashBuild(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t, `
 		with c as (
 			select l_shipmode as region, l_suppkey as k,
@@ -861,7 +861,7 @@ func TestCTEMultiReferenceRejectsProjectedFallibleDomainAboveHashBuild(t *testin
 }
 
 func TestCTEMultiReferenceRejectsFallibleOutputBeforeConsumerTopN(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t, `
 		with c as (
 			select l_shipmode as region, l_suppkey as k,
@@ -887,7 +887,7 @@ func TestCTEMultiReferenceRejectsFallibleOutputBeforeConsumerTopN(t *testing.T) 
 }
 
 func TestCTEMultiReferenceRejectsOmittedTagFreeConsumerPredicate(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t, `
 		with c as (
 			select l_suppkey as region,
@@ -909,7 +909,7 @@ func TestCTEMultiReferenceRejectsOmittedTagFreeConsumerPredicate(t *testing.T) {
 }
 
 func TestCTEMultiReferenceReusesRobustPredicateFreeSpillProducer(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t, `
 		with c as (
 			select l_suppkey, max(l_comment) as comment
@@ -935,17 +935,9 @@ func TestCTEMultiReferenceReusesRobustPredicateFreeSpillProducer(t *testing.T) {
 }
 
 func TestCTEReuseRollbackHintKeepsConsumersInline(t *testing.T) {
-	mock := NewMockOptimizer(false)
-	rt := moruntime.ServiceRuntime(mock.CurrentContext().GetProcess().GetService())
-	oldHints, hadHints := rt.GetGlobalVariables("optimizer_hints")
-	t.Cleanup(func() {
-		if hadHints {
-			rt.SetGlobalVariables("optimizer_hints", oldHints)
-		} else {
-			rt.SetGlobalVariables("optimizer_hints", "")
-		}
-	})
-	rt.SetGlobalVariables("optimizer_hints", "sharedComputation=1")
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+
+	setPlanTestGlobalVariable(t, mock.CurrentContext().GetProcess().GetService(), "optimizer_hints", "sharedComputation=1")
 
 	logicPlan, err := runOneStmt(mock, t, `
 		with c as (
@@ -972,7 +964,7 @@ func TestCTEReuseRollbackHintKeepsConsumersInline(t *testing.T) {
 }
 
 func TestCTEMultiReferenceRejectsNonHashBuildConsumers(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	for _, test := range []struct {
 		name      string
 		predicate string
@@ -1012,7 +1004,7 @@ func subtreeHasNodeOption(query *planpb.Query, nodeID int32, option string) bool
 }
 
 func TestCTEReuseRewritesConsumersInsideInlineCTE(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t, `
 		with supplier_totals as (
 			select l_suppkey, sum(l_extendedprice) as total
@@ -1040,7 +1032,7 @@ func TestCTEReuseRewritesConsumersInsideInlineCTE(t *testing.T) {
 }
 
 func TestCTEReuseRejectsProducerContainingRecursiveCTE(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t, `with recursive r(n) as (
 		select 1
 		union all
@@ -1063,7 +1055,7 @@ func TestCTEReuseRejectsProducerContainingRecursiveCTE(t *testing.T) {
 }
 
 func TestCTEMultiReferenceReuseGuards(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	tests := []struct {
 		name          string
 		sql           string
@@ -1216,7 +1208,7 @@ func TestCTEReuseRejectsOccurrenceOutsideRewriteRoot(t *testing.T) {
 }
 
 func TestCTEDrainProofRejectsProbeBehindDrainingOperator(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	intType := planpb.Type{Id: int32(types.T_int64), NotNullable: true}
 	joinCond, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*planpb.Expr{
 		GetColExpr(intType, 10, 0),
@@ -1254,7 +1246,7 @@ func TestCTEDrainProofRejectsCrossJoinConsumer(t *testing.T) {
 }
 
 func TestCTEDrainProofRejectsPinnedInnerProbe(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	intType := planpb.Type{Id: int32(types.T_int64), NotNullable: true}
 	joinCond, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*planpb.Expr{
 		GetColExpr(intType, 10, 0),
@@ -1316,7 +1308,7 @@ func TestCTEDrainProofRejectsSamplingConsumer(t *testing.T) {
 }
 
 func TestCTEDrainProofMarksExactInnerHashBuild(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	intType := planpb.Type{Id: int32(types.T_int64), NotNullable: true}
 	joinCond, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*planpb.Expr{
 		GetColExpr(intType, 10, 0),
@@ -1341,7 +1333,7 @@ func TestCTEDrainProofMarksExactInnerHashBuild(t *testing.T) {
 }
 
 func TestCTEDrainProofRecognizesPendingCommaJoinEquality(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	intType := planpb.Type{Id: int32(types.T_int64), NotNullable: true}
 
 	for _, test := range []struct {
@@ -1396,7 +1388,7 @@ func TestCTEDrainProofCarriesPreservedLeftInput(t *testing.T) {
 }
 
 func TestCTEMultiReferenceReusesCommaJoinHashBuildConsumers(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t, `
 		with expensive_keys as (
 			select l_suppkey, sum(l_extendedprice) as total
@@ -1427,7 +1419,7 @@ func TestCTEMultiReferenceReusesCommaJoinHashBuildConsumers(t *testing.T) {
 }
 
 func TestCTEMultiReferenceReuseRespectsNestedShadowing(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t, `with c as (
 		select n_regionkey, count(*) as n from nation group by n_regionkey
 	) select outer_c.n_regionkey
@@ -1530,7 +1522,7 @@ func TestCTEReuseMemoryGuard(t *testing.T) {
 }
 
 func TestSharedMaterializationRespectsCumulativeProcessCaps(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	proc := mock.CurrentContext().GetProcess()
 	require.NotNil(t, proc)
 	require.NotNil(t, proc.Base)
@@ -1579,7 +1571,7 @@ func TestSharedMaterializationAccountsForPerRecordSpillFraming(t *testing.T) {
 	require.Equal(t, float64(payloadBytes+rows*recordBytes), spillBytes,
 		"the worst-case one-row record must include grouping provenance")
 
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	proc := mock.CurrentContext().GetProcess()
 	proc.Base.Lim.Size = mpool.GB
 	proc.Base.Lim.SpillSize = payloadBytes
@@ -1645,7 +1637,7 @@ func TestCTEOutputDemandRequiresTotalExtraColumns(t *testing.T) {
 	intType := planpb.Type{Id: int32(types.T_int64), NotNullable: true}
 	stringType := planpb.Type{Id: int32(types.T_varchar)}
 	targetType := types.T_int64.ToType()
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	castExpr, err := makePlan2CastExpr(
 		ctx.GetContext(),
 		GetColExpr(stringType, 1, 1),
@@ -1724,7 +1716,7 @@ func TestCTEReuseRejectsExternalAndSideEffectingNodes(t *testing.T) {
 }
 
 func TestCTEReuseRejectsVolatileValueScanExpressions(t *testing.T) {
-	logicPlan, err := runOneStmt(NewMockOptimizer(false), t, `
+	logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, `
 		select * from (values row(rand())) v(x)`)
 	require.NoError(t, err)
 
@@ -1747,7 +1739,7 @@ func TestCTEReuseRejectsVolatileValueScanExpressions(t *testing.T) {
 }
 
 func TestCTEReuseRejectsVolatileAuxiliaryNodeExpressions(t *testing.T) {
-	logicPlan, err := runOneStmt(NewMockOptimizer(false), t, `select rand()`)
+	logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, `select rand()`)
 	require.NoError(t, err)
 	var volatile *planpb.Expr
 	for _, node := range logicPlan.GetQuery().Nodes {
@@ -1836,7 +1828,7 @@ func TestCTEReuseSharesOnlyStatementStableCurrentRolesFunction(t *testing.T) {
 }
 
 func TestCTEReuseCurrentRolesExemptionRejectsAmplifyingSubtree(t *testing.T) {
-	purePlan, err := runOneStmt(NewMockOptimizer(false), t, `
+	purePlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, `
 		WITH c AS (SELECT role_id FROM mo_current_roles() role_closure)
 		SELECT a.role_id FROM c a JOIN c b ON a.role_id = b.role_id LIMIT 1`)
 	require.NoError(t, err)
@@ -1871,7 +1863,7 @@ func TestCTEReuseCurrentRolesExemptionRejectsAmplifyingSubtree(t *testing.T) {
 	}
 	for _, test := range earlyStopQueries {
 		t.Run(test.name, func(t *testing.T) {
-			amplifiedPlan, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			amplifiedPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
 			require.NoError(t, err)
 			require.Zero(t, countReachableNodeType(amplifiedPlan.GetQuery(), planpb.Node_SINK),
 				"an early-terminating amplifying subtree must retain the guarded inline plan")
@@ -1879,7 +1871,7 @@ func TestCTEReuseCurrentRolesExemptionRejectsAmplifyingSubtree(t *testing.T) {
 		})
 	}
 
-	variableWidthPlan, err := runOneStmt(NewMockOptimizer(false), t, `
+	variableWidthPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, `
 		WITH c AS (
 			SELECT l.l_comment, r.role_id
 			FROM lineitem l CROSS JOIN mo_current_roles() r
@@ -1891,7 +1883,7 @@ func TestCTEReuseCurrentRolesExemptionRejectsAmplifyingSubtree(t *testing.T) {
 }
 
 func TestCTEReuseCurrentRolesExemptionRejectsFallibleProjection(t *testing.T) {
-	logicPlan, err := runOneStmt(NewMockOptimizer(false), t, `
+	logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, `
 		WITH c AS (
 			SELECT CAST(CONCAT('not-an-integer-', role_id) AS BIGINT) AS role_id
 			FROM mo_current_roles() role_closure
@@ -1922,7 +1914,7 @@ func TestInformationSchemaMetadataPlansShareCurrentRolesOnce(t *testing.T) {
 		t.Run(view.name, func(t *testing.T) {
 			as := strings.Index(view.ddl, " AS ")
 			require.Greater(t, as, 0)
-			logicPlan, err := runOneStmt(NewMockOptimizer(false), t, view.ddl[as+4:])
+			logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, view.ddl[as+4:])
 			require.NoError(t, err)
 			query := logicPlan.GetQuery()
 			require.Equal(t, 1, countReachableTableFunction(query, "mo_current_roles"))
@@ -1936,7 +1928,7 @@ func TestInformationSchemaSchemataSQLPathIsNullableCharZero(t *testing.T) {
 	as := strings.Index(sysview.InformationSchemaSchemataDDL, " AS ")
 	require.Greater(t, as, 0)
 	logicPlan, err := runOneStmt(
-		NewMockOptimizer(false),
+		NewMockOptimizer(false, newPlanTestProcess(t)),
 		t,
 		sysview.InformationSchemaSchemataDDL[as+4:],
 	)
@@ -1972,7 +1964,7 @@ func BenchmarkInformationSchemaSchemataPlanSharesCurrentRoles(b *testing.B) {
 		b.Fatal("SCHEMATA DDL has no AS clause")
 	}
 	sql := sysview.InformationSchemaSchemataDDL[as+4:]
-	ctx := NewMockOptimizer(false).CurrentContext()
+	ctx := NewMockOptimizer(false, newPlanTestProcess(b)).CurrentContext()
 
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
@@ -2061,7 +2053,7 @@ func TestCTEReuseRecognizesGuardedRuntimeFilterExpression(t *testing.T) {
 }
 
 func TestCTEMultiReferenceReusePreservesConsumerBindings(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t, `
 		with totals(region_key, total) as (
 			select n_regionkey, count(*) from nation group by n_regionkey

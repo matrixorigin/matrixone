@@ -76,6 +76,22 @@ SET NAMES utf32 COLLATE utf32_general_ci;
 invalid input: unsupported character set 'utf32'
 SET collation_connection = 'utf32_bin';
 invalid input: unsupported collation 'utf32_bin'
+SELECT CONVERT('😀' USING utf32);
+invalid input: unsupported character set 'utf32' for CONVERT USING
+CREATE VIEW v_utf32_expr AS SELECT CONVERT('😀' USING utf32) AS c;
+invalid input: unsupported character set 'utf32' for CONVERT USING
+SELECT COUNT(*) AS rejected_view_count FROM information_schema.views
+WHERE table_schema = 'charset_test' AND table_name = 'v_utf32_expr';
+➤ rejected_view_count[-5,64,0]  𝄀
+0
+SELECT HEX(CONVERT('😀' USING utf8)) AS utf8_hex, HEX(CONVERT('😀' USING utf8mb3)) AS utf8mb3_hex;
+➤ utf8_hex[12,8,0]  ¦  utf8mb3_hex[12,8,0]  𝄀
+F09F9880  ¦  F09F9880
+CREATE VIEW v_utf8mb3_expr AS SELECT CONVERT('😀' USING utf8mb3) AS c;
+SELECT HEX(c) AS view_hex FROM v_utf8mb3_expr;
+➤ view_hex[12,8,0]  𝄀
+F09F9880
+DROP VIEW v_utf8mb3_expr;
 CREATE TABLE charset_metadata_repro (
 c_char CHAR(8),
 c_varchar VARCHAR(128),

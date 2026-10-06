@@ -318,7 +318,6 @@ func initPipelineMetrics() {
 	registry.MustRegister(PipelineStreamLifecycleGauge)
 	registry.MustRegister(PipelineStreamFinishDurationHistogram)
 	registry.MustRegister(PipelineRemoteReceiverWaitDurationHistogram)
-	registry.MustRegister(PipelineRemoteNotifyRetryCounter)
 }
 
 func initMongoDBMetrics() {
