@@ -1526,9 +1526,9 @@ func TestPrivateIntegerArgumentScalarSourceClassification(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) { require.Equal(t, tc.want, scalarIntegerArgumentSource(tc.source)) })
 	}
-	for _, overload := range []int32{1, function.IntegerArgumentCastOverload, function.TruncatedIntegerArgumentCastOverload} {
+	for _, overload := range []int32{0, 1, function.IntegerArgumentCastOverload, function.TruncatedIntegerArgumentCastOverload, 7, 8} {
 		cast.overloadID = function.EncodeOverloadID(function.CAST, overload)
-		require.Equal(t, overload != 1, cast.hasScalarIntegerArgumentSource(), "overload %d", overload)
+		require.Equal(t, overload == function.IntegerArgumentCastOverload || overload == function.TruncatedIntegerArgumentCastOverload, cast.hasScalarIntegerArgumentSource(), "overload %d", overload)
 	}
 }
 
@@ -1578,12 +1578,15 @@ func TestPrivateIntegerArgumentScalarLifecycle(t *testing.T) {
 		for row := 0; row < 3; row++ {
 			require.True(t, got.IsNull(uint64(row)))
 		}
-		_, err = executor.Eval(proc, []*batch.Batch{bat}, []bool{false, true, false})
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), "%v", err)
-		value = float64(2.5)
-		got, err = executor.Eval(proc, []*batch.Batch{bat}, []bool{false, true, false})
-		require.NoError(t, err)
-		checkScalar(t, got, 1, 2)
+		for _, mask := range [][]bool{{false, true, false}, {true, true, true}} {
+			value = math.Inf(1)
+			_, err = executor.Eval(proc, []*batch.Batch{bat}, mask)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), "%v", err)
+			value = float64(2.5)
+			got, err = executor.Eval(proc, []*batch.Batch{bat}, mask)
+			require.NoError(t, err)
+			checkScalar(t, got, 1, 2)
+		}
 	})
 	for _, tc := range []struct {
 		name     string
@@ -1605,10 +1608,105 @@ func TestPrivateIntegerArgumentScalarLifecycle(t *testing.T) {
 			bat := batch.New(nil)
 			t.Cleanup(func() { bat.Clean(proc.Mp()) })
 			bat.SetRowCount(3)
-			got := evalTestTextParameter(t, proc, executor, "3.5", false, vector.PrepareParamFloat, []*batch.Batch{bat}, []bool{false, true, false})
+			for _, mask := range [][]bool{nil, {true, true, true}, {false, true, false}} {
+				got := evalTestTextParameter(t, proc, executor, "3.5", false, vector.PrepareParamFloat, []*batch.Batch{bat}, mask)
+				checkScalar(t, got, 1, tc.want)
+				require.False(t, executor.(*FunctionExpressionExecutor).folded.canFold)
+				if mask == nil || mask[0] {
+					require.False(t, executor.(*FunctionExpressionExecutor).parameterResults[0].IsConst())
+				}
+			}
+			for _, mask := range [][]bool{nil, {false, true, false}} {
+				executor.ResetForNextQuery()
+				got := evalTestTextParameter(t, proc, executor, "", true, vector.PrepareParamFloat, []*batch.Batch{bat}, mask)
+				require.Equal(t, types.Type{Oid: types.T_int64, Size: 8}, *got.GetType())
+				require.True(t, got.IsConstNull())
+				require.Equal(t, 3, got.Length())
+				executor.ResetForNextQuery()
+				got = evalTestTextParameter(t, proc, executor, "3.5", false, vector.PrepareParamFloat, []*batch.Batch{bat}, mask)
+				checkScalar(t, got, 1, tc.want)
+			}
+			bat.SetRowCount(0)
+			for _, mask := range [][]bool{nil, {}} {
+				got := evalTestTextParameter(t, proc, executor, "3.5", false, vector.PrepareParamFloat, []*batch.Batch{bat}, mask)
+				require.Equal(t, 0, got.Length())
+				require.False(t, got.IsConst())
+			}
+			bat.SetRowCount(3)
+			got := evalTestTextParameter(t, proc, executor, "3.5", false, vector.PrepareParamFloat, []*batch.Batch{bat}, nil)
 			checkScalar(t, got, 1, tc.want)
 		})
 	}
+	t.Run("column_stays_flat", func(t *testing.T) {
+		checkExpressionStorageAfterCleanup(t, proc)
+		input := vector.NewVec(types.T_float64.ToType())
+		bat := testutil.NewBatchWithVectors([]*vector.Vector{input}, nil)
+		t.Cleanup(func() { bat.Clean(proc.Mp()) })
+		require.NoError(t, vector.AppendFixedList(input, []float64{2.5, 3.5, -1.5}, nil, proc.Mp()))
+		column := &plan.Expr{Typ: plan.Type{Id: int32(types.T_float64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+		executor, err := NewExpressionExecutor(proc, bindTestCast(t, proc, function.IntegerArgumentCastOverload, column, types.T_int64.ToType()))
+		if executor != nil {
+			t.Cleanup(executor.Free)
+		}
+		require.NoError(t, err)
+		for _, rows := range []int{3, 1, 3} {
+			bat.SetRowCount(rows)
+			got, err := executor.Eval(proc, []*batch.Batch{bat}, nil)
+			require.NoError(t, err)
+			require.Equal(t, types.Type{Oid: types.T_int64, Size: 8}, *got.GetType())
+			require.False(t, got.IsConst())
+			require.Equal(t, rows, got.Length())
+			for row, want := range []int64{2, 4, -2}[:rows] {
+				require.False(t, got.IsNull(uint64(row)))
+				require.Equal(t, want, vector.GetFixedAtNoTypeCheck[int64](got, row))
+			}
+		}
+	})
+	t.Run("parameter_unsigned", func(t *testing.T) {
+		checkExpressionStorageAfterCleanup(t, proc)
+		parameter := &plan.Expr{Typ: plan.Type{Id: int32(types.T_float64)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+		executor, err := NewExpressionExecutor(proc, bindTestCast(t, proc, function.IntegerArgumentCastOverload, parameter, types.T_uint64.ToType()))
+		if executor != nil {
+			t.Cleanup(executor.Free)
+		}
+		require.NoError(t, err)
+		bat := batch.New(nil)
+		t.Cleanup(func() { bat.Clean(proc.Mp()) })
+		bat.SetRowCount(3)
+		got := evalTestTextParameter(t, proc, executor, "3.5", false, vector.PrepareParamFloat, []*batch.Batch{bat}, nil)
+		require.Equal(t, types.Type{Oid: types.T_uint64, Size: 8}, *got.GetType())
+		require.True(t, got.IsConst())
+		require.Equal(t, 3, got.Length())
+		for row := 0; row < 3; row++ {
+			require.False(t, got.IsNull(uint64(row)))
+			require.Equal(t, uint64(4), vector.GetFixedAtNoTypeCheck[uint64](got, row))
+		}
+	})
+	t.Run("floor_consumes_parameter", func(t *testing.T) {
+		checkExpressionStorageAfterCleanup(t, proc)
+		input := vector.NewVec(types.T_varchar.ToType())
+		bat := testutil.NewBatchWithVectors([]*vector.Vector{input}, nil)
+		t.Cleanup(func() { bat.Clean(proc.Mp()) })
+		require.NoError(t, vector.AppendBytesList(input, [][]byte{[]byte("1.23456"), []byte("-2.34561")}, nil, proc.Mp()))
+		bat.SetRowCount(2)
+		column := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+		parameter := &plan.Expr{Typ: plan.Type{Id: int32(types.T_float64)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+		precision := bindTestCast(t, proc, function.IntegerArgumentCastOverload, parameter, types.T_int64.ToType())
+		executor, err := NewExpressionExecutor(proc, bindTestFunction(t, proc, "floor", bindTestCast(t, proc, 0, column, types.T_float64.ToType()), precision))
+		if executor != nil {
+			t.Cleanup(executor.Free)
+		}
+		require.NoError(t, err)
+		got := evalTestTextParameter(t, proc, executor, "3.5", false, vector.PrepareParamFloat, []*batch.Batch{bat}, nil)
+		require.Equal(t, types.Type{Oid: types.T_float64, Size: 8}, *got.GetType())
+		require.False(t, got.IsConst())
+		require.Equal(t, 2, got.Length())
+		for row, want := range []float64{1.2345, -2.3457} {
+			require.False(t, got.IsNull(uint64(row)))
+			require.Equal(t, want, vector.GetFixedAtNoTypeCheck[float64](got, row))
+		}
+	})
+
 }
 
 func TestFlowControlPreservesPreparedParamKindOnPartialSelection(t *testing.T) {

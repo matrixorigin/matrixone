@@ -1413,18 +1413,6 @@ func (expr *FunctionExpressionExecutor) hasScalarIntegerArgumentSource() bool {
 	return scalarIntegerArgumentSource(expr.parameterExecutor[0])
 }
 
-func (expr *FunctionExpressionExecutor) preserveIntegerArgumentScalar(rowCount int, selectList []bool) {
-	if rowCount == 0 || !expr.hasScalarIntegerArgumentSource() {
-		return
-	}
-	for row := 0; row < rowCount && selectList != nil; row++ {
-		if !selectList[row] {
-			return
-		}
-	}
-	expr.resultVector.GetResultVector().ToConst()
-}
-
 func applyTransparentStringSource(
 	result *vector.Vector,
 	source *vector.Vector,
@@ -1827,7 +1815,11 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 		expr.parameterResults, expr.resultVector, proc, rowCount, &expr.selectList); err != nil {
 		return nil, err
 	}
-	expr.preserveIntegerArgumentScalar(rowCount, selectList)
+	// Partial selections returned through evalSelectedRows above.
+	// Runtime CASTs can flatten an otherwise scalar source.
+	if rowCount > 0 && expr.hasScalarIntegerArgumentSource() {
+		expr.resultVector.GetResultVector().ToConst()
+	}
 	if expr.isImplicitCast() && len(expr.parameterResults) > 0 {
 		if err := applyTransparentStringSource(
 			expr.resultVector.GetResultVector(), expr.parameterResults[0], rowCount, proc.Mp()); err != nil {
