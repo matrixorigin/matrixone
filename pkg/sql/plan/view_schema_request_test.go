@@ -26,6 +26,7 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -45,14 +46,21 @@ func (p viewSchemaTestProvider) OpenViewSchemaBinding(ctx context.Context) (*Vie
 // objects. The request itself must protect them from binder and caller writes.
 type viewSchemaTestCompiler struct {
 	*MockCompilerContext
-	snapshot *Snapshot
-	resolve  func(context.Context, string, string, *Snapshot) error
-	lookups  atomic.Int64
+	snapshot      *Snapshot
+	namedSnapshot *Snapshot
+	resolve       func(context.Context, string, string, *Snapshot) error
+	lookups       atomic.Int64
 }
 
 func (c *viewSchemaTestCompiler) GetSnapshot() *Snapshot { return c.snapshot }
 func (c *viewSchemaTestCompiler) SetSnapshot(snapshot *Snapshot) {
 	c.snapshot = snapshot
+}
+func (c *viewSchemaTestCompiler) ResolveSnapshotWithSnapshotName(name string) (*Snapshot, error) {
+	if name == "daily" {
+		return DeepCopySnapshot(c.namedSnapshot), nil
+	}
+	return c.MockCompilerContext.ResolveSnapshotWithSnapshotName(name)
 }
 func (c *viewSchemaTestCompiler) Resolve(database, name string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
 	c.lookups.Add(1)
@@ -441,9 +449,9 @@ func TestViewSchemaRequestSharedProjectionMemoMatchesCacheOff(t *testing.T) {
 		name, middleName, middleSQL, firstSQL, secondSQL string
 		catalogName                                      string
 	}{
-		{"unqualified star", "middle_v", "select * from leaf_v", "select * from middle_v", "select * from middle_v", ""},
-		{"qualified star", "middle_v", "select leaf_v.* from leaf_v", "select * from middle_v", "select middle_v.* from middle_v", ""},
-		{"reference name differs from catalog", "mixed", "select * from leaf_v", "select * from mixed", "select mixed.k as key_value, mixed.label as Label from mixed", "Mixed"},
+		{"explicit projection", "middle_v", "select k, label from leaf_v", "select k, label from middle_v", "select k, label from middle_v", ""},
+		{"renamed projection", "middle_v", "select leaf_v.k as key_value, leaf_v.label from leaf_v", "select key_value, label from middle_v", "select middle_v.key_value, middle_v.label from middle_v", ""},
+		{"reference name differs from catalog", "mixed", "select k, label from leaf_v", "select k, label from mixed", "select mixed.k as key_value, mixed.label as Label from mixed", "Mixed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newViewSchemaTestFixture(t)
@@ -1237,12 +1245,131 @@ func TestViewSchemaRequestSnapshotEvidenceIsOwned(t *testing.T) {
 	require.Nil(t, f.compiler.snapshot, "the borrowed compiler snapshot is restored")
 }
 
+func TestViewSchemaRequestHistoricalHintWithTenantlessSnapshot(t *testing.T) {
+	for _, tc := range []struct {
+		name, statement string
+		named           *Snapshot
+	}{
+		{"named snapshot with tenantless parent", "select n_name from nation {snapshot='daily'}", &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 456}}},
+		{"named snapshot with tenant domain", "select n_name from nation {snapshot='daily'}", &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 456}, Tenant: &planpb.SnapshotTenant{TenantID: 42}}},
+		{"TS-only parent", "select n_name from nation", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newViewSchemaTestFixture(t)
+			f.compiler.namedSnapshot = tc.named
+			f.addView(t, "root_v", tc.statement)
+			parent := &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 123}}
+			for _, disabled := range []bool{false, true} {
+				r := f.request(t)
+				r.memoDisabled = disabled
+				result, err := r.Describe("tpch", "root_v", parent)
+				require.NoError(t, err)
+				columns, err := result.Columns()
+				require.NoError(t, err)
+				require.Len(t, columns, 1)
+				result.Release()
+				r.Close()
+			}
+			require.Nil(t, parent.Tenant)
+			require.Nil(t, f.compiler.snapshot, "description restores the borrowed snapshot")
+		})
+	}
+}
+
+func TestViewSchemaRequestRejectsUnfrozenLegacyProjectionStar(t *testing.T) {
+	for _, tc := range []struct {
+		name, middleSQL, rootSQL string
+	}{
+		{"root unqualified", "", "select * from nation"},
+		{"root qualified", "", "select nation.* from nation"},
+		{"nested unqualified", "select * from nation", "select n_name from middle_v"},
+		{"nested qualified", "select nation.* from nation", "select n_name from middle_v"},
+		{"CTE output", "", "with c as (select * from nation) select n_name from c"},
+		{"derived table", "", "select n_name from (select * from nation) as c"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newViewSchemaTestFixture(t)
+			if tc.middleSQL != "" {
+				f.addView(t, "middle_v", tc.middleSQL)
+			}
+			f.addView(t, "root_v", tc.rootSQL)
+			// A new visible base column must not silently extend old View output.
+			f.compiler.tables["nation"].Cols = append(f.compiler.tables["nation"].Cols,
+				&ColDef{Name: "new_column", Typ: planpb.Type{Id: int32(types.T_int32)}})
+			for _, disabled := range []bool{false, true} {
+				r := f.request(t)
+				r.memoDisabled = disabled
+				for i := 0; i < 2; i++ {
+					result, err := r.Describe("tpch", "root_v", nil)
+					if result != nil {
+						result.Release()
+					}
+					require.Nil(t, result)
+					require.Error(t, err)
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "unexpected error class: %v", err)
+					require.Contains(t, err.Error(), "LEGACY_STAR_UNAVAILABLE")
+				}
+				r.Close()
+			}
+		})
+	}
+}
+
+func TestViewSchemaRequestLegacyStarCannotUsePreviousMemo(t *testing.T) {
+	f := newViewSchemaTestFixture(t)
+	middle := f.addView(t, "middle_v", "select n_name from nation")
+	f.addView(t, "first_v", "select n_name from middle_v")
+	f.addView(t, "second_v", "select n_name from middle_v")
+	r := f.request(t)
+	viewSchemaTestResult(t, r, "first_v").Release()
+	// Keep the object identity but replace its persisted SQL. The second root
+	// must not reuse the previously bound nested metadata for a legacy star.
+	encoded, err := json.Marshal(ViewData{Stmt: "create view middle_v as select * from nation", DefaultDatabase: "tpch"})
+	require.NoError(t, err)
+	middle.ViewSql.View = string(encoded)
+	result, err := r.Describe("tpch", "second_v", nil)
+	if result != nil {
+		result.Release()
+	}
+	require.Nil(t, result)
+	require.ErrorContains(t, err, "LEGACY_STAR_UNAVAILABLE")
+	// The root memo key also incorporates its persisted SQL, even if its
+	// catalog identity has not changed.
+	root := f.compiler.tables["first_v"]
+	encoded, err = json.Marshal(ViewData{Stmt: "create view first_v as select * from nation", DefaultDatabase: "tpch"})
+	require.NoError(t, err)
+	root.ViewSql.View = string(encoded)
+	result, err = r.Describe("tpch", "first_v", nil)
+	if result != nil {
+		result.Release()
+	}
+	require.Nil(t, result)
+	require.ErrorContains(t, err, "LEGACY_STAR_UNAVAILABLE")
+}
+
+func TestViewSchemaRequestAcceptsStableProjectionAndCountStar(t *testing.T) {
+	f := newViewSchemaTestFixture(t)
+	f.addView(t, "explicit_v", "select n_name from nation")
+	f.addView(t, "count_v", "select count(*) as n from nation")
+	f.compiler.tables["nation"].Cols = append(f.compiler.tables["nation"].Cols,
+		&ColDef{Name: "new_column", Typ: planpb.Type{Id: int32(types.T_int32)}})
+	r := f.request(t)
+	for _, name := range []string{"explicit_v", "count_v"} {
+		result, err := r.Describe("tpch", name, nil)
+		require.NoError(t, err)
+		columns, err := result.Columns()
+		require.NoError(t, err)
+		require.Len(t, columns, 1)
+		result.Release()
+	}
+}
+
 func BenchmarkViewSchemaRequest(b *testing.B) {
 	for _, disabled := range []bool{false, true} {
 		b.Run(fmt.Sprintf("memo_disabled=%t", disabled), func(b *testing.B) {
 			f := newViewSchemaTestFixture(b)
 			f.addView(b, "leaf_v", "select n_nationkey as k, n_name as label from nation")
-			f.addView(b, "middle_v", "select * from leaf_v")
+			f.addView(b, "middle_v", "select k, label from leaf_v")
 			f.addView(b, "root_v", "select k, label from middle_v")
 			var request *ViewSchemaRequest
 			defer func() {

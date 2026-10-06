@@ -11869,6 +11869,9 @@ func (builder *QueryBuilder) bindView(
 	}
 
 	if state, _ := builder.GetContext().Value(viewSchemaContextKey{}).(*viewSchemaDerivation); state != nil {
+		if err = rejectViewSchemaUnstableStar(state.request, viewStmt.AsSource); err != nil {
+			return 0, err
+		}
 		previousLower := state.lower
 		state.lower = viewLowerCaseTableNames
 		defer func() { state.lower = previousLower }()
@@ -13789,7 +13792,7 @@ func (builder *QueryBuilder) ResolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *
 	}
 
 	var tenant *SnapshotTenant
-	if bgSnapshot := builder.compCtx.GetSnapshot(); IsSnapshotValid(bgSnapshot) {
+	if bgSnapshot := builder.compCtx.GetSnapshot(); IsSnapshotValid(bgSnapshot) && bgSnapshot.Tenant != nil {
 		tenant = &SnapshotTenant{
 			TenantName: bgSnapshot.Tenant.TenantName,
 			TenantID:   bgSnapshot.Tenant.TenantID,
@@ -13858,6 +13861,10 @@ func (builder *QueryBuilder) ResolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *
 				return
 			}
 			if bgSnapshot := builder.compCtx.GetSnapshot(); builder.isRestoreByTs {
+				if bgSnapshot == nil || bgSnapshot.Tenant == nil {
+					err = moerr.NewInvalidInput(builder.GetContext(), "restore timestamp requires a tenant snapshot")
+					return
+				}
 				tenant = &SnapshotTenant{
 					TenantName: bgSnapshot.Tenant.TenantName,
 					TenantID:   bgSnapshot.Tenant.TenantID,

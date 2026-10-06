@@ -207,6 +207,9 @@ func (s *viewSchemaDerivation) describe(database, name string, snapshot *Snapsho
 		return nil, err
 	}
 	defer parsed.free()
+	if err := rejectViewSchemaUnstableStar(s.request, parsed.selectStmt); err != nil {
+		return nil, err
+	}
 	if parsed.data.RequiredProtocolVersion != nil {
 		s.observeProtocol(*parsed.data.RequiredProtocolVersion)
 	}
