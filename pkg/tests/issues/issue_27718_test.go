@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -106,7 +107,7 @@ func TestIssue27718ConcurrentSnapshotQuota(t *testing.T) {
 					}()
 				}
 				runIssue27718SnapshotQuotaMode(
-					t, ctx, sysDB, tenantDB, accountName, accountID, ports, mode.name)
+					t, ctx, sysDB, tenantDB, accountName, accountID, ports, commitClients, mode.name)
 			})
 		}
 	})
@@ -277,6 +278,7 @@ func runIssue27718SnapshotQuotaMode(
 	accountName string,
 	accountID int32,
 	ports []int64,
+	commitClients []issue27718CommitClient,
 	modeName string,
 ) {
 	t.Helper()
@@ -302,10 +304,46 @@ func runIssue27718SnapshotQuotaMode(
 		require.Equal(t, 1, probe)
 	}
 
+	// SQL completion publishes a commit, not the other CN's applied logtail.
+	// Fence each phase before cross-CN admission or a persisted-row oracle.
+	fence := func() {
+		t.Helper()
+		fenceCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		require.NoError(t, waitIssue27718Commits(fenceCtx, commitClients))
+	}
+	pendingSnapshots := make(map[string]*sql.DB)
+	defer func() {
+		if len(pendingSnapshots) == 0 {
+			return
+		}
+		// A failed oracle must not leave quota-consuming rows for the next
+		// transaction-mode subtest. Keep sessions and mode alive until cleanup.
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := waitIssue27718Commits(cleanupCtx, commitClients); err != nil {
+			t.Errorf("apply commits before snapshot cleanup: %v", err)
+		}
+		for name, db := range pendingSnapshots {
+			if _, err := db.ExecContext(cleanupCtx, "drop snapshot if exists "+name); err != nil {
+				t.Errorf("clean snapshot %s: %v", name, err)
+			}
+		}
+		if err := waitIssue27718Commits(cleanupCtx, commitClients); err != nil {
+			t.Errorf("apply snapshot cleanup commits: %v", err)
+		}
+	}()
+	dropSnapshot := func(db *sql.DB, name string) {
+		t.Helper()
+		execSQLRequire(t, ctx, db, "drop snapshot "+name)
+		delete(pendingSnapshots, name)
+	}
+
 	runConcurrentCreates := func(prefix string, quota, expectedSuccesses int) []string {
 		t.Helper()
 		execSQLRequire(t, ctx, sysDB, fmt.Sprintf(
 			"select mo_feature_limit_upsert(%d, 'snapshot', 'table', %d)", accountID, quota))
+		fence()
 
 		type createResult struct {
 			name string
@@ -314,11 +352,18 @@ func runIssue27718SnapshotQuotaMode(
 		start := make(chan struct{})
 		results := make(chan createResult, creators)
 		createCtx, createCancel := context.WithTimeout(ctx, 30*time.Second)
-		defer createCancel()
+		var workers sync.WaitGroup
+		defer func() {
+			createCancel()
+			workers.Wait()
+		}()
 		for i := 1; i <= creators; i++ {
 			name := fmt.Sprintf("%s_%d", prefix, i)
+			pendingSnapshots[name] = tenantDB
 			conn := connections[i-1]
+			workers.Add(1)
 			go func() {
+				defer workers.Done()
 				<-start
 				_, createErr := conn.ExecContext(createCtx, fmt.Sprintf(
 					"create snapshot %s for table issue_27718_db t", name))
@@ -338,6 +383,7 @@ func runIssue27718SnapshotQuotaMode(
 				t.Fatal("concurrent snapshot creator did not finish")
 			}
 		}
+		fence()
 		successes := make([]string, 0, creators)
 		for _, result := range completed {
 			if quota < 0 {
@@ -358,6 +404,7 @@ func runIssue27718SnapshotQuotaMode(
 					"feature SNAPSHOT with scope table has reached the limit of %d", quota))
 			}
 			require.NotContains(t, strings.ToLower(result.err.Error()), "txn need retry")
+			delete(pendingSnapshots, result.name)
 		}
 		require.Len(t, successes, expectedSuccesses)
 
@@ -371,37 +418,41 @@ func runIssue27718SnapshotQuotaMode(
 
 	prefix := "issue27718_" + strings.ReplaceAll(modeName, "_", "")
 	quotaOneSnapshots := runConcurrentCreates(prefix+"_q1", 1, 1)
-	execSQLRequire(t, ctx, tenantDB, "drop snapshot "+quotaOneSnapshots[0])
+	dropSnapshot(tenantDB, quotaOneSnapshots[0])
 	replacement := prefix + "_replacement"
 	overLimit := prefix + "_over_limit"
+	pendingSnapshots[replacement] = tenantDB
 	execSQLRequire(t, ctx, tenantDB, fmt.Sprintf(
 		"create snapshot %s for table issue_27718_db t", replacement))
+	pendingSnapshots[overLimit] = tenantDB
 	_, err := tenantDB.ExecContext(ctx, fmt.Sprintf(
 		"create snapshot %s for table issue_27718_db t", overLimit))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "feature SNAPSHOT with scope table has reached the limit of 1")
+	delete(pendingSnapshots, overLimit)
 	var overLimitRows int
 	require.NoError(t, tenantDB.QueryRowContext(ctx,
 		"select count(*) from mo_catalog.mo_snapshots where account_name = ? and sname = ?",
 		accountName, overLimit).Scan(&overLimitRows))
 	require.Zero(t, overLimitRows)
-	execSQLRequire(t, ctx, tenantDB, "drop snapshot "+replacement)
+	dropSnapshot(tenantDB, replacement)
 
 	quotaTwoSnapshots := runConcurrentCreates(prefix+"_q2", 2, 2)
 	for _, name := range quotaTwoSnapshots {
-		execSQLRequire(t, ctx, tenantDB, "drop snapshot "+name)
+		dropSnapshot(tenantDB, name)
 	}
 	runConcurrentCreates(prefix+"_disabled", 0, 0)
 
 	unlimitedSnapshots := runConcurrentCreates(prefix+"_unlimited", -1, creators)
 	for _, name := range unlimitedSnapshots {
-		execSQLRequire(t, ctx, tenantDB, "drop snapshot "+name)
+		dropSnapshot(tenantDB, name)
 	}
 
 	// Sys-on-behalf and the target tenant publish to different physical
 	// mo_snapshots catalogs but compete for the same final ACCOUNT slot.
 	execSQLRequire(t, ctx, sysDB, fmt.Sprintf(
 		"select mo_feature_limit_upsert(%d, 'snapshot', 'account', 1)", accountID))
+	fence()
 	sysName, tenantName := prefix+"_sysaccount", prefix+"_selfaccount"
 	type accountCreateResult struct {
 		name string
@@ -410,34 +461,49 @@ func runIssue27718SnapshotQuotaMode(
 	start := make(chan struct{})
 	results := make(chan accountCreateResult, 2)
 	accountCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
+	var workers sync.WaitGroup
+	defer func() {
+		cancel()
+		workers.Wait()
+	}()
+	pendingSnapshots[sysName] = sysDB
+	pendingSnapshots[tenantName] = tenantDBs[1]
+	workers.Add(2)
 	go func() {
+		defer workers.Done()
 		<-start
 		_, createErr := sysDB.ExecContext(accountCtx,
 			fmt.Sprintf("create snapshot %s for account %s", sysName, accountName))
 		results <- accountCreateResult{name: sysName, err: createErr}
 	}()
 	go func() {
+		defer workers.Done()
 		<-start
 		_, createErr := connections[1].ExecContext(accountCtx,
 			fmt.Sprintf("create snapshot %s for account", tenantName))
 		results <- accountCreateResult{name: tenantName, err: createErr}
 	}()
 	close(start)
-	var winner string
+	completed := make([]accountCreateResult, 0, 2)
 	for range 2 {
 		select {
 		case result := <-results:
-			if result.err == nil {
-				require.Empty(t, winner, "only one physical catalog may consume the account slot")
-				winner = result.name
-			} else {
-				require.Contains(t, result.err.Error(),
-					"feature SNAPSHOT with scope account has reached the limit of 1")
-				require.NotContains(t, strings.ToLower(result.err.Error()), "txn need retry")
-			}
+			completed = append(completed, result)
 		case <-accountCtx.Done():
 			t.Fatal("cross-catalog account snapshot creator did not finish")
+		}
+	}
+	fence()
+	var winner string
+	for _, result := range completed {
+		if result.err == nil {
+			require.Empty(t, winner, "only one physical catalog may consume the account slot")
+			winner = result.name
+		} else {
+			require.Contains(t, result.err.Error(),
+				"feature SNAPSHOT with scope account has reached the limit of 1")
+			require.NotContains(t, strings.ToLower(result.err.Error()), "txn need retry")
+			delete(pendingSnapshots, result.name)
 		}
 	}
 	require.NotEmpty(t, winner)
@@ -454,7 +520,7 @@ func runIssue27718SnapshotQuotaMode(
 			physical.name, accountName, accountID).Scan(&count))
 		if physical.name == winner {
 			require.Equal(t, 1, count)
-			execSQLRequire(t, ctx, physical.db, "drop snapshot "+winner)
+			dropSnapshot(physical.db, winner)
 		} else {
 			require.Zero(t, count)
 		}

@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
-	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_11"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_8"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -247,7 +246,11 @@ func TestV408LoginRepairsTenantCreatedAfterUpgradeSnapshot(t *testing.T) {
 		}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).WithWaitCommittedLogApplied()))
 		require.NoError(t, catalogExec(ctx,
 			fmt.Sprintf("update mo_catalog.mo_upgrade_tenant set ready = 1 where upgrade_id = %d", upgradeID)))
-		final := v4_0_11.Handler.Metadata()
+		// Follow the actual CN/bootstrap version, not the historical handler
+		// whose STATISTICS repair this late-login scenario exercises.
+		final := versions.Version{Version: cn.RawService().(frontend.BaseService).GetFinalVersion()}
+		require.NoError(t, sysDB.QueryRowContext(ctx,
+			"select version_offset from mo_catalog.mo_version where version = ?", final.Version).Scan(&final.VersionOffset))
 		require.NoError(t, sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
 			return versions.UpdateVersionState(final.Version, final.VersionOffset, versions.StateReady, txn)
 		}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).WithWaitCommittedLogApplied()))

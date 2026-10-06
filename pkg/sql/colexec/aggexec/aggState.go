@@ -1556,7 +1556,7 @@ func (ag *aggState) readStateWithAllocation(
 
 	if !info.saveArg {
 		for _, vec := range ag.vecs {
-			if err := vec.UnmarshalWithReader(reader, mp); err != nil {
+			if err := unmarshalAggregateVector(vec, reader, mp); err != nil {
 				return 0, err
 			}
 			if vec.Length() != int(cnt) {

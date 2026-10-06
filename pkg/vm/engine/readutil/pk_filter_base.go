@@ -554,7 +554,14 @@ func validatePKInVectorEncoding(data []byte) error {
 		return moerr.NewInvalidInputNoCtxf("invalid PK IN vector class %d", class)
 	}
 	pos := 1
-	typ := types.DecodeType(data[pos : pos+types.TSize])
+	typ, err := types.DecodeTypeChecked(data[pos : pos+types.TSize])
+	if err != nil {
+		return err
+	}
+	// This reader sorts and compares keys, rather than merely transporting them.
+	if err := plan.RequireLegacyCollations(typ.PlanType()); err != nil {
+		return err
+	}
 	pos += types.TSize
 	if !supportedPKInType(typ.Oid) || typ.TypeSize() != typ.Oid.TypeLen() {
 		return moerr.NewInvalidInputNoCtxf("invalid PK IN vector type %s", typ.Oid.String())
