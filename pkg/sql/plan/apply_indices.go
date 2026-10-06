@@ -1756,16 +1756,24 @@ func indexUsesUnicodeCollation(idxDef *IndexDef, tableDef *TableDef) bool {
 	if idxDef == nil || tableDef == nil {
 		return false
 	}
-	for _, part := range idxDef.Parts {
-		colPos, ok := tableDef.Name2ColIndex[catalog.ResolveAlias(part)]
-		if !ok || colPos < 0 || int(colPos) >= len(tableDef.Cols) {
-			continue
-		}
-		if types.IsUnicodeCollation(uint8(tableDef.Cols[colPos].Typ.Charset)) {
+	for partPos := range idxDef.Parts {
+		if indexPartUsesUnicodeCollation(idxDef, tableDef, partPos) {
 			return true
 		}
 	}
 	return false
+}
+
+func indexPartUsesUnicodeCollation(idxDef *IndexDef, tableDef *TableDef, partPos int) bool {
+	if idxDef == nil || tableDef == nil || partPos < 0 || partPos >= len(idxDef.Parts) {
+		return false
+	}
+	part := idxDef.Parts[partPos]
+	colPos, ok := tableDef.Name2ColIndex[catalog.ResolveAlias(part)]
+	if !ok || colPos < 0 || int(colPos) >= len(tableDef.Cols) {
+		return false
+	}
+	return types.IsUnicodeCollation(uint8(tableDef.Cols[colPos].Typ.Charset))
 }
 
 func canUseRegularIndexHiddenSortKey(scanNode *plan.Node, orderByCol *plan.ColRef) bool {
@@ -2507,7 +2515,7 @@ func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *pl
 			// A serial_extract of a Unicode index part returns the UCA weight
 			// bytes, not the original text. Keep this optional pushdown on the
 			// base-table scan and let the normal row comparator evaluate it.
-			if types.IsUnicodeCollation(uint8(fn.Args[colArgIdx].Typ.Charset)) {
+			if indexPartUsesUnicodeCollation(idxDef, node.TableDef, access.position) {
 				continue
 			}
 			idxColExpr := GetColExpr(idxTableNode.TableDef.Cols[0].Typ, idxTableNode.BindingTags[0], 0)
