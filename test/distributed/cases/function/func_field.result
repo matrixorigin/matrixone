@@ -233,6 +233,80 @@ set @field_condition = null;
 set @field_peer = null;
 set @field_subject = 'A';
 set @field_candidate = 'a';
+prepare field_substring_nullif from 'select field(nullif(substring(?,1),cast(''B'' as binary)),?) as substring_nullif';
+execute field_substring_nullif using @field_subject,@field_candidate;
+➤ substring_nullif[-5,64,0]  𝄀
+1
+set @field_subject = X'41';
+set @field_candidate = X'61';
+execute field_substring_nullif using @field_subject,@field_candidate;
+➤ substring_nullif[-5,64,0]  𝄀
+1
+deallocate prepare field_substring_nullif;
+set @field_subject = 'A';
+set @field_candidate = 'a';
+prepare field_binary_nullif from 'select field(nullif(coalesce(?,_binary''A''),''''),?) as binary_nullif';
+execute field_binary_nullif using @field_subject,@field_candidate;
+➤ binary_nullif[-5,64,0]  𝄀
+0
+set @field_subject = X'41';
+set @field_candidate = X'61';
+execute field_binary_nullif using @field_subject,@field_candidate;
+➤ binary_nullif[-5,64,0]  𝄀
+0
+deallocate prepare field_binary_nullif;
+set @field_subject = 'A';
+set @field_candidate = 'a';
+prepare field_binary_nullif from 'select field(nullif(coalesce(?,cast(''B'' as binary)),''''),?) as cast_binary_nullif';
+execute field_binary_nullif using @field_subject,@field_candidate;
+➤ cast_binary_nullif[-5,64,0]  𝄀
+0
+set @field_subject = X'41';
+set @field_candidate = X'61';
+execute field_binary_nullif using @field_subject,@field_candidate;
+➤ cast_binary_nullif[-5,64,0]  𝄀
+0
+deallocate prepare field_binary_nullif;
+set @field_subject = 'A';
+set @field_candidate = 'a';
+prepare field_binary_nullif from 'select field(nullif(if(true,?,_binary''B''),''''),?) as if_binary_nullif';
+execute field_binary_nullif using @field_subject,@field_candidate;
+➤ if_binary_nullif[-5,64,0]  𝄀
+0
+set @field_subject = X'41';
+set @field_candidate = X'61';
+execute field_binary_nullif using @field_subject,@field_candidate;
+➤ if_binary_nullif[-5,64,0]  𝄀
+0
+deallocate prepare field_binary_nullif;
+set @field_subject = 'A';
+set @field_candidate = 'a';
+prepare field_binary_nullif from 'select field(nullif(case when true then ? else _binary''B'' end,''''),?) as case_binary_nullif';
+execute field_binary_nullif using @field_subject,@field_candidate;
+➤ case_binary_nullif[-5,64,0]  𝄀
+0
+set @field_subject = X'41';
+set @field_candidate = X'61';
+execute field_binary_nullif using @field_subject,@field_candidate;
+➤ case_binary_nullif[-5,64,0]  𝄀
+0
+deallocate prepare field_binary_nullif;
+set @field_prefix = 0;
+set @field_subject = 'A';
+set @field_candidate = 'a';
+prepare field_sparse_nullif from 'select ? as prefix_value,field(nullif(?,1),?) as sparse_nullif';
+execute field_sparse_nullif using @field_prefix,@field_subject,@field_candidate;
+➤ prefix_value[-1,16383,0]  ¦  sparse_nullif[-5,64,0]  𝄀
+0  ¦  1
+deallocate prepare field_sparse_nullif;
+prepare field_sparse_nullif from 'select ? as prefix_one,? as prefix_two,field(nullif(?,cast(null as signed)),?) as sparse_nullif';
+execute field_sparse_nullif using @field_prefix,@field_prefix,@field_subject,@field_candidate;
+➤ prefix_one[-1,16383,0]  ¦  prefix_two[-1,16383,0]  ¦  sparse_nullif[-5,64,0]  𝄀
+0  ¦  0  ¦  1
+deallocate prepare field_sparse_nullif;
+set @field_prefix = null;
+set @field_subject = 'A';
+set @field_candidate = 'a';
 set @field_condition = 0;
 prepare field_nested_case from 'select field(coalesce(case when ? then null else ? end,null),?) as nested_case';
 execute field_nested_case using @field_condition, @field_subject, @field_candidate;

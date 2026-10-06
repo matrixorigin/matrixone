@@ -3274,10 +3274,11 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				rule.specialized = true
 			} else {
 				var applyErr error
+				// Sparse marker maps are keyed by position, not bounded by their
+				// entry count. Return-role protection also applies to marker 1/2/...
 				disablePrefix := sharedControlParam && paramPos >= 0 &&
-					paramPos < len(rule.numericComparisonTextParamPositions) &&
 					(rule.numericComparisonTextParamPositions[paramPos] ||
-						paramPos < len(rule.numericPrefixParamPositions) && rule.numericPrefixParamPositions[paramPos] &&
+						rule.numericPrefixParamPositions[paramPos] &&
 							paramPos < len(rule.sqlExecuteStringBackedParams) && rule.sqlExecuteStringBackedParams[paramPos])
 				if disablePrefix && paramPos < len(rule.params) && paramPos < len(rule.paramValues) &&
 					rule.params[paramPos] != nil {

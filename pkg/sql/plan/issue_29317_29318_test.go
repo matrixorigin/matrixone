@@ -484,6 +484,11 @@ func TestPreparedFieldComparisonExecution(t *testing.T) {
 			{"numeric NULL nullif peer", "nullif(?, cast(null as signed))", 1},
 			{"text NULL nullif peer", "nullif(?, cast(null as char))", 1},
 			{"explicit binary nullif peer", "nullif(?, cast('B' as binary))", 0},
+			{"substring nullif binary peer", "nullif(substring(?,1), cast('B' as binary))", 1},
+			{"coalesce fixed binary nullif value", "nullif(coalesce(?,_binary'A'), '')", 0},
+			{"coalesce cast binary nullif value", "nullif(coalesce(?,cast('B' as binary)), '')", 0},
+			{"if fixed binary nullif value", "nullif(if(true,?,_binary'B'), '')", 0},
+			{"case fixed binary nullif value", "nullif(case when true then ? else _binary'B' end, '')", 0},
 			{"greatest", "greatest(?, '@')", 1},
 			{"coalesce text", "coalesce(?, 'fallback')", 1},
 			{"if text", "if(true, ?, 'B')", 1},
@@ -494,7 +499,7 @@ func TestPreparedFieldComparisonExecution(t *testing.T) {
 		} {
 			t.Run(source.String()+"/"+tc.name, func(t *testing.T) {
 				query := "select field(" + tc.operand + ", ?)"
-				prepared, err := runOneStmt(NewMockOptimizer(false), t,
+				prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 					"prepare p from '"+strings.ReplaceAll(query, "'", "''")+"'")
 				require.NoError(t, err)
 				template := prepared.GetDcl().GetPrepare().Plan
@@ -515,7 +520,7 @@ func TestPreparedFieldComparisonExecution(t *testing.T) {
 				out, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 				require.NoError(t, err)
 				require.Equal(t, tc.want, vector.GetFixedAtWithTypeCheck[int64](out, 0), consumer.String())
-				mock := NewMockOptimizer(false)
+				mock := NewMockOptimizer(false, newPlanTestProcess(t))
 				mock.ctxt.SetContext(withPreparedSourceBindings(context.Background(), []PreparedSourceBinding{
 					{Position: 0, Type: source.ToType()}, {Position: 1, Type: source.ToType()},
 				}, values))
@@ -541,7 +546,7 @@ func TestPreparedFieldParameterCaseComparison(t *testing.T) {
 		"prepare p from 'select field(nullif(coalesce(?,?), ''''), ?)'",
 	} {
 		t.Run(sql, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t,
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 				sql)
 			require.NoError(t, err)
 			first := ParamValue{Value: int64(0), SourceType: types.T_int64.ToType(), HasSourceType: true}
@@ -585,7 +590,7 @@ func TestPreparedNullifDomainWitnessBudget(t *testing.T) {
 					}
 					query := "prepare p from 'select " + strings.ReplaceAll(expr, "'", "''") + "'"
 					start := time.Now()
-					p, err := runOneStmt(NewMockOptimizer(false), t, query)
+					p, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, query)
 					require.NoError(t, err)
 					t.Logf("depth=%d prepare=%s sqlBytes=%d", depth, time.Since(start), len("select "+expr))
 					require.NoError(t, planpb.VisitExpressionsInOwner(p.GetDcl().GetPrepare().Plan, func(root *Expr) error {
@@ -615,7 +620,7 @@ func TestPreparedNullifDomainWitnessBudget(t *testing.T) {
 func TestPreparedFieldTextCaseReuse(t *testing.T) {
 	for _, operand := range []string{"case when ? then null else ? end", "coalesce(case when ? then null else ? end,null)"} {
 		query := "select field(" + operand + ", ?)"
-		p, err := runOneStmt(NewMockOptimizer(false), t, "prepare p from '"+query+"'")
+		p, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "prepare p from '"+query+"'")
 		require.NoError(t, err)
 		template := p.GetDcl().GetPrepare().Plan
 		before := template.String()
@@ -640,7 +645,7 @@ func TestPreparedFieldTextCaseReuse(t *testing.T) {
 						want = 0
 					}
 					require.Equal(t, want, vector.GetFixedAtWithTypeCheck[int64](out, 0))
-					mock := NewMockOptimizer(false)
+					mock := NewMockOptimizer(false, newPlanTestProcess(t))
 					mock.ctxt.SetContext(withPreparedSourceBindings(context.Background(), []PreparedSourceBinding{
 						{Position: 0, Type: types.T_int64.ToType()}, {Position: 1, Type: source.ToType()}, {Position: 2, Type: source.ToType()},
 					}, values))
@@ -669,7 +674,7 @@ func TestPreparedFieldTextNullSelectorSourceBinding(t *testing.T) {
 		"select field(x, ?) from (select max(case when ? then null else ? end) over() as x) d",
 	} {
 		t.Run(query, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			text := types.T_varchar.ToType()
 			bindings := []PreparedSourceBinding{{Position: 0, Type: text}, {Position: 1, Type: text}}
 			values := []any{
@@ -700,7 +705,7 @@ func TestPreparedFieldTextNullSelectorSourceBinding(t *testing.T) {
 }
 
 func TestPreparedFieldNullifSourceBinding(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	binary := types.T_varbinary.ToType()
 	values := []any{
 		ParamValue{Value: "A", SourceType: binary, HasSourceType: true},

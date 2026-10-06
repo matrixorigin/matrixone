@@ -175,6 +175,62 @@ deallocate prepare field_nullif_fixed_value;
 set @field_condition = null;
 set @field_peer = null;
 
+-- NULLIF's equality domain must not overwrite an already typed return expression.
+set @field_subject = 'A';
+set @field_candidate = 'a';
+prepare field_substring_nullif from 'select field(nullif(substring(?,1),cast(''B'' as binary)),?) as substring_nullif';
+execute field_substring_nullif using @field_subject,@field_candidate;
+set @field_subject = X'41';
+set @field_candidate = X'61';
+execute field_substring_nullif using @field_subject,@field_candidate;
+deallocate prepare field_substring_nullif;
+
+-- Fixed BINARY return contributors survive NULLIF's comparison conversion for both sources.
+set @field_subject = 'A';
+set @field_candidate = 'a';
+prepare field_binary_nullif from 'select field(nullif(coalesce(?,_binary''A''),''''),?) as binary_nullif';
+execute field_binary_nullif using @field_subject,@field_candidate;
+set @field_subject = X'41';
+set @field_candidate = X'61';
+execute field_binary_nullif using @field_subject,@field_candidate;
+deallocate prepare field_binary_nullif;
+set @field_subject = 'A';
+set @field_candidate = 'a';
+prepare field_binary_nullif from 'select field(nullif(coalesce(?,cast(''B'' as binary)),''''),?) as cast_binary_nullif';
+execute field_binary_nullif using @field_subject,@field_candidate;
+set @field_subject = X'41';
+set @field_candidate = X'61';
+execute field_binary_nullif using @field_subject,@field_candidate;
+deallocate prepare field_binary_nullif;
+set @field_subject = 'A';
+set @field_candidate = 'a';
+prepare field_binary_nullif from 'select field(nullif(if(true,?,_binary''B''),''''),?) as if_binary_nullif';
+execute field_binary_nullif using @field_subject,@field_candidate;
+set @field_subject = X'41';
+set @field_candidate = X'61';
+execute field_binary_nullif using @field_subject,@field_candidate;
+deallocate prepare field_binary_nullif;
+set @field_subject = 'A';
+set @field_candidate = 'a';
+prepare field_binary_nullif from 'select field(nullif(case when true then ? else _binary''B'' end,''''),?) as case_binary_nullif';
+execute field_binary_nullif using @field_subject,@field_candidate;
+set @field_subject = X'41';
+set @field_candidate = X'61';
+execute field_binary_nullif using @field_subject,@field_candidate;
+deallocate prepare field_binary_nullif;
+
+-- Non-zero return marker positions preserve the value rather than its numeric comparison prefix.
+set @field_prefix = 0;
+set @field_subject = 'A';
+set @field_candidate = 'a';
+prepare field_sparse_nullif from 'select ? as prefix_value,field(nullif(?,1),?) as sparse_nullif';
+execute field_sparse_nullif using @field_prefix,@field_subject,@field_candidate;
+deallocate prepare field_sparse_nullif;
+prepare field_sparse_nullif from 'select ? as prefix_one,? as prefix_two,field(nullif(?,cast(null as signed)),?) as sparse_nullif';
+execute field_sparse_nullif using @field_prefix,@field_prefix,@field_subject,@field_candidate;
+deallocate prepare field_sparse_nullif;
+set @field_prefix = null;
+
 -- Nested selectors compose CASE's prepared value domain without using its condition as a value.
 set @field_subject = 'A';
 set @field_candidate = 'a';

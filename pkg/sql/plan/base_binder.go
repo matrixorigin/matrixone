@@ -4164,7 +4164,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	}
 	isIfNull := name == "ifnull"
 	isNullIf := name == "nullif"
-	var nullIfPeerSyntax tree.Expr
+	var nullIfValueSyntax, nullIfPeerSyntax tree.Expr
 
 	// rewrite some ast Exprs before binding
 	switch name {
@@ -4173,6 +4173,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		if len(astArgs) != 2 {
 			return nil, moerr.NewInvalidArg(b.GetContext(), "nullif need two args", len(astArgs))
 		}
+		nullIfValueSyntax = unwrapParenExpr(astArgs[0])
 		nullIfPeerSyntax = unwrapParenExpr(astArgs[1])
 		elseExpr := astArgs[0]
 		thenExpr := tree.NewNumVal("", "", false, tree.P_null)
@@ -4738,18 +4739,22 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 							Typ: declared, Expr: &plan.Expr_Lit{Lit: &plan.Literal{StringSource: 1}},
 						})
 					}
-					// Preserve NULLIF's comparison-domain operands before its CASE
-					// shape becomes indistinguishable from a user-written CASE.
-					// This witness is metadata only; CASE remains the executable.
-					ensurePreparedNumericMetadata(e).StringDomainSource = &Expr{
-						Typ: e.Typ, Expr: &plan.Expr_F{F: &plan.Function{
-							Func: &plan.ObjectRef{ObjName: "coalesce"},
-							Args: []*Expr{
-								preparedNullifDomainWitness(args[2]),
-								peerWitness,
-							},
-						}},
+					// Record NULLIF's return-domain ownership before CASE lowering
+					// erases its identity. This compact witness is metadata only;
+					// CASE, including its separate equality conversions, is executable.
+					valueWitness := preparedNullifDomainWitness(args[2])
+					if _, unresolved := nullIfValueSyntax.(*tree.ParamExpr); unresolved {
+						// Only an unresolved PARAM_ITEM takes its type from the peer.
+						// Value-producing functions own their return domain independently
+						// of the equality's conversion (SUBSTRING, selectors, nested NULLIF).
+						valueWitness = &Expr{
+							Typ: e.Typ, Expr: &plan.Expr_F{F: &plan.Function{
+								Func: &plan.ObjectRef{ObjName: "coalesce"},
+								Args: []*Expr{valueWitness, peerWitness},
+							}},
+						}
 					}
+					ensurePreparedNumericMetadata(e).StringDomainSource = valueWitness
 				}
 			}
 			b.markPreparedResultCastsProvisional(
