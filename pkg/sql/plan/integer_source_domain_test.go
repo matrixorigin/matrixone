@@ -67,7 +67,7 @@ func TestPreparedIntegerSourceDomainBoundaries(t *testing.T) {
 				if insert {
 					sql = "insert into constraint_test.emp(empno,ename) values (1," + expr + ")"
 				}
-				prepared, err := runOneStmt(NewMockOptimizer(false), t, "prepare source_domain from '"+sql+"'")
+				prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "prepare source_domain from '"+sql+"'")
 				require.NoError(t, err)
 				original := prepared.GetDcl().GetPrepare().Plan
 				var bound *Plan
@@ -110,7 +110,7 @@ func TestPreparedIntegerSourceProjectionDomains(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
-			prepared, err := runOneStmt(NewMockOptimizer(false), t, "prepare source_projection from '"+tc.sql+"'")
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "prepare source_projection from '"+tc.sql+"'")
 			require.NoError(t, err)
 			original := prepared.GetDcl().GetPrepare().Plan
 			require.Equal(t, tc.positions, PreparedPlanNumericFallbackParamPositions(original))
@@ -151,7 +151,7 @@ func TestPreparedIntegerNullPhysicalDomains(t *testing.T) {
 	} {
 		t.Run(source, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
-			prepared, err := runOneStmt(NewMockOptimizer(false), t,
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 				`prepare null_domain from 'select substring_index("a.b.c.d",".",`+source+`) '`)
 			require.NoError(t, err)
 			original := prepared.GetDcl().GetPrepare().Plan
@@ -175,7 +175,7 @@ func TestPreparedIntegerNullPhysicalDomains(t *testing.T) {
 
 func TestPreparedIntegerBitCountSource(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		`prepare bit_count_source from 'select substring_index("a.b.c.d",".",bit_count(?))'`)
 	require.NoError(t, err)
 	bound, _, err := FillValuesOfParamsInPlanWithSpecialization(proc.Ctx, prepared.GetDcl().GetPrepare().Plan, []any{
@@ -194,7 +194,7 @@ func TestPreparedIntegerNestedBitAggregateSource(t *testing.T) {
 	for _, name := range []string{"bit_or", "bit_and", "bit_xor"} {
 		t.Run(name, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
-			prepared, err := runOneStmt(NewMockOptimizer(false), t,
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 				`prepare bit_source from 'select substring_index("a.b.c.d",".",(select `+name+`(?) from nation))'`)
 			require.NoError(t, err)
 			bound, _, err := FillValuesOfParamsInPlanWithSpecialization(proc.Ctx, prepared.GetDcl().GetPrepare().Plan, []any{
@@ -255,7 +255,7 @@ func TestPreparedResultPeerUsesCurrentOccurrence(t *testing.T) {
 }
 
 func TestPreparedArithmeticExplicitDoublePeer(t *testing.T) {
-	prepared, err := runOneStmt(NewMockOptimizer(false), t, `prepare cast_boundary from 'select (? / 2) + cast(1 as double)'`)
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, `prepare cast_boundary from 'select (? / 2) + cast(1 as double)'`)
 	require.NoError(t, err)
 	proc := testutil.NewProcess(t)
 	bound, _, err := FillValuesOfParamsInPlanWithSpecialization(proc.Ctx, prepared.GetDcl().GetPrepare().Plan, []any{

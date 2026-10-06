@@ -23,12 +23,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
 func TestDecimal256HighScaleMultiplicationPublicPath(t *testing.T) {
-	stmt, err := runOneExprStmt(NewMockOptimizer(false), t,
+	stmt, err := runOneExprStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"select cast('1e-65' as decimal(65,65)) * cast('1e-65' as decimal(65,65))")
 	require.NoError(t, err)
 	expr := stmt.GetQuery().Nodes[1].ProjectList[0]
@@ -36,8 +35,8 @@ func TestDecimal256HighScaleMultiplicationPublicPath(t *testing.T) {
 	require.Equal(t, int32(65), expr.Typ.Width)
 	require.Equal(t, int32(65), expr.Typ.Scale)
 
-	proc := testutil.NewProc(nil)
-	t.Cleanup(func() { proc.Base.FileService.Close(proc.Ctx); proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	proc := newPlanTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 	executor, err := colexec.NewExpressionExecutor(proc, expr)
 	require.NoError(t, err)
 	defer executor.Free()
@@ -78,7 +77,7 @@ func TestDecimal256ScaleAlignmentPublicPath(t *testing.T) {
 		{"mod_high_bits", "select cast((cast(n_nationkey as decimal(20,0)) * cast('2000000000000000000' as decimal(20,0))) as decimal(65,0)) % cast('85070591730234615865843651857942052864e-58' as decimal(65,58)) from nation", 58, 0, 58, []types.Decimal256{{B64_127: 0x2eeb4be2e32a2000}, {B64_127: 0x1dd697c5c6544000}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			stmt, err := runOneExprStmt(NewMockOptimizer(false), t, tc.sql)
+			stmt, err := runOneExprStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, tc.sql)
 			require.NoError(t, err)
 			var expr *pb.Expr
 			for _, node := range stmt.GetQuery().Nodes {
@@ -98,8 +97,8 @@ func TestDecimal256ScaleAlignmentPublicPath(t *testing.T) {
 			require.Len(t, args, 2)
 			require.Equal(t, tc.leftScale, args[0].Typ.Scale)
 			require.Equal(t, tc.rightScale, args[1].Typ.Scale)
-			proc := testutil.NewProc(nil)
-			t.Cleanup(func() { proc.Base.FileService.Close(proc.Ctx); proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+			proc := newPlanTestProcess(t)
+			t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 			input := batch.NewWithSize(1)
 			t.Cleanup(func() { input.Clean(proc.Mp()) })
 			input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
@@ -141,15 +140,15 @@ func TestDecimal256ScaleAlignmentPublicPath(t *testing.T) {
 // Legal inputs must not publish a physical carrier coefficient under a SQL
 // precision that cannot represent it, including the minimum signed coefficient.
 func TestDecimal256ArithmeticPrecisionPublicPath(t *testing.T) {
-	stmt, err := runOneExprStmt(NewMockOptimizer(false), t,
+	stmt, err := runOneExprStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"select cast('-57896044618658097711785492504343953926634992332820282019728792003' as decimal(65,0)) + cast('-0.956564819968' as decimal(65,12))")
 	require.NoError(t, err)
 	expr := stmt.GetQuery().Nodes[1].ProjectList[0]
 	require.Equal(t, int32(types.T_decimal256), expr.Typ.Id)
 	require.Equal(t, int32(65), expr.Typ.Width)
 	require.Equal(t, int32(12), expr.Typ.Scale)
-	proc := testutil.NewProc(nil)
-	t.Cleanup(func() { proc.Base.FileService.Close(proc.Ctx); proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	proc := newPlanTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 	executor, err := colexec.NewExpressionExecutor(proc, expr)
 	require.NoError(t, err)
 	defer executor.Free()

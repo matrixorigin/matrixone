@@ -21,8 +21,10 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
 
@@ -299,7 +301,7 @@ func TestPreparedVariadicRuntimeSourceDomains(t *testing.T) {
 	)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t, tc.sql)
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, tc.sql)
 			require.NoError(t, err)
 			plan := prepared.GetDcl().GetPrepare().Plan
 			snapshot := plan.String()
@@ -323,7 +325,7 @@ func TestPreparedVariadicRuntimeSourceDomains(t *testing.T) {
 func TestPreparedCommonValueStringMarkerWithFixedDecimalPeer(t *testing.T) {
 	for _, name := range []string{"coalesce", "greatest", "least"} {
 		t.Run(name, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t,
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 				"prepare p from 'select "+name+"(?, cast(9007199254740992.0000000001 as decimal(38,10))) = cast(9007199254740992.0000000002 as decimal(38,10))'")
 			require.NoError(t, err)
 			template := prepared.GetDcl().GetPrepare().Plan
@@ -363,7 +365,7 @@ func TestPreparedCommonValueStringMarkerWithFixedDecimalPeer(t *testing.T) {
 		{"nested arithmetic peer", "greatest(?, coalesce(?, cast(1 as decimal(38,10)))+0)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t,
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 				"prepare p from 'select "+tc.expr+" = cast(9007199254740992.0000000002 as decimal(38,10))'")
 			require.NoError(t, err)
 			template := prepared.GetDcl().GetPrepare().Plan
@@ -387,7 +389,7 @@ func TestPreparedCommonValueStringMarkerWithFixedDecimalPeer(t *testing.T) {
 }
 
 func TestPreparedFixedDecimalPrefixReservesIntegralDigits(t *testing.T) {
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare p from 'select least(?, cast(1.25 as decimal(10,2)))'")
 	require.NoError(t, err)
 	template := prepared.GetDcl().GetPrepare().Plan
@@ -407,7 +409,7 @@ func TestPreparedFixedDecimalPrefixReservesIntegralDigits(t *testing.T) {
 }
 
 func TestPreparedFixedDecimalPrefixReservesRoundingCarry(t *testing.T) {
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare p from 'select least(?, cast(1.25 as decimal(10,2)))'")
 	require.NoError(t, err)
 	template := prepared.GetDcl().GetPrepare().Plan
@@ -436,7 +438,7 @@ func TestPreparedFixedDecimalPrefixReservesRoundingCarry(t *testing.T) {
 }
 
 func TestPreparedRoundRebindsNestedFixedDecimalChild(t *testing.T) {
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare p from 'select greatest(?,round(coalesce(?,cast(9007199254740992.0000000001 as decimal(38,10))),10))'")
 	require.NoError(t, err)
 	template := prepared.GetDcl().GetPrepare().Plan
@@ -453,7 +455,7 @@ func TestPreparedRoundRebindsNestedFixedDecimalChild(t *testing.T) {
 	require.Equal(t, int32(10), round.Typ.Scale, round.String())
 	require.Equal(t, int32(types.T_decimal128), round.GetF().Args[0].Typ.Id, round.String())
 
-	explicit, err := runOneStmt(NewMockOptimizer(false), t,
+	explicit, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare p from 'select round(cast(coalesce(?,cast(9007199254740992.0000000001 as decimal(38,10))) as double),10)'")
 	require.NoError(t, err)
 	explicitPlan := explicit.GetDcl().GetPrepare().Plan
@@ -468,7 +470,7 @@ func TestPreparedRoundRebindsNestedFixedDecimalChild(t *testing.T) {
 func TestPreparedRoundAndTruncateKeepRuntimeValueDomain(t *testing.T) {
 	for _, name := range []string{"round", "truncate"} {
 		t.Run(name, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t,
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 				"prepare p from 'select "+name+"(?,?)'")
 			require.NoError(t, err)
 			template := prepared.GetDcl().GetPrepare().Plan
@@ -503,7 +505,7 @@ func TestPreparedRoundAndTruncateKeepRuntimeValueDomain(t *testing.T) {
 			require.NotNil(t, fn)
 			require.True(t, types.T(fn.GetF().Args[0].Typ.Id).IsDecimal(), fn.String())
 
-			explicit, err := runOneStmt(NewMockOptimizer(false), t,
+			explicit, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 				"prepare p from 'select "+name+"(cast(? as decimal(10,2)),1)'")
 			require.NoError(t, err)
 			explicitPlan := explicit.GetDcl().GetPrepare().Plan
@@ -513,7 +515,7 @@ func TestPreparedRoundAndTruncateKeepRuntimeValueDomain(t *testing.T) {
 				stmt, parseErr := parsers.ParseOne(context.Background(), dialect.MYSQL,
 					"select "+name+"("+valueExpr+",1)", 1)
 				require.NoError(t, parseErr)
-				mock := NewMockOptimizer(false)
+				mock := NewMockOptimizer(false, newPlanTestProcess(t))
 				source := types.T_varchar.ToType()
 				bound, bindErr := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
 					[]PreparedSourceBinding{{Position: 0, Type: source}},
@@ -522,6 +524,96 @@ func TestPreparedRoundAndTruncateKeepRuntimeValueDomain(t *testing.T) {
 				require.False(t, bound.ValueDependent,
 					"an explicit numeric cast fixes the overload without inspecting text: %s", valueExpr)
 				stmt.Free()
+			}
+
+			// A result cast may narrow the function's answer, not its input.
+			// Inspect source casts instead of snapshotting a complete plan: a
+			// premature scale=1 conversion destroys 1.46 before TRUNCATE sees it.
+			for _, tc := range []struct {
+				name, sql      string
+				explicitNarrow bool
+			}{
+				{"outer_cast", "select cast(" + name + "(?,1) as decimal(20,1))", false},
+				{"scalar_input", "select cast(" + name + "((select ?),1) as decimal(20,1))", false},
+				{"scalar_result", "select cast((select " + name + "(?,1)) as decimal(20,1))", false},
+				{"derived_input", "select cast(" + name + "(v,1) as decimal(20,1)) from (select ? as v) s", false},
+				{"explicit_decimal_input", "select cast(" + name + "(cast(? as decimal(20,1)),1) as decimal(20,2))", true},
+				{"explicit_double_input", "select cast(" + name + "(cast(? as double),1) as decimal(20,1))", false},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, tc.sql, 1)
+					require.NoError(t, err)
+					t.Cleanup(stmt.Free)
+					mock := NewMockOptimizer(false, newPlanTestProcess(t))
+					proc := mock.ctxt.GetProcess()
+					params := vector.NewVec(types.T_text.ToType())
+					t.Cleanup(func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) })
+					require.NoError(t, vector.AppendBytes(params, []byte("1.46"), false, proc.Mp()))
+					proc.SetPrepareParams(params)
+					source := types.T_varchar.ToType()
+					bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
+						[]PreparedSourceBinding{{Position: 0, Type: source}},
+						[]any{ParamValue{Value: "1.46", SourceType: source, HasSourceType: true, IsBinaryProtocol: true}})
+					require.NoError(t, err)
+					require.NotNil(t, findPlanFunctionExpr(bound.Plan, name))
+					narrowSourceCast := false
+					require.NoError(t, planpb.VisitExpressionsInOwner(bound.Plan, func(root *Expr) error {
+						return planpb.VisitExprTree(root, func(expr *Expr) error {
+							fn := expr.GetF()
+							if fn != nil && fn.Func.GetObjName() == "cast" && len(fn.Args) > 0 &&
+								fn.Args[0].GetP() != nil && types.T(expr.Typ.Id).IsDecimal() && expr.Typ.Scale < 2 {
+								narrowSourceCast = true
+							}
+							return nil
+						})
+					}))
+					require.Equal(t, tc.explicitNarrow, narrowSourceCast,
+						"only an explicit input cast may narrow the original decimal spelling: %s\n%s", tc.sql, bound.Plan.String())
+				})
+			}
+
+			for _, tc := range []struct {
+				name, precision string
+				value           any
+				wantErr         bool
+			}{
+				{"value", "1", "1.46", false},
+				{"null", "1", nil, false},
+				{"precision_error", "missing_precision_column", "1.46", true},
+			} {
+				t.Run("context_restored/"+tc.name, func(t *testing.T) {
+					mock := NewMockOptimizer(false, newPlanTestProcess(t))
+					source := types.T_varchar.ToType()
+					ctx := withPreparedSourceBindings(context.Background(),
+						[]PreparedSourceBinding{{Position: 0, Type: source}},
+						[]any{ParamValue{Value: tc.value, SourceType: source, HasSourceType: true, IsBinaryProtocol: true}})
+					mock.ctxt.SetContext(ctx)
+					builder := NewQueryBuilder(planpb.Query_SELECT, &mock.ctxt, false, true)
+					binder := NewDefaultBinder(ctx, builder, NewBindContext(builder, nil), Type{}, nil)
+					outer := Type{Id: int32(types.T_decimal128), Width: 20, Scale: 1}
+					subquery := Type{Id: int32(types.T_decimal128), Width: 22, Scale: 1}
+					binder.numericParamType, binder.numericSubqueryTarget = &outer, &subquery
+					binder.numericFunctionTarget = true
+					stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select "+name+"(?,"+tc.precision+")", 1)
+					require.NoError(t, err)
+					t.Cleanup(stmt.Free)
+					ast := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.FuncExpr)
+					_, err = binder.bindPreparedNumericPrecisionFuncExpr(name, ast.Exprs, 0, nil, -1)
+					if tc.wantErr {
+						require.Error(t, err)
+					} else {
+						require.NoError(t, err)
+					}
+					require.Same(t, &outer, binder.numericParamType)
+					require.Same(t, &subquery, binder.numericSubqueryTarget)
+					require.True(t, binder.numericFunctionTarget)
+					// The next arithmetic sibling must still see its own outer
+					// target after success, NULL fallback, or a precision error.
+					sibling, err := binder.BindExpr(ast.Exprs[0], 0, false)
+					require.NoError(t, err)
+					require.Equal(t, outer.Id, sibling.Typ.Id)
+					require.Equal(t, outer.Scale, sibling.Typ.Scale)
+				})
 			}
 		})
 	}

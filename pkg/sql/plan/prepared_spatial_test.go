@@ -27,7 +27,7 @@ func TestPreparedSpatialDistanceUnitOverload(t *testing.T) {
 	ctx := t.Context()
 	geometryArgs := "st_geomfromtext(?,4326), st_geomfromtext(?,4326)"
 
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare stmt_spatial_distance from 'select st_distance("+geometryArgs+", ?)'")
 	require.NoError(t, err)
 	preparePlan := prepared.GetDcl().GetPrepare().Plan
@@ -79,7 +79,7 @@ func TestPreparedSpatialDistanceUnitOverload(t *testing.T) {
 		{name: "hausdorff", function: "st_hausdorffdistance", wantPrepare: 2, wantRuntime: 2},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t,
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 				"prepare stmt_spatial_"+test.name+" from 'select "+test.function+"("+geometryArgs+", ?)'")
 			require.NoError(t, err)
 			preparePlan := prepared.GetDcl().GetPrepare().Plan

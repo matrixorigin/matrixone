@@ -87,7 +87,7 @@ func vectorColMap() map[string]*ColDef {
 // CAGRA --------------------------------------------------------------------
 
 func TestBuildCagraSecondaryIndexDef_NoPK(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	_, _, err := buildCagraSecondaryIndexDef(ctx,
 		vectorIndexInfoFixture("v", tree.INDEX_TYPE_CAGRA),
 		vectorColMap(), nil, "")
@@ -100,7 +100,7 @@ func TestBuildCagraSecondaryIndexDef_NoPK(t *testing.T) {
 }
 
 func TestBuildCagraSecondaryIndexDef_PKWrongType(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	colMap := vectorColMap()
 	colMap["id"] = &ColDef{Typ: plan.Type{Id: int32(types.T_varchar)}}
 	_, _, err := buildCagraSecondaryIndexDef(ctx,
@@ -111,7 +111,7 @@ func TestBuildCagraSecondaryIndexDef_PKWrongType(t *testing.T) {
 }
 
 func TestBuildCagraSecondaryIndexDef_MultiCol(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	idx := vectorIndexInfoFixture("v", tree.INDEX_TYPE_CAGRA)
 	idx.KeyParts = append(idx.KeyParts, &tree.KeyPart{ColName: tree.NewUnresolvedColName("price")})
 	_, _, err := buildCagraSecondaryIndexDef(ctx, idx, vectorColMap(), nil, "id")
@@ -120,7 +120,7 @@ func TestBuildCagraSecondaryIndexDef_MultiCol(t *testing.T) {
 }
 
 func TestBuildCagraSecondaryIndexDef_ColMissing(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	colMap := vectorColMap()
 	delete(colMap, "v")
 	_, _, err := buildCagraSecondaryIndexDef(ctx,
@@ -131,7 +131,7 @@ func TestBuildCagraSecondaryIndexDef_ColMissing(t *testing.T) {
 }
 
 func TestBuildCagraSecondaryIndexDef_WrongVecType(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	colMap := vectorColMap()
 	colMap["v"] = &ColDef{Typ: plan.Type{Id: int32(types.T_int64)}}
 	_, _, err := buildCagraSecondaryIndexDef(ctx,
@@ -142,7 +142,7 @@ func TestBuildCagraSecondaryIndexDef_WrongVecType(t *testing.T) {
 }
 
 func TestBuildCagraSecondaryIndexDef_DuplicateOnSameColumn(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	existing := []*plan.IndexDef{{IndexAlgo: "cagra", Parts: []string{"v"}}}
 	_, _, err := buildCagraSecondaryIndexDef(ctx,
 		vectorIndexInfoFixture("v", tree.INDEX_TYPE_CAGRA),
@@ -152,7 +152,7 @@ func TestBuildCagraSecondaryIndexDef_DuplicateOnSameColumn(t *testing.T) {
 }
 
 func TestBuildCagraSecondaryIndexDef_BadIncludeColumn(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	// "id" is the PK — validateIncludeColumns rejects.
 	idx := vectorIndexInfoFixture("v", tree.INDEX_TYPE_CAGRA, "id")
 	_, _, err := buildCagraSecondaryIndexDef(ctx, idx, vectorColMap(), nil, "id")
@@ -160,7 +160,7 @@ func TestBuildCagraSecondaryIndexDef_BadIncludeColumn(t *testing.T) {
 }
 
 func TestBuildCagraSecondaryIndexDef_OK(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	idxDefs, tblDefs, err := buildCagraSecondaryIndexDef(ctx,
 		vectorIndexInfoFixture("v", tree.INDEX_TYPE_CAGRA, "price"),
 		vectorColMap(), nil, "id")
@@ -174,7 +174,7 @@ func TestBuildCagraSecondaryIndexDef_OK(t *testing.T) {
 // IVFPQ --------------------------------------------------------------------
 
 func TestBuildIvfpqSecondaryIndexDef_NoPK(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	_, _, err := buildIvfpqSecondaryIndexDef(ctx,
 		vectorIndexInfoFixture("v", tree.INDEX_TYPE_IVFPQ),
 		vectorColMap(), nil, "")
@@ -187,7 +187,7 @@ func TestBuildIvfpqSecondaryIndexDef_NoPK(t *testing.T) {
 }
 
 func TestBuildIvfpqSecondaryIndexDef_PKWrongType(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	colMap := vectorColMap()
 	colMap["id"] = &ColDef{Typ: plan.Type{Id: int32(types.T_varchar)}}
 	_, _, err := buildIvfpqSecondaryIndexDef(ctx,
@@ -198,7 +198,7 @@ func TestBuildIvfpqSecondaryIndexDef_PKWrongType(t *testing.T) {
 }
 
 func TestBuildIvfpqSecondaryIndexDef_MultiCol(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	idx := vectorIndexInfoFixture("v", tree.INDEX_TYPE_IVFPQ)
 	idx.KeyParts = append(idx.KeyParts, &tree.KeyPart{ColName: tree.NewUnresolvedColName("price")})
 	_, _, err := buildIvfpqSecondaryIndexDef(ctx, idx, vectorColMap(), nil, "id")
@@ -207,7 +207,7 @@ func TestBuildIvfpqSecondaryIndexDef_MultiCol(t *testing.T) {
 }
 
 func TestBuildIvfpqSecondaryIndexDef_ColMissing(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	colMap := vectorColMap()
 	delete(colMap, "v")
 	_, _, err := buildIvfpqSecondaryIndexDef(ctx,
@@ -218,7 +218,7 @@ func TestBuildIvfpqSecondaryIndexDef_ColMissing(t *testing.T) {
 }
 
 func TestBuildIvfpqSecondaryIndexDef_WrongVecType(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	colMap := vectorColMap()
 	colMap["v"] = &ColDef{Typ: plan.Type{Id: int32(types.T_int64)}}
 	_, _, err := buildIvfpqSecondaryIndexDef(ctx,
@@ -229,7 +229,7 @@ func TestBuildIvfpqSecondaryIndexDef_WrongVecType(t *testing.T) {
 }
 
 func TestBuildIvfpqSecondaryIndexDef_DuplicateOnSameColumn(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	existing := []*plan.IndexDef{{IndexAlgo: "ivfpq", Parts: []string{"v"}}}
 	_, _, err := buildIvfpqSecondaryIndexDef(ctx,
 		vectorIndexInfoFixture("v", tree.INDEX_TYPE_IVFPQ),
@@ -239,14 +239,14 @@ func TestBuildIvfpqSecondaryIndexDef_DuplicateOnSameColumn(t *testing.T) {
 }
 
 func TestBuildIvfpqSecondaryIndexDef_BadIncludeColumn(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	idx := vectorIndexInfoFixture("v", tree.INDEX_TYPE_IVFPQ, "id")
 	_, _, err := buildIvfpqSecondaryIndexDef(ctx, idx, vectorColMap(), nil, "id")
 	require.Error(t, err)
 }
 
 func TestBuildIvfpqSecondaryIndexDef_OK(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	// IVF-PQ requires lists > 0 (ParamsFromTree); the shared fixture leaves it 0.
 	idx := vectorIndexInfoFixture("v", tree.INDEX_TYPE_IVFPQ, "price")
 	idx.IndexOption.AlgoParamList = 10
