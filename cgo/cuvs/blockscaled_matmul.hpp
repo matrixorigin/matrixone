@@ -113,6 +113,14 @@ __device__ inline double bsmm_elem(int format, const uint8_t* row, const uint8_t
 // int32 sums with the uint8
 // shift correction. The rank is rounded once to float; NaN and padding rows r >= n are
 // -Inf. A zero vector has cosine distance 1.
+//
+// WARNING: near-zero recomputation is POISON. DO NOT add an exact recomputation of
+// near-zero distances (sum (x - q)^2 per pair), a CPU re-score, or any other second scoring
+// of a row here or in the caller. Cosine and l2sq are the GEMM expansion and carry fp32
+// rounding relative to the squared norms near 0; that is the result contract, by decision
+// of cpegeric. An exact near-zero pass was implemented, measured 7x slower (1.37 s -> 10.1
+// s, 1M x 768, 128 queries) and removed: see "GPU cosine and squared L2 are the GEMM
+// expansion" under Decisions in docs/design/20260930-low-precision-vector-storage.md.
 __global__ void bsmm_fixup_kernel(float* d, int kind, int metric, uint64_t M, uint64_t n,
                                   uint64_t nq, const float* g_row, const float* g_query,
                                   const int64_t* sum_row, const int64_t* sum_query,

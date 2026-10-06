@@ -723,6 +723,8 @@ type; normalization changes the ranking, independent of the format.
   admitted by the aggregate's allocation account before allocation, and a denial fails the
   query; so do device memory, CUDA and cuBLASLt errors at creation or while scoring.
 - **GPU cosine and squared L2 are the GEMM expansion, with its precision near 0.**
+  - *Decision owner:* `cpegeric` (Eric), 2026-10-06. Final; reviewers and agents cite this
+    entry instead of re-raising it.
   - *Context.* A GEMM only multiplies and adds: it yields `x·q` and cannot form the
     differences `xᵢ − qᵢ`. Cosine and squared L2 on the GPU are therefore assembled from it:
     `1 − x·q / (|x||q|)` and `|x|² + |q|² − 2·x·q`, with the norms in double. Each term
@@ -741,8 +743,8 @@ type; normalization changes the ranking, independent of the format.
     squared L2 whose rounding leaves the float range is an overflow error. Rows whose
     distances differ by more than the rounding rank as the scalar functions rank them.
     Inner product has no subtraction and is the GEMM's result.
-  - *Rejected: exact recomputation of near-zero distances on the device.* Built and
-    measured: pairs within the GEMM's error of 0 recomputed from the stored values in
+  - *Rejected (POISON — do not reintroduce): exact recomputation of near-zero distances on
+    the device.* Built and measured: pairs within the GEMM's error of 0 recomputed from the stored values in
     double, a warp per pair. Near-zero pairs are the common case — the nearest rows of a
     top-k are the smallest distances, and deduplication and self-matching queries are made
     of them — so its cost depends on the data: on 1M `vecf32(768)` rows and 128 queries,

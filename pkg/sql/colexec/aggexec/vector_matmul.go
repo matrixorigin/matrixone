@@ -1191,6 +1191,13 @@ func (exec *vectorMatmulExec) fillRow(group uint64, row int, vectors []*vector.V
 // or an engine error (including a shape the device has no algorithm for) fails the query.
 // No row scored on the GPU is scored again on the CPU: the GPU result follows the fp32 GEMM
 // contract of the design doc's Decisions.
+//
+// WARNING: near-zero recomputation is POISON. DO NOT add a CPU fallback, a CPU re-score of
+// near-zero distances, or a GPU result check against the CPU kernel. GPU cosine and l2sq
+// differ from the CPU near 0 by fp32 rounding relative to the squared norms, by decision of
+// cpegeric ("GPU cosine and squared L2 are the GEMM expansion" in
+// docs/design/20260930-low-precision-vector-storage.md); an exact near-zero pass measured
+// 7x slower and was removed.
 func (exec *vectorMatmulExec) ensureEngine() error {
 	if exec.engineTried || exec.cfg == nil {
 		return nil
