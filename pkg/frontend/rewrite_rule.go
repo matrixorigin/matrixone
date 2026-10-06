@@ -148,13 +148,16 @@ func captureRewritePolicy(ctx context.Context, ses *Session) (*rewritePolicySnap
 		rules, err := loadRuleCache(ctx, ses)
 		if err != nil {
 			ses.Error(ctx, "failed to load rewrite rule cache", logutil.ErrorField(err))
+			ses.validatePreparedStatementsAfterRewritePolicyRefresh(nil, err)
 			return nil, err
 		}
 
 		ses.ruleCacheMu.Lock()
 		if ses.rewritePolicyGeneration != policy.generation {
 			ses.ruleCacheMu.Unlock()
-			return nil, moerr.NewInvalidState(ctx, "rewrite policy changed while loading")
+			err := moerr.NewInvalidState(ctx, "rewrite policy changed while loading")
+			ses.validatePreparedStatementsAfterRewritePolicyRefresh(nil, err)
+			return nil, err
 		}
 		if ses.ruleCache == nil {
 			ses.ruleCache = rules
@@ -171,6 +174,11 @@ func captureRewritePolicy(ctx context.Context, ses *Session) (*rewritePolicySnap
 	}
 
 	policy.enabled = sessionEnabled || len(policy.roleRules) > 0
+	if !cacheLoaded {
+		// Every cache reload, including one after a failed SET ROLE, closes the
+		// generation boundary for handles published under the previous policy.
+		ses.validatePreparedStatementsAfterRewritePolicyRefresh(policy, nil)
+	}
 	return policy, nil
 }
 

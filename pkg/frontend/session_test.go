@@ -2236,6 +2236,70 @@ func TestSetPrepareStmtRejectsStaleRewritePolicyGeneration(t *testing.T) {
 	require.Same(t, fresh, got)
 }
 
+func TestPreparedStatementsValidateRefreshedRewritePolicy(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name       string
+		enabled    bool
+		refreshErr error
+		generation uint64
+		invalid    bool
+	}{
+		{name: "disabled to mandatory", enabled: true, generation: 1, invalid: true},
+		{name: "disabled to disabled", generation: 1},
+		{name: "failed load", refreshErr: assert.AnError, generation: 1, invalid: true},
+		{name: "concurrent invalidation", generation: 0, invalid: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			old := &PrepareStmt{Name: "old", rewritePolicyCaptured: true}
+			fresh := &PrepareStmt{Name: "fresh", rewritePolicyCaptured: true, rewritePolicyGeneration: 1}
+			ses := &Session{
+				cache:        &privilegeCache{},
+				ruleCache:    map[string]string{},
+				prepareStmts: map[string]*PrepareStmt{"old": old},
+			}
+			ses.InvalidatePrivilegeCache()
+			require.False(t, old.rewritePolicyInvalidated.Load(), "disabled handle awaits the refreshed policy")
+			// Model the cache reload after an error path such as failed SET ROLE.
+			ses.ruleCache = map[string]string{}
+			if tc.enabled {
+				ses.ruleCache["db.t"] = "select * from db.t where tenant = 1"
+			}
+			ses.prepareStmts["fresh"] = fresh
+			ses.validatePreparedStatementsAfterRewritePolicyRefresh(
+				&rewritePolicySnapshot{generation: tc.generation, enabled: tc.enabled}, tc.refreshErr)
+			got, err := ses.GetPrepareStmt(ctx, "old")
+			require.Same(t, old, got)
+			if tc.invalid {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNeedReprepare))
+			} else {
+				require.NoError(t, err)
+			}
+			_, err = ses.GetPrepareStmt(ctx, "fresh")
+			if tc.refreshErr != nil || tc.generation != 1 {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNeedReprepare))
+			} else {
+				require.NoError(t, err, "refresh must preserve handles captured in the current generation")
+			}
+		})
+	}
+}
+
+func TestGetPrepareStmtRejectsStaleGenerationWithCurrentMandatoryRules(t *testing.T) {
+	stmt := &PrepareStmt{Name: "old", rewritePolicyCaptured: true}
+	ses := &Session{
+		ruleCache:               map[string]string{"db.t": "select * from db.t where tenant = 1"},
+		rewritePolicyGeneration: 1,
+		prepareStmts:            map[string]*PrepareStmt{"old": stmt},
+	}
+	got, err := ses.GetPrepareStmt(context.Background(), "old")
+	require.Same(t, stmt, got)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNeedReprepare))
+	got, err = ses.getPrepareStmtAllowInvalidated(context.Background(), "old")
+	require.NoError(t, err, "explicit cleanup must remain available")
+	require.Same(t, stmt, got)
+}
+
 func TestPrepareStmtNamesAreCaseInsensitive(t *testing.T) {
 	ctx := context.Background()
 	ses := &Session{prepareStmts: make(map[string]*PrepareStmt)}

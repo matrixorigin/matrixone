@@ -155,6 +155,76 @@ func TestIssue29148PreparedRowRuleProtocolLifecycle(t *testing.T) {
 		require.Equal(t, [][2]int{{1, 100}, {2, 200}}, emptyRoleRows,
 			"a disabled handle remains valid across a role switch with no row rules")
 
+		// Failed SET ROLE also clears the cache. It must preserve the harmless
+		// empty-policy case, but cannot leave that same handle executable once
+		// the active role acquires a mandatory rule.
+		_, err = userConn.ExecContext(ctx, "set role issue29148_nonexistent_role")
+		require.Error(t, err)
+		func() {
+			rows, err := userConn.QueryContext(ctx, "execute issue29148_empty_role_handle")
+			require.NoError(t, err)
+			defer rows.Close()
+			var got [][2]int
+			for rows.Next() {
+				var row [2]int
+				require.NoError(t, rows.Scan(&row[0], &row[1]))
+				got = append(got, row)
+			}
+			require.NoError(t, rows.Err())
+			require.Equal(t, [][2]int{{1, 100}, {2, 200}}, got)
+		}()
+
+		func() {
+			stmt, err := userConn.PrepareContext(ctx,
+				"select id, amount from "+dbName+"."+tableName+" order by id")
+			require.NoError(t, err)
+			defer stmt.Close()
+			execSQLRequire(t, ctx, adminDB,
+				"alter role "+emptyRole+" add rule \"select id, amount from "+dbName+"."+tableName+" where tenant = 1\" on table "+dbName+"."+tableName)
+			_, err = userConn.ExecContext(ctx, "set role issue29148_nonexistent_role")
+			require.Error(t, err)
+
+			// Binary EXECUTE arrives before any direct query can reload policy.
+			// Use Exec so an unfixed server reports success instead of leaking an
+			// unread Rows resource when the negative assertion fails.
+			_, err = stmt.ExecContext(ctx)
+			requireNeedReprepare(t, err)
+			require.NoError(t, userConn.QueryRowContext(ctx,
+				"select id, amount from "+dbName+"."+tableName+" order by id").Scan(&id, &amount))
+			require.Equal(t, 1, id)
+			require.Equal(t, 100, amount)
+			_, err = userConn.ExecContext(ctx, "execute issue29148_empty_role_handle")
+			requireNeedReprepare(t, err)
+			fresh, err := userConn.PrepareContext(ctx,
+				"select id, amount from "+dbName+"."+tableName+" order by id")
+			require.NoError(t, err)
+			defer fresh.Close()
+			require.NoError(t, fresh.QueryRowContext(ctx).Scan(&id, &amount))
+			require.Equal(t, 1, id)
+			require.Equal(t, 100, amount)
+		}()
+		execOnUser("deallocate prepare issue29148_empty_role_handle")
+		execSQLRequire(t, ctx, adminDB,
+			"alter role "+emptyRole+" drop rule on table "+dbName+"."+tableName)
+		execOnUser("set role " + emptyRole)
+		// Independently exercise COM_QUERY's cache reload before SQL EXECUTE.
+		execOnUser("prepare issue29148_failed_switch from 'select id, amount from " + dbName + "." + tableName + " order by id'")
+		execSQLRequire(t, ctx, adminDB,
+			"alter role "+emptyRole+" add rule \"select id, amount from "+dbName+"."+tableName+" where tenant = 1\" on table "+dbName+"."+tableName)
+		_, err = userConn.ExecContext(ctx, "set role issue29148_nonexistent_role")
+		require.Error(t, err)
+		require.NoError(t, userConn.QueryRowContext(ctx,
+			"select id, amount from "+dbName+"."+tableName+" order by id").Scan(&id, &amount))
+		require.Equal(t, 1, id)
+		require.Equal(t, 100, amount)
+		_, err = userConn.ExecContext(ctx, "execute issue29148_failed_switch")
+		requireNeedReprepare(t, err)
+		execOnUser("deallocate prepare issue29148_failed_switch")
+		execSQLRequire(t, ctx, adminDB,
+			"alter role "+emptyRole+" drop rule on table "+dbName+"."+tableName)
+		execOnUser("set role " + emptyRole)
+		execOnUser("prepare issue29148_empty_role_handle from 'select id, amount from " + dbName + "." + tableName + " order by id'")
+
 		execOnUser("set role " + roleName)
 		_, err = userConn.ExecContext(ctx, "execute issue29148_empty_role_handle")
 		requireNeedReprepare(t, err)

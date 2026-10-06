@@ -2589,9 +2589,16 @@ func (ses *Session) validatePreparedStatementsAfterRewritePolicyRefresh(
 	currentPolicyEnabled := ses.rewriteEnabled.Load() || len(ses.ruleCache) > 0
 	ses.ruleCacheMu.RUnlock()
 
-	if refreshErr != nil || policy == nil || policy.enabled || currentPolicyEnabled ||
-		policy.generation != currentGeneration {
+	if refreshErr != nil || policy == nil || policy.generation != currentGeneration {
 		ses.invalidateAllPreparedRewriteStatementsLocked()
+		return
+	}
+	for _, stmt := range ses.prepareStmts {
+		if stmt != nil && stmt.rewritePolicyCaptured &&
+			stmt.rewritePolicyGeneration != currentGeneration &&
+			(stmt.rewritePolicyEnabled || policy.enabled || currentPolicyEnabled) {
+			stmt.invalidateRewritePolicy()
+		}
 	}
 }
 
@@ -3055,9 +3062,34 @@ func (ses *Session) GetPrepareStmt(ctx context.Context, name string) (*PrepareSt
 func (ses *Session) getPrepareStmt(ctx context.Context, name string, allowInvalidated bool) (*PrepareStmt, error) {
 	normalizedName := strings.ToLower(name)
 	ses.mu.Lock()
+	// Binary EXECUTE does not capture a COM_QUERY policy. A failed role switch
+	// can leave the cache unloaded and a previously disabled handle alive, so
+	// resolve the current mandatory rules before permitting that stale handle.
+	// Catalog I/O must stay outside ses.mu and ruleCacheMu.
+	if !allowInvalidated {
+		stmt := ses.prepareStmts[normalizedName]
+		ses.ruleCacheMu.RLock()
+		needsRefresh := stmt != nil && stmt.rewritePolicyCaptured &&
+			!stmt.rewritePolicyInvalidated.Load() &&
+			stmt.rewritePolicyGeneration != ses.rewritePolicyGeneration && ses.ruleCache == nil
+		ses.ruleCacheMu.RUnlock()
+		if needsRefresh {
+			ses.mu.Unlock()
+			ses.refreshRewritePolicyAndValidatePrepared(ctx)
+			ses.mu.Lock()
+		}
+	}
 	defer ses.mu.Unlock()
 	if prepareStmt, ok := ses.prepareStmts[normalizedName]; ok {
 		if !allowInvalidated {
+			ses.ruleCacheMu.RLock()
+			if prepareStmt != nil && prepareStmt.rewritePolicyCaptured &&
+				prepareStmt.rewritePolicyGeneration != ses.rewritePolicyGeneration &&
+				(prepareStmt.rewritePolicyEnabled || ses.rewriteEnabled.Load() ||
+					ses.ruleCache == nil || len(ses.ruleCache) > 0) {
+				prepareStmt.invalidateRewritePolicy()
+			}
+			ses.ruleCacheMu.RUnlock()
 			if err := prepareStmt.checkRewritePolicy(ctx); err != nil {
 				ses.Errorf(ctx, "prepared statement '%s' needs to be re-prepared", name)
 				return prepareStmt, err
@@ -3093,10 +3125,20 @@ func (ses *Session) GetPrepareStmts() []*PrepareStmt {
 func (ses *Session) getPrepareStmtsForMigration() ([]*PrepareStmt, bool) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
+	ses.ruleCacheMu.RLock()
+	defer ses.ruleCacheMu.RUnlock()
 	ret := make([]*PrepareStmt, 0, len(ses.prepareStmts))
 	for _, stmt := range ses.prepareStmts {
-		if stmt != nil && stmt.rewritePolicyInvalidated.Load() {
-			return nil, true
+		if stmt != nil {
+			// Do not replay a stale handle while the post-invalidation policy is
+			// still unknown. A normal checked lookup can reload an empty policy
+			// and preserve the harmless disabled-to-disabled control on the source.
+			if stmt.rewritePolicyInvalidated.Load() || (stmt.rewritePolicyCaptured &&
+				stmt.rewritePolicyGeneration != ses.rewritePolicyGeneration &&
+				(stmt.rewritePolicyEnabled || ses.rewriteEnabled.Load() ||
+					ses.ruleCache == nil || len(ses.ruleCache) > 0)) {
+				return nil, true
+			}
 		}
 		ret = append(ret, stmt)
 	}

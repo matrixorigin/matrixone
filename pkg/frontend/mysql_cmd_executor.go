@@ -6988,12 +6988,11 @@ func executeStmtFetch(ctx context.Context, ses *Session, data []byte) (*Response
 	}
 	stmtID := binary.LittleEndian.Uint32(data[:4])
 	fetchRows := uint64(binary.LittleEndian.Uint32(data[4:8]))
-	stmt, err := ses.getPrepareStmtAllowInvalidated(ctx, getPrepareStmtName(stmtID))
+	stmt, err := ses.GetPrepareStmt(ctx, getPrepareStmtName(stmtID))
 	if err != nil {
-		return NewGeneralErrorResponse(COM_STMT_FETCH, ses.GetTxnHandler().GetServerStatus(), err), nil
-	}
-	if err = stmt.checkRewritePolicy(ctx); err != nil {
-		stmt.closeCursor()
+		if stmt != nil {
+			stmt.closeCursor()
+		}
 		return NewGeneralErrorResponse(COM_STMT_FETCH, ses.GetTxnHandler().GetServerStatus(), err), nil
 	}
 	if stmt.cursor == nil || stmt.cursor.result == nil {

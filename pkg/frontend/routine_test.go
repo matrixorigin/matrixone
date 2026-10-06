@@ -962,6 +962,28 @@ func TestMigrateConnectionFromRejectsInvalidatedRewritePreparedStmt(t *testing.T
 	require.Equal(t, uint32(42), ses.GenNewStmtId())
 }
 
+func TestMigrateConnectionFromRejectsUnvalidatedRewriteGeneration(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	t.Cleanup(ses.Close)
+	ses.prepareStmts = map[string]*PrepareStmt{
+		"old": {Name: "old", Sql: "select 1", rewritePolicyCaptured: true},
+	}
+	ses.rewritePolicyGeneration = 1
+	rt := &Routine{mc: newMigrateController()}
+	rt.setSession(ses)
+	// A failed role switch can leave this disabled handle awaiting cache reload.
+	for _, rules := range []map[string]string{nil, {"db.t": "select * from db.t where tenant = 1"}} {
+		ses.ruleCache = rules
+		err := rt.migrateConnectionFrom(&query.MigrateConnFromResponse{})
+		require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer))
+	}
+	ses.ruleCache = map[string]string{}
+	resp := &query.MigrateConnFromResponse{}
+	require.NoError(t, rt.migrateConnectionFrom(resp))
+	require.Len(t, resp.PrepareStmts, 1, "known empty policy remains safe to migrate")
+}
+
 func TestMigrateConnectionFromExportsEvaluatedUserVariables(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
