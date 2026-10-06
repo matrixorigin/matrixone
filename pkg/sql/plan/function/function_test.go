@@ -1773,6 +1773,12 @@ func TestZoneMapComparisonDomain(t *testing.T) {
 		args[0].GetLit().Isnull = true
 		require.False(t, CanUseZoneMapComparison(id, args), "unknown NULL domain %d", fid)
 	}
+	unicode := plan.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8MB4UnicodeCI)}
+	for _, fid := range []int32{EQUAL, NULL_SAFE_EQUAL, NOT_EQUAL, GREAT_THAN, GREAT_EQUAL, LESS_THAN, LESS_EQUAL, BETWEEN} {
+		require.False(t, CanUseZoneMapComparison(
+			EncodeOverloadID(fid, 0), []*plan.Expr{{Typ: unicode}, {Typ: plan.Type{Id: int32(types.T_varchar)}}}),
+			"Unicode comparison must not use raw persisted metadata: %d", fid)
+	}
 	char := []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_char)}}}
 	for _, fid := range []int32{PREFIX_EQ, PREFIX_BETWEEN, AND, OR} {
 		require.True(t, CanUseZoneMapComparison(EncodeOverloadID(fid, 0), char), "separate operator domain %d", fid)
@@ -1805,4 +1811,13 @@ func TestZoneMapMembershipDomain(t *testing.T) {
 			}
 		})
 	}
+	unicode := plan.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8MB4UnicodeCI)}
+	unicodeItem := &plan.Expr{Typ: unicode}
+	unicodeList := &plan.Expr{Typ: plan.Type{Id: int32(types.T_tuple)}, Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{unicodeItem}}}}
+	require.False(t, CanUseZoneMapComparison(
+		EncodeOverloadID(IN, 0), []*plan.Expr{{Typ: unicode}, unicodeList}),
+		"Unicode membership must not use raw persisted metadata")
+	require.False(t, CanUseZoneMapComparison(
+		EncodeOverloadID(IN, 0), []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_varchar)}}, unicodeList}),
+		"Unicode list items must not use raw persisted metadata")
 }

@@ -1654,6 +1654,12 @@ func (builder *QueryBuilder) tryHintedCoveringIndexScan(idxDef *plan.IndexDef, n
 	if !usableRegularHintIndex(idxDef) || node == nil || node.TableDef == nil || len(node.BindingTags) == 0 || !hintedIndexContainsQualifyingRows(idxDef, node) {
 		return -1, nil
 	}
+	// Serialized secondary-index keys contain UCA weights for native Unicode
+	// collations. serial_extract cannot reconstruct the original text, so an
+	// index-only/covering plan must keep the base-table row as the value source.
+	if indexUsesUnicodeCollation(idxDef, node.TableDef) {
+		return -1, nil
+	}
 	for i, col := range node.TableDef.Cols {
 		if colRefCnt[[2]int32{node.BindingTags[0], int32(i)}] == 0 {
 			continue
@@ -1740,6 +1746,26 @@ func (builder *QueryBuilder) tryHintedCoveringIndexScan(idxDef *plan.IndexDef, n
 	builder.inheritIndexHints(idxNodeID, node.NodeId)
 	forceScanNodeStatsTP(idxNodeID, builder)
 	return idxNodeID, nil
+}
+
+// indexUsesUnicodeCollation reports whether an index part is stored in the
+// opaque native-collation comparison-key domain. Such a key is suitable for
+// lookup, but not for projecting an original value or evaluating a residual
+// predicate through serial_extract.
+func indexUsesUnicodeCollation(idxDef *IndexDef, tableDef *TableDef) bool {
+	if idxDef == nil || tableDef == nil {
+		return false
+	}
+	for _, part := range idxDef.Parts {
+		colPos, ok := tableDef.Name2ColIndex[catalog.ResolveAlias(part)]
+		if !ok || colPos < 0 || int(colPos) >= len(tableDef.Cols) {
+			continue
+		}
+		if types.IsUnicodeCollation(uint8(tableDef.Cols[colPos].Typ.Charset)) {
+			return true
+		}
+	}
+	return false
 }
 
 func canUseRegularIndexHiddenSortKey(scanNode *plan.Node, orderByCol *plan.ColRef) bool {
@@ -2478,6 +2504,12 @@ func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *pl
 		access := resolveRegularIndexBackfillResidualAccess(idxDef, node.TableDef, col.ColPos, prefixLengths, nil)
 		switch access.source {
 		case regularIndexResidualIndexKey:
+			// A serial_extract of a Unicode index part returns the UCA weight
+			// bytes, not the original text. Keep this optional pushdown on the
+			// base-table scan and let the normal row comparator evaluate it.
+			if types.IsUnicodeCollation(uint8(fn.Args[colArgIdx].Typ.Charset)) {
+				continue
+			}
 			idxColExpr := GetColExpr(idxTableNode.TableDef.Cols[0].Typ, idxTableNode.BindingTags[0], 0)
 			mappedExpr := idxColExpr
 			if indexTableStoresSerializedKey(idxDef) {
@@ -3871,6 +3903,9 @@ func (builder *QueryBuilder) matchRegularIndexOnlyScan(
 	costCtx *encodedRegularIndexCostContext,
 ) (*regularIndexOnlyMatch, bool) {
 	if idxDef == nil || len(idxDef.Parts) == 0 || node == nil || node.TableDef == nil || node.TableDef.Pkey == nil || len(node.BindingTags) == 0 {
+		return nil, false
+	}
+	if indexUsesUnicodeCollation(idxDef, node.TableDef) {
 		return nil, false
 	}
 	if regularIndexHasDeclaredPrefix(idxDef) {

@@ -60,7 +60,12 @@ func CollationKeyOrOriginal(charset uint8, value []byte) []byte {
 // CompareStringValues compares two values in one resolved text identity. The
 // native UCA domains compare their transformed keys; all other identities keep
 // the caller's historical byte order. Invalid native input uses a deterministic
-// byte fallback because vector comparator interfaces cannot return errors.
+// per-value fallback because vector comparator interfaces cannot return errors.
+//
+// Valid and invalid values are separate comparison classes. Choosing the raw
+// byte order only when both values are invalid keeps the fallback independent
+// of the other operand, so an invalid value cannot change the ordering of two
+// otherwise equal valid values.
 func CompareStringValues(typ Type, left, right []byte) int {
 	if !IsUnicodeCollation(typ.Charset) {
 		if typ.Oid == T_char {
@@ -70,8 +75,14 @@ func CompareStringValues(typ Type, left, right []byte) int {
 	}
 	leftKey, leftErr := CollationKey(typ.Charset, nil, left)
 	rightKey, rightErr := CollationKey(typ.Charset, nil, right)
-	if leftErr != nil || rightErr != nil {
+	if leftErr != nil {
+		if rightErr == nil {
+			return 1
+		}
 		return bytes.Compare(left, right)
+	}
+	if rightErr != nil {
+		return -1
 	}
 	return bytes.Compare(leftKey, rightKey)
 }

@@ -40,11 +40,21 @@ func TestUnicodeCollationComparisonKeys(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, key)
 
-	invalid := []byte{0xff}
+	invalid := []byte{0x5a, 0xff}
 	require.Equal(t, invalid,
 		CollationKeyOrOriginal(CharsetUTF8MB3UnicodeCI, invalid))
-	require.Equal(t, bytes.Compare(invalid, []byte("a")),
-		CompareStringValues(NewWithCharset(T_varchar, 64, 0, CharsetUTF8MB3UnicodeCI), invalid, []byte("a")))
+	unicode := NewWithCharset(T_varchar, 64, 0, CharsetUTF8MB3UnicodeCI)
+	require.Equal(t, bytes.Compare(invalid, []byte{0xff}),
+		CompareStringValues(unicode, invalid, []byte{0xff}))
+
+	// Invalid input is retained by the vector APIs, so its comparison class
+	// must be chosen per value rather than by falling back for both operands.
+	// In particular, equivalent valid values must have the same ordering
+	// against every third value.
+	require.Equal(t, 0, CompareStringValues(unicode, []byte("A"), []byte("a")))
+	leftInvalid := CompareStringValues(unicode, []byte("A"), invalid)
+	rightInvalid := CompareStringValues(unicode, []byte("a"), invalid)
+	require.Equal(t, leftInvalid, rightInvalid)
 }
 
 func TestMergeStringCharsetKeepsSupplementaryRepertoire(t *testing.T) {
