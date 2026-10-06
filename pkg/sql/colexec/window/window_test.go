@@ -204,13 +204,6 @@ func makeTestCases(t *testing.T) []winTestCase {
 			arg: &Window{
 				WinSpecList: []*plan.Expr{makeWindowSpec()},
 				Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
-				OperatorBase: vm.OperatorBase{
-					OperatorInfo: vm.OperatorInfo{
-						Idx:     0,
-						IsFirst: false,
-						IsLast:  false,
-					},
-				},
 			},
 		},
 		{
@@ -221,13 +214,6 @@ func makeTestCases(t *testing.T) []winTestCase {
 			arg: &Window{
 				WinSpecList: []*plan.Expr{makeAggWindowSpec("json_objectagg")},
 				Aggs:        []aggexec.AggFuncExecExpression{newJsonObjectAggExpr(t)},
-				OperatorBase: vm.OperatorBase{
-					OperatorInfo: vm.OperatorInfo{
-						Idx:     0,
-						IsFirst: false,
-						IsLast:  false,
-					},
-				},
 			},
 		},
 	}

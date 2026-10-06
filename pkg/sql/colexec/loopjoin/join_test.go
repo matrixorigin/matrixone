@@ -1607,14 +1607,7 @@ func newTestCase(t *testing.T, flgs []bool, ts []types.Type, rp []colexec.Result
 			JoinMapTag: tag,
 		},
 		barg: &hashbuild.HashBuild{
-			NeedBatches: true,
-			OperatorBase: vm.OperatorBase{
-				OperatorInfo: vm.OperatorInfo{
-					Idx:     0,
-					IsFirst: false,
-					IsLast:  false,
-				},
-			},
+			NeedBatches:   true,
 			JoinMapTag:    tag,
 			JoinMapRefCnt: 1,
 		},

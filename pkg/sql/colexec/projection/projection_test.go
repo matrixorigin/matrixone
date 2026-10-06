@@ -57,13 +57,6 @@ func makeTestCases(t *testing.T) []projectionTestCase {
 						},
 					},
 				},
-				OperatorBase: vm.OperatorBase{
-					OperatorInfo: vm.OperatorInfo{
-						Idx:     0,
-						IsFirst: false,
-						IsLast:  false,
-					},
-				},
 			},
 		},
 	}

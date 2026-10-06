@@ -733,25 +733,11 @@ func newTestCase(t *testing.T, flgs []bool, ts []types.Type, rp []int32, cs [][]
 		arg: &RightDedupJoin{
 			RightTypes: ts,
 			Conditions: cs,
-			OperatorBase: vm.OperatorBase{
-				OperatorInfo: vm.OperatorInfo{
-					Idx:     0,
-					IsFirst: false,
-					IsLast:  false,
-				},
-			},
 			JoinMapTag: tag,
 		},
 		barg: &hashbuild.HashBuild{
-			NeedHashMap: true,
-			Conditions:  cs[1],
-			OperatorBase: vm.OperatorBase{
-				OperatorInfo: vm.OperatorInfo{
-					Idx:     0,
-					IsFirst: false,
-					IsLast:  false,
-				},
-			},
+			NeedHashMap:      true,
+			Conditions:       cs[1],
 			NeedAllocateSels: false,
 			JoinMapTag:       tag,
 			JoinMapRefCnt:    1,

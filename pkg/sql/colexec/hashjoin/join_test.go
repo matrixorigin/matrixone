@@ -2484,25 +2484,11 @@ func newTestCaseWithMPool(
 			NumCPU:     1,
 			IsMerger:   true,
 			NonEqCond:  cond,
-			OperatorBase: vm.OperatorBase{
-				OperatorInfo: vm.OperatorInfo{
-					Idx:     0,
-					IsFirst: false,
-					IsLast:  false,
-				},
-			},
 			JoinMapTag: tag,
 		},
 		barg: &hashbuild.HashBuild{
-			NeedHashMap: true,
-			Conditions:  cs[1],
-			OperatorBase: vm.OperatorBase{
-				OperatorInfo: vm.OperatorInfo{
-					Idx:     0,
-					IsFirst: false,
-					IsLast:  false,
-				},
-			},
+			NeedHashMap:      true,
+			Conditions:       cs[1],
 			NeedAllocateSels: true,
 			NeedBatches:      true,
 			JoinMapTag:       tag,

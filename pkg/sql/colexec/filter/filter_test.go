@@ -81,13 +81,6 @@ func makeTestCases(t testing.TB) []filterTestCase {
 						},
 					},
 				},
-				OperatorBase: vm.OperatorBase{
-					OperatorInfo: vm.OperatorInfo{
-						Idx:     0,
-						IsFirst: false,
-						IsLast:  false,
-					},
-				},
 			},
 			getRowCount: 20,
 		},
@@ -145,13 +138,6 @@ func makeTestCases(t testing.TB) []filterTestCase {
 								},
 							},
 						},
-					},
-				},
-				OperatorBase: vm.OperatorBase{
-					OperatorInfo: vm.OperatorInfo{
-						Idx:     0,
-						IsFirst: false,
-						IsLast:  false,
 					},
 				},
 			},

@@ -337,13 +337,6 @@ func newTestCase(t testing.TB, flgs []bool, ts []types.Type, cs []*plan.Expr) bu
 		JoinMapRefCnt: 1,
 		Conditions:    cs,
 		NeedHashMap:   true,
-		OperatorBase: vm.OperatorBase{
-			OperatorInfo: vm.OperatorInfo{
-				Idx:     0,
-				IsFirst: false,
-				IsLast:  false,
-			},
-		},
 	}
 	installTestHashBuildAllocation(t, arg)
 	return buildTestCase{
@@ -495,13 +488,6 @@ func TestHashBuildWithRuntimeFilter(t *testing.T) {
 		NeedHashMap: true,
 		RuntimeFilterSpec: &plan.RuntimeFilterSpec{
 			Tag: 1,
-		},
-		OperatorBase: vm.OperatorBase{
-			OperatorInfo: vm.OperatorInfo{
-				Idx:     0,
-				IsFirst: false,
-				IsLast:  false,
-			},
 		},
 	}
 	installTestHashBuildAllocation(t, arg)
@@ -2806,13 +2792,6 @@ func TestHashBuildRuntimeFilterWithNulls(t *testing.T) {
 		},
 		NeedHashMap:       true,
 		RuntimeFilterSpec: rawRuntimeFilterSpec(1, 10000, types.T_int32.ToType()),
-		OperatorBase: vm.OperatorBase{
-			OperatorInfo: vm.OperatorInfo{
-				Idx:     0,
-				IsFirst: false,
-				IsLast:  false,
-			},
-		},
 	}
 	installTestHashBuildAllocation(t, arg)
 
@@ -2859,13 +2838,6 @@ func TestHashBuildRuntimeFilterWithNullsHashOnPK(t *testing.T) {
 		},
 		NeedHashMap:       true,
 		RuntimeFilterSpec: rawRuntimeFilterSpec(1, 10000, types.T_int32.ToType()),
-		OperatorBase: vm.OperatorBase{
-			OperatorInfo: vm.OperatorInfo{
-				Idx:     0,
-				IsFirst: false,
-				IsLast:  false,
-			},
-		},
 	}
 	installTestHashBuildAllocation(t, arg)
 

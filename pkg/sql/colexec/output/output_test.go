@@ -57,13 +57,6 @@ func makeTestCases(t *testing.T) []outputTestCase {
 			arg: &Output{
 				Data: nil,
 				Func: sqlOutput,
-				OperatorBase: vm.OperatorBase{
-					OperatorInfo: vm.OperatorInfo{
-						Idx:     0,
-						IsFirst: false,
-						IsLast:  false,
-					},
-				},
 			},
 		},
 		{
@@ -77,13 +70,6 @@ func makeTestCases(t *testing.T) []outputTestCase {
 				},
 				Data: nil,
 				Func: sqlOutput,
-				OperatorBase: vm.OperatorBase{
-					OperatorInfo: vm.OperatorInfo{
-						Idx:     0,
-						IsFirst: false,
-						IsLast:  false,
-					},
-				},
 			},
 		},
 	}
