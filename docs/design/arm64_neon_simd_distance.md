@@ -23,7 +23,10 @@
   diverging. The recompute runs in the kernel's own accumulation type (float32 for
   f32/bf16/f16, float64 for f64) via the source-order reference, not unconditionally in
   float64. It reuses the existing scalar reference / `cosineRecomputeF64` exception and is
-  **free on the fast path** (the recompute runs only on a non-finite result). The v1
+  free on the **common** fast path — the O(d) second pass runs on any non-finite SIMD
+  result, which includes finite extreme-magnitude inputs, so a finite-data workload is not
+  exempt (§2 Cost). A genuine overflow fast-fails to a well-ordered ±Inf of the metric's
+  own sign (only NaN is normalized), caught by the sign-agnostic serve boundary. The v1
   scope (§3–§6 kernels/build) is unaffected.
 
 ## 1. Context & goal
@@ -56,7 +59,10 @@ contract as amd64**, with **identical observable results**.
   package has shipped since the float32-domain standardization (#29040/#29050/#29100).
 - **Fast-fail genuine overflow.** When the in-order reference also leaves the element
   domain, the overflow is **genuine** — not a lane-ordering artifact — so the recompute
-  returns +Inf, a well-ordered distance the serve boundary rejects.
+  returns a well-ordered ±Inf that the serve boundary rejects. The sign is the metric's
+  own: inner product (distance = −dot) can return −Inf; the non-negative metrics
+  (L2/L2sq/L1) and the bounded ones (cosine/spherical) return +Inf. The result is **not**
+  sign-normalized — only NaN is (see the finiteness-boundary paragraph below).
 - The recompute is applied at the **metric owner**, reusing the existing scalar reference
   kernels rather than a second algorithm:
   - **inner product** — `InnerProduct[T]` (via `InnerProductUnrolled`, summed in T) and
@@ -70,21 +76,34 @@ contract as amd64**, with **identical observable results**.
     overflow float32, so its recover is a no-op guard).
   - L2/L2sq/L1 are non-negative sums and cannot produce NaN; int8/uint8 accumulate in
     integers and cannot either.
-- **Cost.** The exceptional recompute adds **nothing measurable** to the fast path: a
-  finite SIMD result pays only one finiteness test (what the prior +Inf sentinel already
-  paid). The recompute runs only on a non-finite result, which finite stored vectors
-  never produce. This is distinct from **always** widening the accumulator to float64,
-  which measured ~2.5× slower (and still cannot fix f64 — no f128 lane); see §5.
+- **Cost.** The exceptional recompute adds nothing to the **common** fast path: a finite
+  SIMD result pays only one finiteness test (what the prior +Inf sentinel already paid).
+  The O(d) in-order second pass runs on any input whose SIMD result is **non-finite** —
+  and that includes **finite** stored vectors at extreme magnitude whose lanes overflow
+  or cancel before the cross-lane reduction (the case this fix targets and the
+  counterexample tests exercise), not only genuine overflow. A finite-data workload is
+  therefore **not** exempt: a query against such a vector pays one extra O(d) pass on that
+  pair — bounded at ~2× the kernel cost, incurred only on the pairs that actually go
+  non-finite, and never on the ordinary finite case. This is still distinct from
+  **always** widening the accumulator to float64, which measured ~2.5× slower on *every*
+  pair (and still cannot fix f64 — no f128 lane); see §5.
 - **Finiteness-as-an-error is still enforced once, at the consumer score boundary**
   — the scalar/SQL array-distance builtins (`moarray`, `arrayDistanceNarrow`), index
-  Search (`CheckFiniteDists`), and ivfflat's `HasFloat64DistanceOverflow`. A genuine
-  non-finite result handed back there is reported as an overflow error.
+  Search (`CheckFiniteDists`), and ivfflat's `HasFloat64DistanceOverflow`. Every one of
+  these rejects a **non-finite of either sign** (the test is `d-d != 0` / `math.IsInf(_, 0)`),
+  so a genuine ±Inf is reported as an overflow error regardless of sign. Only **NaN** is
+  rewritten (to +Inf) before ranking, and only because NaN is **unordered**: it is never
+  the maximum a top-k heap evicts, so it is retained in a slot and silently drops a nearer
+  finite candidate. A genuine ±Inf is **well-ordered** and cannot cause that silent
+  lost-winner, so it keeps its own sign and is caught sign-agnostically at the boundary;
+  normalizing its sign would be unnecessary and would mis-rank a genuine inner-product
+  overflow (a maximal dot) as the farthest instead of letting the boundary reject it.
 - **Equivalence.** On finite inputs every SIMD tier and architecture agrees with the
   scalar reference up to ordinary floating-point rounding; on the degenerate
   cancellation input they now **also** agree, because both yield the in-order reference
   (the fast path recovers it, the scalar path computes it directly). A genuine overflow
-  is the same +Inf everywhere and the same error at the same boundary. Tests assert this
-  equivalence in both the default and the SIMD-opt-out modes.
+  is the same well-ordered ±Inf everywhere and the same error at the same boundary. Tests
+  assert this equivalence in both the default and the SIMD-opt-out modes.
 
 ## 3. Ownership: one scalar oracle, per-arch SIMD
 
@@ -116,9 +135,10 @@ contract as amd64**, with **identical observable results**.
   f64-accumulator kernel is ~2.5× slower than the f32 kernel and only ~1.1× faster
   than the pre-SIMD scalar loop, versus ~2.8× for the f32 kernel — it gives back
   almost the entire SIMD gain. The residual non-finite case is handled by the §2
-  **exceptional recompute** (recover the in-order float64 reference only when the SIMD
-  result is non-finite; fast-fail genuine overflow), which is free on the fast path —
-  not by widening every accumulation.
+  **exceptional recompute** (recover the in-order reference in the kernel's native
+  accumulation type — float32 for f32/bf16/f16, float64 for f64 — only when the SIMD
+  result is non-finite; fast-fail genuine overflow), which runs only on the affected
+  pairs (§2 Cost) — not by widening every accumulation.
 - f16 cannot overflow the float32 accumulator (its magnitude range is small);
   bf16 shares float32's exponent range and therefore can — the §2 contract covers
   it.
@@ -155,19 +175,24 @@ contract as amd64**, with **identical observable results**.
   (float32 for f32/bf16/f16, float64 for f64) — inner product (`InnerProduct[T]` +
   narrow bf16/f16 kernels), spherical (`acos`), and cosine (f32/f64 via the f64 norm
   recompute, narrow bf16/f16 via the scalar `cosineDistanceBF16`/`F16` reference). A
-  genuine overflow — one the reference cannot represent either — fast-fails to +Inf.
+  genuine overflow — one the reference cannot represent either — fast-fails to a
+  well-ordered ±Inf (the metric's own sign; only NaN is normalized, see §2).
 - Scalar oracle ≡ every SIMD tier ≡ every architecture: on finite inputs up to FP
   rounding, AND on the degenerate cancellation input, where both yield the same
   in-order reference (SIMD recovers it, scalar computes it directly). A genuine
-  overflow is the same +Inf everywhere. The SIMD contract test runs the SIMD kernels
-  directly (narrow by name; real kernels with the tier flag forced on), not through
-  the resolver, so it asserts the recovered value regardless of the opt-out override.
-- The recompute is free on the fast path: a finite SIMD result pays one finiteness
-  test; the recompute runs only on a non-finite result, which finite stored vectors
-  never produce. Never widen every accumulation (§5).
+  overflow is the same well-ordered ±Inf everywhere. The SIMD contract test runs the SIMD
+  kernels directly (narrow by name; real kernels with the tier flag forced on), not
+  through the resolver, so it asserts the recovered value regardless of the opt-out override.
+- The recompute is free on the **common** fast path: a finite SIMD result pays one
+  finiteness test. The O(d) second pass runs on any input whose SIMD result is
+  non-finite — including **finite** extreme-magnitude vectors, not only genuine overflow —
+  so a finite-data workload pays it on exactly those pairs (bounded ~2×, §2 Cost), never
+  on the ordinary case. Never widen every accumulation (§5).
 - Finiteness-as-an-error is enforced at the consumer serve boundary
-  (`CheckFiniteDists`, ivfflat `HasFloat64DistanceOverflow`); a genuine non-finite
-  result is reported as an overflow error there.
+  (`CheckFiniteDists`, ivfflat `HasFloat64DistanceOverflow`), whose finiteness test is
+  **sign-agnostic**; a genuine non-finite result of either sign is reported as an overflow
+  error there. Only NaN is sign-normalized (to +Inf) before ranking; a well-ordered ±Inf
+  is not (§2).
 - No architecture branch outside build-tagged kernel files.
 - Build-experiment default on + opt-out honored; capability-gated paths fail
   closed.
