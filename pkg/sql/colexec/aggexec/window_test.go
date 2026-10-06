@@ -18,337 +18,218 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
 )
 
-func TestValueWindowExec_BasicOperations(t *testing.T) {
+func newValueWindowTestPool(t *testing.T) *mpool.MPool {
+	t.Helper()
 	mp := mpool.MustNewZero()
-	defer mp.Free(nil)
-
-	// Test LAG function
-	t.Run("LAG_basic", func(t *testing.T) {
-		exec, err := makeValueWindowExec(mp, WinIdOfLag, false, []types.Type{types.T_int64.ToType()})
-		require.NoError(t, err)
-		require.NotNil(t, exec)
-
-		// Test GroupGrow
-		err = exec.GroupGrow(3)
-		require.NoError(t, err)
-
-		// Test PreAllocateGroups
-		err = exec.PreAllocateGroups(2)
-		require.NoError(t, err)
-
-		// Test GetOptResult
-		result := exec.GetOptResult()
-		require.Nil(t, result)
-
-		// Test Size
-		size := exec.Size()
-		require.GreaterOrEqual(t, size, int64(0))
-
-		// Test Free
-		exec.Free()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	t.Cleanup(func() {
+		require.Zero(t, mp.CurrNB())
+		bytes, objects := mp.OnHeapOutstanding()
+		require.Zero(t, bytes)
+		require.Zero(t, objects)
 	})
+	return mp
+}
 
-	// Test LEAD function
-	t.Run("LEAD_basic", func(t *testing.T) {
-		exec, err := makeValueWindowExec(mp, WinIdOfLead, false, []types.Type{types.T_int64.ToType()})
-		require.NoError(t, err)
-		require.NotNil(t, exec)
-		exec.Free()
-	})
+// Frames are explicit so callers retain control of GroupGrow and missing-current-row cases.
+func fillValueWindowFrames(t *testing.T, exec AggFuncExec, input *vector.Vector, frames [][]int) {
+	t.Helper()
+	for group, frame := range frames {
+		for _, row := range frame {
+			require.NoError(t, exec.Fill(group, row, []*vector.Vector{input}))
+		}
+	}
+}
 
-	// Test FIRST_VALUE function
-	t.Run("FIRST_VALUE_basic", func(t *testing.T) {
-		exec, err := makeValueWindowExec(mp, WinIdOfFirstValue, false, []types.Type{types.T_int64.ToType()})
-		require.NoError(t, err)
-		require.NotNil(t, exec)
-		exec.Free()
-	})
+func flushValueWindowForTest(t *testing.T, exec AggFuncExec, mp *mpool.MPool) *vector.Vector {
+	t.Helper()
+	results, err := exec.Flush()
+	for _, result := range results {
+		t.Cleanup(func() { result.Free(mp) })
+	}
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.NotNil(t, results[0])
+	return results[0]
+}
 
-	// Test LAST_VALUE function
-	t.Run("LAST_VALUE_basic", func(t *testing.T) {
-		exec, err := makeValueWindowExec(mp, WinIdOfLastValue, false, []types.Type{types.T_int64.ToType()})
-		require.NoError(t, err)
-		require.NotNil(t, exec)
-		exec.Free()
-	})
+func checkValueWindowNulls(t *testing.T, result *vector.Vector, typ types.Type, want []bool) {
+	t.Helper()
+	require.Equal(t, typ, *result.GetType())
+	require.Equal(t, len(want), result.Length())
+	for row, isNull := range want {
+		require.Equal(t, isNull, result.IsNull(uint64(row)), "row %d", row)
+	}
+}
 
-	// Test NTH_VALUE function
-	t.Run("NTH_VALUE_basic", func(t *testing.T) {
-		exec, err := makeValueWindowExec(mp, WinIdOfNthValue, false, []types.Type{types.T_int64.ToType()})
-		require.NoError(t, err)
-		require.NotNil(t, exec)
-		exec.Free()
-	})
+func runValueWindowFixedCase[T types.FixedSizeTExceptStrType](t *testing.T, id int64, typ types.Type, input []T, nulls []bool, want []T, wantNulls []bool) {
+	t.Helper()
+	mp := newValueWindowTestPool(t)
+	vec := vector.NewVec(typ)
+	t.Cleanup(func() { vec.Free(mp) })
+	require.NoError(t, vector.AppendFixedList(vec, input, nulls, mp))
+	exec, err := makeValueWindowExec(mp, id, false, []types.Type{typ})
+	require.NoError(t, err)
+	t.Cleanup(exec.Free)
+	require.NoError(t, exec.GroupGrow(3))
+	fillValueWindowFrames(t, exec, vec, [][]int{{0, 1, 2}, {0, 1, 2}, {0, 1, 2}})
+	result := flushValueWindowForTest(t, exec, mp)
+	checkValueWindowNulls(t, result, typ, wantNulls)
+	require.Len(t, want, len(wantNulls))
+	values := vector.MustFixedColWithTypeCheck[T](result)
+	for row, isNull := range wantNulls {
+		if !isNull {
+			require.Equal(t, want[row], values[row], "row %d", row)
+		}
+	}
+}
 
-	// Test with distinct (should fail)
-	t.Run("distinct_not_supported", func(t *testing.T) {
-		_, err := makeValueWindowExec(mp, WinIdOfLag, true, []types.Type{types.T_int64.ToType()})
-		require.Error(t, err)
+func TestValueWindowExec_APIContracts(t *testing.T) {
+	mp := newValueWindowTestPool(t)
+	exec, err := makeValueWindowExec(mp, WinIdOfLag, false, []types.Type{types.T_int64.ToType()})
+	require.NoError(t, err)
+	t.Cleanup(exec.Free)
+	require.NoError(t, exec.GroupGrow(3))
+	require.NoError(t, exec.PreAllocateGroups(2))
+	require.Nil(t, exec.GetOptResult())
+	require.GreaterOrEqual(t, exec.Size(), int64(0))
+	require.NoError(t, exec.SetExtraInformation(nil, 0))
+	for _, test := range []struct {
+		name string
+		call func() error
+	}{
+		{"BulkFill", func() error { return exec.BulkFill(0, nil) }},
+		{"BatchFill", func() error { return exec.BatchFill(0, nil, nil) }},
+		{"Merge", func() error { return exec.Merge(nil, 0, 0) }},
+		{"BatchMerge", func() error { return exec.BatchMerge(nil, 0, nil) }},
+		{"SaveIntermediateResult", func() error { return exec.SaveIntermediateResult(0, nil, nil) }},
+		{"SaveIntermediateResultOfChunk", func() error { return exec.SaveIntermediateResultOfChunk(0, nil) }},
+		{"UnmarshalFromReader", func() error { return exec.UnmarshalFromReader(nil, mp) }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.call()
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
+			require.Contains(t, err.Error(), test.name)
+		})
+	}
+	t.Run("distinct rejected", func(t *testing.T) {
+		rejected, err := makeValueWindowExec(mp, WinIdOfLag, true, []types.Type{types.T_int64.ToType()})
+		require.Nil(t, rejected)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
+		require.Contains(t, err.Error(), "distinct")
 	})
+	for _, test := range []struct {
+		name   string
+		params []types.Type
+		want   types.Type
+	}{
+		{"no parameters", nil, types.T_any.ToType()},
+		{"complete type", []types.Type{{Oid: types.T_decimal64, Width: 18, Scale: 4}}, types.Type{Oid: types.T_decimal64, Width: 18, Scale: 4}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := newValueWindowTestPool(t)
+			typed, err := makeValueWindowExec(mp, WinIdOfLag, false, test.params)
+			require.NoError(t, err)
+			t.Cleanup(typed.Free)
+			args, result := typed.TypesInfo()
+			require.Equal(t, []types.Type{test.want}, args)
+			require.Equal(t, test.want, result)
+			require.Equal(t, WinIdOfLag, typed.AggID())
+			require.False(t, typed.IsDistinct())
+		})
+	}
+
 }
 
 func TestValueWindowExec_FillAndFlush(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer mp.Free(nil)
-
-	t.Run("LAG_fill_and_flush_int64", func(t *testing.T) {
-		exec, err := makeValueWindowExec(mp, WinIdOfLag, false, []types.Type{types.T_int64.ToType()})
-		require.NoError(t, err)
-
-		// Create test vector with int64 values
-		vec := vector.NewVec(types.T_int64.ToType())
-		err = vector.AppendFixedList(vec, []int64{100, 200, 300}, nil, mp)
-		require.NoError(t, err)
-		defer vec.Free(mp)
-
-		// Grow groups
-		err = exec.GroupGrow(3)
-		require.NoError(t, err)
-
-		// Fill values for each row
-		// Row 0: frame contains [100, 200, 300], current row is 0
-		for k := 0; k < 3; k++ {
-			err = exec.Fill(0, k, []*vector.Vector{vec})
-			require.NoError(t, err)
-		}
-		// Row 1: frame contains [100, 200, 300], current row is 1
-		for k := 0; k < 3; k++ {
-			err = exec.Fill(1, k, []*vector.Vector{vec})
-			require.NoError(t, err)
-		}
-		// Row 2: frame contains [100, 200, 300], current row is 2
-		for k := 0; k < 3; k++ {
-			err = exec.Fill(2, k, []*vector.Vector{vec})
-			require.NoError(t, err)
-		}
-
-		// Flush and check results
-		results, err := exec.Flush()
-		require.NoError(t, err)
-		require.Len(t, results, 1)
-
-		// LAG should return: [null, 100, 200]
-		resultVec := results[0]
-		require.Equal(t, 3, resultVec.Length())
-
-		// First row should be null (no previous row)
-		require.True(t, resultVec.IsNull(0))
-
-		resultVec.Free(mp)
-		exec.Free()
-	})
-
-	t.Run("LEAD_fill_and_flush_int64", func(t *testing.T) {
-		exec, err := makeValueWindowExec(mp, WinIdOfLead, false, []types.Type{types.T_int64.ToType()})
-		require.NoError(t, err)
-
-		vec := vector.NewVec(types.T_int64.ToType())
-		err = vector.AppendFixedList(vec, []int64{100, 200, 300}, nil, mp)
-		require.NoError(t, err)
-		defer vec.Free(mp)
-
-		err = exec.GroupGrow(3)
-		require.NoError(t, err)
-
-		for j := 0; j < 3; j++ {
-			for k := 0; k < 3; k++ {
-				err = exec.Fill(j, k, []*vector.Vector{vec})
-				require.NoError(t, err)
-			}
-		}
-
-		results, err := exec.Flush()
-		require.NoError(t, err)
-		require.Len(t, results, 1)
-
-		resultVec := results[0]
-		require.Equal(t, 3, resultVec.Length())
-
-		// Last row should be null (no next row)
-		require.True(t, resultVec.IsNull(2))
-
-		resultVec.Free(mp)
-		exec.Free()
-	})
-
-	t.Run("FIRST_VALUE_fill_and_flush", func(t *testing.T) {
-		exec, err := makeValueWindowExec(mp, WinIdOfFirstValue, false, []types.Type{types.T_int64.ToType()})
-		require.NoError(t, err)
-
-		vec := vector.NewVec(types.T_int64.ToType())
-		err = vector.AppendFixedList(vec, []int64{100, 200, 300}, nil, mp)
-		require.NoError(t, err)
-		defer vec.Free(mp)
-
-		err = exec.GroupGrow(3)
-		require.NoError(t, err)
-
-		for j := 0; j < 3; j++ {
-			for k := 0; k < 3; k++ {
-				err = exec.Fill(j, k, []*vector.Vector{vec})
-				require.NoError(t, err)
-			}
-		}
-
-		results, err := exec.Flush()
-		require.NoError(t, err)
-		require.Len(t, results, 1)
-
-		resultVec := results[0]
-		require.Equal(t, 3, resultVec.Length())
-
-		// All rows should have first value = 100
-		col := vector.MustFixedColNoTypeCheck[int64](resultVec)
-		for i := 0; i < 3; i++ {
-			require.Equal(t, int64(100), col[i])
-		}
-
-		resultVec.Free(mp)
-		exec.Free()
-	})
-
-	t.Run("LAST_VALUE_fill_and_flush", func(t *testing.T) {
-		exec, err := makeValueWindowExec(mp, WinIdOfLastValue, false, []types.Type{types.T_int64.ToType()})
-		require.NoError(t, err)
-
-		vec := vector.NewVec(types.T_int64.ToType())
-		err = vector.AppendFixedList(vec, []int64{100, 200, 300}, nil, mp)
-		require.NoError(t, err)
-		defer vec.Free(mp)
-
-		err = exec.GroupGrow(3)
-		require.NoError(t, err)
-
-		for j := 0; j < 3; j++ {
-			for k := 0; k < 3; k++ {
-				err = exec.Fill(j, k, []*vector.Vector{vec})
-				require.NoError(t, err)
-			}
-		}
-
-		results, err := exec.Flush()
-		require.NoError(t, err)
-		require.Len(t, results, 1)
-
-		resultVec := results[0]
-		require.Equal(t, 3, resultVec.Length())
-
-		// All rows should have last value = 300
-		col := vector.MustFixedColNoTypeCheck[int64](resultVec)
-		for i := 0; i < 3; i++ {
-			require.Equal(t, int64(300), col[i])
-		}
-
-		resultVec.Free(mp)
-		exec.Free()
-	})
-
-	t.Run("NTH_VALUE_fill_and_flush", func(t *testing.T) {
-		exec, err := makeValueWindowExec(mp, WinIdOfNthValue, false, []types.Type{types.T_int64.ToType()})
-		require.NoError(t, err)
-
-		vec := vector.NewVec(types.T_int64.ToType())
-		err = vector.AppendFixedList(vec, []int64{100, 200, 300}, nil, mp)
-		require.NoError(t, err)
-		defer vec.Free(mp)
-
-		err = exec.GroupGrow(3)
-		require.NoError(t, err)
-
-		for j := 0; j < 3; j++ {
-			for k := 0; k < 3; k++ {
-				err = exec.Fill(j, k, []*vector.Vector{vec})
-				require.NoError(t, err)
-			}
-		}
-
-		results, err := exec.Flush()
-		require.NoError(t, err)
-		require.Len(t, results, 1)
-
-		resultVec := results[0]
-		require.Equal(t, 3, resultVec.Length())
-
-		resultVec.Free(mp)
-		exec.Free()
-	})
+	for _, test := range []struct {
+		name      string
+		id        int64
+		input     []int64
+		nulls     []bool
+		want      []int64
+		wantNulls []bool
+	}{
+		{"lag", WinIdOfLag, []int64{100, 200, 300}, nil, []int64{0, 100, 200}, []bool{true, false, false}},
+		{"lead", WinIdOfLead, []int64{100, 200, 300}, nil, []int64{200, 300, 0}, []bool{false, false, true}},
+		{"first", WinIdOfFirstValue, []int64{100, 200, 300}, nil, []int64{100, 100, 100}, []bool{false, false, false}},
+		{"last", WinIdOfLastValue, []int64{100, 200, 300}, nil, []int64{300, 300, 300}, []bool{false, false, false}},
+		{"nth default one", WinIdOfNthValue, []int64{100, 200, 300}, nil, []int64{100, 100, 100}, []bool{false, false, false}},
+		{"lag null predecessor", WinIdOfLag, []int64{100, 0, 300}, []bool{false, true, false}, []int64{0, 100, 0}, []bool{true, false, true}},
+		{"first null endpoint", WinIdOfFirstValue, []int64{0, 200, 300}, []bool{true, false, false}, []int64{0, 0, 0}, []bool{true, true, true}},
+		{"last null endpoint", WinIdOfLastValue, []int64{100, 200, 0}, []bool{false, false, true}, []int64{0, 0, 0}, []bool{true, true, true}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runValueWindowFixedCase(t, test.id, types.T_int64.ToType(), test.input, test.nulls, test.want, test.wantNulls)
+		})
+	}
 }
 
 func TestValueWindowExec_VarlenTypes(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer mp.Free(nil)
-
-	t.Run("LAG_varchar", func(t *testing.T) {
-		exec, err := makeValueWindowExec(mp, WinIdOfLag, false, []types.Type{types.T_varchar.ToType()})
-		require.NoError(t, err)
-
-		vec := vector.NewVec(types.T_varchar.ToType())
-		err = vector.AppendStringList(vec, []string{"aaa", "bbb", "ccc"}, nil, mp)
-		require.NoError(t, err)
-		defer vec.Free(mp)
-
-		err = exec.GroupGrow(3)
-		require.NoError(t, err)
-
-		for j := 0; j < 3; j++ {
-			for k := 0; k < 3; k++ {
-				err = exec.Fill(j, k, []*vector.Vector{vec})
-				require.NoError(t, err)
+	for _, test := range []struct {
+		name  string
+		id    int64
+		want  []string
+		nulls []bool
+	}{
+		{"lag", WinIdOfLag, []string{"", "aaa", "bbb"}, []bool{true, false, false}},
+		{"lead", WinIdOfLead, []string{"bbb", "ccc", ""}, []bool{false, false, true}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := newValueWindowTestPool(t)
+			vec := vector.NewVec(types.T_varchar.ToType())
+			t.Cleanup(func() { vec.Free(mp) })
+			require.NoError(t, vector.AppendStringList(vec, []string{"aaa", "bbb", "ccc"}, nil, mp))
+			exec, err := makeValueWindowExec(mp, test.id, false, []types.Type{types.T_varchar.ToType()})
+			require.NoError(t, err)
+			t.Cleanup(exec.Free)
+			require.NoError(t, exec.GroupGrow(3))
+			fillValueWindowFrames(t, exec, vec, [][]int{{0, 1, 2}, {0, 1, 2}, {0, 1, 2}})
+			result := flushValueWindowForTest(t, exec, mp)
+			checkValueWindowNulls(t, result, types.T_varchar.ToType(), test.nulls)
+			for row, isNull := range test.nulls {
+				if !isNull {
+					require.Equal(t, test.want[row], string(result.GetBytesAt(row)))
+				}
 			}
-		}
-
-		results, err := exec.Flush()
-		require.NoError(t, err)
-		require.Len(t, results, 1)
-
-		resultVec := results[0]
-		require.Equal(t, 3, resultVec.Length())
-
-		// First row should be null
-		require.True(t, resultVec.IsNull(0))
-
-		// Second row should be "aaa"
-		require.Equal(t, "aaa", string(resultVec.GetBytesAt(1)))
-
-		// Third row should be "bbb"
-		require.Equal(t, "bbb", string(resultVec.GetBytesAt(2)))
-
-		resultVec.Free(mp)
-		exec.Free()
-	})
+		})
+	}
 }
 
 func TestValueWindowExec_BinaryStringProvenance(t *testing.T) {
 	tests := []struct {
-		name string
-		id   int64
-		want []bool
+		name   string
+		id     int64
+		want   []bool
+		values []string
+		nulls  []bool
 	}{
-		{name: "lag", id: WinIdOfLag, want: []bool{false, true, false}},
-		{name: "lead", id: WinIdOfLead, want: []bool{false, true, false}},
-		{name: "first_value", id: WinIdOfFirstValue, want: []bool{true, true, true}},
-		{name: "last_value", id: WinIdOfLastValue, want: []bool{true, true, true}},
-		{name: "nth_value", id: WinIdOfNthValue, want: []bool{true, true, true}},
+		{name: "lag", id: WinIdOfLag, want: []bool{false, true, false}, values: []string{"", "binary-0", "text-1"}, nulls: []bool{true, false, false}},
+		{name: "lead", id: WinIdOfLead, want: []bool{false, true, false}, values: []string{"text-1", "binary-2", ""}, nulls: []bool{false, false, true}},
+		{name: "first_value", id: WinIdOfFirstValue, want: []bool{true, true, true}, values: []string{"binary-0", "binary-0", "binary-0"}, nulls: []bool{false, false, false}},
+		{name: "last_value", id: WinIdOfLastValue, want: []bool{true, true, true}, values: []string{"binary-2", "binary-2", "binary-2"}, nulls: []bool{false, false, false}},
+		{name: "nth_value", id: WinIdOfNthValue, want: []bool{true, true, true}, values: []string{"binary-0", "binary-0", "binary-0"}, nulls: []bool{false, false, false}},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			mp := mpool.MustNewZero()
-			defer mp.Free(nil)
+			mp := newValueWindowTestPool(t)
 
 			exec, err := makeValueWindowExec(mp, tc.id, false, []types.Type{types.T_varchar.ToType()})
 			require.NoError(t, err)
-			defer exec.Free()
+			t.Cleanup(exec.Free)
 
 			vec := vector.NewVec(types.T_varchar.ToType())
+			t.Cleanup(func() { vec.Free(mp) })
 			require.NoError(t, vector.AppendStringList(vec, []string{"binary-0", "text-1", "binary-2"}, nil, mp))
-			defer vec.Free(mp)
+
 			require.NoError(t, vec.SetIsBinaryStringAt(0, true, mp))
 			require.NoError(t, vec.SetIsBinaryStringAt(2, true, mp))
 
@@ -359,264 +240,127 @@ func TestValueWindowExec_BinaryStringProvenance(t *testing.T) {
 				}
 			}
 
-			results, err := exec.Flush()
-			require.NoError(t, err)
-			require.Len(t, results, 1)
-			defer results[0].Free(mp)
+			result := flushValueWindowForTest(t, exec, mp)
+			checkValueWindowNulls(t, result, types.T_varchar.ToType(), tc.nulls)
+			for row, isNull := range tc.nulls {
+				if !isNull {
+					require.Equal(t, tc.values[row], string(result.GetBytesAt(row)))
+				}
+			}
+
 			for row, want := range tc.want {
-				require.Equal(t, want, results[0].GetBinaryStringMetadataAt(row), "row %d", row)
+				require.Equal(t, want, result.GetBinaryStringMetadataAt(row), "row %d", row)
 			}
 			if tc.id == WinIdOfLag {
-				require.True(t, results[0].IsNull(0))
-				require.False(t, results[0].GetBinaryStringMetadataAt(0))
+				require.True(t, result.IsNull(0))
+				require.False(t, result.GetBinaryStringMetadataAt(0))
 			}
 			if tc.id == WinIdOfLead {
-				require.True(t, results[0].IsNull(2))
-				require.False(t, results[0].GetBinaryStringMetadataAt(2))
+				require.True(t, result.IsNull(2))
+				require.False(t, result.GetBinaryStringMetadataAt(2))
 			}
 		})
 	}
 }
 
-func TestValueWindowExec_NullValues(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer mp.Free(nil)
-
-	t.Run("LAG_with_nulls", func(t *testing.T) {
-		exec, err := makeValueWindowExec(mp, WinIdOfLag, false, []types.Type{types.T_int64.ToType()})
-		require.NoError(t, err)
-
-		vec := vector.NewVec(types.T_int64.ToType())
-		err = vector.AppendFixedList(vec, []int64{100, 0, 300}, []bool{false, true, false}, mp)
-		require.NoError(t, err)
-		defer vec.Free(mp)
-
-		err = exec.GroupGrow(3)
-		require.NoError(t, err)
-
-		for j := 0; j < 3; j++ {
-			for k := 0; k < 3; k++ {
-				err = exec.Fill(j, k, []*vector.Vector{vec})
-				require.NoError(t, err)
-			}
-		}
-
-		results, err := exec.Flush()
-		require.NoError(t, err)
-		require.Len(t, results, 1)
-
-		resultVec := results[0]
-		require.Equal(t, 3, resultVec.Length())
-
-		// Row 0: LAG should be null (no previous)
-		require.True(t, resultVec.IsNull(0))
-
-		// Row 1: LAG should be 100 (previous row value)
-		require.False(t, resultVec.IsNull(1))
-
-		// Row 2: LAG should be null (previous row was null)
-		require.True(t, resultVec.IsNull(2))
-
-		resultVec.Free(mp)
-		exec.Free()
-	})
-}
-
-func TestValueWindowExec_EmptyFrame(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer mp.Free(nil)
-
-	t.Run("LAG_empty_frame", func(t *testing.T) {
-		exec, err := makeValueWindowExec(mp, WinIdOfLag, false, []types.Type{types.T_int64.ToType()})
-		require.NoError(t, err)
-
-		// Grow but don't fill
-		err = exec.GroupGrow(1)
-		require.NoError(t, err)
-
-		results, err := exec.Flush()
-		require.NoError(t, err)
-		require.Len(t, results, 1)
-
-		resultVec := results[0]
-		require.Equal(t, 1, resultVec.Length())
-		require.True(t, resultVec.IsNull(0))
-
-		resultVec.Free(mp)
-		exec.Free()
-	})
-}
-
-func TestValueWindowExec_ErrorMethods(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer mp.Free(nil)
-
-	exec, err := makeValueWindowExec(mp, WinIdOfLag, false, []types.Type{types.T_int64.ToType()})
-	require.NoError(t, err)
-
-	// Test BulkFill (should return error)
-	err = exec.BulkFill(0, nil)
-	require.Error(t, err)
-
-	// Test BatchFill (should return error)
-	err = exec.BatchFill(0, nil, nil)
-	require.Error(t, err)
-
-	// Test Merge (should return error)
-	err = exec.Merge(nil, 0, 0)
-	require.Error(t, err)
-
-	// Test BatchMerge (should return error)
-	err = exec.BatchMerge(nil, 0, nil)
-	require.Error(t, err)
-
-	// Test SetExtraInformation (should not return error)
-	err = exec.SetExtraInformation(nil, 0)
-	require.NoError(t, err)
-
-	exec.Free()
-}
-
 func TestValueWindowExec_EmptyVectors(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer mp.Free(nil)
-
+	mp := newValueWindowTestPool(t)
 	exec, err := makeValueWindowExec(mp, WinIdOfLag, false, []types.Type{types.T_int64.ToType()})
 	require.NoError(t, err)
-
-	err = exec.GroupGrow(1)
-	require.NoError(t, err)
-
-	// Fill with empty vectors
-	err = exec.Fill(0, 0, []*vector.Vector{})
-	require.NoError(t, err)
-
-	exec.Free()
+	t.Cleanup(exec.Free)
+	require.NoError(t, exec.GroupGrow(1))
+	require.NoError(t, exec.Fill(0, 0, nil))
+	checkValueWindowNulls(t, flushValueWindowForTest(t, exec, mp), types.T_int64.ToType(), []bool{true})
 }
 
-// TestValueWindowExec_FillWithoutGroupGrow tests Fill when frameValues needs to be extended
 func TestValueWindowExec_FillWithoutGroupGrow(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer mp.Free(nil)
-
-	exec, err := makeValueWindowExec(mp, WinIdOfLag, false, []types.Type{types.T_int64.ToType()})
-	require.NoError(t, err)
-
+	mp := newValueWindowTestPool(t)
 	vec := vector.NewVec(types.T_int64.ToType())
-	err = vector.AppendFixedList(vec, []int64{100, 200}, nil, mp)
-	require.NoError(t, err)
-	defer vec.Free(mp)
-
-	// Don't call GroupGrow, let Fill extend frameValues automatically
-	// This covers the branch: for len(exec.frameValues) <= groupIndex
-	err = exec.Fill(0, 0, []*vector.Vector{vec})
-	require.NoError(t, err)
-
-	err = exec.Fill(1, 0, []*vector.Vector{vec})
-	require.NoError(t, err)
-
-	exec.Free()
-}
-
-// TestValueWindowExec_SaveIntermediateResult tests the error methods
-func TestValueWindowExec_SaveIntermediateResult(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer mp.Free(nil)
-
+	t.Cleanup(func() { vec.Free(mp) })
+	require.NoError(t, vector.AppendFixedList(vec, []int64{100, 200}, nil, mp))
 	exec, err := makeValueWindowExec(mp, WinIdOfLag, false, []types.Type{types.T_int64.ToType()})
 	require.NoError(t, err)
-
-	vExec := exec.(*valueWindowExec)
-
-	// Test SaveIntermediateResult (should return error)
-	err = vExec.SaveIntermediateResult(0, nil, nil)
-	require.Error(t, err)
-
-	// Test SaveIntermediateResultOfChunk (should return error)
-	err = vExec.SaveIntermediateResultOfChunk(0, nil)
-	require.Error(t, err)
-
-	// Test UnmarshalFromReader (should return error)
-	err = vExec.UnmarshalFromReader(nil, mp)
-	require.Error(t, err)
-
-	exec.Free()
+	t.Cleanup(exec.Free)
+	// No GroupGrow: second group has a nonempty frame but no current row.
+	fillValueWindowFrames(t, exec, vec, [][]int{{0}, {0}})
+	checkValueWindowNulls(t, flushValueWindowForTest(t, exec, mp), types.T_int64.ToType(), []bool{true, true})
 }
 
-// TestValueWindowExec_SizeWithData tests Size method with actual data
 func TestValueWindowExec_SizeWithData(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer mp.Free(nil)
-
+	mp := newValueWindowTestPool(t)
+	vec := vector.NewVec(types.T_int64.ToType())
+	t.Cleanup(func() { vec.Free(mp) })
+	require.NoError(t, vector.AppendFixedList(vec, []int64{100, 200, 300}, nil, mp))
 	exec, err := makeValueWindowExec(mp, WinIdOfLag, false, []types.Type{types.T_int64.ToType()})
 	require.NoError(t, err)
-
-	vec := vector.NewVec(types.T_int64.ToType())
-	err = vector.AppendFixedList(vec, []int64{100, 200, 300}, nil, mp)
-	require.NoError(t, err)
-	defer vec.Free(mp)
-
-	err = exec.GroupGrow(2)
-	require.NoError(t, err)
-
-	// Fill some data
-	for k := 0; k < 3; k++ {
-		err = exec.Fill(0, k, []*vector.Vector{vec})
-		require.NoError(t, err)
-	}
-
-	// Size should be > 0 now
-	size := exec.Size()
-	require.Greater(t, size, int64(0))
-
+	t.Cleanup(exec.Free)
+	require.NoError(t, exec.GroupGrow(2))
+	fillValueWindowFrames(t, exec, vec, [][]int{{0, 1, 2}})
+	require.Positive(t, exec.Size())
 	exec.Free()
+	require.Zero(t, exec.Size())
+	concrete := exec.(*valueWindowExec)
+	require.Nil(t, concrete.frameValues)
+	require.Nil(t, concrete.currentRowPosition)
 }
 
-// TestValueWindowExec_FreeWithResultVec tests Free when resultVec is set
-func TestValueWindowExec_FreeWithResultVec(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer mp.Free(nil)
-
-	exec, err := makeValueWindowExec(mp, WinIdOfLag, false, []types.Type{types.T_int64.ToType()})
-	require.NoError(t, err)
-
-	vec := vector.NewVec(types.T_int64.ToType())
-	err = vector.AppendFixedList(vec, []int64{100, 200, 300}, nil, mp)
-	require.NoError(t, err)
-	defer vec.Free(mp)
-
-	err = exec.GroupGrow(3)
-	require.NoError(t, err)
-
-	for j := 0; j < 3; j++ {
-		for k := 0; k < 3; k++ {
-			err = exec.Fill(j, k, []*vector.Vector{vec})
-			require.NoError(t, err)
+func TestValueWindowExec_ResultOwnership(t *testing.T) {
+	for _, transfer := range []bool{false, true} {
+		name := "caller owns output"
+		if transfer {
+			name = "executor owns transferred output"
 		}
+		t.Run(name, func(t *testing.T) {
+			mp := newValueWindowTestPool(t)
+			vec := vector.NewVec(types.T_int64.ToType())
+			t.Cleanup(func() { vec.Free(mp) })
+			require.NoError(t, vector.AppendFixedList(vec, []int64{100, 200}, nil, mp))
+			exec, err := makeValueWindowExec(mp, WinIdOfLag, false, []types.Type{types.T_int64.ToType()})
+			require.NoError(t, err)
+			t.Cleanup(exec.Free)
+			require.NoError(t, exec.GroupGrow(2))
+			fillValueWindowFrames(t, exec, vec, [][]int{{0, 1}, {0, 1}})
+			results, err := exec.Flush()
+			callerOwns := true
+			t.Cleanup(func() {
+				if callerOwns {
+					for _, result := range results {
+						result.Free(mp)
+					}
+				}
+			})
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			checkValueWindowNulls(t, results[0], types.T_int64.ToType(), []bool{true, false})
+			require.Equal(t, int64(100), vector.GetFixedAtWithTypeCheck[int64](results[0], 1))
+			require.Positive(t, mp.CurrNB())
+			if transfer {
+				exec.(*valueWindowExec).resultVec = results[0]
+				callerOwns = false
+			}
+			exec.Free()
+			require.Zero(t, exec.Size())
+			if transfer {
+				require.Zero(t, mp.CurrNB())
+			} else {
+				require.Positive(t, mp.CurrNB())
+				require.Equal(t, int64(100), vector.GetFixedAtWithTypeCheck[int64](results[0], 1))
+			}
+		})
 	}
-
-	// Flush to create resultVec
-	results, err := exec.Flush()
-	require.NoError(t, err)
-	require.Len(t, results, 1)
-
-	// Set resultVec manually to test Free branch
-	vExec := exec.(*valueWindowExec)
-	vExec.resultVec = results[0]
-
-	// Free should clean up resultVec
-	exec.Free()
 }
 
 func TestValueWindowExecPreservesRowStringSources(t *testing.T) {
 	for _, window := range []struct {
-		name string
-		id   int64
-		want []types.StringSource
+		name   string
+		id     int64
+		want   []types.StringSource
+		values []string
+		nulls  []bool
 	}{
 		{
 			name: "lag",
-			id:   WinIdOfLag,
+			id:   WinIdOfLag, values: []string{"", "a", "b", "c", "d"}, nulls: []bool{true, false, false, false, false},
 			want: []types.StringSource{
 				types.StringSourceExpression,
 				types.StringSourceExpression,
@@ -627,7 +371,7 @@ func TestValueWindowExecPreservesRowStringSources(t *testing.T) {
 		},
 		{
 			name: "lead",
-			id:   WinIdOfLead,
+			id:   WinIdOfLead, values: []string{"b", "c", "d", "e", ""}, nulls: []bool{false, false, false, false, true},
 			want: []types.StringSource{
 				types.StringSourceLiteral,
 				types.StringSourceUserVariable,
@@ -638,8 +382,9 @@ func TestValueWindowExecPreservesRowStringSources(t *testing.T) {
 		},
 	} {
 		t.Run(window.name, func(t *testing.T) {
-			mp := mpool.MustNewZero()
+			mp := newValueWindowTestPool(t)
 			input := vector.NewVec(types.T_text.ToType())
+			t.Cleanup(func() { input.Free(mp) })
 			sources := []types.StringSource{
 				types.StringSourceExpression,
 				types.StringSourceLiteral,
@@ -653,543 +398,129 @@ func TestValueWindowExecPreservesRowStringSources(t *testing.T) {
 			require.NoError(t, input.SetStringSourcesWithMP(sources, mp))
 			exec, err := makeValueWindowExec(mp, window.id, false, []types.Type{types.T_text.ToType()})
 			require.NoError(t, err)
+			t.Cleanup(exec.Free)
 			require.NoError(t, exec.GroupGrow(len(sources)))
 			for group := range sources {
 				for row := range sources {
 					require.NoError(t, exec.Fill(group, row, []*vector.Vector{input}))
 				}
 			}
-			results, err := exec.Flush()
-			require.NoError(t, err)
-			require.Len(t, results, 1)
-			for row, source := range window.want {
-				require.Equal(t, source, results[0].GetStringSourceAt(row))
-			}
-			results[0].Free(mp)
-			exec.Free()
-			input.Free(mp)
-			require.Zero(t, mp.CurrNB())
-		})
-	}
-}
-
-// TestValueWindowExec_VariousTypes tests different data types for appendValueToVector
-func TestValueWindowExec_VariousTypes(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer mp.Free(nil)
-
-	testCases := []struct {
-		name   string
-		typ    types.Type
-		values interface{}
-		nulls  []bool
-	}{
-		{"bool", types.T_bool.ToType(), []bool{true, false, true}, nil},
-		{"int8", types.T_int8.ToType(), []int8{1, 2, 3}, nil},
-		{"int16", types.T_int16.ToType(), []int16{100, 200, 300}, nil},
-		{"int32", types.T_int32.ToType(), []int32{1000, 2000, 3000}, nil},
-		{"uint8", types.T_uint8.ToType(), []uint8{1, 2, 3}, nil},
-		{"uint16", types.T_uint16.ToType(), []uint16{100, 200, 300}, nil},
-		{"uint32", types.T_uint32.ToType(), []uint32{1000, 2000, 3000}, nil},
-		{"uint64", types.T_uint64.ToType(), []uint64{10000, 20000, 30000}, nil},
-		{"float32", types.T_float32.ToType(), []float32{1.1, 2.2, 3.3}, nil},
-		{"float64", types.T_float64.ToType(), []float64{1.11, 2.22, 3.33}, nil},
-		{"date", types.T_date.ToType(), []types.Date{1, 2, 3}, nil},
-		{"datetime", types.T_datetime.ToType(), []types.Datetime{1000, 2000, 3000}, nil},
-		{"decimal64", types.T_decimal64.ToType(), []types.Decimal64{100, 200, 300}, nil},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			exec, err := makeValueWindowExec(mp, WinIdOfLag, false, []types.Type{tc.typ})
-			require.NoError(t, err)
-
-			vec := vector.NewVec(tc.typ)
-			switch v := tc.values.(type) {
-			case []bool:
-				err = vector.AppendFixedList(vec, v, tc.nulls, mp)
-			case []int8:
-				err = vector.AppendFixedList(vec, v, tc.nulls, mp)
-			case []int16:
-				err = vector.AppendFixedList(vec, v, tc.nulls, mp)
-			case []int32:
-				err = vector.AppendFixedList(vec, v, tc.nulls, mp)
-			case []uint8:
-				err = vector.AppendFixedList(vec, v, tc.nulls, mp)
-			case []uint16:
-				err = vector.AppendFixedList(vec, v, tc.nulls, mp)
-			case []uint32:
-				err = vector.AppendFixedList(vec, v, tc.nulls, mp)
-			case []uint64:
-				err = vector.AppendFixedList(vec, v, tc.nulls, mp)
-			case []float32:
-				err = vector.AppendFixedList(vec, v, tc.nulls, mp)
-			case []float64:
-				err = vector.AppendFixedList(vec, v, tc.nulls, mp)
-			case []types.Date:
-				err = vector.AppendFixedList(vec, v, tc.nulls, mp)
-			case []types.Datetime:
-				err = vector.AppendFixedList(vec, v, tc.nulls, mp)
-			case []types.Decimal64:
-				err = vector.AppendFixedList(vec, v, tc.nulls, mp)
-			}
-			require.NoError(t, err)
-			defer vec.Free(mp)
-
-			err = exec.GroupGrow(3)
-			require.NoError(t, err)
-
-			for j := 0; j < 3; j++ {
-				for k := 0; k < 3; k++ {
-					err = exec.Fill(j, k, []*vector.Vector{vec})
-					require.NoError(t, err)
+			result := flushValueWindowForTest(t, exec, mp)
+			checkValueWindowNulls(t, result, types.T_text.ToType(), window.nulls)
+			for row, isNull := range window.nulls {
+				if !isNull {
+					require.Equal(t, window.values[row], string(result.GetBytesAt(row)))
 				}
 			}
 
-			results, err := exec.Flush()
-			require.NoError(t, err)
-			require.Len(t, results, 1)
-
-			resultVec := results[0]
-			require.Equal(t, 3, resultVec.Length())
-
-			resultVec.Free(mp)
-			exec.Free()
+			for row, source := range window.want {
+				require.Equal(t, source, result.GetStringSourceAt(row))
+			}
 		})
 	}
 }
 
-// TestValueWindowExec_LEADVariousTypes tests LEAD with various types
-func TestValueWindowExec_LEADVariousTypes(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer mp.Free(nil)
-
-	// Test with varchar for LEAD
-	t.Run("LEAD_varchar", func(t *testing.T) {
-		exec, err := makeValueWindowExec(mp, WinIdOfLead, false, []types.Type{types.T_varchar.ToType()})
-		require.NoError(t, err)
-
-		vec := vector.NewVec(types.T_varchar.ToType())
-		err = vector.AppendStringList(vec, []string{"aaa", "bbb", "ccc"}, nil, mp)
-		require.NoError(t, err)
-		defer vec.Free(mp)
-
-		err = exec.GroupGrow(3)
-		require.NoError(t, err)
-
-		for j := 0; j < 3; j++ {
-			for k := 0; k < 3; k++ {
-				err = exec.Fill(j, k, []*vector.Vector{vec})
-				require.NoError(t, err)
-			}
-		}
-
-		results, err := exec.Flush()
-		require.NoError(t, err)
-		require.Len(t, results, 1)
-
-		resultVec := results[0]
-		require.Equal(t, 3, resultVec.Length())
-
-		// Last row should be null
-		require.True(t, resultVec.IsNull(2))
-
-		resultVec.Free(mp)
-		exec.Free()
+func TestValueWindowExec_FixedTypes(t *testing.T) {
+	t.Run("bool", func(t *testing.T) {
+		runValueWindowFixedCase(t, WinIdOfLag, types.T_bool.ToType(), []bool{true, false, true}, nil, []bool{false, true, false}, []bool{true, false, false})
+	})
+	t.Run("int8", func(t *testing.T) {
+		runValueWindowFixedCase(t, WinIdOfLag, types.T_int8.ToType(), []int8{1, 2, 3}, nil, []int8{0, 1, 2}, []bool{true, false, false})
+	})
+	t.Run("int16", func(t *testing.T) {
+		runValueWindowFixedCase(t, WinIdOfLag, types.T_int16.ToType(), []int16{100, 200, 300}, nil, []int16{0, 100, 200}, []bool{true, false, false})
+	})
+	t.Run("int32", func(t *testing.T) {
+		runValueWindowFixedCase(t, WinIdOfLag, types.T_int32.ToType(), []int32{1000, 2000, 3000}, nil, []int32{0, 1000, 2000}, []bool{true, false, false})
+	})
+	t.Run("uint8", func(t *testing.T) {
+		runValueWindowFixedCase(t, WinIdOfLag, types.T_uint8.ToType(), []uint8{1, 2, 3}, nil, []uint8{0, 1, 2}, []bool{true, false, false})
+	})
+	t.Run("uint16", func(t *testing.T) {
+		runValueWindowFixedCase(t, WinIdOfLag, types.T_uint16.ToType(), []uint16{100, 200, 300}, nil, []uint16{0, 100, 200}, []bool{true, false, false})
+	})
+	t.Run("uint32", func(t *testing.T) {
+		runValueWindowFixedCase(t, WinIdOfLag, types.T_uint32.ToType(), []uint32{1000, 2000, 3000}, nil, []uint32{0, 1000, 2000}, []bool{true, false, false})
+	})
+	t.Run("uint64", func(t *testing.T) {
+		runValueWindowFixedCase(t, WinIdOfLag, types.T_uint64.ToType(), []uint64{10000, 20000, 30000}, nil, []uint64{0, 10000, 20000}, []bool{true, false, false})
+	})
+	t.Run("float32", func(t *testing.T) {
+		runValueWindowFixedCase(t, WinIdOfLag, types.T_float32.ToType(), []float32{1.1, 2.2, 3.3}, nil, []float32{0, 1.1, 2.2}, []bool{true, false, false})
+	})
+	t.Run("float64", func(t *testing.T) {
+		runValueWindowFixedCase(t, WinIdOfLag, types.T_float64.ToType(), []float64{1.11, 2.22, 3.33}, nil, []float64{0, 1.11, 2.22}, []bool{true, false, false})
+	})
+	t.Run("date", func(t *testing.T) {
+		runValueWindowFixedCase(t, WinIdOfLag, types.T_date.ToType(), []types.Date{1, 2, 3}, nil, []types.Date{0, 1, 2}, []bool{true, false, false})
+	})
+	t.Run("datetime", func(t *testing.T) {
+		runValueWindowFixedCase(t, WinIdOfLag, types.T_datetime.ToType(), []types.Datetime{1000, 2000, 3000}, nil, []types.Datetime{0, 1000, 2000}, []bool{true, false, false})
+	})
+	t.Run("decimal64", func(t *testing.T) {
+		runValueWindowFixedCase(t, WinIdOfLag, types.T_decimal64.ToType(), []types.Decimal64{100, 200, 300}, nil, []types.Decimal64{0, 100, 200}, []bool{true, false, false})
+	})
+	t.Run("bit", func(t *testing.T) {
+		runValueWindowFixedCase(t, WinIdOfLag, types.T_bit.ToType(), []uint64{1, 2, 3}, nil, []uint64{0, 1, 2}, []bool{true, false, false})
+	})
+	t.Run("time", func(t *testing.T) {
+		runValueWindowFixedCase(t, WinIdOfLag, types.T_time.ToType(), []types.Time{1000, 2000, 3000}, nil, []types.Time{0, 1000, 2000}, []bool{true, false, false})
+	})
+	t.Run("timestamp", func(t *testing.T) {
+		runValueWindowFixedCase(t, WinIdOfLag, types.T_timestamp.ToType(), []types.Timestamp{1000, 2000, 3000}, nil, []types.Timestamp{0, 1000, 2000}, []bool{true, false, false})
+	})
+	t.Run("decimal128", func(t *testing.T) {
+		runValueWindowFixedCase(t, WinIdOfLag, types.T_decimal128.ToType(), []types.Decimal128{{B0_63: 100}, {B0_63: 200}, {B0_63: 300}}, nil, []types.Decimal128{{}, {B0_63: 100}, {B0_63: 200}}, []bool{true, false, false})
+	})
+	t.Run("uuid", func(t *testing.T) {
+		runValueWindowFixedCase(t, WinIdOfLag, types.T_uuid.ToType(), []types.Uuid{{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}, {2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17}, {3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18}}, nil, []types.Uuid{{}, {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}, {2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17}}, []bool{true, false, false})
+	})
+	t.Run("enum", func(t *testing.T) {
+		runValueWindowFixedCase(t, WinIdOfLag, types.T_enum.ToType(), []types.Enum{1, 2, 3}, nil, []types.Enum{0, 1, 2}, []bool{true, false, false})
+	})
+	t.Run("Rowid", func(t *testing.T) {
+		runValueWindowFixedCase(t, WinIdOfLag, types.T_Rowid.ToType(), []types.Rowid{{1, 2, 3, 4, 5, 6}, {2, 3, 4, 5, 6, 7}, {3, 4, 5, 6, 7, 8}}, nil, []types.Rowid{{}, {1, 2, 3, 4, 5, 6}, {2, 3, 4, 5, 6, 7}}, []bool{true, false, false})
+	})
+	t.Run("Blockid", func(t *testing.T) {
+		runValueWindowFixedCase(t, WinIdOfLag, types.T_Blockid.ToType(), []types.Blockid{{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}, {2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21}, {3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22}}, nil, []types.Blockid{{}, {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}, {2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21}}, []bool{true, false, false})
+	})
+	t.Run("TS", func(t *testing.T) {
+		runValueWindowFixedCase(t, WinIdOfLag, types.T_TS.ToType(), []types.TS{types.BuildTS(1, 1), types.BuildTS(2, 2), types.BuildTS(3, 3)}, nil, []types.TS{{}, types.BuildTS(1, 1), types.BuildTS(2, 2)}, []bool{true, false, false})
 	})
 }
 
-// TestValueWindowExec_FIRST_LAST_VALUE_WithNulls tests FIRST_VALUE and LAST_VALUE with null values
-func TestValueWindowExec_FIRST_LAST_VALUE_WithNulls(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer mp.Free(nil)
-
-	t.Run("FIRST_VALUE_with_null_first", func(t *testing.T) {
-		exec, err := makeValueWindowExec(mp, WinIdOfFirstValue, false, []types.Type{types.T_int64.ToType()})
-		require.NoError(t, err)
-
-		vec := vector.NewVec(types.T_int64.ToType())
-		// First value is null
-		err = vector.AppendFixedList(vec, []int64{0, 200, 300}, []bool{true, false, false}, mp)
-		require.NoError(t, err)
-		defer vec.Free(mp)
-
-		err = exec.GroupGrow(3)
-		require.NoError(t, err)
-
-		for j := 0; j < 3; j++ {
-			for k := 0; k < 3; k++ {
-				err = exec.Fill(j, k, []*vector.Vector{vec})
-				require.NoError(t, err)
-			}
-		}
-
-		results, err := exec.Flush()
-		require.NoError(t, err)
-		require.Len(t, results, 1)
-
-		resultVec := results[0]
-		require.Equal(t, 3, resultVec.Length())
-
-		// All rows should have null as first value
-		for i := 0; i < 3; i++ {
-			require.True(t, resultVec.IsNull(uint64(i)))
-		}
-
-		resultVec.Free(mp)
-		exec.Free()
-	})
-
-	t.Run("LAST_VALUE_with_null_last", func(t *testing.T) {
-		exec, err := makeValueWindowExec(mp, WinIdOfLastValue, false, []types.Type{types.T_int64.ToType()})
-		require.NoError(t, err)
-
-		vec := vector.NewVec(types.T_int64.ToType())
-		// Last value is null
-		err = vector.AppendFixedList(vec, []int64{100, 200, 0}, []bool{false, false, true}, mp)
-		require.NoError(t, err)
-		defer vec.Free(mp)
-
-		err = exec.GroupGrow(3)
-		require.NoError(t, err)
-
-		for j := 0; j < 3; j++ {
-			for k := 0; k < 3; k++ {
-				err = exec.Fill(j, k, []*vector.Vector{vec})
-				require.NoError(t, err)
-			}
-		}
-
-		results, err := exec.Flush()
-		require.NoError(t, err)
-		require.Len(t, results, 1)
-
-		resultVec := results[0]
-		require.Equal(t, 3, resultVec.Length())
-
-		// All rows should have null as last value
-		for i := 0; i < 3; i++ {
-			require.True(t, resultVec.IsNull(uint64(i)))
-		}
-
-		resultVec.Free(mp)
-		exec.Free()
-	})
-}
-
-// TestValueWindowExec_EmptyFrameAllFunctions tests empty frame for all window functions
 func TestValueWindowExec_EmptyFrameAllFunctions(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer mp.Free(nil)
-
-	funcs := []struct {
+	for _, test := range []struct {
 		name string
 		id   int64
 	}{
-		{"LAG", WinIdOfLag},
-		{"LEAD", WinIdOfLead},
-		{"FIRST_VALUE", WinIdOfFirstValue},
-		{"LAST_VALUE", WinIdOfLastValue},
-		{"NTH_VALUE", WinIdOfNthValue},
-	}
-
-	for _, f := range funcs {
-		t.Run(f.name+"_empty_frame", func(t *testing.T) {
-			exec, err := makeValueWindowExec(mp, f.id, false, []types.Type{types.T_int64.ToType()})
+		{"lag", WinIdOfLag}, {"lead", WinIdOfLead}, {"first", WinIdOfFirstValue}, {"last", WinIdOfLastValue}, {"nth default one", WinIdOfNthValue},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := newValueWindowTestPool(t)
+			exec, err := makeValueWindowExec(mp, test.id, false, []types.Type{types.T_int64.ToType()})
 			require.NoError(t, err)
-
-			err = exec.GroupGrow(1)
-			require.NoError(t, err)
-
-			results, err := exec.Flush()
-			require.NoError(t, err)
-			require.Len(t, results, 1)
-
-			resultVec := results[0]
-			require.Equal(t, 1, resultVec.Length())
-			require.True(t, resultVec.IsNull(0))
-
-			resultVec.Free(mp)
-			exec.Free()
+			t.Cleanup(exec.Free)
+			require.NoError(t, exec.GroupGrow(1))
+			checkValueWindowNulls(t, flushValueWindowForTest(t, exec, mp), types.T_int64.ToType(), []bool{true})
 		})
 	}
 }
 
-// TestValueWindowExec_MoreTypes tests additional data types for appendValueToVector
-func TestValueWindowExec_MoreTypes(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer mp.Free(nil)
-
-	// Test bit type
-	t.Run("bit", func(t *testing.T) {
-		exec, err := makeValueWindowExec(mp, WinIdOfLag, false, []types.Type{types.T_bit.ToType()})
-		require.NoError(t, err)
-
-		vec := vector.NewVec(types.T_bit.ToType())
-		err = vector.AppendFixedList(vec, []uint64{1, 2, 3}, nil, mp)
-		require.NoError(t, err)
-		defer vec.Free(mp)
-
-		err = exec.GroupGrow(3)
-		require.NoError(t, err)
-
-		for j := 0; j < 3; j++ {
-			for k := 0; k < 3; k++ {
-				err = exec.Fill(j, k, []*vector.Vector{vec})
-				require.NoError(t, err)
-			}
-		}
-
-		results, err := exec.Flush()
-		require.NoError(t, err)
-		require.Len(t, results, 1)
-		results[0].Free(mp)
-		exec.Free()
-	})
-
-	// Test time type
-	t.Run("time", func(t *testing.T) {
-		exec, err := makeValueWindowExec(mp, WinIdOfLag, false, []types.Type{types.T_time.ToType()})
-		require.NoError(t, err)
-
-		vec := vector.NewVec(types.T_time.ToType())
-		err = vector.AppendFixedList(vec, []types.Time{1000, 2000, 3000}, nil, mp)
-		require.NoError(t, err)
-		defer vec.Free(mp)
-
-		err = exec.GroupGrow(3)
-		require.NoError(t, err)
-
-		for j := 0; j < 3; j++ {
-			for k := 0; k < 3; k++ {
-				err = exec.Fill(j, k, []*vector.Vector{vec})
-				require.NoError(t, err)
-			}
-		}
-
-		results, err := exec.Flush()
-		require.NoError(t, err)
-		require.Len(t, results, 1)
-		results[0].Free(mp)
-		exec.Free()
-	})
-
-	// Test timestamp type
-	t.Run("timestamp", func(t *testing.T) {
-		exec, err := makeValueWindowExec(mp, WinIdOfLag, false, []types.Type{types.T_timestamp.ToType()})
-		require.NoError(t, err)
-
-		vec := vector.NewVec(types.T_timestamp.ToType())
-		err = vector.AppendFixedList(vec, []types.Timestamp{1000, 2000, 3000}, nil, mp)
-		require.NoError(t, err)
-		defer vec.Free(mp)
-
-		err = exec.GroupGrow(3)
-		require.NoError(t, err)
-
-		for j := 0; j < 3; j++ {
-			for k := 0; k < 3; k++ {
-				err = exec.Fill(j, k, []*vector.Vector{vec})
-				require.NoError(t, err)
-			}
-		}
-
-		results, err := exec.Flush()
-		require.NoError(t, err)
-		require.Len(t, results, 1)
-		results[0].Free(mp)
-		exec.Free()
-	})
-
-	// Test decimal128 type
-	t.Run("decimal128", func(t *testing.T) {
-		exec, err := makeValueWindowExec(mp, WinIdOfLag, false, []types.Type{types.T_decimal128.ToType()})
-		require.NoError(t, err)
-
-		vec := vector.NewVec(types.T_decimal128.ToType())
-		err = vector.AppendFixedList(vec, []types.Decimal128{
-			{B0_63: 100, B64_127: 0},
-			{B0_63: 200, B64_127: 0},
-			{B0_63: 300, B64_127: 0},
-		}, nil, mp)
-		require.NoError(t, err)
-		defer vec.Free(mp)
-
-		err = exec.GroupGrow(3)
-		require.NoError(t, err)
-
-		for j := 0; j < 3; j++ {
-			for k := 0; k < 3; k++ {
-				err = exec.Fill(j, k, []*vector.Vector{vec})
-				require.NoError(t, err)
-			}
-		}
-
-		results, err := exec.Flush()
-		require.NoError(t, err)
-		require.Len(t, results, 1)
-		results[0].Free(mp)
-		exec.Free()
-	})
-
-	// Test uuid type
-	t.Run("uuid", func(t *testing.T) {
-		exec, err := makeValueWindowExec(mp, WinIdOfLag, false, []types.Type{types.T_uuid.ToType()})
-		require.NoError(t, err)
-
-		vec := vector.NewVec(types.T_uuid.ToType())
-		err = vector.AppendFixedList(vec, []types.Uuid{
-			{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
-			{2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17},
-			{3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18},
-		}, nil, mp)
-		require.NoError(t, err)
-		defer vec.Free(mp)
-
-		err = exec.GroupGrow(3)
-		require.NoError(t, err)
-
-		for j := 0; j < 3; j++ {
-			for k := 0; k < 3; k++ {
-				err = exec.Fill(j, k, []*vector.Vector{vec})
-				require.NoError(t, err)
-			}
-		}
-
-		results, err := exec.Flush()
-		require.NoError(t, err)
-		require.Len(t, results, 1)
-		results[0].Free(mp)
-		exec.Free()
-	})
-
-	// Test enum type
-	t.Run("enum", func(t *testing.T) {
-		exec, err := makeValueWindowExec(mp, WinIdOfLag, false, []types.Type{types.T_enum.ToType()})
-		require.NoError(t, err)
-
-		vec := vector.NewVec(types.T_enum.ToType())
-		err = vector.AppendFixedList(vec, []types.Enum{1, 2, 3}, nil, mp)
-		require.NoError(t, err)
-		defer vec.Free(mp)
-
-		err = exec.GroupGrow(3)
-		require.NoError(t, err)
-
-		for j := 0; j < 3; j++ {
-			for k := 0; k < 3; k++ {
-				err = exec.Fill(j, k, []*vector.Vector{vec})
-				require.NoError(t, err)
-			}
-		}
-
-		results, err := exec.Flush()
-		require.NoError(t, err)
-		require.Len(t, results, 1)
-		results[0].Free(mp)
-		exec.Free()
-	})
-}
-
-// TestValueWindowExec_InvalidAggID tests Flush with invalid aggID
 func TestValueWindowExec_InvalidAggID(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer mp.Free(nil)
-
-	// Create a valueWindowExec with invalid aggID
-	info := singleAggInfo{
-		aggID:     -999, // Invalid ID
-		distinct:  false,
-		argType:   types.T_int64.ToType(),
-		retType:   types.T_int64.ToType(),
-		emptyNull: true,
-	}
-	exec := &valueWindowExec{
-		singleAggInfo:      info,
-		mp:                 mp,
-		frameValues:        make([][]*valueEntry, 0),
-		currentRowPosition: make([]int, 0),
-	}
-
-	err := exec.GroupGrow(1)
-	require.NoError(t, err)
-
-	// Flush should return error for invalid aggID
-	_, err = exec.Flush()
-	require.Error(t, err)
-
-	exec.Free()
-}
-
-// TestValueWindowExec_RowidType tests Rowid type
-func TestValueWindowExec_RowidType(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer mp.Free(nil)
-
-	exec, err := makeValueWindowExec(mp, WinIdOfLag, false, []types.Type{types.T_Rowid.ToType()})
-	require.NoError(t, err)
-
-	vec := vector.NewVec(types.T_Rowid.ToType())
-	err = vector.AppendFixedList(vec, []types.Rowid{
-		{1, 2, 3, 4, 5, 6},
-		{2, 3, 4, 5, 6, 7},
-		{3, 4, 5, 6, 7, 8},
-	}, nil, mp)
-	require.NoError(t, err)
-	defer vec.Free(mp)
-
-	err = exec.GroupGrow(3)
-	require.NoError(t, err)
-
-	for j := 0; j < 3; j++ {
-		for k := 0; k < 3; k++ {
-			err = exec.Fill(j, k, []*vector.Vector{vec})
-			require.NoError(t, err)
-		}
-	}
-
+	mp := newValueWindowTestPool(t)
+	exec := &valueWindowExec{singleAggInfo: singleAggInfo{aggID: -999, argType: types.T_int64.ToType(), retType: types.T_int64.ToType(), emptyNull: true}, mp: mp}
+	t.Cleanup(exec.Free)
+	require.NoError(t, exec.GroupGrow(1))
 	results, err := exec.Flush()
-	require.NoError(t, err)
-	require.Len(t, results, 1)
-	results[0].Free(mp)
-	exec.Free()
-}
-
-// TestValueWindowExec_BlockidType tests Blockid type
-func TestValueWindowExec_BlockidType(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer mp.Free(nil)
-
-	exec, err := makeValueWindowExec(mp, WinIdOfLag, false, []types.Type{types.T_Blockid.ToType()})
-	require.NoError(t, err)
-
-	vec := vector.NewVec(types.T_Blockid.ToType())
-	err = vector.AppendFixedList(vec, []types.Blockid{
-		{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20},
-		{2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21},
-		{3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22},
-	}, nil, mp)
-	require.NoError(t, err)
-	defer vec.Free(mp)
-
-	err = exec.GroupGrow(3)
-	require.NoError(t, err)
-
-	for j := 0; j < 3; j++ {
-		for k := 0; k < 3; k++ {
-			err = exec.Fill(j, k, []*vector.Vector{vec})
-			require.NoError(t, err)
-		}
+	for _, result := range results {
+		t.Cleanup(func() { result.Free(mp) })
 	}
-
-	results, err := exec.Flush()
-	require.NoError(t, err)
-	require.Len(t, results, 1)
-	results[0].Free(mp)
-	exec.Free()
+	require.Nil(t, results)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
+	require.Contains(t, err.Error(), "invalid value window function")
 }
 
-// TestNtileWindowExec tests NTILE window function
 func TestNtileWindowExec(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mp.Free(nil)
@@ -1315,40 +646,6 @@ func TestNtileWindowExec(t *testing.T) {
 		resultVec.Free(mp)
 		exec.Free()
 	})
-}
-
-// TestValueWindowExec_TSType tests TS type
-func TestValueWindowExec_TSType(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer mp.Free(nil)
-
-	exec, err := makeValueWindowExec(mp, WinIdOfLag, false, []types.Type{types.T_TS.ToType()})
-	require.NoError(t, err)
-
-	vec := vector.NewVec(types.T_TS.ToType())
-	err = vector.AppendFixedList(vec, []types.TS{
-		types.BuildTS(1, 1),
-		types.BuildTS(2, 2),
-		types.BuildTS(3, 3),
-	}, nil, mp)
-	require.NoError(t, err)
-	defer vec.Free(mp)
-
-	err = exec.GroupGrow(3)
-	require.NoError(t, err)
-
-	for j := 0; j < 3; j++ {
-		for k := 0; k < 3; k++ {
-			err = exec.Fill(j, k, []*vector.Vector{vec})
-			require.NoError(t, err)
-		}
-	}
-
-	results, err := exec.Flush()
-	require.NoError(t, err)
-	require.Len(t, results, 1)
-	results[0].Free(mp)
-	exec.Free()
 }
 
 func TestPercentRank(t *testing.T) {
