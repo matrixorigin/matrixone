@@ -618,14 +618,14 @@ func TestPreparedScopeRunReleasesBuiltReader(t *testing.T) {
 				Proc:     proc,
 				NodeInfo: engine.Node{Mcpu: 1},
 				DataSource: &Source{
-					Rel:        rel,
-					FilterList: []*plan.Expr{plan2.MakeFalseExpr()},
+					Rel: rel,
 				},
 			}
 			reader.onRead = func() {
 				require.Same(t, reader, scope.DataSource.R)
 			}
 			compile := &Compile{proc: proc, isPrepare: true}
+			configureReaderPathTest(t, compile, scope)
 			var err error
 			if parallel {
 				err = scope.ParallelRun(compile)
@@ -652,9 +652,9 @@ func TestPreparedParallelWorkersReleaseBuiltReaders(t *testing.T) {
 			Rel: &mockRelationForParallelOrderBy{readers: []engine.Reader{
 				readers[0], readers[1],
 			}},
-			FilterList: []*plan.Expr{plan2.MakeFalseExpr()},
 		},
 	}
+	configureReaderPathTest(t, c, source)
 	parallel, err := buildScanParallelRun(source, c)
 	require.NoError(t, err)
 	require.Len(t, parallel.PreScopes, 2)
@@ -3064,13 +3064,13 @@ func TestBuildScanParallelRunSetsOrderByOnParallelReaders(t *testing.T) {
 
 	scope.DataSource = &Source{
 		Rel:                &mockRelationForParallelOrderBy{readers: []engine.Reader{reader1, reader2}},
-		FilterList:         []*plan.Expr{plan2.MakeFalseExpr()},
 		FilterExpr:         nil,
 		OrderBy:            orderBy,
 		RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
 	}
 	scope.NodeInfo = engine.Node{Mcpu: 2}
 
+	configureReaderPathTest(t, c, scope)
 	mergeScope, err := buildScanParallelRun(scope, c)
 	require.NoError(t, err)
 	require.NotNil(t, mergeScope)
