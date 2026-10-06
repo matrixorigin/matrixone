@@ -73,6 +73,12 @@ func TestString(t *testing.T) {
 
 func TestPrepare(t *testing.T) {
 	for _, tc := range makeTestCases(t) {
+		t.Cleanup(func() {
+			tc.arg.Free(tc.proc, false, nil)
+			tc.barg.Free(tc.proc, false, nil)
+			tc.resultBatch.Clean(tc.proc.Mp())
+			require.Zero(t, tc.proc.Mp().OnHeapCurrNB())
+		})
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 	}
@@ -242,9 +248,8 @@ func newTestCase(t *testing.T, flgs []bool, ts []types.Type, rp []colexec.Result
 	_, cancel := context.WithCancel(context.Background())
 	resultBatch := batch.NewWithSize(len(rp))
 	resultBatch.SetRowCount(4)
-	bat := colexec.MakeMockBatchs(proc.Mp())
 	for i := range rp {
-		resultBatch.Vecs[i] = vector.NewVec(*bat.Vecs[rp[i].Pos].GetType())
+		resultBatch.Vecs[i] = vector.NewVec(ts[rp[i].Pos])
 	}
 	tag++
 	tc := productTestCase{
