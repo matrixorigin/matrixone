@@ -28,47 +28,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// ivfpqScanNode mirrors cagraScanNode for the ivfpq tests — same column shape
-// (vec_col at pos 0, id PK at pos 1).
-func ivfpqScanNode() *plan.Node {
-	return &plan.Node{
-		TableDef: &plan.TableDef{
-			Name: "test_table",
-			Name2ColIndex: map[string]int32{
-				"vec_col": 0,
-				"id":      1,
-			},
-			Cols: []*plan.ColDef{
-				{Name: "vec_col", Typ: plan.Type{Id: int32(types.T_array_float32)}},
-				{Name: "id", Typ: plan.Type{Id: int32(types.T_int64), Width: 64}},
-			},
-			Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"},
-		},
-	}
-}
-
-func ivfpqVecCtx(scanNode *plan.Node) *vectorSortContext {
-	limit := makePlan2Uint64ConstExprWithType(10)
-	return &vectorSortContext{
-		distFnExpr: &plan.Function{
-			Func: &ObjectRef{ObjName: "l2_distance"},
-			Args: []*plan.Expr{
-				{
-					Typ:  plan.Type{Id: int32(types.T_array_float32)},
-					Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
-				},
-				{
-					Typ:  plan.Type{Id: int32(types.T_array_float32)},
-					Expr: &plan.Expr_Lit{Lit: &plan.Literal{}},
-				},
-			},
-		},
-		scanNode:    scanNode,
-		limit:       DeepCopyExpr(limit),
-		resultLimit: limit,
-	}
-}
-
 func ivfpqMTI(algoParams string) *MultiTableIndex {
 	return &MultiTableIndex{
 		IndexDefs: map[string]*plan.IndexDef{
@@ -185,7 +144,7 @@ func TestPrepareIvfpqIndexContext_OpTypeNotString(t *testing.T) {
 
 func TestPrepareIvfpqIndexContext_ArgsNotFound(t *testing.T) {
 	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
-	scan := ivfpqScanNode()
+	scan := vectorProviderScanNode()
 	v := &vectorSortContext{
 		distFnExpr: &plan.Function{
 			Func: &ObjectRef{ObjName: "l2_distance"},
@@ -213,7 +172,7 @@ func TestPrepareIvfpqIndexContext_ResolveThreadsError(t *testing.T) {
 		},
 	}
 	b := NewQueryBuilder(plan.Query_SELECT, mock, false, true)
-	r, err := b.prepareIvfpqIndexContext(ivfpqVecCtx(ivfpqScanNode()),
+	r, err := b.prepareIvfpqIndexContext(vectorProviderVecCtx(vectorProviderScanNode()),
 		ivfpqMTI(`{"op_type": "`+metric.DistFuncOpTypes["l2_distance"]+`"}`))
 	assert.Error(t, err)
 	assert.Nil(t, r)
@@ -234,7 +193,7 @@ func TestPrepareIvfpqIndexContext_ResolveBatchWindowError(t *testing.T) {
 		},
 	}
 	b := NewQueryBuilder(plan.Query_SELECT, mock, false, true)
-	r, err := b.prepareIvfpqIndexContext(ivfpqVecCtx(ivfpqScanNode()),
+	r, err := b.prepareIvfpqIndexContext(vectorProviderVecCtx(vectorProviderScanNode()),
 		ivfpqMTI(`{"op_type": "`+metric.DistFuncOpTypes["l2_distance"]+`"}`))
 	assert.Error(t, err)
 	assert.Nil(t, r)
@@ -258,7 +217,7 @@ func TestPrepareIvfpqIndexContext_ResolveProbeLimitError(t *testing.T) {
 		},
 	}
 	b := NewQueryBuilder(plan.Query_SELECT, mock, false, true)
-	r, err := b.prepareIvfpqIndexContext(ivfpqVecCtx(ivfpqScanNode()),
+	r, err := b.prepareIvfpqIndexContext(vectorProviderVecCtx(vectorProviderScanNode()),
 		ivfpqMTI(`{"op_type": "`+metric.DistFuncOpTypes["l2_distance"]+`"}`))
 	assert.Error(t, err)
 	assert.Nil(t, r)
@@ -282,7 +241,7 @@ func TestPrepareIvfpqIndexContext_Success(t *testing.T) {
 	}
 	b := NewQueryBuilder(plan.Query_SELECT, mock, false, true)
 	algo := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `", "lists": "100", "m": "8"}`
-	r, err := b.prepareIvfpqIndexContext(ivfpqVecCtx(ivfpqScanNode()), ivfpqMTI(algo))
+	r, err := b.prepareIvfpqIndexContext(vectorProviderVecCtx(vectorProviderScanNode()), ivfpqMTI(algo))
 	require.NoError(t, err)
 	require.NotNil(t, r)
 
@@ -318,8 +277,8 @@ func TestApplyIndicesForSortUsingIvfpq_PrepareReturnsNil(t *testing.T) {
 	// calling prepare, so we must seed at least one slot.
 	b.ctxByNode = append(b.ctxByNode, NewBindContext(b, nil))
 
-	scan := ivfpqScanNode()
-	v := ivfpqVecCtx(scan)
+	scan := vectorProviderScanNode()
+	v := vectorProviderVecCtx(scan)
 	v.sortNode = &plan.Node{}
 	v.rankOption = &plan.RankOption{Mode: "force"}
 

@@ -30,7 +30,7 @@ func TestRightExistentialDuplicateGroupAcrossBatchesAndReset(t *testing.T) {
 	typ := types.T_int32.ToType()
 	for _, join := range []plan.Node_JoinType{plan.Node_SEMI, plan.Node_ANTI} {
 		t.Run(join.String(), func(t *testing.T) {
-			tc := newTestCase(t, []bool{true}, []types.Type{typ}, []colexec.ResultPos{colexec.NewResultPos(1, 0)}, [][]*plan.Expr{{newExpr(0, typ)}, {newExpr(0, typ)}})
+			tc := newTestCase(t, []types.Type{typ}, []colexec.ResultPos{colexec.NewResultPos(1, 0)}, [][]*plan.Expr{{newExpr(0, typ)}, {newExpr(0, typ)}})
 			tc.arg.JoinType, tc.arg.IsRightJoin, tc.arg.NonEqCond = join, true, nil
 			defer func() {
 				tc.arg.Free(tc.proc, false, nil)
@@ -109,7 +109,7 @@ func TestRightExistentialResidualMatchesDifferentRows(t *testing.T) {
 			// Hash on the constant key in column 1; the existing equality residual
 			// compares payload column 0. First probe marks only the first build row,
 			// so its bitmap bit must not certify the entire group on the second probe.
-			tc := newTestCase(t, []bool{false, false}, []types.Type{typ, typ}, []colexec.ResultPos{colexec.NewResultPos(1, 0)}, [][]*plan.Expr{{newExpr(1, typ)}, {newExpr(1, typ)}})
+			tc := newTestCase(t, []types.Type{typ, typ}, []colexec.ResultPos{colexec.NewResultPos(1, 0)}, [][]*plan.Expr{{newExpr(1, typ)}, {newExpr(1, typ)}})
 			tc.arg.JoinType, tc.arg.IsRightJoin = join, true
 			defer func() {
 				tc.arg.Reset(tc.proc, false, nil)
@@ -162,7 +162,7 @@ func BenchmarkRightExistentialRepeatedKeys(b *testing.B) {
 		for _, join := range []plan.Node_JoinType{plan.Node_SEMI, plan.Node_ANTI} {
 			b.Run(fmt.Sprintf("%s/%d", join, n), func(b *testing.B) {
 				typ := types.T_int32.ToType()
-				tc := newTestCase(b, []bool{false}, []types.Type{typ}, []colexec.ResultPos{colexec.NewResultPos(1, 0)}, [][]*plan.Expr{{newExpr(0, typ)}, {newExpr(0, typ)}})
+				tc := newTestCase(b, []types.Type{typ}, []colexec.ResultPos{colexec.NewResultPos(1, 0)}, [][]*plan.Expr{{newExpr(0, typ)}, {newExpr(0, typ)}})
 				tc.arg.JoinType, tc.arg.IsRightJoin, tc.arg.NonEqCond = join, true, nil
 				values := make([]int32, n)
 				for i := range values {
@@ -210,7 +210,7 @@ func TestRightExistentialGroupsAcrossSpillBuckets(t *testing.T) {
 	typ := types.T_int32.ToType()
 	for _, join := range []plan.Node_JoinType{plan.Node_SEMI, plan.Node_ANTI} {
 		t.Run(join.String(), func(t *testing.T) {
-			tc := newTestCase(t, []bool{false}, []types.Type{typ}, []colexec.ResultPos{colexec.NewResultPos(1, 0)}, [][]*plan.Expr{{newExpr(0, typ)}, {newExpr(0, typ)}})
+			tc := newTestCase(t, []types.Type{typ}, []colexec.ResultPos{colexec.NewResultPos(1, 0)}, [][]*plan.Expr{{newExpr(0, typ)}, {newExpr(0, typ)}})
 			defer func() {
 				tc.arg.Reset(tc.proc, false, nil)
 				tc.barg.Reset(tc.proc, false, nil)
