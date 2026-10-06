@@ -1244,7 +1244,7 @@ func TestBuildCreateOrReplaceViewRejectsRecursiveDefinition(t *testing.T) {
 				lowerCaseMode = *test.lowerCaseMode
 			}
 			mock := NewMockCompilerContext(false)
-			proc := testutil.NewProc(nil)
+			proc := newPlanTestProcess(t)
 			if !test.withoutTxn {
 				proc.Base.TxnOperator = viewReplacementTxnOperator{snapshotTS: currentTxnSnapshot}
 			}

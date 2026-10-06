@@ -194,6 +194,7 @@ func getdummyMpool() *mpool.MPool {
 func TestDiscardIncompatibleFile(t *testing.T) {
 	ctx := context.Background()
 	fs := testutil.NewFS(t)
+	t.Cleanup(func() { fs.Close(context.Background()) })
 	filePath := "etl:sys/logs/legacy-statement-info.csv"
 	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
 		FilePath: filePath,
@@ -215,6 +216,7 @@ func TestDiscardIncompatibleFile(t *testing.T) {
 func TestMergeDiscardsIncompatibleStatementInfoFile(t *testing.T) {
 	ctx := context.Background()
 	fs := testutil.NewFS(t)
+	t.Cleanup(func() { fs.Close(context.Background()) })
 	filePath := "etl:sys/logs/legacy-statement-info.csv"
 	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
 		FilePath: filePath,
@@ -266,6 +268,7 @@ func TestNewMergeNOFiles(t *testing.T) {
 	mergeLock.Lock()
 	defer mergeLock.Unlock()
 	fs := testutil.NewFS(t)
+	t.Cleanup(func() { fs.Close(context.Background()) })
 	ts, _ := time.Parse("2006-01-02 15:04:05", "2021-01-01 00:00:00")
 	dummyFilePath := newFilePath(dummyTable, ts)
 
@@ -487,6 +490,7 @@ func TestNewMergeService(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Minute*5)
 	defer cancel()
 	fs := testutil.NewFS(t)
+	t.Cleanup(func() { fs.Close(context.Background()) })
 
 	type args struct {
 		ctx  context.Context

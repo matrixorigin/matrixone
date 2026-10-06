@@ -32,7 +32,6 @@ import (
 
 func TestRecursiveCTEPrefixLimit(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	t.Cleanup(proc.Free)
 	for _, tc := range []struct {
 		limit, offset, want uint64
 	}{
