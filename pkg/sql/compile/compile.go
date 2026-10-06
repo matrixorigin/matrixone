@@ -7079,6 +7079,10 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 		return rs
 	}
 
+	if rs[0].RootOp.OpType() == vm.Product {
+		return c.compileSharedBroadcastProduct(node, rs, buildScopes[0])
+	}
+
 	buildScopeAttached := false
 	for i := range rs {
 		if sameExecutionNode(rs[i].NodeInfo, buildScopes[0].NodeInfo) {
@@ -7147,6 +7151,57 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 	dispatchArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 	buildScopes[0].setRootOperator(dispatchArg)
 	return rs
+}
+
+// compileSharedBroadcastProduct keeps broadcast producers out of individual
+// probe trees. A probe or its ancestor can stop without calling Product; only
+// the receiver common to all probes may retire their shared producers.
+func (c *Compile) compileSharedBroadcastProduct(node *plan.Node, probes []*Scope, source *Scope) []*Scope {
+	groups := c.groupBroadcastProbeScopesByCN(probes, c.queryWorkerStageNodes())
+	outputs := make([]*Scope, 0, len(groups))
+	builds := make([]*Scope, 0, len(groups))
+	for _, group := range groups {
+		var workers int32
+		for _, probe := range group {
+			workers += int32(probe.NodeInfo.Mcpu)
+		}
+		build := newScope(Remote)
+		build.NodeInfo = scopeNodeWithMcpu(group[0].NodeInfo, 1)
+		build.Proc = c.proc.NewNoContextChildProc(1)
+		mergeOp := merge.NewArgument()
+		mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
+		build.setRootOperator(mergeOp)
+		build.setRootOperator(constructJoinBuildOperator(c, group[0].RootOp, workers, node.RuntimeFilterBuildList))
+		builds = append(builds, build)
+		if len(group) == 1 {
+			outputs = append(outputs, group[0])
+		} else {
+			outputs = append(outputs, c.newMergeScopeByCN(group, group[0].NodeInfo))
+		}
+	}
+	var owner *Scope
+	if len(outputs) == 1 && sameExecutionNode(outputs[0].NodeInfo, source.NodeInfo) {
+		owner = outputs[0]
+		// These producers have no output edge: the merge counts probe EOF only.
+		owner.PreScopes = append(owner.PreScopes, builds...)
+	} else {
+		// Separate remote builds need terminal-only connectors for ordinary
+		// RemoteRun cleanup. Exclude those edges from the result merge so EOF
+		// cancels all producers before MergeRun joins their completion.
+		inputs := append(outputs[:len(outputs):len(outputs)], builds...)
+		owner = c.newMergeScope(inputs)
+		owner.RootOp.(*merge.Merge).WithPartial(0, int32(len(outputs)))
+		if !sameExecutionNode(owner.NodeInfo, source.NodeInfo) {
+			// Keep the scan remote; execute dispatch at its actual common owner.
+			source = c.newMergeScope([]*Scope{source})
+		}
+	}
+	owner.ConcurrentPreScopes = true
+	dispatchOp := constructDispatch(0, builds, source, node, false)
+	dispatchOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
+	source.setRootOperator(dispatchOp)
+	owner.PreScopes = append(owner.PreScopes, source)
+	return []*Scope{owner}
 }
 
 func (c *Compile) groupBroadcastProbeScopesByCN(rs []*Scope, stageNodes engine.Nodes) [][]*Scope {

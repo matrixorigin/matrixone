@@ -29,12 +29,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestProductEmptyProbeReceivesBuildOutcome(t *testing.T) {
+func TestProductProbeBuildOutcomes(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		err  error
+		name  string
+		err   error
+		empty bool
 	}{
 		{name: "empty_success"},
+		{name: "empty_probe_without_build", empty: true},
 		{name: "build_failure", err: moerr.NewInternalErrorNoCtx("build failed")},
 		{name: "build_canceled", err: context.Canceled},
 		{name: "build_deadline", err: context.DeadlineExceeded},
@@ -61,16 +63,24 @@ func TestProductEmptyProbeReceivesBuildOutcome(t *testing.T) {
 			// generation boundary so a failed dependency cannot poison reuse.
 			for _, buildErr := range []error{tc.err, nil} {
 				arg.Children = nil
-				arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{batch.EmptyBatch}))
+				batches := []*batch.Batch{batch.EmptyBatch}
+				if !tc.empty {
+					batches = append(batches, colexec.MakeMockBatchs(proc.Mp()))
+				}
+				probe := colexec.NewMockOperator().WithBatchs(batches)
+				t.Cleanup(func() { probe.Free(proc, false, nil) })
+				arg.AppendChild(probe)
 				require.NoError(t, arg.Prepare(proc))
 				terminal := message.NewJoinMapResult(nil)
 				if buildErr != nil {
 					terminal = message.NewJoinMapBuildErrorResult(buildErr)
 				}
-				require.True(t, message.SendJoinMapResult(terminal, 1, false, 0, proc.GetMessageBoard()))
+				if !tc.empty {
+					require.True(t, message.SendJoinMapResult(terminal, 1, false, 0, proc.GetMessageBoard()))
+				}
 				result, err := vm.Exec(arg, proc)
-				require.Nil(t, result.Batch)
 				if buildErr == nil {
+					require.Nil(t, result.Batch)
 					require.NoError(t, err)
 					require.Equal(t, vm.ExecStop, result.Status)
 				} else if buildErr == context.Canceled || buildErr == context.DeadlineExceeded {
@@ -80,6 +90,7 @@ func TestProductEmptyProbeReceivesBuildOutcome(t *testing.T) {
 					require.Contains(t, err.Error(), buildErr.Error())
 				}
 				arg.Reset(proc, err != nil, err)
+				probe.Free(proc, false, nil)
 				proc.GetMessageBoard().Reset()
 				require.Zero(t, account.Snapshot().Used)
 			}
@@ -87,7 +98,7 @@ func TestProductEmptyProbeReceivesBuildOutcome(t *testing.T) {
 	}
 }
 
-func TestProductEmptyProbeReleasesNonemptyBuildOnReuse(t *testing.T) {
+func TestProductBuildReferencesOnProbeReuse(t *testing.T) {
 	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)})
 	t.Cleanup(func() {
 		tc.arg.Free(tc.proc, false, nil)

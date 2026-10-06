@@ -148,4 +148,41 @@ func TestJoinCoordinatorStage(t *testing.T) {
 		})
 	}
 	require.Equal(t, "", query(t, `select d.id from (select id,k,row_number() over(order by id) rn from a where id<0) d left join c on d.k=c.k`))
+	// Reuse the same cluster with both workers admitted. Product probes remain
+	// distributed while their broadcast producers have a common result owner.
+	require.NoError(t, updater.DebugUpdateCNWorkStateWithContext(ctx, cn.ServiceID(), int(metadata.WorkState_Working)))
+	waitWorkers(ctx, 2)
+	exec("set max_dop=2")
+	for _, tc := range []struct{ name, statement, want string }{
+		{"broadcast product", `select count(*),sum(a.id*100+c.rid) from a cross join c`, "16\t4200\n"},
+		{"empty broadcast product", `select count(*) from a cross join c where a.id<0`, "0\n"},
+		{"nested product early stop", `select count(*) from (select a.id from a cross join c) d join a z on d.id=z.id where z.id<0`, "0\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for range 2 {
+				require.Equal(t, tc.want, query(t, tc.statement))
+			}
+		})
+	}
+	physical := query(t, "explain phyplan analyze select a.id,c.rid from a cross join c")
+	require.Contains(t, strings.ToLower(physical), "product")
+	require.Contains(t, physical, peer, "must retain remote probe work")
+
+	stmt, err := conn.PrepareContext(ctx, `select count(*),sum(a.id*100+c.rid) from a cross join c where a.id>?`)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, stmt.Close()) })
+	for _, threshold := range []int{0, 99, 0} {
+		var count int64
+		var sum sql.NullInt64
+		require.NoError(t, stmt.QueryRowContext(ctx, threshold).Scan(&count, &sum))
+		if threshold == 0 {
+			require.EqualValues(t, 16, count)
+			require.True(t, sum.Valid)
+			require.EqualValues(t, 4200, sum.Int64)
+		} else {
+			require.Zero(t, count)
+			require.False(t, sum.Valid)
+		}
+	}
+
 }

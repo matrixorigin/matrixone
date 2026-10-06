@@ -67,11 +67,15 @@ func (product *Product) Call(proc *process.Process) (vm.CallResult, error) {
 					return result, err
 				}
 				ctr.inBat = result.Batch
-				if ctr.inBat != nil && ctr.inBat.Last() {
+				if ctr.inBat == nil {
+					ctr.state = End
+					continue
+				}
+				if ctr.inBat.Last() {
 					ctr.inBat = nil
 					return result, nil
 				}
-				if ctr.inBat != nil && ctr.inBat.IsEmpty() {
+				if ctr.inBat.IsEmpty() {
 					ctr.inBat = nil
 					continue
 				}
@@ -80,13 +84,7 @@ func (product *Product) Call(proc *process.Process) (vm.CallResult, error) {
 			if err = product.build(proc, analyzer); err != nil {
 				return result, err
 			}
-			// Local probe EOF cannot retire a broadcast build still needed by
-			// other partitions. Receive its terminal result before cleanup.
-			if ctr.inBat == nil {
-				ctr.state = End
-			} else {
-				ctr.state = Probe
-			}
+			ctr.state = Probe
 
 		case Probe:
 			if ctr.inBat == nil {

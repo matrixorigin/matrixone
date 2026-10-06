@@ -58,6 +58,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
@@ -2550,42 +2551,96 @@ func TestBroadcastJoinMapReferencesCountProbeWorkers(t *testing.T) {
 			want:   map[string]int32{"cn1:6001": 5},
 		},
 		{
+			name:   "remote colocated probes with local source",
+			probes: engine.Nodes{{Addr: "cn2:6001", Mcpu: 1}, {Addr: "cn2:6001", Mcpu: 1}},
+			want:   map[string]int32{"cn2:6001": 2},
+		},
+		{
 			name:   "mixed groups on multiple CNs",
 			probes: engine.Nodes{{Addr: "cn1:6001", Mcpu: 2}, {Addr: "cn1:6001", Mcpu: 1}, {Addr: "cn2:6001", Mcpu: 4}},
 			want:   map[string]int32{"cn1:6001": 3, "cn2:6001": 4},
 		},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			c := NewMockCompile(t)
-			c.cnList = engine.Nodes{{Addr: "cn1:6001", Mcpu: 4}, {Addr: "cn2:6001", Mcpu: 4}}
-			c.addr = "cn1:6001"
-			c.execType = plan2.ExecTypeAP_MULTICN
-			c.anal = &AnalyzeModule{qry: &plan.Query{}}
-			node := &plan.Node{Stats: &plan.Stats{HashmapStats: &plan.HashMapStats{}}}
-			buildScope := generateScopeWithRootOperator(c.proc, []vm.OpType{vm.TableScan})
-			buildScope.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
-			probes := make([]*Scope, len(tc.probes))
-			for i, probe := range tc.probes {
-				probes[i] = generateScopeWithRootOperator(c.proc, []vm.OpType{vm.HashJoin})
-				probes[i].NodeInfo = probe
-			}
+		for _, opType := range []vm.OpType{vm.HashJoin, vm.Product} {
+			t.Run(fmt.Sprintf("%s/%d", tc.name, opType), func(t *testing.T) {
+				c := NewMockCompile(t)
+				c.cnList = engine.Nodes{{Addr: "cn1:6001", Mcpu: 4}, {Addr: "cn2:6001", Mcpu: 4}}
+				c.addr = "cn1:6001"
+				c.execType = plan2.ExecTypeAP_MULTICN
+				c.anal = &AnalyzeModule{qry: &plan.Query{}}
+				node := &plan.Node{Stats: &plan.Stats{HashmapStats: &plan.HashMapStats{}}}
+				buildScope := generateScopeWithRootOperator(c.proc, []vm.OpType{vm.TableScan})
+				buildScope.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
+				probes := make([]*Scope, len(tc.probes))
+				for i, probe := range tc.probes {
+					probes[i] = generateScopeWithRootOperator(c.proc, []vm.OpType{opType})
+					probes[i].NodeInfo = probe
+				}
 
-			c.compileBuildSideForBroadcastJoin(node, probes, []*Scope{buildScope})
-			builds := make(map[string]*hashbuild.HashBuild)
-			for _, probe := range probes {
-				for _, pre := range probe.PreScopes {
-					if build, ok := pre.RootOp.(*hashbuild.HashBuild); ok {
-						require.NotContains(t, builds, pre.NodeInfo.Addr)
-						builds[pre.NodeInfo.Addr] = build
+				owners := c.compileBuildSideForBroadcastJoin(node, probes, []*Scope{buildScope})
+				builds := make(map[string]*hashbuild.HashBuild)
+				seen := make(map[*Scope]bool)
+				var visit func(*Scope)
+				visit = func(scope *Scope) {
+					require.False(t, seen[scope], "scope must have exactly one owner")
+					seen[scope] = true
+					require.NoError(t, vm.HandleAllOp(scope.RootOp, func(_ vm.Operator, op vm.Operator) error {
+						if build, ok := op.(*hashbuild.HashBuild); ok {
+							require.NotContains(t, builds, scope.NodeInfo.Addr)
+							builds[scope.NodeInfo.Addr] = build
+						}
+						return nil
+					}))
+					for _, pre := range scope.PreScopes {
+						visit(pre)
 					}
 				}
-			}
-			require.Len(t, builds, len(tc.want))
-			for addr, want := range tc.want {
-				require.Contains(t, builds, addr)
-				require.Equal(t, want, builds[addr].JoinMapRefCnt, addr)
-			}
-		})
+				for _, owner := range owners {
+					visit(owner)
+				}
+				if opType == vm.Product && len(probes) > 1 {
+					require.Len(t, owners, 1)
+					require.True(t, owners[0].ConcurrentPreScopes)
+					require.Contains(t, owners[0].PreScopes, buildScope, "source must be a sibling of every probe output")
+					for _, probe := range probes {
+						require.Empty(t, probe.PreScopes, "a probe must not own shared producers")
+					}
+					directBuilds := make(map[string]*hashbuild.HashBuild)
+					for _, pre := range owners[0].PreScopes {
+						op := pre.RootOp
+						if op.OpType() == vm.Connector {
+							op = op.GetOperatorBase().Children[0]
+						}
+						if build, ok := op.(*hashbuild.HashBuild); ok {
+							directBuilds[pre.NodeInfo.Addr] = build
+						}
+					}
+					require.Len(t, directBuilds, len(builds))
+					for addr, build := range builds {
+						require.Same(t, build, directBuilds[addr], "each build must be a direct sibling of probe outputs")
+					}
+					if len(tc.want) > 1 || tc.probes[0].Addr != c.addr {
+						resultMerge := owners[0].RootOp.(*merge.Merge)
+						require.True(t, resultMerge.Partial)
+						require.Zero(t, resultMerge.StartIDX)
+						require.Equal(t, int32(len(tc.want)), resultMerge.EndIDX)
+						require.Len(t, owners[0].Proc.Reg.MergeReceivers, 2*len(tc.want), "result and terminal-only edges must remain distinct")
+						for _, pre := range owners[0].PreScopes {
+							conn, ok := pre.RootOp.(*connector.Connector)
+							if ok && conn.GetChildren(0).OpType() == vm.HashBuild {
+								require.Contains(t, owners[0].Proc.Reg.MergeReceivers[resultMerge.EndIDX:], conn.Reg,
+									"build completion must not count toward result EOF")
+							}
+						}
+					}
+				}
+				require.Len(t, builds, len(tc.want))
+				for addr, want := range tc.want {
+					require.Contains(t, builds, addr)
+					require.Equal(t, want, builds[addr].JoinMapRefCnt, addr)
+				}
+			})
+		}
 	}
 }
 
@@ -2610,6 +2665,8 @@ func generateScopeWithRootOperator(proc *process.Process, operatorList []vm.OpTy
 			arg := hashjoin.NewArgument()
 			arg.EqConds = [][]*plan.Expr{nil, nil}
 			return arg
+		case vm.Product:
+			return product.NewArgument()
 		case vm.Merge:
 			return merge.NewArgument()
 		default:
