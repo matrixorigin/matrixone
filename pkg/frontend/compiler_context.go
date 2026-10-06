@@ -596,6 +596,11 @@ func (tcc *TxnCompilerContext) recoverLegacyTinyText(
 	sub *plan.SubscriptionMeta,
 	snapshot *plan2.Snapshot,
 ) error {
+	// Reject disabled domains before any legacy recovery or ALTER rewrite can
+	// replace their type metadata. Final-plan validation alone is too late.
+	if err := plan.RequireLegacyCollations(tableDef); err != nil {
+		return err
+	}
 	if tableDef.DbName == "" {
 		tableDef.DbName = dbName
 	}
@@ -612,6 +617,9 @@ func (tcc *TxnCompilerContext) recoverLegacyTinyText(
 			return nil, err
 		}
 		sourceDef := plan2.CloneTableDefForPlan(relation.GetTableDef(sourceCtx), true)
+		if err := plan.RequireLegacyCollations(sourceDef); err != nil {
+			return nil, err
+		}
 		if sourceDef.DbName == "" {
 			sourceDef.DbName = sourceDB
 		}

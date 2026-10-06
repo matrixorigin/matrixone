@@ -142,7 +142,7 @@ func TestNormalizeDeleteOldValueProjectionFollowsOrderProjection(t *testing.T) {
 	display, err := makeEnumOrSetDisplayValue(context.Background(), raw)
 	require.NoError(t, err)
 
-	mock := newMySQLSpecialOrderMock()
+	mock := newMySQLSpecialOrderMock(t)
 	builder := NewQueryBuilder(planpb.Query_DELETE, &mock.ctxt, false, true)
 	builder.qry.Nodes = []*planpb.Node{
 		{
@@ -220,7 +220,7 @@ func TestNormalizeDeleteOldValueProjectionRejectsInvalidMapping(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			mock := newMySQLSpecialOrderMock()
+			mock := newMySQLSpecialOrderMock(t)
 			builder := NewQueryBuilder(planpb.Query_DELETE, &mock.ctxt, false, true)
 			builder.qry.Nodes = test.nodes
 
@@ -295,7 +295,7 @@ func TestNormalizeDeleteOldValueProjectionRejectsInvalidChain(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			mock := newMySQLSpecialOrderMock()
+			mock := newMySQLSpecialOrderMock(t)
 			builder := NewQueryBuilder(planpb.Query_DELETE, &mock.ctxt, false, true)
 			builder.qry.Nodes = test.nodes
 			visiting := make(map[int32]bool)
@@ -311,7 +311,7 @@ func TestNormalizeDeleteOldValueProjectionRejectsInvalidChain(t *testing.T) {
 
 func TestNormalizeDeleteOldValueProjectionAcceptsRawScan(t *testing.T) {
 	enumType := planpb.Type{Id: int32(types.T_enum), Enumvalues: "a,b"}
-	mock := newMySQLSpecialOrderMock()
+	mock := newMySQLSpecialOrderMock(t)
 	builder := NewQueryBuilder(planpb.Query_DELETE, &mock.ctxt, false, true)
 	builder.qry.Nodes = []*planpb.Node{{NodeType: planpb.Node_TABLE_SCAN}}
 
@@ -325,7 +325,7 @@ func TestNormalizeDeleteOldValueProjectionAcceptsRawScan(t *testing.T) {
 
 func TestIrregularIndexDeleteJoinIsRowScoped(t *testing.T) {
 	logicPlan, err := runOneStmt(
-		NewMockOptimizer(true),
+		NewMockOptimizer(true, newPlanTestProcess(t)),
 		t,
 		"delete d from constraint_test.docs_ft d join constraint_test.dept s on d.id = s.deptno",
 	)
@@ -354,7 +354,7 @@ func TestIrregularIndexDeleteJoinIsRowScoped(t *testing.T) {
 }
 
 func TestLegacyMultiTableDeleteNormalizesSpecialOldValues(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	dept := mock.ctxt.tables["dept"]
 	for _, col := range dept.Cols {
 		if col.Name == "dname" {

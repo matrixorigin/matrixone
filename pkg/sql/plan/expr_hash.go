@@ -102,6 +102,18 @@ func hashExprInto(h writeByter, expr *plan.Expr) {
 	writeUint32(h, uint32(expr.Typ.Width))
 	writeUint32(h, uint32(expr.Typ.Scale))
 	writeUint32(h, expr.Typ.Charset)
+	writeUint32(h, expr.Typ.CollationVersion)
+	writeUint32(h, expr.Typ.CollationCoercibility)
+	if expr.Typ.CollationCoercibilitySet {
+		writeByte(h, 1)
+	} else {
+		writeByte(h, 0)
+	}
+	if expr.Typ.CollationMergeConflict {
+		writeByte(h, 1)
+	} else {
+		writeByte(h, 0)
+	}
 
 	switch v := expr.Expr.(type) {
 	case *plan.Expr_Lit:
@@ -182,8 +194,8 @@ func literalForExecutableIdentity(typ plan.Type, lit *plan.Literal) *plan.Litera
 }
 
 func executableLiteralForm(typ plan.Type, form plan.StringLiteralForm) plan.StringLiteralForm {
-	staticDomain := types.StaticStringDomain(types.NewWithCharset(
-		types.T(typ.Id), typ.Width, typ.Scale, uint8(typ.Charset)))
+	staticDomain := types.StaticStringDomain(types.MustTypeFromPlan(
+		typ))
 	if form == plan.StringLiteralForm_STRING_LITERAL_TEXT &&
 		staticDomain == types.StringDomainText {
 		return plan.StringLiteralForm_STRING_LITERAL_NONE
@@ -307,7 +319,7 @@ func exprStructuralEqual(a, b *plan.Expr) bool {
 		return false
 	}
 	if a.Typ.Id != b.Typ.Id || a.Typ.Width != b.Typ.Width ||
-		a.Typ.Scale != b.Typ.Scale || a.Typ.Charset != b.Typ.Charset {
+		a.Typ.Scale != b.Typ.Scale || !a.Typ.SameCollation(b.Typ) {
 		return false
 	}
 	switch av := a.Expr.(type) {

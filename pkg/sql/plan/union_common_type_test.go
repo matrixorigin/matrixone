@@ -139,7 +139,7 @@ func TestUnionSignedUnsignedIntegerCommonType(t *testing.T) {
 
 func TestUnionSignedUnsignedIntegerColumnCommonType(t *testing.T) {
 	const tableName = "union_signed_unsigned_columns"
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	ctx.dbs["test"] = true
 	ctx.objects[tableName] = &planpb.ObjectRef{DbName: "test", ObjName: tableName, Obj: 1}
 	ctx.tables[tableName] = &planpb.TableDef{
@@ -189,7 +189,7 @@ func TestCTASUnionSignedUnsignedIntegerMetadata(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	logicPlan, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+	logicPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
 	require.NoError(t, err)
 
 	var visible []*planpb.ColDef
@@ -212,7 +212,7 @@ func TestCTASUnionDecimalLiteralMetadata(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	logicPlan, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+	logicPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
 	require.NoError(t, err)
 
 	var visible []*planpb.ColDef
@@ -354,7 +354,7 @@ func buildFirstQueryResultType(t *testing.T, sql string) planpb.Type {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	logicPlan, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+	logicPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
 	require.NoError(t, err)
 	query := logicPlan.GetQuery()
 	require.NotEmpty(t, query.Steps)

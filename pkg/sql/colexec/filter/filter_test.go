@@ -52,7 +52,7 @@ func makeTestCases(t testing.TB) []filterTestCase {
 	return []filterTestCase{
 		// case1: Contains one conditional expression
 		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			proc: testutil.NewProcess(t),
 			arg: &Filter{
 				FilterExprs: []*plan.Expr{
 					{
@@ -81,19 +81,12 @@ func makeTestCases(t testing.TB) []filterTestCase {
 						},
 					},
 				},
-				OperatorBase: vm.OperatorBase{
-					OperatorInfo: vm.OperatorInfo{
-						Idx:     0,
-						IsFirst: false,
-						IsLast:  false,
-					},
-				},
 			},
 			getRowCount: 20,
 		},
 		// case2: Contains two conditional expressions
 		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			proc: testutil.NewProcess(t),
 			arg: &Filter{
 				FilterExprs: []*plan.Expr{
 					{
@@ -145,13 +138,6 @@ func makeTestCases(t testing.TB) []filterTestCase {
 								},
 							},
 						},
-					},
-				},
-				OperatorBase: vm.OperatorBase{
-					OperatorInfo: vm.OperatorInfo{
-						Idx:     0,
-						IsFirst: false,
-						IsLast:  false,
 					},
 				},
 			},

@@ -42,6 +42,12 @@ message Type {
   // Internal semantic marker for VARCHAR/TEXT values that can carry
   // representation-only CHAR padding through a transparent query boundary.
   bool pad_space = 9;
+  // Expression provenance; explicit COLLATE has coercibility zero.
+  uint32 collation_coercibility = 10;
+  bool collation_coercibility_set = 11;
+  bool collation_merge_conflict = 12;
+  // Zero retains the historical meaning of charset. New semantics stay gated.
+  uint32 collation_version = 13;
 }
 
 message msgHeader {
@@ -470,6 +476,8 @@ message IndexDef {
   // identity would misinterpret plans produced by versions that carried it.
   reserved 14;
   reserved "visibility_set";
+  // Physical format belongs to the index schema, never to an individual key.
+  uint32 key_format = 15;
 }
 
 message ForeignKeyDef {
@@ -599,6 +607,9 @@ message TableDef {
   uint32 default_charset = 39;
   // Zero inherits the service policy; one disables speculative ID reservation.
   uint64 auto_id_cache = 40;
+  uint32 key_format = 41;
+  // Semantic revision of default_charset, independent of physical key format.
+  uint32 collation_version = 42;
 }
 
 message TableFunction {

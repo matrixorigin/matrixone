@@ -367,6 +367,11 @@ func Test_Operator_Or(t *testing.T) {
 
 func Test_Operator_Xor(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	t.Cleanup(func() {
+		proc.GetFileService().Close(proc.Ctx)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
 	{
 		tc := tcTemp{
 			inputs: []FunctionTestInput{
@@ -390,6 +395,29 @@ func Test_Operator_Xor(t *testing.T) {
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, xorFn)
 		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
+	}
+
+	for _, tc := range []struct {
+		name        string
+		left, right FunctionTestInput
+		wanted      []bool
+		nulls       []bool
+		selection   *FunctionSelectList
+	}{
+		{"left constant", NewFunctionTestConstInput(types.T_bool.ToType(), []bool{false}, nil), NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false, false}, []bool{false, false, true}), []bool{true, false, false}, []bool{false, false, true}, nil},
+		{"right constant", NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false, false}, []bool{false, false, true}), NewFunctionTestConstInput(types.T_bool.ToType(), []bool{true}, nil), []bool{false, true, false}, []bool{false, false, true}, nil},
+		{"both constant broadcast", NewFunctionTestConstInput(types.T_bool.ToType(), []bool{false}, nil), NewFunctionTestConstInput(types.T_bool.ToType(), []bool{true}, nil), []bool{true, true, true}, nil, nil},
+		{"left constant null", NewFunctionTestConstInput(types.T_bool.ToType(), []bool{false}, []bool{true}), NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false, true}, nil), []bool{false, false, false}, []bool{true, true, true}, nil},
+		{"right constant null", NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false, true}, nil), NewFunctionTestConstInput(types.T_bool.ToType(), []bool{false}, []bool{true}), []bool{false, false, false}, []bool{true, true, true}, nil},
+		{"direct row selection", NewFunctionTestInput(types.T_bool.ToType(), []bool{false, false}, nil), NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false}, nil), []bool{false, false}, []bool{true, false}, &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewFunctionTestCase(proc, []FunctionTestInput{tc.left, tc.right}, NewFunctionTestResult(types.T_bool.ToType(), false, tc.wanted, tc.nulls), xorFn).WithSelectList(tc.selection)
+			t.Cleanup(c.Free)
+			c.fnLength = len(tc.wanted)
+			ok, info := c.Run()
+			require.True(t, ok, info)
+		})
 	}
 }
 

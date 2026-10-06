@@ -306,7 +306,7 @@ func TestCompilePlanScopeKeepsNestedUnionAllConcurrentWithoutLimit(t *testing.T)
 }
 
 func TestScalarUnionAllRunsBranchesInStatementOrder(t *testing.T) {
-	compilerCtx := plan2.NewMockCompilerContext(true)
+	compilerCtx := plan2.NewMockCompilerContext(true, newPlanTestProcess(t))
 	statements, err := mysql.Parse(
 		compilerCtx.GetContext(),
 		"SELECT 3 UNION ALL SELECT 1 UNION ALL SELECT 2",

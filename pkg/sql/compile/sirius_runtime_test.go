@@ -193,7 +193,6 @@ func (b *siriusAdmissionBackend) Accepting() bool { return b.accepting }
 
 func TestEmbeddedSiriusAdmissionNeverSilentlyFallsBack(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	t.Cleanup(proc.Free)
 	runtime := moruntime.ServiceRuntime(proc.GetService())
 	previous, existed := runtime.GetGlobalVariables(SiriusRuntimeKey)
 	backend := &siriusAdmissionBackend{accepting: true}

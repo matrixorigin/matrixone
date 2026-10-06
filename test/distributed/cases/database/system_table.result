@@ -4,7 +4,7 @@ def  ¦  mo_catalog  ¦  mo_tables  ¦  BASE TABLE
 SELECT * FROM `information_schema`.`character_sets` LIMIT 0,1000;
 ➤ character_set_name[12,64,0]  ¦  default_collate_name[12,64,0]  ¦  description[12,2048,0]  ¦  maxlen[4,32,0]  𝄀
 binary  ¦  binary  ¦  Binary pseudo charset  ¦  1  𝄀
-utf8  ¦  utf8_general_ci  ¦  UTF-8 Unicode  ¦  3  𝄀
+utf8  ¦  utf8_general_ci  ¦  UTF-8 Unicode  ¦  4  𝄀
 utf8mb4  ¦  utf8mb4_general_ci  ¦  UTF-8 Unicode  ¦  4
 SELECT * FROM `information_schema`.`columns` where TABLE_NAME = 'mo_tables' order by ORDINAL_POSITION LIMIT 2;
 ➤ TABLE_CATALOG[12,3,0]  ¦  TABLE_SCHEMA[12,256,0]  ¦  TABLE_NAME[12,256,0]  ¦  COLUMN_NAME[12,256,0]  ¦  ORDINAL_POSITION[4,32,0]  ¦  COLUMN_DEFAULT[12,65535,0]  ¦  IS_NULLABLE[12,3,0]  ¦  DATA_TYPE[12,65535,0]  ¦  CHARACTER_MAXIMUM_LENGTH[-5,64,0]  ¦  CHARACTER_OCTET_LENGTH[-5,64,0]  ¦  NUMERIC_PRECISION[-5,64,0]  ¦  NUMERIC_SCALE[-5,64,0]  ¦  DATETIME_PRECISION[-5,64,0]  ¦  CHARACTER_SET_NAME[12,7,0]  ¦  COLLATION_NAME[12,18,0]  ¦  COLUMN_TYPE[12,65535,0]  ¦  COLUMN_KEY[12,3,0]  ¦  EXTRA[12,24,0]  ¦  PRIVILEGES[12,31,0]  ¦  COLUMN_COMMENT[12,2048,0]  ¦  GENERATION_EXPRESSION[12,500,0]  ¦  SRS_ID[-5,64,0]  𝄀

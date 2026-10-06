@@ -98,7 +98,7 @@ func TestGetSqlForFkReferredToEscapesStringLiterals(t *testing.T) {
 }
 
 func TestForeignKeyCatalogLayoutIsExtendedOnlyAfterAllColumnsExist(t *testing.T) {
-	ctx := NewEmptyCompilerContext()
+	ctx := NewEmptyCompilerContext(nil)
 	ctx.tables[catalog.MOForeignKeys] = &TableDef{
 		Name: catalog.MOForeignKeys,
 		Cols: []*ColDef{{Name: "referenced_index_name"}, {Name: "on_delete_origin"}},
@@ -546,7 +546,7 @@ func TestAppendIndexPrefixProjection(t *testing.T) {
 	newBuilder := func(t *testing.T) (*QueryBuilder, *BindContext, int32) {
 		t.Helper()
 
-		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 		bindCtx := NewBindContext(builder, nil)
 		lastNodeID := builder.appendNode(&plan.Node{
 			NodeType: plan.Node_PROJECT,
@@ -657,7 +657,7 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 	newBuilder := func(t *testing.T) (*QueryBuilder, *BindContext, int32) {
 		t.Helper()
 
-		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 		bindCtx := NewBindContext(builder, nil)
 		lastNodeID := builder.appendNode(&plan.Node{
 			NodeType: plan.Node_PROJECT,
@@ -916,7 +916,7 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 }
 
 func TestUniqueIndexDeletePreservesTagThroughFilterAndLock(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	builder := NewQueryBuilder(plan.Query_DELETE, ctx, false, false)
 	bindCtx := NewBindContext(builder, nil)
 	sourceTag := builder.genNewBindTag()
@@ -987,7 +987,7 @@ func TestUniqueIndexDeletePreservesTagThroughFilterAndLock(t *testing.T) {
 }
 
 func TestPrefixIndexDMLPlansMaterializePrefixKeys(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	emp := mock.ctxt.tables["emp"]
 	require.NotNil(t, emp)
 	require.NotEmpty(t, emp.Indexes)

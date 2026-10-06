@@ -168,7 +168,7 @@ func TestSpecialIntegerArgumentPreparedReuse(t *testing.T) {
 		{"cast(maketime(1,?,1.25) as varchar)", [3]string{"01:01:01.25", "01:02:01.25", "01:03:01.25"}},
 	} {
 		t.Run(tc.sql, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t, "prepare special_integer from 'select "+tc.sql+"'")
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "prepare special_integer from 'select "+tc.sql+"'")
 			require.NoError(t, err)
 			original := prepared.GetDcl().GetPrepare().Plan
 			snapshot := proto.Clone(original)

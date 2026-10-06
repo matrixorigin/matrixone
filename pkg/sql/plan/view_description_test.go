@@ -39,7 +39,7 @@ func TestViewMetadataUdfRebindFlagSurvivesPlanCopyAndWire(t *testing.T) {
 }
 
 func TestDescribeViewColumnsUsesCurrentDefinition(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	ctx.GetAccountIdFunc = func() (uint32, error) { return 42, nil }
 	const definition = `{"Stmt":"create view v as select n_name as label, n_nationkey as k from nation","DefaultDatabase":"tpch"}`
 	before, err := DescribeViewColumns(ctx, definition)
@@ -162,7 +162,7 @@ func TestDescribeViewColumnsSharedInferenceContract(t *testing.T) {
 }
 
 func TestDescribeViewColumnsFailureDoesNotCache(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	ctx.GetAccountIdFunc = func() (uint32, error) { return 42, nil }
 	const definition = `{"Stmt":"create view v as select n_name from nation","DefaultDatabase":"tpch"}`
 	source := ctx.tables["nation"]
@@ -191,7 +191,7 @@ func TestSubscriptionViewDatabaseLookupUsesPublisherSnapshot(t *testing.T) {
 		TS:     &timestamp.Timestamp{PhysicalTime: 50},
 		Tenant: &planpb.SnapshotTenant{TenantID: 17},
 	}
-	mock := NewMockCompilerContext(false)
+	mock := NewMockCompilerContext(false, newPlanTestProcess(t))
 	ctx := &subscriptionViewDatabaseContext{MockCompilerContext: mock,
 		sub: &SubscriptionMeta{AccountId: int32(publisher)}}
 	mock.GetDatabaseIdFunc = func(name string, snapshot *Snapshot) (uint64, error) {
@@ -228,7 +228,7 @@ func TestDescribeViewColumnsPreservesDatabaseLookupFailure(t *testing.T) {
 		{name: "genuinely missing", lookupError: moerr.GetOkExpectedEOB(), missing: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := NewMockCompilerContext(false)
+			ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 			ctx.GetAccountIdFunc = func() (uint32, error) { return 42, nil }
 			ctx.DatabaseExistsFunc = func(string, *Snapshot) bool {
 				t.Fatal("View regeneration must not use a bool-only database lookup")
@@ -252,12 +252,12 @@ func TestDescribeViewColumnsPreservesDatabaseLookupFailure(t *testing.T) {
 
 func TestDescribeViewColumnsRejectsInvalidInputAndCancellation(t *testing.T) {
 	for _, definition := range []string{`{`, `{"Stmt":"select 1"}`, `{"Stmt":"create view v as select 1; select 2"}`} {
-		ctx := NewMockCompilerContext(false)
+		ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 		cols, err := DescribeViewColumns(ctx, definition)
 		require.Error(t, err)
 		require.Nil(t, cols)
 	}
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	canceled, cancel := context.WithCancel(ctx.GetContext())
 	cancel()
 	ctx.SetContext(canceled)

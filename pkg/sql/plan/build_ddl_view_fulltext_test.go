@@ -32,7 +32,7 @@ func TestIndexRewritesDisabled(t *testing.T) {
 	rt := runtime.ServiceRuntime("")
 	require.NotNil(t, rt, "test runtime must exist")
 
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 
 	for _, tc := range []struct {
 		name string
@@ -55,8 +55,8 @@ func TestIndexRewritesDisabled(t *testing.T) {
 		{"malformed", "applyIndices", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			rt.SetGlobalVariables("optimizer_hints", tc.hint)
-			defer rt.SetGlobalVariables("optimizer_hints", "")
+			setPlanTestGlobalVariable(t, "", "optimizer_hints", tc.hint)
+
 			require.Equal(t, tc.want, indexRewritesDisabled(ctx))
 
 			// Parity with the optimizer itself: whatever the hint string, the guard's answer
