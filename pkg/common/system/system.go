@@ -190,47 +190,64 @@ func cgroupDirectory(mountPoint, mountRoot, processPath string) (string, bool) {
 	return filepath.Join(mountPoint, rel), true
 }
 
-// readCgroupUint reads a single-value cgroup file. ok is false when the file is
-// missing, empty, or the literal "max" (cgroup v2's "unlimited"). A value of 0
-// is returned as ok -- it is a legitimate usage reading for an empty cgroup.
-// readCgroupStatKey reads one "<key> <value>" line out of a cgroup memory.stat.
-// Absent file, absent key or unparseable value all answer false, which leaves the
-// caller charging the full usage -- the conservative direction.
-func readCgroupStatKey(path, key string) (uint64, bool) {
-	data, err := os.ReadFile(path)
+// reclaimableCgroupCache reports clean filesystem cache on the reclaimable
+// LRUs. Active file pages are recently used, not pinned: unlike anonymous or
+// unevictable memory, the kernel can reclaim them under cgroup pressure.
+//
+// Bound the LRU counters by file minus shmem, and keep dirty/writeback pages
+// charged. Missing or malformed counters leave the full usage charged. Read
+// one snapshot and use only hierarchical total_* counters on cgroup v1; mixing
+// local and hierarchical counters could credit a parent's children's cache
+// without charging their dirty pages.
+func reclaimableCgroupCache(statPath string) (uint64, bool) {
+	data, err := os.ReadFile(statPath)
 	if err != nil {
 		return 0, false
 	}
+	stats := make(map[string]uint64)
+	v1 := false
 	for _, line := range strings.Split(string(data), "\n") {
-		field, value, found := strings.Cut(strings.TrimSpace(line), " ")
-		if !found || field != key {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
 			continue
 		}
-		v, perr := strconv.ParseUint(strings.TrimSpace(value), 10, 64)
-		if perr != nil {
+		v1 = v1 || strings.HasPrefix(fields[0], "total_")
+		if value, err := strconv.ParseUint(fields[1], 10, 64); err == nil {
+			stats[fields[0]] = value
+		}
+	}
+	keys := [6]string{"file", "shmem", "inactive_file", "active_file", "file_dirty", "file_writeback"}
+	if v1 {
+		keys = [6]string{"total_cache", "total_shmem", "total_inactive_file", "total_active_file", "total_dirty", "total_writeback"}
+	}
+	var values [6]uint64
+	for i, key := range keys {
+		value, ok := stats[key]
+		if !ok {
 			return 0, false
 		}
-		return v, true
+		values[i] = value
 	}
-	return 0, false
+	file, shmem, inactive, active, dirty, writeback := values[0], values[1], values[2], values[3], values[4], values[5]
+	if shmem >= file {
+		return 0, true
+	}
+	if active > math.MaxUint64-inactive {
+		return 0, false
+	}
+	reclaimable := min(file-shmem, inactive+active)
+	if dirty >= reclaimable {
+		return 0, true
+	}
+	reclaimable -= dirty
+	if writeback >= reclaimable {
+		return 0, true
+	}
+	return reclaimable - writeback, true
 }
 
 // cgroupStatPath locates memory.stat for a pid on the single-level fallback path,
 // trying cgroup v2 first and then v1's memory controller.
-// reclaimableCgroupCache reads the reclaimable page cache from a memory.stat, under whichever
-// key the cgroup version uses. v1 exposes BOTH a cgroup-local `inactive_file` and a
-// hierarchical `total_inactive_file`; the hierarchy walk asks for the hierarchical one
-// (minHierarchicalHeadroom), and reading the local key here instead reported less reclaimable
-// cache than that walk for the same host whenever the process's cgroup had children --
-// under-reporting available memory, which is the undercount this correction exists to remove.
-// v2 has no `total_` prefix, so the plain key is the fallback rather than the first choice.
-func reclaimableCgroupCache(statPath string) (uint64, bool) {
-	if v, ok := readCgroupStatKey(statPath, "total_inactive_file"); ok {
-		return v, true
-	}
-	return readCgroupStatKey(statPath, "inactive_file")
-}
-
 func cgroupStatPath(pid int) string {
 	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/cgroup", pid))
 	if err != nil {
@@ -251,6 +268,8 @@ func cgroupStatPath(pid int) string {
 	return ""
 }
 
+// readCgroupUint reads a single-value cgroup file. Zero is a valid usage;
+// missing, empty, malformed and "max" values are unavailable.
 func readCgroupUint(path string) (uint64, bool) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -304,7 +323,7 @@ func readCgroupLimit(path string) (uint64, bool) {
 // A level that publishes a limit but no readable usage makes the whole
 // measurement unavailable rather than being skipped -- skipping a governing
 // level is exactly the overstatement this exists to prevent.
-func minHierarchicalHeadroom(dir, mountPoint, limitFile, usageFile, statFile, reclaimKey string) (uint64, bool) {
+func minHierarchicalHeadroom(dir, mountPoint, limitFile, usageFile, statFile string) (uint64, bool) {
 	dir = filepath.Clean(dir)
 	mountPoint = filepath.Clean(mountPoint)
 	var (
@@ -317,22 +336,9 @@ func minHierarchicalHeadroom(dir, mountPoint, limitFile, usageFile, statFile, re
 			if !uok {
 				return 0, false
 			}
-			// Cgroup usage counts page cache, and this function's whole contract is
-			// that reclaimable cache is AVAILABLE -- raw MemFree "drops to a few GiB
-			// the moment the cache warms up even when the kernel can reclaim hundreds
-			// of GiB". Charging it would reintroduce exactly that, and does so where
-			// it hurts most: right after a bulk load, which is when a build sizes
-			// itself. Reading 5.5 GB of CSV once collapsed this from ~15 GB to 3.8 GB
-			// on a host with 14.7 GB genuinely available, and shrank a 1M-row index
-			// into two sub-indexes by a 131 MB margin.
-			//
-			// Inactive file pages are the reclaimable part: the kernel drops them
-			// under pressure without evicting anything live, which is the same
-			// "without evicting live pages" this function promises. Active file pages
-			// are deliberately NOT added back -- they are in use, and counting them
-			// would overstate headroom in the direction that gets a cgroup OOM-killed.
-			// This is the working-set convention (usage - inactive_file).
-			if reclaimable, rok := readCgroupStatKey(filepath.Join(dir, statFile), reclaimKey); rok {
+			// Page-cache recency is not a hard allocation boundary. Credit only
+			// clean reclaimable file pages, at this same governing level.
+			if reclaimable, rok := reclaimableCgroupCache(filepath.Join(dir, statFile)); rok {
 				if reclaimable > usage {
 					usage = 0
 				} else {
@@ -407,14 +413,14 @@ func hierarchicalCgroupHeadroom(pid int) (uint64, bool) {
 			if v2Path != "" {
 				if dir, ok := cgroupDirectory(mountPoint, mountRoot, v2Path); ok {
 					return minHierarchicalHeadroom(dir, mountPoint, "memory.max", "memory.current",
-						"memory.stat", "inactive_file")
+						"memory.stat")
 				}
 			}
 		case "cgroup":
 			if v1MemoryPath != "" && strings.Contains(","+right[2]+",", ",memory,") {
 				if dir, ok := cgroupDirectory(mountPoint, mountRoot, v1MemoryPath); ok {
 					return minHierarchicalHeadroom(dir, mountPoint, "memory.limit_in_bytes", "memory.usage_in_bytes",
-						"memory.stat", "total_inactive_file")
+						"memory.stat")
 				}
 			}
 		}
@@ -462,12 +468,14 @@ func MemoryAvailable() uint64 {
 }
 
 // MemoryAvailableIncludingCache returns memory that could be allocated on this
-// node without evicting live pages. This is the number to use for sizing bulk
+// node after reclaiming clean file cache, without swapping anonymous memory.
+// This is the number to use for sizing bulk
 // allocations (index build buffers, ANN staging arrays):
 //
 //   - When a cgroup memory limit is discoverable for the current process
 //     (regardless of whether the process is PID 1), it is `limit - cgroup
-//     usage`. This bounds allocations by the CN's actual budget rather than
+//     non-reclaimable usage`, bounded also by host MemAvailable. This bounds
+//     allocations by the CN's actual budget rather than
 //     the host's, so mo-service behind an init/entrypoint on a large node
 //     with a small cgroup does not size against the whole host and get
 //     OOM-killed by the cgroup.
@@ -481,14 +489,12 @@ func MemoryAvailable() uint64 {
 // not conflate that with measured==false (unavailable), because the two
 // demand opposite responses -- fail the request vs. fall back to another bound.
 func MemoryAvailableIncludingCache() (avail uint64, measured bool) {
-	// Prefer the hierarchy walk: it subtracts usage at each governing level, so
-	// a constrained ancestor is reported at ITS headroom rather than the leaf's.
+	// Prefer the hierarchy walk: a constrained ancestor contributes its own
+	// usage and cache, not just its limit. Fall back to single-level accounting
+	// only when the hierarchy cannot be resolved.
 	if headroom, ok := hierarchicalCgroupHeadroom(pid); ok {
-		return headroom, true
-	}
-	// Fallback for hosts where the ancestry is not readable (cgroup namespaces,
-	// unusual mountinfo). Single-level: limit minus this process's usage.
-	if limit := CgroupMemoryLimit(); limit > 0 {
+		avail, measured = headroom, true
+	} else if limit := CgroupMemoryLimit(); limit > 0 {
 		used, err := cgroup.GetMemUsage(pid)
 		if err != nil {
 			logutil.Errorf("failed to get cgroup memory usage: %v", err)
@@ -496,22 +502,26 @@ func MemoryAvailableIncludingCache() (avail uint64, measured bool) {
 		}
 		// Same correction as the hierarchy walk: cgroup usage counts page cache and
 		// this function promises reclaimable cache is available.
-		if reclaimable, rok := reclaimableCgroupCache(cgroupStatPath(pid)); rok && uint64(used) > reclaimable {
-			used -= int64(reclaimable)
+		usage := uint64(used)
+		if reclaimable, rok := reclaimableCgroupCache(cgroupStatPath(pid)); rok {
+			usage -= min(usage, reclaimable)
 		}
-		if uint64(used) >= limit {
+		if usage >= limit {
 			// Measured, and genuinely exhausted. This is NOT the same as an
 			// unavailable measurement: reporting it as unmeasured is what let
 			// callers silently disable their memory bound on a full cgroup.
 			return 0, true
 		}
-		return limit - uint64(used), true
+		avail, measured = limit-usage, true
 	}
 	s := gosigar.ConcreteSigar{}
 	mem, err := s.GetMem()
 	if err != nil {
 		logutil.Errorf("failed to get memory stats: %v", err)
-		return 0, false
+		return avail, measured
+	}
+	if measured {
+		return min(avail, mem.ActualFree), true
 	}
 	return mem.ActualFree, true
 }
