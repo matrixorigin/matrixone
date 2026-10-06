@@ -1189,8 +1189,8 @@ func (exec *vectorMatmulExec) fillRow(group uint64, row int, vectors []*vector.V
 // device in play the GPU scores every row: the engine's native host memory and the tile
 // buffers are charged to the allocation account before they are allocated, and a denial
 // or an engine error (including a shape the device has no algorithm for) fails the query.
-// No row scored on the GPU is scored again on the CPU, including a score the fp32 GEMM
-// reports as an overflow: the GPU result follows the fp32 GEMM contract of the design doc.
+// No row scored on the GPU is scored again on the CPU: the engine meets the metric contract
+// on the device (see the design doc's Decisions).
 func (exec *vectorMatmulExec) ensureEngine() error {
 	if exec.engineTried || exec.cfg == nil {
 		return nil

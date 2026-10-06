@@ -546,7 +546,8 @@ void check_matches_nvidia(int format, size_t K, size_t rows, size_t nq, bool sam
 
 
 // check_magnitude scores a query of magnitude 2^e (elements 2^e times {1, 1.5, 2}) against
-// rows equal to the query, to twice it and to minus it, in a format holding those values,
+// rows equal to the query, to twice it, to minus it and a zero vector, in a format holding
+// those values; the row equal to the query, and its double for cosine, are at distance 0,
 // and compares cosine and l2sq with a double reference over the stored values: the cosine
 // distance to 1e-6, the squared L2 distance to 1e-5 of |x|^2 + |q|^2, and a distance beyond
 // the float range as +Inf.
@@ -554,10 +555,10 @@ void check_magnitude(int format, uint32_t dim, int e) {
     const bool mx = format == GPU_BLOCKSCALED_MXFP8, nv = format == GPU_BLOCKSCALED_NVFP4;
     const size_t esize = format == GPU_BLOCKSCALED_F32 ? 4 : 2;
     const double pattern[3] = {1, 1.5, 2};
-    const double factor[4] = {1, 1, 2, -1}; // query, then rows: equal, twice, minus
-    std::vector<std::vector<uint8_t>> cells(4);
-    std::vector<std::vector<double>> vals(4, std::vector<double>(dim));
-    for (int v = 0; v < 4; v++) {
+    const double factor[5] = {1, 1, 2, -1, 0}; // query, then rows: equal, twice, minus, zero
+    std::vector<std::vector<uint8_t>> cells(5);
+    std::vector<std::vector<double>> vals(5, std::vector<double>(dim));
+    for (int v = 0; v < 5; v++) {
         for (uint32_t k = 0; k < dim; k++) vals[v][k] = std::ldexp(factor[v] * pattern[k % 3], e);
         if (mx || nv) {
             const size_t block = mx ? 32 : 16, nscale = (dim + block - 1) / block;
@@ -600,14 +601,14 @@ void check_magnitude(int format, uint32_t dim, int e) {
         }
     }
     std::vector<uint8_t> rows;
-    for (int v = 1; v < 4; v++) rows.insert(rows.end(), cells[v].begin(), cells[v].end());
+    for (int v = 1; v < 5; v++) rows.insert(rows.end(), cells[v].begin(), cells[v].end());
     for (int metric : {blockscaled_matmul::kCosine, blockscaled_matmul::kL2sq}) {
         blockscaled_matmul eng(0, format, dim, 1, cells[0].data(), 128, 0, metric);
-        std::vector<float> scores(3);
-        eng.run(rows.data(), 3, scores.data());
+        std::vector<float> scores(4);
+        eng.run(rows.data(), 4, scores.data());
         double nq = 0;
         for (uint32_t k = 0; k < dim; k++) nq += vals[0][k] * vals[0][k];
-        for (int r = 0; r < 3; r++) {
+        for (int r = 0; r < 4; r++) {
             double nr = 0, l2 = 0, dot = 0;
             for (uint32_t k = 0; k < dim; k++) {
                 const double x = vals[r + 1][k], y = vals[0][k];
@@ -622,6 +623,10 @@ void check_magnitude(int format, uint32_t dim, int e) {
                     printf("    format %d dim %u 2^%d cosine row %d: %g, want %g\n", format, dim, e, r, got, want);
                 }
                 ASSERT_TRUE(std::fabs(got - want) <= 1e-6);
+                // the row equal to the query, and its double, are at distance 0
+                if (r <= 1 && nq > 0) ASSERT_TRUE(std::fabs(got) <= 1e-12);
+            } else if (r == 0) {
+                ASSERT_TRUE(got == 0);
             } else if (std::isinf(float(l2))) {
                 ASSERT_TRUE(std::isinf(got));
             } else {

@@ -70,20 +70,60 @@ constexpr int kMetricInnerProduct = 0;
 constexpr int kMetricCosine = 1;
 constexpr int kMetricL2sq = 2;
 
+// bsmm_scale_off is the offset of block s of row r in the tiled scale layout.
+__device__ inline uint64_t bsmm_scale_off(uint64_t r, uint64_t s, uint64_t Sp) {
+    const uint64_t tile = (r / 128) * (Sp / 4) + s / 4;
+    const uint64_t rr = r % 128;
+    return tile * 512 + (rr % 32) * 16 + (rr / 32) * 4 + s % 4;
+}
+
+// bsmm_elem is element k of packed row r of a float format, before the row's global scale:
+// the code times its block scale for MXFP8/NVFP4, the value for F32/F16/BF16.
+__device__ inline double bsmm_elem(int format, const uint8_t* row, const uint8_t* scale,
+                                   uint64_t r, uint64_t k, uint64_t Sp) {
+    switch (format) {
+    case 1: { // MXFP8: E4M3 element, E8M0 scale per 32
+        __nv_fp8_e4m3 e;
+        e.__x = row[k];
+        return double(float(e)) * ldexp(1.0, int(scale[bsmm_scale_off(r, k / 32, Sp)]) - 127);
+    }
+    case 2: { // NVFP4: E2M1 nibble (element 2i low), UE4M3 scale per 16
+        __nv_fp4_e2m1 e;
+        e.__x = (k & 1) ? (row[k / 2] >> 4) : (row[k / 2] & 0x0f);
+        __nv_fp8_e4m3 sc;
+        sc.__x = scale[bsmm_scale_off(r, k / 16, Sp)];
+        return double(float(e)) * double(float(sc));
+    }
+    case 3: // F32
+        return double(reinterpret_cast<const float*>(row)[k]);
+    case 4: // F16
+        return double(__half2float(reinterpret_cast<const __half*>(row)[k]));
+    case 7: // BF16
+        return double(__bfloat162float(reinterpret_cast<const __nv_bfloat16*>(row)[k]));
+    }
+    return 0;
+}
+
 // bsmm_fixup_kernel turns the raw matmul output d (query major, M rows per query) into
 // rank scores in place, the negated distance of the metric (largest is nearest). For float
 // formats the inner product is d * float(g_row * g_query) in float, as cuBLASLt applies
 // alpha = G_a * G_b to a GEMM with per-tensor global scales; cosine and l2sq take the dot
-// product d * g_row * g_query in double, with the squared norms, so a row equal to a query
-// is at distance 0. Integer formats take the int32 sums with the uint8 shift correction.
-// The rank is rounded once to float; NaN and padding rows r >= n are -Inf. A zero vector
-// has cosine distance 1.
+// product d * g_row * g_query in double, with the squared norms, and a distance within the
+// fp32 GEMM's error of 0 (dim * 2^-22, relative to the squared norms for l2sq) is computed
+// again from the elements in double: 1 - x.q / (|x||q|) and the sum of (x - q)^2, so a row
+// equal to a query is at distance 0. Integer formats take the int32 sums with the uint8
+// shift correction. The rank is rounded once to float; NaN and padding rows r >= n are
+// -Inf. A zero vector has cosine distance 1.
 __global__ void bsmm_fixup_kernel(float* d, int kind, int metric, uint64_t M, uint64_t n,
                                   uint64_t nq, const float* g_row, const float* g_query,
                                   const int64_t* sum_row, const int64_t* sum_query,
                                   int64_t base, const double* norm_row,
-                                  const double* norm_query) {
+                                  const double* norm_query, int format, const uint8_t* elem_row,
+                                  const uint8_t* scale_row, const uint8_t* elem_query,
+                                  const uint8_t* scale_query, uint64_t row_bytes, uint64_t dim,
+                                  uint64_t Sp) {
     const uint64_t total = M * nq;
+    const double tol = double(dim) * 0x1p-22;
     for (uint64_t i = uint64_t(blockIdx.x) * blockDim.x + threadIdx.x; i < total;
          i += uint64_t(gridDim.x) * blockDim.x) {
         const uint64_t q = i / M, r = i % M;
@@ -108,18 +148,32 @@ __global__ void bsmm_fixup_kernel(float* d, int kind, int metric, uint64_t M, ui
             } else if (metric == kMetricL2sq) {
                 rank = -fmax(0.0, norm_row[r] + norm_query[q] - 2.0 * dot);
             }
+            if (kind == 0 && metric != kMetricInnerProduct &&
+                (metric == kMetricCosine ? -rank <= tol
+                                         : -rank <= tol * (norm_row[r] + norm_query[q]))) {
+                const uint8_t* x = elem_row + r * row_bytes;
+                const uint8_t* y = elem_query + q * row_bytes;
+                const double gx = double(g_row[r]), gy = double(g_query[q]);
+                double xy = 0, xx = 0, yy = 0, l2 = 0;
+                for (uint64_t k = 0; k < dim; k++) {
+                    const double a = bsmm_elem(format, x, scale_row, r, k, Sp) * gx;
+                    const double b = bsmm_elem(format, y, scale_query, q, k, Sp) * gy;
+                    xy += a * b;
+                    xx += a * a;
+                    yy += b * b;
+                    l2 += (a - b) * (a - b);
+                }
+                if (metric == kMetricL2sq) {
+                    rank = -l2;
+                } else if (xx > 0 && yy > 0) {
+                    rank = -(1.0 - fmax(-1.0, fmin(1.0, xy / (sqrt(xx) * sqrt(yy)))));
+                }
+            }
             v = float(rank);
         }
         if (isnan(v)) v = -INFINITY;
         d[i] = v;
     }
-}
-
-// bsmm_scale_off is the offset of block s of row r in the tiled scale layout.
-__device__ inline uint64_t bsmm_scale_off(uint64_t r, uint64_t s, uint64_t Sp) {
-    const uint64_t tile = (r / 128) * (Sp / 4) + s / 4;
-    const uint64_t rr = r % 128;
-    return tile * 512 + (rr % 32) * 16 + (rr / 32) * 4 + s % 4;
 }
 
 // bsmm_row_stats_kernel computes, for each of the n packed rows (one block per row), the
@@ -145,36 +199,12 @@ __global__ void bsmm_row_stats_kernel(const uint8_t* elem, const uint8_t* scale,
     long long iacc = 0, isum = 0;
     for (uint64_t k = threadIdx.x; k < dim; k += kThreads) {
         switch (format) {
-        case 1: { // MXFP8: E4M3 element, E8M0 scale per 32
-            __nv_fp8_e4m3 e;
-            e.__x = row[k];
-            const double v = double(float(e)) *
-                             ldexp(1.0, int(scale[bsmm_scale_off(r, k / 32, Sp)]) - 127);
-            acc += v * v;
-            break;
-        }
-        case 2: { // NVFP4: E2M1 nibble (element 2i low), UE4M3 scale per 16
-            __nv_fp4_e2m1 e;
-            e.__x = (k & 1) ? (row[k / 2] >> 4) : (row[k / 2] & 0x0f);
-            __nv_fp8_e4m3 sc;
-            sc.__x = scale[bsmm_scale_off(r, k / 16, Sp)];
-            const double v = double(float(e)) * double(float(sc));
-            acc += v * v;
-            break;
-        }
-        case 3: { // F32
-            const double v = double(reinterpret_cast<const float*>(row)[k]);
-            acc += v * v;
-            break;
-        }
-        case 4: { // F16
-            const double v = double(__half2float(reinterpret_cast<const __half*>(row)[k]));
-            acc += v * v;
-            break;
-        }
-        case 7: { // BF16
-            const double v =
-                double(__bfloat162float(reinterpret_cast<const __nv_bfloat16*>(row)[k]));
+        case 1:
+        case 2:
+        case 3:
+        case 4:
+        case 7: {
+            const double v = bsmm_elem(format, row, scale, r, k, Sp);
             acc += v * v;
             break;
         }
@@ -208,10 +238,10 @@ __global__ void bsmm_row_stats_kernel(const uint8_t* elem, const uint8_t* scale,
     }
 }
 
-// bsmm_rescale_kernel scales each of the n packed rows whose squared norm (norm, the value
-// including the row's global scale) is outside [2^-60, 2^60] by a power of two 2^-k, |x| near
-// 2^k, so its fp32 matmul with a query neither overflows nor underflows, and multiplies the
-// row's global scale by 2^k: F32 and BF16 elements are scaled, MXFP8 block scale exponents
+// bsmm_rescale_kernel scales each of the n packed rows whose squared norm without its global
+// scale (norm / global^2) is outside [2^-60, 2^60] by a power of two 2^-k, |x| near 2^k, so
+// its fp32 matmul with a query neither overflows nor underflows, and multiplies the row's
+// global scale by 2^k: F32 and BF16 elements are scaled, MXFP8 block scale exponents
 // are shifted, and a block shifted below the E8M0 range is zeroed. Rows in range are left as
 // they are. One block per row; the format constants are those of blockscaled_matmul.
 template <int kThreads>
@@ -220,7 +250,9 @@ __global__ void bsmm_rescale_kernel(uint8_t* elem, uint8_t* scale, float* global
                                     uint64_t row_bytes, uint64_t dim, uint64_t Sp) {
     const uint64_t r = blockIdx.x;
     if (r >= n) return;
-    const double nr = norm[r];
+    // the squared norm of the matmul operand: the row's norm without its global scale
+    const double g = double(global[r]);
+    const double nr = g > 0 ? norm[r] / (g * g) : 0.0;
     if (!(nr > 0) || (nr >= 0x1p-60 && nr <= 0x1p60)) return;
     const int k = max(-126, min(127, int(lrint(log2(nr) / 2))));
     uint8_t* row = elem + r * row_bytes;
@@ -579,7 +611,10 @@ private:
             static_cast<const float*>(d_g_row_), static_cast<const float*>(d_g_query_),
             static_cast<const int64_t*>(d_sum_row_), static_cast<const int64_t*>(d_sum_query_),
             base, static_cast<const double*>(d_norm_row_),
-            static_cast<const double*>(d_norm_query_));
+            static_cast<const double*>(d_norm_query_), format_,
+            static_cast<const uint8_t*>(d_a_), static_cast<const uint8_t*>(d_sa_),
+            static_cast<const uint8_t*>(d_b_), static_cast<const uint8_t*>(d_sb_), row_bytes_,
+            dim_, Sp_);
         check(cudaGetLastError(), "bsmm_fixup_kernel");
     }
 
@@ -625,10 +660,14 @@ private:
             }
         }
         check(cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking), "cudaStreamCreate");
-        check(cudaMemcpy(d_b_, h_b.data(), h_b.size(), cudaMemcpyHostToDevice), "cudaMemcpy");
-        check(cudaMemcpy(d_sb_, h_sb.data(), h_sb.size(), cudaMemcpyHostToDevice), "cudaMemcpy");
-        check(cudaMemcpy(d_g_query_, g_query_.data(), nq_ * sizeof(float), cudaMemcpyHostToDevice),
-              "cudaMemcpy");
+        // on stream_, ahead of the kernels that read and rescale the queries
+        check(cudaMemcpyAsync(d_b_, h_b.data(), h_b.size(), cudaMemcpyHostToDevice, stream_),
+              "cudaMemcpyAsync");
+        check(cudaMemcpyAsync(d_sb_, h_sb.data(), h_sb.size(), cudaMemcpyHostToDevice, stream_),
+              "cudaMemcpyAsync");
+        check(cudaMemcpyAsync(d_g_query_, g_query_.data(), nq_ * sizeof(float),
+                              cudaMemcpyHostToDevice, stream_),
+              "cudaMemcpyAsync");
         // the queries' squared norms and uint8 sums, from the packed query matrix
         row_stats(d_b_, d_sb_, d_g_query_, nq_, d_norm_query_, d_sum_query_);
         check(cudaStreamSynchronize(stream_), "cudaStreamSynchronize");

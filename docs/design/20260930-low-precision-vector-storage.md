@@ -221,8 +221,11 @@ Device kernels around the matmul, on the engine's stream:
 - A fix-up kernel turns the matmul output into rank scores. The inner product is
   `acc × fp32(g_row × g_query)` in fp32, as cuBLASLt applies `alpha = G_a × G_b` to a GEMM
   with per-tensor global scales; cosine and squared L2 take the dot product with the
-  global scales in double, with the squared norms, so a row equal to a query is at
-  distance 0 (integer formats take the corrected int64 sums). The rank is rounded once to
+  global scales in double, with the squared norms, and a distance within the fp32 GEMM's
+  error of 0 (`dim × 2^-22`, relative to the squared norms for squared L2) is computed
+  again from the decoded elements in double — `1 − x·q / (|x||q|)` and `Σ(x − q)²`, the
+  numerics of `cosine_distance` and `l2_distance_sq` — so a row equal to a query is at
+  distance 0 (integer formats take the corrected int64 sums, which are exact). The rank is rounded once to
   fp32; −Inf for NaN and for the padding rows. A zero vector has cosine distance 1, as
   `cosine_distance` returns.
 - With one global scale for all rows and one for all queries, the cells are exactly
@@ -448,11 +451,12 @@ the kernel of the SQL function of the metric — `VecBlockInnerProduct`,
 kernel (`metric.ResolveDistanceFn`) for the other types, as `inner_product`,
 `cosine_distance` and `l2_distance_sq` resolve them — so a CPU result equals the scalar
 function on the same row and query, including the float64 cosine recompute and the
-squared L2 of differences. The GPU's numeric contract is the fp32 GEMM's (see Decisions):
-scores within fp32 summation-order tolerance of the scalar function, squared L2 as
-`|x|² + |q|² − 2·x·q` with rounding relative to the squared norms, and a score beyond the
-float range an overflow error. An overflowing score (NaN) ranks last; a non-finite score in
-the result is an overflow error, since JSON has no infinity.
+squared L2 of differences. The GPU meets the same contract on the GPU (see Decisions): the
+GEMM's scores are within fp32 summation-order tolerance of the scalar function, and a
+cosine or squared L2 distance within that tolerance of 0 is computed again on the device
+from the elements in double, so a row equal to a query is at distance 0 at any finite
+magnitude. An overflowing score (NaN) ranks last; a non-finite score in the result is an
+overflow error, since JSON has no infinity.
 
 #### Result format
 
@@ -713,14 +717,14 @@ type; normalization changes the ranking, independent of the format.
   such device; the CPU path is the reference for verification and benchmarks.
 - With an eligible device enabled there is no CPU fallback: every row is scored on the
   GPU or the query fails.
-- The GPU's numeric contract is the fp32 GEMM's, and it is not repaired on the CPU. The
-  engine keeps the GEMM inside the fp32 range by exact power-of-two rescaling (cosine and
-  squared L2 rows outside [2^-60, 2^60] in squared norm); beyond that, a score differs from
-  the scalar function within fp32 tolerance, and a score that leaves the float range —
-  including the squared L2 of two rows whose squared norms exceed it — is an overflow
-  error. Re-scoring such rows or queries on the CPU is rejected: it would run the work
-  twice and make the result depend on which path ran. `gpu_mode = 0` gives the CPU
-  result, which equals the scalar functions. The engine's native host memory and the tile buffers are
+- The GPU meets the scalar metric contract on the GPU, never by re-scoring on the CPU. It
+  keeps the GEMM inside the fp32 range by exact power-of-two rescaling (cosine and squared
+  L2 rows outside [2^-60, 2^60] in squared norm), and recomputes on the device, in double
+  from the decoded elements, every cosine or squared L2 distance within the GEMM's error of
+  0, so admitted finite values give the scalar function's result where fp32 cancellation
+  would lose it (a row equal to its query is at distance 0). Other scores are within fp32
+  summation-order tolerance of the scalar function. Re-scoring rows or queries on the CPU
+  is rejected: it would run the work twice and make the result depend on which path ran. The engine's native host memory and the tile buffers are
   admitted by the aggregate's allocation account before allocation, and a denial fails the
   query; so do device memory, CUDA and cuBLASLt errors at creation or while scoring.
 - The engine looks up a cuBLASLt algorithm for every tile shape it can run (rows in
