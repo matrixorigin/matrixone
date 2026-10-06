@@ -4087,6 +4087,17 @@ func (s *preparedCastWarningSession) AppendWarningDiagnostic(uint16, string) {
 }
 
 func TestJsonOrderingWithTextPrepareParamExact(t *testing.T) {
+	proc := testutil.NewProcess(t, testutil.WithFileService(nil))
+	guard := func(t *testing.T) {
+		checkExpressionStorageAfterCleanup(t, proc)
+		t.Cleanup(func() {
+			state := proc.DetachPrepareParams()
+			proc.RestorePrepareParams(state)
+			assert.Equal(t, process.PrepareParamsState{}, state)
+			assert.False(t, proc.GetBaseProcessRunningStatus())
+		})
+	}
+	guard(t)
 	tests := []struct {
 		name       string
 		op         string
@@ -4108,24 +4119,15 @@ func TestJsonOrderingWithTextPrepareParamExact(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			proc := testutil.NewProcess(t)
+			guard(t)
 			params := vector.NewVec(types.T_text.ToType())
+			t.Cleanup(func() { params.Free(proc.Mp()) })
+			previous := proc.DetachPrepareParams()
+			t.Cleanup(func() { proc.RestorePrepareParams(previous) })
 			require.NoError(t, vector.AppendBytes(params, []byte(test.paramValue), test.paramNull, proc.Mp()))
 			proc.SetPrepareParams(params)
-
-			jsonType := types.T_json.ToType()
-			textType := types.T_text.ToType()
-			normalizeFn, err := function.GetFunctionByName(proc.Ctx, function.JsonOrderingParamFunctionName, []types.Type{textType})
-			require.NoError(t, err)
-			paramExpr := &plan.Expr{
-				Typ: plan.Type{Id: int32(types.T_json)},
-				Expr: &plan.Expr_F{F: &plan.Function{
-					Func: &plan.ObjectRef{ObjName: function.JsonOrderingParamFunctionName, Obj: normalizeFn.GetEncodedOverloadID()},
-					Args: []*plan.Expr{
-						{Typ: plan.Type{Id: int32(types.T_text)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}},
-					},
-				}},
-			}
+			paramExpr := bindTestFunction(t, proc, function.JsonOrderingParamFunctionName,
+				&plan.Expr{Typ: plan.Type{Id: int32(types.T_text)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}})
 			jsonExpr := &plan.Expr{
 				Typ:  plan.Type{Id: int32(types.T_json)},
 				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}},
@@ -4134,44 +4136,33 @@ func TestJsonOrderingWithTextPrepareParamExact(t *testing.T) {
 			if !test.jsonOnLeft {
 				args[0], args[1] = args[1], args[0]
 			}
-			compareFn, err := function.GetFunctionByName(proc.Ctx, test.op, []types.Type{jsonType, jsonType})
-			require.NoError(t, err)
-			expr := &plan.Expr{
-				Typ: plan.Type{Id: int32(types.T_bool)},
-				Expr: &plan.Expr_F{F: &plan.Function{
-					Func: &plan.ObjectRef{ObjName: test.op, Obj: compareFn.GetEncodedOverloadID()},
-					Args: args,
-				}},
-			}
-
+			expr := bindTestFunction(t, proc, test.op, args...)
 			json, err := types.ParseStringToByteJson(test.jsonValue)
 			require.NoError(t, err)
 			encoded, err := types.EncodeJson(json)
 			require.NoError(t, err)
-			jsonVec := vector.NewVec(jsonType)
-			require.NoError(t, vector.AppendBytes(jsonVec, encoded, false, proc.Mp()))
 			input := batch.NewWithSize(1)
-			input.Vecs[0] = jsonVec
+			t.Cleanup(func() { input.Clean(proc.Mp()) })
+			input.Vecs[0] = vector.NewVec(types.T_json.ToType())
+			require.NoError(t, vector.AppendBytes(input.Vecs[0], encoded, false, proc.Mp()))
 			input.SetRowCount(1)
-
 			executor, err := NewExpressionExecutor(proc, expr)
+			if executor != nil {
+				t.Cleanup(executor.Free)
+			}
 			require.NoError(t, err)
 			result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
 			if test.wantErr {
-				require.Error(t, err)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "error: %v", err)
 			} else {
 				require.NoError(t, err)
-				require.Equal(t, test.wantNull, result.GetNulls().Contains(0))
+				require.Equal(t, types.T_bool.ToType(), *result.GetType())
+				require.Equal(t, 1, result.Length())
+				require.Equal(t, test.wantNull, result.IsNull(0))
 				if !test.wantNull {
 					require.Equal(t, test.want, vector.MustFixedColWithTypeCheck[bool](result)[0])
 				}
 			}
-
-			executor.Free()
-			input.Clean(proc.Mp())
-			proc.SetPrepareParams(nil)
-			params.Free(proc.Mp())
-			proc.Free()
 		})
 	}
 }
