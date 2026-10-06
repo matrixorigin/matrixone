@@ -542,17 +542,9 @@ func DeepCopyType(typ *plan.Type) *plan.Type {
 	if typ == nil {
 		return nil
 	}
-	return &plan.Type{
-		Id:          typ.Id,
-		NotNullable: typ.NotNullable,
-		Width:       typ.Width,
-		Scale:       typ.Scale,
-		AutoIncr:    typ.AutoIncr,
-		Table:       typ.Table,
-		Enumvalues:  typ.Enumvalues,
-		Charset:     typ.Charset,
-		PadSpace:    typ.PadSpace,
-	}
+	result := *typ
+	result.XXX_unrecognized = slices.Clone(typ.XXX_unrecognized)
+	return &result
 }
 
 func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {
@@ -564,7 +556,7 @@ func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {
 		Name:          col.Name,
 		OriginName:    col.OriginName,
 		Alg:           col.Alg,
-		Typ:           col.Typ,
+		Typ:           *DeepCopyType(&col.Typ),
 		Default:       DeepCopyDefault(col.Default),
 		Primary:       col.Primary,
 		Unique:        col.Unique,
@@ -622,6 +614,8 @@ func DeepCopyIndexDef(indexDef *plan.IndexDef) *plan.IndexDef {
 		IndexAlgo:          indexDef.IndexAlgo,
 		IndexAlgoTableType: indexDef.IndexAlgoTableType,
 		IndexAlgoParams:    indexDef.IndexAlgoParams,
+		KeyFormat:          indexDef.KeyFormat,
+		XXX_unrecognized:   slices.Clone(indexDef.XXX_unrecognized),
 		Parts:              slices.Clone(indexDef.Parts),
 		IncludedColumns:    slices.Clone(indexDef.IncludedColumns),
 	}
@@ -706,31 +700,34 @@ func DeepCopyTableDef(table *plan.TableDef, withCols bool) *plan.TableDef {
 		return nil
 	}
 	newTable := &plan.TableDef{
-		TblId:          table.TblId,
-		Name:           table.Name,
-		Hidden:         table.Hidden,
-		TableType:      table.TableType,
-		LogicalId:      table.LogicalId,
-		Createsql:      table.Createsql,
-		Version:        table.Version,
-		Pkey:           DeepCopyPrimaryKeyDef(table.Pkey),
-		Indexes:        make([]*IndexDef, len(table.Indexes)),
-		Fkeys:          make([]*plan.ForeignKeyDef, len(table.Fkeys)),
-		RefChildTbls:   slices.Clone(table.RefChildTbls),
-		Checks:         make([]*plan.CheckDef, len(table.Checks)),
-		Props:          make([]*plan.PropertyDef, len(table.Props)),
-		Defs:           make([]*plan.TableDef_DefType, len(table.Defs)),
-		Name2ColIndex:  table.Name2ColIndex,
-		IsLocked:       table.IsLocked,
-		TableLockType:  table.TableLockType,
-		IsTemporary:    table.IsTemporary,
-		AutoIncrOffset: table.AutoIncrOffset,
-		AutoIncrEpoch:  table.AutoIncrEpoch,
-		AutoIdCache:    table.AutoIdCache,
-		DefaultCharset: table.DefaultCharset,
-		DbName:         table.DbName,
-		DbId:           table.DbId,
-		FeatureFlag:    table.FeatureFlag,
+		TblId:            table.TblId,
+		Name:             table.Name,
+		Hidden:           table.Hidden,
+		TableType:        table.TableType,
+		LogicalId:        table.LogicalId,
+		Createsql:        table.Createsql,
+		Version:          table.Version,
+		Pkey:             DeepCopyPrimaryKeyDef(table.Pkey),
+		Indexes:          make([]*IndexDef, len(table.Indexes)),
+		Fkeys:            make([]*plan.ForeignKeyDef, len(table.Fkeys)),
+		RefChildTbls:     slices.Clone(table.RefChildTbls),
+		Checks:           make([]*plan.CheckDef, len(table.Checks)),
+		Props:            make([]*plan.PropertyDef, len(table.Props)),
+		Defs:             make([]*plan.TableDef_DefType, len(table.Defs)),
+		Name2ColIndex:    table.Name2ColIndex,
+		IsLocked:         table.IsLocked,
+		TableLockType:    table.TableLockType,
+		IsTemporary:      table.IsTemporary,
+		AutoIncrOffset:   table.AutoIncrOffset,
+		AutoIncrEpoch:    table.AutoIncrEpoch,
+		AutoIdCache:      table.AutoIdCache,
+		DefaultCharset:   table.DefaultCharset,
+		CollationVersion: table.CollationVersion,
+		KeyFormat:        table.KeyFormat,
+		XXX_unrecognized: slices.Clone(table.XXX_unrecognized),
+		DbName:           table.DbName,
+		DbId:             table.DbId,
+		FeatureFlag:      table.FeatureFlag,
 	}
 
 	if withCols {
@@ -1182,7 +1179,7 @@ func DeepCopyExpr(expr *Expr) *Expr {
 		return nil
 	}
 	newExpr := &Expr{
-		Typ:             expr.Typ,
+		Typ:             *DeepCopyType(&expr.Typ),
 		Ndv:             expr.Ndv,
 		Selectivity:     expr.Selectivity,
 		PreparedNumeric: copyPreparedNumericMetadata(expr.PreparedNumeric),
