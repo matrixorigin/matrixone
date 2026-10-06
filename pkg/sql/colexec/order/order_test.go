@@ -146,25 +146,46 @@ func TestOrderResetReleasesPartiallyAccumulatedAccountedBatch(t *testing.T) {
 }
 
 func BenchmarkOrder(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		tcs := []orderTestCase{
-			newTestCase(b, []types.Type{types.T_int8.ToType()}, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}}),
-			newTestCase(b, []types.Type{types.T_int8.ToType()}, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}}),
-		}
-		t := new(testing.T)
-		for _, tc := range tcs {
-			err := tc.arg.Prepare(tc.proc)
-			require.NoError(t, err)
-
-			bats := []*batch.Batch{
-				newBatch(tc.types, tc.proc, BenchmarkRows),
-				newBatch(tc.types, tc.proc, BenchmarkRows),
-				batch.EmptyBatch,
-			}
-			resetChildren(tc.arg, bats)
-			_, _ = vm.Exec(tc.arg, tc.proc)
+	tcs := []orderTestCase{
+		newTestCase(b, []types.Type{types.T_int8.ToType()}, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}}),
+		newTestCase(b, []types.Type{types.T_int8.ToType()}, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}}),
+	}
+	for _, tc := range tcs {
+		b.Cleanup(func() {
 			tc.arg.Free(tc.proc, false, nil)
-			tc.arg.GetChildren(0).Free(tc.proc, false, nil)
+			require.Zero(b, tc.proc.Mp().CurrNB())
+			require.Zero(b, tc.proc.Mp().OnHeapCurrNB())
+		})
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for _, tc := range tcs {
+			func() {
+				bats := []*batch.Batch{
+					newBatch(tc.types, tc.proc, BenchmarkRows),
+					newBatch(tc.types, tc.proc, BenchmarkRows),
+					batch.EmptyBatch,
+				}
+				resetChildren(tc.arg, bats)
+				child := tc.arg.GetChildren(0)
+				defer func() {
+					tc.arg.Reset(tc.proc, false, nil)
+					child.Free(tc.proc, false, nil)
+				}()
+				require.NoError(b, tc.arg.Prepare(tc.proc))
+				rows := 0
+				for {
+					result, err := vm.Exec(tc.arg, tc.proc)
+					require.NoError(b, err)
+					if result.Batch != nil {
+						rows += result.Batch.RowCount()
+					}
+					if result.Status == vm.ExecStop {
+						break
+					}
+				}
+				require.Equal(b, 2*BenchmarkRows, rows)
+			}()
 		}
 	}
 }

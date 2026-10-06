@@ -2204,29 +2204,52 @@ func TestPrepareInMemoryMergeAndHeapEdgeBranches(t *testing.T) {
 }
 
 func BenchmarkOrder(b *testing.B) {
+	tcs := []orderTestCase{
+		newTestCase(b, []types.Type{types.T_int8.ToType()}, []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 0}}),
+		newTestCase(b, []types.Type{types.T_int8.ToType()}, []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 2}}),
+	}
+	for _, tc := range tcs {
+		b.Cleanup(func() {
+			tc.arg.Free(tc.proc, false, nil)
+			require.Zero(b, tc.proc.Mp().CurrNB())
+			require.Zero(b, tc.proc.Mp().OnHeapCurrNB())
+		})
+	}
+	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		tcs := []orderTestCase{
-			newTestCase(b, []types.Type{types.T_int8.ToType()}, []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 0}}),
-			newTestCase(b, []types.Type{types.T_int8.ToType()}, []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 2}}),
-		}
-		t := new(testing.T)
 		for _, tc := range tcs {
-			bats := []*batch.Batch{newRandomBatch(tc.types, tc.proc, BenchmarkRows), batch.EmptyBatch, newRandomBatch(tc.types, tc.proc, BenchmarkRows)}
-			resetChildren(tc.arg, bats)
-			err := tc.arg.Prepare(tc.proc)
-			require.NoError(t, err)
-			for {
-				ok, err := vm.Exec(tc.arg, tc.proc)
-				if ok.Status == vm.ExecStop || err != nil {
-					break
+			func() {
+				bats := []*batch.Batch{
+					newRandomBatch(tc.types, tc.proc, BenchmarkRows),
+					batch.EmptyBatch,
+					newRandomBatch(tc.types, tc.proc, BenchmarkRows),
 				}
-			}
+				resetChildren(tc.arg, bats)
+				child := tc.arg.GetChildren(0)
+				defer func() {
+					tc.arg.Reset(tc.proc, false, nil)
+					child.Free(tc.proc, false, nil)
+				}()
+				require.NoError(b, tc.arg.Prepare(tc.proc))
+				rows := 0
+				for {
+					result, err := vm.Exec(tc.arg, tc.proc)
+					require.NoError(b, err)
+					if result.Batch != nil {
+						rows += result.Batch.RowCount()
+					}
+					if result.Status == vm.ExecStop {
+						break
+					}
+				}
+				require.Equal(b, 2*BenchmarkRows, rows)
+			}()
 		}
 	}
 }
 
 func newTestCase(t testing.TB, ts []types.Type, fs []*plan.OrderBySpec) orderTestCase {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcess(t)
 	return orderTestCase{
 		types: ts,
 		proc:  proc,

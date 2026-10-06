@@ -658,34 +658,46 @@ func TestMergeTopReevaluatesPreparedOrderExpressionForEachBatch(t *testing.T) {
 }
 
 func BenchmarkTop(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		tcs := []testCase{
-			newTestCase(b, []types.Type{types.T_int8.ToType()}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}}),
-			newTestCase(b, []types.Type{types.T_int8.ToType()}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}}),
-		}
-
-		for _, tc := range tcs {
-			err := tc.arg.Prepare(tc.proc)
-			require.NoError(b, err)
-
-			bats := []*batch.Batch{
-				newBatch(tc.types, tc.proc, Rows),
-				batch.EmptyBatch,
-				newBatch(tc.types, tc.proc, Rows),
-			}
-			resetChildren(tc.arg, bats)
-
-			for {
-				ok, err := vm.Exec(tc.arg, tc.proc)
-				if ok.Status == vm.ExecStop || err != nil {
-					break
-				}
-			}
-
+	tcs := []testCase{
+		newTestCase(b, []types.Type{types.T_int8.ToType()}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}}),
+		newTestCase(b, []types.Type{types.T_int8.ToType()}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}}),
+	}
+	for _, tc := range tcs {
+		b.Cleanup(func() {
 			tc.arg.Free(tc.proc, false, nil)
-			tc.arg.GetChildren(0).Free(tc.proc, false, nil)
-
-			tc.proc.Free()
+			require.Zero(b, tc.proc.Mp().CurrNB())
+			require.Zero(b, tc.proc.Mp().OnHeapCurrNB())
+		})
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for _, tc := range tcs {
+			func() {
+				bats := []*batch.Batch{
+					newBatch(tc.types, tc.proc, Rows),
+					batch.EmptyBatch,
+					newBatch(tc.types, tc.proc, Rows),
+				}
+				resetChildren(tc.arg, bats)
+				child := tc.arg.GetChildren(0)
+				defer func() {
+					tc.arg.Reset(tc.proc, false, nil)
+					child.Free(tc.proc, false, nil)
+				}()
+				require.NoError(b, tc.arg.Prepare(tc.proc))
+				rows := 0
+				for {
+					result, err := vm.Exec(tc.arg, tc.proc)
+					require.NoError(b, err)
+					if result.Batch != nil {
+						rows += result.Batch.RowCount()
+					}
+					if result.Status == vm.ExecStop {
+						break
+					}
+				}
+				require.Equal(b, 3, rows)
+			}()
 		}
 	}
 }
