@@ -503,3 +503,53 @@ SELECT REGEXP_INSTR(CAST(X'78C9' AS BINARY(2)), CAST(X'E9' AS BINARY(1)), 1, 1, 
        REGEXP_INSTR(CAST(X'78C9' AS VARBINARY(2)), CAST(X'E9' AS VARBINARY(1)), 1, 1, 0, 'i') AS varbinary_i;
 SELECT REGEXP_INSTR(CAST(_binary'中中' AS BINARY(6)), CAST(_binary'中' AS BINARY(3)), 2, 1, 0, 'i') AS binary_byte_pos,
        REGEXP_INSTR(CAST(_binary'中中' AS VARBINARY(6)), CAST(_binary'中' AS VARBINARY(3)), 2, 1, 0, 'i') AS varbinary_byte_pos;
+
+# Declaration closure must survive constant lengths, NULL control flow,
+# projection and window boundaries without changing execution values.
+SET @decl_s = 'abc';
+SELECT REGEXP_LIKE(CAST(LPAD(@decl_s,-1,'x') AS BINARY),'a');
+SELECT REGEXP_LIKE(CAST(RPAD(@decl_s,-1,'x') AS BINARY),'a');
+SELECT REGEXP_LIKE(CAST(REPEAT(@decl_s,-1) AS BINARY),'a');
+PREPARE decl_negative FROM 'SELECT REGEXP_LIKE(CAST(LPAD(@decl_s,-1,''x'') AS BINARY),''a'')';
+EXECUTE decl_negative;
+DEALLOCATE PREPARE decl_negative;
+SELECT REGEXP_LIKE(CAST(LEFT(@decl_s,ROUND(2.8)) AS BINARY),'a');
+SELECT REGEXP_LIKE(CAST(LEFT(@decl_s,IF(TRUE,3,4)) AS BINARY),'a');
+SELECT REGEXP_LIKE(CAST(LEFT(@decl_s,CASE WHEN TRUE THEN 3 ELSE 4 END) AS BINARY),'a');
+PREPARE decl_round FROM 'SELECT REGEXP_LIKE(CAST(LEFT(@decl_s,ROUND(2.8)) AS BINARY),''a'')';
+PREPARE decl_if FROM 'SELECT REGEXP_LIKE(CAST(LEFT(@decl_s,IF(TRUE,3,4)) AS BINARY),''a'')';
+PREPARE decl_case FROM 'SELECT REGEXP_LIKE(CAST(LEFT(@decl_s,CASE WHEN TRUE THEN 3 ELSE 4 END) AS BINARY),''a'')';
+SELECT REGEXP_LIKE((SELECT COALESCE(NULL,CAST('abc' AS BINARY))),'a');
+SELECT REGEXP_LIKE(v,'a') FROM (SELECT COALESCE(NULL,CAST('abc' AS BINARY)) v) s;
+SELECT REGEXP_LIKE(MAX(COALESCE(NULL,CAST('abc' AS BINARY))),'a');
+PREPARE decl_projection FROM 'SELECT REGEXP_LIKE(v,''a'') FROM (SELECT COALESCE(NULL,CAST(''abc'' AS BINARY)) v) s';
+SELECT REGEXP_LIKE(MAX(CAST('abc' AS BINARY)) OVER(),'a');
+SELECT REGEXP_LIKE(MIN(CAST('abc' AS BINARY)) OVER(),'a');
+PREPARE decl_window FROM 'SELECT REGEXP_LIKE(MAX(CAST(''abc'' AS BINARY)) OVER(),''a'')';
+SET @decl_n = 1;
+SET @decl_n = NULL;
+SELECT REGEXP_LIKE(CAST(COALESCE(@decl_n,0) AS BINARY),'a');
+SELECT REGEXP_LIKE(CAST(IFNULL(@decl_n,0) AS BINARY),'a');
+SELECT REGEXP_LIKE(CAST(CASE WHEN TRUE THEN @decl_n ELSE 0 END AS BINARY),'a');
+PREPARE decl_numeric_null FROM 'SELECT REGEXP_LIKE(CAST(COALESCE(@decl_n,0) AS BINARY),''a'')';
+SET @decl_n = 'abc';
+SET @decl_n = NULL;
+SELECT REGEXP_LIKE(CAST(COALESCE(@decl_n,0) AS BINARY),'a');
+SELECT REGEXP_LIKE(CAST(CAST('abc' AS CHAR) AS BINARY),'a');
+SELECT REGEXP_LIKE(CAST(CAST('' AS CHAR) AS BINARY),'a');
+SELECT REGEXP_LIKE(CAST(CAST(@decl_s AS CHAR) AS BINARY),'a');
+SELECT REGEXP_LIKE(CAST(CAST(@decl_s AS CHAR(0)) AS BINARY),'a');
+PREPARE decl_char FROM 'SELECT REGEXP_LIKE(CAST(CAST(''abc'' AS CHAR) AS BINARY),''a'')';
+SELECT REGEXP_LIKE(CAST(CONCAT(NULL,'abc') AS BINARY),'a');
+SELECT REGEXP_LIKE(CAST(CONCAT_WS(',',NULL,'abc') AS BINARY),'a');
+PREPARE decl_concat FROM 'SELECT REGEXP_LIKE(CAST(CONCAT(NULL,''abc'') AS BINARY),''a'')';
+PREPARE decl_concat_ws FROM 'SELECT REGEXP_LIKE(CAST(CONCAT_WS('','',NULL,''abc'') AS BINARY),''a'')';
+CREATE DATABASE regexp_declaration_test;
+USE regexp_declaration_test;
+CREATE TABLE physical_domains(b BINARY(3), t TEXT);
+INSERT INTO physical_domains VALUES ('abc','abc');
+SELECT REGEXP_LIKE(MAX(b) OVER(),'a') FROM physical_domains;
+SELECT REGEXP_LIKE(MAX(CAST(t AS BINARY)) OVER(),'a') FROM physical_domains;
+SELECT REGEXP_LIKE(MAX(CAST(LEFT(t,3) AS BINARY)) OVER(),'a') FROM physical_domains;
+DROP TABLE physical_domains;
+DROP DATABASE regexp_declaration_test;

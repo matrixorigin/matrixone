@@ -5909,7 +5909,7 @@ func (b *baseBinder) annotateStringDomainSource(
 			return
 		}
 		var source *Expr
-		if b.ctx != nil && (col.RelPos == b.ctx.groupTag || col.RelPos == b.ctx.aggregateTag) {
+		if b.ctx != nil && (col.RelPos == b.ctx.groupTag || col.RelPos == b.ctx.aggregateTag || col.RelPos == b.ctx.windowTag) {
 			source = b.pendingColumnSource(col)
 		} else {
 			nodeID, ok := b.builder.tag2NodeID[col.RelPos]
@@ -5928,10 +5928,14 @@ func (b *baseBinder) annotateStringDomainSource(
 					outputs = node.AggList
 				}
 			}
-			if int(col.ColPos) >= len(outputs) {
-				return
+			if node.NodeType == plan.Node_WINDOW && node.WindowIdx == col.ColPos && len(node.WinSpecList) > 0 {
+				source = node.WinSpecList[0].GetW().GetWindowFunc()
+			} else {
+				if int(col.ColPos) >= len(outputs) {
+					return
+				}
+				source = outputs[col.ColPos]
 			}
-			source = outputs[col.ColPos]
 		}
 		if fn := source.GetF(); fn != nil && fn.Func != nil && len(fn.Args) == 1 &&
 			(strings.EqualFold(fn.Func.ObjName, "max") || strings.EqualFold(fn.Func.ObjName, "min")) {
@@ -6139,6 +6143,15 @@ func stringDomainSourceWitness(source *Expr, domains uint8) *Expr {
 		return DeepCopyExpr(source)
 	}
 	if domains == possibleStringDomainText|possibleStringDomainBinary {
+		if declared := regexpDeclaredStringType(source); declared.Oid == types.T_varbinary && regexpOwnsBinaryCast(source) {
+			// A proven binary CAST declaration is execution-invariant. Preserve
+			// its bound/ownership rather than replacing it with unbounded empty
+			// text/binary leaves. Execution still retains every real marker.
+			witness := makePlan2VarBinaryConstExprWithType("")
+			witness.Typ = makePlan2Type(&declared)
+			witness.Typ.Id = int32(types.T_binary)
+			return witness
+		}
 		if witness, ok := stringDomainSourceFunctionWitness(source); ok {
 			return witness
 		}

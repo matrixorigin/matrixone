@@ -94,8 +94,31 @@ func regexpDeclaredStringType(expr *Expr) types.Type {
 	}
 	if name == "cast" && len(fn.Args) > 0 && !isExplicitPreparedCast(expr) {
 		// Overload alignment is not a user-declared maximum length.
-		if source := parameters[0]; source.Oid.IsMySQLString() || regexpBareNull(fn.Args[0]) {
-			return source
+		// Fixed numeric/temporal formatting is bounded too. Widening it to
+		// the selected VARCHAR overload loses finite control-flow declarations
+		// when the other branch is a numeric-history NULL.
+		return parameters[0]
+	}
+	if name == "cast" && isExplicitPreparedCast(expr) && len(parameters) > 0 &&
+		typ.Oid == types.T_varchar && typ.Width == types.MaxVarcharLen {
+		// The parser represents omitted CHAR length with the generic VARCHAR
+		// envelope; CHAR(n) retains its CHAR target and explicit width. Infer
+		// only compatibility facts here, never persisted execution metadata.
+		bound, known := regexpDeclaredCharacterBound(parameters[0])
+		if regexpBareNull(fn.Args[0]) {
+			bound, known = 0, true
+		}
+		if known && bound <= uint64(types.MaxVarcharLen) {
+			return types.NewWithCharset(types.T_varchar, int32(bound), 0, typ.Charset)
+		}
+	}
+	if name == "concat" || name == "concat_ws" {
+		for i, arg := range fn.Args {
+			if regexpBareNull(arg) {
+				// The existing concat declaration owner needs a known zero
+				// contribution, not the generic unknown ANY/TEXT envelope.
+				parameters[i] = types.NewWithCharset(types.T_varchar, 0, 0, types.CharsetUTF8)
+			}
 		}
 	}
 	if indexes := controlFlowValueIndexes(name, len(fn.Args)); len(indexes) > 0 {
@@ -120,6 +143,20 @@ func regexpDeclaredStringType(expr *Expr) types.Type {
 				return regexpBinaryTypeForBound(maxBytes, true)
 			}
 			return types.NewWithCharset(types.T_binary, int32(maxBytes), 0, types.CharsetBinary)
+		}
+		if !unbounded {
+			var maxCharacters uint64
+			for _, index := range indexes {
+				if parameters[index].Oid == types.T_any {
+					continue
+				}
+				characters, known := regexpDeclaredCharacterBound(parameters[index])
+				if !known {
+					return typ
+				}
+				maxCharacters = max(maxCharacters, characters)
+			}
+			return types.NewWithCharset(types.T_varchar, int32(maxCharacters), 0, types.CharsetUTF8)
 		}
 	}
 	if (name == "max" || name == "min") && len(parameters) == 1 {
@@ -166,7 +203,10 @@ func regexpDeclaredStringType(expr *Expr) types.Type {
 		if len(fn.Args) == 2 {
 			count, signed, known := regexpConstantInteger(fn.Args[1])
 			if known && signed && int64(count) < 0 {
-				count = 0
+				if types.StaticStringDomain(typ) == types.StringDomainBinary {
+					return types.T_blob.ToType()
+				}
+				return types.T_text.ToType()
 			}
 			source := parameters[0]
 			if known && count == 0 {
@@ -193,6 +233,12 @@ func regexpDeclaredStringType(expr *Expr) types.Type {
 	if lengthIndex >= 0 {
 		if length, signed, known := regexpConstantInteger(fn.Args[lengthIndex]); known {
 			if signed && int64(length) < 0 {
+				if name == "lpad" || name == "rpad" {
+					if types.StaticStringDomain(typ) == types.StringDomainBinary {
+						return types.T_blob.ToType()
+					}
+					return types.T_text.ToType()
+				}
 				length = 0
 			}
 			if length <= uint64(types.MaxVarcharLen) {
@@ -346,6 +392,18 @@ func regexpExpressionByteBound(expr *Expr) (uint64, bool) {
 	if typ.Oid == types.T_any {
 		return 0, true
 	}
+	return function.StringResultByteBound(typ)
+}
+
+func regexpDeclaredCharacterBound(typ types.Type) (uint64, bool) {
+	if typ.Oid == types.T_char || typ.Oid == types.T_varchar {
+		return uint64(typ.Width), typ.Width >= 0
+	}
+	if typ.Oid == types.T_text {
+		return uint64(typ.Width), typ.Width > 0
+	}
+	// A formatted scalar or binary payload cannot produce more characters
+	// than its declared byte bound; unknown ANY/JSON remains unknown.
 	return function.StringResultByteBound(typ)
 }
 
