@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"math"
 	"math/rand"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -213,7 +214,24 @@ func TestVectorMatmulGPUPlainTypesMatchCPU(t *testing.T) {
 			for _, options := range vmMetricOptions {
 				cpu := vmGPURun(t, mp, vt, c.toCell, false, queries, options, topk, groups, ids, rows)
 				gpu := vmGPURun(t, mp, vt, c.toCell, true, queries, options, topk, groups, ids, rows)
-				require.Equal(t, cpu, gpu, "%s %s groups %d", options, c.oid, groups)
+				if !strings.Contains(options, "cosine") {
+					require.Equal(t, cpu, gpu, "%s %s groups %d", options, c.oid, groups)
+					continue
+				}
+				// the CPU computes 1 - cos in float64 as cosine_distance (2.2e-16 for parallel
+				// vectors), the GPU from the fp32 GEMM: the same rows in the same order
+				require.Len(t, gpu, len(cpu))
+				for g := range cpu {
+					want, got := vmGPUParse(t, cpu[g]), vmGPUParse(t, gpu[g])
+					require.Len(t, got, len(want))
+					for q := range want {
+						require.Len(t, got[q], len(want[q]))
+						for i := range want[q] {
+							require.Equal(t, want[q][i].id, got[q][i].id, "%s %s groups %d", options, c.oid, groups)
+							require.InDelta(t, want[q][i].score, got[q][i].score, 1e-9)
+						}
+					}
+				}
 			}
 		}
 	}

@@ -17,6 +17,7 @@ package aggexec
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"math"
 	"math/rand"
 	"sort"
@@ -1197,5 +1198,115 @@ func TestVectorMatmulVecBlockQueries(t *testing.T) {
 	} {
 		_, err := parseVectorMatmulConfig(tc.raw, tc.vt)
 		require.ErrorContains(t, err, tc.want, name)
+	}
+}
+
+// TestVectorMatmulCPUDistanceAtExtremeMagnitudes scores, on the CPU, a query of magnitude m
+// (elements m times {1, 1.5, 2}) against itself, twice itself and minus itself, for each
+// column type holding m, at dimensions around the 16-element kernel unit. The distances are
+// those of cosine_distance and l2_distance_sq on the stored values: cosine 0, 0 and 2 and
+// squared L2 0, |q|^2 and 4|q|^2, or an overflow where the squared distance exceeds float32.
+// vecf32, vecf8 and vecf4 take magnitudes whose float32 products overflow or underflow.
+func TestVectorMatmulCPUDistanceAtExtremeMagnitudes(t *testing.T) {
+	type column struct {
+		vt   func(dim int) types.Type
+		cell func(v []float32) []byte
+		mags []float64
+	}
+	block := func(f types.BlockScaledFormat) func(v []float32) []byte {
+		return func(v []float32) []byte {
+			c, err := types.AppendBlockScaled(nil, f, v)
+			require.NoError(t, err)
+			return c
+		}
+	}
+	plain := map[types.T]func(v []float32) []byte{}
+	for _, c := range vmPlainCases() {
+		plain[c.oid] = c.toCell
+	}
+	columns := map[string]column{
+		"vecf32": {func(d int) types.Type { return types.New(types.T_array_float32, int32(d), 0) }, plain[types.T_array_float32], []float64{1e30, 1e-30, 1, math.Ldexp(1, -140)}},
+		// bf16 and f16 cosine accumulate in float32 (the narrow kernels' contract): magnitudes
+		// whose float32 lanes stay in range
+		"vecbf16": {func(d int) types.Type { return types.New(types.T_array_bf16, int32(d), 0) }, plain[types.T_array_bf16], []float64{1, 1e-3, 1e3}},
+		"vecf16":  {func(d int) types.Type { return types.New(types.T_array_float16, int32(d), 0) }, plain[types.T_array_float16], []float64{1, 1e-3, 1e3}},
+		"vecf8":   {func(d int) types.Type { return types.New(types.T_array_float8, int32(d), 0) }, block(types.BlockScaledMXFP8), []float64{1e30, 1e-30, 1}},
+		"vecf4":   {func(d int) types.Type { return types.New(types.T_array_float4, int32(d), 0) }, block(types.BlockScaledNVFP4), []float64{1e30, 1e-30, 1}},
+	}
+	pattern := []float32{1, 1.5, 2}
+	for name, col := range columns {
+		for _, dim := range []int{15, 16, 17, 33} {
+			for _, m := range col.mags {
+				vec := func(f float64) []float32 {
+					v := make([]float32, dim)
+					for k := range v {
+						v[k] = float32(f * m * float64(pattern[k%3]))
+					}
+					return v
+				}
+				q := vec(1)
+				rows := [][]byte{col.cell(vec(1)), col.cell(vec(2)), col.cell(vec(-1))}
+				qj, _ := json.Marshal([][]float32{q})
+				for _, options := range []string{`{"metric":"cosine"}`, `{"metric":"l2sq"}`} {
+					cfg, err := parseVectorMatmulConfig(EncodeVectorMatmulConfig(1, string(qj), options, false), col.vt(dim))
+					require.NoError(t, err)
+					// the stored query and rows, decoded, for the reference
+					stored := func(cell []byte) []float64 {
+						var x []float32
+						if oid := col.vt(dim).Oid; oid.IsBlockScaledArray() {
+							x, err = types.BlockScaledToFloat32(cell)
+							require.NoError(t, err)
+						} else {
+							row := make([]float32, dim)
+							for k := range row {
+								switch oid {
+								case types.T_array_float32:
+									row[k] = types.BytesToArray[float32](cell)[k]
+								case types.T_array_bf16:
+									row[k] = types.BytesToArray[types.BF16](cell)[k].ToFloat32()
+								default:
+									row[k] = types.BytesToArray[types.Float16](cell)[k].ToFloat32()
+								}
+							}
+							x = row
+						}
+						out := make([]float64, len(x))
+						for k, v := range x {
+							out[k] = float64(v)
+						}
+						return out
+					}
+					qv := stored(cfg.queryCells)
+					for r, cell := range rows {
+						msg := fmt.Sprintf("%s dim %d m %g %s row %d", name, dim, m, options, r)
+						xv := stored(cell)
+						var dot, nx, nq, l2 float64
+						for k := range xv {
+							dot += xv[k] * qv[k]
+							nx += xv[k] * xv[k]
+							nq += qv[k] * qv[k]
+							l2 += (xv[k] - qv[k]) * (xv[k] - qv[k])
+						}
+						out := make([]float64, 1)
+						err := cfg.score(cell, out)
+						if strings.Contains(options, "cosine") {
+							require.NoError(t, err, msg)
+							want := 1.0
+							if nx > 0 && nq > 0 {
+								want = 1 - dot/math.Sqrt(nx*nq)
+							}
+							require.InDelta(t, want, -out[0], 1e-6, msg)
+							continue
+						}
+						if l2 > math.MaxFloat32 {
+							require.True(t, err != nil || math.IsInf(out[0], -1), msg)
+							continue
+						}
+						require.NoError(t, err, msg)
+						require.InDelta(t, l2, -out[0], 1e-6*(nx+nq)+1e-45, msg)
+					}
+				}
+			}
+		}
 	}
 }

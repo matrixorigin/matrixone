@@ -135,4 +135,20 @@ prepare pvq from 'select vector_matmul(1, id, v, ?, ''{"query_format":"vecblock"
 execute pvq using @qc;
 deallocate prepare pvq;
 
+-- cosine and l2sq equal cosine_distance and l2_distance_sq at magnitudes whose float32
+-- products overflow (1e30) or underflow (1e-30): a row equal to the query is at distance 0
+create table mg (id int, f vecf32(16), e vecf8(16), b vecf4(16));
+insert into mg values (0, '[1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30]', '[1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30]', '[1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30]');
+insert into mg values (1, '[1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30]', '[1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30]', '[1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30]');
+insert into mg values (2, '[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]', '[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]', '[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]');
+select vector_matmul(1, id, f, '[[1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30]]', '{"metric":"cosine"}'), vector_matmul(1, id, f, '[[1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30]]', '{"metric":"l2sq"}') from mg where id = 0;
+select vector_matmul(1, id, e, '[[1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30]]', '{"metric":"cosine"}'), vector_matmul(1, id, e, '[[1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30]]', '{"metric":"l2sq"}') from mg where id = 0;
+select vector_matmul(1, id, b, '[[1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30]]', '{"metric":"cosine"}'), vector_matmul(1, id, b, '[[1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30]]', '{"metric":"l2sq"}') from mg where id = 0;
+select vector_matmul(1, id, f, '[[1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30]]', '{"metric":"cosine"}'), vector_matmul(1, id, f, '[[1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30]]', '{"metric":"l2sq"}') from mg where id = 1;
+select vector_matmul(1, id, e, '[[1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30]]', '{"metric":"cosine"}'), vector_matmul(1, id, e, '[[1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30]]', '{"metric":"l2sq"}') from mg where id = 1;
+select vector_matmul(1, id, b, '[[1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30]]', '{"metric":"cosine"}'), vector_matmul(1, id, b, '[[1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30]]', '{"metric":"l2sq"}') from mg where id = 1;
+select vector_matmul(1, id, f, '[[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]]', '{"metric":"cosine"}'), vector_matmul(1, id, f, '[[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]]', '{"metric":"l2sq"}') from mg where id = 2;
+select vector_matmul(1, id, e, '[[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]]', '{"metric":"cosine"}'), vector_matmul(1, id, e, '[[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]]', '{"metric":"l2sq"}') from mg where id = 2;
+select vector_matmul(1, id, b, '[[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]]', '{"metric":"cosine"}'), vector_matmul(1, id, b, '[[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]]', '{"metric":"l2sq"}') from mg where id = 2;
+
 drop database vector_matmul_db;

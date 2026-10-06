@@ -217,23 +217,6 @@ func parseVectorMatmulOptions(options string) (metric int, vecblockQueries bool,
 	return metric, vecblockQueries, nil
 }
 
-// vectorMatmulRank is the rank score, the negated distance, of a dot product and the
-// squared norms of the row and the query (used by cosine and l2sq); a zero vector has
-// cosine distance 1. The GPU fix-up kernel computes the same.
-func vectorMatmulRank(metric int, dot, rowNorm, queryNorm float64) float64 {
-	switch metric {
-	case vectorMatmulCosine:
-		if den := math.Sqrt(rowNorm * queryNorm); den > 0 {
-			return -(1 - dot/den)
-		}
-		return -1
-	case vectorMatmulL2sq:
-		return -math.Max(0, rowNorm+queryNorm-2*dot)
-	default:
-		return dot
-	}
-}
-
 // vectorMatmulConfigs shares a parsed configuration between the executors holding the same
 // configuration bytes for the same column type: a query's pipeline executors and the
 // executors that receive its partial states for the merge. An entry lives while an executor
@@ -475,16 +458,14 @@ func (cfg *vectorMatmulConfig) setBlockScaledCells(oid types.T, dim int, cells [
 			return err
 		}
 	}
-	// the inner product distance is -dot; an overflow NaN ranks last
-	queryNorms := make([]float64, len(ops))
-	if cfg.metric != vectorMatmulInnerProduct {
-		for i := range ops {
-			dist, err := metric.VecBlockInnerProduct(&ops[i], &ops[i])
-			if err != nil {
-				return err
-			}
-			queryNorms[i] = -dist
-		}
+	// the distance as inner_product, cosine_distance and l2_distance_sq compute it; an
+	// inner product overflow NaN ranks last
+	distance := metric.VecBlockInnerProduct
+	switch cfg.metric {
+	case vectorMatmulCosine:
+		distance = metric.VecBlockCosineDistance
+	case vectorMatmulL2sq:
+		distance = metric.VecBlockL2DistanceSq
 	}
 	cfg.score = func(cell []byte, out []float64) error {
 		c, err := types.ParseBlockScaledCell(cell)
@@ -492,20 +473,12 @@ func (cfg *vectorMatmulConfig) setBlockScaledCells(oid types.T, dim int, cells [
 			return err
 		}
 		row := metric.VecBlockOperand{Cell: c}
-		var rowNorm float64
-		if cfg.metric != vectorMatmulInnerProduct {
-			dist, err := metric.VecBlockInnerProduct(&row, &row)
-			if err != nil {
-				return err
-			}
-			rowNorm = -dist
-		}
 		for j := range ops {
-			dist, err := metric.VecBlockInnerProduct(&row, &ops[j])
+			dist, err := distance(&row, &ops[j])
 			if err != nil {
 				return err
 			}
-			out[j] = vectorMatmulRank(cfg.metric, -dist, rowNorm, queryNorms[j])
+			out[j] = -dist
 		}
 		return nil
 	}
@@ -515,7 +488,15 @@ func (cfg *vectorMatmulConfig) setBlockScaledCells(oid types.T, dim int, cells [
 // setVectorMatmulPlain converts the queries to the element type T and scores cells with the
 // inner product kernel of T. conv reports whether a value is representable.
 func setVectorMatmulPlain[T types.ArrayElement](cfg *vectorMatmulConfig, engineFormat int, queries [][]float32, conv func(float32) (T, bool)) error {
-	fn, err := metric.ResolveDistanceFn[T, float64](metric.Metric_InnerProduct)
+	// the distance kernel as inner_product, cosine_distance and l2_distance_sq resolve it
+	m := metric.Metric_InnerProduct
+	switch cfg.metric {
+	case vectorMatmulCosine:
+		m = metric.Metric_CosineDistance
+	case vectorMatmulL2sq:
+		m = metric.Metric_L2sqDistance
+	}
+	fn, err := metric.ResolveDistanceFn[T, float64](m)
 	if err != nil {
 		return err
 	}
@@ -532,36 +513,17 @@ func setVectorMatmulPlain[T types.ArrayElement](cfg *vectorMatmulConfig, engineF
 	}
 	cfg.engineFormat = engineFormat
 	cfg.cellBytes = len(cfg.queryCells) / len(queries)
-	// the inner product distance is -dot
-	queryNorms := make([]float64, len(typed))
-	if cfg.metric != vectorMatmulInnerProduct {
-		for i, q := range typed {
-			dist, err := fn(q, q)
-			if err != nil {
-				return err
-			}
-			queryNorms[i] = -dist
-		}
-	}
 	cfg.score = func(cell []byte, out []float64) error {
 		if len(cell) != cfg.cellBytes {
 			return moerr.NewInvalidInputNoCtxf("vector_matmul: cell is %d bytes, want %d", len(cell), cfg.cellBytes)
 		}
 		row := types.BytesToArray[T](cell)
-		var rowNorm float64
-		if cfg.metric != vectorMatmulInnerProduct {
-			dist, err := fn(row, row)
-			if err != nil {
-				return err
-			}
-			rowNorm = -dist
-		}
 		for j, q := range typed {
 			dist, err := fn(row, q)
 			if err != nil {
 				return err
 			}
-			out[j] = vectorMatmulRank(cfg.metric, -dist, rowNorm, queryNorms[j])
+			out[j] = -dist
 		}
 		return nil
 	}

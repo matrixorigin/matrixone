@@ -175,7 +175,7 @@ set @qc2 = (select concat(vecblock_binary(v), (select vecblock_binary(v) from vq
 set @qj = (select concat('[', group_concat(vecblock_json(v) order by id), ']') from vq where id in (1, 2));
 select vector_matmul(2, id, v, @qc, '{"query_format":"vecblock","metric":"l2sq"}') from vq;
 ➤ vector_matmul(2, id, v, @qc, {"query_format":"vecblock","metric":"l2sq"})[-1,2147483647,0]  𝄀
-[[["1", 0], ["3", 0.5857187]]]
+[[["1", 0], ["3", 0.5857208]]]
 select vector_matmul(1, id, v, @qc2, '{"query_format":"vecblock","metric":"l2sq"}') from vq;
 ➤ vector_matmul(1, id, v, @qc2, {"query_format":"vecblock","metric":"l2sq"})[-1,2147483647,0]  𝄀
 [[["1", 0]], [["2", 0]]]
@@ -184,7 +184,7 @@ select vector_matmul(1, id, v, @qj, '{"query_format":"vecblock","metric":"l2sq"}
 [[["1", 0]], [["2", 0]]]
 select vector_matmul(2, id, v, '[[8.764914,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,6.2606535]]', '{"metric":"l2sq"}') from vq;
 ➤ vector_matmul(2, id, v, [[8.764914,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,6.2606535]], {"metric":"l2sq"})[-1,2147483647,0]  𝄀
-[[["1", 0.3919571], ["3", 0.94629604]]]
+[[["1", 0.3919571], ["3", 0.9462981]]]
 select vector_matmul(1, id, v, @qc, '{"query_format":"float32"}') from vq;
 invalid input: vector_matmul: binary queries are 23 bytes, want a non-zero multiple of 68 (float32 x dimension 17)
 select vector_matmul(1, id, w, @qc, '{"query_format":"vecblock"}') from vq;
@@ -198,4 +198,35 @@ execute pvq using @qc;
 ➤ vector_matmul(1, vq.id, vq.v, ?, {"query_format":"vecblock","metric":"l2sq"})[-1,2147483647,0]  𝄀
 [[["1", 0]]]
 deallocate prepare pvq;
+create table mg (id int, f vecf32(16), e vecf8(16), b vecf4(16));
+insert into mg values (0, '[1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30]', '[1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30]', '[1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30]');
+insert into mg values (1, '[1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30]', '[1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30]', '[1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30]');
+insert into mg values (2, '[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]', '[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]', '[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]');
+select vector_matmul(1, id, f, '[[1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30]]', '{"metric":"cosine"}'), vector_matmul(1, id, f, '[[1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30]]', '{"metric":"l2sq"}') from mg where id = 0;
+➤ vector_matmul(1, id, f, [[1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30]], {"metric":"cosine"})[-1,2147483647,0]  ¦  vector_matmul(1, id, f, [[1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30]], {"metric":"l2sq"})[-1,2147483647,0]  𝄀
+[[["0", 0]]]  ¦  [[["0", 0]]]
+select vector_matmul(1, id, e, '[[1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30]]', '{"metric":"cosine"}'), vector_matmul(1, id, e, '[[1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30]]', '{"metric":"l2sq"}') from mg where id = 0;
+➤ vector_matmul(1, id, e, [[1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30]], {"metric":"cosine"})[-1,2147483647,0]  ¦  vector_matmul(1, id, e, [[1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30]], {"metric":"l2sq"})[-1,2147483647,0]  𝄀
+[[["0", 0]]]  ¦  [[["0", 0]]]
+select vector_matmul(1, id, b, '[[1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30]]', '{"metric":"cosine"}'), vector_matmul(1, id, b, '[[1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30]]', '{"metric":"l2sq"}') from mg where id = 0;
+➤ vector_matmul(1, id, b, [[1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30]], {"metric":"cosine"})[-1,2147483647,0]  ¦  vector_matmul(1, id, b, [[1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30]], {"metric":"l2sq"})[-1,2147483647,0]  𝄀
+[[["0", 0]]]  ¦  [[["0", 0]]]
+select vector_matmul(1, id, f, '[[1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30]]', '{"metric":"cosine"}'), vector_matmul(1, id, f, '[[1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30]]', '{"metric":"l2sq"}') from mg where id = 1;
+➤ vector_matmul(1, id, f, [[1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30]], {"metric":"cosine"})[-1,2147483647,0]  ¦  vector_matmul(1, id, f, [[1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30]], {"metric":"l2sq"})[-1,2147483647,0]  𝄀
+[[["1", 0]]]  ¦  [[["1", 0]]]
+select vector_matmul(1, id, e, '[[1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30]]', '{"metric":"cosine"}'), vector_matmul(1, id, e, '[[1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30]]', '{"metric":"l2sq"}') from mg where id = 1;
+➤ vector_matmul(1, id, e, [[1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30]], {"metric":"cosine"})[-1,2147483647,0]  ¦  vector_matmul(1, id, e, [[1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30]], {"metric":"l2sq"})[-1,2147483647,0]  𝄀
+[[["1", 0]]]  ¦  [[["1", 0]]]
+select vector_matmul(1, id, b, '[[1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30]]', '{"metric":"cosine"}'), vector_matmul(1, id, b, '[[1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30]]', '{"metric":"l2sq"}') from mg where id = 1;
+➤ vector_matmul(1, id, b, [[1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30]], {"metric":"cosine"})[-1,2147483647,0]  ¦  vector_matmul(1, id, b, [[1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30]], {"metric":"l2sq"})[-1,2147483647,0]  𝄀
+[[["1", 0]]]  ¦  [[["1", 0]]]
+select vector_matmul(1, id, f, '[[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]]', '{"metric":"cosine"}'), vector_matmul(1, id, f, '[[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]]', '{"metric":"l2sq"}') from mg where id = 2;
+➤ vector_matmul(1, id, f, [[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]], {"metric":"cosine"})[-1,2147483647,0]  ¦  vector_matmul(1, id, f, [[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]], {"metric":"l2sq"})[-1,2147483647,0]  𝄀
+[[["2", 0]]]  ¦  [[["2", 0]]]
+select vector_matmul(1, id, e, '[[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]]', '{"metric":"cosine"}'), vector_matmul(1, id, e, '[[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]]', '{"metric":"l2sq"}') from mg where id = 2;
+➤ vector_matmul(1, id, e, [[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]], {"metric":"cosine"})[-1,2147483647,0]  ¦  vector_matmul(1, id, e, [[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]], {"metric":"l2sq"})[-1,2147483647,0]  𝄀
+[[["2", 0]]]  ¦  [[["2", 0]]]
+select vector_matmul(1, id, b, '[[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]]', '{"metric":"cosine"}'), vector_matmul(1, id, b, '[[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]]', '{"metric":"l2sq"}') from mg where id = 2;
+➤ vector_matmul(1, id, b, [[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]], {"metric":"cosine"})[-1,2147483647,0]  ¦  vector_matmul(1, id, b, [[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]], {"metric":"l2sq"})[-1,2147483647,0]  𝄀
+[[["2", 0]]]  ¦  [[["2", 0]]]
 drop database vector_matmul_db;
