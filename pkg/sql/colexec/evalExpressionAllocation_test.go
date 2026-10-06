@@ -15,6 +15,7 @@
 package colexec
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -39,7 +40,7 @@ func TestAccountedExpressionTreeCoversNestedAndSelectedResults(t *testing.T) {
 	proc := testutil.NewProcess(t, testutil.WithMPool(pool), testutil.WithFileService(nil))
 	registry, err := mpool.NewAllocationAccountRegistry(1, 64)
 	require.NoError(t, err)
-	account, err := registry.Open(1 << 20)
+	account, err := registry.Open(4 << 10)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		assert.Zero(t, account.Snapshot().Used)
@@ -96,6 +97,22 @@ func TestAccountedExpressionTreeCoversNestedAndSelectedResults(t *testing.T) {
 			}
 		}
 	}
+	// Grow the selected path beyond its account budget, then retry the same
+	// executor with a small partial batch. Admission failure must not poison it.
+	large := batch.NewWithSize(1)
+	defer large.Clean(proc.Mp())
+	large.Vecs[0] = vector.NewVec(typ)
+	for range 4 {
+		require.NoError(t, vector.AppendBytes(large.Vecs[0], []byte(strings.Repeat("A", 2048)), false, proc.Mp()))
+	}
+	large.SetRowCount(4)
+	_, err = executor.Eval(proc, []*batch.Batch{large}, []bool{true, false, true, false})
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	require.LessOrEqual(t, account.Snapshot().Used, account.Snapshot().Limit)
+	result, err = executor.Eval(proc, []*batch.Batch{input}, []bool{true, false, true, false})
+	require.NoError(t, err)
+	require.Equal(t, []string{"aaAA-", "", "ccCC-", ""}, vector.InefficientMustStrCol(result))
+
 	assertFunctionStorage(root)
 	assertFunctionStorage(nested)
 	fixed := root.parameterExecutor[2].(*FixedVectorExpressionExecutor)
@@ -153,6 +170,26 @@ func TestAccountedExpressionTreeCoversNestedAndSelectedResults(t *testing.T) {
 	executor.Free()
 	executor = nil
 	require.Zero(t, account.Snapshot().Used)
+	// The valid first literal allocates, but a later invalid literal must
+	// roll the entire partially constructed tree back to its entry state.
+	func() {
+		first, err := NewExpressionExecutorWithAllocation(proc, literal, selection)
+		require.NoError(t, err)
+		defer first.Free()
+		require.Positive(t, account.Snapshot().Used)
+	}()
+	invalid := &plan.Expr{Typ: typ.PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+		Value: &plan.Literal_Sval{Sval: "invalid source"}, StringSource: 257,
+	}}}
+	partial, err := NewExpressionExecutorWithAllocation(proc,
+		bindTestFunction(t, proc, "concat", literal, invalid), selection)
+	if partial != nil {
+		t.Cleanup(partial.Free)
+	}
+	require.ErrorContains(t, err, "invalid literal string source")
+	require.Nil(t, partial)
+	require.Zero(t, account.Snapshot().Used, "failed later child must release the first literal")
+	require.Zero(t, registry.LiveAllocationMetadata())
 }
 
 func TestAccountedFixedCrossDomainConstBroadcastUsesPhysicalMetadata(t *testing.T) {

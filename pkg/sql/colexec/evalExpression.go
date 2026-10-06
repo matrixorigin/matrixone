@@ -1637,10 +1637,10 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 			} else {
 				selected.Reset(*parameter.GetType())
 			}
-			selected.SetIsBin(parameter.GetIsBin())
 			if err := selected.Union(parameter, expr.selectedRows, proc.Mp()); err != nil {
 				return nil, err
 			}
+			parameter.CopyExpressionMetadataTo(selected)
 			expr.selectedParameterResults[i] = selected
 			continue
 		}
@@ -1677,17 +1677,13 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 
 	selectedResult := expr.selectedResult.GetResultVector()
 	runtimeType := *selectedResult.GetType()
-	runtimeIsBin := selectedResult.GetIsBin()
 	runtimePrepareParamKind := selectedResult.GetPrepareParamKind()
-	runtimePreparedJSONComparisonParam := selectedResult.IsPreparedJSONComparisonParam()
-	runtimePrepareParamType := selectedResult.GetPrepareParamType()
 	if expr.fid == function.IFF || expr.fid == function.CASE || expr.fid == function.COALESCE {
 		runtimePrepareParamKind = expr.getFlowControlPrepareParamKind()
 	}
 
 	result := expr.resultVector.GetResultVector()
 	result.SetType(runtimeType)
-	result.SetIsBin(runtimeIsBin)
 	result.ResetWithSameType()
 	if selectedCount > 0 && expr.hasScalarIntegerArgumentSource() {
 		// The compact result was evaluated only for selected rows. A scalar
@@ -1701,6 +1697,7 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 		result.ToConst()
 		result.SetLength(rowCount)
 		result.SetPrepareParamKind(runtimePrepareParamKind)
+		selectedResult.CopyExpressionMetadataTo(result)
 		return result, nil
 	}
 	if expr.selectedNullResult == nil {
@@ -1715,7 +1712,7 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 		expr.selectedNullResult.SetType(runtimeType)
 		expr.selectedNullResult.SetLength(1)
 	}
-	expr.selectedNullResult.SetIsBin(runtimeIsBin)
+	expr.selectedNullResult.SetIsBin(selectedResult.GetIsBin())
 	selectedRow := int64(0)
 	for row := 0; row < rowCount; row++ {
 		if selectList[row] {
@@ -1738,11 +1735,8 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 		if len(result.GetPrepareParamKinds()) == 0 {
 			result.SetPrepareParamKind(runtimePrepareParamKind)
 		}
-		if runtimePreparedJSONComparisonParam {
-			result.SetPrepareParamType(runtimePrepareParamType)
-			result.SetPreparedJSONComparisonParam()
-		}
 	}
+	selectedResult.CopyExpressionMetadataTo(result)
 	return result, nil
 }
 
