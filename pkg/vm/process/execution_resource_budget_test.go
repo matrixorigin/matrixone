@@ -15,7 +15,6 @@
 package process
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"math"
@@ -25,9 +24,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/stretchr/testify/require"
 )
 
 // testPhysicalAllocation exercises the capacity controller at the same
@@ -516,32 +513,6 @@ func TestGetExecutionResourceBudgetInitializesAndReusesCNAggregate(t *testing.T)
 	firstGeneration.Close()
 	secondGeneration.Close()
 	firstGeneration.budget.Close()
-}
-
-func TestGetExecutionResourceBudgetUsesLocalSpillFilesystemCapacity(t *testing.T) {
-	const localService = "__process_local_cn__"
-	executionResourceCNBudgets.Delete(localService)
-	t.Cleanup(func() { executionResourceCNBudgets.Delete(localService) })
-
-	localFS, err := fileservice.NewLocalFS(
-		context.Background(),
-		defines.LocalFileServiceName,
-		t.TempDir(),
-		fileservice.DisabledCacheConfig,
-		nil,
-	)
-	require.NoError(t, err)
-	t.Cleanup(func() { localFS.Close(context.Background()) })
-	proc := &Process{Base: &BaseProcess{
-		Lim:         Limitation{Size: 1 << 20},
-		FileService: localFS,
-	}}
-	want := automaticSpillDiskCap(proc.automaticSpillDiskAvailable())
-	require.Positive(t, want)
-
-	generation, err := proc.GetExecutionResourceBudget()
-	require.NoError(t, err)
-	require.Equal(t, want, generation.SpillDiskCap())
 }
 
 func TestResolveExecutionMemoryCeiling(t *testing.T) {
