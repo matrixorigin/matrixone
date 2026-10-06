@@ -492,6 +492,7 @@ func (c *Compile) clear() {
 	c.MessageBoard = c.MessageBoard.Reset()
 	c.fuzzys = c.fuzzys[:0]
 	c.scopes = c.scopes[:0]
+	c.auxiliaryProductScopes = nil
 	c.pn = nil
 	c.fill = nil
 	c.preparedParamValues = nil
@@ -703,14 +704,17 @@ func (c *Compile) isRetryErr(err error) bool {
 }
 
 type scopeRunResult struct {
-	err error
+	err   error
+	scope *Scope
 }
 
 func newScopeRunResult(err error, scope *Scope) scopeRunResult {
 	if scope == nil {
 		return newScopeRunResultForProcess(err, nil)
 	}
-	return newScopeRunResultForProcess(err, scope.Proc)
+	result := newScopeRunResultForProcess(err, scope.Proc)
+	result.scope = scope
+	return result
 }
 
 func newScopeRunResultForProcess(err error, proc *process.Process) scopeRunResult {
@@ -818,6 +822,17 @@ func (c *Compile) preferPrimaryScopeResult(current, candidate scopeRunResult) sc
 	}
 	if candidate.err == nil {
 		return current
+	}
+	// A shared producer job can report its original failure after a probe has
+	// already observed cancellation through its dependency. Keep the originating
+	// failure, while explicit query cancellation remains authoritative.
+	_, currentProducer := c.auxiliaryProductScopes[current.scope]
+	_, candidateProducer := c.auxiliaryProductScopes[candidate.scope]
+	if (currentProducer || candidateProducer) &&
+		process.IsPipelineCancellationError(process.UnwrapPipelineFailure(current.err)) &&
+		!process.IsPipelineCancellationError(process.UnwrapPipelineFailure(candidate.err)) &&
+		c.proc.GetQueryContextError() == nil {
+		return candidate
 	}
 	if c.isRetryErr(candidate.err) {
 		return candidate
@@ -1106,8 +1121,24 @@ func (c *Compile) runOnce() (err error) {
 		}
 
 		var resultToThrowOut scopeRunResult
+		primaryRemaining := 0
+		for _, root := range c.scopes {
+			if !c.auxiliaryProductScopes[root] {
+				primaryRemaining++
+			}
+		}
 		for i := 0; i < cap(errC); i++ {
 			result := <-errC
+			if !c.auxiliaryProductScopes[result.scope] {
+				primaryRemaining--
+				if primaryRemaining == 0 {
+					for _, root := range c.scopes {
+						if c.auxiliaryProductScopes[root] {
+							root.Proc.Cancel(process.ErrPipelineStopped)
+						}
+					}
+				}
+			}
 			e := result.err
 
 			// cancel this query if the first error occurs.
@@ -1402,6 +1433,7 @@ func (c *Compile) shouldPrePipelineLockTable(target *plan.LockTarget) bool {
 func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	var err error
 	c.foundRowsOwnerNode = c.selectFoundRowsOwnerNode(qry)
+	c.auxiliaryProductScopes = nil
 	c.compiledLocalRuntimeFilterNodes = nil
 	defer func() {
 		c.compiledLocalRuntimeFilterNodes = nil
@@ -1466,16 +1498,13 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	}()
 	for i := len(qry.Steps) - 1; i >= firstStep; i-- {
 		var scopes []*Scope
-		scopes, err = c.compilePlanScope(int32(i), qry.Steps[i], qry.Nodes)
-		if err != nil {
-			return nil, err
-		}
-		scopes, err = c.compileSteps(qry, scopes, qry.Steps[i])
+		scopes, err = c.compileProductRegion(int32(i), qry.Steps[i], qry.Nodes, false, qry)
 		if err != nil {
 			return nil, err
 		}
 		steps = append(steps, scopes...)
 	}
+	c.markProductProducerRegions(steps)
 	if err = validateSequenceScopePlacement(qry, toEngineNode(c.currentCNWorker()), steps); err != nil {
 		return nil, err
 	}
@@ -2097,7 +2126,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		}
 		branches := make([][]*Scope, len(node.Children))
 		for i, childID := range node.Children {
-			branches[i], err = c.compilePlanScope(step, childID, nodes)
+			branches[i], err = c.compileProductRegion(step, childID, nodes, false, nil)
 			if err != nil {
 				for j := 0; j < i; j++ {
 					ReleaseScopes(branches[j])
@@ -2112,11 +2141,19 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		if !lazy && c.pn != nil {
 			lazy = orderedScalarUnionAllResult(step, curNodeIdx, c.pn.GetQuery())
 		}
-		left, err = c.compilePlanScopeWithUnionAllDemand(step, node.Children[0], nodes, lazy)
+		if lazy {
+			left, err = c.compileProductRegion(step, node.Children[0], nodes, lazy, nil)
+		} else {
+			left, err = c.compilePlanScopeWithUnionAllDemand(step, node.Children[0], nodes, lazy)
+		}
 		if err != nil {
 			return nil, err
 		}
-		right, err = c.compilePlanScopeWithUnionAllDemand(step, node.Children[1], nodes, lazy)
+		if lazy {
+			right, err = c.compileProductRegion(step, node.Children[1], nodes, lazy, nil)
+		} else {
+			right, err = c.compilePlanScopeWithUnionAllDemand(step, node.Children[1], nodes, lazy)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -7153,55 +7190,138 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 	return rs
 }
 
-// compileSharedBroadcastProduct keeps broadcast producers out of individual
-// probe trees. A probe or its ancestor can stop without calling Product; only
-// the receiver common to all probes may retire their shared producers.
+// pendingProductBuild owns detached producers only during compilation.
+// Probe templates are non-owning references used to finalize worker counts.
+type pendingProductBuild struct {
+	source *Scope
+	builds []*Scope
+	groups [][]*Scope
+}
+
+// Keep the data plane parallel; choose producer ownership only after downstream
+// Group, Limit, Sort and Join placement is complete.
 func (c *Compile) compileSharedBroadcastProduct(node *plan.Node, probes []*Scope, source *Scope) []*Scope {
 	groups := c.groupBroadcastProbeScopesByCN(probes, c.queryWorkerStageNodes())
-	outputs := make([]*Scope, 0, len(groups))
-	builds := make([]*Scope, 0, len(groups))
+	pending := &pendingProductBuild{source: source, groups: groups}
+	c.pendingProductBuilds = append(c.pendingProductBuilds, pending)
 	for _, group := range groups {
-		var workers int32
-		for _, probe := range group {
-			workers += int32(probe.NodeInfo.Mcpu)
-		}
 		build := newScope(Remote)
 		build.NodeInfo = scopeNodeWithMcpu(group[0].NodeInfo, 1)
 		build.Proc = c.proc.NewNoContextChildProc(1)
 		mergeOp := merge.NewArgument()
 		mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
 		build.setRootOperator(mergeOp)
-		build.setRootOperator(constructJoinBuildOperator(c, group[0].RootOp, workers, node.RuntimeFilterBuildList))
-		builds = append(builds, build)
-		if len(group) == 1 {
-			outputs = append(outputs, group[0])
-		} else {
-			outputs = append(outputs, c.newMergeScopeByCN(group, group[0].NodeInfo))
-		}
+		build.setRootOperator(constructJoinBuildOperator(c, group[0].RootOp, 0, node.RuntimeFilterBuildList))
+		pending.builds = append(pending.builds, build)
 	}
-	var owner *Scope
-	if len(outputs) == 1 && sameExecutionNode(outputs[0].NodeInfo, source.NodeInfo) {
-		owner = outputs[0]
-		// These producers have no output edge: the merge counts probe EOF only.
-		owner.PreScopes = append(owner.PreScopes, builds...)
-	} else {
-		// Separate remote builds need terminal-only connectors for ordinary
-		// RemoteRun cleanup. Exclude those edges from the result merge so EOF
-		// cancels all producers before MergeRun joins their completion.
-		inputs := append(outputs[:len(outputs):len(outputs)], builds...)
-		owner = c.newMergeScope(inputs)
-		owner.RootOp.(*merge.Merge).WithPartial(0, int32(len(outputs)))
-		if !sameExecutionNode(owner.NodeInfo, source.NodeInfo) {
-			// Keep the scan remote; execute dispatch at its actual common owner.
-			source = c.newMergeScope([]*Scope{source})
-		}
+	// Dispatch is wired now, while the Product still owns the join-node analysis.
+	// Run dispatch locally so independent remote build/probe fragments share only
+	// the existing statement MessageBoard, never a foreign in-process receiver.
+	if !sameExecutionNode(source.NodeInfo, toEngineNode(c.currentCNWorker())) {
+		source = c.newMergeScope([]*Scope{source})
+		pending.source = source
 	}
-	owner.ConcurrentPreScopes = true
-	dispatchOp := constructDispatch(0, builds, source, node, false)
+	dispatchOp := constructDispatch(0, pending.builds, source, node, false)
 	dispatchOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
 	source.setRootOperator(dispatchOp)
-	owner.PreScopes = append(owner.PreScopes, source)
-	return []*Scope{owner}
+	return probes
+}
+
+// A region is one independently admitted query step or lazy branch. Pending
+// producers cannot escape it, including compilation failures and panics.
+func (c *Compile) compileProductRegion(step, node int32, nodes []*plan.Node, demand bool, query *plan.Query) ([]*Scope, error) {
+	enclosing := c.pendingProductBuilds
+	c.pendingProductBuilds = nil
+	defer func() {
+		for _, pending := range c.pendingProductBuilds {
+			ReleaseScopes(pending.builds)
+			ReleaseScopes([]*Scope{pending.source})
+		}
+		c.pendingProductBuilds = enclosing
+	}()
+	scopes, err := c.compilePlanScopeWithUnionAllDemand(step, node, nodes, demand)
+	if err != nil {
+		return nil, err
+	}
+	if query != nil {
+		// Complete RETURNING/Output and existing writer accounting assembly
+		// before attaching jobs, so they never become counted result inputs.
+		scopes, err = c.compileSteps(query, scopes, node)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return c.finishProductBuilds(scopes, query == nil), nil
+}
+
+func (c *Compile) finishProductBuilds(scopes []*Scope, mergeResults bool) []*Scope {
+	if len(c.pendingProductBuilds) == 0 {
+		return scopes
+	}
+	if mergeResults && !c.IsSingleScope(scopes) {
+		scopes = []*Scope{c.newMergeScope(c.mergeShuffleScopesIfNeeded(scopes, false))}
+	}
+	if mergeResults && scopes[0].Magic == Remote && !scopes[0].ipAddrMatch(c.addr) {
+		scopes = []*Scope{c.newMergeScope(scopes)}
+	}
+	singleOwner := c.IsSingleScope(scopes) && scopes[0].ipAddrMatch(c.addr)
+	for _, pending := range c.pendingProductBuilds {
+		for i, group := range pending.groups {
+			var workers int32
+			for _, probe := range group {
+				workers += int32(probe.NodeInfo.Mcpu)
+			}
+			pending.builds[i].RootOp.(*hashbuild.HashBuild).JoinMapRefCnt = workers
+		}
+		// Build connectors belong to the job, not to the result receiver set. Thus
+		// ordinary/ordered/partial result merges retain their existing semantics.
+		job := c.newMergeScope(pending.builds)
+		job.PreScopes = append(job.PreScopes, pending.source)
+		job.ConcurrentPreScopes = true
+		if c.auxiliaryProductScopes == nil {
+			c.auxiliaryProductScopes = make(map[*Scope]bool)
+		}
+		c.auxiliaryProductScopes[job] = true
+		pending.builds, pending.source = nil, nil
+		if singleOwner {
+			owner := scopes[0]
+			c.auxiliaryProductScopes[owner] = false
+			if owner.Magic == Normal {
+				owner.Magic = Merge
+			}
+			owner.PreScopes = append(owner.PreScopes, job)
+			owner.ConcurrentPreScopes = true
+		} else {
+			scopes = append(scopes, job)
+		}
+	}
+	c.pendingProductBuilds = nil
+	return scopes
+}
+
+// Preserve producer-error attribution across the complete finalized ancestry,
+// including lazy parents assembled after their branch producers were attached.
+// This is static scope ownership metadata; it never activates a branch.
+func (c *Compile) markProductProducerRegions(scopes []*Scope) {
+	if len(c.auxiliaryProductScopes) == 0 {
+		return
+	}
+	var visit func(*Scope, bool) bool
+	visit = func(scope *Scope, insideProducer bool) bool {
+		job, region := c.auxiliaryProductScopes[scope]
+		insideProducer = insideProducer || job
+		region = region || insideProducer
+		for _, child := range scope.PreScopes {
+			region = visit(child, insideProducer) || region
+		}
+		if region && !job {
+			c.auxiliaryProductScopes[scope] = false
+		}
+		return region
+	}
+	for _, scope := range scopes {
+		visit(scope, false)
+	}
 }
 
 func (c *Compile) groupBroadcastProbeScopesByCN(rs []*Scope, stageNodes engine.Nodes) [][]*Scope {

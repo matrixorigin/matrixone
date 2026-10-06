@@ -2578,6 +2578,15 @@ func TestBroadcastJoinMapReferencesCountProbeWorkers(t *testing.T) {
 				}
 
 				owners := c.compileBuildSideForBroadcastJoin(node, probes, []*Scope{buildScope})
+				if opType == vm.Product && len(probes) > 1 {
+					require.Equal(t, probes, owners)
+					// Model a downstream rewrite of packed DOP before ownership
+					// transfer: refcounts must use the final worker templates.
+					if tc.name == "colocated packed scopes" {
+						probes[0].NodeInfo.Mcpu = 1
+					}
+				}
+				owners = c.finishProductBuilds(owners, true)
 				builds := make(map[string]*hashbuild.HashBuild)
 				seen := make(map[*Scope]bool)
 				var visit func(*Scope)
@@ -2600,43 +2609,32 @@ func TestBroadcastJoinMapReferencesCountProbeWorkers(t *testing.T) {
 				}
 				if opType == vm.Product && len(probes) > 1 {
 					require.Len(t, owners, 1)
-					require.True(t, owners[0].ConcurrentPreScopes)
-					require.Contains(t, owners[0].PreScopes, buildScope, "source must be a sibling of every probe output")
+					owner := owners[0]
+					require.True(t, owner.ConcurrentPreScopes)
 					for _, probe := range probes {
 						require.Empty(t, probe.PreScopes, "a probe must not own shared producers")
 					}
-					directBuilds := make(map[string]*hashbuild.HashBuild)
-					for _, pre := range owners[0].PreScopes {
-						op := pre.RootOp
-						if op.OpType() == vm.Connector {
-							op = op.GetOperatorBase().Children[0]
-						}
-						if build, ok := op.(*hashbuild.HashBuild); ok {
-							directBuilds[pre.NodeInfo.Addr] = build
-						}
-					}
-					require.Len(t, directBuilds, len(builds))
-					for addr, build := range builds {
-						require.Same(t, build, directBuilds[addr], "each build must be a direct sibling of probe outputs")
-					}
-					if len(tc.want) > 1 || tc.probes[0].Addr != c.addr {
-						resultMerge := owners[0].RootOp.(*merge.Merge)
-						require.True(t, resultMerge.Partial)
-						require.Zero(t, resultMerge.StartIDX)
-						require.Equal(t, int32(len(tc.want)), resultMerge.EndIDX)
-						require.Len(t, owners[0].Proc.Reg.MergeReceivers, 2*len(tc.want), "result and terminal-only edges must remain distinct")
-						for _, pre := range owners[0].PreScopes {
-							conn, ok := pre.RootOp.(*connector.Connector)
-							if ok && conn.GetChildren(0).OpType() == vm.HashBuild {
-								require.Contains(t, owners[0].Proc.Reg.MergeReceivers[resultMerge.EndIDX:], conn.Reg,
-									"build completion must not count toward result EOF")
-							}
+					job := owner.PreScopes[len(owner.PreScopes)-1]
+					require.True(t, job.ConcurrentPreScopes)
+					require.Contains(t, job.PreScopes, buildScope)
+					require.Len(t, job.Proc.Reg.MergeReceivers, len(tc.want))
+					require.Len(t, job.PreScopes, len(tc.want)+1)
+					require.False(t, owner.RootOp.(*merge.Merge).Partial,
+						"auxiliary job must not change the result receiver range")
+					for _, pre := range job.PreScopes {
+						conn, ok := pre.RootOp.(*connector.Connector)
+						if ok && conn.GetChildren(0).OpType() == vm.HashBuild {
+							require.Contains(t, job.Proc.Reg.MergeReceivers, conn.Reg)
+							require.NotContains(t, owner.Proc.Reg.MergeReceivers, conn.Reg)
 						}
 					}
 				}
 				require.Len(t, builds, len(tc.want))
 				for addr, want := range tc.want {
 					require.Contains(t, builds, addr)
+					if opType == vm.Product && tc.name == "colocated packed scopes" && addr == "cn1:6001" {
+						want--
+					}
 					require.Equal(t, want, builds[addr].JoinMapRefCnt, addr)
 				}
 			})

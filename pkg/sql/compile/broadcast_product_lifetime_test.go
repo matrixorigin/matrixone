@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -158,12 +159,14 @@ func testBroadcastProductOwner(t *testing.T, tc broadcastProductCase) {
 	source := makeScope(reader)
 	source.Magic = Normal
 	owners := c.compileBuildSideForBroadcastJoin(node, probes, []*Scope{source})
+	owners = c.finishProductBuilds(owners, true)
 	require.Len(t, owners, 1)
 	owner := owners[0]
-	require.Len(t, owner.PreScopes, 4)
+	require.Len(t, owner.PreScopes, 3)
 	require.Empty(t, emptyScope.PreScopes)
-	buildScope := owner.PreScopes[2]
-	require.Equal(t, int32(2), buildScope.RootOp.(*hashbuild.HashBuild).JoinMapRefCnt)
+	job := owner.PreScopes[2]
+	buildScope := job.PreScopes[0]
+	require.Equal(t, int32(2), buildScope.RootOp.GetOperatorBase().GetChildren(0).(*hashbuild.HashBuild).JoinMapRefCnt)
 	if tc.outer {
 		outer := hashjoin.NewArgument()
 		outer.JoinType, outer.JoinMapTag = planpb.Node_INNER, 43
@@ -182,6 +185,8 @@ func testBroadcastProductOwner(t *testing.T, tc broadcastProductCase) {
 	}
 	var values []int8
 	root := c.newMergeScope(owners)
+	root = c.newMergeScope([]*Scope{root})
+	c.markProductProducerRegions([]*Scope{root})
 	root.setRootOperator(output.NewArgument().WithFunc(func(b *batch.Batch, _ *perfcounter.CounterSet) error {
 		if b != nil {
 			values = append(values, vector.MustFixedColNoTypeCheck[int8](b.Vecs[0])...)
@@ -484,4 +489,191 @@ type productRunGate struct {
 
 func (g *productRunGate) Call(*process.Process) (vm.CallResult, error) {
 	return vm.CancelResult, g.run()
+}
+
+func TestBroadcastProductPreservesDownstreamPlacement(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		local   vm.OpType
+		compile func(*testing.T, *Compile, []*Scope) []*Scope
+	}{
+		{"independent_roots", vm.Product, func(t *testing.T, c *Compile, probes []*Scope) []*Scope { return probes }},
+		{"group", vm.Group, func(t *testing.T, c *Compile, probes []*Scope) []*Scope {
+			node, nodes := newShuffleGroupTestNodes(2)
+			return c.compileGroupWithoutShuffle(node, probes, nodes, false)
+		}},
+		{"limit", vm.Limit, func(t *testing.T, c *Compile, probes []*Scope) []*Scope {
+			return c.compileLimit(&planpb.Node{Limit: plan2.MakePlan2Uint64ConstExprWithType(1)}, probes)
+		}},
+		{"order", vm.Order, func(t *testing.T, c *Compile, probes []*Scope) []*Scope {
+			node := newMergeTopFallbackTestNode(plan2.MakePlan2Uint64ConstExprWithType(1))
+			return c.compileOrder(node, probes)
+		}},
+		{"ordered_top", vm.Top, func(t *testing.T, c *Compile, probes []*Scope) []*Scope {
+			enableDistributedOrderedTopForTest(t, c.proc)
+			node := newMergeTopFallbackTestNode(plan2.MakePlan2Uint64ConstExprWithType(1))
+			node.NodeType = planpb.Node_SORT
+			return c.compileTop(node, node.Limit, probes)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newCompileForShuffleJoinTest(t, engine.Nodes{{Addr: "cn1:6001", Mcpu: 2}, {Addr: "cn2:6001", Mcpu: 2}})
+			c.execType = plan2.ExecTypeAP_MULTICN
+			probes := make([]*Scope, len(c.cnList))
+			for i, cn := range c.cnList {
+				probes[i] = generateScopeWithRootOperator(c.proc, []vm.OpType{vm.Product})
+				probes[i].NodeInfo = scopeNodeWithMcpu(cn, 1)
+			}
+			source := generateScopeWithRootOperator(c.proc, []vm.OpType{vm.TableScan})
+			source.NodeInfo = scopeNodeWithMcpu(c.cnList[0], 1)
+			node := &planpb.Node{Stats: &planpb.Stats{HashmapStats: &planpb.HashMapStats{}}}
+			data := c.compileBuildSideForBroadcastJoin(node, probes, []*Scope{source})
+			require.Equal(t, probes, data, "producer lifetime must not collapse the data plane")
+			outputs := tc.compile(t, c, data)
+			if tc.name == "independent_roots" {
+				result := c.finishProductBuilds(outputs, false)
+				require.Len(t, result, 3)
+				for i, probe := range probes {
+					require.Same(t, probe, result[i], "independent writer roots must retain placement and accounting")
+					require.Empty(t, probe.PreScopes)
+				}
+				job := result[2]
+				require.Contains(t, c.auxiliaryProductScopes, job)
+				require.Contains(t, job.PreScopes, source)
+				ReleaseScopes(result)
+				c.proc.Free()
+				return
+			}
+			require.Len(t, outputs, 1)
+			resultReceivers := append([]*process.WaitRegister(nil), outputs[0].Proc.Reg.MergeReceivers...)
+			for _, probe := range probes {
+				require.True(t, scopesContainOperator([]*Scope{probe}, tc.local), "each probe must reduce/order before exchange")
+			}
+			result := c.finishProductBuilds(outputs, true)
+			require.Same(t, outputs[0], result[0], "reuse the existing completed result owner")
+			require.Equal(t, resultReceivers, result[0].Proc.Reg.MergeReceivers, "job terminals must not alter ordered or result receiver indexing")
+			job := result[0].PreScopes[len(result[0].PreScopes)-1]
+			require.Contains(t, job.PreScopes, source)
+			require.Len(t, job.Proc.Reg.MergeReceivers, 2)
+			ReleaseScopes(result)
+			c.proc.Free()
+		})
+	}
+}
+
+// Preserve existing writer-root accounting while the ordinary root scheduler
+// owns shared producers that cannot belong to either independent writer.
+type productRootWriter struct {
+	*productBuildReader
+	affected uint64
+}
+
+func (w *productRootWriter) GetAffectedRows() uint64 { return w.affected }
+
+func TestBroadcastProductIndependentRootsRetireProducer(t *testing.T) {
+	for _, failure := range []bool{false, true} {
+		t.Run(map[bool]string{false: "last_primary", true: "primary_failure"}[failure], func(t *testing.T) {
+			c := NewMockCompile(t)
+			c.counterSet = &perfcounter.CounterSet{}
+			c.addr = "cn1:6001"
+			c.execType = plan2.ExecTypeAP_ONECN
+			c.anal = &AnalyzeModule{}
+			c.pn = &planpb.Plan{}
+			c.affectRows = &atomic.Uint64{}
+			makeReader := func() *productBuildReader {
+				return &productBuildReader{MockOperator: colexec.NewMockOperator(), started: make(chan struct{}), release: make(chan struct{}), stopped: make(chan struct{})}
+			}
+			makeScope := func(op vm.Operator) *Scope {
+				scope := newScope(Normal)
+				scope.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
+				scope.Proc = c.proc.NewNoContextChildProc(0)
+				scope.RootOp = op
+				return scope
+			}
+			first := &productRootWriter{productBuildReader: makeReader(), affected: 5}
+			second := &productRootWriter{productBuildReader: makeReader(), affected: 7}
+			source := makeReader()
+			ack := make(chan struct{})
+			source.ackStopped = ack
+			wantErr := moerr.NewInternalErrorNoCtx("independent writer failed")
+			if failure {
+				first.terminal = wantErr
+			}
+			roots := []*Scope{makeScope(first), makeScope(second)}
+			job := c.newMergeScope([]*Scope{makeScope(source)})
+			job.ConcurrentPreScopes = true
+			c.auxiliaryProductScopes = map[*Scope]bool{job: true}
+			c.scopes = append(roots, job)
+			c.InitPipelineContextToExecuteQuery()
+			done := make(chan error, 1)
+			finished := make(chan struct{})
+			go func() { defer close(finished); done <- c.runOnce() }()
+			acknowledged := false
+			t.Cleanup(func() {
+				c.proc.Cancel(context.Canceled)
+				for _, scope := range c.scopes {
+					scope.Proc.Cancel(context.Canceled)
+				}
+				if !acknowledged {
+					close(ack)
+				}
+				select {
+				case <-finished:
+				case <-time.After(10 * time.Second):
+					t.Error("root scheduler cleanup did not finish")
+					return
+				}
+				ReleaseScopes(c.scopes)
+				c.proc.Free()
+			})
+			for _, ready := range []<-chan struct{}{first.started, second.started, source.started} {
+				select {
+				case <-ready:
+				case <-time.After(10 * time.Second):
+					t.Fatal("root did not start")
+				}
+			}
+			close(first.release)
+			select {
+			case <-roots[0].Proc.Ctx.Done():
+			case <-time.After(10 * time.Second):
+				t.Fatal("first writer did not finish")
+			}
+			if !failure {
+				// Give the completion collector an observation window while the second
+				// writer remains blocked. Retiring on the first result must be observable.
+				select {
+				case <-source.stopped:
+					t.Fatal("first writer retired the shared producer")
+				case <-time.After(25 * time.Millisecond):
+				}
+				require.NoError(t, job.Proc.Ctx.Err())
+				close(second.release)
+			}
+			select {
+			case <-source.stopped:
+			case <-time.After(10 * time.Second):
+				t.Fatal("producer was not canceled")
+			}
+			select {
+			case err := <-done:
+				t.Fatalf("root scheduler joined before producer cleanup acknowledgement: %v", err)
+			default:
+			}
+			close(ack)
+			acknowledged = true
+			select {
+			case err := <-done:
+				if failure {
+					require.ErrorContains(t, err, wantErr.Error())
+					require.Zero(t, c.getAffectedRows())
+				} else {
+					require.NoError(t, err)
+					require.EqualValues(t, 12, c.getAffectedRows())
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("root scheduler did not join")
+			}
+		})
+	}
 }

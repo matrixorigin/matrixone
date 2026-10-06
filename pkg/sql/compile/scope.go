@@ -702,7 +702,7 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 		}
 		err = c.collectMergeRunResults(
 			s.Proc,
-			newScopeRunResultForProcess(err, s.Proc),
+			newScopeRunResult(err, s),
 			preScopeResultReceiveChan,
 			notifyMessageResultReceiveChan,
 			cleanupCtx)

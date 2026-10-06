@@ -168,6 +168,35 @@ func TestJoinCoordinatorStage(t *testing.T) {
 	require.Contains(t, strings.ToLower(physical), "product")
 	require.Contains(t, physical, peer, "must retain remote probe work")
 
+	// Scale the Cartesian output without growing the cluster fixture. The result
+	// receiver must consume aggregate states, not all 65,536 Product rows.
+	exec("create table product_left(id int)")
+	exec("create table product_right(id int)")
+	values := make([]string, 256)
+	for i := range values {
+		values[i] = fmt.Sprintf("(%d)", i+1)
+	}
+	exec("insert into product_left values " + strings.Join(values, ","))
+	exec("insert into product_right select id from product_left")
+	for _, table := range []string{"product_left", "product_right"} {
+		exec("select mo_ctl('dn','flush','" + schema + "." + table + "')")
+	}
+	aggregateSQL := "select count(*),sum(l.id+r.id) from product_left l cross join product_right r"
+	require.Equal(t, "65536\t16842752\n", query(t, aggregateSQL))
+	aggregatePlan := query(t, "explain phyplan analyze "+aggregateSQL)
+	require.Regexp(t, `merge group CallNum:[^\n]*InRows:2 OutRows:1`, aggregatePlan,
+		"global aggregation must merge one local state per probe CN")
+	require.Regexp(t, `└── merge CallNum:[^\n]*InRows:2 OutRows:2`, aggregatePlan,
+		"raw Cartesian rows must not cross the result merge")
+	require.Equal(t, "7\n", query(t, "select 7 union all select l.id from product_left l cross join product_right r limit 1"))
+	exec("create table product_written(id int)")
+	written, err := conn.ExecContext(ctx, "insert into product_written select l.id+r.id from product_left l cross join product_right r")
+	require.NoError(t, err)
+	affected, err := written.RowsAffected()
+	require.NoError(t, err)
+	require.EqualValues(t, 65536, affected, "parallel writers must retain affected-row accounting")
+	require.Equal(t, "65536\t16842752\n", query(t, "select count(*),sum(id) from product_written"))
+
 	stmt, err := conn.PrepareContext(ctx, `select count(*),sum(a.id*100+c.rid) from a cross join c where a.id>?`)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, stmt.Close()) })
