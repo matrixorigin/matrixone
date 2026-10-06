@@ -16,17 +16,14 @@ package types
 
 import (
 	"math"
+	"math/big"
+	"math/bits"
+	"strconv"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
-// RejectNonFiniteNarrowFloat returns an error if v (widened to float32) is NaN, Inf,
-// or outside the finite range of the low-precision float type oid. Strict SQL string
-// parsing and LOAD use it so an out-of-range value errors -- MySQL-style -- instead of
-// silently saturating (bf16/float16 have Inf, so overflow is detected as Inf after
-// narrowing; float8/float4 saturate, so their input magnitude is range-checked). This
-// mirrors the narrow-vector element parser's rejectNonFiniteArrayElem. oid must be one
-// of T_bf16/T_float16/T_float8/T_float4.
 // Float32RoundToOdd rounds v to float32 toward zero and sets the last significand bit when
 // the result is inexact. Rounding the result to bf16, float16, float8 or float4 rounds v
 // once: the float32 keeps at least two bits beyond each of their significands.
@@ -41,6 +38,73 @@ func Float32RoundToOdd(v float64) float32 {
 	return math.Float32frombits(math.Float32bits(f) | 1)
 }
 
+// Float32RoundToOddString is Float32RoundToOdd of the exact value of decimal text s, and
+// that value parsed to float64 for range checks. Where the float64 is a float32 value but
+// the text is not, the text's side of it sets the last bit; 1024-bit arithmetic decides it.
+func Float32RoundToOddString(s string) (float32, float64, error) {
+	s = strings.TrimSpace(s)
+	d, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0, d, err
+	}
+	f := Float32RoundToOdd(d)
+	if float64(f) != d || math.IsInf(d, 0) {
+		return f, d, nil
+	}
+	x, ok := new(big.Float).SetPrec(1024).SetString(s)
+	if !ok {
+		return f, d, nil
+	}
+	c := x.Cmp(new(big.Float).SetFloat64(d))
+	if c == 0 {
+		return f, d, nil
+	}
+	// the exact value lies beyond d, away from zero, or between d and zero
+	if (c > 0) != (x.Sign() < 0) {
+		return math.Float32frombits(math.Float32bits(f) | 1), d, nil
+	}
+	return math.Float32frombits(math.Float32bits(math.Nextafter32(f, 0)) | 1), d, nil
+}
+
+// Float32RoundToOddUint is Float32RoundToOdd of u, from its bits.
+func Float32RoundToOddUint(u uint64) float32 {
+	n := bits.Len64(u)
+	if n <= 24 {
+		return float32(u)
+	}
+	shift := n - 24
+	m := u >> shift
+	if u&(1<<shift-1) != 0 {
+		m |= 1
+	}
+	return float32(math.Ldexp(float64(m), shift))
+}
+
+// Float32RoundToOddInt is Float32RoundToOdd of v, from its bits.
+func Float32RoundToOddInt(v int64) float32 {
+	if v < 0 {
+		return -Float32RoundToOddUint(uint64(-v))
+	}
+	return Float32RoundToOddUint(uint64(v))
+}
+
+// RejectNarrowFloatInput is RejectNonFiniteNarrowFloat for f rounded from a finite input d;
+// an out-of-range error names input, the value the user gave.
+func RejectNarrowFloatInput(f float32, oid T, d float64, input any) error {
+	err := RejectNonFiniteNarrowFloat(f, oid)
+	if err == nil || math.IsNaN(d) || math.IsInf(d, 0) {
+		return err
+	}
+	return moerr.NewOutOfRangeNoCtxf(oid.String(), "value %v", input)
+}
+
+// RejectNonFiniteNarrowFloat returns an error if v (widened to float32) is NaN, Inf,
+// or outside the finite range of the low-precision float type oid. Strict SQL string
+// parsing and LOAD use it so an out-of-range value errors -- MySQL-style -- instead of
+// silently saturating (bf16/float16 have Inf, so overflow is detected as Inf after
+// narrowing; float8/float4 saturate, so their input magnitude is range-checked). This
+// mirrors the narrow-vector element parser's rejectNonFiniteArrayElem. oid must be one
+// of T_bf16/T_float16/T_float8/T_float4.
 func RejectNonFiniteNarrowFloat(v float32, oid T) error {
 	f := float64(v)
 	if math.IsNaN(f) || math.IsInf(f, 0) {

@@ -129,6 +129,12 @@ CREATE INDEX ia ON t2 (a);
 -- a value wider than float32 rounds once: just above a tie rounds up
 SELECT cast('1.0039062500001' AS bf16), cast(1.0039062500001 AS bf16), cast(cast(1.0039062500001 AS double) AS bf16);
 SELECT cast('1.00048828125001' AS float16), cast('1.0625000001' AS float8), cast('1.2500000001' AS float4);
+-- text with more digits than float64, decimals and integers above 2^53 also round once
+SELECT cast('1.00390625000000000001' AS bf16), cast(1.00390625000000000001 AS bf16), cast(1157425104234217473 AS bf16);
+SELECT cast('[1.0039062500001]' AS vecbf16(1)), cast('[1.00048828125001]' AS vecf16(1)), cast(cast('[1.0039062500001]' AS vecf64(1)) AS vecbf16(1));
+-- an out-of-range error names the value given
+SELECT cast('448.0000001' AS float8);
+SELECT cast('1e39' AS bf16);
 CREATE TABLE tr (b bf16);
 INSERT INTO tr VALUES ('1.0039062500001'), (1.0039062500001);
 SELECT b FROM tr;

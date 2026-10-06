@@ -101,3 +101,50 @@ func signBitOf(name string) int {
 	}
 	return 0x08
 }
+
+// TestFloat32RoundToOddExactSources checks sources wider than float64: decimal text with
+// more digits than float64 holds and integers above 2^53 round once from their exact value.
+func TestFloat32RoundToOddExactSources(t *testing.T) {
+	bf16 := func(f float32) float32 { return BF16FromFloat32(f).ToFloat32() }
+	for _, c := range []struct {
+		text string
+		want float32
+	}{
+		{"1.00390625000000000001", 1.0078125}, // above the bf16 tie 1 + 2^-8; float64 is the tie
+		{"1.00390624999999999999", 1},         // below it
+		{"-1.00390625000000000001", -1.0078125},
+		{"1.00390625", 1}, // the tie itself, to even
+		{" 1.5 ", 1.5},
+		{"0", 0},
+	} {
+		f, _, err := Float32RoundToOddString(c.text)
+		require.NoError(t, err, c.text)
+		require.Equal(t, c.want, bf16(f), c.text)
+	}
+	// text below the float64 range is not zero: the smallest float32 of its sign
+	f, d, err := Float32RoundToOddString("1e-400")
+	require.NoError(t, err)
+	require.Equal(t, 0.0, d)
+	require.Equal(t, float32(math.SmallestNonzeroFloat32), f)
+	f, _, err = Float32RoundToOddString("-1e-400")
+	require.NoError(t, err)
+	require.Equal(t, float32(-math.SmallestNonzeroFloat32), f)
+	_, _, err = Float32RoundToOddString("abc")
+	require.Error(t, err)
+
+	// 2^60 + 2^52 + 1 is just above the bf16 tie 2^60 + 2^52; float64(v) is the tie
+	v := int64(1)<<60 + int64(1)<<52 + 1
+	require.Equal(t, float32(math.Ldexp(1, 60)+math.Ldexp(1, 53)), bf16(Float32RoundToOddInt(v)))
+	require.Equal(t, -float32(math.Ldexp(1, 60)+math.Ldexp(1, 53)), bf16(Float32RoundToOddInt(-v)))
+	require.Equal(t, float32(math.Ldexp(1, 60)+math.Ldexp(1, 53)), bf16(Float32RoundToOddUint(uint64(v))))
+	require.Equal(t, float32(1<<24-1), Float32RoundToOddUint(1<<24-1))
+	// an integer exact in float64 agrees with Float32RoundToOdd of its float64
+	for _, u := range []uint64{1 << 30, 1<<30 + 1, 1<<53 - 1, 12345678901234567 &^ 3} {
+		require.Equal(t, Float32RoundToOdd(float64(u)), Float32RoundToOddUint(u), u)
+	}
+	// an out-of-range error names the input
+	err = RejectNarrowFloatInput(Float32RoundToOdd(1e39), T_bf16, 1e39, "1e39")
+	require.ErrorContains(t, err, "1e39")
+	err = RejectNarrowFloatInput(Float32RoundToOdd(448.0000001), T_float8, 448.0000001, "448.0000001")
+	require.ErrorContains(t, err, "448.0000001")
+}

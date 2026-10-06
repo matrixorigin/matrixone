@@ -3411,7 +3411,7 @@ func parquetLowPrecFloatMapper[T types.LowPrecFloat](st parquet.Type, oid types.
 				return zero, err
 			}
 			f := types.Float32RoundToOdd(f64)
-			if err := types.RejectNonFiniteNarrowFloat(f, oid); err != nil {
+			if err := types.RejectNarrowFloatInput(f, oid, f64, f64); err != nil {
 				return zero, err
 			}
 			return types.CanonicalLowPrecFloat(ctor(f)), nil

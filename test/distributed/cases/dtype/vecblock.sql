@@ -213,6 +213,8 @@ select id, vecblock_json(v), vecblock_json(e) from vbin order by id;
 select count(distinct vecblock_binary(v)), count(distinct vecblock_binary(e)) from vbin;
 select vecblock_binary(cast(vecblock_binary(e) as vecf8)) = vecblock_binary(e) from vbin where id = 1;
 -- a BLOB of cell length that is not a valid cell is an error
+-- an unsized cast of a cell of the other format is an error
+select vecblock_json(cast(vecblock_binary(cast('[1,2,3,4,5]' as vecf4(5))) as vecf8));
 select cast(cast(unhex('02010000020000000000803F7F7EBC') as blob) as vecf8(2));
 select cast(cast(unhex('01020000020000000000803F7F7EBC') as blob) as vecf8(2));
 select cast(cast(unhex('01010000020000000000803F7F7EBC') as blob) as vecf8(3));

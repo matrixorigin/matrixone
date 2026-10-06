@@ -9703,6 +9703,13 @@ func arrayToArray[I types.ArrayElement, O types.ArrayElement](
 			// This replaces moarray.Cast[I,O], which only handled float pairs.
 			_v := types.BytesToArray[I](v)
 			f32 := types.ToFloat32Array[I](_v)
+			if f64, ok := any(_v).([]float64); ok && to.GetType().Oid != types.T_array_float32 {
+				// a narrower target rounds once from the float64 value
+				f32 = make([]float32, len(f64))
+				for k, x := range f64 {
+					f32[k] = types.Float32RoundToOdd(x)
+				}
+			}
 			out := types.FromFloat32Array[O](f32)
 			// A finite source can narrow to +/-Inf (e.g. VECF64 1e300 -> VECF32, or a VECF32 that
 			// overflows VECF16/VECBF16). Reject it here so the narrowing CAST enforces the same

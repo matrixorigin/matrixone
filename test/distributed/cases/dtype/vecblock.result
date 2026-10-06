@@ -421,6 +421,8 @@ select count(distinct vecblock_binary(v)), count(distinct vecblock_binary(e)) fr
 select vecblock_binary(cast(vecblock_binary(e) as vecf8)) = vecblock_binary(e) from vbin where id = 1;
 ➤ vecblock_binary(cast(vecblock_binary(e) as vecf8)) = vecblock_binary(e)[-7,1,0]  𝄀
 1
+select vecblock_json(cast(vecblock_binary(cast('[1,2,3,4,5]' as vecf4(5))) as vecf8));
+invalid input: vecf4 cell is not a vecf8 cell
 select cast(cast(unhex('02010000020000000000803F7F7EBC') as blob) as vecf8(2));
 invalid input: unsupported block-scaled vector version 2
 select cast(cast(unhex('01020000020000000000803F7F7EBC') as blob) as vecf8(2));

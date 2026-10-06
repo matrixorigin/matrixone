@@ -100,6 +100,15 @@ type BlockScaledValue struct {
 	Cell []byte
 }
 
+// String is the exact text of the cell (BlockScaledToJSON), which casts back to it.
+func (v BlockScaledValue) String() string {
+	text, err := BlockScaledToJSON(v.Cell)
+	if err != nil {
+		return ""
+	}
+	return text
+}
+
 // BlockScaledCell is a validated view of a cell; Scales and Elems alias the cell bytes.
 type BlockScaledCell struct {
 	Format BlockScaledFormat

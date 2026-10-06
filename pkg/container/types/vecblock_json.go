@@ -226,16 +226,20 @@ func blockElemCode(f BlockScaledFormat, v float32) (uint8, bool) {
 // (vecblock_binary) as is, or little-endian float32 elements quantized. dim is the declared
 // dimension, MaxArrayDimension or 0 when unsized. With a declared dimension the value is a
 // cell when its length is the cell size of dim, which is never 4*dim; without one, when its
-// header names f and its length is the cell size of its dimension. The returned cell aliases
-// b when b is a cell.
+// header names a block-scaled format and its length is that format's cell size of its
+// dimension; a cell of the other format is an error. The returned cell aliases b when b is
+// a cell.
 func BlockScaledFromBinary(f BlockScaledFormat, dim int, b []byte) ([]byte, error) {
 	sized := dim > 0 && dim != MaxArrayDimension
 	isCell := false
 	if sized {
 		isCell = len(b) == BlockScaledCellSize(f, dim)
-	} else if len(b) >= BlockScaledHeaderSize && b[0] == blockScaledVersion && b[1] == byte(f) && b[2] == 0 && b[3] == 0 {
-		d := BlockScaledDim(b)
-		isCell = d > 0 && d <= MaxArrayDimension && len(b) == BlockScaledCellSize(f, d)
+	} else if len(b) >= BlockScaledHeaderSize && b[0] == blockScaledVersion && b[2] == 0 && b[3] == 0 {
+		// a header of either format with its cell length; the other format is an error below
+		if hf := BlockScaledFormat(b[1]); hf.valid() {
+			d := BlockScaledDim(b)
+			isCell = d > 0 && d <= MaxArrayDimension && len(b) == BlockScaledCellSize(hf, d)
+		}
 	}
 	if isCell {
 		c, err := ParseBlockScaledCell(b)

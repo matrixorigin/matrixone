@@ -17,7 +17,6 @@ package function
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -93,7 +92,8 @@ func castToLowPrecFloat(parameters []*vector.Vector, toType types.Type, result v
 }
 
 // anyToLowPrecFloat rounds each source value to Tr via ctor, once: a source wider than
-// float32 reaches ctor through Float32RoundToOdd.
+// float32 reaches ctor rounded to odd from its exact value (Float32RoundToOdd and its
+// integer and decimal-text forms), and an out-of-range error names the source value.
 // Every value is finite-checked (RejectNonFiniteNarrowFloat) before rounding, so a NaN,
 // Inf, or out-of-range source errors instead of persisting a non-finite / saturated
 // value -- this keeps the numeric path consistent with the string path and upholds the
@@ -111,8 +111,25 @@ func anyToLowPrecFloat[Tr types.LowPrecFloat](
 		}
 		return types.CanonicalLowPrecFloat(ctor(f)), nil
 	}
-	// a source wider than float32 rounds once to Tr
-	conv64 := func(f float64) (Tr, error) { return conv(types.Float32RoundToOdd(f)) }
+	// a source wider than float32: f rounded to odd from it, d its float64 value
+	convFrom := func(f float32, d float64, input any) (Tr, error) {
+		var zero Tr
+		if err := types.RejectNarrowFloatInput(f, oid, d, input); err != nil {
+			return zero, err
+		}
+		return types.CanonicalLowPrecFloat(ctor(f)), nil
+	}
+	conv64 := func(v float64) (Tr, error) { return convFrom(types.Float32RoundToOdd(v), v, v) }
+	convInt := func(v int64) (Tr, error) { return convFrom(types.Float32RoundToOddInt(v), float64(v), v) }
+	convUint := func(v uint64) (Tr, error) { return convFrom(types.Float32RoundToOddUint(v), float64(v), v) }
+	convText := func(text string) (Tr, error) {
+		f, d, err := types.Float32RoundToOddString(text)
+		if err != nil {
+			var zero Tr
+			return zero, moerr.NewInvalidInputNoCtxf("invalid float value %q", text)
+		}
+		return convFrom(f, d, text)
+	}
 	switch from.GetType().Oid {
 	case types.T_bool:
 		return opUnaryFixedToFixedWithErrorCheck[bool, Tr](parameters, result, proc, length, func(v bool) (Tr, error) {
@@ -122,23 +139,23 @@ func anyToLowPrecFloat[Tr types.LowPrecFloat](
 			return conv(0)
 		}, selectList)
 	case types.T_bit:
-		return opUnaryFixedToFixedWithErrorCheck[uint64, Tr](parameters, result, proc, length, func(v uint64) (Tr, error) { return conv64(float64(v)) }, selectList)
+		return opUnaryFixedToFixedWithErrorCheck[uint64, Tr](parameters, result, proc, length, func(v uint64) (Tr, error) { return convUint(v) }, selectList)
 	case types.T_int8:
 		return opUnaryFixedToFixedWithErrorCheck[int8, Tr](parameters, result, proc, length, func(v int8) (Tr, error) { return conv(float32(v)) }, selectList)
 	case types.T_int16:
 		return opUnaryFixedToFixedWithErrorCheck[int16, Tr](parameters, result, proc, length, func(v int16) (Tr, error) { return conv(float32(v)) }, selectList)
 	case types.T_int32:
-		return opUnaryFixedToFixedWithErrorCheck[int32, Tr](parameters, result, proc, length, func(v int32) (Tr, error) { return conv64(float64(v)) }, selectList)
+		return opUnaryFixedToFixedWithErrorCheck[int32, Tr](parameters, result, proc, length, func(v int32) (Tr, error) { return convInt(int64(v)) }, selectList)
 	case types.T_int64:
-		return opUnaryFixedToFixedWithErrorCheck[int64, Tr](parameters, result, proc, length, func(v int64) (Tr, error) { return conv64(float64(v)) }, selectList)
+		return opUnaryFixedToFixedWithErrorCheck[int64, Tr](parameters, result, proc, length, func(v int64) (Tr, error) { return convInt(v) }, selectList)
 	case types.T_uint8:
 		return opUnaryFixedToFixedWithErrorCheck[uint8, Tr](parameters, result, proc, length, func(v uint8) (Tr, error) { return conv(float32(v)) }, selectList)
 	case types.T_uint16:
 		return opUnaryFixedToFixedWithErrorCheck[uint16, Tr](parameters, result, proc, length, func(v uint16) (Tr, error) { return conv(float32(v)) }, selectList)
 	case types.T_uint32:
-		return opUnaryFixedToFixedWithErrorCheck[uint32, Tr](parameters, result, proc, length, func(v uint32) (Tr, error) { return conv64(float64(v)) }, selectList)
+		return opUnaryFixedToFixedWithErrorCheck[uint32, Tr](parameters, result, proc, length, func(v uint32) (Tr, error) { return convUint(uint64(v)) }, selectList)
 	case types.T_uint64:
-		return opUnaryFixedToFixedWithErrorCheck[uint64, Tr](parameters, result, proc, length, func(v uint64) (Tr, error) { return conv64(float64(v)) }, selectList)
+		return opUnaryFixedToFixedWithErrorCheck[uint64, Tr](parameters, result, proc, length, func(v uint64) (Tr, error) { return convUint(v) }, selectList)
 	case types.T_float32:
 		return opUnaryFixedToFixedWithErrorCheck[float32, Tr](parameters, result, proc, length, func(v float32) (Tr, error) { return conv(v) }, selectList)
 	case types.T_float64:
@@ -154,17 +171,17 @@ func anyToLowPrecFloat[Tr types.LowPrecFloat](
 	case types.T_decimal64:
 		scale := from.GetType().Scale
 		return opUnaryFixedToFixedWithErrorCheck[types.Decimal64, Tr](parameters, result, proc, length, func(v types.Decimal64) (Tr, error) {
-			return conv64(types.Decimal64ToFloat64(v, scale))
+			return convText(v.Format(scale))
 		}, selectList)
 	case types.T_decimal128:
 		scale := from.GetType().Scale
 		return opUnaryFixedToFixedWithErrorCheck[types.Decimal128, Tr](parameters, result, proc, length, func(v types.Decimal128) (Tr, error) {
-			return conv64(types.Decimal128ToFloat64(v, scale))
+			return convText(v.Format(scale))
 		}, selectList)
 	case types.T_decimal256:
 		scale := from.GetType().Scale
 		return opUnaryFixedToFixedWithErrorCheck[types.Decimal256, Tr](parameters, result, proc, length, func(v types.Decimal256) (Tr, error) {
-			return conv64(types.Decimal256ToFloat64(v, scale))
+			return convText(v.Format(scale))
 		}, selectList)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_datalink:
@@ -200,12 +217,12 @@ func strToLowPrecFloat[Tr types.LowPrecFloat](
 			}
 			continue
 		}
-		f64, err := strconv.ParseFloat(strings.TrimSpace(string(bs)), 64)
+		text := string(bs)
+		f, f64, err := types.Float32RoundToOddString(text)
 		if err != nil {
-			return moerr.NewInvalidInput(ctx, fmt.Sprintf("invalid float value %q", string(bs)))
+			return moerr.NewInvalidInput(ctx, fmt.Sprintf("invalid float value %q", text))
 		}
-		f := types.Float32RoundToOdd(f64)
-		if err := types.RejectNonFiniteNarrowFloat(f, rs.GetType().Oid); err != nil {
+		if err := types.RejectNarrowFloatInput(f, rs.GetType().Oid, f64, strings.TrimSpace(text)); err != nil {
 			return err
 		}
 		if err := rs.Append(types.CanonicalLowPrecFloat(ctor(f)), false); err != nil {

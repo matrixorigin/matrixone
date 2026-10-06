@@ -444,12 +444,11 @@ func SetBytesToAnyVector(ctx context.Context, val string, row int,
 		}
 		return vector.SetFixedAtNoTypeCheck(vec, row, float64(v))
 	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
-		v64, err := strconv.ParseFloat(val, 64)
+		v, v64, err := types.Float32RoundToOddString(val)
 		if err != nil {
 			return moerr.NewOutOfRangef(ctx, vec.GetType().Oid.String(), "value '%v'", val)
 		}
-		v := types.Float32RoundToOdd(v64)
-		if err := types.RejectNonFiniteNarrowFloat(v, vec.GetType().Oid); err != nil {
+		if err := types.RejectNarrowFloatInput(v, vec.GetType().Oid, v64, val); err != nil {
 			return err
 		}
 		switch vec.GetType().Oid {

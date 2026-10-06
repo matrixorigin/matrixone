@@ -130,3 +130,21 @@ func TestBlockScaledJSONRejects(t *testing.T) {
 	_, err = BlockScaledFromJSON(BlockScaledMXFP8, `{"g":1,"s":[1,2],"v":`+ones(33)+`}`)
 	require.NoError(t, err)
 }
+
+// TestBlockScaledFromBinaryOtherFormat checks that an unsized binary value holding a cell of
+// the other format is an error, not float32 elements.
+func TestBlockScaledFromBinaryOtherFormat(t *testing.T) {
+	cell4, err := AppendBlockScaled(nil, BlockScaledNVFP4, []float32{1, 2, 3, 4, 5})
+	require.NoError(t, err)
+	require.Zero(t, len(cell4)%4)
+	_, err = BlockScaledFromBinary(BlockScaledMXFP8, MaxArrayDimension, cell4)
+	require.ErrorContains(t, err, "is not a")
+	got, err := BlockScaledFromBinary(BlockScaledNVFP4, MaxArrayDimension, cell4)
+	require.NoError(t, err)
+	require.Equal(t, cell4, got)
+	// the exact text of a user variable value casts back to the cell
+	text := BlockScaledValue{Oid: T_array_float4, Cell: cell4}.String()
+	back, err := BlockScaledFromJSON(BlockScaledNVFP4, text)
+	require.NoError(t, err)
+	require.Equal(t, cell4, back)
+}

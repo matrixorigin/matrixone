@@ -75,7 +75,7 @@ Data truncation: data out of range: data type FLOAT8, value 1000
 SELECT CAST(70000 AS float16);
 Data truncation: data out of range: data type FLOAT16, value 70000
 SELECT CAST(1e300 AS bf16);
-invalid input: value +Inf is not a finite BF16
+Data truncation: data out of range: data type BF16, value 1e+300
 SELECT CAST('inf' AS float8);
 invalid input: value +Inf is not a finite FLOAT8
 SELECT CAST('nan' AS bf16);
@@ -237,6 +237,16 @@ SELECT cast('1.0039062500001' AS bf16), cast(1.0039062500001 AS bf16), cast(cast
 SELECT cast('1.00048828125001' AS float16), cast('1.0625000001' AS float8), cast('1.2500000001' AS float4);
 ➤ cast(1.00048828125001 as float16)[7,24,0]  ¦  cast(1.0625000001 as float8)[7,24,0]  ¦  cast(1.2500000001 as float4)[7,24,0]  𝄀
 1.0009766  ¦  1.125  ¦  1.5
+SELECT cast('1.00390625000000000001' AS bf16), cast(1.00390625000000000001 AS bf16), cast(1157425104234217473 AS bf16);
+➤ cast(1.00390625000000000001 as bf16)[7,24,0]  ¦  cast(1.00390625000000000001 as bf16)[7,24,0]  ¦  cast(1157425104234217473 as bf16)[7,24,0]  𝄀
+1.0078125  ¦  1.0078125  ¦  1.1619287E18
+SELECT cast('[1.0039062500001]' AS vecbf16(1)), cast('[1.00048828125001]' AS vecf16(1)), cast(cast('[1.0039062500001]' AS vecf64(1)) AS vecbf16(1));
+➤ cast([1.0039062500001] as vecbf16(1))[12,1,0]  ¦  cast([1.00048828125001] as vecf16(1))[12,1,0]  ¦  cast(cast([1.0039062500001] as vecf64(1)) as vecbf16(1))[12,1,0]  𝄀
+[1.0078125]  ¦  [1.0009766]  ¦  [1.0078125]
+SELECT cast('448.0000001' AS float8);
+Data truncation: data out of range: data type FLOAT8, value 448.0000001
+SELECT cast('1e39' AS bf16);
+Data truncation: data out of range: data type BF16, value 1e39
 CREATE TABLE tr (b bf16);
 INSERT INTO tr VALUES ('1.0039062500001'), (1.0039062500001);
 SELECT b FROM tr;
