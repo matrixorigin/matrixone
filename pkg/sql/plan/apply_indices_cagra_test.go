@@ -28,51 +28,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// cagraScanNode builds a minimal scan node fixture suitable for the cagra
-// prepare-context tests. Same shape used by hnsw/ivfflat fixtures: vec_col at
-// pos 0, id PK at pos 1.
-func cagraScanNode() *plan.Node {
-	return &plan.Node{
-		TableDef: &plan.TableDef{
-			Name: "test_table",
-			Name2ColIndex: map[string]int32{
-				"vec_col": 0,
-				"id":      1,
-			},
-			Cols: []*plan.ColDef{
-				{Name: "vec_col", Typ: plan.Type{Id: int32(types.T_array_float32)}},
-				{Name: "id", Typ: plan.Type{Id: int32(types.T_int64), Width: 64}},
-			},
-			Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"},
-		},
-	}
-}
-
-// cagraVecCtx wraps the supplied scanNode in a vectorSortContext with a
-// l2_distance(col, vec_lit) shape — matches what buildVectorSortContext
-// produces in the planner for the prepare* path.
-func cagraVecCtx(scanNode *plan.Node) *vectorSortContext {
-	limit := makePlan2Uint64ConstExprWithType(10)
-	return &vectorSortContext{
-		distFnExpr: &plan.Function{
-			Func: &ObjectRef{ObjName: "l2_distance"},
-			Args: []*plan.Expr{
-				{
-					Typ:  plan.Type{Id: int32(types.T_array_float32)},
-					Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
-				},
-				{
-					Typ:  plan.Type{Id: int32(types.T_array_float32)},
-					Expr: &plan.Expr_Lit{Lit: &plan.Literal{}},
-				},
-			},
-		},
-		scanNode:    scanNode,
-		limit:       DeepCopyExpr(limit),
-		resultLimit: limit,
-	}
-}
-
 // cagraMTI builds a MultiTableIndex with the given algo params on the
 // metadata def; the storage def carries the part list used by getArgsFromDistFn.
 func cagraMTI(algoParams string) *MultiTableIndex {
@@ -192,7 +147,7 @@ func TestPrepareCagraIndexContext_OpTypeNotString(t *testing.T) {
 
 func TestPrepareCagraIndexContext_ArgsNotFound(t *testing.T) {
 	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
-	scan := cagraScanNode()
+	scan := vectorProviderScanNode()
 	// Both args are literals → getArgsFromDistFn returns found=false.
 	v := &vectorSortContext{
 		distFnExpr: &plan.Function{
@@ -221,7 +176,7 @@ func TestPrepareCagraIndexContext_ResolveThreadsError(t *testing.T) {
 		},
 	}
 	b := NewQueryBuilder(plan.Query_SELECT, mock, false, true)
-	r, err := b.prepareCagraIndexContext(cagraVecCtx(cagraScanNode()),
+	r, err := b.prepareCagraIndexContext(vectorProviderVecCtx(vectorProviderScanNode()),
 		cagraMTI(`{"op_type": "`+metric.DistFuncOpTypes["l2_distance"]+`"}`))
 	assert.Error(t, err)
 	assert.Nil(t, r)
@@ -242,7 +197,7 @@ func TestPrepareCagraIndexContext_ResolveBatchWindowError(t *testing.T) {
 		},
 	}
 	b := NewQueryBuilder(plan.Query_SELECT, mock, false, true)
-	r, err := b.prepareCagraIndexContext(cagraVecCtx(cagraScanNode()),
+	r, err := b.prepareCagraIndexContext(vectorProviderVecCtx(vectorProviderScanNode()),
 		cagraMTI(`{"op_type": "`+metric.DistFuncOpTypes["l2_distance"]+`"}`))
 	assert.Error(t, err)
 	assert.Nil(t, r)
@@ -264,7 +219,7 @@ func TestPrepareCagraIndexContext_Success(t *testing.T) {
 	}
 	b := NewQueryBuilder(plan.Query_SELECT, mock, false, true)
 	algo := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `", "m": 32}`
-	r, err := b.prepareCagraIndexContext(cagraVecCtx(cagraScanNode()), cagraMTI(algo))
+	r, err := b.prepareCagraIndexContext(vectorProviderVecCtx(vectorProviderScanNode()), cagraMTI(algo))
 	require.NoError(t, err)
 	require.NotNil(t, r)
 
@@ -304,8 +259,8 @@ func TestApplyIndicesForSortUsingCagra_PrepareReturnsNil(t *testing.T) {
 	// calling prepare, so we must seed at least one slot.
 	b.ctxByNode = append(b.ctxByNode, NewBindContext(b, nil))
 
-	scan := cagraScanNode()
-	v := cagraVecCtx(scan)
+	scan := vectorProviderScanNode()
+	v := vectorProviderVecCtx(scan)
 	v.sortNode = &plan.Node{}
 	v.rankOption = &plan.RankOption{Mode: "force"}
 
