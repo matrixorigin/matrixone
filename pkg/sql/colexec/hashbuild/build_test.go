@@ -72,12 +72,11 @@ func rawRuntimeFilterSpec(tag, upperLimit int32, typ types.Type) *plan.RuntimeFi
 
 // add unit tests for cases
 type buildTestCase struct {
-	arg    *HashBuild
-	marg   *merge.Merge
-	flgs   []bool // flgs[i] == true: nullable
-	types  []types.Type
-	proc   *process.Process
-	cancel context.CancelFunc
+	arg   *HashBuild
+	marg  *merge.Merge
+	flgs  []bool // flgs[i] == true: nullable
+	types []types.Type
+	proc  *process.Process
 }
 
 func makeTestCases(t *testing.T) []buildTestCase {
@@ -326,7 +325,6 @@ func newTestCase(t testing.TB, flgs []bool, ts []types.Type, cs []*plan.Expr) bu
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	proc.SetMessageBoard(message.NewMessageBoard())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 1)
-	_, cancel := context.WithCancel(context.Background())
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
 		Ch2: make(chan process.PipelineSignal, 10),
 	}
@@ -338,12 +336,11 @@ func newTestCase(t testing.TB, flgs []bool, ts []types.Type, cs []*plan.Expr) bu
 	}
 	installTestHashBuildAllocation(t, arg)
 	return buildTestCase{
-		types:  ts,
-		flgs:   flgs,
-		proc:   proc,
-		cancel: cancel,
-		arg:    arg,
-		marg:   &merge.Merge{},
+		types: ts,
+		flgs:  flgs,
+		proc:  proc,
+		arg:   arg,
+		marg:  &merge.Merge{},
 	}
 }
 

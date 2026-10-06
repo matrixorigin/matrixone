@@ -16,7 +16,6 @@ package rightdedupjoin
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"testing"
 
@@ -47,12 +46,11 @@ const (
 
 // add unit tests for cases
 type joinTestCase struct {
-	arg    *RightDedupJoin
-	flgs   []bool // flgs[i] == true: nullable
-	types  []types.Type
-	proc   *process.Process
-	cancel context.CancelFunc
-	barg   *hashbuild.HashBuild
+	arg   *RightDedupJoin
+	flgs  []bool // flgs[i] == true: nullable
+	types []types.Type
+	proc  *process.Process
+	barg  *hashbuild.HashBuild
 }
 
 func newRightDedupTestProcess(t *testing.T, pessimistic bool) (*process.Process, *gomock.Controller) {
@@ -654,36 +652,11 @@ func newExpr(pos int32, typ types.Type) *plan.Expr {
 func newTestCase(t *testing.T, flgs []bool, ts []types.Type, rp []int32, cs [][]*plan.Expr) joinTestCase {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	proc.SetMessageBoard(message.NewMessageBoard())
-	_, cancel := context.WithCancel(context.Background())
-	//args := make([]*plan.Expr, 0, 2)
-	//args = append(args, &plan.Expr{
-	//	Typ: plan.Type{
-	//		Id: int32(ts[0].Oid),
-	//	},
-	//	Expr: &plan.Expr_Col{
-	//		Col: &plan.ColRef{
-	//			RelPos: 0,
-	//			ColPos: 0,
-	//		},
-	//	},
-	//})
-	//args = append(args, &plan.Expr{
-	//	Typ: plan.Type{
-	//		Id: int32(ts[0].Oid),
-	//	},
-	//	Expr: &plan.Expr_Col{
-	//		Col: &plan.ColRef{
-	//			RelPos: 1,
-	//			ColPos: 0,
-	//		},
-	//	},
-	//})
 	tag++
 	tc := joinTestCase{
-		types:  ts,
-		flgs:   flgs,
-		proc:   proc,
-		cancel: cancel,
+		types: ts,
+		flgs:  flgs,
+		proc:  proc,
 		arg: &RightDedupJoin{
 			RightTypes: ts,
 			Conditions: cs,
