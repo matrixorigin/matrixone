@@ -448,11 +448,11 @@ the kernel of the SQL function of the metric — `VecBlockInnerProduct`,
 kernel (`metric.ResolveDistanceFn`) for the other types, as `inner_product`,
 `cosine_distance` and `l2_distance_sq` resolve them — so a CPU result equals the scalar
 function on the same row and query, including the float64 cosine recompute and the
-squared L2 of differences. The GPU matches within fp32 summation-order tolerance: its
-squared L2 is `|x|² + |q|² − 2·x·q`, whose rounding is relative to the squared norms, so
-where those exceed the float range (elements near 1e30) a squared distance near 0 can
-round beyond it and report an overflow. An overflowing score (NaN) ranks last; a
-non-finite score in the result is an overflow error, since JSON has no infinity.
+squared L2 of differences. The GPU's numeric contract is the fp32 GEMM's (see Decisions):
+scores within fp32 summation-order tolerance of the scalar function, squared L2 as
+`|x|² + |q|² − 2·x·q` with rounding relative to the squared norms, and a score beyond the
+float range an overflow error. An overflowing score (NaN) ranks last; a non-finite score in
+the result is an overflow error, since JSON has no infinity.
 
 #### Result format
 
@@ -712,7 +712,15 @@ type; normalization changes the ranking, independent of the format.
   Rows are scored on the CPU only when the session has `gpu_mode` off or the box has no
   such device; the CPU path is the reference for verification and benchmarks.
 - With an eligible device enabled there is no CPU fallback: every row is scored on the
-  GPU or the query fails. The engine's native host memory and the tile buffers are
+  GPU or the query fails.
+- The GPU's numeric contract is the fp32 GEMM's, and it is not repaired on the CPU. The
+  engine keeps the GEMM inside the fp32 range by exact power-of-two rescaling (cosine and
+  squared L2 rows outside [2^-60, 2^60] in squared norm); beyond that, a score differs from
+  the scalar function within fp32 tolerance, and a score that leaves the float range —
+  including the squared L2 of two rows whose squared norms exceed it — is an overflow
+  error. Re-scoring such rows or queries on the CPU is rejected: it would run the work
+  twice and make the result depend on which path ran. `gpu_mode = 0` gives the CPU
+  result, which equals the scalar functions. The engine's native host memory and the tile buffers are
   admitted by the aggregate's allocation account before allocation, and a denial fails the
   query; so do device memory, CUDA and cuBLASLt errors at creation or while scoring.
 - The engine looks up a cuBLASLt algorithm for every tile shape it can run (rows in
