@@ -20,14 +20,12 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
 func TestMixedDecimalPlusReuse(t *testing.T) {
-	proc := testutil.NewProcess(nil)
+	proc := newMemoryFunctionTestProcess(t)
 	t.Cleanup(func() {
-		proc.Base.FileService.Close(proc.Ctx)
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
 	})

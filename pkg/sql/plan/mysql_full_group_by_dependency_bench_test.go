@@ -55,7 +55,7 @@ func BenchmarkGroupByDependencyPlanning(b *testing.B) {
 	}
 	for _, tc := range cases {
 		b.Run(tc.name, func(b *testing.B) {
-			opt := NewMockOptimizer(false)
+			opt := NewMockOptimizer(false, newPlanTestProcess(b))
 			opt.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
 			ctx := opt.CurrentContext()
 			b.ReportAllocs()

@@ -42,7 +42,6 @@ func TestReplaceFoldExprPreservesCastTargetMetadata(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
-			t.Cleanup(proc.Free)
 			column := &planpb.Expr{
 				Typ: makePlan2Type(&tc.source),
 				Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
@@ -129,7 +128,6 @@ func TestReplaceFoldExprPreservesCastTargetMetadata(t *testing.T) {
 
 func TestReplaceFoldExprStillFoldsWholeConstantCast(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	t.Cleanup(proc.Free)
 	target := types.T_uint64.ToType()
 	cast, err := BindFuncExprImplByPlanExpr(t.Context(), "cast", []*planpb.Expr{
 		makePlan2StringConstExprWithType("7"),

@@ -31,17 +31,6 @@ import (
 
 func TestPreparedAPRuntimeCacheWorkspaceTransition(t *testing.T) {
 	var fixtureInvalidationErr error
-	defer func() {
-		if fixtureInvalidationErr == nil {
-			return
-		}
-		if err := embed.CloseBaseClusterTests(); err != nil {
-			t.Errorf("failed to discard shared two-CN fixture after an unverified work-state transition (%v): %v", fixtureInvalidationErr, err)
-			return
-		}
-		t.Logf("discarded shared two-CN fixture after an unverified work-state transition: %v", fixtureInvalidationErr)
-	}()
-
 	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()

@@ -16,6 +16,7 @@ package function
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"math"
 	"runtime"
@@ -33,6 +34,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+// newMemoryFunctionTestProcess binds memory-backed dependencies to the test lifetime.
+func newMemoryFunctionTestProcess(t testing.TB) *process.Process {
+	t.Helper()
+	fs := testutil.NewFS(nil)
+	t.Cleanup(func() { fs.Close(context.Background()) })
+	return testutil.NewProcess(t, testutil.WithFileService(fs))
+}
 
 // geometryComparisonWKT normalizes a geometry payload (WKB or legacy WKT/EWKT
 // text) to canonical WKT so geometry test expectations written as WKT compare
@@ -872,8 +881,8 @@ func TestFunctionTestCaseOwnership(t *testing.T) {
 }
 
 func TestFunctionResultMetadataContract(t *testing.T) {
-	proc := testutil.NewProcess(nil)
-	t.Cleanup(func() { proc.GetFileService().Close(proc.Ctx); proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 	for _, tc := range []struct {
 		name   string
 		length int

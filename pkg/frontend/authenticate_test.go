@@ -7101,7 +7101,7 @@ func TestNamedWindowValidationDependencyRequiresSelectPrivilege(t *testing.T) {
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
 		"select 1 from nation window unused_w as (order by (select r_name from region limit 1))", 1)
 	require.NoError(t, err)
-	queryPlan, err := plan2.BuildPlan(plan2.NewMockCompilerContext(true), stmt, false)
+	queryPlan, err := plan2.BuildPlan(plan2.NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
 	require.NoError(t, err)
 	dependencies := queryPlan.GetQuery().GetCatalogDependencies()
 	require.Len(t, dependencies, 2)
@@ -7180,7 +7180,7 @@ func TestNamedWindowValidationSpecialScansRequireSelectPrivilege(t *testing.T) {
 
 	newCompilerContext := func() *namedWindowAuthorizationCompilerContext {
 		return &namedWindowAuthorizationCompilerContext{
-			MockCompilerContext: plan2.NewMockCompilerContext(true),
+			MockCompilerContext: plan2.NewMockCompilerContext(true, newPlanTestProcess(t)),
 			mongoObject: &plan.ObjectRef{
 				Db: 1, Obj: 2, SchemaName: "mongo_window_auth", ObjName: "events",
 			},

@@ -102,7 +102,7 @@ func TestBindDateFormatMetadata(t *testing.T) {
 }
 
 func TestBuildCTASDateFormatMetadataAndHeading(t *testing.T) {
-	ctx := newDateFormatCompilerContext()
+	ctx := newDateFormatCompilerContext(t)
 
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
 		"create table time02 as select date_format(col2, '%W %M %Y') from time01", 1)
@@ -156,13 +156,13 @@ func TestBuildCTASPreservesBinaryDateTimeFormatHeadings(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			requireCTASColumnName(t, newDateFormatCompilerContext(), test.sql, test.want)
+			requireCTASColumnName(t, newDateFormatCompilerContext(t), test.sql, test.want)
 		})
 	}
 }
 
 func TestBuildCTASPreservesNestedDateFormatHeading(t *testing.T) {
-	ctx := newDateFormatCompilerContext()
+	ctx := newDateFormatCompilerContext(t)
 
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
 		"create table time02 as select concat(date_format(col2, '%M'), 'X'), concat(date_format(col2, '%m'), 'X') from time01", 1)
@@ -184,7 +184,7 @@ func TestBuildCTASPreservesNestedDateFormatHeading(t *testing.T) {
 }
 
 func TestBuildCTASDateFormatHeadingWithIntervalOperand(t *testing.T) {
-	ctx := newDateFormatCompilerContext()
+	ctx := newDateFormatCompilerContext(t)
 	requireCTASColumnName(t, ctx,
 		"create table time02 as select date_format(col2 + interval 1 day, '%M') from time01",
 		"date_format(col2 + interval 1 day, '%M')")
@@ -254,7 +254,7 @@ func parseSelectHeadingExpr(t *testing.T, sql string) tree.Expr {
 }
 
 func TestBuildCTASLowercasesApostropheInQuotedAlias(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
 		"create table t as select 1 as `A'B`", 1)
 	require.NoError(t, err)
@@ -273,8 +273,8 @@ func TestBuildCTASLowercasesApostropheInQuotedAlias(t *testing.T) {
 	require.Equal(t, "a'b", visible[0].Name)
 }
 
-func newDateFormatCompilerContext() *MockCompilerContext {
-	ctx := NewMockCompilerContext(false)
+func newDateFormatCompilerContext(t testing.TB) *MockCompilerContext {
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	datetime := planpb.Type{Id: int32(types.T_datetime)}
 	ctx.tables["time01"] = &planpb.TableDef{
 		TblId:     1001,
@@ -336,27 +336,27 @@ func TestBuildCTASPreservesDateFormatHeadingThroughDerivedStars(t *testing.T) {
 		"create table time02 as select * from (select date_format(col2, '%M') from time01) c",
 	} {
 		t.Run(sql, func(t *testing.T) {
-			requireCTASColumnName(t, newDateFormatCompilerContext(), sql,
+			requireCTASColumnName(t, newDateFormatCompilerContext(t), sql,
 				"date_format(col2, '%M')")
 		})
 	}
 }
 
 func TestBuildCTASPreservesDateFormatHeadingThroughScalarSubquery(t *testing.T) {
-	requireCTASColumnName(t, newDateFormatCompilerContext(),
+	requireCTASColumnName(t, newDateFormatCompilerContext(t),
 		"create table time02 as select (select date_format(col2, '%M') from time01 limit 1)",
 		"(select date_format(col2, '%M') from time01 limit 1)")
 }
 
 func TestBuildCTASPreservesDateFormatHeadingThroughJoinUsingStar(t *testing.T) {
-	requireCTASColumnName(t, newDateFormatCompilerContext(),
+	requireCTASColumnName(t, newDateFormatCompilerContext(t),
 		"create table time02 as select * from (select date_format(col2, '%M') from time01) a "+
 			"join (select date_format(col2, '%M') from time01) b using (`date_format(col2, '%M')`)",
 		"date_format(col2, '%M')")
 }
 
 func TestBuildCTASUsesSafeHeadingForMismatchedFullJoinUsing(t *testing.T) {
-	requireCTASColumnName(t, newDateFormatCompilerContext(),
+	requireCTASColumnName(t, newDateFormatCompilerContext(t),
 		"create table time02 as select * from (select date_format(col2, '%M') from time01) a "+
 			"full outer join (select date_format(col2, '%m') from time01) b "+
 			"using (`date_format(col2, '%M')`)",
@@ -364,7 +364,7 @@ func TestBuildCTASUsesSafeHeadingForMismatchedFullJoinUsing(t *testing.T) {
 }
 
 func TestBuildCTASPreservesDateFormatHeadingThroughRollupWindowRewrite(t *testing.T) {
-	ctx := newDateFormatCompilerContext()
+	ctx := newDateFormatCompilerContext(t)
 	sql := "create table time02 as select date_format(col2, '%M'), date_format(col2, '%m'), row_number() over () from time01 group by col2 with rollup"
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
@@ -384,13 +384,13 @@ func TestBuildCTASPreservesDateFormatHeadingThroughRollupWindowRewrite(t *testin
 }
 
 func TestBuildCTASDynamicDateFormatLowercasesIdentifiers(t *testing.T) {
-	requireCTASColumnName(t, newDateFormatCompilerContext(),
+	requireCTASColumnName(t, newDateFormatCompilerContext(t),
 		"create table time02 as select date_format(`D'X`, fmt_col) from time01",
 		"date_format(d'x, fmt_col)")
 }
 
 func TestBuildCTASLowercasesApostropheInSourceIdentifier(t *testing.T) {
-	requireCTASColumnName(t, newDateFormatCompilerContext(),
+	requireCTASColumnName(t, newDateFormatCompilerContext(t),
 		"create table time02 as select date_format(`D'X`, '%M') from time01",
 		"date_format(d'x, '%M')")
 }
@@ -399,7 +399,7 @@ func TestHeadingProvenanceIsLazyAndSparse(t *testing.T) {
 	ctx := NewBindContext(nil, nil)
 	require.Nil(t, ctx.headingProvenance)
 	require.Nil(t, ctx.generatedHeadingProvenance)
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false), false, false)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false, newPlanTestProcess(t)), false, false)
 	require.Nil(t, builder.headingProvenanceByNode)
 
 	for i := 0; i < 1000; i++ {

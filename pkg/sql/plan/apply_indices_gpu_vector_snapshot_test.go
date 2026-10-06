@@ -37,7 +37,7 @@ func gpuVectorSnapshotFixture(
 	t.Helper()
 
 	mock := &customMockCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(false),
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		resolveVarFunc: func(name string, isSys, isGlobal bool) (interface{}, error) {
 			switch name {
 			case threadsVar:

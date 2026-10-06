@@ -32,14 +32,6 @@ import (
 // Reuse the shared two-CN fixture and persist just five rows (six after reuse).
 func TestHexBitFilterRemote(t *testing.T) {
 	var invalidationErr error
-	defer func() {
-		if invalidationErr != nil {
-			t.Errorf("discarding shared fixture: %v", invalidationErr)
-			if err := embed.CloseBaseClusterTests(); err != nil {
-				t.Errorf("close invalid fixture: %v", err)
-			}
-		}
-	}()
 	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()

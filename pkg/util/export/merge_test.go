@@ -41,7 +41,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 
 	"github.com/lni/goutils/leaktest"
-	"github.com/matrixorigin/simdcsv"
 	"github.com/robfig/cron/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -139,13 +138,6 @@ func TestInitCronExpr(t *testing.T) {
 	}
 }
 
-var newFilePath = func(tbl *table.Table, ts time.Time) string {
-	filename := tbl.PathBuilder.NewLogFilename(tbl.GetName(), "uuid", "node", ts, table.CsvExtension)
-	p := tbl.PathBuilder.Build(tbl.Account, table.MergeLogTypeLogs, ts, tbl.Database, tbl.GetName())
-	filepath := path.Join(p, filename)
-	return filepath
-}
-
 func newETLWriter(ctx context.Context, fs fileservice.FileService, filePath string, buf []byte, tbl *table.Table, mp *mpool.MPool) (ETLWriter, error) {
 
 	if strings.LastIndex(filePath, table.TaeExtension) > 0 {
@@ -156,31 +148,6 @@ func newETLWriter(ctx context.Context, fs fileservice.FileService, filePath stri
 		fsWriter := etl.NewFSWriter(ctx, fs, etl.WithFilePath(filePath))
 		return etl.NewCSVWriter(ctx, fsWriter), nil
 	}
-}
-
-func initEmptyLogFile(ctx context.Context, fs fileservice.FileService, tbl *table.Table, ts time.Time) ([]string, error) {
-	mux.Lock()
-	defer mux.Unlock()
-
-	files := make([]string, 0, 1)
-	buf := make([]byte, 0, 4096)
-
-	ts1 := ts
-	filePath := newFilePath(tbl, ts1)
-	files = append(files, filePath)
-	writer, err := newETLWriter(ctx, fs, filePath, buf, tbl, nil)
-	if err != nil {
-		return nil, err
-	}
-	_, err = writer.FlushAndClose()
-	if err != nil {
-		var e *moerr.Error
-		if !errors.As(err, &e) || e.ErrorCode() != moerr.ErrEmptyRange {
-			return nil, err
-		}
-	}
-
-	return files, nil
 }
 
 func getdummyMpool() *mpool.MPool {
@@ -194,6 +161,7 @@ func getdummyMpool() *mpool.MPool {
 func TestDiscardIncompatibleFile(t *testing.T) {
 	ctx := context.Background()
 	fs := testutil.NewFS(t)
+	t.Cleanup(func() { fs.Close(context.Background()) })
 	filePath := "etl:sys/logs/legacy-statement-info.csv"
 	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
 		FilePath: filePath,
@@ -215,6 +183,7 @@ func TestDiscardIncompatibleFile(t *testing.T) {
 func TestMergeDiscardsIncompatibleStatementInfoFile(t *testing.T) {
 	ctx := context.Background()
 	fs := testutil.NewFS(t)
+	t.Cleanup(func() { fs.Close(context.Background()) })
 	filePath := "etl:sys/logs/legacy-statement-info.csv"
 	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
 		FilePath: filePath,
@@ -254,68 +223,6 @@ func initSingleLogsFile(ctx context.Context, fs fileservice.FileService, tbl *ta
 	writer.FlushAndClose()
 
 	return path, nil
-}
-
-var mergeLock sync.Mutex
-
-func TestNewMergeNOFiles(t *testing.T) {
-	const newSqlWriteLogic = true
-	if simdcsv.SupportedCPU() || newSqlWriteLogic {
-		t.Skip()
-	}
-	mergeLock.Lock()
-	defer mergeLock.Unlock()
-	fs := testutil.NewFS(t)
-	ts, _ := time.Parse("2006-01-02 15:04:05", "2021-01-01 00:00:00")
-	dummyFilePath := newFilePath(dummyTable, ts)
-
-	ctx := trace.Generate(context.Background())
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	_, err := initEmptyLogFile(ctx, fs, dummyTable, ts)
-	require.Nil(t, err)
-
-	type args struct {
-		ctx  context.Context
-		opts []MergeOption
-		// files
-		files []*FileMeta
-	}
-	tests := []struct {
-		name string
-		args args
-		// wantMsg
-		wantMsg string
-	}{
-		{
-			name: "normal",
-			args: args{
-				ctx: ctx,
-				opts: []MergeOption{
-					WithFileService(fs),
-					WithTable(dummyTable),
-					WithMaxFileSize(1),
-					WithMaxFileSize(16 * mpool.MB),
-					WithMaxMergeJobs(16),
-				},
-				files: []*FileMeta{{dummyFilePath, 0}},
-			},
-			wantMsg: "is not found",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-
-			got, err := NewMerge(tt.args.ctx, "", tt.args.opts...)
-			require.Nil(t, err)
-			require.NotNil(t, got)
-
-			err = got.doMergeFiles(ctx, tt.args.files)
-			require.Equal(t, true, strings.Contains(err.Error(), tt.wantMsg))
-
-		})
-	}
 }
 
 func TestMergeTaskExecutorFactory(t *testing.T) {
@@ -487,6 +394,7 @@ func TestNewMergeService(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Minute*5)
 	defer cancel()
 	fs := testutil.NewFS(t)
+	t.Cleanup(func() { fs.Close(context.Background()) })
 
 	type args struct {
 		ctx  context.Context
@@ -572,6 +480,12 @@ func Test_newETLReader(t *testing.T) {
 			defer got.Close()
 		})
 	}
+
+	t.Run("missing CSV", func(t *testing.T) {
+		got, err := newETLReader(ctx, "", dummyTable, fs, "missing.csv", 0, mp)
+		require.Nil(t, got)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+	})
 
 	t.Run("unsupported", func(t *testing.T) {
 		filePath := "sys/logs/2026/08/27/rawlog/"
