@@ -50,7 +50,7 @@ func sqlOutput(_ *batch.Batch, _ *perfcounter.CounterSet) error {
 func makeTestCases(t *testing.T) []outputTestCase {
 	return []outputTestCase{
 		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			proc: testutil.NewProcess(t),
 			types: []types.Type{
 				types.T_int8.ToType(),
 			},
@@ -60,7 +60,7 @@ func makeTestCases(t *testing.T) []outputTestCase {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			proc: testutil.NewProcess(t),
 			types: []types.Type{
 				types.T_int8.ToType(),
 			},

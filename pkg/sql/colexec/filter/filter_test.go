@@ -52,7 +52,7 @@ func makeTestCases(t testing.TB) []filterTestCase {
 	return []filterTestCase{
 		// case1: Contains one conditional expression
 		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			proc: testutil.NewProcess(t),
 			arg: &Filter{
 				FilterExprs: []*plan.Expr{
 					{
@@ -86,7 +86,7 @@ func makeTestCases(t testing.TB) []filterTestCase {
 		},
 		// case2: Contains two conditional expressions
 		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			proc: testutil.NewProcess(t),
 			arg: &Filter{
 				FilterExprs: []*plan.Expr{
 					{
