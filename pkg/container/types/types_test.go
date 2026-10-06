@@ -95,7 +95,6 @@ func TestTypeMarshalAndUnmarshal(t *testing.T) {
 		Oid:     T(1),
 		Charset: 2,
 		notNull: 0,
-		dummy2:  4,
 		Size:    5,
 		Width:   6,
 		Scale:   -1,

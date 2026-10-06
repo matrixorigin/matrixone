@@ -2825,28 +2825,25 @@ func TestUnionSqlBuilder(t *testing.T) {
 		"select n_name from nation intersect all select n_name from nation2",
 		"select n_name from nation except all select n_name from nation2",
 		"select n_name from nation minus all select n_name from nation2",
-		"(select n_name from nation for update) union all (select n_name from nation2 for update)",
-		"(select n_name from nation for update) union all (select n_name from nation2)",
-		"with qn as (select n_nationkey from nation union all select n_nationkey from nation2) select * from qn for update",
-		"with qn as (select n_nationkey from nation union all select n_nationkey from nation2) select * from qn limit 6 for update",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
-	forUpdateUnionPlan, err := runOneStmt(mock, t, "(select n_name from nation for update) union all (select n_name from nation2 for update)")
-	require.NoError(t, err)
-	require.Equal(t, 2, countLockOpNodes(forUpdateUnionPlan))
-
-	forUpdateUnionOneBranchPlan, err := runOneStmt(mock, t, "(select n_name from nation for update) union all (select n_name from nation2)")
-	require.NoError(t, err)
-	require.Equal(t, 1, countLockOpNodes(forUpdateUnionOneBranchPlan))
-
-	cteOuterForUpdatePlan, err := runOneStmt(mock, t, "with qn as (select n_nationkey from nation union all select n_nationkey from nation2) select * from qn for update")
-	require.NoError(t, err)
-	require.Equal(t, 0, countLockOpNodes(cteOuterForUpdatePlan))
-
-	cteOuterForUpdateLimitPlan, err := runOneStmt(mock, t, "with qn as (select n_nationkey from nation union all select n_nationkey from nation2) select * from qn limit 6 for update")
-	require.NoError(t, err)
-	require.Equal(t, 0, countLockOpNodes(cteOuterForUpdateLimitPlan))
+	for _, test := range []struct {
+		sql         string
+		wantLockOps int
+	}{
+		{"(select n_name from nation for update) union all (select n_name from nation2 for update)", 2},
+		{"(select n_name from nation for update) union all (select n_name from nation2)", 1},
+		{"with qn as (select n_nationkey from nation union all select n_nationkey from nation2) select * from qn for update", 0},
+		{"with qn as (select n_nationkey from nation union all select n_nationkey from nation2) select * from qn limit 6 for update", 0},
+	} {
+		t.Run(test.sql, func(t *testing.T) {
+			logicPlan, err := runOneStmt(mock, t, test.sql)
+			require.NoError(t, err)
+			testDeepCopy(logicPlan)
+			require.Equal(t, test.wantLockOps, countLockOpNodes(logicPlan))
+		})
+	}
 
 	// should error
 	sqls = []string{

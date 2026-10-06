@@ -63,10 +63,10 @@ func makeTestCases(t *testing.T) []mergeCTETestCase {
 }
 
 func TestString(t *testing.T) {
-	buf := new(bytes.Buffer)
-	for _, tc := range makeTestCases(t) {
-		tc.arg.String(buf)
-	}
+	var buf bytes.Buffer
+	arg := &MergeCTE{}
+	arg.String(&buf)
+	require.Equal(t, "merge_cte: merge cte ", buf.String())
 }
 
 func TestPrepare(t *testing.T) {

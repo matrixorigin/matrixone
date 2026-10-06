@@ -58,6 +58,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
@@ -617,14 +618,14 @@ func TestPreparedScopeRunReleasesBuiltReader(t *testing.T) {
 				Proc:     proc,
 				NodeInfo: engine.Node{Mcpu: 1},
 				DataSource: &Source{
-					Rel:        rel,
-					FilterList: []*plan.Expr{plan2.MakeFalseExpr()},
+					Rel: rel,
 				},
 			}
 			reader.onRead = func() {
 				require.Same(t, reader, scope.DataSource.R)
 			}
 			compile := &Compile{proc: proc, isPrepare: true}
+			configureReaderPathTest(t, compile, scope)
 			var err error
 			if parallel {
 				err = scope.ParallelRun(compile)
@@ -651,9 +652,9 @@ func TestPreparedParallelWorkersReleaseBuiltReaders(t *testing.T) {
 			Rel: &mockRelationForParallelOrderBy{readers: []engine.Reader{
 				readers[0], readers[1],
 			}},
-			FilterList: []*plan.Expr{plan2.MakeFalseExpr()},
 		},
 	}
+	configureReaderPathTest(t, c, source)
 	parallel, err := buildScanParallelRun(source, c)
 	require.NoError(t, err)
 	require.Len(t, parallel.PreScopes, 2)
@@ -2553,42 +2554,94 @@ func TestBroadcastJoinMapReferencesCountProbeWorkers(t *testing.T) {
 			want:   map[string]int32{"cn1:6001": 5},
 		},
 		{
+			name:   "remote colocated probes with local source",
+			probes: engine.Nodes{{Addr: "cn2:6001", Mcpu: 1}, {Addr: "cn2:6001", Mcpu: 1}},
+			want:   map[string]int32{"cn2:6001": 2},
+		},
+		{
 			name:   "mixed groups on multiple CNs",
 			probes: engine.Nodes{{Addr: "cn1:6001", Mcpu: 2}, {Addr: "cn1:6001", Mcpu: 1}, {Addr: "cn2:6001", Mcpu: 4}},
 			want:   map[string]int32{"cn1:6001": 3, "cn2:6001": 4},
 		},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			c := NewMockCompile(t)
-			c.cnList = engine.Nodes{{Addr: "cn1:6001", Mcpu: 4}, {Addr: "cn2:6001", Mcpu: 4}}
-			c.addr = "cn1:6001"
-			c.execType = plan2.ExecTypeAP_MULTICN
-			c.anal = &AnalyzeModule{qry: &plan.Query{}}
-			node := &plan.Node{Stats: &plan.Stats{HashmapStats: &plan.HashMapStats{}}}
-			buildScope := generateScopeWithRootOperator(c.proc, []vm.OpType{vm.TableScan})
-			buildScope.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
-			probes := make([]*Scope, len(tc.probes))
-			for i, probe := range tc.probes {
-				probes[i] = generateScopeWithRootOperator(c.proc, []vm.OpType{vm.HashJoin})
-				probes[i].NodeInfo = probe
-			}
+		for _, opType := range []vm.OpType{vm.HashJoin, vm.Product} {
+			t.Run(fmt.Sprintf("%s/%d", tc.name, opType), func(t *testing.T) {
+				c := NewMockCompile(t)
+				c.cnList = engine.Nodes{{Addr: "cn1:6001", Mcpu: 4}, {Addr: "cn2:6001", Mcpu: 4}}
+				c.addr = "cn1:6001"
+				c.execType = plan2.ExecTypeAP_MULTICN
+				c.anal = &AnalyzeModule{qry: &plan.Query{}}
+				node := &plan.Node{Stats: &plan.Stats{HashmapStats: &plan.HashMapStats{}}}
+				buildScope := generateScopeWithRootOperator(c.proc, []vm.OpType{vm.TableScan})
+				buildScope.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
+				probes := make([]*Scope, len(tc.probes))
+				for i, probe := range tc.probes {
+					probes[i] = generateScopeWithRootOperator(c.proc, []vm.OpType{opType})
+					probes[i].NodeInfo = probe
+				}
 
-			c.compileBuildSideForBroadcastJoin(node, probes, []*Scope{buildScope})
-			builds := make(map[string]*hashbuild.HashBuild)
-			for _, probe := range probes {
-				for _, pre := range probe.PreScopes {
-					if build, ok := pre.RootOp.(*hashbuild.HashBuild); ok {
-						require.NotContains(t, builds, pre.NodeInfo.Addr)
-						builds[pre.NodeInfo.Addr] = build
+				owners := c.compileBuildSideForBroadcastJoin(node, probes, []*Scope{buildScope})
+				if opType == vm.Product && len(probes) > 1 {
+					require.Equal(t, probes, owners)
+					// Model a downstream rewrite of packed DOP before ownership
+					// transfer: refcounts must use the final worker templates.
+					if tc.name == "colocated packed scopes" {
+						probes[0].NodeInfo.Mcpu = 1
 					}
 				}
-			}
-			require.Len(t, builds, len(tc.want))
-			for addr, want := range tc.want {
-				require.Contains(t, builds, addr)
-				require.Equal(t, want, builds[addr].JoinMapRefCnt, addr)
-			}
-		})
+				owners = c.finishProductBuilds(owners, true)
+				builds := make(map[string]*hashbuild.HashBuild)
+				seen := make(map[*Scope]bool)
+				var visit func(*Scope)
+				visit = func(scope *Scope) {
+					require.False(t, seen[scope], "scope must have exactly one owner")
+					seen[scope] = true
+					require.NoError(t, vm.HandleAllOp(scope.RootOp, func(_ vm.Operator, op vm.Operator) error {
+						if build, ok := op.(*hashbuild.HashBuild); ok {
+							require.NotContains(t, builds, scope.NodeInfo.Addr)
+							builds[scope.NodeInfo.Addr] = build
+						}
+						return nil
+					}))
+					for _, pre := range scope.PreScopes {
+						visit(pre)
+					}
+				}
+				for _, owner := range owners {
+					visit(owner)
+				}
+				if opType == vm.Product && len(probes) > 1 {
+					require.Len(t, owners, 1)
+					owner := owners[0]
+					require.True(t, owner.ConcurrentPreScopes)
+					for _, probe := range probes {
+						require.Empty(t, probe.PreScopes, "a probe must not own shared producers")
+					}
+					job := owner.PreScopes[len(owner.PreScopes)-1]
+					require.True(t, job.ConcurrentPreScopes)
+					require.Contains(t, job.PreScopes, buildScope)
+					require.Len(t, job.Proc.Reg.MergeReceivers, len(tc.want))
+					require.Len(t, job.PreScopes, len(tc.want)+1)
+					require.False(t, owner.RootOp.(*merge.Merge).Partial,
+						"auxiliary job must not change the result receiver range")
+					for _, pre := range job.PreScopes {
+						conn, ok := pre.RootOp.(*connector.Connector)
+						if ok && conn.GetChildren(0).OpType() == vm.HashBuild {
+							require.Contains(t, job.Proc.Reg.MergeReceivers, conn.Reg)
+							require.NotContains(t, owner.Proc.Reg.MergeReceivers, conn.Reg)
+						}
+					}
+				}
+				require.Len(t, builds, len(tc.want))
+				for addr, want := range tc.want {
+					require.Contains(t, builds, addr)
+					if opType == vm.Product && tc.name == "colocated packed scopes" && addr == "cn1:6001" {
+						want--
+					}
+					require.Equal(t, want, builds[addr].JoinMapRefCnt, addr)
+				}
+			})
+		}
 	}
 }
 
@@ -2613,6 +2666,8 @@ func generateScopeWithRootOperator(proc *process.Process, operatorList []vm.OpTy
 			arg := hashjoin.NewArgument()
 			arg.EqConds = [][]*plan.Expr{nil, nil}
 			return arg
+		case vm.Product:
+			return product.NewArgument()
 		case vm.Merge:
 			return merge.NewArgument()
 		default:
@@ -3009,13 +3064,13 @@ func TestBuildScanParallelRunSetsOrderByOnParallelReaders(t *testing.T) {
 
 	scope.DataSource = &Source{
 		Rel:                &mockRelationForParallelOrderBy{readers: []engine.Reader{reader1, reader2}},
-		FilterList:         []*plan.Expr{plan2.MakeFalseExpr()},
 		FilterExpr:         nil,
 		OrderBy:            orderBy,
 		RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
 	}
 	scope.NodeInfo = engine.Node{Mcpu: 2}
 
+	configureReaderPathTest(t, c, scope)
 	mergeScope, err := buildScanParallelRun(scope, c)
 	require.NoError(t, err)
 	require.NotNil(t, mergeScope)

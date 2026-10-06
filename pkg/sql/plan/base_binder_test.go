@@ -1227,10 +1227,45 @@ func TestMinOverGroupConcatPreservesTextShapedBinaryCollation(t *testing.T) {
 		minCharsets)
 }
 
-func TestConvertUsingRejectsUnsupportedCharset(t *testing.T) {
-	_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
-		"select convert(c using latin1) from select_test.bind_select")
-	require.ErrorContains(t, err, "unsupported character set 'latin1' for CONVERT USING")
+func TestConvertUsingCharsetAdmissionMatchesEvaluator(t *testing.T) {
+	for _, charset := range []string{"utf32", "UTF32", "latin1", "ascii", "gbk"} {
+		for _, prefix := range []string{"", "create view select_test.c01_convert_view as "} {
+			sql := prefix + "select convert(c using " + charset + ") as c from select_test.bind_select"
+			t.Run(sql, func(t *testing.T) {
+				stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+				p, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
+				require.ErrorContains(t, err, "for CONVERT USING")
+				if charset == "latin1" {
+					require.ErrorContains(t, err, "unsupported character set 'latin1' for CONVERT USING")
+				} else {
+					require.ErrorContains(t, err, "unsupported character set")
+				}
+				require.Nil(t, p, "unsupported conversion must not publish a SELECT or durable view plan")
+			})
+		}
+	}
+	for _, charset := range []string{"utf8", "utf8mb3", "utf8mb4", "binary"} {
+		for _, prefix := range []string{"", "create view select_test.c01_convert_view as "} {
+			sql := prefix + "select convert(c using " + charset + ") as c from select_test.bind_select"
+			t.Run(sql, func(t *testing.T) {
+				stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+				p, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
+				require.NoError(t, err)
+				require.NotNil(t, p)
+			})
+		}
+	}
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"create table c01_utf32_ddl(c varchar(1)) default charset=utf32", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+	require.NoError(t, err)
+	require.Equal(t, uint32(types.CharsetUTF8), p.GetDdl().GetCreateTable().GetTableDef().DefaultCharset)
 }
 
 func TestBindSerialFunctionOverEmptyExprListDoesNotPanic(t *testing.T) {

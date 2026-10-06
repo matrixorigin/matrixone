@@ -398,9 +398,14 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 			if null2 {
 				return false, fmt.Sprintf("the %dth row expected %s, but get NULL", i+1, string(want))
 			}
-			if types.ArrayCompare[float32](types.BytesToArray[float32](want), types.BytesToArray[float32](get)) != 0 {
-				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
-					i+1, types.BytesToArray[float32](want), types.BytesToArray[float32](get))
+			wantArray, gotArray := types.BytesToArray[float32](want), types.BytesToArray[float32](get)
+			if len(wantArray) != len(gotArray) {
+				return false, fmt.Sprintf("the %dth row expected %v, but get %v", i+1, wantArray, gotArray)
+			}
+			for j, value := range wantArray {
+				if value != gotArray[j] && !(math.IsNaN(float64(value)) && math.IsNaN(float64(gotArray[j]))) {
+					return false, fmt.Sprintf("the %dth row expected %v, but get %v", i+1, wantArray, gotArray)
+				}
 			}
 		}
 	case types.T_array_float64:
@@ -883,6 +888,33 @@ func TestFunctionTestCaseOwnership(t *testing.T) {
 func TestFunctionResultMetadataContract(t *testing.T) {
 	proc := newMemoryFunctionTestProcess(t)
 	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	t.Run("float32 array values", func(t *testing.T) {
+		for _, tc := range []struct {
+			name         string
+			want, actual []float32
+			match        bool
+		}{
+			{"finite equal", []float32{1}, []float32{1}, true},
+			{"finite different", []float32{1}, []float32{2}, false},
+			{"unexpected NaN", []float32{1}, []float32{float32(math.NaN())}, false},
+			{"missing NaN", []float32{float32(math.NaN())}, []float32{1}, false},
+			{"matching NaN", []float32{float32(math.NaN())}, []float32{float32(math.NaN())}, true},
+			{"array length", []float32{1}, []float32{1, 2}, false},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				fc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1}}, nil)},
+					NewFunctionTestResult(types.T_array_float32.ToType(), false, [][]float32{tc.want}, nil),
+					func(_ []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, _ int, _ *FunctionSelectList) error {
+						return vector.MustFunctionResult[types.Varlena](result).AppendBytes(types.ArrayToBytes(tc.actual), false)
+					})
+				t.Cleanup(fc.Free)
+				ok, info := fc.RunAndFree()
+				require.Equal(t, tc.match, ok, info)
+				require.Zero(t, proc.Mp().CurrNB())
+			})
+		}
+	})
+
 	for _, tc := range []struct {
 		name   string
 		length int

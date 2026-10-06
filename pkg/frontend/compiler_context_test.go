@@ -523,6 +523,35 @@ func TestRecoverTableDefForPlanMigratesLegacyHex(t *testing.T) {
 	require.Equal(t, int32(function.HexFloat64Overload), overloadID)
 }
 
+func TestCollationMetadataResolveRejectsBeforeLegacyRecovery(t *testing.T) {
+	for _, catalogDef := range []*pbplan.TableDef{
+		{Cols: []*pbplan.ColDef{{Name: "v", Typ: pbplan.Type{Id: int32(types.T_varchar), Charset: 4, CollationVersion: 1}}}},
+		{DefaultCharset: 3, CollationVersion: 1},
+		{KeyFormat: 1},
+		{Indexes: []*pbplan.IndexDef{{KeyFormat: 1}}},
+	} {
+		proc := testutil.NewProcess(t)
+		ctrl := gomock.NewController(t)
+		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+		storage := mock_frontend.NewMockEngine(ctrl)
+		relation := mock_frontend.NewMockRelation(ctrl)
+		storage.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(42)).Return("db", "t", relation, nil)
+		relation.EXPECT().GetTableDef(gomock.Any()).Return(catalogDef)
+		ses, _ := newObservedProtocolSession()
+		ses.txnHandler = InitTxnHandler("", storage, proc.Ctx, txnOp)
+		tcc := &TxnCompilerContext{execCtx: &ExecCtx{reqCtx: proc.Ctx, ses: ses, proc: proc}}
+		before, err := catalogDef.Marshal()
+		require.NoError(t, err)
+		obj, resolved, err := tcc.ResolveById(42, nil)
+		require.ErrorContains(t, err, "disabled")
+		require.Nil(t, obj)
+		require.Nil(t, resolved)
+		after, err := catalogDef.Marshal()
+		require.NoError(t, err)
+		require.Equal(t, before, after)
+	}
+}
+
 func TestResolveByIdPreservesUnassignableLegacyHexDefault(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	rt := moruntime.ServiceRuntime(proc.GetService())
