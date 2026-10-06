@@ -44,56 +44,18 @@ type offsetTestCase struct {
 }
 
 func makeTestCases(t *testing.T) []offsetTestCase {
-	return []offsetTestCase{
-		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
-			types: []types.Type{
-				types.T_int8.ToType(),
-			},
+	cases := make([]offsetTestCase, 0, 3)
+	for _, offset := range []uint64{8, 10, 12} {
+		cases = append(cases, offsetTestCase{
+			proc:  testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			types: []types.Type{types.T_int8.ToType()},
 			arg: &Offset{
-				OffsetExpr: plan2.MakePlan2Uint64ConstExprWithType(8),
-				OperatorBase: vm.OperatorBase{
-					OperatorInfo: vm.OperatorInfo{
-						Idx:     1,
-						IsFirst: false,
-						IsLast:  false,
-					},
-				},
+				OffsetExpr:   plan2.MakePlan2Uint64ConstExprWithType(offset),
+				OperatorBase: vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 1}},
 			},
-		},
-		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
-			types: []types.Type{
-				types.T_int8.ToType(),
-			},
-			arg: &Offset{
-				OffsetExpr: plan2.MakePlan2Uint64ConstExprWithType(10),
-				OperatorBase: vm.OperatorBase{
-					OperatorInfo: vm.OperatorInfo{
-						Idx:     1,
-						IsFirst: false,
-						IsLast:  false,
-					},
-				},
-			},
-		},
-		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
-			types: []types.Type{
-				types.T_int8.ToType(),
-			},
-			arg: &Offset{
-				OffsetExpr: plan2.MakePlan2Uint64ConstExprWithType(12),
-				OperatorBase: vm.OperatorBase{
-					OperatorInfo: vm.OperatorInfo{
-						Idx:     1,
-						IsFirst: false,
-						IsLast:  false,
-					},
-				},
-			},
-		},
+		})
 	}
+	return cases
 }
 
 func TestString(t *testing.T) {

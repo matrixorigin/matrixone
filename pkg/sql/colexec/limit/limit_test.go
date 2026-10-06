@@ -44,53 +44,18 @@ type limitTestCase struct {
 }
 
 func makeTestCases(t *testing.T) []limitTestCase {
-	return []limitTestCase{
-		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
-			arg: &Limit{
-				LimitExpr: plan2.MakePlan2Uint64ConstExprWithType(0),
-				OperatorBase: vm.OperatorBase{
-					OperatorInfo: vm.OperatorInfo{
-						Idx:     0,
-						IsFirst: false,
-						IsLast:  false,
-					},
-				},
-			},
-			getRowCount: 0,
-		},
-		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
-			arg: &Limit{
-				LimitExpr: plan2.MakePlan2Uint64ConstExprWithType(1),
-				OperatorBase: vm.OperatorBase{
-					OperatorInfo: vm.OperatorInfo{
-						Idx:     0,
-						IsFirst: false,
-						IsLast:  false,
-					},
-				},
-			},
-			getRowCount: 1,
-		},
-		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
-			arg: &Limit{
-				ctr: container{
-					seen: 0,
-				},
-				LimitExpr: plan2.MakePlan2Uint64ConstExprWithType(5),
-				OperatorBase: vm.OperatorBase{
-					OperatorInfo: vm.OperatorInfo{
-						Idx:     0,
-						IsFirst: false,
-						IsLast:  false,
-					},
-				},
-			},
-			getRowCount: 2, //if colexec.MakeMockBatchs return more rows, you need to change it
-		},
+	cases := make([]limitTestCase, 0, 3)
+	for _, tc := range []struct {
+		limit uint64
+		rows  int
+	}{{0, 0}, {1, 1}, {5, 2}} {
+		cases = append(cases, limitTestCase{
+			proc:        testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			arg:         &Limit{LimitExpr: plan2.MakePlan2Uint64ConstExprWithType(tc.limit)},
+			getRowCount: tc.rows,
+		})
 	}
+	return cases
 }
 
 func TestString(t *testing.T) {
