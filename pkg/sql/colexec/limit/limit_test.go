@@ -50,7 +50,7 @@ func makeTestCases(t *testing.T) []limitTestCase {
 		rows  int
 	}{{0, 0}, {1, 1}, {5, 2}} {
 		cases = append(cases, limitTestCase{
-			proc:        testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			proc:        testutil.NewProcess(t),
 			arg:         &Limit{LimitExpr: plan2.MakePlan2Uint64ConstExprWithType(tc.limit)},
 			getRowCount: tc.rows,
 		})

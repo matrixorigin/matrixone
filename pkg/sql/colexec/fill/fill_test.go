@@ -57,7 +57,7 @@ func makeTestCases(t *testing.T) []fillTestCase {
 		plan.Node_VALUE, plan.Node_PREV, plan.Node_NONE, plan.Node_NEXT, plan.Node_LINEAR,
 	} {
 		cases = append(cases, fillTestCase{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			proc: testutil.NewProcess(t),
 			arg: &Fill{
 				FillType: mode,
 				FillVal: []*plan.Expr{{
@@ -81,6 +81,10 @@ func TestString(t *testing.T) {
 
 func TestPrepare(t *testing.T) {
 	for _, tc := range makeTestCases(t) {
+		t.Cleanup(func() {
+			tc.arg.Free(tc.proc, false, nil)
+			require.Zero(t, tc.proc.Mp().CurrNB())
+		})
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 	}
@@ -91,6 +95,7 @@ func TestFill(t *testing.T) {
 		t.Cleanup(func() {
 			tc.arg.Free(tc.proc, false, nil)
 			require.Zero(t, tc.proc.Mp().CurrNB())
+			require.Zero(t, tc.proc.Mp().OnHeapCurrNB())
 		})
 		tc.arg.ctr.bats = make([]*batch.Batch, 10)
 		for range 2 {

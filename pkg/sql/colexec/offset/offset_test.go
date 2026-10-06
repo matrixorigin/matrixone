@@ -47,7 +47,7 @@ func makeTestCases(t *testing.T) []offsetTestCase {
 	cases := make([]offsetTestCase, 0, 3)
 	for _, offset := range []uint64{8, 10, 12} {
 		cases = append(cases, offsetTestCase{
-			proc:  testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			proc:  testutil.NewProcess(t),
 			types: []types.Type{types.T_int8.ToType()},
 			arg: &Offset{
 				OffsetExpr:   plan2.MakePlan2Uint64ConstExprWithType(offset),

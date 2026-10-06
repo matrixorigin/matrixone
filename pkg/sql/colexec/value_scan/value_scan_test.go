@@ -80,7 +80,7 @@ func (e *rowWindowExpressionExecutor) TypeName() string   { return "row-window-p
 func makeTestCases(t *testing.T) []valueScanTestCase {
 	return []valueScanTestCase{
 		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			proc: testutil.NewProcess(t),
 			arg:  &ValueScan{},
 		},
 	}
