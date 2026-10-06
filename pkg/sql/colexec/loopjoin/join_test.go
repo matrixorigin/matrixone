@@ -37,11 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const (
-	Rows          = 10     // default rows
-	BenchmarkRows = 100000 // default rows for benchmark
-)
-
 func TestLoopJoinAllocationSiteLedger(t *testing.T) {
 	require.Equal(t, uint8(92), uint8(loopJoinAllocationSiteMatched))
 	require.Equal(t, uint8(93), uint8(loopJoinAllocationSiteBatchOffsets))

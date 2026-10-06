@@ -39,11 +39,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const (
-	Rows          = 10     // default rows
-	BenchmarkRows = 100000 // default rows for benchmark
-)
-
 // add unit tests for cases
 type joinTestCase struct {
 	arg    *HashJoin

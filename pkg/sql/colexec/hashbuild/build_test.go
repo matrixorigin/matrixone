@@ -48,8 +48,7 @@ import (
 )
 
 const (
-	Rows          = 10     // default rows
-	BenchmarkRows = 100000 // default rows for benchmark
+	Rows = 10 // default rows
 )
 
 func runtimeFilterPlanType(typ types.Type) *plan.Type {

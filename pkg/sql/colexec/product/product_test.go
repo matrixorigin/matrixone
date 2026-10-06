@@ -31,11 +31,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const (
-	Rows          = 10     // default rows
-	BenchmarkRows = 100000 // default rows for benchmark
-)
-
 func TestProductAllocationSiteLedger(t *testing.T) {
 	require.Equal(t, uint8(94), uint8(productAllocationSiteResultData))
 	require.Equal(t, uint8(97), uint8(productAllocationSiteResultGrouping))

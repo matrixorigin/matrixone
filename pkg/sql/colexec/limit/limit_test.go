@@ -31,11 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const (
-	Rows          = 10      // default rows
-	BenchmarkRows = 1000000 // default rows for benchmark
-)
-
 // add unit tests for cases
 type limitTestCase struct {
 	arg         *Limit
