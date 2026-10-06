@@ -61,181 +61,133 @@ func makeConsistentIvfMultiTableIndexForTest(indexName, idxAlgoParams string, pa
 	}
 }
 
-// TestPrepareIvfIndexContext_NilVecCtx tests the case where vecCtx is nil
-func TestPrepareIvfIndexContext_NilVecCtx(t *testing.T) {
+func TestPrepareIvfIndexContextRejectsUnsupportedInputs(t *testing.T) {
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
-	multiTableIndex := &MultiTableIndex{}
-
-	result, err := builder.prepareIvfIndexContext(nil, multiTableIndex)
-	assert.NoError(t, err)
-	assert.Nil(t, result)
-}
-
-// TestPrepareIvfIndexContext_NilMultiTableIndex tests the case where multiTableIndex is nil
-func TestPrepareIvfIndexContext_NilMultiTableIndex(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
-	vecCtx := &vectorSortContext{}
-
-	result, err := builder.prepareIvfIndexContext(vecCtx, nil)
-	assert.NoError(t, err)
-	assert.Nil(t, result)
-}
-
-// TestPrepareIvfIndexContext_NilDistFnExpr tests the case where distFnExpr is nil
-func TestPrepareIvfIndexContext_NilDistFnExpr(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
-	vecCtx := &vectorSortContext{
-		distFnExpr: nil,
-	}
-	multiTableIndex := &MultiTableIndex{}
-
-	result, err := builder.prepareIvfIndexContext(vecCtx, multiTableIndex)
-	assert.NoError(t, err)
-	assert.Nil(t, result)
-}
-
-// TestPrepareIvfIndexContext_ForceModeEnabled tests the case where rankOption.Mode is "force"
-func TestPrepareIvfIndexContext_ForceModeEnabled(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
-	vecCtx := &vectorSortContext{
-		distFnExpr: &plan.Function{
-			Func: &ObjectRef{
-				ObjName: "l2_distance",
+	distFn := &plan.Function{Func: &ObjectRef{ObjName: "l2_distance"}}
+	cases := []struct {
+		name   string
+		vecCtx *vectorSortContext
+		index  *MultiTableIndex
+	}{
+		{
+			name:   "NilVecCtx",
+			vecCtx: nil,
+			index:  &MultiTableIndex{},
+		},
+		{
+			name:   "NilMultiTableIndex",
+			vecCtx: &vectorSortContext{},
+			index:  nil,
+		},
+		{
+			name: "NilDistFnExpr",
+			vecCtx: &vectorSortContext{
+				distFnExpr: nil,
+			},
+			index: &MultiTableIndex{},
+		},
+		{
+			name: "ForceModeEnabled",
+			vecCtx: &vectorSortContext{
+				distFnExpr: distFn,
+				rankOption: &plan.RankOption{
+					Mode: "force",
+				},
+			},
+			index: &MultiTableIndex{},
+		},
+		{
+			name: "NilMetaDef",
+			vecCtx: &vectorSortContext{
+				distFnExpr: distFn,
+			},
+			index: &MultiTableIndex{
+				IndexDefs: map[string]*plan.IndexDef{
+					catalog.SystemSI_IVFFLAT_TblType_Metadata:  nil,
+					catalog.SystemSI_IVFFLAT_TblType_Centroids: {},
+					catalog.SystemSI_IVFFLAT_TblType_Entries:   {},
+				},
 			},
 		},
-		rankOption: &plan.RankOption{
-			Mode: "force",
-		},
-	}
-	multiTableIndex := &MultiTableIndex{}
-
-	result, err := builder.prepareIvfIndexContext(vecCtx, multiTableIndex)
-	assert.NoError(t, err)
-	assert.Nil(t, result)
-}
-
-// TestPrepareIvfIndexContext_NilMetaDef tests the case where metaDef is nil
-func TestPrepareIvfIndexContext_NilMetaDef(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
-	vecCtx := &vectorSortContext{
-		distFnExpr: &plan.Function{
-			Func: &ObjectRef{
-				ObjName: "l2_distance",
+		{
+			name: "NilIdxDef",
+			vecCtx: &vectorSortContext{
+				distFnExpr: distFn,
+			},
+			index: &MultiTableIndex{
+				IndexDefs: map[string]*plan.IndexDef{
+					catalog.SystemSI_IVFFLAT_TblType_Metadata:  {},
+					catalog.SystemSI_IVFFLAT_TblType_Centroids: nil,
+					catalog.SystemSI_IVFFLAT_TblType_Entries:   {},
+				},
 			},
 		},
-	}
-	multiTableIndex := &MultiTableIndex{
-		IndexDefs: map[string]*plan.IndexDef{
-			catalog.SystemSI_IVFFLAT_TblType_Metadata:  nil,
-			catalog.SystemSI_IVFFLAT_TblType_Centroids: {},
-			catalog.SystemSI_IVFFLAT_TblType_Entries:   {},
-		},
-	}
-
-	result, err := builder.prepareIvfIndexContext(vecCtx, multiTableIndex)
-	assert.NoError(t, err)
-	assert.Nil(t, result)
-}
-
-// TestPrepareIvfIndexContext_NilIdxDef tests the case where idxDef is nil
-func TestPrepareIvfIndexContext_NilIdxDef(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
-	vecCtx := &vectorSortContext{
-		distFnExpr: &plan.Function{
-			Func: &ObjectRef{
-				ObjName: "l2_distance",
+		{
+			name: "NilEntriesDef",
+			vecCtx: &vectorSortContext{
+				distFnExpr: distFn,
+			},
+			index: &MultiTableIndex{
+				IndexDefs: map[string]*plan.IndexDef{
+					catalog.SystemSI_IVFFLAT_TblType_Metadata:  {},
+					catalog.SystemSI_IVFFLAT_TblType_Centroids: {},
+					catalog.SystemSI_IVFFLAT_TblType_Entries:   nil,
+				},
 			},
 		},
-	}
-	multiTableIndex := &MultiTableIndex{
-		IndexDefs: map[string]*plan.IndexDef{
-			catalog.SystemSI_IVFFLAT_TblType_Metadata:  {},
-			catalog.SystemSI_IVFFLAT_TblType_Centroids: nil,
-			catalog.SystemSI_IVFFLAT_TblType_Entries:   {},
-		},
-	}
-
-	result, err := builder.prepareIvfIndexContext(vecCtx, multiTableIndex)
-	assert.NoError(t, err)
-	assert.Nil(t, result)
-}
-
-// TestPrepareIvfIndexContext_NilEntriesDef tests the case where entriesDef is nil
-func TestPrepareIvfIndexContext_NilEntriesDef(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
-	vecCtx := &vectorSortContext{
-		distFnExpr: &plan.Function{
-			Func: &ObjectRef{
-				ObjName: "l2_distance",
+		{
+			name: "InvalidIndexAlgoParams",
+			vecCtx: &vectorSortContext{
+				distFnExpr: distFn,
+			},
+			index: &MultiTableIndex{
+				IndexDefs: map[string]*plan.IndexDef{
+					catalog.SystemSI_IVFFLAT_TblType_Metadata: {
+						IndexAlgoParams: "invalid json",
+					},
+					catalog.SystemSI_IVFFLAT_TblType_Centroids: {},
+					catalog.SystemSI_IVFFLAT_TblType_Entries:   {},
+				},
 			},
 		},
-	}
-	multiTableIndex := &MultiTableIndex{
-		IndexDefs: map[string]*plan.IndexDef{
-			catalog.SystemSI_IVFFLAT_TblType_Metadata:  {},
-			catalog.SystemSI_IVFFLAT_TblType_Centroids: {},
-			catalog.SystemSI_IVFFLAT_TblType_Entries:   nil,
+		{
+			name: "OpTypeNotString",
+			vecCtx: &vectorSortContext{
+				distFnExpr: distFn,
+			},
+			index: &MultiTableIndex{
+				IndexDefs: map[string]*plan.IndexDef{
+					catalog.SystemSI_IVFFLAT_TblType_Metadata: {
+						IndexAlgoParams: `{"op_type":123}`,
+					},
+					catalog.SystemSI_IVFFLAT_TblType_Centroids: {},
+					catalog.SystemSI_IVFFLAT_TblType_Entries:   {},
+				},
+			},
 		},
-	}
-
-	result, err := builder.prepareIvfIndexContext(vecCtx, multiTableIndex)
-	assert.NoError(t, err)
-	assert.Nil(t, result)
-}
-
-// TestPrepareIvfIndexContext_InvalidIndexAlgoParams tests the case where IndexAlgoParams is invalid JSON
-func TestPrepareIvfIndexContext_InvalidIndexAlgoParams(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
-	vecCtx := &vectorSortContext{
-		distFnExpr: &plan.Function{
-			Func: &ObjectRef{
-				ObjName: "l2_distance",
+		{
+			name: "OpTypeMismatch",
+			vecCtx: &vectorSortContext{
+				distFnExpr: distFn,
+			},
+			index: &MultiTableIndex{
+				IndexDefs: map[string]*plan.IndexDef{
+					catalog.SystemSI_IVFFLAT_TblType_Metadata: {
+						IndexAlgoParams: `{"op_type": "cosine_similarity"}`,
+					},
+					catalog.SystemSI_IVFFLAT_TblType_Centroids: {},
+					catalog.SystemSI_IVFFLAT_TblType_Entries:   {},
+				},
 			},
 		},
 	}
-	multiTableIndex := &MultiTableIndex{
-		IndexDefs: map[string]*plan.IndexDef{
-			catalog.SystemSI_IVFFLAT_TblType_Metadata: {
-				IndexAlgoParams: "invalid json",
-			},
-			catalog.SystemSI_IVFFLAT_TblType_Centroids: {},
-			catalog.SystemSI_IVFFLAT_TblType_Entries:   {},
-		},
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := builder.prepareIvfIndexContext(tc.vecCtx, tc.index)
+			require.NoError(t, err)
+			require.Nil(t, result)
+		})
 	}
-
-	result, err := builder.prepareIvfIndexContext(vecCtx, multiTableIndex)
-	assert.NoError(t, err)
-	assert.Nil(t, result)
-
-	multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexAlgoParams = `{"op_type":123}`
-	result, err = builder.prepareIvfIndexContext(vecCtx, multiTableIndex)
-	assert.NoError(t, err)
-	assert.Nil(t, result)
-}
-
-// TestPrepareIvfIndexContext_OpTypeMismatch tests the case where op_type doesn't match the distance function
-func TestPrepareIvfIndexContext_OpTypeMismatch(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
-	vecCtx := &vectorSortContext{
-		distFnExpr: &plan.Function{
-			Func: &ObjectRef{
-				ObjName: "l2_distance",
-			},
-		},
-	}
-	multiTableIndex := &MultiTableIndex{
-		IndexDefs: map[string]*plan.IndexDef{
-			catalog.SystemSI_IVFFLAT_TblType_Metadata: {
-				IndexAlgoParams: `{"op_type": "cosine_similarity"}`,
-			},
-			catalog.SystemSI_IVFFLAT_TblType_Centroids: {},
-			catalog.SystemSI_IVFFLAT_TblType_Entries:   {},
-		},
-	}
-
-	result, err := builder.prepareIvfIndexContext(vecCtx, multiTableIndex)
-	assert.NoError(t, err)
-	assert.Nil(t, result)
 }
 
 // TestPrepareIvfIndexContext_ArgsNotFound tests the case where getArgsFromDistFn returns found=false
