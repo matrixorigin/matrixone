@@ -48,7 +48,7 @@ func TestBindUserVariableCapturesEffectiveStringDomain(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			assigned := makePlan2Type(&tc.typ)
-			ctx := &variableStringDomainContext{MockCompilerContext: NewMockOptimizer(false).ctxt, domain: tc.domain}
+			ctx := &variableStringDomainContext{MockCompilerContext: NewMockOptimizer(false, newPlanTestProcess(t)).ctxt, domain: tc.domain}
 			ctx.ResolveVariableTypeFunc = func(string, bool, bool) (Type, error) { return assigned, nil }
 			binder := &baseBinder{builder: &QueryBuilder{compCtx: ctx}}
 			first, err := binder.baseBindVar(&tree.VarExpr{Name: "s"}, 0, true)
@@ -82,7 +82,7 @@ func TestBindUserVariableCapturesEffectiveStringDomain(t *testing.T) {
 }
 
 func TestBindUserVariableStringDomainErrorsAndNonStringControls(t *testing.T) {
-	ctx := &variableStringDomainContext{MockCompilerContext: NewMockOptimizer(false).ctxt}
+	ctx := &variableStringDomainContext{MockCompilerContext: NewMockOptimizer(false, newPlanTestProcess(t)).ctxt}
 	assigned := makeSimplePlan2Type(types.T_text)
 	ctx.ResolveVariableTypeFunc = func(string, bool, bool) (Type, error) { return assigned, nil }
 	binder := &baseBinder{builder: &QueryBuilder{compCtx: ctx}}

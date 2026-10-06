@@ -71,7 +71,7 @@ func TestHistoricalViewColumnsSQL(t *testing.T) {
 		{name: "protocol not ready", current: sysview.InformationSchemaColumnsDDL, oldProtocol: true, wantResolve: true, wantError: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockCompilerContext(true)
+			mock := NewMockCompilerContext(true, newPlanTestProcess(t))
 			mock.GetAccountIdFunc = func() (uint32, error) {
 				if tc.accountErr {
 					return 0, denied

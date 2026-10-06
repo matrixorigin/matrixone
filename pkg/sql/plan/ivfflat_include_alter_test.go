@@ -56,7 +56,7 @@ func TestHandleDropColumnWithIndexRemovesIvfIndexForIncludeColumn(t *testing.T) 
 }
 
 func TestUpdateRenameColumnInTableDefRenamesIvfIncludeMetadata(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	tableDef := &planpb.TableDef{
 		TblId:  42,
 		DbName: "db1",

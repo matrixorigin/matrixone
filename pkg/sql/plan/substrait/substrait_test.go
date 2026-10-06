@@ -2701,7 +2701,7 @@ func boundSQLQuery(t *testing.T, sql string) *planpb.Query {
 	t.Helper()
 	statement, err := mysql.ParseOne(context.Background(), sql, 1)
 	require.NoError(t, err)
-	built, err := planbuilder.BuildPlan(planbuilder.NewMockCompilerContext(false), statement, false)
+	built, err := planbuilder.BuildPlan(planbuilder.NewMockCompilerContext(false, newPlanTestProcess(t)), statement, false)
 	require.NoError(t, err)
 	query := built.GetQuery()
 	require.NotNil(t, query)

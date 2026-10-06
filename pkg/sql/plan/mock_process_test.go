@@ -16,9 +16,11 @@ package plan
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -37,25 +39,58 @@ func newPlanTestProcess(t testing.TB) *process.Process {
 }
 
 func TestMockCompilerContextReusesProcess(t *testing.T) {
-	tests := []struct {
+	proc := newPlanTestProcess(t)
+	for _, tc := range []struct {
 		name string
 		ctx  *MockCompilerContext
 	}{
-		{name: "constructor", ctx: NewMockCompilerContext(false)},
-		{name: "literal", ctx: &MockCompilerContext{}},
+		{name: "constructor", ctx: NewMockCompilerContext(false, proc)},
+		{name: "literal", ctx: &MockCompilerContext{proc: proc}},
+	} {
+		t.Run(tc.name, func(t *testing.T) { assertMockCompilerContextReusesProcess(t, tc.ctx, proc) })
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			assertMockCompilerContextReusesProcess(t, test.ctx)
+	for _, tc := range []struct {
+		name string
+		ctx  *MockCompilerContext
+	}{
+		{name: "explicit nil", ctx: NewMockCompilerContext(false, nil)},
+		{name: "empty nil", ctx: NewEmptyCompilerContext(nil)},
+		{name: "zero value", ctx: &MockCompilerContext{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Nil(t, tc.ctx.GetProcess())
+			exec, ok := tc.ctx.getInternalSQLExecutor(nil)
+			require.False(t, ok)
+			require.Nil(t, exec)
 		})
 	}
 }
 
 func TestCopiedMockCompilerContextReusesProcess(t *testing.T) {
-	original := NewEmptyCompilerContext()
+	proc := newPlanTestProcess(t)
+	original := NewEmptyCompilerContext(proc)
 	copied := *original
-
-	require.Same(t, original.GetProcess(), copied.GetProcess())
+	require.NotNil(t, original.GetProcess())
+	require.Same(t, proc, original.GetProcess())
+	require.Same(t, proc, copied.GetProcess())
+	exec, ok := original.getInternalSQLExecutor(proc)
+	require.True(t, ok)
+	require.NotNil(t, exec)
+	copyExec, ok := copied.getInternalSQLExecutor(proc)
+	require.True(t, ok)
+	require.Same(t, exec, copyExec)
+	unavailable, ok := copied.getInternalSQLExecutor(&process.Process{})
+	require.False(t, ok)
+	require.Nil(t, unavailable)
+	calls := 0
+	copied.GetProcessFunc = func() *process.Process { calls++; return nil }
+	unavailable, ok = copied.getInternalSQLExecutor(proc)
+	require.False(t, ok)
+	require.Nil(t, unavailable)
+	require.Zero(t, calls, "executor lookup must not invoke an override")
+	require.Nil(t, copied.GetProcess())
+	require.Equal(t, 1, calls)
+	require.Same(t, proc, original.GetProcess())
 }
 
 func TestMockCompilerContextDoesNotLeakInternalSQLExecutor(t *testing.T) {
@@ -85,7 +120,7 @@ func TestMockCompilerContextDoesNotLeakInternalSQLExecutor(t *testing.T) {
 
 		// This is the same plan-building producer shape used by the frontend
 		// named-window regression, using syntax supported by this branch.
-		ctx := NewMockCompilerContext(true)
+		ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 		queryPlan, err := BuildPlan(ctx, stmt, false)
 		require.NoError(t, err)
 		require.NotNil(t, queryPlan.GetQuery())
@@ -114,23 +149,60 @@ func TestMockCompilerContextDoesNotLeakInternalSQLExecutor(t *testing.T) {
 	})
 }
 
-func assertMockCompilerContextReusesProcess(t *testing.T, ctx *MockCompilerContext) {
-	const workers = 16
-
+func assertMockCompilerContextReusesProcess(t *testing.T, ctx *MockCompilerContext, expected *process.Process) {
+	t.Helper()
+	require.NotNil(t, expected)
+	const workers = 2
+	start := make(chan struct{})
 	results := make(chan *process.Process, workers)
 	var wg sync.WaitGroup
 	for range workers {
 		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			results <- ctx.GetProcess()
-		}()
+		go func() { defer wg.Done(); <-start; results <- ctx.GetProcess() }()
 	}
+	close(start)
 	wg.Wait()
 	close(results)
-
-	first := ctx.GetProcess()
+	require.Same(t, expected, ctx.GetProcess())
 	for result := range results {
-		require.Same(t, first, result)
+		require.Same(t, expected, result)
 	}
+}
+
+func TestFullTextMockResolverObservesCurrentState(t *testing.T) {
+	ctx := newFullTextJoinMockCompilerContext(t)
+	resolver := ctx.proc.GetResolveVariableFunc()
+	require.NotNil(t, resolver)
+	value, err := resolver("fulltext_bloom_filter_pushdown", true, false)
+	require.NoError(t, err)
+	require.Equal(t, int8(0), value)
+	ctx.fulltextBloomFilterPushdown = 1
+	value, err = resolver("fulltext_bloom_filter_pushdown", true, false)
+	require.NoError(t, err)
+	require.Equal(t, int8(1), value)
+	require.Same(t, ctx.proc, ctx.GetProcess())
+}
+
+func TestPlanFixtureReleasesPoolAtChildEnd(t *testing.T) {
+	count := func() int {
+		var pools []map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal([]byte(mpool.ReportMemUsage("must_new_zero_no_fixed")), &pools))
+		return len(pools)
+	}
+	before := count()
+	t.Run("owned compiler session", func(t *testing.T) {
+		proc := newPlanTestProcess(t)
+		ctx := NewEmptyCompilerContext(proc)
+		require.NotNil(t, ctx.GetProcess())
+		require.Same(t, proc, ctx.GetProcess())
+		require.Equal(t, before+1, count())
+		t.Cleanup(func() { require.Zero(t, proc.Mp().CurrNB()) })
+		for _, offHeap := range []bool{true, false} {
+			block, err := proc.Mp().Alloc(16, offHeap)
+			require.NoError(t, err)
+			t.Cleanup(func() { proc.Mp().Free(block) })
+		}
+		require.Greater(t, proc.Mp().CurrNB(), int64(0))
+	})
+	require.Equal(t, before, count(), "zero byte use does not prove pool deregistration")
 }

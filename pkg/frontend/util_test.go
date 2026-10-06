@@ -715,10 +715,10 @@ func TestBindSetVariableResultExprUsesPreparedModeForDecimalParam(t *testing.T) 
 	selectStmt := stmt.(*tree.Select)
 	expr := selectStmt.Select.(*tree.SelectClause).Exprs[0].Expr
 
-	_, err = bindSetVariableResultExpr(expr, plan.NewEmptyCompilerContext(), false)
+	_, err = bindSetVariableResultExpr(expr, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), false)
 	require.ErrorContains(t, err, "only prepare statement can use ? expr")
 
-	bound, err := bindSetVariableResultExpr(expr, plan.NewEmptyCompilerContext(), true)
+	bound, err := bindSetVariableResultExpr(expr, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), true)
 	require.NoError(t, err)
 	require.NotNil(t, bound)
 }
@@ -2103,7 +2103,7 @@ func TestJdbcResultMetadataForTextTemporalAndYear(t *testing.T) {
 }
 
 func TestResultColumnMetadataDistinguishesBlobFromText(t *testing.T) {
-	mock := plan.NewMockOptimizer(false)
+	mock := plan.NewMockOptimizer(false, newPlanTestProcess(t))
 	queryPlan, err := buildSingleSql(mock, t,
 		"select partition_info, aes_encrypt(rel_createsql, 'key'), rel_createsql, relname from mo_catalog.mo_tables")
 	require.NoError(t, err)

@@ -32,7 +32,7 @@ func TestQ9JoinsFilteredBranchBeforeOrders(t *testing.T) {
 	require.NoError(t, err)
 	for _, scale := range []float64{1, 100, 1000} {
 		t.Run(fmt.Sprint(scale), func(t *testing.T) {
-			mock := NewMockCompilerContext(false)
+			mock := NewMockCompilerContext(false, newPlanTestProcess(t))
 			cache := NewStatsCache()
 			rows := map[string]float64{"nation": 25, "part": 200000 * scale, "supplier": 10000 * scale, "partsupp": 800000 * scale, "orders": 1500000 * scale, "lineitem": 6001215 * scale}
 			for name, count := range rows {

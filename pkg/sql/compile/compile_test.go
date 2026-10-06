@@ -80,7 +80,7 @@ import (
 )
 
 func TestBroadcastJoinUsesHashAfterPreparedDiagnosticProof(t *testing.T) {
-	ctx := plan2.NewMockCompilerContext(true)
+	ctx := plan2.NewMockCompilerContext(true, newPlanTestProcess(t))
 	proc := ctx.GetProcess()
 	params := vector.NewVec(types.T_text.ToType())
 	defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
@@ -218,7 +218,7 @@ func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 		}
 		return "STRICT_TRANS_TABLES", nil
 	})
-	compilerCtx := plan2.NewEmptyCompilerContext()
+	compilerCtx := plan2.NewEmptyCompilerContext(newPlanTestProcess(t))
 	compilerCtx.SetContext(ctx)
 	stmts, err := mysql.Parse(ctx, "select ?", 1)
 	require.NoError(t, err)
@@ -286,7 +286,7 @@ func TestSQLSelectLimitIsResolvedForEachExecution(t *testing.T) {
 		return "STRICT_TRANS_TABLES", nil
 	})
 
-	compilerCtx := plan2.NewEmptyCompilerContext()
+	compilerCtx := plan2.NewEmptyCompilerContext(newPlanTestProcess(t))
 	compilerCtx.SetContext(ctx)
 	const sql = "select 1 union all select 2"
 	stmts, err := mysql.Parse(ctx, sql, 1)
@@ -357,7 +357,7 @@ func TestSQLSelectLimitOperatorSelection(t *testing.T) {
 				return "STRICT_TRANS_TABLES", nil
 			})
 
-			compilerCtx := plan2.NewEmptyCompilerContext()
+			compilerCtx := plan2.NewEmptyCompilerContext(newPlanTestProcess(t))
 			compilerCtx.SetContext(ctx)
 			const sql = "select 1 union all select 2"
 			stmts, err := mysql.Parse(ctx, sql, 1)
@@ -812,7 +812,7 @@ func TestCompileResultSinkDiscardsRetriedGenerations(t *testing.T) {
 		}
 		return "STRICT_TRANS_TABLES", nil
 	})
-	compilerCtx := plan2.NewEmptyCompilerContext()
+	compilerCtx := plan2.NewEmptyCompilerContext(newPlanTestProcess(t))
 	compilerCtx.SetContext(ctx)
 	stmts, err := mysql.Parse(ctx, "select 1", 1)
 	require.NoError(t, err)
@@ -3586,7 +3586,7 @@ func (c *distinctPreAggregationCompilerContext) GetStatsCache() *plan2.StatsCach
 }
 
 func TestLocalPreAggregationCompileShapeIsReachableFromSQL(t *testing.T) {
-	base := plan2.NewMockCompilerContext(false)
+	base := plan2.NewMockCompilerContext(false, newPlanTestProcess(t))
 	base.SetContext(context.Background())
 	_, tableDef, err := base.Resolve("tpch", "lineitem", nil)
 	require.NoError(t, err)
