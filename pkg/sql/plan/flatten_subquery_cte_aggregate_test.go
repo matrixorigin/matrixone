@@ -37,7 +37,7 @@ func TestCorrelatedLocalCTEAggregateReaggregates(t *testing.T) {
 			sql := fmt.Sprintf(`SELECT o.N_NATIONKEY,
 				(WITH x AS (SELECT %s FROM NATION i WHERE i.N_NATIONKEY %s o.N_NATIONKEY)
 				 SELECT %s FROM x) FROM NATION o`, tc.aggregate, tc.op, tc.selected)
-			logicPlan, err := runSelectWithValidator(NewMockOptimizer(true), t, sql, func(query *planpb.Query) error {
+			logicPlan, err := runSelectWithValidator(NewMockOptimizer(true, newPlanTestProcess(t)), t, sql, func(query *planpb.Query) error {
 				var postJoinAgg *planpb.Node
 				for _, node := range query.Nodes {
 					if node.NodeType != planpb.Node_AGG || len(node.Children) != 1 {
@@ -64,13 +64,13 @@ func TestCorrelatedLocalCTEAggregateReaggregates(t *testing.T) {
 
 func TestCorrelatedLocalCTENonEqAggregateRejectsUnsafeShapes(t *testing.T) {
 	t.Run("aggregate behind join", func(t *testing.T) {
-		_, err := runOneStmt(NewMockOptimizer(true), t, `SELECT o.N_NATIONKEY,
+		_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, `SELECT o.N_NATIONKEY,
 			(WITH x AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY <= o.N_NATIONKEY),
 			 y AS (SELECT 1 AS k) SELECT m FROM x CROSS JOIN y) FROM NATION o`)
 		require.ErrorContains(t, err, "non-equality correlated aggregate behind a non-transparent projection")
 	})
 	t.Run("nested aggregate", func(t *testing.T) {
-		_, err := runOneStmt(NewMockOptimizer(true), t, `SELECT o.N_NATIONKEY,
+		_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, `SELECT o.N_NATIONKEY,
 			(WITH a AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY <= o.N_NATIONKEY),
 			 x AS (SELECT SUM(m) AS s FROM a) SELECT s FROM x) FROM NATION o`)
 		require.ErrorContains(t, err, "nested non-equality correlated aggregate")
@@ -87,7 +87,7 @@ func TestCorrelatedLocalCTENonEqAggregateRejectsUnsafeShapes(t *testing.T) {
 			 SELECT m FROM x) FROM NATION o`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.sql)
 			require.Error(t, err)
 		})
 	}
@@ -132,7 +132,7 @@ func TestCorrelatedLocalCTEAggregateSiblingOutputsSurviveRemapping(t *testing.T)
 			 SELECT m FROM x) > 0`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.sql)
 			require.NoError(t, err)
 			assertReachablePlanHasNoCorrelatedExpr(t, logicPlan.GetQuery())
 		})
@@ -152,7 +152,7 @@ func TestCorrelatedAggregatePreservesExistentialOuterOutputs(t *testing.T) {
 			FROM NATION o`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.sql)
 			require.NoError(t, err)
 			assertReachablePlanHasNoCorrelatedExpr(t, logicPlan.GetQuery())
 		})
@@ -160,7 +160,7 @@ func TestCorrelatedAggregatePreservesExistentialOuterOutputs(t *testing.T) {
 }
 
 func TestCorrelatedLocalCTEEqualityCountAllowsMultipleOuterBindings(t *testing.T) {
-	logicPlan, err := runOneStmt(NewMockOptimizer(true), t, `SELECT o.N_NATIONKEY,
+	logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, `SELECT o.N_NATIONKEY,
 		(WITH x AS (SELECT COUNT(*) AS c FROM NATION i WHERE i.N_NATIONKEY = o.N_NATIONKEY)
 		 SELECT c FROM x)
 		FROM NATION o CROSS JOIN NATION p`)
@@ -175,7 +175,7 @@ func TestCorrelatedLocalCTEEqualityComputedEmptyResult(t *testing.T) {
 		`SELECT o.N_NATIONKEY, (WITH x AS (SELECT SUM(i.N_NATIONKEY) AS s FROM NATION i
 			WHERE i.N_NATIONKEY = o.N_NATIONKEY) SELECT COALESCE(s, 7) FROM x) FROM NATION o`,
 	} {
-		p, err := runOneStmt(NewMockOptimizer(true), t, sql)
+		p, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, sql)
 		require.NoError(t, err)
 		assertReachablePlanHasNoCorrelatedExpr(t, p.GetQuery())
 	}
@@ -196,7 +196,7 @@ func TestCorrelatedLocalCTEEqualityAggregateBoundaries(t *testing.T) {
 			 WHERE i.N_NATIONKEY = o.N_NATIONKEY) SELECT c, d FROM x) FROM NATION o`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.sql)
 			require.NoError(t, err)
 			assertReachablePlanHasNoCorrelatedExpr(t, logicPlan.GetQuery())
 		})
@@ -204,7 +204,7 @@ func TestCorrelatedLocalCTEEqualityAggregateBoundaries(t *testing.T) {
 }
 
 func TestCorrelatedLocalCTEProjectionOnlyCorrelationPreserved(t *testing.T) {
-	_, err := runOneStmt(NewMockOptimizer(true), t, `SELECT o.N_NATIONKEY,
+	_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, `SELECT o.N_NATIONKEY,
 		(WITH x AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i)
 		 SELECT m + o.N_NATIONKEY FROM x) FROM NATION o`)
 	require.NoError(t, err)
@@ -218,7 +218,7 @@ func TestCorrelatedLocalCTEIndependentAggregateFilter(t *testing.T) {
 			MAX(i.N_NATIONKEY) AS m FROM NATION i GROUP BY i.N_REGIONKEY)
 			SELECT m FROM x WHERE x.n < o.N_NATIONKEY) FROM NATION o`,
 	} {
-		p, err := runOneStmt(NewMockOptimizer(true), t, sql)
+		p, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, sql)
 		require.NoError(t, err)
 		assertReachablePlanHasNoCorrelatedExpr(t, p.GetQuery())
 	}
@@ -244,14 +244,14 @@ func TestDeepNonEqualityScalarAggregateDoesNotEscapeIntoExists(t *testing.T) {
 					WHERE k.N_REGIONKEY < o.N_NATIONKEY)))`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.sql)
 			require.ErrorContains(t, err, "deep non-equality correlated aggregate")
 		})
 	}
 }
 
 func TestDeepEqualityScalarAggregateAcrossTwoOuterScopes(t *testing.T) {
-	p, err := runOneStmt(NewMockOptimizer(true), t, `SELECT o.N_NATIONKEY FROM NATION o
+	p, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, `SELECT o.N_NATIONKEY FROM NATION o
 		WHERE EXISTS (SELECT 1 FROM NATION j WHERE j.N_REGIONKEY = 3
 			AND j.N_REGIONKEY = (SELECT MAX(k.N_REGIONKEY) FROM NATION k
 				WHERE o.N_NATIONKEY = 1 AND k.N_REGIONKEY = j.N_REGIONKEY))`)
@@ -260,7 +260,7 @@ func TestDeepEqualityScalarAggregateAcrossTwoOuterScopes(t *testing.T) {
 }
 
 func TestDeepOuterOnlyScalarAggregateAcrossThreeScopes(t *testing.T) {
-	p, err := runOneStmt(NewMockOptimizer(true), t, `SELECT o.N_NATIONKEY FROM NATION o
+	p, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, `SELECT o.N_NATIONKEY FROM NATION o
 		WHERE EXISTS (SELECT 1 FROM NATION j WHERE EXISTS
 			(SELECT 1 FROM NATION h WHERE 1 = (SELECT MAX(k.N_REGIONKEY) FROM NATION k
 				WHERE o.N_NATIONKEY = 1)))`)

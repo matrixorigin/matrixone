@@ -70,7 +70,7 @@ func makeConsistentHnswMultiTableIndexForTest(indexName, idxAlgoParams string, p
 
 // TestPrepareHnswIndexContext_NilVecCtx tests the case where vecCtx is nil
 func TestPrepareHnswIndexContext_NilVecCtx(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	multiTableIndex := &MultiTableIndex{}
 
 	result, err := builder.prepareHnswIndexContext(nil, multiTableIndex)
@@ -80,7 +80,7 @@ func TestPrepareHnswIndexContext_NilVecCtx(t *testing.T) {
 
 // TestPrepareHnswIndexContext_NilMultiTableIndex tests the case where multiTableIndex is nil
 func TestPrepareHnswIndexContext_NilMultiTableIndex(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	vecCtx := &vectorSortContext{}
 
 	result, err := builder.prepareHnswIndexContext(vecCtx, nil)
@@ -90,7 +90,7 @@ func TestPrepareHnswIndexContext_NilMultiTableIndex(t *testing.T) {
 
 // TestPrepareHnswIndexContext_NilDistFnExpr tests the case where distFnExpr is nil
 func TestPrepareHnswIndexContext_NilDistFnExpr(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	vecCtx := &vectorSortContext{
 		distFnExpr: nil,
 	}
@@ -103,7 +103,7 @@ func TestPrepareHnswIndexContext_NilDistFnExpr(t *testing.T) {
 
 // TestPrepareHnswIndexContext_ForceModeEnabled tests the case where rankOption.Mode is "force"
 func TestPrepareHnswIndexContext_ForceModeEnabled(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	vecCtx := &vectorSortContext{
 		distFnExpr: &plan.Function{
 			Func: &ObjectRef{
@@ -122,7 +122,7 @@ func TestPrepareHnswIndexContext_ForceModeEnabled(t *testing.T) {
 }
 
 func TestPrepareHnswIndexContext_ImplicitDescendingOrderDisablesRewrite(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	vecCtx := &vectorSortContext{
 		distFnExpr: &plan.Function{
 			Func: &ObjectRef{
@@ -139,7 +139,7 @@ func TestPrepareHnswIndexContext_ImplicitDescendingOrderDisablesRewrite(t *testi
 }
 
 func TestPrepareHnswIndexContext_ExplicitDescendingOrderFallsBackToOriginalSearch(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	vecCtx := &vectorSortContext{
 		distFnExpr: &plan.Function{
 			Func: &ObjectRef{
@@ -158,7 +158,7 @@ func TestPrepareHnswIndexContext_ExplicitDescendingOrderFallsBackToOriginalSearc
 
 // TestPrepareHnswIndexContext_NilMetaDef tests the case where metaDef is nil
 func TestPrepareHnswIndexContext_NilMetaDef(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	vecCtx := &vectorSortContext{
 		distFnExpr: &plan.Function{
 			Func: &ObjectRef{
@@ -180,7 +180,7 @@ func TestPrepareHnswIndexContext_NilMetaDef(t *testing.T) {
 
 // TestPrepareHnswIndexContext_NilIdxDef tests the case where idxDef is nil
 func TestPrepareHnswIndexContext_NilIdxDef(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	vecCtx := &vectorSortContext{
 		distFnExpr: &plan.Function{
 			Func: &ObjectRef{
@@ -202,7 +202,7 @@ func TestPrepareHnswIndexContext_NilIdxDef(t *testing.T) {
 
 // TestPrepareHnswIndexContext_InvalidIndexAlgoParams tests the case where IndexAlgoParams is invalid JSON
 func TestPrepareHnswIndexContext_InvalidIndexAlgoParams(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	vecCtx := &vectorSortContext{
 		distFnExpr: &plan.Function{
 			Func: &ObjectRef{
@@ -226,7 +226,7 @@ func TestPrepareHnswIndexContext_InvalidIndexAlgoParams(t *testing.T) {
 
 // TestPrepareHnswIndexContext_MissingOpType tests the case where op_type field is missing
 func TestPrepareHnswIndexContext_MissingOpType(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	vecCtx := &vectorSortContext{
 		distFnExpr: &plan.Function{
 			Func: &ObjectRef{
@@ -250,7 +250,7 @@ func TestPrepareHnswIndexContext_MissingOpType(t *testing.T) {
 
 // TestPrepareHnswIndexContext_OpTypeNotString tests the case where op_type is not a string
 func TestPrepareHnswIndexContext_OpTypeNotString(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	vecCtx := &vectorSortContext{
 		distFnExpr: &plan.Function{
 			Func: &ObjectRef{
@@ -274,7 +274,7 @@ func TestPrepareHnswIndexContext_OpTypeNotString(t *testing.T) {
 
 // TestPrepareHnswIndexContext_OpTypeMismatch tests the case where op_type doesn't match the distance function
 func TestPrepareHnswIndexContext_OpTypeMismatch(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	vecCtx := &vectorSortContext{
 		distFnExpr: &plan.Function{
 			Func: &ObjectRef{
@@ -298,7 +298,7 @@ func TestPrepareHnswIndexContext_OpTypeMismatch(t *testing.T) {
 
 // TestPrepareHnswIndexContext_ArgsNotFound tests the case where getArgsFromDistFn returns found=false
 func TestPrepareHnswIndexContext_ArgsNotFound(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 
 	// Create a scan node with proper table def
 	scanNode := &plan.Node{
@@ -366,7 +366,7 @@ func TestPrepareHnswIndexContext_ArgsNotFound(t *testing.T) {
 
 // TestPrepareHnswIndexContext_ResolveVariableError tests the case where ResolveVariable returns an error
 func TestPrepareHnswIndexContext_ResolveVariableError(t *testing.T) {
-	baseMockCtx := NewMockCompilerContext(true)
+	baseMockCtx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	mockCtx := &customMockCompilerContext{
 		MockCompilerContext: baseMockCtx,
 		resolveVarFunc: func(varName string, isSystem, isGlobal bool) (interface{}, error) {
@@ -446,7 +446,7 @@ func TestPrepareHnswIndexContext_ResolveVariableError(t *testing.T) {
 
 // TestPrepareHnswIndexContext_Success tests the successful case where all conditions are met
 func TestPrepareHnswIndexContext_Success(t *testing.T) {
-	baseMockCtx := NewMockCompilerContext(true)
+	baseMockCtx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	mockCtx := &customMockCompilerContext{
 		MockCompilerContext: baseMockCtx,
 		resolveVarFunc: func(varName string, isSystem, isGlobal bool) (interface{}, error) {
@@ -537,7 +537,7 @@ func TestPrepareHnswIndexContext_Success(t *testing.T) {
 }
 
 func TestApplyIndicesForSortUsingHnswKeepsFiltersOnScan(t *testing.T) {
-	baseMockCtx := NewMockCompilerContext(true)
+	baseMockCtx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	mockCtx := &customMockCompilerContext{
 		MockCompilerContext: baseMockCtx,
 		resolveVarFunc: func(varName string, isSystem, isGlobal bool) (interface{}, error) {
@@ -669,7 +669,7 @@ func TestApplyIndicesForSortUsingHnswKeepsFiltersOnScan(t *testing.T) {
 // the TVF node itself.
 func applyHnswAndGetTableConfig(t *testing.T, limit *plan.Expr) (vectorindex.IndexTableConfig, *plan.Node) {
 	t.Helper()
-	baseMockCtx := NewMockCompilerContext(true)
+	baseMockCtx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	mockCtx := &customMockCompilerContext{
 		MockCompilerContext: baseMockCtx,
 		resolveVarFunc: func(varName string, isSystem, isGlobal bool) (interface{}, error) {
@@ -865,7 +865,7 @@ func TestPrepareHnswIndexContext_DifferentDistanceFunctions(t *testing.T) {
 				return
 			}
 
-			baseMockCtx := NewMockCompilerContext(true)
+			baseMockCtx := NewMockCompilerContext(true, newPlanTestProcess(t))
 			mockCtx := &customMockCompilerContext{
 				MockCompilerContext: baseMockCtx,
 				resolveVarFunc: func(varName string, isSystem, isGlobal bool) (interface{}, error) {

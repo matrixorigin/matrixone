@@ -190,7 +190,6 @@ func TestAccountedFixedCrossDomainConstBroadcastUsesPhysicalMetadata(t *testing.
 
 func TestAccountedLiteralConstructorReleasesPayloadOnDomainDenial(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	t.Cleanup(proc.Free)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
 	require.NoError(t, err)
 	// One inline varlen cell and its NULL bitmap fit; the text-domain bitmap does not.

@@ -88,7 +88,6 @@ func TestMakeSetDecimal(t *testing.T) {
 		t.Run(group.name, func(t *testing.T) {
 			run := func(t *testing.T, rows []row, constant bool) {
 				proc := testutil.NewProcess(t)
-				t.Cleanup(proc.Free)
 				n := len(rows)
 				if constant {
 					n = 3

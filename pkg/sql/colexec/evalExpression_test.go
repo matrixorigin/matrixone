@@ -15,6 +15,7 @@
 package colexec
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"testing"
@@ -3992,9 +3993,10 @@ func TestLastDayPersistedVarcharABI(t *testing.T) {
 }
 
 func TestDecimalCastSelectionAndErrorReuse(t *testing.T) {
-	proc := testutil.NewProcess(nil)
+	fs := testutil.NewFS(nil)
+	t.Cleanup(func() { fs.Close(context.Background()) })
+	proc := testutil.NewProcess(t, testutil.WithFileService(fs))
 	t.Cleanup(func() {
-		proc.Base.FileService.Close(proc.Ctx)
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
 	})
@@ -4052,9 +4054,10 @@ func TestDecimalCastSelectionAndErrorReuse(t *testing.T) {
 }
 
 func TestDecimalWideningEmptyBatchReuse(t *testing.T) {
-	proc := testutil.NewProcess(nil)
+	fs := testutil.NewFS(nil)
+	t.Cleanup(func() { fs.Close(context.Background()) })
+	proc := testutil.NewProcess(t, testutil.WithFileService(fs))
 	t.Cleanup(func() {
-		proc.Base.FileService.Close(proc.Ctx)
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
 	})
@@ -4101,4 +4104,76 @@ func TestDecimalWideningEmptyBatchReuse(t *testing.T) {
 		})
 		require.Zero(t, proc.Mp().CurrNB())
 	}
+}
+
+func TestRegisteredXorSelectionAndFolding(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(func() {
+		proc.GetFileService().Close(proc.Ctx)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+		require.Zero(t, proc.Mp().OnHeapCurrNB())
+	})
+	input := batch.NewWithSize(2)
+	t.Cleanup(func() { input.Clean(proc.Mp()) })
+	input.Vecs[0] = testutil.NewVectorWithNulls(3, types.T_bool.ToType(), proc.Mp(), false, []bool{false, false, true}, []bool{false, false, false})
+	input.Vecs[1] = testutil.NewVector(3, types.T_bool.ToType(), proc.Mp(), false, []bool{true, false, true})
+	input.SetRowCount(3)
+	resolved, err := function.GetFunctionByName(proc.Ctx, "xor", []types.Type{types.T_bool.ToType(), types.T_bool.ToType()})
+	require.NoError(t, err)
+	require.Equal(t, function.EncodeOverloadID(function.XOR, 0), resolved.GetEncodedOverloadID())
+	require.Equal(t, types.T_bool.ToType(), resolved.GetReturnType())
+	left := &plan.Expr{Typ: plan.Type{Id: int32(types.T_bool)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+	right := &plan.Expr{Typ: left.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}}}
+	expr := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_bool)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: resolved.GetEncodedOverloadID(), ObjName: "xor"},
+			Args: []*plan.Expr{left, right},
+		}},
+	}
+	t.Run("selected rows and reuse", func(t *testing.T) {
+		executor, err := NewExpressionExecutor(proc, expr)
+		require.NoError(t, err)
+		t.Cleanup(executor.Free)
+		for _, tc := range []struct {
+			selection []bool
+			nulls     []bool
+		}{
+			{[]bool{false, true, true}, []bool{true, false, true}},
+			{nil, []bool{false, false, true}},
+			{[]bool{false, false, false}, []bool{true, true, true}},
+			{nil, []bool{false, false, true}},
+		} {
+			result, err := executor.Eval(proc, []*batch.Batch{input}, tc.selection)
+			require.NoError(t, err)
+			require.Equal(t, types.T_bool.ToType(), *result.GetType())
+			require.Equal(t, 3, result.Length())
+			for row, wantNull := range tc.nulls {
+				require.Equal(t, wantNull, result.IsNull(uint64(row)))
+				if !wantNull {
+					require.Equal(t, row == 0, vector.GetFixedAtWithTypeCheck[bool](result, row))
+				}
+			}
+		}
+	})
+	t.Run("folded constants", func(t *testing.T) {
+		folded := *expr
+		folded.Expr = &plan.Expr_F{F: &plan.Function{
+			Func: expr.GetF().Func,
+			Args: []*plan.Expr{makePlan2BoolConstExprWithType(false), makePlan2BoolConstExprWithType(true)},
+		}}
+		executor, err := NewExpressionExecutor(proc, &folded)
+		require.NoError(t, err)
+		t.Cleanup(executor.Free)
+		for _, selection := range [][]bool{nil, {false, true, false}} {
+			result, err := executor.Eval(proc, []*batch.Batch{input}, selection)
+			require.NoError(t, err)
+			require.Equal(t, types.T_bool.ToType(), *result.GetType())
+			require.Equal(t, 3, result.Length())
+			require.True(t, result.IsConst())
+			require.False(t, result.IsNull(1))
+			require.True(t, vector.GetFixedAtWithTypeCheck[bool](result, 1))
+		}
+	})
 }

@@ -29,7 +29,7 @@ func TestFilterAndAssertRemapRefreshesPredicateNullability(t *testing.T) {
 	for _, nodeType := range []planpb.Node_NodeType{planpb.Node_FILTER, planpb.Node_ASSERT} {
 		for _, nullable := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/nullable_%t", nodeType, nullable), func(t *testing.T) {
-				builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, false)
+				builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, false)
 				tag := builder.GenNewBindTag()
 				childType := planpb.Type{Id: int32(types.T_int64), NotNullable: !nullable}
 				staleType := childType
