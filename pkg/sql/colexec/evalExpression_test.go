@@ -631,8 +631,16 @@ func TestLiteralMaterialization(t *testing.T) {
 		}
 	})
 	t.Run("list and vector", func(t *testing.T) {
-		var data []byte
-		if !t.Run("direct", func(t *testing.T) {
+		checkExpressionStorageAfterCleanup(t, proc)
+		data := func() []byte {
+			vec := vector.NewVec(types.T_varchar.ToType())
+			defer vec.Free(proc.Mp())
+			require.NoError(t, vector.AppendStringList(vec, []string{"a", "b"}, nil, proc.Mp()))
+			data, err := vec.MarshalBinary()
+			require.NoError(t, err)
+			return data
+		}()
+		t.Run("direct", func(t *testing.T) {
 			checkExpressionStorageAfterCleanup(t, proc)
 			exprs := []*plan.Expr{
 				{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "a"}}}},
@@ -648,11 +656,7 @@ func TestLiteralMaterialization(t *testing.T) {
 				require.Equal(t, types.StringSourceLiteral, vec.GetStringSourceAt(row))
 				require.Equal(t, want, vec.GetStringAt(row))
 			}
-			data, err = vec.MarshalBinary()
-			require.NoError(t, err)
-		}) {
-			return
-		}
+		})
 		for _, source := range []uint32{uint32(types.StringSourceLiteral), uint32(types.StringSourceCOMStmt) + 1, 256, 257, ^uint32(0)} {
 			name := fmt.Sprintf("rejected source %d", source)
 			if source == uint32(types.StringSourceLiteral) {
@@ -3156,7 +3160,7 @@ func TestFlowControlShortCircuitInvalidCast(t *testing.T) {
 	t.Run("case and coalesce skip unresolved variable leaves", func(t *testing.T) {
 		checkExpressionStorageAfterCleanup(t, proc)
 		previousResolver := proc.GetResolveVariableFunc()
-		defer proc.SetResolveVariableFunc(previousResolver)
+		t.Cleanup(func() { proc.SetResolveVariableFunc(previousResolver) })
 		resolveCalls := 0
 		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
 			resolveCalls++
@@ -3170,9 +3174,10 @@ func TestFlowControlShortCircuitInvalidCast(t *testing.T) {
 			}},
 		}
 		tests := []struct {
-			name  string
-			expr  *plan.Expr
-			input *vector.Vector
+			name       string
+			expr       *plan.Expr
+			inputType  types.Type
+			inputValue any
 		}{
 			{
 				name: "case",
@@ -3180,28 +3185,38 @@ func TestFlowControlShortCircuitInvalidCast(t *testing.T) {
 					column(0, types.T_bool.ToType()),
 					variable,
 					stringConst("ok")),
-				input: testutil.NewVector(1, types.T_bool.ToType(), proc.Mp(), false, []bool{false}),
+				inputType:  types.T_bool.ToType(),
+				inputValue: false,
 			},
 			{
 				name: "coalesce",
 				expr: bindTestFunction(t, proc, "coalesce",
 					column(0, types.T_varchar.ToType()),
 					variable),
-				input: testutil.NewVector(1, types.T_varchar.ToType(), proc.Mp(), false, []string{"ok"}),
+				inputType:  types.T_varchar.ToType(),
+				inputValue: []byte("ok"),
 			},
 		}
 
 		for _, test := range tests {
 			t.Run(test.name, func(t *testing.T) {
-				input := testutil.NewBatchWithVectors([]*vector.Vector{test.input}, nil)
-				defer input.Clean(proc.Mp())
+				checkExpressionStorageAfterCleanup(t, proc)
+				input := batch.NewWithSize(1)
+				t.Cleanup(func() { input.Clean(proc.Mp()) })
+				input.Vecs[0] = vector.NewVec(test.inputType)
+				require.NoError(t, vector.AppendAny(input.Vecs[0], test.inputValue, false, proc.Mp()))
+				input.SetRowCount(1)
 				executor, err := NewExpressionExecutor(proc, test.expr)
+				if executor != nil {
+					t.Cleanup(executor.Free)
+				}
 				require.NoError(t, err)
-				defer executor.Free()
 
+				beforeCalls := resolveCalls
 				result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
 				require.NoError(t, err)
 				require.Equal(t, "ok", result.GetStringAt(0))
+				require.Equal(t, beforeCalls, resolveCalls)
 			})
 		}
 		require.Zero(t, resolveCalls)
