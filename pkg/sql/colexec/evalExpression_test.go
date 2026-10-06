@@ -2481,131 +2481,157 @@ func TestColumnExpressionLifecycle(t *testing.T) {
 	})
 }
 
-func TestFunctionExpressionExecutor(t *testing.T) {
-	{
-		proc := testutil.NewProcess(t)
+func TestFunctionExpressionLifecycle(t *testing.T) {
+	proc := testutil.NewProcess(t, testutil.WithFileService(nil))
 
-		bat := testutil.NewBatchWithVectors(
-			[]*vector.Vector{
-				testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 2}),
-			}, make([]int64, 2))
-
-		currStart := proc.Mp().CurrNB()
-		fExprExecutor := &FunctionExpressionExecutor{}
-		err := fExprExecutor.Init(proc, 2, types.T_int64.ToType())
-		fExprExecutor.evalFn = func(params []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *function.FunctionSelectList) error {
-			v1 := vector.GenerateFunctionFixedTypeParameter[int64](params[0])
-			v2 := vector.GenerateFunctionFixedTypeParameter[int64](params[1])
-			rs := vector.MustFunctionResult[int64](result)
-			for i := 0; i < length; i++ {
-				v11, null11 := v1.GetValue(uint64(i))
-				v22, null22 := v2.GetValue(uint64(i))
-				if null11 || null22 {
-					err := rs.Append(0, true)
-					if err != nil {
-						return err
-					}
-				} else {
-					err := rs.Append(v11+v22, false)
-					if err != nil {
-						return err
-					}
+	t.Run("ordinary", func(t *testing.T) {
+		checkExpressionStorageAfterCleanup(t, proc)
+		bat := batch.NewWithSize(1)
+		t.Cleanup(func() { bat.Clean(proc.Mp()) })
+		bat.Vecs[0] = testutil.MakeInt64Vector([]int64{1, 2}, nil, proc.Mp())
+		bat.SetRowCount(2)
+		native := proc.Mp().CurrNB()
+		heap, objects := proc.Mp().OnHeapOutstanding()
+		columnType := types.T_int64.ToType().PlanType()
+		columnType.NotNullable = true
+		expression := bindTestFunction(t, proc, "+",
+			&plan.Expr{Typ: columnType, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}},
+			makePlan2Int64ConstExprWithType(100))
+		expression.Typ.NotNullable = true
+		executor, err := NewExpressionExecutor(proc, expression)
+		if executor != nil {
+			t.Cleanup(func() {
+				if executor != nil {
+					executor.Free()
 				}
+			})
+		}
+		require.NoError(t, err)
+		_, err = DebugShowExecutor(executor)
+		require.NoError(t, err)
+		first, err := executor.Eval(proc, []*batch.Batch{bat}, nil)
+		require.NoError(t, err)
+		require.Equal(t, types.Type{Oid: types.T_int64, Size: 8}, *first.GetType())
+		require.Equal(t, 2, first.Length())
+		require.Equal(t, []int64{101, 102}, vector.MustFixedColNoTypeCheck[int64](first))
+		require.False(t, first.IsNull(0))
+		require.False(t, first.IsNull(1))
+		_, err = DebugShowExecutor(executor)
+		require.NoError(t, err)
+		reuseNative := proc.Mp().CurrNB()
+		reuseHeap, reuseObjects := proc.Mp().OnHeapOutstanding()
+		second, err := executor.Eval(proc, []*batch.Batch{bat}, nil)
+		require.NoError(t, err)
+		require.Same(t, first, second)
+		require.Equal(t, types.Type{Oid: types.T_int64, Size: 8}, *second.GetType())
+		require.Equal(t, 2, second.Length())
+		require.Equal(t, []int64{101, 102}, vector.MustFixedColNoTypeCheck[int64](second))
+		require.False(t, second.IsNull(0))
+		require.False(t, second.IsNull(1))
+		require.Equal(t, reuseNative, proc.Mp().CurrNB())
+		afterHeap, afterObjects := proc.Mp().OnHeapOutstanding()
+		require.Equal(t, reuseHeap, afterHeap)
+		require.Equal(t, reuseObjects, afterObjects)
+		executor.Free()
+		executor = nil
+		require.Equal(t, native, proc.Mp().CurrNB())
+		afterHeap, afterObjects = proc.Mp().OnHeapOutstanding()
+		require.Equal(t, heap, afterHeap)
+		require.Equal(t, objects, afterObjects)
+		require.Equal(t, []int64{1, 2}, vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0]))
+	})
+
+	t.Run("folded_reset", func(t *testing.T) {
+		checkExpressionStorageAfterCleanup(t, proc)
+		input := batch.NewWithSize(0)
+		t.Cleanup(func() { input.Clean(proc.Mp()) })
+		input.SetRowCount(100)
+		expression := bindTestFunction(t, proc, "and", makePlan2BoolConstExprWithType(true), makePlan2BoolConstExprWithType(true))
+		expression.Typ.NotNullable = true
+		executor, err := NewExpressionExecutor(proc, expression)
+		if executor != nil {
+			t.Cleanup(executor.Free)
+		}
+		require.NoError(t, err)
+		_, err = DebugShowExecutor(executor)
+		require.NoError(t, err)
+		checkTrue := func(result *vector.Vector, length int) {
+			t.Helper()
+			require.Equal(t, types.Type{Oid: types.T_bool, Size: 1}, *result.GetType())
+			require.True(t, result.IsConst())
+			require.Equal(t, length, result.Length())
+			for row := 0; row < length; row++ {
+				require.False(t, result.IsNull(uint64(row)))
+				require.True(t, vector.GetFixedAtNoTypeCheck[bool](result, row))
 			}
-			return nil
 		}
-		fExprExecutor.freeFn = nil
-		require.NoError(t, err)
-
-		col1 := &plan.Expr{
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: 0,
-					ColPos: 0,
-				},
-			},
-			Typ: plan.Type{
-				Id:          int32(types.T_int64),
-				NotNullable: true,
-			},
-		}
-		col2 := makePlan2Int64ConstExprWithType(100)
-		executor1, err := NewExpressionExecutor(proc, col1)
-		require.NoError(t, err)
-		executor2, err := NewExpressionExecutor(proc, col2)
-		require.NoError(t, err)
-		fExprExecutor.SetParameter(0, executor1)
-		fExprExecutor.SetParameter(1, executor2)
-
-		tree, err := DebugShowExecutor(fExprExecutor)
-		require.NoError(t, err)
-		t.Log(tree)
-
-		vec, err := fExprExecutor.Eval(proc, []*batch.Batch{bat}, nil)
-		require.NoError(t, err)
-		tree, err = DebugShowExecutor(fExprExecutor)
-		require.NoError(t, err)
-		t.Log(tree)
-
-		curr3 := proc.Mp().CurrNB()
-		{
-			require.Equal(t, 2, vec.Length())
-			require.Equal(t, types.T_int64.ToType(), *vec.GetType())
-			require.Equal(t, int64(101), vector.MustFixedColWithTypeCheck[int64](vec)[0]) // 1+100
-			require.Equal(t, int64(102), vector.MustFixedColWithTypeCheck[int64](vec)[1]) // 2+100
-		}
-		_, err = fExprExecutor.Eval(proc, []*batch.Batch{bat}, nil)
-		require.NoError(t, err)
-		require.Equal(t, curr3, proc.Mp().CurrNB())
-		fExprExecutor.Free()
-		proc.Free()
-		require.Equal(t, currStart, proc.Mp().CurrNB())
-	}
-
-	// test memory leak if constant fold happens
-	{
-		proc := testutil.NewProcess(t)
-
-		col1 := makePlan2BoolConstExprWithType(true)
-		col2 := makePlan2BoolConstExprWithType(true)
-		fExpr := &plan.Expr{
-			Typ: plan.Type{
-				Id:          int32(types.T_bool),
-				NotNullable: true,
-			},
-			Expr: &plan.Expr_F{
-				F: &plan.Function{
-					Func: &plan.ObjectRef{
-						ObjName: function.AndFunctionName,
-						Obj:     function.AndFunctionEncodedID,
-					},
-					Args: []*plan.Expr{col1, col2},
-				},
-			},
-		}
-		currNb := proc.Mp().CurrNB()
-		executor, err := NewExpressionExecutor(proc, fExpr)
-		require.NoError(t, err)
 		result, err := executor.Eval(proc, nil, nil)
 		require.NoError(t, err)
-		require.Equal(t, true, result != nil && result.IsConst())
-		executor.Free()
-		proc.Free()
-		require.Equal(t, currNb, proc.Mp().CurrNB())
-	}
-}
+		checkTrue(result, 1)
+		_, err = DebugShowExecutor(executor)
+		require.NoError(t, err)
+		result, err = executor.Eval(proc, []*batch.Batch{input}, nil)
+		require.NoError(t, err)
+		checkTrue(result, 100)
+		executor.ResetForNextQuery()
+		functionExecutor, ok := executor.(*FunctionExpressionExecutor)
+		require.True(t, ok)
+		require.True(t, functionExecutor.folded.needFoldingCheck)
+		require.False(t, functionExecutor.folded.canFold)
+		require.Len(t, functionExecutor.parameterResults, 2)
+		require.Nil(t, functionExecutor.parameterResults[0])
+		require.Nil(t, functionExecutor.parameterResults[1])
+		result, err = executor.Eval(proc, nil, nil)
+		require.NoError(t, err)
+		checkTrue(result, 1)
+	})
 
-func TestFunctionExpressionExecutorShrinkingSelectList(t *testing.T) {
-	for _, tc := range []struct {
-		op   string
-		want float64
+	for _, test := range []struct {
+		name, op  string
+		wantLarge []float64
+		wantSmall float64
 	}{
-		{op: "/", want: 2.5},
-		{op: "+", want: 7},
-		{op: "*", want: 10},
+		{"divide", "/", []float64{2.5, 4.5}, 2.5},
+		{"add", "+", []float64{7, 11}, 7},
+		{"multiply", "*", []float64{10, 18}, 10},
 	} {
-		t.Run(tc.op, func(t *testing.T) {
-			testFunctionExpressionExecutorShrinkingSelectList(t, tc.op, tc.want)
+		t.Run(test.name, func(t *testing.T) {
+			checkExpressionStorageAfterCleanup(t, proc)
+			large := batch.NewWithSize(1)
+			t.Cleanup(func() { large.Clean(proc.Mp()) })
+			large.Vecs[0] = testutil.MakeFloat64Vector([]float64{5, 9, 5}, nil, proc.Mp())
+			large.SetRowCount(3)
+			small := batch.NewWithSize(1)
+			t.Cleanup(func() { small.Clean(proc.Mp()) })
+			small.Vecs[0] = testutil.MakeFloat64Vector([]float64{5, 5}, nil, proc.Mp())
+			small.SetRowCount(2)
+			inputType := types.T_float64.ToType().PlanType()
+			inputType.NotNullable = true
+			expression := bindTestFunction(t, proc, test.op,
+				&plan.Expr{Typ: inputType, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}},
+				&plan.Expr{Typ: inputType, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Dval{Dval: 2}}}})
+			expression.Typ.NotNullable = false
+			executor, err := NewExpressionExecutor(proc, expression)
+			if executor != nil {
+				t.Cleanup(executor.Free)
+			}
+			require.NoError(t, err)
+			result, err := executor.Eval(proc, []*batch.Batch{large}, []bool{true, true, false})
+			require.NoError(t, err)
+			require.Equal(t, types.Type{Oid: types.T_float64, Size: 8}, *result.GetType())
+			require.Equal(t, 3, result.Length())
+			require.Equal(t, test.wantLarge, vector.MustFixedColNoTypeCheck[float64](result)[:2])
+			require.False(t, result.IsNull(0))
+			require.False(t, result.IsNull(1))
+			require.True(t, result.IsNull(2))
+			result, err = executor.Eval(proc, []*batch.Batch{small}, []bool{true, false})
+			require.NoError(t, err)
+			require.Equal(t, types.Type{Oid: types.T_float64, Size: 8}, *result.GetType())
+			require.Equal(t, 2, result.Length())
+			require.Equal(t, test.wantSmall, vector.GetFixedAtNoTypeCheck[float64](result, 0))
+			require.False(t, result.GetNulls().Contains(0))
+			require.True(t, result.GetNulls().Contains(1))
+			require.False(t, result.GetNulls().Contains(2))
 		})
 	}
 }
@@ -2785,56 +2811,6 @@ func TestPreparedJSONComparisonSelection(t *testing.T) {
 			})
 		}
 	})
-}
-
-func testFunctionExpressionExecutorShrinkingSelectList(t *testing.T, op string, want float64) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
-	floatType := types.T_float64.ToType()
-	fn, err := function.GetFunctionByName(proc.Ctx, op, []types.Type{floatType, floatType})
-	require.NoError(t, err)
-	resultType := fn.GetReturnType()
-
-	column := &plan.Expr{
-		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}},
-		Typ:  plan.Type{Id: int32(types.T_float64), NotNullable: true},
-	}
-	constant := &plan.Expr{
-		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
-			Value: &plan.Literal_Dval{Dval: 2},
-		}},
-		Typ: plan.Type{Id: int32(types.T_float64), NotNullable: true},
-	}
-	expr := &plan.Expr{
-		Expr: &plan.Expr_F{F: &plan.Function{
-			Func: &plan.ObjectRef{ObjName: op, Obj: fn.GetEncodedOverloadID()},
-			Args: []*plan.Expr{column, constant},
-		}},
-		Typ: plan.Type{Id: int32(resultType.Oid), Width: resultType.Width, Scale: resultType.Scale},
-	}
-
-	executor, err := NewExpressionExecutor(proc, expr)
-	require.NoError(t, err)
-	defer executor.Free()
-
-	largeBatch := testutil.NewBatchWithVectors(
-		[]*vector.Vector{testutil.NewVector(3, floatType, proc.Mp(), false, []float64{5, 5, 5})},
-		make([]int64, 3))
-	defer largeBatch.Clean(proc.Mp())
-	_, err = executor.Eval(proc, []*batch.Batch{largeBatch}, []bool{true, true, false})
-	require.NoError(t, err)
-
-	smallBatch := testutil.NewBatchWithVectors(
-		[]*vector.Vector{testutil.NewVector(2, floatType, proc.Mp(), false, []float64{5, 5})},
-		make([]int64, 2))
-	defer smallBatch.Clean(proc.Mp())
-	result, err := executor.Eval(proc, []*batch.Batch{smallBatch}, []bool{true, false})
-	require.NoError(t, err)
-	require.Equal(t, 2, result.Length())
-	require.Equal(t, want, vector.MustFixedColWithTypeCheck[float64](result)[0])
-	require.False(t, result.GetNulls().Contains(0))
-	require.True(t, result.GetNulls().Contains(1))
-	require.False(t, result.GetNulls().Contains(2))
 }
 
 func TestFlowControlShortCircuitInvalidCast(t *testing.T) {
@@ -3679,66 +3655,6 @@ func BenchmarkConstantFlowControlExpression(b *testing.B) {
 		if _, err = executor.Eval(proc, batches, nil); err != nil {
 			b.Fatal(err)
 		}
-	}
-}
-
-func TestExpressionReset(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	// functions will be folded.
-	{
-		col1 := makePlan2BoolConstExprWithType(true)
-		col2 := makePlan2BoolConstExprWithType(true)
-		fExpr := &plan.Expr{
-			Typ: plan.Type{
-				Id:          int32(types.T_bool),
-				NotNullable: true,
-			},
-			Expr: &plan.Expr_F{
-				F: &plan.Function{
-					Func: &plan.ObjectRef{
-						ObjName: function.AndFunctionName,
-						Obj:     function.AndFunctionEncodedID,
-					},
-					Args: []*plan.Expr{col1, col2},
-				},
-			},
-		}
-
-		originNb := proc.Mp().CurrNB()
-
-		executor, err := NewExpressionExecutor(proc, fExpr)
-		require.NoError(t, err)
-
-		tree, err := DebugShowExecutor(executor)
-		require.NoError(t, err)
-		t.Log(tree)
-
-		result, err := executor.Eval(proc, nil, nil)
-		require.NoError(t, err)
-		require.Equal(t, true, result != nil && result.IsConst() && result.Length() == 1)
-
-		tree, err = DebugShowExecutor(executor)
-		require.NoError(t, err)
-		t.Log(tree)
-
-		inputs := []*batch.Batch{
-			batch.New(nil),
-		}
-		inputs[0].SetRowCount(100)
-		result, err = executor.Eval(proc, inputs, nil)
-		require.NoError(t, err)
-		require.Equal(t, true, result != nil && result.IsConst() && result.Length() == 100)
-
-		executor.ResetForNextQuery()
-
-		result, err = executor.Eval(proc, nil, nil)
-		require.NoError(t, err)
-		require.Equal(t, true, result != nil && result.IsConst() && result.Length() == 1)
-
-		executor.Free()
-		proc.Free()
-		require.Equal(t, originNb, proc.Mp().CurrNB())
 	}
 }
 
