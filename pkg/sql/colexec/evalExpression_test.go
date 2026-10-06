@@ -2307,131 +2307,178 @@ func TestVariableExpressionLifecycle(t *testing.T) {
 	})
 }
 
-func TestColumnExpressionExecutor(t *testing.T) {
-	proc := testutil.NewProcess(t)
+func TestColumnExpressionLifecycle(t *testing.T) {
+	proc := testutil.NewProcess(t, testutil.WithFileService(nil))
 
-	col := &plan.Expr{
-		Expr: &plan.Expr_Col{
-			Col: &plan.ColRef{
-				RelPos: 0,
-				ColPos: 2,
-			},
-		},
-		Typ: plan.Type{
-			Id:          int32(types.T_int32),
-			NotNullable: true,
-		},
-	}
-	colExprExecutor, err := NewExpressionExecutor(proc, col)
-	require.NoError(t, err)
-	tree, err := DebugShowExecutor(colExprExecutor)
-	require.NoError(t, err)
-	t.Log(tree)
-
-	bat := testutil.NewBatch(
-		[]types.Type{types.T_int8.ToType(), types.T_int16.ToType(), types.T_int32.ToType(), types.T_int64.ToType()},
-		true, 10, proc.Mp())
-	curr := proc.Mp().CurrNB()
-	vec, err := colExprExecutor.Eval(proc, []*batch.Batch{bat}, nil)
-	require.NoError(t, err)
-	tree, err = DebugShowExecutor(colExprExecutor)
-	require.NoError(t, err)
-	t.Log(tree)
-	{
-		require.Equal(t, types.T_int32.ToType(), *vec.GetType())
-		require.Equal(t, 10, vec.Length())
-	}
-	colExprExecutor.Free() // cannot free the vec of batch
-	require.Equal(t, curr, proc.Mp().CurrNB())
-}
-
-func TestColumnExpressionExecutorConstNullPreservesStringSourceAcrossCacheReuse(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
-	col := &plan.Expr{
-		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}},
-		Typ:  plan.Type{Id: int32(types.T_int32)},
-	}
-	executor, err := NewExpressionExecutor(proc, col)
-	require.NoError(t, err)
-	defer executor.Free()
-	input := batch.NewWithSize(1)
-	input.Vecs[0] = vector.NewConstNull(types.T_int32.ToType(), 3, proc.Mp())
-	input.SetRowCount(3)
-	defer input.Clean(proc.Mp())
-
-	for _, source := range []types.StringSource{
-		types.StringSourceSQLPrepare,
-		types.StringSourceCOMStmt,
-	} {
-		require.NoError(t, input.Vecs[0].SetStringSource(source))
-		result, evalErr := executor.Eval(proc, []*batch.Batch{input}, nil)
-		require.NoError(t, evalErr)
-		require.True(t, result.IsConstNull())
-		require.Equal(t, source, result.GetStringSourceAt(0))
-	}
-}
-
-func TestColumnExpressionExecutorPreservesGroupingSentinel(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	executor, err := NewExpressionExecutor(proc, &plan.Expr{
-		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}},
-		Typ:  plan.Type{Id: int32(types.T_varchar)},
+	t.Run("ordinary borrowed", func(t *testing.T) {
+		checkExpressionStorageAfterCleanup(t, proc)
+		bat := batch.NewWithSize(4)
+		t.Cleanup(func() { bat.Clean(proc.Mp()) })
+		bat.Vecs[0] = testutil.MakeInt8Vector([]int8{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, nil, proc.Mp())
+		bat.Vecs[1] = testutil.MakeInt16Vector([]int16{10, 9, 8, 7, 6, 5, 4, 3, 2, 1}, nil, proc.Mp())
+		bat.Vecs[2] = testutil.MakeInt32Vector([]int32{17, -3, 0, 42, 8, 99, -11, 5, 2, 31}, nil, proc.Mp())
+		bat.Vecs[3] = testutil.MakeInt64Vector([]int64{11, 12, 13, 14, 15, 16, 17, 18, 19, 20}, nil, proc.Mp())
+		bat.SetRowCount(10)
+		executor, err := NewExpressionExecutor(proc, &plan.Expr{
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 2}},
+			Typ:  plan.Type{Id: int32(types.T_int32), NotNullable: true},
+		})
+		if executor != nil {
+			t.Cleanup(func() {
+				if executor != nil {
+					executor.Free()
+				}
+			})
+		}
+		require.NoError(t, err)
+		_, err = DebugShowExecutor(executor)
+		require.NoError(t, err)
+		result, err := executor.Eval(proc, []*batch.Batch{bat}, nil)
+		require.NoError(t, err)
+		require.Same(t, bat.Vecs[2], result)
+		require.Equal(t, types.T_int32.ToType(), *result.GetType())
+		require.Equal(t, 10, result.Length())
+		require.Equal(t, []int32{17, -3, 0, 42, 8, 99, -11, 5, 2, 31}, vector.MustFixedColNoTypeCheck[int32](result))
+		_, err = DebugShowExecutor(executor)
+		require.NoError(t, err)
+		borrowed, err := executor.EvalWithoutResultReusing(proc, []*batch.Batch{bat}, nil)
+		require.NoError(t, err)
+		require.Same(t, result, borrowed)
+		native := proc.Mp().CurrNB()
+		heap, objects := proc.Mp().OnHeapOutstanding()
+		executor.Free()
+		executor = nil
+		require.Equal(t, native, proc.Mp().CurrNB())
+		afterHeap, afterObjects := proc.Mp().OnHeapOutstanding()
+		require.Equal(t, heap, afterHeap)
+		require.Equal(t, objects, afterObjects)
+		require.Equal(t, types.T_int32.ToType(), *borrowed.GetType())
+		require.Equal(t, 10, borrowed.Length())
+		require.Equal(t, []int32{17, -3, 0, 42, 8, 99, -11, 5, 2, 31}, vector.MustFixedColNoTypeCheck[int32](borrowed))
 	})
-	require.NoError(t, err)
 
-	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewRollupConst(types.T_varchar.ToType(), 3, proc.Mp())
-	bat.SetRowCount(3)
-	result, err := executor.Eval(proc, []*batch.Batch{bat}, nil)
-	require.NoError(t, err)
-	require.Same(t, bat.Vecs[0], result)
-	require.True(t, result.IsGrouping())
-	require.Equal(t, 3, result.GetGrouping().Count())
+	t.Run("NULL cache reuse and transfer", func(t *testing.T) {
+		checkExpressionStorageAfterCleanup(t, proc)
+		input := batch.NewWithSize(1)
+		t.Cleanup(func() { input.Clean(proc.Mp()) })
+		input.Vecs[0] = vector.NewConstNull(types.T_int32.ToType(), 3, proc.Mp())
+		input.SetRowCount(3)
+		executor, err := NewExpressionExecutor(proc, &plan.Expr{
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}},
+			Typ:  plan.Type{Id: int32(types.T_int32)},
+		})
+		if executor != nil {
+			t.Cleanup(func() {
+				if executor != nil {
+					executor.Free()
+				}
+			})
+		}
+		require.NoError(t, err)
+		checkNull := func(vec *vector.Vector, typ types.Type, length int, source types.StringSource) {
+			t.Helper()
+			require.Equal(t, typ, *vec.GetType())
+			require.Equal(t, length, vec.Length())
+			require.True(t, vec.IsConstNull())
+			require.False(t, vec.IsGrouping())
+			for row := 0; row < length; row++ {
+				require.True(t, vec.IsNull(uint64(row)))
+				require.Equal(t, source, vec.GetStringSourceAt(row))
+			}
+		}
+		require.NoError(t, input.Vecs[0].SetStringSource(types.StringSourceSQLPrepare))
+		first, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+		require.NoError(t, err)
+		require.NotSame(t, input.Vecs[0], first)
+		checkNull(first, types.T_int32.ToType(), 3, types.StringSourceSQLPrepare)
+		checkNull(input.Vecs[0], types.T_int32.ToType(), 3, types.StringSourceSQLPrepare)
+		input.Vecs[0].SetType(types.T_int64.ToType())
+		input.Vecs[0].SetLength(1)
+		input.SetRowCount(1)
+		require.NoError(t, input.Vecs[0].SetStringSource(types.StringSourceCOMStmt))
+		second, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+		require.NoError(t, err)
+		require.Same(t, first, second)
+		checkNull(second, types.T_int32.ToType(), 1, types.StringSourceCOMStmt)
+		checkNull(input.Vecs[0], types.T_int64.ToType(), 1, types.StringSourceCOMStmt)
+		owned, err := executor.EvalWithoutResultReusing(proc, []*batch.Batch{input}, nil)
+		if owned != nil {
+			t.Cleanup(func() { owned.Free(proc.Mp()) })
+		}
+		require.NoError(t, err)
+		require.Same(t, second, owned)
+		checkNull(owned, types.T_int32.ToType(), 1, types.StringSourceCOMStmt)
+		input.Vecs[0].SetLength(2)
+		input.SetRowCount(2)
+		require.NoError(t, input.Vecs[0].SetStringSource(types.StringSourceExpression))
+		replacement, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+		require.NoError(t, err)
+		require.NotSame(t, owned, replacement)
+		checkNull(replacement, types.T_int32.ToType(), 2, types.StringSourceExpression)
+		checkNull(input.Vecs[0], types.T_int64.ToType(), 2, types.StringSourceExpression)
+		checkNull(owned, types.T_int32.ToType(), 1, types.StringSourceCOMStmt)
+		executor.Free()
+		executor = nil
+		checkNull(owned, types.T_int32.ToType(), 1, types.StringSourceCOMStmt)
+	})
 
-	executor.Free()
-	bat.Clean(proc.Mp())
-	proc.Free()
-	require.Zero(t, proc.Mp().CurrNB())
-}
+	t.Run("grouping borrowed", func(t *testing.T) {
+		checkExpressionStorageAfterCleanup(t, proc)
+		bat := batch.NewWithSize(1)
+		t.Cleanup(func() { bat.Clean(proc.Mp()) })
+		bat.Vecs[0] = vector.NewRollupConst(types.T_varchar.ToType(), 3, proc.Mp())
+		bat.SetRowCount(3)
+		executor, err := NewExpressionExecutor(proc, &plan.Expr{
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}},
+			Typ:  plan.Type{Id: int32(types.T_varchar)},
+		})
+		if executor != nil {
+			t.Cleanup(executor.Free)
+		}
+		require.NoError(t, err)
+		result, err := executor.Eval(proc, []*batch.Batch{bat}, nil)
+		require.NoError(t, err)
+		require.Same(t, bat.Vecs[0], result)
+		require.Equal(t, types.T_varchar.ToType(), *result.GetType())
+		require.Equal(t, 3, result.Length())
+		require.True(t, result.IsConstNull())
+		require.True(t, result.IsGrouping())
+		require.Equal(t, 3, result.GetGrouping().Count())
+	})
 
-// TestColumnExpressionExecutor_RelIndexOutOfRange verifies that Eval returns
-// an error instead of panicking when relIndex >= len(batches).
-// This reproduces the crash seen when IVF-Flat entries table contains NULL
-// vectors and L2_DISTANCE + ORDER BY LIMIT triggers the Top operator.
-func TestColumnExpressionExecutor_RelIndexOutOfRange(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	// relIndex=2 but we will only pass 2 batches (valid indices: 0, 1).
-	col := &plan.Expr{
-		Expr: &plan.Expr_Col{
-			Col: &plan.ColRef{
-				RelPos: 2,
-				ColPos: 0,
-			},
-		},
-		Typ: plan.Type{
-			Id:          int32(types.T_int32),
-			NotNullable: true,
-		},
-	}
-	executor, err := NewExpressionExecutor(proc, col)
-	require.NoError(t, err)
-	defer executor.Free()
-
-	bat := testutil.NewBatch(
-		[]types.Type{types.T_int32.ToType()},
-		true, 5, proc.Mp())
-
-	// Two batches → relIndex 2 is out of range.
-	_, err = executor.Eval(proc, []*batch.Batch{bat, bat}, nil)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "relIndex 2 out of range")
-
-	// Single batch → the existing len==1 hack forces relIndex to 0, should succeed.
-	vec, err := executor.Eval(proc, []*batch.Batch{bat}, nil)
-	require.NoError(t, err)
-	require.Equal(t, 5, vec.Length())
+	t.Run("relation error and recovery", func(t *testing.T) {
+		checkExpressionStorageAfterCleanup(t, proc)
+		bat := batch.NewWithSize(1)
+		t.Cleanup(func() { bat.Clean(proc.Mp()) })
+		bat.Vecs[0] = testutil.MakeInt32Vector([]int32{5, -7, 0, 19, 42}, nil, proc.Mp())
+		bat.SetRowCount(5)
+		executor, err := NewExpressionExecutor(proc, &plan.Expr{
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 2, ColPos: 0}},
+			Typ:  plan.Type{Id: int32(types.T_int32), NotNullable: true},
+		})
+		if executor != nil {
+			t.Cleanup(executor.Free)
+		}
+		require.NoError(t, err)
+		native := proc.Mp().CurrNB()
+		heap, objects := proc.Mp().OnHeapOutstanding()
+		result, err := executor.Eval(proc, []*batch.Batch{bat, bat}, nil)
+		require.Nil(t, result)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal), "%v", err)
+		require.Contains(t, err.Error(), "relIndex 2 out of range")
+		require.Equal(t, native, proc.Mp().CurrNB())
+		afterHeap, afterObjects := proc.Mp().OnHeapOutstanding()
+		require.Equal(t, heap, afterHeap)
+		require.Equal(t, objects, afterObjects)
+		require.Equal(t, []int32{5, -7, 0, 19, 42}, vector.MustFixedColNoTypeCheck[int32](bat.Vecs[0]))
+		// The existing single-batch compatibility path must recover on the same executor.
+		result, err = executor.Eval(proc, []*batch.Batch{bat}, nil)
+		require.NoError(t, err)
+		require.Same(t, bat.Vecs[0], result)
+		require.Equal(t, types.T_int32.ToType(), *result.GetType())
+		require.Equal(t, 5, result.Length())
+		require.Equal(t, []int32{5, -7, 0, 19, 42}, vector.MustFixedColNoTypeCheck[int32](result))
+	})
 }
 
 func TestFunctionExpressionExecutor(t *testing.T) {
