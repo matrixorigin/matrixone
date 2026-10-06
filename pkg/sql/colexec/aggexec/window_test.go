@@ -25,19 +25,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newValueWindowTestPool(t *testing.T) *mpool.MPool {
-	t.Helper()
-	mp := mpool.MustNewZero()
-	t.Cleanup(func() { mpool.DeleteMPool(mp) })
-	t.Cleanup(func() {
-		require.Zero(t, mp.CurrNB())
-		bytes, objects := mp.OnHeapOutstanding()
-		require.Zero(t, bytes)
-		require.Zero(t, objects)
-	})
-	return mp
-}
-
 // Frames are explicit so callers retain control of GroupGrow and missing-current-row cases.
 func fillValueWindowFrames(t *testing.T, exec AggFuncExec, input *vector.Vector, frames [][]int) {
 	t.Helper()
@@ -71,7 +58,7 @@ func checkValueWindowNulls(t *testing.T, result *vector.Vector, typ types.Type, 
 
 func runValueWindowFixedCase[T types.FixedSizeTExceptStrType](t *testing.T, id int64, typ types.Type, input []T, nulls []bool, want []T, wantNulls []bool) {
 	t.Helper()
-	mp := newValueWindowTestPool(t)
+	mp := newAggExecTestPool(t)
 	vec := vector.NewVec(typ)
 	t.Cleanup(func() { vec.Free(mp) })
 	require.NoError(t, vector.AppendFixedList(vec, input, nulls, mp))
@@ -92,7 +79,7 @@ func runValueWindowFixedCase[T types.FixedSizeTExceptStrType](t *testing.T, id i
 }
 
 func TestValueWindowExec_APIContracts(t *testing.T) {
-	mp := newValueWindowTestPool(t)
+	mp := newAggExecTestPool(t)
 	exec, err := makeValueWindowExec(mp, WinIdOfLag, false, []types.Type{types.T_int64.ToType()})
 	require.NoError(t, err)
 	t.Cleanup(exec.Free)
@@ -134,7 +121,7 @@ func TestValueWindowExec_APIContracts(t *testing.T) {
 		{"complete type", []types.Type{{Oid: types.T_decimal64, Width: 18, Scale: 4}}, types.Type{Oid: types.T_decimal64, Width: 18, Scale: 4}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			mp := newValueWindowTestPool(t)
+			mp := newAggExecTestPool(t)
 			typed, err := makeValueWindowExec(mp, WinIdOfLag, false, test.params)
 			require.NoError(t, err)
 			t.Cleanup(typed.Free)
@@ -183,7 +170,7 @@ func TestValueWindowExec_VarlenTypes(t *testing.T) {
 		{"lead", WinIdOfLead, []string{"bbb", "ccc", ""}, []bool{false, false, true}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			mp := newValueWindowTestPool(t)
+			mp := newAggExecTestPool(t)
 			vec := vector.NewVec(types.T_varchar.ToType())
 			t.Cleanup(func() { vec.Free(mp) })
 			require.NoError(t, vector.AppendStringList(vec, []string{"aaa", "bbb", "ccc"}, nil, mp))
@@ -220,7 +207,7 @@ func TestValueWindowExec_BinaryStringProvenance(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			mp := newValueWindowTestPool(t)
+			mp := newAggExecTestPool(t)
 
 			exec, err := makeValueWindowExec(mp, tc.id, false, []types.Type{types.T_varchar.ToType()})
 			require.NoError(t, err)
@@ -264,7 +251,7 @@ func TestValueWindowExec_BinaryStringProvenance(t *testing.T) {
 }
 
 func TestValueWindowExec_EmptyVectors(t *testing.T) {
-	mp := newValueWindowTestPool(t)
+	mp := newAggExecTestPool(t)
 	exec, err := makeValueWindowExec(mp, WinIdOfLag, false, []types.Type{types.T_int64.ToType()})
 	require.NoError(t, err)
 	t.Cleanup(exec.Free)
@@ -274,7 +261,7 @@ func TestValueWindowExec_EmptyVectors(t *testing.T) {
 }
 
 func TestValueWindowExec_FillWithoutGroupGrow(t *testing.T) {
-	mp := newValueWindowTestPool(t)
+	mp := newAggExecTestPool(t)
 	vec := vector.NewVec(types.T_int64.ToType())
 	t.Cleanup(func() { vec.Free(mp) })
 	require.NoError(t, vector.AppendFixedList(vec, []int64{100, 200}, nil, mp))
@@ -287,7 +274,7 @@ func TestValueWindowExec_FillWithoutGroupGrow(t *testing.T) {
 }
 
 func TestValueWindowExec_SizeWithData(t *testing.T) {
-	mp := newValueWindowTestPool(t)
+	mp := newAggExecTestPool(t)
 	vec := vector.NewVec(types.T_int64.ToType())
 	t.Cleanup(func() { vec.Free(mp) })
 	require.NoError(t, vector.AppendFixedList(vec, []int64{100, 200, 300}, nil, mp))
@@ -311,7 +298,7 @@ func TestValueWindowExec_ResultOwnership(t *testing.T) {
 			name = "executor owns transferred output"
 		}
 		t.Run(name, func(t *testing.T) {
-			mp := newValueWindowTestPool(t)
+			mp := newAggExecTestPool(t)
 			vec := vector.NewVec(types.T_int64.ToType())
 			t.Cleanup(func() { vec.Free(mp) })
 			require.NoError(t, vector.AppendFixedList(vec, []int64{100, 200}, nil, mp))
@@ -382,7 +369,7 @@ func TestValueWindowExecPreservesRowStringSources(t *testing.T) {
 		},
 	} {
 		t.Run(window.name, func(t *testing.T) {
-			mp := newValueWindowTestPool(t)
+			mp := newAggExecTestPool(t)
 			input := vector.NewVec(types.T_text.ToType())
 			t.Cleanup(func() { input.Free(mp) })
 			sources := []types.StringSource{
@@ -497,7 +484,7 @@ func TestValueWindowExec_EmptyFrameAllFunctions(t *testing.T) {
 		{"lag", WinIdOfLag}, {"lead", WinIdOfLead}, {"first", WinIdOfFirstValue}, {"last", WinIdOfLastValue}, {"nth default one", WinIdOfNthValue},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			mp := newValueWindowTestPool(t)
+			mp := newAggExecTestPool(t)
 			exec, err := makeValueWindowExec(mp, test.id, false, []types.Type{types.T_int64.ToType()})
 			require.NoError(t, err)
 			t.Cleanup(exec.Free)
@@ -508,7 +495,7 @@ func TestValueWindowExec_EmptyFrameAllFunctions(t *testing.T) {
 }
 
 func TestValueWindowExec_InvalidAggID(t *testing.T) {
-	mp := newValueWindowTestPool(t)
+	mp := newAggExecTestPool(t)
 	exec := &valueWindowExec{singleAggInfo: singleAggInfo{aggID: -999, argType: types.T_int64.ToType(), retType: types.T_int64.ToType(), emptyNull: true}, mp: mp}
 	t.Cleanup(exec.Free)
 	require.NoError(t, exec.GroupGrow(1))

@@ -31,10 +31,17 @@ import (
 
 func buildDecimal256Vector(t *testing.T, mp *mpool.MPool, typ types.Type, nulls []bool, values []types.Decimal256) *vector.Vector {
 	vec := vector.NewVec(typ)
+	transferred := false
+	defer func() {
+		if !transferred {
+			vec.Free(mp)
+		}
+	}()
 	for i, value := range values {
 		isNull := len(nulls) > 0 && nulls[i]
 		require.NoError(t, vector.AppendFixed(vec, value, isNull, mp))
 	}
+	transferred = true
 	return vec
 }
 
@@ -850,6 +857,18 @@ func buildNumericTestDataVecs(t *testing.T, mp *mpool.MPool) ([]types.Type, []*v
 
 	vecs := make([]*vector.Vector, 8)
 	nvecs := make([]*vector.Vector, 8)
+	transferred := false
+	defer func() {
+		if !transferred {
+			for _, inputs := range [][]*vector.Vector{vecs, nvecs} {
+				for _, input := range inputs {
+					if input != nil {
+						input.Free(mp)
+					}
+				}
+			}
+		}
+	}()
 	vecs[0] = testutil.NewInt8Vector(10, typs[0], mp, false, nil, int8s[:10])
 	nvecs[0] = testutil.NewInt8Vector(10, typs[0], mp, false, nulls, int8s[2:])
 	vecs[1] = testutil.NewInt32Vector(10, typs[1], mp, false, nil, int32s[:10])
@@ -866,48 +885,80 @@ func buildNumericTestDataVecs(t *testing.T, mp *mpool.MPool) ([]types.Type, []*v
 	nvecs[6] = testutil.NewDecimal128Vector(10, typs[6], mp, false, nulls, d128s[2:])
 	vecs[7] = buildDecimal256Vector(t, mp, typs[7], nil, d256s[:10])
 	nvecs[7] = buildDecimal256Vector(t, mp, typs[7], nulls, d256s[2:])
+	for _, inputs := range [][]*vector.Vector{vecs, nvecs} {
+		for _, input := range inputs {
+			require.NotNil(t, input)
+		}
+	}
+	transferred = true
 	return typs, vecs, nvecs
 }
 
 type expectedResult struct {
 	expected float64
+	decimal  string
+	isNull   bool
 }
 
 func (e *expectedResult) check(val any, scale int32) error {
+	var got float64
+	tolerance := 1e-6
 	switch val := val.(type) {
 	case int64:
-		if math.Abs(e.expected-float64(val)) > 1e-6 {
-			return moerr.NewInternalErrorNoCtxf("expected %f, got %d", e.expected, val)
-		}
+		got = float64(val)
 	case float64:
-		if math.Abs(e.expected-val) > 1e-6 {
-			return moerr.NewInternalErrorNoCtxf("expected %f, got %f", e.expected, val)
-		}
+		got = val
 	case types.Decimal128:
-		resultFloat := types.Decimal128ToFloat64(val, scale)
-		tolerance := 1e-6
+		got = types.Decimal128ToFloat64(val, scale)
 		if scale > 0 {
 			tolerance = math.Max(tolerance, math.Pow10(-int(scale)))
-		}
-		if math.Abs(e.expected-resultFloat) > tolerance {
-			return moerr.NewInternalErrorNoCtxf("expected %f, got %f", e.expected, resultFloat)
 		}
 	case types.Decimal256:
-		resultFloat := types.Decimal256ToFloat64(val, scale)
-		tolerance := 1e-6
+		got = types.Decimal256ToFloat64(val, scale)
 		if scale > 0 {
 			tolerance = math.Max(tolerance, math.Pow10(-int(scale)))
-		}
-		if math.Abs(e.expected-resultFloat) > tolerance {
-			return moerr.NewInternalErrorNoCtxf("expected %f, got %f", e.expected, resultFloat)
 		}
 	default:
 		return moerr.NewInternalErrorNoCtxf("unsupported type %T", val)
+	}
+	if math.IsNaN(e.expected) || math.IsInf(e.expected, 0) || math.IsNaN(got) || math.IsInf(got, 0) || math.Abs(e.expected-got) > tolerance {
+		return moerr.NewInternalErrorNoCtxf("expected %f, got %f", e.expected, got)
 	}
 	return nil
 }
 
 func (e *expectedResult) checkVecAt(vec *vector.Vector, idx int) error {
+	if vec.IsNull(uint64(idx)) != e.isNull {
+		return moerr.NewInternalErrorNoCtxf("row %d: expected null=%v", idx, e.isNull)
+	}
+	if e.isNull {
+		return nil
+	}
+	if e.decimal != "" {
+		typ := vec.GetType()
+		switch typ.Oid {
+		case types.T_decimal128:
+			want, err := types.ParseDecimal128(e.decimal, typ.Width, typ.Scale)
+			if err != nil {
+				return err
+			}
+			if want != vector.GetFixedAtWithTypeCheck[types.Decimal128](vec, idx) {
+				return moerr.NewInternalErrorNoCtxf("row %d: expected decimal %s", idx, e.decimal)
+			}
+		case types.T_decimal256:
+			want, err := types.ParseDecimal256(e.decimal, typ.Width, typ.Scale)
+			if err != nil {
+				return err
+			}
+			if want != vector.GetFixedAtWithTypeCheck[types.Decimal256](vec, idx) {
+				return moerr.NewInternalErrorNoCtxf("row %d: expected decimal %s", idx, e.decimal)
+			}
+		default:
+			return moerr.NewInternalErrorNoCtxf("expected decimal, got %s", typ.Oid)
+		}
+		return nil
+	}
+
 	typ := vec.GetType()
 	switch typ.Oid {
 	case types.T_int64:
@@ -923,6 +974,9 @@ func (e *expectedResult) checkVecAt(vec *vector.Vector, idx int) error {
 }
 
 func checkVecAll(vec *vector.Vector, expected []expectedResult) error {
+	if vec.Length() != len(expected) {
+		return moerr.NewInternalErrorNoCtxf("expected %d rows, got %d", len(expected), vec.Length())
+	}
 	for i, expected := range expected {
 		if err := expected.checkVecAt(vec, i); err != nil {
 			return err
@@ -985,19 +1039,17 @@ func requireSingleAggResultEqual(t *testing.T, mp *mpool.MPool, left, right AggF
 }
 
 type expectedSumAvg struct {
-	expected    expectedResult
-	b2          [2]expectedResult
-	expected20k expectedResult
+	expected expectedResult
+	b2       [2]expectedResult
 }
 
-func newExpectedSumAvg(exp1, b2a, b2b, exp20k float64) *expectedSumAvg {
+func newExpectedSumAvg(exp1, b2a, b2b float64) *expectedSumAvg {
 	return &expectedSumAvg{
 		expected: expectedResult{expected: exp1},
 		b2: [2]expectedResult{
 			{expected: b2a},
 			{expected: b2b},
 		},
-		expected20k: expectedResult{expected: exp20k},
 	}
 }
 
@@ -1008,6 +1060,33 @@ func TestExpectedSumAvg(t *testing.T) {
 	require.NoError(t, e1.check(int64(100), 3))
 	require.NoError(t, e2.check(float64(200.1230000001), 3))
 	require.Error(t, e3.check(float64(200.123456), 3))
+	for _, test := range []struct {
+		name      string
+		got       float64
+		null      bool
+		wantError bool
+	}{
+		{"matching", 100, false, false}, {"wrong value", 101, false, true},
+		{"nan", math.NaN(), false, true}, {"positive infinity", math.Inf(1), false, true}, {"negative infinity", math.Inf(-1), false, true},
+		{"null with matching payload", 100, true, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := newAggExecTestPool(t)
+			vec := vector.NewVec(types.T_float64.ToType())
+			t.Cleanup(func() { vec.Free(mp) })
+			require.NoError(t, vector.AppendFixed(vec, test.got, false, mp))
+			if test.null {
+				vec.GetNulls().Add(0)
+			}
+			err := e1.checkVecAt(vec, 0)
+			if test.wantError {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+
 }
 
 func makeSumExec(t *testing.T, mp *mpool.MPool, typ types.Type) AggFuncExec {
@@ -1026,16 +1105,16 @@ func makeAvgExec(t *testing.T, mp *mpool.MPool, typ types.Type) AggFuncExec {
 }
 
 func makeAvgDistinctExec(t *testing.T, mp *mpool.MPool, typ types.Type) AggFuncExec {
-	agg := makeSumAvgExec(mp, false, AggIdOfSum, true, typ)
+	agg := makeSumAvgExec(mp, false, AggIdOfAvg, true, typ)
 	return agg
 }
 
 func TestSum(t *testing.T) {
-	testSumAvg(t, makeSumExec, newExpectedSumAvg(111, 53, 58, 222000))
+	testSumAvg(t, makeSumExec, AggIdOfSum, false, newExpectedSumAvg(111, 53, 58))
 }
 
 func TestSumDistinct(t *testing.T) {
-	testSumAvg(t, makeSumDistinctExec, newExpectedSumAvg(66, 36, 30, 222000))
+	testSumAvg(t, makeSumDistinctExec, AggIdOfSum, true, newExpectedSumAvg(66, 36, 30))
 }
 
 func TestSumDistinctUsesRepresentativePayloadAcrossExecutionShapes(t *testing.T) {
@@ -1091,11 +1170,11 @@ func TestSumDistinctScaledFloat32PreservesRepresentativeAcrossIntermediateRoundT
 }
 
 func TestAvg(t *testing.T) {
-	testSumAvg(t, makeAvgExec, newExpectedSumAvg(6.1666666666, 5.88888888, 6.4444444444, 126000))
+	testSumAvg(t, makeAvgExec, AggIdOfAvg, false, newExpectedSumAvg(6.1666666666, 5.88888888, 6.4444444444))
 }
 
 func TestAvgDistinct(t *testing.T) {
-	testSumAvg(t, makeAvgDistinctExec, newExpectedSumAvg(6, 6, 6, 126000))
+	testSumAvg(t, makeAvgDistinctExec, AggIdOfAvg, true, newExpectedSumAvg(6, 6, 6))
 }
 
 func TestWindowSlidingSumAvgCapability(t *testing.T) {
@@ -1819,8 +1898,8 @@ func TestSumAvgBulkFillIntermediateRoundTrip(t *testing.T) {
 		makeExec func(t *testing.T, mp *mpool.MPool, typ types.Type) AggFuncExec
 		expected *expectedSumAvg
 	}{
-		{"sum", makeSumExec, newExpectedSumAvg(111, 53, 58, 222000)},
-		{"avg", makeAvgExec, newExpectedSumAvg(6.1666666666, 5.88888888, 6.4444444444, 126000)},
+		{"sum", makeSumExec, newExpectedSumAvg(111, 53, 58)},
+		{"avg", makeAvgExec, newExpectedSumAvg(6.1666666666, 5.88888888, 6.4444444444)},
 	}
 
 	for _, tc := range testCases {
@@ -2166,164 +2245,243 @@ func TestSumBigIntMergeOverflowUsesDecimal128State(t *testing.T) {
 
 func testSumAvg(t *testing.T,
 	makeSumAvgExec func(t *testing.T, mp *mpool.MPool, typ types.Type) AggFuncExec,
-	expected *expectedSumAvg) {
+	aggID int64, distinct bool, expected *expectedSumAvg) {
 
-	mp := mpool.MustNewZero()
+	mp := newAggExecTestPool(t)
 	typs, vecs, nvecs := buildNumericTestDataVecs(t, mp)
-
-	t.Run("BulkFill", func(t *testing.T) {
-		for i, typ := range typs {
-			curNB := mp.CurrNB()
-			exec := makeSumAvgExec(t, mp, typ)
-			exec.GetOptResult().modifyChunkSize(1)
-			require.NoError(t, exec.GroupGrow(1))
-			require.NoError(t, exec.BulkFill(0, vecs[i:i+1]))
-			require.NoError(t, exec.BulkFill(0, nvecs[i:i+1]))
-			results, err := exec.Flush()
-			require.NoError(t, err)
-			require.Len(t, results, 1)
-
-			require.NoError(t, expected.expected.checkVecAt(results[0], 0))
-
-			exec.Free()
-			for _, result := range results {
-				result.Free(mp)
+	t.Cleanup(func() {
+		for _, inputs := range [][]*vector.Vector{vecs, nvecs} {
+			for _, input := range inputs {
+				input.Free(mp)
 			}
-			require.Equal(t, curNB, mp.CurrNB())
 		}
 	})
 
-	t.Run("BatchFill1", func(t *testing.T) {
-		for i, typ := range typs {
-			curNB := mp.CurrNB()
-			exec := makeSumAvgExec(t, mp, typ)
-			require.NoError(t, exec.GroupGrow(1))
-
-			require.NoError(t, exec.BatchFill(0, []uint64{1, 1, 1, 1, 1, 1, 1, 1, 1, 1}, vecs[i:i+1]))
-			require.NoError(t, exec.BatchFill(0, []uint64{1, 1, 1, 1, 1, 1, 1, 1, 1, 1}, nvecs[i:i+1]))
-
-			results, err := exec.Flush()
-			require.NoError(t, err)
-			require.Len(t, results, 1)
-
-			require.NoError(t, expected.expected.checkVecAt(results[0], 0))
-			exec.Free()
-			for _, result := range results {
-				result.Free(mp)
-			}
-			require.Equal(t, curNB, mp.CurrNB())
+	sumTypes := []types.Type{types.T_int64.ToType(), types.T_int64.ToType(), types.New(types.T_decimal128, 38, 0), types.T_float64.ToType(), types.T_float64.ToType(), types.New(types.T_decimal256, 40, 0), types.New(types.T_decimal256, 60, 0), types.New(types.T_decimal256, 65, 0)}
+	avgTypes := []types.Type{types.New(types.T_decimal128, 7, 4), types.New(types.T_decimal128, 14, 4), types.New(types.T_decimal128, 23, 4), types.T_float64.ToType(), types.T_float64.ToType(), types.New(types.T_decimal128, 22, 4), types.New(types.T_decimal256, 42, 4), types.New(types.T_decimal256, 65, 4)}
+	metadata := sumTypes
+	decimals := [3]string{"111", "53", "58"}
+	if aggID == AggIdOfAvg {
+		metadata = avgTypes
+		decimals = [3]string{"6.1667", "5.8889", "6.4444"}
+		if distinct {
+			decimals = [3]string{"6", "6", "6"}
 		}
-	})
-
-	t.Run("BatchFill2", func(t *testing.T) {
-		for i, typ := range typs {
-			curNB := mp.CurrNB()
-			exec := makeSumAvgExec(t, mp, typ)
-			require.NoError(t, exec.GroupGrow(2))
-
-			require.NoError(t, exec.BatchFill(0, []uint64{1, 2, 1, 2, 1, 2, 1, 2, 1, 2}, vecs[i:i+1]))
-			require.NoError(t, exec.BatchFill(0, []uint64{1, 2, 1, 2, 1, 2, 1, 2, 1, 2}, nvecs[i:i+1]))
-
-			results, err := exec.Flush()
-			require.NoError(t, err)
-			require.Len(t, results, 1)
-
-			require.NoError(t, checkVecAll(results[0], expected.b2[:]))
-
-			exec.Free()
-			for _, result := range results {
-				result.Free(mp)
-			}
-			require.Equal(t, curNB, mp.CurrNB())
+	} else if distinct {
+		decimals = [3]string{"66", "36", "30"}
+	}
+	scalar := func(i, which int) expectedResult {
+		value := expected.expected
+		if which > 0 {
+			value = expected.b2[which-1]
 		}
-	})
-
-	t.Run("BatchFill20000", func(t *testing.T) {
-		for i, typ := range typs {
-			curNB := mp.CurrNB()
-			exec := makeSumAvgExec(t, mp, typ)
-			// grow twice, so we have 20000 groups.
-			require.NoError(t, exec.GroupGrow(10000))
-			require.NoError(t, exec.GroupGrow(10000))
-
-			for j := 0; j < 2000; j++ {
-				groups := make([]uint64, 10)
-				for k := range groups {
-					groups[k] = uint64(j*10 + k + 1)
-				}
-
-				require.NoError(t, exec.BatchFill(0, groups[:5], vecs[i:i+1]))
-				require.NoError(t, exec.BatchFill(5, groups[5:], vecs[i:i+1]))
-				require.NoError(t, exec.BatchFill(0, groups[:5], nvecs[i:i+1]))
-				require.NoError(t, exec.BatchFill(5, groups[5:], nvecs[i:i+1]))
-			}
-
-			results, err := exec.Flush()
-			require.NoError(t, err)
-			require.Equal(t, 3, len(results))
-			require.Equal(t, 8192, results[0].Length())
-			require.Equal(t, 8192, results[1].Length())
-			require.Equal(t, 3616, results[2].Length())
-			require.NoError(t, expected.expected20k.checkVecSum(results))
-
-			for _, result := range results {
-				result.Free(mp)
-			}
-			exec.Free()
-			require.Equal(t, curNB, mp.CurrNB())
+		if metadata[i].Oid == types.T_decimal128 || metadata[i].Oid == types.T_decimal256 {
+			value.decimal = decimals[which]
 		}
-	})
-}
-
-func (e *expectedResult) checkVecSum(vecs []*vector.Vector) error {
-	var fsum float64
-
-	for _, vec := range vecs {
-		typ := vec.GetType()
-		switch typ.Oid {
-		case types.T_int64:
-			vals := vector.MustFixedColNoTypeCheck[int64](vec)
-			var sum int64 = 0
-			for _, val := range vals {
-				sum += val
-			}
-			fsum += float64(sum)
-		case types.T_float64:
-			vals := vector.MustFixedColNoTypeCheck[float64](vec)
-			sum := 0.0
-			for _, val := range vals {
-				sum += val
-			}
-			fsum += sum
-		case types.T_decimal128:
-			vals := vector.MustFixedColNoTypeCheck[types.Decimal128](vec)
-			sum := types.Decimal128{B0_63: 0, B64_127: 0}
-			var err error
-			for _, val := range vals {
-				sum, err = sum.Add128(val)
-				if err != nil {
-					return err
-				}
-			}
-			fsum += types.Decimal128ToFloat64(sum, typ.Scale)
-		case types.T_decimal256:
-			vals := vector.MustFixedColNoTypeCheck[types.Decimal256](vec)
-			sum := types.Decimal256{}
-			var err error
-			for _, val := range vals {
-				sum, err = sum.Add256(val)
-				if err != nil {
-					return err
-				}
-			}
-			fsum += types.Decimal256ToFloat64(sum, typ.Scale)
-		default:
-			return moerr.NewInternalErrorNoCtxf("unsupported type %s", typ.Oid)
-		}
+		return value
 	}
 
-	if math.Abs(e.expected-fsum) > 1e-6 {
-		return moerr.NewInternalErrorNoCtxf("expected %f, got %f", e.expected, fsum)
+	t.Run("FractionalDecimal", func(t *testing.T) {
+		for _, test := range []struct {
+			input    types.Type
+			sum, avg types.Type
+		}{
+			{types.New(types.T_decimal64, 10, 2), types.New(types.T_decimal128, 32, 2), types.New(types.T_decimal128, 14, 6)},
+			{types.New(types.T_decimal128, 38, 2), types.New(types.T_decimal256, 60, 2), types.New(types.T_decimal256, 42, 6)},
+			{types.New(types.T_decimal256, 50, 2), types.New(types.T_decimal256, 65, 2), types.New(types.T_decimal256, 54, 6)},
+		} {
+			t.Run(test.input.Oid.String(), func(t *testing.T) {
+				baseline := mp.CurrNB()
+				t.Cleanup(func() { require.Equal(t, baseline, mp.CurrNB()) })
+				input := vector.NewVec(test.input)
+				t.Cleanup(func() { input.Free(mp) })
+				for row, literal := range []string{"1.25", "1.25", "2.50", "0"} {
+					switch test.input.Oid {
+					case types.T_decimal64:
+						value, err := types.ParseDecimal64(literal, test.input.Width, test.input.Scale)
+						require.NoError(t, err)
+						require.NoError(t, vector.AppendFixed(input, value, row == 3, mp))
+					case types.T_decimal128:
+						value, err := types.ParseDecimal128(literal, test.input.Width, test.input.Scale)
+						require.NoError(t, err)
+						require.NoError(t, vector.AppendFixed(input, value, row == 3, mp))
+					case types.T_decimal256:
+						value, err := types.ParseDecimal256(literal, test.input.Width, test.input.Scale)
+						require.NoError(t, err)
+						require.NoError(t, vector.AppendFixed(input, value, row == 3, mp))
+					}
+				}
+				exec := makeSumAvgExec(t, mp, test.input)
+				t.Cleanup(exec.Free)
+				require.Equal(t, aggID, exec.AggID())
+				require.Equal(t, distinct, exec.IsDistinct())
+				require.NoError(t, exec.GroupGrow(4))
+				require.NoError(t, exec.BatchFill(0, []uint64{1, 1, 1, 4}, []*vector.Vector{input}))
+				require.NoError(t, exec.Fill(1, 2, []*vector.Vector{input}))
+				want, metadata := "5.00", test.sum
+				if aggID == AggIdOfAvg {
+					want, metadata = "1.666667", test.avg
+					if distinct {
+						want = "1.875000"
+					}
+				} else if distinct {
+					want = "3.75"
+				}
+				results, err := exec.Flush()
+				t.Cleanup(func() {
+					for _, result := range results {
+						result.Free(mp)
+					}
+				})
+				require.NoError(t, err)
+				require.Len(t, results, 1)
+				require.Equal(t, metadata, *results[0].GetType())
+				require.NoError(t, checkVecAll(results[0], []expectedResult{
+					{decimal: want}, {decimal: "2.50"}, {isNull: true}, {isNull: true},
+				}))
+			})
+		}
+	})
+
+	for _, shape := range []struct {
+		name   string
+		bulk   bool
+		groups []uint64
+		rows   int
+	}{
+		{name: "BulkFill", bulk: true, rows: 1},
+		{name: "BatchFill1", groups: []uint64{1, 1, 1, 1, 1, 1, 1, 1, 1, 1}, rows: 1},
+		{name: "BatchFill2", groups: []uint64{1, 2, 1, 2, 1, 2, 1, 2, 1, 2}, rows: 2},
+	} {
+		t.Run(shape.name, func(t *testing.T) {
+			for i, typ := range typs {
+				t.Run(typ.Oid.String(), func(t *testing.T) {
+					baseline := mp.CurrNB()
+					t.Cleanup(func() { require.Equal(t, baseline, mp.CurrNB()) })
+					exec := makeSumAvgExec(t, mp, typ)
+					t.Cleanup(exec.Free)
+					require.Equal(t, aggID, exec.AggID())
+					require.Equal(t, distinct, exec.IsDistinct())
+					if shape.bulk {
+						exec.GetOptResult().modifyChunkSize(1)
+					}
+					require.NoError(t, exec.GroupGrow(shape.rows))
+					for _, inputs := range [][]*vector.Vector{vecs[i : i+1], nvecs[i : i+1]} {
+						if shape.bulk {
+							require.NoError(t, exec.BulkFill(0, inputs))
+						} else {
+							require.NoError(t, exec.BatchFill(0, shape.groups, inputs))
+						}
+					}
+					results, err := exec.Flush()
+					t.Cleanup(func() {
+						for _, result := range results {
+							result.Free(mp)
+						}
+					})
+					require.NoError(t, err)
+					require.Len(t, results, 1)
+					require.Equal(t, metadata[i], *results[0].GetType())
+					want := []expectedResult{scalar(i, 0)}
+					if shape.rows == 2 {
+						want = []expectedResult{scalar(i, 1), scalar(i, 2)}
+					}
+					require.NoError(t, checkVecAll(results[0], want))
+				})
+			}
+		})
 	}
-	return nil
+
+	t.Run("BatchFillBoundary", func(t *testing.T) {
+		for i, typ := range typs {
+			t.Run(typ.Oid.String(), func(t *testing.T) {
+				curNB := mp.CurrNB()
+				t.Cleanup(func() { require.Equal(t, curNB, mp.CurrNB()) })
+				exec := makeSumAvgExec(t, mp, typ)
+				t.Cleanup(exec.Free)
+				require.Equal(t, aggID, exec.AggID())
+				require.Equal(t, distinct, exec.IsDistinct())
+				const groupsCount = 2*AggBatchSize + 2
+				want := [...]float64{4, 6, 8, 10, 5, 14, 16, 18, 20, 10}
+				if aggID == AggIdOfAvg {
+					want = [...]float64{2, 3, 4, 5, 5, 7, 8, 9, 10, 10}
+				}
+				oracles := make([]expectedResult, groupsCount)
+				for group := range oracles {
+					oracles[group].isNull = true
+				}
+				// Wide DISTINCT owns the shared skiplist arena growth proof.
+				dense := 0
+				if aggID == AggIdOfSum && distinct && typ.Oid == types.T_decimal256 {
+					dense = 7700
+				}
+				fill := func(start, end int) {
+					for origin := start; origin < end; origin += 10 {
+						var groups [10]uint64
+						for row := range groups {
+							groups[row] = uint64(origin + row + 1)
+							oracles[origin+row] = expectedResult{expected: want[row], decimal: fmt.Sprintf("%.0f", want[row])}
+						}
+						for _, inputs := range [][]*vector.Vector{vecs[i : i+1], nvecs[i : i+1]} {
+							require.NoError(t, exec.BatchFill(0, groups[:5], inputs))
+							require.NoError(t, exec.BatchFill(5, groups[5:], inputs))
+						}
+					}
+				}
+				require.NoError(t, exec.GroupGrow(AggBatchSize+1))
+				if dense > 0 {
+					fill(0, dense)
+				} else {
+					fill(0, 10)
+				}
+				// Admit the first half of a window before extending the partial chunk.
+				var boundary [10]uint64
+				for row := range boundary {
+					boundary[row] = uint64(AggBatchSize - 5 + row + 1)
+				}
+				for _, inputs := range [][]*vector.Vector{vecs[i : i+1], nvecs[i : i+1]} {
+					require.NoError(t, exec.BatchFill(0, boundary[:5], inputs))
+				}
+				require.NoError(t, exec.GroupGrow(AggBatchSize+1))
+				for _, inputs := range [][]*vector.Vector{vecs[i : i+1], nvecs[i : i+1]} {
+					require.NoError(t, exec.BatchFill(5, boundary[5:], inputs))
+				}
+				for row := range boundary {
+					oracles[AggBatchSize-5+row] = expectedResult{expected: want[row], decimal: fmt.Sprintf("%.0f", want[row])}
+				}
+				fill(2*AggBatchSize-8, groupsCount)
+				require.NoError(t, exec.BatchFill(0, []uint64{0}, vecs[i:i+1]))
+				require.NoError(t, exec.BatchFill(4, []uint64{AggBatchSize - 19}, nvecs[i:i+1]))
+				if dense > 0 {
+					require.Greater(t, len(exec.GetOptResult().(*aggExec).state[0].argbuf), 512*1024)
+				}
+
+				results, err := exec.Flush()
+				t.Cleanup(func() {
+					for _, result := range results {
+						result.Free(mp)
+					}
+				})
+				require.NoError(t, err)
+				require.Equal(t, 3, len(results))
+				require.Equal(t, 8192, results[0].Length())
+				require.Equal(t, 8192, results[1].Length())
+				require.Equal(t, 2, results[2].Length())
+				group := 0
+				for _, result := range results {
+					require.Equal(t, metadata[i], *result.GetType())
+					for row := 0; row < result.Length(); row++ {
+						oracle := oracles[group]
+						if result.GetType().Oid != types.T_decimal128 && result.GetType().Oid != types.T_decimal256 {
+							oracle.decimal = ""
+						}
+						require.NoError(t, oracle.checkVecAt(result, row), "group %d", group)
+						group++
+					}
+				}
+				require.Equal(t, groupsCount, group)
+
+			})
+		}
+	})
 }
