@@ -544,6 +544,97 @@ void check_matches_nvidia(int format, size_t K, size_t rows, size_t nq, bool sam
            fp8 ? "MXFP8" : "NVFP4", K, rows, nq, identical, rows * nq, (long long)max_ulps);
 }
 
+
+// check_magnitude scores a query of magnitude 2^e (elements 2^e times {1, 1.5, 2}) against
+// rows equal to the query, to twice it and to minus it, in a format holding those values,
+// and compares cosine and l2sq with a double reference over the stored values: the cosine
+// distance to 1e-6, the squared L2 distance to 1e-5 of |x|^2 + |q|^2, and a distance beyond
+// the float range as +Inf.
+void check_magnitude(int format, uint32_t dim, int e) {
+    const bool mx = format == GPU_BLOCKSCALED_MXFP8, nv = format == GPU_BLOCKSCALED_NVFP4;
+    const size_t esize = format == GPU_BLOCKSCALED_F32 ? 4 : 2;
+    const double pattern[3] = {1, 1.5, 2};
+    const double factor[4] = {1, 1, 2, -1}; // query, then rows: equal, twice, minus
+    std::vector<std::vector<uint8_t>> cells(4);
+    std::vector<std::vector<double>> vals(4, std::vector<double>(dim));
+    for (int v = 0; v < 4; v++) {
+        for (uint32_t k = 0; k < dim; k++) vals[v][k] = std::ldexp(factor[v] * pattern[k % 3], e);
+        if (mx || nv) {
+            const size_t block = mx ? 32 : 16, nscale = (dim + block - 1) / block;
+            const size_t elem_bytes = mx ? dim : (dim + 1) / 2;
+            std::vector<uint8_t> c(12 + nscale + elem_bytes, 0);
+            c[0] = 1;
+            c[1] = uint8_t(format);
+            std::memcpy(&c[4], &dim, 4);
+            // MXFP8: scale 2^e and E4M3 codes; NVFP4: global 2^e, scale 1 and E2M1 codes
+            const float g = mx ? 1.0f : std::ldexp(1.0f, e);
+            std::memcpy(&c[8], &g, 4);
+            for (size_t s = 0; s < nscale; s++) c[12 + s] = mx ? uint8_t(127 + e) : 0x38;
+            for (uint32_t k = 0; k < dim; k++) {
+                const double x = factor[v] * pattern[k % 3];
+                if (mx) {
+                    __nv_fp8_e4m3 q(static_cast<float>(x));
+                    c[12 + nscale + k] = q.__x;
+                } else {
+                    __nv_fp4_e2m1 q(static_cast<float>(x));
+                    c[12 + nscale + k / 2] |= k % 2 == 0 ? (q.__x & 0xf) : uint8_t(q.__x << 4);
+                }
+            }
+            cells[v] = c;
+        } else {
+            cells[v].resize(dim * esize);
+            for (uint32_t k = 0; k < dim; k++) {
+                const float x = float(vals[v][k]);
+                if (format == GPU_BLOCKSCALED_F32) {
+                    std::memcpy(&cells[v][k * 4], &x, 4);
+                } else if (format == GPU_BLOCKSCALED_BF16) {
+                    __nv_bfloat16 h = __float2bfloat16(x);
+                    std::memcpy(&cells[v][k * 2], &h, 2);
+                    vals[v][k] = double(__bfloat162float(h));
+                } else {
+                    __half h = __float2half(x);
+                    std::memcpy(&cells[v][k * 2], &h, 2);
+                    vals[v][k] = double(__half2float(h));
+                }
+            }
+        }
+    }
+    std::vector<uint8_t> rows;
+    for (int v = 1; v < 4; v++) rows.insert(rows.end(), cells[v].begin(), cells[v].end());
+    for (int metric : {blockscaled_matmul::kCosine, blockscaled_matmul::kL2sq}) {
+        blockscaled_matmul eng(0, format, dim, 1, cells[0].data(), 128, 0, metric);
+        std::vector<float> scores(3);
+        eng.run(rows.data(), 3, scores.data());
+        double nq = 0;
+        for (uint32_t k = 0; k < dim; k++) nq += vals[0][k] * vals[0][k];
+        for (int r = 0; r < 3; r++) {
+            double nr = 0, l2 = 0, dot = 0;
+            for (uint32_t k = 0; k < dim; k++) {
+                const double x = vals[r + 1][k], y = vals[0][k];
+                nr += x * x;
+                dot += x * y;
+                l2 += (x - y) * (x - y);
+            }
+            const double got = -double(scores[r]);
+            if (metric == blockscaled_matmul::kCosine) {
+                const double want = nr > 0 && nq > 0 ? 1 - dot / std::sqrt(nr * nq) : 1.0;
+                if (!(std::fabs(got - want) <= 1e-6)) {
+                    printf("    format %d dim %u 2^%d cosine row %d: %g, want %g\n", format, dim, e, r, got, want);
+                }
+                ASSERT_TRUE(std::fabs(got - want) <= 1e-6);
+            } else if (std::isinf(float(l2))) {
+                ASSERT_TRUE(std::isinf(got));
+            } else {
+                const double tol = std::max(1e-5 * (nr + nq), 1.5e-45);
+                if (!(std::fabs(got - l2) <= tol)) {
+                    printf("    format %d dim %u 2^%d l2sq row %d: %g, want %g\n", format, dim, e, r, got, l2);
+                }
+                ASSERT_TRUE(std::fabs(got - l2) <= tol);
+            }
+        }
+    }
+}
+
 } // namespace
 
 TEST(BlockScaledMatmulTest, DistanceMetricsMatchReference) {
@@ -555,6 +646,21 @@ TEST(BlockScaledMatmulTest, DistanceMetricsMatchReference) {
             check_metric(format, 96, 300, 5, 128, metric);
             check_metric(format, 32, 7, 2, 512, metric);
         }
+    }
+}
+
+// Cosine and l2sq hold at magnitudes whose fp32 products overflow or underflow: the rows are
+// rescaled by powers of two before the matmul.
+TEST(BlockScaledMatmulTest, DistanceMetricsAtExtremeMagnitudes) {
+    for (uint32_t dim : {15u, 16u, 17u, 33u, 96u}) {
+        for (int e : {120, 100, 0, -100, -140}) {
+            check_magnitude(GPU_BLOCKSCALED_F32, dim, e);
+            check_magnitude(GPU_BLOCKSCALED_BF16, dim, e);
+            check_magnitude(GPU_BLOCKSCALED_NVFP4, dim, e);
+            if (e >= -120) check_magnitude(GPU_BLOCKSCALED_MXFP8, dim, e);
+        }
+        check_magnitude(GPU_BLOCKSCALED_F16, dim, 0);
+        check_magnitude(GPU_BLOCKSCALED_F16, dim, -10);
     }
 }
 

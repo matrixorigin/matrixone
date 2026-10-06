@@ -55,12 +55,22 @@ insert into vq values
 set @vqc = (select vecblock_binary(v) from vq where id = 1);
 set @vqj = (select concat('[', group_concat(vecblock_json(v) order by id), ']') from vq where id in (1, 2));
 
+create table mg (id int primary key, f vecf32(16), e vecf8(16), b vecf4(16));
+insert into mg values (0, '[1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30]', '[1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30]', '[1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30]');
+insert into mg values (1, '[1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30]', '[1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30]', '[1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30]');
+insert into mg values (2, '[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]', '[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]', '[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]');
+
 create table qv (qid int primary key, v vecf32(4));
 insert into qv values (1, '[1,0,0,0]'), (2, '[0,0,1,1]');
 set @qs = (select json_arrayagg(v) from qv);
 
 -- ---- gpu_mode = 1 (cuBLASLt) ----
 SET gpu_mode = 1;
+-- cosine at magnitudes whose float32 products overflow or underflow: rows rescaled by a
+-- power of two before the matmul, distance 0 to the GEMM's float32 rounding
+select id, json_extract(vector_matmul(1, id, f, '[[1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30]]', '{"metric":"cosine"}'), '$[0][0][1]') < 1e-6, json_extract(vector_matmul(1, id, e, '[[1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30]]', '{"metric":"cosine"}'), '$[0][0][1]') < 1e-6, json_extract(vector_matmul(1, id, b, '[[1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30]]', '{"metric":"cosine"}'), '$[0][0][1]') < 1e-6 from mg where id = 0 group by id;
+select id, json_extract(vector_matmul(1, id, f, '[[1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30]]', '{"metric":"cosine"}'), '$[0][0][1]') < 1e-6, json_extract(vector_matmul(1, id, e, '[[1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30]]', '{"metric":"cosine"}'), '$[0][0][1]') < 1e-6, json_extract(vector_matmul(1, id, b, '[[1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30]]', '{"metric":"cosine"}'), '$[0][0][1]') < 1e-6 from mg where id = 1 group by id;
+select id, json_extract(vector_matmul(1, id, f, '[[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]]', '{"metric":"cosine"}'), '$[0][0][1]') < 1e-6, json_extract(vector_matmul(1, id, e, '[[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]]', '{"metric":"cosine"}'), '$[0][0][1]') < 1e-6, json_extract(vector_matmul(1, id, b, '[[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]]', '{"metric":"cosine"}'), '$[0][0][1]') < 1e-6 from mg where id = 2 group by id;
 -- query_format vecblock: exact query cells
 select vector_matmul(1, id, v, @vqc, '{"query_format":"vecblock","metric":"l2sq"}') from vq;
 select vector_matmul(1, id, v, @vqj, '{"query_format":"vecblock","metric":"l2sq"}') from vq;

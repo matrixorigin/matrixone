@@ -208,6 +208,51 @@ __global__ void bsmm_row_stats_kernel(const uint8_t* elem, const uint8_t* scale,
     }
 }
 
+// bsmm_rescale_kernel scales each of the n packed rows whose squared norm (norm, the value
+// including the row's global scale) is outside [2^-60, 2^60] by a power of two 2^-k, |x| near
+// 2^k, so its fp32 matmul with a query neither overflows nor underflows, and multiplies the
+// row's global scale by 2^k: F32 and BF16 elements are scaled, MXFP8 block scale exponents
+// are shifted, and a block shifted below the E8M0 range is zeroed. Rows in range are left as
+// they are. One block per row; the format constants are those of blockscaled_matmul.
+template <int kThreads>
+__global__ void bsmm_rescale_kernel(uint8_t* elem, uint8_t* scale, float* global,
+                                    const double* norm, uint64_t n, int format,
+                                    uint64_t row_bytes, uint64_t dim, uint64_t Sp) {
+    const uint64_t r = blockIdx.x;
+    if (r >= n) return;
+    const double nr = norm[r];
+    if (!(nr > 0) || (nr >= 0x1p-60 && nr <= 0x1p60)) return;
+    const int k = max(-126, min(127, int(lrint(log2(nr) / 2))));
+    uint8_t* row = elem + r * row_bytes;
+    switch (format) {
+    case 1: { // MXFP8: shift the E8M0 exponents
+        for (uint64_t s = threadIdx.x; s < (dim + 31) / 32; s += kThreads) {
+            const uint64_t off = bsmm_scale_off(r, s, Sp);
+            int e = int(scale[off]) - k;
+            if (e < 0) {
+                for (uint64_t i = s * 32; i < min(dim, s * 32 + 32); i++) row[i] = 0;
+                e = 0;
+            }
+            scale[off] = uint8_t(min(e, 254));
+        }
+        break;
+    }
+    case 3: { // F32
+        float* p = reinterpret_cast<float*>(row);
+        for (uint64_t i = threadIdx.x; i < dim; i += kThreads) p[i] = ldexpf(p[i], -k);
+        break;
+    }
+    case 7: { // BF16
+        __nv_bfloat16* p = reinterpret_cast<__nv_bfloat16*>(row);
+        for (uint64_t i = threadIdx.x; i < dim; i += kThreads) {
+            p[i] = __float2bfloat16(ldexpf(__bfloat162float(p[i]), -k));
+        }
+        break;
+    }
+    }
+    if (threadIdx.x == 0) global[r] = ldexpf(global[r], k);
+}
+
 // bsmm_ties_kernel sets tied[q] when query q has more real rows (r < n) at its k-th score
 // than select_k kept; one block per query.
 template <int kThreads>
@@ -510,6 +555,17 @@ private:
             static_cast<const float*>(global), n, format_, row_bytes_, dim_, Sp_,
             static_cast<double*>(norm), static_cast<int64_t*>(sum));
         check(cudaGetLastError(), "bsmm_row_stats_kernel");
+        // cosine and l2sq rows of a format without a bounded range: rescaled in place, after
+        // their norms are taken
+        if (metric_ != kMetricInnerProduct &&
+            (format_ == kFormatMXFP8 || format_ == kFormatF32 || format_ == kFormatBF16)) {
+            bsmm_rescale_kernel<128><<<unsigned(n), 128, 0, stream_>>>(
+                static_cast<uint8_t*>(const_cast<void*>(elem)),
+                static_cast<uint8_t*>(const_cast<void*>(scale)),
+                static_cast<float*>(const_cast<void*>(global)), static_cast<const double*>(norm),
+                n, format_, row_bytes_, dim_, Sp_);
+            check(cudaGetLastError(), "bsmm_rescale_kernel");
+        }
     }
 
     // fixup enqueues the rank scores of the matmul output of an M-row tile holding n rows.

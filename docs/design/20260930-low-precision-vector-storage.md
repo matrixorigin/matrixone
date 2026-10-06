@@ -208,6 +208,16 @@ Device kernels around the matmul, on the engine's stream:
   and the `vecuint8` shifted-element sums. It runs once on the query matrix when the
   engine is created, and on each tile when the metric is cosine or squared L2 or the
   format is `vecuint8`. The host only packs bytes and reads cell headers.
+- For cosine and squared L2 on `vecf32`, `vecbf16` and `vecf8`, whose values can make the
+  fp32 products overflow or underflow, a rescale kernel runs after the row statistics:
+  a row whose squared norm is outside [2^-60, 2^60] is multiplied by a power of two
+  2^-k (|x| near 2^k) — `vecf32`/`vecbf16` elements scaled, `vecf8` E8M0 exponents shifted,
+  a block shifted below the E8M0 range zeroed — and its global scale by 2^k, so the
+  GEMM sees values near 1 and the fix-up kernel restores the scale exactly. Rows in range
+  are left as they are. `vecf4` (its global scale is outside the GEMM), `vecf16`,
+  `vecint8` and `vecuint8` have bounded GEMM operands. The kernel reads one norm per row;
+  on 1M `vecf32(768)` rows it takes 2.6 ms of GPU time when no row is out of range (32 ms
+  when every row is), next to 61 ms of GEMM.
 - A fix-up kernel turns the matmul output into rank scores. The inner product is
   `acc × fp32(g_row × g_query)` in fp32, as cuBLASLt applies `alpha = G_a × G_b` to a GEMM
   with per-tensor global scales; cosine and squared L2 take the dot product with the
@@ -432,13 +442,17 @@ Instances on one CN share its GPU: each uses its own CUDA stream and cuBLASLt
 handle/workspace, and host and device tile memory scale with the instance count
 (`instances` × one tile of at most 64 MiB).
 
-On the CPU (gpu_mode off, a CPU build, or no visible device) the dot products come from the
-CPU distance kernels: `VecBlockInnerProduct` over the quantized cells for `vecf8`/`vecf4`,
-the column type's inner-product kernel (`metric.ResolveDistanceFn`) for the other types;
-the squared norms are the same kernels' `x·x`, and the metric is the formula of the GPU
-fix-up kernel. Results match the GPU within fp32 summation-order tolerance. An overflowing
-score (NaN) ranks last; a non-finite score in the result is an overflow error, since JSON
-has no infinity.
+On the CPU (gpu_mode off, a CPU build, or no visible device) each distance is computed by
+the kernel of the SQL function of the metric — `VecBlockInnerProduct`,
+`VecBlockCosineDistance` and `VecBlockL2DistanceSq` for `vecf8`/`vecf4`, the column type's
+kernel (`metric.ResolveDistanceFn`) for the other types, as `inner_product`,
+`cosine_distance` and `l2_distance_sq` resolve them — so a CPU result equals the scalar
+function on the same row and query, including the float64 cosine recompute and the
+squared L2 of differences. The GPU matches within fp32 summation-order tolerance: its
+squared L2 is `|x|² + |q|² − 2·x·q`, whose rounding is relative to the squared norms, so
+where those exceed the float range (elements near 1e30) a squared distance near 0 can
+round beyond it and report an overflow. An overflowing score (NaN) ranks last; a
+non-finite score in the result is an overflow error, since JSON has no infinity.
 
 #### Result format
 
@@ -681,8 +695,8 @@ type; normalization changes the ranking, independent of the format.
   merge come from MO's two-phase aggregation. A `CROSS APPLY` table function cannot emit a
   row at end of input, which rules out a table-function + merge-aggregate pair.
 - Result = JSON with string ids.
-- CPU dot-product accumulation = fp32 within a 16-element unit, fp64 across units; the
-  GPU accumulates in fp32 (cuBLASLt `CUBLAS_COMPUTE_32F`).
+- The CPU computes each distance with the scalar SQL function's kernel; the GPU
+  accumulates in fp32 (cuBLASLt `CUBLAS_COMPUTE_32F`).
 - GPU dispatch follows the session's `gpu_mode` only. The `options` argument is a JSON
   object of which only `metric` and `query_format` are read; a tile size is an internal choice bounded by the
   allocation account, not a user setting.
