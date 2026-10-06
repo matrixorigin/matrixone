@@ -137,10 +137,10 @@ func TestPrepare(t *testing.T) {
 }
 
 func TestString(t *testing.T) {
-	buf := new(bytes.Buffer)
-	for _, tc := range makeTestCases(t) {
-		tc.arg.String(buf)
-	}
+	var buf bytes.Buffer
+	arg := &TimeWin{}
+	arg.String(&buf)
+	require.Equal(t, "time_window: time window", buf.String())
 }
 
 func TestTimeWin(t *testing.T) {
