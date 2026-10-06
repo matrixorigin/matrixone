@@ -27,6 +27,46 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Variance inputs keep their existing memory domain and are owned before any
+// append can fail. Child scenarios share only immutable inputs.
+func varianceInput[T any](t *testing.T, mp *mpool.MPool, typ types.Type, values []T, nulls []bool) *vector.Vector {
+	t.Helper()
+	input := vector.NewVec(typ)
+	t.Cleanup(func() { input.Free(mp) })
+	require.NoError(t, vector.AppendFixedList(input, values, nulls, mp))
+	return input
+}
+
+func varianceExec(t *testing.T, mp *mpool.MPool, id int64, distinct bool, typ types.Type) AggFuncExec {
+	t.Helper()
+	exec, err := MakeAgg(mp, id, distinct, typ)
+	require.NoError(t, err)
+	t.Cleanup(exec.Free)
+	args, _ := exec.TypesInfo()
+	require.Equal(t, []types.Type{typ}, args)
+	return exec
+}
+
+func varianceResult(t *testing.T, mp *mpool.MPool, exec AggFuncExec, typ types.Type, nulls []bool) *vector.Vector {
+	t.Helper()
+	results, err := exec.Flush()
+	for _, result := range results {
+		if result != nil {
+			t.Cleanup(func() { result.Free(mp) })
+		}
+	}
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	result := results[0]
+	require.NotNil(t, result)
+	require.Equal(t, typ, *result.GetType())
+	require.Equal(t, len(nulls), result.Length())
+	for row, want := range nulls {
+		require.Equal(t, want, result.IsNull(uint64(row)), "row %d NULL", row)
+	}
+	return result
+}
+
 func TestVarianceStateLargeOffset(t *testing.T) {
 	mean, variance, varianceExponent, count := 0.0, 0.0, int64(0), int64(0)
 	for i := 0; i < 7; i++ {
@@ -270,49 +310,90 @@ func TestMergeVarianceStateAvoidsFiniteIntermediateOverflow(t *testing.T) {
 		scaledVarianceFloat64(scaledVariance{value: residentVariance, exponent: residentExponent}), 1e-15)
 }
 
-func TestVarStdDevExecLargeOffset(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer mpool.DeleteMPool(mp)
-
-	input := vector.NewVec(types.T_float64.ToType())
-	for i := 0; i < 7; i++ {
-		require.NoError(t, vector.AppendFixed(input, 1_000_000_000_000+float64(i), false, mp))
-	}
-	defer input.Free(mp)
-
-	tests := []struct {
-		name string
-		make func(bool) AggFuncExec
-		want float64
+func TestVarianceLargeOffset(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		typ    types.Type
+		origin int64
 	}{
-		{
-			name: "var_pop",
-			make: func(distinct bool) AggFuncExec {
-				return makeVarPopExec(mp, AggIdOfVarPop, distinct, *input.GetType())
-			},
-			want: 4,
-		},
-		{
-			name: "stddev_pop",
-			make: func(distinct bool) AggFuncExec {
-				return makeStdDevPopExec(mp, AggIdOfStdDevPop, distinct, *input.GetType())
-			},
-			want: 2,
-		},
-	}
-	for _, tc := range tests {
-		for _, distinct := range []bool{false, true} {
-			t.Run(tc.name, func(t *testing.T) {
-				exec := tc.make(distinct)
-				require.NoError(t, exec.GroupGrow(1))
-				require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
-				vecs, err := exec.Flush()
-				require.NoError(t, err)
-				require.InEpsilon(t, tc.want, vector.MustFixedColNoTypeCheck[float64](vecs[0])[0], 1e-15)
-				vecs[0].Free(mp)
-				exec.Free()
-			})
-		}
+		{"float64", types.T_float64.ToType(), 1_000_000_000_000},
+		{"decimal128", types.New(types.T_decimal128, 30, 6), 1_000_000_000_000},
+		{"decimal64", types.New(types.T_decimal64, 18, 6), 100_000_000_000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := newAggExecTestPool(t)
+			input := vector.NewVec(tc.typ)
+			t.Cleanup(func() { input.Free(mp) })
+			for i := int64(0); i < 7; i++ {
+				literal := strconv.FormatInt(tc.origin+i, 10)
+				switch tc.typ.Oid {
+				case types.T_float64:
+					require.NoError(t, vector.AppendFixed(input, float64(tc.origin+i), false, mp))
+				case types.T_decimal64:
+					value, err := types.ParseDecimal64(literal, tc.typ.Width, tc.typ.Scale)
+					require.NoError(t, err)
+					require.NoError(t, vector.AppendFixed(input, value, false, mp))
+				case types.T_decimal128:
+					value, err := types.ParseDecimal128(literal, tc.typ.Width, tc.typ.Scale)
+					require.NoError(t, err)
+					require.NoError(t, vector.AppendFixed(input, value, false, mp))
+				}
+			}
+			// Only Decimal128's original bulk fixture included a trailing NULL.
+			if tc.typ.Oid == types.T_decimal128 {
+				require.NoError(t, vector.AppendFixed(input, types.Decimal128{}, true, mp))
+			}
+			type offsetCase struct {
+				name            string
+				id              int64
+				distinct, merge bool
+				want            float64
+			}
+			cases := []offsetCase{
+				{"var-resident", AggIdOfVarPop, false, false, 4},
+				{"var-distinct", AggIdOfVarPop, true, false, 4},
+			}
+			var leftInput, rightInput *vector.Vector
+			if tc.typ.Oid != types.T_decimal64 {
+				cases = append(cases, offsetCase{"var-merge", AggIdOfVarPop, false, true, 4})
+				leftInput = vector.NewVec(tc.typ)
+				t.Cleanup(func() { leftInput.Free(mp) })
+				require.NoError(t, input.CloneWindowTo(leftInput, 0, 3, mp))
+				rightInput = vector.NewVec(tc.typ)
+				t.Cleanup(func() { rightInput.Free(mp) })
+				require.NoError(t, input.CloneWindowTo(rightInput, 3, 7, mp))
+			}
+			if tc.typ.Oid == types.T_float64 {
+				cases = append(cases, offsetCase{"stddev-resident", AggIdOfStdDevPop, false, false, 2}, offsetCase{"stddev-distinct", AggIdOfStdDevPop, true, false, 2})
+			}
+			for _, cell := range cases {
+				t.Run(cell.name, func(t *testing.T) {
+					exec := varianceExec(t, mp, cell.id, cell.distinct, tc.typ)
+					require.NoError(t, exec.GroupGrow(1))
+					if cell.merge {
+						right := varianceExec(t, mp, cell.id, false, tc.typ)
+						require.NoError(t, right.GroupGrow(1))
+						require.NoError(t, exec.BulkFill(0, []*vector.Vector{leftInput}))
+						require.NoError(t, right.BulkFill(0, []*vector.Vector{rightInput}))
+						require.NoError(t, exec.Merge(right, 0, 0))
+						// The merged result must survive donor destruction.
+						right.Free()
+					} else {
+						require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
+					}
+					resultType := types.T_float64.ToType()
+					if tc.typ.Oid != types.T_float64 {
+						resultType = types.New(types.T_decimal128, 38, 12)
+					}
+					result := varianceResult(t, mp, exec, resultType, []bool{false})
+					if tc.typ.Oid == types.T_float64 {
+						require.InEpsilon(t, cell.want, vector.MustFixedColWithTypeCheck[float64](result)[0], 1e-15)
+					} else {
+						require.Equal(t, "4.000000000000", vector.MustFixedColWithTypeCheck[types.Decimal128](result)[0].Format(12))
+					}
+				})
+			}
+		})
 	}
 }
 
@@ -1132,100 +1213,6 @@ func TestDecimalDeviationToFloat64Branches(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestVarPopExecMergeLargeOffset(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer mpool.DeleteMPool(mp)
-
-	makeInput := func(from, to int) *vector.Vector {
-		v := vector.NewVec(types.T_float64.ToType())
-		for i := from; i < to; i++ {
-			require.NoError(t, vector.AppendFixed(v, 1_000_000_000_000+float64(i), false, mp))
-		}
-		return v
-	}
-	leftInput, rightInput := makeInput(0, 3), makeInput(3, 7)
-	defer leftInput.Free(mp)
-	defer rightInput.Free(mp)
-
-	left := makeVarPopExec(mp, AggIdOfVarPop, false, *leftInput.GetType())
-	right := makeVarPopExec(mp, AggIdOfVarPop, false, *rightInput.GetType())
-	require.NoError(t, left.GroupGrow(1))
-	require.NoError(t, right.GroupGrow(1))
-	require.NoError(t, left.BulkFill(0, []*vector.Vector{leftInput}))
-	require.NoError(t, right.BulkFill(0, []*vector.Vector{rightInput}))
-	require.NoError(t, left.Merge(right, 0, 0))
-	right.Free()
-	vecs, err := left.Flush()
-	require.NoError(t, err)
-	require.InEpsilon(t, 4.0, vector.MustFixedColNoTypeCheck[float64](vecs[0])[0], 1e-15)
-	vecs[0].Free(mp)
-	left.Free()
-}
-
-func TestVarPopDecimalLargeOffsetWithNull(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer mpool.DeleteMPool(mp)
-
-	param := types.New(types.T_decimal128, 30, 6)
-	input := vector.NewVec(param)
-	defer input.Free(mp)
-	for i := 0; i < 7; i++ {
-		value, err := types.Decimal128FromFloat64(1_000_000_000_000+float64(i), 30, 6)
-		require.NoError(t, err)
-		require.NoError(t, vector.AppendFixed(input, value, false, mp))
-	}
-	zero, err := types.Decimal128FromFloat64(0, 30, 6)
-	require.NoError(t, err)
-	require.NoError(t, vector.AppendFixed(input, zero, true, mp))
-
-	exec := makeVarPopExec(mp, AggIdOfVarPop, false, param)
-	defer exec.Free()
-	require.NoError(t, exec.GroupGrow(1))
-	require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
-	vecs, err := exec.Flush()
-	require.NoError(t, err)
-	defer vecs[0].Free(mp)
-	got := vector.MustFixedColNoTypeCheck[types.Decimal128](vecs[0])[0]
-	// The DECIMAL result is materialized through a float64 aggregate state; this
-	// bound is far below the input scale while ensuring we catch the previous
-	// cancellation-to-zero failure.
-	require.InEpsilon(t, 4.0, types.Decimal128ToFloat64(got, vecs[0].GetType().Scale), 1e-8)
-}
-
-func TestVarPopDecimalMergeLargeOffset(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer mpool.DeleteMPool(mp)
-
-	param := types.New(types.T_decimal128, 30, 6)
-	makeInput := func(from, to int) *vector.Vector {
-		v := vector.NewVec(param)
-		for i := from; i < to; i++ {
-			value, err := types.Decimal128FromFloat64(1_000_000_000_000+float64(i), 30, 6)
-			require.NoError(t, err)
-			require.NoError(t, vector.AppendFixed(v, value, false, mp))
-		}
-		return v
-	}
-	leftInput, rightInput := makeInput(0, 3), makeInput(3, 7)
-	defer leftInput.Free(mp)
-	defer rightInput.Free(mp)
-
-	left := makeVarPopExec(mp, AggIdOfVarPop, false, param)
-	right := makeVarPopExec(mp, AggIdOfVarPop, false, param)
-	defer left.Free()
-	defer right.Free()
-	require.NoError(t, left.GroupGrow(1))
-	require.NoError(t, right.GroupGrow(1))
-	require.NoError(t, left.BulkFill(0, []*vector.Vector{leftInput}))
-	require.NoError(t, right.BulkFill(0, []*vector.Vector{rightInput}))
-	require.NoError(t, left.Merge(right, 0, 0))
-	vecs, err := left.Flush()
-	require.NoError(t, err)
-	defer vecs[0].Free(mp)
-	got := vector.MustFixedColNoTypeCheck[types.Decimal128](vecs[0])[0]
-	require.InEpsilon(t, 4.0, types.Decimal128ToFloat64(got, vecs[0].GetType().Scale), 1e-8)
-}
-
 func TestStdDevPopDecimal128WideDeviation(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
@@ -1287,193 +1274,97 @@ func TestStdDevPopDecimal128WideDeviation(t *testing.T) {
 	})
 }
 
-func TestVarPopDecimal64LargeOffset(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer mpool.DeleteMPool(mp)
-
-	param := types.New(types.T_decimal64, 18, 6)
-	input := vector.NewVec(param)
-	defer input.Free(mp)
-	for i := 0; i < 7; i++ {
-		value, err := types.Decimal64FromFloat64(100_000_000_000+float64(i), 18, 6)
+func TestVarianceCardinality(t *testing.T) {
+	t.Run("decimal256", func(t *testing.T) {
+		mp := newAggExecTestPool(t)
+		typ := types.New(types.T_decimal256, 65, 0)
+		value, err := types.ParseDecimal256("1"+strings.Repeat("0", 60), 65, 0)
 		require.NoError(t, err)
-		require.NoError(t, vector.AppendFixed(input, value, false, mp))
-	}
-
-	for _, distinct := range []bool{false, true} {
-		exec := makeVarPopExec(mp, AggIdOfVarPop, distinct, param)
-		require.NoError(t, exec.GroupGrow(1))
-		require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
-		vecs, err := exec.Flush()
-		require.NoError(t, err)
-		got := vector.MustFixedColNoTypeCheck[types.Decimal128](vecs[0])[0]
-		require.InEpsilon(t, 4.0, types.Decimal128ToFloat64(got, vecs[0].GetType().Scale), 1e-8)
-		vecs[0].Free(mp)
-		exec.Free()
-	}
-}
-
-func TestVarStdDevBigIntReturnsFloat64(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer mpool.DeleteMPool(mp)
-
-	cases := []struct {
-		name string
-		typ  types.Type
-		make func(types.Type) AggFuncExec
-	}{
-		{
-			name: "var_pop_int64",
-			typ:  types.T_int64.ToTypeWithScale(-1),
-			make: func(typ types.Type) AggFuncExec {
-				return makeVarPopExec(mp, 0, false, typ)
-			},
-		},
-		{
-			name: "stddev_pop_uint64",
-			typ:  types.T_uint64.ToTypeWithScale(-1),
-			make: func(typ types.Type) AggFuncExec {
-				return makeStdDevPopExec(mp, 0, false, typ)
-			},
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			curNB := mp.CurrNB()
-			exec := tc.make(tc.typ)
-			vec := vector.NewVec(tc.typ)
-			require.NoError(t, exec.GroupGrow(1))
-			switch tc.typ.Oid {
-			case types.T_int64:
-				require.NoError(t, vector.AppendFixed(vec, int64(1), false, mp))
-				require.NoError(t, vector.AppendFixed(vec, int64(1), false, mp))
-			case types.T_uint64:
-				require.NoError(t, vector.AppendFixed(vec, uint64(1), false, mp))
-				require.NoError(t, vector.AppendFixed(vec, uint64(1), false, mp))
-			}
-			require.NoError(t, exec.BatchFill(0, []uint64{1, 1}, []*vector.Vector{vec}))
-
-			vecs, err := exec.Flush()
-			require.NoError(t, err)
-			require.Len(t, vecs, 1)
-			require.Equal(t, types.T_float64, vecs[0].GetType().Oid)
-			require.Equal(t, 0.0, vector.MustFixedColNoTypeCheck[float64](vecs[0])[0])
-
-			for _, vec := range vecs {
-				vec.Free(mp)
-			}
-			vec.Free(mp)
-			exec.Free()
-			require.Equal(t, curNB, mp.CurrNB())
-		})
-	}
-}
-
-func TestVarSampleSingleNonNullValueReturnsNull(t *testing.T) {
-	tests := []struct {
-		name       string
-		isDistinct bool
-	}{
-		{
-			name: "non-distinct",
-		},
-		{
-			name:       "distinct",
-			isDistinct: true,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			mp := mpool.MustNewZero()
-			param := types.T_int32.ToType()
-			exec := makeVarSampleExec(mp, 0, tc.isDistinct, param)
-			require.NoError(t, exec.GroupGrow(1))
-
-			v := vector.NewVec(param)
-			require.NoError(t, vector.AppendFixed(v, int32(4), false, mp))
-			require.NoError(t, exec.Fill(0, 0, []*vector.Vector{v}))
-			v.Free(mp)
-
-			vecs, err := exec.Flush()
-			require.NoError(t, err)
-			require.Len(t, vecs, 1)
-			require.True(t, vecs[0].IsNull(0))
-
-			for _, vec := range vecs {
-				vec.Free(mp)
-			}
-			exec.Free()
-		})
-	}
-}
-
-func TestDecimal256VarianceEmptyAndSingleton(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer mpool.DeleteMPool(mp)
-	param := types.New(types.T_decimal256, 65, 0)
-	value, err := types.ParseDecimal256("1"+strings.Repeat("0", 60), 65, 0)
-	require.NoError(t, err)
-
-	tests := []struct {
-		name  string
-		make  func(bool) AggFuncExec
-		isPop bool
-	}{
-		{
-			name:  "var_pop",
-			make:  func(distinct bool) AggFuncExec { return makeVarPopExec(mp, AggIdOfVarPop, distinct, param) },
-			isPop: true,
-		},
-		{
-			name: "var_sample",
-			make: func(distinct bool) AggFuncExec { return makeVarSampleExec(mp, AggIdOfVarSample, distinct, param) },
-		},
-		{
-			name:  "stddev_pop",
-			make:  func(distinct bool) AggFuncExec { return makeStdDevPopExec(mp, AggIdOfStdDevPop, distinct, param) },
-			isPop: true,
-		},
-		{
-			name: "stddev_sample",
-			make: func(distinct bool) AggFuncExec { return makeStdDevSampleExec(mp, AggIdOfStdDevSample, distinct, param) },
-		},
-	}
-
-	for _, tc := range tests {
-		for _, distinct := range []bool{false, true} {
-			t.Run(tc.name+map[bool]string{false: "/resident", true: "/distinct"}[distinct], func(t *testing.T) {
-				t.Run("empty", func(t *testing.T) {
-					exec := tc.make(distinct)
-					defer exec.Free()
-					require.NoError(t, exec.GroupGrow(1))
-					results, err := exec.Flush()
-					require.NoError(t, err)
-					defer results[0].Free(mp)
-					require.True(t, results[0].IsNull(0))
-				})
-
-				t.Run("singleton", func(t *testing.T) {
-					exec := tc.make(distinct)
-					defer exec.Free()
-					input := vector.NewVec(param)
-					defer input.Free(mp)
-					require.NoError(t, vector.AppendFixed(input, value, false, mp))
-					require.NoError(t, exec.GroupGrow(1))
-					require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
-					results, err := exec.Flush()
-					require.NoError(t, err)
-					defer results[0].Free(mp)
-					if tc.isPop {
-						require.Equal(t, 0.0, vector.MustFixedColNoTypeCheck[float64](results[0])[0])
-					} else {
-						require.True(t, results[0].IsNull(0))
+		input := varianceInput(t, mp, typ, []types.Decimal256{value, value, value}, []bool{false, false, true})
+		singleton := varianceInput(t, mp, typ, []types.Decimal256{value, value}, []bool{false, true})
+		cases := []struct {
+			name string
+			id   int64
+			pop  bool
+		}{
+			{"var_pop", AggIdOfVarPop, true}, {"var_sample", AggIdOfVarSample, false},
+			{"stddev_pop", AggIdOfStdDevPop, true}, {"stddev_sample", AggIdOfStdDevSample, false},
+		}
+		for _, tc := range cases {
+			for _, distinct := range []bool{false, true} {
+				mode := "resident"
+				if distinct {
+					mode = "distinct"
+				}
+				t.Run(tc.name+"/"+mode, func(t *testing.T) {
+					exec := varianceExec(t, mp, tc.id, distinct, typ)
+					require.NoError(t, exec.GroupGrow(4))
+					// Groups: empty, NULL-only, singleton with ignored NULL, duplicate pair.
+					require.NoError(t, exec.Fill(1, 2, []*vector.Vector{input}))
+					require.NoError(t, exec.BulkFill(2, []*vector.Vector{singleton}))
+					require.NoError(t, exec.BatchFill(0, []uint64{4, 4}, []*vector.Vector{input}))
+					wantNull := []bool{true, true, !tc.pop, !tc.pop && distinct}
+					result := varianceResult(t, mp, exec, types.T_float64.ToType(), wantNull)
+					values := vector.MustFixedColWithTypeCheck[float64](result)
+					for row, isNull := range wantNull {
+						if !isNull {
+							require.Equal(t, 0.0, values[row], "row %d", row)
+						}
 					}
 				})
+			}
+		}
+	})
+	t.Run("int32-fill", func(t *testing.T) {
+		mp := newAggExecTestPool(t)
+		typ := types.T_int32.ToType()
+		input := varianceInput(t, mp, typ, []int32{4}, nil)
+		for _, tc := range []struct {
+			name             string
+			id               int64
+			distinct, isNull bool
+		}{
+			{"sample-resident", AggIdOfVarSample, false, true},
+			{"sample-distinct", AggIdOfVarSample, true, true},
+			{"population", AggIdOfVarPop, false, false},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				exec := varianceExec(t, mp, tc.id, tc.distinct, typ)
+				require.NoError(t, exec.GroupGrow(1))
+				require.NoError(t, exec.Fill(0, 0, []*vector.Vector{input}))
+				result := varianceResult(t, mp, exec, types.T_float64.ToType(), []bool{tc.isNull})
+				if !tc.isNull {
+					require.Equal(t, 0.0, vector.MustFixedColWithTypeCheck[float64](result)[0])
+				}
 			})
 		}
-	}
+	})
+	t.Run("bigint-batch", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			typ  types.Type
+			id   int64
+		}{
+			{"var_pop_int64", types.T_int64.ToTypeWithScale(-1), AggIdOfVarPop},
+			{"stddev_pop_uint64", types.T_uint64.ToTypeWithScale(-1), AggIdOfStdDevPop},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				mp := newAggExecTestPool(t)
+				var input *vector.Vector
+				if tc.typ.Oid == types.T_int64 {
+					input = varianceInput(t, mp, tc.typ, []int64{99, 1, 1, 7, 3, 5, 99}, []bool{false, false, false, false, false, false, true})
+				} else {
+					input = varianceInput(t, mp, tc.typ, []uint64{99, 1, 1, 7, 3, 5, 99}, []bool{false, false, false, false, false, false, true})
+				}
+				exec := varianceExec(t, mp, tc.id, false, tc.typ)
+				require.NoError(t, exec.GroupGrow(2))
+				// The prefix and group 0 sentinel are filtered; NULL 99 must not count.
+				require.NoError(t, exec.BatchFill(1, []uint64{1, 1, 0, 2, 2, 2}, []*vector.Vector{input}))
+				result := varianceResult(t, mp, exec, types.T_float64.ToType(), []bool{false, false})
+				require.Equal(t, []float64{0, 1}, vector.MustFixedColWithTypeCheck[float64](result))
+			})
+		}
+	})
 }
 
 func TestDecimal256VarianceAcrossFloatConversionBoundary(t *testing.T) {
@@ -1569,24 +1460,4 @@ func TestDecimal256VarianceAcrossFloatConversionBoundary(t *testing.T) {
 				vector.MustFixedColNoTypeCheck[float64](results[0])[0], 1e-14)
 		})
 	}
-}
-
-func TestNumericToFloat64ViaVarExec(t *testing.T) {
-	mp := mpool.MustNewZero()
-
-	param := types.T_int32.ToType()
-	exec := makeVarStdDevExec(mp, true, true, 0, false, param)
-	require.NoError(t, exec.GroupGrow(1))
-
-	v := vector.NewVec(param)
-	require.NoError(t, vector.AppendFixed(v, int32(4), false, mp))
-	require.NoError(t, exec.Fill(0, 0, []*vector.Vector{v}))
-	v.Free(mp)
-
-	vecs, err := exec.Flush()
-	require.NoError(t, err)
-	for _, vec := range vecs {
-		vec.Free(mp)
-	}
-	exec.Free()
 }
