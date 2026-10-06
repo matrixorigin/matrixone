@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -30,9 +29,8 @@ func runAssignmentIgnoreStringCast(t *testing.T, sourceType, targetType types.Ty
 	values []string, nulls []bool, binary bool, selectList *FunctionSelectList) (*vector.Vector, *numericWarningSession, error) {
 	t.Helper()
 	session := &numericWarningSession{}
-	proc := testutil.NewProcess(nil)
+	proc := newMemoryFunctionTestProcess(t)
 	t.Cleanup(func() {
-		proc.Base.FileService.Close(proc.Ctx)
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
 	})

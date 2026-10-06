@@ -344,7 +344,6 @@ func TestDedupResetNotifiesOnlySharedBuildMerger(t *testing.T) {
 
 func TestDedupResetReportsWorkerFailure(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	t.Cleanup(proc.Free)
 	mailbox := NewWorkerJoinMailbox(2)
 	arg := &DedupJoin{
 		NumCPU:   2,
@@ -1184,7 +1183,6 @@ func TestReceiveWorkerMsg_RejectsMissingMailboxAndNilStatus(t *testing.T) {
 func TestDedupFinalizeWorkerPublicationBoundaries(t *testing.T) {
 	t.Run("missing mailbox", func(t *testing.T) {
 		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-		t.Cleanup(proc.Free)
 		worker := &DedupJoin{
 			NumCPU:   2,
 			IsMerger: false,
@@ -1196,7 +1194,6 @@ func TestDedupFinalizeWorkerPublicationBoundaries(t *testing.T) {
 
 	t.Run("canceled before publication", func(t *testing.T) {
 		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-		t.Cleanup(proc.Free)
 		ctx, cancel := context.WithCancel(proc.Ctx)
 		cancel()
 		proc.Ctx = ctx
@@ -1213,7 +1210,6 @@ func TestDedupFinalizeWorkerPublicationBoundaries(t *testing.T) {
 
 	t.Run("merger already stopped", func(t *testing.T) {
 		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-		t.Cleanup(proc.Free)
 		mailbox := NewWorkerJoinMailbox(2)
 		mailbox.stopAndDrain(proc)
 		worker := &DedupJoin{
@@ -1229,7 +1225,6 @@ func TestDedupFinalizeWorkerPublicationBoundaries(t *testing.T) {
 
 	t.Run("full mailbox", func(t *testing.T) {
 		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-		t.Cleanup(proc.Free)
 		mailbox := NewWorkerJoinMailbox(1)
 		sent, stopped, _ := mailbox.trySend(&WorkerJoinMsg{})
 		require.True(t, sent)
@@ -1289,7 +1284,6 @@ func TestWorkerJoinMailboxStopAndSendHaveSingleCaptureOwner(t *testing.T) {
 
 func TestWorkerJoinMailboxReopensAfterCompleteResetGeneration(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	t.Cleanup(proc.Free)
 	mailbox := NewWorkerJoinMailbox(2)
 
 	mailbox.stopAndDrain(proc)
@@ -1496,7 +1490,6 @@ func TestDedupFinalizeNormalAbortDoesNotHideCancellation(t *testing.T) {
 
 func TestDedupFinalizeMailboxSupportsMultipleSpillBuckets(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	t.Cleanup(proc.Free)
 	mailbox := NewWorkerJoinMailbox(3)
 	workers := []*DedupJoin{
 		{
@@ -1558,7 +1551,6 @@ func TestDedupFinalizeMailboxSupportsMultipleSpillBuckets(t *testing.T) {
 
 func TestDedupFinalizeResetPublishesAbortForNextSpillBucket(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	t.Cleanup(proc.Free)
 
 	mailbox := NewWorkerJoinMailbox(2)
 	worker := &DedupJoin{

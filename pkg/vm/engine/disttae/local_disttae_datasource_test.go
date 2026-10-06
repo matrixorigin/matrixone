@@ -1022,7 +1022,6 @@ func (fs *filteredPrefetchFS) PrefetchFile(context.Context, string) error {
 }
 func TestLocalDataSourceFilteredPrefetch(t *testing.T) {
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
 	table := &txnTable{db: &txnDatabase{}}
 	table.proc.Store(proc)
 	for _, count := range []int{3, 4} {

@@ -86,8 +86,8 @@ func TestTransparentMySQLSpecialValueProof(t *testing.T) {
 	}
 }
 
-func newMySQLSpecialOrderMock() *MockOptimizer {
-	mock := NewMockOptimizer(false)
+func newMySQLSpecialOrderMock(t testing.TB) *MockOptimizer {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	mock.ctxt.objects["enum_order_t"] = &planpb.ObjectRef{Obj: 9001, ObjName: "enum_order_t"}
 	mock.ctxt.tables["enum_order_t"] = &planpb.TableDef{
 		TblId: 9001,
@@ -195,7 +195,7 @@ func requireSingleGroupConcatOrderKeyType(t *testing.T, logicPlan *planpb.Plan, 
 }
 
 func TestMySQLSpecialMultiKeyEnumOrderUsesRawEnumKey(t *testing.T) {
-	logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t, "select id, e from enum_order_t order by e is null, e desc")
+	logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(t), t, "select id, e from enum_order_t order by e is null, e desc")
 	require.NoError(t, err)
 	var found []*planpb.OrderBySpec
 	for _, node := range logicPlan.GetQuery().Nodes {
@@ -259,7 +259,7 @@ func TestMySQLSpecialOrderProvenanceThroughQueryBoundaries(t *testing.T) {
 	}
 	for _, tc := range orderCases {
 		t.Run(tc.name, func(t *testing.T) {
-			logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t, tc.sql)
+			logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(t), t, tc.sql)
 			require.NoError(t, err)
 			requireSingleSortKeyType(t, logicPlan, tc.typ)
 		})
@@ -286,7 +286,7 @@ func TestMySQLSpecialOrderProvenanceThroughQueryBoundaries(t *testing.T) {
 	}
 	for _, tc := range windowCases {
 		t.Run(tc.name, func(t *testing.T) {
-			logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t, tc.sql)
+			logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(t), t, tc.sql)
 			require.NoError(t, err)
 			requireSingleWindowOrderKeyType(t, logicPlan, tc.typ)
 		})
@@ -299,14 +299,14 @@ func TestMySQLSpecialOrderProvenanceRejectsNonReversibleEnum(t *testing.T) {
 			"create table enum_duplicate_ddl (e enum('same', 'same', 'other'))",
 			"create table enum_equal_fold_ddl (e enum('low', 'LOW', 'high'))",
 		} {
-			_, err := runOneStmt(newMySQLSpecialOrderMock(), t, sql)
+			_, err := runOneStmt(newMySQLSpecialOrderMock(t), t, sql)
 			require.NoError(t, err)
 		}
 	})
 
 	for _, table := range []string{"enum_duplicate_t", "enum_equal_fold_t"} {
 		t.Run(table+" direct keeps raw ordinal", func(t *testing.T) {
-			logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t,
+			logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(t), t,
 				"select e from "+table+" order by e")
 			require.NoError(t, err)
 			requireSingleSortKeyType(t, logicPlan, types.T_enum)
@@ -319,7 +319,7 @@ func TestMySQLSpecialOrderProvenanceRejectsNonReversibleEnum(t *testing.T) {
 			"select e from " + table + " union all select e from " + table + " order by e",
 		} {
 			t.Run(sql, func(t *testing.T) {
-				_, err := runOneStmt(newMySQLSpecialOrderMock(), t, sql)
+				_, err := runOneStmt(newMySQLSpecialOrderMock(t), t, sql)
 				require.Error(t, err)
 				require.Contains(t, err.Error(), "non-unique display labels")
 			})
@@ -328,7 +328,7 @@ func TestMySQLSpecialOrderProvenanceRejectsNonReversibleEnum(t *testing.T) {
 }
 
 func TestMySQLSpecialOrderProvenanceSetWithEmptyMember(t *testing.T) {
-	logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t,
+	logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(t), t,
 		"select id, s from set_empty_member_t order by s")
 	require.NoError(t, err)
 	requireSingleSortKeyType(t, logicPlan, types.T_uint64)
@@ -338,7 +338,7 @@ func TestMySQLSpecialOrderProvenanceSetWithEmptyMember(t *testing.T) {
 		"with c as (select id, s from set_empty_member_t) select id, s from c order by s",
 	} {
 		t.Run(sql, func(t *testing.T) {
-			p, err := runOneStmt(newMySQLSpecialOrderMock(), t, sql)
+			p, err := runOneStmt(newMySQLSpecialOrderMock(t), t, sql)
 			require.NoError(t, err)
 			requireSingleSortKeyType(t, p, types.T_uint64)
 			require.Nil(t, findPlanFunctionExpr(p, moSetCastValueToIndexFun), "transparent projection must retain raw bitmap")
@@ -352,7 +352,7 @@ func TestMySQLSpecialOrderProvenanceSetWithEmptyMember(t *testing.T) {
 		"select s from (select s from set_empty_member_t group by s) d order by s",
 	} {
 		t.Run(sql, func(t *testing.T) {
-			p, err := runOneStmt(newMySQLSpecialOrderMock(), t, sql)
+			p, err := runOneStmt(newMySQLSpecialOrderMock(t), t, sql)
 			require.NoError(t, err)
 			requireSingleSortKeyType(t, p, types.T_uint64)
 			conversion := findPlanFunctionExpr(p, moSetCastValueToIndexFun)
@@ -374,7 +374,7 @@ func TestMySQLSpecialNumericAggregateIdentity(t *testing.T) {
 			for _, source := range []string{"enum_order_t", "(select e, s from enum_order_t) d"} {
 				sql := "select " + name + "(" + operand + ") from " + source
 				t.Run(sql, func(t *testing.T) {
-					p, err := runOneStmt(newMySQLSpecialOrderMock(), t, sql)
+					p, err := runOneStmt(newMySQLSpecialOrderMock(t), t, sql)
 					require.NoError(t, err)
 					fn := findPlanFunctionExpr(p, name)
 					require.NotNil(t, fn)
@@ -395,12 +395,12 @@ func TestMySQLSpecialNumericAggregateIdentity(t *testing.T) {
 		"select sum(s) from (select distinct s from set_empty_member_t) d",
 		"select s, sum(s), avg(s) from set_empty_member_t group by s",
 	} {
-		_, err := runOneStmt(newMySQLSpecialOrderMock(), t, sql)
+		_, err := runOneStmt(newMySQLSpecialOrderMock(t), t, sql)
 		require.NoError(t, err, sql)
 	}
-	_, err := runOneStmt(newMySQLSpecialOrderMock(), t, "select s + 0 from set_empty_member_t group by s")
+	_, err := runOneStmt(newMySQLSpecialOrderMock(t), t, "select s + 0 from set_empty_member_t group by s")
 	require.ErrorContains(t, err, "without retained storage identity")
-	_, err = runOneStmt(newMySQLSpecialOrderMock(), t, "select sum(v) from enum_order_t")
+	_, err = runOneStmt(newMySQLSpecialOrderMock(t), t, "select sum(v) from enum_order_t")
 	require.Error(t, err, "ordinary VARCHAR aggregate rejection remains unchanged")
 }
 
@@ -412,7 +412,7 @@ func TestPreparedMySQLSpecialNumericAggregateIdentity(t *testing.T) {
 		"select sum(e), avg(s) from (select e, s from enum_order_t) d",
 	} {
 		t.Run(sql, func(t *testing.T) {
-			p, err := runOneStmt(newMySQLSpecialOrderMock(), t, "prepare stmt1 from '"+sql+"'")
+			p, err := runOneStmt(newMySQLSpecialOrderMock(t), t, "prepare stmt1 from '"+sql+"'")
 			require.NoError(t, err)
 			require.NotNil(t, p.GetDcl().GetPrepare())
 			for _, name := range []string{"sum", "avg"} {
@@ -433,7 +433,7 @@ func TestCanonicalSetCastThroughResultProjection(t *testing.T) {
 			"select s from set_empty_member_t group by s order by s limit 2",
 		} {
 			t.Run(source, func(t *testing.T) {
-				p, err := runOneStmt(newMySQLSpecialOrderMock(), t, "select cast(s as "+target+") from ("+source+") d")
+				p, err := runOneStmt(newMySQLSpecialOrderMock(t), t, "select cast(s as "+target+") from ("+source+") d")
 				require.NoError(t, err)
 				conversion := findPlanFunctionExpr(p, moSetCastValueToIndexFun)
 				require.NotNil(t, conversion, "cast must use surviving canonical display, not raw bitmap")
@@ -446,7 +446,7 @@ func TestCanonicalSetCastThroughResultProjection(t *testing.T) {
 				}
 			})
 		}
-		p, err := runOneStmt(newMySQLSpecialOrderMock(), t, "select cast(s as "+target+") from (select s from set_empty_member_t) d")
+		p, err := runOneStmt(newMySQLSpecialOrderMock(t), t, "select cast(s as "+target+") from (select s from set_empty_member_t) d")
 		require.NoError(t, err)
 		require.False(t, planHasVarcharToIntegerCast(p))
 		require.True(t, planHasPlainUint64ColRef(p), "transparent casts must carry raw numeric identity")
@@ -469,13 +469,13 @@ func TestMySQLSpecialOrderProvenanceInGroupConcat(t *testing.T) {
 		{name: "derived expression stays lexical", sql: "select group_concat(e order by concat(e, '')) from (select e from enum_order_t) d", typ: types.T_varchar},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t, tc.sql)
+			logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(t), t, tc.sql)
 			require.NoError(t, err)
 			requireSingleGroupConcatOrderKeyType(t, logicPlan, tc.typ)
 		})
 	}
 
-	_, err := runOneStmt(newMySQLSpecialOrderMock(), t,
+	_, err := runOneStmt(newMySQLSpecialOrderMock(t), t,
 		"select group_concat(e order by e) from (select e from enum_duplicate_t) d")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "non-unique display labels")

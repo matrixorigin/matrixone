@@ -70,7 +70,7 @@ func TestFullTextRoutineVariablePatternReachesBothIndexScans(t *testing.T) {
 func buildWrappedMatchGuardPlan(t *testing.T, bare bool) (*QueryBuilder, int32, int32) {
 	t.Helper()
 
-	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(t), false, true)
 	ctx := NewBindContext(builder, nil)
 	scanTag := builder.genNewBindTag()
 	projTag := builder.genNewBindTag()

@@ -432,7 +432,7 @@ func TestPreparedVariadicRuntimeSourceDomains(t *testing.T) {
 	)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t, tc.sql)
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, tc.sql)
 			require.NoError(t, err)
 			plan := prepared.GetDcl().GetPrepare().Plan
 			snapshot := plan.String()
@@ -725,7 +725,7 @@ func TestPreparedFieldNullifSourceBinding(t *testing.T) {
 func TestPreparedCommonValueStringMarkerWithFixedDecimalPeer(t *testing.T) {
 	for _, name := range []string{"coalesce", "greatest", "least"} {
 		t.Run(name, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t,
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 				"prepare p from 'select "+name+"(?, cast(9007199254740992.0000000001 as decimal(38,10))) = cast(9007199254740992.0000000002 as decimal(38,10))'")
 			require.NoError(t, err)
 			template := prepared.GetDcl().GetPrepare().Plan
@@ -765,7 +765,7 @@ func TestPreparedCommonValueStringMarkerWithFixedDecimalPeer(t *testing.T) {
 		{"nested arithmetic peer", "greatest(?, coalesce(?, cast(1 as decimal(38,10)))+0)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t,
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 				"prepare p from 'select "+tc.expr+" = cast(9007199254740992.0000000002 as decimal(38,10))'")
 			require.NoError(t, err)
 			template := prepared.GetDcl().GetPrepare().Plan
@@ -789,7 +789,7 @@ func TestPreparedCommonValueStringMarkerWithFixedDecimalPeer(t *testing.T) {
 }
 
 func TestPreparedFixedDecimalPrefixReservesIntegralDigits(t *testing.T) {
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare p from 'select least(?, cast(1.25 as decimal(10,2)))'")
 	require.NoError(t, err)
 	template := prepared.GetDcl().GetPrepare().Plan
@@ -809,7 +809,7 @@ func TestPreparedFixedDecimalPrefixReservesIntegralDigits(t *testing.T) {
 }
 
 func TestPreparedFixedDecimalPrefixReservesRoundingCarry(t *testing.T) {
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare p from 'select least(?, cast(1.25 as decimal(10,2)))'")
 	require.NoError(t, err)
 	template := prepared.GetDcl().GetPrepare().Plan
@@ -838,7 +838,7 @@ func TestPreparedFixedDecimalPrefixReservesRoundingCarry(t *testing.T) {
 }
 
 func TestPreparedRoundRebindsNestedFixedDecimalChild(t *testing.T) {
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare p from 'select greatest(?,round(coalesce(?,cast(9007199254740992.0000000001 as decimal(38,10))),10))'")
 	require.NoError(t, err)
 	template := prepared.GetDcl().GetPrepare().Plan
@@ -855,7 +855,7 @@ func TestPreparedRoundRebindsNestedFixedDecimalChild(t *testing.T) {
 	require.Equal(t, int32(10), round.Typ.Scale, round.String())
 	require.Equal(t, int32(types.T_decimal128), round.GetF().Args[0].Typ.Id, round.String())
 
-	explicit, err := runOneStmt(NewMockOptimizer(false), t,
+	explicit, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare p from 'select round(cast(coalesce(?,cast(9007199254740992.0000000001 as decimal(38,10))) as double),10)'")
 	require.NoError(t, err)
 	explicitPlan := explicit.GetDcl().GetPrepare().Plan
@@ -870,7 +870,7 @@ func TestPreparedRoundRebindsNestedFixedDecimalChild(t *testing.T) {
 func TestPreparedRoundAndTruncateKeepRuntimeValueDomain(t *testing.T) {
 	for _, name := range []string{"round", "truncate"} {
 		t.Run(name, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t,
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 				"prepare p from 'select "+name+"(?,?)'")
 			require.NoError(t, err)
 			template := prepared.GetDcl().GetPrepare().Plan
@@ -905,7 +905,7 @@ func TestPreparedRoundAndTruncateKeepRuntimeValueDomain(t *testing.T) {
 			require.NotNil(t, fn)
 			require.True(t, types.T(fn.GetF().Args[0].Typ.Id).IsDecimal(), fn.String())
 
-			explicit, err := runOneStmt(NewMockOptimizer(false), t,
+			explicit, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 				"prepare p from 'select "+name+"(cast(? as decimal(10,2)),1)'")
 			require.NoError(t, err)
 			explicitPlan := explicit.GetDcl().GetPrepare().Plan
@@ -915,7 +915,7 @@ func TestPreparedRoundAndTruncateKeepRuntimeValueDomain(t *testing.T) {
 				stmt, parseErr := parsers.ParseOne(context.Background(), dialect.MYSQL,
 					"select "+name+"("+valueExpr+",1)", 1)
 				require.NoError(t, parseErr)
-				mock := NewMockOptimizer(false)
+				mock := NewMockOptimizer(false, newPlanTestProcess(t))
 				source := types.T_varchar.ToType()
 				bound, bindErr := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
 					[]PreparedSourceBinding{{Position: 0, Type: source}},
@@ -944,7 +944,7 @@ func TestPreparedRoundAndTruncateKeepRuntimeValueDomain(t *testing.T) {
 					stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, tc.sql, 1)
 					require.NoError(t, err)
 					t.Cleanup(stmt.Free)
-					mock := NewMockOptimizer(false)
+					mock := NewMockOptimizer(false, newPlanTestProcess(t))
 					proc := mock.ctxt.GetProcess()
 					params := vector.NewVec(types.T_text.ToType())
 					t.Cleanup(func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) })
@@ -982,7 +982,7 @@ func TestPreparedRoundAndTruncateKeepRuntimeValueDomain(t *testing.T) {
 				{"precision_error", "missing_precision_column", "1.46", true},
 			} {
 				t.Run("context_restored/"+tc.name, func(t *testing.T) {
-					mock := NewMockOptimizer(false)
+					mock := NewMockOptimizer(false, newPlanTestProcess(t))
 					source := types.T_varchar.ToType()
 					ctx := withPreparedSourceBindings(context.Background(),
 						[]PreparedSourceBinding{{Position: 0, Type: source}},

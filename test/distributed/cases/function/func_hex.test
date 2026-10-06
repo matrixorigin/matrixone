@@ -81,6 +81,8 @@ set @hex_arg = 15.5;
 execute hex_explicit_real using @hex_arg;
 set @hex_arg = -15.5;
 execute hex_explicit_real using @hex_arg;
+set @hex_arg = null;
+execute hex_explicit_real using @hex_arg;
 deallocate prepare hex_explicit_real;
 
 drop database hex_issue_28457;

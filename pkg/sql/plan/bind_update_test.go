@@ -31,7 +31,7 @@ import (
 )
 
 func TestUpdateChangedRowsPredicateCastsMixedNumericRHS(t *testing.T) {
-	ctx := NewMockOptimizer(false).CurrentContext()
+	ctx := NewMockOptimizer(false, newPlanTestProcess(t)).CurrentContext()
 	stmts, err := mysql.Parse(ctx.GetContext(),
 		"UPDATE constraint_test.t_on_update_gen SET val = CASE WHEN id = 1 THEN 111 ELSE val END WHERE id IN (1,2)",
 		1)
@@ -72,7 +72,7 @@ func TestOnUpdateReusesFinalVolatileAssignment(t *testing.T) {
 		"t.id = t.id, t.val = IF(RAND() < 0.5, 0, 1)",
 	} {
 		t.Run(assignments, func(t *testing.T) {
-			ctx := NewMockOptimizer(false).CurrentContext()
+			ctx := NewMockOptimizer(false, newPlanTestProcess(t)).CurrentContext()
 			target := "constraint_test.t_on_update_gen"
 			if strings.Contains(assignments, "t.") {
 				target += " AS t JOIN constraint_test.t_on_update_gen AS u ON t.id = u.id"
@@ -209,7 +209,7 @@ func findUpdateSecondaryIndexLookupJoin(t *testing.T, query *planpb.Query) *plan
 
 func TestUpdateIndexLookupBuildSideUsesScanWidthBehindProject(t *testing.T) {
 	newOptimizer := func() Optimizer {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		addIndexHintChoiceTableForTest(mock)
 		indexTableName := catalog.SecondaryIndexTableNamePrefix + "update_build_side"
 		mainTable := mock.ctxt.tables["index_hint_t"]
@@ -316,7 +316,7 @@ func TestUpdateIndexLookupBuildSideUsesScanWidthBehindProject(t *testing.T) {
 
 func TestUpdateIndexLookupBuildSidePreservesNarrowTarget(t *testing.T) {
 	newOptimizer := func() Optimizer {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		addIndexHintChoiceTableForTest(mock)
 		mainTable := mock.ctxt.tables["index_hint_t"]
 		mainTable.Indexes = mainTable.Indexes[:1]

@@ -117,7 +117,6 @@ func TestBuildSnapshotTSUnknownWithoutTxn(t *testing.T) {
 	require.EqualValues(t, 0, buildSnapshotTS(nil), "no process => unknown")
 
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
 	proc.Base.TxnOperator = nil
 	require.EqualValues(t, 0, buildSnapshotTS(proc), "no transaction => unknown")
 }

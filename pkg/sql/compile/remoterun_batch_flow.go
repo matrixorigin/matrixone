@@ -142,6 +142,17 @@ func (f *pipelineBatchFlow) terminate(cause error, stoppedByReceiver bool) {
 	f.mu.Unlock()
 }
 
+// Snapshot before entering another wait so StopSending cannot be lost between
+// inspecting terminal state and subscribing to the existing credit wakeup.
+func (f *pipelineBatchFlow) terminalNotification() (<-chan struct{}, error) {
+	if f == nil {
+		return nil, nil
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.changed, f.abortErr
+}
+
 func (f *pipelineBatchFlow) wasStoppedByReceiver() bool {
 	if f == nil {
 		return false

@@ -196,7 +196,6 @@ func TestNullableMembershipPruningAndResidual(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
-			t.Cleanup(proc.Free)
 			expr := makeVarcharMembershipExpr(t, proc.Ctx, tc.op, tc.value, true)
 			if tc.wireVector {
 				expr = makeVarcharInVecExpr(t, proc.Ctx, proc, tc.value, true)

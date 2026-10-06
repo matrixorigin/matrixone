@@ -33,9 +33,8 @@ import (
 
 // TestCastStringWidthContracts preserves the string and JSON width-owner contracts.
 func TestCastStringWidthContracts(t *testing.T) {
-	proc := testutil.NewProcess(nil)
+	proc := newMemoryFunctionTestProcess(t)
 	t.Cleanup(func() {
-		proc.Base.FileService.Close(proc.Ctx)
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
 	})

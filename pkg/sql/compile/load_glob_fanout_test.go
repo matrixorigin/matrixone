@@ -116,6 +116,7 @@ func TestMultiFileFanoutEligible(t *testing.T) {
 
 func TestCompileExternScanMultiFileFanoutCsvLoad(t *testing.T) {
 	testCompile := NewMockCompile(t)
+	testCompile.ncpu = 3 // Logical capacity for three independent file scopes.
 	testCompile.cnList = engine.Nodes{{Addr: "cn1:6001", Mcpu: 2}, {Addr: "cn2:6001", Mcpu: 2}}
 	testCompile.addr = "cn1:6001"
 	testCompile.execType = plan2.ExecTypeAP_MULTICN
@@ -241,6 +242,7 @@ func TestIsSingleScopeRejectsMultiScopeTpPlan(t *testing.T) {
 // decides, and nothing is read by byte range.
 func TestCompileExternScanMultiFileFanoutExternalTable(t *testing.T) {
 	testCompile := NewMockCompile(t)
+	testCompile.ncpu = 3 // Logical capacity for three independent file scopes.
 	testCompile.cnList = engine.Nodes{{Addr: "cn1:6001", Mcpu: 2}, {Addr: "cn2:6001", Mcpu: 2}}
 	testCompile.addr = "cn1:6001"
 	testCompile.execType = plan2.ExecTypeAP_MULTICN
