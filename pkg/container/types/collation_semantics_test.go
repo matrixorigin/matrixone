@@ -15,6 +15,7 @@
 package types
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/collation"
@@ -38,6 +39,12 @@ func TestUnicodeCollationComparisonKeys(t *testing.T) {
 	key, err = CollationKey(CharsetUTF8MB4UnicodeCI, nil, []byte("😀"))
 	require.NoError(t, err)
 	require.NotEmpty(t, key)
+
+	invalid := []byte{0xff}
+	require.Equal(t, invalid,
+		CollationKeyOrOriginal(CharsetUTF8MB3UnicodeCI, invalid))
+	require.Equal(t, bytes.Compare(invalid, []byte("a")),
+		CompareStringValues(NewWithCharset(T_varchar, 64, 0, CharsetUTF8MB3UnicodeCI), invalid, []byte("a")))
 }
 
 func TestMergeStringCharsetKeepsSupplementaryRepertoire(t *testing.T) {
