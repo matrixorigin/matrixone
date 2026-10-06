@@ -199,9 +199,26 @@ func makeTestCases(t *testing.T) []joinTestCase {
 }
 
 func TestString(t *testing.T) {
-	buf := new(bytes.Buffer)
-	for _, tc := range makeTestCases(t) {
-		tc.arg.String(buf)
+	for _, tc := range []struct {
+		name     string
+		joinType plan.Node_JoinType
+		want     string
+	}{
+		{name: "inner", joinType: plan.Node_INNER, want: "loop_join: loop inner join "},
+		{name: "anti", joinType: plan.Node_ANTI, want: "loop_join: loop anti join "},
+		{name: "left", joinType: plan.Node_LEFT, want: "loop_join: loop left join "},
+		{name: "mark", joinType: plan.Node_MARK, want: "loop_join: loop mark join "},
+		{name: "semi", joinType: plan.Node_SEMI, want: "loop_join: loop semi join "},
+		{name: "single", joinType: plan.Node_SINGLE, want: "loop_join: loop single join "},
+		{name: "outer", joinType: plan.Node_OUTER, want: "loop_join: loop full outer join "},
+		{name: "unknown", joinType: plan.Node_JoinType(-1), want: "loop_join"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			arg := &LoopJoin{JoinType: tc.joinType}
+			arg.String(&buf)
+			require.Equal(t, tc.want, buf.String())
+		})
 	}
 }
 

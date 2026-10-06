@@ -163,24 +163,32 @@ func makeTestCases(t *testing.T) []joinTestCase {
 }
 
 func TestString(t *testing.T) {
-	buf := new(bytes.Buffer)
-	for _, tc := range makeTestCases(t) {
-		tc.arg.String(buf)
-	}
-
-	for _, test := range []struct {
+	for _, tc := range []struct {
+		name     string
 		joinType plan.Node_JoinType
+		right    bool
 		want     string
 	}{
-		{joinType: plan.Node_ASOF, want: ": asof join "},
-		{joinType: plan.Node_ASOF_LEFT, want: ": asof left join "},
+		{name: "inner", joinType: plan.Node_INNER, want: "hash_join: inner join "},
+		{name: "left", joinType: plan.Node_LEFT, want: "hash_join: left join "},
+		{name: "right", joinType: plan.Node_RIGHT, want: "hash_join: right join "},
+		{name: "semi", joinType: plan.Node_SEMI, want: "hash_join: semi join "},
+		{name: "right semi", joinType: plan.Node_SEMI, right: true, want: "hash_join: right semi join "},
+		{name: "anti", joinType: plan.Node_ANTI, want: "hash_join: anti join "},
+		{name: "right anti", joinType: plan.Node_ANTI, right: true, want: "hash_join: right anti join "},
+		{name: "single", joinType: plan.Node_SINGLE, want: "hash_join: single join "},
+		{name: "mark", joinType: plan.Node_MARK, want: "hash_join: hash mark join "},
+		{name: "outer", joinType: plan.Node_OUTER, want: "hash_join: full outer join "},
+		{name: "asof", joinType: plan.Node_ASOF, want: "hash_join: asof join "},
+		{name: "asof left", joinType: plan.Node_ASOF_LEFT, want: "hash_join: asof left join "},
+		{name: "unknown", joinType: plan.Node_JoinType(-1), want: "hash_join"},
 	} {
-		buf.Reset()
-		arg := NewArgument()
-		arg.JoinType = test.joinType
-		arg.String(buf)
-		require.Contains(t, buf.String(), test.want)
-		arg.Release()
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			arg := &HashJoin{JoinType: tc.joinType, IsRightJoin: tc.right}
+			arg.String(&buf)
+			require.Equal(t, tc.want, buf.String())
+		})
 	}
 }
 
