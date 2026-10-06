@@ -96,7 +96,7 @@ func TestCompileFilterExprDecimalScaleMatchesPublicPlan(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			ctx := &decimalZoneMapCompilerContext{MockCompilerContext: plan2.NewMockCompilerContext(true)}
+			ctx := &decimalZoneMapCompilerContext{MockCompilerContext: plan2.NewMockCompilerContext(true, newPlanTestProcess(t))}
 			ctx.SetContext(context.Background())
 			stmt, err := mysql.ParseOne(ctx.GetContext(), "select count(*) from "+test.table+" where amount < 2000", 1)
 			require.NoError(t, err)

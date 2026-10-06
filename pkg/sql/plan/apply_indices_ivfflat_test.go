@@ -63,7 +63,7 @@ func makeConsistentIvfMultiTableIndexForTest(indexName, idxAlgoParams string, pa
 
 // TestPrepareIvfIndexContext_NilVecCtx tests the case where vecCtx is nil
 func TestPrepareIvfIndexContext_NilVecCtx(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	multiTableIndex := &MultiTableIndex{}
 
 	result, err := builder.prepareIvfIndexContext(nil, multiTableIndex)
@@ -73,7 +73,7 @@ func TestPrepareIvfIndexContext_NilVecCtx(t *testing.T) {
 
 // TestPrepareIvfIndexContext_NilMultiTableIndex tests the case where multiTableIndex is nil
 func TestPrepareIvfIndexContext_NilMultiTableIndex(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	vecCtx := &vectorSortContext{}
 
 	result, err := builder.prepareIvfIndexContext(vecCtx, nil)
@@ -83,7 +83,7 @@ func TestPrepareIvfIndexContext_NilMultiTableIndex(t *testing.T) {
 
 // TestPrepareIvfIndexContext_NilDistFnExpr tests the case where distFnExpr is nil
 func TestPrepareIvfIndexContext_NilDistFnExpr(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	vecCtx := &vectorSortContext{
 		distFnExpr: nil,
 	}
@@ -96,7 +96,7 @@ func TestPrepareIvfIndexContext_NilDistFnExpr(t *testing.T) {
 
 // TestPrepareIvfIndexContext_ForceModeEnabled tests the case where rankOption.Mode is "force"
 func TestPrepareIvfIndexContext_ForceModeEnabled(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	vecCtx := &vectorSortContext{
 		distFnExpr: &plan.Function{
 			Func: &ObjectRef{
@@ -116,7 +116,7 @@ func TestPrepareIvfIndexContext_ForceModeEnabled(t *testing.T) {
 
 // TestPrepareIvfIndexContext_NilMetaDef tests the case where metaDef is nil
 func TestPrepareIvfIndexContext_NilMetaDef(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	vecCtx := &vectorSortContext{
 		distFnExpr: &plan.Function{
 			Func: &ObjectRef{
@@ -139,7 +139,7 @@ func TestPrepareIvfIndexContext_NilMetaDef(t *testing.T) {
 
 // TestPrepareIvfIndexContext_NilIdxDef tests the case where idxDef is nil
 func TestPrepareIvfIndexContext_NilIdxDef(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	vecCtx := &vectorSortContext{
 		distFnExpr: &plan.Function{
 			Func: &ObjectRef{
@@ -162,7 +162,7 @@ func TestPrepareIvfIndexContext_NilIdxDef(t *testing.T) {
 
 // TestPrepareIvfIndexContext_NilEntriesDef tests the case where entriesDef is nil
 func TestPrepareIvfIndexContext_NilEntriesDef(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	vecCtx := &vectorSortContext{
 		distFnExpr: &plan.Function{
 			Func: &ObjectRef{
@@ -185,7 +185,7 @@ func TestPrepareIvfIndexContext_NilEntriesDef(t *testing.T) {
 
 // TestPrepareIvfIndexContext_InvalidIndexAlgoParams tests the case where IndexAlgoParams is invalid JSON
 func TestPrepareIvfIndexContext_InvalidIndexAlgoParams(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	vecCtx := &vectorSortContext{
 		distFnExpr: &plan.Function{
 			Func: &ObjectRef{
@@ -215,7 +215,7 @@ func TestPrepareIvfIndexContext_InvalidIndexAlgoParams(t *testing.T) {
 
 // TestPrepareIvfIndexContext_OpTypeMismatch tests the case where op_type doesn't match the distance function
 func TestPrepareIvfIndexContext_OpTypeMismatch(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	vecCtx := &vectorSortContext{
 		distFnExpr: &plan.Function{
 			Func: &ObjectRef{
@@ -240,7 +240,7 @@ func TestPrepareIvfIndexContext_OpTypeMismatch(t *testing.T) {
 
 // TestPrepareIvfIndexContext_ArgsNotFound tests the case where getArgsFromDistFn returns found=false
 func TestPrepareIvfIndexContext_ArgsNotFound(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 
 	scanNode := &plan.Node{
 		TableDef: &plan.TableDef{
@@ -305,7 +305,7 @@ func TestPrepareIvfIndexContext_ArgsNotFound(t *testing.T) {
 
 // TestPrepareIvfIndexContext_ResolveVariableError_IvfThreads tests the case where ResolveVariable returns error for ivf_threads_search
 func TestPrepareIvfIndexContext_ResolveVariableError_IvfThreads(t *testing.T) {
-	baseMockCtx := NewMockCompilerContext(true)
+	baseMockCtx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	mockCtx := &customMockCompilerContext{
 		MockCompilerContext: baseMockCtx,
 		resolveVarFunc: func(varName string, isSystem, isGlobal bool) (interface{}, error) {
@@ -385,7 +385,7 @@ func TestPrepareIvfIndexContext_ResolveVariableError_IvfThreads(t *testing.T) {
 
 // TestPrepareIvfIndexContext_ResolveVariableError_ProbeLimit tests the case where ResolveVariable returns error for probe_limit
 func TestPrepareIvfIndexContext_ResolveVariableError_ProbeLimit(t *testing.T) {
-	baseMockCtx := NewMockCompilerContext(true)
+	baseMockCtx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	mockCtx := &customMockCompilerContext{
 		MockCompilerContext: baseMockCtx,
 		resolveVarFunc: func(varName string, isSystem, isGlobal bool) (interface{}, error) {
@@ -468,7 +468,7 @@ func TestPrepareIvfIndexContext_ResolveVariableError_ProbeLimit(t *testing.T) {
 
 // TestPrepareIvfIndexContext_ProbeLimitNotInt64 tests the case where probe_limit is not int64
 func TestPrepareIvfIndexContext_ProbeLimitNotInt64(t *testing.T) {
-	baseMockCtx := NewMockCompilerContext(true)
+	baseMockCtx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	mockCtx := &customMockCompilerContext{
 		MockCompilerContext: baseMockCtx,
 		resolveVarFunc: func(varName string, isSystem, isGlobal bool) (interface{}, error) {
@@ -551,7 +551,7 @@ func TestPrepareIvfIndexContext_ProbeLimitNotInt64(t *testing.T) {
 
 // TestPrepareIvfIndexContext_Success tests the successful case
 func TestPrepareIvfIndexContext_Success(t *testing.T) {
-	baseMockCtx := NewMockCompilerContext(true)
+	baseMockCtx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	mockCtx := &customMockCompilerContext{
 		MockCompilerContext: baseMockCtx,
 		resolveVarFunc: func(varName string, isSystem, isGlobal bool) (interface{}, error) {
@@ -646,7 +646,7 @@ func TestPrepareIvfIndexContext_Success(t *testing.T) {
 
 // TestCalculateAdaptiveNprobe tests the calculateAdaptiveNprobe function
 func TestCalculateAdaptiveNprobe(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 
 	tests := []struct {
 		name        string
@@ -714,7 +714,7 @@ func TestCalculateAdaptiveNprobe(t *testing.T) {
 // TestPrepareIvfIndexContext_AdaptiveNprobeAndFinalPostCandidate verifies that
 // the resolved AUTO parameters and INCLUDE coverage reach the final POST scan.
 func TestPrepareIvfIndexContext_AdaptiveNprobeAndFinalPostCandidate(t *testing.T) {
-	baseMockCtx := NewMockCompilerContext(true)
+	baseMockCtx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	mockCtx := &customMockCompilerContext{
 		MockCompilerContext: baseMockCtx,
 		resolveVarFunc: func(varName string, isSystem, isGlobal bool) (interface{}, error) {
@@ -920,7 +920,7 @@ func TestPrepareIvfIndexContext_AdaptiveNprobeAndFinalPostCandidate(t *testing.T
 }
 
 func TestPrepareIvfIndexContext_ImplicitDescendingOrderDisablesIvfRewrite(t *testing.T) {
-	baseMockCtx := NewMockCompilerContext(true)
+	baseMockCtx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	mockCtx := &customMockCompilerContext{
 		MockCompilerContext: baseMockCtx,
 		resolveVarFunc: func(varName string, isSystem, isGlobal bool) (interface{}, error) {
@@ -996,7 +996,7 @@ func TestPrepareIvfIndexContext_ImplicitDescendingOrderDisablesIvfRewrite(t *tes
 }
 
 func TestPrepareIvfIndexContext_ExplicitDescendingOrderFallsBackToOriginalSearch(t *testing.T) {
-	baseMockCtx := NewMockCompilerContext(true)
+	baseMockCtx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	mockCtx := &customMockCompilerContext{
 		MockCompilerContext: baseMockCtx,
 		resolveVarFunc: func(varName string, isSystem, isGlobal bool) (interface{}, error) {
@@ -1077,7 +1077,7 @@ func TestPrepareIvfIndexContext_ExplicitDescendingOrderFallsBackToOriginalSearch
 // ============================================================================
 
 func TestShouldUseForceMode(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 
 	tests := []struct {
 		name        string
@@ -1171,7 +1171,7 @@ func TestShouldUseForceMode(t *testing.T) {
 }
 
 func TestShouldUseForceMode_NilLimit(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 
 	vecCtx := &vectorSortContext{
 		scanNode: &plan.Node{
@@ -1185,7 +1185,7 @@ func TestShouldUseForceMode_NilLimit(t *testing.T) {
 }
 
 func TestShouldUseForceMode_NonLiteralLimit(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 
 	// Limit is a column reference, not a literal
 	vecCtx := &vectorSortContext{
@@ -1208,7 +1208,7 @@ func TestShouldUseForceMode_NonLiteralLimit(t *testing.T) {
 // ============================================================================
 
 func TestResolveVectorSearchMode(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 
 	// Create a vecCtx with stats that won't trigger force mode
 	largeTableCtx := func() *vectorSortContext {
@@ -1331,7 +1331,7 @@ func TestResolveVectorSearchMode(t *testing.T) {
 }
 
 func TestResolveVectorSearchMode_AutoModeTriggersForce(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 
 	// Small table that should trigger force mode in auto
 	vecCtx := &vectorSortContext{
@@ -1376,14 +1376,14 @@ func TestBuildPkExprFromNode_NilBuilder(t *testing.T) {
 
 // TestBuildPkExprFromNode_NegativeNodeID tests when nodeID is negative
 func TestBuildPkExprFromNode_NegativeNodeID(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	result := builder.buildPkExprFromNode(-1, plan.Type{}, "id")
 	assert.Nil(t, result)
 }
 
 // TestBuildPkExprFromNode_TableScan_Success tests TABLE_SCAN node with valid setup
 func TestBuildPkExprFromNode_TableScan_Success(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 
 	scanNode := &plan.Node{
 		NodeType: plan.Node_TABLE_SCAN,
@@ -1414,7 +1414,7 @@ func TestBuildPkExprFromNode_TableScan_Success(t *testing.T) {
 }
 
 func TestBuildPkExprFromNode_IndexTableScan_UsesIndexPrimaryColumn(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 
 	scanNode := &plan.Node{
 		NodeType: plan.Node_TABLE_SCAN,
@@ -1445,7 +1445,7 @@ func TestBuildPkExprFromNode_IndexTableScan_UsesIndexPrimaryColumn(t *testing.T)
 
 // TestBuildPkExprFromNode_TableScan_NilTableDef tests TABLE_SCAN with nil TableDef
 func TestBuildPkExprFromNode_TableScan_NilTableDef(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 
 	scanNode := &plan.Node{
 		NodeType: plan.Node_TABLE_SCAN,
@@ -1459,7 +1459,7 @@ func TestBuildPkExprFromNode_TableScan_NilTableDef(t *testing.T) {
 
 // TestBuildPkExprFromNode_TableScan_NoBindingTags tests TABLE_SCAN with no BindingTags
 func TestBuildPkExprFromNode_TableScan_NoBindingTags(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 
 	scanNode := &plan.Node{
 		NodeType: plan.Node_TABLE_SCAN,
@@ -1477,7 +1477,7 @@ func TestBuildPkExprFromNode_TableScan_NoBindingTags(t *testing.T) {
 
 // TestBuildPkExprFromNode_Project_Success tests PROJECT node
 func TestBuildPkExprFromNode_Project_Success(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	builder.nameByColRef = make(map[[2]int32]string)
 	builder.nameByColRef[[2]int32{100, 0}] = "id"
 
@@ -1507,7 +1507,7 @@ func TestBuildPkExprFromNode_Project_Success(t *testing.T) {
 
 // TestBuildPkExprFromNode_Project_Recursive tests PROJECT node that recurses to child
 func TestBuildPkExprFromNode_Project_Recursive(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 
 	scanNode := &plan.Node{
 		NodeType: plan.Node_TABLE_SCAN,
@@ -1532,7 +1532,7 @@ func TestBuildPkExprFromNode_Project_Recursive(t *testing.T) {
 
 // TestBuildPkExprFromNode_Join_Recursive tests JOIN node
 func TestBuildPkExprFromNode_Join_Recursive(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 
 	scanNode := &plan.Node{
 		NodeType: plan.Node_TABLE_SCAN,
@@ -1555,7 +1555,7 @@ func TestBuildPkExprFromNode_Join_Recursive(t *testing.T) {
 }
 
 func TestBuildPkExprFromNode_Project_ExposesPk_Success(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	builder.nameByColRef = make(map[[2]int32]string)
 	builder.nameByColRef[[2]int32{200, 1}] = "id"
 
@@ -1590,7 +1590,7 @@ func TestBuildPkExprFromNode_Project_ExposesPk_Success(t *testing.T) {
 // ============================================================================
 
 func TestFindScanNodeByTag_FindsMatchingScan(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 
 	scanNode := &plan.Node{
 		NodeType:    plan.Node_TABLE_SCAN,
@@ -1608,7 +1608,7 @@ func TestFindScanNodeByTag_FindsMatchingScan(t *testing.T) {
 }
 
 func TestFindScanNodeByTag_CycleDoesNotLoop(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 
 	// Create a malformed graph cycle: node0 -> node1 -> node0.
 	node0 := &plan.Node{
@@ -1632,7 +1632,7 @@ func TestFindScanNodeByTag_CycleDoesNotLoop(t *testing.T) {
 
 // TestGetColName_NilCol tests when col is nil
 func TestGetColName_NilCol(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	result := builder.getColName(nil)
 	assert.Equal(t, "", result)
 }
@@ -1647,7 +1647,7 @@ func TestGetColName_NilBuilder(t *testing.T) {
 
 // TestGetColName_NilNameByColRef tests when nameByColRef is nil
 func TestGetColName_NilNameByColRef(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	builder.nameByColRef = nil
 	col := &plan.ColRef{Name: "test_col"}
 	result := builder.getColName(col)
@@ -1656,7 +1656,7 @@ func TestGetColName_NilNameByColRef(t *testing.T) {
 
 // TestGetColName_FoundInMap tests when name is found in map
 func TestGetColName_FoundInMap(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	builder.nameByColRef = make(map[[2]int32]string)
 	builder.nameByColRef[[2]int32{100, 5}] = "mapped_name"
 
@@ -1672,7 +1672,7 @@ func TestGetColName_FoundInMap(t *testing.T) {
 
 // TestGetColName_NotFoundInMap tests when name is not in map
 func TestGetColName_NotFoundInMap(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	builder.nameByColRef = make(map[[2]int32]string)
 
 	col := &plan.ColRef{
@@ -1691,14 +1691,14 @@ func TestGetColName_NotFoundInMap(t *testing.T) {
 
 // TestRebindScanNode_NilNode tests when scanNode is nil
 func TestRebindScanNode_NilNode(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	// Should not panic
 	builder.rebindScanNode(nil)
 }
 
 // TestRebindScanNode_NoBindingTags tests when BindingTags is empty
 func TestRebindScanNode_NoBindingTags(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	scanNode := &plan.Node{
 		BindingTags: []int32{},
 	}
@@ -1708,7 +1708,7 @@ func TestRebindScanNode_NoBindingTags(t *testing.T) {
 
 // TestRebindScanNode_Success tests successful rebinding
 func TestRebindScanNode_Success(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 
 	oldTag := int32(100)
 	scanNode := &plan.Node{
@@ -1862,14 +1862,14 @@ func TestReplaceColRefTag_List(t *testing.T) {
 
 // TestCanApplyRegularIndex_NilNode tests when node is nil
 func TestCanApplyRegularIndex_NilNode(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	result := builder.canApplyRegularIndex(nil)
 	assert.False(t, result)
 }
 
 // TestCanApplyRegularIndex_NilTableDef tests when TableDef is nil
 func TestCanApplyRegularIndex_NilTableDef(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	node := &plan.Node{
 		TableDef: nil,
 	}
@@ -1879,7 +1879,7 @@ func TestCanApplyRegularIndex_NilTableDef(t *testing.T) {
 
 // TestCanApplyRegularIndex_ZeroCols tests when there are no columns
 func TestCanApplyRegularIndex_ZeroCols(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	node := &plan.Node{
 		TableDef: &plan.TableDef{
 			Cols: []*plan.ColDef{},
@@ -1891,7 +1891,7 @@ func TestCanApplyRegularIndex_ZeroCols(t *testing.T) {
 
 // TestCanApplyRegularIndex_NoFilters tests when there are no filters
 func TestCanApplyRegularIndex_NoFilters(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	node := &plan.Node{
 		TableDef: &plan.TableDef{
 			Cols: []*plan.ColDef{
@@ -1907,7 +1907,7 @@ func TestCanApplyRegularIndex_NoFilters(t *testing.T) {
 
 // TestCanApplyRegularIndex_ColRefOutOfRange tests when colPos is out of range
 func TestCanApplyRegularIndex_ColRefOutOfRange(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	node := &plan.Node{
 		TableDef: &plan.TableDef{
 			Cols: []*plan.ColDef{
@@ -1931,7 +1931,7 @@ func TestCanApplyRegularIndex_ColRefOutOfRange(t *testing.T) {
 
 // TestCanApplyRegularIndex_Success tests successful case
 func TestCanApplyRegularIndex_Success(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	node := &plan.Node{
 		TableDef: &plan.TableDef{
 			Cols: []*plan.ColDef{

@@ -28,7 +28,7 @@ import (
 )
 
 func TestCreateTableLikePreservesTextCollationMetadata(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	stmt, err := mysql.ParseOne(t.Context(), `create table source_t(
 		bin_text varchar(10),
 		general_text varchar(10) collate utf8mb4_general_ci,
@@ -55,7 +55,7 @@ func TestCreateTableLikePreservesTextCollationMetadata(t *testing.T) {
 }
 
 func TestCreateTableLikePreservesGeneralCIDefaultWhenServerUsesBin(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	mock.ctxt.ResolveVariableFunc = func(name string, isSystem, isGlobal bool) (interface{}, error) {
 		if name == "collation_server" && isSystem && !isGlobal {
 			return "utf8mb4_bin", nil
@@ -83,7 +83,7 @@ func TestCreateTableLikePreservesGeneralCIDefaultWhenServerUsesBin(t *testing.T)
 }
 
 func TestCreateTableLikePreservesLegacyBytewiseTextBehavior(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	stmt, err := mysql.ParseOne(t.Context(), `create table source_t(
 		legacy_text varchar(10),
 		general_text varchar(10) collate utf8mb4_general_ci
@@ -151,7 +151,7 @@ func TestCreateTableLikePreservesCheckAcrossSQLModes(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			source := build(t, mock, tc.createSQL, tc.sourceMode)
 			require.Len(t, source.Checks, 1)
 			mock.ctxt.tables["source_t"] = source
@@ -166,7 +166,7 @@ func TestCreateTableLikePreservesCheckAcrossSQLModes(t *testing.T) {
 }
 
 func TestRecoverLegacyChecksSkipsViewDefinitions(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	view := &plan.TableDef{
 		Name: "checkpoint", TableType: catalog.SystemViewRel,
 		Createsql: "create view checkpoint as select 1",
@@ -190,7 +190,7 @@ func TestCreateTableLikeCloneProvenance(t *testing.T) {
 		{name: "unexpected statement", sql: "select 'CHECK'", wantError: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			stmt, err := mysql.ParseOne(t.Context(), "create table source_t(a int check (a > 0))", 1)
 			require.NoError(t, err)
 			defer stmt.Free()
@@ -223,7 +223,7 @@ func TestCreateTableLikeCloneProvenance(t *testing.T) {
 }
 
 func TestCreateTableLikeRequiresCheckProtocol(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	source := func() *plan.TableDef {
 		stmt, err := mysql.ParseOne(t.Context(), "create table source_t(a int check (a > 0))", 1)
 		require.NoError(t, err)
@@ -271,7 +271,7 @@ func TestRecoverLegacyChecksFailureDoesNotPublishPartialConstraints(t *testing.T
 		"create table source_t clone /* CHECK */",
 	} {
 		t.Run(legacySQL, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			stmt, err := mysql.ParseOne(t.Context(), "create table source_t(a int)", 1)
 			require.NoError(t, err)
 			defer stmt.Free()
@@ -360,7 +360,7 @@ func TestCreateTableLikePreservesLegacyCheck(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			stmt, err := mysql.ParseOne(t.Context(), tc.baseSQL, 1)
 			require.NoError(t, err)
 			defer stmt.Free()

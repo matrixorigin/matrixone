@@ -224,7 +224,7 @@ func TestIntegerArgumentPreparedRuntimeCandidates(t *testing.T) {
 		{`select substring_index(?,".",2)`, nil},
 	} {
 		t.Run(tc.query, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t, "prepare integer_source from '"+tc.query+"'")
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "prepare integer_source from '"+tc.query+"'")
 			require.NoError(t, err)
 			require.Equal(t, tc.positions, PreparedPlanNumericFallbackParamPositions(prepared.GetDcl().GetPrepare().Plan))
 		})
@@ -275,7 +275,7 @@ func TestIntegerArgumentMixedPreparedSources(t *testing.T) {
 		{`select substring_index("a.b.c.d",".",?)`, nil, types.T_any, "", true},
 	} {
 		t.Run(tc.query+"/"+tc.typ.String(), func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t, "prepare mixed_integer from '"+tc.query+"'")
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "prepare mixed_integer from '"+tc.query+"'")
 			require.NoError(t, err)
 			original := prepared.GetDcl().GetPrepare().Plan
 			require.Equal(t, []int32{0}, PreparedPlanNumericFallbackParamPositions(original))
@@ -421,7 +421,7 @@ func TestIntegerArgumentPreparedSelectors(t *testing.T) {
 		},
 	} {
 		t.Run(tc.query, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t, "prepare integer_selector from '"+tc.query+"'")
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "prepare integer_selector from '"+tc.query+"'")
 			require.NoError(t, err)
 			bound, changed, err := FillValuesOfParamsInPlanWithPreparedNumericOverload(proc.Ctx, prepared.GetDcl().GetPrepare().Plan, tc.params)
 			require.NoError(t, err)
@@ -438,7 +438,7 @@ func TestIntegerArgumentPreparedSelectors(t *testing.T) {
 
 func TestIntegerArgumentPreparedScalarSubquery(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		`prepare integer_scalar from 'select substring_index("a.b.c.d",".",(select ? where true))'`)
 	require.NoError(t, err)
 	original := prepared.GetDcl().GetPrepare().Plan
@@ -486,7 +486,7 @@ func TestIntegerArgumentPreparedGroupedAndSetScalarSubqueries(t *testing.T) {
 		`select substring_index("a.b.c.d",".",(select ? union all select cast(0 as double) limit 1))`,
 	} {
 		t.Run(sql, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t, "prepare integer_scalar_shape from '"+sql+"'")
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "prepare integer_scalar_shape from '"+sql+"'")
 			require.NoError(t, err)
 			original := prepared.GetDcl().GetPrepare().Plan
 			require.Equal(t, []int32{0}, PreparedPlanNumericFallbackParamPositions(original))

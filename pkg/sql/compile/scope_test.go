@@ -739,7 +739,7 @@ func generateScopeCases(t *testing.T, testCases []string) []*Scope {
 		db.rels["nation"] = newStubRelation("nation")
 		db.rels["region"] = newStubRelation("region")
 		e.dbs["tpch"] = db
-		compilerCtx := plan2.NewMockCompilerContext(true)
+		compilerCtx := plan2.NewMockCompilerContext(true, newPlanTestProcess(t1))
 		compilerCtx.SetContext(defines.AttachAccountId(context.Background(), catalog.System_Account))
 		opt := plan2.NewBaseOptimizer(compilerCtx)
 		ctx := compilerCtx.GetContext()
@@ -2175,6 +2175,7 @@ func TestReadLoadParquetRowGroupMetadataSkipsUnusedIndexSections(t *testing.T) {
 
 func TestCompileExternScanParquetLoadUsesRowGroupMetadata(t *testing.T) {
 	testCompile := NewMockCompile(t)
+	testCompile.ncpu = 3 // Logical capacity for three independent row-group scopes.
 	testCompile.addr = "cn1:6001"
 	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
 	testCompile.proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
@@ -2240,6 +2241,7 @@ func TestCompileExternScanParquetLoadUsesRowGroupMetadata(t *testing.T) {
 
 func TestCompileExternScanParquetLoadUsesRowGroupFanoutWithEmptyFiles(t *testing.T) {
 	testCompile := NewMockCompile(t)
+	testCompile.ncpu = 3 // Leave capacity beyond two files so footer planning is exercised.
 	testCompile.addr = "cn1:6001"
 	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
 	testCompile.proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
@@ -2308,6 +2310,7 @@ func TestCompileExternScanParquetLoadUsesRowGroupFanoutWithEmptyFiles(t *testing
 
 func TestCompileExternScanParquetRowGroupFanoutValidatesEmptyFileColumnCount(t *testing.T) {
 	testCompile := NewMockCompile(t)
+	testCompile.ncpu = 3 // Leave capacity beyond two files so footer validation is exercised.
 	testCompile.addr = "cn1:6001"
 	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
 	testCompile.proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {

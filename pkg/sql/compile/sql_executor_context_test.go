@@ -250,7 +250,7 @@ func TestCompilerContextDelegatesSnapshotAndSubscriptionBinding(t *testing.T) {
 	snapshot := &plan.Snapshot{}
 	subscription := &plan.SubscriptionMeta{Name: "pub", SubName: "sub"}
 	delegate := &recordingSessionCompilerContext{
-		MockCompilerContext: plan.NewMockCompilerContext(false),
+		MockCompilerContext: plan.NewMockCompilerContext(false, nil),
 		snapshot:            snapshot, subscription: subscription,
 		resolvedTableDef: &plan.TableDef{Name: "physical_source"},
 	}
@@ -304,10 +304,10 @@ func TestInternalExecutorViewChildDoesNotMutateParent(t *testing.T) {
 	parentSubscription := &plan.SubscriptionMeta{Name: "parent"}
 	delegate := &isolatedViewTestDelegate{
 		recordingSessionCompilerContext: &recordingSessionCompilerContext{
-			MockCompilerContext:  plan.NewMockCompilerContext(false),
+			MockCompilerContext:  plan.NewMockCompilerContext(false, nil),
 			queryingSubscription: parentSubscription,
 		},
-		child: &recordingSessionCompilerContext{MockCompilerContext: plan.NewMockCompilerContext(false)},
+		child: &recordingSessionCompilerContext{MockCompilerContext: plan.NewMockCompilerContext(false, nil)},
 	}
 	parent := &compilerContext{proc: proc, ctx: attachInternalExecutorCompilerContext(original, delegate)}
 	childContext := context.WithValue(original, struct{}{}, "child")
@@ -336,9 +336,9 @@ func TestInternalExecutorViewChildUsesDelegateProcess(t *testing.T) {
 	separate := proc.NewViewBindingProcess(original)
 	defer separate.Free()
 	delegate := &isolatedViewTestDelegate{
-		recordingSessionCompilerContext: &recordingSessionCompilerContext{MockCompilerContext: plan.NewMockCompilerContext(false)},
+		recordingSessionCompilerContext: &recordingSessionCompilerContext{MockCompilerContext: plan.NewMockCompilerContext(false, nil)},
 		child: &recordingSessionCompilerContext{
-			MockCompilerContext: plan.NewMockCompilerContext(false), proc: separate,
+			MockCompilerContext: plan.NewMockCompilerContext(false, nil), proc: separate,
 		},
 	}
 	parent := &compilerContext{proc: proc, ctx: attachInternalExecutorCompilerContext(original, delegate)}
@@ -356,7 +356,7 @@ func TestInternalExecutorViewChildPropagatesDelegateFailure(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	original := proc.GetTopContext()
 	delegate := &isolatedViewTestDelegate{
-		recordingSessionCompilerContext: &recordingSessionCompilerContext{MockCompilerContext: plan.NewMockCompilerContext(false)},
+		recordingSessionCompilerContext: &recordingSessionCompilerContext{MockCompilerContext: plan.NewMockCompilerContext(false, nil)},
 		err:                             errors.New("cannot create child"),
 	}
 	parent := &compilerContext{proc: proc, ctx: attachInternalExecutorCompilerContext(original, delegate)}
@@ -370,7 +370,7 @@ func TestInternalExecutorViewChildPropagatesDelegateFailure(t *testing.T) {
 func TestInternalExecutorViewChildRejectsUnisolatedDelegate(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	original := proc.GetTopContext()
-	delegate := &recordingSessionCompilerContext{MockCompilerContext: plan.NewMockCompilerContext(false)}
+	delegate := &recordingSessionCompilerContext{MockCompilerContext: plan.NewMockCompilerContext(false, nil)}
 	parent := &compilerContext{proc: proc, ctx: attachInternalExecutorCompilerContext(original, delegate)}
 	binding, cleanup, err := parent.NewViewDescriptionCompilerContext(original)
 	require.ErrorContains(t, err, "cannot isolate view binding")
@@ -583,7 +583,7 @@ func TestCompilerContextResolveVariableDelegatesToAttachedSession(t *testing.T) 
 		isSystem, isGlobal bool
 	}
 	var seen []resolved
-	delegate := plan.NewMockCompilerContext(false)
+	delegate := plan.NewMockCompilerContext(false, nil)
 	delegate.ResolveVariableFunc = func(name string, isSystemVar, isGlobalVar bool) (interface{}, error) {
 		seen = append(seen, resolved{name, isSystemVar, isGlobalVar})
 		if name == "sql_mode" {
@@ -743,7 +743,7 @@ func TestInternalCompilerPlanConsumesScopedDOP(t *testing.T) {
 	_, err = compiler.ResolveVariable("max_dop", true, false)
 	require.ErrorContains(t, err, "resolver failed")
 	// An attached frontend delegate controls replay even when the process disagrees.
-	delegate := plan.NewMockCompilerContext(false)
+	delegate := plan.NewMockCompilerContext(false, nil)
 	delegate.ResolveVariableFunc = func(name string, system, global bool) (interface{}, error) {
 		if name == "max_dop" {
 			return int64(2), nil

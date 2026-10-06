@@ -33,7 +33,7 @@ func TestBuildPartitionDefs(t *testing.T) {
 
 	option := ast.(*tree.CreateTable).PartitionOption
 
-	binder := newTestPartitionBinder()
+	binder := newTestPartitionBinder(t)
 
 	_, err = binder.buildPartitionDefs(ctx, option)
 	require.NoError(t, err)
@@ -48,7 +48,7 @@ func TestConstructListExpression(t *testing.T) {
 	option := ast.(*tree.CreateTable).PartitionOption
 	method := option.PartBy.PType.(*tree.ListType)
 
-	binder := newTestPartitionBinder()
+	binder := newTestPartitionBinder(t)
 
 	_, err = binder.constructListExpression(ctx, option, method.ColumnList[0], 0)
 	require.NoError(t, err)
@@ -63,7 +63,7 @@ func TestConstructListExpression_DuplicateWithinPartitionShouldFail(t *testing.T
 	option := ast.(*tree.CreateTable).PartitionOption
 	method := option.PartBy.PType.(*tree.ListType)
 
-	binder := newTestPartitionBinder()
+	binder := newTestPartitionBinder(t)
 
 	_, err = binder.constructListExpression(ctx, option, method.ColumnList[0], 0)
 	require.Error(t, err)
@@ -78,7 +78,7 @@ func TestConstructListExpression_OverlapAcrossPartitionsShouldFail(t *testing.T)
 	option := ast.(*tree.CreateTable).PartitionOption
 	method := option.PartBy.PType.(*tree.ListType)
 
-	binder := newTestPartitionBinder()
+	binder := newTestPartitionBinder(t)
 
 	// validate partition 0 ok
 	_, err = binder.constructListExpression(ctx, option, method.ColumnList[0], 0)
@@ -97,7 +97,7 @@ func TestConstructListExpression_NonOverlapAcrossPartitionsOK(t *testing.T) {
 	option := ast.(*tree.CreateTable).PartitionOption
 	method := option.PartBy.PType.(*tree.ListType)
 
-	binder := newTestPartitionBinder()
+	binder := newTestPartitionBinder(t)
 
 	_, err = binder.constructListExpression(ctx, option, method.ColumnList[0], 0)
 	require.NoError(t, err)
@@ -114,7 +114,7 @@ func TestConstructRangeExpression(t *testing.T) {
 	option := ast.(*tree.CreateTable).PartitionOption
 	method := option.PartBy.PType.(*tree.RangeType)
 
-	binder := newTestPartitionBinder()
+	binder := newTestPartitionBinder(t)
 
 	_, err = binder.constructRangeExpression(ctx, option, method.ColumnList[0], 0)
 	require.NoError(t, err)
@@ -129,7 +129,7 @@ func TestConstructRangeExpressionWithMaxValue(t *testing.T) {
 	option := ast.(*tree.CreateTable).PartitionOption
 	method := option.PartBy.PType.(*tree.RangeType)
 
-	binder := newTestPartitionBinder()
+	binder := newTestPartitionBinder(t)
 
 	// Test p0: a < 10
 	expr0, err := binder.constructRangeExpression(ctx, option, method.ColumnList[0], 0)
@@ -165,7 +165,7 @@ func TestConstructRangeExpressionWithMaxValueFirstPartition(t *testing.T) {
 	option := ast.(*tree.CreateTable).PartitionOption
 	method := option.PartBy.PType.(*tree.RangeType)
 
-	binder := newTestPartitionBinder()
+	binder := newTestPartitionBinder(t)
 
 	// Test p0: all values (MAXVALUE partition)
 	expr0, err := binder.constructRangeExpression(ctx, option, method.ColumnList[0], 0)
@@ -182,7 +182,7 @@ func TestConstructRangeExpression_StrictIncreasing_EqualShouldFail(t *testing.T)
 	option := ast.(*tree.CreateTable).PartitionOption
 	method := option.PartBy.PType.(*tree.RangeType)
 
-	binder := newTestPartitionBinder()
+	binder := newTestPartitionBinder(t)
 
 	// position 1 should fail since 10 < 10 is false
 	_, err = binder.constructRangeExpression(ctx, option, method.ColumnList[0], 1)
@@ -198,7 +198,7 @@ func TestConstructRangeExpression_StrictIncreasing_DecreasingShouldFail(t *testi
 	option := ast.(*tree.CreateTable).PartitionOption
 	method := option.PartBy.PType.(*tree.RangeType)
 
-	binder := newTestPartitionBinder()
+	binder := newTestPartitionBinder(t)
 
 	// position 1 should fail since 20 < 10 is false
 	_, err = binder.constructRangeExpression(ctx, option, method.ColumnList[0], 1)
@@ -214,7 +214,7 @@ func TestConstructRangeExpression_MaxValueMustBeLast(t *testing.T) {
 	option := ast.(*tree.CreateTable).PartitionOption
 	method := option.PartBy.PType.(*tree.RangeType)
 
-	binder := newTestPartitionBinder()
+	binder := newTestPartitionBinder(t)
 
 	// position 0 should fail because MAXVALUE must be last
 	_, err = binder.constructRangeExpression(ctx, option, method.ColumnList[0], 0)
@@ -235,7 +235,7 @@ func TestConstructHashExpression(t *testing.T) {
 	method := option.PartBy.PType.(*tree.HashType)
 	num := option.PartBy.Num
 
-	binder := newTestPartitionBinder()
+	binder := newTestPartitionBinder(t)
 
 	_, err = binder.constructHashExpression(ctx, num, method, 0)
 	require.NoError(t, err)
@@ -244,8 +244,8 @@ func TestConstructHashExpression(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func newTestPartitionBinder() *PartitionBinder {
-	mock := NewMockOptimizer(false)
+func newTestPartitionBinder(t testing.TB) *PartitionBinder {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	builder := NewQueryBuilder(plan.Query_SELECT, mock.CurrentContext(), false, false)
 	bindContext := NewBindContext(builder, nil)
 

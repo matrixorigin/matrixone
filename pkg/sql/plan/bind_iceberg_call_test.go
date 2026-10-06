@@ -36,7 +36,7 @@ func TestIcebergBuiltinCallIsInterceptedBeforeStoredProcedure(t *testing.T) {
 	if !isIcebergBuiltinCall(call) {
 		t.Fatalf("expected Iceberg builtin call to be recognized")
 	}
-	_, err = BuildPlan(NewMockCompilerContext(true), stmt, false)
+	_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
 	if err == nil || !strings.Contains(err.Error(), "Iceberg builtin procedure iceberg_rewrite_manifests for ksa_gold.sales.orders is recognized") {
 		t.Fatalf("expected Iceberg builtin procedure not-supported error, got %v", err)
 	}

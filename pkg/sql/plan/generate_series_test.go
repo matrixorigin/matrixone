@@ -41,7 +41,7 @@ func TestGenerateSeriesDatetimeLiteralScale(t *testing.T) {
 }
 
 func TestPreparedGenerateSeriesParameterInfo(t *testing.T) {
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare series_info from 'select result from generate_series(?,?,?) g'")
 	require.NoError(t, err)
 	positions, parameterized := PreparedPlanGenerateSeriesParameterInfo(
@@ -49,7 +49,7 @@ func TestPreparedGenerateSeriesParameterInfo(t *testing.T) {
 	require.True(t, parameterized)
 	require.Equal(t, []int32{0, 1}, positions)
 
-	prepared, err = runOneStmt(NewMockOptimizer(false), t,
+	prepared, err = runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare series_step from 'select result from generate_series(''2020-01-01'',''2020-01-02'',?) g'")
 	require.NoError(t, err)
 	positions, parameterized = PreparedPlanGenerateSeriesParameterInfo(
@@ -203,7 +203,7 @@ func TestBindGenerateSeriesArgs(t *testing.T) {
 }
 
 func TestPreparedGenerateSeriesEndpointDomain(t *testing.T) {
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare gs from 'select min(result), max(result) from generate_series(?,?,?) g'")
 	require.NoError(t, err)
 	original := prepared.GetDcl().GetPrepare().Plan
@@ -294,7 +294,7 @@ func TestPreparedGenerateSeriesEndpointDomain(t *testing.T) {
 }
 
 func TestPreparedGenerateSeriesMixedTemporalEndpoint(t *testing.T) {
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare gs_mixed from 'select result from generate_series(?,''2020-01-03 00:00:00'',''1 day'') g'")
 	require.NoError(t, err)
 	original := prepared.GetDcl().GetPrepare().Plan
@@ -317,7 +317,7 @@ func TestPreparedGenerateSeriesMixedTemporalEndpoint(t *testing.T) {
 
 func TestBuildGenerateSeriesOwnsStableResultSchema(t *testing.T) {
 	build := func() *planpb.Node {
-		logicPlan, err := runOneStmt(NewMockOptimizer(false), t,
+		logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 			"select * from generate_series('2020-02-29 23:59:59.124356', '2020-02-29 23:59:59.124360', '1 microsecond') g")
 		require.NoError(t, err)
 		resultColumns := GetResultColumnsFromPlan(logicPlan)
@@ -447,7 +447,7 @@ func TestTableFunctionInputDependency(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			logicPlan, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
 			require.NoError(t, err)
 
 			query := resolveQueryPlan(logicPlan).GetQuery()
@@ -464,7 +464,7 @@ func TestTableFunctionInputDependency(t *testing.T) {
 
 func TestFullTextIndexTokenizeRequiresInputRelation(t *testing.T) {
 	_, err := runOneStmt(
-		NewMockOptimizer(false),
+		NewMockOptimizer(false, newPlanTestProcess(t)),
 		t,
 		"select * from fulltext_index_tokenize('', 1, 'body') f",
 	)

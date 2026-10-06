@@ -2962,7 +2962,7 @@ func TestTxnComputationWrapperCompileRefreshesProfileForBinaryExecute(t *testing
 	prepareString := tree.NewPrepareString(tree.Identifier(stmtName), "select 1")
 	stmts, err := mysql.Parse(ctx, prepareString.Sql, 1)
 	require.NoError(t, err)
-	preparePlan, err := buildPlan(ctx, nil, plan.NewEmptyCompilerContext(), prepareString)
+	preparePlan, err := buildPlan(ctx, nil, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), prepareString)
 	require.NoError(t, err)
 
 	prepareStmt := &PrepareStmt{
@@ -4570,7 +4570,7 @@ func TestGetComputationWrapperRestoresPreparedStatementRemap(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	stmt := &tree.Select{}
 	prepareString := tree.NewPrepareString("stmt1", "select 1")
-	preparePlan, err := buildPlan(ctx, nil, plan.NewEmptyCompilerContext(), prepareString)
+	preparePlan, err := buildPlan(ctx, nil, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), prepareString)
 	require.NoError(t, err)
 	execCtx := newTestExecCtx(ctx, ctrl)
 	execCtx.ses = ses
@@ -5645,7 +5645,7 @@ func Test_ExecRequestStmtExecuteErrorClearsPreparedBinaryState(t *testing.T) {
 	st := tree.NewPrepareString(tree.Identifier(stmtName), "select ?, ?")
 	stmts, err := mysql.Parse(ctx, st.Sql, 1)
 	require.NoError(t, err)
-	compCtx := plan.NewEmptyCompilerContext()
+	compCtx := plan.NewEmptyCompilerContext(newPlanTestProcess(t))
 	preparePlan, err := buildPlan(ctx, nil, compCtx, st)
 	require.NoError(t, err)
 
@@ -7610,19 +7610,22 @@ func TestSerializePlanToJson(t *testing.T) {
 	}
 
 	for _, sql := range sqls {
-		mock := plan.NewMockOptimizer(false)
-		plan, err := buildSingleSql(mock, t, sql)
-		if err != nil {
-			t.Fatalf("%+v", err)
-		}
-		uid, _ := uuid.NewV7()
-		stm := &motrace.StatementInfo{StatementID: uid, Statement: []byte(sql), RequestAt: time.Now()}
-		h := NewMarshalPlanHandler(mock.CurrentContext().GetContext(), stm, plan, nil)
-		json := h.Marshal(mock.CurrentContext().GetContext())
-		_, stats := h.Stats(mock.CurrentContext().GetContext(), nil)
-		require.Equal(t, int64(0), stats.RowsRead)
-		require.Equal(t, int64(0), stats.BytesScan)
-		t.Logf("SQL plan to json : %s\n", string(json))
+		t.Run(sql, func(t *testing.T) {
+			mock := plan.NewMockOptimizer(false, newPlanTestProcess(t))
+			plan, err := buildSingleSql(mock, t, sql)
+			if err != nil {
+				t.Fatalf("%+v", err)
+			}
+			uid, _ := uuid.NewV7()
+			stm := &motrace.StatementInfo{StatementID: uid, Statement: []byte(sql), RequestAt: time.Now()}
+			h := NewMarshalPlanHandler(mock.CurrentContext().GetContext(), stm, plan, nil)
+			json := h.Marshal(mock.CurrentContext().GetContext())
+			_, stats := h.Stats(mock.CurrentContext().GetContext(), nil)
+			require.Equal(t, int64(0), stats.RowsRead)
+			require.Equal(t, int64(0), stats.BytesScan)
+			t.Logf("SQL plan to json : %s\n", string(json))
+
+		})
 	}
 }
 
@@ -7632,11 +7635,11 @@ func TestPreparedSetExpressionPlanModeIsExplicit(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = buildPlanWithPrepareMode(
-		ctx, nil, plan.NewEmptyCompilerContext(), stmt, false)
+		ctx, nil, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), stmt, false)
 	require.ErrorContains(t, err, "only prepare statement can use ? expr")
 
 	preparedPlan, err := buildPlanWithPrepareMode(
-		ctx, nil, plan.NewEmptyCompilerContext(), stmt, true)
+		ctx, nil, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), stmt, true)
 	require.NoError(t, err)
 	require.True(t, preparedPlan.GetIsPrepare())
 	require.Equal(t, []int32{0}, queryParamPositions(preparedPlan.GetQuery()))
@@ -7647,8 +7650,7 @@ func TestBuildPlanWithPrepareModeAllowsMissingCompilerProcess(t *testing.T) {
 	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select 1", 1)
 	require.NoError(t, err)
 
-	compCtx := plan.NewEmptyCompilerContext()
-	compCtx.GetProcessFunc = func() *process.Process { return nil }
+	compCtx := plan.NewEmptyCompilerContext(nil)
 	compCtx.SetContext(nil)
 	_, err = buildPlanWithPrepareMode(ctx, nil, compCtx, stmt, false)
 	require.NoError(t, err)
@@ -7666,7 +7668,7 @@ func TestPreparedSetExpressionPlanKeepsGlobalParserOrdinal(t *testing.T) {
 	clause.Exprs = clause.Exprs[1:]
 
 	preparedPlan, err := buildPlanWithPrepareMode(
-		ctx, nil, plan.NewEmptyCompilerContext(), stmt, true)
+		ctx, nil, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), stmt, true)
 	require.NoError(t, err)
 	require.Equal(t, []int32{1}, queryParamPositions(preparedPlan.GetQuery()))
 	require.Equal(t, 2, secondParam.Offset, "planning must not mutate the retained SET AST")
@@ -7695,7 +7697,7 @@ func TestPreparedSetExpressionPlanNormalizesAggregateAndWindowParams(t *testing.
 		stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, tc.sql, 1)
 		require.NoError(t, err)
 		preparedPlan, err := buildPlanWithPrepareMode(
-			ctx, nil, plan.NewEmptyCompilerContext(), stmt, true)
+			ctx, nil, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), stmt, true)
 		require.NoError(t, err)
 		require.ElementsMatch(t, tc.want, queryParamPositions(preparedPlan.GetQuery()))
 	}
@@ -7711,7 +7713,7 @@ func TestPreparedSetExpressionRetryKeepsGlobalParserOrdinal(t *testing.T) {
 	clause.Exprs = clause.Exprs[1:]
 
 	retryPlan, err := buildPlanForCompileRetry(
-		ctx, nil, plan.NewEmptyCompilerContext(), stmt, true, nil)
+		ctx, nil, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), stmt, true, nil)
 	require.NoError(t, err)
 	require.Equal(t, []int32{1}, queryParamPositions(retryPlan.GetQuery()))
 	require.Equal(t, 2, secondParam.Offset)
@@ -7730,7 +7732,7 @@ func TestPreparedQueryRetryKeepsPrunedParserOrdinal(t *testing.T) {
 			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			retryPlan, err := buildPlanForCompileRetry(ctx, ses, plan.NewEmptyCompilerContext(), stmt, false, nil)
+			retryPlan, err := buildPlanForCompileRetry(ctx, ses, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), stmt, false, nil)
 			require.NoError(t, err)
 			require.Equal(t, []int32{1}, queryParamPositions(retryPlan.GetQuery()))
 		}()
@@ -7756,7 +7758,7 @@ func TestBuildPlanForCompileRetryReappliesPreparedRuntimeSpecialization(t *testi
 		},
 	})
 	retryPlan, err := buildPlanForCompileRetry(
-		ctx, nil, plan.NewEmptyCompilerContext(), stmt, true, retry)
+		ctx, nil, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), stmt, true, retry)
 	require.NoError(t, err)
 	require.Empty(t, queryParamPositions(retryPlan.GetQuery()),
 		"definition-change retry returned the prepare-time parameterized plan: %s", retryPlan.String())
@@ -7780,7 +7782,7 @@ func TestBuildPlanForCompileRetryReprovesPreparedJoin(t *testing.T) {
 		"select count(*) from select_test.bind_select a join select_test.bind_select b on a.a=b.a and a.a=hour(time(?)) where a.a=?", 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	compilerCtx := plan.NewMockCompilerContext(true)
+	compilerCtx := plan.NewMockCompilerContext(true, newPlanTestProcess(t))
 	compilerCtx.SetContext(ctx)
 	proc := compilerCtx.GetProcess()
 	params := vector.NewVec(types.T_text.ToType())
@@ -7837,7 +7839,7 @@ func TestBuildPlanForPreparedExpressionRetryPreservesBinaryRuntimeType(t *testin
 	require.NoError(t, err)
 
 	retryPlan, err := buildPlanForCompileRetry(
-		ctx, nil, plan.NewEmptyCompilerContext(), stmt, true,
+		ctx, nil, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), stmt, true,
 		newPreparedExecutionRetry([]any{plan.ParamValue{
 			Value:            "42",
 			IsBinaryProtocol: true,
@@ -10363,7 +10365,7 @@ func TestExecRequestStmtSendLongDataRowCount(t *testing.T) {
 	st := tree.NewPrepareString(tree.Identifier(stmtName), "select ?")
 	stmts, err := mysql.Parse(ctx, st.Sql, 1)
 	require.NoError(t, err)
-	preparePlan, err := buildPlan(ctx, nil, plan.NewEmptyCompilerContext(), st)
+	preparePlan, err := buildPlan(ctx, nil, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), st)
 	require.NoError(t, err)
 	prepareStmt := &PrepareStmt{
 		Name:                stmtName,
@@ -10420,7 +10422,7 @@ func TestExecRequestStmtSendLongDataDefersFailureUntilExecute(t *testing.T) {
 	st := tree.NewPrepareString(tree.Identifier(stmtName), "select ?")
 	stmts, err := mysql.Parse(ctx, st.Sql, 1)
 	require.NoError(t, err)
-	preparePlan, err := buildPlan(ctx, nil, plan.NewEmptyCompilerContext(), st)
+	preparePlan, err := buildPlan(ctx, nil, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), st)
 	require.NoError(t, err)
 	stmt := &PrepareStmt{
 		Name: stmtName, PreparePlan: preparePlan, PrepareStmt: stmts[0],
@@ -10528,7 +10530,7 @@ func Test_ExecRequestStmtExecuteErrorClearsPreparedParamState(t *testing.T) {
 	stmts, err := mysql.Parse(ctx, st.Sql, 1)
 	require.NoError(t, err)
 
-	compCtx := plan.NewEmptyCompilerContext()
+	compCtx := plan.NewEmptyCompilerContext(newPlanTestProcess(t))
 	preparePlan, err := buildPlan(ctx, nil, compCtx, st)
 	require.NoError(t, err)
 
@@ -11711,7 +11713,7 @@ func TestOrdinaryCacheStatsAdmissionUsesGenerationBaseline(t *testing.T) {
 		{"material range growth", "select n_name from nation where n_nationkey>=1", 256, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			base := plan.NewMockCompilerContext(false)
+			base := plan.NewMockCompilerContext(false, newPlanTestProcess(t))
 			ctx := &preparedStatsTestCompiler{preparedTestCompiler: &preparedTestCompiler{CompilerContext: base, proc: base.GetProcess()}, stats: &pbstats.StatsInfo{TableCnt: 128}}
 			ses, prepared, initialCW, ec := newPreparedExecuteEnvForSQLWithCompilerContext(t, 229, tc.sql, ctx)
 			defer prepared.Close()

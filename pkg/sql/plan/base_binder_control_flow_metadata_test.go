@@ -581,7 +581,7 @@ func TestBuildControlFlowTemporalFSPMetadata(t *testing.T) {
 			require.NoError(t, err)
 			defer stmt.Free()
 
-			pl, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+			pl, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
 			require.NoError(t, err)
 			query := pl.GetQuery()
 			projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
@@ -713,7 +713,7 @@ func TestBuildCaseSignedUnsignedMetadataWithNull(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)
 			require.NoError(t, err)
 
-			pl, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+			pl, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
 			require.NoError(t, err)
 			query := pl.GetQuery()
 			projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
@@ -735,7 +735,7 @@ func TestBuildControlFlowUTF8MB4BinaryWidth(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
 
-			pl, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+			pl, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
 			require.NoError(t, err)
 			query := pl.GetQuery()
 			projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
@@ -760,7 +760,7 @@ func TestBuildControlFlowBinaryCharacterLiteralWidth(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)
 			require.NoError(t, err)
 
-			pl, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+			pl, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
 			require.NoError(t, err)
 			query := pl.GetQuery()
 			projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
@@ -814,7 +814,7 @@ func TestBuildControlFlowDecimalStringMetadataWidth(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)
 			require.NoError(t, err)
 
-			pl, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+			pl, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
 			require.NoError(t, err)
 			query := pl.GetQuery()
 			projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
@@ -850,7 +850,7 @@ func TestBuildControlFlowTimeVarcharMetadata(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)
 			require.NoError(t, err)
 
-			pl, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+			pl, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
 			require.NoError(t, err)
 			query := pl.GetQuery()
 			projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
@@ -905,7 +905,7 @@ func TestBuildControlFlowTypedNullVarcharMetadata(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)
 			require.NoError(t, err)
 
-			pl, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+			pl, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
 			require.NoError(t, err)
 			query := pl.GetQuery()
 			projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
@@ -917,7 +917,7 @@ func TestBuildControlFlowTypedNullVarcharMetadata(t *testing.T) {
 }
 
 func TestBuildControlFlowTextFamilyMetadataFromColumns(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	ctx.tables["text_family"] = &planpb.TableDef{
 		TblId:     1001,
 		Name:      "text_family",
@@ -965,7 +965,7 @@ func TestBuildCaseSameFixedBinaryMetadata(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
 
-			pl, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+			pl, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
 			require.NoError(t, err)
 			query := pl.GetQuery()
 			projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
@@ -985,7 +985,7 @@ func TestBuildControlFlowDifferentFixedBinaryMetadata(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
 
-			pl, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+			pl, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
 			require.NoError(t, err)
 			query := pl.GetQuery()
 			projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
@@ -1037,7 +1037,7 @@ func TestBuildCaseBinaryMetadataWithNullBranches(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)
 			require.NoError(t, err)
 
-			pl, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+			pl, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
 			require.NoError(t, err)
 			query := pl.GetQuery()
 			projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
@@ -1139,7 +1139,7 @@ func TestUnquotedDecimal256LiteralKeepsAllDigits(t *testing.T) {
 				require.Equal(t, test.value, expr.GetF().Args[0].GetLit().GetSval())
 			}
 
-			stmt, err := runOneStmt(NewMockOptimizer(false), t, "select "+test.value)
+			stmt, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "select "+test.value)
 			require.NoError(t, err)
 			root := stmt.GetQuery().Nodes[stmt.GetQuery().Steps[len(stmt.GetQuery().Steps)-1]]
 			require.Len(t, root.ProjectList, 1)
@@ -1154,7 +1154,7 @@ func TestUnquotedDecimal256LiteralKeepsAllDigits(t *testing.T) {
 }
 
 func TestUnquotedScientificLiteralKeepsExistingFloatPath(t *testing.T) {
-	stmt, err := runOneStmt(NewMockOptimizer(false), t, "select 12345678901234567890123456789012345678e-30")
+	stmt, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "select 12345678901234567890123456789012345678e-30")
 	require.NoError(t, err)
 	root := stmt.GetQuery().Nodes[stmt.GetQuery().Steps[len(stmt.GetQuery().Steps)-1]]
 	require.Len(t, root.ProjectList, 1)
@@ -1176,7 +1176,7 @@ func TestUnquotedDecimalLiteralRejectsBeyondDecimal256Precision(t *testing.T) {
 			// These cases must go through the parser and binder as well. The
 			// parser classifies a decimal point as P_float64; falling back to
 			// astExpr.Float64 there would hide the Decimal256 range error.
-			_, err = runOneStmt(NewMockOptimizer(false), t, "select "+test.value)
+			_, err = runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "select "+test.value)
 			require.Error(t, err)
 		})
 	}
@@ -1215,7 +1215,7 @@ func TestUnquotedDecimalLiteralNormalizesSpellingBeforeParsing(t *testing.T) {
 			require.Equal(t, test.wantCanonical, expr.GetF().Args[0].GetLit().GetSval())
 			require.True(t, expr.GetF().Args[0].GetLit().GetDecimalLiteralRequiresV82(), expr.String())
 
-			stmt, err := runOneStmt(NewMockOptimizer(false), t, "select "+test.value)
+			stmt, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "select "+test.value)
 			require.NoError(t, err)
 			root := stmt.GetQuery().Nodes[stmt.GetQuery().Steps[len(stmt.GetQuery().Steps)-1]]
 			require.Len(t, root.ProjectList, 1)
@@ -1261,7 +1261,7 @@ func TestBuildIfNullMetadata(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
 
-			pl, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+			pl, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
 			require.NoError(t, err)
 			query := pl.GetQuery()
 			projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
@@ -1280,7 +1280,7 @@ func TestBuildIfNullMetadataAfterOuterJoin(t *testing.T) {
 		from nation n left join region r on n.n_regionkey = r.r_regionkey`, 1)
 	require.NoError(t, err)
 
-	pl, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+	pl, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
 	require.NoError(t, err)
 	query := pl.GetQuery()
 	projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList

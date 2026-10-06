@@ -295,9 +295,8 @@ func TestUnaryInactiveExecutionContracts(t *testing.T) {
 }
 
 func TestUnaryStringConsumerSelection(t *testing.T) {
-	proc := testutil.NewProcess(nil)
+	proc := newMemoryFunctionTestProcess(t)
 	t.Cleanup(func() {
-		proc.Base.FileService.Close(proc.Ctx)
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
 		require.Zero(t, proc.Mp().OnHeapCurrNB())
@@ -323,9 +322,8 @@ func TestUnaryStringConsumerSelection(t *testing.T) {
 }
 
 func TestUnaryStringErrorPreservesAdmissionAndReuse(t *testing.T) {
-	proc := testutil.NewProcess(nil)
+	proc := newMemoryFunctionTestProcess(t)
 	t.Cleanup(func() {
-		proc.Base.FileService.Close(proc.Ctx)
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
 		require.Zero(t, proc.Mp().OnHeapCurrNB())
@@ -362,9 +360,8 @@ func TestUnaryStringErrorPreservesAdmissionAndReuse(t *testing.T) {
 }
 
 func TestUnaryBytesResultCopiesBorrowedCallbackBytes(t *testing.T) {
-	proc := testutil.NewProcess(nil)
+	proc := newMemoryFunctionTestProcess(t)
 	t.Cleanup(func() {
-		proc.Base.FileService.Close(proc.Ctx)
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
 		require.Zero(t, proc.Mp().OnHeapCurrNB())
@@ -394,9 +391,8 @@ func TestUnaryBytesResultCopiesBorrowedCallbackBytes(t *testing.T) {
 }
 
 func TestUnaryStringDecimalPrefixCastConsumer(t *testing.T) {
-	proc := testutil.NewProcess(nil)
+	proc := newMemoryFunctionTestProcess(t)
 	t.Cleanup(func() {
-		proc.Base.FileService.Close(proc.Ctx)
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
 		require.Zero(t, proc.Mp().OnHeapCurrNB())
@@ -422,9 +418,8 @@ func TestUnaryStringDecimalPrefixCastConsumer(t *testing.T) {
 }
 
 func TestBinaryFixedExecutionContracts(t *testing.T) {
-	proc := testutil.NewProcess(t)
+	proc := newMemoryFunctionTestProcess(t)
 	t.Cleanup(func() {
-		proc.GetFileService().Close(proc.Ctx)
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
 		require.Zero(t, proc.Mp().OnHeapCurrNB())
