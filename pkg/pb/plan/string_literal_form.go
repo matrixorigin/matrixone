@@ -416,6 +416,7 @@ type RemoteExpressionFeatures struct {
 	ScalarDivision bool
 	// ViewMetadataFunctions requires v126 for MO_VIEW_DEFINITION/CHECK_OPTION.
 	ViewMetadataFunctions           bool
+	PythonRoutineContract           bool
 	JSONScalarLiteralContracts      bool
 	JSONInputContracts              bool
 	YearBitCast                     bool
@@ -473,7 +474,7 @@ type RemoteExpressionFeatures struct {
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
-	return features.FloatConversionSemantics || features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts || features.JSONNumericComparisons || features.LoadFKIgnoreCheck || features.DependentPrograms || features.CalendarIntervalNormalization || features.ViewMetadataFunctions || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
+	return features.FloatConversionSemantics || features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts || features.JSONNumericComparisons || features.LoadFKIgnoreCheck || features.DependentPrograms || features.CalendarIntervalNormalization || features.ViewMetadataFunctions || features.PythonRoutineContract || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
 		features.ODKUStatementResult || features.SessionLastInsertIDBaseline || features.JSONMinMaxTypedComparison ||
 		features.JSONComparisonParam ||
 		features.MixedJSONBooleanEquality ||
@@ -1033,6 +1034,7 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				}
 			}
 			fn := current.GetF()
+			features.PythonRoutineContract = features.PythonRoutineContract || (fn != nil && fn.RoutineCall != nil)
 			if fn != nil && fn.Func != nil {
 				features.JSONMinMaxTypedComparison = features.JSONMinMaxTypedComparison || IsJSONMinMaxAggregate(fn.Func.Obj, fn.Args)
 				id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)
