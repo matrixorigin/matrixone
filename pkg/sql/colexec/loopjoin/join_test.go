@@ -54,8 +54,6 @@ func TestLoopJoinAllocationSiteLedger(t *testing.T) {
 // add unit tests for cases
 type joinTestCase struct {
 	arg    *LoopJoin
-	flgs   []bool // flgs[i] == true: nullable
-	types  []types.Type
 	proc   *process.Process
 	cancel context.CancelFunc
 	barg   *hashbuild.HashBuild
@@ -193,7 +191,7 @@ var (
 
 func makeTestCases(t *testing.T) []joinTestCase {
 	return []joinTestCase{
-		newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)}),
+		newTestCase(t, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)}),
 	}
 }
 
@@ -318,7 +316,7 @@ func TestJoin(t *testing.T) {
 }
 
 func TestLoopJoinPassesRecursiveMarker(t *testing.T) {
-	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
+	tc := newTestCase(t, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
 		colexec.NewResultPos(0, 0),
 		colexec.NewResultPos(1, 0),
 	})
@@ -353,7 +351,7 @@ func (source *recursiveLoopJoinProbe) OpType() vm.OpType {
 }
 
 func TestLoopJoinPassesRecursiveMarkerWithEmptyBuild(t *testing.T) {
-	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
+	tc := newTestCase(t, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
 		colexec.NewResultPos(0, 0),
 		colexec.NewResultPos(1, 0),
 	})
@@ -386,7 +384,7 @@ func TestLoopJoinPassesRecursiveMarkerWithEmptyBuild(t *testing.T) {
 }
 
 func TestLoopJoinPrepareRecomputesRecursiveProbeForFastPath(t *testing.T) {
-	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
+	tc := newTestCase(t, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
 		colexec.NewResultPos(0, 0),
 		colexec.NewResultPos(1, 0),
 	})
@@ -420,7 +418,7 @@ func TestLoopJoinPrepareRecomputesRecursiveProbeForFastPath(t *testing.T) {
 }
 
 func TestLoopJoinResetAfterEmptyProbe(t *testing.T) {
-	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
+	tc := newTestCase(t, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
 		colexec.NewResultPos(0, 0),
 		colexec.NewResultPos(1, 0),
 	})
@@ -501,7 +499,7 @@ func TestLoopJoinResetClearsResumeGeneration(t *testing.T) {
 }
 
 func TestLoopJoinConstNullAfterNonEmptyProbe(t *testing.T) {
-	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
+	tc := newTestCase(t, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
 		colexec.NewResultPos(0, 0),
 		colexec.NewResultPos(1, 0),
 	})
@@ -557,9 +555,7 @@ func TestLoopJoinSingleRejectsMultipleRows(t *testing.T) {
 			name = "with condition"
 		}
 		t.Run(name, func(t *testing.T) {
-			tc := newTestCase(t,
-				[]bool{false},
-				[]types.Type{types.T_int32.ToType()},
+			tc := newTestCase(t, []types.Type{types.T_int32.ToType()},
 				[]colexec.ResultPos{colexec.NewResultPos(0, 0)})
 			tc.arg.JoinType = plan.Node_SINGLE
 			if !withCondition {
@@ -1515,7 +1511,7 @@ func makeVarcharLoopJoinBatch(mp *mpool.MPool, vals []string) *batch.Batch {
 	return bat
 }
 
-func newTestCase(t *testing.T, flgs []bool, ts []types.Type, rp []colexec.ResultPos) joinTestCase {
+func newTestCase(t *testing.T, ts []types.Type, rp []colexec.ResultPos) joinTestCase {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	proc.SetMessageBoard(message.NewMessageBoard())
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1557,8 +1553,6 @@ func newTestCase(t *testing.T, flgs []bool, ts []types.Type, rp []colexec.Result
 	}
 	tag++
 	testCase := joinTestCase{
-		types:  ts,
-		flgs:   flgs,
 		proc:   proc,
 		cancel: cancel,
 		arg: &LoopJoin{

@@ -47,8 +47,6 @@ const (
 // add unit tests for cases
 type joinTestCase struct {
 	arg    *HashJoin
-	flgs   []bool // flgs[i] == true: nullable
-	types  []types.Type
 	proc   *process.Process
 	cancel context.CancelFunc
 	barg   *hashbuild.HashBuild
@@ -140,7 +138,7 @@ var (
 
 func makeTestCases(t *testing.T) []joinTestCase {
 	return []joinTestCase{
-		newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0)},
+		newTestCase(t, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0)},
 			[][]*plan.Expr{
 				{
 					newExpr(0, types.T_int32.ToType()),
@@ -149,7 +147,7 @@ func makeTestCases(t *testing.T) []joinTestCase {
 					newExpr(0, types.T_int32.ToType()),
 				},
 			}),
-		newTestCase(t, []bool{true}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)},
+		newTestCase(t, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)},
 			[][]*plan.Expr{
 				{
 					newExpr(0, types.T_int32.ToType()),
@@ -278,7 +276,7 @@ func TestHashJoinCountOnlyCollapsesDuplicateMatches(t *testing.T) {
 		{newExpr(0, typ)},
 		{newExpr(0, typ)},
 	}
-	tc := newTestCase(t, []bool{false}, []types.Type{typ}, nil, conditions)
+	tc := newTestCase(t, []types.Type{typ}, nil, conditions)
 	tc.arg.JoinType = plan.Node_INNER
 	tc.arg.NonEqCond = nil
 	tc.arg.EmitCompressedRowCount = true
@@ -331,7 +329,7 @@ func TestHashJoinCountOnlyRequiresLoadedMap(t *testing.T) {
 func TestHashJoinEmptyProjectionWithoutCountContractStaysBoundedAndCancelable(t *testing.T) {
 	typ := types.T_int32.ToType()
 	conditions := [][]*plan.Expr{{newExpr(0, typ)}, {newExpr(0, typ)}}
-	tc := newTestCase(t, []bool{false}, []types.Type{typ}, nil, conditions)
+	tc := newTestCase(t, []types.Type{typ}, nil, conditions)
 	tc.arg.JoinType = plan.Node_INNER
 	tc.arg.NonEqCond = nil
 	tc.barg.NeedBatches = false
@@ -380,7 +378,7 @@ func (source *recursiveHashJoinProbe) OpType() vm.OpType {
 func TestHashJoinPassesRecursiveMarkerWithEmptyBuild(t *testing.T) {
 	typ := types.T_int32.ToType()
 	conditions := [][]*plan.Expr{{newExpr(0, typ)}, {newExpr(0, typ)}}
-	tc := newTestCase(t, []bool{false}, []types.Type{typ}, []colexec.ResultPos{
+	tc := newTestCase(t, []types.Type{typ}, []colexec.ResultPos{
 		colexec.NewResultPos(0, 0),
 	}, conditions)
 	marker := colexec.MakeMockBatchs(tc.proc.Mp())
@@ -414,7 +412,7 @@ func TestHashJoinPassesRecursiveMarkerWithEmptyBuild(t *testing.T) {
 func TestHashJoinPrepareRecomputesRecursiveProbeForFastPath(t *testing.T) {
 	typ := types.T_int32.ToType()
 	conditions := [][]*plan.Expr{{newExpr(0, typ)}, {newExpr(0, typ)}}
-	tc := newTestCase(t, []bool{false}, []types.Type{typ}, []colexec.ResultPos{
+	tc := newTestCase(t, []types.Type{typ}, []colexec.ResultPos{
 		colexec.NewResultPos(0, 0),
 	}, conditions)
 	probeCalls := 0
@@ -453,7 +451,6 @@ func TestHashJoinPropagatesUnmatchedOutputOOM(t *testing.T) {
 	tc := newTestCaseWithMPool(
 		t,
 		limited,
-		[]bool{false},
 		[]types.Type{typ},
 		[]colexec.ResultPos{colexec.NewResultPos(0, 0)},
 		[][]*plan.Expr{{newExpr(0, typ)}, {newExpr(0, typ)}},
@@ -492,7 +489,7 @@ func TestHashJoinPropagatesUnmatchedOutputOOM(t *testing.T) {
 }
 
 func TestHashJoinResetAfterEmptyProbe(t *testing.T) {
-	tc := newTestCase(t, []bool{true}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
+	tc := newTestCase(t, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
 		colexec.NewResultPos(0, 0),
 		colexec.NewResultPos(1, 0),
 	}, [][]*plan.Expr{
@@ -549,7 +546,7 @@ func TestHashJoinResetAfterEmptyProbe(t *testing.T) {
 }
 
 func TestHashJoinConstNullAfterNonEmptyProbe(t *testing.T) {
-	tc := newTestCase(t, []bool{true}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
+	tc := newTestCase(t, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
 		colexec.NewResultPos(0, 0),
 		colexec.NewResultPos(1, 0),
 	}, [][]*plan.Expr{
@@ -662,9 +659,7 @@ func TestHashMarkJoinThreeValuedSemantics(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tc := newTestCase(t,
-				[]bool{true},
-				[]types.Type{types.T_int32.ToType()},
+			tc := newTestCase(t, []types.Type{types.T_int32.ToType()},
 				[]colexec.ResultPos{colexec.NewResultPos(0, 0)},
 				[][]*plan.Expr{
 					{newExpr(0, types.T_int32.ToType())},
@@ -732,9 +727,7 @@ func TestHashMarkJoinCompositeNotNullKeys(t *testing.T) {
 		expr.Typ.NotNullable = true
 	}
 
-	tc := newTestCase(t,
-		[]bool{false, false},
-		[]types.Type{types.T_int32.ToType(), types.T_int32.ToType()},
+	tc := newTestCase(t, []types.Type{types.T_int32.ToType(), types.T_int32.ToType()},
 		[]colexec.ResultPos{colexec.NewResultPos(0, 0)},
 		[][]*plan.Expr{{probeKey0, probeKey1}, {buildKey0, buildKey1}},
 	)
@@ -784,9 +777,7 @@ func TestHashMarkJoinCompositeNotNullKeys(t *testing.T) {
 }
 
 func TestHashMarkJoinResetClearsBuildNullState(t *testing.T) {
-	tc := newTestCase(t,
-		[]bool{true},
-		[]types.Type{types.T_int32.ToType()},
+	tc := newTestCase(t, []types.Type{types.T_int32.ToType()},
 		[]colexec.ResultPos{colexec.NewResultPos(0, 0)},
 		[][]*plan.Expr{
 			{newExpr(0, types.T_int32.ToType())},
@@ -850,9 +841,7 @@ func TestHashMarkJoinResetClearsBuildNullState(t *testing.T) {
 }
 
 func TestHashMarkJoinBatchBoundary(t *testing.T) {
-	tc := newTestCase(t,
-		[]bool{true},
-		[]types.Type{types.T_int32.ToType()},
+	tc := newTestCase(t, []types.Type{types.T_int32.ToType()},
 		[]colexec.ResultPos{colexec.NewResultPos(0, 0)},
 		[][]*plan.Expr{
 			{newExpr(0, types.T_int32.ToType())},
@@ -958,9 +947,7 @@ func TestHashJoinSingleRejectsMultipleRows(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tc := newTestCase(t,
-				[]bool{false},
-				[]types.Type{types.T_int32.ToType()},
+			tc := newTestCase(t, []types.Type{types.T_int32.ToType()},
 				[]colexec.ResultPos{colexec.NewResultPos(0, 0)},
 				[][]*plan.Expr{
 					{newExpr(0, types.T_int32.ToType())},
@@ -1171,9 +1158,7 @@ func TestHashJoinTracksBuildMatchesWhenFullOuterIsNotRightOriented(t *testing.T)
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			typ := types.T_int32.ToType()
-			tc := newTestCase(t,
-				[]bool{true},
-				[]types.Type{typ},
+			tc := newTestCase(t, []types.Type{typ},
 				[]colexec.ResultPos{
 					colexec.NewResultPos(0, 0),
 					colexec.NewResultPos(1, 0),
@@ -1247,9 +1232,7 @@ func makeInt32Batch(proc *process.Process, values []int32) *batch.Batch {
 func TestAsofLeftJoinEndToEnd(t *testing.T) {
 	keyType := types.T_int32.ToType()
 	timeType := types.T_timestamp.ToType()
-	tc := newTestCase(t,
-		[]bool{false, true},
-		[]types.Type{keyType, keyType},
+	tc := newTestCase(t, []types.Type{keyType, keyType},
 		[]colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 1)},
 		[][]*plan.Expr{{newExpr(0, keyType)}, {newExpr(0, keyType)}},
 	)
@@ -1301,9 +1284,7 @@ func TestAsofBuildLeftStreamsRightAndKeepsOneCandidate(t *testing.T) {
 	timeType := types.T_timestamp.ToType()
 	textType := types.T_varchar.ToType()
 	equality := [][]*plan.Expr{{newExpr(0, keyType)}, {newExpr(0, keyType)}}
-	tc := newTestCase(t,
-		[]bool{false, true},
-		[]types.Type{keyType, keyType},
+	tc := newTestCase(t, []types.Type{keyType, keyType},
 		[]colexec.ResultPos{
 			colexec.NewResultPos(0, 1),
 			colexec.NewResultPos(1, 1),
@@ -1371,9 +1352,7 @@ func TestAsofBuildLeftEmptyLeftSkipsRightScan(t *testing.T) {
 	keyType := types.T_int32.ToType()
 	timeType := types.T_timestamp.ToType()
 	equality := [][]*plan.Expr{{newExpr(0, keyType)}, {newExpr(0, keyType)}}
-	tc := newTestCase(t,
-		[]bool{false},
-		[]types.Type{keyType, keyType},
+	tc := newTestCase(t, []types.Type{keyType, keyType},
 		[]colexec.ResultPos{colexec.NewResultPos(0, 0)},
 		equality,
 	)
@@ -1421,9 +1400,7 @@ func TestAsofBuildLeftRejectsRecursiveProbeBeforeInput(t *testing.T) {
 	keyType := types.T_int32.ToType()
 	timeType := types.T_timestamp.ToType()
 	equality := [][]*plan.Expr{{newExpr(0, keyType)}, {newExpr(0, keyType)}}
-	tc := newTestCase(t,
-		[]bool{false},
-		[]types.Type{keyType, keyType},
+	tc := newTestCase(t, []types.Type{keyType, keyType},
 		[]colexec.ResultPos{colexec.NewResultPos(0, 0)},
 		equality,
 	)
@@ -1456,9 +1433,7 @@ func TestAsofBuildLeftActualHotGroupUsesBoundedRangeIndex(t *testing.T) {
 	timeType := types.T_timestamp.ToType()
 	textType := types.T_varchar.ToType()
 	equality := [][]*plan.Expr{{newExpr(0, keyType)}, {newExpr(0, keyType)}}
-	tc := newTestCase(t,
-		[]bool{false, true},
-		[]types.Type{keyType, keyType},
+	tc := newTestCase(t, []types.Type{keyType, keyType},
 		[]colexec.ResultPos{
 			colexec.NewResultPos(0, 1),
 			colexec.NewResultPos(1, 1),
@@ -1556,9 +1531,7 @@ func TestAsofBuildLeftRangeIndexSharesAndRecyclesPayload(t *testing.T) {
 	timeType := types.T_timestamp.ToType()
 	textType := types.T_varchar.ToType()
 	equality := [][]*plan.Expr{{newExpr(0, keyType)}, {newExpr(0, keyType)}}
-	tc := newTestCase(t,
-		[]bool{false},
-		[]types.Type{keyType, keyType},
+	tc := newTestCase(t, []types.Type{keyType, keyType},
 		[]colexec.ResultPos{colexec.NewResultPos(1, 2)},
 		equality,
 	)
@@ -1639,9 +1612,7 @@ func TestAsofBuildLeftStrictPredicateRejectsEqualTimestamp(t *testing.T) {
 	keyType := types.T_int32.ToType()
 	timeType := types.T_timestamp.ToType()
 	equality := [][]*plan.Expr{{newExpr(0, keyType)}, {newExpr(0, keyType)}}
-	tc := newTestCase(t,
-		[]bool{false},
-		[]types.Type{keyType, keyType},
+	tc := newTestCase(t, []types.Type{keyType, keyType},
 		[]colexec.ResultPos{colexec.NewResultPos(1, 1)},
 		equality,
 	)
@@ -1689,9 +1660,7 @@ func TestAsofBuildLeftCompactsRepeatedVarlenaReplacement(t *testing.T) {
 	timeType := types.T_timestamp.ToType()
 	textType := types.T_varchar.ToType()
 	equality := [][]*plan.Expr{{newExpr(0, keyType)}, {newExpr(0, keyType)}}
-	tc := newTestCase(t,
-		[]bool{false},
-		[]types.Type{keyType, keyType},
+	tc := newTestCase(t, []types.Type{keyType, keyType},
 		[]colexec.ResultPos{colexec.NewResultPos(1, 2)},
 		equality,
 	)
@@ -2371,14 +2340,13 @@ func newExpr(pos int32, typ types.Type) *plan.Expr {
 	}
 }
 
-func newTestCase(t testing.TB, flgs []bool, ts []types.Type, rp []colexec.ResultPos, cs [][]*plan.Expr) joinTestCase {
-	return newTestCaseWithMPool(t, mpool.MustNewZero(), flgs, ts, rp, cs)
+func newTestCase(t testing.TB, ts []types.Type, rp []colexec.ResultPos, cs [][]*plan.Expr) joinTestCase {
+	return newTestCaseWithMPool(t, mpool.MustNewZero(), ts, rp, cs)
 }
 
 func newTestCaseWithMPool(
 	t testing.TB,
 	m *mpool.MPool,
-	flgs []bool,
 	ts []types.Type,
 	rp []colexec.ResultPos,
 	cs [][]*plan.Expr,
@@ -2424,8 +2392,6 @@ func newTestCaseWithMPool(
 	}
 	tag++
 	tc := joinTestCase{
-		types:  ts,
-		flgs:   flgs,
 		proc:   proc,
 		cancel: cancel,
 		arg: &HashJoin{
