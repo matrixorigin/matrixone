@@ -531,9 +531,8 @@ func TestStdDevPopExecRetainsFiniteResultWhenVarianceOverflows(t *testing.T) {
 	}
 }
 
-func TestExactIntegerVarianceAtTypeLimits(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer mpool.DeleteMPool(mp)
+func TestVarianceExactOrigins(t *testing.T) {
+	mp := newAggExecTestPool(t)
 
 	maxInt64 := int64(^uint64(0) >> 1)
 	maxUint64 := ^uint64(0)
@@ -600,84 +599,74 @@ func TestExactIntegerVarianceAtTypeLimits(t *testing.T) {
 	}
 	aggregates := []struct {
 		name string
-		make func(bool, types.Type) AggFuncExec
+		id   int64
 		want float64
 	}{
-		{
-			name: "var-pop",
-			make: func(distinct bool, param types.Type) AggFuncExec {
-				return makeVarPopExec(mp, AggIdOfVarPop, distinct, param)
-			},
-			want: 1.25,
-		},
-		{
-			name: "var-sample",
-			make: func(distinct bool, param types.Type) AggFuncExec {
-				return makeVarSampleExec(mp, AggIdOfVarSample, distinct, param)
-			},
-			want: 5.0 / 3.0,
-		},
-		{
-			name: "stddev-pop",
-			make: func(distinct bool, param types.Type) AggFuncExec {
-				return makeStdDevPopExec(mp, AggIdOfStdDevPop, distinct, param)
-			},
-			want: math.Sqrt(1.25),
-		},
-		{
-			name: "stddev-sample",
-			make: func(distinct bool, param types.Type) AggFuncExec {
-				return makeStdDevSampleExec(mp, AggIdOfStdDevSample, distinct, param)
-			},
-			want: math.Sqrt(5.0 / 3.0),
-		},
+		{"var-pop", AggIdOfVarPop, 1.25},
+		{"var-sample", AggIdOfVarSample, 5.0 / 3.0},
+		{"stddev-pop", AggIdOfStdDevPop, math.Sqrt(1.25)},
+		{"stddev-sample", AggIdOfStdDevSample, math.Sqrt(5.0 / 3.0)},
 	}
-
-	flush := func(t *testing.T, exec AggFuncExec, want float64) {
-		t.Helper()
-		results, err := exec.Flush()
-		require.NoError(t, err)
-		defer results[0].Free(mp)
-		require.InDelta(t, want,
-			vector.MustFixedColNoTypeCheck[float64](results[0])[0], 1e-14)
-	}
-
 	for _, inputCase := range inputs {
-		for _, aggregate := range aggregates {
-			for _, mode := range []string{"resident", "distinct", "merge"} {
-				t.Run(inputCase.name+"/"+aggregate.name+"/"+mode, func(t *testing.T) {
-					if mode == "merge" {
-						leftInput := vector.NewVec(inputCase.param)
-						rightInput := vector.NewVec(inputCase.param)
-						defer leftInput.Free(mp)
-						defer rightInput.Free(mp)
-						inputCase.append(t, leftInput, 0, 2)
-						inputCase.append(t, rightInput, 2, 4)
-
-						left := aggregate.make(false, inputCase.param)
-						right := aggregate.make(false, inputCase.param)
-						defer left.Free()
-						defer right.Free()
-						require.NoError(t, left.GroupGrow(1))
+		t.Run(inputCase.name, func(t *testing.T) {
+			// Native values are built once per type. Executors never own these inputs.
+			input := vector.NewVec(inputCase.param)
+			t.Cleanup(func() { input.Free(mp) })
+			inputCase.append(t, input, 0, 4)
+			leftInput := vector.NewVec(inputCase.param)
+			t.Cleanup(func() { leftInput.Free(mp) })
+			require.NoError(t, input.CloneWindowTo(leftInput, 0, 2, mp))
+			rightInput := vector.NewVec(inputCase.param)
+			t.Cleanup(func() { rightInput.Free(mp) })
+			require.NoError(t, input.CloneWindowTo(rightInput, 2, 4, mp))
+			check := func(t *testing.T, exec AggFuncExec, want float64) {
+				t.Helper()
+				result := varianceResult(t, mp, exec, types.T_float64.ToType(), []bool{false})
+				require.InDelta(t, want, vector.MustFixedColWithTypeCheck[float64](result)[0], 1e-14)
+			}
+			for _, aggregate := range aggregates {
+				for _, mode := range []string{"resident", "distinct", "merge"} {
+					t.Run(aggregate.name+"/"+mode, func(t *testing.T) {
+						exec := varianceExec(t, mp, aggregate.id, mode == "distinct", inputCase.param)
+						require.NoError(t, exec.GroupGrow(1))
+						if mode == "merge" {
+							right := varianceExec(t, mp, aggregate.id, false, inputCase.param)
+							require.NoError(t, right.GroupGrow(1))
+							require.NoError(t, exec.BulkFill(0, []*vector.Vector{leftInput}))
+							require.NoError(t, right.BulkFill(0, []*vector.Vector{rightInput}))
+							require.NoError(t, exec.Merge(right, 0, 0))
+						} else {
+							require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
+						}
+						check(t, exec, aggregate.want)
+					})
+				}
+			}
+			// The signed-minimum fixture has no former wire continuation contract.
+			if inputCase.name == "int64-min" {
+				return
+			}
+			for _, continuation := range []string{"fill", "merge"} {
+				t.Run("wire/"+continuation, func(t *testing.T) {
+					source := varianceExec(t, mp, AggIdOfVarPop, false, inputCase.param)
+					require.NoError(t, source.GroupGrow(1))
+					require.NoError(t, source.BulkFill(0, []*vector.Vector{leftInput}))
+					var wire bytes.Buffer
+					require.NoError(t, source.SaveIntermediateResult(1, [][]uint8{{1}}, &wire))
+					restored := varianceExec(t, mp, AggIdOfVarPop, false, inputCase.param)
+					require.NoError(t, restored.UnmarshalFromReader(bytes.NewReader(wire.Bytes()), mp))
+					if continuation == "fill" {
+						require.NoError(t, restored.BulkFill(0, []*vector.Vector{rightInput}))
+					} else {
+						right := varianceExec(t, mp, AggIdOfVarPop, false, inputCase.param)
 						require.NoError(t, right.GroupGrow(1))
-						require.NoError(t, left.BulkFill(0, []*vector.Vector{leftInput}))
 						require.NoError(t, right.BulkFill(0, []*vector.Vector{rightInput}))
-						require.NoError(t, left.Merge(right, 0, 0))
-						flush(t, left, aggregate.want)
-						return
+						require.NoError(t, restored.Merge(right, 0, 0))
 					}
-
-					input := vector.NewVec(inputCase.param)
-					defer input.Free(mp)
-					inputCase.append(t, input, 0, 4)
-					exec := aggregate.make(mode == "distinct", inputCase.param)
-					defer exec.Free()
-					require.NoError(t, exec.GroupGrow(1))
-					require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
-					flush(t, exec, aggregate.want)
+					check(t, restored, 1.25)
 				})
 			}
-		}
+		})
 	}
 }
 
@@ -946,108 +935,6 @@ func TestVarianceIntermediateStateWireLayouts(t *testing.T) {
 				require.Error(t, mismatched.UnmarshalFromReader(
 					bytes.NewReader(wire.Bytes()), mp),
 					"the protocol gate must prevent unlike state layouts from decoding")
-			})
-		}
-	}
-}
-
-func TestExactIntegerVarianceOriginWireRoundTrip(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer mpool.DeleteMPool(mp)
-
-	maxInt64 := int64(^uint64(0) >> 1)
-	maxUint64 := ^uint64(0)
-	decimal256Base, err := types.ParseDecimal256("1"+strings.Repeat("0", 60), 65, 0)
-	require.NoError(t, err)
-	tests := []struct {
-		name   string
-		param  types.Type
-		append func(*testing.T, *vector.Vector, int, int)
-	}{
-		{
-			name:  "int64",
-			param: types.T_int64.ToType(),
-			append: func(t *testing.T, input *vector.Vector, from, to int) {
-				for i := from; i < to; i++ {
-					require.NoError(t, vector.AppendFixed(
-						input, maxInt64-3+int64(i), false, mp))
-				}
-			},
-		},
-		{
-			name:  "uint64",
-			param: types.T_uint64.ToType(),
-			append: func(t *testing.T, input *vector.Vector, from, to int) {
-				for i := from; i < to; i++ {
-					require.NoError(t, vector.AppendFixed(
-						input, maxUint64-3+uint64(i), false, mp))
-				}
-			},
-		},
-		{
-			name:  "bit",
-			param: types.T_bit.ToType(),
-			append: func(t *testing.T, input *vector.Vector, from, to int) {
-				for i := from; i < to; i++ {
-					require.NoError(t, vector.AppendFixed(
-						input, maxUint64-3+uint64(i), false, mp))
-				}
-			},
-		},
-		{
-			name:  "decimal256",
-			param: types.New(types.T_decimal256, 65, 0),
-			append: func(t *testing.T, input *vector.Vector, from, to int) {
-				for i := from; i < to; i++ {
-					value, _, err := decimal256Base.Add(
-						types.Decimal256FromInt64(int64(i)), 0, 0)
-					require.NoError(t, err)
-					require.NoError(t, vector.AppendFixed(input, value, false, mp))
-				}
-			},
-		},
-	}
-
-	for _, tc := range tests {
-		for _, continuation := range []string{"fill", "merge"} {
-			t.Run(tc.name+"/"+continuation, func(t *testing.T) {
-				leftInput := vector.NewVec(tc.param)
-				defer leftInput.Free(mp)
-				tc.append(t, leftInput, 0, 2)
-
-				source := makeVarPopExec(mp, AggIdOfVarPop, false, tc.param)
-				defer source.Free()
-				require.NoError(t, source.GroupGrow(1))
-				require.NoError(t, source.BulkFill(0, []*vector.Vector{leftInput}))
-
-				var wire bytes.Buffer
-				require.NoError(t, source.SaveIntermediateResult(
-					1, [][]uint8{{1}}, &wire))
-				restored := makeVarPopExec(mp, AggIdOfVarPop, false, tc.param)
-				defer restored.Free()
-				require.NoError(t, restored.UnmarshalFromReader(
-					bytes.NewReader(wire.Bytes()), mp))
-
-				rightInput := vector.NewVec(tc.param)
-				defer rightInput.Free(mp)
-				tc.append(t, rightInput, 2, 4)
-				if continuation == "fill" {
-					require.NoError(t, restored.BulkFill(
-						0, []*vector.Vector{rightInput}))
-				} else {
-					right := makeVarPopExec(mp, AggIdOfVarPop, false, tc.param)
-					defer right.Free()
-					require.NoError(t, right.GroupGrow(1))
-					require.NoError(t, right.BulkFill(
-						0, []*vector.Vector{rightInput}))
-					require.NoError(t, restored.Merge(right, 0, 0))
-				}
-
-				results, err := restored.Flush()
-				require.NoError(t, err)
-				defer results[0].Free(mp)
-				require.InDelta(t, 1.25,
-					vector.MustFixedColNoTypeCheck[float64](results[0])[0], 1e-14)
 			})
 		}
 	}
