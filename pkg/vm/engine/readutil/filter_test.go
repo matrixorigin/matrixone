@@ -1192,7 +1192,7 @@ func TestConstructBasePKFilterWithOr(t *testing.T) {
 		expr   *plan.Expr
 		expect expect
 	}
-	testCases := []testCase{
+	testCases := append(make([]testCase, 0, 10), []testCase{
 		{
 			name: "eq or eq",
 			expr: MakeFunctionExprForTest("or", []*plan.Expr{
@@ -1309,7 +1309,7 @@ func TestConstructBasePKFilterWithOr(t *testing.T) {
 				allowMore: true,
 			},
 		},
-	}
+	}...)
 	otherEq := func(v int64) *plan.Expr {
 		return MakeFunctionExprForTest("=", []*plan.Expr{
 			MakeColExprForTest(1, types.T_int64), plan2.MakePlan2Int64ConstExprWithType(v),
