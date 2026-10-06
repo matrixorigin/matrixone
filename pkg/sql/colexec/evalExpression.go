@@ -2186,7 +2186,7 @@ func DecodeLiteralStringSource(literal *plan.Literal) (types.StringSource, error
 	return source, nil
 }
 
-func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Expr) (*vector.Vector, error) {
+func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Expr) (result *vector.Vector, err error) {
 	if err := plan.RequireLegacyCollations(exprs); err != nil {
 		return nil, err
 	}
@@ -2199,6 +2199,13 @@ func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Ex
 	if err != nil {
 		return nil, err
 	}
+	// The constructor owns the partial vector until successful return.
+	defer func() {
+		if err != nil {
+			vec.Free(proc.Mp())
+			result = nil
+		}
+	}()
 	sources := make([]types.StringSource, lenList)
 	for i := 0; i < lenList; i++ {
 		expr := exprs[i]
@@ -2208,7 +2215,6 @@ func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Ex
 		}
 		sources[i], err = DecodeLiteralStringSource(t)
 		if err != nil {
-			vec.Free(proc.Mp())
 			return nil, err
 		}
 		if t.GetIsnull() {
@@ -2303,8 +2309,7 @@ func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Ex
 			vec.SetIsBin(t.IsBin)
 		}
 	}
-	if err := vec.SetStringSourcesWithMP(sources, proc.Mp()); err != nil {
-		vec.Free(proc.Mp())
+	if err = vec.SetStringSourcesWithMP(sources, proc.Mp()); err != nil {
 		return nil, err
 	}
 	return vec, nil

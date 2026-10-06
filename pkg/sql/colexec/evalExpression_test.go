@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -399,112 +400,229 @@ func TestFlowControlMetadataMethods(t *testing.T) {
 	})
 }
 
-func TestStringLiteralFormRestoresOnlyCrossDomainOverride(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	tests := []struct {
-		name          string
-		typ           types.Type
-		form          plan.StringLiteralForm
-		want          types.RuntimeStringDomain
-		wantEffective types.StringDomain
-		wantVarchar   bool
-	}{
-		{name: "text on text", typ: types.T_varchar.ToType(), form: plan.StringLiteralForm_STRING_LITERAL_TEXT, want: types.RuntimeStringInherit, wantEffective: types.StringDomainText},
-		{name: "text on binary", typ: types.T_varbinary.ToType(), form: plan.StringLiteralForm_STRING_LITERAL_TEXT, want: types.RuntimeStringText, wantEffective: types.StringDomainText},
-		{name: "binary on text", typ: types.T_varchar.ToType(), form: plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER, want: types.RuntimeStringBinary, wantEffective: types.StringDomainBinary},
-		{name: "binary on binary", typ: types.T_varbinary.ToType(), form: plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER, want: types.RuntimeStringInherit, wantEffective: types.StringDomainBinary},
-		{name: "raw hex", typ: types.NewWithCharset(types.T_varchar, 0, 0, types.CharsetBinary), form: plan.StringLiteralForm_STRING_LITERAL_HEX, want: types.RuntimeStringInherit, wantEffective: types.StringDomainBinary, wantVarchar: true},
-		{name: "raw bit", typ: types.NewWithCharset(types.T_varchar, 0, 0, types.CharsetBinary), form: plan.StringLiteralForm_STRING_LITERAL_BIT, want: types.RuntimeStringInherit, wantEffective: types.StringDomainBinary, wantVarchar: true},
-		{name: "empty text uses varchar container", typ: types.NewWithCharset(types.T_char, 0, 0, types.CharsetUTF8), form: plan.StringLiteralForm_STRING_LITERAL_TEXT, want: types.RuntimeStringInherit, wantEffective: types.StringDomainText, wantVarchar: true},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			vec, err := generateConstExpressionExecutor(proc, test.typ, &plan.Literal{
-				Value:       &plan.Literal_Sval{Sval: "selected"},
-				LiteralForm: test.form,
-			}, nil)
-			require.NoError(t, err)
-			defer vec.Free(proc.Mp())
-			require.Equal(t, types.StringSourceLiteral, vec.GetStringSourceAt(0))
-			require.Equal(t, test.want, vec.GetRuntimeStringDomainAt(0))
-			effective := types.StaticStringDomain(*vec.GetType())
-			if test.want == types.RuntimeStringText {
-				effective = types.StringDomainText
-			} else if test.want == types.RuntimeStringBinary {
-				effective = types.StringDomainBinary
-			}
-			require.Equal(t, test.wantEffective, effective)
-			if test.wantVarchar {
-				require.Equal(t, types.T_varchar, vec.GetType().Oid)
-			}
-		})
-	}
-}
-
-func TestFoldedBinaryLiteralPreservesResolvedSQLType(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	for _, typ := range []types.Type{
-		types.New(types.T_binary, 3, 0),
-		types.T_varbinary.ToType(),
-		types.T_blob.ToType(),
-	} {
-		vec, err := generateConstExpressionExecutor(proc, typ, &plan.Literal{
-			Value: &plan.Literal_Sval{Sval: "a\x00b"},
-		}, nil)
-		require.NoError(t, err)
-		require.Equal(t, typ.Oid, vec.GetType().Oid)
-		require.Equal(t, []byte("a\x00b"), vec.GetBytesAt(0))
-		vec.Free(proc.Mp())
-	}
-}
-
-func TestConstListExpressionExecutorPreservesLiteralSource(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	exprs := []*plan.Expr{
-		{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "a"}}}},
-		{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "b"}}}},
-	}
-	vec, err := GenerateConstListExpressionExecutor(proc, exprs)
-	require.NoError(t, err)
-	defer vec.Free(proc.Mp())
-	for row := range exprs {
-		require.Equal(t, types.StringSourceLiteral, vec.GetStringSourceAt(row))
-	}
-}
-
-func TestLiteralVecExpressionExecutorRestoresLiteralSource(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	exprs := []*plan.Expr{
-		{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "a"}}}},
-		{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "b"}}}},
-	}
-	direct, err := GenerateConstListExpressionExecutor(proc, exprs)
-	require.NoError(t, err)
-	data, err := direct.MarshalBinary()
-	require.NoError(t, err)
-	direct.Free(proc.Mp())
-
-	executor, err := NewExpressionExecutor(proc, &plan.Expr{
-		Typ: exprs[0].Typ,
-		Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{
-			Len:          int32(len(exprs)),
-			Data:         data,
-			StringSource: uint32(types.StringSourceLiteral),
-		}},
+func TestLiteralMaterialization(t *testing.T) {
+	proc := testutil.NewProcess(t, testutil.WithFileService(nil))
+	t.Run("forms", func(t *testing.T) {
+		tests := []struct {
+			name          string
+			typ           types.Type
+			form          plan.StringLiteralForm
+			want          types.RuntimeStringDomain
+			wantEffective types.StringDomain
+			wantVarchar   bool
+		}{
+			{name: "text on text", typ: types.T_varchar.ToType(), form: plan.StringLiteralForm_STRING_LITERAL_TEXT, want: types.RuntimeStringInherit, wantEffective: types.StringDomainText},
+			{name: "text on binary", typ: types.T_varbinary.ToType(), form: plan.StringLiteralForm_STRING_LITERAL_TEXT, want: types.RuntimeStringText, wantEffective: types.StringDomainText},
+			{name: "binary on text", typ: types.T_varchar.ToType(), form: plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER, want: types.RuntimeStringBinary, wantEffective: types.StringDomainBinary},
+			{name: "binary on binary", typ: types.T_varbinary.ToType(), form: plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER, want: types.RuntimeStringInherit, wantEffective: types.StringDomainBinary},
+			{name: "raw hex", typ: types.NewWithCharset(types.T_varchar, 0, 0, types.CharsetBinary), form: plan.StringLiteralForm_STRING_LITERAL_HEX, want: types.RuntimeStringInherit, wantEffective: types.StringDomainBinary, wantVarchar: true},
+			{name: "raw bit", typ: types.NewWithCharset(types.T_varchar, 0, 0, types.CharsetBinary), form: plan.StringLiteralForm_STRING_LITERAL_BIT, want: types.RuntimeStringInherit, wantEffective: types.StringDomainBinary, wantVarchar: true},
+			{name: "char text uses varchar container", typ: types.NewWithCharset(types.T_char, 0, 0, types.CharsetUTF8), form: plan.StringLiteralForm_STRING_LITERAL_TEXT, want: types.RuntimeStringInherit, wantEffective: types.StringDomainText, wantVarchar: true},
+		}
+		for _, test := range tests {
+			t.Run(test.name, func(t *testing.T) {
+				checkExpressionStorageAfterCleanup(t, proc)
+				vec, err := generateConstExpressionExecutor(proc, test.typ, &plan.Literal{
+					Value:       &plan.Literal_Sval{Sval: "selected"},
+					LiteralForm: test.form,
+				}, nil)
+				if vec != nil {
+					t.Cleanup(func() { vec.Free(proc.Mp()) })
+				}
+				require.NoError(t, err)
+				require.Equal(t, types.StringSourceLiteral, vec.GetStringSourceAt(0))
+				require.Equal(t, test.want, vec.GetRuntimeStringDomainAt(0))
+				effective := types.StaticStringDomain(*vec.GetType())
+				if test.want == types.RuntimeStringText {
+					effective = types.StringDomainText
+				} else if test.want == types.RuntimeStringBinary {
+					effective = types.StringDomainBinary
+				}
+				require.Equal(t, test.wantEffective, effective)
+				if test.wantVarchar {
+					require.Equal(t, types.T_varchar, vec.GetType().Oid)
+				}
+			})
+		}
 	})
-	require.NoError(t, err)
-	defer executor.Free()
+	t.Run("resolved binary", func(t *testing.T) {
+		for _, typ := range []types.Type{types.New(types.T_binary, 3, 0), types.T_varbinary.ToType(), types.T_blob.ToType()} {
+			t.Run(typ.Oid.String(), func(t *testing.T) {
+				checkExpressionStorageAfterCleanup(t, proc)
+				vec, err := generateConstExpressionExecutor(proc, typ, &plan.Literal{Value: &plan.Literal_Sval{Sval: "a\x00b"}}, nil)
+				if vec != nil {
+					t.Cleanup(func() { vec.Free(proc.Mp()) })
+				}
+				require.NoError(t, err)
+				require.Equal(t, typ.Oid, vec.GetType().Oid)
+				require.Equal(t, []byte("a\x00b"), vec.GetBytesAt(0))
+			})
+		}
+	})
+	t.Run("scalar rejection", func(t *testing.T) {
+		for _, isNull := range []bool{false, true} {
+			t.Run(fmt.Sprintf("null=%t", isNull), func(t *testing.T) {
+				checkExpressionStorageAfterCleanup(t, proc)
+				before := proc.Mp().CurrNB()
+				bytes, objects := proc.Mp().OnHeapOutstanding()
+				executor, err := NewExpressionExecutor(proc, &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: isNull, Value: &plan.Literal_Sval{Sval: "value"}, StringSource: 257}}})
+				if executor != nil {
+					t.Cleanup(executor.Free)
+				}
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "%v", err)
+				require.ErrorContains(t, err, "invalid literal string source 257")
+				require.Nil(t, executor)
+				require.Equal(t, before, proc.Mp().CurrNB())
+				afterBytes, afterObjects := proc.Mp().OnHeapOutstanding()
+				require.Equal(t, bytes, afterBytes)
+				require.Equal(t, objects, afterObjects)
+			})
+		}
+	})
+	t.Run("list and vector", func(t *testing.T) {
+		var data []byte
+		if !t.Run("direct", func(t *testing.T) {
+			checkExpressionStorageAfterCleanup(t, proc)
+			exprs := []*plan.Expr{
+				{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "a"}}}},
+				{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "b"}}}},
+			}
+			vec, err := GenerateConstListExpressionExecutor(proc, exprs)
+			if vec != nil {
+				t.Cleanup(func() { vec.Free(proc.Mp()) })
+			}
+			require.NoError(t, err)
+			require.Equal(t, 2, vec.Length())
+			for row, want := range []string{"a", "b"} {
+				require.Equal(t, types.StringSourceLiteral, vec.GetStringSourceAt(row))
+				require.Equal(t, want, vec.GetStringAt(row))
+			}
+			data, err = vec.MarshalBinary()
+			require.NoError(t, err)
+		}) {
+			return
+		}
+		for _, source := range []uint32{uint32(types.StringSourceLiteral), uint32(types.StringSourceCOMStmt) + 1, 256, 257, ^uint32(0)} {
+			name := fmt.Sprintf("rejected source %d", source)
+			if source == uint32(types.StringSourceLiteral) {
+				name = "decoded"
+			}
+			t.Run(name, func(t *testing.T) {
+				checkExpressionStorageAfterCleanup(t, proc)
+				before := proc.Mp().CurrNB()
+				bytes, objects := proc.Mp().OnHeapOutstanding()
+				executor, err := NewExpressionExecutor(proc, &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Len: 2, Data: data, StringSource: source}}})
+				if executor != nil {
+					t.Cleanup(executor.Free)
+				}
+				if source != uint32(types.StringSourceLiteral) {
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "%v", err)
+					require.ErrorContains(t, err, fmt.Sprintf("invalid literal vector string source %d", source))
+					require.Nil(t, executor)
+					require.Equal(t, before, proc.Mp().CurrNB())
+					afterBytes, afterObjects := proc.Mp().OnHeapOutstanding()
+					require.Equal(t, bytes, afterBytes)
+					require.Equal(t, objects, afterObjects)
+					return
+				}
+				require.NoError(t, err)
+				result, err := executor.Eval(proc, nil, nil)
+				require.NoError(t, err)
+				require.Equal(t, 2, result.Length())
+				for row, want := range []string{"a", "b"} {
+					require.Equal(t, types.StringSourceLiteral, result.GetStringSourceAt(row))
+					require.Equal(t, want, result.GetStringAt(row))
+				}
+			})
+		}
+	})
+	t.Run("list failure ownership", func(t *testing.T) {
+		for _, test := range []struct {
+			name  string
+			later *plan.Expr
+			code  uint16
+		}{
+			{"nonliteral", &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}, moerr.ErrInternal},
+			{"timestamp precision", &plan.Expr{Typ: plan.Type{Id: int32(types.T_timestamp), Scale: 7}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Timestampval{Timestampval: 1}}}}, moerr.ErrTooBigPrecision},
+			{"unsupported payload", &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{}}}, moerr.ErrNYI},
+			{"payload write", &plan.Expr{Typ: plan.Type{Id: int32(types.T_json)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: ""}}}}, moerr.ErrInvalidInput},
+			{"invalid source", &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "b"}, StringSource: 257}}}, moerr.ErrInvalidInput},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				checkExpressionStorageAfterCleanup(t, proc)
+				first := &plan.Expr{Typ: test.later.Typ, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "a"}}}}
+				if test.later.Typ.Id == int32(types.T_timestamp) {
+					first.Expr = &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Timestampval{Timestampval: 1}}}
+					first.Typ.Scale = 6
+				}
+				if test.later.Typ.Id == int32(types.T_json) {
+					first.Expr = &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}
+				}
+				before := proc.Mp().CurrNB()
+				bytes, objects := proc.Mp().OnHeapOutstanding()
+				vec, err := GenerateConstListExpressionExecutor(proc, []*plan.Expr{first, test.later})
+				if vec != nil {
+					t.Cleanup(func() { vec.Free(proc.Mp()) })
+				}
+				require.True(t, moerr.IsMoErrCode(err, test.code), "%v", err)
+				require.Nil(t, vec)
+				require.Equal(t, before, proc.Mp().CurrNB())
+				afterBytes, afterObjects := proc.Mp().OnHeapOutstanding()
+				require.Equal(t, bytes, afterBytes)
+				require.Equal(t, objects, afterObjects)
+			})
+		}
+	})
+	t.Run("sidecar capacity", func(t *testing.T) {
+		const capacity = 1 << 20
+		pool, err := mpool.NewMPool("literal list sidecar", capacity, mpool.NoFixed)
+		if pool != nil {
+			t.Cleanup(func() { mpool.DeleteMPool(pool) })
+		}
+		require.NoError(t, err)
+		proc := testutil.NewProcess(t, testutil.WithMPool(pool), testutil.WithFileService(nil))
+		checkExpressionStorageAfterCleanup(t, proc)
+		pressure, err := pool.Alloc(capacity-1, true)
+		if pressure != nil {
+			t.Cleanup(func() { pool.Free(pressure) })
+		}
+		require.NoError(t, err)
+		exprs := []*plan.Expr{
+			{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "a"}}}},
+			{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "b"}, StringSource: uint32(types.StringSourceSQLPrepare) + 1}}},
+		}
+		before := pool.CurrNB()
+		bytes, objects := pool.OnHeapOutstanding()
+		vec, err := GenerateConstListExpressionExecutor(proc, exprs)
+		if vec != nil {
+			t.Cleanup(func() { vec.Free(pool) })
+		}
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrMPoolCapacity), "%v", err)
+		require.Nil(t, vec)
+		require.Equal(t, before, pool.CurrNB())
+		afterBytes, afterObjects := pool.OnHeapOutstanding()
+		require.Equal(t, bytes, afterBytes)
+		require.Equal(t, objects, afterObjects)
+		pool.Free(pressure)
+		pressure = nil
+		recovered, err := GenerateConstListExpressionExecutor(proc, exprs)
+		if recovered != nil {
+			t.Cleanup(func() { recovered.Free(pool) })
+		}
+		require.NoError(t, err)
+		require.Equal(t, 2, recovered.Length())
+		require.Equal(t, "a", recovered.GetStringAt(0))
+		require.Equal(t, "b", recovered.GetStringAt(1))
+		require.Equal(t, types.StringSourceLiteral, recovered.GetStringSourceAt(0))
+		require.Equal(t, types.StringSourceSQLPrepare, recovered.GetStringSourceAt(1))
+	})
 
-	result, err := executor.Eval(proc, nil, nil)
-	require.NoError(t, err)
-	for row := range exprs {
-		require.Equal(t, types.StringSourceLiteral, result.GetStringSourceAt(row))
-	}
 }
 
 func TestLiteralStringSourceRejectsWideWireValuesBeforeNarrowing(t *testing.T) {
 	for _, rawSource := range []uint32{256, 257, ^uint32(0)} {
 		_, err := DecodeLiteralStringSource(&plan.Literal{StringSource: rawSource})
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "%v", err)
 		require.ErrorContains(t, err, "invalid literal string source")
 	}
 	for source := types.StringSourceExpression; source <= types.StringSourceCOMStmt; source++ {
@@ -515,49 +633,6 @@ func TestLiteralStringSourceRejectsWideWireValuesBeforeNarrowing(t *testing.T) {
 		decoded, err := DecodeLiteralStringSource(&plan.Literal{StringSource: encoded})
 		require.NoError(t, err)
 		require.Equal(t, source, decoded)
-	}
-}
-
-func TestLiteralExecutorRejectsInvalidSourceWithoutAllocation(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
-	for _, isNull := range []bool{false, true} {
-		func() {
-			literal := &plan.Literal{Isnull: isNull, Value: &plan.Literal_Sval{Sval: "value"}, StringSource: 257}
-			before := proc.Mp().CurrNB()
-			executor, err := NewExpressionExecutor(proc, &plan.Expr{
-				Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: literal},
-			})
-			if executor != nil {
-				defer executor.Free()
-			}
-			require.ErrorContains(t, err, "invalid literal string source")
-			require.Nil(t, executor)
-			require.Equal(t, before, proc.Mp().CurrNB())
-		}()
-	}
-}
-
-func TestLiteralVecExpressionExecutorRejectsInvalidStringSource(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	vec := vector.NewVec(types.T_varchar.ToType())
-	require.NoError(t, vector.AppendBytes(vec, []byte("value"), false, proc.Mp()))
-	data, err := vec.MarshalBinary()
-	require.NoError(t, err)
-	vec.Free(proc.Mp())
-
-	for _, source := range []uint32{
-		uint32(types.StringSourceCOMStmt) + 1, 256, 257, ^uint32(0),
-	} {
-		_, err = NewExpressionExecutor(proc, &plan.Expr{
-			Typ: plan.Type{Id: int32(types.T_varchar)},
-			Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{
-				Len:          1,
-				Data:         data,
-				StringSource: source,
-			}},
-		})
-		require.Error(t, err)
 	}
 }
 
