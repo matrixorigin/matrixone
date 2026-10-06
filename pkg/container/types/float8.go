@@ -39,8 +39,8 @@ func Float32RoundToOdd(v float64) float32 {
 }
 
 // Float32RoundToOddString is Float32RoundToOdd of the exact value of decimal text s, and
-// that value parsed to float64 for range checks. Where the float64 is a float32 value but
-// the text is not, the text's side of it sets the last bit; 1024-bit arithmetic decides it.
+// that value parsed to float64 for range checks. Where the float64 is a float32 value, the
+// exact rational value of the text decides on which side of it the text lies.
 func Float32RoundToOddString(s string) (float32, float64, error) {
 	s = strings.TrimSpace(s)
 	d, err := strconv.ParseFloat(s, 64)
@@ -51,19 +51,51 @@ func Float32RoundToOddString(s string) (float32, float64, error) {
 	if float64(f) != d || math.IsInf(d, 0) {
 		return f, d, nil
 	}
-	x, ok := new(big.Float).SetPrec(1024).SetString(s)
-	if !ok {
-		return f, d, nil
-	}
-	c := x.Cmp(new(big.Float).SetFloat64(d))
+	c, neg := decimalSide(s, d)
 	if c == 0 {
 		return f, d, nil
 	}
 	// the exact value lies beyond d, away from zero, or between d and zero
-	if (c > 0) != (x.Sign() < 0) {
+	if (c > 0) != neg {
 		return math.Float32frombits(math.Float32bits(f) | 1), d, nil
 	}
 	return math.Float32frombits(math.Float32bits(math.Nextafter32(f, 0)) | 1), d, nil
+}
+
+// decimalSide compares the exact value of decimal text s with d, its float64 parse: -1, 0 or
+// +1, and whether s is negative. A text of zero float64 is compared by its digits; otherwise
+// the exponent field is within len(s)+400 of the value's decimal exponent, which bounds the
+// rational arithmetic. Hexadecimal text is taken as d.
+func decimalSide(s string, d float64) (int, bool) {
+	neg := strings.HasPrefix(s, "-")
+	body := strings.TrimLeft(s, "+-")
+	if len(body) > 1 && body[0] == '0' && (body[1] == 'x' || body[1] == 'X') {
+		return 0, neg
+	}
+	mant, exp := body, ""
+	if i := strings.IndexAny(body, "eE"); i >= 0 {
+		mant, exp = body[:i], body[i+1:]
+	}
+	if d == 0 {
+		if !strings.ContainsAny(mant, "123456789") {
+			return 0, neg
+		}
+		if neg {
+			return -1, neg
+		}
+		return 1, neg
+	}
+	if exp != "" {
+		e, err := strconv.Atoi(exp)
+		if err != nil || e > len(s)+400 || e < -(len(s)+400) {
+			return 0, neg
+		}
+	}
+	x, ok := new(big.Rat).SetString(s)
+	if !ok {
+		return 0, neg
+	}
+	return x.Cmp(new(big.Rat).SetFloat64(d)), neg
 }
 
 // Float32RoundToOddUint is Float32RoundToOdd of u, from its bits.

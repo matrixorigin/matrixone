@@ -18,6 +18,7 @@ import (
 	"math"
 	"math/rand"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -121,6 +122,35 @@ func TestFloat32RoundToOddExactSources(t *testing.T) {
 		require.NoError(t, err, c.text)
 		require.Equal(t, c.want, bf16(f), c.text)
 	}
+	// digits beyond any fixed working precision still decide the side of a tie: float8
+	// 1.0625 is the midpoint of 1 and 1.125
+	f8 := func(f float32) float32 { return Float8FromFloat32(f).ToFloat32() }
+	for _, zeros := range []int{20, 300, 310, 400, 2000} {
+		for _, sign := range []float32{1, -1} {
+			prefix := "1.0625"
+			if sign < 0 {
+				prefix = "-1.0625"
+			}
+			above := prefix + strings.Repeat("0", zeros) + "1"
+			f, _, err := Float32RoundToOddString(above)
+			require.NoError(t, err)
+			require.Equal(t, sign*1.125, f8(f), "%d zeros above", zeros)
+			below := strings.TrimSuffix(prefix, "5") + "4" + strings.Repeat("9", zeros)
+			f, _, err = Float32RoundToOddString(below)
+			require.NoError(t, err)
+			require.Equal(t, sign*1, f8(f), "%d nines below", zeros)
+			f, _, err = Float32RoundToOddString(prefix + strings.Repeat("0", zeros))
+			require.NoError(t, err)
+			require.Equal(t, sign*1, f8(f), "%d zeros at the tie, to even", zeros)
+		}
+	}
+	// an exponent field far from the value's is taken as the float64
+	f, _, err := Float32RoundToOddString("1.0625e0")
+	require.NoError(t, err)
+	require.Equal(t, float32(1), f8(f))
+	_, _, err = Float32RoundToOddString("1e-100000000")
+	require.NoError(t, err)
+
 	// text below the float64 range is not zero: the smallest float32 of its sign
 	f, d, err := Float32RoundToOddString("1e-400")
 	require.NoError(t, err)
