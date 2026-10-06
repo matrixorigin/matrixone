@@ -168,10 +168,14 @@ func TestProductPassesRecursiveMarker(t *testing.T) {
 
 			require.NoError(t, tc.arg.Prepare(tc.proc))
 			require.NoError(t, tc.barg.Prepare(tc.proc))
-			res, err := vm.Exec(tc.barg, tc.proc)
-			require.NoError(t, err)
-			require.Nil(t, res.Batch)
-			res, err = vm.Exec(tc.arg, tc.proc)
+			if test.probeData {
+				res, err := vm.Exec(tc.barg, tc.proc)
+				require.NoError(t, err)
+				require.Nil(t, res.Batch)
+			}
+			// The first marker must pass even before the build publishes: a
+			// recursive round can depend on this progress signal.
+			res, err := vm.Exec(tc.arg, tc.proc)
 			require.NoError(t, err)
 			require.Same(t, marker, res.Batch)
 		})
