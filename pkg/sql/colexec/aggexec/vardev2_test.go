@@ -21,6 +21,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -1069,65 +1070,72 @@ func TestDecimalDeviationToFloat64Branches(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestStdDevPopDecimal128WideDeviation(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer mpool.DeleteMPool(mp)
-
+func TestVarianceWideDecimalResults(t *testing.T) {
+	mp := newAggExecTestPool(t)
 	param := types.New(types.T_decimal128, 38, 20)
 	positive, err := types.ParseDecimal128("900000000000000000.00000000000000000000", 38, 20)
 	require.NoError(t, err)
 	negative, err := types.ParseDecimal128("-900000000000000000.00000000000000000000", 38, 20)
 	require.NoError(t, err)
-
-	makeInput := func(values ...types.Decimal128) *vector.Vector {
-		input := vector.NewVec(param)
-		for _, value := range values {
-			require.NoError(t, vector.AppendFixed(input, value, false, mp))
-		}
-		return input
+	input := varianceInput(t, mp, param, []types.Decimal128{positive, negative}, nil)
+	leftInput := varianceInput(t, mp, param, []types.Decimal128{positive}, nil)
+	rightInput := varianceInput(t, mp, param, []types.Decimal128{negative}, nil)
+	// Preserve the existing 1e-15 relative bound (900 at magnitude9e17)
+	// without converting the materialized decimal back to float64.
+	lower, err := types.ParseDecimal128("899999999999999100.00000000000000000000", 38, 20)
+	require.NoError(t, err)
+	upper, err := types.ParseDecimal128("900000000000000900.00000000000000000000", 38, 20)
+	require.NoError(t, err)
+	for _, mode := range []string{"resident", "distinct", "merge"} {
+		t.Run("stddev/"+mode, func(t *testing.T) {
+			exec := varianceExec(t, mp, AggIdOfStdDevPop, mode == "distinct", param)
+			require.NoError(t, exec.GroupGrow(1))
+			if mode == "merge" {
+				right := varianceExec(t, mp, AggIdOfStdDevPop, false, param)
+				require.NoError(t, right.GroupGrow(1))
+				require.NoError(t, exec.BulkFill(0, []*vector.Vector{leftInput}))
+				require.NoError(t, right.BulkFill(0, []*vector.Vector{rightInput}))
+				require.NoError(t, exec.Merge(right, 0, 0))
+			} else {
+				require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
+			}
+			result := varianceResult(t, mp, exec, types.New(types.T_decimal128, 38, 20), []bool{false})
+			got := vector.MustFixedColWithTypeCheck[types.Decimal128](result)[0]
+			require.GreaterOrEqual(t, got.Compare(lower), 0)
+			require.LessOrEqual(t, got.Compare(upper), 0)
+		})
 	}
-	checkResult := func(t *testing.T, exec AggFuncExec) {
-		t.Helper()
-		vecs, err := exec.Flush()
-		require.NoError(t, err)
-		defer vecs[0].Free(mp)
-		got := vector.MustFixedColNoTypeCheck[types.Decimal128](vecs[0])[0]
-		require.InEpsilon(t, 9e17, types.Decimal128ToFloat64(got, vecs[0].GetType().Scale), 1e-15)
+	// The standard deviation fits, but variance 8.1e35 exceeds the return
+	// precision. Empty and singleton rows are constructed before that error.
+	for _, mode := range []string{"resident", "distinct", "legacy"} {
+		t.Run("variance-overflow/"+mode, func(t *testing.T) {
+			var exec AggFuncExec
+			if mode == "legacy" {
+				exec = makeVarPopExec(mp, AggIdOfVarPop, false, param, true)
+				t.Cleanup(exec.Free)
+			} else {
+				exec = varianceExec(t, mp, AggIdOfVarPop, mode == "distinct", param)
+			}
+			require.NoError(t, exec.GroupGrow(3))
+			require.NoError(t, exec.BulkFill(1, []*vector.Vector{leftInput}))
+			require.NoError(t, exec.BulkFill(2, []*vector.Vector{input}))
+			beforeNB := mp.CurrNB()
+			beforeBytes, beforeObjects := mp.OnHeapOutstanding()
+			results, err := exec.Flush()
+			for _, result := range results {
+				if result != nil {
+					t.Cleanup(func() { result.Free(mp) })
+				}
+			}
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "error: %v", err)
+			require.Nil(t, results)
+			// Check while the executor is still alive: its cleanup cannot mask a leak.
+			require.Equal(t, beforeNB, mp.CurrNB())
+			afterBytes, afterObjects := mp.OnHeapOutstanding()
+			require.Equal(t, beforeBytes, afterBytes)
+			require.Equal(t, beforeObjects, afterObjects)
+		})
 	}
-
-	t.Run("bulk", func(t *testing.T) {
-		input := makeInput(positive, negative)
-		defer input.Free(mp)
-		exec := makeStdDevPopExec(mp, AggIdOfStdDevPop, false, param)
-		defer exec.Free()
-		require.NoError(t, exec.GroupGrow(1))
-		require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
-		checkResult(t, exec)
-	})
-	t.Run("distinct", func(t *testing.T) {
-		input := makeInput(positive, negative)
-		defer input.Free(mp)
-		exec := makeStdDevPopExec(mp, AggIdOfStdDevPop, true, param)
-		defer exec.Free()
-		require.NoError(t, exec.GroupGrow(1))
-		require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
-		checkResult(t, exec)
-	})
-	t.Run("merge", func(t *testing.T) {
-		leftInput, rightInput := makeInput(positive), makeInput(negative)
-		defer leftInput.Free(mp)
-		defer rightInput.Free(mp)
-		left := makeStdDevPopExec(mp, AggIdOfStdDevPop, false, param)
-		right := makeStdDevPopExec(mp, AggIdOfStdDevPop, false, param)
-		defer left.Free()
-		defer right.Free()
-		require.NoError(t, left.GroupGrow(1))
-		require.NoError(t, right.GroupGrow(1))
-		require.NoError(t, left.BulkFill(0, []*vector.Vector{leftInput}))
-		require.NoError(t, right.BulkFill(0, []*vector.Vector{rightInput}))
-		require.NoError(t, left.Merge(right, 0, 0))
-		checkResult(t, left)
-	})
 }
 
 func TestVarianceCardinality(t *testing.T) {
