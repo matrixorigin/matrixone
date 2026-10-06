@@ -75,31 +75,25 @@ func TestPrepare(t *testing.T) {
 
 func TestOffset(t *testing.T) {
 	for _, tc := range makeTestCases(t) {
-		err := tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-		bats := []*batch.Batch{
-			newBatch(tc.types, tc.proc, Rows),
-			newBatch(tc.types, tc.proc, Rows),
-			batch.EmptyBatch,
+		t.Cleanup(func() {
+			tc.arg.Free(tc.proc, false, nil)
+			require.Zero(t, tc.proc.Mp().CurrNB())
+		})
+		for range 2 {
+			func() {
+				bats := []*batch.Batch{
+					newBatch(tc.types, tc.proc, Rows),
+					newBatch(tc.types, tc.proc, Rows),
+					batch.EmptyBatch,
+				}
+				child := resetChildren(tc.arg, bats)
+				defer child.Free(tc.proc, false, nil)
+				defer tc.arg.Reset(tc.proc, false, nil)
+				require.NoError(t, tc.arg.Prepare(tc.proc))
+				_, err := vm.Exec(tc.arg, tc.proc)
+				require.NoError(t, err)
+			}()
 		}
-		resetChildren(tc.arg, bats)
-		_, _ = vm.Exec(tc.arg, tc.proc)
-		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
-		tc.arg.Reset(tc.proc, false, nil)
-
-		err = tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-		bats = []*batch.Batch{
-			newBatch(tc.types, tc.proc, Rows),
-			newBatch(tc.types, tc.proc, Rows),
-			batch.EmptyBatch,
-		}
-		resetChildren(tc.arg, bats)
-		_, _ = vm.Exec(tc.arg, tc.proc)
-		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
-		tc.arg.Free(tc.proc, false, nil)
-		tc.proc.Free()
-		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
 
@@ -261,8 +255,9 @@ func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }
 
-func resetChildren(arg *Offset, bats []*batch.Batch) {
+func resetChildren(arg *Offset, bats []*batch.Batch) *colexec.MockOperator {
 	op := colexec.NewMockOperator().WithBatchs(bats)
 	arg.Children = nil
 	arg.AppendChild(op)
+	return op
 }

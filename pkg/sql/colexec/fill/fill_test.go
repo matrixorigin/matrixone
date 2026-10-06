@@ -88,21 +88,21 @@ func TestPrepare(t *testing.T) {
 
 func TestFill(t *testing.T) {
 	for _, tc := range makeTestCases(t) {
+		t.Cleanup(func() {
+			tc.arg.Free(tc.proc, false, nil)
+			require.Zero(t, tc.proc.Mp().CurrNB())
+		})
 		tc.arg.ctr.bats = make([]*batch.Batch, 10)
-		resetChildren(tc.arg, tc.proc.Mp())
-		err := tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-		_, _ = vm.Exec(tc.arg, tc.proc)
-
-		tc.arg.Reset(tc.proc, false, nil)
-
-		resetChildren(tc.arg, tc.proc.Mp())
-		err = tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-		_, _ = vm.Exec(tc.arg, tc.proc)
-		tc.arg.Free(tc.proc, false, nil)
-		tc.proc.Free()
-		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+		for range 2 {
+			func() {
+				child := resetChildren(tc.arg, tc.proc.Mp())
+				defer child.Free(tc.proc, false, nil)
+				defer tc.arg.Reset(tc.proc, false, nil)
+				require.NoError(t, tc.arg.Prepare(tc.proc))
+				_, err := vm.Exec(tc.arg, tc.proc)
+				require.NoError(t, err)
+			}()
+		}
 	}
 }
 
@@ -450,12 +450,13 @@ func BenchmarkSetLinearInterpolatedValueDecimal256(b *testing.B) {
 	}
 }
 
-func resetChildren(arg *Fill, m *mpool.MPool) {
+func resetChildren(arg *Fill, m *mpool.MPool) *colexec.MockOperator {
 	bat1 := colexec.MakeMockBatchsWithNullVec1(m)
 	bat := colexec.MakeMockBatchsWithNullVec(m)
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat1, bat, bat})
 	arg.Children = nil
 	arg.AppendChild(op)
+	return op
 }
 
 func Test_appendValue(t *testing.T) {

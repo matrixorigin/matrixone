@@ -75,30 +75,26 @@ func TestPrepare(t *testing.T) {
 
 func TestLimit(t *testing.T) {
 	for _, tc := range makeTestCases(t) {
-		resetChildren(tc.arg, tc.proc.Mp())
-		err := tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-		res, _ := vm.Exec(tc.arg, tc.proc)
-		if tc.getRowCount > 0 {
-			require.Equal(t, res.Batch.RowCount(), tc.getRowCount)
-		} else {
-			require.Equal(t, res.Batch == nil, true)
+		t.Cleanup(func() {
+			tc.arg.Free(tc.proc, false, nil)
+			require.Zero(t, tc.proc.Mp().CurrNB())
+		})
+		for range 2 {
+			func() {
+				child := resetChildren(tc.arg, tc.proc.Mp())
+				defer child.Free(tc.proc, false, nil)
+				defer tc.arg.Reset(tc.proc, false, nil)
+				require.NoError(t, tc.arg.Prepare(tc.proc))
+				res, err := vm.Exec(tc.arg, tc.proc)
+				require.NoError(t, err)
+				if tc.getRowCount > 0 {
+					require.NotNil(t, res.Batch)
+					require.Equal(t, tc.getRowCount, res.Batch.RowCount())
+				} else {
+					require.Nil(t, res.Batch)
+				}
+			}()
 		}
-		tc.arg.Reset(tc.proc, false, nil)
-
-		resetChildren(tc.arg, tc.proc.Mp())
-		err = tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-		res, _ = vm.Exec(tc.arg, tc.proc)
-		if tc.getRowCount > 0 {
-			require.Equal(t, res.Batch.RowCount(), tc.getRowCount)
-		} else {
-			require.Equal(t, res.Batch == nil, true)
-		}
-
-		tc.arg.Free(tc.proc, false, nil)
-		tc.proc.Free()
-		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
 
@@ -355,9 +351,10 @@ func BenchmarkLimit(b *testing.B) {
 	}
 }
 
-func resetChildren(arg *Limit, m *mpool.MPool) {
+func resetChildren(arg *Limit, m *mpool.MPool) *colexec.MockOperator {
 	bat := colexec.MakeMockBatchs(m)
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil
 	arg.AppendChild(op)
+	return op
 }
