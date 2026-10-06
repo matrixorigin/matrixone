@@ -99,7 +99,7 @@ func TestCharsetAdmissionHandshake(t *testing.T) {
 	for _, id := range []byte{8, 47, 65, 192, 224, 33, 45, 46, 63, 83, 255} {
 		capabilities := uint32(CLIENT_PROTOCOL_41 | CLIENT_SECURE_CONNECTION)
 		proto := &MysqlProtocolImpl{io: gIO, capability: capabilities, collationID: 45, charset: "utf8mb4", authResponse: []byte("unchanged")}
-		payload := make([]byte, 32)
+		payload := make([]byte, 32, 35)
 		binary.LittleEndian.PutUint32(payload, capabilities)
 		payload[8] = id
 		payload = append(payload, 'u', 0, 0)

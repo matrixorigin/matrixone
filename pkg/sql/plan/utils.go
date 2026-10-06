@@ -964,7 +964,7 @@ func checkStrictJoinPred(onPred *plan.Expr) (bool, *ColRef, *ColRef) {
 }
 
 func splitPlanConjunctions(exprList []*plan.Expr) []*plan.Expr {
-	var exprs []*plan.Expr
+	exprs := make([]*plan.Expr, 0, len(exprList))
 	for _, expr := range exprList {
 		exprs = append(exprs, splitPlanConjunction(expr)...)
 	}

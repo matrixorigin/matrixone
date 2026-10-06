@@ -3240,6 +3240,7 @@ func initCastTestCase() []tcTemp {
 	}
 
 	// init the testCases
+	testCases = make([]tcTemp, 0, len(castFloat64ToOthers)+len(castFloat32ToOthers)+len(castStrToOthers)+len(castDecToOthers)+len(castDateToOthers)+len(castTimestampToOthers)+len(castArrayFloat32ToOthers)+len(castArrayFloat64ToOthers)+len(castBitToOthers)+len(castToSameTypeCases)+len(castInt8ToOthers)+len(castInt16ToOthers)+len(castInt32ToOthers)+len(castInt64ToOthers)+len(castUint8ToOthers)+len(castUint16ToOthers)+len(castUint32ToOthers)+len(castUint64ToOthers))
 	testCases = append(testCases, castFloat64ToOthers...)
 	testCases = append(testCases, castFloat32ToOthers...)
 	testCases = append(testCases, castStrToOthers...)

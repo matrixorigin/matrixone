@@ -26,16 +26,17 @@ func TestMockEchoModel(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	msgs := []Message{
-		{
+	msgs := make([]Message, 0, 3)
+	msgs = append(msgs,
+		Message{
 			Role:    "system",
 			Content: "You are a helpful assistant.",
 		},
-		{
+		Message{
 			Role:    "user",
 			Content: "Hello, world!",
 		},
-	}
+	)
 
 	reply, err := client.ChatMsg(context.Background(), msgs)
 	if err != nil {

@@ -229,7 +229,7 @@ func (rule *GetParamRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 }
 
 func (rule *GetParamRule) SetParamOrder() {
-	argPos := []int{}
+	argPos := make([]int, 0, len(rule.params))
 	for pos := range rule.params {
 		argPos = append(argPos, pos)
 	}

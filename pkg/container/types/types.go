@@ -16,6 +16,7 @@ package types
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/binary"
 	"fmt"
 
@@ -487,7 +488,7 @@ type Times interface {
 }
 
 type OrderedT interface {
-	constraints.Ordered
+	cmp.Ordered
 }
 
 type Decimal interface {

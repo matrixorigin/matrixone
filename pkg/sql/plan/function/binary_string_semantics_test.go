@@ -690,7 +690,8 @@ func TestByteLikeSegmentMatcherFindsLateValidAlignment(t *testing.T) {
 func TestByteLikeSegmentMatcherRejectsRepeatedAnchor(t *testing.T) {
 	mp := mpool.MustNewZero()
 	value := bytes.Repeat([]byte{'a'}, 32_000)
-	pattern := []byte{'%', 'a'}
+	pattern := make([]byte, 0, 16_002)
+	pattern = append(pattern, '%', 'a')
 	pattern = append(pattern, bytes.Repeat([]byte{'_'}, 16_000-2)...)
 	pattern = append(pattern, 'b', '%')
 	matched, err := byteLike(pattern, value, nil, false, mp)
@@ -913,7 +914,8 @@ func makeDenseDirectMultiSegmentByteLike(segmentCount, segmentLength int) (value
 
 func makeSingleCandidateByteLike(segmentLength int) (value, pattern []byte) {
 	value = bytes.Repeat([]byte{'a'}, segmentLength)
-	pattern = []byte{'%', 'a'}
+	pattern = make([]byte, 0, segmentLength+2)
+	pattern = append(pattern, '%', 'a')
 	pattern = append(pattern, bytes.Repeat([]byte{'_'}, segmentLength-2)...)
 	pattern = append(pattern, 'a', '%')
 	return value, pattern
@@ -1086,7 +1088,8 @@ func TestByteLikeDirectVerificationHonorsMidMatchCancellation(t *testing.T) {
 func makeEqualFrequencyByteLikeAdversary(size int) (value, pattern []byte) {
 	value = append(bytes.Repeat([]byte{'a'}, size), bytes.Repeat([]byte{'b'}, size+1)...)
 	value = append(value, bytes.Repeat([]byte{'a'}, size)...)
-	pattern = []byte{'%', 'a'}
+	pattern = make([]byte, 0, 2*size+3)
+	pattern = append(pattern, '%', 'a')
 	pattern = append(pattern, bytes.Repeat([]byte{'_'}, size-1)...)
 	pattern = append(pattern, 'a')
 	pattern = append(pattern, bytes.Repeat([]byte{'_'}, size-1)...)
@@ -1405,7 +1408,8 @@ func BenchmarkByteLikeRepeatedAnchorRejection(b *testing.B) {
 	for _, size := range []int{2_000, 4_000, 8_000, 16_000, 32_000, 64_000} {
 		b.Run(fmt.Sprintf("n=%d", size), func(b *testing.B) {
 			value := bytes.Repeat([]byte{'a'}, size)
-			pattern := []byte{'%', 'a'}
+			pattern := make([]byte, 0, size/2+2)
+			pattern = append(pattern, '%', 'a')
 			pattern = append(pattern, bytes.Repeat([]byte{'_'}, size/2-2)...)
 			pattern = append(pattern, 'b', '%')
 			compiled, err := compileByteLikePattern(pattern, nil, false, mpool.MustNewZero())

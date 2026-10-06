@@ -310,7 +310,7 @@ func (builder *QueryBuilder) buildRemapErrorMessage(
 	// Available columns
 	if len(colMap) > 0 {
 		sb.WriteString("✅ Available Columns in Context:\n")
-		var keyPairs []string
+		keyPairs := make([]string, 0, len(colMap))
 		for k := range colMap {
 			name := builder.nameByColRef[k]
 			if name == "" {
@@ -3948,7 +3948,7 @@ func (builder *QueryBuilder) rewriteStarApproxCount(nodeID int32) {
 							},
 						}
 
-						var exprs []*plan.Expr
+						exprs := make([]*plan.Expr, 0, 2)
 						str := child.ObjRef.SchemaName + "." + child.TableDef.Name
 						exprs = append(exprs, makePlan2StringConstExprWithType(str))
 						str = child.TableDef.Cols[0].Name
