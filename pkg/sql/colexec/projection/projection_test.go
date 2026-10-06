@@ -44,7 +44,7 @@ type projectionTestCase struct {
 func makeTestCases(t *testing.T) []projectionTestCase {
 	return []projectionTestCase{
 		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			proc: testutil.NewProcess(t),
 			types: []types.Type{
 				types.T_int32.ToType(),
 			},

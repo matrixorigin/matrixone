@@ -172,7 +172,7 @@ func BenchmarkOrder(b *testing.B) {
 func newTestCase(t testing.TB, ts []types.Type, fs []*plan.OrderBySpec) orderTestCase {
 	return orderTestCase{
 		types: ts,
-		proc:  testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+		proc:  testutil.NewProcess(t),
 		arg: &Order{
 			OrderBySpec: fs,
 		},
