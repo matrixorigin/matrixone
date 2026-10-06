@@ -206,67 +206,177 @@ func TestMemoRowAlignmentClassification(t *testing.T) {
 	}
 }
 
-func TestListExpressionExecutor(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	bat := testutil.NewBatch(
-		[]types.Type{types.T_int64.ToType()},
-		true, 10, proc.Mp())
-
-	// build plan_list
-	exprList := []*plan.Expr{
-		makePlan2Int64ConstExprWithType(1),
-		makePlan2Int64ConstExprWithType(2),
+func TestConstantExpressionMaterialization(t *testing.T) {
+	proc := testutil.NewProcess(t, testutil.WithFileService(nil))
+	checkExpressionStorageAfterCleanup(t, proc)
+	t.Run("list_reset_transfer", func(t *testing.T) {
+		checkExpressionStorageAfterCleanup(t, proc)
+		bat := batch.New(nil)
+		t.Cleanup(func() { bat.Clean(proc.Mp()) })
+		bat.SetRowCount(10)
+		expr := &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true},
+			Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{
+				makePlan2Int64ConstExprWithType(1), makePlan2Int64ConstExprWithType(2),
+			}}},
+		}
+		executor, err := NewExpressionExecutor(proc, expr)
+		t.Cleanup(func() {
+			if executor != nil {
+				executor.Free()
+			}
+		})
+		require.NoError(t, err)
+		require.False(t, executor.IsColumnExpr())
+		_, err = DebugShowExecutor(executor)
+		require.NoError(t, err)
+		check := func(vec *vector.Vector) {
+			require.Equal(t, types.Type{Oid: types.T_int64, Size: 8}, *vec.GetType())
+			require.Equal(t, 2, vec.Length())
+			for i, want := range []int64{1, 2} {
+				require.False(t, vec.IsNull(uint64(i)))
+				require.Equal(t, want, vector.GetFixedAtNoTypeCheck[int64](vec, i))
+			}
+		}
+		vec, err := executor.Eval(proc, []*batch.Batch{bat}, nil)
+		require.NoError(t, err)
+		check(vec)
+		executor.ResetForNextQuery()
+		vec, err = executor.Eval(proc, []*batch.Batch{bat}, nil)
+		require.NoError(t, err)
+		check(vec)
+		_, err = DebugShowExecutor(executor)
+		require.NoError(t, err)
+		owned, err := executor.EvalWithoutResultReusing(proc, []*batch.Batch{bat}, nil)
+		t.Cleanup(func() {
+			if owned != nil && (executor == nil || executor.(*ListExpressionExecutor).resultVector != owned) {
+				owned.Free(proc.Mp())
+			}
+		})
+		require.NoError(t, err)
+		require.Nil(t, executor.(*ListExpressionExecutor).resultVector)
+		executor.Free()
+		executor = nil
+		check(owned)
+	})
+	t.Run("int64_reuse_duplication", func(t *testing.T) {
+		checkExpressionStorageAfterCleanup(t, proc)
+		bat := batch.New(nil)
+		t.Cleanup(func() { bat.Clean(proc.Mp()) })
+		bat.SetRowCount(10)
+		executor, err := NewExpressionExecutor(proc, makePlan2Int64ConstExprWithType(218311))
+		t.Cleanup(func() {
+			if executor != nil {
+				executor.Free()
+			}
+		})
+		require.NoError(t, err)
+		_, err = DebugShowExecutor(executor)
+		require.NoError(t, err)
+		check := func(vec *vector.Vector) {
+			require.Equal(t, types.Type{Oid: types.T_int64, Size: 8}, *vec.GetType())
+			require.True(t, vec.IsConst())
+			require.Equal(t, 10, vec.Length())
+			for i := 0; i < 10; i++ {
+				require.False(t, vec.IsNull(uint64(i)))
+				require.Equal(t, int64(218311), vector.GetFixedAtNoTypeCheck[int64](vec, i))
+			}
+		}
+		vec, err := executor.Eval(proc, []*batch.Batch{bat}, nil)
+		require.NoError(t, err)
+		check(vec)
+		native := proc.Mp().CurrNB()
+		heap, objects := proc.Mp().OnHeapOutstanding()
+		reused, err := executor.Eval(proc, []*batch.Batch{bat}, nil)
+		require.NoError(t, err)
+		require.Same(t, vec, reused)
+		check(reused)
+		require.Equal(t, native, proc.Mp().CurrNB())
+		afterHeap, afterObjects := proc.Mp().OnHeapOutstanding()
+		require.Equal(t, heap, afterHeap)
+		require.Equal(t, objects, afterObjects)
+		_, err = DebugShowExecutor(executor)
+		require.NoError(t, err)
+		owned, err := executor.EvalWithoutResultReusing(proc, []*batch.Batch{bat}, nil)
+		t.Cleanup(func() {
+			if owned != nil && (executor == nil || executor.(*FixedVectorExpressionExecutor).resultVector != owned) {
+				owned.Free(proc.Mp())
+			}
+		})
+		require.NoError(t, err)
+		require.NotSame(t, vec, owned)
+		require.Same(t, vec, executor.(*FixedVectorExpressionExecutor).resultVector)
+		check(vec)
+		executor.Free()
+		executor = nil
+		check(owned)
+	})
+	for _, tc := range []struct {
+		name  string
+		expr  *plan.Expr
+		typ   types.Type
+		rows  int
+		null  bool
+		check func(*testing.T, *vector.Vector, int)
+	}{
+		{"decimal128_target_null", &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_decimal128), Width: 30, Scale: 6, NotNullable: true},
+			Expr: &plan.Expr_T{T: &plan.TargetType{}},
+		}, types.Type{Oid: types.T_decimal128, Size: 16, Width: 30, Scale: 6}, 5, true, nil},
+		{"geometry_literal", &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_geometry), NotNullable: true},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: false, Value: &plan.Literal_Sval{Sval: "POINT(1 1)"}}},
+		}, types.Type{Oid: types.T_geometry, Size: 24, Charset: types.CharsetBinary}, 3, false,
+			func(t *testing.T, v *vector.Vector, i int) { require.Equal(t, "POINT(1 1)", v.GetStringAt(i)) }},
+		{"decimal64_literal", &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_decimal64), Width: 2, Scale: 1},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Decimal64Val{Decimal64Val: &plan.Decimal64{A: -15}}}},
+		}, types.Type{Oid: types.T_decimal64, Size: 8, Width: 2, Scale: 1}, 1, false,
+			func(t *testing.T, v *vector.Vector, i int) {
+				require.Equal(t, types.Decimal64(0xfffffffffffffff1), vector.GetFixedAtNoTypeCheck[types.Decimal64](v, i))
+			}},
+		{"int64_literal", &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_int64)},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: -42}}},
+		}, types.Type{Oid: types.T_int64, Size: 8}, 1, false,
+			func(t *testing.T, v *vector.Vector, i int) {
+				require.Equal(t, int64(-42), vector.GetFixedAtNoTypeCheck[int64](v, i))
+			}},
+		{"year_literal", &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_year)},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I32Val{I32Val: 2026}}},
+		}, types.Type{Oid: types.T_year, Size: 2}, 1, false,
+			func(t *testing.T, v *vector.Vector, i int) {
+				require.Equal(t, types.MoYear(2026), vector.GetFixedAtNoTypeCheck[types.MoYear](v, i))
+			}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			checkExpressionStorageAfterCleanup(t, proc)
+			bat := batch.New(nil)
+			t.Cleanup(func() { bat.Clean(proc.Mp()) })
+			bat.SetRowCount(tc.rows)
+			executor, err := NewExpressionExecutor(proc, tc.expr)
+			t.Cleanup(func() {
+				if executor != nil {
+					executor.Free()
+				}
+			})
+			require.NoError(t, err)
+			vec, err := executor.Eval(proc, []*batch.Batch{bat}, nil)
+			require.NoError(t, err)
+			require.Equal(t, tc.typ, *vec.GetType())
+			require.True(t, vec.IsConst())
+			require.Equal(t, tc.rows, vec.Length())
+			_, err = DebugShowExecutor(executor)
+			require.NoError(t, err)
+			for i := 0; i < tc.rows; i++ {
+				require.Equal(t, tc.null, vec.IsNull(uint64(i)))
+				if tc.check != nil {
+					tc.check(t, vec, i)
+				}
+			}
+		})
 	}
-
-	evalExpr := &plan.Expr{
-		Expr: &plan.Expr_List{
-			List: &plan.ExprList{
-				List: exprList,
-			},
-		},
-		Typ: plan.Type{
-			Id:          int32(types.T_int64),
-			NotNullable: true,
-		},
-	}
-	curr := proc.Mp().CurrNB()
-
-	listExprExecutor, err := NewExpressionExecutor(proc, evalExpr)
-	require.NoError(t, err)
-	tree, err := DebugShowExecutor(listExprExecutor)
-	require.NoError(t, err)
-	t.Log(tree)
-	require.NoError(t, err)
-	require.Equal(t, listExprExecutor.IsColumnExpr(), false)
-
-	vec, err := listExprExecutor.Eval(proc, []*batch.Batch{bat}, nil)
-	require.NoError(t, err)
-	vals := vector.MustFixedColNoTypeCheck[int64](vec)
-	require.Equal(t, int64(1), vals[0])
-	require.Equal(t, int64(2), vals[1])
-
-	listExprExecutor.ResetForNextQuery()
-
-	vec, err = listExprExecutor.Eval(proc, []*batch.Batch{bat}, nil)
-	require.NoError(t, err)
-	tree, err = DebugShowExecutor(listExprExecutor)
-	require.NoError(t, err)
-	t.Log(tree)
-	vals = vector.MustFixedColNoTypeCheck[int64](vec)
-	require.Equal(t, int64(1), vals[0])
-	require.Equal(t, int64(2), vals[1])
-
-	vec, err = listExprExecutor.EvalWithoutResultReusing(proc, []*batch.Batch{bat}, nil)
-	require.NoError(t, err)
-	vals = vector.MustFixedColNoTypeCheck[int64](vec)
-	require.Equal(t, int64(1), vals[0])
-	require.Equal(t, int64(2), vals[1])
-	vec.Free(proc.GetMPool())
-
-	listExprExecutor.Free()
-
-	require.Equal(t, curr, proc.Mp().CurrNB())
 }
 
 func TestFlowControlMetadataMethods(t *testing.T) {
@@ -1369,51 +1479,6 @@ func TestParamExpressionExecutorLifecycle(t *testing.T) {
 	}
 }
 
-func TestPreparedNumericLiteralsMaterializeWithTheirRuntimeTypes(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
-	bat := batch.New(nil)
-	bat.SetRowCount(1)
-
-	decimalExpr := &plan.Expr{
-		Typ: plan.Type{Id: int32(types.T_decimal64), Width: 2, Scale: 1},
-		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Decimal64Val{
-			Decimal64Val: &plan.Decimal64{A: -15},
-		}}},
-	}
-	decimalExecutor, err := NewExpressionExecutor(proc, decimalExpr)
-	require.NoError(t, err)
-	defer decimalExecutor.Free()
-	decimalVec, err := decimalExecutor.Eval(proc, []*batch.Batch{bat}, nil)
-	require.NoError(t, err)
-	require.Equal(t, types.T_decimal64, decimalVec.GetType().Oid)
-	require.Equal(t, int64(-15), int64(vector.GetFixedAtNoTypeCheck[types.Decimal64](decimalVec, 0)))
-
-	integerExpr := &plan.Expr{
-		Typ:  plan.Type{Id: int32(types.T_int64)},
-		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: -42}}},
-	}
-	integerExecutor, err := NewExpressionExecutor(proc, integerExpr)
-	require.NoError(t, err)
-	defer integerExecutor.Free()
-	integerVec, err := integerExecutor.Eval(proc, []*batch.Batch{bat}, nil)
-	require.NoError(t, err)
-	require.Equal(t, types.T_int64, integerVec.GetType().Oid)
-	require.Equal(t, int64(-42), vector.GetFixedAtNoTypeCheck[int64](integerVec, 0))
-
-	yearExpr := &plan.Expr{
-		Typ:  plan.Type{Id: int32(types.T_year)},
-		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I32Val{I32Val: 2026}}},
-	}
-	yearExecutor, err := NewExpressionExecutor(proc, yearExpr)
-	require.NoError(t, err)
-	defer yearExecutor.Free()
-	yearVec, err := yearExecutor.Eval(proc, []*batch.Batch{bat}, nil)
-	require.NoError(t, err)
-	require.Equal(t, types.T_year, yearVec.GetType().Oid)
-	require.Equal(t, types.MoYear(2026), vector.GetFixedAtNoTypeCheck[types.MoYear](yearVec, 0))
-}
-
 func TestPrivateIntegerArgumentScalarSourceClassification(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	scalar, err := vector.NewConstFixed(types.T_float64.ToType(), 2.5, 3, proc.Mp())
@@ -1654,98 +1719,6 @@ func TestFlowControlPreservesPreparedParamKindOnPartialSelection(t *testing.T) {
 	require.Equal(t, []string{"5.5", "ordinary"}, []string{result.GetStringAt(0), result.GetStringAt(1)})
 	require.Equal(t, vector.PrepareParamFloat, result.GetPrepareParamKindAt(0))
 	require.Equal(t, vector.PrepareParamNone, result.GetPrepareParamKindAt(1))
-}
-
-func TestFixedExpressionExecutor(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	// Expr_C
-	con := makePlan2Int64ConstExprWithType(218311)
-	conExprExecutor, err := NewExpressionExecutor(proc, con)
-	require.NoError(t, err)
-	tree, err := DebugShowExecutor(conExprExecutor)
-	require.NoError(t, err)
-	t.Log(tree)
-
-	emptyBatch := &batch.Batch{}
-	emptyBatch.SetRowCount(10)
-	vec, err := conExprExecutor.Eval(proc, []*batch.Batch{emptyBatch}, nil)
-	require.NoError(t, err)
-	curr1 := proc.Mp().CurrNB()
-	{
-		require.Equal(t, 10, vec.Length())
-		require.Equal(t, types.T_int64.ToType(), *vec.GetType())
-		require.Equal(t, int64(218311), vector.MustFixedColWithTypeCheck[int64](vec)[0])
-		require.Equal(t, false, vec.GetNulls().Contains(0))
-	}
-	_, err = conExprExecutor.Eval(proc, []*batch.Batch{emptyBatch}, nil)
-	require.NoError(t, err)
-	tree, err = DebugShowExecutor(conExprExecutor)
-	require.NoError(t, err)
-	t.Log(tree)
-	require.Equal(t, curr1, proc.Mp().CurrNB()) // check memory reuse
-	conExprExecutor.Free()
-	require.Equal(t, int64(0), proc.Mp().CurrNB())
-
-	// Expr_T
-	ety := &plan.Expr{
-		Expr: &plan.Expr_T{T: &plan.TargetType{}},
-		Typ: plan.Type{
-			Id:          int32(types.T_decimal128),
-			Width:       30,
-			Scale:       6,
-			NotNullable: true,
-		},
-	}
-	curr2 := proc.Mp().CurrNB()
-	typExpressionExecutor, err := NewExpressionExecutor(proc, ety)
-	require.NoError(t, err)
-
-	emptyBatch.SetRowCount(5)
-	vec, err = typExpressionExecutor.Eval(proc, []*batch.Batch{emptyBatch}, nil)
-	require.NoError(t, err)
-	tree, err = DebugShowExecutor(typExpressionExecutor)
-	require.NoError(t, err)
-	t.Log(tree)
-	{
-		require.Equal(t, 5, vec.Length())
-		require.Equal(t, types.T_decimal128, vec.GetType().Oid)
-		require.Equal(t, int32(30), vec.GetType().Width)
-		require.Equal(t, int32(6), vec.GetType().Scale)
-	}
-	typExpressionExecutor.Free()
-	require.Equal(t, curr2, proc.Mp().CurrNB())
-}
-
-func TestGeometryLiteralExpressionExecutor(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	expr := &plan.Expr{
-		Typ: plan.Type{
-			Id:          int32(types.T_geometry),
-			NotNullable: true,
-		},
-		Expr: &plan.Expr_Lit{
-			Lit: &plan.Literal{
-				Isnull: false,
-				Value: &plan.Literal_Sval{
-					Sval: "POINT(1 1)",
-				},
-			},
-		},
-	}
-
-	executor, err := NewExpressionExecutor(proc, expr)
-	require.NoError(t, err)
-	defer executor.Free()
-
-	emptyBatch := &batch.Batch{}
-	emptyBatch.SetRowCount(3)
-	vec, err := executor.Eval(proc, []*batch.Batch{emptyBatch}, nil)
-	require.NoError(t, err)
-	require.Equal(t, types.T_geometry, vec.GetType().Oid)
-	require.Equal(t, 3, vec.Length())
-	require.Equal(t, "POINT(1 1)", vec.GetStringAt(0))
 }
 
 func TestVariableExpressionLifecycle(t *testing.T) {
