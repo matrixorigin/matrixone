@@ -19,12 +19,14 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -90,14 +92,23 @@ func (h *spillTestHarness) close(t *testing.T) {
 	h.proc.Free()
 }
 
-func spillFileRows(t *testing.T, files []*os.File) int64 {
+func spillFileRows(t *testing.T, h *spillTestHarness) int64 {
 	t.Helper()
+	require.NotNil(t, h.op.ctr.spillBundle)
+	h.op.ctr.spillBundle.mu.Lock()
+	entries := make([]*spillFileEntry, 0, len(h.op.ctr.spillBundle.entries))
+	for _, entry := range h.op.ctr.spillBundle.entries {
+		entries = append(entries, entry)
+	}
+	h.op.ctr.spillBundle.mu.Unlock()
 	var total int64
-	for _, file := range files {
-		if file == nil {
+	for _, entry := range entries {
+		if entry == nil {
 			continue
 		}
-		_, err := file.Seek(0, io.SeekStart)
+		file, err := entry.fs.OpenFile(context.Background(), entry.name)
+		require.NoError(t, err)
+		_, err = file.Seek(0, io.SeekStart)
 		require.NoError(t, err)
 		reader := bufio.NewReader(file)
 		for {
@@ -119,6 +130,7 @@ func spillFileRows(t *testing.T, files []*os.File) int64 {
 			require.Equal(t, uint64(spillMagic), types.DecodeUint64(magic[:]))
 			total += rows
 		}
+		require.NoError(t, file.Close())
 	}
 	return total
 }
@@ -156,6 +168,56 @@ func TestShouldSpillBatches(t *testing.T) {
 	require.False(t, op.shouldSpillBatches())
 }
 
+func TestAutoSpillUsesLiveExecutionHeadroom(t *testing.T) {
+	budget := process.MustNewExecutionResourceBudget(512*mpool.MB, 512*mpool.MB)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	first, err := generation.RegisterMemoryGrowthParticipant()
+	require.NoError(t, err)
+	second, err := generation.RegisterMemoryGrowthParticipant()
+	require.NoError(t, err)
+	defer first.Release()
+	defer second.Release()
+
+	op := &HashBuild{IsShuffle: true, NeedHashMap: true}
+	op.ctr.setSpillThreshold(0)
+	op.ctr.memoryGrowthParticipant = first
+	spill, err := op.shouldSpillBeforeRetain(64 * mpool.MB)
+	require.NoError(t, err)
+	require.False(t, spill)
+
+	retained, err := generation.ReserveTransientMemory(300 * mpool.MB)
+	require.NoError(t, err)
+	defer retained.Release()
+	spill, err = op.shouldSpillBeforeRetain(140 * mpool.MB)
+	require.NoError(t, err)
+	require.True(t, spill)
+	require.True(t, op.ctr.autoSpillTriggered)
+	require.Equal(t, uint64(106*mpool.MB), op.ctr.autoSpillLimitAtTrigger)
+}
+
+func TestEstimatedResidentBuildBytesUsesRowCountUpperBound(t *testing.T) {
+	builder := &HashmapBuilder{keyWidth: 8}
+	got, err := builder.EstimatedHashMapBytes(513)
+	require.NoError(t, err)
+	require.Equal(t, hashtable.EstimateInt64HashMapSize(513), got)
+
+	builder.keyWidth = 9
+	got, err = builder.EstimatedHashMapBytes(513)
+	require.NoError(t, err)
+	require.Equal(t, hashtable.EstimateStringHashMapSize(513), got)
+
+	got, err = builder.EstimatedResidentBuildBytes(math.MaxUint64, 1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(math.MaxUint64), got)
+
+	_, err = builder.EstimatedHashMapBytes(-1)
+	require.ErrorIs(t, err, process.ErrExecutionResourceInvalid)
+	var nilBuilder *HashmapBuilder
+	_, err = nilBuilder.EstimatedHashMapBytes(1)
+	require.ErrorIs(t, err, process.ErrExecutionResourceInvalid)
+}
+
 func TestAccountedSpillAdaptsAndPreservesRows(t *testing.T) {
 	h := newSpillTestHarness(t, 80<<10)
 	defer h.close(t)
@@ -178,7 +240,7 @@ func TestAccountedSpillAdaptsAndPreservesRows(t *testing.T) {
 	))
 	require.Positive(t, analyzer.GetOpStats().ExtraStats["HashBuildSpillInputReductions"])
 	require.NoError(t, h.op.ctr.flushSpillBuffers(h.proc, h.files, analyzer))
-	require.Equal(t, int64(len(values)), spillFileRows(t, h.files))
+	require.Equal(t, int64(len(values)), spillFileRows(t, h))
 }
 
 func TestAccountedSpillBroadcastsPreparedParamKey(t *testing.T) {
@@ -216,7 +278,7 @@ func TestAccountedSpillBroadcastsPreparedParamKey(t *testing.T) {
 	require.Positive(t,
 		analyzer.GetOpStats().ExtraStats["HashBuildSpillInputReductions"])
 	require.NoError(t, h.op.ctr.flushSpillBuffers(h.proc, h.files, analyzer))
-	require.Equal(t, int64(len(values)), spillFileRows(t, h.files))
+	require.Equal(t, int64(len(values)), spillFileRows(t, h))
 }
 
 func TestAccountedSpillCoalescesWithoutDuplicateOwnership(t *testing.T) {
@@ -245,7 +307,7 @@ func TestAccountedSpillCoalescesWithoutDuplicateOwnership(t *testing.T) {
 	}
 	require.Positive(t, pending)
 	require.NoError(t, h.op.ctr.flushSpillBuffers(h.proc, h.files, analyzer))
-	require.Equal(t, int64(6), spillFileRows(t, h.files))
+	require.Equal(t, int64(6), spillFileRows(t, h))
 	require.Equal(t, h.account.Snapshot().Used, h.generation.Used())
 }
 
@@ -305,9 +367,10 @@ func TestWriteSpillPayloadCancellationStopsBeforeIO(t *testing.T) {
 		require.NoError(t, spillfs.RemoveFile(context.Background(), t.Name()))
 	}()
 	proc.Cancel(context.Canceled)
-	err = (&container{}).writeSpillPayload(
+	err = (&container{}).writeOpenSpillPayload(
 		proc,
 		file,
+		0,
 		[]byte("stale"),
 		1,
 		process.NewAnalyzer(0, false, false, "test"),

@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"testing"
 
@@ -27,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -136,6 +138,7 @@ func TestTakeSpillBuildPayloadRejectsGlobalRowMismatch(t *testing.T) {
 	budget := process.MustNewExecutionResourceBudget(1<<20, 1<<20)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
+	defer generation.Close()
 	fd, err := os.CreateTemp(t.TempDir(), "payload-row-mismatch")
 	require.NoError(t, err)
 	releases := 0
@@ -154,6 +157,44 @@ func TestTakeSpillBuildPayloadRejectsGlobalRowMismatch(t *testing.T) {
 	require.ErrorContains(t, err, "row count")
 	require.Equal(t, 1, releases)
 	jm.Free()
+}
+
+func TestBucketWriterQueuesWithoutOpenFD(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	budget := process.MustNewExecutionResourceBudget(1<<20, 1<<20)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	defer generation.Close()
+	writer := BucketWriter{
+		Name:   "queued-spill",
+		Budget: generation,
+	}
+	defer writer.Close()
+
+	payload := []byte("complete-record")
+	require.NoError(t, writeBucketPayload(proc, payload, 1, &writer, nil))
+	require.True(t, writer.Created())
+	require.Nil(t, writer.Fd)
+	require.Zero(t, generation.SpillFDUsed())
+	require.Equal(t, uint64(len(payload)), generation.SpillDiskUsed())
+
+	file, err := writer.handOffSpillFile(proc.Ctx)
+	require.NoError(t, err)
+	require.NotNil(t, file)
+	require.True(t, file.NeedsOpen())
+	require.Zero(t, generation.SpillFDUsed())
+
+	reader := BucketReader{}
+	require.NoError(t, reader.ResetForSpillFile(proc, generation, file))
+	require.Equal(t, uint64(1), generation.SpillFDUsed())
+	reader.Close()
+	require.Zero(t, generation.SpillFDUsed())
+	require.Zero(t, generation.SpillDiskUsed())
+	spillFS, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+	_, err = spillFS.OpenFile(context.Background(), "queued-spill")
+	require.Error(t, err)
 }
 
 func TestClassifyRowsConservesRows(t *testing.T) {
@@ -320,6 +361,45 @@ func TestRebuildHashmapBasic(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, BucketQueueEmpty, result)
 	engine.Cleanup(proc)
+}
+
+func TestReSpillDecisionKeepsStaticBoundAndAddsAdaptiveBound(t *testing.T) {
+	builder := &hashbuild.HashmapBuilder{}
+	builder.Batches.MemSize = 120_000
+
+	spill, adaptive, err := shouldReSpillBeforeRetain(
+		builder, nil, math.MaxInt64, nil,
+	)
+	require.NoError(t, err)
+	require.False(t, spill)
+	require.False(t, adaptive)
+
+	spill, adaptive, err = shouldReSpillBeforeRetain(builder, nil, 100_001, nil)
+	require.NoError(t, err)
+	require.True(t, spill)
+	require.False(t, adaptive)
+
+	builder.Batches.MemSize = 140 * mpool.MB
+	budget := process.MustNewExecutionResourceBudget(200*mpool.MB, 200*mpool.MB)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	retained, err := generation.ReserveTransientMemory(140 * mpool.MB)
+	require.NoError(t, err)
+	first, err := generation.RegisterMemoryGrowthParticipant()
+	require.NoError(t, err)
+	second, err := generation.RegisterMemoryGrowthParticipant()
+	require.NoError(t, err)
+
+	spill, adaptive, err = shouldReSpillBeforeRetain(
+		builder, nil, math.MaxInt64, first,
+	)
+	require.NoError(t, err)
+	require.True(t, spill)
+	require.True(t, adaptive)
+
+	require.True(t, first.Release())
+	require.True(t, second.Release())
+	retained.Release()
 }
 
 func TestReSpillConservesBuildAndProbeRows(t *testing.T) {

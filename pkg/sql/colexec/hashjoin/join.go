@@ -527,6 +527,7 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 				BuildKeyExprs:           buildKeyExprs,
 				ProbeKeyExprs:           probeKeyExprs,
 				SpillThreshold:          ctr.spillThreshold,
+				AdaptiveMemory:          ctr.autoSpill,
 				NeedsProbeForEmptyBuild: needsProbeForEmptyBuild,
 				NeedsBuildForEmptyProbe: needsBuildForEmptyProbe,
 				HashOnPK:                hashJoin.HashOnPK,

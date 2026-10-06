@@ -1757,6 +1757,10 @@ func MPoolControl(tag string, cmd string) string {
 }
 
 var simpleCAllocator = sync.OnceValue(func() *malloc.SimpleCAllocator {
+	const (
+		libcTrimMinFreedBytes = 64 << 20
+		libcTrimCooldown      = time.Second
+	)
 	sca := malloc.NewSimpleCAllocator(
 		v2.MallocCounter.WithLabelValues("mpool-allocate"),
 		v2.MallocGauge.WithLabelValues("mpool-inuse"),
@@ -1773,6 +1777,12 @@ var simpleCAllocator = sync.OnceValue(func() *malloc.SimpleCAllocator {
 			return uint64(min(GlobalCap()/4, GB))
 		},
 		v2.OffHeapInuseGauge.WithLabelValues("mpool-cache"),
+	)
+	sca.EnableLibcTrim(
+		libcTrimMinFreedBytes,
+		libcTrimCooldown,
+		v2.CAllocatorTrimCounter.WithLabelValues("released"),
+		v2.CAllocatorTrimCounter.WithLabelValues("noop"),
 	)
 	return sca
 })

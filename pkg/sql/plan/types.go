@@ -549,6 +549,10 @@ type QueryBuilder struct {
 	// common input can be shared after CTE reuse has established any nested
 	// producer boundaries.
 	groupingSetCandidates []groupingSetCandidate
+	// splitGroupingSetCoarseAggs marks the large coarser half of a direct
+	// ROLLUP split. Keep its partial aggregation local: shuffling a key that
+	// the coarser sets roll up creates a hot owner for those sets.
+	splitGroupingSetCoarseAggs map[*plan.Node]struct{}
 	// sharedMaterializationMemoryBytes and sharedMaterializationSpillBytes are
 	// the conservative cumulative reservations made by planner-introduced CTE
 	// and grouping-set sources. They prevent individually valid rewrites from

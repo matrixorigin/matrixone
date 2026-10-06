@@ -1425,6 +1425,59 @@ func sortFilterListByStats(ctx context.Context, nodeID int32, builder *QueryBuil
 	}
 }
 
+// residualInequalityBuildCapacityBound separates join-order cardinality from the
+// capacity envelope used to select a spillable hash-build topology. Residual
+// inequality filters currently use a heuristic 5% selectivity, but != and <>
+// can retain nearly every input row. When such a filter is the direct build
+// child, its input cardinality is a more conservative planning bound that does
+// not require accurate predicate statistics.
+func residualInequalityBuildCapacityBound(nodeID int32, builder *QueryBuilder) (float64, bool) {
+	node := builder.qry.Nodes[nodeID]
+	if node == nil || node.Stats == nil {
+		return 0, false
+	}
+	cardinality := node.Stats.Outcnt
+	if node.NodeType != plan.Node_FILTER || len(node.Children) != 1 ||
+		!containsResidualInequality(node.FilterList) {
+		return 0, false
+	}
+	child := builder.qry.Nodes[node.Children[0]]
+	if child != nil && child.Stats != nil && child.Stats.Outcnt > cardinality {
+		return child.Stats.Outcnt, true
+	}
+	return cardinality, true
+}
+
+func containsResidualInequality(filters []*plan.Expr) bool {
+	for _, filter := range filters {
+		if containsInequalityExpr(filter) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsInequalityExpr(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil {
+		return false
+	}
+	switch fn.Func.ObjName {
+	case "!=", "<>":
+		return true
+	case "and", "or":
+		for _, arg := range fn.Args {
+			if containsInequalityExpr(arg) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNode bool, needResetHashMapStats bool) {
 	node := builder.qry.Nodes[nodeID]
 	if recursive {

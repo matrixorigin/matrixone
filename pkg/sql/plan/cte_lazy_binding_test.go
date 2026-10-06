@@ -710,6 +710,29 @@ func TestCTEMultiReferenceReusesHashSemiBuildConsumers(t *testing.T) {
 		"each marked CTE reader must remain the physical hash-build input")
 }
 
+func TestCTEMultiReferenceReusesBelowBlockingAggregateLimit(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := runOneStmt(mock, t, `
+		with expensive_keys as (
+			select l_suppkey, sum(l_extendedprice) as total
+			from lineitem group by l_suppkey
+		)
+		select sum(x) from (
+			select o_totalprice as x from orders
+			where o_custkey in (select l_suppkey from expensive_keys)
+			union all
+			select c_acctbal as x from customer
+			where c_custkey in (select l_suppkey from expensive_keys)
+		) u limit 100`)
+	require.NoError(t, err)
+
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+	require.Equal(t, 2, countReachableNodeType(query, planpb.Node_SINK_SCAN),
+		"a transparent LIMIT above a blocking aggregate cannot truncate its input")
+	require.Equal(t, 1, countReachableNodeType(query, planpb.Node_SINK))
+}
+
 func TestCTEMultiReferencePrunesUnusedVariableWidthPayload(t *testing.T) {
 	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t, `
@@ -1348,6 +1371,31 @@ func TestCTEDrainProofRejectsZeroAndStreamingLimits(t *testing.T) {
 	builder.qry.Nodes[1].NodeType = planpb.Node_DISTINCT
 	_, ok = builder.cteConsumerDrainRequirements(1, []cteOccurrence{{rootID: 0}})
 	require.False(t, ok, "streaming distinct is not a full-input witness under LIMIT")
+
+	builder.qry.Nodes = append(builder.qry.Nodes,
+		&planpb.Node{NodeId: 2, NodeType: planpb.Node_PROJECT, Children: []int32{1},
+			Limit: MakePlan2Uint64ConstExprWithType(1)})
+	_, ok = builder.cteConsumerDrainRequirements(2, []cteOccurrence{{rootID: 0}})
+	require.False(t, ok,
+		"a streaming descendant remains truncatable through a transparent limited parent")
+
+	builder.qry.Nodes[1].NodeType = planpb.Node_AGG
+	builder.qry.Nodes[1].Limit = nil
+	_, ok = builder.cteConsumerDrainRequirements(2, []cteOccurrence{{rootID: 0}})
+	require.True(t, ok,
+		"a blocking descendant drains its input before a transparent parent can apply LIMIT")
+
+	// A blocking branch is not enough when a lazy multi-input ancestor can
+	// satisfy LIMIT from another branch without starting this occurrence.
+	builder.qry.Nodes = append(builder.qry.Nodes,
+		&planpb.Node{NodeId: 3, NodeType: planpb.Node_VALUE_SCAN},
+		&planpb.Node{NodeId: 4, NodeType: planpb.Node_UNION,
+			Children: []int32{3, 1}},
+		&planpb.Node{NodeId: 5, NodeType: planpb.Node_PROJECT,
+			Children: []int32{4}, Limit: MakePlan2Uint64ConstExprWithType(1)})
+	_, ok = builder.cteConsumerDrainRequirements(5, []cteOccurrence{{rootID: 0}})
+	require.False(t, ok,
+		"LIMIT above a lazy multi-input boundary may skip a blocking branch entirely")
 }
 
 func TestCTEDrainProofRejectsSamplingConsumer(t *testing.T) {

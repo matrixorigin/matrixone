@@ -539,6 +539,9 @@ func TestRecoveryCapacityCoverCheckMatchesExactTarget(t *testing.T) {
 
 	ctr := container{recoveryCapacity: process.NewExecutionRecoveryCapacitySlot()}
 	ctr.recoveryCapacityFloor = 1
+	growth, err := ctr.recoveryCapacityGrowth(1)
+	require.NoError(t, err)
+	require.Equal(t, groupSpillHashBytes+groupSpillRowIDBytes-1, growth)
 	require.False(t, ctr.recoveryCapacityCovers(-1))
 	mp := mpool.MustNewZero()
 	hash, err := hashmap.NewIntHashMap(false, mp)
@@ -547,6 +550,51 @@ func TestRecoveryCapacityCoverCheckMatchesExactTarget(t *testing.T) {
 	ctr.hr.Hash = hash
 	require.False(t, ctr.recoveryCapacityCovers(1))
 	hash.Free()
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestGroupAdaptiveSpillProjectsRecoveryGrowth(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	proc.Base.Lim.Size = 64 << 20
+	generation, err := proc.GetExecutionResourceBudget()
+	require.NoError(t, err)
+	participant, err := generation.RegisterMemoryGrowthParticipant()
+	require.NoError(t, err)
+
+	mp := mpool.MustNewZero()
+	hash, err := hashmap.NewIntHashMap(false, mp)
+	require.NoError(t, err)
+	hash.AddGroups(1)
+	ctr := container{
+		mp:                      mp,
+		budget:                  generation,
+		mtyp:                    H8,
+		autoSpill:               true,
+		memoryGrowthParticipant: participant,
+	}
+	ctr.hr.Hash = hash
+	ctr.hr.TxnItr = hash.NewTransactionalIterator()
+	analyzer := process.NewAnalyzer(0, false, false, "group")
+	used := uint64(ctr.memUsed())
+	cap := generation.Snapshot().Cap
+	require.Less(t, used, cap)
+
+	spill, err := ctr.needAdaptiveSpillForGrowth(analyzer, cap-used-1)
+	require.NoError(t, err)
+	require.False(t, spill)
+	spill, err = ctr.needAdaptiveSpillForGrowth(analyzer, cap-used)
+	require.NoError(t, err)
+	require.True(t, spill)
+	require.Equal(t, int64(1),
+		analyzer.GetOpStats().ExtraStats["GroupAdaptiveSpillTriggers"])
+
+	ctr.releaseMemoryGrowthParticipant()
+	require.Zero(t, generation.Snapshot().MemoryGrowthParticipants)
+	hash.Free()
+	ctr.hr.Hash = nil
+	ctr.hr.TxnItr = nil
+	mpool.DeleteMPool(mp)
 	require.Zero(t, mp.CurrNB())
 }
 
@@ -612,6 +660,8 @@ func TestGroupReleasesRecoveryFloorBeforeFinalFlush(t *testing.T) {
 	require.NoError(t, g.Prepare(proc))
 	_, err := g.buildOneBatch(proc, input)
 	require.NoError(t, err)
+	require.NoError(t, g.ctr.ensureMemoryGrowthParticipant())
+	require.NotNil(t, g.ctr.memoryGrowthParticipant)
 	require.NotNil(t, g.ctr.recoveryCapacity)
 	reserved, borrowed := g.ctr.recoveryCapacity.Snapshot()
 	require.Positive(t, reserved)
@@ -621,6 +671,7 @@ func TestGroupReleasesRecoveryFloorBeforeFinalFlush(t *testing.T) {
 	result, err := g.ctr.outputOneBatchFinal(proc, g.OpAnalyzer, g.Aggs)
 	require.NoError(t, err)
 	require.NotNil(t, result.Batch)
+	require.Nil(t, g.ctr.memoryGrowthParticipant)
 	require.NotNil(t, g.ctr.recoveryCapacity)
 	afterReserved, afterBorrowed := g.ctr.recoveryCapacity.Snapshot()
 	require.Zero(t, afterReserved)

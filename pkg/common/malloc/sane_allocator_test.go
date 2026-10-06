@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -31,6 +32,52 @@ func TestSimpleCAllocatorMmapBoundary(t *testing.T) {
 	require.False(t, simpleCAllocatorUsesMmap(simpleCAllocatorMmapThreshold-1))
 	require.True(t, simpleCAllocatorUsesMmap(simpleCAllocatorMmapThreshold))
 	require.True(t, simpleCAllocatorUsesMmap(simpleCAllocatorMmapThreshold+1))
+}
+
+func TestSimpleCAllocatorTryLibcTrimThreshold(t *testing.T) {
+	allocator := newTestSimpleCAllocator()
+	allocator.libcTrimThreshold = 100
+	trimCalls := 0
+	allocator.libcTrim = func() bool {
+		trimCalls++
+		return true
+	}
+
+	allocator.libcFreedBytes.Store(99)
+	require.False(t, allocator.tryLibcTrim())
+	require.Equal(t, uint64(99), allocator.libcFreedBytes.Load())
+	require.Zero(t, trimCalls)
+
+	allocator.libcFreedBytes.Add(1)
+	require.True(t, allocator.tryLibcTrim())
+	require.Zero(t, allocator.libcFreedBytes.Load())
+	require.Equal(t, 1, trimCalls)
+}
+
+func TestSimpleCAllocatorSchedulesLibcTrim(t *testing.T) {
+	allocator := newTestSimpleCAllocator()
+	allocator.libcTrimThreshold = 100
+	allocator.libcTrimCooldown = time.Millisecond
+	trimmed := make(chan struct{}, 1)
+	allocator.libcTrim = func() bool {
+		trimmed <- struct{}{}
+		return true
+	}
+
+	allocator.recordLibcFree(99)
+	require.False(t, allocator.libcTrimQueued.Load())
+	allocator.recordLibcFree(1)
+	require.True(t, allocator.libcTrimQueued.Load())
+
+	select {
+	case <-trimmed:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for libc trim")
+	}
+	require.Eventually(t, func() bool {
+		return !allocator.libcTrimQueued.Load()
+	}, time.Second, time.Millisecond)
+	require.Zero(t, allocator.libcFreedBytes.Load())
 }
 
 func TestSimpleCAllocatorAllocateAndDeallocate(t *testing.T) {

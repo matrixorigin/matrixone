@@ -396,6 +396,11 @@ func (builder *QueryBuilder) shareGroupingSetInput(
 			return false
 		}
 	}
+	if directOutputOK && builder.shareDirectGroupingSetSplit(
+		branches, directOutput.unionRootID, producerStats, outputRowSize,
+	) {
+		return true
+	}
 	if !directOutputOK && !builder.reserveSharedMaterialization(
 		estimatedMaterializedRows*outputRowSize,
 		estimatedMaterializedRows,
@@ -529,6 +534,219 @@ func (builder *QueryBuilder) shareGroupingSetInput(
 
 		builder.rewriteGroupingBranch(branches[i].rootID, branches[i].aggID, filterID,
 			branches[i].agg, scanTag, groupCount)
+	}
+	return true
+}
+
+// A large strict-prefix ROLLUP can be cheaper as two independent direct
+// aggregates. The finest level often retains almost one group per input row;
+// mixing it with every coarser level in one expanded hash table multiplies
+// spill traffic. Keep that level's original producer and aggregate, and share
+// only the remaining levels over their own original producer. Unlike prefix
+// state reuse, every SUM still sees raw input values in its original branch.
+func (builder *QueryBuilder) shareDirectGroupingSetSplit(
+	branches []groupingSetBranch,
+	unionRootID int32,
+	producerStats *planpb.Stats,
+	outputRowSize float64,
+) bool {
+	if !directGroupingSetSplitFits(branches, producerStats, outputRowSize) {
+		return false
+	}
+	// TOP's comparator schema is fixed by its first input batch. A direct
+	// UNION can deliver a later grouping branch whose ORDER BY expression
+	// evaluates into an additional vector, changing that schema mid-stream.
+	// Keep the existing single-aggregate path until TOP can handle that case.
+	parents := builder.groupingSetConsumerParents()
+	queue := []int32{unionRootID}
+	seen := make(map[int32]bool)
+	for len(queue) > 0 {
+		childID := queue[0]
+		queue = queue[1:]
+		if seen[childID] {
+			continue
+		}
+		seen[childID] = true
+		for _, parentID := range parents[childID] {
+			parent := builder.qry.Nodes[parentID]
+			switch parent.NodeType {
+			case planpb.Node_SORT:
+				return false
+			case planpb.Node_PROJECT, planpb.Node_FILTER:
+				queue = append(queue, parentID)
+			}
+		}
+	}
+
+	coarse := branches[1:]
+	first := coarse[0].agg
+	groupCount := len(first.GroupBy)
+	aggCount := len(first.AggList)
+	producerID := first.Children[0]
+	unionRoot := builder.qry.Nodes[unionRootID]
+	finestRoot := builder.qry.Nodes[branches[0].rootID]
+	if unionRoot == nil || finestRoot == nil || len(finestRoot.BindingTags) != 1 ||
+		len(unionRoot.ProjectList) != len(finestRoot.ProjectList) {
+		return false
+	}
+	// Validate the surviving UNION projection before appending any nodes.
+	unionProject := DeepCopyExprList(unionRoot.ProjectList)
+	for i, expr := range unionProject {
+		col := expr.GetCol()
+		if col == nil || col.ColPos != int32(i) {
+			return false
+		}
+		col.RelPos = finestRoot.BindingTags[0]
+	}
+
+	// The last key is inactive in every remaining ROLLUP level. Do not
+	// evaluate or hash it in this branch; restore its SQL NULL output below.
+	inputProject := make([]*planpb.Expr, 0, groupCount+aggCount+1)
+	for pos, group := range first.GroupBy[:groupCount-1] {
+		group = DeepCopyExpr(group)
+		for _, branch := range coarse {
+			if !branch.agg.GroupingFlag[pos] {
+				group.Typ.NotNullable = false
+				break
+			}
+		}
+		inputProject = append(inputProject, group)
+	}
+	aggArgPositions := make([][]int32, aggCount)
+	for i, agg := range first.AggList {
+		for _, arg := range agg.GetF().Args {
+			aggArgPositions[i] = append(aggArgPositions[i], int32(len(inputProject)))
+			inputProject = append(inputProject, DeepCopyExpr(arg))
+		}
+	}
+	inputTag := builder.genNewBindTag()
+	if builder.syntheticNDVCols == nil {
+		builder.syntheticNDVCols = make(map[[2]int32]struct{}, groupCount)
+	}
+	for i := 0; i < groupCount-1; i++ {
+		builder.syntheticNDVCols[[2]int32{inputTag, int32(i)}] = struct{}{}
+	}
+	inputProject = append(inputProject, MakePlan2BoolConstExprWithType(false))
+	setIDPos := int32(len(inputProject))
+	inputProject = append(inputProject, MakePlan2Int64ConstExprWithType(0))
+	builder.syntheticNDVCols[[2]int32{inputTag, setIDPos}] = struct{}{}
+	flattenedFlags := make([]bool, 0, len(coarse)*(groupCount-1))
+	for _, branch := range coarse {
+		flattenedFlags = append(flattenedFlags, branch.agg.GroupingFlag[:groupCount-1]...)
+	}
+	expandedID := builder.appendNode(&planpb.Node{
+		NodeType:     planpb.Node_PROJECT,
+		Children:     []int32{producerID},
+		ProjectList:  inputProject,
+		BindingTags:  []int32{inputTag},
+		GroupingFlag: flattenedFlags,
+		ExtraOptions: groupingSetExpandOptionPrefix + strconv.Itoa(len(coarse)),
+	}, coarse[0].ctx)
+
+	sharedGroupTag := builder.genNewBindTag()
+	sharedAggTag := builder.genNewBindTag()
+	sharedGroups := make([]*planpb.Expr, 0, groupCount)
+	for i := 0; i < groupCount-1; i++ {
+		group := groupingSetCol(inputProject[i].Typ, inputTag, int32(i))
+		group.Ndv = first.GroupBy[i].Ndv
+		sharedGroups = append(sharedGroups, group)
+	}
+	sharedGroups = append(sharedGroups, groupingSetCol(
+		planpb.Type{Id: int32(types.T_int64), NotNullable: true}, inputTag, setIDPos))
+	sharedGroups[groupCount-1].Ndv = float64(len(coarse))
+	sharedAggs := DeepCopyExprList(first.AggList)
+	for i, agg := range sharedAggs {
+		for j, pos := range aggArgPositions[i] {
+			agg.GetF().Args[j] = groupingSetCol(inputProject[pos].Typ, inputTag, pos)
+		}
+	}
+	sharedAggID := builder.appendNode(&planpb.Node{
+		NodeType:    planpb.Node_AGG,
+		Children:    []int32{expandedID},
+		GroupBy:     sharedGroups,
+		AggList:     sharedAggs,
+		BindingTags: []int32{sharedGroupTag, sharedAggTag},
+		SpillMem:    first.SpillMem,
+	}, coarse[0].ctx)
+	if builder.splitGroupingSetCoarseAggs == nil {
+		builder.splitGroupingSetCoarseAggs = make(map[*planpb.Node]struct{})
+	}
+	builder.splitGroupingSetCoarseAggs[builder.qry.Nodes[sharedAggID]] = struct{}{}
+
+	sharedOutputTag := builder.genNewBindTag()
+	sharedOutput := make([]*planpb.Expr, 0, groupCount+aggCount+1)
+	for i := 0; i < groupCount-1; i++ {
+		sharedOutput = append(sharedOutput, groupingSetCol(sharedGroups[i].Typ, sharedGroupTag, int32(i)))
+	}
+	rolledUpKey := &planpb.Expr{Typ: first.GroupBy[groupCount-1].Typ,
+		Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Isnull: true}}}
+	rolledUpKey.Typ.NotNullable = false
+	sharedOutput = append(sharedOutput, rolledUpKey)
+	for i, agg := range sharedAggs {
+		sharedOutput = append(sharedOutput, groupingSetCol(agg.Typ, sharedAggTag, int32(i)))
+	}
+	sharedOutput = append(sharedOutput,
+		groupingSetCol(sharedGroups[groupCount-1].Typ, sharedGroupTag, int32(groupCount-1)))
+	sharedOutputID := builder.appendNode(&planpb.Node{
+		NodeType:    planpb.Node_PROJECT,
+		Children:    []int32{sharedAggID},
+		ProjectList: sharedOutput,
+		BindingTags: []int32{sharedOutputTag},
+	}, coarse[0].ctx)
+
+	coarseTag := builder.genNewBindTag()
+	coarseProject := DeepCopyExprList(builder.qry.Nodes[coarse[0].rootID].ProjectList)
+	for i, expr := range coarseProject {
+		rewriteGroupingSetExpr(expr, first, sharedOutputTag, groupCount)
+		expr.Typ = unionProject[i].Typ
+	}
+	coarseRootID := builder.appendNode(&planpb.Node{
+		NodeType:    planpb.Node_PROJECT,
+		Children:    []int32{sharedOutputID},
+		ProjectList: coarseProject,
+		BindingTags: []int32{coarseTag},
+	}, coarse[0].ctx)
+
+	unionRoot.Children = []int32{branches[0].rootID, coarseRootID}
+	unionRoot.ProjectList = unionProject
+	unionRoot.PhysicalEqualityKeyList = nil
+	unionRoot.Stats = nil
+	return true
+}
+
+// This is a performance admission, not a correctness proof. Single-column NDV
+// only supplies an opportunity signal; all grouping/aggregate semantics above
+// remain exact even when the estimate is wrong.
+func directGroupingSetSplitFits(
+	branches []groupingSetBranch,
+	producerStats *planpb.Stats,
+	outputRowSize float64,
+) bool {
+	if len(branches) < 4 || producerStats == nil ||
+		!finitePositive(producerStats.Outcnt) || !finitePositive(outputRowSize) {
+		return false
+	}
+	finest := branches[0].agg
+	if finest == nil || finest.Stats == nil || !finitePositive(finest.Stats.Outcnt) {
+		return false
+	}
+	groupCount := len(finest.GroupBy)
+	if len(branches) != groupCount+1 || groupCount < 3 ||
+		len(finest.GroupingFlag) != groupCount ||
+		finest.Stats.Outcnt < producerStats.Outcnt/2 ||
+		math.Min(finest.Stats.Outcnt, producerStats.Outcnt)*outputRowSize < float64(128*mpool.MB) ||
+		finest.GroupBy[groupCount-1] == nil || finest.GroupBy[groupCount-1].Ndv < 128 {
+		return false
+	}
+	for branchIndex, branch := range branches {
+		if branch.agg == nil || len(branch.agg.GroupingFlag) != groupCount {
+			return false
+		}
+		for keyIndex, active := range branch.agg.GroupingFlag {
+			if active != (keyIndex < groupCount-branchIndex) {
+				return false
+			}
+		}
 	}
 	return true
 }

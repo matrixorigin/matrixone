@@ -15,6 +15,7 @@
 package process
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
@@ -24,7 +25,9 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/stretchr/testify/require"
 )
 
 // testPhysicalAllocation exercises the capacity controller at the same
@@ -37,7 +40,7 @@ type testPhysicalAllocation struct {
 }
 
 func TestExecutionResourceBudgetObserverDimensionsAreFixed(t *testing.T) {
-	components := [...]string{"memory", "spill_disk", "spill_fd"}
+	components := [...]string{"memory", "recovery_memory", "spill_disk", "spill_fd"}
 	events := [...]string{"reserve", "release", "reconcile", "reject"}
 	scopes := [...]string{"query", "cn"}
 	want := len(components) * len(events) * len(scopes)
@@ -515,6 +518,32 @@ func TestGetExecutionResourceBudgetInitializesAndReusesCNAggregate(t *testing.T)
 	firstGeneration.budget.Close()
 }
 
+func TestGetExecutionResourceBudgetUsesLocalSpillFilesystemCapacity(t *testing.T) {
+	const localService = "__process_local_cn__"
+	executionResourceCNBudgets.Delete(localService)
+	t.Cleanup(func() { executionResourceCNBudgets.Delete(localService) })
+
+	localFS, err := fileservice.NewLocalFS(
+		context.Background(),
+		defines.LocalFileServiceName,
+		t.TempDir(),
+		fileservice.DisabledCacheConfig,
+		nil,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { localFS.Close(context.Background()) })
+	proc := &Process{Base: &BaseProcess{
+		Lim:         Limitation{Size: 1 << 20},
+		FileService: localFS,
+	}}
+	want := automaticSpillDiskCap(proc.automaticSpillDiskAvailable())
+	require.Positive(t, want)
+
+	generation, err := proc.GetExecutionResourceBudget()
+	require.NoError(t, err)
+	require.Equal(t, want, generation.SpillDiskCap())
+}
+
 func TestResolveExecutionMemoryCeiling(t *testing.T) {
 	const gib = uint64(1 << 30)
 	ceiling, err := ResolveExecutionMemoryCeiling(ExecutionMemoryCeilingInputs{
@@ -539,8 +568,40 @@ func TestResolveExecutionMemoryCeiling(t *testing.T) {
 	if small, smallErr := ResolveExecutionMemoryCeiling(ExecutionMemoryCeilingInputs{
 		HostMemTotal:  3 * gib,
 		FileCacheHint: 3 * gib,
-	}); smallErr != nil || small.CNMemoryCap != 3*gib/20 {
+	}); smallErr != nil || small.CNMemoryCap != 3*gib/20 || small.QueryCap != small.CNMemoryCap {
 		t.Fatalf("small-CN ceiling = %+v, err=%v", small, smallErr)
+	}
+}
+
+func TestExecutionMemoryHeadroomSafety(t *testing.T) {
+	const gib = uint64(1 << 30)
+	tests := []struct {
+		name    string
+		ceiling ExecutionMemoryCeiling
+		want    uint64
+	}{
+		{
+			name:    "minimum runtime margin",
+			ceiling: ExecutionMemoryCeiling{EffectiveCN: 12 * gib, Reserve: 4 * gib},
+			want:    gib,
+		},
+		{
+			name:    "five percent on a large CN",
+			ceiling: ExecutionMemoryCeiling{EffectiveCN: 100 * gib, Reserve: 20 * gib},
+			want:    5 * gib,
+		},
+		{
+			name:    "bounded by the startup reserve",
+			ceiling: ExecutionMemoryCeiling{EffectiveCN: 2 * gib, Reserve: gib / 2},
+			want:    gib / 2,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := executionMemoryHeadroomSafety(test.ceiling); got != test.want {
+				t.Fatalf("safety = %d, want %d", got, test.want)
+			}
+		})
 	}
 }
 

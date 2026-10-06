@@ -10276,12 +10276,13 @@ func (v *Vector) remapShuffleBitmaps(sels []int64, mp *mpool.MPool) error {
 			continue
 		}
 		words := (len(sels) + 63) / 64
-		storage, err := mpool.MakeSliceAccounted[uint64](
+		storage, err := mpool.MakeSliceAccountedWithCapacityClass[uint64](
 			words,
 			mp,
 			v.allocationAccount.account,
 			v.allocationAccount.owner,
 			target.site,
+			v.allocationAccount.capacityClass,
 		)
 		if err != nil {
 			for j := range i {

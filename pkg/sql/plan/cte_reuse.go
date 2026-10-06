@@ -1145,6 +1145,12 @@ func (builder *QueryBuilder) proveCTEConsumerDrainRequirements(
 			nodeID            int32
 			childID           int32
 			requiresHashBuild bool
+			// inputDrained records that a blocking descendant has already
+			// consumed this occurrence completely before producing its first
+			// row. A LIMIT on a transparent ancestor cannot shorten that work,
+			// although intervening joins must still prove that the descendant is
+			// executed at all.
+			inputDrained bool
 		}
 		queue := make([]consumerPath, 0, len(parents[occurrence.rootID]))
 		for _, nodeID := range parents[occurrence.rootID] {
@@ -1161,11 +1167,20 @@ func (builder *QueryBuilder) proveCTEConsumerDrainRequirements(
 			}
 			seen[path] = true
 			node := builder.qry.Nodes[path.nodeID]
+			// A blocking descendant only proves that this occurrence drains after
+			// its branch starts. A partially consumed multi-input operator may never
+			// start this exact child (lazy UNION ALL is the common case). Joins are
+			// checked below with child-specific build/probe rules; every other
+			// multi-input boundary drops the carried witness until a new blocking
+			// ancestor establishes one.
+			if path.inputDrained && len(node.Children) > 1 && node.NodeType != planpb.Node_JOIN {
+				path.inputDrained = false
+			}
 			// LIMIT can stop the subtree before it completes. Only a positive
 			// literal limit on a proven blocking operator is a witness: LIMIT 0 is
 			// compiled without its input steps, and a dynamic limit may be zero at
 			// execution time. OFFSET alone does not shorten a fully consumed stream.
-			if node.Limit != nil && !cteLimitPreservesFullInput(node) {
+			if node.Limit != nil && !path.inputDrained && !cteLimitPreservesFullInput(node) {
 				continue
 			}
 			// APPLY may skip its right input when the left side is empty. Block
@@ -1173,6 +1188,9 @@ func (builder *QueryBuilder) proveCTEConsumerDrainRequirements(
 			// Neither node can carry a complete-evaluation witness upward.
 			if node.NodeType == planpb.Node_APPLY || node.NodeType == planpb.Node_SAMPLE {
 				continue
+			}
+			if node.NodeType == planpb.Node_AGG || node.NodeType == planpb.Node_SORT {
+				path.inputDrained = true
 			}
 			if node.NodeType == planpb.Node_JOIN {
 				switch node.JoinType {
@@ -1277,6 +1295,7 @@ func (builder *QueryBuilder) proveCTEConsumerDrainRequirements(
 				queue = append(queue, consumerPath{
 					nodeID: parentID, childID: path.nodeID,
 					requiresHashBuild: path.requiresHashBuild,
+					inputDrained:      path.inputDrained,
 				})
 			}
 		}

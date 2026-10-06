@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillio"
 	"github.com/matrixorigin/matrixone/pkg/util/list"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -1427,6 +1428,7 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 	// popped bkt must be defer freed.
 	bkt := ctr.spillBkts.PopBack().Value
 	defer func() {
+		spillio.DropReadCache(bkt.file)
 		if err := bkt.free(); err != nil && retErr == nil {
 			retErr = err
 		}
@@ -1582,7 +1584,11 @@ reloadLoop:
 		observeHashGrowth(opStats, "GroupHashReload", hashBytesBefore, ctr.hr.Hash.Size())
 		hashMergeNanos += time.Since(mergeStart).Nanoseconds()
 
-		if ctr.needSpill(opAnalyzer) && canRepartitionGroupSpill(bkt) {
+		needSpill, err := ctr.shouldSpill(opAnalyzer)
+		if err != nil {
+			return false, err
+		}
+		if needSpill && canRepartitionGroupSpill(bkt) {
 			ctr.freeSpillReloadStaging()
 			if bytes, rows, err := ctr.spillDataToDisk(proc, opAnalyzer, bkt); err != nil {
 				return false, err
@@ -1781,6 +1787,65 @@ func (ctr *container) needSpill(opAnalyzer process.Analyzer) bool {
 		return ctr.hr.Hash.GroupCount() >= uint64(ctr.spillMem)
 	}
 	return memUsed > ctr.spillMem
+}
+
+// needAdaptiveSpill divides the live query/CN/physical growth headroom among
+// every spill-capable operator which can still retain input. The decision is
+// advisory; the execution-resource ledger remains the hard allocation gate.
+// An empty hash has nothing useful to externalize, so it is always allowed to
+// establish a new resident prefix.
+func (ctr *container) needAdaptiveSpill(
+	opAnalyzer process.Analyzer,
+) (bool, error) {
+	return ctr.needAdaptiveSpillForGrowth(opAnalyzer, 0)
+}
+
+func (ctr *container) needAdaptiveSpillForGrowth(
+	opAnalyzer process.Analyzer,
+	projectedGrowth uint64,
+) (bool, error) {
+	if ctr == nil || !ctr.autoSpill || ctr.mtyp == H0 ||
+		ctr.memoryGrowthParticipant == nil || ctr.hr.IsEmpty() ||
+		ctr.hr.Hash.GroupCount() == 0 {
+		return false, nil
+	}
+	used := ctr.memUsed()
+	if used < 0 {
+		return false, process.ErrExecutionResourceInvalid
+	}
+	limit, err := ctr.memoryGrowthParticipant.RetainedLimit(uint64(used))
+	if err != nil {
+		return false, err
+	}
+	if opAnalyzer != nil {
+		stats := opAnalyzer.GetOpStats()
+		stats.AddExtraStat("GroupAdaptiveSpillChecks", 1)
+		stats.SetMaxExtraStat("GroupAdaptiveRetainedBytes", used)
+		stats.SetMaxExtraStat(
+			"GroupAdaptiveLimitBytes", int64(min(limit, uint64(math.MaxInt64))))
+	}
+	projected := uint64(used)
+	if projectedGrowth > math.MaxUint64-projected {
+		projected = math.MaxUint64
+	} else {
+		projected += projectedGrowth
+	}
+	spill := projected >= limit
+	if spill && opAnalyzer != nil {
+		opAnalyzer.GetOpStats().AddExtraStat("GroupAdaptiveSpillTriggers", 1)
+	}
+	return spill, nil
+}
+
+func (ctr *container) shouldSpill(
+	opAnalyzer process.Analyzer,
+) (bool, error) {
+	staticSpill := ctr.needSpill(opAnalyzer)
+	adaptiveSpill, err := ctr.needAdaptiveSpill(opAnalyzer)
+	if err != nil {
+		return false, err
+	}
+	return staticSpill || adaptiveSpill, nil
 }
 
 func (ctr *container) makeAggList(aggExprs []aggexec.AggFuncExecExpression) ([]aggexec.GroupAggFuncExec, error) {

@@ -291,10 +291,12 @@ type container struct {
 	timeZone                *time.Location
 
 	// spill, agglist to load spilled data.
-	spillMem        int64
-	spillAggList    []aggexec.GroupAggFuncExec
-	spillBkts       list.Deque[*spillBucket]
-	currentSpillBkt []*spillBucket
+	spillMem                int64
+	autoSpill               bool
+	memoryGrowthParticipant *process.ExecutionMemoryGrowthParticipant
+	spillAggList            []aggexec.GroupAggFuncExec
+	spillBkts               list.Deque[*spillBucket]
+	currentSpillBkt         []*spillBucket
 
 	// reusable buffers for spill to avoid per-call allocations
 	spillFlagFlat   []uint8           // scratch 0/1 flags for one batch's rows during spill
@@ -522,6 +524,7 @@ func (ctr *container) releaseFinalRecoveryCapacity() error {
 		ctr.spillBkts != nil && ctr.spillBkts.Len() != 0 {
 		return nil
 	}
+	ctr.releaseMemoryGrowthParticipant()
 	ctr.freeSpillReloadStaging()
 	if ctr.spillReader != nil {
 		ctr.spillReader.DropReadAhead()
@@ -568,6 +571,7 @@ func (ctr *container) isSpilling() bool {
 }
 
 func (ctr *container) setSpillMem(m int64) {
+	ctr.autoSpill = m == 0
 	if m == 0 {
 		// 0 means auto config.   Here the formula is made up on the fly.
 		fileCacheMem := fileservice.GlobalMemoryCacheSizeHint.Load()
@@ -580,6 +584,29 @@ func (ctr *container) setSpillMem(m int64) {
 	} else {
 		ctr.spillMem = m
 	}
+}
+
+func (ctr *container) ensureMemoryGrowthParticipant() error {
+	if ctr == nil || !ctr.autoSpill || ctr.mtyp == H0 || ctr.budget == nil {
+		return nil
+	}
+	if ctr.memoryGrowthParticipant != nil {
+		return nil
+	}
+	participant, err := ctr.budget.RegisterMemoryGrowthParticipant()
+	if err != nil {
+		return err
+	}
+	ctr.memoryGrowthParticipant = participant
+	return nil
+}
+
+func (ctr *container) releaseMemoryGrowthParticipant() {
+	if ctr == nil || ctr.memoryGrowthParticipant == nil {
+		return
+	}
+	ctr.memoryGrowthParticipant.Release()
+	ctr.memoryGrowthParticipant = nil
 }
 
 func (ctr *container) freeAggList() {
@@ -657,6 +684,7 @@ func (ctr *container) freeGroupingRollups() {
 
 func (ctr *container) free() {
 	// free container stuff, WTH is the Free0?
+	ctr.releaseMemoryGrowthParticipant()
 	ctr.inputDone = false
 	ctr.inputRowCount = 0
 	ctr.hr.Free0()
