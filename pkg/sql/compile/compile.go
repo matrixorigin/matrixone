@@ -6259,10 +6259,13 @@ func (c *Compile) compileMinusAndIntersect(node *plan.Node, left []*Scope, right
 	if c.IsSingleScope(left) && c.IsSingleScope(right) {
 		return c.compileTpMinusAndIntersect(node, left, right, nodeType)
 	}
-	if nodeType == plan.Node_MINUS_ALL || nodeType == plan.Node_INTERSECT_ALL {
+	broadcastDistinct := (nodeType == plan.Node_MINUS || nodeType == plan.Node_INTERSECT) &&
+		!node.GetStats().GetHashmapStats().GetShuffle()
+	if nodeType == plan.Node_MINUS_ALL || nodeType == plan.Node_INTERSECT_ALL || broadcastDistinct {
 		// Multiset operations need one owner of every occurrence from both
-		// inputs. The existing parallel set-op path broadcasts rows to workers;
-		// using it here would multiply the result cardinality.
+		// inputs. Broadcast DISTINCT inputs also need only one owner to avoid
+		// repeating the same set work across workers. Preserve parallel upstream
+		// scopes and merge them into that single owner.
 		return c.compileTpMinusAndIntersect(
 			node,
 			[]*Scope{c.newMergeScope(left)},

@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"os"
@@ -26,12 +27,14 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -39,6 +42,7 @@ import (
 type spillTestHarness struct {
 	op         *HashBuild
 	proc       *process.Process
+	budget     *process.ExecutionResourceBudget
 	generation *process.ExecutionResourceGeneration
 	registry   *mpool.AllocationAccountRegistry
 	account    *mpool.AllocationAccount
@@ -58,14 +62,83 @@ func newSpillTestHarness(t *testing.T, limit uint64) *spillTestHarness {
 	op := &HashBuild{NeedHashMap: true}
 	require.NoError(t, op.SetAllocationAccount(account))
 	op.ctr.hashmapBuilder.setBudget(generation)
-	op.ctr.spillUUID = t.Name()
+	op.ctr.spillUUID = strings.ReplaceAll(t.Name(), "/", "_")
 	return &spillTestHarness{
 		op:         op,
 		proc:       proc,
+		budget:     budget,
 		generation: generation,
 		registry:   registry,
 		account:    account,
 		files:      make([]*os.File, spillNumBuckets),
+	}
+}
+
+func TestDirectSpillKeepsAdmittedRecoveryUntilBuildEnds(t *testing.T) {
+	for _, cancelAtEnd := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cancel=%t", cancelAtEnd), func(t *testing.T) {
+			h := newSpillTestHarness(t, 8<<20)
+			t.Cleanup(func() {
+				h.op.ctr.hashmapBuilder.Free(h.proc)
+				h.op.ctr.dropSpillScratchBuffers()
+				require.NoError(t, h.op.releaseRecoveryCapacity(h.account, true))
+				h.close(t)
+				require.Zero(t, h.proc.Mp().CurrNB())
+			})
+			h.op.IsShuffle = true
+			h.op.JoinMapRefCnt = 1
+			h.op.Conditions = []*plan.Expr{newExpr(0, types.T_int64.ToType())}
+			h.op.ctr.setSpillThreshold(0)
+			require.NoError(t, h.op.installRecoveryCapacity(h.generation))
+			require.NoError(t, h.op.ctr.hashmapBuilder.Prepare(h.op.Conditions, 0, 0, nil, h.proc))
+			ctx, cancel := context.WithCancelCause(h.proc.Ctx)
+			h.proc.Ctx = ctx
+			t.Cleanup(func() { cancel(context.Canceled) })
+			child := colexec.NewMockOperator()
+			t.Cleanup(func() { child.Free(h.proc, false, nil) })
+			for _, value := range []int64{1, 2} {
+				input := batch.NewWithSize(1)
+				child.WithBatchs([]*batch.Batch{input})
+				input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+				require.NoError(t, vector.AppendFixed(input.Vecs[0], value, false, h.proc.Mp()))
+				input.SetRowCount(1)
+			}
+			var reserved uint64
+			child.WithBatchCallback(func(index int) {
+				if index == 1 {
+					require.Len(t, h.op.ctr.hashmapBuilder.Batches.Buf, 1)
+					reserved, _ = h.op.ctr.recoveryCapacity.Snapshot()
+					require.Positive(t, reserved)
+					// New allocations are denied; borrowing already-admitted
+					// recovery bytes must still drain both retained and direct input.
+					require.NoError(t, h.budget.UpdateAggregateCap(1))
+				}
+			})
+			ended := false
+			child.WithEndOfDataCallback(func() {
+				ended = true
+				require.NotNil(t, h.op.ctr.recoveryCapacity)
+				capacity, _ := h.op.ctr.recoveryCapacity.Snapshot()
+				require.Equal(t, reserved, capacity, "continuation must reuse, not grow, its admitted floor")
+				if cancelAtEnd {
+					cancel(context.Canceled)
+				}
+			})
+			h.op.SetChildren([]vm.Operator{child})
+			err := h.op.build(h.proc, process.NewAnalyzer(0, false, false, "hash build"))
+			if cancelAtEnd {
+				require.ErrorIs(t, err, context.Canceled)
+				require.Nil(t, h.op.ctr.spillBundle)
+				require.Zero(t, h.generation.SpillDiskUsed())
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, int64(2), spillFileRows(t, h))
+			}
+			require.True(t, ended)
+			require.Nil(t, h.op.ctr.recoveryCapacity)
+			require.Zero(t, h.account.Snapshot().Used)
+			require.Zero(t, h.generation.Used())
+		})
 	}
 }
 
@@ -108,6 +181,7 @@ func spillFileRows(t *testing.T, h *spillTestHarness) int64 {
 		}
 		file, err := entry.fs.OpenFile(context.Background(), entry.name)
 		require.NoError(t, err)
+		defer func() { require.NoError(t, file.Close()) }()
 		_, err = file.Seek(0, io.SeekStart)
 		require.NoError(t, err)
 		reader := bufio.NewReader(file)
@@ -130,7 +204,6 @@ func spillFileRows(t *testing.T, h *spillTestHarness) int64 {
 			require.Equal(t, uint64(spillMagic), types.DecodeUint64(magic[:]))
 			total += rows
 		}
-		require.NoError(t, file.Close())
 	}
 	return total
 }
@@ -182,14 +255,14 @@ func TestAutoSpillUsesLiveExecutionHeadroom(t *testing.T) {
 	op := &HashBuild{IsShuffle: true, NeedHashMap: true}
 	op.ctr.setSpillThreshold(0)
 	op.ctr.memoryGrowthParticipant = first
-	spill, err := op.shouldSpillBeforeRetain(64 * mpool.MB)
+	spill, err := op.shouldSpillBeforeRetain(64*mpool.MB, nil)
 	require.NoError(t, err)
 	require.False(t, spill)
 
 	retained, err := generation.ReserveTransientMemory(300 * mpool.MB)
 	require.NoError(t, err)
 	defer retained.Release()
-	spill, err = op.shouldSpillBeforeRetain(140 * mpool.MB)
+	spill, err = op.shouldSpillBeforeRetain(140*mpool.MB, nil)
 	require.NoError(t, err)
 	require.True(t, spill)
 	require.True(t, op.ctr.autoSpillTriggered)
@@ -216,6 +289,122 @@ func TestEstimatedResidentBuildBytesUsesRowCountUpperBound(t *testing.T) {
 	var nilBuilder *HashmapBuilder
 	_, err = nilBuilder.EstimatedHashMapBytes(1)
 	require.ErrorIs(t, err, process.ErrExecutionResourceInvalid)
+}
+
+func BenchmarkAutoSpillRetainedProjection(b *testing.B) {
+	proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+	defer proc.Free()
+	input := testutil.NewBatch([]types.Type{types.T_int64.ToType()}, true, colexec.DefaultBatchSize, proc.Mp())
+	defer input.Clean(proc.Mp())
+	executor, err := colexec.NewExpressionExecutor(proc, newExpr(0, types.T_int64.ToType()))
+	require.NoError(b, err)
+	defer executor.Free()
+	for _, retainedBatches := range []int{128, 1024, 8192} {
+		b.Run(fmt.Sprintf("batches=%d", retainedBatches), func(b *testing.B) {
+			budget := process.MustNewExecutionResourceBudget(1<<40, 1<<40)
+			generation, err := budget.OpenGeneration(1)
+			require.NoError(b, err)
+			participant, err := generation.RegisterMemoryGrowthParticipant()
+			require.NoError(b, err)
+			defer participant.Release()
+			op := &HashBuild{IsShuffle: true, NeedHashMap: true}
+			op.ctr.setSpillThreshold(0)
+			op.ctr.memoryGrowthParticipant = participant
+			hb := &op.ctr.hashmapBuilder
+			hb.keyWidth = 8
+			hb.executors = []colexec.ExpressionExecutor{executor}
+			hb.Batches.Buf = make([]*batch.Batch, retainedBatches)
+			for i := range hb.Batches.Buf {
+				hb.Batches.Buf[i] = input
+			}
+			hb.Batches.MemSize = int64(input.Size()) * int64(retainedBatches)
+			hb.InputBatchRowCount = input.RowCount() * (retainedBatches + 1)
+			inputBytes := int64(input.Size())
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				if _, err := op.shouldSpillBeforeRetain(inputBytes, input); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func TestAutoSpillProjectsIncomingGroupingKeys(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		column   int
+		row      uint64
+		want     bool
+		borrowed bool
+	}{
+		{name: "first key sentinel", column: 0, row: 0, want: true},
+		{name: "non-key sentinel", column: 1, row: 0},
+		{name: "out-of-range key bit", column: 0, row: 513},
+		{name: "borrowed key sentinel", column: 0, want: true, borrowed: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			defer proc.Free()
+			input := testutil.NewBatch([]types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, true, 513, proc.Mp())
+			defer input.Clean(proc.Mp())
+			if tc.borrowed {
+				validity := make([]byte, (input.RowCount()+7)/8)
+				for i := range validity {
+					validity[i] = 0xff
+				}
+				validity[0] &^= 1
+				lease, err := bufferlease.NewRefCounted(validity, int64(len(validity)), nil)
+				require.NoError(t, err)
+				defer lease.Release()
+				require.NoError(t, input.Vecs[0].GetGrouping().InstallBorrowedValidity(validity, 0, input.RowCount(), 1, lease))
+			} else {
+				input.Vecs[tc.column].GetGrouping().Add(tc.row)
+			}
+			expr := newExpr(0, types.T_int64.ToType())
+			expr.GetCol().RelPos = 1 // Direct keys still resolve against the single build batch.
+			executor, err := colexec.NewExpressionExecutor(proc, expr)
+			require.NoError(t, err)
+			defer executor.Free()
+			inputBytes := int64(input.Size())
+			intBytes := hashtable.EstimateInt64HashMapSize(513)
+			strBytes := hashtable.EstimateStringHashMapSize(513)
+			require.Greater(t, strBytes, intBytes)
+			limit := uint64(inputBytes) + (intBytes+strBytes)/2
+			budget := process.MustNewExecutionResourceBudget(limit, limit)
+			generation, err := budget.OpenGeneration(1)
+			require.NoError(t, err)
+			participant, err := generation.RegisterMemoryGrowthParticipant()
+			require.NoError(t, err)
+			defer participant.Release()
+			op := &HashBuild{IsShuffle: true, NeedHashMap: true}
+			op.ctr.setSpillThreshold(0)
+			op.ctr.memoryGrowthParticipant = participant
+			op.ctr.hashmapBuilder.keyWidth = 8
+			op.ctr.hashmapBuilder.InputBatchRowCount = 513
+			op.ctr.hashmapBuilder.executors = []colexec.ExpressionExecutor{executor}
+			spill, err := op.shouldSpillBeforeRetain(inputBytes, input)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, spill)
+			require.Equal(t, tc.want, op.ctr.autoSpillHasGrouping)
+			if tc.borrowed {
+				require.True(t, input.Vecs[0].GetGrouping().HasBorrowedValidity(), "projection must not mutate upstream-owned metadata")
+			}
+
+			// A sentinel first appearing in a later input changes the projected
+			// map kind before that input is copied into the retained relation.
+			input.Vecs[0].GetGrouping().Add(0)
+			spill, err = op.shouldSpillBeforeRetain(inputBytes, input)
+			require.NoError(t, err)
+			require.True(t, spill)
+			// Reusing the upstream buffer cannot erase the retained fact.
+			input.Vecs[0].GetGrouping().Clear()
+			spill, err = op.shouldSpillBeforeRetain(inputBytes, input)
+			require.NoError(t, err)
+			require.True(t, spill)
+		})
+	}
 }
 
 func TestAccountedSpillAdaptsAndPreservesRows(t *testing.T) {
@@ -351,6 +540,8 @@ func TestSpillMinimumUnitPressureIsControlled(t *testing.T) {
 	)
 	var minimum *MinimumAllocationPressureError
 	require.True(t, errors.As(err, &minimum), "unexpected error: %v", err)
+	require.Contains(t, err.Error(), "last capacity refusal:")
+	require.Equal(t, MemoryPressureMinimumUnit, MemoryPressureReasonOf(err))
 }
 
 func TestWriteSpillPayloadCancellationStopsBeforeIO(t *testing.T) {

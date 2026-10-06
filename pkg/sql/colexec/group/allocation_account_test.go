@@ -2351,6 +2351,114 @@ func TestAccountedGroupSpillResourceAdmissionCleans(t *testing.T) {
 	}
 }
 
+func TestAccountedGroupQueuedSpillDoesNotRetainFDs(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	keys := []int32{1, 2}
+	input := batch.NewWithSize(1)
+	defer input.Clean(proc.Mp())
+	input.Vecs[0] = testutil.MakeInt32Vector(keys, nil, proc.Mp())
+	input.SetRowCount(len(keys))
+	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)},
+		[]aggexec.AggFuncExecExpression{countStarAgg()})
+	g.SpillMem = 2 // Values below 10000 are deterministic group-count thresholds.
+	allocation := installGroupTestAllocation(t, g, proc, 64<<20)
+	defer func() {
+		g.Free(proc, false, nil)
+		require.Zero(t, allocation.account.Snapshot().Used)
+		require.Zero(t, allocation.generation.SpillFDUsed())
+		require.Zero(t, allocation.generation.SpillDiskUsed())
+		finalizeGroupTestAllocation(t, g, allocation)
+		spillFS, err := proc.GetSpillFileService()
+		require.NoError(t, err)
+		for entry, err := range spillFS.List(context.Background(), "/") {
+			require.NoError(t, err)
+			t.Errorf("spill file remains after cleanup: %s", entry.Name)
+		}
+	}()
+	var nonEmptyBuckets int
+	g.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}).WithEndOfDataCallback(func() {
+		for _, bkt := range g.ctr.currentSpillBkt {
+			if bkt.cnt > 0 {
+				nonEmptyBuckets++
+			}
+		}
+		require.Positive(t, allocation.generation.SpillFDUsed())
+		// Stop after writer ownership has moved to the queue, before any reader
+		// opens a bucket. Queue length must not consume the reader's FD budget.
+		proc.Ctx = newCancelOnDoneCheckContext(proc.Ctx, nonEmptyBuckets+4)
+	}))
+	require.NoError(t, g.Prepare(proc))
+	result, err := g.Call(proc)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, result.Batch)
+	require.Nil(t, g.ctr.currentSpillBkt)
+	require.Positive(t, nonEmptyBuckets)
+	require.Equal(t, nonEmptyBuckets, g.ctr.spillBkts.Len())
+	require.Positive(t, allocation.generation.SpillDiskUsed())
+	require.Zero(t, allocation.generation.SpillFDUsed())
+}
+
+func TestGroupSpillBucketReopen(t *testing.T) {
+	for _, mode := range []string{"read", "canceled", "fd-refused", "flush-error"} {
+		t.Run(mode, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			budget, err := proc.GetExecutionResourceBudget()
+			require.NoError(t, err)
+			fs, err := proc.GetSpillFileService()
+			require.NoError(t, err)
+			ctr := container{mp: proc.Mp(), budget: budget}
+			bkt := &spillBucket{name: "reopen"}
+			defer func() {
+				require.NoError(t, bkt.free())
+				require.Zero(t, budget.SpillFDUsed())
+				require.Zero(t, budget.SpillDiskUsed())
+				for entry, err := range fs.List(context.Background(), "/") {
+					require.NoError(t, err)
+					t.Errorf("spill file remains after cleanup: %s", entry.Name)
+				}
+			}()
+			require.NoError(t, ctr.openSpillBucket(proc, fs, bkt))
+			_, err = bkt.writer.Write([]byte("data"))
+			require.NoError(t, err)
+			if mode == "flush-error" {
+				require.NoError(t, bkt.flushWriter())
+				bkt.writer = &distinctFlushErrorWriter{err: io.ErrShortWrite}
+				require.ErrorIs(t, bkt.free(), io.ErrShortWrite)
+				return // The deferred checks still require deletion and zero ledgers.
+			}
+			require.NoError(t, bkt.finishWriting())
+			require.Nil(t, bkt.file)
+			require.Zero(t, budget.SpillFDUsed())
+			diskBytes := budget.SpillDiskUsed()
+			require.Positive(t, diskBytes)
+
+			switch mode {
+			case "read":
+				require.NoError(t, bkt.openReader(proc.Ctx, budget))
+				require.EqualValues(t, 1, budget.SpillFDUsed())
+				data, err := io.ReadAll(bkt.file)
+				require.NoError(t, err)
+				require.Equal(t, "data", string(data))
+			case "canceled":
+				ctx, cancel := context.WithCancel(proc.Ctx)
+				cancel()
+				require.ErrorIs(t, bkt.openReader(ctx, budget), context.Canceled)
+				require.Zero(t, budget.SpillFDUsed())
+			case "fd-refused":
+				blocker, err := budget.ReserveSpillFD(budget.SpillFDCap())
+				require.NoError(t, err)
+				defer blocker.Release()
+				require.Error(t, bkt.openReader(proc.Ctx, budget))
+				require.Equal(t, budget.SpillFDCap(), budget.SpillFDUsed())
+			}
+			require.Equal(t, diskBytes, budget.SpillDiskUsed())
+			require.NoError(t, bkt.free()) // The deferred second free is also safe.
+		})
+	}
+}
+
 func TestAccountedGroupCancellationResetAndReuse(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()

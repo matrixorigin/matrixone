@@ -73,6 +73,7 @@ func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
 	hashBuild.ctr.setSpillThreshold(hashBuild.SpillThreshold)
 	hashBuild.ctr.autoSpillTriggered = false
 	hashBuild.ctr.autoSpillLimitAtTrigger = 0
+	hashBuild.ctr.autoSpillHasGrouping = false
 	hashBuild.ctr.spillUUID = fmt.Sprintf("hb_%d", hashBuildSpillSequence.Add(1))
 
 	budget, err := proc.GetExecutionResourceBudget()
@@ -379,16 +380,11 @@ func (hashBuild *HashBuild) build(
 				return err
 			}
 		}
-		// No retained state remains after the drain. Drop every mandatory
-		// recovery-class borrower before returning the conservative floor, then
-		// let direct sources use ordinary allocation-led admission.
+		// The retained drain is not the end of this producer: later direct
+		// inputs still need hash/selection/codec scratch. Return these borrowers
+		// to the admitted floor, but keep the floor until build's deferred
+		// cleanup so pressure cannot strand the next input's minimum allocation.
 		ctr.dropMandatorySpillRecoveryScratch()
-		if err := hashBuild.releaseRecoveryCapacity(
-			ctr.hashmapBuilder.mapAllocationAccount,
-			true,
-		); err != nil {
-			return err
-		}
 		v2.HashBuildSpillDepthCounter.WithLabelValues("spill", "1").Inc()
 		return nil
 	}
@@ -396,10 +392,9 @@ func (hashBuild *HashBuild) build(
 		if err := startSpill(); err != nil {
 			return err
 		}
-		// Recovery headroom proves that already-retained batches can be drained;
-		// an upstream-owned direct source cannot strand retained state. Admit its
-		// scratch at the physical allocation sites instead of applying the
-		// conservative retained-batch projection as a query-fatal gate.
+		// Reuse any admitted recovery floor, growing it only at actual scratch
+		// allocation sites. Do not apply the conservative retained-batch
+		// projection as a query-fatal gate to an upstream-owned direct source.
 		return ctr.spillBatchWithPressure(
 			proc, bat, spillFiles, ctr.spillExprExecs, analyzer, false)
 	}
@@ -442,7 +437,7 @@ func (hashBuild *HashBuild) build(
 		// speculative spill sizing and reservation off the resident hot path while
 		// preserving enough budget headroom to drain the batches already retained.
 		spillBeforeRetain, spillDecisionErr :=
-			hashBuild.shouldSpillBeforeRetain(inputBatchSize)
+			hashBuild.shouldSpillBeforeRetain(inputBatchSize, result.Batch)
 		if spillDecisionErr != nil {
 			return spillDecisionErr
 		}

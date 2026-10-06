@@ -743,7 +743,7 @@ func (ctr *container) openSpillBucket(
 			return err
 		}
 	}
-	file, err := spillfs.CreateAndRemoveFile(proc.Ctx, bkt.name)
+	file, err := spillfs.CreateFile(proc.Ctx, bkt.name)
 	if err != nil {
 		if fdToken != nil {
 			fdToken.Release()
@@ -754,20 +754,14 @@ func (ctr *container) openSpillBucket(
 		return err
 	}
 	bkt.file = file
-	bkt.writer, err = newGroupSpillWriter(ctr, file, proc.Ctx, diskToken)
-	if err != nil {
-		_ = file.Close()
-		bkt.file = nil
-		if fdToken != nil {
-			fdToken.Release()
-		}
-		if diskToken != nil {
-			diskToken.Release()
-		}
-		return err
-	}
+	bkt.fileFS = spillfs
 	bkt.fdToken = fdToken
 	bkt.diskToken = diskToken
+	bkt.writer, err = newGroupSpillWriter(ctr, file, proc.Ctx, diskToken)
+	if err != nil {
+		_ = bkt.free()
+		return err
+	}
 	return nil
 }
 
@@ -1400,7 +1394,7 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 				if err, canceled := vm.CancelCheck(proc); canceled {
 					return false, err
 				}
-				if err := bkt.flushWriter(); err != nil {
+				if err := bkt.finishWriting(); err != nil {
 					bkt.free()
 					ctr.currentSpillBkt[i] = nil
 					return false, err
@@ -1458,6 +1452,9 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 	}
 	defer recordReloadTime()
 
+	if err := bkt.openReader(proc.Ctx, ctr.budget); err != nil {
+		return false, err
+	}
 	// reposition to the start of the file.
 	if _, err := bkt.file.Seek(0, io.SeekStart); err != nil {
 		return false, err

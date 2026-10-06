@@ -202,6 +202,99 @@ func TestMergeDiscardsIncompatibleStatementInfoFile(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestETLMergeCanceledBeforeWork(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	merge, err := NewMerge(ctx, "", WithFileService(testutil.NewFS(t)), WithTable(dummyTable))
+	require.NoError(t, err)
+	defer merge.Stop()
+	require.ErrorIs(t, merge.doMergeFiles(ctx, nil), context.Canceled)
+	require.Empty(t, merge.runningJobs)
+	require.ErrorIs(t, merge.Main(ctx), context.Canceled)
+	require.ErrorIs(t, LongRunETLMerge(ctx, "", task.AsyncTask{}, merge.logger,
+		WithFileService(merge.fs)), context.Canceled)
+}
+
+type mergeWaitContext struct {
+	context.Context
+	waiting chan struct{}
+	once    sync.Once
+}
+
+func (c *mergeWaitContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.waiting) })
+	return c.Context.Done()
+}
+
+func TestETLMergeCancellationWhileWaiting(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	merge, err := NewMerge(ctx, "", WithFileService(testutil.NewFS(t)), WithTable(dummyTable), WithMaxMergeJobs(1))
+	require.NoError(t, err)
+	defer merge.Stop()
+	merge.runningJobs <- struct{}{}
+	defer func() { <-merge.runningJobs }()
+	done := make(chan error, 1)
+	waitCtx := &mergeWaitContext{Context: ctx, waiting: make(chan struct{})}
+	go func() { done <- merge.doMergeFiles(waitCtx, nil) }()
+	select {
+	case <-waitCtx.waiting:
+	case <-time.After(time.Second):
+		cancel()
+		<-merge.runningJobs
+		<-done
+		merge.runningJobs <- struct{}{}
+		t.Fatal("permit admission did not observe cancellation")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		// Unblock a regressed implementation before failing the test.
+		<-merge.runningJobs
+		<-done
+		merge.runningJobs <- struct{}{}
+		t.Fatal("canceled merge waited for another job's permit")
+	}
+	require.Len(t, merge.runningJobs, 1, "must not consume another job's permit")
+}
+
+func TestETLMergeCancellationPreservesFiles(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fs := testutil.NewFS(t)
+	files := []*FileMeta{{FilePath: "etl:sys/logs/cancel-first.csv"}, {FilePath: "etl:sys/logs/cancel-next.csv"}}
+	for _, file := range files {
+		require.NoError(t, fs.Write(ctx, fileservice.IOVector{
+			FilePath: file.FilePath,
+			Entries:  []fileservice.IOEntry{{Size: 10, Data: []byte("statement\n")}},
+		}))
+	}
+	merge, err := NewMerge(ctx, "", WithFileService(fs), WithTable(&table.Table{Table: "statement_info"}))
+	require.NoError(t, err)
+	defer merge.Stop()
+	merge.isRecordExisted = func(context.Context, []string, *table.Table, db_holder.DBConnProvider) (bool, error) {
+		cancel()
+		return false, context.Canceled
+	}
+	done := make(chan error, 1)
+	go func() { done <- merge.doMergeFiles(ctx, files) }()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		// Join even a regressed, non-cancelable retry before releasing its FS.
+		<-done
+		t.Fatal("canceled merge remained in upload backoff")
+	}
+	require.Empty(t, merge.runningJobs)
+	for _, file := range files {
+		_, err := fs.StatFile(context.Background(), file.FilePath)
+		require.NoError(t, err, "unprocessed file must survive cancellation")
+	}
+}
+
 func initSingleLogsFile(ctx context.Context, fs fileservice.FileService, tbl *table.Table, ts time.Time, ext string) (string, error) {
 	mux.Lock()
 	defer mux.Unlock()

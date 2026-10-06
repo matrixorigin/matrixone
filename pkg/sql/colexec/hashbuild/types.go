@@ -120,6 +120,9 @@ type container struct {
 	memoryGrowthParticipant *process.ExecutionMemoryGrowthParticipant
 	autoSpillTriggered      bool
 	autoSpillLimitAtTrigger uint64
+	// Monotone while ingress can retain batches; Prepare starts a new generation.
+	// Only the spill projection uses this bit, not the final hashmap selection.
+	autoSpillHasGrouping bool
 
 	// reusable buffers for spill operations
 	spillHashValues []uint64
@@ -520,9 +523,9 @@ func (hashBuild *HashBuild) installRecoveryCapacity(
 	return nil
 }
 
-// releaseRecoveryCapacity returns recovery headroom after retained spill state
-// has been drained or build reaches a terminal result. restoreDefault keeps
-// later direct/test/reuse allocations on the statement's ordinary controller;
+// releaseRecoveryCapacity returns recovery headroom at a terminal build result,
+// after all scratch borrowers have been dropped. restoreDefault keeps later
+// test/reuse allocations on the statement's ordinary controller;
 // statement teardown passes false and drops the selection immediately afterward.
 func (hashBuild *HashBuild) releaseRecoveryCapacity(
 	account *mpool.AllocationAccount,

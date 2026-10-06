@@ -520,11 +520,11 @@ func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch,
 							"HashBuildSpillMinimumUnitErrors",
 							1,
 						)
-						return NewMinimumAllocationPressureError(
+						return fmt.Errorf("%w; last capacity refusal: %v", NewMinimumAllocationPressureError(
 							"hashbuild",
 							"spill-selected-or-codec",
 							ctr.hashmapBuilder.mapAllocationAccount,
-						)
+						), spillErr)
 					}
 					analyzer.GetOpStats().AddExtraStat(
 						"HashBuildSpillOptionalReclaims",
@@ -536,11 +536,11 @@ func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch,
 					"HashBuildSpillMinimumUnitErrors",
 					1,
 				)
-				return NewMinimumAllocationPressureError(
+				return fmt.Errorf("%w; last capacity refusal: %v", NewMinimumAllocationPressureError(
 					"hashbuild",
 					"spill-selected-or-codec",
 					ctr.hashmapBuilder.mapAllocationAccount,
-				)
+				), spillErr)
 			}
 		}
 	}
@@ -708,11 +708,11 @@ func (ctr *container) spillBatchWithPressure(
 					OptionalDisabled: ctr.spillCoalesceDisabled,
 				}
 				if guard.Advance(next) != nil {
-					return NewMinimumAllocationPressureError(
+					return fmt.Errorf("%w; last capacity refusal: %v", NewMinimumAllocationPressureError(
 						"hashbuild",
 						"spill-hash-or-expression",
 						ctr.hashmapBuilder.mapAllocationAccount,
-					)
+					), err)
 				}
 				minimumRetried = true
 				analyzer.GetOpStats().AddExtraStat(
@@ -721,11 +721,13 @@ func (ctr *container) spillBatchWithPressure(
 				)
 				continue
 			}
-			return NewMinimumAllocationPressureError(
+			// Preserve the terminal classification; the original retryable cause
+			// is diagnostic text, not another error in the unwrap chain.
+			return fmt.Errorf("%w; last capacity refusal: %v", NewMinimumAllocationPressureError(
 				"hashbuild",
 				"spill-hash-or-expression",
 				ctr.hashmapBuilder.mapAllocationAccount,
-			)
+			), err)
 		}
 		chunk = (attempted + 1) / 2
 		if err := guard.Advance(PressureProgress{
@@ -963,6 +965,7 @@ func (hashBuild *HashBuild) shouldSpillBatches() bool {
 // headroom needed to start spill; it does not size or reserve spill scratch.
 func (hashBuild *HashBuild) shouldSpillBeforeRetain(
 	inputBatchSize int64,
+	input *batch.Batch,
 ) (bool, error) {
 	if !hashBuild.IsShuffle || !hashBuild.NeedHashMap {
 		return false, nil
@@ -991,12 +994,22 @@ func (hashBuild *HashBuild) shouldSpillBeforeRetain(
 		} else {
 			predicted += uint64(inputBatchSize)
 		}
-		projectedBuild, err := ctr.hashmapBuilder.EstimatedResidentBuildBytes(
-			predicted,
+		// Each retained batch passed through this ingress once. Inspect only the
+		// new input, including the threshold-crossing batch, instead of rescanning
+		// the entire growing build relation on every admission decision.
+		if ctr.hashmapBuilder.keyWidth <= 8 && !ctr.autoSpillHasGrouping {
+			ctr.autoSpillHasGrouping = ctr.hashmapBuilder.hasGroupingKeyInBatches([]*batch.Batch{input})
+		}
+		mapBytes, err := estimatedHashMapBytes(
 			int64(ctr.hashmapBuilder.InputBatchRowCount),
+			ctr.hashmapBuilder.keyWidth <= 8 && !ctr.autoSpillHasGrouping,
 		)
 		if err != nil {
 			return false, err
+		}
+		projectedBuild := predicted + mapBytes
+		if mapBytes > math.MaxUint64-predicted {
+			projectedBuild = math.MaxUint64
 		}
 		adaptiveSpill := projectedBuild > limit
 		staticSpill := colexec.ShouldSpill(

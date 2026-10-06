@@ -16,6 +16,7 @@ package group
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -110,11 +111,12 @@ type Group struct {
 }
 
 type spillBucket struct {
-	lv        int       // spill level
-	name      string    // spill bucket name
-	cnt       int64     // number of rows in this spill bucket
-	file      *os.File  // spill file
-	writer    io.Writer // file writer; tests may inject a failing writer
+	lv        int                            // spill level
+	name      string                         // spill bucket name
+	cnt       int64                          // number of rows in this spill bucket
+	file      *os.File                       // spill file
+	writer    io.Writer                      // file writer; tests may inject a failing writer
+	fileFS    fileservice.MutableFileService // owns the named file until free
 	fdToken   *process.ExecutionSpillFDReservation
 	diskToken *process.ExecutionSpillDiskReservation
 	path      [spillMaxPass]uint8
@@ -176,20 +178,66 @@ func (bkt *spillBucket) flushWriter() error {
 	return nil
 }
 
-func (bkt *spillBucket) free() error {
-	if bkt == nil {
-		return nil
-	}
-	err := bkt.flushWriter()
+func (bkt *spillBucket) closeFile() error {
+	var err error
 	if bkt.file != nil {
-		if closeErr := bkt.file.Close(); err == nil {
-			err = closeErr
-		}
+		err = bkt.file.Close()
 		bkt.file = nil
 	}
 	if bkt.fdToken != nil {
 		bkt.fdToken.Release()
 		bkt.fdToken = nil
+	}
+	return err
+}
+
+// A queued bucket owns disk bytes, not an open descriptor. Retaining every
+// waiting sibling's FD can prevent the active bucket from being repartitioned.
+func (bkt *spillBucket) finishWriting() error {
+	if err := bkt.flushWriter(); err != nil {
+		return err
+	}
+	if bkt.fileFS != nil {
+		return bkt.closeFile()
+	}
+	return nil // Externally supplied anonymous files cannot be reopened.
+}
+
+func (bkt *spillBucket) openReader(ctx context.Context, budget *process.ExecutionResourceGeneration) error {
+	if bkt.file != nil {
+		return nil
+	}
+	if bkt.fileFS == nil {
+		return moerr.NewInternalErrorNoCtx("group spill bucket has no file")
+	}
+	var err error
+	if budget != nil {
+		bkt.fdToken, err = budget.ReserveSpillFD(1)
+		if err != nil {
+			return err
+		}
+	}
+	bkt.file, err = bkt.fileFS.OpenFile(ctx, bkt.name)
+	if err != nil {
+		_ = bkt.closeFile()
+	}
+	return err
+}
+
+func (bkt *spillBucket) free() error {
+	if bkt == nil {
+		return nil
+	}
+	err := bkt.flushWriter()
+	if closeErr := bkt.closeFile(); err == nil {
+		err = closeErr
+	}
+	if bkt.fileFS != nil {
+		// Cancellation must not prevent deletion of a bucket owned by the query.
+		if removeErr := bkt.fileFS.RemoveFile(context.Background(), bkt.name); err == nil {
+			err = removeErr
+		}
+		bkt.fileFS = nil
 	}
 	if bkt.diskToken != nil {
 		bkt.diskToken.Release()

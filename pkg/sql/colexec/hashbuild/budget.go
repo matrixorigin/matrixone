@@ -38,8 +38,20 @@ func (hb *HashmapBuilder) EstimatedHashMapBytes(rowCount int64) (uint64, error) 
 	if rowCount == 0 {
 		return 0, nil
 	}
+	return estimatedHashMapBytes(rowCount, hb.keyWidth <= 8 && !hb.hasGroupingKey())
+}
+
+// estimatedHashMapBytes separates the capacity calculation from inspecting
+// retained data. Streaming ingress supplies its incrementally observed key kind.
+func estimatedHashMapBytes(rowCount int64, useIntHashMap bool) (uint64, error) {
+	if rowCount < 0 {
+		return 0, process.ErrExecutionResourceInvalid
+	}
+	if rowCount == 0 {
+		return 0, nil
+	}
 	cardinality := uint64(rowCount)
-	if hb.keyWidth <= 8 && !hb.hasGroupingKey() {
+	if useIntHashMap {
 		return hashtable.EstimateInt64HashMapSize(cardinality), nil
 	}
 	return hashtable.EstimateStringHashMapSize(cardinality), nil
