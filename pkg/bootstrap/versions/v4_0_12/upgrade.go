@@ -28,13 +28,11 @@ import (
 	"go.uber.org/zap"
 )
 
-// 4.0.12 is a repair version, not a new schema contract.  Some clusters have
-// already persisted 4.0.7 or 4.0.8 while an older upgrade worker skipped the
-// shared Python UDF catalog entries.  A new semantic version is required so
-// those clusters cannot finish the task with the old, empty handler.  The
-// entries are the original idempotent checks, so a normal 4.0.6 -> 4.0.7 ->
-// 4.0.8 -> 4.0.12 upgrade and a repair of an existing 4.0.8 cluster converge
-// on the same catalog state.
+// 4.0.12 replays only the idempotent shared Python UDF catalog entries.
+// An upstream-final 4.0.11 tenant may lack these entries; a strictly newer
+// registered handler ensures the upgrade framework schedules their repair.
+// Earlier tenants first traverse the unchanged upstream handlers through
+// 4.0.11. Complete, partial and absent revision schemas converge on retry.
 var Handler = &versionHandle{
 	metadata: versions.Version{
 		Version:                 "4.0.12",

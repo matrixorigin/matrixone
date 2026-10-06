@@ -45,25 +45,25 @@ func TestPythonRevisionRepairUpgradePath(t *testing.T) {
 	require.Len(t, v4_0_7.PythonRevisionUpgradeEntries(), 9)
 }
 
-func TestPythonRevisionRepairIsIdempotentForPersisted407And408(t *testing.T) {
+func TestPythonRevisionRepairIsIdempotentForCatalogStates(t *testing.T) {
 	for _, test := range []struct {
-		name             string
-		persistedVersion string
-		columns          []string
-		newIndex         bool
-		legacyIndex      bool
-		revisionTable    bool
-		wantFirstDDL     int
+		name          string
+		schemaOrigin  string
+		columns       []string
+		newIndex      bool
+		legacyIndex   bool
+		revisionTable bool
+		wantFirstDDL  int
 	}{
 		{
-			name:             "persisted_4.0.7_missed_catalog",
-			persistedVersion: "4.0.7",
-			legacyIndex:      true,
-			wantFirstDDL:     9,
+			name:         "upstream_final_4.0.11_missed_catalog",
+			schemaOrigin: "4.0.11",
+			legacyIndex:  true,
+			wantFirstDDL: 9,
 		},
 		{
-			name:             "persisted_4.0.8_partial_catalog",
-			persistedVersion: "4.0.8",
+			name:         "partial_revision_catalog",
+			schemaOrigin: "4.0.8",
 			columns: []string{
 				"active_revision", "namespace_version", "canonical_input_descriptor",
 				"return_descriptor", "signature_key_schema_version", "signature_fingerprint",
@@ -72,8 +72,8 @@ func TestPythonRevisionRepairIsIdempotentForPersisted407And408(t *testing.T) {
 			wantFirstDDL: 3,
 		},
 		{
-			name:             "persisted_4.0.8_complete_catalog",
-			persistedVersion: "4.0.8",
+			name:         "complete_revision_catalog",
+			schemaOrigin: "4.0.8",
 			columns: []string{
 				"active_revision", "namespace_version", "canonical_input_descriptor",
 				"return_descriptor", "signature_key_schema_version", "signature_fingerprint",
@@ -98,11 +98,11 @@ func TestPythonRevisionRepairIsIdempotentForPersisted407And408(t *testing.T) {
 				require.NoError(t, Handler.Prepare(context.Background(), txn, true))
 				require.NoError(t, Handler.HandleTenantUpgrade(context.Background(), 7, txn))
 				require.Len(t, state.ddl, test.wantFirstDDL,
-					"repair from persisted %s must apply only missing catalog objects", test.persistedVersion)
+					"repair of %s schema must apply only missing catalog objects", test.schemaOrigin)
 				firstDDL := append([]string(nil), state.ddl...)
 				require.NoError(t, Handler.HandleTenantUpgrade(context.Background(), 7, txn))
 				require.Equal(t, firstDDL, state.ddl,
-					"a restart/retry from persisted %s must not repeat DDL", test.persistedVersion)
+					"a restart/retry of %s schema must not repeat DDL", test.schemaOrigin)
 			})
 		})
 	}
