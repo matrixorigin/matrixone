@@ -552,6 +552,7 @@ func TestFlowControlMetadataMethods(t *testing.T) {
 
 func TestLiteralMaterialization(t *testing.T) {
 	proc := testutil.NewProcess(t, testutil.WithFileService(nil))
+	checkExpressionStorageAfterCleanup(t, proc)
 	t.Run("forms", func(t *testing.T) {
 		tests := []struct {
 			name          string
@@ -765,6 +766,38 @@ func TestLiteralMaterialization(t *testing.T) {
 		require.Equal(t, "b", recovered.GetStringAt(1))
 		require.Equal(t, types.StringSourceLiteral, recovered.GetStringSourceAt(0))
 		require.Equal(t, types.StringSourceSQLPrepare, recovered.GetStringSourceAt(1))
+	})
+
+	t.Run("timestamp scale", func(t *testing.T) {
+		for _, scale := range []int32{-1, 0, 1, 2, 3, 4, 5, 6, 7} {
+			t.Run(fmt.Sprintf("scale_%d", scale), func(t *testing.T) {
+				checkExpressionStorageAfterCleanup(t, proc)
+				expr := &plan.Expr{
+					Typ: plan.Type{Id: int32(types.T_timestamp), Scale: scale, NotNullable: true},
+					Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Timestampval{
+						Timestampval: 1609459200000000,
+					}}},
+				}
+				executor, err := NewExpressionExecutor(proc, expr)
+				if executor != nil {
+					t.Cleanup(executor.Free)
+				}
+				if scale < 0 || scale > 6 {
+					require.Nil(t, executor)
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrTooBigPrecision), "%v", err)
+					require.EqualError(t, err, fmt.Sprintf("Too-big precision %d specified for 'TIMESTAMP'. Maximum is 6.", scale))
+					return
+				}
+				require.NoError(t, err)
+				vec, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+				require.NoError(t, err)
+				require.Equal(t, types.Type{Oid: types.T_timestamp, Size: 8, Scale: scale}, *vec.GetType())
+				require.True(t, vec.IsConst())
+				require.Equal(t, 1, vec.Length())
+				require.False(t, vec.IsNull(0))
+				require.Equal(t, types.Timestamp(1609459200000000), vector.GetFixedAtNoTypeCheck[types.Timestamp](vec, 0))
+			})
+		}
 	})
 
 }
@@ -4187,72 +4220,6 @@ func makePlan2BoolConstExpr(b bool) *plan.Expr_Lit {
 			Bval: b,
 		},
 	}}
-}
-
-func makePlan2TimestampConstExprWithType(v int64, scale int32) *plan.Expr {
-	return &plan.Expr{
-		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
-			Isnull: false,
-			Value: &plan.Literal_Timestampval{
-				Timestampval: v,
-			},
-		}},
-		Typ: plan.Type{
-			Id:          int32(types.T_timestamp),
-			Scale:       scale,
-			NotNullable: true,
-		},
-	}
-}
-
-// TestTimestampLiteral_ScaleValidation tests scale validation for TIMESTAMP literals
-func TestTimestampLiteral_ScaleValidation(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	// Test valid scales (0-6)
-	for scale := int32(0); scale <= 6; scale++ {
-		t.Run(fmt.Sprintf("valid_scale_%d", scale), func(t *testing.T) {
-			expr := makePlan2TimestampConstExprWithType(1609459200000000, scale) // 2021-01-01 00:00:00
-			executor, err := NewExpressionExecutor(proc, expr)
-			require.NoError(t, err)
-
-			emptyBatch := &batch.Batch{}
-			emptyBatch.SetRowCount(1)
-			vec, err := executor.Eval(proc, []*batch.Batch{emptyBatch}, nil)
-			require.NoError(t, err)
-			require.Equal(t, 1, vec.Length())
-			require.Equal(t, types.T_timestamp, vec.GetType().Oid)
-			require.Equal(t, scale, vec.GetType().Scale)
-
-			executor.Free()
-		})
-	}
-
-	// Test invalid scale: negative
-	// Note: Scale validation happens during NewExpressionExecutor creation,
-	// not during Eval, because generateConstExpressionExecutor validates scale
-	t.Run("invalid_scale_negative", func(t *testing.T) {
-		expr := makePlan2TimestampConstExprWithType(1609459200000000, -1)
-		executor, err := NewExpressionExecutor(proc, expr)
-		require.Error(t, err) // Executor creation should fail due to invalid scale
-		require.Nil(t, executor)
-		require.Contains(t, err.Error(), "Too-big precision")
-		require.Contains(t, err.Error(), "TIMESTAMP")
-		require.Contains(t, err.Error(), "Maximum is 6")
-	})
-
-	// Test invalid scale: greater than 6
-	// Note: Scale validation happens during NewExpressionExecutor creation,
-	// not during Eval, because generateConstExpressionExecutor validates scale
-	t.Run("invalid_scale_too_large", func(t *testing.T) {
-		expr := makePlan2TimestampConstExprWithType(1609459200000000, 7)
-		executor, err := NewExpressionExecutor(proc, expr)
-		require.Error(t, err) // Executor creation should fail due to invalid scale
-		require.Nil(t, executor)
-		require.Contains(t, err.Error(), "Too-big precision")
-		require.Contains(t, err.Error(), "TIMESTAMP")
-		require.Contains(t, err.Error(), "Maximum is 6")
-	})
 }
 
 func TestOneShotExpressionOwnership(t *testing.T) {
