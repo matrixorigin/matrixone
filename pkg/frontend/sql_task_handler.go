@@ -362,9 +362,6 @@ func syncSQLTaskMetadataCommitTimestamp(ctx context.Context, ses *Session) {
 		return
 	}
 	cluster := clusterservice.GetMOCluster(qc.ServiceID())
-	if cluster == nil {
-		return
-	}
 
 	addresses := make([]string, 0, 4)
 	cluster.GetCNService(

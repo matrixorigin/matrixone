@@ -29,7 +29,8 @@ import (
 func TestPackedDatetimeDecimal128MatchesParser(t *testing.T) {
 	// Keep the old text conversion as an independent oracle for width, scale,
 	// rounding, overflow, zero values, and the exact public error text.
-	values := []types.Datetime{types.ZeroDatetime, types.DatetimeEpoch, types.Datetime(-2)}
+	values := append(make([]types.Datetime, 0, 77),
+		types.ZeroDatetime, types.DatetimeEpoch, types.Datetime(-2))
 	for _, input := range []string{
 		"0001-01-01 00:00:00.000001",
 		"1000-01-01 00:59:05.000000",

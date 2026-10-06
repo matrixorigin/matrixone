@@ -243,7 +243,7 @@ type ShuffleRangeTestCase struct {
 }
 
 func TestShuffleRange(t *testing.T) {
-	testcase := make([]ShuffleRangeTestCase, 0)
+	testcase := make([]ShuffleRangeTestCase, 0, 3)
 	testcase = append(testcase, ShuffleRangeTestCase{
 		min: []float64{},
 		max: []float64{},

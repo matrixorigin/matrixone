@@ -1882,8 +1882,6 @@ func TestMysqlResultSet(t *testing.T) {
 		mrs *MysqlResultSet
 	}
 
-	var kases []kase
-
 	kases1 := []kase{
 		{
 			sql: "select tiny",
@@ -2000,6 +1998,7 @@ func TestMysqlResultSet(t *testing.T) {
 	appendKases(kases1)
 	appendKases(kases2)
 
+	kases := make([]kase, 0, len(kases1)+len(kases2))
 	kases = append(kases, kases1...)
 	kases = append(kases, kases2...)
 
@@ -3675,7 +3674,8 @@ func TestParseSendLongDataAppendsRepeatedChunks(t *testing.T) {
 func buildLongDataExecutePacket(paramTypes ...defines.MysqlType) []byte {
 	// Cursor flag, iteration count, NULL bitmap, new-bound flag, and types.
 	// Streamed parameters have no inline values in COM_STMT_EXECUTE.
-	data := []byte{0, 1, 0, 0, 0}
+	data := make([]byte, 0, 6+((len(paramTypes)+7)>>3)+2*len(paramTypes))
+	data = append(data, 0, 1, 0, 0, 0)
 	data = append(data, make([]byte, (len(paramTypes)+7)>>3)...)
 	data = append(data, 1)
 	for _, tp := range paramTypes {
@@ -4205,25 +4205,25 @@ func Test_analyse320resp(t *testing.T) {
 		convey.ShouldBeNil(err)
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
 
-		var data []byte = nil
 		var cap uint16 = 0
 		cap |= uint16(CLIENT_CONNECT_WITH_DB)
 		var header [2]byte
 		proto.io.WriteUint16(header[:], 0, cap)
+		username := "abc"
+		authResp := []byte{0x1, 0x2, 0x3, 0x4}
+		dbName := "T"
+		data := make([]byte, 0, len(header)+3+len(username)+1+len(authResp)+1+len(dbName)+1)
 		//int<2>             capabilities flags, CLIENT_PROTOCOL_41 never set
 		data = append(data, header[:]...)
 		//int<3>             max-packet size
 		data = append(data, 0xff, 0xff, 0xff)
 		//string[NUL]        username
-		username := "abc"
 		data = append(data, []byte(username)...)
 		data = append(data, 0x0)
 		//auth response
-		authResp := []byte{0x1, 0x2, 0x3, 0x4}
 		data = append(data, authResp...)
 		data = append(data, 0x0)
 		//database
-		dbName := "T"
 		data = append(data, []byte(dbName)...)
 		data = append(data, 0x0)
 
@@ -4293,7 +4293,7 @@ func Test_analyse41resp(t *testing.T) {
 		convey.ShouldBeNil(err)
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
 
-		var data []byte = nil
+		data := make([]byte, 0, 36)
 		var cap uint32 = 0
 		cap |= CLIENT_PROTOCOL_41 | CLIENT_CONNECT_WITH_DB
 		var header [4]byte
@@ -4446,7 +4446,7 @@ func Test_handleHandshake(t *testing.T) {
 		mp := &MysqlProtocolImpl{SV: SV}
 		mp.io = &IO
 		mp.tcpConn = ioses
-		payload := []byte{'a'}
+		payload := append(make([]byte, 0, 6), 'a')
 		_, err = mp.HandleHandshake(ctx, payload)
 		convey.So(err, convey.ShouldNotBeNil)
 
@@ -5065,8 +5065,6 @@ type kase struct {
 }
 
 func makeKases() []kase {
-	var kases []kase
-
 	kases1 := []kase{
 		{
 			sql: "select bool",
@@ -5201,6 +5199,7 @@ func makeKases() []kase {
 		},
 	}
 
+	kases := make([]kase, 0, len(kases1)+len(kases2))
 	kases = append(kases, kases1...)
 	kases = append(kases, kases2...)
 	mp := mpool.MustNewZero()

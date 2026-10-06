@@ -2847,7 +2847,7 @@ func TestCompareStatsIsStrictWeakOrdering(t *testing.T) {
 	// consistent order b < a < c (the old comparator produced a b<a<c<b cycle).
 
 	// antisymmetry + transitivity over a grid of selectivity/outcnt values.
-	var xs []*Stats
+	xs := make([]*Stats, 0, 44)
 	for _, s := range []float64{-0.01, 0, 0.004, 0.009, 0.01, 0.015, 0.02, 0.099, 0.1, 0.5, 1.0} {
 		for _, o := range []float64{0, 1, 2, 100} {
 			xs = append(xs, &Stats{Selectivity: s, Outcnt: o})

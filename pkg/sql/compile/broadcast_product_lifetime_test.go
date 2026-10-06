@@ -599,7 +599,8 @@ func TestBroadcastProductIndependentRootsRetireProducer(t *testing.T) {
 			if failure {
 				first.terminal = wantErr
 			}
-			roots := []*Scope{makeScope(first), makeScope(second)}
+			roots := make([]*Scope, 0, 3)
+			roots = append(roots, makeScope(first), makeScope(second))
 			job := c.newMergeScope([]*Scope{makeScope(source)})
 			job.ConcurrentPreScopes = true
 			c.auxiliaryProductScopes = map[*Scope]bool{job: true}

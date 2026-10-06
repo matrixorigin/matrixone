@@ -1679,7 +1679,7 @@ var (
 )
 
 func init() {
-	tables := make([]string, 0)
+	tables := make([]string, 0, len(predefinedTables))
 	for tbl := range predefinedTables {
 		tables = append(tables, tbl)
 	}
@@ -6956,7 +6956,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		panic(fmt.Sprintf("does not have the privilege definition of statement type %T", stmt))
 	}
 
-	entries := make([]privilegeEntry, len(typs))
+	entries := make([]privilegeEntry, len(typs), len(typs)+len(extraEntries))
 	for i, typ := range typs {
 		entries[i] = privilegeEntriesMap[typ]
 		entries[i].databaseName = dbName
@@ -10981,12 +10981,12 @@ func createTablesInSystemOfGeneralTenant(ctx context.Context, bh BackgroundExec,
 	defer span.End()
 
 	var err error
-	sqls := make([]string, 0)
-	sqls = append(sqls, "use "+motrace.SystemDBConst+";")
 	traceTables := motrace.GetSchemaForAccount(ctx, newTenant.GetTenant())
+	metricTables := mometric.GetSchemaForAccount(ctx, newTenant.GetTenant())
+	sqls := make([]string, 0, 1+len(traceTables)+1+len(metricTables))
+	sqls = append(sqls, "use "+motrace.SystemDBConst+";")
 	sqls = append(sqls, traceTables...)
 	sqls = append(sqls, "use "+mometric.MetricDBConst+";")
-	metricTables := mometric.GetSchemaForAccount(ctx, newTenant.GetTenant())
 	sqls = append(sqls, metricTables...)
 
 	for _, sql := range sqls {

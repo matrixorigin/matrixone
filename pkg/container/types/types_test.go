@@ -15,11 +15,10 @@
 package types
 
 import (
+	"cmp"
 	"math"
 	"sort"
 	"testing"
-
-	"golang.org/x/exp/constraints"
 
 	"github.com/stretchr/testify/require"
 )
@@ -242,7 +241,7 @@ func BenchmarkCopy(b *testing.B) {
 	}
 }
 
-func sliceCopyG[T constraints.Ordered](a, b []T) {
+func sliceCopyG[T cmp.Ordered](a, b []T) {
 	for i := range a {
 		b[i] = a[i] + a[i]
 	}
@@ -349,7 +348,7 @@ func TestTypeCompare(t *testing.T) {
 	obj1 := NewObjectid()
 	blockId_1_1291 := NewBlockidWithObjectID(&obj1, 1291)
 	blockId_1_1036 := NewBlockidWithObjectID(&obj1, 1036)
-	var blocks []Blockid
+	blocks := make([]Blockid, 0, 2)
 	blocks = append(blocks, blockId_1_1291)
 	blocks = append(blocks, blockId_1_1036)
 
@@ -359,7 +358,7 @@ func TestTypeCompare(t *testing.T) {
 	require.Equal(t, uint16(1036), blocks[0].Sequence())
 	require.Equal(t, uint16(1291), blocks[1].Sequence())
 
-	var blocks2 []Blockid
+	blocks2 := make([]Blockid, 0, len(blocks))
 	blocks2 = append(blocks2, blocks...)
 	sort.Slice(blocks2, func(i, j int) bool {
 		return blocks[j].LT(&blocks[i])

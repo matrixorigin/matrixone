@@ -1296,7 +1296,7 @@ func TestScopeResetClearsPipelineEdgeTerminalState(t *testing.T) {
 		PreScopes: []*Scope{child},
 	}
 
-	var regs []*process.WaitRegister
+	regs := make([]*process.WaitRegister, 0, len(s.Proc.Reg.MergeReceivers)+len(child.Proc.Reg.MergeReceivers))
 	regs = append(regs, s.Proc.Reg.MergeReceivers...)
 	regs = append(regs, child.Proc.Reg.MergeReceivers...)
 	for _, reg := range regs {
