@@ -60,17 +60,12 @@ insert into mg values (0, '[1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e
 insert into mg values (1, '[1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30]', '[1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30]', '[1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30,1e-30]');
 insert into mg values (2, '[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]', '[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]', '[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]');
 
-create table mx (id int primary key, v vecf8(33));
-insert into mx values (1, '[1.329228e36,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1]'), (2, '[1.329228e36,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]');
-
 create table qv (qid int primary key, v vecf32(4));
 insert into qv values (1, '[1,0,0,0]'), (2, '[0,0,1,1]');
 set @qs = (select json_arrayagg(v) from qv);
 
 -- ---- gpu_mode = 1 (cuBLASLt) ----
 SET gpu_mode = 1;
--- the stored small element of a rescaled row keeps squared distance 1
-select vector_matmul(2, id, v, '[[1.329228e36,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]]', '{"metric":"l2sq"}') from mx;
 -- cosine at magnitudes whose float32 products overflow or underflow: rows rescaled by a
 -- power of two before the matmul, distance 0 to the GEMM's float32 rounding
 select id, json_extract(vector_matmul(1, id, f, '[[1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30]]', '{"metric":"cosine"}'), '$[0][0][1]') < 1e-6, json_extract(vector_matmul(1, id, e, '[[1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30]]', '{"metric":"cosine"}'), '$[0][0][1]') < 1e-6, json_extract(vector_matmul(1, id, b, '[[1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30]]', '{"metric":"cosine"}'), '$[0][0][1]') < 1e-6 from mg where id = 0 group by id;

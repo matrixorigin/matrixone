@@ -209,9 +209,7 @@ Device kernels around the matmul, on the engine's stream:
   and the `vecuint8` shifted-element sums. It runs once on the query matrix when the
   engine is created, and on each tile when the metric is cosine or squared L2 or the
   format is `vecuint8`. The host only packs bytes and reads cell headers.
-- The engine's device buffers are slices of one allocation sized when it is created, and
-  the copies of rescaled rows and queries are allocated only for cosine and squared L2 on
-  the formats that rescale.
+- The engine's device buffers are slices of one allocation sized when it is created.
 - For cosine and squared L2 on `vecf32`, `vecbf16` and `vecf8`, whose values can make the
   fp32 products overflow or underflow, the row-statistics kernel rescales a row right after
   taking its norm: a row whose squared norm without its global scale is outside
@@ -230,17 +228,9 @@ Device kernels around the matmul, on the engine's stream:
 - A fix-up kernel turns the matmul output into rank scores. The inner product is
   `acc × fp32(g_row × g_query)` in fp32, as cuBLASLt applies `alpha = G_a × G_b` to a GEMM
   with per-tensor global scales; cosine and squared L2 take the dot product with the
-  global scales in double, with the squared norms, and a distance within the fp32 GEMM's
-  error of 0 (`dim × 2^-22`, relative to the squared norms for squared L2) is marked for an
-  exact kernel, which computes it, a warp per pair, from the stored values in double —
-  `1 − x·q / (|x||q|)` with the row statistics' norms and `Σ(x − q)²`, the numerics of
-  `cosine_distance` and `l2_distance_sq` — so a row equal to a query is at distance 0
-  (integer formats take the corrected int64 sums, which are exact). A row or query the
-  rescale changed is read from the copy of its stored elements and scales the
-  row-statistics kernel saved before changing it, with its global scale before the shift,
-  so values the rescale drops from the GEMM operand (a block shifted below the E8M0 range,
-  an element underflowing) still count: vecf8(33) rows `[2^120, 0, …, 1]` and
-  `[2^120, 0, …, 0]` are at squared distance 1. The rank is rounded once to
+  global scales in double, with the squared norms: `1 − x·q / (|x||q|)` and
+  `|x|² + |q|² − 2·x·q` (integer formats take the corrected int64 sums, which are exact).
+  The rank is rounded once to
   fp32; −Inf for NaN and for the padding rows. A zero vector has cosine distance 1, as
   `cosine_distance` returns.
 - With one global scale for all rows and one for all queries, the cells are exactly
@@ -466,12 +456,10 @@ the kernel of the SQL function of the metric — `VecBlockInnerProduct`,
 kernel (`metric.ResolveDistanceFn`) for the other types, as `inner_product`,
 `cosine_distance` and `l2_distance_sq` resolve them — so a CPU result equals the scalar
 function on the same row and query, including the float64 cosine recompute and the
-squared L2 of differences. The GPU meets the same contract on the GPU (see Decisions): the
-GEMM's scores are within fp32 summation-order tolerance of the scalar function, and a
-cosine or squared L2 distance within that tolerance of 0 is computed again on the device
-from the elements in double, so a row equal to a query is at distance 0 at any finite
-magnitude. An overflowing score (NaN) ranks last; a non-finite score in the result is an
-overflow error, since JSON has no infinity.
+squared L2 of differences. The GPU's cosine and squared L2 are those of the fp32 GEMM
+expansion (see Decisions): within fp32 summation-order tolerance of the scalar function,
+relative to the squared norms. An overflowing score (NaN) ranks last; a non-finite score in
+the result is an overflow error, since JSON has no infinity.
 
 #### Result format
 
@@ -731,21 +719,41 @@ type; normalization changes the ranking, independent of the format.
   Rows are scored on the CPU only when the session has `gpu_mode` off or the box has no
   such device; the CPU path is the reference for verification and benchmarks.
 - With an eligible device enabled there is no CPU fallback: every row is scored on the
-  GPU or the query fails.
-- The GPU meets the scalar metric contract on the GPU, never by re-scoring on the CPU. It
-  keeps the GEMM inside the fp32 range by exact power-of-two rescaling (cosine and squared
-  L2 rows outside [2^-60, 2^60] in squared norm), and recomputes on the device, in double
-  from the decoded elements, every cosine or squared L2 distance within the GEMM's error of
-  0, so admitted finite values give the scalar function's result where fp32 cancellation
-  would lose it (a row equal to its query is at distance 0). Other scores are within fp32
-  summation-order tolerance of the scalar function. Re-scoring rows or queries on the CPU
-  is rejected: it would run the work twice and make the result depend on which path ran.
-  The exact computation is the cost of near-zero pairs: on 1M `vecf32(768)` rows and 128
-  queries, cosine takes 1.37 s end to end with no near pair, 1.42 s when every row equals
-  one query, and 10.1 s when every row equals every query (every pair exact, FP64 at 1/64
-  of FP32 on a GeForce). The engine's native host memory and the tile buffers are
+  GPU or the query fails. The engine's native host memory and the tile buffers are
   admitted by the aggregate's allocation account before allocation, and a denial fails the
   query; so do device memory, CUDA and cuBLASLt errors at creation or while scoring.
+- **GPU cosine and squared L2 are the GEMM expansion, with its precision near 0.**
+  - *Context.* A GEMM only multiplies and adds: it yields `x·q` and cannot form the
+    differences `xᵢ − qᵢ`. Cosine and squared L2 on the GPU are therefore assembled from it:
+    `1 − x·q / (|x||q|)` and `|x|² + |q|² − 2·x·q`, with the norms in double. Each term
+    carries the fp32 GEMM's rounding, about `dim × 2^-24` relative to `|x||q|`; when the
+    vectors are close the terms cancel and that rounding is what remains. The scalar
+    functions do not have this: `Σ(xᵢ − qᵢ)²` subtracts first, a difference of close values
+    is exact, and the result's error is relative to the distance itself; the CPU's cosine
+    takes `x·q` and the norms by the same operations, so equal vectors give exactly 0.
+  - *Decision.* The GPU's cosine and squared L2 are the expansion's: within fp32
+    summation-order tolerance of the scalar function, relative to the squared norms. The
+    GEMM is kept in the fp32 range by exact power-of-two rescaling (rows outside
+    [2^-60, 2^60] in squared norm). Consequences: a distance near 0 carries the GEMM's
+    rounding (a row equal to its query is at about 1e-7 cosine distance, not 0); rows whose
+    distances to a query differ by less than that rounding can rank in either order
+    (duplicates, near-duplicates, a small difference beside a large shared coordinate); a
+    squared L2 whose rounding leaves the float range is an overflow error. Rows whose
+    distances differ by more than the rounding rank as the scalar functions rank them.
+    Inner product has no subtraction and is the GEMM's result.
+  - *Rejected: exact recomputation of near-zero distances on the device.* Built and
+    measured: pairs within the GEMM's error of 0 recomputed from the stored values in
+    double, a warp per pair. Near-zero pairs are the common case — the nearest rows of a
+    top-k are the smallest distances, and deduplication and self-matching queries are made
+    of them — so its cost depends on the data: on 1M `vecf32(768)` rows and 128 queries,
+    cosine took 1.37 s end to end with no near pair and 10.1 s with every pair near (7×,
+    FP64 at 1/64 of FP32 on a GeForce). Exact values for every pair would also need the
+    stored values beside any rescaled operand (a second copy of the tile).
+  - *Rejected: re-scoring on the CPU,* which runs the work twice and makes the result
+    depend on which path ran (see the GPU dispatch decision above).
+  - *Exact results* are the CPU path's (`gpu_mode = 0`), which computes each distance with
+    the scalar functions' kernels, and the scalar functions themselves: ordering near-ties
+    exactly takes re-ranking the top-k rows with `cosine_distance` / `l2_distance_sq`.
 - The engine looks up a cuBLASLt algorithm for every tile shape it can run (rows in
   buckets of 128 × 2^i up to the tile capacity) when it is created, so a shape the device
   has no algorithm for fails before any row is scored.
