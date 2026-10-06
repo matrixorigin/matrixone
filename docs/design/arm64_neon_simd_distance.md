@@ -26,8 +26,13 @@
   free on the **common** fast path — the O(d) second pass runs on any non-finite SIMD
   result, which includes finite extreme-magnitude inputs, so a finite-data workload is not
   exempt (§2 Cost). A genuine overflow fast-fails to a well-ordered ±Inf of the metric's
-  own sign (only NaN is normalized), caught by the sign-agnostic serve boundary. The v1
-  scope (§3–§6 kernels/build) is unaffected.
+  own sign (only NaN is normalized), caught by the sign-agnostic serve boundary. Two points
+  the review amended: (1) the no-NaN finalizer is applied at **every** oracle's return, so the
+  **non-SIMD build** (which delegates straight to the loop-unrolled kernels) no longer leaks a
+  block-cancellation NaN into ranking; (2) the recovery predicate is **result-only**, so a
+  genuine overflow a SIMD tier cancels across lanes to a finite (wrong) value is explicitly
+  **outside** the asserted cross-mode equivalence domain, not silently guaranteed (§2
+  Equivalence). The v1 scope (§3–§6 kernels/build) is unaffected.
 
 ## 1. Context & goal
 
@@ -42,12 +47,17 @@ contract as amd64**, with **identical observable results**.
 - A distance kernel computes in IEEE-754. A multi-lane SIMD accumulation can
   produce **NaN** on an extreme input whose products are each finite but whose
   per-lane partial sums reach +Inf and −Inf before the cross-lane reduction
-  cancels them, where a **sequential (in-order) scalar sum cancels and stays
-  finite**. NaN is **unordered**, so it corrupts a top-k ranking: it never compares
+  cancels them. The scalar oracle is itself **loop-unrolled** (8-wide), so it is
+  **not** immune: a block of same-sign extreme products can overflow and two
+  opposite-sign blocks cancel to NaN the same way, just at block width rather than
+  lane width. NaN is **unordered**, so it corrupts a top-k ranking: it never compares
   as the maximum a heap evicts, so it is retained in a slot and discards a
   genuinely-nearer finite candidate — a silent wrong result no final-score check can
-  catch, because the returned winner's score is a finite value. A distance function
-  never returns NaN.
+  catch, because the returned winner's score is a finite value. **No distance function
+  returns NaN, in any build:** every NaN-capable oracle — the loop-unrolled kernels
+  that are both the non-SIMD build's path and the SIMD build's recovery reference, and
+  the narrow scalar kernels — applies the no-NaN finalizer (NaN → +Inf) at its own
+  return, so a NaN never reaches ranking whether SIMD is compiled in or not.
 - **Resolution — recover the in-order reference at the metric owner.** The ordinary
   fast path is the SIMD kernel, unchanged. Only when its result is **non-finite** does
   the metric owner take an exceptional path: recompute via the **source-order reference**
@@ -82,11 +92,16 @@ contract as amd64**, with **identical observable results**.
   and that includes **finite** stored vectors at extreme magnitude whose lanes overflow
   or cancel before the cross-lane reduction (the case this fix targets and the
   counterexample tests exercise), not only genuine overflow. A finite-data workload is
-  therefore **not** exempt: a query against such a vector pays one extra O(d) pass on that
-  pair — bounded at ~2× the kernel cost, incurred only on the pairs that actually go
-  non-finite, and never on the ordinary finite case. This is still distinct from
-  **always** widening the accumulator to float64, which measured ~2.5× slower on *every*
-  pair (and still cannot fix f64 — no f128 lane); see §5.
+  therefore **not** exempt: a query against such a vector pays one extra **O(d)** in-order
+  pass on that pair, incurred only on the pairs that actually go non-finite and never on the
+  ordinary finite case. The extra work is bounded **O(d)**, but it is **not** a fixed ~2× of
+  the kernel time: operating on non-finite SIMD lanes is itself slow, so the measured
+  exception path costs far more than an ordinary pair. Representative numbers on one real
+  AVX-512 / Go 1.27 host, dim 768 f32, zero-alloc: an alternating ±2⁶³ recovery pair ~850
+  ns/op versus ~38 ns/op for an ordinary ±1 cancellation (~22×), with a standalone scalar
+  pass ~210 ns/op; these are indicative of the exception path, not a throughput regression or
+  an ARM estimate. This is still distinct from **always** widening the accumulator to float64,
+  which measured ~2.5× slower on *every* pair (and still cannot fix f64 — no f128 lane); see §5.
 - **Finiteness-as-an-error is still enforced once, at the consumer score boundary**
   — the scalar/SQL array-distance builtins (`moarray`, `arrayDistanceNarrow`), index
   Search (`CheckFiniteDists`), and ivfflat's `HasFloat64DistanceOverflow`. Every one of
@@ -98,12 +113,23 @@ contract as amd64**, with **identical observable results**.
   lost-winner, so it keeps its own sign and is caught sign-agnostically at the boundary;
   normalizing its sign would be unnecessary and would mis-rank a genuine inner-product
   overflow (a maximal dot) as the farthest instead of letting the boundary reject it.
-- **Equivalence.** On finite inputs every SIMD tier and architecture agrees with the
-  scalar reference up to ordinary floating-point rounding; on the degenerate
-  cancellation input they now **also** agree, because both yield the in-order reference
-  (the fast path recovers it, the scalar path computes it directly). A genuine overflow
-  is the same well-ordered ±Inf everywhere and the same error at the same boundary. Tests
-  assert this equivalence in both the default and the SIMD-opt-out modes.
+- **Equivalence, and its domain.** On ordinary finite inputs every SIMD tier and
+  architecture agrees with the scalar reference up to floating-point rounding; on a
+  cancellation input whose SIMD result is **non-finite** they also agree, because the metric
+  owner recovers the in-order reference. Equivalence is **not** claimed for one extreme
+  class: an input that is a **genuine overflow a SIMD tier cancels across lanes to a finite
+  (wrong) value** — e.g. per-lane +Inf and −Inf summing to 0. The recovery predicate is
+  **result-only** (recompute iff the SIMD result is non-finite), so it does not fire here:
+  that tier returns a finite value while the in-order reference and the non-SIMD build
+  saturate to +Inf, and the serve boundary — which rejects only non-finite results — does not
+  catch the finite one. This is a deliberate **domain limit**, not a silent universal claim:
+  closing it needs an unconditional per-element precheck or a wider recompute on **every**
+  call (§5), whose cost the feature exists to avoid, for an input finite stored vectors do not
+  produce. Genuine-overflow decision: a non-finite result is rejected sign-agnostically at the
+  boundary in every mode; a tier that cancels a genuine overflow down to a finite value is
+  outside the asserted equivalence domain and stays the metric owner's concern, not a consumer
+  validator's. Tests assert the in-domain equivalence (finite inputs; recovered non-finite
+  results) in both the default and the SIMD-opt-out modes.
 
 ## 3. Ownership: one scalar oracle, per-arch SIMD
 
@@ -170,24 +196,29 @@ contract as amd64**, with **identical observable results**.
 
 ## 7. Invariants (review checklist)
 
-- No distance function returns NaN. On a non-finite SIMD result the metric owner
-  recomputes via the source-order reference in the kernel's own accumulation type
-  (float32 for f32/bf16/f16, float64 for f64) — inner product (`InnerProduct[T]` +
-  narrow bf16/f16 kernels), spherical (`acos`), and cosine (f32/f64 via the f64 norm
-  recompute, narrow bf16/f16 via the scalar `cosineDistanceBF16`/`F16` reference). A
-  genuine overflow — one the reference cannot represent either — fast-fails to a
+- No distance function returns NaN, **in any build**: every NaN-capable oracle applies the
+  no-NaN finalizer at its own return (the loop-unrolled kernels — the non-SIMD build's path
+  and the SIMD recovery reference — and the narrow scalar kernels), so an 8-wide block
+  cancellation leaks no NaN even when SIMD is not compiled in. On a non-finite SIMD result
+  the metric owner additionally recomputes via the source-order reference in the kernel's own
+  accumulation type (float32 for f32/bf16/f16, float64 for f64) — inner product
+  (`InnerProduct[T]` + narrow bf16/f16 kernels), spherical (`acos`), and cosine (f32/f64 via
+  the f64 norm recompute, narrow bf16/f16 via the scalar `cosineDistanceBF16`/`F16`
+  reference). A genuine overflow — one the reference cannot represent either — fast-fails to a
   well-ordered ±Inf (the metric's own sign; only NaN is normalized, see §2).
-- Scalar oracle ≡ every SIMD tier ≡ every architecture: on finite inputs up to FP
-  rounding, AND on the degenerate cancellation input, where both yield the same
-  in-order reference (SIMD recovers it, scalar computes it directly). A genuine
-  overflow is the same well-ordered ±Inf everywhere. The SIMD contract test runs the SIMD
-  kernels directly (narrow by name; real kernels with the tier flag forced on), not
-  through the resolver, so it asserts the recovered value regardless of the opt-out override.
+- Scalar oracle ≡ every SIMD tier ≡ every architecture on finite inputs up to FP rounding,
+  AND on a cancellation input whose SIMD result is non-finite (recovered). **NOT** on a
+  genuine overflow a SIMD tier cancels across lanes to a finite value: the result-only
+  predicate cannot see it, so that extreme input is outside the asserted equivalence domain
+  (§2 Equivalence). A non-finite result is the same well-ordered ±Inf everywhere and rejected
+  at the boundary. The SIMD contract test runs the SIMD kernels directly (narrow by name; real
+  kernels with the tier flag forced on), not through the resolver, so it asserts the recovered
+  value regardless of the opt-out override.
 - The recompute is free on the **common** fast path: a finite SIMD result pays one
   finiteness test. The O(d) second pass runs on any input whose SIMD result is
   non-finite — including **finite** extreme-magnitude vectors, not only genuine overflow —
-  so a finite-data workload pays it on exactly those pairs (bounded ~2×, §2 Cost), never
-  on the ordinary case. Never widen every accumulation (§5).
+  so a finite-data workload pays it on exactly those pairs (bounded extra O(d), not a fixed
+  ~2×; §2 Cost), never on the ordinary case. Never widen every accumulation (§5).
 - Finiteness-as-an-error is enforced at the consumer serve boundary
   (`CheckFiniteDists`, ivfflat `HasFloat64DistanceOverflow`), whose finiteness test is
   **sign-agnostic**; a genuine non-finite result of either sign is reported as an overflow

@@ -25,7 +25,8 @@ import "github.com/matrixorigin/matrixone/pkg/container/types"
 // reference only when a strided lane overflows to +/-Inf before the cross-lane reduction cancels it,
 // so the reference recovers the finite answer (2^63 products are 2^126, fit float32, cancel to 0). A
 // GENUINE overflow -- 1e20 products are 1e40, which overflow float32 in the lanes AND in the reference
-// -- stays non-finite and nanToPosInf keeps it well-ordered for the serve boundary to reject. The fast
+// -- stays non-finite. Each reference applies nanToPosInf itself (so its own 8-wide block cancellation
+// never leaks a NaN either), keeping the result well-ordered for the serve boundary to reject. The fast
 // path pays only one finiteness test; the recompute runs only on the rare non-finite result. This file
 // is SIMD-tagged because only the SIMD kernels need recovery.
 
@@ -36,8 +37,7 @@ func recoverInnerProduct[T types.RealNumbers](res T, p, q []T) (T, error) {
 	if isFinite(res) {
 		return res, nil
 	}
-	r, err := InnerProductUnrolled(p, q)
-	return nanToPosInf(r), err
+	return InnerProductUnrolled(p, q)
 }
 
 func recoverInnerProductBF16(res float64, a, b []types.BF16) (float64, error) {
@@ -77,6 +77,5 @@ func recoverSpherical[T types.RealNumbers](res T, p, q []T) (T, error) {
 	if isFinite(res) {
 		return res, nil
 	}
-	r, err := SphericalDistanceUnrolled(p, q)
-	return nanToPosInf(r), err
+	return SphericalDistanceUnrolled(p, q)
 }

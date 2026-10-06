@@ -111,6 +111,9 @@ func L1DistanceUnrolled[T types.RealNumbers](p, q []T) (T, error) {
 }
 
 // InnerProductUnrolled returns the inner-product distance (-dot) summed in source order, unrolled by 8.
+// The 8-wide blocks can themselves overflow to +/-Inf and cancel to NaN on an extreme (but finite)
+// input, so the result passes through nanToPosInf: NaN -> +Inf keeps ranking well-ordered in every
+// build (this oracle is the non-SIMD kernel and the SIMD recovery reference). A genuine +/-Inf is kept.
 func InnerProductUnrolled[T types.RealNumbers](p, q []T) (T, error) {
 	if len(p) != len(q) {
 		return T(0), moerr.NewInternalErrorNoCtx("vector dimension not matched")
@@ -140,11 +143,13 @@ func InnerProductUnrolled[T types.RealNumbers](p, q []T) (T, error) {
 		i++
 	}
 
-	return -sum, nil
+	return nanToPosInf(-sum), nil
 }
 
 // CosineDistanceUnrolled returns 1 - cosine similarity, dot and squared norms summed in one pass,
-// unrolled by 4, with the float64 norm recompute for subnormal/overflow norms.
+// unrolled by 4, with the float64 norm recompute for subnormal/overflow norms. It finalizes through
+// cosineDistClamped (the shared cosine finalizer), so a NaN dot from block overflow maps to +Inf
+// rather than reaching ranking.
 func CosineDistanceUnrolled[T types.RealNumbers](p, q []T) (T, error) {
 	if len(p) == 0 {
 		return 0, nil
@@ -198,17 +203,7 @@ func CosineDistanceUnrolled[T types.RealNumbers](p, q []T) (T, error) {
 		return 1.0, nil
 	}
 
-	similarity := dot / denominator
-
-	if similarity > 1.0 {
-		similarity = 1.0
-	} else if similarity < -1.0 {
-		similarity = -1.0
-	}
-
-	distance := 1.0 - similarity
-
-	return T(distance), nil
+	return T(cosineDistClamped(dot, denominator)), nil
 }
 
 // CosineSimilarityUnrolled returns the cosine similarity, computed like CosineDistanceUnrolled.
@@ -314,5 +309,7 @@ func SphericalDistanceUnrolled[T types.RealNumbers](p, q []T) (T, error) {
 
 	theta := math.Acos(float64(dp))
 
-	return T(theta / math.Pi), nil
+	// A NaN dot (8-wide block overflow cancelling signs) passes the clamp above (NaN compares false)
+	// and makes acos NaN; map it to +Inf so ranking stays well-ordered in every build.
+	return nanToPosInf(T(theta / math.Pi)), nil
 }
