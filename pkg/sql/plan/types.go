@@ -476,6 +476,10 @@ type QueryBuilder struct {
 
 	tag2Table  map[int32]*TableDef
 	tag2NodeID map[int32]int32
+	// syntheticNDVCols is an explicit allowlist for planner-generated column
+	// bindings whose Expr.Ndv was copied from a real source expression. Unknown
+	// synthetic bindings must not make arbitrary carried estimates authoritative.
+	syntheticNDVCols map[[2]int32]struct{}
 
 	nextBindTag      int32
 	nextMsgTag       int32

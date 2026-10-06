@@ -2819,6 +2819,15 @@ func TestGetExprNdv(t *testing.T) {
 		require.True(t, ndv > 0 || ndv == -1)
 	})
 
+	t.Run("registered synthetic column carries estimate", func(t *testing.T) {
+		col := &planpb.ColRef{RelPos: 999, ColPos: 3}
+		expr := &planpb.Expr{Ndv: 73, Expr: &planpb.Expr_Col{Col: col}}
+		require.Equal(t, -1.0, getExprNdv(expr, builder))
+
+		builder.syntheticNDVCols = map[[2]int32]struct{}{{col.RelPos, col.ColPos}: {}}
+		require.Equal(t, 73.0, getExprNdv(expr, builder))
+	})
+
 	t.Run("unsupported expr type", func(t *testing.T) {
 		expr := &planpb.Expr{
 			Expr: &planpb.Expr_Lit{

@@ -1205,7 +1205,7 @@ func (builder *QueryBuilder) proveCTEConsumerDrainRequirements(
 					if path.childID == siblingID {
 						siblingID = node.Children[1]
 					}
-					if builder.subtreeContainsCTEHashBuildScan(siblingID, make(map[int32]bool)) {
+					if builder.joinInputContainsCTEHashBuildScan(siblingID, make(map[int32]bool)) {
 						continue
 					}
 					if requiredChild, exists := requiredBuildChildByJoin[path.nodeID]; exists && requiredChild != path.childID {
@@ -1226,7 +1226,7 @@ func (builder *QueryBuilder) proveCTEConsumerDrainRequirements(
 					// the nullable/probe side can never establish this witness.
 					if node.IsRightJoin || len(node.Children) != 2 ||
 						path.childID != node.Children[1] ||
-						builder.subtreeContainsCTEHashBuildScan(node.Children[0], make(map[int32]bool)) {
+						builder.joinInputContainsCTEHashBuildScan(node.Children[0], make(map[int32]bool)) {
 						continue
 					}
 					if requiredChild, exists := requiredBuildChildByJoin[path.nodeID]; exists && requiredChild != path.childID {
@@ -1237,7 +1237,7 @@ func (builder *QueryBuilder) proveCTEConsumerDrainRequirements(
 				case planpb.Node_SEMI:
 					if node.IsRightJoin || len(node.Children) != 2 ||
 						path.childID != node.Children[1] ||
-						builder.subtreeContainsCTEHashBuildScan(node.Children[0], make(map[int32]bool)) ||
+						builder.joinInputContainsCTEHashBuildScan(node.Children[0], make(map[int32]bool)) ||
 						!builder.IsEquiJoin(node) {
 						continue
 					}
@@ -1249,7 +1249,7 @@ func (builder *QueryBuilder) proveCTEConsumerDrainRequirements(
 				case planpb.Node_MARK:
 					if node.IsRightJoin || len(node.Children) != 2 ||
 						path.childID != node.Children[1] ||
-						builder.subtreeContainsCTEHashBuildScan(node.Children[0], make(map[int32]bool)) ||
+						builder.joinInputContainsCTEHashBuildScan(node.Children[0], make(map[int32]bool)) ||
 						!builder.cteMarkJoinBecomesHashSemi(path.nodeID, parents) {
 						continue
 					}

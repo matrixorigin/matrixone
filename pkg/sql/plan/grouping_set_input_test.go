@@ -35,6 +35,35 @@ func useLegacyGroupingSetPlan(t *testing.T, mock *MockOptimizer) {
 	setPlanTestGlobalVariable(t, proc.GetService(), moruntime.MOProtocolVersion, defines.MORPCVersion47)
 }
 
+func buildSharedGroupingSetPlan(t *testing.T, sql string) *planpb.Query {
+	t.Helper()
+	ctx := NewMockCompilerContext(true)
+	rt := moruntime.ServiceRuntime(ctx.GetProcess().GetService())
+	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	oldHints, hadHints := rt.GetGlobalVariables("optimizer_hints")
+	t.Cleanup(func() {
+		if hadVersion {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+		if hadHints {
+			rt.SetGlobalVariables("optimizer_hints", oldHints)
+		} else {
+			rt.SetGlobalVariables("optimizer_hints", "")
+		}
+	})
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion49)
+	rt.SetGlobalVariables("optimizer_hints", "")
+
+	stmt, err := mysql.ParseOne(context.Background(), sql, 1)
+	require.NoError(t, err)
+	t.Cleanup(stmt.Free)
+	built, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	return built.GetQuery()
+}
+
 func TestGroupingSetInputSharingProtocolGate(t *testing.T) {
 	const sql = `select l_returnflag, l_linestatus,
 		grouping(l_returnflag), grouping(l_linestatus), count(*)
@@ -101,6 +130,48 @@ func TestGroupingSetInputSharingKeepsDecimalSumOnRawInput(t *testing.T) {
 	require.Equal(t, 1, shape.aggregatesOnExpand)
 	require.Equal(t, 4, shape.sinkScans)
 	require.Equal(t, 1, shape.materializedSinks)
+}
+
+func TestGroupingSetInputSharingStreamsEquivalentBranchProjects(t *testing.T) {
+	const sql = `select l_returnflag, l_linestatus, sum(l_extendedprice)
+		from lineitem
+		group by rollup(l_returnflag, l_linestatus)
+		order by l_returnflag, l_linestatus`
+
+	shape := reachableGroupingSetShape(buildSharedGroupingSetPlan(t, sql))
+	require.Equal(t, 1, shape.tableScans)
+	require.Equal(t, 1, shape.aggregates)
+	require.Equal(t, 1, shape.expandProjects)
+	require.Equal(t, 1, shape.aggregatesOnExpand)
+	require.Zero(t, shape.sinkScans)
+	require.Zero(t, shape.materializedSinks)
+}
+
+func TestGroupingSetInputSharingKeepsVolatileBranchProjects(t *testing.T) {
+	const sql = `select l_returnflag, l_linestatus, rand(), sum(l_extendedprice)
+		from lineitem
+		group by rollup(l_returnflag, l_linestatus)`
+
+	shape := reachableGroupingSetShape(buildSharedGroupingSetPlan(t, sql))
+	require.Equal(t, 1, shape.tableScans)
+	require.Equal(t, 1, shape.expandProjects)
+	require.NotZero(t, shape.sinkScans)
+	require.NotZero(t, shape.materializedSinks)
+}
+
+func TestGroupingSetInputSharingKeepsHashBuildDrainMarker(t *testing.T) {
+	const sql = `select count(*)
+		from (
+			select l_returnflag, l_linestatus, sum(l_extendedprice) as revenue
+			from lineitem
+			group by rollup(l_returnflag, l_linestatus)
+		) g
+		join nation n on g.l_returnflag = n.n_name`
+
+	shape := reachableGroupingSetShape(buildSharedGroupingSetPlan(t, sql))
+	require.Equal(t, 1, shape.expandProjects)
+	require.NotZero(t, shape.sinkScans)
+	require.NotZero(t, shape.materializedSinks)
 }
 
 func TestGroupingSetInputSharingRejectsInheritedGroupingSentinel(t *testing.T) {

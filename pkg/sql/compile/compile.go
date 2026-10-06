@@ -1974,7 +1974,10 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		}
 		childNodeID := node.Children[0]
 		childNode := nodes[childNodeID]
-		if isLocalPreAggregationGroup(node, childNode) &&
+		if canPreserveParallelUnionAllBranches(childNode) &&
+			c.canCompileParallelUnionAllAggregate(node) {
+			ss, err = c.compileParallelUnionAllInput(step, childNodeID, nodes)
+		} else if isLocalPreAggregationGroup(node, childNode) &&
 			!c.hasUnsupportedRemoteGroupWire(node) {
 			ss, err = c.compileLocalPreAggregationScope(step, childNodeID, nodes)
 		} else {
@@ -2044,7 +2047,13 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		ss = c.compileProjection(node, c.compileRestrict(node, c.compileFill(node, ss)))
 		return ss, nil
 	case plan.Node_JOIN:
-		left, err = c.compilePlanScope(step, node.Children[0], nodes)
+		leftNode := nodes[node.Children[0]]
+		if node.JoinType == plan.Node_INNER &&
+			canPreserveParallelUnionAllBranches(leftNode) {
+			left, err = c.compileParallelUnionAllInput(step, node.Children[0], nodes)
+		} else {
+			left, err = c.compilePlanScope(step, node.Children[0], nodes)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -6367,6 +6376,68 @@ func (c *Compile) compileUnionAll(
 	c.anal.isFirst = false
 
 	return []*Scope{rs}
+}
+
+// canPreserveParallelUnionAllBranches identifies a UNION ALL whose row stream
+// may be handed directly to a downstream consumer. LIMIT/OFFSET/order are
+// deliberately excluded because they require one whole-union owner.
+func canPreserveParallelUnionAllBranches(node *plan.Node) bool {
+	return node != nil && node.NodeType == plan.Node_UNION_ALL &&
+		len(node.Children) == 2 && node.Limit == nil && node.Offset == nil &&
+		len(node.OrderBy) == 0 && len(node.FilterList) == 0 &&
+		!node.FilterIsBarrier && !nodeHasUserLevelLockFunction(node)
+}
+
+func (c *Compile) canCompileParallelUnionAllAggregate(node *plan.Node) bool {
+	return !hasOrderedGroupConcat(node) && !hasOrderedSetPercentile(node) &&
+		!c.hasUnsupportedRemoteGroupWire(node) &&
+		!plan2.RequiresSingleStageDistinctAgg(node)
+}
+
+// compileParallelUnionAllInput preserves independent UNION ALL branches only
+// for consumers that explicitly request them (currently parallel aggregation
+// and the probe side of INNER JOIN). Ordinary UNION ALL compilation keeps its
+// established one-stream contract for result, DML, and other consumers.
+func (c *Compile) compileParallelUnionAllInput(
+	step int32,
+	nodeID int32,
+	nodes []*plan.Node,
+) ([]*Scope, error) {
+	node := nodes[nodeID]
+	left, err := c.compileParallelUnionAllBranch(step, node.Children[0], nodes)
+	if err != nil {
+		return nil, err
+	}
+	right, err := c.compileParallelUnionAllBranch(step, node.Children[1], nodes)
+	if err != nil {
+		ReleaseScopes(left)
+		return nil, err
+	}
+
+	c.setAnalyzeCurrent(left, int(nodeID))
+	c.setAnalyzeCurrent(right, int(nodeID))
+	inputs := make([]*Scope, 0, len(left)+len(right))
+	inputs = append(inputs, left...)
+	inputs = append(inputs, right...)
+	currentFirstFlag := c.anal.isFirst
+	for _, input := range inputs {
+		op := constructUnionAll(node)
+		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+		input.setRootOperator(op)
+	}
+	c.anal.isFirst = false
+	return c.ensureCoordinatorOnlyFunctions(node, inputs), nil
+}
+
+func (c *Compile) compileParallelUnionAllBranch(
+	step int32,
+	nodeID int32,
+	nodes []*plan.Node,
+) ([]*Scope, error) {
+	if canPreserveParallelUnionAllBranches(nodes[nodeID]) {
+		return c.compileParallelUnionAllInput(step, nodeID, nodes)
+	}
+	return c.compilePlanScope(step, nodeID, nodes)
 }
 
 // lazyUnionAllBranches transfers a directly nested lazy UNION ALL's branch

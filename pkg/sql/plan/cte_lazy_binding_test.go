@@ -484,6 +484,59 @@ func TestCTEMultiReferenceReusesExpensiveProducer(t *testing.T) {
 	}
 }
 
+func TestCTEReuseKeepsIndependentNestedHashBuildRequirements(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := runOneStmt(mock, t, `
+		with expensive_keys as (
+			select l_suppkey as k, sum(l_extendedprice) as total
+			from lineitem
+			group by l_suppkey
+		), avg_value as (
+			select avg(quantity * price) as v
+			from (
+				select l_quantity as quantity, l_extendedprice as price from lineitem
+				union all
+				select o_shippriority as quantity, o_totalprice as price from orders
+				union all
+				select ps_availqty as quantity, ps_supplycost as price from partsupp
+			) sales
+		)
+		select channel, sum(sales)
+		from (
+			select 'lineitem' as channel, sum(l_quantity * l_extendedprice) as sales
+			from lineitem
+			where l_suppkey in (select k from expensive_keys)
+			having sum(l_quantity * l_extendedprice) > (select v from avg_value)
+			union all
+			select 'orders' as channel, sum(o_shippriority * o_totalprice) as sales
+			from orders
+			where o_custkey in (select k from expensive_keys)
+			having sum(o_shippriority * o_totalprice) > (select v from avg_value)
+			union all
+			select 'partsupp' as channel, sum(ps_availqty * ps_supplycost) as sales
+			from partsupp
+			where ps_suppkey in (select k from expensive_keys)
+			having sum(ps_availqty * ps_supplycost) > (select v from avg_value)
+		) channels
+		group by rollup(channel)`)
+	require.NoError(t, err)
+
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+	tableScans := 0
+	for nodeID := range cteReachablePlanNodes(query) {
+		node := query.Nodes[nodeID]
+		if node.NodeType == planpb.Node_TABLE_SCAN && node.TableDef != nil {
+			switch node.TableDef.Name {
+			case "lineitem", "orders", "partsupp":
+				tableScans++
+			}
+		}
+	}
+	require.Equal(t, 7, tableScans,
+		"the nested hash-build CTE and the surrounding scalar CTE should each have one producer")
+}
+
 func TestCTEReuseHonorsPostOptimizerSQLSelectLimit(t *testing.T) {
 	const sql = `
 		with q15_revenue0 as (

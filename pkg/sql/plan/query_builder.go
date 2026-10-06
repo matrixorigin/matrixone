@@ -3067,7 +3067,7 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 
 	case plan.Node_PROJECT, plan.Node_MATERIAL:
 		projectTag := node.BindingTags[0]
-		_, groupingSetExpand := DecodeGroupingSetExpandOption(node.ExtraOptions)
+		groupingSetCount, groupingSetExpand := DecodeGroupingSetExpandOption(node.ExtraOptions)
 
 		var neededProj []int32
 
@@ -3109,6 +3109,10 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			}
 
 			refreshExprNullabilityFromInputs(expr, childProjList)
+			if groupingSetExpand {
+				expr.Typ = groupingSetExpandOutputType(
+					expr.Typ, node.GroupingFlag, groupingSetCount, needed)
+			}
 
 			globalRef := [2]int32{projectTag, needed}
 			remapping.addColRef(globalRef)

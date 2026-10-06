@@ -714,7 +714,16 @@ func getExprNdv(expr *plan.Expr, builder *QueryBuilder) float64 {
 			return getExprNdv(exprImpl.F.Args[0], builder)
 		}
 	case *plan.Expr_Col:
-		return builder.getColNdv(exprImpl.Col)
+		ndv := builder.getColNdv(exprImpl.Col)
+		if ndv >= 0 {
+			return ndv
+		}
+		if _, ok := builder.syntheticNDVCols[[2]int32{
+			exprImpl.Col.RelPos, exprImpl.Col.ColPos,
+		}]; ok && expr.Ndv > 0 {
+			return expr.Ndv
+		}
+		return ndv
 	}
 	return -1
 }
@@ -2362,9 +2371,9 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 	switch node.JoinType {
 	case plan.Node_INNER, plan.Node_OUTER:
 		if node.JoinType == plan.Node_INNER {
-			leftMarked := builder.subtreeContainsCTEHashBuildScan(
+			leftMarked := builder.joinInputContainsCTEHashBuildScan(
 				node.Children[0], make(map[int32]bool))
-			rightMarked := builder.subtreeContainsCTEHashBuildScan(
+			rightMarked := builder.joinInputContainsCTEHashBuildScan(
 				node.Children[1], make(map[int32]bool))
 			if leftMarked || rightMarked {
 				// CTE drain admission marked one exact equality-hash build.
@@ -2428,7 +2437,7 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 		// right-sided choice would turn the marked reader into the probe input,
 		// which may stop without draining it.
 		if (node.JoinType == plan.Node_LEFT || node.JoinType == plan.Node_SEMI) &&
-			builder.subtreeContainsCTEHashBuildScan(node.Children[1], make(map[int32]bool)) {
+			builder.joinInputContainsCTEHashBuildScan(node.Children[1], make(map[int32]bool)) {
 			node.IsRightJoin = false
 			break
 		}
@@ -2816,7 +2825,7 @@ func estimatedRetainedBytes(rows, rowSize float64) (float64, bool) {
 	return rows * rowSize, true
 }
 
-func (builder *QueryBuilder) subtreeContainsCTEHashBuildScan(nodeID int32, seen map[int32]bool) bool {
+func (builder *QueryBuilder) joinInputContainsCTEHashBuildScan(nodeID int32, seen map[int32]bool) bool {
 	if seen[nodeID] {
 		return false
 	}
@@ -2826,8 +2835,14 @@ func (builder *QueryBuilder) subtreeContainsCTEHashBuildScan(nodeID int32, seen 
 		node.ExtraOptions == materialized.CTEHashBuildScanOption {
 		return true
 	}
+	// A marker below another join pins that nested join, not this ancestor.
+	// Looking through the boundary can make two independent build requirements
+	// appear to conflict and reject an otherwise safe shared computation.
+	if node.NodeType == plan.Node_JOIN {
+		return false
+	}
 	for _, childID := range node.Children {
-		if builder.subtreeContainsCTEHashBuildScan(childID, seen) {
+		if builder.joinInputContainsCTEHashBuildScan(childID, seen) {
 			return true
 		}
 	}

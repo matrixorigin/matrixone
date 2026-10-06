@@ -305,6 +305,63 @@ func TestCompilePlanScopeKeepsNestedUnionAllConcurrentWithoutLimit(t *testing.T)
 	freeLazyUnionAllTestScope(c, outer)
 }
 
+func TestCompileParallelUnionAllInputPreservesNestedBranches(t *testing.T) {
+	c := newLazyUnionAllTestCompile(t)
+	nodes := nestedUnionAllPlanNodes(false)
+
+	scopes, err := c.compileParallelUnionAllInput(0, int32(len(nodes)-1), nodes)
+	require.NoError(t, err)
+	require.Len(t, scopes, 3)
+	for i, branch := range scopes {
+		require.False(t, branch.LazyPreScopes)
+		require.Empty(t, branch.PreScopes)
+		unionMarkers := 0
+		require.NoError(t, vm.HandleAllOp(branch.RootOp, func(_ vm.Operator, op vm.Operator) error {
+			if _, ok := op.(*unionall.UnionAll); ok {
+				unionMarkers++
+			}
+			return nil
+		}))
+		if i < 2 {
+			require.Equal(t, 2, unionMarkers)
+		} else {
+			require.Equal(t, 1, unionMarkers)
+		}
+		branch.FreeOperator(c)
+		branch.release()
+	}
+	c.proc.Free()
+}
+
+func TestParallelUnionAllInputRequiresPureConcatenation(t *testing.T) {
+	newUnion := func() *planpb.Node {
+		return &planpb.Node{
+			NodeType: planpb.Node_UNION_ALL,
+			Children: []int32{0, 1},
+		}
+	}
+	require.True(t, canPreserveParallelUnionAllBranches(newUnion()))
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*planpb.Node)
+	}{
+		{"limit", func(node *planpb.Node) { node.Limit = plan2.MakePlan2Uint64ConstExprWithType(1) }},
+		{"offset", func(node *planpb.Node) { node.Offset = plan2.MakePlan2Uint64ConstExprWithType(1) }},
+		{"order", func(node *planpb.Node) { node.OrderBy = []*planpb.OrderBySpec{{}} }},
+		{"filter", func(node *planpb.Node) { node.FilterList = []*planpb.Expr{plan2.MakePlan2BoolConstExprWithType(true)} }},
+		{"barrier", func(node *planpb.Node) { node.FilterIsBarrier = true }},
+		{"wrong node type", func(node *planpb.Node) { node.NodeType = planpb.Node_UNION }},
+		{"missing branch", func(node *planpb.Node) { node.Children = node.Children[:1] }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			node := newUnion()
+			test.mutate(node)
+			require.False(t, canPreserveParallelUnionAllBranches(node))
+		})
+	}
+}
+
 func TestScalarUnionAllRunsBranchesInStatementOrder(t *testing.T) {
 	compilerCtx := plan2.NewMockCompilerContext(true, newPlanTestProcess(t))
 	statements, err := mysql.Parse(

@@ -317,23 +317,25 @@ func WaitPipelineSignalCapacity(ctx context.Context, reg *WaitRegister) bool {
 	if cap(reg.Ch2) == 0 {
 		return true
 	}
-	if ctx != nil && ctx.Err() != nil {
-		return false
-	}
-	select {
-	case <-reg.Done():
-		return false
-	default:
-	}
-	if len(reg.Ch2) < cap(reg.Ch2) {
-		return true
-	}
 	if ctx == nil {
 		ctx = context.TODO()
 	}
-	ticker := time.NewTicker(time.Millisecond)
-	defer ticker.Stop()
 	for {
+		if ctx.Err() != nil {
+			return false
+		}
+		select {
+		case <-reg.Done():
+			return false
+		default:
+		}
+		if len(reg.Ch2) < cap(reg.Ch2) {
+			return true
+		}
+		capacityReady := reg.capacityNotification()
+		// Close the receive-before-subscribe race: if a receiver drained Ch2
+		// before capacityNotification was initialized, observe that capacity
+		// here instead of waiting for another receive.
 		if len(reg.Ch2) < cap(reg.Ch2) {
 			return true
 		}
@@ -342,7 +344,7 @@ func WaitPipelineSignalCapacity(ctx context.Context, reg *WaitRegister) bool {
 			return false
 		case <-reg.Done():
 			return false
-		case <-ticker.C:
+		case <-capacityReady:
 		}
 	}
 }
@@ -630,24 +632,33 @@ func (receiver *PipelineSignalReceiver) State() PipelineSignalReceiverState {
 }
 
 func (receiver *PipelineSignalReceiver) listenToAll() (int, PipelineSignal) {
+	var chosen int
+	var signal PipelineSignal
+
 	// hard codes for less interface convert and less reflect.
 	switch len(receiver.srcReg) {
 	case 1:
-		return receiver.listenToSingleEntry()
+		chosen, signal = receiver.listenToSingleEntry()
 	case 2:
-		return receiver.listenToTwoEntry()
+		chosen, signal = receiver.listenToTwoEntry()
 	case 3:
-		return receiver.listenToThreeEntry()
+		chosen, signal = receiver.listenToThreeEntry()
 	case 4:
-		return receiver.listenToFourEntry()
+		chosen, signal = receiver.listenToFourEntry()
 	case 5:
-		return receiver.listenToFiveEntry()
+		chosen, signal = receiver.listenToFiveEntry()
 	case 6:
-		return receiver.listenToSixEntry()
+		chosen, signal = receiver.listenToSixEntry()
 	case 7:
-		return receiver.listenToSevenEntry()
+		chosen, signal = receiver.listenToSevenEntry()
 	case 8:
-		return receiver.listenToEightEntry()
+		chosen, signal = receiver.listenToEightEntry()
+	}
+	if len(receiver.srcReg) <= 8 {
+		if chosen > 0 {
+			receiver.srcReg[chosen-1].notifyCapacityAvailable()
+		}
+		return chosen, signal
 	}
 
 	// common case.
@@ -662,9 +673,12 @@ func (receiver *PipelineSignalReceiver) listenToAll() (int, PipelineSignal) {
 		if !ok {
 			panic("unexpected sender close during GetNextBatch")
 		}
+		receiver.srcReg[idx].notifyCapacityAvailable()
 		return idx + 1, value.Interface().(PipelineSignal)
 	}
-	return receiver.receiveSignalOrTerminal(idx)
+	chosen, signal = receiver.receiveSignalOrTerminal(idx)
+	receiver.srcReg[idx].notifyCapacityAvailable()
+	return chosen, signal
 }
 
 // receiveSignalOrTerminal handles an edge whose Done channel is ready. Ch2
