@@ -555,38 +555,54 @@ func TestSharedRoutineRevisionProtocolGatesMixedVersionSQLUdfWrites(t *testing.T
 	require.Len(t, create.executedSqls, 2)
 	require.NotContains(t, create.executedSqls[1], "mo_function_revisions")
 
-	functionID := int64(92)
-	replace := &backgroundExecTestWithHistory{}
-	replace.init()
-	replace.sql2result[functionRevisionCatalogSchemaCheck] = emptyCatalogProbeResult(20)
-	replace.sql2result[fmt.Sprintf(
-		"select language from mo_catalog.mo_user_defined_function where function_id = %d;", functionID,
-	)] = singleStringResult("language", string(tree.SQL))
-	replace.sql2result[fmt.Sprintf(
-		"select active_revision, namespace_version from mo_catalog.mo_user_defined_function where function_id = %d;", functionID,
-	)] = func() *MysqlResultSet {
-		result := &MysqlResultSet{}
-		for _, name := range []string{"active_revision", "namespace_version"} {
-			column := &MysqlColumn{}
-			column.SetName(name)
-			column.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
-			result.AddColumn(column)
-		}
-		result.AddRow([]interface{}{int64(1), int64(1)})
-		return result
-	}()
-	err = persistUserDefinedFunction(context.Background(), replace, &TenantInfo{User: "owner"}, 7, userDefinedFunctionDefinition{
-		name:     "legacy_until_ready",
-		args:     `[{"name":"value","type":"bigint"}]`,
-		argTypes: `["bigint"]`,
-		retType:  "bigint",
-		body:     "select value + 2",
-		lang:     string(tree.SQL),
-		dbName:   "db1",
-	}, &functionID)
-	require.ErrorContains(t, err, "SQL UDF revision replacement requires MORPC protocol version 107")
-	for _, sql := range replace.executedSqls {
-		require.NotContains(t, sql, "update mo_catalog.mo_user_defined_function")
+	for _, test := range []struct {
+		name                string
+		revision, namespace int64
+		wantError           string
+	}{
+		{name: "legacy_zero_head"},
+		{name: "revision_head", revision: 1, namespace: 1, wantError: "SQL UDF revision replacement requires MORPC protocol version 107"},
+		{name: "half_zero_revision", namespace: 1, wantError: "invalid revision head"},
+		{name: "half_zero_namespace", revision: 1, wantError: "invalid revision head"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			functionID := int64(92)
+			replace := &backgroundExecTestWithHistory{}
+			replace.init()
+			replace.sql2result[functionRevisionCatalogSchemaCheck] = emptyCatalogProbeResult(20)
+			replace.sql2result[fmt.Sprintf("select language from mo_catalog.mo_user_defined_function where function_id = %d;", functionID)] = singleStringResult("language", string(tree.SQL))
+			replace.sql2result[fmt.Sprintf("select rettype from mo_catalog.mo_user_defined_function where function_id = %d;", functionID)] = singleStringResult("rettype", "bigint")
+			result := &MysqlResultSet{}
+			for _, name := range []string{"active_revision", "namespace_version"} {
+				column := &MysqlColumn{}
+				column.SetName(name)
+				column.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+				result.AddColumn(column)
+			}
+			result.AddRow([]interface{}{test.revision, test.namespace})
+			replace.sql2result[fmt.Sprintf("select active_revision, namespace_version from mo_catalog.mo_user_defined_function where function_id = %d;", functionID)] = result
+			err := persistUserDefinedFunction(context.Background(), replace, &TenantInfo{User: "owner"}, 7, userDefinedFunctionDefinition{
+				name: "legacy_until_ready", args: `[{"name":"value","type":"bigint"}]`,
+				argTypes: `["bigint"]`, retType: "bigint", body: "select value + 2", lang: string(tree.SQL), dbName: "db1",
+			}, &functionID)
+			if test.wantError != "" {
+				require.ErrorContains(t, err, test.wantError)
+			} else {
+				require.NoError(t, err)
+			}
+			var updates int
+			for _, sql := range replace.executedSqls {
+				require.NotContains(t, sql, "insert into mo_catalog.mo_function_revisions")
+				if strings.HasPrefix(sql, "update mo_catalog.mo_user_defined_function") {
+					updates++
+				}
+			}
+			if test.wantError == "" {
+				require.Equal(t, 1, updates)
+			} else {
+				require.Zero(t, updates)
+			}
+		})
 	}
 }
 
