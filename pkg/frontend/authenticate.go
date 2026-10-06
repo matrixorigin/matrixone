@@ -11685,14 +11685,13 @@ func ensurePythonUdfCatalogReady(ctx context.Context, bh BackgroundExec) error {
 	return nil
 }
 
-const sharedRoutineRevisionProtocolVersion = defines.MORPCVersion107
+const sharedRoutineRevisionProtocolVersion = udf.SharedRoutineRevisionProtocolVersion
 
-// sharedRoutineRevisionProtocolReady reports whether the deployment has
-// reached the protocol floor at which every live CN understands the shared
-// routine revision writer/reader contract. The protocol value is the active
-// rollout floor, not merely the binary's compiled-in maximum.
+// sharedRoutineRevisionProtocolReady reads this service's active rollout
+// floor, not its compiled-in maximum or a live cluster minimum. Remote
+// dispatch independently probes its actual destination and the receiver.
 func sharedRoutineRevisionProtocolReady(service string) bool {
-	return currentProtocolVersionForService(service) >= sharedRoutineRevisionProtocolVersion
+	return udf.SharedRoutineRevisionProtocolReady(service)
 }
 
 // functionRevisionCatalogAvailable reports whether the current shared

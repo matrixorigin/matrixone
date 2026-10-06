@@ -20,13 +20,30 @@ import (
 	"encoding/hex"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+
 	"github.com/matrixorigin/matrixone/pkg/udf/protocol"
 )
 
 const (
-	pythonInlineArtifactDigestDomain = "matrixone-python-inline-artifact"
-	pythonEnvironmentDigestDomain    = "matrixone-python-environment"
+	SharedRoutineRevisionProtocolVersion = defines.MORPCVersion107
+	pythonInlineArtifactDigestDomain     = "matrixone-python-inline-artifact"
+	pythonEnvironmentDigestDomain        = "matrixone-python-environment"
 )
+
+// SharedRoutineRevisionProtocolReady checks this service's active rollout
+// floor. Remote dispatch must also probe the destination; a local value does
+// not prove that every live CN implements the contract.
+func SharedRoutineRevisionProtocolReady(service string) bool {
+	rt := runtime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	value, present := rt.GetGlobalVariables(runtime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return present && valid && version >= SharedRoutineRevisionProtocolVersion
+}
 
 // PythonInlineArtifactDigest identifies the exact source payload sent to the
 // worker. Length-prefixing each UTF-8 string prevents delimiter ambiguity and

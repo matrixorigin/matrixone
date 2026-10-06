@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -818,4 +819,33 @@ func TestExternalRoutineSkipsArgumentsForEmptySelection(t *testing.T) {
 			require.Zero(t, seen, "an unselected call must not evaluate any arguments")
 		})
 	}
+}
+
+func TestExternalRoutineEvalRejectsProtocolRollbackBeforeInputs(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previous, present := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if present {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, udf.SharedRoutineRevisionProtocolVersion)
+		}
+	})
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, udf.SharedRoutineRevisionProtocolVersion)
+	seen := 0
+	evaluator, err := newExternalRoutineEval(proc, testExternalRoutineCall(t, "SCALAR", udf.NullCallHandler), []ExpressionExecutor{&externalRoutineTestExecutor{evalSeen: &seen}}, nil)
+	require.NoError(t, err)
+	defer evaluator.Free()
+	for _, version := range []any{udf.SharedRoutineRevisionProtocolVersion - 1, nil, "107"} {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+		rejected, err := newExternalRoutineEval(proc, evaluator.call, evaluator.parameterExecutor, nil)
+		require.Nil(t, rejected)
+		require.ErrorContains(t, err, "Python execution requires")
+		_, err = evaluator.Eval(proc, nil, nil)
+		require.ErrorContains(t, err, "Python execution requires")
+		require.Zero(t, seen)
+	}
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, udf.SharedRoutineRevisionProtocolVersion)
 }
