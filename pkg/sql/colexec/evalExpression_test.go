@@ -1748,60 +1748,104 @@ func TestGeometryLiteralExpressionExecutor(t *testing.T) {
 	require.Equal(t, "POINT(1 1)", vec.GetStringAt(0))
 }
 
-func TestVarExpressionExecutor(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	// Create a variable expression
-	varExpr := &plan.Expr{
-		Expr: &plan.Expr_V{
-			V: &plan.VarRef{
-				Name:   "test_var",
-				System: false,
-				Global: false,
-			},
-		},
-		Typ: plan.Type{
-			Id:          int32(types.T_int64),
-			NotNullable: true,
-		},
+func TestVariableExpressionLifecycle(t *testing.T) {
+	proc := testutil.NewProcess(t, testutil.WithFileService(nil))
+	checkExpressionStorageAfterCleanup(t, proc)
+	checkResolvers := func(t *testing.T) {
+		t.Helper()
+		assert.Nil(t, proc.GetResolveVariableFunc())
+		assert.Nil(t, proc.GetResolveVariableIsBinFunc())
+		assert.Nil(t, proc.GetResolveVariableStringDomainFunc())
+		assert.Nil(t, proc.GetResolveVariablePrepareParamKindFunc())
+	}
+	t.Cleanup(func() { checkResolvers(t) })
+	runLeaf := func(name string, scenario func(t *testing.T)) {
+		t.Run(name, func(t *testing.T) {
+			checkExpressionStorageAfterCleanup(t, proc)
+			valueBefore, binBefore := proc.GetResolveVariableFunc(), proc.GetResolveVariableIsBinFunc()
+			domainBefore, kindBefore := proc.GetResolveVariableStringDomainFunc(), proc.GetResolveVariablePrepareParamKindFunc()
+			t.Cleanup(func() {
+				proc.SetResolveVariableFunc(valueBefore)
+				proc.SetResolveVariableIsBinFunc(binBefore)
+				proc.SetResolveVariableStringDomainFunc(domainBefore)
+				proc.SetResolveVariablePrepareParamKindFunc(kindBefore)
+			})
+			checkResolvers(t)
+			scenario(t)
+		})
 	}
 
-	// Mock the variable resolution function
-	proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
-		if name == "test_var" {
-			return int64(12345), nil
+	runLeaf("integer reuse", func(t *testing.T) {
+
+		// Create a variable expression
+		varExpr := &plan.Expr{
+			Expr: &plan.Expr_V{
+				V: &plan.VarRef{
+					Name:   "test_var",
+					System: false,
+					Global: false,
+				},
+			},
+			Typ: plan.Type{
+				Id:          int32(types.T_int64),
+				NotNullable: true,
+			},
 		}
-		return nil, moerr.NewInternalErrorNoCtx("variable not found")
+
+		// Mock the variable resolution function
+		proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+			if name == "test_var" {
+				return int64(12345), nil
+			}
+			return nil, moerr.NewInternalErrorNoCtx("variable not found")
+		})
+
+		varExprExecutor, err := NewExpressionExecutor(proc, varExpr)
+		if varExprExecutor != nil {
+			t.Cleanup(func() {
+				if varExprExecutor != nil {
+					varExprExecutor.Free()
+				}
+			})
+		}
+		require.NoError(t, err)
+		tree, err := DebugShowExecutor(varExprExecutor)
+		require.NoError(t, err)
+		t.Log(tree)
+
+		input := &batch.Batch{}
+		input.SetRowCount(4)
+		vec, err := varExprExecutor.Eval(proc, []*batch.Batch{input}, nil)
+		require.NoError(t, err)
+		require.Equal(t, input.RowCount(), vec.Length())
+		require.Equal(t, types.T_int64.ToType(), *vec.GetType())
+		require.Equal(t, int64(12345), vector.MustFixedColNoTypeCheck[int64](vec)[0])
+		require.False(t, vec.GetNulls().Contains(0))
+
+		// A reused executor must reparse the new value into the fixed-width vector,
+		// rather than treating its backing memory as a varlena descriptor.
+		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+			return int64(67890), nil
+		})
+		input.SetRowCount(2)
+		vec, err = varExprExecutor.Eval(proc, []*batch.Batch{input}, nil)
+		require.NoError(t, err)
+		require.Equal(t, input.RowCount(), vec.Length())
+		require.Equal(t, int64(67890), vector.MustFixedColNoTypeCheck[int64](vec)[0])
+
+		owned, err := varExprExecutor.EvalWithoutResultReusing(proc, []*batch.Batch{input}, nil)
+		if owned != nil {
+			defer owned.Free(proc.Mp())
+		}
+		require.NoError(t, err)
+		varExprExecutor.Free()
+		varExprExecutor = nil
+		require.Equal(t, 2, owned.Length())
+		require.Equal(t, int64(67890), vector.GetFixedAtNoTypeCheck[int64](owned, 0))
+		require.False(t, owned.IsNull(0))
+
 	})
 
-	varExprExecutor, err := NewExpressionExecutor(proc, varExpr)
-	require.NoError(t, err)
-	tree, err := DebugShowExecutor(varExprExecutor)
-	require.NoError(t, err)
-	t.Log(tree)
-
-	input := &batch.Batch{}
-	input.SetRowCount(4)
-	vec, err := varExprExecutor.Eval(proc, []*batch.Batch{input}, nil)
-	require.NoError(t, err)
-	require.Equal(t, input.RowCount(), vec.Length())
-	require.Equal(t, types.T_int64.ToType(), *vec.GetType())
-	require.Equal(t, int64(12345), vector.MustFixedColNoTypeCheck[int64](vec)[0])
-	require.False(t, vec.GetNulls().Contains(0))
-
-	// A reused executor must reparse the new value into the fixed-width vector,
-	// rather than treating its backing memory as a varlena descriptor.
-	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
-		return int64(67890), nil
-	})
-	input.SetRowCount(2)
-	vec, err = varExprExecutor.Eval(proc, []*batch.Batch{input}, nil)
-	require.NoError(t, err)
-	require.Equal(t, input.RowCount(), vec.Length())
-	require.Equal(t, int64(67890), vector.MustFixedColNoTypeCheck[int64](vec)[0])
-}
-
-func TestVarExpressionExecutorPreservesBoundStringDomainOnReuse(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		typ    types.Type
@@ -1815,8 +1859,7 @@ func TestVarExpressionExecutorPreservesBoundStringDomainOnReuse(t *testing.T) {
 		{"bound text on binary charset", types.NewWithCharset(types.T_varchar, 0, 0, types.CharsetBinary), types.RuntimeStringText, false},
 		{"bound binary on text", types.T_varchar.ToType(), types.RuntimeStringBinary, true},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcess(t)
+		runLeaf("domain "+tc.name, func(t *testing.T) {
 			var value any = "你"
 			var resolveErr error
 			runtimeDomain := types.RuntimeStringBinary
@@ -1832,11 +1875,14 @@ func TestVarExpressionExecutorPreservesBoundStringDomainOnReuse(t *testing.T) {
 				Expr: &plan.Expr_V{V: &plan.VarRef{Name: "domain_var", BoundStringDomain: uint32(tc.domain) + 1}},
 				Typ:  plan.Type{Id: int32(tc.typ.Oid), Width: tc.typ.Width, Charset: uint32(tc.typ.Charset)},
 			})
+			if executor != nil {
+				t.Cleanup(func() {
+					if executor != nil {
+						executor.Free()
+					}
+				})
+			}
 			require.NoError(t, err)
-			t.Cleanup(func() {
-				executor.Free()
-				require.Zero(t, proc.Mp().CurrNB())
-			})
 
 			input := batch.New(nil)
 			input.SetRowCount(2)
@@ -1893,51 +1939,95 @@ func TestVarExpressionExecutorPreservesBoundStringDomainOnReuse(t *testing.T) {
 			require.Equal(t, "你", vec.GetStringAt(0))
 			require.Equal(t, tc.binary, vec.GetIsBinaryStringAt(0))
 			require.Zero(t, domainCalls)
+			if tc.name == "text" {
+				value = nil
+				owned, err := executor.EvalWithoutResultReusing(proc, []*batch.Batch{input}, nil)
+				if owned != nil {
+					defer owned.Free(proc.Mp())
+				}
+				require.NoError(t, err)
+				executor.Free()
+				executor = nil
+				require.Equal(t, 2, owned.Length())
+				require.True(t, owned.IsConstNull())
+			}
+
 		})
 	}
-}
 
-func TestVarExpressionExecutorTypedJSONAndUUID(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	var value any = `{"a":1}`
-	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
-		return value, nil
+	runLeaf("json reuse", func(t *testing.T) {
+		var value any = `{"a":1}`
+		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+			return value, nil
+		})
+
+		jsonExpr := &plan.Expr{
+			Expr: &plan.Expr_V{V: &plan.VarRef{Name: "json_var"}},
+			Typ:  plan.Type{Id: int32(types.T_json)},
+		}
+		jsonExecutor, err := NewExpressionExecutor(proc, jsonExpr)
+		if jsonExecutor != nil {
+			t.Cleanup(jsonExecutor.Free)
+		}
+		require.NoError(t, err)
+
+		vec, err := jsonExecutor.Eval(proc, nil, nil)
+		require.NoError(t, err)
+		require.Equal(t, `{"a": 1}`, types.DecodeJson(vec.GetBytesAt(0)).String())
+
+		value = `{"a":2}`
+		vec, err = jsonExecutor.Eval(proc, nil, nil)
+		require.NoError(t, err)
+		require.Equal(t, `{"a": 2}`, types.DecodeJson(vec.GetBytesAt(0)).String())
+
+		value = `{"a":}`
+		vec, err = jsonExecutor.Eval(proc, nil, nil)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "%v", err)
+		require.Nil(t, vec)
+		require.Zero(t, proc.Mp().CurrNB())
+		bytes, objects := proc.Mp().OnHeapOutstanding()
+		require.Zero(t, bytes)
+		require.Zero(t, objects)
+		value = `{"a":3}`
+		vec, err = jsonExecutor.Eval(proc, nil, nil)
+		require.NoError(t, err)
+		require.Equal(t, `{"a": 3}`, types.DecodeJson(vec.GetBytesAt(0)).String())
+
+	})
+	runLeaf("uuid value", func(t *testing.T) {
+		uuid := types.Uuid{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
+		value := "ffffffff-ffff-ffff-ffff-ffffffffffff"
+		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return value, nil })
+		uuidExpr := &plan.Expr{
+			Expr: &plan.Expr_V{V: &plan.VarRef{Name: "uuid_var"}},
+			Typ:  plan.Type{Id: int32(types.T_uuid)},
+		}
+		uuidExecutor, err := NewExpressionExecutor(proc, uuidExpr)
+		if uuidExecutor != nil {
+			t.Cleanup(uuidExecutor.Free)
+		}
+		require.NoError(t, err)
+
+		vec, err := uuidExecutor.Eval(proc, nil, nil)
+		require.NoError(t, err)
+		require.Equal(t, uuid, vector.MustFixedColNoTypeCheck[types.Uuid](vec)[0])
+
+		value = "ffffffff-ffff-ffff-ffff-fffffffffff"
+		vec, err = uuidExecutor.Eval(proc, nil, nil)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "invalid UUID length")
+		require.Nil(t, vec)
+		require.Zero(t, proc.Mp().CurrNB())
+		bytes, objects := proc.Mp().OnHeapOutstanding()
+		require.Zero(t, bytes)
+		require.Zero(t, objects)
+		value = "ffffffff-ffff-ffff-ffff-ffffffffffff"
+		vec, err = uuidExecutor.Eval(proc, nil, nil)
+		require.NoError(t, err)
+		require.Equal(t, uuid, vector.GetFixedAtNoTypeCheck[types.Uuid](vec, 0))
+
 	})
 
-	jsonExpr := &plan.Expr{
-		Expr: &plan.Expr_V{V: &plan.VarRef{Name: "json_var"}},
-		Typ:  plan.Type{Id: int32(types.T_json)},
-	}
-	jsonExecutor, err := NewExpressionExecutor(proc, jsonExpr)
-	require.NoError(t, err)
-	t.Cleanup(jsonExecutor.Free)
-
-	vec, err := jsonExecutor.Eval(proc, nil, nil)
-	require.NoError(t, err)
-	require.Equal(t, `{"a": 1}`, types.DecodeJson(vec.GetBytesAt(0)).String())
-
-	value = `{"a":2}`
-	vec, err = jsonExecutor.Eval(proc, nil, nil)
-	require.NoError(t, err)
-	require.Equal(t, `{"a": 2}`, types.DecodeJson(vec.GetBytesAt(0)).String())
-
-	uuid, err := types.ParseUuid("ffffffff-ffff-ffff-ffff-ffffffffffff")
-	require.NoError(t, err)
-	value = uuid.String()
-	uuidExpr := &plan.Expr{
-		Expr: &plan.Expr_V{V: &plan.VarRef{Name: "uuid_var"}},
-		Typ:  plan.Type{Id: int32(types.T_uuid)},
-	}
-	uuidExecutor, err := NewExpressionExecutor(proc, uuidExpr)
-	require.NoError(t, err)
-	t.Cleanup(uuidExecutor.Free)
-
-	vec, err = uuidExecutor.Eval(proc, nil, nil)
-	require.NoError(t, err)
-	require.Equal(t, uuid, vector.MustFixedColNoTypeCheck[types.Uuid](vec)[0])
-}
-
-func TestVarExpressionExecutorReencodesTypedArraysOnReuse(t *testing.T) {
 	testCases := []struct {
 		name   string
 		typ    types.Type
@@ -2026,8 +2116,7 @@ func TestVarExpressionExecutorReencodesTypedArraysOnReuse(t *testing.T) {
 	}
 
 	for _, testCase := range testCases {
-		t.Run(testCase.name, func(t *testing.T) {
-			proc := testutil.NewProcess(t)
+		runLeaf("array "+testCase.name, func(t *testing.T) {
 			value := testCase.first
 			proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
 				return value, nil
@@ -2041,8 +2130,10 @@ func TestVarExpressionExecutorReencodesTypedArraysOnReuse(t *testing.T) {
 				},
 			}
 			executor, err := NewExpressionExecutor(proc, expr)
+			if executor != nil {
+				t.Cleanup(executor.Free)
+			}
 			require.NoError(t, err)
-			t.Cleanup(executor.Free)
 
 			vec, err := executor.Eval(proc, nil, nil)
 			require.NoError(t, err)
@@ -2052,79 +2143,168 @@ func TestVarExpressionExecutorReencodesTypedArraysOnReuse(t *testing.T) {
 			vec, err = executor.Eval(proc, nil, nil)
 			require.NoError(t, err)
 			testCase.check(t, vec, true)
+			if testCase.name == "vecf32" {
+				value = []float32{4, 5}
+				vec, err = executor.Eval(proc, nil, nil)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "%v", err)
+				require.Nil(t, vec)
+				require.Zero(t, proc.Mp().CurrNB())
+				bytes, objects := proc.Mp().OnHeapOutstanding()
+				require.Zero(t, bytes)
+				require.Zero(t, objects)
+				value = testCase.second
+				vec, err = executor.Eval(proc, nil, nil)
+				require.NoError(t, err)
+				testCase.check(t, vec, true)
+			}
+
 		})
 	}
-}
 
-func TestVarExpressionExecutorPreservesProtocolMetadataOnReuse(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	value := "AB\x00\x00"
-	isBin := true
-	prepareParamKind := vector.PrepareParamNone
-	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
-		return value, nil
+	runLeaf("protocol metadata reuse", func(t *testing.T) {
+		value := "AB\x00\x00"
+		isBin := true
+		prepareParamKind := vector.PrepareParamNone
+		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+			return value, nil
+		})
+		proc.SetResolveVariableIsBinFunc(func(string, bool, bool) (bool, error) {
+			return isBin, nil
+		})
+		proc.SetResolveVariablePrepareParamKindFunc(func(string, bool, bool) (vector.PrepareParamKind, error) {
+			return prepareParamKind, nil
+		})
+		expr := &plan.Expr{
+			Expr: &plan.Expr_V{V: &plan.VarRef{Name: "copied_var"}},
+			Typ:  plan.Type{Id: int32(types.T_text)},
+		}
+		executor, err := NewExpressionExecutor(proc, expr)
+		if executor != nil {
+			t.Cleanup(executor.Free)
+		}
+		require.NoError(t, err)
+
+		vec, err := executor.Eval(proc, nil, nil)
+		require.NoError(t, err)
+		require.True(t, vec.GetIsBin())
+		require.Equal(t, vector.PrepareParamNone, vec.GetPrepareParamKind())
+		require.Equal(t, "AB\x00\x00", vec.GetStringAt(0))
+
+		value, isBin, prepareParamKind = "5.0", false, vector.PrepareParamFloat
+		vec, err = executor.Eval(proc, nil, nil)
+		require.NoError(t, err)
+		require.False(t, vec.GetIsBin())
+		require.Equal(t, vector.PrepareParamFloat, vec.GetPrepareParamKind())
+		require.Equal(t, "5.0", vec.GetStringAt(0))
+
+		value, prepareParamKind = "text", vector.PrepareParamNone
+		vec, err = executor.Eval(proc, nil, nil)
+		require.NoError(t, err)
+		require.False(t, vec.GetIsBin())
+		require.Equal(t, vector.PrepareParamNone, vec.GetPrepareParamKind())
+		require.Equal(t, "text", vec.GetStringAt(0))
+
+		value, isBin = "CD\x00\x00", true
+		vec, err = executor.Eval(proc, nil, nil)
+		require.NoError(t, err)
+		require.True(t, vec.GetIsBin())
+		require.Equal(t, vector.PrepareParamNone, vec.GetPrepareParamKind())
+		require.Equal(t, "CD\x00\x00", vec.GetStringAt(0))
+
+		// Resolver errors must stop before later metadata callbacks or publication.
+		resolverErr := moerr.NewInternalErrorNoCtx("variable metadata resolver failed")
+		calls := [4]int{}
+		failStage := -1
+		failure := func(stage int) error {
+			calls[stage]++
+			if failStage == stage || failStage == -2 {
+				return resolverErr
+			}
+			return nil
+		}
+		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return "7", failure(0) })
+		proc.SetResolveVariableIsBinFunc(func(string, bool, bool) (bool, error) { return true, failure(1) })
+		proc.SetResolveVariableStringDomainFunc(func(string, bool, bool) (types.RuntimeStringDomain, error) {
+			return types.RuntimeStringText, failure(2)
+		})
+		proc.SetResolveVariablePrepareParamKindFunc(func(string, bool, bool) (vector.PrepareParamKind, error) {
+			return vector.PrepareParamInteger, failure(3)
+		})
+		expectedText := types.Type{Oid: types.T_text, Charset: types.CharsetLegacy, Size: 24}
+		checkRecovered := func(result *vector.Vector, rows int) {
+			t.Helper()
+			require.Equal(t, expectedText, *result.GetType())
+			require.Equal(t, rows, result.Length())
+			require.True(t, result.IsConst())
+			for row := 0; row < rows; row++ {
+				require.False(t, result.IsNull(uint64(row)))
+				require.Equal(t, "7", result.GetStringAt(row))
+				require.Equal(t, types.StringSourceUserVariable, result.GetStringSourceAt(row))
+				require.Equal(t, types.RuntimeStringText, result.GetRuntimeStringDomainAt(row))
+			}
+			require.True(t, result.GetIsBin())
+			require.Equal(t, vector.PrepareParamInteger, result.GetPrepareParamKind())
+		}
+		for stage, expectedCalls := range [][4]int{{1, 0, 0, 0}, {1, 1, 0, 0}, {1, 1, 1, 0}, {1, 1, 1, 1}} {
+			failStage, calls = stage, [4]int{}
+			result, err := executor.Eval(proc, nil, nil)
+			require.ErrorIs(t, err, resolverErr)
+			require.Nil(t, result)
+			require.Equal(t, expectedCalls, calls)
+			failStage, calls = -1, [4]int{}
+			func() {
+				owned, err := executor.EvalWithoutResultReusing(proc, nil, nil)
+				if owned != nil {
+					defer owned.Free(proc.Mp())
+				}
+				require.NoError(t, err)
+				require.Equal(t, [4]int{1, 1, 1, 1}, calls)
+				checkRecovered(owned, 1)
+			}()
+			require.Zero(t, proc.Mp().CurrNB())
+			bytes, objects := proc.Mp().OnHeapOutstanding()
+			require.Zero(t, bytes)
+			require.Zero(t, objects)
+		}
+		failStage, calls = -2, [4]int{}
+		input := batch.New(nil)
+		input.SetRowCount(3)
+		masked, err := executor.Eval(proc, []*batch.Batch{input}, []bool{false, false, false})
+		require.NoError(t, err)
+		require.Equal(t, [4]int{}, calls)
+		require.Equal(t, expectedText, *masked.GetType())
+		require.Equal(t, 3, masked.Length())
+		require.True(t, masked.IsConstNull())
+		failStage = -1
+		result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+		require.NoError(t, err)
+		require.Equal(t, [4]int{1, 1, 1, 1}, calls)
+		checkRecovered(result, 3)
+
 	})
-	proc.SetResolveVariableIsBinFunc(func(string, bool, bool) (bool, error) {
-		return isBin, nil
-	})
-	proc.SetResolveVariablePrepareParamKindFunc(func(string, bool, bool) (vector.PrepareParamKind, error) {
-		return prepareParamKind, nil
-	})
-	expr := &plan.Expr{
-		Expr: &plan.Expr_V{V: &plan.VarRef{Name: "copied_var"}},
-		Typ:  plan.Type{Id: int32(types.T_text)},
-	}
-	executor, err := NewExpressionExecutor(proc, expr)
-	require.NoError(t, err)
-	t.Cleanup(executor.Free)
-
-	vec, err := executor.Eval(proc, nil, nil)
-	require.NoError(t, err)
-	require.True(t, vec.GetIsBin())
-	require.Equal(t, vector.PrepareParamNone, vec.GetPrepareParamKind())
-	require.Equal(t, "AB\x00\x00", vec.GetStringAt(0))
-
-	value, isBin, prepareParamKind = "5.0", false, vector.PrepareParamFloat
-	vec, err = executor.Eval(proc, nil, nil)
-	require.NoError(t, err)
-	require.False(t, vec.GetIsBin())
-	require.Equal(t, vector.PrepareParamFloat, vec.GetPrepareParamKind())
-	require.Equal(t, "5.0", vec.GetStringAt(0))
-
-	value, prepareParamKind = "text", vector.PrepareParamNone
-	vec, err = executor.Eval(proc, nil, nil)
-	require.NoError(t, err)
-	require.False(t, vec.GetIsBin())
-	require.Equal(t, vector.PrepareParamNone, vec.GetPrepareParamKind())
-	require.Equal(t, "text", vec.GetStringAt(0))
-
-	value, isBin = "CD\x00\x00", true
-	vec, err = executor.Eval(proc, nil, nil)
-	require.NoError(t, err)
-	require.True(t, vec.GetIsBin())
-	require.Equal(t, vector.PrepareParamNone, vec.GetPrepareParamKind())
-	require.Equal(t, "CD\x00\x00", vec.GetStringAt(0))
-}
-
-func TestVarExpressionExecutorWithoutResolveVariableFunc(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	varExpr := &plan.Expr{
-		Expr: &plan.Expr_V{
-			V: &plan.VarRef{
-				Name:   "test_var",
-				System: true,
+	runLeaf("missing system resolver", func(t *testing.T) {
+		varExpr := &plan.Expr{
+			Expr: &plan.Expr_V{
+				V: &plan.VarRef{
+					Name:   "test_var",
+					System: true,
+				},
 			},
-		},
-		Typ: plan.Type{
-			Id: int32(types.T_text),
-		},
-	}
+			Typ: plan.Type{
+				Id: int32(types.T_text),
+			},
+		}
 
-	varExprExecutor, err := NewExpressionExecutor(proc, varExpr)
-	require.NoError(t, err)
-	_, err = varExprExecutor.Eval(proc, nil, nil)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "resolve variable function is not set")
+		varExprExecutor, err := NewExpressionExecutor(proc, varExpr)
+		if varExprExecutor != nil {
+			t.Cleanup(varExprExecutor.Free)
+		}
+		require.NoError(t, err)
+		_, err = varExprExecutor.Eval(proc, nil, nil)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal), "%v", err)
+		require.Contains(t, err.Error(), "resolve variable function is not set")
+
+	})
 }
 
 func TestColumnExpressionExecutor(t *testing.T) {
