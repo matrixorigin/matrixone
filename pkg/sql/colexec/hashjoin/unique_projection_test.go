@@ -94,7 +94,7 @@ func TestHashJoinUniqueProjectionPreservesSelectionMetadata(t *testing.T) {
 
 func TestHashJoinUniqueProjectionResumesAndReuses(t *testing.T) {
 	typ := types.T_int32.ToType()
-	tc := newTestCase(t, []bool{false}, []types.Type{typ}, nil,
+	tc := newTestCase(t, []types.Type{typ}, nil,
 		[][]*plan.Expr{{newExpr(0, typ)}, {newExpr(0, typ)}})
 	tc.arg.JoinType, tc.arg.NonEqCond = plan.Node_INNER, nil
 	tc.arg.ResultCols = []colexec.ResultPos{{Rel: 0, Pos: 0}, {Rel: 1, Pos: 0}}

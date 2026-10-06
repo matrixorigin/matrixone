@@ -204,13 +204,6 @@ func makeTestCases(t *testing.T) []winTestCase {
 			arg: &Window{
 				WinSpecList: []*plan.Expr{makeWindowSpec()},
 				Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
-				OperatorBase: vm.OperatorBase{
-					OperatorInfo: vm.OperatorInfo{
-						Idx:     0,
-						IsFirst: false,
-						IsLast:  false,
-					},
-				},
 			},
 		},
 		{
@@ -221,23 +214,16 @@ func makeTestCases(t *testing.T) []winTestCase {
 			arg: &Window{
 				WinSpecList: []*plan.Expr{makeAggWindowSpec("json_objectagg")},
 				Aggs:        []aggexec.AggFuncExecExpression{newJsonObjectAggExpr(t)},
-				OperatorBase: vm.OperatorBase{
-					OperatorInfo: vm.OperatorInfo{
-						Idx:     0,
-						IsFirst: false,
-						IsLast:  false,
-					},
-				},
 			},
 		},
 	}
 }
 
 func TestString(t *testing.T) {
-	buf := new(bytes.Buffer)
-	for _, tc := range makeTestCases(t) {
-		tc.arg.String(buf)
-	}
+	var buf bytes.Buffer
+	arg := &Window{}
+	arg.String(&buf)
+	require.Equal(t, "window: window", buf.String())
 }
 
 func TestPrepare(t *testing.T) {
