@@ -1511,36 +1511,6 @@ func makeVarcharLoopJoinBatch(mp *mpool.MPool, vals []string) *batch.Batch {
 	return bat
 }
 
-/*
-	func BenchmarkJoin(b *testing.B) {
-		for i := 0; i < b.N; i++ {
-			tcs = []joinTestCase{
-				newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)}),
-				newTestCase([]bool{true}, []types.Type{types.T_int8.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)}),
-			}
-			t := new(testing.T)
-			for _, tc := range tcs {
-				bats := hashBuild(t, tc)
-				err := tc.arg.Prepare(tc.proc)
-				require.NoError(t, err)
-				tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-				tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
-				tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-				tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-				tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-				tc.proc.Reg.MergeReceivers[0].Ch <- nil
-				tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(bats[1])
-				for {
-					ok, err := tc.arg.Call(tc.proc)
-					if ok.Status == vm.ExecStop || err != nil {
-						break
-					}
-				}
-			}
-		}
-	}
-*/
-
 func newTestCase(t *testing.T, flgs []bool, ts []types.Type, rp []colexec.ResultPos) joinTestCase {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	proc.SetMessageBoard(message.NewMessageBoard())
