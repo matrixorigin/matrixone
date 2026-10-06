@@ -101,7 +101,7 @@ func BlockScaledFromJSON(f BlockScaledFormat, s string) ([]byte, error) {
 	}
 	var doc blockScaledJSON
 	if err := blockScaledJSONAPI.UnmarshalFromString(s, &doc); err != nil {
-		return nil, invalid("%v", err)
+		return nil, invalid(`not a JSON object of "g", "s" and "v"`)
 	}
 	dim := len(doc.V)
 	if dim == 0 {

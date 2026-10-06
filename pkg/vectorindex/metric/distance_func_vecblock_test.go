@@ -296,12 +296,14 @@ func TestVecBlockOverflowNaNMapsToPosInf(t *testing.T) {
 // rounded once, as stored, on targets that fuse multiply-add (arm64) as on the others.
 func TestVecBlockSelfDistance(t *testing.T) {
 	r := rand.New(rand.NewSource(29554))
-	vectors := [][]float32{
-		{9.9999994e29, 9.9999994e29, 9.9999994e29, 9.9999994e29, 9.9999994e29, 9.9999994e29, 9.9999994e29, 9.9999994e29,
-			9.9999994e29, 9.9999994e29, 9.9999994e29, 9.9999994e29, 9.9999994e29, 9.9999994e29, 9.9999994e29, 9.9999994e29},
-	}
-	for _, scale := range []float64{1e-30, 1e-3, 1, 1e3, 1e20} {
-		for _, dim := range []int{16, 17, 70} {
+	scales := []float64{1e-30, 1e-3, 1, 1e3, 1e20}
+	dims := []int{16, 17, 70}
+	vectors := make([][]float32, 0, 1+len(scales)*len(dims))
+	vectors = append(vectors, []float32{
+		9.9999994e29, 9.9999994e29, 9.9999994e29, 9.9999994e29, 9.9999994e29, 9.9999994e29, 9.9999994e29, 9.9999994e29,
+		9.9999994e29, 9.9999994e29, 9.9999994e29, 9.9999994e29, 9.9999994e29, 9.9999994e29, 9.9999994e29, 9.9999994e29})
+	for _, scale := range scales {
+		for _, dim := range dims {
 			vectors = append(vectors, vecBlockRandom(r, dim, scale))
 		}
 	}

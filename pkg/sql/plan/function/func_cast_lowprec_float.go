@@ -52,7 +52,8 @@ func init() {
 	}
 
 	// Targets a low-precision float may cast to (numerics, strings, each other).
-	fromLowPrecTargets := []types.T{
+	fromLowPrecTargets := make([]types.T, 0, 21+len(lowPrec))
+	fromLowPrecTargets = append(fromLowPrecTargets,
 		types.T_bool, types.T_bit,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
@@ -60,7 +61,7 @@ func init() {
 		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
-	}
+	)
 	fromLowPrecTargets = append(fromLowPrecTargets, lowPrec...)
 	for _, s := range lowPrec {
 		supportedTypeCast[s] = append(supportedTypeCast[s], fromLowPrecTargets...)

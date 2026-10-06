@@ -947,7 +947,11 @@ func TestVectorMatmulGPUMemoryAdmission(t *testing.T) {
 func TestVectorMatmulBinaryQueries(t *testing.T) {
 	queries := [][]float32{{1, 0, -0.5, 2}, {0, 3, 0, -1}}
 	blob := func(qs [][]float32) []byte {
-		var b []byte
+		n := 0
+		for _, q := range qs {
+			n += 4 * len(q)
+		}
+		b := make([]byte, 0, n)
 		for _, q := range qs {
 			b = append(b, types.ArrayToBytes(q)...)
 		}
@@ -1110,7 +1114,7 @@ func TestVectorMatmulVecBlockQueries(t *testing.T) {
 	queries := [][]float32{{1, 0, -0.5, 2}, {0, 3, 0, -1}}
 	const vecblock = `{"query_format":"vecblock","metric":"l2sq"}`
 	forms := func(t *testing.T, f types.BlockScaledFormat, qs [][]float32) (blob []byte, text string, cells [][]byte) {
-		var texts []string
+		texts := make([]string, 0, len(qs))
 		for _, q := range qs {
 			cell, err := types.AppendBlockScaled(nil, f, q)
 			require.NoError(t, err)
@@ -1161,11 +1165,12 @@ func TestVectorMatmulVecBlockQueries(t *testing.T) {
 	mp := mpool.MustNewZero()
 	rows := [][]float32{{1, 0, 0, 0}, {1, 0, -0.5, 2}, {2, 2, 0, 0}}
 	blob8, text8, _ := forms(t, types.BlockScaledMXFP8, [][]float32{{1, 0, -0.5, 2}})
-	var results []string
-	for _, cfg := range [][]byte{
+	cfgs := [][]byte{
 		EncodeVectorMatmulBinaryConfig(1, blob8, vecblock, false),
 		EncodeVectorMatmulConfig(1, text8, vecblock, false),
-	} {
+	}
+	results := make([]string, 0, len(cfgs))
+	for _, cfg := range cfgs {
 		exec := vmExec(t, mp, types.T_int64.ToType(), 1, cfg)
 		vecs := vmVectors(t, mp, []int64{1, 2, 3}, rows)
 		require.NoError(t, exec.BulkFill(0, vecs))

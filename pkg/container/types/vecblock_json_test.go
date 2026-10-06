@@ -27,9 +27,11 @@ import (
 // quantized again and can store other values.
 func TestBlockScaledJSONIdentity(t *testing.T) {
 	r := rand.New(rand.NewSource(29554))
-	var vectors [][]float32
-	for _, dim := range []int{1, 15, 16, 17, 31, 32, 33, 70} {
-		for _, scale := range []float64{1e-30, 1e-3, 1, 1e3, 1e30} {
+	dims := []int{1, 15, 16, 17, 31, 32, 33, 70}
+	scales := []float64{1e-30, 1e-3, 1, 1e3, 1e30}
+	vectors := make([][]float32, 0, len(dims)*len(scales)+2)
+	for _, dim := range dims {
+		for _, scale := range scales {
 			v := make([]float32, dim)
 			for i := range v {
 				v[i] = float32(r.NormFloat64() * scale)

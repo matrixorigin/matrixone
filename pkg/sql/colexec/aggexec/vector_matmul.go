@@ -299,7 +299,7 @@ func parseVectorMatmulConfig(raw []byte, vecType types.Type) (*vectorMatmulConfi
 			return nil, err
 		}
 	} else if err := sonic.UnmarshalString(queriesText, &queries); err != nil {
-		return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: queries must be a JSON array of vectors: %v", err)
+		return nil, moerr.NewInvalidInputNoCtx("vector_matmul: queries must be a JSON array of vectors")
 	}
 	if len(queries) == 0 || len(queries) > vectorMatmulMaxQueries {
 		return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: query count %d out of range [1, %d]", len(queries), vectorMatmulMaxQueries)
@@ -393,7 +393,7 @@ func decodeVectorMatmulCells(queries string, binaryQueries bool, vecType types.T
 	} else {
 		var texts []json.RawMessage
 		if err := sonic.UnmarshalString(queries, &texts); err != nil {
-			return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: vecblock queries must be a JSON array of vecblock JSON objects: %v", err)
+			return nil, moerr.NewInvalidInputNoCtx("vector_matmul: vecblock queries must be a JSON array of vecblock JSON objects")
 		}
 		if len(texts) == 0 || len(texts) > vectorMatmulMaxQueries {
 			return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: query count %d out of range [1, %d]", len(texts), vectorMatmulMaxQueries)

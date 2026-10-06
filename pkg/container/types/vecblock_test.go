@@ -517,8 +517,9 @@ func TestHasF8E4M3NaN(t *testing.T) {
 // cells that decode to an infinite value, and accepted cells round-trip through text.
 func TestBlockScaledDecodedFinite(t *testing.T) {
 	for _, f := range []BlockScaledFormat{BlockScaledMXFP8, BlockScaledNVFP4} {
-		var inputs []float32
-		for _, x := range []float32{math.MaxFloat32, 3.3e38, 3.0e38, float32(math.Ldexp(1, 127)), 1e38, 1} {
+		xs := []float32{math.MaxFloat32, 3.3e38, 3.0e38, float32(math.Ldexp(1, 127)), 1e38, 1}
+		inputs := make([]float32, 0, 3*len(xs))
+		for _, x := range xs {
 			inputs = append(inputs, x, -x, math.Nextafter32(x, 0))
 		}
 		for _, x := range inputs {
