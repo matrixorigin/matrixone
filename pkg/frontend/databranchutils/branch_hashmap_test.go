@@ -2684,7 +2684,12 @@ func TestEncodeDecodedValue_AllTypes(t *testing.T) {
 		types.T_array_float64,
 	}
 
-	baseCases := []struct {
+	baseCases := append(make([]struct {
+		name   string
+		typ    types.Type
+		value  any
+		expect any
+	}, 0, 26+len(stringTypeOids)), []struct {
 		name   string
 		typ    types.Type
 		value  any
@@ -2716,7 +2721,7 @@ func TestEncodeDecodedValue_AllTypes(t *testing.T) {
 		{name: "enum_uint16", typ: types.T_enum.ToType(), value: uint16(9), expect: types.Enum(9)},
 		{name: "ts_bytes", typ: types.T_TS.ToType(), value: []byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}, expect: []byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}},
 		{name: "default_bytes", typ: types.T_any.ToType(), value: []byte("fallback"), expect: []byte("fallback")},
-	}
+	}...)
 
 	for _, oid := range stringTypeOids {
 		baseCases = append(baseCases, struct {

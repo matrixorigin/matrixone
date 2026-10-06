@@ -268,9 +268,11 @@ func TestDedupJoinEmitsOrderedODKUActions(t *testing.T) {
 
 			out := runFinalizeFixture(t, dedupArg, buildArg, proc, buildBat, probeBat)
 			require.Len(t, out, tc.wantBatchCount)
-			var payload []int32
-			var affected []uint64
-			var physical, final, fkEligibility []bool
+			payload := make([]int32, 0, len(out))
+			affected := make([]uint64, 0, len(out))
+			physical := make([]bool, 0, len(out))
+			final := make([]bool, 0, len(out))
+			fkEligibility := make([]bool, 0, len(out))
 			for _, output := range out {
 				require.LessOrEqual(t, output.RowCount(), colexec.DefaultBatchSize)
 				payload = append(payload, vector.MustFixedColNoTypeCheck[int32](output.Vecs[0])...)

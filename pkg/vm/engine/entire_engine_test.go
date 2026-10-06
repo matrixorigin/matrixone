@@ -263,7 +263,7 @@ func (e *testEngine) Databases(ctx context.Context, txnOp client.TxnOperator) ([
 		e.parent.state = e.parent.state - e.parent.step*e.parent.state
 	}
 
-	var a []string
+	a := make([]string, 0, 2)
 	a = append(a, "foo")
 	a = append(a, "bar")
 	return a, nil

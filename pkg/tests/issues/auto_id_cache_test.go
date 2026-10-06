@@ -37,8 +37,8 @@ func TestAutoIDCachePublicLifecycle(t *testing.T) {
 		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
 		defer cancel()
 		var (
-			conns      []*sql.Conn
 			cnServices = make([]cnservice.Service, 2)
+			conns      = make([]*sql.Conn, 0, len(cnServices))
 		)
 		for i := range cnServices {
 			cn, err := c.GetCNService(i)

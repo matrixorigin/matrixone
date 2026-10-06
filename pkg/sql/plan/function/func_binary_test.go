@@ -15245,7 +15245,7 @@ func TestTimestampAddDateWithTCharNonConstUnit(t *testing.T) {
 	intervalVec := vector.NewVec(types.T_int64.ToType())
 	vector.AppendFixedList(intervalVec, intervals, nil, proc.Mp())
 
-	dates := []types.Date{}
+	dates := make([]types.Date, 0, 2)
 	for _, d := range []string{"2024-01-01", "2024-01-01"} {
 		date, err := types.ParseDateCast(d)
 		require.NoError(t, err)

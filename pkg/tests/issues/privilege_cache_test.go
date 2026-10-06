@@ -175,7 +175,7 @@ func TestPrivilegeCacheTracksRemoteCatalogChanges(t *testing.T) {
 						mustExec(t, ctx, conn, "prepare nested_set from 'set @nested_value=(select id from app.t)'")
 					case "binary set":
 						var err error
-						binary, err = conn.PrepareContext(ctx, "set @nested_value=(select id from app.t)")
+						binary, err = conn.PrepareContext(ctx, "set @nested_value=(select id from app.t)") //nolint:sqlclosecheck // closed by the deferred Close below; the run closure captures binary, which defeats the analyzer's tracking
 						require.NoError(t, err)
 						defer binary.Close()
 					}
@@ -219,7 +219,7 @@ func TestPrivilegeCacheTracksRemoteCatalogChanges(t *testing.T) {
 				query string
 				conn  *sql.Conn
 			}
-			var controls []control
+			controls := make([]control, 0, 10)
 			for _, user := range []string{"learner#reader", "admin#accountadmin"} {
 				for _, query := range []string{"set clear_privilege_cache=on", "set enable_privilege_cache=off", "show warnings", "set clear_privilege_cache=1", "set @constant=1+1"} {
 					conn := open(1, "auth_cache#"+user)

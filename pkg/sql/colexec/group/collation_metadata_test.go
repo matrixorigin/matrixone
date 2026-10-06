@@ -38,9 +38,10 @@ func TestMergeGroupExtraBufCollationAdmission(t *testing.T) {
 			input := vector.NewVec(typ)
 			defer input.Free(proc.Mp())
 			require.NoError(t, vector.AppendBytes(input, []byte("A"), false, proc.Mp()))
-			var sources []aggexec.AggFuncExec
-			var expressions []aggexec.AggFuncExecExpression
-			for _, id := range []int64{aggexec.AggIdOfMin, aggexec.AggIdOfMax} {
+			ids := []int64{aggexec.AggIdOfMin, aggexec.AggIdOfMax}
+			sources := make([]aggexec.AggFuncExec, 0, len(ids))
+			expressions := make([]aggexec.AggFuncExecExpression, 0, len(ids))
+			for _, id := range ids {
 				source, err := aggexec.MakeAgg(proc.Mp(), id, false, typ)
 				require.NoError(t, err)
 				defer source.Free()

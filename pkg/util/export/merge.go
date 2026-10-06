@@ -726,7 +726,7 @@ func LongRunETLMerge(
 		return nil
 	}
 
-	var newOptions []MergeOption
+	newOptions := make([]MergeOption, 0, len(opts)+1+1)
 	newOptions = append(newOptions, opts...)
 	newOptions = append(newOptions, WithTask(task))
 	newOptions = append(newOptions, WithTable(tables[0]))
