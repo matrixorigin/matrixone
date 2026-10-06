@@ -46,14 +46,14 @@ func makeTestCases(t *testing.T) []projectionTestCase {
 		{
 			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			types: []types.Type{
-				types.T_int8.ToType(),
+				types.T_int32.ToType(),
 			},
 			arg: &Projection{
 				ProjectList: []*plan.Expr{
 					{
 						Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
 						Typ: plan.Type{
-							Id: int32(types.T_int8),
+							Id: int32(types.T_int32),
 						},
 					},
 				},
@@ -78,24 +78,26 @@ func TestPrepare(t *testing.T) {
 
 func TestProjection(t *testing.T) {
 	for _, tc := range makeTestCases(t) {
-		nb0 := tc.proc.Mp().CurrNB()
-		op := resetChildren(tc.arg, tc.proc.Mp())
-		err := tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-		_, _ = vm.Exec(tc.arg, tc.proc)
-
-		tc.arg.Reset(tc.proc, false, nil)
-		op.Free(tc.proc, false, nil)
-
-		op = resetChildren(tc.arg, tc.proc.Mp())
-		err = tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-		_, _ = vm.Exec(tc.arg, tc.proc)
-		tc.arg.Free(tc.proc, false, nil)
-		op.Free(tc.proc, false, nil)
-		tc.proc.Free()
-		nb1 := tc.proc.Mp().CurrNB()
-		require.Equal(t, nb0, nb1)
+		baseline := tc.proc.Mp().CurrNB()
+		t.Cleanup(func() {
+			tc.arg.Free(tc.proc, false, nil)
+			require.Equal(t, baseline, tc.proc.Mp().CurrNB())
+		})
+		for range 2 {
+			func() {
+				child := resetChildren(tc.arg, tc.proc.Mp())
+				defer child.Free(tc.proc, false, nil)
+				defer tc.arg.Reset(tc.proc, false, nil)
+				require.NoError(t, tc.arg.Prepare(tc.proc))
+				result, err := vm.Exec(tc.arg, tc.proc)
+				require.NoError(t, err)
+				require.NotNil(t, result.Batch)
+				require.Equal(t, 2, result.Batch.RowCount())
+				require.Len(t, result.Batch.Vecs, 1)
+				require.Equal(t, types.T_int32, result.Batch.Vecs[0].GetType().Oid)
+				require.Equal(t, []int32{1, 1000}, vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[0]))
+			}()
+		}
 	}
 }
 
@@ -240,7 +242,9 @@ func makeProjectionCol(pos int32, typ types.T) *plan.Expr {
 }
 
 func resetChildren(arg *Projection, m *mpool.MPool) *colexec.MockOperator {
-	bat := colexec.MakeMockBatchs(m)
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1000}, nil, m)
+	bat.SetRowCount(2)
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil
 	arg.AppendChild(op)
