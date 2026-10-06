@@ -709,13 +709,6 @@ func newTestCase(t testing.TB, ds []bool, ts []types.Type, limit int64, fs []*pl
 		arg: &MergeTop{
 			Fs:    fs,
 			Limit: plan2.MakePlan2Uint64ConstExprWithType(uint64(limit)),
-			OperatorBase: vm.OperatorBase{
-				OperatorInfo: vm.OperatorInfo{
-					Idx:     0,
-					IsFirst: false,
-					IsLast:  false,
-				},
-			},
 		},
 		cancel: cancel,
 	}

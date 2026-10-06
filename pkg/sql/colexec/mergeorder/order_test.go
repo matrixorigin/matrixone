@@ -344,7 +344,6 @@ func TestMergeOrderFloatNaNLastAndPeerTieBreak(t *testing.T) {
 			{Expr: newExpression(0, types.T_float64)},
 			{Expr: newExpression(1, types.T_int64)},
 		},
-		OperatorBase: vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
 	}
 	makeBatch := func(values []float64, ids []int64) *batch.Batch {
 		bat := batch.NewWithSize(2)
@@ -385,7 +384,6 @@ func TestOrderSpill(t *testing.T) {
 	arg := &MergeOrder{
 		OrderBySpecs:   []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 0}},
 		SpillThreshold: 1,
-		OperatorBase:   vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
 	}
 	bats := []*batch.Batch{
 		newValuesBatch(proc, []int8{1, 4, 7}),
@@ -411,7 +409,6 @@ func TestOrderSpillFinalMergeHonorsCancellationAfterInput(t *testing.T) {
 	arg := &MergeOrder{
 		OrderBySpecs:   []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 0}},
 		SpillThreshold: 1,
-		OperatorBase:   vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
 	}
 	baseCtx := proc.Ctx
 	ctx, cancel := context.WithCancel(proc.Ctx)
@@ -459,7 +456,6 @@ func TestOrderSpillWriteHonorsCancellationAfterInputBatch(t *testing.T) {
 	arg := &MergeOrder{
 		OrderBySpecs:   []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 0}},
 		SpillThreshold: 1,
-		OperatorBase:   vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
 	}
 	baseCtx := proc.Ctx
 	ctx, cancel := context.WithCancel(baseCtx)
@@ -1078,7 +1074,6 @@ func TestOrderSpillMultiPass(t *testing.T) {
 	arg := &MergeOrder{
 		OrderBySpecs:   []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 0}},
 		SpillThreshold: 1,
-		OperatorBase:   vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
 	}
 	bats := make([]*batch.Batch, 0, spillMergeFanIn+8)
 	for i := spillMergeFanIn + 8; i >= 1; i-- {
@@ -1107,7 +1102,6 @@ func TestOrderSpillSkipsColumnKeys(t *testing.T) {
 	arg := &MergeOrder{
 		OrderBySpecs:   []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 0}},
 		SpillThreshold: 1,
-		OperatorBase:   vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
 	}
 	arg.ctr.executors = []colexec.ExpressionExecutor{exec}
 
@@ -1139,7 +1133,6 @@ func TestOrderSpillPersistsComputedKeys(t *testing.T) {
 	arg := &MergeOrder{
 		OrderBySpecs:   []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 0}},
 		SpillThreshold: 1,
-		OperatorBase:   vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
 	}
 	arg.ctr.executors = []colexec.ExpressionExecutor{exec}
 
@@ -1167,7 +1160,6 @@ func TestOrderSpillDesc(t *testing.T) {
 	arg := &MergeOrder{
 		OrderBySpecs:   []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: plan.OrderBySpec_DESC}},
 		SpillThreshold: 1,
-		OperatorBase:   vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
 	}
 	bats := []*batch.Batch{
 		newValuesBatch(proc, []int8{9, 6, 3}),
@@ -1195,7 +1187,6 @@ func TestOrderSpillMultiKey(t *testing.T) {
 			{Expr: newExpression(1, types.T_int64), Flag: plan.OrderBySpec_DESC},
 		},
 		SpillThreshold: 1,
-		OperatorBase:   vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
 	}
 	bats := []*batch.Batch{
 		newPairBatch(proc, []int8{1, 2, 3}, []int64{10, 9, 8}),
@@ -1230,7 +1221,6 @@ func TestOrderSpillNullsLast(t *testing.T) {
 	arg := &MergeOrder{
 		OrderBySpecs:   []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: plan.OrderBySpec_NULLS_LAST}},
 		SpillThreshold: 1,
-		OperatorBase:   vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
 	}
 	bats := []*batch.Batch{
 		newNullableValuesBatch(proc, []int8{1, 4, 0}, []uint64{2}),
@@ -1268,7 +1258,6 @@ func TestOrderSpillDescNullsFirst(t *testing.T) {
 			Flag: plan.OrderBySpec_DESC | plan.OrderBySpec_NULLS_FIRST,
 		}},
 		SpillThreshold: 1,
-		OperatorBase:   vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
 	}
 	bats := []*batch.Batch{
 		newNullableValuesBatch(proc, []int8{0, 9, 6}, []uint64{0}),
@@ -2243,13 +2232,6 @@ func newTestCase(t testing.TB, ts []types.Type, fs []*plan.OrderBySpec) orderTes
 		proc:  proc,
 		arg: &MergeOrder{
 			OrderBySpecs: fs,
-			OperatorBase: vm.OperatorBase{
-				OperatorInfo: vm.OperatorInfo{
-					Idx:     0,
-					IsFirst: false,
-					IsLast:  false,
-				},
-			},
 		},
 	}
 }

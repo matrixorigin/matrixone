@@ -162,13 +162,6 @@ func newTestCase(t testing.TB, ts []types.Type, fs []*plan.OrderBySpec) orderTes
 		proc:  testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 		arg: &Order{
 			OrderBySpec: fs,
-			OperatorBase: vm.OperatorBase{
-				OperatorInfo: vm.OperatorInfo{
-					Idx:     0,
-					IsFirst: false,
-					IsLast:  false,
-				},
-			},
 		},
 	}
 }

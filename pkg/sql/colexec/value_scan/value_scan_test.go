@@ -81,15 +81,7 @@ func makeTestCases(t *testing.T) []valueScanTestCase {
 	return []valueScanTestCase{
 		{
 			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
-			arg: &ValueScan{
-				OperatorBase: vm.OperatorBase{
-					OperatorInfo: vm.OperatorInfo{
-						Idx:     0,
-						IsFirst: false,
-						IsLast:  false,
-					},
-				},
-			},
+			arg:  &ValueScan{},
 		},
 	}
 }
