@@ -270,33 +270,7 @@ func TestPrepareIvfIndexContext_ResolveVariableError_IvfThreads(t *testing.T) {
 
 	builder := NewQueryBuilder(plan.Query_SELECT, mockCtx, false, true)
 
-	scanNode := &plan.Node{
-		TableDef: &plan.TableDef{
-			Name: "test_table",
-			Name2ColIndex: map[string]int32{
-				"vec_col": 0,
-				"id":      1,
-			},
-			Cols: []*plan.ColDef{
-				{
-					Name: "vec_col",
-					Typ: plan.Type{
-						Id: int32(types.T_array_float32),
-					},
-				},
-				{
-					Name: "id",
-					Typ: plan.Type{
-						Id:    int32(types.T_int64),
-						Width: 64,
-					},
-				},
-			},
-			Pkey: &plan.PrimaryKeyDef{
-				PkeyColName: "id",
-			},
-		},
-	}
+	scanNode := vectorProviderScanNode()
 
 	vecCtx := &vectorSortContext{
 		distFnExpr: &plan.Function{
@@ -353,33 +327,7 @@ func TestPrepareIvfIndexContext_ResolveVariableError_ProbeLimit(t *testing.T) {
 
 	builder := NewQueryBuilder(plan.Query_SELECT, mockCtx, false, true)
 
-	scanNode := &plan.Node{
-		TableDef: &plan.TableDef{
-			Name: "test_table",
-			Name2ColIndex: map[string]int32{
-				"vec_col": 0,
-				"id":      1,
-			},
-			Cols: []*plan.ColDef{
-				{
-					Name: "vec_col",
-					Typ: plan.Type{
-						Id: int32(types.T_array_float32),
-					},
-				},
-				{
-					Name: "id",
-					Typ: plan.Type{
-						Id:    int32(types.T_int64),
-						Width: 64,
-					},
-				},
-			},
-			Pkey: &plan.PrimaryKeyDef{
-				PkeyColName: "id",
-			},
-		},
-	}
+	scanNode := vectorProviderScanNode()
 
 	vecCtx := &vectorSortContext{
 		distFnExpr: &plan.Function{
@@ -436,33 +384,7 @@ func TestPrepareIvfIndexContext_ProbeLimitNotInt64(t *testing.T) {
 
 	builder := NewQueryBuilder(plan.Query_SELECT, mockCtx, false, true)
 
-	scanNode := &plan.Node{
-		TableDef: &plan.TableDef{
-			Name: "test_table",
-			Name2ColIndex: map[string]int32{
-				"vec_col": 0,
-				"id":      1,
-			},
-			Cols: []*plan.ColDef{
-				{
-					Name: "vec_col",
-					Typ: plan.Type{
-						Id: int32(types.T_array_float32),
-					},
-				},
-				{
-					Name: "id",
-					Typ: plan.Type{
-						Id:    int32(types.T_int64),
-						Width: 64,
-					},
-				},
-			},
-			Pkey: &plan.PrimaryKeyDef{
-				PkeyColName: "id",
-			},
-		},
-	}
+	scanNode := vectorProviderScanNode()
 
 	vecCtx := &vectorSortContext{
 		distFnExpr: &plan.Function{
@@ -519,33 +441,7 @@ func TestPrepareIvfIndexContext_Success(t *testing.T) {
 
 	builder := NewQueryBuilder(plan.Query_SELECT, mockCtx, false, true)
 
-	scanNode := &plan.Node{
-		TableDef: &plan.TableDef{
-			Name: "test_table",
-			Name2ColIndex: map[string]int32{
-				"vec_col": 0,
-				"id":      1,
-			},
-			Cols: []*plan.ColDef{
-				{
-					Name: "vec_col",
-					Typ: plan.Type{
-						Id: int32(types.T_array_float32),
-					},
-				},
-				{
-					Name: "id",
-					Typ: plan.Type{
-						Id:    int32(types.T_int64),
-						Width: 64,
-					},
-				},
-			},
-			Pkey: &plan.PrimaryKeyDef{
-				PkeyColName: "id",
-			},
-		},
-	}
+	scanNode := vectorProviderScanNode()
 
 	vecCtx := &vectorSortContext{
 		distFnExpr: &plan.Function{
@@ -888,28 +784,7 @@ func TestPrepareIvfIndexContext_ImplicitDescendingOrderDisablesIvfRewrite(t *tes
 
 	builder := NewQueryBuilder(plan.Query_SELECT, mockCtx, false, true)
 
-	scanNode := &plan.Node{
-		TableDef: &plan.TableDef{
-			Name: "test_table",
-			Name2ColIndex: map[string]int32{
-				"vec_col": 0,
-				"id":      1,
-			},
-			Cols: []*plan.ColDef{
-				{
-					Name: "vec_col",
-					Typ:  plan.Type{Id: int32(types.T_array_float32)},
-				},
-				{
-					Name: "id",
-					Typ:  plan.Type{Id: int32(types.T_int64), Width: 64},
-				},
-			},
-			Pkey: &plan.PrimaryKeyDef{
-				PkeyColName: "id",
-			},
-		},
-	}
+	scanNode := vectorProviderScanNode()
 
 	vecCtx := &vectorSortContext{
 		distFnExpr: &plan.Function{
@@ -964,28 +839,7 @@ func TestPrepareIvfIndexContext_ExplicitDescendingOrderFallsBackToOriginalSearch
 
 	builder := NewQueryBuilder(plan.Query_SELECT, mockCtx, false, true)
 
-	scanNode := &plan.Node{
-		TableDef: &plan.TableDef{
-			Name: "test_table",
-			Name2ColIndex: map[string]int32{
-				"vec_col": 0,
-				"id":      1,
-			},
-			Cols: []*plan.ColDef{
-				{
-					Name: "vec_col",
-					Typ:  plan.Type{Id: int32(types.T_array_float32)},
-				},
-				{
-					Name: "id",
-					Typ:  plan.Type{Id: int32(types.T_int64), Width: 64},
-				},
-			},
-			Pkey: &plan.PrimaryKeyDef{
-				PkeyColName: "id",
-			},
-		},
-	}
+	scanNode := vectorProviderScanNode()
 
 	vecCtx := &vectorSortContext{
 		distFnExpr: &plan.Function{
