@@ -79,6 +79,9 @@ func newExternalRoutineEval(
 	if err := validateRoutineCall(call); err != nil {
 		return nil, err
 	}
+	if !udf.SharedRoutineRevisionProtocolReady(proc.GetService()) {
+		return nil, udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: Python execution requires MORPC protocol version %d", udf.SharedRoutineRevisionProtocolVersion)
+	}
 	if len(call.ArgumentTypes) != len(parameters) {
 		return nil, udferr.Newf("python udf: typed routine has %d argument descriptors but %d bound arguments", len(call.ArgumentTypes), len(parameters))
 	}
@@ -203,6 +206,9 @@ func (e *ExternalRoutineEval) eval(proc *process.Process, batches []*batch.Batch
 
 	if err := validateRoutineCall(e.call); err != nil {
 		return nil, err
+	}
+	if !udf.SharedRoutineRevisionProtocolReady(proc.GetService()) {
+		return nil, udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: Python execution requires MORPC protocol version %d", udf.SharedRoutineRevisionProtocolVersion)
 	}
 	accountID, err := defines.GetAccountId(proc.Ctx)
 	if err != nil {

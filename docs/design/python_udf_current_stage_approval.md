@@ -5,7 +5,7 @@
 | Record | `python-udf-current-stage-r1-2026-09-24-approval` |
 | Issue | [MatrixOne #28132](https://github.com/matrixorigin/matrixone/issues/28132) |
 | Implementation PR | [MatrixOne #29152](https://github.com/matrixorigin/matrixone/pull/29152) |
-| Current-stage contract | [`python-udf-current-stage-r1-2026-09-24`](python_udf_current_stage.md) |
+| Current-stage proposal | [`python-udf-current-stage-r3-2026-10-05`](python_udf_current_stage.md); historical r1 approval retained below |
 | Scope | Explicitly enabled test/development adapter; no production rollout or production-readiness claim |
 
 This record separates the immutable current-stage design artifact, the feature
@@ -32,13 +32,13 @@ The pre-rebase exact review head was
 [`92a89d81588159a918458b1a930bccc9d0e75d4b`](https://github.com/matrixorigin/matrixone/commit/92a89d81588159a918458b1a930bccc9d0e75d4b).
 The repair commit carrying this record is the final documentation commit on
 top of the rebased PR history; its exact remote head is verified at delivery.
-The final current-stage design blob is
+The historical r1 design blob delivered with the approval-record link was
 `994b8016729d2e87a6a706a2833eee7faf50c89b`; its only difference from the
 approved design blob is the link to this traceability record.
 
 The namespace-validation companion is the implementation contract from commit
 [`284a1d971a1d2c763c6aed425d52f751735c409f`](https://github.com/matrixorigin/matrixone/commit/284a1d971a1d2c763c6aed425d52f751735c409f),
-with current-head blob `51ccfb771db19321d03b292cd3d7219f698a11b8`.
+with historical recorded blob `51ccfb771db19321d03b292cd3d7219f698a11b8`.
 
 ## Approval ledger
 
@@ -65,3 +65,15 @@ skipped at the recorded head; cross-version rollback/restore is unsupported in
 this stage. Those gaps are recorded as limits and are not represented as passing
 approval evidence. Full implementation/lifecycle review remains a separate PR
 review step after the design record is accepted by the relevant reviewers.
+
+## r3 maintenance addendum (2026-10-05)
+
+The current document proposes protocol 107 and repair catalog 4.0.12 against
+upstream `856e9ddbdd69b52d18f727c763ecd963e66644de`. It adds explicit sender,
+receiver, prepared-reuse and physical execution admission, and schedules repair
+for a tenant already at upstream-final 4.0.11. These are conservative corrections
+within the opt-in development scope. The immutable r1 blobs above describe that
+historical approval only; they are not the current proposal's content identity.
+Architecture and SQL/Planner approval remain pending, as recorded in reviews
+5302243148 and the exact-head review on 4ca229411166b9da09a702dbe1b799de43d8d694.
+Code review and passing tests do not substitute for those independent decisions.
