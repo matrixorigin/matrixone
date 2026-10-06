@@ -151,4 +151,10 @@ select vector_matmul(1, id, f, '[[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]]', '{"metric"
 select vector_matmul(1, id, e, '[[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]]', '{"metric":"cosine"}'), vector_matmul(1, id, e, '[[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]]', '{"metric":"l2sq"}') from mg where id = 2;
 select vector_matmul(1, id, b, '[[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]]', '{"metric":"cosine"}'), vector_matmul(1, id, b, '[[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]]', '{"metric":"l2sq"}') from mg where id = 2;
 
+-- a row whose small element a rescale drops from the GPU operand keeps its stored distance:
+-- vecf8(33) rows 2^120 + 1 at element 32 and 2^120 alone are at squared distance 1
+create table mx (id int, v vecf8(33));
+insert into mx values (1, '[1.329228e36,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1]'), (2, '[1.329228e36,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]');
+select vector_matmul(2, id, v, '[[1.329228e36,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]]', '{"metric":"l2sq"}') from mx;
+
 drop database vector_matmul_db;

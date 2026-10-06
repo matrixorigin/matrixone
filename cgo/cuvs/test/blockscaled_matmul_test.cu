@@ -640,6 +640,69 @@ void check_magnitude(int format, uint32_t dim, int e) {
     }
 }
 
+
+// mixed_cell encodes values that are 0 or powers of two (at most one non-zero per MXFP8
+// block) as a cell of format F32, BF16 or MXFP8; an MXFP8 block holding 2^e takes the E8M0
+// scale 2^(e-8) and the E4M3 code 256.
+std::vector<uint8_t> mixed_cell(int format, const std::vector<double>& v) {
+    const uint32_t dim = uint32_t(v.size());
+    if (format == GPU_BLOCKSCALED_F32) {
+        std::vector<uint8_t> c(dim * 4);
+        for (uint32_t k = 0; k < dim; k++) {
+            const float x = float(v[k]);
+            std::memcpy(&c[k * 4], &x, 4);
+        }
+        return c;
+    }
+    if (format == GPU_BLOCKSCALED_BF16) {
+        std::vector<uint8_t> c(dim * 2);
+        for (uint32_t k = 0; k < dim; k++) {
+            const __nv_bfloat16 h = __float2bfloat16(float(v[k]));
+            std::memcpy(&c[k * 2], &h, 2);
+        }
+        return c;
+    }
+    const size_t nscale = (dim + 31) / 32;
+    std::vector<uint8_t> c(12 + nscale + dim, 0);
+    c[0] = 1;
+    c[1] = uint8_t(format);
+    std::memcpy(&c[4], &dim, 4);
+    const float g = 1.0f;
+    std::memcpy(&c[8], &g, 4);
+    for (size_t s = 0; s < nscale; s++) c[12 + s] = 127;
+    for (uint32_t k = 0; k < dim; k++) {
+        if (v[k] == 0) continue;
+        const int e = std::ilogb(v[k]);
+        c[12 + k / 32] = uint8_t(127 + e - 8);
+        c[12 + nscale + k] = __nv_fp8_e4m3(256.0f).__x;
+    }
+    return c;
+}
+
+// check_mixed_magnitude scores a query q (element 0 = 2^big, the rest 0) against a row
+// equal to it and a row x that also holds 2^small at element dim-1, so a rescale of x by
+// about 2^-big loses that element in the matmul operand. The squared L2 distances are 0 and
+// exactly 2^(2*small), computed from the stored values, so the equal row ranks first.
+void check_mixed_magnitude(int format, uint32_t dim, int big, int small) {
+    std::vector<double> q(dim, 0.0), x(dim, 0.0);
+    q[0] = x[0] = std::ldexp(1.0, big);
+    x[dim - 1] = std::ldexp(1.0, small);
+    std::vector<uint8_t> qc = mixed_cell(format, q), rows = mixed_cell(format, x);
+    const std::vector<uint8_t> eq = mixed_cell(format, q);
+    rows.insert(rows.end(), eq.begin(), eq.end());
+    blockscaled_matmul eng(0, format, dim, 1, qc.data(), 128, 0, blockscaled_matmul::kL2sq);
+    std::vector<float> scores(2);
+    eng.run(rows.data(), 2, scores.data());
+    const double want = std::ldexp(1.0, 2 * small);
+    if (!(-double(scores[0]) == want && scores[1] == 0)) {
+        printf("    format %d dim %u 2^%d with 2^%d: l2sq %g and %g, want %g and 0\n", format, dim,
+               big, small, -double(scores[0]), -double(scores[1]), want);
+    }
+    ASSERT_TRUE(-double(scores[0]) == want);
+    ASSERT_TRUE(scores[1] == 0);
+    ASSERT_TRUE(scores[1] > scores[0]);
+}
+
 } // namespace
 
 TEST(BlockScaledMatmulTest, DistanceMetricsMatchReference) {
@@ -668,6 +731,23 @@ TEST(BlockScaledMatmulTest, DistanceMetricsAtExtremeMagnitudes) {
         }
         check_magnitude(GPU_BLOCKSCALED_F16, dim, 0);
         check_magnitude(GPU_BLOCKSCALED_F16, dim, -10);
+    }
+}
+
+// A rescaled row keeps its stored values for the distances computed from them: a small
+// element the rescale drops from the matmul operand still sets the squared L2 distance.
+TEST(BlockScaledMatmulTest, MixedMagnitudeSmallDistances) {
+    for (uint32_t dim : {2u, 33u, 129u}) {
+        check_mixed_magnitude(GPU_BLOCKSCALED_F32, dim, 120, -30);
+        check_mixed_magnitude(GPU_BLOCKSCALED_F32, dim, 31, -40);
+        check_mixed_magnitude(GPU_BLOCKSCALED_F32, dim, -40, -60);
+        check_mixed_magnitude(GPU_BLOCKSCALED_BF16, dim, 120, -14);
+        check_mixed_magnitude(GPU_BLOCKSCALED_BF16, dim, -40, -60);
+    }
+    for (uint32_t dim : {33u, 129u, 768u}) {
+        check_mixed_magnitude(GPU_BLOCKSCALED_MXFP8, dim, 120, 0);
+        check_mixed_magnitude(GPU_BLOCKSCALED_MXFP8, dim, 31, -20);
+        check_mixed_magnitude(GPU_BLOCKSCALED_MXFP8, dim, -40, -60);
     }
 }
 

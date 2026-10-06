@@ -145,8 +145,9 @@ product of the block-scaled values, and the caller multiplies it by `g_d × g_q`
   finite is rejected. Only blocks whose largest element code could overflow are scanned.
   Every accepted cell therefore renders as finite text and parses back.
 - **One zero.** The encoder stores an element that quantizes to zero of either sign as
-  code 0, so cells of equal values have equal bytes for `GROUP BY` and `DISTINCT`,
-  which group vecf8/vecf4 by bytes.
+  code 0. Equality, hashing (`GROUP BY`, `DISTINCT`, joins) and ordering peers compare the
+  decoded values, not the bytes (see Column operations), so cells that encode equal values
+  with other scales are equal.
 
 ## Storage size, 1024-dim
 
@@ -208,6 +209,9 @@ Device kernels around the matmul, on the engine's stream:
   and the `vecuint8` shifted-element sums. It runs once on the query matrix when the
   engine is created, and on each tile when the metric is cosine or squared L2 or the
   format is `vecuint8`. The host only packs bytes and reads cell headers.
+- The engine's device buffers are slices of one allocation sized when it is created, and
+  the copies of rescaled rows and queries are allocated only for cosine and squared L2 on
+  the formats that rescale.
 - For cosine and squared L2 on `vecf32`, `vecbf16` and `vecf8`, whose values can make the
   fp32 products overflow or underflow, the row-statistics kernel rescales a row right after
   taking its norm: a row whose squared norm without its global scale is outside
@@ -227,10 +231,16 @@ Device kernels around the matmul, on the engine's stream:
   `acc × fp32(g_row × g_query)` in fp32, as cuBLASLt applies `alpha = G_a × G_b` to a GEMM
   with per-tensor global scales; cosine and squared L2 take the dot product with the
   global scales in double, with the squared norms, and a distance within the fp32 GEMM's
-  error of 0 (`dim × 2^-22`, relative to the squared norms for squared L2) is computed
-  again from the decoded elements in double — `1 − x·q / (|x||q|)` and `Σ(x − q)²`, the
-  numerics of `cosine_distance` and `l2_distance_sq` — so a row equal to a query is at
-  distance 0 (integer formats take the corrected int64 sums, which are exact). The rank is rounded once to
+  error of 0 (`dim × 2^-22`, relative to the squared norms for squared L2) is marked for an
+  exact kernel, which computes it, a warp per pair, from the stored values in double —
+  `1 − x·q / (|x||q|)` with the row statistics' norms and `Σ(x − q)²`, the numerics of
+  `cosine_distance` and `l2_distance_sq` — so a row equal to a query is at distance 0
+  (integer formats take the corrected int64 sums, which are exact). A row or query the
+  rescale changed is read from the copy of its stored elements and scales the
+  row-statistics kernel saved before changing it, with its global scale before the shift,
+  so values the rescale drops from the GEMM operand (a block shifted below the E8M0 range,
+  an element underflowing) still count: vecf8(33) rows `[2^120, 0, …, 1]` and
+  `[2^120, 0, …, 0]` are at squared distance 1. The rank is rounded once to
   fp32; −Inf for NaN and for the padding rows. A zero vector has cosine distance 1, as
   `cosine_distance` returns.
 - With one global scale for all rows and one for all queries, the cells are exactly
@@ -729,7 +739,11 @@ type; normalization changes the ranking, independent of the format.
   0, so admitted finite values give the scalar function's result where fp32 cancellation
   would lose it (a row equal to its query is at distance 0). Other scores are within fp32
   summation-order tolerance of the scalar function. Re-scoring rows or queries on the CPU
-  is rejected: it would run the work twice and make the result depend on which path ran. The engine's native host memory and the tile buffers are
+  is rejected: it would run the work twice and make the result depend on which path ran.
+  The exact computation is the cost of near-zero pairs: on 1M `vecf32(768)` rows and 128
+  queries, cosine takes 1.37 s end to end with no near pair, 1.42 s when every row equals
+  one query, and 10.1 s when every row equals every query (every pair exact, FP64 at 1/64
+  of FP32 on a GeForce). The engine's native host memory and the tile buffers are
   admitted by the aggregate's allocation account before allocation, and a denial fails the
   query; so do device memory, CUDA and cuBLASLt errors at creation or while scoring.
 - The engine looks up a cuBLASLt algorithm for every tile shape it can run (rows in
