@@ -53,13 +53,12 @@ func TestLoopJoinAllocationSiteLedger(t *testing.T) {
 
 // add unit tests for cases
 type joinTestCase struct {
-	arg         *LoopJoin
-	flgs        []bool // flgs[i] == true: nullable
-	types       []types.Type
-	proc        *process.Process
-	cancel      context.CancelFunc
-	barg        *hashbuild.HashBuild
-	resultBatch *batch.Batch
+	arg    *LoopJoin
+	flgs   []bool // flgs[i] == true: nullable
+	types  []types.Type
+	proc   *process.Process
+	cancel context.CancelFunc
+	barg   *hashbuild.HashBuild
 }
 
 type loopJoinTestAllocationOwner interface {
@@ -267,18 +266,20 @@ func TestJoin(t *testing.T) {
 		require.Equal(t, res.Batch == nil, true)
 		res, err = vm.Exec(tc.arg, tc.proc)
 		require.NoError(t, err)
-		require.Equal(t, res.Batch.RowCount(), tc.resultBatch.RowCount())
-		require.Equal(t, len(res.Batch.Vecs), len(tc.resultBatch.Vecs))
-		for i := range res.Batch.Vecs {
-			vec1 := res.Batch.Vecs[i]
-			vec2 := tc.resultBatch.Vecs[i]
-			require.Equal(t, vec1.GetType().Oid, vec2.GetType().Oid)
-			require.Equal(t, bytes.Compare(vec1.GetArea(), vec2.GetArea()), 0)
-			require.Equal(t, bytes.Compare(vec1.UnsafeGetRawData(), vec2.UnsafeGetRawData()), 0)
+		require.NotNil(t, res.Batch)
+		require.Equal(t, 2, res.Batch.RowCount())
+		require.Len(t, res.Batch.Vecs, len(tc.arg.ResultCols))
+		for _, vec := range res.Batch.Vecs {
+			require.Equal(t, types.T_int32, vec.GetType().Oid)
+			require.Equal(t, []int32{1, 1000}, vector.MustFixedColNoTypeCheck[int32](vec))
+			require.Empty(t, vec.GetArea())
+			require.False(t, vec.GetNulls().Any())
 		}
 
 		tc.arg.Reset(tc.proc, false, nil)
 		tc.barg.Reset(tc.proc, false, nil)
+		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
+		tc.barg.GetChildren(0).Free(tc.proc, false, nil)
 
 		resetChildren(tc.arg, tc.proc.Mp())
 		resetHashBuildChildren(tc.barg, tc.proc.Mp())
@@ -293,22 +294,25 @@ func TestJoin(t *testing.T) {
 		require.Equal(t, res.Batch == nil, true)
 		res, err = vm.Exec(tc.arg, tc.proc)
 		require.NoError(t, err)
-		require.Equal(t, res.Batch.RowCount(), tc.resultBatch.RowCount())
-		require.Equal(t, len(res.Batch.Vecs), len(tc.resultBatch.Vecs))
-		for i := range res.Batch.Vecs {
-			vec1 := res.Batch.Vecs[i]
-			vec2 := tc.resultBatch.Vecs[i]
-			require.Equal(t, vec1.GetType().Oid, vec2.GetType().Oid)
-			require.Equal(t, bytes.Compare(vec1.GetArea(), vec2.GetArea()), 0)
-			require.Equal(t, bytes.Compare(vec1.UnsafeGetRawData(), vec2.UnsafeGetRawData()), 0)
+		require.NotNil(t, res.Batch)
+		require.Equal(t, 2, res.Batch.RowCount())
+		require.Len(t, res.Batch.Vecs, len(tc.arg.ResultCols))
+		for _, vec := range res.Batch.Vecs {
+			require.Equal(t, types.T_int32, vec.GetType().Oid)
+			require.Equal(t, []int32{1, 1000}, vector.MustFixedColNoTypeCheck[int32](vec))
+			require.Empty(t, vec.GetArea())
+			require.False(t, vec.GetNulls().Any())
 		}
 
 		tc.arg.Reset(tc.proc, false, nil)
 		tc.barg.Reset(tc.proc, false, nil)
+		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
+		tc.barg.GetChildren(0).Free(tc.proc, false, nil)
 
 		tc.arg.Free(tc.proc, false, nil)
 		tc.barg.Free(tc.proc, false, nil)
 		tc.proc.Free()
+		require.Zero(t, tc.proc.Mp().OnHeapCurrNB())
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
@@ -1551,12 +1555,6 @@ func newTestCase(t *testing.T, flgs []bool, ts []types.Type, rp []colexec.Result
 			},
 		},
 	}
-	resultBatch := batch.NewWithSize(len(rp))
-	resultBatch.SetRowCount(2)
-	for i := range rp {
-		bat := colexec.MakeMockBatchs(proc.Mp())
-		resultBatch.Vecs[i] = bat.Vecs[rp[i].Pos]
-	}
 	tag++
 	testCase := joinTestCase{
 		types:  ts,
@@ -1581,7 +1579,6 @@ func newTestCase(t *testing.T, flgs []bool, ts []types.Type, rp []colexec.Result
 			JoinMapTag:    tag,
 			JoinMapRefCnt: 1,
 		},
-		resultBatch: resultBatch,
 	}
 	installLoopJoinTestAllocation(t, testCase.arg, testCase.barg)
 	return testCase
