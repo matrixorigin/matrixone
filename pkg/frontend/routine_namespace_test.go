@@ -154,7 +154,9 @@ type namespaceValidationSession struct{ FeSession }
 
 func (*namespaceValidationSession) GetTxnCompileCtx() *TxnCompilerContext { return nil }
 func (*namespaceValidationSession) GetAccountId() uint32                  { return 9 }
+func (*namespaceValidationSession) GetService() string                    { return "" }
 func TestRoutinePlanWithoutNamespaceRebinds(t *testing.T) {
+	setSharedRoutineRevisionProtocolForTest(t, sharedRoutineRevisionProtocolVersion)
 	dependency := testRoutinePlanDependency()
 	dependency.NamespaceFingerprint = ""
 	p := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{RoutineDependencies: []*planpb.RoutinePlanDependency{dependency}}}}
