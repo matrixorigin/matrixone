@@ -8256,6 +8256,15 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 	v.RetainStringSourcePreflight()
 	defer v.FinalizeStringSourcePreflight()
 
+	// Keep preflight admission and validation unchanged. As in UnionOne,
+	// uniform ordinary metadata needs no per-row publication. Check both
+	// vectors, including source ownership retained even by NULL rows.
+	plainMetadata := v.prepareParamKinds == nil && w.prepareParamKinds == nil &&
+		v.prepareParamKind == PrepareParamNone && w.prepareParamKind == PrepareParamNone &&
+		!v.binaryStringRowsActive && !w.binaryStringRowsActive && !v.binaryString && !w.binaryString &&
+		v.stringSources == nil && w.stringSources == nil &&
+		(v.length == 0 || v.stringSource == w.stringSource)
+
 	sourceGrouping := nulls.Contains(&w.gsp, uint64(sel))
 	sourceNull := w.IsConstNull() ||
 		(!w.IsConst() && nulls.Contains(&w.nsp, uint64(sel)))
@@ -8274,10 +8283,14 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 
 	oldLen := v.length
 	v.setLengthAfterExtend(v.length + cnt)
-	for i := 0; i < cnt; i++ {
-		if err := v.appendStringSourceAt(
-			oldLen+i, oldLen, w.GetStringSourceAt(int(sel)), mp); err != nil {
-			return err
+	if plainMetadata {
+		v.stringSource = w.stringSource
+	} else {
+		for i := 0; i < cnt; i++ {
+			if err := v.appendStringSourceAt(
+				oldLen+i, oldLen, w.GetStringSourceAt(int(sel)), mp); err != nil {
+				return err
+			}
 		}
 	}
 	sourceHasValue := !sourceNull
@@ -8314,6 +8327,10 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 
 	if sourceHasValue {
 		v.prepareParamKindAppendStart(oldLen)
+		if plainMetadata {
+			v.prepareParamKindSeen = true
+			return nil
+		}
 	}
 	for i := 0; i < cnt; i++ {
 		if sourceHasValue {
@@ -8800,14 +8817,15 @@ func (v *Vector) unionBatch(
 		tlen := v.GetType().TypeSize()
 		if !w.nsp.EmptyByFlag() {
 			if flags == nil {
+				// Fixed-width NULL slots contain no payload references. Copy the
+				// range once; only their bitmap, not those opaque bytes, is visible.
+				copy(v.data[oldLen*tlen:(oldLen+cnt)*tlen], w.data[int(offset)*tlen:(int(offset)+cnt)*tlen])
 				for i := 0; i < cnt; i++ {
 					if w.nsp.Contains(uint64(offset) + uint64(i)) {
-						nulls.Add(&v.nsp, uint64(v.length))
-					} else {
-						copy(v.data[v.length*tlen:(v.length+1)*tlen], w.data[(int(offset)+i)*tlen:(int(offset)+i+1)*tlen])
+						nulls.Add(&v.nsp, uint64(oldLen+i))
 					}
-					v.setLengthAfterExtend(v.length + 1)
 				}
+				v.setLengthAfterExtend(oldLen + cnt)
 			} else {
 				for i := range flags {
 					if flags[i] == 0 {

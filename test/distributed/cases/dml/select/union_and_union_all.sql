@@ -485,3 +485,8 @@ DROP TABLE union_signed_unsigned_28233_empty;
 
 DROP TABLE union_signed_unsigned_28233_ctas;
 DROP TABLE union_signed_unsigned_28233;
+
+-- Nested UNION transport must return Top's retained buffers before account teardown.
+SELECT COUNT(*) AS row_count, CAST(SUM(x) AS SIGNED) AS total
+FROM ((SELECT 1 AS x UNION SELECT 1+0 UNION SELECT 2 ORDER BY x LIMIT 2)
+      UNION SELECT 3 UNION SELECT 4) u;

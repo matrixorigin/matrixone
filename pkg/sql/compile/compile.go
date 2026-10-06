@@ -6406,6 +6406,12 @@ func (c *Compile) compileParallelUnionAllInput(
 	nodeID int32,
 	nodes []*plan.Node,
 ) ([]*Scope, error) {
+	// TP consumers rely on IsSingleScope and only attach their operator to
+	// the first scope. Keep the ordinary merged input instead of exposing
+	// independent branches that those consumers would silently ignore.
+	if c.IsTpQuery() {
+		return c.compilePlanScope(step, nodeID, nodes)
+	}
 	node := nodes[nodeID]
 	left, err := c.compileParallelUnionAllBranch(step, node.Children[0], nodes)
 	if err != nil {
