@@ -184,6 +184,19 @@ func validateRoutinePlanDependencies(ctx context.Context, ses FeSession, p *plan
 		snapshot = tcc.GetSnapshot()
 	}
 	accountID := routineCatalogAccountID(ses.GetAccountId(), snapshot)
+	if !sharedRoutineRevisionProtocolReady(ses.GetService()) {
+		for _, dependency := range dependencies {
+			if err := validateRoutinePlanDependencyShape(dependency, accountID); err != nil {
+				return false, err
+			}
+			if dependency.Language == udf.LanguagePython {
+				return false, udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: Python prepared execution requires MORPC protocol version %d", sharedRoutineRevisionProtocolVersion)
+			}
+		}
+		// Rebind revision-bearing SQL plans against the legacy compatibility
+		// row, which is the shared writer contract below the rollout floor.
+		return true, nil
+	}
 	ids := make([]uint64, 0, len(dependencies))
 	seen := make(map[uint64]struct{}, len(dependencies))
 	for _, dependency := range dependencies {
