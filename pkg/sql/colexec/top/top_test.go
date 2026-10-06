@@ -300,69 +300,70 @@ func TestTopOrdersFloatNaNLastAndUsesSecondaryKey(t *testing.T) {
 
 func TestTopSpill(t *testing.T) {
 	limit := int64(topSpillThreshold + 1000)
-	batchRows := 8192
-
-	tcs := []testCase{
-		newTestCase(t, mpool.MustNewZero(), []types.Type{types.T_int64.ToType()}, limit,
-			[]*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}}),
-		newTestCase(t, mpool.MustNewZero(), []types.Type{types.T_int64.ToType()}, limit,
-			[]*plan.OrderBySpec{{Expr: newExpression(0), Flag: plan.OrderBySpec_DESC}}),
-		newTestCase(t, mpool.MustNewZero(), []types.Type{types.T_int64.ToType(), types.T_int32.ToType()}, limit,
-			[]*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}, {Expr: newExpression(1), Flag: plan.OrderBySpec_DESC}}),
-	}
-
-	for _, tc := range tcs {
-		err := tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-		require.True(t, tc.arg.ctr.spilling)
-
-		inputBats := []*batch.Batch{
-			newBatch(tc.types, tc.proc, int64(batchRows)),
-			newBatch(tc.types, tc.proc, int64(batchRows)),
-			newBatch(tc.types, tc.proc, int64(batchRows)),
-			batch.EmptyBatch,
-		}
-		resetChildren(tc.arg, inputBats)
-
-		var totalRows int
-		for {
-			result, err := vm.Exec(tc.arg, tc.proc)
-			require.NoError(t, err)
-			if result.Batch == nil || result.Status == vm.ExecStop {
-				break
+	const batchRows = 8192
+	for _, config := range []struct {
+		name  string
+		types []types.Type
+		flags []plan.OrderBySpec_OrderByFlag
+		desc  bool
+	}{
+		{"ascending", []types.Type{types.T_int64.ToType()}, []plan.OrderBySpec_OrderByFlag{0}, false},
+		{"descending", []types.Type{types.T_int64.ToType()}, []plan.OrderBySpec_OrderByFlag{plan.OrderBySpec_DESC}, true},
+		{"multiple_keys", []types.Type{types.T_int64.ToType(), types.T_int32.ToType()}, []plan.OrderBySpec_OrderByFlag{0, plan.OrderBySpec_DESC}, false},
+	} {
+		t.Run(config.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			t.Cleanup(func() { mpool.DeleteMPool(mp) })
+			specs := make([]*plan.OrderBySpec, len(config.flags))
+			for column, flag := range config.flags {
+				specs[column] = &plan.OrderBySpec{Expr: newExpression(int32(column)), Flag: flag}
 			}
-			totalRows += result.Batch.RowCount()
-		}
-		require.Equal(t, int(limit), totalRows)
-
-		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
-		tc.arg.Reset(tc.proc, false, nil)
-
-		err = tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-		inputBats = []*batch.Batch{
-			newBatch(tc.types, tc.proc, int64(batchRows)),
-			newBatch(tc.types, tc.proc, int64(batchRows)),
-			newBatch(tc.types, tc.proc, int64(batchRows)),
-			batch.EmptyBatch,
-		}
-		resetChildren(tc.arg, inputBats)
-
-		totalRows = 0
-		for {
-			result, err := vm.Exec(tc.arg, tc.proc)
-			require.NoError(t, err)
-			if result.Batch == nil || result.Status == vm.ExecStop {
-				break
+			tc := newTestCase(t, mp, config.types, limit, specs)
+			t.Cleanup(func() {
+				tc.arg.Free(tc.proc, false, nil)
+				require.Zero(t, mp.CurrNB())
+			})
+			for range 2 {
+				func() {
+					input := []*batch.Batch{
+						newBatch(config.types, tc.proc, batchRows),
+						newBatch(config.types, tc.proc, batchRows),
+						newBatch(config.types, tc.proc, batchRows),
+						batch.EmptyBatch,
+					}
+					child := resetChildren(tc.arg, input)
+					defer child.Free(tc.proc, false, nil)
+					defer tc.arg.Reset(tc.proc, false, nil)
+					require.NoError(t, tc.arg.Prepare(tc.proc))
+					require.True(t, tc.arg.ctr.spilling)
+					totalRows := 0
+					for {
+						result, err := vm.Exec(tc.arg, tc.proc)
+						require.NoError(t, err)
+						if result.Batch == nil || result.Status == vm.ExecStop {
+							break
+						}
+						require.Len(t, result.Batch.Vecs, len(config.types))
+						require.Equal(t, types.T_int64, result.Batch.Vecs[0].GetType().Oid)
+						keys := vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[0])
+						for row, key := range keys {
+							// Three identical 0..8191 inputs contribute three rows per key.
+							want := int64((totalRows + row) / 3)
+							if config.desc {
+								want = batchRows - 1 - want
+							}
+							require.Equal(t, want, key)
+							if len(config.types) == 2 {
+								require.Equal(t, types.T_int32, result.Batch.Vecs[1].GetType().Oid)
+								require.Equal(t, int32(want), vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[1])[row])
+							}
+						}
+						totalRows += result.Batch.RowCount()
+					}
+					require.Equal(t, int(limit), totalRows)
+				}()
 			}
-			totalRows += result.Batch.RowCount()
-		}
-		require.Equal(t, int(limit), totalRows)
-
-		tc.arg.Free(tc.proc, false, nil)
-		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
-		tc.proc.Free()
-		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+		})
 	}
 }
 
