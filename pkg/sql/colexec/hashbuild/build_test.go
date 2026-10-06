@@ -74,18 +74,13 @@ func rawRuntimeFilterSpec(tag, upperLimit int32, typ types.Type) *plan.RuntimeFi
 type buildTestCase struct {
 	arg   *HashBuild
 	marg  *merge.Merge
-	flgs  []bool // flgs[i] == true: nullable
 	types []types.Type
 	proc  *process.Process
 }
 
 func makeTestCases(t *testing.T) []buildTestCase {
 	return []buildTestCase{
-		newTestCase(t, []bool{false}, []types.Type{types.T_int8.ToType()},
-			[]*plan.Expr{
-				newExpr(0, types.T_int8.ToType()),
-			}),
-		newTestCase(t, []bool{true}, []types.Type{types.T_int8.ToType()},
+		newTestCase(t, []types.Type{types.T_int8.ToType()},
 			[]*plan.Expr{
 				newExpr(0, types.T_int8.ToType()),
 			}),
@@ -100,7 +95,7 @@ func TestString(t *testing.T) {
 }
 
 func TestBuild(t *testing.T) {
-	for _, tc := range makeTestCases(t)[:1] {
+	for _, tc := range makeTestCases(t) {
 		err := tc.marg.Prepare(tc.proc)
 		require.NoError(t, err)
 		err = tc.arg.Prepare(tc.proc)
@@ -136,8 +131,7 @@ func TestBuild(t *testing.T) {
 }
 
 func TestHashBuildRepeatedResetFinalizesRuntimeFilterOnce(t *testing.T) {
-	tc := newTestCase(t, []bool{false},
-		[]types.Type{types.T_int32.ToType()},
+	tc := newTestCase(t, []types.Type{types.T_int32.ToType()},
 		[]*plan.Expr{newExpr(0, types.T_int32.ToType())})
 	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{
 		Tag: tc.arg.JoinMapTag + 6000,
@@ -167,7 +161,7 @@ func TestHashBuildRepeatedResetFinalizesRuntimeFilterOnce(t *testing.T) {
 }
 
 func TestBroadcastBudgetFailurePublishesTerminalAndCleansBudget(t *testing.T) {
-	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []*plan.Expr{newExpr(0, types.T_int32.ToType())})
+	tc := newTestCase(t, []types.Type{types.T_int32.ToType()}, []*plan.Expr{newExpr(0, types.T_int32.ToType())})
 	budget := installTestProcessExecutionResourceBudget(t, tc.arg, tc.proc)
 	account := tc.arg.ctr.hashmapBuilder.mapAllocationAccount
 	require.NotNil(t, account)
@@ -249,7 +243,7 @@ func TestHashBuildPrepareConvertsTerminalBudgetAdmission(t *testing.T) {
 }
 
 func TestHashBuildWithoutMapStillBudgetsRetainedBatches(t *testing.T) {
-	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, nil)
+	tc := newTestCase(t, []types.Type{types.T_int32.ToType()}, nil)
 	installTestProcessExecutionResourceBudget(t, tc.arg, tc.proc)
 	tc.arg.NeedHashMap = false
 	tc.arg.NeedBatches = true
@@ -272,7 +266,7 @@ func TestHashBuildWithoutMapStillBudgetsRetainedBatches(t *testing.T) {
 }
 
 func TestShuffleWithoutMapRejectsMissingRuntimeFilter(t *testing.T) {
-	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, nil)
+	tc := newTestCase(t, []types.Type{types.T_int32.ToType()}, nil)
 	tc.arg.IsShuffle = true
 	tc.arg.NeedHashMap = false
 	require.Error(t, tc.arg.Prepare(tc.proc))
@@ -282,7 +276,7 @@ func TestShuffleWithoutMapRejectsMissingRuntimeFilter(t *testing.T) {
 func BenchmarkBuild(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		func() {
-			tc := newTestCase(b, []bool{false}, []types.Type{types.T_int8.ToType()},
+			tc := newTestCase(b, []types.Type{types.T_int8.ToType()},
 				[]*plan.Expr{newExpr(0, types.T_int8.ToType())})
 			defer mpool.DeleteMPool(tc.proc.Mp())
 			defer func() {
@@ -321,7 +315,7 @@ func newExpr(pos int32, typ types.Type) *plan.Expr {
 	}
 }
 
-func newTestCase(t testing.TB, flgs []bool, ts []types.Type, cs []*plan.Expr) buildTestCase {
+func newTestCase(t testing.TB, ts []types.Type, cs []*plan.Expr) buildTestCase {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	proc.SetMessageBoard(message.NewMessageBoard())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 1)
@@ -337,7 +331,6 @@ func newTestCase(t testing.TB, flgs []bool, ts []types.Type, cs []*plan.Expr) bu
 	installTestHashBuildAllocation(t, arg)
 	return buildTestCase{
 		types: ts,
-		flgs:  flgs,
 		proc:  proc,
 		arg:   arg,
 		marg:  &merge.Merge{},
@@ -363,7 +356,7 @@ func TestHashBuildPrepareDropsPriorGenerationSpillFileService(t *testing.T) {
 	require.Nil(t, arg.ctr.spillFS)
 }
 
-// create a new block based on the type information, flgs[i] == ture: has null
+// Create a batch with the requested types and no NULL values.
 func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }
@@ -514,9 +507,7 @@ func TestHashBuildFloatRuntimeFilterFallsBackToPass(t *testing.T) {
 	buildType.Scale = 2
 
 	tc := newTestCase(
-		t,
-		[]bool{false},
-		[]types.Type{buildType},
+		t, []types.Type{buildType},
 		[]*plan.Expr{newExpr(0, buildType)},
 	)
 	defer func() {
@@ -589,9 +580,7 @@ func TestHashBuildOptionalRuntimeFilterCollectionFallsBackToJoinMap(
 ) {
 	typ := types.T_int32.ToType()
 	tc := newTestCase(
-		t,
-		[]bool{false},
-		[]types.Type{typ},
+		t, []types.Type{typ},
 		[]*plan.Expr{newExpr(0, typ)},
 	)
 	tc.arg.RuntimeFilterSpec = rawRuntimeFilterSpec(
@@ -680,9 +669,7 @@ func TestHashBuildClosedMapBudgetDoesNotRecordCollectionFallback(
 ) {
 	typ := types.T_int32.ToType()
 	tc := newTestCase(
-		t,
-		[]bool{false},
-		[]types.Type{typ},
+		t, []types.Type{typ},
 		[]*plan.Expr{newExpr(0, typ)},
 	)
 	tc.arg.RuntimeFilterSpec = rawRuntimeFilterSpec(
@@ -753,9 +740,7 @@ func TestHashmapBuilderUniqueGrowthFailureAbandonsOptionalKeysInPlace(
 ) {
 	typ := types.T_int32.ToType()
 	tc := newTestCase(
-		t,
-		[]bool{false},
-		[]types.Type{typ},
+		t, []types.Type{typ},
 		[]*plan.Expr{newExpr(0, typ)},
 	)
 	const capBytes = uint64(64 << 20)
@@ -839,9 +824,7 @@ func TestHashmapBuilderRuntimeFilterLimitAbandonsOptionalKeysInPlace(
 			t.Run(fmt.Sprintf("hash-on-pk=%t/%s", hashOnPK, test.name), func(t *testing.T) {
 				typ := types.T_int32.ToType()
 				tc := newTestCase(
-					t,
-					[]bool{false},
-					[]types.Type{typ},
+					t, []types.Type{typ},
 					[]*plan.Expr{newExpr(0, typ)},
 				)
 				require.NoError(t, tc.arg.Prepare(tc.proc))
@@ -883,9 +866,7 @@ func TestHashBuildRuntimeFilterLimitFailsOpenWithoutLosingJoinKeys(
 ) {
 	typ := types.T_int32.ToType()
 	tc := newTestCase(
-		t,
-		[]bool{false},
-		[]types.Type{typ},
+		t, []types.Type{typ},
 		[]*plan.Expr{newExpr(0, typ)},
 	)
 	tc.arg.RuntimeFilterSpec = rawRuntimeFilterSpec(
@@ -944,9 +925,7 @@ func TestDedupBatchRewriteRecollectsOptionalKeysWithoutUnsafeReplay(
 ) {
 	typ := types.T_int32.ToType()
 	tc := newTestCase(
-		t,
-		[]bool{false},
-		[]types.Type{typ},
+		t, []types.Type{typ},
 		[]*plan.Expr{newExpr(0, typ)},
 	)
 	tc.arg.IsDedup = true
@@ -989,9 +968,7 @@ func TestDedupBatchRewriteRecollectsOptionalKeysWithoutUnsafeReplay(
 func TestDedupDeleteMarkerZeroValueIsAbsentWithoutKeepColumns(t *testing.T) {
 	typ := types.T_int32.ToType()
 	tc := newTestCase(
-		t,
-		[]bool{false},
-		[]types.Type{typ},
+		t, []types.Type{typ},
 		[]*plan.Expr{newExpr(0, typ)},
 	)
 	tc.arg.IsDedup = true
@@ -1007,9 +984,7 @@ func TestDedupDeleteOnlyRowsPreserveAuxBudgetThroughRuntimeFilter(
 ) {
 	typ := types.T_int32.ToType()
 	tc := newTestCase(
-		t,
-		[]bool{false, false, true},
-		[]types.Type{typ, typ, typ},
+		t, []types.Type{typ, typ, typ},
 		[]*plan.Expr{newExpr(0, typ)},
 	)
 	tc.arg.IsDedup = true
@@ -1084,9 +1059,7 @@ func TestShuffleDedupAdmissionAfterRewriteDoesNotSpillPartialInput(
 ) {
 	typ := types.T_int32.ToType()
 	tc := newTestCase(
-		t,
-		[]bool{false, false, true},
-		[]types.Type{typ, typ, typ},
+		t, []types.Type{typ, typ, typ},
 		[]*plan.Expr{newExpr(0, typ)},
 	)
 	tc.arg.IsShuffle = true
@@ -1189,9 +1162,7 @@ func TestHashBuildFloatRuntimeFilterClosesSignedZero(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			tc := newTestCase(
-				t,
-				[]bool{false},
-				[]types.Type{test.typ},
+				t, []types.Type{test.typ},
 				[]*plan.Expr{newExpr(0, test.typ)},
 			)
 			defer func() {
@@ -1482,7 +1453,7 @@ func TestRuntimeFilterPayloadStateContract(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()},
+			tc := newTestCase(t, []types.Type{types.T_int32.ToType()},
 				[]*plan.Expr{newExpr(0, types.T_int32.ToType())})
 			spec := &plan.RuntimeFilterSpec{
 				Tag:                 102,
@@ -1557,8 +1528,7 @@ func TestScalarRuntimeFilterUsesActualCardinality(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			tc := newTestCase(t, []bool{len(test.nulls) > 0},
-				[]types.Type{types.T_int32.ToType()}, nil)
+			tc := newTestCase(t, []types.Type{types.T_int32.ToType()}, nil)
 			tc.arg.NeedHashMap = false
 			tc.arg.NeedBatches = true
 			tc.arg.RuntimeFilterSpec = rawRuntimeFilterSpec(
@@ -1613,8 +1583,7 @@ func TestScalarRuntimeFilterUsesActualCardinality(t *testing.T) {
 }
 
 func TestScalarRuntimeFilterMalformedBuildShapeFailsOpen(t *testing.T) {
-	tc := newTestCase(t, []bool{false},
-		[]types.Type{types.T_int32.ToType()}, nil)
+	tc := newTestCase(t, []types.Type{types.T_int32.ToType()}, nil)
 	tc.arg.NeedHashMap = false
 	tc.arg.NeedBatches = false
 	tc.arg.RuntimeFilterSpec = rawRuntimeFilterSpec(
@@ -1650,7 +1619,7 @@ func TestScalarRuntimeFilterMalformedBuildShapeFailsOpen(t *testing.T) {
 func TestRuntimeFilterStaleProbeContractFailsOpen(t *testing.T) {
 	payloadType := types.New(types.T_decimal64, 18, 3)
 	probeType := types.New(types.T_decimal64, 18, 2)
-	tc := newTestCase(t, []bool{false}, []types.Type{payloadType},
+	tc := newTestCase(t, []types.Type{payloadType},
 		[]*plan.Expr{newExpr(0, payloadType)})
 	spec := &plan.RuntimeFilterSpec{
 		Tag:         103,
@@ -1731,7 +1700,7 @@ func TestRuntimeFilterStaleProbeContractFailsOpen(t *testing.T) {
 
 func TestRuntimeFilterExplicitDecimalContractProducesIn(t *testing.T) {
 	decimalType := types.New(types.T_decimal64, 18, 3)
-	tc := newTestCase(t, []bool{false}, []types.Type{decimalType},
+	tc := newTestCase(t, []types.Type{decimalType},
 		[]*plan.Expr{newExpr(0, decimalType)})
 	spec := rawRuntimeFilterSpec(105, 100, decimalType)
 	tc.arg.RuntimeFilterSpec = spec
@@ -1774,9 +1743,7 @@ func TestRuntimeFilterExplicitDecimalContractProducesIn(t *testing.T) {
 func TestDirectRuntimeFilterUsesDeclaredHashSlot(t *testing.T) {
 	typ := types.T_int32.ToType()
 	tc := newTestCase(
-		t,
-		[]bool{false, false},
-		[]types.Type{typ, typ},
+		t, []types.Type{typ, typ},
 		[]*plan.Expr{newExpr(0, typ), newExpr(1, typ)},
 	)
 	spec := rawRuntimeFilterSpec(106, 100, typ)
@@ -2004,9 +1971,7 @@ func TestSerializedRuntimeFilterNarrowingExecution(t *testing.T) {
 				newExpr(1, narrowType),
 			}
 			tc := newTestCase(
-				t,
-				[]bool{false, false},
-				[]types.Type{wideType, narrowType},
+				t, []types.Type{wideType, narrowType},
 				conditions,
 			)
 			spec := makeSerializedRuntimeFilterSpec(
@@ -2098,9 +2063,7 @@ func TestSerializedRuntimeFilterUsesTightBudgetAndProducesIn(t *testing.T) {
 		newExpr(1, componentType),
 	}
 	tc := newTestCase(
-		t,
-		[]bool{false, false},
-		[]types.Type{componentType, componentType},
+		t, []types.Type{componentType, componentType},
 		conditions,
 	)
 	spec := makeSerializedRuntimeFilterSpec(
@@ -2231,7 +2194,7 @@ func TestSerializedRuntimeFilterScratchUsesPhysicalAccount(t *testing.T) {
 }
 
 func TestSerializedRuntimeFilterBoundsObserveCancellation(t *testing.T) {
-	tc := newTestCase(t, nil, nil, nil)
+	tc := newTestCase(t, nil, nil)
 	vec := testutil.MakeInt32Vector([]int32{1}, nil, tc.proc.Mp())
 	ctx, cancel := context.WithCancel(tc.proc.Ctx)
 	tc.proc.Ctx = ctx
@@ -2250,9 +2213,7 @@ func TestSerializedRuntimeFilterActualComponentMismatchFailsOpen(t *testing.T) {
 	declaredType := types.New(types.T_decimal64, 18, 2)
 	actualType := types.New(types.T_decimal64, 18, 3)
 	tc := newTestCase(
-		t,
-		[]bool{false},
-		[]types.Type{declaredType},
+		t, []types.Type{declaredType},
 		[]*plan.Expr{newExpr(0, declaredType)},
 	)
 	spec := makeSerializedRuntimeFilterSpec(
@@ -2336,9 +2297,7 @@ func TestSerializedRuntimeFilterMetadataMismatchFailsOpen(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			componentType := types.T_int32.ToType()
 			tc := newTestCase(
-				t,
-				[]bool{false},
-				[]types.Type{componentType},
+				t, []types.Type{componentType},
 				[]*plan.Expr{newExpr(0, componentType)},
 			)
 			spec := makeSerializedRuntimeFilterSpec(
@@ -2385,7 +2344,7 @@ func TestRuntimeFilterMarshalBudgetAdmissionFallsBackToPass(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()},
+			tc := newTestCase(t, []types.Type{types.T_int32.ToType()},
 				[]*plan.Expr{newExpr(0, types.T_int32.ToType())})
 			spec := &plan.RuntimeFilterSpec{
 				Tag:                 101,
@@ -2454,7 +2413,7 @@ func TestRuntimeFilterMarshalBudgetAdmissionFallsBackToPass(t *testing.T) {
 }
 
 func TestRuntimeFilterMarshalUsesSinglePayloadBudget(t *testing.T) {
-	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()},
+	tc := newTestCase(t, []types.Type{types.T_int32.ToType()},
 		[]*plan.Expr{newExpr(0, types.T_int32.ToType())})
 	vec := testutil.MakeInt32Vector([]int32{1, 2, 3, 4}, nil, tc.proc.Mp())
 	budget := process.MustNewExecutionResourceBudget(1<<20, 1<<20)
@@ -2478,7 +2437,7 @@ func TestRuntimeFilterMarshalUsesSinglePayloadBudget(t *testing.T) {
 }
 
 func TestRuntimeFilterMarshalSinglePayloadCoversVarlenaPeak(t *testing.T) {
-	tc := newTestCase(t, []bool{true}, []types.Type{types.T_varchar.ToType()},
+	tc := newTestCase(t, []types.Type{types.T_varchar.ToType()},
 		[]*plan.Expr{newExpr(0, types.T_varchar.ToType())})
 	values := make([]string, 128)
 	for i := range values {
@@ -2505,7 +2464,7 @@ func TestRuntimeFilterMarshalSinglePayloadCoversVarlenaPeak(t *testing.T) {
 }
 
 func TestRuntimeFilterMarshalAccountedPayloadMessageLifecycle(t *testing.T) {
-	tc := newTestCase(t, []bool{true}, []types.Type{types.T_varchar.ToType()},
+	tc := newTestCase(t, []types.Type{types.T_varchar.ToType()},
 		[]*plan.Expr{newExpr(0, types.T_varchar.ToType())})
 	vec := testutil.MakeVarcharVector(
 		[]string{strings.Repeat("x", 4<<10), strings.Repeat("y", 8<<10)},
@@ -2559,7 +2518,7 @@ func TestRuntimeFilterMarshalAccountedPayloadMessageLifecycle(t *testing.T) {
 }
 
 func TestRuntimeFilterMarshalAccountedOneByteShortFallsBackToPass(t *testing.T) {
-	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()},
+	tc := newTestCase(t, []types.Type{types.T_int32.ToType()},
 		[]*plan.Expr{newExpr(0, types.T_int32.ToType())})
 	vec := testutil.MakeInt32Vector([]int32{1, 2, 3, 4}, nil, tc.proc.Mp())
 	size, err := vec.MarshalBinarySize()
@@ -2618,7 +2577,7 @@ func TestRuntimeFilterMarshalAccountedOneByteShortFallsBackToPass(t *testing.T) 
 }
 
 func TestRuntimeFilterWithGroupingKeyFallsBackToPass(t *testing.T) {
-	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()},
+	tc := newTestCase(t, []types.Type{types.T_int32.ToType()},
 		[]*plan.Expr{newExpr(0, types.T_int32.ToType())})
 	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{
 		Tag:                 105,
@@ -2652,7 +2611,7 @@ func TestRuntimeFilterWithGroupingKeyFallsBackToPass(t *testing.T) {
 }
 
 func TestSpilledBuildRuntimeFilterPassesInsteadOfDropping(t *testing.T) {
-	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()},
+	tc := newTestCase(t, []types.Type{types.T_int32.ToType()},
 		[]*plan.Expr{newExpr(0, types.T_int32.ToType())})
 	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{
 		Tag:        106,
@@ -2698,7 +2657,7 @@ func TestHashBuildMultipleTypes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tc := newTestCase(t, []bool{false}, []types.Type{tt.typ}, []*plan.Expr{newExpr(0, tt.typ)})
+			tc := newTestCase(t, []types.Type{tt.typ}, []*plan.Expr{newExpr(0, tt.typ)})
 			err := tc.marg.Prepare(tc.proc)
 			require.NoError(t, err)
 			err = tc.arg.Prepare(tc.proc)
@@ -2717,7 +2676,7 @@ func TestHashBuildMultipleTypes(t *testing.T) {
 }
 
 func TestHashBuildNullable(t *testing.T) {
-	tc := newTestCase(t, []bool{true}, []types.Type{types.T_int32.ToType()}, []*plan.Expr{newExpr(0, types.T_int32.ToType())})
+	tc := newTestCase(t, []types.Type{types.T_int32.ToType()}, []*plan.Expr{newExpr(0, types.T_int32.ToType())})
 	err := tc.marg.Prepare(tc.proc)
 	require.NoError(t, err)
 	err = tc.arg.Prepare(tc.proc)
@@ -2735,7 +2694,7 @@ func TestHashBuildNullable(t *testing.T) {
 }
 
 func TestHashBuildEmptyBatch(t *testing.T) {
-	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []*plan.Expr{newExpr(0, types.T_int32.ToType())})
+	tc := newTestCase(t, []types.Type{types.T_int32.ToType()}, []*plan.Expr{newExpr(0, types.T_int32.ToType())})
 	err := tc.marg.Prepare(tc.proc)
 	require.NoError(t, err)
 	err = tc.arg.Prepare(tc.proc)
@@ -2751,7 +2710,7 @@ func TestHashBuildEmptyBatch(t *testing.T) {
 }
 
 func TestHashBuildHashOnPK(t *testing.T) {
-	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []*plan.Expr{newExpr(0, types.T_int32.ToType())})
+	tc := newTestCase(t, []types.Type{types.T_int32.ToType()}, []*plan.Expr{newExpr(0, types.T_int32.ToType())})
 	tc.arg.HashOnPK = true
 	err := tc.marg.Prepare(tc.proc)
 	require.NoError(t, err)
@@ -2860,7 +2819,7 @@ func TestHashBuildRuntimeFilterWithNullsHashOnPK(t *testing.T) {
 }
 
 func TestBroadcastHashBuildParallelConsumersStayResident(t *testing.T) {
-	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []*plan.Expr{newExpr(0, types.T_int32.ToType())})
+	tc := newTestCase(t, []types.Type{types.T_int32.ToType()}, []*plan.Expr{newExpr(0, types.T_int32.ToType())})
 	tc.arg.IsShuffle = false
 	tc.arg.JoinMapRefCnt = 2
 	tc.arg.SpillThreshold = 1
@@ -2900,7 +2859,7 @@ func TestBroadcastHashBuildParallelConsumersStayResident(t *testing.T) {
 }
 
 func TestHashBuildRejectsSharedSpillPayload(t *testing.T) {
-	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []*plan.Expr{newExpr(0, types.T_int32.ToType())})
+	tc := newTestCase(t, []types.Type{types.T_int32.ToType()}, []*plan.Expr{newExpr(0, types.T_int32.ToType())})
 	tc.arg.IsShuffle = true
 	tc.arg.ShuffleIdx = 0
 	tc.arg.JoinMapRefCnt = 2
@@ -2944,9 +2903,7 @@ func TestHashBuildRejectsNonPositiveJoinMapRefCountBeforeTransfer(t *testing.T) 
 	for _, refCount := range []int32{0, -1} {
 		t.Run(fmt.Sprintf("ref-%d", refCount), func(t *testing.T) {
 			tc := newTestCase(
-				t,
-				[]bool{false},
-				[]types.Type{types.T_int32.ToType()},
+				t, []types.Type{types.T_int32.ToType()},
 				[]*plan.Expr{newExpr(0, types.T_int32.ToType())},
 			)
 			tc.arg.JoinMapRefCnt = refCount
@@ -2988,9 +2945,7 @@ func TestHashBuildRejectsNonPositiveJoinMapRefCountBeforeTransfer(t *testing.T) 
 
 func TestShuffleHashBuildAccountedSpillLifecycle(t *testing.T) {
 	tc := newTestCase(
-		t,
-		[]bool{false},
-		[]types.Type{types.T_int64.ToType()},
+		t, []types.Type{types.T_int64.ToType()},
 		[]*plan.Expr{newExpr(0, types.T_int64.ToType())},
 	)
 	tc.arg.IsShuffle = true
@@ -3060,9 +3015,7 @@ func TestShuffleHashBuildAccountedSpillLifecycle(t *testing.T) {
 func TestShuffleHashBuildRetainsBroadcastConstNull(t *testing.T) {
 	typ := types.T_varchar.ToType()
 	tc := newTestCase(
-		t,
-		[]bool{true},
-		[]types.Type{typ},
+		t, []types.Type{typ},
 		[]*plan.Expr{newExpr(0, typ)},
 	)
 	tc.arg.IsShuffle = true
@@ -3128,9 +3081,7 @@ func TestShuffleHashBuildRetainsBroadcastConstNull(t *testing.T) {
 
 func TestShuffleHashBuildDirectSpillUsesActualAllocation(t *testing.T) {
 	tc := newTestCase(
-		t,
-		[]bool{false, false},
-		[]types.Type{types.T_int32.ToType(), types.T_int32.ToType()},
+		t, []types.Type{types.T_int32.ToType(), types.T_int32.ToType()},
 		nil,
 	)
 	tc.arg.Conditions = []*plan.Expr{makeIssue26454ConcatKey(t, tc.proc)}

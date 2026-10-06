@@ -16,7 +16,6 @@ package product
 
 import (
 	"bytes"
-	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -45,10 +44,7 @@ func TestProductAllocationSiteLedger(t *testing.T) {
 // add unit tests for cases
 type productTestCase struct {
 	arg         *Product
-	flgs        []bool // flgs[i] == true: nullable
-	types       []types.Type
 	proc        *process.Process
-	cancel      context.CancelFunc
 	barg        *hashbuild.HashBuild
 	resultBatch *batch.Batch
 }
@@ -59,8 +55,7 @@ var (
 
 func makeTestCases(t *testing.T) []productTestCase {
 	return []productTestCase{
-		newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)}),
-		newTestCase(t, []bool{true}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)}),
+		newTestCase(t, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)}),
 	}
 }
 
@@ -159,7 +154,7 @@ func TestProductPassesRecursiveMarker(t *testing.T) {
 		{name: "marker after empty build", probeData: true, emptyBuild: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
+			tc := newTestCase(t, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
 				colexec.NewResultPos(0, 0),
 				colexec.NewResultPos(1, 0),
 			})
@@ -182,7 +177,6 @@ func TestProductPassesRecursiveMarker(t *testing.T) {
 				tc.barg.Free(tc.proc, false, nil)
 				probe.Free(tc.proc, false, nil)
 				tc.proc.Free()
-				tc.cancel()
 			}()
 
 			require.NoError(t, tc.arg.Prepare(tc.proc))
@@ -199,9 +193,7 @@ func TestProductPassesRecursiveMarker(t *testing.T) {
 
 func TestProductConsumesMultipleBuildBatchesWithoutCopy(t *testing.T) {
 	tc := newTestCase(
-		t,
-		[]bool{false},
-		[]types.Type{types.T_int32.ToType()},
+		t, []types.Type{types.T_int32.ToType()},
 		[]colexec.ResultPos{
 			colexec.NewResultPos(0, 0),
 			colexec.NewResultPos(1, 0),
@@ -242,10 +234,9 @@ func TestProductConsumesMultipleBuildBatchesWithoutCopy(t *testing.T) {
 	require.Zero(t, tc.proc.Mp().CurrNB())
 }
 
-func newTestCase(t *testing.T, flgs []bool, ts []types.Type, rp []colexec.ResultPos) productTestCase {
+func newTestCase(t *testing.T, ts []types.Type, rp []colexec.ResultPos) productTestCase {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	proc.SetMessageBoard(message.NewMessageBoard())
-	_, cancel := context.WithCancel(context.Background())
 	resultBatch := batch.NewWithSize(len(rp))
 	resultBatch.SetRowCount(4)
 	for i := range rp {
@@ -253,10 +244,7 @@ func newTestCase(t *testing.T, flgs []bool, ts []types.Type, rp []colexec.Result
 	}
 	tag++
 	tc := productTestCase{
-		types:  ts,
-		flgs:   flgs,
-		proc:   proc,
-		cancel: cancel,
+		proc: proc,
 		arg: &Product{
 			Result:     rp,
 			JoinMapTag: tag,

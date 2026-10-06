@@ -51,11 +51,9 @@ const (
 
 // add unit tests for cases
 type joinTestCase struct {
-	arg   *DedupJoin
-	flgs  []bool // flgs[i] == true: nullable
-	types []types.Type
-	proc  *process.Process
-	barg  *hashbuild.HashBuild
+	arg  *DedupJoin
+	proc *process.Process
+	barg *hashbuild.HashBuild
 }
 
 func newDedupTestSpillEngine(
@@ -390,16 +388,7 @@ var (
 
 func makeTestCases(t *testing.T) []joinTestCase {
 	return []joinTestCase{
-		newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []int32{0},
-			[][]*plan.Expr{
-				{
-					newExpr(0, types.T_int32.ToType()),
-				},
-				{
-					newExpr(0, types.T_int32.ToType()),
-				},
-			}),
-		newTestCase(t, []bool{true}, []types.Type{types.T_int32.ToType()}, []int32{1},
+		newTestCase(t, []types.Type{types.T_int32.ToType()},
 			[][]*plan.Expr{
 				{
 					newExpr(0, types.T_int32.ToType()),
@@ -505,14 +494,12 @@ func newExpr(pos int32, typ types.Type) *plan.Expr {
 	}
 }
 
-func newTestCase(t *testing.T, flgs []bool, ts []types.Type, rp []int32, cs [][]*plan.Expr) joinTestCase {
+func newTestCase(t *testing.T, ts []types.Type, cs [][]*plan.Expr) joinTestCase {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	proc.SetMessageBoard(message.NewMessageBoard())
 	tag++
 	tc := joinTestCase{
-		types: ts,
-		flgs:  flgs,
-		proc:  proc,
+		proc: proc,
 		arg: &DedupJoin{
 			RightTypes: ts,
 			Conditions: cs,
