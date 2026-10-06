@@ -209,15 +209,20 @@ Device kernels around the matmul, on the engine's stream:
   engine is created, and on each tile when the metric is cosine or squared L2 or the
   format is `vecuint8`. The host only packs bytes and reads cell headers.
 - For cosine and squared L2 on `vecf32`, `vecbf16` and `vecf8`, whose values can make the
-  fp32 products overflow or underflow, a rescale kernel runs after the row statistics:
-  a row whose squared norm is outside [2^-60, 2^60] is multiplied by a power of two
-  2^-k (|x| near 2^k) — `vecf32`/`vecbf16` elements scaled, `vecf8` E8M0 exponents shifted,
-  a block shifted below the E8M0 range zeroed — and its global scale by 2^k, so the
-  GEMM sees values near 1 and the fix-up kernel restores the scale exactly. Rows in range
-  are left as they are. `vecf4` (its global scale is outside the GEMM), `vecf16`,
-  `vecint8` and `vecuint8` have bounded GEMM operands. The kernel reads one norm per row;
-  on 1M `vecf32(768)` rows it takes 2.6 ms of GPU time when no row is out of range (32 ms
-  when every row is), next to 61 ms of GEMM.
+  fp32 products overflow or underflow, the row-statistics kernel rescales a row right after
+  taking its norm: a row whose squared norm without its global scale is outside
+  [2^-60, 2^60] is multiplied by a power of two 2^-k (|x| near 2^k) — `vecf32`/`vecbf16`
+  elements scaled, `vecf8` E8M0 exponents shifted, a block shifted below the E8M0 range
+  zeroed — and its global scale by 2^k, so the GEMM sees values near 1 and the fix-up kernel
+  restores the scale exactly. Rows in range are left as they are, at the cost of one
+  comparison. `vecf4` (its global scale is outside the GEMM), `vecf16`, `vecint8` and
+  `vecuint8` have bounded GEMM operands.
+- The row-statistics kernel takes a row per thread up to 128 elements and a row per warp
+  above (shuffle reduction, no block barrier), loops its grid over the rows, accumulates in
+  double, and is compiled per format. On 1M `vecf32(768)` rows it takes 0.74 ms per
+  64K-row tile; a block per row with a separate rescale kernel took about 0.9 ms plus the
+  rescale launch. Measured alternatives: float accumulation and 16-byte vector loads were
+  not faster; a thread per row is 2–3× slower above 768 elements.
 - A fix-up kernel turns the matmul output into rank scores. The inner product is
   `acc × fp32(g_row × g_query)` in fp32, as cuBLASLt applies `alpha = G_a × G_b` to a GEMM
   with per-tensor global scales; cosine and squared L2 take the dot product with the

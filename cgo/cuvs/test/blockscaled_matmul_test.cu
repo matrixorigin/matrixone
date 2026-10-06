@@ -650,6 +650,7 @@ TEST(BlockScaledMatmulTest, DistanceMetricsMatchReference) {
             // 300 rows over 128-row tiles: two full tiles and a partial one
             check_metric(format, 96, 300, 5, 128, metric);
             check_metric(format, 32, 7, 2, 512, metric);
+            check_metric(format, 200, 300, 3, 128, metric);
         }
     }
 }
@@ -657,7 +658,8 @@ TEST(BlockScaledMatmulTest, DistanceMetricsMatchReference) {
 // Cosine and l2sq hold at magnitudes whose fp32 products overflow or underflow: the rows are
 // rescaled by powers of two before the matmul.
 TEST(BlockScaledMatmulTest, DistanceMetricsAtExtremeMagnitudes) {
-    for (uint32_t dim : {15u, 16u, 17u, 33u, 96u}) {
+    // dimensions up to 128 take a thread per row in the row statistics, larger a warp
+    for (uint32_t dim : {15u, 16u, 17u, 33u, 96u, 129u, 768u}) {
         for (int e : {120, 100, 0, -100, -140}) {
             check_magnitude(GPU_BLOCKSCALED_F32, dim, e);
             check_magnitude(GPU_BLOCKSCALED_BF16, dim, e);
