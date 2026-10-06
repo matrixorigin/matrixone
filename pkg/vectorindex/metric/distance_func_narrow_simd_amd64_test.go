@@ -37,6 +37,9 @@ func l1Uint8Oracle(a, b []uint8) float64 {
 // Exact equality is the right bar: every value is an integer well inside
 // float64's exact range, so any difference is a real defect, not rounding.
 func TestL1DistanceUint8SIMD(t *testing.T) {
+	if !hasAVX512 {
+		t.Skip("AVX-512 not available")
+	}
 	// Lengths chosen around the 64-byte block: below it (pure tail), exactly
 	// on it, one over, and several blocks plus a ragged tail.
 	for _, n := range []int{0, 1, 7, 63, 64, 65, 127, 128, 1023, 1024} {
@@ -79,6 +82,9 @@ func TestL1DistanceUint8SIMD(t *testing.T) {
 }
 
 func BenchmarkL1DistanceUint8SIMD(b *testing.B) {
+	if !hasAVX512 {
+		b.Skip("AVX-512 not available")
+	}
 	const dim, pool = 1024, 256
 	xs, ys := make([][]uint8, pool), make([][]uint8, pool)
 	for i := range xs {
@@ -101,6 +107,9 @@ func BenchmarkL1DistanceUint8SIMD(b *testing.B) {
 // Dimensions sweep 0..200 plus block boundaries, which covers every tail
 // remainder for both the 32-element (VPMADDWD) and 64-element (VPSADBW) loops.
 func TestNarrowSIMDMatchesScalar(t *testing.T) {
+	if !hasAVX512 {
+		t.Skip("AVX-512 not available")
+	}
 	rnd := rand.New(rand.NewSource(20260821))
 
 	i8 := []struct {
