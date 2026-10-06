@@ -15,7 +15,6 @@
 package colexec
 
 import (
-	"context"
 	"fmt"
 	"math"
 	"testing"
@@ -3516,7 +3515,34 @@ func TestExpressionReset(t *testing.T) {
 	}
 }
 
-func TestVolatileStringAssignmentCastReset(t *testing.T) {
+func TestPreparedCastLifecycle(t *testing.T) {
+	proc := testutil.NewProcess(t, testutil.WithFileService(nil))
+	initialSession, initialMode, initialRunning := proc.Session, proc.Base.SessionInfo.SqlMode, proc.GetBaseProcessRunningStatus()
+	initialParams := proc.DetachPrepareParams()
+	proc.RestorePrepareParams(initialParams)
+	t.Cleanup(func() {
+		actualParams := proc.DetachPrepareParams()
+		proc.RestorePrepareParams(actualParams)
+		assert.Equal(t, initialParams, actualParams)
+		assert.Equal(t, initialSession, proc.Session)
+		assert.Equal(t, initialMode, proc.Base.SessionInfo.SqlMode)
+		assert.Equal(t, initialRunning, proc.GetBaseProcessRunningStatus())
+	})
+
+	makeNumericExecutor := func(t *testing.T, targetType types.Type) *FunctionExpressionExecutor {
+		expr := bindTestFunction(t, proc, "cast",
+			&plan.Expr{Typ: plan.Type{Id: int32(types.T_text)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}},
+			&plan.Expr{Typ: plan.Type{Id: int32(targetType.Oid), Width: targetType.Width, Scale: targetType.Scale}, Expr: &plan.Expr_T{T: &plan.TargetType{}}})
+		executor, err := NewExpressionExecutor(proc, expr)
+		if executor != nil {
+			t.Cleanup(executor.Free)
+		}
+		require.NoError(t, err)
+		result, ok := executor.(*FunctionExpressionExecutor)
+		require.True(t, ok)
+		return result
+	}
+
 	targets := []struct {
 		name string
 		typ  types.Type
@@ -3526,38 +3552,35 @@ func TestVolatileStringAssignmentCastReset(t *testing.T) {
 		{name: "tinytext", typ: types.New(types.T_text, types.MaxTinyTextLen, 0)},
 	}
 	for _, target := range targets {
-		t.Run(target.name, func(t *testing.T) {
-			proc := testutil.NewProcess(t)
-			defer proc.Free()
+		t.Run("assignment "+target.name, func(t *testing.T) {
+
+			checkExpressionStorageAfterCleanup(t, proc)
+			sessionBefore, modeBefore, runningBefore := proc.Session, proc.Base.SessionInfo.SqlMode, proc.GetBaseProcessRunningStatus()
+			t.Cleanup(func() {
+				proc.Session = sessionBefore
+				proc.Base.SessionInfo.SqlMode = modeBefore
+				proc.SetBaseProcessRunningStatus(runningBefore)
+			})
+
 			proc.SetBaseProcessRunningStatus(true)
 			proc.Base.SessionInfo.SqlMode = "STRICT_TRANS_TABLES"
 
 			sourceType := types.T_text.ToType()
-			fn, err := function.GetFunctionByName(proc.Ctx, "cast_assign", []types.Type{sourceType, target.typ})
-			require.NoError(t, err)
-			expr := &plan.Expr{
-				Typ: plan.Type{Id: int32(target.typ.Oid), Width: target.typ.Width, Scale: target.typ.Scale},
-				Expr: &plan.Expr_F{F: &plan.Function{
-					Func: &plan.ObjectRef{Obj: fn.GetEncodedOverloadID(), ObjName: "cast_assign"},
-					Args: []*plan.Expr{
-						{
-							Typ:  plan.Type{Id: int32(sourceType.Oid), Width: sourceType.Width, Scale: sourceType.Scale},
-							Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
-						},
-						{
-							Typ:  plan.Type{Id: int32(target.typ.Oid), Width: target.typ.Width, Scale: target.typ.Scale},
-							Expr: &plan.Expr_T{T: &plan.TargetType{}},
-						},
-					},
-				}},
-			}
+			expr := bindTestFunction(t, proc, "cast_assign",
+				&plan.Expr{Typ: plan.Type{Id: int32(sourceType.Oid), Width: sourceType.Width, Scale: sourceType.Scale}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}},
+				&plan.Expr{Typ: plan.Type{Id: int32(target.typ.Oid), Width: target.typ.Width, Scale: target.typ.Scale}, Expr: &plan.Expr_T{T: &plan.TargetType{}}})
 			executor, err := NewExpressionExecutor(proc, expr)
+			if executor != nil {
+				t.Cleanup(executor.Free)
+			}
 			require.NoError(t, err)
-			defer executor.Free()
 
 			eval := func(value *string, kind vector.PrepareParamKind) *vector.Vector {
 				t.Helper()
 				params := vector.NewVec(sourceType)
+				defer params.Free(proc.Mp())
+				previous := proc.DetachPrepareParams()
+				defer proc.RestorePrepareParams(previous)
 				if value == nil {
 					require.NoError(t, vector.AppendBytes(params, nil, true, proc.Mp()))
 				} else {
@@ -3568,8 +3591,6 @@ func TestVolatileStringAssignmentCastReset(t *testing.T) {
 				result, evalErr := executor.Eval(proc, nil, nil)
 				require.NoError(t, evalErr)
 				require.False(t, executor.(*FunctionExpressionExecutor).folded.canFold)
-				proc.SetPrepareParams(nil)
-				params.Free(proc.Mp())
 				return result
 			}
 
@@ -3599,29 +3620,33 @@ func TestVolatileStringAssignmentCastReset(t *testing.T) {
 			require.Equal(t, integer, result.GetStringAt(0))
 		})
 	}
-}
-
-func TestPreparedIntegerStringNumericCastFolding(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
-	proc.SetBaseProcessRunningStatus(true)
 
 	sourceType := types.T_text.ToType()
 
-	eval := func(executor *FunctionExpressionExecutor, value string, kind vector.PrepareParamKind) *vector.Vector {
-		params := vector.NewVec(sourceType)
-		require.NoError(t, vector.AppendBytes(params, []byte(value), false, proc.Mp()))
-		proc.SetPrepareParamsWithMeta(params, nil, []vector.PrepareParamKind{kind})
-		result, err := executor.Eval(proc, nil, nil)
-		require.NoError(t, err)
-		proc.SetPrepareParams(nil)
-		params.Free(proc.Mp())
-		return result
-	}
-
 	t.Run("integer provenance folds", func(t *testing.T) {
-		executor := newPreparedStringNumericCastExecutor(t, proc, types.T_int32.ToType())
-		defer executor.Free()
+		checkExpressionStorageAfterCleanup(t, proc)
+		sessionBefore, modeBefore, runningBefore := proc.Session, proc.Base.SessionInfo.SqlMode, proc.GetBaseProcessRunningStatus()
+		t.Cleanup(func() {
+			proc.Session = sessionBefore
+			proc.Base.SessionInfo.SqlMode = modeBefore
+			proc.SetBaseProcessRunningStatus(runningBefore)
+		})
+
+		proc.SetBaseProcessRunningStatus(true)
+
+		eval := func(executor *FunctionExpressionExecutor, value string, kind vector.PrepareParamKind) *vector.Vector {
+			params := vector.NewVec(sourceType)
+			defer params.Free(proc.Mp())
+			previous := proc.DetachPrepareParams()
+			defer proc.RestorePrepareParams(previous)
+			require.NoError(t, vector.AppendBytes(params, []byte(value), false, proc.Mp()))
+			proc.SetPrepareParamsWithMeta(params, nil, []vector.PrepareParamKind{kind})
+			result, err := executor.Eval(proc, nil, nil)
+			require.NoError(t, err)
+			return result
+		}
+
+		executor := makeNumericExecutor(t, types.T_int32.ToType())
 
 		result := eval(executor, "42", vector.PrepareParamInteger)
 		require.True(t, executor.folded.canFold)
@@ -3636,107 +3661,111 @@ func TestPreparedIntegerStringNumericCastFolding(t *testing.T) {
 	})
 
 	t.Run("ordinary text does not fold", func(t *testing.T) {
-		executor := newPreparedStringNumericCastExecutor(t, proc, types.T_int32.ToType())
-		defer executor.Free()
+		checkExpressionStorageAfterCleanup(t, proc)
+		sessionBefore, modeBefore, runningBefore := proc.Session, proc.Base.SessionInfo.SqlMode, proc.GetBaseProcessRunningStatus()
+		t.Cleanup(func() {
+			proc.Session = sessionBefore
+			proc.Base.SessionInfo.SqlMode = modeBefore
+			proc.SetBaseProcessRunningStatus(runningBefore)
+		})
+
+		proc.SetBaseProcessRunningStatus(true)
+
+		eval := func(executor *FunctionExpressionExecutor, value string, kind vector.PrepareParamKind) *vector.Vector {
+			params := vector.NewVec(sourceType)
+			defer params.Free(proc.Mp())
+			previous := proc.DetachPrepareParams()
+			defer proc.RestorePrepareParams(previous)
+			require.NoError(t, vector.AppendBytes(params, []byte(value), false, proc.Mp()))
+			proc.SetPrepareParamsWithMeta(params, nil, []vector.PrepareParamKind{kind})
+			result, err := executor.Eval(proc, nil, nil)
+			require.NoError(t, err)
+			return result
+		}
+
+		executor := makeNumericExecutor(t, types.T_int32.ToType())
 
 		result := eval(executor, "42", vector.PrepareParamNone)
 		require.False(t, executor.folded.canFold)
 		require.False(t, result.IsConst())
 		require.Equal(t, int32(42), vector.GetFixedAtNoTypeCheck[int32](result, 0))
 	})
-}
 
-func newPreparedStringNumericCastExecutor(
-	t *testing.T, proc *process.Process, targetType types.Type,
-) *FunctionExpressionExecutor {
-	t.Helper()
-	sourceType := types.T_text.ToType()
-	fn, err := function.GetFunctionByName(proc.Ctx, "cast", []types.Type{sourceType, targetType})
-	require.NoError(t, err)
+	t.Run("owned constant warning multiplicity", func(t *testing.T) {
+		checkExpressionStorageAfterCleanup(t, proc)
+		sessionBefore, modeBefore, runningBefore := proc.Session, proc.Base.SessionInfo.SqlMode, proc.GetBaseProcessRunningStatus()
+		t.Cleanup(func() {
+			proc.Session = sessionBefore
+			proc.Base.SessionInfo.SqlMode = modeBefore
+			proc.SetBaseProcessRunningStatus(runningBefore)
+		})
 
-	expr := &plan.Expr{
-		Typ: plan.Type{Id: int32(targetType.Oid), Width: targetType.Width, Scale: targetType.Scale},
-		Expr: &plan.Expr_F{F: &plan.Function{
-			Func: &plan.ObjectRef{Obj: fn.GetEncodedOverloadID(), ObjName: "cast"},
-			Args: []*plan.Expr{
-				{
-					Typ:  plan.Type{Id: int32(sourceType.Oid), Width: sourceType.Width, Scale: sourceType.Scale},
-					Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
-				},
-				{
-					Typ:  plan.Type{Id: int32(targetType.Oid), Width: targetType.Width, Scale: targetType.Scale},
-					Expr: &plan.Expr_T{T: &plan.TargetType{}},
-				},
-			},
-		}},
-	}
-	executor, err := NewExpressionExecutor(proc, expr)
-	require.NoError(t, err)
-	return executor.(*FunctionExpressionExecutor)
-}
+		proc.SetBaseProcessRunningStatus(true)
+		warnings := &preparedCastWarningSession{}
+		proc.Session = warnings
+		targetType := types.T_float64.ToType()
+		expr := bindTestFunction(t, proc, "cast",
+			&plan.Expr{Typ: plan.Type{Id: int32(types.T_text)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "12suffix"}}}},
+			&plan.Expr{Typ: plan.Type{Id: int32(targetType.Oid)}, Expr: &plan.Expr_T{T: &plan.TargetType{}}})
 
-type preparedCastWarningSession struct {
-	warningCount int
-}
+		executors, err := NewOwnedConstantFilterExecutors(proc, []*plan.Expr{expr})
+		for _, executor := range executors {
+			if executor != nil {
+				t.Cleanup(executor.Free)
+			}
+		}
+		require.NoError(t, err)
+		require.Len(t, executors, 1)
+		executor := executors[0]
+		input := batch.New(nil)
+		input.SetRowCount(4)
+		checkTwelve := func(result *vector.Vector) {
+			t.Helper()
+			require.Equal(t, types.T_float64.ToType(), *result.GetType())
+			require.Equal(t, 4, result.Length())
+			for row := 0; row < 4; row++ {
+				require.False(t, result.IsNull(uint64(row)))
+				require.Equal(t, float64(12), vector.GetFixedAtNoTypeCheck[float64](result, row))
+			}
+		}
 
-func (*preparedCastWarningSession) GetTempTable(string, string) (string, bool) { return "", false }
-func (*preparedCastWarningSession) AddTempTable(string, string, string)        {}
-func (*preparedCastWarningSession) RemoveTempTable(string, string)             {}
-func (*preparedCastWarningSession) RemoveTempTableByRealName(string)           {}
-func (*preparedCastWarningSession) GetSqlModeNoAutoValueOnZero() (bool, bool)  { return false, false }
-func (s *preparedCastWarningSession) AppendWarningDiagnostic(uint16, string) {
-	s.warningCount++
-}
+		result, err := executor.Eval(proc, []*batch.Batch{input}, []bool{false, false, false, false})
+		require.NoError(t, err)
+		require.Equal(t, types.T_float64.ToType(), *result.GetType())
+		require.Equal(t, 4, result.Length())
+		require.Zero(t, warnings.warningCount)
+		for row := 0; row < 4; row++ {
+			require.True(t, result.IsNull(uint64(row)))
+		}
 
-func TestConstantStringNumericCastWarningRunsOnceWhenSelected(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
-	proc.SetBaseProcessRunningStatus(true)
-	warnings := &preparedCastWarningSession{}
-	proc.Session = warnings
-	sourceType, targetType := types.T_text.ToType(), types.T_float64.ToType()
-	fn, err := function.GetFunctionByName(proc.Ctx, "cast", []types.Type{sourceType, targetType})
-	require.NoError(t, err)
-	expr := &plan.Expr{Typ: plan.Type{Id: int32(types.T_float64)}, Expr: &plan.Expr_F{F: &plan.Function{
-		Func: &plan.ObjectRef{Obj: fn.GetEncodedOverloadID(), ObjName: "cast"},
-		Args: []*plan.Expr{
-			{Typ: plan.Type{Id: int32(types.T_text)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "12suffix"}}}},
-			{Typ: plan.Type{Id: int32(types.T_float64)}, Expr: &plan.Expr_T{T: &plan.TargetType{}}},
-		},
-	}}}
-	executors, err := NewOwnedConstantFilterExecutors(proc, []*plan.Expr{expr})
-	require.NoError(t, err)
-	executor := executors[0]
-	defer executor.Free()
-	input := batch.New(nil)
-	input.SetRowCount(4)
-	result, err := executor.Eval(proc, []*batch.Batch{input}, []bool{false, false, false, false})
-	require.NoError(t, err)
-	require.Equal(t, 4, result.Length())
-	require.Zero(t, warnings.warningCount)
+		result, err = executor.Eval(proc, []*batch.Batch{input}, []bool{true, false, true, false})
+		require.NoError(t, err)
+		require.True(t, result.IsConst())
+		require.Equal(t, 1, warnings.warningCount)
+		checkTwelve(result)
+		result, err = executor.Eval(proc, []*batch.Batch{input}, nil)
+		require.NoError(t, err)
+		require.Equal(t, 1, warnings.warningCount)
+		checkTwelve(result)
 
-	result, err = executor.Eval(proc, []*batch.Batch{input}, []bool{true, false, true, false})
-	require.NoError(t, err)
-	require.True(t, result.IsConst())
-	require.Equal(t, 1, warnings.warningCount)
-	_, err = executor.Eval(proc, []*batch.Batch{input}, nil)
-	require.NoError(t, err)
-	require.Equal(t, 1, warnings.warningCount)
+		executor.ResetForNextQuery()
+		result, err = executor.Eval(proc, []*batch.Batch{input}, nil)
+		require.NoError(t, err)
+		require.Equal(t, 2, warnings.warningCount)
+		checkTwelve(result)
 
-	executor.ResetForNextQuery()
-	_, err = executor.Eval(proc, []*batch.Batch{input}, nil)
-	require.NoError(t, err)
-	require.Equal(t, 2, warnings.warningCount)
+		defaultExecutor, err := NewExpressionExecutor(proc, expr)
+		if defaultExecutor != nil {
+			t.Cleanup(defaultExecutor.Free)
+		}
+		require.NoError(t, err)
+		result, err = defaultExecutor.Eval(proc, []*batch.Batch{input}, nil)
+		require.NoError(t, err)
+		require.Equal(t, 6, warnings.warningCount, "ordinary expressions retain four row diagnostics")
+		checkTwelve(result)
 
-	defaultExecutor, err := NewExpressionExecutor(proc, expr)
-	require.NoError(t, err)
-	defer defaultExecutor.Free()
-	_, err = defaultExecutor.Eval(proc, []*batch.Batch{input}, nil)
-	require.NoError(t, err)
-	require.Equal(t, 6, warnings.warningCount, "ordinary expressions retain four row diagnostics")
-}
+	})
 
-func TestPreparedStringNumericCastWarningsAcrossReuse(t *testing.T) {
 	selectedRows := []bool{true, false, true, false}
 	tests := []struct {
 		name     string
@@ -3751,29 +3780,47 @@ func TestPreparedStringNumericCastWarningsAcrossReuse(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			proc := testutil.NewProcess(t)
-			defer proc.Free()
+
+			checkExpressionStorageAfterCleanup(t, proc)
+			sessionBefore, modeBefore, runningBefore := proc.Session, proc.Base.SessionInfo.SqlMode, proc.GetBaseProcessRunningStatus()
+			t.Cleanup(func() {
+				proc.Session = sessionBefore
+				proc.Base.SessionInfo.SqlMode = modeBefore
+				proc.SetBaseProcessRunningStatus(runningBefore)
+			})
+
 			proc.SetBaseProcessRunningStatus(true)
 			session := &preparedCastWarningSession{}
 			proc.Session = session
-			executor := newPreparedStringNumericCastExecutor(t, proc, types.T_float64.ToType())
-			defer executor.Free()
+			executor := makeNumericExecutor(t, types.T_float64.ToType())
 
 			eval := func(value string, kind vector.PrepareParamKind) *vector.Vector {
 				t.Helper()
 				params := vector.NewVec(types.T_text.ToType())
+				defer params.Free(proc.Mp())
+				previous := proc.DetachPrepareParams()
+				defer proc.RestorePrepareParams(previous)
 				require.NoError(t, vector.AppendBytes(params, []byte(value), false, proc.Mp()))
 				proc.SetPrepareParamsWithMeta(params, nil, []vector.PrepareParamKind{kind})
-				defer func() {
-					proc.SetPrepareParams(nil)
-					params.Free(proc.Mp())
-				}()
 
 				input := batch.New(nil)
 				input.SetRowCount(len(selectedRows))
 				result, err := executor.Eval(proc, []*batch.Batch{input}, selectedRows)
 				require.NoError(t, err)
 				require.Equal(t, len(selectedRows), result.Length())
+				require.Equal(t, types.T_float64.ToType(), *result.GetType())
+				expected := float64(12)
+				if kind == vector.PrepareParamInteger {
+					expected = 7
+				}
+				for row, selected := range selectedRows {
+					if kind != vector.PrepareParamInteger && !selected {
+						require.True(t, result.IsNull(uint64(row)))
+						continue
+					}
+					require.False(t, result.IsNull(uint64(row)))
+					require.Equal(t, expected, vector.GetFixedAtNoTypeCheck[float64](result, row))
+				}
 				return result
 			}
 
@@ -3800,6 +3847,20 @@ func TestPreparedStringNumericCastWarningsAcrossReuse(t *testing.T) {
 			require.Equal(t, 2, session.warningCount)
 		})
 	}
+
+}
+
+type preparedCastWarningSession struct {
+	warningCount int
+}
+
+func (*preparedCastWarningSession) GetTempTable(string, string) (string, bool) { return "", false }
+func (*preparedCastWarningSession) AddTempTable(string, string, string)        {}
+func (*preparedCastWarningSession) RemoveTempTable(string, string)             {}
+func (*preparedCastWarningSession) RemoveTempTableByRealName(string)           {}
+func (*preparedCastWarningSession) GetSqlModeNoAutoValueOnZero() (bool, bool)  { return false, false }
+func (s *preparedCastWarningSession) AppendWarningDiagnostic(uint16, string) {
+	s.warningCount++
 }
 
 func TestJsonOrderingWithTextPrepareParamExact(t *testing.T) {
@@ -4176,20 +4237,27 @@ func TestLastDayPersistedVarcharABI(t *testing.T) {
 	}
 }
 
-func TestDecimalCastSelectionAndErrorReuse(t *testing.T) {
-	fs := testutil.NewFS(nil)
-	t.Cleanup(func() { fs.Close(context.Background()) })
-	proc := testutil.NewProcess(t, testutil.WithFileService(fs))
+func TestDecimalCastLifecycle(t *testing.T) {
+	proc := testutil.NewProcess(t, testutil.WithFileService(nil))
+	initialSession, initialMode, initialRunning := proc.Session, proc.Base.SessionInfo.SqlMode, proc.GetBaseProcessRunningStatus()
+	initialParams := proc.DetachPrepareParams()
+	proc.RestorePrepareParams(initialParams)
 	t.Cleanup(func() {
-		proc.Free()
-		require.Zero(t, proc.Mp().CurrNB())
+		actualParams := proc.DetachPrepareParams()
+		proc.RestorePrepareParams(actualParams)
+		assert.Equal(t, initialParams, actualParams)
+		assert.Equal(t, initialSession, proc.Session)
+		assert.Equal(t, initialMode, proc.Base.SessionInfo.SqlMode)
+		assert.Equal(t, initialRunning, proc.GetBaseProcessRunningStatus())
 	})
-	t.Run("registered cast", func(t *testing.T) {
+
+	t.Run("narrowing error recovery", func(t *testing.T) {
+		checkExpressionStorageAfterCleanup(t, proc)
 		sourceType := types.New(types.T_decimal128, 38, 30)
 		targetType := types.New(types.T_decimal64, 3, 2)
 		input := batch.NewWithSize(1)
+		t.Cleanup(func() { input.Clean(proc.Mp()) })
 		input.Vecs[0] = vector.NewVec(sourceType)
-		defer input.Clean(proc.Mp())
 		values := make([]types.Decimal128, 3)
 		for i, literal := range []string{"1.499999999999999999999999999999", "9.995000000000000000000000000000"} {
 			var err error
@@ -4198,23 +4266,14 @@ func TestDecimalCastSelectionAndErrorReuse(t *testing.T) {
 		}
 		require.NoError(t, vector.AppendFixedList(input.Vecs[0], values, []bool{false, false, true}, proc.Mp()))
 		input.SetRowCount(3)
-		fn, err := function.GetFunctionByName(proc.Ctx, "cast", []types.Type{sourceType, targetType})
-		require.NoError(t, err)
-		expr := &plan.Expr{
-			Typ: plan.Type{Id: int32(targetType.Oid), Width: targetType.Width, Scale: targetType.Scale},
-			Expr: &plan.Expr_F{F: &plan.Function{
-				Func: &plan.ObjectRef{Obj: fn.GetEncodedOverloadID(), ObjName: "cast"},
-				Args: []*plan.Expr{
-					{Typ: plan.Type{Id: int32(sourceType.Oid), Width: sourceType.Width, Scale: sourceType.Scale},
-						Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}}},
-					{Typ: plan.Type{Id: int32(targetType.Oid), Width: targetType.Width, Scale: targetType.Scale},
-						Expr: &plan.Expr_T{T: &plan.TargetType{}}},
-				},
-			}},
-		}
+		expr := bindTestFunction(t, proc, "cast",
+			&plan.Expr{Typ: plan.Type{Id: int32(sourceType.Oid), Width: sourceType.Width, Scale: sourceType.Scale}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}}},
+			&plan.Expr{Typ: plan.Type{Id: int32(targetType.Oid), Width: targetType.Width, Scale: targetType.Scale}, Expr: &plan.Expr_T{T: &plan.TargetType{}}})
 		executor, err := NewExpressionExecutor(proc, expr)
+		if executor != nil {
+			t.Cleanup(executor.Free)
+		}
 		require.NoError(t, err)
-		defer executor.Free()
 		result, err := executor.Eval(proc, []*batch.Batch{input}, []bool{true, false, true})
 		require.NoError(t, err)
 		require.Equal(t, targetType, *result.GetType())
@@ -4234,35 +4293,24 @@ func TestDecimalCastSelectionAndErrorReuse(t *testing.T) {
 		require.Equal(t, types.Decimal64(150), vector.GetFixedAtNoTypeCheck[types.Decimal64](result, 0))
 		require.Equal(t, sourceType, *input.Vecs[0].GetType())
 	})
-	require.Zero(t, proc.Mp().CurrNB())
-}
 
-func TestDecimalWideningEmptyBatchReuse(t *testing.T) {
-	fs := testutil.NewFS(nil)
-	t.Cleanup(func() { fs.Close(context.Background()) })
-	proc := testutil.NewProcess(t, testutil.WithFileService(fs))
-	t.Cleanup(func() {
-		proc.Free()
-		require.Zero(t, proc.Mp().CurrNB())
-	})
 	for _, nullable := range []bool{false, true} {
 		t.Run(fmt.Sprintf("nullable=%v", nullable), func(t *testing.T) {
+			checkExpressionStorageAfterCleanup(t, proc)
 			sourceType := types.New(types.T_decimal64, 18, 2)
 			targetType := types.New(types.T_decimal128, 38, 2)
 			input := batch.NewWithSize(1)
+			t.Cleanup(func() { input.Clean(proc.Mp()) })
 			input.Vecs[0] = vector.NewVec(sourceType)
-			defer input.Clean(proc.Mp())
 			require.NoError(t, vector.AppendFixedList(input.Vecs[0], []types.Decimal64{149, 200}, []bool{false, nullable}, proc.Mp()))
-			fn, err := function.GetFunctionByName(proc.Ctx, "cast", []types.Type{sourceType, targetType})
-			require.NoError(t, err)
-			expr := &plan.Expr{Typ: plan.Type{Id: int32(targetType.Oid), Width: targetType.Width, Scale: targetType.Scale}, Expr: &plan.Expr_F{F: &plan.Function{
-				Func: &plan.ObjectRef{Obj: fn.GetEncodedOverloadID(), ObjName: "cast"}, Args: []*plan.Expr{
-					{Typ: plan.Type{Id: int32(sourceType.Oid), Width: sourceType.Width, Scale: sourceType.Scale}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}}},
-					{Typ: plan.Type{Id: int32(targetType.Oid), Width: targetType.Width, Scale: targetType.Scale}, Expr: &plan.Expr_T{T: &plan.TargetType{}}},
-				}}}}
+			expr := bindTestFunction(t, proc, "cast",
+				&plan.Expr{Typ: plan.Type{Id: int32(sourceType.Oid), Width: sourceType.Width, Scale: sourceType.Scale}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}}},
+				&plan.Expr{Typ: plan.Type{Id: int32(targetType.Oid), Width: targetType.Width, Scale: targetType.Scale}, Expr: &plan.Expr_T{T: &plan.TargetType{}}})
 			executor, err := NewExpressionExecutor(proc, expr)
+			if executor != nil {
+				t.Cleanup(executor.Free)
+			}
 			require.NoError(t, err)
-			defer executor.Free()
 			for i, size := range []int{0, 2, 0, 2} {
 				if i == 3 {
 					input.Vecs[0].GetNulls().Reset()
@@ -4286,8 +4334,8 @@ func TestDecimalWideningEmptyBatchReuse(t *testing.T) {
 				}
 			}
 		})
-		require.Zero(t, proc.Mp().CurrNB())
 	}
+
 }
 
 func TestRegisteredXorSelectionAndFolding(t *testing.T) {
