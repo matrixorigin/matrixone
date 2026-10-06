@@ -102,20 +102,22 @@ func TestPrepare(t *testing.T) {
 
 func TestValueScan(t *testing.T) {
 	for _, tc := range makeTestCases(t) {
-		resetBatchs(tc.arg, tc.proc.Mp())
-		err := tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-		_, _ = vm.Exec(tc.arg, tc.proc)
-
-		tc.arg.Reset(tc.proc, false, nil)
-
-		resetBatchs(tc.arg, tc.proc.Mp())
-		err = tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-		_, _ = vm.Exec(tc.arg, tc.proc)
-		tc.arg.Free(tc.proc, false, nil)
-		tc.proc.Free()
-		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+		t.Cleanup(func() {
+			tc.arg.Free(tc.proc, false, nil)
+			require.Zero(t, tc.proc.Mp().CurrNB())
+		})
+		for range 2 {
+			func() {
+				resetBatchs(tc.arg, tc.proc.Mp())
+				defer tc.arg.Reset(tc.proc, false, nil)
+				require.NoError(t, tc.arg.Prepare(tc.proc))
+				result, err := vm.Exec(tc.arg, tc.proc)
+				require.NoError(t, err)
+				require.Same(t, tc.arg.Batchs[0], result.Batch)
+				require.Equal(t, 2, result.Batch.RowCount())
+				require.Len(t, result.Batch.Vecs, 5)
+			}()
+		}
 	}
 }
 
