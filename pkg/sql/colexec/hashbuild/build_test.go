@@ -274,19 +274,25 @@ func TestShuffleWithoutMapRejectsMissingRuntimeFilter(t *testing.T) {
 }
 
 func BenchmarkBuild(b *testing.B) {
+	tc := newTestCase(b, []types.Type{types.T_int8.ToType()},
+		[]*plan.Expr{newExpr(0, types.T_int8.ToType())})
+	tc.arg.SetChildren([]vm.Operator{tc.marg})
+	b.Cleanup(func() {
+		tc.arg.Free(tc.proc, false, nil)
+		tc.marg.Free(tc.proc, false, nil)
+		require.Zero(b, tc.proc.Mp().CurrNB())
+		require.Zero(b, tc.proc.Mp().OnHeapCurrNB())
+	})
+	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		func() {
-			tc := newTestCase(b, []types.Type{types.T_int8.ToType()},
-				[]*plan.Expr{newExpr(0, types.T_int8.ToType())})
-			defer mpool.DeleteMPool(tc.proc.Mp())
 			defer func() {
-				tc.arg.Free(tc.proc, false, nil)
+				tc.arg.Reset(tc.proc, false, nil)
 				tc.marg.Reset(tc.proc, false, nil)
-				tc.marg.Free(tc.proc, false, nil)
 				tc.proc.GetMessageBoard().Reset()
 				require.Zero(b, tc.proc.Mp().CurrNB())
+				require.Zero(b, tc.proc.Mp().OnHeapCurrNB())
 			}()
-			tc.arg.SetChildren([]vm.Operator{tc.marg})
 			require.NoError(b, tc.marg.Prepare(tc.proc))
 			require.NoError(b, tc.arg.Prepare(tc.proc))
 			tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(newBatch(tc.types, tc.proc, Rows), nil, tc.proc.Mp())
@@ -316,7 +322,9 @@ func newExpr(pos int32, typ types.Type) *plan.Expr {
 }
 
 func newTestCase(t testing.TB, ts []types.Type, cs []*plan.Expr) buildTestCase {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	proc := testutil.NewProcessWithMPool(t, "", mp)
 	proc.SetMessageBoard(message.NewMessageBoard())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 1)
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
