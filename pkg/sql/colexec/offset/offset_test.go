@@ -211,42 +211,25 @@ func TestNestedOffsetDoesNotPublishFoundRows(t *testing.T) {
 }
 
 func BenchmarkOffset(b *testing.B) {
+	mp := mpool.MustNewZero()
+	b.Cleanup(func() { mpool.DeleteMPool(mp) })
+	proc := testutil.NewProcessWithMPool(b, "", mp)
+	arg := &Offset{OffsetExpr: plan2.MakePlan2Uint64ConstExprWithType(8), OperatorBase: vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 1}}}
+	b.Cleanup(func() {
+		arg.Free(proc, false, nil)
+		require.Zero(b, proc.Mp().CurrNB())
+	})
 	for i := 0; i < b.N; i++ {
-		tcs := []offsetTestCase{
-			{
-				proc: testutil.NewProcessWithMPool(b, "", mpool.MustNewZero()),
-				types: []types.Type{
-					types.T_int8.ToType(),
-				},
-				arg: &Offset{
-					ctr: container{
-						seen: 0,
-					},
-					OffsetExpr: plan2.MakePlan2Uint64ConstExprWithType(8),
-					OperatorBase: vm.OperatorBase{
-						OperatorInfo: vm.OperatorInfo{
-							Idx:     1,
-							IsFirst: false,
-							IsLast:  false,
-						},
-					},
-				},
-			},
-		}
-
-		t := new(testing.T)
-		for _, tc := range tcs {
-			err := tc.arg.Prepare(tc.proc)
-			require.NoError(t, err)
-			bats := []*batch.Batch{
-				newBatch(tc.types, tc.proc, BenchmarkRows),
-				batch.EmptyBatch,
-			}
-			resetChildren(tc.arg, bats)
-			_, _ = vm.Exec(tc.arg, tc.proc)
-			tc.arg.Free(tc.proc, false, nil)
-			tc.proc.Free()
-		}
+		func() {
+			child := resetChildren(arg, []*batch.Batch{newBatch([]types.Type{types.T_int8.ToType()}, proc, BenchmarkRows), batch.EmptyBatch})
+			defer child.Free(proc, false, nil)
+			defer arg.Reset(proc, false, nil)
+			require.NoError(b, arg.Prepare(proc))
+			result, err := vm.Exec(arg, proc)
+			require.NoError(b, err)
+			require.NotNil(b, result.Batch)
+			require.Equal(b, BenchmarkRows-8, result.Batch.RowCount())
+		}()
 	}
 }
 

@@ -282,30 +282,28 @@ func TestShuffleWithoutMapRejectsMissingRuntimeFilter(t *testing.T) {
 
 func BenchmarkBuild(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		tcs := []buildTestCase{
-			newTestCase(b, []bool{false}, []types.Type{types.T_int8.ToType()},
-				[]*plan.Expr{
-					newExpr(0, types.T_int8.ToType()),
-				}),
-		}
-		t := new(testing.T)
-		for _, tc := range tcs {
-			err := tc.arg.Prepare(tc.proc)
-			require.NoError(t, err)
+		func() {
+			tc := newTestCase(b, []bool{false}, []types.Type{types.T_int8.ToType()},
+				[]*plan.Expr{newExpr(0, types.T_int8.ToType())})
+			defer mpool.DeleteMPool(tc.proc.Mp())
+			defer func() {
+				tc.arg.Free(tc.proc, false, nil)
+				tc.marg.Reset(tc.proc, false, nil)
+				tc.marg.Free(tc.proc, false, nil)
+				tc.proc.GetMessageBoard().Reset()
+				require.Zero(b, tc.proc.Mp().CurrNB())
+			}()
+			tc.arg.SetChildren([]vm.Operator{tc.marg})
+			require.NoError(b, tc.marg.Prepare(tc.proc))
+			require.NoError(b, tc.arg.Prepare(tc.proc))
 			tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(newBatch(tc.types, tc.proc, Rows), nil, tc.proc.Mp())
 			tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(batch.EmptyBatch, nil, tc.proc.Mp())
 			tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
-			for {
-				ok, err := vm.Exec(tc.arg, tc.proc)
-				require.NoError(t, err)
-				require.Equal(t, true, ok)
-				//mp := ok.Batch.AuxData.(*hashmap.JoinMap)
-				tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
-				//mp.Free()
-				ok.Batch.Clean(tc.proc.Mp())
-				break
-			}
-		}
+			result, err := vm.Exec(tc.arg, tc.proc)
+			require.NoError(b, err)
+			require.Equal(b, vm.ExecStop, result.Status)
+			require.Nil(b, result.Batch)
+		}()
 	}
 }
 

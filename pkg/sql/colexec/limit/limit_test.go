@@ -330,24 +330,25 @@ func TestLimitResetReleasesCopiedAllocationAccountData(t *testing.T) {
 }
 
 func BenchmarkLimit(b *testing.B) {
+	mp := mpool.MustNewZero()
+	b.Cleanup(func() { mpool.DeleteMPool(mp) })
+	proc := testutil.NewProcessWithMPool(b, "", mp)
+	arg := &Limit{LimitExpr: plan2.MakePlan2Uint64ConstExprWithType(8)}
+	b.Cleanup(func() {
+		arg.Free(proc, false, nil)
+		require.Zero(b, proc.Mp().CurrNB())
+	})
 	for i := 0; i < b.N; i++ {
-		tcs := []limitTestCase{
-			{
-				proc: testutil.NewProcessWithMPool(b, "", mpool.MustNewZero()),
-				arg: &Limit{
-					LimitExpr: plan2.MakePlan2Uint64ConstExprWithType(8),
-				},
-			},
-		}
-
-		t := new(testing.T)
-		for _, tc := range tcs {
-			err := tc.arg.Prepare(tc.proc)
-			require.NoError(t, err)
-			resetChildren(tc.arg, tc.proc.Mp())
-			_, _ = vm.Exec(tc.arg, tc.proc)
-			tc.arg.Free(tc.proc, false, nil)
-		}
+		func() {
+			child := resetChildren(arg, proc.Mp())
+			defer child.Free(proc, false, nil)
+			defer arg.Reset(proc, false, nil)
+			require.NoError(b, arg.Prepare(proc))
+			result, err := vm.Exec(arg, proc)
+			require.NoError(b, err)
+			require.NotNil(b, result.Batch)
+			require.Equal(b, 2, result.Batch.RowCount())
+		}()
 	}
 }
 
