@@ -87,7 +87,7 @@ type viewSchemaTestFixture struct {
 
 func newViewSchemaTestFixture(t testing.TB) *viewSchemaTestFixture {
 	t.Helper()
-	mock := NewMockCompilerContext(false)
+	mock := NewMockCompilerContext(false, newPlanTestProcess(t))
 	mock.SetContext(t.Context())
 	mock.GetAccountIdFunc = func() (uint32, error) { return 42, nil }
 	mock.GetDatabaseIdFunc = func(string, *Snapshot) (uint64, error) { return 7, nil }
@@ -117,12 +117,9 @@ func newViewSchemaTestFixture(t testing.TB) *viewSchemaTestFixture {
 		f.compiler.SetContext(ctx)
 		return f.binding, nil
 	}
-	proc := mock.GetProcess()
 	t.Cleanup(func() {
 		generation.Close()
 		budget.Close()
-		proc.Free()
-		proc.GetFileService().Close(context.Background())
 	})
 	return f
 }

@@ -80,12 +80,7 @@ func (c *descriptionPublicationContext) ResolveVariable(name string, system, glo
 }
 
 func TestDescribeViewColumnsDoesNotAssembleDefinition(t *testing.T) {
-	ctx := &descriptionPublicationContext{MockCompilerContext: NewMockCompilerContext(false)}
-	proc := ctx.GetProcess()
-	t.Cleanup(func() {
-		proc.Free()
-		proc.GetFileService().Close(context.Background())
-	})
+	ctx := &descriptionPublicationContext{MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t))}
 	ctx.GetAccountIdFunc = func() (uint32, error) { return 42, nil }
 	const definition = `{"Stmt":"create view v (label) as select n_name from nation","DefaultDatabase":"tpch","security_type":"INVOKER","future_field":{"keep":true}}`
 	cols, err := DescribeViewColumns(ctx, definition)
@@ -118,12 +113,7 @@ func TestDescribeViewColumnsSharedInferenceContract(t *testing.T) {
 		{name: "expression clears default", selectSQL: "select n_nationkey + 1 from nation"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := NewMockCompilerContext(false)
-			proc := ctx.GetProcess()
-			t.Cleanup(func() {
-				proc.Free()
-				proc.GetFileService().Close(context.Background())
-			})
+			ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 			ctx.GetAccountIdFunc = func() (uint32, error) { return 42, nil }
 			source := ctx.tables["nation"].Cols[0]
 			source.Typ.NotNullable = true
