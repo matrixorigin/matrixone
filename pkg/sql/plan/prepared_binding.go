@@ -655,9 +655,12 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 			if target.Oid == types.T_any && (binding.Type.Oid.IsMySQLString() || binding.Type.Oid == types.T_any) {
 				target = types.T_varbinary.ToType()
 			}
-		case name == "ntile" && len(args) == 1 && binding.Type.Oid == types.T_any:
-			// Keep a NULL bucket count executable so NTILE reports its
-			// runtime argument error instead of a binder ANY overload error.
+		case name == "ntile" && len(args) == 1 &&
+			(binding.Type.Oid == types.T_any || binding.Type.Oid.IsMySQLString()):
+			// Rebinding must retain NTILE's prepared integer consumer for
+			// numeric text, without changing the marker's source domain.
+			// The implicit cast rejects fractional/invalid text; NULL still
+			// reaches NTILE's runtime argument check.
 			target = types.T_int64.ToType()
 		case len(args) == 1 && binding.Type.Oid.IsMySQLString() &&
 			(name == "sum" || name == "avg"):

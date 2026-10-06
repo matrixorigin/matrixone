@@ -867,7 +867,7 @@ func samePlanType(left, right planpb.Type) bool {
 	return left.Id == right.Id && left.NotNullable == right.NotNullable &&
 		left.AutoIncr == right.AutoIncr && left.Width == right.Width &&
 		left.Scale == right.Scale && left.Table == right.Table &&
-		left.Enumvalues == right.Enumvalues && left.Charset == right.Charset
+		left.Enumvalues == right.Enumvalues && left.SameCollation(right)
 }
 
 func statementStableFunctionScan(node *planpb.Node) bool {

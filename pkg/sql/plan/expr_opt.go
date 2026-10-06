@@ -1103,10 +1103,11 @@ func blockFilterConstantVectorSet(literalVec *plan.LiteralVec) (ret map[string]s
 		return nil, false
 	}
 	typ := plan.Type{
-		Id:      int32(vec.GetType().Oid),
-		Scale:   vec.GetType().Scale,
-		Width:   vec.GetType().Width,
-		Charset: uint32(vec.GetType().Charset),
+		Id:               int32(vec.GetType().Oid),
+		Scale:            vec.GetType().Scale,
+		Width:            vec.GetType().Width,
+		Charset:          uint32(vec.GetType().Charset),
+		CollationVersion: uint32(vec.GetType().CollationVersion),
 	}
 	if physicalLength == 0 {
 		return make(map[string]struct{}), true

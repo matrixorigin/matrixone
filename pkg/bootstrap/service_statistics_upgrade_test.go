@@ -41,8 +41,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Current-version fixtures follow the same registry as bootstrap and CNs;
+// historical handler versions below remain explicit migration inputs.
+func statisticsFinalUpgradeVersion() versions.Version {
+	s := &service{}
+	s.initUpgrade()
+	return s.getFinalVersionHandle().Metadata()
+}
+
 func TestDoCheckUpgradeQueuesStatisticsRefresh(t *testing.T) {
-	final := v4_0_11.Handler.Metadata()
+	final := statisticsFinalUpgradeVersion()
 	require.Greater(t, versions.Compare(final.Version, "4.0.7"), 0)
 	for _, test := range []struct {
 		name    string
@@ -63,7 +71,8 @@ func TestDoCheckUpgradeQueuesStatisticsRefresh(t *testing.T) {
 		{name: "current_4.0.8", version: "4.0.8", offset: v4_0_8.Handler.Metadata().VersionOffset, upgrade: true, via409: true, via410: true},
 		{name: "current_4.0.9", version: "4.0.9", offset: v4_0_9.Handler.Metadata().VersionOffset, upgrade: true, via410: true},
 		{name: "current_4.0.10", version: "4.0.10", offset: v4_0_10.Handler.Metadata().VersionOffset, upgrade: true},
-		{name: "current_4.0.11", version: final.Version, offset: final.VersionOffset},
+		{name: "current_4.0.11", version: "4.0.11", offset: v4_0_11.Handler.Metadata().VersionOffset, upgrade: true},
+		{name: "current_4.0.12", version: final.Version, offset: final.VersionOffset},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			runtime.RunTest("", func(runtime.Runtime) {
@@ -98,6 +107,9 @@ func TestDoCheckUpgradeQueuesStatisticsRefresh(t *testing.T) {
 				require.NoError(t, b.doCheckUpgrade(context.Background()))
 				if test.upgrade {
 					hops := []versions.Version{final}
+					if versions.Compare(test.version, "4.0.11") < 0 {
+						hops = append([]versions.Version{v4_0_11.Handler.Metadata()}, hops...)
+					}
 					if test.via410 {
 						hops = append([]versions.Version{v4_0_10.Handler.Metadata()}, hops...)
 					}
@@ -357,6 +369,7 @@ func TestStatisticsUpgradeCompensatesPostSnapshotTenantAfterRestart(t *testing.T
 }
 
 func TestMaybeUpgradeTenantDoesNotCacheUncommittedOrFailedChecks(t *testing.T) {
+	final := statisticsFinalUpgradeVersion()
 	for _, test := range []struct {
 		name           string
 		version        string
@@ -365,11 +378,11 @@ func TestMaybeUpgradeTenantDoesNotCacheUncommittedOrFailedChecks(t *testing.T) {
 		failUpgrade    bool
 		ownTxn         bool
 	}{
-		{name: "caller_owned_transaction", version: "4.0.11", ownTxn: true},
-		{name: "catalog_read_failure", version: "4.0.11", fail: true},
+		{name: "caller_owned_transaction", version: final.Version, ownTxn: true},
+		{name: "catalog_read_failure", version: final.Version, fail: true},
 		{name: "migration_failure", version: "4.0.9", failUpgrade: true},
-		{name: "newer_catalog_version", version: "4.0.12"},
-		{name: "different_cluster_version", version: "4.0.9", clusterVersion: "4.0.12"},
+		{name: "newer_catalog_version", version: "999.0.0"},
+		{name: "different_cluster_version", version: "4.0.9", clusterVersion: "999.0.0"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			runtime.RunTest("", func(runtime.Runtime) {
@@ -385,7 +398,7 @@ func TestMaybeUpgradeTenantDoesNotCacheUncommittedOrFailedChecks(t *testing.T) {
 						}
 						return newBootstrapStringResult(test.version), nil
 					case strings.HasPrefix(sql, "select version, version_offset, state from mo_version"):
-						latest := v4_0_11.Handler.Metadata()
+						latest := final
 						if test.clusterVersion != "" {
 							latest.Version = test.clusterVersion
 						}
@@ -404,7 +417,7 @@ func TestMaybeUpgradeTenantDoesNotCacheUncommittedOrFailedChecks(t *testing.T) {
 					if test.ownTxn {
 						txnOp = &testTxnOperator{}
 					}
-					fetch := func() (int32, string, error) { return 11, "4.0.11", nil }
+					fetch := func() (int32, string, error) { return 11, final.Version, nil }
 					upgraded, err := b.MaybeUpgradeTenant(t.Context(), fetch, txnOp)
 					if test.ownTxn {
 						require.NoError(t, err)
@@ -426,7 +439,7 @@ func TestMaybeUpgradeTenantDoesNotCacheUncommittedOrFailedChecks(t *testing.T) {
 
 func TestMaybeUpgradeTenantRechecksVersionUnderLock(t *testing.T) {
 	runtime.RunTest("", func(runtime.Runtime) {
-		final := v4_0_11.Handler.Metadata()
+		final := statisticsFinalUpgradeVersion()
 		reads := 0
 		exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
 			switch {
@@ -456,7 +469,7 @@ func TestMaybeUpgradeTenantRechecksVersionUnderLock(t *testing.T) {
 
 func TestMaybeUpgradeTenantWaitHonorsCancellation(t *testing.T) {
 	runtime.RunTest("", func(runtime.Runtime) {
-		final := v4_0_11.Handler.Metadata()
+		final := statisticsFinalUpgradeVersion()
 		exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
 			switch {
 			case sql == "select create_version from mo_account where account_id = 11":
@@ -491,7 +504,7 @@ func TestMaybeUpgradeTenantRejectsConcurrentAccountDeletion(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			runtime.RunTest("", func(runtime.Runtime) {
-				final := v4_0_11.Handler.Metadata()
+				final := statisticsFinalUpgradeVersion()
 				var authenticated, dropped bool
 				exec := &statisticsTransactionTracker{SQLExecutor: executor.NewMemExecutor(
 					func(sql string) (executor.Result, error) {

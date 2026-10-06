@@ -139,11 +139,10 @@ func setProcForTest(fuzzyFilter *FuzzyFilter, proc *process.Process, typs []type
 }
 
 func TestString(t *testing.T) {
-	for _, tc := range makeTestCases(t) {
-		buf := new(bytes.Buffer)
-		tc.arg.String(buf)
-		require.Equal(t, "fuzzy_filter: fuzzy check duplicate constraint", buf.String())
-	}
+	var buf bytes.Buffer
+	arg := &FuzzyFilter{}
+	arg.String(&buf)
+	require.Equal(t, "fuzzy_filter: fuzzy check duplicate constraint", buf.String())
 }
 
 func TestPrepare(t *testing.T) {

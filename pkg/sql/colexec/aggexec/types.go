@@ -547,6 +547,13 @@ func makeAgg(
 	legacyDecimalSumResult bool,
 	param ...types.Type,
 ) (AggFuncExec, error) {
+	// Compact spill vectors inherit their type from this execution contract;
+	// ordinary partial-state vectors also validate their own wire metadata.
+	for _, typ := range param {
+		if err := requireLegacyAggregateType(typ); err != nil {
+			return nil, err
+		}
+	}
 	exec, ok, err := makeSpecialAggExec(
 		mg, aggID, isDistinct, legacyTextMinMax, legacyVarianceState,
 		legacyDecimalSumState, legacyDecimalSumResult, param...)

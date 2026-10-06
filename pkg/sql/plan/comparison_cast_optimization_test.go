@@ -1834,7 +1834,7 @@ func TestDecimalFloatOptimizedFilterResults(t *testing.T) {
 			{"c between " + tc.peer + " and " + tc.peer, tc.equal},
 		} {
 			t.Run(tc.name+"/"+predicate.sql, func(t *testing.T) {
-				mock := NewMockOptimizer(false)
+				mock := NewMockOptimizer(false, newPlanTestProcess(t))
 				table := makeExprOptCompositeSortKeyTableDef()
 				table.Name, table.TblId = "decimal_float_filter", 99193
 				table.Cols[2].Typ = makePlan2Type(&tc.column)

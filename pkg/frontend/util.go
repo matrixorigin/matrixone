@@ -37,6 +37,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -2036,6 +2037,14 @@ func mysqlDecimalType(precision, scale int32) types.Type {
 }
 
 func setMysqlColumnTypeInfo(ctx context.Context, typ types.Type, col *MysqlColumn) error {
+	if err := typ.ValidateCollation(); err != nil {
+		return err
+	}
+	if typ.Charset != 255 {
+		if err := collation.RequireLegacy(uint32(typ.Charset), uint32(typ.CollationVersion), 0); err != nil {
+			return err
+		}
+	}
 	if err := convertEngineTypeToMysqlType(ctx, typ.Oid, col); err != nil {
 		return err
 	}
@@ -2049,21 +2058,11 @@ func setMysqlColumnTypeInfo(ctx context.Context, typ types.Type, col *MysqlColum
 	}
 	setMysqlColumnTypeMetadata(col, typ)
 	setCharacter(col)
-	switch typ.Charset {
-	case types.CharsetUTF8:
-		// CharsetUTF8 is MatrixOne's explicit utf8mb4_general_ci identity.
-		// setCharacter uses the older utf8_general_ci protocol default, so
-		// override it with the exact utf8mb4 collation ID.
-		col.SetCharset(uint16(Utf8mb4CollationID))
-	case types.CharsetUTF8MB4Bin:
-		// A _bin collation still describes nonbinary UTF-8 text. Protocol
-		// collation 63 is reserved for the binary character set.
-		col.SetCharset(uint16(utf8mb4BinCollationID))
-	case types.CharsetBinary:
-		// Some internal functions intentionally return packed bytes in a VARCHAR
-		// container. Keep those values binary even though their physical OID is a
-		// text OID; clients must not attempt UTF-8 conversion on the payload.
-		col.SetCharset(charsetBinary)
+	// Keep zero-value protocol defaults. Explicit collation metadata comes
+	// from the same capability owner as admission; 255 is a numeric CAST marker.
+	if typ.Charset != types.CharsetLegacy && typ.Charset != 255 {
+		d, _ := collation.EffectiveDefinition(uint32(typ.Charset), uint32(typ.CollationVersion))
+		col.SetCharset(d.ProtocolID)
 	}
 	if typ.Oid == types.T_binary || typ.Oid == types.T_varbinary {
 		col.SetFlag(col.Flag() | uint16(defines.BINARY_FLAG))
@@ -2791,9 +2790,10 @@ func colDef2MysqlColumn(ctx context.Context, col *plan.ColDef) (*MysqlColumn, er
 	c.SetOrgTable(orgTable)
 	c.SetAutoIncr(col.Typ.AutoIncr)
 	c.SetSchema(col.DbName)
-	typ := types.NewWithCharset(
-		types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale, uint8(col.Typ.Charset),
-	)
+	typ, err := types.TypeFromPlan(col.Typ)
+	if err != nil {
+		return nil, err
+	}
 	if err = setMysqlColumnTypeInfo(ctx, typ, c); err != nil {
 		return nil, err
 	}
@@ -3054,12 +3054,13 @@ func extractTableDefColumns(erArray []ExecResult, ctx context.Context, dbName, t
 				OriginName: colName,
 				Hidden:     isHidden == 1,
 				Typ: plan.Type{
-					Id:          int32(typ.Oid),
-					Width:       typ.Width,
-					Scale:       typ.Scale,
-					Charset:     uint32(typ.Charset),
-					Table:       table,
-					NotNullable: !def.NullAbility,
+					Id:               int32(typ.Oid),
+					Width:            typ.Width,
+					Scale:            typ.Scale,
+					Charset:          uint32(typ.Charset),
+					CollationVersion: uint32(typ.CollationVersion),
+					Table:            table,
+					NotNullable:      !def.NullAbility,
 				},
 				Default: def,
 			})

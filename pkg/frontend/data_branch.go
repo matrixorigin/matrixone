@@ -1306,9 +1306,7 @@ func getTableStuff(
 			continue
 		}
 
-		t := types.NewWithCharset(
-			types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale, uint8(col.Typ.Charset),
-		)
+		t := types.MustTypeFromPlan(col.Typ)
 
 		tblStuff.def.colNames = append(tblStuff.def.colNames, col.Name)
 		tblStuff.def.colTypes = append(tblStuff.def.colTypes, t)
@@ -1832,7 +1830,7 @@ func isDataBranchLogicalTypeEquivalent(left, right plan.Type) bool {
 		left.Width == right.Width &&
 		left.Scale == right.Scale &&
 		left.Enumvalues == right.Enumvalues &&
-		left.Charset == right.Charset &&
+		left.SameCollation(right) &&
 		left.NotNullable == right.NotNullable &&
 		left.AutoIncr == right.AutoIncr
 }

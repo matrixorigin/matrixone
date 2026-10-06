@@ -566,8 +566,8 @@ func TestCeil(t *testing.T) {
 	testCases := initCeilTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess(nil)
-	t.Cleanup(func() { proc.GetFileService().Close(proc.Ctx); proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 	for _, tc := range testCases {
 		var fcTC FunctionTestCase
 		switch tc.typ {
@@ -587,8 +587,8 @@ func TestCeil(t *testing.T) {
 }
 
 func TestCeilFloorDecimal128Int64Boundaries(t *testing.T) {
-	proc := testutil.NewProcess(nil)
-	t.Cleanup(func() { proc.GetFileService().Close(proc.Ctx); proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 	decimalType := types.New(types.T_decimal128, 19, 0)
 	values := make([]types.Decimal128, 0, 6)
 	for _, value := range []string{
@@ -674,8 +674,8 @@ func TestFloor(t *testing.T) {
 	testCases := initFloorTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess(nil)
-	t.Cleanup(func() { proc.GetFileService().Close(proc.Ctx); proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 	for _, tc := range testCases {
 		var fcTC FunctionTestCase
 		switch tc.typ {
@@ -695,8 +695,8 @@ func TestFloor(t *testing.T) {
 }
 
 func TestFloorStrSkipsNullAndMaskedRows(t *testing.T) {
-	proc := testutil.NewProcess(nil)
-	t.Cleanup(func() { proc.GetFileService().Close(proc.Ctx); proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 
 	for _, tc := range []struct {
 		name       string
@@ -784,8 +784,8 @@ func TestFloorStrSkipsNullAndMaskedRows(t *testing.T) {
 }
 
 func TestFloorStrDecimalPlacesMustBeConstant(t *testing.T) {
-	proc := testutil.NewProcess(nil)
-	t.Cleanup(func() { proc.GetFileService().Close(proc.Ctx); proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 
 	for _, tc := range []struct {
 		name   string
@@ -876,8 +876,8 @@ func TestRound(t *testing.T) {
 	testCases := initRoundTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess(nil)
-	t.Cleanup(func() { proc.GetFileService().Close(proc.Ctx); proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 	for _, tc := range testCases {
 		var fcTC FunctionTestCase
 		switch tc.typ {
@@ -1696,7 +1696,6 @@ func TestTimestampAddComprehensiveFromExpectResult(t *testing.T) {
 
 func TestTimestampAddStringFormats(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	t.Cleanup(proc.Free)
 	native, heap := proc.Mp().CurrNB(), proc.Mp().OnHeapCurrNB()
 	t.Cleanup(func() {
 		require.Equal(t, native, proc.Mp().CurrNB())
@@ -1744,7 +1743,6 @@ func TestTimestampAddStringFormats(t *testing.T) {
 
 func TestTimestampAddErrorHandling(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	t.Cleanup(proc.Free)
 	native, heap := proc.Mp().CurrNB(), proc.Mp().OnHeapCurrNB()
 	t.Cleanup(func() {
 		require.Equal(t, native, proc.Mp().CurrNB())
@@ -6400,8 +6398,8 @@ func initTruncateTestCase() []tcTemp {
 func TestTruncate(t *testing.T) {
 	testCases := initTruncateTestCase()
 
-	proc := testutil.NewProcess(nil)
-	t.Cleanup(func() { proc.GetFileService().Close(proc.Ctx); proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, TruncateFloat64)
 		s, info := fcTC.RunAndFree()
@@ -6421,8 +6419,8 @@ func TestMathPrecisionNullContract(t *testing.T) {
 		{"truncate", TruncateFloat64, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcess(nil)
-			t.Cleanup(func() { proc.GetFileService().Close(proc.Ctx); proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+			proc := newMemoryFunctionTestProcess(t)
+			t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 			for _, nullValue := range []bool{false, true} {
 				fc := NewFunctionTestCase(proc, []FunctionTestInput{
 					NewFunctionTestConstInput(types.T_float64.ToType(), []float64{123.342}, []bool{nullValue}),
@@ -6453,8 +6451,8 @@ func TestRoundAndTruncateReusePrecisionFrame(t *testing.T) {
 		{"truncate", TruncateFloat64, []float64{140, 149}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcess(nil)
-			t.Cleanup(func() { proc.GetFileService().Close(proc.Ctx); proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+			proc := newMemoryFunctionTestProcess(t)
+			t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 			result := vector.NewFunctionResultWrapper(types.T_float64.ToType(), proc.Mp())
 			defer result.Free()
 			values := vector.NewVec(types.T_float64.ToType())
@@ -6500,8 +6498,8 @@ func TestRoundAndTruncateReusePrecisionFrame(t *testing.T) {
 }
 
 func TestRoundAndTruncateWithDynamicDigits(t *testing.T) {
-	proc := testutil.NewProcess(nil)
-	t.Cleanup(func() { proc.GetFileService().Close(proc.Ctx); proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 	values := NewFunctionTestInput(types.T_float64.ToType(), []float64{123.4567, 123.4567, 123.4567, 123.4567, -123.4567, 123.4567}, nil)
 	digits := NewFunctionTestInput(types.T_int64.ToType(), []int64{0, 1, 2, -1, 1, 0}, []bool{false, false, false, false, false, true})
 	expectedRound := NewFunctionTestResult(types.T_float64.ToType(), false,
@@ -6559,154 +6557,9 @@ func TestSqrt(t *testing.T) {
 	}
 }
 
-func initSqrtArrayTestCase() []tcTemp {
-	return []tcTemp{
-		{
-			info: "test sqrt float32 array",
-			typ:  types.T_array_float32,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float32.ToType(),
-					[][]float32{{4, 9, 16}, {0, 25, 49}},
-					[]bool{false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_array_float64.ToType(), false,
-				//NOTE: SQRT(vecf32) --> vecf64
-				[][]float64{{2, 3, 4}, {0, 5, 7}},
-				[]bool{false, false}),
-		},
-		{
-			info: "test sqrt float64 array",
-			typ:  types.T_array_float64,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float64.ToType(),
-					[][]float64{{4, 9, 16}, {0, 25, 49}},
-					[]bool{false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_array_float64.ToType(), false,
-				[][]float64{{2, 3, 4}, {0, 5, 7}},
-				[]bool{false, false}),
-		},
-		{
-			info: "test sqrt array with err",
-			typ:  types.T_array_float32,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float32.ToType(),
-					[][]float32{{4, -9, 16}},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_array_float64.ToType(), false,
-				[][]float64{{0, 0, 0}},
-				[]bool{true}),
-		},
-	}
-}
-
-func TestSqrtArray(t *testing.T) {
-	testCases := initSqrtArrayTestCase()
-
-	proc := testutil.NewProcess(t)
-	for _, tc := range testCases {
-		var fcTC FunctionTestCase
-		switch tc.typ {
-		case types.T_array_float32:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInSqrtArray[float32])
-		case types.T_array_float64:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInSqrtArray[float64])
-		}
-		s, info := fcTC.RunAndFree()
-		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
-	}
-}
-
 // Inner Product
-func initInnerProductArrayTestCase() []tcTemp {
-	return []tcTemp{
-		{
-			info: "test InnerProduct float32 array",
-			typ:  types.T_array_float32,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}, {4, 5, 6}}, []bool{false, false}),
-				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}, {4, 5, 6}}, []bool{false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{-14, -77},
-				[]bool{false, false}),
-		},
-		{
-			info: "test InnerProduct float64 array",
-			typ:  types.T_array_float64,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float64.ToType(), [][]float64{{1, 2, 3}, {4, 5, 6}}, []bool{false, false}),
-				NewFunctionTestInput(types.T_array_float64.ToType(), [][]float64{{1, 2, 3}, {4, 5, 6}}, []bool{false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{-14, -77},
-				[]bool{false, false}),
-		},
-	}
-}
-
-func TestInnerProductArray(t *testing.T) {
-	testCases := initInnerProductArrayTestCase()
-
-	proc := testutil.NewProcess(t)
-	for _, tc := range testCases {
-		var fcTC FunctionTestCase
-		switch tc.typ {
-		case types.T_array_float32:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, InnerProductArray[float32])
-		case types.T_array_float64:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, InnerProductArray[float64])
-		}
-		s, info := fcTC.RunAndFree()
-		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
-	}
-}
 
 // Cosine Similarity
-func initCosineSimilarityArrayTestCase() []tcTemp {
-	return []tcTemp{
-		{
-			info: "test CosineSimilarity float32 array",
-			typ:  types.T_array_float32,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}, {4, 5, 6}}, []bool{false, false}),
-				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}, {4, 5, 6}}, []bool{false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{1, 1},
-				[]bool{false, false}),
-		},
-		{
-			info: "test CosineSimilarity float64 array",
-			typ:  types.T_array_float64,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float64.ToType(), [][]float64{{1, 2, 3}, {4, 5, 6}}, []bool{false, false}),
-				NewFunctionTestInput(types.T_array_float64.ToType(), [][]float64{{1, 2, 3}, {4, 5, 6}}, []bool{false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{1, 1},
-				[]bool{false, false}),
-		},
-	}
-}
-
-func TestCosineSimilarityArray(t *testing.T) {
-	testCases := initCosineSimilarityArrayTestCase()
-
-	proc := testutil.NewProcess(t)
-	for _, tc := range testCases {
-		var fcTC FunctionTestCase
-		switch tc.typ {
-		case types.T_array_float32:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, CosineSimilarityArray[float32])
-		case types.T_array_float64:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, CosineSimilarityArray[float64])
-		}
-		s, info := fcTC.RunAndFree()
-		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
-	}
-}
 
 // L2 Distance
 func initStDistanceTestCase() []tcTemp {
@@ -11209,49 +11062,6 @@ func TestGeometryDistanceHelpersRejectMalformedSlices(t *testing.T) {
 
 // L1 Distance — sum|a-b|, exact for these inputs in both float widths:
 // |1-10|+|2-20|+|3-30| = 54 and |4-40|+|5-50|+|6-60| = 135.
-func initL1DistanceArrayTestCase() []tcTemp {
-	return []tcTemp{
-		{
-			info: "test L1Distance float32 array",
-			typ:  types.T_array_float32,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}, {4, 5, 6}}, []bool{false, false}),
-				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{10, 20, 30}, {40, 50, 60}}, []bool{false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{54, 135},
-				[]bool{false, false}),
-		},
-		{
-			info: "test L1Distance float64 array",
-			typ:  types.T_array_float64,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float64.ToType(), [][]float64{{1, 2, 3}, {4, 5, 6}}, []bool{false, false}),
-				NewFunctionTestInput(types.T_array_float64.ToType(), [][]float64{{10, 20, 30}, {40, 50, 60}}, []bool{false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{54, 135},
-				[]bool{false, false}),
-		},
-	}
-}
-
-func TestL1DistanceArray(t *testing.T) {
-	testCases := initL1DistanceArrayTestCase()
-
-	proc := testutil.NewProcess(t)
-	for _, tc := range testCases {
-		var fcTC FunctionTestCase
-		switch tc.typ {
-		case types.T_array_float32:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, L1DistanceArray[float32])
-		case types.T_array_float64:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, L1DistanceArray[float64])
-		}
-		s, info := fcTC.RunAndFree()
-		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
-	}
-}
 
 // TestL1DistanceArrayConstQuery covers the BATCHED path: batchArrayDistanceSync only
 // engages when exactly one operand is constant, which is the shape of every real
@@ -11349,96 +11159,8 @@ func TestL1DistanceArrayConstQueryMaskedRow(t *testing.T) {
 }
 
 // L2 Distance
-func initL2DistanceArrayTestCase() []tcTemp {
-	return []tcTemp{
-		{
-			info: "test L2Distance float32 array",
-			typ:  types.T_array_float32,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}, {4, 5, 6}}, []bool{false, false}),
-				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{10, 20, 30}, {40, 50, 60}}, []bool{false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{33.6749153137207, 78.97467803955078},
-				[]bool{false, false}),
-		},
-		{
-			// Vector distances are a float32 domain (#29040 / #29050), so a float64 base rounds to
-			// float32 -- not the old exact-f64 33.67491648096547 / 78.9746794865291.
-			info: "test L2Distance float64 array",
-			typ:  types.T_array_float64,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float64.ToType(), [][]float64{{1, 2, 3}, {4, 5, 6}}, []bool{false, false}),
-				NewFunctionTestInput(types.T_array_float64.ToType(), [][]float64{{10, 20, 30}, {40, 50, 60}}, []bool{false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{float64(float32(33.67491648096547)), float64(float32(78.9746794865291))},
-				[]bool{false, false}),
-		},
-	}
-}
-
-func TestL2DistanceArray(t *testing.T) {
-	testCases := initL2DistanceArrayTestCase()
-
-	proc := testutil.NewProcess(t)
-	for _, tc := range testCases {
-		var fcTC FunctionTestCase
-		switch tc.typ {
-		case types.T_array_float32:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, L2DistanceArray[float32])
-		case types.T_array_float64:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, L2DistanceArray[float64])
-		}
-		s, info := fcTC.RunAndFree()
-		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
-	}
-}
 
 // Cosine Distance
-func initCosineDistanceArrayTestCase() []tcTemp {
-	return []tcTemp{
-		{
-			info: "test CosineDistance float32 array",
-			typ:  types.T_array_float32,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}, {4, 5, 6}}, []bool{false, false}),
-				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{10, 20, 30}, {5, 6, 7}}, []bool{false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{0, 0.0003542540071066469},
-				[]bool{false, false}),
-		},
-		{
-			info: "test CosineDistance float64 array",
-			typ:  types.T_array_float64,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float64.ToType(), [][]float64{{1, 2, 3}, {4, 5, 6}}, []bool{false, false}),
-				NewFunctionTestInput(types.T_array_float64.ToType(), [][]float64{{10, 20, 30}, {5, 6, 7}}, []bool{false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{0, 0.0003542540112345671},
-				[]bool{false, false}),
-		},
-	}
-}
-
-func TestCosineDistanceArray(t *testing.T) {
-	testCases := initCosineDistanceArrayTestCase()
-
-	proc := testutil.NewProcess(t)
-	for _, tc := range testCases {
-		var fcTC FunctionTestCase
-		switch tc.typ {
-		case types.T_array_float32:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, CosineDistanceArray[float32])
-		case types.T_array_float64:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, CosineDistanceArray[float64])
-		}
-		s, info := fcTC.RunAndFree()
-		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
-	}
-}
 
 // Extract
 func initExtractTestCase() []tcTemp {
@@ -13618,7 +13340,6 @@ func TestTemporalMicrosecondBoundaryOverflowIsNull(t *testing.T) {
 	timestampInputs := func(t *testing.T, dateAddSyntax bool) (*process.Process, []*vector.Vector, vector.FunctionResultWrapper) {
 		t.Helper()
 		proc := testutil.NewProcess(t)
-		t.Cleanup(proc.Free)
 		proc.GetSessionInfo().TimeZone = time.UTC
 		timestampVec := vector.NewVec(types.New(types.T_timestamp, 0, 6))
 		t.Cleanup(func() { timestampVec.Free(proc.Mp()) })
@@ -13677,7 +13398,6 @@ func TestTemporalMicrosecondBoundaryOverflowIsNull(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
-			t.Cleanup(proc.Free)
 			stringVec := vector.NewVec(types.T_varchar.ToType())
 			t.Cleanup(func() { stringVec.Free(proc.Mp()) })
 			require.NoError(t, vector.AppendStringList(stringVec, []string{
@@ -17070,7 +16790,6 @@ func TestTimestampAddDateWarningsPerSelectedRow(t *testing.T) {
 		for _, constant := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/constant=%t", unitText, constant), func(t *testing.T) {
 				proc := testutil.NewProcess(t)
-				t.Cleanup(proc.Free)
 				warnings := &numericWarningSession{}
 				proc.WarningSink = warnings
 				var unit *vector.Vector

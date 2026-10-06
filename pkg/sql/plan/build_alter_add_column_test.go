@@ -184,7 +184,7 @@ func TestLowPrecisionFloatKeyParts(t *testing.T) {
 		require.NoError(t, checkPrimaryKeyPartType(ctx, plan.Type{Id: int32(id)}, "k"))
 	}
 
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	for _, typ := range []string{"bf16", "float16", "float8", "float4"} {
 		for _, sql := range []string{
 			"create table lp (k " + typ + " primary key, v int)",

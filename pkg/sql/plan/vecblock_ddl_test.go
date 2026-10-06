@@ -23,7 +23,7 @@ import (
 )
 
 func TestVecBlockDDL(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	for _, typ := range []string{"vecf8", "vecf4"} {
 		runTestShouldPass(mock, t, []string{
 			"create table vb_ok (id int primary key, v " + typ + "(4), w " + typ + "(1024))",

@@ -84,7 +84,7 @@ func TestVectorGeneratedColumnAssignment(t *testing.T) {
 	require.Equal(t, "cast", gen.Expr.GetF().Func.ObjName)
 	require.Equal(t, "greatest", gen.Expr.GetF().Args[0].GetF().Func.ObjName)
 
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	legacy := gen.Expr.GetF().Args[0]
 	for _, ignore := range []bool{false, true} {
 		checked, err := builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(legacy), ignore)

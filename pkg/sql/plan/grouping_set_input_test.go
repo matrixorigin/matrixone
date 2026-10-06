@@ -31,22 +31,8 @@ import (
 func useLegacyGroupingSetPlan(t *testing.T, mock *MockOptimizer) {
 	t.Helper()
 	proc := mock.CurrentContext().GetProcess()
-	rt := moruntime.ServiceRuntime(proc.GetService())
-	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	oldHints, hadHints := rt.GetGlobalVariables("optimizer_hints")
-	t.Cleanup(func() {
-		if hadVersion {
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
-		} else {
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-		}
-		if hadHints {
-			rt.SetGlobalVariables("optimizer_hints", oldHints)
-		} else {
-			rt.SetGlobalVariables("optimizer_hints", "")
-		}
-	})
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion47)
+
+	setPlanTestGlobalVariable(t, proc.GetService(), moruntime.MOProtocolVersion, defines.MORPCVersion47)
 }
 
 func TestGroupingSetInputSharingProtocolGate(t *testing.T) {
@@ -55,26 +41,11 @@ func TestGroupingSetInputSharingProtocolGate(t *testing.T) {
 		from lineitem
 		group by l_returnflag, l_linestatus with rollup`
 
-	ctx := NewMockCompilerContext(true)
-	rt := moruntime.ServiceRuntime(ctx.GetProcess().GetService())
-	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	oldHints, hadHints := rt.GetGlobalVariables("optimizer_hints")
-	t.Cleanup(func() {
-		if hadVersion {
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
-		} else {
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-		}
-		if hadHints {
-			rt.SetGlobalVariables("optimizer_hints", oldHints)
-		} else {
-			rt.SetGlobalVariables("optimizer_hints", "")
-		}
-	})
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 
 	build := func(version int64) *planpb.Query {
 		t.Helper()
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+		setPlanTestGlobalVariable(t, ctx.GetProcess().GetService(), moruntime.MOProtocolVersion, version)
 		stmt, err := mysql.ParseOne(context.Background(), sql, 1)
 		require.NoError(t, err)
 		defer stmt.Free()
@@ -97,7 +68,7 @@ func TestGroupingSetInputSharingProtocolGate(t *testing.T) {
 	require.Equal(t, []bool{true, true, true, false, false, false}, shared.flags)
 	require.True(t, shared.hasEmptyRowMarker)
 
-	rt.SetGlobalVariables("optimizer_hints", "sharedComputation=1")
+	setPlanTestGlobalVariable(t, ctx.GetProcess().GetService(), "optimizer_hints", "sharedComputation=1")
 	rolledBack := reachableGroupingSetShape(build(defines.MORPCVersion49))
 	require.Equal(t, 3, rolledBack.tableScans)
 	require.Zero(t, rolledBack.expandProjects)
@@ -109,24 +80,10 @@ func TestGroupingSetInputSharingKeepsDecimalSumOnRawInput(t *testing.T) {
 		from lineitem
 		group by rollup(l_returnflag, l_linestatus, l_shipmode)`
 
-	ctx := NewMockCompilerContext(true)
-	rt := moruntime.ServiceRuntime(ctx.GetProcess().GetService())
-	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	oldHints, hadHints := rt.GetGlobalVariables("optimizer_hints")
-	t.Cleanup(func() {
-		if hadVersion {
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
-		} else {
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-		}
-		if hadHints {
-			rt.SetGlobalVariables("optimizer_hints", oldHints)
-		} else {
-			rt.SetGlobalVariables("optimizer_hints", "")
-		}
-	})
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion49)
-	rt.SetGlobalVariables("optimizer_hints", "")
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+
+	setPlanTestGlobalVariable(t, ctx.GetProcess().GetService(), moruntime.MOProtocolVersion, defines.MORPCVersion49)
+	setPlanTestGlobalVariable(t, ctx.GetProcess().GetService(), "optimizer_hints", "")
 
 	stmt, err := mysql.ParseOne(context.Background(), sql, 1)
 	require.NoError(t, err)
@@ -155,24 +112,10 @@ func TestGroupingSetInputSharingRejectsInheritedGroupingSentinel(t *testing.T) {
 		) d
 		group by rollup(d.l_returnflag)`
 
-	ctx := NewMockCompilerContext(true)
-	rt := moruntime.ServiceRuntime(ctx.GetProcess().GetService())
-	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	oldHints, hadHints := rt.GetGlobalVariables("optimizer_hints")
-	t.Cleanup(func() {
-		if hadVersion {
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
-		} else {
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-		}
-		if hadHints {
-			rt.SetGlobalVariables("optimizer_hints", oldHints)
-		} else {
-			rt.SetGlobalVariables("optimizer_hints", "")
-		}
-	})
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion49)
-	rt.SetGlobalVariables("optimizer_hints", "")
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+
+	setPlanTestGlobalVariable(t, ctx.GetProcess().GetService(), moruntime.MOProtocolVersion, defines.MORPCVersion49)
+	setPlanTestGlobalVariable(t, ctx.GetProcess().GetService(), "optimizer_hints", "")
 
 	stmt, err := mysql.ParseOne(context.Background(), sql, 1)
 	require.NoError(t, err)
@@ -197,24 +140,10 @@ func TestGroupingSetInputSharingRequiresLegacyDrainWitness(t *testing.T) {
 		group by rollup(l_returnflag)
 		limit 1`
 
-	ctx := NewMockCompilerContext(true)
-	rt := moruntime.ServiceRuntime(ctx.GetProcess().GetService())
-	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	oldHints, hadHints := rt.GetGlobalVariables("optimizer_hints")
-	t.Cleanup(func() {
-		if hadVersion {
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
-		} else {
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-		}
-		if hadHints {
-			rt.SetGlobalVariables("optimizer_hints", oldHints)
-		} else {
-			rt.SetGlobalVariables("optimizer_hints", "")
-		}
-	})
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion49)
-	rt.SetGlobalVariables("optimizer_hints", "")
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+
+	setPlanTestGlobalVariable(t, ctx.GetProcess().GetService(), moruntime.MOProtocolVersion, defines.MORPCVersion49)
+	setPlanTestGlobalVariable(t, ctx.GetProcess().GetService(), "optimizer_hints", "")
 
 	stmt, err := mysql.ParseOne(context.Background(), sql, 1)
 	require.NoError(t, err)
@@ -233,24 +162,10 @@ func TestGroupingSetInputSharingAllowsFallibleKeyWhenAllBranchesDrain(t *testing
 		from lineitem
 		group by rollup(cast(l_returnflag as bigint))`
 
-	ctx := NewMockCompilerContext(true)
-	rt := moruntime.ServiceRuntime(ctx.GetProcess().GetService())
-	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	oldHints, hadHints := rt.GetGlobalVariables("optimizer_hints")
-	t.Cleanup(func() {
-		if hadVersion {
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
-		} else {
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-		}
-		if hadHints {
-			rt.SetGlobalVariables("optimizer_hints", oldHints)
-		} else {
-			rt.SetGlobalVariables("optimizer_hints", "")
-		}
-	})
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion49)
-	rt.SetGlobalVariables("optimizer_hints", "")
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+
+	setPlanTestGlobalVariable(t, ctx.GetProcess().GetService(), moruntime.MOProtocolVersion, defines.MORPCVersion49)
+	setPlanTestGlobalVariable(t, ctx.GetProcess().GetService(), "optimizer_hints", "")
 
 	stmt, err := mysql.ParseOne(context.Background(), sql, 1)
 	require.NoError(t, err)

@@ -111,6 +111,9 @@ func exportCandidate(q *planpb.Query, embeddedMO bool) (*Candidate, error) {
 	if q == nil {
 		return nil, moerr.NewInternalErrorNoCtx("substrait: missing query")
 	}
+	if err := planpb.RequireLegacyCollations(q); err != nil {
+		return nil, notEligiblef(EligibilityExpression, "unsupported collation metadata: %v", err)
+	}
 	if q.StmtType != planpb.Query_SELECT || len(q.Steps) == 0 || len(q.BackgroundQueries) != 0 {
 		return nil, notEligiblef(EligibilityPlanShape, "a SELECT query root is required")
 	}
@@ -164,6 +167,9 @@ func exportCandidate(q *planpb.Query, embeddedMO bool) (*Candidate, error) {
 func (c *Candidate) Build(readValues map[int32][]byte) ([]byte, error) {
 	if c == nil {
 		return nil, moerr.NewInternalErrorNoCtxf("substrait: nil candidate")
+	}
+	if err := planpb.RequireLegacyCollations(c.query); err != nil {
+		return nil, notEligiblef(EligibilityExpression, "unsupported collation metadata: %v", err)
 	}
 	if c.embeddedMO {
 		return nil, notEligiblef(EligibilityPlanShape, "MO-reader candidate cannot be emitted as Flight")
@@ -1339,6 +1345,9 @@ func validateExprFields(exprs []*planpb.Expr, inputs []int) error {
 // CanonicalSchema serializes the exact Substrait schema used in ReadRel and
 // lets snapshot admission detect catalog drift after logical planning.
 func CanonicalSchema(t *planpb.TableDef) ([]byte, error) {
+	if err := planpb.RequireLegacyCollations(t); err != nil {
+		return nil, notEligiblef(EligibilityExpression, "unsupported collation metadata: %v", err)
+	}
 	schema, err := namedStruct(t)
 	if err != nil {
 		return nil, err

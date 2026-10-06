@@ -62,7 +62,7 @@ func TestBuildLeastGreatestTemporalScale(t *testing.T) {
 		"select greatest(cast('10:00:00.1' as time(1)), cast('10:00:00.99' as time(2)))", 1)
 	require.NoError(t, err)
 
-	pl, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+	pl, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
 	require.NoError(t, err)
 
 	var result *planpb.Expr
@@ -79,7 +79,7 @@ func TestBuildLeastGreatestTemporalScale(t *testing.T) {
 }
 
 func TestMinMaxMixedTextLeastGreatestPreservesBinaryCollation(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	mock.ctxt.tables["bind_select"].Cols[1].Typ = planpb.Type{
 		Id:      int32(types.T_varchar),
 		Width:   80,
@@ -140,7 +140,7 @@ func TestMinMaxJSONLeastGreatestPreservesBinaryCollation(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			mock.ctxt.tables["bind_select"].Cols[0].Typ = planpb.Type{Id: int32(types.T_date)}
 			mock.ctxt.tables["bind_select"].Cols[1].Typ = planpb.Type{
 				Id:      int32(types.T_varchar),
@@ -182,7 +182,7 @@ func TestMinMaxJSONLeastGreatestPreservesBinaryCollation(t *testing.T) {
 }
 
 func TestConstantFoldLeastGreatestTemporalScale(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
 		"select greatest(cast('10:00:00.1' as time(1)), cast('10:00:00.99' as time(2)))", 1)
 	require.NoError(t, err)
@@ -257,7 +257,7 @@ func TestConstantFoldLeastGreatestBitUsesNumericText(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			ctx := NewMockCompilerContext(true)
+			ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)
 			require.NoError(t, err)
 
