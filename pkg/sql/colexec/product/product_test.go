@@ -43,10 +43,9 @@ func TestProductAllocationSiteLedger(t *testing.T) {
 
 // add unit tests for cases
 type productTestCase struct {
-	arg         *Product
-	proc        *process.Process
-	barg        *hashbuild.HashBuild
-	resultBatch *batch.Batch
+	arg  *Product
+	proc *process.Process
+	barg *hashbuild.HashBuild
 }
 
 var (
@@ -55,7 +54,7 @@ var (
 
 func makeTestCases(t *testing.T) []productTestCase {
 	return []productTestCase{
-		newTestCase(t, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)}),
+		newTestCase(t, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)}),
 	}
 }
 
@@ -71,7 +70,6 @@ func TestPrepare(t *testing.T) {
 		t.Cleanup(func() {
 			tc.arg.Free(tc.proc, false, nil)
 			tc.barg.Free(tc.proc, false, nil)
-			tc.resultBatch.Clean(tc.proc.Mp())
 			require.Zero(t, tc.proc.Mp().OnHeapCurrNB())
 		})
 		err := tc.arg.Prepare(tc.proc)
@@ -87,60 +85,54 @@ func TestPrepareRequiresAllocationAccount(t *testing.T) {
 
 func TestProduct(t *testing.T) {
 	for _, tc := range makeTestCases(t) {
-
-		resetChildren(tc.arg, tc.proc.Mp())
-		resetHashBuildChildren(tc.barg, tc.proc.Mp())
-		err := tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-		err = tc.barg.Prepare(tc.proc)
-		require.NoError(t, err)
-
-		res, err := vm.Exec(tc.barg, tc.proc)
-		require.NoError(t, err)
-		require.Equal(t, res.Batch == nil, true)
-		res, err = vm.Exec(tc.arg, tc.proc)
-		require.NoError(t, err)
-		require.Equal(t, res.Batch.RowCount(), tc.resultBatch.RowCount())
-		require.Equal(t, len(res.Batch.Vecs), len(tc.resultBatch.Vecs))
-		for i := range res.Batch.Vecs {
-			vec1 := res.Batch.Vecs[i]
-			vec2 := tc.resultBatch.Vecs[i]
-			require.Equal(t, vec1.GetType().Oid, vec2.GetType().Oid)
+		t.Cleanup(func() {
+			tc.arg.Free(tc.proc, false, nil)
+			tc.barg.Free(tc.proc, false, nil)
+			require.Zero(t, tc.proc.Mp().CurrNB())
+			require.Zero(t, tc.proc.Mp().OnHeapCurrNB())
+		})
+		for generation := 0; generation < 2; generation++ {
+			func() {
+				resetChildren(tc.arg, tc.proc.Mp())
+				resetHashBuildChildren(tc.barg, tc.proc.Mp())
+				probe := tc.arg.GetChildren(0)
+				build := tc.barg.GetChildren(0)
+				defer func() {
+					tc.arg.Reset(tc.proc, false, nil)
+					tc.barg.Reset(tc.proc, false, nil)
+					usedAfterReset := tc.arg.allocationAccount.Snapshot().Used
+					probe.Free(tc.proc, false, nil)
+					build.Free(tc.proc, false, nil)
+					tc.proc.GetMessageBoard().Reset()
+					require.Zero(t, usedAfterReset)
+					require.Zero(t, tc.proc.Mp().CurrNB())
+					require.Zero(t, tc.proc.Mp().OnHeapCurrNB())
+				}()
+				require.NoError(t, tc.arg.Prepare(tc.proc))
+				require.NoError(t, tc.barg.Prepare(tc.proc))
+				res, err := vm.Exec(tc.barg, tc.proc)
+				require.NoError(t, err)
+				require.Nil(t, res.Batch)
+				res, err = vm.Exec(tc.arg, tc.proc)
+				require.NoError(t, err)
+				require.NotNil(t, res.Batch)
+				require.Equal(t, 4, res.Batch.RowCount())
+				require.Len(t, res.Batch.Vecs, 2)
+				for _, vec := range res.Batch.Vecs {
+					require.Equal(t, types.T_int32, vec.GetType().Oid)
+					require.Zero(t, vec.GetNulls().Count())
+				}
+				left := vector.MustFixedColNoTypeCheck[int32](res.Batch.Vecs[0])
+				right := vector.MustFixedColNoTypeCheck[int32](res.Batch.Vecs[1])
+				require.Len(t, left, 4)
+				require.Len(t, right, 4)
+				pairs := make([][2]int32, 4)
+				for row := range pairs {
+					pairs[row] = [2]int32{left[row], right[row]}
+				}
+				require.ElementsMatch(t, [][2]int32{{1, 1}, {1, 1000}, {1000, 1}, {1000, 1000}}, pairs)
+			}()
 		}
-
-		tc.arg.Reset(tc.proc, false, nil)
-		tc.barg.Reset(tc.proc, false, nil)
-		require.Zero(t, tc.arg.allocationAccount.Snapshot().Used)
-
-		resetChildren(tc.arg, tc.proc.Mp())
-		resetHashBuildChildren(tc.barg, tc.proc.Mp())
-		tc.proc.GetMessageBoard().Reset()
-		err = tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-		err = tc.barg.Prepare(tc.proc)
-		require.NoError(t, err)
-
-		res, err = vm.Exec(tc.barg, tc.proc)
-		require.NoError(t, err)
-		require.Equal(t, res.Batch == nil, true)
-		res, err = vm.Exec(tc.arg, tc.proc)
-		require.NoError(t, err)
-		require.Equal(t, res.Batch.RowCount(), tc.resultBatch.RowCount())
-		require.Equal(t, len(res.Batch.Vecs), len(tc.resultBatch.Vecs))
-		for i := range res.Batch.Vecs {
-			vec1 := res.Batch.Vecs[i]
-			vec2 := tc.resultBatch.Vecs[i]
-			require.Equal(t, vec1.GetType().Oid, vec2.GetType().Oid)
-		}
-
-		tc.arg.Reset(tc.proc, false, nil)
-		tc.barg.Reset(tc.proc, false, nil)
-		require.Zero(t, tc.arg.allocationAccount.Snapshot().Used)
-
-		tc.arg.Free(tc.proc, false, nil)
-		tc.barg.Free(tc.proc, false, nil)
-		tc.proc.Free()
-		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
 
@@ -154,7 +146,7 @@ func TestProductPassesRecursiveMarker(t *testing.T) {
 		{name: "marker after empty build", probeData: true, emptyBuild: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			tc := newTestCase(t, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
+			tc := newTestCase(t, []colexec.ResultPos{
 				colexec.NewResultPos(0, 0),
 				colexec.NewResultPos(1, 0),
 			})
@@ -193,7 +185,7 @@ func TestProductPassesRecursiveMarker(t *testing.T) {
 
 func TestProductConsumesMultipleBuildBatchesWithoutCopy(t *testing.T) {
 	tc := newTestCase(
-		t, []types.Type{types.T_int32.ToType()},
+		t,
 		[]colexec.ResultPos{
 			colexec.NewResultPos(0, 0),
 			colexec.NewResultPos(1, 0),
@@ -234,14 +226,9 @@ func TestProductConsumesMultipleBuildBatchesWithoutCopy(t *testing.T) {
 	require.Zero(t, tc.proc.Mp().CurrNB())
 }
 
-func newTestCase(t *testing.T, ts []types.Type, rp []colexec.ResultPos) productTestCase {
+func newTestCase(t *testing.T, rp []colexec.ResultPos) productTestCase {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	proc.SetMessageBoard(message.NewMessageBoard())
-	resultBatch := batch.NewWithSize(len(rp))
-	resultBatch.SetRowCount(4)
-	for i := range rp {
-		resultBatch.Vecs[i] = vector.NewVec(ts[rp[i].Pos])
-	}
 	tag++
 	tc := productTestCase{
 		proc: proc,
@@ -254,7 +241,6 @@ func newTestCase(t *testing.T, ts []types.Type, rp []colexec.ResultPos) productT
 			JoinMapTag:    tag,
 			JoinMapRefCnt: 1,
 		},
-		resultBatch: resultBatch,
 	}
 	registry, err := mpool.NewAllocationAccountRegistry(1, 1<<20)
 	require.NoError(t, err)
