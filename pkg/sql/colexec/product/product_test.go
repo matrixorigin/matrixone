@@ -65,10 +65,10 @@ func makeTestCases(t *testing.T) []productTestCase {
 }
 
 func TestString(t *testing.T) {
-	buf := new(bytes.Buffer)
-	for _, tc := range makeTestCases(t) {
-		tc.arg.String(buf)
-	}
+	var buf bytes.Buffer
+	arg := &Product{}
+	arg.String(&buf)
+	require.Equal(t, "product: cross join ", buf.String())
 }
 
 func TestPrepare(t *testing.T) {

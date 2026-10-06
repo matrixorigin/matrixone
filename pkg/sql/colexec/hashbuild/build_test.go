@@ -94,10 +94,10 @@ func makeTestCases(t *testing.T) []buildTestCase {
 }
 
 func TestString(t *testing.T) {
-	buf := new(bytes.Buffer)
-	for _, tc := range makeTestCases(t) {
-		tc.arg.String(buf)
-	}
+	var buf bytes.Buffer
+	arg := &HashBuild{}
+	arg.String(&buf)
+	require.Equal(t, "hash_build: hash build ", buf.String())
 }
 
 func TestBuild(t *testing.T) {

@@ -90,10 +90,10 @@ func makeTestCases(t *testing.T) []outputTestCase {
 }
 
 func TestString(t *testing.T) {
-	buf := new(bytes.Buffer)
-	for _, tc := range makeTestCases(t) {
-		tc.arg.String(buf)
-	}
+	var buf bytes.Buffer
+	arg := &Output{}
+	arg.String(&buf)
+	require.Equal(t, "output: sql output", buf.String())
 }
 
 func TestPrepare(t *testing.T) {

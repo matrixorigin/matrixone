@@ -188,10 +188,10 @@ func makeTestCases(t *testing.T) []fillTestCase {
 }
 
 func TestString(t *testing.T) {
-	buf := new(bytes.Buffer)
-	for _, tc := range makeTestCases(t) {
-		tc.arg.String(buf)
-	}
+	var buf bytes.Buffer
+	arg := &Fill{}
+	arg.String(&buf)
+	require.Equal(t, "fill: fill", buf.String())
 }
 
 func TestPrepare(t *testing.T) {

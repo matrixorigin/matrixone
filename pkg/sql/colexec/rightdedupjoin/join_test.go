@@ -558,10 +558,10 @@ func makeTestCases(t *testing.T) []joinTestCase {
 }
 
 func TestString(t *testing.T) {
-	buf := new(bytes.Buffer)
-	for _, tc := range makeTestCases(t) {
-		tc.arg.String(buf)
-	}
+	var buf bytes.Buffer
+	arg := &RightDedupJoin{}
+	arg.String(&buf)
+	require.Equal(t, "right_dedup_join: right dedup join ", buf.String())
 }
 
 func TestRightDedupJoin(t *testing.T) {
