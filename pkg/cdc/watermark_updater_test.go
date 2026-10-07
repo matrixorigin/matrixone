@@ -3645,7 +3645,6 @@ func TestCDCWatermarkUpdater_wrapCronJob_ExportTimeReached(t *testing.T) {
 	}
 
 	wrappedJob := updater.wrapCronJob(job)
-	time.Sleep(time.Millisecond * 10) // Ensure interval passed
 	wrappedJob(context.Background())
 
 	require.True(t, jobExecuted)
@@ -3684,7 +3683,6 @@ func TestCDCWatermarkUpdater_wrapCronJob_QueryValidWatermarksFailed(t *testing.T
 	}
 
 	wrappedJob := updater.wrapCronJob(job)
-	time.Sleep(time.Millisecond * 10)
 	wrappedJob(context.Background())
 
 	require.True(t, jobExecuted)
@@ -3839,7 +3837,6 @@ func TestCDCWatermarkUpdater_wrapCronJob_EmptyWatermark(t *testing.T) {
 
 	job := func(ctx context.Context) {}
 	wrappedJob := updater.wrapCronJob(job)
-	time.Sleep(time.Millisecond * 10)
 	wrappedJob(context.Background())
 
 	// Empty watermark should be skipped (not processed for metrics)
@@ -3888,7 +3885,6 @@ func TestCDCWatermarkUpdater_wrapCronJob_ValidWatermarkMetrics(t *testing.T) {
 
 	job := func(ctx context.Context) {}
 	wrappedJob := updater.wrapCronJob(job)
-	time.Sleep(time.Millisecond * 10)
 	wrappedJob(context.Background())
 
 	// Valid watermark should remain
@@ -4002,7 +3998,6 @@ func TestCDCWatermarkUpdater_wrapCronJob_MultipleKeysMixed(t *testing.T) {
 
 	job := func(ctx context.Context) {}
 	wrappedJob := updater.wrapCronJob(job)
-	time.Sleep(time.Millisecond * 10)
 	wrappedJob(context.Background())
 
 	// key1 and key3 should remain, key2 should be removed
@@ -4058,7 +4053,6 @@ func TestCDCWatermarkUpdater_wrapCronJob_StatsExport(t *testing.T) {
 
 	job := func(ctx context.Context) {}
 	wrappedJob := updater.wrapCronJob(job)
-	time.Sleep(time.Millisecond * 10)
 	wrappedJob(context.Background())
 
 	// Verify stats are exported
@@ -4104,7 +4098,6 @@ func TestCDCWatermarkUpdater_wrapCronJob_NoKeysToRemove(t *testing.T) {
 
 	job := func(ctx context.Context) {}
 	wrappedJob := updater.wrapCronJob(job)
-	time.Sleep(time.Millisecond * 10)
 	wrappedJob(context.Background())
 
 	// Key should remain (no orphans to remove)
