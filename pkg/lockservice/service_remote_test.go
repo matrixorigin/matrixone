@@ -1025,14 +1025,60 @@ func TestHandleForwardLockDoesNotHoldBindChangeLockWhileWaitingForBind(t *testin
 			}
 			resp := acquireResponse()
 			defer releaseResponse(resp)
-			cs := &testClientSession{ctx: context.Background()}
+			// Service-close cancellation is orthogonal to this test's bind
+			// allocation wait. Disable the wrapper so the parent context's Done
+			// call is the actual wait select below.
+			serviceCtx := s.lifecycle.ctx
+			s.lifecycle.Lock()
+			s.lifecycle.ctx = nil
+			s.lifecycle.Unlock()
+			defer func() {
+				s.lifecycle.Lock()
+				s.lifecycle.ctx = serviceCtx
+				s.lifecycle.Unlock()
+			}()
+			// The default safety ceiling derives another context before table
+			// lookup. Disable it here so the barrier below observes the real
+			// allocation wait rather than context construction.
+			maxLockWaitDuration := s.cfg.MaxLockWaitDuration.Duration
+			s.cfg.MaxLockWaitDuration.Duration = 0
+			defer func() {
+				s.cfg.MaxLockWaitDuration.Duration = maxLockWaitDuration
+			}()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			waitCtx := &bindAllocationWaitContext{
+				Context: ctx,
+				entered: make(chan struct{}),
+			}
+			cs := &testClientSession{ctx: ctx}
 
 			done := make(chan struct{})
+			var releaseWait sync.Once
+			releaseAllocation := func() {
+				s.mu.Lock()
+				delete(s.mu.allocating[group], table)
+				s.mu.Unlock()
+				releaseWait.Do(func() { close(waitC) })
+			}
+			defer func() {
+				cancel()
+				releaseAllocation()
+				select {
+				case <-done:
+				case <-time.After(time.Second):
+					t.Errorf("forwarded lock did not finish during cleanup")
+				}
+			}()
 			go func() {
 				defer close(done)
-				s.handleForwardLock(context.Background(), nil, req, resp, cs)
+				s.handleForwardLock(waitCtx, nil, req, resp, cs)
 			}()
-			time.Sleep(20 * time.Millisecond)
+			select {
+			case <-waitCtx.entered:
+			case <-ctx.Done():
+				t.Fatal("forwarded lock did not reach the bind allocation wait")
+			}
 
 			published := make(chan struct{})
 			go func() {
@@ -1040,10 +1086,7 @@ func TestHandleForwardLockDoesNotHoldBindChangeLockWhileWaitingForBind(t *testin
 				s.bindChangeMu.Lock()
 				s.tableGroups.set(group, table, s.createLockTableByBind(bind))
 				s.bindChangeMu.Unlock()
-				s.mu.Lock()
-				delete(s.mu.allocating[group], table)
-				s.mu.Unlock()
-				close(waitC)
+				releaseAllocation()
 			}()
 
 			select {
