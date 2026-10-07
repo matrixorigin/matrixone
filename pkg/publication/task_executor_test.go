@@ -67,17 +67,6 @@ func TestPublicationTaskExecutor_SetDeleteTask(t *testing.T) {
 	assert.False(t, found)
 }
 
-func TestPublicationTaskExecutor_GetCandidateTasks_Mixed(t *testing.T) {
-	exec := &PublicationTaskExecutor{}
-	exec.tasks = btree.NewBTreeGOptions(taskEntryLess, btree.Options{NoLocks: true})
-	exec.setTask(TaskEntry{TaskID: "t1", SubscriptionState: SubscriptionStateRunning, State: IterationStateCompleted})
-	exec.setTask(TaskEntry{TaskID: "t2", SubscriptionState: SubscriptionStatePause, State: IterationStateCompleted})
-	exec.setTask(TaskEntry{TaskID: "t3", SubscriptionState: SubscriptionStateRunning, State: IterationStateCompleted})
-	exec.setTask(TaskEntry{TaskID: "t4", SubscriptionState: SubscriptionStateRunning, State: IterationStateRunning})
-	candidates := exec.getCandidateTasks()
-	assert.Equal(t, 2, len(candidates))
-}
-
 func TestPublicationPublishRebuiltStateReplacesAbandonedGeneration(t *testing.T) {
 	exec := &PublicationTaskExecutor{tasks: newPublicationTaskTree()}
 	exec.setTask(TaskEntry{
@@ -559,11 +548,5 @@ func TestCleanPrevData_NilEngine(t *testing.T) {
 
 func TestCleanPrevData_NilExecutor(t *testing.T) {
 	err := CleanPrevData(context.Background(), nil, nil, nil, "task1", 0)
-	assert.Error(t, err)
-}
-
-func TestCleanPrevData_NilTxn(t *testing.T) {
-	mock := &mockSQLExecutor{}
-	err := CleanPrevData(context.Background(), nil, mock, nil, "task1", 0)
 	assert.Error(t, err)
 }

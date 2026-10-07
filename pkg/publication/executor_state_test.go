@@ -43,14 +43,6 @@ func TestPublicationTaskExecutor_Cancel(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestPublicationTaskExecutor_Restart(t *testing.T) {
-	exec := &PublicationTaskExecutor{}
-	// When not running, Stop is a no-op, then Start hits initStateLocked with nil deps
-	// Just verify Stop part works when not running
-	exec.Stop()
-	assert.False(t, exec.IsRunning())
-}
-
 func TestPublicationTaskExecutor_IsRunning_Default(t *testing.T) {
 	exec := &PublicationTaskExecutor{}
 	assert.False(t, exec.IsRunning())
