@@ -1413,18 +1413,6 @@ func (expr *FunctionExpressionExecutor) hasScalarIntegerArgumentSource() bool {
 	return scalarIntegerArgumentSource(expr.parameterExecutor[0])
 }
 
-func (expr *FunctionExpressionExecutor) preserveIntegerArgumentScalar(rowCount int, selectList []bool) {
-	if rowCount == 0 || !expr.hasScalarIntegerArgumentSource() {
-		return
-	}
-	for row := 0; row < rowCount && selectList != nil; row++ {
-		if !selectList[row] {
-			return
-		}
-	}
-	expr.resultVector.GetResultVector().ToConst()
-}
-
 func applyTransparentStringSource(
 	result *vector.Vector,
 	source *vector.Vector,
@@ -1637,10 +1625,10 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 			} else {
 				selected.Reset(*parameter.GetType())
 			}
-			selected.SetIsBin(parameter.GetIsBin())
 			if err := selected.Union(parameter, expr.selectedRows, proc.Mp()); err != nil {
 				return nil, err
 			}
+			parameter.CopyExpressionMetadataTo(selected)
 			expr.selectedParameterResults[i] = selected
 			continue
 		}
@@ -1677,17 +1665,13 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 
 	selectedResult := expr.selectedResult.GetResultVector()
 	runtimeType := *selectedResult.GetType()
-	runtimeIsBin := selectedResult.GetIsBin()
 	runtimePrepareParamKind := selectedResult.GetPrepareParamKind()
-	runtimePreparedJSONComparisonParam := selectedResult.IsPreparedJSONComparisonParam()
-	runtimePrepareParamType := selectedResult.GetPrepareParamType()
 	if expr.fid == function.IFF || expr.fid == function.CASE || expr.fid == function.COALESCE {
 		runtimePrepareParamKind = expr.getFlowControlPrepareParamKind()
 	}
 
 	result := expr.resultVector.GetResultVector()
 	result.SetType(runtimeType)
-	result.SetIsBin(runtimeIsBin)
 	result.ResetWithSameType()
 	if selectedCount > 0 && expr.hasScalarIntegerArgumentSource() {
 		// The compact result was evaluated only for selected rows. A scalar
@@ -1701,6 +1685,7 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 		result.ToConst()
 		result.SetLength(rowCount)
 		result.SetPrepareParamKind(runtimePrepareParamKind)
+		selectedResult.CopyExpressionMetadataTo(result)
 		return result, nil
 	}
 	if expr.selectedNullResult == nil {
@@ -1715,7 +1700,7 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 		expr.selectedNullResult.SetType(runtimeType)
 		expr.selectedNullResult.SetLength(1)
 	}
-	expr.selectedNullResult.SetIsBin(runtimeIsBin)
+	expr.selectedNullResult.SetIsBin(selectedResult.GetIsBin())
 	selectedRow := int64(0)
 	for row := 0; row < rowCount; row++ {
 		if selectList[row] {
@@ -1738,11 +1723,8 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 		if len(result.GetPrepareParamKinds()) == 0 {
 			result.SetPrepareParamKind(runtimePrepareParamKind)
 		}
-		if runtimePreparedJSONComparisonParam {
-			result.SetPrepareParamType(runtimePrepareParamType)
-			result.SetPreparedJSONComparisonParam()
-		}
 	}
+	selectedResult.CopyExpressionMetadataTo(result)
 	return result, nil
 }
 
@@ -1833,7 +1815,11 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 		expr.parameterResults, expr.resultVector, proc, rowCount, &expr.selectList); err != nil {
 		return nil, err
 	}
-	expr.preserveIntegerArgumentScalar(rowCount, selectList)
+	// Partial selections returned through evalSelectedRows above.
+	// Runtime CASTs can flatten an otherwise scalar source.
+	if rowCount > 0 && expr.hasScalarIntegerArgumentSource() {
+		expr.resultVector.GetResultVector().ToConst()
+	}
 	if expr.isImplicitCast() && len(expr.parameterResults) > 0 {
 		if err := applyTransparentStringSource(
 			expr.resultVector.GetResultVector(), expr.parameterResults[0], rowCount, proc.Mp()); err != nil {
@@ -2197,7 +2183,7 @@ func DecodeLiteralStringSource(literal *plan.Literal) (types.StringSource, error
 	return source, nil
 }
 
-func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Expr) (*vector.Vector, error) {
+func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Expr) (result *vector.Vector, err error) {
 	if err := plan.RequireLegacyCollations(exprs); err != nil {
 		return nil, err
 	}
@@ -2210,6 +2196,13 @@ func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Ex
 	if err != nil {
 		return nil, err
 	}
+	// The constructor owns the partial vector until successful return.
+	defer func() {
+		if err != nil {
+			vec.Free(proc.Mp())
+			result = nil
+		}
+	}()
 	sources := make([]types.StringSource, lenList)
 	for i := 0; i < lenList; i++ {
 		expr := exprs[i]
@@ -2219,7 +2212,6 @@ func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Ex
 		}
 		sources[i], err = DecodeLiteralStringSource(t)
 		if err != nil {
-			vec.Free(proc.Mp())
 			return nil, err
 		}
 		if t.GetIsnull() {
@@ -2314,8 +2306,7 @@ func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Ex
 			vec.SetIsBin(t.IsBin)
 		}
 	}
-	if err := vec.SetStringSourcesWithMP(sources, proc.Mp()); err != nil {
-		vec.Free(proc.Mp())
+	if err = vec.SetStringSourcesWithMP(sources, proc.Mp()); err != nil {
 		return nil, err
 	}
 	return vec, nil

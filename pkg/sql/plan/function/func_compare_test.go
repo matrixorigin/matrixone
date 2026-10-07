@@ -15,6 +15,7 @@
 package function
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"math"
 	"strconv"
 	"strings"
@@ -149,38 +150,48 @@ func TestJsonComparisonParamPreservesPreparedScalarType(t *testing.T) {
 func TestPreparedJSONComparisonCoercion(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
-	encode := func(value any) []byte {
+	t.Cleanup(func() {
+		native := proc.Mp().CurrNB()
+		heap, objects := proc.Mp().OnHeapOutstanding()
+		if native != 0 || heap != 0 || objects != 0 {
+			t.Errorf("comparison fixture leaked storage: native=%d heap=%d objects=%d", native, heap, objects)
+		}
+	})
+	encode := func(t *testing.T, value any) []byte {
 		bj, err := bytejson.CreateByteJSON(value)
 		require.NoError(t, err)
 		data, err := types.EncodeJson(bj)
 		require.NoError(t, err)
 		return data
 	}
-	makeJSON := func(values []any, nullAt ...uint64) *vector.Vector {
+	makeJSON := func(t *testing.T, values []any, nullAt ...uint64) *vector.Vector {
 		v := vector.NewVec(types.T_json.ToType())
+		t.Cleanup(func() { v.Free(proc.Mp()) })
 		nullsAt := make(map[uint64]bool)
 		for _, i := range nullAt {
 			nullsAt[i] = true
 		}
 		for i, value := range values {
-			require.NoError(t, vector.AppendBytes(v, encode(value), nullsAt[uint64(i)], proc.Mp()))
+			require.NoError(t, vector.AppendBytes(v, encode(t, value), nullsAt[uint64(i)], proc.Mp()))
 		}
 		return v
 	}
-	makePreparedJSON := func(values []any, nullAt ...uint64) *vector.Vector {
-		v := makeJSON(values, nullAt...)
+	makePreparedJSON := func(t *testing.T, values []any, nullAt ...uint64) *vector.Vector {
+		v := makeJSON(t, values, nullAt...)
 		v.SetPreparedJSONComparisonParam()
 		return v
 	}
-	makeResult := func(length int) *vector.FunctionResult[bool] {
+	makeResult := func(t *testing.T, length int) *vector.FunctionResult[bool] {
 		result := vector.NewFunctionResultWrapper(types.T_bool.ToType(), proc.Mp()).(*vector.FunctionResult[bool])
+		t.Cleanup(result.Free)
 		require.NoError(t, result.PreExtendAndReset(length))
 		return result
 	}
 
 	t.Run("mixed JSON boolean operators preserve scalar category", func(t *testing.T) {
-		jsonValues := makeJSON([]any{true, false, float64(1), float64(0), "true", "false", nil, nil, true}, 7)
+		jsonValues := makeJSON(t, []any{true, false, float64(1), float64(0), "true", "false", nil, nil, true}, 7)
 		booleanValues := vector.NewVec(types.T_bool.ToType())
+		t.Cleanup(func() { booleanValues.Free(proc.Mp()) })
 		for i, value := range []bool{true, true, true, false, true, false, true, false, false} {
 			require.NoError(t, vector.AppendFixed(booleanValues, value, i == 7 || i == 8, proc.Mp()))
 		}
@@ -219,7 +230,7 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 					},
 				} {
 					t.Run(operator.name, func(t *testing.T) {
-						result := makeResult(len(operator.expected))
+						result := makeResult(t, len(operator.expected))
 						require.NoError(t, operator.fn(
 							orientation.parameters, result, proc, len(operator.expected), nil))
 						got := result.GetResultVector()
@@ -250,18 +261,20 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 	t.Run("mixed JSON boolean comparison rejects containers", func(t *testing.T) {
 		booleanValue, err := vector.NewConstFixed(types.T_bool.ToType(), true, 1, proc.Mp())
 		require.NoError(t, err)
+		t.Cleanup(func() { booleanValue.Free(proc.Mp()) })
 		for _, value := range []any{map[string]any{"v": true}, []any{true}} {
-			jsonValue := makeJSON([]any{value})
+			jsonValue := makeJSON(t, []any{value})
 			require.Error(t, equalFn(
-				[]*vector.Vector{jsonValue, booleanValue}, makeResult(1), proc, 1, nil))
+				[]*vector.Vector{jsonValue, booleanValue}, makeResult(t, 1), proc, 1, nil))
 		}
 	})
 
 	t.Run("mixed JSON boolean comparison masks rows before conversion", func(t *testing.T) {
-		jsonValues := makeJSON([]any{true, map[string]any{"unsupported": true}})
+		jsonValues := makeJSON(t, []any{true, map[string]any{"unsupported": true}})
 		booleanValues, err := vector.NewConstFixed(types.T_bool.ToType(), true, 2, proc.Mp())
 		require.NoError(t, err)
-		result := makeResult(2)
+		t.Cleanup(func() { booleanValues.Free(proc.Mp()) })
+		result := makeResult(t, 2)
 		selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}
 		require.NoError(t, equalFn(
 			[]*vector.Vector{jsonValues, booleanValues}, result, proc, 2, selectList))
@@ -271,10 +284,11 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 	})
 
 	t.Run("mixed JSON boolean comparison skips an all-masked batch", func(t *testing.T) {
-		malformedJSON := makeJSON([]any{map[string]any{"unsupported": true}})
+		malformedJSON := makeJSON(t, []any{map[string]any{"unsupported": true}})
 		booleanValue, err := vector.NewConstFixed(types.T_bool.ToType(), true, 1, proc.Mp())
 		require.NoError(t, err)
-		result := makeResult(1)
+		t.Cleanup(func() { booleanValue.Free(proc.Mp()) })
+		result := makeResult(t, 1)
 		require.NoError(t, equalFn(
 			[]*vector.Vector{malformedJSON, booleanValue}, result, proc, 1,
 			&FunctionSelectList{AnyNull: true, AllNull: true}))
@@ -284,6 +298,7 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 	t.Run("mixed JSON boolean comparison rejects truncated scalar encodings", func(t *testing.T) {
 		booleanValue, err := vector.NewConstFixed(types.T_bool.ToType(), true, 1, proc.Mp())
 		require.NoError(t, err)
+		t.Cleanup(func() { booleanValue.Free(proc.Mp()) })
 		for _, encoded := range [][]byte{
 			{byte(bytejson.TpCodeString), 4, 't'},
 			{byte(bytejson.TpCodeString), 0x80},
@@ -293,26 +308,27 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 			// Deliberately bypass admission to retain this internal defensive
 			// decoder probe; public raw JSON construction now rejects these bytes.
 			malformedJSON := vector.NewVec(types.T_blob.ToType())
+			defer malformedJSON.Free(proc.Mp())
 			require.NoError(t, vector.AppendBytes(malformedJSON, encoded, false, proc.Mp()))
 			malformedJSON.SetType(types.T_json.ToType())
-			defer malformedJSON.Free(proc.Mp())
 			require.Error(t, equalFn(
-				[]*vector.Vector{malformedJSON, booleanValue}, makeResult(1), proc, 1, nil))
+				[]*vector.Vector{malformedJSON, booleanValue}, makeResult(t, 1), proc, 1, nil))
 		}
 	})
 
 	t.Run("mixed JSON boolean comparison accepts constant SQL null", func(t *testing.T) {
-		jsonValues := makeJSON([]any{nil, true, "true"})
+		jsonValues := makeJSON(t, []any{nil, true, "true"})
 		booleanNull := vector.NewConstNull(types.T_bool.ToType(), 3, proc.Mp())
+		t.Cleanup(func() { booleanNull.Free(proc.Mp()) })
 
-		ordinaryResult := makeResult(3)
+		ordinaryResult := makeResult(t, 3)
 		require.NoError(t, equalFn(
 			[]*vector.Vector{jsonValues, booleanNull}, ordinaryResult, proc, 3, nil))
 		for row := 0; row < 3; row++ {
 			require.True(t, ordinaryResult.GetResultVector().IsNull(uint64(row)))
 		}
 
-		result := makeResult(3)
+		result := makeResult(t, 3)
 		require.NoError(t, nullSafeEqualFn(
 			[]*vector.Vector{jsonValues, booleanNull}, result, proc, 3, nil))
 		require.Equal(t, []bool{true, false, false},
@@ -320,11 +336,11 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 	})
 
 	t.Run("ordinary JSON provenance stays on ordinary comparison path", func(t *testing.T) {
-		left := makeJSON([]any{true})
-		right := makeJSON([]any{true})
+		left := makeJSON(t, []any{true})
+		right := makeJSON(t, []any{true})
 		left.SetPrepareParamKind(vector.PrepareParamBoolean)
 		right.SetPrepareParamKind(vector.PrepareParamBoolean)
-		result := makeResult(1)
+		result := makeResult(t, 1)
 		require.NoError(t, equalFn(
 			[]*vector.Vector{left, right}, result, proc, 1, nil))
 		require.Equal(t, []bool{true},
@@ -332,67 +348,67 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 	})
 
 	t.Run("boolean numeric and string categories", func(t *testing.T) {
-		jsonValues := makeJSON([]any{float64(1), "true", true})
-		params := makePreparedJSON([]any{true, true, true})
+		jsonValues := makeJSON(t, []any{float64(1), "true", true})
+		params := makePreparedJSON(t, []any{true, true, true})
 		params.SetPrepareParamKinds([]vector.PrepareParamKind{vector.PrepareParamBoolean, vector.PrepareParamBoolean, vector.PrepareParamBoolean})
-		result := makeResult(3)
+		result := makeResult(t, 3)
 		require.NoError(t, comparePreparedJSON([]*vector.Vector{jsonValues, params}, result, proc, 3, false, func(c int) bool { return c == 0 }, nil))
 		got := result.GetResultVector()
 		require.Equal(t, []bool{true, false, true}, vector.MustFixedColNoTypeCheck[bool](got))
 	})
 
 	t.Run("boolean metadata requires boolean adapter payload", func(t *testing.T) {
-		jsonValues := makeJSON([]any{true})
-		params := makePreparedJSON([]any{float64(1)})
+		jsonValues := makeJSON(t, []any{true})
+		params := makePreparedJSON(t, []any{float64(1)})
 		params.SetPrepareParamKind(vector.PrepareParamBoolean)
 		require.Error(t, comparePreparedJSON(
-			[]*vector.Vector{jsonValues, params}, makeResult(1), proc, 1, false,
+			[]*vector.Vector{jsonValues, params}, makeResult(t, 1), proc, 1, false,
 			func(c int) bool { return c == 0 }, nil))
 	})
 
 	t.Run("reversed numeric and null safe nulls", func(t *testing.T) {
-		jsonValues := makeJSON([]any{float64(2), nil}, 1)
-		params := makePreparedJSON([]any{2.0, nil}, 1)
+		jsonValues := makeJSON(t, []any{float64(2), nil}, 1)
+		params := makePreparedJSON(t, []any{2.0, nil}, 1)
 		params.SetPrepareParamKinds([]vector.PrepareParamKind{vector.PrepareParamFloat, vector.PrepareParamFloat})
-		result := makeResult(2)
+		result := makeResult(t, 2)
 		require.NoError(t, comparePreparedJSON([]*vector.Vector{params, jsonValues}, result, proc, 2, true, func(c int) bool { return c == 0 }, nil))
 		got := result.GetResultVector()
 		require.Equal(t, []bool{true, true}, vector.MustFixedColNoTypeCheck[bool](got))
 	})
 
 	t.Run("decimal category uses exact numeric comparison", func(t *testing.T) {
-		jsonValues := makeJSON([]any{
+		jsonValues := makeJSON(t, []any{
 			float64(1.25),
 			"1.25",
 			newTypedByteJson(bytejson.TpCodeDecimal, "9007199254740992.1"),
 			newTypedByteJson(bytejson.TpCodeDecimal, "1e100"),
 		})
-		params := makePreparedJSON([]any{
+		params := makePreparedJSON(t, []any{
 			newTypedByteJson(bytejson.TpCodeDecimal, "1.25"),
 			newTypedByteJson(bytejson.TpCodeDecimal, "1.2500"),
 			newTypedByteJson(bytejson.TpCodeDecimal, "9007199254740993.1"),
 			newTypedByteJson(bytejson.TpCodeDecimal, "10e99"),
 		})
 		params.SetPrepareParamKind(vector.PrepareParamDecimal)
-		result := makeResult(4)
+		result := makeResult(t, 4)
 		require.NoError(t, comparePreparedJSON([]*vector.Vector{jsonValues, params}, result, proc, 4, false, func(c int) bool { return c == 0 }, nil))
 		require.Equal(t, []bool{true, true, false, true}, vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
 	})
 
 	t.Run("decimal category rejects malformed numeric text", func(t *testing.T) {
-		jsonValues := makeJSON([]any{"1.25tail"})
-		params := makePreparedJSON([]any{newTypedByteJson(bytejson.TpCodeDecimal, "1.25")})
+		jsonValues := makeJSON(t, []any{"1.25tail"})
+		params := makePreparedJSON(t, []any{newTypedByteJson(bytejson.TpCodeDecimal, "1.25")})
 		params.SetPrepareParamKind(vector.PrepareParamDecimal)
 		require.Error(t, comparePreparedJSON(
-			[]*vector.Vector{jsonValues, params}, makeResult(1), proc, 1,
+			[]*vector.Vector{jsonValues, params}, makeResult(t, 1), proc, 1,
 			false, func(c int) bool { return c == 0 }, nil))
 	})
 
 	t.Run("ordinary comparison propagates null", func(t *testing.T) {
-		jsonValues := makeJSON([]any{nil}, 0)
-		params := makePreparedJSON([]any{true})
+		jsonValues := makeJSON(t, []any{nil}, 0)
+		params := makePreparedJSON(t, []any{true})
 		params.SetPrepareParamKinds([]vector.PrepareParamKind{vector.PrepareParamBoolean})
-		result := makeResult(1)
+		result := makeResult(t, 1)
 		require.NoError(t, comparePreparedJSON([]*vector.Vector{jsonValues, params}, result, proc, 1, false, func(c int) bool { return c == 0 }, nil))
 		require.True(t, result.GetResultVector().IsNull(0))
 	})
@@ -400,36 +416,36 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 	t.Run("invalid encoded JSON is rejected", func(t *testing.T) {
 		// Internal corruption fixture, intentionally outside admitted T_json.
 		left := vector.NewVec(types.T_blob.ToType())
+		defer left.Free(proc.Mp())
 		require.NoError(t, vector.AppendBytes(left, []byte("invalid"), false, proc.Mp()))
 		left.SetType(types.T_json.ToType())
-		defer left.Free(proc.Mp())
-		right := makePreparedJSON([]any{true})
+		right := makePreparedJSON(t, []any{true})
 		right.SetPrepareParamKinds([]vector.PrepareParamKind{vector.PrepareParamBoolean})
-		require.Error(t, comparePreparedJSON([]*vector.Vector{left, right}, makeResult(1), proc, 1, false, func(c int) bool { return c == 0 }, nil))
+		require.Error(t, comparePreparedJSON([]*vector.Vector{left, right}, makeResult(t, 1), proc, 1, false, func(c int) bool { return c == 0 }, nil))
 	})
 
 	t.Run("string category and malformed adapter output", func(t *testing.T) {
-		jsonValues := makeJSON([]any{"7"})
-		params := makePreparedJSON([]any{"7"})
+		jsonValues := makeJSON(t, []any{"7"})
+		params := makePreparedJSON(t, []any{"7"})
 		params.SetPrepareParamKind(vector.PrepareParamNone)
-		result := makeResult(1)
+		result := makeResult(t, 1)
 		require.NoError(t, comparePreparedJSON([]*vector.Vector{jsonValues, params}, result, proc, 1, false, func(c int) bool { return c == 0 }, nil))
 		require.Equal(t, []bool{true}, vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
 
-		malformed := makePreparedJSON([]any{"bad"})
+		malformed := makePreparedJSON(t, []any{"bad"})
 		malformed.SetPrepareParamKind(vector.PrepareParamInteger)
-		require.Error(t, comparePreparedJSON([]*vector.Vector{jsonValues, malformed}, makeResult(1), proc, 1, false, func(c int) bool { return c == 0 }, nil))
+		require.Error(t, comparePreparedJSON([]*vector.Vector{jsonValues, malformed}, makeResult(t, 1), proc, 1, false, func(c int) bool { return c == 0 }, nil))
 	})
 
 	t.Run("integer comparison preserves precision", func(t *testing.T) {
-		jsonValues := makeJSON([]any{
+		jsonValues := makeJSON(t, []any{
 			int64(9007199254740992),
 			int64(math.MaxInt64 - 1),
 			uint64(math.MaxUint64 - 1),
 			newTypedByteJson(bytejson.TpCodeDecimal, "9007199254740992.9"),
 			"18446744073709551614.9",
 		})
-		params := makePreparedJSON([]any{
+		params := makePreparedJSON(t, []any{
 			int64(9007199254740993),
 			int64(math.MaxInt64),
 			uint64(math.MaxUint64),
@@ -437,7 +453,7 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 			uint64(math.MaxUint64),
 		})
 		params.SetPrepareParamKind(vector.PrepareParamInteger)
-		result := makeResult(5)
+		result := makeResult(t, 5)
 		require.NoError(t, comparePreparedJSON([]*vector.Vector{jsonValues, params}, result, proc, 5, false, func(c int) bool { return c == 0 }, nil))
 		got := result.GetResultVector()
 		require.Equal(t, []bool{false, false, false, false, false}, vector.MustFixedColNoTypeCheck[bool](got))
@@ -445,95 +461,151 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 	})
 
 	t.Run("integer comparison spans signed and unsigned boundaries", func(t *testing.T) {
-		jsonValues := makeJSON([]any{
+		jsonValues := makeJSON(t, []any{
 			int64(math.MaxInt64),
 			uint64(math.MaxUint64),
 			uint64(math.MaxUint64),
 			"18446744073709551615",
 		})
-		params := makePreparedJSON([]any{
+		params := makePreparedJSON(t, []any{
 			int64(math.MaxInt64),
 			uint64(math.MaxUint64),
 			int64(1),
 			uint64(math.MaxUint64),
 		})
 		params.SetPrepareParamKind(vector.PrepareParamInteger)
-		result := makeResult(4)
+		result := makeResult(t, 4)
 		require.NoError(t, comparePreparedJSON([]*vector.Vector{jsonValues, params}, result, proc, 4, false, func(c int) bool { return c == 0 }, nil))
 		require.Equal(t, []bool{true, true, false, true}, vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
 	})
 
 	t.Run("concrete signed type preserves overflow errors", func(t *testing.T) {
-		jsonValues := makeJSON([]any{uint64(math.MaxUint64)})
-		params := makePreparedJSON([]any{int64(math.MaxInt64)})
+		jsonValues := makeJSON(t, []any{uint64(math.MaxUint64)})
+		params := makePreparedJSON(t, []any{int64(math.MaxInt64)})
 		params.SetPrepareParamKind(vector.PrepareParamInteger)
 		params.SetPrepareParamType(types.T_int64)
 		err := comparePreparedJSON(
-			[]*vector.Vector{jsonValues, params}, makeResult(1), proc, 1,
+			[]*vector.Vector{jsonValues, params}, makeResult(t, 1), proc, 1,
 			false, func(c int) bool { return c == 0 }, nil)
 		require.ErrorContains(t, err, "JSON -> BIGINT")
 	})
 
 	t.Run("concrete narrow integer rejects out of range JSON", func(t *testing.T) {
-		jsonValues := makeJSON([]any{int64(math.MaxInt8 + 1)})
-		params := makePreparedJSON([]any{int64(1)})
+		jsonValues := makeJSON(t, []any{int64(math.MaxInt8 + 1)})
+		params := makePreparedJSON(t, []any{int64(1)})
 		params.SetPrepareParamKind(vector.PrepareParamInteger)
 		params.SetPrepareParamType(types.T_int8)
 		err := comparePreparedJSON(
-			[]*vector.Vector{jsonValues, params}, makeResult(1), proc, 1,
+			[]*vector.Vector{jsonValues, params}, makeResult(t, 1), proc, 1,
 			false, func(c int) bool { return c == 0 }, nil)
 		require.ErrorContains(t, err, "JSON -> TINYINT")
 	})
 
 	t.Run("concrete unsigned type rejects negative JSON", func(t *testing.T) {
-		jsonValues := makeJSON([]any{int64(-1)})
-		params := makePreparedJSON([]any{uint64(1)})
+		jsonValues := makeJSON(t, []any{int64(-1)})
+		params := makePreparedJSON(t, []any{uint64(1)})
 		params.SetPrepareParamKind(vector.PrepareParamInteger)
 		params.SetPrepareParamType(types.T_uint64)
 		err := comparePreparedJSON(
-			[]*vector.Vector{jsonValues, params}, makeResult(1), proc, 1,
+			[]*vector.Vector{jsonValues, params}, makeResult(t, 1), proc, 1,
 			false, func(c int) bool { return c == 0 }, nil)
 		require.ErrorContains(t, err, "JSON -> BIGINT UNSIGNED")
 	})
 
 	t.Run("concrete float32 rounds both operands", func(t *testing.T) {
-		jsonValues := makeJSON([]any{float64(16777217)})
-		params := makePreparedJSON([]any{float64(16777216)})
+		jsonValues := makeJSON(t, []any{float64(16777217)})
+		params := makePreparedJSON(t, []any{float64(16777216)})
 		params.SetPrepareParamKind(vector.PrepareParamFloat)
 		params.SetPrepareParamType(types.T_float32)
-		result := makeResult(1)
+		result := makeResult(t, 1)
 		require.NoError(t, comparePreparedJSON(
 			[]*vector.Vector{jsonValues, params}, result, proc, 1,
 			false, func(c int) bool { return c == 0 }, nil))
 		require.Equal(t, []bool{true}, vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
 	})
 
-	t.Run("concrete type and conversion kind must agree", func(t *testing.T) {
-		jsonValues := makeJSON([]any{int64(1)})
-		params := makePreparedJSON([]any{int64(1)})
-		params.SetPrepareParamKind(vector.PrepareParamFloat)
-		params.SetPrepareParamType(types.T_int64)
-		err := comparePreparedJSON(
-			[]*vector.Vector{jsonValues, params}, makeResult(1), proc, 1,
-			false, func(c int) bool { return c == 0 }, nil)
-		require.ErrorContains(t, err, "does not match conversion kind")
-	})
+	for _, test := range []struct {
+		name               string
+		typ                types.T
+		constant, reversed bool
+	}{
+		{"integer flat", types.T_int64, false, false},
+		{"float constant reversed", types.T_float64, true, true},
+		{"decimal flat reversed", types.T_decimal128, false, true},
+		{"boolean constant", types.T_bool, true, false},
+	} {
+		t.Run("typed all NULL "+test.name, func(t *testing.T) {
+			jsonValues := makeJSON(t, []any{int64(1), nil, nil}, 2)
+			var params *vector.Vector
+			if test.constant {
+				params = vector.NewConstNull(types.T_json.ToType(), 3, proc.Mp())
+				t.Cleanup(func() { params.Free(proc.Mp()) })
+			} else {
+				params = makeJSON(t, []any{nil, nil, nil}, 0, 1, 2)
+			}
+			params.SetPreparedJSONComparisonParam()
+			params.SetPrepareParamKind(vector.PrepareParamNone)
+			params.SetPrepareParamType(test.typ)
+			parameters := []*vector.Vector{jsonValues, params}
+			if test.reversed {
+				parameters = []*vector.Vector{params, jsonValues}
+			}
+			ordinary := makeResult(t, 3)
+			require.NoError(t, comparePreparedJSON(parameters, ordinary, proc, 3,
+				false, func(c int) bool { return c == 0 }, nil))
+			for row := range 3 {
+				require.True(t, ordinary.GetResultVector().IsNull(uint64(row)))
+			}
+			nullSafe := makeResult(t, 3)
+			require.NoError(t, comparePreparedJSON(parameters, nullSafe, proc, 3,
+				true, func(c int) bool { return c == 0 }, nil))
+			require.Equal(t, []bool{false, true, true}, vector.MustFixedColNoTypeCheck[bool](nullSafe.GetResultVector()))
+			require.True(t, nullSafe.GetResultVector().GetNulls().IsEmpty())
+		})
+	}
+
+	for _, test := range []struct {
+		name string
+		typ  types.T
+		kind vector.PrepareParamKind
+		null bool
+	}{
+		{"wrong value kind", types.T_int64, vector.PrepareParamFloat, false},
+		{"wrong kind on NULL", types.T_int64, vector.PrepareParamFloat, true},
+		{"unknown type on NULL", types.T(255), vector.PrepareParamNone, true},
+		{"missing kind on value", types.T_int64, vector.PrepareParamNone, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			jsonValues := makeJSON(t, []any{int64(1)})
+			params := makePreparedJSON(t, []any{int64(1)})
+			if test.null {
+				params.SetAllNulls(1)
+			}
+			params.SetPreparedJSONComparisonParam()
+			params.SetPrepareParamKind(test.kind)
+			params.SetPrepareParamType(test.typ)
+			err := comparePreparedJSON([]*vector.Vector{jsonValues, params}, makeResult(t, 1),
+				proc, 1, false, func(c int) bool { return c == 0 }, nil)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
+			require.ErrorContains(t, err, "does not match conversion kind")
+		})
+	}
 
 	t.Run("json null follows boolean coercion for null safe equality", func(t *testing.T) {
-		jsonValues := makeJSON([]any{nil})
-		params := makePreparedJSON([]any{true})
+		jsonValues := makeJSON(t, []any{nil})
+		params := makePreparedJSON(t, []any{true})
 		params.SetPrepareParamKind(vector.PrepareParamBoolean)
-		result := makeResult(1)
+		result := makeResult(t, 1)
 		require.NoError(t, comparePreparedJSON([]*vector.Vector{jsonValues, params}, result, proc, 1, true, func(c int) bool { return c == 0 }, nil))
 		require.Equal(t, []bool{false}, vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
 		require.True(t, result.GetResultVector().GetNulls().IsEmpty())
 	})
 
 	t.Run("selection masks rows before evaluation", func(t *testing.T) {
-		jsonValues := makeJSON([]any{true, true, map[string]any{"unsupported": true}})
-		params := makePreparedJSON([]any{true, false, true})
+		jsonValues := makeJSON(t, []any{true, true, map[string]any{"unsupported": true}})
+		params := makePreparedJSON(t, []any{true, false, true})
 		params.SetPrepareParamKind(vector.PrepareParamBoolean)
-		result := makeResult(3)
+		result := makeResult(t, 3)
 		selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, false}}
 		require.NoError(t, comparePreparedJSON([]*vector.Vector{jsonValues, params}, result, proc, 3, false, func(c int) bool { return c == 0 }, selectList))
 		got := result.GetResultVector()
@@ -543,10 +615,10 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 	})
 
 	t.Run("unsupported boolean cast returns an error", func(t *testing.T) {
-		jsonValues := makeJSON([]any{map[string]any{"unsupported": true}})
-		params := makePreparedJSON([]any{true})
+		jsonValues := makeJSON(t, []any{map[string]any{"unsupported": true}})
+		params := makePreparedJSON(t, []any{true})
 		params.SetPrepareParamKind(vector.PrepareParamBoolean)
-		require.Error(t, comparePreparedJSON([]*vector.Vector{jsonValues, params}, makeResult(1), proc, 1, false, func(c int) bool { return c == 0 }, nil))
+		require.Error(t, comparePreparedJSON([]*vector.Vector{jsonValues, params}, makeResult(t, 1), proc, 1, false, func(c int) bool { return c == 0 }, nil))
 	})
 
 }

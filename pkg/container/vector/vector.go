@@ -974,6 +974,15 @@ func (v *Vector) SetPreparedJSONComparisonParam() {
 	v.preparedJSONComparisonParam = true
 }
 
+// CopyExpressionMetadataTo preserves scalar identity when a single expression
+// result is materialized at different row coordinates. It does not merge sources
+// or copy row sidecars; the row materializer owns their selection mapping.
+func (v *Vector) CopyExpressionMetadataTo(dst *Vector) {
+	dst.isBin = v.isBin
+	dst.prepareParamType = v.prepareParamType
+	dst.preparedJSONComparisonParam = v.preparedJSONComparisonParam
+}
+
 // GetPrepareParamKindAt returns the source category for one logical row.
 // Constants use their single physical value for every logical row. The scalar
 // field remains the common fast path; heterogeneous vectors consult the
