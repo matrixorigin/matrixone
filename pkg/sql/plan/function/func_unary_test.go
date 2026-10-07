@@ -4047,7 +4047,6 @@ func TestJsonQuoteRejectsInvalidUTF8(t *testing.T) {
 
 func TestJsonQuoteRejectsBinaryDomain(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	defer proc.Free()
 	for _, tc := range []struct {
 		name string
 		typ  types.Type
@@ -4273,7 +4272,6 @@ func TestJsonUnquoteBinaryDomainDefersErrorUntilValue(t *testing.T) {
 
 func TestJsonUnquoteUsesEvaluatedRowStringDomain(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	defer proc.Free()
 	t.Run("runtime binary provenance is rejected", func(t *testing.T) {
 		tc := NewFunctionTestCase(proc,
 			[]FunctionTestInput{

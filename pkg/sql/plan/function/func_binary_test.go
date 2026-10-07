@@ -10592,7 +10592,6 @@ func geomInputEWKTAsType(ewkt string, geometryType types.T) FunctionTestInput {
 
 func TestBinaryGeometryFunctionsRejectDifferentSRIDs(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	defer proc.Free()
 	boolTests := []struct {
 		name  string
 		fn    executeLogicOfOverload
@@ -13309,9 +13308,7 @@ func TestCalendarIntervalArithmetic(t *testing.T) {
 
 func TestTemporalMicrosecondBoundaryOverflowIsNull(t *testing.T) {
 	timestampProc := testutil.NewProcess(t)
-	defer timestampProc.Free()
 	stringProc := testutil.NewProcess(t)
-	defer stringProc.Free()
 
 	minDatetime, err := types.ParseDatetime("0001-01-01 00:00:00.000000", 6)
 	require.NoError(t, err)
@@ -15470,7 +15467,6 @@ func TestEltHandlesUnsignedAndBitOverflowIndexes(t *testing.T) {
 
 func TestEltCoversSignedAndSelectListPaths(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	defer proc.Free()
 	t.Run("int64 path returns null for null string and out of range indexes", func(t *testing.T) {
 		tc := tcTemp{
 			info: "elt int64 path",
