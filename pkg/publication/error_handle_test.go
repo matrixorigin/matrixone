@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	gomysql "github.com/go-sql-driver/mysql"
@@ -757,24 +758,24 @@ func TestPolicyDo_BackoffZeroWait(t *testing.T) {
 }
 
 func TestPolicyDo_MaxDurationStopsBeforeBackoff(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	synctest.Test(t, func(t *testing.T) {
+		start := time.Now()
+		calls := 0
+		p := Policy{
+			MaxAttempts: 3,
+			MaxDuration: time.Second,
+			Backoff:     ExponentialBackoff{Base: time.Hour},
+			Classifier:  &mockClassifier{retryable: true},
+		}
+		err := p.Do(context.Background(), func() error {
+			calls++
+			return errors.New("retry me")
+		})
 
-	calls := 0
-	p := Policy{
-		MaxAttempts: 3,
-		MaxDuration: time.Nanosecond,
-		Backoff:     ExponentialBackoff{Base: time.Hour},
-		Classifier:  &mockClassifier{retryable: true},
-	}
-	err := p.Do(ctx, func() error {
-		calls++
-		cancel()
-		return errors.New("retry me")
+		assert.ErrorIs(t, err, ErrNonRetryable)
+		assert.Equal(t, 1, calls)
+		assert.LessOrEqual(t, time.Since(start), time.Second)
 	})
-
-	assert.ErrorIs(t, err, ErrNonRetryable)
-	assert.Equal(t, 1, calls)
 }
 
 // --- Round 4 additions ---

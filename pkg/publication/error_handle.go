@@ -523,8 +523,13 @@ func (p Policy) Do(ctx context.Context, op Operation) error {
 	}
 
 	for attempt := 1; attempt <= p.MaxAttempts; attempt++ {
-		if attempt > 1 && p.MaxDuration > 0 && time.Since(startTime) >= p.MaxDuration {
-			return ErrNonRetryable
+		if attempt > 1 && p.MaxDuration > 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if time.Since(startTime) >= p.MaxDuration {
+				return ErrNonRetryable
+			}
 		}
 
 		lastErr = op()
@@ -557,6 +562,9 @@ func (p Policy) Do(ctx context.Context, op Operation) error {
 		if p.MaxDuration > 0 {
 			remaining := p.MaxDuration - time.Since(startTime)
 			if remaining <= 0 {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
 				return ErrNonRetryable
 			}
 			if wait > remaining {
