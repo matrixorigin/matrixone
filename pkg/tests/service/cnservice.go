@@ -97,7 +97,13 @@ func (c *cnService) Close() error {
 		if c.cancel != nil {
 			c.cancel()
 		}
-		if c.closeErr == nil {
+		complete := c.closeErr == nil
+		if !complete {
+			if certificate, ok := c.svc.(interface{ CloseComplete() bool }); ok {
+				complete = certificate.CloseComplete()
+			}
+		}
+		if complete {
 			c.status = ServiceClosed
 		}
 	})

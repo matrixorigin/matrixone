@@ -391,7 +391,14 @@ func (c *testCluster) Close() error {
 	defer c.mu.Unlock()
 
 	if !c.mu.running {
-		return c.releaseAdmissionLocked()
+		if c.fileservices != nil {
+			c.fileservices.Close(context.Background())
+		}
+		if err := c.releaseAdmissionLocked(); err != nil {
+			return err
+		}
+		c.stopper.Stop()
+		return nil
 	}
 
 	// close all cn services first
@@ -410,6 +417,9 @@ func (c *testCluster) Close() error {
 	}
 
 	c.mu.running = false
+	if c.fileservices != nil {
+		c.fileservices.Close(context.Background())
+	}
 	if err := c.releaseAdmissionLocked(); err != nil {
 		return err
 	}
@@ -1372,9 +1382,11 @@ func (c *testCluster) buildCNConfigs(n int) {
 		opt = append(opt, cnservice.WithLogger(c.logger))
 		c.cn.opts = append(c.cn.opts, opt)
 
-		c.fileservices.cnLocalFSs = append(c.fileservices.cnLocalFSs,
-			c.createFS(context.Background(), filepath.Join(c.opt.rootDataDir, cfg.UUID), defines.LocalFileServiceName))
+		fs := c.createFS(context.Background(), filepath.Join(c.opt.rootDataDir, cfg.UUID), defines.LocalFileServiceName)
+		c.fileservices.Lock()
+		c.fileservices.cnLocalFSs = append(c.fileservices.cnLocalFSs, fs)
 		c.fileservices.cnServiceNum++
+		c.fileservices.Unlock()
 	}
 }
 

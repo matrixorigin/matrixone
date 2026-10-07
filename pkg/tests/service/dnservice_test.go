@@ -95,3 +95,10 @@ func TestTNWrapperClosesAcquiredBackend(t *testing.T) {
 		})
 	}
 }
+
+func TestLogWrapperCloseBeforeStartIsTerminal(t *testing.T) {
+	owner := &logService{status: ServiceInitialized}
+	require.NoError(t, owner.Close())
+	require.Equal(t, ServiceClosed, owner.Status())
+	require.NoError(t, owner.Close())
+}

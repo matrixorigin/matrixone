@@ -43,6 +43,7 @@ const (
 type lifecycleCN struct {
 	cnservice.Service
 	closeErr error
+	complete bool
 	closes   int
 }
 
@@ -51,18 +52,22 @@ func (s *lifecycleCN) Close() error {
 	return s.closeErr
 }
 
+func (s *lifecycleCN) CloseComplete() bool { return s.complete }
+
 func TestCNWrapperClosesAcquiredBackendBeforeStart(t *testing.T) {
 	failure := moerr.NewInternalErrorNoCtx("CN close incomplete")
 	for _, tc := range []struct {
 		name         string
 		closeErr     error
+		complete     bool
 		expectStatus ServiceStatus
 	}{
 		{name: "complete", expectStatus: ServiceClosed},
 		{name: "incomplete", closeErr: failure, expectStatus: ServiceInitialized},
+		{name: "diagnostic after local close", closeErr: failure, complete: true, expectStatus: ServiceClosed},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			backend := &lifecycleCN{closeErr: tc.closeErr}
+			backend := &lifecycleCN{closeErr: tc.closeErr, complete: tc.complete}
 			owner := &cnService{status: ServiceInitialized, svc: backend}
 			require.Equal(t, tc.closeErr, owner.Close())
 			require.Equal(t, tc.closeErr, owner.Close())
