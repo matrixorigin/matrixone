@@ -919,6 +919,10 @@ func TestExecutor_execWithRetry_DurationLimit(t *testing.T) {
 		retryDuration: 10 * time.Millisecond,
 	}
 	executor.initRetryPolicy()
+	require.NotNil(t, executor.retryPolicy.Backoff,
+		"initRetryPolicy must install a backoff strategy")
+	// This test isolates the retry-duration cutoff from backoff delay.
+	executor.retryPolicy.Backoff = nil
 
 	attempts := 0
 	err := executor.execWithRetry(context.Background(), nil, func() error {
