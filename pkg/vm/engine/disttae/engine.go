@@ -237,6 +237,12 @@ func (e *Engine) Close() error {
 		if err := e.pClient.Close(); err != nil {
 			e.closeErr = err
 		}
+		if e.ccprTxnCache != nil {
+			e.ccprTxnCache.Close()
+		}
+		if e.snapshotMgr != nil {
+			e.snapshotMgr.Close()
+		}
 
 		e.gcSchedulerMu.Lock()
 		cancel := e.gcSchedulerCancel
