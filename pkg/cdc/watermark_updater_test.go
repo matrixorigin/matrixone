@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math/rand"
 	"regexp"
 	"strings"
 	"sync"
@@ -33,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -2677,10 +2675,11 @@ func TestCDCWatermarkUpdater_CDCWatermarkUpdaterRun(t *testing.T) {
 	u := NewCDCWatermarkUpdater(
 		t.Name(),
 		ie,
-		WithCronJobInterval(time.Millisecond*1),
 	)
-	u.Start()
-	defer u.Stop()
+	// Start only the job queue. Calling cronRun directly keeps each flush
+	// synchronized with the assertions instead of relying on a scheduler tick.
+	u.queue.Start()
+	defer u.queue.Stop()
 
 	ctx := context.Background()
 
@@ -2733,27 +2732,21 @@ func TestCDCWatermarkUpdater_CDCWatermarkUpdaterRun(t *testing.T) {
 			&nts,
 		)
 		assert.NoError(t, err)
-		assert.NoError(t, err)
 		ret, err = u.GetFromCache(
 			ctx,
 			key,
 		)
 		assert.NoError(t, err)
 		assert.Equal(t, nts, ret)
-		time.Sleep(time.Millisecond * 1)
+		u.cronRun(ctx)
 	}
-	testutils.WaitExpect(
-		5000,
-		func() bool {
-			tuple, err := ie.GetTableDataByPK(
-				"mo_catalog",
-				"mo_cdc_watermark",
-				[]string{"1", "task1", "db1", "t1"},
-			)
-			t.Logf("tuple: %v", tuple)
-			return err == nil && tuple[4] == "5-1"
-		},
+	tuple, err := ie.GetTableDataByPK(
+		"mo_catalog",
+		"mo_cdc_watermark",
+		[]string{"1", "task1", "db1", "t1"},
 	)
+	assert.NoError(t, err)
+	assert.Equal(t, "5-1", tuple[4])
 	assert.Equal(t, 1, ie.RowCount("mo_catalog", "mo_cdc_watermark"))
 
 	var tasksWg sync.WaitGroup
@@ -2764,7 +2757,6 @@ func TestCDCWatermarkUpdater_CDCWatermarkUpdaterRun(t *testing.T) {
 		physicalStart int64,
 	) {
 		defer wg.Done()
-		time.Sleep(time.Millisecond * time.Duration(rand.Intn(4)))
 
 		logic := uint32(0)
 		candidateTS := types.BuildTS(physicalStart, logic)
@@ -2792,10 +2784,10 @@ func TestCDCWatermarkUpdater_CDCWatermarkUpdaterRun(t *testing.T) {
 			)
 			assert.NoError(t, err)
 			assert.True(t, ts.EQ(&cacheTS))
-			time.Sleep(time.Microsecond * time.Duration(rand.Intn(1000)))
 		}
 	}
 
+	start := make(chan struct{})
 	tasksWg.Add(5)
 	keys := make([]*WatermarkKey, 0, 5)
 	for i := 0; i < 5; i++ {
@@ -2806,28 +2798,25 @@ func TestCDCWatermarkUpdater_CDCWatermarkUpdaterRun(t *testing.T) {
 			TableName: "t1",
 		}
 		keys = append(keys, key)
-		go runTaskFunc(&tasksWg, key, int64(i+100000))
+		go func(key *WatermarkKey, physicalStart int64) {
+			<-start
+			runTaskFunc(&tasksWg, key, physicalStart)
+		}(key, int64(i+100000))
 	}
 
+	close(start)
 	tasksWg.Wait()
+	u.cronRun(ctx)
 	assert.Equal(t, 6, ie.RowCount("mo_catalog", "mo_cdc_watermark"))
 	for _, key := range keys {
-		testutils.WaitExpect(
-			5000,
-			func() bool {
-				tuple, err := ie.GetTableDataByPK(
-					"mo_catalog",
-					"mo_cdc_watermark",
-					[]string{fmt.Sprintf("%d", key.AccountId), key.TaskId, key.DBName, key.TableName},
-				)
-				t.Logf("tuple: %v", tuple)
-				if err != nil {
-					return false
-				}
-				ts := types.StringToTS(tuple[4])
-				return ts.Logical() >= 20
-			},
+		tuple, err := ie.GetTableDataByPK(
+			"mo_catalog",
+			"mo_cdc_watermark",
+			[]string{fmt.Sprintf("%d", key.AccountId), key.TaskId, key.DBName, key.TableName},
 		)
+		assert.NoError(t, err)
+		durableTS := types.StringToTS(tuple[4])
+		assert.GreaterOrEqual(t, durableTS.Logical(), uint32(20))
 	}
 }
 
