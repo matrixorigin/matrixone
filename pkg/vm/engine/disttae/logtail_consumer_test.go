@@ -679,6 +679,37 @@ func TestPushClient_LoadAndConsumeLatestCkp(t *testing.T) {
 	assert.Equal(t, Unsubscribing, state)
 }
 
+func TestPushClientCloseJoinsOwnedWorkers(t *testing.T) {
+	c := &PushClient{}
+	ctx := c.start(context.Background())
+	workerDone := make(chan struct{})
+	c.runOwned(func() {
+		<-ctx.Done()
+		close(workerDone)
+	})
+
+	require.NoError(t, c.Close())
+	select {
+	case <-workerDone:
+	default:
+		t.Fatal("push client close returned before its worker observed cancellation")
+	}
+	require.NoError(t, c.Close())
+}
+
+func TestRoutineControllerCloseStopsBlockedSend(t *testing.T) {
+	c := &PushClient{consumeErrC: make(chan error, 1)}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rc := c.createRoutineToConsumeLogTails(ctx, 0, 1, nil)
+	rc.close()
+	rc.wait()
+
+	// The consumer owns the lifecycle of its signal channel. A late dispatch
+	// must observe the completed owner instead of blocking on a full queue.
+	rc.sendTableLogTail(logtail.TableLogtail{}, time.Now())
+}
+
 // TestRoutineControllerSendMethods verifies that routine controller send methods work correctly
 func TestRoutineControllerSendMethods(t *testing.T) {
 	t.Run("routineController initialization with pools", func(t *testing.T) {
