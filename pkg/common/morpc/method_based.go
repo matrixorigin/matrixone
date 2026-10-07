@@ -83,6 +83,17 @@ type methodBasedServer[REQ, RESP MethodBasedMessage] struct {
 	pool     MessagePool[REQ, RESP]
 	handlers map[uint32]handleFuncCtx[REQ, RESP]
 
+	// Async handlers are submitted to the process-wide ants pool, so the
+	// underlying RPC server cannot join them when it closes. Keep a local
+	// admission gate and join count for this method server; its parent may
+	// otherwise destroy dependencies while an accepted handler is still using
+	// them.
+	asyncMu   sync.Mutex
+	asyncWG   sync.WaitGroup
+	closeOnce sync.Once
+	closeErr  error
+	closed    bool
+
 	// respReleaseFunc is the function to release response.
 	respReleaseFunc func(Message)
 
@@ -153,7 +164,15 @@ func (s *methodBasedServer[REQ, RESP]) Start() error {
 }
 
 func (s *methodBasedServer[REQ, RESP]) Close() error {
-	return s.rpc.Close()
+	s.closeOnce.Do(func() {
+		s.asyncMu.Lock()
+		s.closed = true
+		s.asyncMu.Unlock()
+
+		s.closeErr = s.rpc.Close()
+		s.asyncWG.Wait()
+	})
+	return s.closeErr
 }
 
 func (s *methodBasedServer[REQ, RESP]) RegisterMethod(
@@ -221,11 +240,34 @@ func (s *methodBasedServer[REQ, RESP]) onMessage(
 	}
 
 	if handlerCtx.async {
-		return ants.Submit(
-			func() {
-				fn(request)
-			},
-		)
+		s.asyncMu.Lock()
+		if s.closed {
+			s.asyncMu.Unlock()
+			if request.Cancel != nil {
+				request.Cancel()
+			}
+			s.pool.ReleaseRequest(req)
+			if s.respReleaseFunc != nil {
+				s.respReleaseFunc(resp)
+			} else {
+				s.pool.ReleaseResponse(resp)
+			}
+			return nil
+		}
+		s.asyncWG.Add(1)
+		s.asyncMu.Unlock()
+
+		run := func() {
+			defer s.asyncWG.Done()
+			fn(request)
+		}
+		if err := ants.Submit(run); err != nil {
+			// The request is already admitted. Run it on the current callback
+			// when the shared pool rejects submission so its request/response
+			// ownership is still completed before Close can return.
+			run()
+		}
+		return nil
 	}
 	return fn(request)
 }

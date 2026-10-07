@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/tnservice"
 	"go.uber.org/zap"
 )
 
@@ -63,7 +64,8 @@ type serviceRoleState struct {
 }
 
 type serviceSupervisor struct {
-	roles [serviceRoleCount]serviceRoleState
+	roles   [serviceRoleCount]serviceRoleState
+	tnOwner tnservice.Service
 
 	shutdownOnce       sync.Once
 	shutdownErr        error

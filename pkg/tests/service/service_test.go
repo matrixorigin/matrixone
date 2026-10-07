@@ -25,15 +25,42 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/tnservice"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 )
 
 const (
 	supportMultiTN = false
 )
+
+type partialBatchHAKeeperClient struct{}
+
+func (partialBatchHAKeeperClient) Close() error { return nil }
+func (partialBatchHAKeeperClient) AllocateID(context.Context) (uint64, error) {
+	return 1, nil
+}
+func (partialBatchHAKeeperClient) AllocateIDByKey(context.Context, string) (uint64, error) {
+	return 1, nil
+}
+func (partialBatchHAKeeperClient) AllocateIDByKeyWithBatch(context.Context, string, uint64) (uint64, error) {
+	return 1, nil
+}
+func (partialBatchHAKeeperClient) GetClusterDetails(context.Context) (logpb.ClusterDetails, error) {
+	return logpb.ClusterDetails{}, nil
+}
+func (partialBatchHAKeeperClient) GetClusterState(context.Context) (logpb.CheckerState, error) {
+	return logpb.CheckerState{}, nil
+}
+func (partialBatchHAKeeperClient) CheckLogServiceHealth(context.Context) error { return nil }
+func (partialBatchHAKeeperClient) SendTNHeartbeat(context.Context, logpb.TNStoreHeartbeat) (logpb.CommandBatch, error) {
+	return logpb.CommandBatch{}, nil
+}
 
 func TestClusterAdmissionCoversServiceClusterLifecycle(t *testing.T) {
 	c := &testCluster{
@@ -47,6 +74,68 @@ func TestClusterAdmissionCoversServiceClusterLifecycle(t *testing.T) {
 	c.mu.running = true
 	require.NoError(t, c.Close())
 	require.Nil(t, c.mu.admission)
+}
+
+func TestInitTNServicesRetainsPublishedOwnersOnPartialBatchFailure(t *testing.T) {
+	ctx := context.Background()
+	opt := DefaultOptions().WithTNServiceNum(2).WithRootDataDir(t.TempDir())
+	opt.validate()
+	// Build only the pieces used by initTNServices. NewCluster also builds CN
+	// configs, whose process runtime is unrelated to this TN ownership test.
+	opt.initial.cnServiceNum = 0
+	first := &testCluster{
+		t:       t,
+		testID:  "partial-tn",
+		opt:     opt,
+		logger:  zap.NewNop(),
+		stopper: stopper.NewStopper("partial-tn"),
+	}
+	first.clock = clock.NewUnixNanoHLCClockWithStopper(first.stopper, 0)
+	first.network.addresses = first.buildServiceAddresses()
+	first.tn.cfgs, first.tn.opts = first.buildTNConfigs()
+	first.fileservices = first.buildFileServices(ctx)
+
+	t.Cleanup(func() {
+		for _, svc := range first.tn.svcs {
+			_ = svc.Close()
+		}
+		for i, fs := range first.fileservices.tnLocalFSs {
+			if i == 1 && fs == first.fileservices.s3FS {
+				continue
+			}
+			if fs != nil {
+				fs.Close(ctx)
+			}
+		}
+		if first.fileservices.s3FS != nil {
+			first.fileservices.s3FS.Close(ctx)
+		}
+		if first.fileservices.etlFS != nil {
+			first.fileservices.etlFS.Close(ctx)
+		}
+		first.stopper.Stop()
+	})
+	first.tn.cfgs[0].InStandalone = true
+	firstHAKeeper := partialBatchHAKeeperClient{}
+	first.tn.opts[0] = append(first.tn.opts[0], tnservice.WithHAKeeperClientFactory(
+		func() (logservice.TNHAKeeperClient, error) { return firstHAKeeper, nil },
+	))
+	for _, cfg := range first.tn.cfgs {
+		rt := first.newRuntime(cfg.UUID)
+		moruntime.SetupServiceBasedRuntime(cfg.UUID, rt)
+	}
+
+	// The second batch item fails while building its file-service graph. The
+	// first TN has already published its wrapper, so the caller must retain it
+	// for cleanup instead of losing it with a temporary local slice.
+	first.fileservices.tnLocalFSs[1] = first.fileservices.s3FS
+	err := first.initTNServices(first.fileservices)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrDupServiceName))
+	require.Len(t, first.tn.svcs, 1)
+	require.Equal(t, first.tn.cfgs[0].UUID, first.tn.svcs[0].ID())
+	require.NoError(t, first.tn.svcs[0].Close())
+	require.NoError(t, first.tn.svcs[0].Close())
 }
 
 func TestSetInitialClusterInfoUsesHAKeeperLeader(t *testing.T) {
