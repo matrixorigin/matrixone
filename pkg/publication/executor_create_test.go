@@ -99,19 +99,18 @@ func TestRetryPublication_NilOption(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestRetryPublication_NoRetryOnNonClassified(t *testing.T) {
-	// retryPublication creates Policy with Classifier: nil → never retries
+func TestRetryPublication_RetriesNonClassified(t *testing.T) {
 	attempt := 0
 	err := retryPublication(context.Background(), "test", func() error {
 		attempt++
 		return moerr.NewInternalErrorNoCtx("fail")
 	}, &ExecutorRetryOption{
-		RetryTimes:    5,
-		RetryInterval: time.Millisecond,
+		RetryTimes:    2,
+		RetryInterval: 0,
 		RetryDuration: time.Second,
 	})
 	assert.Error(t, err)
-	assert.Equal(t, 1, attempt) // no retry since classifier is nil
+	assert.Equal(t, 3, attempt)
 }
 
 func TestRetryPublication_ContextCancelled(t *testing.T) {
@@ -124,7 +123,7 @@ func TestRetryPublication_ContextCancelled(t *testing.T) {
 		RetryInterval: time.Millisecond,
 		RetryDuration: time.Second,
 	})
-	assert.Error(t, err)
+	assert.ErrorIs(t, err, context.Canceled)
 }
 
 func TestRetryPublication_ErrNonRetryable(t *testing.T) {
@@ -137,10 +136,11 @@ func TestRetryPublication_ErrNonRetryable(t *testing.T) {
 		return moerr.NewInternalErrorNoCtx("fail")
 	}, &ExecutorRetryOption{
 		RetryTimes:    10,
-		RetryInterval: time.Millisecond,
+		RetryInterval: 0,
 		RetryDuration: time.Second,
 	})
-	assert.Error(t, err)
+	assert.ErrorIs(t, err, ErrNonRetryable)
+	assert.Equal(t, 2, attempt)
 }
 
 // --- fillDefaultOption tests ---

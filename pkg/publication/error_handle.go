@@ -473,6 +473,16 @@ type ErrorClassifier interface {
 	IsRetryable(error) bool
 }
 
+// retryAllErrorsClassifier makes the retry-all contract explicit for callers
+// that do not classify individual operation failures. A nil classifier means
+// no retry in Policy.Do, so leaving this policy implicit would silently turn
+// retry options into a single attempt.
+type retryAllErrorsClassifier struct{}
+
+func (retryAllErrorsClassifier) IsRetryable(err error) bool {
+	return err != nil
+}
+
 // Policy controls the retry behaviour for an operation.
 type Policy struct {
 	// MaxAttempts defines how many times the operation should be attempted in total.

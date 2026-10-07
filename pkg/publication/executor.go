@@ -1445,8 +1445,7 @@ func retryPublication(
 	policy := Policy{
 		MaxAttempts: maxAttempts,
 		Backoff:     backoff,
-		// No classifier - retry all errors
-		Classifier: nil,
+		Classifier:  retryAllErrorsClassifier{},
 	}
 
 	err = policy.Do(ctx, func() error {

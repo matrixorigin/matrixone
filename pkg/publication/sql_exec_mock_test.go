@@ -73,18 +73,19 @@ func TestUpstreamExecutor_ExecSQLInDatabase_DelegatesToExecSQL(t *testing.T) {
 func TestUpstreamExecutor_ExecWithRetry_RetryDurationExceeded(t *testing.T) {
 	e := &UpstreamExecutor{
 		retryTimes:    100,
-		retryDuration: time.Millisecond, // very short
+		retryDuration: time.Nanosecond,
 	}
 	e.initRetryPolicy(&mockClassifier{retryable: true})
+	e.retryPolicy.Backoff = ExponentialBackoff{}
 
 	attempt := 0
 	_, _, err := e.execWithRetry(context.Background(), nil, 0, func(ctx context.Context) (*Result, error) {
 		attempt++
-		time.Sleep(2 * time.Millisecond)
 		return nil, errors.New("fail")
 	})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "retry limit exceeded")
+	assert.Equal(t, 1, attempt)
 }
 
 // ---- UpstreamExecutor.execWithRetry success after retry ----

@@ -951,39 +951,6 @@ func TestCoverageBoost2_WriteObjectJobResult_Fields(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// executor.go — retryPublication context cancelled
-// ---------------------------------------------------------------------------
-
-func TestCoverageBoost2_RetryPublication_ContextDone(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	err := retryPublication(ctx, "test", func() error {
-		return moerr.NewInternalErrorNoCtx("error")
-	}, &ExecutorRetryOption{
-		RetryTimes:    100,
-		RetryInterval: time.Millisecond,
-		RetryDuration: time.Minute,
-	})
-	assert.Error(t, err)
-}
-
-func TestCoverageBoost2_RetryPublication_DurationExceeded(t *testing.T) {
-	attempts := 0
-	err := retryPublication(context.Background(), "test", func() error {
-		attempts++
-		time.Sleep(5 * time.Millisecond)
-		return moerr.NewInternalErrorNoCtx("fail")
-	}, &ExecutorRetryOption{
-		RetryTimes:    100,
-		RetryInterval: time.Millisecond,
-		RetryDuration: time.Millisecond, // very short - will expire
-	})
-	assert.Error(t, err)
-	assert.True(t, attempts >= 1)
-}
-
-// ---------------------------------------------------------------------------
 // executor.go — ErrSyncProtectionTTLExpired sentinel
 // ---------------------------------------------------------------------------
 
