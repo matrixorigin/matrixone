@@ -51,7 +51,7 @@ func TestRetryScheduleCronTask(t *testing.T) {
 			return nil
 		}
 
-		assert.NoError(t, s.CreateCronTask(ctx, newTestTaskMetadata("t1"), "*/1 * * * * *"))
+		assert.NoError(t, s.CreateCronTask(ctx, newTestTaskMetadata("t1"), "0 0 0 1 1 *"))
 
 		cronTasks, err := s.QueryCronTask(ctx)
 		require.NoError(t, err)
@@ -80,7 +80,7 @@ func TestRetryScheduleCronTaskAllFailed(t *testing.T) {
 			return moerr.NewInfo(context.TODO(), "persistent database error")
 		}
 
-		assert.NoError(t, s.CreateCronTask(ctx, newTestTaskMetadata("t1"), "*/1 * * * * *"))
+		assert.NoError(t, s.CreateCronTask(ctx, newTestTaskMetadata("t1"), "0 0 0 1 1 *"))
 
 		cronTasks, err := s.QueryCronTask(ctx)
 		require.NoError(t, err)
@@ -103,7 +103,7 @@ func TestRetryScheduleCronTaskAllFailed(t *testing.T) {
 
 func TestScheduleCronTaskImmediately(t *testing.T) {
 	runScheduleCronTaskTest(t, func(store *memTaskStorage, s *taskService, ctx context.Context) {
-		task := newTestCronTask("t1", "*/1 * * * * *")
+		task := newTestCronTask("t1", "0 0 0 1 1 *")
 		task.CreateAt = time.Now().Add(-time.Second).UnixMilli()
 		task.NextTime = task.CreateAt
 		task.TriggerTimes = 0
@@ -123,7 +123,7 @@ func TestScheduleCronTaskImmediately(t *testing.T) {
 		defer s.StopScheduleCronTask()
 		s.fetchCronTasksOnce(ctx)
 		<-updated
-		s.crons.stopper.Stop()
+		s.crons.stopForTest()
 
 		tasks, err := store.QueryAsyncTask(ctx, WithTaskParentTaskIDCond(EQ, "t1"))
 		require.NoError(t, err)
@@ -134,7 +134,7 @@ func TestScheduleCronTaskImmediately(t *testing.T) {
 
 func TestScheduleCronTaskLimitConcurrency(t *testing.T) {
 	runScheduleCronTaskTest(t, func(store *memTaskStorage, s *taskService, ctx context.Context) {
-		cronTask := newTestCronTask("t1", "* * * * ? *")
+		cronTask := newTestCronTask("t1", "0 0 0 1 1 *")
 		cronTask.CreateAt = time.Now().UnixMilli()
 		cronTask.NextTime = cronTask.CreateAt
 		cronTask.TriggerTimes = 0
@@ -160,7 +160,7 @@ func TestScheduleCronTaskLimitConcurrency(t *testing.T) {
 		require.Len(t, cronTasks, 1)
 		job := s.crons.jobs[cronTasks[0].ID]
 		require.NotNil(t, job)
-		s.crons.stopper.Stop()
+		s.crons.stopForTest()
 		job.Run()
 
 		tasks, err := store.QueryAsyncTask(ctx, WithTaskParentTaskIDCond(EQ, "t1"))
@@ -172,7 +172,7 @@ func TestScheduleCronTaskLimitConcurrency(t *testing.T) {
 
 func TestRemovedCronTask(t *testing.T) {
 	runScheduleCronTaskTest(t, func(store *memTaskStorage, s *taskService, ctx context.Context) {
-		assert.NoError(t, s.CreateCronTask(ctx, newTestTaskMetadata("t1"), "*/1 * * * * *"))
+		assert.NoError(t, s.CreateCronTask(ctx, newTestTaskMetadata("t1"), "0 0 0 1 1 *"))
 
 		s.StartScheduleCronTask()
 		defer s.StopScheduleCronTask()
@@ -193,12 +193,13 @@ func TestRemovedCronTask(t *testing.T) {
 		s.fetchCronTasksOnce(ctx)
 		s.crons.stopForTest()
 		require.Len(t, s.crons.entries, 0)
+		require.Empty(t, s.crons.cron.Entries())
 	})
 }
 
 func TestReplaceCronTask(t *testing.T) {
 	runScheduleCronTaskTest(t, func(store *memTaskStorage, s *taskService, ctx context.Context) {
-		assert.NoError(t, s.CreateCronTask(ctx, newTestTaskMetadata("t1"), "*/1 * * * * *"))
+		assert.NoError(t, s.CreateCronTask(ctx, newTestTaskMetadata("t1"), "0 0 0 1 1 *"))
 		s.StartScheduleCronTask()
 		defer s.StopScheduleCronTask()
 		s.fetchCronTasksOnce(ctx)
@@ -207,8 +208,8 @@ func TestReplaceCronTask(t *testing.T) {
 		require.Len(t, cronTasks, 1)
 		jobInCron := s.crons.jobs[cronTasks[0].ID]
 		require.NotNil(t, jobInCron)
-		jobInCron.doRunWithRetryBackoff(0)
 		s.crons.stopForTest()
+		jobInCron.doRunWithRetryBackoff(0)
 
 		taskInStore := store.cronTasks[jobInCron.task.ID]
 		oldEntryID := s.crons.entries[jobInCron.task.ID]
@@ -228,10 +229,14 @@ func TestReplaceCronTask(t *testing.T) {
 		require.Len(t, s.crons.entries, 1)
 		require.NotEqual(t, oldEntryID, s.crons.entries[cronTaskID])
 
-		jobInCron = s.crons.jobs[cronTaskID]
-		taskInStore = store.cronTasks[jobInCron.task.ID]
-		require.Equal(t, jobInCron.task.TriggerTimes, taskInStore.TriggerTimes)
-		jobInCron.Run()
+		entries := s.crons.cron.Entries()
+		require.Len(t, entries, 1)
+		require.Equal(t, s.crons.entries[cronTaskID], entries[0].ID)
+		replacementJob, ok := entries[0].Job.(*cronJob)
+		require.True(t, ok)
+		taskInStore = store.cronTasks[replacementJob.task.ID]
+		require.Equal(t, replacementJob.task.TriggerTimes, taskInStore.TriggerTimes)
+		entries[0].WrappedJob.Run()
 		require.Greater(t, store.cronTasks[cronTaskID].TriggerTimes, firstTriggerTimes)
 	})
 }
