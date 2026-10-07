@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -99,7 +98,7 @@ func TestProductProbeBuildOutcomes(t *testing.T) {
 }
 
 func TestProductBuildReferencesOnProbeReuse(t *testing.T) {
-	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)})
+	tc := newTestCase(t, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)})
 	t.Cleanup(func() {
 		tc.arg.Free(tc.proc, false, nil)
 		tc.barg.Free(tc.proc, false, nil)
@@ -109,9 +108,7 @@ func TestProductBuildReferencesOnProbeReuse(t *testing.T) {
 		for _, child := range tc.barg.Children {
 			child.Free(tc.proc, false, nil)
 		}
-		tc.resultBatch.Clean(tc.proc.Mp())
 		tc.proc.Free()
-		tc.cancel()
 		require.Zero(t, tc.proc.Mp().CurrNB())
 	})
 	for _, empty := range []bool{true, false, true} {

@@ -53,7 +53,7 @@ SELECT UNCOMPRESS(COMPRESS('2024-01-01')) AS date_string;
 SELECT COMPRESS('Hello World') != 'Hello World' AS compressed_different;
 
 # Test compression ratio (compressed should be smaller for repetitive data)
-SELECT LENGTH(COMPRESS('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA')) < LENGTH('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA') AS compression_works;
+SELECT LENGTH(COMPRESS(REPEAT('A', 200))) < LENGTH(REPEAT('A', 200)) AS compression_works;
 
 # UNCOMPRESSED_LENGTH function
 SELECT UNCOMPRESSED_LENGTH(COMPRESS('Hello World')) AS result1;

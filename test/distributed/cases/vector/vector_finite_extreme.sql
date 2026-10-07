@@ -69,6 +69,17 @@ select id, inner_product(v, '[1e20,-1e20]') from tip order by id;
 select a.id, inner_product(a.v, b.v) from tip a join tip b on b.id = 1 where a.id = 1;
 select id, inner_product(v, '[1,1]') from tip where id = 2;
 
+-- inner_product on a NARROW vector type (vecbf16, which carries float32's exponent range) rejects
+-- the same out-of-domain dot. The bf16 kernel accumulates in float32 and returns a raw non-finite
+-- value; the SQL scalar boundary (arrayDistanceNarrow) rejects it, matching the vecf32 path above
+-- (#29496). vecf16/vecint8 cannot overflow (f16 max is 65504, int8 is integral), so they have no
+-- such error case.
+create table tipbf(id int primary key, v vecbf16(2));
+insert into tipbf values (1, '[1e20,1e20]'), (2, '[1,2]');
+select id, inner_product(v, '[1e20,-1e20]') from tipbf order by id;
+select a.id, inner_product(a.v, b.v) from tipbf a join tipbf b on b.id = 1 where a.id = 1;
+select id, inner_product(v, '[1,1]') from tipbf where id = 2;
+
 -- A float64 vector whose squared norm underflows has no computable cosine; it is rejected rather
 -- than reported as maximally dissimilar (distance 1) against itself.
 create table tu(id int primary key, v vecf64(2));

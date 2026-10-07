@@ -4411,7 +4411,7 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 					return moerr.AttachCause(migrationCtx, err)
 				}
 			}
-			if err := ses.SetSessionSysVar(migrationCtx, variable.name, variable.value); err != nil {
+			if err := ses.restoreSessionSysVar(migrationCtx, variable.name, variable.value); err != nil {
 				return moerr.AttachCause(migrationCtx, err)
 			}
 			ses.markMigrationSystemVarReplayable(variable.name, req.SystemVariablesReplayable)

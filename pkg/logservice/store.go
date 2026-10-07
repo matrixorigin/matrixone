@@ -484,7 +484,7 @@ func (l *store) isSkippedZombie(shardID, replicaID uint64) bool {
 
 func (l *store) startReplicas(ctx context.Context) error {
 	l.mu.Lock()
-	shards := make([]metadata.LogShard, 0)
+	shards := make([]metadata.LogShard, 0, len(l.mu.metadata.Shards))
 	shards = append(shards, l.mu.metadata.Shards...)
 	l.mu.Unlock()
 

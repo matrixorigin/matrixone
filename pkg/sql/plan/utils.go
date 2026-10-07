@@ -964,7 +964,7 @@ func checkStrictJoinPred(onPred *plan.Expr) (bool, *ColRef, *ColRef) {
 }
 
 func splitPlanConjunctions(exprList []*plan.Expr) []*plan.Expr {
-	var exprs []*plan.Expr
+	exprs := make([]*plan.Expr, 0, len(exprList))
 	for _, expr := range exprList {
 		exprs = append(exprs, splitPlanConjunction(expr)...)
 	}
@@ -2112,10 +2112,11 @@ func constantFoldWithPreparedExactSource(
 
 		return &plan.Expr{
 			Typ: plan.Type{
-				Id:      int32(vec.GetType().Oid),
-				Scale:   vec.GetType().Scale,
-				Width:   vec.GetType().Width,
-				Charset: uint32(vec.GetType().Charset),
+				Id:               int32(vec.GetType().Oid),
+				Scale:            vec.GetType().Scale,
+				Width:            vec.GetType().Width,
+				Charset:          uint32(vec.GetType().Charset),
+				CollationVersion: uint32(vec.GetType().CollationVersion),
 			},
 			Expr: &plan.Expr_Vec{
 				Vec: &plan.LiteralVec{
@@ -3402,7 +3403,7 @@ func ResetAuxIdForExpr(expr *plan.Expr) {
 // }
 
 func ExprType2Type(typ *plan.Type) types.Type {
-	return types.NewWithCharset(types.T(typ.Id), typ.Width, typ.Scale, uint8(typ.Charset))
+	return types.MustTypeFromPlan(*typ)
 }
 
 func PkColByTableDef(tblDef *plan.TableDef) *plan.ColDef {

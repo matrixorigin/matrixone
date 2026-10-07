@@ -45,20 +45,18 @@ const (
 
 // add unit tests for cases
 type testCase struct {
-	ds     []bool // Directions, ds[i] == true: the attrs[i] are in descending order
-	arg    *MergeTop
-	types  []types.Type
-	proc   *process.Process
-	cancel context.CancelFunc
+	arg   *MergeTop
+	types []types.Type
+	proc  *process.Process
 }
 
 func genTestCases(t *testing.T) []testCase {
 	return []testCase{
-		newTestCase(t, []bool{false}, []types.Type{types.T_int8.ToType()}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}}),
-		newTestCase(t, []bool{true}, []types.Type{types.T_int8.ToType()}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}}),
-		newTestCase(t, []bool{false, false}, []types.Type{types.T_int8.ToType(), types.T_int64.ToType()}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}}),
-		newTestCase(t, []bool{true, false}, []types.Type{types.T_int8.ToType(), types.T_int64.ToType()}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}}),
-		newTestCase(t, []bool{true, false}, []types.Type{types.T_int8.ToType(), types.T_int64.ToType()}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}, {Expr: newExpression(1), Flag: 0}}),
+		newTestCase(t, []types.Type{types.T_int8.ToType()}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}}),
+		newTestCase(t, []types.Type{types.T_int8.ToType()}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}}),
+		newTestCase(t, []types.Type{types.T_int8.ToType(), types.T_int64.ToType()}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}}),
+		newTestCase(t, []types.Type{types.T_int8.ToType(), types.T_int64.ToType()}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}}),
+		newTestCase(t, []types.Type{types.T_int8.ToType(), types.T_int64.ToType()}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}, {Expr: newExpression(1), Flag: 0}}),
 	}
 }
 
@@ -128,7 +126,7 @@ func TestTop(t *testing.T) {
 
 func TestMergeTopMaxUint64LimitReturnsAllRows(t *testing.T) {
 	batchRows := 7
-	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int64.ToType()}, 1,
+	tc := newTestCase(t, []types.Type{types.T_int64.ToType()}, 1,
 		[]*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}})
 	tc.arg.Limit = plan2.MakePlan2Uint64ConstExprWithType(^uint64(0))
 
@@ -493,7 +491,7 @@ func sendStringStream(
 }
 
 func TestMergeTopEmitsFinalBatchOnce(t *testing.T) {
-	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int64.ToType()}, 1,
+	tc := newTestCase(t, []types.Type{types.T_int64.ToType()}, 1,
 		[]*plan.OrderBySpec{{Expr: newExpression(0)}})
 	require.NoError(t, tc.arg.Prepare(tc.proc))
 	resetChildren(tc.arg, []*batch.Batch{newBatch(tc.types, tc.proc, 3)})
@@ -531,7 +529,7 @@ func TestMergeTopEmptyResultRemainsTerminal(t *testing.T) {
 
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			tc := newTestCase(t, []bool{false}, []types.Type{types.T_int64.ToType()}, testCase.limit,
+			tc := newTestCase(t, []types.Type{types.T_int64.ToType()}, testCase.limit,
 				[]*plan.OrderBySpec{{Expr: newExpression(0)}})
 			require.NoError(t, tc.arg.Prepare(tc.proc))
 			var bats []*batch.Batch
@@ -558,7 +556,7 @@ func TestMergeTopEmptyResultRemainsTerminal(t *testing.T) {
 }
 
 func TestMergeTopResetStartsNewGeneration(t *testing.T) {
-	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int64.ToType()}, 1,
+	tc := newTestCase(t, []types.Type{types.T_int64.ToType()}, 1,
 		[]*plan.OrderBySpec{{Expr: newExpression(0)}})
 	var children []vm.Operator
 	t.Cleanup(func() {
@@ -601,7 +599,7 @@ func TestMergeTopResetStartsNewGeneration(t *testing.T) {
 }
 
 func TestMergeTopFloatNaNLastAndPeerTieBreak(t *testing.T) {
-	tc := newTestCase(t, []bool{false, false}, []types.Type{types.T_float64.ToType(), types.T_int64.ToType()}, 5,
+	tc := newTestCase(t, []types.Type{types.T_float64.ToType(), types.T_int64.ToType()}, 5,
 		[]*plan.OrderBySpec{{Expr: newExpression(0)}, {Expr: newExpression(1)}})
 	require.NoError(t, tc.arg.Prepare(tc.proc))
 
@@ -632,7 +630,7 @@ func TestMergeTopReevaluatesPreparedOrderExpressionForEachBatch(t *testing.T) {
 		Typ:  plan.Type{Id: int32(types.T_varchar)},
 		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
 	}
-	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int64.ToType()}, 4,
+	tc := newTestCase(t, []types.Type{types.T_int64.ToType()}, 4,
 		[]*plan.OrderBySpec{{Expr: paramExpr}})
 
 	params := vector.NewVec(types.T_varchar.ToType())
@@ -660,42 +658,53 @@ func TestMergeTopReevaluatesPreparedOrderExpressionForEachBatch(t *testing.T) {
 }
 
 func BenchmarkTop(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		tcs := []testCase{
-			newTestCase(b, []bool{false}, []types.Type{types.T_int8.ToType()}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}}),
-			newTestCase(b, []bool{true}, []types.Type{types.T_int8.ToType()}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}}),
-		}
-
-		for _, tc := range tcs {
-			err := tc.arg.Prepare(tc.proc)
-			require.NoError(b, err)
-
-			bats := []*batch.Batch{
-				newBatch(tc.types, tc.proc, Rows),
-				batch.EmptyBatch,
-				newBatch(tc.types, tc.proc, Rows),
-			}
-			resetChildren(tc.arg, bats)
-
-			for {
-				ok, err := vm.Exec(tc.arg, tc.proc)
-				if ok.Status == vm.ExecStop || err != nil {
-					break
-				}
-			}
-
+	tcs := []testCase{
+		newTestCase(b, []types.Type{types.T_int8.ToType()}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}}),
+		newTestCase(b, []types.Type{types.T_int8.ToType()}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}}),
+	}
+	for _, tc := range tcs {
+		b.Cleanup(func() {
 			tc.arg.Free(tc.proc, false, nil)
-			tc.arg.GetChildren(0).Free(tc.proc, false, nil)
-
-			tc.proc.Free()
+			require.Zero(b, tc.proc.Mp().CurrNB())
+			require.Zero(b, tc.proc.Mp().OnHeapCurrNB())
+		})
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for _, tc := range tcs {
+			func() {
+				bats := []*batch.Batch{
+					newBatch(tc.types, tc.proc, Rows),
+					batch.EmptyBatch,
+					newBatch(tc.types, tc.proc, Rows),
+				}
+				resetChildren(tc.arg, bats)
+				child := tc.arg.GetChildren(0)
+				defer func() {
+					tc.arg.Reset(tc.proc, false, nil)
+					child.Free(tc.proc, false, nil)
+				}()
+				require.NoError(b, tc.arg.Prepare(tc.proc))
+				rows := 0
+				for {
+					result, err := vm.Exec(tc.arg, tc.proc)
+					require.NoError(b, err)
+					if result.Batch != nil {
+						rows += result.Batch.RowCount()
+					}
+					if result.Status == vm.ExecStop {
+						break
+					}
+				}
+				require.Equal(b, 3, rows)
+			}()
 		}
 	}
 }
 
-func newTestCase(t testing.TB, ds []bool, ts []types.Type, limit int64, fs []*plan.OrderBySpec) testCase {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+func newTestCase(t testing.TB, ts []types.Type, limit int64, fs []*plan.OrderBySpec) testCase {
+	proc := testutil.NewProcess(t)
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
-	_, cancel := context.WithCancel(context.Background())
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
 		Ch2: make(chan process.PipelineSignal, 3),
 	}
@@ -703,21 +712,12 @@ func newTestCase(t testing.TB, ds []bool, ts []types.Type, limit int64, fs []*pl
 		Ch2: make(chan process.PipelineSignal, 3),
 	}
 	return testCase{
-		ds:    ds,
 		types: ts,
 		proc:  proc,
 		arg: &MergeTop{
 			Fs:    fs,
 			Limit: plan2.MakePlan2Uint64ConstExprWithType(uint64(limit)),
-			OperatorBase: vm.OperatorBase{
-				OperatorInfo: vm.OperatorInfo{
-					Idx:     0,
-					IsFirst: false,
-					IsLast:  false,
-				},
-			},
 		},
-		cancel: cancel,
 	}
 }
 

@@ -154,7 +154,7 @@ func Test_joinAccountDatabase(t *testing.T) {
 func Test_constructInStmtByTableId(t *testing.T) {
 
 	t.Run("A", func(t *testing.T) {
-		var tblId []uint64
+		tblId := make([]uint64, 0, 4)
 		tblId = append(tblId, 3)
 		tblId = append(tblId, 5)
 		tblId = append(tblId, 7)
@@ -169,7 +169,7 @@ func Test_constructInStmtByTableId(t *testing.T) {
 	})
 
 	t.Run("B", func(t *testing.T) {
-		var tblId []uint64
+		tblId := make([]uint64, 0, 1)
 		tblId = append(tblId, 3)
 
 		str, release := constructInStmt(tblId, "table_id")
