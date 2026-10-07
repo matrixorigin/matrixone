@@ -909,6 +909,113 @@ func TestAccountedGroupForcedSpillReleasesMemoryDiskAndFD(t *testing.T) {
 	input.Clean(proc.Mp())
 }
 
+func TestAccountedMergeGroupVectorDistinctSpillConsumer(t *testing.T) {
+	for _, keyType := range []types.T{types.T_array_float32, types.T_array_float64} {
+		t.Run(keyType.String(), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			t.Cleanup(func() {
+				proc.Free()
+				require.Zero(t, proc.Mp().CurrNB())
+			})
+			input := batch.NewWithSize(1)
+			input.Vecs[0] = vector.NewVec(keyType.ToType())
+			var child *colexec.MockOperator
+			t.Cleanup(func() {
+				if child == nil {
+					input.Clean(proc.Mp())
+				} else {
+					child.Free(proc, false, nil)
+				}
+			})
+			const keys = 64
+			want := make(map[string]int, keys)
+			for pass := 0; pass < 2; pass++ {
+				for i := range keys {
+					var value []byte
+					if keyType == types.T_array_float32 {
+						values := []float32{float32(i), 2, 3, 4}
+						if i%2 != 0 {
+							values = append(values, 5, 6)
+						}
+						value = types.ArrayToBytes(values)
+					} else {
+						values := []float64{float64(i), 2}
+						if i%2 != 0 {
+							values = append(values, 3)
+						}
+						value = types.ArrayToBytes(values)
+					}
+					require.NoError(t, vector.AppendBytes(input.Vecs[0], value, false, proc.Mp()))
+					want[string(value)] = 1
+				}
+				require.NoError(t, vector.AppendBytes(input.Vecs[0], nil, true, proc.Mp()))
+			}
+			input.SetRowCount(input.Vecs[0].Length())
+			child = colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+			partial := newGroupOp(proc, []*plan.Expr{colExpr(0, keyType)}, nil)
+			partial.NeedEval = false
+			partial.AppendChild(child)
+			merge := newMergeGroupOp(nil)
+			merge.SpillMem = 8 // Existing deterministic group-count spill mode.
+			merge.AppendChild(partial)
+			var partialAllocation, mergeAllocation groupTestAllocation
+			var partialBound, mergeBound bool
+			var execErr error
+			t.Cleanup(func() {
+				merge.Free(proc, execErr != nil, execErr)
+				partial.Free(proc, execErr != nil, execErr)
+				// Both operators share one statement generation. Release both
+				// registered recovery floors before either terminal helper checks
+				// that the statement's physical reservations are all returned.
+				if mergeBound {
+					require.NoError(t, merge.ctr.clearAllocationAccount(mergeAllocation.account))
+				}
+				if partialBound {
+					require.NoError(t, partial.ctr.clearAllocationAccount(partialAllocation.account))
+				}
+				if mergeBound {
+					require.Zero(t, mergeAllocation.account.Snapshot().Used)
+					require.Zero(t, mergeAllocation.generation.Snapshot().SpillDiskUsed)
+					require.Zero(t, mergeAllocation.generation.Snapshot().SpillFDUsed)
+					finalizeGroupTestAllocation(t, merge, mergeAllocation)
+				}
+				if partialBound {
+					require.Zero(t, partialAllocation.account.Snapshot().Used)
+					finalizeGroupTestAllocation(t, partial, partialAllocation)
+				}
+			})
+			partialAllocation = installGroupTestAllocation(t, partial, proc, 64<<20)
+			partialBound = true
+			mergeAllocation = installGroupTestAllocation(t, merge, proc, 64<<20)
+			mergeBound = true
+			require.NoError(t, partial.Prepare(proc))
+			require.NoError(t, merge.Prepare(proc))
+			got := make(map[string]int, keys)
+			nulls := 0
+			for {
+				var result vm.CallResult
+				result, execErr = vm.Exec(merge, proc)
+				require.NoError(t, execErr)
+				if result.Status == vm.ExecStop || result.Batch == nil {
+					break
+				}
+				for row := range result.Batch.RowCount() {
+					if result.Batch.Vecs[0].IsNull(uint64(row)) {
+						nulls++
+					} else {
+						got[string(result.Batch.Vecs[0].GetBytesAt(row))]++
+					}
+				}
+			}
+			require.Equal(t, want, got)
+			require.Equal(t, 1, nulls)
+			stats := merge.OpAnalyzer.GetOpStats().ExtraStats
+			require.Positive(t, stats["GroupSpillRecords"])
+			require.Positive(t, stats["GroupSpillReloadRows"], "the real MergeGroup must consume the spill codec")
+		})
+	}
+}
+
 func TestPreAllocateBuildChunkIncludesVectorBitmaps(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()

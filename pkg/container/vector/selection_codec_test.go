@@ -16,6 +16,7 @@ package vector
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"testing"
 
@@ -324,6 +325,236 @@ func BenchmarkSelectedRowsFixedWidth(b *testing.B) {
 		}
 		b.ReportMetric(float64(len(payload)), "encoded-B")
 	})
+}
+
+func BenchmarkSelectedRowsVarlenaDecode(b *testing.B) {
+	for _, rows := range []int{512, 8192} {
+		for _, tc := range []struct {
+			name  string
+			typ   types.Type
+			value func(int) []byte
+		}{
+			{"varchar_inline_23", types.T_varchar.ToType(), func(i int) []byte {
+				return bytes.Repeat([]byte{byte(i)}, types.VarlenaInlineSize)
+			}},
+			{"varchar_area_24", types.T_varchar.ToType(), func(i int) []byte {
+				return bytes.Repeat([]byte{byte(i)}, types.VarlenaInlineSize+1)
+			}},
+			{"vecf32_inline_16", types.T_array_float32.ToType(), func(i int) []byte {
+				return types.ArrayToBytes([]float32{float32(i), 2, 3, 4})
+			}},
+			{"vecf64_area_32", types.T_array_float64.ToType(), func(i int) []byte {
+				return types.ArrayToBytes([]float64{float64(i), 2, 3, 4})
+			}},
+		} {
+			b.Run(fmt.Sprintf("%s/rows_%d", tc.name, rows), func(b *testing.B) {
+				mp := mpool.MustNewZero()
+				b.Cleanup(func() { mpool.DeleteMPool(mp) })
+				source := NewVec(tc.typ)
+				account := newTestVectorAllocationAccount(b, 16<<20, 64)
+				destination := newAccountedTestVector(b, tc.typ, account.selection)
+				b.Cleanup(func() {
+					destination.Free(mp)
+					source.Free(mp)
+					finalizeTestVectorAllocationAccount(b, account)
+					require.Zero(b, mp.CurrNB())
+				})
+				selected := make([]int32, rows)
+				for i := range rows {
+					require.NoError(b, AppendBytes(source, tc.value(i), false, mp))
+					selected[i] = int32(i)
+				}
+				var encoded bytes.Buffer
+				require.NoError(b, source.MarshalSelectedRowsTo(&encoded, selected))
+				payload := encoded.Bytes()
+				reader := bytes.NewReader(payload)
+				// Warm the reusable, accounted destination before measuring the
+				// per-record codec cost; setup and capacity growth are separate.
+				require.NoError(b, destination.UnmarshalSelectedRowsFrom(reader, rows, mp))
+				b.ReportAllocs()
+				b.SetBytes(int64(len(payload)))
+				b.ResetTimer()
+				for b.Loop() {
+					reader.Reset(payload)
+					if err := destination.UnmarshalSelectedRowsFrom(reader, rows, mp); err != nil {
+						b.Fatal(err)
+					}
+				}
+				b.StopTimer()
+				require.Equal(b, source.Length(), destination.Length())
+				require.Equal(b, source.GetBytesAt(rows-1), destination.GetBytesAt(rows-1))
+				b.ReportMetric(float64(account.account.Snapshot().Peak), "account-peak-B")
+			})
+		}
+	}
+}
+
+func TestSelectedRowsVarlenaDecodeInlineBoundaryAndReuse(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		typ    types.Type
+		values [][]byte
+	}{
+		{"varchar", types.T_varchar.ToType(), [][]byte{
+			bytes.Repeat([]byte{'a'}, types.VarlenaInlineSize+1),
+			bytes.Repeat([]byte{'b'}, types.VarlenaInlineSize), {}, []byte("short"),
+		}},
+		{"vecf32", types.T_array_float32.ToType(), [][]byte{
+			types.ArrayToBytes([]float32{1, 2, 3, 4, 5, 6}),
+			types.ArrayToBytes([]float32{-0.5, 2, 3, 4}), {},
+			types.ArrayToBytes([]float32{7}),
+		}},
+		{"vecf64", types.T_array_float64.ToType(), [][]byte{
+			types.ArrayToBytes([]float64{1, 2, 3}),
+			types.ArrayToBytes([]float64{-0.5, 2}), {},
+			types.ArrayToBytes([]float64{7}),
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			t.Cleanup(func() { mpool.DeleteMPool(mp) })
+			source := NewVec(tc.typ)
+			account := newTestVectorAllocationAccount(t, 1<<20, 64)
+			destination := newAccountedTestVector(t, tc.typ, account.selection)
+			t.Cleanup(func() {
+				destination.Free(mp)
+				source.Free(mp)
+				finalizeTestVectorAllocationAccount(t, account)
+				require.Zero(t, mp.CurrNB())
+			})
+			require.NoError(t, AppendBytesList(source, tc.values, nil, mp))
+			require.NoError(t, AppendBytes(source, nil, true, mp))
+			// The second decode moves an inline value onto an earlier external
+			// descriptor; its unused inline bytes must not retain old offsets.
+			for _, selected := range [][]int32{{0, 1, 2, 3, 4}, {3, 2, 1, 0, 4}} {
+				var encoded bytes.Buffer
+				require.NoError(t, source.MarshalSelectedRowsTo(&encoded, selected))
+				require.NoError(t, destination.UnmarshalSelectedRowsFrom(&encoded, len(selected), mp))
+				require.Zero(t, encoded.Len())
+				descriptors := MustFixedColNoTypeCheck[types.Varlena](destination)
+				for row, input := range selected {
+					if source.IsNull(uint64(input)) {
+						require.True(t, destination.IsNull(uint64(row)))
+						continue
+					}
+					want := tc.values[input]
+					require.False(t, destination.IsNull(uint64(row)))
+					require.Equal(t, want, destination.GetBytesAt(row))
+					if len(want) <= types.VarlenaInlineSize {
+						require.Equal(t, make([]byte, types.VarlenaSize-1-len(want)),
+							descriptors[row][1+len(want):])
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestSelectedRowsVarlenaDecodeAccountCapacityAndReuse(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	source := NewVec(types.T_varchar.ToType())
+	t.Cleanup(func() {
+		source.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	})
+	require.NoError(t, AppendBytesList(source, [][]byte{
+		[]byte("inline"), bytes.Repeat([]byte{'x'}, 80),
+	}, nil, mp))
+	var encoded, recovery bytes.Buffer
+	require.NoError(t, source.MarshalSelectedRowsTo(&encoded, []int32{0, 1}))
+	require.NoError(t, source.MarshalSelectedRowsTo(&recovery, []int32{0}))
+
+	run := func(t *testing.T, limit uint64, rejected bool) uint64 {
+		t.Helper()
+		account := newTestVectorAllocationAccount(t, limit, 64)
+		destination := newAccountedTestVector(t, source.typ, account.selection)
+		t.Cleanup(func() {
+			destination.Free(mp)
+			finalizeTestVectorAllocationAccount(t, account)
+		})
+		err := destination.UnmarshalSelectedRowsFrom(bytes.NewReader(encoded.Bytes()), 2, mp)
+		if rejected {
+			require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+			require.Zero(t, destination.Length(), "the earlier inline row must not be published")
+			require.NoError(t, destination.UnmarshalSelectedRowsFrom(bytes.NewReader(recovery.Bytes()), 1, mp))
+			require.Equal(t, []byte("inline"), destination.GetBytesAt(0))
+		} else {
+			require.NoError(t, err)
+			require.Equal(t, source.GetBytesAt(1), destination.GetBytesAt(1))
+		}
+		return account.account.Snapshot().Peak
+	}
+	var peak uint64
+	t.Run("measured-peak", func(t *testing.T) { peak = run(t, 1<<20, false) })
+	require.Positive(t, peak)
+	t.Run("exact-peak", func(t *testing.T) { require.Equal(t, peak, run(t, peak, false)) })
+	t.Run("one-byte-short", func(t *testing.T) { run(t, peak-1, true) })
+}
+
+func TestSelectedRowsVarlenaDecodeRejectsInvalidLength(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	destination := NewOffHeapVecWithType(types.T_varchar.ToType())
+	t.Cleanup(func() {
+		destination.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	})
+	for _, tc := range []struct {
+		name string
+		size int32
+		want string
+	}{
+		{"negative", -1, "value size"},
+		{"min-int32", -1 << 31, "value size"},
+		{"truncated-inline", types.VarlenaInlineSize, "EOF"},
+		{"truncated-area", types.VarlenaInlineSize + 1, "EOF"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var payload bytes.Buffer
+			require.NoError(t, types.WriteInt32(&payload, 1))
+			require.NoError(t, payload.WriteByte(0))
+			require.NoError(t, types.WriteInt32(&payload, tc.size))
+			require.ErrorContains(t,
+				destination.UnmarshalSelectedRowsFrom(&payload, 1, mp), tc.want)
+			require.Zero(t, destination.Length())
+		})
+	}
+}
+
+func TestSelectedRowsVarlenaDecodeMaterializesBorrowedDestination(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	source := NewVec(types.T_varchar.ToType())
+	destination := NewOffHeapVecWithType(source.typ)
+	t.Cleanup(func() {
+		destination.Free(mp)
+		source.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	})
+	require.NoError(t, AppendBytesList(source, [][]byte{
+		bytes.Repeat([]byte{'x'}, 80), []byte("inline"),
+	}, nil, mp))
+	borrowedData, borrowedArea := bytes.Clone(source.GetData()), bytes.Clone(source.GetArea())
+	wantData, wantArea := bytes.Clone(borrowedData), bytes.Clone(borrowedArea)
+	dataLease, err := NewRefCountedBufferLease(borrowedData, int64(cap(borrowedData)), nil)
+	require.NoError(t, err)
+	t.Cleanup(dataLease.Release)
+	areaLease, err := NewRefCountedBufferLease(borrowedArea, int64(cap(borrowedArea)), nil)
+	require.NoError(t, err)
+	t.Cleanup(areaLease.Release)
+	require.NoError(t, destination.InstallBorrowedData(borrowedData, dataLease))
+	require.NoError(t, destination.InstallBorrowedArea(borrowedArea, areaLease))
+	destination.SetLength(2)
+	require.True(t, destination.HasBorrowedBacking())
+	var encoded bytes.Buffer
+	require.NoError(t, source.MarshalSelectedRowsTo(&encoded, []int32{1, 0}))
+	require.NoError(t, destination.UnmarshalSelectedRowsFrom(&encoded, 2, mp))
+	require.False(t, destination.HasBorrowedBacking())
+	require.Equal(t, []byte("inline"), destination.GetBytesAt(0))
+	require.Equal(t, source.GetBytesAt(0), destination.GetBytesAt(1))
+	require.Equal(t, wantData, borrowedData, "decode must not mutate the borrowed producer")
+	require.Equal(t, wantArea, borrowedArea)
 }
 
 func TestSelectedRowsCodecPreservesMetadataAndVarlena(t *testing.T) {

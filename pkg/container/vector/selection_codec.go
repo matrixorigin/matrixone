@@ -430,13 +430,21 @@ func (v *Vector) UnmarshalSelectedRowsFrom(
 			return err
 		}
 	} else {
+		// Framing words and inline payloads must not allocate a temporary
+		// object for every row. PreExtend has admitted owned storage for the
+		// full descriptor extent, so decode directly into that storage.
+		var encodedSize [4]byte
+		var varlenas []types.Varlena
+		if isVarlen {
+			varlenas = MustFixedColNoTypeCheck[types.Varlena](v)
+		}
 		for row := 0; row < count; row++ {
 			rowFlags := byte(0)
 			if withRowFlags {
-				rowFlags, err = types.ReadByte(r)
-				if err != nil {
+				if _, err = io.ReadFull(r, encodedSize[:1]); err != nil {
 					return err
 				}
+				rowFlags = encodedSize[0]
 				if rowFlags&^(selectedRowsHasNull|selectedRowsHasGrouping|
 					selectedRowsRowBinary|selectedRowsRowText) != 0 ||
 					rowFlags&selectedRowsHasNull != 0 && metadata&selectedRowsHasNull == 0 ||
@@ -461,19 +469,57 @@ func (v *Vector) UnmarshalSelectedRowsFrom(
 			if rowFlags&selectedRowsRowText != 0 {
 				v.textStringRows.Add(uint64(row))
 			}
-			valueSize := fixedWidth
-			if isVarlen {
-				valueSize, err = types.ReadInt32AsInt(r)
-				if err != nil {
+			if !isVarlen {
+				start := row * fixedWidth
+				if _, err = io.ReadFull(r, v.data[start:start+fixedWidth]); err != nil {
 					return err
 				}
-				if valueSize < 0 {
-					return moerr.NewInvalidInputNoCtx("invalid selected vector value size")
-				}
+				continue
 			}
-			if err := v.readRawBytesAt(r, row, valueSize, mp); err != nil {
+			if _, err = io.ReadFull(r, encodedSize[:]); err != nil {
 				return err
 			}
+			valueSize := int(int32(binary.LittleEndian.Uint32(encodedSize[:])))
+			if valueSize < 0 {
+				return moerr.NewInvalidInputNoCtx("invalid selected vector value size")
+			}
+			if uint64(valueSize) > math.MaxUint32 {
+				return moerr.NewInvalidInputNoCtx("selected vector value exceeds varlena format")
+			}
+			value := &varlenas[row]
+			*value = types.Varlena{}
+			if valueSize <= types.VarlenaInlineSize {
+				value[0] = byte(valueSize)
+				if _, err = io.ReadFull(r, value[1:1+valueSize]); err != nil {
+					return err
+				}
+				if err = validateJSONPayload(v.typ, value.GetByteSlice(nil)); err != nil {
+					return err
+				}
+				v.areaDisjoint = false
+				continue
+			}
+			oldAreaLength := len(v.area)
+			if uint64(oldAreaLength)+uint64(valueSize) > math.MaxUint32 ||
+				uint64(oldAreaLength)+uint64(valueSize) > uint64(math.MaxInt) {
+				return moerr.NewInvalidInputNoCtx("selected vector area exceeds varlena format")
+			}
+			newAreaLength := oldAreaLength + valueSize
+			area, growErr := v.growArea(mp, newAreaLength)
+			if growErr != nil {
+				return growErr
+			}
+			if _, err = io.ReadFull(r, area[oldAreaLength:newAreaLength]); err != nil {
+				v.area = area[:oldAreaLength]
+				return err
+			}
+			if err = validateJSONPayload(v.typ, area[oldAreaLength:newAreaLength]); err != nil {
+				v.area = area[:oldAreaLength]
+				return err
+			}
+			value.SetOffsetLen(uint32(oldAreaLength), uint32(valueSize))
+			v.area = area
+			v.areaDisjoint = true
 		}
 	}
 	switch kindMode {
@@ -506,58 +552,5 @@ func (v *Vector) UnmarshalSelectedRowsFrom(
 		v.binaryStringRowsActive = true
 		v.normalizeBinaryStringRows()
 	}
-	return nil
-}
-
-func (v *Vector) readRawBytesAt(
-	r io.Reader,
-	row int,
-	size int,
-	mp *mpool.MPool,
-) error {
-	if !v.typ.IsVarlen() {
-		start := row * v.typ.TypeSize()
-		_, err := io.ReadFull(r, v.data[start:start+size])
-		return err
-	}
-	if uint64(size) > math.MaxUint32 {
-		return moerr.NewInvalidInputNoCtx("selected vector value exceeds varlena format")
-	}
-	var value types.Varlena
-	if size <= types.VarlenaInlineSize {
-		value[0] = byte(size)
-		if _, err := io.ReadFull(r, value[1:1+size]); err != nil {
-			return err
-		}
-		if err := validateJSONPayload(v.typ, value.GetByteSlice(nil)); err != nil {
-			return err
-		}
-		return SetFixedAtWithTypeCheck(v, row, value)
-	}
-	oldAreaLength := len(v.area)
-	if uint64(oldAreaLength)+uint64(size) > math.MaxUint32 ||
-		uint64(oldAreaLength)+uint64(size) > uint64(math.MaxInt) {
-		return moerr.NewInvalidInputNoCtx("selected vector area exceeds varlena format")
-	}
-	newAreaLength := oldAreaLength + size
-	area, err := v.growArea(mp, newAreaLength)
-	if err != nil {
-		return err
-	}
-	if _, err = io.ReadFull(r, area[oldAreaLength:newAreaLength]); err != nil {
-		v.area = area[:oldAreaLength]
-		return err
-	}
-	if err := validateJSONPayload(v.typ, area[oldAreaLength:newAreaLength]); err != nil {
-		v.area = area[:oldAreaLength]
-		return err
-	}
-	value.SetOffsetLen(uint32(oldAreaLength), uint32(size))
-	if err = SetFixedAtWithTypeCheck(v, row, value); err != nil {
-		v.area = area[:oldAreaLength]
-		return err
-	}
-	v.area = area
-	v.areaDisjoint = true
 	return nil
 }

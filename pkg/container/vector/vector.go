@@ -9538,6 +9538,14 @@ func AppendBytesWithStringSource(vec *Vector, val []byte, isNull bool, source ty
 }
 
 func (v *Vector) prepareSingleAppendMetadata(isNull bool, source *types.StringSource, mp *mpool.MPool) error {
+	// Ordinary appends cannot introduce any provenance when every metadata
+	// representation is already ordinary. Keep the full admission path for
+	// scalar provenance, row sidecars, and an outstanding source preflight.
+	if source == nil && v.prepareParamKind == PrepareParamNone && v.prepareParamKinds == nil &&
+		v.stringSource == types.StringSourceExpression && v.stringSources == nil &&
+		!v.binaryString && !v.binaryStringRowsActive && !v.preflightStringSourceReady {
+		return nil
+	}
 	if source == nil {
 		if isNull {
 			return v.prepareOrdinaryStringSourceAppend(1, mp)
@@ -9552,6 +9560,12 @@ func (v *Vector) prepareSingleAppendMetadata(isNull bool, source *types.StringSo
 
 func (v *Vector) publishSingleAppend(source *types.StringSource) {
 	if source == nil {
+		// The caller has admitted data/bitmap capacity and metadata. Without
+		// either row sidecar, setLengthAfterExtend only publishes the length.
+		if v.prepareParamKinds == nil && v.stringSources == nil {
+			v.length++
+			return
+		}
 		v.setLengthAfterExtend(v.length + 1)
 	} else {
 		v.setLengthAfterExtendWithSource(v.length+1, *source, false)
