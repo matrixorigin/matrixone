@@ -1378,6 +1378,16 @@ func TestPreparedLowPrecisionFloatMarkerNarrowing(t *testing.T) {
 		{"in out of range", "f in (?, 9)", []param{{"1e300", types.T_float64.ToType()}}, true, 0},
 		{"in one sql value out of range", "f in (?, ?)", []param{sqlDecimal, {"1e39", types.T_float64.ToType()}}, false, 1},
 		{"not in one sql value out of range", "f not in (?, ?)", []param{sqlDecimal, {"1e39", types.T_float64.ToType()}}, false, 1},
+		// in range by the value CAST rounds the marker to (to odd, from the exact source)
+		{"float4 above max binary double", "h <= ?", []param{{"6.0000001", types.T_float64.ToType()}}, true, 0},
+		{"float4 below min binary double", "h >= ?", []param{{"-6.0000001", types.T_float64.ToType()}}, true, 0},
+		{"float4 above max binary text", "h <= ?", []param{{"6.0000001", types.T_varchar.ToType()}}, true, 0},
+		{"float4 above max beyond float64 binary text", "h <= ?", []param{{"6.0000000000000000000000001", types.T_varchar.ToType()}}, true, 0},
+		{"float4 max binary double", "h <= ?", []param{{"6", types.T_float64.ToType()}}, true, 1},
+		{"float4 min binary text", "h >= ?", []param{{"-6", types.T_varchar.ToType()}}, true, 1},
+		{"float8 above max binary double", "g <= ?", []param{{"448.000001", types.T_float64.ToType()}}, true, 0},
+		{"float8 below min binary text", "g >= ?", []param{{"-448.000001", types.T_varchar.ToType()}}, true, 0},
+		{"float8 max binary double", "g <= ?", []param{{"448", types.T_float64.ToType()}}, true, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := NewMockOptimizer(false, newPlanTestProcess(t))
@@ -1409,7 +1419,7 @@ func TestPreparedLowPrecisionFloatMarkerNarrowing(t *testing.T) {
 					filters++
 					require.NoError(t, planpb.VisitExprTree(filter, func(expr *Expr) error {
 						if fn := expr.GetF(); fn != nil && fn.Func.ObjName == "cast" &&
-							expr.Typ.Id == int32(types.T_bf16) && function.ContainsParameter(fn.Args[0]) {
+							types.T(expr.Typ.Id).IsLowPrecisionFloat() && function.ContainsParameter(fn.Args[0]) {
 							narrowed++
 						}
 						return nil

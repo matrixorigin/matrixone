@@ -6919,6 +6919,30 @@ func TestLowPrecisionFloatLiteralNarrowing(t *testing.T) {
 	args := firstFilter("SELECT id FROM vecblock_t WHERE f < 1e39").GetF().Args
 	require.Nil(t, args[0].GetCol(), "an out-of-range literal widens the column")
 	require.Equal(t, int32(types.T_float64), args[0].Typ.Id)
+
+	// a literal is in range by the value CAST rounds it to (to odd, from the exact source):
+	// one just outside float4 (±6) or float8 (±448) that float32 rounds to the maximum
+	// keeps the wide comparison, and the exact maximum compares in the column type
+	for _, tc := range []struct {
+		sql    string
+		narrow bool
+	}{
+		{"SELECT id FROM vecblock_t WHERE h <= 6.0000001", false},
+		{"SELECT id FROM vecblock_t WHERE h >= -6.0000001", false},
+		{"SELECT id FROM vecblock_t WHERE h <= '6.0000001'", false},
+		{"SELECT id FROM vecblock_t WHERE h <= 6.0000000000000000000000001", false},
+		{"SELECT id FROM vecblock_t WHERE h <= '6.0000000000000000000000001'", false},
+		{"SELECT id FROM vecblock_t WHERE g <= 448.000001", false},
+		{"SELECT id FROM vecblock_t WHERE g >= -448.000001", false},
+		{"SELECT id FROM vecblock_t WHERE h <= 6", true},
+		{"SELECT id FROM vecblock_t WHERE h >= -6.0", true},
+		{"SELECT id FROM vecblock_t WHERE h <= '6'", true},
+		{"SELECT id FROM vecblock_t WHERE g <= 448", true},
+		{"SELECT id FROM vecblock_t WHERE g >= -448.0", true},
+	} {
+		args := firstFilter(tc.sql).GetF().Args
+		require.Equal(t, tc.narrow, args[0].GetCol() != nil, tc.sql)
+	}
 }
 
 // TestLowPrecisionFloatColumnsStayNarrow checks that NOT IN, !=, <=> and BETWEEN round

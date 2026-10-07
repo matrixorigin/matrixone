@@ -28,10 +28,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestVectorMatmulCPUMatchesScalarOrder runs CPU vector_matmul over every row and requires
-// the rows, in order, and the distance text of ORDER BY <scalar function>(v, q), id-text:
-// inner_product, cosine_distance and l2_distance_sq evaluated by the SQL functions on the
-// same cells. Rows 0 and 1 differ only in a coordinate of 1e-4 in the last block.
+// TestVectorMatmulCPUMatchesScalarOrder runs CPU vector_matmul with topk 1 and with every
+// row, and requires the rows, in order, and the distance text of ORDER BY <scalar
+// function>(v, q), id-text LIMIT topk: inner_product, cosine_distance and l2_distance_sq
+// evaluated by the SQL functions on the same cells. Rows 0 and 1 differ only in a
+// coordinate of 1e-4 alone in the last vecf8/vecf4 block, where the query is 0: their
+// squared L2 distances differ in float64 and are equal in float32.
 func TestVectorMatmulCPUMatchesScalarOrder(t *testing.T) {
 	proc := testutil.NewProcess(t, testutil.WithFileService(nil))
 	mp := proc.Mp()
@@ -40,6 +42,7 @@ func TestVectorMatmulCPUMatchesScalarOrder(t *testing.T) {
 	for d := range query {
 		query[d] = float32(d % 3)
 	}
+	query[dim-1] = 0
 	for _, oid := range []types.T{
 		types.T_array_float32, types.T_array_bf16, types.T_array_float16,
 		types.T_array_int8, types.T_array_uint8, types.T_array_float8, types.T_array_float4,
@@ -109,8 +112,10 @@ func TestVectorMatmulCPUMatchesScalarOrder(t *testing.T) {
 					}
 					return strconv.Itoa(order[a]) < strconv.Itoa(order[b])
 				})
-				if !integer && mc.metric == "l2sq" {
-					require.Greater(t, dist[0], dist[1], "the scalar function separates rows 0 and 1")
+				if (oid == types.T_array_float8 || oid == types.T_array_float4) && mc.metric == "l2sq" {
+					require.Greater(t, dist[0], dist[1], "l2_distance_sq separates rows 0 and 1")
+					require.Equal(t, float32(dist[0]), float32(dist[1]), "rows 0 and 1 are equal in float32")
+					require.Equal(t, 1, order[0], "row 1 is nearest")
 				}
 
 				// CPU vector_matmul over the same cells; the query as a float32 BLOB, exact in
@@ -122,38 +127,40 @@ func TestVectorMatmulCPUMatchesScalarOrder(t *testing.T) {
 					require.NoError(t, vector.AppendFixed(ids, int64(i), false, mp))
 					groups[i] = 1
 				}
-				raw := aggexec.EncodeVectorMatmulBinaryConfig(nrows, types.ArrayToBytes(query), `{"metric":"`+mc.metric+`"}`, false)
-				if oid == types.T_array_float8 || oid == types.T_array_float4 {
-					raw = aggexec.EncodeVectorMatmulBinaryConfig(nrows, qcell, `{"metric":"`+mc.metric+`","query_format":"vecblock"}`, false)
-				}
-				ag, err := aggexec.MakeGroupAgg(mp, aggexec.AggIdOfVectorMatmul, false, nil, raw, types.T_int64.ToType(), typ)
-				require.NoError(t, err)
-				t.Cleanup(ag.Free)
-				require.NoError(t, ag.GroupGrow(1))
-				require.NoError(t, ag.BatchFill(0, groups, []*vector.Vector{ids, vecs}))
-				out, err := ag.Flush()
-				require.NoError(t, err)
-				t.Cleanup(func() {
-					for _, v := range out {
-						v.Free(mp)
+				for _, topk := range []int64{1, nrows} {
+					raw := aggexec.EncodeVectorMatmulBinaryConfig(topk, types.ArrayToBytes(query), `{"metric":"`+mc.metric+`"}`, false)
+					if oid == types.T_array_float8 || oid == types.T_array_float4 {
+						raw = aggexec.EncodeVectorMatmulBinaryConfig(topk, qcell, `{"metric":"`+mc.metric+`","query_format":"vecblock"}`, false)
 					}
-				})
-				var hits [][][]json.RawMessage
-				require.NoError(t, json.Unmarshal([]byte(types.DecodeJson(out[0].GetBytesAt(0)).String()), &hits))
-				require.Len(t, hits, 1)
-				require.Len(t, hits[0], nrows)
-				for rank, i := range order {
-					var id string
-					require.NoError(t, json.Unmarshal(hits[0][rank][0], &id))
-					require.Equal(t, strconv.Itoa(i), id, "rank %d", rank)
-					want := strconv.FormatFloat(dist[i], 'g', -1, 64)
-					if float64(float32(dist[i])) == dist[i] {
-						want = strconv.FormatFloat(dist[i], 'g', -1, 32)
+					ag, err := aggexec.MakeGroupAgg(mp, aggexec.AggIdOfVectorMatmul, false, nil, raw, types.T_int64.ToType(), typ)
+					require.NoError(t, err)
+					t.Cleanup(ag.Free)
+					require.NoError(t, ag.GroupGrow(1))
+					require.NoError(t, ag.BatchFill(0, groups, []*vector.Vector{ids, vecs}))
+					out, err := ag.Flush()
+					require.NoError(t, err)
+					t.Cleanup(func() {
+						for _, v := range out {
+							v.Free(mp)
+						}
+					})
+					var hits [][][]json.RawMessage
+					require.NoError(t, json.Unmarshal([]byte(types.DecodeJson(out[0].GetBytesAt(0)).String()), &hits))
+					require.Len(t, hits, 1)
+					require.Len(t, hits[0], int(topk))
+					for rank, i := range order[:topk] {
+						var id string
+						require.NoError(t, json.Unmarshal(hits[0][rank][0], &id))
+						require.Equal(t, strconv.Itoa(i), id, "topk %d rank %d", topk, rank)
+						want := strconv.FormatFloat(dist[i], 'g', -1, 64)
+						if float64(float32(dist[i])) == dist[i] {
+							want = strconv.FormatFloat(dist[i], 'g', -1, 32)
+						}
+						if dist[i] == 0 {
+							want = "0"
+						}
+						require.Equal(t, want, string(hits[0][rank][1]), "topk %d rank %d id %d", topk, rank, i)
 					}
-					if dist[i] == 0 {
-						want = "0"
-					}
-					require.Equal(t, want, string(hits[0][rank][1]), "rank %d id %d", rank, i)
 				}
 			})
 		}

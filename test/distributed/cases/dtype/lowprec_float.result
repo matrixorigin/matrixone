@@ -504,4 +504,81 @@ SELECT json_row(cast(1.5 AS bf16), cast(-2 AS float16), cast(448 AS float8), cas
 [1.5,-2,448,6,null]
 SELECT bit_cast(cast(x'803f' AS varbinary(2)) AS bf16), bit_cast(cast(x'0000803f' AS varbinary(4)) AS float);
 not supported: bit_cast to BF16
+CREATE TABLE fp (id INT, f float4, g float8);
+INSERT INTO fp VALUES (1, 6, 448), (2, -6, -448);
+SELECT count(*) FROM fp WHERE f <= 6.0000001;
+➤ count(*)[-5,64,0]  𝄀
+2
+SELECT count(*) FROM fp WHERE f >= -6.0000001;
+➤ count(*)[-5,64,0]  𝄀
+2
+SELECT count(*) FROM fp WHERE g <= 448.000001;
+➤ count(*)[-5,64,0]  𝄀
+2
+SELECT count(*) FROM fp WHERE g >= -448.000001;
+➤ count(*)[-5,64,0]  𝄀
+2
+SELECT count(*) FROM fp WHERE f <= '6.0000001';
+➤ count(*)[-5,64,0]  𝄀
+2
+SELECT count(*) FROM fp WHERE f BETWEEN -6.0000001 AND 6.0000001;
+➤ count(*)[-5,64,0]  𝄀
+2
+SELECT count(*) FROM fp WHERE f IN (6.0000001, 6, -6);
+➤ count(*)[-5,64,0]  𝄀
+2
+SELECT count(*) FROM fp WHERE f NOT IN (6.0000001);
+➤ count(*)[-5,64,0]  𝄀
+2
+SELECT count(*) FROM fp WHERE f <= 6.0000000000000000000000001;
+➤ count(*)[-5,64,0]  𝄀
+2
+SELECT count(*) FROM fp WHERE f <= '6.0000000000000000000000001';
+➤ count(*)[-5,64,0]  𝄀
+2
+SELECT count(*) FROM fp WHERE f < 6.0000001 AND f > 5.9999999;
+➤ count(*)[-5,64,0]  𝄀
+0
+SELECT count(*) FROM fp WHERE f <= 6.1;
+➤ count(*)[-5,64,0]  𝄀
+2
+SELECT count(*) FROM fp WHERE g <= 449;
+➤ count(*)[-5,64,0]  𝄀
+2
+SELECT count(*) FROM fp WHERE f <= 6;
+➤ count(*)[-5,64,0]  𝄀
+2
+SELECT count(*) FROM fp WHERE f = 6;
+➤ count(*)[-5,64,0]  𝄀
+1
+SELECT count(*) FROM fp WHERE CAST(f AS double) <= 6.0000001;
+➤ count(*)[-5,64,0]  𝄀
+2
+SET @p = 6.0000001;
+PREPARE s FROM 'SELECT count(*) FROM fp WHERE f <= ?';
+EXECUTE s USING @p;
+➤ count(*)[-5,64,0]  𝄀
+2
+SET @p = '6.0000000000000000000000001';
+EXECUTE s USING @p;
+➤ count(*)[-5,64,0]  𝄀
+2
+SET @p = 6;
+EXECUTE s USING @p;
+➤ count(*)[-5,64,0]  𝄀
+2
+DEALLOCATE PREPARE s;
+SET @q = -448.000001;
+PREPARE s2 FROM 'SELECT count(*) FROM fp WHERE g >= ?';
+EXECUTE s2 USING @q;
+➤ count(*)[-5,64,0]  𝄀
+2
+DEALLOCATE PREPARE s2;
+SELECT CAST(6.0000001 AS float4);
+Data truncation: data out of range: data type FLOAT4, value 6.0000001
+INSERT INTO fp VALUES (3, 6.0000001, 0);
+Data truncation: data out of range: data type FLOAT4, value 6.0000001
+SELECT count(*) FROM fp;
+➤ count(*)[-5,64,0]  𝄀
+2
 DROP DATABASE lowprec_float;

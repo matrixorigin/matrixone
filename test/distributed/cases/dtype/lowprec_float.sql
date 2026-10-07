@@ -276,4 +276,41 @@ SELECT json_row(cast(1.5 AS bf16), cast(-2 AS float16), cast(448 AS float8), cas
 -- arbitrary bits are not a stored low-precision value
 SELECT bit_cast(cast(x'803f' AS varbinary(2)) AS bf16), bit_cast(cast(x'0000803f' AS varbinary(4)) AS float);
 
+-- a literal or parameter is in range by the value CAST rounds it to (to odd, from the exact
+-- source); one just outside float4 (6) or float8 (448) keeps the wide comparison
+CREATE TABLE fp (id INT, f float4, g float8);
+INSERT INTO fp VALUES (1, 6, 448), (2, -6, -448);
+SELECT count(*) FROM fp WHERE f <= 6.0000001;
+SELECT count(*) FROM fp WHERE f >= -6.0000001;
+SELECT count(*) FROM fp WHERE g <= 448.000001;
+SELECT count(*) FROM fp WHERE g >= -448.000001;
+SELECT count(*) FROM fp WHERE f <= '6.0000001';
+SELECT count(*) FROM fp WHERE f BETWEEN -6.0000001 AND 6.0000001;
+SELECT count(*) FROM fp WHERE f IN (6.0000001, 6, -6);
+SELECT count(*) FROM fp WHERE f NOT IN (6.0000001);
+SELECT count(*) FROM fp WHERE f <= 6.0000000000000000000000001;
+SELECT count(*) FROM fp WHERE f <= '6.0000000000000000000000001';
+SELECT count(*) FROM fp WHERE f < 6.0000001 AND f > 5.9999999;
+SELECT count(*) FROM fp WHERE f <= 6.1;
+SELECT count(*) FROM fp WHERE g <= 449;
+SELECT count(*) FROM fp WHERE f <= 6;
+SELECT count(*) FROM fp WHERE f = 6;
+SELECT count(*) FROM fp WHERE CAST(f AS double) <= 6.0000001;
+SET @p = 6.0000001;
+PREPARE s FROM 'SELECT count(*) FROM fp WHERE f <= ?';
+EXECUTE s USING @p;
+SET @p = '6.0000000000000000000000001';
+EXECUTE s USING @p;
+SET @p = 6;
+EXECUTE s USING @p;
+DEALLOCATE PREPARE s;
+SET @q = -448.000001;
+PREPARE s2 FROM 'SELECT count(*) FROM fp WHERE g >= ?';
+EXECUTE s2 USING @q;
+DEALLOCATE PREPARE s2;
+-- CAST and writes still reject a value outside the type
+SELECT CAST(6.0000001 AS float4);
+INSERT INTO fp VALUES (3, 6.0000001, 0);
+SELECT count(*) FROM fp;
+
 DROP DATABASE lowprec_float;

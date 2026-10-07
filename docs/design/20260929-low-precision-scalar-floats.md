@@ -65,7 +65,10 @@ GPU kernels agree on the encoding.
   and is not cached by parameter type. Two literals that round to the same value are the
   same constant for filter simplification (`a = 1.1 AND a = 1` on a `float4` column). A literal
   or parameter outside the finite range, and any other expression, keeps the comparison
-  in `float32`/`float64`. For `<`/`>` this follows the column's grid: a literal that
+  in `float32`/`float64`. Inside or outside is decided on the value `CAST` rounds the source
+  to (to odd, from the exact decimal or text value), so a value `CAST` rejects is never
+  narrowed: `f <= 6.0000001` on a `float4` column, or `g <= 448.000001` on a `float8`
+  column, compares wide although float32 rounds those literals to the maximum. For `<`/`>` this follows the column's grid: a literal that
   rounds down compares as its rounded value.
 - **One zero.** A zero of either sign is stored as `+0` (code 0 in every format) by
   casts, writes, `LOAD` and user variables, so equal values have equal bits for hashing

@@ -1451,6 +1451,8 @@ func NewMockCompilerContext(isDml bool, proc *process.Process) *MockCompilerCont
 			{"a", types.T_array_float8, true, 4, 0},
 			{"b", types.T_array_float4, true, 4, 0},
 			{"f", types.T_bf16, true, 16, 0},
+			{"g", types.T_float8, true, 8, 0},
+			{"h", types.T_float4, true, 8, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
 		pks: []int{0},

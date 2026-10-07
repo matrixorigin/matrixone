@@ -790,7 +790,7 @@ func narrowPreparedLowPrecisionOperand(ctx context.Context, state *preparedSourc
 		return nil, false, nil
 	}
 	value, ok := preparedLowPrecisionValue(ctx, source)
-	if !ok || types.RejectNonFiniteNarrowFloat(float32(value), peerOid) != nil {
+	if !ok || types.RejectNonFiniteNarrowFloat(value, peerOid) != nil {
 		return nil, false, nil
 	}
 	converted, err := makePlan2CastExpr(ctx, source, peer)
@@ -799,55 +799,100 @@ func narrowPreparedLowPrecisionOperand(ctx context.Context, state *preparedSourc
 
 var preparedDecimalNumeral = regexp.MustCompile(`^\s*[+-]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][+-]?[0-9]+)?\s*$`)
 
-// decimalNumeralLiteralFloat64 returns the value of a text literal that is a decimal numeral,
-// as preparedLowPrecisionValue reads a text parameter.
-func decimalNumeralLiteralFloat64(expr *Expr) (float64, bool) {
+// lowPrecisionTextFloat32 is decimal numeral text rounded to float32 as CAST to
+// bf16/float16/float8/float4 rounds it: to odd, from the text's exact value.
+func lowPrecisionTextFloat32(text string) (float32, bool) {
+	if !preparedDecimalNumeral.MatchString(text) {
+		return 0, false
+	}
+	f, _, err := types.Float32RoundToOddString(text)
+	return f, err == nil
+}
+
+// lowPrecisionLiteralFloat32 is a numeric or decimal-numeral text literal rounded to
+// float32 as CAST to bf16/float16/float8/float4 rounds it: to odd, from the exact value of
+// a decimal or text literal.
+func lowPrecisionLiteralFloat32(expr *Expr) (float32, bool) {
+	// a decimal literal binds as CAST('<digits>' AS DECIMAL(w, s))
+	if fn := expr.GetF(); fn != nil && fn.Func.GetObjName() == "cast" && len(fn.Args) > 0 {
+		lit := fn.Args[0].GetLit()
+		sval, isStr := lit.GetValue().(*plan.Literal_Sval)
+		if lit == nil || lit.Isnull || !isStr {
+			return 0, false
+		}
+		switch t := expr.Typ; types.T(t.Id) {
+		case types.T_decimal64, types.T_decimal128:
+			d, err := types.ParseDecimal128(sval.Sval, t.Width, t.Scale)
+			if err != nil {
+				return 0, false
+			}
+			return lowPrecisionTextFloat32(d.Format(t.Scale))
+		}
+		return 0, false
+	}
 	lit := expr.GetLit()
 	if lit == nil || lit.Isnull {
 		return 0, false
 	}
-	sval, ok := lit.Value.(*plan.Literal_Sval)
-	if !ok || !preparedDecimalNumeral.MatchString(sval.Sval) {
-		return 0, false
+	switch v := lit.Value.(type) {
+	case *plan.Literal_Dval:
+		return types.Float32RoundToOdd(v.Dval), true
+	case *plan.Literal_Fval:
+		return v.Fval, true
+	case *plan.Literal_I8Val:
+		return types.Float32RoundToOddInt(int64(v.I8Val)), true
+	case *plan.Literal_I16Val:
+		return types.Float32RoundToOddInt(int64(v.I16Val)), true
+	case *plan.Literal_I32Val:
+		return types.Float32RoundToOddInt(int64(v.I32Val)), true
+	case *plan.Literal_I64Val:
+		return types.Float32RoundToOddInt(v.I64Val), true
+	case *plan.Literal_U8Val:
+		return types.Float32RoundToOddUint(uint64(v.U8Val)), true
+	case *plan.Literal_U16Val:
+		return types.Float32RoundToOddUint(uint64(v.U16Val)), true
+	case *plan.Literal_U32Val:
+		return types.Float32RoundToOddUint(uint64(v.U32Val)), true
+	case *plan.Literal_U64Val:
+		return types.Float32RoundToOddUint(v.U64Val), true
+	case *plan.Literal_Decimal64Val:
+		return lowPrecisionTextFloat32(types.Decimal64(v.Decimal64Val.A).Format(expr.Typ.Scale))
+	case *plan.Literal_Decimal128Val:
+		d := types.Decimal128{B0_63: uint64(v.Decimal128Val.A), B64_127: uint64(v.Decimal128Val.B)}
+		return lowPrecisionTextFloat32(d.Format(expr.Typ.Scale))
+	case *plan.Literal_Sval:
+		return lowPrecisionTextFloat32(v.Sval)
 	}
-	v, err := strconv.ParseFloat(strings.TrimSpace(sval.Sval), 64)
-	return v, err == nil
+	return 0, false
 }
 
-// preparedLowPrecisionValue reads this execution's value of a marker as a float64: a
-// float, a signed or unsigned integer, or text holding a decimal numeral.
-func preparedLowPrecisionValue(ctx context.Context, expr *Expr) (float64, bool) {
+// preparedLowPrecisionValue is this execution's value of a marker -- a float, a signed or
+// unsigned integer, or text holding a decimal numeral -- rounded to float32 as CAST to
+// bf16/float16/float8/float4 rounds it.
+func preparedLowPrecisionValue(ctx context.Context, expr *Expr) (float32, bool) {
 	raw, present := preparedConfigurationValue(ctx, expr)
 	if !present {
 		return 0, false
 	}
 	switch value := raw.(type) {
 	case float64:
-		return value, true
+		return types.Float32RoundToOdd(value), true
 	case float32:
-		return float64(value), true
+		return value, true
 	case int64:
-		return float64(value), true
+		return types.Float32RoundToOddInt(value), true
 	case int32:
-		return float64(value), true
+		return types.Float32RoundToOddInt(int64(value)), true
 	case int:
-		return float64(value), true
+		return types.Float32RoundToOddInt(int64(value)), true
 	case uint64:
-		return float64(value), true
+		return types.Float32RoundToOddUint(value), true
 	case uint32:
-		return float64(value), true
+		return types.Float32RoundToOddUint(uint64(value)), true
 	case string:
-		if !preparedDecimalNumeral.MatchString(value) {
-			return 0, false
-		}
-		parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
-		return parsed, err == nil
+		return lowPrecisionTextFloat32(value)
 	case []byte:
-		if !preparedDecimalNumeral.Match(value) {
-			return 0, false
-		}
-		parsed, err := strconv.ParseFloat(strings.TrimSpace(string(value)), 64)
-		return parsed, err == nil
+		return lowPrecisionTextFloat32(string(value))
 	default:
 		return 0, false
 	}

@@ -7549,15 +7549,13 @@ func bindFuncExprImplByPlanExpr(
 						if otherExpr == nil {
 							return false
 						}
-						var v float64
-						var ok bool
-						switch {
-						case otherOid.IsFloat() || otherOid.IsDecimal() || otherOid.IsInteger():
-							v, ok = numericLiteralFloat64(otherExpr)
-						case otherOid.IsMySQLString():
-							v, ok = decimalNumeralLiteralFloat64(otherExpr)
+						if !(otherOid.IsFloat() || otherOid.IsDecimal() || otherOid.IsInteger() || otherOid.IsMySQLString()) {
+							return false
 						}
-						return ok && types.RejectNonFiniteNarrowFloat(float32(v), colOid) == nil
+						// the literal rounded as the CAST that narrows it rounds it; a value that
+						// CAST rejects keeps the wide comparison
+						v, ok := lowPrecisionLiteralFloat32(otherExpr)
+						return ok && types.RejectNonFiniteNarrowFloat(v, colOid) == nil
 					}
 
 					// For integers, check if constant value is within column type range
