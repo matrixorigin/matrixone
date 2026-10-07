@@ -687,30 +687,34 @@ most of it), 0.15 s converting the queries, and 0.5 s of scan, matmul and top-k.
 type; normalization changes the ranking, independent of the format.
 
 Every metric over the same tables, reloaded from the CSV (`vecf32`, then `normalize_l2` and
-a cast to each type), with the GEMM-expansion cosine and squared L2 of the Decisions; warm
-runs, the first run after a restart (reading the table from disk) left out:
+a cast to each type), with the GEMM-expansion cosine and squared L2 of the Decisions. The
+1,000 queries are passed in a user variable (`set @q = ...`, then `vector_matmul(10, id,
+embedding, @q, ...)`), so the times are the statement's execution; five warm runs after one
+run that reads the table. The inline column passes the same queries as SQL text:
 
-| Type | Metric | Warm runs | Recall@10, normalized exact | Recall@10, raw L2 ground truth |
-|------|--------|-----------|-----------------------------|--------------------------------|
-| `vecf32` | `inner_product` | 3.48 / 3.35 / 3.62 / 3.20 / 3.09 s | 0.9999 | 0.701 |
-| `vecf32` | `cosine` | 9.00 / 6.52 / 9.75 s | 0.9999 | 0.701 |
-| `vecf32` | `l2sq` | 7.12 / 7.20 s | 0.9999 | 0.701 |
-| `vecbf16` | `inner_product` | 2.17 / 2.22 s | 0.9976 | 0.701 |
-| `vecbf16` | `cosine` | 2.17 / 2.08 / 1.94 s | 0.9984 | 0.701 |
-| `vecbf16` | `l2sq` | 1.95 / 1.92 / 1.86 s | 0.9983 | 0.701 |
-| `vecf8` | `inner_product` | 3.02 / 1.61 s | 0.964 | 0.700 |
-| `vecf8` | `cosine` | 1.76 / 2.47 / 2.01 s | 0.974 | 0.701 |
-| `vecf8` | `l2sq` | 2.02 / 1.50 / 1.42 s | 0.974 | 0.700 |
-| `vecf4` | `inner_product` | 3.16 / 1.20 s | 0.893 | 0.687 |
-| `vecf4` | `cosine` | 1.24 / 1.23 / 1.34 s | 0.920 | 0.693 |
-| `vecf4` | `l2sq` | 1.15 / 1.29 / 1.02 s | 0.915 | 0.692 |
+| Type | Metric | Runs, queries in `@q` | Median | Inline SQL, median | Recall@10, normalized exact | Recall@10, raw L2 ground truth |
+|------|--------|-----------------------|--------|--------------------|-----------------------------|--------------------------------|
+| `vecf32` | `inner_product` | 2.54 / 2.43 / 2.49 / 2.44 / 2.47 s | 2.47 s | 3.11 s | 0.9999 | 0.701 |
+| `vecf32` | `cosine` | 2.53 / 2.50 / 2.50 / 2.46 / 2.75 s | 2.50 s | | 0.9999 | 0.701 |
+| `vecf32` | `l2sq` | 2.33 / 2.37 / 2.48 / 3.78 / 2.26 s | 2.37 s | | 0.9999 | 0.701 |
+| `vecbf16` | `inner_product` | 1.48 / 1.42 / 1.36 / 1.35 / 1.26 s | 1.36 s | 2.46 s | 0.9976 | 0.701 |
+| `vecbf16` | `cosine` | 1.64 / 2.02 / 1.64 / 1.44 / 1.45 s | 1.64 s | | 0.9984 | 0.701 |
+| `vecbf16` | `l2sq` | 1.37 / 1.31 / 1.37 / 1.40 / 1.43 s | 1.37 s | | 0.9983 | 0.701 |
+| `vecf8` | `inner_product` | 0.85 / 0.83 / 0.86 / 0.86 / 0.84 s | 0.85 s | 1.35 s | 0.964 | 0.700 |
+| `vecf8` | `cosine` | 0.94 / 0.93 / 0.94 / 0.90 / 0.95 s | 0.94 s | | 0.974 | 0.701 |
+| `vecf8` | `l2sq` | 0.89 / 0.88 / 0.89 / 0.88 / 0.94 s | 0.89 s | | 0.974 | 0.700 |
+| `vecf4` | `inner_product` | 0.49 / 0.46 / 0.45 / 0.50 / 0.46 s | 0.46 s | 0.83 s | 0.893 | 0.687 |
+| `vecf4` | `cosine` | 0.62 / 0.65 / 0.61 / 0.61 / 0.65 s | 0.62 s | | 0.920 | 0.693 |
+| `vecf4` | `l2sq` | 0.51 / 0.51 / 0.49 / 0.53 / 0.50 s | 0.51 s | | 0.915 | 0.692 |
 
-Inner-product recall equals the table above. The `vecf32` cosine and squared-L2 runs read
-part of the 3 GB table from disk, evicted from the page cache by the other tables; its
-inner-product runs, repeated with the table cached, are 3.1–3.6 s. On `vecf8` and `vecf4`
-cosine and squared L2 recall more than the inner product: the quantized rows are no longer
-of unit norm, so the dot product ranks partly by row norm; cosine divides the norm out and
-squared L2 includes it.
+Inner-product recall equals the table above. The inline column adds the handling of the
+16 MB statement text, which this server also records into `system.statement_info`; it
+varies most for the wider types (`vecbf16` inline runs 1.72 to 9.00 s). Engine creation
+allocates the tile staging uninitialized (written before it is read): 3.2 ms per engine
+for this shape, where zero-filling it took about 20 ms, eight engines per query. On
+`vecf8` and `vecf4` cosine and squared L2 recall more than the inner product: the
+quantized rows are no longer of unit norm, so the dot product ranks partly by row norm;
+cosine divides the norm out and squared L2 includes it.
 
 ## Decisions
 
