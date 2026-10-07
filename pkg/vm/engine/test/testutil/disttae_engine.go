@@ -224,8 +224,10 @@ func NewTestDisttaeEngine(
 		return de, err
 	}
 
-	// Start unified GC scheduler
-	go de.Engine.RunGCScheduler(de.ctx)
+	// Start the engine-owned GC scheduler. Engine.Close joins it.
+	if err = de.Engine.StartGCScheduler(de.ctx); err != nil {
+		return de, err
+	}
 
 	//err = de.prevSubscribeSysTables(ctx, rpcAgent)
 	return de, nil

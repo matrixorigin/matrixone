@@ -213,18 +213,30 @@ func New(
 }
 
 func (e *Engine) Close() error {
-	// Linearize statistics admission before waiting on any engine-owned
-	// resource.  A callback must not start work after engine teardown begins.
-	e.dynamicCtx.closed.Store(true)
-	if e.gcPool != nil {
-		_ = e.gcPool.ReleaseTimeout(time.Second * 3)
-	}
+	e.closeOnce.Do(func() {
+		// Linearize statistics admission before waiting on any engine-owned
+		// resource. A callback must not start work after engine teardown begins.
+		e.dynamicCtx.closed.Store(true)
 
-	e.dynamicCtx.Close()
-	e.cloneTxnCache = nil
-	e.ccprTxnCache = nil
+		e.gcSchedulerMu.Lock()
+		cancel := e.gcSchedulerCancel
+		done := e.gcSchedulerDone
+		e.gcSchedulerMu.Unlock()
+		if cancel != nil {
+			cancel()
+			<-done
+		}
 
-	return nil
+		if e.gcPool != nil {
+			_ = e.gcPool.ReleaseTimeout(time.Second * 3)
+		}
+
+		e.dynamicCtx.Close()
+		e.cloneTxnCache = nil
+		e.ccprTxnCache = nil
+	})
+
+	return e.closeErr
 }
 
 func (e *Engine) fillDefaults() {
@@ -1438,8 +1450,37 @@ func (e *Engine) AcquireLogtailReadBarrier(
 	return e.pClient.AcquireLogtailReadBarrier(ctx)
 }
 
-// RunGCScheduler runs all GC tasks in a single goroutine with different intervals
-func (e *Engine) RunGCScheduler(ctx context.Context) {
+// StartGCScheduler starts the engine-owned GC scheduler. The scheduler is
+// started at most once and is joined by Close.
+func (e *Engine) StartGCScheduler(ctx context.Context) error {
+	if ctx == nil {
+		return moerr.NewInvalidInputNoCtx("engine GC scheduler context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	e.gcSchedulerMu.Lock()
+	defer e.gcSchedulerMu.Unlock()
+	if e.dynamicCtx.closed.Load() {
+		return moerr.NewInvalidStateNoCtx("engine is closed")
+	}
+	if e.gcSchedulerDone != nil {
+		return nil
+	}
+	schedulerCtx, cancel := context.WithCancel(ctx)
+	e.gcSchedulerCancel = cancel
+	e.gcSchedulerDone = make(chan struct{})
+	done := e.gcSchedulerDone
+	go func() {
+		defer close(done)
+		e.runGCScheduler(schedulerCtx)
+	}()
+	return nil
+}
+
+// runGCScheduler runs all GC tasks in a single goroutine with different intervals.
+func (e *Engine) runGCScheduler(ctx context.Context) {
 	unusedTableTicker := time.NewTicker(unsubscribeProcessTicker)
 	partitionStateTicker := time.NewTicker(gcPartitionStateTicker)
 	snapshotTicker := time.NewTicker(gcSnapshotTicker)
