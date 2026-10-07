@@ -555,7 +555,6 @@ func TestTableDetectorScanLoopSingleInstance(t *testing.T) {
 		}
 	}
 
-	time.Sleep(50 * time.Millisecond)
 	if td.loopSeq.Load() != firstSeq {
 		t.Fatalf("expected loopSeq to remain %d, got %d", firstSeq, td.loopSeq.Load())
 	}
@@ -902,6 +901,8 @@ func TestTableDetectorConcurrentRegisterUnregister(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(workers)
 	errCh := make(chan error, workers)
+	registered := make(chan struct{}, workers)
+	release := make(chan struct{})
 
 	for i := 0; i < workers; i++ {
 		go func(idx int) {
@@ -909,12 +910,18 @@ func TestTableDetectorConcurrentRegisterUnregister(t *testing.T) {
 			id := fmt.Sprintf("task-%d", idx)
 			if !td.RegisterIfAbsent(id, uint32(idx+1), []string{fmt.Sprintf("db%d", idx)}, []string{fmt.Sprintf("tbl%d", idx)}, func(map[uint32]TblMap) error { return nil }) {
 				errCh <- moerr.NewInternalErrorNoCtx(fmt.Sprintf("register failed for %s", id))
+				registered <- struct{}{}
 				return
 			}
-			time.Sleep(time.Duration(idx%4) * 5 * time.Millisecond)
+			registered <- struct{}{}
+			<-release
 			td.UnRegister(id)
 		}(i)
 	}
+	for range workers {
+		<-registered
+	}
+	close(release)
 
 	done := make(chan struct{})
 	go func() {
@@ -1120,10 +1127,10 @@ func TestTableScannerMalformedUTF8UsesCatalogSuperset(t *testing.T) {
 	require.NoError(t, td.scanTable())
 }
 
-func TestScanAndProcess(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
+func TestScanAndProcessStopsOnScanError(t *testing.T) {
+	const wantErr = "scan failed"
+	var scanCalls atomic.Int32
+	var callbackCalls atomic.Int32
 	td := &TableDetector{
 		Mp:                   make(map[uint32]TblMap),
 		Callbacks:            make(map[string]TableCallback),
@@ -1133,45 +1140,28 @@ func TestScanAndProcess(t *testing.T) {
 		SubscribedDbNames:    make(map[string][]string),
 		CallBackTableName:    make(map[string][]string),
 		SubscribedTableNames: make(map[string][]string),
-		exec:                 nil,
 		cleanupPeriod:        time.Hour,
 		cleanupWarn:          DefaultCleanupWarnThreshold,
 	}
 	defer td.Close()
 
-	tables := map[uint32]TblMap{
-		1: {
-			"db1.tbl1": &DbTableInfo{
-				SourceDbId:      1,
-				SourceDbName:    "db1",
-				SourceTblId:     1001,
-				SourceTblName:   "tbl1",
-				SourceCreateSql: "create table tbl1 (a int)",
-			},
-		},
-	}
-	scanCount := 0
 	td.scanTableFn = func() error {
-		td.mu.Lock()
-		if scanCount%5 == 0 {
-			td.lastMp = tables
-		} else {
-			td.lastMp = nil
-		}
-		td.mu.Unlock()
-		scanCount++
-		return nil
+		scanCalls.Add(1)
+		return moerr.NewInternalErrorNoCtx(wantErr)
 	}
+	require.True(t, td.RegisterIfAbsent("scan-error", 1, []string{"db"}, []string{"tbl"}, func(map[uint32]TblMap) error {
+		callbackCalls.Add(1)
+		return nil
+	}))
 
-	fault.Enable()
-	objectio.SimpleInject(objectio.FJ_CDCScanTableErr)
-	rm, _ := objectio.InjectCDCScanTable("fast scan")
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go td.scanTableLoop(ctx)
-	time.Sleep(200 * time.Millisecond)
-	defer rm()
-	fault.Disable()
+	td.scanAndProcess(context.Background())
+
+	require.Equal(t, int32(1), scanCalls.Load())
+	require.Zero(t, callbackCalls.Load())
+	td.mu.Lock()
+	lastMp := td.lastMp
+	td.mu.Unlock()
+	require.Nil(t, lastMp)
 }
 
 func TestProcessCallBack(t *testing.T) {
