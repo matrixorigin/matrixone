@@ -1228,13 +1228,11 @@ func (exec *vectorMatmulExec) fillRow(group uint64, row int, vectors []*vector.V
 		return err
 	}
 	if exec.engine != nil {
+		// a vecf8/vecf4 cell is validated where it is produced (cast, LOAD, CDC, user
+		// variables) and when its column is loaded from an object
+		// (objectio.validateVectorCacheData), so the GPU path checks its length only
 		if len(raw) != exec.cfg.cellBytes {
 			return moerr.NewInvalidInputNoCtxf("vector_matmul: cell is %d bytes, want %d", len(raw), exec.cfg.cellBytes)
-		}
-		if exec.argTypes[1].Oid.IsBlockScaledArray() {
-			if _, err := types.ParseBlockScaledCell(raw); err != nil {
-				return err
-			}
 		}
 		return exec.enqueue(group, raw, ids, idRow)
 	}

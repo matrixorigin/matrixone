@@ -58,6 +58,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -410,7 +411,7 @@ public:
         const size_t M = matmul(cells, n);
         fixup(M, n);
         // D is column major M x nq_pad; the first nq columns hold the queries
-        check(cudaMemcpy2DAsync(h_d_.data(), n * sizeof(float), d_d_, M * sizeof(float),
+        check(cudaMemcpy2DAsync(h_d_.get(), n * sizeof(float), d_d_, M * sizeof(float),
                                 n * sizeof(float), nq_, cudaMemcpyDeviceToHost, stream_),
               "cudaMemcpy2DAsync");
         check(cudaStreamSynchronize(stream_), "cudaStreamSynchronize");
@@ -508,14 +509,14 @@ private:
         size_t b = 0;
         while (algos_[b].first < n) ++b;
         const size_t M = algos_[b].first;
-        std::fill(h_a_.begin(), h_a_.begin() + M * row_bytes_, 0);
-        std::fill(h_sa_.begin(), h_sa_.begin() + M * Sp_, 0);
-        pack_rows(cells, n, h_a_.data(), h_sa_.data(), g_row_.data());
+        std::fill_n(h_a_.get(), M * row_bytes_, uint8_t(0));
+        std::fill_n(h_sa_.get(), M * Sp_, uint8_t(0));
+        pack_rows(cells, n, h_a_.get(), h_sa_.get(), g_row_.data());
 
         check(cudaSetDevice(device_id_), "cudaSetDevice");
-        check(cudaMemcpyAsync(d_a_, h_a_.data(), M * row_bytes_, cudaMemcpyHostToDevice, stream_),
+        check(cudaMemcpyAsync(d_a_, h_a_.get(), M * row_bytes_, cudaMemcpyHostToDevice, stream_),
               "cudaMemcpyAsync");
-        check(cudaMemcpyAsync(d_sa_, h_sa_.data(), M * Sp_, cudaMemcpyHostToDevice, stream_),
+        check(cudaMemcpyAsync(d_sa_, h_sa_.get(), M * Sp_, cudaMemcpyHostToDevice, stream_),
               "cudaMemcpyAsync");
         check(cudaMemcpyAsync(d_g_row_, g_row_.data(), n * sizeof(float), cudaMemcpyHostToDevice,
                               stream_),
@@ -605,9 +606,12 @@ private:
     }
 
     void init(const uint8_t* query_cells) {
-        h_a_.assign(max_rows_ * row_bytes_, 0);
-        h_sa_.assign(max_rows_ * Sp_, 0);
-        h_d_.resize(max_rows_ * nq_);
+        // tile staging is written before it is read (run zeroes the rows of each tile, the
+        // score copy fills h_d_), so it is allocated uninitialized: pages are touched only
+        // as tiles use them
+        h_a_.reset(new uint8_t[max_rows_ * row_bytes_]);
+        h_sa_.reset(new uint8_t[max_rows_ * Sp_]);
+        h_d_.reset(new float[max_rows_ * nq_]);
         g_row_.resize(max_rows_);
         g_query_.resize(nq_);
         std::vector<uint8_t> h_b(nq_pad_ * row_bytes_, 0), h_sb(nq_pad_ * Sp_, 0);
@@ -837,8 +841,9 @@ private:
     raft::resources res_;
     // row bucket -> cuBLASLt algorithm, ascending
     std::vector<std::pair<size_t, cublasLtMatmulAlgo_t>> algos_;
-    std::vector<uint8_t> h_a_, h_sa_;
-    std::vector<float> h_d_, g_row_, g_query_;
+    std::unique_ptr<uint8_t[]> h_a_, h_sa_;
+    std::unique_ptr<float[]> h_d_;
+    std::vector<float> g_row_, g_query_;
 };
 
 } // namespace matrixone
