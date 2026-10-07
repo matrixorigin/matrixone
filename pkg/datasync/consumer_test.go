@@ -781,12 +781,9 @@ func TestWaitPermission(t *testing.T) {
 		c := createTestConsumer(nil, nil)
 		assert.NotNil(t, c)
 		defer c.Close()
-		go func() {
-			time.Sleep(time.Millisecond * 200)
-			c.common.setShardReplicaID(logShardID, 10)
-			lc := c.logClient.(*mockLogClient)
-			lc.setLeaderID(10)
-		}()
+		c.common.setShardReplicaID(logShardID, 10)
+		lc := c.logClient.(*mockLogClient)
+		lc.setLeaderID(10)
 		assert.NoError(t, c.waitPermission(ctx, time.Millisecond*10))
 	})
 }
@@ -824,13 +821,16 @@ func TestLoopWork(t *testing.T) {
 		lc.setLeaderID(10)
 
 		c.syncedLsn.Store(10)
+		c.writeLsn.Store(20)
+		readEntries := make(chan struct{}, 1)
+		lc.readEntriesEvent = readEntries
+		loopDone := make(chan error, 1)
 		go func() {
-			time.Sleep(time.Millisecond * 200)
-			c.writeLsn.Store(20)
-			time.Sleep(time.Millisecond * 200)
-			cancel()
+			loopDone <- c.loop(ctx, time.Millisecond)
 		}()
-		assert.Equal(t, context.Canceled, c.loop(ctx, time.Millisecond*10))
+		<-readEntries
+		cancel()
+		assert.Equal(t, context.Canceled, <-loopDone)
 	})
 
 	t.Run("file not found entries", func(t *testing.T) {
@@ -853,12 +853,7 @@ func TestLoopWork(t *testing.T) {
 		}
 
 		c.syncedLsn.Store(10)
-		go func() {
-			time.Sleep(time.Millisecond * 200)
-			c.writeLsn.Store(20)
-			time.Sleep(time.Millisecond * 200)
-			cancel()
-		}()
+		c.writeLsn.Store(20)
 		assert.True(t, moerr.IsMoErrCode(c.loop(ctx, time.Millisecond), moerr.ErrFileNotFound))
 		assert.Equal(t, uint64(10), c.syncedLsn.Load())
 		requiredLsn, err := c.logClient.getRequiredLsn(ctx)
@@ -878,16 +873,18 @@ func TestLoopWork(t *testing.T) {
 		lc.setLeaderID(10)
 
 		c.syncedLsn.Store(10)
+		lc.fakeError("readEntries")
+		defer lc.clearFakeError("readEntries")
+		c.writeLsn.Store(20)
+		readEntries := make(chan struct{}, 1)
+		lc.readEntriesEvent = readEntries
+		loopDone := make(chan error, 1)
 		go func() {
-			time.Sleep(time.Millisecond * 200)
-			time.Sleep(time.Millisecond * 200)
-			lc.fakeError("readEntries")
-			defer lc.clearFakeError("readEntries")
-			c.writeLsn.Store(20)
-			time.Sleep(time.Millisecond * 200)
-			cancel()
+			loopDone <- c.loop(ctx, time.Millisecond)
 		}()
-		assert.Equal(t, context.Canceled, c.loop(ctx, time.Millisecond))
+		<-readEntries
+		cancel()
+		assert.Equal(t, context.Canceled, <-loopDone)
 		assert.Equal(t, uint64(10), c.syncedLsn.Load())
 		requiredLsn, err := c.logClient.getRequiredLsn(ctx)
 		assert.NoError(t, err)
@@ -1160,11 +1157,22 @@ func TestConsumerStart(t *testing.T) {
 		c.common.setShardReplicaID(logShardID, 10)
 		lc := c.logClient.(*mockLogClient)
 		lc.setLeaderID(10)
+		c.writeLsn.Store(1)
+		c.loopWorkInterval = time.Millisecond
+		readEntries := make(chan struct{}, 1)
+		lc.readEntriesEvent = readEntries
+		done := make(chan struct{})
 		go func() {
-			time.Sleep(time.Second)
-			cancel()
+			c.Start(ctx)
+			close(done)
 		}()
-		c.Start(ctx)
+		<-readEntries
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("consumer did not stop after cancellation")
+		}
 	})
 
 	t.Run("init failed", func(t *testing.T) {
@@ -1180,11 +1188,20 @@ func TestConsumerStart(t *testing.T) {
 
 		lc.fakeError("getTruncatedLsn")
 		defer lc.clearFakeError("getTruncatedLsn")
+		initAttempt := make(chan struct{}, 1)
+		lc.getTruncatedLsnEvent = initAttempt
+		done := make(chan struct{})
 		go func() {
-			time.Sleep(time.Second)
-			cancel()
+			c.Start(ctx)
+			close(done)
 		}()
-		c.Start(ctx)
+		<-initAttempt
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("consumer did not stop after failed initialization")
+		}
 	})
 
 	t.Run("role changed", func(t *testing.T) {
@@ -1197,14 +1214,34 @@ func TestConsumerStart(t *testing.T) {
 		c.common.setShardReplicaID(logShardID, 10)
 		lc := c.logClient.(*mockLogClient)
 		lc.setLeaderID(10)
-
+		c.writeLsn.Store(1)
+		c.loopWorkInterval = time.Millisecond
+		leaderChecks := make(chan struct{}, 8)
+		lc.getLeaderIDEvent = leaderChecks
+		readEntries := make(chan struct{}, 1)
+		lc.readEntriesEvent = readEntries
+		done := make(chan struct{})
 		go func() {
-			time.Sleep(time.Second)
-			lc.setLeaderID(20)
-			time.Sleep(time.Second)
-			cancel()
+			c.Start(ctx)
+			close(done)
 		}()
-		c.Start(ctx)
+		// One check grants permission; the second check starts the loop.
+		<-leaderChecks
+		<-leaderChecks
+		<-readEntries
+		// Consume the check that began the next loop iteration while the old
+		// leader is still installed, then change the role before the following
+		// check.
+		<-leaderChecks
+		lc.setLeaderID(20)
+		// The next check observes the role change and returns from loop.
+		<-leaderChecks
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("consumer did not stop after role change")
+		}
 	})
 }
 

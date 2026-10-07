@@ -243,8 +243,11 @@ func newMockServer() *mockLogServer {
 }
 
 type mockLogClient struct {
-	shardID uint64
-	s       *mockLogServer
+	shardID              uint64
+	s                    *mockLogServer
+	getLeaderIDEvent     chan<- struct{}
+	readEntriesEvent     chan<- struct{}
+	getTruncatedLsnEvent chan<- struct{}
 }
 
 func newMockLogClient(s *mockLogServer, shardID uint64) LogClient {
@@ -273,9 +276,20 @@ var (
 	fakeError = moerr.NewInternalErrorNoCtx("fake error")
 )
 
+func signalTestEvent(ch chan<- struct{}) {
+	if ch == nil {
+		return
+	}
+	select {
+	case ch <- struct{}{}:
+	default:
+	}
+}
+
 func (m *mockLogClient) getLeaderID(_ context.Context) (uint64, error) {
 	m.s.mu.Lock()
 	defer m.s.mu.Unlock()
+	defer signalTestEvent(m.getLeaderIDEvent)
 	if _, ok := m.s.values[m.shardID].fakeErr["getLeaderID"]; ok {
 		return 0, fakeError
 	}
@@ -302,6 +316,7 @@ func (m *mockLogClient) write(_ context.Context, data []byte) (uint64, error) {
 func (m *mockLogClient) readEntries(_ context.Context, lsn uint64) ([]logservice.LogRecord, uint64, error) {
 	m.s.mu.Lock()
 	defer m.s.mu.Unlock()
+	defer signalTestEvent(m.readEntriesEvent)
 	if _, ok := m.s.values[m.shardID].fakeErr["readEntries"]; ok {
 		return nil, 0, fakeError
 	}
@@ -328,6 +343,7 @@ func (m *mockLogClient) truncate(_ context.Context, lsn uint64) error {
 func (m *mockLogClient) getTruncatedLsn(_ context.Context) (uint64, error) {
 	m.s.mu.Lock()
 	defer m.s.mu.Unlock()
+	defer signalTestEvent(m.getTruncatedLsnEvent)
 	if _, ok := m.s.values[m.shardID].fakeErr["getTruncatedLsn"]; ok {
 		return 0, fakeError
 	}

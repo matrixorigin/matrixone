@@ -60,39 +60,39 @@ func TestProducer_EnqueueFull2(t *testing.T) {
 	p := newProducer(common{}, 10, writeLsn)
 	ctx := context.Background()
 	q := p.(*producer).dataQ
-	var wg1, wg2 sync.WaitGroup
+	items := make([]*wrappedData, 20)
+	for i := range items {
+		payload, err := payloadData()
+		assert.NoError(t, err)
+		assert.NotNil(t, payload)
+		items[i] = newWrappedData(genRecord(payload, 0).Data, 0, nil)
+	}
 
-	wg1.Add(1)
-	wg2.Add(20)
+	firstBatchDone := make(chan struct{})
+	secondBatchStarted := make(chan struct{})
+	done := make(chan struct{})
 	go func() {
-		for i := 0; i < 10; i++ {
-			payload, err := payloadData()
-			assert.NoError(t, err)
-			assert.NotNil(t, payload)
-			w := newWrappedData(genRecord(payload, 0).Data, 0, nil)
-			p.Enqueue(ctx, w)
+		for _, item := range items[:10] {
+			p.Enqueue(ctx, item)
 		}
-		wg1.Done()
+		close(firstBatchDone)
 
 		// the queue is already full
-		for i := 0; i < 10; i++ {
-			payload, err := payloadData()
-			assert.NoError(t, err)
-			assert.NotNil(t, payload)
-			w := newWrappedData(genRecord(payload, 0).Data, 0, nil)
-			p.Enqueue(ctx, w)
+		close(secondBatchStarted)
+		for _, item := range items[10:] {
+			p.Enqueue(ctx, item)
 		}
-		wg2.Wait()
-		assert.Equal(t, 0, len(q.(*dataQueue).queue))
+		close(done)
 	}()
-	wg1.Wait()
-	time.Sleep(time.Millisecond * 100)
+	<-firstBatchDone
+	<-secondBatchStarted
 	for i := 0; i < 20; i++ {
 		w, err := q.dequeue(ctx)
 		assert.NoError(t, err)
 		assert.NotNil(t, w)
-		wg2.Done()
 	}
+	<-done
+	assert.Equal(t, 0, len(q.(*dataQueue).queue))
 }
 
 func withProducerStarted(
@@ -160,10 +160,17 @@ func TestProducer_Start(t *testing.T) {
 			defer p.Close()
 
 			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			go p.Start(ctx)
-			time.Sleep(time.Millisecond * 100)
+			done := make(chan struct{})
+			go func() {
+				p.Start(ctx)
+				close(done)
+			}()
 			cancel()
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("producer did not stop after cancellation")
+			}
 		}
 		logservice.RunClientTest(t, false, nil, fn)
 	})
