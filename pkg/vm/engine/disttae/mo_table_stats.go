@@ -296,6 +296,48 @@ const (
 	specialTableId    = 1
 )
 
+func moTableSizeFunc() *function.GetMoTableSizeRowsFuncType {
+	fn := function.GetMoTableSizeRowsFuncType(func(
+		ctx context.Context,
+		accs, dbs, tbls []uint64,
+		eng engine.Engine,
+		forceUpdate bool,
+		resetUpdateTime bool,
+	) ([]uint64, error) {
+		e, ok := eng.(*Engine)
+		if !ok || e == nil {
+			return nil, moerr.NewInternalErrorNoCtx("MoTableSizeRows: engine is not a disttae engine")
+		}
+		if e.dynamicCtx.closed.Load() {
+			return nil, moerr.NewInvalidStateNoCtx("MoTableSizeRows: engine is closed")
+		}
+		return e.dynamicCtx.MTSTableSize(
+			ctx, accs, dbs, tbls, eng, forceUpdate, resetUpdateTime)
+	})
+	return &fn
+}
+
+func moTableRowsFunc() *function.GetMoTableSizeRowsFuncType {
+	fn := function.GetMoTableSizeRowsFuncType(func(
+		ctx context.Context,
+		accs, dbs, tbls []uint64,
+		eng engine.Engine,
+		forceUpdate bool,
+		resetUpdateTime bool,
+	) ([]uint64, error) {
+		e, ok := eng.(*Engine)
+		if !ok || e == nil {
+			return nil, moerr.NewInternalErrorNoCtx("MoTableSizeRows: engine is not a disttae engine")
+		}
+		if e.dynamicCtx.closed.Load() {
+			return nil, moerr.NewInvalidStateNoCtx("MoTableSizeRows: engine is closed")
+		}
+		return e.dynamicCtx.MTSTableRows(
+			ctx, accs, dbs, tbls, eng, forceUpdate, resetUpdateTime)
+	})
+	return &fn
+}
+
 var TableStatsName = [TableStatsCnt]string{
 	"table_size",
 	"table_rows",
@@ -386,24 +428,11 @@ func initMoTableStatsConfig(
 		eng.dynamicCtx.updateForgottenQueue = make(chan struct{})
 		eng.dynamicCtx.insertNewTableQueue = make(chan struct{})
 
-		// registerMoTableSizeRows
-		{
-			ff1 := func() func(
-				context.Context,
-				[]uint64, []uint64, []uint64,
-				engine.Engine, bool, bool) ([]uint64, error) {
-				return eng.dynamicCtx.MTSTableSize
-			}
-			function.GetMoTableSizeFunc.Store(&ff1)
-
-			ff2 := func() func(
-				context.Context,
-				[]uint64, []uint64, []uint64,
-				engine.Engine, bool, bool) ([]uint64, error) {
-				return eng.dynamicCtx.MTSTableRows
-			}
-			function.GetMoTableRowsFunc.Store(&ff2)
-		}
+		// The callbacks are process-global, but the engine is supplied by each
+		// caller. Keep them stateless so constructing another CN does not
+		// redirect existing callers to the most recently constructed engine.
+		function.GetMoTableSizeFunc.Store(moTableSizeFunc())
+		function.GetMoTableRowsFunc.Store(moTableRowsFunc())
 
 		eng.dynamicCtx.tableStock.tbls = make([]tablePair, 0, 1)
 
@@ -602,7 +631,8 @@ func (ts taskState) String() string {
 type dynamicCtx struct {
 	sync.RWMutex
 
-	once sync.Once
+	once   sync.Once
+	closed atomic.Bool
 
 	defaultConf MoTableStatsConfig
 	conf        MoTableStatsConfig
@@ -670,6 +700,7 @@ func (d *dynamicCtx) LogDynamicCtx() string {
 }
 
 func (d *dynamicCtx) Close() {
+	d.closed.Store(true)
 	if d.alphaTaskPool != nil {
 		_ = d.alphaTaskPool.ReleaseTimeout(time.Second * 3)
 	}
