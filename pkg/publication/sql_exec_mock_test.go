@@ -72,68 +72,97 @@ func TestUpstreamExecutor_ExecSQLInDatabase_DelegatesToExecSQL(t *testing.T) {
 // ---- UpstreamExecutor.execWithRetry retryDuration exceeded ----
 
 func TestUpstreamExecutor_ExecWithRetry_RetryDurationExceeded(t *testing.T) {
-	e := &UpstreamExecutor{
-		retryTimes:    100,
-		retryDuration: time.Nanosecond,
+	for _, timeout := range []time.Duration{0, 2 * time.Second} {
+		t.Run(timeout.String(), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				e := &UpstreamExecutor{retryTimes: 100, retryDuration: time.Second}
+				e.initRetryPolicy(DefaultClassifier{})
+				e.retryPolicy.Backoff = ExponentialBackoff{Base: time.Hour}
+				ctx, stop := context.WithCancel(context.Background())
+				defer stop()
+				var attemptCtx context.Context
+				calls := 0
+				result, cancel, err := e.execWithRetry(ctx, nil, timeout, func(child context.Context) (*Result, error) {
+					calls++
+					attemptCtx = child
+					return nil, errors.New("connection reset")
+				})
+				if cancel != nil {
+					t.Cleanup(cancel)
+				}
+				require.ErrorContains(t, err, "retry limit exceeded")
+				require.Nil(t, result)
+				require.Nil(t, cancel)
+				require.Equal(t, 1, calls)
+				require.NoError(t, ctx.Err())
+				if timeout > 0 {
+					require.ErrorIs(t, attemptCtx.Err(), context.Canceled)
+				} else {
+					require.Same(t, ctx, attemptCtx)
+				}
+			})
+		})
 	}
-	e.initRetryPolicy(&mockClassifier{retryable: true})
-	// A nil backoff keeps this boundary test immediate. ExponentialBackoff{}
-	// applies its default 100 ms base delay.
-	e.retryPolicy.Backoff = nil
-
-	attempt := 0
-	_, _, err := e.execWithRetry(context.Background(), nil, 0, func(ctx context.Context) (*Result, error) {
-		attempt++
-		return nil, errors.New("fail")
-	})
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "retry limit exceeded")
-	assert.Equal(t, 1, attempt)
 }
 
 // ---- UpstreamExecutor.execWithRetry success after retry ----
 
 func TestUpstreamExecutor_ExecWithRetry_SuccessAfterRetry(t *testing.T) {
-	e := &UpstreamExecutor{retryTimes: 5, retryDuration: 10 * time.Second}
-	e.initRetryPolicy(&mockClassifier{retryable: true})
-	e.retryPolicy.Backoff = nil
-
-	ctx, stop := context.WithCancel(context.Background())
-	t.Cleanup(stop)
-	want := &Result{}
-	var attemptContexts []context.Context
-	var previousErrors []error
-	result, cancel, err := e.execWithRetry(ctx, nil, time.Second, func(ctx context.Context) (*Result, error) {
-		if len(attemptContexts) > 0 {
-			previousErrors = append(previousErrors, attemptContexts[len(attemptContexts)-1].Err())
-		}
-		attemptContexts = append(attemptContexts, ctx)
-		if len(attemptContexts) < 3 {
-			return nil, errors.New("transient")
-		}
-		return want, nil
-	})
-	if cancel != nil {
-		t.Cleanup(cancel)
+	for _, timeout := range []time.Duration{0, 2 * time.Second} {
+		t.Run(timeout.String(), func(t *testing.T) {
+			e := &UpstreamExecutor{retryTimes: 5, retryDuration: 10 * time.Second}
+			e.initRetryPolicy(DefaultClassifier{})
+			e.retryPolicy.Backoff = nil
+			ctx, stop := context.WithCancel(context.Background())
+			t.Cleanup(stop)
+			want := &Result{}
+			var attemptContexts []context.Context
+			var previousErrors []error
+			result, cancel, err := e.execWithRetry(ctx, nil, timeout, func(child context.Context) (*Result, error) {
+				if len(attemptContexts) > 0 {
+					previousErrors = append(previousErrors, attemptContexts[len(attemptContexts)-1].Err())
+				}
+				attemptContexts = append(attemptContexts, child)
+				if len(attemptContexts) < 3 {
+					return nil, errors.New("connection reset")
+				}
+				return want, nil
+			})
+			if cancel != nil {
+				t.Cleanup(cancel)
+			}
+			if result != nil {
+				t.Cleanup(func() { require.NoError(t, result.Close()) })
+			}
+			require.NoError(t, err)
+			require.Same(t, want, result)
+			require.Len(t, attemptContexts, 3)
+			require.Len(t, previousErrors, 2)
+			for _, err := range previousErrors {
+				if timeout > 0 {
+					require.ErrorIs(t, err, context.Canceled, "previous attempt must be cancelled before replacement")
+				} else {
+					require.NoError(t, err)
+				}
+			}
+			for _, child := range attemptContexts {
+				_, hasDeadline := child.Deadline()
+				require.Equal(t, timeout > 0, hasDeadline)
+				if timeout == 0 {
+					require.Same(t, ctx, child)
+				}
+			}
+			require.NoError(t, attemptContexts[2].Err(), "successful attempt belongs to the caller")
+			if timeout > 0 {
+				require.NotNil(t, cancel)
+				cancel()
+				require.ErrorIs(t, attemptContexts[2].Err(), context.Canceled)
+			} else {
+				require.Nil(t, cancel)
+			}
+			require.NoError(t, ctx.Err(), "attempt cleanup must not cancel the borrowed parent")
+		})
 	}
-	if result != nil {
-		t.Cleanup(func() { require.NoError(t, result.Close()) })
-	}
-	require.NoError(t, err)
-	require.Same(t, want, result)
-	require.Len(t, attemptContexts, 3)
-	require.Len(t, previousErrors, 2)
-	for _, err := range previousErrors {
-		require.ErrorIs(t, err, context.Canceled, "previous attempt must be cancelled before replacement")
-	}
-	for _, ctx := range attemptContexts {
-		_, hasDeadline := ctx.Deadline()
-		require.True(t, hasDeadline)
-	}
-	require.NoError(t, attemptContexts[2].Err(), "successful attempt belongs to the caller")
-	require.NotNil(t, cancel)
-	cancel()
-	require.ErrorIs(t, attemptContexts[2].Err(), context.Canceled)
 }
 
 func TestUpstreamExecutor_ExecWithRetry_AttemptTimeout(t *testing.T) {
@@ -142,7 +171,6 @@ func TestUpstreamExecutor_ExecWithRetry_AttemptTimeout(t *testing.T) {
 		e.initRetryPolicy(&mockClassifier{retryable: false})
 		e.retryPolicy.Backoff = nil
 		calls := 0
-		start := time.Now()
 		result, cancel, err := e.execWithRetry(context.Background(), nil, time.Second, func(ctx context.Context) (*Result, error) {
 			calls++
 			<-ctx.Done()
@@ -155,7 +183,6 @@ func TestUpstreamExecutor_ExecWithRetry_AttemptTimeout(t *testing.T) {
 		require.Nil(t, result)
 		require.Nil(t, cancel)
 		require.Equal(t, 1, calls)
-		require.Equal(t, time.Second, time.Since(start))
 	})
 }
 

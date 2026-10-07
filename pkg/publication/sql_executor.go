@@ -679,7 +679,7 @@ func (e *UpstreamExecutor) execWithRetry(
 
 	start := time.Now()
 	attempt := 0
-	var lastErr error
+	var lastErr error // Diagnostic only; Policy.Do owns the terminal error.
 	var lastResult *Result
 	var lastCancel context.CancelFunc
 
@@ -714,9 +714,7 @@ func (e *UpstreamExecutor) execWithRetry(
 			}
 		}
 
-		begin := time.Now()
 		result, err := fn(execCtx)
-		_ = begin // TODO: add metrics if needed
 		if err == nil {
 			lastErr = nil
 			lastResult = result
@@ -735,14 +733,6 @@ func (e *UpstreamExecutor) execWithRetry(
 	})
 
 	if err == nil {
-		if attempt > 1 && lastErr != nil {
-			logutil.Info(
-				"publication.executor.retry_success",
-				zap.Int("attempts", attempt),
-				zap.Duration("total-duration", time.Since(start)),
-				zap.Error(lastErr),
-			)
-		}
 		return lastResult, lastCancel, nil
 	}
 
@@ -759,10 +749,6 @@ func (e *UpstreamExecutor) execWithRetry(
 			zap.Error(lastErr),
 		)
 		return nil, nil, moerr.NewInternalError(ctx, "retry limit exceeded")
-	}
-
-	if lastErr != nil {
-		return nil, nil, lastErr
 	}
 
 	return nil, nil, err
