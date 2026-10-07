@@ -31,19 +31,19 @@ utf8_general_ci  ¦  utf8  ¦  33  ¦  YES  ¦  Yes  ¦  1  ¦  PAD SPACE  𝄀
 utf8_unicode_ci  ¦  utf8  ¦  192  ¦    ¦  Yes  ¦  8  ¦  PAD SPACE  𝄀
 utf8mb4_0900_ai_ci  ¦  utf8mb4  ¦  255  ¦    ¦  Yes  ¦  1  ¦  PAD SPACE  𝄀
 utf8mb4_bin  ¦  utf8mb4  ¦  46  ¦    ¦  Yes  ¦  1  ¦  PAD SPACE  𝄀
-utf8mb4_general_ci  ¦  utf8mb4  ¦  45  ¦  YES  ¦  Yes  ¦  1  ¦  PAD SPACE
+utf8mb4_general_ci  ¦  utf8mb4  ¦  45  ¦  YES  ¦  Yes  ¦  1  ¦  PAD SPACE  𝄀
 utf8mb4_unicode_ci  ¦  utf8mb4  ¦  224  ¦    ¦  Yes  ¦  8  ¦  PAD SPACE
 SHOW COLLATION LIKE 'utf8mb4%';
 ➤ Collation[12,0,0]  ¦  Charset[12,0,0]  ¦  Id[-5,0,0]  ¦  Default[12,0,0]  ¦  Compiled[12,0,0]  ¦  Sortlen[4,0,0]  ¦  Pad_attribute[12,0,0]  𝄀
 utf8mb4_0900_ai_ci  ¦  utf8mb4  ¦  255  ¦    ¦  Yes  ¦  1  ¦  PAD SPACE  𝄀
 utf8mb4_bin  ¦  utf8mb4  ¦  46  ¦    ¦  Yes  ¦  1  ¦  PAD SPACE  𝄀
-utf8mb4_general_ci  ¦  utf8mb4  ¦  45  ¦  YES  ¦  Yes  ¦  1  ¦  PAD SPACE
+utf8mb4_general_ci  ¦  utf8mb4  ¦  45  ¦  YES  ¦  Yes  ¦  1  ¦  PAD SPACE  𝄀
 utf8mb4_unicode_ci  ¦  utf8mb4  ¦  224  ¦    ¦  Yes  ¦  8  ¦  PAD SPACE
 SHOW COLLATION WHERE Charset = 'utf8mb4';
 ➤ Collation[12,0,0]  ¦  Charset[12,0,0]  ¦  Id[-5,0,0]  ¦  Default[12,0,0]  ¦  Compiled[12,0,0]  ¦  Sortlen[4,0,0]  ¦  Pad_attribute[12,0,0]  𝄀
 utf8mb4_0900_ai_ci  ¦  utf8mb4  ¦  255  ¦    ¦  Yes  ¦  1  ¦  PAD SPACE  𝄀
 utf8mb4_bin  ¦  utf8mb4  ¦  46  ¦    ¦  Yes  ¦  1  ¦  PAD SPACE  𝄀
-utf8mb4_general_ci  ¦  utf8mb4  ¦  45  ¦  YES  ¦  Yes  ¦  1  ¦  PAD SPACE
+utf8mb4_general_ci  ¦  utf8mb4  ¦  45  ¦  YES  ¦  Yes  ¦  1  ¦  PAD SPACE  𝄀
 utf8mb4_unicode_ci  ¦  utf8mb4  ¦  224  ¦    ¦  Yes  ¦  8  ¦  PAD SPACE
 SHOW COLLATION WHERE Collation = 'utf8mb4_bin';
 ➤ Collation[12,0,0]  ¦  Charset[12,0,0]  ¦  Id[-5,0,0]  ¦  Default[12,0,0]  ¦  Compiled[12,0,0]  ¦  Sortlen[4,0,0]  ¦  Pad_attribute[12,0,0]  𝄀
