@@ -1465,7 +1465,17 @@ func (c *testCluster) initCNServices(
 			panic(err)
 		}
 		ctx, cancel := context.WithCancel(context.Background())
-		cs, err := newCNService(cfg, ctx, fs, opt)
+		cs, err := newCNService(
+			cfg,
+			ctx,
+			fs,
+			func(owner CNService) {
+				c.cn.Lock()
+				c.cn.svcs = append(c.cn.svcs, owner)
+				c.cn.Unlock()
+			},
+			opt,
+		)
 		if err != nil {
 			panic(err)
 		}
@@ -1477,7 +1487,6 @@ func (c *testCluster) initCNServices(
 			zap.Any("config", cfg),
 		)
 
-		c.cn.svcs = append(c.cn.svcs, cs)
 	}
 }
 

@@ -115,10 +115,14 @@ func NewService(
 	ctx context.Context,
 	fileService fileservice.FileService,
 	gossipNode *gossip.Node,
+	publish func(Service),
 	options ...Option,
 ) (result Service, err error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
+	}
+	if publish == nil {
+		return nil, moerr.NewInvalidStateNoCtx("CN service requires an owner")
 	}
 
 	//set frontend parameters
@@ -165,6 +169,17 @@ func NewService(
 		gossipNode:  gossipNode,
 	}
 	srv.colexecServer = colexec.NewServer(cfg.UUID)
+	constructed := false
+	defer func() {
+		if constructed {
+			return
+		}
+		if closeErr := srv.Close(); closeErr != nil {
+			result = srv
+			srv.logger.Error("failed to retire CN construction", zap.Error(closeErr))
+		}
+	}()
+	publish(srv)
 
 	srv.requestHandler = func(ctx context.Context,
 		cnAddr string,
@@ -206,11 +221,6 @@ func NewService(
 	if err = srv.initViewMetadataAdmission(ctx); err != nil {
 		return nil, err
 	}
-	defer func() {
-		if err != nil {
-			srv.closeViewMetadataAdmission()
-		}
-	}()
 	if err = srv.initQueryService(); err != nil {
 		return nil, err
 	}
@@ -242,13 +252,13 @@ func NewService(
 		var pc *pythonservice.Client
 		pc, err = pythonservice.NewClient(srv.cfg.PythonUdfClient)
 		if err != nil {
-			panic(err)
+			return nil, err
 		}
 		udfServices = append(udfServices, pc)
 	}
 	srv.udfService, err = udf.NewService(udfServices...)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 
 	srv.CNMemoryThrottler = rscthrottler.NewMemThrottler(
@@ -309,7 +319,7 @@ func NewService(
 		&cnclient.PipelineConfig{RPC: cfg.RPC},
 	)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	srv.pipelines.client = c
 
@@ -330,6 +340,7 @@ func NewService(
 	if err := srv.startCNStoreHeartbeat(); err != nil {
 		return nil, err
 	}
+	constructed = true
 	return srv, nil
 }
 
@@ -543,7 +554,9 @@ func (s *service) closeService() error {
 		// Stop waits for any in-flight periodic heartbeat before teardown. Keep
 		// ingress published until all local entry points and work have drained;
 		// withdrawal below is the ownership handoff linearization point.
-		s.stopper.Stop()
+		if s.stopper != nil {
+			s.stopper.Stop()
+		}
 
 		// A failed producer drain must not tear down its dependencies. Unknown
 		// local errors remain fail-stop; only remote withdrawal is diagnostic.
@@ -557,7 +570,12 @@ func (s *service) closeService() error {
 			// Stop scheduled statements as well as interactive frontend work.
 			s.stopTask,
 			s.closePipelineAdmission,
-			s.server.Close,
+			func() error {
+				if s.server == nil {
+					return nil
+				}
+				return s.server.Close()
+			},
 			// Pipeline handlers and the auto-increment cleanup worker can issue
 			// transactions. Drain both before closing their transaction and RPC
 			// dependencies.
@@ -576,7 +594,9 @@ func (s *service) closeService() error {
 			s.stopRPCs,
 			func() error {
 				// stop I/O pipeline
-				ioutil.Stop(s.cfg.UUID)
+				if runtime.ServiceRuntime(s.cfg.UUID) != nil {
+					ioutil.Stop(s.cfg.UUID)
+				}
 				return nil
 			},
 			func() error {
@@ -585,7 +605,6 @@ func (s *service) closeService() error {
 				}
 				return nil
 			},
-			s.lockService.Close,
 			func() error {
 				if s.shardService != nil {
 					return s.shardService.Close()
@@ -764,7 +783,10 @@ func (s *service) GetFinalVersion() string {
 func (s *service) stopFrontend() error {
 	defer logutil.LogClose(s.logger, "cnservice/frontend")()
 
-	err := s.serverShutdown(true)
+	var err error
+	if s.mo != nil {
+		err = s.serverShutdown(true)
+	}
 	if s.cancelMoServerFunc != nil {
 		s.cancelMoServerFunc()
 	}
@@ -783,7 +805,9 @@ func (s *service) stopRPCs() error {
 		err = errors.Join(err, s._txnClient.Close())
 	}
 	if s._hakeeperClient != nil {
-		s.moCluster.Close()
+		if s.moCluster != nil {
+			s.moCluster.Close()
+		}
 		err = errors.Join(err, s._hakeeperClient.Close())
 	}
 	if s._txnSender != nil {
@@ -1156,6 +1180,7 @@ func (s *service) initShardService() {
 	s.shardService = shardservice.NewService(
 		cfg,
 		store,
+		func(owner shardservice.ShardService) { s.shardService = owner },
 		shardservice.WithWaitCNReported(),
 	)
 	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(
@@ -1316,6 +1341,9 @@ func (s *service) initMongoDBRuntime() {
 
 func (s *service) closeMongoDBRuntime() error {
 	rt := runtime.ServiceRuntime(s.cfg.UUID)
+	if rt == nil {
+		return nil
+	}
 	value, ok := rt.GetGlobalVariables(sqlmongodb.RuntimeDependenciesKey)
 	if !ok {
 		return nil

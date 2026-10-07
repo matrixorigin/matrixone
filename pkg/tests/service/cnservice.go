@@ -65,6 +65,9 @@ type cnService struct {
 	svc    cnservice.Service
 	cfg    *cnservice.Config
 
+	closeOnce sync.Once
+	closeErr  error
+
 	cancel context.CancelFunc
 }
 
@@ -87,16 +90,18 @@ func (c *cnService) Close() error {
 	c.Lock()
 	defer c.Unlock()
 
-	if c.status == ServiceStarted {
-		err := c.svc.Close()
-		c.cancel()
-		if err != nil {
-			return err
+	c.closeOnce.Do(func() {
+		if c.svc != nil {
+			c.closeErr = c.svc.Close()
 		}
-		c.status = ServiceClosed
-	}
-
-	return nil
+		if c.cancel != nil {
+			c.cancel()
+		}
+		if c.closeErr == nil {
+			c.status = ServiceClosed
+		}
+	})
+	return c.closeErr
 }
 
 func (c *cnService) Status() ServiceStatus {
@@ -145,18 +150,31 @@ func newCNService(
 	cfg *cnservice.Config,
 	ctx context.Context,
 	fileService fileservice.FileService,
+	publish func(CNService),
 	options cnOptions,
 ) (CNService, error) {
-	srv, err := cnservice.NewService(cfg, ctx, fileService, nil, options...)
+	holder := &cnService{status: ServiceInitialized, cfg: cfg}
+	if publish != nil {
+		publish(holder)
+	}
+	srv, err := cnservice.NewService(
+		cfg,
+		ctx,
+		fileService,
+		nil,
+		func(owner cnservice.Service) { holder.svc = owner },
+		options...,
+	)
 	if err != nil {
-		return nil, err
+		if srv != nil {
+			holder.svc = srv
+			return holder, err
+		}
+		return holder, err
 	}
 
-	return &cnService{
-		status: ServiceInitialized,
-		svc:    srv,
-		cfg:    cfg,
-	}, nil
+	holder.svc = srv
+	return holder, nil
 }
 
 func buildCNConfig(index int, opt Options, address *serviceAddresses) *cnservice.Config {

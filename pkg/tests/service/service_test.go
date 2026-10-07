@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
@@ -38,6 +39,38 @@ import (
 const (
 	supportMultiTN = false
 )
+
+type lifecycleCN struct {
+	cnservice.Service
+	closeErr error
+	closes   int
+}
+
+func (s *lifecycleCN) Close() error {
+	s.closes++
+	return s.closeErr
+}
+
+func TestCNWrapperClosesAcquiredBackendBeforeStart(t *testing.T) {
+	failure := moerr.NewInternalErrorNoCtx("CN close incomplete")
+	for _, tc := range []struct {
+		name         string
+		closeErr     error
+		expectStatus ServiceStatus
+	}{
+		{name: "complete", expectStatus: ServiceClosed},
+		{name: "incomplete", closeErr: failure, expectStatus: ServiceInitialized},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backend := &lifecycleCN{closeErr: tc.closeErr}
+			owner := &cnService{status: ServiceInitialized, svc: backend}
+			require.Equal(t, tc.closeErr, owner.Close())
+			require.Equal(t, tc.closeErr, owner.Close())
+			require.Equal(t, 1, backend.closes)
+			require.Equal(t, tc.expectStatus, owner.Status())
+		})
+	}
+}
 
 type partialBatchHAKeeperClient struct{}
 

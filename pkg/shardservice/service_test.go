@@ -16,6 +16,7 @@ package shardservice
 
 import (
 	"context"
+	"errors"
 	"os"
 	"sync"
 	"testing"
@@ -30,6 +31,28 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/stretchr/testify/require"
 )
+
+func TestServiceConstructorUnwind(t *testing.T) {
+	runtime.RunTest(t.Name(), func(rt runtime.Runtime) {
+		cluster := clusterservice.NewMOCluster(t.Name(), nil, 0, clusterservice.WithDisableRefresh())
+		rt.SetGlobalVariables(runtime.ClusterService, cluster)
+		defer cluster.Close()
+
+		var owner ShardService
+		sentinel := errors.New("shard service option refused")
+		require.PanicsWithValue(t, sentinel, func() {
+			NewService(
+				Config{ServiceID: t.Name()},
+				NewMemShardStorage(rt.Logger()),
+				func(value ShardService) { owner = value },
+				func(*service) { panic(sentinel) },
+			)
+		})
+		require.NotNil(t, owner)
+		require.ErrorIs(t, owner.(*service).stopper.RunTask(func(context.Context) {}), stopper.ErrUnavailable)
+		require.NoError(t, owner.Close())
+	})
+}
 
 func TestServiceWaitCNReported(t *testing.T) {
 	for _, tc := range []struct {
@@ -823,7 +846,14 @@ func runServicesTest(
 			opts = adjustConfigFunc(&cfg)
 		}
 
-		s := NewService(cfg, NewMemShardStorage(runtime.ServiceRuntime(sid).Logger()), opts...)
+		var published ShardService
+		s := NewService(
+			cfg,
+			NewMemShardStorage(runtime.ServiceRuntime(sid).Logger()),
+			func(owner ShardService) { published = owner },
+			opts...,
+		)
+		require.Same(t, published, s)
 		services = append(services, s.(*service))
 	}
 
