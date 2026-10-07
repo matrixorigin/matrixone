@@ -24,13 +24,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
-	"github.com/robfig/cron/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestScheduleCronTask(t *testing.T) {
 	runScheduleCronTaskTest(t, func(store *memTaskStorage, s *taskService, ctx context.Context) {
+		fetchInterval = 300 * time.Millisecond
 		assert.NoError(t, s.CreateCronTask(ctx, newTestTaskMetadata("t1"), "*/1 * * * * *"))
 
 		s.StartScheduleCronTask()
@@ -53,10 +53,18 @@ func TestRetryScheduleCronTask(t *testing.T) {
 
 		assert.NoError(t, s.CreateCronTask(ctx, newTestTaskMetadata("t1"), "*/1 * * * * *"))
 
-		s.StartScheduleCronTask()
-		defer s.StopScheduleCronTask()
+		cronTasks, err := s.QueryCronTask(ctx)
+		require.NoError(t, err)
+		require.Len(t, cronTasks, 1)
+		job, err := newCronJob(cronTasks[0], s)
+		require.NoError(t, err)
 
-		waitHasTasks(t, store, time.Second*20, WithTaskParentTaskIDCond(EQ, "t1"))
+		job.doRunWithRetryBackoff(0)
+		tasks, err := store.QueryAsyncTask(ctx, WithTaskParentTaskIDCond(EQ, "t1"))
+		require.NoError(t, err)
+		require.Len(t, tasks, 1)
+		require.Equal(t, "t1:1", tasks[0].Metadata.ID)
+		require.Equal(t, 1, n)
 	})
 }
 
@@ -96,17 +104,31 @@ func TestRetryScheduleCronTaskAllFailed(t *testing.T) {
 func TestScheduleCronTaskImmediately(t *testing.T) {
 	runScheduleCronTaskTest(t, func(store *memTaskStorage, s *taskService, ctx context.Context) {
 		task := newTestCronTask("t1", "*/1 * * * * *")
-		task.CreateAt = time.Now().UnixMilli()
+		task.CreateAt = time.Now().Add(-time.Second).UnixMilli()
 		task.NextTime = task.CreateAt
 		task.TriggerTimes = 0
 		task.UpdateAt = time.Now().UnixMilli()
 
 		mustAddTestCronTask(t, store, 1, task)
+		updated := make(chan struct{}, 1)
+		store.preUpdateCron = func() error {
+			select {
+			case updated <- struct{}{}:
+			default:
+			}
+			return nil
+		}
 
 		s.StartScheduleCronTask()
 		defer s.StopScheduleCronTask()
+		s.fetchCronTasksOnce(ctx)
+		<-updated
+		s.crons.stopper.Stop()
 
-		waitHasTasks(t, store, time.Second*20, WithTaskParentTaskIDCond(EQ, "t1"))
+		tasks, err := store.QueryAsyncTask(ctx, WithTaskParentTaskIDCond(EQ, "t1"))
+		require.NoError(t, err)
+		require.Len(t, tasks, 1)
+		require.Equal(t, "t1:1", tasks[0].Metadata.ID)
 	})
 }
 
@@ -120,15 +142,31 @@ func TestScheduleCronTaskLimitConcurrency(t *testing.T) {
 		cronTask.Metadata.Options.Concurrency = 1
 
 		mustAddTestCronTask(t, store, 1, cronTask)
+		firstRun := make(chan struct{}, 1)
+		store.preUpdateCron = func() error {
+			select {
+			case firstRun <- struct{}{}:
+			default:
+			}
+			return nil
+		}
 
 		s.StartScheduleCronTask()
 		defer s.StopScheduleCronTask()
+		s.fetchCronTasksOnce(ctx)
+		<-firstRun
+		cronTasks, err := s.QueryCronTask(ctx)
+		require.NoError(t, err)
+		require.Len(t, cronTasks, 1)
+		job := s.crons.jobs[cronTasks[0].ID]
+		require.NotNil(t, job)
+		s.crons.stopper.Stop()
+		job.Run()
 
-		waitHasTasks(t, store, time.Second*20,
-			WithTaskParentTaskIDCond(EQ, "t1"))
-		assertTaskCountEqual(t, store, time.Second*5, 1,
-			WithTaskParentTaskIDCond(EQ, "t1"),
-			WithTaskStatusCond(task.TaskStatus_Running))
+		tasks, err := store.QueryAsyncTask(ctx, WithTaskParentTaskIDCond(EQ, "t1"))
+		require.NoError(t, err)
+		require.Len(t, tasks, 1)
+		require.Equal(t, "t1:1", tasks[0].Metadata.ID)
 	})
 }
 
@@ -138,8 +176,11 @@ func TestRemovedCronTask(t *testing.T) {
 
 		s.StartScheduleCronTask()
 		defer s.StopScheduleCronTask()
-		waitJobsCount(t, 1, s, time.Second*10)
-		waitHasTasks(t, store, time.Second*10, WithTaskParentTaskIDCond(EQ, "t1"))
+		s.fetchCronTasksOnce(ctx)
+		cronTasks, err := s.QueryCronTask(ctx)
+		require.NoError(t, err)
+		require.Len(t, cronTasks, 1)
+		s.crons.jobs[cronTasks[0].ID].Run()
 		s.crons.stopForTest()
 		require.Len(t, s.crons.entries, 1)
 
@@ -148,8 +189,8 @@ func TestRemovedCronTask(t *testing.T) {
 		store.cronTasks = make(map[uint64]task.CronTask)
 		store.Unlock()
 
-		s.crons.startForTest(t, s.fetchCronTasks)
-		waitJobsCount(t, 0, s, time.Second*10)
+		s.crons.startForTest()
+		s.fetchCronTasksOnce(ctx)
 		s.crons.stopForTest()
 		require.Len(t, s.crons.entries, 0)
 	})
@@ -160,12 +201,17 @@ func TestReplaceCronTask(t *testing.T) {
 		assert.NoError(t, s.CreateCronTask(ctx, newTestTaskMetadata("t1"), "*/1 * * * * *"))
 		s.StartScheduleCronTask()
 		defer s.StopScheduleCronTask()
-		waitHasTasks(t, store, time.Second*10, WithTaskParentTaskIDCond(EQ, "t1"))
+		s.fetchCronTasksOnce(ctx)
+		cronTasks, err := s.QueryCronTask(ctx)
+		require.NoError(t, err)
+		require.Len(t, cronTasks, 1)
+		jobInCron := s.crons.jobs[cronTasks[0].ID]
+		require.NotNil(t, jobInCron)
+		jobInCron.doRunWithRetryBackoff(0)
 		s.crons.stopForTest()
 
-		jobInCron := s.crons.jobs[1]
 		taskInStore := store.cronTasks[jobInCron.task.ID]
-		oldEntryID := s.crons.entries[1]
+		oldEntryID := s.crons.entries[jobInCron.task.ID]
 		cronTaskID := jobInCron.task.ID
 
 		require.Equal(t, jobInCron.task.TriggerTimes, taskInStore.TriggerTimes)
@@ -174,18 +220,19 @@ func TestReplaceCronTask(t *testing.T) {
 
 		t.Log("set trigger times to 0")
 		jobInCron.task.TriggerTimes = 0
-		require.Equal(t, s.crons.jobs[1].task.TriggerTimes, uint64(0))
+		require.Equal(t, s.crons.jobs[cronTaskID].task.TriggerTimes, uint64(0))
 
-		s.crons.startForTest(t, s.fetchCronTasks)
-		waitCronEntryIDChanged(t, s, oldEntryID, time.Second*10)
-		waitCronTriggerTimes(t, store, cronTaskID, firstTriggerTimes, time.Second*10)
+		s.crons.startForTest()
+		s.fetchCronTasksOnce(ctx)
 		s.crons.stopForTest()
 		require.Len(t, s.crons.entries, 1)
-		require.NotEqual(t, oldEntryID, s.crons.entries[1])
+		require.NotEqual(t, oldEntryID, s.crons.entries[cronTaskID])
 
-		jobInCron = s.crons.jobs[1]
+		jobInCron = s.crons.jobs[cronTaskID]
 		taskInStore = store.cronTasks[jobInCron.task.ID]
 		require.Equal(t, jobInCron.task.TriggerTimes, taskInStore.TriggerTimes)
+		jobInCron.Run()
+		require.Greater(t, store.cronTasks[cronTaskID].TriggerTimes, firstTriggerTimes)
 	})
 }
 
@@ -194,14 +241,17 @@ func (c *crons) stopForTest() {
 	<-c.cron.Stop().Done()
 }
 
-func (c *crons) startForTest(t *testing.T, fn func(ctx context.Context)) {
+func (c *crons) startForTest() {
 	c.cron.Start()
 	c.stopper = stopper.NewStopper("cronTasks")
-	require.NoError(t, c.stopper.RunTask(fn))
 }
 
 func runScheduleCronTaskTest(t *testing.T, testFunc func(*memTaskStorage, *taskService, context.Context)) {
-	fetchInterval = 300 * time.Millisecond
+	oldFetchInterval := fetchInterval
+	fetchInterval = time.Hour
+	t.Cleanup(func() {
+		fetchInterval = oldFetchInterval
+	})
 
 	store := NewMemTaskStorage().(*memTaskStorage)
 	s := NewTaskService(runtime.DefaultRuntime(), store).(*taskService)
@@ -212,67 +262,6 @@ func runScheduleCronTaskTest(t *testing.T, testFunc func(*memTaskStorage, *taskS
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
 	defer cancel()
 	testFunc(store, s, ctx)
-}
-
-func waitJobsCount(t *testing.T, n int, s *taskService, timeout time.Duration) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	defer func() {
-		require.Equal(t, n, len(s.crons.cron.Entries()))
-	}()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-			if len(s.crons.cron.Entries()) == n {
-				return
-			}
-		}
-		time.Sleep(time.Millisecond * 10)
-	}
-}
-
-func waitCronEntryIDChanged(t *testing.T, s *taskService, oldID cron.EntryID, timeout time.Duration) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	for {
-		entries := s.crons.cron.Entries()
-		if len(entries) == 1 && entries[0].ID != oldID {
-			return
-		}
-		select {
-		case <-ctx.Done():
-			require.Fail(t, "wait cron task replacement failed")
-			return
-		default:
-		}
-		time.Sleep(time.Millisecond * 10)
-	}
-}
-
-func waitCronTriggerTimes(t *testing.T, store *memTaskStorage, taskID uint64, previous uint64, timeout time.Duration) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	for {
-		store.Lock()
-		current := store.cronTasks[taskID].TriggerTimes
-		store.Unlock()
-		if current > previous {
-			return
-		}
-		select {
-		case <-ctx.Done():
-			require.Fail(t, "wait cron task execution after replacement failed")
-			return
-		default:
-		}
-		time.Sleep(time.Millisecond * 10)
-	}
 }
 
 func waitHasTasks(t *testing.T, store *memTaskStorage, timeout time.Duration, conds ...Condition) {
@@ -292,22 +281,5 @@ func waitHasTasks(t *testing.T, store *memTaskStorage, timeout time.Duration, co
 			}
 		}
 		time.Sleep(time.Millisecond * 10)
-	}
-}
-
-func assertTaskCountEqual(t *testing.T, store *memTaskStorage, timeout time.Duration, count int, conds ...Condition) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-			tasks, err := store.QueryAsyncTask(ctx, conds...)
-			require.NoError(t, err)
-			require.LessOrEqual(t, len(tasks), count, "err")
-		}
-		time.Sleep(time.Second)
 	}
 }
