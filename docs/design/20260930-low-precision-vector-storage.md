@@ -678,6 +678,32 @@ most of it), 0.15 s converting the queries, and 0.5 s of scan, matmul and top-k.
 `vecf32` the scan of 3 GB of vectors dominates. The raw-L2 column is about 0.70 for every
 type; normalization changes the ranking, independent of the format.
 
+Every metric over the same tables, reloaded from the CSV (`vecf32`, then `normalize_l2` and
+a cast to each type), with the GEMM-expansion cosine and squared L2 of the Decisions; warm
+runs, the first run after a restart (reading the table from disk) left out:
+
+| Type | Metric | Warm runs | Recall@10, normalized exact | Recall@10, raw L2 ground truth |
+|------|--------|-----------|-----------------------------|--------------------------------|
+| `vecf32` | `inner_product` | 3.48 / 3.35 / 3.62 / 3.20 / 3.09 s | 0.9999 | 0.701 |
+| `vecf32` | `cosine` | 9.00 / 6.52 / 9.75 s | 0.9999 | 0.701 |
+| `vecf32` | `l2sq` | 7.12 / 7.20 s | 0.9999 | 0.701 |
+| `vecbf16` | `inner_product` | 2.17 / 2.22 s | 0.9976 | 0.701 |
+| `vecbf16` | `cosine` | 2.17 / 2.08 / 1.94 s | 0.9984 | 0.701 |
+| `vecbf16` | `l2sq` | 1.95 / 1.92 / 1.86 s | 0.9983 | 0.701 |
+| `vecf8` | `inner_product` | 3.02 / 1.61 s | 0.964 | 0.700 |
+| `vecf8` | `cosine` | 1.76 / 2.47 / 2.01 s | 0.974 | 0.701 |
+| `vecf8` | `l2sq` | 2.02 / 1.50 / 1.42 s | 0.974 | 0.700 |
+| `vecf4` | `inner_product` | 3.16 / 1.20 s | 0.893 | 0.687 |
+| `vecf4` | `cosine` | 1.24 / 1.23 / 1.34 s | 0.920 | 0.693 |
+| `vecf4` | `l2sq` | 1.15 / 1.29 / 1.02 s | 0.915 | 0.692 |
+
+Inner-product recall equals the table above. The `vecf32` cosine and squared-L2 runs read
+part of the 3 GB table from disk, evicted from the page cache by the other tables; its
+inner-product runs, repeated with the table cached, are 3.1–3.6 s. On `vecf8` and `vecf4`
+cosine and squared L2 recall more than the inner product: the quantized rows are no longer
+of unit norm, so the dot product ranks partly by row norm; cosine divides the norm out and
+squared L2 includes it.
+
 ## Decisions
 
 - `vecf4` = NVFP4 (e2m1, unsigned E4M3 16-block scale, fp32 global per vector in the
