@@ -28,6 +28,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -4756,6 +4757,16 @@ func builtInConvertUsingCharset(parameters []*vector.Vector, result vector.Funct
 		return nil
 	}
 
+	var identity collation.Identity
+	var err error
+	if parameters[1].IsConst() && length > 0 {
+		if charset, isNull := p2.GetStrValue(0); !isNull {
+			identity, err = resolveConvertCharset(charset)
+			if err != nil {
+				return err
+			}
+		}
+	}
 	for i := uint64(0); i < uint64(length); i++ {
 		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(i) {
 			if err := rs.AppendMustNullForBytesResult(); err != nil {
@@ -4782,7 +4793,13 @@ func builtInConvertUsingCharset(parameters []*vector.Vector, result vector.Funct
 			continue
 		}
 
-		if isUTF8Charset(charset) && !utf8.Valid(value) {
+		if !parameters[1].IsConst() {
+			identity, err = resolveConvertCharset(charset)
+			if err != nil {
+				return err
+			}
+		}
+		if identity != collation.BinaryIdentity && !utf8.Valid(value) {
 			if err := rs.AppendMustNullForBytesResult(); err != nil {
 				return err
 			}
@@ -4796,10 +4813,12 @@ func builtInConvertUsingCharset(parameters []*vector.Vector, result vector.Funct
 	return nil
 }
 
-func isUTF8Charset(charset []byte) bool {
-	return strings.EqualFold(string(charset), "utf8") ||
-		strings.EqualFold(string(charset), "utf8mb3") ||
-		strings.EqualFold(string(charset), "utf8mb4")
+func resolveConvertCharset(charset []byte) (collation.Identity, error) {
+	identity, ok := collation.ResolveCharset(string(charset))
+	if !ok {
+		return 0, moerr.NewInvalidInputNoCtxf("unsupported character set '%s'", charset)
+	}
+	return identity, nil
 }
 
 func builtInToUpper(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

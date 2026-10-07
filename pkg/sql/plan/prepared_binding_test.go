@@ -108,10 +108,12 @@ func TestPreparedNumericPredicateFiltering(t *testing.T) {
 		{"round nonzero precision", "c=round(?,?)", []string{"54321.0", "1"}, true, true},
 		{"round negative precision", "c=round(?,?)", []string{"54321.0", "-1"}, true, true},
 		{"explicit column cast", "cast(c as decimal(5,0))=round(?,0)", []string{"54321.0"}, false, true},
-		{"explicit value cast", "c=cast(round(?,0) as decimal(4,0))", []string{"54321.0"}, false, true},
+		// ROUND sees the source before the explicit result cast clamps it to
+		// 9999. The full expression is safe to lower, but the cast must remain.
+		{"explicit value cast", "c=cast(round(?,0) as decimal(4,0))", []string{"54321.0"}, true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			table := makeExprOptCompositeSortKeyTableDef()
 			table.Name, table.TblId = "numeric_filters", 99003
 			decimal := types.New(types.T_decimal64, 12, 2)
@@ -149,7 +151,7 @@ func TestPreparedNumericPredicateFiltering(t *testing.T) {
 				domain.Width = 38
 				promoted, err := appendCastBeforeExpr(ctx, column, domain)
 				require.NoError(t, err)
-				args := []*Expr{promoted}
+				args := append(make([]*Expr, 0, 3), promoted)
 				for pos := range 2 {
 					peer, err := appendCastBeforeExpr(ctx, &Expr{Typ: makeSimplePlan2Type(types.T_varchar), Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: int32(pos)}}}, domain)
 					require.NoError(t, err)
@@ -173,6 +175,7 @@ func TestPreparedNumericPredicateFiltering(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, bound.ValueDependent, "runtime value proof must not enter the type-only cache")
 			foundScan, columnCast, executableParam := false, false, false
+			explicitResultCast := false
 			for _, node := range bound.Plan.GetQuery().Nodes {
 				if node.NodeType != planpb.Node_TABLE_SCAN || node.TableDef.Name != table.Name {
 					continue
@@ -190,6 +193,15 @@ func TestPreparedNumericPredicateFiltering(t *testing.T) {
 							fn.Args[0].GetCol() != nil && fn.Args[0].Typ.Id == table.Cols[2].Typ.Id {
 							columnCast = true
 						}
+						if tc.name == "explicit value cast" && types.T(expr.Typ.Id).IsDecimal() &&
+							expr.Typ.Width == 4 && expr.Typ.Scale == 0 {
+							if fn := expr.GetF(); fn != nil && fn.Func.ObjName == "cast" {
+								_, overload := function.DecodeOverloadID(fn.Func.Obj)
+								require.EqualValues(t, 1, overload, "retain the explicit, not implicit, cast")
+								require.True(t, function.ContainsParameter(expr))
+								explicitResultCast = true
+							}
+						}
 						return nil
 					}))
 				}
@@ -197,6 +209,9 @@ func TestPreparedNumericPredicateFiltering(t *testing.T) {
 			require.True(t, foundScan)
 			require.Equal(t, !tc.native, columnCast, bound.Plan.String())
 			require.True(t, executableParam, "proof witnesses must not replace executable parameters")
+			if tc.name == "explicit value cast" {
+				require.True(t, explicitResultCast, "safe key lowering must still execute the user's narrowing cast")
+			}
 		})
 	}
 }
@@ -208,7 +223,7 @@ func TestPreparedDomainlessNullUsesConcreteRelationalColumns(t *testing.T) {
 	} {
 		for _, binary := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/binary=%v", query, binary), func(t *testing.T) {
-				mock := NewMockOptimizer(false)
+				mock := NewMockOptimizer(false, newPlanTestProcess(t))
 				bindings := []PreparedSourceBinding{
 					{Position: 0, Type: types.T_any.ToType()},
 					{Position: 1, Type: types.T_any.ToType()},
@@ -241,7 +256,7 @@ func TestPreparedSQLPresentationKeepsDerivedNumericConsumer(t *testing.T) {
 	source := types.New(types.T_decimal128, 20, 0)
 	bindings := []PreparedSourceBinding{{Position: 0, Type: source}, {Position: 1, Type: source}}
 	for _, binary := range []bool{false, true} {
-		mock := NewMockOptimizer(false)
+		mock := NewMockOptimizer(false, newPlanTestProcess(t))
 		ctx := withPreparedSourceBindings(context.Background(), bindings, []any{
 			ParamValue{Value: "2", IsBinaryProtocol: binary},
 			ParamValue{Value: "10", IsBinaryProtocol: binary},
@@ -282,7 +297,7 @@ func TestPreparedBindingBeforeKeyLowering(t *testing.T) {
 		{"mixed scalar", "b=? and abs(?)=2", types.T_int32, types.T_int32, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			ctx := &mock.ctxt
 			table := makeExprOptCompositeSortKeyTableDef()
 			table.Name, table.TblId = "binding_keys", 99001
@@ -328,7 +343,7 @@ func TestPreparedBindingBeforeKeyLowering(t *testing.T) {
 }
 
 func TestPreparedSourceBindingKeepsCurrentValuesAndOrdinals(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	mock.ctxt.SetContext(withPreparedSourceBindings(context.Background(), []PreparedSourceBinding{
 		// Deliberately use a non-identity mapping. Optimizer pruning must not
 		// renumber the source parameters or select the neighboring value.
@@ -393,7 +408,7 @@ func TestPreparedSourceBindingKeepsCurrentValuesAndOrdinals(t *testing.T) {
 }
 
 func TestPreparedTextSourceRemainsText(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	mock.ctxt.SetContext(withPreparedSourceBindings(context.Background(), []PreparedSourceBinding{
 		{Position: 0, Type: types.T_text.ToType()},
 		{Position: 1, Type: types.T_text.ToType()},
@@ -492,7 +507,7 @@ func TestPreparedSourceBindingPreservesComparisonContracts(t *testing.T) {
 		{types.T_decimal64, types.T_float64, types.T_float64, ""},
 	} {
 		t.Run(tc.column.String(), func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			table := makeExprOptCompositeSortKeyTableDef()
 			table.Name, table.TblId = "binding_contract", 99002
 			table.Cols[2].Typ = makeSimplePlan2Type(tc.column)
@@ -516,7 +531,7 @@ func TestPreparedSourceBindingPreservesComparisonContracts(t *testing.T) {
 }
 
 func TestPreparedSourceBindingPreservesUpdateDomains(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	// The generic mock's historical composite definition contains empty
 	// component names and no physical key column. Supply catalog-valid key
 	// metadata so this test exercises the real UPDATE contract.
@@ -588,7 +603,7 @@ func TestPreparedDMLIntegerKeyDomains(t *testing.T) {
 				continue
 			}
 			t.Run(statement+tc.name, func(t *testing.T) {
-				mock := NewMockOptimizer(false)
+				mock := NewMockOptimizer(false, newPlanTestProcess(t))
 				table := DeepCopyTableDef(mock.ctxt.tables["nation"], true)
 				table.Cols[0].Typ = makeSimplePlan2Type(tc.column)
 				mock.ctxt.tables["nation"] = table
@@ -639,7 +654,7 @@ func TestPreparedSignedKeyGuardPreservesOtherDependencies(t *testing.T) {
 		for _, dependent := range []bool{false, true} {
 			ctx := withPreparedSourceBindings(context.Background(),
 				[]PreparedSourceBinding{{Position: 0, Type: types.T_int64.ToType()}},
-				[]any{ParamValue{Value: "7", IsBinaryProtocol: true}})
+				[]any{ParamValue{Value: "7", IsBinaryProtocol: true, PrepareParamKind: vector.PrepareParamInteger}})
 			state := preparedBindingState(ctx)
 			state.valueDependent = dependent
 			state.selectStatement = selectStatement
@@ -652,7 +667,7 @@ func TestPreparedSignedKeyGuardPreservesOtherDependencies(t *testing.T) {
 				if selectStatement {
 					var admitted bool
 					var err error
-					converted, admitted, err = bindPreparedIntegerInValue(ctx, column, param)
+					converted, admitted, err = bindPreparedIntegerValue(ctx, column, param)
 					require.NoError(t, err)
 					require.True(t, admitted)
 				} else {
@@ -661,10 +676,26 @@ func TestPreparedSignedKeyGuardPreservesOtherDependencies(t *testing.T) {
 					converted = args[1]
 				}
 				require.Equal(t, int32(target), converted.Typ.Id)
+				require.NotNil(t, converted.GetP(), "admitted consumer uses one transport conversion")
+				require.Equal(t, int32(types.T_int64), param.Typ.Id, "source/sibling domain stays unchanged")
+				require.Equal(t, types.T_int64, state.bindings[0].Type.Oid)
+				require.NotSame(t, param, converted, "sibling source occurrence remains immutable")
+				guard := state.diagnosticCandidates[len(state.diagnosticCandidates)-1]
+				require.Equal(t, int32(types.T_int64), guard.GetF().Args[0].Typ.Id)
 				require.Equal(t, dependent, state.valueDependent)
 				require.NotSame(t, converted, state.diagnosticCandidates[len(state.diagnosticCandidates)-1])
 			}
 			require.Len(t, state.diagnosticCandidates, 3)
+			// Revisiting a consumer-local marker must retain the full original
+			// source proof as well as another consumer's narrower domain.
+			firstGuard := state.diagnosticCandidates[0]
+			native := DeepCopyExpr(param)
+			native.Typ = makeSimplePlan2Type(types.T_int32)
+			column := &Expr{Typ: native.Typ, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}
+			_, _, err := bindPreparedIntegerValue(ctx, column, native)
+			require.NoError(t, err)
+			require.Same(t, firstGuard, state.diagnosticCandidates[0])
+			require.Equal(t, int32(types.T_int64), firstGuard.GetF().Args[0].Typ.Id)
 			proc := testutil.NewProcess(t)
 			params := vector.NewVec(types.T_text.ToType())
 			t.Cleanup(func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()); proc.Free() })
@@ -683,7 +714,64 @@ func TestPreparedSignedKeyGuardPreservesOtherDependencies(t *testing.T) {
 	}
 }
 
-func TestPreparedIntegerInAdmissionRejectsUnsupportedDomains(t *testing.T) {
+func TestPreparedIntegerConsumerLoweringProvenance(t *testing.T) {
+	for _, value := range []ParamValue{
+		{Value: "7", PrepareParamKind: vector.PrepareParamInteger},
+		{Value: "7", IsBinaryProtocol: true},
+		{Value: "7", IsBinaryProtocol: true, IsBin: true, PrepareParamKind: vector.PrepareParamInteger},
+		{Value: "7", IsBinaryProtocol: true, IsBinaryString: true, PrepareParamKind: vector.PrepareParamInteger},
+	} {
+		ctx := withPreparedSourceBindings(context.Background(), []PreparedSourceBinding{{Position: 0, Type: types.T_int64.ToType()}}, []any{value})
+		param := &Expr{Typ: makeSimplePlan2Type(types.T_int64), Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+		column := &Expr{Typ: makeSimplePlan2Type(types.T_int32), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}
+		converted, admitted, err := bindPreparedIntegerValue(ctx, column, param)
+		require.NoError(t, err)
+		require.True(t, admitted)
+		require.NotNil(t, converted.GetF(), "SQL/opaque/unclassified transport retains the source conversion")
+		require.Equal(t, int32(types.T_int64), converted.GetF().Args[0].Typ.Id)
+	}
+}
+
+// Failure on either side must not publish half a narrow range or discard a
+// diagnostic/dependency owned by a different consumer in the same statement.
+func TestPreparedIntegerBetweenAtomicAdmission(t *testing.T) {
+	for _, bounds := range [][]any{{int64(7), int64(2147483648)}, {int64(-2147483649), int64(7)}, {int64(7), int64(8)}} {
+		for _, dependent := range []bool{false, true} {
+			ctx := withPreparedSourceBindings(context.Background(), []PreparedSourceBinding{
+				{Position: 0, Type: types.T_int64.ToType()}, {Position: 1, Type: types.T_int64.ToType()},
+			}, bounds)
+			state := preparedBindingState(ctx)
+			state.selectStatement, state.valueDependent = true, dependent
+			prior := &Expr{Typ: makeSimplePlan2Type(types.T_int64), Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+			state.diagnosticCandidates = []*Expr{prior}
+			lower, err := bindPreparedSource(ctx, 1)
+			require.NoError(t, err)
+			upper, err := bindPreparedSource(ctx, 2)
+			require.NoError(t, err)
+			column := &Expr{Typ: makeSimplePlan2Type(types.T_int32), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}
+			args := []*Expr{column, lower, upper}
+			got, admitted, err := bindPreparedIntegerBetween(ctx, args)
+			require.NoError(t, err)
+			require.Same(t, prior, state.diagnosticCandidates[0])
+			if bounds[1] == int64(8) {
+				require.True(t, admitted)
+				require.Len(t, state.diagnosticCandidates, 3)
+				require.Equal(t, dependent, state.valueDependent)
+				require.Equal(t, int32(types.T_int32), got[1].Typ.Id)
+				require.Equal(t, int32(types.T_int32), got[2].Typ.Id)
+			} else {
+				require.False(t, admitted)
+				require.Len(t, state.diagnosticCandidates, 1)
+				require.True(t, state.valueDependent)
+				for i := range args {
+					require.Same(t, args[i], got[i])
+				}
+			}
+		}
+	}
+}
+
+func TestPreparedIntegerAdmissionRejectsUnsupportedDomains(t *testing.T) {
 	for _, tc := range []struct {
 		source, binding, target types.T
 		position                int32
@@ -712,7 +800,7 @@ func TestPreparedIntegerInAdmissionRejectsUnsupportedDomains(t *testing.T) {
 			}
 			param.GetP().Pos = tc.position
 			column := &Expr{Typ: makeSimplePlan2Type(tc.target), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}
-			result, admitted, err := bindPreparedIntegerInValue(ctx, column, param)
+			result, admitted, err := bindPreparedIntegerValue(ctx, column, param)
 			require.NoError(t, err)
 			require.False(t, admitted)
 			require.Same(t, param, result)
@@ -724,7 +812,7 @@ func TestPreparedIntegerInAdmissionRejectsUnsupportedDomains(t *testing.T) {
 
 func TestPreparedSourceBindingConfigurationConsumers(t *testing.T) {
 	t.Run("geometry SRID", func(t *testing.T) {
-		mock := NewMockOptimizer(false)
+		mock := NewMockOptimizer(false, newPlanTestProcess(t))
 		for _, tc := range []struct {
 			source any
 			srid   int64
@@ -767,7 +855,7 @@ func TestPreparedSourceBindingConfigurationConsumers(t *testing.T) {
 			{types.T_varchar.ToType(), []any{"2024-01-01 00:00:00.123", "2024-01-02", "1 second"}, types.T_varchar, 3, true},
 			{types.T_datetime.ToTypeWithScale(3), []any{"2024-01-01", "2024-01-02", "1 microsecond"}, types.T_datetime, 6, true},
 		} {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			stepType := types.T_varchar.ToType()
 			if tc.typ.Oid.IsInteger() {
 				stepType = types.T_int32.ToType()
@@ -795,7 +883,7 @@ func TestPreparedSourceBindingConfigurationConsumers(t *testing.T) {
 }
 
 func TestPreparedSourceBindingDiagnosticProofIsLocal(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	ctx := withPreparedSourceBindings(context.Background(), []PreparedSourceBinding{
 		{Position: 0, Type: types.T_varchar.ToType()}, {Position: 1, Type: types.T_int32.ToType()},
 	}, []any{"00:00:01", int32(1)})
@@ -849,7 +937,7 @@ func TestPreparedSourceBindingStringConsumers(t *testing.T) {
 		{"regexp null", "select regexp_substr(?, 'a')", "", types.T_any, true, false, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			ctx := withPreparedSourceBindings(context.Background(), []PreparedSourceBinding{{Position: 0, Type: tc.typ.ToType()}})
 			mock.ctxt.SetContext(ctx)
 			p, err := runOneStmt(mock, t, tc.sql)
@@ -895,7 +983,7 @@ func TestPreparedSourceBindingJSONComparisonExecution(t *testing.T) {
 		{"decimal", "1.25", "1.25", types.New(types.T_decimal64, 3, 2), vector.PrepareParamDecimal},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			mock.ctxt.SetContext(withPreparedSourceBindings(context.Background(), []PreparedSourceBinding{{Position: 0, Type: tc.typ}}))
 			p, err := runOneStmt(mock, t, "select cast('"+tc.json+"' as json)=?")
 			require.NoError(t, err)
@@ -946,7 +1034,7 @@ func TestPreparedExecutionPlanConsumerDomains(t *testing.T) {
 		{name: "bit count null", sql: "bit_count(?)", null: true, source: types.T_any.ToType(), latch: types.T_int64.ToType()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			proc := mock.ctxt.GetProcess()
 			params := vector.NewVec(types.T_text.ToType())
 			defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
@@ -990,7 +1078,7 @@ func TestPreparedExecutionPlanConsumerDomains(t *testing.T) {
 func TestPreparedBinarySourceKeepsRuntimeTextWidth(t *testing.T) {
 	for _, sql := range []string{"select left(?,1)", "select left(v,1) from (select ? v) s"} {
 		t.Run(sql, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			sourceType := types.NewWithCharset(types.T_varbinary, 512, 0, types.CharsetBinary)
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
@@ -1024,7 +1112,7 @@ func TestPreparedBinarySourceKeepsRuntimeTextWidth(t *testing.T) {
 }
 
 func TestPreparedRegexpRuntimeTextOverride(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	prepared, err := runOneStmt(mock, t, "prepare domain_override from 'select regexp_substr(left(?, 1), ''a'')'")
 	require.NoError(t, err)
 	_, _, err = FillValuesOfParamsInPlanWithSpecialization(context.Background(), prepared.GetDcl().GetPrepare().Plan, []any{ParamValue{
@@ -1049,7 +1137,7 @@ func TestPreparedExecutionRegexpDomainModes(t *testing.T) {
 		{name: "text override derived", sql: "select regexp_substr(v, cast('a' as varbinary(1))) from (select ? v) s", source: types.T_varbinary, domain: types.RuntimeStringText, fails: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			source := tc.source.ToType()
 			value := ParamValue{Value: "abc", SourceType: source, HasSourceType: true, RuntimeStringDomain: tc.domain}
 			if tc.null {
@@ -1067,7 +1155,7 @@ func TestPreparedExecutionRegexpDomainModes(t *testing.T) {
 			require.False(t, bound.ValueDependent, "compatibility depends only on source metadata")
 		})
 	}
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select regexp_substr(NULL,cast('a' as varbinary(1)))", 1)
 	require.NoError(t, err)
 	defer stmt.Free()
@@ -1104,7 +1192,7 @@ func TestPreparedIntegerComparisonProofDiagnostics(t *testing.T) {
 		{"volatile", "cast(? as decimal(38,0))+rand()", "12", false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			proc := mock.ctxt.GetProcess()
 			params := vector.NewVec(types.T_text.ToType())
 			defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
@@ -1166,7 +1254,7 @@ func TestPreparedSingletonJoinIntegerComparison(t *testing.T) {
 		{name: "CTE", value: "9007199254740993", native: true, query: "with y as (select cast(? as decimal(38,0)) as v), x as (select v+0 as v from y) select k.c from numeric_join k join x on k.c=x.v"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			table := makeExprOptCompositeSortKeyTableDef()
 			table.Name, table.TblId = "numeric_join", 99004
 			table.Cols[2].Typ = makeSimplePlan2Type(types.T_int64)
@@ -1242,7 +1330,7 @@ func TestSingletonProjectedPeerAdmission(t *testing.T) {
 		{"padding mismatch", func(p, v *planpb.Node, e *Expr) { p.ProjectList[0].Typ.PadSpace = !e.Typ.PadSpace }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			builder := NewQueryBuilder(planpb.Query_SELECT, &mock.ctxt, false, false)
 			typ := makeSimplePlan2Type(types.T_int64)
 			project := &planpb.Node{NodeType: planpb.Node_PROJECT, BindingTags: []int32{7}, Children: []int32{1}, ProjectList: []*Expr{{Typ: typ, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}}}
@@ -1263,10 +1351,10 @@ func TestSingletonProjectedPeerAdmission(t *testing.T) {
 }
 
 func TestPreparedWideIntegerComparisonKeepsColumn(t *testing.T) {
-	for _, predicate := range []string{"val in (?,?)", "val not in (?,?)"} {
+	for _, predicate := range []string{"val in (?,?)", "val not in (?,?)", "val=?", "?<=val", "val between ? and ?", "val between ? and ? or val between ? and ?"} {
 		for _, value := range []int64{math.MinInt32, math.MaxInt32, math.MinInt32 - 1, math.MaxInt32 + 1} {
 			t.Run(fmt.Sprintf("%s/%d", predicate, value), func(t *testing.T) {
-				mock := NewMockOptimizer(true)
+				mock := NewMockOptimizer(true, newPlanTestProcess(t))
 				proc := mock.ctxt.GetProcess()
 				stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select id from single_idx_t where "+predicate, 1)
 				require.NoError(t, err)
@@ -1298,7 +1386,10 @@ func TestPreparedWideIntegerComparisonKeepsColumn(t *testing.T) {
 					})
 				}))
 				require.Equal(t, value < math.MinInt32 || value > math.MaxInt32, columnCast)
-				if strings.Contains(predicate, "in") && value >= math.MinInt32 && value <= math.MaxInt32 {
+				if value >= math.MinInt32 && value <= math.MaxInt32 && strings.Contains(predicate, "between") {
+					require.NotNil(t, findPlanFunctionExpr(bound.Plan, "between"), "safe closed range keeps its native expression")
+				}
+				if strings.Contains(predicate, "in") && !strings.Contains(predicate, "between") && value >= math.MinInt32 && value <= math.MaxInt32 {
 					require.NotNil(t, findPlanFunctionExpr(bound.Plan, map[bool]string{true: "not_in", false: "in"}[strings.Contains(predicate, "not")]), "safe list keeps one typed IN predicate")
 				}
 			})

@@ -1067,7 +1067,7 @@ func GetDeleteTableLabelValue(deleteCtx *plan.DeleteCtx) []string {
 	if deleteCtx == nil {
 		return make([]string, 0)
 	}
-	result := make([]string, 0)
+	result := make([]string, 0, 1)
 	ref := deleteCtx.Ref
 	result = append(result, ref.SchemaName+"."+ref.ObjName)
 	return result

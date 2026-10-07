@@ -296,7 +296,7 @@ func newPreparedExecuteEnv(t testing.TB, stmtID uint32) (*Session, *PrepareStmt,
 
 func newPreparedExecuteEnvForSQL(t testing.TB, stmtID uint32, sql string) (*Session, *PrepareStmt, *TxnComputationWrapper, *ExecCtx) {
 	return newPreparedExecuteEnvForSQLWithCompilerContext(
-		t, stmtID, sql, plan2.NewEmptyCompilerContext())
+		t, stmtID, sql, plan2.NewEmptyCompilerContext(newPlanTestProcess(t)))
 }
 
 func newPreparedExecuteEnvForSQLWithCompilerContext(
@@ -1106,7 +1106,7 @@ func TestBuildPlanRegexpStaticStringDomainMatrix(t *testing.T) {
 			statements, err := mysql.Parse(ctx, sql, 1)
 			require.NoError(t, err)
 			require.Len(t, statements, 1)
-			_, err = buildPlan(ctx, nil, plan2.NewEmptyCompilerContext(), statements[0])
+			_, err = buildPlan(ctx, nil, plan2.NewEmptyCompilerContext(newPlanTestProcess(t)), statements[0])
 			require.Error(t, err)
 			var moErr *moerr.Error
 			require.ErrorAs(t, err, &moErr)
@@ -1123,7 +1123,7 @@ func TestBuildPlanRegexpStaticStringDomainMatrix(t *testing.T) {
 		t.Run("accepted_"+sql, func(t *testing.T) {
 			statements, err := mysql.Parse(ctx, sql, 1)
 			require.NoError(t, err)
-			_, err = buildPlan(ctx, nil, plan2.NewEmptyCompilerContext(), statements[0])
+			_, err = buildPlan(ctx, nil, plan2.NewEmptyCompilerContext(newPlanTestProcess(t)), statements[0])
 			require.NoError(t, err)
 		})
 	}
@@ -1142,7 +1142,7 @@ func TestBuildPlanRegexpDefersOnlyRuntimeStringDomains(t *testing.T) {
 	} {
 		t.Run("accepted_"+sql, func(t *testing.T) {
 			prepare := tree.NewPrepareString(tree.Identifier("regexp_dynamic"), sql)
-			_, err := buildPlan(ctx, nil, plan2.NewEmptyCompilerContext(), prepare)
+			_, err := buildPlan(ctx, nil, plan2.NewEmptyCompilerContext(newPlanTestProcess(t)), prepare)
 			require.NoError(t, err)
 		})
 	}
@@ -1159,7 +1159,7 @@ func TestBuildPlanRegexpDefersOnlyRuntimeStringDomains(t *testing.T) {
 	} {
 		t.Run("rejected_"+sql, func(t *testing.T) {
 			prepare := tree.NewPrepareString(tree.Identifier("regexp_static"), sql)
-			_, err := buildPlan(ctx, nil, plan2.NewEmptyCompilerContext(), prepare)
+			_, err := buildPlan(ctx, nil, plan2.NewEmptyCompilerContext(newPlanTestProcess(t)), prepare)
 			require.Error(t, err)
 			var moErr *moerr.Error
 			require.ErrorAs(t, err, &moErr)
@@ -3432,7 +3432,7 @@ func TestPreparedDiagnosticFreeFilterReusesPlan(t *testing.T) {
 }
 
 func TestPreparedArithmeticDMLReusesStableRuntimeCategory(t *testing.T) {
-	optimizer := plan2.NewMockOptimizer(false)
+	optimizer := plan2.NewMockOptimizer(false, newPlanTestProcess(t))
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQLWithCompilerContext(
 		t,
 		216,
@@ -3575,6 +3575,9 @@ func TestPreparedSignedNarrowingCacheGuard(t *testing.T) {
 		{"update", "update nation set n_regionkey = ? where n_nationkey = ?", []string{"1", "7"}, []int{1}},
 		{"delete", "delete from nation where n_nationkey = ?", []string{"7"}, []int{0}},
 		{"multiple predicates", "update nation set n_name = 'updated' where n_nationkey = ? and n_regionkey = ?", []string{"7", "1"}, []int{0, 1}},
+		{"SELECT comparison", "select n_name from nation where n_nationkey=?", []string{"7"}, []int{0}},
+		{"BETWEEN", "select n_name from nation where n_nationkey between ? and ?", []string{"1", "127"}, []int{0, 1}},
+		{"OR BETWEEN", "select n_name from nation where n_nationkey between ? and ? or n_nationkey between ? and ?", []string{"1", "127", "8", "9"}, []int{0, 1, 2, 3}},
 		{"IN", "select n_name from nation where n_nationkey in (?,?)", []string{"127", "1"}, []int{0, 1}},
 		{"NOT IN", "select n_name from nation where n_nationkey not in (?,?)", []string{"127", "1"}, []int{0, 1}},
 		{"no narrowing", "select ?", []string{"127"}, nil},
@@ -3583,7 +3586,7 @@ func TestPreparedSignedNarrowingCacheGuard(t *testing.T) {
 		{"unused projection", "select n_name from (select n_name, n_nationkey in (?,?) as unused from nation) derived", []string{"127", "1"}, []int{0, 1}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			optimizer := plan2.NewMockOptimizer(false)
+			optimizer := plan2.NewMockOptimizer(false, newPlanTestProcess(t))
 			ses, prepared, cw, execCtx := newPreparedExecuteEnvForSQLWithCompilerContext(
 				t, 231, tc.sql, optimizer.CurrentContext())
 			t.Cleanup(func() {
@@ -3766,7 +3769,7 @@ func TestPreparedSignedNarrowingCacheGuard(t *testing.T) {
 }
 
 func BenchmarkInitExecuteStmtParamRepeatedTPCCArithmeticUpdate(b *testing.B) {
-	optimizer := plan2.NewMockOptimizer(false)
+	optimizer := plan2.NewMockOptimizer(false, newPlanTestProcess(b))
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQLWithCompilerContext(
 		b,
 		217,
@@ -3825,9 +3828,10 @@ func BenchmarkPreparedNarrowingCacheAdmission(b *testing.B) {
 		{"guarded_narrowing", "update nation set n_regionkey=1 where n_nationkey=?", defines.MYSQL_TYPE_LONGLONG},
 		{"IN_same_width", "select n_name from nation where n_nationkey in (?,?)", defines.MYSQL_TYPE_LONG},
 		{"IN_guarded_narrowing", "select n_name from nation where n_nationkey in (?,?)", defines.MYSQL_TYPE_LONGLONG},
+		{"ranges_guarded_narrowing", "select count(n_nationkey) from nation where " + strings.TrimSuffix(strings.Repeat("n_nationkey between ? and ? or ", 10), " or "), defines.MYSQL_TYPE_LONGLONG},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
-			optimizer := plan2.NewMockOptimizer(false)
+			optimizer := plan2.NewMockOptimizer(false, newPlanTestProcess(b))
 			ses, prepared, cw, execCtx := newPreparedExecuteEnvForSQLWithCompilerContext(
 				b, 232, tc.sql, optimizer.CurrentContext())
 			b.Cleanup(func() {
@@ -3890,7 +3894,7 @@ func TestPreparedIntegerAssignmentReusesBoundCompile(t *testing.T) {
 		{"insert into nation(n_regionkey,n_nationkey,n_name,n_comment) values (?,?,'','')", true, false, true},
 	} {
 		t.Run(fmt.Sprintf("%s/long_data=%t", query.sql, query.longData), func(t *testing.T) {
-			optimizer := plan2.NewMockOptimizer(false)
+			optimizer := plan2.NewMockOptimizer(false, newPlanTestProcess(t))
 			ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQLWithCompilerContext(
 				t, 222, query.sql, optimizer.CurrentContext())
 			defer func() {
@@ -3970,7 +3974,7 @@ func BenchmarkInitExecuteStmtParamRepeatedIntegerAssignment(b *testing.B) {
 		{"insert", "insert into nation(n_nationkey,n_name,n_regionkey,n_comment) values (?,'',?,'')", []string{"7", "1"}},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
-			optimizer := plan2.NewMockOptimizer(false)
+			optimizer := plan2.NewMockOptimizer(false, newPlanTestProcess(b))
 			ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQLWithCompilerContext(
 				b, 221, tc.sql, optimizer.CurrentContext())
 			defer func() {
@@ -4013,7 +4017,7 @@ func BenchmarkInitExecuteStmtParamRepeatedIntegerAssignment(b *testing.B) {
 }
 
 func BenchmarkInitExecuteStmtParamRepeatedNonConsumerDecimal(b *testing.B) {
-	optimizer := plan2.NewMockOptimizer(false)
+	optimizer := plan2.NewMockOptimizer(false, newPlanTestProcess(b))
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQLWithCompilerContext(
 		b, 220, "update nation set n_name = ? where n_nationkey = 1", optimizer.CurrentContext())
 	defer func() {
@@ -4838,7 +4842,7 @@ func TestValidateCapturedPrepareSchemasSkipsPlansRebuiltEveryExecute(t *testing.
 		PubInfo:          &plan.PubInfo{TenantId: 11},
 	}}
 	metadataPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{
-		OriginViews: []string{"information_schema#statistics"},
+		ViewPath: []*plan.ViewStep{{DatabaseName: "information_schema", ViewName: "statistics", Snapshot: &plan.Snapshot{Tenant: &plan.SnapshotTenant{}}}},
 	}}}}}
 	rebuildEveryExecute := shouldRebuildPreparePlan(false, metadataPlan)
 	require.True(t, rebuildEveryExecute)
@@ -6568,7 +6572,6 @@ func TestBuildExecuteUserParamsPreservesExplicitTextOverride(t *testing.T) {
 
 func TestPreparedBinaryIntegerCastDiagnosticProofBoundary(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	t.Cleanup(proc.Free)
 	for _, tc := range []struct {
 		name      string
 		value     string
@@ -6587,7 +6590,15 @@ func TestPreparedBinaryIntegerCastDiagnosticProofBoundary(t *testing.T) {
 		{"unsigned long widening", "4294967295", defines.MYSQL_TYPE_LONG, true, types.T_uint64, false, false, true, true},
 		{"unsigned long long max", "18446744073709551615", defines.MYSQL_TYPE_LONGLONG, true, types.T_uint64, false, false, true, true},
 		{"sign mismatch", "1", defines.MYSQL_TYPE_LONG, false, types.T_uint32, false, false, true, false},
-		{"narrowing", "1", defines.MYSQL_TYPE_LONG, false, types.T_int16, false, false, true, false},
+		{"narrowing", "1", defines.MYSQL_TYPE_LONG, false, types.T_int16, false, false, true, true},
+		{"narrow min", "-2147483648", defines.MYSQL_TYPE_LONGLONG, false, types.T_int32, false, false, true, true},
+		{"narrow max", "2147483647", defines.MYSQL_TYPE_LONGLONG, false, types.T_int32, false, false, true, true},
+		{"narrow underflow", "-2147483649", defines.MYSQL_TYPE_LONGLONG, false, types.T_int32, false, false, true, false},
+		{"narrow overflow", "2147483648", defines.MYSQL_TYPE_LONGLONG, false, types.T_int32, false, false, true, false},
+		{"narrow invalid bytes", "invalid", defines.MYSQL_TYPE_LONGLONG, false, types.T_int32, false, false, true, false},
+		{"narrow NULL", "", defines.MYSQL_TYPE_LONGLONG, false, types.T_int32, true, false, true, true},
+		{"narrow long data", "1", defines.MYSQL_TYPE_LONGLONG, false, types.T_int32, false, true, true, false},
+		{"unsigned narrow stays probed", "1", defines.MYSQL_TYPE_LONGLONG, true, types.T_uint32, false, false, true, false},
 		{"tiny bool heuristic", "1", defines.MYSQL_TYPE_TINY, false, types.T_int32, false, false, true, false},
 		{"long data", "1", defines.MYSQL_TYPE_LONG, false, types.T_int32, false, true, true, false},
 		{"sql prepare", "1", defines.MYSQL_TYPE_LONG, false, types.T_int32, false, false, false, false},
@@ -6612,13 +6623,28 @@ func TestPreparedBinaryIntegerCastDiagnosticProofBoundary(t *testing.T) {
 				prepared.getFromSendLongData = map[int]struct{}{0: {}}
 			}
 			require.Equal(t, tc.want, preparedBinaryIntegerCastDiagnosticFree(prepared, cast, tc.binary))
+			if tc.mysqlType == defines.MYSQL_TYPE_LONGLONG && !tc.unsigned && tc.target == types.T_int32 {
+				// This is the actual signed admission shape: a semantic BIGINT
+				// marker cast to INT, not just the text transport conversion.
+				param.Typ.Id = int32(types.T_int64)
+				typed, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "cast", []*plan.Expr{param, target})
+				require.NoError(t, err)
+				require.Equal(t, tc.want, preparedBinaryIntegerCastDiagnosticFree(prepared, typed, tc.binary))
+				typed.GetF().SyntaxExplicitCast = true
+				require.False(t, preparedBinaryIntegerCastDiagnosticFree(prepared, typed, tc.binary))
+				// Certifying the outer INT must never hide an inner TINYINT
+				// conversion: its smaller source domain remains independently probed.
+				param.Typ.Id = int32(types.T_int8)
+				inner, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "cast", []*plan.Expr{param, target})
+				require.NoError(t, err)
+				require.False(t, preparedBinaryIntegerCastDiagnosticFree(prepared, inner, tc.binary))
+			}
 		})
 	}
 }
 
 func TestPreparedBinaryIntegerSerialDiagnosticProofBoundary(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	t.Cleanup(proc.Free)
 	params := vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(params, []byte("1"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(params, []byte("2"), false, proc.Mp()))
@@ -6674,7 +6700,7 @@ func TestPreparedBinaryIntegerSerialDiagnosticProofBoundary(t *testing.T) {
 			serial.GetF().Args[0] = first.GetF().Args[0]
 			check(false)
 			serial.GetF().Args[0] = castAt(0, types.T_int16)
-			check(false)
+			check(true)
 			serial.GetF().Args[0] = first
 			serial.GetF().Args[0].GetF().SyntaxExplicitCast = false
 			check(true)
@@ -6782,7 +6808,7 @@ func (c *preparedStatsTestCompiler) Resolve(dbName, tableName string, snapshot *
 }
 
 func TestPreparedStatsAdmissionPreservesStableCompileAndRejectsError(t *testing.T) {
-	base := plan2.NewMockCompilerContext(false)
+	base := plan2.NewMockCompilerContext(false, newPlanTestProcess(t))
 	ctx := &preparedStatsTestCompiler{preparedTestCompiler: &preparedTestCompiler{CompilerContext: base, proc: base.GetProcess()},
 		stats: &pbstats.StatsInfo{TableCnt: 5}}
 	ses, prepared, cw, execCtx := newPreparedExecuteEnvForSQLWithCompilerContext(t, 225, "select n_nationkey from nation", ctx)
@@ -6828,7 +6854,7 @@ func installStatsAdmissionStorage(t testing.TB, ses *Session, table *plan.TableD
 }
 
 func TestPreparedStatsGrowthRebuildsExecutionStrategy(t *testing.T) {
-	base := plan2.NewMockCompilerContext(false)
+	base := plan2.NewMockCompilerContext(false, newPlanTestProcess(t))
 	ctx := &preparedStatsTestCompiler{preparedTestCompiler: &preparedTestCompiler{CompilerContext: base, proc: base.GetProcess()}, stats: &pbstats.StatsInfo{TableCnt: 5, BlockNumber: 1}}
 	ses, prepared, cw, execCtx := newPreparedExecuteEnvForSQLWithCompilerContext(t, 227, "select n_name from nation", ctx)
 	defer prepared.Close()
@@ -6899,7 +6925,7 @@ func TestPreparedGenerationSurvivesSmallStatsDrift(t *testing.T) {
 		{"composite", "update partsupp set ps_availqty=ps_availqty+1 where ps_partkey=? and ps_suppkey=?", 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			base := plan2.NewMockCompilerContext(true)
+			base := plan2.NewMockCompilerContext(true, newPlanTestProcess(t))
 			ctx := &preparedStatsTestCompiler{preparedTestCompiler: &preparedTestCompiler{CompilerContext: base, proc: base.GetProcess()}, stats: &pbstats.StatsInfo{TableCnt: 128}}
 			if tc.params == 2 {
 				_, table, err := base.Resolve("tpch", "partsupp", nil)
@@ -6999,7 +7025,7 @@ func BenchmarkPreparedStatsDrift(b *testing.B) {
 		{"range_aggregate", "select sum(n_regionkey) from nation where n_nationkey>?"},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
-			base := plan2.NewMockCompilerContext(true)
+			base := plan2.NewMockCompilerContext(true, newPlanTestProcess(b))
 			ctx := &preparedStatsTestCompiler{preparedTestCompiler: &preparedTestCompiler{CompilerContext: base, proc: base.GetProcess()}, stats: &pbstats.StatsInfo{TableCnt: 128}}
 			ses, prepared, cw, ec := newPreparedExecuteEnvForSQLWithCompilerContext(b, 230, tc.sql, ctx)
 			defer prepared.Close()

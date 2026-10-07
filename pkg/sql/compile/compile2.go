@@ -132,6 +132,9 @@ func (c *Compile) Compile(
 	execTopContext context.Context,
 	queryPlan *plan.Plan,
 	resultWriteBack func(batch *batch.Batch, crs *perfcounter.CounterSet) error) (err error) {
+	if err = plan.RequireLegacyCollations(queryPlan); err != nil {
+		return err
+	}
 	if err = validateOctStringProtocol(c.proc, queryPlan); err != nil {
 		return err
 	}
@@ -396,6 +399,7 @@ func expressionsContainUnresolvedFullText(expressions []*plan.Expr) bool {
 
 // Run executes the pipeline and returns the result.
 func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
+	defer func() { err = process.UnwrapPipelineFailure(err) }()
 	if c.pn.GetDdl().GetDropTable() != nil {
 		// Retry generations share this statement owner. Other statements do
 		// not need a temporary DROP retirement journal.

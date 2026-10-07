@@ -230,6 +230,9 @@ func NewJoinProbeExpressionExecutors(
 		execs, err := NewExpressionExecutorsFromPlanExpressionsWithAllocation(proc, planExprs, selection)
 		return execs, nil, err
 	}
+	if err := plan.RequireLegacyCollations(planExprs); err != nil {
+		return nil, nil, err
+	}
 	activation := make([]ExpressionExecutor, 0)
 	execs := make([]ExpressionExecutor, len(planExprs))
 	for i, expr := range planExprs {
@@ -260,6 +263,9 @@ func newExpressionExecutorsWithDiagnosticOwner(
 	foldOwnedConstantCasts bool,
 	owner *DeferredJoinDiagnostic,
 ) (executors []ExpressionExecutor, err error) {
+	if err := plan.RequireLegacyCollations(planExprs); err != nil {
+		return nil, err
+	}
 	executors = make([]ExpressionExecutor, len(planExprs))
 	for i := range executors {
 		buildCtx := &expressionExecutorBuildContext{
@@ -289,6 +295,9 @@ func NewExpressionExecutorWithAllocation(
 	planExpr *plan.Expr,
 	selection *vector.AllocationAccountSelection,
 ) (ExpressionExecutor, error) {
+	if err := plan.RequireLegacyCollations(planExpr); err != nil {
+		return nil, err
+	}
 	buildCtx := &expressionExecutorBuildContext{}
 	executor, err := newExpressionExecutorWithAllocation(proc, planExpr, selection, buildCtx)
 	if err != nil || len(buildCtx.states) == 0 {
@@ -303,6 +312,10 @@ func newExpressionExecutorWithAllocation(
 	selection *vector.AllocationAccountSelection,
 	buildCtx *expressionExecutorBuildContext,
 ) (ExpressionExecutor, error) {
+	typ, typeErr := types.TypeFromPlan(planExpr.Typ)
+	if typeErr != nil {
+		return nil, typeErr
+	}
 	if planExpr.AuxId < 0 {
 		if buildCtx.memos == nil {
 			buildCtx.memos = make(map[int32]*memoExpressionState)
@@ -324,9 +337,6 @@ func newExpressionExecutorWithAllocation(
 	}
 	switch t := planExpr.Expr.(type) {
 	case *plan.Expr_Lit:
-		typ := types.NewWithCharset(
-			types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale, uint8(planExpr.Typ.Charset),
-		)
 		vec, err := generateConstExpressionExecutor(proc, typ, t.Lit, selection)
 		if err != nil {
 			return nil, err
@@ -334,9 +344,6 @@ func newExpressionExecutorWithAllocation(
 		return NewFixedVectorExpressionExecutor(proc.Mp(), false, vec), nil
 
 	case *plan.Expr_T:
-		typ := types.NewWithCharset(
-			types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale, uint8(planExpr.Typ.Charset),
-		)
 		vec, err := newExpressionConstNull(typ, 1, selection)
 		if err != nil {
 			return nil, err
@@ -344,9 +351,6 @@ func newExpressionExecutorWithAllocation(
 		return NewFixedVectorExpressionExecutor(proc.Mp(), false, vec), nil
 
 	case *plan.Expr_Col:
-		typ := types.NewWithCharset(
-			types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale, uint8(planExpr.Typ.Charset),
-		)
 		ce := NewColumnExpressionExecutor()
 		*ce = ColumnExpressionExecutor{
 			mp:         proc.Mp(),
@@ -363,9 +367,6 @@ func newExpressionExecutorWithAllocation(
 		return ce, nil
 
 	case *plan.Expr_P:
-		typ := types.NewWithCharset(
-			types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale, uint8(planExpr.Typ.Charset),
-		)
 		if typ.Oid != types.T_any && !typ.Oid.IsMySQLString() {
 			// ParamRef describes the SQL source domain. The process transports
 			// values as TEXT; adapt that representation inside the executor so
@@ -388,9 +389,6 @@ func newExpressionExecutorWithAllocation(
 		return executor, nil
 
 	case *plan.Expr_V:
-		typ := types.NewWithCharset(
-			types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale, uint8(planExpr.Typ.Charset),
-		)
 		// Validate the full wire value before converting to the uint8 domain.
 		if t.V.BoundStringDomain > uint32(types.RuntimeStringBinary)+1 ||
 			(t.V.BoundStringDomain != 0 && (t.V.System || !typ.Oid.IsMySQLString())) {
@@ -415,6 +413,12 @@ func newExpressionExecutorWithAllocation(
 			vec.Free(proc.Mp())
 			return nil, err
 		}
+		// The opaque payload may carry a different type than the enclosing Expr.
+		// Decoding permits known metadata; executing it still requires admission.
+		if err := plan.RequireLegacyCollations(vec.GetType().PlanType()); err != nil {
+			vec.Free(proc.Mp())
+			return nil, err
+		}
 		// The stable Vector payload does not carry runtime provenance. LiteralVec
 		// explicitly records its uniform owner because the same container is used
 		// for SQL constants and runtime-filter payloads.
@@ -433,9 +437,7 @@ func newExpressionExecutorWithAllocation(
 	case *plan.Expr_List:
 		executor := NewListExpressionExecutor()
 		resultVecTyp := t.List.List[0].GetTyp()
-		typ := types.NewWithCharset(
-			types.T(resultVecTyp.Id), resultVecTyp.Width, resultVecTyp.Scale, uint8(resultVecTyp.Charset),
-		)
+		typ := types.MustTypeFromPlan(resultVecTyp)
 		if err := executor.init(proc, typ, len(t.List.List), selection); err != nil {
 			executor.Free()
 			return nil, err
@@ -474,10 +476,6 @@ func newExpressionExecutorWithAllocation(
 			executor.fid, _ = function.DecodeOverloadID(overloadID)
 			executor.evalFn, executor.resetFn, executor.freeFn, executor.retainedBytesFn = overload.GetExecuteMethod()
 		}
-		typ := types.NewWithCharset(
-			types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale, uint8(planExpr.Typ.Charset),
-		)
-
 		if err = executor.init(proc, len(t.F.Args), typ, selection); err != nil {
 			executor.Free()
 			return nil, err
@@ -1415,18 +1413,6 @@ func (expr *FunctionExpressionExecutor) hasScalarIntegerArgumentSource() bool {
 	return scalarIntegerArgumentSource(expr.parameterExecutor[0])
 }
 
-func (expr *FunctionExpressionExecutor) preserveIntegerArgumentScalar(rowCount int, selectList []bool) {
-	if rowCount == 0 || !expr.hasScalarIntegerArgumentSource() {
-		return
-	}
-	for row := 0; row < rowCount && selectList != nil; row++ {
-		if !selectList[row] {
-			return
-		}
-	}
-	expr.resultVector.GetResultVector().ToConst()
-}
-
 func applyTransparentStringSource(
 	result *vector.Vector,
 	source *vector.Vector,
@@ -1639,10 +1625,10 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 			} else {
 				selected.Reset(*parameter.GetType())
 			}
-			selected.SetIsBin(parameter.GetIsBin())
 			if err := selected.Union(parameter, expr.selectedRows, proc.Mp()); err != nil {
 				return nil, err
 			}
+			parameter.CopyExpressionMetadataTo(selected)
 			expr.selectedParameterResults[i] = selected
 			continue
 		}
@@ -1679,17 +1665,13 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 
 	selectedResult := expr.selectedResult.GetResultVector()
 	runtimeType := *selectedResult.GetType()
-	runtimeIsBin := selectedResult.GetIsBin()
 	runtimePrepareParamKind := selectedResult.GetPrepareParamKind()
-	runtimePreparedJSONComparisonParam := selectedResult.IsPreparedJSONComparisonParam()
-	runtimePrepareParamType := selectedResult.GetPrepareParamType()
 	if expr.fid == function.IFF || expr.fid == function.CASE || expr.fid == function.COALESCE {
 		runtimePrepareParamKind = expr.getFlowControlPrepareParamKind()
 	}
 
 	result := expr.resultVector.GetResultVector()
 	result.SetType(runtimeType)
-	result.SetIsBin(runtimeIsBin)
 	result.ResetWithSameType()
 	if selectedCount > 0 && expr.hasScalarIntegerArgumentSource() {
 		// The compact result was evaluated only for selected rows. A scalar
@@ -1703,6 +1685,7 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 		result.ToConst()
 		result.SetLength(rowCount)
 		result.SetPrepareParamKind(runtimePrepareParamKind)
+		selectedResult.CopyExpressionMetadataTo(result)
 		return result, nil
 	}
 	if expr.selectedNullResult == nil {
@@ -1717,7 +1700,7 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 		expr.selectedNullResult.SetType(runtimeType)
 		expr.selectedNullResult.SetLength(1)
 	}
-	expr.selectedNullResult.SetIsBin(runtimeIsBin)
+	expr.selectedNullResult.SetIsBin(selectedResult.GetIsBin())
 	selectedRow := int64(0)
 	for row := 0; row < rowCount; row++ {
 		if selectList[row] {
@@ -1740,11 +1723,8 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 		if len(result.GetPrepareParamKinds()) == 0 {
 			result.SetPrepareParamKind(runtimePrepareParamKind)
 		}
-		if runtimePreparedJSONComparisonParam {
-			result.SetPrepareParamType(runtimePrepareParamType)
-			result.SetPreparedJSONComparisonParam()
-		}
 	}
+	selectedResult.CopyExpressionMetadataTo(result)
 	return result, nil
 }
 
@@ -1835,7 +1815,11 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 		expr.parameterResults, expr.resultVector, proc, rowCount, &expr.selectList); err != nil {
 		return nil, err
 	}
-	expr.preserveIntegerArgumentScalar(rowCount, selectList)
+	// Partial selections returned through evalSelectedRows above.
+	// Runtime CASTs can flatten an otherwise scalar source.
+	if rowCount > 0 && expr.hasScalarIntegerArgumentSource() {
+		expr.resultVector.GetResultVector().ToConst()
+	}
 	if expr.isImplicitCast() && len(expr.parameterResults) > 0 {
 		if err := applyTransparentStringSource(
 			expr.resultVector.GetResultVector(), expr.parameterResults[0], rowCount, proc.Mp()); err != nil {
@@ -2114,6 +2098,7 @@ func generateConstExpressionExecutor(
 				// plan-typed CHAR and still materializes as VARCHAR for consumers.
 				constStringType := constSType
 				constStringType.Charset = typ.Charset
+				constStringType.CollationVersion = typ.CollationVersion
 				vec, err = newExpressionConstBytes(constStringType, []byte(sval), 1, proc.Mp(), selection)
 			} else {
 				vec, err = newExpressionConstBytes(constSType, []byte(sval), 1, proc.Mp(), selection)
@@ -2193,14 +2178,26 @@ func DecodeLiteralStringSource(literal *plan.Literal) (types.StringSource, error
 	return source, nil
 }
 
-func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Expr) (*vector.Vector, error) {
+func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Expr) (result *vector.Vector, err error) {
+	if err := plan.RequireLegacyCollations(exprs); err != nil {
+		return nil, err
+	}
 	lenList := len(exprs)
-	vec, err := proc.AllocVectorOfRows(types.NewWithCharset(
-		types.T(exprs[0].Typ.Id), exprs[0].Typ.Width, exprs[0].Typ.Scale, uint8(exprs[0].Typ.Charset),
-	), lenList, nil)
+	typ, err := types.TypeFromPlan(exprs[0].Typ)
 	if err != nil {
 		return nil, err
 	}
+	vec, err := proc.AllocVectorOfRows(typ, lenList, nil)
+	if err != nil {
+		return nil, err
+	}
+	// The constructor owns the partial vector until successful return.
+	defer func() {
+		if err != nil {
+			vec.Free(proc.Mp())
+			result = nil
+		}
+	}()
 	sources := make([]types.StringSource, lenList)
 	for i := 0; i < lenList; i++ {
 		expr := exprs[i]
@@ -2210,7 +2207,6 @@ func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Ex
 		}
 		sources[i], err = DecodeLiteralStringSource(t)
 		if err != nil {
-			vec.Free(proc.Mp())
 			return nil, err
 		}
 		if t.GetIsnull() {
@@ -2305,8 +2301,7 @@ func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Ex
 			vec.SetIsBin(t.IsBin)
 		}
 	}
-	if err := vec.SetStringSourcesWithMP(sources, proc.Mp()); err != nil {
-		vec.Free(proc.Mp())
+	if err = vec.SetStringSourcesWithMP(sources, proc.Mp()); err != nil {
 		return nil, err
 	}
 	return vec, nil
@@ -3191,9 +3186,11 @@ func GetExprZoneMap(
 								zms[expr.AuxId].Reset()
 								return
 							}
+							declaredType := types.MustTypeFromPlan(arg.Typ)
 							argType := *vecs[arg.AuxId].GetType()
-							argType.Width = arg.Typ.Width
-							argType.Charset = uint8(arg.Typ.Charset)
+							argType.Width = declaredType.Width
+							argType.Charset = declaredType.Charset
+							argType.CollationVersion = declaredType.CollationVersion
 							vecs[arg.AuxId].SetType(argType)
 							// Class is provenance, not a property of a point column ZM.
 							if constant && isSingleValueZoneMap(zms[arg.AuxId]) {
@@ -3203,9 +3200,7 @@ func GetExprZoneMap(
 						}
 					}
 					fn, _, fnFree, _ := overload.GetExecuteMethod()
-					typ := types.NewWithCharset(
-						types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale, uint8(expr.Typ.Charset),
-					)
+					typ := types.MustTypeFromPlan(expr.Typ)
 
 					zms[expr.AuxId] = evaluateZoneMapFunction(child, typ, zms[expr.AuxId], func(result vector.FunctionResultWrapper) error {
 						return fn(ivecs, result, child, 2, nil)
@@ -3844,9 +3839,7 @@ func MakeEvalVectorWithAllocation(
 	ev.Vec = make([]*vector.Vector, len(ev.Executor))
 	ev.Typ = make([]types.Type, len(ev.Executor))
 	for i, expr := range expressions {
-		ev.Typ[i] = types.NewWithCharset(
-			types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale, uint8(expr.Typ.Charset),
-		)
+		ev.Typ[i] = types.MustTypeFromPlan(expr.Typ)
 	}
 	return
 }

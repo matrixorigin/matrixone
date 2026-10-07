@@ -1208,35 +1208,23 @@ func makeGeneratedPlan2Type(oid types.T, width, scale int32, notNullable bool) p
 }
 
 func makePlan2Type(typ *types.Type) plan.Type {
-	return plan.Type{
-		Id:      int32(typ.Oid),
-		Width:   typ.Width,
-		Scale:   typ.Scale,
-		Charset: uint32(typ.Charset),
-	}
+	return typ.PlanType()
 }
 func makePlan2TypeValue(typ *types.Type) plan.Type {
-	return plan.Type{
-		Id:      int32(typ.Oid),
-		Width:   typ.Width,
-		Scale:   typ.Scale,
-		Charset: uint32(typ.Charset),
-	}
+	return typ.PlanType()
 }
 
 var MakeTypeByPlan2Type = makeTypeByPlan2Type
 var MakePlan2TypeValue = makePlan2TypeValue
 
 func makeTypeByPlan2Type(typ plan.Type) types.Type {
-	oid := types.T(typ.Id)
-	return types.NewWithCharset(oid, typ.Width, typ.Scale, uint8(typ.Charset))
+	return types.MustTypeFromPlan(typ)
 }
 
 var MakeTypeByPlan2Expr = makeTypeByPlan2Expr
 
 func makeTypeByPlan2Expr(expr *plan.Expr) types.Type {
-	oid := types.T(expr.Typ.Id)
-	return types.NewWithCharset(oid, expr.Typ.Width, expr.Typ.Scale, uint8(expr.Typ.Charset))
+	return types.MustTypeFromPlan(expr.Typ)
 }
 
 func makeHiddenColTyp() Type {

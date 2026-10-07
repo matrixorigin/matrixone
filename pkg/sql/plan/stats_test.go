@@ -34,7 +34,7 @@ import (
 )
 
 func TestReCalcInnerJoinCardinality(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, nil)
 	typ := planpb.Type{Id: int32(types.T_int64)}
 	equality, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*planpb.Expr{
 		GetColExpr(typ, 1, 0), GetColExpr(typ, 2, 0),
@@ -76,7 +76,7 @@ func TestReCalcInnerJoinCardinality(t *testing.T) {
 }
 
 func TestReCalcCartesianChainCardinality(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false), false, false)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false, nil), false, false)
 	const want = 300_000_000
 	for i, rows := range []float64{1000, 10, 3, 1000, 10} {
 		leafID := int32(len(builder.qry.Nodes))
@@ -163,7 +163,7 @@ func TestHintQueryTypePreservesExecutionContracts(t *testing.T) {
 func TestHintQueryTypeKeepsRuntimeFilterDeliveryLocal(t *testing.T) {
 	for _, hint := range []int{1, 2, 3} {
 		t.Run(fmt.Sprintf("execType-%d", hint), func(t *testing.T) {
-			builder := newRuntimeFilterSingleTestBuilder(false)
+			builder := newRuntimeFilterSingleTestBuilder(t, false)
 			join := builder.qry.Nodes[2]
 			join.JoinType = planpb.Node_DEDUP
 			join.RuntimeFilterBuildList = []*planpb.RuntimeFilterSpec{{Tag: 1}}
@@ -203,7 +203,7 @@ func TestAggregateBlockEstimateSaturates(t *testing.T) {
 		{name: "unknown row upper bound", rows: float64(^uint64(0)), want: math.MaxInt32},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			builder := newRuntimeFilterSingleTestBuilder(false)
+			builder := newRuntimeFilterSingleTestBuilder(t, false)
 			builder.qry.Nodes[0].Stats.Outcnt = tc.rows
 			builder.qry.Nodes = append(builder.qry.Nodes, &planpb.Node{
 				NodeType: planpb.Node_AGG, NodeId: 3, Children: []int32{0}, Stats: DefaultStats(),
@@ -568,7 +568,7 @@ func TestStatsSelectivityClampAvoidsNonFiniteJoin(t *testing.T) {
 }
 
 func TestAntiJoinCardinalityUsesPrimaryKeyLowerBound(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	intType := planpb.Type{Id: int32(types.T_int64), NotNullable: true}
 	makeEquality := func(leftPos, rightPos int32) *planpb.Expr {
 		expr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*planpb.Expr{
@@ -842,7 +842,7 @@ func TestEstimateIntervalSelectivityPreservesClippedBoundaryMembership(t *testin
 }
 
 func TestBoundFilterListNormalizesSameColumnRanges(t *testing.T) {
-	mock := NewMockCompilerContext(false)
+	mock := NewMockCompilerContext(false, newPlanTestProcess(t))
 	part := mock.tables["part"]
 	require.NotNil(t, part)
 	statsCache := NewStatsCache()
@@ -1076,7 +1076,7 @@ func TestGetExecType_VectorIndexScanRespectsOneCNAndDDL(t *testing.T) {
 }
 
 func TestDetermineBuildSidePreservesDeclaredRuntimeFilterDependency(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false, newPlanTestProcess(t)), false, true)
 	builder.qry.Nodes = []*planpb.Node{
 		{NodeId: 0, NodeType: planpb.Node_VECTOR_INDEX_SCAN, Stats: &planpb.Stats{Outcnt: 2}},
 		{NodeId: 1, NodeType: planpb.Node_TABLE_SCAN, Stats: &planpb.Stats{Outcnt: 100}},
@@ -1095,7 +1095,7 @@ func TestDetermineBuildSidePreservesDeclaredRuntimeFilterDependency(t *testing.T
 }
 
 func TestGuardedDiagnosticKeepsLoopJoinSupportedOrientation(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	intType := planpb.Type{Id: int32(types.T_int64)}
 	timeType := planpb.Type{Id: int32(types.T_time)}
 	leftTag, rightTag := int32(10), int32(20)
@@ -1192,7 +1192,7 @@ func TestDetermineBuildSideCostsUnfilteredIndexByRetainedBytes(t *testing.T) {
 		}
 		statsCache.Set(2, indexStats)
 		ctx := &statsCacheCompilerContext{
-			MockCompilerContext: NewMockCompilerContext(false),
+			MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 			statsCache:          statsCache,
 		}
 		builder := NewQueryBuilder(planpb.Query_UPDATE, ctx, false, true)
@@ -1916,7 +1916,7 @@ func TestFixedTypeRetainedBytesSchemaMatrix(t *testing.T) {
 }
 
 func TestHasRecursiveScanHandlesGeneralPlanGraphs(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false, nil), false, true)
 	builder.qry.Nodes = []*planpb.Node{
 		{NodeId: 0, NodeType: planpb.Node_TABLE_SCAN},
 		{NodeId: 1, NodeType: planpb.Node_PROJECT, Children: []int32{0}},
@@ -1937,7 +1937,7 @@ func TestHasRecursiveScanHandlesGeneralPlanGraphs(t *testing.T) {
 }
 
 func TestDetermineBuildSidePreservesCTEHashBuildDrainProof(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	intType := planpb.Type{Id: int32(types.T_int64)}
 	joinCond, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*planpb.Expr{
 		GetColExpr(intType, 10, 0),
@@ -1987,7 +1987,7 @@ func TestDetermineBuildSidePreservesCTEHashBuildDrainProof(t *testing.T) {
 }
 
 func TestDetermineInnerBuildSidePreservesCTEHashBuildDrainProof(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	intType := planpb.Type{Id: int32(types.T_int64)}
 	joinCond, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*planpb.Expr{
 		GetColExpr(intType, 10, 0),
@@ -2847,7 +2847,7 @@ func TestCompareStatsIsStrictWeakOrdering(t *testing.T) {
 	// consistent order b < a < c (the old comparator produced a b<a<c<b cycle).
 
 	// antisymmetry + transitivity over a grid of selectivity/outcnt values.
-	var xs []*Stats
+	xs := make([]*Stats, 0, 44)
 	for _, s := range []float64{-0.01, 0, 0.004, 0.009, 0.01, 0.015, 0.02, 0.099, 0.1, 0.5, 1.0} {
 		for _, o := range []float64{0, 1, 2, 100} {
 			xs = append(xs, &Stats{Selectivity: s, Outcnt: o})
@@ -2897,7 +2897,7 @@ func TestEstimatedRowsInt64(t *testing.T) {
 }
 
 func TestCachedPlanStatsChanged(t *testing.T) {
-	ctx := &tableDefStatsTestCompilerContext{MockCompilerContext: NewMockCompilerContext(false)}
+	ctx := &tableDefStatsTestCompilerContext{MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t))}
 	scan := &planpb.Node{NodeType: planpb.Node_TABLE_SCAN,
 		ObjRef: &planpb.ObjectRef{Obj: 42}, TableDef: &planpb.TableDef{Name: "events", Version: 7},
 		Stats: &planpb.Stats{TableCnt: 5, Outcnt: 1},
@@ -2951,7 +2951,7 @@ func TestCachedPlanStatsChanged(t *testing.T) {
 }
 
 func TestCachedLimitZeroFinalPlan(t *testing.T) {
-	ctx := &tableDefStatsTestCompilerContext{MockCompilerContext: NewMockCompilerContext(false)}
+	ctx := &tableDefStatsTestCompilerContext{MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t))}
 	statements, err := mysql.Parse(ctx.GetContext(), "select n_nationkey from nation limit 0", 1)
 	require.NoError(t, err)
 	defer statements[0].Free()
@@ -2975,7 +2975,7 @@ func TestCachedLimitZeroFinalPlan(t *testing.T) {
 }
 
 func TestAggregateBlockEstimateThroughL2(t *testing.T) {
-	builder := newRuntimeFilterSingleTestBuilder(false)
+	builder := newRuntimeFilterSingleTestBuilder(t, false)
 	builder.qry.Nodes[0].Stats.Outcnt = float64(^uint64(0))
 	builder.qry.Nodes = append(builder.qry.Nodes,
 		&planpb.Node{NodeType: planpb.Node_AGG, Children: []int32{0}, Stats: DefaultStats()},
@@ -3009,7 +3009,7 @@ func TestValueScanCardinality(t *testing.T) {
 		{name: "table control", table: &planpb.TableDef{}, want: 1000},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			b := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false), false, false)
+			b := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false, nil), false, false)
 			n := &planpb.Node{NodeType: planpb.Node_VALUE_SCAN, RowsetData: tc.rowset, TableDef: tc.table, Limit: tc.limit, Stats: DefaultStats()}
 			b.qry.Nodes = []*planpb.Node{n, {NodeType: planpb.Node_PROJECT, Children: []int32{0}, Stats: DefaultStats()},
 				{NodeType: planpb.Node_VALUE_SCAN, RowsetData: &planpb.RowsetData{RowCount: 10}, Stats: DefaultStats()},
@@ -3049,7 +3049,7 @@ func TestCachedPlanStatsAdmissionQueryShapes(t *testing.T) {
 		{"select n_name from nation join region on n_regionkey=r_regionkey where n_nationkey=1", false},
 	} {
 		t.Run(tc.sql, func(t *testing.T) {
-			ctx := &tableDefStatsTestCompilerContext{MockCompilerContext: NewMockCompilerContext(true)}
+			ctx := &tableDefStatsTestCompilerContext{MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t))}
 			// The legacy TPCH mock uses cluster-key metadata with empty key
 			// names. Supply a real composite primary-key catalog for this test.
 			table := ctx.tables["partsupp"]
@@ -3085,7 +3085,7 @@ func TestCachedPlanStatsAdmissionQueryShapes(t *testing.T) {
 }
 
 func BenchmarkCachedPointPlanAdmission(b *testing.B) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(b))
 	stmts, err := mysql.Parse(ctx.GetContext(), "select n_name from nation where n_nationkey=1", 1)
 	require.NoError(b, err)
 	defer stmts[0].Free()
@@ -3114,7 +3114,7 @@ func TestCachedPlanStrictStatsReachability(t *testing.T) {
 			q := &planpb.Query{Nodes: []*planpb.Node{scan,
 				{NodeType: planpb.Node_JOIN, JoinType: tc.joinType, IsRightJoin: tc.right, Children: []int32{0, 0}}}, Steps: []int32{0}}
 			p := &planpb.Plan{Plan: &planpb.Plan_Query{Query: q}}
-			ctx := &tableDefStatsTestCompilerContext{MockCompilerContext: NewMockCompilerContext(false), stats: &pb.StatsInfo{TableCnt: 129}}
+			ctx := &tableDefStatsTestCompilerContext{MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)), stats: &pb.StatsInfo{TableCnt: 129}}
 			changed, err := CachedPlanStatsChanged(p, ctx)
 			require.NoError(t, err)
 			require.False(t, changed, "abandoned construction joins are not executable")

@@ -117,13 +117,6 @@ func runValueWindowTest(t *testing.T, winSpec *plan.Expr, bat *batch.Batch, mp *
 	arg := &Window{
 		WinSpecList: []*plan.Expr{winSpec},
 		Aggs:        []aggexec.AggFuncExecExpression{makeValueWindowAggExpr("")},
-		OperatorBase: vm.OperatorBase{
-			OperatorInfo: vm.OperatorInfo{
-				Idx:     0,
-				IsFirst: false,
-				IsLast:  false,
-			},
-		},
 	}
 
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
@@ -1382,13 +1375,6 @@ func TestProcessValueFunc_Varchar(t *testing.T) {
 	arg := &Window{
 		WinSpecList: []*plan.Expr{spec},
 		Aggs:        []aggexec.AggFuncExecExpression{makeValueWindowAggExpr("")},
-		OperatorBase: vm.OperatorBase{
-			OperatorInfo: vm.OperatorInfo{
-				Idx:     0,
-				IsFirst: false,
-				IsLast:  false,
-			},
-		},
 	}
 
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})

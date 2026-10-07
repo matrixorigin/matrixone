@@ -14852,7 +14852,11 @@ func arrayDistanceNarrow[T types.ArrayElement](
 		if sqrtResult {
 			d = math.Sqrt(d)
 		}
-		return d, nil
+		// The narrow kernels accumulate in float32 and return a raw non-finite value
+		// when the magnitude overflows the element domain (they do not check -- see
+		// metric/metric_nonfinite_contract_test.go). This per-row consumer boundary is
+		// where that is rejected, matching moarray's f32/f64 scalar path (#29496).
+		return metric.CheckFiniteDist(d, metric.MetricWhat(m))
 	}, selectList)
 }
 

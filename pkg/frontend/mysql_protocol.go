@@ -754,7 +754,7 @@ func (mp *MysqlProtocolImpl) setChangeUserState(ses *Session, req changeUserRequ
 		connectAttrs: req.connectAttrs,
 	}
 	if req.hasCollation {
-		collation := collationID2CharsetAndName[req.collationID]
+		collation, _ := lookupSupportedProtocolCollation(req.collationID)
 		state.collationID = req.collationID
 		state.collationName = collation.collationName
 		state.charset = collation.charset
@@ -807,7 +807,7 @@ func (mp *MysqlProtocolImpl) parseChangeUserRequest(ctx context.Context, data []
 			return req, moerr.NewInvalidInput(ctx, "malformed COM_CHANGE_USER character set")
 		}
 		req.collationID = int(collationID)
-		if _, exists := collationID2CharsetAndName[req.collationID]; !exists {
+		if _, exists := lookupSupportedProtocolCollation(req.collationID); !exists {
 			return req, moerr.NewInvalidInputf(ctx, "unsupported COM_CHANGE_USER character set %d", collationID)
 		}
 		req.hasCollation = true
@@ -1760,16 +1760,15 @@ func (mp *MysqlProtocolImpl) HandleHandshake(ctx context.Context, payload []byte
 			return true, nil
 		}
 
+		nameAndCharset, admitted := lookupSupportedProtocolCollation(int(resp41.collationID))
+		if !admitted {
+			return false, moerr.NewInvalidInputf(ctx, "unsupported handshake character set %d", resp41.collationID)
+		}
 		mp.authResponse = resp41.authResponse
 		mp.capability = mp.capability & resp41.capabilities
-
-		if nameAndCharset, ok3 := collationID2CharsetAndName[int(resp41.collationID)]; !ok3 {
-			return false, moerr.NewInternalError(ctx, "get collationName and charset failed")
-		} else {
-			mp.collationID = int(resp41.collationID)
-			mp.collationName = nameAndCharset.collationName
-			mp.charset = nameAndCharset.charset
-		}
+		mp.collationID = int(resp41.collationID)
+		mp.collationName = nameAndCharset.collationName
+		mp.charset = nameAndCharset.charset
 
 		mp.maxClientPacketSize = resp41.maxPacketSize
 		mp.username.Store(resp41.username)
@@ -2064,7 +2063,7 @@ func (mp *MysqlProtocolImpl) handleClientResponse41(resp41 response41) error {
 	mp.capability = DefaultCapability & resp41.capabilities
 
 	//character set
-	if nameAndCharset, ok := collationID2CharsetAndName[int(resp41.collationID)]; !ok {
+	if nameAndCharset, ok := lookupSupportedProtocolCollation(int(resp41.collationID)); !ok {
 		return moerr.NewInternalError(requestCtx, "get collationName and charset failed")
 	} else {
 		mp.collationID = int(resp41.collationID)
@@ -2664,7 +2663,7 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow(mrs *MysqlResultSet, rowId
 				bitLength := mysqlColumn.ColumnImpl.Length()
 				byteLength := (bitLength + 7) / 8
 				b := types.EncodeUint64(&value)[:byteLength]
-				slices.Reverse(b)
+				slices.Reverse(b) //nolint:govet // inline: cannot inline generic slices.Reverse (type-param inference unsupported)
 				err = AppendCountOfBytesLenEnc(mp, b)
 				if err != nil {
 					return err
@@ -2867,7 +2866,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow(mrs *MysqlResultSet, r uint6
 				bitLength := mysqlColumn.ColumnImpl.Length()
 				byteLength := (bitLength + 7) / 8
 				b := types.EncodeUint64(&value)[:byteLength]
-				slices.Reverse(b)
+				slices.Reverse(b) //nolint:govet // inline: cannot inline generic slices.Reverse (type-param inference unsupported)
 				err = mp.appendStringLenEnc(string(b))
 				if err != nil {
 					return err
@@ -3174,7 +3173,7 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 			bitLength := mysqlColumn.ColumnImpl.Length()
 			byteLength := (bitLength + 7) / 8
 			b := types.EncodeUint64(&value)[:byteLength]
-			slices.Reverse(b)
+			slices.Reverse(b) //nolint:govet // inline: cannot inline generic slices.Reverse (type-param inference unsupported)
 			err = AppendCountOfBytesLenEnc(mp, b)
 			if err != nil {
 				return err
@@ -3469,7 +3468,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 			bitLength := mysqlColumn.ColumnImpl.Length()
 			byteLength := (bitLength + 7) / 8
 			b := types.EncodeUint64(&value)[:byteLength]
-			slices.Reverse(b)
+			slices.Reverse(b) //nolint:govet // inline: cannot inline generic call (type-param inference unsupported)
 			err = AppendCountOfBytesLenEnc(mp, b)
 			if err != nil {
 				return err

@@ -1848,7 +1848,7 @@ func ctasSameDefaultType(bound, target plan.Type) bool {
 	// carry the source table name. Nullability is reconciled separately.
 	return bound.Id == target.Id && bound.Width == target.Width &&
 		bound.Scale == target.Scale && bound.AutoIncr == target.AutoIncr &&
-		bound.Enumvalues == target.Enumvalues && bound.Charset == target.Charset &&
+		bound.Enumvalues == target.Enumvalues && bound.SameCollation(target) &&
 		bound.PadSpace == target.PadSpace
 }
 
@@ -3328,6 +3328,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		return err
 	}
 	createTable.TableDef.DefaultCharset = tableCharset
+	if types.IsUnicodeCollation(uint8(tableCharset)) {
+		createTable.TableDef.CollationVersion = uint32(types.CollationVersionV1)
+	} else {
+		createTable.TableDef.CollationVersion = uint32(types.CollationVersionLegacy)
+	}
 
 	if stmt.Param != nil || stmt.IcebergParam != nil || stmt.MongoDBParam != nil {
 		if err := rejectExternalTableInlineIndexes(ctx.GetContext(), stmt); err != nil {
@@ -4762,10 +4767,14 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 				Alg:  plan.CompressType_Lz4,
 				Typ: plan.Type{
 					// don't copy auto increment
-					Id:      colMap[pkeyName].Typ.Id,
-					Width:   colMap[pkeyName].Typ.Width,
-					Scale:   colMap[pkeyName].Typ.Scale,
-					Charset: colMap[pkeyName].Typ.Charset,
+					Id:                       colMap[pkeyName].Typ.Id,
+					Width:                    colMap[pkeyName].Typ.Width,
+					Scale:                    colMap[pkeyName].Typ.Scale,
+					Charset:                  colMap[pkeyName].Typ.Charset,
+					CollationVersion:         colMap[pkeyName].Typ.CollationVersion,
+					CollationCoercibility:    colMap[pkeyName].Typ.CollationCoercibility,
+					CollationCoercibilitySet: colMap[pkeyName].Typ.CollationCoercibilitySet,
+					CollationMergeConflict:   colMap[pkeyName].Typ.CollationMergeConflict,
 				},
 				Default: &plan.Default{
 					NullAbility:  false,
@@ -4977,10 +4986,14 @@ func buildMasterSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, co
 			Alg:  plan.CompressType_Lz4,
 			Typ: plan.Type{
 				// don't copy auto increment
-				Id:      colMap[pkeyName].Typ.Id,
-				Width:   colMap[pkeyName].Typ.Width,
-				Scale:   colMap[pkeyName].Typ.Scale,
-				Charset: colMap[pkeyName].Typ.Charset,
+				Id:                       colMap[pkeyName].Typ.Id,
+				Width:                    colMap[pkeyName].Typ.Width,
+				Scale:                    colMap[pkeyName].Typ.Scale,
+				Charset:                  colMap[pkeyName].Typ.Charset,
+				CollationVersion:         colMap[pkeyName].Typ.CollationVersion,
+				CollationCoercibility:    colMap[pkeyName].Typ.CollationCoercibility,
+				CollationCoercibilitySet: colMap[pkeyName].Typ.CollationCoercibilitySet,
+				CollationMergeConflict:   colMap[pkeyName].Typ.CollationMergeConflict,
 			},
 			Default: &plan.Default{
 				NullAbility:  false,
@@ -5115,10 +5128,14 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 			Alg:  plan.CompressType_Lz4,
 			Typ: plan.Type{
 				// don't copy auto increment
-				Id:      colMap[pkeyName].Typ.Id,
-				Width:   colMap[pkeyName].Typ.Width,
-				Scale:   colMap[pkeyName].Typ.Scale,
-				Charset: colMap[pkeyName].Typ.Charset,
+				Id:                       colMap[pkeyName].Typ.Id,
+				Width:                    colMap[pkeyName].Typ.Width,
+				Scale:                    colMap[pkeyName].Typ.Scale,
+				Charset:                  colMap[pkeyName].Typ.Charset,
+				CollationVersion:         colMap[pkeyName].Typ.CollationVersion,
+				CollationCoercibility:    colMap[pkeyName].Typ.CollationCoercibility,
+				CollationCoercibilitySet: colMap[pkeyName].Typ.CollationCoercibilitySet,
+				CollationMergeConflict:   colMap[pkeyName].Typ.CollationMergeConflict,
 			},
 			Default: &plan.Default{
 				NullAbility:  false,
@@ -5159,10 +5176,14 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 			Alg:  plan.CompressType_Lz4,
 			Typ: plan.Type{
 				// don't copy auto increment
-				Id:      colMap[pkeyName].Typ.Id,
-				Width:   colMap[pkeyName].Typ.Width,
-				Scale:   colMap[pkeyName].Typ.Scale,
-				Charset: colMap[pkeyName].Typ.Charset,
+				Id:                       colMap[pkeyName].Typ.Id,
+				Width:                    colMap[pkeyName].Typ.Width,
+				Scale:                    colMap[pkeyName].Typ.Scale,
+				Charset:                  colMap[pkeyName].Typ.Charset,
+				CollationVersion:         colMap[pkeyName].Typ.CollationVersion,
+				CollationCoercibility:    colMap[pkeyName].Typ.CollationCoercibility,
+				CollationCoercibilitySet: colMap[pkeyName].Typ.CollationCoercibilitySet,
+				CollationMergeConflict:   colMap[pkeyName].Typ.CollationMergeConflict,
 			},
 			Default: &plan.Default{
 				NullAbility:  false,
@@ -5792,6 +5813,18 @@ func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
 }
 
 func buildCreateDatabase(stmt *tree.CreateDatabase, ctx CompilerContext) (*Plan, error) {
+	for _, option := range stmt.CreateOptions {
+		switch opt := option.(type) {
+		case *tree.CreateOptionCharset:
+			if _, ok := charsetForName(opt.Charset); !ok {
+				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "unsupported character set '%s'", opt.Charset)
+			}
+		case *tree.CreateOptionCollate:
+			if _, ok := collationForName(opt.Collate); !ok {
+				return nil, unsupportedCollationError(ctx.GetContext(), opt.Collate)
+			}
+		}
+	}
 	if err := validateIdentifier(ctx.GetContext(), string(stmt.Name)); err != nil {
 		return nil, err
 	}

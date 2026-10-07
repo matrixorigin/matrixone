@@ -72,7 +72,10 @@ func comparePreparedJSON(
 	}
 	if paramType != types.T_any {
 		expectedKind, ok := vector.PrepareParamKindForType(paramType)
-		if !ok || expectedKind != paramVector.GetPrepareParamKind() {
+		// All-NULL adapter outputs intentionally carry no value category.
+		// Only inspect the NULL bitmap when the category does not match.
+		kind := paramVector.GetPrepareParamKind()
+		if !ok || (expectedKind != kind && !(kind == vector.PrepareParamNone && paramVector.AllNull())) {
 			return moerr.NewInternalErrorf(
 				proc.Ctx,
 				"prepared parameter type %s does not match conversion kind %d",

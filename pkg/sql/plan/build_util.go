@@ -25,6 +25,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
@@ -481,6 +482,9 @@ func applyTextCharsetToPlanType(typ *plan.Type, charset uint32) {
 	switch types.T(typ.Id) {
 	case types.T_char, types.T_varchar, types.T_text:
 		typ.Charset = charset
+		if types.IsUnicodeCollation(uint8(charset)) {
+			typ.CollationVersion = uint32(types.CollationVersionV1)
+		}
 	}
 }
 
@@ -506,41 +510,20 @@ func applyCharsetToPlanType(typ *plan.Type, charset uint32) {
 }
 
 func charsetForName(name string) (uint32, bool) {
-	switch strings.ToLower(name) {
-	case "binary":
-		return uint32(types.CharsetBinary), true
-	case "utf8", "utf8mb3", "utf8mb4", "latin1", "ascii", "utf32":
-		// MatrixOne stores text as UTF-8. Accept MySQL charset spellings for DDL
-		// compatibility and normalize them to the supported text identity rather
-		// than pretending to preserve an encoding that MatrixOne does not store.
-		return uint32(types.CharsetUTF8), true
-	default:
-		return 0, false
-	}
+	identity, ok := collation.ResolveDDLCharset(name)
+	return uint32(identity), ok
 }
 
 func collationForName(name string) (uint32, bool) {
-	switch strings.ToLower(name) {
-	case "binary":
-		return uint32(types.CharsetBinary), true
-	case "utf8_bin", "utf8mb3_bin", "utf8mb4_bin", "utf32_bin":
-		return uint32(types.CharsetUTF8MB4Bin), true
-	case "utf8_unicode_ci", "utf8mb3_unicode_ci":
-		return uint32(types.CharsetUTF8MB3UnicodeCI), true
-	case "utf8mb4_unicode_ci":
-		return uint32(types.CharsetUTF8MB4UnicodeCI), true
-	case "utf8_general_ci", "utf8mb3_general_ci", "utf8mb4_general_ci", "utf8mb4_0900_ai_ci",
-		"latin1_swedish_ci", "ascii_general_ci", "utf32_general_ci":
-		// MySQL 8 uses utf8mb4_0900_ai_ci by default. Accept that exact spelling
-		// as a DDL compatibility alias. The utf32 spellings are handled the same
-		// way: normalize to MatrixOne's existing identity instead of claiming
-		// native UCA or UTF-32 storage semantics.
-		return uint32(types.CharsetUTF8), true
-	default:
-		// Do not silently alias other advertised UCA/0900 collations to either
-		// legacy general_ci or byte ordering. Their weight and padding contracts differ.
-		return 0, false
+	// Native Unicode collations are executable only through their versioned
+	// identity. Resolve them directly instead of the legacy SQL admission path,
+	// which intentionally maps compatible spellings such as utf8mb4_0900_ai_ci
+	// to general_ci.
+	if definition, ok := collation.Lookup(name); ok && definition.Semantics == collation.UCA400 {
+		return uint32(definition.Identity), true
 	}
+	identity, ok := collation.ResolveDDLCollation(name)
+	return uint32(identity), ok
 }
 
 func unsupportedCollationError(ctx context.Context, name string) error {
@@ -595,14 +578,11 @@ func charsetAndCollationCompatible(charset, collation string) bool {
 }
 
 func canonicalCharsetName(name string) string {
-	switch strings.ToLower(name) {
-	case "utf8", "utf8mb3", "utf8mb4":
-		// MatrixOne implements the accepted utf8/utf8mb3/utf8mb4 general_ci
-		// and _bin spellings with the same internal collation identities.
-		return "utf8mb4"
-	default:
-		return strings.ToLower(name)
+	if identity, ok := collation.ResolveDDLCharset(name); ok {
+		d, _ := collation.EffectiveDefinition(uint32(identity), 0)
+		return d.Charset.Name()
 	}
+	return collation.CanonicalCharsetName(name)
 }
 
 func tableDefaultCharset(ctx CompilerContext, options []tree.TableOption) (uint32, error) {
@@ -2595,7 +2575,7 @@ func hasParamExprReflectively(value reflect.Value, visited map[paramExprVisit]st
 		}
 		return hasParamExprReflectively(value.Elem(), visited)
 
-	case reflect.Ptr:
+	case reflect.Pointer:
 		if value.IsNil() {
 			return false
 		}

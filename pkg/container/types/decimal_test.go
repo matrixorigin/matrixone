@@ -192,7 +192,28 @@ func TestParse256(t *testing.T) {
 	}
 }
 
-func TestDecimal256ModScaleAlignmentOverflow(t *testing.T) {
+func TestDecimalModScaleAlignmentOverflow(t *testing.T) {
+	max64 := Decimal64(^uint64(0) >> 1)
+	max128 := Decimal128{B0_63: ^uint64(0), B64_127: 0x7FFFFFFFFFFFFFFF}
+	max256 := Decimal256{B0_63: ^uint64(0), B64_127: ^uint64(0), B128_191: ^uint64(0), B192_255: 0x7FFFFFFFFFFFFFFF}
+	// Each signed maximum is 2^odd-1: multiplying by 10^18 leaves remainder 1 modulo 3.
+	for _, tc := range []struct{ divisor, want uint64 }{{1, 0}, {3, 1}} {
+		t.Run(fmt.Sprintf("wide_coefficient_divisor_%d", tc.divisor), func(t *testing.T) {
+			got64, scale, err := max64.Mod(Decimal64(tc.divisor), 0, 18)
+			require.NoError(t, err)
+			require.Equal(t, int32(18), scale)
+			require.Equal(t, Decimal64(tc.want), got64)
+			got128, scale, err := max128.Mod(Decimal128{B0_63: tc.divisor}, 0, 18)
+			require.NoError(t, err)
+			require.Equal(t, int32(18), scale)
+			require.Equal(t, Decimal128{B0_63: tc.want}, got128)
+			got256, scale, err := max256.Mod(Decimal256{B0_63: tc.divisor}, 0, 18)
+			require.NoError(t, err)
+			require.Equal(t, int32(18), scale)
+			require.Equal(t, Decimal256{B0_63: tc.want}, got256)
+		})
+	}
+
 	maxCoefficient := new(big.Int).Sub(
 		new(big.Int).Exp(big.NewInt(10), big.NewInt(65), nil), big.NewInt(1))
 	maximum, err := ParseDecimal256(maxCoefficient.String(), 65, 0)
@@ -331,6 +352,20 @@ func TestDecimal128ScaleMinimumAndExtremeNegativeScale(t *testing.T) {
 	inplace := Decimal128Min
 	require.NoError(t, inplace.ScaleInplace(math.MinInt32))
 	require.Equal(t, Decimal128{}, inplace)
+	for _, n := range []int32{math.MinInt32, math.MaxInt32} {
+		t.Run(fmt.Sprintf("zero/%d", n), func(t *testing.T) {
+			inplace := Decimal128{}
+			require.NoError(t, inplace.ScaleInplace(n))
+			require.Equal(t, Decimal128{}, inplace)
+			truncated, err := (Decimal128{}).ScaleTruncate(n)
+			require.NoError(t, err)
+			require.Equal(t, Decimal128{}, truncated)
+			wide, err := (Decimal256{}).ScaleTruncate(n)
+			require.NoError(t, err)
+			require.Equal(t, Decimal256{}, wide)
+		})
+	}
+
 }
 
 func TestDecimal256ScaleMultiStepRoundingAndMinimum(t *testing.T) {
@@ -552,26 +587,34 @@ func TestCompare256(t *testing.T) {
 	}
 }
 
-func TestDecimal64Float(t *testing.T) {
-	x := Decimal64(rand.Int())
-	y := Decimal64ToFloat64(x, 15)
-	z, _ := Decimal64FromFloat64(y, 18, 5)
-	x, _ = x.Scale(-10)
-	if x != z {
-		panic("DecimalFloat wrong")
+func TestDecimalToFloat64(t *testing.T) {
+	// Binary floating point is lossy; forward conversion is not a reversible quantizer.
+	for _, tc := range []struct {
+		name      string
+		value     Decimal128
+		scale     int32
+		want      uint64
+		decimal64 bool
+	}{
+		{"zero", Decimal128{}, 15, 0, true},
+		{"positive fraction", Decimal128{125000000000000, 0}, 15, 0x3fc0000000000000, true},
+		{"negative fraction", Decimal128{18446619073709551616, 0xffffffffffffffff}, 15, 0xbfc0000000000000, true},
+		{"negative scale", Decimal128{125, 0}, -1, 0x4093880000000000, true},
+		{"integer tie", Decimal128{9007199254740993, 0}, 0, 0x4340000000000000, true},
+		{"high word", Decimal128{0, 1}, 0, 0x43f0000000000000, false},
+		{"scale chunk boundary", Decimal128{10000000000000000000, 0}, 19, 0x3ff0000000000000, false},
+		{"scale chunk continuation", Decimal128{7766279631452241920, 5}, 20, 0x3ff0000000000000, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, math.Float64bits(Decimal128ToFloat64(tc.value, tc.scale)))
+			if tc.decimal64 {
+				require.Equal(t, tc.want, math.Float64bits(Decimal64ToFloat64(Decimal64(tc.value.B0_63), tc.scale)))
+			}
+		})
 	}
-}
-func TestDecimal128Float(t *testing.T) {
-	// This test is flaky, so skip it for now.
-	t.Skip()
-
-	x := Decimal128{uint64(rand.Int()), uint64(rand.Int())}
-	y := Decimal128ToFloat64(x, 30)
-	z, _ := Decimal128FromFloat64(y, 38, 7)
-	x, _ = x.Scale(-23)
-	if x != z {
-		panic("DecimalFloat wrong")
-	}
+	converted, err := Decimal64FromFloat64(0.125, 18, 5)
+	require.NoError(t, err)
+	require.Equal(t, Decimal64(12500), converted)
 }
 
 func TestDecimal128FromFloat64PreservesScaledIntegerPrecision(t *testing.T) {
@@ -764,57 +807,103 @@ func TestDecimal128FromFloat64RejectsSpecialValuesAndInvalidTypes(t *testing.T) 
 }
 
 func TestDecimal64AddSub(t *testing.T) {
-	x := Decimal64(rand.Int() >> 1)
-	z := x
-	err := error(nil)
-	y := Decimal64(rand.Int() >> 1)
-	x, _, err = x.Add(y, 0, 0)
-	if err == nil {
-		x, _, err = x.Sub(y, 0, 0)
+	result, scale, err := Decimal64(2305843009213693952).Add(1152921504606846976, 0, 0)
+	require.NoError(t, err)
+	require.Equal(t, Decimal64(3458764513820540928), result)
+	require.Equal(t, int32(0), scale)
+	result, scale, err = Decimal64(3458764513820540928).Sub(1152921504606846976, 0, 0)
+	require.NoError(t, err)
+	require.Equal(t, Decimal64(2305843009213693952), result)
+	require.Equal(t, int32(0), scale)
+
+	_, _, err = Decimal64(9223372036854775807).Add(1, 0, 0)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.EqualError(t, err, "invalid input: Decimal64 Add overflow: 9223372036854775807+1")
+	result, scale, err = Decimal64(0).Sub(9223372036854775807, 0, 10)
+	require.NoError(t, err)
+	require.Equal(t, Decimal64(9223372036854775809), result) // -(2^63-1) in two's complement.
+	require.Equal(t, int32(10), scale)
+
+	tests := []struct {
+		name  string
+		x, y  Decimal64
+		isSub bool
+		want  Decimal64
+	}{
+		{"simple add", Decimal64(100), Decimal64(200), false, Decimal64(300)},
+		{"simple sub", Decimal64(300), Decimal64(100), true, Decimal64(200)},
+		{"add negative", Decimal64(100), Decimal64(^uint64(100) + 1), false, Decimal64(0)},
+		{"sub negative (add)", Decimal64(100), Decimal64(^uint64(100) + 1), true, Decimal64(200)},
+		{"zero + zero", Decimal64(0), Decimal64(0), false, Decimal64(0)},
+		{"large values", Decimal64(999999999999999), Decimal64(1), false, Decimal64(1000000000000000)},
 	}
-	if err != nil || x != z {
-		panic("Decimal64AddSub wrong")
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got Decimal64
+			var err error
+			if tt.isSub {
+				got, err = tt.x.Sub64(tt.y)
+			} else {
+				got, err = tt.x.Add64(tt.y)
+			}
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got, "d64 op(%d, %d, sub=%v)", tt.x, tt.y, tt.isSub)
+		})
 	}
+
 }
 func TestDecimal128AddSub(t *testing.T) {
-	x := Decimal128{uint64(rand.Int()), uint64(rand.Int()) >> 1}
-	z := x
-	err := error(nil)
-	y := Decimal128{uint64(rand.Int()), uint64(rand.Int()) >> 1}
-	x, _, err = x.Add(y, 0, 0)
-	if err == nil {
-		x, _, err = x.Sub(y, 0, 0)
-	}
-	if err != nil || x != z {
-		panic("Decimal128AddSub wrong")
+	left := Decimal128{B0_63: 0x4000000000000000, B64_127: 0x2000000000000000}
+	right := Decimal128{B0_63: 0x2000000000000000, B64_127: 0x1000000000000000}
+	sum := Decimal128{B0_63: 0x6000000000000000, B64_127: 0x3000000000000000}
+	for _, test := range []struct {
+		name                  string
+		fn                    func(Decimal128, Decimal128, int32, int32) (Decimal128, int32, error)
+		left, right, want     Decimal128
+		leftScale, rightScale int32
+		wantScale             int32
+	}{
+		{"wide add", Decimal128.Add, left, right, sum, 0, 0, 0},
+		{"wide subtract", Decimal128.Sub, sum, right, left, 0, 0, 0},
+		{"carry", Decimal128.Add, Decimal128{B0_63: ^uint64(0), B64_127: 1}, Decimal128{B0_63: 1}, Decimal128{B64_127: 2}, 0, 0, 0},
+		{"borrow", Decimal128.Sub, Decimal128{B64_127: 2}, Decimal128{B0_63: 1}, Decimal128{B0_63: ^uint64(0), B64_127: 1}, 0, 0, 0},
+		{"add zero right", Decimal128.Add, Decimal128{B0_63: 1}, Decimal128{}, Decimal128{B0_63: 1}, 2, 2, 2},
+		{"add zero left", Decimal128.Add, Decimal128{}, Decimal128{B0_63: 1}, Decimal128{B0_63: 1}, 2, 2, 2},
+		{"align fractional zero", Decimal128.Add, Decimal128{B0_63: 1}, Decimal128{}, Decimal128{B0_63: 10}, 1, 2, 2},
+		{"subtract zero", Decimal128.Sub, Decimal128{B0_63: 1}, Decimal128{}, Decimal128{B0_63: 1}, 2, 2, 2},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result, scale, err := test.fn(test.left, test.right, test.leftScale, test.rightScale)
+			require.NoError(t, err)
+			require.Equal(t, test.want, result)
+			require.Equal(t, test.wantScale, scale)
+		})
 	}
 }
 
 func TestDecimal64MulDiv(t *testing.T) {
-	x := Decimal64(rand.Int() >> 32)
-	z := x
-	err := error(nil)
-	y := Decimal64(rand.Int() >> 32)
-	x, _, err = x.Mul(y, 0, 0)
-	if err == nil {
-		x, _, err = x.Div(y, 12, 0)
-	}
-	if err != nil || x != z {
-		panic("Decimal64MulDiv wrong")
-	}
+	result, scale, err := Decimal64(1073741823).Mul(1073741821, 0, 0)
+	require.NoError(t, err)
+	require.Equal(t, Decimal64(1152921500311879683), result)
+	require.Equal(t, int32(0), scale)
+	result, scale, err = Decimal64(1152921500311879683).Div(1073741821, 12, 0)
+	require.NoError(t, err)
+	require.Equal(t, Decimal64(1073741823), result)
+	require.Equal(t, int32(12), scale)
 }
 func TestDecimal128MulDiv(t *testing.T) {
-	x := Decimal128{uint64(rand.Int()) >> 8, 0}
-	z := x
-	err := error(nil)
-	y := Decimal128{uint64(rand.Int()), uint64(rand.Int() & 255)}
-	x, _, err = x.Mul(y, 0, 0)
-	if err == nil {
-		x, _, err = x.Div(y, 12, 0)
-	}
-	if err != nil || x != z {
-		panic("Decimal128MulDiv wrong")
-	}
+	left := Decimal128{B0_63: 18014398509481983}
+	right := Decimal128{B0_63: 1, B64_127: 64}
+	product := Decimal128{B0_63: 18014398509481983, B64_127: 1152921504606846912}
+	result, scale, err := left.Mul(right, 0, 0)
+	require.NoError(t, err)
+	require.Equal(t, product, result)
+	require.Equal(t, int32(0), scale)
+	result, scale, err = product.Div(right, 12, 0)
+	require.NoError(t, err)
+	require.Equal(t, left, result)
+	require.Equal(t, int32(12), scale)
 }
 
 func TestDecimal128OverDiv(t *testing.T) {
@@ -829,8 +918,8 @@ func TestDecimal128OverDiv(t *testing.T) {
 func TestDecimal128Div128HalfUpLargeDivisor(t *testing.T) {
 	fromBig := func(value *big.Int) Decimal128 {
 		t.Helper()
-		if value.Sign() < 0 || value.BitLen() > 127 {
-			t.Fatalf("value does not fit a positive Decimal128: %s", value)
+		if value.Sign() < 0 || value.BitLen() > 128 {
+			t.Fatalf("value does not fit an unsigned Decimal128 magnitude: %s", value)
 		}
 		hi := new(big.Int).Rsh(new(big.Int).Set(value), 64).Uint64()
 		return Decimal128{B0_63: value.Uint64(), B64_127: hi}
@@ -874,6 +963,34 @@ func TestDecimal128Div128HalfUpLargeDivisor(t *testing.T) {
 		}
 	}
 
+	magnitudeLimit := new(big.Int).Lsh(big.NewInt(1), 127)
+	for _, tc := range []struct {
+		name string
+		x, y *big.Int
+	}{
+		{"minimum_magnitudes_equal", magnitudeLimit, magnitudeLimit},
+		{"below_minimum_divisor", new(big.Int).Sub(new(big.Int).Set(magnitudeLimit), big.NewInt(1)), magnitudeLimit},
+		{"minimum_dividend_wide_divisor", magnitudeLimit, new(big.Int).Add(new(big.Int).Lsh(big.NewInt(1), 64), big.NewInt(3))},
+		{"unsigned_rounded_quotient_carry", new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 128), big.NewInt(1)), new(big.Int).Lsh(big.NewInt(1), 64)},
+		{"minimum_divisor_below_half", new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 126), big.NewInt(1)), magnitudeLimit},
+		{"minimum_divisor_at_half", new(big.Int).Lsh(big.NewInt(1), 126), magnitudeLimit},
+		{"minimum_divisor_above_half", new(big.Int).Add(new(big.Int).Lsh(big.NewInt(1), 126), big.NewInt(1)), magnitudeLimit},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			want, remainder := new(big.Int), new(big.Int)
+			want.QuoRem(tc.x, tc.y, remainder)
+			got, err := fromBig(tc.x).Div128Trunc(fromBig(tc.y))
+			require.NoError(t, err)
+			require.Equal(t, want, toBig(got))
+			if new(big.Int).Lsh(remainder, 1).Cmp(tc.y) >= 0 {
+				want.Add(want, big.NewInt(1))
+			}
+			got, err = fromBig(tc.x).Div128(fromBig(tc.y))
+			require.NoError(t, err)
+			require.Equal(t, want, toBig(got))
+		})
+	}
+
 	t.Run("odd half threshold carries into high limb", func(t *testing.T) {
 		x := new(big.Int).Lsh(big.NewInt(1), 64)
 		y := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 65), big.NewInt(1))
@@ -912,6 +1029,169 @@ func TestDecimal128Div128HalfUpLargeDivisor(t *testing.T) {
 		want := new(big.Int).Lsh(big.NewInt(1), 63)
 		require.Equal(t, want, toBig(got))
 	})
+}
+
+// Raw division consumes unsigned magnitudes, including the high sign bit.
+func TestDecimal256UnsignedDivision(t *testing.T) {
+	fromBig := func(v *big.Int) Decimal256 {
+		words := new(big.Int).Set(v)
+		var d Decimal256
+		d.B0_63 = words.Uint64()
+		d.B64_127 = words.Rsh(words, 64).Uint64()
+		d.B128_191 = words.Rsh(words, 64).Uint64()
+		d.B192_255 = words.Rsh(words, 64).Uint64()
+		return d
+	}
+	toBig := func(d Decimal256) *big.Int {
+		v := new(big.Int).SetUint64(d.B192_255)
+		for _, limb := range []uint64{d.B128_191, d.B64_127, d.B0_63} {
+			v.Lsh(v, 64).Or(v, new(big.Int).SetUint64(limb))
+		}
+		return v
+	}
+	values := []*big.Int{big.NewInt(0), big.NewInt(1), big.NewInt(2), big.NewInt(10)}
+	for _, bit := range []uint{63, 64, 65, 127, 128, 129, 191, 192, 193, 253, 254, 255, 256} {
+		power := new(big.Int).Lsh(big.NewInt(1), bit)
+		values = append(values, new(big.Int).Sub(power, big.NewInt(1)))
+		if bit < 256 {
+			values = append(values, new(big.Int).Set(power), new(big.Int).Add(power, big.NewInt(1)))
+		}
+	}
+	check := func(x, y *big.Int) {
+		t.Helper()
+		dx, dy := fromBig(x), fromBig(y)
+		q, err := dx.Div256Trunc(dy)
+		r, modErr := dx.Mod256(dy)
+		if y.Sign() == 0 {
+			for _, e := range []error{err, modErr} {
+				require.True(t, moerr.IsMoErrCode(e, moerr.ErrInvalidInput), "%v", e)
+				require.Equal(t, "invalid input: Decimal256 Div by Zero", e.Error())
+			}
+			require.Equal(t, dx, q)
+			require.Equal(t, dx, r)
+			return
+		}
+		require.NoError(t, err)
+		require.NoError(t, modErr)
+		wantQ, wantR := new(big.Int), new(big.Int)
+		wantQ.QuoRem(x, y, wantR)
+		require.Equal(t, wantQ.String(), toBig(q).String(), "quotient %s / %s", x, y)
+		require.Equal(t, wantR.String(), toBig(r).String(), "remainder %s %% %s", x, y)
+		require.Equal(t, x.String(), new(big.Int).Add(new(big.Int).Mul(toBig(q), y), toBig(r)).String())
+		require.Less(t, toBig(r).Cmp(y), 0)
+	}
+	for _, x := range values {
+		for _, y := range values {
+			check(x, y)
+		}
+	}
+	// Exercise every cross-limb alignment and the largest wide-divisor distance.
+	y := new(big.Int).Add(new(big.Int).Lsh(big.NewInt(1), 64), big.NewInt(3))
+	for _, shift := range []uint{0, 1, 63, 64, 65, 127, 128, 191} {
+		x := new(big.Int).Lsh(new(big.Int).Set(y), shift)
+		x.Add(x, big.NewInt(1))
+		check(x, y)
+	}
+	rng := rand.New(rand.NewSource(256))
+	limit := new(big.Int).Lsh(big.NewInt(1), 256)
+	for range 200 {
+		check(new(big.Int).Rand(rng, limit), new(big.Int).Rand(rng, limit))
+	}
+
+	// Rounding has a distinct consumer contract; avoid repeating the floor matrix.
+	top := new(big.Int).Lsh(big.NewInt(1), 255)
+	half := new(big.Int).Rsh(new(big.Int).Set(top), 1)
+	for _, tc := range []struct {
+		name string
+		x, y *big.Int
+	}{
+		{"rounded_scaled_boundary", new(big.Int).Mul(big.NewInt(3), new(big.Int).Exp(big.NewInt(10), big.NewInt(76), nil)), new(big.Int).Exp(big.NewInt(10), big.NewInt(64), nil)},
+		{"rounded_full_magnitude", top, big.NewInt(1)},
+		{"rounded_quotient_carry", new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1)), big.NewInt(2)},
+		{"rounded_even_below_half", new(big.Int).Sub(new(big.Int).Set(half), big.NewInt(1)), top},
+		{"rounded_even_at_half", half, top},
+		{"rounded_odd_below_half", half, new(big.Int).Add(new(big.Int).Set(top), big.NewInt(1))},
+		{"rounded_odd_above_half", new(big.Int).Add(new(big.Int).Set(half), big.NewInt(1)), new(big.Int).Add(new(big.Int).Set(top), big.NewInt(1))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			want, rem := new(big.Int), new(big.Int)
+			want.QuoRem(tc.x, tc.y, rem)
+			if new(big.Int).Lsh(rem, 1).Cmp(tc.y) >= 0 {
+				want.Add(want, big.NewInt(1))
+			}
+			got, err := fromBig(tc.x).Div256(fromBig(tc.y))
+			require.NoError(t, err)
+			require.Zero(t, want.Cmp(toBig(got)))
+		})
+	}
+	t.Run("rounded_zero_error", func(t *testing.T) {
+		x := Decimal256{B0_63: 7}
+		got, err := x.Div256(Decimal256{})
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+		require.Equal(t, "invalid input: Decimal256 Div by Zero", err.Error())
+		require.Equal(t, x, got)
+	})
+}
+
+func TestDecimal256ModHighMagnitude(t *testing.T) {
+	toSignedBig := func(v Decimal256) *big.Int {
+		result := new(big.Int).SetUint64(v.B192_255)
+		for _, limb := range []uint64{v.B128_191, v.B64_127, v.B0_63} {
+			result.Lsh(result, 64).Or(result, new(big.Int).SetUint64(limb))
+		}
+		if v.B192_255>>63 != 0 {
+			result.Sub(result, new(big.Int).Lsh(big.NewInt(1), 256))
+		}
+		return result
+	}
+	min := Decimal256{B192_255: 1 << 63}
+	for _, tc := range []struct {
+		x, y   Decimal256
+		s1, s2 int32
+	}{
+		{Decimal256FromInt64(2000000000000000000), Decimal256{B64_127: 1 << 62}, 0, 58},
+		{Decimal256FromInt64(4000000000000000000), Decimal256{B64_127: 1 << 62}, 0, 58},
+		{min, Decimal256FromInt64(7), 0, 0},
+		{Decimal256FromInt64(7), min, 0, 0},
+		{min, min, 0, 0},
+	} {
+		for _, negateX := range []bool{false, true} {
+			for _, negateY := range []bool{false, true} {
+				x, y := tc.x, tc.y
+				if negateX {
+					x = x.Minus()
+				}
+				if negateY {
+					y = y.Minus()
+				}
+				xBig, yBig := toSignedBig(x), toSignedBig(y)
+				scale := max(tc.s1, tc.s2)
+				xBig.Mul(xBig, new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scale-tc.s1)), nil))
+				yBig.Mul(yBig, new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scale-tc.s2)), nil))
+				want := new(big.Int).Rem(xBig, yBig)
+				got, gotScale, err := x.Mod(y, tc.s1, tc.s2)
+				require.NoError(t, err)
+				require.Equal(t, scale, gotScale)
+				require.Equal(t, want.String(), toSignedBig(got).String())
+			}
+		}
+	}
+}
+
+func TestDecimal256FormatSignedLimits(t *testing.T) {
+	min := new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 255))
+	max := new(big.Int).Sub(new(big.Int).Neg(new(big.Int).Set(min)), big.NewInt(1))
+	for _, tc := range []struct {
+		value Decimal256
+		want  *big.Int
+	}{
+		{Decimal256{B192_255: 1 << 63}, min},
+		{Decimal256{B0_63: ^uint64(0), B64_127: ^uint64(0), B128_191: ^uint64(0), B192_255: 1<<63 - 1}, max},
+	} {
+		require.Equal(t, tc.want.String(), tc.value.Format(0))
+		text := tc.want.String()
+		require.Equal(t, text[:len(text)-2]+"."+text[len(text)-2:], tc.value.Format(2))
+	}
 }
 
 func TestDecimal128Div128TruncByZero(t *testing.T) {
@@ -1146,35 +1426,28 @@ func TestDecimal256AddErrorFormat(t *testing.T) {
 	}
 }
 
-// TestDecimal64AddSubErrorFormat exercises the Decimal64.Add/Sub error paths.
-func TestDecimal64AddSubErrorFormat(t *testing.T) {
-	maxD64 := Decimal64(^uint64(0) >> 1) // max positive Decimal64
-	one := Decimal64(1)
-
-	_, _, err := maxD64.Add(one, 0, 0)
-	if err == nil {
-		t.Fatal("expected overflow from Add")
-	}
-	_, _, err = Decimal64(0).Sub(maxD64, 0, 10)
-	// This may or may not overflow depending on scale; we just exercise the path.
-	_ = err
-}
-
 // TestDecimal128AddSubErrorFormat exercises Decimal128.Add/Sub with origX/origY.
 func TestDecimal128AddSubErrorFormat(t *testing.T) {
 	maxD128 := Decimal128{B0_63: ^uint64(0), B64_127: 0x7FFFFFFFFFFFFFFF}
-	one := Decimal128{B0_63: 1, B64_127: 0}
+	one := Decimal128{B0_63: 1}
 
-	_, _, err := maxD128.Add(one, 0, 0)
-	if err == nil {
-		t.Fatal("expected overflow from Add")
-	}
-	_, _, err = maxD128.Sub(Decimal128{B0_63: ^uint64(0), B64_127: ^uint64(0)}, 0, 0) // sub a negative = add
-	_ = err
+	result, scale, err := maxD128.Add(Decimal128{}, 0, 0)
+	require.NoError(t, err)
+	require.Equal(t, maxD128, result)
+	require.Equal(t, int32(0), scale)
+	_, _, err = maxD128.Add(one, 0, 0)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.EqualError(t, err, "invalid input: Decimal128 Add overflow: 170141183460469231731687303715884105727+1")
+
+	result, scale, err = maxD128.Sub(Decimal128{}, 0, 0)
+	require.NoError(t, err)
+	require.Equal(t, maxD128, result)
+	require.Equal(t, int32(0), scale)
+	_, _, err = maxD128.Sub(Decimal128{B0_63: ^uint64(0), B64_127: ^uint64(0)}, 0, 0)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.EqualError(t, err, "invalid input: Decimal128 Sub overflow: 170141183460469231731687303715884105727--1")
 }
 
-// TestDecimalScaleOverflowErrors exercises the error formatting in Scale
-// functions where we changed the error messages.
 func TestDecimalScaleOverflowErrors(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -1194,7 +1467,10 @@ func TestDecimalScaleOverflowErrors(t *testing.T) {
 		{"minimum downscale", math.MinInt64, -1, -922337203685477581, false},
 		{"minimum coarse rounding", math.MinInt64, -19, -1, false},
 		{"maximum coarse rounding", math.MaxInt64, -19, 1, false},
+		{"maximum scale18 rounding", math.MaxInt64, -18, 9, false},
+		{"exact chunk downscale", 125000000000000, -10, 12500, false},
 		{"unsigned overflow", math.MaxInt64, 18, 0, true},
+		{"unsigned coarse overflow", math.MaxInt64, 38, 0, true},
 		{"extreme positive", 1, math.MaxInt32, 0, true},
 		{"extreme negative", math.MinInt64, math.MinInt32, 0, false},
 		{"zero", 0, math.MaxInt32, 0, false},
@@ -1205,6 +1481,7 @@ func TestDecimalScaleOverflowErrors(t *testing.T) {
 			if tc.overflow {
 				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "result %d, error %v", int64(got), err)
 				require.Equal(t, x, got, "failed alignment must preserve input for widening consumers")
+				require.EqualError(t, err, fmt.Sprintf("invalid input: Decimal64 scale overflow: coefficient %d, target scale=%d", tc.x, tc.n))
 			} else {
 				require.NoError(t, err)
 				require.Equal(t, tc.want, int64(got))
@@ -1212,172 +1489,61 @@ func TestDecimalScaleOverflowErrors(t *testing.T) {
 		})
 	}
 
-	// Decimal128.ScaleInplace: large D128 scaling up.
 	maxD128 := Decimal128{B0_63: ^uint64(0), B64_127: 0x7FFFFFFFFFFFFFFF}
-	t.Run("d128_scaleinplace_up", func(t *testing.T) {
-		x := maxD128
-		err := x.ScaleInplace(18)
-		if err == nil {
-			t.Fatal("expected overflow")
+	maxD256 := Decimal256{B0_63: ^uint64(0), B64_127: ^uint64(0), B128_191: ^uint64(0), B192_255: 0x7FFFFFFFFFFFFFFF}
+	const d128Error = "Decimal128 scale overflow: coefficient 170141183460469231731687303715884105727, target scale="
+	const d256Error = "Decimal256 scale overflow: coefficient 57896044618658097711785492504343953926634992332820282019728792003956564819967, target scale="
+	for _, tc := range []struct {
+		name, want string
+		scale      func(int32) error
+	}{
+		{"d128_inplace", d128Error, func(n int32) error { x := maxD128; return x.ScaleInplace(n) }},
+		{"d128", d128Error, func(n int32) error { _, err := maxD128.Scale(n); return err }},
+		{"d128_truncate", d128Error, func(n int32) error { _, err := maxD128.ScaleTruncate(n); return err }},
+		{"d256", "Decimal256 scale overflow: target scale=", func(n int32) error { _, err := maxD256.Scale(n); return err }},
+		{"d256_truncate", d256Error, func(n int32) error { _, err := maxD256.ScaleTruncate(n); return err }},
+	} {
+		// 18 exercises the final multiply; 38 overflows in the first 19-digit chunk.
+		for _, n := range []int32{18, 38} {
+			t.Run(fmt.Sprintf("%s/%d", tc.name, n), func(t *testing.T) {
+				err := tc.scale(n)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+				require.EqualError(t, err, fmt.Sprintf("invalid input: %s%d", tc.want, n))
+			})
 		}
-	})
+	}
 	t.Run("d128_scaleinplace_down", func(t *testing.T) {
 		x := maxD128
-		err := x.ScaleInplace(-38) // scale down by a lot
-		_ = err
-	})
-
-	// Decimal128.Scale (non-inplace).
-	t.Run("d128_scale_up", func(t *testing.T) {
-		_, err := maxD128.Scale(18)
-		if err == nil {
-			t.Fatal("expected overflow")
-		}
-	})
-
-	// Decimal128.ScaleTruncate.
-	t.Run("d128_scaletrunc_up", func(t *testing.T) {
-		_, err := maxD128.ScaleTruncate(18)
-		if err == nil {
-			t.Fatal("expected overflow")
-		}
-	})
-
-	// Decimal256.Scale: large D256 scaling up.
-	maxD256 := Decimal256{B0_63: ^uint64(0), B64_127: ^uint64(0), B128_191: ^uint64(0), B192_255: 0x7FFFFFFFFFFFFFFF}
-	t.Run("d256_scale_up", func(t *testing.T) {
-		_, err := maxD256.Scale(18)
-		if err == nil {
-			t.Fatal("expected overflow")
-		}
-	})
-
-	// Decimal256.ScaleTruncate.
-	t.Run("d256_scaletrunc_up", func(t *testing.T) {
-		_, err := maxD256.ScaleTruncate(18)
-		if err == nil {
-			t.Fatal("expected overflow")
-		}
+		require.NoError(t, x.ScaleInplace(-38))
+		require.Equal(t, Decimal128{B0_63: 2}, x)
 	})
 }
 
-// TestDecimalArithOverflowErrors exercises the arithmetic overflow error paths
-// where error messages were reformatted.
 func TestDecimalArithOverflowErrors(t *testing.T) {
-	maxD64 := Decimal64(^uint64(0) >> 1)
-	maxD128 := Decimal128{B0_63: ^uint64(0), B64_127: 0x7FFFFFFFFFFFFFFF}
-	maxD256 := Decimal256{B0_63: ^uint64(0), B64_127: ^uint64(0), B128_191: ^uint64(0), B192_255: 0x7FFFFFFFFFFFFFFF}
-
-	// D64 Mul overflow (enters D128 fallback, result too big for D64).
-	t.Run("d64_mul_overflow", func(t *testing.T) {
-		_, _, err := maxD64.Mul(maxD64, 0, 0)
-		if err == nil {
-			t.Fatal("expected overflow")
-		}
-	})
-
-	// D128 Mul overflow (enters D256 fallback, result too big for D128).
-	t.Run("d128_mul_overflow", func(t *testing.T) {
-		_, _, err := maxD128.Mul(maxD128, 0, 0)
-		if err == nil {
-			t.Fatal("expected overflow")
-		}
-	})
-
-	// D64 Div overflow (scale overflow in fallback).
-	t.Run("d64_div_scale_overflow", func(t *testing.T) {
-		_, _, err := maxD64.Div(Decimal64(1), 0, 0)
-		_ = err // exercises the path
-	})
-
-	// D128 Div overflow (scale overflow).
-	t.Run("d128_div_scale_overflow", func(t *testing.T) {
-		_, _, err := maxD128.Div(Decimal128{B0_63: 1}, 0, 0)
-		_ = err
-	})
-
-	// D64 Mod overflow.
-	t.Run("d64_mod_overflow", func(t *testing.T) {
-		_, _, err := maxD64.Mod(Decimal64(1), 0, 18)
-		_ = err
-	})
-
-	// D128 Mod overflow.
-	t.Run("d128_mod_overflow", func(t *testing.T) {
-		_, _, err := maxD128.Mod(Decimal128{B0_63: 1}, 0, 18)
-		_ = err
-	})
-
-	// D256 Div overflow.
-	t.Run("d256_div_scale_overflow", func(t *testing.T) {
-		_, _, err := maxD256.Div(Decimal256{B0_63: 1}, 0, 0)
-		_ = err
-	})
-
-	// D256 Mod overflow.
-	t.Run("d256_mod_overflow", func(t *testing.T) {
-		_, _, err := maxD256.Mod(Decimal256{B0_63: 1}, 0, 18)
-		_ = err
-	})
-
-	// D64 Sub error path.
-	t.Run("d64_sub_scale_overflow", func(t *testing.T) {
-		_, _, err := maxD64.Sub(Decimal64(1), 0, 18)
-		_ = err
-	})
-
-	// D128 Sub error path.
-	t.Run("d128_sub_scale_overflow", func(t *testing.T) {
-		_, _, err := maxD128.Sub(Decimal128{B0_63: 1}, 0, 18)
-		_ = err
-	})
-}
-
-// TestDecimalScaleLoopOverflow exercises the for-loop body in Scale functions
-// where n > 19. These are the modified error-message lines inside the loop.
-func TestDecimalScaleLoopOverflow(t *testing.T) {
-	maxD64 := Decimal64(^uint64(0) >> 1)
-	maxD128 := Decimal128{B0_63: ^uint64(0), B64_127: 0x7FFFFFFFFFFFFFFF}
-	maxD256 := Decimal256{B0_63: ^uint64(0), B64_127: ^uint64(0), B128_191: ^uint64(0), B192_255: 0x7FFFFFFFFFFFFFFF}
-
-	// Scale by 38 triggers the loop (38-0 > 19).
-	t.Run("d64_loop", func(t *testing.T) {
-		_, err := maxD64.Scale(38)
-		if err == nil {
-			t.Fatal("expected overflow")
-		}
-	})
-	t.Run("d128_scaleinplace_loop", func(t *testing.T) {
-		x := maxD128
-		err := x.ScaleInplace(38)
-		if err == nil {
-			t.Fatal("expected overflow")
-		}
-	})
-	t.Run("d128_scale_loop", func(t *testing.T) {
-		_, err := maxD128.Scale(38)
-		if err == nil {
-			t.Fatal("expected overflow")
-		}
-	})
-	t.Run("d128_scaletrunc_loop", func(t *testing.T) {
-		_, err := maxD128.ScaleTruncate(38)
-		if err == nil {
-			t.Fatal("expected overflow")
-		}
-	})
-	t.Run("d256_scale_loop", func(t *testing.T) {
-		_, err := maxD256.Scale(38)
-		if err == nil {
-			t.Fatal("expected overflow")
-		}
-	})
-	t.Run("d256_scaletrunc_loop", func(t *testing.T) {
-		_, err := maxD256.ScaleTruncate(38)
-		if err == nil {
-			t.Fatal("expected overflow")
-		}
-	})
+	max64 := Decimal64(^uint64(0) >> 1)
+	max128 := Decimal128{B0_63: ^uint64(0), B64_127: 0x7FFFFFFFFFFFFFFF}
+	max256 := Decimal256{B0_63: ^uint64(0), B64_127: ^uint64(0), B128_191: ^uint64(0), B192_255: 0x7FFFFFFFFFFFFFFF}
+	const coefficient64 = "9223372036854775807"
+	const coefficient128 = "170141183460469231731687303715884105727"
+	const coefficient256 = "57896044618658097711785492504343953926634992332820282019728792003956564819967"
+	for _, tc := range []struct {
+		name, want string
+		run        func() error
+	}{
+		{"d64_mul", "Decimal64 Mul overflow: " + coefficient64 + "*" + coefficient64, func() error { _, _, err := max64.Mul(max64, 0, 0); return err }},
+		{"d128_mul", "Decimal128 Mul overflow: " + coefficient128 + "*" + coefficient128, func() error { _, _, err := max128.Mul(max128, 0, 0); return err }},
+		{"d64_div", "Decimal64 Div overflow: " + coefficient64 + "/1", func() error { _, _, err := max64.Div(1, 0, 0); return err }},
+		{"d128_div", "Decimal128 Div overflow: " + coefficient128 + "/1", func() error { _, _, err := max128.Div(Decimal128{B0_63: 1}, 0, 0); return err }},
+		{"d256_div", "Decimal256 Div overflow: " + coefficient256 + "/1", func() error { _, _, err := max256.Div(Decimal256{B0_63: 1}, 0, 0); return err }},
+		{"d64_sub", "Decimal64 Sub overflow: " + coefficient64 + "-0.000000000000000001", func() error { _, _, err := max64.Sub(1, 0, 18); return err }},
+		{"d128_sub", "Decimal128 Sub overflow: " + coefficient128 + "-0.000000000000000001", func() error { _, _, err := max128.Sub(Decimal128{B0_63: 1}, 0, 18); return err }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.run()
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+			require.EqualError(t, err, "invalid input: "+tc.want)
+		})
+	}
 }
 
 func TestDecimal64MulCappedScale(t *testing.T) {
@@ -1400,23 +1566,30 @@ func TestDecimal64MulCappedScale(t *testing.T) {
 }
 
 func TestDecimalScientificExponentBoundaries(t *testing.T) {
-	for _, spelling := range []string{"1E-2", "1e-2", "1E+2", "0E2147483647", "1E-2147483647"} {
-		d64, e64 := ParseDecimal64(spelling, 18, 2)
-		d128, e128 := ParseDecimal128(spelling, 38, 2)
-		d256, e256 := ParseDecimal256(spelling, 65, 2)
-		require.NoError(t, e64, spelling)
-		require.NoError(t, e128, spelling)
-		require.NoError(t, e256, spelling)
-		require.Equal(t, d64.Format(2), d128.Format(2), spelling)
-		require.Equal(t, d64.Format(2), d256.Format(2), spelling)
+	for _, tc := range []struct {
+		spelling    string
+		coefficient uint64
+	}{
+		{"1E-2", 1}, {"1e-2", 1}, {"1E+2", 10000},
+		{"0E2147483647", 0}, {"1E-2147483647", 0},
+	} {
+		d64, e64 := ParseDecimal64(tc.spelling, 18, 2)
+		d128, e128 := ParseDecimal128(tc.spelling, 38, 2)
+		d256, e256 := ParseDecimal256(tc.spelling, 65, 2)
+		require.NoError(t, e64, tc.spelling)
+		require.NoError(t, e128, tc.spelling)
+		require.NoError(t, e256, tc.spelling)
+		require.Equal(t, Decimal64(tc.coefficient), d64, tc.spelling)
+		require.Equal(t, Decimal128{B0_63: tc.coefficient}, d128, tc.spelling)
+		require.Equal(t, Decimal256{B0_63: tc.coefficient}, d256, tc.spelling)
 	}
 	for _, spelling := range []string{"1E4294967296", "1E-4294967296", "1E2147483647"} {
 		_, e64 := ParseDecimal64(spelling, 18, 2)
 		_, e128 := ParseDecimal128(spelling, 38, 2)
 		_, e256 := ParseDecimal256(spelling, 65, 2)
-		require.Error(t, e64)
-		require.Error(t, e128)
-		require.Error(t, e256)
+		require.True(t, moerr.IsMoErrCode(e64, moerr.ErrInvalidInput), spelling)
+		require.True(t, moerr.IsMoErrCode(e128, moerr.ErrInvalidInput), spelling)
+		require.True(t, moerr.IsMoErrCode(e256, moerr.ErrInvalidInput), spelling)
 	}
 }
 
@@ -1491,4 +1664,32 @@ func TestDecimal64Div64MagnitudeRounding(t *testing.T) {
 	}
 	_, err := Decimal64(1).Div64(0)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+}
+
+var decimal256DivisionSink Decimal256
+
+func BenchmarkDecimal256UnsignedDivision(b *testing.B) {
+	for _, tc := range []struct {
+		name string
+		x, y Decimal256
+	}{
+		{"small", Decimal256{B0_63: 1234567890123456789}, Decimal256{B0_63: 10}},
+		{"small_divisor", Decimal256{B0_63: 1234567890123456789, B128_191: 123456}, Decimal256{B0_63: 1000000000000000000}},
+		{"wide_divisor", Decimal256{B0_63: 1234567890123456789, B128_191: 123456}, Decimal256{B0_63: 123, B64_127: 1 << 40}},
+		{"wide_small_quotient", Decimal256{B0_63: 1, B192_255: 1 << 62}, Decimal256{B0_63: 3, B192_255: 1 << 61}},
+		{"wide_max_quotient", Decimal256{B0_63: ^uint64(0), B64_127: ^uint64(0), B128_191: ^uint64(0), B192_255: ^uint64(0)}, Decimal256{B0_63: 3, B64_127: 1}},
+	} {
+		b.Run(tc.name+"/trunc", func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				decimal256DivisionSink, _ = tc.x.Div256Trunc(tc.y)
+			}
+		})
+		b.Run(tc.name+"/mod", func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				decimal256DivisionSink, _ = tc.x.Mod256(tc.y)
+			}
+		})
+	}
 }

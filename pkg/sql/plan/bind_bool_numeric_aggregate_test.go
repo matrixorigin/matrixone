@@ -27,8 +27,8 @@ import (
 // boolSumAvgMockContext answers sql_mode with the mock's default modes, plus
 // ENABLE_BOOL_SUMAVG when enabled, so a test states only the mode under test
 // and still proves the token composes with the modes a session already has.
-func boolSumAvgMockContext(enabled bool) *MockCompilerContext {
-	ctx := NewMockCompilerContext(false)
+func boolSumAvgMockContext(t testing.TB, enabled bool) *MockCompilerContext {
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	if enabled {
 		ctx.SetSqlModeOverride("ONLY_FULL_GROUP_BY," + mysql.SQLModeEnableBoolSumAvg)
 	}
@@ -92,9 +92,12 @@ func TestBoolNumericAggregateRejectedWhenModeDisabled(t *testing.T) {
 			"select sum(n_nationkey <> 0) over () from nation",
 			"select n_name from nation group by n_name having sum(n_nationkey <> 0) > 0",
 		} {
-			_, err := buildOneQuery(t, boolSumAvgMockContext(false), sql, mode.prepare)
-			require.Error(t, err, "%s %s", mode.name, sql)
-			require.Contains(t, err.Error(), "invalid argument aggregate function", "%s %s", mode.name, sql)
+			t.Run(mode.name+"/"+sql, func(t *testing.T) {
+				_, err := buildOneQuery(t, boolSumAvgMockContext(t, false), sql, mode.prepare)
+				require.Error(t, err, "%s %s", mode.name, sql)
+				require.Contains(t, err.Error(), "invalid argument aggregate function", "%s %s", mode.name, sql)
+
+			})
 		}
 	}
 }
@@ -114,7 +117,7 @@ func TestBoolNumericAggregateUnresolvableSQLModeStaysStrict(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			ctx := NewMockCompilerContext(false)
+			ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 			ctx.ResolveVariableFunc = resolve
 			_, err := buildOneQuery(t, ctx, "select sum(n_nationkey <> 0) from nation", false)
 			require.Error(t, err)
@@ -142,21 +145,26 @@ func TestBoolNumericAggregateBindsAsTinyint(t *testing.T) {
 	}
 	for _, mode := range bindModes {
 		for _, c := range cases {
-			p, err := buildOneQuery(t, boolSumAvgMockContext(true), c.sql, mode.prepare)
-			require.NoError(t, err, "%s %s", mode.name, c.sql)
-			require.Equal(t, []types.T{types.T_int8}, aggregateArgTypes(t, p), "%s %s", mode.name, c.sql)
-			require.Equal(t, c.wantReturn, types.T(firstAggregate(t, p).Typ.Id), "%s %s", mode.name, c.sql)
+			t.Run(mode.name+"/"+c.sql, func(t *testing.T) {
+				p, err := buildOneQuery(t, boolSumAvgMockContext(t, true), c.sql, mode.prepare)
+				require.NoError(t, err, "%s %s", mode.name, c.sql)
+				require.Equal(t, []types.T{types.T_int8}, aggregateArgTypes(t, p), "%s %s", mode.name, c.sql)
+				require.Equal(t, c.wantReturn, types.T(firstAggregate(t, p).Typ.Id), "%s %s", mode.name, c.sql)
+
+			})
 		}
 		// A window aggregate takes the window binder's route to the same
 		// coercion.
-		_, err := buildOneQuery(t, boolSumAvgMockContext(true),
-			"select sum(n_nationkey <> 0) over () from nation", mode.prepare)
-		require.NoError(t, err, mode.name)
+		t.Run(mode.name+"/window", func(t *testing.T) {
+			_, err := buildOneQuery(t, boolSumAvgMockContext(t, true),
+				"select sum(n_nationkey <> 0) over () from nation", mode.prepare)
+			require.NoError(t, err, mode.name)
+		})
 	}
 }
 
 func TestBoolNumericAggregatePreparedMarkerKeepsAdapter(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY," + mysql.SQLModeEnableBoolSumAvg)
 	for _, aggregate := range []string{"sum", "avg"} {
 		t.Run(aggregate, func(t *testing.T) {
@@ -183,7 +191,7 @@ func TestBoolNumericAggregatePreparedMarkerKeepsAdapter(t *testing.T) {
 // worked (min/max/count over BOOL, sum over a number) or is still rejected
 // (aggregates outside the mode's scope, non-numeric arguments).
 func TestBoolNumericAggregateScopeIsUnchanged(t *testing.T) {
-	ctx := boolSumAvgMockContext(true)
+	ctx := boolSumAvgMockContext(t, true)
 
 	t.Run("bool argument of other aggregates keeps its own binding", func(t *testing.T) {
 		for _, sql := range []string{
@@ -227,15 +235,17 @@ func TestBoolNumericAggregateScopeIsUnchanged(t *testing.T) {
 			"select n_nationkey <> 0 from nation",
 			"select count(n_nationkey <> 0) from nation",
 		} {
-			onPlan, onErr := buildOneQuery(t, boolSumAvgMockContext(true), sql, false)
-			offPlan, offErr := buildOneQuery(t, boolSumAvgMockContext(false), sql, false)
-			if offErr != nil {
-				require.Error(t, onErr, sql)
-				require.Equal(t, offErr.Error(), onErr.Error(), sql)
-				continue
-			}
-			require.NoError(t, onErr, sql)
-			require.Equal(t, offPlan.String(), onPlan.String(), sql)
+			t.Run(sql, func(t *testing.T) {
+				onPlan, onErr := buildOneQuery(t, boolSumAvgMockContext(t, true), sql, false)
+				offPlan, offErr := buildOneQuery(t, boolSumAvgMockContext(t, false), sql, false)
+				if offErr != nil {
+					require.Error(t, onErr, sql)
+					require.Equal(t, offErr.Error(), onErr.Error(), sql)
+					return
+				}
+				require.NoError(t, onErr, sql)
+				require.Equal(t, offPlan.String(), onPlan.String(), sql)
+			})
 		}
 	})
 }

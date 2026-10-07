@@ -141,7 +141,8 @@ const (
 	MORPCVersion103    int64 = 103 // distributed required IVF PRE domains and CPU centroid routing
 	MORPCVersion104    int64 = 104 // preserve typed JSON scalar literals across CNs
 	MORPCVersion105    int64 = 105 // instance-bound lock-service drain confirmation
-	MORPCLatestVersion       = MORPCVersion105
+	MORPCVersion106    int64 = 106 // CDC durable target identity and generation-aware task admission
+	MORPCLatestVersion       = MORPCVersion106
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

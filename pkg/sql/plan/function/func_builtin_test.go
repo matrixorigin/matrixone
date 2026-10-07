@@ -1156,7 +1156,7 @@ func TestBuiltInConvertUsingCharsetBranches(t *testing.T) {
 				[]string{invalidUTF8, invalidUTF8, "AZ", "你好", "charset null"},
 				[]bool{false, false, false, false, false}),
 			NewFunctionTestInput(types.T_varchar.ToType(),
-				[]string{"utf8", "latin1", "UTF8MB4", "utf8", ""},
+				[]string{"utf8", "binary", "UTF8MB4", "utf8", ""},
 				[]bool{false, false, false, false, true}),
 		},
 		expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
@@ -1166,6 +1166,34 @@ func TestBuiltInConvertUsingCharsetBranches(t *testing.T) {
 	fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInConvertUsingCharset)
 	s, info := fcTC.RunAndFree()
 	require.True(t, s, info)
+}
+
+func TestBuiltInConvertUsingRejectsDisabledCharsets(t *testing.T) {
+	for _, charset := range []string{"latin1", "ASCII", "gbk", "missing"} {
+		proc := testutil.NewProcess(t)
+		fc := NewFunctionTestCase(proc, []FunctionTestInput{
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"a"}, []bool{false}),
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{charset}, []bool{false}),
+		}, NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil), builtInConvertUsingCharset)
+		defer fc.result.Free()
+		for _, parameter := range fc.parameters {
+			defer parameter.Free(fc.proc.Mp())
+		}
+		require.NoError(t, fc.result.PreExtendAndReset(fc.fnLength))
+		require.ErrorContains(t, fc.fn(fc.parameters, fc.result, fc.proc, fc.fnLength, nil), "unsupported character set")
+	}
+	for _, charset := range []string{"utf8", "utf8mb3", "utf8mb4"} {
+		fc := NewFunctionTestCase(testutil.NewProcess(t), []FunctionTestInput{
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"😀"}, []bool{false}),
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{charset}, []bool{false}),
+		}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"😀"}, []bool{false}), builtInConvertUsingCharset)
+		defer fc.result.Free()
+		for _, parameter := range fc.parameters {
+			defer parameter.Free(fc.proc.Mp())
+		}
+		ok, info := fc.Run()
+		require.True(t, ok, info)
+	}
 }
 
 func TestBuiltInConvertUsingCharsetConstArgs(t *testing.T) {
@@ -1707,7 +1735,6 @@ func Test_BuiltIn_Serial(t *testing.T) {
 		tcc := NewFunctionTestCase(proc, tc.inputs,
 			NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil), opSerial.BuiltInSerial)
 		defer tcc.Free()
-		require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
 		_, err := tcc.DebugRun()
 		require.NoError(t, err, tc.info)
 
@@ -1758,7 +1785,6 @@ func Test_BuiltIn_Serial(t *testing.T) {
 		tcc := NewFunctionTestCase(proc, tc.inputs,
 			NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil), opSerial.BuiltInSerial)
 		defer tcc.Free()
-		require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
 		_, err := tcc.DebugRun()
 		require.NoError(t, err, tc.info)
 
@@ -1812,7 +1838,6 @@ func Test_BuiltIn_Serial(t *testing.T) {
 		tcc := NewFunctionTestCase(proc, tc.inputs,
 			NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil), opSerial.BuiltInSerial)
 		defer tcc.Free()
-		require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
 		_, err := tcc.DebugRun()
 		require.NoError(t, err, tc.info)
 
@@ -1903,7 +1928,6 @@ func Test_BuiltIn_SerialFull(t *testing.T) {
 		tcc := NewFunctionTestCase(proc, tc.inputs,
 			NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil), opSerial.BuiltInSerialFull)
 		defer tcc.Free()
-		require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
 		_, err := tcc.DebugRun()
 		require.NoError(t, err, tc.info)
 
@@ -1969,7 +1993,6 @@ func Test_BuiltIn_SerialFull(t *testing.T) {
 		tcc := NewFunctionTestCase(proc, tc.inputs,
 			NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil), opSerial.BuiltInSerialFull)
 		defer tcc.Free()
-		require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
 		_, err := tcc.DebugRun()
 		require.NoError(t, err, tc.info)
 
@@ -2023,7 +2046,6 @@ func Test_BuiltIn_SerialFull(t *testing.T) {
 		tcc := NewFunctionTestCase(proc, tc.inputs,
 			NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil), opSerial.BuiltInSerialFull)
 		defer tcc.Free()
-		require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
 		_, err := tcc.DebugRun()
 		require.NoError(t, err, tc.info)
 
@@ -2072,7 +2094,6 @@ func Test_BuiltIn_SerialFullGeometry(t *testing.T) {
 	tcc := NewFunctionTestCase(proc, tc.inputs,
 		NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil), opSerial.BuiltInSerialFull)
 	defer tcc.Free()
-	require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
 	_, err := tcc.DebugRun()
 	require.NoError(t, err, tc.info)
 
@@ -2496,7 +2517,6 @@ func testSerialExtractNamedType[T types.Enum | types.MoYear | types.Decimal256](
 				builtInSerialExtract,
 			)
 			defer testCase.Free()
-			require.NoError(t, testCase.result.PreExtendAndReset(testCase.fnLength))
 			result, err := testCase.DebugRun()
 			require.NoError(t, err)
 			require.Equal(t, typ.Oid, result.GetType().Oid)
@@ -2972,7 +2992,6 @@ func TestBuiltInExpAndCotInvalidResultReturnsNull(t *testing.T) {
 				tc.fn,
 			)
 			defer tcc.Free()
-			require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
 			_, err := tcc.DebugRun()
 			require.NoError(t, err)
 			param := vector.GenerateFunctionFixedTypeParameter[float64](tcc.result.GetResultVector())
@@ -3233,7 +3252,6 @@ func TestBuiltInTimestampScaleValidation(t *testing.T) {
 						[]FunctionTestInput{NewFunctionTestInput(types.T_int64.ToType(), []int64{scale}, nil)},
 						NewFunctionTestResult(types.T_timestamp.ToType(), false, nil, nil), function.fn)
 					defer caseUnderTest.Free()
-					require.NoError(t, caseUnderTest.result.PreExtendAndReset(1))
 					result, err := caseUnderTest.DebugRun()
 					if scale < 0 || scale > 6 {
 						require.Error(t, err)

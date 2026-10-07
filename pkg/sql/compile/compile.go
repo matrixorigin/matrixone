@@ -51,6 +51,7 @@ import (
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -491,6 +492,7 @@ func (c *Compile) clear() {
 	c.MessageBoard = c.MessageBoard.Reset()
 	c.fuzzys = c.fuzzys[:0]
 	c.scopes = c.scopes[:0]
+	c.auxiliaryProductScopes = nil
 	c.pn = nil
 	c.fill = nil
 	c.preparedParamValues = nil
@@ -557,6 +559,7 @@ func (c *Compile) clear() {
 	c.skipDataBranchReclaim = false
 	c.keepAutoIncrement = 0
 	c.disableLock = false
+	c.prePipelineLockTableID = 0
 	c.icebergScanPlanner = nil
 
 	for _, exe := range c.filterExprExes {
@@ -701,26 +704,30 @@ func (c *Compile) isRetryErr(err error) bool {
 }
 
 type scopeRunResult struct {
-	err      error
-	ctx      context.Context
-	queryCtx context.Context
+	err   error
+	scope *Scope
 }
 
 func newScopeRunResult(err error, scope *Scope) scopeRunResult {
 	if scope == nil {
-		return scopeRunResult{err: err}
+		return newScopeRunResultForProcess(err, nil)
 	}
-	return newScopeRunResultForProcess(err, scope.Proc)
+	result := newScopeRunResultForProcess(err, scope.Proc)
+	result.scope = scope
+	return result
 }
 
 func newScopeRunResultForProcess(err error, proc *process.Process) scopeRunResult {
-	result := scopeRunResult{err: err}
 	if proc == nil {
-		return result
+		return scopeRunResult{err: process.MarkPipelineFailure(err)}
 	}
-	result.ctx = proc.Ctx
-	result.queryCtx = scopeRunQueryContext(proc)
-	return result
+	return newScopeRunResultForContext(err, proc.Ctx, scopeRunQueryContext(proc))
+}
+
+// Capture before publication: cleanup must never change an already owned result.
+func newScopeRunResultForContext(err error, pipelineCtx, queryCtx context.Context) scopeRunResult {
+	err, _ = normalizeScopeRunError(err, pipelineCtx, queryCtx)
+	return scopeRunResult{err: err}
 }
 
 func scopeRunQueryContext(proc *process.Process) context.Context {
@@ -742,7 +749,7 @@ func isScopeCancellationError(err error) bool {
 // to the same canceled context. A joined error is attributable only as a whole;
 // one matching cancellation leaf must not hide an independent deadline leaf.
 func isScopeCancellationFrom(err error, contextErr error) bool {
-	if err == nil || contextErr == nil {
+	if err == nil || contextErr == nil || process.IsPipelineFailure(err) {
 		return false
 	}
 	if joined, ok := err.(interface{ Unwrap() []error }); ok {
@@ -763,7 +770,7 @@ func isScopeCancellationFrom(err error, contextErr error) bool {
 		}
 	}
 	return errors.Is(err, contextErr) ||
-		moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted)
+		(errors.Is(contextErr, context.Canceled) && errors.Is(err, process.ErrPipelineStopped))
 }
 
 // normalizeScopeRunError distinguishes a substantive execution failure from
@@ -776,75 +783,63 @@ func normalizeScopeRunError(
 	pipelineCtx context.Context,
 	queryCtx context.Context,
 ) (error, bool) {
-	if err == nil || !isScopeCancellationError(err) ||
-		pipelineCtx == nil || pipelineCtx.Err() == nil {
-		return err, false
+	if err == nil {
+		return nil, false
 	}
-	// Query cancellation owns the terminal classification. In particular,
-	// context.WithTimeoutCause reports DeadlineExceeded through Err while Cause
-	// carries diagnostic detail. Replacing the former with the latter would make
-	// callers misclassify a timeout as an ordinary execution failure; they can
-	// attach the cause after observing DeadlineExceeded.
-	if queryCtx != nil {
-		if queryErr := queryCtx.Err(); queryErr != nil {
-			if errors.Is(queryErr, context.DeadlineExceeded) {
-				return queryErr, true
-			}
-			if !isScopeCancellationFrom(err, queryErr) {
-				return err, false
-			}
-			if cause := context.Cause(queryCtx); cause != nil {
-				return cause, true
-			}
-			return queryErr, true
+	if !isScopeCancellationError(err) {
+		return process.MarkPipelineFailure(err), false
+	}
+	if queryCtx != nil && queryCtx.Err() != nil && isScopeCancellationFrom(err, queryCtx.Err()) {
+		if errors.Is(queryCtx.Err(), context.DeadlineExceeded) {
+			return process.MarkPipelineFailure(queryCtx.Err()), true
 		}
+		if cause := context.Cause(queryCtx); cause != nil {
+			return process.MarkPipelineFailure(cause), true
+		}
+		return process.MarkPipelineFailure(queryCtx.Err()), true
 	}
-
-	// A context-shaped error is secondary only when every leaf was derived from
-	// this pipeline's cancellation. Preserve an independent operator timeout
-	// that merely raced a different pipeline cancellation, including when the
-	// two errors were joined.
-	if !isScopeCancellationFrom(err, pipelineCtx.Err()) {
-		return err, false
+	if pipelineCtx == nil || pipelineCtx.Err() == nil || !isScopeCancellationFrom(err, pipelineCtx.Err()) {
+		return process.MarkPipelineFailure(err), false
 	}
-
-	if cause := context.Cause(pipelineCtx); cause != nil {
-		err = cause
+	cause := context.Cause(pipelineCtx)
+	if cause == process.ErrPipelineStopped && queryCtx != nil {
+		// A first-wins consumer stop can outlive its query's deadline. It is
+		// successful only while that query remains live.
+		return process.MarkPipelineFailure(queryCtx.Err()), true
 	}
-	if isScopeCancellationError(err) && queryCtx != nil && queryCtx.Err() == nil {
-		return nil, true
+	if cause != nil {
+		return process.MarkPipelineFailure(cause), true
 	}
-	return err, true
+	return process.MarkPipelineFailure(err), false
 }
 
-func (r scopeRunResult) resolveCancelCause() (scopeRunResult, bool) {
-	var normalized bool
-	r.err, normalized = normalizeScopeRunError(r.err, r.ctx, r.queryCtx)
-	return r, normalized
-}
-
-// preferPrimaryScopeResult keeps cleanup fallout from masking the execution
-// error that caused another scope to stop consuming its pipeline input. A
-// cancellation result is first resolved through that scope's CancelCauseFunc:
-// internally canceled siblings therefore report the triggering execution
-// error, while an externally canceled query keeps its external cause.
-func preferPrimaryScopeResult(current, candidate scopeRunResult) scopeRunResult {
-	current, _ = current.resolveCancelCause()
-	candidate, candidateNormalized := candidate.resolveCancelCause()
-
+// preferPrimaryScopeResult arbitrates frozen results at every scope boundary.
+// Retry selection belongs to the Compile's transaction policy; cleanup fallout
+// must not hide a retry merely because it crosses a nested MergeRun first.
+func (c *Compile) preferPrimaryScopeResult(current, candidate scopeRunResult) scopeRunResult {
 	if current.err == nil {
 		return candidate
 	}
-	if candidate.err == nil ||
-		!errors.Is(current.err, process.ErrPipelineEndSignalDeliveryFailed) ||
-		errors.Is(candidate.err, process.ErrPipelineEndSignalDeliveryFailed) {
+	if candidate.err == nil {
 		return current
 	}
-	// An unresolved pure cancellation does not prove that the cleanup fallback
-	// was secondary. A mixed error tree is substantive, however, and must not be
-	// rejected merely because one leaf is context.Canceled.
-	if !candidateNormalized &&
-		isScopeCancellationFrom(candidate.err, context.Canceled) {
+	// A shared producer job can report its original failure after a probe has
+	// already observed cancellation through its dependency. Keep the originating
+	// failure, while explicit query cancellation remains authoritative.
+	_, currentProducer := c.auxiliaryProductScopes[current.scope]
+	_, candidateProducer := c.auxiliaryProductScopes[candidate.scope]
+	if (currentProducer || candidateProducer) &&
+		process.IsPipelineCancellationError(process.UnwrapPipelineFailure(current.err)) &&
+		!process.IsPipelineCancellationError(process.UnwrapPipelineFailure(candidate.err)) &&
+		c.proc.GetQueryContextError() == nil {
+		return candidate
+	}
+	if c.isRetryErr(candidate.err) {
+		return candidate
+	}
+	if c.isRetryErr(current.err) ||
+		!errors.Is(current.err, process.ErrPipelineEndSignalDeliveryFailed) ||
+		errors.Is(candidate.err, process.ErrPipelineEndSignalDeliveryFailed) {
 		return current
 	}
 	return candidate
@@ -1126,9 +1121,24 @@ func (c *Compile) runOnce() (err error) {
 		}
 
 		var resultToThrowOut scopeRunResult
+		primaryRemaining := 0
+		for _, root := range c.scopes {
+			if !c.auxiliaryProductScopes[root] {
+				primaryRemaining++
+			}
+		}
 		for i := 0; i < cap(errC); i++ {
 			result := <-errC
-			result, _ = result.resolveCancelCause()
+			if !c.auxiliaryProductScopes[result.scope] {
+				primaryRemaining--
+				if primaryRemaining == 0 {
+					for _, root := range c.scopes {
+						if c.auxiliaryProductScopes[root] {
+							root.Proc.Cancel(process.ErrPipelineStopped)
+						}
+					}
+				}
+			}
 			e := result.err
 
 			// cancel this query if the first error occurs.
@@ -1141,17 +1151,10 @@ func (c *Compile) runOnce() (err error) {
 					}
 				}
 			}
-			resultToThrowOut = preferPrimaryScopeResult(resultToThrowOut, result)
-
-			// if any error already return is retryable, we should throw this one
-			// to make sure query will retry.
-			if e != nil && c.isRetryErr(e) {
-				resultToThrowOut = result
-			}
+			resultToThrowOut = c.preferPrimaryScopeResult(resultToThrowOut, result)
 		}
 		close(errC)
 
-		resultToThrowOut, _ = resultToThrowOut.resolveCancelCause()
 		if resultToThrowOut.err != nil {
 			return resultToThrowOut.err
 		}
@@ -1430,6 +1433,7 @@ func (c *Compile) shouldPrePipelineLockTable(target *plan.LockTarget) bool {
 func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	var err error
 	c.foundRowsOwnerNode = c.selectFoundRowsOwnerNode(qry)
+	c.auxiliaryProductScopes = nil
 	c.compiledLocalRuntimeFilterNodes = nil
 	defer func() {
 		c.compiledLocalRuntimeFilterNodes = nil
@@ -1494,16 +1498,13 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	}()
 	for i := len(qry.Steps) - 1; i >= firstStep; i-- {
 		var scopes []*Scope
-		scopes, err = c.compilePlanScope(int32(i), qry.Steps[i], qry.Nodes)
-		if err != nil {
-			return nil, err
-		}
-		scopes, err = c.compileSteps(qry, scopes, qry.Steps[i])
+		scopes, err = c.compileProductRegion(int32(i), qry.Steps[i], qry.Nodes, false, qry)
 		if err != nil {
 			return nil, err
 		}
 		steps = append(steps, scopes...)
 	}
+	c.markProductProducerRegions(steps)
 	if err = validateSequenceScopePlacement(qry, toEngineNode(c.currentCNWorker()), steps); err != nil {
 		return nil, err
 	}
@@ -2125,7 +2126,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		}
 		branches := make([][]*Scope, len(node.Children))
 		for i, childID := range node.Children {
-			branches[i], err = c.compilePlanScope(step, childID, nodes)
+			branches[i], err = c.compileProductRegion(step, childID, nodes, false, nil)
 			if err != nil {
 				for j := 0; j < i; j++ {
 					ReleaseScopes(branches[j])
@@ -2140,11 +2141,19 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		if !lazy && c.pn != nil {
 			lazy = orderedScalarUnionAllResult(step, curNodeIdx, c.pn.GetQuery())
 		}
-		left, err = c.compilePlanScopeWithUnionAllDemand(step, node.Children[0], nodes, lazy)
+		if lazy {
+			left, err = c.compileProductRegion(step, node.Children[0], nodes, lazy, nil)
+		} else {
+			left, err = c.compilePlanScopeWithUnionAllDemand(step, node.Children[0], nodes, lazy)
+		}
 		if err != nil {
 			return nil, err
 		}
-		right, err = c.compilePlanScopeWithUnionAllDemand(step, node.Children[1], nodes, lazy)
+		if lazy {
+			right, err = c.compileProductRegion(step, node.Children[1], nodes, lazy, nil)
+		} else {
+			right, err = c.compilePlanScopeWithUnionAllDemand(step, node.Children[1], nodes, lazy)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -7107,6 +7116,10 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 		return rs
 	}
 
+	if rs[0].RootOp.OpType() == vm.Product {
+		return c.compileSharedBroadcastProduct(node, rs, buildScopes[0])
+	}
+
 	buildScopeAttached := false
 	for i := range rs {
 		if sameExecutionNode(rs[i].NodeInfo, buildScopes[0].NodeInfo) {
@@ -7175,6 +7188,140 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 	dispatchArg.SetAnalyzeControl(c.anal.curNodeIdx, false)
 	buildScopes[0].setRootOperator(dispatchArg)
 	return rs
+}
+
+// pendingProductBuild owns detached producers only during compilation.
+// Probe templates are non-owning references used to finalize worker counts.
+type pendingProductBuild struct {
+	source *Scope
+	builds []*Scope
+	groups [][]*Scope
+}
+
+// Keep the data plane parallel; choose producer ownership only after downstream
+// Group, Limit, Sort and Join placement is complete.
+func (c *Compile) compileSharedBroadcastProduct(node *plan.Node, probes []*Scope, source *Scope) []*Scope {
+	groups := c.groupBroadcastProbeScopesByCN(probes, c.queryWorkerStageNodes())
+	pending := &pendingProductBuild{source: source, groups: groups}
+	c.pendingProductBuilds = append(c.pendingProductBuilds, pending)
+	for _, group := range groups {
+		build := newScope(Remote)
+		build.NodeInfo = scopeNodeWithMcpu(group[0].NodeInfo, 1)
+		build.Proc = c.proc.NewNoContextChildProc(1)
+		mergeOp := merge.NewArgument()
+		mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
+		build.setRootOperator(mergeOp)
+		build.setRootOperator(constructJoinBuildOperator(c, group[0].RootOp, 0, node.RuntimeFilterBuildList))
+		pending.builds = append(pending.builds, build)
+	}
+	// Dispatch is wired now, while the Product still owns the join-node analysis.
+	// Run dispatch locally so independent remote build/probe fragments share only
+	// the existing statement MessageBoard, never a foreign in-process receiver.
+	if !sameExecutionNode(source.NodeInfo, toEngineNode(c.currentCNWorker())) {
+		source = c.newMergeScope([]*Scope{source})
+		pending.source = source
+	}
+	dispatchOp := constructDispatch(0, pending.builds, source, node, false)
+	dispatchOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
+	source.setRootOperator(dispatchOp)
+	return probes
+}
+
+// A region is one independently admitted query step or lazy branch. Pending
+// producers cannot escape it, including compilation failures and panics.
+func (c *Compile) compileProductRegion(step, node int32, nodes []*plan.Node, demand bool, query *plan.Query) ([]*Scope, error) {
+	enclosing := c.pendingProductBuilds
+	c.pendingProductBuilds = nil
+	defer func() {
+		for _, pending := range c.pendingProductBuilds {
+			ReleaseScopes(pending.builds)
+			ReleaseScopes([]*Scope{pending.source})
+		}
+		c.pendingProductBuilds = enclosing
+	}()
+	scopes, err := c.compilePlanScopeWithUnionAllDemand(step, node, nodes, demand)
+	if err != nil {
+		return nil, err
+	}
+	if query != nil {
+		// Complete RETURNING/Output and existing writer accounting assembly
+		// before attaching jobs, so they never become counted result inputs.
+		scopes, err = c.compileSteps(query, scopes, node)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return c.finishProductBuilds(scopes, query == nil), nil
+}
+
+func (c *Compile) finishProductBuilds(scopes []*Scope, mergeResults bool) []*Scope {
+	if len(c.pendingProductBuilds) == 0 {
+		return scopes
+	}
+	if mergeResults && !c.IsSingleScope(scopes) {
+		scopes = []*Scope{c.newMergeScope(c.mergeShuffleScopesIfNeeded(scopes, false))}
+	}
+	if mergeResults && scopes[0].Magic == Remote && !scopes[0].ipAddrMatch(c.addr) {
+		scopes = []*Scope{c.newMergeScope(scopes)}
+	}
+	singleOwner := c.IsSingleScope(scopes) && scopes[0].ipAddrMatch(c.addr)
+	for _, pending := range c.pendingProductBuilds {
+		for i, group := range pending.groups {
+			var workers int32
+			for _, probe := range group {
+				workers += int32(probe.NodeInfo.Mcpu)
+			}
+			pending.builds[i].RootOp.(*hashbuild.HashBuild).JoinMapRefCnt = workers
+		}
+		// Build connectors belong to the job, not to the result receiver set. Thus
+		// ordinary/ordered/partial result merges retain their existing semantics.
+		job := c.newMergeScope(pending.builds)
+		job.PreScopes = append(job.PreScopes, pending.source)
+		job.ConcurrentPreScopes = true
+		if c.auxiliaryProductScopes == nil {
+			c.auxiliaryProductScopes = make(map[*Scope]bool)
+		}
+		c.auxiliaryProductScopes[job] = true
+		pending.builds, pending.source = nil, nil
+		if singleOwner {
+			owner := scopes[0]
+			c.auxiliaryProductScopes[owner] = false
+			if owner.Magic == Normal {
+				owner.Magic = Merge
+			}
+			owner.PreScopes = append(owner.PreScopes, job)
+			owner.ConcurrentPreScopes = true
+		} else {
+			scopes = append(scopes, job)
+		}
+	}
+	c.pendingProductBuilds = nil
+	return scopes
+}
+
+// Preserve producer-error attribution across the complete finalized ancestry,
+// including lazy parents assembled after their branch producers were attached.
+// This is static scope ownership metadata; it never activates a branch.
+func (c *Compile) markProductProducerRegions(scopes []*Scope) {
+	if len(c.auxiliaryProductScopes) == 0 {
+		return
+	}
+	var visit func(*Scope, bool) bool
+	visit = func(scope *Scope, insideProducer bool) bool {
+		job, region := c.auxiliaryProductScopes[scope]
+		insideProducer = insideProducer || job
+		region = region || insideProducer
+		for _, child := range scope.PreScopes {
+			region = visit(child, insideProducer) || region
+		}
+		if region && !job {
+			c.auxiliaryProductScopes[scope] = false
+		}
+		return region
+	}
+	for _, scope := range scopes {
+		visit(scope, false)
+	}
 }
 
 func (c *Compile) groupBroadcastProbeScopesByCN(rs []*Scope, stageNodes engine.Nodes) [][]*Scope {
@@ -9232,7 +9379,8 @@ func (c *Compile) compileDelete(node *plan.Node, ss []*Scope) ([]*Scope, error) 
 
 func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 	lockRows := make([]*plan.LockTarget, 0, len(node.LockTargets))
-	localizeLoadPlan := c.loadUniqueIndexPromotion != nil
+	localizeLockPlan := c.loadUniqueIndexPromotion != nil || c.prePipelineLockTableID != 0
+	promotedNewTable := false
 	filterPromotedRows := false
 	if state := c.loadUniqueIndexPromotion; state != nil &&
 		state.phase == loadUniqueIndexPromotionFenced {
@@ -9245,8 +9393,20 @@ func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 		if filterPromotedRows && c.loadUniqueIndexPromotion.coversRowTarget(canonicalTarget) {
 			continue
 		}
+		if c.canPrePipelineLockNewTable(canonicalTarget) {
+			// The DDL owner supplied the newly created physical ID. Acquire its
+			// total range through the ordinary pre-pipeline lock path, before any
+			// source starts; failures still abort or retry the complete DDL. The
+			// physical disposition must not modify a reusable logical plan.
+			tableTarget := *canonicalTarget
+			tableTarget.LockTable = true
+			tableTarget.LockTableAtTheEnd = false
+			c.lockTables[tableTarget.TableId] = &tableTarget
+			promotedNewTable = true
+			continue
+		}
 		tbl := canonicalTarget
-		if localizeLoadPlan && (canonicalTarget.LockTable || canonicalTarget.LockTableAtTheEnd) {
+		if localizeLockPlan && (canonicalTarget.LockTable || canonicalTarget.LockTableAtTheEnd) {
 			// Only table-lock disposition is annotated during physical compile. A
 			// shallow value copy keeps the canonical generation immutable without
 			// changing allocation or mutation behavior for non-candidate statements.
@@ -9261,12 +9421,18 @@ func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 			}
 		}
 	}
-	if !localizeLoadPlan {
+	if !localizeLockPlan {
 		// Preserve exact-main compile behavior outside the positively admitted
-		// LOAD path, including its existing canonical-node reuse contract.
+		// internal INSERT and LOAD paths, including canonical-node reuse.
 		node.LockTargets = lockRows
 	}
 	if len(lockRows) == 0 {
+		if promotedNewTable && (!c.IsTpQuery() || len(ss) > 1 || len(c.pn.GetQuery().Steps) > 1) {
+			// Keep the original input merge and downstream writer placement/DOP.
+			// Only remove row-key preparation; attaching writers to reader scopes
+			// would also change object fanout and I/O behavior during backfill.
+			ss = []*Scope{c.newMergeScope(ss)}
+		}
 		return ss, nil
 	}
 
@@ -9291,7 +9457,7 @@ func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 	var err error
 	var lockOpArg *lockop.LockOp
 	lockNode := node
-	if localizeLoadPlan {
+	if localizeLockPlan {
 		localNode := *node
 		localNode.LockTargets = lockRows
 		lockNode = &localNode
@@ -9304,6 +9470,16 @@ func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 	ss[0].doSetRootOperator(lockOpArg)
 	c.anal.isFirst = false
 	return ss, nil
+}
+
+func (c *Compile) canPrePipelineLockNewTable(target *plan.LockTarget) bool {
+	if c.prePipelineLockTableID == 0 || target.TableId != c.prePipelineLockTableID ||
+		target.Mode != lock.LockMode_Exclusive || target.HasPartitionCol {
+		return false
+	}
+	qry := c.pn.GetQuery()
+	return qry != nil && qry.StmtType == plan.Query_INSERT && !qry.LoadTag &&
+		lockop.SupportsTotalLockTableRange(plan2.MakeTypeByPlan2Type(target.PrimaryColTyp))
 }
 
 func (c *Compile) compileRecursiveCte(node *plan.Node, curNodeIdx int32) ([]*Scope, error) {
@@ -10731,7 +10907,7 @@ func (c *Compile) evalAggOptimize(node *plan.Node, blk *objectio.BlockInfo, part
 }
 
 func dupType(typ *plan.Type) types.Type {
-	return types.NewWithCharset(types.T(typ.Id), typ.Width, typ.Scale, uint8(typ.Charset))
+	return types.MustTypeFromPlan(*typ)
 }
 
 func sameExecutionNode(left, right engine.Node) bool {

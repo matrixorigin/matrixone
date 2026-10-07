@@ -78,6 +78,11 @@ func constructCreateTableSQL(
 	includeChecks bool,
 	sourceSubscription *SubscriptionMeta,
 ) (string, tree.Statement, error) {
+	// Replaying native metadata through a legacy SQL alias would change its
+	// semantics. Until activation, reject rather than emit a lossy dump.
+	if err := plan.RequireLegacyCollations(tableDef); err != nil {
+		return "", nil, err
+	}
 	var err error
 	var createStr string
 	sqlMode := ""
