@@ -2944,7 +2944,10 @@ func getSqlForDbPubCount(ctx context.Context, dbName string) (string, error) {
 }
 
 func checkColExists(ctx context.Context, bh BackgroundExec, dbName, tblName, colName string) (exists bool, err error) {
-	sql := fmt.Sprintf("select 1 from mo_catalog.mo_columns where att_database = '%s' and att_relname = '%s' and attname = '%s'", dbName, tblName, colName)
+	// These compatibility checks describe sys-owned catalog tables, not the
+	// tenant rows stored in them. Include the leading catalog primary-key part
+	// so a check does not scan every tenant's column metadata.
+	sql := fmt.Sprintf("select 1 from mo_catalog.mo_columns where account_id = %d and att_database = '%s' and att_relname = '%s' and attname = '%s'", catalog.System_Account, dbName, tblName, colName)
 
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	bh.ClearExecResultSet()
