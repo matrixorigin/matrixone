@@ -23,6 +23,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
@@ -483,6 +485,24 @@ func TestClampSpillFDCapBoundaries(t *testing.T) {
 				test.configured, test.limit, test.known, got, test.want)
 		}
 	}
+}
+
+func TestSetExecutionResourceBudgetForTesting(t *testing.T) {
+	var nilProc *Process
+	require.ErrorIs(t, nilProc.SetExecutionResourceBudgetForTesting(nil), ErrExecutionResourceInvalid)
+	proc := &Process{Base: &BaseProcess{}}
+	require.ErrorIs(t, proc.SetExecutionResourceBudgetForTesting(nil), ErrExecutionResourceInvalid)
+	budget := MustNewExecutionResourceBudget(1000, 800)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	defer generation.Close()
+	require.NoError(t, proc.SetExecutionResourceBudgetForTesting(generation))
+	got, err := proc.GetExecutionResourceBudget()
+	require.NoError(t, err)
+	require.Same(t, generation, got)
+	require.ErrorIs(t, proc.SetExecutionResourceBudgetForTesting(generation), ErrExecutionResourceInvalid)
+	generation.Close()
+	require.ErrorIs(t, (&Process{Base: &BaseProcess{}}).SetExecutionResourceBudgetForTesting(generation), ErrExecutionResourceInvalid)
 }
 
 func TestGetExecutionResourceBudgetInitializesAndReusesCNAggregate(t *testing.T) {

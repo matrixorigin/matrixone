@@ -48,6 +48,41 @@ func TestMemory(t *testing.T) {
 	require.Equal(t, true, totalMemory >= availableMemory)
 }
 
+func TestMemoryStatsFromPages(t *testing.T) {
+	const total = uint64(16 << 30)
+	for _, pageSize := range []uint64{4096, 16384} {
+		for _, pages := range [][2]uint64{{0, 0}, {1, 0}, {32768, 65536}} {
+			t.Run(fmt.Sprintf("page-%d/free-%d/inactive-%d", pageSize, pages[0], pages[1]), func(t *testing.T) {
+				mem, err := memoryStatsFromPages(total, pages[0], pages[1], pageSize)
+				require.NoError(t, err)
+				require.Equal(t, pages[0]*pageSize, mem.Free)
+				require.Equal(t, (pages[0]+pages[1])*pageSize, mem.ActualFree)
+				require.Equal(t, total, mem.Used+mem.Free)
+				require.Equal(t, total, mem.ActualUsed+mem.ActualFree)
+			})
+		}
+	}
+	for _, input := range [][4]uint64{
+		{total, 0, 0, 0},
+		{total, total/4096 + 1, 0, 4096},
+		{total, total / 4096, 1, 4096},
+		{total, ^uint64(0), 0, 16384},
+	} {
+		_, err := memoryStatsFromPages(input[0], input[1], input[2], input[3])
+		require.Error(t, err)
+	}
+}
+
+func TestHostMemoryStats(t *testing.T) {
+	mem, err := hostMemoryStats()
+	require.NoError(t, err)
+	require.Positive(t, mem.Total)
+	require.LessOrEqual(t, mem.Free, mem.ActualFree)
+	require.LessOrEqual(t, mem.ActualFree, mem.Total)
+	require.Equal(t, mem.Total, mem.Used+mem.Free)
+	require.Equal(t, mem.Total, mem.ActualUsed+mem.ActualFree)
+}
+
 func TestMinHierarchicalCgroupLimit(t *testing.T) {
 	root := t.TempDir()
 	parent := filepath.Join(root, "tenant")

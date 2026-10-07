@@ -459,8 +459,7 @@ func MemoryAvailable() uint64 {
 		}
 		return memoryTotal.Load() - uint64(used)
 	}
-	s := gosigar.ConcreteSigar{}
-	mem, err := s.GetMem()
+	mem, err := hostMemoryStats()
 	if err != nil {
 		logutil.Errorf("failed to get memory stats: %v", err)
 	}
@@ -514,8 +513,7 @@ func MemoryAvailableIncludingCache() (avail uint64, measured bool) {
 		}
 		avail, measured = limit-usage, true
 	}
-	s := gosigar.ConcreteSigar{}
-	mem, err := s.GetMem()
+	mem, err := hostMemoryStats()
 	if err != nil {
 		logutil.Errorf("failed to get memory stats: %v", err)
 		return avail, measured
@@ -535,8 +533,7 @@ func MemoryUsed() uint64 {
 		}
 		return uint64(used)
 	}
-	s := gosigar.ConcreteSigar{}
-	mem, err := s.GetMem()
+	mem, err := hostMemoryStats()
 	if err != nil {
 		logutil.Errorf("failed to get memory stats: %v", err)
 	}
@@ -706,8 +703,7 @@ func shouldRefreshQuotaConfig() bool {
 }
 
 func hostMemoryTotal() (uint64, bool) {
-	s := gosigar.ConcreteSigar{}
-	mem, err := s.GetMem()
+	mem, err := hostMemoryStats()
 	if err != nil {
 		logutil.Errorf("failed to get host memory stats: %v", err)
 		return 0, false

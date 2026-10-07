@@ -2047,6 +2047,23 @@ func (proc *Process) GetExecutionResourceBudget() (*ExecutionResourceGeneration,
 	return generation, nil
 }
 
+// SetExecutionResourceBudgetForTesting installs a private, deterministic ledger
+// before operator preparation, without changing the shared CN or its live
+// headroom provider. The fixture must close the generation after its operators
+// are freed. This must only be called during setup, before query work begins.
+func (proc *Process) SetExecutionResourceBudgetForTesting(generation *ExecutionResourceGeneration) error {
+	if proc == nil || proc.Base == nil || generation == nil || generation.Closed() {
+		return ErrExecutionResourceInvalid
+	}
+	proc.Base.executionResourceBudgetMu.Lock()
+	defer proc.Base.executionResourceBudgetMu.Unlock()
+	if proc.Base.executionResourceBudget != nil {
+		return ErrExecutionResourceInvalid
+	}
+	proc.Base.executionResourceBudget = generation
+	return nil
+}
+
 type spillStorageRoot interface {
 	RootPath() string
 }

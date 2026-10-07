@@ -554,17 +554,23 @@ func TestRecoveryCapacityCoverCheckMatchesExactTarget(t *testing.T) {
 }
 
 func TestGroupAdaptiveSpillProjectsRecoveryGrowth(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	defer proc.Free()
-	proc.Base.Lim.Size = 64 << 20
-	generation, err := proc.GetExecutionResourceBudget()
+	// This boundary is the query ledger, not the test host's live pressure.
+	budget := process.MustNewExecutionResourceBudget(64<<20, 64<<20)
+	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
+	defer generation.Close()
 	participant, err := generation.RegisterMemoryGrowthParticipant()
 	require.NoError(t, err)
+	defer participant.Release()
 
 	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
 	hash, err := hashmap.NewIntHashMap(false, mp)
 	require.NoError(t, err)
+	defer func() {
+		hash.Free()
+		require.Zero(t, mp.CurrNB())
+	}()
 	hash.AddGroups(1)
 	ctr := container{
 		mp:                      mp,
@@ -591,11 +597,8 @@ func TestGroupAdaptiveSpillProjectsRecoveryGrowth(t *testing.T) {
 
 	ctr.releaseMemoryGrowthParticipant()
 	require.Zero(t, generation.Snapshot().MemoryGrowthParticipants)
-	hash.Free()
 	ctr.hr.Hash = nil
 	ctr.hr.TxnItr = nil
-	mpool.DeleteMPool(mp)
-	require.Zero(t, mp.CurrNB())
 }
 
 func mustGroupRecoveryAdd(t *testing.T, left, right uint64) uint64 {
@@ -2362,9 +2365,19 @@ func TestAccountedGroupQueuedSpillDoesNotRetainFDs(t *testing.T) {
 	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)},
 		[]aggexec.AggFuncExecExpression{countStarAgg()})
 	g.SpillMem = 2 // Values below 10000 are deterministic group-count thresholds.
-	allocation := installGroupTestAllocation(t, g, proc, 64<<20)
+	// Prepare against a private fixed ledger so live host pressure cannot
+	// reject an allocation before the queue/cancellation boundary under test.
+	budget := process.MustNewExecutionResourceBudget(64<<20, 64<<20)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	defer generation.Close()
+	var allocation groupTestAllocation
+	require.NoError(t, proc.SetExecutionResourceBudgetForTesting(generation))
 	defer func() {
 		g.Free(proc, false, nil)
+		if allocation.account == nil {
+			return // Initialization failed before the account was acquired.
+		}
 		require.Zero(t, allocation.account.Snapshot().Used)
 		require.Zero(t, allocation.generation.SpillFDUsed())
 		require.Zero(t, allocation.generation.SpillDiskUsed())
@@ -2388,6 +2401,7 @@ func TestAccountedGroupQueuedSpillDoesNotRetainFDs(t *testing.T) {
 		// opens a bucket. Queue length must not consume the reader's FD budget.
 		proc.Ctx = newCancelOnDoneCheckContext(proc.Ctx, nonEmptyBuckets+4)
 	}))
+	allocation = installGroupTestAllocation(t, g, proc, 64<<20)
 	require.NoError(t, g.Prepare(proc))
 	result, err := g.Call(proc)
 	require.ErrorIs(t, err, context.Canceled)

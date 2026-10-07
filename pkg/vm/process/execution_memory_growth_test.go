@@ -300,6 +300,46 @@ func TestExecutionMemoryAdmissionConsumesCachedPhysicalHeadroom(t *testing.T) {
 	require.True(t, reused.Release())
 }
 
+func TestExecutionMemoryAdmissionMeasuredHeadroomBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		available uint64
+		measured  bool
+		admitted  bool
+	}{
+		{name: "measured zero", measured: true},
+		{name: "below safety", available: 99, measured: true},
+		{name: "at safety", available: 100, measured: true},
+		{name: "one byte short", available: 123, measured: true},
+		{name: "exact allocation", available: 124, measured: true, admitted: true},
+		{name: "unavailable uses ledger", admitted: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			budget := MustNewExecutionResourceBudget(1000, 800)
+			budget.memoryHeadroomProvider = func() (uint64, bool) { return tc.available, tc.measured }
+			budget.memoryHeadroomSafety = 100
+			generation, err := budget.OpenGeneration(1)
+			require.NoError(t, err)
+			defer generation.Close()
+			reservation, err := generation.ReserveTransientMemory(24)
+			if reservation != nil {
+				defer reservation.Release()
+			}
+			if tc.admitted {
+				require.NoError(t, err)
+				require.NotNil(t, reservation)
+				require.Equal(t, uint64(24), generation.Used())
+				reservation.Release()
+			} else {
+				require.ErrorIs(t, err, ErrExecutionResourceAdmission)
+				require.Nil(t, reservation)
+			}
+			require.Zero(t, generation.Used())
+			require.Zero(t, budget.aggregateUsed)
+		})
+	}
+}
+
 func TestExecutionRecoveryBorrowsAlreadyAdmittedPhysicalHeadroom(t *testing.T) {
 	budget := MustNewExecutionResourceBudget(1_000, 800)
 	budget.memoryHeadroomProvider = func() (uint64, bool) { return 300, true }
