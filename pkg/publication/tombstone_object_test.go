@@ -93,7 +93,7 @@ func (m *mockCCPRTxnCacheWriterCB2) OnFileWritten(objectName string) {
 // filter_object.go — rewriteTombstoneRowidsBatch edge cases
 // ---------------------------------------------------------------------------
 
-func TestCoverageBoost2_RewriteTombstoneRowidsBatch_ZeroRows(t *testing.T) {
+func TestRewriteTombstoneRowidsBatch_ZeroRows(t *testing.T) {
 	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	require.NoError(t, err)
 	defer mp.Free(nil)
@@ -103,7 +103,7 @@ func TestCoverageBoost2_RewriteTombstoneRowidsBatch_ZeroRows(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestCoverageBoost2_RewriteTombstoneRowidsBatch_NoMapping(t *testing.T) {
+func TestRewriteTombstoneRowidsBatch_NoMapping(t *testing.T) {
 	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	require.NoError(t, err)
 	defer mp.Free(nil)
@@ -144,7 +144,7 @@ func newTestMemoryFS(t *testing.T) fileservice.FileService {
 	return fs
 }
 
-func TestCoverageBoost2_WriteObjectJob_Execute_NilCache_Success(t *testing.T) {
+func TestWriteObjectJob_Execute_NilCache_Success(t *testing.T) {
 	fs := newTestMemoryFS(t)
 	job := NewWriteObjectJob(context.Background(), fs, "test-obj-1", []byte("content"), nil, nil)
 	job.Execute()
@@ -152,7 +152,7 @@ func TestCoverageBoost2_WriteObjectJob_Execute_NilCache_Success(t *testing.T) {
 	assert.NoError(t, res.Err)
 }
 
-func TestCoverageBoost2_WriteObjectJob_Execute_NilCache_FileExists(t *testing.T) {
+func TestWriteObjectJob_Execute_NilCache_FileExists(t *testing.T) {
 	fs := newTestMemoryFS(t)
 	// Write once
 	job1 := NewWriteObjectJob(context.Background(), fs, "test-obj-dup", []byte("content"), nil, nil)
@@ -166,7 +166,7 @@ func TestCoverageBoost2_WriteObjectJob_Execute_NilCache_FileExists(t *testing.T)
 	assert.NoError(t, res2.Err)
 }
 
-func TestCoverageBoost2_WriteObjectJob_Execute_WithCache_CacheError(t *testing.T) {
+func TestWriteObjectJob_Execute_WithCache_CacheError(t *testing.T) {
 	cache := &mockCCPRTxnCacheWriterCB2{
 		writeObjectFn: func(ctx context.Context, objectName string, txnID []byte) (bool, error) {
 			return false, moerr.NewInternalErrorNoCtx("cache error")
@@ -179,7 +179,7 @@ func TestCoverageBoost2_WriteObjectJob_Execute_WithCache_CacheError(t *testing.T
 	assert.Contains(t, res.Err.Error(), "cache error")
 }
 
-func TestCoverageBoost2_WriteObjectJob_Execute_WithCache_NotNewFile(t *testing.T) {
+func TestWriteObjectJob_Execute_WithCache_NotNewFile(t *testing.T) {
 	cache := &mockCCPRTxnCacheWriterCB2{
 		writeObjectFn: func(ctx context.Context, objectName string, txnID []byte) (bool, error) {
 			return false, nil // not a new file
@@ -191,7 +191,7 @@ func TestCoverageBoost2_WriteObjectJob_Execute_WithCache_NotNewFile(t *testing.T
 	assert.NoError(t, res.Err)
 }
 
-func TestCoverageBoost2_WriteObjectJob_Execute_WithCache_NewFile_Success(t *testing.T) {
+func TestWriteObjectJob_Execute_WithCache_NewFile_Success(t *testing.T) {
 	fs := newTestMemoryFS(t)
 	notified := false
 	cache := &mockCCPRTxnCacheWriterCB2{
@@ -213,7 +213,7 @@ func TestCoverageBoost2_WriteObjectJob_Execute_WithCache_NewFile_Success(t *test
 // filter_object_job.go — FilterObjectJob Execute paths
 // ---------------------------------------------------------------------------
 
-func TestCoverageBoost2_FilterObjectJob_Execute_TTLPassesButFilterFails(t *testing.T) {
+func TestFilterObjectJob_Execute_TTLPassesButFilterFails(t *testing.T) {
 	// TTL checker passes, but FilterObject fails due to invalid stats bytes
 	job := NewFilterObjectJob(
 		context.Background(),
@@ -228,7 +228,7 @@ func TestCoverageBoost2_FilterObjectJob_Execute_TTLPassesButFilterFails(t *testi
 	assert.Contains(t, res.Err.Error(), "invalid object stats length")
 }
 
-func TestCoverageBoost2_UpstreamExecutor_EndTxn_NilTx_Rollback(t *testing.T) {
+func TestUpstreamExecutor_EndTxn_NilTx_Rollback(t *testing.T) {
 	e := &UpstreamExecutor{}
 	err := e.EndTxn(context.Background(), false)
 	assert.NoError(t, err)
@@ -238,7 +238,7 @@ func TestCoverageBoost2_UpstreamExecutor_EndTxn_NilTx_Rollback(t *testing.T) {
 // sql_executor.go — tryDecryptPassword with executor but empty cnUUID
 // ---------------------------------------------------------------------------
 
-func TestCoverageBoost2_TryDecryptPassword_ExecutorNotNil_EmptyCnUUID(t *testing.T) {
+func TestTryDecryptPassword_ExecutorNotNil_EmptyCnUUID(t *testing.T) {
 	exec := &mockSQLExecutorCB2{
 		execFn: func(_ context.Context, _ *ActiveRoutine, _ uint32, _ string, _ bool, _ bool, _ time.Duration) (*Result, context.CancelFunc, error) {
 			return nil, nil, nil
@@ -254,21 +254,21 @@ func TestCoverageBoost2_TryDecryptPassword_ExecutorNotNil_EmptyCnUUID(t *testing
 // executor.go — Cancel, Pause, Restart when not running
 // ---------------------------------------------------------------------------
 
-func TestCoverageBoost2_PublicationTaskExecutor_Cancel_NotRunning(t *testing.T) {
+func TestPublicationTaskExecutor_Cancel_NotRunning(t *testing.T) {
 	exec := &PublicationTaskExecutor{}
 	err := exec.Cancel()
 	assert.NoError(t, err)
 	assert.False(t, exec.IsRunning())
 }
 
-func TestCoverageBoost2_PublicationTaskExecutor_Pause_NotRunning(t *testing.T) {
+func TestPublicationTaskExecutor_Pause_NotRunning(t *testing.T) {
 	exec := &PublicationTaskExecutor{}
 	err := exec.Pause()
 	assert.NoError(t, err)
 	assert.False(t, exec.IsRunning())
 }
 
-func TestCoverageBoost2_PublicationTaskExecutor_Start_AlreadyRunning(t *testing.T) {
+func TestPublicationTaskExecutor_Start_AlreadyRunning(t *testing.T) {
 	exec := &PublicationTaskExecutor{}
 	exec.running = true
 	err := exec.Start()
@@ -283,7 +283,7 @@ func TestCoverageBoost2_PublicationTaskExecutor_Start_AlreadyRunning(t *testing.
 // executor.go — getCandidateTasks
 // ---------------------------------------------------------------------------
 
-func TestCoverageBoost2_GetCandidateTasks_Mixed(t *testing.T) {
+func TestGetCandidateTasks_Mixed(t *testing.T) {
 	exec := &PublicationTaskExecutor{}
 	exec.tasks = btree.NewBTreeGOptions(taskEntryLess, btree.Options{NoLocks: true})
 	exec.setTask(TaskEntry{TaskID: "t1", SubscriptionState: SubscriptionStateRunning, State: IterationStateCompleted})
@@ -302,7 +302,7 @@ func TestCoverageBoost2_GetCandidateTasks_Mixed(t *testing.T) {
 	assert.True(t, taskIDs["t5"])
 }
 
-func TestCoverageBoost2_GetCandidateTasks_Empty(t *testing.T) {
+func TestGetCandidateTasks_Empty(t *testing.T) {
 	exec := &PublicationTaskExecutor{}
 	exec.tasks = btree.NewBTreeGOptions(taskEntryLess, btree.Options{NoLocks: true})
 	candidates := exec.getCandidateTasks()
@@ -317,7 +317,7 @@ func TestCoverageBoost2_GetCandidateTasks_Empty(t *testing.T) {
 // executor.go — getAllTasks
 // ---------------------------------------------------------------------------
 
-func TestCoverageBoost2_GetAllTasks(t *testing.T) {
+func TestGetAllTasks(t *testing.T) {
 	exec := &PublicationTaskExecutor{}
 	exec.tasks = btree.NewBTreeGOptions(taskEntryLess, btree.Options{NoLocks: true})
 	exec.setTask(TaskEntry{TaskID: "a"})
@@ -344,7 +344,7 @@ func (m *mockClassifierCB2) IsRetryable(err error) bool {
 // sql_executor.go — ExecSQL with ActiveRoutine (not nil)
 // ---------------------------------------------------------------------------
 
-func TestCoverageBoost2_UpstreamExecutor_ExecWithRetry_ActiveRoutine_Pause(t *testing.T) {
+func TestUpstreamExecutor_ExecWithRetry_ActiveRoutine_Pause(t *testing.T) {
 	e := &UpstreamExecutor{
 		retryTimes:    5,
 		retryDuration: time.Minute,
@@ -361,7 +361,7 @@ func TestCoverageBoost2_UpstreamExecutor_ExecWithRetry_ActiveRoutine_Pause(t *te
 	assert.Contains(t, err.Error(), "task paused")
 }
 
-func TestCoverageBoost2_UpstreamExecutor_ExecWithRetry_ActiveRoutine_Cancel(t *testing.T) {
+func TestUpstreamExecutor_ExecWithRetry_ActiveRoutine_Cancel(t *testing.T) {
 	e := &UpstreamExecutor{
 		retryTimes:    5,
 		retryDuration: time.Minute,

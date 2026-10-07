@@ -112,50 +112,65 @@ func TestResult_Err(t *testing.T) {
 
 func TestParseUpstreamConn(t *testing.T) {
 	tests := []struct {
-		name        string
-		connStr     string
-		wantAccount string
-		wantUser    string
-		wantHost    string
-		wantPort    int
-		wantErr     bool
-		errContains string
+		name         string
+		connStr      string
+		wantAccount  string
+		wantUser     string
+		wantPassword string
+		wantHost     string
+		wantPort     int
+		wantErr      bool
+		errContains  string
 	}{
 		{
-			name:        "valid connection with account",
-			connStr:     "mysql://acc#user:password@127.0.0.1:6001",
-			wantAccount: "acc",
-			wantUser:    "user",
-			wantHost:    "127.0.0.1",
-			wantPort:    6001,
-			wantErr:     false,
+			name:         "valid connection with account",
+			connStr:      "mysql://acc#user:password@127.0.0.1:6001",
+			wantAccount:  "acc",
+			wantUser:     "user",
+			wantPassword: "password",
+			wantHost:     "127.0.0.1",
+			wantPort:     6001,
+			wantErr:      false,
 		},
 		{
-			name:        "valid connection without account",
-			connStr:     "mysql://user:password@127.0.0.1:6001",
-			wantAccount: "",
-			wantUser:    "user",
-			wantHost:    "127.0.0.1",
-			wantPort:    6001,
-			wantErr:     false,
+			name:         "valid connection without account",
+			connStr:      "mysql://user:password@127.0.0.1:6001",
+			wantAccount:  "",
+			wantUser:     "user",
+			wantPassword: "password",
+			wantHost:     "127.0.0.1",
+			wantPort:     6001,
+			wantErr:      false,
 		},
 		{
-			name:        "valid connection with complex password",
-			connStr:     "mysql://acc#user:pass:word@localhost:3306",
-			wantAccount: "acc",
-			wantUser:    "user",
-			wantHost:    "localhost",
-			wantPort:    3306,
-			wantErr:     false,
+			name:         "valid connection with complex password",
+			connStr:      "mysql://acc#user:pass:word@localhost:3306",
+			wantAccount:  "acc",
+			wantUser:     "user",
+			wantPassword: "pass:word",
+			wantHost:     "localhost",
+			wantPort:     3306,
+			wantErr:      false,
 		},
 		{
-			name:        "valid connection with query parameters",
-			connStr:     "mysql://acc#user:password@127.0.0.1:6001/dbname?param=value",
-			wantAccount: "acc",
-			wantUser:    "user",
-			wantHost:    "127.0.0.1",
-			wantPort:    6001,
-			wantErr:     false,
+			name:         "valid connection with query parameters",
+			connStr:      "mysql://acc#user:password@127.0.0.1:6001/dbname?param=value",
+			wantAccount:  "acc",
+			wantUser:     "user",
+			wantPassword: "password",
+			wantHost:     "127.0.0.1",
+			wantPort:     6001,
+			wantErr:      false,
+		},
+		{
+			name:         "valid connection with colon in standard password",
+			connStr:      "mysql://user:pa:ss:word@127.0.0.1:6001",
+			wantAccount:  "",
+			wantUser:     "user",
+			wantPassword: "pa:ss:word",
+			wantHost:     "127.0.0.1",
+			wantPort:     6001,
+			wantErr:      false,
 		},
 		{
 			name:        "empty connection string",
@@ -174,6 +189,12 @@ func TestParseUpstreamConn(t *testing.T) {
 			connStr:     "mysql://user:password",
 			wantErr:     true,
 			errContains: "missing '@'",
+		},
+		{
+			name:        "missing user colon",
+			connStr:     "mysql://user@host:3306",
+			wantErr:     true,
+			errContains: "invalid user:password format",
 		},
 		{
 			name:        "empty user with account",
@@ -233,6 +254,7 @@ func TestParseUpstreamConn(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantAccount, config.Account)
 			assert.Equal(t, tt.wantUser, config.User)
+			assert.Equal(t, tt.wantPassword, config.Password)
 			assert.Equal(t, tt.wantHost, config.Host)
 			assert.Equal(t, tt.wantPort, config.Port)
 			assert.NotEmpty(t, config.Timeout)
