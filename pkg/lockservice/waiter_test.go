@@ -17,6 +17,7 @@ package lockservice
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -42,12 +43,29 @@ func TestWait(t *testing.T) {
 		defer w.close("", nil)
 
 		w.setStatus(blocking)
+		entered := make(chan struct{})
+		var enteredOnce sync.Once
+		w.beforeSwapStatusAdjustFunc = func() {
+			enteredOnce.Do(func() {
+				close(entered)
+			})
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		done := make(chan notifyValue, 1)
 		go func() {
-			time.Sleep(time.Millisecond * 10)
-			w.notify(notifyValue{}, getLogger(""))
+			done <- w.wait(ctx, getLogger(""))
 		}()
 
-		assert.NoError(t, w.wait(context.Background(), getLogger("")).err)
+		<-entered
+		notified := w.notify(notifyValue{}, getLogger(""))
+		if !notified {
+			cancel()
+		}
+		result := <-done
+		require.True(t, notified)
+		assert.NoError(t, result.err)
 	})
 }
 
