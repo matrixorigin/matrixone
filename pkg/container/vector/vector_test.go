@@ -6249,71 +6249,108 @@ func TestSelectedBatchPreflightProtocol(t *testing.T) {
 		"a rejected aliased preflight must not leave a publishable proof")
 }
 
-func TestUnionOneMetadataTransitions(t *testing.T) {
-	for _, metadata := range []string{"ordinary", "source", "kind", "domain", "text_prefix"} {
-		t.Run(metadata, func(t *testing.T) {
-			mp := mpool.MustNewZero()
-			source := NewVec(types.T_varchar.ToType())
-			destination := NewVec(types.T_varchar.ToType())
-			var changed, constant *Vector
-			t.Cleanup(func() {
-				source.Free(mp)
-				changed.Free(mp)
-				constant.Free(mp)
-				destination.Free(mp)
-				require.Zero(t, mp.CurrNB())
-			})
-			require.NoError(t, AppendBytesList(source, [][]byte{
-				[]byte("value"), nil, []byte(strings.Repeat("long", 16)),
-			}, []bool{false, true, false}, mp))
-			require.NoError(t, source.SetStringSource(types.StringSourceLiteral))
-			nulls.Add(source.GetGrouping(), 1)
-			changed, err := source.Dup(mp)
-			require.NoError(t, err)
-			switch metadata {
-			case "source":
-				require.NoError(t, changed.SetStringSourceAtWithMP(1, types.StringSourceUserVariable, mp))
-			case "kind":
-				require.NoError(t, changed.SetPrepareParamKindsWithMP(
-					[]PrepareParamKind{PrepareParamInteger, PrepareParamNone, PrepareParamFloat}, mp))
-			case "domain":
-				require.NoError(t, changed.SetRuntimeStringDomainsWithMP([]types.RuntimeStringDomain{
-					types.RuntimeStringBinary, types.RuntimeStringInherit, types.RuntimeStringInherit,
-				}, mp))
-			case "text_prefix":
-				require.NoError(t, changed.SetRuntimeStringDomainWithMP(types.RuntimeStringText, mp))
-			}
-			constant, err = NewConstBytes(types.T_varchar.ToType(), []byte("constant"), 4, mp)
-			require.NoError(t, err)
-			require.NoError(t, constant.SetStringSource(types.StringSourceLiteral))
-			rows := []struct {
-				vec *Vector
-				row int
-			}{{source, 1}, {constant, 3}, {source, 2}, {changed, 1},
-				{changed, 0}, {changed, 2}, {source, 0}, {source, 1}}
-			if metadata == "text_prefix" {
-				rows = rows[:3]
-				rows[0].vec, rows[0].row = changed, 0
-			}
-			for range 2 { // Reuse must not retain a previous mixed representation.
-				destination.ResetWithSameType()
-				for end, input := range rows {
-					require.NoError(t, destination.UnionOne(input.vec, int64(input.row), mp))
-					for row, expected := range rows[:end+1] {
-						isNull := expected.vec.IsNull(uint64(expected.row))
-						require.Equal(t, isNull, destination.IsNull(uint64(row)))
-						if !isNull {
-							require.Equal(t, expected.vec.GetBytesAt(expected.row), destination.GetBytesAt(row))
+func TestUnionAppendMetadataTransitions(t *testing.T) {
+	for _, copies := range []int{1, 3} {
+		for _, metadata := range []string{"ordinary", "source", "kind", "domain", "text_prefix"} {
+			t.Run(fmt.Sprintf("%s/copies=%d", metadata, copies), func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				source := NewVec(types.T_varchar.ToType())
+				destination := NewVec(types.T_varchar.ToType())
+				var changed, constant *Vector
+				t.Cleanup(func() {
+					source.Free(mp)
+					changed.Free(mp)
+					constant.Free(mp)
+					destination.Free(mp)
+					require.Zero(t, mp.CurrNB())
+				})
+				require.NoError(t, AppendBytesList(source, [][]byte{
+					[]byte("value"), nil, []byte(strings.Repeat("long", 16)),
+				}, []bool{false, true, false}, mp))
+				require.NoError(t, source.SetStringSource(types.StringSourceLiteral))
+				nulls.Add(source.GetGrouping(), 1)
+				changed, err := source.Dup(mp)
+				require.NoError(t, err)
+				switch metadata {
+				case "source":
+					require.NoError(t, changed.SetStringSourceAtWithMP(1, types.StringSourceUserVariable, mp))
+				case "kind":
+					require.NoError(t, changed.SetPrepareParamKindsWithMP(
+						[]PrepareParamKind{PrepareParamInteger, PrepareParamNone, PrepareParamFloat}, mp))
+				case "domain":
+					require.NoError(t, changed.SetRuntimeStringDomainsWithMP([]types.RuntimeStringDomain{
+						types.RuntimeStringBinary, types.RuntimeStringInherit, types.RuntimeStringInherit,
+					}, mp))
+				case "text_prefix":
+					require.NoError(t, changed.SetRuntimeStringDomainWithMP(types.RuntimeStringText, mp))
+				}
+				constant, err = NewConstBytes(types.T_varchar.ToType(), []byte("constant"), 4, mp)
+				require.NoError(t, err)
+				require.NoError(t, constant.SetStringSource(types.StringSourceLiteral))
+				rows := []struct {
+					vec *Vector
+					row int
+				}{{source, 1}, {constant, 3}, {source, 2}, {changed, 1},
+					{changed, 0}, {changed, 2}, {source, 0}, {source, 1}}
+				if metadata == "text_prefix" {
+					rows = rows[:3]
+					rows[0].vec, rows[0].row = changed, 0
+				}
+				for range 2 { // Reuse must not retain a previous mixed representation.
+					destination.ResetWithSameType()
+					for end, input := range rows {
+						if copies == 1 {
+							require.NoError(t, destination.UnionOne(input.vec, int64(input.row), mp))
+						} else {
+							require.NoError(t, destination.UnionMulti(input.vec, int64(input.row), copies, mp))
 						}
-						require.Equal(t, expected.vec.GetGrouping().Contains(uint64(expected.row)),
-							destination.GetGrouping().Contains(uint64(row)))
-						require.Equal(t, expected.vec.GetStringSourceAt(expected.row), destination.GetStringSourceAt(row))
-						require.Equal(t, expected.vec.GetPrepareParamKindAt(expected.row), destination.GetPrepareParamKindAt(row))
-						require.Equal(t, expected.vec.GetRuntimeStringDomainAt(expected.row), destination.GetRuntimeStringDomainAt(row))
+						require.Equal(t, (end+1)*copies, destination.Length())
+						for row := range destination.Length() {
+							expected := rows[row/copies]
+							isNull := expected.vec.IsNull(uint64(expected.row))
+							require.Equal(t, isNull, destination.IsNull(uint64(row)))
+							if !isNull {
+								require.Equal(t, expected.vec.GetBytesAt(expected.row), destination.GetBytesAt(row))
+							}
+							require.Equal(t, expected.vec.GetGrouping().Contains(uint64(expected.row)),
+								destination.GetGrouping().Contains(uint64(row)))
+							require.Equal(t, expected.vec.GetStringSourceAt(expected.row), destination.GetStringSourceAt(row))
+							require.Equal(t, expected.vec.GetPrepareParamKindAt(expected.row), destination.GetPrepareParamKindAt(row))
+							require.Equal(t, expected.vec.GetRuntimeStringDomainAt(expected.row), destination.GetRuntimeStringDomainAt(row))
+						}
 					}
 				}
-			}
-		})
+			})
+		}
+	}
+}
+
+func BenchmarkUnionMultiUniformMetadata(b *testing.B) {
+	for _, oid := range []types.T{types.T_int64, types.T_varchar} {
+		for _, copies := range []int{1, 8, 64} {
+			b.Run(fmt.Sprintf("%s/copies=%d", oid, copies), func(b *testing.B) {
+				mp := mpool.MustNewZero()
+				source := NewVec(oid.ToType())
+				defer source.Free(mp)
+				destination := NewVec(oid.ToType())
+				defer destination.Free(mp)
+				if oid == types.T_int64 {
+					require.NoError(b, AppendFixed(source, int64(42), false, mp))
+				} else {
+					require.NoError(b, AppendBytes(source, []byte("ordinary column value"), false, mp))
+				}
+				require.NoError(b, source.SetStringSource(types.StringSourceLiteral))
+				require.NoError(b, destination.PreExtend(copies, mp))
+				b.ReportAllocs()
+				b.ResetTimer()
+				for b.Loop() {
+					destination.ResetWithSameType()
+					if err := destination.UnionMulti(source, 0, copies, mp); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+		}
 	}
 }
 
@@ -6734,22 +6771,35 @@ func BenchmarkUnionBatchPrepareParamKind(b *testing.B) {
 	}
 }
 
-func BenchmarkUnionBatchNoMetadata(b *testing.B) {
-	mp := mpool.MustNewZero()
-	source := NewVec(types.T_int64.ToType())
-	defer source.Free(mp)
-	for i := 0; i < 1024; i++ {
-		require.NoError(b, AppendFixed(source, int64(i), false, mp))
-	}
-	destination := NewVec(types.T_int64.ToType())
-	defer destination.Free(mp)
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		destination.ResetWithSameType()
-		if err := destination.UnionBatch(source, 0, source.Length(), nil, mp); err != nil {
-			b.Fatal(err)
-		}
+func BenchmarkUnionBatchFixedRange(b *testing.B) {
+	for _, test := range []struct {
+		name      string
+		nullEvery int
+	}{
+		{name: "no-null"},
+		{name: "sparse", nullEvery: 100},
+		{name: "dense", nullEvery: 2},
+		{name: "all-null", nullEvery: 1},
+	} {
+		b.Run(test.name, func(b *testing.B) {
+			mp := mpool.MustNewZero()
+			source := NewVec(types.T_int64.ToType())
+			defer source.Free(mp)
+			for i := 0; i < 1024; i++ {
+				isNull := test.nullEvery != 0 && i%test.nullEvery == 0
+				require.NoError(b, AppendFixed(source, int64(i), isNull, mp))
+			}
+			destination := NewVec(types.T_int64.ToType())
+			defer destination.Free(mp)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				destination.ResetWithSameType()
+				if err := destination.UnionBatch(source, 0, source.Length(), nil, mp); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }
 

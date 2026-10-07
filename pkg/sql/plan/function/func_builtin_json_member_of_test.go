@@ -382,6 +382,8 @@ func TestJSONMemberOfLargeConstantArrayUsesExactComparator(t *testing.T) {
 }
 
 func TestJSONMemberOfNullLeftSkipsRightValidation(t *testing.T) {
+	// Children are sequential; each case owns its vectors and result.
+	proc := testutil.NewProcess(t)
 	binaryCharset := types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetBinary)
 	tests := []struct {
 		name  string
@@ -407,7 +409,6 @@ func TestJSONMemberOfNullLeftSkipsRightValidation(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			proc := testutil.NewProcess(t)
 			testCase := NewFunctionTestCase(
 				proc,
 				[]FunctionTestInput{
@@ -422,7 +423,6 @@ func TestJSONMemberOfNullLeftSkipsRightValidation(t *testing.T) {
 		})
 	}
 
-	proc := testutil.NewProcess(t)
 	prepared := NewFunctionTestCase(
 		proc,
 		[]FunctionTestInput{
@@ -471,11 +471,13 @@ func TestJSONMemberOfFunctionRegistration(t *testing.T) {
 }
 
 func TestJSONMemberOfRejectsInvalidRightDomainsAtExecution(t *testing.T) {
+	// Children are sequential; each case owns its vectors and result.
+	proc := testutil.NewProcess(t)
 	want := "Cannot create a JSON value from a string with CHARACTER SET 'binary'."
 	for _, oid := range []types.T{types.T_binary, types.T_varbinary, types.T_blob} {
 		func() {
 			testCase := NewFunctionTestCase(
-				testutil.NewProcess(t),
+				proc,
 				[]FunctionTestInput{
 					NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, nil),
 					NewFunctionTestInput(oid.ToType(), []string{"[1]"}, nil),
@@ -493,7 +495,7 @@ func TestJSONMemberOfRejectsInvalidRightDomainsAtExecution(t *testing.T) {
 
 	binaryCharset := types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetBinary)
 	testCase := NewFunctionTestCase(
-		testutil.NewProcess(t),
+		proc,
 		[]FunctionTestInput{
 			NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, nil),
 			NewFunctionTestInput(binaryCharset, []string{"[1]"}, nil),
@@ -594,8 +596,9 @@ func TestJSONMemberOfPreservesSpecialScalarDomains(t *testing.T) {
 
 func TestJSONMemberOfPreparedSpecialDomains(t *testing.T) {
 	const geoJSON = `[{"type":"Point","coordinates":[1,2]}]`
+	proc := testutil.NewProcess(t)
 	preparedGeometry := NewFunctionTestCase(
-		testutil.NewProcess(t),
+		proc,
 		[]FunctionTestInput{
 			NewFunctionTestInput(types.T_text.ToType(), []string{string(encodeGeometryPayload("POINT(1 2)", 0, false))}, nil),
 			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{geoJSON}, nil),
@@ -610,7 +613,7 @@ func TestJSONMemberOfPreparedSpecialDomains(t *testing.T) {
 	require.True(t, succeed, message)
 
 	preparedEnum := NewFunctionTestCase(
-		testutil.NewProcess(t),
+		proc,
 		[]FunctionTestInput{
 			NewFunctionTestInput(types.T_text.ToType(), []string{"red"}, nil),
 			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{`["red"]`}, nil),
@@ -626,6 +629,8 @@ func TestJSONMemberOfPreparedSpecialDomains(t *testing.T) {
 }
 
 func TestJSONMemberOfRejectsLossyPreparedDomains(t *testing.T) {
+	// Children are sequential; each case owns its vectors and result.
+	proc := testutil.NewProcess(t)
 	for _, test := range []struct {
 		name string
 		typ  types.T
@@ -636,7 +641,6 @@ func TestJSONMemberOfRejectsLossyPreparedDomains(t *testing.T) {
 		{name: "vecf64", typ: types.T_array_float64, data: "[1 2]"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			proc := testutil.NewProcess(t)
 			testCase := NewFunctionTestCase(
 				proc,
 				[]FunctionTestInput{

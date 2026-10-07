@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
 
@@ -49,7 +50,12 @@ func BenchmarkAutoIDCacheBulkAllocationRequests(b *testing.B) {
 					for range b.N {
 						func() {
 							store := &autoIDCacheStore{IncrValueStore: NewMemStore()}
-							cols := []AutoColumn{{ColName: catalog.FakePrimaryKeyColName, Step: 1, isInternal: true}}
+							// Use the production CREATE qualification so this fixture also
+							// measures an unmodified main allocator with the same input.
+							cols := GetAutoColumnFromDef(&plan.TableDef{Cols: []*plan.ColDef{{
+								Name: catalog.FakePrimaryKeyColName, Hidden: true,
+								Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true},
+							}}})
 							require.NoError(b, store.Create(ctx, 0, cols, nil))
 							cfg := Config{}
 							cfg.adjust()

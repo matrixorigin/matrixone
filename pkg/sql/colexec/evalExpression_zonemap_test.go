@@ -38,6 +38,8 @@ import (
 )
 
 func TestEvaluateFilterByZoneMapDatetimeTimestampComparison(t *testing.T) {
+	// Children are sequential; each case sets its timezone before evaluation.
+	proc := testutil.NewProcess(t)
 	parseDatetime := func(t *testing.T, value string) types.Datetime {
 		t.Helper()
 		datetime, err := types.ParseDatetime(value, 6)
@@ -62,8 +64,6 @@ func TestEvaluateFilterByZoneMapDatetimeTimestampComparison(t *testing.T) {
 	}
 
 	t.Run("fixed offset prunes", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
-		defer proc.Free()
 		zone := time.FixedZone("UTC+08", 8*3600)
 		proc.GetSessionInfo().TimeZone = zone
 		threshold := parseDatetime(t, "2026-08-10 12:00:00").ToTimestamp(zone)
@@ -79,8 +79,6 @@ func TestEvaluateFilterByZoneMapDatetimeTimestampComparison(t *testing.T) {
 	})
 
 	t.Run("ordinary named-zone range prunes", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
-		defer proc.Free()
 		zone, err := time.LoadLocation("America/New_York")
 		require.NoError(t, err)
 		proc.GetSessionInfo().TimeZone = zone
@@ -97,8 +95,6 @@ func TestEvaluateFilterByZoneMapDatetimeTimestampComparison(t *testing.T) {
 	})
 
 	t.Run("DST fold is conservative", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
-		defer proc.Free()
 		zone, err := time.LoadLocation("America/New_York")
 		require.NoError(t, err)
 		proc.GetSessionInfo().TimeZone = zone
@@ -116,8 +112,6 @@ func TestEvaluateFilterByZoneMapDatetimeTimestampComparison(t *testing.T) {
 	})
 
 	t.Run("timestamp scale is applied before pruning", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
-		defer proc.Free()
 		proc.GetSessionInfo().TimeZone = time.UTC
 		value := parseDatetime(t, "2026-08-10 12:00:00.123456")
 		threshold := value.ToTimestamp(time.UTC).TruncateToScale(3)
@@ -130,8 +124,6 @@ func TestEvaluateFilterByZoneMapDatetimeTimestampComparison(t *testing.T) {
 	})
 
 	t.Run("between prunes", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
-		defer proc.Free()
 		zone := time.FixedZone("UTC+08", 8*3600)
 		proc.GetSessionInfo().TimeZone = zone
 		column := &plan.Expr{
@@ -155,8 +147,6 @@ func TestEvaluateFilterByZoneMapDatetimeTimestampComparison(t *testing.T) {
 	})
 
 	t.Run("between preserves common value scale", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
-		defer proc.Free()
 		proc.GetSessionInfo().TimeZone = time.UTC
 		value := parseDatetime(t, "2026-08-10 12:00:00.123456")
 		column := &plan.Expr{
