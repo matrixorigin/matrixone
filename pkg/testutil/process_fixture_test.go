@@ -137,6 +137,31 @@ func TestProcessFixtureBorrowedDependencies(t *testing.T) {
 	}))
 }
 
+func TestProcessFixtureOwnedMPool(t *testing.T) {
+	ensureAutoIncrService("")
+	const tag = "must_new_zero"
+	before := fixturePoolCount(t, tag)
+	require.True(t, t.Run("owned", func(t *testing.T) {
+		proc := NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+		mp := proc.Mp()
+		require.Equal(t, before+1, fixturePoolCount(t, tag))
+
+		blocks := make([][]byte, 0, 2)
+		for _, offHeap := range []bool{false, true} {
+			block, err := mp.Alloc(1, offHeap)
+			require.NoError(t, err)
+			blocks = append(blocks, block)
+		}
+		t.Cleanup(func() {
+			for _, block := range blocks {
+				mp.Free(block)
+			}
+			require.Equal(t, before+1, fixturePoolCount(t, tag), "caller cleanup must precede owned pool deletion")
+		})
+	}))
+	require.Equal(t, before, fixturePoolCount(t, tag))
+}
+
 func TestProcessFixtureManualLifetime(t *testing.T) {
 	ensureAutoIncrService("")
 	const tag = "must_new_zero_no_fixed"
