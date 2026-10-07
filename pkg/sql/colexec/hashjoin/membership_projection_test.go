@@ -32,7 +32,7 @@ func TestHashJoinMembershipProjection(t *testing.T) {
 	for _, joinType := range []plan.Node_JoinType{plan.Node_SEMI, plan.Node_ANTI} {
 		t.Run(joinType.String(), func(t *testing.T) {
 			typ := types.T_int32.ToType()
-			tc := newTestCase(t, []bool{false}, []types.Type{typ}, nil,
+			tc := newTestCase(t, []types.Type{typ}, nil,
 				[][]*plan.Expr{{newExpr(0, typ)}, {newExpr(0, typ)}})
 			tc.arg.JoinType = joinType
 			residual := tc.arg.NonEqCond
@@ -159,7 +159,7 @@ func BenchmarkHashJoinMembershipProjection(b *testing.B) {
 	for _, joinType := range []plan.Node_JoinType{plan.Node_SEMI, plan.Node_ANTI} {
 		b.Run(joinType.String(), func(b *testing.B) {
 			typ := types.T_int32.ToType()
-			tc := newTestCase(b, []bool{false}, []types.Type{typ}, nil,
+			tc := newTestCase(b, []types.Type{typ}, nil,
 				[][]*plan.Expr{{newExpr(0, typ)}, {newExpr(0, typ)}})
 			tc.arg.JoinType, tc.arg.NonEqCond = joinType, nil
 			tc.arg.ResultCols = []colexec.ResultPos{{Rel: 0, Pos: 0}}

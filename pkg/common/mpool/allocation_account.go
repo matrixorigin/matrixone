@@ -939,10 +939,7 @@ func (r *AllocationAccountRegistry) publishTerminalSnapshot(
 			AllocationAccountSnapshot: current,
 			State:                     AllocationAccountTerminalInvariantFailure,
 			Owners:                    owners,
-		}, false, wrapAllocationAccountError(
-			ErrAllocationAccountInvariant,
-			"terminal account is not quiescent",
-		)
+		}, false, wrapAllocationAccountError(ErrAllocationAccountInvariant, "terminal account is not quiescent")
 	}
 	if liveCapacityControllers != 0 {
 		terminalCause = errors.Join(
