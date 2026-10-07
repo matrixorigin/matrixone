@@ -458,8 +458,10 @@ func SetBytesToAnyVector(ctx context.Context, val string, row int,
 			return vector.SetFixedAtNoTypeCheck(vec, row, types.CanonicalLowPrecFloat(types.Float16FromFloat32(float32(v))))
 		case types.T_float8:
 			return vector.SetFixedAtNoTypeCheck(vec, row, types.CanonicalLowPrecFloat(types.Float8FromFloat32(float32(v))))
-		default:
+		case types.T_float4:
 			return vector.SetFixedAtNoTypeCheck(vec, row, types.CanonicalLowPrecFloat(types.Float4FromFloat32(float32(v))))
+		default:
+			return moerr.NewInternalErrorf(ctx, "unexpected low-precision type %s", vec.GetType().Oid)
 		}
 	case types.T_decimal64:
 		v, err := types.ParseDecimal64(val, vec.GetType().Width, vec.GetType().Scale)

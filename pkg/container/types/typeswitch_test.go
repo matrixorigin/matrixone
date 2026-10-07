@@ -31,23 +31,32 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Type-switch families. A switch over T that names a family's anchor must name every
-// member of the family, or carry a comment, on the switch line or in the comment block
-// right above it:
+// Type-switch families. A switch over T that names any member of a family must name every
+// member, or every member of one of its subfamilies and no other family member, or carry a
+// comment, on the switch line or in the comment block right above it:
 //
 //	// typeswitch:partial <reason>
 //
-// The members are discovered from the T constants in types.go, so a type added to a family
-// is checked everywhere the anchor is switched on.
-var typeSwitchFamilies = []struct {
+// Members are discovered from the T constants in types.go, so a type added to a family or
+// subfamily is checked everywhere a member is switched on.
+type typeSwitchSubfamily struct {
 	name   string
-	anchor string
 	member func(name string) bool
+}
+
+var typeSwitchFamilies = []struct {
+	name        string
+	member      func(name string) bool
+	subfamilies []typeSwitchSubfamily
 }{
-	{"float", "T_float32", func(n string) bool {
+	{"float", func(n string) bool {
 		return strings.HasPrefix(n, "T_float") || strings.HasPrefix(n, "T_bf")
+	}, []typeSwitchSubfamily{
+		{"low-precision", func(n string) bool { return n != "T_float32" && n != "T_float64" }},
 	}},
-	{"vector", "T_array_float32", func(n string) bool { return strings.HasPrefix(n, "T_array_") }},
+	{"vector", func(n string) bool { return strings.HasPrefix(n, "T_array_") }, []typeSwitchSubfamily{
+		{"block-scaled", func(n string) bool { return n == "T_array_float8" || n == "T_array_float4" }},
+	}},
 }
 
 const typeSwitchTag = "typeswitch:partial"
@@ -55,8 +64,9 @@ const typeSwitchTag = "typeswitch:partial"
 var updateTypeSwitchBaseline = flag.Bool("update-typeswitch", false,
 	"rewrite testdata/typeswitch_baseline.txt with the current untagged partial switches")
 
-// TestTypeSwitchFamilies fails on a switch in pkg/ (tests excluded) that names a family's
-// anchor but not every member, has no typeswitch:partial tag, and is not in the baseline of
+// TestTypeSwitchFamilies fails on a switch in pkg/ (tests excluded) that names a member of
+// a family but neither the whole family nor exactly a whole subfamily, has no
+// typeswitch:partial tag, and is not in the baseline of
 // switches that predate the check. The baseline is keyed by file, function and family, with
 // a count; it may shrink, never grow. Regenerate it with
 //
@@ -80,13 +90,13 @@ func TestTypeSwitchFamilies(t *testing.T) {
 	}
 	sort.Strings(problems)
 	require.Empty(t, problems,
-		"switches that name a family anchor but miss members: add the members, or tag the switch "+
+		"switches that name part of a type family: add the members, or tag the switch "+
 			"with `// typeswitch:partial <reason>` when the omission is intended; do not add them to "+
 			"the baseline. See pkg/container/types/testdata/README.md")
 }
 
-// typeSwitchFamilyMembers returns, per family, its members other than the anchor, from the
-// T constants of types.go.
+// typeSwitchFamilyMembers returns, per family, its members from the T constants of
+// types.go.
 func typeSwitchFamilyMembers(t *testing.T) map[string][]string {
 	f, err := parser.ParseFile(token.NewFileSet(), "types.go", nil, 0)
 	require.NoError(t, err)
@@ -108,13 +118,21 @@ func typeSwitchFamilyMembers(t *testing.T) map[string][]string {
 	}
 	out := make(map[string][]string, len(typeSwitchFamilies))
 	for _, fam := range typeSwitchFamilies {
-		require.Contains(t, consts, fam.anchor)
 		for _, c := range consts {
-			if c != fam.anchor && fam.member(c) {
+			if fam.member(c) {
 				out[fam.name] = append(out[fam.name], c)
 			}
 		}
-		require.NotEmpty(t, out[fam.name], fam.name)
+		require.Greater(t, len(out[fam.name]), 1, fam.name)
+		for _, sub := range fam.subfamilies {
+			n := 0
+			for _, c := range out[fam.name] {
+				if sub.member(c) {
+					n++
+				}
+			}
+			require.Greater(t, n, 1, sub.name)
+		}
 	}
 	return out
 }
@@ -185,16 +203,15 @@ func scanTypeSwitches(t *testing.T, root string, families map[string][]string) (
 			}
 			line := fset.Position(sw.Pos()).Line
 			for _, fam := range typeSwitchFamilies {
-				if !names[fam.anchor] {
-					continue
-				}
-				var missing []string
+				var named, missing []string
 				for _, m := range families[fam.name] {
-					if !names[m] {
+					if names[m] {
+						named = append(named, m)
+					} else {
 						missing = append(missing, m)
 					}
 				}
-				if len(missing) == 0 {
+				if len(named) == 0 || len(missing) == 0 || namesWholeSubfamily(fam.subfamilies, families[fam.name], names) {
 					continue
 				}
 				if reason, ok := tagOf(line); ok {
@@ -213,6 +230,24 @@ func scanTypeSwitches(t *testing.T, root string, families map[string][]string) (
 	})
 	require.NoError(t, err)
 	return found, bare
+}
+
+// namesWholeSubfamily reports whether the switch names every member of one subfamily and no
+// other member of the family.
+func namesWholeSubfamily(subs []typeSwitchSubfamily, members []string, names map[string]bool) bool {
+	for _, sub := range subs {
+		whole := true
+		for _, m := range members {
+			if sub.member(m) != names[m] {
+				whole = false
+				break
+			}
+		}
+		if whole {
+			return true
+		}
+	}
+	return false
 }
 
 func readTypeSwitchBaseline(t *testing.T, path string) map[string]int {

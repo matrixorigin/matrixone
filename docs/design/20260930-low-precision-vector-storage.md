@@ -567,8 +567,9 @@ cast to the column's format — on the CPU the same ids in the same order; on th
 within the fp32 GEMM's tolerance, rows closer than it in either order.
 
 - **Type-switch families** (`pkg/container/types/typeswitch_test.go`): a `switch` over
-  `types.T` in `pkg/` that names `T_float32` must name every `T_float*`/`T_bf*` type, and
-  one that names `T_array_float32` every `T_array_*` type, or carry
+  `types.T` in `pkg/` that names any `T_float*`/`T_bf*` type must name all of them, or all
+  low-precision ones (bf16/float16/float8/float4) and no other; one that names any
+  `T_array_*` type must name all of them, or exactly vecf8/vecf4; otherwise it carries
   `// typeswitch:partial <reason>` on or above the switch. The families are read from the
   constants in `types.go`, so a new type is checked at every such switch. Switches that
   predate the check are listed in `testdata/typeswitch_baseline.txt` by file, function and

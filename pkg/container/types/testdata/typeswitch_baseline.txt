@@ -32,6 +32,7 @@ pkg/frontend/computation_wrapper.go	preparedJSONGenericConcreteTypeSupported	flo
 pkg/frontend/computation_wrapper.go	untypedUserParamKindForType	float	1
 pkg/frontend/data_branch_hashdiff.go	lcaProbeJoinCastType	float	1
 pkg/frontend/data_branch_helpers.go	dataBranchFloatPKIdentityAt	float	1
+pkg/frontend/data_branch_helpers.go	extractDataBranchSQLRowValue	vector	1
 pkg/frontend/data_branch_pick.go	appendNumericStringToVec	float	1
 pkg/frontend/data_branch_pick.go	extractPKVal	float	1
 pkg/frontend/data_branch_pick.go	formatPickKeyVectorValueAsString	float	1
@@ -95,6 +96,7 @@ pkg/sql/colexec/deletion/types.go	getNonNullValue	vector	1
 pkg/sql/colexec/evalExpression.go	finiteVectorEndpoints	float	1
 pkg/sql/colexec/evalExpression.go	finiteZoneMapEndpoints	float	1
 pkg/sql/colexec/evalExpression.go	zoneMapInVectorOrderIsKnown	vector	1
+pkg/sql/colexec/evalExpression.go	zoneMapTemporalEndpoints	float	1
 pkg/sql/colexec/external/hive_partition_fill.go	fillConstantVector	float	1
 pkg/sql/colexec/external/iceberg_delete_apply.go	vectorEqualityValue	float	1
 pkg/sql/colexec/external/parquet_nested.go	appendLeafValue	float	1
@@ -109,6 +111,7 @@ pkg/sql/colexec/postdml/postdml.go	GetAnyAsString	float	1
 pkg/sql/colexec/postdml/postdml.go	GetAnyAsString	vector	1
 pkg/sql/colexec/postdml/postdml.go	runPostDml	vector	1
 pkg/sql/colexec/productl2/product_l2.go	build	vector	1
+pkg/sql/colexec/productl2/product_l2.go	newMat	vector	1
 pkg/sql/colexec/runtimefilter/contract.go	CloseFloatSignedZero	float	1
 pkg/sql/colexec/table_function/filter_helper_gpu.go	filterColTypeFromOid	float	1
 pkg/sql/colexec/table_function/ivf_create.go	start	vector	1
@@ -166,6 +169,8 @@ pkg/sql/plan/function/func_binary.go	MakeSet	float	1
 pkg/sql/plan/function/func_binary.go	MakeTime	float	3
 pkg/sql/plan/function/func_binary.go	PeriodAdd	float	2
 pkg/sql/plan/function/func_binary.go	PeriodDiff	float	2
+pkg/sql/plan/function/func_binary.go	SecToTime	float	1
+pkg/sql/plan/function/func_binary.go	getCount	float	1
 pkg/sql/plan/function/func_binary.go	makeExportSetBitsGetter	float	1
 pkg/sql/plan/function/func_builtin.go	SerialHelper	float	1
 pkg/sql/plan/function/func_builtin.go	SerialHelper	vector	1
@@ -185,6 +190,7 @@ pkg/sql/plan/function/func_builtin_leastgreatest.go	leastFn	float	1
 pkg/sql/plan/function/func_builtin_leastgreatest.go	leastFn	vector	1
 pkg/sql/plan/function/func_builtin_leastgreatest.go	leastGreatestExecutorSupportsOid	float	1
 pkg/sql/plan/function/func_builtin_leastgreatest.go	leastGreatestExecutorSupportsOid	vector	1
+pkg/sql/plan/function/func_builtin_leastgreatest.go	leastGreatestYearNumericFn	float	1
 pkg/sql/plan/function/func_cast.go	arrayToArrayDispatch	vector	1
 pkg/sql/plan/function/func_cast.go	arrayTypeToOthers	vector	1
 pkg/sql/plan/function/func_cast.go	bitToOthers	float	1
@@ -234,6 +240,7 @@ pkg/sql/plan/function/func_compare.go	nullSafeEqualFn	vector	1
 pkg/sql/plan/function/func_compare.go	otherCompareOperatorSupports	float	1
 pkg/sql/plan/function/func_unary.go	BinDynamic	float	1
 pkg/sql/plan/function/func_unary.go	BitCast	float	1
+pkg/sql/plan/function/func_unary.go	GetLock	float	1
 pkg/sql/plan/function/func_unary.go	InetNtoa	float	1
 pkg/sql/plan/function/func_unary.go	NormalizeL2Array	vector	1
 pkg/sql/plan/function/func_unary.go	makeRandomBytesLengthGetter	float	1
@@ -256,7 +263,8 @@ pkg/sql/plan/function/type_check.go	fixedTypeCastRule1	vector	2
 pkg/sql/plan/function/type_check.go	fixedTypeCastRule2	vector	1
 pkg/sql/plan/function/udf.go	vector2DataVector	float	1
 pkg/sql/plan/function/udf.go	writeResponse	float	1
-pkg/sql/plan/function/zonemap.go	GetZoneMapEvaluation	float	1
+pkg/sql/plan/function/zonemap.go	GetZoneMapEvaluation	float	4
+pkg/sql/plan/hex_catalog_compat.go	migrateFoldedHexDefault	float	1
 pkg/sql/plan/opt_misc.go	comparisonEvaluationIsTotal	float	1
 pkg/sql/plan/opt_misc.go	comparisonEvaluationIsTotal	vector	1
 pkg/sql/plan/opt_misc.go	isTruncationSafeBetween	float	1
@@ -293,10 +301,19 @@ pkg/tools/checkpointtool/table_dump.go	appendCSVUnquotedVecValue	float	1
 pkg/tools/objecttool/interactive/bubbletea.go	formatCell	float	1
 pkg/tools/objecttool/interactive/state.go	CurrentRows	float	1
 pkg/tools/objecttool/interactive/state.go	formatRows	float	1
+pkg/util/export/etl/tae.go	GetVectorArrayLen	float	1
 pkg/util/export/etl/tae.go	GetVectorArrayLen	vector	1
+pkg/util/export/etl/tae.go	ValToString	float	1
 pkg/util/export/etl/tae.go	ValToString	vector	1
+pkg/util/export/etl/tae.go	WriteStrings	float	1
+pkg/util/export/etl/tae.go	getOneRowData	float	1
+pkg/util/export/table/table.go	Reset	float	1
+pkg/util/export/table/table.go	Size	float	1
+pkg/util/export/table/table.go	ToStrings	float	1
 pkg/vectorindex/hnsw/types.go	QuantizationToUsearch	vector	1
+pkg/vectorindex/ivfflat/plan_reader.go	prepareSearch	vector	1
 pkg/vectorindex/ivfflat/plan_reader.go	queryFloat32	vector	1
+pkg/vectorindex/ivfflat/plugin/plan/schema.go	BuildSecondaryIndexDefs	vector	1
 pkg/vectorindex/ivfflat/relation_search.go	entryQueryBytes	vector	1
 pkg/vectorindex/ivfflat/search.go	entryQueryExpression	vector	1
 pkg/vectorindex/sqlexec/bloomfilter.go	AppendVectorSQLLiteral	float	1

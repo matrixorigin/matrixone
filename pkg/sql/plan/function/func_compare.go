@@ -1153,8 +1153,10 @@ func lowPrecisionCompare(parameters []*vector.Vector, rs *vector.FunctionResult[
 		return true, lowPrecisionCompareOf[types.Float16](parameters, rs, proc, length, selectList, nullSafe, cmp)
 	case types.T_float8:
 		return true, lowPrecisionCompareOf[types.Float8](parameters, rs, proc, length, selectList, nullSafe, cmp)
-	default:
+	case types.T_float4:
 		return true, lowPrecisionCompareOf[types.Float4](parameters, rs, proc, length, selectList, nullSafe, cmp)
+	default:
+		return true, moerr.NewInternalErrorNoCtxf("lowPrecisionCompare: unexpected type %s", oid)
 	}
 }
 

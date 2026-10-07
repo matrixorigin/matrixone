@@ -1,16 +1,18 @@
 # Type-switch families
 
 `TestTypeSwitchFamilies` (`../typeswitch_test.go`) checks every `switch` over `types.T`
-in `pkg/` (`_test.go` files excluded). A switch that names a family's anchor must name
-every member of the family:
+in `pkg/` (`_test.go` files excluded). A switch that names any member of a family must name
+every member of the family, or every member of one subfamily and no other family member:
 
-| Family | Anchor | Members |
-|--------|--------|---------|
-| float | `T_float32` | every `T_float*` and `T_bf*` constant (`T_float64`, `T_bf16`, `T_float16`, `T_float8`, `T_float4`, ...) |
-| vector | `T_array_float32` | every `T_array_*` constant (`T_array_float64`, `T_array_bf16`, ..., `T_array_float8`, `T_array_float4`) |
+| Family | Members | Subfamily |
+|--------|---------|-----------|
+| float | every `T_float*` and `T_bf*` constant (`T_float32`, `T_float64`, `T_bf16`, `T_float16`, `T_float8`, `T_float4`, ...) | low-precision: the members other than `T_float32` and `T_float64` |
+| vector | every `T_array_*` constant (`T_array_float32`, `T_array_float64`, `T_array_bf16`, ..., `T_array_float8`, `T_array_float4`) | block-scaled: `T_array_float8`, `T_array_float4` |
 
 Members are read from the `T` constants in `types.go`, so a type added there is checked at
-every switch on its family's anchor.
+every switch that names a member of its family, and a low-precision type added later at
+every low-precision-only switch. In a switch that lists the members, give the last one its
+own case and keep `default` for an error, so a later member is not read as another type.
 
 ## When the test fails
 

@@ -2686,8 +2686,10 @@ func foldedScalarBytes(expr *plan.Expr) ([]byte, bool) {
 			v = types.DecodeFixed[types.Float16](fold.Data).ToFloat32()
 		case types.T_float8:
 			v = types.DecodeFixed[types.Float8](fold.Data).ToFloat32()
-		default:
+		case types.T_float4:
 			v = types.DecodeFixed[types.Float4](fold.Data).ToFloat32()
+		default:
+			return nil, false
 		}
 		if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
 			return nil, false
