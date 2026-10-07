@@ -2250,6 +2250,7 @@ func TestPushClientCloseRacingInitDoesNotPublishTransport(t *testing.T) {
 
 	closeDone := make(chan error, 1)
 	go func() { closeDone <- c.Close() }()
+	require.Eventually(t, c.closed.Load, time.Second, time.Millisecond)
 	close(release)
 
 	require.ErrorIs(t, <-initDone, context.Canceled)
