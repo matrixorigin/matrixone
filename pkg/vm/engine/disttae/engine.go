@@ -234,6 +234,10 @@ func (e *Engine) Close() error {
 		// resource. A callback must not start work after engine teardown begins.
 		e.dynamicCtx.closed.Store(true)
 
+		if err := e.pClient.Close(); err != nil {
+			e.closeErr = err
+		}
+
 		e.gcSchedulerMu.Lock()
 		cancel := e.gcSchedulerCancel
 		done := e.gcSchedulerDone
@@ -247,7 +251,9 @@ func (e *Engine) Close() error {
 			e.globalStats.Close()
 		}
 		if e.gcPool != nil {
-			e.closeErr = e.gcPool.ReleaseTimeout(time.Second * 3)
+			if err := e.gcPool.ReleaseTimeout(time.Second * 3); e.closeErr == nil {
+				e.closeErr = err
+			}
 		}
 		e.dynamicCtx.Close()
 		e.cloneTxnCache = nil
