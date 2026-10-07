@@ -927,7 +927,9 @@ func TestSession_Migrate(t *testing.T) {
 		for _, name := range []string{
 			"character_set_client", "character_set_connection", "character_set_results",
 		} {
-			require.NoError(t, source.SetSessionSysVar(context.Background(), name, "latin1"))
+			require.Error(t, source.SetSessionSysVar(context.Background(), name, "latin1"))
+			// Model a snapshot created before the new-request admission policy.
+			require.NoError(t, source.restoreSessionSysVar(context.Background(), name, "latin1"))
 		}
 		require.NoError(t, source.GetTxnHandler().setNextTxnIsolation(
 			context.Background(), txn.TxnIsolation_RC, false))

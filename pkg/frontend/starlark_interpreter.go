@@ -46,7 +46,7 @@ type starlarkInterpreter struct {
 func convertToStarlarkValue(ctx context.Context, v any) (starlark.Value, error) {
 	val := reflect.ValueOf(v)
 	kind := val.Kind()
-	if kind == reflect.Ptr {
+	if kind == reflect.Pointer {
 		kind = val.Elem().Kind()
 	}
 	switch kind {

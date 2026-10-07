@@ -35,7 +35,7 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 		conn, err := db.Conn(ctx)
 		require.NoError(t, err)
 		defer conn.Close()
-		stmt, err := conn.PrepareContext(ctx, `select hex(?),hex(char(?)),make_set(?,"a","b","c"),export_set(?,"Y","N","",4)`)
+		stmt, err := conn.PrepareContext(ctx, `select hex(?),hex(char(?)),make_set(?,"a","b","c"),export_set(?,"Y","N","",4)`) //nolint:sqlclosecheck // stmt closed via outer defer; not tracked across t.Run subtest closures
 		require.NoError(t, err)
 		defer stmt.Close()
 		for _, tc := range []struct {
@@ -599,7 +599,7 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 		defer rawDB.Close()
 		rawDB.SetMaxOpenConns(1)
 		rawDB.SetMaxIdleConns(1)
-		stmt, err := rawDB.PrepareContext(ctx, `select export_set(?,"Y","N","",4)`)
+		stmt, err := rawDB.PrepareContext(ctx, `select export_set(?,"Y","N","",4)`) //nolint:sqlclosecheck // stmt closed via outer defer; not tracked across t.Run subtest closures
 		require.NoError(t, err)
 		defer stmt.Close()
 		mu.Lock()

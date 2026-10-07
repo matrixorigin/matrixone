@@ -588,9 +588,6 @@ func (t *CDCDao) syncCommitTimestamp(ctx context.Context) error {
 	}
 
 	cluster := clusterservice.GetMOCluster(qc.ServiceID())
-	if cluster == nil {
-		return moerr.NewInternalError(ctx, "cluster service is nil")
-	}
 
 	addresses := make([]string, 0, 4)
 	cluster.GetCNService(

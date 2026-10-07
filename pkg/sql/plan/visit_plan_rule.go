@@ -229,7 +229,7 @@ func (rule *GetParamRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 }
 
 func (rule *GetParamRule) SetParamOrder() {
-	argPos := []int{}
+	argPos := make([]int, 0, len(rule.params))
 	for pos := range rule.params {
 		argPos = append(argPos, pos)
 	}
@@ -2225,7 +2225,7 @@ func (rule *ResetParamRefRule) restorePreparedTemporalNullEnvelope(
 	if !ok || (types.T(rewritten.Typ.Id) == types.T(target.Id) &&
 		rewritten.Typ.Width == target.Width &&
 		rewritten.Typ.Scale == target.Scale &&
-		rewritten.Typ.Charset == target.Charset &&
+		rewritten.Typ.SameCollation(target) &&
 		rewritten.Typ.NotNullable == target.NotNullable) {
 		return rewritten, false, nil
 	}

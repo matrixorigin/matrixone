@@ -46,7 +46,8 @@ func TestPreparedVariadicRuntimeSourceDomains(t *testing.T) {
 		values []ParamValue
 		want   []types.T
 	}
-	cases := []sourceDomainCase{
+	cases := make([]sourceDomainCase, 0, 44)
+	cases = append(cases, []sourceDomainCase{
 		{
 			name: "greatest decimal and string", sql: "prepare p from 'select greatest(?, ?)'", fn: "greatest",
 			values: []ParamValue{
@@ -348,7 +349,7 @@ func TestPreparedVariadicRuntimeSourceDomains(t *testing.T) {
 			},
 			want: []types.T{types.T_blob, types.T_text},
 		},
-	}
+	}...)
 	// Each relational owner keeps a different binding tag or physical output.
 	// These cases must also trigger specialization through the public EXECUTE gate.
 	for _, relation := range []struct {

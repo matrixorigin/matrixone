@@ -673,9 +673,10 @@ func TestStringDomainWitnessKeepsImplicitTextConversion(t *testing.T) {
 
 func TestPreparedNumericMetadataIsSparse(t *testing.T) {
 	require.Nil(t, (&planpb.Expr{}).GetPreparedNumeric())
-	// Five resident scalar fields made Expr 184 bytes. One optional pointer
-	// keeps ordinary expressions at a bounded 168 bytes on 64-bit targets.
-	require.Equal(t, uintptr(168), unsafe.Sizeof(planpb.Expr{}))
+	// Prepared numeric metadata still uses one optional pointer. Collation
+	// metadata adds 16 bytes to the embedded Type, not resident numeric fields.
+	require.Equal(t, uintptr(104), unsafe.Sizeof(planpb.Type{}))
+	require.Equal(t, uintptr(184), unsafe.Sizeof(planpb.Expr{}))
 }
 
 var benchmarkPreparedNumericDeepCopySink *planpb.Expr

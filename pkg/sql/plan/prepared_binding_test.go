@@ -151,7 +151,7 @@ func TestPreparedNumericPredicateFiltering(t *testing.T) {
 				domain.Width = 38
 				promoted, err := appendCastBeforeExpr(ctx, column, domain)
 				require.NoError(t, err)
-				args := []*Expr{promoted}
+				args := append(make([]*Expr, 0, 3), promoted)
 				for pos := range 2 {
 					peer, err := appendCastBeforeExpr(ctx, &Expr{Typ: makeSimplePlan2Type(types.T_varchar), Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: int32(pos)}}}, domain)
 					require.NoError(t, err)
