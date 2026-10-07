@@ -31,12 +31,27 @@ import (
 func TestScheduleCronTask(t *testing.T) {
 	runScheduleCronTaskTest(t, func(store *memTaskStorage, s *taskService, ctx context.Context) {
 		fetchInterval = 300 * time.Millisecond
+		triggered := make(chan struct{}, 1)
+		store.preUpdateCron = func() error {
+			select {
+			case triggered <- struct{}{}:
+			default:
+			}
+			return nil
+		}
 		assert.NoError(t, s.CreateCronTask(ctx, newTestTaskMetadata("t1"), "*/1 * * * * *"))
 
 		s.StartScheduleCronTask()
-		defer s.StopScheduleCronTask()
 
-		waitHasTasks(t, store, time.Second*20, WithTaskParentTaskIDCond(EQ, "t1"))
+		select {
+		case <-triggered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("cron scheduler did not trigger")
+		}
+		s.StopScheduleCronTask()
+		tasks, err := store.QueryAsyncTask(ctx, WithTaskMetadataId(EQ, "t1:1"))
+		require.NoError(t, err)
+		require.Len(t, tasks, 1)
 	})
 }
 
