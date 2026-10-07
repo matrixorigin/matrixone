@@ -1169,8 +1169,9 @@ func TestBuiltInConvertUsingCharsetBranches(t *testing.T) {
 }
 
 func TestBuiltInConvertUsingRejectsDisabledCharsets(t *testing.T) {
+	// Children are sequential; each case owns its vectors and result.
+	proc := testutil.NewProcess(t)
 	for _, charset := range []string{"latin1", "ASCII", "gbk", "missing"} {
-		proc := testutil.NewProcess(t)
 		fc := NewFunctionTestCase(proc, []FunctionTestInput{
 			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"a"}, []bool{false}),
 			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{charset}, []bool{false}),
@@ -1183,7 +1184,7 @@ func TestBuiltInConvertUsingRejectsDisabledCharsets(t *testing.T) {
 		require.ErrorContains(t, fc.fn(fc.parameters, fc.result, fc.proc, fc.fnLength, nil), "unsupported character set")
 	}
 	for _, charset := range []string{"utf8", "utf8mb3", "utf8mb4"} {
-		fc := NewFunctionTestCase(testutil.NewProcess(t), []FunctionTestInput{
+		fc := NewFunctionTestCase(proc, []FunctionTestInput{
 			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"😀"}, []bool{false}),
 			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{charset}, []bool{false}),
 		}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"😀"}, []bool{false}), builtInConvertUsingCharset)
