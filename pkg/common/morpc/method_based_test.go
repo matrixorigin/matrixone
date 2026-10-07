@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -32,6 +33,18 @@ import (
 
 type testMethodBasedClientSession struct {
 	write func(context.Context, Message) error
+}
+
+type testMethodBasedRPCServer struct {
+	closeStarted chan struct{}
+}
+
+func (s *testMethodBasedRPCServer) Start() error { return nil }
+func (s *testMethodBasedRPCServer) Close() error {
+	close(s.closeStarted)
+	return nil
+}
+func (s *testMethodBasedRPCServer) RegisterRequestHandler(func(context.Context, RPCMessage, uint64, ClientSession) error) {
 }
 
 func (s *testMethodBasedClientSession) Close() error {
@@ -119,6 +132,72 @@ func TestMethodBasedServerCancelsRejectedRequest(t *testing.T) {
 			require.Equal(t, 1, cancelCalls)
 		})
 	}
+}
+
+func TestMethodBasedServerCloseJoinsAsyncHandlers(t *testing.T) {
+	pool := NewMessagePool(
+		func() *testMethodBasedMessage { return &testMethodBasedMessage{} },
+		func() *testMethodBasedMessage { return &testMethodBasedMessage{} },
+	)
+	rpc := &testMethodBasedRPCServer{closeStarted: make(chan struct{})}
+	s := &methodBasedServer[*testMethodBasedMessage, *testMethodBasedMessage]{
+		logger:          getLogger(""),
+		pool:            pool,
+		rpc:             rpc,
+		handlers:        make(map[uint32]handleFuncCtx[*testMethodBasedMessage, *testMethodBasedMessage]),
+		respReleaseFunc: func(Message) {},
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	atExit := make(chan struct{})
+	allowExit := make(chan struct{})
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+		select {
+		case <-allowExit:
+		default:
+			close(allowExit)
+		}
+		_ = s.Close()
+	})
+	var once sync.Once
+	s.RegisterMethod(1, func(context.Context, *testMethodBasedMessage, *testMethodBasedMessage, *Buffer) error {
+		once.Do(func() { close(started) })
+		<-release
+		close(atExit)
+		<-allowExit
+		return nil
+	}, true)
+	cs := &testMethodBasedClientSession{write: func(context.Context, Message) error { return nil }}
+	req := RPCMessage{
+		Message: &testMethodBasedMessage{method: 1},
+		Cancel:  func() {},
+	}
+	require.NoError(t, s.onMessage(context.Background(), req, 0, cs))
+	<-started
+
+	closed := make(chan struct{})
+	closeErr := make(chan error, 1)
+	go func() {
+		closeErr <- s.Close()
+		close(closed)
+	}()
+	<-rpc.closeStarted
+	close(release)
+	<-atExit
+	select {
+	case <-closed:
+		t.Fatal("Close returned before the admitted async handler finished")
+	case <-time.After(time.Second):
+	}
+	close(allowExit)
+	<-closed
+	require.NoError(t, <-closeErr)
+	require.NoError(t, s.Close())
 }
 
 func TestRPCSend(t *testing.T) {

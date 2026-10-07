@@ -1381,12 +1381,11 @@ func (c *testCluster) buildCNConfigs(n int) {
 // initTNServices builds all tn services.
 //
 // Before initializing tn service, log service must be started already.
-func (c *testCluster) initTNServices(fileservices *fileServices) []TNService {
+func (c *testCluster) initTNServices(fileservices *fileServices) error {
 	batch := c.opt.initial.tnServiceNum
 
 	c.logger.Info("initialize tn services", zap.Int("batch", batch))
 
-	svcs := make([]TNService, 0, batch)
 	for i := 0; i < batch; i++ {
 		cfg := c.tn.cfgs[i]
 		opt := c.tn.opts[i]
@@ -1396,14 +1395,21 @@ func (c *testCluster) initTNServices(fileservices *fileServices) []TNService {
 			fileservices.getS3FileService(),
 		)
 		if err != nil {
-			panic(err)
+			return err
 		}
-		ds, err := newTNService(
+		_, err = newTNService(
 			cfg,
 			c.newRuntime(cfg.UUID),
 			fs,
+			func(owner TNService) {
+				c.tn.Lock()
+				c.tn.svcs = append(c.tn.svcs, owner)
+				c.tn.Unlock()
+			},
 			opt)
-		require.NoError(c.t, err)
+		if err != nil {
+			return err
+		}
 
 		c.logger.Info(
 			"dn service initialized",
@@ -1411,10 +1417,9 @@ func (c *testCluster) initTNServices(fileservices *fileServices) []TNService {
 			zap.Any("config", cfg),
 		)
 
-		svcs = append(svcs, ds)
 	}
 
-	return svcs
+	return nil
 }
 
 // initLogServices builds all log services.
@@ -1479,7 +1484,9 @@ func (c *testCluster) initCNServices(
 // startTNServices initializes and starts all tn services.
 func (c *testCluster) startTNServices(ctx context.Context) error {
 	// initialize all tn services
-	c.tn.svcs = c.initTNServices(c.fileservices)
+	if err := c.initTNServices(c.fileservices); err != nil {
+		return err
+	}
 
 	// start tn services
 	for _, ds := range c.tn.svcs {

@@ -60,9 +60,11 @@ type TNService interface {
 // The main purpose of this structure is to maintain status.
 type tnService struct {
 	sync.Mutex
-	status ServiceStatus
-	uuid   string
-	svc    tnservice.Service
+	status    ServiceStatus
+	uuid      string
+	svc       tnservice.Service
+	closeOnce sync.Once
+	closeErr  error
 }
 
 func (ds *tnService) Start() error {
@@ -83,16 +85,15 @@ func (ds *tnService) Start() error {
 func (ds *tnService) Close() error {
 	ds.Lock()
 	defer ds.Unlock()
-
-	if ds.status == ServiceStarted {
-		err := ds.svc.Close()
-		if err != nil {
-			return err
+	ds.closeOnce.Do(func() {
+		if ds.svc != nil {
+			ds.closeErr = ds.svc.Close()
 		}
-		ds.status = ServiceClosed
-	}
-
-	return nil
+		if ds.closeErr == nil {
+			ds.status = ServiceClosed
+		}
+	})
+	return ds.closeErr
 }
 
 func (ds *tnService) Status() ServiceStatus {
@@ -141,17 +142,15 @@ func newTNService(
 	cfg *tnservice.Config,
 	rt runtime.Runtime,
 	fs fileservice.FileService,
+	publish func(TNService),
 	opts tnOptions,
 ) (TNService, error) {
-	svc, err := tnservice.NewService(cfg, rt, fs, nil, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return &tnService{
-		status: ServiceInitialized,
-		uuid:   cfg.UUID,
-		svc:    svc,
-	}, nil
+	ds := &tnService{status: ServiceInitialized, uuid: cfg.UUID}
+	ds.Lock()
+	defer ds.Unlock()
+	publish(ds)
+	_, err := tnservice.NewService(cfg, rt, fs, nil, func(owner tnservice.Service) { ds.svc = owner }, opts...)
+	return ds, err
 }
 
 // buildTNConfig builds configuration for a tn service.

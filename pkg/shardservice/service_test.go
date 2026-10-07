@@ -791,9 +791,20 @@ func runServicesTest(
 	if adjustConfigFunc != nil {
 		adjustConfigFunc(&cfg)
 	}
-	server := NewShardServer(cfg, runtime.ServiceRuntime(sid).Logger()).(*server)
+	var shardServer *server
+	defer func() {
+		if shardServer != nil {
+			require.NoError(t, shardServer.Close())
+		}
+	}()
+	NewShardServer(cfg, runtime.ServiceRuntime(sid).Logger(), func(owner ShardServer) { shardServer = owner.(*server) })
 
 	services := make([]*service, 0, len(cns))
+	defer func() {
+		for _, svc := range services {
+			require.NoError(t, svc.Close())
+		}
+	}()
 	for _, cn := range cns {
 		if err := os.RemoveAll(cn.ShardServiceAddress[7:]); err != nil {
 			panic(err)
@@ -819,10 +830,6 @@ func runServicesTest(
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
 
-	fn(ctx, server, services)
+	fn(ctx, shardServer, services)
 
-	for _, s := range services {
-		require.NoError(t, s.Close())
-	}
-	require.NoError(t, server.Close())
 }
