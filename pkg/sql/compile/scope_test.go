@@ -54,6 +54,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
@@ -2480,12 +2481,16 @@ func TestCompileBuildSideForBroadcastJoinSkipsEmptyCN(t *testing.T) {
 
 	out := testCompile.compileBuildSideForBroadcastJoin(node, rs, []*Scope{buildScope})
 
-	require.Same(t, rs[0], out[0])
-	require.Len(t, rs[0].PreScopes, 2)
-	require.Empty(t, rs[1].PreScopes)
-	require.Empty(t, rs[2].PreScopes)
-	require.Same(t, buildScope, rs[0].PreScopes[0])
-	require.NoError(t, checkScopeWithExpectedList(rs[0].PreScopes[1], []vm.OpType{vm.Merge, vm.HashBuild}))
+	require.Equal(t, rs, out)
+	for _, probe := range rs {
+		require.Empty(t, probe.PreScopes, "a probe cannot own the shared source/map")
+	}
+	out = testCompile.finishProductBuilds(out, true)
+	require.Len(t, out, 1)
+	job := out[0].PreScopes[len(out[0].PreScopes)-1]
+	require.Len(t, job.PreScopes, 2)
+	require.Same(t, buildScope, job.PreScopes[1])
+	require.NoError(t, checkScopeWithExpectedList(job.PreScopes[0], []vm.OpType{vm.Merge, vm.HashBuild, vm.Connector}))
 	require.NoError(t, checkScopeWithExpectedList(buildScope, []vm.OpType{vm.TableScan, vm.Dispatch}))
 	dispatchOp, ok := buildScope.RootOp.(*dispatch.Dispatch)
 	require.True(t, ok)
@@ -2515,12 +2520,16 @@ func TestCompileBuildSideForBroadcastJoinGroupsDuplicateCN(t *testing.T) {
 		scope.NodeInfo = engine.Node{Addr: "cn1:6001", Mcpu: 1}
 	}
 
-	testCompile.compileBuildSideForBroadcastJoin(node, rs, []*Scope{buildScope})
-
-	require.Len(t, rs[0].PreScopes, 2)
-	require.Empty(t, rs[1].PreScopes)
-	require.Same(t, buildScope, rs[0].PreScopes[0])
-	require.NoError(t, checkScopeWithExpectedList(rs[0].PreScopes[1], []vm.OpType{vm.Merge, vm.HashBuild}))
+	out := testCompile.compileBuildSideForBroadcastJoin(node, rs, []*Scope{buildScope})
+	for _, probe := range rs {
+		require.Empty(t, probe.PreScopes)
+	}
+	out = testCompile.finishProductBuilds(out, true)
+	require.Len(t, out, 1)
+	job := out[0].PreScopes[len(out[0].PreScopes)-1]
+	require.Len(t, job.PreScopes, 2)
+	require.Same(t, buildScope, job.PreScopes[1])
+	require.NoError(t, checkScopeWithExpectedList(job.PreScopes[0], []vm.OpType{vm.Merge, vm.HashBuild, vm.Connector}))
 	dispatchOp, ok := buildScope.RootOp.(*dispatch.Dispatch)
 	require.True(t, ok)
 	require.Len(t, dispatchOp.LocalRegs, 1)
@@ -2581,7 +2590,9 @@ func TestBroadcastJoinMapReferencesCountProbeWorkers(t *testing.T) {
 				}
 
 				owners := c.compileBuildSideForBroadcastJoin(node, probes, []*Scope{buildScope})
-				if opType == vm.Product && len(probes) > 1 {
+				sharedOwner := len(probes) > 1 && (opType == vm.Product ||
+					hasMultiScopeGroup(c.groupBroadcastProbeScopesByCN(probes, c.queryWorkerStageNodes())))
+				if sharedOwner {
 					require.Equal(t, probes, owners)
 					// Model a downstream rewrite of packed DOP before ownership
 					// transfer: refcounts must use the final worker templates.
@@ -2610,7 +2621,7 @@ func TestBroadcastJoinMapReferencesCountProbeWorkers(t *testing.T) {
 				for _, owner := range owners {
 					visit(owner)
 				}
-				if opType == vm.Product && len(probes) > 1 {
+				if sharedOwner {
 					require.Len(t, owners, 1)
 					owner := owners[0]
 					require.True(t, owner.ConcurrentPreScopes)
@@ -2635,7 +2646,7 @@ func TestBroadcastJoinMapReferencesCountProbeWorkers(t *testing.T) {
 				require.Len(t, builds, len(tc.want))
 				for addr, want := range tc.want {
 					require.Contains(t, builds, addr)
-					if opType == vm.Product && tc.name == "colocated packed scopes" && addr == "cn1:6001" {
+					if sharedOwner && tc.name == "colocated packed scopes" && addr == "cn1:6001" {
 						want--
 					}
 					require.Equal(t, want, builds[addr].JoinMapRefCnt, addr)
@@ -2643,6 +2654,33 @@ func TestBroadcastJoinMapReferencesCountProbeWorkers(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestBroadcastIndexJoinKeepsIndexBuildOwnership(t *testing.T) {
+	c := NewMockCompile(t)
+	t.Cleanup(c.proc.Free)
+	c.addr = "cn1:6001"
+	c.cnList = engine.Nodes{{Addr: c.addr, Mcpu: 2}, {Addr: "cn2:6001", Mcpu: 2}}
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.anal = &AnalyzeModule{qry: &plan.Query{}}
+	probes := make([]*Scope, 2)
+	for i := range probes {
+		probes[i] = newScope(Remote)
+		probes[i].Proc = c.proc.NewNoContextChildProc(0)
+		probes[i].NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
+		probes[i].RootOp = indexjoin.NewArgument()
+	}
+	source := generateScopeWithRootOperator(c.proc.NewNoContextChildProc(0), []vm.OpType{vm.TableScan})
+	source.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
+	node := &plan.Node{Stats: &plan.Stats{HashmapStats: &plan.HashMapStats{}}}
+	out := c.compileBuildSideForBroadcastJoin(node, probes, []*Scope{source})
+	t.Cleanup(func() { ReleaseScopes(out) })
+	require.Empty(t, c.pendingProductBuilds, "IndexBuild is not a shared HashBuild producer")
+	require.Equal(t, probes, c.finishProductBuilds(out, true))
+	require.Len(t, probes[0].PreScopes, 2)
+	require.Empty(t, probes[1].PreScopes)
+	require.Same(t, source, probes[0].PreScopes[0])
+	require.NoError(t, checkScopeWithExpectedList(probes[0].PreScopes[1], []vm.OpType{vm.Merge, vm.IndexBuild}))
 }
 
 func generateScopeWithRootOperator(proc *process.Process, operatorList []vm.OpType) *Scope {

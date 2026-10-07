@@ -99,6 +99,10 @@ func (r *productBuildReader) Call(proc *process.Process) (vm.CallResult, error) 
 type broadcastProductCase struct {
 	name                                                                           string
 	emptyPeer, emptyBuild, cancel, stop, outer, reverse, panicAfterBatch, deadline bool
+	hashJoin                                                                       bool
+	loopJoin                                                                       bool
+	allSkipped                                                                     bool
+	reuse                                                                          bool
 	terminal                                                                       error
 }
 
@@ -120,8 +124,47 @@ func TestBroadcastProductSharedProducerOwnership(t *testing.T) {
 		})
 	}
 }
+
+// A colocated broadcast HashJoin is a supported compiler domain: independent
+// probe scopes consume the same build/map, even when an outer join never calls
+// one of them. Skipping that probe must not cancel the producer needed by its
+// peer. This internal scope contract does not claim a particular SQL plan uses
+// this placement.
+func TestBroadcastHashJoinSharedProducerOwnership(t *testing.T) {
+	testBroadcastNonProductOwners(t, false)
+}
+
+func TestBroadcastLoopJoinSharedProducerOwnership(t *testing.T) {
+	testBroadcastNonProductOwners(t, true)
+}
+
+func testBroadcastNonProductOwners(t *testing.T, loopJoin bool) {
+	for _, tc := range []broadcastProductCase{
+		{name: "first_consumer_skipped"},
+		{name: "last_consumer_skipped", reverse: true},
+		{name: "empty_peer", emptyPeer: true},
+		{name: "all_consumers_skipped", allSkipped: true},
+		{name: "empty_build", emptyBuild: true},
+		{name: "build_failure", terminal: moerr.NewInternalErrorNoCtx("build reader failed")},
+		{name: "query_cancel", cancel: true},
+		{name: "query_deadline", deadline: true},
+		{name: "partial_source_then_panic", panicAfterBatch: true, terminal: moerr.NewInternalErrorNoCtx("source panic after output")},
+		{name: "ancestor_stop", stop: true},
+		{name: "normal_stop_then_reuse", reuse: true},
+		{name: "query_cancel_then_reuse", cancel: true, reuse: true},
+	} {
+		tc.hashJoin, tc.loopJoin, tc.outer = !loopJoin, loopJoin, true
+		t.Run(tc.name, func(t *testing.T) { testBroadcastProductOwner(t, tc) })
+	}
+}
+
 func testBroadcastProductOwner(t *testing.T, tc broadcastProductCase) {
+	nonProduct := tc.hashJoin || tc.loopJoin
 	c := NewMockCompile(t)
+	t.Cleanup(c.proc.Free)
+	// Retain the operator templates solely to exercise Scope.Reset and fresh
+	// pipeline contexts. This is not a claim that AP prepared SQL is supported.
+	c.isPrepare = tc.reuse
 	c.counterSet = &perfcounter.CounterSet{}
 	c.MessageBoard = message.NewMessageBoard()
 	c.proc.SetMessageBoard(c.MessageBoard)
@@ -150,6 +193,18 @@ func testBroadcastProductOwner(t *testing.T, tc broadcastProductCase) {
 	node := &planpb.Node{JoinType: planpb.Node_INNER, Stats: &planpb.Stats{HashmapStats: &planpb.HashMapStats{}},
 		ProjectList: []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_int8)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}}}},
 		SendMsgList: []planpb.MsgHeader{{MsgType: int32(message.MsgJoinMap), MsgTag: 42}}}
+	if nonProduct {
+		col := func(rel int32) *planpb.Expr {
+			return &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int8)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: rel, ColPos: 0}}}
+		}
+		condition := "="
+		if tc.loopJoin {
+			condition = "<"
+		}
+		equal, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, condition, []*planpb.Expr{col(0), col(1)})
+		require.NoError(t, err)
+		node.OnList = []*planpb.Expr{equal}
+	}
 	input := &planpb.Node{ProjectList: node.ProjectList}
 	probes = c.compileProbeSideForBroadcastJoin(node, input, input, probes)
 	reader := &productBuildReader{MockOperator: colexec.NewMockOperator(), started: started, release: make(chan struct{}), stopped: make(chan struct{}), terminal: tc.terminal, panicAfterBatch: tc.panicAfterBatch}
@@ -159,15 +214,57 @@ func testBroadcastProductOwner(t *testing.T, tc broadcastProductCase) {
 	source := makeScope(reader)
 	source.Magic = Normal
 	owners := c.compileBuildSideForBroadcastJoin(node, probes, []*Scope{source})
+	c.scopes = owners
+	var done chan struct{}
+	var configured []executionAllocationAccountOwner
+	var registry *mpool.AllocationAccountRegistry
+	var account *mpool.AllocationAccount
+	t.Cleanup(func() {
+		c.proc.Cancel(context.Canceled)
+		if done != nil {
+			select {
+			case <-done:
+			case <-time.After(10 * time.Second):
+				t.Fatal("scheduler cleanup did not terminate")
+			}
+		}
+		for _, s := range c.scopes {
+			s.FreeOperator(c)
+		}
+		c.MessageBoard.Reset()
+		for i := len(configured) - 1; i >= 0; i-- {
+			require.NoError(t, configured[i].ClearAllocationAccount(account))
+		}
+		if account != nil {
+			require.Zero(t, account.Snapshot().Used, "quiescent spool/account cleanup must release allocations")
+			_, _, err := registry.CompleteTerminal(account)
+			require.NoError(t, err)
+		}
+		for _, s := range c.scopes {
+			s.release()
+		}
+	})
 	owners = c.finishProductBuilds(owners, true)
-	require.Len(t, owners, 1)
+	c.scopes = owners
 	owner := owners[0]
-	require.Len(t, owner.PreScopes, 3)
-	require.Empty(t, emptyScope.PreScopes)
-	job := owner.PreScopes[2]
-	buildScope := job.PreScopes[0]
-	require.Equal(t, int32(2), buildScope.RootOp.GetOperatorBase().GetChildren(0).(*hashbuild.HashBuild).JoinMapRefCnt)
-	if tc.outer {
+	var buildScope *Scope
+	if nonProduct && len(owners) == 2 {
+		// Exercise the current first-probe owner rather than failing a structural
+		// expectation before runtime. Its second child is the colocated build.
+		buildScope = emptyScope.PreScopes[len(emptyScope.PreScopes)-1]
+	} else {
+		require.Len(t, owners, 1)
+		require.Len(t, owner.PreScopes, 3)
+		require.Empty(t, emptyScope.PreScopes)
+		job := owner.PreScopes[2]
+		buildScope = job.PreScopes[0]
+	}
+	build, ok := buildScope.RootOp.(*hashbuild.HashBuild)
+	if !ok {
+		build = buildScope.RootOp.GetOperatorBase().GetChildren(0).(*hashbuild.HashBuild)
+	}
+	require.Equal(t, int32(2), build.JoinMapRefCnt)
+	wrapSkippedProbe := func(scope *Scope, ended chan struct{}) {
 		outer := hashjoin.NewArgument()
 		outer.JoinType, outer.JoinMapTag = planpb.Node_INNER, 43
 		col := func(rel int32) *planpb.Expr {
@@ -176,11 +273,29 @@ func testBroadcastProductOwner(t *testing.T, tc broadcastProductCase) {
 		outer.EqConds = [][]*planpb.Expr{{col(0)}, {col(1)}}
 		outer.LeftTypes, outer.RightTypes = []types.Type{types.T_int8.ToType()}, []types.Type{types.T_int8.ToType()}
 		outer.ResultCols = []colexec.ResultPos{{Rel: 0, Pos: 0}}
-		conn := emptyScope.RootOp
-		outer.AppendChild(conn.GetOperatorBase().Children[0])
-		gate := &productOuterJoinGate{MockOperator: colexec.NewMockOperator(), started: started, ended: retired}
+		root := scope.RootOp
+		if root.OpType() == vm.Connector {
+			outer.AppendChild(root.GetOperatorBase().Children[0])
+		} else {
+			outer.AppendChild(root)
+		}
+		gate := &productOuterJoinGate{MockOperator: colexec.NewMockOperator(), started: started, ended: ended}
 		gate.AppendChild(outer)
-		conn.GetOperatorBase().Children[0] = gate
+		if root.OpType() == vm.Connector {
+			root.GetOperatorBase().Children[0] = gate
+		} else {
+			scope.RootOp = gate
+		}
+	}
+	if tc.outer {
+		wrapSkippedProbe(emptyScope, retired)
+		if tc.allSkipped {
+			for _, probe := range probes {
+				if probe != emptyScope {
+					wrapSkippedProbe(probe, make(chan struct{}))
+				}
+			}
+		}
 		require.True(t, message.SendJoinMapResult(message.NewJoinMapResult(nil), 43, false, 0, c.MessageBoard))
 	}
 	var values []int8
@@ -201,41 +316,18 @@ func testBroadcastProductOwner(t *testing.T, tc broadcastProductCase) {
 	owner.Magic = Merge
 	budget, err := c.proc.GetExecutionResourceBudget()
 	require.NoError(t, err)
-	registry, err := mpool.NewAllocationAccountRegistry(1, 64)
+	registry, err = mpool.NewAllocationAccountRegistry(1, 64)
 	require.NoError(t, err)
-	account, err := registry.OpenWithController(1<<20, budget)
+	accountLimit := uint64(1 << 20)
+	if nonProduct {
+		accountLimit = 64 << 20
+	}
+	account, err = registry.OpenWithController(accountLimit, budget)
 	require.NoError(t, err)
 	accountOwners, err := collectAllocationAccountOwners(c.scopes)
 	require.NoError(t, err)
-	configured, err := configureAllocationAccountOwners(accountOwners, account)
+	configured, err = configureAllocationAccountOwners(accountOwners, account)
 	require.NoError(t, err)
-	var done chan struct{}
-	t.Cleanup(func() {
-		c.proc.Cancel(context.Canceled)
-		if done != nil {
-			select {
-			case <-done:
-			case <-time.After(10 * time.Second):
-				t.Fatal("scheduler cleanup did not terminate")
-			}
-		}
-		for _, s := range c.scopes {
-			s.FreeOperator(c)
-		}
-		// As in Compile.clear, destroy the board-owned unclaimed map before
-		// completing the statement's allocation account.
-		c.MessageBoard.Reset()
-		for i := len(configured) - 1; i >= 0; i-- {
-			require.NoError(t, configured[i].ClearAllocationAccount(account))
-		}
-		require.Zero(t, account.Snapshot().Used, "quiescent spool/account cleanup must release allocations")
-		_, _, err := registry.CompleteTerminal(account)
-		require.NoError(t, err)
-		for _, s := range c.scopes {
-			s.release()
-		}
-		c.proc.Free()
-	})
 	if tc.deadline {
 		ctx, cancel := context.WithTimeout(c.proc.GetTopContext(), time.Second)
 		t.Cleanup(cancel)
@@ -249,6 +341,8 @@ func testBroadcastProductOwner(t *testing.T, tc broadcastProductCase) {
 	go func() { defer close(done); result <- root.MergeRun(c) }()
 	select {
 	case <-retired:
+	case err := <-result:
+		t.Fatalf("scheduler stopped before the empty consumer retired: %v", err)
 	case <-time.After(10 * time.Second):
 		t.Fatal("empty consumer did not retire")
 	}
@@ -257,11 +351,20 @@ func testBroadcastProductOwner(t *testing.T, tc broadcastProductCase) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("consumer cleanup did not finish independently of shared build")
 	}
+	if nonProduct {
+		require.ErrorIs(t, context.Cause(emptyScope.Proc.Ctx), process.ErrPipelineStopped,
+			"the skipped consumer must finish normally, not fail from fixture configuration")
+		require.NoError(t, query.Err(), "the parent query must still be live when the probe ends")
+		if source.Proc.Ctx.Err() != nil {
+			require.ErrorIs(t, context.Cause(source.Proc.Ctx), process.ErrPipelineStopped,
+				"source cancellation must be inherited from normal probe cleanup")
+		}
+	}
 	if tc.cancel {
 		queryCancel()
 	} else if tc.stop {
 		root.Proc.Cancel(process.ErrPipelineStopped)
-	} else if !tc.emptyPeer && !tc.deadline {
+	} else if (!tc.emptyPeer || nonProduct) && !tc.allSkipped && !tc.deadline {
 		require.NoError(t, source.Proc.Ctx.Err(), "one consumer must not retire shared producer")
 		close(reader.release)
 	}
@@ -280,7 +383,7 @@ func testBroadcastProductOwner(t *testing.T, tc broadcastProductCase) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("scheduler did not terminate after build release")
 	}
-	if tc.emptyPeer || tc.cancel || tc.stop || tc.deadline {
+	if (tc.emptyPeer && !nonProduct) || tc.allSkipped || tc.cancel || tc.stop || tc.deadline {
 		select {
 		case <-reader.stopped:
 		default:
@@ -294,14 +397,85 @@ func testBroadcastProductOwner(t *testing.T, tc broadcastProductCase) {
 	} else {
 		require.NoError(t, query.Err())
 	}
-	if !tc.emptyPeer && !tc.emptyBuild && tc.terminal == nil && !tc.cancel && !tc.stop && !tc.deadline {
-		require.ElementsMatch(t, []int8{1, 1, 1, 2, 2, 2, 3, 3, 3}, values, "peer must receive complete cross product")
+	if !tc.emptyPeer && !tc.allSkipped && !tc.emptyBuild && tc.terminal == nil && !tc.cancel && !tc.stop && !tc.deadline {
+		if tc.hashJoin {
+			require.ElementsMatch(t, []int8{1, 2, 3}, values, "peer must receive every matching build row")
+		} else if tc.loopJoin {
+			require.ElementsMatch(t, []int8{1, 1, 2}, values, "peer must receive every non-equi match")
+		} else {
+			require.ElementsMatch(t, []int8{1, 1, 1, 2, 2, 2, 3, 3, 3}, values, "peer must receive complete cross product")
+		}
 	} else {
 		require.Empty(t, values)
 	}
+	if tc.reuse {
+		// First-generation cancellation and terminal edges must not leak into a
+		// second execution of the same shared-owner tree.
+		c.MessageBoard.Reset()
+		for i := len(configured) - 1; i >= 0; i-- {
+			require.NoError(t, configured[i].ClearAllocationAccount(account))
+		}
+		require.Zero(t, account.Snapshot().Used, "first-generation allocations must retire before rebinding")
+		_, _, err = registry.CompleteTerminal(account)
+		require.NoError(t, err)
+		configured, account = nil, nil
+		require.NoError(t, root.Reset(c))
+		c.proc.ResetQueryContext()
+		reader.Free(c.proc, false, nil)
+		peer.Free(c.proc, false, nil)
+		started, retired = make(chan struct{}), make(chan struct{})
+		reader.started, reader.release, reader.stopped = started, make(chan struct{}), make(chan struct{})
+		reader.first, reader.delivered, reader.terminal = false, false, nil
+		reader.WithBatchs([]*batch.Batch{newLazyUnionAllInt8Batch(c, 1, 2, 3)})
+		peer.WithBatchs([]*batch.Batch{newLazyUnionAllInt8Batch(c, 1, 2, 3)})
+		emptyProbe.WithEndOfDataCallback(func() { <-started; close(retired) })
+		require.NoError(t, vm.HandleAllOp(emptyScope.RootOp, func(_ vm.Operator, op vm.Operator) error {
+			if gate, ok := op.(*productOuterJoinGate); ok {
+				gate.started, gate.ended, gate.once = started, retired, sync.Once{}
+			}
+			return nil
+		}))
+		require.True(t, message.SendJoinMapResult(message.NewJoinMapResult(nil), 43, false, 0, c.MessageBoard))
+		values = nil
+		root.RootOp.(*output.Output).Func = func(b *batch.Batch, _ *perfcounter.CounterSet) error {
+			if b != nil {
+				values = append(values, vector.MustFixedColNoTypeCheck[int8](b.Vecs[0])...)
+			}
+			return nil
+		}
+		account, err = registry.OpenWithController(accountLimit, budget)
+		require.NoError(t, err)
+		configured, err = configureAllocationAccountOwners(accountOwners, account)
+		require.NoError(t, err)
+		c.InitPipelineContextToExecuteQuery()
+		secondQuery, _ := process.GetQueryCtxFromProc(c.proc)
+		done, result = make(chan struct{}), make(chan error, 1)
+		go func() { defer close(done); result <- root.MergeRun(c) }()
+		select {
+		case <-retired:
+		case err := <-result:
+			t.Fatalf("reused scheduler stopped before consumer retirement: %v", err)
+		case <-time.After(10 * time.Second):
+			t.Fatal("reused consumer did not retire")
+		}
+		require.NoError(t, source.Proc.Ctx.Err(), "previous consumer cancellation must not reach the reused producer")
+		close(reader.release)
+		select {
+		case err := <-result:
+			require.NoError(t, err)
+		case <-time.After(10 * time.Second):
+			t.Fatal("reused scheduler did not terminate")
+		}
+		require.NoError(t, secondQuery.Err())
+		if tc.hashJoin {
+			require.ElementsMatch(t, []int8{1, 2, 3}, values)
+		} else {
+			require.ElementsMatch(t, []int8{1, 1, 2}, values)
+		}
+	}
 }
 
-// Gate a real outer HashJoin on source admission; the child Product must never
+// Gate a real outer HashJoin on source admission; the child join must never
 // be called when that outer join receives an empty map.
 type productOuterJoinGate struct {
 	*colexec.MockOperator

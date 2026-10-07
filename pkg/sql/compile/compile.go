@@ -7116,8 +7116,17 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 		return rs
 	}
 
-	if rs[0].RootOp.OpType() == vm.Product {
-		return c.compileSharedBroadcastProduct(node, rs, buildScopes[0])
+	stageNodes := c.queryWorkerStageNodes()
+	probeScopeGroups := c.groupBroadcastProbeScopesByCN(rs, stageNodes)
+	probeType := rs[0].RootOp.OpType()
+	// A HashBuild shared by independent colocated probes cannot belong to
+	// one consumer: that consumer may finish without calling its child, while
+	// a peer still needs the build. Reuse the common producer-region owner.
+	// Limit the extension to the HashJoin/LoopJoin lifecycle domain; other
+	// operators keep their existing ownership and execution placement.
+	if probeType == vm.Product ||
+		((probeType == vm.HashJoin || probeType == vm.LoopJoin) && hasMultiScopeGroup(probeScopeGroups)) {
+		return c.compileSharedBroadcastJoin(node, rs, buildScopes[0], probeScopeGroups)
 	}
 
 	buildScopeAttached := false
@@ -7132,9 +7141,7 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 		rs[0].PreScopes = append(rs[0].PreScopes, buildScopes[0])
 	}
 
-	stageNodes := c.queryWorkerStageNodes()
 	buildOpScopes := make([]*Scope, 0, len(stageNodes))
-	probeScopeGroups := c.groupBroadcastProbeScopesByCN(rs, stageNodes)
 
 	if len(rs) > len(stageNodes) || hasMultiScopeGroup(probeScopeGroups) {
 		for _, tmp := range probeScopeGroups {
@@ -7190,7 +7197,7 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 	return rs
 }
 
-// pendingProductBuild owns detached producers only during compilation.
+// pendingProductBuild owns detached shared HashBuild producers only during compilation.
 // Probe templates are non-owning references used to finalize worker counts.
 type pendingProductBuild struct {
 	source *Scope
@@ -7200,8 +7207,7 @@ type pendingProductBuild struct {
 
 // Keep the data plane parallel; choose producer ownership only after downstream
 // Group, Limit, Sort and Join placement is complete.
-func (c *Compile) compileSharedBroadcastProduct(node *plan.Node, probes []*Scope, source *Scope) []*Scope {
-	groups := c.groupBroadcastProbeScopesByCN(probes, c.queryWorkerStageNodes())
+func (c *Compile) compileSharedBroadcastJoin(node *plan.Node, probes []*Scope, source *Scope, groups [][]*Scope) []*Scope {
 	pending := &pendingProductBuild{source: source, groups: groups}
 	c.pendingProductBuilds = append(c.pendingProductBuilds, pending)
 	for _, group := range groups {
@@ -7214,7 +7220,7 @@ func (c *Compile) compileSharedBroadcastProduct(node *plan.Node, probes []*Scope
 		build.setRootOperator(constructJoinBuildOperator(c, group[0].RootOp, 0, node.RuntimeFilterBuildList))
 		pending.builds = append(pending.builds, build)
 	}
-	// Dispatch is wired now, while the Product still owns the join-node analysis.
+	// Dispatch is wired now, while the probe still owns the join-node analysis.
 	// Run dispatch locally so independent remote build/probe fragments share only
 	// the existing statement MessageBoard, never a foreign in-process receiver.
 	if !sameExecutionNode(source.NodeInfo, toEngineNode(c.currentCNWorker())) {
