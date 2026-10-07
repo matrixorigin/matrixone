@@ -442,6 +442,25 @@ top `topk`; across CNs the states are serialized to the merging CN. Rows with a 
 `src_id` or `src_vec` are skipped. A `WHERE` on the source table filters rows before they
 reach the aggregate.
 
+Passing the queries: a literal in the SQL text is processed with the statement, and a
+statement that runs longer than the server's long-query time (1 s by default) records its
+execution plan, literal included, in `system.statement_info`. 1,000 768-dimensional queries
+as JSON text make a 16 MB statement and a 64 MB plan, above the 10 MB row the
+`statement_info` loader accepts. A user variable or a prepared parameter keeps the queries
+out of the text; the plan names the variable (18 KB). Measured on the 1M × 768 tables
+below, 1,000 queries, top 10, inner product, queries in a user variable:
+
+| Queries | Bytes | `vecf4` | `vecf8` |
+|---------|-------|---------|---------|
+| JSON text, `@q` | 15.9 MB | 0.48 s | 0.87 s |
+| float32 `BLOB`, `CAST(@qb AS BLOB)` | 3.07 MB | 0.33 s | 0.73 s / 1.22 s (two runs) |
+| cells, `CAST(@qc AS BLOB)` with `"query_format":"vecblock"` | 444 KB / 804 KB | 0.30 s | 0.77 s |
+
+Cells are used as given (no parse or quantization), so they are the smallest and fastest
+form for `vecf8`/`vecf4`; recall is the same for all three when the cells are the column's
+encoding of the same vectors (`vecblock_binary(CAST(v AS vecf8(N)))`). A `BLOB` written
+as an `x'…'` literal is again part of the statement and its plan, at twice its size.
+
 Per group the state holds, for each query, a heap of at most `topk` hits, plus an arena
 with the hits' id text (a row that enters several queries stores its id once). All of it
 is charged to the aggregate's allocation account; preflight reserves the arena space for
