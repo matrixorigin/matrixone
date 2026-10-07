@@ -24,6 +24,10 @@ package malloc
 
 typedef int (*mo_malloc_trim_fn)(size_t);
 
+static int mo_malloc_trim_available(void) {
+	return dlsym(RTLD_DEFAULT, "malloc_trim") != NULL;
+}
+
 static int
 mo_malloc_trim(void) {
 	mo_malloc_trim_fn trim = (mo_malloc_trim_fn)dlsym(RTLD_DEFAULT, "malloc_trim");
@@ -34,6 +38,10 @@ mo_malloc_trim(void) {
 }
 */
 import "C"
+
+func canTrimCAllocator() bool {
+	return C.mo_malloc_trim_available() != 0
+}
 
 func trimCAllocator() bool {
 	return C.mo_malloc_trim() != 0

@@ -271,9 +271,8 @@ func (p *SpillBuildPayload) Close() error {
 // file admissible. Ownership is transferred by moving the SpillFile pointer;
 // Close is the only terminal operation and is idempotent.
 //
-// Legacy callers may hand off an already-open anonymous descriptor. Join spill
-// uses the reopenable form: queued partitions retain a local path and disk
-// ownership but no descriptor. Open acquires the descriptor only when the
+// Queued partitions retain a local path and disk ownership but no descriptor.
+// Open acquires the descriptor only when the
 // partition becomes the active reader. Keeping callbacks SQL-agnostic avoids a
 // message -> process import cycle while still keeping physical cleanup with the
 // move-only payload.
@@ -290,10 +289,6 @@ type SpillFile struct {
 	releaseOnce sync.Once
 }
 
-func NewSpillFile(fd *os.File, rows int64, bytes uint64, release func()) *SpillFile {
-	return &SpillFile{fd: fd, rows: rows, bytes: bytes, release: release}
-}
-
 // NewReopenableSpillFile creates a dormant spill payload. open must return the
 // complete file from offset zero. remove owns the stable name and must be safe
 // to invoke after a failed open or an already-removed path.
@@ -307,17 +302,6 @@ func NewReopenableSpillFile(
 	return &SpillFile{
 		open: open, remove: remove, rows: rows, bytes: bytes, release: release,
 	}
-}
-
-// File returns the descriptor to its current single owner.  Callers must not
-// retain it after transferring or closing the SpillFile.
-func (f *SpillFile) File() *os.File {
-	if f == nil {
-		return nil
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.fd
 }
 
 // NeedsOpen reports whether this payload is dormant. The caller uses this to

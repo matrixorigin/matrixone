@@ -72,7 +72,7 @@ func writeBuildRecords(
 	if err != nil {
 		panic(err)
 	}
-	file, err := spillfs.CreateAndRemoveFile(context.Background(), name)
+	file, err := spillfs.CreateFile(context.Background(), name)
 	if err != nil {
 		panic(err)
 	}
@@ -116,7 +116,8 @@ func TestTakeSpillBuildPayloadRejectsWrongBudgetRef(t *testing.T) {
 	_, err = fd.Seek(0, io.SeekStart)
 	require.NoError(t, err)
 	releases := 0
-	file := message.NewSpillFile(fd, 1, 1, func() { releases++ })
+	file := newTestSpillFileWithSize(fd, 1, 1, func() { releases++ })
+	defer file.Close()
 	jm := message.NewJoinMap(
 		message.GroupSels{}, nil, nil, nil, nil, proc.Mp(),
 	)
@@ -141,7 +142,11 @@ func TestTakeSpillBuildPayloadRejectsGlobalRowMismatch(t *testing.T) {
 	defer generation.Close()
 	fd, err := os.CreateTemp(t.TempDir(), "payload-row-mismatch")
 	require.NoError(t, err)
+	_, err = fd.Write([]byte{1})
+	require.NoError(t, err)
 	releases := 0
+	file := newTestSpillFileWithSize(fd, 1, 1, func() { releases++ })
+	defer file.Close()
 	jm := message.NewJoinMap(
 		message.GroupSels{}, nil, nil, nil, nil, proc.Mp(),
 	)
@@ -149,7 +154,7 @@ func TestTakeSpillBuildPayloadRejectsGlobalRowMismatch(t *testing.T) {
 	jm.IncRef(1)
 	require.NoError(t, jm.SetSpillBuildPayload(message.SpillBuildPayload{
 		Files: []*message.SpillFile{
-			message.NewSpillFile(fd, 1, 0, func() { releases++ }),
+			file,
 		},
 		BudgetRef: generation,
 	}))
@@ -175,19 +180,26 @@ func TestBucketWriterQueuesWithoutOpenFD(t *testing.T) {
 	payload := []byte("complete-record")
 	require.NoError(t, writeBucketPayload(proc, payload, 1, &writer, nil))
 	require.True(t, writer.Created())
-	require.Nil(t, writer.Fd)
+	// A second write reopens the same named file and appends, while the queued
+	// writer still retains disk ownership only.
+	require.NoError(t, writeBucketPayload(proc, payload, 1, &writer, nil))
 	require.Zero(t, generation.SpillFDUsed())
-	require.Equal(t, uint64(len(payload)), generation.SpillDiskUsed())
+	require.Equal(t, uint64(2*len(payload)), generation.SpillDiskUsed())
 
 	file, err := writer.handOffSpillFile(proc.Ctx)
 	require.NoError(t, err)
 	require.NotNil(t, file)
+	defer file.Close()
 	require.True(t, file.NeedsOpen())
 	require.Zero(t, generation.SpillFDUsed())
 
 	reader := BucketReader{}
 	require.NoError(t, reader.ResetForSpillFile(proc, generation, file))
+	defer reader.Close()
 	require.Equal(t, uint64(1), generation.SpillFDUsed())
+	got, err := io.ReadAll(reader.fd)
+	require.NoError(t, err)
+	require.Equal(t, bytes.Repeat(payload, 2), got)
 	reader.Close()
 	require.Zero(t, generation.SpillFDUsed())
 	require.Zero(t, generation.SpillDiskUsed())
@@ -502,7 +514,7 @@ func TestSpillRejectsPhysicalTruncationBeforeFirstRecord(t *testing.T) {
 		NeedsBuildForEmptyProbe: true,
 	})
 	engine.InitFromSpilledFiles([]*message.SpillFile{
-		message.NewSpillFile(file, 2, uint64(info.Size()), nil),
+		newTestSpillFileWithSize(file, 2, uint64(info.Size()), nil),
 	})
 	jm, _, err := engine.RebuildHashmap(
 		proc,

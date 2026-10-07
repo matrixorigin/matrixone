@@ -16,6 +16,10 @@
 
 package malloc
 
+func canTrimCAllocator() bool {
+	return false
+}
+
 func trimCAllocator() bool {
 	return false
 }

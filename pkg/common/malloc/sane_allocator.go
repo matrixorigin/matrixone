@@ -119,6 +119,9 @@ func (sca *SimpleCAllocator) EnableLibcTrim(
 	if threshold == 0 || cooldown <= 0 {
 		panic("libc trim requires a positive threshold and cooldown")
 	}
+	if !canTrimCAllocator() {
+		return
+	}
 	sca.libcTrimThreshold = threshold
 	sca.libcTrimCooldown = cooldown
 	sca.libcTrim = trimCAllocator

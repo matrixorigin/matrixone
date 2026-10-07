@@ -405,10 +405,9 @@ func (r *BucketReader) Close() {
 	}
 }
 
-// BucketWriter writes serialized batch records to an fd.
+// BucketWriter retains a named spill file and its disk ownership, never an FD.
 type BucketWriter struct {
 	Name            string
-	Fd              *os.File
 	Budget          *process.ExecutionResourceGeneration
 	Rows            int64
 	Bytes           uint64
@@ -417,7 +416,6 @@ type BucketWriter struct {
 	created         bool
 	writeCache      spillio.SequentialWriteCache
 	diskReservation *process.ExecutionSpillDiskReservation
-	fdReservation   *process.ExecutionSpillFDReservation
 }
 
 // spillFileServiceCache is shared by every writer created by one SpillEngine.
@@ -448,14 +446,9 @@ func (w *BucketWriter) getSpillFileService(proc *process.Process) (fileservice.M
 	return w.spillFS.get(proc)
 }
 
-func (w *BucketWriter) Created() bool { return w.Fd != nil || w.created }
+func (w *BucketWriter) Created() bool { return w.created }
 
 func (w *BucketWriter) Close() {
-	if w.Fd != nil {
-		w.writeCache.Finish(w.Fd)
-		_ = w.Fd.Close()
-		w.Fd = nil
-	}
 	if w.created && w.fileFS != nil && w.Name != "" {
 		_ = w.fileFS.RemoveFile(context.Background(), w.Name)
 	}
@@ -465,10 +458,6 @@ func (w *BucketWriter) Close() {
 		w.diskReservation.Release()
 		w.diskReservation = nil
 	}
-	if w.fdReservation != nil {
-		w.fdReservation.Release()
-		w.fdReservation = nil
-	}
 }
 
 func (w *BucketWriter) handOffSpillFile(
@@ -477,68 +466,40 @@ func (w *BucketWriter) handOffSpillFile(
 	if !w.Created() {
 		return nil, nil
 	}
-	if w.Fd == nil {
-		if ctx == nil || w.fileFS == nil || w.Name == "" ||
-			w.fdReservation != nil || w.Budget == nil {
-			return nil, process.ErrExecutionResourceInvalid
-		}
-		fdToken, err := w.Budget.ReserveSpillFD(1)
-		if err != nil {
-			return nil, err
-		}
-		fd, err := w.fileFS.OpenFile(ctx, w.Name)
-		if err != nil {
-			fdToken.Release()
-			return nil, err
-		}
-		w.writeCache.Finish(fd)
-		closeErr := fd.Close()
-		fdToken.Release()
-		if closeErr != nil {
-			return nil, closeErr
-		}
-		fs := w.fileFS
-		name := w.Name
-		disk := w.diskReservation
-		w.diskReservation = nil
-		w.created = false
-		w.fileFS = nil
-		release := func() {
-			if disk != nil {
-				disk.Release()
-			}
-		}
-		return message.NewReopenableSpillFile(
-			func(ctx context.Context) (*os.File, error) {
-				return fs.OpenFile(ctx, name)
-			},
-			func() error {
-				return fs.RemoveFile(context.Background(), name)
-			},
-			w.Rows,
-			w.Bytes,
-			release,
-		), nil
+	if ctx == nil || w.fileFS == nil || w.Name == "" || w.Budget == nil {
+		return nil, process.ErrExecutionResourceInvalid
 	}
-	w.writeCache.Finish(w.Fd)
-	if _, err := w.Fd.Seek(0, io.SeekStart); err != nil {
+	fdToken, err := w.Budget.ReserveSpillFD(1)
+	if err != nil {
 		return nil, err
 	}
-	fd := w.Fd
-	w.Fd = nil
+	fd, err := w.fileFS.OpenFile(ctx, w.Name)
+	if err != nil {
+		fdToken.Release()
+		return nil, err
+	}
+	w.writeCache.Finish(fd)
+	closeErr := fd.Close()
+	fdToken.Release()
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	fs := w.fileFS
+	name := w.Name
 	disk := w.diskReservation
-	fdToken := w.fdReservation
 	w.diskReservation = nil
-	w.fdReservation = nil
+	w.created = false
+	w.fileFS = nil
 	release := func() {
 		if disk != nil {
 			disk.Release()
 		}
-		if fdToken != nil {
-			fdToken.Release()
-		}
 	}
-	return message.NewSpillFile(fd, w.Rows, w.Bytes, release), nil
+	return message.NewReopenableSpillFile(
+		func(ctx context.Context) (*os.File, error) { return fs.OpenFile(ctx, name) },
+		func() error { return fs.RemoveFile(context.Background(), name) },
+		w.Rows, w.Bytes, release,
+	), nil
 }
 
 // MakeBucketWriters creates SpillNumBuckets writers with derived names.
@@ -672,42 +633,38 @@ func writeBucketPayload(proc *process.Process, payload []byte, rows int64, w *Bu
 			return err
 		}
 	}
-	fd := w.Fd
-	var err error
-	var fdToken *process.ExecutionSpillFDReservation
-	if fd == nil {
-		fdToken, err = w.Budget.ReserveSpillFD(1)
-		if err != nil {
-			rollbackDisk()
-			return err
-		}
-		defer fdToken.Release()
-		fs, fsErr := w.getSpillFileService(proc)
-		if fsErr != nil {
-			rollbackDisk()
-			return fsErr
-		}
-		w.fileFS = fs
-		if !w.created {
-			fd, err = fs.CreateFile(proc.Ctx, w.Name)
-			if err == nil {
-				w.created = true
-			}
-		} else {
-			fd, err = fs.OpenFile(proc.Ctx, w.Name)
-			if err == nil {
-				_, err = fd.Seek(0, io.SeekEnd)
-			}
-		}
-		if err != nil {
-			if fd != nil {
-				_ = fd.Close()
-			}
-			rollbackDisk()
-			return err
-		}
-		defer fd.Close()
+	fdToken, err := w.Budget.ReserveSpillFD(1)
+	var fd *os.File
+	if err != nil {
+		rollbackDisk()
+		return err
 	}
+	defer fdToken.Release()
+	fs, fsErr := w.getSpillFileService(proc)
+	if fsErr != nil {
+		rollbackDisk()
+		return fsErr
+	}
+	w.fileFS = fs
+	if !w.created {
+		fd, err = fs.CreateFile(proc.Ctx, w.Name)
+		if err == nil {
+			w.created = true
+		}
+	} else {
+		fd, err = fs.OpenFile(proc.Ctx, w.Name)
+		if err == nil {
+			_, err = fd.Seek(0, io.SeekEnd)
+		}
+	}
+	if err != nil {
+		if fd != nil {
+			_ = fd.Close()
+		}
+		rollbackDisk()
+		return err
+	}
+	defer fd.Close()
 	if err := checkSpillCanceled(proc); err != nil {
 		return err
 	}

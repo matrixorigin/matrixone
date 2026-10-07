@@ -499,7 +499,10 @@ func TestUnionBatchFixedNullableRange(t *testing.T) {
 		for _, preflighted := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/preflighted-%t", test.name, preflighted), func(t *testing.T) {
 				mp := mpool.MustNewZero()
-				t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+				t.Cleanup(func() {
+					defer mpool.DeleteMPool(mp)
+					require.Zero(t, mp.CurrNB())
+				})
 				source := NewVec(types.T_int64.ToType())
 				defer source.Free(mp)
 				require.NoError(t, AppendFixedList(source, []int64{10, 11, 12, 13, 14, 15, 16}, nil, mp))

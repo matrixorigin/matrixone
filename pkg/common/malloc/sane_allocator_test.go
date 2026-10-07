@@ -52,6 +52,30 @@ func TestSimpleCAllocatorTryLibcTrimThreshold(t *testing.T) {
 	require.True(t, allocator.tryLibcTrim())
 	require.Zero(t, allocator.libcFreedBytes.Load())
 	require.Equal(t, 1, trimCalls)
+
+	// A supported trim returning false is a no-op for this attempt, not an
+	// unavailable backend. Future frees must still be accounted.
+	allocator.libcTrim = func() bool { trimCalls++; return false }
+	allocator.libcFreedBytes.Store(100)
+	require.True(t, allocator.tryLibcTrim(), "the supported backend was invoked")
+	allocator.recordLibcFree(99)
+	require.Equal(t, uint64(99), allocator.libcFreedBytes.Load())
+	require.Equal(t, 2, trimCalls)
+}
+
+func TestSimpleCAllocatorLibcTrimActivation(t *testing.T) {
+	allocator := newTestSimpleCAllocator()
+	allocator.EnableLibcTrim(100, time.Second, nil, nil)
+	if canTrimCAllocator() {
+		require.Equal(t, uint64(100), allocator.libcTrimThreshold)
+		require.NotNil(t, allocator.libcTrim)
+		return
+	}
+	require.Zero(t, allocator.libcTrimThreshold)
+	require.Nil(t, allocator.libcTrim)
+	allocator.recordLibcFree(100)
+	require.Zero(t, allocator.libcFreedBytes.Load())
+	require.False(t, allocator.libcTrimQueued.Load())
 }
 
 func TestSimpleCAllocatorSchedulesLibcTrim(t *testing.T) {
