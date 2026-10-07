@@ -45,6 +45,15 @@ type syncer struct {
 	common
 	ctx context.Context
 
+	lifecycleMu   sync.Mutex
+	cancel        context.CancelFunc
+	startDone     chan struct{}
+	startDoneOnce sync.Once
+	admitted      bool
+	closed        atomic.Bool
+	closeOnce     sync.Once
+	appendWG      sync.WaitGroup
+
 	// producer worker dequeues the items from the data queue and
 	// write the entries which is storage related to the datasync
 	// shard.
@@ -73,8 +82,11 @@ func NewDataSync(
 	cfg logservice.HAKeeperClientConfig,
 	fs fileservice.FileService,
 ) (logservice.DataSync, error) {
+	ownerCtx, ownerCancel := context.WithCancel(context.Background())
 	ss := &syncer{
-		ctx: context.Background(),
+		ctx:       ownerCtx,
+		cancel:    ownerCancel,
+		startDone: make(chan struct{}),
 		common: common{
 			stopper:        stopper,
 			log:            rt.Logger().With(zap.String("module", "datasync")),
@@ -94,6 +106,7 @@ func NewDataSync(
 	)
 	ss.consumer = newConsumer(ss.common, fs, &ss.writeLsn, &ss.syncedLsn)
 	if ss.consumer == nil {
+		ss.finishStart()
 		_ = ss.Close()
 		panic("cannot create consumer, please set standby file-service")
 	}
@@ -102,7 +115,11 @@ func NewDataSync(
 		&ss.syncedLsn,
 		withTruncateInterval(truncateInterval),
 	)
+	ss.lifecycleMu.Lock()
+	ss.admitted = true
+	ss.lifecycleMu.Unlock()
 	if err := ss.stopper.RunNamedTask("data-syncer", ss.start); err != nil {
+		ss.finishStart()
 		return nil, err
 	}
 	return ss, nil
@@ -110,6 +127,16 @@ func NewDataSync(
 
 // Append implements the logservice.DataSync interface.
 func (s *syncer) Append(ctx context.Context, lsn uint64, data []byte) {
+	s.lifecycleMu.Lock()
+	if s.closed.Load() {
+		s.lifecycleMu.Unlock()
+		return
+	}
+	s.appendWG.Add(1)
+	ownerCtx := s.ctx
+	s.lifecycleMu.Unlock()
+	defer s.appendWG.Done()
+
 	// Acquire data intance from pool.
 	w := s.pool.acquire(len(data))
 
@@ -120,7 +147,11 @@ func (s *syncer) Append(ctx context.Context, lsn uint64, data []byte) {
 	w.upstreamLsn = lsn
 
 	// send data to the queue.
-	s.producer.Enqueue(ctx, w)
+	queueCtx, cancel := context.WithCancel(ctx)
+	stopOwner := context.AfterFunc(ownerCtx, cancel)
+	s.producer.Enqueue(queueCtx, w)
+	stopOwner()
+	cancel()
 }
 
 // NotifyReplicaID implements the logservice.DataSync interface.
@@ -134,41 +165,65 @@ func (s *syncer) NotifyReplicaID(shardID uint64, replicaID uint64, typ logservic
 
 // Close implements the logservice.DataSync interface.
 func (s *syncer) Close() error {
-	if s.producer != nil {
-		s.producer.Close()
-	}
-	if s.truncation != nil {
-		s.truncation.Close()
-	}
-	if s.consumer != nil {
-		s.consumer.Close()
-	}
+	s.closeOnce.Do(func() {
+		s.lifecycleMu.Lock()
+		s.closed.Store(true)
+		cancel := s.cancel
+		admitted := s.admitted
+		s.lifecycleMu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+		s.appendWG.Wait()
+		if admitted {
+			<-s.startDone
+		}
+		if s.producer != nil {
+			s.producer.Close()
+		}
+		if s.truncation != nil {
+			s.truncation.Close()
+		}
+		if s.consumer != nil {
+			s.consumer.Close()
+		}
+	})
 	return nil
 }
 
 // start starts the goroutines in the syncer module:
 func (s *syncer) start(ctx context.Context) {
-	var e error
-
-	// start truncation worker.
-	if err := s.stopper.RunNamedTask("datasync-truncation", s.truncation.Start); err != nil {
-		s.log.Error("failed to start truncation worker", zap.Error(err))
-		e = err
+	s.lifecycleMu.Lock()
+	if s.closed.Load() {
+		s.lifecycleMu.Unlock()
+		s.finishStart()
+		return
 	}
+	ownerCtx := s.ctx
+	s.lifecycleMu.Unlock()
+	defer s.finishStart()
+	workerCtx, cancelWorker := context.WithCancel(ctx)
+	stopOwner := context.AfterFunc(ownerCtx, cancelWorker)
+	defer stopOwner()
+	defer cancelWorker()
 
-	// start sync_data worker.
-	if err := s.stopper.RunNamedTask("datasync-consumer", s.consumer.Start); err != nil {
-		s.log.Error("failed to start consumer worker", zap.Error(err))
-		e = err
+	var workers sync.WaitGroup
+	startWorker := func(worker Worker) {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			worker.Start(workerCtx)
+		}()
 	}
+	startWorker(s.truncation)
+	startWorker(s.consumer)
+	startWorker(s.producer)
+	<-workerCtx.Done()
+	workers.Wait()
+}
 
-	// the filter worker should start after replay entries in the WAL.
-	if err := s.stopper.RunNamedTask("datasync-producer", s.producer.Start); err != nil {
-		s.log.Error("failed to start producer worker", zap.Error(err))
-		e = err
-	}
-
-	if e != nil {
-		s.log.Error("failed to start datasync worker", zap.Error(e))
-	}
+func (s *syncer) finishStart() {
+	s.startDoneOnce.Do(func() {
+		close(s.startDone)
+	})
 }

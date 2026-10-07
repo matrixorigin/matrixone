@@ -205,9 +205,18 @@ func (c *consumer) Start(ctx context.Context) {
 
 // Close implement the Worker interface.
 func (c *consumer) Close() {
-	c.logClient.close()
-	c.txnClient.close()
-	c.jobScheduler.Stop()
+	if c.logClient != nil {
+		c.logClient.close()
+	}
+	if c.upstreamLogClient != nil {
+		c.upstreamLogClient.close()
+	}
+	if c.txnClient != nil {
+		c.txnClient.close()
+	}
+	if c.jobScheduler != nil {
+		c.jobScheduler.Stop()
+	}
 }
 
 // waitPermission waits for the permission to do the data sync.
@@ -551,6 +560,8 @@ func (c *consumer) fullSync(ctx context.Context, ckpLocationStr string) error {
 
 func (c *consumer) copyFiles(ctx context.Context, locations []string, dstDir string) error {
 	syncJobs := make([]*tasks.Job, len(locations))
+	scheduled := 0
+	var firstErr error
 	for i, location := range locations {
 		job := new(tasks.Job)
 		job.Init(ctx, location, tasks.JTAny,
@@ -587,23 +598,28 @@ func (c *consumer) copyFiles(ctx context.Context, locations []string, dstDir str
 		if err := c.jobScheduler.Schedule(job); err != nil {
 			job.DoneWithErr(err)
 			c.log.Error("failed to schedule sync job", zap.Error(err))
-			return err
+			firstErr = err
+			scheduled = i + 1
+			break
 		}
+		scheduled = i + 1
 	}
 
-	// Wait for all jobs to be done.
-	for i, job := range syncJobs {
+	// Wait for every accepted job, even after the first failure. A scheduler
+	// release does not certify completion of jobs already accepted by its pool.
+	for i := 0; i < scheduled; i++ {
+		job := syncJobs[i]
 		res := job.WaitDone()
-		if res != nil && res.Err != nil {
+		if firstErr == nil && res != nil && res.Err != nil {
 			c.log.Error("failed to sync object",
 				zap.String("location", locations[i]),
 				zap.Error(res.Err),
 			)
-			return res.Err
+			firstErr = res.Err
 		}
 	}
 
-	return nil
+	return firstErr
 }
 
 // copyFile copies the file with the retry operation.

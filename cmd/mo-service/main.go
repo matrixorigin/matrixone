@@ -515,6 +515,19 @@ func startLogService(
 	fileService fileservice.FileService,
 	shutdownC chan struct{},
 ) error {
+	var dataSyncOwner logservice.DataSync
+	ownedByLogService := false
+	defer func() {
+		if dataSyncOwner != nil && !ownedByLogService {
+			if err := dataSyncOwner.Close(); err != nil {
+				logutil.GetGlobalLogger().Error(
+					"failed to close data sync after log service construction failed",
+					zap.Error(err),
+				)
+			}
+		}
+	}()
+
 	lscfg := cfg.getLogServiceConfig()
 	commonConfigKVMap, _ := dumpCommonConfig(*cfg)
 	rt := runtime.ServiceRuntime(lscfg.UUID)
@@ -533,6 +546,7 @@ func startLogService(
 		if err != nil {
 			panic(err)
 		}
+		dataSyncOwner = ds
 		options = append(options, logservice.WithDataSync(ds))
 	}
 	s, err := logservice.NewService(
@@ -544,6 +558,7 @@ func startLogService(
 	if err != nil {
 		panic(err)
 	}
+	ownedByLogService = true
 	finish := serviceLifecycle.registerTask(serviceRoleLog)
 	serviceWG.Add(1)
 	var taskDone sync.Once
