@@ -57,11 +57,11 @@ func BenchmarkSubstringASCII(b *testing.B) {
 }
 
 func TestSubstringExactBinaryRuntimeDomain(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
 	for _, oid := range []types.T{types.T_binary, types.T_varbinary} {
 		for _, arity := range []int{2, 3} {
 			t.Run(fmt.Sprintf("%s/%d", oid, arity), func(t *testing.T) {
-				proc := testutil.NewProcess(t)
-				mp := proc.Mp()
 				input := makeBinaryStringTestInput(t, proc, oid.ToType(), [][]byte{[]byte("你好"), []byte("你好"), nil}, []types.RuntimeStringDomain{types.RuntimeStringText, types.RuntimeStringBinary, types.RuntimeStringText})
 				defer input.Free(mp)
 				input.GetNulls().Add(2)
