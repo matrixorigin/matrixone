@@ -15,9 +15,9 @@
 package system
 
 import (
-	"fmt"
-
 	"github.com/elastic/gosigar"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // memoryStatsFromPages converts one kernel snapshot using that kernel's page
@@ -26,7 +26,7 @@ import (
 // overflowing or underflowing a value used for hard allocation admission.
 func memoryStatsFromPages(total, freePages, inactivePages, pageSize uint64) (gosigar.Mem, error) {
 	if pageSize == 0 || freePages > total/pageSize || inactivePages > total/pageSize-freePages {
-		return gosigar.Mem{}, fmt.Errorf("invalid host memory page counters")
+		return gosigar.Mem{}, moerr.NewInternalErrorNoCtx("invalid host memory page counters")
 	}
 	free := freePages * pageSize
 	available := (freePages + inactivePages) * pageSize

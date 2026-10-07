@@ -31,10 +31,10 @@ static kern_return_t mo_host_memory(vm_statistics_data_t *stats) {
 import "C"
 
 import (
-	"fmt"
-
 	"github.com/elastic/gosigar"
 	"golang.org/x/sys/unix"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // Read Mach counts directly: gosigar@40aab500bfac hard-codes <<12, which
@@ -46,7 +46,7 @@ func hostMemoryStats() (gosigar.Mem, error) {
 	}
 	var stats C.vm_statistics_data_t
 	if status := C.mo_host_memory(&stats); status != C.KERN_SUCCESS {
-		return gosigar.Mem{}, fmt.Errorf("host_statistics error=%d", status)
+		return gosigar.Mem{}, moerr.NewInternalErrorNoCtxf("host_statistics error=%d", status)
 	}
 	return memoryStatsFromPages(total, uint64(stats.free_count),
 		uint64(stats.inactive_count), uint64(C.vm_kernel_page_size))
