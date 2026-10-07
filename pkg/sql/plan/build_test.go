@@ -1347,9 +1347,10 @@ func TestSingleTableSQLBuilder(t *testing.T) {
 func TestRollupWindowRanksAfterRollupUnion(t *testing.T) {
 	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	for _, tc := range []struct {
-		name             string
-		sql              string
-		expectedHeadings []string
+		name                    string
+		sql                     string
+		expectedHeadings        []string
+		expectedWindowInputType plan.Node_NodeType
 	}{
 		{
 			name: "aliased aggregate output",
@@ -1365,7 +1366,8 @@ func TestRollupWindowRanksAfterRollupUnion(t *testing.T) {
 				group by l_returnflag, l_linestatus with rollup
 				having total_qty > 0
 				order by total_qty desc, l_returnflag, l_linestatus`,
-			expectedHeadings: []string{"l_returnflag", "l_linestatus", "total_qty", "row_num", "rank_num", "dense_rank_num"},
+			expectedHeadings:        []string{"l_returnflag", "l_linestatus", "total_qty", "row_num", "rank_num", "dense_rank_num"},
+			expectedWindowInputType: plan.Node_UNION_ALL,
 		},
 		{
 			name: "aggregate output without alias",
@@ -1380,7 +1382,8 @@ func TestRollupWindowRanksAfterRollupUnion(t *testing.T) {
 				from lineitem
 				group by l_returnflag, l_linestatus with rollup
 				order by sum(l_quantity) desc, l_returnflag, l_linestatus`,
-			expectedHeadings: []string{"l_returnflag", "l_linestatus", "sum(l_quantity)", "row_num", "rank_num", "dense_rank_num"},
+			expectedHeadings:        []string{"l_returnflag", "l_linestatus", "sum(l_quantity)", "row_num", "rank_num", "dense_rank_num"},
+			expectedWindowInputType: plan.Node_AGG,
 		},
 		{
 			name: "aggregate used only by windows",
@@ -1394,7 +1397,8 @@ func TestRollupWindowRanksAfterRollupUnion(t *testing.T) {
 				from lineitem
 				group by l_returnflag, l_linestatus with rollup
 				order by row_num`,
-			expectedHeadings: []string{"l_returnflag", "l_linestatus", "row_num", "rank_num", "dense_rank_num"},
+			expectedHeadings:        []string{"l_returnflag", "l_linestatus", "row_num", "rank_num", "dense_rank_num"},
+			expectedWindowInputType: plan.Node_AGG,
 		},
 		{
 			name: "window outputs only",
@@ -1405,7 +1409,8 @@ func TestRollupWindowRanksAfterRollupUnion(t *testing.T) {
 					dense_rank() over (order by 1) as dense_rank_num
 				from lineitem
 				group by l_returnflag with rollup`,
-			expectedHeadings: []string{"row_num", "rank_num", "dense_rank_num"},
+			expectedHeadings:        []string{"row_num", "rank_num", "dense_rank_num"},
+			expectedWindowInputType: plan.Node_AGG,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1417,19 +1422,28 @@ func TestRollupWindowRanksAfterRollupUnion(t *testing.T) {
 			require.Equal(t, tc.expectedHeadings, query.Headings)
 
 			windowCount := 0
-			windowAfterUnionCount := 0
+			windowAfterGroupingSetOutputCount := 0
+			windowInputTypes := make([]plan.Node_NodeType, 0, 3)
 			for _, node := range query.Nodes {
 				if node.NodeType == plan.Node_WINDOW {
 					windowCount++
 					require.Len(t, node.Children, 1)
-					if query.Nodes[node.Children[0]].NodeType == plan.Node_UNION_ALL {
-						windowAfterUnionCount++
+					input := query.Nodes[node.Children[0]]
+					windowInputTypes = append(windowInputTypes, input.NodeType)
+					if input.NodeType == tc.expectedWindowInputType {
+						if input.NodeType == plan.Node_AGG {
+							require.Len(t, input.Children, 1)
+							_, expanded := DecodeGroupingSetExpandOption(
+								query.Nodes[input.Children[0]].ExtraOptions)
+							require.True(t, expanded)
+						}
+						windowAfterGroupingSetOutputCount++
 					}
 				}
 			}
 
 			require.Equal(t, 3, windowCount)
-			require.Equal(t, 1, windowAfterUnionCount)
+			require.Equal(t, 1, windowAfterGroupingSetOutputCount, "window input types: %v", windowInputTypes)
 		})
 	}
 }

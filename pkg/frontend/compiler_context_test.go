@@ -120,7 +120,7 @@ func TestSubscriptionMetadataEnumerationObservesCancellation(t *testing.T) {
 }
 
 func TestActiveSubscriptionMetadataCandidatesAreBoundedAtCatalogQuery(t *testing.T) {
-	columnCheckSQL := "select 1 from mo_catalog.mo_columns where att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
+	columnCheckSQL := "select 1 from mo_catalog.mo_columns where account_id = 0 and att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
 
 	for _, test := range []struct {
 		name          string
@@ -234,7 +234,7 @@ func subscriptionPublisherAccountResult(rows ...[]interface{}) *MysqlResultSet {
 }
 
 func TestLegacySubscriptionMetadataResolvesPublisherAccountAtCatalogBoundary(t *testing.T) {
-	columnCheckSQL := "select 1 from mo_catalog.mo_columns where att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
+	columnCheckSQL := "select 1 from mo_catalog.mo_columns where account_id = 0 and att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
 	candidateSQL := getSubsSqlOld +
 		" and sub_account_id = 7 and status = 0 and sub_name is not null and sub_name <> '' limit 2"
 	lookupSQL := subscriptionPublisherAccountLookupSQL([]string{"publisher"})

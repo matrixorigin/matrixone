@@ -3067,7 +3067,7 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 
 	case plan.Node_PROJECT, plan.Node_MATERIAL:
 		projectTag := node.BindingTags[0]
-		_, groupingSetExpand := DecodeGroupingSetExpandOption(node.ExtraOptions)
+		groupingSetCount, groupingSetExpand := DecodeGroupingSetExpandOption(node.ExtraOptions)
 
 		var neededProj []int32
 
@@ -3109,6 +3109,10 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			}
 
 			refreshExprNullabilityFromInputs(expr, childProjList)
+			if groupingSetExpand {
+				expr.Typ = groupingSetExpandOutputType(
+					expr.Typ, node.GroupingFlag, groupingSetCount, needed)
+			}
 
 			globalRef := [2]int32{projectTag, needed}
 			remapping.addColRef(globalRef)
@@ -4680,12 +4684,33 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		utIdx := i - 1
 		lastTag = builder.genNewBindTag()
 		leftNodeTag := builder.qry.Nodes[lastNodeID].BindingTags[0]
+		previousNode := builder.qry.Nodes[lastNodeID]
 
 		lastNodeID, err = appendSetOperationNode(
 			newUnionType[utIdx], lastNodeID, newNodes[i], leftNodeTag, lastTag,
 		)
 		if err != nil {
 			return 0, err
+		}
+		// Every branch already has the same common type. In a consecutive
+		// UNION chain the final DISTINCT also removes the preceding UNION's
+		// duplicates. Only demote a node made by this loop, never an independently
+		// bound branch with its own casts, ordering, limit or multiplicity rules.
+		// Keep variable-width/equality-key domains and prepared plans whose
+		// types can specialize at execution on their existing paths.
+		if !builder.isPrepareStatement && i > 1 && newUnionType[utIdx] == plan.Node_UNION &&
+			previousNode.NodeType == plan.Node_UNION &&
+			len(previousNode.PhysicalEqualityKeyList) == 0 {
+			fixedWidth := true
+			for _, expr := range previousNode.ProjectList {
+				if !types.T(expr.Typ.Id).IsFixedLen() {
+					fixedWidth = false
+					break
+				}
+			}
+			if fixedWidth {
+				previousNode.NodeType = plan.Node_UNION_ALL
+			}
 		}
 	}
 

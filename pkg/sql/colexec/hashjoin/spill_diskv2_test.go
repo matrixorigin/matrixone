@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -77,8 +78,9 @@ func TestHashJoinSpillDiskV2(t *testing.T) {
 	buildBat.SetRowCount(100)
 
 	// Write one production-format spill record to the DISK-V2 file.
-	buildFile, err := spillfs.CreateAndRemoveFile(context.Background(), "diskv2_build")
+	buildFile, err := spillfs.CreateFile(context.Background(), "diskv2_build")
 	require.NoError(t, err)
+	defer buildFile.Close()
 	var payload bytes.Buffer
 	err = buildBat.MarshalBinaryWithGroupingTo(&payload)
 	require.NoError(t, err)
@@ -96,6 +98,13 @@ func TestHashJoinSpillDiskV2(t *testing.T) {
 	require.NoError(t, err)
 	info, err := buildFile.Stat()
 	require.NoError(t, err)
+	require.NoError(t, buildFile.Close())
+	file := message.NewReopenableSpillFile(
+		func(ctx context.Context) (*os.File, error) { return spillfs.OpenFile(ctx, "diskv2_build") },
+		func() error { return spillfs.RemoveFile(context.Background(), "diskv2_build") },
+		100, uint64(info.Size()), nil,
+	)
+	defer file.Close()
 
 	// rebuild via SpillEngine
 	engine := newAccountedTestSpillEngine(t, spillutil.SpillEngineConfig{
@@ -104,7 +113,7 @@ func TestHashJoinSpillDiskV2(t *testing.T) {
 		NeedBatches:             true,
 	})
 	engine.InitFromSpilledFiles([]*message.SpillFile{
-		message.NewSpillFile(buildFile, 100, uint64(info.Size()), nil),
+		file,
 	})
 
 	analyzer := process.NewAnalyzer(0, false, false, "test")
