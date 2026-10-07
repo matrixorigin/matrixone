@@ -566,6 +566,13 @@ Oracle: the result equals a reference computed over the whole table by
 cast to the column's format — on the CPU the same ids in the same order; on the GPU scores
 within the fp32 GEMM's tolerance, rows closer than it in either order.
 
+- **Type-switch families** (`pkg/container/types/typeswitch_test.go`): a `switch` over
+  `types.T` in `pkg/` that names `T_float32` must name every `T_float*`/`T_bf*` type, and
+  one that names `T_array_float32` every `T_array_*` type, or carry
+  `// typeswitch:partial <reason>` on or above the switch. The families are read from the
+  constants in `types.go`, so a new type is checked at every such switch. Switches that
+  predate the check are listed in `testdata/typeswitch_baseline.txt` by file, function and
+  family; the list may only shrink (regenerate with `-args -update-typeswitch`).
 - **Unit** (`aggexec/vector_matmul_test.go`): top-k and tie order; NULL ids and vectors;
   empty groups (`[]` per query); several groups; merge of three partial states in both
   orders against a brute-force reference; intermediate-result round trip; accounted fill
