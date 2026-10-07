@@ -461,12 +461,6 @@ func startTNService(
 			if owner != nil {
 				err := owner.Close()
 				closeErr = errors.Join(closeErr, err)
-				if err == nil {
-					state := &serviceLifecycle.roles[serviceRoleTN]
-					state.errMu.Lock()
-					serviceLifecycle.tnOwner = nil
-					state.errMu.Unlock()
-				}
 			}
 			finishTask(closeErr)
 			serviceLifecycle.notifyFatal(closeErr)
@@ -485,10 +479,6 @@ func startTNService(
 			shutdownC,
 			func(value tnservice.Service) {
 				owner = value
-				state := &serviceLifecycle.roles[serviceRoleTN]
-				state.errMu.Lock()
-				serviceLifecycle.tnOwner = value
-				state.errMu.Unlock()
 			},
 			tnservice.WithConfigData(commonConfigKVMap))
 		if err != nil {
