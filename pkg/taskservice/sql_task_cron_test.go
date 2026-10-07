@@ -47,10 +47,36 @@ func TestScheduleSQLTaskCatchUpPersistsTriggerState(t *testing.T) {
 	mustAddTestSQLTask(t, store, 1, sqlTask)
 	sqlTask = mustGetTestSQLTask(t, store, 1, WithTaskName(EQ, "task-scheduled"))[0]
 
+	type catchUpEvent struct {
+		serviceID string
+		taskID    uint64
+		started   bool
+	}
+	catchUp := make(chan catchUpEvent, 2)
+	restore := SetSQLTaskRefreshHookForTest(nil, func(serviceID string, taskID uint64, started bool) {
+		catchUp <- catchUpEvent{serviceID: serviceID, taskID: taskID, started: started}
+	})
+	defer restore()
+
 	ts.StartScheduleSQLTask()
 	defer ts.StopScheduleSQLTask()
 
-	waitHasTasks(t, store, 5*time.Second, WithTaskParentTaskIDCond(EQ, fmt.Sprintf("sql-task:%d", sqlTask.TaskID)))
+	select {
+	case event := <-catchUp:
+		require.Equal(t, ts.rt.ServiceUUID(), event.serviceID)
+		require.Equal(t, sqlTask.TaskID, event.taskID)
+		require.True(t, event.started)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for SQL task catch-up to start")
+	}
+	select {
+	case event := <-catchUp:
+		require.Equal(t, ts.rt.ServiceUUID(), event.serviceID)
+		require.Equal(t, sqlTask.TaskID, event.taskID)
+		require.False(t, event.started)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for SQL task catch-up to finish")
+	}
 
 	updated := mustGetTestSQLTask(t, store, 1, WithTaskIDCond(EQ, sqlTask.TaskID))[0]
 	require.Equal(t, uint64(1), updated.TriggerCount)
