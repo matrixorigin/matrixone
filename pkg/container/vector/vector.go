@@ -8091,9 +8091,11 @@ func (v *Vector) UnionNull(mp *mpool.MPool) error {
 
 // It is simply append. the purpose of retention is ease of use
 func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
-	sourceGrouping := nulls.Contains(&w.gsp, uint64(sel))
+	// EmptyByFlag includes borrowed Arrow validity. Avoid row lookup only
+	// when the source has no NULL/grouping bits; retain the full append path.
+	sourceGrouping := !w.gsp.EmptyByFlag() && nulls.Contains(&w.gsp, uint64(sel))
 	sourceNull := w.IsConstNull() ||
-		(!w.IsConst() && nulls.Contains(&w.nsp, uint64(sel)))
+		(!w.IsConst() && !w.nsp.EmptyByFlag() && nulls.Contains(&w.nsp, uint64(sel)))
 	// Uniform ordinary metadata needs neither per-row lookup nor sidecar
 	// admission. Include both vectors: an ordinary source can still append to
 	// a mixed destination, and NULL rows retain their string-source ownership.

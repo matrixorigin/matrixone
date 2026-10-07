@@ -6376,6 +6376,159 @@ func TestUnionOneOrdinaryMetadataAfterNullPrefix(t *testing.T) {
 	require.Equal(t, PrepareParamNone, destination.GetPrepareParamKind())
 }
 
+func TestUnionOneEmptyMarkerSets(t *testing.T) {
+	for _, oid := range []types.T{types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_decimal128, types.T_decimal256} {
+		t.Run(oid.String(), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+			source := NewVec(oid.ToType())
+			t.Cleanup(func() { source.Free(mp) })
+			destination := NewVec(oid.ToType())
+			t.Cleanup(func() { destination.Free(mp) })
+			require.NoError(t, source.PreExtend(3, mp))
+			source.SetLength(3)
+			require.NoError(t, source.SetStringSource(types.StringSourceLiteral))
+			tlen := source.GetType().TypeSize()
+			// Distinct fixed-width byte patterns make every selected row and
+			// byte observable, including widths handled by the generic copy.
+			for row := range 3 {
+				for column := range tlen {
+					source.data[row*tlen+column] = byte(row*32 + column + 1)
+				}
+			}
+			require.NoError(t, destination.PreExtend(3, mp))
+			capacity := cap(destination.data)
+			for range 2 {
+				destination.ResetWithSameType()
+				for row, sel := range []int64{2, 0, 1} {
+					require.NoError(t, destination.UnionOne(source, sel, mp))
+					require.Equal(t, source.data[int(sel)*tlen:(int(sel)+1)*tlen], destination.data[row*tlen:(row+1)*tlen])
+					require.False(t, destination.IsNull(uint64(row)))
+					require.False(t, destination.GetGrouping().Contains(uint64(row)))
+					require.Equal(t, types.StringSourceLiteral, destination.GetStringSourceAt(row))
+					require.Equal(t, PrepareParamNone, destination.GetPrepareParamKindAt(row))
+				}
+				require.Equal(t, 3, destination.Length())
+				require.Equal(t, capacity, len(destination.data), "append retains extendWithBitmaps' slice-to-cap contract")
+				require.Same(t, mp, destination.prepareParamKindsMP)
+				require.True(t, destination.prepareParamKindSeen)
+			}
+			// A later non-ordinary append must allocate its sidecar from the
+			// same owner and retain the ordinary prefix's provenance.
+			source.SetPrepareParamKind(PrepareParamInteger)
+			require.NoError(t, destination.UnionOne(source, 1, mp))
+			require.Equal(t, PrepareParamNone, destination.GetPrepareParamKindAt(0))
+			require.Equal(t, PrepareParamInteger, destination.GetPrepareParamKindAt(3))
+			require.Same(t, mp, destination.prepareParamKindsMP)
+			require.Equal(t, source.data[tlen:2*tlen], destination.data[3*tlen:4*tlen])
+		})
+	}
+}
+
+func TestUnionOneSourceMarkerLookup(t *testing.T) {
+	for _, scenario := range []string{"source_null", "source_all_null", "source_grouping", "null_prefix", "grouping_prefix", "source_const", "destination_const", "nil_mpool"} {
+		t.Run(scenario, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+			source := NewVec(types.T_int64.ToType())
+			t.Cleanup(func() { source.Free(mp) })
+			destination := NewVec(types.T_int64.ToType())
+			t.Cleanup(func() { destination.Free(mp) })
+			require.NoError(t, AppendFixedList(source, []int64{11, 22, 33}, nil, mp))
+			require.NoError(t, destination.PreExtend(4, mp))
+			offset := 0
+			appendMP := mp
+			switch scenario {
+			case "source_null":
+				source.GetNulls().Set(1)
+			case "source_all_null":
+				for row := range source.Length() {
+					source.GetNulls().Set(uint64(row))
+				}
+			case "source_grouping":
+				source.GetGrouping().Set(1)
+			case "null_prefix":
+				require.NoError(t, AppendFixed(destination, int64(0), true, mp))
+				offset = 1
+			case "grouping_prefix":
+				require.NoError(t, AppendFixed(destination, int64(44), false, mp))
+				destination.GetGrouping().Set(0)
+				offset = 1
+			case "source_const":
+				source.Free(mp)
+				var err error
+				source, err = NewConstFixed(types.T_int64.ToType(), int64(77), 3, mp)
+				require.NoError(t, err)
+			case "destination_const":
+				destination.SetClass(CONSTANT)
+			case "nil_mpool":
+				appendMP = nil
+			}
+			for row, sel := range []int64{0, 1, 2} {
+				require.NoError(t, destination.UnionOne(source, sel, appendMP))
+				require.Equal(t, source.IsNull(uint64(sel)), destination.IsNull(uint64(row+offset)))
+				require.Equal(t, source.GetGrouping().Contains(uint64(sel)), destination.GetGrouping().Contains(uint64(row+offset)))
+				if !source.IsNull(uint64(sel)) {
+					// Assert physical row bytes as well as constant-class retention.
+					physicalSourceRow := int(sel)
+					if source.IsConst() {
+						physicalSourceRow = 0
+					}
+					require.Equal(t, source.data[physicalSourceRow*8:(physicalSourceRow+1)*8], destination.data[(row+offset)*8:(row+offset+1)*8])
+				}
+			}
+			require.Equal(t, 3+offset, destination.Length())
+			require.Same(t, mp, destination.prepareParamKindsMP)
+			if scenario == "null_prefix" {
+				require.True(t, destination.IsNull(0))
+			}
+			if scenario == "grouping_prefix" {
+				require.True(t, destination.GetGrouping().Contains(0))
+				require.Equal(t, int64(44), GetFixedAtWithTypeCheck[int64](destination, 0))
+			}
+			if scenario == "destination_const" {
+				require.True(t, destination.IsConst())
+				require.Equal(t, int64(11), GetFixedAtWithTypeCheck[int64](destination, 2))
+			}
+		})
+	}
+}
+
+func TestUnionOneFixedGrowthFailureKeepsPrefix(t *testing.T) {
+	const poolCap = int64(1 << 20)
+	mp, err := mpool.NewMPool(t.Name(), poolCap, mpool.NoFixed)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.Zero(t, mp.CurrNB())
+		mpool.DeleteMPool(mp)
+	})
+	destination := NewOffHeapVecWithType(types.T_int64.ToType())
+	t.Cleanup(func() { destination.Free(mp) })
+	require.NoError(t, destination.PreExtend(1, mp))
+	rows := cap(destination.data) / 8
+	for range rows {
+		require.NoError(t, AppendFixed(destination, int64(7), false, mp))
+	}
+	sourceMP := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, sourceMP.CurrNB()) })
+	source := NewVec(types.T_int64.ToType())
+	t.Cleanup(func() { source.Free(sourceMP) })
+	require.NoError(t, AppendFixed(source, int64(9), false, sourceMP))
+	fill, err := mp.Alloc(int(poolCap-mp.CurrNB()), true)
+	require.NoError(t, err)
+	t.Cleanup(func() { mp.Free(fill) })
+	require.Error(t, destination.UnionOne(source, 0, mp))
+	require.Equal(t, rows, destination.Length())
+	for _, value := range MustFixedColNoTypeCheck[int64](destination) {
+		require.Equal(t, int64(7), value)
+	}
+	mp.Free(fill)
+	fill = nil
+	require.NoError(t, destination.UnionOne(source, 0, mp))
+	require.Equal(t, rows+1, destination.Length())
+	require.Equal(t, int64(9), GetFixedAtWithTypeCheck[int64](destination, rows))
+}
+
 func TestUnionOneFinalizesCollapsedStringSourcePreflight(t *testing.T) {
 	mp := mpool.MustNewZero()
 	source := NewVec(types.T_varchar.ToType())
