@@ -213,6 +213,9 @@ func New(
 }
 
 func (e *Engine) Close() error {
+	// Linearize statistics admission before waiting on any engine-owned
+	// resource.  A callback must not start work after engine teardown begins.
+	e.dynamicCtx.closed.Store(true)
 	if e.gcPool != nil {
 		_ = e.gcPool.ReleaseTimeout(time.Second * 3)
 	}

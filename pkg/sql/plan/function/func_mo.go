@@ -172,7 +172,7 @@ func MoTableRows(
 // some special cases:
 // 1. cluster table
 
-type GetMoTableSizeRowsFuncType = func() func(
+type GetMoTableSizeRowsFuncType = func(
 	context.Context, []uint64, []uint64, []uint64,
 	engine.Engine, bool, bool) ([]uint64, error)
 
@@ -414,7 +414,11 @@ func MoTableSizeRowsHelper(
 		}
 	}
 
-	ret, err = (*executor.Load())()(
+	fn := executor.Load()
+	if fn == nil {
+		return moerr.NewInternalError(proc.Ctx, "MoTableSizeRows: statistics executor is nil")
+	}
+	ret, err = (*fn)(
 		proc.Ctx, accIds, dbIds, tblIds, eng,
 		forceUpdate || MoTableRowsSizeForceUpdate.Load(),
 		resetUpdateTime)

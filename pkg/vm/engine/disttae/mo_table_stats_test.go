@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
@@ -74,6 +75,26 @@ func TestGetChangedTableListWithNoTN(t *testing.T) {
 		require.Error(t, err)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend), err)
 	})
+}
+
+func TestMoTableStatsDispatchRejectsInvalidAndClosedEngines(t *testing.T) {
+	ctx := context.Background()
+	for name, fn := range map[string]func() *function.GetMoTableSizeRowsFuncType{
+		"size": moTableSizeFunc,
+		"rows": moTableRowsFunc,
+	} {
+		t.Run(name, func(t *testing.T) {
+			callback := fn()
+			_, err := (*callback)(ctx, nil, nil, nil, nil, false, false)
+			require.Error(t, err)
+
+			closed := &Engine{}
+			closed.dynamicCtx.closed.Store(true)
+			_, err = (*callback)(ctx, nil, nil, nil, closed, false, false)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "engine is closed")
+		})
+	}
 }
 
 func Test_intsJoin(t *testing.T) {
