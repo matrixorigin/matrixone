@@ -2707,18 +2707,20 @@ func TestCDCWatermarkUpdater_CDCWatermarkUpdaterRun(t *testing.T) {
 	u := NewCDCWatermarkUpdater(
 		t.Name(),
 		ie,
+		// Keep the real cron lifecycle and default callback wiring without
+		// allowing an unsynchronized scheduler tick to drive the assertions.
+		WithCronJobInterval(time.Hour),
 	)
-	// Start only the job queue. Calling cronRun directly keeps each flush
-	// synchronized with the assertions instead of relying on a scheduler tick.
 	var releaseOnce sync.Once
 	release := func() { releaseOnce.Do(func() { close(ie.releaseWrite) }) }
-	u.queue.Start()
+	u.Start()
 	defer func() {
 		// Release a blocked persistence before waiting for the queue worker. This
 		// keeps timeout/failure cleanup from waiting on its own test barrier.
 		release()
-		u.queue.Stop()
+		u.Stop()
 	}()
+	cronRun := u.customized.cronJob
 
 	ctx := context.Background()
 
@@ -2777,7 +2779,7 @@ func TestCDCWatermarkUpdater_CDCWatermarkUpdaterRun(t *testing.T) {
 		)
 		assert.NoError(t, err)
 		assert.Equal(t, nts, ret)
-		u.cronRun(ctx)
+		cronRun(ctx)
 	}
 	tuple, err := ie.GetTableDataByPK(
 		"mo_catalog",
@@ -2853,7 +2855,7 @@ func TestCDCWatermarkUpdater_CDCWatermarkUpdaterRun(t *testing.T) {
 	ie.blockWatermarkWrite.Store(true)
 	flushDone := make(chan struct{})
 	go func() {
-		u.cronRun(ctx)
+		cronRun(ctx)
 		close(flushDone)
 	}()
 	select {
@@ -2872,7 +2874,7 @@ func TestCDCWatermarkUpdater_CDCWatermarkUpdaterRun(t *testing.T) {
 
 	// The first flush must publish its snapshot while retaining the newer
 	// buffered update for the next flush.
-	u.cronRun(ctx)
+	cronRun(ctx)
 	assert.Equal(t, 6, ie.RowCount("mo_catalog", "mo_cdc_watermark"))
 	for _, key := range keys {
 		tuple, err := ie.GetTableDataByPK(
