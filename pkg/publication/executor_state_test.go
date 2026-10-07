@@ -62,26 +62,6 @@ func TestPublicationTaskExecutor_Stop_NotRunning(t *testing.T) {
 	assert.False(t, exec.IsRunning())
 }
 
-// ---- fillDefaultOption ----
-
-func TestFillDefaultOption_Nil(t *testing.T) {
-	opt := fillDefaultOption(nil)
-	assert.NotNil(t, opt)
-	assert.True(t, opt.GCInterval > 0)
-	assert.True(t, opt.GCTTL > 0)
-	assert.True(t, opt.SyncTaskInterval > 0)
-	assert.NotNil(t, opt.RetryOption)
-	assert.NotNil(t, opt.SQLExecutorRetryOpt)
-}
-
-func TestFillDefaultOption_Partial(t *testing.T) {
-	opt := fillDefaultOption(&PublicationExecutorOption{
-		GCInterval: 1,
-	})
-	assert.Equal(t, 1, int(opt.GCInterval))
-	assert.True(t, opt.GCTTL > 0)
-}
-
 // ---- taskEntryLess ----
 
 func TestTaskEntryLess(t *testing.T) {

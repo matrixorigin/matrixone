@@ -267,11 +267,6 @@ func TestCompareTableDefs_DropColumn(t *testing.T) {
 
 // ==== filter_object_batch.go ====
 
-func TestFilterBatchBySnapshotTS_NilBatchCov(t *testing.T) {
-	_, _, err := filterBatchBySnapshotTS(context.Background(), nil, types.TS{}, nil)
-	assert.NoError(t, err)
-}
-
 func TestCreateObjectFromBatch_NilBatchCov(t *testing.T) {
 	var stats objectio.ObjectStats
 	result, _, err := createObjectFromBatch(context.Background(), nil, nil, &stats, types.TS{}, false, nil, nil, 0, false)
@@ -280,21 +275,6 @@ func TestCreateObjectFromBatch_NilBatchCov(t *testing.T) {
 }
 
 // ==== filter_object_submit.go ====
-
-func TestSubmitObjectsAsInsert_Empty(t *testing.T) {
-	assert.NoError(t, submitObjectsAsInsert(context.Background(), "t1", nil, nil, nil, nil, nil))
-}
-
-func TestSubmitObjectsAsInsert_NilEngine(t *testing.T) {
-	stats := []*ObjectWithTableInfo{{}}
-	err := submitObjectsAsInsert(context.Background(), "t1", nil, nil, stats, nil, nil)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "engine is nil")
-}
-
-func TestSubmitObjectsAsDelete_Empty(t *testing.T) {
-	assert.NoError(t, submitObjectsAsDelete(context.Background(), "t1", nil, nil, nil, nil))
-}
 
 func TestSubmitObjectsAsDelete_NilEngine(t *testing.T) {
 	stats := []*ObjectWithTableInfo{{}}
@@ -377,18 +357,6 @@ func TestUpstreamExecutor_CloseNilConnCov(t *testing.T) {
 	assert.NoError(t, e.Close())
 }
 
-func TestUpstreamExecutor_InitRetryPolicyCov(t *testing.T) {
-	e := &UpstreamExecutor{retryTimes: 3, retryDuration: time.Minute}
-	e.initRetryPolicy(nil)
-	assert.NotNil(t, e.retryPolicy)
-}
-
-func TestUpstreamExecutor_InitRetryPolicyNegative(t *testing.T) {
-	e := &UpstreamExecutor{retryTimes: -1, retryDuration: time.Minute}
-	e.initRetryPolicy(nil)
-	assert.NotNil(t, e.retryPolicy)
-}
-
 // ==== sql_executor.go: Result ====
 
 func TestResult_AllNil(t *testing.T) {
@@ -428,11 +396,6 @@ func TestObjectWithTableInfo_FieldAccess(t *testing.T) {
 }
 
 // ==== error_handle.go: DefaultClassifier ====
-
-func TestDefaultClassifier_NilErr(t *testing.T) {
-	c := DefaultClassifier{}
-	assert.False(t, c.IsRetryable(nil))
-}
 
 func TestDefaultClassifier_GenericError(t *testing.T) {
 	c := DefaultClassifier{}

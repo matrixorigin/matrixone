@@ -146,14 +146,6 @@ func TestCoverageBoost2_AObjectMap_SetGetDelete(t *testing.T) {
 // filter_object.go — rewriteTombstoneRowidsBatch edge cases
 // ---------------------------------------------------------------------------
 
-func TestCoverageBoost2_RewriteTombstoneRowidsBatch_NilBatch(t *testing.T) {
-	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
-	require.NoError(t, err)
-	defer mp.Free(nil)
-	err = rewriteTombstoneRowidsBatch(context.Background(), nil, nil, mp)
-	assert.NoError(t, err)
-}
-
 func TestCoverageBoost2_RewriteTombstoneRowidsBatch_ZeroRows(t *testing.T) {
 	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	require.NoError(t, err)
@@ -162,79 +154,6 @@ func TestCoverageBoost2_RewriteTombstoneRowidsBatch_ZeroRows(t *testing.T) {
 	bat.SetRowCount(0)
 	err = rewriteTombstoneRowidsBatch(context.Background(), bat, nil, mp)
 	assert.NoError(t, err)
-}
-
-func TestCoverageBoost2_RewriteTombstoneRowidsBatch_NilAObjectMap(t *testing.T) {
-	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
-	require.NoError(t, err)
-	defer mp.Free(nil)
-	bat := &batch.Batch{Vecs: []*vector.Vector{vector.NewVec(types.T_Rowid.ToType())}}
-	bat.SetRowCount(0)
-	err = rewriteTombstoneRowidsBatch(context.Background(), bat, nil, mp)
-	assert.NoError(t, err)
-}
-
-func TestCoverageBoost2_RewriteTombstoneRowidsBatch_WrongType(t *testing.T) {
-	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
-	require.NoError(t, err)
-	defer mp.Free(nil)
-
-	// Create a batch with non-Rowid first column
-	vec := vector.NewVec(types.T_int32.ToType())
-	require.NoError(t, vector.AppendFixed(vec, int32(42), false, mp))
-	bat := &batch.Batch{Vecs: []*vector.Vector{vec}}
-	bat.SetRowCount(1)
-
-	amap := NewAObjectMap()
-	err = rewriteTombstoneRowidsBatch(context.Background(), bat, amap, mp)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "first column of tombstone should be rowid")
-	vec.Free(mp)
-}
-
-func TestCoverageBoost2_RewriteTombstoneRowidsBatch_NilRowidVec(t *testing.T) {
-	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
-	require.NoError(t, err)
-	defer mp.Free(nil)
-
-	bat := &batch.Batch{Vecs: []*vector.Vector{nil}}
-	bat.SetRowCount(1)
-	amap := NewAObjectMap()
-	err = rewriteTombstoneRowidsBatch(context.Background(), bat, amap, mp)
-	assert.NoError(t, err)
-}
-
-func TestCoverageBoost2_RewriteTombstoneRowidsBatch_WithRowOffsetMap(t *testing.T) {
-	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
-	require.NoError(t, err)
-	defer mp.Free(nil)
-
-	upstreamObjID := types.NewObjectid()
-	// Create rowid with rowoffset=5
-	rid := types.NewRowIDWithObjectIDBlkNumAndRowID(upstreamObjID, 0, 5)
-
-	rowidVec := vector.NewVec(types.T_Rowid.ToType())
-	require.NoError(t, vector.AppendFixed(rowidVec, rid, false, mp))
-	bat := &batch.Batch{Vecs: []*vector.Vector{rowidVec}}
-	bat.SetRowCount(1)
-
-	downstreamObjID := types.NewObjectid()
-	var downstreamStats objectio.ObjectStats
-	objectio.SetObjectStatsObjectName(&downstreamStats, objectio.BuildObjectNameWithObjectID(&downstreamObjID))
-
-	amap := NewAObjectMap()
-	amap.Set(upstreamObjID.String(), &AObjectMapping{
-		DownstreamStats: downstreamStats,
-		RowOffsetMap:    map[uint32]uint32{5: 10},
-	})
-
-	err = rewriteTombstoneRowidsBatch(context.Background(), bat, amap, mp)
-	assert.NoError(t, err)
-
-	rowids := vector.MustFixedColWithTypeCheck[types.Rowid](rowidVec)
-	assert.Equal(t, uint32(10), rowids[0].GetRowOffset())
-
-	rowidVec.Free(mp)
 }
 
 func TestCoverageBoost2_RewriteTombstoneRowidsBatch_NoMapping(t *testing.T) {

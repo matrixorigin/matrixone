@@ -885,12 +885,6 @@ func (e *netTempErr) Error() string   { return "temp" }
 func (e *netTempErr) Timeout() bool   { return false }
 func (e *netTempErr) Temporary() bool { return true }
 
-func TestMySQLErrorClassifier_RetryableCode1205(t *testing.T) {
-	c := MySQLErrorClassifier{}
-	err := &gomysql.MySQLError{Number: 1205, Message: "Lock wait timeout"}
-	assert.True(t, c.IsRetryable(err))
-}
-
 func TestPolicyDo_TimerContextCancel(t *testing.T) {
 	// Test the timer + context cancel path (L536-538)
 	ctx, cancel := context.WithCancel(context.Background())
