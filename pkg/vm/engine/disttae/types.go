@@ -294,6 +294,13 @@ type Engine struct {
 
 	gcPool *ants.Pool
 
+	gcSchedulerMu     sync.Mutex
+	gcSchedulerCancel context.CancelFunc
+	gcSchedulerDone   chan struct{}
+
+	closeOnce sync.Once
+	closeErr  error
+
 	// XXX related to cn push model
 	pClient PushClient
 
