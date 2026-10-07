@@ -119,13 +119,16 @@ type MinimumAllocationPressureError struct {
 	Response string
 	Used     uint64
 	Limit    uint64
+	// LastRefusal is diagnostic only: unwrapping it would turn the terminal
+	// minimum-unit failure back into a retryable capacity failure.
+	LastRefusal string
 }
 
 func (e *MinimumAllocationPressureError) Error() string {
 	if e == nil {
 		return "minimum allocation cannot be admitted"
 	}
-	return fmt.Sprintf(
+	detail := fmt.Sprintf(
 		"minimum allocation cannot be admitted: owner=%s site=%s response=%s used=%d limit=%d",
 		e.Owner,
 		e.Site,
@@ -133,12 +136,17 @@ func (e *MinimumAllocationPressureError) Error() string {
 		e.Used,
 		e.Limit,
 	)
+	if e.LastRefusal != "" {
+		detail += "; last capacity refusal: " + e.LastRefusal
+	}
+	return detail
 }
 
 func NewMinimumAllocationPressureError(
 	owner string,
 	site string,
 	account *mpool.AllocationAccount,
+	lastRefusal ...error,
 ) error {
 	err := &MinimumAllocationPressureError{
 		Owner:    owner,
@@ -149,6 +157,9 @@ func NewMinimumAllocationPressureError(
 		snapshot := account.Snapshot()
 		err.Used = snapshot.Used
 		err.Limit = snapshot.Limit
+	}
+	if len(lastRefusal) > 0 && lastRefusal[0] != nil {
+		err.LastRefusal = lastRefusal[0].Error()
 	}
 	return err
 }

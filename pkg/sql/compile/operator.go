@@ -637,6 +637,14 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.ProjectList = t.ProjectList
 		op.SetInfo(&info)
 		return op
+	case vm.UnionAll:
+		t := sourceOp.(*unionall.UnionAll)
+		if t.SequentialBranches != 0 {
+			panic("cannot duplicate a sequential UNION ALL scheduler")
+		}
+		op := unionall.NewArgument()
+		op.SetInfo(&info)
+		return op
 	case vm.Apply:
 		t := sourceOp.(*apply.Apply)
 		op := apply.NewArgument()
