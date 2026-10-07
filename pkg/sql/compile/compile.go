@@ -7221,15 +7221,32 @@ func (c *Compile) compileSharedBroadcastJoin(node *plan.Node, probes []*Scope, s
 		pending.builds = append(pending.builds, build)
 	}
 	// Dispatch is wired now, while the probe still owns the join-node analysis.
-	// Run dispatch locally so independent remote build/probe fragments share only
-	// the existing statement MessageBoard, never a foreign in-process receiver.
-	if !sameExecutionNode(source.NodeInfo, toEngineNode(c.currentCNWorker())) {
+	// Preserve the existing Product placement. HashJoin/LoopJoin keep the source
+	// on its original CN instead of relaying the build payload via the coordinator.
+	isProduct := probes[0].RootOp.OpType() == vm.Product
+	if isProduct && !sameExecutionNode(source.NodeInfo, toEngineNode(c.currentCNWorker())) {
 		source = c.newMergeScope([]*Scope{source})
 		pending.source = source
 	}
 	dispatchOp := constructDispatch(0, pending.builds, source, node, false)
 	dispatchOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
 	source.setRootOperator(dispatchOp)
+	if !isProduct {
+		// A build, unlike a probe, must consume the source to completion. Put
+		// the source under the independent build on the same CN (or the first
+		// build when no probe uses that CN, as in the original placement). The
+		// local Dispatch receiver then stays in the same RemoteRun scope tree.
+		owner := pending.builds[0]
+		for _, build := range pending.builds {
+			if sameExecutionNode(source.NodeInfo, build.NodeInfo) {
+				owner = build
+				break
+			}
+		}
+		owner.PreScopes = append(owner.PreScopes, source)
+		owner.ConcurrentPreScopes = true
+		pending.source = nil // ownership transferred to pending.builds
+	}
 	return probes
 }
 
@@ -7282,7 +7299,9 @@ func (c *Compile) finishProductBuilds(scopes []*Scope, mergeResults bool) []*Sco
 		// Build connectors belong to the job, not to the result receiver set. Thus
 		// ordinary/ordered/partial result merges retain their existing semantics.
 		job := c.newMergeScope(pending.builds)
-		job.PreScopes = append(job.PreScopes, pending.source)
+		if pending.source != nil {
+			job.PreScopes = append(job.PreScopes, pending.source)
+		}
 		job.ConcurrentPreScopes = true
 		if c.auxiliaryProductScopes == nil {
 			c.auxiliaryProductScopes = make(map[*Scope]bool)

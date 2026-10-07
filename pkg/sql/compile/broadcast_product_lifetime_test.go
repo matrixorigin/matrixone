@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc/mock_morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
@@ -103,6 +104,7 @@ type broadcastProductCase struct {
 	loopJoin                                                                       bool
 	allSkipped                                                                     bool
 	reuse                                                                          bool
+	remoteSource                                                                   bool
 	terminal                                                                       error
 }
 
@@ -131,14 +133,22 @@ func TestBroadcastProductSharedProducerOwnership(t *testing.T) {
 // peer. This internal scope contract does not claim a particular SQL plan uses
 // this placement.
 func TestBroadcastHashJoinSharedProducerOwnership(t *testing.T) {
-	testBroadcastNonProductOwners(t, false)
+	testBroadcastNonProductOwners(t, false, false)
 }
 
 func TestBroadcastLoopJoinSharedProducerOwnership(t *testing.T) {
-	testBroadcastNonProductOwners(t, true)
+	testBroadcastNonProductOwners(t, true, false)
 }
 
-func testBroadcastNonProductOwners(t *testing.T, loopJoin bool) {
+func TestBroadcastHashJoinRemoteSourceOwnership(t *testing.T) {
+	testBroadcastNonProductOwners(t, false, true)
+}
+
+func TestBroadcastLoopJoinRemoteSourceOwnership(t *testing.T) {
+	testBroadcastNonProductOwners(t, true, true)
+}
+
+func testBroadcastNonProductOwners(t *testing.T, loopJoin, remoteSource bool) {
 	for _, tc := range []broadcastProductCase{
 		{name: "first_consumer_skipped"},
 		{name: "last_consumer_skipped", reverse: true},
@@ -154,6 +164,7 @@ func testBroadcastNonProductOwners(t *testing.T, loopJoin bool) {
 		{name: "query_cancel_then_reuse", cancel: true, reuse: true},
 	} {
 		tc.hashJoin, tc.loopJoin, tc.outer = !loopJoin, loopJoin, true
+		tc.remoteSource = remoteSource
 		t.Run(tc.name, func(t *testing.T) { testBroadcastProductOwner(t, tc) })
 	}
 }
@@ -168,6 +179,13 @@ func testBroadcastProductOwner(t *testing.T, tc broadcastProductCase) {
 	c.counterSet = &perfcounter.CounterSet{}
 	c.MessageBoard = message.NewMessageBoard()
 	c.proc.SetMessageBoard(c.MessageBoard)
+	// Register the remote process's automatic cleanup before the scope cleanup,
+	// so workers and board/account users quiesce before its pool is released.
+	var remoteProc *process.Process
+	if tc.remoteSource {
+		remoteProc = testutil.NewProcess(t)
+		remoteProc.SetMessageBoard(c.MessageBoard)
+	}
 	c.addr = "cn1:6001"
 	c.cnList = engine.Nodes{{Addr: c.addr, Mcpu: 1}, {Addr: "cn2:6001", Mcpu: 1}}
 	c.execType = plan2.ExecTypeAP_MULTICN
@@ -175,6 +193,9 @@ func testBroadcastProductOwner(t *testing.T, tc broadcastProductCase) {
 	makeScope := func(op vm.Operator) *Scope {
 		s := newScope(Remote)
 		s.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
+		if tc.remoteSource {
+			s.NodeInfo.Addr = "cn2:6001"
+		}
 		s.Proc = c.proc.NewNoContextChildProc(0)
 		s.RootOp = op
 		return s
@@ -217,6 +238,7 @@ func testBroadcastProductOwner(t *testing.T, tc broadcastProductCase) {
 	c.scopes = owners
 	var done chan struct{}
 	var configured []executionAllocationAccountOwner
+	var encodedBuild *Scope
 	var registry *mpool.AllocationAccountRegistry
 	var account *mpool.AllocationAccount
 	t.Cleanup(func() {
@@ -231,6 +253,10 @@ func testBroadcastProductOwner(t *testing.T, tc broadcastProductCase) {
 		for _, s := range c.scopes {
 			s.FreeOperator(c)
 		}
+		if encodedBuild != nil {
+			encodedBuild.FreeOperator(c)
+			encodedBuild.release()
+		}
 		c.MessageBoard.Reset()
 		for i := len(configured) - 1; i >= 0; i-- {
 			require.NoError(t, configured[i].ClearAllocationAccount(account))
@@ -239,6 +265,10 @@ func testBroadcastProductOwner(t *testing.T, tc broadcastProductCase) {
 			require.Zero(t, account.Snapshot().Used, "quiescent spool/account cleanup must release allocations")
 			_, _, err := registry.CompleteTerminal(account)
 			require.NoError(t, err)
+		}
+		if remoteProc != nil {
+			require.Zero(t, remoteProc.Mp().CurrNB(), "decoded producer pool must drain before process cleanup")
+			require.Zero(t, c.proc.Mp().CurrNB(), "coordinator pool must drain before process cleanup")
 		}
 		for _, s := range c.scopes {
 			s.release()
@@ -258,6 +288,59 @@ func testBroadcastProductOwner(t *testing.T, tc broadcastProductCase) {
 		require.Empty(t, emptyScope.PreScopes)
 		job := owner.PreScopes[2]
 		buildScope = job.PreScopes[0]
+	}
+	if tc.remoteSource {
+		// Round-trip the exact remote producer fragment: only its top connector
+		// stays on the coordinator. The nested Source Dispatch and its local
+		// receiver must survive together. This is codec/runtime evidence, not a
+		// full MORPC cluster; the reader is a deterministic admission barrier.
+		require.Equal(t, "cn2:6001", buildScope.NodeInfo.Addr)
+		require.Equal(t, []*Scope{source}, buildScope.PreScopes)
+		require.Nil(t, findPipelineExternalLocalReceiver(buildScope))
+		data, err := func() ([]byte, error) {
+			wireReader := value_scan.NewArgument()
+			root := source.RootOp.GetOperatorBase()
+			children := root.Children
+			root.SetChildren([]vm.Operator{wireReader})
+			defer func() {
+				root.SetChildren(children)
+				wireReader.Free(source.Proc, false, nil)
+				wireReader.Release()
+			}()
+			wireScope, withoutOutput := getScopeForRemoteRunEncoding(buildScope)
+			require.False(t, withoutOutput)
+			require.Equal(t, vm.HashBuild, wireScope.RootOp.OpType())
+			return encodeScope(wireScope)
+		}()
+		require.NoError(t, err)
+		decoded, err := decodeScope(data, remoteProc, true, nil)
+		detachedDecoded := decoded
+		t.Cleanup(func() {
+			if detachedDecoded != nil {
+				detachedDecoded.FreeOperator(c)
+				detachedDecoded.release()
+			}
+		})
+		require.NoError(t, err)
+		require.Len(t, decoded.PreScopes, 1)
+		originalSource := source
+		source = decoded.PreScopes[0]
+		d := source.RootOp.(*dispatch.Dispatch)
+		require.Len(t, d.LocalRegs, 1)
+		require.Empty(t, d.RemoteRegs, "colocated payload must not travel through the coordinator")
+		require.Same(t, decoded.Proc.Reg.MergeReceivers[0], d.LocalRegs[0])
+		// Replace only the serialized ValueScan leaf, not the compiled data edge.
+		d.GetChildren(0).Free(source.Proc, false, nil)
+		d.GetChildren(0).Release()
+		d.SetChildren([]vm.Operator{reader})
+		conn := connector.NewArgument().WithReg(buildScope.RootOp.(*connector.Connector).Reg)
+		conn.SetAnalyzeControl(c.anal.curNodeIdx, false)
+		decoded.setRootOperator(conn)
+		originalSource.RootOp.GetOperatorBase().SetChildren([]vm.Operator{value_scan.NewArgument()})
+		owner.PreScopes[2].PreScopes[0] = decoded
+		encodedBuild = buildScope // only now is the original tree detached
+		detachedDecoded = nil     // ownership transferred to c.scopes
+		buildScope = decoded
 	}
 	build, ok := buildScope.RootOp.(*hashbuild.HashBuild)
 	if !ok {
