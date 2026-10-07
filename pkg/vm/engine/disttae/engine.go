@@ -228,7 +228,7 @@ func (e *Engine) Close() error {
 		}
 
 		if e.gcPool != nil {
-			_ = e.gcPool.ReleaseTimeout(time.Second * 3)
+			e.closeErr = e.gcPool.ReleaseTimeout(time.Second * 3)
 		}
 
 		e.dynamicCtx.Close()
