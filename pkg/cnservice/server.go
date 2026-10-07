@@ -573,6 +573,7 @@ func (s *service) closeService() error {
 		}
 		withdrawErr := s.withdrawViewMetadataAdmission()
 		localErr := closeCNServiceSteps(
+			s.closeStoreEngine,
 			s.stopRPCs,
 			func() error {
 				// stop I/O pipeline
@@ -603,6 +604,16 @@ func (s *service) closeService() error {
 		s.closeErr = errors.Join(withdrawErr, localErr)
 	})
 	return s.closeErr
+}
+
+func (s *service) closeStoreEngine() error {
+	if s.storeEngine == nil {
+		return nil
+	}
+	if closer, ok := s.storeEngine.(interface{ Close() error }); ok {
+		return closer.Close()
+	}
+	return nil
 }
 
 // CloseComplete certifies local teardown, not a successful remote generation

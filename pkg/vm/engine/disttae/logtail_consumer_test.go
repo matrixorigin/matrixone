@@ -402,7 +402,7 @@ func TestPushClient_UnusedTableGCTicker(t *testing.T) {
 func TestPushClient_DoGCUnusedTable(t *testing.T) {
 	initFn := func(ctx context.Context, c *PushClient) {
 		c.eng = &Engine{}
-		c.eng.globalStats = NewGlobalStats(ctx, c.eng, nil)
+		c.eng.globalStats = newTestGlobalStats(ctx, c.eng, nil)
 		c.subscriber = &logTailSubscriber{}
 		c.subscriber.mu.cond = sync.NewCond(&c.subscriber.mu)
 		c.subscriber.setReady()
@@ -605,7 +605,8 @@ func TestPushClient_LoadAndConsumeLatestCkp(t *testing.T) {
 	defer cli.Close()
 
 	// Create Engine
-	e := New(
+	var e *Engine
+	e = New(
 		ctx,
 		sid,
 		mp,
@@ -614,6 +615,7 @@ func TestPushClient_LoadAndConsumeLatestCkp(t *testing.T) {
 		nil,
 		nil,
 		4,
+		func(owner *Engine) { e = owner },
 	)
 	defer e.Close()
 
@@ -1739,7 +1741,7 @@ func TestDoGCUnusedTable_ConcurrentAccess(t *testing.T) {
 	c.subscribed.m = make(map[uint64]*subEntry)
 	c.eng = &Engine{
 		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
-		globalStats: NewGlobalStats(ctx, nil, nil),
+		globalStats: newTestGlobalStats(ctx, nil, nil),
 	}
 	c.subscriber = &logTailSubscriber{}
 	c.subscriber.mu.cond = sync.NewCond(&c.subscriber.mu)
@@ -1817,7 +1819,7 @@ func TestDoGCUnusedTable_RaceWithIsSubscribed(t *testing.T) {
 	c.subscribed.m = make(map[uint64]*subEntry)
 	c.eng = &Engine{
 		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
-		globalStats: NewGlobalStats(ctx, nil, nil),
+		globalStats: newTestGlobalStats(ctx, nil, nil),
 	}
 	c.subscriber = &logTailSubscriber{}
 	c.subscriber.mu.cond = sync.NewCond(&c.subscriber.mu)
@@ -2005,7 +2007,7 @@ func TestDoGCUnusedTable_ProtectedTables(t *testing.T) {
 	c.subscribed.m = make(map[uint64]*subEntry)
 	c.eng = &Engine{
 		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
-		globalStats: NewGlobalStats(ctx, nil, nil),
+		globalStats: newTestGlobalStats(ctx, nil, nil),
 	}
 	c.subscriber = &logTailSubscriber{}
 	c.subscriber.mu.cond = sync.NewCond(&c.subscriber.mu)
@@ -2034,7 +2036,7 @@ func TestDoGCUnusedTable_NonSubscribedState(t *testing.T) {
 	c.subscribed.m = make(map[uint64]*subEntry)
 	c.eng = &Engine{
 		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
-		globalStats: NewGlobalStats(ctx, nil, nil),
+		globalStats: newTestGlobalStats(ctx, nil, nil),
 	}
 	c.subscriber = &logTailSubscriber{}
 	c.subscriber.mu.cond = sync.NewCond(&c.subscriber.mu)
@@ -2067,7 +2069,7 @@ func TestGC_ConcurrentWithSubscribe(t *testing.T) {
 	c.subscribed.m = make(map[uint64]*subEntry)
 	c.eng = &Engine{
 		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
-		globalStats: NewGlobalStats(ctx, nil, nil),
+		globalStats: newTestGlobalStats(ctx, nil, nil),
 	}
 	c.subscriber = &logTailSubscriber{}
 	c.subscriber.mu.cond = sync.NewCond(&c.subscriber.mu)
@@ -2129,7 +2131,7 @@ func TestGC_ConcurrentWithUnsubscribe(t *testing.T) {
 	c.subscribed.m = make(map[uint64]*subEntry)
 	c.eng = &Engine{
 		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
-		globalStats: NewGlobalStats(ctx, nil, nil),
+		globalStats: newTestGlobalStats(ctx, nil, nil),
 	}
 	c.subscribed.eng = c.eng
 	c.subscriber = &logTailSubscriber{}
@@ -2255,7 +2257,7 @@ func TestGC_TimestampUpdateBetweenPhases(t *testing.T) {
 	c.subscribed.m = make(map[uint64]*subEntry)
 	c.eng = &Engine{
 		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
-		globalStats: NewGlobalStats(ctx, nil, nil),
+		globalStats: newTestGlobalStats(ctx, nil, nil),
 	}
 	c.subscriber = &logTailSubscriber{}
 	c.subscriber.mu.cond = sync.NewCond(&c.subscriber.mu)
@@ -2295,7 +2297,7 @@ func TestEmptyMap_Operations(t *testing.T) {
 	c.subscribed.m = make(map[uint64]*subEntry)
 	c.eng = &Engine{
 		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
-		globalStats: NewGlobalStats(ctx, nil, nil),
+		globalStats: newTestGlobalStats(ctx, nil, nil),
 	}
 	c.subscriber = &logTailSubscriber{}
 	c.subscriber.mu.cond = sync.NewCond(&c.subscriber.mu)
@@ -2327,7 +2329,7 @@ func TestHighConcurrency_StressTest(t *testing.T) {
 	c.subscribed.m = make(map[uint64]*subEntry)
 	c.eng = &Engine{
 		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
-		globalStats: NewGlobalStats(ctx, nil, nil),
+		globalStats: newTestGlobalStats(ctx, nil, nil),
 	}
 	c.subscribed.eng = c.eng
 	c.subscriber = &logTailSubscriber{}
@@ -2375,7 +2377,7 @@ func TestGC_FailedUnsubscribe(t *testing.T) {
 	c.subscribed.m = make(map[uint64]*subEntry)
 	c.eng = &Engine{
 		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
-		globalStats: NewGlobalStats(ctx, nil, nil),
+		globalStats: newTestGlobalStats(ctx, nil, nil),
 	}
 	c.subscriber = &logTailSubscriber{}
 	c.subscriber.mu.cond = sync.NewCond(&c.subscriber.mu)
@@ -2439,7 +2441,7 @@ func TestConcurrent_GC_Subscribe_Unsubscribe_Read(t *testing.T) {
 	c.subscribed.m = make(map[uint64]*subEntry)
 	c.eng = &Engine{
 		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
-		globalStats: NewGlobalStats(ctx, nil, nil),
+		globalStats: newTestGlobalStats(ctx, nil, nil),
 	}
 	c.subscribed.eng = c.eng
 	c.subscriber = &logTailSubscriber{}
@@ -2904,7 +2906,7 @@ func TestConcurrent_ReadWrite_SameTable(t *testing.T) {
 	c.subscribed.m = make(map[uint64]*subEntry)
 	c.eng = &Engine{
 		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
-		globalStats: NewGlobalStats(ctx, nil, nil),
+		globalStats: newTestGlobalStats(ctx, nil, nil),
 	}
 	c.subscribed.eng = c.eng
 	c.subscriber = &logTailSubscriber{}
@@ -3045,7 +3047,7 @@ func TestAllWriteOperations_Concurrent(t *testing.T) {
 	c.subscribed.m = make(map[uint64]*subEntry)
 	c.eng = &Engine{
 		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
-		globalStats: NewGlobalStats(ctx, nil, nil),
+		globalStats: newTestGlobalStats(ctx, nil, nil),
 	}
 	c.subscribed.eng = c.eng
 	c.subscriber = &logTailSubscriber{}
@@ -3212,7 +3214,7 @@ func TestGC_FailureRetry(t *testing.T) {
 	c.subscribed.m = make(map[uint64]*subEntry)
 	c.eng = &Engine{
 		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
-		globalStats: NewGlobalStats(ctx, nil, nil),
+		globalStats: newTestGlobalStats(ctx, nil, nil),
 	}
 	c.subscribed.eng = c.eng
 	c.subscriber = &logTailSubscriber{}
@@ -3268,7 +3270,7 @@ func TestGC_PartialFailure(t *testing.T) {
 	c.subscribed.m = make(map[uint64]*subEntry)
 	c.eng = &Engine{
 		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
-		globalStats: NewGlobalStats(ctx, nil, nil),
+		globalStats: newTestGlobalStats(ctx, nil, nil),
 	}
 	c.subscribed.eng = c.eng
 	c.subscriber = &logTailSubscriber{}
