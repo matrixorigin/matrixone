@@ -106,7 +106,7 @@ func TestBuildHashmapPreservesRowwiseGroupingAcrossCopiedBatchMerge(t *testing.T
 		{name: "multi-column grouping pattern", groupFirst: true, columns: 2},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			defer proc.Free()
 			builder := newTestHashmapBuilder(t)
 			defer builder.Free(proc)
@@ -160,7 +160,7 @@ func TestBuildHashmapPreservesRowwiseGroupingAcrossCopiedBatchMerge(t *testing.T
 }
 
 func TestBuildHashmapDetectsGroupingForOriginalBuildRelation(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	builder := newTestHashmapBuilder(t)
 	defer builder.Free(proc)
@@ -188,7 +188,7 @@ func TestBuildHashmapDetectsGroupingForOriginalBuildRelation(t *testing.T) {
 
 func TestBuildHashMap(t *testing.T) {
 	hb := newTestHashmapBuilder(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	err := hb.Prepare([]*plan.Expr{newExpr(0, types.T_int32.ToType())}, -1, -1, nil, proc)
 	require.NoError(t, err)
 
@@ -223,7 +223,7 @@ func TestHashmapBuilderPhysicalAllocationsChargeOnce(t *testing.T) {
 	require.NoError(t, op.SetAllocationAccount(account))
 	hb := &op.ctr.hashmapBuilder
 	hb.setBudget(generation)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	require.NoError(t, hb.Prepare(
 		[]*plan.Expr{newExpr(0, types.T_int32.ToType())},
@@ -272,7 +272,7 @@ func TestHashmapBuilderPhysicalAllocationsChargeOnce(t *testing.T) {
 
 func TestHashmapBuilderAccountedBatchCopyOneByteShortRollsBack(t *testing.T) {
 	const budgetCap = uint64(64 << 20)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	input := testutil.NewBatch(
 		[]types.Type{types.T_int32.ToType(), types.T_varchar.ToType()},
@@ -343,7 +343,7 @@ func TestAccountedJoinMapTransfersBatchesAndGroupSelsToLastConsumer(t *testing.T
 	require.NoError(t, op.SetAllocationAccount(account))
 	hb := &op.ctr.hashmapBuilder
 	hb.setBudget(generation)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	require.NoError(t, hb.Prepare(
 		[]*plan.Expr{newExpr(0, types.T_int32.ToType())},
@@ -479,7 +479,7 @@ func TestAccountedJoinMapLateFreeKeepsOriginalGeneration(t *testing.T) {
 }
 
 func TestAccountedRuntimeFilterUniqueKeysDegradeWithoutFailingHashBuild(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	values := make([]string, 1_024)
 	for i := range values {
@@ -533,7 +533,7 @@ func TestAccountedRuntimeFilterUniqueKeysDegradeWithoutFailingHashBuild(t *testi
 }
 
 func TestSpillExpressionStorageUsesRetainedAccount(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	budget := process.MustNewExecutionResourceBudget(16<<20, 16<<20)
 	generation, err := budget.OpenGeneration(1)
@@ -571,7 +571,7 @@ func TestSpillExpressionStorageUsesRetainedAccount(t *testing.T) {
 }
 
 func TestSpillExpressionStorageHonorsAccountCapacity(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	run := func(limit uint64) (uint64, error) {
 		budget := process.MustNewExecutionResourceBudget(16<<20, 16<<20)
@@ -618,7 +618,7 @@ func TestSpillExpressionStorageHonorsAccountCapacity(t *testing.T) {
 
 func TestIssue26454ExpressionKeyBuildUsesActualCapacity(t *testing.T) {
 	const capBytes = uint64(16 << 20)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	for _, tc := range []struct {
 		name  string
@@ -729,7 +729,7 @@ func TestPreparedParamExpressionExecutorRemainsConst(t *testing.T) {
 
 func TestGetJoinMapTransfersGroupSels(t *testing.T) {
 	hb := newTestHashmapBuilder(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
 	require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_int32.ToType())}, -1, -1, nil, proc))
@@ -759,7 +759,7 @@ func TestGetJoinMapTransfersGroupSels(t *testing.T) {
 
 func TestDedupUpdateBuildGroupsNullKeysSeparately(t *testing.T) {
 	hb := newTestHashmapBuilder(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	hb.IsDedup = true
 	hb.OnDuplicateAction = plan.Node_UPDATE
 	defer func() {
@@ -828,7 +828,7 @@ func TestHashMapAllocAndFree(t *testing.T) {
 
 func TestIteratorReuseAcrossBuilds(t *testing.T) {
 	hb := newTestHashmapBuilder(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_int32.ToType())}, -1, -1, nil, proc))
 
 	b := testutil.NewBatch([]types.Type{types.T_int32.ToType()}, true, 16, proc.Mp())
@@ -855,7 +855,7 @@ func TestIteratorReuseAcrossBuilds(t *testing.T) {
 
 func TestStrIteratorCapacityPrune(t *testing.T) {
 	hb := newTestHashmapBuilder(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_varchar.ToType())}, -1, -1, nil, proc))
 
 	// Build with an oversized string to inflate iterator buffers beyond threshold.
@@ -877,7 +877,7 @@ func TestStrIteratorCapacityPrune(t *testing.T) {
 
 func TestStrIteratorBelowThresholdIsKept(t *testing.T) {
 	hb := newTestHashmapBuilder(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_varchar.ToType())}, -1, -1, nil, proc))
 
 	// Build with small strings so iterator capacity stays below threshold.
@@ -900,7 +900,7 @@ func TestStrIteratorBelowThresholdIsKept(t *testing.T) {
 
 func TestResetWithHashTableSentKeepsCache(t *testing.T) {
 	hb := newTestHashmapBuilder(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_int32.ToType())}, -1, -1, nil, proc))
 
 	// Build once to populate cachedIntIterator.
@@ -918,7 +918,7 @@ func TestResetWithHashTableSentKeepsCache(t *testing.T) {
 
 func TestAlternateIntStrBuildsReuseIndependently(t *testing.T) {
 	hb := newTestHashmapBuilder(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 	// First int build
 	require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_int32.ToType())}, -1, -1, nil, proc))
@@ -967,7 +967,7 @@ func TestAlternateIntStrBuildsReuseIndependently(t *testing.T) {
 
 func TestBuildHashmapWithZeroInputKeepsCachesUntouched(t *testing.T) {
 	hb := newTestHashmapBuilder(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 	require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_int32.ToType())}, -1, -1, nil, proc))
 
@@ -981,7 +981,7 @@ func TestBuildHashmapWithZeroInputKeepsCachesUntouched(t *testing.T) {
 
 func TestDedupBuildDuplicateKeyStillFailsByDefault(t *testing.T) {
 	hb := newTestHashmapBuilder(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	hb.IsDedup = true
 	hb.OnDuplicateAction = plan.Node_FAIL
 	hb.DedupColName = "id"
@@ -1005,7 +1005,7 @@ func TestDedupBuildDuplicateKeyStillFailsByDefault(t *testing.T) {
 
 func TestDedupBuildKeepLastForReplace(t *testing.T) {
 	hb := newTestHashmapBuilder(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	hb.IsDedup = true
 	hb.DedupBuildKeepLast = true
 	hb.OnDuplicateAction = plan.Node_FAIL
@@ -1038,7 +1038,7 @@ func TestDedupBuildKeepLastForReplace(t *testing.T) {
 
 func TestDedupBuildKeepLastPreservesDeleteOnlyRows(t *testing.T) {
 	hb := newTestHashmapBuilder(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	hb.IsDedup = true
 	hb.DedupBuildKeepLast = true
 	hb.OnDuplicateAction = plan.Node_FAIL
@@ -1080,7 +1080,7 @@ func TestDedupBuildKeepLastPreservesDeleteOnlyRows(t *testing.T) {
 
 func TestAccountedDedupScratchAndDeleteBitmapFollowJoinMapLifetime(t *testing.T) {
 	const capBytes = uint64(64 << 20)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	budget := process.MustNewExecutionResourceBudget(capBytes, capBytes)
 	generation, err := budget.OpenGeneration(1)
@@ -1143,7 +1143,7 @@ func TestAccountedDedupScratchAndDeleteBitmapFollowJoinMapLifetime(t *testing.T)
 }
 
 func TestAccountedDedupBitmapExactBoundaryRollsBack(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	for _, tc := range []struct {
 		name    string
@@ -1194,7 +1194,7 @@ func TestAccountedDedupBitmapExactBoundaryRollsBack(t *testing.T) {
 // probe side raises a false DuplicateEntry for the existing row REPLACE removes.
 func TestDedupBuildKeepLastMarksConflictBucketForDiscardedFanout(t *testing.T) {
 	hb := newTestHashmapBuilder(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	hb.IsDedup = true
 	hb.DedupBuildKeepLast = true
 	hb.OnDuplicateAction = plan.Node_FAIL
@@ -1261,7 +1261,7 @@ func TestDedupBuildIgnoreOnlyMarksCandidateOwnOldKey(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			hb := newTestHashmapBuilder(t)
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			hb.IsDedup = true
 			hb.OnDuplicateAction = plan.Node_IGNORE
 			defer func() {
@@ -1307,7 +1307,7 @@ func (s *hashBuildWarningSession) AppendWarningBatch(total uint64, codes []uint1
 
 func TestDedupBuildIgnoreReportsOneWarningPerSkippedInputRow(t *testing.T) {
 	session := &hashBuildWarningSession{}
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.Session = session
 	proc.SetStmtProfile(&process.StmtProfile{})
 	proc.GetStmtProfile().SetStatementRuntimeProfile("Insert", "DML", true)
@@ -1341,7 +1341,7 @@ func TestDedupBuildIgnoreReportsOneWarningPerSkippedInputRow(t *testing.T) {
 
 func TestDedupBuildIgnoreReleasesAcceptedCandidateOldKey(t *testing.T) {
 	hb := newTestHashmapBuilder(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	hb.IsDedup = true
 	hb.OnDuplicateAction = plan.Node_IGNORE
 	defer func() {
@@ -1370,7 +1370,7 @@ func TestDedupBuildIgnorePrefersOriginalKeyOwner(t *testing.T) {
 	for _, oldKeys := range [][]int32{{1, 2}, {2, 1}} {
 		t.Run(strings.Join([]string{strconv.Itoa(int(oldKeys[0])), strconv.Itoa(int(oldKeys[1]))}, "_"), func(t *testing.T) {
 			hb := newTestHashmapBuilder(t)
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			hb.IsDedup = true
 			hb.OnDuplicateAction = plan.Node_IGNORE
 			defer func() {
@@ -1397,7 +1397,7 @@ func TestDedupBuildIgnorePrefersOriginalKeyOwner(t *testing.T) {
 
 func TestDedupBuildIgnoreRebuildsAfterOwnerReplacement(t *testing.T) {
 	hb := newTestHashmapBuilder(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	hb.IsDedup = true
 	hb.OnDuplicateAction = plan.Node_IGNORE
 	defer func() {
@@ -1456,7 +1456,7 @@ func TestBuildHashmapErrorDoesNotLeakIterators(t *testing.T) {
 
 func TestBuildHashmapReuseUniqueSelsBuffer(t *testing.T) {
 	hb := newTestHashmapBuilder(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_int32.ToType())}, -1, -1, nil, proc))
 
 	bat := makeIntBatch(t, 4, proc)
@@ -1488,7 +1488,7 @@ func TestBuildHashmapReuseUniqueSelsBuffer(t *testing.T) {
 
 func TestBuildHashmapDoesNotCreateUniqueSelsWhenNotNeeded(t *testing.T) {
 	hb := newTestHashmapBuilder(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_int32.ToType())}, -1, -1, nil, proc))
 
 	bat := makeIntBatch(t, 2, proc)
@@ -1502,7 +1502,7 @@ func TestBuildHashmapDoesNotCreateUniqueSelsWhenNotNeeded(t *testing.T) {
 
 func TestCachedStrIteratorOwnerClearedBeforeReuse(t *testing.T) {
 	hb := newTestHashmapBuilder(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 	// Build once to create cached str iterator.
 	require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_varchar.ToType())}, -1, -1, nil, proc))
@@ -1536,7 +1536,7 @@ func TestCachedStrIteratorOwnerClearedBeforeReuse(t *testing.T) {
 
 func TestSwitchKeyTypeCreatesCorrectIterator(t *testing.T) {
 	hb := newTestHashmapBuilder(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 	// Build int first.
 	require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_int32.ToType())}, -1, -1, nil, proc))
@@ -1563,7 +1563,7 @@ func TestSwitchKeyTypeCreatesCorrectIterator(t *testing.T) {
 
 func TestCachedIteratorOwnerClearedBeforeReuse(t *testing.T) {
 	hb := newTestHashmapBuilder(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 	// Build once to create cached int iterator and bind to map A.
 	require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_int32.ToType())}, -1, -1, nil, proc))
@@ -1598,7 +1598,7 @@ func TestCachedIteratorOwnerClearedBeforeReuse(t *testing.T) {
 
 func TestFreeThenBuildRepopulatesCache(t *testing.T) {
 	hb := newTestHashmapBuilder(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 	// First build to populate cache.
 	require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_int32.ToType())}, -1, -1, nil, proc))
@@ -1640,7 +1640,7 @@ func (f failingExecutor) ResetForNextQuery() {}
 
 // Benchmarks: cached vs new iterator paths for int/str.
 func BenchmarkBuildHashmapCachedInt(b *testing.B) {
-	proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(b, "", mpool.MustNewZero())
 	hb := newTestHashmapBuilder(b)
 	require.NoError(b, hb.Prepare([]*plan.Expr{newExpr(0, types.T_int32.ToType())}, -1, -1, nil, proc))
 	data := makeIntBatch(b, 1024, proc)
@@ -1656,7 +1656,7 @@ func BenchmarkBuildHashmapCachedInt(b *testing.B) {
 }
 
 func BenchmarkBuildHashmapCachedStr(b *testing.B) {
-	proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(b, "", mpool.MustNewZero())
 	hb := newTestHashmapBuilder(b)
 	require.NoError(b, hb.Prepare([]*plan.Expr{newExpr(0, types.T_varchar.ToType())}, -1, -1, nil, proc))
 	data := makeStrBatch(b, 1024, proc)
@@ -1741,7 +1741,7 @@ func makeIntKeyValueBatchWithMarker(
 
 // Cold path benchmarks: recreate builder each iteration (no cached iterator reuse).
 func BenchmarkBuildHashmapColdInt(b *testing.B) {
-	proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(b, "", mpool.MustNewZero())
 	data := makeIntBatch(b, 1024, proc)
 	defer data.Clean(proc.Mp())
 	b.ResetTimer()
@@ -1756,7 +1756,7 @@ func BenchmarkBuildHashmapColdInt(b *testing.B) {
 }
 
 func BenchmarkBuildHashmapColdStr(b *testing.B) {
-	proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(b, "", mpool.MustNewZero())
 	data := makeStrBatch(b, 1024, proc)
 	defer data.Clean(proc.Mp())
 	b.ResetTimer()
@@ -1772,7 +1772,7 @@ func BenchmarkBuildHashmapColdStr(b *testing.B) {
 
 func BenchmarkCopyBuildBatchAccounting(b *testing.B) {
 	const capBytes = uint64(256 << 20)
-	proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(b, "", mpool.MustNewZero())
 	defer proc.Free()
 	input := testutil.NewBatch(
 		[]types.Type{types.T_int32.ToType(), types.T_varchar.ToType()},
@@ -1841,7 +1841,7 @@ func BenchmarkResidentHashBuildAccounting(b *testing.B) {
 					mode = "budget-controlled"
 				}
 				b.Run(fmt.Sprintf("%s/rows-%d/%s", kind, rows, mode), func(b *testing.B) {
-					proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+					proc := testutil.NewProcessWithOwnedMPool(b, "", mpool.MustNewZero())
 					defer proc.Free()
 					var input *batch.Batch
 					var keyType types.Type
@@ -1954,7 +1954,7 @@ func TestExtractRestoreCachedIterators(t *testing.T) {
 
 func TestStrIteratorLargeStringTriggersPrune(t *testing.T) {
 	hb := newTestHashmapBuilder(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_varchar.ToType())}, -1, -1, nil, proc))
 
 	// Build a batch with one very large string to bloat iterator buffers.
@@ -1980,7 +1980,7 @@ func TestStrIteratorLargeStringTriggersPrune(t *testing.T) {
 // This is a regression test for the panic fix where Reset() would crash when
 // curVecs or UniqueJoinKeys contained nil pointers.
 func TestResetWithNilPointers(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	hb := newTestHashmapBuilder(t)
 
 	// Test case 1: curVecs with nil pointers and needDupVec = true
@@ -2004,7 +2004,7 @@ func TestResetWithNilPointers(t *testing.T) {
 
 // TestResetWithMixedNilAndValidPointers tests Reset() with a mix of nil and valid vectors
 func TestResetWithMixedNilAndValidPointers(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	hb := newTestHashmapBuilder(t)
 
 	// Create some valid vectors
@@ -2027,7 +2027,7 @@ func TestResetWithMixedNilAndValidPointers(t *testing.T) {
 
 // TestFreeWithNilPointers tests that Free() handles nil pointers gracefully
 func TestFreeWithNilPointers(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	hb := newTestHashmapBuilder(t)
 
 	// Test case: UniqueJoinKeys with nil pointers
@@ -2044,7 +2044,7 @@ func TestFreeWithNilPointers(t *testing.T) {
 
 // TestFreeWithMixedNilAndValidPointers tests Free() with a mix of nil and valid vectors
 func TestFreeWithMixedNilAndValidPointers(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	hb := newTestHashmapBuilder(t)
 
 	// Create some valid vectors

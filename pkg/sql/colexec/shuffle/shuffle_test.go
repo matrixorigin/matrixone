@@ -190,7 +190,7 @@ func (child *handoffThenBlockingShuffleChild) Call(proc *process.Process) (vm.Ca
 func makeTestCases(t *testing.T) []shuffleTestCase {
 	return []shuffleTestCase{
 		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_int16.ToType(),
 			},
@@ -204,7 +204,7 @@ func makeTestCases(t *testing.T) []shuffleTestCase {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_int32.ToType(),
 			},
@@ -218,7 +218,7 @@ func makeTestCases(t *testing.T) []shuffleTestCase {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_int64.ToType(),
 			},
@@ -232,7 +232,7 @@ func makeTestCases(t *testing.T) []shuffleTestCase {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_uint16.ToType(),
 			},
@@ -246,7 +246,7 @@ func makeTestCases(t *testing.T) []shuffleTestCase {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_uint32.ToType(),
 			},
@@ -260,7 +260,7 @@ func makeTestCases(t *testing.T) []shuffleTestCase {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_uint64.ToType(),
 			},
@@ -274,7 +274,7 @@ func makeTestCases(t *testing.T) []shuffleTestCase {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_int16.ToType(),
 			},
@@ -287,7 +287,7 @@ func makeTestCases(t *testing.T) []shuffleTestCase {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_int32.ToType(),
 			},
@@ -300,7 +300,7 @@ func makeTestCases(t *testing.T) []shuffleTestCase {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_int64.ToType(),
 			},
@@ -313,7 +313,7 @@ func makeTestCases(t *testing.T) []shuffleTestCase {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_uint16.ToType(),
 			},
@@ -326,7 +326,7 @@ func makeTestCases(t *testing.T) []shuffleTestCase {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_uint32.ToType(),
 			},
@@ -339,7 +339,7 @@ func makeTestCases(t *testing.T) []shuffleTestCase {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_uint64.ToType(),
 			},
@@ -352,7 +352,7 @@ func makeTestCases(t *testing.T) []shuffleTestCase {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_int64.ToType(),
 			},
@@ -364,7 +364,7 @@ func makeTestCases(t *testing.T) []shuffleTestCase {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_uint64.ToType(),
 			},
@@ -376,7 +376,7 @@ func makeTestCases(t *testing.T) []shuffleTestCase {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_int32.ToType(),
 			},
@@ -388,7 +388,7 @@ func makeTestCases(t *testing.T) []shuffleTestCase {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_uint32.ToType(),
 			},
@@ -400,7 +400,7 @@ func makeTestCases(t *testing.T) []shuffleTestCase {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_int16.ToType(),
 			},
@@ -412,7 +412,7 @@ func makeTestCases(t *testing.T) []shuffleTestCase {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_uint16.ToType(),
 			},
@@ -680,7 +680,7 @@ func TestEvalAndShuffleConst(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			defer proc.Free()
 			arg := &Shuffle{
 				ctr:                container{},

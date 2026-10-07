@@ -125,7 +125,7 @@ func TestSqlProcessExecutionIdentityOverrideFromProcess(t *testing.T) {
 	key := contextKey{}
 	subscriberCtx := context.WithValue(context.Background(), key, "subscriber")
 	subscriberCtx = defines.AttachAccountId(subscriberCtx, 7)
-	proc := testutil.NewProcessWithMPool(t, uuid, mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, uuid, mpool.MustNewZero())
 	proc.Base.LockService = lockService
 	proc.Ctx = subscriberCtx
 	proc.ReplaceTopCtx(subscriberCtx)
@@ -275,7 +275,7 @@ func TestFinishTxnWithCleanupContextCommitsWithFreshContext(t *testing.T) {
 // cache freshness check (captured at load to re-query in the background).
 func TestSqlProcessServiceAndAccount(t *testing.T) {
 	// Proc-backed: just exercise the branch (values depend on the test proc).
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	sp := NewSqlProcess(proc)
 	_ = sp.GetService()
 	_, _ = sp.GetAccountID()

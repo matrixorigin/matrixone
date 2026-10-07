@@ -234,7 +234,7 @@ func TestCentroidAndExactSearchHelpersHandleBoundaryStates(t *testing.T) {
 	require.Equal(t, []any{"a", "b"}, data["payload"])
 	require.Equal(t, []bool{true, false}, nulls["payload"])
 
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	sqlproc := sqlexec.NewSqlProcess(proc)
 	require.Equal(t, uint(3), exactResultLimit(sqlproc, 3))
 	sqlproc.IndexReaderParam = &plan.IndexReaderParam{Limit: ivfUint64Expr(9)}

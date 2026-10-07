@@ -204,7 +204,7 @@ func TestBroadcastBudgetFailurePublishesTerminalAndCleansBudget(t *testing.T) {
 }
 
 func TestHashBuildPrepareConvertsTerminalBudgetAdmission(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.SetMessageBoard(message.NewMessageBoard())
 	proc.Base.Lim.Size = 1024
 	literal := &plan.Expr{
@@ -346,7 +346,7 @@ func newTestCase(t testing.TB, ts []types.Type, cs []*plan.Expr) buildTestCase {
 }
 
 func TestHashBuildPrepareDropsPriorGenerationSpillFileService(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	prior, err := proc.GetSpillFileService()
 	require.NoError(t, err)
@@ -468,7 +468,7 @@ func TestHashBuildReleaseAndReuse(t *testing.T) {
 }
 
 func TestHashBuildWithRuntimeFilter(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.SetMessageBoard(message.NewMessageBoard())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 1)
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
@@ -2161,7 +2161,7 @@ func TestSerializedRuntimeFilterUsesTightBudgetAndProducesIn(t *testing.T) {
 }
 
 func TestSerializedRuntimeFilterScratchUsesPhysicalAccount(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	componentType := types.T_varchar.ToType()
 	spec := makeSerializedRuntimeFilterSpec(
 		t, proc, 107, 2, []types.Type{componentType}, false)
@@ -2753,7 +2753,7 @@ func TestHashBuildHashOnPK(t *testing.T) {
 // don't corrupt the runtime filter. Before the fix, InplaceSort reordered
 // data but NOT the null bitmap, corrupting the serialized filter.
 func TestHashBuildRuntimeFilterWithNulls(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.SetMessageBoard(message.NewMessageBoard())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 1)
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
@@ -2798,7 +2798,7 @@ func TestHashBuildRuntimeFilterWithNulls(t *testing.T) {
 // TestHashBuildRuntimeFilterWithNullsHashOnPK tests the hashOnPK path
 // where UniqueJoinKeys include NULLs from UnionBatch.
 func TestHashBuildRuntimeFilterWithNullsHashOnPK(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.SetMessageBoard(message.NewMessageBoard())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 1)
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{

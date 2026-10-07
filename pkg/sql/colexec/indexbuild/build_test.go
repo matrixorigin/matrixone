@@ -62,7 +62,7 @@ func indexBuildRawSpec(tag, upperLimit int32, typ types.Type) *plan.RuntimeFilte
 }
 
 func indexBuildTestProcess(t *testing.T) *process.Process {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.SetMessageBoard(message.NewMessageBoard())
 	return proc
 }

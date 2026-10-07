@@ -121,7 +121,7 @@ func newArgument(typ types.Type) *FuzzyFilter {
 }
 
 func newProcess(t *testing.T) *process.Process {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	return proc
 }
 

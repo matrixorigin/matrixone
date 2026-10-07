@@ -264,7 +264,7 @@ func TestFilter(t *testing.T) {
 }
 
 func TestAssertFilterFastPath(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	message := &plan.Expr{
 		Typ: plan.Type{Id: int32(types.T_varchar)},
 		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
@@ -327,7 +327,7 @@ func TestFilterReturnsSelectionOnLaterExecutorError(t *testing.T) {
 }
 
 func TestAssertFilterStillAppliesRuntimeFilter(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	assertions := makeCheckConstraintAssertExprs(
 		t,
 		[]*plan.Expr{plan2.MakePlan2BoolConstExprWithType(true)},

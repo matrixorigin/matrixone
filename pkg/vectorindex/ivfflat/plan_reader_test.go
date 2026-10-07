@@ -301,7 +301,7 @@ func TestScanEntriesPrunesFilteredSearchToSelectedCentroids(t *testing.T) {
 }
 
 func TestStorageTopKEligibility(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	sqlproc := sqlexec.NewSqlProcess(proc)
 	centroids := []int64{1}
 	require.True(t, canUseStorageTopK(sqlproc, centroids, nil, 1, true))

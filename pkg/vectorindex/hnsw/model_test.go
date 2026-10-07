@@ -205,7 +205,7 @@ func TestModelStreamError(t *testing.T) {
 
 func TestHnswWaitsPreserveCancellationCause(t *testing.T) {
 	newSQLProcess := func(t *testing.T) *sqlexec.SqlProcess {
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 		proc.BuildPipelineContext(context.Background())
 		t.Cleanup(func() {
 			proc.Cancel(nil)

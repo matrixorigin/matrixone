@@ -372,7 +372,7 @@ func TestConstructAggregateConfigPreservesOrderedGroupConcatArgs(t *testing.T) {
 }
 
 func TestConstructAggregateConfigApproxPercentileWithinGroup(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
 	value := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}}
@@ -399,7 +399,7 @@ func TestConstructAggregateConfigApproxPercentileWithinGroup(t *testing.T) {
 }
 
 func TestConstructAggregateConfigOrderedPercentile(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
 	value := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}}
@@ -423,7 +423,7 @@ func TestConstructAggregateConfigOrderedPercentile(t *testing.T) {
 }
 
 func TestConstructAggregateConfigPreparedPercentile(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	params := vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(params, []byte("0.25"), false, proc.Mp()))
@@ -455,7 +455,7 @@ func TestConstructAggregateConfigPreparedPercentile(t *testing.T) {
 }
 
 func TestConstructAggregateConfigPreparedPercentileExpression(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
 	value := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}}
@@ -515,7 +515,7 @@ func TestConstructAggregateConfigPreparedPercentileExpression(t *testing.T) {
 }
 
 func TestConstructAggregateConfigPreparedPercentileExpressionDivisionByZero(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	params := vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(params, []byte("50"), false, proc.Mp()))
@@ -541,7 +541,7 @@ func TestConstructAggregateConfigPreparedPercentileExpressionDivisionByZero(t *t
 }
 
 func TestConstructAggregateConfigPreparedDecimalPercentilePreservesPrecision(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
 	parameter := &plan.Expr{
@@ -598,7 +598,7 @@ func TestConstructAggregateConfigPreparedDecimalPercentilePreservesPrecision(t *
 }
 
 func TestPreflightPercentileConfigsReturnsPreparedValueError(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	value := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}}
 	for _, test := range []struct {
@@ -704,7 +704,7 @@ func TestConstructAggregateConfigOrderedPercentileNormalizesStaticCast(t *testin
 			require.NotNil(t, percentileFn.GetArgs()[1].GetF(), "raw planner output should retain the static cast")
 			originalConfigExpr := plan2.DeepCopyExpr(percentileFn.GetArgs()[1])
 
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			defer proc.Free()
 			args, config := constructAggregateConfig(percentileFn, proc)
 			require.Len(t, args, 1)
@@ -738,7 +738,7 @@ func TestConstructAggregateConfigApproxPercentileNormalizesStaticCast(t *testing
 	require.Len(t, percentileFn.GetArgs(), 2)
 	require.NotNil(t, percentileFn.GetArgs()[1].GetF(), "raw planner output should retain the static cast")
 
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	args, config := constructAggregateConfig(percentileFn, proc)
 	require.Len(t, args, 1)
@@ -746,7 +746,7 @@ func TestConstructAggregateConfigApproxPercentileNormalizesStaticCast(t *testing
 }
 
 func TestConstructAggregateConfigOrderedPercentileRejectsInvalidInput(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
 	value := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}}
@@ -1059,7 +1059,7 @@ func TestConstructTimeWindowUsesRegularSumForPartialSum(t *testing.T) {
 }
 
 func TestConstructTimeWindowApproxPercentileConfig(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
 	fn, err := function.GetFunctionByName(context.Background(), plan2.NameApproxPercentile, []types.Type{
@@ -1086,7 +1086,7 @@ func TestConstructTimeWindowApproxPercentileConfig(t *testing.T) {
 }
 
 func TestConstructTimeWindowApproxPercentileRejectsInvalidConfig(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
 	fn, err := function.GetFunctionByName(context.Background(), plan2.NameApproxPercentile, []types.Type{
@@ -1131,7 +1131,7 @@ func TestConstructTimeWindowApproxPercentileRejectsInvalidConfig(t *testing.T) {
 }
 
 func TestCompileRejectsInvalidAggregateConfigWithoutPanicFrames(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
 	fn, err := function.GetFunctionByName(context.Background(), plan2.NameApproxPercentile, []types.Type{
@@ -1155,7 +1155,7 @@ func TestCompileRejectsInvalidAggregateConfigWithoutPanicFrames(t *testing.T) {
 }
 
 func TestCompileValidatesAggregateConfigsBeforeBuildingEachOperator(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
 	fn, err := function.GetFunctionByName(context.Background(), plan2.NameApproxPercentile, []types.Type{
@@ -1227,7 +1227,7 @@ func TestCompileValidatesAggregateConfigsBeforeBuildingEachOperator(t *testing.T
 }
 
 func TestConstructAggregateConfigRejectsOrderedPercentileErrors(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
 	value := &plan.Expr{
@@ -1278,7 +1278,7 @@ func TestConstructAggregateConfigRejectsOrderedPercentileErrors(t *testing.T) {
 }
 
 func TestConstructAggregateConfigPropagatesConfigExpressionErrors(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	value := &plan.Expr{
 		Typ:  plan.Type{Id: int32(types.T_int32)},
@@ -1296,7 +1296,7 @@ func TestConstructAggregateConfigPropagatesConfigExpressionErrors(t *testing.T) 
 }
 
 func TestConstructAggregateConfigCoversLegacyConfigurationFailures(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	value := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}}
 	badString := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}}
@@ -1337,7 +1337,7 @@ func TestConstructAggregateConfigCoversLegacyConfigurationFailures(t *testing.T)
 }
 
 func TestGroupConcatNullSeparatorConfig(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
 		return int64(1024), nil
@@ -1354,7 +1354,7 @@ func TestGroupConcatNullSeparatorConfig(t *testing.T) {
 }
 
 func TestConstructAggregateConfigPreservesOtherSpecialConfigs(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
 		require.Equal(t, "group_concat_max_len", name)

@@ -496,7 +496,7 @@ func TestSpillAllocationAccountScatterDoesNotReadmitBorrowedSource(t *testing.T)
 }
 
 func TestSpillAllocationAccountScatterBroadcastsConstKey(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	state := newTestSpillAllocationAccount(t, 1<<20, 64)
 	engine, err := newSpillEngine(
@@ -860,7 +860,7 @@ func TestSpillAllocationAccountExpressionPressureReducesBeforePublication(t *tes
 // initial and recursive join spill. Each iteration removes its named files so
 // repeated measurements cannot accumulate disk usage or queued descriptors.
 func BenchmarkSpillScatterAccounting(b *testing.B) {
-	proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(b, "", mpool.MustNewZero())
 	defer proc.Free()
 	values := make([]int64, 4_096)
 	for i := range values {

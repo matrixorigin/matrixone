@@ -56,7 +56,7 @@ func useDiskV2LocalFS(t *testing.T, proc *process.Process) {
 // with a DISK-V2 (raw, checksum-free) LOCAL fileservice, confirming spill works
 // end-to-end when the cluster is configured for DISK-V2.
 func TestHashJoinSpillDiskV2(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	useDiskV2LocalFS(t, proc)
 

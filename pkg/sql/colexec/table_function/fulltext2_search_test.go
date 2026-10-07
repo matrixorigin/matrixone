@@ -214,7 +214,7 @@ func TestFulltextMembershipFilterPaths(t *testing.T) {
 	// message board. This exercises the UNIQUEJOINKEYS -> docfilter path for
 	// both the legacy FULLTEXT waiter and FULLTEXT2's status-preserving waiter.
 	makePayload := func(t *testing.T) (*process.Process, []*plan.RuntimeFilterSpec, []byte) {
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 		mb := message.NewMessageBoard()
 		proc.SetMessageBoard(mb)
 		vec := vector.NewVec(types.T_int64.ToType())
