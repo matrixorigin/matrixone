@@ -112,6 +112,28 @@ func TestServiceCloseErrors(t *testing.T) {
 	}
 }
 
+func TestServiceConstructorUnwind(t *testing.T) {
+	runtime.RunTest(t.Name(), func(rt runtime.Runtime) {
+		cluster := clusterservice.NewMOCluster(t.Name(), nil, 0, clusterservice.WithDisableRefresh())
+		rt.SetGlobalVariables(runtime.ClusterService, cluster)
+		defer cluster.Close()
+
+		var owner ShardService
+		sentinel := errors.New("shard service option refused")
+		require.PanicsWithValue(t, sentinel, func() {
+			NewService(
+				Config{ServiceID: t.Name()},
+				NewMemShardStorage(rt.Logger()),
+				func(value ShardService) { owner = value },
+				func(*service) { panic(sentinel) },
+			)
+		})
+		require.NotNil(t, owner)
+		require.ErrorIs(t, owner.(*service).stopper.RunTask(func(context.Context) {}), stopper.ErrUnavailable)
+		require.NoError(t, owner.Close())
+	})
+}
+
 func TestServiceWaitCNReported(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -907,8 +929,14 @@ func runServicesTest(
 
 		store := NewMemShardStorage(runtime.ServiceRuntime(sid).Logger()).(*MemShardStorage)
 		defer store.waiter.Close()
-		s := NewService(cfg, store, opts...)
-		defer func() { assert.NoError(t, s.Close()) }()
+		var published ShardService
+		s := NewService(
+			cfg,
+			store,
+			func(owner ShardService) { published = owner },
+			opts...,
+		)
+		require.Same(t, published, s)
 		services = append(services, s.(*service))
 	}
 

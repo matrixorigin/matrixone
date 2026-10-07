@@ -353,6 +353,7 @@ func (op *operator) startCNServiceLocked(
 		context.Background(),
 		fs,
 		op.reset.gossipNode,
+		func(owner cnservice.Service) { op.reset.svc = owner },
 		cnservice.WithLogger(op.reset.logger),
 		cnservice.WithMessageHandle(compile.CnServerMessageHandler),
 		cnservice.WithConfigData(commonConfigKVMap),

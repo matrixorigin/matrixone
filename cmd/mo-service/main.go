@@ -391,11 +391,13 @@ func startCNService(
 		defer cancelRole()
 		cfg.initMetaCache()
 		commonConfigKVMap, _ := dumpCommonConfig(*cfg)
+		var published cnservice.Service
 		s, err := cnservice.NewService(
 			&c,
 			ctx,
 			fileService,
 			gossipNode,
+			func(owner cnservice.Service) { published = owner },
 			cnservice.WithLogger(logutil.GetGlobalLogger().Named("cn-service").With(zap.String("uuid", cfg.CN.UUID))),
 			cnservice.WithMessageHandle(compile.CnServerMessageHandler),
 			cnservice.WithConfigData(commonConfigKVMap),
@@ -404,6 +406,7 @@ func startCNService(
 			panic(err)
 		}
 		if err := s.Start(); err != nil {
+			closeErr = errors.Join(err, published.Close())
 			panic(err)
 		}
 

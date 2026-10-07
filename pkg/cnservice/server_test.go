@@ -253,6 +253,44 @@ func TestCNServiceCloseStoreEngineUsesItsOwner(t *testing.T) {
 	require.Equal(t, 1, calls)
 	require.NoError(t, (&service{}).closeStoreEngine())
 }
+func TestCNServiceCloseIsSafeBeforeConstructionCompletes(t *testing.T) {
+	s := &service{
+		cfg:    &Config{UUID: t.Name()},
+		logger: zap.NewNop(),
+	}
+
+	require.NoError(t, s.Close())
+	require.True(t, s.CloseComplete())
+	require.NoError(t, s.Close())
+}
+
+func TestCNServiceConstructorPublishesBeforeOptionFailure(t *testing.T) {
+	moruntime.RunTest(t.Name(), func(rt moruntime.Runtime) {
+		local, err := fileservice.NewMemoryFS(defines.LocalFileServiceName, fileservice.DisabledCacheConfig, nil)
+		require.NoError(t, err)
+		etl, err := fileservice.NewMemoryFS(defines.ETLFileServiceName, fileservice.DisabledCacheConfig, nil)
+		require.NoError(t, err)
+		services, err := fileservice.NewFileServices(defines.LocalFileServiceName, local, etl)
+		require.NoError(t, err)
+		t.Cleanup(func() { services.Close(context.Background()) })
+
+		var owner Service
+		sentinel := errors.New("CN option refused")
+		require.PanicsWithValue(t, sentinel, func() {
+			NewService(
+				&Config{UUID: t.Name()},
+				context.Background(),
+				services,
+				nil,
+				func(value Service) { owner = value },
+				func(*service) { panic(sentinel) },
+			)
+		})
+		require.NotNil(t, owner)
+		require.NoError(t, owner.Close())
+	})
+}
+
 func TestServiceCloseDoesNotHangOnNeverReadyClusterAfterEarlyError(t *testing.T) {
 	moruntime.RunTest(
 		t.Name(),
@@ -312,7 +350,7 @@ func TestServiceCloseWithdrawalErrorIsLocallyComplete(t *testing.T) {
 					// withdrawal failed too; both diagnostics must survive.
 					tailErr = errors.New("local tail failed")
 				}
-				ls.EXPECT().Close().Return(tailErr).Times(2)
+				ls.EXPECT().Close().Return(tailErr).Times(1)
 				sv := &service{
 					cfg: &Config{UUID: t.Name()}, logger: zap.NewNop(), config: util.NewConfigData(nil),
 					stopper:          stopper.NewStopper(t.Name()),
@@ -637,7 +675,7 @@ func TestServiceStartBootstrapFailureCanBeRolledBack(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			defer ctrl.Finish()
 			ls := mock_lock.NewMockLockService(ctrl)
-			ls.EXPECT().Close().Return(nil).Times(2)
+			ls.EXPECT().Close().Return(nil).Times(1)
 			cfg := &Config{UUID: t.Name()}
 			s := &service{
 				cfg:                cfg,
@@ -755,7 +793,7 @@ func TestServiceCloseWaitsForPipelineHandlers(t *testing.T) {
 				t.Error("lock service closed before pipeline producer stopped")
 			}
 			return nil
-		}).Times(2)
+		})
 		startFinal := make(chan struct{})
 		s := &service{
 			cfg: &Config{UUID: t.Name()}, logger: zap.NewNop(),
@@ -781,7 +819,7 @@ func TestServiceCloseDrainsAutoIncrementBeforeTxnClient(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			defer ctrl.Finish()
 			ls := mock_lock.NewMockLockService(ctrl)
-			ls.EXPECT().Close().Return(nil).Times(2)
+			ls.EXPECT().Close().Return(nil).Times(1)
 
 			incrCloseStarted := make(chan struct{})
 			releaseIncrClose := make(chan struct{})
@@ -840,7 +878,7 @@ func TestServiceCloseDrainsQueryHandlersBeforeDependencies(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			defer ctrl.Finish()
 			ls := mock_lock.NewMockLockService(ctrl)
-			ls.EXPECT().Close().Return(nil).Times(2)
+			ls.EXPECT().Close().Return(nil).Times(1)
 
 			reloadStarted := make(chan struct{})
 			releaseReload := make(chan struct{})
@@ -1159,7 +1197,7 @@ func TestServiceCloseCancelsAdmittedPipeline(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 		ls := mock_lock.NewMockLockService(ctrl)
-		ls.EXPECT().Close().Return(nil).Times(2)
+		ls.EXPECT().Close().Return(nil).Times(1)
 
 		handlerStarted := make(chan struct{})
 		handlerExited := make(chan struct{})
