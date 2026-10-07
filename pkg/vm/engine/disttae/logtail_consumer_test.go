@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -2195,6 +2196,69 @@ func TestPushClientDisconnectDoesNotRetireOwner(t *testing.T) {
 	require.NoError(t, c.Disconnect())
 	require.False(t, c.closed.Load())
 	require.NoError(t, c.Close())
+}
+
+type closeRaceStream struct {
+	recv   chan morpc.Message
+	closed chan struct{}
+	once   sync.Once
+}
+
+func newCloseRaceStream() *closeRaceStream {
+	return &closeRaceStream{
+		recv:   make(chan morpc.Message),
+		closed: make(chan struct{}),
+	}
+}
+
+func (s *closeRaceStream) ID() uint64 { return 1 }
+
+func (s *closeRaceStream) Send(context.Context, morpc.Message) error { return nil }
+
+func (s *closeRaceStream) Receive() (chan morpc.Message, error) { return s.recv, nil }
+
+func (s *closeRaceStream) Close(bool) error {
+	s.once.Do(func() {
+		close(s.closed)
+		close(s.recv)
+	})
+	return nil
+}
+
+func TestPushClientCloseRacingInitDoesNotPublishTransport(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	stream := newCloseRaceStream()
+	c := &PushClient{}
+	ownerCtx := c.start(context.Background())
+	c.LogtailRPCClientFactory = func(
+		context.Context,
+		string,
+		string,
+		morpc.RPCClient,
+	) (morpc.RPCClient, morpc.Stream, error) {
+		close(started)
+		<-release
+		return nil, stream, nil
+	}
+
+	initDone := make(chan error, 1)
+	go func() {
+		initDone <- c.init(ownerCtx, "addr", nil, &Engine{service: "test"})
+	}()
+	<-started
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- c.Close() }()
+	close(release)
+
+	require.ErrorIs(t, <-initDone, context.Canceled)
+	require.NoError(t, <-closeDone)
+	select {
+	case <-stream.closed:
+	default:
+		t.Fatal("transport was published after owner close")
+	}
 }
 
 // TestIsSubscribed_DifferentStates tests isSubscribed with different states
