@@ -220,7 +220,7 @@ func TestVecBlockBinary(t *testing.T) {
 	values := []float32{0.44547153, 1.7, -3.1, 0.02, 5.5}
 	for _, oid := range []types.T{types.T_array_float8, types.T_array_float4} {
 		f, _ := oid.BlockScaledFormat()
-		cells := vecBlockCellVector(t, oid, 5, [][]float32{values}, []bool{false})
+		cells := vecBlockCellVector(t, proc, oid, 5, [][]float32{values}, []bool{false})
 		require.NoError(t, vector.AppendBytes(cells, nil, true, proc.Mp()))
 		cell := cells.GetBytesAt(0)
 
@@ -245,7 +245,7 @@ func TestVecBlockBinary(t *testing.T) {
 		if oid == types.T_array_float4 {
 			other = types.T_array_float8
 		}
-		otherCell := vecBlockCellVector(t, other, 5, [][]float32{values}, []bool{false}).GetBytesAt(0)
+		otherCell := vecBlockCellVector(t, proc, other, 5, [][]float32{values}, []bool{false}).GetBytesAt(0)
 		bad := func(mutate func(b []byte)) []byte {
 			b := append([]byte(nil), cell...)
 			mutate(b)

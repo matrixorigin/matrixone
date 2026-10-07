@@ -178,3 +178,27 @@ func TestFloat32RoundToOddExactSources(t *testing.T) {
 	err = RejectNarrowFloatInput(Float32RoundToOdd(448.0000001), T_float8, 448.0000001, "448.0000001")
 	require.ErrorContains(t, err, "448.0000001")
 }
+
+// TestFloat32RoundToOddStringSeparators checks that digit separators, which
+// strconv.ParseFloat accepts in the mantissa and the exponent, keep the exact side of the
+// text: a spelling with separators rounds as the same value without them.
+func TestFloat32RoundToOddStringSeparators(t *testing.T) {
+	for _, tc := range []struct{ with, without string }{
+		{"1.062500000000000000000001e0_0", "1.062500000000000000000001e00"},
+		{"-1.062500000000000000000001e0_0", "-1.062500000000000000000001e00"},
+		{"1.062_500000000000000000001", "1.062500000000000000000001"},
+		{"1_0.625000000000000000000001e-1", "10.625000000000000000000001e-1"},
+		{"1.0625e0_0", "1.0625"},
+	} {
+		got, gotD, err := Float32RoundToOddString(tc.with)
+		require.NoError(t, err, tc.with)
+		want, wantD, err := Float32RoundToOddString(tc.without)
+		require.NoError(t, err, tc.without)
+		require.Equal(t, math.Float32bits(want), math.Float32bits(got), tc.with)
+		require.Equal(t, wantD, gotD, tc.with)
+	}
+	// the exact value above the float64 1.0625 rounds to odd above it
+	f, _, err := Float32RoundToOddString("1.062500000000000000000001e0_0")
+	require.NoError(t, err)
+	require.Greater(t, f, float32(1.0625))
+}

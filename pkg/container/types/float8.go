@@ -51,7 +51,10 @@ func Float32RoundToOddString(s string) (float32, float64, error) {
 	if float64(f) != d || math.IsInf(d, 0) {
 		return f, d, nil
 	}
-	c, neg := decimalSide(s, d)
+	c, neg, err := decimalSide(s, d)
+	if err != nil {
+		return 0, d, err
+	}
 	if c == 0 {
 		return f, d, nil
 	}
@@ -63,14 +66,18 @@ func Float32RoundToOddString(s string) (float32, float64, error) {
 }
 
 // decimalSide compares the exact value of decimal text s with d, its float64 parse: -1, 0 or
-// +1, and whether s is negative. A text of zero float64 is compared by its digits; otherwise
-// the exponent field is within len(s)+400 of the value's decimal exponent, which bounds the
-// rational arithmetic. Hexadecimal text is taken as d.
-func decimalSide(s string, d float64) (int, bool) {
+// +1, and whether s is negative. s is text strconv.ParseFloat accepted; its digit
+// separators are dropped. A text of zero float64 is compared by its digits; otherwise the
+// exponent field is within len(s)+400 of the value's decimal exponent, which bounds the
+// rational arithmetic. Hexadecimal text is taken as d. Text whose exact value cannot be read
+// is a syntax error.
+func decimalSide(s string, d float64) (int, bool, error) {
+	s = strings.ReplaceAll(s, "_", "")
+	syntax := &strconv.NumError{Func: "ParseFloat", Num: s, Err: strconv.ErrSyntax}
 	neg := strings.HasPrefix(s, "-")
 	body := strings.TrimLeft(s, "+-")
 	if len(body) > 1 && body[0] == '0' && (body[1] == 'x' || body[1] == 'X') {
-		return 0, neg
+		return 0, neg, nil
 	}
 	mant, exp := body, ""
 	if i := strings.IndexAny(body, "eE"); i >= 0 {
@@ -78,24 +85,24 @@ func decimalSide(s string, d float64) (int, bool) {
 	}
 	if d == 0 {
 		if !strings.ContainsAny(mant, "123456789") {
-			return 0, neg
+			return 0, neg, nil
 		}
 		if neg {
-			return -1, neg
+			return -1, neg, nil
 		}
-		return 1, neg
+		return 1, neg, nil
 	}
 	if exp != "" {
 		e, err := strconv.Atoi(exp)
 		if err != nil || e > len(s)+400 || e < -(len(s)+400) {
-			return 0, neg
+			return 0, neg, syntax
 		}
 	}
 	x, ok := new(big.Rat).SetString(s)
 	if !ok {
-		return 0, neg
+		return 0, neg, syntax
 	}
-	return x.Cmp(new(big.Rat).SetFloat64(d)), neg
+	return x.Cmp(new(big.Rat).SetFloat64(d)), neg, nil
 }
 
 // Float32RoundToOddUint is Float32RoundToOdd of u, from its bits.
@@ -317,24 +324,4 @@ func roundMantissaRNE(m, srcW, dstW int) (int, int) {
 		return kept & ((1 << dstW) - 1), 1
 	}
 	return kept, 0
-}
-
-// ----------------------------------------------------------------------------
-// Batch converters (float32 bridge).
-// ----------------------------------------------------------------------------
-
-func Float8ToFloat32Slice(src []Float8) []float32 {
-	dst := make([]float32, len(src))
-	for i, v := range src {
-		dst[i] = v.ToFloat32()
-	}
-	return dst
-}
-
-func Float32ToFloat8Slice(src []float32) []Float8 {
-	dst := make([]Float8, len(src))
-	for i, v := range src {
-		dst[i] = Float8FromFloat32(v)
-	}
-	return dst
 }

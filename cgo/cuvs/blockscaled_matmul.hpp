@@ -34,9 +34,10 @@
 // squared L2 distance. bsmm_row_stats_kernel computes each row's squared norm from the
 // packed tile (the values the matmul multiplies) and the uint8 element sums;
 // bsmm_fixup_kernel turns the dot products into rank scores, the negated distance (largest
-// is nearest): dot, -(1 - dot / sqrt(|x|^2 |q|^2)) or -max(0, |x|^2 + |q|^2 - 2 dot). run
-// copies the rank scores of every row; run_topk selects the k best rows per query with
-// cuvs::selection::select_k and copies only those back.
+// is nearest): dot, -(1 - clamp(dot / sqrt(|x|^2 |q|^2), -1, 1)) or
+// -max(0, |x|^2 + |q|^2 - 2 dot). run copies the rank scores of every row; run_topk
+// selects the k best rows per query with cuvs::selection::select_k and copies only those
+// back.
 
 #include "device_memory.hpp"
 
@@ -112,7 +113,8 @@ __device__ inline double bsmm_elem(int format, const uint8_t* row, const uint8_t
 // product d * g_row * g_query in double, with the squared norms. Integer formats take the
 // int32 sums with the uint8
 // shift correction. The rank is rounded once to float; NaN and padding rows r >= n are
-// -Inf. A zero vector has cosine distance 1.
+// -Inf. The cosine similarity is clamped to [-1, 1] and the squared L2 to >= 0, so no
+// distance is negative. A zero vector has cosine distance 1.
 //
 // WARNING: near-zero recomputation is POISON. DO NOT add an exact recomputation of
 // near-zero distances (sum (x - q)^2 per pair), a CPU re-score, or any other second scoring
@@ -147,7 +149,7 @@ __global__ void bsmm_fixup_kernel(float* d, int kind, int metric, uint64_t M, ui
             double rank = dot;
             if (metric == kMetricCosine) {
                 const double den = sqrt(norm_row[r] * norm_query[q]);
-                rank = den > 0 ? -(1.0 - dot / den) : -1.0;
+                rank = den > 0 ? -(1.0 - fmin(1.0, fmax(-1.0, dot / den))) : -1.0;
             } else if (metric == kMetricL2sq) {
                 rank = -fmax(0.0, norm_row[r] + norm_query[q] - 2.0 * dot);
             }

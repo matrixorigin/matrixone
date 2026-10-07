@@ -139,6 +139,20 @@ func floatOrderPartition[T types.FixedSizeT](
 }
 
 func bytesPartition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vector) []int64 {
+	return bytesPartitionBy(sels, diffs, partitions, vec, false)
+}
+
+// cellsEqual reports whether two non-null cells are equal: by decoded value for vecf8/vecf4
+// cells (decoded), as = compares them, and by bytes otherwise.
+func cellsEqual(decoded bool, v, w []byte) bool {
+	if decoded {
+		return types.CompareBlockScaledFromBytes(v, w, false) == 0
+	}
+	return bytes.Equal(v, w)
+}
+
+// bytesPartitionBy partitions varlena cells, comparing them with cellsEqual(decoded).
+func bytesPartitionBy(sels []int64, diffs []bool, partitions []int64, vec *vector.Vector, decoded bool) []int64 {
 	partitions = partitions[:0]
 	if len(sels) == 0 {
 		return partitions
@@ -146,7 +160,8 @@ func bytesPartition(sels []int64, diffs []bool, partitions []int64, vec *vector.
 	diffs[0] = true
 	diffs = diffs[:len(sels)]
 
-	// See genericPartition: diffs is accumulated; never overwrite to false.
+	// See genericPartition: diffs is accumulated; never overwrite to false. Row 0 is always
+	// a boundary, so it is never compared.
 	if !vec.IsConst() {
 		var n bool
 		var v []byte
@@ -159,8 +174,8 @@ func bytesPartition(sels []int64, diffs []bool, partitions []int64, vec *vector.
 				isNull := nulls.Contains(nsp, uint64(sel))
 				if n != isNull {
 					diffs[i] = true
-				} else if !isNull {
-					diffs[i] = diffs[i] || !(bytes.Equal(v, w))
+				} else if !isNull && i > 0 {
+					diffs[i] = diffs[i] || !cellsEqual(decoded, v, w)
 				}
 				// else: both NULL → equal, preserve diffs[i]
 				n = isNull
@@ -169,7 +184,9 @@ func bytesPartition(sels []int64, diffs []bool, partitions []int64, vec *vector.
 		} else {
 			for i, sel := range sels {
 				w := vs[sel].GetByteSlice(area)
-				diffs[i] = diffs[i] || !(bytes.Equal(v, w))
+				if i > 0 {
+					diffs[i] = diffs[i] || !cellsEqual(decoded, v, w)
+				}
 				v = w
 			}
 		}
@@ -257,49 +274,11 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		//Byte partition logic doesn't use byte.Compare or Str.
 		//Hence, we can use bytesPartition here.
 	case types.T_array_float8, types.T_array_float4:
-		return blockScaledPartition(sels, diffs, partitions, vec)
+		// vecf8/vecf4 cells are equal when their decoded values are
+		return bytesPartitionBy(sels, diffs, partitions, vec, true)
 	default:
 		panic(moerr.NewNotSupportedNoCtx(vec.GetType().Oid.String()))
 	}
-}
-
-// blockScaledPartition is bytesPartition for vecf8/vecf4 cells, which are equal when their
-// decoded values are, as = compares them.
-func blockScaledPartition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vector) []int64 {
-	partitions = partitions[:0]
-	if len(sels) == 0 {
-		return partitions
-	}
-	diffs[0] = true
-	diffs = diffs[:len(sels)]
-
-	// See genericPartition: diffs is accumulated; never overwrite to false.
-	if !vec.IsConst() {
-		var n bool
-		var v []byte
-
-		vs, area := vector.MustVarlenaRawData(vec)
-		nsp := vec.GetNulls()
-		for i, sel := range sels {
-			w := vs[sel].GetByteSlice(area)
-			isNull := nulls.Contains(nsp, uint64(sel))
-			if n != isNull {
-				diffs[i] = true
-			} else if !isNull && i > 0 {
-				diffs[i] = diffs[i] || types.CompareBlockScaledFromBytes(v, w, false) != 0
-			}
-			n = isNull
-			v = w
-		}
-	}
-
-	for i, j := int64(0), int64(len(diffs)); i < j; i++ {
-		if diffs[i] {
-			partitions = append(partitions, i)
-		}
-	}
-
-	return partitions
 }
 
 // PartitionForOrder returns peer-group boundaries for SQL ORDER BY. Generic

@@ -103,5 +103,18 @@ func TestBlockScaledPartition(t *testing.T) {
 			require.Equal(t, []int64{0, 3, 4}, got, oid.String())
 		}
 		vec.Free(mp)
+
+		// without nulls
+		vec = vector.NewVec(types.New(oid, 1, 0))
+		for _, c := range [][]byte{x, y, x, z} {
+			require.NoError(t, vector.AppendBytes(vec, c, false, mp))
+		}
+		sels = []int64{0, 1, 2, 3}
+		for _, part := range []func([]int64, []bool, []int64, *vector.Vector) []int64{Partition, PartitionForOrder} {
+			got := part(sels, make([]bool, len(sels)), nil, vec)
+			require.Equal(t, []int64{0, 3}, got, oid.String())
+		}
+		vec.Free(mp)
 	}
+	require.Zero(t, mp.CurrNB())
 }

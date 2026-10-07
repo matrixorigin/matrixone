@@ -15,9 +15,9 @@ insert into t values
 select vector_matmul(2, id, a, '[[1,0,0,0],[0,1,0,0]]') from t;
 select vector_matmul(10, id, b, '[[1,1,0,0]]') from t;
 -- pre-filter, grouping, empty input
-select vector_matmul(3, id, a, '[[1,1,0,0]]', '{"mode":"cpu"}') from t where cat = 'x';
+select vector_matmul(3, id, a, '[[1,1,0,0]]', '{"no_such_key":"a"}') from t where cat = 'x';
 select cat, vector_matmul(1, id, a, '[[1,0,0,0]]') r from t group by cat order by cat;
-select vector_matmul(2, id, a, '[[1,0,0,0],[0,0,1,0]]', '{"mode":"auto","tile_bytes":1048576}') from t where id > 100;
+select vector_matmul(2, id, a, '[[1,0,0,0],[0,0,1,0]]', '{"no_such_key":1,"other_unknown":-1}') from t where id > 100;
 -- string and uuid ids
 select vector_matmul(2, cat, a, '[[1,0,0,0]]') from t;
 create table u (k uuid primary key, a vecf8(2));

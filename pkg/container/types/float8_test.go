@@ -211,10 +211,6 @@ func TestLowPrecTypeRegistration(t *testing.T) {
 	require.Equal(t, f4, DecodeValue(EncodeValue(f4, T_float4), T_float4))
 
 	// Slice converters.
-	require.Equal(t, []float32{1.5, -2.0}, Float8ToFloat32Slice([]Float8{Float8FromFloat32(1.5), Float8FromFloat32(-2.0)}))
-	require.Equal(t, []Float8{Float8FromFloat32(1.5)}, Float32ToFloat8Slice([]float32{1.5}))
-	require.Equal(t, []float32{1.5, -2.0}, Float4ToFloat32Slice([]Float4{Float4FromFloat32(1.5), Float4FromFloat32(-2.0)}))
-	require.Equal(t, []Float4{Float4FromFloat32(1.5)}, Float32ToFloat4Slice([]float32{1.5}))
 	require.Equal(t, []float32{1.5}, BF16ToFloat32Slice([]BF16{BF16FromFloat32(1.5)}))
 	require.Equal(t, []float32{1.5}, Float16ToFloat32Slice([]Float16{Float16FromFloat32(1.5)}))
 }

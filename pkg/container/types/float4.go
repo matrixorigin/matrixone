@@ -92,23 +92,3 @@ func Float4FromFloat32(v float32) Float4 {
 	}
 	return Float4(sign | uint8(code))
 }
-
-// ----------------------------------------------------------------------------
-// Batch converters (float32 bridge).
-// ----------------------------------------------------------------------------
-
-func Float4ToFloat32Slice(src []Float4) []float32 {
-	dst := make([]float32, len(src))
-	for i, v := range src {
-		dst[i] = v.ToFloat32()
-	}
-	return dst
-}
-
-func Float32ToFloat4Slice(src []float32) []Float4 {
-	dst := make([]Float4, len(src))
-	for i, v := range src {
-		dst[i] = Float4FromFloat32(v)
-	}
-	return dst
-}

@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unsafe"
 
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -154,8 +155,11 @@ func decodeVectorMatmulConfig(b []byte) (topk int64, queries, options string, gp
 type vectorMatmulConfig struct {
 	topk int
 	nq   int
-	// queryCells holds the queries back to back in the column's cell format.
+	// queryCells holds the queries back to back in the column's cell format; the CPU scorer
+	// reads them through views of the same storage.
 	queryCells []byte
+	// retained is the byte size the configuration holds: the query storage and the views.
+	retained int
 	// cellBytes is the byte length of one cell.
 	cellBytes int
 	// engineFormat is the GPU engine format of the column type.
@@ -458,6 +462,7 @@ func (cfg *vectorMatmulConfig) setBlockScaledCells(oid types.T, dim int, cells [
 			return err
 		}
 	}
+	cfg.retained = cap(cfg.queryCells) + cap(ops)*int(unsafe.Sizeof(metric.VecBlockOperand{}))
 	// the distance as inner_product, cosine_distance and l2_distance_sq compute it; an
 	// inner product overflow NaN ranks last
 	distance := metric.VecBlockInnerProduct
@@ -500,17 +505,19 @@ func setVectorMatmulPlain[T types.ArrayElement](cfg *vectorMatmulConfig, engineF
 	if err != nil {
 		return err
 	}
-	typed := make([][]T, len(queries))
+	// one backing of the queries: queryCells is its bytes, the scorer slices query j from it
+	dim := len(queries[0])
+	backing := make([]T, len(queries)*dim)
 	for i, q := range queries {
-		typed[i] = make([]T, len(q))
 		for k, v := range q {
 			var ok bool
-			if typed[i][k], ok = conv(v); !ok {
+			if backing[i*dim+k], ok = conv(v); !ok {
 				return moerr.NewInvalidInputNoCtxf("vector_matmul: query value %v is not representable in the column type", v)
 			}
 		}
-		cfg.queryCells = append(cfg.queryCells, types.ArrayToBytes(typed[i])...)
 	}
+	cfg.queryCells = types.ArrayToBytes(backing)
+	cfg.retained = cap(cfg.queryCells)
 	cfg.engineFormat = engineFormat
 	cfg.cellBytes = len(cfg.queryCells) / len(queries)
 	cfg.score = func(cell []byte, out []float64) error {
@@ -518,7 +525,8 @@ func setVectorMatmulPlain[T types.ArrayElement](cfg *vectorMatmulConfig, engineF
 			return moerr.NewInvalidInputNoCtxf("vector_matmul: cell is %d bytes, want %d", len(cell), cfg.cellBytes)
 		}
 		row := types.BytesToArray[T](cell)
-		for j, q := range typed {
+		for j := range out {
+			q := backing[j*dim : (j+1)*dim : (j+1)*dim]
 			dist, err := fn(row, q)
 			if err != nil {
 				return err
@@ -1033,6 +1041,9 @@ type vectorMatmulExec struct {
 
 	// releaseCfg drops the hold on cfg in vectorMatmulConfigs.
 	releaseCfg func()
+	// cfgLease holds the account's charge for cfg's retained bytes and the score scratch.
+	// Every executor holding a shared configuration is charged for all of it.
+	cfgLease *mpool.CapacityLease
 
 	engine vectorMatmulEngine
 	// engineLease holds the account's charge for the engine's native host memory.
@@ -1098,12 +1109,73 @@ func (exec *vectorMatmulExec) SetExtraInformation(partialResult any, _ int) erro
 	if err != nil {
 		return err
 	}
-	if exec.releaseCfg != nil {
-		exec.releaseCfg()
-	}
+	exec.releaseConfig()
 	exec.cfg, exec.releaseCfg = cfg, release
 	exec.scores = make([]float64, cfg.nq)
+	if err := exec.chargeConfig(); err != nil {
+		exec.releaseConfig()
+		return err
+	}
 	return nil
+}
+
+// SetAllocationAccount attaches the account and charges it for the configuration, which
+// the aggregate factory sets first.
+func (exec *vectorMatmulExec) SetAllocationAccount(allocation *AllocationAccount) error {
+	if err := exec.aggExec.SetAllocationAccount(allocation); err != nil {
+		return err
+	}
+	if err := exec.chargeConfig(); err != nil {
+		exec.releaseConfig()
+		return err
+	}
+	return nil
+}
+
+// ClearAllocationAccount detaches the account and returns the configuration's charge.
+func (exec *vectorMatmulExec) ClearAllocationAccount(allocation *AllocationAccount) error {
+	if err := exec.aggExec.ClearAllocationAccount(allocation); err != nil {
+		return err
+	}
+	exec.cfgLease.Release()
+	exec.cfgLease = nil
+	return nil
+}
+
+// configBytes is the charge of the configuration: its retained bytes and the score scratch.
+func (exec *vectorMatmulExec) configBytes() uint64 {
+	return uint64(exec.cfg.retained) + uint64(cap(exec.scores))*8
+}
+
+// chargeConfig reserves the configuration's bytes from the account once both are set; a
+// denial fails the caller before any row is scored.
+func (exec *vectorMatmulExec) chargeConfig() error {
+	if exec.allocation == nil || exec.cfg == nil || exec.cfgLease != nil {
+		return nil
+	}
+	n := exec.configBytes()
+	reservation, err := exec.allocation.reserveCapacity(n)
+	if err != nil {
+		return err
+	}
+	lease, err := reservation.Commit(n)
+	if err != nil {
+		reservation.Abort()
+		return err
+	}
+	exec.cfgLease = lease
+	return nil
+}
+
+// releaseConfig returns the configuration's charge and drops the hold on it.
+func (exec *vectorMatmulExec) releaseConfig() {
+	exec.cfgLease.Release()
+	exec.cfgLease = nil
+	if exec.releaseCfg != nil {
+		exec.releaseCfg()
+		exec.releaseCfg = nil
+	}
+	exec.cfg = nil
 }
 
 func (exec *vectorMatmulExec) stateAt(group uint64) (*vectorMatmulState, error) {
@@ -1706,6 +1778,9 @@ func (exec *vectorMatmulExec) Size() int64 {
 			}
 		}
 	}
+	if exec.cfg != nil {
+		size += int64(exec.configBytes())
+	}
 	return size + exec.tileSize()
 }
 
@@ -1720,8 +1795,5 @@ func (exec *vectorMatmulExec) Free() {
 	exec.engineTried = false
 	exec.aggExec.Free()
 	exec.state = nil
-	if exec.releaseCfg != nil {
-		exec.releaseCfg()
-		exec.releaseCfg = nil
-	}
+	exec.releaseConfig()
 }

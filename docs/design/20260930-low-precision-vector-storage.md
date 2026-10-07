@@ -169,8 +169,9 @@ dataset and queries quantized; recall@10 of the quantized dot product against ex
 | `vecf4` NVFP4, per-vector global | 0.922 | 9.9% |
 | NVFP4 with a fixed global of 1.0 (not used) | 0.918 | 10.6% |
 
-The GEMM is exact on the stored values; the ranking is approximate relative to the
-original fp32 vectors because the storage is quantized. `vecf8` is the quality format,
+The GEMM multiplies the stored values; the ranking is approximate relative to the original
+fp32 vectors because the storage is quantized, and on the GPU it carries the fp32 GEMM's
+rounding (see Decisions). `vecf8` is the quality format,
 `vecf4` the memory format.
 
 ## GPU engine: cuBLASLt in `cgo/cuvs`
@@ -508,12 +509,15 @@ The score is the distance of the `metric` option, the value of the matching SQL 
 | `metric` | Score | SQL function |
 |----------|-------|--------------|
 | `inner_product` (default) | `−x·q` | `inner_product(v, q)` |
-| `cosine` | `1 − x·q / (‖x‖‖q‖)`, 1 with a zero vector | `cosine_distance(v, q)` |
+| `cosine` | `1 − x·q / (‖x‖‖q‖)`, the similarity clamped to [−1, 1], 1 with a zero vector | `cosine_distance(v, q)` |
 | `l2sq` | `‖x − q‖²`, as `‖x‖² + ‖q‖² − 2 x·q` clamped at 0 | `l2_distance_sq(v, q)` |
 
-The hits are the same rows, in the same order, as `ORDER BY <function>(v, q), id LIMIT
-topk`. The squared-L2 expansion loses digits relative to the norms when `x` is close to
-`q` (as in cuVS and FAISS); a row equal to a query has distance 0 up to that rounding. L1
+On the CPU the hits are the same rows, in the same order, as `ORDER BY <function>(v, q), id
+LIMIT topk`. On the GPU, rows whose distances differ by more than the fp32 GEMM's rounding
+rank as there, and closer rows can rank in either order; the cosine and squared-L2
+expansions lose digits relative to the norms when `x` is close to `q` (as in cuVS and
+FAISS), so a row equal to a query has distance 0 up to that rounding, never below 0 (see
+Decisions). L1
 and L2 (the square root) are not provided.
 
 ## Hardware & toolchain
@@ -559,8 +563,8 @@ and L2 (the square root) are not provided.
 
 Oracle: the result equals a reference computed over the whole table by
 `ORDER BY inner_product(src_vec, query) DESC, id-text LIMIT k` per query, with the query
-cast to the column's format — the same ids in the same order, scores within fp32
-summation-order tolerance.
+cast to the column's format — on the CPU the same ids in the same order; on the GPU scores
+within the fp32 GEMM's tolerance, rows closer than it in either order.
 
 - **Unit** (`aggexec/vector_matmul_test.go`): top-k and tie order; NULL ids and vectors;
   empty groups (`[]` per query); several groups; merge of three partial states in both
@@ -693,9 +697,14 @@ type; normalization changes the ranking, independent of the format.
   format). `vecuint8` runs on the int8 path with the shift correction.
 - The per-tile top-k runs on the GPU (`select_k`) for one-group tiles; mixed-group tiles
   copy the full scores. Rows tied at the `k`-th score beyond the kept ones bring back their
-  query's full column, so GPU and CPU results are identical.
+  query's full column, so the GPU top-k equals the selection over the full scores.
 - The parsed configuration is shared by the executors of a query and reference-counted;
-  the configuration bytes and their encoding are unchanged.
+  the configuration bytes and their encoding are unchanged. Plain queries are held once,
+  as the engine's packed cells, with the CPU scorer reading typed views of them. Every
+  executor holding the configuration charges its allocation account for the retained
+  query storage and its score scratch, so a shared configuration is charged to each
+  holder; a denial fails the aggregate's creation, and the charge returns when the
+  executor is freed.
 - v1 is a function call per tile with no index, residency or dataset cache; the cuVS
   brute-force index is unchanged.
 - SQL surface = one aggregate, `vector_matmul`; partials per pipeline and the cross-CN

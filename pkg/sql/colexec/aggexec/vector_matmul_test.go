@@ -355,7 +355,7 @@ func TestVectorMatmulConfigErrors(t *testing.T) {
 	require.ErrorContains(t, err, "queries x topk exceeds")
 	// the options are a JSON object; only "metric" is read, other keys are ignored
 	for options, metric := range map[string]int{
-		``: vectorMatmulInnerProduct, `{"mode":"auto"}`: vectorMatmulInnerProduct, `{"mode":"gpu","tile_bytes":-1}`: vectorMatmulInnerProduct,
+		``: vectorMatmulInnerProduct, `{"no_such_key":"a"}`: vectorMatmulInnerProduct, `{"no_such_key":1,"other_unknown":-1}`: vectorMatmulInnerProduct,
 		`{"metric":"inner_product"}`: vectorMatmulInnerProduct, `{"metric":"cosine","x":[1]}`: vectorMatmulCosine, `{"metric":"l2sq"}`: vectorMatmulL2sq,
 	} {
 		cfg, err := parseVectorMatmulConfig(EncodeVectorMatmulConfig(1, `[[1,0,0,0]]`, options, false), vt)
@@ -1314,4 +1314,134 @@ func TestVectorMatmulCPUDistanceAtExtremeMagnitudes(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestVectorMatmulConfigAdmission checks that the parsed configuration (the query storage
+// and the score scratch) is charged to the allocation account of every executor holding
+// it, through the aggregate factory: a configuration larger than the account fails the
+// factory, a shared configuration stays charged to each holder until it is freed, and every
+// charge returns on Free.
+func TestVectorMatmulConfigAdmission(t *testing.T) {
+	const limit = 64 << 10
+	openAccount := func(t *testing.T) (*mpool.AllocationAccount, *AllocationAccount) {
+		registry, err := mpool.NewAllocationAccountRegistry(1, 512)
+		require.NoError(t, err)
+		account, err := registry.Open(limit)
+		require.NoError(t, err)
+		allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{
+			VectorData: 1, VectorArea: 2, VectorNulls: 3, VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+		})
+		require.NoError(t, err)
+		return account, allocation
+	}
+	ones := func(n int) []float32 {
+		v := make([]float32, n)
+		for i := range v {
+			v[i] = 1
+		}
+		return v
+	}
+	configs := func() int {
+		vectorMatmulConfigs.Lock()
+		defer vectorMatmulConfigs.Unlock()
+		return len(vectorMatmulConfigs.m)
+	}
+	for _, oid := range []types.T{types.T_array_float32, types.T_array_float8} {
+		for _, tc := range []struct {
+			name    string
+			dim, nq int
+			denied  bool
+		}{{"small", 4, 1, false}, {"large", 8192, 64, true}} {
+			t.Run(oid.String()+"/"+tc.name, func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				account, allocation := openAccount(t)
+				before := configs()
+				typ := types.New(oid, int32(tc.dim), 0)
+				raw := EncodeVectorMatmulBinaryConfig(1, types.ArrayToBytes(ones(tc.nq*tc.dim)), "", false)
+				ag, err := MakeGroupAgg(mp, AggIdOfVectorMatmul, false, allocation, raw, types.T_int64.ToType(), typ)
+				if tc.denied {
+					require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+					require.Zero(t, account.Snapshot().Used)
+					require.Equal(t, before, configs())
+					return
+				}
+				require.NoError(t, err)
+				exec := ag.(*vectorMatmulExec)
+				charged := exec.configBytes()
+				require.GreaterOrEqual(t, charged, uint64(len(exec.cfg.queryCells)))
+				require.Equal(t, charged, account.Snapshot().Used)
+				require.GreaterOrEqual(t, exec.Size(), int64(charged))
+
+				require.NoError(t, exec.GroupGrow(1))
+				cell := types.ArrayToBytes(ones(tc.dim))
+				if oid == types.T_array_float8 {
+					cell, err = types.AppendBlockScaled(nil, types.BlockScaledMXFP8, ones(tc.dim))
+					require.NoError(t, err)
+				}
+				ids, v := vector.NewVec(types.T_int64.ToType()), vector.NewVec(typ)
+				require.NoError(t, vector.AppendFixed(ids, int64(7), false, mp))
+				require.NoError(t, vector.AppendBytes(v, cell, false, mp))
+				vecs := []*vector.Vector{ids, v}
+				require.NoError(t, exec.PreflightBatchFill(0, []uint64{1}, vecs))
+				require.NoError(t, exec.BatchFill(0, []uint64{1}, vecs))
+				out, err := exec.Flush()
+				require.NoError(t, err)
+				for _, v := range out {
+					v.Free(mp)
+				}
+				exec.Free()
+				vmFree(mp, vecs)
+				require.Zero(t, account.Snapshot().Used)
+				require.Equal(t, before, configs())
+				require.Zero(t, mp.CurrNB())
+			})
+		}
+	}
+
+	t.Run("shared", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		before := configs()
+		typ := types.New(types.T_array_float32, 4, 0)
+		raw := EncodeVectorMatmulBinaryConfig(1, types.ArrayToBytes(ones(8)), "", false)
+		accounts := make([]*mpool.AllocationAccount, 2)
+		execs := make([]*vectorMatmulExec, 2)
+		for i := range execs {
+			var allocation *AllocationAccount
+			accounts[i], allocation = openAccount(t)
+			ag, err := MakeGroupAgg(mp, AggIdOfVectorMatmul, false, allocation, raw, types.T_int64.ToType(), typ)
+			require.NoError(t, err)
+			execs[i] = ag.(*vectorMatmulExec)
+		}
+		require.Same(t, execs[0].cfg, execs[1].cfg)
+		require.Equal(t, before+1, configs())
+		for i := range execs {
+			require.Equal(t, execs[i].configBytes(), accounts[i].Snapshot().Used)
+		}
+		execs[0].Free()
+		require.Zero(t, accounts[0].Snapshot().Used)
+		require.Equal(t, execs[1].configBytes(), accounts[1].Snapshot().Used)
+		require.Equal(t, before+1, configs())
+		execs[1].Free()
+		require.Zero(t, accounts[1].Snapshot().Used)
+		require.Equal(t, before, configs())
+	})
+
+	t.Run("replaced", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		account, allocation := openAccount(t)
+		typ := types.New(types.T_array_float32, 4, 0)
+		ag, err := MakeGroupAgg(mp, AggIdOfVectorMatmul, false, allocation,
+			EncodeVectorMatmulBinaryConfig(1, types.ArrayToBytes(ones(4)), "", false), types.T_int64.ToType(), typ)
+		require.NoError(t, err)
+		exec := ag.(*vectorMatmulExec)
+		// a larger configuration replaces the charge; one beyond the account releases it
+		require.NoError(t, exec.SetExtraInformation(EncodeVectorMatmulBinaryConfig(1, types.ArrayToBytes(ones(64)), "", false), 0))
+		require.Equal(t, exec.configBytes(), account.Snapshot().Used)
+		big := EncodeVectorMatmulBinaryConfig(1, types.ArrayToBytes(ones(4*4000)), "", false)
+		require.ErrorIs(t, exec.SetExtraInformation(big, 0), mpool.ErrAllocationAccountCapacity)
+		require.Nil(t, exec.cfg)
+		require.Zero(t, account.Snapshot().Used)
+		exec.Free()
+		require.Zero(t, account.Snapshot().Used)
+	})
 }

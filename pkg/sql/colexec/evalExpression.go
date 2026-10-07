@@ -2136,6 +2136,11 @@ func generateConstExpressionExecutor(
 				vec, err = newExpressionConstArray(typ, types.BytesToArray[int8]([]byte(val.VecVal)), 1, proc.Mp(), selection)
 			case types.T_array_uint8:
 				vec, err = newExpressionConstArray(typ, types.BytesToArray[uint8]([]byte(val.VecVal)), 1, proc.Mp(), selection)
+			case types.T_array_float8, types.T_array_float4:
+				// a vecf8/vecf4 constant is its stored cell
+				vec, err = newExpressionConstBytes(typ, []byte(val.VecVal), 1, proc.Mp(), selection)
+			default:
+				return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("vector constant of type %s", typ))
 			}
 		default:
 			return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("const expression %v", con.GetValue()))

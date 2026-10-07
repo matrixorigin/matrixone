@@ -14,15 +14,15 @@ select vector_matmul(2, id, a, '[[1,0,0,0],[0,1,0,0]]') from t;
 select vector_matmul(10, id, b, '[[1,1,0,0]]') from t;
 ➤ vector_matmul(10, id, b, [[1,1,0,0]])[-1,2147483647,0]  𝄀
 [[["3", -2], ["1", -1], ["2", -1], ["4", 1]]]
-select vector_matmul(3, id, a, '[[1,1,0,0]]', '{"mode":"cpu"}') from t where cat = 'x';
-➤ vector_matmul(3, id, a, [[1,1,0,0]], {"mode":"cpu"})[-1,2147483647,0]  𝄀
+select vector_matmul(3, id, a, '[[1,1,0,0]]', '{"no_such_key":"a"}') from t where cat = 'x';
+➤ vector_matmul(3, id, a, [[1,1,0,0]], {"no_such_key":"a"})[-1,2147483647,0]  𝄀
 [[["1", -1], ["2", -1]]]
 select cat, vector_matmul(1, id, a, '[[1,0,0,0]]') r from t group by cat order by cat;
 ➤ cat[12,10,0]  ¦  r[-1,2147483647,0]  𝄀
 x  ¦  [[["1", -1]]]  𝄀
 y  ¦  [[["3", -1]]]
-select vector_matmul(2, id, a, '[[1,0,0,0],[0,0,1,0]]', '{"mode":"auto","tile_bytes":1048576}') from t where id > 100;
-➤ vector_matmul(2, id, a, [[1,0,0,0],[0,0,1,0]], {"mode":"auto","tile_bytes":1048576})[-1,2147483647,0]  𝄀
+select vector_matmul(2, id, a, '[[1,0,0,0],[0,0,1,0]]', '{"no_such_key":1,"other_unknown":-1}') from t where id > 100;
+➤ vector_matmul(2, id, a, [[1,0,0,0],[0,0,1,0]], {"no_such_key":1,"other_unknown":-1})[-1,2147483647,0]  𝄀
 [[], []]
 select vector_matmul(2, cat, a, '[[1,0,0,0]]') from t;
 ➤ vector_matmul(2, cat, a, [[1,0,0,0]])[-1,2147483647,0]  𝄀

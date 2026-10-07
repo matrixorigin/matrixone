@@ -548,8 +548,8 @@ void check_matches_nvidia(int format, size_t K, size_t rows, size_t nq, bool sam
 // check_magnitude scores a query of magnitude 2^e (elements 2^e times {1, 1.5, 2}) against
 // rows equal to the query, to twice it, to minus it and a zero vector, in a format holding
 // those values,
-// and compares cosine and l2sq with a double reference over the stored values: the cosine
-// distance to 1e-6, the squared L2 distance to 1e-5 of |x|^2 + |q|^2, and a distance beyond
+// and compares cosine and l2sq with a double reference over the stored values: every
+// distance non-negative, the cosine distance at most 2 and to 1e-6, the squared L2 distance to 1e-5 of |x|^2 + |q|^2, and a distance beyond
 // the float range as +Inf.
 void check_magnitude(int format, uint32_t dim, int e) {
     const bool mx = format == GPU_BLOCKSCALED_MXFP8, nv = format == GPU_BLOCKSCALED_NVFP4;
@@ -617,7 +617,10 @@ void check_magnitude(int format, uint32_t dim, int e) {
                 l2 += (x - y) * (x - y);
             }
             const double got = -double(scores[r]);
+            // a distance is never negative; a cosine distance is at most 2
+            ASSERT_TRUE(got >= 0);
             if (metric == blockscaled_matmul::kCosine) {
+                ASSERT_TRUE(got <= 2);
                 const double want = nr > 0 && nq > 0 ? 1 - dot / std::sqrt(nr * nq) : 1.0;
                 if (!(std::fabs(got - want) <= 1e-6)) {
                     printf("    format %d dim %u 2^%d cosine row %d: %g, want %g\n", format, dim, e, r, got, want);
