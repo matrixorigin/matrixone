@@ -467,51 +467,59 @@ func TestUpstreamConnConfig(t *testing.T) {
 
 func TestUpstreamExecutor_ExecWithRetry(t *testing.T) {
 	t.Run("context cancelled", func(t *testing.T) {
-		e := &UpstreamExecutor{
-			retryTimes: 3,
-		}
+		e := &UpstreamExecutor{retryTimes: 3}
 		e.initRetryPolicy(&mockClassifier{retryable: true})
+		e.retryPolicy.Backoff = nil
 
 		ctx, cancel := context.WithCancel(context.Background())
-		cancel() // Cancel immediately
-
-		_, _, err := e.execWithRetry(ctx, nil, 0, func(ctx context.Context) (*Result, error) {
+		defer cancel()
+		cancel()
+		calls := 0
+		result, cleanup, err := e.execWithRetry(ctx, nil, 0, func(ctx context.Context) (*Result, error) {
+			calls++
 			return nil, assert.AnError
 		})
-		assert.Error(t, err)
-	})
-
-	t.Run("active routine paused", func(t *testing.T) {
-		e := &UpstreamExecutor{
-			retryTimes: 3,
+		if cleanup != nil {
+			t.Cleanup(cleanup)
 		}
-		e.initRetryPolicy(&mockClassifier{retryable: true})
-
-		ar := NewActiveRoutine()
-		ar.ClosePause() // Close pause channel
-
-		_, _, err := e.execWithRetry(context.Background(), ar, 0, func(ctx context.Context) (*Result, error) {
-			return nil, assert.AnError
-		})
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "paused")
+		require.ErrorIs(t, err, context.Canceled)
+		require.Nil(t, result)
+		require.Nil(t, cleanup)
+		require.Zero(t, calls)
 	})
 
-	t.Run("active routine cancelled", func(t *testing.T) {
-		e := &UpstreamExecutor{
-			retryTimes: 3,
-		}
-		e.initRetryPolicy(&mockClassifier{retryable: true})
-
-		ar := NewActiveRoutine()
-		ar.CloseCancel() // Close cancel channel
-
-		_, _, err := e.execWithRetry(context.Background(), ar, 0, func(ctx context.Context) (*Result, error) {
-			return nil, assert.AnError
+	for _, tc := range []struct {
+		name string
+		stop func(*ActiveRoutine)
+	}{
+		{name: "paused", stop: (*ActiveRoutine).ClosePause},
+		{name: "cancelled", stop: (*ActiveRoutine).CloseCancel},
+	} {
+		t.Run("active routine "+tc.name, func(t *testing.T) {
+			for _, timeout := range []time.Duration{0, time.Second} {
+				t.Run(timeout.String(), func(t *testing.T) {
+					e := &UpstreamExecutor{retryTimes: 5, retryDuration: time.Minute}
+					e.initRetryPolicy(&mockClassifier{retryable: true})
+					// Admission and error propagation are independent of retry delay.
+					e.retryPolicy.Backoff = nil
+					ar := NewActiveRoutine()
+					tc.stop(ar)
+					calls := 0
+					result, cleanup, err := e.execWithRetry(context.Background(), ar, timeout, func(context.Context) (*Result, error) {
+						calls++
+						return nil, assert.AnError
+					})
+					if cleanup != nil {
+						t.Cleanup(cleanup)
+					}
+					require.ErrorContains(t, err, "task "+tc.name)
+					require.Nil(t, result)
+					require.Nil(t, cleanup)
+					require.Zero(t, calls, "a stopped routine must not execute the operation")
+				})
+			}
 		})
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "cancelled")
-	})
+	}
 
 	t.Run("success on first attempt", func(t *testing.T) {
 		e := &UpstreamExecutor{
@@ -533,10 +541,18 @@ func TestUpstreamExecutor_ExecWithRetry(t *testing.T) {
 		}
 		e.initRetryPolicy(&mockClassifier{retryable: false})
 
-		_, _, err := e.execWithRetry(context.Background(), nil, 0, func(ctx context.Context) (*Result, error) {
+		calls := 0
+		result, cleanup, err := e.execWithRetry(context.Background(), nil, 0, func(ctx context.Context) (*Result, error) {
+			calls++
 			return nil, assert.AnError
 		})
-		assert.Error(t, err)
+		if cleanup != nil {
+			t.Cleanup(cleanup)
+		}
+		require.ErrorIs(t, err, assert.AnError)
+		require.Nil(t, result)
+		require.Nil(t, cleanup)
+		require.Equal(t, 1, calls)
 	})
 }
 

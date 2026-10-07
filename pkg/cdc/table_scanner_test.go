@@ -17,6 +17,8 @@ package cdc
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -895,62 +897,128 @@ func TestTableDetectorConcurrentRegisterUnregister(t *testing.T) {
 		nowFn:                time.Now,
 	}
 	td.scanTableFn = func() error { return nil }
-	defer td.Close()
-
-	const workers = 16
-	var wg sync.WaitGroup
-	wg.Add(workers)
-	errCh := make(chan error, workers)
-	registered := make(chan struct{}, workers)
-	release := make(chan struct{})
-
-	for i := 0; i < workers; i++ {
-		go func(idx int) {
-			defer wg.Done()
-			id := fmt.Sprintf("task-%d", idx)
-			if !td.RegisterIfAbsent(id, uint32(idx+1), []string{fmt.Sprintf("db%d", idx)}, []string{fmt.Sprintf("tbl%d", idx)}, func(map[uint32]TblMap) error { return nil }) {
-				errCh <- moerr.NewInternalErrorNoCtx(fmt.Sprintf("register failed for %s", id))
-				registered <- struct{}{}
-				return
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	start := make(chan struct{})
+	startWorkers := sync.OnceFunc(func() { close(start) })
+	var workersDone <-chan struct{}
+	defer func() {
+		cancel()
+		startWorkers()
+		if workersDone != nil {
+			select {
+			case <-workersDone:
+			case <-time.After(time.Second):
+				t.Error("register/unregister workers did not exit")
 			}
-			registered <- struct{}{}
-			<-release
-			td.UnRegister(id)
-		}(i)
-	}
-	for range workers {
-		<-registered
-	}
-	close(release)
+		}
+		closed := make(chan struct{})
+		go func() {
+			td.Close()
+			close(closed)
+		}()
+		select {
+		case <-closed:
+		case <-time.After(time.Second):
+			t.Error("table detector did not close")
+			return
+		}
+		waitUntil(t, func() bool { return !td.loopRunning.Load() }, time.Second, "scan loop did not stop after Close")
+	}()
 
+	register := func(id string) bool {
+		return td.RegisterIfAbsent(id, 1, []string{"db"}, []string{"tbl"}, func(map[uint32]TblMap) error { return nil })
+	}
+	require.True(t, register("anchor"))
+	require.True(t, register("a"))
+
+	// Registration and removal contend on the same subscription indexes. The
+	// registration of c must follow a's removal, regardless of b's ordering.
+	removed := make(chan struct{})
+	results := make(chan error, 2)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		td.UnRegister("a")
+		close(removed)
+		results <- nil
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		if !register("b") {
+			results <- moerr.NewInternalErrorNoCtx("register b failed")
+			return
+		}
+		select {
+		case <-removed:
+		case <-ctx.Done():
+			results <- ctx.Err()
+			return
+		}
+		if !register("c") {
+			results <- moerr.NewInternalErrorNoCtx("register c failed")
+			return
+		}
+		results <- nil
+	}()
 	done := make(chan struct{})
+	workersDone = done
 	go func() {
 		wg.Wait()
 		close(done)
 	}()
-
+	startWorkers()
+	for range 2 {
+		select {
+		case err := <-results:
+			require.NoError(t, err)
+		case <-ctx.Done():
+			t.Fatalf("concurrent register/unregister timed out: %v", ctx.Err())
+		}
+	}
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatalf("concurrent register/unregister timed out")
+	case <-ctx.Done():
+		t.Fatal("register/unregister workers did not finish")
 	}
 
-	close(errCh)
-	for err := range errCh {
-		t.Fatalf("unexpected error: %v", err)
+	td.mu.Lock()
+	ids := make([]string, 0, len(td.Callbacks))
+	for id := range td.Callbacks {
+		ids = append(ids, id)
 	}
+	accountByTask := maps.Clone(td.CallBackAccountId)
+	dbByTask := maps.Clone(td.CallBackDbName)
+	tableByTask := maps.Clone(td.CallBackTableName)
+	accountTasks := slices.Clone(td.SubscribedAccountIds[1])
+	dbTasks := slices.Clone(td.SubscribedDbNames["db"])
+	tableTasks := slices.Clone(td.SubscribedTableNames["tbl"])
+	indexCounts := []int{len(td.SubscribedAccountIds), len(td.SubscribedDbNames), len(td.SubscribedTableNames)}
+	td.mu.Unlock()
 
-	waitUntil(t, func() bool {
-		td.mu.Lock()
-		defer td.mu.Unlock()
-		return len(td.Callbacks) == 0 &&
-			len(td.SubscribedAccountIds) == 0 &&
-			len(td.SubscribedDbNames) == 0 &&
-			len(td.SubscribedTableNames) == 0
-	}, 500*time.Millisecond, "callbacks or subscriptions not cleaned up")
+	wantIDs := []string{"anchor", "b", "c"}
+	require.ElementsMatch(t, wantIDs, ids)
+	require.Equal(t, map[string]uint32{"anchor": 1, "b": 1, "c": 1}, accountByTask)
+	require.Equal(t, map[string][]string{"anchor": {"db"}, "b": {"db"}, "c": {"db"}}, dbByTask)
+	require.Equal(t, map[string][]string{"anchor": {"tbl"}, "b": {"tbl"}, "c": {"tbl"}}, tableByTask)
+	require.Equal(t, []int{1, 1, 1}, indexCounts)
+	require.ElementsMatch(t, wantIDs, accountTasks)
+	require.ElementsMatch(t, wantIDs, dbTasks)
+	require.ElementsMatch(t, wantIDs, tableTasks)
 
-	td.Close()
-	waitUntil(t, func() bool { return !td.loopRunning.Load() }, time.Second, "scan loop did not stop after Close")
+	for _, id := range wantIDs {
+		td.UnRegister(id)
+	}
+	td.mu.Lock()
+	counts := []int{
+		len(td.Callbacks), len(td.CallBackAccountId), len(td.SubscribedAccountIds),
+		len(td.CallBackDbName), len(td.SubscribedDbNames),
+		len(td.CallBackTableName), len(td.SubscribedTableNames),
+	}
+	td.mu.Unlock()
+	require.Equal(t, []int{0, 0, 0, 0, 0, 0, 0}, counts)
 }
 
 func waitUntil(t *testing.T, cond func() bool, timeout time.Duration, msg string) {

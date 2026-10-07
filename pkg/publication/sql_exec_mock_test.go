@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -93,26 +94,69 @@ func TestUpstreamExecutor_ExecWithRetry_RetryDurationExceeded(t *testing.T) {
 // ---- UpstreamExecutor.execWithRetry success after retry ----
 
 func TestUpstreamExecutor_ExecWithRetry_SuccessAfterRetry(t *testing.T) {
-	e := &UpstreamExecutor{
-		retryTimes:    5,
-		retryDuration: time.Second * 10,
-	}
+	e := &UpstreamExecutor{retryTimes: 5, retryDuration: 10 * time.Second}
 	e.initRetryPolicy(&mockClassifier{retryable: true})
+	e.retryPolicy.Backoff = nil
 
-	attempt := 0
-	result, cancel, err := e.execWithRetry(context.Background(), nil, time.Second, func(ctx context.Context) (*Result, error) {
-		attempt++
-		if attempt < 3 {
+	ctx, stop := context.WithCancel(context.Background())
+	t.Cleanup(stop)
+	want := &Result{}
+	var attemptContexts []context.Context
+	var previousErrors []error
+	result, cancel, err := e.execWithRetry(ctx, nil, time.Second, func(ctx context.Context) (*Result, error) {
+		if len(attemptContexts) > 0 {
+			previousErrors = append(previousErrors, attemptContexts[len(attemptContexts)-1].Err())
+		}
+		attemptContexts = append(attemptContexts, ctx)
+		if len(attemptContexts) < 3 {
 			return nil, errors.New("transient")
 		}
-		return &Result{}, nil
+		return want, nil
 	})
-	assert.NoError(t, err)
-	assert.NotNil(t, result)
-	assert.Equal(t, 3, attempt)
 	if cancel != nil {
-		cancel()
+		t.Cleanup(cancel)
 	}
+	if result != nil {
+		t.Cleanup(func() { require.NoError(t, result.Close()) })
+	}
+	require.NoError(t, err)
+	require.Same(t, want, result)
+	require.Len(t, attemptContexts, 3)
+	require.Len(t, previousErrors, 2)
+	for _, err := range previousErrors {
+		require.ErrorIs(t, err, context.Canceled, "previous attempt must be cancelled before replacement")
+	}
+	for _, ctx := range attemptContexts {
+		_, hasDeadline := ctx.Deadline()
+		require.True(t, hasDeadline)
+	}
+	require.NoError(t, attemptContexts[2].Err(), "successful attempt belongs to the caller")
+	require.NotNil(t, cancel)
+	cancel()
+	require.ErrorIs(t, attemptContexts[2].Err(), context.Canceled)
+}
+
+func TestUpstreamExecutor_ExecWithRetry_AttemptTimeout(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		e := &UpstreamExecutor{retryDuration: 10 * time.Second}
+		e.initRetryPolicy(&mockClassifier{retryable: false})
+		e.retryPolicy.Backoff = nil
+		calls := 0
+		start := time.Now()
+		result, cancel, err := e.execWithRetry(context.Background(), nil, time.Second, func(ctx context.Context) (*Result, error) {
+			calls++
+			<-ctx.Done()
+			return nil, ctx.Err()
+		})
+		if cancel != nil {
+			t.Cleanup(cancel)
+		}
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		require.Nil(t, result)
+		require.Nil(t, cancel)
+		require.Equal(t, 1, calls)
+		require.Equal(t, time.Second, time.Since(start))
+	})
 }
 
 // ---- UpstreamExecutor.ExecSQL no retry path with timeout ----
