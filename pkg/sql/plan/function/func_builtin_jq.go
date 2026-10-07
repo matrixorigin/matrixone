@@ -587,6 +587,14 @@ func (op *opBuiltInJsonRow) jsonRow(params []*vector.Vector, result vector.Funct
 			encodeFloat[float32](op, params[i], ulen)
 		case types.T_float64:
 			encodeFloat[float64](op, params[i], ulen)
+		case types.T_bf16:
+			encodeLowPrecFloat[types.BF16](op, params[i], ulen)
+		case types.T_float16:
+			encodeLowPrecFloat[types.Float16](op, params[i], ulen)
+		case types.T_float8:
+			encodeLowPrecFloat[types.Float8](op, params[i], ulen)
+		case types.T_float4:
+			encodeLowPrecFloat[types.Float4](op, params[i], ulen)
 		case types.T_decimal64:
 			encodeDecimal[types.Decimal64](op, params[i], ulen)
 		case types.T_decimal128:
@@ -623,6 +631,10 @@ func (op *opBuiltInJsonRow) jsonRow(params []*vector.Vector, result vector.Funct
 		case types.T_array_uint8:
 			encodeNarrowArray[uint8](op, params[i], ulen,
 				func(x uint8) float64 { return float64(x) })
+		case types.T_array_float8, types.T_array_float4:
+			if err := encodeBlockScaledArray(op, params[i], ulen); err != nil {
+				return err
+			}
 		case types.T_uuid:
 			encodeFixedStringer[types.Uuid](op, params[i], ulen)
 		case types.T_json:
@@ -773,6 +785,44 @@ func encodeNarrowArray[T types.ArrayElement](op *opBuiltInJsonRow, v *vector.Vec
 			op.enc[i].w.WriteByte(']')
 		}
 	}
+}
+
+// encodeLowPrecFloat writes bf16/float16/float8/float4 values as their float32 values.
+func encodeLowPrecFloat[T types.LowPrecFloat](op *opBuiltInJsonRow, v *vector.Vector, length uint64) {
+	p := vector.GenerateFunctionFixedTypeParameter[T](v)
+	for i := uint64(0); i < length; i++ {
+		v, null := p.GetValue(i)
+		if null {
+			op.enc[i].w.WriteString("null")
+		} else {
+			op.enc[i].encodeFloat64(float64(v.ToFloat32()))
+		}
+	}
+}
+
+// encodeBlockScaledArray writes vecf8/vecf4 cells as JSON arrays of their decoded values.
+func encodeBlockScaledArray(op *opBuiltInJsonRow, v *vector.Vector, length uint64) error {
+	p := vector.GenerateFunctionStrParameter(v)
+	for i := uint64(0); i < length; i++ {
+		cell, null := p.GetStrValue(i)
+		if null {
+			op.enc[i].w.WriteString("null")
+			continue
+		}
+		vv, err := types.BlockScaledToFloat32(cell)
+		if err != nil {
+			return err
+		}
+		op.enc[i].w.WriteByte('[')
+		for j, val := range vv {
+			if j > 0 {
+				op.enc[i].w.WriteByte(',')
+			}
+			op.enc[i].encodeFloat64(float64(val))
+		}
+		op.enc[i].w.WriteByte(']')
+	}
+	return nil
 }
 
 func encodeJson(op *opBuiltInJsonRow, v *vector.Vector, length uint64) error {

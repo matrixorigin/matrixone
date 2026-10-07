@@ -226,7 +226,8 @@ func (zm ZM) decodeSum() any {
 		return types.DecodeInt64(zm.GetSumBuf())
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
 		return types.DecodeUint64(zm.GetSumBuf())
-	case types.T_float32, types.T_float64:
+	case types.T_float32, types.T_float64,
+		types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
 		return types.DecodeFloat64(zm.GetSumBuf())
 	case types.T_decimal64:
 		return types.DecodeDecimal64(zm.GetSumBuf())
@@ -815,6 +816,13 @@ func (zm ZM) PrefixIn(vec *vector.Vector) bool {
 	return false
 }
 
+// anyInLowPrecFloat is AnyIn for a low-precision float column: whether a value of the sorted
+// vector lies within the zonemap's bounds, compared as float32 values.
+func anyInLowPrecFloat[T types.LowPrecFloat](zm ZM, vec *vector.Vector) bool {
+	lower, upper := subVecInLowPrecFloat[T](zm, vec)
+	return lower < upper
+}
+
 // subVecInLowPrecFloat is the SubVecIn bound search for a low-precision float column
 // (bf16/float16/float8/float4). The column is sorted by float value (InplaceSort widens
 // via ToFloat32), so bounds are searched on the widened float value, not the raw bits.
@@ -1281,6 +1289,15 @@ func (zm ZM) AnyIn(vec *vector.Vector) bool {
 
 		return lowerBound < len(col) &&
 			cmp.Compare(maxVal, col[lowerBound]) >= 0
+
+	case types.T_bf16:
+		return anyInLowPrecFloat[types.BF16](zm, vec)
+	case types.T_float16:
+		return anyInLowPrecFloat[types.Float16](zm, vec)
+	case types.T_float8:
+		return anyInLowPrecFloat[types.Float8](zm, vec)
+	case types.T_float4:
+		return anyInLowPrecFloat[types.Float4](zm, vec)
 
 	case types.T_date:
 		col := vector.MustFixedColNoTypeCheck[types.Date](vec)

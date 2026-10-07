@@ -425,4 +425,83 @@ SELECT a, CASE WHEN a = 1 THEN CAST(s AS bf16) END, CASE WHEN a = 1 THEN CAST(s 
 ➤ a[4,32,0]  ¦  case when a = 1 then cast(s as bf16) end[7,24,0]  ¦  case when a = 1 then cast(s as float8) end[7,24,0]  𝄀
 0  ¦  null  ¦  null  𝄀
 1  ¦  1.5  ¦  1.5
+CREATE TABLE zf (id INT, b bf16, h float16, e float8, f float4);
+INSERT INTO zf VALUES (1, -6, -6, -6, -6), (2, -3, -3, -3, -3), (3, -1, -1, -1, -1);
+SELECT mo_ctl('dn', 'flush', 'lowprec_float.zf');
+➤ mo_ctl(dn, flush, lowprec_float.zf)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+INSERT INTO zf VALUES (4, 1, 1, 1, 1), (5, 3, 3, 3, 3), (6, 6, 6, 6, 6);
+SELECT mo_ctl('dn', 'flush', 'lowprec_float.zf');
+➤ mo_ctl(dn, flush, lowprec_float.zf)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+SELECT id FROM zf WHERE b IN (-3, 3) ORDER BY id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+5
+SELECT id FROM zf WHERE h IN (-1, 6) ORDER BY id;
+➤ id[4,32,0]  𝄀
+3  𝄀
+6
+SELECT id FROM zf WHERE e IN (-6, 1) ORDER BY id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+4
+SELECT id FROM zf WHERE f IN (4, 6) ORDER BY id;
+➤ id[4,32,0]  𝄀
+6
+SELECT id FROM zf WHERE e IN (10, 20) ORDER BY id;
+➤ id[4,32,0]
+SELECT id FROM zf WHERE b = -1;
+➤ id[4,32,0]  𝄀
+3
+SELECT id FROM zf WHERE h > 2 ORDER BY id;
+➤ id[4,32,0]  𝄀
+5  𝄀
+6
+SELECT id FROM zf WHERE f < -2 ORDER BY id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+SELECT id, e FROM zf ORDER BY e DESC LIMIT 2;
+➤ id[4,32,0]  ¦  e[7,24,0]  𝄀
+6  ¦  6.0  𝄀
+5  ¦  3.0
+SELECT id, b FROM zf ORDER BY b LIMIT 2;
+➤ id[4,32,0]  ¦  b[7,24,0]  𝄀
+1  ¦  -6.0  𝄀
+2  ¦  -3.0
+SELECT id, f FROM zf ORDER BY f LIMIT 1;
+➤ id[4,32,0]  ¦  f[7,24,0]  𝄀
+1  ¦  -6.0
+DROP TABLE zf;
+SELECT hex(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', cast(1 AS bf16))), hex(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', cast(0 AS float8)));
+➤ hex(uuid_to_bin(6ccd780c-baba-1026-9564-5b8c656024db, cast(1 as bf16)))[12,32,0]  ¦  hex(uuid_to_bin(6ccd780c-baba-1026-9564-5b8c656024db, cast(0 as float8)))[12,32,0]  𝄀
+1026BABA6CCD780C95645B8C656024DB  ¦  6CCD780CBABA102695645B8C656024DB
+SELECT date_add('2020-01-01 00:00:00', INTERVAL cast(1.5 AS bf16) SECOND), date_sub('2020-01-01 00:00:00', INTERVAL cast(0.5 AS float4) SECOND);
+➤ date_add(2020-01-01 00:00:00, INTERVAL cast(1.5 as bf16) second)[12,65535,0]  ¦  date_sub(2020-01-01 00:00:00, INTERVAL cast(0.5 as float4) second)[12,65535,0]  𝄀
+2020-01-01 00:00:01.500000  ¦  2019-12-31 23:59:59.500000
+SELECT date_add(DATE '2020-01-01', INTERVAL cast(1.5 AS float8) DAY), '2020-01-01 00:00:00' + INTERVAL cast(1.5 AS float16) SECOND;
+➤ date_add(DATE(2020-01-01), INTERVAL cast(1.5 as float8) day)[93,26,0]  ¦  2020-01-01 00:00:00 + INTERVAL cast(1.5 as float16) second[12,65535,0]  𝄀
+2020-01-02 12:00:00  ¦  2020-01-01 00:00:01.500000
+SELECT json_row(cast(1.5 AS bf16), cast(-2 AS float16), cast(448 AS float8), cast(6 AS float4), cast(NULL AS bf16));
+➤ json_row(cast(1.5 as bf16), cast(-2 as float16), cast(448 as float8), cast(6 as float4), cast(null as bf16))[12,65535,0]  𝄀
+[1.5,-2,448,6,null]
+SELECT bit_cast(cast(x'803f' AS varbinary(2)) AS bf16), bit_cast(cast(x'0000803f' AS varbinary(4)) AS float);
+not supported: bit_cast to BF16
 DROP DATABASE lowprec_float;

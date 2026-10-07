@@ -110,6 +110,12 @@ func GenericLess[T types.OrderedT](a, b T) bool {
 	return a < b
 }
 
+// LowPrecisionLess orders bf16, float16, float8 and float4 values by their float32 values,
+// the order Sort gives them.
+func LowPrecisionLess[T types.LowPrecFloat](a, b T) bool {
+	return a.ToFloat32() < b.ToFloat32()
+}
+
 // ByteJsonPhysicalLess compares the pre-SQL-order relation used by persisted
 // JSON cluster keys. The varlena strings point into immutable vector storage;
 // converting them with UnsafeStringToBytes avoids a comparator allocation.

@@ -248,4 +248,27 @@ load data infile {'filepath'='$resources/into_outfile/vecblock.jsonl', 'format'=
 select x.id, vecblock_json(x.v) <=> vecblock_json(c.v), vecblock_json(x.e) = vecblock_json(c.e), vecblock_json(x.v) <=> vecblock_json(j.v), vecblock_json(x.e) = vecblock_json(j.e) from expt x join expt_csv c on x.id = c.id join expt_jsonl j on x.id = j.id order by x.id;
 select id, v, e from expt_jsonl order by id;
 
+-- cells equal by decoded value can differ in bytes: vecf8/vecf4 are no cluster by or KEY
+-- partition columns
+create table cb8 (id int, v vecf8(4)) cluster by (v);
+create table cb4 (id int, v vecf4(4)) cluster by (id, v);
+create table pk8 (id int, v vecf8(4)) partition by key(v) partitions 2;
+create table pk4 (id int, v vecf4(4)) partition by key(id, v) partitions 2;
+
+-- json_row writes the decoded values; a vecf8 equality key partitions a correlated LIMIT
+select json_row(cast('[1,-2,0.5]' as vecf8(3)), cast('[1,-2,0.5]' as vecf4(3)), cast(null as vecf8(3)));
+create table cl (id int, v vecf8(2));
+insert into cl values (1, '[1,2]'), (2, '[1,2]'), (3, '[3,4]');
+select a.id, (select b.id from cl b where b.v = a.v order by b.id desc limit 1) m from cl a order by a.id;
+drop table cl;
+
+-- a distance to a vecf8 query vector is not the vecf32 index score of the same text
+set experimental_ivf_index = 1;
+create table iv (id int primary key, v vecf32(3));
+insert into iv values (1, '[1,2,3]'), (2, '[1.3,2.7,3.1]'), (3, '[4,5,6]'), (4, '[0,0,1]');
+create index ix using ivfflat on iv(v) lists = 1 op_type 'vector_l2_ops';
+select id, l2_distance(v, cast('[1.3,2.7,3.1]' as vecf8(3))) dq8 from iv order by l2_distance(v, '[1.3,2.7,3.1]') limit 3;
+drop table iv;
+set experimental_ivf_index = 0;
+
 drop database vecblock_db;

@@ -8698,6 +8698,15 @@ func getConstantBytes(vec *vector.Vector, transAll bool, row uint64) (ret []byte
 		val := vector.MustFixedColNoTypeCheck[float64](vec)[row]
 		ret = types.EncodeFloat64(&val)
 
+	case types.T_bf16:
+		ret = types.EncodeFixed(vector.MustFixedColNoTypeCheck[types.BF16](vec)[row])
+	case types.T_float16:
+		ret = types.EncodeFixed(vector.MustFixedColNoTypeCheck[types.Float16](vec)[row])
+	case types.T_float8:
+		ret = types.EncodeFixed(vector.MustFixedColNoTypeCheck[types.Float8](vec)[row])
+	case types.T_float4:
+		ret = types.EncodeFixed(vector.MustFixedColNoTypeCheck[types.Float4](vec)[row])
+
 	case types.T_varchar, types.T_char,
 		types.T_binary, types.T_varbinary, types.T_text, types.T_blob, types.T_datalink:
 		ret = []byte(vec.GetStringAt(int(row)))

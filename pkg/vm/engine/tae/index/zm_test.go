@@ -63,6 +63,26 @@ func zonemapLowPrecCase[T types.LowPrecFloat](t *testing.T, oid types.T, from fu
 	lower, upper := zm.SubVecIn(vec)
 	require.Equal(t, 0, lower)
 	require.Equal(t, vec.Length(), upper)
+
+	// AnyIn prunes by value: no value of these sorted vectors lies in [-3, 2]
+	for _, outside := range [][]float32{{3, 4, 6}, {-6, -4}, {-6, 3, 4}} {
+		out := vector.NewVec(oid.ToType())
+		for _, f := range outside {
+			require.NoError(t, vector.AppendFixed(out, from(f), false, mp))
+		}
+		require.False(t, zm.AnyIn(out), "%s %v", oid, outside)
+		out.Free(mp)
+	}
+
+	// ZMToVector materializes the bounds as a two-row vector of the column type
+	bounds, err := ZMToVector(zm, nil, mp)
+	require.NoError(t, err)
+	minVal, ok := vector.GetLowPrecisionFloatAt(bounds, 0)
+	require.True(t, ok)
+	maxVal, ok := vector.GetLowPrecisionFloatAt(bounds, 1)
+	require.True(t, ok)
+	require.Equal(t, []float32{-3, 2}, []float32{minVal, maxVal})
+	bounds.Free(mp)
 }
 
 func TestZonemapLowPrecFloat(t *testing.T) {

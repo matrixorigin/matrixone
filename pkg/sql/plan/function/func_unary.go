@@ -13808,6 +13808,10 @@ func BitCast(
 	toType := parameters[1].GetType()
 	ctx := proc.Ctx
 
+	// stored bf16/float16/float8/float4 values are finite with a +0 zero; arbitrary bits are not
+	if toType.Oid.IsLowPrecisionFloat() {
+		return moerr.NewNotSupported(ctx, fmt.Sprintf("bit_cast to %s", toType))
+	}
 	switch toType.Oid {
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)

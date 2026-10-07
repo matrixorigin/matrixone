@@ -300,7 +300,7 @@ func checkPrimaryKeyPartType(ctx context.Context, colType plan.Type, columnName 
 	if types.T(colType.GetId()).IsArray() {
 		return moerr.NewNotSupported(ctx, fmt.Sprintf("VECTOR column '%s' cannot be in primary key", columnName))
 	}
-	if err := lowPrecisionFloatKeyError(ctx, colType.GetId(), columnName, "primary"); err != nil {
+	if err := lowPrecisionKeyError(ctx, colType.GetId(), columnName, "primary"); err != nil {
 		return err
 	}
 	if isSetPlanType(&colType) {
@@ -331,7 +331,7 @@ func checkUniqueKeyPartType(ctx context.Context, colType plan.Type, columnName s
 	if isGeometryPlanType(&colType) {
 		return moerr.NewNotSupported(ctx, fmt.Sprintf("GEOMETRY column '%s' cannot be in unique index", columnName))
 	}
-	return lowPrecisionFloatKeyError(ctx, colType.GetId(), columnName, "unique")
+	return lowPrecisionKeyError(ctx, colType.GetId(), columnName, "unique")
 }
 
 func checkAddColumWithUniqueKey(ctx context.Context, tableDef *TableDef, uniKey *tree.UniqueIndex) (*plan.IndexDef, error) {

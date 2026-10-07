@@ -1,0 +1,214 @@
+drop database if exists lowprec_ddl_dml;
+create database lowprec_ddl_dml;
+use lowprec_ddl_dml;
+create table t (
+id int primary key,
+b bf16 default 1.5 comment 'bf16 col',
+h float16 not null default -2,
+e float8 default 448,
+f float4,
+v vecf8(4) comment 'vecf8 col',
+w vecf4(4) not null
+);
+show create table t;
+➤ Table[12,1,0]  ¦  Create Table[12,269,0]  𝄀
+t  ¦  CREATE TABLE `t` (
+  `id` int NOT NULL,
+  `b` bf16 DEFAULT 1.5 COMMENT 'bf16 col',
+  `h` float16 NOT NULL DEFAULT (-2),
+  `e` float8 DEFAULT 448,
+  `f` float4 DEFAULT NULL,
+  `v` vecf8(4) DEFAULT NULL COMMENT 'vecf8 col',
+  `w` vecf4(4) NOT NULL,
+  PRIMARY KEY (`id`)
+)
+desc t;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+b  ¦  BF16(0)  ¦  YES  ¦    ¦  1.5  ¦    ¦  bf16 col  𝄀
+h  ¦  FLOAT16(0)  ¦  NO  ¦    ¦  (-2)  ¦    ¦    𝄀
+e  ¦  FLOAT8(0)  ¦  YES  ¦    ¦  448  ¦    ¦    𝄀
+f  ¦  FLOAT4(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v  ¦  VECF8(4)  ¦  YES  ¦    ¦  null  ¦    ¦  vecf8 col  𝄀
+w  ¦  VECF4(4)  ¦  NO  ¦    ¦  null  ¦    ¦  
+insert into t (id, w) values (1, '[1,2,3,4]');
+insert into t values (2, 0.1, 0.1, 0.1, 0.5, '[0.1,0.2,0.3,0.4]', '[0.5,1,1.5,2]');
+insert into t values (3, null, 65504, -448, -6, null, '[6,-6,0,0.5]');
+select * from t order by id;
+➤ id[4,32,0]  ¦  b[7,24,0]  ¦  h[7,24,0]  ¦  e[7,24,0]  ¦  f[7,24,0]  ¦  v[12,4,0]  ¦  w[12,4,0]  𝄀
+1  ¦  1.5  ¦  -2.0  ¦  448.0  ¦  null  ¦  null  ¦  [1, 2, 2.6666667, 4]  𝄀
+2  ¦  0.100097656  ¦  0.099975586  ¦  0.1015625  ¦  0.5  ¦  [0.1015625, 0.203125, 0.3125, 0.40625]  ¦  [0.5, 1, 1.3333334, 2]  𝄀
+3  ¦  null  ¦  65504.0  ¦  -448.0  ¦  -6.0  ¦  null  ¦  [6, -6, 0, 0.5]
+insert into t (id, h, w) values (4, null, '[1,2,3,4]');
+constraint violation: Column 'h' cannot be null
+insert into t (id, w) values (4, null);
+constraint violation: Column 'w' cannot be null
+insert into t (id, e, w) values (4, 1000, '[1,2,3,4]');
+Data truncation: data out of range: data type FLOAT8, value 1000
+insert into t (id, v, w) values (4, '[1,2,3]', '[1,2,3,4]');
+invalid input: expected vector dimension 4 != actual dimension 3.
+create table src (id int, d double, x vecf32(4));
+insert into src values (10, 1.1, '[1.1,2.2,3.3,4.4]'), (11, -0.0, '[-0,0,1,-1]');
+insert into t select id, d, d, d, d, x, x from src;
+select * from t where id >= 10 order by id;
+➤ id[4,32,0]  ¦  b[7,24,0]  ¦  h[7,24,0]  ¦  e[7,24,0]  ¦  f[7,24,0]  ¦  v[12,4,0]  ¦  w[12,4,0]  𝄀
+10  ¦  1.1015625  ¦  1.0996094  ¦  1.125  ¦  1.0  ¦  [1.125, 2.25, 3.25, 4.5]  ¦  [1.1, 2.2, 2.9333334, 4.4]  𝄀
+11  ¦  0.0  ¦  0.0  ¦  0.0  ¦  0.0  ¦  [0, 0, 1, -1]  ¦  [0, 0, 1, -1]
+insert into t values (2, 9, 9, 9, 6, '[9,9,9,9]', '[6,6,6,6]') on duplicate key update b = values(b) + 1, v = values(v);
+replace into t values (3, 2, 2, 2, 2, '[2,2,2,2]', '[2,2,2,2]');
+select * from t where id in (2, 3) order by id;
+➤ id[4,32,0]  ¦  b[7,24,0]  ¦  h[7,24,0]  ¦  e[7,24,0]  ¦  f[7,24,0]  ¦  v[12,4,0]  ¦  w[12,4,0]  𝄀
+2  ¦  10.0  ¦  0.099975586  ¦  0.1015625  ¦  0.5  ¦  [9, 9, 9, 9]  ¦  [0.5, 1, 1.3333334, 2]  𝄀
+3  ¦  2.0  ¦  2.0  ¦  2.0  ¦  2.0  ¦  [2, 2, 2, 2]  ¦  [2, 2, 2, 2]
+select mo_ctl('dn', 'flush', 'lowprec_ddl_dml.t');
+➤ mo_ctl(dn, flush, lowprec_ddl_dml.t)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+update t set b = b * 2, e = e / 2 where f = 0.5;
+update t set v = '[4,3,2,1]', w = cast('[4,3,2,1]' as vecf32(4)) where id = 1;
+update t set h = 3 where v = cast('[2,2,2,2]' as vecf8(4));
+select * from t order by id;
+➤ id[4,32,0]  ¦  b[7,24,0]  ¦  h[7,24,0]  ¦  e[7,24,0]  ¦  f[7,24,0]  ¦  v[12,4,0]  ¦  w[12,4,0]  𝄀
+1  ¦  1.5  ¦  -2.0  ¦  448.0  ¦  null  ¦  [4, 3, 2, 1]  ¦  [4, 2.6666667, 2, 1]  𝄀
+2  ¦  20.0  ¦  0.099975586  ¦  0.05078125  ¦  0.5  ¦  [9, 9, 9, 9]  ¦  [0.5, 1, 1.3333334, 2]  𝄀
+3  ¦  2.0  ¦  3.0  ¦  2.0  ¦  2.0  ¦  [2, 2, 2, 2]  ¦  [2, 2, 2, 2]  𝄀
+10  ¦  1.1015625  ¦  1.0996094  ¦  1.125  ¦  1.0  ¦  [1.125, 2.25, 3.25, 4.5]  ¦  [1.1, 2.2, 2.9333334, 4.4]  𝄀
+11  ¦  0.0  ¦  0.0  ¦  0.0  ¦  0.0  ¦  [0, 0, 1, -1]  ¦  [0, 0, 1, -1]
+insert into t (id, e, w) values (12, 1, '[6,6,6,6]');
+select count(*) from t where w = cast('[6,6,6,6]' as vecf4(4));
+➤ count(*)[-5,64,0]  𝄀
+1
+delete from t where e = 448;
+delete from t where w = cast('[6,6,6,6]' as vecf4(4));
+select count(*) from t where w = cast('[6,6,6,6]' as vecf4(4));
+➤ count(*)[-5,64,0]  𝄀
+0
+select id from t order by id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3  𝄀
+10  𝄀
+11
+alter table t add column g bf16 default 0.25 after id;
+alter table t add column u vecf8(2) default '[1,2]';
+alter table t add column z float8 first;
+show create table t;
+➤ Table[12,1,0]  ¦  Create Table[12,353,0]  𝄀
+t  ¦  CREATE TABLE `t` (
+  `z` float8 DEFAULT NULL,
+  `id` int NOT NULL,
+  `g` bf16 DEFAULT 0.25,
+  `b` bf16 DEFAULT 1.5 COMMENT 'bf16 col',
+  `h` float16 NOT NULL DEFAULT (-2),
+  `e` float8 DEFAULT 448,
+  `f` float4 DEFAULT NULL,
+  `v` vecf8(4) DEFAULT NULL COMMENT 'vecf8 col',
+  `w` vecf4(4) NOT NULL,
+  `u` vecf8(2) DEFAULT '[1,2]',
+  PRIMARY KEY (`id`)
+)
+select * from t order by id;
+➤ z[7,24,0]  ¦  id[4,32,0]  ¦  g[7,24,0]  ¦  b[7,24,0]  ¦  h[7,24,0]  ¦  e[7,24,0]  ¦  f[7,24,0]  ¦  v[12,4,0]  ¦  w[12,4,0]  ¦  u[12,2,0]  𝄀
+null  ¦  2  ¦  0.25  ¦  20.0  ¦  0.099975586  ¦  0.05078125  ¦  0.5  ¦  [9, 9, 9, 9]  ¦  [0.5, 1, 1.3333334, 2]  ¦  [1, 2]  𝄀
+null  ¦  3  ¦  0.25  ¦  2.0  ¦  3.0  ¦  2.0  ¦  2.0  ¦  [2, 2, 2, 2]  ¦  [2, 2, 2, 2]  ¦  [1, 2]  𝄀
+null  ¦  10  ¦  0.25  ¦  1.1015625  ¦  1.0996094  ¦  1.125  ¦  1.0  ¦  [1.125, 2.25, 3.25, 4.5]  ¦  [1.1, 2.2, 2.9333334, 4.4]  ¦  [1, 2]  𝄀
+null  ¦  11  ¦  0.25  ¦  0.0  ¦  0.0  ¦  0.0  ¦  0.0  ¦  [0, 0, 1, -1]  ¦  [0, 0, 1, -1]  ¦  [1, 2]
+alter table t modify column f float8;
+alter table t modify column e double;
+alter table t modify column v vecf4(4);
+alter table t modify column u vecf32(2);
+alter table t change column h hh bf16 not null default 0;
+alter table t rename column b to bb;
+alter table t drop column z;
+show create table t;
+➤ Table[12,1,0]  ¦  Create Table[12,301,0]  𝄀
+t  ¦  CREATE TABLE `t` (
+  `id` int NOT NULL,
+  `g` bf16 DEFAULT 0.25,
+  `bb` bf16 DEFAULT 1.5 COMMENT 'bf16 col',
+  `hh` bf16 NOT NULL DEFAULT 0,
+  `e` double DEFAULT NULL,
+  `f` float8 DEFAULT NULL,
+  `v` vecf4(4) DEFAULT NULL,
+  `w` vecf4(4) NOT NULL,
+  `u` vecf32(2) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+)
+select * from t order by id;
+➤ id[4,32,0]  ¦  g[7,24,0]  ¦  bb[7,24,0]  ¦  hh[7,24,0]  ¦  e[8,53,31]  ¦  f[7,24,0]  ¦  v[12,4,0]  ¦  w[12,4,0]  ¦  u[12,2,0]  𝄀
+2  ¦  0.25  ¦  20.0  ¦  0.100097656  ¦  0.05078125  ¦  0.5  ¦  [9, 9, 9, 9]  ¦  [0.5, 1, 1.3333334, 2]  ¦  [1, 2]  𝄀
+3  ¦  0.25  ¦  2.0  ¦  3.0  ¦  2.0  ¦  2.0  ¦  [2, 2, 2, 2]  ¦  [2, 2, 2, 2]  ¦  [1, 2]  𝄀
+10  ¦  0.25  ¦  1.1015625  ¦  1.1015625  ¦  1.125  ¦  1.0  ¦  [1.125, 2.25, 3, 4.5]  ¦  [1.1, 2.2, 2.9333334, 4.4]  ¦  [1, 2]  𝄀
+11  ¦  0.25  ¦  0.0  ¦  0.0  ¦  0.0  ¦  0.0  ¦  [0, 0, 1, -1]  ¦  [0, 0, 1, -1]  ¦  [1, 2]
+create table nar (id int primary key, d double, x vecf32(2));
+insert into nar values (1, 1.0625000001, '[1.0625000001,-3]'), (2, 300, '[300,0.5]');
+alter table nar modify column d float8;
+alter table nar modify column x vecf8(2);
+select * from nar order by id;
+➤ id[4,32,0]  ¦  d[7,24,0]  ¦  x[12,2,0]  𝄀
+1  ¦  1.125  ¦  [1, -3]  𝄀
+2  ¦  288.0  ¦  [288, 0.5]
+insert into nar values (3, 1000, '[1,1]');
+Data truncation: data out of range: data type FLOAT8, value 1000
+alter table nar modify column d float4;
+Data truncation: data out of range: data type FLOAT4, value 288
+select * from nar order by id;
+➤ id[4,32,0]  ¦  d[7,24,0]  ¦  x[12,2,0]  𝄀
+1  ¦  1.125  ¦  [1, -3]  𝄀
+2  ¦  288.0  ¦  [288, 0.5]
+alter table t add index ib (bb);
+not supported: BF16 column 'bb' cannot be in index
+alter table t add unique key uv (v);
+not supported: VECTOR column 'v' cannot be in index
+alter table t drop primary key, add primary key (id, hh);
+not supported: BF16 column 'hh' cannot be in primary key
+alter table t add column k float4 primary key;
+not supported: FLOAT4 column 'k' cannot be in primary key
+create table t_like like t;
+show create table t_like;
+➤ Table[12,6,0]  ¦  Create Table[12,306,0]  𝄀
+t_like  ¦  CREATE TABLE `t_like` (
+  `id` int NOT NULL,
+  `g` bf16 DEFAULT 0.25,
+  `bb` bf16 DEFAULT 1.5 COMMENT 'bf16 col',
+  `hh` bf16 NOT NULL DEFAULT 0,
+  `e` double DEFAULT NULL,
+  `f` float8 DEFAULT NULL,
+  `v` vecf4(4) DEFAULT NULL,
+  `w` vecf4(4) NOT NULL,
+  `u` vecf32(2) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+)
+insert into t_like select * from t;
+create table t_as as select id, bb, hh, v, w from t;
+show create table t_as;
+➤ Table[12,4,0]  ¦  Create Table[12,154,0]  𝄀
+t_as  ¦  CREATE TABLE `t_as` (
+  `id` int NOT NULL,
+  `bb` bf16 DEFAULT 1.5,
+  `hh` bf16 NOT NULL DEFAULT 0,
+  `v` vecf4(4) DEFAULT NULL,
+  `w` vecf4(4) NOT NULL
+)
+select * from t_as order by id;
+➤ id[4,32,0]  ¦  bb[7,24,0]  ¦  hh[7,24,0]  ¦  v[12,4,0]  ¦  w[12,4,0]  𝄀
+2  ¦  20.0  ¦  0.100097656  ¦  [9, 9, 9, 9]  ¦  [0.5, 1, 1.3333334, 2]  𝄀
+3  ¦  2.0  ¦  3.0  ¦  [2, 2, 2, 2]  ¦  [2, 2, 2, 2]  𝄀
+10  ¦  1.1015625  ¦  1.1015625  ¦  [1.125, 2.25, 3, 4.5]  ¦  [1.1, 2.2, 2.9333334, 4.4]  𝄀
+11  ¦  0.0  ¦  0.0  ¦  [0, 0, 1, -1]  ¦  [0, 0, 1, -1]
+rename table t_as to t_as2;
+select count(*) from t_as2;
+➤ count(*)[-5,64,0]  𝄀
+4
+truncate table t_like;
+select count(*) from t_like;
+➤ count(*)[-5,64,0]  𝄀
+0
+drop database lowprec_ddl_dml;

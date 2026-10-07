@@ -2654,7 +2654,8 @@ func foldedScalarBytes(expr *plan.Expr) ([]byte, bool) {
 	case types.T_bool, types.T_bit, types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64, types.T_date, types.T_time, types.T_datetime,
-		types.T_timestamp, types.T_decimal64, types.T_decimal128:
+		types.T_timestamp, types.T_decimal64, types.T_decimal128,
+		types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
 	default:
 		return nil, false
 	}
@@ -2674,6 +2675,21 @@ func foldedScalarBytes(expr *plan.Expr) ([]byte, bool) {
 	case types.T_float64:
 		v := types.DecodeFloat64(fold.Data)
 		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return nil, false
+		}
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		var v float32
+		switch oid {
+		case types.T_bf16:
+			v = types.DecodeFixed[types.BF16](fold.Data).ToFloat32()
+		case types.T_float16:
+			v = types.DecodeFixed[types.Float16](fold.Data).ToFloat32()
+		case types.T_float8:
+			v = types.DecodeFixed[types.Float8](fold.Data).ToFloat32()
+		default:
+			v = types.DecodeFixed[types.Float4](fold.Data).ToFloat32()
+		}
+		if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
 			return nil, false
 		}
 	case types.T_timestamp, types.T_time, types.T_datetime:

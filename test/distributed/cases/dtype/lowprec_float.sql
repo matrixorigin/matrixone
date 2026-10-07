@@ -246,4 +246,34 @@ CREATE TABLE sel (a INT, s VARCHAR(20));
 INSERT INTO sel VALUES (1, '1.5'), (0, 'invalid');
 SELECT a, CASE WHEN a = 1 THEN CAST(s AS bf16) END, CASE WHEN a = 1 THEN CAST(s AS float8) END FROM sel ORDER BY a;
 
+-- two flushed objects with disjoint ranges: zonemap pruning by IN lists, constants and the
+-- ORDER BY ... LIMIT top value keeps every matching row
+CREATE TABLE zf (id INT, b bf16, h float16, e float8, f float4);
+INSERT INTO zf VALUES (1, -6, -6, -6, -6), (2, -3, -3, -3, -3), (3, -1, -1, -1, -1);
+-- @ignore:0
+SELECT mo_ctl('dn', 'flush', 'lowprec_float.zf');
+INSERT INTO zf VALUES (4, 1, 1, 1, 1), (5, 3, 3, 3, 3), (6, 6, 6, 6, 6);
+-- @ignore:0
+SELECT mo_ctl('dn', 'flush', 'lowprec_float.zf');
+SELECT id FROM zf WHERE b IN (-3, 3) ORDER BY id;
+SELECT id FROM zf WHERE h IN (-1, 6) ORDER BY id;
+SELECT id FROM zf WHERE e IN (-6, 1) ORDER BY id;
+SELECT id FROM zf WHERE f IN (4, 6) ORDER BY id;
+SELECT id FROM zf WHERE e IN (10, 20) ORDER BY id;
+SELECT id FROM zf WHERE b = -1;
+SELECT id FROM zf WHERE h > 2 ORDER BY id;
+SELECT id FROM zf WHERE f < -2 ORDER BY id;
+SELECT id, e FROM zf ORDER BY e DESC LIMIT 2;
+SELECT id, b FROM zf ORDER BY b LIMIT 2;
+SELECT id, f FROM zf ORDER BY f LIMIT 1;
+DROP TABLE zf;
+
+-- a low-precision argument is read as its own value: uuid swap flag, interval value
+SELECT hex(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', cast(1 AS bf16))), hex(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', cast(0 AS float8)));
+SELECT date_add('2020-01-01 00:00:00', INTERVAL cast(1.5 AS bf16) SECOND), date_sub('2020-01-01 00:00:00', INTERVAL cast(0.5 AS float4) SECOND);
+SELECT date_add(DATE '2020-01-01', INTERVAL cast(1.5 AS float8) DAY), '2020-01-01 00:00:00' + INTERVAL cast(1.5 AS float16) SECOND;
+SELECT json_row(cast(1.5 AS bf16), cast(-2 AS float16), cast(448 AS float8), cast(6 AS float4), cast(NULL AS bf16));
+-- arbitrary bits are not a stored low-precision value
+SELECT bit_cast(cast(x'803f' AS varbinary(2)) AS bf16), bit_cast(cast(x'0000803f' AS varbinary(4)) AS float);
+
 DROP DATABASE lowprec_float;

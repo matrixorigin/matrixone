@@ -233,12 +233,14 @@ func indexColumnCheckKind(indexType tree.IndexType) string {
 	}
 }
 
-// lowPrecisionFloatKeyError rejects a bf16, float16, float8 or float4 column as a key part:
-// key encoding, locking and TN merge/dedup have no support for these types. kind is
-// "primary", "unique", "cluster" or another index kind.
-func lowPrecisionFloatKeyError(ctx context.Context, id int32, colName, kind string) error {
+// lowPrecisionKeyError rejects a bf16, float16, float8 or float4 column as a key part, and a
+// vecf8 or vecf4 column as a cluster by key: key encoding, locking and TN dedup have no
+// support for the scalar types, and vecf8/vecf4 cells equal by decoded value can differ in
+// bytes (other vector keys are rejected as vectors). kind is "primary", "unique", "cluster"
+// or another index kind.
+func lowPrecisionKeyError(ctx context.Context, id int32, colName, kind string) error {
 	t := types.T(id)
-	if !t.IsLowPrecisionFloat() {
+	if !t.IsLowPrecisionFloat() && !(t.IsBlockScaledArray() && kind == "cluster") {
 		return nil
 	}
 	switch kind {
@@ -259,7 +261,7 @@ func checkIndexColumnSupportability(ctx context.Context, col *ColDef, keyPart *t
 	}
 
 	colName := keyPart.ColName.ColNameOrigin()
-	if err := lowPrecisionFloatKeyError(ctx, col.Typ.Id, colName, indexKind); err != nil {
+	if err := lowPrecisionKeyError(ctx, col.Typ.Id, colName, indexKind); err != nil {
 		return err
 	}
 

@@ -11281,6 +11281,12 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 	if err != nil {
 		return nil, err
 	}
+	// a bf16, float16, float8 or float4 value is an interval as its float32 value
+	if types.T(firstExpr.Typ.Id).IsLowPrecisionFloat() {
+		if firstExpr, err = appendCastBeforeExpr(ctx, firstExpr, plan.Type{Id: int32(types.T_float32)}); err != nil {
+			return nil, err
+		}
+	}
 	if dateExpr.Typ.Id == int32(types.T_time) {
 		// Check the SQL unit before a string or marker can be normalized to
 		// MICROSECOND. Calendar units have no stable TIME result semantics.

@@ -1429,6 +1429,14 @@ func appendDictionaryNull(vec *vector.Vector, target types.Type, mp *mpool.MPool
 		return vector.AppendFixed(vec, float32(0), true, mp)
 	case types.T_float64:
 		return vector.AppendFixed(vec, float64(0), true, mp)
+	case types.T_bf16:
+		return vector.AppendFixed(vec, types.BF16(0), true, mp)
+	case types.T_float16:
+		return vector.AppendFixed(vec, types.Float16(0), true, mp)
+	case types.T_float8:
+		return vector.AppendFixed(vec, types.Float8(0), true, mp)
+	case types.T_float4:
+		return vector.AppendFixed(vec, types.Float4(0), true, mp)
 	case types.T_year:
 		return vector.AppendFixed(vec, types.MoYear(0), true, mp)
 	case types.T_enum:

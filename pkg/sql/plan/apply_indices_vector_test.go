@@ -866,3 +866,15 @@ func vectorProviderVecCtx(scanNode *plan.Node) *vectorSortContext {
 		resultLimit: limit,
 	}
 }
+
+// TestVecFloatKey_BlockScaledCastNotPeeled: cast('[...]' as vecf8(n)) quantizes the text, so it is
+// a different query vector than the vecf32 parse of the same text and yields no vecf32 key; a
+// vecf32 cast of the same text still does.
+func TestVecFloatKey_BlockScaledCastNotPeeled(t *testing.T) {
+	for _, oid := range []types.T{types.T_array_float8, types.T_array_float4} {
+		_, ok := vecFloatKey(castTextVecExpr(oid, "[1.3,2.7,3.1]"), types.T_array_float32)
+		require.False(t, ok, oid.String())
+	}
+	_, ok := vecFloatKey(castTextVecExpr(types.T_array_float32, "[1.3,2.7,3.1]"), types.T_array_float32)
+	require.True(t, ok)
+}

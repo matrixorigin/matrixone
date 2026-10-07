@@ -365,7 +365,7 @@ func checkIndexedColumnTypeChange(ctx context.Context, tableDef *plan.TableDef, 
 				if isGeometryPlanType(&newCol.Typ) {
 					return moerr.NewNotSupported(ctx, fmt.Sprintf("GEOMETRY column '%s' cannot be in index", newCol.OriginName))
 				}
-				if err := lowPrecisionFloatKeyError(ctx, newCol.Typ.Id, newCol.OriginName, "secondary"); err != nil {
+				if err := lowPrecisionKeyError(ctx, newCol.Typ.Id, newCol.OriginName, "secondary"); err != nil {
 					return err
 				}
 				break

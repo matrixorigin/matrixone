@@ -92,10 +92,12 @@ func jsonConstructorSupportsType(oid types.T) bool {
 	}
 }
 
+// uuidSwapFlagTypeSupported reports a swap flag the flag getter reads directly; a bf16,
+// float16, float8 or float4 flag is cast to float64 first.
 func uuidSwapFlagTypeSupported(typ types.Type) bool {
 	return typ.Oid == types.T_bool ||
 		typ.IsIntOrUint() ||
-		typ.IsFloat() ||
+		(typ.IsFloat() && !typ.Oid.IsLowPrecisionFloat()) ||
 		typ.IsDecimal() ||
 		typ.Oid.IsMySQLString()
 }

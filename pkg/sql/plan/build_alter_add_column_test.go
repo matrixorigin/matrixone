@@ -177,10 +177,10 @@ func TestLowPrecisionFloatKeyParts(t *testing.T) {
 			err = checkIndexColumnSupportability(ctx, col, key, kind)
 			require.ErrorContains(t, err, id.String()+" column 'k' "+want)
 		}
-		require.ErrorContains(t, lowPrecisionFloatKeyError(ctx, int32(id), "k", "cluster"), "cannot be a cluster by key")
+		require.ErrorContains(t, lowPrecisionKeyError(ctx, int32(id), "k", "cluster"), "cannot be a cluster by key")
 	}
 	for _, id := range []types.T{types.T_float32, types.T_float64, types.T_int32} {
-		require.NoError(t, lowPrecisionFloatKeyError(ctx, int32(id), "k", "primary"))
+		require.NoError(t, lowPrecisionKeyError(ctx, int32(id), "k", "primary"))
 		require.NoError(t, checkPrimaryKeyPartType(ctx, plan.Type{Id: int32(id)}, "k"))
 	}
 
@@ -201,6 +201,18 @@ func TestLowPrecisionFloatKeyParts(t *testing.T) {
 		_, err := runOneStmt(mock, t, "create table lp (id int primary key, k "+typ+")")
 		require.NoError(t, err, typ)
 	}
+	// vecf8/vecf4 cells equal by decoded value can differ in bytes: no cluster by key
+	for _, typ := range []string{"vecf8(4)", "vecf4(4)"} {
+		for _, sql := range []string{
+			"create table lp (id int, v " + typ + ") cluster by (v)",
+			"create table lp (id int, v " + typ + ") cluster by (id, v)",
+		} {
+			_, err := runOneStmt(mock, t, sql)
+			require.ErrorContains(t, err, "cannot be a cluster by key", sql)
+		}
+	}
+	_, err := runOneStmt(mock, t, "create table lp (id int, v vecf32(4)) cluster by (v)")
+	require.NoError(t, err)
 }
 
 // TestBuildColumnDomainExprLowPrecisionFloat checks that a column-domain rewrite over a
