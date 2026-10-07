@@ -119,6 +119,7 @@ func TestNewService(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.NoError(t, service.Close())
+	assert.NoError(t, service.Close())
 }
 
 func TestNewServiceClosesStoreOnMetadataFailure(t *testing.T) {

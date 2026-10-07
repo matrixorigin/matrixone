@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/tnservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
@@ -98,6 +99,9 @@ type Service struct {
 
 	// dataSync is used to sync data to other modules.
 	dataSync DataSync
+
+	closeOnce sync.Once
+	closeErr  error
 }
 
 func NewService(
@@ -120,6 +124,17 @@ func NewService(
 		heartbeatC:  make(chan struct{}, 1),
 		shutdownC:   shutdownC,
 	}
+	constructed := false
+	defer func() {
+		if !constructed {
+			if err := service.Close(); err != nil {
+				logutil.GetGlobalLogger().Error(
+					"failed to close log service construction",
+					zap.Error(err),
+				)
+			}
+		}
+	}()
 	for _, opt := range opts {
 		opt(service)
 	}
@@ -138,9 +153,9 @@ func NewService(
 		service.runtime.Logger().Error("failed to create log store", zap.Error(err))
 		return nil, err
 	}
+	service.store = store
 	store.bootstrapCommandsAdded = service.requestHeartbeat
 	if err := store.loadMetadata(); err != nil {
-		_ = store.close()
 		return nil, err
 	}
 	startCtx, cancelStart := context.WithCancel(context.Background())
@@ -157,7 +172,6 @@ func NewService(
 	}
 	defer cancelStart()
 	if err := store.startReplicas(startCtx); err != nil {
-		_ = store.close()
 		return nil, err
 	}
 	pool := &sync.Pool{}
@@ -192,13 +206,9 @@ func NewService(
 		morpc.WithServerLogger(service.runtime.Logger().RawLogger()),
 	)
 	if err != nil {
-		if closeErr := store.close(); closeErr != nil {
-			service.runtime.Logger().Error("failed to close log store", zap.Error(closeErr))
-		}
 		return nil, err
 	}
 
-	service.store = store
 	service.server = server
 	service.pool = pool
 	service.respPool = respPool
@@ -216,9 +226,6 @@ func NewService(
 	// replicas already known to the local store
 	if err := server.Start(); err != nil {
 		service.runtime.SubLogger(runtime.SystemInit).Error("failed to start the server", zap.Error(err))
-		if err := store.close(); err != nil {
-			service.runtime.SubLogger(runtime.SystemInit).Error("failed to close the store", zap.Error(err))
-		}
 		return nil, err
 	}
 	// start the heartbeat worker
@@ -236,6 +243,7 @@ func NewService(
 	}
 	service.initTaskHolder()
 	service.initSqlWriterFactory()
+	constructed = true
 	return service, nil
 }
 
@@ -265,24 +273,28 @@ func (s *Service) Start() error {
 }
 
 func (s *Service) Close() (err error) {
-	s.stopper.Stop()
-	if s.haClient != nil {
-		err = firstError(err, s.haClient.Close())
-	}
-	err = firstError(err, s.server.Close())
-	if s.store != nil {
-		err = firstError(err, s.store.close())
-	}
-	s.task.RLock()
-	ts := s.task.holder
-	s.task.RUnlock()
-	if ts != nil {
-		err = firstError(err, ts.Close())
-	}
-	if s.dataSync != nil {
-		err = firstError(err, s.dataSync.Close())
-	}
-	return err
+	s.closeOnce.Do(func() {
+		s.stopper.Stop()
+		if s.dataSync != nil {
+			s.closeErr = firstError(s.closeErr, s.dataSync.Close())
+		}
+		if s.haClient != nil {
+			s.closeErr = firstError(s.closeErr, s.haClient.Close())
+		}
+		if s.server != nil {
+			s.closeErr = firstError(s.closeErr, s.server.Close())
+		}
+		if s.store != nil {
+			s.closeErr = firstError(s.closeErr, s.store.close())
+		}
+		s.task.RLock()
+		ts := s.task.holder
+		s.task.RUnlock()
+		if ts != nil {
+			s.closeErr = firstError(s.closeErr, ts.Close())
+		}
+	})
+	return s.closeErr
 }
 
 func (s *Service) ID() string {
