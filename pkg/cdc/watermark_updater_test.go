@@ -2710,8 +2710,15 @@ func TestCDCWatermarkUpdater_CDCWatermarkUpdaterRun(t *testing.T) {
 	)
 	// Start only the job queue. Calling cronRun directly keeps each flush
 	// synchronized with the assertions instead of relying on a scheduler tick.
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(ie.releaseWrite) }) }
 	u.queue.Start()
-	defer u.queue.Stop()
+	defer func() {
+		// Release a blocked persistence before waiting for the queue worker. This
+		// keeps timeout/failure cleanup from waiting on its own test barrier.
+		release()
+		u.queue.Stop()
+	}()
 
 	ctx := context.Background()
 
@@ -2844,9 +2851,6 @@ func TestCDCWatermarkUpdater_CDCWatermarkUpdaterRun(t *testing.T) {
 	// watermark is buffered while the older batch is in flight, and a second
 	// flush proves that the newer value survives the first completion.
 	ie.blockWatermarkWrite.Store(true)
-	var releaseOnce sync.Once
-	release := func() { releaseOnce.Do(func() { close(ie.releaseWrite) }) }
-	t.Cleanup(release)
 	flushDone := make(chan struct{})
 	go func() {
 		u.cronRun(ctx)
