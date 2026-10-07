@@ -416,12 +416,20 @@ func (c *PushClient) init(
 	}
 	c.initialized = true
 
-	return c.subscriber.init(
+	err := c.subscriber.init(
 		ctx,
 		e.GetService(),
 		serviceAddr,
 		c.LogtailRPCClientFactory,
 	)
+	if err != nil {
+		return err
+	}
+	if c.closed.Load() {
+		_ = c.subscriber.closeClient()
+		return context.Canceled
+	}
+	return nil
 }
 
 func (c *PushClient) SetReconnectHandler(handler func()) {
@@ -1932,6 +1940,7 @@ func (r *syncLogTailTimestamp) updateTimestamp(
 type logTailSubscriber struct {
 	sid           string
 	tnNodeID      int
+	transportMu   sync.Mutex
 	rpcClient     morpc.RPCClient
 	rpcStream     morpc.Stream
 	logTailClient *service.LogtailClient
@@ -2009,6 +2018,9 @@ func (s *logTailSubscriber) init(
 	sid string,
 	serviceAddr string,
 	rpcStreamFactory func(context.Context, string, string, morpc.RPCClient) (morpc.RPCClient, morpc.Stream, error)) (err error) {
+	s.transportMu.Lock()
+	defer s.transportMu.Unlock()
+
 	// XXX we assume that we have only 1 tn now.
 	s.tnNodeID = 0
 	s.sid = sid
@@ -2065,6 +2077,12 @@ func (s *logTailSubscriber) client() *service.LogtailClient {
 }
 
 func (s *logTailSubscriber) closeClient() error {
+	s.transportMu.Lock()
+	defer s.transportMu.Unlock()
+	return s.closeClientLocked()
+}
+
+func (s *logTailSubscriber) closeClientLocked() error {
 	client := s.swapClient(nil)
 	if client == nil {
 		return nil
@@ -2073,11 +2091,12 @@ func (s *logTailSubscriber) closeClient() error {
 }
 
 func (s *logTailSubscriber) closeTransport() error {
+	s.transportMu.Lock()
+	defer s.transportMu.Unlock()
+
 	var firstErr error
-	if client := s.swapClient(nil); client != nil {
-		if err := client.Close(); err != nil {
-			firstErr = err
-		}
+	if err := s.closeClientLocked(); err != nil {
+		firstErr = err
 	}
 	if s.rpcStream != nil {
 		if err := s.rpcStream.Close(true); err != nil && firstErr == nil {
