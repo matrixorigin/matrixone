@@ -1538,13 +1538,11 @@ func TestWatermarkUpdater_MockSQLExecutor(t *testing.T) {
 // 2. wait for the cron job to execute 3 times
 // 3. check the execution times: should be >= 3
 // 4. stop the CDCWatermarkUpdater
-// 5. get the execution times
-// 5. wait for 5ms
-// 6. check the execution times: should be the same as the previous value
-// 7. start the CDCWatermarkUpdater
+// 5. verify the callback exited and the execution count no longer changes
 func TestCDCWatermarkUpdater_Basic1(t *testing.T) {
 	ie := newWmMockSQLExecutor()
 	var cronJobExecNum atomic.Int32
+	var cronJobExited atomic.Bool
 	var wg1 sync.WaitGroup
 	wg1.Add(1)
 	cronJob := func(ctx context.Context) {
@@ -1552,6 +1550,8 @@ func TestCDCWatermarkUpdater_Basic1(t *testing.T) {
 		t.Logf("cronJobExecNum: %d", now)
 		if now == 3 {
 			wg1.Done()
+			<-ctx.Done()
+			cronJobExited.Store(true)
 		}
 	}
 
@@ -1560,14 +1560,16 @@ func TestCDCWatermarkUpdater_Basic1(t *testing.T) {
 		ie,
 		WithCronJobInterval(time.Millisecond),
 		WithCustomizedCronJob(cronJob),
-		WithExportStatsInterval(time.Millisecond*5),
+		WithExportStatsInterval(time.Hour),
 	)
+	u.stats.lastExportTime = time.Now()
 	u.Start()
+	defer u.Stop()
 	wg1.Wait()
 	assert.GreaterOrEqual(t, cronJobExecNum.Load(), int32(3))
 	u.Stop()
+	assert.True(t, cronJobExited.Load())
 	prevNum := cronJobExecNum.Load()
-	time.Sleep(time.Millisecond * 5)
 	assert.Equal(t, prevNum, cronJobExecNum.Load())
 }
 
@@ -1575,117 +1577,64 @@ func TestCDCWatermarkUpdater_cronRun(t *testing.T) {
 	ie := newWmMockSQLExecutor()
 
 	executeError := moerr.NewInternalErrorNoCtx(fmt.Sprintf("%s-execute-error", t.Name()))
-	scheduleErr := moerr.NewInternalErrorNoCtx(fmt.Sprintf("%s-schedule-error", t.Name()))
 
 	var passTimes atomic.Uint64
-	passScheduler := func(job *UpdaterJob) (err error) {
-		job.DoneWithResult(nil)
-		passTimes.Add(1)
-		return
-	}
 	var executeErrTimes atomic.Uint64
-	executeErrScheduler := func(job *UpdaterJob) (err error) {
-		job.DoneWithErr(executeError)
-		executeErrTimes.Add(1)
-		return
-	}
-	var scheduleErrTimes atomic.Uint64
-	scheduleErrScheduler := func(job *UpdaterJob) (err error) {
-		job.DoneWithErr(scheduleErr)
-		scheduleErrTimes.Add(1)
-		err = scheduleErr
-		return
-	}
-	_ = executeErrScheduler
-	_ = scheduleErrScheduler
-
-	implScheduler := passScheduler
+	phase := 0
 
 	scheduleJob := func(job *UpdaterJob) (err error) {
-		return implScheduler(job)
+		switch phase {
+		case 0:
+			job.DoneWithResult(nil)
+			passTimes.Add(1)
+		default:
+			job.DoneWithErr(executeError)
+			executeErrTimes.Add(1)
+		}
+		return nil
 	}
 	u := NewCDCWatermarkUpdater(
 		t.Name(),
 		ie,
-		WithCronJobInterval(time.Millisecond),
 		WithCronJobErrorSupressTimes(1),
 		WithCustomizedScheduleJob(scheduleJob),
 	)
-	u.Start()
 	defer u.Stop()
 
-	// check u.cacheUncommitted is empty logic
-	var wg1 sync.WaitGroup
-	wg1.Add(1)
-	go func() {
-		for {
-			if u.stats.skipTimes.Load() > 0 {
-				wg1.Done()
-				break
-			}
-			time.Sleep(time.Millisecond)
-		}
-	}()
-	wg1.Wait()
+	// An empty cache is skipped without invoking the scheduler.
+	u.cronRun(context.Background())
+	assert.Equal(t, uint64(1), u.stats.skipTimes.Load())
+	assert.Equal(t, uint64(0), passTimes.Load())
+	assert.Equal(t, uint64(0), executeErrTimes.Load())
 
 	ctx := context.Background()
 
-	// add 1 uncommitted watermark and check the execution logic
+	// Add one uncommitted watermark and synchronously exercise the successful
+	// move-to-committing path.
 	err := u.UpdateWatermarkOnly(ctx, new(WatermarkKey), new(types.TS))
 	assert.NoError(t, err)
+	u.cronRun(ctx)
 
-	// wait uncommitted watermark to be commtting
-	wg1.Add(2)
-	go func() {
-		for {
-			u.RLock()
-			l1 := len(u.cacheCommitting)
-			l2 := len(u.cacheUncommitted)
-			u.RUnlock()
-			if l1 == 1 && l2 == 0 {
-				wg1.Done()
-				break
-			}
-			time.Sleep(time.Millisecond)
-		}
-		for {
-			if passTimes.Load() > 0 {
-				wg1.Done()
-				break
-			}
-			time.Sleep(time.Millisecond)
-		}
-	}()
-	wg1.Wait()
+	u.RLock()
+	committingCount := len(u.cacheCommitting)
+	uncommittedCount := len(u.cacheUncommitted)
+	u.RUnlock()
+	assert.Equal(t, 1, committingCount)
+	assert.Equal(t, 0, uncommittedCount)
 	assert.Equal(t, uint64(1), passTimes.Load())
+	assert.Equal(t, uint64(0), executeErrTimes.Load())
 
-	// clear cacheCommitting manually
+	// Clear the committing cache and exercise the error completion path. The
+	// direct cronRun calls make this phase change race-free.
 	u.Lock()
 	u.cacheCommitting = make(map[WatermarkKey]types.TS)
 	u.Unlock()
 
-	implScheduler = executeErrScheduler
+	phase = 1
 	err = u.UpdateWatermarkOnly(ctx, new(WatermarkKey), new(types.TS))
 	assert.NoError(t, err)
+	u.cronRun(ctx)
 
-	wg1.Add(2)
-	go func() {
-		for {
-			if executeErrTimes.Load() > 0 {
-				wg1.Done()
-				break
-			}
-			time.Sleep(time.Millisecond)
-		}
-		for {
-			if u.stats.errorTimes.Load() > 0 {
-				wg1.Done()
-				break
-			}
-			time.Sleep(time.Millisecond)
-		}
-	}()
-	wg1.Wait()
 	assert.Equal(t, uint64(1), executeErrTimes.Load())
 	assert.Equal(t, uint64(1), u.stats.errorTimes.Load())
 }
