@@ -54,14 +54,24 @@ func vecBlockDistance(fn func(x, y *metric.VecBlockOperand) (float64, error)) ex
 	}
 }
 
-// InnerProductVecBlock is inner_product: the negated dot product.
-var InnerProductVecBlock = vecBlockDistance(func(x, y *metric.VecBlockOperand) (float64, error) {
-	d, err := metric.VecBlockInnerProduct(x, y)
+// vecBlockSQLDistance is the SQL function of metric m: metric.VecBlockSQLDistance, checked
+// finite.
+func vecBlockSQLDistance(m metric.MetricType) executeLogicOfOverload {
+	fn, err := metric.VecBlockSQLDistance(m)
 	if err != nil {
-		return 0, err
+		panic(err)
 	}
-	return metric.CheckFiniteDist(metric.RoundDistanceToElemDomain(d), metric.MetricWhat(metric.Metric_InnerProduct))
-})
+	return vecBlockDistance(func(x, y *metric.VecBlockOperand) (float64, error) {
+		d, err := fn(x, y)
+		if err != nil {
+			return 0, err
+		}
+		return metric.CheckFiniteDist(d, metric.MetricWhat(m))
+	})
+}
+
+// InnerProductVecBlock is inner_product: the negated dot product.
+var InnerProductVecBlock = vecBlockSQLDistance(metric.Metric_InnerProduct)
 
 // L2DistanceVecBlock is l2_distance.
 var L2DistanceVecBlock = vecBlockDistance(func(x, y *metric.VecBlockOperand) (float64, error) {
@@ -77,13 +87,7 @@ var L2DistanceVecBlock = vecBlockDistance(func(x, y *metric.VecBlockOperand) (fl
 })
 
 // L2DistanceSqVecBlock is l2_distance_sq: the unrounded square.
-var L2DistanceSqVecBlock = vecBlockDistance(func(x, y *metric.VecBlockOperand) (float64, error) {
-	sq, err := metric.VecBlockL2DistanceSq(x, y)
-	if err != nil {
-		return 0, err
-	}
-	return metric.CheckFiniteDist(sq, metric.MetricWhat(metric.Metric_L2sqDistance))
-})
+var L2DistanceSqVecBlock = vecBlockSQLDistance(metric.Metric_L2sqDistance)
 
 // L1DistanceVecBlock is l1_distance.
 var L1DistanceVecBlock = vecBlockDistance(func(x, y *metric.VecBlockOperand) (float64, error) {
@@ -95,13 +99,7 @@ var L1DistanceVecBlock = vecBlockDistance(func(x, y *metric.VecBlockOperand) (fl
 })
 
 // CosineDistanceVecBlock is cosine_distance.
-var CosineDistanceVecBlock = vecBlockDistance(func(x, y *metric.VecBlockOperand) (float64, error) {
-	d, err := metric.VecBlockCosineDistance(x, y)
-	if err != nil {
-		return 0, err
-	}
-	return metric.CheckFiniteDist(metric.RoundDistanceToElemDomain(d), metric.MetricWhat(metric.Metric_CosineDistance))
-})
+var CosineDistanceVecBlock = vecBlockSQLDistance(metric.Metric_CosineDistance)
 
 // CosineSimilarityVecBlock is cosine_similarity.
 var CosineSimilarityVecBlock = vecBlockDistance(func(x, y *metric.VecBlockOperand) (float64, error) {

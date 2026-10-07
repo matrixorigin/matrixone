@@ -371,3 +371,43 @@ func TestCastTextToFloat8DigitSeparators(t *testing.T) {
 		result.Free()
 	}
 }
+
+func TestCastTextToFloat8Hexadecimal(t *testing.T) {
+	proc := testutil.NewProcess(t, testutil.WithFileService(nil))
+	for _, tc := range []struct {
+		text       string
+		want       float32
+		outOfRange bool
+	}{
+		{"0x1.100000000000000000000001p0", 1.125, false},
+		{"-0x1.100000000000000000000001p0", -1.125, false},
+		{"0X1.1000000000000000000000_01P0", 1.125, false},
+		{"0x1.1p0", 1, false},
+		{"-0x1.1p0", -1, false},
+		{"0x1.cp8", 448, false},
+		{"448", 448, false},
+		{"0x1.c0000000000000000000001p8", 0, true},
+		{"-0x1.c0000000000000000000001p8", 0, true},
+		{"448.000000000000000000000001", 0, true},
+	} {
+		t.Run(tc.text, func(t *testing.T) {
+			from := vector.NewVec(types.T_varchar.ToType())
+			t.Cleanup(func() { from.Free(proc.Mp()) })
+			require.NoError(t, vector.AppendBytes(from, []byte(tc.text), false, proc.Mp()))
+			target := vector.NewConstNull(types.T_float8.ToType(), 1, proc.Mp())
+			t.Cleanup(func() { target.Free(proc.Mp()) })
+			result := vector.NewFunctionResultWrapper(types.T_float8.ToType(), proc.Mp())
+			t.Cleanup(result.Free)
+			require.NoError(t, result.PreExtendAndReset(1))
+			err := NewCast([]*vector.Vector{from, target}, result, proc, 1, nil)
+			if tc.outOfRange {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			got, ok := vector.GetLowPrecisionFloatAt(result.GetResultVector(), 0)
+			require.True(t, ok)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}

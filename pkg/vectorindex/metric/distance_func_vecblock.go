@@ -257,6 +257,31 @@ func VecBlockCosineSimilarity(x, y *VecBlockOperand) (float64, error) {
 	return max(-1, min(1, dot/den)), nil
 }
 
+// VecBlockSQLDistance returns the vecf8/vecf4 distance of metric m rounded as its SQL function
+// returns it: inner_product and cosine_distance in the float32 domain, l2_distance_sq unrounded.
+func VecBlockSQLDistance(m MetricType) (func(x, y *VecBlockOperand) (float64, error), error) {
+	switch m {
+	case Metric_InnerProduct:
+		return vecBlockRoundedToElemDomain(VecBlockInnerProduct), nil
+	case Metric_CosineDistance:
+		return vecBlockRoundedToElemDomain(VecBlockCosineDistance), nil
+	case Metric_L2sqDistance:
+		return VecBlockL2DistanceSq, nil
+	}
+	return nil, moerr.NewInternalErrorNoCtxf("no vecf8/vecf4 distance for metric %d", m)
+}
+
+// vecBlockRoundedToElemDomain returns fn with its result rounded by RoundDistanceToElemDomain.
+func vecBlockRoundedToElemDomain(fn func(x, y *VecBlockOperand) (float64, error)) func(x, y *VecBlockOperand) (float64, error) {
+	return func(x, y *VecBlockOperand) (float64, error) {
+		d, err := fn(x, y)
+		if err != nil {
+			return 0, err
+		}
+		return RoundDistanceToElemDomain(d), nil
+	}
+}
+
 // VecBlockCosineDistance returns 1 - cosine similarity; 1 when either vector is zero.
 // NaN maps to +Inf.
 func VecBlockCosineDistance(x, y *VecBlockOperand) (float64, error) {

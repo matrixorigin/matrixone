@@ -1086,7 +1086,7 @@ func TestVectorMatmulMetrics(t *testing.T) {
 					case vectorMatmulL2sq:
 						dist = l2
 					}
-					hits[i] = hit{i, float64(float32(dist))}
+					hits[i] = hit{i, dist}
 				}
 				sort.Slice(hits, func(a, b int) bool {
 					if hits[a].dist != hits[b].dist {
@@ -1334,6 +1334,19 @@ func TestVectorMatmulConfigAdmission(t *testing.T) {
 		require.NoError(t, err)
 		return account, allocation
 	}
+	// newPool's pool is deleted after the test's other cleanups.
+	newPool := func(t *testing.T) *mpool.MPool {
+		mp := mpool.MustNewZero()
+		t.Cleanup(func() { mpool.DeleteMPool(mp) })
+		return mp
+	}
+	// releaser returns a function running f once; cleanup runs it if the test did not.
+	releaser := func(t *testing.T, f func()) func() {
+		var once sync.Once
+		release := func() { once.Do(f) }
+		t.Cleanup(release)
+		return release
+	}
 	ones := func(n int) []float32 {
 		v := make([]float32, n)
 		for i := range v {
@@ -1353,7 +1366,7 @@ func TestVectorMatmulConfigAdmission(t *testing.T) {
 			denied  bool
 		}{{"small", 4, 1, false}, {"large", 8192, 64, true}} {
 			t.Run(oid.String()+"/"+tc.name, func(t *testing.T) {
-				mp := mpool.MustNewZero()
+				mp := newPool(t)
 				account, allocation := openAccount(t)
 				before := configs()
 				typ := types.New(oid, int32(tc.dim), 0)
@@ -1367,6 +1380,7 @@ func TestVectorMatmulConfigAdmission(t *testing.T) {
 				}
 				require.NoError(t, err)
 				exec := ag.(*vectorMatmulExec)
+				freeExec := releaser(t, exec.Free)
 				charged := exec.configBytes()
 				require.GreaterOrEqual(t, charged, uint64(len(exec.cfg.queryCells)))
 				require.Equal(t, charged, account.Snapshot().Used)
@@ -1379,18 +1393,18 @@ func TestVectorMatmulConfigAdmission(t *testing.T) {
 					require.NoError(t, err)
 				}
 				ids, v := vector.NewVec(types.T_int64.ToType()), vector.NewVec(typ)
+				vecs := []*vector.Vector{ids, v}
+				freeVecs := releaser(t, func() { vmFree(mp, vecs) })
 				require.NoError(t, vector.AppendFixed(ids, int64(7), false, mp))
 				require.NoError(t, vector.AppendBytes(v, cell, false, mp))
-				vecs := []*vector.Vector{ids, v}
 				require.NoError(t, exec.PreflightBatchFill(0, []uint64{1}, vecs))
 				require.NoError(t, exec.BatchFill(0, []uint64{1}, vecs))
 				out, err := exec.Flush()
+				freeOut := releaser(t, func() { vmFree(mp, out) })
 				require.NoError(t, err)
-				for _, v := range out {
-					v.Free(mp)
-				}
-				exec.Free()
-				vmFree(mp, vecs)
+				freeOut()
+				freeExec()
+				freeVecs()
 				require.Zero(t, account.Snapshot().Used)
 				require.Equal(t, before, configs())
 				require.Zero(t, mp.CurrNB())
@@ -1399,41 +1413,44 @@ func TestVectorMatmulConfigAdmission(t *testing.T) {
 	}
 
 	t.Run("shared", func(t *testing.T) {
-		mp := mpool.MustNewZero()
+		mp := newPool(t)
 		before := configs()
 		typ := types.New(types.T_array_float32, 4, 0)
 		raw := EncodeVectorMatmulBinaryConfig(1, types.ArrayToBytes(ones(8)), "", false)
 		accounts := make([]*mpool.AllocationAccount, 2)
 		execs := make([]*vectorMatmulExec, 2)
+		frees := make([]func(), 2)
 		for i := range execs {
 			var allocation *AllocationAccount
 			accounts[i], allocation = openAccount(t)
 			ag, err := MakeGroupAgg(mp, AggIdOfVectorMatmul, false, allocation, raw, types.T_int64.ToType(), typ)
 			require.NoError(t, err)
 			execs[i] = ag.(*vectorMatmulExec)
+			frees[i] = releaser(t, execs[i].Free)
 		}
 		require.Same(t, execs[0].cfg, execs[1].cfg)
 		require.Equal(t, before+1, configs())
 		for i := range execs {
 			require.Equal(t, execs[i].configBytes(), accounts[i].Snapshot().Used)
 		}
-		execs[0].Free()
+		frees[0]()
 		require.Zero(t, accounts[0].Snapshot().Used)
 		require.Equal(t, execs[1].configBytes(), accounts[1].Snapshot().Used)
 		require.Equal(t, before+1, configs())
-		execs[1].Free()
+		frees[1]()
 		require.Zero(t, accounts[1].Snapshot().Used)
 		require.Equal(t, before, configs())
 	})
 
 	t.Run("replaced", func(t *testing.T) {
-		mp := mpool.MustNewZero()
+		mp := newPool(t)
 		account, allocation := openAccount(t)
 		typ := types.New(types.T_array_float32, 4, 0)
 		ag, err := MakeGroupAgg(mp, AggIdOfVectorMatmul, false, allocation,
 			EncodeVectorMatmulBinaryConfig(1, types.ArrayToBytes(ones(4)), "", false), types.T_int64.ToType(), typ)
 		require.NoError(t, err)
 		exec := ag.(*vectorMatmulExec)
+		freeExec := releaser(t, exec.Free)
 		// a larger configuration replaces the charge; one beyond the account releases it
 		require.NoError(t, exec.SetExtraInformation(EncodeVectorMatmulBinaryConfig(1, types.ArrayToBytes(ones(64)), "", false), 0))
 		require.Equal(t, exec.configBytes(), account.Snapshot().Used)
@@ -1441,7 +1458,7 @@ func TestVectorMatmulConfigAdmission(t *testing.T) {
 		require.ErrorIs(t, exec.SetExtraInformation(big, 0), mpool.ErrAllocationAccountCapacity)
 		require.Nil(t, exec.cfg)
 		require.Zero(t, account.Snapshot().Used)
-		exec.Free()
+		freeExec()
 		require.Zero(t, account.Snapshot().Used)
 	})
 }

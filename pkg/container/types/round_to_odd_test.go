@@ -202,3 +202,26 @@ func TestFloat32RoundToOddStringSeparators(t *testing.T) {
 	require.NoError(t, err)
 	require.Greater(t, f, float32(1.0625))
 }
+
+func TestFloat32RoundToOddStringHexadecimal(t *testing.T) {
+	for _, tc := range []struct{ hex, dec string }{
+		// 1 + 2^-4 + 2^-92: above the float64 1.0625
+		{"0x1.100000000000000000000001p0", "1.0625000000000000000000000002019483917365790275247"},
+		{"-0x1.100000000000000000000001p0", "-1.0625000000000000000000000002019483917365790275247"},
+		{"0x1.1p0", "1.0625"},
+		{"0X1.1P+0", "1.0625"},
+		// above 448 by 2^-92
+		{"0x1.c0000000000000000000001p8", "448.0000000000000000000000000002"},
+		{"0x1.cp8", "448"},
+		// 2^-1250: zero in float64, above zero exactly
+		{"0x0.00000000000000000000000000000000000000000001p-1074", "5e-377"},
+		{"0x0p0", "0"},
+	} {
+		got, gotD, err := Float32RoundToOddString(tc.hex)
+		require.NoError(t, err, tc.hex)
+		want, wantD, err := Float32RoundToOddString(tc.dec)
+		require.NoError(t, err, tc.dec)
+		require.Equal(t, math.Float32bits(want), math.Float32bits(got), tc.hex)
+		require.Equal(t, wantD, gotD, tc.hex)
+	}
+}

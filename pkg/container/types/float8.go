@@ -65,26 +65,28 @@ func Float32RoundToOddString(s string) (float32, float64, error) {
 	return math.Float32frombits(math.Float32bits(math.Nextafter32(f, 0)) | 1), d, nil
 }
 
-// decimalSide compares the exact value of decimal text s with d, its float64 parse: -1, 0 or
-// +1, and whether s is negative. s is text strconv.ParseFloat accepted; its digit
-// separators are dropped. A text of zero float64 is compared by its digits; otherwise the
-// exponent field is within len(s)+400 of the value's decimal exponent, which bounds the
-// rational arithmetic. Hexadecimal text is taken as d. Text whose exact value cannot be read
-// is a syntax error.
+// decimalSide compares the exact value of decimal or hexadecimal text s with d, its float64
+// parse: -1, 0 or +1, and whether s is negative. s is text strconv.ParseFloat accepted; its
+// digit separators are dropped. A text of zero float64 is compared by its digits; otherwise
+// the exponent field is within len(s)+400 of the value's decimal exponent (4*len(s)+1100 of
+// its binary exponent for hexadecimal text), which bounds the rational arithmetic. Text
+// whose exact value cannot be read is a syntax error.
 func decimalSide(s string, d float64) (int, bool, error) {
 	s = strings.ReplaceAll(s, "_", "")
 	syntax := &strconv.NumError{Func: "ParseFloat", Num: s, Err: strconv.ErrSyntax}
 	neg := strings.HasPrefix(s, "-")
 	body := strings.TrimLeft(s, "+-")
+	expMarks, digits, expBound := "eE", "123456789", len(s)+400
 	if len(body) > 1 && body[0] == '0' && (body[1] == 'x' || body[1] == 'X') {
-		return 0, neg, nil
+		body = body[2:]
+		expMarks, digits, expBound = "pP", "123456789abcdefABCDEF", 4*len(s)+1100
 	}
 	mant, exp := body, ""
-	if i := strings.IndexAny(body, "eE"); i >= 0 {
+	if i := strings.IndexAny(body, expMarks); i >= 0 {
 		mant, exp = body[:i], body[i+1:]
 	}
 	if d == 0 {
-		if !strings.ContainsAny(mant, "123456789") {
+		if !strings.ContainsAny(mant, digits) {
 			return 0, neg, nil
 		}
 		if neg {
@@ -94,7 +96,7 @@ func decimalSide(s string, d float64) (int, bool, error) {
 	}
 	if exp != "" {
 		e, err := strconv.Atoi(exp)
-		if err != nil || e > len(s)+400 || e < -(len(s)+400) {
+		if err != nil || e > expBound || e < -expBound {
 			return 0, neg, syntax
 		}
 	}

@@ -123,6 +123,8 @@ set @qc = (select vecblock_binary(v) from vq where id = 1);
 set @qc2 = (select concat(vecblock_binary(v), (select vecblock_binary(v) from vq where id = 2)) from vq where id = 1);
 set @qj = (select concat('[', group_concat(vecblock_json(v) order by id), ']') from vq where id in (1, 2));
 select vector_matmul(2, id, v, @qc, '{"query_format":"vecblock","metric":"l2sq"}') from vq;
+-- on the CPU the hits and distances are those of l2_distance_sq ordered by distance, id
+select a.id, l2_distance_sq(a.v, b.v) d from vq a, vq b where b.id = 1 order by d, a.id limit 2;
 select vector_matmul(1, id, v, @qc2, '{"query_format":"vecblock","metric":"l2sq"}') from vq;
 select vector_matmul(1, id, v, @qj, '{"query_format":"vecblock","metric":"l2sq"}') from vq;
 -- the displayed (decoded) values of row 1 quantize to another cell: not at distance 0

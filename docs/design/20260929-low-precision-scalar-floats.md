@@ -47,9 +47,11 @@ GPU kernels agree on the encoding.
   overload for these types resolves by casting the argument to `float32` (the
   implicit-cast table ranks `float32` first, then `float64`), and the JSON aggregates,
   percentiles and RANGE frames with an offset take the argument as `float32`.
-  `COUNT`, `MIN`/`MAX`, `SUM`/`AVG`, the value window functions (`FIRST_VALUE`,
-  `LAG`, ...) and `IF`/`CASE`/`COALESCE`/`IFNULL`/`NULLIF` over one of these types keep
-  the column type, so the projections a multi-table `UPDATE` or `INSERT ... ON DUPLICATE
+  `MIN`/`MAX` and `SUM`/`AVG` also take the argument as `float32` and return what they
+  return over a `float32` column: `MIN`/`MAX` a `float32`, `SUM`/`AVG` a `float64`.
+  The value window functions (`FIRST_VALUE`, `LAG`, ...) and
+  `IF`/`CASE`/`COALESCE`/`IFNULL`/`NULLIF` over one of these types keep the column
+  type, so the projections a multi-table `UPDATE` or `INSERT ... ON DUPLICATE
   KEY UPDATE` builds from them write cells of the column's width. Branches of two
   different narrow types widen to `float32`.
 - **Comparison with a literal.** A numeric literal compared with a column of these types
@@ -104,9 +106,9 @@ GPU kernels agree on the encoding.
   and zonemap pruning order these columns by their float value. The raw 1-/2-byte
   encodings do not sort monotonically (the sign bit inverts negative ordering), so
   any comparison path must widen to float before comparing.
-- **Aggregation accumulates in a wide type.** `SUM`/`AVG` accumulate in `float64`
-  and (for a narrow-typed result) round back once at the end; per-element rounding
-  is never used for accumulation.
+- **Aggregation accumulates in a wide type.** `SUM`/`AVG` run on the `float32`
+  argument and accumulate and return `float64`; no aggregate rounds back to the
+  narrow type.
 - **Precision loss is expected and one-directional.** Writing a value that the
   format cannot represent exactly stores the nearest representable value; reading
   it back yields that stored value. Round-tripping a value already in the format

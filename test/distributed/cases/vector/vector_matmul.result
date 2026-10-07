@@ -175,7 +175,11 @@ set @qc2 = (select concat(vecblock_binary(v), (select vecblock_binary(v) from vq
 set @qj = (select concat('[', group_concat(vecblock_json(v) order by id), ']') from vq where id in (1, 2));
 select vector_matmul(2, id, v, @qc, '{"query_format":"vecblock","metric":"l2sq"}') from vq;
 ➤ vector_matmul(2, id, v, @qc, {"query_format":"vecblock","metric":"l2sq"})[-1,2147483647,0]  𝄀
-[[["1", 0], ["3", 0.5857208]]]
+[[["1", 0], ["3", 0.5857207836327234]]]
+select a.id, l2_distance_sq(a.v, b.v) d from vq a, vq b where b.id = 1 order by d, a.id limit 2;
+➤ id[4,32,0]  ¦  d[8,53,31]  𝄀
+1  ¦  0.0  𝄀
+3  ¦  0.5857207836327234
 select vector_matmul(1, id, v, @qc2, '{"query_format":"vecblock","metric":"l2sq"}') from vq;
 ➤ vector_matmul(1, id, v, @qc2, {"query_format":"vecblock","metric":"l2sq"})[-1,2147483647,0]  𝄀
 [[["1", 0]], [["2", 0]]]
@@ -184,7 +188,7 @@ select vector_matmul(1, id, v, @qj, '{"query_format":"vecblock","metric":"l2sq"}
 [[["1", 0]], [["2", 0]]]
 select vector_matmul(2, id, v, '[[8.764914,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,6.2606535]]', '{"metric":"l2sq"}') from vq;
 ➤ vector_matmul(2, id, v, [[8.764914,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,6.2606535]], {"metric":"l2sq"})[-1,2147483647,0]  𝄀
-[[["1", 0.3919571], ["3", 0.9462981]]]
+[[["1", 0.3919571054686912], ["3", 0.9462981068973022]]]
 select vector_matmul(1, id, v, @qc, '{"query_format":"float32"}') from vq;
 invalid input: vector_matmul: binary queries are 23 bytes, want a non-zero multiple of 68 (float32 x dimension 17)
 select vector_matmul(1, id, w, @qc, '{"query_format":"vecblock"}') from vq;

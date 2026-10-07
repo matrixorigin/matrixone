@@ -497,7 +497,10 @@ the result is an overflow error, since JSON has no infinity.
 - Hit: a pair `[id, score]`.
   - Position 0, `id`: the source key as a JSON string (exact for 64-bit integers and
     non-integer keys).
-  - Position 1, `score`: the distance of the metric, a JSON number.
+  - Position 1, `score`: the distance of the metric, a JSON number: the shortest text of
+    the float32 value when the distance is one (the GPU, and the float32-domain CPU
+    distances), otherwise of the float64 value. On the CPU it is the value the scalar
+    function returns, so `l2sq` over `vecf8`/`vecf4` prints the unrounded square.
   - A field added later takes position 2; positions 0 and 1 keep their meaning.
 
 #### Usage

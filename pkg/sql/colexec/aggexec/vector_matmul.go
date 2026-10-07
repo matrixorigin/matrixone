@@ -463,14 +463,18 @@ func (cfg *vectorMatmulConfig) setBlockScaledCells(oid types.T, dim int, cells [
 		}
 	}
 	cfg.retained = cap(cfg.queryCells) + cap(ops)*int(unsafe.Sizeof(metric.VecBlockOperand{}))
-	// the distance as inner_product, cosine_distance and l2_distance_sq compute it; an
+	// the distance as inner_product, cosine_distance and l2_distance_sq return it; an
 	// inner product overflow NaN ranks last
-	distance := metric.VecBlockInnerProduct
+	m := metric.Metric_InnerProduct
 	switch cfg.metric {
 	case vectorMatmulCosine:
-		distance = metric.VecBlockCosineDistance
+		m = metric.Metric_CosineDistance
 	case vectorMatmulL2sq:
-		distance = metric.VecBlockL2DistanceSq
+		m = metric.Metric_L2sqDistance
+	}
+	distance, err := metric.VecBlockSQLDistance(m)
+	if err != nil {
+		return err
 	}
 	cfg.score = func(cell []byte, out []float64) error {
 		c, err := types.ParseBlockScaledCell(cell)
@@ -947,7 +951,12 @@ func (s *vectorMatmulState) appendJSON(out []byte) ([]byte, error) {
 			out = append(out, '[')
 			out = append(out, id...)
 			out = append(out, ',')
-			out = strconv.AppendFloat(out, dist, 'g', -1, 32)
+			// a float32 distance (GPU, float32 kernels) prints as float32, any other as float64
+			bitSize := 64
+			if float64(float32(dist)) == dist {
+				bitSize = 32
+			}
+			out = strconv.AppendFloat(out, dist, 'g', -1, bitSize)
 			out = append(out, ']')
 		}
 		out = append(out, ']')
@@ -1242,9 +1251,8 @@ func (exec *vectorMatmulExec) fillRow(group uint64, row int, vectors []*vector.V
 	for j, score := range exec.scores {
 		// an overflow NaN ranks last
 		if math.IsNaN(score) {
-			score = math.Inf(-1)
+			exec.scores[j] = math.Inf(-1)
 		}
-		exec.scores[j] = float64(float32(score))
 	}
 	s, err := exec.stateAt(group)
 	if err != nil {
