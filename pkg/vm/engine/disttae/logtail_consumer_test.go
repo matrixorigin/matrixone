@@ -2190,6 +2190,13 @@ func TestIsSubscribed_NotFound(t *testing.T) {
 	assert.Equal(t, Unsubscribed, state)
 }
 
+func TestPushClientDisconnectDoesNotRetireOwner(t *testing.T) {
+	c := &PushClient{}
+	require.NoError(t, c.Disconnect())
+	require.False(t, c.closed.Load())
+	require.NoError(t, c.Close())
+}
+
 // TestIsSubscribed_DifferentStates tests isSubscribed with different states
 func TestIsSubscribed_DifferentStates(t *testing.T) {
 	ctx := context.Background()

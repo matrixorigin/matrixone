@@ -120,6 +120,7 @@ func NewDataSync(
 	ss.lifecycleMu.Unlock()
 	if err := ss.stopper.RunNamedTask("data-syncer", ss.start); err != nil {
 		ss.finishStart()
+		_ = ss.Close()
 		return nil, err
 	}
 	return ss, nil

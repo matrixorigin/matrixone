@@ -1774,7 +1774,15 @@ func (c *PushClient) isNotUnsubscribing(ctx context.Context, dbId, tblId uint64)
 }
 
 func (c *PushClient) Disconnect() error {
-	return c.Close()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.subscriber == nil {
+		return nil
+	}
+	// Disconnect is a transport-level fault injection used by reconnect
+	// handling. It must not retire the PushClient owner; Engine.Close is the
+	// lifecycle operation that marks the client permanently closed.
+	return c.subscriber.closeClient()
 }
 
 func (c *PushClient) Close() error {
