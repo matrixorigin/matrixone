@@ -322,12 +322,14 @@ func TestSQLTaskRefreshObserverTracksOverdueExecution(t *testing.T) {
 	}()
 	var active atomic.Int64
 	snapshots := make(chan []uint64, 2)
+	finished := make(chan struct{}, 1)
 	restore := SetSQLTaskRefreshHookForTest(func(_ string, ids []uint64) { snapshots <- ids },
 		func(_ string, _ uint64, started bool) {
 			if started {
 				active.Add(1)
 			} else {
 				active.Add(-1)
+				finished <- struct{}{}
 			}
 		})
 	defer restore()
@@ -351,7 +353,12 @@ func TestSQLTaskRefreshObserverTracksOverdueExecution(t *testing.T) {
 	require.Empty(t, <-snapshots)
 	require.Equal(t, int64(1), active.Load(), "cache removal must not hide an in-flight catch-up")
 	unblock()
-	require.Eventually(t, func() bool { return active.Load() == 0 }, 5*time.Second, time.Millisecond)
+	select {
+	case <-finished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for overdue SQL task execution to finish")
+	}
+	require.Equal(t, int64(0), active.Load())
 }
 
 type blockedSQLTaskObserverStorage struct {
