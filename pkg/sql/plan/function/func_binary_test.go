@@ -10591,6 +10591,7 @@ func geomInputEWKTAsType(ewkt string, geometryType types.T) FunctionTestInput {
 }
 
 func TestBinaryGeometryFunctionsRejectDifferentSRIDs(t *testing.T) {
+	proc := testutil.NewProcess(t)
 	boolTests := []struct {
 		name  string
 		fn    executeLogicOfOverload
@@ -10672,7 +10673,6 @@ func TestBinaryGeometryFunctionsRejectDifferentSRIDs(t *testing.T) {
 
 	for _, tc := range boolTests {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcess(t)
 			// SRID lives in the type now; encode it from the EWKT prefix.
 			inputs := []FunctionTestInput{
 				geomInputEWKT(tc.left),
@@ -10688,7 +10688,6 @@ func TestBinaryGeometryFunctionsRejectDifferentSRIDs(t *testing.T) {
 	}
 
 	t.Run("distance", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
 		inputs := []FunctionTestInput{
 			geomInputEWKT("SRID=4326;MULTIPOINT((0 0),(3 0))"),
 			geomInputEWKT("SRID=3857;POINT(2 0)"),
