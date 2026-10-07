@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	statsinfo "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/stretchr/testify/require"
@@ -30,9 +31,44 @@ import (
 
 func useLegacyGroupingSetPlan(t *testing.T, mock *MockOptimizer) {
 	t.Helper()
-	proc := mock.CurrentContext().GetProcess()
+	setGroupingSetTestProtocol(t, mock.CurrentContext(), defines.MORPCVersion47)
+}
 
-	setPlanTestGlobalVariable(t, proc.GetService(), moruntime.MOProtocolVersion, defines.MORPCVersion47)
+func buildSharedGroupingSetPlan(t *testing.T, sql string) *planpb.Query {
+	t.Helper()
+	return buildSharedGroupingSetPlanWithContext(t, sql, NewMockCompilerContext(true, newPlanTestProcess(t)))
+}
+
+func setGroupingSetTestProtocol(t *testing.T, ctx CompilerContext, version int64) {
+	t.Helper()
+	setPlanTestGlobalVariable(t, ctx.GetProcess().GetService(), moruntime.MOProtocolVersion, version)
+}
+
+func buildSharedGroupingSetPlanWithContext(t *testing.T, sql string, ctx CompilerContext) *planpb.Query {
+	t.Helper()
+	setGroupingSetTestProtocol(t, ctx, defines.MORPCVersion49)
+	setPlanTestGlobalVariable(t, ctx.GetProcess().GetService(), "optimizer_hints", "")
+
+	stmt, err := mysql.ParseOne(context.Background(), sql, 1)
+	require.NoError(t, err)
+	t.Cleanup(stmt.Free)
+	built, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	return built.GetQuery()
+}
+
+type groupingSetStatsCompilerContext struct {
+	*MockCompilerContext
+	statsCache *StatsCache
+}
+
+func (ctx *groupingSetStatsCompilerContext) GetStatsCache() *StatsCache {
+	return ctx.statsCache
+}
+
+func (ctx *groupingSetStatsCompilerContext) Stats(obj *planpb.ObjectRef, _ *planpb.Snapshot) (*statsinfo.StatsInfo, error) {
+	stats := ctx.statsCache.Get(uint64(obj.Obj))
+	return stats.GetStats(), nil
 }
 
 func TestGroupingSetInputSharingProtocolGate(t *testing.T) {
@@ -80,18 +116,7 @@ func TestGroupingSetInputSharingKeepsDecimalSumOnRawInput(t *testing.T) {
 		from lineitem
 		group by rollup(l_returnflag, l_linestatus, l_shipmode)`
 
-	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
-
-	setPlanTestGlobalVariable(t, ctx.GetProcess().GetService(), moruntime.MOProtocolVersion, defines.MORPCVersion49)
-	setPlanTestGlobalVariable(t, ctx.GetProcess().GetService(), "optimizer_hints", "")
-
-	stmt, err := mysql.ParseOne(context.Background(), sql, 1)
-	require.NoError(t, err)
-	defer stmt.Free()
-	built, err := BuildPlan(ctx, stmt, false)
-	require.NoError(t, err)
-
-	shape := reachableGroupingSetShape(built.GetQuery())
+	shape := reachableGroupingSetShape(buildSharedGroupingSetPlan(t, sql))
 	// Checked fixed-width SUM is not associative in error semantics. Every
 	// grouping set must therefore aggregate the raw rows in their original
 	// order; SUM(SUM(x)) prefix reuse could introduce an intermediate overflow.
@@ -103,6 +128,170 @@ func TestGroupingSetInputSharingKeepsDecimalSumOnRawInput(t *testing.T) {
 	require.Equal(t, 1, shape.materializedSinks)
 }
 
+func TestGroupingSetInputSharingStreamsEquivalentBranchProjects(t *testing.T) {
+	const sql = `select l_returnflag, l_linestatus, sum(l_extendedprice)
+		from lineitem
+		group by rollup(l_returnflag, l_linestatus)
+		order by l_returnflag, l_linestatus`
+
+	shape := reachableGroupingSetShape(buildSharedGroupingSetPlan(t, sql))
+	require.Equal(t, 1, shape.tableScans)
+	require.Equal(t, 1, shape.aggregates)
+	require.Equal(t, 1, shape.expandProjects)
+	require.Equal(t, 1, shape.aggregatesOnExpand)
+	require.Zero(t, shape.sinkScans)
+	require.Zero(t, shape.materializedSinks)
+}
+
+func TestSplitGroupingSetCoarseDisablesShuffle(t *testing.T) {
+	child := &planpb.Node{NodeType: planpb.Node_PROJECT}
+	agg := &planpb.Node{
+		NodeType: planpb.Node_AGG,
+		Children: []int32{0},
+		GroupBy:  make([]*planpb.Expr, 2),
+		Stats: &planpb.Stats{HashmapStats: &planpb.HashMapStats{
+			Shuffle:       true,
+			ShuffleColIdx: 0,
+		}},
+	}
+	builder := &QueryBuilder{
+		qry:                        &planpb.Query{Nodes: []*planpb.Node{child, agg}},
+		splitGroupingSetCoarseAggs: map[*planpb.Node]struct{}{agg: {}},
+	}
+	determineShuffleForGroupBy(agg, builder)
+	require.False(t, agg.Stats.HashmapStats.Shuffle)
+	require.Equal(t, int32(-1), agg.Stats.HashmapStats.ShuffleColIdx)
+}
+
+func TestDirectGroupingSetSplitFits(t *testing.T) {
+	newBranches := func() []groupingSetBranch {
+		branches := make([]groupingSetBranch, 5)
+		for i := range branches {
+			groups := make([]*planpb.Expr, 4)
+			flags := make([]bool, 4)
+			for j := range groups {
+				groups[j] = groupingSetCol(planpb.Type{Id: int32(types.T_int64)}, 1, int32(j))
+				flags[j] = j < 4-i
+			}
+			groups[3].Ndv = 1000
+			branches[i].agg = &planpb.Node{GroupBy: groups, GroupingFlag: flags,
+				Stats: &planpb.Stats{Outcnt: 800_000}}
+		}
+		return branches
+	}
+	producer := &planpb.Stats{Outcnt: 1_000_000}
+	for _, tc := range []struct {
+		name   string
+		change func([]groupingSetBranch, *planpb.Stats)
+		want   bool
+	}{
+		{name: "large strict prefix", want: true},
+		{name: "small input", change: func(_ []groupingSetBranch, s *planpb.Stats) { s.Outcnt = 1_000 }},
+		{name: "low trailing NDV", change: func(b []groupingSetBranch, _ *planpb.Stats) { b[0].agg.GroupBy[3].Ndv = 10 }},
+		{name: "finest reduces input", change: func(b []groupingSetBranch, _ *planpb.Stats) { b[0].agg.Stats.Outcnt = 100_000 }},
+		{name: "not a prefix", change: func(b []groupingSetBranch, _ *planpb.Stats) { b[2].agg.GroupingFlag[0] = false }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			branches, stats := newBranches(), *producer
+			if tc.change != nil {
+				tc.change(branches, &stats)
+			}
+			require.Equal(t, tc.want, directGroupingSetSplitFits(branches, &stats, 200))
+		})
+	}
+}
+
+func TestDirectGroupingSetSplitPlan(t *testing.T) {
+	const sql = `select l_returnflag, l_linestatus, l_shipmode, l_orderkey,
+		sum(l_extendedprice) from lineitem
+		group by rollup(l_returnflag, l_linestatus, l_shipmode, l_orderkey)`
+	// The mock compiler has no column stats, so the opportunity gate fails
+	// closed rather than duplicating the scan speculatively.
+	shape := reachableGroupingSetShape(buildSharedGroupingSetPlan(t, sql))
+	require.Equal(t, 1, shape.tableScans)
+	require.Equal(t, 1, shape.aggregates)
+	require.Equal(t, 1, shape.expandProjects)
+	require.Equal(t, 1, shape.aggregatesOnExpand)
+	require.Zero(t, shape.sinkScans)
+
+	mock := NewMockCompilerContext(true, newPlanTestProcess(t))
+	cache := NewStatsCache()
+	cache.Set(mock.tables["lineitem"].TblId, &statsinfo.StatsInfo{
+		TableCnt: 6_000_000,
+		NdvMap: map[string]float64{
+			"l_returnflag": 3, "l_linestatus": 2, "l_shipmode": 7,
+			"l_orderkey": 1_500_000,
+		},
+	})
+	withStats := &groupingSetStatsCompilerContext{MockCompilerContext: mock, statsCache: cache}
+	shape = reachableGroupingSetShape(buildSharedGroupingSetPlanWithContext(t, sql, withStats))
+	require.Equal(t, 2, shape.tableScans)
+	require.Equal(t, 2, shape.aggregates)
+	require.Equal(t, 1, shape.expandProjects)
+	require.Equal(t, 1, shape.aggregatesOnExpand)
+	require.Zero(t, shape.sinkScans)
+
+	orderedSQL := sql + ` order by l_returnflag, l_linestatus, l_shipmode, l_orderkey`
+	shape = reachableGroupingSetShape(buildSharedGroupingSetPlanWithContext(t, orderedSQL, withStats))
+	require.Equal(t, 1, shape.tableScans)
+	require.Equal(t, 1, shape.aggregates)
+
+	cache.Set(mock.tables["orders"].TblId, &statsinfo.StatsInfo{
+		TableCnt: 1_500_000,
+		NdvMap:   map[string]float64{"o_orderkey": 1_500_000},
+	})
+	for _, tc := range []struct {
+		name       string
+		from       string
+		scans      int
+		aggregates int
+	}{
+		{name: "where join", from: "lineitem, orders where l_orderkey = o_orderkey", scans: 4, aggregates: 2},
+		{name: "on join", from: "lineitem join orders on l_orderkey = o_orderkey", scans: 4, aggregates: 2},
+		{name: "cartesian join", from: "lineitem cross join orders", scans: 2, aggregates: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			joinedSQL := `select l_returnflag, l_linestatus, l_shipmode, l_orderkey,
+				sum(l_extendedprice) from ` + tc.from + `
+				group by rollup(l_returnflag, l_linestatus, l_shipmode, l_orderkey)`
+			shape := reachableGroupingSetShape(buildSharedGroupingSetPlanWithContext(t, joinedSQL, withStats))
+			// Equivalent WHERE/ON joins must cost the joined input; a genuine
+			// Cartesian product must retain its multiplicative cardinality.
+			require.Equal(t, tc.scans, shape.tableScans)
+			require.Equal(t, tc.aggregates, shape.aggregates)
+			require.Equal(t, 1, shape.expandProjects)
+			require.Zero(t, shape.sinkScans)
+		})
+	}
+}
+
+func TestGroupingSetInputSharingKeepsVolatileBranchProjects(t *testing.T) {
+	const sql = `select l_returnflag, l_linestatus, rand(), sum(l_extendedprice)
+		from lineitem
+		group by rollup(l_returnflag, l_linestatus)`
+
+	shape := reachableGroupingSetShape(buildSharedGroupingSetPlan(t, sql))
+	require.Equal(t, 1, shape.tableScans)
+	require.Equal(t, 1, shape.expandProjects)
+	require.NotZero(t, shape.sinkScans)
+	require.NotZero(t, shape.materializedSinks)
+}
+
+func TestGroupingSetInputSharingKeepsHashBuildDrainMarker(t *testing.T) {
+	const sql = `select count(*)
+		from (
+			select l_returnflag, l_linestatus, sum(l_extendedprice) as revenue
+			from lineitem
+			group by rollup(l_returnflag, l_linestatus)
+		) g
+		join nation n on g.l_returnflag = n.n_name`
+
+	shape := reachableGroupingSetShape(buildSharedGroupingSetPlan(t, sql))
+	require.Equal(t, 1, shape.expandProjects)
+	require.NotZero(t, shape.sinkScans)
+	require.NotZero(t, shape.materializedSinks)
+}
+
 func TestGroupingSetInputSharingRejectsInheritedGroupingSentinel(t *testing.T) {
 	const sql = `select d.l_returnflag, grouping(d.l_returnflag), count(*)
 		from (
@@ -112,18 +301,7 @@ func TestGroupingSetInputSharingRejectsInheritedGroupingSentinel(t *testing.T) {
 		) d
 		group by rollup(d.l_returnflag)`
 
-	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
-
-	setPlanTestGlobalVariable(t, ctx.GetProcess().GetService(), moruntime.MOProtocolVersion, defines.MORPCVersion49)
-	setPlanTestGlobalVariable(t, ctx.GetProcess().GetService(), "optimizer_hints", "")
-
-	stmt, err := mysql.ParseOne(context.Background(), sql, 1)
-	require.NoError(t, err)
-	defer stmt.Free()
-	built, err := BuildPlan(ctx, stmt, false)
-	require.NoError(t, err)
-
-	shape := reachableGroupingSetShape(built.GetQuery())
+	shape := reachableGroupingSetShape(buildSharedGroupingSetPlan(t, sql))
 	// Dynamic grouping distinguishes its own sentinel from SQL NULL. The outer
 	// ROLLUP therefore cannot accept the inner sentinel, and sharing the inner
 	// ROLLUP cannot change the sentinel's legacy representation before the outer
@@ -140,18 +318,7 @@ func TestGroupingSetInputSharingRequiresLegacyDrainWitness(t *testing.T) {
 		group by rollup(l_returnflag)
 		limit 1`
 
-	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
-
-	setPlanTestGlobalVariable(t, ctx.GetProcess().GetService(), moruntime.MOProtocolVersion, defines.MORPCVersion49)
-	setPlanTestGlobalVariable(t, ctx.GetProcess().GetService(), "optimizer_hints", "")
-
-	stmt, err := mysql.ParseOne(context.Background(), sql, 1)
-	require.NoError(t, err)
-	defer stmt.Free()
-	built, err := BuildPlan(ctx, stmt, false)
-	require.NoError(t, err)
-
-	shape := reachableGroupingSetShape(built.GetQuery())
+	shape := reachableGroupingSetShape(buildSharedGroupingSetPlan(t, sql))
 	require.Zero(t, shape.expandProjects)
 	require.Zero(t, shape.sinkScans)
 }
@@ -162,18 +329,7 @@ func TestGroupingSetInputSharingAllowsFallibleKeyWhenAllBranchesDrain(t *testing
 		from lineitem
 		group by rollup(cast(l_returnflag as bigint))`
 
-	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
-
-	setPlanTestGlobalVariable(t, ctx.GetProcess().GetService(), moruntime.MOProtocolVersion, defines.MORPCVersion49)
-	setPlanTestGlobalVariable(t, ctx.GetProcess().GetService(), "optimizer_hints", "")
-
-	stmt, err := mysql.ParseOne(context.Background(), sql, 1)
-	require.NoError(t, err)
-	defer stmt.Free()
-	built, err := BuildPlan(ctx, stmt, false)
-	require.NoError(t, err)
-
-	shape := reachableGroupingSetShape(built.GetQuery())
+	shape := reachableGroupingSetShape(buildSharedGroupingSetPlan(t, sql))
 	require.Equal(t, 1, shape.tableScans)
 	require.Equal(t, 1, shape.expandProjects)
 	require.Equal(t, 2, shape.sinkScans)
@@ -340,6 +496,45 @@ type groupingSetShape struct {
 	materializedSinks  int
 	flags              []bool
 	hasEmptyRowMarker  bool
+}
+
+func TestGroupingSetExpandKeepsOutputFilterAboveInput(t *testing.T) {
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+	typ := planpb.Type{Id: int32(types.T_int64), NotNullable: true}
+	filter, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "isnull", []*planpb.Expr{
+		GetColExpr(typ, 20, 0),
+	})
+	require.NoError(t, err)
+	equal, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*planpb.Expr{
+		GetColExpr(typ, 20, 0), MakePlan2Int64ConstExprWithType(10),
+	})
+	require.NoError(t, err)
+	for _, expands := range []bool{false, true} {
+		for _, filter := range []*planpb.Expr{filter, equal} {
+			builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, true)
+			project := &planpb.Node{
+				NodeId: 1, NodeType: planpb.Node_PROJECT, Children: []int32{0},
+				BindingTags: []int32{20}, ProjectList: []*planpb.Expr{GetColExpr(typ, 10, 0)},
+			}
+			if expands {
+				project.ExtraOptions = groupingSetExpandOptionPrefix + "2"
+				project.GroupingFlag = []bool{true, false}
+			}
+			scan := &planpb.Node{NodeId: 0, NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{10}}
+			builder.qry.Nodes = []*planpb.Node{scan, project}
+			_, remaining := builder.pushdownFilters(1, []*planpb.Expr{DeepCopyExpr(filter)}, false)
+			if expands {
+				require.Len(t, remaining, 1)
+				require.Empty(t, scan.FilterList, "rolled-up NULLs do not exist in the original input")
+				scan.NodeType = planpb.Node_VALUE_SCAN
+				_, remaining = builder.pushdownFilters(1, []*planpb.Expr{DeepCopyExpr(filter)}, false)
+				require.Len(t, remaining, 1, "a dummy input must not discard the expansion barrier")
+			} else {
+				require.Empty(t, remaining)
+				require.Len(t, scan.FilterList, 1, "ordinary projection pushdown remains available")
+			}
+		}
+	}
 }
 
 func reachableGroupingSetShape(query *planpb.Query) groupingSetShape {

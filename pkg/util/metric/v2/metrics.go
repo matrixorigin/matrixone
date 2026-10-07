@@ -100,6 +100,7 @@ func initMemMetrics() {
 	registry.MustRegister(MallocCounter)
 	registry.MustRegister(MallocGauge)
 	registry.MustRegister(OffHeapInuseGauge)
+	registry.MustRegister(CAllocatorTrimCounter)
 }
 
 func initTaskMetrics() {

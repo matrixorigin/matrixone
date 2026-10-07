@@ -16,6 +16,7 @@ package function
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -23,6 +24,37 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
+
+func TestSubstringASCIIFastPath(t *testing.T) {
+	for _, input := range []string{"", "a\x00bc", strings.Repeat("abcdef", 8), "a你好b", "abc\xffz"} {
+		for _, bounds := range [][2]int64{{1, 2}, {-3, 2}, {0, 2}, {2, -1}, {100, 2}} {
+			for _, withLength := range []bool{false, true} {
+				// Preserve the former rune-based text semantics, including
+				// replacement of invalid UTF-8, independently of the fast path.
+				runes := []rune(input)
+				left, right := substringBounds(len(runes), bounds[0], bounds[1], withLength)
+				got := substringByDomain([]byte(input), bounds[0], bounds[1], withLength, false)
+				require.Equal(t, string(runes[left:right]), string(got))
+			}
+		}
+	}
+	input := []byte(strings.Repeat("abcdef", 8))
+	var output []byte
+	allocs := testing.AllocsPerRun(100, func() {
+		output = substringByDomain(input, 1, 10, true, false)
+	})
+	require.Equal(t, "abcdefabcd", string(output))
+	require.Zero(t, allocs, "ASCII substring must not materialize temporary runes or strings")
+}
+
+func BenchmarkSubstringASCII(b *testing.B) {
+	input := []byte(strings.Repeat("abcdef", 8))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		substringByDomain(input, 1, 10, true, false)
+	}
+}
 
 func TestSubstringExactBinaryRuntimeDomain(t *testing.T) {
 	proc := testutil.NewProcess(t)

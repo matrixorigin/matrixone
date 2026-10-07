@@ -282,6 +282,40 @@ func TestAccountedMergeOrderPhysicalPressureSpillsBelowPolicyHint(t *testing.T) 
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestAccountedMergeOrderDynamicShareSpillsBelowPolicyHint(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	op := newAccountedMergeOrder()
+	op.SpillThreshold = 1 << 30
+	state := installMergeOrderTestAllocation(t, op, proc, 64<<20)
+	first := newValuesBatch(proc, make([]int8, 4096))
+	second := newValuesBatch(proc, make([]int8, 4096))
+	op.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{first, second}))
+	require.NoError(t, op.Prepare(proc))
+	require.NotNil(t, op.ctr.growthParticipant)
+	require.True(t, op.ctr.growthParticipant.Release())
+
+	batchBytes := uint64(first.Size())
+	budget := process.MustNewExecutionResourceBudget(
+		batchBytes+batchBytes/2,
+		batchBytes+batchBytes/2,
+	)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	op.ctr.growthParticipant, err = generation.RegisterMemoryGrowthParticipant()
+	require.NoError(t, err)
+
+	require.Len(t, collectInt8Results(t, op, proc, 0), 8192)
+	require.Positive(t, op.OpAnalyzer.GetOpStats().SpillSize)
+	require.Nil(t, op.ctr.growthParticipant)
+	require.Zero(t, generation.Snapshot().MemoryGrowthParticipants)
+
+	op.Children[0].Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	finalizeMergeOrderTestAllocation(t, op, state)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 func TestAccountedMergeOrderSpillResourceAdmissionCleans(t *testing.T) {
 	tests := []struct {
 		name    string

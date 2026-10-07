@@ -484,6 +484,59 @@ func TestCTEMultiReferenceReusesExpensiveProducer(t *testing.T) {
 	}
 }
 
+func TestCTEReuseKeepsIndependentNestedHashBuildRequirements(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	logicPlan, err := runOneStmt(mock, t, `
+		with expensive_keys as (
+			select l_suppkey as k, sum(l_extendedprice) as total
+			from lineitem
+			group by l_suppkey
+		), avg_value as (
+			select avg(quantity * price) as v
+			from (
+				select l_quantity as quantity, l_extendedprice as price from lineitem
+				union all
+				select o_shippriority as quantity, o_totalprice as price from orders
+				union all
+				select ps_availqty as quantity, ps_supplycost as price from partsupp
+			) sales
+		)
+		select channel, sum(sales)
+		from (
+			select 'lineitem' as channel, sum(l_quantity * l_extendedprice) as sales
+			from lineitem
+			where l_suppkey in (select k from expensive_keys)
+			having sum(l_quantity * l_extendedprice) > (select v from avg_value)
+			union all
+			select 'orders' as channel, sum(o_shippriority * o_totalprice) as sales
+			from orders
+			where o_custkey in (select k from expensive_keys)
+			having sum(o_shippriority * o_totalprice) > (select v from avg_value)
+			union all
+			select 'partsupp' as channel, sum(ps_availqty * ps_supplycost) as sales
+			from partsupp
+			where ps_suppkey in (select k from expensive_keys)
+			having sum(ps_availqty * ps_supplycost) > (select v from avg_value)
+		) channels
+		group by rollup(channel)`)
+	require.NoError(t, err)
+
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+	tableScans := 0
+	for nodeID := range cteReachablePlanNodes(query) {
+		node := query.Nodes[nodeID]
+		if node.NodeType == planpb.Node_TABLE_SCAN && node.TableDef != nil {
+			switch node.TableDef.Name {
+			case "lineitem", "orders", "partsupp":
+				tableScans++
+			}
+		}
+	}
+	require.Equal(t, 7, tableScans,
+		"the nested hash-build CTE and the surrounding scalar CTE should each have one producer")
+}
+
 func TestCTEReuseHonorsPostOptimizerSQLSelectLimit(t *testing.T) {
 	const sql = `
 		with q15_revenue0 as (
@@ -655,6 +708,29 @@ func TestCTEMultiReferenceReusesHashSemiBuildConsumers(t *testing.T) {
 	require.Equal(t, 2, markedScans)
 	require.Equal(t, 2, markedSemis,
 		"each marked CTE reader must remain the physical hash-build input")
+}
+
+func TestCTEMultiReferenceReusesBelowBlockingAggregateLimit(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	logicPlan, err := runOneStmt(mock, t, `
+		with expensive_keys as (
+			select l_suppkey, sum(l_extendedprice) as total
+			from lineitem group by l_suppkey
+		)
+		select sum(x) from (
+			select o_totalprice as x from orders
+			where o_custkey in (select l_suppkey from expensive_keys)
+			union all
+			select c_acctbal as x from customer
+			where c_custkey in (select l_suppkey from expensive_keys)
+		) u limit 100`)
+	require.NoError(t, err)
+
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+	require.Equal(t, 2, countReachableNodeType(query, planpb.Node_SINK_SCAN),
+		"a transparent LIMIT above a blocking aggregate cannot truncate its input")
+	require.Equal(t, 1, countReachableNodeType(query, planpb.Node_SINK))
 }
 
 func TestCTEMultiReferencePrunesUnusedVariableWidthPayload(t *testing.T) {
@@ -1295,6 +1371,55 @@ func TestCTEDrainProofRejectsZeroAndStreamingLimits(t *testing.T) {
 	builder.qry.Nodes[1].NodeType = planpb.Node_DISTINCT
 	_, ok = builder.cteConsumerDrainRequirements(1, []cteOccurrence{{rootID: 0}})
 	require.False(t, ok, "streaming distinct is not a full-input witness under LIMIT")
+
+	builder.qry.Nodes = append(builder.qry.Nodes,
+		&planpb.Node{NodeId: 2, NodeType: planpb.Node_PROJECT, Children: []int32{1},
+			Limit: MakePlan2Uint64ConstExprWithType(1)})
+	_, ok = builder.cteConsumerDrainRequirements(2, []cteOccurrence{{rootID: 0}})
+	require.False(t, ok,
+		"a streaming descendant remains truncatable through a transparent limited parent")
+
+	builder.qry.Nodes[1].NodeType = planpb.Node_AGG
+	builder.qry.Nodes[1].Limit = nil
+	_, ok = builder.cteConsumerDrainRequirements(2, []cteOccurrence{{rootID: 0}})
+	require.True(t, ok,
+		"a blocking descendant drains its input before a transparent parent can apply LIMIT")
+	for _, limit := range []*planpb.Expr{
+		MakePlan2Uint64ConstExprWithType(0),
+		{Typ: planpb.Type{Id: int32(types.T_uint64)}, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}},
+	} {
+		builder.qry.Nodes[2].Limit = limit
+		_, ok = builder.cteConsumerDrainRequirements(2, []cteOccurrence{{rootID: 0}})
+		require.False(t, ok,
+			"zero or dynamic LIMIT may skip the blocking descendant without starting it")
+	}
+
+	// A blocking branch is not enough when a lazy multi-input ancestor can
+	// satisfy LIMIT from another branch without starting this occurrence.
+	builder.qry.Nodes = append(builder.qry.Nodes,
+		&planpb.Node{NodeId: 3, NodeType: planpb.Node_VALUE_SCAN},
+		&planpb.Node{NodeId: 4, NodeType: planpb.Node_UNION,
+			Children: []int32{3, 1}},
+		&planpb.Node{NodeId: 5, NodeType: planpb.Node_PROJECT,
+			Children: []int32{4}, Limit: MakePlan2Uint64ConstExprWithType(1)})
+	_, ok = builder.cteConsumerDrainRequirements(5, []cteOccurrence{{rootID: 0}})
+	require.False(t, ok,
+		"LIMIT above a lazy multi-input boundary may skip a blocking branch entirely")
+
+	logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, `
+		with c as (
+			select l_suppkey as k, sum(cast(l_comment as bigint)) as total
+			from lineitem group by l_suppkey
+		)
+		select x from (select sum(total) as x from c limit 0) a
+		union all
+		select x from (select sum(total) as x from c limit 0) b`)
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	for id := range cteReachablePlanNodes(query) {
+		require.NotEqual(t, planpb.Node_SINK, query.Nodes[id].NodeType,
+			"skipped consumers must not publish an eager CTE producer")
+	}
 }
 
 func TestCTEDrainProofRejectsSamplingConsumer(t *testing.T) {
