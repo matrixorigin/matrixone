@@ -24,7 +24,7 @@ import (
 )
 
 func TestFunctionalIndexOwnershipAfterDropColumn(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	rt := runtime.ServiceRuntime(ctx.GetProcess().GetService())
 	old, _ := rt.GetGlobalVariables(runtime.MOProtocolVersion)
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion105)
@@ -66,7 +66,7 @@ func TestFunctionalIndexOwnershipAfterDropColumn(t *testing.T) {
 }
 
 func TestFunctionalIndexLegacyVisibleColumn(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "create table legacy(id int primary key,user_value int,index ordinary(user_value))", 1)
 	require.NoError(t, err)
 	p, err := BuildPlan(ctx, stmt, false)
@@ -122,7 +122,7 @@ func TestFunctionalIndexLegacyVisibleColumn(t *testing.T) {
 }
 
 func TestFunctionalIndexSyntheticKeyLayout(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	rt := runtime.ServiceRuntime(ctx.GetProcess().GetService())
 	old, _ := rt.GetGlobalVariables(runtime.MOProtocolVersion)
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion105)
@@ -149,7 +149,7 @@ func TestFunctionalIndexSyntheticKeyLayout(t *testing.T) {
 }
 
 func TestFunctionalIndexDDL(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	rt := runtime.ServiceRuntime(ctx.GetProcess().GetService())
 	old, _ := rt.GetGlobalVariables(runtime.MOProtocolVersion)
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion105)
@@ -240,7 +240,7 @@ func TestFunctionalIndexDDL(t *testing.T) {
 }
 
 func TestFunctionalCompositeIndexDDL(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	rt := runtime.ServiceRuntime(ctx.GetProcess().GetService())
 	old, _ := rt.GetGlobalVariables(runtime.MOProtocolVersion)
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion105)
