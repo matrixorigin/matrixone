@@ -778,6 +778,27 @@ func TestPolicyDo_MaxDurationStopsBeforeBackoff(t *testing.T) {
 	})
 }
 
+func TestPolicyDo_MaxDurationPreservesCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	calls := 0
+	p := Policy{
+		MaxAttempts: 3,
+		MaxDuration: time.Nanosecond,
+		Backoff:     ExponentialBackoff{Base: time.Hour},
+		Classifier:  &mockClassifier{retryable: true},
+	}
+	err := p.Do(ctx, func() error {
+		calls++
+		cancel()
+		return errors.New("retry me")
+	})
+
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, 1, calls)
+}
+
 // --- Round 4 additions ---
 
 func TestBuildErrorMetadata_NilOld_Retryable(t *testing.T) {

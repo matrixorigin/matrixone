@@ -17,6 +17,7 @@ package publication
 import (
 	"context"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -144,18 +145,20 @@ func TestRetryPublication_ErrNonRetryable(t *testing.T) {
 }
 
 func TestRetryPublication_DurationExceeded(t *testing.T) {
-	attempt := 0
-	err := retryPublication(context.Background(), "test", func() error {
-		attempt++
-		return moerr.NewInternalErrorNoCtx("fail")
-	}, &ExecutorRetryOption{
-		RetryTimes:    100,
-		RetryInterval: 0,
-		RetryDuration: time.Nanosecond,
-	})
+	synctest.Test(t, func(t *testing.T) {
+		attempt := 0
+		err := retryPublication(context.Background(), "test", func() error {
+			attempt++
+			return moerr.NewInternalErrorNoCtx("fail")
+		}, &ExecutorRetryOption{
+			RetryTimes:    100,
+			RetryInterval: time.Hour,
+			RetryDuration: time.Second,
+		})
 
-	assert.ErrorIs(t, err, ErrNonRetryable)
-	assert.Equal(t, 1, attempt)
+		assert.ErrorIs(t, err, ErrNonRetryable)
+		assert.Equal(t, 1, attempt)
+	})
 }
 
 // --- fillDefaultOption tests ---
