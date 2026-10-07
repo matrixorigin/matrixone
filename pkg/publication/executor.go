@@ -1444,17 +1444,13 @@ func retryPublication(
 
 	policy := Policy{
 		MaxAttempts: maxAttempts,
+		MaxDuration: retryOpt.RetryDuration,
 		Backoff:     backoff,
 		Classifier:  retryAllErrorsClassifier{},
 	}
 
 	err = policy.Do(ctx, func() error {
 		attempt++
-
-		// Check total duration limit
-		if retryOpt.RetryDuration > 0 && attempt > 1 && time.Since(startTime) > retryOpt.RetryDuration {
-			return ErrNonRetryable
-		}
 
 		err = fn()
 		if err != nil {

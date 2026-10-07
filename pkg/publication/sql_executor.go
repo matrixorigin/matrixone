@@ -671,6 +671,7 @@ func (e *UpstreamExecutor) execWithRetry(
 
 	policy := e.retryPolicy
 	policy.MaxAttempts = e.calculateMaxAttempts()
+	policy.MaxDuration = e.retryDuration
 	if policy.MaxAttempts < 1 {
 		policy.MaxAttempts = 1
 	}
@@ -711,10 +712,6 @@ func (e *UpstreamExecutor) execWithRetry(
 				return moerr.NewInternalError(ctx, "task cancelled")
 			default:
 			}
-		}
-
-		if e.retryDuration > 0 && attempt > 1 && time.Since(start) >= e.retryDuration {
-			return ErrNonRetryable
 		}
 
 		begin := time.Now()

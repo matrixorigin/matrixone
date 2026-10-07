@@ -106,7 +106,7 @@ func TestRetryPublication_RetriesNonClassified(t *testing.T) {
 		return moerr.NewInternalErrorNoCtx("fail")
 	}, &ExecutorRetryOption{
 		RetryTimes:    2,
-		RetryInterval: 0,
+		RetryInterval: time.Nanosecond,
 		RetryDuration: time.Second,
 	})
 	assert.Error(t, err)
@@ -136,11 +136,26 @@ func TestRetryPublication_ErrNonRetryable(t *testing.T) {
 		return moerr.NewInternalErrorNoCtx("fail")
 	}, &ExecutorRetryOption{
 		RetryTimes:    10,
-		RetryInterval: 0,
+		RetryInterval: time.Nanosecond,
 		RetryDuration: time.Second,
 	})
 	assert.ErrorIs(t, err, ErrNonRetryable)
 	assert.Equal(t, 2, attempt)
+}
+
+func TestRetryPublication_DurationExceeded(t *testing.T) {
+	attempt := 0
+	err := retryPublication(context.Background(), "test", func() error {
+		attempt++
+		return moerr.NewInternalErrorNoCtx("fail")
+	}, &ExecutorRetryOption{
+		RetryTimes:    100,
+		RetryInterval: 0,
+		RetryDuration: time.Nanosecond,
+	})
+
+	assert.ErrorIs(t, err, ErrNonRetryable)
+	assert.Equal(t, 1, attempt)
 }
 
 // --- fillDefaultOption tests ---

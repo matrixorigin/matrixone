@@ -489,6 +489,10 @@ type Policy struct {
 	// Must be >= 1.
 	MaxAttempts int
 
+	// MaxDuration limits the total time spent retrying. A non-positive value
+	// disables the limit.
+	MaxDuration time.Duration
+
 	// Backoff decides how long to wait between attempts. Optional; zero value means no backoff.
 	Backoff BackoffStrategy
 
@@ -513,8 +517,16 @@ func (p Policy) Do(ctx context.Context, op Operation) error {
 	backoff := p.Backoff
 
 	var lastErr error
+	var startTime time.Time
+	if p.MaxDuration > 0 {
+		startTime = time.Now()
+	}
 
 	for attempt := 1; attempt <= p.MaxAttempts; attempt++ {
+		if attempt > 1 && p.MaxDuration > 0 && time.Since(startTime) >= p.MaxDuration {
+			return ErrNonRetryable
+		}
+
 		lastErr = op()
 		if lastErr == nil {
 			return nil
@@ -541,6 +553,15 @@ func (p Policy) Do(ctx context.Context, op Operation) error {
 		wait := backoff.Next(attempt)
 		if wait <= 0 {
 			continue
+		}
+		if p.MaxDuration > 0 {
+			remaining := p.MaxDuration - time.Since(startTime)
+			if remaining <= 0 {
+				return ErrNonRetryable
+			}
+			if wait > remaining {
+				wait = remaining
+			}
 		}
 
 		timer := time.NewTimer(wait)

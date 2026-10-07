@@ -76,7 +76,9 @@ func TestUpstreamExecutor_ExecWithRetry_RetryDurationExceeded(t *testing.T) {
 		retryDuration: time.Nanosecond,
 	}
 	e.initRetryPolicy(&mockClassifier{retryable: true})
-	e.retryPolicy.Backoff = ExponentialBackoff{}
+	// A nil backoff keeps this boundary test immediate. ExponentialBackoff{}
+	// applies its default 100 ms base delay.
+	e.retryPolicy.Backoff = nil
 
 	attempt := 0
 	_, _, err := e.execWithRetry(context.Background(), nil, 0, func(ctx context.Context) (*Result, error) {

@@ -2914,6 +2914,14 @@ func TestRangeLockModeUpgradeUpdatesBothEnds(t *testing.T) {
 
 			// Step 5: txn3 requests Shared range lock → should be blocked by Exclusive holder
 			txn3 := newTestTxnID(3)
+			txn3Waiting := make(chan struct{})
+			var txn3WaitOnce sync.Once
+			lt.options.beforeWait = func(c *lockContext) func() {
+				if bytes.Equal(c.txn.txnID, txn3) {
+					txn3WaitOnce.Do(func() { close(txn3Waiting) })
+				}
+				return func() {}
+			}
 			txn3Done := make(chan error, 1)
 			wg.Add(1)
 			go func() {
@@ -2923,11 +2931,15 @@ func TestRangeLockModeUpgradeUpdatesBothEnds(t *testing.T) {
 			}()
 
 			select {
+			case <-txn3Waiting:
+			case <-ctx.Done():
+				t.Fatalf("txn3 did not enter the wait path: %v", ctx.Err())
+			}
+			select {
 			case err := <-txn3Done:
-				t.Fatalf("txn3 (Shared) should be BLOCKED by txn2 (Exclusive range lock), "+
-					"but it was granted. This means setModePairedRangeLock did not update both ends: %v", err)
-			case <-time.After(500 * time.Millisecond):
-				// Expected: txn3 is blocked
+				t.Fatalf("txn3 (Shared) should be blocked by txn2 (Exclusive range lock), "+
+					"but it completed before txn2 was released: %v", err)
+			default:
 			}
 
 			// Cleanup
