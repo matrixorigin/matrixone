@@ -79,6 +79,34 @@ type blockingProgressWatermarkExecutor struct {
 	startOnce    sync.Once
 }
 
+// blockingWatermarkSQLExecutor pauses the first watermark update after the
+// updater has moved a batch into the committing tier. It keeps the
+// update-during-persistence boundary explicit without relying on a scheduler
+// tick or a timing window.
+type blockingWatermarkSQLExecutor struct {
+	*mockSQLExecutor
+	blockWatermarkWrite atomic.Bool
+	writeStarted        chan struct{}
+	releaseWrite        chan struct{}
+	startOnce           sync.Once
+}
+
+func (e *blockingWatermarkSQLExecutor) Exec(
+	ctx context.Context,
+	sql string,
+	opts ie.SessionOverrideOptions,
+) error {
+	if e.blockWatermarkWrite.Load() && IsInsertOnDuplicateUpdateClause(sql) {
+		e.startOnce.Do(func() { close(e.writeStarted) })
+		select {
+		case <-e.releaseWrite:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return e.mockSQLExecutor.Exec(ctx, sql, opts)
+}
+
 type watermarkProgressExecutor struct {
 	watermark  string
 	generation string
@@ -2664,7 +2692,11 @@ func TestCDCWatermarkUpdater_ParseSelectByPKs(t *testing.T) {
 }
 
 func TestCDCWatermarkUpdater_CDCWatermarkUpdaterRun(t *testing.T) {
-	ie := NewMockSQLExecutor()
+	ie := &blockingWatermarkSQLExecutor{
+		mockSQLExecutor: NewMockSQLExecutor(),
+		writeStarted:    make(chan struct{}),
+		releaseWrite:    make(chan struct{}),
+	}
 	err := ie.CreateTable(
 		"mo_catalog",
 		"mo_cdc_watermark",
@@ -2806,6 +2838,36 @@ func TestCDCWatermarkUpdater_CDCWatermarkUpdaterRun(t *testing.T) {
 
 	close(start)
 	tasksWg.Wait()
+
+	// Keep the producer-versus-persistence boundary from the original
+	// scheduler-driven test. The first flush is held in the executor, a newer
+	// watermark is buffered while the older batch is in flight, and a second
+	// flush proves that the newer value survives the first completion.
+	ie.blockWatermarkWrite.Store(true)
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(ie.releaseWrite) }) }
+	t.Cleanup(release)
+	flushDone := make(chan struct{})
+	go func() {
+		u.cronRun(ctx)
+		close(flushDone)
+	}()
+	select {
+	case <-ie.writeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("watermark persistence did not start")
+	}
+	newest := types.BuildTS(100000, 21)
+	require.NoError(t, u.UpdateWatermarkOnly(ctx, keys[0], &newest))
+	release()
+	select {
+	case <-flushDone:
+	case <-time.After(time.Second):
+		t.Fatal("watermark persistence did not finish")
+	}
+
+	// The first flush must publish its snapshot while retaining the newer
+	// buffered update for the next flush.
 	u.cronRun(ctx)
 	assert.Equal(t, 6, ie.RowCount("mo_catalog", "mo_cdc_watermark"))
 	for _, key := range keys {
@@ -2816,7 +2878,11 @@ func TestCDCWatermarkUpdater_CDCWatermarkUpdaterRun(t *testing.T) {
 		)
 		assert.NoError(t, err)
 		durableTS := types.StringToTS(tuple[4])
-		assert.GreaterOrEqual(t, durableTS.Logical(), uint32(20))
+		if key == keys[0] {
+			assert.Equal(t, uint32(21), durableTS.Logical())
+		} else {
+			assert.GreaterOrEqual(t, durableTS.Logical(), uint32(20))
+		}
 	}
 }
 
