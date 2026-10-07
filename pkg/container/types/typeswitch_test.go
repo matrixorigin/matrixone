@@ -64,7 +64,7 @@ var updateTypeSwitchBaseline = flag.Bool("update-typeswitch", false,
 func TestTypeSwitchFamilies(t *testing.T) {
 	families := typeSwitchFamilyMembers(t)
 	found, untaggedBare := scanTypeSwitches(t, filepath.Join("..", "..", ".."), families)
-	require.Empty(t, untaggedBare, "a typeswitch:partial tag needs a reason")
+	require.Empty(t, untaggedBare, "a typeswitch:partial tag needs a reason; see pkg/container/types/testdata/README.md")
 
 	baselinePath := filepath.Join("testdata", "typeswitch_baseline.txt")
 	if *updateTypeSwitchBaseline {
@@ -81,7 +81,8 @@ func TestTypeSwitchFamilies(t *testing.T) {
 	sort.Strings(problems)
 	require.Empty(t, problems,
 		"switches that name a family anchor but miss members: add the members, or tag the switch "+
-			"with `// typeswitch:partial <reason>` when the omission is intended")
+			"with `// typeswitch:partial <reason>` when the omission is intended; do not add them to "+
+			"the baseline. See pkg/container/types/testdata/README.md")
 }
 
 // typeSwitchFamilyMembers returns, per family, its members other than the anchor, from the
