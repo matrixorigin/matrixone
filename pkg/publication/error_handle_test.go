@@ -857,18 +857,16 @@ func TestPolicyDo_TimerContextCancel(t *testing.T) {
 		Classifier:  &mockClassifier{retryable: true},
 		Backoff:     &ExponentialBackoff{Base: 5 * time.Second, Factor: 1},
 	}
-	// Cancel after first call to hit the timer cancel path
+	// Cancel before the backoff timer is created to hit its cancellation path.
 	err := p.Do(ctx, func() error {
 		calls++
 		if calls == 1 {
-			go func() {
-				time.Sleep(10 * time.Millisecond)
-				cancel()
-			}()
+			cancel()
 		}
 		return errors.New("retry me")
 	})
 	assert.Error(t, err)
+	assert.ErrorIs(t, err, context.Canceled)
 }
 
 func TestBuildErrorMetadata_ErrorTypeChanged_RetryableToRetryable(t *testing.T) {

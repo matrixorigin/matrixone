@@ -254,16 +254,13 @@ func TestInternalExecSQLInDB_PausedInRetryLoop(t *testing.T) {
 	defer ctrl.Finish()
 	e, _ := newTestInternalExecutor(t, ctrl)
 	e.retryOpt.MaxRetries = 2
+	e.retryOpt.Classifier = &mockClassifier{retryable: true}
 	ar := NewActiveRoutine()
-	// Don't close pause yet - let the first check pass, then close in retry
-	go func() {
-		time.Sleep(10 * time.Millisecond)
-		close(ar.Pause)
-	}()
-	// First attempt will succeed the initial ar check, but fail in retry loop ar check
+	// The first attempt passes the pause check, then the retry sees it closed.
 	e.utHelper = &testUTHelper{
 		onSQLExecFailed: func(ctx context.Context, query string, errorCount int) error {
 			if errorCount == 0 {
+				ar.ClosePause()
 				return moerr.NewInternalErrorNoCtx("retry me")
 			}
 			return nil
@@ -271,6 +268,7 @@ func TestInternalExecSQLInDB_PausedInRetryLoop(t *testing.T) {
 	}
 	_, _, err := e.ExecSQLInDatabase(context.Background(), ar, InvalidAccountID, "SELECT 1", "mydb", false, false, 0)
 	assert.Error(t, err)
+	assert.ErrorContains(t, err, "paused")
 }
 
 // ============================================================
