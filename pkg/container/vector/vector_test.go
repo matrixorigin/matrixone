@@ -4339,23 +4339,16 @@ func TestRowToString(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // timestamp
-		v := NewVec(types.T_timestamp.ToType())
-		// Use FromClockZone with UTC to create timestamp that will display correctly
-		// RowToString uses time.Local, so we need to create timestamp that accounts for local timezone
-		// If we want to display "1970-01-01 00:00:00" in local time, we need to create timestamp
-		// that represents that time in local timezone
-		utc := time.UTC
-		ts := types.FromClockZone(utc, 1970, 1, 1, 0, 0, 0, 0)
-		err := AppendFixedList(v, []types.Timestamp{1, ts, 3, 4}, nil, mp)
-		require.NoError(t, err)
-		// RowToString uses time.Local, so the displayed time will be in local timezone
-		// If local timezone is UTC+8, UTC time 1970-01-01 00:00:00 will display as 1970-01-01 08:00:00
-		// So we need to adjust the expected value based on local timezone offset
-		_, offset := time.Now().In(time.Local).Zone()
-		expectedHour := offset / 3600
-		expectedStr := fmt.Sprintf("1970-01-01 %02d:00:00", expectedHour)
-		require.Equal(t, expectedStr, v.RowToString(1))
-		v.Free(mp)
+		func() {
+			v := NewVec(types.T_timestamp.ToType())
+			defer v.Free(mp)
+			ts := types.FromClockZone(time.UTC, 1970, 1, 1, 0, 0, 0, 0)
+			err := AppendFixedList(v, []types.Timestamp{1, ts, 3, 4}, nil, mp)
+			require.NoError(t, err)
+			// Use the instant's historical offset, including date and minute changes.
+			want := time.Unix(0, 0).In(time.Local).Format("2006-01-02 15:04:05")
+			require.Equal(t, want, v.RowToString(1))
+		}()
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
 	{ // decimal64
@@ -6322,6 +6315,48 @@ func TestUnionOneMetadataTransitions(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestUnionOneOrdinaryMetadataAfterNullPrefix(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_int64.ToType())
+	destination := NewVec(types.T_int64.ToType())
+	t.Cleanup(func() {
+		destination.Free(mp)
+		source.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	})
+	require.NoError(t, AppendFixed(source, int64(7), false, mp))
+	require.NoError(t, AppendFixed(destination, int64(0), true, mp))
+	destination.SetPrepareParamType(types.T_int16)
+	destination.SetPreparedJSONComparisonParam()
+	require.NoError(t, destination.UnionOne(source, 0, mp))
+	require.True(t, destination.IsNull(0))
+	require.Equal(t, int64(7), MustFixedColNoTypeCheck[int64](destination)[1])
+	require.Equal(t, types.T_any, destination.GetPrepareParamType())
+	require.False(t, destination.IsPreparedJSONComparisonParam())
+	require.True(t, destination.HasPrepareParamKind())
+	require.Equal(t, PrepareParamNone, destination.GetPrepareParamKind())
+}
+
+func TestUnionOneFinalizesCollapsedStringSourcePreflight(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_varchar.ToType())
+	destination := NewVec(types.T_varchar.ToType())
+	t.Cleanup(func() {
+		destination.Free(mp)
+		source.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	})
+	require.NoError(t, AppendBytes(source, []byte("value"), false, mp))
+	require.NoError(t, AppendBytes(destination, []byte("prefix"), false, mp))
+	require.NoError(t, destination.PreflightSetStringSourceAtLength(1, 2, types.StringSourceLiteral, mp))
+	require.True(t, destination.preflightStringSourceReady)
+	require.NoError(t, destination.SetStringSource(types.StringSourceExpression))
+	require.Nil(t, destination.stringSources)
+	require.NoError(t, destination.UnionOne(source, 0, mp))
+	require.False(t, destination.preflightStringSourceReady)
+	require.Equal(t, []string{"prefix", "value"}, []string{destination.GetStringAt(0), destination.GetStringAt(1)})
 }
 
 func BenchmarkUnionOneUniformMetadata(b *testing.B) {

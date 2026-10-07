@@ -79,7 +79,7 @@ func TestCastArrayNarrowingRejectsNonFinite(t *testing.T) {
 				NewFunctionTestInput(vecf32(2), [][]float32{}, []bool{}),
 			},
 			NewFunctionTestResult(vecf32(2), true, nil, nil), NewCast)
-		ok, info := tc.Run()
+		ok, info := tc.RunAndFree()
 		require.True(t, ok, info)
 	})
 
@@ -90,7 +90,7 @@ func TestCastArrayNarrowingRejectsNonFinite(t *testing.T) {
 				NewFunctionTestInput(vecf32(2), [][]float32{}, []bool{}),
 			},
 			NewFunctionTestResult(vecf32(2), false, [][]float32{{3e38, -3e38}}, []bool{false}), NewCast)
-		ok, info := tc.Run()
+		ok, info := tc.RunAndFree()
 		require.True(t, ok, info)
 	})
 }
@@ -107,7 +107,7 @@ func TestVecFromBase64RejectsNonFinite(t *testing.T) {
 		tc := NewFunctionTestCase(proc,
 			[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{b64}, []bool{false})},
 			NewFunctionTestResult(f32vec, true, nil, nil), VecFromBase64[float32])
-		ok, info := tc.Run()
+		ok, info := tc.RunAndFree()
 		require.True(t, ok, info)
 	}
 
@@ -115,7 +115,7 @@ func TestVecFromBase64RejectsNonFinite(t *testing.T) {
 	tc := NewFunctionTestCase(proc,
 		[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{"AAAAQA=="}, []bool{false})},
 		NewFunctionTestResult(f32vec, false, [][]float32{{2}}, []bool{false}), VecFromBase64[float32])
-	ok, info := tc.Run()
+	ok, info := tc.RunAndFree()
 	require.True(t, ok, info)
 
 	// float64: a +Inf payload is rejected, but a finite value that overflows float32 (1e300) must
@@ -125,13 +125,13 @@ func TestVecFromBase64RejectsNonFinite(t *testing.T) {
 	tcInf64 := NewFunctionTestCase(proc,
 		[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{infB64}, []bool{false})},
 		NewFunctionTestResult(f64vec, true, nil, nil), VecFromBase64[float64])
-	ok, info = tcInf64.Run()
+	ok, info = tcInf64.RunAndFree()
 	require.True(t, ok, info)
 
 	bigB64 := base64.StdEncoding.EncodeToString(types.ArrayToBytes([]float64{1e300, -1e300}))
 	tcBig64 := NewFunctionTestCase(proc,
 		[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{bigB64}, []bool{false})},
 		NewFunctionTestResult(f64vec, false, [][]float64{{1e300, -1e300}}, []bool{false}), VecFromBase64[float64])
-	ok, info = tcBig64.Run()
+	ok, info = tcBig64.RunAndFree()
 	require.True(t, ok, info)
 }

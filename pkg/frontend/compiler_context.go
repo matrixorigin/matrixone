@@ -188,6 +188,14 @@ func (tcc *TxnCompilerContext) InitExecuteStmtParam(execPlan *plan.Execute) (*pl
 		execPlan,
 		"",
 	)
+	if err == nil && !tcc.execCtx.ses.IsBackgroundSession() {
+		// EXPLAIN delegates EXECUTE binding here rather than through the ordinary
+		// Execute wrapper. Authorize the resolved AST before releasing ownership.
+		authStats, authErr := authenticateUserCanExecutePrepareOrExecute(
+			tcc.execCtx.reqCtx, owner, st, p, tcc.execCtx.effectiveTxnDefaultDatabase)
+		statistic.StatsInfoFromContext(tcc.execCtx.reqCtx).PermissionAuth.Add(&authStats)
+		err = authErr
+	}
 	if owned && st != nil {
 		st.Free()
 		st = nil
@@ -582,6 +590,11 @@ func (tcc *TxnCompilerContext) recoverLegacyTinyText(
 	sub *plan.SubscriptionMeta,
 	snapshot *plan2.Snapshot,
 ) error {
+	// Reject disabled domains before any legacy recovery or ALTER rewrite can
+	// replace their type metadata. Final-plan validation alone is too late.
+	if err := plan.RequireLegacyCollations(tableDef); err != nil {
+		return err
+	}
 	if tableDef.DbName == "" {
 		tableDef.DbName = dbName
 	}
@@ -598,6 +611,9 @@ func (tcc *TxnCompilerContext) recoverLegacyTinyText(
 			return nil, err
 		}
 		sourceDef := plan2.CloneTableDefForPlan(relation.GetTableDef(sourceCtx), true)
+		if err := plan.RequireLegacyCollations(sourceDef); err != nil {
+			return nil, err
+		}
 		if sourceDef.DbName == "" {
 			sourceDef.DbName = sourceDB
 		}

@@ -60,6 +60,58 @@ revoke select on view db_v1.v1 from role_v1;
 use db_v1;
 select * from v1;
 internal error: do not have privilege to execute the statement
+create view v_const as select cast(42 as int) as id;
+create view v_const_chain as select id from v_const;
+grant select on view db_v1.v_const_chain to role_v1;
+select id from db_v1.v_const_chain;
+➤ id[4,32,0]  𝄀
+42
+revoke select on view db_v1.v_const_chain from role_v1;
+select id from db_v1.v_const_chain;
+internal error: do not have privilege to execute the statement
+select count(*) from db_v1.v_const where false;
+internal error: do not have privilege to execute the statement
+select cast(42 as int) as id;
+➤ id[4,32,0]  𝄀
+42
+grant select on view db_v1.v_const to role_v1;
+select id from db_v1.v_const_chain;
+internal error: do not have privilege to execute the statement
+grant select on view db_v1.v_const_chain to role_v1;
+select id from db_v1.v_const_chain;
+➤ id[4,32,0]  𝄀
+42
+use db_v1;
+set view_security_type='INVOKER';
+create view hist_inv as select id from v_const;
+set view_security_type='DEFINER';
+create view hist_def as select id from v_const;
+grant select on view db_v1.hist_inv to role_v1;
+grant select on view db_v1.hist_def to role_v1;
+create snapshot grant_view_nested_snapshot for account sys;
+alter view hist_inv as select cast(7 as int) as id;
+set view_security_type='INVOKER';
+alter view hist_def as select id from v_const;
+create view wrap_inv as select id from hist_inv {snapshot='grant_view_nested_snapshot'};
+create view wrap_def as select id from hist_def {snapshot='grant_view_nested_snapshot'};
+grant select on view db_v1.wrap_inv to role_v1;
+grant select on view db_v1.wrap_def to role_v1;
+revoke select on view db_v1.v_const from role_v1;
+set view_security_type='DEFINER';
+select id from db_v1.hist_inv;
+➤ id[4,32,0]  𝄀
+7
+select id from db_v1.hist_inv {snapshot='grant_view_nested_snapshot'};
+internal error: do not have privilege to execute the statement
+select id from db_v1.wrap_inv;
+internal error: do not have privilege to execute the statement
+select id from db_v1.hist_def {snapshot='grant_view_nested_snapshot'};
+➤ id[4,32,0]  𝄀
+42
+select id from db_v1.wrap_def;
+➤ id[4,32,0]  𝄀
+42
+drop snapshot grant_view_nested_snapshot;
 drop user user_v1;
 drop user user_no_db;
 drop user user_invoker;

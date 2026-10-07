@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/RoaringBitmap/roaring/v2"
+	"github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 )
@@ -302,22 +303,125 @@ func TestPreparedSpecializedDomains(t *testing.T) {
 			require.Equal(t, want, query(t, "select id from floating_filters where cast(v+1e0 as double)=1e0 or v=2e0 order by id"))
 			require.Equal(t, want, query(t, "select id from floating_filters where v+1e0=1e0 or v=2e0 order by id"))
 		})
-		t.Run("ntile_null_runtime_error", func(t *testing.T) {
-			exec(t, "create table ntile_source(id int)")
-			exec(t, "insert into ntile_source values (1),(2)")
-			exec(t, "prepare ntile_buckets from 'select ntile(?) over (order by id) from ntile_source'")
-			defer conn.ExecContext(ctx, "deallocate prepare ntile_buckets")
-			exec(t, "set @buckets = 2")
-			require.Equal(t, [][]string{{"1"}, {"2"}}, query(t, "execute ntile_buckets using @buckets"))
-			exec(t, "set @buckets = null")
-			rows, err := conn.QueryContext(ctx, "execute ntile_buckets using @buckets")
-			if rows != nil {
-				defer rows.Close()
-				for rows.Next() {
-				}
-				err = rows.Err()
+		t.Run("ntile_prepared_bucket_domains", func(t *testing.T) {
+			cleanupSQL := func(t *testing.T, statement string) {
+				t.Helper()
+				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cleanupCancel()
+				_, cleanupErr := conn.ExecContext(cleanupCtx, statement)
+				require.NoError(t, cleanupErr, statement)
 			}
-			require.ErrorContains(t, err, "ntile bucket count cannot be NULL")
+			exec(t, "create table ntile_source(id int)")
+			defer cleanupSQL(t, "drop table ntile_source")
+			exec(t, "insert into ntile_source values (1),(2)")
+			readBuckets := func(rows *sql.Rows) ([][2]int64, error) {
+				var got [][2]int64
+				for rows.Next() {
+					var row [2]int64
+					if err := rows.Scan(&row[0], &row[1]); err != nil {
+						return nil, err
+					}
+					got = append(got, row)
+				}
+				return got, nil
+			}
+			const statement = "select id,ntile(?) over (order by id) from ntile_source order by id"
+			oneBucket := [][2]int64{{1, 1}, {2, 1}}
+			twoBuckets := [][2]int64{{1, 1}, {2, 2}}
+			for _, protocol := range []string{"binary_protocol", "sql_execute"} {
+				t.Run(protocol, func(t *testing.T) {
+					var run func(any, string) ([][2]int64, error)
+					if protocol == "binary_protocol" {
+						stmt, err := conn.PrepareContext(ctx, statement)
+						require.NoError(t, err)
+						defer stmt.Close()
+						run = func(input any, _ string) ([][2]int64, error) {
+							rows, err := stmt.QueryContext(ctx, input)
+							if rows != nil {
+								defer rows.Close()
+							}
+							if err != nil {
+								return nil, err
+							}
+							got, err := readBuckets(rows)
+							if err != nil {
+								return nil, err
+							}
+							return got, rows.Err()
+						}
+					} else {
+						exec(t, "prepare ntile_buckets from '"+statement+"'")
+						defer cleanupSQL(t, "deallocate prepare ntile_buckets")
+						defer cleanupSQL(t, "set @buckets = null")
+						run = func(_ any, assignment string) ([][2]int64, error) {
+							if _, err := conn.ExecContext(ctx, "set @buckets = "+assignment); err != nil {
+								return nil, err
+							}
+							rows, err := conn.QueryContext(ctx, "execute ntile_buckets using @buckets")
+							if rows != nil {
+								defer rows.Close()
+							}
+							if err != nil {
+								return nil, err
+							}
+							got, err := readBuckets(rows)
+							if err != nil {
+								return nil, err
+							}
+							return got, rows.Err()
+						}
+					}
+					// Fixed answers for the same two input rows, not results of
+					// a second server query. Each protocol reuses one handle.
+					for _, tc := range []struct {
+						name, assignment string
+						input            any
+						want             [][2]int64
+					}{
+						{"integer_one", "1", int64(1), oneBucket},
+						{"integer_two", "2", int64(2), twoBuckets},
+						{"more_buckets_than_rows", "5", int64(5), twoBuckets},
+						{"text_two", "'2'", "2", twoBuckets},
+						{"text_one", "'1'", "1", oneBucket},
+						{"text_five", "'5'", "5", twoBuckets},
+						{"integer_recovery", "2", int64(2), twoBuckets},
+					} {
+						t.Run(tc.name, func(t *testing.T) {
+							got, err := run(tc.input, tc.assignment)
+							require.NoError(t, err)
+							require.Equal(t, tc.want, got)
+						})
+					}
+					for _, tc := range []struct {
+						name, assignment, cause string
+						input                   any
+					}{
+						{"zero", "0", "ntile bucket count must be positive", int64(0)},
+						{"negative", "-1", "ntile bucket count must be positive", int64(-1)},
+						{"null", "null", "ntile bucket count cannot be NULL", nil},
+						{"fractional", "cast(2.5 as double)", "invalid argument function ntile", float64(2.5)},
+						{"fractional_text", "'2.5'", "invalid argument cast to int", "2.5"},
+						{"invalid_text", "'bad'", "invalid argument cast to int", "bad"},
+						{"numeric_prefix", "'2tail'", "invalid argument cast to int", "2tail"},
+						{"integer_overflow", "'9223372036854775808'", "out of range", "9223372036854775808"},
+					} {
+						t.Run(tc.name, func(t *testing.T) {
+							_, err := run(tc.input, tc.assignment)
+							var serverErr *mysql.MySQLError
+							require.ErrorAs(t, err, &serverErr)
+							require.ErrorContains(t, err, tc.cause)
+						})
+						t.Run(tc.name+"_recovery", func(t *testing.T) {
+							got, err := run("2", "'2'")
+							require.NoError(t, err)
+							require.Equal(t, twoBuckets, got)
+							got, err = run(int64(2), "2")
+							require.NoError(t, err)
+							require.Equal(t, twoBuckets, got)
+						})
+					}
+				})
+			}
 		})
 		t.Run("regexp_scalar_mixed_domain_reuse", func(t *testing.T) {
 			exec(t, "create table regexp_source(id int)")
@@ -401,8 +505,8 @@ func TestPreparedSpecializedDomains(t *testing.T) {
 			require.Equal(t, got[0], got[1])
 		})
 		t.Run("float_literal_membership", func(t *testing.T) {
-			exec(t, "create table float_source(a float(3))")
-			exec(t, "insert into float_source values(1),(0.00),(0.8)")
+			exec(t, "create table float_source(a float(3), bounded float(4,1))")
+			exec(t, "insert into float_source values(1,1),(0.00,1.3),(0.8,null)")
 			require.Equal(t, [][]string{{"0.8"}}, query(t,
 				"select a from float_source where a in (0.8,0.9)"))
 			exec(t, "create table float_range(id float, b int)")
@@ -412,6 +516,21 @@ func TestPreparedSpecializedDomains(t *testing.T) {
 			for _, rhs := range []string{"9.0", "cast(9.0 as decimal)", "abs(-9)"} {
 				plan := query(t, "explain select * from float_source where a = "+rhs)
 				require.NotContains(t, fmt.Sprint(plan), "cast(float_source.a AS DOUBLE)", rhs)
+			}
+			for _, tc := range []struct {
+				peer, count string
+				columnCast  bool
+			}{{"abs(-1e0)", "1", false}, {"abs(-1.25e0)", "0", true}} {
+				require.Equal(t, [][]string{{tc.count}}, query(t,
+					"select count(*) from float_source where bounded = "+tc.peer))
+				plan := query(t, "explain select * from float_source where bounded = "+tc.peer)
+				require.Equal(t, tc.columnCast, strings.Contains(fmt.Sprint(plan), "cast(float_source.bounded AS DOUBLE)"))
+			}
+			exec(t, "prepare float_expression from 'select count(*) from float_source where bounded = abs(cast(? as double))'")
+			defer conn.ExecContext(ctx, "deallocate prepare float_expression")
+			for _, tc := range []struct{ value, count string }{{"1e0", "1"}, {"1.25e0", "0"}} {
+				exec(t, "set @float_peer = "+tc.value)
+				require.Equal(t, [][]string{{tc.count}}, query(t, "execute float_expression using @float_peer"))
 			}
 		})
 		t.Run("ordinary_string_integer_comparison", func(t *testing.T) {

@@ -755,7 +755,7 @@ func TestSession_Migrate(t *testing.T) {
 			txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 			txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 			txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
-			txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+
 			txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 			txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 			txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
@@ -927,7 +927,9 @@ func TestSession_Migrate(t *testing.T) {
 		for _, name := range []string{
 			"character_set_client", "character_set_connection", "character_set_results",
 		} {
-			require.NoError(t, source.SetSessionSysVar(context.Background(), name, "latin1"))
+			require.Error(t, source.SetSessionSysVar(context.Background(), name, "latin1"))
+			// Model a snapshot created before the new-request admission policy.
+			require.NoError(t, source.restoreSessionSysVar(context.Background(), name, "latin1"))
 		}
 		require.NoError(t, source.GetTxnHandler().setNextTxnIsolation(
 			context.Background(), txn.TxnIsolation_RC, false))

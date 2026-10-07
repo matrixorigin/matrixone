@@ -80,7 +80,6 @@ func (r *siriusBatchRecorder) Publish(_ context.Context, rows uint32, vs []Siriu
 
 func TestSiriusBatchPublicationLayoutAndOwnership(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	t.Cleanup(proc.Free)
 	bat := batch.NewWithSize(3)
 	t.Cleanup(func() { bat.Clean(proc.Mp()) })
 	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
@@ -125,7 +124,6 @@ func TestSiriusBatchPublicationLayoutAndOwnership(t *testing.T) {
 
 func TestSiriusSlicesBoundLogicalExpansion(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	t.Cleanup(proc.Free)
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 9, proc.Mp())
 	bat.SetRowCount(9)
@@ -142,7 +140,6 @@ func TestSiriusSlicesBoundLogicalExpansion(t *testing.T) {
 
 func TestSiriusSplitAndConstantVarlenaPublication(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	t.Cleanup(proc.Free)
 	columns := []SiriusReadColumn{{Type: planpb.Type{Id: int32(types.T_varchar)}}}
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
@@ -190,7 +187,6 @@ func TestSiriusNativeElementSizesAndBatchRejections(t *testing.T) {
 	_, err := siriusElementSize(types.T_decimal256)
 	require.Error(t, err, "wide types stay declined until numeric support is delivered")
 	proc := testutil.NewProcess(t)
-	t.Cleanup(proc.Free)
 	bat := batch.NewWithSize(1)
 	t.Cleanup(func() { bat.Clean(proc.Mp()) })
 	bat.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 1, proc.Mp())
@@ -228,7 +224,7 @@ func TestSiriusPublicationBackPressureStopsTableScan(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
-	txnOp.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+
 	proc.Base.TxnOperator = txnOp
 	c := allocateNewCompile(proc)
 	t.Cleanup(c.Release)
@@ -303,13 +299,12 @@ func (r *siriusSpecRelation) BuildReaders(_ context.Context, _ any, _ *planpb.Ex
 
 func TestEmbeddedSiriusReaderReusesScanFilterProjectionAndFetch(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	t.Cleanup(proc.Free)
 	ctrl := gomock.NewController(t)
 	tx := mock_frontend.NewMockTxnOperator(ctrl)
 	tx.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 	tx.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 	tx.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
-	tx.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+
 	proc.Base.TxnOperator = tx
 	intType := planpb.Type{Id: int32(types.T_int64)}
 	filter, err := plan2.BindFuncExprImplByPlanExpr(t.Context(), ">", []*planpb.Expr{plan2.GetColExpr(intType, 0, 0), plan2.MakePlan2Int64ConstExprWithType(0)})
@@ -339,13 +334,12 @@ func TestEmbeddedSiriusReaderPreservesParallelScanAndCleanup(t *testing.T) {
 	for _, dop := range []int{1, 2} {
 		t.Run(fmt.Sprintf("DOP%d_without_fetch", dop), func(t *testing.T) {
 			proc := testutil.NewProcess(t)
-			t.Cleanup(proc.Free)
 			ctrl := gomock.NewController(t)
 			tx := mock_frontend.NewMockTxnOperator(ctrl)
 			tx.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 			tx.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 			tx.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
-			tx.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+
 			proc.Base.TxnOperator = tx
 			intType := planpb.Type{Id: int32(types.T_int64)}
 			definition := &planpb.TableDef{TblId: 7, Version: 3, Name: "t", Cols: []*planpb.ColDef{{Name: "n", Typ: intType}}}

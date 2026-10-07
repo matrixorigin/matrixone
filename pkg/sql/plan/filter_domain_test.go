@@ -25,7 +25,7 @@ import (
 func setupInDomainRewriteTest(t *testing.T) (*MockCompilerContext, *QueryBuilder, int32, *planpb.Expr) {
 	t.Helper()
 
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
 	tag := builder.GenNewBindTag()
 	colExpr := &planpb.Expr{
@@ -681,7 +681,7 @@ func TestRewriteInDomainNonScanNodeRecurses(t *testing.T) {
 func setupStringInDomainRewriteTest(t *testing.T) (*MockCompilerContext, *QueryBuilder, int32, *planpb.Expr) {
 	t.Helper()
 
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
 	tag := builder.GenNewBindTag()
 	colExpr := &planpb.Expr{
@@ -968,7 +968,7 @@ func TestNormalizeColumnDomainInListExpressionFixpoint(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
 			require.NoError(t, err)
 		})
 	}
@@ -1049,7 +1049,7 @@ func TestRewriteInDomainOuterInWithNullSkipsNotIn(t *testing.T) {
 func setupUint8InDomainRewriteTest(t *testing.T) (*MockCompilerContext, *QueryBuilder, int32, *planpb.Expr) {
 	t.Helper()
 
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
 	tag := builder.GenNewBindTag()
 	colExpr := &planpb.Expr{

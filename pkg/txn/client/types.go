@@ -195,7 +195,6 @@ type TxnOperator interface {
 	// method.
 	Debug(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error)
 
-	NextSequence() uint64
 	// EnterRunSqlWithTokenAndSQL registers one SQL execution. The returned token
 	// is opaque, including zero, and must be passed to ExitRunSqlWithToken. Use
 	// TryEnterRunSqlWithTokenAndSQL when rejection reasons are required. This
@@ -408,12 +407,10 @@ type Lock struct {
 }
 
 type TxnEvent struct {
-	Event     EventType
-	Txn       txn.TxnMeta
-	TableID   uint64
-	Err       error
-	Sequence  uint64
-	Cost      time.Duration
+	Event EventType
+	Txn   txn.TxnMeta
+	Err   error
+	// CostEvent identifies the completion phase of commit/rollback callbacks.
 	CostEvent bool
 }
 

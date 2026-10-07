@@ -1805,7 +1805,7 @@ func (c *relationStatsContext) Resolve(string, string, *plan.Snapshot) (*plan.Ob
 
 func assertRelationScanWidth(t *testing.T, observed *statsinfo.StatsInfo, want float64) {
 	t.Helper()
-	ctx := &relationStatsContext{MockCompilerContext: splan.NewMockCompilerContext(false), observed: observed}
+	ctx := &relationStatsContext{MockCompilerContext: splan.NewMockCompilerContext(false, newPlanTestProcess(t)), observed: observed}
 
 	stmt, err := mysql.ParseOne(t.Context(), "select v from t where v > 0", 1)
 	require.NoError(t, err)

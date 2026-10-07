@@ -21,14 +21,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
 // Test_RoundUint64 tests ROUND function for uint64
 // This complex function handles different precision levels and calls multiple helper functions
 func Test_RoundUint64(t *testing.T) {
-	proc := testutil.NewProcess(t)
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 
 	// Round to 0 decimal places (no change for integers)
 	{
@@ -44,7 +44,7 @@ func Test_RoundUint64(t *testing.T) {
 				[]uint64{123, 456, 789, 1000}, []bool{false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, RoundUint64)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -63,7 +63,7 @@ func Test_RoundUint64(t *testing.T) {
 				[]uint64{120, 460, 790}, []bool{false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, RoundUint64)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -82,14 +82,14 @@ func Test_RoundUint64(t *testing.T) {
 				[]uint64{1000, 2000}, []bool{false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, RoundUint64)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
 
 // Test_RoundInt64 tests ROUND function for int64
 func Test_RoundInt64(t *testing.T) {
-	proc := testutil.NewProcess(t)
+	proc := newMemoryFunctionTestProcess(t)
 	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 
 	{
@@ -106,13 +106,7 @@ func Test_RoundInt64(t *testing.T) {
 				[]int64{120, -460, 790, 0, 0, -10, -10, -10, -10, -10, -20, -20, 0}, nil),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, RoundInt64)
-		t.Cleanup(func() {
-			for _, parameter := range tcc.parameters {
-				parameter.Free(proc.Mp())
-			}
-			tcc.result.Free()
-		})
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -131,13 +125,7 @@ func Test_RoundInt64(t *testing.T) {
 				[]int64{-1000, 2000, 1100}, []bool{false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, RoundInt64)
-		t.Cleanup(func() {
-			for _, parameter := range tcc.parameters {
-				parameter.Free(proc.Mp())
-			}
-			tcc.result.Free()
-		})
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -155,13 +143,7 @@ func Test_RoundInt64(t *testing.T) {
 				[]int64{100, -200, 0}, []bool{false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, RoundInt64)
-		t.Cleanup(func() {
-			for _, parameter := range tcc.parameters {
-				parameter.Free(proc.Mp())
-			}
-			tcc.result.Free()
-		})
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -203,18 +185,13 @@ func TestRoundInt64Boundaries(t *testing.T) {
 }
 
 func TestRoundInt64DynamicPrecisionAndNull(t *testing.T) {
-	proc := testutil.NewProcess(t)
+	proc := newMemoryFunctionTestProcess(t)
 	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 	values := NewFunctionTestConstInput(types.T_int64.ToType(), []int64{math.MinInt64}, nil)
 	digits := NewFunctionTestInput(types.T_int64.ToType(), []int64{0, -18, math.MinInt64, math.MaxInt64, -1}, []bool{false, false, false, false, true})
 	expected := NewFunctionTestResult(types.T_int64.ToType(), false, []int64{math.MinInt64, -9000000000000000000, 0, math.MinInt64, 0}, []bool{false, false, false, false, true})
 	tc := NewFunctionTestCase(proc, []FunctionTestInput{values, digits}, expected, RoundInt64)
-	t.Cleanup(func() {
-		for _, parameter := range tc.parameters {
-			parameter.Free(proc.Mp())
-		}
-		tc.result.Free()
-	})
+	defer tc.Free()
 	tc.fnLength = tc.parameters[1].Length()
 	tc.parameters[0].SetLength(tc.fnLength)
 	ok, info := tc.Run()
@@ -224,7 +201,8 @@ func TestRoundInt64DynamicPrecisionAndNull(t *testing.T) {
 // Test_RoundFloat64 tests ROUND function for float64
 // This is particularly complex as it handles both positive and negative precision
 func Test_RoundFloat64(t *testing.T) {
-	proc := testutil.NewProcess(t)
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 
 	// Round to 0 decimal places
 	{
@@ -240,7 +218,7 @@ func Test_RoundFloat64(t *testing.T) {
 				[]float64{1.0, 2.0, 2.0, -1.0, -2.0, -2.0}, []bool{false, false, false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, RoundFloat64)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -258,7 +236,7 @@ func Test_RoundFloat64(t *testing.T) {
 				[]float64{1.23, 1.24, 1.24, -1.23, -1.24}, []bool{false, false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, RoundFloat64)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -277,14 +255,15 @@ func Test_RoundFloat64(t *testing.T) {
 				[]float64{10.0, 20.0, 20.0, 20.0, 30.0}, []bool{false, false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, RoundFloat64)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
 
 // Test_CeilFloat64 tests CEIL function for float64
 func Test_CeilFloat64(t *testing.T) {
-	proc := testutil.NewProcess(t)
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 
 	// Ceil with 0 decimal places
 	{
@@ -300,7 +279,7 @@ func Test_CeilFloat64(t *testing.T) {
 				[]float64{2.0, 2.0, -1.0, -1.0, 0.0, 6.0}, []bool{false, false, false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, CeilFloat64)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -318,14 +297,15 @@ func Test_CeilFloat64(t *testing.T) {
 				[]float64{1.2, 1.2, -1.1, -1.1}, []bool{false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, CeilFloat64)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
 
 // Test_FloorFloat64 tests FLOOR function for float64
 func Test_FloorFloat64(t *testing.T) {
-	proc := testutil.NewProcess(t)
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 
 	// Floor with 0 decimal places
 	{
@@ -341,7 +321,7 @@ func Test_FloorFloat64(t *testing.T) {
 				[]float64{1.0, 1.0, -2.0, -2.0, 0.0, 5.0}, []bool{false, false, false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, FloorFloat64)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -359,7 +339,7 @@ func Test_FloorFloat64(t *testing.T) {
 				[]float64{1.1, 1.1, -1.2, -1.2}, []bool{false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, FloorFloat64)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -377,14 +357,15 @@ func Test_FloorFloat64(t *testing.T) {
 				[]float64{10.0, 10.0, 10.0, -20.0, -20.0}, []bool{false, false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, FloorFloat64)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
 
 // Test_CeilInt64 tests CEIL function for int64
 func Test_CeilInt64(t *testing.T) {
-	proc := testutil.NewProcess(t)
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 
 	{
 		tc := tcTemp{
@@ -400,14 +381,15 @@ func Test_CeilInt64(t *testing.T) {
 				[]int64{20, 20, 20, -10, -10, 20, -10}, []bool{false, false, false, false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, CeilInt64)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
 
 // Test_FloorInt64 tests FLOOR function for int64
 func Test_FloorInt64(t *testing.T) {
-	proc := testutil.NewProcess(t)
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 
 	{
 		tc := tcTemp{
@@ -423,7 +405,7 @@ func Test_FloorInt64(t *testing.T) {
 				[]int64{10, 10, 10, -20, -20, 10, -20}, []bool{false, false, false, false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, FloorInt64)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -441,14 +423,15 @@ func Test_FloorInt64(t *testing.T) {
 				[]int64{123, -456, 0}, []bool{false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, FloorInt64)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
 
 // Test_FloorUint64 tests FLOOR function for uint64
 func Test_FloorUint64(t *testing.T) {
-	proc := testutil.NewProcess(t)
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 
 	{
 		tc := tcTemp{
@@ -464,7 +447,7 @@ func Test_FloorUint64(t *testing.T) {
 				[]uint64{10, 10, 10, 10, 90}, []bool{false, false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, FloorUInt64)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -483,14 +466,15 @@ func Test_FloorUint64(t *testing.T) {
 				[]uint64{100, 100, 100, 200}, []bool{false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, FloorUInt64)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
 
 // Test_CeilUint64 tests CEIL function for uint64
 func Test_CeilUint64(t *testing.T) {
-	proc := testutil.NewProcess(t)
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 
 	{
 		tc := tcTemp{
@@ -506,7 +490,7 @@ func Test_CeilUint64(t *testing.T) {
 				[]uint64{20, 20, 20, 20, 20}, []bool{false, false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, CeilUint64)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }

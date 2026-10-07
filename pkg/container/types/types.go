@@ -16,11 +16,13 @@ package types
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/binary"
 	"fmt"
 
 	"golang.org/x/exp/constraints"
 
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
@@ -150,12 +152,13 @@ const (
 type Type struct {
 	Oid T
 
-	// Charset originally existed only to keep T four-byte aligned and was always
-	// zero-filled. It now carries text collation identity; the two following
-	// bytes remain explicit padding so the serialized layout stays unchanged.
-	Charset uint8
-	notNull uint8
-	dummy2  uint8
+	// Keep this four-byte header and Size's offset unchanged: object, vector and
+	// catalog codecs also persist Type's native 16-byte layout. Charset is the
+	// compact collation identity, not a MySQL protocol ID. Revision zero keeps
+	// the historical semantics of identities 0..3.
+	Charset          uint8
+	notNull          uint8
+	CollationVersion uint8
 
 	Size int32
 	// Width means max Display width for float and double, char and varchar
@@ -166,6 +169,9 @@ type Type struct {
 }
 
 const (
+	CollationVersionLegacy = collation.RevisionLegacy
+	CollationVersionV1     = collation.RevisionV1
+
 	// CharsetLegacy is the zero value written before text collation metadata
 	// became meaningful. Text values with this identity keep the historical
 	// bytewise ordering so an upgrade cannot change results for existing data.
@@ -216,12 +222,15 @@ func (t *Type) ProtoSize() int {
 // MarshalToSizedBuffer is used by gogoproto.
 func (t *Type) MarshalToSizedBuffer(data []byte) (int, error) {
 	if len(data) < t.ProtoSize() {
-		panic("invalid byte slice")
+		return 0, moerr.NewInvalidInputNoCtx("short type encoding buffer")
+	}
+	if err := t.ValidateCollation(); err != nil {
+		return 0, err
 	}
 	binary.BigEndian.PutUint16(data[0:], uint16(t.Oid))
-	binary.BigEndian.PutUint16(data[2:], uint16(t.Charset))
+	binary.BigEndian.PutUint16(data[2:], uint16(t.CollationVersion)<<8|uint16(t.Charset))
 	binary.BigEndian.PutUint16(data[4:], uint16(t.notNull))
-	binary.BigEndian.PutUint16(data[6:], uint16(t.dummy2))
+	binary.BigEndian.PutUint16(data[6:], 0)
 	binary.BigEndian.PutUint32(data[8:], Int32ToUint32(t.Size))
 	binary.BigEndian.PutUint32(data[12:], Int32ToUint32(t.Width))
 	binary.BigEndian.PutUint32(data[16:], Int32ToUint32(t.Scale))
@@ -230,8 +239,7 @@ func (t *Type) MarshalToSizedBuffer(data []byte) (int, error) {
 
 // MarshalTo is used by gogoproto.
 func (t *Type) MarshalTo(data []byte) (int, error) {
-	size := t.ProtoSize()
-	return t.MarshalToSizedBuffer(data[:size])
+	return t.MarshalToSizedBuffer(data)
 }
 
 // Marshal is used by gogoproto.
@@ -247,16 +255,38 @@ func (t *Type) Marshal() ([]byte, error) {
 // Unmarshal is used by gogoproto.
 func (t *Type) Unmarshal(data []byte) error {
 	if len(data) < t.ProtoSize() {
-		panic("invalid byte slice")
+		return moerr.NewInvalidInputNoCtx("short type encoding")
 	}
-	t.Oid = T(binary.BigEndian.Uint16(data[0:]))
-	t.Charset = uint8(binary.BigEndian.Uint16(data[2:]))
-	t.notNull = uint8(binary.BigEndian.Uint16(data[4:]))
-	t.dummy2 = uint8(binary.BigEndian.Uint16(data[6:]))
-	t.Size = Uint32ToInt32(binary.BigEndian.Uint32(data[8:]))
-	t.Width = Uint32ToInt32(binary.BigEndian.Uint32(data[12:]))
-	t.Scale = Uint32ToInt32(binary.BigEndian.Uint32(data[16:]))
+	oid := binary.BigEndian.Uint16(data[0:])
+	if oid > 255 || binary.BigEndian.Uint16(data[4:]) > 1 || binary.BigEndian.Uint16(data[6:]) != 0 {
+		return moerr.NewInvalidInputNoCtx("invalid type encoding header")
+	}
+	decoded := Type{
+		Oid: T(oid), Charset: data[3], CollationVersion: data[2], notNull: data[5],
+		Size:  Uint32ToInt32(binary.BigEndian.Uint32(data[8:])),
+		Width: Uint32ToInt32(binary.BigEndian.Uint32(data[12:])),
+		Scale: Uint32ToInt32(binary.BigEndian.Uint32(data[16:])),
+	}
+	if err := decoded.ValidateCollation(); err != nil {
+		return err
+	}
+	*t = decoded
 	return nil
+}
+
+// ValidateCollation validates a type without admitting new SQL semantics.
+// Numeric CAST's private Charset=255 marker is not a string identity.
+func (t Type) ValidateCollation() error {
+	if t.Oid.IsMySQLString() {
+		return collation.ValidateMetadata(uint32(t.Charset), uint32(t.CollationVersion))
+	}
+	if t.CollationVersion != 0 {
+		return moerr.NewInvalidInputNoCtx("collation revision on a non-string type")
+	}
+	if t.Charset == 255 {
+		return nil
+	} // Existing numeric CAST marker.
+	return collation.ValidateMetadata(uint32(t.Charset), 0)
 }
 
 func (t *Type) MarshalBinary() ([]byte, error) {
@@ -419,7 +449,7 @@ type Times interface {
 }
 
 type OrderedT interface {
-	constraints.Ordered
+	cmp.Ordered
 }
 
 type Decimal interface {
@@ -709,6 +739,9 @@ func (t Type) GetArrayElementSize() int {
 }
 
 func (t Type) Eq(b Type) bool {
+	if t.CollationVersion != b.CollationVersion {
+		return false
+	}
 	switch t.Oid {
 	// XXX need to find out why these types have different size/width
 	case T_bool, T_uint8, T_uint16, T_uint32, T_uint64, T_uint128, T_int8, T_int16, T_int32, T_int64, T_int128:

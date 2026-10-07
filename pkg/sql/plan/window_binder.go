@@ -16,7 +16,6 @@ package plan
 
 import (
 	"context"
-	"fmt"
 	"math"
 	"reflect"
 	"strings"
@@ -776,8 +775,7 @@ func windowValidationPrivilegeCarrier(node *plan.Node) *plan.Node {
 		ObjRef:       DeepCopyObjectRef(node.ObjRef),
 		ParentObjRef: DeepCopyObjectRef(node.ParentObjRef),
 		ScanSnapshot: DeepCopySnapshot(node.ScanSnapshot),
-		OriginViews:  append([]string(nil), node.OriginViews...),
-		DirectView:   node.DirectView,
+		ViewPath:     DeepCopyViewPath(node.ViewPath),
 	}
 	if node.TableDef != nil {
 		// Authorization only needs the table type to identify cluster tables.
@@ -812,8 +810,11 @@ func windowValidationPrivilegeCarrier(node *plan.Node) *plan.Node {
 // windowValidationPrivilegeCarrierKey preserves distinct view and snapshot
 // authorization contexts while coalescing repeated references to one relation.
 func windowValidationPrivilegeCarrierKey(node *plan.Node) string {
-	return fmt.Sprintf("%d/%v/%v/%v/%s/%s", node.NodeType, node.ObjRef,
-		node.ParentObjRef, node.ScanSnapshot, strings.Join(node.OriginViews, "\x00"), node.DirectView)
+	data, err := node.Marshal()
+	if err != nil {
+		panic(err) // Compact carriers contain only generated protobuf value fields.
+	}
+	return string(data)
 }
 
 // mergeWindowValidationDependencies retains the catalog closure discovered
@@ -845,6 +846,7 @@ func mergeWindowValidationDependencies(builder, validationBuilder *QueryBuilder)
 			dependencies, prepareSchemaRefWithSnapshot(objRef, tableDef, dependency.snapshot))
 	}
 	builder.qry.CatalogDependencies = appendPrepareSchemas(builder.qry.CatalogDependencies, dependencies...)
+	builder.qry.ViewReferences = append(builder.qry.ViewReferences, validationBuilder.qry.ViewReferences...)
 	return nil
 }
 

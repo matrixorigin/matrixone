@@ -85,9 +85,10 @@ are not guaranteed this optimization.
 SHOW CREATE emits expression syntax. SHOW INDEX and STATISTICS expose a NULL
 column name and the original expression. Checkpoint export reconstructs
 functional keys from generated metadata and fails closed when it is missing.
-Cluster protocol 105 gates creation. A dedicated 4.0.11 tenant upgrade (minimum
-4.0.10, protocol 101) refreshes existing STATISTICS views; old tenant workers
-cannot claim this semantic-version task.
+Cluster protocol 105 gates creation. A dedicated 4.0.13 tenant upgrade (minimum
+4.0.12, protocol 106) refreshes existing STATISTICS views after the current
+4.0.11 CDC and 4.0.12 character-set migrations; old tenant workers cannot
+claim this semantic-version task.
 
 ## Validation
 

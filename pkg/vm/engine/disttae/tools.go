@@ -32,14 +32,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 )
 
 func genWriteReqs(
 	ctx context.Context,
 	txnCommit *Transaction,
 ) ([]txn.TxnRequest, error) {
-	writes, tablesInVain, op := txnCommit.writes, txnCommit.tablesInVain, txnCommit.op
+	writes, tablesInVain := txnCommit.writes, txnCommit.tablesInVain
 	var pendingDatabaseCreates map[databaseKey]uint64
 	if txnCommit.haveDDL.Load() {
 		pendingDatabaseCreates = txnCommit.pendingCreatedDatabaseWrites()
@@ -107,7 +106,7 @@ func genWriteReqs(
 	if len(entries) == 0 {
 		return nil, nil
 	}
-	trace.GetService(txnCommit.proc.GetService()).TxnCommit(op, entries)
+
 	reqs := make([]txn.TxnRequest, 0, len(entries))
 	payload, err := types.Encode(&api.PrecommitWriteCmd{
 		EntryList:           entries,

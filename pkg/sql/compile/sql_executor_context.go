@@ -708,11 +708,13 @@ func (c *compilerContext) ResolveVariable(varName string, isSystemVar bool, isGl
 	//
 	// Replay may carry the original frontend context; other internal SQL can
 	// carry a partial session resolver on its process (e.g. ALTER TABLE).
-	// Prefer the former, then request only the persisted division variable.
+	// Prefer the former, then forward only explicit precision and DOP settings.
 	if delegate := c.resolveDelegate(); delegate != nil {
 		return delegate.ResolveVariable(varName, isSystemVar, isGlobalVar)
 	}
-	if isSystemVar && !isGlobalVar && strings.EqualFold(varName, "div_precision_increment") && c.proc != nil {
+	if isSystemVar && !isGlobalVar && c.proc != nil &&
+		(strings.EqualFold(varName, "div_precision_increment") ||
+			strings.EqualFold(varName, "max_dop")) {
 		if resolve := c.proc.GetResolveVariableFunc(); resolve != nil {
 			return resolve(varName, isSystemVar, isGlobalVar)
 		}

@@ -1306,9 +1306,7 @@ func getTableStuff(
 			continue
 		}
 
-		t := types.NewWithCharset(
-			types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale, uint8(col.Typ.Charset),
-		)
+		t := types.MustTypeFromPlan(col.Typ)
 
 		tblStuff.def.colNames = append(tblStuff.def.colNames, col.Name)
 		tblStuff.def.colTypes = append(tblStuff.def.colTypes, t)
@@ -1639,26 +1637,6 @@ func diffOnBase(
 	return
 }
 
-func isSchemaEquivalent(leftDef, rightDef *plan.TableDef) bool {
-	if len(leftDef.Cols) != len(rightDef.Cols) {
-		return false
-	}
-	for i := range leftDef.Cols {
-		if leftDef.Cols[i].ColId != rightDef.Cols[i].ColId ||
-			!isDataBranchLogicalTypeEquivalent(leftDef.Cols[i].Typ, rightDef.Cols[i].Typ) ||
-			leftDef.Cols[i].ClusterBy != rightDef.Cols[i].ClusterBy ||
-			leftDef.Cols[i].Primary != rightDef.Cols[i].Primary ||
-			leftDef.Cols[i].Seqnum != rightDef.Cols[i].Seqnum ||
-			leftDef.Cols[i].NotNull != rightDef.Cols[i].NotNull ||
-			!dataBranchGeneratedColumnsEqual(
-				leftDef.Cols[i].GeneratedCol, rightDef.Cols[i].GeneratedCol,
-			) {
-			return false
-		}
-	}
-	return true
-}
-
 func dataBranchPrimaryKeyColumns(tblDef *plan.TableDef) (kind int, names []string) {
 	if tblDef == nil || tblDef.Pkey == nil {
 		return -1, nil
@@ -1852,7 +1830,7 @@ func isDataBranchLogicalTypeEquivalent(left, right plan.Type) bool {
 		left.Width == right.Width &&
 		left.Scale == right.Scale &&
 		left.Enumvalues == right.Enumvalues &&
-		left.Charset == right.Charset &&
+		left.SameCollation(right) &&
 		left.NotNullable == right.NotNullable &&
 		left.AutoIncr == right.AutoIncr
 }

@@ -182,56 +182,37 @@ func TestEvaluateFilterByZoneMapDatetimeTimestampComparison(t *testing.T) {
 	})
 }
 
-func TestEvaluateFilterByZoneMapNullableInListIsConservative(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	ctx := proc.Ctx
-
-	expr := makeVarcharInExpr(t, ctx, "keep", true)
-	meta := makeVarcharBlockMeta("key", "keep")
-	zms, vecs := makeZoneMapEvalScratch(expr)
-
-	selected := colexec.EvaluateFilterByZoneMap(ctx, proc, expr, meta, map[int]int{0: 0}, zms, vecs)
-	require.True(t, selected, plan2.FormatExpr(expr, plan2.FormatOption{}))
-}
-
-func TestEvaluateFilterByZoneMapNullableInVecIsConservative(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	ctx := proc.Ctx
-
-	expr := makeVarcharInVecExpr(t, ctx, proc, "keep", true)
-	meta := makeVarcharBlockMeta("key", "keep")
-	zms, vecs := makeZoneMapEvalScratch(expr)
-
-	selected := colexec.EvaluateFilterByZoneMap(ctx, proc, expr, meta, map[int]int{0: 0}, zms, vecs)
-	require.True(t, selected, plan2.FormatExpr(expr, plan2.FormatOption{}))
-}
-
-func TestFoldedNullableInExprKeepsMatchAndNullsMiss(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	ctx := proc.Ctx
-
-	expr := makeVarcharInExpr(t, ctx, "keep", true)
-	folded, err := plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(expr), proc, true, true)
-	require.NoError(t, err)
-
-	result := evalVarcharPredicate(t, proc, folded, "keep", "key", "")
-	requireBoolValue(t, result, 0, true, false)
-	requireBoolValue(t, result, 1, false, true)
-	requireBoolValue(t, result, 2, false, true)
-}
-
-func TestFoldedNullableNotInExprNullsMiss(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	ctx := proc.Ctx
-
-	expr := makeVarcharNotInExpr(t, ctx, "keep", true)
-	folded, err := plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(expr), proc, true, true)
-	require.NoError(t, err)
-
-	result := evalVarcharPredicate(t, proc, folded, "keep", "key", "")
-	requireBoolValue(t, result, 0, false, false)
-	requireBoolValue(t, result, 1, false, true)
-	requireBoolValue(t, result, 2, false, true)
+func TestNullableMembershipPruningAndResidual(t *testing.T) {
+	for _, tc := range []struct {
+		name, op, value             string
+		wireVector, selected, match bool
+	}{
+		{"list match", "in", "keep", false, true, true},
+		{"vector match", "in", "keep", true, true, true},
+		{"list miss", "in", "zzz", false, false, true},
+		{"vector miss", "in", "zzz", true, false, true},
+		{"not in match", "not_in", "keep", false, false, false},
+		{"not in miss", "not_in", "zzz", false, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			expr := makeVarcharMembershipExpr(t, proc.Ctx, tc.op, tc.value, true)
+			if tc.wireVector {
+				expr = makeVarcharInVecExpr(t, proc.Ctx, proc, tc.value, true)
+			}
+			zms, vecs := makeZoneMapEvalScratch(expr)
+			baseline := proc.Mp().CurrNB()
+			selected := colexec.EvaluateFilterByZoneMap(proc.Ctx, proc, expr, makeVarcharBlockMeta("key", "keep"), map[int]int{0: 0}, zms, vecs)
+			require.Equal(t, tc.selected, selected, plan2.FormatExpr(expr, plan2.FormatOption{}))
+			require.Equal(t, baseline, proc.Mp().CurrNB(), "pruning must release its temporary vectors")
+			folded, err := plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(expr), proc, true, true)
+			require.NoError(t, err)
+			result := evalVarcharPredicate(t, proc, folded, tc.value, "key", "")
+			requireBoolValue(t, result, 0, tc.match, false)
+			requireBoolValue(t, result, 1, false, true)
+			requireBoolValue(t, result, 2, false, true)
+		})
+	}
 }
 
 func TestEvaluateFilterByZoneMapMathPrecision(t *testing.T) {
@@ -353,30 +334,6 @@ func TestEvaluateFilterByZoneMapAndKeepsPossibleTrueBoolRange(t *testing.T) {
 	require.True(t, selected, plan2.FormatExpr(expr, plan2.FormatOption{}))
 }
 
-func TestEvaluateFilterByZoneMapNullableInListWithoutMatchPrunes(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	ctx := proc.Ctx
-
-	expr := makeVarcharInExpr(t, ctx, "zzz", true)
-	meta := makeVarcharBlockMeta("key", "keep")
-	zms, vecs := makeZoneMapEvalScratch(expr)
-
-	selected := colexec.EvaluateFilterByZoneMap(ctx, proc, expr, meta, map[int]int{0: 0}, zms, vecs)
-	require.False(t, selected, plan2.FormatExpr(expr, plan2.FormatOption{}))
-}
-
-func TestEvaluateFilterByZoneMapNullableNotInListPrunes(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	ctx := proc.Ctx
-
-	expr := makeVarcharNotInExpr(t, ctx, "zzz", true)
-	meta := makeVarcharBlockMeta("key", "keep")
-	zms, vecs := makeZoneMapEvalScratch(expr)
-
-	selected := colexec.EvaluateFilterByZoneMap(ctx, proc, expr, meta, map[int]int{0: 0}, zms, vecs)
-	require.False(t, selected, plan2.FormatExpr(expr, plan2.FormatOption{}))
-}
-
 func TestEvaluateFilterByZoneMapNotInExpandedWithBareNullPrunes(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	ctx := proc.Ctx
@@ -399,27 +356,6 @@ func TestEvaluateFilterByZoneMapNotInExpandedWithBareNullPrunes(t *testing.T) {
 
 	selected := colexec.EvaluateFilterByZoneMap(ctx, proc, expr, meta, map[int]int{0: 0}, zms, vecs)
 	require.False(t, selected, plan2.FormatExpr(expr, plan2.FormatOption{}))
-}
-
-func TestEvaluateFilterByZoneMapNotEqualBareNullPrunes(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	ctx := proc.Ctx
-
-	for _, op := range []string{"!=", "<>"} {
-		t.Run(op, func(t *testing.T) {
-			expr, err := plan2.BindFuncExprImplByPlanExpr(ctx, op, []*plan.Expr{
-				makeVarcharColExpr(),
-				makeBareNullExpr(),
-			})
-			require.NoError(t, err)
-
-			meta := makeVarcharBlockMeta("key", "keep")
-			zms, vecs := makeZoneMapEvalScratch(expr)
-
-			selected := colexec.EvaluateFilterByZoneMap(ctx, proc, expr, meta, map[int]int{0: 0}, zms, vecs)
-			require.False(t, selected, plan2.FormatExpr(expr, plan2.FormatOption{}))
-		})
-	}
 }
 
 func TestEvaluateFilterByZoneMapUnknownResultIsConservative(t *testing.T) {
@@ -500,7 +436,7 @@ func TestEvaluateFilterByZoneMapInListWithUninitializedLHSIsConservative(t *test
 	proc := testutil.NewProcess(t)
 	ctx := proc.Ctx
 
-	expr := makeVarcharInExpr(t, ctx, "zzz", true)
+	expr := makeVarcharMembershipExpr(t, ctx, "in", "zzz", true)
 	dataMeta := objectio.BuildMetaData(1, 1)
 	meta := dataMeta.GetBlockMeta(0)
 	zms, vecs := makeZoneMapEvalScratch(expr)
@@ -509,7 +445,7 @@ func TestEvaluateFilterByZoneMapInListWithUninitializedLHSIsConservative(t *test
 	require.True(t, selected, plan2.FormatExpr(expr, plan2.FormatOption{}))
 }
 
-func makeVarcharInExpr(t *testing.T, ctx context.Context, value string, withNull bool) *plan.Expr {
+func makeVarcharMembershipExpr(t *testing.T, ctx context.Context, op, value string, withNull bool) *plan.Expr {
 	t.Helper()
 
 	listValues := []*plan.Expr{plan2.MakePlan2StringConstExprWithType(value)}
@@ -525,7 +461,7 @@ func makeVarcharInExpr(t *testing.T, ctx context.Context, value string, withNull
 			List: &plan.ExprList{List: listValues},
 		},
 	}
-	expr, err := plan2.BindFuncExprImplByPlanExpr(ctx, "in", []*plan.Expr{
+	expr, err := plan2.BindFuncExprImplByPlanExpr(ctx, op, []*plan.Expr{
 		makeVarcharColExpr(),
 		listExpr,
 	})
@@ -582,30 +518,6 @@ func makeNativeVarcharInExpr(t *testing.T, ctx context.Context, args []*plan.Exp
 			},
 		},
 	}
-}
-
-func makeVarcharNotInExpr(t *testing.T, ctx context.Context, value string, withNull bool) *plan.Expr {
-	t.Helper()
-
-	listValues := []*plan.Expr{plan2.MakePlan2StringConstExprWithType(value)}
-	if withNull {
-		nullExpr := plan2.MakePlan2StringConstExprWithType("")
-		nullExpr.Expr.(*plan.Expr_Lit).Lit.Isnull = true
-		listValues = append(listValues, nullExpr)
-	}
-
-	listExpr := &plan.Expr{
-		Typ: makeVarcharColExpr().Typ,
-		Expr: &plan.Expr_List{
-			List: &plan.ExprList{List: listValues},
-		},
-	}
-	expr, err := plan2.BindFuncExprImplByPlanExpr(ctx, "not_in", []*plan.Expr{
-		makeVarcharColExpr(),
-		listExpr,
-	})
-	require.NoError(t, err)
-	return expr
 }
 
 func evalVarcharPredicate(t *testing.T, proc *process.Process, expr *plan.Expr, values ...string) *vector.Vector {
@@ -693,6 +605,7 @@ func TestEvaluateFilterByZoneMapRoundOverflowCleanup(t *testing.T) {
 			}
 		}
 	})
+	heapBaseline := proc.Mp().OnHeapCurrNB()
 	for i, value := range []int64{4999999999999999999, 5000000000000000000, 4999999999999999999} {
 		zm := index.NewZM(types.T_int64, 0)
 		index.UpdateZM(zm, types.EncodeInt64(&value))
@@ -706,6 +619,10 @@ func TestEvaluateFilterByZoneMapRoundOverflowCleanup(t *testing.T) {
 		require.Nil(t, escaped, "metadata failure must defer to row execution; native bytes=%d", proc.Mp().CurrNB())
 		require.Equal(t, i == 1, selected)
 		require.Zero(t, proc.Mp().CurrNB(), "speculative result and operand vectors must be freed")
+		require.Equal(t, heapBaseline, proc.Mp().OnHeapCurrNB(), "Go-heap operand ownership must also be released")
+		for slot, vec := range vecs {
+			require.Nil(t, vec, "scratch slot %d must be cleared before return", slot)
+		}
 	}
 }
 
@@ -888,7 +805,7 @@ func TestEvaluateFilterByZoneMapMaterializedPrefixAndIn(t *testing.T) {
 	zms, vecs = makeZoneMapEvalScratch(expr)
 	require.True(t, colexec.EvaluateFilterByZoneMap(proc.Ctx, proc, expr, makeVarcharBlockMeta("keep"), map[int]int{0: 0}, zms, vecs))
 	for _, value := range []string{"keep", "zzz"} {
-		expr := materializeZoneMapFilter(t, proc, makeVarcharInExpr(t, proc.Ctx, value, true))
+		expr := materializeZoneMapFilter(t, proc, makeVarcharMembershipExpr(t, proc.Ctx, "in", value, true))
 		zms, vecs := makeZoneMapEvalScratch(expr)
 		require.Equal(t, value == "keep", colexec.EvaluateFilterByZoneMap(proc.Ctx, proc, expr, makeVarcharBlockMeta("keep"), map[int]int{0: 0}, zms, vecs))
 		// A payload type mismatch and a malformed vector must both fail open.
@@ -1527,7 +1444,15 @@ func TestEvaluateFilterByZoneMapScalarOverflowCleanup(t *testing.T) {
 			require.NoError(t, err)
 			meta := objectio.BuildMetaData(1, 2).GetBlockMeta(0)
 			zms, vecs := makeZoneMapEvalScratch(predicate)
+			defer func() {
+				for _, vec := range vecs {
+					if vec != nil {
+						vec.Free(proc.Mp())
+					}
+				}
+			}()
 			baseline := proc.Mp().CurrNB()
+			heapBaseline := proc.Mp().OnHeapCurrNB()
 			for _, tc := range []struct {
 				vmin, vmax, wmin, wmax uint64
 				selected               bool
@@ -1551,16 +1476,14 @@ func TestEvaluateFilterByZoneMapScalarOverflowCleanup(t *testing.T) {
 					defer func() { panicked = recover() }()
 					selected = colexec.EvaluateFilterByZoneMap(proc.Ctx, proc, predicate, meta, map[int]int{0: 0, 1: 1}, zms, vecs)
 				}()
-				for i, vec := range vecs {
-					if vec != nil {
-						vec.Free(proc.Mp())
-						vecs[i] = nil
-					}
-				}
 				if panicked != nil {
 					t.Errorf("metadata scalar panic escaped: %v", panicked)
 				}
 				require.Equal(t, baseline, proc.Mp().CurrNB(), "temporary result must be released on every exit")
+				require.Equal(t, heapBaseline, proc.Mp().OnHeapCurrNB(), "Go-heap operand ownership must also be released")
+				for slot, vec := range vecs {
+					require.Nil(t, vec, "scratch slot %d must be cleared before return", slot)
+				}
 				require.Equal(t, tc.selected, selected)
 				require.Equal(t, tc.unknown, !zms[rounded.AuxId].IsInited(), "only the invalid endpoint loses its proof")
 			}

@@ -62,7 +62,7 @@ func comparisonCastSource(expr *plan.Expr) *plan.Expr {
 // executable expression intact, and keep value-dependent plans out of the
 // type-only prepared cache.
 func (builder *QueryBuilder) decimalFloatPeerValue(expr *plan.Expr) (float64, bool) {
-	if value, ok := decimalFloatComparisonConstant(expr); ok {
+	if value, ok := floatingComparisonConstant(expr); ok {
 		return value, true
 	}
 	state := preparedBindingState(builder.GetContext())
@@ -115,7 +115,7 @@ func (builder *QueryBuilder) decimalFloatPeerValue(expr *plan.Expr) (float64, bo
 	if err != nil {
 		return 0, false
 	}
-	return decimalFloatComparisonConstant(folded)
+	return floatingComparisonConstant(folded)
 }
 
 // Resolve only actual expressions from the executor's one-row dummy input.
@@ -188,7 +188,7 @@ func (builder *QueryBuilder) singletonProjectedFloatValue(node *plan.Node, expr 
 	if err != nil {
 		return 0, false
 	}
-	return decimalFloatComparisonConstant(folded)
+	return floatingComparisonConstant(folded)
 }
 
 func (builder *QueryBuilder) preparedIntegerPeerWitness(node *plan.Node, peer *plan.Expr) (*plan.Expr, bool) {
@@ -1103,10 +1103,11 @@ func blockFilterConstantVectorSet(literalVec *plan.LiteralVec) (ret map[string]s
 		return nil, false
 	}
 	typ := plan.Type{
-		Id:      int32(vec.GetType().Oid),
-		Scale:   vec.GetType().Scale,
-		Width:   vec.GetType().Width,
-		Charset: uint32(vec.GetType().Charset),
+		Id:               int32(vec.GetType().Oid),
+		Scale:            vec.GetType().Scale,
+		Width:            vec.GetType().Width,
+		Charset:          uint32(vec.GetType().Charset),
+		CollationVersion: uint32(vec.GetType().CollationVersion),
 	}
 	if physicalLength == 0 {
 		return make(map[string]struct{}), true

@@ -269,7 +269,6 @@ func newResetTxnForTest(t *testing.T, eng *Engine) (client.TxnOperator, *Transac
 	op, closeFn := client.NewTestTxnOperator(context.Background())
 	t.Cleanup(closeFn)
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
 	txn := &Transaction{
 		op:          op,
 		proc:        proc,
@@ -503,7 +502,6 @@ func newPrimaryKeyCheckTableForTest(t *testing.T) (*txnTable, *Engine) {
 	op, closeFn := client.NewTestTxnOperator(context.Background())
 	t.Cleanup(closeFn)
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
 
 	tbl := &txnTable{
 		accountId: 1,

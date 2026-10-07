@@ -33,6 +33,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func specialIntegerResultString(result *vector.Vector, row int) string {
+	if result.GetType().Oid == types.T_date {
+		return vector.GetFixedAtWithTypeCheck[types.Date](result, row).String()
+	}
+	return result.GetStringAt(row)
+}
+
 func TestSpecialIntegerArgumentEvaluation(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	for _, tc := range []struct {
@@ -110,7 +117,7 @@ func TestSpecialIntegerArgumentEvaluation(t *testing.T) {
 					require.NoError(t, err)
 					require.Equal(t, tc.null, result.IsConstNull() || result.IsNull(0))
 					if !tc.null {
-						require.Equal(t, tc.want, result.GetStringAt(0))
+						require.Equal(t, tc.want, specialIntegerResultString(result, 0))
 					}
 				})
 			}
@@ -161,7 +168,7 @@ func TestSpecialIntegerArgumentPreparedReuse(t *testing.T) {
 		{"cast(maketime(1,?,1.25) as varchar)", [3]string{"01:01:01.25", "01:02:01.25", "01:03:01.25"}},
 	} {
 		t.Run(tc.sql, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t, "prepare special_integer from 'select "+tc.sql+"'")
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "prepare special_integer from 'select "+tc.sql+"'")
 			require.NoError(t, err)
 			original := prepared.GetDcl().GetPrepare().Plan
 			snapshot := proto.Clone(original)
@@ -198,7 +205,7 @@ func TestSpecialIntegerArgumentPreparedReuse(t *testing.T) {
 						require.True(t, result.IsConstNull() || result.IsNull(0))
 						return
 					}
-					require.Equal(t, tc.want[source.index], result.GetStringAt(0))
+					require.Equal(t, tc.want[source.index], specialIntegerResultString(result, 0))
 				})
 				require.True(t, proto.Equal(snapshot, original))
 			}

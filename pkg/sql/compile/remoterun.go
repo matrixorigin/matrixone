@@ -136,68 +136,15 @@ func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requir
 	if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
-	if err = validateRemoteExpressionPipelineProtocol(proc, p); err != nil {
-		return nil, err
-	}
 	features, err := plan.RequiredRemoteExpressionFeatures(p)
 	if err != nil {
 		return nil, err
 	}
-	if features.IntegerArithmeticDomains {
-		if err = validateIntegerDomainDestination(proc, p); err != nil {
-			return nil, err
-		}
+	if err = validateRemoteExpressionFeatures(proc, features); err != nil {
+		return nil, err
 	}
-	if features.RowDependentConvBases {
-		if err = validateConvBasesDestination(proc, p); err != nil {
-			return nil, err
-		}
-	}
-	if features.IntegerParameterCoercion || features.SpecialIntegerConsumers {
-		if err = validateIntegerArgumentDestination(proc, p); err != nil {
-			return nil, err
-		}
-	}
-	if features.PreparedPrecisionScalar {
-		if err = validatePreparedPrecisionDestination(proc, p); err != nil {
-			return nil, err
-		}
-	}
-	if features.DecimalDivisionSemantics {
-		if err = validateDecimalDivisionDestination(proc, p); err != nil {
-			return nil, err
-		}
-	}
-	if required := temporalExpressionProtocolVersion(features); required != 0 {
-		if err = validateTemporalResultDestination(proc, p, required); err != nil {
-			return nil, err
-		}
-	}
-	if features.IPFunctionSemantics || features.TOBase64ResultContracts || features.IPFunctionResultContracts ||
-		features.ExpressionResultMetadataContracts || features.JSONInputContracts || features.YearBitCast || features.JSONScalarLiteralContracts {
-		if err = validateIPFunctionDestination(proc, p); err != nil {
-			return nil, err
-		}
-	}
-	if features.StringNumericResultContracts {
-		if err = validateStringNumericResultDestination(proc, p); err != nil {
-			return nil, err
-		}
-	}
-	if features.BoundedConditionalStringDomains {
-		if err = validateBoundedConditionalStringDestination(proc, p); err != nil {
-			return nil, err
-		}
-	}
-	if features.SpatialDistanceSemantics {
-		if err = validateSpatialDistanceDestination(proc, p); err != nil {
-			return nil, err
-		}
-	}
-	if features.DecimalLiteralSemantics {
-		if err = validateDecimalLiteralDestination(proc, p); err != nil {
-			return nil, err
-		}
+	if err = validateRemoteExpressionDestination(proc, p, features); err != nil {
+		return nil, err
 	}
 	if err = validateStrictWriteDestination(proc, p); err != nil {
 		return nil, err
@@ -2031,12 +1978,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 func convertToPlanTypes(ts []types.Type) []plan.Type {
 	result := make([]plan.Type, len(ts))
 	for i, t := range ts {
-		result[i] = plan.Type{
-			Id:      int32(t.Oid),
-			Width:   t.Width,
-			Scale:   t.Scale,
-			Charset: uint32(t.Charset),
-		}
+		result[i] = t.PlanType()
 	}
 	return result
 }
@@ -2045,7 +1987,7 @@ func convertToPlanTypes(ts []types.Type) []plan.Type {
 func convertToTypes(ts []plan.Type) []types.Type {
 	result := make([]types.Type, len(ts))
 	for i, t := range ts {
-		result[i] = types.NewWithCharset(types.T(t.Id), t.Width, t.Scale, uint8(t.Charset))
+		result[i] = types.MustTypeFromPlan(t)
 	}
 	return result
 }
@@ -2279,10 +2221,19 @@ func validateRemoteExpressionPipelineProtocol(
 	proc *process.Process,
 	p *pipeline.Pipeline,
 ) error {
+	if err := plan.RequireLegacyCollations(p); err != nil {
+		return err
+	}
 	features, err := plan.RequiredRemoteExpressionFeatures(p)
 	if err != nil {
 		return err
 	}
+	return validateRemoteExpressionFeatures(proc, features)
+}
+
+// The sender reuses analysis of its current pipeline; the receiver computes
+// features independently after decoding before calling this same source fence.
+func validateRemoteExpressionFeatures(proc *process.Process, features plan.RemoteExpressionFeatures) error {
 	if !features.Any() {
 		return nil
 	}
@@ -2958,6 +2909,16 @@ func decodeBatch(mp *mpool.MPool, data []byte) (*batch.Batch, error) {
 	if err := bat.UnmarshalBinaryForPipeline(data, mp); err != nil {
 		bat.Clean(mp)
 		return nil, err
+	}
+	// Transport codecs preserve known metadata, but the received batch is
+	// about to enter execution. Its opaque vectors need their own admission.
+	for _, vec := range bat.Vecs {
+		if vec != nil {
+			if err := plan.RequireLegacyCollations(vec.GetType().PlanType()); err != nil {
+				bat.Clean(mp)
+				return nil, err
+			}
+		}
 	}
 	return bat, nil
 }

@@ -973,6 +973,15 @@ func (v *Vector) SetPreparedJSONComparisonParam() {
 	v.preparedJSONComparisonParam = true
 }
 
+// CopyExpressionMetadataTo preserves scalar identity when a single expression
+// result is materialized at different row coordinates. It does not merge sources
+// or copy row sidecars; the row materializer owns their selection mapping.
+func (v *Vector) CopyExpressionMetadataTo(dst *Vector) {
+	dst.isBin = v.isBin
+	dst.prepareParamType = v.prepareParamType
+	dst.preparedJSONComparisonParam = v.preparedJSONComparisonParam
+}
+
 // GetPrepareParamKindAt returns the source category for one logical row.
 // Constants use their single physical value for every logical row. The scalar
 // field remains the common fast path; heterogeneous vectors consult the
@@ -4922,7 +4931,10 @@ func decodeVectorBinaryLayout(
 			return vectorBinaryLayout{}, err
 		}
 	}
-	typ := types.DecodeType(typData)
+	typ, err := types.DecodeTypeChecked(typData)
+	if err != nil {
+		return vectorBinaryLayout{}, err
+	}
 	if err = validateVectorBinary(
 		class[0],
 		typ,
@@ -8088,7 +8100,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 	plainMetadata := v.prepareParamKinds == nil && w.prepareParamKinds == nil &&
 		v.prepareParamKind == PrepareParamNone && w.prepareParamKind == PrepareParamNone &&
 		!v.binaryStringRowsActive && !w.binaryStringRowsActive && !v.binaryString && !w.binaryString &&
-		v.stringSources == nil && w.stringSources == nil &&
+		v.stringSources == nil && w.stringSources == nil && !v.preflightStringSourceReady &&
 		(v.length == 0 || v.stringSource == w.stringSource)
 	if !plainMetadata {
 		if err := v.PreflightUnionOnePrepareParamKinds(w, sel, mp); err != nil {
@@ -8098,8 +8110,8 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 			v.FinalizeStringSourcePreflight()
 			return err
 		}
+		defer v.FinalizeStringSourcePreflight()
 	}
-	defer v.FinalizeStringSourcePreflight()
 	if err := extendWithBitmaps(
 		v,
 		1,
@@ -8109,32 +8121,45 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 	); err != nil {
 		return err
 	}
-	if v.typ.IsVarlen() {
+	varlen := v.typ.IsVarlen()
+	preserveAreaDisjoint := varlen && !v.IsConst() && v.areaDisjoint &&
+		v.DataBackingKind() == OwnedMPoolUnique && v.AreaBackingKind() == OwnedMPoolUnique
+	if varlen {
+		// Until the new descriptor and its payload are initialized, failure
+		// must leave the visible range without a disjoint-layout proof.
 		v.areaDisjoint = false
 	}
 
 	oldLen := v.length
-	v.setLengthAfterExtend(v.length + 1)
 	if plainMetadata {
+		// There are no row sidecars to extend or normalize on this path.
+		v.length = oldLen + 1
 		v.stringSource = w.stringSource
-	} else if err := v.appendStringSourceAt(oldLen, oldLen, w.GetStringSourceAt(int(sel)), mp); err != nil {
-		return err
+	} else {
+		v.setLengthAfterExtend(oldLen + 1)
+		if err := v.appendStringSourceAt(oldLen, oldLen, w.GetStringSourceAt(int(sel)), mp); err != nil {
+			return err
+		}
 	}
-	sourceHasValue := !sourceNull
 	if sourceGrouping {
 		nulls.Add(&v.gsp, uint64(oldLen))
 	}
-	if w.IsConst() {
-		if sourceNull {
-			nulls.Add(&v.nsp, uint64(oldLen))
-			return nil
+	if sourceNull {
+		if preserveAreaDisjoint {
+			var values []types.Varlena
+			ToSliceNoTypeCheck(v, &values)
+			// Reused capacity can contain a stale out-of-line descriptor. The
+			// layout proof must remain valid even if the NULL bit is cleared.
+			values[oldLen] = types.Varlena{}
+			v.areaDisjoint = true
 		}
-		sel = 0
-	} else if sourceNull {
 		nulls.Add(&v.nsp, uint64(oldLen))
 		return nil
 	}
-	if v.GetType().IsVarlen() {
+	if w.IsConst() {
+		sel = 0
+	}
+	if varlen {
 		var vs, ws []types.Varlena
 		ToSliceNoTypeCheck(v, &vs)
 		ToSliceNoTypeCheck(w, &ws)
@@ -8142,6 +8167,10 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 		if err != nil {
 			return err
 		}
+		// Each append copies its own payload, including repeated selections
+		// and constant sources. Preserve an existing proof, never create one
+		// for a borrowed area or an already aliased destination.
+		v.areaDisjoint = preserveAreaDisjoint
 	} else {
 		tlen := v.GetType().TypeSize()
 		switch tlen {
@@ -8164,18 +8193,20 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 		}
 	}
 
-	if sourceHasValue {
+	if !plainMetadata || !v.nsp.EmptyByFlag() {
+		// An all-NULL prefix may still carry scalar parameter metadata that
+		// must be cleared before its first value establishes ownership.
 		v.prepareParamKindAppendStart(oldLen)
-		if plainMetadata {
-			v.prepareParamKindSeen = true
-			return nil
-		}
-		if err := v.appendPrepareParamKindAt(oldLen, w.GetPrepareParamKindAt(int(sel)), mp); err != nil {
-			return err
-		}
-		if err := v.setRuntimeStringDomainAt(oldLen, w.GetRuntimeStringDomainAt(int(sel)), true, mp); err != nil {
-			return err
-		}
+	}
+	if plainMetadata {
+		v.prepareParamKindSeen = true
+		return nil
+	}
+	if err := v.appendPrepareParamKindAt(oldLen, w.GetPrepareParamKindAt(int(sel)), mp); err != nil {
+		return err
+	}
+	if err := v.setRuntimeStringDomainAt(oldLen, w.GetRuntimeStringDomainAt(int(sel)), true, mp); err != nil {
+		return err
 	}
 	return nil
 }

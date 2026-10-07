@@ -2514,43 +2514,6 @@ func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *pl
 	}
 }
 
-func tryMatchMoreLeadingFilters(idxDef *IndexDef, node *plan.Node, pos int32) []int32 {
-	leadingPos := []int32{pos}
-	for i := range idxDef.Parts {
-		if i == 0 {
-			continue //already hit
-		}
-		currentPos, ok := node.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[i])]
-		if !ok {
-			break
-		}
-		found := false
-		for j := range node.FilterList {
-			fn := node.FilterList[j].GetF()
-			if fn == nil {
-				continue
-			}
-			switch fn.Func.ObjName {
-			case "=":
-				col := fn.Args[0].GetCol()
-				if col != nil && col.ColPos == currentPos && isRuntimeConstExpr(fn.Args[1]) {
-					leadingPos = append(leadingPos, int32(j))
-					found = true
-				}
-			}
-			if found {
-				break
-			}
-		}
-		// Composite index filters must match a contiguous leading prefix.
-		// If any intermediate part is missing, stop matching immediately.
-		if !found {
-			break
-		}
-	}
-	return leadingPos
-}
-
 func checkIndexFilter(fn *plan.Function) (int, *plan.ColRef) {
 	if fn == nil {
 		return UnsupportedIndexCondition, nil
@@ -2628,25 +2591,6 @@ func isFloatIndexFilterExpr(expr *plan.Expr) bool {
 	return typ == types.T_float32 || typ == types.T_float64
 }
 
-func findLeadingFilter(idxDef *IndexDef, node *plan.Node) ([]int32, bool) {
-	leadingPos := node.TableDef.Name2ColIndex[idxDef.Parts[0]]
-	for i := range node.FilterList {
-		filterType, col := checkIndexFilter(node.FilterList[i].GetF())
-		switch filterType {
-		case EqualIndexCondition:
-			if col.ColPos == leadingPos {
-				return []int32{int32(i)}, true
-			}
-		case NonEqualIndexCondition:
-			if col.ColPos == leadingPos {
-				return []int32{int32(i)}, false
-			}
-		}
-		continue
-	}
-	return nil, false
-}
-
 func (builder *QueryBuilder) makeIndexLookupPartExpr(idxDef *IndexDef, partPos int, inputExpr *plan.Expr) (*plan.Expr, error) {
 	prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
 	if err != nil {
@@ -2667,6 +2611,7 @@ func (builder *QueryBuilder) replaceEqualCondition(idxDef *IndexDef, filterList 
 		args := expr.GetF().Args
 		args[0].GetCol().RelPos = idxTag
 		args[0].GetCol().ColPos = 0
+		args[0].GetCol().Name = idxTableDef.Cols[0].Name
 		var err error
 		args[1], err = builder.makeIndexLookupPartExpr(idxDef, 0, args[1])
 		if err != nil {
@@ -2706,6 +2651,7 @@ func (builder *QueryBuilder) replaceEqualCondition(idxDef *IndexDef, filterList 
 		funcName = "prefix_eq"
 	}
 	leadingColExpr := GetColExpr(idxTableDef.Cols[0].Typ, idxTag, 0)
+	leadingColExpr.GetCol().Name = idxTableDef.Cols[0].Name
 	expr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, []*plan.Expr{leadingColExpr, rightArg})
 	if err != nil {
 		return nil, err
@@ -2751,6 +2697,7 @@ func (builder *QueryBuilder) replaceNonEqualCondition(idxDef *IndexDef, filter *
 	indexedPartType := fn.Args[0].Typ
 	fn.Args[0].GetCol().RelPos = idxTag
 	fn.Args[0].GetCol().ColPos = 0
+	fn.Args[0].GetCol().Name = idxTableDef.Cols[0].Name
 	fn.Args[0].Typ = idxTableDef.Cols[0].Typ
 	if numParts > 1 {
 		serialFunc := indexTableComparisonSerialFunc()
@@ -4574,6 +4521,7 @@ func (builder *QueryBuilder) replaceRangePairCondition(idxDef *IndexDef, filterL
 	upperOp := canonicalRangeOp(upperFn)
 
 	colExpr := GetColExpr(idxTableDef.Cols[0].Typ, idxTag, 0)
+	colExpr.GetCol().Name = idxTableDef.Cols[0].Name
 	lowerVal := DeepCopyExpr(rangeFilterConstValue(lowerFn))
 	upperVal := DeepCopyExpr(rangeFilterConstValue(upperFn))
 
@@ -4687,6 +4635,7 @@ func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, f
 
 	pkIdx := node.TableDef.Name2ColIndex[node.TableDef.Pkey.PkeyColName]
 	pkExpr := GetColExpr(node.TableDef.Cols[pkIdx].Typ, node.BindingTags[0], pkIdx)
+	pkExpr.GetCol().Name = node.TableDef.Pkey.PkeyColName
 
 	joinCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
 		DeepCopyExpr(pkExpr),

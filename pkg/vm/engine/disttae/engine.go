@@ -594,7 +594,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 	dbName, tableName, deleted := txn.tableOps.queryNameByTid(tableId)
 	latestCatalogFallback := false
 	if tableName == "" && deleted {
-		return "", "", nil, moerr.NewInternalErrorf(ctx, "can not find table by id %d: accountId: %d. Deleted in txn", tableId, accountId)
+		return "", "", nil, moerr.NewNoSuchTablef(ctx, "can not find table by id %d: accountId: %d. Deleted in txn", tableId, accountId)
 	}
 
 	// not found in tableOps, try cache
@@ -650,7 +650,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 
 	if tableName == "" {
 		accountId, _ := defines.GetAccountId(ctx)
-		return "", "", nil, moerr.NewInternalErrorf(
+		return "", "", nil, moerr.NewNoSuchTablef(
 			ctx,
 			"can not find table by id %d: accountId: %d",
 			tableId, accountId,

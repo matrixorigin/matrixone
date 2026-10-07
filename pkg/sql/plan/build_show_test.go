@@ -24,7 +24,7 @@ import (
 )
 
 func TestCoverage_buildShowGrants_ForRole(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
 	sqls := []string{
 		"show grants for ROLE role1",
@@ -33,7 +33,7 @@ func TestCoverage_buildShowGrants_ForRole(t *testing.T) {
 }
 
 func TestCoverage_buildShowGrants_ForUser(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
 	// The mock optimizer doesn't have mo_user_grant table, so this should fail with a known error
 	sqls := []string{
@@ -50,7 +50,7 @@ func TestCoverage_buildShowGrants_ForUser(t *testing.T) {
 }
 
 func TestCoverage_buildShowGrants_ForUserDefaultHost(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
 	sqls := []string{
 		"show grants for 'testuser'@'%'",
@@ -65,7 +65,7 @@ func TestCoverage_buildShowGrants_ForUserDefaultHost(t *testing.T) {
 }
 
 func TestCoverage_buildShowRoles(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
 	sqls := []string{
 		"show roles",
@@ -74,7 +74,7 @@ func TestCoverage_buildShowRoles(t *testing.T) {
 }
 
 func TestCoverage_buildShowRoles_WithLike(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
 	sqls := []string{
 		"show roles like '%admin%'",
@@ -83,7 +83,7 @@ func TestCoverage_buildShowRoles_WithLike(t *testing.T) {
 }
 
 func TestCoverage_buildShowStages(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
 	sqls := []string{
 		"show stages",
@@ -92,7 +92,7 @@ func TestCoverage_buildShowStages(t *testing.T) {
 }
 
 func TestCoverage_buildShowStages_WithLike(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
 	sqls := []string{
 		"show stages like 'my_stage%'",
@@ -101,7 +101,7 @@ func TestCoverage_buildShowStages_WithLike(t *testing.T) {
 }
 
 func TestCoverage_buildShowSnapshots(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
 	sqls := []string{
 		"show snapshots",
@@ -110,7 +110,7 @@ func TestCoverage_buildShowSnapshots(t *testing.T) {
 }
 
 func TestCoverage_buildShowSnapshots_WithWhere(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
 	sqls := []string{
 		"show snapshots where SNAPSHOT_NAME = 'snap1'",
@@ -119,7 +119,7 @@ func TestCoverage_buildShowSnapshots_WithWhere(t *testing.T) {
 }
 
 func TestCoverage_buildShowStatus(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
 	sqls := []string{
 		"show status",
@@ -128,7 +128,7 @@ func TestCoverage_buildShowStatus(t *testing.T) {
 }
 
 func TestCoverage_buildShowProcessList(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
 	sqls := []string{
 		"show processlist",
@@ -137,7 +137,7 @@ func TestCoverage_buildShowProcessList(t *testing.T) {
 }
 
 func TestCoverage_buildShowVariables(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
 	sqls := []string{
 		"show variables",
@@ -147,7 +147,7 @@ func TestCoverage_buildShowVariables(t *testing.T) {
 }
 
 func TestCoverage_buildShowIndex(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
 	sqls := []string{
 		"show index from tpch.nation",
@@ -164,7 +164,7 @@ func TestShowKeysUsesMySQLIndexOrder(t *testing.T) {
 
 	for _, sql := range testCases {
 		t.Run(sql, func(t *testing.T) {
-			logicPlan, err := runOneStmt(NewMockOptimizer(false), t, sql)
+			logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, sql)
 			require.NoError(t, err)
 
 			var sortNodes []*plan.Node
@@ -202,7 +202,7 @@ func TestShowKeysUsesMySQLIndexOrder(t *testing.T) {
 }
 
 func TestCoverage_buildShowFunctionStatus(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
 	sqls := []string{
 		"show function status",
@@ -212,7 +212,7 @@ func TestCoverage_buildShowFunctionStatus(t *testing.T) {
 }
 
 func TestCoverage_buildShowLocks(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
 	sqls := []string{
 		"show locks",
@@ -221,7 +221,7 @@ func TestCoverage_buildShowLocks(t *testing.T) {
 }
 
 func TestCoverage_buildShowNodeList(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
 	sqls := []string{
 		"show node list",
@@ -230,7 +230,7 @@ func TestCoverage_buildShowNodeList(t *testing.T) {
 }
 
 func TestCoverage_buildShowCreatePublications(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
 	stmts, err := mysql.Parse(mock.CurrentContext().GetContext(), "show create publication pub1", 1)
 	if err != nil {
@@ -247,7 +247,7 @@ func TestCoverage_buildShowCreatePublications(t *testing.T) {
 }
 
 func TestCoverage_buildShowPublicationCoverage(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
 	stmts, err := mysql.Parse(mock.CurrentContext().GetContext(), "show publication coverage pub1", 1)
 	if err != nil {
@@ -263,7 +263,7 @@ func TestCoverage_buildShowPublicationCoverage(t *testing.T) {
 }
 
 func TestCoverage_returnByRewriteSQL(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	ctx := mock.CurrentContext()
 
 	// Simple valid SQL
@@ -273,7 +273,7 @@ func TestCoverage_returnByRewriteSQL(t *testing.T) {
 }
 
 func TestCoverage_returnByRewriteSQL_InvalidSQL(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	ctx := mock.CurrentContext()
 
 	_, err := returnByRewriteSQL(ctx, "THIS IS NOT VALID SQL", plan.DataDefinition_SHOW_TARGET)
@@ -281,7 +281,7 @@ func TestCoverage_returnByRewriteSQL_InvalidSQL(t *testing.T) {
 }
 
 func TestCoverage_buildShowDatabases(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
 	sqls := []string{
 		"show databases",
@@ -291,7 +291,7 @@ func TestCoverage_buildShowDatabases(t *testing.T) {
 }
 
 func TestCoverage_buildShowTables(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
 	sqls := []string{
 		"show tables",
@@ -302,7 +302,7 @@ func TestCoverage_buildShowTables(t *testing.T) {
 }
 
 func TestCoverage_buildShowColumns(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
 	sqls := []string{
 		"show columns from nation",
@@ -320,7 +320,7 @@ func TestShowColumnsTracksTargetDependency(t *testing.T) {
 		"show columns from nation where Field = 'n_name'",
 	} {
 		t.Run(sql, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			def := mock.ctxt.tables["nation"]
 			def.DbId, def.TblId, def.Version = 42, 100, 7
 			p, err := runOneStmt(mock, t, sql)
@@ -355,7 +355,7 @@ func TestShowColumnsTracksTargetDependency(t *testing.T) {
 		})
 	}
 	t.Run("View retains source and target", func(t *testing.T) {
-		mock := NewMockOptimizer(false)
+		mock := NewMockOptimizer(false, newPlanTestProcess(t))
 		mock.ctxt.tables["v1"].ViewSql.View = `{"Stmt":"create view v1 as select n_name from nation","DefaultDatabase":"tpch"}`
 		p, err := runOneStmt(mock, t, "show columns from v1")
 		require.NoError(t, err)
@@ -364,7 +364,7 @@ func TestShowColumnsTracksTargetDependency(t *testing.T) {
 		require.ElementsMatch(t, []string{"mo_tables", "nation", "v1"}, []string{dependencies[0].ObjName, dependencies[1].ObjName, dependencies[2].ObjName})
 	})
 	t.Run("ordinary SELECT keeps scan dependencies", func(t *testing.T) {
-		p, err := runOneStmt(NewMockOptimizer(false), t, "select n_name from nation")
+		p, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "select n_name from nation")
 		require.NoError(t, err)
 		require.Len(t, p.GetQuery().GetCatalogDependencies(), 1)
 		require.Equal(t, "nation", p.GetQuery().CatalogDependencies[0].ObjName)
@@ -372,10 +372,10 @@ func TestShowColumnsTracksTargetDependency(t *testing.T) {
 }
 
 func TestShowColumnsSkipsNilIndexMetadata(t *testing.T) {
-	control, err := runOneStmt(NewMockOptimizer(false), t, "show columns from single_idx_t")
+	control, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "show columns from single_idx_t")
 	require.NoError(t, err)
 
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	tableDef := mock.ctxt.tables["single_idx_t"]
 	require.NotNil(t, tableDef)
 	require.NotEmpty(t, tableDef.Indexes)
@@ -389,7 +389,7 @@ func TestShowColumnsSkipsNilIndexMetadata(t *testing.T) {
 }
 
 func TestCoverage_buildShowTableStatus(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
 	sqls := []string{
 		"show table status",
@@ -399,7 +399,7 @@ func TestCoverage_buildShowTableStatus(t *testing.T) {
 }
 
 func TestCoverage_buildShowCreateTable(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
 	sqls := []string{
 		"show create table nation",
@@ -409,7 +409,7 @@ func TestCoverage_buildShowCreateTable(t *testing.T) {
 }
 
 func TestCoverage_buildShowCreateView(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
 	sqls := []string{
 		"show create view v1",
@@ -418,7 +418,7 @@ func TestCoverage_buildShowCreateView(t *testing.T) {
 }
 
 func TestCoverage_buildShowTableNumber(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
 	sqls := []string{
 		"show table_number",
@@ -428,7 +428,7 @@ func TestCoverage_buildShowTableNumber(t *testing.T) {
 }
 
 func TestCoverage_buildShowColumnNumber(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
 	sqls := []string{
 		"show column_number from nation",

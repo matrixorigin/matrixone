@@ -1,7 +1,7 @@
 module github.com/matrixorigin/matrixone
 
 // Minimum Go version required
-go 1.26.4
+go 1.27.0
 
 require (
 	github.com/BurntSushi/toml v1.2.1
@@ -37,6 +37,7 @@ require (
 	github.com/docker/go-units v0.5.0
 	github.com/dolthub/maphash v0.1.0
 	github.com/dslipak/pdf v0.0.2
+	github.com/elastic/elastic-transport-go/v8 v8.6.0
 	github.com/elastic/go-elasticsearch/v8 v8.15.0
 	github.com/elastic/gosigar v0.14.2
 	github.com/extism/go-sdk v1.6.0
@@ -173,7 +174,6 @@ require (
 	github.com/dlclark/regexp2 v1.10.0
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/dylibso/observe-sdk/go v0.0.0-20240819160327-2d926c5d788a // indirect
-	github.com/elastic/elastic-transport-go/v8 v8.6.0 // indirect
 	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f // indirect
 	github.com/getsentry/sentry-go v0.12.0 // indirect
 	github.com/go-ini/ini v1.67.0 // indirect
@@ -307,3 +307,5 @@ replace (
 )
 
 replace github.com/shoenig/go-m1cpu => github.com/shoenig/go-m1cpu v0.1.7
+
+replace github.com/dlclark/regexp2 => github.com/XuPeng-SH/regexp2 v1.10.1-0.20261004024751-718f43e031fe
