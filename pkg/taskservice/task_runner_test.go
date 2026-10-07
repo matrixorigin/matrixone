@@ -50,14 +50,25 @@ func TestRunTasksInParallel(t *testing.T) {
 	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
 		wg := &sync.WaitGroup{}
 		wg.Add(2)
+		started := make(chan struct{}, 2)
+		release := make(chan struct{})
 		r.RegisterExecutor(0, func(ctx context.Context, task task.Task) error {
+			started <- struct{}{}
+			<-release
 			defer wg.Done()
-			time.Sleep(time.Millisecond * 200)
 			return nil
 		})
 		mustAddTestAsyncTask(t, store, 1, newTestAsyncTask("t1"))
 		mustAddTestAsyncTask(t, store, 1, newTestAsyncTask("t2"))
 		mustAllocTestTask(t, s, store, map[string]string{"t1": r.runnerID, "t2": r.runnerID})
+		for range 2 {
+			select {
+			case <-started:
+			case <-time.After(time.Second):
+				t.Fatal("parallel executors did not start")
+			}
+		}
+		close(release)
 		wg.Wait()
 	}, WithRunnerParallelism(2),
 		WithRunnerFetchInterval(time.Millisecond))
@@ -67,15 +78,15 @@ func TestTooMuchTasksWillBlockAndEventuallyCanBeExecuted(t *testing.T) {
 	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
 		c := make(chan struct{})
 		continueC := make(chan struct{})
+		firstStarted := make(chan struct{})
 		v := atomic.Uint32{}
-		wait := time.Millisecond * 200
 		r.RegisterExecutor(0, func(ctx context.Context, task task.Task) error {
 			n := v.Add(1)
 			if n == 2 {
 				defer close(c) // second task close the chan
 			}
 			if n == 1 {
-				time.Sleep(wait) // block first task
+				close(firstStarted)
 				<-continueC
 			}
 
@@ -85,13 +96,22 @@ func TestTooMuchTasksWillBlockAndEventuallyCanBeExecuted(t *testing.T) {
 		mustAddTestAsyncTask(t, store, 1, newTestAsyncTask("t2"))
 		mustAllocTestTask(t, s, store, map[string]string{"t1": r.runnerID, "t2": r.runnerID})
 		select {
-		case <-c:
-			assert.Fail(t, "must block")
-		case <-time.After(wait):
-			assert.Equal(t, uint32(1), v.Load())
-			close(continueC) // second task can be run
+		case <-firstStarted:
+		case <-time.After(time.Second):
+			t.Fatal("first task did not start")
 		}
-		<-c
+		select {
+		case <-c:
+			assert.Fail(t, "second task started while parallelism was occupied")
+		default:
+		}
+		assert.Equal(t, uint32(1), v.Load())
+		close(continueC) // second task can be run
+		select {
+		case <-c:
+		case <-time.After(time.Second):
+			t.Fatal("second task did not run after parallelism was released")
+		}
 		assert.Equal(t, uint32(2), v.Load())
 	}, WithRunnerParallelism(1),
 		WithRunnerFetchInterval(time.Millisecond))
@@ -170,21 +190,22 @@ func TestRetryDrainsAllDueTasks(t *testing.T) {
 
 	r := NewTaskRunner("r1", s, func(string) bool {
 		return true
-	}, WithRunnerParallelism(1),
+	}, WithRunnerParallelism(2),
 		WithRunnerLogger(logutil.GetPanicLoggerWithLevel(zap.DebugLevel))).(*taskRunner)
 	defer r.stopper.Stop()
 
-	executed := make(chan struct{}, 1)
 	n := atomic.Uint32{}
 	r.RegisterExecutor(0, func(ctx context.Context, task task.Task) error {
-		if n.Add(1) == 1 {
-			executed <- struct{}{}
-		}
+		n.Add(1)
 		return nil
 	})
 
 	taskCtx, taskCancel := context.WithCancelCause(context.Background())
 	defer taskCancel(nil)
+	taskCtx2, taskCancel2 := context.WithCancelCause(context.Background())
+	defer taskCancel2(nil)
+	now := time.Now()
+	r.parallelismC <- struct{}{}
 	r.parallelismC <- struct{}{}
 	r.retryTasks.s = append(r.retryTasks.s, runningTask{
 		task: task.AsyncTask{
@@ -194,34 +215,20 @@ func TestRetryDrainsAllDueTasks(t *testing.T) {
 		cancel: taskCancel,
 		// All entries in the queue are due. This used to leave the slice
 		// unchanged because no future retryAt entry was found.
-		retryAt: time.Now().Add(-time.Second),
+		retryAt: now.Add(-time.Second),
+	}, runningTask{
+		task: task.AsyncTask{
+			ID: 2,
+		},
+		ctx:     taskCtx2,
+		cancel:  taskCancel2,
+		retryAt: now.Add(-time.Second),
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
-	retryDone := make(chan struct{})
-	go func() {
-		defer close(retryDone)
-		r.retry(ctx)
-	}()
-	defer func() {
-		cancel()
-		<-retryDone
-	}()
-
-	select {
-	case <-executed:
-	case <-time.After(5 * time.Second):
-		require.Fail(t, "timeout waiting for retry task to execute")
-	}
-
-	require.Eventually(t, func() bool {
-		r.retryTasks.Lock()
-		defer r.retryTasks.Unlock()
-		return len(r.retryTasks.s) == 0
-	}, 5*time.Second, 10*time.Millisecond)
-
-	time.Sleep(250 * time.Millisecond)
-	require.Equal(t, uint32(1), n.Load())
+	r.retryDueTasks(now, nil)
+	<-r.doneC
+	<-r.doneC
+	require.Equal(t, uint32(2), n.Load())
 	require.Equal(t, 0, len(r.parallelismC))
 }
 
@@ -238,12 +245,9 @@ func TestRetryPreservesFutureTasks(t *testing.T) {
 		WithRunnerLogger(logutil.GetPanicLoggerWithLevel(zap.DebugLevel))).(*taskRunner)
 	defer r.stopper.Stop()
 
-	executed := make(chan struct{}, 1)
 	n := atomic.Uint32{}
 	r.RegisterExecutor(0, func(ctx context.Context, task task.Task) error {
-		if n.Add(1) == 1 {
-			executed <- struct{}{}
-		}
+		n.Add(1)
 		return nil
 	})
 
@@ -272,32 +276,15 @@ func TestRetryPreservesFutureTasks(t *testing.T) {
 		},
 	)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	retryDone := make(chan struct{})
-	go func() {
-		defer close(retryDone)
-		r.retry(ctx)
-	}()
-	defer func() {
-		cancel()
-		<-retryDone
-	}()
-
-	select {
-	case <-executed:
-	case <-time.After(5 * time.Second):
-		require.Fail(t, "timeout waiting for due retry task to execute")
-	}
-
-	require.Eventually(t, func() bool {
-		r.retryTasks.Lock()
-		defer r.retryTasks.Unlock()
-		return len(r.retryTasks.s) == 1 && r.retryTasks.s[0].task.ID == 2
-	}, 5*time.Second, 10*time.Millisecond)
-
-	time.Sleep(250 * time.Millisecond)
+	now := time.Now()
+	r.retryDueTasks(now, nil)
+	<-r.doneC
 	require.Equal(t, uint32(1), n.Load())
 	require.Equal(t, 1, len(r.parallelismC))
+	r.retryTasks.Lock()
+	defer r.retryTasks.Unlock()
+	require.Len(t, r.retryTasks.s, 1)
+	require.Equal(t, uint64(2), r.retryTasks.s[0].task.ID)
 }
 
 func TestRunTaskWithDisableRetry(t *testing.T) {
@@ -342,24 +329,14 @@ func TestCancelRunningTask(t *testing.T) {
 		v.Epoch++
 		mustUpdateTestAsyncTask(t, store, 1, []task.AsyncTask{v})
 		close(cancelC)
-		for v := mustGetTestAsyncTask(t, store, 1)[0]; v.Status != task.TaskStatus_Completed; v = mustGetTestAsyncTask(t, store, 1)[0] {
-			time.Sleep(10 * time.Millisecond)
-		}
-		timeout := time.After(10 * time.Second)
-		for {
-			select {
-			case <-timeout:
-				require.Fail(t, "task not removed after 10 seconds")
-			default:
-			}
+		require.Eventually(t, func() bool {
+			return mustGetTestAsyncTask(t, store, 1)[0].Status == task.TaskStatus_Completed
+		}, 10*time.Second, 10*time.Millisecond, "task did not complete after cancellation")
+		require.Eventually(t, func() bool {
 			r.runningTasks.RLock()
-			if len(r.runningTasks.m) == 0 {
-				r.runningTasks.RUnlock()
-				break
-			}
-			r.runningTasks.RUnlock()
-			time.Sleep(time.Millisecond * 10)
-		}
+			defer r.runningTasks.RUnlock()
+			return len(r.runningTasks.m) == 0
+		}, 10*time.Second, 10*time.Millisecond, "running task was not removed after completion")
 		r.runningTasks.RLock()
 		defer r.runningTasks.RUnlock()
 		assert.Equal(t, 0, len(r.runningTasks.m))
@@ -572,52 +549,33 @@ func mustAllocTestTask(t *testing.T, s TaskService, store TaskStorage, alloc map
 }
 
 func mustWaitTestTaskHasHeartbeat(t *testing.T, store TaskStorage, expectHasHeartbeatCount int) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-	defer cancel()
-
-	for {
-		select {
-		case <-ctx.Done():
-			require.Fail(t, "wait heatbeat timeout")
-		default:
-			tasks := mustGetTestAsyncTask(t, store, expectHasHeartbeatCount,
-				WithTaskStatusCond(task.TaskStatus_Running))
-			n := 0
-			for _, v := range tasks {
-				if v.LastHeartbeat > 0 {
-					n++
-				}
-			}
-			if n == len(tasks) {
-				return
+	require.Eventually(t, func() bool {
+		ctx := context.Background()
+		tasks, err := store.QueryAsyncTask(ctx, WithTaskStatusCond(task.TaskStatus_Running))
+		if err != nil || len(tasks) != expectHasHeartbeatCount {
+			return false
+		}
+		for _, v := range tasks {
+			if v.LastHeartbeat == 0 {
+				return false
 			}
 		}
-	}
+		return true
+	}, 10*time.Second, 10*time.Millisecond, "wait heartbeat timeout")
 }
 
 func mustWaitTestTaskHasExecuteResult(t *testing.T, store TaskStorage, expectCount int) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-	defer cancel()
-
-	for {
-		select {
-		case <-ctx.Done():
-			require.Fail(t, "wait execute result timeout")
-		default:
-			tasks, err := store.QueryAsyncTask(ctx, WithTaskStatusCond(task.TaskStatus_Completed))
-			require.NoError(t, err)
-			if len(tasks) != expectCount {
-				break
-			}
-			n := 0
-			for _, v := range tasks {
-				if v.ExecuteResult != nil {
-					n++
-				}
-			}
-			if n == len(tasks) {
-				return
+	require.Eventually(t, func() bool {
+		ctx := context.Background()
+		tasks, err := store.QueryAsyncTask(ctx, WithTaskStatusCond(task.TaskStatus_Completed))
+		if err != nil || len(tasks) != expectCount {
+			return false
+		}
+		for _, v := range tasks {
+			if v.ExecuteResult == nil {
+				return false
 			}
 		}
-	}
+		return true
+	}, 10*time.Second, 10*time.Millisecond, "wait execute result timeout")
 }
