@@ -380,6 +380,11 @@ func initMoTableStatsConfig(
 		}()
 
 		eng.dynamicCtx.de = eng
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		eng.dynamicCtx.ctx, eng.dynamicCtx.cancel = context.WithCancel(ctx)
+		ownerCtx := eng.dynamicCtx.ctx
 
 		if eng.dynamicCtx.alphaTaskPool, err = ants.NewPool(
 			runtime.NumCPU(),
@@ -479,7 +484,9 @@ func initMoTableStatsConfig(
 				zap.Int("times", task.launchTimes),
 			)
 
+			eng.dynamicCtx.roots.Add(1)
 			go func() {
+				defer eng.dynamicCtx.roots.Done()
 				defer func() {
 					eng.dynamicCtx.Lock()
 					task.running = false
@@ -487,7 +494,7 @@ func initMoTableStatsConfig(
 				}()
 
 				// there should not have a deadline
-				taskCtx := turn2SysCtx(ctx)
+				taskCtx := turn2SysCtx(ownerCtx)
 				task.executor(taskCtx, eng.service, eng)
 			}()
 		}
@@ -497,6 +504,9 @@ func initMoTableStatsConfig(
 		eng.dynamicCtx.launchTask = func(name string) {
 			eng.dynamicCtx.Lock()
 			defer eng.dynamicCtx.Unlock()
+			if eng.dynamicCtx.closed.Load() {
+				return
+			}
 
 			switch name {
 			case gamaTaskName:
@@ -507,7 +517,9 @@ func initMoTableStatsConfig(
 			}
 		}
 
+		eng.dynamicCtx.roots.Add(1)
 		go func() {
+			defer eng.dynamicCtx.roots.Done()
 			var (
 				start           = time.Now()
 				moServerStarted time.Time
@@ -521,8 +533,9 @@ func initMoTableStatsConfig(
 				)
 			}()
 
-			newCtx := turn2SysCtx(ctx)
+			newCtx := turn2SysCtx(ownerCtx)
 			ticker := time.NewTicker(time.Second)
+			defer ticker.Stop()
 
 			for {
 				select {
@@ -631,8 +644,12 @@ func (ts taskState) String() string {
 type dynamicCtx struct {
 	sync.RWMutex
 
-	once   sync.Once
-	closed atomic.Bool
+	once      sync.Once
+	closeOnce sync.Once
+	closed    atomic.Bool
+	ctx       context.Context
+	cancel    context.CancelFunc
+	roots     sync.WaitGroup
 
 	defaultConf MoTableStatsConfig
 	conf        MoTableStatsConfig
@@ -700,16 +717,22 @@ func (d *dynamicCtx) LogDynamicCtx() string {
 }
 
 func (d *dynamicCtx) Close() {
-	d.closed.Store(true)
-	if d.alphaTaskPool != nil {
-		_ = d.alphaTaskPool.ReleaseTimeout(time.Second * 3)
-	}
-	if d.beta.taskPool != nil {
-		_ = d.beta.taskPool.ReleaseTimeout(time.Second * 3)
-	}
-	if d.gama.taskPool != nil {
-		_ = d.gama.taskPool.ReleaseTimeout(time.Second * 3)
-	}
+	d.closeOnce.Do(func() {
+		d.closed.Store(true)
+		if d.cancel != nil {
+			d.cancel()
+		}
+		d.roots.Wait()
+		if d.alphaTaskPool != nil {
+			_ = d.alphaTaskPool.ReleaseTimeout(time.Second * 3)
+		}
+		if d.beta.taskPool != nil {
+			_ = d.beta.taskPool.ReleaseTimeout(time.Second * 3)
+		}
+		if d.gama.taskPool != nil {
+			_ = d.gama.taskPool.ReleaseTimeout(time.Second * 3)
+		}
+	})
 }
 
 ////////////////// MoTableStats Interface //////////////////
@@ -1611,6 +1634,18 @@ func (d *dynamicCtx) LaunchMTSTasksForUT() {
 	d.launchTask(betaTaskName)
 }
 
+func (d *dynamicCtx) sendTablePair(ctx context.Context, tbl tablePair) bool {
+	select {
+	case d.tblQueue <- tbl:
+		return true
+	case <-ctx.Done():
+		if tbl.errChan != nil {
+			tbl.Done(ctx.Err())
+		}
+		return false
+	}
+}
+
 func (d *dynamicCtx) cleanTableStock() {
 	d.Lock()
 	defer d.Unlock()
@@ -1642,6 +1677,7 @@ func (d *dynamicCtx) tableStatsExecutor(
 		tickerDur     = time.Second
 		executeTicker = time.NewTicker(tickerDur)
 	)
+	defer executeTicker.Stop()
 
 	for {
 		select {
@@ -1770,7 +1806,18 @@ func (d *dynamicCtx) callAlphaWithRetry(
 			break
 		}
 
-		time.Sleep(time.Second)
+		timer := time.NewTimer(time.Second)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return ctx.Err()
+		case <-timer.C:
+		}
 	}
 
 	return nil
@@ -1836,6 +1883,7 @@ func (d *dynamicCtx) alphaTask(
 
 	errQueue := make(chan alphaError, len(tbls)*2)
 	ticker = time.NewTicker(time.Millisecond * 10)
+	defer ticker.Stop()
 
 	var lastError error
 
@@ -1866,7 +1914,9 @@ func (d *dynamicCtx) alphaTask(
 		case <-ticker.C:
 			if len(tbls) == 0 {
 				// all submitted
-				d.tblQueue <- tablePair{}
+				if !d.sendTablePair(ctx, tablePair{}) {
+					return false, ctx.Err()
+				}
 				ticker.Reset(time.Second)
 
 				if enterWait {
@@ -1940,7 +1990,7 @@ func (d *dynamicCtx) alphaTask(
 
 					tbls[i].pState = pState
 					tbls[i].errChan = errQueue
-					d.tblQueue <- tbls[i]
+					d.sendTablePair(ctx, tbls[i])
 				})
 
 				if err != nil {
@@ -1956,7 +2006,9 @@ func (d *dynamicCtx) alphaTask(
 			wg.Wait()
 
 			// let beta know that a batch done
-			d.tblQueue <- tablePair{}
+			if !d.sendTablePair(ctx, tablePair{}) {
+				return false, ctx.Err()
+			}
 
 			dur := time.Since(start)
 			// the longer the update takes, the longer we would pause,
@@ -2047,15 +2099,29 @@ func (d *dynamicCtx) betaTask(
 }
 
 func (d *dynamicCtx) NotifyCleanDeletes() {
-	d.cleanDeletesQueue <- struct{}{}
+	d.notify(d.cleanDeletesQueue)
 }
 
 func (d *dynamicCtx) NotifyUpdateForgotten() {
-	d.updateForgottenQueue <- struct{}{}
+	d.notify(d.updateForgottenQueue)
 }
 
 func (d *dynamicCtx) NotifyInsertNewTable() {
-	d.insertNewTableQueue <- struct{}{}
+	d.notify(d.insertNewTableQueue)
+}
+
+func (d *dynamicCtx) notify(ch chan struct{}) {
+	if d.closed.Load() {
+		return
+	}
+	if d.ctx == nil {
+		ch <- struct{}{}
+		return
+	}
+	select {
+	case ch <- struct{}{}:
+	case <-d.ctx.Done():
+	}
 }
 
 func (d *dynamicCtx) gamaInsertNewTables(
@@ -2514,6 +2580,9 @@ func (d *dynamicCtx) gamaTask(
 	tickerA := time.NewTicker(randDuration(baseFactory))
 	tickerB := time.NewTicker(randDuration(baseFactory))
 	tickerC := time.NewTicker(randDuration(baseFactory))
+	defer tickerA.Stop()
+	defer tickerB.Stop()
+	defer tickerC.Stop()
 
 	for {
 		select {

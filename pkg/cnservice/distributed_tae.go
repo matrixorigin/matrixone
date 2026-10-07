@@ -74,6 +74,7 @@ func (s *service) initDistributedTAE(
 		hakeeper,
 		s.gossipNode.StatsKeyRouter(),
 		s.cfg.LogtailUpdateWorkerFactor,
+		func(owner *disttae.Engine) { s.storeEngine = owner },
 
 		disttae.WithCNTransferTxnLifespanThreshold(
 			s.cfg.Engine.CNTransferTxnLifespanThreshold,

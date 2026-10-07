@@ -97,6 +97,29 @@ func TestMoTableStatsDispatchRejectsInvalidAndClosedEngines(t *testing.T) {
 	}
 }
 
+func TestDynamicCtxCloseCancelsAndJoinsRoots(t *testing.T) {
+	d := &dynamicCtx{
+		cleanDeletesQueue:    make(chan struct{}),
+		updateForgottenQueue: make(chan struct{}),
+		insertNewTableQueue:  make(chan struct{}),
+	}
+	d.ctx, d.cancel = context.WithCancel(context.Background())
+	d.roots.Add(1)
+	go func() {
+		defer d.roots.Done()
+		<-d.ctx.Done()
+	}()
+
+	d.Close()
+	d.Close()
+	require.True(t, d.closed.Load())
+	require.NotPanics(t, func() {
+		d.NotifyCleanDeletes()
+		d.NotifyUpdateForgotten()
+		d.NotifyInsertNewTable()
+	})
+}
+
 func Test_intsJoin(t *testing.T) {
 	wg := sync.WaitGroup{}
 

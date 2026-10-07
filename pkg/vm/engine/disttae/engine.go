@@ -99,8 +99,12 @@ func New(
 	hakeeper logservice.CNHAKeeperClient,
 	keyRouter client2.KeyRouter[pb.StatsInfoKey],
 	updateWorkerFactor int,
+	publish func(*Engine),
 	options ...EngineOptions,
 ) *Engine {
+	if publish == nil {
+		panic("disttae engine requires an owner")
+	}
 	cluster := clusterservice.GetMOCluster(service)
 	services := cluster.GetAllTNServices()
 
@@ -136,6 +140,16 @@ func New(
 			},
 		),
 	}
+	constructed := false
+	defer func() {
+		if constructed {
+			return
+		}
+		if err := e.Close(); err != nil {
+			logutil.Error("failed to retire disttae engine construction", zap.Error(err))
+		}
+	}()
+	publish(e)
 	// Initialize snapshot manager
 	e.snapshotMgr = NewSnapshotManager()
 	e.snapshotMgr.Init()
@@ -147,6 +161,7 @@ func New(
 	e.gcPool = pool
 
 	e.globalStats = NewGlobalStats(ctx, e, keyRouter,
+		func(owner *GlobalStats) { e.globalStats = owner },
 		WithUpdateWorkerFactor(updateWorkerFactor))
 
 	e.messageCenter = &message.MessageCenter{
@@ -209,6 +224,7 @@ func New(
 		zap.Duration("CNTransferTxnLifespanThreshold", e.config.cnTransferTxnLifespanThreshold),
 	)
 
+	constructed = true
 	return e
 }
 
@@ -227,10 +243,12 @@ func (e *Engine) Close() error {
 			<-done
 		}
 
+		if e.globalStats != nil {
+			e.globalStats.Close()
+		}
 		if e.gcPool != nil {
 			e.closeErr = e.gcPool.ReleaseTimeout(time.Second * 3)
 		}
-
 		e.dynamicCtx.Close()
 		e.cloneTxnCache = nil
 		e.ccprTxnCache = nil

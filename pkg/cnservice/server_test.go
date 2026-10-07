@@ -62,6 +62,15 @@ type closeErrorMOServer struct {
 	err error
 }
 
+type closableEngine struct {
+	engine.Engine
+	closeFn func() error
+}
+
+func (e closableEngine) Close() error {
+	return e.closeFn()
+}
+
 func (s closeErrorMOServer) GetRoutineManager() *frontend.RoutineManager {
 	return nil
 }
@@ -236,6 +245,23 @@ func TestCNServiceCloseIsSafeBeforeConstructionCompletes(t *testing.T) {
 	require.NoError(t, s.Close())
 	require.True(t, s.CloseComplete())
 	require.NoError(t, s.Close())
+}
+
+func TestCNServiceCloseStoreEngineUsesItsOwner(t *testing.T) {
+	sentinel := errors.New("engine close failed")
+	calls := 0
+	s := &service{
+		storeEngine: closableEngine{
+			closeFn: func() error {
+				calls++
+				return sentinel
+			},
+		},
+	}
+
+	require.ErrorIs(t, s.closeStoreEngine(), sentinel)
+	require.Equal(t, 1, calls)
+	require.NoError(t, (&service{}).closeStoreEngine())
 }
 
 func TestCNServiceConstructorPublishesBeforeOptionFailure(t *testing.T) {

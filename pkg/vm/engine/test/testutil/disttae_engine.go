@@ -160,7 +160,9 @@ func NewTestDisttaeEngine(
 		de.txnClient,
 		hakeeper,
 		nil,
-		1, engineOpts...)
+		1,
+		func(owner *disttae.Engine) { de.Engine = owner },
+		engineOpts...)
 
 	de.Engine.PushClient().LogtailRPCClientFactory = rpcAgent.MockLogtailRPCClientFactory
 
