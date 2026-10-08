@@ -296,6 +296,17 @@ const (
 	specialTableId    = 1
 )
 
+func asDisttaeEngine(eng engine.Engine) (*Engine, bool) {
+	if e, ok := eng.(*Engine); ok && e != nil {
+		return e, true
+	}
+	if wrapped, ok := eng.(*engine.EntireEngine); ok && wrapped != nil {
+		e, ok := wrapped.Engine.(*Engine)
+		return e, ok && e != nil
+	}
+	return nil, false
+}
+
 func moTableSizeFunc() *function.GetMoTableSizeRowsFuncType {
 	fn := function.GetMoTableSizeRowsFuncType(func(
 		ctx context.Context,
@@ -304,8 +315,8 @@ func moTableSizeFunc() *function.GetMoTableSizeRowsFuncType {
 		forceUpdate bool,
 		resetUpdateTime bool,
 	) ([]uint64, error) {
-		e, ok := eng.(*Engine)
-		if !ok || e == nil {
+		e, ok := asDisttaeEngine(eng)
+		if !ok {
 			return nil, moerr.NewInternalErrorNoCtx("MoTableSizeRows: engine is not a disttae engine")
 		}
 		if e.dynamicCtx.closed.Load() {
@@ -325,8 +336,8 @@ func moTableRowsFunc() *function.GetMoTableSizeRowsFuncType {
 		forceUpdate bool,
 		resetUpdateTime bool,
 	) ([]uint64, error) {
-		e, ok := eng.(*Engine)
-		if !ok || e == nil {
+		e, ok := asDisttaeEngine(eng)
+		if !ok {
 			return nil, moerr.NewInternalErrorNoCtx("MoTableSizeRows: engine is not a disttae engine")
 		}
 		if e.dynamicCtx.closed.Load() {

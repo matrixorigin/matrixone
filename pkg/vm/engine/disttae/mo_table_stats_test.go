@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/stretchr/testify/require"
 )
@@ -91,6 +92,11 @@ func TestMoTableStatsDispatchRejectsInvalidAndClosedEngines(t *testing.T) {
 			closed := &Engine{}
 			closed.dynamicCtx.closed.Store(true)
 			_, err = (*callback)(ctx, nil, nil, nil, closed, false, false)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "engine is closed")
+
+			wrapped := &engine.EntireEngine{Engine: closed}
+			_, err = (*callback)(ctx, nil, nil, nil, wrapped, false, false)
 			require.Error(t, err)
 			require.Contains(t, err.Error(), "engine is closed")
 		})
