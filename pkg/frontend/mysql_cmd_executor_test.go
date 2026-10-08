@@ -4936,7 +4936,7 @@ func TestGetComputationWrapperUsesPreparedTemplateFingerprintInTextExecute(t *te
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	provider := motrace.GetTracerProvider()
 	wasEnabled := provider.IsEnable()
 	provider.SetEnable(true)
@@ -4986,7 +4986,7 @@ func TestRefreshPreparedStatementFingerprintAtExecutionBoundary(t *testing.T) {
 	ses.logger = observedLoggerSession.logger
 	ses.logLevel = zap.ErrorLevel
 	ses.loggerOnce.Do(func() {})
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 	makeWrappers := func() []ComputationWrapper {
 		execCtx := newTestExecCtx(ctx, ctrl)
@@ -5074,7 +5074,7 @@ func TestGetComputationWrapperUsesSameTemplateForBinaryBindings(t *testing.T) {
 	ses.logger = observedLoggerSession.logger
 	ses.logLevel = zap.ErrorLevel
 	ses.loggerOnce.Do(func() {})
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	prepareString := tree.NewPrepareString("stmt1", "select ?")
 	preparePlan, err := buildPlan(ctx, nil, plan.NewEmptyCompilerContext(proc), prepareString)
 	require.NoError(t, err)
@@ -5130,7 +5130,7 @@ func TestGetComputationWrapperCapturesFingerprintAfterRemap(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
 	require.NoError(t, ses.SetSessionSysVar(ctx, "enable_remap_hint", int64(1)))
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	provider := motrace.GetTracerProvider()
 	wasEnabled := provider.IsEnable()
 	provider.SetEnable(true)
