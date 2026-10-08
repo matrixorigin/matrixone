@@ -61,6 +61,10 @@ type handleFuncCtx[REQ, RESP MethodBasedMessage] struct {
 	async      bool
 }
 
+type asyncRequest struct {
+	cancel context.CancelFunc
+}
+
 func (c *handleFuncCtx[REQ, RESP]) call(
 	ctx context.Context,
 	req REQ,
@@ -90,6 +94,7 @@ type methodBasedServer[REQ, RESP MethodBasedMessage] struct {
 	// them.
 	asyncMu   sync.Mutex
 	asyncWG   sync.WaitGroup
+	asyncReqs map[*asyncRequest]struct{}
 	closeOnce sync.Once
 	closeErr  error
 	closed    bool
@@ -127,10 +132,11 @@ func NewMessageHandler[REQ, RESP MethodBasedMessage](
 	opts ...HandlerOption[REQ, RESP],
 ) (MethodBasedServer[REQ, RESP], error) {
 	s := &methodBasedServer[REQ, RESP]{
-		logger:   getLogger(sid),
-		cfg:      &cfg,
-		pool:     pool,
-		handlers: make(map[uint32]handleFuncCtx[REQ, RESP]),
+		logger:    getLogger(sid),
+		cfg:       &cfg,
+		pool:      pool,
+		handlers:  make(map[uint32]handleFuncCtx[REQ, RESP]),
+		asyncReqs: make(map[*asyncRequest]struct{}),
 	}
 	s.cfg.Adjust()
 	for _, opt := range opts {
@@ -170,6 +176,18 @@ func (s *methodBasedServer[REQ, RESP]) Close() error {
 		s.asyncMu.Unlock()
 
 		s.closeErr = s.rpc.Close()
+
+		s.asyncMu.Lock()
+		cancels := make([]context.CancelFunc, 0, len(s.asyncReqs))
+		for req := range s.asyncReqs {
+			if req.cancel != nil {
+				cancels = append(cancels, req.cancel)
+			}
+		}
+		s.asyncMu.Unlock()
+		for _, cancel := range cancels {
+			cancel()
+		}
 		s.asyncWG.Wait()
 	})
 	return s.closeErr
@@ -240,6 +258,7 @@ func (s *methodBasedServer[REQ, RESP]) onMessage(
 	}
 
 	if handlerCtx.async {
+		admission := &asyncRequest{cancel: request.Cancel}
 		s.asyncMu.Lock()
 		if s.closed {
 			s.asyncMu.Unlock()
@@ -254,11 +273,20 @@ func (s *methodBasedServer[REQ, RESP]) onMessage(
 			}
 			return nil
 		}
+		if s.asyncReqs == nil {
+			s.asyncReqs = make(map[*asyncRequest]struct{})
+		}
+		s.asyncReqs[admission] = struct{}{}
 		s.asyncWG.Add(1)
 		s.asyncMu.Unlock()
 
 		run := func() {
-			defer s.asyncWG.Done()
+			defer func() {
+				s.asyncMu.Lock()
+				delete(s.asyncReqs, admission)
+				s.asyncMu.Unlock()
+				s.asyncWG.Done()
+			}()
 			fn(request)
 		}
 		if err := ants.Submit(run); err != nil {
