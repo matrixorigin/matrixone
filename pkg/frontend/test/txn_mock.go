@@ -221,6 +221,21 @@ func (mr *MockTxnClientMockRecorder) GetLatestCommitTS() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLatestCommitTS", reflect.TypeOf((*MockTxnClient)(nil).GetLatestCommitTS))
 }
 
+// GetLatestSnapshot mocks base method.
+func (m *MockTxnClient) GetLatestSnapshot(ctx context.Context, minimum timestamp.Timestamp) (timestamp.Timestamp, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetLatestSnapshot", ctx, minimum)
+	ret0, _ := ret[0].(timestamp.Timestamp)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetLatestSnapshot indicates an expected call of GetLatestSnapshot.
+func (mr *MockTxnClientMockRecorder) GetLatestSnapshot(ctx, minimum interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLatestSnapshot", reflect.TypeOf((*MockTxnClient)(nil).GetLatestSnapshot), ctx, minimum)
+}
+
 // GetState mocks base method.
 func (m *MockTxnClient) GetState() client.TxnState {
 	m.ctrl.T.Helper()
