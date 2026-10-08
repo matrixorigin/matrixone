@@ -124,6 +124,17 @@ func NewProcessWithMPool(t testing.TB, sid string, mp *mpool.MPool) *process.Pro
 	return newProcess(t, sid, procConfig{mp: mp, mpSet: true})
 }
 
+// NewProcessWithOwnedMPool gives the test lifetime ownership of mp. The pool
+// cleanup is registered before the process constructor so process and file
+// service cleanup run before the pool is deleted. With nil t, the caller keeps
+// ownership and must delete mp explicitly.
+func NewProcessWithOwnedMPool(t testing.TB, sid string, mp *mpool.MPool) *process.Process {
+	if t != nil && mp != nil {
+		t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	}
+	return NewProcessWithMPool(t, sid, mp)
+}
+
 func newProcess(t testing.TB, sid string, cfg procConfig) *process.Process {
 	mp, fs := cfg.mp, cfg.fs
 	var proc *process.Process
