@@ -10,8 +10,6 @@ create database hybrid_ft_vec_gpu;
 use hybrid_ft_vec_gpu;
 set experimental_fulltext_index = 1;
 set experimental_fulltext2_index = 1;
-set experimental_hnsw_index = 1;
-set experimental_ivf_index = 1;
 set experimental_cagra_index = 1;
 set experimental_ivfpq_index = 1;
 
@@ -229,3 +227,7 @@ select id, match(body) against('needle') as s from t_ft2_ivfpq order by l2_dista
 select id, match(body) against('needle') as s from t_ref_ft2 order by l2_distance(v,'[0,0,0]') limit 3;
 
 drop database hybrid_ft_vec_gpu;
+set experimental_fulltext_index = 0;
+set experimental_fulltext2_index = 0;
+set experimental_cagra_index = 0;
+set experimental_ivfpq_index = 0;

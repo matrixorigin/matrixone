@@ -12,8 +12,6 @@ set experimental_fulltext_index = 1;
 set experimental_fulltext2_index = 1;
 set experimental_hnsw_index = 1;
 set experimental_ivf_index = 1;
-set experimental_cagra_index = 1;
-set experimental_ivfpq_index = 1;
 
 create table src(id bigint primary key, body text, tag int, v vecf32(3) not null);
 insert into src select result,
@@ -266,3 +264,7 @@ select * from fulltext2_search('{}', '{}', 'needle', 0);
 select * from fulltext_index_scan('{}', 'src', 'src', 'needle', 0);
 
 drop database hybrid_ft_vec;
+set experimental_fulltext_index = 0;
+set experimental_fulltext2_index = 0;
+set experimental_hnsw_index = 0;
+set experimental_ivf_index = 0;
