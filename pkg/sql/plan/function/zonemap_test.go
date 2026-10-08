@@ -27,8 +27,13 @@ func TestZoneMapCapabilityRegistryCoverage(t *testing.T) {
 	// The flag is inventory, not permission for paired endpoint execution.
 	expected := []int32{EQUAL, GREAT_THAN, GREAT_EQUAL, LESS_THAN, LESS_EQUAL, BETWEEN,
 		AND, OR, IN, ISNULL, ISNOTNULL, PLUS, MINUS, MULTI, DIV, INTEGER_DIV, UNARY_PLUS, UNARY_MINUS,
-		PREFIX_EQ, PREFIX_BETWEEN, PREFIX_IN_RANGE, PREFIX_IN, IN_RANGE, CEIL, FLOOR, ROUND, PI,
+		PREFIX_EQ, PREFIX_BETWEEN, PREFIX_IN_RANGE, PREFIX_IN, IN_RANGE, PI,
 		TS_TO_TIME, CURRENT_TIMESTAMP, LOCALTIME, DATE, DATE_SUB, FROM_UNIXTIME, YEAR, DATE_TRUNC}
+	// String-numeric conversion is not monotonic with string ordering, so these
+	// families intentionally do not advertise function-wide zonemap pruning.
+	require.False(t, allSupportedFunctions[CEIL].testFlag(plan.Function_ZONEMAPPABLE))
+	require.False(t, allSupportedFunctions[FLOOR].testFlag(plan.Function_ZONEMAPPABLE))
+	require.False(t, allSupportedFunctions[ROUND].testFlag(plan.Function_ZONEMAPPABLE))
 	families := make(map[int32]bool, len(expected))
 	for _, id := range expected {
 		require.True(t, allSupportedFunctions[id].testFlag(plan.Function_ZONEMAPPABLE))
