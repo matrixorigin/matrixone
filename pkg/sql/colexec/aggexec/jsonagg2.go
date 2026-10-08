@@ -1132,10 +1132,6 @@ func (exec *jsonObjectAggExec) flushAccounted() (_ []*vector.Vector, retErr erro
 	return vecs, nil
 }
 
-func buildValueByteJson(vec *vector.Vector, row uint64) (bytejson.ByteJson, error) {
-	return buildValueByteJsonWithProtocol(vec, row, 0)
-}
-
 func buildValueByteJsonWithLocation(vec *vector.Vector, row uint64, loc *time.Location) (bytejson.ByteJson, error) {
 	return buildValueByteJsonWithProtocol(vec, row, 0, loc)
 }
@@ -1274,10 +1270,6 @@ func buildValueByteJsonWithProtocol(
 	default:
 		return bytejson.ByteJson{}, moerr.NewInvalidInputNoCtxf("unsupported type for json aggregate: %v", typ.String())
 	}
-}
-
-func buildJSONArrayValueByteJson(vec *vector.Vector, row uint64, locations ...*time.Location) (bytejson.ByteJson, error) {
-	return buildJSONArrayValueByteJsonWithProtocol(vec, row, 0, locations...)
 }
 
 func buildJSONArrayValueByteJsonWithProtocol(
