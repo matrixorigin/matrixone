@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
@@ -36,10 +35,7 @@ func TestPrivilegeCacheVersionRejectsUnprovenCatalog(t *testing.T) {
 	snapshot := timestamp.Timestamp{PhysicalTime: 20}
 	ctrl := gomock.NewController(t)
 	cli := mock_frontend.NewMockTxnClient(ctrl)
-	op := mock_frontend.NewMockTxnOperator(ctrl)
-	cli.EXPECT().New(ctx, timestamp.Timestamp{}, gomock.Any()).Return(op, nil).AnyTimes()
-	op.EXPECT().Txn().Return(txn.TxnMeta{SnapshotTS: snapshot}).AnyTimes()
-	op.EXPECT().Commit(ctx).Return(nil).AnyTimes()
+	cli.EXPECT().GetLatestSnapshot(ctx, timestamp.Timestamp{}).Return(snapshot, nil).AnyTimes()
 	e := &Engine{cli: cli, partitions: make(map[[2]uint64]*logtailreplay.Partition)}
 	e.catalog.Store(cache.NewCatalog())
 	e.pClient.eng = e
@@ -96,27 +92,21 @@ func TestPrivilegeCacheVersionRejectsUnprovenCatalog(t *testing.T) {
 }
 
 func TestPrivilegeCacheVersionPreservesSnapshotErrors(t *testing.T) {
-	for _, atCommit := range []bool{false, true} {
-		t.Run(map[bool]string{false: "admission", true: "release"}[atCommit], func(t *testing.T) {
-			ctx := context.Background()
-			ctrl := gomock.NewController(t)
-			cli := mock_frontend.NewMockTxnClient(ctrl)
-			failed := errors.New("snapshot unavailable")
-			minimum := timestamp.Timestamp{PhysicalTime: 10}
-			if atCommit {
-				op := mock_frontend.NewMockTxnOperator(ctrl)
-				cli.EXPECT().New(ctx, minimum, gomock.Any()).Return(op, nil)
-				op.EXPECT().Txn().Return(txn.TxnMeta{SnapshotTS: minimum.Next()})
-				op.EXPECT().Commit(ctx).Return(failed)
-			} else {
-				cli.EXPECT().New(ctx, minimum, gomock.Any()).Return(nil, failed)
-			}
-			eng := &Engine{cli: cli}
-			eng.pClient.receivedLogTailTime.ready.Store(true)
-			version, observed, err := eng.GetPrivilegeCacheVersion(ctx, 7, minimum)
-			require.ErrorIs(t, err, failed)
-			require.Equal(t, minimum, observed)
-			require.True(t, version == (PrivilegeCacheVersion{}))
-		})
+	for _, failure := range []error{errors.New("snapshot unavailable"), context.Canceled, nil} {
+		ctx := context.Background()
+		ctrl := gomock.NewController(t)
+		cli := mock_frontend.NewMockTxnClient(ctrl)
+		minimum := timestamp.Timestamp{PhysicalTime: 10}
+		cli.EXPECT().GetLatestSnapshot(ctx, minimum).Return(timestamp.Timestamp{}, failure)
+		eng := &Engine{cli: cli}
+		eng.pClient.receivedLogTailTime.ready.Store(true)
+		version, observed, err := eng.GetPrivilegeCacheVersion(ctx, 7, minimum)
+		if failure == nil {
+			require.NoError(t, err)
+		} else {
+			require.ErrorIs(t, err, failure)
+		}
+		require.Equal(t, minimum, observed)
+		require.Equal(t, PrivilegeCacheVersion{}, version, "an unknown snapshot cannot authorize cache reuse")
 	}
 }

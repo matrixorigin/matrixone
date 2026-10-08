@@ -76,6 +76,9 @@ type TxnClient interface {
 	// be from a CN coordinator txn operator. Before returning, it waits until
 	// the local CN has applied every logtail visible to the snapshot.
 	NewWithSnapshot(ctx context.Context, snapshot txn.CNTxnSnapshot) (TxnOperator, error)
+	// GetLatestSnapshot returns a policy-selected, locally applied exclusive snapshot
+	// without a transaction; an empty timestamp provides no visibility proof.
+	GetLatestSnapshot(ctx context.Context, minimum timestamp.Timestamp) (timestamp.Timestamp, error)
 	// Close closes client.sender
 	Close() error
 	// RefreshExpressionEnabled return true if refresh expression feature enabled
