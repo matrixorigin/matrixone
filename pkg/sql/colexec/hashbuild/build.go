@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"io"
 	"math"
 	"os"
 	"slices"
@@ -72,6 +71,9 @@ func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
 	}
 
 	hashBuild.ctr.setSpillThreshold(hashBuild.SpillThreshold)
+	hashBuild.ctr.autoSpillTriggered = false
+	hashBuild.ctr.autoSpillLimitAtTrigger = 0
+	hashBuild.ctr.autoSpillHasGrouping = false
 	hashBuild.ctr.spillUUID = fmt.Sprintf("hb_%d", hashBuildSpillSequence.Add(1))
 
 	budget, err := proc.GetExecutionResourceBudget()
@@ -188,7 +190,7 @@ func (hashBuild *HashBuild) sendJoinMap(proc *process.Process) error {
 			jm.FreeMemory()
 		}
 	}()
-	spillMode := len(ctr.spilledFds) > 0
+	spillMode := ctr.spillBundle != nil
 	if ctr.hashmapBuilder.InputBatchRowCount > 0 {
 		if spillMode {
 			jm = message.NewJoinMap(
@@ -212,14 +214,21 @@ func (hashBuild *HashBuild) sendJoinMap(proc *process.Process) error {
 			if ctr.spillBundle == nil || ctr.hashmapBuilder.budget == nil {
 				return process.ErrExecutionResourceInvalid
 			}
+			files, err := ctr.spillBundle.accountedFiles(
+				proc.Ctx,
+				ctr.hashmapBuilder.budget,
+			)
+			if err != nil {
+				return err
+			}
 			payload := message.SpillBuildPayload{
-				Files:     ctr.spillBundle.accountedFiles(),
+				Files:     files,
 				BudgetRef: ctr.hashmapBuilder.budget,
 			}
 			if err := jm.SetSpillBuildPayload(payload); err != nil {
+				_ = payload.Close()
 				return moerr.NewInternalError(proc.Ctx, err.Error())
 			}
-			ctr.spilledFds = nil
 			ctr.spillBundle = nil
 		}
 	}
@@ -253,6 +262,17 @@ func (hashBuild *HashBuild) build(
 	analyzer process.Analyzer,
 ) (retErr error) {
 	ctr := &hashBuild.ctr
+	if ctr.autoSpill && hashBuild.IsShuffle && hashBuild.NeedHashMap {
+		if ctr.memoryGrowthParticipant != nil {
+			return process.ErrExecutionResourceInvalid
+		}
+		ctr.memoryGrowthParticipant, retErr =
+			ctr.hashmapBuilder.budget.RegisterMemoryGrowthParticipant()
+		if retErr != nil {
+			return retErr
+		}
+		defer ctr.releaseMemoryGrowthParticipant()
+	}
 	ctr.spillConditions = hashBuild.Conditions
 	spillMode := false
 	var spillFiles []*os.File
@@ -320,6 +340,17 @@ func (hashBuild *HashBuild) build(
 		}
 		spillMode = true
 		analyzer.GetOpStats().AddExtraStat("HashBuildSpillStarts", 1)
+		if ctr.autoSpillTriggered {
+			analyzer.GetOpStats().AddExtraStat("HashBuildAdaptiveSpillStarts", 1)
+			analyzer.GetOpStats().SetMaxExtraStat(
+				"HashBuildAdaptiveSpillLimitBytes",
+				hashBuildStatInt64(ctr.autoSpillLimitAtTrigger),
+			)
+		}
+		// Once spill starts this worker no longer competes for resident growth.
+		// Removing it before draining turns its still-live retained batches into
+		// fixed usage for every remaining participant until each physical free.
+		ctr.releaseMemoryGrowthParticipant()
 		// Drain retained copies oldest-first.  Each successful partition is
 		// followed immediately by reservation and mpool release, so the source
 		// batch and one partition scratch are the only simultaneous peaks.
@@ -349,16 +380,11 @@ func (hashBuild *HashBuild) build(
 				return err
 			}
 		}
-		// No retained state remains after the drain. Drop every mandatory
-		// recovery-class borrower before returning the conservative floor, then
-		// let direct sources use ordinary allocation-led admission.
+		// The retained drain is not the end of this producer: later direct
+		// inputs still need hash/selection/codec scratch. Return these borrowers
+		// to the admitted floor, but keep the floor until build's deferred
+		// cleanup so pressure cannot strand the next input's minimum allocation.
 		ctr.dropMandatorySpillRecoveryScratch()
-		if err := hashBuild.releaseRecoveryCapacity(
-			ctr.hashmapBuilder.mapAllocationAccount,
-			true,
-		); err != nil {
-			return err
-		}
 		v2.HashBuildSpillDepthCounter.WithLabelValues("spill", "1").Inc()
 		return nil
 	}
@@ -366,10 +392,9 @@ func (hashBuild *HashBuild) build(
 		if err := startSpill(); err != nil {
 			return err
 		}
-		// Recovery headroom proves that already-retained batches can be drained;
-		// an upstream-owned direct source cannot strand retained state. Admit its
-		// scratch at the physical allocation sites instead of applying the
-		// conservative retained-batch projection as a query-fatal gate.
+		// Reuse any admitted recovery floor, growing it only at actual scratch
+		// allocation sites. Do not apply the conservative retained-batch
+		// projection as a query-fatal gate to an upstream-owned direct source.
 		return ctr.spillBatchWithPressure(
 			proc, bat, spillFiles, ctr.spillExprExecs, analyzer, false)
 	}
@@ -400,7 +425,7 @@ func (hashBuild *HashBuild) build(
 		// particular, a rejected retained-copy admission below must not add the
 		// same upstream batch a second time when it is spilled directly.
 		ctr.hashmapBuilder.InputBatchRowCount += result.Batch.RowCount()
-		// If in spill mode, spill this batch directly to open files.
+		// If in spill mode, append this batch to dormant named bucket files.
 		if spillMode {
 			if err := spillDirect(result.Batch); err != nil {
 				return err
@@ -411,7 +436,12 @@ func (hashBuild *HashBuild) build(
 		// input size was already computed for analyzer accounting, so this keeps
 		// speculative spill sizing and reservation off the resident hot path while
 		// preserving enough budget headroom to drain the batches already retained.
-		if hashBuild.shouldSpillBeforeRetain(inputBatchSize) {
+		spillBeforeRetain, spillDecisionErr :=
+			hashBuild.shouldSpillBeforeRetain(inputBatchSize, result.Batch)
+		if spillDecisionErr != nil {
+			return spillDecisionErr
+		}
+		if spillBeforeRetain {
 			if err := spillDirect(result.Batch); err != nil {
 				return err
 			}
@@ -559,8 +589,8 @@ func (hashBuild *HashBuild) build(
 
 	// spillBatchBounded flushes each selected bucket immediately; no persistent
 	// 32-bucket vectors remain here. Flush serialized records accumulated across
-	// source batches before rewinding every file and publishing the
-	// complete set, including a spill entered after hard map-budget rejection.
+	// source batches before publishing the complete dormant named-file set,
+	// including a spill entered after hard map-budget rejection.
 	if spillMode {
 		if err := checkHashBuildCanceled(proc); err != nil {
 			return err
@@ -568,14 +598,6 @@ func (hashBuild *HashBuild) build(
 		if err := ctr.flushSpillBuffers(proc, spillFiles, analyzer); err != nil {
 			return err
 		}
-		for _, f := range spillFiles {
-			if f != nil {
-				if _, err := f.Seek(0, io.SeekStart); err != nil {
-					return err
-				}
-			}
-		}
-		ctr.spilledFds = spillFiles
 		spillFiles = nil
 		bundleTransferred = true
 	}
@@ -889,7 +911,7 @@ func (hashBuild *HashBuild) handleRuntimeFilter(
 	// A spilled build has no resident unique-key vector. Treating that absence
 	// as an empty build would publish DROP and incorrectly discard every probe
 	// row, so spill always disables this optional optimization.
-	if len(ctr.spilledFds) > 0 {
+	if ctr.spillBundle != nil {
 		runtimeFilter.Typ = message.RuntimeFilter_PASS
 		hashBuild.sendRuntimeFilter(runtimeFilter, spec, proc)
 		return nil

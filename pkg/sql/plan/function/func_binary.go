@@ -7385,7 +7385,9 @@ func SubStringWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrap
 }
 
 func substringByDomain(value []byte, start, length int64, withLength, binary bool) []byte {
-	if binary {
+	// Every ASCII code point occupies one byte. Avoid materializing runes and
+	// re-encoding text that can use the existing byte-offset bounds unchanged.
+	if binary || isASCIIBytes(functionUtil.QuickBytesToStr(value)) {
 		left, right := substringBounds(len(value), start, length, withLength)
 		return value[left:right]
 	}

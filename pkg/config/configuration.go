@@ -66,9 +66,6 @@ var (
 	//mempool factor.
 	defaultMempoolFactor = 8
 
-	//process.Limitation.Size.  10 << 32 = 42949672960
-	defaultProcessLimitationSize = 42949672960
-
 	//process.Limitation.BatchRows.  10 << 32 = 42949672960
 	defaultProcessLimitationBatchRows = 42949672960
 
@@ -609,7 +606,8 @@ type FrontendParameters struct {
 	//mempool factor. default: 8
 	MempoolFactor int64 `toml:"mempoolFactor"`
 
-	//process.Limitation.Size. default: 10 << 32 = 42949672960
+	// ProcessLimitationSize is an optional per-query execution-memory cap.
+	// Zero leaves the cgroup/host/mpool-derived CN ceiling authoritative.
 	ProcessLimitationSize int64 `toml:"processLimitationSize"`
 
 	// process.Limitation.SpillSize. Zero selects the bounded query default.
@@ -788,10 +786,6 @@ func (fp *FrontendParameters) SetDefaultValues() {
 
 	if fp.MempoolFactor == 0 {
 		fp.MempoolFactor = int64(defaultMempoolFactor)
-	}
-
-	if fp.ProcessLimitationSize == 0 {
-		fp.ProcessLimitationSize = int64(toml.ByteSize(defaultProcessLimitationSize))
 	}
 
 	if fp.ProcessLimitationBatchRows == 0 {

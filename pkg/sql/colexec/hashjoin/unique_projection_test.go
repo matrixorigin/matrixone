@@ -185,6 +185,12 @@ func TestHashJoinUniqueProjectionPropagatesAllocationFailure(t *testing.T) {
 	require.Zero(t, matched)
 	require.Zero(t, arg.ctr.resBat.RowCount())
 	require.Zero(t, account.Snapshot().Used)
+	arg.ctr.probeLeftSemi = true
+	matched, err = arg.ctr.appendMembershipMatches(arg, proc, 1)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	require.Zero(t, matched)
+	require.Zero(t, arg.ctr.resBat.RowCount())
+	require.Zero(t, account.Snapshot().Used)
 }
 
 func BenchmarkHashJoinUniqueProjection(b *testing.B) {

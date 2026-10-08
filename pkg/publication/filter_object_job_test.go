@@ -69,25 +69,6 @@ func TestGetOrCreateChunkSemaphore(t *testing.T) {
 	assert.Equal(t, sem, getOrCreateChunkSemaphore())
 }
 
-func TestAObjectMap(t *testing.T) {
-	m := NewAObjectMap()
-	assert.NotNil(t, m)
-
-	mapping := &AObjectMapping{DBName: "db1", TableName: "t1"}
-	m.Set("key1", mapping)
-
-	got, ok := m.Get("key1")
-	assert.True(t, ok)
-	assert.Equal(t, "db1", got.DBName)
-
-	_, ok = m.Get("nonexistent")
-	assert.False(t, ok)
-
-	m.Delete("key1")
-	_, ok = m.Get("key1")
-	assert.False(t, ok)
-}
-
 // --- Additional coverage tests ---
 
 func TestGetMetaJob_WaitDoneReceivesResult(t *testing.T) {
