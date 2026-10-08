@@ -24,6 +24,7 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"github.com/stretchr/testify/require"
 	"testing"
+	"time"
 )
 
 type closeFailureRPC struct {
@@ -38,12 +39,21 @@ func TestShardServerCloseStopsWorkersOnRPCError(t *testing.T) {
 	sentinel := errors.New("RPC close refused")
 	rpc := &closeFailureRPC{err: sentinel}
 	s := &server{rpc: rpc, stopper: stopper.NewStopper(t.Name())}
-	t.Cleanup(func() { _ = s.Close() })
+	// The fixture must still join its worker if the production Close misses Stop.
+	t.Cleanup(s.stopper.Stop)
 	entered, done := make(chan struct{}), make(chan struct{})
 	require.NoError(t, s.stopper.RunTask(func(ctx context.Context) { close(entered); <-ctx.Done(); close(done) }))
-	<-entered
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("shard server worker did not start")
+	}
 	require.Same(t, sentinel, s.Close())
-	<-done
+	select {
+	case <-done:
+	default:
+		t.Fatal("shard server Close returned before worker stopped")
+	}
 	require.Same(t, sentinel, s.Close())
 	require.Equal(t, 1, rpc.calls)
 	require.ErrorIs(t, s.stopper.RunTask(func(context.Context) {}), stopper.ErrUnavailable)
