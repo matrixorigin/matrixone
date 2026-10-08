@@ -737,20 +737,6 @@ func (mr *MockTxnOperatorMockRecorder) LockSkipped(tableID, mode interface{}) *g
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LockSkipped", reflect.TypeOf((*MockTxnOperator)(nil).LockSkipped), tableID, mode)
 }
 
-// NextSequence mocks base method.
-func (m *MockTxnOperator) NextSequence() uint64 {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "NextSequence")
-	ret0, _ := ret[0].(uint64)
-	return ret0
-}
-
-// NextSequence indicates an expected call of NextSequence.
-func (mr *MockTxnOperatorMockRecorder) NextSequence() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NextSequence", reflect.TypeOf((*MockTxnOperator)(nil).NextSequence))
-}
-
 // Read mocks base method.
 func (m *MockTxnOperator) Read(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error) {
 	m.ctrl.T.Helper()

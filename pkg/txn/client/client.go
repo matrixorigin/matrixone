@@ -189,12 +189,6 @@ func WithNormalStateNoWait(t bool) TxnClientCreateOption {
 	}
 }
 
-func WithTxnOpenedCallback(callbacks []func(op TxnOperator)) TxnClientCreateOption {
-	return func(tc *txnClient) {
-		tc.txnOpenedCallbacks = callbacks
-	}
-}
-
 func WithCheckDup() TxnClientCreateOption {
 	return func(tc *txnClient) {
 		tc.enableCheckDup = true
@@ -270,7 +264,6 @@ type txnClient struct {
 	enableCNBasedConsistency    bool
 	enableSacrificingFreshness  bool
 	enableRefreshExpression     bool
-	txnOpenedCallbacks          []func(TxnOperator)
 	defaultEventCallbacks       defaultTxnEventCallbacks
 	sharedEventCallbacks        txnEventCallbacks
 
@@ -648,8 +641,8 @@ func (client *txnClient) doCreateTxn(
 		return nil, err
 	}
 	// Direct admission is already published. Queued admission may still be
-	// unpublished, but recording an older abort observation is safe and avoids
-	// exposing stale state to creation callbacks.
+	// unpublished, but recording an older abort observation is safe and preserves
+	// the observation before snapshot admission completes.
 	client.markTxnAbortedIfObserved(op)
 	// From this point until the successful return, openTxn has transferred the
 	// operator into the client's admission ownership graph. One deferred owner
@@ -669,10 +662,6 @@ func (client *txnClient) doCreateTxn(
 	if closed && op.reset.waiter == nil {
 		err := moerr.NewClientClosedNoCtx()
 		return nil, err
-	}
-
-	for _, cb := range client.txnOpenedCallbacks {
-		cb(op)
 	}
 
 	ts := client.determineTxnSnapshot(minTS)

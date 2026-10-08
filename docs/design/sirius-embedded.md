@@ -18,8 +18,9 @@ document and report its own evidence.
 ## 1. Decision and scope
 
 Embed Sirius and DuckDB statically in `mo-service` through a C ABI and CGo,
-retaining pinned shared GPU dependencies. Use `upstream-dev-merge` synchronized
-with `sirius-db/sirius:dev`, not the legacy engine or a from-scratch port.
+retaining pinned shared GPU dependencies. Use the Sirius commit pinned at
+`third_party/sirius`, integrating the native embedding work with a reviewed
+`sirius-db/sirius:main` commit, not the legacy engine or a from-scratch port.
 
 - MO readers are the only embedded input in this milestone. No new TAE or
   directory-lock changes are required for Sirius offload.
@@ -163,12 +164,24 @@ logical query reservations must not count the same bytes twice.
 
 Input back-pressure:
 
+The compiler-facing input exposes `Acquire(ctx, payloadBytes)` and returns a
+lease with `Capacity`, `Publish`, and `Release`. Acquisition must precede any
+additional outgoing payload allocation, expansion, coalescing, or copying;
+existing MO reader batches remain governed by their bounded pipeline edge.
+Register lease cleanup immediately after acquisition. Successful publication
+consumes native ownership and retains no Go buffers after the synchronous call;
+failed publication leaves cleanup with the producer. A lease publishes at most
+once. Release is idempotent, and a surviving handle after native release failure
+transfers exactly once to query cleanup. Query cancellation uses an independent
+native control path and interrupts blocked acquisition before joining producers.
+
 1. MO acquires native capacity before allocation/copy.
 2. Bounded coalescing creates a GPU source unit on downstream demand.
 3. Filling, queueing and H2D ownership consume the same credit budget.
 4. Credit remains held through asynchronous use and retry ownership.
-5. If Sirius stops consuming, publication blocks, MO's existing bounded output
-   edge fills, and the reader stops after ordinary DOP-bounded read-ahead.
+5. If Sirius stops consuming, acquiring another lease blocks, MO's existing
+   bounded output edge fills, and the reader stops after ordinary DOP-bounded
+   read-ahead.
 
 No second unaccounted repository or eager source-continuation queue is allowed.
 Do not replace back-pressure with spillable-but-unbounded transport state.
@@ -230,8 +243,11 @@ extension or hide unresolved/duplicate symbols with broad linker flags.
 Package pinned shared dependencies beside MO with relocatable runtime paths.
 Pin source commits, compiler/toolchain, architecture and native artifacts in
 build provenance. Use Pixi and incremental host builds; no container rebuilds.
-Combined Sirius/cuVS builds must use a single compatible CUDA/RAPIDS dependency
-set and a lifetime-managed allocator arrangement. No per-query replacement of
+Pixi is the sole GPU dependency provider, and combined Sirius/cuVS builds use
+one activated Sirius `mo` prefix, as defined by the
+[GPU toolchain design v2](sirius-gpu-toolchain.md). They do not exchange a
+separate GPU toolchain manifest. The process needs a lifetime-managed allocator
+arrangement. No per-query replacement of
 process-wide device resources or `cudaDeviceReset` is permitted.
 
 The backend selector is `flight` or `embedded`. Empty selection preserves
@@ -245,6 +261,8 @@ embedded selection with MO-reader input only.
 
 All PRs reference #28966; no intermediate PR auto-closes the migration.
 Numeric #28968 has its own design and PR count outside this table.
+This original map remains the historical record; the remaining sequence below
+incorporates the delivered prerequisites and the owner-approved native split.
 
 | PR | Repository | Closure | Dependencies | Merge evidence |
 | --- | --- | --- | --- | --- |
@@ -274,6 +292,47 @@ target their `main` branches. Pin MO artifacts to merged Sirius commits, not
 moving branch names. Do not mark dependent PRs ready with unresolved contracts
 or cumulative unmerged diffs. Optional later submissions of reusable patches
 to `sirius-db/sirius:dev` are outside this ten-PR count.
+
+### Remaining implementation sequence
+
+Owner-approved on 2026-10-08. MO #29547 delivers the opt-in bounded MO-reader
+bridge; Sirius #25 delivers numeric primitives. Importer #3/#4 are merged.
+These are prerequisites, not all-22 or production cutover evidence.
+
+| Order | Repository | Complete closure | Required predecessor |
+| --- | --- | --- | --- |
+| A | Sirius | Scoped exact type/literal import, immutable binding, clone fidelity and masked scalar GPU execution; capability disabled | Merged Sirius #25 and importer #4 |
+| B | Sirius | SUM/AVG/MIN/MAX, exact grouping/join/sort keys, spillable states, complete admission, statuses 12/13 and capability 16u | Merged A |
+| C | MO | Capability-scoped lowering, Decimal256 publication/reconstruction, public typed errors and query-local evidence; opt-in | Merged and pinned B |
+| D | MO | Real native-MO/embedded-MO runner, all-22 SF1/SF10 public/type/error parity, lifecycle/resource and performance acceptance | Merged C |
+| E | MO | Embedded default, Flight removal and strict configuration/recovery migration | D and all acceptance gates |
+| F | sidecar | Retire superseded MO Flight service/deployment/tests while retaining independent tools and historical records | E and verified available MO release artifact |
+
+Native A may not expose partial numeric support. Native B completes and validates
+the entire family before advertising it. C must preserve one export profile
+through validation and serialization; ordinary Flight emission remains unchanged
+during coexistence. Exact semantic approval remains MO #29449 document blob
+`42a89f09a1d168d02b9583cb3ea7b4de6dbb5634`.
+
+D versions the campaign contract around required native-MO and embedded-MO
+routes. The obsolete embedded-TAE route is not required. Equivalent Flight
+coverage is optional and explicitly recorded; unavailable comparisons are N/A,
+not incomplete results presented as full-suite evidence. The matched Flight+MO
+ratio limit remains 1.0 for common-suite metrics and Q9 where available. The
+numeric regression limit remains 10% against valid equivalent baselines.
+
+E rejects enabled legacy Flight selections and removed transport settings with
+actionable migration errors. Disabled Sirius and ordinary CPU behavior remain
+unchanged. Cutover requires authoritative replay/readiness and no unresolved
+Flight executions; a nil or unready lease manager is not proof of empty state.
+Retain GC protection until old consumers are proven quiescent. Reconciliation
+and post-removal rollback use the previous release. F waits for the actual MO
+release artifact, preserves DuckDB/TAE/HTTP and standalone Sirius tools, and
+maps useful tests to retained replacements before transport-only deletion.
+
+Close #28968 only after numeric/public/resource/performance acceptance passes;
+close #28966 only after E, release availability and F are delivered. Docker
+image/base changes remain a separate later PR.
 
 ## 9. Verification and observability
 
@@ -314,8 +373,14 @@ schema and native-MO results. Also validate streams=1 and a higher-stream
 stress configuration. Passing at one stream alone is insufficient.
 Agreed floating-point tolerance never excuses decimal/type corruption.
 
-Publish Q1-Q22 and a sum for MO native, Flight+TAE, Flight+MO and embedded+MO.
-Flight+TAE is a retained comparison baseline, not an embedded route. Use
+Publish complete Q1-Q22 tables and sums for MO native and embedded+MO.
+Native MO is the all-22 correctness oracle. Flight's existing exporter declines
+14 canonical queries; exact numeric support remains embedded-only. The owner
+selected native-oracle cutover on 2026-10-01 rather than extending Flight.
+Publish Flight+TAE and Flight+MO comparisons only where equivalent execution is
+supported, explicitly marking unsupported or unavailable coverage. Never call
+a partial sum a full-suite total. Flight+TAE is a retained comparison baseline,
+not an embedded route. Use
 identical data/semantics, matching hardware/memory configuration and exact
 recorded source/artifact revisions. Distinguish cold/warm runs.
 
@@ -325,9 +390,12 @@ their sum, plus raw runs and the separately labelled median full-suite time.
 Repeat Q9 ten times for its concurrency sensitivity. CPU samples are not wall
 time and are not additive stage latencies.
 
-Embedded MO-reader Q9 and full-suite median must not regress against their
-controlled Flight+MO baselines. Report their ratios to Flight+TAE for context;
-that route uses a different reader and is not an embedded acceptance gate.
+Compare embedded MO-reader performance with controlled Flight+MO only on the
+same supported queries and report the common coverage. An unavailable exact
+Q9/full-suite Flight baseline is not fabricated or obtained through narrowing,
+SQL rewrites or fallback. Report ratios to Flight+TAE for context; that route
+uses a different reader and is not an embedded acceptance gate. Complete native
+MO/embedded timings and the reviewed numeric performance gates remain required.
 Historical 34.16s/15.50s observations are not fresh evidence.
 
 #28968 must inventory current-main numeric failures and provide separately

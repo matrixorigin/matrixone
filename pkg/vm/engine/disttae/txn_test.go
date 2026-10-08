@@ -1019,6 +1019,7 @@ func TestIssue25589RollbackLastStatementRestoresWorkspaceAccounting(t *testing.T
 	txn := &Transaction{
 		op:              op,
 		proc:            proc,
+		tablesInVain:    map[uint64]int{42: 1, 43: 0},
 		tableCache:      new(sync.Map),
 		tableOps:        newTableOps(),
 		databaseOps:     newDbOps(),
@@ -1035,8 +1036,12 @@ func TestIssue25589RollbackLastStatementRestoresWorkspaceAccounting(t *testing.T
 	txn.appendWorkspaceEntryLocked(Entry{typ: DELETE, databaseId: 7, tableId: 42, bat: rolledBackDelete})
 	txn.statementID = 1
 	txn.offsets = []int{1}
+	require.True(t, txn.IsTableDeletedAtTxnClose(42))
+	require.True(t, txn.IsTableDeletedAtTxnClose(43))
 
 	require.NoError(t, txn.RollbackLastStatement(context.Background()))
+	require.False(t, txn.IsTableDeletedAtTxnClose(42))
+	require.True(t, txn.IsTableDeletedAtTxnClose(43))
 	require.Len(t, txn.writes, 1)
 	require.Same(t, committed, txn.writes[0].bat)
 	require.Equal(t, uint64(committed.Size()), txn.workspaceSize)
@@ -1272,21 +1277,21 @@ func newTxnOperatorForTest(t *testing.T) *mock_frontend.MockTxnOperator {
 }
 
 func newTxnOperatorForTestWithWorkspace(
-	t *testing.T,
+	t testing.TB,
 	workspace client.Workspace,
 ) *mock_frontend.MockTxnOperator {
 	t.Helper()
 	ctrl := gomock.NewController(t)
 	op := mock_frontend.NewMockTxnOperator(ctrl)
 	op.EXPECT().Txn().Return(txnpb.TxnMeta{ID: []byte("txn-test")}).AnyTimes()
-	op.EXPECT().NextSequence().Return(uint64(1)).AnyTimes()
+
 	op.EXPECT().Status().Return(txnpb.TxnStatus_Active).AnyTimes()
 	op.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
 	return op
 }
 
 func newTransactionWithActivePKTableForTest(
-	t *testing.T,
+	t testing.TB,
 	pkName string,
 ) *Transaction {
 	t.Helper()

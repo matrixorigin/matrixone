@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -1382,6 +1383,154 @@ func TestFoldVarExprsInRemoteRunScopeDoesNotMutateReusableScope(t *testing.T) {
 	require.True(t, scopeContainsVarExpr(scope))
 }
 
+func TestCopyBlockFiltersForRemoteRunUsesAdmittedSubset(t *testing.T) {
+	admitted := plan2.MakePlan2Int64ConstExprWithType(7)
+	staleFold := plan2.MakePlan2Int64ConstExprWithType(8)
+	scope := &Scope{DataSource: &Source{
+		node:               &plan.Node{BlockFilterList: []*plan.Expr{admitted}},
+		remoteBlockFilters: []*plan.Expr{admitted},
+		BlockFilterList:    []*plan.Expr{staleFold},
+	}}
+
+	remote := copyBlockFiltersForRemoteRun(scope)
+	require.NotSame(t, scope, remote)
+	require.Equal(t, int64(7), remote.DataSource.BlockFilterList[0].GetLit().GetI64Val())
+	require.NotSame(t, admitted, remote.DataSource.BlockFilterList[0])
+	require.Same(t, staleFold, scope.DataSource.BlockFilterList[0])
+
+	scope.DataSource.remoteBlockFilters = []*plan.Expr{}
+	remote = copyBlockFiltersForRemoteRun(scope)
+	require.NotSame(t, scope, remote)
+	require.Empty(t, remote.DataSource.BlockFilterList)
+	require.Same(t, staleFold, scope.DataSource.BlockFilterList[0])
+}
+
+func TestFoldRemoteJSONVariablePreservesTypeAndBinding(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	var value any
+	proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+		require.Equal(t, "json_value", name)
+		require.False(t, system)
+		return value, nil
+	})
+	variable := makeTestVarExprWithType("json_value", types.T_json.ToType())
+	variable.GetV().System = false
+	scope := newScope(Remote)
+	proj := projection.NewArgument()
+	proj.ProjectList = []*plan.Expr{variable}
+	scope.setRootOperator(proj)
+
+	worker := testutil.NewProcess(t)
+	worker.SetResolveVariableFunc(nil)
+	input := batch.NewWithSize(0)
+	input.SetRowCount(3)
+	for _, tc := range []struct {
+		name  string
+		value any
+		want  string
+	}{
+		{"object", `{"a":1}`, `{"a": 1}`},
+		{"array", `[2,true,null]`, `[2, true, null]`},
+		{"string", `"true"`, `"true"`},
+		{"boolean", `true`, `true`},
+		{"number", `12.34`, `12.34`},
+		{"nested_float", `{"a":[1.0,18446744073709551615]}`, `{"a": [1, 18446744073709551615]}`},
+		{"json_null", `null`, `null`},
+		{"sql_null", nil, ""},
+		{"rebound_object", `{"a":2}`, `{"a": 2}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			value = tc.value
+			remote, changed, err := foldVarExprsInRemoteRunScope(scope, proc)
+			require.NoError(t, err)
+			require.True(t, changed, "JSON variable must be folded for remote execution")
+			require.False(t, scopeContainsVarExpr(remote))
+			require.True(t, scopeContainsVarExpr(scope), "reusable scope must retain the variable")
+			require.Same(t, variable, proj.ProjectList[0])
+			expr := remote.RootOp.(*projection.Projection).ProjectList[0]
+			require.Equal(t, int32(types.T_json), expr.Typ.Id)
+			require.Equal(t, uint32(types.StringSourceUserVariable)+1, expr.GetLit().StringSource)
+
+			wire, err := expr.Marshal()
+			require.NoError(t, err)
+			decoded := new(plan.Expr)
+			require.NoError(t, decoded.Unmarshal(wire))
+			exec, err := colexec.NewExpressionExecutor(worker, decoded)
+			require.NoError(t, err)
+			defer exec.Free()
+			vec, err := exec.Eval(worker, []*batch.Batch{input}, nil)
+			require.NoError(t, err)
+			require.Equal(t, types.T_json, vec.GetType().Oid)
+			require.True(t, vec.IsConst())
+			require.Equal(t, 3, vec.Length())
+			require.Equal(t, types.StringSourceUserVariable, vec.GetStringSourceAt(0))
+			if tc.value == nil {
+				require.True(t, vec.IsConstNull())
+			} else {
+				require.False(t, vec.IsConstNull())
+				require.Equal(t, tc.want, types.DecodeJson(vec.GetBytesAt(0)).String())
+				expected, err := types.ParseStringToByteJson(tc.value.(string))
+				require.NoError(t, err)
+				encoded, err := types.EncodeJson(expected)
+				require.NoError(t, err)
+				require.Equal(t, encoded, vec.GetBytesAt(0), "binary JSON numeric tags must survive transport")
+			}
+		})
+	}
+}
+
+func TestRemoteJSONLiteralProtocolValidation(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	rt := runtime.ServiceRuntime(c.proc.GetService())
+	previous, exists := rt.GetGlobalVariables(runtime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if exists {
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion104)
+		}
+	})
+	variable := makeTestVarExprWithType("json_value", types.T_json.ToType())
+	variable.GetV().System = false
+	c.proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return `{"a":1}`, nil })
+	op := projection.NewArgument()
+	defer op.Release()
+	op.ProjectList = []*plan.Expr{variable}
+	scope := &Scope{Magic: Remote, Proc: c.proc, RootOp: op, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}}
+	remote, changed, err := foldVarExprsInRemoteRunScope(scope, c.proc)
+	require.NoError(t, err)
+	require.True(t, changed)
+	p, err := fillPipeline(remote)
+	require.NoError(t, err)
+	features, err := plan.RequiredRemoteExpressionFeatures(p)
+	require.NoError(t, err)
+	require.True(t, features.JSONScalarLiteralContracts)
+	for _, version := range []int64{defines.MORPCVersion101, defines.MORPCVersion102, defines.MORPCVersion103} {
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, version)
+		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "typed JSON scalar literals")
+	}
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion104)
+	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
+	for _, version := range []int64{defines.MORPCVersion101, defines.MORPCVersion102, defines.MORPCVersion103} {
+		client.version = version
+		_, err = encodeRemoteScope(remote, c.proc)
+		require.ErrorContains(t, err, "remote destination")
+	}
+	client.version = defines.MORPCVersion104
+	_, err = encodeRemoteScope(remote, c.proc)
+	require.NoError(t, err)
+
+	// Ordinary string constants and typed SQL NULL do not need the new decoder.
+	for _, expr := range []*plan.Expr{
+		plan2.MakePlan2StringConstExprWithType(`{"a":1}`),
+		{Typ: variable.Typ, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}},
+	} {
+		features, err := plan.RequiredRemoteExpressionFeatures(expr)
+		require.NoError(t, err)
+		require.False(t, features.JSONScalarLiteralContracts)
+	}
+}
+
 func TestRemoteUserVariableFoldPreservesStringSource(t *testing.T) {
 	makeProc := func(value any) *process.Process {
 		proc := testutil.NewProcess(t)
@@ -1525,4 +1674,49 @@ func makeTestConstBoolExpr(v bool) *plan.Expr {
 			},
 		},
 	}
+}
+
+// Reflection must inspect expression owners without boxing unrelated mutable
+// state. Interface() on a struct copies private fields, even if field traversal
+// would otherwise skip them.
+func TestVarExprTraversalDoesNotCopySharedPrivateState(t *testing.T) {
+	shared := &struct {
+		privateCounter int
+		Expr           *plan.Expr
+	}{Expr: makeTestConstBoolExpr(true)}
+	owner := &struct{ State any }{State: shared}
+	started, stop, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		shared.privateCounter++
+		close(started)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				shared.privateCounter++
+			}
+		}
+	}()
+	<-started
+	func() {
+		defer func() { close(stop); <-done }()
+		for i := 0; i < 1000; i++ {
+			require.False(t, containsVarExprInValue(reflect.ValueOf(owner), nil))
+			folded, err := foldVarExprsInValue(reflect.ValueOf(owner), nil, nil)
+			require.NoError(t, err)
+			require.False(t, folded)
+		}
+	}()
+	// Skipping a non-getter's boxing must still traverse its exported Expr.
+	shared.Expr = makeTestVarExpr("sql_mode")
+	require.True(t, containsVarExprInValue(reflect.ValueOf(owner), nil))
+	folded, err := foldVarExprsInValue(reflect.ValueOf(owner), nil, newResolveVariableProcess(t, "ANSI"))
+	require.NoError(t, err)
+	require.True(t, folded)
+	require.Equal(t, "ANSI", owner.State.(*struct {
+		privateCounter int
+		Expr           *plan.Expr
+	}).Expr.GetLit().GetSval())
 }

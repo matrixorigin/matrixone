@@ -79,6 +79,26 @@ func TestSourceCommitTSMax(t *testing.T) {
 	require.Equal(t, types.BuildTS(30, 1), info.Max())
 }
 
+func TestPartitionDataVersion(t *testing.T) {
+	state := NewPartitionState("", false, 42, false)
+	require.False(t, state.DataVersion().VisibleAt(types.MaxTs()), "unapplied state is not a proof")
+	state.UpdateAppliedTo(types.BuildTS(10, 0))
+	version := state.DataVersion()
+	require.False(t, version.VisibleAt(types.BuildTS(10, 0)))
+	require.True(t, version.VisibleAt(types.BuildTS(10, 1)))
+
+	copy := state.Copy()
+	copy.UpdateDuration(types.BuildTS(9, 0), types.MaxTs())
+	copy.UpdateAppliedTo(types.BuildTS(9, 0))
+	require.Equal(t, version, copy.DataVersion(), "copy/GC and older delivery preserve the version")
+	copy.UpdateAppliedTo(types.BuildTS(11, 0))
+	require.NotEqual(t, version, copy.DataVersion())
+	require.Equal(t, version, state.DataVersion(), "published snapshots stay immutable")
+	rebuilt := NewPartitionState("", false, 42, false)
+	rebuilt.UpdateAppliedTo(types.BuildTS(10, 0))
+	require.False(t, version == rebuilt.DataVersion(), "same watermark in another subscription is not the same catalog")
+}
+
 func TestSourceCommitTSAtIncludesPartitionStateStart(t *testing.T) {
 	state := NewPartitionState("", false, 42, false)
 	state.UpdateDuration(types.BuildTS(100, 1), types.MaxTs())
@@ -2131,58 +2151,6 @@ func TestCountTombstoneRowsEdgeCases(t *testing.T) {
 // TestCountTombstoneRowsIntegration demonstrates the full flow with real tombstone files
 // This is a more complete integration test showing how tombstone counting would work
 // with actual file I/O. Currently commented out as it requires more setup.
-/*
-func TestCountTombstoneRowsIntegration(t *testing.T) {
-	ctx := context.Background()
-	mp := mpool.MustNewZero()
-	fs := testutil.NewSharedFS()
-
-	state := NewPartitionState("", false, 42, false)
-
-	// Step 1: Create a real tombstone object file
-	writer := ioutil.ConstructTombstoneWriter(objectio.HiddenColumnSelection_None, fs)
-
-	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
-
-	// Create 100 deletion records
-	dataObjID := objectio.NewObjectid()
-	for i := 0; i < 100; i++ {
-		// Create rowid pointing to data object
-		blkID := objectio.NewBlockidWithObjectID(&dataObjID, 0)
-		rowid := types.NewRowid(&blkID, uint32(i))
-		pk := rand.Int()
-
-		require.NoError(t, vector.AppendFixed[types.Rowid](bat.Vecs[0], rowid, false, mp))
-		require.NoError(t, vector.AppendFixed[int32](bat.Vecs[1], int32(pk), false, mp))
-	}
-
-	_, err := writer.WriteBatch(bat)
-	require.NoError(t, err)
-
-	_, _, err = writer.Sync(ctx)
-	require.NoError(t, err)
-
-	// Step 2: Add the tombstone object to partition state
-	ss := writer.GetObjectStats()
-	tombstoneEntry := objectio.ObjectEntry{
-		ObjectStats: *ss,
-		CreateTime:  types.BuildTS(1, 0),
-		DeleteTime:  types.TS{},
-	}
-	state.tombstoneObjectsNameIndex.Set(tombstoneEntry)
-
-	// Step 3: Count tombstone rows
-	// Note: Current implementation uses Rows() approximation
-	// Full implementation would read the file and filter by snapshot
-	tombStats, err := state.CollectTombstoneStats(ctx, types.BuildTS(10, 0), fs)
-	require.NoError(t, err)
-	count := tombStats.Rows
-	require.NoError(t, err)
-	assert.Equal(t, uint64(100), count)
-}
-*/
 
 // TestCalculateTableStatsEmpty tests empty partition
 func TestCalculateTableStatsEmpty(t *testing.T) {

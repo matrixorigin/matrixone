@@ -8,7 +8,8 @@ insert into ft values
 (2, 'aaaaaaaaaaaaaaaaaaaaaaa'),
 (3, 'hello bbbbbbbbbbbbbbbbbbbbbbbbbb'),
 (4, 'short'),
-(5, 'aяяяяяяяяяяяя');
+(5, 'aяяяяяяяяяяяя'),
+(6, 'ȺȺȺȺȺȺȺȺ');
 create fulltext2 index fi on ft(body) with parser ngram;
 select id from ft where match(body) against('bbbbbbbbbbbbbbbbbbbbbbbbbb') order by id;
 ➤ id[4,32,0]  𝄀
@@ -34,6 +35,18 @@ select id from ft where match(body) against('aяяяяяяяяяяяя' in bm25 
 select id from ft where match(body) against('"aяяяяяяяяяяяя"' in boolean mode) order by id;
 ➤ id[4,32,0]  𝄀
 5
+select id from ft where match(body) against('ȺȺȺȺȺȺȺȺ') order by id;
+➤ id[4,32,0]  𝄀
+6
+select id from ft where match(body) against('ȺȺȺȺȺȺȺȺ' in bm25 mode) order by id;
+➤ id[4,32,0]  𝄀
+6
+select id from ft where match(body) against('"ȺȺȺȺȺȺȺȺ"' in boolean mode) order by id;
+➤ id[4,32,0]  𝄀
+6
+select id from ft where match(body) against('ȺȺȺȺȺȺȺ') order by id;
+➤ id[4,32,0]  𝄀
+6
 select id from ft where match(body) against('bbbbbbbbbbbbbbbbbbbbbbbbbb' in boolean mode) order by id;
 ➤ id[4,32,0]  𝄀
 1  𝄀

@@ -171,6 +171,7 @@ type container struct {
 	// spill support
 	spillEngine       *spillutil.SpillEngine
 	spillThreshold    int64
+	autoSpill         bool
 	probeBucketActive bool // true while reading probe batches from a bucket
 }
 
@@ -641,5 +642,6 @@ func (hashJoin *HashJoin) EmitUnmatchedBuild() bool {
 }
 
 func (ctr *container) setSpillThreshold(threshold int64) {
+	ctr.autoSpill = threshold == 0
 	ctr.spillThreshold = colexec.ResolveSpillThreshold(threshold)
 }

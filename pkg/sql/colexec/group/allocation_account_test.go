@@ -311,7 +311,7 @@ func installGroupTestAllocation(
 }
 
 func TestGroupAllocationBindingAndRecoveryBoundaryMatrix(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.Base.Lim.Size = 64 << 20
 	generation, err := proc.GetExecutionResourceBudget()
 	require.NoError(t, err)
@@ -539,6 +539,9 @@ func TestRecoveryCapacityCoverCheckMatchesExactTarget(t *testing.T) {
 
 	ctr := container{recoveryCapacity: process.NewExecutionRecoveryCapacitySlot()}
 	ctr.recoveryCapacityFloor = 1
+	growth, err := ctr.recoveryCapacityGrowth(1)
+	require.NoError(t, err)
+	require.Equal(t, groupSpillHashBytes+groupSpillRowIDBytes-1, growth)
 	require.False(t, ctr.recoveryCapacityCovers(-1))
 	mp := mpool.MustNewZero()
 	hash, err := hashmap.NewIntHashMap(false, mp)
@@ -548,6 +551,54 @@ func TestRecoveryCapacityCoverCheckMatchesExactTarget(t *testing.T) {
 	require.False(t, ctr.recoveryCapacityCovers(1))
 	hash.Free()
 	require.Zero(t, mp.CurrNB())
+}
+
+func TestGroupAdaptiveSpillProjectsRecoveryGrowth(t *testing.T) {
+	// This boundary is the query ledger, not the test host's live pressure.
+	budget := process.MustNewExecutionResourceBudget(64<<20, 64<<20)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	defer generation.Close()
+	participant, err := generation.RegisterMemoryGrowthParticipant()
+	require.NoError(t, err)
+	defer participant.Release()
+
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	hash, err := hashmap.NewIntHashMap(false, mp)
+	require.NoError(t, err)
+	defer func() {
+		hash.Free()
+		require.Zero(t, mp.CurrNB())
+	}()
+	hash.AddGroups(1)
+	ctr := container{
+		mp:                      mp,
+		budget:                  generation,
+		mtyp:                    H8,
+		autoSpill:               true,
+		memoryGrowthParticipant: participant,
+	}
+	ctr.hr.Hash = hash
+	ctr.hr.TxnItr = hash.NewTransactionalIterator()
+	analyzer := process.NewAnalyzer(0, false, false, "group")
+	used := uint64(ctr.memUsed())
+	cap := generation.Snapshot().Cap
+	require.Less(t, used, cap)
+
+	spill, err := ctr.needAdaptiveSpillForGrowth(analyzer, cap-used-1)
+	require.NoError(t, err)
+	require.False(t, spill)
+	spill, err = ctr.needAdaptiveSpillForGrowth(analyzer, cap-used)
+	require.NoError(t, err)
+	require.True(t, spill)
+	require.Equal(t, int64(1),
+		analyzer.GetOpStats().ExtraStats["GroupAdaptiveSpillTriggers"])
+
+	ctr.releaseMemoryGrowthParticipant()
+	require.Zero(t, generation.Snapshot().MemoryGrowthParticipants)
+	ctr.hr.Hash = nil
+	ctr.hr.TxnItr = nil
 }
 
 func mustGroupRecoveryAdd(t *testing.T, left, right uint64) uint64 {
@@ -612,6 +663,8 @@ func TestGroupReleasesRecoveryFloorBeforeFinalFlush(t *testing.T) {
 	require.NoError(t, g.Prepare(proc))
 	_, err := g.buildOneBatch(proc, input)
 	require.NoError(t, err)
+	require.NoError(t, g.ctr.ensureMemoryGrowthParticipant())
+	require.NotNil(t, g.ctr.memoryGrowthParticipant)
 	require.NotNil(t, g.ctr.recoveryCapacity)
 	reserved, borrowed := g.ctr.recoveryCapacity.Snapshot()
 	require.Positive(t, reserved)
@@ -621,6 +674,7 @@ func TestGroupReleasesRecoveryFloorBeforeFinalFlush(t *testing.T) {
 	result, err := g.ctr.outputOneBatchFinal(proc, g.OpAnalyzer, g.Aggs)
 	require.NoError(t, err)
 	require.NotNil(t, result.Batch)
+	require.Nil(t, g.ctr.memoryGrowthParticipant)
 	require.NotNil(t, g.ctr.recoveryCapacity)
 	afterReserved, afterBorrowed := g.ctr.recoveryCapacity.Snapshot()
 	require.Zero(t, afterReserved)
@@ -907,6 +961,119 @@ func TestAccountedGroupForcedSpillReleasesMemoryDiskAndFD(t *testing.T) {
 	require.Zero(t, allocation.generation.Snapshot().SpillFDUsed)
 	finalizeGroupTestAllocation(t, g, allocation)
 	input.Clean(proc.Mp())
+}
+
+func TestAccountedMergeGroupVectorDistinctSpillConsumer(t *testing.T) {
+	for _, keyType := range []types.T{types.T_array_float32, types.T_array_float64} {
+		t.Run(keyType.String(), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			t.Cleanup(func() {
+				proc.Free()
+				require.Zero(t, proc.Mp().CurrNB())
+			})
+			// Keep the forced-spill boundary independent of live host pressure.
+			budget := process.MustNewExecutionResourceBudget(64<<20, 64<<20)
+			generation, err := budget.OpenGeneration(1)
+			require.NoError(t, err)
+			t.Cleanup(generation.Close)
+			require.NoError(t, proc.SetExecutionResourceBudgetForTesting(generation))
+			input := batch.NewWithSize(1)
+			input.Vecs[0] = vector.NewVec(keyType.ToType())
+			var child *colexec.MockOperator
+			t.Cleanup(func() {
+				if child == nil {
+					input.Clean(proc.Mp())
+				} else {
+					child.Free(proc, false, nil)
+				}
+			})
+			const keys = 64
+			want := make(map[string]int, keys)
+			for pass := 0; pass < 2; pass++ {
+				for i := range keys {
+					var value []byte
+					if keyType == types.T_array_float32 {
+						values := []float32{float32(i), 2, 3, 4}
+						if i%2 != 0 {
+							values = append(values, 5, 6)
+						}
+						value = types.ArrayToBytes(values)
+					} else {
+						values := []float64{float64(i), 2}
+						if i%2 != 0 {
+							values = append(values, 3)
+						}
+						value = types.ArrayToBytes(values)
+					}
+					require.NoError(t, vector.AppendBytes(input.Vecs[0], value, false, proc.Mp()))
+					want[string(value)] = 1
+				}
+				require.NoError(t, vector.AppendBytes(input.Vecs[0], nil, true, proc.Mp()))
+			}
+			input.SetRowCount(input.Vecs[0].Length())
+			child = colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+			partial := newGroupOp(proc, []*plan.Expr{colExpr(0, keyType)}, nil)
+			partial.NeedEval = false
+			partial.AppendChild(child)
+			merge := newMergeGroupOp(nil)
+			merge.SpillMem = 8 // Existing deterministic group-count spill mode.
+			merge.AppendChild(partial)
+			var partialAllocation, mergeAllocation groupTestAllocation
+			var partialBound, mergeBound bool
+			var execErr error
+			t.Cleanup(func() {
+				merge.Free(proc, execErr != nil, execErr)
+				partial.Free(proc, execErr != nil, execErr)
+				// Both operators share one statement generation. Release both
+				// registered recovery floors before either terminal helper checks
+				// that the statement's physical reservations are all returned.
+				if mergeBound {
+					require.NoError(t, merge.ctr.clearAllocationAccount(mergeAllocation.account))
+				}
+				if partialBound {
+					require.NoError(t, partial.ctr.clearAllocationAccount(partialAllocation.account))
+				}
+				if mergeBound {
+					require.Zero(t, mergeAllocation.account.Snapshot().Used)
+					require.Zero(t, mergeAllocation.generation.Snapshot().SpillDiskUsed)
+					require.Zero(t, mergeAllocation.generation.Snapshot().SpillFDUsed)
+					finalizeGroupTestAllocation(t, merge, mergeAllocation)
+				}
+				if partialBound {
+					require.Zero(t, partialAllocation.account.Snapshot().Used)
+					finalizeGroupTestAllocation(t, partial, partialAllocation)
+				}
+			})
+			partialAllocation = installGroupTestAllocation(t, partial, proc, 64<<20)
+			partialBound = true
+			mergeAllocation = installGroupTestAllocation(t, merge, proc, 64<<20)
+			mergeBound = true
+			require.NoError(t, partial.Prepare(proc))
+			require.NoError(t, merge.Prepare(proc))
+			got := make(map[string]int, keys)
+			nulls := 0
+			for {
+				var result vm.CallResult
+				result, execErr = vm.Exec(merge, proc)
+				require.NoError(t, execErr)
+				if result.Status == vm.ExecStop || result.Batch == nil {
+					break
+				}
+				for row := range result.Batch.RowCount() {
+					if result.Batch.Vecs[0].IsNull(uint64(row)) {
+						nulls++
+					} else {
+						got[string(result.Batch.Vecs[0].GetBytesAt(row))]++
+					}
+				}
+			}
+			require.Equal(t, want, got)
+			require.Equal(t, 1, nulls)
+			stats := merge.OpAnalyzer.GetOpStats().ExtraStats
+			require.Positive(t, stats["GroupSpillRecords"])
+			require.Positive(t, stats["GroupSpillReloadRows"], "the real MergeGroup must consume the spill codec")
+		})
+	}
 }
 
 func TestPreAllocateBuildChunkIncludesVectorBitmaps(t *testing.T) {
@@ -2296,6 +2463,125 @@ func TestAccountedGroupSpillResourceAdmissionCleans(t *testing.T) {
 			require.Zero(t, allocation.generation.Snapshot().SpillFDUsed)
 			finalizeGroupTestAllocation(t, g, allocation)
 			input.Clean(proc.Mp())
+		})
+	}
+}
+
+func TestAccountedGroupQueuedSpillDoesNotRetainFDs(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	keys := []int32{1, 2}
+	input := batch.NewWithSize(1)
+	defer input.Clean(proc.Mp())
+	input.Vecs[0] = testutil.MakeInt32Vector(keys, nil, proc.Mp())
+	input.SetRowCount(len(keys))
+	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)},
+		[]aggexec.AggFuncExecExpression{countStarAgg()})
+	g.SpillMem = 2 // Values below 10000 are deterministic group-count thresholds.
+	// Prepare against a private fixed ledger so live host pressure cannot
+	// reject an allocation before the queue/cancellation boundary under test.
+	budget := process.MustNewExecutionResourceBudget(64<<20, 64<<20)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	defer generation.Close()
+	var allocation groupTestAllocation
+	require.NoError(t, proc.SetExecutionResourceBudgetForTesting(generation))
+	defer func() {
+		g.Free(proc, false, nil)
+		if allocation.account == nil {
+			return // Initialization failed before the account was acquired.
+		}
+		require.Zero(t, allocation.account.Snapshot().Used)
+		require.Zero(t, allocation.generation.SpillFDUsed())
+		require.Zero(t, allocation.generation.SpillDiskUsed())
+		finalizeGroupTestAllocation(t, g, allocation)
+		spillFS, err := proc.GetSpillFileService()
+		require.NoError(t, err)
+		for entry, err := range spillFS.List(context.Background(), "/") {
+			require.NoError(t, err)
+			t.Errorf("spill file remains after cleanup: %s", entry.Name)
+		}
+	}()
+	var nonEmptyBuckets int
+	g.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}).WithEndOfDataCallback(func() {
+		for _, bkt := range g.ctr.currentSpillBkt {
+			if bkt.cnt > 0 {
+				nonEmptyBuckets++
+			}
+		}
+		require.Positive(t, allocation.generation.SpillFDUsed())
+		// Stop after writer ownership has moved to the queue, before any reader
+		// opens a bucket. Queue length must not consume the reader's FD budget.
+		proc.Ctx = newCancelOnDoneCheckContext(proc.Ctx, nonEmptyBuckets+4)
+	}))
+	allocation = installGroupTestAllocation(t, g, proc, 64<<20)
+	require.NoError(t, g.Prepare(proc))
+	result, err := g.Call(proc)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, result.Batch)
+	require.Nil(t, g.ctr.currentSpillBkt)
+	require.Positive(t, nonEmptyBuckets)
+	require.Equal(t, nonEmptyBuckets, g.ctr.spillBkts.Len())
+	require.Positive(t, allocation.generation.SpillDiskUsed())
+	require.Zero(t, allocation.generation.SpillFDUsed())
+}
+
+func TestGroupSpillBucketReopen(t *testing.T) {
+	for _, mode := range []string{"read", "canceled", "fd-refused", "flush-error"} {
+		t.Run(mode, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			budget, err := proc.GetExecutionResourceBudget()
+			require.NoError(t, err)
+			fs, err := proc.GetSpillFileService()
+			require.NoError(t, err)
+			ctr := container{mp: proc.Mp(), budget: budget}
+			bkt := &spillBucket{name: "reopen"}
+			defer func() {
+				require.NoError(t, bkt.free())
+				require.Zero(t, budget.SpillFDUsed())
+				require.Zero(t, budget.SpillDiskUsed())
+				for entry, err := range fs.List(context.Background(), "/") {
+					require.NoError(t, err)
+					t.Errorf("spill file remains after cleanup: %s", entry.Name)
+				}
+			}()
+			require.NoError(t, ctr.openSpillBucket(proc, fs, bkt))
+			_, err = bkt.writer.Write([]byte("data"))
+			require.NoError(t, err)
+			if mode == "flush-error" {
+				require.NoError(t, bkt.flushWriter())
+				bkt.writer = &distinctFlushErrorWriter{err: io.ErrShortWrite}
+				require.ErrorIs(t, bkt.free(), io.ErrShortWrite)
+				return // The deferred checks still require deletion and zero ledgers.
+			}
+			require.NoError(t, bkt.finishWriting())
+			require.Nil(t, bkt.file)
+			require.Zero(t, budget.SpillFDUsed())
+			diskBytes := budget.SpillDiskUsed()
+			require.Positive(t, diskBytes)
+
+			switch mode {
+			case "read":
+				require.NoError(t, bkt.openReader(proc.Ctx, budget))
+				require.EqualValues(t, 1, budget.SpillFDUsed())
+				data, err := io.ReadAll(bkt.file)
+				require.NoError(t, err)
+				require.Equal(t, "data", string(data))
+			case "canceled":
+				ctx, cancel := context.WithCancel(proc.Ctx)
+				cancel()
+				require.ErrorIs(t, bkt.openReader(ctx, budget), context.Canceled)
+				require.Zero(t, budget.SpillFDUsed())
+			case "fd-refused":
+				blocker, err := budget.ReserveSpillFD(budget.SpillFDCap())
+				require.NoError(t, err)
+				defer blocker.Release()
+				require.Error(t, bkt.openReader(proc.Ctx, budget))
+				require.Equal(t, budget.SpillFDCap(), budget.SpillFDUsed())
+			}
+			require.Equal(t, diskBytes, budget.SpillDiskUsed())
+			require.NoError(t, bkt.free()) // The deferred second free is also safe.
 		})
 	}
 }

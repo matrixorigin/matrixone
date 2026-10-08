@@ -21,16 +21,73 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
 
 type filterFoldWarningCounter struct{ count int }
 
 func (c *filterFoldWarningCounter) AppendWarningDiagnostic(uint16, string) { c.count++ }
+
+func TestFoldedHexBitFilterRemoteRoundTrip(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	t.Cleanup(c.proc.Free)
+	client.version = defines.MORPCLatestVersion
+	column := &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_bit), Width: 8},
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{Name: "v"}},
+	}
+	hex, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "hex", []*planpb.Expr{column})
+	require.NoError(t, err)
+	filter, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "=", []*planpb.Expr{
+		hex, plan2.MakePlan2StringConstExprWithType("AA"),
+	})
+	require.NoError(t, err)
+	_, err = planpb.RequiredRemoteExpressionFeatures(filter)
+	require.NoError(t, err, "the public binder must produce a valid expression")
+
+	var executors []colexec.ExpressionExecutor
+	t.Cleanup(func() {
+		for _, executor := range executors {
+			executor.Free()
+		}
+	})
+	folded, nextExecutors, rebuilt, err := prepareFoldedFilterExprs(
+		c.proc, []*planpb.Expr{filter}, nil, executors, true)
+	executors = nextExecutors
+	require.NoError(t, err)
+	require.True(t, rebuilt)
+	require.False(t, plan2.HasFoldValExpr(filter), "the logical filter must stay unchanged")
+	require.NotNil(t, folded[0].GetF().Args[1].GetFold(), "runtime constants still fold")
+
+	op := value_scan.NewArgument()
+	t.Cleanup(op.Release)
+	scope := &Scope{
+		Magic: Remote, Proc: c.proc, RootOp: op,
+		NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"},
+		DataSource: &Source{
+			node:       &planpb.Node{FilterList: []*planpb.Expr{filter}},
+			FilterExpr: folded[0],
+		},
+	}
+	data, err := encodeRemoteScope(scope, c.proc)
+	require.NoError(t, err, "scan folding must not invalidate private CAST metadata")
+	remote := new(pipeline.Pipeline)
+	require.NoError(t, remote.Unmarshal(data))
+	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, remote))
+	remoteHex := remote.DataSource.Expr.GetF().Args[0].GetF()
+	require.NotNil(t, remoteHex.Args[0].GetF().Args[1].GetT())
+	decoded, err := decodeScope(data, c.proc, true, nil)
+	require.NoError(t, err)
+	t.Cleanup(decoded.release)
+}
 
 func TestDiagnosticFilterClassificationExcludesStorageCopy(t *testing.T) {
 	proc := testutil.NewProcess(t)
@@ -56,10 +113,122 @@ func TestDiagnosticFilterClassificationExcludesStorageCopy(t *testing.T) {
 		context.Background(), "=", []*planpb.Expr{column, cast})
 	require.NoError(t, err)
 	require.True(t, plan2.ContainsConstantFilterDiagnostic(proc, filter))
-	require.Empty(t, filterScanStorageExprs(proc, []*planpb.Expr{filter}))
+	storageFilters := filterScanStorageExprs(proc, []*planpb.Expr{filter}, false)
+	require.Empty(t, storageFilters)
 	require.True(t, (&Compile{proc: proc}).needsCoordinatorConstantFilterDiagnostic(
 		&planpb.Node{FilterList: []*planpb.Expr{filter}}))
+	require.True(t, (&Compile{proc: proc, preparedJoinDiagnosticFree: true}).needsCoordinatorConstantFilterDiagnostic(
+		&planpb.Node{FilterList: []*planpb.Expr{filter}}), "a literal warning still needs its owner")
 	require.Zero(t, warnings.count, "the classification probe must not publish diagnostics")
+}
+
+func TestFilterScanStorageExprsUsesPreparedDiagnosticProof(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(func() { proc.Free() })
+	warnings := &filterFoldWarningCounter{}
+	proc.WarningSink = warnings
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("7"), false, proc.Mp()))
+	proc.SetPrepareParams(params)
+	t.Cleanup(func() {
+		proc.SetPrepareParams(nil)
+		params.Free(proc.Mp())
+	})
+
+	column := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int32)},
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{Name: "s_w_id"}}}
+	param := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_text)},
+		Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+	target := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int32)},
+		Expr: &planpb.Expr_T{T: &planpb.TargetType{}}}
+	cast, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "cast", []*planpb.Expr{param, target})
+	require.NoError(t, err)
+	filter, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "=", []*planpb.Expr{column, cast})
+	require.NoError(t, err)
+	require.True(t, plan2.ContainsStatementInvariantFilterDiagnostic(proc, filter))
+	prepared := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{Nodes: []*planpb.Node{
+		{NodeType: planpb.Node_TABLE_SCAN, FilterList: []*planpb.Expr{filter}},
+	}}}}
+	require.Equal(t, []*planpb.Expr{cast}, plan2.PreparedPlanDiagnosticCandidates(prepared))
+	require.False(t, (&Compile{proc: proc, preparedJoinDiagnosticFree: true}).needsCoordinatorConstantFilterDiagnostic(
+		&planpb.Node{FilterList: []*planpb.Expr{filter}}))
+	derivedBlocks := plan2.CompletePreparedDiagnosticBlockFilters(
+		context.Background(), &planpb.Node{NodeType: planpb.Node_TABLE_SCAN}, []*planpb.Expr{filter}, nil)
+	require.Len(t, derivedBlocks, 1)
+	require.NotSame(t, filter, derivedBlocks[0])
+	require.Len(t, plan2.CompletePreparedDiagnosticBlockFilters(
+		context.Background(), &planpb.Node{NodeType: planpb.Node_TABLE_SCAN}, []*planpb.Expr{filter}, derivedBlocks), 1)
+	require.Empty(t, plan2.CompletePreparedDiagnosticBlockFilters(
+		context.Background(), &planpb.Node{NodeType: planpb.Node_TABLE_SCAN, ExtraOptions: plan2.PreparedBlockFilterDisabledScanOption}, []*planpb.Expr{filter}, nil))
+	require.Empty(t, plan2.CompletePreparedDiagnosticBlockFilters(
+		context.Background(), &planpb.Node{NodeType: planpb.Node_TABLE_SCAN, ExtraOptions: "other-scan-option"}, []*planpb.Expr{filter}, nil))
+
+	for _, tc := range []struct {
+		value string
+		safe  bool
+	}{
+		{value: "7", safe: true},
+		{value: "invalid", safe: false},
+		{value: "8", safe: true},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			require.NoError(t, vector.SetStringAt(params, 0, tc.value, proc.Mp()))
+			proven, err := plan2.ProbeStatementParameterDiagnosticFree(proc, filter)
+			require.NoError(t, err)
+			require.Equal(t, tc.safe, proven)
+			storageFilters := filterScanStorageExprs(proc, []*planpb.Expr{filter}, proven)
+			if tc.safe {
+				require.Equal(t, []*planpb.Expr{filter}, storageFilters)
+			} else {
+				require.Empty(t, storageFilters)
+			}
+			require.Zero(t, warnings.count, "probing must not publish diagnostics")
+		})
+	}
+	t.Run("index prefix IN", func(t *testing.T) {
+		require.NoError(t, vector.SetStringAt(params, 0, "7", proc.Mp()))
+		serial, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "serial", []*planpb.Expr{cast})
+		require.NoError(t, err)
+		filter, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "prefix_in", []*planpb.Expr{
+			{Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{Name: "__mo_index_idx_col"}}},
+			{Typ: serial.Typ, Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{serial}}}},
+		})
+		require.NoError(t, err)
+		require.True(t, plan2.ContainsStatementInvariantFilterDiagnostic(proc, filter))
+		prepared := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{Nodes: []*planpb.Node{
+			{NodeType: planpb.Node_TABLE_SCAN, FilterList: []*planpb.Expr{filter}},
+		}}}}
+		candidates := plan2.PreparedPlanDiagnosticCandidates(prepared)
+		require.NotEmpty(t, candidates)
+		proven, err := plan2.ProbePreparedDiagnosticCandidates(proc, candidates)
+		require.NoError(t, err)
+		storageFilters := filterScanStorageExprs(proc, []*planpb.Expr{filter}, proven)
+		require.Len(t, storageFilters, 1,
+			"a warning-free current parameter must retain the secondary index filter")
+		require.Zero(t, warnings.count)
+
+		require.NoError(t, vector.SetStringAt(params, 0, "not-an-int", proc.Mp()))
+		proven, err = plan2.ProbePreparedDiagnosticCandidates(proc, candidates)
+		require.NoError(t, err)
+		storageFilters = filterScanStorageExprs(proc, []*planpb.Expr{filter}, proven)
+		require.Empty(t, storageFilters,
+			"a diagnostic-bearing parameter must keep its row-level owner")
+		require.Zero(t, warnings.count, "the probe must not publish the SQL diagnostic")
+
+		require.NoError(t, vector.SetStringAt(params, 0, "8", proc.Mp()))
+		proven, err = plan2.ProbePreparedDiagnosticCandidates(proc, candidates)
+		require.NoError(t, err)
+		storageFilters = filterScanStorageExprs(proc, []*planpb.Expr{filter}, proven)
+		require.Len(t, storageFilters, 1, "the next execution must recheck its parameter")
+
+		proc.SetPrepareParams(nil)
+		proven, err = plan2.ProbePreparedDiagnosticCandidates(proc, candidates)
+		require.Error(t, err, "an unbound parameter must reject execution-local proof")
+		require.False(t, proven)
+		storageFilters = filterScanStorageExprs(proc, []*planpb.Expr{filter}, proven)
+		require.Empty(t, storageFilters, "an unbound plan has no execution-local proof")
+
+	})
 }
 
 func TestBuildFoldedFilterExprsRollsBackAndCanRetry(t *testing.T) {

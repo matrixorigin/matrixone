@@ -494,20 +494,6 @@ func init() {
 // is non-nil solely so the caller can retain it and retry Close.
 func StartTestCluster(opts ...Option) (Cluster, error) {
 	opts = append([]Option{WithTesting()}, opts...)
-	// Keep every embedded UT cluster on the short test-only readiness cadence.
-	// Shared base clusters already use this callback, but dedicated scenarios
-	// commonly provide their own pre-start adjustment and would otherwise fall
-	// back to the production one-second polling intervals. Apply the cadence
-	// first so an explicit scenario-specific value can still override it.
-	opts = append(opts, func(c *cluster) {
-		preStart := c.options.preStart
-		c.options.preStart = func(svc ServiceOperator) {
-			adjustClusterStartupRetryIntervals(svc)
-			if preStart != nil {
-				preStart(svc)
-			}
-		}
-	})
 	c, err := NewCluster(opts...)
 	if err != nil {
 		return cleanupClusterOnError(c, err)
@@ -561,8 +547,6 @@ func startBasicCluster(
 }
 
 func adjustBasicClusterService(svc ServiceOperator) {
-	adjustClusterStartupRetryIntervals(svc)
-
 	switch svc.ServiceType() {
 	case metadata.ServiceType_CN:
 		svc.Adjust(
@@ -592,14 +576,15 @@ func adjustBasicClusterService(svc ServiceOperator) {
 	}
 }
 
-// adjustClusterStartupRetryIntervals keeps test-only cluster startup
-// responsive while services are converging. These intervals only affect the
-// polling cadence; readiness is still gated by the same HAKeeper state and
-// shard conditions.
-func adjustClusterStartupRetryIntervals(svc ServiceOperator) {
+// adjustTestingClusterStartup applies local test-cluster Raft timing
+// and readiness polling before scenario overrides. Readiness conditions,
+// store liveness, and bootstrap failure budgets are unchanged.
+func adjustTestingClusterStartup(svc ServiceOperator) {
 	switch svc.ServiceType() {
 	case metadata.ServiceType_LOG:
 		svc.Adjust(func(config *ServiceConfig) {
+			// A single local LOG needs no production network RTT allowance.
+			config.LogService.RTTMillisecond = 50
 			config.LogService.HAKeeperBootstrapRetryInterval.Duration =
 				basicClusterHAKeeperBootstrapRetryInterval
 		})
@@ -630,8 +615,8 @@ func waitBasicClusterTaskServices(ctx context.Context, c Cluster, cnCount int) e
 				"CN %s does not expose its task service", svc.ServiceID())
 		}
 		if err := waitTaskServiceReady(ctx, getter, basicClusterServiceStartupRetryInterval); err != nil {
-			return moerr.NewInternalErrorf(
-				ctx, "CN %s task service did not become ready: %v", svc.ServiceID(), err)
+			return errors.Join(moerr.NewInternalErrorNoCtxf(
+				"CN %s task service did not become ready", svc.ServiceID()), err)
 		}
 	}
 	return nil
@@ -643,8 +628,20 @@ func waitTaskServiceReady(
 	retryInterval time.Duration,
 ) error {
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if service, ok := getter.GetTaskService(); ok && service != nil {
-			return nil
+			// Holder publication does not imply backing storage availability.
+			// Ping also succeeds with no store; a bounded read observes the real
+			// boundary and requests refresh without retrying any business write.
+			_, err := service.QueryDaemonTask(ctx, taskservice.WithTaskIDCond(taskservice.EQ, 0))
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if err == nil || !errors.Is(err, taskservice.ErrNotReady) {
+				return err
+			}
 		}
 		if err := waitStartupRetry(ctx, retryInterval); err != nil {
 			return err

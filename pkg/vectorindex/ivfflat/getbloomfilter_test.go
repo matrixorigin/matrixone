@@ -34,7 +34,7 @@ import (
 // getBloomFilter's WaitUniqueJoinKeys receives it.
 func setupKeyFilter(t *testing.T, n int) *sqlexec.SqlProcess {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	mb := message.NewMessageBoard()
 	proc.SetMessageBoard(mb)
 	sqlproc := sqlexec.NewSqlProcess(proc)
@@ -100,7 +100,6 @@ func TestExactRelationMembershipScanThreshold(t *testing.T) {
 	makeSQLProc := func(t *testing.T, rows int) *sqlexec.SqlProcess {
 		t.Helper()
 		proc := testutil.NewProc(t)
-		t.Cleanup(proc.Free)
 		vec := vector.NewVec(types.T_int64.ToType())
 		t.Cleanup(func() { vec.Free(proc.Mp()) })
 		for row := range rows {

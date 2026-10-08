@@ -500,7 +500,7 @@ func TestSelectMetaLockRequirementPlannerPaths(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			optimizer := plan2.NewMockOptimizer(true)
+			optimizer := plan2.NewMockOptimizer(true, newPlanTestProcess(t))
 			ctx := optimizer.CurrentContext()
 			ctx.GetProcess().SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
 				return "BM25", nil

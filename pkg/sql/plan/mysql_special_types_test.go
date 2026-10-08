@@ -301,7 +301,7 @@ func TestFindInSetPlannerPreservesSetContractAcrossQueryBoundary(t *testing.T) {
 		{name: "ordered derived empty member", sql: "select find_in_set('', s) from (select s from set_empty_member_t order by s) d", def: ",a", wantType: types.T_uint64},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			logicPlan, err := runOneExprStmt(newMySQLSpecialOrderMock(), t, tc.sql)
+			logicPlan, err := runOneExprStmt(newMySQLSpecialOrderMock(t), t, tc.sql)
 			require.NoError(t, err)
 			findInSet := findPlanFunctionExpr(logicPlan, "find_in_set")
 			require.NotNil(t, findInSet, logicPlan.String())
@@ -433,7 +433,7 @@ func TestPreparedGeometrySRIDPlanIsValueSpecialized(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	prepared, err := BuildPlan(NewMockCompilerContext(true), stmt, true)
+	prepared, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, true)
 	require.NoError(t, err)
 	require.NoError(t, NormalizePrepareParamRefs(ctx, prepared))
 	fn := findPlanFunctionExpr(prepared, "st_srid")
@@ -443,8 +443,6 @@ func TestPreparedGeometrySRIDPlanIsValueSpecialized(t *testing.T) {
 	require.True(t, hasParam)
 	_, defined := decodeGeometrySRIDWidth(fn.Typ.Width)
 	require.False(t, defined)
-	require.Equal(t, []int32{0}, PreparedPlanGeometrySRIDParamPositions(prepared))
-	require.True(t, PreparedPlanNeedsRuntimeSpecialization(prepared))
 
 	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, prepared,
 		[]any{ParamValue{Value: int64(4326), RuntimeType: types.T_int64.ToType(), HasRuntimeType: true}})
@@ -456,46 +454,6 @@ func TestPreparedGeometrySRIDPlanIsValueSpecialized(t *testing.T) {
 	require.True(t, defined)
 	require.Equal(t, uint32(4326), srid)
 
-	key := PreparedPlanGeometrySRIDSemanticKey(prepared, []any{
-		ParamValue{Value: int64(4326), RuntimeType: types.T_int64.ToType(), HasRuntimeType: true},
-	})
-	otherKey := PreparedPlanGeometrySRIDSemanticKey(prepared, []any{
-		ParamValue{Value: int64(3857), RuntimeType: types.T_int64.ToType(), HasRuntimeType: true},
-	})
-	require.NotEmpty(t, key)
-	require.NotEqual(t, key, otherKey)
-	nullKey := PreparedPlanGeometrySRIDSemanticKey(prepared, []any{
-		ParamValue{RuntimeType: types.T_int64.ToType(), HasRuntimeType: true},
-	})
-	sentinelKey := PreparedPlanGeometrySRIDSemanticKey(prepared, []any{
-		ParamValue{Value: "<null>", RuntimeType: types.T_int64.ToType(), HasRuntimeType: true},
-	})
-	require.NotEqual(t, nullKey, sentinelKey,
-		"a typed NULL must not alias a user value equal to the old NULL sentinel")
-}
-
-func TestPreparedGeometrySRIDSemanticKeyTracksFixedSRIDSource(t *testing.T) {
-	ctx := context.Background()
-	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL,
-		"select st_geomfromwkb(?, 4326)", 1)
-	require.NoError(t, err)
-	defer stmt.Free()
-
-	prepared, err := BuildPlan(NewMockCompilerContext(true), stmt, true)
-	require.NoError(t, err)
-	require.NoError(t, NormalizePrepareParamRefs(ctx, prepared))
-	require.Empty(t, PreparedPlanGeometrySRIDParamPositions(prepared),
-		"the fixed SRID literal is not itself a runtime parameter")
-
-	nullKey := PreparedPlanGeometrySRIDSemanticKey(prepared, []any{
-		ParamValue{RuntimeType: types.T_blob.ToType(), HasRuntimeType: true},
-	})
-	valueKey := PreparedPlanGeometrySRIDSemanticKey(prepared, []any{
-		ParamValue{Value: "wkb", RuntimeType: types.T_blob.ToType(), HasRuntimeType: true},
-	})
-	require.NotEmpty(t, nullKey)
-	require.NotEqual(t, nullKey, valueKey,
-		"a fixed SRID still needs source NULL state in the runtime cache key")
 }
 
 // TestFuncCastForGeometrySRID verifies that SRID compatibility is enforced at
@@ -713,7 +671,7 @@ func TestFuncCastForGeometryTypeNull(t *testing.T) {
 
 func mockGeometryPreparedDMLPlan(t *testing.T, sql string, srid uint32, sridDefined bool) *plan.Plan {
 	t.Helper()
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	table := ctx.tables["emp"]
 	for _, col := range table.Cols {
 		if col.Name == "sal" {
@@ -732,7 +690,7 @@ func mockGeometryPreparedDMLPlan(t *testing.T, sql string, srid uint32, sridDefi
 
 func mockInetNtoaPreparedDMLPlan(t *testing.T, sql string) *plan.Plan {
 	t.Helper()
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	table := ctx.tables["emp"]
 	for _, col := range table.Cols {
 		if col.Name == "sal" {

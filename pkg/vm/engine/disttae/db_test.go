@@ -181,7 +181,6 @@ func TestRequestSnapshotReadUntilReadyAddsDeadlineForTxnRequest(t *testing.T) {
 	require.NoError(t, err)
 
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
 	proc.Base.TxnClient = client
 	proc.Base.TxnOperator = txnOp
 	tbl := &txnTable{}

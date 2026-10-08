@@ -56,6 +56,9 @@ const SnapshotLifecycleFeatureCode = "SNAPSHOT"
 const FeatureRegistryCatalogGateSQL = "select rel_id from mo_catalog.mo_tables " +
 	"where account_id=0 and reldatabase='mo_catalog' and relname='mo_feature_registry' for update"
 
+const FeatureRegistryCatalogSharedGateSQL = "select rel_id from mo_catalog.mo_tables " +
+	"where account_id=0 and reldatabase='mo_catalog' and relname='mo_feature_registry' for share"
+
 // LockViewMetadataLifecycle preserves SNAPSHOT -> View ordering across an
 // entire transaction, including CREATE followed by DROP in a later statement.
 // Keep the View lock as well: older CNs still use it during rolling upgrades.

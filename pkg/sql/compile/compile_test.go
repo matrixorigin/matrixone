@@ -80,7 +80,7 @@ import (
 )
 
 func TestBroadcastJoinUsesHashAfterPreparedDiagnosticProof(t *testing.T) {
-	ctx := plan2.NewMockCompilerContext(true)
+	ctx := plan2.NewMockCompilerContext(true, newPlanTestProcess(t))
 	proc := ctx.GetProcess()
 	params := vector.NewVec(types.T_text.ToType())
 	defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
@@ -149,13 +149,15 @@ func TestCompileClearResetsExecutionType(t *testing.T) {
 	// Exercise the pool reset directly, independent of which object sync.Pool
 	// would choose for the next allocation.
 	c := &Compile{
-		proc:         testutil.NewProcess(t),
-		execType:     plan2.ExecTypeAP_MULTICN,
-		MessageBoard: message.NewMessageBoard(),
-		affectRows:   new(atomic.Uint64),
+		proc:                   testutil.NewProcess(t),
+		execType:               plan2.ExecTypeAP_MULTICN,
+		MessageBoard:           message.NewMessageBoard(),
+		affectRows:             new(atomic.Uint64),
+		prePipelineLockTableID: 42,
 	}
 	c.clear()
 	require.True(t, c.IsTpQuery())
+	require.Zero(t, c.prePipelineLockTableID, "pooled compiles must not retain a backfill lock request")
 }
 
 func TestCompileMongoDBQueryDiagnosticsAreRedacted(t *testing.T) {
@@ -201,7 +203,8 @@ func TestFilterScanStorageExprsExcludesVolatilePredicates(t *testing.T) {
 	}}}}
 	stable := plan2.MakePlan2Int64ConstExprWithType(1)
 
-	require.Equal(t, []*plan.Expr{stable}, filterScanStorageExprs(nil, []*plan.Expr{stable, volatile}))
+	filters := filterScanStorageExprs(nil, []*plan.Expr{stable, volatile}, false)
+	require.Equal(t, []*plan.Expr{stable}, filters)
 }
 
 func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
@@ -215,7 +218,7 @@ func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 		}
 		return "STRICT_TRANS_TABLES", nil
 	})
-	compilerCtx := plan2.NewEmptyCompilerContext()
+	compilerCtx := plan2.NewEmptyCompilerContext(newPlanTestProcess(t))
 	compilerCtx.SetContext(ctx)
 	stmts, err := mysql.Parse(ctx, "select ?", 1)
 	require.NoError(t, err)
@@ -283,7 +286,7 @@ func TestSQLSelectLimitIsResolvedForEachExecution(t *testing.T) {
 		return "STRICT_TRANS_TABLES", nil
 	})
 
-	compilerCtx := plan2.NewEmptyCompilerContext()
+	compilerCtx := plan2.NewEmptyCompilerContext(newPlanTestProcess(t))
 	compilerCtx.SetContext(ctx)
 	const sql = "select 1 union all select 2"
 	stmts, err := mysql.Parse(ctx, sql, 1)
@@ -354,7 +357,7 @@ func TestSQLSelectLimitOperatorSelection(t *testing.T) {
 				return "STRICT_TRANS_TABLES", nil
 			})
 
-			compilerCtx := plan2.NewEmptyCompilerContext()
+			compilerCtx := plan2.NewEmptyCompilerContext(newPlanTestProcess(t))
 			compilerCtx.SetContext(ctx)
 			const sql = "select 1 union all select 2"
 			stmts, err := mysql.Parse(ctx, sql, 1)
@@ -809,7 +812,7 @@ func TestCompileResultSinkDiscardsRetriedGenerations(t *testing.T) {
 		}
 		return "STRICT_TRANS_TABLES", nil
 	})
-	compilerCtx := plan2.NewEmptyCompilerContext()
+	compilerCtx := plan2.NewEmptyCompilerContext(newPlanTestProcess(t))
 	compilerCtx.SetContext(ctx)
 	stmts, err := mysql.Parse(ctx, "select 1", 1)
 	require.NoError(t, err)
@@ -1075,6 +1078,301 @@ func TestCompileLockNonCandidatePreservesExactMainMutation(t *testing.T) {
 	require.Same(t, target, c.lockTables[target.TableId])
 }
 
+func TestCompileLockPrePipelineTargetAdmission(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		requestID uint64
+		statement plan.Query_StatementType
+		keyType   types.T
+		mode      lockpb.LockMode
+		partition bool
+		promote   bool
+		load      bool
+	}{
+		{"integer backfill", 42, plan.Query_INSERT, types.T_int64, lockpb.LockMode_Exclusive, false, true, false},
+		{"serialized composite backfill", 42, plan.Query_INSERT, types.T_varchar, lockpb.LockMode_Exclusive, false, true, false},
+		{"ordinary insert", 0, plan.Query_INSERT, types.T_int64, lockpb.LockMode_Exclusive, false, false, false},
+		{"different table", 99, plan.Query_INSERT, types.T_int64, lockpb.LockMode_Exclusive, false, false, false},
+		{"update", 42, plan.Query_UPDATE, types.T_int64, lockpb.LockMode_Exclusive, false, false, false},
+		{"delete", 42, plan.Query_DELETE, types.T_int64, lockpb.LockMode_Exclusive, false, false, false},
+		{"shared ownership", 42, plan.Query_INSERT, types.T_int64, lockpb.LockMode_Shared, false, false, false},
+		{"partitioned target", 42, plan.Query_INSERT, types.T_int64, lockpb.LockMode_Exclusive, true, false, false},
+		{"no total key range", 42, plan.Query_INSERT, types.T_blob, lockpb.LockMode_Exclusive, false, false, false},
+		{"load keeps its own admission", 42, plan.Query_INSERT, types.T_int64, lockpb.LockMode_Exclusive, false, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newPrePipelineLockTestCompile(t, tc.statement)
+			c.prePipelineLockTableID = tc.requestID
+			c.pn.GetQuery().LoadTag = tc.load
+			target := &plan.LockTarget{
+				TableId: 42, PrimaryColTyp: plan.Type{Id: int32(tc.keyType)},
+				Mode: tc.mode, HasPartitionCol: tc.partition,
+			}
+			canonical := *target
+			node := &plan.Node{LockTargets: []*plan.LockTarget{target}}
+			scope := &Scope{}
+			got, err := c.compileLock(node, []*Scope{scope})
+			require.NoError(t, err)
+			require.Equal(t, []*Scope{scope}, got)
+			require.Equal(t, []*plan.LockTarget{target}, node.LockTargets)
+			require.Equal(t, canonical, *target, "the request must not rewrite a reusable logical target")
+			if tc.promote {
+				require.Nil(t, scope.RootOp, "no row-key encoder is needed for the pre-locked target")
+				require.Len(t, c.lockTables, 1)
+				physical := c.lockTables[42]
+				require.NotSame(t, target, physical)
+				require.True(t, physical.LockTable)
+				require.False(t, physical.LockTableAtTheEnd)
+				require.Equal(t, tc.mode, physical.Mode)
+			} else {
+				require.Empty(t, c.lockTables)
+				op, ok := scope.RootOp.(*lockop.LockOp)
+				require.True(t, ok, "ineligible targets retain their row lock operator")
+				t.Cleanup(func() { op.Free(c.proc, false, nil); op.Release() })
+				physical := op.CopyToPipelineTarget()
+				require.Len(t, physical, 1)
+				require.Equal(t, uint64(42), physical[0].TableId)
+				require.False(t, physical[0].LockTable)
+				require.False(t, physical[0].LockTableAtTheEnd)
+				require.Equal(t, tc.mode, physical[0].Mode)
+			}
+		})
+	}
+}
+
+func TestCompileLockPrePipelineTargetPreservesOtherRowsAndPlanReuse(t *testing.T) {
+	c := newPrePipelineLockTestCompile(t, plan.Query_INSERT)
+	c.prePipelineLockTableID = 42
+	backfill := &plan.LockTarget{TableId: 42, PrimaryColTyp: plan.Type{Id: int32(types.T_varchar)}}
+	other := &plan.LockTarget{TableId: 43, PrimaryColTyp: plan.Type{Id: int32(types.T_int64)}}
+	node := &plan.Node{LockTargets: []*plan.LockTarget{backfill, other}}
+	canonicalBackfill, canonicalOther := *backfill, *other
+
+	compileRows := func() []*pipeline.LockTarget {
+		t.Helper()
+		scope := &Scope{}
+		_, err := c.compileLock(node, []*Scope{scope})
+		require.NoError(t, err)
+		op, ok := scope.RootOp.(*lockop.LockOp)
+		require.True(t, ok)
+		t.Cleanup(func() { op.Free(c.proc, false, nil); op.Release() })
+		return op.CopyToPipelineTarget()
+	}
+	physical := compileRows()
+	require.Len(t, physical, 1)
+	require.Equal(t, other.TableId, physical[0].TableId)
+	require.False(t, physical[0].LockTable)
+	require.Len(t, c.lockTables, 1)
+	require.Contains(t, c.lockTables, backfill.TableId)
+	require.Equal(t, []*plan.LockTarget{backfill, other}, node.LockTargets)
+	require.Equal(t, canonicalBackfill, *backfill)
+	require.Equal(t, canonicalOther, *other)
+
+	// Recompiling the same logical node without the internal request must lock
+	// both ordinary mutation targets, including the previously promoted one.
+	c.prePipelineLockTableID = 0
+	clear(c.lockTables)
+	physical = compileRows()
+	require.Len(t, physical, 2)
+	require.Equal(t, backfill.TableId, physical[0].TableId)
+	require.Equal(t, other.TableId, physical[1].TableId)
+	require.False(t, physical[0].LockTable)
+	require.False(t, physical[1].LockTable)
+	require.Empty(t, c.lockTables)
+}
+
+func TestCompileLockPrePipelineTargetPreservesInputMerge(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		tp     bool
+		inputs int
+		mcpu   int
+	}{
+		{name: "AP parallel input", inputs: 1, mcpu: 4},
+		{name: "TP multiple inputs", tp: true, inputs: 2, mcpu: 1},
+	} {
+		for _, promoted := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/promoted=%t", tc.name, promoted), func(t *testing.T) {
+				c := newPrePipelineLockTestCompile(t, plan.Query_INSERT)
+				c.addr = "cn1:6001"
+				c.pn.GetQuery().Steps = []int32{0}
+				if !tc.tp {
+					c.execType = plan2.ExecTypeAP_ONECN
+				}
+				if promoted {
+					c.prePipelineLockTableID = 42
+				}
+				inputs := make([]*Scope, tc.inputs)
+				owned := inputs
+				t.Cleanup(func() {
+					for _, scope := range owned {
+						if scope != nil {
+							scope.FreeOperator(c)
+							scope.release()
+						}
+					}
+				})
+				for i := range inputs {
+					inputs[i] = newScope(Normal)
+					inputs[i].NodeInfo = engine.Node{Addr: c.addr, Mcpu: tc.mcpu}
+					inputs[i].Proc = c.proc.NewNoContextChildProc(0)
+					inputs[i].setRootOperator(colexec.NewMockOperator())
+				}
+				node := &plan.Node{LockTargets: []*plan.LockTarget{{
+					TableId: 42, PrimaryColTyp: plan.Type{Id: int32(types.T_varchar)},
+					Mode: lockpb.LockMode_Exclusive,
+				}}}
+				got, err := c.compileLock(node, inputs)
+				if err == nil {
+					owned = got
+				}
+				require.NoError(t, err)
+				require.Len(t, got, 1)
+				root := got[0]
+				require.Equal(t, Merge, root.Magic)
+				require.Equal(t, c.addr, root.NodeInfo.Addr)
+				require.Equal(t, 1, root.NodeInfo.Mcpu,
+					"removing key preparation must preserve downstream writer placement and DOP")
+				require.Len(t, root.PreScopes, len(inputs))
+				require.Len(t, root.Proc.Reg.MergeReceivers, len(inputs))
+				for i, input := range inputs {
+					require.Same(t, input, root.PreScopes[i])
+					require.Equal(t, tc.mcpu, input.NodeInfo.Mcpu)
+					require.Equal(t, vm.Connector, input.RootOp.OpType())
+					require.IsType(t, &colexec.MockOperator{}, input.RootOp.GetOperatorBase().GetChildren(0))
+				}
+				if promoted {
+					require.IsType(t, &merge.Merge{}, root.RootOp)
+					require.False(t, compiledScopesContainOperator(got, vm.LockOp))
+				} else {
+					require.IsType(t, &lockop.LockOp{}, root.RootOp)
+					require.IsType(t, &merge.Merge{}, root.RootOp.GetOperatorBase().GetChildren(0))
+				}
+			})
+		}
+	}
+}
+
+func TestCompileLockPrePipelineTargetMustAcquireBeforeExecution(t *testing.T) {
+	grantErr := errors.New("table lock refused")
+	refreshErr := errors.New("snapshot refresh failed")
+	for _, tc := range []struct {
+		name       string
+		grantErr   error
+		cancel     bool
+		refresh    bool
+		refreshErr error
+	}{
+		{name: "granted"},
+		{name: "grant refused", grantErr: grantErr},
+		{name: "cancel while acquiring", cancel: true},
+		{name: "refresh failed", refresh: true, refreshErr: refreshErr},
+		{name: "definition refresh requires retry", refresh: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newPrePipelineLockTestCompile(t, plan.Query_INSERT)
+			c.prePipelineLockTableID = 42
+			c.lockMeta = NewLockMeta()
+			ctx, cancel := context.WithCancel(c.proc.Ctx)
+			t.Cleanup(cancel)
+			c.proc.Ctx = ctx
+			ctrl := gomock.NewController(t)
+			snapshot := timestamp.Timestamp{PhysicalTime: 10}
+			lockedTS := timestamp.Timestamp{PhysicalTime: 9}
+			if tc.refresh {
+				lockedTS = timestamp.Timestamp{PhysicalTime: 20}
+			}
+			txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+			txnOp.EXPECT().Txn().Return(txn.TxnMeta{
+				ID: []byte("index-backfill"), Mode: txn.TxnMode_Pessimistic,
+				Isolation: txn.TxnIsolation_RC, SnapshotTS: snapshot,
+			}).AnyTimes()
+			txnOp.EXPECT().CreateTS().Return(snapshot).AnyTimes()
+			txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
+			txnOp.EXPECT().AddWaitLock(uint64(42), gomock.Any(), gomock.Any()).Return(uint64(1))
+			txnOp.EXPECT().RemoveWaitLock(uint64(1))
+			c.proc.Base.TxnOperator = txnOp
+			lockService := mock_lock.NewMockLockService(ctrl)
+			lockService.EXPECT().GetConfig().Return(lockservice.Config{MaxLockRowCount: 10}).AnyTimes()
+			lockService.EXPECT().GetServiceID().Return("").AnyTimes()
+			c.proc.Base.LockService = lockService
+			binding := lockpb.LockTable{Table: 42, Valid: true}
+			granted := false
+			lockService.EXPECT().Lock(gomock.Any(), uint64(42), gomock.Any(), []byte("index-backfill"), gomock.Any()).
+				DoAndReturn(func(_ context.Context, _ uint64, rows [][]byte, _ []byte, opts lockpb.LockOptions) (lockpb.Result, error) {
+					require.Equal(t, lockpb.Granularity_Range, opts.Granularity)
+					require.Equal(t, lockpb.LockMode_Exclusive, opts.Mode)
+					require.Len(t, rows, 2, "the new hidden table is protected by one complete range")
+					if tc.cancel {
+						cancel()
+						return lockpb.Result{}, ctx.Err()
+					}
+					if tc.grantErr != nil {
+						return lockpb.Result{}, tc.grantErr
+					}
+					granted = true
+					return lockpb.Result{
+						LockedOn: binding, NewLockAdd: true, Timestamp: lockedTS,
+						HasPrevCommit: tc.refresh, TableDefChanged: tc.refresh,
+					}, nil
+				})
+			if tc.grantErr == nil && !tc.cancel {
+				txnOp.EXPECT().AddLockTable(binding).Return(nil)
+				if tc.refresh {
+					txnClient := mock_frontend.NewMockTxnClient(ctrl)
+					txnClient.EXPECT().WaitLogTailAppliedAt(gomock.Any(), lockedTS).Return(lockedTS, tc.refreshErr)
+					c.proc.Base.TxnClient = txnClient
+					if tc.refreshErr == nil {
+						txnOp.EXPECT().UpdateSnapshot(gomock.Any(), lockedTS).Return(nil)
+					}
+				}
+			}
+			target := &plan.LockTarget{
+				TableId: 42, PrimaryColTyp: plan.Type{Id: int32(types.T_varchar)},
+				Mode: lockpb.LockMode_Exclusive,
+			}
+			scope := &Scope{}
+			_, err := c.compileLock(&plan.Node{LockTargets: []*plan.LockTarget{target}}, []*Scope{scope})
+			require.NoError(t, err)
+			require.Nil(t, scope.RootOp)
+			started := false
+			err = c.runPipelineAttempt(func() error {
+				require.True(t, granted, "no pipeline may run before the normal lock grant")
+				started = true
+				return nil
+			})
+			switch {
+			case tc.cancel:
+				require.ErrorIs(t, err, context.Canceled)
+			case tc.grantErr != nil:
+				require.ErrorIs(t, err, tc.grantErr)
+			case tc.refreshErr != nil:
+				require.ErrorIs(t, err, tc.refreshErr)
+			case tc.refresh:
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), "%v", err)
+			default:
+				require.NoError(t, err)
+			}
+			require.Equal(t, tc.grantErr == nil && !tc.cancel && !tc.refresh, started)
+		})
+	}
+}
+
+func newPrePipelineLockTestCompile(t *testing.T, statement plan.Query_StatementType) *Compile {
+	t.Helper()
+	c := NewMockCompile(t)
+	t.Cleanup(c.proc.Free)
+	c.execType = plan2.ExecTypeTP
+	c.anal = &AnalyzeModule{}
+	c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{StmtType: statement}}}
+	c.lockTables = make(map[uint64]*plan.LockTarget)
+	ctrl := gomock.NewController(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{Mode: txn.TxnMode_Pessimistic}).AnyTimes()
+	c.proc.Base.TxnOperator = txnOp
+	return c
+}
+
 func TestConstructLockOpPreservesSharedTableMode(t *testing.T) {
 	for _, lockTable := range []bool{false, true} {
 		t.Run(fmt.Sprintf("table=%t", lockTable), func(t *testing.T) {
@@ -1214,7 +1512,7 @@ func newTestTxnClientAndOpWithModeIsolation(
 	txnOperator.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
 	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{Mode: mode, Isolation: isolation}).AnyTimes()
 	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
-	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+
 	txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
 	txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 	txnOperator.EXPECT().CheckLockTableBinds(gomock.Any()).Return(nil).AnyTimes()
@@ -1704,7 +2002,7 @@ func newTestTxnClientAndOpWithPessimistic(ctrl *gomock.Controller) (client.TxnCl
 		Mode: txn.TxnMode_Pessimistic,
 	}).AnyTimes()
 	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
-	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+
 	txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
 	txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 	txnOperator.EXPECT().CheckLockTableBinds(gomock.Any()).Return(nil).AnyTimes()
@@ -1754,6 +2052,7 @@ func TestDebugLogFor19288(t *testing.T) {
 }
 
 func TestPreferPrimaryScopeResult(t *testing.T) {
+	c := NewMockCompile(t)
 	cleanupErr := process.ErrPipelineEndSignalDeliveryFailed
 	executionErr := moerr.NewDuplicateEntryNoCtx("1000000", "")
 	joinedExecutionErr := errors.Join(executionErr, context.Canceled)
@@ -1765,7 +2064,7 @@ func TestPreferPrimaryScopeResult(t *testing.T) {
 	internalCancelCtx, cancelInternal := context.WithCancelCause(context.Background())
 	cancelInternal(executionErr)
 	internalNormalCancelCtx, cancelInternalNormal := context.WithCancelCause(context.Background())
-	cancelInternalNormal(nil)
+	cancelInternalNormal(process.ErrPipelineStopped)
 	activeQueryCtx := context.Background()
 	externalCancelCtx, cancelExternal := context.WithCancel(context.Background())
 	cancelExternal()
@@ -1800,39 +2099,38 @@ func TestPreferPrimaryScopeResult(t *testing.T) {
 		candidate scopeRunResult
 		want      error
 	}{
-		{name: "converted reader cancellation resolves to execution error", current: scopeRunResult{err: convertedReaderCanceled, ctx: internalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
-		{name: "remote reader cancellation resolves to execution error", current: scopeRunResult{err: remoteReaderCanceled, ctx: internalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
+		{name: "converted reader cancellation resolves to execution error", current: newScopeRunResultForContext(convertedReaderCanceled, internalCancelCtx, nil), candidate: scopeRunResult{err: executionErr}, want: executionErr},
+		{name: "remote reader cancellation resolves to execution error", current: newScopeRunResultForContext(remoteReaderCanceled, internalCancelCtx, nil), candidate: scopeRunResult{err: executionErr}, want: executionErr},
 		{name: "first error", candidate: scopeRunResult{err: cleanupErr}, want: cleanupErr},
 		{name: "execution error replaces cleanup fallback", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
 		{name: "joined execution error replaces cleanup fallback", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: joinedExecutionErr}, want: joinedExecutionErr},
 		{name: "joined independent deadline replaces cleanup fallback", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: joinedDeadlineErr}, want: context.DeadlineExceeded},
-		{name: "causal cancellation replaces cleanup fallback with execution error", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: context.Canceled, ctx: internalCancelCtx}, want: executionErr},
-		{name: "external cancellation replaces cleanup fallback with external cause", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: context.Canceled, ctx: externalCauseCtx}, want: externalCause},
+		{name: "causal cancellation replaces cleanup fallback with execution error", current: scopeRunResult{err: cleanupErr}, candidate: newScopeRunResultForContext(context.Canceled, internalCancelCtx, nil), want: executionErr},
+		{name: "external cancellation replaces cleanup fallback with external cause", current: scopeRunResult{err: cleanupErr}, candidate: newScopeRunResultForContext(context.Canceled, externalCauseCtx, nil), want: externalCause},
 		{name: "cleanup fallback does not replace execution error", current: scopeRunResult{err: executionErr}, candidate: scopeRunResult{err: cleanupErr}, want: executionErr},
-		{name: "unresolved canceled sibling is secondary", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: context.Canceled}, want: cleanupErr},
-		{name: "unresolved interrupted sibling is secondary", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: queryInterrupted}, want: cleanupErr},
-		{name: "unresolved joined cancellation is secondary", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: joinedCancellationErr}, want: cleanupErr},
-		{name: "internally canceled sibling resolves to execution error", current: scopeRunResult{err: context.Canceled, ctx: internalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
+		{name: "independent canceled failure replaces cleanup fallback", current: scopeRunResult{err: cleanupErr}, candidate: newScopeRunResultForProcess(context.Canceled, nil), want: context.Canceled},
+		{name: "independent interruption replaces cleanup fallback", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: queryInterrupted}, want: queryInterrupted},
+		{name: "joined independent interruption replaces cleanup fallback", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: joinedCancellationErr}, want: joinedCancellationErr},
+		{name: "internally canceled sibling resolves to execution error", current: newScopeRunResultForContext(context.Canceled, internalCancelCtx, nil), candidate: scopeRunResult{err: executionErr}, want: executionErr},
 		// A reader library's wrapped cancellation (as external readers now
 		// return it, see convertReaderError) is still the sibling's cancellation.
-		{name: "wrapped reader cancellation resolves to execution error", current: scopeRunResult{err: fmt.Errorf("reading magic footer of parquet file: %w (read: 0)", context.Canceled), ctx: internalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
-		{name: "join map cancellation resolves to execution error", current: scopeRunResult{err: joinMapCancellationErr, ctx: internalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
-		{name: "normal internal cancellation is secondary", current: scopeRunResult{err: context.Canceled, ctx: internalNormalCancelCtx, queryCtx: activeQueryCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
-		{name: "internally interrupted sibling resolves to execution error", current: scopeRunResult{err: queryInterrupted, ctx: internalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
-		{name: "remote query cancellation remains primary", current: scopeRunResult{err: queryInterrupted, ctx: remotePipelineCtx, queryCtx: remoteQueryCtx}, want: context.Canceled},
-		{name: "plain external cancellation remains primary", current: scopeRunResult{err: context.Canceled, ctx: externalCancelCtx, queryCtx: externalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: context.Canceled},
-		{name: "external deadline remains primary", current: scopeRunResult{err: context.DeadlineExceeded, ctx: externalDeadlineCtx, queryCtx: externalDeadlineCtx}, candidate: scopeRunResult{err: executionErr}, want: context.DeadlineExceeded},
-		{name: "join map deadline remains primary", current: scopeRunResult{err: joinMapDeadlineErr, ctx: externalDeadlineCtx, queryCtx: externalDeadlineCtx}, candidate: scopeRunResult{err: executionErr}, want: context.DeadlineExceeded},
-		{name: "query deadline classification survives custom timeout cause", current: scopeRunResult{err: context.DeadlineExceeded, ctx: pipelineDeadlineCauseCtx, queryCtx: queryDeadlineCauseCtx}, candidate: scopeRunResult{err: executionErr}, want: context.DeadlineExceeded},
-		{name: "external cancellation cause remains primary", current: scopeRunResult{err: context.Canceled, ctx: externalCauseCtx, queryCtx: externalCauseCtx}, candidate: scopeRunResult{err: executionErr}, want: externalCause},
-		{name: "join map external cancellation cause remains primary", current: scopeRunResult{err: joinMapCancellationErr, ctx: externalCauseCtx, queryCtx: externalCauseCtx}, candidate: scopeRunResult{err: executionErr}, want: externalCause},
+		{name: "wrapped reader cancellation resolves to execution error", current: newScopeRunResultForContext(fmt.Errorf("reading magic footer of parquet file: %w (read: 0)", context.Canceled), internalCancelCtx, nil), candidate: scopeRunResult{err: executionErr}, want: executionErr},
+		{name: "join map cancellation resolves to execution error", current: newScopeRunResultForContext(joinMapCancellationErr, internalCancelCtx, nil), candidate: scopeRunResult{err: executionErr}, want: executionErr},
+		{name: "normal internal cancellation is secondary", current: newScopeRunResultForContext(context.Canceled, internalNormalCancelCtx, activeQueryCtx), candidate: scopeRunResult{err: executionErr}, want: executionErr},
+		{name: "internally interrupted sibling resolves to execution error", current: newScopeRunResultForContext(moerr.ConvertGoError(context.Background(), context.Canceled), internalCancelCtx, nil), candidate: scopeRunResult{err: executionErr}, want: executionErr},
+		{name: "remote query cancellation remains primary", current: newScopeRunResultForContext(context.Canceled, remotePipelineCtx, remoteQueryCtx), want: context.Canceled},
+		{name: "plain external cancellation remains primary", current: newScopeRunResultForContext(context.Canceled, externalCancelCtx, externalCancelCtx), candidate: scopeRunResult{err: executionErr}, want: context.Canceled},
+		{name: "external deadline remains primary", current: newScopeRunResultForContext(context.DeadlineExceeded, externalDeadlineCtx, externalDeadlineCtx), candidate: scopeRunResult{err: executionErr}, want: context.DeadlineExceeded},
+		{name: "join map deadline remains primary", current: newScopeRunResultForContext(joinMapDeadlineErr, externalDeadlineCtx, externalDeadlineCtx), candidate: scopeRunResult{err: executionErr}, want: context.DeadlineExceeded},
+		{name: "query deadline classification survives custom timeout cause", current: newScopeRunResultForContext(context.DeadlineExceeded, pipelineDeadlineCauseCtx, queryDeadlineCauseCtx), candidate: scopeRunResult{err: executionErr}, want: context.DeadlineExceeded},
+		{name: "external cancellation cause remains primary", current: newScopeRunResultForContext(context.Canceled, externalCauseCtx, externalCauseCtx), candidate: scopeRunResult{err: executionErr}, want: externalCause},
+		{name: "join map external cancellation cause remains primary", current: newScopeRunResultForContext(joinMapCancellationErr, externalCauseCtx, externalCauseCtx), candidate: scopeRunResult{err: executionErr}, want: externalCause},
 		{name: "first substantive error remains", current: scopeRunResult{err: executionErr}, candidate: scopeRunResult{err: moerr.NewInternalErrorNoCtx("later")}, want: executionErr},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := preferPrimaryScopeResult(tt.current, tt.candidate)
-			got, _ = got.resolveCancelCause()
+			got := c.preferPrimaryScopeResult(tt.current, tt.candidate)
 			if errors.Is(tt.want, context.Canceled) || errors.Is(tt.want, context.DeadlineExceeded) {
 				require.ErrorIs(t, got.err, tt.want)
 			} else {
@@ -1863,13 +2161,13 @@ func TestScopeRunPreservesPrimaryErrorAcrossCancellation(t *testing.T) {
 	}{
 		{
 			name:        "substantive execution error survives normal sibling cancellation",
-			cancelCause: nil,
+			cancelCause: process.ErrPipelineStopped,
 			runErr:      primaryErr,
 			want:        primaryErr,
 		},
 		{
 			name:        "joined execution error survives normal sibling cancellation",
-			cancelCause: nil,
+			cancelCause: process.ErrPipelineStopped,
 			runErr:      errors.Join(primaryErr, context.Canceled),
 			want:        primaryErr,
 		},
@@ -1881,28 +2179,28 @@ func TestScopeRunPreservesPrimaryErrorAcrossCancellation(t *testing.T) {
 		},
 		{
 			name:        "normal internal cancellation remains secondary",
-			cancelCause: nil,
+			cancelCause: process.ErrPipelineStopped,
 			runErr:      context.Canceled,
 			want:        nil,
 		},
 		{
 			name:        "independent operator deadline survives normal cancellation",
-			cancelCause: nil,
+			cancelCause: process.ErrPipelineStopped,
 			runErr:      context.DeadlineExceeded,
 			want:        context.DeadlineExceeded,
 		},
 		{
 			name:        "joined independent deadline survives normal cancellation",
-			cancelCause: nil,
+			cancelCause: process.ErrPipelineStopped,
 			runErr:      errors.Join(context.DeadlineExceeded, context.Canceled),
 			want:        context.DeadlineExceeded,
 		},
 		{
 			name:        "joined cancellation fallout remains secondary",
-			cancelCause: nil,
+			cancelCause: process.ErrPipelineStopped,
 			runErr: errors.Join(
 				context.Canceled,
-				moerr.NewQueryInterrupted(context.Background())),
+				moerr.ConvertGoError(context.Background(), context.Canceled)),
 			want: nil,
 		},
 		{
@@ -1910,7 +2208,7 @@ func TestScopeRunPreservesPrimaryErrorAcrossCancellation(t *testing.T) {
 			cancelCause: primaryErr,
 			runErr: errors.Join(
 				context.Canceled,
-				moerr.NewQueryInterrupted(context.Background())),
+				moerr.ConvertGoError(context.Background(), context.Canceled)),
 			want: primaryErr,
 		},
 		{
@@ -3288,7 +3586,7 @@ func (c *distinctPreAggregationCompilerContext) GetStatsCache() *plan2.StatsCach
 }
 
 func TestLocalPreAggregationCompileShapeIsReachableFromSQL(t *testing.T) {
-	base := plan2.NewMockCompilerContext(false)
+	base := plan2.NewMockCompilerContext(false, newPlanTestProcess(t))
 	base.SetContext(context.Background())
 	_, tableDef, err := base.Resolve("tpch", "lineitem", nil)
 	require.NoError(t, err)

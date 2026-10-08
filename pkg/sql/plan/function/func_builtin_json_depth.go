@@ -24,21 +24,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// jsonDepthStringTypeSupported describes the text transport accepted by
-// JSON_DEPTH. Binary string domains are opaque values, even when their OID is
-// text-shaped, and must not be parsed as JSON documents.
-func jsonDepthStringTypeSupported(typ types.Type) bool {
-	switch typ.Oid {
-	case types.T_char, types.T_varchar, types.T_text:
-		return types.StaticStringDomain(typ) != types.StringDomainBinary
-	default:
-		return false
-	}
-}
-
 func jsonDepthTypeSupported(typ types.Type) bool {
 	return typ.Oid == types.T_json || typ.Oid == types.T_any ||
-		jsonDepthStringTypeSupported(typ)
+		typ.Oid.IsMySQLString()
 }
 
 func jsonDepthInvalidType(proc *process.Process) error {
@@ -98,11 +86,11 @@ func jsonDepthCheckPreparedInput(
 			continue
 		}
 
-		if !jsonDepthTypeSupported(*input.GetType()) {
-			return jsonDepthInvalidType(proc)
-		}
 		if input.GetIsBinaryStringAt(physicalRow) {
 			return jsonDepthInvalidBinary(proc)
+		}
+		if !jsonDepthTypeSupported(*input.GetType()) {
+			return jsonDepthInvalidType(proc)
 		}
 		if preparedType != types.T_any {
 			if !jsonDepthTypeSupported(preparedType.ToType()) {

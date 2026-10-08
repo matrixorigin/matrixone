@@ -17,10 +17,13 @@ package rule
 import (
 	"context"
 	"fmt"
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -515,5 +518,60 @@ func TestConstantFoldDefersDiagnosticExpressions(t *testing.T) {
 				require.NotNil(t, got.GetLit())
 			}
 		}
+	}
+}
+
+func TestEvaluateConstantExpressionKernelFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []int64
+		fail bool
+	}{
+		{"round", []int64{5000000000000000000, -19}, true},
+		{"abs", []int64{math.MinInt64}, true},
+		{"round", []int64{-11, -1}, false},
+	} {
+		t.Run(fmt.Sprintf("%s/fail=%t", tc.name, tc.fail), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			t.Cleanup(func() {
+				defer proc.Free()
+				require.Equal(t, [2]int64{}, [2]int64{proc.Mp().CurrNB(), proc.Mp().OnHeapCurrNB()})
+			})
+			args := make([]*plan.Expr, len(tc.args))
+			argTypes := make([]types.Type, len(tc.args))
+			for i, value := range tc.args {
+				argTypes[i] = types.T_int64.ToType()
+				args[i] = &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: value}}}}
+			}
+			fn, err := function.GetFunctionByName(proc.Ctx, tc.name, argTypes)
+			require.NoError(t, err)
+			expr := &plan.Expr{Typ: plan.Type{Id: int32(fn.GetReturnType().Oid)}, Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{Obj: fn.GetEncodedOverloadID(), ObjName: tc.name}, Args: args}}}
+			var vec *vector.Vector
+			var free func()
+			var warned bool
+			var escaped any
+			originalSink := &foldTestWarnings{count: 7}
+			proc.WarningSink = originalSink
+			func() {
+				defer func() { escaped = recover() }()
+				vec, free, warned, err = EvaluateConstantExpression(proc, expr, batch.EmptyForConstFoldBatch)
+			}()
+			if free != nil {
+				t.Cleanup(free)
+			}
+			require.Nil(t, escaped, "speculative failure must use the folder error channel")
+			require.Same(t, originalSink, proc.WarningSink)
+			require.Equal(t, 7, originalSink.count)
+			require.False(t, warned)
+			if tc.fail {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange))
+				require.Nil(t, vec)
+				require.Nil(t, free)
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, free)
+				require.Equal(t, int64(-10), vector.MustFixedColNoTypeCheck[int64](vec)[0])
+			}
+		})
 	}
 }

@@ -26,6 +26,12 @@ import (
 )
 
 func TestMemoryPressureReasonSeparatesCapacityFromLifecycle(t *testing.T) {
+	minimum := NewMinimumAllocationPressureError("hashbuild", "spill", nil,
+		mpool.ErrAllocationAccountCapacity)
+	var minimumTyped *MinimumAllocationPressureError
+	require.ErrorAs(t, minimum, &minimumTyped)
+	require.Contains(t, minimum.Error(), "last capacity refusal:")
+	require.NotErrorIs(t, minimum, mpool.ErrAllocationAccountCapacity)
 	tests := []struct {
 		err    error
 		reason MemoryPressureReason
@@ -46,6 +52,7 @@ func TestMemoryPressureReasonSeparatesCapacityFromLifecycle(t *testing.T) {
 		{mpool.ErrAllocationAllocatorLimit, MemoryPressureAllocatorLimit},
 		{mpool.ErrAllocationAccountInvariant, MemoryPressureInvariant},
 		{NewMinimumAllocationPressureError("hashbuild", "spill", nil), MemoryPressureMinimumUnit},
+		{minimum, MemoryPressureMinimumUnit},
 	}
 	for _, test := range tests {
 		require.Equal(t, test.reason, MemoryPressureReasonOf(test.err))

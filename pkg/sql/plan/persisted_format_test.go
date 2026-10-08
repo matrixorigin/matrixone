@@ -34,7 +34,7 @@ import (
 )
 
 func TestPersistedFormatCatalogCompatibility(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	rt := moruntime.ServiceRuntime(ctx.GetProcess().GetService())
 	old, exists := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	t.Cleanup(func() {
@@ -127,7 +127,7 @@ func TestPersistedFormatRoundingAndProjection(t *testing.T) {
 }
 
 func TestPersistedFormatLegacyPrecisionDomains(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	proc := ctx.GetProcess()
 	for _, precision := range []string{
 		"cast('2024-01-01' as date)",
@@ -224,7 +224,7 @@ func TestPersistedFormatDefaultCompatibility(t *testing.T) {
 	require.NoError(t, err)
 	update, err := buildOnUpdate(proc.Ctx, col, typ, proc)
 	require.NoError(t, err)
-	ctas, err := buildCTASDefaultFromOrigin(NewMockCompilerContext(false), typ, true, "format(2.5, 0)")
+	ctas, err := buildCTASDefaultFromOrigin(NewMockCompilerContext(false, newPlanTestProcess(t)), typ, true, "format(2.5, 0)")
 	require.NoError(t, err)
 	for _, tc := range []struct {
 		name string

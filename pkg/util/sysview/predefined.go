@@ -280,7 +280,35 @@ func informationSchemaSubscriptionColumnAuthorizationPredicate() string {
 }
 
 func informationSchemaCurrentColumnsDDL() string {
-	original := InformationSchemaColumnsV58DDL()
+	return informationSchemaDerivedColumnsDDL(InformationSchemaColumnsV58DDL())
+}
+
+// AdaptLegacyInformationSchemaColumnsDDL changes only the column authority of
+// known historical templates. Keep their projection/formatting rules; reading
+// a snapshot must not change its character-set selectors or add subscriptions
+// to a template that did not expose them.
+func AdaptLegacyInformationSchemaColumnsDDL(definition string) (string, bool) {
+	definition = canonicalColumnsViewName(definition)
+	for _, legacy := range []string{InformationSchemaColumnsV41DDL, InformationSchemaColumnsV46DDL, InformationSchemaColumnsV46UpgradeDDL, InformationSchemaColumnsV58DDL()} {
+		if definition == legacy {
+			return informationSchemaDerivedColumnsDDL(legacy), true
+		}
+	}
+	return "", false
+}
+
+func IsCurrentInformationSchemaColumnsDDL(definition string) bool {
+	return canonicalColumnsViewName(definition) == InformationSchemaColumnsDDL
+}
+
+func canonicalColumnsViewName(definition string) string {
+	// Older upgrades used the lowercase spelling of this identifier. Do not
+	// case-fold literals or accept arbitrary lookalike system-view SQL.
+	return strings.Replace(definition, "CREATE VIEW information_schema.columns AS ",
+		"CREATE VIEW information_schema.COLUMNS AS ", 1)
+}
+
+func informationSchemaDerivedColumnsDDL(original string) string {
 	prefix := "CREATE VIEW information_schema.COLUMNS AS " + informationSchemaMetadataVisibilityCTE()
 	branches := strings.SplitN(strings.TrimPrefix(original, prefix), " UNION ALL ", 2)
 	local := branches[0]
@@ -294,9 +322,17 @@ func informationSchemaCurrentColumnsDDL() string {
 	).Replace(viewRows)
 	viewRows = castViewColumnNames(viewRows)
 	userView := "mt.relkind = 'v' AND mt.reldatabase NOT IN ('mo_catalog','information_schema','mysql','system','system_metrics','mo_task','mo_debug')"
+	if len(branches) == 1 {
+		return prefix + local + " AND NOT (" + userView + ") UNION ALL " + viewRows + " AND (" + userView + ")"
+	}
 	// Restrict the left side of APPLY before describing publisher Views. A
 	// post-APPLY WHERE cannot prevent invisible Views from consuming budget.
-	prefix += ", __mo_visible_subscription_views AS (SELECT mt.* FROM mo_subscription_tables() mt WHERE mt.relkind = 'v' AND (" +
+	// Keep this projection explicit: CREATE VIEW freezes projection stars and
+	// reformats the entire definition. Upgrade readiness compares the persisted
+	// SQL with this template exactly, so a star would make every retry rebuild it.
+	prefix += ", __mo_visible_subscription_views AS (SELECT mt.account_id, mt.rel_id, mt.relname, " +
+		"mt.reldatabase, mt.relkind, mt.rel_createsql, mt.extra_info, mt.publisher_account_id " +
+		"FROM mo_subscription_tables() mt WHERE mt.relkind = 'v' AND (" +
 		informationSchemaSubscriptionViewAuthorizationPredicate() + ")) "
 	return prefix + local + " AND NOT (" + userView + ") UNION ALL " +
 		viewRows + " AND (" + userView + ") UNION ALL " + branches[1] +
@@ -1010,8 +1046,8 @@ func informationSchemaCollationsDataSQL() string {
 func informationSchemaCharacterSetsDataSQL() string {
 	values := []string{
 		fmt.Sprintf("('binary','%s','Binary pseudo charset',1)", DefaultCollationForCharset("binary")),
-		fmt.Sprintf("('utf8','%s','UTF-8 Unicode',3)", DefaultCollationForCharset("utf8")),
-		fmt.Sprintf("('utf8mb4','%s','UTF-8 Unicode',4)", DefaultCollationForCharset("utf8mb4")),
+		fmt.Sprintf("('utf8','%s','UTF-8 Unicode',%d)", DefaultCollationForCharset("utf8"), characterSetMaxBytes("utf8")),
+		fmt.Sprintf("('utf8mb4','%s','UTF-8 Unicode',%d)", DefaultCollationForCharset("utf8mb4"), characterSetMaxBytes("utf8mb4")),
 	}
 	return "INSERT INTO information_schema.CHARACTER_SETS VALUES " + strings.Join(values, ",")
 }

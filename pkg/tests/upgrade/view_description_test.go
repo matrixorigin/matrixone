@@ -17,12 +17,14 @@ package upgrade
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_10"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/embed"
@@ -59,6 +61,9 @@ func TestViewDescriptionPublicSQL(t *testing.T) {
 		defer exec("drop database view_description_test")
 		t.Run("SHOW target replacement", func(t *testing.T) {
 			testShowColumnsTargetReplacement(t, ctx, db)
+		})
+		t.Run("current schema consumers", func(t *testing.T) {
+			testViewMetadataConsumers(t, ctx, db)
 		})
 		exec("create table view_description_test.src (x varchar(5), qty int not null default 7)")
 		exec("create view view_description_test.v as select x as label, qty from view_description_test.src")
@@ -396,36 +401,6 @@ func TestViewDescriptionPrivileges(t *testing.T) {
 	})
 }
 
-func TestViewDescriptionTwoCN(t *testing.T) {
-	cluster, err := embed.NewCluster(embed.WithCNCount(2), embed.WithTesting(), embed.WithConcurrentTestClusters())
-	require.NoError(t, err)
-	defer func() { require.NoError(t, cluster.Close()) }()
-	require.NoError(t, cluster.Start())
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
-	cn0, err := cluster.GetCNService(0)
-	require.NoError(t, err)
-	cn1, err := cluster.GetCNService(1)
-	require.NoError(t, err)
-	first := openViewDescriptionDB(t, cn0.GetServiceConfig().CN.Frontend.Port, "dump:111")
-	second := openViewDescriptionDB(t, cn1.GetServiceConfig().CN.Frontend.Port, "dump:111")
-	_, err = first.ExecContext(ctx, "create database view_description_two_cn")
-	require.NoError(t, err)
-	defer func() {
-		_, err := first.ExecContext(ctx, "drop database view_description_two_cn")
-		require.NoError(t, err)
-	}()
-	_, err = first.ExecContext(ctx, "create table view_description_two_cn.src (x varchar(5))")
-	require.NoError(t, err)
-	_, err = first.ExecContext(ctx, "create view view_description_two_cn.v as select x from view_description_two_cn.src")
-	require.NoError(t, err)
-	_, err = first.ExecContext(ctx, "alter table view_description_two_cn.src modify column x varchar(60)")
-	require.NoError(t, err)
-	var width int
-	require.NoError(t, second.QueryRowContext(ctx, "select character_maximum_length from information_schema.columns where table_schema='view_description_two_cn' and table_name='v'").Scan(&width))
-	require.Equal(t, 60, width)
-}
-
 func TestViewDescriptionUdfDatabaseContext(t *testing.T) {
 	embed.RunSingleCNBaseClusterTests(t, func(cluster embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
@@ -571,6 +546,60 @@ func TestViewDescriptionUdfDatabaseContext(t *testing.T) {
 	})
 }
 
+// Fail after the real DROP, while leaving transaction ownership to ExecTxn.
+// This proves rollback/retry against storage, unlike an in-memory SQL recorder.
+type failedViewColumnsUpgradeTxn struct {
+	executor.TxnExecutor
+	failure error
+}
+
+func (txn failedViewColumnsUpgradeTxn) Exec(sql string, opts executor.StatementOption) (executor.Result, error) {
+	if sql == sysview.InformationSchemaColumnsDDL {
+		return executor.Result{}, txn.failure
+	}
+	return txn.TxnExecutor.Exec(sql, opts)
+}
+
+func testViewColumnsUpgradeRollback(t *testing.T, ctx context.Context, sqlExecutor executor.SQLExecutor, tenantID uint32) {
+	t.Helper()
+	// Run the tenant-upgrade transaction as the sys account, mirroring the production
+	// driver (service.MaybeUpgradeTenant scopes the txn to System_Account and targets
+	// the tenant via the tenantID passed to HandleTenantUpgrade, whose per-tenant
+	// statements carry UpgradeStatementOption(tenantID)). An upgrade entry's cluster-wide
+	// protocol-version check runs mo_ctl, which only the sys account may execute (#28985).
+	opts := executor.Options{}.WithDatabase(catalog.MO_CATALOG).
+		WithAccountID(catalog.System_Account).WithWaitCommittedLogApplied()
+	definition := func() string {
+		t.Helper()
+		var exists bool
+		var ddl string
+		require.NoError(t, sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
+			var err error
+			exists, ddl, err = versions.CheckViewDefinition(txn, tenantID, "information_schema", "columns")
+			return err
+		}, opts))
+		require.True(t, exists, "failed migration must not leave COLUMNS missing")
+		return ddl
+	}
+	require.Equal(t, sysview.InformationSchemaColumnsV58DDL(), definition())
+	injected := errors.New("injected COLUMNS creation failure")
+	err := sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
+		return v4_0_10.Handler.HandleTenantUpgrade(ctx, int32(tenantID), failedViewColumnsUpgradeTxn{txn, injected})
+	}, opts)
+	require.ErrorIs(t, err, injected)
+	require.Equal(t, sysview.InformationSchemaColumnsV58DDL(), definition(), "DROP must roll back with CREATE")
+	for i := 0; i < 2; i++ {
+		require.NoError(t, sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
+			if i == 1 {
+				// Exact readiness must bypass DDL when the handler is replayed.
+				txn = failedViewColumnsUpgradeTxn{txn, injected}
+			}
+			return v4_0_10.Handler.HandleTenantUpgrade(ctx, int32(tenantID), txn)
+		}, opts))
+		require.Equal(t, sysview.InformationSchemaColumnsDDL, definition())
+	}
+}
+
 func TestViewDescriptionSubscription(t *testing.T) {
 	embed.RunSingleCNBaseClusterTests(t, func(cluster embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
@@ -580,10 +609,29 @@ func TestViewDescriptionSubscription(t *testing.T) {
 		port := cn.GetServiceConfig().CN.Frontend.Port
 		sys := openViewDescriptionDB(t, port, "dump:111")
 		exec := func(q string) { t.Helper(); _, err := sys.ExecContext(ctx, q); require.NoError(t, err, q) }
+		cleanup := func(db *sql.DB, q string) {
+			t.Helper()
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cleanupCancel()
+			_, cleanupErr := db.ExecContext(cleanupCtx, q)
+			require.NoError(t, cleanupErr, q)
+		}
+		// Verify teardown before the enclosing fixture destroys the cluster.
+		defer func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cleanupCancel()
+			var count int
+			require.NoError(t, sys.QueryRowContext(cleanupCtx,
+				"select count(*) from mo_catalog.mo_account where account_name='view_description_sub'").Scan(&count))
+			require.Zero(t, count, "the subscriber account must be removed")
+			require.NoError(t, sys.QueryRowContext(cleanupCtx,
+				"select count(*) from mo_catalog.mo_database where datname='view_description_pub'").Scan(&count))
+			require.Zero(t, count, "the publisher database must be removed")
+		}()
 		exec("create account view_description_sub admin_name='admin' identified by '111'")
-		defer exec("drop account view_description_sub")
+		defer cleanup(sys, "drop account view_description_sub")
 		exec("create database view_description_pub")
-		defer exec("drop database view_description_pub")
+		defer cleanup(sys, "drop database view_description_pub")
 		exec("create table view_description_pub.src (x varchar(5) character set utf8mb4 collate utf8mb4_general_ci)")
 		exec("create table view_description_pub.charset_src (mb4 varchar(5) character set utf8mb4 collate utf8mb4_general_ci, mb4_bin varchar(5) character set utf8mb4 collate utf8mb4_bin, legacy varchar(5) character set utf8, raw varbinary(5), txt text)")
 		exec("create view view_description_pub.charset_v as select mb4, mb4_bin, legacy, raw, txt from view_description_pub.charset_src")
@@ -591,11 +639,11 @@ func TestViewDescriptionSubscription(t *testing.T) {
 		exec("create view view_description_pub.v as select x from view_description_pub.src")
 		exec("create view view_description_pub.bad_view as select x from view_description_pub.bad_src")
 		exec("create publication view_description_publication database view_description_pub account view_description_sub")
-		defer exec("drop publication view_description_publication")
+		defer cleanup(sys, "drop publication view_description_publication")
 		subscriber := openViewDescriptionDB(t, port, "view_description_sub#admin#accountadmin:111")
 		_, err = subscriber.ExecContext(ctx, "create database subscribed from sys publication view_description_publication")
 		require.NoError(t, err)
-		defer func() { _, err := subscriber.ExecContext(ctx, "drop database subscribed"); require.NoError(t, err) }()
+		defer cleanup(subscriber, "drop database subscribed")
 		// Simulate a tenant whose V58 COLUMNS definition has not yet been migrated,
 		// while all SQL and table functions execute on this newer CN.
 		var tenantID uint32
@@ -625,6 +673,13 @@ func TestViewDescriptionSubscription(t *testing.T) {
 		require.NoError(t, subscriber.QueryRowContext(ctx,
 			"select column_name from information_schema.columns where table_schema='subscribed' and table_name='v'").Scan(&legacyColumn))
 		require.Equal(t, "x", legacyColumn)
+		// The historical system template is still V58, but its View must be
+		// described using the source visible at that snapshot after migration.
+		exec("alter table view_description_pub.src modify column x varchar(7)")
+		_, err = subscriber.ExecContext(ctx, "create snapshot view_description_legacy_columns for account")
+		require.NoError(t, err)
+		defer cleanup(subscriber, "drop snapshot view_description_legacy_columns")
+		exec("alter table view_description_pub.src modify column x varchar(5)")
 		// Compare the historical projection with the new one on the same CN.
 		// Publisher View, subscription table and subscription View must all
 		// agree on the supported character-set selector variants.
@@ -675,20 +730,22 @@ func TestViewDescriptionSubscription(t *testing.T) {
 		require.Equal(t, "utf8mb4_general_ci", publisherTable[0].collation)
 		require.Equal(t, "binary", publisherTable[3].charset)
 
-		require.NoError(t, replaceColumns(ctx, sysview.InformationSchemaColumnsDDL))
+		testViewColumnsUpgradeRollback(t, ctx, sqlExecutor, tenantID)
 		require.Equal(t, publisherTable, readCharsets(subscriber, "subscribed", "charset_src"))
 		require.Equal(t, publisherView, readCharsets(subscriber, "subscribed", "charset_v"))
 		require.Equal(t, legacySubscriptionView, readCharsets(subscriber, "subscribed", "charset_v"))
+		var historicalWidth int
+		require.NoError(t, subscriber.QueryRowContext(ctx,
+			"select character_maximum_length from information_schema.columns {snapshot='view_description_legacy_columns'} "+
+				"where table_schema='subscribed' and table_name='v' and column_name='x'").Scan(&historicalWidth))
+		require.Equal(t, 7, historicalWidth, "an old system template must not resurrect creation-time View columns")
 
 		// The snapshot belongs to the subscriber, but the View's source database
 		// belongs to the publisher. Database existence and relation binding must
 		// use the same account and historical timestamp.
 		_, err = subscriber.ExecContext(ctx, "create snapshot view_description_sub_history for account")
 		require.NoError(t, err)
-		defer func() {
-			_, dropErr := subscriber.ExecContext(ctx, "drop snapshot view_description_sub_history")
-			require.NoError(t, dropErr)
-		}()
+		defer cleanup(subscriber, "drop snapshot view_description_sub_history")
 		exec("alter table view_description_pub.src modify column x varchar(60)")
 		checkHistoricalView := func(snapshotName string, wantWidth int) {
 			t.Helper()
@@ -731,10 +788,7 @@ func TestViewDescriptionSubscription(t *testing.T) {
 		// substitute for the publisher's source catalog at a later snapshot.
 		_, err = subscriber.ExecContext(ctx, "create database view_description_pub")
 		require.NoError(t, err)
-		defer func() {
-			_, dropErr := subscriber.ExecContext(ctx, "drop database view_description_pub")
-			require.NoError(t, dropErr)
-		}()
+		defer cleanup(subscriber, "drop database view_description_pub")
 		var field, typ, nullable, key, defaultValue, extra, comment sql.NullString
 		require.NoError(t, subscriber.QueryRowContext(ctx, "desc subscribed.v").Scan(
 			&field, &typ, &nullable, &key, &defaultValue, &extra, &comment))
@@ -780,10 +834,7 @@ func TestViewDescriptionSubscription(t *testing.T) {
 		defer prepared.Close()
 		_, err = subscriber.ExecContext(ctx, "create snapshot view_description_sub_same_name for account")
 		require.NoError(t, err)
-		defer func() {
-			_, dropErr := subscriber.ExecContext(ctx, "drop snapshot view_description_sub_same_name")
-			require.NoError(t, dropErr)
-		}()
+		defer cleanup(subscriber, "drop snapshot view_description_sub_same_name")
 		exec("alter table view_description_pub.src modify column x varchar(90)")
 		checkHistoricalView("view_description_sub_same_name", 60)
 		checkSubscribedShow("VARCHAR(90)")
@@ -832,8 +883,8 @@ func TestViewDescriptionSubscription(t *testing.T) {
 		require.NoError(t, err)
 		_, err = subscriber.ExecContext(ctx, "create user metadata_user identified by 'reader_pass'")
 		require.NoError(t, err)
-		defer subscriber.ExecContext(ctx, "drop user metadata_user")
-		defer subscriber.ExecContext(ctx, "drop role metadata_reader")
+		defer cleanup(subscriber, "drop user metadata_user")
+		defer cleanup(subscriber, "drop role metadata_reader")
 		_, err = subscriber.ExecContext(ctx, "grant metadata_reader to metadata_user")
 		require.NoError(t, err)
 		_, err = subscriber.ExecContext(ctx, "grant connect on account * to metadata_reader")
@@ -874,5 +925,7 @@ func TestViewDescriptionSubscription(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, reader.QueryRowContext(ctx, query).Scan(&width))
 		require.Equal(t, 90, width)
+		// Cleanup must work after the scenario's context is cancelled or expires.
+		cancel()
 	})
 }

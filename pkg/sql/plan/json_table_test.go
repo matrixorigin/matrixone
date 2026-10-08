@@ -35,7 +35,7 @@ func TestJSONTableDefaultAdmission(t *testing.T) {
 		{"unsupported_fractional_integer", `n INT PATH '$' DEFAULT '1.25' ON EMPTY`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := runOneStmt(NewMockOptimizer(false), t,
+			_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 				`SELECT * FROM JSON_TABLE('[]','$[*]' COLUMNS(`+tc.column+`)) jt`)
 			if tc.valid {
 				require.NoError(t, err)
@@ -53,7 +53,7 @@ func TestJSONTableCorrelatedJoinConditions(t *testing.T) {
 		{"on", `JOIN JSON_TABLE(n.n_name,'$[*]' COLUMNS(n_nationkey INT PATH '$')) jt ON n.n_nationkey=jt.n_nationkey`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			p, err := runOneStmt(NewMockOptimizer(false), t, `SELECT n.n_name FROM nation n `+tc.join)
+			p, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, `SELECT n.n_name FROM nation n `+tc.join)
 			require.NoError(t, err)
 			var applies, equalities int
 			for _, node := range p.GetQuery().Nodes {
@@ -81,7 +81,7 @@ func TestJSONTableCoreFailClosed(t *testing.T) {
 		{`SELECT * FROM JSON_TABLE(1,'$[*]' COLUMNS(v INT PATH '$')) jt`, "source must be JSON, text or DATALINK"},
 	} {
 		t.Run(tc.errorText, func(t *testing.T) {
-			_, err := runOneStmt(NewMockOptimizer(false), t, tc.sql)
+			_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, tc.sql)
 			require.ErrorContains(t, err, tc.errorText)
 		})
 	}
