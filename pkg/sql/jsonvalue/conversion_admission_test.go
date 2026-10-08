@@ -57,7 +57,7 @@ func TestJSONTablePathTimestampCarriesExecutionLocation(t *testing.T) {
 	value := parseConversionValue(t, `"2024-02-03 04:05:06"`)
 	path, err := bytejson.ParseJsonPath("$")
 	require.NoError(t, err)
-	var timestamps []types.Timestamp
+	timestamps := make([]types.Timestamp, 0, 2)
 	for _, location := range []*time.Location{time.UTC, time.FixedZone("UTC+8", 8*60*60)} {
 		it := bytejson.NewPathIterator(value, &path)
 		result := ConvertPathMatchesWithOptions(context.Background(), it, target, ConversionOptions{Location: location}, 1024)
