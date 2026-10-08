@@ -181,6 +181,12 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 		if err = rowAliasBinding.remapIncomingPositions(builder.GetContext(), tableDef, colName2Idx); err != nil {
 			return 0, err
 		}
+		// Source and generated-column validation has completed. Reject every
+		// UPDATE-only subquery before RHS binding, key lookup, or the no-key
+		// fallback: even an uncorrelated input can execute eagerly before DEDUP.
+		if err = validateRowAliasUpdateSubqueries(builder.GetContext(), astUpdateExprs); err != nil {
+			return 0, err
+		}
 	}
 
 	// The irregular-index maintenance source is set up inside
@@ -6066,7 +6072,7 @@ func valuesExprIsFuncCall(e tree.Expr) bool {
 // without letting one statement create hundreds of source scopes.
 const maxReplaceValuesSubqueryBranches = 32
 
-func replaceValueExprContainsSubquery(expr tree.Expr) bool {
+func astExprContainsSubquery(expr tree.Expr) bool {
 	// Keep ordinary literal/default/parameter VALUES rows on an allocation-free
 	// classification path. The reflective walker is only needed for expression
 	// trees that can contain nested subqueries.
@@ -6074,7 +6080,7 @@ func replaceValueExprContainsSubquery(expr tree.Expr) bool {
 	case nil, *tree.NumVal, *tree.StrVal, *tree.UnresolvedName, *tree.ParamExpr, *tree.UpdateVal, *tree.MaxValue:
 		return false
 	case *tree.DefaultVal:
-		return replaceValueExprContainsSubquery(typedExpr.Expr)
+		return astExprContainsSubquery(typedExpr.Expr)
 	}
 
 	found := false
@@ -6092,7 +6098,7 @@ func validateReplaceValuesSubqueryBranchLimit(ctx context.Context, rows []tree.E
 	subqueryRows := 0
 	for _, row := range rows {
 		for _, expr := range row {
-			if !replaceValueExprContainsSubquery(expr) {
+			if !astExprContainsSubquery(expr) {
 				continue
 			}
 			subqueryRows++

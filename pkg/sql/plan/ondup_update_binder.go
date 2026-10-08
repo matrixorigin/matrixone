@@ -163,9 +163,31 @@ func validateOndupUpdateTargets(
 		); err != nil {
 			return err
 		}
-		if _, ok := lookupInsertTableColumn(tableDef, update.Names[0].ColName(), lowerCaseTableNames); !ok {
+		colIdx, ok := lookupInsertTableColumn(tableDef, update.Names[0].ColName(), lowerCaseTableNames)
+		if !ok {
 			return moerr.NewBadFieldErrorf(ctx,
 				"invalid input: column '%s' does not exist", update.Names[0].ColNameOrigin())
+		}
+		if tableDef.Cols[colIdx].GeneratedCol != nil {
+			if _, isDefault := update.Expr.(*tree.DefaultVal); !isDefault {
+				return moerr.NewInvalidInputf(ctx,
+					"the value specified for generated column '%s' in table '%s' is not allowed",
+					tableDef.Cols[colIdx].Name, tableDef.Name)
+			}
+		}
+	}
+	return nil
+}
+
+const odkuRowAliasSubqueryCause = "row-alias subqueries in on duplicate key update cannot be evaluated before duplicate-key action"
+
+// This is an AST-only gate. Invalid names/types in a rejected RHS subquery
+// must not replace the deterministic error, and unreachable CASE branches and
+// no-key UPDATE arms must be checked without binding or executing them.
+func validateRowAliasUpdateSubqueries(ctx context.Context, updates tree.UpdateExprs) error {
+	for _, update := range updates {
+		if update != nil && astExprContainsSubquery(update.Expr) {
+			return moerr.NewUnsupportedDML(ctx, odkuRowAliasSubqueryCause)
 		}
 	}
 	return nil

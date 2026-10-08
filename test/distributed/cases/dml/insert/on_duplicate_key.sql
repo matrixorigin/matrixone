@@ -232,38 +232,38 @@ delete from t_odku_row_alias;
 insert into t_odku_row_alias values (1, 10, 0);
 -- Correlated ODKU subqueries are fail-closed until the UPDATE-only subtree can
 -- be evaluated lazily after duplicate-key arbitration.
--- @regex("target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
+-- @regex("row-alias subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
 insert into t_odku_row_alias values (1, 5, 0) as n(x, y, z) on duplicate key update b = (select n.y + t_odku_row_alias.a from t_odku_scope_source as n where n.x = t_odku_row_alias.id);
 
 -- A correlated assignment followed by an uncorrelated scalar is rejected as a
 -- whole statement; no earlier assignment may make the unsafe subtree visible.
 delete from t_odku_row_alias;
 insert into t_odku_row_alias values (1, 10, 0);
--- @regex("target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
+-- @regex("row-alias subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
 insert into t_odku_row_alias values (1, 5, 0) as n(x, y, z) on duplicate key update a = (select s.y + t_odku_row_alias.a from t_odku_scope_source as s where s.x = t_odku_row_alias.id), b = (select max(s.y) from t_odku_scope_source as s);
 
 -- Target-correlated subqueries are rejected before they can read a stale
 -- target snapshot after an earlier ordered assignment.
 delete from t_odku_row_alias;
 insert into t_odku_row_alias values (1, 10, 0);
--- @regex("target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
+-- @regex("row-alias subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
 insert into t_odku_row_alias values (1, 5, 0) as n(x, y, z) on duplicate key update a = t_odku_row_alias.a + 1, b = (select n.y + t_odku_row_alias.a from t_odku_scope_source as n where n.x = t_odku_row_alias.id);
 
 delete from t_odku_row_alias;
 insert into t_odku_row_alias values (1, 10, 0);
--- @regex("target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
+-- @regex("row-alias subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
 insert into t_odku_row_alias values (1, 5, 0), (1, 6, 0) as n(x, y, z) on duplicate key update b = (select n.y + t_odku_row_alias.a from t_odku_scope_source as n where n.x = t_odku_row_alias.id);
 
 delete from t_odku_row_alias;
 insert into t_odku_row_alias values (1, 10, 0);
--- @regex("target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
+-- @regex("row-alias subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
 insert into t_odku_row_alias (id, a, b) select 1, 5, 0 on duplicate key update b = (select s.y + t_odku_row_alias.a from t_odku_scope_source as s where s.x = t_odku_row_alias.id);
 
 -- A target-correlated subquery is rejected even when the source alias does not
 -- shadow the row alias; the whole UPDATE-only subtree must remain unevaluated.
 delete from t_odku_row_alias;
 insert into t_odku_row_alias values (1, 10, 100);
--- @regex("target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
+-- @regex("row-alias subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
 insert into t_odku_row_alias values (1, 5, 0) as n on duplicate key update b = (select s.y from t_odku_scope_source as s where s.x = t_odku_row_alias.id);
 
 -- A scalar UPDATE expression must not run for a non-conflicting insert. Since
@@ -274,43 +274,43 @@ create table t_odku_scope_multi (x int, y int);
 insert into t_odku_scope_multi values (0, 10), (0, 20);
 delete from t_odku_row_alias;
 insert into t_odku_row_alias values (1, 10, 0);
--- @regex("target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
+-- @regex("row-alias subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
 insert into t_odku_row_alias values (2, 5, 0) as n on duplicate key update b = (select s.y from t_odku_scope_multi as s where s.x = coalesce(t_odku_row_alias.id, 0));
 
 -- Candidate-row correlation is rejected for the same pre-DEDUP safety reason.
 insert into t_odku_scope_multi values (2, 30), (2, 40);
 delete from t_odku_row_alias;
 insert into t_odku_row_alias values (1, 10, 0);
--- @regex("target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
+-- @regex("row-alias subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
 insert into t_odku_row_alias values (2, 5, 0) as n on duplicate key update b = (select s.y from t_odku_scope_multi as s where s.x = n.id);
 
 -- A candidate-correlated scalar cannot be evaluated safely for a multi-row
 -- candidate input before DEDUP selects each row's duplicate-key action.
 delete from t_odku_row_alias;
 insert into t_odku_row_alias values (1, 10, 0);
--- @regex("target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
+-- @regex("row-alias subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
 insert into t_odku_row_alias values (1, 5, 0), (1, 6, 0) as n on duplicate key update b = (select s.y from t_odku_scope_source as s where s.x = n.id);
 
 -- A local FROM alias may have the same spelling as the ODKU target table. It
 -- must remain local even when its expression contains another subquery.
 delete from t_odku_row_alias;
 insert into t_odku_row_alias values (1, 10, 0);
-insert into t_odku_row_alias values (2, 5, 0) as n on duplicate key update b = (select t_odku_row_alias.y + (select 1) from t_odku_scope_source as t_odku_row_alias);
+insert into t_odku_row_alias values (2, 5, 0) on duplicate key update b = (select t_odku_row_alias.y + (select 1) from t_odku_scope_source as t_odku_row_alias);
 select * from t_odku_row_alias order by id;
 
 -- A nested candidate-correlated scalar is also rejected before its inner input
 -- can execute for a row that does not conflict.
--- @regex("target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
+-- @regex("row-alias subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
 insert into t_odku_row_alias values (2, 5, 0) as n on duplicate key update b = (select (select q.y from t_odku_scope_multi as q) from t_odku_scope_multi as s where s.x = n.id);
 
 -- The same nested candidate-correlated shape must be rejected when the
 -- incoming row alias is referenced by a bare column name.
--- @regex("target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
+-- @regex("row-alias subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
 insert into t_odku_row_alias values (2, 5, 0) as n(k, incoming_a, incoming_b) on duplicate key update b = (select (select q.y from t_odku_scope_multi as q) from t_odku_scope_multi as s where s.x = k);
 
 -- A nested subquery input cannot be guarded by the outer target-match
 -- predicate. Reject it before the unused UPDATE branch can execute.
--- @regex("target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action",true)
+-- @regex("row-alias subqueries in on duplicate key update cannot be evaluated before duplicate-key action",true)
 insert into t_odku_row_alias values (2, 5, 0) as n on duplicate key update b = (select (select q.y from t_odku_scope_multi as q) from t_odku_scope_multi as s where s.x = coalesce(t_odku_row_alias.id, 0));
 drop table t_odku_scope_multi;
 
@@ -321,7 +321,7 @@ select * from t_odku_row_alias order by id;
 
 delete from t_odku_row_alias;
 insert into t_odku_row_alias values (1, 10, 0);
--- @regex("target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
+-- @regex("row-alias subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
 insert into t_odku_row_alias values (1, 5, 0) as n(x, y, z) on duplicate key update b = (select n.y + s.y from t_odku_scope_source as s where s.x = n.x);
 drop table t_odku_scope_source;
 
@@ -405,3 +405,42 @@ insert into t_null_dup values (1, 100, 100), (3, 300, 300);
 insert into t_null_dup (id, a, b) values (1, NULL, NULL), (3, NULL, 30) on duplicate key update a = values(a), b = values(b);
 select * from t_null_dup order by id;
 drop table if exists t_null_dup;
+
+-- #28160: reject every row-alias RHS subquery before keyed/no-key execution.
+drop table if exists t_odku_subquery_gate;
+drop table if exists t_odku_subquery_nokey;
+drop table if exists t_odku_subquery_source;
+create table t_odku_subquery_gate (id int primary key, b int not null);
+create table t_odku_subquery_nokey (id int, b int);
+create table t_odku_subquery_source (y int);
+insert into t_odku_subquery_source values (10), (20);
+-- @regex("row-alias subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
+insert into t_odku_subquery_gate values (1, 5) as n on duplicate key update b = n.b + (select y from t_odku_subquery_source);
+select id, b from t_odku_subquery_gate order by id;
+insert into t_odku_subquery_gate values (1, 5) as n on duplicate key update b = n.b;
+-- @regex("row-alias subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
+insert into t_odku_subquery_gate values (1, 6) as n on duplicate key update b = if(exists (select 1), n.b, 0);
+-- @regex("row-alias subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
+insert into t_odku_subquery_gate values (2, 7) as n on duplicate key update b = case when false then (select missing from nonexistent) else n.b end;
+select id, b from t_odku_subquery_gate order by id;
+-- @regex("row-alias subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
+insert into t_odku_subquery_nokey values (1, 5) as n on duplicate key update b = (select y from t_odku_subquery_source);
+-- @regex("row-alias subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
+insert into t_odku_subquery_nokey values (1, 5) as n on duplicate key update b = n.b in (select y from t_odku_subquery_source);
+select id, b from t_odku_subquery_nokey order by id;
+insert into t_odku_subquery_nokey values (1, 5) as n on duplicate key update b = n.b;
+select id, b from t_odku_subquery_nokey order by id;
+prepare s_odku_gate_reuse from insert into t_odku_subquery_gate values (?, ?) as n on duplicate key update b = n.b;
+set @odku_gate_id = 1;
+set @odku_gate_b = 9;
+execute s_odku_gate_reuse using @odku_gate_id, @odku_gate_b;
+set @odku_gate_b = NULL;
+execute s_odku_gate_reuse using @odku_gate_id, @odku_gate_b;
+select id, b from t_odku_subquery_gate order by id;
+set @odku_gate_b = 11;
+execute s_odku_gate_reuse using @odku_gate_id, @odku_gate_b;
+select id, b from t_odku_subquery_gate order by id;
+deallocate prepare s_odku_gate_reuse;
+drop table t_odku_subquery_gate;
+drop table t_odku_subquery_nokey;
+drop table t_odku_subquery_source;
