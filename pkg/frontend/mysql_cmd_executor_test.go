@@ -10461,7 +10461,7 @@ func TestExecRequestStmtSendLongDataRowCount(t *testing.T) {
 	require.NoError(t, ses.SetPrepareStmt(ctx, invalidated.Name, invalidated))
 
 	setRowCount(ses, ses.GetProc(), 7)
-	invalidatedPayload := make([]byte, 6, 6+len("discarded long data"))
+	invalidatedPayload := make([]byte, 6, 25)
 	binary.LittleEndian.PutUint32(invalidatedPayload, invalidatedID)
 	binary.LittleEndian.PutUint16(invalidatedPayload[4:], 0)
 	invalidatedPayload = append(invalidatedPayload, "discarded long data"...)
