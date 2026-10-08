@@ -346,9 +346,7 @@ func buildIrregularIndexValueChangeFiltersWithResolver(
 	for _, key := range groupOrder {
 		columnSet := make(map[string]struct{})
 		supported := true
-		fulltextGroup := false
 		for _, indexdef := range groups[key] {
-			fulltextGroup = fulltextGroup || catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo)
 			plugin, ok := resolvePlugin(indexdef.IndexAlgo)
 			if !ok {
 				supported = false
@@ -373,22 +371,6 @@ func buildIrregularIndexValueChangeFiltersWithResolver(
 		}
 		if !supported {
 			continue
-		}
-		if fulltextGroup && tableDef != nil && tableDef.Partition != nil &&
-			len(tableDef.Partition.PartitionDefs) > 0 {
-			// Physical FULLTEXT ownership depends on the parent partition
-			// expression as well as the document/text values. Include every
-			// expression dependency in the value marker so ODKU does not
-			// classify a route-only change as a no-op.
-			partitionColumns := make(map[string]struct{})
-			for _, partitionDef := range tableDef.Partition.PartitionDefs {
-				if partitionDef != nil {
-					collectPartitionExprColumnNames(partitionDef.Def, tableDef, partitionColumns)
-				}
-			}
-			for columnName := range partitionColumns {
-				columnSet[columnName] = struct{}{}
-			}
 		}
 
 		columns := make([]string, 0, len(columnSet))
@@ -423,7 +405,10 @@ func splitIrregularIndexesByUpdatedColumns(
 	}
 
 	affectedGroups := make(map[string]bool, len(indexes))
-	partitionChanged := partitionColumnsUpdated(tableDef, possiblyChangedCols)
+	partitionChanged, err := partitionColumnsUpdated(tableDef, possiblyChangedCols)
+	if err != nil {
+		return nil, nil, err
+	}
 	pkChanged := false
 	if tableDef != nil && tableDef.Pkey != nil {
 		for _, pkName := range tableDef.Pkey.Names {
@@ -3025,8 +3010,11 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	}
 
 	moveFulltextPartition := false
-	if onDupAction == plan.Node_UPDATE && features.IsPartitioned(tableDef.FeatureFlag) &&
-		partitionColumnsUpdated(tableDef, possiblyChangedCols) {
+	partitionUpdated, err := partitionColumnsUpdated(tableDef, possiblyChangedCols)
+	if err != nil {
+		return 0, err
+	}
+	if onDupAction == plan.Node_UPDATE && features.IsPartitioned(tableDef.FeatureFlag) && partitionUpdated {
 		for _, idx := range irregularIndexes {
 			if catalog.IsFullTextIndexAlgo(idx.IndexAlgo) {
 				moveFulltextPartition = true

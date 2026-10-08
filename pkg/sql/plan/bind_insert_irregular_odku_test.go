@@ -205,6 +205,64 @@ func fulltextODKUPlanShape(t *testing.T, sql string) fulltextODKUShape {
 	return inspectFulltextODKUPlan(t, NewMockOptimizer(true, newPlanTestProcess(t)), sql)
 }
 
+func TestPartitionedFulltextUpdateAutomaticGeneratedRoute(t *testing.T) {
+	for _, tc := range []struct {
+		name, partitionKey, assignment string
+		automatic                      bool
+		wantRouted                     int
+	}{
+		{"direct automatic", "payload", "embedding = '[3,4,5]'", true, 2},
+		{"generated automatic", "g", "embedding = '[3,4,5]'", true, 2},
+		{"generated explicit", "g", "payload = '2026-01-01'", false, 2},
+		{"unrelated without automatic assignment", "g", "embedding = '[3,4,5]'", false, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			onUpdate := ""
+			if tc.automatic {
+				onUpdate = " on update current_timestamp"
+			}
+			ddl, err := runOneStmt(mock, t, "create table constraint_test.qa_ft_auto (id int primary key, body varchar(200), payload datetime default current_timestamp"+onUpdate+", embedding vecf32(3), g datetime as (payload) stored, fulltext fti(body)) partition by range columns("+tc.partitionKey+") (partition p0 values less than ('2025-01-01'), partition p1 values less than (maxvalue))")
+			require.NoError(t, err)
+			created := ddl.GetDdl().GetCreateTable()
+			require.NotNil(t, created)
+			// Resolve returns persisted DDL plus the engine-owned row-id column;
+			// index tables exist by the time UPDATE reaches the catalog.
+			for _, index := range created.TableDef.Indexes {
+				index.TableExist = true
+			}
+			for _, def := range append([]*planpb.TableDef{created.TableDef}, created.IndexTables...) {
+				def.Cols = append(def.Cols, &planpb.ColDef{Name: catalog.Row_ID, Hidden: true, Typ: planpb.Type{Id: int32(types.T_Rowid), Width: 16}, Default: &planpb.Default{NullAbility: false}})
+				def.Name2ColIndex = make(map[string]int32, len(def.Cols))
+				for i, col := range def.Cols {
+					def.Name2ColIndex[col.Name] = int32(i)
+				}
+				mock.ctxt.tables[def.Name] = def
+				mock.ctxt.objects[def.Name] = &planpb.ObjectRef{SchemaName: "constraint_test", ObjName: def.Name}
+			}
+			p, err := runOneStmt(mock, t, "update constraint_test.qa_ft_auto set "+tc.assignment+" where id = 1")
+			require.NoError(t, err)
+			routed := 0
+			for _, node := range p.GetQuery().Nodes {
+				if node.NodeType != planpb.Node_MULTI_UPDATE {
+					continue
+				}
+				for _, update := range node.UpdateCtxList {
+					if update.PartitionIndexCtx != nil {
+						routed++
+					}
+				}
+			}
+			require.Equal(t, tc.wantRouted, routed, "automatic and explicit changes to the same final partition key need equivalent delete/insert maintenance")
+			if tc.automatic && tc.partitionKey == "g" {
+				shape := inspectFulltextODKUPlan(t, mock, "insert into constraint_test.qa_ft_auto(id,body,payload,embedding) values(1,'automatic alpha','2024-01-01','[3,4,5]') on duplicate key update embedding=values(embedding)")
+				require.Len(t, shape.valueChangeFilter, 1)
+				require.ElementsMatch(t, []string{"id", "body", "g"}, nullSafeEqualityColumns(t, shape.valueChangeFilter[0].markerExpr), "the plugin's marker must compare final generated routes, not just unchanged text/doc_id")
+			}
+		})
+	}
+}
+
 func TestPartitionedFulltextMaintenanceUsesIndexOnlyMultiUpdate(t *testing.T) {
 	oldPostDML := postdml_flag
 	postdml_flag = true

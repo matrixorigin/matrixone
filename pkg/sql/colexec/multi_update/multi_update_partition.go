@@ -53,7 +53,12 @@ type partitionUpdateTarget struct {
 	meta             partition.PartitionMetadata
 	mainIndexes      []uint64
 	partitionIndexes map[uint64][]engine.Relation
-	writerIDs        map[uint64]uint64
+	writerIDs        map[partitionWriterKey]uint64
+}
+
+type partitionWriterKey struct {
+	physicalTableID uint64
+	action          actionType
 }
 
 func NewPartitionMultiUpdate(
@@ -225,7 +230,7 @@ func buildPartitionUpdateTargets(contexts []*MultiUpdateCtx) []*partitionUpdateT
 				target = &partitionUpdateTarget{
 					indexOnly: true,
 					tableID:   parentID,
-					writerIDs: make(map[uint64]uint64),
+					writerIDs: make(map[partitionWriterKey]uint64),
 				}
 				targetsByParent[parentID] = target
 				targets = append(targets, target)
@@ -239,7 +244,7 @@ func buildPartitionUpdateTargets(contexts []*MultiUpdateCtx) []*partitionUpdateT
 		target := &partitionUpdateTarget{
 			contexts:  []*MultiUpdateCtx{cloneTargetContext(ctx)},
 			tableID:   ctx.TableDef.TblId,
-			writerIDs: make(map[uint64]uint64),
+			writerIDs: make(map[partitionWriterKey]uint64),
 		}
 		targetsByMain[i] = target
 		targets = append(targets, target)
@@ -688,7 +693,7 @@ func (op *PartitionMultiUpdate) callRawTarget(
 	}
 	op.raw.mainTable = mainTable
 	if op.raw.Action == UpdateWriteS3 {
-		op.raw.mainTable = op.writerID(target, mainTable)
+		op.raw.mainTable = op.writerID(target, mainTable, s3WriterAction(contexts))
 	}
 	op.raw.input = vm.CallResult{Batch: input}
 	_, err := op.raw.Call(proc)
@@ -710,12 +715,16 @@ func (update *MultiUpdate) cleanTargetBuffers(proc *process.Process) {
 	update.ctr.deleteBuf = make([]*batch.Batch, len(update.MultiUpdateCtx))
 }
 
-func (op *PartitionMultiUpdate) writerID(target *partitionUpdateTarget, physicalTableID uint64) uint64 {
-	if id, ok := target.writerIDs[physicalTableID]; ok {
+func (op *PartitionMultiUpdate) writerID(target *partitionUpdateTarget, physicalTableID uint64, action actionType) uint64 {
+	// A delegate captures its insert/delete contexts when created. A partition
+	// key UPDATE can delete and insert into the same physical table, so those
+	// phases must not reuse a delete-only (or insert-only) delegate.
+	key := partitionWriterKey{physicalTableID: physicalTableID, action: action}
+	if id, ok := target.writerIDs[key]; ok {
 		return id
 	}
 	op.nextWriterID++
-	target.writerIDs[physicalTableID] = op.nextWriterID
+	target.writerIDs[key] = op.nextWriterID
 	return op.nextWriterID
 }
 

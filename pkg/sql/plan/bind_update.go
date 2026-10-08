@@ -1288,7 +1288,11 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			}
 		}
 		aliasIdxNeedConstraintCheck[i] = append([]bool(nil), idxNeedUpdate[i]...)
-		if features.IsPartitioned(tableDef.FeatureFlag) && partitionColumnsUpdated(tableDef, assignedColsByTarget[i]) {
+		partitionUpdated, err := partitionColumnsUpdated(tableDef, assignedColsByTarget[i])
+		if err != nil {
+			return 0, err
+		}
+		if features.IsPartitioned(tableDef.FeatureFlag) && partitionUpdated {
 			for _, idx := range inlineIrregularIndexes[i] {
 				if catalog.IsFullTextIndexAlgo(idx.IndexAlgo) {
 					// Key values did not necessarily change, but their physical
@@ -4721,49 +4725,24 @@ func irregularIndexAffectedByUpdate(
 // different physical partition. The partition expression is the authoritative
 // dependency set; using only the first column or assuming a fixed column
 // position misses composite and expression-based partitioning.
-func partitionColumnsUpdated(tableDef *plan.TableDef, updated map[string]struct{}) bool {
-	if tableDef == nil || tableDef.Partition == nil || len(tableDef.Partition.PartitionDefs) == 0 {
-		return false
+func partitionColumnsUpdated(tableDef *plan.TableDef, updated map[string]struct{}) (bool, error) {
+	if tableDef == nil || tableDef.Partition == nil || len(tableDef.Partition.PartitionDefs) == 0 || len(updated) == 0 {
+		return false, nil
 	}
-	// Partition expressions may reference a generated column rather than the
-	// base column assigned by UPDATE/ODKU.  The final row image recomputes that
-	// generated value, so expand the changed set through generated-column
-	// dependencies before checking the partition expression.  Without this
-	// closure a write to the source column can move a row while the FULLTEXT
-	// maintenance planner incorrectly takes the insert-only path.
-	possiblyChanged := make(map[string]struct{}, len(updated))
-	for colName := range updated {
-		resolved := catalog.ResolveAlias(colName)
-		if colPos, ok := tableDef.Name2ColIndex[resolved]; ok &&
-			colPos >= 0 && int(colPos) < len(tableDef.Cols) {
-			possiblyChanged[tableDef.Cols[colPos].Name] = struct{}{}
-			continue
-		}
-		possiblyChanged[resolved] = struct{}{}
+	// Classification happens before automatic assignments are materialized.
+	// Seed those sources before the shared generated-column dependency closure.
+	seed := make(map[string]struct{}, len(updated))
+	for name := range updated {
+		seed[name] = struct{}{}
 	}
-	for {
-		expanded := false
-		for _, col := range tableDef.Cols {
-			if col == nil || col.GeneratedCol == nil || col.GeneratedCol.Expr == nil {
-				continue
-			}
-			if _, alreadyChanged := possiblyChanged[col.Name]; alreadyChanged {
-				continue
-			}
-			for _, refPos := range collectRefColPos(col.GeneratedCol.Expr) {
-				if refPos < 0 || int(refPos) >= len(tableDef.Cols) {
-					continue
-				}
-				if _, sourceChanged := possiblyChanged[tableDef.Cols[refPos].Name]; sourceChanged {
-					possiblyChanged[col.Name] = struct{}{}
-					expanded = true
-					break
-				}
-			}
+	for _, col := range tableDef.Cols {
+		if col.OnUpdate != nil {
+			seed[col.Name] = struct{}{}
 		}
-		if !expanded {
-			break
-		}
+	}
+	possiblyChanged, err := collectGeneratedColumnDependents(context.Background(), tableDef, seed)
+	if err != nil {
+		return false, err
 	}
 	partitionCols := make(map[string]struct{})
 	for _, partitionDef := range tableDef.Partition.PartitionDefs {
@@ -4772,18 +4751,11 @@ func partitionColumnsUpdated(tableDef *plan.TableDef, updated map[string]struct{
 		}
 	}
 	for colName := range partitionCols {
-		if _, ok := possiblyChanged[colName]; ok {
-			return true
-		}
-		resolved := catalog.ResolveAlias(colName)
-		if _, ok := possiblyChanged[resolved]; ok {
-			return true
-		}
-		if colPos, ok := tableDef.Name2ColIndex[colName]; ok && colPos >= 0 && int(colPos) < len(tableDef.Cols) && tableDef.Cols[colPos].OnUpdate != nil {
-			return true
+		if columnPossiblyChanged(tableDef, possiblyChanged, colName) {
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 // irregularIndexAffectedByUpdatedColumnNames is the shared dependency check for
@@ -4874,7 +4846,10 @@ func classifyIrregularIndexesForUpdate(
 	for colName := range updateCols {
 		updatedCols[colName] = struct{}{}
 	}
-	partitionUpdated := partitionColumnsUpdated(tableDef, updatedCols)
+	partitionUpdated, err := partitionColumnsUpdated(tableDef, updatedCols)
+	if err != nil {
+		return nil, false, err
+	}
 	affectedSyncGroups := make(map[string]bool)
 	for _, idxDef := range tableDef.Indexes {
 		if catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) {

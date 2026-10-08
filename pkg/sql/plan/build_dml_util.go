@@ -7379,6 +7379,14 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 	idx int, updateColPosMap map[string]int) error {
 	partitioned := features.IsPartitioned(tableDef.FeatureFlag) &&
 		tableDef.Partition != nil && len(tableDef.Partition.PartitionDefs) > 0
+	updatedCols := make(map[string]struct{}, len(updateColPosMap))
+	for colName := range updateColPosMap {
+		updatedCols[colName] = struct{}{}
+	}
+	partitionUpdated, err := partitionColumnsUpdated(tableDef, updatedCols)
+	if err != nil {
+		return err
+	}
 
 	// Check if secondary key is being updated.
 	isSecondaryKeyUpdated := func() bool {
@@ -7400,14 +7408,8 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 		// A partition-key update moves the document even when none of the
 		// FULLTEXT parts changed. The delete branch has already removed the old
 		// postings; force the insert branch to rebuild them at the new route.
-		if partitioned && updateColPosMap != nil {
-			updatedCols := make(map[string]struct{}, len(updateColPosMap))
-			for colName := range updateColPosMap {
-				updatedCols[colName] = struct{}{}
-			}
-			if partitionColumnsUpdated(tableDef, updatedCols) {
-				return true
-			}
+		if partitioned && partitionUpdated {
+			return true
 		}
 
 		// The document id is the FULLTEXT row's lookup key. A primary-key
