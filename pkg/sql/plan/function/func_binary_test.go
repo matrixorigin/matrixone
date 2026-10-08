@@ -10591,6 +10591,7 @@ func geomInputEWKTAsType(ewkt string, geometryType types.T) FunctionTestInput {
 }
 
 func TestBinaryGeometryFunctionsRejectDifferentSRIDs(t *testing.T) {
+	proc := testutil.NewProcess(t)
 	boolTests := []struct {
 		name  string
 		fn    executeLogicOfOverload
@@ -10672,7 +10673,6 @@ func TestBinaryGeometryFunctionsRejectDifferentSRIDs(t *testing.T) {
 
 	for _, tc := range boolTests {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcess(t)
 			// SRID lives in the type now; encode it from the EWKT prefix.
 			inputs := []FunctionTestInput{
 				geomInputEWKT(tc.left),
@@ -10688,7 +10688,6 @@ func TestBinaryGeometryFunctionsRejectDifferentSRIDs(t *testing.T) {
 	}
 
 	t.Run("distance", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
 		inputs := []FunctionTestInput{
 			geomInputEWKT("SRID=4326;MULTIPOINT((0 0),(3 0))"),
 			geomInputEWKT("SRID=3857;POINT(2 0)"),
@@ -13308,6 +13307,9 @@ func TestCalendarIntervalArithmetic(t *testing.T) {
 }
 
 func TestTemporalMicrosecondBoundaryOverflowIsNull(t *testing.T) {
+	timestampProc := testutil.NewProcess(t)
+	stringProc := testutil.NewProcess(t)
+
 	minDatetime, err := types.ParseDatetime("0001-01-01 00:00:00.000000", 6)
 	require.NoError(t, err)
 	maxTimestamp, err := types.ParseTimestamp(time.UTC, "9999-12-31 23:59:59.999999", 6)
@@ -13337,34 +13339,33 @@ func TestTemporalMicrosecondBoundaryOverflowIsNull(t *testing.T) {
 		require.True(t, isDatetimeOverflowMaxError(err))
 	})
 
-	timestampInputs := func(t *testing.T, dateAddSyntax bool) (*process.Process, []*vector.Vector, vector.FunctionResultWrapper) {
+	timestampInputs := func(t *testing.T, dateAddSyntax bool) ([]*vector.Vector, vector.FunctionResultWrapper) {
 		t.Helper()
-		proc := testutil.NewProcess(t)
-		proc.GetSessionInfo().TimeZone = time.UTC
+		timestampProc.GetSessionInfo().TimeZone = time.UTC
 		timestampVec := vector.NewVec(types.New(types.T_timestamp, 0, 6))
-		t.Cleanup(func() { timestampVec.Free(proc.Mp()) })
+		t.Cleanup(func() { timestampVec.Free(timestampProc.Mp()) })
 		require.NoError(t, vector.AppendFixedList(timestampVec,
-			[]types.Timestamp{maxTimestamp, ordinaryTimestamp, ordinaryTimestamp}, []bool{false, false, true}, proc.Mp()))
+			[]types.Timestamp{maxTimestamp, ordinaryTimestamp, ordinaryTimestamp}, []bool{false, false, true}, timestampProc.Mp()))
 		intervalVec := vector.NewVec(types.T_int64.ToType())
-		t.Cleanup(func() { intervalVec.Free(proc.Mp()) })
-		require.NoError(t, vector.AppendFixedList(intervalVec, []int64{1, 1, 1}, nil, proc.Mp()))
+		t.Cleanup(func() { intervalVec.Free(timestampProc.Mp()) })
+		require.NoError(t, vector.AppendFixedList(intervalVec, []int64{1, 1, 1}, nil, timestampProc.Mp()))
 
 		var parameters []*vector.Vector
 		if dateAddSyntax {
-			unitVec, makeErr := vector.NewConstFixed(types.T_int64.ToType(), int64(types.MicroSecond), 3, proc.Mp())
-			t.Cleanup(func() { unitVec.Free(proc.Mp()) })
+			unitVec, makeErr := vector.NewConstFixed(types.T_int64.ToType(), int64(types.MicroSecond), 3, timestampProc.Mp())
+			t.Cleanup(func() { unitVec.Free(timestampProc.Mp()) })
 			require.NoError(t, makeErr)
 			parameters = []*vector.Vector{timestampVec, intervalVec, unitVec}
 		} else {
-			unitVec, makeErr := vector.NewConstBytes(types.T_varchar.ToType(), []byte("MICROSECOND"), 3, proc.Mp())
-			t.Cleanup(func() { unitVec.Free(proc.Mp()) })
+			unitVec, makeErr := vector.NewConstBytes(types.T_varchar.ToType(), []byte("MICROSECOND"), 3, timestampProc.Mp())
+			t.Cleanup(func() { unitVec.Free(timestampProc.Mp()) })
 			require.NoError(t, makeErr)
 			parameters = []*vector.Vector{unitVec, intervalVec, timestampVec}
 		}
-		result := vector.NewFunctionResultWrapper(types.T_timestamp.ToType(), proc.Mp())
+		result := vector.NewFunctionResultWrapper(types.T_timestamp.ToType(), timestampProc.Mp())
 		t.Cleanup(result.Free)
 		require.NoError(t, result.PreExtendAndReset(3))
-		return proc, parameters, result
+		return parameters, result
 	}
 
 	for _, test := range []struct {
@@ -13376,8 +13377,8 @@ func TestTemporalMicrosecondBoundaryOverflowIsNull(t *testing.T) {
 		{name: "TIMESTAMPADD timestamp column", fn: TimestampAddTimestamp},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			proc, parameters, result := timestampInputs(t, test.dateAddSyntax)
-			require.NoError(t, test.fn(parameters, result, proc, 3, nil))
+			parameters, result := timestampInputs(t, test.dateAddSyntax)
+			require.NoError(t, test.fn(parameters, result, timestampProc, 3, nil))
 			resultVec := result.GetResultVector()
 			require.True(t, resultVec.GetNulls().Contains(0), "upper overflow must be row-local NULL")
 			require.False(t, resultVec.GetNulls().Contains(1), "ordinary neighbor must remain valid")
@@ -13397,36 +13398,35 @@ func TestTemporalMicrosecondBoundaryOverflowIsNull(t *testing.T) {
 		{name: "TIMESTAMPADD string column", fn: TimestampAddString},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			proc := testutil.NewProcess(t)
 			stringVec := vector.NewVec(types.T_varchar.ToType())
-			t.Cleanup(func() { stringVec.Free(proc.Mp()) })
+			t.Cleanup(func() { stringVec.Free(stringProc.Mp()) })
 			require.NoError(t, vector.AppendStringList(stringVec, []string{
 				"0001-01-01 00:00:00.000000",
 				"0001-01-01 00:00:00.000000",
 				"0001-01-01 00:00:00.000000",
 				"2024-01-01 00:00:00.000000",
-			}, []bool{false, false, false, true}, proc.Mp()))
+			}, []bool{false, false, false, true}, stringProc.Mp()))
 			intervalVec := vector.NewVec(types.T_int64.ToType())
-			t.Cleanup(func() { intervalVec.Free(proc.Mp()) })
-			require.NoError(t, vector.AppendFixedList(intervalVec, []int64{-1, -2, 0, 1}, nil, proc.Mp()))
+			t.Cleanup(func() { intervalVec.Free(stringProc.Mp()) })
+			require.NoError(t, vector.AppendFixedList(intervalVec, []int64{-1, -2, 0, 1}, nil, stringProc.Mp()))
 
 			var parameters []*vector.Vector
 			if test.dateAddSyntax {
-				unitVec, makeErr := vector.NewConstFixed(types.T_int64.ToType(), int64(types.MicroSecond), 4, proc.Mp())
-				t.Cleanup(func() { unitVec.Free(proc.Mp()) })
+				unitVec, makeErr := vector.NewConstFixed(types.T_int64.ToType(), int64(types.MicroSecond), 4, stringProc.Mp())
+				t.Cleanup(func() { unitVec.Free(stringProc.Mp()) })
 				require.NoError(t, makeErr)
 				parameters = []*vector.Vector{stringVec, intervalVec, unitVec}
 			} else {
-				unitVec, makeErr := vector.NewConstBytes(types.T_varchar.ToType(), []byte("MICROSECOND"), 4, proc.Mp())
-				t.Cleanup(func() { unitVec.Free(proc.Mp()) })
+				unitVec, makeErr := vector.NewConstBytes(types.T_varchar.ToType(), []byte("MICROSECOND"), 4, stringProc.Mp())
+				t.Cleanup(func() { unitVec.Free(stringProc.Mp()) })
 				require.NoError(t, makeErr)
 				parameters = []*vector.Vector{unitVec, intervalVec, stringVec}
 			}
-			result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+			result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), stringProc.Mp())
 			t.Cleanup(result.Free)
 			require.NoError(t, result.PreExtendAndReset(4))
 
-			require.NoError(t, test.fn(parameters, result, proc, 4, nil))
+			require.NoError(t, test.fn(parameters, result, stringProc, 4, nil))
 			resultNulls := result.GetResultVector().GetNulls()
 			require.True(t, resultNulls.Contains(0), "one microsecond below minimum must be NULL")
 			require.True(t, resultNulls.Contains(1), "two microseconds below minimum must be NULL")
@@ -15245,7 +15245,7 @@ func TestTimestampAddDateWithTCharNonConstUnit(t *testing.T) {
 	intervalVec := vector.NewVec(types.T_int64.ToType())
 	vector.AppendFixedList(intervalVec, intervals, nil, proc.Mp())
 
-	dates := []types.Date{}
+	dates := make([]types.Date, 0, 2)
 	for _, d := range []string{"2024-01-01", "2024-01-01"} {
 		date, err := types.ParseDateCast(d)
 		require.NoError(t, err)
@@ -15466,8 +15466,8 @@ func TestEltHandlesUnsignedAndBitOverflowIndexes(t *testing.T) {
 }
 
 func TestEltCoversSignedAndSelectListPaths(t *testing.T) {
+	proc := testutil.NewProcess(t)
 	t.Run("int64 path returns null for null string and out of range indexes", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
 		tc := tcTemp{
 			info: "elt int64 path",
 			inputs: []FunctionTestInput{
@@ -15484,7 +15484,6 @@ func TestEltCoversSignedAndSelectListPaths(t *testing.T) {
 	})
 
 	testSelectList := func(t *testing.T, indexType types.Type, indexValues any) {
-		proc := testutil.NewProcess(t)
 		ivecs := []*vector.Vector{
 			newVectorByType(proc.Mp(), indexType, indexValues, nil),
 			newVectorByType(proc.Mp(), types.T_varchar.ToType(), []string{"a"}, nil),

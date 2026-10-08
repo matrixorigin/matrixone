@@ -271,4 +271,34 @@ set @a = cast(54323 as double);
 execute range_peers using @a, @b;
 deallocate prepare range_peers;
 
+-- Integer source domains reuse exact DECIMAL admission without stale values.
+set @v = 54321;
+prepare integer_peer from 'select count(*), min(d) from t where d = ?';
+-- @regex("Table Scan on issue_29514_decimal_expr[.]t\b[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=1\s+inputRows=8192\b",true)
+explain analyze force execute integer_peer using @v;
+execute integer_peer using @v;
+set @v = 54322;
+execute integer_peer using @v;
+set @v = 9223372036854775807;
+execute integer_peer using @v;
+set @v = null;
+execute integer_peer using @v;
+set @v = 54321;
+execute integer_peer using @v;
+deallocate prepare integer_peer;
+prepare integer_cast_peer from 'select count(*), min(d) from t where d = cast(? as double)';
+execute integer_cast_peer using @v;
+set @v = 54322;
+execute integer_cast_peer using @v;
+set @v = null;
+execute integer_cast_peer using @v;
+set @v = 54321;
+execute integer_cast_peer using @v;
+deallocate prepare integer_cast_peer;
+-- Adjacent DECIMAL keys above 2^53 must still both match the DOUBLE peer.
+set @v = 9007199254740992;
+prepare integer_collision_peer from 'select count(*) from wide where d = cast(? as double)';
+execute integer_collision_peer using @v;
+deallocate prepare integer_collision_peer;
+
 drop database issue_29514_decimal_expr;

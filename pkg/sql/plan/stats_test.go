@@ -314,6 +314,71 @@ func TestAssertStatsInheritChildWithoutSelectivityDiscount(t *testing.T) {
 	require.NotSame(t, childStats, builder.qry.Nodes[1].Stats)
 }
 
+func TestResidualInequalityUsesInputAsHashBuildCapacityBound(t *testing.T) {
+	for _, test := range []struct {
+		name              string
+		operator          string
+		wantCapacityBound float64
+		wantBound         bool
+	}{
+		{name: "inequality uses input bound", operator: "<>", wantCapacityBound: 1_000, wantBound: true},
+		{name: "other residual has no bound", operator: ">"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			builder := NewQueryBuilder(planpb.Query_SELECT, &MockCompilerContext{ctx: context.Background()}, false, false)
+			left := &planpb.Node{
+				NodeType: planpb.Node_VALUE_SCAN,
+				Stats:    &planpb.Stats{Outcnt: 10_000, Cost: 10_000, Selectivity: 1},
+			}
+			input := &planpb.Node{
+				NodeType: planpb.Node_VALUE_SCAN,
+				Stats:    &planpb.Stats{Outcnt: 1_000, Cost: 1_000, Selectivity: 1},
+			}
+			filter := &planpb.Node{
+				NodeType: planpb.Node_FILTER,
+				Children: []int32{1},
+				FilterList: []*planpb.Expr{{
+					Expr: &planpb.Expr_F{F: &planpb.Function{
+						Func: &planpb.ObjectRef{ObjName: test.operator},
+						Args: []*planpb.Expr{
+							{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}}},
+							{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 1, ColPos: 0}}},
+						},
+					}},
+				}},
+			}
+			join := &planpb.Node{
+				NodeType: planpb.Node_JOIN,
+				JoinType: planpb.Node_INNER,
+				Children: []int32{0, 2},
+			}
+			builder.qry.Nodes = []*planpb.Node{left, input, filter, join}
+
+			ReCalcNodeStats(2, builder, false, false, false)
+			ReCalcNodeStats(3, builder, false, false, false)
+
+			require.Equal(t, 0.05, filter.Stats.Selectivity)
+			require.Equal(t, float64(50), filter.Stats.Outcnt)
+			require.Equal(t, float64(50), join.Stats.HashmapStats.HashmapSize)
+			capacityBound, ok := residualInequalityBuildCapacityBound(2, builder)
+			require.Equal(t, test.wantBound, ok)
+			require.Equal(t, test.wantCapacityBound, capacityBound)
+		})
+	}
+}
+
+func TestContainsResidualInequalityIgnoresNestedScalarComparison(t *testing.T) {
+	inequality := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{ObjName: "<>"},
+	}}}
+	comparison := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{ObjName: ">"},
+		Args: []*planpb.Expr{inequality},
+	}}}
+
+	require.False(t, containsInequalityExpr(comparison))
+}
+
 func TestSafeStatsRatiosAvoidNonFiniteSelectivity(t *testing.T) {
 	t.Run("limit never increases cardinality", func(t *testing.T) {
 		builder := NewQueryBuilder(planpb.Query_SELECT, &MockCompilerContext{ctx: context.Background()}, false, false)
@@ -1984,6 +2049,12 @@ func TestDetermineBuildSidePreservesCTEHashBuildDrainProof(t *testing.T) {
 		builder.determineBuildAndProbeSide(2, false)
 		require.False(t, builder.qry.Nodes[2].IsRightJoin)
 	})
+	t.Run("marked SINGLE build remains logical right", func(t *testing.T) {
+		builder := makeBuilder(materialized.CTEHashBuildScanOption)
+		builder.qry.Nodes[2].JoinType = planpb.Node_SINGLE
+		builder.determineBuildAndProbeSide(2, false)
+		require.False(t, builder.qry.Nodes[2].IsRightJoin)
+	})
 }
 
 func TestDetermineInnerBuildSidePreservesCTEHashBuildDrainProof(t *testing.T) {
@@ -2819,6 +2890,15 @@ func TestGetExprNdv(t *testing.T) {
 		require.True(t, ndv > 0 || ndv == -1)
 	})
 
+	t.Run("registered synthetic column carries estimate", func(t *testing.T) {
+		col := &planpb.ColRef{RelPos: 999, ColPos: 3}
+		expr := &planpb.Expr{Ndv: 73, Expr: &planpb.Expr_Col{Col: col}}
+		require.Equal(t, -1.0, getExprNdv(expr, builder))
+
+		builder.syntheticNDVCols = map[[2]int32]struct{}{{col.RelPos, col.ColPos}: {}}
+		require.Equal(t, 73.0, getExprNdv(expr, builder))
+	})
+
 	t.Run("unsupported expr type", func(t *testing.T) {
 		expr := &planpb.Expr{
 			Expr: &planpb.Expr_Lit{
@@ -2847,7 +2927,7 @@ func TestCompareStatsIsStrictWeakOrdering(t *testing.T) {
 	// consistent order b < a < c (the old comparator produced a b<a<c<b cycle).
 
 	// antisymmetry + transitivity over a grid of selectivity/outcnt values.
-	var xs []*Stats
+	xs := make([]*Stats, 0, 44)
 	for _, s := range []float64{-0.01, 0, 0.004, 0.009, 0.01, 0.015, 0.02, 0.099, 0.1, 0.5, 1.0} {
 		for _, o := range []float64{0, 1, 2, 100} {
 			xs = append(xs, &Stats{Selectivity: s, Outcnt: o})

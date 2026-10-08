@@ -973,6 +973,15 @@ func (v *Vector) SetPreparedJSONComparisonParam() {
 	v.preparedJSONComparisonParam = true
 }
 
+// CopyExpressionMetadataTo preserves scalar identity when a single expression
+// result is materialized at different row coordinates. It does not merge sources
+// or copy row sidecars; the row materializer owns their selection mapping.
+func (v *Vector) CopyExpressionMetadataTo(dst *Vector) {
+	dst.isBin = v.isBin
+	dst.prepareParamType = v.prepareParamType
+	dst.preparedJSONComparisonParam = v.preparedJSONComparisonParam
+}
+
 // GetPrepareParamKindAt returns the source category for one logical row.
 // Constants use their single physical value for every logical row. The scalar
 // field remains the common fast path; heterogeneous vectors consult the
@@ -8082,9 +8091,11 @@ func (v *Vector) UnionNull(mp *mpool.MPool) error {
 
 // It is simply append. the purpose of retention is ease of use
 func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
-	sourceGrouping := nulls.Contains(&w.gsp, uint64(sel))
+	// EmptyByFlag includes borrowed Arrow validity. Avoid row lookup only
+	// when the source has no NULL/grouping bits; retain the full append path.
+	sourceGrouping := !w.gsp.EmptyByFlag() && nulls.Contains(&w.gsp, uint64(sel))
 	sourceNull := w.IsConstNull() ||
-		(!w.IsConst() && nulls.Contains(&w.nsp, uint64(sel)))
+		(!w.IsConst() && !w.nsp.EmptyByFlag() && nulls.Contains(&w.nsp, uint64(sel)))
 	// Uniform ordinary metadata needs neither per-row lookup nor sidecar
 	// admission. Include both vectors: an ordinary source can still append to
 	// a mixed destination, and NULL rows retain their string-source ownership.
@@ -8247,6 +8258,15 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 	v.RetainStringSourcePreflight()
 	defer v.FinalizeStringSourcePreflight()
 
+	// Keep preflight admission and validation unchanged. As in UnionOne,
+	// uniform ordinary metadata needs no per-row publication. Check both
+	// vectors, including source ownership retained even by NULL rows.
+	plainMetadata := v.prepareParamKinds == nil && w.prepareParamKinds == nil &&
+		v.prepareParamKind == PrepareParamNone && w.prepareParamKind == PrepareParamNone &&
+		!v.binaryStringRowsActive && !w.binaryStringRowsActive && !v.binaryString && !w.binaryString &&
+		v.stringSources == nil && w.stringSources == nil &&
+		(v.length == 0 || v.stringSource == w.stringSource)
+
 	sourceGrouping := nulls.Contains(&w.gsp, uint64(sel))
 	sourceNull := w.IsConstNull() ||
 		(!w.IsConst() && nulls.Contains(&w.nsp, uint64(sel)))
@@ -8265,10 +8285,14 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 
 	oldLen := v.length
 	v.setLengthAfterExtend(v.length + cnt)
-	for i := 0; i < cnt; i++ {
-		if err := v.appendStringSourceAt(
-			oldLen+i, oldLen, w.GetStringSourceAt(int(sel)), mp); err != nil {
-			return err
+	if plainMetadata {
+		v.stringSource = w.stringSource
+	} else {
+		for i := 0; i < cnt; i++ {
+			if err := v.appendStringSourceAt(
+				oldLen+i, oldLen, w.GetStringSourceAt(int(sel)), mp); err != nil {
+				return err
+			}
 		}
 	}
 	sourceHasValue := !sourceNull
@@ -8305,6 +8329,10 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 
 	if sourceHasValue {
 		v.prepareParamKindAppendStart(oldLen)
+		if plainMetadata {
+			v.prepareParamKindSeen = true
+			return nil
+		}
 	}
 	for i := 0; i < cnt; i++ {
 		if sourceHasValue {
@@ -8791,14 +8819,15 @@ func (v *Vector) unionBatch(
 		tlen := v.GetType().TypeSize()
 		if !w.nsp.EmptyByFlag() {
 			if flags == nil {
+				// Fixed-width NULL slots contain no payload references. Copy the
+				// range once; only their bitmap, not those opaque bytes, is visible.
+				copy(v.data[oldLen*tlen:(oldLen+cnt)*tlen], w.data[int(offset)*tlen:(int(offset)+cnt)*tlen])
 				for i := 0; i < cnt; i++ {
 					if w.nsp.Contains(uint64(offset) + uint64(i)) {
-						nulls.Add(&v.nsp, uint64(v.length))
-					} else {
-						copy(v.data[v.length*tlen:(v.length+1)*tlen], w.data[(int(offset)+i)*tlen:(int(offset)+i+1)*tlen])
+						nulls.Add(&v.nsp, uint64(oldLen+i))
 					}
-					v.setLengthAfterExtend(v.length + 1)
 				}
+				v.setLengthAfterExtend(oldLen + cnt)
 			} else {
 				for i := range flags {
 					if flags[i] == 0 {
@@ -9527,6 +9556,14 @@ func AppendBytesWithStringSource(vec *Vector, val []byte, isNull bool, source ty
 }
 
 func (v *Vector) prepareSingleAppendMetadata(isNull bool, source *types.StringSource, mp *mpool.MPool) error {
+	// Ordinary appends cannot introduce any provenance when every metadata
+	// representation is already ordinary. Keep the full admission path for
+	// scalar provenance, row sidecars, and an outstanding source preflight.
+	if source == nil && v.prepareParamKind == PrepareParamNone && v.prepareParamKinds == nil &&
+		v.stringSource == types.StringSourceExpression && v.stringSources == nil &&
+		!v.binaryString && !v.binaryStringRowsActive && !v.preflightStringSourceReady {
+		return nil
+	}
 	if source == nil {
 		if isNull {
 			return v.prepareOrdinaryStringSourceAppend(1, mp)
@@ -9541,6 +9578,12 @@ func (v *Vector) prepareSingleAppendMetadata(isNull bool, source *types.StringSo
 
 func (v *Vector) publishSingleAppend(source *types.StringSource) {
 	if source == nil {
+		// The caller has admitted data/bitmap capacity and metadata. Without
+		// either row sidecar, setLengthAfterExtend only publishes the length.
+		if v.prepareParamKinds == nil && v.stringSources == nil {
+			v.length++
+			return
+		}
 		v.setLengthAfterExtend(v.length + 1)
 	} else {
 		v.setLengthAfterExtendWithSource(v.length+1, *source, false)
@@ -10267,12 +10310,13 @@ func (v *Vector) remapShuffleBitmaps(sels []int64, mp *mpool.MPool) error {
 			continue
 		}
 		words := (len(sels) + 63) / 64
-		storage, err := mpool.MakeSliceAccounted[uint64](
+		storage, err := mpool.MakeSliceAccountedWithCapacityClass[uint64](
 			words,
 			mp,
 			v.allocationAccount.account,
 			v.allocationAccount.owner,
 			target.site,
+			v.allocationAccount.capacityClass,
 		)
 		if err != nil {
 			for j := range i {

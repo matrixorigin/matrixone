@@ -412,6 +412,7 @@ func (shuffle *Shuffle) flushPending(proc *process.Process) (bool, <-chan struct
 	nextBucket, nextOffset, waiter, done, err := shuffle.ctr.shufflePool.tryWrite(
 		shuffle.ctr.pendingBat,
 		shuffle.ctr.sels,
+		shuffle.CurrentShuffleIdx,
 		shuffle.ctr.pendingBucket,
 		shuffle.ctr.pendingOffset,
 		proc,

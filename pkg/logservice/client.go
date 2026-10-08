@@ -923,22 +923,26 @@ func getRPCClient(
 	}
 
 	// construct morpc.BackendOption
-	backendOpts := []morpc.BackendOption{
+	backendOptsExtra := GetBackendOptions(ctx)
+	backendOpts := make([]morpc.BackendOption, 0, 5+len(backendOptsExtra))
+	backendOpts = append(backendOpts,
 		morpc.WithBackendConnectTimeout(time.Second),
 		morpc.WithBackendHasPayloadResponse(),
 		morpc.WithBackendFreeOrphansResponse(releaseOrphanRPCResponse),
 		morpc.WithBackendLogger(logutil.GetGlobalLogger().Named("hakeeper-client-backend")),
 		morpc.WithBackendReadTimeout(readTimeout),
-	}
-	backendOpts = append(backendOpts, GetBackendOptions(ctx)...)
+	)
+	backendOpts = append(backendOpts, backendOptsExtra...)
 
 	// construct morpc.ClientOption
-	clientOpts := []morpc.ClientOption{
+	clientOptsExtra := GetClientOptions(ctx)
+	clientOpts := make([]morpc.ClientOption, 0, 3+len(clientOptsExtra))
+	clientOpts = append(clientOpts,
 		morpc.WithClientInitBackends([]string{target}, []int{1}),
 		morpc.WithClientMaxBackendPerHost(1),
 		morpc.WithClientLogger(logutil.GetGlobalLogger()),
-	}
-	clientOpts = append(clientOpts, GetClientOptions(ctx)...)
+	)
+	clientOpts = append(clientOpts, clientOptsExtra...)
 
 	var codecOpts []morpc.CodecOption
 	codecOpts = append(codecOpts,

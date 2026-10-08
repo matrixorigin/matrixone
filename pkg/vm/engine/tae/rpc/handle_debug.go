@@ -504,9 +504,9 @@ func (h *Handle) HandleGetChangedTableList(
 
 	var (
 		err    error
-		accIds []uint64
-		dbIds  []uint64
-		tblIds []uint64
+		accIds []uint64 //nolint:prealloc // assigned by getChangedListFromCheckpoints, then extended
+		dbIds  []uint64 //nolint:prealloc // assigned by getChangedListFromCheckpoints, then extended
+		tblIds []uint64 //nolint:prealloc // assigned by getChangedListFromCheckpoints, then extended
 	)
 
 	isTheTblIWant := func(innerExist []uint64, tblId uint64, commit types.TS) bool {
@@ -579,9 +579,9 @@ func (h *Handle) HandleGetChangedTableList(
 		return nil, err
 	}
 
-	accIds = append(accIds, accIds2...)
-	dbIds = append(dbIds, dbIds2...)
-	tblIds = append(tblIds, tblIds2...)
+	accIds = append(accIds, accIds2...) //nolint:prealloc // already holds getChangedListFromCheckpoints results; a fresh make would drop them
+	dbIds = append(dbIds, dbIds2...)    //nolint:prealloc // already holds getChangedListFromCheckpoints results
+	tblIds = append(tblIds, tblIds2...) //nolint:prealloc // already holds getChangedListFromCheckpoints results
 
 	resp.TableIds = append(resp.TableIds, tblIds...)
 	resp.AccIds = append(resp.AccIds, accIds...)
