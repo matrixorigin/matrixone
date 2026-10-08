@@ -27,7 +27,7 @@ func TestFunctionalIndexOwnershipAfterDropColumn(t *testing.T) {
 	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	rt := runtime.ServiceRuntime(ctx.GetProcess().GetService())
 	old, _ := rt.GetGlobalVariables(runtime.MOProtocolVersion)
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion105)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion107)
 	t.Cleanup(func() { rt.SetGlobalVariables(runtime.MOProtocolVersion, old) })
 	for _, order := range [][]string{{"tenant", "spare"}, {"spare", "tenant"}} {
 		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
@@ -111,7 +111,7 @@ func TestFunctionalIndexLegacyVisibleColumn(t *testing.T) {
 	require.Error(t, validateFunctionalTable(t.Context(), bad), "missing internal key metadata must fail closed")
 	rt := runtime.ServiceRuntime(ctx.GetProcess().GetService())
 	old, _ := rt.GetGlobalVariables(runtime.MOProtocolVersion)
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion105)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion107)
 	t.Cleanup(func() { rt.SetGlobalVariables(runtime.MOProtocolVersion, old) })
 	stmt, err = parsers.ParseOne(t.Context(), dialect.MYSQL,
 		"create table collision(name varchar(40),"+functionalColumnName("ix")+" int,index ix((lower(name))))", 1)
@@ -125,7 +125,7 @@ func TestFunctionalIndexSyntheticKeyLayout(t *testing.T) {
 	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	rt := runtime.ServiceRuntime(ctx.GetProcess().GetService())
 	old, _ := rt.GetGlobalVariables(runtime.MOProtocolVersion)
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion105)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion107)
 	t.Cleanup(func() { rt.SetGlobalVariables(runtime.MOProtocolVersion, old) })
 	for _, sql := range []string{
 		"create table t(a int,b int,primary key(a,b),index ix((a+1)),index iy(b,(a+2)))",
@@ -152,7 +152,7 @@ func TestFunctionalIndexDDL(t *testing.T) {
 	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	rt := runtime.ServiceRuntime(ctx.GetProcess().GetService())
 	old, _ := rt.GetGlobalVariables(runtime.MOProtocolVersion)
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion105)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion107)
 	t.Cleanup(func() { rt.SetGlobalVariables(runtime.MOProtocolVersion, old) })
 	build := func(sql string) (*Plan, error) {
 		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
@@ -234,9 +234,11 @@ func TestFunctionalIndexDDL(t *testing.T) {
 	}
 	_, err := build("alter table nation add index idx_fi ((n_nationkey + 1)), algorithm=inplace")
 	require.Error(t, err)
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion100)
+	// The current main predecessor (MORPC v106) must not be able to author
+	// functional-index metadata before all CNs understand the new contract.
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion106)
 	_, err = build("create table fi (id int, index idx ((id + 1)))")
-	require.Error(t, err)
+	require.ErrorContains(t, err, "protocol version 107")
 }
 
 func TestFunctionalCompositeIndexDDL(t *testing.T) {

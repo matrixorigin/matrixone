@@ -175,7 +175,7 @@ access is disabled for functional indexes in the first release. Missing or
 malformed metadata fails closed to a normal table scan.
 
 Functional-index creation is gated on the cluster's oldest-live protocol
-capability. This implementation uses MORPC protocol 105, so a mixed-version
+capability. This implementation uses MORPC protocol 107, so a mixed-version
 CN cannot publish metadata it cannot render or safely alter.
 
 ### DDL foundation from #28052

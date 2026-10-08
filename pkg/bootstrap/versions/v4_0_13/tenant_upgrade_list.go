@@ -31,7 +31,7 @@ func upgradeInformationSchemaStatistics() versions.UpgradeEntry {
 		TableName:               "STATISTICS",
 		UpgType:                 versions.MODIFY_VIEW,
 		UpgSql:                  sysview.InformationSchemaStatisticsDDL,
-		RequiredProtocolVersion: defines.MORPCVersion106,
+		RequiredProtocolVersion: defines.MORPCVersion107,
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
 			exists, definition, err := versions.CheckViewDefinition(txn, accountID, sysview.InformationDBConst, "STATISTICS")
 			if err == nil && !exists {
