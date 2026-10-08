@@ -99,7 +99,7 @@ func TestIssue26879PreparedCommonValueFollowup(t *testing.T) {
 					} else {
 						stmt, err = conn.PrepareContext(ctx, query)
 						require.NoError(t, err)
-						defer stmt.Close()
+						defer func() { require.NoError(t, stmt.Close()) }()
 					}
 					queryIDs := func(value any) ([]int, error) {
 						var rows *sql.Rows
