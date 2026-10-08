@@ -1438,6 +1438,10 @@ func TestFlowControlBranchPreparation(t *testing.T) {
 		require.NoError(t, expr.Init(proc, 3, types.T_int64.ToType()))
 		nativeMode := proc.GetSessionInfo().MatrixOneNativeMode
 		defer func() { proc.GetSessionInfo().MatrixOneNativeMode = nativeMode }()
+		info := proc.GetSessionInfo()
+		previousCompatibilityMode := info.MySQLNumericCompatibilityMode
+		info.MySQLNumericCompatibilityMode = true
+		defer func() { info.MySQLNumericCompatibilityMode = previousCompatibilityMode }()
 		bat := batch.New(nil)
 		bat.SetRowCount(2)
 
