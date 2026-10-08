@@ -127,6 +127,7 @@ func TestGlobalClientGC_RegisterUnregister(t *testing.T) {
 
 func TestGlobalClientGC_GCIdleLoop(t *testing.T) {
 	mgr := newClientGCManager()
+	defer mgr.stop()
 
 	// Create a client with idle duration
 	c, err := NewClient("test-client",
@@ -164,12 +165,11 @@ func TestGlobalClientGC_GCIdleLoop(t *testing.T) {
 		return tb.closed
 	}, time.Second, time.Millisecond)
 
-	mgr.unregister(client)
-	mgr.stop()
 }
 
 func TestGlobalClientGC_GCInactiveLoop(t *testing.T) {
 	mgr := newClientGCManager()
+	defer mgr.stop()
 
 	c, err := NewClient("test-client", newTestBackendFactory(), WithClientEnableAutoCreateBackend())
 	require.NoError(t, err)
@@ -198,12 +198,11 @@ func TestGlobalClientGC_GCInactiveLoop(t *testing.T) {
 		return len(client.mu.backends["b1"]) == 0
 	}, time.Second, time.Millisecond)
 
-	mgr.unregister(client)
-	mgr.stop()
 }
 
 func TestGlobalClientGC_CreateLoop(t *testing.T) {
 	mgr := newClientGCManager()
+	defer mgr.stop()
 
 	c, err := NewClient("test-client",
 		newTestBackendFactory(),
@@ -231,8 +230,6 @@ func TestGlobalClientGC_CreateLoop(t *testing.T) {
 		return len(client.mu.backends["b1"]) == 1
 	}, time.Second, time.Millisecond)
 
-	mgr.unregister(client)
-	mgr.stop()
 }
 
 func TestGlobalClientGC_CreateWorkersBoundFactoryConcurrency(t *testing.T) {
@@ -624,32 +621,36 @@ func TestGlobalClientGC_ChannelFull(t *testing.T) {
 
 func TestGlobalClientGC_UnregisteredClientIgnored(t *testing.T) {
 	mgr := newClientGCManager()
-
-	c, err := NewClient("test-client", newTestBackendFactory())
+	defer mgr.stop()
+	factory := newTestBackendFactory()
+	c, err := NewClient("test-client", factory)
 	require.NoError(t, err)
 	defer c.Close()
-
 	client := c.(*client)
-
-	// Register and then unregister
 	mgr.register(client)
 	mgr.unregister(client)
 
-	// Try to trigger GC on unregistered client
-	mgr.triggerGCInactive(client, "b1")
-	triggerCreateForTest(mgr, client, "b1")
+	client.mu.Lock()
+	generation := client.backendGenerationLocked("b1")
+	client.mu.Unlock()
+	state, admitted := mgr.triggerCreateAtGenerationState(client, "b1", generation)
+	require.True(t, admitted)
 
-	// Stop joins the worker and drains any queued request before the state is
-	// inspected, so no timing window is needed here.
-	mgr.stop()
-
-	// Should not process requests for unregistered client
+	// Observe worker rejection while the manager is live; stop can discard
+	// queued work without exercising the registration check.
+	select {
+	case <-state.done:
+	case <-time.After(time.Second):
+		t.Fatal("unregistered create request did not complete")
+	}
+	factory.RLock()
+	attempts := factory.id
+	factory.RUnlock()
+	require.Zero(t, attempts, "unregistered client must not enter the factory")
 	client.mu.Lock()
 	backends := client.mu.backends["b1"]
 	client.mu.Unlock()
-
-	// No backend should be created since client is unregistered
-	assert.Equal(t, 0, len(backends))
+	require.Empty(t, backends)
 }
 
 func TestGlobalClientGC_Stop(t *testing.T) {
@@ -680,6 +681,7 @@ func TestGlobalClientGC_Stop(t *testing.T) {
 
 func TestGlobalClientGC_GCIdleRespectsMaxIdleDuration(t *testing.T) {
 	mgr := newClientGCManager()
+	defer mgr.stop()
 
 	// Create client without maxIdleDuration (should not GC)
 	c1, err := NewClient("test-client-1", newTestBackendFactory(), WithClientEnableAutoCreateBackend())
@@ -743,9 +745,6 @@ func TestGlobalClientGC_GCIdleRespectsMaxIdleDuration(t *testing.T) {
 		return tb2.closed
 	}, time.Second, time.Millisecond)
 
-	mgr.unregister(client1)
-	mgr.unregister(client2)
-	mgr.stop()
 }
 
 func TestGlobalClientGC_Integration(t *testing.T) {
@@ -1173,6 +1172,7 @@ func TestGlobalClientGC_CloseIdleBackendsOnClosedClient(t *testing.T) {
 		WithClientMaxBackendMaxIdleDuration(time.Millisecond*10),
 		WithClientEnableAutoCreateBackend())
 	require.NoError(t, err)
+	defer c.Close()
 
 	client := c.(*client)
 
@@ -1198,6 +1198,7 @@ func TestGlobalClientGC_DoRemoveInactiveOnClosedClient(t *testing.T) {
 	c, err := NewClient("test-client", newTestBackendFactory(),
 		WithClientEnableAutoCreateBackend())
 	require.NoError(t, err)
+	defer c.Close()
 
 	client := c.(*client)
 
@@ -1229,6 +1230,13 @@ func TestGlobalClientGC_CreateOnClosedClient(t *testing.T) {
 
 	client := c.(*client)
 	mgr.register(client)
+	defer func() {
+		mgr.stop()
+		client.mu.Lock()
+		client.mu.closed = false
+		client.mu.Unlock()
+		c.Close()
+	}()
 
 	// Close the client but keep it registered (simulates race condition)
 	client.mu.Lock()
@@ -1244,18 +1252,8 @@ func TestGlobalClientGC_CreateOnClosedClient(t *testing.T) {
 	client.mu.Unlock()
 	assert.Equal(t, 0, len(backends), "no backends should be created for closed client")
 
-	mgr.unregister(client)
-	mgr.stop()
-
-	// Properly close the client
-	client.mu.Lock()
-	client.mu.closed = false // Reset for proper Close()
-	client.mu.Unlock()
-	c.Close()
 }
 
-// TestGlobalClientGC_RaceConditionSimulation simulates the exact race condition
-// that was fixed: GC goroutine accessing client while it's being closed.
 func TestGlobalClientGC_RaceConditionSimulation(t *testing.T) {
 	const numIterations = 100
 
