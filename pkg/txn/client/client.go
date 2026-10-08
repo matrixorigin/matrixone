@@ -15,7 +15,6 @@
 package client
 
 import (
-	"bytes"
 	"context"
 	"encoding/hex"
 	"errors"
@@ -304,7 +303,7 @@ type txnClient struct {
 		// user active txns
 		users int
 		// FIFO queue for ready to active txn
-		waitActiveTxns            []*txnOperator
+		waitActiveTxns            activeTxnQueue
 		waitMarkAllActiveAbortedC chan struct{}
 	}
 
@@ -448,8 +447,8 @@ func (client *txnClient) GetState() TxnState {
 	})
 
 	client.mu.RLock()
-	wt := make([]string, 0, len(client.mu.waitActiveTxns))
-	for _, v := range client.mu.waitActiveTxns {
+	wt := make([]string, 0, client.mu.waitActiveTxns.size)
+	for v := client.mu.waitActiveTxns.head; v != nil; v = v.reset.waiter.next {
 		wt = append(wt, hex.EncodeToString(v.reset.txnID))
 	}
 	state := client.mu.state
@@ -780,7 +779,7 @@ func (client *txnClient) NewWithSnapshot(
 }
 
 func (client *txnClient) Close() error {
-	var waiting []*txnOperator
+	var waiting []*activeTxnWaiter
 	client.lifecycle.gate.Lock()
 	if client.lifecycle.closeDone == nil {
 		client.lifecycle.closeDone = make(chan struct{})
@@ -805,12 +804,11 @@ func (client *txnClient) Close() error {
 	if client.closeCancel != nil {
 		client.closeCancel()
 	}
-	waiting = client.mu.waitActiveTxns
-	client.mu.waitActiveTxns = nil
+	waiting = client.mu.waitActiveTxns.drain()
 	client.mu.Unlock()
 	client.lifecycle.gate.Unlock()
-	for _, op := range waiting {
-		op.failActiveWait(moerr.NewClientClosedNoCtx())
+	for _, waiter := range waiting {
+		waiter.complete(moerr.NewClientClosedNoCtx())
 	}
 
 	client.stopper.Stop()
@@ -1033,7 +1031,7 @@ func (client *txnClient) waitForReadyLocked(
 			}
 			if client.normalStateNoWait {
 				activeCount := client.atomic.activeTxnCount.Load()
-				waitQueueSize := len(client.mu.waitActiveTxns)
+				waitQueueSize := client.mu.waitActiveTxns.size
 				v2.TxnActiveQueueSizeGauge.Set(float64(activeCount))
 				v2.TxnWaitActiveQueueSizeGauge.Set(float64(waitQueueSize))
 				return moerr.NewInternalErrorNoCtx("cn service is not ready, retry later")
@@ -1041,7 +1039,7 @@ func (client *txnClient) waitForReadyLocked(
 
 			if waitPausedDisabled {
 				activeCount := client.atomic.activeTxnCount.Load()
-				waitQueueSize := len(client.mu.waitActiveTxns)
+				waitQueueSize := client.mu.waitActiveTxns.size
 				v2.TxnActiveQueueSizeGauge.Set(float64(activeCount))
 				v2.TxnWaitActiveQueueSizeGauge.Set(float64(waitQueueSize))
 				return moerr.NewInvalidStateNoCtx("txn client is in pause state")
@@ -1092,7 +1090,7 @@ func (client *txnClient) openTxn(ctx context.Context, op *txnOperator) error {
 		if op.opts.options.UserTxn() {
 			client.mu.users++
 		}
-		waitQueueSize := len(client.mu.waitActiveTxns)
+		waitQueueSize := client.mu.waitActiveTxns.size
 		client.mu.Unlock()
 		// Add to sharded map outside mu lock.
 		client.addActiveTxn(op)
@@ -1103,9 +1101,9 @@ func (client *txnClient) openTxn(ctx context.Context, op *txnOperator) error {
 	}
 
 	op.reset.waiter = newActiveTxnWaiter()
-	client.mu.waitActiveTxns = append(client.mu.waitActiveTxns, op)
+	client.mu.waitActiveTxns.pushBack(op)
 	activeCount := client.atomic.activeTxnCount.Load()
-	waitQueueSize := len(client.mu.waitActiveTxns)
+	waitQueueSize := client.mu.waitActiveTxns.size
 	client.mu.Unlock()
 	v2.TxnActiveQueueSizeGauge.Set(float64(activeCount))
 	v2.TxnWaitActiveQueueSizeGauge.Set(float64(waitQueueSize))
@@ -1138,28 +1136,28 @@ func (client *txnClient) closeTxn(ctx context.Context, txnOp TxnOperator, event 
 
 		if !op.opts.options.UserTxn() {
 			v2.TxnActiveQueueSizeGauge.Set(float64(client.atomic.activeTxnCount.Load()))
-			v2.TxnWaitActiveQueueSizeGauge.Set(float64(len(client.mu.waitActiveTxns)))
+			v2.TxnWaitActiveQueueSizeGauge.Set(float64(client.mu.waitActiveTxns.size))
 			client.mu.Unlock()
 			return
 		}
 		if op.reset.unknownCommitResolutionTransferred &&
 			op.reset.unknownCommitResolved != nil {
 			v2.TxnActiveQueueSizeGauge.Set(float64(client.atomic.activeTxnCount.Load()))
-			v2.TxnWaitActiveQueueSizeGauge.Set(float64(len(client.mu.waitActiveTxns)))
+			v2.TxnWaitActiveQueueSizeGauge.Set(float64(client.mu.waitActiveTxns.size))
 			client.mu.Unlock()
 			return
 		}
 		toActivate := client.releaseUserTxnLocked()
 
 		v2.TxnActiveQueueSizeGauge.Set(float64(client.atomic.activeTxnCount.Load() + int64(len(toActivate))))
-		v2.TxnWaitActiveQueueSizeGauge.Set(float64(len(client.mu.waitActiveTxns)))
+		v2.TxnWaitActiveQueueSizeGauge.Set(float64(client.mu.waitActiveTxns.size))
 		client.mu.Unlock()
 
 		client.activateWaitActiveTxns(toActivate)
 		return
 	}
 
-	if ok = client.removeFromWaitActiveLocked(txn.ID); ok {
+	if ok = client.mu.waitActiveTxns.remove(txnOp.(*txnOperator)); ok {
 		client.removeFromLeakCheck(txn.ID)
 	} else if txnOp.(*txnOperator).reset.waiter != nil &&
 		txnOp.(*txnOperator).reset.waiter.canceled() {
@@ -1172,7 +1170,7 @@ func (client *txnClient) closeTxn(ctx context.Context, txnOp TxnOperator, event 
 	}
 
 	v2.TxnActiveQueueSizeGauge.Set(float64(client.atomic.activeTxnCount.Load()))
-	v2.TxnWaitActiveQueueSizeGauge.Set(float64(len(client.mu.waitActiveTxns)))
+	v2.TxnWaitActiveQueueSizeGauge.Set(float64(client.mu.waitActiveTxns.size))
 	client.mu.Unlock()
 	return
 }
@@ -1184,7 +1182,7 @@ func (client *txnClient) releaseUnknownCommitAdmission() {
 	client.mu.Lock()
 	toActivate := client.releaseUserTxnLocked()
 	v2.TxnActiveQueueSizeGauge.Set(float64(client.atomic.activeTxnCount.Load() + int64(len(toActivate))))
-	v2.TxnWaitActiveQueueSizeGauge.Set(float64(len(client.mu.waitActiveTxns)))
+	v2.TxnWaitActiveQueueSizeGauge.Set(float64(client.mu.waitActiveTxns.size))
 	client.mu.Unlock()
 
 	client.activateWaitActiveTxns(toActivate)
@@ -1233,30 +1231,24 @@ func (client *txnClient) activateWaitActiveTxns(ops []*txnOperator) {
 	}
 }
 
-// claimWaitActiveOpsLocked consumes the FIFO prefix needed for admission.
-// Canceled entries in that prefix cannot reserve slots. Untouched suffix entries
-// retain their existing cancellation/ClosedEvent owner; promotion must not scan
-// or lock them. Clear detached references before advancing the queue slice.
+// claimWaitActiveOpsLocked consumes only the FIFO prefix needed for admission.
+// Cancellation owns untouched suffix removal through ClosedEvent; neither path
+// scans or locks unrelated waiters.
 func (client *txnClient) claimWaitActiveOpsLocked(limit int) []*txnOperator {
-	queued := client.mu.waitActiveTxns
-	if limit <= 0 || len(queued) == 0 {
+	q := &client.mu.waitActiveTxns
+	if limit <= 0 || q.size == 0 {
 		return nil
 	}
-	capacity := limit
-	if capacity > len(queued) {
-		capacity = len(queued)
-	}
+	capacity := min(limit, q.size)
 	claimed := make([]*txnOperator, 0, capacity)
-	consumed := 0
-	for consumed < len(queued) && len(claimed) < limit {
-		waitOp := queued[consumed]
-		consumed++
-		if waitOp.reset.waiter.claimPromotion() {
-			claimed = append(claimed, waitOp)
+	for q.head != nil && len(claimed) < limit {
+		op := q.head
+		promoted := op.reset.waiter.claimPromotion()
+		q.remove(op)
+		if promoted {
+			claimed = append(claimed, op)
 		}
 	}
-	clear(queued[:consumed])
-	client.mu.waitActiveTxns = queued[consumed:]
 	return claimed
 }
 
@@ -1331,8 +1323,8 @@ func (client *txnClient) IterTxnIDs(fn func([]byte) bool) {
 	}
 
 	client.mu.RLock()
-	waitActiveTxnIDs := make([][]byte, 0, len(client.mu.waitActiveTxns))
-	for _, op := range client.mu.waitActiveTxns {
+	waitActiveTxnIDs := make([][]byte, 0, client.mu.waitActiveTxns.size)
+	for op := client.mu.waitActiveTxns.head; op != nil; op = op.reset.waiter.next {
 		waitActiveTxnIDs = append(waitActiveTxnIDs, append([]byte(nil), op.reset.txnID...))
 	}
 	client.mu.RUnlock()
@@ -1349,7 +1341,7 @@ func (client *txnClient) getAllTxnOperators() []*txnOperator {
 
 	// Also include waiting txns
 	client.mu.RLock()
-	ops = append(ops, client.mu.waitActiveTxns...)
+	ops = client.mu.waitActiveTxns.appendTo(ops)
 	client.mu.RUnlock()
 
 	return ops
@@ -1437,21 +1429,6 @@ func (client *txnClient) handleMarkActiveTxnAborted(
 			}
 		}
 	}
-}
-
-func (client *txnClient) removeFromWaitActiveLocked(txnID []byte) bool {
-	var ok bool
-	values := client.mu.waitActiveTxns[:0]
-	for _, op := range client.mu.waitActiveTxns {
-		if bytes.Equal(op.reset.txnID, txnID) {
-			ok = true
-			continue
-		}
-		values = append(values, op)
-	}
-	clear(client.mu.waitActiveTxns[len(values):])
-	client.mu.waitActiveTxns = values
-	return ok
 }
 
 func (client *txnClient) waitMarkAllActiveAbortedLocked(ctx context.Context) error {
