@@ -616,7 +616,7 @@ func LoadCheckpointEntriesFromKey(
 		})
 	}
 
-	ckpReader.ForEachRow(
+	if err = ckpReader.ForEachRow(
 		ctx,
 		func(
 			account uint32,
@@ -660,7 +660,9 @@ func LoadCheckpointEntriesFromKey(
 			}
 			return nil
 		},
-	)
+	); err != nil {
+		return nil, nil, err
+	}
 	return locations, ckpReader, nil
 }
 
@@ -729,9 +731,9 @@ func ReWriteCheckpointAndBlockFromKey(
 		od *map[string]*objData,
 		objectType int8,
 		dataType objectio.DataMetaType,
-	) {
+	) error {
 		i := 0
-		ckpReader.ForEachRow(
+		err := ckpReader.ForEachRow(
 			ctx,
 			func(
 				account uint32,
@@ -763,15 +765,16 @@ func ReWriteCheckpointAndBlockFromKey(
 				return nil
 			},
 		)
+		return err
 	}
 
 	initData2 := func(
 		od *map[string]*objData,
 		objectType int8,
 		dataType objectio.DataMetaType,
-	) {
+	) error {
 		i := 0
-		lastCkpData.ForEachRow(
+		err := lastCkpData.ForEachRow(
 			ctx,
 			func(
 				account uint32,
@@ -797,11 +800,18 @@ func ReWriteCheckpointAndBlockFromKey(
 				return nil
 			},
 		)
+		return err
 	}
 
-	initData(&objectsData, ckputil.ObjectType_Data, objectio.SchemaData)
-	initData(&tombstonesData, ckputil.ObjectType_Tombstone, objectio.SchemaTombstone)
-	initData2(&tombstonesData2, ckputil.ObjectType_Tombstone, objectio.SchemaTombstone)
+	if err = initData(&objectsData, ckputil.ObjectType_Data, objectio.SchemaData); err != nil {
+		return nil, nil, nil, err
+	}
+	if err = initData(&tombstonesData, ckputil.ObjectType_Tombstone, objectio.SchemaTombstone); err != nil {
+		return nil, nil, nil, err
+	}
+	if err = initData2(&tombstonesData2, ckputil.ObjectType_Tombstone, objectio.SchemaTombstone); err != nil {
+		return nil, nil, nil, err
+	}
 
 	phaseNumber = 3
 
@@ -1010,9 +1020,9 @@ func ReWriteCheckpointAndBlockFromKey(
 
 		}
 
-		initCkpBatch := func(objectType int8, newMeta *batch.Batch, insertObjData map[int]*objData) {
+		initCkpBatch := func(objectType int8, newMeta *batch.Batch, insertObjData map[int]*objData) error {
 			i := 0
-			ckpReader.ForEachRow(
+			err := ckpReader.ForEachRow(
 				ctx,
 				func(
 					account uint32,
@@ -1023,7 +1033,9 @@ func ReWriteCheckpointAndBlockFromKey(
 					rowID types.Rowid,
 				) error {
 					if objectType2 == objectType {
-						appendValToBatch(account, dbid, tid, objectType2, objectStats, create, delete, encoder, newMeta, common.CheckpointAllocator)
+						if err := appendValToBatch(account, dbid, tid, objectType2, objectStats, create, delete, encoder, newMeta, common.CheckpointAllocator); err != nil {
+							return err
+						}
 						if insertObjData[i] != nil {
 							if !insertObjData[i].appendable {
 								row := newMeta.RowCount() - 1
@@ -1031,7 +1043,9 @@ func ReWriteCheckpointAndBlockFromKey(
 									newMeta.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx], uint32(row), types.TS{}, false, common.CheckpointAllocator,
 								)
 							} else {
-								appendValToBatch(account, dbid, tid, objectType2, objectStats, create, delete, encoder, newMeta, common.CheckpointAllocator)
+								if err := appendValToBatch(account, dbid, tid, objectType2, objectStats, create, delete, encoder, newMeta, common.CheckpointAllocator); err != nil {
+									return err
+								}
 								row := newMeta.RowCount() - 1
 								objectio.WithSorted()(insertObjData[i].stats)
 								containers.UpdateValue(
@@ -1053,16 +1067,25 @@ func ReWriteCheckpointAndBlockFromKey(
 					return nil
 				},
 			)
+			return err
 		}
 
-		initCkpBatch(ckputil.ObjectType_Data, objectInfoMeta, infoInsert)
-		initCkpBatch(ckputil.ObjectType_Tombstone, tombstoneInfoMeta, infoInsertTombstone)
-		dataSinker.Write(ctx, objectInfoMeta)
-		dataSinker.Write(ctx, tombstoneInfoMeta)
+		if err = initCkpBatch(ckputil.ObjectType_Data, objectInfoMeta, infoInsert); err != nil {
+			return nil, nil, nil, err
+		}
+		if err = initCkpBatch(ckputil.ObjectType_Tombstone, tombstoneInfoMeta, infoInsertTombstone); err != nil {
+			return nil, nil, nil, err
+		}
+		if err = dataSinker.Write(ctx, objectInfoMeta); err != nil {
+			return nil, nil, nil, err
+		}
+		if err = dataSinker.Write(ctx, tombstoneInfoMeta); err != nil {
+			return nil, nil, nil, err
+		}
 
 	} else {
 		dest := ckputil.NewObjectListBatch()
-		ckpReader.ForEachRow(
+		if err = ckpReader.ForEachRow(
 			ctx,
 			func(
 				account uint32,
@@ -1072,13 +1095,16 @@ func ReWriteCheckpointAndBlockFromKey(
 				create, delete types.TS,
 				rowID types.Rowid,
 			) error {
-				appendValToBatch(
+				return appendValToBatch(
 					account, dbid, tid, objectType, objectStats, create, delete, encoder, dest, common.CheckpointAllocator,
 				)
-				return nil
 			},
-		)
-		dataSinker.Write(ctx, dest)
+		); err != nil {
+			return nil, nil, nil, err
+		}
+		if err = dataSinker.Write(ctx, dest); err != nil {
+			return nil, nil, nil, err
+		}
 	}
 	newData := NewCheckpointDataWithSinker(dataSinker, common.CheckpointAllocator)
 	location, checkpointFiles, err := newData.Sync(

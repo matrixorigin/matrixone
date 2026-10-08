@@ -591,49 +591,72 @@ func compatibilityForV12(
 	}
 	encoder := types.NewPacker()
 	defer encoder.Close()
-	compatibilityFn := func(src *containers.Batch, dataType int8) {
+	compatibilityFn := func(src *containers.Batch, dataType int8) error {
 		sels := make([]int64, src.Length())
 		for i := 0; i < src.Length(); i++ {
 			sels[i] = int64(i)
 		}
-		vector.AppendMultiFixed(
+		if err = vector.AppendMultiFixed(
 			ckpData.Vecs[ckputil.TableObjectsAttr_Accout_Idx],
 			0,
 			true,
 			src.Length(),
 			mp,
-		)
-		ckpData.Vecs[ckputil.TableObjectsAttr_DB_Idx].Union(src.Vecs[ObjectInfo_DBID_Idx+2].GetDownstreamVector(), sels, mp)
-		ckpData.Vecs[ckputil.TableObjectsAttr_Table_Idx].Union(src.Vecs[ObjectInfo_TID_Idx+2].GetDownstreamVector(), sels, mp)
-		vector.AppendMultiFixed(
+		); err != nil {
+			return err
+		}
+		if err = ckpData.Vecs[ckputil.TableObjectsAttr_DB_Idx].Union(src.Vecs[ObjectInfo_DBID_Idx+2].GetDownstreamVector(), sels, mp); err != nil {
+			return err
+		}
+		if err = ckpData.Vecs[ckputil.TableObjectsAttr_Table_Idx].Union(src.Vecs[ObjectInfo_TID_Idx+2].GetDownstreamVector(), sels, mp); err != nil {
+			return err
+		}
+		if err = vector.AppendMultiFixed(
 			ckpData.Vecs[ckputil.TableObjectsAttr_ObjectType_Idx],
 			dataType,
 			false,
 			src.Length(),
 			mp,
-		)
-		ckpData.Vecs[ckputil.TableObjectsAttr_ID_Idx].Union(src.Vecs[ObjectInfo_ObjectStats_Idx+2].GetDownstreamVector(), sels, mp)
-		ckpData.Vecs[ckputil.TableObjectsAttr_CreateTS_Idx].Union(src.Vecs[ObjectInfo_CreateAt_Idx+2].GetDownstreamVector(), sels, mp)
-		ckpData.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx].Union(src.Vecs[ObjectInfo_DeleteAt_Idx+2].GetDownstreamVector(), sels, mp)
+		); err != nil {
+			return err
+		}
+		if err = ckpData.Vecs[ckputil.TableObjectsAttr_ID_Idx].Union(src.Vecs[ObjectInfo_ObjectStats_Idx+2].GetDownstreamVector(), sels, mp); err != nil {
+			return err
+		}
+		if err = ckpData.Vecs[ckputil.TableObjectsAttr_CreateTS_Idx].Union(src.Vecs[ObjectInfo_CreateAt_Idx+2].GetDownstreamVector(), sels, mp); err != nil {
+			return err
+		}
+		if err = ckpData.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx].Union(src.Vecs[ObjectInfo_DeleteAt_Idx+2].GetDownstreamVector(), sels, mp); err != nil {
+			return err
+		}
 		for i := 0; i < src.Length(); i++ {
 			rowID := types.NewRowid(blockID, uint32(i))
-			vector.AppendFixed(ckpData.Vecs[ckputil.TableObjectsAttr_PhysicalAddr_Idx], rowID, false, mp)
+			if err = vector.AppendFixed(ckpData.Vecs[ckputil.TableObjectsAttr_PhysicalAddr_Idx], rowID, false, mp); err != nil {
+				return err
+			}
 		}
 		tids := vector.MustFixedColNoTypeCheck[uint64](src.Vecs[ObjectInfo_TID_Idx+2].GetDownstreamVector())
 		deletes := vector.MustFixedColNoTypeCheck[types.TS](src.Vecs[ObjectInfo_DeleteAt_Idx+2].GetDownstreamVector())
 		for i := 0; i < src.Length(); i++ {
 			objectStats := objectio.ObjectStats(src.Vecs[ObjectInfo_ObjectStats_Idx+2].GetDownstreamVector().GetBytesAt(i))
 			ckputil.EncodeCluser(encoder, tids[i], dataType, objectStats.ObjectName().ObjectId(), deletes[i].IsEmpty())
-			vector.AppendBytes(ckpData.Vecs[ckputil.TableObjectsAttr_Cluster_Idx], encoder.Bytes(), false, mp)
+			if err = vector.AppendBytes(ckpData.Vecs[ckputil.TableObjectsAttr_Cluster_Idx], encoder.Bytes(), false, mp); err != nil {
+				return err
+			}
 			encoder.Reset()
 		}
+		return nil
 	}
 
 	if dataBatch != nil {
-		compatibilityFn(dataBatch, ckputil.ObjectType_Data)
+		if err = compatibilityFn(dataBatch, ckputil.ObjectType_Data); err != nil {
+			return
+		}
 	}
 	if tombstoneBatch != nil {
-		compatibilityFn(tombstoneBatch, ckputil.ObjectType_Tombstone)
+		if err = compatibilityFn(tombstoneBatch, ckputil.ObjectType_Tombstone); err != nil {
+			return
+		}
 	}
 	ckpData.SetRowCount(ckpData.Vecs[0].Length())
 	return

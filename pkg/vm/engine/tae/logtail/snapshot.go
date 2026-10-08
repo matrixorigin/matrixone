@@ -568,8 +568,12 @@ func (sm *SnapshotMeta) updateTableInfo(
 			moTable[id].deleteAt = deleteTS
 		}
 	}
-	collectObjects(ctx, &objects, nil, nil, data, ckputil.ObjectType_Data, collector)
-	collectObjects(ctx, &tombstones, nil, nil, data, ckputil.ObjectType_Tombstone, collector)
+	if err := collectObjects(ctx, &objects, nil, nil, data, ckputil.ObjectType_Data, collector); err != nil {
+		return err
+	}
+	if err := collectObjects(ctx, &tombstones, nil, nil, data, ckputil.ObjectType_Tombstone, collector); err != nil {
+		return err
+	}
 	tObjects := objects[catalog2.MO_TABLES_ID]
 	tTombstones := tombstones[catalog2.MO_TABLES_ID]
 	orderedInfos := make([]*objectInfo, 0, len(tObjects))
@@ -843,8 +847,8 @@ func collectObjects(
 		objectio.ObjectStats,
 		types.TS, types.TS,
 	),
-) {
-	data.ForEachRow(
+) error {
+	return data.ForEachRow(
 		ctx,
 		func(
 			account uint32,
@@ -957,7 +961,7 @@ func (sm *SnapshotMeta) Update(
 		}
 		mapFun((*objects1)[tid])
 	}
-	collectObjects(
+	if err = collectObjects(
 		ctx,
 		&sm.objects,
 		&sm.pitr.objects,
@@ -965,8 +969,10 @@ func (sm *SnapshotMeta) Update(
 		data,
 		ckputil.ObjectType_Data,
 		collector,
-	)
-	collectObjects(
+	); err != nil {
+		return
+	}
+	if err = collectObjects(
 		ctx,
 		&sm.tombstones,
 		&sm.pitr.tombstones,
@@ -974,7 +980,9 @@ func (sm *SnapshotMeta) Update(
 		data,
 		ckputil.ObjectType_Tombstone,
 		collector,
-	)
+	); err != nil {
+		return
+	}
 
 	trimList := func(
 		objects map[uint64]map[objectio.Segmentid]*objectInfo,
