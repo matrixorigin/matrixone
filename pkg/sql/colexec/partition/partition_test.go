@@ -41,7 +41,7 @@ type partitionTestCase struct {
 func makeTestCases(t *testing.T) []partitionTestCase {
 	return []partitionTestCase{
 		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero()),
 			arg: &Partition{
 				OrderBySpecs: []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int32), Flag: 0}},
 			},
@@ -86,7 +86,7 @@ func TestPartition(t *testing.T) {
 }
 
 func TestPartitionOutputHonorsCancellation(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	arg := &Partition{
 		OrderBySpecs: []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int32)}},
 	}
@@ -123,7 +123,7 @@ func (c *countedPartitionCompare) Set(i int, vec *vector.Vector) {
 }
 
 func TestPartitionGroupSearchDoesNotRevisitEarlierHeads(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	arg := &Partition{OrderBySpecs: []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int32)}}}
 	t.Cleanup(func() {
 		arg.Reset(proc, false, nil)
@@ -171,7 +171,7 @@ func TestPartitionGroupSearchPreservesGroupsAndReset(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			arg := &Partition{OrderBySpecs: []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int32), Flag: tc.flag}}}
 			t.Cleanup(func() {
 				arg.Reset(proc, false, nil)

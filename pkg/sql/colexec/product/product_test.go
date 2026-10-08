@@ -73,7 +73,7 @@ func TestPrepare(t *testing.T) {
 }
 
 func TestPrepareRequiresAllocationAccount(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	require.ErrorIs(t, (&Product{}).Prepare(proc), mpool.ErrAllocationAccountInvalid)
 }
@@ -226,7 +226,7 @@ func TestProductConsumesMultipleBuildBatchesWithoutCopy(t *testing.T) {
 }
 
 func newTestCase(t *testing.T, rp []colexec.ResultPos) productTestCase {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.SetMessageBoard(message.NewMessageBoard())
 	tag++
 	tc := productTestCase{

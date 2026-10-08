@@ -151,7 +151,7 @@ func TestMergeTopMaxUint64LimitReturnsAllRows(t *testing.T) {
 }
 
 func TestMergeTopOrderedStreamsMergesWithoutRetainingLimitRows(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.Reg.MergeReceivers = []*process.WaitRegister{
 		process.NewPipelineEdge(4, 1),
 		process.NewPipelineEdge(4, 1),
@@ -209,7 +209,7 @@ func TestMergeTopOrderedStreamsMergesWithoutRetainingLimitRows(t *testing.T) {
 }
 
 func TestMergeTopOrderedStreamsAcrossBatchBoundariesDescending(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.Reg.MergeReceivers = []*process.WaitRegister{
 		process.NewPipelineEdge(4, 1),
 		process.NewPipelineEdge(4, 1),
@@ -236,7 +236,7 @@ func TestMergeTopOrderedStreamsAcrossBatchBoundariesDescending(t *testing.T) {
 }
 
 func TestMergeTopOrderedStreamsChunksOutputRows(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	reg := process.NewPipelineEdge(2, 1)
 	proc.Reg.MergeReceivers = []*process.WaitRegister{reg}
 	values := make([]int64, mergeTopStreamBatchRows+17)
@@ -266,7 +266,7 @@ func TestMergeTopOrderedStreamsChunksOutputRows(t *testing.T) {
 }
 
 func TestMergeTopOrderedStreamsVarlenNullsFirst(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.Reg.MergeReceivers = []*process.WaitRegister{
 		process.NewPipelineEdge(2, 1),
 		process.NewPipelineEdge(2, 1),
@@ -301,7 +301,7 @@ func TestMergeTopOrderedStreamsVarlenNullsFirst(t *testing.T) {
 }
 
 func TestMergeTopOrderedStreamsVarlenByteBoundary(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.Reg.MergeReceivers = []*process.WaitRegister{
 		process.NewPipelineEdge(2, 1), process.NewPipelineEdge(2, 1),
 	}
@@ -349,7 +349,7 @@ func TestMergeTopOrderedStreamsVarlenByteBoundary(t *testing.T) {
 }
 
 func TestMergeTopOrderedStreamsPropagatesTerminalError(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.Reg.MergeReceivers = []*process.WaitRegister{
 		process.NewPipelineEdge(1, 1),
 		process.NewPipelineEdge(1, 1),
@@ -399,7 +399,7 @@ func TestMergeTopOrderedStreamsPreservesQueryTerminalOverLateEdgeFailure(t *test
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			queryCtx, cancelQuery := test.buildContext(proc)
 			proc.BuildPipelineContext(queryCtx)
 			edge := process.NewPipelineEdge(1, 1)
@@ -432,7 +432,7 @@ func TestMergeTopOrderedStreamsPreservesQueryTerminalOverLateEdgeFailure(t *test
 }
 
 func TestMergeTopOrderedStreamsRejectsInvalidOrderColumn(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	reg := process.NewPipelineEdge(2, 1)
 	proc.Reg.MergeReceivers = []*process.WaitRegister{reg}
 	sendInt64Stream(t, proc, reg, []int64{1})
