@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 )
 
@@ -45,15 +44,12 @@ func (e *Engine) GetPrivilegeCacheVersion(
 	if !e.pClient.receivedLogTailTime.ready.Load() {
 		return version, minimum, nil
 	}
-	op, err := e.cli.New(ctx, minimum, client.WithTxnReadyOnly())
+	snapshot, err := e.cli.GetLatestSnapshot(ctx, minimum)
 	if err != nil {
 		return version, minimum, err
 	}
-	snapshot := op.Txn().SnapshotTS
-	// This transaction owns no workspace or writes. Read-only Commit only
-	// releases its admission; it cannot send a storage commit or take locks.
-	if err = op.Commit(ctx); err != nil {
-		return version, minimum, err
+	if snapshot.IsEmpty() {
+		return version, minimum, nil
 	}
 	minimum = snapshot.Prev()
 	if !e.pClient.receivedLogTailTime.ready.Load() {
