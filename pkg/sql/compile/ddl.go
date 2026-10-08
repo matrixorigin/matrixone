@@ -777,9 +777,10 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 
 						//1. drop index table
 						if indexdef.TableExist {
-							if err := c.runSqlWithOptions(
-								"DROP TABLE `"+indexdef.IndexTableName+"`", executor.StatementOption{}.WithDisableLog(),
-							); err != nil {
+							// The parent already owns catalog and index storage locks.
+							// Nested DROP TABLE would take child metadata after the
+							// parent, reversing the order of DML metadata admission.
+							if err := c.dropIndexChildRelation(dbSource, indexdef.IndexTableName, oTableDef.GetIsTemporary()); err != nil {
 								return err
 							}
 						}
@@ -793,12 +794,6 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 						notDroppedIndex = append(notDroppedIndex, indexdef)
 						newIndexes = append(newIndexes, extra.IndexTables[idx])
 					}
-				}
-
-				// drop index cdc task
-				err = DropIndexCdcTask(c, oTableDef, dbName, tblName, constraintName)
-				if err != nil {
-					return err
 				}
 
 				// unregister index update
@@ -2844,22 +2839,8 @@ func (s *Scope) DropIndex(c *Compile) error {
 
 	//2. drop index table
 	for _, indexTableName := range dropIndexTableNames {
-		if _, err = d.Relation(c.proc.Ctx, indexTableName, nil); err != nil {
+		if err = c.dropIndexChildRelation(d, indexTableName, oldTableDef.GetIsTemporary()); err != nil {
 			return err
-		}
-
-		if err = maybeDeleteAutoIncrement(c.proc.Ctx, c.proc.GetService(), d, indexTableName, c.proc.GetTxnOperator()); err != nil {
-			return err
-		}
-
-		if err = d.Delete(c.proc.Ctx, indexTableName); err != nil {
-			return err
-		}
-
-		if oldTableDef.GetIsTemporary() {
-			if session := c.proc.GetSession(); session != nil {
-				session.RemoveTempTableByRealName(indexTableName)
-			}
 		}
 	}
 
@@ -2890,6 +2871,24 @@ func (s *Scope) DropIndex(c *Compile) error {
 	// hook (pkg/vectorindex/*/plugin/compile HandleDropIndex) was never invoked.
 	dispatchPluginDropIndexes(s, c, d, qry.Database, qry.Table, oldTableDef, qry.IndexName)
 
+	return nil
+}
+
+// dropIndexChildRelation uses the parent's lifecycle ownership, without a
+// second child catalog lock. Both ALTER and standalone DROP INDEX use this
+// sequence; CDC draining remains with their parent index operation.
+func (c *Compile) dropIndexChildRelation(database engine.Database, name string, isTemporary bool) error {
+	if err := maybeDeleteAutoIncrement(c.proc.Ctx, c.proc.GetService(), database, name, c.proc.GetTxnOperator()); err != nil {
+		return err
+	}
+	if err := database.Delete(c.proc.Ctx, name); err != nil {
+		return err
+	}
+	if isTemporary {
+		if session := c.proc.GetSession(); session != nil {
+			session.RemoveTempTableByRealName(name)
+		}
+	}
 	return nil
 }
 
