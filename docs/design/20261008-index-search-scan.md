@@ -59,13 +59,23 @@ fulltext search scan.
 
 ### Hybrid fulltext + vector
 
-Because every vector index rewrites in the early pass, a query with a MATCH filter
-and a vector Top-K becomes `JOIN(scan[MATCH filter], vector search scan)` first; the
-late fulltext pass then serves the MATCH filter on that scan. The two scans compose
-through the join; the vector side applies its existing residual-filter behavior
-(post-filter over-fetch). The `BY RANK WITH OPTION 'mode=...'` clause is honored by
-ivfflat only; hnsw, cagra and ivfpq ignore it, so the hybrid claims are stated
-without it.
+A MATCH filter restricts the vector Top-K to the rows the MATCH keeps. The vector
+rewrite admits an algorithm for such a query only if it may serve that restriction
+(`vectorIndexSupportsContext`, the same gate as a membership join):
+
+- **ivfflat** rewrites in the early pass: the query becomes
+  `JOIN(scan[MATCH filter], vector search scan)`, and the late fulltext pass then serves
+  the MATCH filter on that scan. Both indexes are used; the vector side applies ivfflat's
+  residual-filter behavior.
+- **hnsw, cagra, ivfpq** only post-filter their candidates, which can drop rows of the
+  Top-K, so they skip a scan with a MATCH filter. The late fulltext pass serves the MATCH
+  and the Top-K is an exact sort over the fulltext hits.
+
+hnsw, cagra and ivfpq implement `BuildLogicalSearch`; the gate is the only thing that
+keeps them off a scan with a MATCH filter.
+
+The `BY RANK WITH OPTION 'mode=...'` clause is honored by ivfflat only; hnsw, cagra and
+ivfpq ignore it, so the hybrid claims are stated without it.
 
 ## Removed
 
@@ -93,12 +103,12 @@ with a MATCH filter (classic fulltext or fulltext2) and
 
 | # | Claim | Black-box test |
 |---|---|---|
-| 1 | A hybrid query uses both the fulltext index and the vector index: the plan has a `Fulltext Index Scan` and a `Vector Index Scan`, for ivfflat, hnsw, cagra and ivfpq. Shapes: natural-language MATCH; boolean MATCH with a scalar filter; a far query vector; the MATCH score projected; a selective MATCH; for ivfflat and hnsw, a query vector from a single-row provider table. | `cases/vector/vector_hybrid_fulltext.sql` (ivfflat, hnsw), `gpu_cases/vector/vector_hybrid_fulltext_gpu.sql` (cagra, ivfpq) |
-| 2 | Hybrid results are post-filtered vector candidates: every returned row satisfies the MATCH and the scalar filters. A selective MATCH can return fewer than k rows. | same two cases: `outside_exact` = 0, including a MATCH on 4 of 200 rows |
-| 3 | With a MATCH that keeps one third of the rows and k = 3, ivfflat, hnsw and cagra return exactly the rows of the same query without a vector index, including the MATCH score and the single-row provider shape (ivfflat, hnsw). | same two cases: each query followed by its `t_ref_*` reference |
+| 1 | A hybrid query on an ivfflat table uses both the fulltext index and the vector index: the plan has a `Fulltext Index Scan` and a `Vector Index Scan`. Shapes: natural-language MATCH; boolean MATCH with a scalar filter; a far query vector; the MATCH score projected; a selective MATCH; a query vector from a single-row provider table. | `cases/vector/vector_hybrid_fulltext.sql` |
+| 2 | On ivfflat, hybrid results are post-filtered vector candidates: every returned row satisfies the MATCH and the scalar filters; a selective MATCH can return fewer than k rows. With a MATCH that keeps one third of the rows and k = 3, results equal the same query without a vector index. | same case: `outside_exact` = 0 on a MATCH of 4 of 200 rows; other queries followed by their `t_ref_*` reference |
+| 3 | A hybrid query on an hnsw, cagra or ivfpq table uses the fulltext index and no vector index, and returns exactly the rows of the same query without a vector index, for all the claim 1 shapes including the selective MATCH (provider shape: hnsw). | `cases/vector/vector_hybrid_fulltext.sql` (hnsw), `gpu_cases/vector/vector_hybrid_fulltext_gpu.sql` (cagra, ivfpq) |
 | 4 | `hnsw_search`, `ivfpq_search`, `cagra_search`, `fulltext2_search` and `fulltext_index_scan` are not callable from SQL. | `cases/vector/vector_hybrid_fulltext.sql`, `cases/publication_subscription/pub_sub_fulltext.sql` |
 | 5 | A subscriber's MATCH on a published table searches the publisher's fulltext index (table and database publications, two subscribers, publisher DML visible, prepared statement invalidated by revoke/drop). | `cases/publication_subscription/pub_sub_fulltext.sql` |
-| 6 | Moving hnsw, cagra and ivfpq to the early pass leaves the plans and results of their existing cases unchanged. | the 77 case files creating an hnsw, cagra or ivfpq index under `cases/` and `gpu_cases/` |
+| 6 | Moving hnsw, cagra and ivfpq to the early pass leaves the plans and results of their existing cases unchanged. | the 77 case files creating an hnsw, cagra or ivfpq index under `cases/` and `gpu_cases/`; the 8 of them with a MATCH rerun with the gate |
 
 ## Scope
 
@@ -108,10 +118,12 @@ query vector from a provider table for cagra and ivfpq.
 
 ## Decision log
 
-- **Post-filter, no retry** (Eric, 2026-10-08). A hybrid query keeps the vector index
-  search and post-filters its over-fetched candidates; it does not retry or fall back to
-  an exact sort when fewer than k rows survive. The result claim is therefore claim 2,
-  and exactness (claim 3) is stated only for the measured shape.
+- **Exact sort for hnsw, cagra, ivfpq under a MATCH** (Eric, 2026-10-08). Measured with
+  their index, a MATCH keeping 4 of 200 rows returned 0 of the 3 Top-K rows, because they
+  only post-filter. They keep the result they had before this change: the exact sort over
+  the fulltext hits. Their early-pass path stays in place behind the gate.
+- **ivfflat unchanged.** ivfflat keeps its hybrid plan and its residual-filter behavior
+  (claim 2).
 - **Composition, not a hybrid operator.** Hybrid search is the early vector rewrite
   followed by the late fulltext rewrite on the same scan; no node or hook is specific
   to the combination.

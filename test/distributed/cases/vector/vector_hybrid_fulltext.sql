@@ -1,10 +1,10 @@
 -- Hybrid fulltext + vector search (docs/design/20261008-index-search-scan.md).
--- A MATCH filter and a vector Top-K in one SELECT use both the fulltext index and
--- the vector index; the vector side post-filters its candidates, so the result is a
--- subset of the exact answer and may hold fewer than k rows.
--- Each EXPLAIN asserts both index scans. A subset claim counts returned rows outside
--- the exact matching set (expected 0). An exactness claim is followed by the same
--- query on t_ref_*, the same rows with only the fulltext index.
+-- A MATCH filter and a vector Top-K in one SELECT: ivfflat uses both the fulltext and
+-- the vector index and post-filters its candidates, so a selective MATCH can return
+-- fewer than k rows; hnsw, cagra and ivfpq use the fulltext index and sort its hits
+-- exactly. Each EXPLAIN asserts which index scans the plan has. A subset claim counts
+-- returned rows outside the exact matching set (expected 0). An exactness claim is
+-- followed by the same query on t_ref_*, the same rows with only the fulltext index.
 drop database if exists hybrid_ft_vec;
 create database hybrid_ft_vec;
 use hybrid_ft_vec;
@@ -128,73 +128,75 @@ select count(*) as outside_exact from (select id from t_ft2_ivfflat where match(
 -- natural-language MATCH
 -- @separator:table
 -- @regex("Fulltext Index Scan on", true)
--- @regex("Vector Index Scan on", true)
+-- @regex("Vector Index Scan on", false)
 explain select id from t_ft_hnsw where match(body) against('needle') order by l2_distance(v,'[0,0,0]') limit 3;
 select id from t_ft_hnsw where match(body) against('needle') order by l2_distance(v,'[0,0,0]') limit 3;
 select id from t_ref_ft where match(body) against('needle') order by l2_distance(v,'[0,0,0]') limit 3;
 -- boolean MATCH and a scalar filter
 -- @separator:table
 -- @regex("Fulltext Index Scan on", true)
--- @regex("Vector Index Scan on", true)
+-- @regex("Vector Index Scan on", false)
 explain select id from t_ft_hnsw where match(body) against('+needle +anchor' in boolean mode) and tag in (1,2,3) order by l2_distance(v,'[0,0,0]') limit 3;
 select id from t_ft_hnsw where match(body) against('+needle +anchor' in boolean mode) and tag in (1,2,3) order by l2_distance(v,'[0,0,0]') limit 3;
 select id from t_ref_ft where match(body) against('+needle +anchor' in boolean mode) and tag in (1,2,3) order by l2_distance(v,'[0,0,0]') limit 3;
 -- far query vector
 -- @separator:table
 -- @regex("Fulltext Index Scan on", true)
--- @regex("Vector Index Scan on", true)
+-- @regex("Vector Index Scan on", false)
 explain select id from t_ft_hnsw where match(body) against('needle') order by l2_distance(v,'[100,101,102]') limit 3;
 select id from t_ft_hnsw where match(body) against('needle') order by l2_distance(v,'[100,101,102]') limit 3;
 select id from t_ref_ft where match(body) against('needle') order by l2_distance(v,'[100,101,102]') limit 3;
 -- MATCH score projected
 -- @separator:table
 -- @regex("Fulltext Index Scan on", true)
--- @regex("Vector Index Scan on", true)
+-- @regex("Vector Index Scan on", false)
 explain select id, match(body) against('needle') as s from t_ft_hnsw where match(body) against('needle') order by l2_distance(v,'[0,0,0]') limit 3;
 select id, match(body) against('needle') as s from t_ft_hnsw where match(body) against('needle') order by l2_distance(v,'[0,0,0]') limit 3;
 select id, match(body) against('needle') as s from t_ref_ft where match(body) against('needle') order by l2_distance(v,'[0,0,0]') limit 3;
 -- selective MATCH, 4 of 200 rows
 -- @separator:table
 -- @regex("Fulltext Index Scan on", true)
--- @regex("Vector Index Scan on", true)
+-- @regex("Vector Index Scan on", false)
 explain select id from t_ft_hnsw where match(body) against('rare') order by l2_distance(v,'[0,0,0]') limit 3;
-select count(*) as outside_exact from (select id from t_ft_hnsw where match(body) against('rare') order by l2_distance(v,'[0,0,0]') limit 3) x where x.id not in (select id from t_ref_ft where match(body) against('rare'));
+select id from t_ft_hnsw where match(body) against('rare') order by l2_distance(v,'[0,0,0]') limit 3;
+select id from t_ref_ft where match(body) against('rare') order by l2_distance(v,'[0,0,0]') limit 3;
 
 -- ---------------- ft2 + hnsw ----------------
 -- natural-language MATCH
 -- @separator:table
 -- @regex("Fulltext Index Scan on", true)
--- @regex("Vector Index Scan on", true)
+-- @regex("Vector Index Scan on", false)
 explain select id from t_ft2_hnsw where match(body) against('needle') order by l2_distance(v,'[0,0,0]') limit 3;
 select id from t_ft2_hnsw where match(body) against('needle') order by l2_distance(v,'[0,0,0]') limit 3;
 select id from t_ref_ft2 where match(body) against('needle') order by l2_distance(v,'[0,0,0]') limit 3;
 -- boolean MATCH and a scalar filter
 -- @separator:table
 -- @regex("Fulltext Index Scan on", true)
--- @regex("Vector Index Scan on", true)
+-- @regex("Vector Index Scan on", false)
 explain select id from t_ft2_hnsw where match(body) against('+needle +anchor' in boolean mode) and tag in (1,2,3) order by l2_distance(v,'[0,0,0]') limit 3;
 select id from t_ft2_hnsw where match(body) against('+needle +anchor' in boolean mode) and tag in (1,2,3) order by l2_distance(v,'[0,0,0]') limit 3;
 select id from t_ref_ft2 where match(body) against('+needle +anchor' in boolean mode) and tag in (1,2,3) order by l2_distance(v,'[0,0,0]') limit 3;
 -- far query vector
 -- @separator:table
 -- @regex("Fulltext Index Scan on", true)
--- @regex("Vector Index Scan on", true)
+-- @regex("Vector Index Scan on", false)
 explain select id from t_ft2_hnsw where match(body) against('needle') order by l2_distance(v,'[100,101,102]') limit 3;
 select id from t_ft2_hnsw where match(body) against('needle') order by l2_distance(v,'[100,101,102]') limit 3;
 select id from t_ref_ft2 where match(body) against('needle') order by l2_distance(v,'[100,101,102]') limit 3;
 -- MATCH score projected
 -- @separator:table
 -- @regex("Fulltext Index Scan on", true)
--- @regex("Vector Index Scan on", true)
+-- @regex("Vector Index Scan on", false)
 explain select id, match(body) against('needle') as s from t_ft2_hnsw where match(body) against('needle') order by l2_distance(v,'[0,0,0]') limit 3;
 select id, match(body) against('needle') as s from t_ft2_hnsw where match(body) against('needle') order by l2_distance(v,'[0,0,0]') limit 3;
 select id, match(body) against('needle') as s from t_ref_ft2 where match(body) against('needle') order by l2_distance(v,'[0,0,0]') limit 3;
 -- selective MATCH, 4 of 200 rows
 -- @separator:table
 -- @regex("Fulltext Index Scan on", true)
--- @regex("Vector Index Scan on", true)
+-- @regex("Vector Index Scan on", false)
 explain select id from t_ft2_hnsw where match(body) against('rare') order by l2_distance(v,'[0,0,0]') limit 3;
-select count(*) as outside_exact from (select id from t_ft2_hnsw where match(body) against('rare') order by l2_distance(v,'[0,0,0]') limit 3) x where x.id not in (select id from t_ref_ft2 where match(body) against('rare'));
+select id from t_ft2_hnsw where match(body) against('rare') order by l2_distance(v,'[0,0,0]') limit 3;
+select id from t_ref_ft2 where match(body) against('rare') order by l2_distance(v,'[0,0,0]') limit 3;
 
 create table query_vectors(name varchar(10) primary key, v vecf32(3) not null);
 insert into query_vectors values ('lo', '[0,0,0]'), ('hi', '[100,101,102]');
@@ -216,14 +218,14 @@ select d.id from t_ref_ft2 d join query_vectors q on q.name = 'hi' where match(d
 -- query vector from a single-row provider, ft + hnsw
 -- @separator:table
 -- @regex("Fulltext Index Scan on", true)
--- @regex("Vector Index Scan on", true)
+-- @regex("Vector Index Scan on", false)
 explain select d.id from t_ft_hnsw d join query_vectors q on q.name = 'hi' where match(d.body) against('needle') order by l2_distance(d.v, q.v) limit 3;
 select d.id from t_ft_hnsw d join query_vectors q on q.name = 'hi' where match(d.body) against('needle') order by l2_distance(d.v, q.v) limit 3;
 select d.id from t_ref_ft d join query_vectors q on q.name = 'hi' where match(d.body) against('needle') order by l2_distance(d.v, q.v) limit 3;
 -- query vector from a single-row provider, ft2 + hnsw
 -- @separator:table
 -- @regex("Fulltext Index Scan on", true)
--- @regex("Vector Index Scan on", true)
+-- @regex("Vector Index Scan on", false)
 explain select d.id from t_ft2_hnsw d join query_vectors q on q.name = 'hi' where match(d.body) against('needle') order by l2_distance(d.v, q.v) limit 3;
 select d.id from t_ft2_hnsw d join query_vectors q on q.name = 'hi' where match(d.body) against('needle') order by l2_distance(d.v, q.v) limit 3;
 select d.id from t_ref_ft2 d join query_vectors q on q.name = 'hi' where match(d.body) against('needle') order by l2_distance(d.v, q.v) limit 3;
