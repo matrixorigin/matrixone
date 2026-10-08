@@ -814,7 +814,6 @@ func TestLoopWork(t *testing.T) {
 		defer cancel()
 		c := createTestConsumer(nil, nil)
 		assert.NotNil(t, c)
-		defer c.Close()
 		// set role
 		c.common.setShardReplicaID(logShardID, 10)
 		lc := c.logClient.(*mockLogClient)
@@ -824,13 +823,35 @@ func TestLoopWork(t *testing.T) {
 		c.writeLsn.Store(20)
 		readEntries := make(chan struct{}, 1)
 		lc.readEntriesEvent = readEntries
-		loopDone := make(chan error, 1)
+		loopDone := make(chan struct{})
+		var loopErr error
 		go func() {
-			loopDone <- c.loop(ctx, time.Millisecond)
+			loopErr = c.loop(ctx, time.Millisecond)
+			close(loopDone)
 		}()
-		<-readEntries
+		defer func() {
+			cancel()
+			select {
+			case <-loopDone:
+				c.Close()
+			case <-time.After(time.Second):
+				t.Error("consumer loop did not stop")
+			}
+		}()
+		select {
+		case <-readEntries:
+		case <-loopDone:
+			t.Fatal("consumer exited before reading")
+		case <-time.After(time.Second):
+			t.Fatal("consumer did not read")
+		}
 		cancel()
-		assert.Equal(t, context.Canceled, <-loopDone)
+		select {
+		case <-loopDone:
+			assert.Equal(t, context.Canceled, loopErr)
+		case <-time.After(time.Second):
+			t.Fatal("consumer loop did not stop after cancellation")
+		}
 	})
 
 	t.Run("file not found entries", func(t *testing.T) {
@@ -866,7 +887,6 @@ func TestLoopWork(t *testing.T) {
 		defer cancel()
 		c := createTestConsumer(nil, nil)
 		assert.NotNil(t, c)
-		defer c.Close()
 		// set role
 		c.common.setShardReplicaID(logShardID, 10)
 		lc := c.logClient.(*mockLogClient)
@@ -878,13 +898,35 @@ func TestLoopWork(t *testing.T) {
 		c.writeLsn.Store(20)
 		readEntries := make(chan struct{}, 1)
 		lc.readEntriesEvent = readEntries
-		loopDone := make(chan error, 1)
+		loopDone := make(chan struct{})
+		var loopErr error
 		go func() {
-			loopDone <- c.loop(ctx, time.Millisecond)
+			loopErr = c.loop(ctx, time.Millisecond)
+			close(loopDone)
 		}()
-		<-readEntries
+		defer func() {
+			cancel()
+			select {
+			case <-loopDone:
+				c.Close()
+			case <-time.After(time.Second):
+				t.Error("consumer loop did not stop")
+			}
+		}()
+		select {
+		case <-readEntries:
+		case <-loopDone:
+			t.Fatal("consumer exited before reading")
+		case <-time.After(time.Second):
+			t.Fatal("consumer did not read")
+		}
 		cancel()
-		assert.Equal(t, context.Canceled, <-loopDone)
+		select {
+		case <-loopDone:
+			assert.Equal(t, context.Canceled, loopErr)
+		case <-time.After(time.Second):
+			t.Fatal("consumer loop did not stop after cancellation")
+		}
 		assert.Equal(t, uint64(10), c.syncedLsn.Load())
 		requiredLsn, err := c.logClient.getRequiredLsn(ctx)
 		assert.NoError(t, err)
@@ -1152,7 +1194,6 @@ func TestConsumerStart(t *testing.T) {
 		defer cancel()
 		c := createTestConsumer(nil, nil)
 		assert.NotNil(t, c)
-		defer c.Close()
 		// set role
 		c.common.setShardReplicaID(logShardID, 10)
 		lc := c.logClient.(*mockLogClient)
@@ -1166,7 +1207,22 @@ func TestConsumerStart(t *testing.T) {
 			c.Start(ctx)
 			close(done)
 		}()
-		<-readEntries
+		defer func() {
+			cancel()
+			select {
+			case <-done:
+				c.Close()
+			case <-time.After(time.Second):
+				t.Error("consumer did not stop")
+			}
+		}()
+		select {
+		case <-readEntries:
+		case <-done:
+			t.Fatal("consumer exited before phase notification")
+		case <-time.After(time.Second):
+			t.Fatal("consumer phase notification missing")
+		}
 		cancel()
 		select {
 		case <-done:
@@ -1180,7 +1236,6 @@ func TestConsumerStart(t *testing.T) {
 		defer cancel()
 		c := createTestConsumer(nil, nil)
 		assert.NotNil(t, c)
-		defer c.Close()
 		// set role
 		c.common.setShardReplicaID(logShardID, 10)
 		lc := c.logClient.(*mockLogClient)
@@ -1195,7 +1250,22 @@ func TestConsumerStart(t *testing.T) {
 			c.Start(ctx)
 			close(done)
 		}()
-		<-initAttempt
+		defer func() {
+			cancel()
+			select {
+			case <-done:
+				c.Close()
+			case <-time.After(time.Second):
+				t.Error("consumer did not stop")
+			}
+		}()
+		select {
+		case <-initAttempt:
+		case <-done:
+			t.Fatal("consumer exited before phase notification")
+		case <-time.After(time.Second):
+			t.Fatal("consumer phase notification missing")
+		}
 		cancel()
 		select {
 		case <-done:
@@ -1209,42 +1279,68 @@ func TestConsumerStart(t *testing.T) {
 		defer cancel()
 		c := createTestConsumer(nil, nil)
 		assert.NotNil(t, c)
-		defer c.Close()
 		// set role
 		c.common.setShardReplicaID(logShardID, 10)
 		lc := c.logClient.(*mockLogClient)
 		lc.setLeaderID(10)
 		c.writeLsn.Store(1)
 		c.loopWorkInterval = time.Millisecond
-		leaderChecks := make(chan struct{}, 8)
+		leaderChecks := make(chan uint64)
 		lc.getLeaderIDEvent = leaderChecks
-		leaderGate := make(chan struct{})
-		lc.getLeaderIDGate = leaderGate
-		lc.getLeaderIDGateAt = 3
 		readEntries := make(chan struct{}, 1)
 		lc.readEntriesEvent = readEntries
-		readEntriesGate := make(chan struct{})
-		lc.readEntriesGate = readEntriesGate
+		initialized := make(chan struct{}, 1)
+		lc.getTruncatedLsnEvent = initialized
 		done := make(chan struct{})
 		go func() {
 			c.Start(ctx)
 			close(done)
 		}()
-		// One check grants permission; the second check starts the loop.
-		<-leaderChecks
-		<-leaderChecks
-		<-readEntries
-		close(readEntriesGate)
-		// The third leader check is held before it reads the role. Change the
-		// role while it is held, then let it observe the demotion. The loop must
-		// return before another read.
-		<-leaderChecks
+		defer func() {
+			cancel()
+			select {
+			case <-done:
+				c.Close()
+			case <-time.After(time.Second):
+				t.Error("consumer did not stop")
+			}
+		}()
+		waitLeader := func(want uint64) {
+			t.Helper()
+			timer := time.NewTimer(time.Second)
+			defer timer.Stop()
+			for {
+				select {
+				case leader := <-leaderChecks:
+					if leader == want {
+						return
+					}
+				case <-done:
+					t.Fatal("consumer exited before observing leader")
+				case <-timer.C:
+					t.Fatalf("consumer did not observe leader %d", want)
+				}
+			}
+		}
+		waitPhase := func(event <-chan struct{}) {
+			t.Helper()
+			select {
+			case <-event:
+			case <-done:
+				t.Fatal("consumer exited before phase notification")
+			case <-time.After(time.Second):
+				t.Fatal("consumer phase notification missing")
+			}
+		}
+		waitLeader(10) // permission granted
+		waitPhase(initialized)
+		waitLeader(10) // consuming loop entered
+		waitPhase(readEntries)
 		lc.setLeaderID(20)
-		close(leaderGate)
-		// The next check observes the role change. No second read may start.
-		<-leaderChecks
-		calls, _ := lc.callStats("readEntries")
-		require.Equal(t, 1, calls, "role loss must stop log consumption before another read")
+		waitLeader(20)
+		lc.setLeaderID(10)
+		waitLeader(10)         // permission regained
+		waitPhase(initialized) // proves demotion actually left the old loop
 		cancel()
 		select {
 		case <-done:

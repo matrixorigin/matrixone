@@ -58,7 +58,8 @@ func TestProducer_EnqueueFull2(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	writeLsn := &atomic.Uint64{}
 	p := newProducer(common{}, 10, writeLsn)
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
 	q := p.(*producer).dataQ
 	items := make([]*wrappedData, 20)
 	for i := range items {
@@ -84,14 +85,32 @@ func TestProducer_EnqueueFull2(t *testing.T) {
 		}
 		close(done)
 	}()
-	<-firstBatchDone
-	<-secondBatchStarted
+	defer func() {
+		cancel()
+		select {
+		case <-done:
+			p.Close()
+		case <-time.After(time.Second):
+			t.Error("enqueue worker did not stop")
+		}
+	}()
+	for _, event := range []<-chan struct{}{firstBatchDone, secondBatchStarted} {
+		select {
+		case <-event:
+		case <-ctx.Done():
+			t.Fatal("enqueue phase notification missing")
+		}
+	}
 	for i := 0; i < 20; i++ {
 		w, err := q.dequeue(ctx)
 		assert.NoError(t, err)
 		assert.NotNil(t, w)
 	}
-	<-done
+	select {
+	case <-done:
+	case <-ctx.Done():
+		t.Fatal("enqueue did not complete")
+	}
 	assert.Equal(t, 0, len(q.(*dataQueue).queue))
 }
 
@@ -157,13 +176,21 @@ func TestProducer_Start(t *testing.T) {
 				10,
 				writeLsn,
 			)
-			defer p.Close()
 
 			ctx, cancel := context.WithCancel(context.Background())
 			done := make(chan struct{})
 			go func() {
 				p.Start(ctx)
 				close(done)
+			}()
+			defer func() {
+				cancel()
+				select {
+				case <-done:
+					p.Close()
+				case <-time.After(time.Second):
+					t.Error("producer did not stop")
+				}
 			}()
 			cancel()
 			select {

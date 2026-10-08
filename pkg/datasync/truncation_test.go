@@ -80,13 +80,21 @@ func TestTruncation_Start(t *testing.T) {
 				&syncedLsn,
 				withTruncateInterval(time.Millisecond),
 			)
-			defer tr.Close()
 
 			ctx, cancel := context.WithCancel(context.Background())
 			done := make(chan struct{})
 			go func() {
 				tr.Start(ctx)
 				close(done)
+			}()
+			defer func() {
+				cancel()
+				select {
+				case <-done:
+					tr.Close()
+				case <-time.After(time.Second):
+					t.Error("truncation did not stop")
+				}
 			}()
 			cancel()
 			select {

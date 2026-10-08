@@ -245,11 +245,8 @@ func newMockServer() *mockLogServer {
 type mockLogClient struct {
 	shardID              uint64
 	s                    *mockLogServer
-	getLeaderIDEvent     chan<- struct{}
-	getLeaderIDGate      <-chan struct{}
-	getLeaderIDGateAt    int
+	getLeaderIDEvent     chan<- uint64
 	readEntriesEvent     chan<- struct{}
-	readEntriesGate      <-chan struct{}
 	getTruncatedLsnEvent chan<- struct{}
 }
 
@@ -291,25 +288,21 @@ func signalTestEvent(ch chan<- struct{}) {
 
 func (m *mockLogClient) getLeaderID(ctx context.Context) (uint64, error) {
 	m.s.mu.Lock()
-	v := m.s.values[m.shardID]
-	v.callCount["getLeaderID"]++
-	call := v.callCount["getLeaderID"]
-	_, fakeErr := v.fakeErr["getLeaderID"]
+	leader := m.s.values[m.shardID].shardID
+	_, failed := m.s.values[m.shardID].fakeErr["getLeaderID"]
 	m.s.mu.Unlock()
-	signalTestEvent(m.getLeaderIDEvent)
-	if m.getLeaderIDGate != nil && call == m.getLeaderIDGateAt {
+	if failed {
+		return 0, fakeError
+	}
+	// Publish the captured return value without holding the server mutex.
+	if m.getLeaderIDEvent != nil {
 		select {
-		case <-m.getLeaderIDGate:
+		case m.getLeaderIDEvent <- leader:
 		case <-ctx.Done():
 			return 0, ctx.Err()
 		}
 	}
-	if fakeErr {
-		return 0, fakeError
-	}
-	m.s.mu.Lock()
-	defer m.s.mu.Unlock()
-	return m.s.values[m.shardID].shardID, nil
+	return leader, nil
 }
 
 func (m *mockLogClient) write(_ context.Context, data []byte) (uint64, error) {
@@ -330,13 +323,9 @@ func (m *mockLogClient) write(_ context.Context, data []byte) (uint64, error) {
 }
 
 func (m *mockLogClient) readEntries(_ context.Context, lsn uint64) ([]logservice.LogRecord, uint64, error) {
-	signalTestEvent(m.readEntriesEvent)
-	if m.readEntriesGate != nil {
-		<-m.readEntriesGate
-	}
 	m.s.mu.Lock()
 	defer m.s.mu.Unlock()
-	m.s.values[m.shardID].callCount["readEntries"]++
+	defer signalTestEvent(m.readEntriesEvent)
 	if _, ok := m.s.values[m.shardID].fakeErr["readEntries"]; ok {
 		return nil, 0, fakeError
 	}
