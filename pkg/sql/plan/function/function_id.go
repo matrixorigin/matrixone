@@ -855,19 +855,21 @@ const (
 	EXTRACTVALUE            = 581
 	UPDATEXML               = 582
 	TO_INTERVAL_MICROSECOND = 583
+	// JSON_ARRAY_INSERT inserts values before array elements selected by paths.
+	JSON_ARRAY_INSERT = 586
 
 	// VECTOR_MATMUL is the batch dot-product top-k aggregate over vecf8/vecf4 columns.
-	VECTOR_MATMUL = 586
+	VECTOR_MATMUL = 587
 
 	// VECBLOCK_JSON returns the exact text of a vecf8/vecf4 value: its blocks as stored.
-	VECBLOCK_JSON = 587
+	VECBLOCK_JSON = 588
 
 	// VECBLOCK_BINARY returns the stored cell of a vecf8/vecf4 value as a BLOB.
-	VECBLOCK_BINARY = 588
+	VECBLOCK_BINARY = 589
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 589
+	FUNCTION_END_NUMBER = 590
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1164,6 +1166,7 @@ var functionIdRegister = map[string]int32{
 	"json_insert":                    JSON_INSERT,
 	"json_replace":                   JSON_REPLACE,
 	"json_array_append":              JSON_ARRAY_APPEND,
+	"json_array_insert":              JSON_ARRAY_INSERT,
 	"json_remove":                    JSON_REMOVE,
 	"hll_cardinality":                HLL_CARDINALITY,
 	"json_type":                      JSON_TYPE,

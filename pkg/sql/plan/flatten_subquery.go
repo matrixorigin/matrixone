@@ -38,6 +38,12 @@ func (builder *QueryBuilder) flattenSubqueries(nodeID int32, expr *plan.Expr, ct
 }
 
 func (builder *QueryBuilder) flattenFilterSubqueries(nodeID int32, expr *plan.Expr, ctx *BindContext) (int32, *plan.Expr, error) {
+	return builder.flattenFilterSubqueriesGuarded(nodeID, expr, ctx, false)
+}
+
+func (builder *QueryBuilder) flattenFilterSubqueriesGuarded(
+	nodeID int32, expr *plan.Expr, ctx *BindContext, guarded bool,
+) (int32, *plan.Expr, error) {
 	// Only the conjunct itself consumes TRUE. NULL rejection through a scalar
 	// function is insufficient (for example NOT(IN) also observes FALSE).
 	if sub := expr.GetSub(); sub != nil {
@@ -45,14 +51,14 @@ func (builder *QueryBuilder) flattenFilterSubqueries(nodeID int32, expr *plan.Ex
 		if sub.Typ == plan.SubqueryRef_NOT_EXISTS {
 			consumer = existentialNegatedFilter
 		}
-		return builder.flattenSubqueriesWithConsumer(nodeID, expr, ctx, true, consumer)
+		return builder.flattenSubqueriesWithConsumerGuarded(nodeID, expr, ctx, true, consumer, guarded)
 	}
 	if f := expr.GetF(); f != nil && f.Func.ObjName == "not" && len(f.Args) == 1 {
 		if sub := f.Args[0].GetSub(); sub != nil && sub.Typ == plan.SubqueryRef_EXISTS {
-			return builder.flattenSubqueriesWithConsumer(nodeID, expr, ctx, true, existentialNegatedFilter)
+			return builder.flattenSubqueriesWithConsumerGuarded(nodeID, expr, ctx, true, existentialNegatedFilter, guarded)
 		}
 	}
-	return builder.flattenSubqueriesWithContext(nodeID, expr, ctx, true)
+	return builder.flattenSubqueriesWithConsumerGuarded(nodeID, expr, ctx, true, existentialIneligible, guarded)
 }
 
 // flattenOuterJoinConditionSubqueries decorrelates each subquery against the
@@ -71,16 +77,17 @@ func (builder *QueryBuilder) flattenOuterJoinConditionSubqueries(
 	leftCtx, rightCtx *BindContext,
 	leftTags, rightTags map[int32]bool,
 	defaultSide int8,
-	nullResultRejected bool,
+	nullResultRejected, guarded bool,
 ) (int32, int32, *plan.Expr, error) {
 	var err error
 
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		childNullResultRejected := nullResultRejected && nullPropagatesThroughDeepScalarConsumer(exprImpl.F.Func)
+		childGuarded := guarded || conditionallyEvaluatesScalarArgument(exprImpl.F.Func)
 		for i, arg := range exprImpl.F.Args {
 			leftID, rightID, exprImpl.F.Args[i], err = builder.flattenOuterJoinConditionSubqueries(
-				leftID, rightID, arg, leftCtx, rightCtx, leftTags, rightTags, defaultSide, childNullResultRejected)
+				leftID, rightID, arg, leftCtx, rightCtx, leftTags, rightTags, defaultSide, childNullResultRejected, childGuarded)
 			if err != nil {
 				return 0, 0, nil, err
 			}
@@ -89,7 +96,7 @@ func (builder *QueryBuilder) flattenOuterJoinConditionSubqueries(
 	case *plan.Expr_List:
 		for i, item := range exprImpl.List.List {
 			leftID, rightID, exprImpl.List.List[i], err = builder.flattenOuterJoinConditionSubqueries(
-				leftID, rightID, item, leftCtx, rightCtx, leftTags, rightTags, defaultSide, nullResultRejected)
+				leftID, rightID, item, leftCtx, rightCtx, leftTags, rightTags, defaultSide, nullResultRejected, true)
 			if err != nil {
 				return 0, 0, nil, err
 			}
@@ -114,9 +121,9 @@ func (builder *QueryBuilder) flattenOuterJoinConditionSubqueries(
 		}
 
 		if side&JoinSideLeft != 0 {
-			leftID, expr, err = builder.flattenSubquery(leftID, exprImpl.Sub, leftCtx, nullResultRejected)
+			leftID, expr, err = builder.flattenSubqueryWithConsumer(leftID, exprImpl.Sub, leftCtx, nullResultRejected, existentialIneligible, guarded)
 		} else {
-			rightID, expr, err = builder.flattenSubquery(rightID, exprImpl.Sub, rightCtx, nullResultRejected)
+			rightID, expr, err = builder.flattenSubqueryWithConsumer(rightID, exprImpl.Sub, rightCtx, nullResultRejected, existentialIneligible, guarded)
 		}
 	}
 
@@ -285,13 +292,33 @@ func (builder *QueryBuilder) flattenSubqueriesWithConsumer(
 	nodeID int32, expr *plan.Expr, ctx *BindContext,
 	nullResultRejected bool, consumer existentialConsumer,
 ) (int32, *plan.Expr, error) {
-	nodeID, expr, _, err := builder.flattenSubqueriesWithConsumerAndChange(nodeID, expr, ctx, nullResultRejected, consumer)
+	return builder.flattenSubqueriesWithConsumerGuarded(nodeID, expr, ctx, nullResultRejected, consumer, false)
+}
+
+func (builder *QueryBuilder) flattenSubqueriesWithConsumerGuarded(
+	nodeID int32, expr *plan.Expr, ctx *BindContext,
+	nullResultRejected bool, consumer existentialConsumer, guarded bool,
+) (int32, *plan.Expr, error) {
+	guarded = guarded || ctx != nil && ctx.outerPaginationPending
+	nodeID, expr, _, err := builder.flattenSubqueriesWithConsumerAndChange(nodeID, expr, ctx, nullResultRejected, consumer, guarded)
 	return nodeID, expr, err
+}
+
+func conditionallyEvaluatesScalarArgument(fn *plan.ObjectRef) bool {
+	if fn == nil {
+		return false
+	}
+	switch fn.ObjName {
+	case "case", "if", "ifnull", "coalesce", "nullif", "and", "or":
+		return true
+	default:
+		return false
+	}
 }
 
 func (builder *QueryBuilder) flattenSubqueriesWithConsumerAndChange(
 	nodeID int32, expr *plan.Expr, ctx *BindContext,
-	nullResultRejected bool, consumer existentialConsumer,
+	nullResultRejected bool, consumer existentialConsumer, guarded bool,
 ) (int32, *plan.Expr, bool, error) {
 	memoID := expr.AuxId
 	if memoID < 0 && ctx != nil && ctx.flattenedVolatileExprs != nil {
@@ -322,7 +349,7 @@ func (builder *QueryBuilder) flattenSubqueriesWithConsumerAndChange(
 			sub := *exprImpl.F.Args[0].GetSub()
 			if sc := builder.ctxByNode[sub.NodeId]; sc != nil && builder.pendingExistentials[sc.existentialBlock] != nil {
 				sub.Typ = plan.SubqueryRef_NOT_EXISTS
-				nodeID, expr, err = builder.flattenSubqueryWithConsumer(nodeID, &sub, ctx, nullResultRejected, consumer)
+				nodeID, expr, err = builder.flattenSubqueryWithConsumer(nodeID, &sub, ctx, nullResultRejected, consumer, guarded)
 				affected = true
 				break
 			}
@@ -330,10 +357,13 @@ func (builder *QueryBuilder) flattenSubqueriesWithConsumerAndChange(
 			// the child's memo/metadata restoration as well as the NOT.
 		}
 		childNullResultRejected := nullResultRejected && nullPropagatesThroughDeepScalarConsumer(exprImpl.F.Func)
+		// Any branch may skip a scalar subquery. Producer replay must be
+		// total on rows outside the branch's actual evaluation domain.
+		childGuarded := guarded || conditionallyEvaluatesScalarArgument(exprImpl.F.Func)
 		for i, arg := range exprImpl.F.Args {
 			var childAffected bool
 			nodeID, exprImpl.F.Args[i], childAffected, err = builder.flattenSubqueriesWithConsumerAndChange(
-				nodeID, arg, ctx, childNullResultRejected, existentialIneligible)
+				nodeID, arg, ctx, childNullResultRejected, existentialIneligible, childGuarded)
 			if err != nil {
 				return 0, nil, false, err
 			}
@@ -359,7 +389,7 @@ func (builder *QueryBuilder) flattenSubqueriesWithConsumerAndChange(
 			// predicate's null-rejection optimization.
 			var childAffected bool
 			nodeID, exprImpl.List.List[i], childAffected, err = builder.flattenSubqueriesWithConsumerAndChange(
-				nodeID, item, ctx, false, existentialIneligible)
+				nodeID, item, ctx, false, existentialIneligible, true)
 			if err != nil {
 				return 0, nil, false, err
 			}
@@ -367,7 +397,7 @@ func (builder *QueryBuilder) flattenSubqueriesWithConsumerAndChange(
 		}
 
 	case *plan.Expr_Sub:
-		nodeID, expr, err = builder.flattenSubqueryWithConsumer(nodeID, exprImpl.Sub, ctx, nullResultRejected, consumer)
+		nodeID, expr, err = builder.flattenSubqueryWithConsumer(nodeID, exprImpl.Sub, ctx, nullResultRejected, consumer, guarded)
 		affected = true
 	}
 	if err == nil && memoID < 0 && ctx != nil {
@@ -387,18 +417,9 @@ func (builder *QueryBuilder) flattenSubqueriesWithConsumerAndChange(
 	return nodeID, expr, affected, err
 }
 
-func (builder *QueryBuilder) flattenSubquery(
-	nodeID int32,
-	subquery *plan.SubqueryRef,
-	ctx *BindContext,
-	nullResultRejected bool,
-) (int32, *plan.Expr, error) {
-	return builder.flattenSubqueryWithConsumer(nodeID, subquery, ctx, nullResultRejected, existentialIneligible)
-}
-
 func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 	nodeID int32, subquery *plan.SubqueryRef, ctx *BindContext,
-	nullResultRejected bool, consumer existentialConsumer,
+	nullResultRejected bool, consumer existentialConsumer, guarded bool,
 ) (int32, *plan.Expr, error) {
 	if id, expr, handled, err := builder.tryDeepExistential(nodeID, subquery, ctx, consumer); handled {
 		return id, expr, err
@@ -422,6 +443,20 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 	var scalarPerOuterOrderKey *plan.Expr
 	var scalarProjectionStatus scalarProjectionNormalization
 	var err error
+	subID, err = builder.parameterizeLocalCTEs(nodeID, subID, ctx, subquery.Typ, guarded)
+	if err != nil {
+		return 0, nil, err
+	}
+	if subquery.Typ != plan.SubqueryRef_SCALAR && builder.hasCorrelatedLocalCTEHaving(subID) {
+		return 0, nil, moerr.NewNYI(builder.GetContext(), "correlated local CTE: non-scalar HAVING")
+	}
+	var localCTEHaving *plan.Expr
+	if subquery.Typ == plan.SubqueryRef_SCALAR && subquery.Child == nil {
+		localCTEHaving, err = builder.detachCorrelatedCountHaving(subID, subCtx)
+		if err != nil {
+			return 0, nil, err
+		}
+	}
 
 	// Strip unnecessary subqueries which have no FROM clause
 	subNode := builder.qry.Nodes[subID]
@@ -498,6 +533,11 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 			builder.traceCorrelatedAggregateSpine(subID, subCtx)
 	}
 
+	// Capture pagination before it is rewritten into a per-identity window.
+	aggregateRowUnsafe, aggregateRowDeleted := false, false
+	if subquery.Typ == plan.SubqueryRef_SCALAR && len(subCtx.aggregates) > 0 {
+		aggregateRowUnsafe, aggregateRowDeleted = builder.scalarAggregatePagination(subID)
+	}
 	var correlatedHaving []*plan.Expr
 	if subquery.Typ == plan.SubqueryRef_SCALAR && subquery.Child != nil {
 		correlatedHaving, err = builder.takeCorrelatedScalarAggregateHaving(subID, subCtx)
@@ -529,6 +569,10 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 	// Reaggregate the raw matching rows instead; never feed its grouped output
 	// into the equality empty-row reconstruction.
 	if subquery.Typ == plan.SubqueryRef_SCALAR {
+		if rangePredicate && localCTEHaving != nil {
+			return 0, nil, moerr.NewNYI(builder.GetContext(),
+				"correlated local CTE HAVING with non-equality input predicates cannot be safely decorrelated")
+		}
 		if rangePredicate && crossedAggregate && aggregateSuppression == aggregateSpineGrouped {
 			return 0, nil, moerr.NewNYI(builder.GetContext(),
 				"non-equality correlated grouped aggregate cannot be safely decorrelated")
@@ -629,11 +673,15 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 	switch subquery.Typ {
 	case plan.SubqueryRef_SCALAR:
 		var rewriteCount bool
-
 		// Preserve the legacy COUNT fallback for plan shapes that cannot use the
 		// more precise empty-input projection reconstruction below.
-		if len(joinPreds) > 0 && builder.findAggrCount(subCtx.aggregates) {
-			rewriteCount = true
+		if len(joinPreds) > 0 && !aggregateRowUnsafe && len(subCtx.groups) == 0 && len(subCtx.results) == 1 &&
+			builder.findAggrCount(subCtx.aggregates) {
+			// An implicit single-group COUNT produces zero on empty input.
+			// Follow identity projections through ordering/duplicate wrappers;
+			// inspecting only the top tag loses valid COUNT results. Explicit
+			// GROUP BY and window results must not inherit the fallback.
+			rewriteCount = builder.directScalarCountResult(subID, subCtx.results[0], subCtx.aggregateTag)
 		}
 		if scalarExistential {
 			if len(joinPreds) == 0 {
@@ -689,15 +737,39 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 			joinType = plan.Node_LEFT
 		}
 
+		// A rank-filtered aggregate spine can delete the result row.
+		// Do not infer an empty-input reconstruction from a successful
+		// projection rewrite when the upstream spine proof is incomplete.
+		if wrappedAggregate && preserveAggregateSpine && !aggregateSpineCandidate &&
+			builder.findAggrCount(subCtx.aggregates) &&
+			builder.qry.Nodes[subID].NodeType == plan.Node_WINDOW && len(builder.qry.Nodes[subID].FilterList) > 0 {
+			return 0, nil, moerr.NewNYI(builder.GetContext(),
+				"correlated aggregate spine cannot preserve empty-input rows")
+		}
 		var postJoinProjections []*plan.Expr
 		var finalizeProjection bool
-		if crossedAggregate && aggregateSpineCandidate && len(aggregateSpine) > 0 && len(joinPreds) > 0 {
-			subID, postJoinProjections, err = builder.prepareCorrelatedAggregateSpine(
-				aggregateSpine, subCtx.results, joinPreds)
-			finalizeProjection = err == nil
-		} else {
-			subID, postJoinProjections, finalizeProjection, err =
-				builder.prepareCorrelatedScalarAggregatePostJoinProjection(subID, subCtx, joinPreds, correlatedHaving, subquery.Child != nil)
+		if !aggregateRowUnsafe {
+			if crossedAggregate && aggregateSpineCandidate && len(aggregateSpine) > 0 && len(joinPreds) > 0 {
+				subID, postJoinProjections, err = builder.prepareCorrelatedAggregateSpine(
+					aggregateSpine, subCtx.results, joinPreds)
+				finalizeProjection = err == nil
+			} else if subquery.Child == nil && !(wrappedAggregate && preserveAggregateSpine) {
+				var postJoinProjection *plan.Expr
+				postJoinProjection, finalizeProjection, err =
+					builder.prepareScalarValueAggregateProjection(subID, subCtx, joinPreds)
+				if finalizeProjection {
+					postJoinProjections = []*plan.Expr{postJoinProjection}
+				} else if localCTEHaving == nil {
+					// The row-scalar reconstruction also handles a non-correlated
+					// HAVING filter; the transparent-wrapper path above does not.
+					subID, postJoinProjections, finalizeProjection, err =
+						builder.prepareCorrelatedScalarAggregatePostJoinProjection(
+							subID, subCtx, joinPreds, nil, false)
+				}
+			} else {
+				subID, postJoinProjections, finalizeProjection, err = builder.prepareCorrelatedScalarAggregatePostJoinProjection(
+					subID, subCtx, joinPreds, correlatedHaving, subquery.Child != nil)
+			}
 		}
 		if err != nil {
 			return nodeID, nil, err
@@ -842,6 +914,36 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 					},
 				},
 				Typ: makePlan2Type(&returnType),
+			}
+		}
+		if localCTEHaving != nil && !aggregateRowDeleted {
+			if !finalizeProjection && !rewriteCount {
+				return 0, nil, moerr.NewNYI(builder.GetContext(),
+					"correlated COUNT HAVING without a proven raw COUNT result")
+			}
+			havingCount := retExpr
+			if finalizeProjection {
+				if len(subCtx.aggregates) != 1 || subCtx.aggregates[0].GetF() == nil ||
+					subCtx.aggregates[0].GetF().Func == nil {
+					return 0, nil, moerr.NewNYI(builder.GetContext(), "correlated COUNT HAVING aggregate projection")
+				}
+				rawCount := GetColExpr(subCtx.aggregates[0].Typ, subCtx.topTag(), 0)
+				rawCount.Typ.NotNullable = false
+				havingCount, err = builder.restoreAggregateEmptyResult(
+					rawCount, subCtx.aggregates[0], subCtx.aggregates[0].GetF().Func.ObjName)
+				if err != nil {
+					return 0, nil, err
+				}
+			}
+			condition, ok := replaceCountHavingResult(localCTEHaving, subCtx.aggregateTag, havingCount)
+			if !ok {
+				return 0, nil, moerr.NewNYI(builder.GetContext(), "correlated COUNT HAVING result expression")
+			}
+			retExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "case", []*plan.Expr{
+				condition, retExpr, makePlan2NullConstExprWithType(),
+			})
+			if err != nil {
+				return 0, nil, err
 			}
 		}
 		return nodeID, retExpr, nil
@@ -1534,9 +1636,8 @@ func (builder *QueryBuilder) takeCorrelatedScalarAggregateHaving(
 // extension. The saved final expression is then evaluated against those
 // post-join values.
 //
-// This is intentionally limited to a direct AGG or PROJECT -> [HAVING] -> AGG.
-// Wrappers that can remove or reorder rows in other ways fail closed in the
-// row-scalar caller rather than skipping the aggregate empty-input fallback.
+// This path handles row comparisons with a direct AGG or PROJECT -> [HAVING] -> AGG.
+// The scalar-value path preserves transparent wrappers separately.
 func (builder *QueryBuilder) prepareCorrelatedScalarAggregatePostJoinProjection(
 	subID int32,
 	subCtx *BindContext,
@@ -2400,10 +2501,93 @@ func replaceAggregateRefsForPostJoin(
 			}
 		}
 		return expr, true
-	case *plan.Expr_List, *plan.Expr_W, *plan.Expr_Sub:
+	case *plan.Expr_List:
+		for i, arg := range item.List.List {
+			var ok bool
+			item.List.List[i], ok = replaceAggregateRefsForPostJoin(arg, aggregateTag, projectedAggregates)
+			if !ok {
+				return nil, false
+			}
+		}
+		return expr, true
+	case *plan.Expr_W, *plan.Expr_Sub:
 		return nil, false
 	default:
 		return expr, true
+	}
+}
+
+// scalarAggregatePagination checks the original scalar plan before its
+// pagination is rewritten into a per-key window. The first return value
+// prevents empty-input restoration for any aggregate when the result row may
+// be removed. The second proves the row is always removed, so a detached
+// COUNT HAVING predicate need not be evaluated above the join.
+func (builder *QueryBuilder) scalarAggregatePagination(root int32) (unsafe, deleted bool) {
+	for {
+		n := builder.qry.Nodes[root]
+		if n.Limit != nil {
+			lit := n.Limit.GetLit()
+			if lit == nil {
+				unsafe = true
+			} else if lit.GetU64Val() == 0 {
+				deleted = true
+			}
+		}
+		if n.Offset != nil {
+			lit := n.Offset.GetLit()
+			if lit == nil {
+				unsafe = true
+			} else if lit.GetU64Val() != 0 {
+				deleted = true
+			}
+		}
+		if n.NodeType == plan.Node_AGG || len(n.Children) != 1 {
+			return unsafe || deleted, deleted
+		}
+		root = n.Children[0]
+	}
+}
+
+// directScalarCountResult proves that a scalar output is a direct COUNT slot,
+// even when ORDER BY or DISTINCT inserts pass-through projections. The proof
+// stops at operators that can change the result expression or cardinality.
+func (builder *QueryBuilder) directScalarCountResult(root int32, result *plan.Expr, aggregateTag int32) bool {
+	for {
+		n := builder.qry.Nodes[root]
+		if n.NodeType == plan.Node_AGG {
+			col := result.GetCol()
+			if col == nil || col.RelPos != aggregateTag || col.ColPos < 0 ||
+				int(col.ColPos) >= len(n.AggList) {
+				return false
+			}
+			f := n.AggList[col.ColPos].GetF()
+			return f != nil && f.Func != nil &&
+				(f.Func.ObjName == "count" || f.Func.ObjName == "starcount")
+		}
+		if len(n.Children) != 1 {
+			return false
+		}
+		switch n.NodeType {
+		case plan.Node_PROJECT:
+			if col := result.GetCol(); col != nil && len(n.BindingTags) == 1 &&
+				col.RelPos == n.BindingTags[0] {
+				if col.ColPos < 0 || int(col.ColPos) >= len(n.ProjectList) {
+					return false
+				}
+				result = n.ProjectList[col.ColPos]
+			}
+		case plan.Node_SORT, plan.Node_DISTINCT, plan.Node_FILTER, plan.Node_PARTITION:
+		case plan.Node_WINDOW:
+			// A window can be a physical carrier for per-key LIMIT, but its
+			// own output is not an aggregate result.
+			if col := result.GetCol(); col != nil && len(n.BindingTags) > 0 &&
+				col.RelPos == n.BindingTags[0] && col.ColPos == n.GetWindowIdx() {
+				return false
+			}
+		default:
+			return false
+		}
+		root = n.Children[0]
 	}
 }
 
@@ -3727,6 +3911,238 @@ func replaceGroupTagRefs(expr *plan.Expr, groupTag int32, groupBy []*plan.Expr) 
 	return expr
 }
 
+// Defer a scalar COUNT HAVING predicate until after the missing-group COUNT
+// fallback. Applying it inside AGG loses the distinction between a filtered
+// aggregate row and an empty aggregate group.
+func (builder *QueryBuilder) correlatedLocalCTEInBranch(root int32) bool {
+	var visit func(int32) bool
+	visit = func(id int32) bool {
+		n := builder.qry.Nodes[id]
+		if builder.localCTERoots[id] || (n.NodeType == plan.Node_FILTER && len(n.Children) == 1 &&
+			builder.localCTERoots[n.Children[0]]) {
+			for _, e := range localCTENodeExprs(n) {
+				if hasCorrCol(e) {
+					return true
+				}
+			}
+		}
+		for _, child := range n.Children {
+			if visit(child) {
+				return true
+			}
+		}
+		return false
+	}
+	return visit(root)
+}
+
+func (builder *QueryBuilder) hasCorrelatedLocalCTEHaving(root int32) bool {
+	id := root
+	for {
+		n := builder.qry.Nodes[id]
+		var agg *plan.Node
+		if n.NodeType == plan.Node_AGG {
+			agg = n
+		} else if n.NodeType == plan.Node_FILTER && len(n.Children) == 1 &&
+			builder.qry.Nodes[n.Children[0]].NodeType == plan.Node_AGG {
+			agg = builder.qry.Nodes[n.Children[0]]
+		}
+		if agg != nil && len(n.FilterList) > 0 && len(agg.Children) == 1 &&
+			builder.correlatedLocalCTEInBranch(agg.Children[0]) {
+			return true
+		}
+		if len(n.Children) != 1 {
+			return false
+		}
+		id = n.Children[0]
+	}
+}
+
+func (builder *QueryBuilder) hasCorrelatedConsumerInput(root int32) bool {
+	if builder.correlatedLocalCTEInBranch(root) {
+		return true
+	}
+	var visit func(int32) bool
+	visit = func(id int32) bool {
+		n := builder.qry.Nodes[id]
+		for _, expr := range localCTENodeExprs(n) {
+			if hasCorrCol(expr) {
+				return true
+			}
+		}
+		for _, child := range n.Children {
+			if visit(child) {
+				return true
+			}
+		}
+		return false
+	}
+	return visit(root)
+}
+
+// Prove the scalar expression depends only on this COUNT and constants.
+// Transparent ORDER BY/DISTINCT projections may change its visible tag.
+func (builder *QueryBuilder) scalarCountHavingProjection(root int32, result *plan.Expr, aggregateTag int32) bool {
+	for {
+		n := builder.qry.Nodes[root]
+		if n.NodeType == plan.Node_AGG {
+			if len(n.AggList) != 1 || len(n.BindingTags) < 2 || n.BindingTags[1] != aggregateTag {
+				return false
+			}
+			_, ok := replaceAggregateRefsForPostJoin(DeepCopyExpr(result), aggregateTag,
+				[]*plan.Expr{GetColExpr(n.AggList[0].Typ, aggregateTag, 0)})
+			return ok
+		}
+		if len(n.Children) != 1 {
+			return false
+		}
+		switch n.NodeType {
+		case plan.Node_PROJECT:
+			if col := result.GetCol(); col != nil && len(n.BindingTags) == 1 &&
+				col.RelPos == n.BindingTags[0] {
+				if col.ColPos < 0 || int(col.ColPos) >= len(n.ProjectList) {
+					return false
+				}
+				result = n.ProjectList[col.ColPos]
+			}
+		case plan.Node_SORT, plan.Node_DISTINCT, plan.Node_FILTER:
+		default:
+			return false
+		}
+		root = n.Children[0]
+	}
+}
+
+func (builder *QueryBuilder) detachCorrelatedCountHaving(root int32, ctx *BindContext) (*plan.Expr, error) {
+	id := root
+	parentID := int32(-1)
+	for {
+		n := builder.qry.Nodes[id]
+		var agg *plan.Node
+		if n.NodeType == plan.Node_AGG {
+			agg = n
+		} else if n.NodeType == plan.Node_FILTER && len(n.Children) == 1 &&
+			builder.qry.Nodes[n.Children[0]].NodeType == plan.Node_AGG {
+			agg = builder.qry.Nodes[n.Children[0]]
+		}
+		if agg != nil && len(n.FilterList) != 0 &&
+			len(agg.Children) == 1 && builder.hasCorrelatedConsumerInput(agg.Children[0]) {
+			if len(agg.AggList) != 1 || agg.AggList[0].GetF() == nil ||
+				agg.AggList[0].GetF().Func == nil ||
+				(agg.AggList[0].GetF().Func.ObjName != "count" && agg.AggList[0].GetF().Func.ObjName != "starcount") {
+				// Leave other aggregate HAVING paths on their existing route.
+				return nil, nil
+			}
+			if len(agg.GroupBy) != 0 || len(ctx.groups) != 0 {
+				// An explicit group has no synthetic empty-input row; the
+				// existing grouped HAVING path already preserves that contract.
+				return nil, nil
+			}
+			if len(ctx.results) != 1 ||
+				!builder.scalarCountHavingProjection(root, ctx.results[0], ctx.aggregateTag) {
+				// A CTE aggregate behind an outer consumer is not the
+				// scalar result. Leave its HAVING attached; the aggregate
+				// spine must prove any row-removal reconstruction instead.
+				return nil, nil
+			}
+			// Validate every conjunct before detaching any filter: both ordinary
+			// scalar queries and local CTE consumers can carry a bound IN list.
+			for _, cond := range n.FilterList {
+				if _, ok := replaceCountHavingResult(cond, ctx.aggregateTag,
+					GetColExpr(agg.AggList[0].Typ, ctx.aggregateTag, 0)); !ok {
+					return nil, moerr.NewNYI(builder.GetContext(), "correlated COUNT HAVING condition cannot be restored")
+				}
+			}
+			having, err := combinePlanExprsBalanced(builder.GetContext(), "and", n.FilterList)
+			if err != nil {
+				return nil, err
+			}
+			n.FilterList = nil
+			if n.NodeType == plan.Node_FILTER && parentID >= 0 {
+				builder.qry.Nodes[parentID].Children[0] = n.Children[0]
+			}
+			return having, nil
+		}
+		if len(n.Children) != 1 {
+			return nil, nil
+		}
+		parentID = id
+		id = n.Children[0]
+	}
+}
+
+func replaceCountHavingResult(expr *plan.Expr, aggregateTag int32, result *plan.Expr) (*plan.Expr, bool) {
+	if col := expr.GetCol(); col != nil {
+		if col.RelPos != aggregateTag || col.ColPos != 0 {
+			return nil, false
+		}
+		return DeepCopyExpr(result), true
+	}
+	if corr := expr.GetCorr(); corr != nil {
+		// HAVING now runs above the join: its immediate outer reference
+		// belongs to this query block, including when nested in an IN list.
+		if corr.Depth != 1 {
+			return nil, false
+		}
+		return GetColExpr(expr.Typ, corr.RelPos, corr.ColPos), true
+	}
+	copy := DeepCopyExpr(expr)
+	if f := copy.GetF(); f != nil {
+		for i, arg := range f.Args {
+			var ok bool
+			f.Args[i], ok = replaceCountHavingResult(arg, aggregateTag, result)
+			if !ok {
+				return nil, false
+			}
+		}
+		return copy, true
+	}
+	if list := copy.GetList(); list != nil {
+		for i, item := range list.List {
+			var ok bool
+			list.List[i], ok = replaceCountHavingResult(item, aggregateTag, result)
+			if !ok {
+				return nil, false
+			}
+		}
+		return copy, true
+	}
+	switch copy.Expr.(type) {
+	case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_T:
+		return copy, true
+	default:
+		return nil, false
+	}
+}
+
+func correlatedIdentityOuterKey(expr *plan.Expr) (*plan.CorrColRef, bool) {
+	f := expr.GetF()
+	if f == nil || f.Func == nil || f.Func.ObjName != "=" || len(f.Args) != 2 {
+		return nil, false
+	}
+	if c := f.Args[0].GetCorr(); c != nil && c.Depth == 1 && f.Args[1].GetCol() != nil {
+		return c, true
+	}
+	if c := f.Args[1].GetCorr(); c != nil && c.Depth == 1 && f.Args[0].GetCol() != nil {
+		return c, true
+	}
+	return nil, false
+}
+
+func correlatedWindowIdentityKey(expr *plan.Expr) (*plan.Expr, bool) {
+	f := expr.GetF()
+	if f == nil || f.Func == nil || f.Func.ObjName != "=" || len(f.Args) != 2 {
+		return nil, false
+	}
+	if f.Args[0].GetCorr() != nil && f.Args[0].GetCorr().Depth == 1 && f.Args[1].GetCol() != nil {
+		return f.Args[1], true
+	}
+	if f.Args[1].GetCorr() != nil && f.Args[1].GetCorr().Depth == 1 && f.Args[0].GetCol() != nil {
+		return f.Args[0], true
+	}
+	return nil, false
+}
+
 func (builder *QueryBuilder) pullupCorrelatedPredicates(
 	nodeID int32,
 	ctx *BindContext,
@@ -3768,6 +4184,68 @@ func (builder *QueryBuilder) pullupCorrelatedPredicates(
 		for _, pred := range preds {
 			builder.pullupThroughProj(ctx, node, projectTag, pred)
 		}
+
+	case plan.Node_WINDOW:
+		// A window is evaluated independently for every correlated input
+		// row. The partition operator, as well as the window specification,
+		// must receive the identity key so the physical input is grouped.
+		for _, pred := range preds {
+			innerKey, ok := correlatedWindowIdentityKey(pred)
+			if !ok {
+				// Other correlated predicates retain the existing pull-up path.
+				continue
+			}
+			for _, spec := range node.WinSpecList {
+				if w := spec.GetW(); w != nil {
+					w.PartitionBy = append(w.PartitionBy, DeepCopyExpr(innerKey))
+				}
+			}
+			if child := builder.qry.Nodes[node.Children[0]]; child.NodeType == plan.Node_PARTITION {
+				child.OrderBy = append(child.OrderBy, &plan.OrderBySpec{Expr: DeepCopyExpr(innerKey), Flag: plan.OrderBySpec_INTERNAL})
+			} else {
+				partition := builder.appendNode(&plan.Node{
+					NodeType: plan.Node_PARTITION, Children: []int32{node.Children[0]},
+					OrderBy:     []*plan.OrderBySpec{{Expr: DeepCopyExpr(innerKey), Flag: plan.OrderBySpec_INTERNAL}},
+					BindingTags: node.BindingTags,
+				}, ctx)
+				node.Children[0] = partition
+			}
+		}
+
+	case plan.Node_UNION_ALL:
+		left := builder.qry.Nodes[node.Children[0]]
+		right := builder.qry.Nodes[node.Children[1]]
+		pos := int32(len(node.ProjectList))
+		if len(left.ProjectList) == int(pos) && len(right.ProjectList) == int(pos) {
+			break
+		}
+		// The two arms must export the same hidden identity slot as well as
+		// their user columns. Collapse their matching correlation predicates
+		// into a single predicate on the union's new output slot.
+		if len(node.Children) != 2 || len(preds) != 2 || len(node.BindingTags) != 1 {
+			return 0, nil, moerr.NewNYI(builder.GetContext(), "correlated local CTE: UNION ALL without matching row identities")
+		}
+		leftKey, leftOK := correlatedWindowIdentityKey(preds[0])
+		rightKey, rightOK := correlatedWindowIdentityKey(preds[1])
+		leftCorr, leftCorrOK := correlatedIdentityOuterKey(preds[0])
+		rightCorr, rightCorrOK := correlatedIdentityOuterKey(preds[1])
+		if !leftOK || !rightOK || !leftCorrOK || !rightCorrOK ||
+			leftCorr.RelPos != rightCorr.RelPos || leftCorr.ColPos != rightCorr.ColPos ||
+			leftKey.GetCol() == nil || rightKey.GetCol() == nil ||
+			int(leftKey.GetCol().ColPos) != int(pos) || int(rightKey.GetCol().ColPos) != int(pos) ||
+			len(left.ProjectList) != int(pos)+1 || len(right.ProjectList) != int(pos)+1 ||
+			!isSameColumnType(leftKey.Typ, rightKey.Typ) {
+			return 0, nil, moerr.NewNYI(builder.GetContext(), "correlated local CTE: UNION ALL branch identities differ")
+		}
+		node.ProjectList = append(node.ProjectList, GetColExpr(leftKey.Typ, left.BindingTags[0], pos))
+		key := GetColExpr(leftKey.Typ, node.BindingTags[0], pos)
+		pred := DeepCopyExpr(preds[0])
+		for _, arg := range pred.GetF().Args {
+			if arg.GetCol() != nil {
+				*arg = *key
+			}
+		}
+		preds = []*plan.Expr{pred}
 
 	case plan.Node_FILTER:
 		var newFilterList []*plan.Expr

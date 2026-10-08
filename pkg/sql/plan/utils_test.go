@@ -197,6 +197,7 @@ func TestPreparedJSONConstructorValueParamPositions(t *testing.T) {
 		{"json_insert", []int32{2, 4}},
 		{"json_replace", []int32{2, 4}},
 		{"json_array_append", []int32{2, 4}},
+		{"json_array_insert", []int32{2, 4}},
 		{"concat", []int32{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
