@@ -17,6 +17,7 @@ package client
 import (
 	"context"
 	"errors"
+	"fmt"
 	goruntime "runtime"
 	"sync"
 	"testing"
@@ -261,6 +262,158 @@ func (w *selectedSuccessTimestampWaiter) NotifyLatestCommitTS(timestamp.Timestam
 func (*selectedSuccessTimestampWaiter) Close()                        {}
 func (*selectedSuccessTimestampWaiter) LatestTS() timestamp.Timestamp { return timestamp.Timestamp{} }
 
+func TestGetLatestSnapshotPolicyAndOwnership(t *testing.T) {
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	for _, freshness := range []bool{false, true} {
+		for _, cnConsistency := range []bool{false, true} {
+			for _, minimum := range []int64{50, 200} {
+				waiter := &snapshotTimestampWaiter{}
+				c := NewTxnClient("", newTestTxnSender(), WithTimestampWaiter(waiter)).(*txnClient)
+				c.Resume()
+				t.Cleanup(func() { _ = c.Close() })
+				c.clock = clock.NewHLCClock(func() int64 { return 100 }, 0)
+				c.enableSacrificingFreshness = !freshness
+				c.enableCNBasedConsistency = cnConsistency
+				c.atomic.latestCommitTS.Store(&timestamp.Timestamp{PhysicalTime: 150})
+				want := minimum
+				if freshness && want < 100 {
+					want = 100
+				} else if !freshness && cnConsistency && want < 150 {
+					want = 150
+				}
+				got, err := c.GetLatestSnapshot(context.Background(), timestamp.Timestamp{PhysicalTime: minimum})
+				require.NoError(t, err)
+				require.Equal(t, timestamp.Timestamp{PhysicalTime: want}, waiter.got)
+				require.Equal(t, waiter.got, got, "the waiter owns exclusive snapshot presentation")
+				require.Zero(t, c.atomic.activeTxnCount.Load())
+				require.Zero(t, c.mu.users)
+				require.Zero(t, c.mu.waitActiveTxns.size)
+				require.NoError(t, c.Close())
+			}
+		}
+	}
+	c := NewTxnClient("", newTestTxnSender())
+	c.Resume()
+	defer c.Close()
+	got, err := c.GetLatestSnapshot(context.Background(), timestamp.Timestamp{PhysicalTime: 200})
+	require.NoError(t, err)
+	require.True(t, got.IsEmpty(), "without a timestamp waiter no visibility proof exists")
+}
+
+func TestGetLatestSnapshotAdmissionWaits(t *testing.T) {
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	for _, scenario := range []struct{ phase, exit string }{
+		{"pause", "resume"}, {"pause", "cancel"}, {"pause", "close"},
+		{"limiter", "cancel"}, {"limiter", "close"},
+	} {
+		t.Run(scenario.phase+"/"+scenario.exit, func(t *testing.T) {
+			c := NewTxnClient("", newTestTxnSender(), WithTimestampWaiter(immediateTimestampWaiter{})).(*txnClient)
+			ctx, cancel := context.WithCancel(context.Background())
+			observed := &observedWaitContext{Context: ctx, waiting: make(chan struct{})}
+			waiting := observed.waiting
+			if scenario.phase == "limiter" {
+				c.Resume()
+				limiter := &blockingTxnRateLimiter{entered: make(chan struct{}, 1)}
+				c.limiter = limiter
+				waiting = limiter.entered
+			}
+			t.Cleanup(func() { cancel(); _ = c.Close() })
+			type result struct {
+				snapshot timestamp.Timestamp
+				err      error
+			}
+			completed := make(chan result, 1)
+			go func() {
+				snapshot, err := c.GetLatestSnapshot(observed, timestamp.Timestamp{})
+				completed <- result{snapshot, err}
+			}()
+			select {
+			case <-waiting:
+			case <-time.After(time.Second):
+				t.Fatal("snapshot did not enter admission wait")
+			}
+			switch scenario.exit {
+			case "resume":
+				c.Resume()
+			case "cancel":
+				cancel()
+			case "close":
+				require.NoError(t, c.Close())
+			}
+			select {
+			case got := <-completed:
+				switch scenario.exit {
+				case "resume":
+					require.NoError(t, got.err)
+					require.False(t, got.snapshot.IsEmpty())
+				case "cancel":
+					require.ErrorIs(t, got.err, context.Canceled)
+					require.True(t, got.snapshot.IsEmpty())
+				case "close":
+					require.True(t, moerr.IsMoErrCode(got.err, moerr.ErrClientClosed))
+					require.True(t, got.snapshot.IsEmpty())
+				}
+			case <-time.After(time.Second):
+				t.Fatal("snapshot remained blocked after admission ended")
+			}
+			require.Zero(t, c.atomic.activeTxnCount.Load())
+		})
+	}
+}
+
+func TestGetLatestSnapshotRejectsLateSuccess(t *testing.T) {
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	for _, closeClient := range []bool{false, true} {
+		waiter := &selectedSuccessTimestampWaiter{
+			entered: make(chan struct{}), notify: make(chan struct{}),
+			selected: make(chan struct{}), release: make(chan struct{}),
+		}
+		c := NewTxnClient("", newTestTxnSender(), WithTimestampWaiter(waiter))
+		c.Resume()
+		ctx, cancel := context.WithCancel(context.Background())
+		release := sync.OnceFunc(func() { close(waiter.release) })
+		t.Cleanup(func() { cancel(); release(); _ = c.Close() })
+		result := make(chan error, 1)
+		go func() {
+			snapshot, err := c.GetLatestSnapshot(ctx, timestamp.Timestamp{PhysicalTime: 100})
+			if !snapshot.IsEmpty() {
+				result <- errors.New("published a snapshot after close/cancel")
+				return
+			}
+			result <- err
+		}()
+		select {
+		case <-waiter.entered:
+		case <-time.After(time.Second):
+			t.Fatal("snapshot did not enter timestamp wait")
+		}
+		waiter.NotifyLatestCommitTS(timestamp.Timestamp{PhysicalTime: 100})
+		select {
+		case <-waiter.selected:
+		case <-time.After(time.Second):
+			t.Fatal("waiter did not select success")
+		}
+		if closeClient {
+			require.NoError(t, c.Close())
+		} else {
+			cancel()
+		}
+		release()
+		select {
+		case err := <-result:
+			if closeClient {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrClientClosed))
+			} else {
+				require.ErrorIs(t, err, context.Canceled)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("snapshot did not finish")
+		}
+		cancel()
+		require.NoError(t, c.Close())
+	}
+}
+
 func TestAdjustClient(t *testing.T) {
 	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 	c := &txnClient{}
@@ -470,7 +623,8 @@ func TestIterTxnIDs(t *testing.T) {
 	waitOp := &txnOperator{}
 	waitOp.reset.txnID = []byte("waiting")
 	c.mu.Lock()
-	c.mu.waitActiveTxns = append(c.mu.waitActiveTxns, waitOp)
+	waitOp.reset.waiter = newActiveTxnWaiter()
+	c.mu.waitActiveTxns.pushBack(waitOp)
 	c.mu.Unlock()
 
 	got := make(map[string]bool)
@@ -487,22 +641,78 @@ func TestIterTxnIDs(t *testing.T) {
 	require.True(t, ok)
 }
 
-func TestWaitActiveQueueClearsRemovedSlots(t *testing.T) {
-	first := &txnOperator{}
-	first.reset.txnID = []byte("first")
-	second := &txnOperator{}
-	second.reset.txnID = []byte("second")
-	c := &txnClient{}
+func TestWaitActiveQueueClearsRemovedLinks(t *testing.T) {
+	for _, order := range [][]int{{0, 1, 2}, {2, 1, 0}, {1, 0, 2}} {
+		t.Run(fmt.Sprint(order), func(t *testing.T) {
+			c := &txnClient{}
+			ops := []*txnOperator{{}, {}, {}}
+			removed := make([]bool, len(ops))
+			for _, op := range ops {
+				op.reset.waiter = newActiveTxnWaiter()
+				c.mu.waitActiveTxns.pushBack(op)
+			}
+			other := activeTxnQueue{}
+			require.False(t, other.remove(ops[0]))
+			require.False(t, c.mu.waitActiveTxns.remove(&txnOperator{}))
+			for i, index := range order {
+				op := ops[index]
+				require.True(t, c.mu.waitActiveTxns.remove(op))
+				require.False(t, c.mu.waitActiveTxns.remove(op))
+				require.Nil(t, op.reset.waiter.queue)
+				require.Nil(t, op.reset.waiter.prev)
+				require.Nil(t, op.reset.waiter.next)
+				require.Equal(t, len(ops)-i-1, c.mu.waitActiveTxns.size)
+				removed[index] = true
+				var expected []*txnOperator
+				for j, candidate := range ops {
+					if !removed[j] {
+						expected = append(expected, candidate)
+					}
+				}
+				remaining := c.mu.waitActiveTxns.appendTo(nil)
+				require.Equal(t, expected, remaining, "deletion preserves survivor FIFO")
+				require.Len(t, remaining, c.mu.waitActiveTxns.size)
+				for j, kept := range remaining {
+					require.Same(t, &c.mu.waitActiveTxns, kept.reset.waiter.queue)
+					if j == 0 {
+						require.Nil(t, kept.reset.waiter.prev)
+					} else {
+						require.Same(t, remaining[j-1], kept.reset.waiter.prev)
+					}
+					if j+1 == len(remaining) {
+						require.Nil(t, kept.reset.waiter.next)
+					} else {
+						require.Same(t, remaining[j+1], kept.reset.waiter.next)
+					}
+				}
+			}
+			require.Nil(t, c.mu.waitActiveTxns.head)
+			require.Nil(t, c.mu.waitActiveTxns.tail)
+		})
+	}
+}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.mu.waitActiveTxns = make([]*txnOperator, 2, 4)
-	c.mu.waitActiveTxns[0] = first
-	c.mu.waitActiveTxns[1] = second
-	require.True(t, c.removeFromWaitActiveLocked(first.reset.txnID))
-	require.Len(t, c.mu.waitActiveTxns, 1)
-	require.Same(t, second, c.mu.waitActiveTxns[0])
-	require.Nil(t, c.mu.waitActiveTxns[:cap(c.mu.waitActiveTxns)][1])
+func TestWaitActiveQueueDrainKeepsWaiterGeneration(t *testing.T) {
+	c := &txnClient{}
+	op := &txnOperator{}
+	old := newActiveTxnWaiter()
+	op.reset.waiter = old
+	c.mu.waitActiveTxns.pushBack(op)
+	require.ErrorIs(t, old.abort(context.Canceled), context.Canceled)
+	drained := c.mu.waitActiveTxns.drain()
+	require.Equal(t, []*activeTxnWaiter{old}, drained)
+	require.Nil(t, old.queue)
+	require.Nil(t, old.prev)
+	require.Nil(t, old.next)
+	require.Zero(t, c.mu.waitActiveTxns.size)
+	op.reset.waiter = newActiveTxnWaiter()
+	c.mu.waitActiveTxns.pushBack(op)
+	for _, w := range drained {
+		w.complete(moerr.NewClientClosedNoCtx())
+	}
+	_, done := op.reset.waiter.result()
+	require.False(t, done, "old shutdown notification must not complete a reused generation")
+	require.True(t, c.mu.waitActiveTxns.remove(op))
 }
 
 func TestClaimWaitActiveOpsSkipsCanceledAndPreservesFIFO(t *testing.T) {
@@ -518,23 +728,53 @@ func TestClaimWaitActiveOpsSkipsCanceledAndPreservesFIFO(t *testing.T) {
 	secondCanceled := newWaiting("second-canceled")
 	second := newWaiting("second")
 	third := newWaiting("third")
-	require.ErrorIs(t, firstCanceled.reset.waiter.abort(context.Canceled), context.Canceled)
-	require.ErrorIs(t, secondCanceled.reset.waiter.abort(context.Canceled), context.Canceled)
+	tailCanceled := newWaiting("tail-canceled")
+	for _, op := range []*txnOperator{firstCanceled, secondCanceled, tailCanceled} {
+		require.ErrorIs(t, op.reset.waiter.abort(context.Canceled), context.Canceled)
+	}
+	for _, op := range []*txnOperator{firstCanceled, first, secondCanceled, second, third, tailCanceled} {
+		client.mu.waitActiveTxns.pushBack(op)
+	}
 
+	// Promotion must not inspect an untouched waiter, even when that waiter's
+	// cancellation owner holds its mutex. Cleanup also joins on a fatal failure.
+	third.reset.waiter.mu.Lock()
+	completed := make(chan []*txnOperator, 1)
+	joined := make(chan struct{})
+	t.Cleanup(func() { third.reset.waiter.mu.Unlock(); <-joined })
+	go func() {
+		defer close(joined)
+		client.mu.Lock()
+		claimed := client.claimWaitActiveOpsLocked(2)
+		client.mu.Unlock()
+		completed <- claimed
+	}()
+	select {
+	case claimed := <-completed:
+		require.Equal(t, []*txnOperator{first, second}, claimed)
+	case <-time.After(time.Second):
+		t.Fatal("promotion inspected an untouched tail waiter")
+	}
+	require.Equal(t, []*txnOperator{third, tailCanceled}, client.mu.waitActiveTxns.appendTo(nil))
+	for _, detached := range []*txnOperator{firstCanceled, first, secondCanceled, second} {
+		require.Nil(t, detached.reset.waiter.queue)
+		require.Nil(t, detached.reset.waiter.prev)
+		require.Nil(t, detached.reset.waiter.next)
+	}
+
+	// Tail cancellation is removed by its existing ClosedEvent owner, without
+	// requiring another available slot or a promoter to sweep the suffix.
 	client.mu.Lock()
-	client.mu.waitActiveTxns = make([]*txnOperator, 5, 8)
-	copy(client.mu.waitActiveTxns, []*txnOperator{
-		firstCanceled, first, secondCanceled, second, third,
-	})
-	claimed := client.claimWaitActiveOpsLocked(2)
-	client.mu.Unlock()
-
-	require.Equal(t, []*txnOperator{first, second}, claimed)
-	require.Equal(t, []*txnOperator{third}, client.mu.waitActiveTxns)
-	require.Nil(t, client.mu.waitActiveTxns[:cap(client.mu.waitActiveTxns)][1])
-	require.Nil(t, client.mu.waitActiveTxns[:cap(client.mu.waitActiveTxns)][2])
-	require.Nil(t, client.mu.waitActiveTxns[:cap(client.mu.waitActiveTxns)][3])
-	require.Nil(t, client.mu.waitActiveTxns[:cap(client.mu.waitActiveTxns)][4])
+	defer client.mu.Unlock()
+	for _, limit := range []int{0, -1} {
+		require.Empty(t, client.claimWaitActiveOpsLocked(limit))
+		require.Equal(t, []*txnOperator{third, tailCanceled}, client.mu.waitActiveTxns.appendTo(nil))
+	}
+	require.True(t, client.mu.waitActiveTxns.remove(tailCanceled))
+	require.Equal(t, []*txnOperator{third}, client.mu.waitActiveTxns.appendTo(nil))
+	require.Nil(t, tailCanceled.reset.waiter.queue)
+	require.Nil(t, tailCanceled.reset.waiter.prev)
+	require.Nil(t, tailCanceled.reset.waiter.next)
 }
 
 func TestNewTxnAndReset(t *testing.T) {
@@ -1242,7 +1482,7 @@ func TestRestartTxnCanceledSnapshotReleasesAdmission(t *testing.T) {
 		require.Zero(t, client.atomic.activeTxnCount.Load())
 		client.mu.RLock()
 		require.Zero(t, client.mu.users)
-		require.Empty(t, client.mu.waitActiveTxns)
+		require.Zero(t, client.mu.waitActiveTxns.size)
 		client.mu.RUnlock()
 
 		// Failure closes the generation without poisoning operator reuse.
@@ -1281,14 +1521,14 @@ func TestRestartTxnCanceledMaxActiveWaitReleasesAdmission(t *testing.T) {
 		require.Eventually(t, func() bool {
 			client.mu.RLock()
 			defer client.mu.RUnlock()
-			return len(client.mu.waitActiveTxns) == 1
+			return client.mu.waitActiveTxns.size == 1
 		}, time.Second, time.Millisecond)
 		cancelRestart()
 		require.ErrorIs(t, <-errC, context.Canceled)
 
 		client.mu.RLock()
 		require.Equal(t, 1, client.mu.users)
-		require.Empty(t, client.mu.waitActiveTxns)
+		require.Zero(t, client.mu.waitActiveTxns.size)
 		client.mu.RUnlock()
 		require.Equal(t, int64(1), client.atomic.activeTxnCount.Load())
 
@@ -1662,7 +1902,7 @@ func TestTxnLimitWaitCancellationClosesUnadmittedRestart(t *testing.T) {
 	require.Zero(t, client.atomic.activeTxnCount.Load())
 	client.mu.RLock()
 	require.Zero(t, client.mu.users)
-	require.Empty(t, client.mu.waitActiveTxns)
+	require.Zero(t, client.mu.waitActiveTxns.size)
 	client.mu.RUnlock()
 
 	// The canceled, unadmitted generation is terminally closed and can be
@@ -1760,7 +2000,7 @@ func TestConcurrentOpenCloseTxn(t *testing.T) {
 			assert.Equal(t, int64(0), v.atomic.activeTxnCount.Load())
 			v.mu.RLock()
 			assert.Equal(t, 0, v.mu.users)
-			assert.Equal(t, 0, len(v.mu.waitActiveTxns))
+			assert.Equal(t, 0, v.mu.waitActiveTxns.size)
 			v.mu.RUnlock()
 		})
 }
@@ -1783,7 +2023,7 @@ func TestMaxActiveTxnWithWaitTimeout(t *testing.T) {
 			v := tc.(*txnClient)
 			v.mu.Lock()
 			defer v.mu.Unlock()
-			require.Equal(t, 0, len(v.mu.waitActiveTxns))
+			require.Equal(t, 0, v.mu.waitActiveTxns.size)
 		},
 		WithMaxActiveTxn(1),
 	)
@@ -1808,7 +2048,7 @@ func TestCloseUnblocksMaxActiveNew(t *testing.T) {
 			require.Eventually(t, func() bool {
 				client.mu.RLock()
 				defer client.mu.RUnlock()
-				return len(client.mu.waitActiveTxns) == 1
+				return client.mu.waitActiveTxns.size == 1
 			}, time.Second, time.Millisecond)
 
 			require.NoError(t, tc.Close())
@@ -1821,7 +2061,7 @@ func TestCloseUnblocksMaxActiveNew(t *testing.T) {
 
 			client.mu.RLock()
 			defer client.mu.RUnlock()
-			require.Empty(t, client.mu.waitActiveTxns)
+			require.Zero(t, client.mu.waitActiveTxns.size)
 		},
 		WithMaxActiveTxn(1),
 	)
@@ -1846,7 +2086,7 @@ func TestCloseUnblocksAllMaxActiveWaiters(t *testing.T) {
 			require.Eventually(t, func() bool {
 				client.mu.RLock()
 				defer client.mu.RUnlock()
-				return len(client.mu.waitActiveTxns) == waiters
+				return client.mu.waitActiveTxns.size == waiters
 			}, time.Second, time.Millisecond)
 
 			require.NoError(t, tc.Close())
@@ -1860,7 +2100,7 @@ func TestCloseUnblocksAllMaxActiveWaiters(t *testing.T) {
 			}
 			client.mu.RLock()
 			defer client.mu.RUnlock()
-			require.Empty(t, client.mu.waitActiveTxns)
+			require.Zero(t, client.mu.waitActiveTxns.size)
 		},
 		WithMaxActiveTxn(1),
 	)
@@ -1930,7 +2170,7 @@ func TestCloseCancelsAdmittedSnapshotWait(t *testing.T) {
 			client.mu.RLock()
 			defer client.mu.RUnlock()
 			require.Zero(t, client.mu.users)
-			require.Empty(t, client.mu.waitActiveTxns)
+			require.Zero(t, client.mu.waitActiveTxns.size)
 		},
 		WithTimestampWaiter(waiter),
 	)
@@ -1967,7 +2207,7 @@ func TestRequestCancelCleansAdmittedSnapshotWait(t *testing.T) {
 			client.mu.RLock()
 			defer client.mu.RUnlock()
 			require.Zero(t, client.mu.users)
-			require.Empty(t, client.mu.waitActiveTxns)
+			require.Zero(t, client.mu.waitActiveTxns.size)
 		},
 		WithTimestampWaiter(waiter),
 	)
@@ -2108,7 +2348,7 @@ func TestCanceledMaxActiveWaitRemovesQueueEntry(t *testing.T) {
 			require.Eventually(t, func() bool {
 				client.mu.RLock()
 				defer client.mu.RUnlock()
-				return len(client.mu.waitActiveTxns) == 1
+				return client.mu.waitActiveTxns.size == 1
 			}, time.Second, time.Millisecond)
 			cancel()
 
@@ -2122,7 +2362,7 @@ func TestCanceledMaxActiveWaitRemovesQueueEntry(t *testing.T) {
 			require.Eventually(t, func() bool {
 				client.mu.RLock()
 				defer client.mu.RUnlock()
-				return len(client.mu.waitActiveTxns) == 0
+				return client.mu.waitActiveTxns.size == 0
 			}, time.Second, time.Millisecond)
 		},
 		WithMaxActiveTxn(1),
@@ -2219,7 +2459,7 @@ func TestCanceledMaxActivePromotionReleasesOwnership(t *testing.T) {
 			require.Zero(t, client.atomic.activeTxnCount.Load())
 			client.mu.RLock()
 			require.Zero(t, client.mu.users)
-			require.Empty(t, client.mu.waitActiveTxns)
+			require.Zero(t, client.mu.waitActiveTxns.size)
 			client.mu.RUnlock()
 			_, exists := client.getActiveTxn(string(meta.ID))
 			require.False(t, exists)
@@ -2323,7 +2563,7 @@ func TestQueuedSnapshotFailureDuringPromotionReleasesOwnership(t *testing.T) {
 			require.Zero(t, client.atomic.activeTxnCount.Load())
 			client.mu.RLock()
 			require.Zero(t, client.mu.users)
-			require.Empty(t, client.mu.waitActiveTxns)
+			require.Zero(t, client.mu.waitActiveTxns.size)
 			client.mu.RUnlock()
 			_, exists := client.getActiveTxn(string(meta.ID))
 			require.False(t, exists)
@@ -2369,7 +2609,7 @@ func TestOpenTxnSkipReadyStillRejectsCanceledContext(t *testing.T) {
 	require.Zero(t, c.atomic.activeTxnCount.Load())
 	c.mu.RLock()
 	require.Zero(t, c.mu.users)
-	require.Empty(t, c.mu.waitActiveTxns)
+	require.Zero(t, c.mu.waitActiveTxns.size)
 	c.mu.RUnlock()
 }
 
@@ -2422,7 +2662,7 @@ func TestNewWithUpdateSnapshotTimeout(t *testing.T) {
 	assert.Error(t, err)
 	v := c.(*txnClient)
 	v.mu.Lock()
-	assert.Equal(t, 0, len(v.mu.waitActiveTxns))
+	assert.Equal(t, 0, v.mu.waitActiveTxns.size)
 	v.mu.Unlock()
 }
 
@@ -2826,4 +3066,106 @@ func benchmarkTxnClientNewRollbackParallel(b *testing.B, parallelism int) {
 		}
 	})
 	b.StopTimer()
+}
+
+// Canceled suffix creators retain their own cleanup even when a live FIFO head
+// is promoted before their ClosedEvent callbacks acquire queue ownership.
+func TestCanceledSuffixCleanupAfterPromotion(t *testing.T) {
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	c := NewTxnClient("", newTestTxnSender(), WithMaxActiveTxn(1), WithTimestampWaiter(immediateTimestampWaiter{})).(*txnClient)
+	c.Resume()
+	const tails = 4
+	release := make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(release) })
+	enteredClose := make(chan struct{}, tails)
+	originalClose := c.defaultEventCallbacks.closed[1].Func
+	c.defaultEventCallbacks.closed[1].Func = func(ctx context.Context, op TxnOperator, event TxnEvent, value any) error {
+		if errors.Is(event.Err, context.Canceled) {
+			enteredClose <- struct{}{}
+			<-release
+		}
+		return originalClose(ctx, op, event, value)
+	}
+	var wg sync.WaitGroup
+	cancels := make([]context.CancelFunc, 0, tails)
+	t.Cleanup(func() {
+		for _, cancel := range cancels {
+			cancel()
+		}
+		unblock()
+		_ = c.Close()
+		wg.Wait()
+	})
+	active, err := c.New(context.Background(), timestamp.Timestamp{}, WithUserTxn())
+	require.NoError(t, err)
+	type result struct {
+		op  TxnOperator
+		err error
+	}
+	queue := func(ctx context.Context) <-chan result {
+		ready := make(chan struct{})
+		done := make(chan result, 1)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			op, err := c.New(ctx, timestamp.Timestamp{}, WithUserTxn(), WithWaitActiveHandle(func() { close(ready) }))
+			done <- result{op, err}
+		}()
+		select {
+		case <-ready:
+		case <-time.After(10 * time.Second):
+			t.Fatal("New did not queue")
+		}
+		return done
+	}
+	head := queue(context.Background())
+	results := make([]<-chan result, 0, tails)
+	for range tails {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancels = append(cancels, cancel)
+		results = append(results, queue(ctx))
+	}
+	for _, cancel := range cancels {
+		cancel()
+	}
+	for range tails {
+		select {
+		case <-enteredClose:
+		case <-time.After(10 * time.Second):
+			t.Fatal("cancellation did not reach ClosedEvent owner")
+		}
+	}
+	require.NoError(t, active.Rollback(context.Background()))
+	var next TxnOperator
+	select {
+	case r := <-head:
+		require.NoError(t, r.err)
+		next = r.op
+	case <-time.After(10 * time.Second):
+		t.Fatal("live head not promoted")
+	}
+	c.mu.RLock()
+	retained := c.mu.waitActiveTxns.size
+	c.mu.RUnlock()
+	t.Cleanup(func() { _ = next.Rollback(context.Background()) })
+	require.Equal(t, tails, retained, "all canceled suffix owners survive the new prefix-only promotion")
+	unblock()
+	for _, done := range results {
+		select {
+		case r := <-done:
+			require.ErrorIs(t, r.err, context.Canceled)
+		case <-time.After(10 * time.Second):
+			t.Fatal("creator did not finish cleanup")
+		}
+	}
+	c.mu.RLock()
+	retained = c.mu.waitActiveTxns.size
+	c.mu.RUnlock()
+	require.Zero(t, retained)
+	require.NoError(t, next.Rollback(context.Background()))
+	require.Zero(t, c.atomic.activeTxnCount.Load())
+	c.mu.RLock()
+	users := c.mu.users
+	c.mu.RUnlock()
+	require.Zero(t, users, "all user admission reservations were released")
 }

@@ -1435,10 +1435,11 @@ func TestInitExecuteStmtParamDirectResultSpecializationUsesBoundedCache(t *testi
 
 	var metadataTypes []plan.Type
 	writer := execCtx.resper.MysqlRrWr().(*testMysqlWriter)
-	writer.makeColumnDefDataFunc = func(_ context.Context, columns []*plan.ColDef) ([][]byte, error) {
+	protocol := &MysqlProtocolImpl{io: gIO}
+	writer.makeColumnDefDataFunc = func(ctx context.Context, columns []*plan.ColDef) ([][]byte, error) {
 		require.Len(t, columns, 1)
 		metadataTypes = append(metadataTypes, columns[0].Typ)
-		return [][]byte{[]byte(fmt.Sprintf("%d:%d:%d", columns[0].Typ.Id, columns[0].Typ.Width, columns[0].Typ.Scale))}, nil
+		return protocol.MakeColumnDefData(ctx, columns, directIntegerResultLengths(prepareStmt.PrepareStmt, columns)...)
 	}
 
 	install := func(value string, mysqlType defines.MysqlType, isNull bool) {
@@ -1473,6 +1474,12 @@ func TestInitExecuteStmtParamDirectResultSpecializationUsesBoundedCache(t *testi
 	require.NoError(t, err)
 	require.Same(t, runtimeCompile, retComp)
 	require.Same(t, runtimePlan, reusedPlan)
+	require.Len(t, metadataTypes, 1, "an admitted generation must reuse its result metadata")
+	require.Equal(t, prepareStmt.runtimeColDefData, execCtx.prepareColDef)
+	freshColumns := getPreparedResultColumnsForWithGroupConcatMaxLen(prepareStmt.PrepareStmt, reusedPlan, false, prepareStmt.groupConcatMaxLenFloor)
+	freshMetadata, metadataErr := protocol.MakeColumnDefData(execCtx.reqCtx, freshColumns, directIntegerResultLengths(prepareStmt.PrepareStmt, freshColumns)...)
+	require.NoError(t, metadataErr)
+	require.Equal(t, freshMetadata, execCtx.prepareColDef, "cached payload must match the uncached protocol builder")
 
 	executor, err := colexec.NewExpressionExecutor(cw.proc, resultExpr(reusedPlan))
 	require.NoError(t, err)
@@ -1486,6 +1493,20 @@ func TestInitExecuteStmtParamDirectResultSpecializationUsesBoundedCache(t *testi
 		"cached direct-result plan must read the current parameter value")
 
 	decimalText := "-12345678901234567890.123456789"
+	install(decimalText, defines.MYSQL_TYPE_NEWDECIMAL, false)
+	metadataFactory := writer.makeColumnDefDataFunc
+	writer.makeColumnDefDataFunc = func(context.Context, []*plan.ColDef) ([][]byte, error) {
+		return nil, assert.AnError
+	}
+	oldMetadata := prepareStmt.runtimeColDefData
+	_, _, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.ErrorIs(t, err, assert.AnError)
+	require.Same(t, runtimePlan, prepareStmt.runtimePlan)
+	require.Same(t, runtimeCompile, prepareStmt.runtimeCompile)
+	require.Equal(t, oldMetadata, prepareStmt.runtimeColDefData)
+	require.Nil(t, cw.runtimeCacheColDefData)
+	cw.discardRuntimeCacheCandidate()
+	writer.makeColumnDefDataFunc = metadataFactory
 	install(decimalText, defines.MYSQL_TYPE_NEWDECIMAL, false)
 	retComp, decimalPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
@@ -2906,6 +2927,7 @@ func TestBinaryDecimalIntegerConsumerSpecializesAndReusesSemanticCategory(t *tes
 	require.Nil(t, retComp)
 	require.NotSame(t, manualPlan, firstPlan)
 	require.Empty(t, prepareStmt.runtimeSpecializationKey)
+	require.Nil(t, prepareStmt.runtimeColDefData)
 	require.Nil(t, prepareStmt.runtimePlan)
 	require.Same(t, firstPlan, cw.runtimeCachePlan)
 	require.NotNil(t, cw.paramVals)
@@ -3824,6 +3846,9 @@ func BenchmarkPreparedNarrowingCacheAdmission(b *testing.B) {
 		name, sql string
 		mysqlType defines.MysqlType
 	}{
+		{"point_select_LONG", "select n_name from nation where n_nationkey=?", defines.MYSQL_TYPE_LONG},
+		{"point_select_LONGLONG", "select n_name from nation where n_nationkey=?", defines.MYSQL_TYPE_LONGLONG},
+		{"direct_result", "select ?", defines.MYSQL_TYPE_LONG},
 		{"same_width", "update nation set n_regionkey=1 where n_nationkey=?", defines.MYSQL_TYPE_LONG},
 		{"guarded_narrowing", "update nation set n_regionkey=1 where n_nationkey=?", defines.MYSQL_TYPE_LONGLONG},
 		{"IN_same_width", "select n_name from nation where n_nationkey in (?,?)", defines.MYSQL_TYPE_LONG},
@@ -3838,6 +3863,13 @@ func BenchmarkPreparedNarrowingCacheAdmission(b *testing.B) {
 				cw.proc.SetPrepareParams(nil)
 				prepared.Close()
 			})
+			if strings.HasPrefix(tc.name, "point_select") {
+				writer := ses.GetResponser().MysqlRrWr().(*testMysqlWriter)
+				protocol := &MysqlProtocolImpl{io: gIO}
+				writer.makeColumnDefDataFunc = func(ctx context.Context, cols []*plan.ColDef) ([][]byte, error) {
+					return protocol.MakeColumnDefData(ctx, cols)
+				}
+			}
 			prepared.params = vector.NewVec(types.T_text.ToType())
 			for range strings.Count(tc.sql, "?") {
 				require.NoError(b, vector.AppendBytes(prepared.params, []byte("7"), false, cw.proc.Mp()))
@@ -4163,6 +4195,46 @@ func TestCOMStmtCharRuntimeCacheReusesTextSourceAcrossSignedness(t *testing.T) {
 	}
 }
 
+func TestPreparedExecutionBindingKeyPreservesIdentity(t *testing.T) {
+	bindings := []plan2.PreparedSourceBinding{
+		{Position: 0, Type: types.T_int32.ToType(), NumericType: types.New(types.T_decimal128, 38, 9)},
+		{Position: 12, Type: types.New(types.T_varchar, 123, -1), BitCountType: types.T_uint64.ToType()},
+	}
+	bindings[1].Type.Charset = 255
+	for flags := range 32 {
+		param := plan2.ParamValue{
+			Value: "17", PrepareParamKind: vector.PrepareParamInteger,
+			IsBinaryProtocol: flags&1 != 0, IsBin: flags&2 != 0,
+			IsBinaryString: flags&4 != 0, EnableNumericPrefix: flags&8 != 0,
+			RuntimeStringDomain: types.RuntimeStringDomain(flags % 3),
+		}
+		if flags&16 != 0 {
+			param.Value = nil
+		}
+		values := []any{param, "ordinary value"}
+		// The legacy framing is a compatibility oracle independent of the new encoder.
+		var expected strings.Builder
+		for i, binding := range bindings {
+			fmt.Fprintf(&expected, "%d;", binding.Position)
+			for _, typ := range []types.Type{binding.Type, binding.NumericType, binding.BitCountType} {
+				fmt.Fprintf(&expected, "%d:%d:%d:%d;", typ.Oid, typ.Charset, typ.Width, typ.Scale)
+			}
+			if p, ok := values[i].(plan2.ParamValue); ok {
+				fmt.Fprintf(&expected, "%d:%t:%t:%t:%d:%t:%t;", p.PrepareParamKind,
+					p.IsBinaryProtocol, p.IsBin, p.IsBinaryString, p.RuntimeStringDomain,
+					p.EnableNumericPrefix, p.Value == nil)
+			}
+		}
+		key := preparedExecutionBindingKey(bindings, values)
+		require.Equal(t, expected.String(), key)
+		if param.Value != nil {
+			param.Value = "18"
+			values[0] = param
+			require.Equal(t, key, preparedExecutionBindingKey(bindings, values), "values do not identify a generation")
+		}
+	}
+}
+
 func TestRuntimeSpecializationReplacementCommitsOnlyAfterCompileSuccess(t *testing.T) {
 	_, prepareStmt, cw, _ := newPreparedExecuteEnvForSQL(t, 208, "select ?")
 	defer prepareStmt.Close()
@@ -4171,9 +4243,10 @@ func TestRuntimeSpecializationReplacementCommitsOnlyAfterCompileSuccess(t *testi
 	oldCompile := compile.NewCompile(
 		"", "", prepareStmt.Sql, "", "", nil,
 		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	oldMetadata := [][]byte{[]byte("old column payload")}
 	oldDiagnostics := []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_int32)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}}
-	prepareStmt.installRuntimeSpecializationCache("old", oldPlan, oldCompile, oldDiagnostics)
-	require.Nil(t, prepareStmt.installRuntimeSpecializationCache("old", oldPlan, oldCompile, oldDiagnostics),
+	prepareStmt.installRuntimeSpecializationCache("old", oldPlan, oldCompile, oldDiagnostics, oldMetadata)
+	require.Nil(t, prepareStmt.installRuntimeSpecializationCache("old", oldPlan, oldCompile, oldDiagnostics, oldMetadata),
 		"reinstalling the live compile must not retire it")
 
 	for _, compileErr := range []error{assert.AnError, context.Canceled} {
@@ -4181,11 +4254,14 @@ func TestRuntimeSpecializationReplacementCommitsOnlyAfterCompileSuccess(t *testi
 		cw.runtimeCacheTarget = prepareStmt
 		cw.runtimeCacheKey = "failed"
 		cw.runtimeCachePlan = failedPlan
+		cw.runtimeCacheColDefData = [][]byte{[]byte("unpublished payload")}
 		require.False(t, cw.completeRuntimeCacheCandidate(nil, compileErr))
 		require.Equal(t, "old", prepareStmt.runtimeSpecializationKey)
 		require.Same(t, oldPlan, prepareStmt.runtimePlan)
 		require.Same(t, oldCompile, prepareStmt.runtimeCompile)
 		require.Same(t, oldDiagnostics[0], prepareStmt.runtimeDiagnosticCandidates[0])
+		require.Equal(t, oldMetadata, prepareStmt.runtimeColDefData)
+		require.Nil(t, cw.runtimeCacheColDefData)
 		require.Nil(t, cw.runtimeCacheTarget)
 		require.Nil(t, cw.runtimeCachePlan)
 
@@ -4200,10 +4276,14 @@ func TestRuntimeSpecializationReplacementCommitsOnlyAfterCompileSuccess(t *testi
 	cw.runtimeCacheTarget = prepareStmt
 	cw.runtimeCacheKey = "new"
 	cw.runtimeCachePlan = newPlan
+	newMetadata := [][]byte{[]byte("new column payload")}
+	cw.runtimeCacheColDefData = newMetadata
 	require.True(t, cw.completeRuntimeCacheCandidate(newCompile, nil))
 	require.Equal(t, "new", prepareStmt.runtimeSpecializationKey)
 	require.Same(t, newPlan, prepareStmt.runtimePlan)
 	require.Same(t, newCompile, prepareStmt.runtimeCompile)
+	require.Equal(t, newMetadata, prepareStmt.runtimeColDefData)
+	require.Nil(t, cw.runtimeCacheColDefData)
 	require.Nil(t, cw.runtimeCacheTarget)
 	require.Nil(t, cw.runtimeCachePlan)
 	require.Same(t, newMessageBoard, cw.proc.GetMessageBoard(),

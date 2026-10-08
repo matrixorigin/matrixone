@@ -96,6 +96,7 @@ type TxnComputationWrapper struct {
 	runtimeCacheKey             string
 	runtimeCachePlan            *plan.Plan
 	runtimeCacheDiagnostics     []*plan.Expr
+	runtimeCacheColDefData      [][]byte
 	runtimeCacheRetiredCompiles []retiredRuntimeCompile
 
 	explainBuffer *bytes.Buffer
@@ -1319,10 +1320,11 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 	}
 	previousGroupConcatMaxLenFloor := prepareStmt.groupConcatMaxLenFloor
-	currentNativeMode := owner.sqlModeHasMatrixOneNative()
-	currentOnlyFullGroupBy := owner.sqlModeHasOnlyFullGroupBy()
-	currentBoolSumAvg := owner.sqlModeHasEnableBoolSumAvg()
-	currentNoUnsignedSubtraction := owner.sqlModeHasNoUnsignedSubtraction()
+	currentSQLMode := sessionSQLMode(owner)
+	currentNativeMode := mysql.HasMatrixOneNativeSQLMode(currentSQLMode)
+	currentOnlyFullGroupBy := mysql.HasSQLMode(currentSQLMode, "ONLY_FULL_GROUP_BY")
+	currentBoolSumAvg := mysql.HasEnableBoolSumAvgSQLMode(currentSQLMode)
+	currentNoUnsignedSubtraction := mysql.HasSQLMode(currentSQLMode, "NO_UNSIGNED_SUBTRACTION")
 	currentDivPrecisionIncrement := owner.currentDivPrecisionIncrement()
 	reqCtx = function.WithNoUnsignedSubtraction(reqCtx, currentNoUnsignedSubtraction)
 	reqCtx = function.WithDivPrecisionIncrement(reqCtx, int32(currentDivPrecisionIncrement))
@@ -1730,6 +1732,7 @@ func initExecuteStmtParamWithResolverInSession(
 	pendingFieldCaseDomains := prepareStmt.fieldCaseDomains
 	pendingFieldCaseRevision := prepareStmt.fieldCaseRevision
 	var cachedRuntimeCompile *compile.Compile
+	var runtimeColDefData [][]byte
 	if sourceBindingQuery {
 		prepareStmt.rememberBitCountSourceTypes(cwft.paramVals)
 		cwft.paramBindings, err = preparedExecutionBindings(reqCtx, cwft.paramVals, prepareStmt.ParamTypes, prepareStmt.bitCountNumericParamTypes)
@@ -1755,6 +1758,9 @@ func initExecuteStmtParamWithResolverInSession(
 				cachedRuntimeCompile = prepareStmt.runtimeCompile
 				cwft.preparedJoinDiagnosticFree = true
 				runtimePlanApplied = true
+				if binaryExecute && !hasPreparedGroupConcat {
+					runtimeColDefData = prepareStmt.runtimeColDefData
+				}
 			}
 		}
 		if !runtimePlanApplied {
@@ -1827,7 +1833,7 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 		runtimePlanApplied = true
 	}
-	if binaryExecute && runtimePlanApplied {
+	if binaryExecute && runtimePlanApplied && runtimeColDefData == nil {
 		columns := getPreparedResultColumnsForWithGroupConcatMaxLen(
 			prepareStmt.PrepareStmt, executionPlan, sessionTxnHaveDDL(executionSes),
 			groupConcatMaxLenFloor)
@@ -1839,7 +1845,13 @@ func initExecuteStmtParamWithResolverInSession(
 		if metadataErr != nil {
 			return nil, nil, nil, originSQL, false, metadataErr
 		}
-		execCtx.prepareColDef = colDefData
+		runtimeColDefData = colDefData
+		if cwft.runtimeCacheTarget != nil && !hasPreparedGroupConcat {
+			cwft.runtimeCacheColDefData = colDefData
+		}
+	}
+	if binaryExecute && runtimePlanApplied {
+		execCtx.prepareColDef = runtimeColDefData
 	}
 
 	// A cached prepared Compile already owns a materialized worker topology.
@@ -1905,6 +1917,7 @@ func (cwft *TxnComputationWrapper) discardRuntimeCacheCandidate() {
 	cwft.runtimeCacheKey = ""
 	cwft.runtimeCachePlan = nil
 	cwft.runtimeCacheDiagnostics = nil
+	cwft.runtimeCacheColDefData = nil
 }
 
 func (cwft *TxnComputationWrapper) completeRuntimeCacheCandidate(
@@ -1924,7 +1937,7 @@ func (cwft *TxnComputationWrapper) installRuntimeCacheCandidate(runtimeCompile *
 		return false
 	}
 	retiredCompile := cwft.runtimeCacheTarget.installRuntimeSpecializationCache(
-		cwft.runtimeCacheKey, cwft.runtimeCachePlan, runtimeCompile, cwft.runtimeCacheDiagnostics)
+		cwft.runtimeCacheKey, cwft.runtimeCachePlan, runtimeCompile, cwft.runtimeCacheDiagnostics, cwft.runtimeCacheColDefData)
 	if retiredCompile != nil {
 		// NewCompile has already installed runtimeCompile's execution state on the
 		// shared session Process. Releasing the displaced compile here would call

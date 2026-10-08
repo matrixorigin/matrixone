@@ -166,7 +166,7 @@ func TestNewOrderJSONUsesSQLComparison(t *testing.T) {
 
 func TestJSONOrderMetadataAndCopy(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	source := vector.NewVec(types.T_json.ToType())
 	destination := vector.NewVec(types.T_json.ToType())
 	value := vector.NewVec(types.T_json.ToType())
@@ -250,7 +250,7 @@ func TestCopyGrowsAccountedRowMetadata(t *testing.T) {
 		for _, metadata := range []string{"null", "const-null", "grouping"} {
 			t.Run(tc.name+"/"+metadata, func(t *testing.T) {
 				mp := mpool.MustNewZero()
-				proc := testutil.NewProcessWithMPool(t, "", mp)
+				proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 				registry, err := mpool.NewAllocationAccountRegistry(1, 16)
 				require.NoError(t, err)
 				account, err := registry.Open(1 << 20)
@@ -299,7 +299,7 @@ func TestCopyGrowsAccountedRowMetadata(t *testing.T) {
 
 func TestCopyAccountedNullAdmissionFailure(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 1)
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
