@@ -1256,7 +1256,7 @@ func TestPreparedExecutionPlanMathPrecisionUsesSourceProvenance(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select ceil(12.34, ?)", 1)
 			require.NoError(t, err)
 			defer stmt.Free()
@@ -1351,7 +1351,7 @@ func TestPreparedExecutionPlanRoundTextUsesExactTextDomain(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select round(?, ?)", 2)
 			require.NoError(t, err)
 			defer stmt.Free()
@@ -1388,7 +1388,7 @@ func TestPreparedExecutionPlanRoundTextUsesExactTextDomain(t *testing.T) {
 }
 
 func TestPreparedExecutionPlanRoundScalarBinaryTextKeepsFallbackDomain(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select round((select ?), 0)", 1)
 	require.NoError(t, err)
 	defer stmt.Free()
