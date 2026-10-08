@@ -439,7 +439,7 @@ func TestMaybeUpgradeTenantDoesNotCacheUncommittedOrFailedChecks(t *testing.T) {
 					}
 				}, txnOp)
 				b := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0),
-					nil, exec, func(s *service) { s.initUpgrade() })
+					nil, exec, initStatisticsUpgradeThroughV4011)
 				defer b.stopper.Stop()
 				for range 2 {
 					var txnOp client.TxnOperator
@@ -466,6 +466,21 @@ func TestMaybeUpgradeTenantDoesNotCacheUncommittedOrFailedChecks(t *testing.T) {
 	}
 }
 
+// These tests exercise the tenant-compensation state machine against the
+// historical statistics-upgrade contract. Keep the synthetic service at the
+// last pre-routine-catalog version so their SQL fixtures do not silently grow
+// unrelated 4.0.12 catalog mutations.
+func initStatisticsUpgradeThroughV4011(s *service) {
+	s.handles = append(s.handles,
+		v4_0_6.Handler,
+		v4_0_7.Handler,
+		v4_0_8.Handler,
+		v4_0_9.Handler,
+		v4_0_10.Handler,
+		v4_0_11.Handler,
+	)
+}
+
 func TestMaybeUpgradeTenantRechecksVersionUnderLock(t *testing.T) {
 	runtime.RunTest("", func(runtime.Runtime) {
 		final := statisticsFinalUpgradeVersion()
@@ -485,7 +500,7 @@ func TestMaybeUpgradeTenantRechecksVersionUnderLock(t *testing.T) {
 			}
 		})
 		b := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0),
-			nil, exec, func(s *service) { s.initUpgrade() })
+			nil, exec, initStatisticsUpgradeThroughV4011)
 		defer b.stopper.Stop()
 		upgraded, err := b.MaybeUpgradeTenant(t.Context(),
 			func() (int32, string, error) { return 11, final.Version, nil }, nil)
@@ -513,7 +528,7 @@ func TestMaybeUpgradeTenantWaitHonorsCancellation(t *testing.T) {
 			}
 		})
 		b := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0),
-			nil, exec, func(s *service) { s.initUpgrade() })
+			nil, exec, initStatisticsUpgradeThroughV4011)
 		defer b.stopper.Stop()
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
@@ -555,7 +570,7 @@ func TestMaybeUpgradeTenantRejectsConcurrentAccountDeletion(t *testing.T) {
 						}
 					})}
 				b := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0),
-					nil, exec, func(s *service) { s.initUpgrade() })
+					nil, exec, initStatisticsUpgradeThroughV4011)
 				defer b.stopper.Stop()
 				fetch := func() (int32, string, error) {
 					authenticated = true

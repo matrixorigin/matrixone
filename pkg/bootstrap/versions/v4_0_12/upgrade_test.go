@@ -45,6 +45,27 @@ func TestPythonRevisionRepairUpgradePath(t *testing.T) {
 	require.Len(t, v4_0_7.PythonRevisionUpgradeEntries(), 9)
 }
 
+func TestPythonRevisionRepairRejectsOldProtocolBeforeCatalogAccess(t *testing.T) {
+	for _, response := range []string{
+		`{"result":"cn-a:106"}`,
+		`{"result":"cn-a:107,cn-b:106"}`,
+		`{"result":""}`,
+		`invalid`,
+	} {
+		t.Run(response, func(t *testing.T) {
+			var statements []string
+			txn := executor.NewMemTxnExecutor(func(statement string) (executor.Result, error) {
+				statements = append(statements, statement)
+				require.Equal(t, "SELECT mo_ctl('cn', 'GetProtocolVersion', '')", statement)
+				return repairStringResult(t, response), nil
+			}, nil)
+			err := Handler.HandleTenantUpgrade(context.Background(), 7, txn)
+			require.ErrorContains(t, err, "upgrade requires all CNs to support protocol version 107")
+			require.Equal(t, []string{"SELECT mo_ctl('cn', 'GetProtocolVersion', '')"}, statements)
+		})
+	}
+}
+
 func TestPythonRevisionRepairIsIdempotentForCatalogStates(t *testing.T) {
 	for _, test := range []struct {
 		name          string
