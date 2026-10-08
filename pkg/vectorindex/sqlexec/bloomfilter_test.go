@@ -18,7 +18,6 @@ import (
 	"context"
 	"math"
 	"testing"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -154,22 +153,9 @@ func TestWaitUniqueJoinKeysForTableFunction(t *testing.T) {
 
 		ctx, cancel := context.WithCancel(context.Background())
 		testProc.Ctx = ctx
-
-		go func() {
-			time.Sleep(100 * time.Millisecond)
-			cancel()
-		}()
-
-		done := make(chan bool)
-		var result []byte
-		var err error
-		go func() {
-			result, err = WaitUniqueJoinKeys(sqlproc)
-			done <- true
-		}()
-
-		<-done
 		cancel()
+
+		result, err := WaitUniqueJoinKeys(sqlproc)
 
 		require.NoError(t, err)
 		require.Nil(t, result)
