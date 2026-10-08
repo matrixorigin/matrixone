@@ -4269,6 +4269,10 @@ func TestPreparedCastLifecycle(t *testing.T) {
 
 		t.Run("owned constant warning multiplicity", func(t *testing.T) {
 			checkExpressionStorageAfterCleanup(t, proc)
+			info := proc.GetSessionInfo()
+			previousCompatibilityMode := info.MySQLNumericCompatibilityMode
+			info.MySQLNumericCompatibilityMode = true
+			defer func() { info.MySQLNumericCompatibilityMode = previousCompatibilityMode }()
 			sessionBefore := proc.Session
 			t.Cleanup(func() { proc.Session = sessionBefore })
 			warnings := &preparedCastWarningSession{}
@@ -4352,6 +4356,10 @@ func TestPreparedCastLifecycle(t *testing.T) {
 			t.Run(test.name, func(t *testing.T) {
 
 				checkExpressionStorageAfterCleanup(t, proc)
+				info := proc.GetSessionInfo()
+				previousCompatibilityMode := info.MySQLNumericCompatibilityMode
+				info.MySQLNumericCompatibilityMode = true
+				defer func() { info.MySQLNumericCompatibilityMode = previousCompatibilityMode }()
 				sessionBefore := proc.Session
 				t.Cleanup(func() { proc.Session = sessionBefore })
 				session := &preparedCastWarningSession{}
@@ -4419,122 +4427,6 @@ func (*preparedCastWarningSession) RemoveTempTableByRealName(string)           {
 func (*preparedCastWarningSession) GetSqlModeNoAutoValueOnZero() (bool, bool)  { return false, false }
 func (s *preparedCastWarningSession) AppendWarningDiagnostic(uint16, string) {
 	s.warningCount++
-}
-
-func TestConstantStringNumericCastWarningRunsOnceWhenSelected(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
-	proc.SetBaseProcessRunningStatus(true)
-	proc.GetSessionInfo().MySQLNumericCompatibilityMode = true
-	warnings := &preparedCastWarningSession{}
-	proc.Session = warnings
-	sourceType, targetType := types.T_text.ToType(), types.T_float64.ToType()
-	fn, err := function.GetFunctionByName(proc.Ctx, "cast", []types.Type{sourceType, targetType})
-	require.NoError(t, err)
-	expr := &plan.Expr{Typ: plan.Type{Id: int32(types.T_float64)}, Expr: &plan.Expr_F{F: &plan.Function{
-		Func: &plan.ObjectRef{Obj: fn.GetEncodedOverloadID(), ObjName: "cast"},
-		Args: []*plan.Expr{
-			{Typ: plan.Type{Id: int32(types.T_text)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "12suffix"}}}},
-			{Typ: plan.Type{Id: int32(types.T_float64)}, Expr: &plan.Expr_T{T: &plan.TargetType{}}},
-		},
-	}}}
-	executors, err := NewOwnedConstantFilterExecutors(proc, []*plan.Expr{expr})
-	require.NoError(t, err)
-	executor := executors[0]
-	defer executor.Free()
-	input := batch.New(nil)
-	input.SetRowCount(4)
-	result, err := executor.Eval(proc, []*batch.Batch{input}, []bool{false, false, false, false})
-	require.NoError(t, err)
-	require.Equal(t, 4, result.Length())
-	require.Zero(t, warnings.warningCount)
-
-	result, err = executor.Eval(proc, []*batch.Batch{input}, []bool{true, false, true, false})
-	require.NoError(t, err)
-	require.True(t, result.IsConst())
-	require.Equal(t, 1, warnings.warningCount)
-	_, err = executor.Eval(proc, []*batch.Batch{input}, nil)
-	require.NoError(t, err)
-	require.Equal(t, 1, warnings.warningCount)
-
-	executor.ResetForNextQuery()
-	_, err = executor.Eval(proc, []*batch.Batch{input}, nil)
-	require.NoError(t, err)
-	require.Equal(t, 2, warnings.warningCount)
-
-	defaultExecutor, err := NewExpressionExecutor(proc, expr)
-	require.NoError(t, err)
-	defer defaultExecutor.Free()
-	_, err = defaultExecutor.Eval(proc, []*batch.Batch{input}, nil)
-	require.NoError(t, err)
-	require.Equal(t, 6, warnings.warningCount, "ordinary expressions retain four row diagnostics")
-}
-
-func TestPreparedStringNumericCastWarningsAcrossReuse(t *testing.T) {
-	selectedRows := []bool{true, false, true, false}
-	tests := []struct {
-		name     string
-		first    string
-		kind     vector.PrepareParamKind
-		last     string
-		lastKind vector.PrepareParamKind
-	}{
-		{name: "integer then ordinary text", first: "7", kind: vector.PrepareParamInteger, last: "12abc", lastKind: vector.PrepareParamNone},
-		{name: "ordinary text then integer", first: "12abc", kind: vector.PrepareParamNone, last: "7", lastKind: vector.PrepareParamInteger},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			proc := testutil.NewProcess(t)
-			proc.GetSessionInfo().MySQLNumericCompatibilityMode = true
-			defer proc.Free()
-			proc.SetBaseProcessRunningStatus(true)
-			session := &preparedCastWarningSession{}
-			proc.Session = session
-			executor := newPreparedStringNumericCastExecutor(t, proc, types.T_float64.ToType())
-			defer executor.Free()
-
-			eval := func(value string, kind vector.PrepareParamKind) *vector.Vector {
-				t.Helper()
-				params := vector.NewVec(types.T_text.ToType())
-				require.NoError(t, vector.AppendBytes(params, []byte(value), false, proc.Mp()))
-				proc.SetPrepareParamsWithMeta(params, nil, []vector.PrepareParamKind{kind})
-				defer func() {
-					proc.SetPrepareParams(nil)
-					params.Free(proc.Mp())
-				}()
-
-				input := batch.New(nil)
-				input.SetRowCount(len(selectedRows))
-				result, err := executor.Eval(proc, []*batch.Batch{input}, selectedRows)
-				require.NoError(t, err)
-				require.Equal(t, len(selectedRows), result.Length())
-				return result
-			}
-
-			result := eval(test.first, test.kind)
-			if test.kind == vector.PrepareParamInteger {
-				require.True(t, executor.folded.canFold)
-				require.True(t, result.IsConst())
-				require.Zero(t, session.warningCount)
-			} else {
-				require.False(t, executor.folded.canFold)
-				require.False(t, result.IsConst())
-				require.Equal(t, 2, session.warningCount)
-			}
-
-			executor.ResetForNextQuery()
-			result = eval(test.last, test.lastKind)
-			if test.lastKind == vector.PrepareParamInteger {
-				require.True(t, executor.folded.canFold)
-				require.True(t, result.IsConst())
-			} else {
-				require.False(t, executor.folded.canFold)
-				require.False(t, result.IsConst())
-			}
-			require.Equal(t, 2, session.warningCount)
-		})
-	}
 }
 
 func TestParamExpressionExecutorDoesNotCacheLookupFailure(t *testing.T) {
