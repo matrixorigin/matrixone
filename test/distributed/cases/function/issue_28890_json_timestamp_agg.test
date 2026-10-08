@@ -12,7 +12,7 @@ set time_zone = '+00:00';
 create table t (k varchar(16), ts timestamp(6));
 insert into t values ('a', '2024-02-29 04:34:56.123456');
 set time_zone = '+08:00';
-select ts,
+select cast(ts as char) ts,
        json_unquote(json_extract(json_object('ts', ts), '$.ts')) scalar_json,
        json_unquote(json_extract(json_arrayagg(ts), '$[0]')) array_agg,
        json_unquote(json_extract(json_objectagg(k, ts), '$.a')) object_agg
