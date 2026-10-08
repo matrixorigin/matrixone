@@ -72,7 +72,9 @@ func TestIssue28582PreparedNumericCastKeepsRuntimeKind(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer binaryStmt.Close()
+		defer func() {
+			_ = binaryStmt.Close()
+		}()
 		for _, test := range []struct {
 			name         string
 			value        float64
