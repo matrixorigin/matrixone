@@ -306,6 +306,39 @@ func TestFunctionalCompositeIndexLifecycle(t *testing.T) {
 				require.Contains(t, strings.Join(lines, "\n"), "Index Table Scan on t."+check.index)
 			}()
 		}
+		// Replacing a functional index under the same name in one COPY ALTER
+		// must rebuild the hidden index table rather than clone the old keys.
+		exec("create table replaced_same(id int primary key, v int, index ix ((v+1)))")
+		exec("insert into replaced_same values(1,10),(2,20)")
+		exec("alter table replaced_same drop index ix, add index ix ((v+2))")
+		count("select count(*) from replaced_same force index(ix) where v+2=12", 1)
+		count("select count(*) from replaced_same ignore index(ix) where v+2=12", 1)
+		func() {
+			rows, e := conn.QueryContext(ctx, "explain select id from replaced_same force index(ix) where v+2=12")
+			require.NoError(t, e)
+			defer rows.Close()
+			var lines []string
+			for rows.Next() {
+				var line string
+				require.NoError(t, rows.Scan(&line))
+				lines = append(lines, line)
+			}
+			require.NoError(t, rows.Err())
+			require.Contains(t, strings.Join(lines, "\n"), "Index Table Scan on replaced_same.ix")
+		}()
+		// Different-name replacement remains a control for the normal rebuild
+		// path, and an unchanged same-name expression remains a control for
+		// preserving the existing index contents.
+		exec("create table replaced_different(id int primary key, v int, index ix ((v+1)))")
+		exec("insert into replaced_different values(1,10),(2,20)")
+		exec("alter table replaced_different drop index ix, add index ix_new ((v+2))")
+		count("select count(*) from replaced_different force index(ix_new) where v+2=12", 1)
+		count("select count(*) from replaced_different ignore index(ix_new) where v+2=12", 1)
+		exec("create table replaced_unchanged(id int primary key, v int, index ix ((v+1)))")
+		exec("insert into replaced_unchanged values(1,10),(2,20)")
+		exec("alter table replaced_unchanged drop index ix, add index ix ((v+1))")
+		count("select count(*) from replaced_unchanged force index(ix) where v+1=11", 1)
+		count("select count(*) from replaced_unchanged ignore index(ix) where v+1=11", 1)
 		count("select count(*) from information_schema.statistics where table_schema='functional_index_multi' and table_name='t' and column_name is null and expression is not null", 6)
 		exec("begin")
 		exec("update t set name='different',tenant=9 where id=1")

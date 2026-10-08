@@ -316,6 +316,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 
 		affectedCols             = make([]string, 0, len(tableDef.Cols))
 		affectedIndexes          = make([]string, 0, len(tableDef.Indexes))
+		rebuildIndexNames        = make(map[string]struct{})
 		pendingAddIndexes        = make([]tree.TableDef, 0)
 		generatedDependencySeeds = make(map[string]struct{})
 		pendingForeignKeys       = make([]*tree.ForeignKey, 0)
@@ -369,6 +370,11 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 					if len(cols) == 0 {
 						return nil, moerr.NewNotSupported(ctx, "combined COPY DROP INDEX requires a functional index")
 					}
+					// A same-statement DROP/ADD can reuse the index name while
+					// changing its key expression. The replacement must be rebuilt
+					// from base rows; cloning the old hidden index table by name
+					// would retain stale keys from the dropped definition.
+					rebuildIndexNames[indexNameKey(index.IndexName)] = struct{}{}
 					copyTableDef.Indexes = append(copyTableDef.Indexes[:i], copyTableDef.Indexes[i+1:]...)
 					for _, col := range cols {
 						if err = handleDropColumnPosition(ctx, copyTableDef, col); err != nil {
@@ -570,6 +576,16 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 			if slices.Index(affectedCols, idxCol.IndexName) == -1 {
 				opt.SkipIndexesCopy[idxCol.IndexName] = true
 			}
+		}
+	}
+	// DROP INDEX followed by ADD INDEX in the same COPY ALTER creates a new
+	// logical index even when the catalog name is reused. Override the normal
+	// affected-column calculation for those identities so both copy-side
+	// maintenance and cloneUnaffectedIndexes rebuild them instead of reusing
+	// the old hidden index table.
+	for _, idxCol := range tableDef.Indexes {
+		if _, ok := rebuildIndexNames[indexNameKey(idxCol.IndexName)]; ok {
+			opt.SkipIndexesCopy[idxCol.IndexName] = false
 		}
 	}
 
