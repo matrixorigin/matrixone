@@ -849,9 +849,8 @@ func TestBuildProcessInfoRejectsInvalidBinaryStringMetadataLength(t *testing.T) 
 }
 
 func TestSessionInfoNumericCompatibilityWireFieldSeparation(t *testing.T) {
-	// A foreign sender that still writes these two varint fields must not
-	// establish this PR's explicit mode or current-sender marker.
-	foreignWire := []byte{0xb0, 0x01, 0x01, 0xb8, 0x01, 0x01}
+	// Unknown fields 23 and 26 must not establish the numeric mode or marker.
+	foreignWire := []byte{0xb8, 0x01, 0x01, 0xd0, 0x01, 0x01}
 	var foreign pipeline.SessionInfo
 	require.NoError(t, foreign.Unmarshal(foreignWire))
 	require.False(t, foreign.GetMysqlNumericCompatibilityMode())
