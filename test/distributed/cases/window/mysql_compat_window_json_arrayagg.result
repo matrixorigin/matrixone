@@ -123,4 +123,29 @@ from opaque_orders order by id;
 2  ¦  {"1": "base64:type16:qg==", "2": null}  ¦  {"1": "base64:type254:AP9B", "2": null}  ¦  {"1": "base64:type15:AP9B", "2": "base64:type15:"}  ¦  {"1": "base64:type252:AA==", "2": null}  𝄀
 3  ¦  {"1": "base64:type16:qg==", "2": null, "3": "base64:type16:Bw=="}  ¦  {"1": "base64:type254:AP9B", "2": null, "3": "base64:type254:AAEC"}  ¦  {"1": "base64:type15:AP9B", "2": "base64:type15:", "3": "base64:type15:AAEC"}  ¦  {"1": "base64:type252:AA==", "2": null, "3": "base64:type252:gA=="}
 drop table opaque_orders;
+set @json_window_saved_time_zone = @@session.time_zone;
+set time_zone = '+00:00';
+create table timestamp_orders (
+id int primary key,
+customer_id int,
+k varchar(16),
+ts timestamp(6)
+);
+insert into timestamp_orders values
+(1,10,'a','2024-02-29 04:34:56.123456'),
+(2,10,'b','2024-02-29 05:34:56.123456');
+set time_zone = '+08:00';
+select id,
+json_unquote(json_extract(
+json_arrayagg(ts) over (partition by customer_id order by id),
+'$[0]')) array_agg,
+json_unquote(json_extract(
+json_objectagg(k, ts) over (partition by customer_id order by id),
+'$.a')) object_agg
+from timestamp_orders order by id;
+➤ id[4,32,0]  ¦  array_agg[12,65535,0]  ¦  object_agg[12,65535,0]  𝄀
+1  ¦  2024-02-29 12:34:56.123456  ¦  2024-02-29 12:34:56.123456  𝄀
+2  ¦  2024-02-29 12:34:56.123456  ¦  2024-02-29 12:34:56.123456
+drop table timestamp_orders;
+set time_zone = @json_window_saved_time_zone;
 drop database mysql_compat_window_json_arrayagg;

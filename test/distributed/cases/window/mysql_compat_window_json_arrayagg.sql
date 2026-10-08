@@ -88,4 +88,28 @@ select id,
 from opaque_orders order by id;
 drop table opaque_orders;
 
+-- TIMESTAMP JSON window aggregates follow the session time zone (#28890).
+set @json_window_saved_time_zone = @@session.time_zone;
+set time_zone = '+00:00';
+create table timestamp_orders (
+  id int primary key,
+  customer_id int,
+  k varchar(16),
+  ts timestamp(6)
+);
+insert into timestamp_orders values
+(1,10,'a','2024-02-29 04:34:56.123456'),
+(2,10,'b','2024-02-29 05:34:56.123456');
+set time_zone = '+08:00';
+select id,
+       json_unquote(json_extract(
+           json_arrayagg(ts) over (partition by customer_id order by id),
+           '$[0]')) array_agg,
+       json_unquote(json_extract(
+           json_objectagg(k, ts) over (partition by customer_id order by id),
+           '$.a')) object_agg
+from timestamp_orders order by id;
+drop table timestamp_orders;
+set time_zone = @json_window_saved_time_zone;
+
 drop database mysql_compat_window_json_arrayagg;
