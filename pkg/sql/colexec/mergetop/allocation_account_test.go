@@ -160,7 +160,7 @@ func runMergeTopInt64(
 }
 
 func TestAccountedMergeTopResidentLifecycle(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedMergeTop(3)
 	state := installMergeTopTestAllocation(t, op, 64<<20, nil)
 	op.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{
@@ -184,7 +184,7 @@ func TestAccountedMergeTopResidentLifecycle(t *testing.T) {
 }
 
 func TestAccountedMergeTopComputedOrderExpression(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	orderExpr, err := plan2.BindFuncExprImplByPlanExpr(
 		proc.Ctx,
 		"+",
@@ -219,7 +219,7 @@ func TestAccountedMergeTopExactCapacityBoundary(t *testing.T) {
 		peak uint64
 	}
 	build := func(t *testing.T, accountLimit uint64) (boundary, error) {
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 		op := newAccountedMergeTop(2048)
 		state := installMergeTopTestAllocation(t, op, accountLimit, nil)
 		source := newMergeTopValuesBatch(t, proc, []int64{4, 3, 2, 1})
@@ -253,7 +253,7 @@ func TestAccountedMergeTopExactCapacityBoundary(t *testing.T) {
 }
 
 func TestAccountedMergeTopCapacityFailureIsControlledAndCleans(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedMergeTop(2048)
 	controller := &mergeTopTestCapacityController{limit: 64 << 20}
 	state := installMergeTopTestAllocation(t, op, 64<<20, controller)
@@ -278,7 +278,7 @@ func TestAccountedMergeTopCapacityFailureIsControlledAndCleans(t *testing.T) {
 }
 
 func TestAccountedMergeTopFinalShufflePressureCleans(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedMergeTop(4)
 	controller := &mergeTopTestCapacityController{limit: 64 << 20}
 	state := installMergeTopTestAllocation(t, op, 64<<20, controller)
@@ -307,10 +307,9 @@ func TestAccountedMergeTopFinalShufflePressureCleans(t *testing.T) {
 }
 
 func TestAccountedMergeTopMultiColumnAppendFailureRollsBack(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZeroNoFixed())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZeroNoFixed())
 	defer func() {
 		proc.Free()
-		mpool.DeleteMPool(proc.Mp())
 	}()
 	op := newAccountedMergeTop(2)
 	controller := &mergeTopTestCapacityController{limit: ^uint64(0)}
@@ -356,10 +355,9 @@ func TestAccountedMergeTopHardVectorCapacityFailureIsControlled(t *testing.T) {
 		mpool.CapLimit = oldCapLimit
 	})
 
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZeroNoFixed())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZeroNoFixed())
 	defer func() {
 		proc.Free()
-		mpool.DeleteMPool(proc.Mp())
 	}()
 	op := newAccountedMergeTop(100)
 	controller := &mergeTopTestCapacityController{limit: 64 << 20}
@@ -402,7 +400,7 @@ func TestAccountedMergeTopHardVectorCapacityFailureIsControlled(t *testing.T) {
 }
 
 func TestAccountedMergeTopCancellationCleans(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedMergeTop(3)
 	state := installMergeTopTestAllocation(t, op, 64<<20, nil)
 	baseCtx := proc.Ctx
@@ -426,7 +424,7 @@ func TestAccountedMergeTopCancellationCleans(t *testing.T) {
 }
 
 func TestAccountedMergeTopResetClosesAllocationGeneration(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedMergeTop(2)
 	registry, err := mpool.NewAllocationAccountRegistry(2, 1<<14)
 	require.NoError(t, err)
@@ -493,7 +491,7 @@ func TestMergeTopAllocationBindingContract(t *testing.T) {
 }
 
 func TestMergeTopAllocationHelperBoundaryMatrix(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	registry, err := mpool.NewAllocationAccountRegistry(1, 64)
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
@@ -563,7 +561,7 @@ func BenchmarkMergeTopUnaccountedResident(b *testing.B) {
 }
 
 func benchmarkMergeTopResident(b *testing.B, accounted bool) {
-	proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(b, "", mpool.MustNewZero())
 	defer proc.Free()
 	values := make([]int64, BenchmarkRows)
 	for i := range values {
