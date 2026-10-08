@@ -398,7 +398,7 @@ func TestStatisticsUpgradeCompensatesPostSnapshotTenantAfterRestart(t *testing.T
 }
 
 func TestMaybeUpgradeTenantDoesNotCacheUncommittedOrFailedChecks(t *testing.T) {
-	final := statisticsFinalUpgradeVersion()
+	final := v4_0_11.Handler.Metadata()
 	for _, test := range []struct {
 		name           string
 		version        string
@@ -483,7 +483,7 @@ func initStatisticsUpgradeThroughV4011(s *service) {
 
 func TestMaybeUpgradeTenantRechecksVersionUnderLock(t *testing.T) {
 	runtime.RunTest("", func(runtime.Runtime) {
-		final := statisticsFinalUpgradeVersion()
+		final := v4_0_11.Handler.Metadata()
 		reads := 0
 		exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
 			switch {
@@ -513,7 +513,7 @@ func TestMaybeUpgradeTenantRechecksVersionUnderLock(t *testing.T) {
 
 func TestMaybeUpgradeTenantWaitHonorsCancellation(t *testing.T) {
 	runtime.RunTest("", func(runtime.Runtime) {
-		final := statisticsFinalUpgradeVersion()
+		final := v4_0_11.Handler.Metadata()
 		exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
 			switch {
 			case sql == "select create_version from mo_account where account_id = 11":
@@ -548,7 +548,7 @@ func TestMaybeUpgradeTenantRejectsConcurrentAccountDeletion(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			runtime.RunTest("", func(runtime.Runtime) {
-				final := statisticsFinalUpgradeVersion()
+				final := v4_0_11.Handler.Metadata()
 				var authenticated, dropped bool
 				exec := &statisticsTransactionTracker{SQLExecutor: executor.NewMemExecutor(
 					func(sql string) (executor.Result, error) {
