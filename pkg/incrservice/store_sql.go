@@ -528,9 +528,16 @@ func (s *sqlStore) GetColumns(
 	if hasKnownPolicy {
 		policySQL = "''"
 	}
+	// Name alone does not establish ownership: legacy CREATE accepts a visible
+	// column with the fake-PK name. Confirm a single hidden catalog column in
+	// this same snapshot. RESET resolves ownership against the replacement
+	// schema, while still reading allocator offsets from the original table.
+	internalSQL := fmt.Sprintf(`(select count(*) = 1 and max(att_is_hidden) = 1
+		from mo_columns where att_relname_id = %d and attname = '%s')`,
+		policyTableID, sqlquote.EscapeString(catalog.FakePrimaryKeyColName))
 	fetchSQL := fmt.Sprintf(`select col_name, col_index, offset, step,
-		%s as table_extra from %s where table_id = %d order by col_index`,
-		policySQL, incrTableName, tableID)
+		%s as table_extra, %s as fake_pk_hidden from %s where table_id = %d order by col_index`,
+		policySQL, internalSQL, incrTableName, tableID)
 	res, err := s.exec.Exec(ctx, fetchSQL, autoColumnReadOptions(txnOp))
 	if err != nil {
 		return nil, err
@@ -544,6 +551,7 @@ func (s *sqlStore) GetColumns(
 	var extra api.SchemaExtra
 	var metadataRead bool
 	var metadataErr error
+	var internalFakePK bool
 	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		if rows == 0 {
 			return true
@@ -557,6 +565,11 @@ func (s *sqlStore) GetColumns(
 				return false
 			}
 			metadataRead = true
+			// An unknown/missing ownership projection fails closed to the
+			// existing policy; it cannot promote a visible user column.
+			if len(cols) > 5 && !cols[5].IsNull(0) {
+				internalFakePK = executor.GetFixedRows[bool](cols[5])[0]
+			}
 		}
 		colNames = append(colNames, executor.GetStringRows(cols[0])...)
 		indexes = append(indexes, executor.GetFixedRows[int32](cols[1])...)
@@ -577,12 +590,13 @@ func (s *sqlStore) GetColumns(
 	cols := make([]AutoColumn, len(colNames))
 	for idx, colName := range colNames {
 		cols[idx] = AutoColumn{
-			TableID:   tableID,
-			ColName:   colName,
-			ColIndex:  int(indexes[idx]),
-			Offset:    offsets[idx],
-			Step:      steps[idx],
-			CacheSize: extra.AutoIdCache,
+			TableID:    tableID,
+			ColName:    colName,
+			ColIndex:   int(indexes[idx]),
+			Offset:     offsets[idx],
+			Step:       steps[idx],
+			CacheSize:  extra.AutoIdCache,
+			isInternal: colName == catalog.FakePrimaryKeyColName && internalFakePK,
 		}
 	}
 	return cols, nil
