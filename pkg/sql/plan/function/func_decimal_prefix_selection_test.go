@@ -91,9 +91,6 @@ func TestDecimalPrefixSelectionContracts(t *testing.T) {
 					input = NewFunctionTestConstInput(types.T_binary.ToType(), []string{"12"}, nil)
 				}
 				value := uint64(12594)
-				if constant {
-					value = 12
-				}
 				var wanted any
 				switch oid {
 				case types.T_decimal64:
