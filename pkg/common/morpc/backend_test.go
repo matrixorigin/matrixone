@@ -2092,7 +2092,7 @@ func TestBackendWriteFailureRetiresBatch(t *testing.T) {
 					encodeCtx.expire()
 				}}
 			}
-			var futures []*Future
+			futures := make([]*Future, 0, 4)
 			for i := range 4 {
 				f := newFuture(nil)
 				requestCtx := ctx

@@ -336,7 +336,7 @@ func sameTableDumpValueType(a, b plan.Type) bool {
 	// value representation that a saved expression consumes.
 	return a.Id == b.Id && a.Width == b.Width && a.Scale == b.Scale &&
 		a.AutoIncr == b.AutoIncr && a.Enumvalues == b.Enumvalues &&
-		a.Charset == b.Charset && a.PadSpace == b.PadSpace
+		a.SameCollation(b) && a.PadSpace == b.PadSpace
 }
 
 func sameTableDumpDefaultDeclaration(a, b *plan.Default) bool {

@@ -27,7 +27,7 @@ import (
 )
 
 func TestIssue28579PreparedIntegerDivKeepsPrecision(t *testing.T) {
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare issue28579 from 'select cast(9223372036854775807 as signed) div ?'")
 	require.NoError(t, err)
 
@@ -66,7 +66,7 @@ func TestIssue28578UnsignedDividendRejectsNegativeQuotient(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
 			require.NoError(t, err)
 			queryPlan := prepared.GetDcl().GetPrepare().Plan
 			fn := findPlanFunctionExpr(queryPlan, "div")

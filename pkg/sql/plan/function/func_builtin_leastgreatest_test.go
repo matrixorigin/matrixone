@@ -1786,6 +1786,7 @@ func TestLeastGreatestNormalExecutorRestoresTemporalScale(t *testing.T) {
 		},
 		NewFunctionTestResult(types.New(types.T_time, 64, 0), false, []types.Time{second}, nil),
 		greatestFn)
+	tc.expected.typ = timeScale2
 	defer tc.Free()
 	ok, info := tc.Run()
 	require.True(t, ok, info)

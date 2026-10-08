@@ -345,8 +345,9 @@ func TestPrepareRemote(t *testing.T) {
 	// uuid map should have this pipeline information after prepare remote.
 	require.NoError(t, d.prepareRemote(proc))
 
-	p, c, b := colexec.GetServer("").GetProcByUuid(uid, false)
-	require.True(t, b)
+	p, c, attachState, lookupWaiter, _ := colexec.GetServer("").AttachProcByUuidOrWait(uid)
+	lookupWaiter.Close()
+	require.Equal(t, colexec.RemoteReceiverAttachedNow, attachState)
 	require.Equal(t, proc, p)
 	require.Equal(t, d.ctr.remoteInfo, c)
 }
@@ -377,40 +378,13 @@ func TestRegisterRemoteReceiversBeforePrepare(t *testing.T) {
 	require.NoError(t, d.Prepare(proc))
 	require.Equal(t, earlyNotifyCh, d.ctr.remoteInfo)
 
-	p, notifyCh, ok := colexec.GetServer("").GetProcByUuid(uid, false)
-	require.True(t, ok)
+	p, notifyCh, attachState, lookupWaiter, _ := colexec.GetServer("").AttachProcByUuidOrWait(uid)
+	lookupWaiter.Close()
+	require.Equal(t, colexec.RemoteReceiverAttachedNow, attachState)
 	require.Same(t, proc, p)
 	require.Equal(t, earlyNotifyCh, notifyCh)
 
-	colexec.GetServer("").DeleteUuids([]uuid.UUID{uid})
-}
-
-func TestRegisterRemoteReceiversRollbackOnPartialFailure(t *testing.T) {
-	_ = colexec.NewServer("")
-
-	proc := testutil.NewProcess(t)
-
-	uid1, err := uuid.NewV7()
-	require.NoError(t, err)
-	uid2, err := uuid.NewV7()
-	require.NoError(t, err)
-
-	colexec.GetServer("").GetProcByUuid(uid2, true)
-	d := Dispatch{
-		FuncId: SendToAllFunc,
-		RemoteRegs: []colexec.ReceiveInfo{
-			{Uuid: uid1},
-			{Uuid: uid2},
-		},
-	}
-
-	require.Error(t, d.RegisterRemoteReceivers(proc))
-	require.Nil(t, d.ctr.remoteInfo)
-
-	p, notifyCh, ok := colexec.GetServer("").GetProcByUuid(uid1, false)
-	require.False(t, ok)
-	require.Nil(t, p)
-	require.Nil(t, notifyCh)
+	registration.Cleanup()
 }
 
 func TestRegisterRemoteReceiversRollbackPreservesConflictingLiveOwner(t *testing.T) {
@@ -424,7 +398,7 @@ func TestRegisterRemoteReceiversRollbackPreservesConflictingLiveOwner(t *testing
 		server.RemoveUuidsOwned([]uuid.UUID{uid2}, ownerCh)
 	})
 
-	require.NoError(t, server.PutProcIntoUuidMap(uid2, ownerProc, ownerCh))
+	require.NoError(t, server.PutProcIntoUuidMapWithTerminal(uid2, ownerProc, ownerCh, colexec.NewRemoteReceiverTerminal(nil)))
 	d := Dispatch{
 		FuncId: SendToAllFunc,
 		RemoteRegs: []colexec.ReceiveInfo{
@@ -436,13 +410,15 @@ func TestRegisterRemoteReceiversRollbackPreservesConflictingLiveOwner(t *testing
 	require.Error(t, d.RegisterRemoteReceivers(proc))
 	require.Nil(t, d.ctr.remoteInfo)
 
-	registeredProc, notifyCh, ok := server.GetProcByUuid(uid1, false)
-	require.False(t, ok)
+	registeredProc, notifyCh, attachState, lookupWaiter, _ := server.AttachProcByUuidOrWait(uid1)
+	lookupWaiter.Close()
+	require.Equal(t, colexec.RemoteReceiverMissing, attachState)
 	require.Nil(t, registeredProc)
 	require.Nil(t, notifyCh)
 
-	registeredProc, notifyCh, ok = server.GetProcByUuid(uid2, false)
-	require.True(t, ok)
+	registeredProc, notifyCh, attachState, lookupWaiter, _ = server.AttachProcByUuidOrWait(uid2)
+	lookupWaiter.Close()
+	require.Equal(t, colexec.RemoteReceiverAttachedNow, attachState)
 	require.Same(t, ownerProc, registeredProc)
 	require.Equal(t, ownerCh, notifyCh)
 }
@@ -460,9 +436,10 @@ func TestRegisterRemoteReceiversRollbackPreservesConflictingAttachedOwner(t *tes
 		server.RemoveUuidsOwned([]uuid.UUID{uid2}, probeCh)
 	})
 
-	require.NoError(t, server.PutProcIntoUuidMap(uid2, ownerProc, ownerCh))
-	registeredProc, notifyCh, ok := server.GetProcByUuid(uid2, false)
-	require.True(t, ok)
+	require.NoError(t, server.PutProcIntoUuidMapWithTerminal(uid2, ownerProc, ownerCh, colexec.NewRemoteReceiverTerminal(nil)))
+	registeredProc, notifyCh, attachState, lookupWaiter, _ := server.AttachProcByUuidOrWait(uid2)
+	lookupWaiter.Close()
+	require.Equal(t, colexec.RemoteReceiverAttachedNow, attachState)
 	require.Same(t, ownerProc, registeredProc)
 	require.Equal(t, ownerCh, notifyCh)
 
@@ -477,14 +454,14 @@ func TestRegisterRemoteReceiversRollbackPreservesConflictingAttachedOwner(t *tes
 	require.Error(t, d.RegisterRemoteReceivers(proc))
 	require.Nil(t, d.ctr.remoteInfo)
 
-	registeredProc, notifyCh, ok = server.GetProcByUuid(uid1, false)
-	require.False(t, ok)
+	registeredProc, notifyCh, attachState, lookupWaiter, _ = server.AttachProcByUuidOrWait(uid1)
+	lookupWaiter.Close()
+	require.Equal(t, colexec.RemoteReceiverMissing, attachState)
 	require.Nil(t, registeredProc)
 	require.Nil(t, notifyCh)
 
-	// A second non-destructive conflict proves the attached owner survived;
-	// calling GetProcByUuid again would consume the attached entry.
-	err := server.PutProcIntoUuidMap(uid2, &process.Process{}, probeCh)
+	// A second conflict proves the attached owner survived rollback.
+	err := server.PutProcIntoUuidMapWithTerminal(uid2, &process.Process{}, probeCh, colexec.NewRemoteReceiverTerminal(nil))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "state: attached")
 }
@@ -514,8 +491,9 @@ func TestRemoteReceiverRegistrationCleanupChecksOwner(t *testing.T) {
 	// A delayed cleanup from the previous registration must not remove or
 	// clear the current owner, even though the UUID and process are reused.
 	first.Cleanup()
-	registeredProc, notifyCh, ok := colexec.GetServer("").GetProcByUuid(uid, false)
-	require.True(t, ok)
+	registeredProc, notifyCh, attachState, lookupWaiter, _ := colexec.GetServer("").AttachProcByUuidOrWait(uid)
+	lookupWaiter.Close()
+	require.Equal(t, colexec.RemoteReceiverAttachedNow, attachState)
 	require.Same(t, proc, registeredProc)
 	require.Equal(t, secondCh, notifyCh)
 }
@@ -698,12 +676,13 @@ func TestDispatchEmptyInputWaitsForRemoteReceiver(t *testing.T) {
 		case <-ctx.Done():
 			return
 		}
-		registeredProc, notifyCh, ok := colexec.GetServer("").GetProcByUuid(uid, false)
-		if !ok || registeredProc != proc {
+		registeredProc, notifyCh, attachState, lookupWaiter, _ := colexec.GetServer("").AttachProcByUuidOrWait(uid)
+		lookupWaiter.Close()
+		if attachState != colexec.RemoteReceiverAttachedNow || registeredProc != proc {
 			return
 		}
 		select {
-		case notifyCh <- &process.WrapCs{Uid: uid, Err: make(chan error, 1)}:
+		case notifyCh <- &process.WrapCs{Uid: uid}:
 		case <-ctx.Done():
 		}
 	}()
@@ -783,109 +762,20 @@ func TestDispatchAdoptCleanupState_NilSafe(t *testing.T) {
 	require.Nil(t, target.ctr)
 }
 
-func TestDispatchResetDoesNotBlockWhenRemoteErrChannelIsFull(t *testing.T) {
-	_ = colexec.NewServer("")
-
-	proc := testutil.NewProcess(t)
-	uid, err := uuid.NewV7()
-	require.NoError(t, err)
-
-	errCh := make(chan error, 1)
-	errCh <- moerr.NewInternalErrorNoCtx("already notified")
-	d := &Dispatch{
-		ctr: &container{
-			isRemote: true,
-			remoteReceivers: []*process.WrapCs{
-				{Err: errCh, Uid: uid, MsgId: 1},
-			},
-		},
-	}
-
-	done := make(chan struct{})
-	go func() {
-		d.Reset(proc, true, moerr.NewInternalErrorNoCtx("cleanup"))
-		close(done)
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("Dispatch.Reset blocked on a full remote receiver error channel")
-	}
-}
-
-func TestDispatchResetUsesOnlyTerminalForTerminalBackedReceiver(t *testing.T) {
-	terminal := colexec.NewRemoteReceiverTerminal(nil)
-	wantErr := moerr.NewDuplicateEntryNoCtx("1", "primary")
-	d := &Dispatch{ctr: &container{
-		isRemote:       true,
-		remoteTerminal: terminal,
-		remoteReceivers: []*process.WrapCs{{
-			TerminalBacked: true,
-		}},
-	}}
-
-	d.Reset(nil, true, wantErr)
-
-	select {
-	case <-terminal.Done():
-	default:
-		t.Fatal("terminal-backed receiver did not receive its generation terminal")
-	}
-	require.ErrorIs(t, terminal.Err(), wantErr)
-}
-
-func TestDispatchResetFailedNilErrorNotifiesRemoteWithCause(t *testing.T) {
-	_ = colexec.NewServer("")
-
-	uid, err := uuid.NewV7()
-	require.NoError(t, err)
-
-	errCh := make(chan error, 1)
-	d := &Dispatch{
-		ctr: &container{
-			isRemote: true,
-			remoteReceivers: []*process.WrapCs{
-				{Err: errCh, Uid: uid, MsgId: 1},
-			},
-		},
-	}
-
-	d.Reset(nil, true, nil)
-
-	select {
-	case got := <-errCh:
-		require.ErrorIs(t, got, process.ErrPipelineTerminalWithoutCause)
-	default:
-		t.Fatal("Dispatch.Reset did not notify remote receiver")
-	}
-}
-
-func TestDispatchResetSkipsInvalidRemoteReceiversAndNotifiesHealthyPeer(t *testing.T) {
-	_ = colexec.NewServer("")
-
-	want := moerr.NewInternalErrorNoCtx("cleanup")
-	errCh := make(chan error, 1)
-	d := &Dispatch{
-		ctr: &container{
-			isRemote: true,
-			remoteReceivers: []*process.WrapCs{
-				nil,
-				{},
-				{Err: errCh},
-			},
-		},
-	}
-
-	require.NotPanics(t, func() {
-		d.Reset(nil, true, want)
-	})
-
-	select {
-	case got := <-errCh:
-		require.ErrorIs(t, got, want)
-	default:
-		t.Fatal("Dispatch.Reset did not notify healthy remote receiver after invalid peers")
+func TestDispatchResetPublishesGenerationTerminal(t *testing.T) {
+	for _, cause := range []error{moerr.NewDuplicateEntryNoCtx("1", "primary"), nil} {
+		terminal := colexec.NewRemoteReceiverTerminal(nil)
+		d := &Dispatch{ctr: &container{isRemote: true, remoteTerminal: terminal}}
+		d.Reset(nil, true, cause)
+		select {
+		case <-terminal.Done():
+		default:
+			t.Fatal("Reset did not publish its generation terminal")
+		}
+		if cause == nil {
+			cause = process.ErrPipelineTerminalWithoutCause
+		}
+		require.ErrorIs(t, terminal.Err(), cause)
 	}
 }
 
@@ -1279,8 +1169,10 @@ func TestDispatchAllocationAccountContract(t *testing.T) {
 	require.ErrorIs(t, d.SetAllocationAccount(nil), mpool.ErrAllocationAccountInvalid)
 	require.NoError(t, d.SetAllocationAccount(first))
 	require.ErrorIs(t, d.SetAllocationAccount(second), mpool.ErrAllocationAccountMismatch)
+	require.ErrorIs(t, d.DrainAllocationAccount(second), mpool.ErrAllocationAccountMismatch)
 	require.ErrorIs(t, d.ClearAllocationAccount(second), mpool.ErrAllocationAccountMismatch)
 	d.ctr = &container{sp: &pSpool.PipelineSpool{}}
+	require.ErrorIs(t, d.DrainAllocationAccount(first), mpool.ErrAllocationAccountInvariant)
 	require.ErrorIs(t, d.ClearAllocationAccount(first), mpool.ErrAllocationAccountInvariant)
 	d.ctr = nil
 	require.NoError(t, d.ClearAllocationAccount(first))
@@ -1340,6 +1232,10 @@ func testDispatchAllocationClearFinalizesSpool(t *testing.T, abort bool) {
 	}
 	d.CleanupDeferredSpool()
 	require.Same(t, sp, d.cleanupSpool)
+	require.NoError(t, d.DrainAllocationAccount(account))
+	require.Nil(t, d.cleanupSpool)
+	require.Same(t, account, d.allocationAccount)
+	require.NoError(t, d.DrainAllocationAccount(account))
 	require.NoError(t, d.ClearAllocationAccount(account))
 	require.Nil(t, d.cleanupSpool)
 
@@ -1357,7 +1253,6 @@ func TestShuffleRetiresCertifiedStopWithoutDataLoss(t *testing.T) {
 		Uid:             uid,
 		ReceiverDone:    true,
 		ReceiverStopped: func() bool { return true },
-		Err:             make(chan error, 1),
 	}
 	d := &Dispatch{ctr: &container{
 		remoteRegsCnt:   1,
@@ -1373,7 +1268,7 @@ func TestShuffleRetiresCertifiedStopWithoutDataLoss(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, done, "the last explicitly stopped remote target ends a remote-only shuffle")
 	require.Empty(t, d.ctr.remoteReceivers)
-	require.Len(t, stopped.Err, 1, "legacy registrations still receive their retirement completion")
+
 }
 
 func TestShuffleContinuesAfterCertifiedStopForOtherMatchedReceivers(t *testing.T) {
@@ -1387,7 +1282,6 @@ func TestShuffleContinuesAfterCertifiedStopForOtherMatchedReceivers(t *testing.T
 		Uid:             firstUID,
 		ReceiverDone:    true,
 		ReceiverStopped: func() bool { return true },
-		Err:             make(chan error, 1),
 	}
 	ctrl := gomock.NewController(t)
 	secondSession := mock_morpc.NewMockClientSession(ctrl)
@@ -1442,7 +1336,6 @@ func TestShuffleRetiresMatchedReceiverPositions(t *testing.T) {
 				if stop {
 					r.ReceiverDone = true
 					r.ReceiverStopped = func() bool { return true }
-					r.Err = make(chan error, 2)
 					retired = append(retired, r)
 				} else {
 					session := mock_morpc.NewMockClientSession(ctrl)
@@ -1461,19 +1354,18 @@ func TestShuffleRetiresMatchedReceiverPositions(t *testing.T) {
 				require.Equal(t, len(live), d.ctr.remoteRegsCnt)
 				require.Equal(t, 1+len(live), d.ctr.aliveRegCnt)
 				for _, r := range retired {
-					require.Len(t, r.Err, 1)
+					require.NotContains(t, d.ctr.remoteReceivers, r)
 				}
 			}
 		})
 	}
 }
 
-func TestSendBatchRetiresTerminalBackedStopWithoutLegacyChannel(t *testing.T) {
+func TestSendBatchRetiresCertifiedStop(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	wcs := &process.WrapCs{
 		ReceiverDone:    true,
 		ReceiverStopped: func() bool { return true },
-		TerminalBacked:  true,
 	}
 
 	outcome, err := sendBatchToClientSessionOutcome(
@@ -1509,7 +1401,7 @@ func Test_sendBatToMultiMatchedReg_ReceiverRemoved(t *testing.T) {
 				{
 					Uid:          uid,
 					ReceiverDone: true, // Receiver is removed/done
-					Err:          make(chan error, 1),
+
 				},
 			},
 			remoteToIdx: map[uuid.UUID]int{
@@ -1557,7 +1449,6 @@ func TestSendBatchToClientSession_StrictMode(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	wcs := &process.WrapCs{
 		ReceiverDone: true,
-		Err:          make(chan error, 1),
 	}
 
 	// Test strict mode - should return error
@@ -1580,7 +1471,6 @@ func TestSendBatchToClientSession_TolerantMode(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	wcs := &process.WrapCs{
 		ReceiverDone: true,
-		Err:          make(chan error, 1),
 	}
 
 	// Test tolerant mode - should NOT return error
@@ -1726,7 +1616,7 @@ func TestSendToAllRemoteFunc_ReceiverFailure(t *testing.T) {
 			remoteReceivers: []*process.WrapCs{
 				{
 					ReceiverDone: true, // Simulate CN failure
-					Err:          make(chan error, 1),
+
 				},
 			},
 		},
@@ -1760,7 +1650,6 @@ func TestSendToAnyRemoteFunc_ReceiverFailure(t *testing.T) {
 				{
 					Uid:          uid1,
 					ReceiverDone: true,
-					Err:          make(chan error, 1),
 				},
 			},
 		},
@@ -1944,7 +1833,7 @@ func TestShuffleScenario_TargetReceiverFailed(t *testing.T) {
 				{
 					Uid:          uid,
 					ReceiverDone: true, // Target receiver failed
-					Err:          make(chan error, 1),
+
 				},
 			},
 			remoteToIdx: map[uuid.UUID]int{
@@ -1967,14 +1856,14 @@ func TestReceiverDoneFailureModes(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
 	t.Run("strict reports unqualified receiver loss", func(t *testing.T) {
-		wcs := &process.WrapCs{ReceiverDone: true, Err: make(chan error, 1)}
+		wcs := &process.WrapCs{ReceiverDone: true}
 		done, err := sendBatchToClientSession(proc.Ctx, []byte("test"), wcs, FailureModeStrict, "CN2")
 		require.True(t, done)
 		require.ErrorContains(t, err, "data loss may occur")
 	})
 
 	t.Run("tolerant retires unqualified receiver for failover", func(t *testing.T) {
-		wcs := &process.WrapCs{ReceiverDone: true, Err: make(chan error, 1)}
+		wcs := &process.WrapCs{ReceiverDone: true}
 		done, err := sendBatchToClientSession(proc.Ctx, []byte("test"), wcs, FailureModeTolerant, "CN2")
 		require.True(t, done)
 		require.NoError(t, err)
@@ -1990,11 +1879,12 @@ func TestSendBatchRetiresOnlyCertifiedReceiverStop(t *testing.T) {
 	}{
 		{"stop before send", true, true, false, nil, true},
 		{"stop wakes reserve", false, true, false, context.Canceled, true},
-		{"stop interrupts reserve", false, true, false, moerr.NewQueryInterrupted(context.Background()), true},
+		{"stop interrupts reserve", false, true, false, process.ErrPipelineStopped, true},
 		{"uncertified done", true, false, false, nil, false},
 		{"uncertified cancellation", false, false, false, context.Canceled, false},
 		{"query cancellation wins", false, true, true, context.Canceled, false},
 		{"query cancellation with done", true, true, true, nil, false},
+		{"interrupted reserve error wins", false, true, false, moerr.NewQueryInterrupted(context.Background()), false},
 		{"real reserve error wins", false, true, false, moerr.NewInternalErrorNoCtx("reserve failure"), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2006,25 +1896,18 @@ func TestSendBatchRetiresOnlyCertifiedReceiverStop(t *testing.T) {
 			wcs := &process.WrapCs{
 				ReceiverDone:    tc.done,
 				ReceiverStopped: func() bool { return tc.stopped },
-				Err:             make(chan error, 1),
-				ReserveBatch:    func(context.Context, uint64) (uint64, error) { return 0, tc.reserveErr },
+
+				ReserveBatch: func(context.Context, uint64) (uint64, error) { return 0, tc.reserveErr },
 			}
 			done, err := sendBatchToClientSession(ctx, []byte("batch"), wcs, FailureModeStrict, "receiver")
 			if tc.wantRetired {
 				require.NoError(t, err)
 				require.True(t, done)
-				select {
-				case err := <-wcs.Err:
-					require.NoError(t, err)
-				default:
-					t.Fatal("removed receiver's registration handler was not completed")
-				}
 			} else {
 				require.Error(t, err)
 				if !tc.done {
 					require.ErrorIs(t, err, tc.reserveErr)
 				}
-				require.Empty(t, wcs.Err)
 			}
 		})
 	}
@@ -2042,11 +1925,10 @@ func TestBroadcastContinuesAfterRemoteReceiverStop(t *testing.T) {
 			d := &Dispatch{LocalRegs: []*process.WaitRegister{reg}, ctr: &container{
 				prepared: true, sp: sp, localRegsCnt: 1, remoteRegsCnt: 1, aliveRegCnt: 2,
 				remoteReceivers: []*process.WrapCs{{
-					ReceiverStopped: func() bool { return true }, Err: make(chan error, 1),
-					ReserveBatch: func(context.Context, uint64) (uint64, error) { return 0, context.Canceled },
+					ReceiverStopped: func() bool { return true },
+					ReserveBatch:    func(context.Context, uint64) (uint64, error) { return 0, context.Canceled },
 				}},
 			}}
-			stopped := d.ctr.remoteReceivers[0]
 			if remoteAlive {
 				ctrl := gomock.NewController(t)
 				cs := mock_morpc.NewMockClientSession(ctrl)
@@ -2092,7 +1974,7 @@ func TestBroadcastContinuesAfterRemoteReceiverStop(t *testing.T) {
 			require.NoError(t, err)
 			require.Nil(t, got)
 			require.NoError(t, <-sent)
-			require.Len(t, stopped.Err, 1)
+
 		})
 	}
 }
@@ -2101,13 +1983,13 @@ func TestBroadcastEndsAfterAllRemoteReceiversStop(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	bat := newDispatchSpoolTestBatch(t, proc.Mp(), 1)
 	defer bat.Clean(proc.Mp())
-	stopped := &process.WrapCs{ReceiverDone: true, ReceiverStopped: func() bool { return true }, Err: make(chan error, 1)}
+	stopped := &process.WrapCs{ReceiverDone: true, ReceiverStopped: func() bool { return true }}
 	d := &Dispatch{ctr: &container{prepared: true, remoteRegsCnt: 1, aliveRegCnt: 1, remoteReceivers: []*process.WrapCs{stopped}}}
 	end, err := sendToAllRemoteFunc(bat, d, proc)
 	require.NoError(t, err)
 	require.True(t, end)
 	require.Empty(t, d.ctr.remoteReceivers)
-	require.Len(t, stopped.Err, 1)
+
 }
 
 func TestRemoteReceiverRollbackPublishesFailure(t *testing.T) {

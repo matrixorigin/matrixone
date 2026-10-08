@@ -71,7 +71,7 @@ func TestQueryBuilderCarriesDivPrecisionIncrementIntoBinding(t *testing.T) {
 	} {
 		t.Run(test.want.String(), func(t *testing.T) {
 			compiler := divPrecisionCompilerContext{
-				CompilerContext: NewMockCompilerContext(true),
+				CompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t)),
 				increment:       test.increment,
 			}
 			builder := NewQueryBuilder(planpb.Query_SELECT, compiler, false, true)
@@ -84,9 +84,9 @@ func TestQueryBuilderCarriesDivPrecisionIncrementIntoBinding(t *testing.T) {
 }
 
 func TestDDLDivisionBindersUseSessionPrecision(t *testing.T) {
-	compiler := NewMockCompilerContext(false)
-	// The mock has no internal SQL executor for FK reverse lookups. An existing
-	// table entry keeps that unrelated catalog query out of this binding test.
+	compiler := NewMockCompilerContext(false, newPlanTestProcess(t))
+	// An existing table entry keeps unrelated FK reverse-catalog queries out
+	// of this binding test.
 	compiler.tables["t"] = &planpb.TableDef{Name: "t"}
 	proc := compiler.GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
@@ -306,7 +306,7 @@ func TestDDLDivisionBindersUseSessionPrecision(t *testing.T) {
 }
 
 func BenchmarkAnalyzeTableDumpBindingsChecks(b *testing.B) {
-	compiler := NewMockCompilerContext(false)
+	compiler := NewMockCompilerContext(false, newPlanTestProcess(b))
 	compiler.tables["t"] = &planpb.TableDef{Name: "t"}
 	rt := moruntime.ServiceRuntime(compiler.GetProcess().GetService())
 	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -351,7 +351,7 @@ func BenchmarkAnalyzeTableDumpBindingsChecks(b *testing.B) {
 }
 
 func TestPreparedDivisionSpecializationUsesPrecisionIncrementContext(t *testing.T) {
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		`prepare div_precision from 'select ? / 2 as q'`)
 	require.NoError(t, err)
 
@@ -511,7 +511,7 @@ func TestDivisionSQLBoundaries(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
-			mock := NewMockCompilerContext(true)
+			mock := NewMockCompilerContext(true, nil)
 			mock.GetProcessFunc = func() *process.Process { return proc }
 			ctx := divPrecisionCompilerContext{CompilerContext: mock, increment: test.increment}
 			statement, err := mysql.ParseOne(t.Context(), test.sql, 1)

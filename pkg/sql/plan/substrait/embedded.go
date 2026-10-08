@@ -158,6 +158,9 @@ func (c *Candidate) validateEmbeddedBindings(bindings map[int32]EmbeddedReadBind
 }
 
 func (c *Candidate) validateEmbeddedReadOccurrences() error {
+	if err := planpb.RequireLegacyCollations(c.query); err != nil {
+		return notEligiblef(EligibilityExpression, "unsupported collation metadata: %v", err)
+	}
 	seen := make(map[int32]bool, len(c.reads))
 	visiting := make(map[int32]bool)
 	var walk func(int32) error

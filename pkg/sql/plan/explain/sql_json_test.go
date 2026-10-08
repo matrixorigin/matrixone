@@ -712,7 +712,7 @@ func buildPlannerSQLJSONNodes(t *testing.T, sql string) []sqlJSONNode {
 	t.Helper()
 	stmt, err := mysql.ParseOne(t.Context(), sql, 1)
 	require.NoError(t, err)
-	query, err := planpkg.NewBaseOptimizer(planpkg.NewMockCompilerContext(true)).Optimize(stmt, false)
+	query, err := planpkg.NewBaseOptimizer(planpkg.NewMockCompilerContext(true, newPlanTestProcess(t))).Optimize(stmt, false)
 	require.NoError(t, err)
 	data, err := BuildSQLJSONPlan(t.Context(), query)
 	require.NoError(t, err)

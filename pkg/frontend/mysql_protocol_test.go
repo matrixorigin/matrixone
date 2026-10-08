@@ -1882,8 +1882,6 @@ func TestMysqlResultSet(t *testing.T) {
 		mrs *MysqlResultSet
 	}
 
-	var kases []kase
-
 	kases1 := []kase{
 		{
 			sql: "select tiny",
@@ -2000,6 +1998,7 @@ func TestMysqlResultSet(t *testing.T) {
 	appendKases(kases1)
 	appendKases(kases2)
 
+	kases := make([]kase, 0, len(kases1)+len(kases2))
 	kases = append(kases, kases1...)
 	kases = append(kases, kases2...)
 
@@ -2658,7 +2657,7 @@ func TestSendPrepareResponse(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-		compCtx := plan.NewEmptyCompilerContext()
+		compCtx := plan.NewEmptyCompilerContext(newPlanTestProcess(t))
 		preparePlan, err := buildPlan(context.TODO(), nil, compCtx, st)
 		if err != nil {
 			t.Error(err)
@@ -2720,7 +2719,7 @@ func TestSendPrepareResponse(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-		compCtx := plan.NewEmptyCompilerContext()
+		compCtx := plan.NewEmptyCompilerContext(newPlanTestProcess(t))
 		preparePlan, err := buildPlan(context.TODO(), nil, compCtx, st)
 		if err != nil {
 			t.Error(err)
@@ -2922,14 +2921,14 @@ func TestJsonQuoteBinaryProtocolMetadata(t *testing.T) {
 			resultIndex: 1,
 			typ:         defines.MYSQL_TYPE_LONG_BLOB,
 			length:      uint32(types.MaxLongTextLen),
-			compilerCtx: plan.NewMockCompilerContext(false),
+			compilerCtx: plan.NewMockCompilerContext(false, newPlanTestProcess(t)),
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			conn := &prepareResponseCaptureConn{}
 			compilerCtx := test.compilerCtx
 			if compilerCtx == nil {
-				compilerCtx = plan.NewEmptyCompilerContext()
+				compilerCtx = plan.NewEmptyCompilerContext(newPlanTestProcess(t))
 			}
 			proto, proc, prepareStmt := newBinaryPrepareProtocolTestCaseWithConnAndContext(
 				t, test.sql, conn, compilerCtx)
@@ -3062,7 +3061,7 @@ func FuzzParseExecuteData(f *testing.F) {
 	if err != nil {
 		f.Error(err)
 	}
-	compCtx := plan.NewEmptyCompilerContext()
+	compCtx := plan.NewEmptyCompilerContext(newPlanTestProcess(f))
 	preparePlan, err := buildPlan(context.TODO(), nil, compCtx, st)
 	if err != nil {
 		f.Error(err)
@@ -3113,7 +3112,7 @@ func newBinaryPrepareProtocolTestCase(t *testing.T, sql string) (*MysqlProtocolI
 }
 
 func newBinaryPrepareProtocolTestCaseWithConn(t *testing.T, sql string, conn net.Conn) (*MysqlProtocolImpl, *process.Process, *PrepareStmt) {
-	return newBinaryPrepareProtocolTestCaseWithConnAndContext(t, sql, conn, plan.NewEmptyCompilerContext())
+	return newBinaryPrepareProtocolTestCaseWithConnAndContext(t, sql, conn, plan.NewEmptyCompilerContext(newPlanTestProcess(t)))
 }
 
 func newBinaryPrepareProtocolTestCaseWithConnAndContext(
@@ -3675,7 +3674,8 @@ func TestParseSendLongDataAppendsRepeatedChunks(t *testing.T) {
 func buildLongDataExecutePacket(paramTypes ...defines.MysqlType) []byte {
 	// Cursor flag, iteration count, NULL bitmap, new-bound flag, and types.
 	// Streamed parameters have no inline values in COM_STMT_EXECUTE.
-	data := []byte{0, 1, 0, 0, 0}
+	data := make([]byte, 0, 6+((len(paramTypes)+7)>>3)+2*len(paramTypes))
+	data = append(data, 0, 1, 0, 0, 0)
 	data = append(data, make([]byte, (len(paramTypes)+7)>>3)...)
 	data = append(data, 1)
 	for _, tp := range paramTypes {
@@ -3784,65 +3784,6 @@ func TestPrepareStmtCloseReleasesPendingLongData(t *testing.T) {
 	require.Equal(t, baseline, proc.Mp().CurrNB())
 	require.False(t, stmt.hasPendingLongData())
 }
-
-/* FIXME The prepare process has undergone some modifications,
-  	so the unit tests for prepare need to be refactored, and the subsequent pr I will resubmit a reasonable ut
-func TestParseExecuteData(t *testing.T) {
-	ctx := context.TODO()
-	convey.Convey("parseExecuteData succ", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-		ioses := mock_frontend.NewMockIOSession(ctrl)
-
-		ioses.EXPECT().OutBuf().Return(goetty_buf.NewByteBuf(1024)).AnyTimes()
-		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
-		ioses.EXPECT().Ref().AnyTimes()
-		ioses.EXPECT().Flush(gomock.Any()).AnyTimes()
-		sv, err := getSystemVariables("test/system_vars_config.toml")
-		if err != nil {
-			t.Error(err)
-		}
-
-		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
-		proc := testutil.NewProcess()
-
-		st := tree.NewPrepareString(tree.Identifier(getPrepareStmtName(1)), "select ?, 1")
-		stmts, err := mysql.Parse(ctx, st.Sql, 1)
-		if err != nil {
-			t.Error(err)
-		}
-		compCtx := plan.NewEmptyCompilerContext()
-		preparePlan, err := buildPlan(context.TODO(), nil, compCtx, st)
-		if err != nil {
-			t.Error(err)
-		}
-		prepareStmt := &PrepareStmt{
-			Name:        preparePlan.GetDcl().GetPrepare().GetName(),
-			PreparePlan: preparePlan,
-			PrepareStmt: stmts[0],
-			params:      vector.NewVec(types.T_varchar.ToType()),
-		}
-
-		var testData []byte
-		testData = append(testData, 0)          //flag
-		testData = append(testData, 0, 0, 0, 0) // skip iteration-count
-		nullBitmapLen := (1 + 7) >> 3
-		//nullBitmapLen
-		for i := 0; i < nullBitmapLen; i++ {
-			testData = append(testData, 0)
-		}
-		testData = append(testData, 1)                              // new param bound flag
-		testData = append(testData, uint8(defines.MYSQL_TYPE_TINY)) // type
-		testData = append(testData, 0)                              //is unsigned
-		testData = append(testData, 10)                             //tiny value
-
-		err = proto.ParseExecuteData(ctx, proc, prepareStmt, testData, 0)
-		convey.So(err, convey.ShouldBeNil)
-	})
-
-}
-*/
 
 func Test_resultset(t *testing.T) {
 	ctx := context.TODO()
@@ -4264,25 +4205,25 @@ func Test_analyse320resp(t *testing.T) {
 		convey.ShouldBeNil(err)
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
 
-		var data []byte = nil
 		var cap uint16 = 0
 		cap |= uint16(CLIENT_CONNECT_WITH_DB)
 		var header [2]byte
 		proto.io.WriteUint16(header[:], 0, cap)
+		username := "abc"
+		authResp := []byte{0x1, 0x2, 0x3, 0x4}
+		dbName := "T"
+		data := make([]byte, 0, len(header)+3+len(username)+1+len(authResp)+1+len(dbName)+1)
 		//int<2>             capabilities flags, CLIENT_PROTOCOL_41 never set
 		data = append(data, header[:]...)
 		//int<3>             max-packet size
 		data = append(data, 0xff, 0xff, 0xff)
 		//string[NUL]        username
-		username := "abc"
 		data = append(data, []byte(username)...)
 		data = append(data, 0x0)
 		//auth response
-		authResp := []byte{0x1, 0x2, 0x3, 0x4}
 		data = append(data, authResp...)
 		data = append(data, 0x0)
 		//database
-		dbName := "T"
 		data = append(data, []byte(dbName)...)
 		data = append(data, 0x0)
 
@@ -4352,7 +4293,7 @@ func Test_analyse41resp(t *testing.T) {
 		convey.ShouldBeNil(err)
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
 
-		var data []byte = nil
+		data := make([]byte, 0, 36)
 		var cap uint32 = 0
 		cap |= CLIENT_PROTOCOL_41 | CLIENT_CONNECT_WITH_DB
 		var header [4]byte
@@ -4505,7 +4446,7 @@ func Test_handleHandshake(t *testing.T) {
 		mp := &MysqlProtocolImpl{SV: SV}
 		mp.io = &IO
 		mp.tcpConn = ioses
-		payload := []byte{'a'}
+		payload := append(make([]byte, 0, 6), 'a')
 		_, err = mp.HandleHandshake(ctx, payload)
 		convey.So(err, convey.ShouldNotBeNil)
 
@@ -5124,8 +5065,6 @@ type kase struct {
 }
 
 func makeKases() []kase {
-	var kases []kase
-
 	kases1 := []kase{
 		{
 			sql: "select bool",
@@ -5260,6 +5199,7 @@ func makeKases() []kase {
 		},
 	}
 
+	kases := make([]kase, 0, len(kases1)+len(kases2))
 	kases = append(kases, kases1...)
 	kases = append(kases, kases2...)
 	mp := mpool.MustNewZero()

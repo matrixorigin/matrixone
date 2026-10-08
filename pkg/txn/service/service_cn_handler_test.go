@@ -143,7 +143,8 @@ func TestSingleTNRollback(t *testing.T) {
 	s := txnService.(*service)
 	c := s.getTxnContext(meta.ID)
 	require.NotNil(t, c)
-	require.Equal(t, meta.ID, c.getTxn().ID)
+	current, _ := c.getTxnSnapshot()
+	require.Equal(t, meta.ID, current.ID)
 	w := acquireWaiter()
 	t.Cleanup(w.close)
 	require.True(t, c.addWaiter(meta.ID, w, txn.TxnStatus_Aborted))
@@ -205,11 +206,12 @@ func TestRollbackRejectsStaleContext(t *testing.T) {
 			require.NotNil(t, response.TxnError)
 			require.True(t, moerr.IsMoErrCode(response.TxnError.UnwrapError(), moerr.ErrTxnNotFound))
 			require.Same(t, nt, c.nt)
+			observed, _ := c.getTxnSnapshot()
 			if reused {
-				require.Equal(t, current.ID, c.getTxn().ID)
+				require.Equal(t, current.ID, observed.ID)
 				require.Same(t, c, s.getTxnContext(current.ID))
 			} else {
-				require.Empty(t, c.getTxn().ID)
+				require.Empty(t, observed.ID)
 			}
 			select {
 			case <-w.c:

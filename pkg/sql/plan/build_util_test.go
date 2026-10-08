@@ -204,7 +204,7 @@ func TestConvertCharBinaryTypeResolution(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.sql, func(t *testing.T) {
-			logicPlan, err := runOneStmt(NewMockOptimizer(false), t, tc.sql)
+			logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, tc.sql)
 			require.NoError(t, err)
 			require.NotNil(t, logicPlan.GetQuery())
 
@@ -784,7 +784,7 @@ func TestBuildDefaultExprFitsVarchar(t *testing.T) {
 }
 
 func TestBuildPlanFencesHexDefaultBeforeConstantFold(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	proc := mock.CurrentContext().GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
@@ -1197,7 +1197,7 @@ func TestBuildGeneratedExprIPFunctionsAreDeterministic(t *testing.T) {
 }
 
 func TestApplyGeneratedColumnAssignmentCastCompatibility(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	proc := builder.compCtx.GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion5)
@@ -1399,7 +1399,7 @@ func TestSubstituteColRefsInExprPreservesAggregateConfig(t *testing.T) {
 }
 
 func TestDefaultBlobTextAssignmentPolicy(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	proc := builder.compCtx.GetProcess()
 	for _, oid := range []types.T{types.T_blob, types.T_text} {
 		target := plan.Type{Id: int32(oid), Width: types.MaxTinyTextLen}

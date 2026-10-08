@@ -100,7 +100,6 @@ func TestExactRelationMembershipScanThreshold(t *testing.T) {
 	makeSQLProc := func(t *testing.T, rows int) *sqlexec.SqlProcess {
 		t.Helper()
 		proc := testutil.NewProc(t)
-		t.Cleanup(proc.Free)
 		vec := vector.NewVec(types.T_int64.ToType())
 		t.Cleanup(func() { vec.Free(proc.Mp()) })
 		for row := range rows {

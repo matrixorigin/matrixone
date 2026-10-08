@@ -145,7 +145,7 @@ func (w issue29187Wire) login(username, password string) {
 		mask[i] ^= stage1[i]
 	}
 	const capabilities = uint32(0x00000200 | 0x00008000 | 0x00080000) // protocol41, secure auth, plugin auth
-	response := make([]byte, 4+4+1+23)
+	response := make([]byte, 4+4+1+23, 4+4+1+23+len(username)+2+len(mask)+22)
 	binary.LittleEndian.PutUint32(response, capabilities)
 	binary.LittleEndian.PutUint32(response[4:], 1<<24)
 	response[8] = 45 // utf8mb4_general_ci
@@ -214,7 +214,7 @@ func (w issue29187Wire) prepare(sql string) uint32 {
 
 func (w issue29187Wire) sendLongData(id uint32, chunk []byte) {
 	w.t.Helper()
-	data := make([]byte, 6)
+	data := make([]byte, 6, 6+len(chunk))
 	binary.LittleEndian.PutUint32(data, id)
 	w.command(0x18, append(data, chunk...))
 }

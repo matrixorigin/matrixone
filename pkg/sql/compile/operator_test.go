@@ -47,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightdedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
 	windowop "github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
@@ -84,6 +85,21 @@ func TestDupOperator(t *testing.T) {
 	duplicatedFilter := dupOperator(assertFilter, 0, 1).(*filter.Filter)
 	defer duplicatedFilter.Release()
 	require.True(t, duplicatedFilter.IsAssert)
+}
+
+func TestDupOperatorUnionAllMarker(t *testing.T) {
+	source := unionall.NewArgument()
+	defer source.Release()
+
+	duplicated := dupOperator(source, 2, 4).(*unionall.UnionAll)
+	defer duplicated.Release()
+	require.Zero(t, duplicated.SequentialBranches)
+	require.Equal(t, int32(2), duplicated.GetOperatorBase().ParallelID)
+	require.Equal(t, int32(4), duplicated.GetOperatorBase().MaxParallel)
+
+	sequential := unionall.NewArgument().WithSequentialBranches(2)
+	defer sequential.Release()
+	require.Panics(t, func() { dupOperator(sequential, 0, 1) })
 }
 
 func TestConstructMergeGroupCarriesEmptyGroupingSetMetadata(t *testing.T) {
@@ -659,7 +675,7 @@ func TestConstructAggregateConfigOrderedPercentileNormalizesStaticCast(t *testin
 		{name: "discrete descending", fn: plan2.NamePercentileDisc, desc: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := plan2.NewMockCompilerContext(false)
+			ctx := plan2.NewMockCompilerContext(false, newPlanTestProcess(t))
 			direction := ""
 			if tc.desc {
 				direction = " desc"
@@ -701,7 +717,7 @@ func TestConstructAggregateConfigOrderedPercentileNormalizesStaticCast(t *testin
 }
 
 func TestConstructAggregateConfigApproxPercentileNormalizesStaticCast(t *testing.T) {
-	ctx := plan2.NewMockCompilerContext(false)
+	ctx := plan2.NewMockCompilerContext(false, newPlanTestProcess(t))
 	stmt, err := parsers.ParseOne(
 		context.Background(), dialect.MYSQL,
 		"select approx_percentile(0.5) within group (order by n_nationkey) from nation", 1)

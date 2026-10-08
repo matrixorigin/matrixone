@@ -1587,6 +1587,9 @@ func doSetVar(
 				}
 			}
 		}
+		if err := validateCharsetAssignment(assign, value); err != nil {
+			return evaluatedAssignment{}, err
+		}
 		return evaluatedAssignment{
 			assign:                  assign,
 			value:                   value,
@@ -7524,7 +7527,7 @@ func sanitizeNonFiniteFloatValue(v reflect.Value, seen map[uintptr]struct{}) {
 		if !v.IsNil() {
 			sanitizeNonFiniteFloatValue(v.Elem(), seen)
 		}
-	case reflect.Ptr:
+	case reflect.Pointer:
 		if v.IsNil() {
 			return
 		}

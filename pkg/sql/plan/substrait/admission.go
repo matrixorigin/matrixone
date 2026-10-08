@@ -416,9 +416,8 @@ func (m *LeaseManager) resolve(ctx context.Context, readRef []byte) (*Lease, boo
 		m.mu.RUnlock()
 		return nil, false, nil
 	}
-	key := string(readRef)
-	l := m.leases[key]
-	if l != nil && (l.Released || m.releases[key] != releaseNone || l.Read.ExpiresAtUnixMS <= uint64(m.now().UnixMilli())) {
+	l := m.leases[string(readRef)]
+	if l != nil && (l.Released || m.releases[string(readRef)] != releaseNone || l.Read.ExpiresAtUnixMS <= uint64(m.now().UnixMilli())) {
 		l = nil
 	}
 	journal := m.journal
