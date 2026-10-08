@@ -16,7 +16,6 @@ package morpc
 
 import (
 	"context"
-	"errors"
 	"runtime"
 	"sync"
 	"sync/atomic"

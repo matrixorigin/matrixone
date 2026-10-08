@@ -80,7 +80,7 @@ func TestAutoCreateEnabled(t *testing.T) {
 	assert.Error(t, err) // No backend available yet
 	assert.True(t, errors.Is(err, ErrBackendCreating))
 
-	// Wait for the exact asynchronous create state to complete.
+	// Reuse the completion-aware helper to observe backend publication.
 	b := getBackendWithRetry(t, c, "test-addr", false)
 	require.NotNil(t, b)
 
