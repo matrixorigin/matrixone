@@ -851,20 +851,22 @@ const (
 	// JSON_AGG_TO_DOUBLE is the MySQL warning-conversion boundary used by
 	// numeric aggregates (SUM/AVG/VAR_*/STDDEV_*). It is not public SQL.
 	JSON_AGG_TO_DOUBLE = 585
+	// JSON_ARRAY_INSERT inserts values before array elements selected by paths.
+	// Keep main's allocated id stable when adding newer internal functions.
+	JSON_ARRAY_INSERT = 586
 	// Internal schema-aware serializers used by index maintenance. They are
 	// deliberately separate from generic SERIAL, whose value round trip must
 	// remain lossless for SQL callers.
-	PHYSICAL_SERIAL        = 586
-	PHYSICAL_SERIAL_FULL   = 587
-	PHYSICAL_COLLATION_KEY = 588
+	PHYSICAL_SERIAL        = 587
+	PHYSICAL_SERIAL_FULL   = 588
+	PHYSICAL_COLLATION_KEY = 589
 
 	EXTRACTVALUE            = 581
 	UPDATEXML               = 582
 	TO_INTERVAL_MICROSECOND = 583
-
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 589
+	FUNCTION_END_NUMBER = 590
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1161,6 +1163,7 @@ var functionIdRegister = map[string]int32{
 	"json_insert":                    JSON_INSERT,
 	"json_replace":                   JSON_REPLACE,
 	"json_array_append":              JSON_ARRAY_APPEND,
+	"json_array_insert":              JSON_ARRAY_INSERT,
 	"json_remove":                    JSON_REMOVE,
 	"hll_cardinality":                HLL_CARDINALITY,
 	"json_type":                      JSON_TYPE,
