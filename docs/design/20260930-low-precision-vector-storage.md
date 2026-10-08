@@ -72,6 +72,14 @@ Optimizer, Transformer Engine) or the OCP MX reference produce for the same inpu
   round-to-nearest-even with the CUDA tie and saturation rules: the float64 quotient
   cannot fall on an E2M1/E4M3 midpoint unless the exact quotient is that midpoint.
 - Encoding is deterministic: equal inputs give equal cells.
+- **Decoded value, CPU ≡ GPU.** A cell's element decodes to `element × blockScale × global`, and
+  the decode preserves any value representable as a float32 subnormal: an intermediate float32
+  product (e.g. `global × blockScale` for a subnormal global) must not underflow an element to zero
+  when its fully-scaled value is representable. So the zero/nonzero classification — and therefore
+  the zero-vector convention (self cosine distance 1 for the zero vector, 0 for a nonzero one) — is
+  a property of the cell: identical on the CPU and the tensor cores (which apply the global in
+  double) and the same whichever executor runs. The CPU finishes such a decode in float64; this is
+  a decode-value rule at the type owner, not a per-query fallback.
 
 ## Cell format
 
