@@ -473,6 +473,19 @@ func TestAddRewriteHints_ValidSimple(t *testing.T) {
 	}
 }
 
+func TestAddRewriteHints_CreateTableAsSelect(t *testing.T) {
+	sql := `/*+ {"rewrites": {"db1.t1": "select * from db1.t1 where tenant_id = 1"}} */ create table db1.copy as select * from db1.t1`
+	stmts, err := parseAndApply(t, sql)
+	require.NoError(t, err)
+	require.Len(t, stmts, 1)
+
+	ctas, ok := stmts[0].(*tree.CreateTable)
+	require.True(t, ok)
+	require.NotNil(t, ctas.AsSource)
+	require.NotNil(t, ctas.AsSource.RewriteOption)
+	require.Contains(t, ctas.AsSource.RewriteOption.Rewrites, "db1.t1")
+}
+
 // A read source inside a DML statement must carry the rewrite option too,
 // otherwise the statement reads the raw base table and bypasses the rewrite
 // policy. Covers INSERT ... SELECT and multi-table INSERT ALL/FIRST ... SELECT.

@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -428,6 +429,13 @@ func (exec *txnExecutor) Exec(
 	if err != nil {
 		return executor.Result{}, err
 	}
+	if hasLeadingRewriteHint(sql) {
+		if err = parsers.AddRewriteHintsWithSQLModeAndLowerCaseTableNames(
+			exec.ctx, stmts, sql, "", lower,
+		); err != nil {
+			return executor.Result{}, err
+		}
+	}
 
 	// TODO(volgariver6): we got a duplicate code logic in `func (cwft *TxnComputationWrapper) Compile`,
 	// maybe we should fix it.
@@ -685,6 +693,35 @@ func (exec *txnExecutor) Exec(
 	result.AffectedRows = runResult.AffectRows
 	result.LogicalPlan = pn.GetQuery()
 	return result, nil
+}
+
+func hasLeadingRewriteHint(sql string) bool {
+	_, ok := leadingRewriteHint(sql)
+	return ok
+}
+
+// leadingRewriteHint returns the complete leading JSON rewrite hint. The
+// parser accepts whitespace between the hint opener and the JSON object, so
+// transport and detection must do the same.
+func leadingRewriteHint(sql string) (string, bool) {
+	trimmed := strings.TrimSpace(sql)
+	markerLen := 0
+	switch {
+	case strings.HasPrefix(trimmed, "/*+"):
+		markerLen = len("/*+")
+	case strings.HasPrefix(trimmed, "/*!+"):
+		markerLen = len("/*!+")
+	default:
+		return "", false
+	}
+	if !strings.HasPrefix(strings.TrimSpace(trimmed[markerLen:]), "{") {
+		return "", false
+	}
+	relEnd := strings.Index(trimmed[markerLen:], "*/")
+	if relEnd < 0 {
+		return "", false
+	}
+	return trimmed[:markerLen+relEnd+2], true
 }
 
 func cloneInternalExecutorResultBatch(

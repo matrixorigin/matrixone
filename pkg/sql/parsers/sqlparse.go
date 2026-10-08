@@ -755,6 +755,15 @@ func AddRewriteHintsWithSQLModeAndLowerCaseTableNames(
 					ps.Select.RewriteOption = rewriteOption
 				}
 			}
+		case *tree.CreateTable:
+			// CREATE TABLE ... AS SELECT carries the rewrite option on its
+			// nested source query so CTAS materializes only rows visible through
+			// the active role/session policy.
+			if s.AsSource != nil {
+				s.AsSource.RewriteOption = rewriteOption
+			} else {
+				freeRewriteOption()
+			}
 		default:
 			// Every policy value must be valid even when this statement kind does
 			// not consume table rewrites. Release validation-only ASTs immediately.
