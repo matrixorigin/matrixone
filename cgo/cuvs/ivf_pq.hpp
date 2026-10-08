@@ -1168,7 +1168,7 @@ public:
                     kPqPostFilterSkipFactor;
             if (!skip_pq_post_filter) {
                 // Empty vec on the deletes-only / unfiltered paths — the
-                // function synthesizes the delete-bitset slice locally there.
+                // function looks each returned row up in deleted_bitset_ there.
                 static const std::vector<uint32_t> kEmptyMask;
                 this->apply_host_post_filter_locked(search_res, start_row, shard_sz,
                     user_host_mask_ptr ? *user_host_mask_ptr : kEmptyMask);

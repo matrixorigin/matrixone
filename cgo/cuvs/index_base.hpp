@@ -1019,7 +1019,7 @@ public:
 
     // Post-filter for rows [start_row, start_row + shard_sz). user_host_mask
     // is the uploaded (user_filter AND NOT deleted) mask, or empty on the
-    // deletes-only path, where the delete-bitset slice is used instead.
+    // deletes-only path, where each returned row is looked up in deleted_bitset_.
     // Caller must hold mutex_ as shared_lock: reads deleted_bitset_ and
     // deleted_count_.
     template <typename ResultT>
@@ -1032,17 +1032,21 @@ public:
             return;
         }
         if (this->deleted_count_ == 0) return;
-        // start_row is 0 (non-SHARDED) or a multiple of 32 (SHARDED).
-        const uint64_t n_mask_words = (shard_sz + 31) / 32;
-        const uint64_t start_word   = start_row / 32;
-        const uint64_t del_words    = this->deleted_bitset_.size();
-        std::vector<uint32_t> del_slice(n_mask_words);
-        for (uint64_t w = 0; w < n_mask_words; ++w) {
-            del_slice[w] = (start_word + w < del_words)
-                             ? this->deleted_bitset_[start_word + w]
-                             : 0xFFFFFFFFu;
+        // deleted_bitset_ has a set bit for a live row; rows past its end are live.
+        const float kDistSentinel = std::numeric_limits<float>::max();
+        const uint64_t del_words  = this->deleted_bitset_.size();
+        for (size_t i = 0; i < search_res.neighbors.size(); ++i) {
+            const int64_t raw = search_res.neighbors[i];
+            if (raw < 0) continue;
+            const uint64_t p   = static_cast<uint64_t>(raw);
+            const uint64_t row = start_row + p;
+            if (p >= shard_sz
+                || (row / 32 < del_words
+                    && !((this->deleted_bitset_[row / 32] >> (row % 32)) & 1U))) {
+                search_res.neighbors[i] = -1;
+                search_res.distances[i] = kDistSentinel;
+            }
         }
-        apply_host_mask_post_filter(search_res, shard_sz, del_slice);
     }
 
     // Off-worker mask-building helpers shared by the filtered-search entry
