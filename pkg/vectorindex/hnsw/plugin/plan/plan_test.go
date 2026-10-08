@@ -136,6 +136,9 @@ func TestHooks_Redirects(t *testing.T) {
 		{"ApplyForSort", func() {
 			_, _, _ = Hooks{}.ApplyForSort(newStubPlanBuilder(), &planplugin.VectorSortContext{}, &planplugin.MultiTableIndexRef{}, 0, planplugin.ApplyForSortOpts{})
 		}},
+		{"BuildLogicalSearch", func() {
+			_, _, _ = Hooks{}.BuildLogicalSearch(newStubPlanBuilder(), &planplugin.VectorSortContext{}, &planplugin.MultiTableIndexRef{}, 0, planplugin.ApplyForSortOpts{})
+		}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			defer func() { require.Equal(t, "hnsw", recover()) }()

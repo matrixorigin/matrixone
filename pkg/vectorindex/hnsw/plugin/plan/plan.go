@@ -30,6 +30,7 @@ import (
 type Hooks struct{}
 
 var _ planplugin.Hooks = Hooks{}
+var _ planplugin.LogicalSearchHooks = Hooks{}
 
 // CanApply redirects to (*plan.QueryBuilder).CanApplyHnsw.
 func (Hooks) CanApply(pb planplugin.PlanBuilder, vctx *planplugin.VectorSortContext, mti *planplugin.MultiTableIndexRef) (bool, error) {
@@ -38,6 +39,10 @@ func (Hooks) CanApply(pb planplugin.PlanBuilder, vctx *planplugin.VectorSortCont
 
 // ApplyForSort redirects to (*plan.QueryBuilder).ApplyIndicesForSortUsingHnsw.
 func (Hooks) ApplyForSort(pb planplugin.PlanBuilder, vctx *planplugin.VectorSortContext, mti *planplugin.MultiTableIndexRef, nodeID int32, opts planplugin.ApplyForSortOpts) (int32, bool, error) {
+	return pb.ApplyIndicesForSortUsingHnsw(vctx, mti, nodeID, opts)
+}
+
+func (Hooks) BuildLogicalSearch(pb planplugin.PlanBuilder, vctx *planplugin.VectorSortContext, mti *planplugin.MultiTableIndexRef, nodeID int32, opts planplugin.ApplyForSortOpts) (int32, bool, error) {
 	return pb.ApplyIndicesForSortUsingHnsw(vctx, mti, nodeID, opts)
 }
 

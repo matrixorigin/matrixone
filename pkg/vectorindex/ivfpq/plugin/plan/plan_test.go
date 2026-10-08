@@ -112,6 +112,13 @@ func TestApplyForSort_Redirects(t *testing.T) {
 	_, _, _ = Hooks{}.ApplyForSort(newStubPlanBuilder(), &planplugin.VectorSortContext{}, &planplugin.MultiTableIndexRef{}, 0, planplugin.ApplyForSortOpts{})
 }
 
+func TestBuildLogicalSearch_Redirects(t *testing.T) {
+	defer func() {
+		require.NotNil(t, recover(), "BuildLogicalSearch must reach pb.ApplyIndicesForSortUsingIvfpq")
+	}()
+	_, _, _ = Hooks{}.BuildLogicalSearch(newStubPlanBuilder(), &planplugin.VectorSortContext{}, &planplugin.MultiTableIndexRef{}, 0, planplugin.ApplyForSortOpts{})
+}
+
 // --- schema.go: BuildSecondaryIndexDefs error paths ------------------------
 
 func TestBuildSecondaryIndexDefs_EmptyPkey(t *testing.T) {
