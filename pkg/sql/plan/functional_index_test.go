@@ -53,15 +53,17 @@ func TestRequireFunctionalIndexProtocol(t *testing.T) {
 		if hadOriginal {
 			rt.SetGlobalVariables(runtime.MOProtocolVersion, original)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion59)
+			rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion107)
 		}
 	}()
 
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion56)
-	require.ErrorContains(t, requireFunctionalIndexProtocol(context.Background(), proc), "version 59")
+	require.ErrorContains(t, requireFunctionalIndexProtocol(context.Background(), proc), "version 107")
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion58)
-	require.ErrorContains(t, requireFunctionalIndexProtocol(context.Background(), proc), "version 59")
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion59)
+	require.ErrorContains(t, requireFunctionalIndexProtocol(context.Background(), proc), "version 107")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion106)
+	require.Error(t, requireFunctionalIndexProtocol(context.Background(), proc), "current main without functional-index support must reject admission")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion107)
 	require.NoError(t, requireFunctionalIndexProtocol(context.Background(), proc))
 }
 
@@ -189,7 +191,7 @@ func TestLowerFunctionalIndexAddsPrivateVirtualGeneratedColumn(t *testing.T) {
 	selectStmt := stmts[0].(*tree.Select)
 	selectClause := selectStmt.Select.(*tree.SelectClause)
 
-	cctx := NewMockCompilerContext(false)
+	cctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	cctx.SetContext(context.Background())
 	table := &TableDef{
 		Name: "t",
@@ -218,7 +220,7 @@ func TestLowerFunctionalIndexAddsPrivateVirtualGeneratedColumn(t *testing.T) {
 }
 
 func TestBuildCreateTableLowersInlineFunctionalIndex(t *testing.T) {
-	optimizer := NewMockOptimizer(false)
+	optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 	created, err := runOneStmt(optimizer, t, "create table functional_inline (id int primary key, a int, key idx_a ((a + 1)))")
 	require.NoError(t, err)
 	table := created.GetDdl().GetCreateTable().GetTableDef()
@@ -252,9 +254,11 @@ func TestBuildStandaloneAndAlterFunctionalIndexUseCopyDDL(t *testing.T) {
 	}{
 		{name: "create index", sql: "create index idx_expr on constraint_test.t1 ((a + 1))"},
 		{name: "alter table", sql: "alter table constraint_test.t1 add index idx_expr2 ((a + 1))"},
+		{name: "index before new column", sql: "alter table constraint_test.t1 add index idx_late ((late_col + 1)), add column late_col int default 7"},
+		{name: "new column before index", sql: "alter table constraint_test.t1 add column late_col int default 7, add index idx_late ((late_col + 1))"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			optimizer := NewMockOptimizer(false)
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 			got, err := buildSingleStmt(optimizer, t, tc.sql)
 			require.NoError(t, err)
 			alter := got.GetDdl().GetAlterTable()
@@ -286,7 +290,7 @@ func TestBuildCreateTableRejectsUnsupportedFunctionalIndexShapes(t *testing.T) {
 	}
 	for _, sql := range tests {
 		t.Run(sql, func(t *testing.T) {
-			_, err := runOneStmt(NewMockOptimizer(false), t, sql)
+			_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, sql)
 			require.Error(t, err)
 			require.Contains(t, strings.ToLower(err.Error()), "functional")
 		})
@@ -294,7 +298,7 @@ func TestBuildCreateTableRejectsUnsupportedFunctionalIndexShapes(t *testing.T) {
 }
 
 func TestBuildCreateTableRejectsSessionDependentFunctionalCast(t *testing.T) {
-	_, err := runOneStmt(NewMockOptimizer(false), t,
+	_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"create table functional_time (id int primary key, ts timestamp, key idx_time ((cast(ts as char(19)))))")
 	require.Error(t, err)
 	require.Contains(t, strings.ToLower(err.Error()), "functional")
@@ -311,14 +315,14 @@ func TestLowerFunctionalIndexRejectsSessionDependentCastBeforePublishingColumn(t
 		},
 	}
 	index := &tree.Index{Name: "idx_time", KeyParts: []*tree.KeyPart{{Expr: selectClause.Exprs[0].Expr}}}
-	_, err = lowerFunctionalIndex(NewMockCompilerContext(false), index, table)
+	_, err = lowerFunctionalIndex(NewMockCompilerContext(false, newPlanTestProcess(t)), index, table)
 	require.Error(t, err)
 	require.Contains(t, strings.ToLower(err.Error()), "functional")
 	require.Len(t, table.Cols, 2)
 }
 
 func TestFunctionalIndexAdmissionRejectsSessionDependentGeneratedDependency(t *testing.T) {
-	created, err := runOneStmt(NewMockOptimizer(false), t,
+	created, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"create table functional_time_dependency (id int primary key, ts timestamp, g varchar(19) generated always as (cast(ts as char(19))) virtual)")
 	require.NoError(t, err)
 	table := created.GetDdl().GetCreateTable().GetTableDef()
@@ -353,7 +357,7 @@ func TestFunctionalIndexAdmissionRejectsGeneratedColumnCycle(t *testing.T) {
 }
 
 func TestFunctionalIndexQueryRejectsUnsafePersistedMetadata(t *testing.T) {
-	created, err := runOneStmt(NewMockOptimizer(false), t,
+	created, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"create table functional_metadata (id int primary key, a int, key idx_a ((a + 1)))")
 	require.NoError(t, err)
 	table := created.GetDdl().GetCreateTable().GetTableDef()
@@ -370,7 +374,7 @@ func TestFunctionalIndexQueryRejectsUnsafePersistedMetadata(t *testing.T) {
 }
 
 func TestShowCreateTableRendersFunctionalExpressionAndHidesImplementationColumn(t *testing.T) {
-	optimizer := NewMockOptimizer(false)
+	optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 	tableDef, err := buildTestCreateTableStmt(optimizer, "create table functional_show (id int primary key, a int, key idx_a ((a + 1)))")
 	require.NoError(t, err)
 	got, _, err := ConstructCreateTableSQL(&optimizer.ctxt, tableDef, nil, false, nil)

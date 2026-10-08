@@ -24,7 +24,6 @@ show create table t_existing;
 
 -- A failed compound DDL must not leave a generated column, index, or table
 -- catalog entry behind.
--- @regex("Duplicate", true)
 create table t_failed (
     id int primary key,
     source int,
@@ -33,7 +32,7 @@ create table t_failed (
     key idx_failed (generated_key)
 );
 select count(*) from mo_catalog.mo_tables where relname = 't_failed' and reldatabase = 'generated_column_index_atomic';
-select count(*) from mo_catalog.mo_columns where attrelname = 't_failed' and attdatabase = 'generated_column_index_atomic';
+select count(*) from mo_catalog.mo_columns where att_relname = 't_failed' and att_database = 'generated_column_index_atomic';
 select count(*) from mo_catalog.mo_indexes where name = 'idx_failed';
 
 drop database generated_column_index_atomic;

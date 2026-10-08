@@ -66,8 +66,19 @@ alter table fi_inline drop index idx_qty_plus;
 drop index idx_sku on fi_inline;
 -- @regex("__mo_fi_", false)
 show create table fi_inline;
-select count(*) from mo_catalog.mo_columns where attrelname = 'fi_inline' and attdatabase = 'functional_index' and attname like '__mo_fi_%';
+select count(*) from mo_catalog.mo_columns where att_relname = 'fi_inline' and att_database = 'functional_index' and attname like '__mo_fi_%';
 select count(*) from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = 'fi_inline' and reldatabase = 'functional_index') and column_name like '__mo_fi_%';
+
+-- COPY binds functional indexes after all column mutations, in either clause order.
+create table fi_clause_order (id int primary key, b int);
+insert into fi_clause_order values (1, 10), (2, 20);
+alter table fi_clause_order add index idx_late ((late_col + 1)), add column late_col int default 7;
+select id, late_col from fi_clause_order order by id;
+select id from fi_clause_order force index (idx_late) where late_col + 1 = 8 order by id;
+select id from fi_clause_order ignore index (idx_late) where late_col + 1 = 8 order by id;
+select count(*) from mo_catalog.mo_columns where att_relname = 'fi_clause_order' and att_database = 'functional_index' and attname like '__mo_fi_%';
+drop table fi_clause_order;
+
 
 -- Stable rejection matrix.
 -- @regex("functional", true)
@@ -88,22 +99,22 @@ select count(*) from mo_catalog.mo_tables where relname = 'fi_time_inline_dep' a
 create table fi_time_create (id int primary key, ts timestamp);
 -- @regex("functional", true)
 create index bad_time_create on fi_time_create ((cast(ts as char(19))));
-select count(*) from mo_catalog.mo_columns where attrelname = 'fi_time_create' and attdatabase = 'functional_index' and attname like '__mo_fi_%';
+select count(*) from mo_catalog.mo_columns where att_relname = 'fi_time_create' and att_database = 'functional_index' and attname like '__mo_fi_%';
 select count(*) from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = 'fi_time_create' and reldatabase = 'functional_index') and column_name like '__mo_fi_%';
 create table fi_time_create_dep (id int primary key, ts timestamp, g varchar(19) generated always as (cast(ts as char(19))) virtual);
 -- @regex("functional", true)
 create index bad_time_create_dep on fi_time_create_dep ((g));
-select count(*) from mo_catalog.mo_columns where attrelname = 'fi_time_create_dep' and attdatabase = 'functional_index' and attname like '__mo_fi_%';
+select count(*) from mo_catalog.mo_columns where att_relname = 'fi_time_create_dep' and att_database = 'functional_index' and attname like '__mo_fi_%';
 select count(*) from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = 'fi_time_create_dep' and reldatabase = 'functional_index') and column_name like '__mo_fi_%';
 create table fi_time_alter (id int primary key, ts timestamp);
 -- @regex("functional", true)
 alter table fi_time_alter add index bad_time_alter ((cast(ts as char(19))));
-select count(*) from mo_catalog.mo_columns where attrelname = 'fi_time_alter' and attdatabase = 'functional_index' and attname like '__mo_fi_%';
+select count(*) from mo_catalog.mo_columns where att_relname = 'fi_time_alter' and att_database = 'functional_index' and attname like '__mo_fi_%';
 select count(*) from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = 'fi_time_alter' and reldatabase = 'functional_index') and column_name like '__mo_fi_%';
 create table fi_time_alter_dep (id int primary key, ts timestamp, g varchar(19) generated always as (cast(ts as char(19))) virtual);
 -- @regex("functional", true)
 alter table fi_time_alter_dep add index bad_time_alter_dep ((g));
-select count(*) from mo_catalog.mo_columns where attrelname = 'fi_time_alter_dep' and attdatabase = 'functional_index' and attname like '__mo_fi_%';
+select count(*) from mo_catalog.mo_columns where att_relname = 'fi_time_alter_dep' and att_database = 'functional_index' and attname like '__mo_fi_%';
 select count(*) from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = 'fi_time_alter_dep' and reldatabase = 'functional_index') and column_name like '__mo_fi_%';
 -- @regex("functional", true)
 create temporary table fi_temp (id int, a int, key bad ((a + 1)));
