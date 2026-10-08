@@ -568,9 +568,25 @@ func vectorWithSemanticType(vec *vector.Vector, typ types.Type) *vector.Vector {
 	if vec == nil || *vec.GetType() == typ {
 		return vec
 	}
-	view := *vec
-	view.SetType(typ)
-	return &view
+	// The semantic type is only allowed to decorate a vector when it has the
+	// same physical OID.  In particular, replacing an int8 vector's metadata
+	// with an int64 plan type would make the fixed-width sort path reinterpret
+	// its backing bytes and can panic.  String vectors are the one case where
+	// the plan carries comparison semantics (charset/collation) that may be
+	// absent after materialization, so retain that overlay for a matching OID.
+	physical := vec.GetType().Oid
+	if physical != typ.Oid {
+		return vec
+	}
+	switch physical {
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_datalink:
+		view := *vec
+		view.SetType(typ)
+		return &view
+	default:
+		return vec
+	}
 }
 
 // SortByVectorsWithScratch sorts row selectors like SortByVectors and reuses

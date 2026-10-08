@@ -555,7 +555,7 @@ func shuffleConstVectorByHash(ap *Shuffle, bat *batch.Batch) uint64 {
 		return plan2.SimpleInt64HashToRange(uint64(groupByCol[0]), lenRegs)
 	case types.T_char, types.T_varchar, types.T_text:
 		groupByCol, area := vector.MustVarlenaRawData(groupByVec)
-		return stringHashToRange(ap, groupByCol[0].GetByteSlice(area), lenRegs)
+		return stringHashToRangeForType(ap, *groupByVec.GetType(), groupByCol[0].GetByteSlice(area), lenRegs)
 	default:
 		panic("unsupported shuffle type, wrong plan!") //something got wrong here!
 	}
@@ -1141,7 +1141,7 @@ func shuffleConstVecByHash(ap *Shuffle, vec *vector.Vector) uint64 {
 		return plan2.SimpleInt64HashToRange(uint64(vector.MustFixedColNoTypeCheck[uint16](vec)[0]), lenRegs)
 	case types.T_char, types.T_varchar, types.T_text:
 		groupByCol, area := vector.MustVarlenaRawData(vec)
-		return stringHashToRange(ap, groupByCol[0].GetByteSlice(area), lenRegs)
+		return stringHashToRangeForType(ap, *vec.GetType(), groupByCol[0].GetByteSlice(area), lenRegs)
 	default:
 		panic("unsupported shuffle type, wrong plan!")
 	}
@@ -1504,10 +1504,17 @@ func appendStringHashSels(
 	for row := range col {
 		regIndex := uint64(0)
 		if !withNull || !vec.IsNull(uint64(row)) {
-			regIndex = stringHashToRange(ap, col[row].GetByteSlice(area), bucketNum)
+			regIndex = stringHashToRangeForType(ap, *vec.GetType(), col[row].GetByteSlice(area), bucketNum)
 		}
 		sels[regIndex] = append(sels[regIndex], int32(row))
 	}
+}
+
+func stringHashToRangeForType(ap *Shuffle, typ types.Type, value []byte, bucketNum uint64) uint64 {
+	if types.IsUnicodeCollation(typ.Charset) {
+		value = types.CollationKeyOrOriginal(typ.Charset, value)
+	}
+	return stringHashToRange(ap, value, bucketNum)
 }
 
 func stringHashToRange(ap *Shuffle, value []byte, bucketNum uint64) uint64 {

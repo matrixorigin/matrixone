@@ -472,7 +472,11 @@ func TestComputeXXHashCanonicalVarlenaShapes(t *testing.T) {
 	jsonFlat := vector.NewVec(jsonType)
 	vecFlat := vector.NewVec(vecType)
 	charFlat := vector.NewVec(charType)
-	unicodeFlat := vector.NewVec(unicodeType)
+	// Build the payload with the physical varchar type first.  Re-tagging it
+	// after append models a legacy/spilled vector whose semantic Unicode
+	// metadata is restored by the consumer; AppendBytes must still reject
+	// malformed values for a genuinely Unicode-typed vector.
+	unicodeFlat := vector.NewVec(types.T_varchar.ToType())
 	jsonConst, err := vector.NewConstBytes(jsonType, jsonOnePointZero, 3, mp)
 	require.NoError(t, err)
 	vecConst, err := vector.NewConstBytes(vecType, vecNegativeZero, 3, mp)
@@ -501,6 +505,7 @@ func TestComputeXXHashCanonicalVarlenaShapes(t *testing.T) {
 	require.NoError(t, vector.AppendBytes(unicodeFlat, []byte("Straße"), false, mp))
 	require.NoError(t, vector.AppendBytes(unicodeFlat, []byte("STRASSE"), false, mp))
 	require.NoError(t, vector.AppendBytes(unicodeFlat, []byte{0xff}, false, mp))
+	unicodeFlat.SetType(unicodeType)
 
 	jsonHashes := make([]uint64, 3)
 	ComputeXXHash([]*vector.Vector{jsonFlat}, jsonHashes, 17)
@@ -549,7 +554,7 @@ func TestCanonicalBytesAtUsesGroupingEquality(t *testing.T) {
 	doubles := vector.NewVec(types.T_float64.ToType())
 	chars := vector.NewVec(types.New(types.T_char, 4, 0))
 	jsonValues := vector.NewVec(types.T_json.ToType())
-	unicodeValues := vector.NewVec(types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetUTF8MB4UnicodeCI))
+	unicodeValues := vector.NewVec(types.T_varchar.ToType())
 	defer func() {
 		floats.Free(mp)
 		doubles.Free(mp)
@@ -570,6 +575,7 @@ func TestCanonicalBytesAtUsesGroupingEquality(t *testing.T) {
 	require.NoError(t, vector.AppendBytes(unicodeValues, []byte("Straße"), false, mp))
 	require.NoError(t, vector.AppendBytes(unicodeValues, []byte("STRASSE"), false, mp))
 	require.NoError(t, vector.AppendBytes(unicodeValues, []byte{0xff}, false, mp))
+	unicodeValues.SetType(types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetUTF8MB4UnicodeCI))
 
 	for _, vec := range []*vector.Vector{floats, doubles, chars, jsonValues} {
 		left, _ := CanonicalBytesAt(vec, 0, nil)

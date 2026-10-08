@@ -1802,7 +1802,7 @@ func exprUsesUnicodeCollationColumn(expr *plan.Expr, tableDef *plan.TableDef) bo
 			name = name[dot+1:]
 		}
 		pos, ok := tableDef.Name2ColIndex[name]
-		if !ok && name == "" && impl.Col.ColPos >= 0 && int(impl.Col.ColPos) < len(tableDef.Cols) {
+		if !ok && impl.Col.ColPos >= 0 && int(impl.Col.ColPos) < len(tableDef.Cols) {
 			pos, ok = impl.Col.ColPos, true
 		}
 		if !ok || pos < 0 || int(pos) >= len(tableDef.Cols) || tableDef.Cols[pos] == nil {

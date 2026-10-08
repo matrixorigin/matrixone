@@ -3862,6 +3862,73 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `physical_serial`
+	// Internal only: index maintenance needs the persisted comparison-key
+	// representation, while generic SERIAL must preserve original values.
+	{
+		functionId: PHYSICAL_SERIAL,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) > 0 {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType:    serializedTupleReturnType,
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
+					opSerial := newOpSerial()
+					return opSerial.BuiltInPhysicalSerial, opSerial.Reset, opSerial.Close, opSerial.RetainedBytes
+				},
+			},
+		},
+	},
+
+	// function `physical_serial_full`
+	{
+		functionId: PHYSICAL_SERIAL_FULL,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) > 0 {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType:    serializedTupleReturnType,
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
+					opSerial := newOpSerial()
+					return opSerial.BuiltInPhysicalSerialFull, opSerial.Reset, opSerial.Close, opSerial.RetainedBytes
+				},
+			},
+		},
+	},
+
+	// function `physical_collation_key`
+	// Internal only: materialize the one-part key used by a secondary index.
+	{
+		functionId: PHYSICAL_COLLATION_KEY,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    stringDomainFixedTypeMatch,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_char},
+				retType:    serializedTupleReturnType,
+				newOp: func() executeLogicOfOverload {
+					return BuiltInPhysicalCollationKey
+				},
+			},
+		},
+	},
+
 	// function `serial_extract`
 	{
 		functionId: SERIAL_EXTRACT,

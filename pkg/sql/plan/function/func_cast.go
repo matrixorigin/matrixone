@@ -9306,6 +9306,11 @@ func strToStr(
 			if padSetOperationChar {
 				v = padVarlenaToRuneWidth(v, destLen)
 			}
+			if mode.isAssignment() {
+				if err := types.ValidateCollationValue(toType, v); err != nil {
+					return err
+				}
+			}
 			if err := to.AppendBytes(v, false); err != nil {
 				return err
 			}
@@ -9321,6 +9326,11 @@ func strToStr(
 			}
 			if trimComparisonKey || trimSetOperationKey {
 				v = bytes.TrimRight(v, " ")
+			}
+			if mode.isAssignment() {
+				if err := types.ValidateCollationValue(toType, v); err != nil {
+					return err
+				}
 			}
 			if err := to.AppendBytes(v, false); err != nil {
 				return err

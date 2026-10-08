@@ -206,7 +206,7 @@ func TestSortByVectorsUsesSemanticUnicodeTypeWhenVectorMetadataIsPhysical(t *tes
 	)
 	require.Equal(t, []int64{1, 2, 3, 0}, selectors)
 	// The metadata view must not mutate the physical vector.
-	require.Equal(t, types.CharsetLegacy, physical.GetType().Charset)
+	require.Equal(t, types.CharsetUTF8, physical.GetType().Charset)
 }
 
 func TestSortByVectorsSortsNonNullPartitionWhenVectorHasNullElsewhere(t *testing.T) {

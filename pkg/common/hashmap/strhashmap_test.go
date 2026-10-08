@@ -375,7 +375,9 @@ func TestStrHashMapUnicodeKeysUseOneNonCollidingDomain(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Zero(t, mp.CurrNB()) }()
 	typ := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI)
-	build := vector.NewVec(typ)
+	// Keep malformed legacy bytes admissible while constructing the fixture,
+	// then restore the Unicode semantic metadata before hashing.
+	build := vector.NewVec(types.T_varchar.ToType())
 	defer build.Free(mp)
 	values := [][]byte{
 		[]byte("A"), []byte("a"), []byte("ß"), []byte("ss"), []byte("b"),
@@ -384,6 +386,7 @@ func TestStrHashMapUnicodeKeysUseOneNonCollidingDomain(t *testing.T) {
 	for _, value := range values {
 		require.NoError(t, vector.AppendBytes(build, value, false, mp))
 	}
+	build.SetType(typ)
 
 	hashMap, err := NewStrHashMap(false, mp)
 	require.NoError(t, err)

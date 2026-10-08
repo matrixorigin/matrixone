@@ -2425,10 +2425,13 @@ func TestCompileFilterExprUnicodeFailsOpen(t *testing.T) {
 	}
 	expr := MakeFunctionExprForTest("=", []*plan.Expr{
 		MakeColExprForTest(0, types.T_varchar),
-		&plan.Expr{Typ: plan2.MakePlan2Type(&typ), Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{
-			IsConst: true,
-			Data:    []byte("a"),
-		}}},
+		&plan.Expr{
+			Typ: plan2.MakePlan2Type(&typ),
+			Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{
+				IsConst: true,
+				Data:    []byte("a"),
+			}},
+		},
 	})
 	expr.GetF().Args[0].Typ.Charset = uint32(types.CharsetUTF8MB4UnicodeCI)
 	_, _, _, _, _, canCompile, _ := CompileFilterExpr(expr, tableDef, nil)

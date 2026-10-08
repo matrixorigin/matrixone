@@ -157,7 +157,7 @@ func ConstructBasePKFilter(
 	// true match (for example `A = 'a'`) before the residual row comparator
 	// runs. Leave this optional fast path disabled until the persisted summary
 	// format carries the same collation domain.
-	if tablePrimaryKeyUsesUnicodeCollation(tblDef) {
+	if tablePrimaryKeyUsesUnicodeCollation(tblDef) || exprUsesUnicodeCollationColumn(expr, tblDef) {
 		return BasePKFilter{}, nil
 	}
 	filter, err = constructBasePKFilter(expr, tblDef, mp, cleanup)
