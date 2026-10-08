@@ -55,8 +55,8 @@ func (apply *Apply) Prepare(proc *process.Process) (err error) {
 	if apply.Source == nil {
 		if apply.TableFunction != nil {
 			apply.Source = apply.TableFunction
-		} else if apply.VectorIndexScan != nil {
-			source := NewVectorSource(apply.VectorIndexScan, apply.VectorAttrs, apply.Typs).(*vectorSource)
+		} else if apply.IndexSearchScan != nil {
+			source := NewVectorSource(apply.IndexSearchScan, apply.VectorAttrs, apply.Typs).(*vectorSource)
 			source.txnOffset = apply.TxnOffset
 			apply.Source = source
 		}

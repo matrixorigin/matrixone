@@ -2581,11 +2581,11 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.Equal(t, indexRef, restoredOp.TableFunction.FulltextIndexRef)
 	})
 
-	t.Run("Apply_VectorIndexScan", func(t *testing.T) {
+	t.Run("Apply_IndexSearchScan", func(t *testing.T) {
 		op := apply.NewArgument()
 		op.VectorAttrs = []string{"pkid", "score"}
 		op.TxnOffset = 19
-		op.VectorIndexScan = &planpb.VectorIndexScan{
+		op.IndexSearchScan = &planpb.IndexSearchScan{
 			Index:            &planpb.IndexDef{IndexName: "idx", IndexAlgo: "ivfflat"},
 			DistanceFunction: "l2_distance",
 			CandidateLimit:   plan.MakePlan2Uint64ConstExprWithType(8),
@@ -2603,8 +2603,8 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.NoError(t, err)
 		restoredOp := restored.(*apply.Apply)
 		require.Equal(t, op.VectorAttrs, restoredOp.VectorAttrs)
-		require.Equal(t, "idx", restoredOp.VectorIndexScan.GetIndex().GetIndexName())
-		require.Equal(t, uint64(8), restoredOp.VectorIndexScan.GetCandidateLimit().GetLit().GetU64Val())
+		require.Equal(t, "idx", restoredOp.IndexSearchScan.GetIndex().GetIndexName())
+		require.Equal(t, uint64(8), restoredOp.IndexSearchScan.GetCandidateLimit().GetLit().GetU64Val())
 		require.Equal(t, 19, restoredOp.TxnOffset)
 	})
 

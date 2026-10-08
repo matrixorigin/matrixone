@@ -1892,7 +1892,7 @@ func TestCTEReuseRejectsVolatileAuxiliaryNodeExpressions(t *testing.T) {
 		}},
 		{name: "vector index query", node: &planpb.Node{
 			NodeType:        planpb.Node_TABLE_SCAN,
-			VectorIndexScan: &planpb.VectorIndexScan{QueryVector: volatile},
+			IndexSearchScan: &planpb.IndexSearchScan{QueryPayload: volatile},
 		}},
 		{name: "dedup update expression", node: &planpb.Node{
 			NodeType:     planpb.Node_JOIN,

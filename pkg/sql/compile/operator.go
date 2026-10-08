@@ -651,7 +651,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.ApplyType = t.ApplyType
 		op.Result = t.Result
 		op.Typs = t.Typs
-		op.VectorIndexScan = plan2.DeepCopyVectorIndexScan(t.VectorIndexScan)
+		op.IndexSearchScan = plan2.DeepCopyIndexSearchScan(t.IndexSearchScan)
 		op.VectorAttrs = slices.Clone(t.VectorAttrs)
 		op.TxnOffset = t.TxnOffset
 		if t.TableFunction != nil {
@@ -2809,8 +2809,8 @@ func constructApply(n, right *plan.Node, applyType int, proc *process.Process) *
 	arg.ApplyType = applyType
 	arg.Result = result
 	arg.Typs = rightTyps
-	if right.NodeType == plan.Node_VECTOR_INDEX_SCAN {
-		arg.VectorIndexScan = plan2.DeepCopyVectorIndexScan(right.VectorIndexScan)
+	if right.NodeType == plan.Node_INDEX_SEARCH_SCAN {
+		arg.IndexSearchScan = plan2.DeepCopyIndexSearchScan(right.IndexSearchScan)
 		arg.VectorAttrs = make([]string, len(right.TableDef.Cols))
 		for i, col := range right.TableDef.Cols {
 			arg.VectorAttrs[i] = col.GetOriginCaseName()

@@ -357,7 +357,7 @@ type RuntimeConfig struct {
 	// copied into Search and do not propagate caller-visible mutations back out.
 	RequestedIncludeColumns []string
 	PushdownFilterSQL       string
-	// PushdownFilters is the typed VECTOR_INDEX_SCAN equivalent of
+	// PushdownFilters is the typed INDEX_SEARCH_SCAN equivalent of
 	// PushdownFilterSQL. Expressions are already rebound to entries-table
 	// columns and are applied before the physical round top-k.
 	PushdownFilters  []*plan.Expr

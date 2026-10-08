@@ -24,15 +24,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestVectorIndexScanInfoIsTypedAndVisible(t *testing.T) {
+func TestIndexSearchScanInfoIsTypedAndVisible(t *testing.T) {
 	node := &plan.Node{
-		NodeType: plan.Node_VECTOR_INDEX_SCAN,
+		NodeType: plan.Node_INDEX_SEARCH_SCAN,
 		Stats:    &plan.Stats{},
-		VectorIndexScan: &plan.VectorIndexScan{
-			Index:             &plan.IndexDef{IndexName: "idx_v", IndexAlgo: "ivfflat"},
-			DistanceFunction:  "l2_distance",
-			CandidateLimit:    plan2.MakePlan2Uint64ConstExprWithType(12),
-			InitialProbeCount: 4,
+		IndexSearchScan: &plan.IndexSearchScan{
+			Index:            &plan.IndexDef{IndexName: "idx_v", IndexAlgo: "ivfflat"},
+			DistanceFunction: "l2_distance",
+			CandidateLimit:   plan2.MakePlan2Uint64ConstExprWithType(12),
+			AlgoOptions:      []byte(`{"initial_probe_count":4}`),
 			PreFilters: []*plan.Expr{{
 				Typ:  plan.Type{Id: int32(types.T_bool)},
 				Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Bval{Bval: true}}},
@@ -48,7 +48,7 @@ func TestVectorIndexScanInfoIsTypedAndVisible(t *testing.T) {
 	require.Contains(t, info[0], "NProbe: 4")
 	require.Contains(t, info[0], "Index Filter: true")
 	require.NotContains(t, info[0], "Estimated Scan Rows")
-	node.VectorIndexScan.ScanWork = &plan.VectorIndexScanWork{Rows: 100, Blocks: 2, VectorBytesPerRow: 128, Objects: 2}
+	node.IndexSearchScan.ScanWork = &plan.IndexSearchScanWork{Rows: 100, Blocks: 2, VectorBytesPerRow: 128, Objects: 2}
 	node.Stats.Dop = 2
 	basic, err := (&NodeDescribeImpl{Node: node}).GetNodeBasicInfo(context.Background(), &ExplainOptions{})
 	require.NoError(t, err)

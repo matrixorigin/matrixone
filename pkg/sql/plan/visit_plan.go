@@ -112,9 +112,9 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 		}
 	}
 
-	if scan := node.VectorIndexScan; scan != nil {
-		if scan.QueryVector != nil {
-			scan.QueryVector, err = rule.ApplyExpr(scan.QueryVector)
+	if scan := node.IndexSearchScan; scan != nil {
+		if scan.QueryPayload != nil {
+			scan.QueryPayload, err = rule.ApplyExpr(scan.QueryPayload)
 			if err != nil {
 				return err
 			}
@@ -125,8 +125,8 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 				return err
 			}
 		}
-		if scan.FirstRoundLimit != nil {
-			scan.FirstRoundLimit, err = rule.ApplyExpr(scan.FirstRoundLimit)
+		for i := range scan.AlgoExprs {
+			scan.AlgoExprs[i], err = rule.ApplyExpr(scan.AlgoExprs[i])
 			if err != nil {
 				return err
 			}

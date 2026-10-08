@@ -25,6 +25,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
+	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -275,7 +277,7 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "Minus All"
 	case plan.Node_FUNCTION_SCAN:
 		pname = "Table Function"
-	case plan.Node_VECTOR_INDEX_SCAN:
+	case plan.Node_INDEX_SEARCH_SCAN:
 		pname = "Vector Index Scan"
 	case plan.Node_PRE_INSERT:
 		pname = "PreInsert"
@@ -331,9 +333,9 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 			if ndesc.Node.TableDef != nil && ndesc.Node.TableDef.TblFunc != nil {
 				buf.WriteString(ndesc.Node.TableDef.TblFunc.Name)
 			}
-		case plan.Node_VECTOR_INDEX_SCAN:
+		case plan.Node_INDEX_SEARCH_SCAN:
 			buf.WriteString(" on ")
-			if spec := ndesc.Node.VectorIndexScan; spec != nil && spec.Index != nil {
+			if spec := ndesc.Node.IndexSearchScan; spec != nil && spec.Index != nil {
 				buf.WriteString(spec.Index.IndexName)
 				buf.WriteString(" [")
 				buf.WriteString(spec.DistanceFunction)
@@ -696,8 +698,8 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 			lines = append(lines, msg)
 		}
 	}
-	if ndesc.Node.NodeType == plan.Node_VECTOR_INDEX_SCAN {
-		msg, err := ndesc.GetVectorIndexScanInfo(ctx, options)
+	if ndesc.Node.NodeType == plan.Node_INDEX_SEARCH_SCAN {
+		msg, err := ndesc.GetIndexSearchScanInfo(ctx, options)
 		if err != nil {
 			return nil, err
 		}
@@ -708,8 +710,8 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 	return lines, nil
 }
 
-func (ndesc *NodeDescribeImpl) GetVectorIndexScanInfo(ctx context.Context, options *ExplainOptions) (string, error) {
-	spec := ndesc.Node.GetVectorIndexScan()
+func (ndesc *NodeDescribeImpl) GetIndexSearchScanInfo(ctx context.Context, options *ExplainOptions) (string, error) {
+	spec := ndesc.Node.GetIndexSearchScan()
 	if spec == nil || spec.GetIndex() == nil {
 		return "", nil
 	}
@@ -722,8 +724,14 @@ func (ndesc *NodeDescribeImpl) GetVectorIndexScanInfo(ctx context.Context, optio
 	if err := describeExpr(ctx, spec.GetCandidateLimit(), options, buf); err != nil {
 		return "", err
 	}
-	buf.WriteString(", NProbe: ")
-	buf.WriteString(strconv.FormatUint(uint64(spec.GetInitialProbeCount()), 10))
+	settings, err := indexSearchScanSettings(spec)
+	if err != nil {
+		return "", err
+	}
+	for _, setting := range settings {
+		buf.WriteString(", ")
+		buf.WriteString(setting)
+	}
 	if len(spec.GetPreFilters()) > 0 {
 		buf.WriteString(", Index Filter: ")
 		filters := NewExprListDescribeImpl(spec.GetPreFilters())
@@ -1809,4 +1817,22 @@ func isLiteral(expr *plan.Expr) bool {
 	}
 	_, ok := expr.Expr.(*plan.Expr_Lit)
 	return ok
+}
+
+// indexSearchScanSettings returns the EXPLAIN fragments the search plugin of
+// spec describes for its algorithm settings.
+func indexSearchScanSettings(spec *plan.IndexSearchScan) ([]string, error) {
+	p, ok := indexplugin.Get(spec.GetIndex().GetIndexAlgo())
+	if !ok {
+		return nil, nil
+	}
+	searcher, ok := p.(indexplugin.SearchPlugin)
+	if !ok {
+		return nil, nil
+	}
+	explainer, ok := searcher.Search().(searchplugin.ExplainHooks)
+	if !ok {
+		return nil, nil
+	}
+	return explainer.ExplainSettings(spec)
 }

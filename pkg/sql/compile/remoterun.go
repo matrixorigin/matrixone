@@ -1201,7 +1201,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			RelList:         relList,
 			ColList:         colList,
 			Types:           convertToPlanTypes(t.Typs),
-			VectorIndexScan: t.VectorIndexScan,
+			IndexSearchScan: t.IndexSearchScan,
 			VectorAttrs:     t.VectorAttrs,
 			TxnOffset:       int64(t.TxnOffset),
 		}
@@ -1857,7 +1857,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.ApplyType = int(t.ApplyType)
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.Typs = convertToTypes(t.Types)
-		arg.VectorIndexScan = t.VectorIndexScan
+		arg.IndexSearchScan = t.IndexSearchScan
 		arg.VectorAttrs = t.VectorAttrs
 		arg.TxnOffset = int(t.TxnOffset)
 		if opr.TableFunction != nil {

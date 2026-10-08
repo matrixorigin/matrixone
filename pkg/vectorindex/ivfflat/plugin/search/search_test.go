@@ -23,8 +23,33 @@ import (
 )
 
 func TestHooksRejectIncompleteExecutionContext(t *testing.T) {
-	_, err := (Hooks{}).NewReader(nil, &plan.VectorIndexScan{
+	_, err := (Hooks{}).NewReader(nil, &plan.IndexSearchScan{
 		Index: &plan.IndexDef{IndexAlgo: "ivfflat"},
 	}, searchplugin.Request{CandidateBudget: 1})
+	require.Error(t, err)
+}
+
+func TestHooksParallelizeOnlySingleRoundScans(t *testing.T) {
+	can, err := Hooks{}.CanParallelize(&plan.IndexSearchScan{AlgoOptions: []byte(`{"initial_probe_count":4}`)})
+	require.NoError(t, err)
+	require.True(t, can)
+	can, err = Hooks{}.CanParallelize(&plan.IndexSearchScan{AlgoOptions: []byte(`{"bucket_expand_step":4}`)})
+	require.NoError(t, err)
+	require.False(t, can)
+	can, err = Hooks{}.CanParallelize(&plan.IndexSearchScan{AlgoExprNames: []string{"first_round_limit"}})
+	require.NoError(t, err)
+	require.False(t, can)
+	_, err = Hooks{}.CanParallelize(&plan.IndexSearchScan{AlgoOptions: []byte(`{`)})
+	require.Error(t, err)
+}
+
+func TestHooksExplainSettingsShowsProbeCount(t *testing.T) {
+	settings, err := Hooks{}.ExplainSettings(&plan.IndexSearchScan{AlgoOptions: []byte(`{"initial_probe_count":4}`)})
+	require.NoError(t, err)
+	require.Equal(t, []string{"NProbe: 4"}, settings)
+	settings, err = Hooks{}.ExplainSettings(&plan.IndexSearchScan{})
+	require.NoError(t, err)
+	require.Equal(t, []string{"NProbe: 0"}, settings)
+	_, err = Hooks{}.ExplainSettings(&plan.IndexSearchScan{AlgoOptions: []byte(`{`)})
 	require.Error(t, err)
 }

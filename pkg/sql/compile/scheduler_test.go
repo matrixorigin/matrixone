@@ -538,7 +538,7 @@ func TestScheduleQueryWorkersKeepsIvfCurrentParticipantAtOrdinalZero(t *testing.
 	c.ncpu = 6
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
-		Nodes: []*plan.Node{{NodeType: plan.Node_VECTOR_INDEX_SCAN}},
+		Nodes: []*plan.Node{{NodeType: plan.Node_INDEX_SEARCH_SCAN}},
 	}}}
 	c.e = &schedulerTestEngine{
 		nodes: engine.Nodes{
@@ -560,7 +560,7 @@ func TestScheduleQueryWorkersDoesNotUseClusterWideMixedCommitProxyForIvf(t *test
 	c.ncpu = 6
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
-		Nodes: []*plan.Node{{NodeType: plan.Node_VECTOR_INDEX_SCAN}},
+		Nodes: []*plan.Node{{NodeType: plan.Node_INDEX_SEARCH_SCAN}},
 	}}}
 	c.e = &schedulerProviderTestEngine{
 		schedulerTestEngine: &schedulerTestEngine{},
@@ -587,7 +587,7 @@ func TestScheduleQueryWorkersKeepsCurrentCNFirstForIvfEntriesScan(t *testing.T) 
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.proc.Base.QueryClient = fakeQueryClient{}
 	c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
-		Nodes: []*plan.Node{{NodeType: plan.Node_VECTOR_INDEX_SCAN}},
+		Nodes: []*plan.Node{{NodeType: plan.Node_INDEX_SEARCH_SCAN}},
 	}}}
 	c.e = &schedulerTestEngine{nodes: engine.Nodes{
 		{Id: "remote", Addr: "a-remote:6001", Mcpu: 4},
@@ -611,7 +611,7 @@ func TestScheduleQueryWorkersCanonicalizesIvfIngressByServiceID(t *testing.T) {
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.proc.Base.LockService = lockSvc
 	c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
-		Nodes: []*plan.Node{{NodeType: plan.Node_VECTOR_INDEX_SCAN}},
+		Nodes: []*plan.Node{{NodeType: plan.Node_INDEX_SEARCH_SCAN}},
 	}}}
 	c.e = &schedulerProviderTestEngine{
 		schedulerTestEngine: &schedulerTestEngine{},

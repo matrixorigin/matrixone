@@ -3447,24 +3447,24 @@ func TestVectorScanMembershipFilterExtractsInPayload(t *testing.T) {
 
 func TestBuildVectorIndexReadersRejectsIncompleteRuntimeState(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	newScopeFor := func(spec *plan.VectorIndexScan) *Scope {
+	newScopeFor := func(spec *plan.IndexSearchScan) *Scope {
 		return &Scope{
 			Proc: proc,
 			DataSource: &Source{node: &plan.Node{
-				NodeType:        plan.Node_VECTOR_INDEX_SCAN,
-				VectorIndexScan: spec,
+				NodeType:        plan.Node_INDEX_SEARCH_SCAN,
+				IndexSearchScan: spec,
 			}},
 		}
 	}
 
 	_, err := newScopeFor(nil).buildVectorIndexReaders(nil)
 	require.ErrorContains(t, err, "missing index metadata")
-	_, err = newScopeFor(&plan.VectorIndexScan{}).buildVectorIndexReaders(nil)
+	_, err = newScopeFor(&plan.IndexSearchScan{}).buildVectorIndexReaders(nil)
 	require.ErrorContains(t, err, "missing index metadata")
 
-	nullQuery := &plan.VectorIndexScan{
-		Index:       &plan.IndexDef{IndexAlgo: "ivfflat"},
-		QueryVector: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}},
+	nullQuery := &plan.IndexSearchScan{
+		Index:        &plan.IndexDef{IndexAlgo: "ivfflat"},
+		QueryPayload: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}},
 	}
 	readers, err := newScopeFor(nullQuery).buildVectorIndexReaders(nil)
 	require.NoError(t, err)
@@ -3476,41 +3476,41 @@ func TestBuildVectorIndexReadersRejectsIncompleteRuntimeState(t *testing.T) {
 			Value: &plan.Literal_VecVal{VecVal: string(types.ArrayToBytes([]float32{1, 2}))},
 		}},
 	}
-	nullLimit := &plan.VectorIndexScan{
+	nullLimit := &plan.IndexSearchScan{
 		Index:          &plan.IndexDef{IndexAlgo: "ivfflat"},
-		QueryVector:    query,
+		QueryPayload:   query,
 		CandidateLimit: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}},
 	}
 	_, err = newScopeFor(nullLimit).buildVectorIndexReaders(nil)
 	require.ErrorContains(t, err, "result limit did not fold")
 
-	wrongLimitType := &plan.VectorIndexScan{
+	wrongLimitType := &plan.IndexSearchScan{
 		Index:          &plan.IndexDef{IndexAlgo: "ivfflat"},
-		QueryVector:    query,
+		QueryPayload:   query,
 		CandidateLimit: plan2.MakePlan2Int64ConstExprWithType(1),
 	}
 	_, err = newScopeFor(wrongLimitType).buildVectorIndexReaders(nil)
 	require.ErrorContains(t, err, "result limit is not uint64")
 
-	noReaderPlugin := &plan.VectorIndexScan{
+	noReaderPlugin := &plan.IndexSearchScan{
 		Index:          &plan.IndexDef{IndexAlgo: "hnsw"},
-		QueryVector:    query,
+		QueryPayload:   query,
 		CandidateLimit: plan2.MakePlan2Uint64ConstExprWithType(1),
 	}
 	_, err = newScopeFor(noReaderPlugin).buildVectorIndexReaders(nil)
 	require.ErrorContains(t, err, "has no scan reader")
 
-	ivfflatPlugin := &plan.VectorIndexScan{
+	ivfflatPlugin := &plan.IndexSearchScan{
 		Index:          &plan.IndexDef{IndexAlgo: "ivfflat"},
-		QueryVector:    query,
+		QueryPayload:   query,
 		CandidateLimit: plan2.MakePlan2Uint64ConstExprWithType(1),
 	}
 	_, err = newScopeFor(ivfflatPlugin).buildVectorIndexReaders(nil)
 	require.ErrorContains(t, err, "requires a process, transaction, and storage engine")
 
-	unknownPlugin := &plan.VectorIndexScan{
+	unknownPlugin := &plan.IndexSearchScan{
 		Index:          &plan.IndexDef{IndexAlgo: "missing"},
-		QueryVector:    query,
+		QueryPayload:   query,
 		CandidateLimit: plan2.MakePlan2Uint64ConstExprWithType(1),
 	}
 	_, err = newScopeFor(unknownPlugin).buildVectorIndexReaders(nil)

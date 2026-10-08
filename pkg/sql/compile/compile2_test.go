@@ -551,31 +551,31 @@ func TestNodeContainsUnresolvedFullTextRuntimeSlots(t *testing.T) {
 		},
 		{
 			name: "vector query vector",
-			node: &plan.Node{VectorIndexScan: &plan.VectorIndexScan{QueryVector: match()}},
+			node: &plan.Node{IndexSearchScan: &plan.IndexSearchScan{QueryPayload: match()}},
 		},
 		{
 			name: "vector candidate limit",
-			node: &plan.Node{VectorIndexScan: &plan.VectorIndexScan{CandidateLimit: match()}},
+			node: &plan.Node{IndexSearchScan: &plan.IndexSearchScan{CandidateLimit: match()}},
 		},
 		{
 			name: "vector first round limit",
-			node: &plan.Node{VectorIndexScan: &plan.VectorIndexScan{FirstRoundLimit: match()}},
+			node: &plan.Node{IndexSearchScan: &plan.IndexSearchScan{AlgoExprs: []*plan.Expr{match()}, AlgoExprNames: []string{"first_round_limit"}}},
 		},
 		{
 			name: "vector lower distance bound",
-			node: &plan.Node{VectorIndexScan: &plan.VectorIndexScan{
+			node: &plan.Node{IndexSearchScan: &plan.IndexSearchScan{
 				DistanceRange: &plan.DistRange{LowerBound: match()},
 			}},
 		},
 		{
 			name: "vector upper distance bound",
-			node: &plan.Node{VectorIndexScan: &plan.VectorIndexScan{
+			node: &plan.Node{IndexSearchScan: &plan.IndexSearchScan{
 				DistanceRange: &plan.DistRange{UpperBound: match()},
 			}},
 		},
 		{
 			name: "vector prefilter",
-			node: &plan.Node{VectorIndexScan: &plan.VectorIndexScan{PreFilters: []*plan.Expr{match()}}},
+			node: &plan.Node{IndexSearchScan: &plan.IndexSearchScan{PreFilters: []*plan.Expr{match()}}},
 		},
 		{
 			name: "runtime filter probe expression",
@@ -605,8 +605,8 @@ func TestNodeContainsUnresolvedFullTextIgnoresSourceTableDefaults(t *testing.T) 
 		Func: &plan.ObjectRef{ObjName: "fulltext_match"},
 	}}}
 	node := &plan.Node{
-		NodeType: plan.Node_VECTOR_INDEX_SCAN,
-		VectorIndexScan: &plan.VectorIndexScan{
+		NodeType: plan.Node_INDEX_SEARCH_SCAN,
+		IndexSearchScan: &plan.IndexSearchScan{
 			SourceTableDef: &plan.TableDef{Cols: []*plan.ColDef{{
 				Default: &plan.Default{Expr: match},
 			}}},

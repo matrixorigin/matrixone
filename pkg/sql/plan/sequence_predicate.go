@@ -203,10 +203,10 @@ func containsSequenceNodeExpressions(node *planpb.Node) bool {
 		containsSequenceExpressions(pre.CompPkeyExpr, pre.ClusterByExpr) {
 		return true
 	}
-	if scan := node.VectorIndexScan; scan != nil {
-		if ContainsSequenceFunction(scan.QueryVector) ||
+	if scan := node.IndexSearchScan; scan != nil {
+		if ContainsSequenceFunction(scan.QueryPayload) ||
 			ContainsSequenceFunction(scan.CandidateLimit) ||
-			containsSequenceExpressions(scan.PreFilters...) || ContainsSequenceFunction(scan.FirstRoundLimit) {
+			containsSequenceExpressions(scan.PreFilters...) || containsSequenceExpressions(scan.AlgoExprs...) {
 			return true
 		}
 		if dist := scan.DistanceRange; dist != nil &&

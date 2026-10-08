@@ -711,7 +711,7 @@ func TestPrepareIvfIndexContext_AdaptiveNprobeAndFinalPostCandidate(t *testing.T
 	var findPostScan func(int32)
 	findPostScan = func(id int32) {
 		n := builder.qry.Nodes[id]
-		if n.NodeType == plan.Node_VECTOR_INDEX_SCAN && postScan == nil {
+		if n.NodeType == plan.Node_INDEX_SEARCH_SCAN && postScan == nil {
 			postScan = n
 		}
 		if n.NodeType == plan.Node_TABLE_SCAN {
@@ -723,9 +723,9 @@ func TestPrepareIvfIndexContext_AdaptiveNprobeAndFinalPostCandidate(t *testing.T
 	}
 	findPostScan(adaptive.Children[0])
 	require.NotNil(t, postScan)
-	require.NotNil(t, postScan.VectorIndexScan)
-	require.Equal(t, uint32(20), postScan.VectorIndexScan.InitialProbeCount)
-	require.Equal(t, []string{"a"}, postScan.VectorIndexScan.IncludedColumns)
+	require.NotNil(t, postScan.IndexSearchScan)
+	require.Equal(t, uint32(20), testIvfScanOptions(t, postScan.IndexSearchScan).InitialProbeCount)
+	require.Equal(t, []string{"a"}, postScan.IndexSearchScan.IncludedColumns)
 	require.False(t, postHasBaseScan, "AUTO POST must remain index-only when INCLUDE covers the projection")
 
 	// The persisted representation is quoted, while older metadata can contain
@@ -1997,7 +1997,7 @@ func TestGetResultColumnsFromPlanMapsVectorIndexSourceSlots(t *testing.T) {
 		},
 		Indexes: []*plan.IndexDef{{Parts: []string{"category"}, Unique: true}},
 	}
-	vectorScan := &plan.VectorIndexScan{
+	vectorScan := &plan.IndexSearchScan{
 		SourceTable:    &plan.ObjectRef{SchemaName: "source_db", ObjName: "source_table"},
 		SourceTableDef: tableDef,
 		Index:          &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()},
@@ -2029,7 +2029,7 @@ func TestGetResultColumnsFromPlanMapsVectorIndexSourceSlots(t *testing.T) {
 		Nodes: []*plan.Node{
 			{
 				NodeId:      0,
-				NodeType:    plan.Node_VECTOR_INDEX_SCAN,
+				NodeType:    plan.Node_INDEX_SEARCH_SCAN,
 				BindingTags: []int32{10},
 				TableDef: &plan.TableDef{Cols: []*plan.ColDef{
 					{Name: "pkid", Typ: tableDef.Cols[2].Typ},
@@ -2038,7 +2038,7 @@ func TestGetResultColumnsFromPlanMapsVectorIndexSourceSlots(t *testing.T) {
 					{Name: "__mo_index_include_payload", Typ: tableDef.Cols[1].Typ},
 				}},
 				ProjectList:     vectorNodeProjectList,
-				VectorIndexScan: vectorScan,
+				IndexSearchScan: vectorScan,
 			},
 			{NodeId: 1, NodeType: plan.Node_PROJECT, Children: []int32{0}, ProjectList: projectList},
 		},
@@ -2086,7 +2086,7 @@ func TestGetResultColumnsFromPlanMapsPrunedVectorIndexSlotsByName(t *testing.T) 
 		Name2ColIndex: map[string]int32{"embedding": 0, "payload": 1, "id": 2, "category": 3},
 		Indexes:       []*plan.IndexDef{{Parts: []string{"category"}, Unique: true}},
 	}
-	vectorSpec := &plan.VectorIndexScan{
+	vectorSpec := &plan.IndexSearchScan{
 		SourceTable:    &plan.ObjectRef{SchemaName: "source_db", ObjName: "source_table"},
 		SourceTableDef: sourceTable,
 		Index:          &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()},
@@ -2124,10 +2124,10 @@ func TestGetResultColumnsFromPlanMapsPrunedVectorIndexSlotsByName(t *testing.T) 
 			Nodes: []*plan.Node{
 				{
 					NodeId:      0,
-					NodeType:    plan.Node_VECTOR_INDEX_SCAN,
+					NodeType:    plan.Node_INDEX_SEARCH_SCAN,
 					TableDef:    &plan.TableDef{Cols: vectorCols},
 					ProjectList: projectList,
-					VectorIndexScan: &plan.VectorIndexScan{
+					IndexSearchScan: &plan.IndexSearchScan{
 						SourceTable:     vectorSpec.SourceTable,
 						SourceTableDef:  vectorSpec.SourceTableDef,
 						Index:           vectorSpec.Index,
@@ -2190,7 +2190,7 @@ func TestGetResultColumnsFromPlanMapsPrunedVectorIndexSlotsByName(t *testing.T) 
 		Steps:    []int32{2},
 		Nodes: []*plan.Node{
 			{
-				NodeId: 0, NodeType: plan.Node_VECTOR_INDEX_SCAN,
+				NodeId: 0, NodeType: plan.Node_INDEX_SEARCH_SCAN,
 				TableDef: &plan.TableDef{Cols: []*plan.ColDef{
 					{Name: "pkid", Typ: sourceTable.Cols[2].Typ},
 					{Name: "score", Typ: plan.Type{Id: int32(types.T_float64)}},
@@ -2203,7 +2203,7 @@ func TestGetResultColumnsFromPlanMapsPrunedVectorIndexSlotsByName(t *testing.T) 
 					{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 2, Name: "__mo_index_include_category"}}},
 					{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 3, Name: "__mo_index_include_payload"}}},
 				},
-				VectorIndexScan: vectorSpec,
+				IndexSearchScan: vectorSpec,
 			},
 			{NodeId: 1, NodeType: plan.Node_SORT, Children: []int32{0}, ProjectList: []*plan.Expr{
 				{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}}},
@@ -2293,7 +2293,7 @@ func TestGetResultColumnsFromPlanFailsClosedForInvalidVectorIndexSource(t *testi
 		Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"},
 		Cols: []*plan.ColDef{{Name: "id", Primary: true}, {Name: "category"}},
 	}
-	vectorScan := &plan.VectorIndexScan{
+	vectorScan := &plan.IndexSearchScan{
 		SourceTableDef:  tableDef,
 		Index:           &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()},
 		IncludedColumns: []string{"missing"},
@@ -2316,7 +2316,7 @@ func TestGetResultColumnsFromPlanFailsClosedForInvalidVectorIndexSource(t *testi
 		StmtType: plan.Query_SELECT,
 		Steps:    []int32{1},
 		Nodes: []*plan.Node{
-			{NodeId: 0, NodeType: plan.Node_VECTOR_INDEX_SCAN, TableDef: vectorTableDef, VectorIndexScan: vectorScan},
+			{NodeId: 0, NodeType: plan.Node_INDEX_SEARCH_SCAN, TableDef: vectorTableDef, IndexSearchScan: vectorScan},
 			{NodeId: 1, NodeType: plan.Node_PROJECT, Children: []int32{0}, ProjectList: projectList},
 		},
 		Headings: []string{"id", "score", "missing", "invalid"},
@@ -2335,7 +2335,7 @@ func TestGetResultColumnsFromPlanFailsClosedForInvalidVectorIndexSource(t *testi
 		StmtType: plan.Query_SELECT,
 		Steps:    []int32{1},
 		Nodes: []*plan.Node{
-			{NodeId: 0, NodeType: plan.Node_VECTOR_INDEX_SCAN, TableDef: vectorTableDef, VectorIndexScan: vectorScan},
+			{NodeId: 0, NodeType: plan.Node_INDEX_SEARCH_SCAN, TableDef: vectorTableDef, IndexSearchScan: vectorScan},
 			{NodeId: 1, NodeType: plan.Node_PROJECT, Children: []int32{0}, ProjectList: projectList},
 		},
 		Headings: []string{"id", "score", "missing", "invalid"},
@@ -2344,12 +2344,12 @@ func TestGetResultColumnsFromPlanFailsClosedForInvalidVectorIndexSource(t *testi
 	require.Empty(t, got[0].OriginName)
 }
 
-// TestResultColumnSourceFromVectorIndexScanFailsClosedForNonIvfflat pins #29212: the IVFFlat
+// TestResultColumnSourceFromIndexSearchScanFailsClosedForNonIvfflat pins #29212: the IVFFlat
 // synthetic-schema resolver (pkid/score/__mo_index_include_*) must only be applied to an IVFFlat
-// VECTOR_INDEX_SCAN. The same node resolves under the IVFFlat algo but yields no source metadata
-// for any other algo (or a missing Index), so a future non-IVFFlat VECTOR_INDEX_SCAN cannot inherit
+// INDEX_SEARCH_SCAN. The same node resolves under the IVFFlat algo but yields no source metadata
+// for any other algo (or a missing Index), so a future non-IVFFlat INDEX_SEARCH_SCAN cannot inherit
 // IVFFlat's schema by accident. Guards the resolver relocated from build.go (PR #28833).
-func TestResultColumnSourceFromVectorIndexScanFailsClosedForNonIvfflat(t *testing.T) {
+func TestResultColumnSourceFromIndexSearchScanFailsClosedForNonIvfflat(t *testing.T) {
 	sourceTable := &plan.TableDef{
 		Name:          "source_table",
 		DbName:        "source_db",
@@ -2361,33 +2361,33 @@ func TestResultColumnSourceFromVectorIndexScanFailsClosedForNonIvfflat(t *testin
 	sourceRef := &plan.ObjectRef{SchemaName: "source_db", ObjName: "source_table"}
 
 	// IVFFlat resolves the pkid slot to the source primary key.
-	ivf := &plan.VectorIndexScan{
+	ivf := &plan.IndexSearchScan{
 		SourceTable:    sourceRef,
 		SourceTableDef: sourceTable,
 		Index:          &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()},
 	}
-	got := resultColumnSourceFromVectorIndexScan(ivf, vectorTableDef, 0)
+	got := resultColumnSourceFromIndexSearchScan(ivf, vectorTableDef, 0)
 	require.NotNil(t, got)
 	require.Equal(t, "id", got.columnName)
 	require.True(t, got.primary)
 
 	// A non-IVFFlat algorithm fails closed -- no source metadata.
-	nonIvf := &plan.VectorIndexScan{
+	nonIvf := &plan.IndexSearchScan{
 		SourceTable:    sourceRef,
 		SourceTableDef: sourceTable,
 		Index:          &plan.IndexDef{IndexAlgo: "hnsw"},
 	}
-	require.Nil(t, resultColumnSourceFromVectorIndexScan(nonIvf, vectorTableDef, 0))
+	require.Nil(t, resultColumnSourceFromIndexSearchScan(nonIvf, vectorTableDef, 0))
 
 	// A missing Index also fails closed (GetIndexAlgo is nil-safe).
-	missingIndex := &plan.VectorIndexScan{SourceTable: sourceRef, SourceTableDef: sourceTable}
-	require.Nil(t, resultColumnSourceFromVectorIndexScan(missingIndex, vectorTableDef, 0))
+	missingIndex := &plan.IndexSearchScan{SourceTable: sourceRef, SourceTableDef: sourceTable}
+	require.Nil(t, resultColumnSourceFromIndexSearchScan(missingIndex, vectorTableDef, 0))
 }
 
-// TestResultColumnSourceFromVectorIndexScanFailClosedBranches exercises every fail-closed
-// branch of the IVFFlat synthetic-schema resolver so a malformed/pruned VECTOR_INDEX_SCAN
+// TestResultColumnSourceFromIndexSearchScanFailClosedBranches exercises every fail-closed
+// branch of the IVFFlat synthetic-schema resolver so a malformed/pruned INDEX_SEARCH_SCAN
 // can never mis-resolve a source column (#29212).
-func TestResultColumnSourceFromVectorIndexScanFailClosedBranches(t *testing.T) {
+func TestResultColumnSourceFromIndexSearchScanFailClosedBranches(t *testing.T) {
 	sourceTable := &plan.TableDef{
 		Name:          "source_table",
 		DbName:        "source_db",
@@ -2396,8 +2396,8 @@ func TestResultColumnSourceFromVectorIndexScanFailClosedBranches(t *testing.T) {
 		Name2ColIndex: map[string]int32{"id": 0, "payload": 1},
 	}
 	ivfIndex := &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()}
-	newScan := func() *plan.VectorIndexScan {
-		return &plan.VectorIndexScan{SourceTableDef: sourceTable, Index: ivfIndex}
+	newScan := func() *plan.IndexSearchScan {
+		return &plan.IndexSearchScan{SourceTableDef: sourceTable, Index: ivfIndex}
 	}
 	includeCol := catalog.SystemSI_IVFFLAT_IncludeColPrefix + "payload"
 	vecCols := func(names ...string) *plan.TableDef {
@@ -2409,25 +2409,25 @@ func TestResultColumnSourceFromVectorIndexScanFailClosedBranches(t *testing.T) {
 	}
 
 	// nil-guard branch (scan/SourceTableDef/vectorTableDef nil, negative colPos).
-	require.Nil(t, resultColumnSourceFromVectorIndexScan(nil, vecCols("pkid"), 0))
-	require.Nil(t, resultColumnSourceFromVectorIndexScan(&plan.VectorIndexScan{Index: ivfIndex}, vecCols("pkid"), 0))
-	require.Nil(t, resultColumnSourceFromVectorIndexScan(newScan(), nil, 0))
-	require.Nil(t, resultColumnSourceFromVectorIndexScan(newScan(), vecCols("pkid"), -1))
+	require.Nil(t, resultColumnSourceFromIndexSearchScan(nil, vecCols("pkid"), 0))
+	require.Nil(t, resultColumnSourceFromIndexSearchScan(&plan.IndexSearchScan{Index: ivfIndex}, vecCols("pkid"), 0))
+	require.Nil(t, resultColumnSourceFromIndexSearchScan(newScan(), nil, 0))
+	require.Nil(t, resultColumnSourceFromIndexSearchScan(newScan(), vecCols("pkid"), -1))
 
 	// colPos past the synthetic schema.
-	require.Nil(t, resultColumnSourceFromVectorIndexScan(newScan(), vecCols("pkid"), 5))
+	require.Nil(t, resultColumnSourceFromIndexSearchScan(newScan(), vecCols("pkid"), 5))
 
 	// nil column slot.
-	require.Nil(t, resultColumnSourceFromVectorIndexScan(newScan(), &plan.TableDef{Cols: []*plan.ColDef{nil}}, 0))
+	require.Nil(t, resultColumnSourceFromIndexSearchScan(newScan(), &plan.TableDef{Cols: []*plan.ColDef{nil}}, 0))
 
 	// score slot never maps to a source column.
-	require.Nil(t, resultColumnSourceFromVectorIndexScan(newScan(), vecCols("score"), 0))
+	require.Nil(t, resultColumnSourceFromIndexSearchScan(newScan(), vecCols("score"), 0))
 
 	// include prefix with an empty include name.
-	require.Nil(t, resultColumnSourceFromVectorIndexScan(newScan(), vecCols(catalog.SystemSI_IVFFLAT_IncludeColPrefix), 0))
+	require.Nil(t, resultColumnSourceFromIndexSearchScan(newScan(), vecCols(catalog.SystemSI_IVFFLAT_IncludeColPrefix), 0))
 
 	// include name not listed in IncludedColumns.
-	require.Nil(t, resultColumnSourceFromVectorIndexScan(newScan(), vecCols(includeCol), 0))
+	require.Nil(t, resultColumnSourceFromIndexSearchScan(newScan(), vecCols(includeCol), 0))
 
 	// include name listed but absent from the source table.
 	missingScan := newScan()
@@ -2438,10 +2438,10 @@ func TestResultColumnSourceFromVectorIndexScanFailClosedBranches(t *testing.T) {
 		Cols:          []*plan.ColDef{{Name: "id", Primary: true}},
 		Name2ColIndex: map[string]int32{"id": 0},
 	}
-	require.Nil(t, resultColumnSourceFromVectorIndexScan(missingScan, vecCols(includeCol), 0))
+	require.Nil(t, resultColumnSourceFromIndexSearchScan(missingScan, vecCols(includeCol), 0))
 
 	// unknown synthetic column name (default branch).
-	require.Nil(t, resultColumnSourceFromVectorIndexScan(newScan(), vecCols("mystery"), 0))
+	require.Nil(t, resultColumnSourceFromIndexSearchScan(newScan(), vecCols("mystery"), 0))
 
 	// pkid slot but the source primary key is unresolvable (position not found).
 	noPkScan := newScan()
@@ -2450,13 +2450,13 @@ func TestResultColumnSourceFromVectorIndexScanFailClosedBranches(t *testing.T) {
 		Cols:          []*plan.ColDef{{Name: "payload"}},
 		Name2ColIndex: map[string]int32{"payload": 0},
 	}
-	require.Nil(t, resultColumnSourceFromVectorIndexScan(noPkScan, vecCols("pkid"), 0))
+	require.Nil(t, resultColumnSourceFromIndexSearchScan(noPkScan, vecCols("pkid"), 0))
 }
 
-// TestResultColumnSourceFromVectorIndexScanCompletesNamesFromObjectRef covers the ObjectRef
+// TestResultColumnSourceFromIndexSearchScanCompletesNamesFromObjectRef covers the ObjectRef
 // name-completion branch: when SourceTableDef leaves db/table names empty, the resolved source
 // is completed from the scan's authoritative ObjectRef (DbName, then SchemaName, then ObjName).
-func TestResultColumnSourceFromVectorIndexScanCompletesNamesFromObjectRef(t *testing.T) {
+func TestResultColumnSourceFromIndexSearchScanCompletesNamesFromObjectRef(t *testing.T) {
 	// SourceTableDef with no db/table names so the resolved source starts blank.
 	sourceTable := &plan.TableDef{
 		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
@@ -2466,23 +2466,23 @@ func TestResultColumnSourceFromVectorIndexScanCompletesNamesFromObjectRef(t *tes
 	vectorTableDef := &plan.TableDef{Cols: []*plan.ColDef{{Name: "pkid"}}}
 
 	// DbName present on the ObjectRef fills the db name; ObjName fills the table name.
-	byDbName := &plan.VectorIndexScan{
+	byDbName := &plan.IndexSearchScan{
 		SourceTable:    &plan.ObjectRef{DbName: "db1", ObjName: "tbl1"},
 		SourceTableDef: sourceTable,
 		Index:          &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()},
 	}
-	got := resultColumnSourceFromVectorIndexScan(byDbName, vectorTableDef, 0)
+	got := resultColumnSourceFromIndexSearchScan(byDbName, vectorTableDef, 0)
 	require.NotNil(t, got)
 	require.Equal(t, "db1", got.dbName)
 	require.Equal(t, "tbl1", got.tableName)
 
 	// With an empty DbName the SchemaName is used as the fallback.
-	bySchema := &plan.VectorIndexScan{
+	bySchema := &plan.IndexSearchScan{
 		SourceTable:    &plan.ObjectRef{SchemaName: "schema1", ObjName: "tbl2"},
 		SourceTableDef: sourceTable,
 		Index:          &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()},
 	}
-	got = resultColumnSourceFromVectorIndexScan(bySchema, vectorTableDef, 0)
+	got = resultColumnSourceFromIndexSearchScan(bySchema, vectorTableDef, 0)
 	require.NotNil(t, got)
 	require.Equal(t, "schema1", got.dbName)
 	require.Equal(t, "tbl2", got.tableName)

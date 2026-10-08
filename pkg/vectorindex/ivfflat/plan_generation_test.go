@@ -150,9 +150,9 @@ func TestPlanGenerationFailsClosedBeforeStorage(t *testing.T) {
 	proc := testutil.NewProc(t)
 	proc.Base.TxnOperator = mock_frontend.NewMockTxnOperator(ctrl)
 	proc.Base.SessionInfo.StorageEngine = mock_frontend.NewMockEngine(ctrl) // no calls allowed
-	spec := &plan.VectorIndexScan{Index: &plan.IndexDef{IndexAlgoParams: `{"lists":"1","op_type":"vector_l2_ops"}`},
+	spec := &plan.IndexSearchScan{Index: &plan.IndexDef{IndexAlgoParams: `{"lists":"1","op_type":"vector_l2_ops"}`},
 		SourceTable: &plan.ObjectRef{}, SourceTableDef: &plan.TableDef{Cols: []*plan.ColDef{{Name: "pk", Typ: plan.Type{Id: int32(types.T_int64)}}},
-			Pkey: &plan.PrimaryKeyDef{PkeyColName: "pk"}, Name2ColIndex: map[string]int32{"pk": 0}}, ScanWork: &plan.VectorIndexScanWork{}}
+			Pkey: &plan.PrimaryKeyDef{PkeyColName: "pk"}, Name2ColIndex: map[string]int32{"pk": 0}}, ScanWork: &plan.IndexSearchScanWork{}}
 	keys := vector.NewVec(types.T_int64.ToType())
 	defer keys.Free(proc.Mp())
 	require.NoError(t, vector.AppendFixed(keys, int64(7), false, proc.Mp()))
@@ -168,11 +168,24 @@ func TestPlanGenerationFailsClosedBeforeStorage(t *testing.T) {
 		func(r *searchplugin.Request) { r.HasMembershipFilter = false },
 		func(r *searchplugin.Request) { r.Identity.PartitionCount = 2 },
 		func(r *searchplugin.Request) { r.MembershipFilter = []byte{1, 2} },
-		func(r *searchplugin.Request) { r.HasFirstRound = true },
 	} {
 		bad := req
 		change(&bad)
 		readers, err := NewPlanReaders(proc, spec, bad, 2)
+		require.Error(t, err)
+		require.Nil(t, readers)
+	}
+	for _, multiRound := range []func(*plan.IndexSearchScan){
+		func(s *plan.IndexSearchScan) {
+			s.AlgoExprs = []*plan.Expr{{}}
+			s.AlgoExprNames = []string{FirstRoundLimitExpr}
+		},
+		func(s *plan.IndexSearchScan) { s.AlgoOptions = []byte(`{"bucket_expand_step":2}`) },
+		func(s *plan.IndexSearchScan) { s.AlgoOptions = []byte(`{`) },
+	} {
+		bad := *spec
+		multiRound(&bad)
+		readers, err := NewPlanReaders(proc, &bad, req, 2)
 		require.Error(t, err)
 		require.Nil(t, readers)
 	}
@@ -194,12 +207,12 @@ func TestPlanGenerationFailsClosedBeforeStorage(t *testing.T) {
 	distributed.Identity.PartitionCount = 2
 	distributed.Identity.PartitionIndex = 1
 	distributed.Identity.IsRemote = true
-	spec.ScanWork = &plan.VectorIndexScanWork{Objects: 2, Rows: 10, Blocks: 2, VectorBytesPerRow: 512}
+	spec.ScanWork = &plan.IndexSearchScanWork{Objects: 2, Rows: 10, Blocks: 2, VectorBytesPerRow: 512}
 	readers, err = NewPlanReaders(proc, spec, distributed, 1)
 	require.NoError(t, err)
 	require.Len(t, readers, 1)
 	require.NoError(t, readers[0].Close())
-	for _, invalid := range []*plan.VectorIndexScanWork{
+	for _, invalid := range []*plan.IndexSearchScanWork{
 		{Objects: 1, Rows: 10, Blocks: 2, VectorBytesPerRow: 512},
 		{Objects: 2, Rows: -1, Blocks: 2, VectorBytesPerRow: 512},
 		{Objects: 2, Rows: 10, Blocks: 0, VectorBytesPerRow: 512},
@@ -210,7 +223,7 @@ func TestPlanGenerationFailsClosedBeforeStorage(t *testing.T) {
 		require.Error(t, err)
 		require.Nil(t, readers)
 	}
-	spec.ScanWork = &plan.VectorIndexScanWork{}
+	spec.ScanWork = &plan.IndexSearchScanWork{}
 
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	old, exists := rt.GetGlobalVariables(moruntime.CNMemoryThrottler)

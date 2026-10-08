@@ -358,7 +358,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		DedupJoinCtx:               DeepCopyDedupJoinCtx(node.DedupJoinCtx),
 		IndexReaderParam:           DeepCopyIndexReaderParam(node.IndexReaderParam),
 		ScanSnapshot:               DeepCopySnapshot(node.ScanSnapshot),
-		VectorIndexScan:            DeepCopyVectorIndexScan(node.VectorIndexScan),
+		IndexSearchScan:            DeepCopyIndexSearchScan(node.IndexSearchScan),
 		ViewPath:                   DeepCopyViewPath(node.ViewPath),
 		RankOption:                 DeepCopyRankOption(node.RankOption),
 		WindowIdx:                  node.WindowIdx,
@@ -485,45 +485,44 @@ func DeepCopyDistRange(old *plan.DistRange) *plan.DistRange {
 	}
 }
 
-func DeepCopyVectorIndexScan(old *plan.VectorIndexScan) *plan.VectorIndexScan {
+func DeepCopyIndexSearchScan(old *plan.IndexSearchScan) *plan.IndexSearchScan {
 	if old == nil {
 		return nil
 	}
-	var work *plan.VectorIndexScanWork
+	var work *plan.IndexSearchScanWork
 	if old.ScanWork != nil {
-		work = &plan.VectorIndexScanWork{Rows: old.ScanWork.Rows, Blocks: old.ScanWork.Blocks,
+		work = &plan.IndexSearchScanWork{Rows: old.ScanWork.Rows, Blocks: old.ScanWork.Blocks,
 			VectorBytesPerRow: old.ScanWork.VectorBytesPerRow, Objects: old.ScanWork.Objects}
 	}
-	hidden := make([]*plan.VectorIndexTableRef, len(old.HiddenTables))
+	hidden := make([]*plan.IndexHiddenTableRef, len(old.HiddenTables))
 	for i, table := range old.HiddenTables {
 		if table == nil {
 			continue
 		}
-		hidden[i] = &plan.VectorIndexTableRef{
+		hidden[i] = &plan.IndexHiddenTableRef{
 			Role:   table.Role,
 			Object: DeepCopyObjectRef(table.Object),
 			Table:  DeepCopyTableDef(table.Table, true),
 		}
 	}
-	return &plan.VectorIndexScan{
+	return &plan.IndexSearchScan{
 		SourceTable:         DeepCopyObjectRef(old.SourceTable),
 		SourceTableDef:      DeepCopyTableDef(old.SourceTableDef, true),
 		Index:               DeepCopyIndexDef(old.Index),
 		HiddenTables:        hidden,
-		QueryVector:         DeepCopyExpr(old.QueryVector),
+		QueryPayload:        DeepCopyExpr(old.QueryPayload),
 		DistanceFunction:    old.DistanceFunction,
 		Direction:           old.Direction,
 		CandidateLimit:      DeepCopyExpr(old.CandidateLimit),
 		DistanceRange:       DeepCopyDistRange(old.DistanceRange),
 		PreFilters:          DeepCopyExprList(old.PreFilters),
 		IncludedColumns:     slices.Clone(old.IncludedColumns),
-		InitialProbeCount:   old.InitialProbeCount,
-		FirstRoundLimit:     DeepCopyExpr(old.FirstRoundLimit),
-		BucketExpandStep:    old.BucketExpandStep,
-		ThreadsSearch:       old.ThreadsSearch,
 		ScanSnapshot:        DeepCopySnapshot(old.ScanSnapshot),
 		PostFilterOverFetch: old.PostFilterOverFetch,
 		ScanWork:            work,
+		AlgoOptions:         slices.Clone(old.AlgoOptions),
+		AlgoExprs:           DeepCopyExprList(old.AlgoExprs),
+		AlgoExprNames:       slices.Clone(old.AlgoExprNames),
 	}
 }
 

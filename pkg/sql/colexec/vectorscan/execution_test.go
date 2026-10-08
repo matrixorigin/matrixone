@@ -31,7 +31,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func parameterizedScanTemplate(t *testing.T) *plan.VectorIndexScan {
+func parameterizedScanTemplate(t *testing.T) *plan.IndexSearchScan {
 	t.Helper()
 	parameter := &plan.Expr{
 		Typ:  plan.Type{Id: int32(types.T_varchar)},
@@ -53,12 +53,13 @@ func parameterizedScanTemplate(t *testing.T) *plan.VectorIndexScan {
 		concat,
 	})
 	require.NoError(t, err)
-	return &plan.VectorIndexScan{
+	return &plan.IndexSearchScan{
 		Index:               &plan.IndexDef{IndexAlgo: "ivfflat"},
 		SourceTable:         &plan.ObjectRef{},
-		QueryVector:         plan2.MakePlan2Vecf32ConstExprWithType("[1,2]", 2),
+		QueryPayload:        plan2.MakePlan2Vecf32ConstExprWithType("[1,2]", 2),
 		CandidateLimit:      plan2.MakePlan2Uint64ConstExprWithType(2),
-		FirstRoundLimit:     plan2.MakePlan2Uint64ConstExprWithType(1),
+		AlgoExprs:           []*plan.Expr{plan2.MakePlan2Uint64ConstExprWithType(1)},
+		AlgoExprNames:       []string{"first_round_limit"},
 		PreFilters:          []*plan.Expr{filter},
 		PostFilterOverFetch: true,
 	}
@@ -75,7 +76,7 @@ func installStringParam(t *testing.T, proc *process.Process, value string) func(
 	}
 }
 
-func foldedFilterValue(t *testing.T, spec *plan.VectorIndexScan) string {
+func foldedFilterValue(t *testing.T, spec *plan.IndexSearchScan) string {
 	t.Helper()
 	require.Len(t, spec.PreFilters, 1)
 	right := spec.PreFilters[0].GetF().Args[1]
@@ -117,8 +118,7 @@ func TestExecutionKeepsTemplateImmutableAcrossPreparedGenerations(t *testing.T) 
 	require.True(t, hasQuery)
 	require.Equal(t, uint64(2), req.ResultLimit)
 	require.Equal(t, overfetch.FilteredPostModeLimit(2), req.CandidateBudget)
-	require.Equal(t, uint64(1), req.FirstRoundLimit)
-	require.True(t, req.HasFirstRound)
+	requireAlgoU64(t, req, "first_round_limit", 1)
 	first.Close()
 	first.Close()
 
@@ -162,13 +162,12 @@ func TestPrepareScalarKeepsTemplateImmutableAcrossParameters(t *testing.T) {
 	require.True(t, req.MembershipFilterRequired)
 	require.Equal(t, uint64(2), req.ResultLimit)
 	require.Equal(t, overfetch.FilteredPostModeLimit(2), req.CandidateBudget)
-	require.Equal(t, uint64(1), req.FirstRoundLimit)
-	require.True(t, req.HasFirstRound)
+	requireAlgoU64(t, req, "first_round_limit", 1)
 }
 
 func TestIdentityUsesPublisherBeforeSnapshotTenant(t *testing.T) {
 	currentSnapshot := timestamp.Timestamp{PhysicalTime: 10}
-	spec := &plan.VectorIndexScan{
+	spec := &plan.IndexSearchScan{
 		SourceTable: &plan.ObjectRef{PubInfo: &plan.PubInfo{TenantId: 42}},
 		ScanSnapshot: &plan.Snapshot{
 			TS:     &timestamp.Timestamp{PhysicalTime: 8},
@@ -201,7 +200,7 @@ func TestIdentityKeepsCurrentTxnForNonHistoricalSnapshot(t *testing.T) {
 		currentSnapshot,
 		{PhysicalTime: 11},
 	} {
-		spec := &plan.VectorIndexScan{
+		spec := &plan.IndexSearchScan{
 			SourceTable: &plan.ObjectRef{},
 			ScanSnapshot: &plan.Snapshot{
 				TS:     &snapshotTS,
@@ -215,7 +214,7 @@ func TestIdentityKeepsCurrentTxnForNonHistoricalSnapshot(t *testing.T) {
 	}
 
 	publisherID := int32(42)
-	identity, err := Identity(&plan.VectorIndexScan{
+	identity, err := Identity(&plan.IndexSearchScan{
 		SourceTable: &plan.ObjectRef{PubInfo: &plan.PubInfo{TenantId: publisherID}},
 		ScanSnapshot: &plan.Snapshot{
 			TS:     &timestamp.Timestamp{PhysicalTime: 11},
@@ -233,7 +232,7 @@ func TestExecutionRejectsInvalidRuntimeState(t *testing.T) {
 
 	_, err := PrepareScalar(nil, proc)
 	require.ErrorContains(t, err, "incomplete metadata")
-	_, err = PrepareCorrelatedExecution(&plan.VectorIndexScan{}, proc)
+	_, err = PrepareCorrelatedExecution(&plan.IndexSearchScan{}, proc)
 	require.ErrorContains(t, err, "incomplete metadata")
 	var nilExecution *Execution
 	require.Error(t, nilExecution.EvalBatch(batch.EmptyForConstFoldBatch, proc))
@@ -242,11 +241,11 @@ func TestExecutionRejectsInvalidRuntimeState(t *testing.T) {
 	_, err = Identity(nil, timestamp.Timestamp{}, 0, 1, 0)
 	require.ErrorContains(t, err, "missing metadata")
 
-	base := func() *plan.VectorIndexScan {
-		return &plan.VectorIndexScan{
+	base := func() *plan.IndexSearchScan {
+		return &plan.IndexSearchScan{
 			Index:          &plan.IndexDef{IndexAlgo: "ivfflat"},
 			SourceTable:    &plan.ObjectRef{},
-			QueryVector:    plan2.MakePlan2Vecf32ConstExprWithType("[1,2]", 2),
+			QueryPayload:   plan2.MakePlan2Vecf32ConstExprWithType("[1,2]", 2),
 			CandidateLimit: plan2.MakePlan2Uint64ConstExprWithType(2),
 		}
 	}
@@ -261,7 +260,7 @@ func TestExecutionRejectsInvalidRuntimeState(t *testing.T) {
 	execution.Close()
 
 	nullQuery := base()
-	nullQuery.QueryVector = &plan.Expr{
+	nullQuery.QueryPayload = &plan.Expr{
 		Typ: plan.Type{Id: int32(types.T_array_float32), Width: 2},
 		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
 			Isnull: true,
@@ -285,14 +284,27 @@ func TestExecutionRejectsInvalidRuntimeState(t *testing.T) {
 	require.ErrorContains(t, err, "result limit did not evaluate to uint64")
 	execution.Close()
 
-	wrongFirstRound := base()
-	wrongFirstRound.FirstRoundLimit = plan2.MakePlan2Int64ConstExprWithType(1)
-	execution, err = PrepareCorrelatedExecution(wrongFirstRound, proc)
+	// an algorithm value is passed through as evaluated; its algorithm checks the type
+	signedAlgo := base()
+	signedAlgo.AlgoExprs = []*plan.Expr{plan2.MakePlan2Int64ConstExprWithType(-1)}
+	signedAlgo.AlgoExprNames = []string{"first_round_limit"}
+	execution, err = PrepareCorrelatedExecution(signedAlgo, proc)
 	require.NoError(t, err)
 	require.NoError(t, execution.EvalBatch(batch.EmptyForConstFoldBatch, proc))
-	_, _, err = execution.RequestAt(0, searchIdentityForTest())
-	require.ErrorContains(t, err, "first-round limit did not evaluate to uint64")
+	req, ok, err := execution.RequestAt(0, searchIdentityForTest())
+	require.NoError(t, err)
+	require.True(t, ok)
+	lit, found := req.AlgoValue("first_round_limit")
+	require.True(t, found)
+	require.Equal(t, int64(-1), lit.GetI64Val())
 	execution.Close()
+
+	unnamed := base()
+	unnamed.AlgoExprs = []*plan.Expr{plan2.MakePlan2Uint64ConstExprWithType(1)}
+	_, err = PrepareCorrelatedExecution(unnamed, proc)
+	require.ErrorContains(t, err, "algorithm expressions are not all named")
+	_, err = PrepareScalar(unnamed, proc)
+	require.ErrorContains(t, err, "algorithm expressions are not all named")
 }
 
 func TestRequestFromScalarRejectsMalformedBoundExpressions(t *testing.T) {
@@ -300,11 +312,11 @@ func TestRequestFromScalarRejectsMalformedBoundExpressions(t *testing.T) {
 	_, _, err := RequestFromScalar(nil, identity, nil, false, false)
 	require.ErrorContains(t, err, "incomplete bound expressions")
 
-	nonLiteralQuery := &plan.VectorIndexScan{QueryVector: &plan.Expr{}}
+	nonLiteralQuery := &plan.IndexSearchScan{QueryPayload: &plan.Expr{}}
 	_, _, err = RequestFromScalar(nonLiteralQuery, identity, nil, false, false)
 	require.ErrorContains(t, err, "query vector did not fold")
 
-	nullQuery := &plan.VectorIndexScan{QueryVector: &plan.Expr{
+	nullQuery := &plan.IndexSearchScan{QueryPayload: &plan.Expr{
 		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}},
 	}}
 	_, hasQuery, err := RequestFromScalar(nullQuery, identity, nil, false, false)
@@ -312,33 +324,53 @@ func TestRequestFromScalarRejectsMalformedBoundExpressions(t *testing.T) {
 	require.False(t, hasQuery)
 
 	query := plan2.MakePlan2Vecf32ConstExprWithType("[1,2]", 2)
-	_, _, err = RequestFromScalar(&plan.VectorIndexScan{QueryVector: query}, identity, nil, false, false)
+	_, _, err = RequestFromScalar(&plan.IndexSearchScan{QueryPayload: query}, identity, nil, false, false)
 	require.ErrorContains(t, err, "result limit did not fold")
-	_, _, err = RequestFromScalar(&plan.VectorIndexScan{
-		QueryVector: query,
+	_, _, err = RequestFromScalar(&plan.IndexSearchScan{
+		QueryPayload: query,
 		CandidateLimit: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
 			Isnull: true,
 		}}},
 	}, identity, nil, false, false)
 	require.ErrorContains(t, err, "result limit did not fold")
-	_, _, err = RequestFromScalar(&plan.VectorIndexScan{
-		QueryVector:    query,
+	_, _, err = RequestFromScalar(&plan.IndexSearchScan{
+		QueryPayload:   query,
 		CandidateLimit: plan2.MakePlan2Int64ConstExprWithType(1),
 	}, identity, nil, false, false)
 	require.ErrorContains(t, err, "result limit is not uint64")
 
-	_, _, err = RequestFromScalar(&plan.VectorIndexScan{
-		QueryVector:     query,
-		CandidateLimit:  plan2.MakePlan2Uint64ConstExprWithType(1),
-		FirstRoundLimit: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}},
+	_, _, err = RequestFromScalar(&plan.IndexSearchScan{
+		QueryPayload:   query,
+		CandidateLimit: plan2.MakePlan2Uint64ConstExprWithType(1),
+		AlgoExprs:      []*plan.Expr{{}},
+		AlgoExprNames:  []string{"first_round_limit"},
 	}, identity, nil, false, false)
-	require.ErrorContains(t, err, "first-round limit did not fold")
-	_, _, err = RequestFromScalar(&plan.VectorIndexScan{
-		QueryVector:     query,
-		CandidateLimit:  plan2.MakePlan2Uint64ConstExprWithType(1),
-		FirstRoundLimit: plan2.MakePlan2Int64ConstExprWithType(1),
+	require.ErrorContains(t, err, "algorithm expression first_round_limit did not fold")
+	_, _, err = RequestFromScalar(&plan.IndexSearchScan{
+		QueryPayload:   query,
+		CandidateLimit: plan2.MakePlan2Uint64ConstExprWithType(1),
+		AlgoExprs:      []*plan.Expr{plan2.MakePlan2Uint64ConstExprWithType(1)},
 	}, identity, nil, false, false)
-	require.ErrorContains(t, err, "first-round limit is not uint64")
+	require.ErrorContains(t, err, "algorithm expressions are not all named")
+	req, ok, err := RequestFromScalar(&plan.IndexSearchScan{
+		QueryPayload:   query,
+		CandidateLimit: plan2.MakePlan2Uint64ConstExprWithType(1),
+		AlgoExprs:      []*plan.Expr{plan2.MakePlan2Uint64ConstExprWithType(7)},
+		AlgoExprNames:  []string{"first_round_limit"},
+	}, identity, nil, false, false)
+	require.NoError(t, err)
+	require.True(t, ok)
+	requireAlgoU64(t, req, "first_round_limit", 7)
+	_, found := req.AlgoValue("absent")
+	require.False(t, found)
+}
+
+// requireAlgoU64 requires that req carries uint64 want as algorithm value name.
+func requireAlgoU64(t *testing.T, req searchplugin.Request, name string, want uint64) {
+	t.Helper()
+	lit, ok := req.AlgoValue(name)
+	require.True(t, ok)
+	require.Equal(t, want, lit.GetU64Val())
 }
 
 func TestExplainDiagnosticsAreEnabledOnlyForScalarScans(t *testing.T) {

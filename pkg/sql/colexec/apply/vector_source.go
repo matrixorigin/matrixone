@@ -31,7 +31,7 @@ import (
 )
 
 type vectorSource struct {
-	template  *plan.VectorIndexScan
+	template  *plan.IndexSearchScan
 	execution *vectorscan.Execution
 	attrs     []string
 	types     []types.Type
@@ -42,16 +42,16 @@ type vectorSource struct {
 
 var _ AppliedSource = (*vectorSource)(nil)
 
-func NewVectorSource(spec *plan.VectorIndexScan, attrs []string, typs []types.Type) AppliedSource {
+func NewVectorSource(spec *plan.IndexSearchScan, attrs []string, typs []types.Type) AppliedSource {
 	return &vectorSource{
-		template: plan2.DeepCopyVectorIndexScan(spec),
+		template: plan2.DeepCopyIndexSearchScan(spec),
 		attrs:    attrs,
 		types:    typs,
 	}
 }
 
 func (s *vectorSource) ApplyPrepare(proc *process.Process) error {
-	if s.template == nil || s.template.Index == nil || s.template.QueryVector == nil || s.template.CandidateLimit == nil {
+	if s.template == nil || s.template.Index == nil || s.template.QueryPayload == nil || s.template.CandidateLimit == nil {
 		return moerr.NewInvalidInput(proc.Ctx, "correlated vector scan has incomplete metadata")
 	}
 	if err := s.closeGeneration(); err != nil {

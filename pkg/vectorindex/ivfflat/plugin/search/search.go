@@ -15,6 +15,8 @@
 package search
 
 import (
+	"strconv"
+
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat"
@@ -26,11 +28,28 @@ type Hooks struct{}
 
 var _ searchplugin.Hooks = Hooks{}
 var _ searchplugin.ParallelHooks = Hooks{}
+var _ searchplugin.ExplainHooks = Hooks{}
 
-func (Hooks) NewReader(proc *process.Process, spec *plan.VectorIndexScan, req searchplugin.Request) (engine.Reader, error) {
+func (Hooks) NewReader(proc *process.Process, spec *plan.IndexSearchScan, req searchplugin.Request) (engine.Reader, error) {
 	return ivfflat.NewPlanReader(proc, spec, req)
 }
 
-func (Hooks) NewReaders(proc *process.Process, spec *plan.VectorIndexScan, req searchplugin.Request, parallelism int) ([]engine.Reader, error) {
+// CanParallelize reports whether spec searches in one round; a multi-round
+// search expands buckets from the merged result of the previous round.
+func (Hooks) CanParallelize(spec *plan.IndexSearchScan) (bool, error) {
+	multiRound, err := ivfflat.MultiRound(spec)
+	return !multiRound, err
+}
+
+func (Hooks) NewReaders(proc *process.Process, spec *plan.IndexSearchScan, req searchplugin.Request, parallelism int) ([]engine.Reader, error) {
 	return ivfflat.NewPlanReaders(proc, spec, req, parallelism)
+}
+
+// ExplainSettings returns the first-round probe count.
+func (Hooks) ExplainSettings(spec *plan.IndexSearchScan) ([]string, error) {
+	opts, err := ivfflat.DecodeScanOptions(spec.GetAlgoOptions())
+	if err != nil {
+		return nil, err
+	}
+	return []string{"NProbe: " + strconv.FormatUint(uint64(opts.InitialProbeCount), 10)}, nil
 }

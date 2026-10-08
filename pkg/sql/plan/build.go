@@ -1015,8 +1015,8 @@ func findResultColumnSourceAtNode(
 		return nil
 	}
 
-	if node.NodeType == plan.Node_VECTOR_INDEX_SCAN {
-		// VECTOR_INDEX_SCAN's TableDef describes the synthetic result schema
+	if node.NodeType == plan.Node_INDEX_SEARCH_SCAN {
+		// INDEX_SEARCH_SCAN's TableDef describes the synthetic result schema
 		// (pkid, score, and optional included columns), not the source table.
 		// Resolve its output slots through the typed vector-index specification
 		// so a pkid or included column carries the same metadata as a regular
@@ -1031,7 +1031,7 @@ func findResultColumnSourceAtNode(
 				vectorRef = sourceExpr.GetCol()
 			}
 		}
-		return resultColumnSourceFromVectorIndexScan(node.VectorIndexScan, node.TableDef, vectorRef.ColPos)
+		return resultColumnSourceFromIndexSearchScan(node.IndexSearchScan, node.TableDef, vectorRef.ColPos)
 	}
 
 	if node.TableDef != nil && isResultColumnSourceNode(node.NodeType) {

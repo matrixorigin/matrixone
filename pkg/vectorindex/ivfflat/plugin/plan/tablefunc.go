@@ -24,7 +24,7 @@ import (
 
 // IVF-FLAT build table-function plumbing invoked when the planner sees
 // `ivf_create(...)` in SQL. Query search is an optimizer-visible
-// VECTOR_INDEX_SCAN and is deliberately not registered as a table function.
+// INDEX_SEARCH_SCAN and is deliberately not registered as a table function.
 //
 // The plugin's init() registers these with planplugin.RegisterTableFunc;
 // pkg/sql/plan/query_builder.go's table-function dispatch falls through
@@ -46,7 +46,7 @@ var (
 		},
 	}
 
-	// IVFFLATScanColDefs is the (pkid, score) schema of VECTOR_INDEX_SCAN.
+	// IVFFLATScanColDefs is the (pkid, score) schema of INDEX_SEARCH_SCAN.
 	// The pkid type is rewritten at plan time to the source table's PK type.
 	IVFFLATScanColDefs = []*plan.ColDef{
 		{

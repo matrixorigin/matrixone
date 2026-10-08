@@ -8225,7 +8225,7 @@ func refreshPreparedPlanProjectionTypes(
 				return plan.Type{}, false
 			}
 			switch node.NodeType {
-			case plan.Node_FUNCTION_SCAN, plan.Node_VECTOR_INDEX_SCAN, plan.Node_VECTOR_QUERY_SOURCE:
+			case plan.Node_FUNCTION_SCAN, plan.Node_INDEX_SEARCH_SCAN, plan.Node_VECTOR_QUERY_SOURCE:
 				// These scans project their own result schema. A child supplies
 				// function inputs (for example a query vector), not output columns.
 				if col.RelPos == 0 && node.TableDef != nil && int(col.ColPos) < len(node.TableDef.Cols) &&

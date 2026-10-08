@@ -282,12 +282,13 @@ func (*scriptedVectorReader) SetIndexParam(*plan.IndexReaderParam) {
 }
 func (*scriptedVectorReader) SetFilterZM(objectio.ZoneMap) {}
 
-func vectorSourceSpec() *plan.VectorIndexScan {
-	return &plan.VectorIndexScan{
-		Index:           &plan.IndexDef{IndexAlgo: "ivfflat"},
-		QueryVector:     plan2.MakePlan2Vecf32ConstExprWithType("[1,2]", 2),
-		CandidateLimit:  plan2.MakePlan2Uint64ConstExprWithType(3),
-		FirstRoundLimit: plan2.MakePlan2Uint64ConstExprWithType(1),
+func vectorSourceSpec() *plan.IndexSearchScan {
+	return &plan.IndexSearchScan{
+		Index:          &plan.IndexDef{IndexAlgo: "ivfflat"},
+		QueryPayload:   plan2.MakePlan2Vecf32ConstExprWithType("[1,2]", 2),
+		CandidateLimit: plan2.MakePlan2Uint64ConstExprWithType(3),
+		AlgoExprs:      []*plan.Expr{plan2.MakePlan2Uint64ConstExprWithType(1)},
+		AlgoExprNames:  []string{"first_round_limit"},
 	}
 }
 
@@ -308,8 +309,9 @@ func TestVectorSourceEvaluatesArgumentsAndUsesSearchPlugin(t *testing.T) {
 	require.True(t, hasQuery)
 	require.Equal(t, uint64(3), req.ResultLimit)
 	require.Equal(t, uint64(3), req.CandidateBudget)
-	require.Equal(t, uint64(1), req.FirstRoundLimit)
-	require.True(t, req.HasFirstRound)
+	firstRound, ok := req.AlgoValue("first_round_limit")
+	require.True(t, ok)
+	require.Equal(t, uint64(1), firstRound.GetU64Val())
 
 	// The registered IVF plugin is reached. The test process deliberately has
 	// no transaction, so NewPlanReader rejects it after ApplyStart has passed
@@ -321,7 +323,7 @@ func TestVectorSourceEvaluatesArgumentsAndUsesSearchPlugin(t *testing.T) {
 func TestApplyCarriesStatementTxnOffsetIntoVectorSource(t *testing.T) {
 	proc := testutil.NewProc(t)
 	apply := NewArgument()
-	apply.VectorIndexScan = vectorSourceSpec()
+	apply.IndexSearchScan = vectorSourceSpec()
 	apply.VectorAttrs = []string{"pkid"}
 	apply.Typs = []types.Type{types.T_int64.ToType()}
 	apply.TxnOffset = 17
@@ -363,7 +365,7 @@ func TestApplyPreparedVectorSourceRebindsPreFiltersPerGeneration(t *testing.T) {
 	spec.PreFilters = []*plan.Expr{preFilter}
 
 	arg := NewArgument()
-	arg.VectorIndexScan = spec
+	arg.IndexSearchScan = spec
 	arg.VectorAttrs = []string{"pkid"}
 	arg.Typs = []types.Type{types.T_int64.ToType()}
 	t.Cleanup(func() {
@@ -432,7 +434,7 @@ func TestVectorSourceReaderLifecycle(t *testing.T) {
 func TestVectorSourceHandlesNullQueryAndCleansUp(t *testing.T) {
 	proc := testutil.NewProc(t)
 	spec := vectorSourceSpec()
-	spec.QueryVector = &plan.Expr{
+	spec.QueryPayload = &plan.Expr{
 		Typ: plan.Type{Id: int32(types.T_array_float32), Width: 2},
 		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
 			Isnull: true,

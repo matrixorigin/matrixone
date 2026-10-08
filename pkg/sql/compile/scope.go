@@ -338,8 +338,8 @@ func (s *Scope) initDataSource(c *Compile) (err error) {
 		return nil
 	}
 
-	if s.DataSource.node != nil && s.DataSource.node.NodeType == plan.Node_VECTOR_INDEX_SCAN {
-		return c.compileVectorIndexScanDataSource(s)
+	if s.DataSource.node != nil && s.DataSource.node.NodeType == plan.Node_INDEX_SEARCH_SCAN {
+		return c.compileIndexSearchScanDataSource(s)
 	}
 	return c.compileTableScanDataSource(s)
 }
@@ -1900,7 +1900,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	if err != nil {
 		return
 	}
-	if s.DataSource.node != nil && s.DataSource.node.NodeType == plan.Node_VECTOR_INDEX_SCAN {
+	if s.DataSource.node != nil && s.DataSource.node.NodeType == plan.Node_INDEX_SEARCH_SCAN {
 		if emptyScan {
 			return emptyScanReaders(s.NodeInfo.Mcpu), nil
 		}
@@ -2116,7 +2116,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 
 func (s *Scope) buildVectorIndexReaders(runtimeFilters []receivedRuntimeFilter) ([]engine.Reader, error) {
 	node := s.DataSource.node
-	spec := node.GetVectorIndexScan()
+	spec := node.GetIndexSearchScan()
 	if spec == nil || spec.GetIndex() == nil {
 		return nil, moerr.NewInvalidInputNoCtx("vector index scan is missing index metadata")
 	}

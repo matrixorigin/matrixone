@@ -350,12 +350,8 @@ func nodeContainsUnresolvedFullText(node *plan.Node) bool {
 			return true
 		}
 	}
-	if scan := node.VectorIndexScan; scan != nil {
-		if expressionsContainUnresolvedFullText(scan.PreFilters) ||
-			expressionsContainUnresolvedFullText([]*plan.Expr{
-				scan.QueryVector, scan.CandidateLimit, scan.FirstRoundLimit,
-				scan.DistanceRange.GetLowerBound(), scan.DistanceRange.GetUpperBound(),
-			}) {
+	if scan := node.IndexSearchScan; scan != nil {
+		if expressionsContainUnresolvedFullText(plan2.IndexSearchScanExprs(scan)) {
 			return true
 		}
 	}

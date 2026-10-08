@@ -108,8 +108,8 @@ func TestGetExecTypeAdaptiveTopIgnoresDeferredForceOneCN(t *testing.T) {
 	qry := &planpb.Query{
 		Steps: []int32{3},
 		Nodes: []*planpb.Node{
-			{NodeId: 0, NodeType: planpb.Node_VECTOR_INDEX_SCAN, Stats: DeepCopyStats(large)},
-			{NodeId: 1, NodeType: planpb.Node_VECTOR_INDEX_SCAN, Stats: &planpb.Stats{ForceOneCN: true}},
+			{NodeId: 0, NodeType: planpb.Node_INDEX_SEARCH_SCAN, Stats: DeepCopyStats(large)},
+			{NodeId: 1, NodeType: planpb.Node_INDEX_SEARCH_SCAN, Stats: &planpb.Stats{ForceOneCN: true}},
 			{NodeId: 2, NodeType: planpb.Node_TABLE_SCAN, Stats: &planpb.Stats{}},
 			{NodeId: 3, NodeType: planpb.Node_ADAPTIVE_TOP, Children: []int32{0, 1, 2}, Stats: DeepCopyStats(large)},
 		},
@@ -1111,28 +1111,28 @@ func TestGetExecType_NonVectorTable_NotForcedByRowsize(t *testing.T) {
 	}
 }
 
-func TestGetExecType_VectorIndexScanUsesMultiCN(t *testing.T) {
+func TestGetExecType_IndexSearchScanUsesMultiCN(t *testing.T) {
 	query := &planpb.Query{
 		Steps: []int32{0},
 		Nodes: []*planpb.Node{{
 			NodeId:          0,
-			NodeType:        planpb.Node_VECTOR_INDEX_SCAN,
+			NodeType:        planpb.Node_INDEX_SEARCH_SCAN,
 			Stats:           &planpb.Stats{BlockNum: 1, Cost: 1, Outcnt: 1},
-			VectorIndexScan: &planpb.VectorIndexScan{},
+			IndexSearchScan: &planpb.IndexSearchScan{},
 		}},
 	}
 	require.Equal(t, ExecTypeAP_MULTICN, GetExecType(query, false, false))
 }
 
-func TestGetExecType_VectorIndexScanRespectsOneCNAndDDL(t *testing.T) {
+func TestGetExecType_IndexSearchScanRespectsOneCNAndDDL(t *testing.T) {
 	makeQuery := func(force bool) *planpb.Query {
 		return &planpb.Query{
 			Steps: []int32{0},
 			Nodes: []*planpb.Node{{
 				NodeId:          0,
-				NodeType:        planpb.Node_VECTOR_INDEX_SCAN,
+				NodeType:        planpb.Node_INDEX_SEARCH_SCAN,
 				Stats:           &planpb.Stats{BlockNum: 1, Cost: 1, Outcnt: 1, ForceOneCN: force},
-				VectorIndexScan: &planpb.VectorIndexScan{},
+				IndexSearchScan: &planpb.IndexSearchScan{},
 			}},
 		}
 	}
@@ -1143,7 +1143,7 @@ func TestGetExecType_VectorIndexScanRespectsOneCNAndDDL(t *testing.T) {
 func TestDetermineBuildSidePreservesDeclaredRuntimeFilterDependency(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false, newPlanTestProcess(t)), false, true)
 	builder.qry.Nodes = []*planpb.Node{
-		{NodeId: 0, NodeType: planpb.Node_VECTOR_INDEX_SCAN, Stats: &planpb.Stats{Outcnt: 2}},
+		{NodeId: 0, NodeType: planpb.Node_INDEX_SEARCH_SCAN, Stats: &planpb.Stats{Outcnt: 2}},
 		{NodeId: 1, NodeType: planpb.Node_TABLE_SCAN, Stats: &planpb.Stats{Outcnt: 100}},
 		{
 			NodeId:                 2,

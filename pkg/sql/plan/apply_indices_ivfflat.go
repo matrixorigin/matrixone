@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat"
 	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/overfetch"
@@ -344,7 +345,7 @@ func collectScanColumnsFromExpr(expr *plan.Expr, scanTag, partPos int32, origFun
 		// the base column, so recurse to collect it — otherwise the base scan is wrongly dropped and
 		// column remap fails ("Missing Column: t.v"). Mirrors replaceDistFnInExpr's match. (#26961)
 		if isVectorDistanceExpr(expr, scanTag, partPos) && impl.F.Func.ObjName == origFuncName &&
-			sameQueryVector(impl.F, scanTag, partPos, vecLitArg) {
+			sameQueryPayload(impl.F, scanTag, partPos, vecLitArg) {
 			return
 		}
 		for _, arg := range impl.F.Args {
@@ -794,13 +795,27 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflatWithContext(
 		}
 	}
 	typedPreFilters := rebindIvfPreFilters(typedPushdownFilters, scanNode, includeColumns)
+	algoOptions, err := ivfflat.EncodeScanOptions(ivfflat.ScanOptions{
+		InitialProbeCount: uint32(ivfCtx.nProbe),
+		BucketExpandStep:  uint32(bucketExpandStep),
+		ThreadsSearch:     ivfCtx.nThread,
+	})
+	if err != nil {
+		return 0, err
+	}
+	var algoExprs []*plan.Expr
+	var algoExprNames []string
+	if firstRoundLimitExpr != nil {
+		algoExprs = []*plan.Expr{firstRoundLimitExpr}
+		algoExprNames = []string{ivfflat.FirstRoundLimitExpr}
+	}
 
 	// Build an optimizer-visible vector-index access path.  The hidden table
 	// references are resolved by name on the execution CN in the same txn; no
 	// generated SQL or nested plan is needed.
 	tableFuncTag := builder.genNewBindTag()
 	tableFuncNode := &plan.Node{
-		NodeType: plan.Node_VECTOR_INDEX_SCAN,
+		NodeType: plan.Node_INDEX_SEARCH_SCAN,
 		// Async index payload may be committed locally before every CN has
 		// replayed the corresponding object metadata. Keep search on one CN
 		// until the async path provides a global visibility watermark.
@@ -817,23 +832,22 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflatWithContext(
 		},
 		BindingTags: []int32{tableFuncTag},
 		Children:    vectorSearchProviderChildren(vecCtx),
-		VectorIndexScan: &plan.VectorIndexScan{
+		IndexSearchScan: &plan.IndexSearchScan{
 			SourceTable:         DeepCopyObjectRef(scanNode.ObjRef),
 			SourceTableDef:      DeepCopyTableDef(scanNode.TableDef, true),
 			ScanSnapshot:        DeepCopySnapshot(scanNode.ScanSnapshot),
 			Index:               DeepCopyIndexDef(ivfCtx.metaDef),
-			QueryVector:         DeepCopyExpr(ivfCtx.vecLitArg),
+			QueryPayload:        DeepCopyExpr(ivfCtx.vecLitArg),
 			DistanceFunction:    ivfCtx.origFuncName,
 			Direction:           vecCtx.sortDirection,
 			DistanceRange:       DeepCopyDistRange(distRange),
 			PreFilters:          typedPreFilters,
 			IncludedColumns:     append([]string(nil), tableFuncIncludeColumns...),
-			InitialProbeCount:   uint32(ivfCtx.nProbe),
-			FirstRoundLimit:     firstRoundLimitExpr,
-			BucketExpandStep:    uint32(bucketExpandStep),
-			ThreadsSearch:       ivfCtx.nThread,
+			AlgoOptions:         algoOptions,
+			AlgoExprs:           algoExprs,
+			AlgoExprNames:       algoExprNames,
 			PostFilterOverFetch: postFilterOverFetch,
-			HiddenTables: []*plan.VectorIndexTableRef{
+			HiddenTables: []*plan.IndexHiddenTableRef{
 				{Role: catalog.SystemSI_IVFFLAT_TblType_Metadata, Object: &plan.ObjectRef{SchemaName: scanNode.ObjRef.SchemaName, ObjName: ivfCtx.metaDef.IndexTableName}},
 				{Role: catalog.SystemSI_IVFFLAT_TblType_Centroids, Object: &plan.ObjectRef{SchemaName: scanNode.ObjRef.SchemaName, ObjName: ivfCtx.idxDef.IndexTableName}},
 				{Role: catalog.SystemSI_IVFFLAT_TblType_Entries, Object: &plan.ObjectRef{SchemaName: scanNode.ObjRef.SchemaName, ObjName: ivfCtx.entriesDef.IndexTableName}},
@@ -866,7 +880,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflatWithContext(
 	// Preserve semantic k in the plan for both literal and prepared executions.
 	limitExpr := DeepCopyExpr(outerResultNeedExpr)
 
-	tableFuncNode.VectorIndexScan.CandidateLimit = DeepCopyExpr(limitExpr)
+	tableFuncNode.IndexSearchScan.CandidateLimit = DeepCopyExpr(limitExpr)
 	if tableFuncNode.Stats == nil {
 		tableFuncNode.Stats = DefaultStats()
 	}
@@ -1074,7 +1088,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflatWithContext(
 			if workErr != nil {
 				return nodeID, workErr
 			}
-			tableFuncNode.VectorIndexScan.ScanWork = work
+			tableFuncNode.IndexSearchScan.ScanWork = work
 		}
 
 		// The original scan was guarded during the recursive planner pass so the vector rewrite
@@ -1683,31 +1697,31 @@ func extractColRefs(expr *plan.Expr, tag int32, colRefCnt map[[2]int32]int) {
 // -----------------------------------------------------------------------------
 // IVFFlat result-column source resolution.
 //
-// These functions resolve a VECTOR_INDEX_SCAN result column (pkid / score /
+// These functions resolve a INDEX_SEARCH_SCAN result column (pkid / score /
 // __mo_index_include_<name>) back to its source-table column metadata. They live
 // here, in the ivfflat plan layer, rather than in build.go's generic result-column
 // resolver, because the synthetic schema they decode is IVFFlat-specific.
-// build.go dispatches into resultColumnSourceFromVectorIndexScan for a
-// VECTOR_INDEX_SCAN node; the function fails closed (returns nil) for any node
-// whose index algorithm is not IVFFlat, so a VECTOR_INDEX_SCAN emitted by another
+// build.go dispatches into resultColumnSourceFromIndexSearchScan for a
+// INDEX_SEARCH_SCAN node; the function fails closed (returns nil) for any node
+// whose index algorithm is not IVFFlat, so a INDEX_SEARCH_SCAN emitted by another
 // algorithm never inherits IVFFlat's schema by accident (#29212). Relocated from
 // build.go where it was introduced by PR #28833 (fixes #28719).
 // -----------------------------------------------------------------------------
 
-func resultColumnSourceFromVectorIndexScan(scan *plan.VectorIndexScan, vectorTableDef *plan.TableDef, colPos int32) *resultColumnSource {
+func resultColumnSourceFromIndexSearchScan(scan *plan.IndexSearchScan, vectorTableDef *plan.TableDef, colPos int32) *resultColumnSource {
 	if scan == nil || scan.SourceTableDef == nil || vectorTableDef == nil || colPos < 0 {
 		return nil
 	}
 
 	// Only IVFFlat's synthetic schema (pkid, score, __mo_index_include_<name>) is
-	// understood here. Any other algorithm's VECTOR_INDEX_SCAN has a different
+	// understood here. Any other algorithm's INDEX_SEARCH_SCAN has a different
 	// schema, so fail closed rather than mis-resolve it as IVFFlat (#29212).
 	// GetIndexAlgo is nil-safe, so a missing Index also fails closed.
 	if !catalog.IsIvfIndexAlgo(scan.Index.GetIndexAlgo()) {
 		return nil
 	}
 
-	// remapAllColRefs compacts VECTOR_INDEX_SCAN.TableDef.Cols to only the
+	// remapAllColRefs compacts INDEX_SEARCH_SCAN.TableDef.Cols to only the
 	// slots still referenced by consumers and rewrites their ColPos values to
 	// local positions. Resolve the synthetic column name (not the slot index),
 	// so a pruned [score, include] schema cannot be mistaken for the original

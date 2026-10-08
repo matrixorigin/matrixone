@@ -1168,7 +1168,7 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 		}
 		node.ProjectList = newProjectList
 
-	case plan.Node_FUNCTION_SCAN, plan.Node_VECTOR_INDEX_SCAN, plan.Node_VECTOR_QUERY_SOURCE:
+	case plan.Node_FUNCTION_SCAN, plan.Node_INDEX_SEARCH_SCAN, plan.Node_VECTOR_QUERY_SOURCE:
 		for _, expr := range node.FilterList {
 			increaseRefCnt(expr, 1, colRefCnt)
 		}
@@ -3285,8 +3285,8 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 		right := builder.qry.Nodes[node.Children[1]]
 		rightTag := right.BindingTags[0]
 		rightArgs := right.TblFuncExprList
-		if right.NodeType == plan.Node_VECTOR_INDEX_SCAN && right.VectorIndexScan != nil {
-			rightArgs = []*plan.Expr{right.VectorIndexScan.QueryVector, right.VectorIndexScan.CandidateLimit}
+		if right.NodeType == plan.Node_INDEX_SEARCH_SCAN && right.IndexSearchScan != nil {
+			rightArgs = []*plan.Expr{right.IndexSearchScan.QueryPayload, right.IndexSearchScan.CandidateLimit}
 		}
 
 		for _, expr := range rightArgs {
@@ -13701,7 +13701,7 @@ func parseRankOption(options map[string]string, ctx context.Context) (*plan.Rank
 
 func (builder *QueryBuilder) checkExprCanPushdown(expr *Expr, node *Node) bool {
 	switch node.NodeType {
-	case plan.Node_FUNCTION_SCAN, plan.Node_VECTOR_INDEX_SCAN:
+	case plan.Node_FUNCTION_SCAN, plan.Node_INDEX_SEARCH_SCAN:
 		if onlyContainsTag(expr, node.BindingTags[0]) {
 			return true
 		}

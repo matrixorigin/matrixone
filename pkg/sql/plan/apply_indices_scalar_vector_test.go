@@ -83,7 +83,7 @@ func scalarVectorPlanHasIndex(q *plan.Query) bool {
 		}
 		seen[id] = true
 		node := q.Nodes[id]
-		if node.NodeType == plan.Node_VECTOR_INDEX_SCAN {
+		if node.NodeType == plan.Node_INDEX_SEARCH_SCAN {
 			return true
 		}
 		for _, child := range node.Children {

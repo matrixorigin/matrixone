@@ -1835,7 +1835,7 @@ func TestFrozenResultMetadataAcceptsEquivalentVectorAccessPath(t *testing.T) {
 	}
 	makeVectorPlan := func() *plan.Plan {
 		const vectorTag = int32(10)
-		vectorSpec := &plan.VectorIndexScan{
+		vectorSpec := &plan.IndexSearchScan{
 			SourceTable:    &plan.ObjectRef{SchemaName: "source_db", ObjName: "source_table"},
 			SourceTableDef: sourceTable,
 			Index:          &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()},
@@ -1862,7 +1862,7 @@ func TestFrozenResultMetadataAcceptsEquivalentVectorAccessPath(t *testing.T) {
 			Nodes: []*plan.Node{
 				{
 					NodeId:      0,
-					NodeType:    plan.Node_VECTOR_INDEX_SCAN,
+					NodeType:    plan.Node_INDEX_SEARCH_SCAN,
 					BindingTags: []int32{vectorTag},
 					TableDef: &plan.TableDef{Cols: []*plan.ColDef{
 						{Name: "pkid", Typ: sourceTable.Cols[2].Typ},
@@ -1871,7 +1871,7 @@ func TestFrozenResultMetadataAcceptsEquivalentVectorAccessPath(t *testing.T) {
 						{Name: "__mo_index_include_payload", Typ: sourceTable.Cols[1].Typ},
 					}},
 					ProjectList:     vectorProjectList,
-					VectorIndexScan: vectorSpec,
+					IndexSearchScan: vectorSpec,
 				},
 				{NodeId: 1, NodeType: plan.Node_PROJECT, Children: []int32{0}, ProjectList: resultProjectList},
 			},
