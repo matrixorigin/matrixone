@@ -91,7 +91,7 @@ public catalog contract from being reported as fully successful, while the
 bounded VIEWS page remains independently rollback-safe.
 
 MORPC v107 is allocated as `MORPCLatestVersion + 1` from official main v106 at
-`a6b6c2ccee73a467ba849b8af8e762f0f4da7150`, which owns the current protocol
+`bab4b3286a0dd5683a9b291763817722233e586c`, which owns the current protocol
 floor. The current main function end marker is 586 after its EXTRACTVALUE and
 UPDATEXML additions; the two VIEWS function IDs are 586 and 587, and the end
 marker advances to 588. These IDs are allocated from the rebased official main and are
