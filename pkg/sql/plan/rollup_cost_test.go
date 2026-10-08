@@ -133,7 +133,7 @@ func TestSortRollupCostModelFallsBackWithoutStats(t *testing.T) {
 	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL,
 		`select a, b, count(*) from select_test.bind_select group by a, b with rollup`, 1)
 	require.NoError(t, err)
-	queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 	require.NoError(t, err)
 	require.False(t, planHasSortRollup(queryPlan.GetQuery()))
 }
@@ -149,7 +149,7 @@ func TestSortRollupCostModelChargesEveryRollupLevel(t *testing.T) {
 			}
 		}
 		return &sortRollupProbe{
-			builder: NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, false),
+			builder: NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, false),
 			source: &Node{Stats: &Stats{
 				TableCnt: 1001,
 				Outcnt:   1000,
@@ -171,7 +171,7 @@ func TestSortRollupCostModelChargesEveryRollupLevel(t *testing.T) {
 }
 
 func TestSortRollupCostModelAccountsForBranchConcurrency(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, false)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, false)
 	groupExprs := make([]*Expr, 20)
 	for i := range groupExprs {
 		groupExprs[i] = &Expr{
@@ -214,7 +214,7 @@ func TestSortRollupCostModelMatchesMeasuredShapeBoundary(t *testing.T) {
 		{name: "tiny-many-levels", rows: 256, levels: 12, ndv: 4, wantSort: true},
 		{name: "large-one-key", rows: 100000, levels: 1, ndv: 8, wantSort: false},
 	} {
-		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, false)
+		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, false)
 		groupExprs := make([]*Expr, tc.levels)
 		for i := range groupExprs {
 			groupExprs[i] = &Expr{
@@ -243,7 +243,7 @@ func TestSortRollupCostModelMatchesMeasuredShapeBoundary(t *testing.T) {
 
 func TestSortRollupCostModelAccountsForOrderedInputReuse(t *testing.T) {
 	makeProbe := func(ordered bool) *sortRollupProbe {
-		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, false)
+		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, false)
 		// The runtime pre-extends one output batch. Leave enough room for that
 		// batch so this test isolates the effect of reusing input order.
 		builder.aggSpillMem = 4 << 20
@@ -283,7 +283,7 @@ func TestSortRollupCostModelAccountsForOrderedInputReuse(t *testing.T) {
 }
 
 func TestSortRollupCostModelRejectsAggregateCapacityOverflow(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, false)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, false)
 	builder.aggSpillMem = 100
 	probe := &sortRollupProbe{
 		builder: builder,
@@ -310,7 +310,7 @@ func TestSortRollupCostModelChargesOutputBatchCapacity(t *testing.T) {
 		`select a, b, count(*) from select_test.bind_select group by a, b with rollup`, 1)
 	require.NoError(t, err)
 	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, false)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, false)
 	builder.aggSpillMem = 10_000
 	probe := &sortRollupProbe{
 		builder: builder,
@@ -346,7 +346,7 @@ func TestSortRollupCostModelChargesHiddenAggregateOutput(t *testing.T) {
 	extra := sortRollupAdditionalExprs(selectClause.Having, stmt.OrderBy)
 	require.Len(t, extra, 2, "the test query must contain HAVING and ORDER BY aggregate expressions")
 
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, false)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, false)
 	builder.aggSpillMem = 700_000
 	probe := &sortRollupProbe{
 		builder: builder,
@@ -379,7 +379,7 @@ func TestSortRollupCostModelChargesHLLOutputCapacity(t *testing.T) {
 		`select a, hll_add_agg(b) from select_test.bind_select group by a with rollup`, 1)
 	require.NoError(t, err)
 	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, false)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, false)
 	builder.aggSpillMem = 128 << 20
 	probe := &sortRollupProbe{
 		builder: builder,
@@ -405,7 +405,7 @@ func TestSortRollupCostModelChargesHLLOutputCapacity(t *testing.T) {
 }
 
 func TestSortRollupCostModelAcceptsKnownEmptyStats(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, false)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, false)
 	probe := &sortRollupProbe{
 		builder: builder,
 		source: &Node{Stats: &Stats{
@@ -428,7 +428,7 @@ func TestSortRollupCostModelAcceptsKnownEmptyStats(t *testing.T) {
 }
 
 func TestSortRollupCostModelRejectsOverflow(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, false)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, false)
 	probe := &sortRollupProbe{
 		builder: builder,
 		source: &Node{Stats: &Stats{
@@ -451,7 +451,7 @@ func TestSortRollupCostModelRejectsOverflow(t *testing.T) {
 }
 
 func TestSortRollupCostModelRejectsUnknownNDV(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, false)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, false)
 	probe := &sortRollupProbe{
 		builder: builder,
 		source: &Node{Stats: &Stats{
@@ -472,7 +472,7 @@ func TestSortRollupCostModelRejectsUnknownNDV(t *testing.T) {
 
 func TestSortRollupCostModelRejectsInconsistentLeafStats(t *testing.T) {
 	probe := &sortRollupProbe{
-		builder: NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, false),
+		builder: NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, false),
 		source: &Node{
 			NodeType: plan.Node_TABLE_SCAN,
 			Stats:    &Stats{TableCnt: 100, Outcnt: 101, Cost: 100, Rowsize: 64},
@@ -493,7 +493,7 @@ func TestSortRollupCostModelRejectsUnboundedAggregateState(t *testing.T) {
 		`select a, group_concat(b) from select_test.bind_select group by a with rollup`, 1)
 	require.NoError(t, err)
 	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, false)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, false)
 	probe := &sortRollupProbe{
 		builder: builder,
 		source: &Node{Stats: &Stats{
@@ -536,7 +536,7 @@ func TestSortRollupCostModelRejectsVariableWidthValueAggregate(t *testing.T) {
 
 func TestSortRollupCostModelUsesGroupUnitsForSmallSpillThreshold(t *testing.T) {
 	makeProbe := func(spillMem int64) *sortRollupCostEstimate {
-		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, false)
+		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, false)
 		builder.aggSpillMem = spillMem
 		groupExprs := make([]*Expr, 3)
 		for i := range groupExprs {
@@ -574,7 +574,7 @@ func TestSortRollupCostModelUsesGroupUnitsForSmallSpillThreshold(t *testing.T) {
 
 func TestSortRollupCostModelUsesByteUnitsForSortSpill(t *testing.T) {
 	makeEstimate := func(sortSpillMem int64) *sortRollupCostEstimate {
-		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, false)
+		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, false)
 		builder.sortSpillMem = sortSpillMem
 		probe := &sortRollupProbe{
 			builder: builder,
@@ -619,7 +619,7 @@ func buildAutoRollupPlanWithStats(t *testing.T, rows float64, grouping string, s
 
 func buildAutoRollupPlanSQLWithStats(t *testing.T, rows float64, sql string) *Plan {
 	t.Helper()
-	mock := NewMockCompilerContext(true)
+	mock := NewMockCompilerContext(true, newPlanTestProcess(t))
 	table := mock.tables["bind_select"]
 	statsCache := NewStatsCache()
 	stats := NewStatsInfo()
@@ -673,7 +673,7 @@ func buildAutoRollupPlanWithAlgorithm(
 	})
 	rt.SetGlobalVariables("optimizer_hints", "determineShuffle=2")
 
-	mock := NewMockCompilerContext(true)
+	mock := NewMockCompilerContext(true, newPlanTestProcess(t))
 	table := mock.tables["bind_select"]
 	statsCache := NewStatsCache()
 	stats := NewStatsInfo()
