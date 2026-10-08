@@ -1628,7 +1628,7 @@ Table    Create Table
 spatial_idx_t1    CREATE TABLE `spatial_idx_t1` (\n  `id` int NOT NULL,\n  `g` point NOT NULL,\n  PRIMARY KEY (`id`),\n  SPATIAL KEY `idx_g` (`g`)\n)
 show index from spatial_idx_t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-spatial_idx_t1    0    PRIMARY    1    id    A    0    NULL    NULL                        YES    id
+spatial_idx_t1    0    PRIMARY    1    id    A    0    NULL    NULL        BTREE                YES    id
 spatial_idx_t1    1    idx_g    1    g    A    0    NULL    NULL        rtree                YES    g
 select name, type, algo, column_name
 from mo_catalog.mo_indexes

@@ -1,0 +1,204 @@
+SELECT ExtractValue('<a><b>1</b><b>2</b></a>', '/a/b') AS multi,
+ExtractValue('<a id="7"/>', '/a/@id') AS attr,
+ExtractValue('<a><b/><b/></a>', 'count(/a/b)') AS count_nodes;
+➤ multi[-1,536870911,0]  ¦  attr[-1,536870911,0]  ¦  count_nodes[-1,536870911,0]  𝄀
+1 2  ¦  7  ¦  2
+SELECT ExtractValue('<a><b>1</b><b>2</b></a>', 'sum(/a/b)') AS sum_nodes,
+ExtractValue('<a><b>1</b><b>2</b></a>', 'count(/a/b)=2') AS count_equals,
+ExtractValue('<a><b>1</b><b>2</b></a>', '/a/b[position()=last()]') AS last_child;
+➤ sum_nodes[-1,536870911,0]  ¦  count_equals[-1,536870911,0]  ¦  last_child[-1,536870911,0]  𝄀
+3  ¦  1  ¦  2
+SELECT ExtractValue('<a>1000000000000000.1</a>', 'sum(/a)') AS large_fraction,
+ExtractValue(CONCAT('<a>', CHAR(11), '2</a>'), 'sum(/a)') AS numeric_whitespace;
+➤ large_fraction[-1,536870911,0]  ¦  numeric_whitespace[-1,536870911,0]  𝄀
+1000000000000000.1  ¦  2
+SELECT ExtractValue('<a>x<b>y</b>z</a>', '/a') AS direct_text,
+ExtractValue('<a>x<b>y</b>z</a>', '/a/text()') AS explicit_text,
+ExtractValue('<a>x<b>y</b>z</a>', '/a|/a/b') AS union_text;
+➤ direct_text[-1,536870911,0]  ¦  explicit_text[-1,536870911,0]  ¦  union_text[-1,536870911,0]  𝄀
+x z  ¦  x z  ¦  x y z
+SELECT ExtractValue('<a/><b>x</b>', '/b') AS fragment,
+ExtractValue('', '/a') = '' AS empty_xml,
+ExtractValue('<a/>', '/b') = '' AS missing,
+ExtractValue('plain', '/') AS plain;
+➤ fragment[-1,536870911,0]  ¦  empty_xml[-7,1,0]  ¦  missing[-7,1,0]  ¦  plain[-1,536870911,0]  𝄀
+x  ¦  1  ¦  1  ¦  plain
+SELECT ExtractValue('<a>&amp;&#65;&unknown;</a>', '/a') AS entities,
+ExtractValue('<a>x<![CDATA[y]]><!--c-->z</a>', '/a') AS segments,
+ExtractValue('<p:a>x</p:a>', '/p:a') AS lexical_prefix;
+➤ entities[-1,536870911,0]  ¦  segments[-1,536870911,0]  ¦  lexical_prefix[-1,536870911,0]  𝄀
+&amp;&#65;&unknown;  ¦  x y z  ¦  x
+SELECT ExtractValue('<a><b>1</b><b>2</b></a><a><b>3</b><b>4</b></a>', '/a/b[1]') AS per_parent,
+ExtractValue('<a><b k="X">yes</b></a>', '/a/b[@k="x"]') AS predicate;
+➤ per_parent[-1,536870911,0]  ¦  predicate[-1,536870911,0]  𝄀
+1 3  ¦  yes
+SELECT ExtractValue('<r><a><b>1</b><b>2</b></a><a><b>3</b><b>4</b></a></r>', '/r/a/b[position()=last()]') = '' AS whole_step_last,
+ExtractValue('<r><a><b>1</b><b>2</b></a><a><b>3</b><b>4</b></a></r>', '/r/a/b[1][position()=last()]') AS filtered_last,
+ExtractValue('<a>1.234567890123456e-6</a>', 'sum(/a)') AS scientific_sum;
+➤ whole_step_last[-7,1,0]  ¦  filtered_last[-1,536870911,0]  ¦  scientific_sum[-1,536870911,0]  𝄀
+1  ¦  3  ¦  1.234567890123456e-6
+SELECT ExtractValue('<a><a><b>1</b></a></a>', 'count(//a//b)') AS overlapping_count,
+ExtractValue('<a><a><b>1</b></a></a>', 'sum(//a//b)') AS overlapping_sum,
+ExtractValue('<a><a><b>1</b></a></a>', 'sum(//a//b|//a//b)') AS union_sum;
+➤ overlapping_count[-1,536870911,0]  ¦  overlapping_sum[-1,536870911,0]  ¦  union_sum[-1,536870911,0]  𝄀
+2  ¦  2  ¦  1
+SELECT ExtractValue('<r><a><a><b>1</b></a></a><a><b>2</b></a></r>', '//a/*[1][position()=last()]') AS ordered_predicate,
+ExtractValue('<r><a><a><b>1</b></a></a><a><b>2</b></a></r>', '//a//b[1][2]') AS second_occurrence;
+➤ ordered_predicate[-1,536870911,0]  ¦  second_occurrence[-1,536870911,0]  𝄀
+1  ¦  2
+SELECT ExtractValue('<a>x<b>y</b>z</a>', '//text()') AS all_text,
+ExtractValue('<a>x<b>y</b>z</a>', '/a//text()') AS descendants,
+ExtractValue('<a>x<b>y</b>z</a>', '/a/text()') AS direct_text;
+➤ all_text[-1,536870911,0]  ¦  descendants[-1,536870911,0]  ¦  direct_text[-1,536870911,0]  𝄀
+x y z  ¦  x y z  ¦  x z
+SELECT ExtractValue('<a>x<b>y</b>z</a>', '/a|/a//text()') AS mixed_text,
+ExtractValue('<a>x<b>y</b>z</a>', '/a/b|/a/text()') AS ordered_text,
+ExtractValue('<p:a p:id="7"><p:b>x</p:b></p:a>', '/p:a[@p:id="7"][p:b="x"]/@p:id') AS qualified;
+➤ mixed_text[-1,536870911,0]  ¦  ordered_text[-1,536870911,0]  ¦  qualified[-1,536870911,0]  𝄀
+x y z  ¦  x y z  ¦  7
+SELECT UpdateXML('<a><b>1</b></a>', '/a/b', '<c>2</c>') AS replaced,
+UpdateXML('<a><b>1</b><b>2</b></a>', '/a/b', '<c/>') AS multiple_unchanged,
+UpdateXML('<a/>', '/missing', '<c/>') AS missing_unchanged;
+➤ replaced[-1,536870911,0]  ¦  multiple_unchanged[-1,536870911,0]  ¦  missing_unchanged[-1,536870911,0]  𝄀
+<a><c>2</c></a>  ¦  <a><b>1</b><b>2</b></a>  ¦  <a/>
+SELECT UpdateXML('<r><a><b>1</b><b>2</b></a><a><b>3</b><b>4</b></a></r>', '/r/a/b[1][position()=last()]', '<c/>') AS filtered_update;
+➤ filtered_update[-1,536870911,0]  𝄀
+<r><a><b>1</b><b>2</b></a><a><c/><b>4</b></a></r>
+SELECT UpdateXML('<a><a><b>1</b></a></a>', '//a//b', '<c/>') AS overlapping_unchanged,
+UpdateXML('<a><a><b>1</b></a></a>', '//a//b|//a//b', '<c/>') AS union_single;
+➤ overlapping_unchanged[-1,536870911,0]  ¦  union_single[-1,536870911,0]  𝄀
+<a><a><b>1</b></a></a>  ¦  <a><a><c/></a></a>
+SELECT UpdateXML('<r><a><a><b>1</b></a></a><a><b>2</b></a></r>', '//a/*[1][position()=last()]', '<c/>') AS ordered_update;
+➤ ordered_update[-1,536870911,0]  𝄀
+<r><a><a><c/></a></a><a><b>2</b></a></r>
+SELECT UpdateXML('<a k="7"><b/></a>', '/a/@k', 'z') AS attribute_span,
+UpdateXML('<a />', '/a', 'not xml') AS raw_replacement,
+UpdateXML('<a/>', '/', 'raw') AS document_replacement,
+UpdateXML('<a/>', 'count(/a)', '<b/>') IS NULL AS scalar_update;
+➤ attribute_span[-1,536870911,0]  ¦  raw_replacement[-1,536870911,0]  ¦  document_replacement[-1,536870911,0]  ¦  scalar_update[-7,1,0]  𝄀
+<a z><b/></a>  ¦  not xml  ¦  raw  ¦  1
+SELECT ExtractValue('<a>', '/a') IS NULL AS malformed;
+➤ malformed[-7,1,0]  𝄀
+1
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1525  ¦  Incorrect XML value: malformed XML fragment
+SELECT UpdateXML('<a>', '/a', '<b/>') IS NULL AS malformed_update;
+➤ malformed_update[-7,1,0]  𝄀
+1
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1525  ¦  Incorrect XML value: malformed XML fragment
+SELECT ExtractValue('<!DOCTYPE a><a/>', '/a') IS NULL AS no_dtd;
+➤ no_dtd[-7,1,0]  𝄀
+1
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1525  ¦  Incorrect XML value: malformed XML fragment
+SELECT ExtractValue(NULL, '/a') IS NULL AS null_xml,
+ExtractValue('<a>', NULL) IS NULL AS null_path,
+UpdateXML('<a/>', '/a', NULL) IS NULL AS null_replacement;
+➤ null_xml[-7,1,0]  ¦  null_path[-7,1,0]  ¦  null_replacement[-7,1,0]  𝄀
+1  ¦  1  ¦  1
+SELECT ExtractValue(NULL, '[');
+not supported: XPATH syntax error or unsupported XPath feature
+SELECT UpdateXML('<a/>', '[', NULL);
+not supported: XPATH syntax error or unsupported XPath feature
+SELECT ExtractValue('<a>', '[');
+not supported: XPATH syntax error or unsupported XPath feature
+SELECT ExtractValue('<a/>', 'sum()');
+not supported: XPATH syntax error or unsupported XPath feature
+SELECT UpdateXML('<a>x</a>', '/a/text()', 'Q') AS root_text;
+➤ root_text[-1,536870911,0]  𝄀
+Q
+SELECT UpdateXML('<a>x<b>y</b></a>', '/a//text()', 'Q') AS multiple_text;
+➤ multiple_text[-1,536870911,0]  𝄀
+<a>x<b>y</b></a>
+SELECT UpdateXML('<a><b>x</b></a>', '/a/b/text()', 'Q') AS nested_text;
+➤ nested_text[-1,536870911,0]  𝄀
+<a>Q</a>
+SELECT UpdateXML('<a><b>x</b><b>y</b></a>', '/a/b/text()', 'Q') AS multiple_nodes;
+➤ multiple_nodes[-1,536870911,0]  𝄀
+<a><b>x</b><b>y</b></a>
+SELECT ExtractValue('<a/>', '/:a');
+not supported: XPATH syntax error or unsupported XPath feature
+SELECT ExtractValue('<a/>', '/a:b:c');
+not supported: XPATH syntax error or unsupported XPath feature
+SELECT IF(FALSE, ExtractValue('<a>', '['), 'ok') AS masked;
+➤ masked[-1,536870911,0]  𝄀
+ok
+SHOW COUNT(*) WARNINGS;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+SET SESSION max_error_count = 2048;
+SELECT SUM(ExtractValue('<a>', '/a') IS NULL) AS malformed_rows FROM generate_series(1, 1100) g;
+➤ malformed_rows[-5,64,0]  𝄀
+1100
+SHOW COUNT(*) WARNINGS;
+➤ @@session.warning_count[-5,0,0]  𝄀
+1100
+SHOW WARNINGS LIMIT 1024, 1;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1525  ¦  Incorrect XML value: malformed XML fragment
+SET SESSION max_error_count = 0;
+SELECT SUM(ExtractValue('<a>', '/a') IS NULL) AS malformed_rows FROM generate_series(1, 3) g;
+➤ malformed_rows[-5,64,0]  𝄀
+3
+SHOW COUNT(*) WARNINGS;
+➤ @@session.warning_count[-5,0,0]  𝄀
+3
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+SET SESSION max_error_count = 1024;
+DROP DATABASE IF EXISTS xml_functions_28306;
+CREATE DATABASE xml_functions_28306;
+CREATE TABLE xml_functions_28306.inputs(id INT PRIMARY KEY, doc TEXT, path VARCHAR(30));
+INSERT INTO xml_functions_28306.inputs VALUES (1,'<a>x</a>','/a'),(2,'<a>','/a'),(3,NULL,'/a');
+SELECT id, ExtractValue(doc, '/a') AS extracted FROM xml_functions_28306.inputs ORDER BY id;
+➤ id[4,32,0]  ¦  extracted[-1,536870911,0]  𝄀
+1  ¦  x  𝄀
+2  ¦  null  𝄀
+3  ¦  null
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1525  ¦  Incorrect XML value: malformed XML fragment
+SELECT ExtractValue(doc, path) FROM xml_functions_28306.inputs WHERE id=1;
+invalid input: Only constant XPATH queries are supported
+CREATE TABLE xml_functions_28306.output AS SELECT ExtractValue('<a>', '/a') AS extracted;
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1525  ¦  Incorrect XML value: malformed XML fragment
+SELECT extracted IS NULL AS nullable_value FROM xml_functions_28306.output;
+➤ nullable_value[-7,1,0]  𝄀
+1
+SELECT data_type,is_nullable FROM information_schema.columns
+WHERE table_schema='xml_functions_28306' AND table_name='output' AND column_name='extracted';
+➤ data_type[12,65535,0]  ¦  is_nullable[12,3,0]  𝄀
+longtext  ¦  YES
+CREATE TABLE xml_functions_28306.large_output AS
+SELECT ExtractValue(CONCAT('<a>', REPEAT('x', 65536), '</a>'), '/a') AS extracted;
+SELECT LENGTH(extracted) AS beyond_varchar FROM xml_functions_28306.large_output;
+➤ beyond_varchar[-5,64,0]  𝄀
+65536
+PREPARE xml_function_probe FROM 'SELECT ExtractValue(?, ?) AS value';
+SET @xml_doc='<a>one</a>', @xml_path='/a';
+EXECUTE xml_function_probe USING @xml_doc,@xml_path;
+➤ value[-1,536870911,0]  𝄀
+one
+SET @xml_doc='<b>two</b>', @xml_path='/b';
+EXECUTE xml_function_probe USING @xml_doc,@xml_path;
+➤ value[-1,536870911,0]  𝄀
+two
+SET @xml_path='[';
+EXECUTE xml_function_probe USING @xml_doc,@xml_path;
+not supported: XPATH syntax error or unsupported XPath feature
+SET @xml_path=NULL;
+EXECUTE xml_function_probe USING @xml_doc,@xml_path;
+➤ value[-1,536870911,0]  𝄀
+null
+DEALLOCATE PREPARE xml_function_probe;
+SET @xml_doc=NULL,@xml_path=NULL;
+DROP DATABASE xml_functions_28306;
+SELECT COUNT(*) AS leftover_databases FROM mo_catalog.mo_database WHERE datname='xml_functions_28306';
+➤ leftover_databases[-5,64,0]  𝄀
+0

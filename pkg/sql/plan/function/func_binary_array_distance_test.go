@@ -217,18 +217,22 @@ func TestBatchArrayDistanceSync_Float64Declines(t *testing.T) {
 // TestBatchArrayDistanceSync_Float64PrecisionMatchesScalar is the value this protects:
 // 16777217 is the first integer float32 cannot represent, so a result rounded through
 // float32 answers 16777216. Distances that collapse this way can reorder an ORDER BY.
-func TestBatchArrayDistanceSync_Float64PrecisionMatchesScalar(t *testing.T) {
+func TestBatchArrayDistanceSync_Float64RoundsToF32Domain(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 
 	const beyondF32 = 16777217.0
+	// Vector distances are a float32 domain for every base type (#29040 / #29050). The batch (SIMD)
+	// path is float32-only, so a float64 base falls to the per-row moarray path -- which now ALSO
+	// rounds into the float32 domain, so a value beyond float32's integer range collapses to
+	// 16777216 and the scalar matches what a vector index returns.
+	want := float64(float32(beyondF32)) // 16777216
 	for _, tc := range []struct {
 		name string
 		m    metric.MetricType
-		want float64
 	}{
-		{"l1", metric.Metric_L1Distance, beyondF32},
-		{"l2", metric.Metric_L2Distance, beyondF32},
+		{"l1", metric.Metric_L1Distance},
+		{"l2", metric.Metric_L2Distance},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			constVec := makeConstArrayVec64(t, mp, []float64{beyondF32}, 1)
@@ -237,9 +241,8 @@ func TestBatchArrayDistanceSync_Float64PrecisionMatchesScalar(t *testing.T) {
 			_, ok, err := batchArrayDistanceSync[float64](
 				[]*vector.Vector{constVec, colVec}, 1, tc.m, nil, nil)
 			require.NoError(t, err)
-			require.False(t, ok)
+			require.False(t, ok) // batch path is float32-only; a float64 base falls to the per-row path
 
-			// What the per-row path then computes -- the exact value, not 16777216.
 			var got float64
 			switch tc.m {
 			case metric.Metric_L1Distance:
@@ -248,8 +251,7 @@ func TestBatchArrayDistanceSync_Float64PrecisionMatchesScalar(t *testing.T) {
 				got, err = moarray.L2Distance[float64]([]float64{0}, []float64{beyondF32})
 			}
 			require.NoError(t, err)
-			require.Equal(t, tc.want, got)
-			require.NotEqual(t, float64(float32(tc.want)), got, "float32 rounding must be observable here")
+			require.Equal(t, want, got, "float64 base rounds into the float32 distance domain")
 		})
 	}
 }

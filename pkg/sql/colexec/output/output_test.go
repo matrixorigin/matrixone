@@ -50,24 +50,17 @@ func sqlOutput(_ *batch.Batch, _ *perfcounter.CounterSet) error {
 func makeTestCases(t *testing.T) []outputTestCase {
 	return []outputTestCase{
 		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			proc: testutil.NewProcess(t),
 			types: []types.Type{
 				types.T_int8.ToType(),
 			},
 			arg: &Output{
 				Data: nil,
 				Func: sqlOutput,
-				OperatorBase: vm.OperatorBase{
-					OperatorInfo: vm.OperatorInfo{
-						Idx:     0,
-						IsFirst: false,
-						IsLast:  false,
-					},
-				},
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			proc: testutil.NewProcess(t),
 			types: []types.Type{
 				types.T_int8.ToType(),
 			},
@@ -77,23 +70,16 @@ func makeTestCases(t *testing.T) []outputTestCase {
 				},
 				Data: nil,
 				Func: sqlOutput,
-				OperatorBase: vm.OperatorBase{
-					OperatorInfo: vm.OperatorInfo{
-						Idx:     0,
-						IsFirst: false,
-						IsLast:  false,
-					},
-				},
 			},
 		},
 	}
 }
 
 func TestString(t *testing.T) {
-	buf := new(bytes.Buffer)
-	for _, tc := range makeTestCases(t) {
-		tc.arg.String(buf)
-	}
+	var buf bytes.Buffer
+	arg := &Output{}
+	arg.String(&buf)
+	require.Equal(t, "output: sql output", buf.String())
 }
 
 func TestPrepare(t *testing.T) {

@@ -80,7 +80,7 @@ func TestForeignTvfDisconnectBuiltin(t *testing.T) {
 			[]bool{true, false, false},
 			[]bool{false, false, true}),
 		builtInSqlTvfDisconnect)
-	ok, info := tc.Run()
+	ok, info := tc.RunAndFree()
 	require.True(t, ok, info)
 	require.True(t, conn.closed)
 	_, found := ses.GetForeignConn("sql:abc")
@@ -91,20 +91,20 @@ func TestForeignTvfBuiltinsRequireInteractiveSession(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.Session = nil // no interactive session
 
-	for _, fn := range []fEvalFn{builtInSqlTvfDisconnect, builtInEsqlTvfDisconnect} {
+	for _, fn := range []executeLogicOfOverload{builtInSqlTvfDisconnect, builtInEsqlTvfDisconnect} {
 		tc := NewFunctionTestCase(proc,
 			[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{"h"}, nil)},
 			NewFunctionTestResult(types.T_bool.ToType(), true, nil, nil),
 			fn)
-		ok, info := tc.Run()
+		ok, info := tc.RunAndFree()
 		require.True(t, ok, info)
 	}
-	for _, fn := range []fEvalFn{builtInSqlTvfConnect, builtInEsqlTvfConnect} {
+	for _, fn := range []executeLogicOfOverload{builtInSqlTvfConnect, builtInEsqlTvfConnect} {
 		tc := NewFunctionTestCase(proc,
 			[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{"{}"}, nil)},
 			NewFunctionTestResult(types.T_varchar.ToType(), true, nil, nil),
 			fn)
-		ok, info := tc.Run()
+		ok, info := tc.RunAndFree()
 		require.True(t, ok, info)
 	}
 }
@@ -120,7 +120,7 @@ func TestForeignTvfConnectBadConfig(t *testing.T) {
 			[]string{`{"driver":"nope","dsn":"x"}`}, nil)},
 		NewFunctionTestResult(types.T_varchar.ToType(), true, nil, nil),
 		builtInSqlTvfConnect)
-	ok, info := tc.Run()
+	ok, info := tc.RunAndFree()
 	require.True(t, ok, info)
 
 	// NULL config with no resolvable @sql_tvf_config errors.
@@ -129,7 +129,7 @@ func TestForeignTvfConnectBadConfig(t *testing.T) {
 			[]string{""}, []bool{true})},
 		NewFunctionTestResult(types.T_varchar.ToType(), true, nil, nil),
 		builtInSqlTvfConnect)
-	ok, info = tc.Run()
+	ok, info = tc.RunAndFree()
 	require.True(t, ok, info)
 }
 

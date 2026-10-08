@@ -4,7 +4,7 @@ no such table system.sql_statement_hotspot
 desc system.sql_statement_hotspot;
 Field    Type    Null    Key    Default    Extra    Comment
 statement_id    VARCHAR(36)    NO        null        
-statement    TEXT(0)    NO        null        
+statement    TEXT    NO        null        
 timeconsumed    DOUBLE(0)    YES        null        
 memorysize    DECIMAL(38,3)    YES        null        
 collecttime    DATETIME(6)    NO        null        

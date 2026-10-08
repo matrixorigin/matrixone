@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minusall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/partition"
@@ -46,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightdedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
 	windowop "github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
@@ -83,6 +85,21 @@ func TestDupOperator(t *testing.T) {
 	duplicatedFilter := dupOperator(assertFilter, 0, 1).(*filter.Filter)
 	defer duplicatedFilter.Release()
 	require.True(t, duplicatedFilter.IsAssert)
+}
+
+func TestDupOperatorUnionAllMarker(t *testing.T) {
+	source := unionall.NewArgument()
+	defer source.Release()
+
+	duplicated := dupOperator(source, 2, 4).(*unionall.UnionAll)
+	defer duplicated.Release()
+	require.Zero(t, duplicated.SequentialBranches)
+	require.Equal(t, int32(2), duplicated.GetOperatorBase().ParallelID)
+	require.Equal(t, int32(4), duplicated.GetOperatorBase().MaxParallel)
+
+	sequential := unionall.NewArgument().WithSequentialBranches(2)
+	defer sequential.Release()
+	require.Panics(t, func() { dupOperator(sequential, 0, 1) })
 }
 
 func TestConstructMergeGroupCarriesEmptyGroupingSetMetadata(t *testing.T) {
@@ -437,6 +454,149 @@ func TestConstructAggregateConfigPreparedPercentile(t *testing.T) {
 	}
 }
 
+func TestConstructAggregateConfigPreparedPercentileExpression(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	value := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}}
+	parameter := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_text)},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+	}
+	percent := plan2.MakePlan2Float64ConstExprWithType(100)
+	configExpr, err := plan2.BindFuncExprImplByPlanExpr(
+		context.Background(), "/", []*plan.Expr{parameter, percent})
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name string
+		want []byte
+	}{
+		{name: plan2.NameApproxPercentile, want: []byte("0.5")},
+		{name: plan2.NamePercentileCont, want: aggexec.EncodeOrderedPercentileConfig([]byte("0.5"), false)},
+		{name: plan2.NamePercentileDisc, want: aggexec.EncodeOrderedPercentileConfig([]byte("0.5"), false)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bound, bindErr := plan2.BindFuncExprImplByPlanExpr(
+				context.Background(), tc.name, []*plan.Expr{value, plan2.DeepCopyExpr(configExpr)})
+			require.NoError(t, bindErr)
+			original := plan2.DeepCopyExpr(bound.GetF().Args[1])
+
+			check := func(param []byte, isNull bool) ([]byte, error) {
+				params := vector.NewVec(types.T_text.ToType())
+				require.NoError(t, vector.AppendBytes(params, param, isNull, proc.Mp()))
+				proc.SetPrepareParams(params)
+				baseline := proc.Mp().CurrNB()
+				_, config, configErr := constructAggregateConfigWithError(bound.GetF(), proc)
+				require.Equal(t, baseline, proc.Mp().CurrNB())
+				proc.SetPrepareParams(nil)
+				params.Free(proc.Mp())
+				return config, configErr
+			}
+
+			config, configErr := check([]byte("50"), false)
+			require.NoError(t, configErr)
+			require.Equal(t, tc.want, config)
+
+			_, configErr = check([]byte("150"), false)
+			require.ErrorContains(t, configErr, "must be finite and in [0,1]")
+			_, configErr = check(nil, true)
+			require.ErrorContains(t, configErr, "cannot be NULL")
+			_, configErr = check([]byte("NaN"), false)
+			require.ErrorContains(t, configErr, "must be finite and in [0,1]")
+
+			config, configErr = check([]byte("50"), false)
+			require.NoError(t, configErr)
+			require.Equal(t, tc.want, config)
+			require.Equal(t, original, bound.GetF().Args[1],
+				"prepared execution must not mutate the cached expression")
+		})
+	}
+}
+
+func TestConstructAggregateConfigPreparedPercentileExpressionDivisionByZero(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("50"), false, proc.Mp()))
+	defer params.Free(proc.Mp())
+	proc.SetPrepareParams(params)
+
+	parameter := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_text)},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+	}
+	configExpr, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "/", []*plan.Expr{
+		parameter,
+		plan2.MakePlan2Float64ConstExprWithType(0),
+	})
+	require.NoError(t, err)
+	value := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}}
+	bound, err := plan2.BindFuncExprImplByPlanExpr(
+		context.Background(), plan2.NamePercentileCont, []*plan.Expr{value, configExpr})
+	require.NoError(t, err)
+
+	_, _, err = constructAggregateConfigWithError(bound.GetF(), proc)
+	require.Error(t, err)
+}
+
+func TestConstructAggregateConfigPreparedDecimalPercentilePreservesPrecision(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	parameter := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_text)},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+	}
+	decimalType := types.New(types.T_decimal128, 19, 18)
+	configExpr, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "cast", []*plan.Expr{
+		parameter,
+		{
+			Typ:  plan2.MakePlan2Type(&decimalType),
+			Expr: &plan.Expr_T{T: &plan.TargetType{}},
+		},
+	})
+	require.NoError(t, err)
+	configExpr.GetF().SyntaxExplicitCast = true
+	value := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}}
+
+	for _, tc := range []struct {
+		name string
+		want []byte
+	}{
+		{name: plan2.NameApproxPercentile, want: []byte("0.500000000000000001")},
+		{name: plan2.NamePercentileCont, want: aggexec.EncodeOrderedPercentileConfig([]byte("0.500000000000000001"), false)},
+		{name: plan2.NamePercentileDisc, want: aggexec.EncodeOrderedPercentileConfig([]byte("0.500000000000000001"), false)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bound, bindErr := plan2.BindFuncExprImplByPlanExpr(
+				context.Background(), tc.name, []*plan.Expr{value, plan2.DeepCopyExpr(configExpr)})
+			require.NoError(t, bindErr)
+			require.Equal(t, int32(types.T_decimal128), bound.GetF().Args[1].Typ.Id)
+
+			check := func(param string) ([]byte, error) {
+				params := vector.NewVec(types.T_text.ToType())
+				require.NoError(t, vector.AppendBytes(params, []byte(param), false, proc.Mp()))
+				proc.SetPrepareParams(params)
+				baseline := proc.Mp().CurrNB()
+				_, config, configErr := constructAggregateConfigWithError(bound.GetF(), proc)
+				require.Equal(t, baseline, proc.Mp().CurrNB())
+				proc.SetPrepareParams(nil)
+				params.Free(proc.Mp())
+				return config, configErr
+			}
+
+			config, configErr := check("0.500000000000000001")
+			require.NoError(t, configErr)
+			require.Equal(t, tc.want, config)
+
+			_, configErr = check("1.000000000000000001")
+			require.ErrorContains(t, configErr,
+				"must be in [0,1], got 1.000000000000000001")
+		})
+	}
+}
+
 func TestPreflightPercentileConfigsReturnsPreparedValueError(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
@@ -515,7 +675,7 @@ func TestConstructAggregateConfigOrderedPercentileNormalizesStaticCast(t *testin
 		{name: "discrete descending", fn: plan2.NamePercentileDisc, desc: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := plan2.NewMockCompilerContext(false)
+			ctx := plan2.NewMockCompilerContext(false, newPlanTestProcess(t))
 			direction := ""
 			if tc.desc {
 				direction = " desc"
@@ -554,6 +714,35 @@ func TestConstructAggregateConfigOrderedPercentileNormalizesStaticCast(t *testin
 			require.Equal(t, originalConfigExpr, percentileFn.GetArgs()[1])
 		})
 	}
+}
+
+func TestConstructAggregateConfigApproxPercentileNormalizesStaticCast(t *testing.T) {
+	ctx := plan2.NewMockCompilerContext(false, newPlanTestProcess(t))
+	stmt, err := parsers.ParseOne(
+		context.Background(), dialect.MYSQL,
+		"select approx_percentile(0.5) within group (order by n_nationkey) from nation", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	queryPlan, err := plan2.BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+
+	var percentileFn *plan.Function
+	for _, node := range queryPlan.GetQuery().GetNodes() {
+		for _, aggregate := range node.GetAggList() {
+			if fn := aggregate.GetF(); fn != nil && fn.GetFunc().GetObjName() == plan2.NameApproxPercentile {
+				percentileFn = fn
+			}
+		}
+	}
+	require.NotNil(t, percentileFn)
+	require.Len(t, percentileFn.GetArgs(), 2)
+	require.NotNil(t, percentileFn.GetArgs()[1].GetF(), "raw planner output should retain the static cast")
+
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	args, config := constructAggregateConfig(percentileFn, proc)
+	require.Len(t, args, 1)
+	require.Equal(t, []byte("0.5"), config)
 }
 
 func TestConstructAggregateConfigOrderedPercentileRejectsInvalidInput(t *testing.T) {
@@ -608,6 +797,16 @@ func TestDupSetOperatorPreservesPhysicalEqualityKeys(t *testing.T) {
 	source.KeyExprs = []*plan.Expr{plan2.MakePlan2Int64ConstExprWithType(7)}
 
 	duplicated := dupOperator(source, 0, 1).(*intersectall.IntersectAll)
+	defer duplicated.Release()
+	require.Equal(t, source.KeyExprs, duplicated.KeyExprs)
+}
+
+func TestDupMinusAllPreservesPhysicalEqualityKeys(t *testing.T) {
+	source := minusall.NewArgument()
+	defer source.Release()
+	source.KeyExprs = []*plan.Expr{plan2.MakePlan2Int64ConstExprWithType(9)}
+
+	duplicated := dupOperator(source, 0, 1).(*minusall.MinusAll)
 	defer duplicated.Release()
 	require.Equal(t, source.KeyExprs, duplicated.KeyExprs)
 }
@@ -1135,6 +1334,23 @@ func TestConstructAggregateConfigCoversLegacyConfigurationFailures(t *testing.T)
 		require.Error(t, err, name)
 	}
 
+}
+
+func TestGroupConcatNullSeparatorConfig(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return int64(1024), nil
+	})
+	value := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}}
+	f := &plan.Function{
+		Func: &plan.ObjectRef{ObjName: plan2.NameGroupConcat},
+		Args: []*plan.Expr{value, plan2.MakePlan2NullTextConstExprWithType("NULL")},
+	}
+	args, config, err := constructAggregateConfigWithError(f, proc)
+	require.NoError(t, err)
+	require.Len(t, args, 1)
+	require.Equal(t, aggexec.EncodeGroupConcatConfig("", 1024), config)
 }
 
 func TestConstructAggregateConfigPreservesOtherSpecialConfigs(t *testing.T) {
@@ -1734,4 +1950,31 @@ func TestDupOperatorApplyPreservesFulltextReferences(t *testing.T) {
 	dup := dupOperator(op, 0, 1).(*apply.Apply)
 	require.Equal(t, tableFunction.FulltextSourceRef, dup.TableFunction.FulltextSourceRef)
 	require.Equal(t, tableFunction.FulltextIndexRef, dup.TableFunction.FulltextIndexRef)
+}
+
+func TestPreInsertEstimatedRowsAreOnlyBoundedPrefetchHints(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, tc := range []struct {
+		name  string
+		auto  bool
+		stats *plan.Stats
+		want  int64
+	}{
+		{"finite", true, &plan.Stats{Outcnt: 5}, 5},
+		{"finite_conservative_bound", true, &plan.Stats{Outcnt: math.MaxUint32}, math.MaxUint32},
+		{"saturating", true, &plan.Stats{Outcnt: float64(math.MaxUint64)}, math.MaxInt64},
+		{"nan", true, &plan.Stats{Outcnt: math.NaN()}, 0},
+		{"missing", true, nil, 0},
+		{"no_auto", false, &plan.Stats{Outcnt: 5}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			child := &plan.Node{Stats: tc.stats}
+			node := &plan.Node{Children: []int32{0}, PreInsertCtx: &plan.PreInsertCtx{
+				Ref: &plan.ObjectRef{}, TableDef: &plan.TableDef{}, HasAutoCol: tc.auto}}
+			op, err := constructPreInsert([]*plan.Node{child}, node, nil, proc)
+			require.NoError(t, err)
+			defer op.Release()
+			require.Equal(t, tc.want, op.EstimatedRowCount)
+		})
+	}
 }

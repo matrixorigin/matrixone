@@ -140,6 +140,15 @@ func GetCDCWatermarkUpdater(
 	return updater
 }
 
+// ResetCDCWatermarkUpdaterForTest releases the process-local updater after an
+// embedded test cluster has closed, before another cluster creates CDC tasks.
+// Callers must ensure no CDC executor can still use the old updater.
+func ResetCDCWatermarkUpdaterForTest() {
+	if updater := cdcWatermarkUpdater.Swap(nil); updater != nil {
+		updater.Stop()
+	}
+}
+
 type WatermarkKey struct {
 	AccountId uint64
 	TaskId    string
@@ -1476,6 +1485,32 @@ func (u *CDCWatermarkUpdater) GetWatermarkProgress(
 	ctx context.Context,
 	key *WatermarkKey,
 ) (types.TS, uint64, error) {
+	watermark, generation, found, err := u.getWatermarkProgress(ctx, key)
+	if err != nil {
+		return types.TS{}, 0, err
+	}
+	if !found {
+		return types.TS{}, 0, &RetryableSnapshotEpochError{err: moerr.NewInternalErrorf(
+			ctx, "CDC watermark generation is missing for %s", key.String())}
+	}
+	return watermark, generation, nil
+}
+
+// GetWatermarkProgressIfExists loads a durable watermark without creating one.
+// It is used when deciding whether a legacy task can safely resume: an
+// existing non-empty watermark is a durable activation boundary, while a
+// missing row must not be replaced with the executor's current snapshot.
+func (u *CDCWatermarkUpdater) GetWatermarkProgressIfExists(
+	ctx context.Context,
+	key *WatermarkKey,
+) (types.TS, uint64, bool, error) {
+	return u.getWatermarkProgress(ctx, key)
+}
+
+func (u *CDCWatermarkUpdater) getWatermarkProgress(
+	ctx context.Context,
+	key *WatermarkKey,
+) (types.TS, uint64, bool, error) {
 	readCtx, cancel := context.WithTimeoutCause(
 		ctx, snapshotEpochPersistenceTimeout, moerr.CauseWatermarkRead)
 	defer cancel()
@@ -1486,30 +1521,33 @@ func (u *CDCWatermarkUpdater) GetWatermarkProgress(
 		ie.SessionOverrideOptions{},
 	)
 	if err := res.Error(); err != nil {
-		return types.TS{}, 0, classifySnapshotEpochBackendError(err)
+		return types.TS{}, 0, false, classifySnapshotEpochBackendError(err)
+	}
+	if res.RowCount() == 0 {
+		return types.TS{}, 0, false, nil
 	}
 	if res.RowCount() != 1 {
-		return types.TS{}, 0, &RetryableSnapshotEpochError{err: moerr.NewInternalErrorf(
-			ctx, "CDC watermark generation is missing for %s", key.String())}
+		return types.TS{}, 0, false, &RetryableSnapshotEpochError{err: moerr.NewInternalErrorf(
+			ctx, "CDC watermark generation has multiple rows for %s", key.String())}
 	}
 	watermarkString, err := res.GetString(readCtx, 0, 0)
 	if err != nil {
-		return types.TS{}, 0, err
+		return types.TS{}, 0, false, err
 	}
 	watermark, err := parseWatermarkTS(watermarkString)
 	if err != nil {
-		return types.TS{}, 0, moerr.NewInternalErrorf(
+		return types.TS{}, 0, false, moerr.NewInternalErrorf(
 			ctx, "invalid CDC watermark %q for %s: %v", watermarkString, key.String(), err)
 	}
 	generation, err := res.GetUint64(readCtx, 0, 1)
 	if err != nil {
-		return types.TS{}, 0, err
+		return types.TS{}, 0, false, err
 	}
 	u.Lock()
 	u.cacheCommitted[*key] = watermark
 	u.cacheCommittedGeneration[*key] = generation
 	u.Unlock()
-	return watermark, generation, nil
+	return watermark, generation, true, nil
 }
 
 // ClaimWatermarkOwner durably publishes the daemon generation that is allowed
@@ -1595,6 +1633,145 @@ func (u *CDCWatermarkUpdater) ClaimWatermarkOwner(
 	u.cacheCommittedGeneration[*key] = generation
 	u.Unlock()
 	return watermark, generation, nil
+}
+
+type WatermarkTargetState struct {
+	SourceGeneration  uint64
+	PendingGeneration uint64
+	HasPending        bool
+	Identity          string
+	HasIdentity       bool
+}
+
+func (u *CDCWatermarkUpdater) GetWatermarkTargetState(ctx context.Context, key *WatermarkKey, fence *OwnerFence) (WatermarkTargetState, error) {
+	var state WatermarkTargetState
+	if fence == nil {
+		return state, moerr.NewInternalError(ctx, "CDC target state has no owner fence")
+	}
+	if err := fence.Check(ctx); err != nil {
+		return state, err
+	}
+	readCtx, cancel := context.WithTimeoutCause(ctx, snapshotEpochPersistenceTimeout, moerr.CauseWatermarkRead)
+	defer cancel()
+	readCtx = defines.AttachAccountId(readCtx, catalog.System_Account)
+	res := u.ie.Query(readCtx, CDCSQLBuilder.GetWatermarkTargetStateSQL(key), ie.SessionOverrideOptions{})
+	if err := res.Error(); err != nil {
+		return state, classifySnapshotEpochBackendError(err)
+	}
+	if res.RowCount() != 1 {
+		return state, NewRetryableSnapshotEpochError(moerr.NewInternalErrorf(ctx, "CDC target state row is missing for %s", key.String()))
+	}
+	owner, err := res.GetUint64(readCtx, 0, 0)
+	if err != nil {
+		return state, err
+	}
+	if owner != fence.GenerationToken() {
+		return state, &OwnerFenceLostError{err: moerr.NewInvalidTask(ctx, "CDC target state owner was superseded", fence.GenerationToken())}
+	}
+	state.SourceGeneration, err = res.GetUint64(readCtx, 0, 1)
+	if err != nil {
+		return state, err
+	}
+	pending, err := res.Value(readCtx, 0, 2)
+	if err != nil {
+		return state, err
+	}
+	if pending != nil {
+		state.PendingGeneration, err = res.GetUint64(readCtx, 0, 2)
+		if err != nil {
+			return state, err
+		}
+		state.HasPending = true
+	}
+	identity, err := res.Value(readCtx, 0, 3)
+	if err != nil {
+		return state, err
+	}
+	if identity != nil {
+		state.Identity, err = res.GetString(readCtx, 0, 3)
+		if err != nil {
+			return state, err
+		}
+		state.HasIdentity = true
+	}
+	return state, fence.Check(ctx)
+}
+
+func (u *CDCWatermarkUpdater) SetWatermarkPending(ctx context.Context, key *WatermarkKey, fence *OwnerFence, generation uint64, preIdentity string) error {
+	if generation == 0 || preIdentity == "" || fence == nil {
+		return moerr.NewInternalError(ctx, "invalid CDC pending target identity")
+	}
+	if err := fence.Check(ctx); err != nil {
+		return err
+	}
+	writeCtx, cancel := context.WithTimeoutCause(ctx, snapshotEpochPersistenceTimeout, moerr.CauseWatermarkUpdate)
+	defer cancel()
+	writeCtx = defines.AttachAccountId(writeCtx, catalog.System_Account)
+	if err := u.ie.Exec(writeCtx, CDCSQLBuilder.SetWatermarkPendingSQL(key, fence.GenerationToken(), generation, preIdentity), ie.SessionOverrideOptions{}); err != nil {
+		return classifySnapshotEpochBackendError(err)
+	}
+	state, err := u.GetWatermarkTargetState(ctx, key, fence)
+	if err != nil {
+		return err
+	}
+	if state.SourceGeneration != 0 || !state.HasPending || state.PendingGeneration != generation || !state.HasIdentity || state.Identity != preIdentity {
+		return moerr.NewInternalErrorf(ctx, "CDC pending target identity changed for %s; explicit recovery is required", key.String())
+	}
+	return nil
+}
+
+func (u *CDCWatermarkUpdater) AcknowledgeTargetIdentity(
+	ctx context.Context, key *WatermarkKey, fence *OwnerFence,
+	sourceGeneration uint64, preIdentity, newIdentity string, replayPoint types.TS,
+) error {
+	if fence == nil || sourceGeneration == 0 || preIdentity == "" || newIdentity == "" {
+		return moerr.NewInternalError(ctx, "invalid CDC target identity acknowledgement")
+	}
+	if err := fence.Check(ctx); err != nil {
+		return err
+	}
+	ackCtx, cancel := context.WithTimeoutCause(ctx, snapshotEpochPersistenceTimeout, moerr.CauseWatermarkUpdate)
+	defer cancel()
+	ackCtx = defines.AttachAccountId(ackCtx, catalog.System_Account)
+	if err := u.ie.Exec(ackCtx, CDCSQLBuilder.AcknowledgeTargetIdentitySQL(
+		key, fence.GenerationToken(), sourceGeneration, preIdentity, newIdentity, replayPoint),
+		ie.SessionOverrideOptions{}); err != nil {
+		return classifySnapshotEpochBackendError(err)
+	}
+	actual, generation, err := u.ClaimWatermarkOwner(ctx, key, fence)
+	if err != nil {
+		return err
+	}
+	state, err := u.GetWatermarkTargetState(ctx, key, fence)
+	if err != nil {
+		return err
+	}
+	if generation != sourceGeneration || !actual.Equal(&replayPoint) || state.HasPending || !state.HasIdentity || state.Identity != newIdentity {
+		return NewRetryableSnapshotEpochError(moerr.NewInternalErrorf(ctx,
+			"CDC target identity acknowledgement for %s was not durable", key.String()))
+	}
+	return u.finishTargetAcknowledgement(ctx, key, fence, actual, generation)
+}
+
+func (u *CDCWatermarkUpdater) finishTargetAcknowledgement(
+	ctx context.Context, key *WatermarkKey, fence *OwnerFence, actual types.TS, generation uint64,
+) error {
+	u.Lock()
+	if active := u.activeWatermarkFence[*key]; active != fence {
+		u.Unlock()
+		return &OwnerFenceLostError{err: moerr.NewInvalidTask(ctx, "CDC target generation owner was superseded locally", fence.GenerationToken())}
+	}
+	delete(u.cacheUncommitted, *key)
+	delete(u.cacheUncommittedGeneration, *key)
+	delete(u.cacheUncommittedFence, *key)
+	delete(u.cacheCommitting, *key)
+	delete(u.cacheCommittingGeneration, *key)
+	delete(u.cacheCommittingFence, *key)
+	delete(u.readKeysBuffer, *key)
+	u.cacheCommitted[*key] = actual
+	u.cacheCommittedGeneration[*key] = generation
+	u.Unlock()
+	return fence.Check(ctx)
 }
 
 func parseWatermarkTS(value string) (types.TS, error) {
@@ -2326,6 +2503,113 @@ func (u *CDCWatermarkUpdater) DeleteTaskWatermarks(
 			zap.Error(err),
 		)
 		return err
+	}
+	return nil
+}
+
+// EvictTaskLocalStateForOwner drains watermark work queued before a claim-loss
+// cancellation and evicts only the old owner's in-memory state. It deliberately
+// leaves durable rows untouched: a replacement executor may already own and
+// advance them. When a newer owner is visible in this updater, progress caches
+// at that generation are retained while stale progress from the relinquished
+// generation is removed.
+func (u *CDCWatermarkUpdater) EvictTaskLocalStateForOwner(
+	ctx context.Context,
+	accountID uint64,
+	taskID string,
+	ownerGeneration uint64,
+) error {
+	if ownerGeneration == 0 {
+		return nil
+	}
+	if err := u.ForceFlush(ctx); err != nil {
+		return err
+	}
+
+	keys := make(map[WatermarkKey]struct{})
+	u.Lock()
+	collectTaskWatermarkKeys(keys, u.cacheUncommitted, accountID, taskID)
+	collectTaskWatermarkKeys(keys, u.cacheCommitting, accountID, taskID)
+	collectTaskWatermarkKeys(keys, u.cacheCommitted, accountID, taskID)
+	collectTaskWatermarkKeys(keys, u.cacheUncommittedGeneration, accountID, taskID)
+	collectTaskWatermarkKeys(keys, u.cacheCommittingGeneration, accountID, taskID)
+	collectTaskWatermarkKeys(keys, u.cacheCommittedGeneration, accountID, taskID)
+	collectTaskWatermarkKeys(keys, u.cacheUncommittedFence, accountID, taskID)
+	collectTaskWatermarkKeys(keys, u.cacheCommittingFence, accountID, taskID)
+	collectTaskWatermarkKeys(keys, u.activeWatermarkFence, accountID, taskID)
+	collectTaskWatermarkKeys(keys, u.errorMetadataCache, accountID, taskID)
+	collectTaskWatermarkKeys(keys, u.commitFailureCount, accountID, taskID)
+	collectTaskWatermarkKeys(keys, u.commitCircuitOpen, accountID, taskID)
+
+	removedMetrics := make([]WatermarkKey, 0, len(keys))
+	for key := range keys {
+		newerOwner := false
+		if fence := u.activeWatermarkFence[key]; fence != nil {
+			newerOwner = fence.GenerationToken() > ownerGeneration
+		}
+		for _, generation := range []uint64{
+			u.cacheUncommittedGeneration[key],
+			u.cacheCommittingGeneration[key],
+			u.cacheCommittedGeneration[key],
+		} {
+			if generation > ownerGeneration {
+				newerOwner = true
+				break
+			}
+		}
+
+		if !newerOwner {
+			// Keep the last committed progress in the process-wide updater. CN
+			// services in an embedded cluster share this updater, so deleting the
+			// committed tier here can erase the replacement reader's local view
+			// after it has claimed the durable row. ClaimWatermarkOwner (and the
+			// legacy durable read path) refreshes this tier before a subsequent
+			// generation uses it; only obsolete in-flight state is unsafe to retain.
+			delete(u.cacheUncommitted, key)
+			delete(u.cacheUncommittedGeneration, key)
+			delete(u.cacheUncommittedFence, key)
+			delete(u.cacheCommitting, key)
+			delete(u.cacheCommittingGeneration, key)
+			delete(u.cacheCommittingFence, key)
+			delete(u.activeWatermarkFence, key)
+			delete(u.errorMetadataCache, key)
+			delete(u.commitFailureCount, key)
+			delete(u.commitCircuitOpen, key)
+			removedMetrics = append(removedMetrics, key)
+			continue
+		}
+
+		// A replacement owner is already visible. Remove uncommitted and
+		// committing entries without a newer generation as well, since those
+		// entries could otherwise be flushed after the replacement claim.
+		for _, state := range []struct {
+			cache       map[WatermarkKey]types.TS
+			generations map[WatermarkKey]uint64
+			fences      map[WatermarkKey]*OwnerFence
+		}{
+			{u.cacheUncommitted, u.cacheUncommittedGeneration, u.cacheUncommittedFence},
+			{u.cacheCommitting, u.cacheCommittingGeneration, u.cacheCommittingFence},
+		} {
+			generation := state.generations[key]
+			if generation == 0 || generation <= ownerGeneration {
+				delete(state.cache, key)
+				delete(state.generations, key)
+				delete(state.fences, key)
+			}
+		}
+		// Keep cacheCommitted even when its generation predates the replacement.
+		// The durable claim/read below refreshes it before the replacement uses
+		// progress, while retaining it avoids a same-process takeover observing
+		// ErrNoWatermarkFound between the claim and the cache refresh.
+		if fence := u.activeWatermarkFence[key]; fence != nil && fence.GenerationToken() <= ownerGeneration {
+			delete(u.activeWatermarkFence, key)
+		}
+	}
+	u.Unlock()
+
+	for _, key := range removedMetrics {
+		u.removeWatermarkMetrics(key)
+		u.fallbackLog.Delete(key.String())
 	}
 	return nil
 }

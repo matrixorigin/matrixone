@@ -19,12 +19,15 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -207,7 +210,8 @@ func TestPrecheckAndInsertUniqueIndexTableUsesSkipDedupAndPipelineFlush(t *testi
 		Unique:         true,
 	}
 
-	err := c.precheckAndInsertUniqueIndexTable("test", tableDef, indexDef, insertSQL)
+	err := c.precheckAndInsertUniqueIndexTable("test", tableDef, indexDef, insertSQL,
+		executor.StatementOption{}.WithPrePipelineLockTable(42))
 	require.ErrorIs(t, err, insertErr)
 	require.Equal(t, []string{checkSQL, insertSQL}, spyExec.executedSQLs)
 
@@ -221,6 +225,7 @@ func TestPrecheckAndInsertUniqueIndexTableUsesSkipDedupAndPipelineFlush(t *testi
 	require.NotNil(t, opt)
 	require.True(t, opt.SkipPkDedup)
 	require.Equal(t, indexDef.IndexTableName, opt.TargetTableName)
+	require.Equal(t, uint64(42), spyExec.insertOption.PrePipelineLockTable())
 
 	require.Same(t, topCtx, proc.Ctx)
 	require.NotEqual(t, true, proc.Ctx.Value(ioutil.PipelineFlushKey))
@@ -252,7 +257,8 @@ func TestPrecheckAndInsertUniqueIndexTableRejectsDuplicateBeforeInsert(t *testin
 		Unique:         true,
 	}
 
-	err := c.precheckAndInsertUniqueIndexTable("test", tableDef, indexDef, insertSQL)
+	err := c.precheckAndInsertUniqueIndexTable("test", tableDef, indexDef, insertSQL,
+		executor.StatementOption{}.WithPrePipelineLockTable(42))
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 	require.Contains(t, err.Error(), "Duplicate entry '7' for key '__mo_index_idx_col'")
@@ -290,10 +296,121 @@ func TestPrecheckAndInsertUniqueIndexTableFormatsCompoundDuplicate(t *testing.T)
 		Unique:         true,
 	}
 
-	err := c.precheckAndInsertUniqueIndexTable("test", tableDef, indexDef, insertSQL)
+	err := c.precheckAndInsertUniqueIndexTable("test", tableDef, indexDef, insertSQL,
+		executor.StatementOption{}.WithPrePipelineLockTable(42))
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 	require.Contains(t, err.Error(), "Duplicate entry '(1,2)' for key '__mo_index_idx_col'")
 	require.Equal(t, []string{checkSQL}, spyExec.executedSQLs)
 	require.Nil(t, spyExec.insertCtx)
+}
+
+// Record every substatement, including the duplicate-check SELECT, while
+// reusing the existing executor fixture for errors and duplicate result rows.
+type indexBackfillOptionSpyExecutor struct {
+	*alterCopyInsertSpyExecutor
+	options map[string]executor.StatementOption
+}
+
+func (e *indexBackfillOptionSpyExecutor) Exec(
+	ctx context.Context, sql string, opts executor.Options,
+) (executor.Result, error) {
+	e.options[sql] = opts.StatementOption()
+	return e.alterCopyInsertSpyExecutor.Exec(ctx, sql, opts)
+}
+
+func TestCreateIndexBackfillScopesPrePipelineLockToInsert(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		unique   bool
+		targetID uint64
+	}{
+		{"regular", false, 42},
+		{"unique", true, 43},
+		{"unresolved target", false, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			c := &Compile{proc: proc, pn: &planpb.Plan{}}
+			tableDef := &planpb.TableDef{
+				Name: "source", TblId: 7,
+				Pkey: &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+			}
+			indexDef := &planpb.IndexDef{
+				IndexName: "ix_value", IndexTableName: "__mo_index_secondary_test",
+				Parts: []string{"value"}, Unique: tc.unique,
+			}
+			indexInfo := &planpb.CreateTable{IndexTables: []*planpb.TableDef{{
+				Name: indexDef.IndexTableName, TblId: tc.targetID,
+			}}}
+			insertSQL, err := genInsertIndexTableSql(tableDef, indexDef, "test", tc.unique)
+			require.NoError(t, err)
+			insertErr := errors.New("injected backfill failure")
+			spy := &indexBackfillOptionSpyExecutor{
+				alterCopyInsertSpyExecutor: &alterCopyInsertSpyExecutor{insertSQL: insertSQL, insertErr: insertErr},
+				options:                    make(map[string]executor.StatementOption),
+			}
+			rt := moruntime.ServiceRuntime(proc.GetService())
+			previous, existed := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+			rt.SetGlobalVariables(moruntime.InternalSQLExecutor, spy)
+			t.Cleanup(func() {
+				if existed {
+					rt.SetGlobalVariables(moruntime.InternalSQLExecutor, previous)
+				} else {
+					rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, spy)
+				}
+			})
+			originalCtx := proc.Ctx
+			if tc.targetID == 0 {
+				// An unresolved target remains on the ordinary row-lock path.
+				err = (&Scope{}).createAndInsertForUniqueOrRegularIndexTable(c, indexDef, "test", tableDef, indexInfo)
+			} else {
+				// Exercise each DDL caller through the real indexTableBuild and
+				// maybeCreateAutoIncrement path. Only the engine boundary is mocked:
+				// the new relation must replace a stale ID from the logical plan.
+				indexInfo.IndexTables[0].TblId = 99
+				ctrl := gomock.NewController(t)
+				db := mock_frontend.NewMockDatabase(ctrl)
+				rel := mock_frontend.NewMockRelation(ctrl)
+				gomock.InOrder(
+					db.EXPECT().RelationExists(gomock.Any(), indexDef.IndexTableName, nil).Return(false, nil),
+					db.EXPECT().Create(gomock.Any(), indexDef.IndexTableName, gomock.Any()).Return(nil),
+					db.EXPECT().Relation(gomock.Any(), indexDef.IndexTableName, nil).Return(rel, nil),
+					rel.EXPECT().GetTableID(gomock.Any()).Return(tc.targetID),
+				)
+				extra := &api.SchemaExtra{}
+				if tc.unique {
+					err = (&Scope{}).handleUniqueIndexTable(c, tableDef.TblId, extra, db, indexDef, "test", tableDef, indexInfo)
+				} else {
+					err = (&Scope{}).handleRegularSecondaryIndexTable(c, tableDef.TblId, extra, db, indexDef, "test", tableDef, indexInfo)
+				}
+				require.Equal(t, tc.targetID, indexInfo.IndexTables[0].TblId)
+				require.Equal(t, []uint64{tc.targetID}, extra.IndexTables)
+			}
+			require.ErrorIs(t, err, insertErr)
+			require.Same(t, originalCtx, proc.Ctx, "failed backfill restores its caller's context")
+			require.Equal(t, tc.targetID, spy.insertOption.PrePipelineLockTable(),
+				"the request names the freshly resolved physical index, not its source table")
+			require.False(t, spy.insertOption.DisableLock(), "backfill still acquires a normal lock")
+			if tc.unique {
+				checkSQL, err := buildCreateUniqueIndexDuplicateCheckSQL("test", tableDef, indexDef)
+				require.NoError(t, err)
+				require.Equal(t, []string{checkSQL, insertSQL}, spy.executedSQLs)
+				require.Zero(t, spy.options[checkSQL].PrePipelineLockTable(),
+					"the source uniqueness check does not own the hidden target")
+				require.Nil(t, spy.options[checkSQL].AlterCopyDedupOpt())
+				require.NotNil(t, spy.insertOption.AlterCopyDedupOpt())
+				require.True(t, spy.insertOption.AlterCopyDedupOpt().SkipPkDedup)
+			} else {
+				require.Equal(t, []string{insertSQL}, spy.executedSQLs)
+				require.Nil(t, spy.insertOption.AlterCopyDedupOpt())
+			}
+
+			// A later ordinary internal statement on the same Compile must not
+			// inherit this statement's table-lock or dedup request after failure.
+			require.NoError(t, c.runSql("select 1"))
+			require.Zero(t, spy.options["select 1"].PrePipelineLockTable())
+			require.Nil(t, spy.options["select 1"].AlterCopyDedupOpt())
+		})
+	}
 }

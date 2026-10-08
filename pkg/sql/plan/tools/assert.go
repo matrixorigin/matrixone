@@ -16,9 +16,10 @@ package tools
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -26,12 +27,17 @@ import (
 )
 
 func AssertPlan(ctx context.Context, sql string, pattern *MatchPattern) error {
-	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
-	mock := plan.NewMockOptimizer(false)
 	one, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
 	if err != nil {
 		return err
 	}
+	defer one.Free()
+	proc := testutil.NewProcess(nil)
+	mp, fs := proc.Mp(), proc.GetFileService()
+	defer mpool.DeleteMPool(mp)
+	defer fs.Close(context.Background())
+	defer proc.Free()
+	mock := plan.NewMockOptimizer(false, proc)
 	actual, err := plan.BuildPlan(mock.CurrentContext(), one, false)
 	if err != nil {
 		return err

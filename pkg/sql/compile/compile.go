@@ -48,13 +48,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	icebergio "github.com/matrixorigin/matrixone/pkg/iceberg/io"
+	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/adaptivetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
@@ -75,6 +78,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergedelete"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minusall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mongoscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
@@ -96,7 +100,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -185,6 +188,9 @@ func (c *Compile) Release() {
 	if c == nil {
 		return
 	}
+	// Prepared Compiles can remain cached after Release. Semantic CTAS values
+	// belong to the completed execution, including its error and retry paths.
+	c.preparedParamValues = nil
 	if c.siriusRead != nil {
 		if err := c.siriusRead.finish(context.Background(), false); err != nil && c.proc != nil {
 			c.proc.Error(context.Background(), "failed to quiesce Sirius read during compile release", zap.Error(err))
@@ -203,7 +209,7 @@ func (c *Compile) Release() {
 	doCompileRelease(c)
 }
 
-func (c Compile) TypeName() string {
+func (c *Compile) TypeName() string {
 	return "compile.Compile"
 }
 
@@ -273,7 +279,10 @@ func (c *Compile) FreezeResultMetadata() {
 	}
 }
 
-func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*batch.Batch, *perfcounter.CounterSet) error, sql string) error {
+func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*batch.Batch, *perfcounter.CounterSet) error, sql string, diagnosticProof ...bool) error {
+	// A cached Compile must never expose the previous execution's CTAS values.
+	c.preparedParamValues = nil
+	c.preparedJoinDiagnosticFree = len(diagnosticProof) != 0 && diagnosticProof[0]
 	// Reset only supports the TP topology admitted by prepare-time compilation.
 	// AP scan state and worker placement belong to one execution; updating the
 	// transaction offset cannot make them valid for another execution.
@@ -483,8 +492,11 @@ func (c *Compile) clear() {
 	c.MessageBoard = c.MessageBoard.Reset()
 	c.fuzzys = c.fuzzys[:0]
 	c.scopes = c.scopes[:0]
+	c.auxiliaryProductScopes = nil
 	c.pn = nil
 	c.fill = nil
+	c.preparedParamValues = nil
+	c.preparedJoinDiagnosticFree = false
 	c.resultSink = nil
 	c.executionGeneration = 0
 	c.retryTimes = 0
@@ -526,6 +538,8 @@ func (c *Compile) clear() {
 	c.needLockMeta = false
 	c.isInternal = false
 	c.temporaryDDLInExecutorTxn = false
+	c.temporaryDropRetryStage = nil
+	c.temporaryDropRetryActive = false
 	c.resourceAttemptOwnerEligible = false
 	c.allocationAccountRegistry = nil
 	c.allocationAccountLimit = 0
@@ -545,6 +559,7 @@ func (c *Compile) clear() {
 	c.skipDataBranchReclaim = false
 	c.keepAutoIncrement = 0
 	c.disableLock = false
+	c.prePipelineLockTableID = 0
 	c.icebergScanPlanner = nil
 
 	for _, exe := range c.filterExprExes {
@@ -689,26 +704,30 @@ func (c *Compile) isRetryErr(err error) bool {
 }
 
 type scopeRunResult struct {
-	err      error
-	ctx      context.Context
-	queryCtx context.Context
+	err   error
+	scope *Scope
 }
 
 func newScopeRunResult(err error, scope *Scope) scopeRunResult {
 	if scope == nil {
-		return scopeRunResult{err: err}
+		return newScopeRunResultForProcess(err, nil)
 	}
-	return newScopeRunResultForProcess(err, scope.Proc)
+	result := newScopeRunResultForProcess(err, scope.Proc)
+	result.scope = scope
+	return result
 }
 
 func newScopeRunResultForProcess(err error, proc *process.Process) scopeRunResult {
-	result := scopeRunResult{err: err}
 	if proc == nil {
-		return result
+		return scopeRunResult{err: process.MarkPipelineFailure(err)}
 	}
-	result.ctx = proc.Ctx
-	result.queryCtx = scopeRunQueryContext(proc)
-	return result
+	return newScopeRunResultForContext(err, proc.Ctx, scopeRunQueryContext(proc))
+}
+
+// Capture before publication: cleanup must never change an already owned result.
+func newScopeRunResultForContext(err error, pipelineCtx, queryCtx context.Context) scopeRunResult {
+	err, _ = normalizeScopeRunError(err, pipelineCtx, queryCtx)
+	return scopeRunResult{err: err}
 }
 
 func scopeRunQueryContext(proc *process.Process) context.Context {
@@ -730,7 +749,7 @@ func isScopeCancellationError(err error) bool {
 // to the same canceled context. A joined error is attributable only as a whole;
 // one matching cancellation leaf must not hide an independent deadline leaf.
 func isScopeCancellationFrom(err error, contextErr error) bool {
-	if err == nil || contextErr == nil {
+	if err == nil || contextErr == nil || process.IsPipelineFailure(err) {
 		return false
 	}
 	if joined, ok := err.(interface{ Unwrap() []error }); ok {
@@ -751,7 +770,7 @@ func isScopeCancellationFrom(err error, contextErr error) bool {
 		}
 	}
 	return errors.Is(err, contextErr) ||
-		moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted)
+		(errors.Is(contextErr, context.Canceled) && errors.Is(err, process.ErrPipelineStopped))
 }
 
 // normalizeScopeRunError distinguishes a substantive execution failure from
@@ -764,75 +783,63 @@ func normalizeScopeRunError(
 	pipelineCtx context.Context,
 	queryCtx context.Context,
 ) (error, bool) {
-	if err == nil || !isScopeCancellationError(err) ||
-		pipelineCtx == nil || pipelineCtx.Err() == nil {
-		return err, false
+	if err == nil {
+		return nil, false
 	}
-	// Query cancellation owns the terminal classification. In particular,
-	// context.WithTimeoutCause reports DeadlineExceeded through Err while Cause
-	// carries diagnostic detail. Replacing the former with the latter would make
-	// callers misclassify a timeout as an ordinary execution failure; they can
-	// attach the cause after observing DeadlineExceeded.
-	if queryCtx != nil {
-		if queryErr := queryCtx.Err(); queryErr != nil {
-			if errors.Is(queryErr, context.DeadlineExceeded) {
-				return queryErr, true
-			}
-			if !isScopeCancellationFrom(err, queryErr) {
-				return err, false
-			}
-			if cause := context.Cause(queryCtx); cause != nil {
-				return cause, true
-			}
-			return queryErr, true
+	if !isScopeCancellationError(err) {
+		return process.MarkPipelineFailure(err), false
+	}
+	if queryCtx != nil && queryCtx.Err() != nil && isScopeCancellationFrom(err, queryCtx.Err()) {
+		if errors.Is(queryCtx.Err(), context.DeadlineExceeded) {
+			return process.MarkPipelineFailure(queryCtx.Err()), true
 		}
+		if cause := context.Cause(queryCtx); cause != nil {
+			return process.MarkPipelineFailure(cause), true
+		}
+		return process.MarkPipelineFailure(queryCtx.Err()), true
 	}
-
-	// A context-shaped error is secondary only when every leaf was derived from
-	// this pipeline's cancellation. Preserve an independent operator timeout
-	// that merely raced a different pipeline cancellation, including when the
-	// two errors were joined.
-	if !isScopeCancellationFrom(err, pipelineCtx.Err()) {
-		return err, false
+	if pipelineCtx == nil || pipelineCtx.Err() == nil || !isScopeCancellationFrom(err, pipelineCtx.Err()) {
+		return process.MarkPipelineFailure(err), false
 	}
-
-	if cause := context.Cause(pipelineCtx); cause != nil {
-		err = cause
+	cause := context.Cause(pipelineCtx)
+	if cause == process.ErrPipelineStopped && queryCtx != nil {
+		// A first-wins consumer stop can outlive its query's deadline. It is
+		// successful only while that query remains live.
+		return process.MarkPipelineFailure(queryCtx.Err()), true
 	}
-	if isScopeCancellationError(err) && queryCtx != nil && queryCtx.Err() == nil {
-		return nil, true
+	if cause != nil {
+		return process.MarkPipelineFailure(cause), true
 	}
-	return err, true
+	return process.MarkPipelineFailure(err), false
 }
 
-func (r scopeRunResult) resolveCancelCause() (scopeRunResult, bool) {
-	var normalized bool
-	r.err, normalized = normalizeScopeRunError(r.err, r.ctx, r.queryCtx)
-	return r, normalized
-}
-
-// preferPrimaryScopeResult keeps cleanup fallout from masking the execution
-// error that caused another scope to stop consuming its pipeline input. A
-// cancellation result is first resolved through that scope's CancelCauseFunc:
-// internally canceled siblings therefore report the triggering execution
-// error, while an externally canceled query keeps its external cause.
-func preferPrimaryScopeResult(current, candidate scopeRunResult) scopeRunResult {
-	current, _ = current.resolveCancelCause()
-	candidate, candidateNormalized := candidate.resolveCancelCause()
-
+// preferPrimaryScopeResult arbitrates frozen results at every scope boundary.
+// Retry selection belongs to the Compile's transaction policy; cleanup fallout
+// must not hide a retry merely because it crosses a nested MergeRun first.
+func (c *Compile) preferPrimaryScopeResult(current, candidate scopeRunResult) scopeRunResult {
 	if current.err == nil {
 		return candidate
 	}
-	if candidate.err == nil ||
-		!errors.Is(current.err, process.ErrPipelineEndSignalDeliveryFailed) ||
-		errors.Is(candidate.err, process.ErrPipelineEndSignalDeliveryFailed) {
+	if candidate.err == nil {
 		return current
 	}
-	// An unresolved pure cancellation does not prove that the cleanup fallback
-	// was secondary. A mixed error tree is substantive, however, and must not be
-	// rejected merely because one leaf is context.Canceled.
-	if !candidateNormalized &&
-		isScopeCancellationFrom(candidate.err, context.Canceled) {
+	// A shared producer job can report its original failure after a probe has
+	// already observed cancellation through its dependency. Keep the originating
+	// failure, while explicit query cancellation remains authoritative.
+	_, currentProducer := c.auxiliaryProductScopes[current.scope]
+	_, candidateProducer := c.auxiliaryProductScopes[candidate.scope]
+	if (currentProducer || candidateProducer) &&
+		process.IsPipelineCancellationError(process.UnwrapPipelineFailure(current.err)) &&
+		!process.IsPipelineCancellationError(process.UnwrapPipelineFailure(candidate.err)) &&
+		c.proc.GetQueryContextError() == nil {
+		return candidate
+	}
+	if c.isRetryErr(candidate.err) {
+		return candidate
+	}
+	if c.isRetryErr(current.err) ||
+		!errors.Is(current.err, process.ErrPipelineEndSignalDeliveryFailed) ||
+		errors.Is(candidate.err, process.ErrPipelineEndSignalDeliveryFailed) {
 		return current
 	}
 	return candidate
@@ -853,6 +860,15 @@ func (c *Compile) IsTpQuery() bool {
 }
 
 func (c *Compile) IsSingleScope(ss []*Scope) bool {
+	// Callers act on a true answer by keeping ss[0] and discarding the rest
+	// (compileSinkNode is the clearest), so answering true for a list that holds
+	// more than one scope silently drops those pipelines' rows.  A TP query
+	// normally builds exactly one scope, so rejecting longer lists only narrows
+	// the answer where the premise was already false -- a multi-file LOAD fanout
+	// can hand a TP-classified plan one scope per file shard.
+	if len(ss) > 1 {
+		return false
+	}
 	if c.IsTpQuery() {
 		return true
 	}
@@ -1105,9 +1121,24 @@ func (c *Compile) runOnce() (err error) {
 		}
 
 		var resultToThrowOut scopeRunResult
+		primaryRemaining := 0
+		for _, root := range c.scopes {
+			if !c.auxiliaryProductScopes[root] {
+				primaryRemaining++
+			}
+		}
 		for i := 0; i < cap(errC); i++ {
 			result := <-errC
-			result, _ = result.resolveCancelCause()
+			if !c.auxiliaryProductScopes[result.scope] {
+				primaryRemaining--
+				if primaryRemaining == 0 {
+					for _, root := range c.scopes {
+						if c.auxiliaryProductScopes[root] {
+							root.Proc.Cancel(process.ErrPipelineStopped)
+						}
+					}
+				}
+			}
 			e := result.err
 
 			// cancel this query if the first error occurs.
@@ -1120,17 +1151,10 @@ func (c *Compile) runOnce() (err error) {
 					}
 				}
 			}
-			resultToThrowOut = preferPrimaryScopeResult(resultToThrowOut, result)
-
-			// if any error already return is retryable, we should throw this one
-			// to make sure query will retry.
-			if e != nil && c.isRetryErr(e) {
-				resultToThrowOut = result
-			}
+			resultToThrowOut = c.preferPrimaryScopeResult(resultToThrowOut, result)
 		}
 		close(errC)
 
-		resultToThrowOut, _ = resultToThrowOut.resolveCancelCause()
 		if resultToThrowOut.err != nil {
 			return resultToThrowOut.err
 		}
@@ -1409,6 +1433,7 @@ func (c *Compile) shouldPrePipelineLockTable(target *plan.LockTarget) bool {
 func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	var err error
 	c.foundRowsOwnerNode = c.selectFoundRowsOwnerNode(qry)
+	c.auxiliaryProductScopes = nil
 	c.compiledLocalRuntimeFilterNodes = nil
 	defer func() {
 		c.compiledLocalRuntimeFilterNodes = nil
@@ -1419,32 +1444,26 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 		v2.TxnStatementCompileQueryHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	c.execType = sequenceExecType(
-		plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL(), c.isPrepare), qry)
+	c.execType = vectorQueryExecType(sequenceExecType(
+		plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL(), c.isPrepare), qry), qry)
 
 	c.cnList, err = c.scheduleQueryWorkers()
 	if err != nil {
 		return nil, err
 	}
-	if err = c.constrainIntegerDomainWorkers(qry); err != nil {
+	if err = c.constrainRequiredIVFWorkers(qry); err != nil {
 		return nil, err
 	}
-	if err = c.constrainConvBasesWorkers(qry); err != nil {
-		return nil, err
-	}
-	if err = c.constrainIPFunctionWorkers(qry); err != nil {
-		return nil, err
-	}
-	if err = c.constrainStringNumericResultWorkers(qry); err != nil {
-		return nil, err
-	}
-	if err = c.constrainBoundedConditionalStringWorkers(qry); err != nil {
+	if err = c.constrainRemoteExpressionWorkers(qry); err != nil {
 		return nil, err
 	}
 	if err = c.constrainStrictWriteWorkers(); err != nil {
 		return nil, err
 	}
 	if err = c.constrainGroupConcatTimeZoneWorkers(qry); err != nil {
+		return nil, err
+	}
+	if err = c.validateGroupingTransportPlacement(qry); err != nil {
 		return nil, err
 	}
 
@@ -1479,21 +1498,21 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	}()
 	for i := len(qry.Steps) - 1; i >= firstStep; i-- {
 		var scopes []*Scope
-		scopes, err = c.compilePlanScope(int32(i), qry.Steps[i], qry.Nodes)
-		if err != nil {
-			return nil, err
-		}
-		scopes, err = c.compileSteps(qry, scopes, qry.Steps[i])
+		scopes, err = c.compileProductRegion(int32(i), qry.Steps[i], qry.Nodes, false, qry)
 		if err != nil {
 			return nil, err
 		}
 		steps = append(steps, scopes...)
 	}
+	c.markProductProducerRegions(steps)
 	if err = validateSequenceScopePlacement(qry, toEngineNode(c.currentCNWorker()), steps); err != nil {
 		return nil, err
 	}
 	if err = validateLocalRuntimeFilterTopology(qry, c.compiledLocalRuntimeFilterNodes, steps); err != nil {
 		return nil, err
+	}
+	if queryNeedsGroupingTransport(qry) {
+		attachGroupingTransportPlan(steps, &plan.Plan{Plan: &plan.Plan_Query{Query: qry}})
 	}
 
 	return steps, err
@@ -1598,21 +1617,6 @@ func (c *Compile) isMaterializedCTEStep(qry *plan.Query, step int32) bool {
 		sink.ExtraOptions == materialized.CTESinkOption
 }
 
-func (c *Compile) isAdaptiveVectorSearch(qry *plan.Query) bool {
-	if qry == nil {
-		return false
-	}
-
-	for _, node := range qry.Nodes {
-		// Check for vector search in auto mode
-		if node.RankOption != nil && node.RankOption.Mode == "auto" {
-			return true
-		}
-	}
-
-	return false
-}
-
 func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) ([]*Scope, error) {
 	if qry.Nodes[step].NodeType == plan.Node_SINK {
 		return ss, nil
@@ -1675,13 +1679,14 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) ([]*Sco
 			}
 		}
 
-		isAdaptive := c.isAdaptiveVectorSearch(qry)
-
+		// IVF AUTO fallback is owned by the local ADAPTIVE_TOP region. Unmatched
+		// AUTO shapes execute their exact plan once; enabling Output retry here
+		// would replay the whole statement and can loop when AST rewriting cannot
+		// reach a nested SELECT.
 		rs.setRootOperator(
 			output.NewArgument().
 				WithFunc(c.resultWriter()).
-				WithBlock(c.needBlock).
-				WithAdaptive(isAdaptive),
+				WithBlock(c.needBlock),
 		)
 		return []*Scope{rs}, nil
 	}
@@ -1874,7 +1879,11 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		return c.compileLimit(node, []*Scope{rs}), nil
 	}
 
-	if nodeHasLocalRuntimeFilter(node) {
+	qualifiedIVFIndex := false
+	if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_INDEX {
+		_, _, _, qualifiedIVFIndex = plan2.RequiredIVFPlacement(c.pn.GetQuery())
+	}
+	if nodeHasLocalRuntimeFilter(node) || qualifiedIVFIndex {
 		// This is deliberately after the literal LIMIT 0 shortcut. The flat
 		// logical plan retains pruned descendants, while topology validation must
 		// cover only local-filter nodes whose physical subtree was constructed.
@@ -1965,7 +1974,10 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		}
 		childNodeID := node.Children[0]
 		childNode := nodes[childNodeID]
-		if isLocalPreAggregationGroup(node, childNode) &&
+		if canPreserveParallelUnionAllBranches(childNode) &&
+			c.canCompileParallelUnionAllAggregate(node) {
+			ss, err = c.compileParallelUnionAllInput(step, childNodeID, nodes)
+		} else if isLocalPreAggregationGroup(node, childNode) &&
 			!c.hasUnsupportedRemoteGroupWire(node) {
 			ss, err = c.compileLocalPreAggregationScope(step, childNodeID, nodes)
 		} else {
@@ -2035,7 +2047,13 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		ss = c.compileProjection(node, c.compileRestrict(node, c.compileFill(node, ss)))
 		return ss, nil
 	case plan.Node_JOIN:
-		left, err = c.compilePlanScope(step, node.Children[0], nodes)
+		leftNode := nodes[node.Children[0]]
+		if node.JoinType == plan.Node_INNER &&
+			canPreserveParallelUnionAllBranches(leftNode) {
+			left, err = c.compileParallelUnionAllInput(step, node.Children[0], nodes)
+		} else {
+			left, err = c.compilePlanScope(step, node.Children[0], nodes)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -2091,7 +2109,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		ss = c.compileSort(node, ss)
 		return ss, nil
-	case plan.Node_MINUS, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
+	case plan.Node_MINUS, plan.Node_MINUS_ALL, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
 		left, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
 			return nil, err
@@ -2107,16 +2125,44 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		ss = c.compileSort(node, ss)
 		return ss, nil
+	case plan.Node_VECTOR_QUERY_TOP:
+		return c.compileVectorQueryTop(step, node, nodes, curNodeIdx)
+	case plan.Node_VECTOR_QUERY_SOURCE:
+		return c.compileVectorQuerySource(node)
+	case plan.Node_ADAPTIVE_TOP:
+		if len(node.Children) < 2 || len(node.Children) > 3 || node.Limit == nil {
+			return nil, moerr.NewInternalErrorNoCtx("invalid adaptive top plan")
+		}
+		branches := make([][]*Scope, len(node.Children))
+		for i, childID := range node.Children {
+			branches[i], err = c.compileProductRegion(step, childID, nodes, false, nil)
+			if err != nil {
+				for j := 0; j < i; j++ {
+					ReleaseScopes(branches[j])
+				}
+				return nil, err
+			}
+		}
+		c.setAnalyzeCurrent(nil, int(curNodeIdx))
+		return c.compileAdaptiveTop(node, branches), nil
 	case plan.Node_UNION_ALL:
 		lazy := streamingUnionAllDemand(node, outerUnionAllDemand)
 		if !lazy && c.pn != nil {
 			lazy = orderedScalarUnionAllResult(step, curNodeIdx, c.pn.GetQuery())
 		}
-		left, err = c.compilePlanScopeWithUnionAllDemand(step, node.Children[0], nodes, lazy)
+		if lazy {
+			left, err = c.compileProductRegion(step, node.Children[0], nodes, lazy, nil)
+		} else {
+			left, err = c.compilePlanScopeWithUnionAllDemand(step, node.Children[0], nodes, lazy)
+		}
 		if err != nil {
 			return nil, err
 		}
-		right, err = c.compilePlanScopeWithUnionAllDemand(step, node.Children[1], nodes, lazy)
+		if lazy {
+			right, err = c.compileProductRegion(step, node.Children[1], nodes, lazy, nil)
+		} else {
+			right, err = c.compilePlanScopeWithUnionAllDemand(step, node.Children[1], nodes, lazy)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -2264,6 +2310,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		}
 		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		ss = c.compileProjection(node, ss)
+		ss = c.compileSort(node, ss)
 		return ss, nil
 	case plan.Node_RECURSIVE_SCAN:
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
@@ -2323,6 +2370,11 @@ func (c *Compile) firstStepToCompile(qry *plan.Query) int {
 
 func (c *Compile) canUseLiteralLimitZeroFastPath(node *plan.Node) bool {
 	if node == nil || node.Limit == nil || c.ownsFoundRows(node) {
+		return false
+	}
+	// Recursive receivers are part of a feedback loop. Even an empty result
+	// must retain them so loop cleanup can drain inputs and notify producers.
+	if node.NodeType == plan.Node_RECURSIVE_CTE {
 		return false
 	}
 	cExpr, ok := node.Limit.Expr.(*plan.Expr_Lit)
@@ -2623,8 +2675,10 @@ func (c *Compile) getExternalFileListAndSize(node *plan.Node, param *tree.Extern
 			return nil, nil, err
 		}
 	case int32(plan.ExternType_LOAD):
-		if (param.Format == tree.PARQUET || param.Format == tree.ARROW) &&
-			strings.ContainsAny(strings.TrimSpace(param.Filepath), "*?[") {
+		// Same predicate bind time used to resolve the source, so the file set
+		// here matches the one param.FileSize was summed over.  A pattern that
+		// matched a single file was already rewritten to that file's path.
+		if plan2.LoadMayListFiles(param) {
 			fileList, fileSize, err = plan2.ReadDir(param)
 			if err != nil {
 				return nil, nil, err
@@ -2990,6 +3044,9 @@ func (c *Compile) compileExternScanWithPlanNodeIDAndIsolation(
 		if len(fileList) > 1 {
 			return c.compileExternScanParquetLoadFileFanout(node, param, fileList, fileSize, strictSqlMode)
 		}
+	}
+	if multiFileFanoutEligible(param, len(fileList)) {
+		return c.compileExternScanMultiFileFanout(node, param, fileList, fileSize, strictSqlMode)
 	}
 
 	readParallel, writeParallel := c.getReadWriteParallelFlag(param, fileList)
@@ -3927,13 +3984,6 @@ func (c *Compile) compileExternScanArrowRecordBatchFanout(
 	return scopes, nil
 }
 
-type icebergDataFileScopeShard struct {
-	node      engine.Node
-	fileList  []string
-	fileSize  []int64
-	dataTasks []*pipeline.IcebergDataFileTask
-}
-
 type icebergExternalScanRuntime struct {
 	dataTasks            []*pipeline.IcebergDataFileTask
 	deleteTasks          []*pipeline.IcebergDeleteFileTask
@@ -3953,6 +4003,48 @@ func (c *Compile) compileExternScanHiveFileFanout(node *plan.Node, param *tree.E
 
 func (c *Compile) compileExternScanParquetLoadFileFanout(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
 	return c.compileExternScanWholeFileFanout(node, param, fileList, fileSize, strictSqlMode, true)
+}
+
+func (c *Compile) compileExternScanMultiFileFanout(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool) ([]*Scope, error) {
+	return c.compileExternScanWholeFileFanout(node, param, fileList, fileSize, strictSqlMode, false)
+}
+
+// multiFileFanoutEligible states the rule for parallelising a row-oriented
+// external file read: more than one file means whole files are distributed to
+// threads, one shard per scope, each file read start to finish by a single
+// reader.  The byte-offset read split then belongs to the single-file case,
+// where it is the only parallelism available.
+//
+// Whole files are also the only shape a compressed source can take, and they
+// keep the per-file contracts an offset split cannot honour: IGNORE n LINES
+// applies to every file, not just the first.
+//
+// The columnar formats are excluded in both roles.  Parquet splits and
+// redistributes row groups and arrow does the same with record batches, each on
+// its own path above, and that behaviour is deliberately left alone.  Hive
+// partitioning is likewise decided earlier: it always fans out whole files.
+//
+// A LOAD honours its explicit `parallel` opt-out.  The gate reads
+// ParallelLoadRequested as well as Parallel because file count, not byte count,
+// is the unit of parallelism here, while bind time clears Parallel for inputs
+// under LoadParallelMinSize (128MB) -- which most many-small-files loads are.
+// An external table scan has no such option, so file count alone decides.
+func multiFileFanoutEligible(param *tree.ExternParam, fileCount int) bool {
+	if param == nil || fileCount <= 1 ||
+		param.Format == tree.PARQUET || param.Format == tree.ARROW {
+		return false
+	}
+	switch param.ExternType {
+	case int32(plan.ExternType_LOAD):
+		// Same "the user asked for parallel" test constructExternal uses for
+		// LoadEmptyNumericAsZero: Parallel alone is not enough, because bind
+		// clears it by size after recording the request.
+		return param.Parallel || param.ParallelLoadRequested
+	case int32(plan.ExternType_EXTERNAL_TB):
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *Compile) compileExternScanWholeFileFanout(node *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, strictSqlMode bool, parquetWholeFileFanout bool, arrowRuntime ...*arrowCompileRuntime) ([]*Scope, error) {
@@ -3977,6 +4069,13 @@ func (c *Compile) compileExternScanWholeFileFanout(node *plan.Node, param *tree.
 		shardParam.Parallel = false
 
 		remote := param.ScanType == tree.S3 && len(stageNodes) > 0
+		var remoteCreateSql string
+		if remote {
+			var err error
+			if remoteCreateSql, err = resolvedExternParamJSON(shardParam); err != nil {
+				return nil, err
+			}
+		}
 		scope := c.constructScopeForExternalNode(shard.node, remote)
 		scope.NodeInfo.Mcpu = 1
 		scope.IsLoad = true
@@ -3988,6 +4087,9 @@ func (c *Compile) compileExternScanWholeFileFanout(node *plan.Node, param *tree.
 			c.arrowExecutionScope(node, shardParam),
 			arrowRuntime...,
 		)
+		if remote {
+			op.Es.CreateSql = remoteCreateSql
+		}
 		op.Es.ParquetWholeFileFanout = parquetWholeFileFanout
 		// Whole-file Arrow fanout also clears Extern.Parallel above. Keep the
 		// execution-side authorization signal independent of that user request.
@@ -4000,7 +4102,71 @@ func (c *Compile) compileExternScanWholeFileFanout(node *plan.Node, param *tree.
 	return ss, nil
 }
 
-func (c *Compile) compileExternScanIcebergFileFanout(
+// resolvedExternParamJSON serializes a compile-time normalized external param
+// for a shard that may run on another CN.  The remote codec carries only
+// CreateSql, which for an external table is the stored DDL: it lacks the
+// ExternType taken from the plan (so the reader would apply LOAD's exact
+// column-count rule) and any stage-resolved S3 settings.
+//
+// The receiver rebuilds S3Param from Option with InitS3Param, and CNs of every
+// version do so, so the resolved settings are written back into Option in the
+// keys InitS3Param reads.  That keeps the payload readable by a CN from before
+// this change during a rolling upgrade: no new field is needed.  Fields that
+// are process-local or unused by the reader are dropped; the receiver installs
+// its own FileService.
+func resolvedExternParamJSON(param *tree.ExternParam) (string, error) {
+	resolved := *param
+	resolved.FileService = nil
+	resolved.Ctx = nil
+	if resolved.Tail != nil {
+		tail := *resolved.Tail
+		tail.ColumnList = nil
+		tail.Assignments = nil
+		resolved.Tail = &tail
+	}
+	if resolved.ScanType == tree.S3 && resolved.S3Param != nil {
+		resolved.Option = s3ParamOptions(resolved.Option, resolved.S3Param)
+	}
+	b, err := json.Marshal(&resolved)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// s3ParamOptions returns option with its S3 location and credential keys
+// replaced by the values in s3, the inverse of the corresponding InitS3Param
+// cases.  Other keys (hive partitioning, format, compression, ...) are kept.
+// "filepath" is dropped too: the serialized Filepath is already resolved, and a
+// stage-backed source's option would not name it.
+func s3ParamOptions(option []string, s3 *tree.S3Parameter) []string {
+	out := make([]string, 0, len(option)+16)
+	for i := 0; i+1 < len(option); i += 2 {
+		switch strings.ToLower(option[i]) {
+		case "endpoint", "region", "access_key_id", "secret_access_key",
+			"bucket", "provider", "role_arn", "external_id", "filepath":
+			continue
+		}
+		out = append(out, option[i], option[i+1])
+	}
+	for _, kv := range [...][2]string{
+		{"endpoint", s3.Endpoint},
+		{"region", s3.Region},
+		{"access_key_id", s3.APIKey},
+		{"secret_access_key", s3.APISecret},
+		{"bucket", s3.Bucket},
+		{"provider", s3.Provider},
+		{"role_arn", s3.RoleArn},
+		{"external_id", s3.ExternalId},
+	} {
+		if kv[1] != "" {
+			out = append(out, kv[0], kv[1])
+		}
+	}
+	return out
+}
+
+func (c *Compile) compileExternScanIcebergCoordinator(
 	node *plan.Node,
 	param *tree.ExternParam,
 	runtime icebergExternalScanRuntime,
@@ -4011,35 +4177,21 @@ func (c *Compile) compileExternScanIcebergFileFanout(
 	shardParam := new(tree.ExternParam)
 	*shardParam = *param
 	shardParam.Parallel = false
-	return c.compileExternScanIcebergShard(node, shardParam, runtime, icebergDataFileScopeShard{
-		node:      engine.Node{Addr: c.addr, Mcpu: 1},
-		fileList:  fileList,
-		fileSize:  fileSize,
-		dataTasks: runtime.dataTasks,
-	}, strictSqlMode)
-}
 
-func (c *Compile) compileExternScanIcebergShard(
-	node *plan.Node,
-	param *tree.ExternParam,
-	runtime icebergExternalScanRuntime,
-	shard icebergDataFileScopeShard,
-	strictSqlMode bool,
-) ([]*Scope, error) {
 	ss := make([]*Scope, 1)
-	ss[0] = c.constructScopeForExternal(shard.node.Addr, param.Parallel)
+	ss[0] = c.constructScopeForExternal(c.addr, shardParam.Parallel)
 	ss[0].NodeInfo.Mcpu = 1
 	ss[0].IsLoad = true
 
 	currentFirstFlag := c.anal.isFirst
 	op := constructExternal(
-		node, param, c.proc.Ctx,
-		shard.fileList, shard.fileSize,
-		makeWholeFileOffsets(len(shard.fileList)),
+		node, shardParam, c.proc.Ctx,
+		fileList, fileSize,
+		makeWholeFileOffsets(len(fileList)),
 		strictSqlMode,
-		c.arrowExecutionScope(node, param),
+		c.arrowExecutionScope(node, shardParam),
 	)
-	if err := attachIcebergRuntimeToExternal(c.proc.Ctx, op, runtime, shard.dataTasks); err != nil {
+	if err := attachIcebergRuntimeToExternal(c.proc.Ctx, op, runtime, runtime.dataTasks); err != nil {
 		return nil, err
 	}
 	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
@@ -4307,16 +4459,28 @@ func (c *Compile) parquetLoadFileFanoutDOP(param *tree.ExternParam) int {
 			if mcpu <= 0 {
 				mcpu = 1
 			}
-			dop += min(mcpu, external.S3ParallelMaxnum)
+			dop += c.capFanoutByMaxDop(min(mcpu, external.S3ParallelMaxnum))
 		}
 		if dop > 0 {
 			return dop
 		}
 	}
 	if c.ncpu > 0 {
-		return c.ncpu
+		return c.capFanoutByMaxDop(c.ncpu)
 	}
 	return 1
+}
+
+// capFanoutByMaxDop applies the query's max_dop to the number of readers a
+// file fanout places on one CN.  It is the same per-CN cap compileQuery hands
+// CalcQueryDOP; the fanouts size their scopes from c.ncpu and worker Mcpu
+// directly, so without it a multi-file scan would open more concurrent readers
+// than the session allows.
+func (c *Compile) capFanoutByMaxDop(mcpu int) int {
+	if maxDop := c.pn.GetQuery().GetMaxDop(); maxDop > 0 && int64(mcpu) > maxDop {
+		return int(maxDop)
+	}
+	return mcpu
 }
 
 func (c *Compile) getHiveFileFanoutNodes(param *tree.ExternParam, fileCount int) []engine.Node {
@@ -4334,6 +4498,7 @@ func (c *Compile) getHiveFileFanoutNodes(param *tree.ExternParam, fileCount int)
 			if mcpu > external.S3ParallelMaxnum {
 				mcpu = external.S3ParallelMaxnum
 			}
+			mcpu = c.capFanoutByMaxDop(mcpu)
 			for i := 0; i < mcpu && len(nodes) < fileCount; i++ {
 				n := node
 				n.Mcpu = 1
@@ -4352,6 +4517,7 @@ func (c *Compile) getHiveFileFanoutNodes(param *tree.ExternParam, fileCount int)
 	if mcpu <= 0 {
 		mcpu = 1
 	}
+	mcpu = c.capFanoutByMaxDop(mcpu)
 	if mcpu > fileCount {
 		mcpu = fileCount
 	}
@@ -4407,58 +4573,6 @@ func splitHiveFileShards(fileList []string, fileSize []int64, nodes []engine.Nod
 	return nonEmpty
 }
 
-func splitIcebergDataFileShards(tasks []*pipeline.IcebergDataFileTask, nodes []engine.Node) []icebergDataFileScopeShard {
-	if len(tasks) == 0 || len(nodes) == 0 {
-		return nil
-	}
-	shardCount := len(nodes)
-	if shardCount > len(tasks) {
-		shardCount = len(tasks)
-	}
-	shards := make([]icebergDataFileScopeShard, shardCount)
-	loads := make([]int64, shardCount)
-	for i := range shards {
-		shards[i].node = nodes[i]
-	}
-
-	indices := make([]int, len(tasks))
-	for i := range indices {
-		indices[i] = i
-	}
-	slices.SortStableFunc(indices, func(leftIdx, rightIdx int) int {
-		left := icebergDataTaskLoad(tasks[leftIdx])
-		right := icebergDataTaskLoad(tasks[rightIdx])
-		if left != right {
-			return cmp.Compare(right, left)
-		}
-		return cmp.Compare(tasks[leftIdx].FilePath, tasks[rightIdx].FilePath)
-	})
-
-	for _, taskIdx := range indices {
-		shardIdx := 0
-		for i := 1; i < shardCount; i++ {
-			if loads[i] < loads[shardIdx] ||
-				(loads[i] == loads[shardIdx] && len(shards[i].dataTasks) < len(shards[shardIdx].dataTasks)) {
-				shardIdx = i
-			}
-		}
-		task := tasks[taskIdx]
-		shards[shardIdx].dataTasks = append(shards[shardIdx].dataTasks, task)
-		shards[shardIdx].fileList = append(shards[shardIdx].fileList, task.FilePath)
-		size := task.FileSize
-		shards[shardIdx].fileSize = append(shards[shardIdx].fileSize, size)
-		loads[shardIdx] += icebergDataTaskLoad(task)
-	}
-
-	nonEmpty := shards[:0]
-	for _, shard := range shards {
-		if len(shard.dataTasks) > 0 {
-			nonEmpty = append(nonEmpty, shard)
-		}
-	}
-	return nonEmpty
-}
-
 func compactIcebergDataTasks(tasks []*pipeline.IcebergDataFileTask) []*pipeline.IcebergDataFileTask {
 	if len(tasks) == 0 {
 		return nil
@@ -4470,19 +4584,6 @@ func compactIcebergDataTasks(tasks []*pipeline.IcebergDataFileTask) []*pipeline.
 		}
 	}
 	return out
-}
-
-func icebergDataTaskLoad(task *pipeline.IcebergDataFileTask) int64 {
-	if task == nil {
-		return 1
-	}
-	if task.FileSize > 0 {
-		return task.FileSize
-	}
-	if task.RecordCount > 0 {
-		return task.RecordCount
-	}
-	return 1
 }
 
 func icebergDataTaskFiles(tasks []*pipeline.IcebergDataFileTask) ([]string, []int64) {
@@ -4877,6 +4978,11 @@ func (c *Compile) compileExternScanParallelReadWrite(node *plan.Node, param *tre
 	if param.Format == tree.PARQUET {
 		return nil, moerr.NewInternalError(c.proc.Ctx, "parquet load cannot use byte-offset parallel read")
 	}
+	// Splitting a file by byte offset is reserved for the single-file case;
+	// multiple files are distributed whole by multiFileFanoutEligible above.
+	if len(fileList) > 1 {
+		return nil, moerr.NewInternalError(c.proc.Ctx, "byte-offset parallel read is reserved for a single file")
+	}
 	visibleCols := make([]*plan.ColDef, 0)
 	if param.Strict {
 		for _, col := range node.TableDef.Cols {
@@ -5197,6 +5303,9 @@ func (c *Compile) compileTableFunction(node *plan.Node, ss []*Scope) ([]*Scope, 
 			return c.compileSingleTableFunction(node)
 		}
 	}
+	if planplugin.TableFuncRequiresCoordinator(node.TableDef.TblFunc.Name) {
+		ss = []*Scope{c.newMergeScope(ss)}
+	}
 	for i := range ss {
 		op := constructTableFunction(node, c.pn.GetQuery())
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
@@ -5280,9 +5389,12 @@ func (c *Compile) compileVectorIndexScan(node *plan.Node) ([]*Scope, error) {
 	if txnOp := c.proc.GetTxnOperator(); txnOp != nil {
 		workspace = txnOp.GetWorkspace()
 	}
+	vectorID, _, _, qualified := plan2.RequiredIVFPlacement(c.pn.GetQuery())
+	required := requiredVectorMembership(node)
+	distributedPRE := required && qualified && vectorID == node.NodeId
 	if c.execType == plan2.ExecTypeAP_MULTICN && len(c.cnList) > 1 &&
 		(workspace == nil || workspace.Readonly()) &&
-		(node.Stats == nil || !node.Stats.ForceOneCN) && !requiredVectorMembership(node) {
+		((node.Stats == nil || !node.Stats.ForceOneCN) && !required || distributedPRE) {
 		nodes = make(engine.Nodes, len(c.cnList))
 		for i := range c.cnList {
 			nodes[i] = engine.Node{
@@ -5291,6 +5403,30 @@ func (c *Compile) compileVectorIndexScan(node *plan.Node) ([]*Scope, error) {
 				Mcpu:  1,
 				CNCNT: int32(len(c.cnList)),
 				CNIDX: int32(i),
+			}
+		}
+		version := defines.MORPCVersion96
+		if distributedPRE {
+			version = defines.MORPCVersion103
+		}
+		stable, err := remoteWorkersSupportProtocol(c.proc, nodes, version)
+		if err != nil {
+			return nil, err
+		}
+		if distributedPRE && !stable {
+			return nil, moerr.NewNotSupportedNoCtx("required IVF worker capability changed after placement")
+		}
+		if stable {
+			// Keep the query's coordinator-first list intact for other scans.
+			// Object owners depend only on the selected identities, not ingress.
+			slices.SortFunc(nodes, func(a, b engine.Node) int {
+				if n := cmp.Compare(a.Id, b.Id); n != 0 {
+					return n
+				}
+				return cmp.Compare(a.Addr, b.Addr)
+			})
+			for i := range nodes {
+				nodes[i].CNIDX = int32(i)
 			}
 		}
 	} else {
@@ -5537,7 +5673,9 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	}
 	tblDef = s.DataSource.Rel.GetTableDef(ctx)
 
-	storageFilters := filterScanStorageExprs(node.FilterList)
+	c.filterExprMu.Lock()
+	defer c.filterExprMu.Unlock()
+	storageFilters := filterScanStorageExprs(c.proc, node.FilterList, c.preparedJoinDiagnosticFree)
 	filters, executors, rebuilt, err := prepareFoldedFilterExprs(
 		c.proc, storageFilters, s.DataSource.FilterList, c.filterExprExes, true)
 	if err != nil {
@@ -5549,8 +5687,18 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	}
 	s.DataSource.FilterExpr = colexec.RewriteFilterExprList(s.DataSource.FilterList)
 
+	blockFilters := filterScanStorageExprs(c.proc, node.BlockFilterList, c.preparedJoinDiagnosticFree)
+	if c.preparedJoinDiagnosticFree {
+		blockFilters = plan2.CompletePreparedDiagnosticBlockFilters(ctx, node, storageFilters, blockFilters)
+	}
+	// Keep the reusable plan intact. Remote scopes need this execution's raw
+	// subset because the folded list contains coordinator-owned Fold IDs.
+	s.DataSource.remoteBlockFilters = blockFilters
+	if blockFilters == nil {
+		s.DataSource.remoteBlockFilters = []*plan.Expr{}
+	}
 	filters, executors, rebuilt, err = prepareFoldedFilterExprs(
-		c.proc, node.BlockFilterList, s.DataSource.BlockFilterList, c.filterExprExes, false)
+		c.proc, blockFilters, s.DataSource.BlockFilterList, c.filterExprExes, false)
 	if err != nil {
 		return err
 	}
@@ -5576,20 +5724,24 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 // filterScanStorageExprs excludes row-dependent predicates from the engine
 // reader. The complete node.FilterList remains owned by TableScan or Restrict,
 // so these predicates are still evaluated once at the row-level boundary.
-func filterScanStorageExprs(exprs []*plan.Expr) []*plan.Expr {
+func filterScanStorageExprs(proc *process.Process, exprs []*plan.Expr, provenFree bool) []*plan.Expr {
+	var filtered []*plan.Expr
 	for i, expr := range exprs {
-		if plan2.ContainsVolatileFunction(expr) {
-			filtered := make([]*plan.Expr, 0, len(exprs)-1)
-			filtered = append(filtered, exprs[:i]...)
-			for _, remaining := range exprs[i+1:] {
-				if !plan2.ContainsVolatileFunction(remaining) {
-					filtered = append(filtered, remaining)
-				}
+		exclude := plan2.ContainsVolatileFunction(expr) || plan2.ContainsConstantFilterDiagnostic(proc, expr) ||
+			plan2.ContainsStatementInvariantFilterDiagnosticWithProof(proc, expr, provenFree)
+		if exclude {
+			if filtered == nil {
+				filtered = make([]*plan.Expr, 0, len(exprs)-1)
+				filtered = append(filtered, exprs[:i]...)
 			}
-			return filtered
+		} else if filtered != nil {
+			filtered = append(filtered, expr)
 		}
 	}
-	return exprs
+	if filtered == nil {
+		return exprs
+	}
+	return filtered
 }
 
 func (c *Compile) compileVectorIndexScanDataSource(s *Scope) error {
@@ -5626,12 +5778,13 @@ func (c *Compile) compileTableScanFiltersAndProjection(node *plan.Node, ss []*Sc
 	ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 
 	hasUserLevelLockFilter := hasUserLevelLockFunction(node.FilterList)
+	hasConstantWarning := c.needsCoordinatorConstantFilterDiagnostic(node)
 
 	// Embed ordinary static filters directly into TableScan.
 	// handleRuntimeFilters will set TableScan.RuntimeFilterExprs at execution time (before Prepare).
 	// This keeps TableScan as RootOp so compileProjection can push ProjectList into it.
 	embeddedStaticFilters := false
-	if len(node.FilterList) > 0 && !hasUserLevelLockFilter {
+	if len(node.FilterList) > 0 && !hasUserLevelLockFilter && !hasConstantWarning {
 		embeddedStaticFilters = true
 		for i := range ss {
 			if _, ok := ss[i].RootOp.(*table_scan.TableScan); !ok {
@@ -5645,7 +5798,7 @@ func (c *Compile) compileTableScanFiltersAndProjection(node *plan.Node, ss []*Sc
 			}
 		}
 	}
-	if hasUserLevelLockFilter ||
+	if hasUserLevelLockFilter || hasConstantWarning ||
 		runtimeFilterSpecsHaveUserLevelLockFunction(node.RuntimeFilterProbeList) ||
 		(len(node.FilterList) > 0 && !embeddedStaticFilters) {
 		ss = c.compileRestrict(node, ss)
@@ -5662,6 +5815,7 @@ func (c *Compile) compileRestrict(node *plan.Node, ss []*Scope) []*Scope {
 	var op *filter.Filter
 	for i := range ss {
 		op = constructRestrict(node, plan2.DeepCopyExprList(node.FilterList))
+		op.OwnsConstantCastWarnings = c.needsCoordinatorConstantFilterDiagnostic(node)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[i].setRootOperator(op)
 	}
@@ -5743,10 +5897,31 @@ func (c *Compile) compileProjection(node *plan.Node, ss []*Scope) []*Scope {
 
 func (c *Compile) ensureCoordinatorOnlyFunctions(node *plan.Node, ss []*Scope) []*Scope {
 	if (!nodeHasUserLevelLockFunction(node) && !nodeHasFoundRowsFunction(node) &&
-		!c.needsCoordinatorIgnoreCheck(node)) || c.scopesRunOnCoordinator(ss) {
+		!c.needsCoordinatorIgnoreCheck(node) && !c.needsCoordinatorConstantFilterDiagnostic(node)) || c.scopesRunOnCoordinator(ss) {
 		return ss
 	}
 	return []*Scope{c.newMergeScope(ss)}
+}
+
+func (c *Compile) needsCoordinatorConstantFilterDiagnostic(node *plan.Node) bool {
+	if node == nil {
+		return false
+	}
+	for _, expr := range node.FilterList {
+		if plan2.ContainsStatementInvariantFilterDiagnosticWithProof(c.proc, expr, c.preparedJoinDiagnosticFree) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsStatementInvariantDiagnosticInList(proc *process.Process, exprs []*plan.Expr) bool {
+	for _, expr := range exprs {
+		if plan2.ContainsStatementInvariantFilterDiagnostic(proc, expr) {
+			return true
+		}
+	}
+	return false
 }
 
 // statementIgnoreEnabled is defensive because a few compile/serialization
@@ -6057,6 +6232,12 @@ func (c *Compile) compileTpMinusAndIntersect(node *plan.Node, left []*Scope, rig
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		rs[0].setRootOperator(arg)
 		arg.AppendChild(merge1)
+	case plan.Node_MINUS_ALL:
+		arg := minusall.NewArgument()
+		arg.KeyExprs = node.PhysicalEqualityKeyList
+		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+		rs[0].setRootOperator(arg)
+		arg.AppendChild(merge1)
 	case plan.Node_INTERSECT:
 		arg := intersect.NewArgument()
 		arg.KeyExprs = node.PhysicalEqualityKeyList
@@ -6077,6 +6258,20 @@ func (c *Compile) compileTpMinusAndIntersect(node *plan.Node, left []*Scope, rig
 func (c *Compile) compileMinusAndIntersect(node *plan.Node, left []*Scope, right []*Scope, nodeType plan.Node_NodeType) []*Scope {
 	if c.IsSingleScope(left) && c.IsSingleScope(right) {
 		return c.compileTpMinusAndIntersect(node, left, right, nodeType)
+	}
+	broadcastDistinct := (nodeType == plan.Node_MINUS || nodeType == plan.Node_INTERSECT) &&
+		!node.GetStats().GetHashmapStats().GetShuffle()
+	if nodeType == plan.Node_MINUS_ALL || nodeType == plan.Node_INTERSECT_ALL || broadcastDistinct {
+		// Multiset operations need one owner of every occurrence from both
+		// inputs. Broadcast DISTINCT inputs also need only one owner to avoid
+		// repeating the same set work across workers. Preserve parallel upstream
+		// scopes and merge them into that single owner.
+		return c.compileTpMinusAndIntersect(
+			node,
+			[]*Scope{c.newMergeScope(left)},
+			[]*Scope{c.newMergeScope(right)},
+			nodeType,
+		)
 	}
 	rs := c.newScopeListOnSingleWorkerStage(2, int(node.Stats.Dop))
 	rs = c.newScopeListForMinusAndIntersect(rs, left, right, node)
@@ -6106,23 +6301,40 @@ func (c *Compile) compileMinusAndIntersect(node *plan.Node, left []*Scope, right
 			rs[i].setRootOperator(arg)
 			arg.AppendChild(merge1)
 		}
-	case plan.Node_INTERSECT_ALL:
-		for i := range rs {
-			merge0 := rs[i].RootOp.(*merge.Merge)
-			merge0.WithPartial(0, 1)
-			merge1 := merge.NewArgument().WithPartial(1, 2)
-			arg := intersectall.NewArgument()
-			arg.KeyExprs = node.PhysicalEqualityKeyList
-			arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-			rs[i].setRootOperator(arg)
-			arg.AppendChild(merge1)
-		}
 	}
-	if nodeType != plan.Node_INTERSECT_ALL {
-		return c.mergeDistinctSetScopes(node, rs, currentFirstFlag)
+	return c.mergeDistinctSetScopes(node, rs, currentFirstFlag)
+}
+
+func (c *Compile) compileAdaptiveTop(node *plan.Node, candidates [][]*Scope) []*Scope {
+	branches := make([]*Scope, len(candidates))
+	for i := range candidates {
+		branches[i] = c.newMergeScope(candidates[i])
 	}
+	rs := c.newMergeScope(branches)
+	rs.LazyPreScopes = true
+	mergeOp, ok := rs.RootOp.(*merge.Merge)
+	if !ok {
+		panic("adaptive top scope has no merge input")
+	}
+	mergeOp.WithPartial(0, 0)
+	op := adaptivetop.NewArgument()
+	op.LimitExpr = plan2.DeepCopyExpr(node.Limit)
+	op.Branches = len(branches)
+	op.FallbackOnEmpty = node.GetAdaptiveTopFallbackOnEmpty()
+	op.SpillConfig = materialized.SpillConfig{
+		FileFactory: func(name string) (*os.File, error) {
+			spillFS, err := c.proc.GetSpillFileService()
+			if err != nil {
+				return nil, err
+			}
+			return spillFS.CreateAndRemoveFile(c.proc.Ctx, name)
+		},
+		Budget: newMaterializedSpillBudget(c.proc),
+	}
+	op.SetAnalyzeControl(c.anal.curNodeIdx, c.anal.isFirst)
+	rs.setRootOperator(op)
 	c.anal.isFirst = false
-	return rs
+	return []*Scope{rs}
 }
 
 func (c *Compile) compileUnionAll(
@@ -6167,6 +6379,74 @@ func (c *Compile) compileUnionAll(
 	c.anal.isFirst = false
 
 	return []*Scope{rs}
+}
+
+// canPreserveParallelUnionAllBranches identifies a UNION ALL whose row stream
+// may be handed directly to a downstream consumer. LIMIT/OFFSET/order are
+// deliberately excluded because they require one whole-union owner.
+func canPreserveParallelUnionAllBranches(node *plan.Node) bool {
+	return node != nil && node.NodeType == plan.Node_UNION_ALL &&
+		len(node.Children) == 2 && node.Limit == nil && node.Offset == nil &&
+		len(node.OrderBy) == 0 && len(node.FilterList) == 0 &&
+		!node.FilterIsBarrier && !nodeHasUserLevelLockFunction(node)
+}
+
+func (c *Compile) canCompileParallelUnionAllAggregate(node *plan.Node) bool {
+	return !hasOrderedGroupConcat(node) && !hasOrderedSetPercentile(node) &&
+		!c.hasUnsupportedRemoteGroupWire(node) &&
+		!plan2.RequiresSingleStageDistinctAgg(node)
+}
+
+// compileParallelUnionAllInput preserves independent UNION ALL branches only
+// for consumers that explicitly request them (currently parallel aggregation
+// and the probe side of INNER JOIN). Ordinary UNION ALL compilation keeps its
+// established one-stream contract for result, DML, and other consumers.
+func (c *Compile) compileParallelUnionAllInput(
+	step int32,
+	nodeID int32,
+	nodes []*plan.Node,
+) ([]*Scope, error) {
+	// TP consumers rely on IsSingleScope and only attach their operator to
+	// the first scope. Keep the ordinary merged input instead of exposing
+	// independent branches that those consumers would silently ignore.
+	if c.IsTpQuery() {
+		return c.compilePlanScope(step, nodeID, nodes)
+	}
+	node := nodes[nodeID]
+	left, err := c.compileParallelUnionAllBranch(step, node.Children[0], nodes)
+	if err != nil {
+		return nil, err
+	}
+	right, err := c.compileParallelUnionAllBranch(step, node.Children[1], nodes)
+	if err != nil {
+		ReleaseScopes(left)
+		return nil, err
+	}
+
+	c.setAnalyzeCurrent(left, int(nodeID))
+	c.setAnalyzeCurrent(right, int(nodeID))
+	inputs := make([]*Scope, 0, len(left)+len(right))
+	inputs = append(inputs, left...)
+	inputs = append(inputs, right...)
+	currentFirstFlag := c.anal.isFirst
+	for _, input := range inputs {
+		op := constructUnionAll(node)
+		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+		input.setRootOperator(op)
+	}
+	c.anal.isFirst = false
+	return c.ensureCoordinatorOnlyFunctions(node, inputs), nil
+}
+
+func (c *Compile) compileParallelUnionAllBranch(
+	step int32,
+	nodeID int32,
+	nodes []*plan.Node,
+) ([]*Scope, error) {
+	if canPreserveParallelUnionAllBranches(nodes[nodeID]) {
+		return c.compileParallelUnionAllInput(step, nodeID, nodes)
+	}
+	return c.compilePlanScope(step, nodeID, nodes)
 }
 
 // lazyUnionAllBranches transfers a directly nested lazy UNION ALL's branch
@@ -6292,6 +6572,23 @@ func scopesContainOperator(scopes []*Scope, target vm.OpType) bool {
 }
 
 func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildScopes []*Scope) []*Scope {
+	if containsStatementInvariantDiagnosticInList(c.proc, node.OnList) ||
+		c.joinNeedsLocalWindow(node, probeScopes, buildScopes) {
+		// Keep WINDOW local: it has no remote encoding. The same local
+		// stage also gives statement-invariant ON diagnostics a single owner.
+		// Neither shuffle nor parallel copies may independently evaluate
+		// those diagnostic operands.
+		if !c.scopesRunOnCoordinator(probeScopes) {
+			probeScopes = []*Scope{c.newMergeScope(probeScopes)}
+		}
+		if !c.scopesRunOnCoordinator(buildScopes) {
+			buildScopes = []*Scope{c.newMergeScope(buildScopes)}
+		}
+		if node.Stats != nil && node.Stats.HashmapStats != nil {
+			node.Stats.HashmapStats.Shuffle = false
+			node.Stats.HashmapStats.ShuffleColIdx = -1
+		}
+	}
 	if shouldBuildLeftForAsof(node, left, right) &&
 		!scopesContainOperator(probeScopes, vm.MergeRecursive) &&
 		!scopesContainOperator(buildScopes, vm.MergeRecursive) {
@@ -6310,6 +6607,14 @@ func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildSc
 		}
 	}
 
+	// Resolve local SINK_SCAN/foreign dependencies before any force-one-CN
+	// reshaping. FULL, DEDUP and right-sided equi joins can then change the
+	// probe owner; colocate their build again before installing HashJoin.
+	probeScopes, buildScopes = c.colocateBroadcastJoinInputs(probeScopes, buildScopes)
+	if broadcastJoinForcesOneCN(node, c.broadcastJoinUsesHash(node)) {
+		probeScopes = c.newProbeScopeListForBroadcastJoin(probeScopes, true)
+		probeScopes, buildScopes = c.colocateBroadcastJoinInputs(probeScopes, buildScopes)
+	}
 	rs := c.compileProbeSideForBroadcastJoin(node, left, right, probeScopes)
 	return c.compileBuildSideForBroadcastJoin(node, rs, buildScopes)
 }
@@ -6325,6 +6630,7 @@ func (c *Compile) compileBroadcastAsofBuildLeft(
 	if len(rightScopes) != 1 || rightScopes[0].NodeInfo.Mcpu != 1 {
 		rightScopes = []*Scope{c.newMergeScope(rightScopes)}
 	}
+	rightScopes, leftScopes = c.colocateBroadcastJoinInputs(rightScopes, leftScopes)
 
 	leftTypes := make([]types.Type, len(left.ProjectList))
 	for i, expr := range left.ProjectList {
@@ -6711,10 +7017,27 @@ func hashMarkOperandRel(expr *plan.Expr) (int32, bool) {
 	return relPos, singleRel && relPos >= 0
 }
 
+func (c *Compile) broadcastJoinUsesHash(node *plan.Node) bool {
+	isEq := plan2.IsEquiJoin2(node.OnList)
+	if isEq && (node.JoinType == plan.Node_INNER || node.JoinType == plan.Node_LEFT ||
+		node.JoinType == plan.Node_RIGHT || node.JoinType == plan.Node_SEMI ||
+		node.JoinType == plan.Node_ANTI || node.JoinType == plan.Node_SINGLE ||
+		node.JoinType == plan.Node_OUTER) {
+		for _, expr := range node.OnList {
+			if plan2.ContainsGuardedJoinDiagnosticWithProof(c.proc, expr, c.preparedJoinDiagnosticFree) {
+				// Preserve row-dependent CASE/IF/COALESCE selection across
+				// nonmatching hash keys by evaluating the complete ON in LoopJoin.
+				isEq = false
+				break
+			}
+		}
+	}
+	return isEq
+}
+
 func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node, probeScopes []*Scope) []*Scope {
 	var rs []*Scope
-	isEq := plan2.IsEquiJoin2(node.OnList)
-
+	isEq := c.broadcastJoinUsesHash(node)
 	rightTypes := make([]types.Type, len(right.ProjectList))
 	for i, expr := range right.ProjectList {
 		rightTypes[i] = dupType(&expr.Typ)
@@ -6775,7 +7098,7 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 		}
 		c.anal.isFirst = false
 	case plan.Node_LEFT, plan.Node_RIGHT, plan.Node_SEMI, plan.Node_ANTI, plan.Node_SINGLE:
-		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, isEq && node.IsRightJoin)
+		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, broadcastJoinForcesOneCN(node, isEq))
 		currentFirstFlag := c.anal.isFirst
 		if isEq {
 			for i := range rs {
@@ -6802,10 +7125,8 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 		c.anal.isFirst = false
 	case plan.Node_OUTER:
 		// FULL OUTER JOIN: equi → hashjoin (Phase 1); non-equi → loopjoin
-		// (Phase 4). IsRightJoin=true (set in stats.go for Node_OUTER) routes
-		// the probe scope through forceOneCN, avoiding distributed
-		// double-emission of unmatched-build rows.
-		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, true)
+		// (Phase 4). Force one probe CN to emit unmatched-build rows once.
+		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, broadcastJoinForcesOneCN(node, isEq))
 		currentFirstFlag := c.anal.isFirst
 		if isEq {
 			for i := range rs {
@@ -6823,7 +7144,7 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 		c.anal.isFirst = false
 	case plan.Node_DEDUP:
 		if node.IsRightJoin {
-			rs = c.newProbeScopeListForBroadcastJoin(probeScopes, true)
+			rs = c.newProbeScopeListForBroadcastJoin(probeScopes, broadcastJoinForcesOneCN(node, isEq))
 			currentFirstFlag := c.anal.isFirst
 			for i := range rs {
 				op := constructRightDedupJoin(node, leftTypes, rightTypes, c.proc)
@@ -6833,7 +7154,7 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 			}
 			c.anal.isFirst = false
 		} else {
-			rs = c.newProbeScopeListForBroadcastJoin(probeScopes, true)
+			rs = c.newProbeScopeListForBroadcastJoin(probeScopes, broadcastJoinForcesOneCN(node, isEq))
 			currentFirstFlag := c.anal.isFirst
 			for i := range rs {
 				op := constructDedupJoin(node, leftTypes, rightTypes, c.proc)
@@ -6875,6 +7196,19 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 		return rs
 	}
 
+	stageNodes := c.queryWorkerStageNodes()
+	probeScopeGroups := c.groupBroadcastProbeScopesByCN(rs, stageNodes)
+	probeType := rs[0].RootOp.OpType()
+	// A HashBuild shared by independent colocated probes cannot belong to
+	// one consumer: that consumer may finish without calling its child, while
+	// a peer still needs the build. Reuse the common producer-region owner.
+	// Limit the extension to the HashJoin/LoopJoin lifecycle domain; other
+	// operators keep their existing ownership and execution placement.
+	if probeType == vm.Product ||
+		((probeType == vm.HashJoin || probeType == vm.LoopJoin) && hasMultiScopeGroup(probeScopeGroups)) {
+		return c.compileSharedBroadcastJoin(node, rs, buildScopes[0], probeScopeGroups)
+	}
+
 	buildScopeAttached := false
 	for i := range rs {
 		if sameExecutionNode(rs[i].NodeInfo, buildScopes[0].NodeInfo) {
@@ -6887,9 +7221,7 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 		rs[0].PreScopes = append(rs[0].PreScopes, buildScopes[0])
 	}
 
-	stageNodes := c.queryWorkerStageNodes()
 	buildOpScopes := make([]*Scope, 0, len(stageNodes))
-	probeScopeGroups := c.groupBroadcastProbeScopesByCN(rs, stageNodes)
 
 	if len(rs) > len(stageNodes) || hasMultiScopeGroup(probeScopeGroups) {
 		for _, tmp := range probeScopeGroups {
@@ -6945,6 +7277,158 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 	return rs
 }
 
+// pendingProductBuild owns detached shared HashBuild producers only during compilation.
+// Probe templates are non-owning references used to finalize worker counts.
+type pendingProductBuild struct {
+	source *Scope
+	builds []*Scope
+	groups [][]*Scope
+}
+
+// Keep the data plane parallel; choose producer ownership only after downstream
+// Group, Limit, Sort and Join placement is complete.
+func (c *Compile) compileSharedBroadcastJoin(node *plan.Node, probes []*Scope, source *Scope, groups [][]*Scope) []*Scope {
+	pending := &pendingProductBuild{source: source, groups: groups}
+	c.pendingProductBuilds = append(c.pendingProductBuilds, pending)
+	for _, group := range groups {
+		build := newScope(Remote)
+		build.NodeInfo = scopeNodeWithMcpu(group[0].NodeInfo, 1)
+		build.Proc = c.proc.NewNoContextChildProc(1)
+		mergeOp := merge.NewArgument()
+		mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
+		build.setRootOperator(mergeOp)
+		build.setRootOperator(constructJoinBuildOperator(c, group[0].RootOp, 0, node.RuntimeFilterBuildList))
+		pending.builds = append(pending.builds, build)
+	}
+	// Dispatch is wired now, while the probe still owns the join-node analysis.
+	// Preserve the existing Product placement. HashJoin/LoopJoin keep the source
+	// on its original CN instead of relaying the build payload via the coordinator.
+	isProduct := probes[0].RootOp.OpType() == vm.Product
+	if isProduct && !sameExecutionNode(source.NodeInfo, toEngineNode(c.currentCNWorker())) {
+		source = c.newMergeScope([]*Scope{source})
+		pending.source = source
+	}
+	dispatchOp := constructDispatch(0, pending.builds, source, node, false)
+	dispatchOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
+	source.setRootOperator(dispatchOp)
+	if !isProduct {
+		// A build, unlike a probe, must consume the source to completion. Put
+		// the source under the independent build on the same CN (or the first
+		// build when no probe uses that CN, as in the original placement). The
+		// local Dispatch receiver then stays in the same RemoteRun scope tree.
+		owner := pending.builds[0]
+		for _, build := range pending.builds {
+			if sameExecutionNode(source.NodeInfo, build.NodeInfo) {
+				owner = build
+				break
+			}
+		}
+		owner.PreScopes = append(owner.PreScopes, source)
+		owner.ConcurrentPreScopes = true
+		pending.source = nil // ownership transferred to pending.builds
+	}
+	return probes
+}
+
+// A region is one independently admitted query step or lazy branch. Pending
+// producers cannot escape it, including compilation failures and panics.
+func (c *Compile) compileProductRegion(step, node int32, nodes []*plan.Node, demand bool, query *plan.Query) ([]*Scope, error) {
+	enclosing := c.pendingProductBuilds
+	c.pendingProductBuilds = nil
+	defer func() {
+		for _, pending := range c.pendingProductBuilds {
+			ReleaseScopes(pending.builds)
+			ReleaseScopes([]*Scope{pending.source})
+		}
+		c.pendingProductBuilds = enclosing
+	}()
+	scopes, err := c.compilePlanScopeWithUnionAllDemand(step, node, nodes, demand)
+	if err != nil {
+		return nil, err
+	}
+	if query != nil {
+		// Complete RETURNING/Output and existing writer accounting assembly
+		// before attaching jobs, so they never become counted result inputs.
+		scopes, err = c.compileSteps(query, scopes, node)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return c.finishProductBuilds(scopes, query == nil), nil
+}
+
+func (c *Compile) finishProductBuilds(scopes []*Scope, mergeResults bool) []*Scope {
+	if len(c.pendingProductBuilds) == 0 {
+		return scopes
+	}
+	if mergeResults && !c.IsSingleScope(scopes) {
+		scopes = []*Scope{c.newMergeScope(c.mergeShuffleScopesIfNeeded(scopes, false))}
+	}
+	if mergeResults && scopes[0].Magic == Remote && !scopes[0].ipAddrMatch(c.addr) {
+		scopes = []*Scope{c.newMergeScope(scopes)}
+	}
+	singleOwner := c.IsSingleScope(scopes) && scopes[0].ipAddrMatch(c.addr)
+	for _, pending := range c.pendingProductBuilds {
+		for i, group := range pending.groups {
+			var workers int32
+			for _, probe := range group {
+				workers += int32(probe.NodeInfo.Mcpu)
+			}
+			pending.builds[i].RootOp.(*hashbuild.HashBuild).JoinMapRefCnt = workers
+		}
+		// Build connectors belong to the job, not to the result receiver set. Thus
+		// ordinary/ordered/partial result merges retain their existing semantics.
+		job := c.newMergeScope(pending.builds)
+		if pending.source != nil {
+			job.PreScopes = append(job.PreScopes, pending.source)
+		}
+		job.ConcurrentPreScopes = true
+		if c.auxiliaryProductScopes == nil {
+			c.auxiliaryProductScopes = make(map[*Scope]bool)
+		}
+		c.auxiliaryProductScopes[job] = true
+		pending.builds, pending.source = nil, nil
+		if singleOwner {
+			owner := scopes[0]
+			c.auxiliaryProductScopes[owner] = false
+			if owner.Magic == Normal {
+				owner.Magic = Merge
+			}
+			owner.PreScopes = append(owner.PreScopes, job)
+			owner.ConcurrentPreScopes = true
+		} else {
+			scopes = append(scopes, job)
+		}
+	}
+	c.pendingProductBuilds = nil
+	return scopes
+}
+
+// Preserve producer-error attribution across the complete finalized ancestry,
+// including lazy parents assembled after their branch producers were attached.
+// This is static scope ownership metadata; it never activates a branch.
+func (c *Compile) markProductProducerRegions(scopes []*Scope) {
+	if len(c.auxiliaryProductScopes) == 0 {
+		return
+	}
+	var visit func(*Scope, bool) bool
+	visit = func(scope *Scope, insideProducer bool) bool {
+		job, region := c.auxiliaryProductScopes[scope]
+		insideProducer = insideProducer || job
+		region = region || insideProducer
+		for _, child := range scope.PreScopes {
+			region = visit(child, insideProducer) || region
+		}
+		if region && !job {
+			c.auxiliaryProductScopes[scope] = false
+		}
+		return region
+	}
+	for _, scope := range scopes {
+		visit(scope, false)
+	}
+}
+
 func (c *Compile) groupBroadcastProbeScopesByCN(rs []*Scope, stageNodes engine.Nodes) [][]*Scope {
 	groups := make([][]*Scope, 0, len(rs))
 	used := make([]bool, len(rs))
@@ -6990,6 +7474,13 @@ func hasMultiScopeGroup(groups [][]*Scope) bool {
 }
 
 func (c *Compile) compileApply(node, right *plan.Node, rs []*Scope) []*Scope {
+	name := right.GetTableDef().GetTblFunc().GetName()
+	if name == "mo_view_columns" || planplugin.TableFuncRequiresCoordinator(name) {
+		// Session-bound functions and index writers must use the origin process:
+		// a remote mirror workspace cannot publish writes in its transaction.
+		// Gather inputs here without changing the source scans' placement.
+		rs = []*Scope{c.newMergeScope(rs)}
+	}
 
 	switch node.ApplyType {
 	case plan.Node_CROSSAPPLY:
@@ -7646,6 +8137,7 @@ func (c *Compile) compileGroupWithoutShuffle(
 func (c *Compile) hasUnsupportedRemoteGroupWire(node *plan.Node) bool {
 	return (hasApproxPercentile(node) && !c.supportsRemoteApproxPercentile()) ||
 		(hasHLLAggregate(node) && !c.supportsRemoteHLL()) ||
+		(canonicalHLLAddRequiredVersion(node) > c.remoteProtocolVersion()) ||
 		(hasVariableLengthGroupKey(node) && !c.supportsRemoteGroupHashString()) ||
 		(hasCanonicalDistinctKeyWire(node) && !c.supportsRemoteCanonicalDistinctKeyWire()) ||
 		(hasLegacyFloatDistinctKeyWire(node) && !c.supportsRemoteCanonicalDistinctKeyWire()) ||
@@ -7858,6 +8350,52 @@ func hasHLLAggregate(node *plan.Node) bool {
 	return false
 }
 
+func hasCanonicalHLLAddAggregate(node *plan.Node) bool {
+	return canonicalHLLAddRequiredVersion(node) != 0
+}
+
+func canonicalHLLAddRequiredVersion(node *plan.Node) int64 {
+	if node == nil {
+		return 0
+	}
+	var required int64
+	for _, agg := range node.AggList {
+		fn := agg.GetF()
+		if fn == nil || fn.Func == nil || fn.Func.ObjName != "hll_add_agg" ||
+			len(fn.Args) == 0 || fn.Args[0] == nil {
+			continue
+		}
+		typ := types.T(fn.Args[0].Typ.Id)
+		switch {
+		case isCanonicalFloatHLLAddType(typ):
+			required = max(required, defines.MORPCVersion92)
+		case isCanonicalTextHLLAddType(typ):
+			required = max(required, defines.MORPCVersion91)
+		case isCanonicalVectorHLLAddType(typ):
+			required = max(required, defines.MORPCVersion88)
+		}
+	}
+	return required
+}
+
+func isCanonicalVectorHLLAddType(typ types.T) bool {
+	switch typ {
+	case types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16:
+		return true
+	default:
+		return false
+	}
+}
+
+func isCanonicalTextHLLAddType(typ types.T) bool {
+	return typ == types.T_char || typ == types.T_json
+}
+
+func isCanonicalFloatHLLAddType(typ types.T) bool {
+	return typ == types.T_float32 || typ == types.T_float64
+}
+
 // hasVariableLengthGroupKey mirrors Group.prepareGroupAndAggArg's v78 fence
 // for a short variable-length physical key. Long variable-length keys already
 // used the historical HStr partial grammar, so they remain remotely usable
@@ -8006,6 +8544,29 @@ func (c *Compile) supportsRemoteHLL() bool {
 	return supportsRemoteHLL(c.proc.GetService())
 }
 
+func (c *Compile) supportsRemoteCanonicalHLLAdd() bool {
+	return c.remoteProtocolVersion() >= defines.MORPCVersion88
+}
+
+func (c *Compile) supportsRemoteCanonicalTextHLLAdd() bool {
+	return c.remoteProtocolVersion() >= defines.MORPCVersion91
+
+}
+
+func (c *Compile) supportsRemoteCanonicalFloatHLLAdd() bool {
+	return c.remoteProtocolVersion() >= defines.MORPCVersion92
+}
+
+func (c *Compile) remoteProtocolVersion() int64 {
+	version, ok := moruntime.ServiceRuntime(c.proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return 0
+	}
+	protocolVersion, _ := version.(int64)
+	return protocolVersion
+}
+
 func (c *Compile) supportsRemoteGroupHashString() bool {
 	return supportsRemoteGroupHashString(c.proc.GetService())
 }
@@ -8065,6 +8626,36 @@ func supportsRemoteHLL(service string) bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion77
+}
+
+func supportsRemoteCanonicalHLLAdd(service string) bool {
+	version, ok := moruntime.ServiceRuntime(service).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion88
+}
+
+func supportsRemoteCanonicalTextHLLAdd(service string) bool {
+	version, ok := moruntime.ServiceRuntime(service).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion91
+}
+
+func supportsRemoteCanonicalFloatHLLAdd(service string) bool {
+	version, ok := moruntime.ServiceRuntime(service).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion92
 }
 
 func supportsRemoteGroupHashString(service string) bool {
@@ -8383,6 +8974,7 @@ func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {
 		(!hasOrderedSetPercentile(node) || c.supportsRemoteOrderedSetAggregates()) &&
 		(!hasApproxPercentile(node) || c.supportsRemoteApproxPercentile()) &&
 		(!hasHLLAggregate(node) || c.supportsRemoteHLL()) &&
+		(canonicalHLLAddRequiredVersion(node) <= c.remoteProtocolVersion()) &&
 		(!hasVariableLengthGroupKey(node) || c.supportsRemoteGroupHashString()) &&
 		(!hasCanonicalDistinctKeyWire(node) || c.supportsRemoteCanonicalDistinctKeyWire()) &&
 		(!hasLegacyFloatDistinctKeyWire(node) || c.supportsRemoteCanonicalDistinctKeyWire()) &&
@@ -8506,7 +9098,7 @@ func (c *Compile) appendPrescopes(parents, children []*Scope, stageNodes engine.
 func (c *Compile) compilePreInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope) ([]*Scope, error) {
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
-		preInsertArg, err := constructPreInsert(nodes, node, c.e, c.proc)
+		preInsertArg, err := constructPreInsert(c.anal.qry.Nodes, node, c.e, c.proc)
 		if err != nil {
 			return nil, err
 		}
@@ -8789,7 +9381,12 @@ func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, er
 		rs.setRootOperator(multiUpdateArg)
 		ss = []*Scope{rs}
 	} else {
-		if !c.IsTpQuery() {
+		// The operator below is attached to ss[0] alone, so more than one input
+		// pipeline must be merged first or the others' rows are dropped.  A TP
+		// query normally builds a single scope, but a multi-file LOAD fanout
+		// hands this one scope per file shard, TP-classified or not -- the
+		// WriteS3 branch above already merges on the same len(ss) > 1 test.
+		if !c.IsTpQuery() || len(ss) > 1 {
 			// keep a cross-CN shuffle dispatch in the same send unit as all its local buckets (issue #24919).
 			ss = c.groupShuffleBucketsByCNIfNeeded(ss)
 			rs := c.newMergeScope(ss)
@@ -8887,7 +9484,8 @@ func (c *Compile) compileDelete(node *plan.Node, ss []*Scope) ([]*Scope, error) 
 
 func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 	lockRows := make([]*plan.LockTarget, 0, len(node.LockTargets))
-	localizeLoadPlan := c.loadUniqueIndexPromotion != nil
+	localizeLockPlan := c.loadUniqueIndexPromotion != nil || c.prePipelineLockTableID != 0
+	promotedNewTable := false
 	filterPromotedRows := false
 	if state := c.loadUniqueIndexPromotion; state != nil &&
 		state.phase == loadUniqueIndexPromotionFenced {
@@ -8900,8 +9498,20 @@ func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 		if filterPromotedRows && c.loadUniqueIndexPromotion.coversRowTarget(canonicalTarget) {
 			continue
 		}
+		if c.canPrePipelineLockNewTable(canonicalTarget) {
+			// The DDL owner supplied the newly created physical ID. Acquire its
+			// total range through the ordinary pre-pipeline lock path, before any
+			// source starts; failures still abort or retry the complete DDL. The
+			// physical disposition must not modify a reusable logical plan.
+			tableTarget := *canonicalTarget
+			tableTarget.LockTable = true
+			tableTarget.LockTableAtTheEnd = false
+			c.lockTables[tableTarget.TableId] = &tableTarget
+			promotedNewTable = true
+			continue
+		}
 		tbl := canonicalTarget
-		if localizeLoadPlan && (canonicalTarget.LockTable || canonicalTarget.LockTableAtTheEnd) {
+		if localizeLockPlan && (canonicalTarget.LockTable || canonicalTarget.LockTableAtTheEnd) {
 			// Only table-lock disposition is annotated during physical compile. A
 			// shallow value copy keeps the canonical generation immutable without
 			// changing allocation or mutation behavior for non-candidate statements.
@@ -8916,12 +9526,18 @@ func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 			}
 		}
 	}
-	if !localizeLoadPlan {
+	if !localizeLockPlan {
 		// Preserve exact-main compile behavior outside the positively admitted
-		// LOAD path, including its existing canonical-node reuse contract.
+		// internal INSERT and LOAD paths, including canonical-node reuse.
 		node.LockTargets = lockRows
 	}
 	if len(lockRows) == 0 {
+		if promotedNewTable && (!c.IsTpQuery() || len(ss) > 1 || len(c.pn.GetQuery().Steps) > 1) {
+			// Keep the original input merge and downstream writer placement/DOP.
+			// Only remove row-key preparation; attaching writers to reader scopes
+			// would also change object fanout and I/O behavior during backfill.
+			ss = []*Scope{c.newMergeScope(ss)}
+		}
 		return ss, nil
 	}
 
@@ -8935,14 +9551,18 @@ func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 	}
 
 	currentFirstFlag := c.anal.isFirst
-	if !c.IsTpQuery() || len(c.pn.GetQuery().Steps) > 1 { // todo: don't support dml with multi steps for now
+	// The lock operator below is attached to ss[0] alone, so every input
+	// pipeline must be merged into it first or the others' rows reach the
+	// writer unlocked -- a multi-file LOAD fanout hands a TP-classified plan one
+	// scope per file shard, the same case compileMultiUpdate merges on.
+	if !c.IsTpQuery() || len(ss) > 1 || len(c.pn.GetQuery().Steps) > 1 { // todo: don't support dml with multi steps for now
 		rs := c.newMergeScope(ss)
 		ss = []*Scope{rs}
 	}
 	var err error
 	var lockOpArg *lockop.LockOp
 	lockNode := node
-	if localizeLoadPlan {
+	if localizeLockPlan {
 		localNode := *node
 		localNode.LockTargets = lockRows
 		lockNode = &localNode
@@ -8955,6 +9575,16 @@ func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 	ss[0].doSetRootOperator(lockOpArg)
 	c.anal.isFirst = false
 	return ss, nil
+}
+
+func (c *Compile) canPrePipelineLockNewTable(target *plan.LockTarget) bool {
+	if c.prePipelineLockTableID == 0 || target.TableId != c.prePipelineLockTableID ||
+		target.Mode != lock.LockMode_Exclusive || target.HasPartitionCol {
+		return false
+	}
+	qry := c.pn.GetQuery()
+	return qry != nil && qry.StmtType == plan.Query_INSERT && !qry.LoadTag &&
+		lockop.SupportsTotalLockTableRange(plan2.MakeTypeByPlan2Type(target.PrimaryColTyp))
 }
 
 func (c *Compile) compileRecursiveCte(node *plan.Node, curNodeIdx int32) ([]*Scope, error) {
@@ -10382,7 +11012,7 @@ func (c *Compile) evalAggOptimize(node *plan.Node, blk *objectio.BlockInfo, part
 }
 
 func dupType(typ *plan.Type) types.Type {
-	return types.NewWithCharset(types.T(typ.Id), typ.Width, typ.Scale, uint8(typ.Charset))
+	return types.MustTypeFromPlan(*typ)
 }
 
 func sameExecutionNode(left, right engine.Node) bool {
@@ -10553,8 +11183,6 @@ func (c *Compile) fatalLog(retry int, err error) {
 		return
 	}
 
-	txnTrace.GetService(c.proc.GetService()).TxnError(c.proc.GetTxnOperator(), err)
-
 	v, ok := moruntime.ServiceRuntime(c.proc.GetService()).
 		GetGlobalVariables(moruntime.EnableCheckInvalidRCErrors)
 	if !ok || !v.(bool) {
@@ -10569,6 +11197,18 @@ func (c *Compile) fatalLog(retry int, err error) {
 
 func (c *Compile) SetOriginSQL(sql string) {
 	c.originSQL = sqlmongodb.RedactSQLForDiagnostics(sql)
+}
+
+func (c *Compile) SetPreparedParamValues(values []any) {
+	// A compile can be pooled, and parameter values may retain large payloads.
+	// Copy only the current execution's values and release the old backing array.
+	c.preparedParamValues = append([]any(nil), values...)
+}
+
+// SetPreparedJoinDiagnosticFree applies the current execution's proof to
+// physical JOIN selection. A rebuilt plan must be reproved.
+func (c *Compile) SetPreparedJoinDiagnosticFree(proven bool) {
+	c.preparedJoinDiagnosticFree = proven
 }
 
 // SetResourceAttemptOwnerEligible marks this Compile as the top-level

@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -1115,36 +1116,73 @@ func TestDispatchUpdateResponseCoalescesTimestampCommands(t *testing.T) {
 }
 
 func TestDispatchUpdateResponseAdvancesTimestampAfterLastLogtail(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
 	tw := client.NewTimestampWaiter(runtime.GetLogger(""))
 	defer tw.Close()
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	packer := types.NewPacker()
+	t.Cleanup(packer.Close)
 
 	e := &Engine{
 		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
 		globalStats: &GlobalStats{tailC: make(chan *logtail.TableLogtail, 8)},
-		skipConsume: true,
+		mp:          mp,
+		packerPool: fileservice.NewPool(1,
+			func() *types.Packer { return packer },
+			func(p *types.Packer) { p.Reset() }, nil),
 	}
+	e.catalog.Store(cache.NewCatalog())
 	e.pClient.subscribed = subscribedTable{
 		eng: e,
 		m: map[uint64]*subEntry{
 			101: {dbID: 10, state: Subscribed},
 			105: {dbID: 10, state: Subscribed},
+			109: {dbID: 10, state: Subscribing},
 		},
 	}
 	e.pClient.receivedLogTailTime.initLogTailTimestamp(tw)
+	e.pClient.receivedLogTailTime.ready.Store(true)
+	rowBatch := &batch.Batch{
+		Vecs:  []*vector.Vector{testutil.MakeVarcharVector([]string{"a"}, nil, mp)},
+		Attrs: []string{"pk"},
+	}
+	t.Cleanup(func() { rowBatch.Clean(mp) })
+	rowBatch.SetRowCount(1)
+	rows, err := fillRandomRowidAndZeroTs(rowBatch, mp)
+	require.NoError(t, err)
 
 	recRoutines := newTestRoutineControllers(8)
 	to := timestamp.Timestamp{PhysicalTime: 200, LogicalTime: 1}
 	response := &logtail.UpdateResponse{
 		To: &to,
 		LogtailList: []logtail.TableLogtail{
-			{Table: &api.TableID{DbId: 10, TbId: 101, DbName: "db", TbName: "t1"}},
-			{Table: &api.TableID{DbId: 10, TbId: 105, DbName: "db", TbName: "t2"}},
+			{Table: &api.TableID{DbId: 10, TbId: 101, DbName: "db", TbName: "t1"},
+				Commands: []api.Entry{{EntryType: api.Entry_Insert, TableId: 101, TableName: "t1", Bat: rows}}},
+			{Table: &api.TableID{DbId: 10, TbId: 105, DbName: "db", TbName: "t2"},
+				Commands: []api.Entry{{EntryType: api.Entry_Insert, TableId: 105, TableName: "t2", Bat: rows}}},
 		},
 	}
 	require.NoError(t, dispatchUpdateResponse(ctx, e, response, recRoutines, time.Now()))
 	assert.True(t, e.pClient.subscribed.hasPendingUpdate(10, 101))
 	assert.True(t, e.pClient.subscribed.hasPendingUpdate(10, 105))
+	// A subscription advances every consumer only after its preceding payloads.
+	subscribedAt := timestamp.Timestamp{PhysicalTime: 300}
+	require.NoError(t, dispatchSubscribeResponse(ctx, e, &logtail.SubscribeResponse{
+		Logtail: logtail.TableLogtail{
+			Ts: &subscribedAt, Table: &api.TableID{DbId: 10, TbId: 109, DbName: "db", TbName: "t3"},
+		},
+	}, recRoutines, time.Now()))
+	for i, controller := range recRoutines {
+		if i == 1 {
+			continue
+		}
+		for len(controller.signalChan) > 0 {
+			require.NoError(t, (<-controller.signalChan).action(ctx, e, controller))
+		}
+	}
+	require.True(t, tw.LatestTS().IsEmpty(), "queued payloads must prevent early snapshot admission")
 
 	cmd := (<-recRoutines[1].signalChan).(*cmdToConsumeLog)
 	require.False(t, cmd.notifyApplied)
@@ -1154,6 +1192,7 @@ func TestDispatchUpdateResponseAdvancesTimestampAfterLastLogtail(t *testing.T) {
 	expectedApplied := types.TimestampToTS(to)
 	applied := e.GetOrCreateLatestPart(ctx, 0, 10, 101).Snapshot().GetAppliedTo()
 	assert.True(t, applied.EQ(&expectedApplied))
+	assert.Equal(t, 1, e.GetOrCreateLatestPart(ctx, 0, 10, 101).Snapshot().ApproxInMemRows())
 	assert.Equal(t, timestamp.Timestamp{}, e.pClient.receivedLogTailTime.tList[1].Load().(timestamp.Timestamp))
 
 	cmd = (<-recRoutines[1].signalChan).(*cmdToConsumeLog)
@@ -1162,11 +1201,20 @@ func TestDispatchUpdateResponseAdvancesTimestampAfterLastLogtail(t *testing.T) {
 	assert.False(t, e.pClient.subscribed.hasPendingUpdate(10, 105))
 	applied = e.GetOrCreateLatestPart(ctx, 0, 10, 105).Snapshot().GetAppliedTo()
 	assert.True(t, applied.EQ(&expectedApplied))
+	assert.Equal(t, 1, e.GetOrCreateLatestPart(ctx, 0, 10, 105).Snapshot().ApproxInMemRows())
 	assert.Equal(t, to, e.pClient.receivedLogTailTime.tList[1].Load().(timestamp.Timestamp))
 
-	timeCmd := (<-recRoutines[0].signalChan).(*cmdToUpdateTime)
-	require.NoError(t, timeCmd.action(ctx, e, recRoutines[0]))
-	assert.Equal(t, to, e.pClient.receivedLogTailTime.tList[0].Load().(timestamp.Timestamp))
+	snapshot, err := tw.GetTimestamp(ctx, to)
+	require.NoError(t, err)
+	require.Equal(t, to.Next(), snapshot)
+	e.pClient.validLogTailMustApplied(snapshot)
+	require.NoError(t, (<-recRoutines[1].signalChan).action(ctx, e, recRoutines[1]))
+	require.Equal(t, to, e.pClient.receivedLogTailTime.getTimestamp(), "subscription must precede its progress")
+	require.NoError(t, (<-recRoutines[1].signalChan).action(ctx, e, recRoutines[1]))
+	snapshot, err = tw.GetTimestamp(ctx, subscribedAt)
+	require.NoError(t, err)
+	require.Equal(t, subscribedAt.Next(), snapshot)
+	e.pClient.validLogTailMustApplied(snapshot)
 }
 
 func TestCanServeTableSnapshotBlocksPendingUpdate(t *testing.T) {
@@ -3572,4 +3620,17 @@ func TestIsSubscribed_StateChangeAfterCheck(t *testing.T) {
 	// Both should be non-zero in a proper concurrent test (initial read guarantees >=10)
 	assert.True(t, trueCount >= 10, "should have successful reads")
 	assert.True(t, falseCount > 0, "should observe non-subscribed states as well")
+}
+
+func TestWaitCanServeTableSnapshotCancellation(t *testing.T) {
+	ps := logtailreplay.NewPartitionState("test", false, 42, false)
+	ps.UpdateDuration(types.TS{}, types.MaxTs())
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var client PushClient
+	state, ready, err := client.waitCanServeTableSnapshot(ctx, 0, 10, 42, ps, true,
+		timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 1})
+	require.ErrorIs(t, err, context.Canceled)
+	require.False(t, ready)
+	require.Nil(t, state, "cancellation cannot admit a stale pre-apply snapshot")
 }

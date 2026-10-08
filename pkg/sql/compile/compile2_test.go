@@ -500,7 +500,7 @@ func TestSelectMetaLockRequirementPlannerPaths(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			optimizer := plan2.NewMockOptimizer(true)
+			optimizer := plan2.NewMockOptimizer(true, newPlanTestProcess(t))
 			ctx := optimizer.CurrentContext()
 			ctx.GetProcess().SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
 				return "BM25", nil
@@ -981,112 +981,6 @@ func TestForceModePre_NilRows(t *testing.T) {
 func TestRewriteAutoModeInSelect_NilSelect(t *testing.T) {
 	result := rewriteAutoModeInSelect(nil)
 	assert.False(t, result)
-}
-
-// ============================================================================
-// Tests for isAdaptiveVectorSearch
-// ============================================================================
-
-func TestIsAdaptiveVectorSearch(t *testing.T) {
-	c := &Compile{}
-
-	tests := []struct {
-		name     string
-		qry      *plan.Query
-		expected bool
-	}{
-		{
-			name:     "nil query",
-			qry:      nil,
-			expected: false,
-		},
-		{
-			name: "no nodes",
-			qry: &plan.Query{
-				Nodes: []*plan.Node{},
-			},
-			expected: false,
-		},
-		{
-			name: "nodes without RankOption",
-			qry: &plan.Query{
-				Nodes: []*plan.Node{
-					{NodeType: plan.Node_TABLE_SCAN},
-					{NodeType: plan.Node_SORT},
-				},
-			},
-			expected: false,
-		},
-		{
-			name: "node with RankOption but mode is not auto",
-			qry: &plan.Query{
-				Nodes: []*plan.Node{
-					{
-						NodeType:   plan.Node_SORT,
-						RankOption: &plan.RankOption{Mode: "post"},
-					},
-				},
-			},
-			expected: false,
-		},
-		{
-			name: "node with RankOption mode=pre",
-			qry: &plan.Query{
-				Nodes: []*plan.Node{
-					{
-						NodeType:   plan.Node_SORT,
-						RankOption: &plan.RankOption{Mode: "pre"},
-					},
-				},
-			},
-			expected: false,
-		},
-		{
-			name: "node with RankOption mode=auto",
-			qry: &plan.Query{
-				Nodes: []*plan.Node{
-					{
-						NodeType:   plan.Node_SORT,
-						RankOption: &plan.RankOption{Mode: "auto"},
-					},
-				},
-			},
-			expected: true,
-		},
-		{
-			name: "multiple nodes, one with mode=auto",
-			qry: &plan.Query{
-				Nodes: []*plan.Node{
-					{NodeType: plan.Node_TABLE_SCAN},
-					{
-						NodeType:   plan.Node_SORT,
-						RankOption: &plan.RankOption{Mode: "auto"},
-					},
-					{NodeType: plan.Node_PROJECT},
-				},
-			},
-			expected: true,
-		},
-		{
-			name: "node with empty RankOption",
-			qry: &plan.Query{
-				Nodes: []*plan.Node{
-					{
-						NodeType:   plan.Node_SORT,
-						RankOption: &plan.RankOption{},
-					},
-				},
-			},
-			expected: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := c.isAdaptiveVectorSearch(tt.qry)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
 }
 
 // ============================================================================

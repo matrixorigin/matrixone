@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -31,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
@@ -148,7 +150,7 @@ func TestChooseRowCarrier(t *testing.T) {
 }
 
 func TestLegacySourceTableFailsClosed(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	mock.ctxt.dbs["db"] = true
 	mock.ctxt.objects["src"] = &plan.ObjectRef{DbName: "db", ObjName: "src", Obj: 42}
 	mock.ctxt.tables["src"] = &plan.TableDef{
@@ -162,7 +164,7 @@ func TestLegacySourceTableFailsClosed(t *testing.T) {
 }
 
 func TestMongoDBExternalScanPruningKeepsResidualColumnsAndPlansPushdown(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	mock.ctxt.dbs["telemetry_source"] = true
 	mock.ctxt.objects["events_external"] = &plan.ObjectRef{DbName: "telemetry_source", ObjName: "events_external", Obj: 42}
 	mapping := sqlmongodb.TableMapping{
@@ -204,7 +206,7 @@ func TestMongoDBExternalScanPruningKeepsResidualColumnsAndPlansPushdown(t *testi
 
 func TestMongoDBExternalScanAddsHiddenQuerySelectorColumn(t *testing.T) {
 	newMock := func() *MockOptimizer {
-		mock := NewMockOptimizer(false)
+		mock := NewMockOptimizer(false, newPlanTestProcess(t))
 		mock.ctxt.dbs["telemetry_source"] = true
 		mock.ctxt.objects["events_external"] = &plan.ObjectRef{
 			DbName: "telemetry_source", ObjName: "events_external", Obj: 42,
@@ -300,7 +302,7 @@ func TestMongoDBExternalScanAddsHiddenQuerySelectorColumn(t *testing.T) {
 
 func TestMongoDBExternalScanRejectsInvalidCatalogState(t *testing.T) {
 	newMock := func(createSQL string) *MockOptimizer {
-		mock := NewMockOptimizer(false)
+		mock := NewMockOptimizer(false, newPlanTestProcess(t))
 		mock.ctxt.dbs["telemetry_source"] = true
 		mock.ctxt.objects["events_external"] = &plan.ObjectRef{
 			DbName: "telemetry_source", ObjName: "events_external", Obj: 42,
@@ -469,7 +471,7 @@ func TestRemoveSimpleProjectionsVolatileRefCount(t *testing.T) {
 		{name: "multiple consumers", refCnt: 2, parentType: plan.Node_PROJECT, wantProject: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			builder, bindCtx := genBuilderAndCtx()
+			builder, bindCtx := genBuilderAndCtx(t)
 			volatileExpr, err := BindFuncExprImplByPlanExpr(
 				context.Background(),
 				"nextval",
@@ -672,13 +674,13 @@ func TestBindViewSequenceFunctionsUseStoredDatabase(t *testing.T) {
 }
 
 func TestSequenceDatabaseArgumentIsInternal(t *testing.T) {
-	_, err := runOneStmt(NewMockOptimizer(false), t, "select nextval('seq1', 'db1')")
+	_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "select nextval('seq1', 'db1')")
 	require.ErrorContains(t, err, "invalid argument function nextval")
 
-	_, err = runOneStmt(NewMockOptimizer(false), t, "select currval('seq1', 'db1')")
+	_, err = runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "select currval('seq1', 'db1')")
 	require.ErrorContains(t, err, "invalid argument function currval")
 
-	_, err = runOneStmt(NewMockOptimizer(false), t, "select setval('seq1', '50', false, 'db1')")
+	_, err = runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "select setval('seq1', '50', false, 'db1')")
 	require.ErrorContains(t, err, "invalid argument function setval")
 
 	for _, test := range []struct {
@@ -691,7 +693,7 @@ func TestSequenceDatabaseArgumentIsInternal(t *testing.T) {
 		{name: "quoted boolean", sql: "select setval('seq1', '50', 'false')", wantArgs: 3, wantOverload: 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			queryPlan, buildErr := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			queryPlan, buildErr := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
 			require.NoError(t, buildErr)
 			setvalPlanExpr := findPlanFunctionExpr(queryPlan, "setval")
 			require.NotNil(t, setvalPlanExpr)
@@ -968,7 +970,7 @@ func Test_cte(t *testing.T) {
 		"select table_catalog, table_schema, table_name, table_type, engine\nfrom information_schema.tables\nwhere table_schema = 'mo_catalog' and table_type = 'BASE TABLE'\norder by table_name;",
 	}
 	testutil.NewProc(t)
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
 	for _, sql := range sqls {
 		logicPlan, err := runOneStmt(mock, t, sql)
@@ -1025,7 +1027,7 @@ var rightCases = []Kase{
 
 func TestRightCases(t *testing.T) {
 	testutil.NewProc(t)
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	for _, kase := range rightCases {
 		_, err := runOneStmt(mock, t, kase.sql)
 		require.NoError(t, err, kase.comment, kase.sql)
@@ -1061,7 +1063,7 @@ var wrongCases = []Kase{
 
 func TestWrongCases(t *testing.T) {
 	testutil.NewProc(t)
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	for _, kase := range wrongCases {
 		_, err := runOneStmt(mock, t, kase.sql)
 		require.Error(t, err, kase.comment, kase.sql)
@@ -1070,7 +1072,7 @@ func TestWrongCases(t *testing.T) {
 
 func TestMissingBaseTableUsesNoSuchTableError(t *testing.T) {
 	testutil.NewProc(t)
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
 	_, err := runOneStmt(mock, t, "select * from mo_odbc_missing_state")
 	require.Error(t, err)
@@ -1088,7 +1090,7 @@ func TestDefaultBigStats(t *testing.T) {
 }
 
 func TestAppendSelectListNameConstHeading(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindCtx := NewBindContext(builder, nil)
 
 	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select name_const('myname', 14), name_const(123, -456), name_const('myname', 14) as alias_name, name_const(('paren_name'), (14))", 1)
@@ -1100,8 +1102,8 @@ func TestAppendSelectListNameConstHeading(t *testing.T) {
 	require.Equal(t, []string{"myname", "123", "alias_name", "paren_name"}, bindCtx.headings)
 }
 
-func genBuilderAndCtx() (builder *QueryBuilder, bindCtx *BindContext) {
-	builder = NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+func genBuilderAndCtx(t testing.TB) (builder *QueryBuilder, bindCtx *BindContext) {
+	builder = NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindCtx = NewBindContext(builder, nil)
 
 	typ := types.T_int64.ToType()
@@ -1130,7 +1132,7 @@ func genBuilderAndCtx() (builder *QueryBuilder, bindCtx *BindContext) {
 }
 
 func TestQueryBuilder_bindWhere(t *testing.T) {
-	builder, bindCtx := genBuilderAndCtx()
+	builder, bindCtx := genBuilderAndCtx(t)
 	bindCtx.binder = NewWhereBinder(builder, bindCtx)
 
 	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select * from select_test.bind_select where a > 0 and b < 0 or c = 0", 1)
@@ -1177,7 +1179,7 @@ func TestQueryBuilder_bindWhere(t *testing.T) {
 }
 
 func TestQueryBuilder_bindGroupBy(t *testing.T) {
-	builder, bindCtx := genBuilderAndCtx()
+	builder, bindCtx := genBuilderAndCtx(t)
 
 	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select group by a", 1)
 	clause := stmts[0].(*tree.Select).Select.(*tree.SelectClause).GroupBy
@@ -1199,7 +1201,7 @@ func TestQueryBuilder_bindGroupBy(t *testing.T) {
 }
 
 func TestQueryBuilder_bindGroupByNull(t *testing.T) {
-	builder, bindCtx := genBuilderAndCtx()
+	builder, bindCtx := genBuilderAndCtx(t)
 
 	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select count(*) from select_test.bind_select group by null", 1)
 	require.NoError(t, err)
@@ -1215,7 +1217,7 @@ func TestQueryBuilder_bindGroupByNull(t *testing.T) {
 }
 
 func TestQueryBuilder_bindGroupByOrdinalPosition(t *testing.T) {
-	builder, bindCtx := genBuilderAndCtx()
+	builder, bindCtx := genBuilderAndCtx(t)
 
 	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select a + 1 as x from select_test.bind_select group by 1", 1)
 	require.NoError(t, err)
@@ -1243,7 +1245,7 @@ func TestQueryBuilderBuildRollupOrderByGroupingExpression(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 	require.NoError(t, err)
 
 	query := queryPlan.GetQuery()
@@ -1315,7 +1317,7 @@ func TestQueryBuilderBuildRollupWithGroupingFunctionExpressions(t *testing.T) {
 			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, test.sql, 1)
 			require.NoError(t, err)
 
-			queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+			queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 			require.NoError(t, err)
 			require.NotNil(t, queryPlan.GetQuery())
 		})
@@ -1328,7 +1330,7 @@ func TestQueryBuilderBuildRollupWithGroupingFunctionExpressions(t *testing.T) {
 		group by IF(O.A = 1, 'X', 'same') with rollup`, 1,
 	)
 	require.NoError(t, err)
-	_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 	require.Error(t, err, "string literal case must remain significant in grouping-expression matching")
 }
 
@@ -1360,7 +1362,7 @@ func TestQueryBuilderRejectsGroupingOutsideGroupingExtensions(t *testing.T) {
 			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, test.sql, 1)
 			require.NoError(t, err)
 
-			_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+			_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 			require.Error(t, err)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidGroupFuncUse), err)
 
@@ -1382,7 +1384,7 @@ func TestQueryBuilderAllowsGroupingWithSingleGroupingSet(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 	require.NoError(t, err)
 	require.NotNil(t, queryPlan.GetQuery())
 }
@@ -1444,7 +1446,7 @@ func TestQueryBuilderBuildRollupRejectsNonGroupByGroupingArguments(t *testing.T)
 			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, test.sql, 1)
 			require.NoError(t, err)
 
-			_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+			_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 			require.ErrorContains(t, err, test.errorContains)
 		})
 	}
@@ -1456,7 +1458,7 @@ func TestQueryBuilderBuildRollupRejectsNonGroupByGroupingArguments(t *testing.T)
 		group by a+1, b with rollup`, 1,
 	)
 	require.NoError(t, err)
-	_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 	require.NoError(t, err)
 }
 
@@ -1472,7 +1474,7 @@ func TestQueryBuilderBuildRollupOrderByWrappedGroupingColumns(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 	require.NoError(t, err)
 
 	query := queryPlan.GetQuery()
@@ -1547,7 +1549,7 @@ func TestQueryBuilderBuildRollupOrderByWrappedGroupingColumnResolution(t *testin
 			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, testCase.sql, 1)
 			require.NoError(t, err)
 
-			queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+			queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 			require.NoError(t, err)
 
 			var sortNode *plan.Node
@@ -1579,7 +1581,7 @@ func TestQueryBuilderBuildRollupOrderByLiteralCaseDifference(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 	require.NoError(t, err)
 
 	var sortNode *plan.Node
@@ -1619,7 +1621,7 @@ func TestQueryBuilderBuildGroupingSetOrderByIdentifierCaseDifference(t *testing.
 			)
 			require.NoError(t, err)
 
-			queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+			queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 			require.NoError(t, err)
 
 			var sortNode *plan.Node
@@ -1648,7 +1650,7 @@ func TestQueryBuilderBuildRollupOrderByCorrelatedScalarSubquery(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 	require.NoError(t, err)
 
 	var sortNode *plan.Node
@@ -1682,7 +1684,7 @@ func TestQueryBuilderBuildGroupingSetOrderByWrappedGroupingColumns(t *testing.T)
 			)
 			require.NoError(t, err)
 
-			_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+			_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 			require.NoError(t, err)
 		})
 	}
@@ -1700,7 +1702,7 @@ func TestQueryBuilderBuildDistinctRollupRejectsUnselectedGroupingColumnOrder(t *
 	)
 	require.NoError(t, err)
 
-	_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 	require.Error(t, err)
 }
 
@@ -1724,7 +1726,7 @@ func TestQueryBuilderBuildRollupOrderByGroupingExpressionWithStar(t *testing.T) 
 			)
 			require.NoError(t, err)
 
-			queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+			queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 			require.NoError(t, err)
 
 			query := queryPlan.GetQuery()
@@ -1758,7 +1760,7 @@ func TestQueryBuilderBuildRollupOrderByGroupingExpressionUsesSourceColumn(t *tes
 	)
 	require.NoError(t, err)
 
-	queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 	require.NoError(t, err)
 
 	foundHiddenProject := false
@@ -1792,7 +1794,7 @@ func TestQueryBuilderBuildGroupingSetNestedOrderUsesSourcePrecedence(t *testing.
 			)
 			require.NoError(t, err)
 
-			queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+			queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 			require.NoError(t, err)
 
 			matchedBranches := 0
@@ -1884,7 +1886,7 @@ func TestQueryBuilderBuildGroupingSetWindowNestedOrderUsesBranchSemantics(t *tes
 			)
 			require.NoError(t, err)
 
-			queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+			queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 			require.NoError(t, err)
 
 			matchedBranches := 0
@@ -1948,7 +1950,7 @@ func TestQueryBuilderBuildGroupingSetWindowKeepsOuterOrderReferences(t *testing.
 	} {
 		stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
-		_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+		_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 		require.NoError(t, err)
 	}
 }
@@ -1983,7 +1985,7 @@ func TestQueryBuilderBuildGroupingSetWindowRewritesAliasFallbackPredicates(t *te
 				selectStmt := stmts[0].(*tree.Select)
 				require.IsType(t, testCase.astType, selectStmt.OrderBy[0].Expr)
 
-				_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+				_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 				require.NoError(t, err)
 			})
 		}
@@ -2002,7 +2004,7 @@ func TestQueryBuilderBuildGroupingSetWindowRejectsDifferentSourceAliases(t *test
 			)
 			require.NoError(t, err)
 
-			_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+			_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 			require.ErrorContains(t, err, "Column 'duplicate_alias' in order clause is ambiguous",
 				"group by %s order by %s", groupBy, orderBy)
 		}
@@ -2016,7 +2018,7 @@ func TestQueryBuilderBuildGroupingSetWindowMatchesUngroupedSourceResolution(t *t
 			group by %s order by a + 0`, windowExpr, groupBy)
 			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, selectSQL, 1)
 			require.NoError(t, err)
-			_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+			_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 			require.ErrorContains(t, err, `column "bind_select.a" must appear in the GROUP BY clause`)
 		}
 	}
@@ -2120,7 +2122,7 @@ func TestQueryBuilderBuildGroupingSetNestedOrderFallsBackToAlias(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 	require.NoError(t, err)
 
 	matchedBranches := 0
@@ -2168,7 +2170,7 @@ func TestQueryBuilderBuildDistinctGroupingSetNestedOrderUsesProjectedSource(t *t
 			)
 			require.NoError(t, err)
 
-			_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+			_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 			if testCase.wantError {
 				require.ErrorContains(t, err, "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
 			} else {
@@ -2195,7 +2197,7 @@ func TestQueryBuilderBuildGroupingSetDuplicateOrderAliases(t *testing.T) {
 	} {
 		stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
-		_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+		_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 		require.NoError(t, err)
 	}
 
@@ -2205,7 +2207,7 @@ func TestQueryBuilderBuildGroupingSetDuplicateOrderAliases(t *testing.T) {
 		group by a, b with rollup order by x`, 1,
 	)
 	require.NoError(t, err)
-	_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 	require.ErrorContains(t, err, "Column 'x' in order clause is ambiguous")
 
 	stmts, err = parsers.Parse(
@@ -2215,7 +2217,7 @@ func TestQueryBuilderBuildGroupingSetDuplicateOrderAliases(t *testing.T) {
 		group by t1.a, t2.a with rollup order by a`, 1,
 	)
 	require.NoError(t, err)
-	_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 	require.ErrorContains(t, err, "Column 'a' in order clause is ambiguous")
 }
 
@@ -2249,7 +2251,7 @@ func TestQueryBuilderBuildRollupOrderByGroupingExpressionIsReentrant(t *testing.
 			orderExpr := tree.String(selectStmt.OrderBy[0].Expr, dialect.MYSQL)
 			firstNodeCount := 0
 			for buildIndex := range 2 {
-				queryPlan, buildErr := BuildPlan(NewMockCompilerContext(true), stmts[0], isPrepare)
+				queryPlan, buildErr := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], isPrepare)
 				require.NoError(t, buildErr)
 				require.NotNil(t, queryPlan.GetQuery())
 				require.Equal(t, orderExpr, tree.String(selectStmt.OrderBy[0].Expr, dialect.MYSQL))
@@ -2280,7 +2282,7 @@ func TestQueryBuilderBuildRollupOrderByQualifiedGroupingColumn(t *testing.T) {
 	orderFunc := selectStmt.OrderBy[0].Expr.(*tree.FuncExpr)
 	orderFunc.Exprs[0] = tree.NewUnresolvedName(tree.NewCStr("t", 0), tree.NewCStr("a", 0))
 
-	queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 	require.NoError(t, err)
 
 	query := queryPlan.GetQuery()
@@ -2314,7 +2316,7 @@ func TestQueryBuilderBuildRollupOrderByGroupingExpressionIgnoresAliasShadowing(t
 	)
 	require.NoError(t, err)
 
-	queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 	require.NoError(t, err)
 
 	query := queryPlan.GetQuery()
@@ -2344,7 +2346,7 @@ func TestQueryBuilderBuildRollupOrderByGroupingBinaryExpression(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 	require.NoError(t, err)
 
 	query := queryPlan.GetQuery()
@@ -2374,7 +2376,7 @@ func TestQueryBuilderBuildRollupOrderByNestedGroupingExpression(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 	require.NoError(t, err)
 
 	query := queryPlan.GetQuery()
@@ -2404,7 +2406,7 @@ func TestQueryBuilderBuildRollupOrderByAmbiguousGroupingColumn(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 	require.Error(t, err)
 }
 
@@ -2570,7 +2572,7 @@ func TestQueryBuilderBuildRollupOrderByGroupingExpressionDistinctRejectsHiddenKe
 	)
 	require.NoError(t, err)
 
-	_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
 }
@@ -2603,7 +2605,7 @@ func TestQueryBuilderBuildRollupOrderByGroupingExpressionDistinctAcceptsEquivale
 			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, testCase.sql, 1)
 			require.NoError(t, err)
 
-			_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+			_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 			require.NoError(t, err)
 		})
 	}
@@ -2622,7 +2624,7 @@ func TestQueryBuilderBuildRollupOrderByGroupingExpressionDistinctPreservesOuterQ
 	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
 
-	_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
 }
@@ -2763,7 +2765,7 @@ func TestAppendGroupingSetOrderByNestedQualifiedProject(t *testing.T) {
 }
 
 func TestQueryBuilder_bindHaving(t *testing.T) {
-	builder, bindCtx := genBuilderAndCtx()
+	builder, bindCtx := genBuilderAndCtx(t)
 
 	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select group by a having a > 0", 1)
 	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
@@ -2782,7 +2784,7 @@ func TestQueryBuilder_bindHaving(t *testing.T) {
 }
 
 func TestGroupingExtensionBindersUseGroupOutputNullability(t *testing.T) {
-	builder, bindCtx := genBuilderAndCtx()
+	builder, bindCtx := genBuilderAndCtx(t)
 	for _, typ := range bindCtx.bindings[0].types {
 		typ.NotNullable = true
 	}
@@ -2821,7 +2823,7 @@ func TestGroupingExtensionBindersUseGroupOutputNullability(t *testing.T) {
 }
 
 func TestQueryBuilder_bindProjection(t *testing.T) {
-	builder, bindCtx := genBuilderAndCtx()
+	builder, bindCtx := genBuilderAndCtx(t)
 
 	// select a, *
 	selectList := tree.SelectExprs{
@@ -2847,13 +2849,13 @@ func TestQueryBuilder_bindProjection(t *testing.T) {
 }
 
 // genBuilderAndCtxWithColumnType creates a builder and context with a column of specified type
-func genBuilderAndCtxWithColumnType(typ types.T, colName string) (*QueryBuilder, *BindContext) {
+func genBuilderAndCtxWithColumnType(t testing.TB, typ types.T, colName string) (*QueryBuilder, *BindContext) {
 	typesType := typ.ToType()
-	return genBuilderAndCtxWithColumnTypesType(typesType, colName)
+	return genBuilderAndCtxWithColumnTypesType(t, typesType, colName)
 }
 
-func genBuilderAndCtxWithColumnTypesType(typesType types.Type, colName string) (*QueryBuilder, *BindContext) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+func genBuilderAndCtxWithColumnTypesType(t testing.TB, typesType types.Type, colName string) (*QueryBuilder, *BindContext) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindCtx := NewBindContext(builder, nil)
 
 	plan2Type := makePlan2Type(&typesType)
@@ -2913,7 +2915,7 @@ func TestQueryBuilder_bindTimeWindowTruncatePreservesFractionalScale(t *testing.
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			builder, bindCtx := genBuilderAndCtxWithColumnTypesType(tt.inputType, "ts")
+			builder, bindCtx := genBuilderAndCtxWithColumnTypesType(t, tt.inputType, "ts")
 			havingBinder := NewHavingBinder(builder, bindCtx)
 			projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
 
@@ -3007,7 +3009,7 @@ func TestQueryBuilder_bindTimeWindowRejectsUnsupportedUnitsBeforeCompile(t *test
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			builder, bindCtx := genBuilderAndCtxWithColumnType(types.T_timestamp, "ts")
+			builder, bindCtx := genBuilderAndCtxWithColumnType(t, types.T_timestamp, "ts")
 			havingBinder := NewHavingBinder(builder, bindCtx)
 			projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
 
@@ -3079,7 +3081,7 @@ func TestQueryBuilder_bindTimeWindowRejectsNonPositiveValuesBeforeCompile(t *tes
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			builder, bindCtx := genBuilderAndCtxWithColumnType(types.T_timestamp, "ts")
+			builder, bindCtx := genBuilderAndCtxWithColumnType(t, types.T_timestamp, "ts")
 			havingBinder := NewHavingBinder(builder, bindCtx)
 			projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
 
@@ -3133,7 +3135,7 @@ func TestQueryBuilderTimeWindowMicrosecondBoundaryTypes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			mockTimeWindowScaleTable(t, mock, tt.typ)
 
 			logicPlan, err := runOneStmt(mock, t,
@@ -3268,7 +3270,7 @@ func TestInferGapFillBoundsPreservesTimestampInstantBounds(t *testing.T) {
 }
 
 func TestQueryBuilderTimeWindowLinearFillKeepsTimestampBoundaryTypes(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	mockTimeWindowScaleTable(t, mock, types.T_timestamp.ToTypeWithScale(3))
 
 	logicPlan, err := runOneStmt(mock, t,
@@ -3321,7 +3323,7 @@ func TestQueryBuilderTimeWindowLinearFillKeepsTimestampBoundaryTypes(t *testing.
 }
 
 func TestQueryBuilderTimeWindowOuterFilterKeepsBoundaryCarrier(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	mockTimeWindowScaleTable(t, mock, types.T_timestamp.ToTypeWithScale(6))
 
 	logicPlan, err := runOneStmt(mock, t,
@@ -3526,7 +3528,7 @@ func TestQueryBuilder_bindTimeWindow(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			builder, bindCtx := genBuilderAndCtxWithColumnType(tt.colType, tt.colName)
+			builder, bindCtx := genBuilderAndCtxWithColumnType(t, tt.colType, tt.colName)
 
 			// Create a time window AST
 			astTimeWindow := &tree.TimeWindow{
@@ -3624,7 +3626,7 @@ func TestQueryBuilder_bindTimeWindow(t *testing.T) {
 }
 
 func TestQueryBuilder_bindTimeWindow_WithSliding(t *testing.T) {
-	builder, bindCtx := genBuilderAndCtxWithColumnType(types.T_datetime, "ts")
+	builder, bindCtx := genBuilderAndCtxWithColumnType(t, types.T_datetime, "ts")
 
 	astTimeWindow := &tree.TimeWindow{
 		Interval: &tree.Interval{
@@ -3668,7 +3670,7 @@ func TestQueryBuilder_bindTimeWindow_WithSliding(t *testing.T) {
 }
 
 func TestQueryBuilder_bindTimeWindow_WithFill(t *testing.T) {
-	builder, bindCtx := genBuilderAndCtxWithColumnType(types.T_datetime, "ts")
+	builder, bindCtx := genBuilderAndCtxWithColumnType(t, types.T_datetime, "ts")
 
 	// Set up context with times for fill
 	bindCtx.times = []*plan.Expr{
@@ -3867,7 +3869,7 @@ func TestQueryBuilder_bindTimeWindowLinearFillTypeValidation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			builder, bindCtx := genBuilderAndCtxWithColumnType(types.T_datetime, "ts")
+			builder, bindCtx := genBuilderAndCtxWithColumnType(t, types.T_datetime, "ts")
 			bindCtx.times = make([]*plan.Expr, len(tt.fillTypes))
 			for i, fillType := range tt.fillTypes {
 				name := "value"
@@ -3932,7 +3934,7 @@ func TestQueryBuilder_bindTimeWindowLinearFillTypeValidation(t *testing.T) {
 }
 
 func TestQueryBuilder_bindTimeWindowLinearFillRejectsOrderByOnlyAggregate(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	mock.ctxt.objects["tw_order"] = &plan.ObjectRef{DbName: "test", ObjName: "tw_order", Obj: 42}
 	mock.ctxt.tables["tw_order"] = &plan.TableDef{
 		Name: "tw_order",
@@ -3955,7 +3957,7 @@ order by max(value), series_id, _wstart`)
 }
 
 func TestQueryBuilder_bindTimeWindowLinearFillKeepsOrderByOnlyNumericAggregate(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	mock.ctxt.objects["tw_numeric_order"] = &plan.ObjectRef{DbName: "test", ObjName: "tw_numeric_order", Obj: 42}
 	mock.ctxt.tables["tw_numeric_order"] = &plan.TableDef{
 		Name: "tw_numeric_order",
@@ -3991,7 +3993,7 @@ order by max(sort_key), series_id, _wstart`)
 }
 
 func TestQueryBuilder_bindTimeWindowLinearFillDeduplicatesSelectedOrderByAggregate(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	mock.ctxt.objects["tw_numeric_order_selected"] = &plan.ObjectRef{DbName: "test", ObjName: "tw_numeric_order_selected", Obj: 42}
 	mock.ctxt.tables["tw_numeric_order_selected"] = &plan.TableDef{
 		Name: "tw_numeric_order_selected",
@@ -4027,7 +4029,7 @@ order by max(shown), max(sort_key), series_id, _wstart`)
 }
 
 func TestQueryBuilder_bindTimeWindowLinearFillKeepsHavingOnlyNumericAggregate(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	mock.ctxt.objects["tw_numeric_having"] = &plan.ObjectRef{DbName: "test", ObjName: "tw_numeric_having", Obj: 42}
 	mock.ctxt.tables["tw_numeric_having"] = &plan.TableDef{
 		Name: "tw_numeric_having",
@@ -4076,7 +4078,7 @@ order by series_id, _wstart`)
 }
 
 func TestQueryBuilder_bindTimeWindowLinearFillKeepsHavingOnlyAggregateWithoutSelection(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	mock.ctxt.objects["tw_having_only"] = &plan.ObjectRef{DbName: "test", ObjName: "tw_having_only", Obj: 42}
 	mock.ctxt.tables["tw_having_only"] = &plan.TableDef{
 		Name: "tw_having_only",
@@ -4113,7 +4115,7 @@ order by series_id, _wstart`)
 }
 
 func TestQueryBuilder_bindOrderBy(t *testing.T) {
-	builder, bindCtx := genBuilderAndCtx()
+	builder, bindCtx := genBuilderAndCtx(t)
 
 	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select a, b from select_test.bind_select order by a desc, b asc", 1)
 	orderList := stmts[0].(*tree.Select).OrderBy
@@ -4135,7 +4137,7 @@ func TestQueryBuilder_bindOrderBy(t *testing.T) {
 }
 
 func TestQueryBuilder_bindOrderByNull(t *testing.T) {
-	builder, bindCtx := genBuilderAndCtx()
+	builder, bindCtx := genBuilderAndCtx(t)
 
 	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select order by null", 1)
 	require.NoError(t, err)
@@ -4154,7 +4156,7 @@ func TestQueryBuilder_bindOrderByNull(t *testing.T) {
 }
 
 func TestQueryBuilder_bindOrderByNullKeepsFollowingKeys(t *testing.T) {
-	builder, bindCtx := genBuilderAndCtx()
+	builder, bindCtx := genBuilderAndCtx(t)
 
 	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select order by null, a desc", 1)
 	require.NoError(t, err)
@@ -4177,7 +4179,7 @@ func TestQueryBuilder_bindOrderByNullKeepsFollowingKeys(t *testing.T) {
 }
 
 func TestQueryBuilder_bindOrderByNullDistinct(t *testing.T) {
-	builder, bindCtx := genBuilderAndCtx()
+	builder, bindCtx := genBuilderAndCtx(t)
 	bindCtx.isDistinct = true
 
 	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select distinct a from select_test.bind_select order by null", 1)
@@ -4197,7 +4199,7 @@ func TestQueryBuilder_bindOrderByNullDistinct(t *testing.T) {
 }
 
 func TestQueryBuilder_bindOrderByNullDistinctKeepsFollowingKeys(t *testing.T) {
-	builder, bindCtx := genBuilderAndCtx()
+	builder, bindCtx := genBuilderAndCtx(t)
 	bindCtx.isDistinct = true
 
 	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select distinct a from select_test.bind_select order by null, a desc", 1)
@@ -4223,7 +4225,7 @@ func TestQueryBuilder_bindOrderByNullDistinctKeepsFollowingKeys(t *testing.T) {
 }
 
 func TestQueryBuilder_bindOrderByNullDistinctRejectsFollowingMissingSelectExpr(t *testing.T) {
-	builder, bindCtx := genBuilderAndCtx()
+	builder, bindCtx := genBuilderAndCtx(t)
 	bindCtx.isDistinct = true
 
 	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select distinct a from select_test.bind_select order by null, b", 1)
@@ -4241,12 +4243,12 @@ func TestQueryBuilder_bindOrderByNullDistinctRejectsFollowingMissingSelectExpr(t
 	require.Contains(t, err.Error(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
 }
 
-func bindDistinctOrderByForTest(sql string) (*QueryBuilder, *BindContext, []*plan.OrderBySpec, int, error) {
-	return bindOrderByForTest(sql, true)
+func bindDistinctOrderByForTest(t testing.TB, sql string) (*QueryBuilder, *BindContext, []*plan.OrderBySpec, int, error) {
+	return bindOrderByForTest(t, sql, true)
 }
 
-func bindOrderByForTest(sql string, distinct bool) (*QueryBuilder, *BindContext, []*plan.OrderBySpec, int, error) {
-	builder, bindCtx := genBuilderAndCtx()
+func bindOrderByForTest(t testing.TB, sql string, distinct bool) (*QueryBuilder, *BindContext, []*plan.OrderBySpec, int, error) {
+	builder, bindCtx := genBuilderAndCtx(t)
 	return bindOrderByWithTestContext(sql, builder, bindCtx, distinct)
 }
 
@@ -4330,7 +4332,7 @@ func TestQueryBuilder_bindOrderByExpressionAliasPrecedence(t *testing.T) {
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			_, bindCtx, boundOrderBys, _, err := bindOrderByForTest(testCase.sql, false)
+			_, bindCtx, boundOrderBys, _, err := bindOrderByForTest(t, testCase.sql, false)
 			require.NoError(t, err)
 			require.Len(t, boundOrderBys, 1)
 			col := boundOrderBys[0].Expr.GetCol()
@@ -4342,7 +4344,7 @@ func TestQueryBuilder_bindOrderByExpressionAliasPrecedence(t *testing.T) {
 	}
 
 	t.Run("name inside expression prefers source column", func(t *testing.T) {
-		_, bindCtx, boundOrderBys, _, err := bindOrderByForTest(
+		_, bindCtx, boundOrderBys, _, err := bindOrderByForTest(t,
 			"select a, -a as a from select_test.bind_select order by a + 0",
 			false,
 		)
@@ -4361,7 +4363,7 @@ func TestQueryBuilder_bindOrderByExpressionAliasPrecedence(t *testing.T) {
 	})
 
 	t.Run("name inside expression falls back to noncolliding alias", func(t *testing.T) {
-		_, _, boundOrderBys, _, err := bindOrderByForTest(
+		_, _, boundOrderBys, _, err := bindOrderByForTest(t,
 			"select a, -a as neg from select_test.bind_select order by neg + 0",
 			false,
 		)
@@ -4371,7 +4373,7 @@ func TestQueryBuilder_bindOrderByExpressionAliasPrecedence(t *testing.T) {
 	})
 
 	t.Run("qualified source name bypasses alias", func(t *testing.T) {
-		_, bindCtx, boundOrderBys, _, err := bindOrderByForTest(
+		_, bindCtx, boundOrderBys, _, err := bindOrderByForTest(t,
 			"select a, -a as a from select_test.bind_select order by bind_select.a",
 			false,
 		)
@@ -4393,7 +4395,7 @@ func TestQueryBuilder_bindOrderByExpressionAliasPrecedence(t *testing.T) {
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			_, _, _, _, err := bindOrderByForTest(testCase.sql, false)
+			_, _, _, _, err := bindOrderByForTest(t, testCase.sql, false)
 			require.Error(t, err)
 			require.Contains(t, err.Error(), "in order clause is ambiguous")
 		})
@@ -4426,7 +4428,7 @@ func TestQueryBuilder_bindOrderByExpressionAliasPrecedence(t *testing.T) {
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			_, bindCtx, boundOrderBys, _, err := bindOrderByForTest(testCase.sql, false)
+			_, bindCtx, boundOrderBys, _, err := bindOrderByForTest(t, testCase.sql, false)
 			require.NoError(t, err)
 			require.Len(t, boundOrderBys, 1)
 			col := boundOrderBys[0].Expr.GetCol()
@@ -4437,7 +4439,7 @@ func TestQueryBuilder_bindOrderByExpressionAliasPrecedence(t *testing.T) {
 	}
 
 	t.Run("nested duplicate expression aliases use first item", func(t *testing.T) {
-		_, _, boundOrderBys, _, err := bindOrderByForTest(
+		_, _, boundOrderBys, _, err := bindOrderByForTest(t,
 			"select -a as x, b + 0 as x from select_test.bind_select order by x + 1",
 			false,
 		)
@@ -4446,7 +4448,7 @@ func TestQueryBuilder_bindOrderByExpressionAliasPrecedence(t *testing.T) {
 	})
 
 	t.Run("nested different direct aliases remain ambiguous", func(t *testing.T) {
-		_, _, _, _, err := bindOrderByForTest(
+		_, _, _, _, err := bindOrderByForTest(t,
 			"select a as x, b as x from select_test.bind_select order by x + 1",
 			false,
 		)
@@ -4455,7 +4457,7 @@ func TestQueryBuilder_bindOrderByExpressionAliasPrecedence(t *testing.T) {
 	})
 
 	t.Run("different direct aliases become ambiguous before a later expression", func(t *testing.T) {
-		_, _, _, _, err := bindOrderByForTest(
+		_, _, _, _, err := bindOrderByForTest(t,
 			"select a as x, b as x, -a as x from select_test.bind_select order by x",
 			false,
 		)
@@ -4464,7 +4466,7 @@ func TestQueryBuilder_bindOrderByExpressionAliasPrecedence(t *testing.T) {
 	})
 
 	t.Run("function name is not an alias reference", func(t *testing.T) {
-		_, _, boundOrderBys, _, err := bindOrderByForTest(
+		_, _, boundOrderBys, _, err := bindOrderByForTest(t,
 			"select a as abs, b as abs from select_test.bind_select order by abs(a)",
 			false,
 		)
@@ -4478,7 +4480,7 @@ func TestQueryBuilder_bindOrderByDistinctExpressionAliasPrecedence(t *testing.T)
 		"select distinct a, -a as a from select_test.bind_select order by a",
 		"select distinct a, 20 as a from select_test.bind_select order by (a)",
 	} {
-		_, bindCtx, boundOrderBys, _, err := bindOrderByForTest(sql, true)
+		_, bindCtx, boundOrderBys, _, err := bindOrderByForTest(t, sql, true)
 		require.NoError(t, err)
 		require.Len(t, boundOrderBys, 1)
 		col := boundOrderBys[0].Expr.GetCol()
@@ -4487,7 +4489,7 @@ func TestQueryBuilder_bindOrderByDistinctExpressionAliasPrecedence(t *testing.T)
 		require.Equal(t, int32(1), col.ColPos)
 	}
 
-	_, bindCtx, boundOrderBys, _, err := bindOrderByForTest(
+	_, bindCtx, boundOrderBys, _, err := bindOrderByForTest(t,
 		"select distinct a, -a as a from select_test.bind_select order by a + 0",
 		true,
 	)
@@ -4502,14 +4504,14 @@ func TestQueryBuilder_bindOrderByDistinctExpressionAliasPrecedence(t *testing.T)
 	require.Equal(t, int32(0), col.ColPos,
 		"a nested DISTINCT ORDER BY name must bind to the selected source column")
 
-	_, _, _, _, err = bindOrderByForTest(
+	_, _, _, _, err = bindOrderByForTest(t,
 		"select distinct a, b as a from select_test.bind_select order by a",
 		true,
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "in order clause is ambiguous")
 
-	_, bindCtx, boundOrderBys, _, err = bindOrderByForTest(
+	_, bindCtx, boundOrderBys, _, err = bindOrderByForTest(t,
 		"select distinct -a as x, b + 0 as x from select_test.bind_select order by x",
 		true,
 	)
@@ -4518,7 +4520,7 @@ func TestQueryBuilder_bindOrderByDistinctExpressionAliasPrecedence(t *testing.T)
 	require.Equal(t, bindCtx.projectTag, boundOrderBys[0].Expr.GetCol().RelPos)
 	require.Equal(t, int32(0), boundOrderBys[0].Expr.GetCol().ColPos)
 
-	_, bindCtx, boundOrderBys, _, err = bindOrderByForTest(
+	_, bindCtx, boundOrderBys, _, err = bindOrderByForTest(t,
 		"select distinct a as x, -b as x from select_test.bind_select order by x",
 		true,
 	)
@@ -4529,7 +4531,7 @@ func TestQueryBuilder_bindOrderByDistinctExpressionAliasPrecedence(t *testing.T)
 }
 
 func TestQueryBuilder_bindOrderByDistinctDerivedSelectedColumns(t *testing.T) {
-	_, bindCtx, boundOrderBys, _, err := bindDistinctOrderByForTest(
+	_, bindCtx, boundOrderBys, _, err := bindDistinctOrderByForTest(t,
 		"select distinct a, b from select_test.bind_select order by abs(a) + b desc, a",
 	)
 	require.NoError(t, err)
@@ -4545,7 +4547,7 @@ func TestQueryBuilder_bindOrderByDistinctDerivedSelectedColumns(t *testing.T) {
 }
 
 func TestQueryBuilder_bindOrderByDistinctDerivedAlias(t *testing.T) {
-	_, bindCtx, boundOrderBys, _, err := bindDistinctOrderByForTest(
+	_, bindCtx, boundOrderBys, _, err := bindDistinctOrderByForTest(t,
 		"select distinct a + 1 as x from select_test.bind_select order by x * 2",
 	)
 	require.NoError(t, err)
@@ -4558,7 +4560,7 @@ func TestQueryBuilder_bindOrderByDistinctDerivedAlias(t *testing.T) {
 
 func TestQueryBuilder_bindOrderByDistinctDerivedNameResolution(t *testing.T) {
 	t.Run("selected FROM column wins over colliding alias", func(t *testing.T) {
-		_, bindCtx, boundOrderBys, _, err := bindDistinctOrderByForTest(
+		_, bindCtx, boundOrderBys, _, err := bindDistinctOrderByForTest(t,
 			"select distinct a as b, b from select_test.bind_select order by abs(b)",
 		)
 		require.NoError(t, err)
@@ -4574,7 +4576,7 @@ func TestQueryBuilder_bindOrderByDistinctDerivedNameResolution(t *testing.T) {
 	})
 
 	t.Run("unselected FROM column does not fall back to colliding alias", func(t *testing.T) {
-		_, _, _, _, err := bindDistinctOrderByForTest(
+		_, _, _, _, err := bindDistinctOrderByForTest(t,
 			"select distinct a as b from select_test.bind_select order by abs(b)",
 		)
 		require.Error(t, err)
@@ -4582,7 +4584,7 @@ func TestQueryBuilder_bindOrderByDistinctDerivedNameResolution(t *testing.T) {
 	})
 
 	t.Run("parenthesized root preserves output ambiguity", func(t *testing.T) {
-		_, _, _, _, err := bindDistinctOrderByForTest(
+		_, _, _, _, err := bindDistinctOrderByForTest(t,
 			"select distinct a as b, b from select_test.bind_select order by (b)",
 		)
 		require.Error(t, err)
@@ -4590,7 +4592,7 @@ func TestQueryBuilder_bindOrderByDistinctDerivedNameResolution(t *testing.T) {
 	})
 
 	t.Run("nested name falls back to noncolliding alias", func(t *testing.T) {
-		_, bindCtx, boundOrderBys, _, err := bindDistinctOrderByForTest(
+		_, bindCtx, boundOrderBys, _, err := bindDistinctOrderByForTest(t,
 			"select distinct a as x from select_test.bind_select order by abs(x)",
 		)
 		require.NoError(t, err)
@@ -4606,7 +4608,7 @@ func TestQueryBuilder_bindOrderByDistinctDerivedNameResolution(t *testing.T) {
 	})
 
 	t.Run("qualified selected FROM column remains available", func(t *testing.T) {
-		_, bindCtx, boundOrderBys, _, err := bindDistinctOrderByForTest(
+		_, bindCtx, boundOrderBys, _, err := bindDistinctOrderByForTest(t,
 			"select distinct a as b, b from select_test.bind_select order by abs(bind_select.b)",
 		)
 		require.NoError(t, err)
@@ -4619,7 +4621,7 @@ func TestQueryBuilder_bindOrderByDistinctDerivedNameResolution(t *testing.T) {
 	})
 
 	t.Run("qualified unselected FROM column is rejected", func(t *testing.T) {
-		_, _, _, _, err := bindDistinctOrderByForTest(
+		_, _, _, _, err := bindDistinctOrderByForTest(t,
 			"select distinct a as x from select_test.bind_select order by abs(bind_select.b)",
 		)
 		require.Error(t, err)
@@ -4628,7 +4630,7 @@ func TestQueryBuilder_bindOrderByDistinctDerivedNameResolution(t *testing.T) {
 }
 
 func TestQueryBuilder_bindOrderByDistinctDerivedAggregateAliasDoesNotRebind(t *testing.T) {
-	_, bindCtx, boundOrderBys, _, err := bindDistinctOrderByForTest(
+	_, bindCtx, boundOrderBys, _, err := bindDistinctOrderByForTest(t,
 		"select distinct count(distinct a) as x from select_test.bind_select order by x + 1",
 	)
 	require.NoError(t, err)
@@ -4639,7 +4641,7 @@ func TestQueryBuilder_bindOrderByDistinctDerivedAggregateAliasDoesNotRebind(t *t
 }
 
 func TestQueryBuilder_bindOrderByDistinctDerivedSubqueryAliasDoesNotRebind(t *testing.T) {
-	builder, bindCtx, boundOrderBys, _, err := bindDistinctOrderByForTest(
+	builder, bindCtx, boundOrderBys, _, err := bindDistinctOrderByForTest(t,
 		"select distinct (select 1) as x from select_test.bind_select order by x + 1",
 	)
 	require.NoError(t, err)
@@ -4650,7 +4652,7 @@ func TestQueryBuilder_bindOrderByDistinctDerivedSubqueryAliasDoesNotRebind(t *te
 }
 
 func TestQueryBuilder_bindOrderByDistinctDerivedFullTextReturnsSyntaxError(t *testing.T) {
-	builder, bindCtx := genBuilderAndCtxWithColumnType(types.T_varchar, "body")
+	builder, bindCtx := genBuilderAndCtxWithColumnType(t, types.T_varchar, "body")
 	_, _, _, _, err := bindDistinctOrderByWithTestContext(
 		"select distinct body from select_test.bind_select order by match(body) against('database')",
 		builder,
@@ -4660,7 +4662,7 @@ func TestQueryBuilder_bindOrderByDistinctDerivedFullTextReturnsSyntaxError(t *te
 	require.Contains(t, err.Error(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
 	require.NotContains(t, err.Error(), "escaped projection scope")
 
-	builder, bindCtx = genBuilderAndCtxWithColumnType(types.T_varchar, "body")
+	builder, bindCtx = genBuilderAndCtxWithColumnType(t, types.T_varchar, "body")
 	_, _, _, _, err = bindDistinctOrderByWithTestContext(
 		"select distinct match(body) against('database') as score from select_test.bind_select order by match(body) against('database')",
 		builder,
@@ -4668,7 +4670,7 @@ func TestQueryBuilder_bindOrderByDistinctDerivedFullTextReturnsSyntaxError(t *te
 	)
 	require.NoError(t, err, "an exact projected full-text expression must remain orderable")
 
-	builder, bindCtx = genBuilderAndCtxWithColumnType(types.T_varchar, "body")
+	builder, bindCtx = genBuilderAndCtxWithColumnType(t, types.T_varchar, "body")
 	_, bindCtx, boundOrderBys, _, err := bindDistinctOrderByWithTestContext(
 		"select distinct match(body) against('database') as score from select_test.bind_select order by not score",
 		builder,
@@ -4687,7 +4689,7 @@ func TestQueryBuilder_bindOrderByDistinctDerivedRejectsUnselectedInputs(t *testi
 	}
 	for _, sql := range tests {
 		t.Run(sql, func(t *testing.T) {
-			_, _, _, _, err := bindDistinctOrderByForTest(sql)
+			_, _, _, _, err := bindDistinctOrderByForTest(t, sql)
 			require.Error(t, err)
 			require.Contains(t, err.Error(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
 		})
@@ -4695,7 +4697,7 @@ func TestQueryBuilder_bindOrderByDistinctDerivedRejectsUnselectedInputs(t *testi
 }
 
 func TestQueryBuilder_appendDistinctOrderProjectionNode(t *testing.T) {
-	builder, bindCtx, boundOrderBys, resultLen, err := bindDistinctOrderByForTest(
+	builder, bindCtx, boundOrderBys, resultLen, err := bindDistinctOrderByForTest(t,
 		"select distinct a, b from select_test.bind_select order by abs(a), abs(a), b",
 	)
 	require.NoError(t, err)
@@ -4732,7 +4734,7 @@ func TestQueryBuilder_appendDistinctOrderProjectionNode(t *testing.T) {
 }
 
 func TestQueryBuilder_bindOrderByOrdinalPosition(t *testing.T) {
-	builder, bindCtx := genBuilderAndCtx()
+	builder, bindCtx := genBuilderAndCtx(t)
 
 	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select a + 1 as x, b from select_test.bind_select order by 1", 1)
 	require.NoError(t, err)
@@ -4790,7 +4792,7 @@ func TestQueryBuilder_buildSetOperationOrderByNull(t *testing.T) {
 
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tt.sql)
+			logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tt.sql)
 			require.NoError(t, err)
 
 			sortNodes := collectReachableSortNodes(logicPlan.GetQuery())
@@ -4883,7 +4885,7 @@ func TestSetOperationMixedCharVarcharUsesSeparatePadSpaceKey(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.sql)
 			require.NoError(t, err)
 
 			var setNode *plan.Node
@@ -4941,7 +4943,7 @@ func TestSetOperationMixedWidthCharUsesCommonPaddedType(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.sql)
 			require.NoError(t, err)
 
 			query := logicPlan.GetQuery()
@@ -4985,7 +4987,7 @@ func TestSetOperationMixedCharVarcharCommonTypeIsOrderIndependent(t *testing.T) 
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.sql)
 			require.NoError(t, err)
 
 			var intersect *plan.Node
@@ -5001,6 +5003,71 @@ func TestSetOperationMixedCharVarcharCommonTypeIsOrderIndependent(t *testing.T) 
 			require.Equal(t, int32(8), intersect.ProjectList[0].Typ.Width)
 		})
 	}
+
+}
+
+func TestPreparedSetOperationPureCharUsesCommonPaddedType(t *testing.T) {
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
+		"prepare pure_char_set from 'select ? as v union all select ? as v'")
+	require.NoError(t, err)
+	preparedPlan := prepared.GetDcl().GetPrepare().Plan
+	cached := DeepCopyPlan(preparedPlan)
+
+	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+		context.Background(), preparedPlan, []any{ParamValue{
+			Value: "MO", IsBinaryProtocol: true,
+			RuntimeType: types.New(types.T_char, 8, 0), HasRuntimeType: true,
+		}, ParamValue{
+			Value: "MO", IsBinaryProtocol: true,
+			RuntimeType: types.New(types.T_char, 4, 0), HasRuntimeType: true,
+		}},
+	)
+	require.NoError(t, err)
+	require.True(t, specialized)
+
+	var setNode *plan.Node
+	for _, node := range filled.GetQuery().Nodes {
+		if node.NodeType == plan.Node_UNION || node.NodeType == plan.Node_UNION_ALL {
+			setNode = node
+			break
+		}
+	}
+	require.NotNil(t, setNode)
+	require.Len(t, setNode.ProjectList, 1)
+	require.Equal(t, int32(types.T_char), setNode.ProjectList[0].Typ.Id, setNode.String())
+	require.Equal(t, int32(8), setNode.ProjectList[0].Typ.Width)
+	for branch, childID := range setNode.Children {
+		child := filled.GetQuery().Nodes[childID]
+		require.Equal(t, int32(types.T_char), child.ProjectList[0].Typ.Id,
+			"prepared branch %d must retain the common CHAR domain", branch)
+		require.Equal(t, int32(8), child.ProjectList[0].Typ.Width)
+	}
+	require.True(t, proto.Equal(cached, preparedPlan),
+		"prepared specialization must not mutate the cached template")
+
+	mixed, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
+		"prepare mixed_char_set from 'select ? as v union all select ? as v'")
+	require.NoError(t, err)
+	mixedFilled, _, err := FillValuesOfParamsInPlanWithSpecialization(
+		context.Background(), mixed.GetDcl().GetPrepare().Plan, []any{ParamValue{
+			Value: "MO", IsBinaryProtocol: true,
+			RuntimeType: types.New(types.T_char, 8, 0), HasRuntimeType: true,
+		}, ParamValue{
+			Value: "MO", IsBinaryProtocol: true,
+			RuntimeType: types.New(types.T_varchar, 4, 0), HasRuntimeType: true,
+		}},
+	)
+	require.NoError(t, err)
+	var mixedSetNode *plan.Node
+	for _, node := range mixedFilled.GetQuery().Nodes {
+		if node.NodeType == plan.Node_UNION || node.NodeType == plan.Node_UNION_ALL {
+			mixedSetNode = node
+			break
+		}
+	}
+	require.NotNil(t, mixedSetNode)
+	require.Equal(t, int32(types.T_varchar), mixedSetNode.ProjectList[0].Typ.Id,
+		"mixed CHAR/VARCHAR must keep the variable-string output domain")
 }
 
 func TestDistinctPromotedCharUsesSeparatePadSpaceKey(t *testing.T) {
@@ -5021,7 +5088,7 @@ func TestDistinctPromotedCharUsesSeparatePadSpaceKey(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.sql)
 			require.NoError(t, err)
 
 			var distinctAgg *plan.Node
@@ -5065,7 +5132,7 @@ func TestDistinctPromotedCharKeepsPadSpaceKeyAcrossDerivedTable(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.sql)
 			require.NoError(t, err)
 
 			var distinctAgg *plan.Node
@@ -5101,7 +5168,7 @@ func TestPromotedCharPadSpaceMetadataCrossesTransparentBoundaries(t *testing.T) 
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.sql)
 			require.NoError(t, err)
 			root := logicPlan.GetQuery().Nodes[logicPlan.GetQuery().Steps[0]]
 			require.NotEmpty(t, root.ProjectList)
@@ -5129,7 +5196,7 @@ func TestWindowValueFunctionsPreservePromotedCharPadSpaceKey(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			logicPlan, err := runOneStmt(
-				NewMockOptimizer(true),
+				NewMockOptimizer(true, newPlanTestProcess(t)),
 				t,
 				"select distinct y from (select "+tc.windowExpr+" as y from nation) d",
 			)
@@ -5176,7 +5243,7 @@ func TestAggregateValueFunctionsPreservePromotedCharPadSpaceKey(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			logicPlan, err := runOneStmt(
-				NewMockOptimizer(true),
+				NewMockOptimizer(true, newPlanTestProcess(t)),
 				t,
 				"select distinct x from (select "+tc.expr+
 					" as x from nation group by n_regionkey) d",
@@ -5216,7 +5283,7 @@ func TestLeastGreatestPreservePromotedCharPadSpaceKey(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			logicPlan, err := runOneStmt(
-				NewMockOptimizer(true),
+				NewMockOptimizer(true, newPlanTestProcess(t)),
 				t,
 				"select distinct x from (select "+tc.expr+" as x from nation) d",
 			)
@@ -5259,7 +5326,7 @@ func TestGroupByPromotedCharUsesSeparatePadSpaceKey(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.sql)
 			require.NoError(t, err)
 
 			var aggregate *plan.Node
@@ -5312,7 +5379,7 @@ func TestDistinctAggregatePromotedCharUsesSeparatePadSpaceKey(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.sql)
 			require.NoError(t, err)
 
 			var innerAggregate *plan.Node
@@ -5341,7 +5408,7 @@ func TestDistinctAggregatePromotedCharUsesCanonicalArgumentsWhenNotRewritten(t *
 		"select count(distinct " + value + ", 1) from nation",
 		"select group_concat(distinct " + value + ") from nation",
 	} {
-		logicPlan, err := runOneStmt(NewMockOptimizer(true), t, sql)
+		logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, sql)
 		require.NoError(t, err)
 
 		var aggregate *plan.Node
@@ -5365,7 +5432,7 @@ func TestDistinctAggregatePromotedCharUsesCanonicalArgumentsWhenNotRewritten(t *
 
 func TestDistinctAggregatePromotedCharCanonicalizesWhenRewriteIsSkipped(t *testing.T) {
 	value := "coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))"
-	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
+	logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
 		"select count(distinct "+value+"), sum(n_regionkey) from nation")
 	require.NoError(t, err)
 
@@ -5388,7 +5455,7 @@ func TestDistinctAggregatePromotedCharCanonicalizesWhenRewriteIsSkipped(t *testi
 
 func TestDistinctAggregatePromotedCharCanonicalizesWhenGroupingSetsSkipRewrite(t *testing.T) {
 	value := "coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))"
-	optimizer := NewMockOptimizer(true)
+	optimizer := NewMockOptimizer(true, newPlanTestProcess(t))
 	useLegacyGroupingSetPlan(t, optimizer)
 	logicPlan, err := runOneStmt(optimizer, t,
 		"select n_regionkey, count(distinct "+value+
@@ -5429,7 +5496,7 @@ func TestWindowPadSpaceKeysUseCanonicalArguments(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			if tc.charColumn {
 				table := DeepCopyTableDef(mock.ctxt.tables["nation"], true)
 				table.Cols[1].Typ = plan.Type{Id: int32(types.T_char), Width: 8}
@@ -5479,7 +5546,7 @@ func requireWindowPadSpaceComparisonCast(t *testing.T, expr *plan.Expr) {
 
 func TestGroupConcatOrderByIsBoundPerAggregate(t *testing.T) {
 	logicPlan, err := runOneStmt(
-		NewMockOptimizer(true),
+		NewMockOptimizer(true, newPlanTestProcess(t)),
 		t,
 		"select group_concat(n_name order by n_nationkey desc separator '|'), "+
 			"group_concat(n_name order by n_regionkey asc) from nation",
@@ -5574,7 +5641,7 @@ func newIcebergTestCompilerContext(t *testing.T, loc *time.Location) *icebergTes
 	if loc == nil {
 		loc = time.UTC
 	}
-	base := NewMockCompilerContext(true)
+	base := NewMockCompilerContext(true, nil)
 	base.objects["gold_orders"] = &plan.ObjectRef{
 		DbName:  "tpch",
 		ObjName: "gold_orders",
@@ -5628,6 +5695,7 @@ func buildIcebergTestPlan(t *testing.T, ctx CompilerContext, sql string) (*Plan,
 	t.Helper()
 	stmts, err := parsers.Parse(ctx.GetContext(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
+	defer stmts[0].Free()
 	return BuildPlan(ctx, stmts[0], false)
 }
 
@@ -5652,7 +5720,7 @@ func requireIcebergScan(t *testing.T, p *Plan) *plan.IcebergScan {
 }
 
 func TestQueryBuilderLegacyExternalTableNotDispatchedAsIceberg(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	ctx.objects["legacy_orders"] = &plan.ObjectRef{
 		DbName:  "tpch",
 		ObjName: "legacy_orders",
@@ -5695,7 +5763,7 @@ func TestQueryBuilderLegacyExternalTableNotDispatchedAsIceberg(t *testing.T) {
 }
 
 func TestQueryBuilderExternalFilepathIdentitySurvivesColumnPruning(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	ctx.objects["pruned_external"] = &plan.ObjectRef{
 		DbName:  "tpch",
 		ObjName: "pruned_external",
@@ -5838,7 +5906,7 @@ func TestQueryBuilderIcebergTimeTravelRejectsNativeSnapshotMix(t *testing.T) {
 }
 
 func TestQueryBuilderIcebergTimeTravelRequiresIcebergTable(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 
 	_, err := buildIcebergTestPlan(t, ctx, "select n_name from nation for iceberg snapshot 1")
 	require.Error(t, err)
@@ -5846,7 +5914,7 @@ func TestQueryBuilderIcebergTimeTravelRequiresIcebergTable(t *testing.T) {
 }
 
 func TestQueryBuilder_bindOrderByEnum(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindCtx := NewBindContext(builder, nil)
 
 	enumType := types.T_enum.ToType()
@@ -5894,7 +5962,7 @@ func TestQueryBuilder_bindOrderByEnum(t *testing.T) {
 }
 
 func TestQueryBuilder_bindOrderByEnumDistinct(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindCtx := NewBindContext(builder, nil)
 	bindCtx.isDistinct = true
 
@@ -5950,7 +6018,7 @@ func TestQueryBuilder_bindOrderByEnumDistinct(t *testing.T) {
 }
 
 func TestQueryBuilder_bindOrderByDistinctLargeExpr(t *testing.T) {
-	builder, bindCtx := genBuilderAndCtx()
+	builder, bindCtx := genBuilderAndCtx(t)
 	bindCtx.isDistinct = true
 
 	longLiteral := strings.Repeat("x", 300)
@@ -5976,7 +6044,7 @@ func TestQueryBuilder_bindOrderByDistinctLargeExpr(t *testing.T) {
 }
 
 func TestAppendOrderByProjectExprLargeExprDedup(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindCtx := NewBindContext(builder, nil)
 
 	stringType := types.T_varchar.ToType()
@@ -6001,7 +6069,7 @@ func TestAppendOrderByProjectExprLargeExprDedup(t *testing.T) {
 }
 
 func TestQueryBuilder_bindLimit(t *testing.T) {
-	builder, bindCtx := genBuilderAndCtx()
+	builder, bindCtx := genBuilderAndCtx(t)
 
 	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select limit 1, 5", 1)
 	astLimit := stmts[0].(*tree.Select).Limit
@@ -6020,7 +6088,7 @@ func TestQueryBuilder_bindLimit(t *testing.T) {
 }
 
 func TestQueryBuilderBindLimitFoldsAndNormalizesConstants(t *testing.T) {
-	builder, bindCtx := genBuilderAndCtx()
+	builder, bindCtx := genBuilderAndCtx(t)
 
 	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select limit 2 + 3 offset 0 + 0", 1)
 	require.NoError(t, err)
@@ -6033,7 +6101,7 @@ func TestQueryBuilderBindLimitFoldsAndNormalizesConstants(t *testing.T) {
 }
 
 func TestQueryBuilderBindLimitReportsConstantOverflow(t *testing.T) {
-	builder, bindCtx := genBuilderAndCtx()
+	builder, bindCtx := genBuilderAndCtx(t)
 
 	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select limit 18446744073709551615 + 1", 1)
 	require.NoError(t, err)
@@ -6044,7 +6112,7 @@ func TestQueryBuilderBindLimitReportsConstantOverflow(t *testing.T) {
 }
 
 func TestQueryBuilderBindLimitKeepsVariableDynamic(t *testing.T) {
-	builder, bindCtx := genBuilderAndCtx()
+	builder, bindCtx := genBuilderAndCtx(t)
 
 	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select limit @page_size", 1)
 	require.NoError(t, err)
@@ -6057,7 +6125,7 @@ func TestQueryBuilderBindLimitKeepsVariableDynamic(t *testing.T) {
 }
 
 func TestQueryBuilder_bindValues(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindCtx := NewBindContext(builder, nil)
 
 	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from (values row(1)) as tmp(a)", 1)
@@ -6071,6 +6139,186 @@ func TestQueryBuilder_bindValues(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, int32(0), nodeID)
 	assert.Equal(t, 1, len(selectList))
+}
+
+func TestQueryBuilderBindValuesUsesColumnCommonType(t *testing.T) {
+	bindValues := func(t *testing.T, rows string) (*plan.Node, error) {
+		t.Helper()
+		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
+		bindCtx := NewBindContext(builder, nil)
+
+		stmts, err := parsers.Parse(
+			context.TODO(), dialect.MYSQL,
+			"select score from (values "+rows+") as tmp(score)", 1)
+		require.NoError(t, err)
+		tables := stmts[0].(*tree.Select).Select.(*tree.SelectClause).From.Tables
+		joinTable := tables[0].(*tree.JoinTableExpr)
+		aliasedTable := joinTable.Left.(*tree.AliasedTableExpr)
+		parenTable := aliasedTable.Expr.(*tree.ParenTableExpr)
+		valuesClause := parenTable.Expr.(*tree.Select).Select.(*tree.ValuesClause)
+
+		nodeID, _, err := builder.bindValues(bindCtx, valuesClause)
+		if err != nil {
+			return nil, err
+		}
+		return builder.qry.Nodes[nodeID], nil
+	}
+
+	for _, test := range []struct {
+		name        string
+		rows        string
+		oid         types.T
+		width       int32
+		scale       int32
+		notNullable bool
+	}{
+		{
+			name:        "decimal scale grows",
+			rows:        "row(26.27946), row(15.2667265)",
+			oid:         types.T_decimal64,
+			width:       9,
+			scale:       7,
+			notNullable: true,
+		},
+		{
+			name:        "decimal scale is order independent",
+			rows:        "row(15.2667265), row(26.27946)",
+			oid:         types.T_decimal64,
+			width:       9,
+			scale:       7,
+			notNullable: true,
+		},
+		{
+			name:  "bare null before decimal",
+			rows:  "row(null), row(26.27946)",
+			oid:   types.T_decimal64,
+			width: 7,
+			scale: 5,
+		},
+		{
+			name:  "bare null after decimal",
+			rows:  "row(26.27946), row(null)",
+			oid:   types.T_decimal64,
+			width: 7,
+			scale: 5,
+		},
+		{
+			name:  "all bare null",
+			rows:  "row(null), row(null)",
+			oid:   types.T_text,
+			width: 0,
+			scale: 0,
+		},
+		{
+			name:        "integer literal joins decimal precision",
+			rows:        "row(1), row(2.50)",
+			oid:         types.T_decimal64,
+			width:       3,
+			scale:       2,
+			notNullable: true,
+		},
+		{
+			name:        "datetime scale grows",
+			rows:        "row(cast('2024-01-02 12:34:56.123' as datetime(3))), row(cast('2024-01-02 12:34:56.123456' as datetime(6)))",
+			oid:         types.T_datetime,
+			width:       6,
+			scale:       6,
+			notNullable: true,
+		},
+		{
+			name:        "datetime scale is order independent",
+			rows:        "row(cast('2024-01-02 12:34:56.123456' as datetime(6))), row(cast('2024-01-02 12:34:56.123' as datetime(3)))",
+			oid:         types.T_datetime,
+			width:       6,
+			scale:       6,
+			notNullable: true,
+		},
+		{
+			name:        "char width grows",
+			rows:        "row(cast('a' as char(4))), row(cast('abcdefgh' as char(8)))",
+			oid:         types.T_char,
+			width:       8,
+			notNullable: true,
+		},
+		{
+			name:        "char width is order independent",
+			rows:        "row(cast('abcdefgh' as char(8))), row(cast('a' as char(4)))",
+			oid:         types.T_char,
+			width:       8,
+			notNullable: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			node, err := bindValues(t, test.rows)
+			require.NoError(t, err)
+			require.Len(t, node.TableDef.Cols, 1)
+			columnType := node.TableDef.Cols[0].Typ
+			require.Equal(t, int32(test.oid), columnType.Id)
+			require.Equal(t, test.width, columnType.Width)
+			require.Equal(t, test.scale, columnType.Scale)
+			require.Equal(t, test.notNullable, columnType.NotNullable)
+
+			require.Len(t, node.RowsetData.Cols, 1)
+			for _, row := range node.RowsetData.Cols[0].Data {
+				require.Equal(t, columnType.Id, row.Expr.Typ.Id)
+				require.Equal(t, columnType.Width, row.Expr.Typ.Width)
+				require.Equal(t, columnType.Scale, row.Expr.Typ.Scale)
+			}
+		})
+	}
+
+	t.Run("string comparison provenance", func(t *testing.T) {
+		for _, test := range []struct {
+			rows     string
+			padSpace bool
+		}{
+			{"row(coalesce(cast('a   ' as char(4)), cast('x' as varchar(8))))", true},
+			{"row(cast('a' as varchar(8))), row(cast('a   ' as char(4)))", true},
+			{"row(cast('a   ' as char(4))), row(cast('a' as varchar(8)))", true},
+			{"row(null), row(coalesce(cast('a   ' as char(4)), cast('x' as varchar(8))))", true},
+			{"row(cast(null as char(4))), row(cast('a' as varchar(8)))", true},
+			{"row(coalesce(cast('a   ' as char(4)), cast('x' as varchar(8)))), row(cast('a' as varchar(8)))", true},
+			{"row(null), row(null)", false},
+			{"row(cast('a   ' as varchar(8))), row(cast('a' as varchar(8)))", false},
+			{"row(concat(cast('a' as char(4)), '   '))", false},
+		} {
+			t.Run(test.rows, func(t *testing.T) {
+				node, err := bindValues(t, test.rows)
+				require.NoError(t, err)
+				require.Equal(t, test.padSpace, node.TableDef.Cols[0].Typ.PadSpace)
+			})
+		}
+	})
+
+	t.Run("vector remains vector", func(t *testing.T) {
+		node, err := bindValues(t, "row(cast('[1,2,3]' as vecf32(3)))")
+		require.NoError(t, err)
+		columnType := node.TableDef.Cols[0].Typ
+		require.Equal(t, int32(types.T_array_float32), columnType.Id)
+		require.Equal(t, int32(3), columnType.Width)
+		require.Len(t, node.RowsetData.Cols[0].Data, 1)
+		require.Equal(t, columnType.Id, node.RowsetData.Cols[0].Data[0].Expr.Typ.Id)
+		require.Equal(t, columnType.Width, node.RowsetData.Cols[0].Data[0].Expr.Typ.Width)
+	})
+
+	t.Run("parameter-only column remains unresolved", func(t *testing.T) {
+		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
+		exprs := []*plan.Expr{
+			{Typ: plan.Type{Id: int32(types.T_any)}},
+			{Typ: plan.Type{Id: int32(types.T_any)}},
+		}
+		commonType, err := builder.coerceValuesColumnToCommonType(exprs, []bool{false, false}, 0)
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_any), commonType.Id)
+		for _, expr := range exprs {
+			require.Equal(t, int32(types.T_any), expr.Typ.Id)
+		}
+	})
+
+	t.Run("incompatible vector and scalar types are rejected", func(t *testing.T) {
+		_, err := bindValues(t, "row(1), row(cast('[1,2,3]' as vecf32(3)))")
+		require.Error(t, err)
+	})
 }
 
 func TestQueryBuilderBuildValuesAndTableSubqueries(t *testing.T) {
@@ -6099,14 +6347,14 @@ func TestQueryBuilderBuildValuesAndTableSubqueries(t *testing.T) {
 			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
 
-			_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+			_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 			require.NoError(t, err)
 		})
 	}
 }
 
 func TestQueryBuilder_appendWhereNode(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindCtx := NewBindContext(builder, nil)
 
 	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select * from select_test.bind_select where a = 0", 1)
@@ -6136,7 +6384,7 @@ func TestQueryBuilder_appendWhereNode(t *testing.T) {
 func TestQueryBuilder_appendSampleNode(t *testing.T) {}
 
 func TestQueryBuilder_appendAggNode(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindCtx := NewBindContext(builder, nil)
 
 	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select group by a having a > 0", 1)
@@ -6176,7 +6424,7 @@ func TestQueryBuilder_appendAggNode(t *testing.T) {
 func TestQueryBuilder_appendTimeWindowNode(t *testing.T) {}
 
 func TestQueryBuilder_appendWindowNode(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	builder.sortSpillMem = 4096
 	bindCtx := NewBindContext(builder, nil)
 	bindCtx.groupTag = builder.GenNewBindTag()
@@ -6225,7 +6473,7 @@ func TestQueryBuilder_appendWindowNode(t *testing.T) {
 }
 
 func TestSplitWindowDependentHavingFilters_WithSubqueryChild(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindCtx := NewBindContext(builder, nil)
 	bindCtx.groupTag = builder.GenNewBindTag()
 	bindCtx.aggregateTag = builder.GenNewBindTag()
@@ -6254,7 +6502,7 @@ func TestSplitWindowDependentHavingFilters_WithSubqueryChild(t *testing.T) {
 }
 
 func TestQueryBuilder_appendProjectionNode(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindCtx := NewBindContext(builder, nil)
 
 	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select", 1)
@@ -6276,7 +6524,7 @@ func TestQueryBuilder_appendProjectionNode(t *testing.T) {
 }
 
 func TestQueryBuilder_appendDistinctNode(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindCtx := NewBindContext(builder, nil)
 
 	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select distinct a from select_test.bind_select", 1)
@@ -6296,7 +6544,7 @@ func TestQueryBuilder_appendDistinctNode(t *testing.T) {
 }
 
 func TestQueryBuilder_appendSortNode(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindCtx := NewBindContext(builder, nil)
 
 	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select order by a", 1)
@@ -6320,7 +6568,7 @@ func TestQueryBuilder_appendSortNode(t *testing.T) {
 }
 
 func TestQueryBuilder_appendResultProjectionNode(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindCtx := NewBindContext(builder, nil)
 
 	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select order by a", 1)
@@ -6349,7 +6597,7 @@ func TestQueryBuilder_appendResultProjectionNode(t *testing.T) {
 }
 
 func TestQueryBuilder_buildRemapErrorMessage(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, false)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, false)
 	builder.nameByColRef = map[[2]int32]string{
 		{1, 0}: "col1",
 		{1, 1}: "col2",
@@ -6847,7 +7095,7 @@ func TestBaseBinder_bindComparisonExpr(t *testing.T) {
 			sql:       "a LIKE ? ESCAPE ?",
 			expectErr: false,
 			setupFunc: func() (*QueryBuilder, *BindContext) {
-				builder, bindCtx := genBuilderAndCtx()
+				builder, bindCtx := genBuilderAndCtx(t)
 				builder.isPrepareStatement = true
 				return builder, bindCtx
 			},
@@ -6908,7 +7156,7 @@ func TestBaseBinder_bindComparisonExpr(t *testing.T) {
 			sql:       "string_col ILIKE 'test%'",
 			expectErr: false,
 			setupFunc: func() (*QueryBuilder, *BindContext) {
-				builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+				builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 				bindCtx := NewBindContext(builder, nil)
 				typ := types.T_varchar.ToType()
 				plan2Type := makePlan2Type(&typ)
@@ -6945,7 +7193,7 @@ func TestBaseBinder_bindComparisonExpr(t *testing.T) {
 			sql:       "string_col NOT ILIKE 'test%'",
 			expectErr: false,
 			setupFunc: func() (*QueryBuilder, *BindContext) {
-				builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+				builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 				bindCtx := NewBindContext(builder, nil)
 				typ := types.T_varchar.ToType()
 				plan2Type := makePlan2Type(&typ)
@@ -7151,7 +7399,7 @@ func TestBaseBinder_bindComparisonExpr(t *testing.T) {
 			sql:       "string_col REGEXP 'pattern'",
 			expectErr: false,
 			setupFunc: func() (*QueryBuilder, *BindContext) {
-				builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+				builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 				bindCtx := NewBindContext(builder, nil)
 				typ := types.T_varchar.ToType()
 				plan2Type := makePlan2Type(&typ)
@@ -7188,7 +7436,7 @@ func TestBaseBinder_bindComparisonExpr(t *testing.T) {
 			sql:       "string_col NOT REGEXP 'pattern'",
 			expectErr: false,
 			setupFunc: func() (*QueryBuilder, *BindContext) {
-				builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+				builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 				bindCtx := NewBindContext(builder, nil)
 				typ := types.T_varchar.ToType()
 				plan2Type := makePlan2Type(&typ)
@@ -7245,7 +7493,7 @@ func TestBaseBinder_bindComparisonExpr(t *testing.T) {
 			if tc.setupFunc != nil {
 				builder, bindCtx = tc.setupFunc()
 			} else {
-				builder, bindCtx = genBuilderAndCtx()
+				builder, bindCtx = genBuilderAndCtx(t)
 			}
 			whereBinder := NewWhereBinder(builder, bindCtx)
 
@@ -7290,7 +7538,7 @@ func TestBaseBinder_bindComparisonExpr(t *testing.T) {
 }
 
 func TestBaseBinderBindUnaryMinusMinInt64Literal(t *testing.T) {
-	builder, bindCtx := genBuilderAndCtx()
+	builder, bindCtx := genBuilderAndCtx(t)
 	whereBinder := NewWhereBinder(builder, bindCtx)
 
 	testCases := []struct {
@@ -7336,7 +7584,7 @@ func TestBaseBinderBindUnaryMinusMinInt64Literal(t *testing.T) {
 
 // TestBaseBinder_bindUnaryExpr tests bindUnaryExpr with various unary operators
 func TestBaseBinder_bindUnaryExpr(t *testing.T) {
-	builder, bindCtx := genBuilderAndCtx()
+	builder, bindCtx := genBuilderAndCtx(t)
 	whereBinder := NewWhereBinder(builder, bindCtx)
 
 	testCases := []struct {
@@ -7429,7 +7677,7 @@ func TestBaseBinder_bindUnaryExpr(t *testing.T) {
 
 // TestBaseBinder_bindBinaryExpr tests bindBinaryExpr with various binary operators
 func TestBaseBinder_bindBinaryExpr(t *testing.T) {
-	builder, bindCtx := genBuilderAndCtx()
+	builder, bindCtx := genBuilderAndCtx(t)
 	whereBinder := NewWhereBinder(builder, bindCtx)
 
 	testCases := []struct {
@@ -7616,7 +7864,7 @@ func TestBaseBinder_bindBinaryExpr(t *testing.T) {
 
 // TestBaseBinder_bindRangeCond tests bindRangeCond with BETWEEN and NOT BETWEEN
 func TestBaseBinder_bindRangeCond(t *testing.T) {
-	builder, bindCtx := genBuilderAndCtx()
+	builder, bindCtx := genBuilderAndCtx(t)
 	whereBinder := NewWhereBinder(builder, bindCtx)
 
 	testCases := []struct {
@@ -7709,7 +7957,7 @@ func TestBaseBinder_bindRangeCond(t *testing.T) {
 
 // TestBaseBinder_baseBindExpr tests baseBindExpr with various expression types
 func TestBaseBinder_baseBindExpr(t *testing.T) {
-	builder, bindCtx := genBuilderAndCtx()
+	builder, bindCtx := genBuilderAndCtx(t)
 	whereBinder := NewWhereBinder(builder, bindCtx)
 
 	testCases := []struct {
@@ -7897,7 +8145,7 @@ func TestAppendGroupingSetOrderByProjectsOrdinalOneWithinVisibleLen(t *testing.T
 //
 // bind_select has columns (a, b, c), so `*, count(*)` yields 4 visible columns.
 func TestGroupingSetOrderByOrdinalStarExpansion(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
 	// Valid visible ordinals (3 -> c, 4 -> count(*)) must be accepted even though
 	// the raw AST select list has only 2 entries.
@@ -7927,7 +8175,7 @@ func TestGroupingSetOrderByOrdinalStarExpansion(t *testing.T) {
 // grouping() ORDER BY key must sort by the appended hidden projection column,
 // not by a visible column shifted in by '*' expansion.
 func TestGroupingSetOrderByGroupingResolvesHiddenColumnWithStar(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
 	starPlan, err := runOneStmt(mock, t,
 		"select *, count(*) from select_test.bind_select group by a, b, c with rollup order by grouping(a)")
@@ -7970,7 +8218,7 @@ func firstSortColPos(t *testing.T, p *Plan) int32 {
 // columns and grouping(a) must sort by 0-based ColPos 3 — the same position as
 // in the explicit-column spelling.
 func TestGroupingSetDistinctOrderByStarExpansion(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
 	starPlan, err := runOneStmt(mock, t,
 		"select distinct *, grouping(a) as ga from select_test.bind_select group by a, b, c with rollup order by grouping(a)")
@@ -7992,7 +8240,7 @@ func TestGroupingSetDistinctOrderByStarExpansion(t *testing.T) {
 // select list. Nested names prefer source columns over aliases, matching the
 // ordinary distinctOrderBinder.
 func TestGroupingSetDistinctOrderByAliasShadowing(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
 	p, err := runOneStmt(mock, t,
 		"select distinct a as b, grouping(a) + b from select_test.bind_select group by a, b with rollup order by grouping(a) + b")
@@ -8008,7 +8256,7 @@ func TestGroupingSetDistinctOrderByAliasShadowing(t *testing.T) {
 }
 
 func TestGroupingSetDistinctOrderAliasResolutionParity(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 
 	_, err := runOneStmt(mock, t,
 		"select distinct grouping(a), abs(b) as b from select_test.bind_select "+
@@ -8029,7 +8277,7 @@ func TestGroupingSetDistinctOrderAliasResolutionParity(t *testing.T) {
 // t1 (bind_select) expands to 3 columns (a, b, c), so grouping(a) as ga lands
 // at 0-based ColPos 3.
 func TestGroupingSetDistinctOrderByBetweenStars(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
 	p, err := runOneStmt(mock, t,
 		"select distinct t1.*, grouping(a) as ga, t2.* from select_test.bind_select as t1, nation as t2 group by a, b, c, n_nationkey, n_name, n_regionkey, n_comment with rollup order by grouping(a)")
@@ -8038,7 +8286,7 @@ func TestGroupingSetDistinctOrderByBetweenStars(t *testing.T) {
 }
 
 func TestGroupingSetDistinctOrderByBoundIdentity(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
 	// The unqualified b in ORDER BY resolves unambiguously to t1.b and therefore
 	// matches the selected bound expression grouping(a) + t1.b.
@@ -8056,7 +8304,7 @@ func TestGroupingSetDistinctOrderByBoundIdentity(t *testing.T) {
 }
 
 func TestQualifyBoundGroupingOrderExprPreservesRelationIdentity(t *testing.T) {
-	_, bindCtx := genBuilderAndCtx()
+	_, bindCtx := genBuilderAndCtx(t)
 	t1 := bindCtx.bindings[0]
 	t1.table = "t1"
 	t1.tag = 1
@@ -8124,7 +8372,7 @@ func hasAggAboveUnionAll(p *Plan) bool {
 // survives) and a single DISTINCT step (rewritten to AGG) sits above the union.
 // The non-distinct form has no such de-dup step.
 func TestGroupingSetDistinctGlobalDedup(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	useLegacyGroupingSetPlan(t, mock)
 
 	distinctPlan, err := runOneStmt(mock, t,
@@ -8168,7 +8416,7 @@ func countAggInSingleChildBranch(nodes []*plan.Node, nodeID int32) int {
 }
 
 func TestGroupingSetDistinctKeepsBranchDedup(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	for _, test := range []struct {
 		name       string
 		groupBy    string
@@ -8205,7 +8453,7 @@ func TestGroupingSetDistinctKeepsBranchDedup(t *testing.T) {
 }
 
 func TestGroupingSetDistinctMaterializesVolatileProjectionOnce(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	tests := []struct {
 		name         string
 		groupBy      string
@@ -8249,7 +8497,7 @@ func TestGroupingSetDistinctMaterializesVolatileProjectionOnce(t *testing.T) {
 }
 
 func TestGroupingSetDistinctOrderByHiddenKeyAfterDedup(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 
 	p, err := runOneStmt(mock, t,
 		"select distinct a from select_test.bind_select group by a, b with rollup order by rand()")
@@ -8286,7 +8534,7 @@ func TestGroupingSetDistinctOrderByHiddenKeyAfterDedup(t *testing.T) {
 }
 
 func TestGroupingSetDistinctDerivedGroupingOrder(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	for _, testCase := range []struct {
 		name    string
 		groupBy string
@@ -8310,7 +8558,7 @@ func TestGroupingSetDistinctDerivedGroupingOrder(t *testing.T) {
 }
 
 func TestGroupingSetDistinctListGroupingOrder(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	for _, testCase := range []struct {
 		name    string
 		groupBy string
@@ -8354,7 +8602,7 @@ func TestGroupingSetDistinctListGroupingOrder(t *testing.T) {
 }
 
 func TestRemapGroupingSetDistinctOrderExprList(t *testing.T) {
-	builder, branchCtx := genBuilderAndCtx()
+	builder, branchCtx := genBuilderAndCtx(t)
 	unionCtx := NewBindContext(builder, nil)
 	unionCtx.projectTag = builder.GenNewBindTag()
 
@@ -8404,7 +8652,7 @@ func TestRemapGroupingSetDistinctOrderExprList(t *testing.T) {
 }
 
 func TestGroupingSetDistinctOrderProjectionBoundaries(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 
 	_, err := runOneStmt(mock, t,
 		"select distinct grouping(a) + b from select_test.bind_select "+
@@ -8432,7 +8680,7 @@ func TestGroupingSetDistinctOrderProjectionBoundaries(t *testing.T) {
 }
 
 func TestGroupingSetDistinctOrderAliasIdentity(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	queries := []string{
 		"select distinct grouping(a), abs(b) as x, abs(b) as y " +
 			"from select_test.bind_select group by a, b with rollup order by grouping(a) + y",
@@ -8450,7 +8698,7 @@ func TestGroupingSetDistinctOrderAliasIdentity(t *testing.T) {
 }
 
 func TestGroupingSetDistinctOrderKeepsNestedVolatileCall(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	p, err := runOneStmt(mock, t,
 		"select distinct grouping(a), rand() as r from select_test.bind_select "+
 			"group by a, b with rollup order by grouping(a) + rand()")
@@ -8502,7 +8750,7 @@ func TestGroupingSetDistinctVectorProjects(t *testing.T) {
 		types.T_array_uint8,
 	} {
 		t.Run(typ.String(), func(t *testing.T) {
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			vectorCol := mock.ctxt.tables["bind_select"].Cols[0]
 			vectorCol.Name = "v"
 			vectorCol.OriginName = "v"
@@ -8519,7 +8767,7 @@ func TestGroupingSetDistinctVectorProjects(t *testing.T) {
 func TestGroupingSetDistinctBinaryProjects(t *testing.T) {
 	for _, typ := range []types.T{types.T_binary, types.T_varbinary} {
 		t.Run(typ.String(), func(t *testing.T) {
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			binaryCol := mock.ctxt.tables["bind_select"].Cols[0]
 			binaryCol.Name = "v"
 			binaryCol.OriginName = "v"
@@ -8546,7 +8794,7 @@ func TestGroupingSetDistinctBinaryProjects(t *testing.T) {
 }
 
 func TestIffVectorCommonType(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	for _, query := range []string{
 		"select if(false, cast('[0,0]' as vecf32(2)), cast('[1.0000000001,2]' as vecf64(2)))",
 		"select if(false, cast('[1.0000000001,2]' as vecf64(2)), cast('[0,0]' as vecf32(2)))",
@@ -8596,7 +8844,7 @@ func TestIffVectorCommonType(t *testing.T) {
 }
 
 func TestNormalizeGroupingSetDistinctProjectsTypedNull(t *testing.T) {
-	builder, bindCtx := genBuilderAndCtx()
+	builder, bindCtx := genBuilderAndCtx(t)
 	for _, typ := range []types.T{
 		types.T_int64,
 		types.T_varchar,
@@ -8638,8 +8886,47 @@ func TestNormalizeGroupingSetDistinctProjectsTypedNull(t *testing.T) {
 		})
 	}
 
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	_, err := runOneStmt(mock, t,
 		"select distinct snapshot_id from mo_catalog.mo_snapshots group by snapshot_id with rollup")
 	require.NoError(t, err, "UUID grouping-set DISTINCT must build without an ANY-to-UUID cast")
+}
+
+func TestBoundViewReferencesSurviveNodeCompaction(t *testing.T) {
+	builder, root := buildViewForSQLModeTest(t, "constant", ViewData{
+		Stmt: "create view constant as select 42 as id", DefaultDatabase: "db", SecurityType: "DEFINER",
+	})
+	require.Len(t, builder.qry.ViewReferences, 1)
+	reference := builder.qry.ViewReferences[0]
+	require.Len(t, reference.ViewPath, 1)
+	require.Equal(t, "db", reference.ViewPath[0].DatabaseName)
+	require.Equal(t, "constant", reference.ViewPath[0].ViewName)
+	require.NotNil(t, reference.ViewPath[0].Snapshot.Tenant)
+	builder.qry.Steps = []int32{root}
+	optimizer := &BaseOptimizer{qry: builder.qry}
+	optimizer.pruneUsedNodes(builder.qry)
+	require.Equal(t, []*plan.ViewReference{reference}, builder.qry.ViewReferences)
+	// One nested hint overrides only its own view step; its sibling inherits
+	// the outer snapshot. The compiler snapshots themselves remain unchanged.
+	compiler := builder.compCtx.(*MockCompilerContext2)
+	compiler.EXPECT().GetSnapshot().Return(nil).AnyTimes()
+	outerSnapshot := &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 2}, Tenant: &plan.SnapshotTenant{TenantID: 9, TenantName: "outer"}}
+	innerSnapshot := &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 42, LogicalTime: 7}, Tenant: &plan.SnapshotTenant{TenantID: 9, TenantName: "inner"}}
+	compiler.EXPECT().ResolveSnapshotWithSnapshotName("inner").Return(innerSnapshot, nil).AnyTimes()
+	definition, err := json.Marshal(ViewData{Stmt: "create view wrapper as select id from db.constant {snapshot='inner'} union all select id from db.constant", DefaultDatabase: "db"})
+	require.NoError(t, err)
+	builder.qry.ViewReferences = nil
+	_, err = builder.bindView(NewBindContext(builder, nil), &plan.TableDef{ViewSql: &plan.ViewDef{View: string(definition)}}, outerSnapshot, &plan.ObjectRef{SchemaName: "db", ObjName: "wrapper"}, "db", "wrapper", nil)
+	require.NoError(t, err)
+	require.Len(t, builder.qry.ViewReferences, 3)
+	for i, want := range []*plan.Snapshot{innerSnapshot, outerSnapshot} {
+		path := builder.qry.ViewReferences[i].ViewPath
+		require.Len(t, path, 2)
+		require.Equal(t, "wrapper", path[0].ViewName)
+		require.Equal(t, outerSnapshot, path[0].Snapshot)
+		require.Equal(t, "constant", path[1].ViewName)
+		require.Equal(t, want, path[1].Snapshot)
+		require.NotSame(t, want, path[1].Snapshot)
+	}
+
 }

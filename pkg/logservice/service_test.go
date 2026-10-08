@@ -155,6 +155,11 @@ func TestNewServiceClosesStoreOnReplicaStartFailure(t *testing.T) {
 	var cfg Config
 	generate := func() Config {
 		cfg = genCfg()
+		// This fixture tests duplicate-replica startup cleanup, not remote
+		// membership discovery. An unrelated service at the default 32001
+		// address could classify the injected replica as a zombie and bypass
+		// the intended StartReplica failure. Self is excluded from that probe.
+		cfg.HAKeeperClientConfig.ServiceAddresses = []string{cfg.LogServiceServiceAddr()}
 		return cfg
 	}
 	defer vfs.ReportLeakedFD(fs, t)
@@ -176,6 +181,10 @@ func TestNewServiceClosesStoreOnReplicaStartFailure(t *testing.T) {
 	require.NoError(t, createMetadataFile(cfg.DataDir, logMetadataFilename, &md, cfg.FS))
 
 	service, err = NewServiceWithRetry(generate, newFS(), nil)
+	if service != nil {
+		unexpected := service
+		t.Cleanup(func() { require.NoError(t, unexpected.Close()) })
+	}
 	require.Nil(t, service)
 	require.ErrorIs(t, err, dragonboat.ErrShardAlreadyExist)
 
@@ -356,6 +365,12 @@ func TestServiceHandleLogHeartbeat(t *testing.T) {
 			s.store.addScheduleCommands(ctx, 1, []pb.ScheduleCommand{sc1, sc2, sc3}))
 		resp := s.handleLogHeartbeat(ctx, req)
 		require.Equal(t, []pb.ScheduleCommand{sc1, sc3}, resp.CommandBatch.Commands)
+		require.Len(t, s.store.hakeeperCheckWakeup, 1)
+		<-s.store.hakeeperCheckWakeup
+		resp = s.handleLogHeartbeat(ctx, req)
+		require.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		require.Empty(t, resp.CommandBatch.Commands)
+		require.Empty(t, s.store.hakeeperCheckWakeup)
 	}
 	runServiceTest(t, true, true, fn)
 }
@@ -374,6 +389,12 @@ func TestServiceHandleCNHeartbeat(t *testing.T) {
 		resp := s.handleCNHeartbeat(ctx, req)
 		assert.Equal(t, &pb.CommandBatch{}, resp.CommandBatch)
 		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		require.Len(t, s.store.hakeeperCheckWakeup, 1)
+		<-s.store.hakeeperCheckWakeup
+		resp = s.handleCNHeartbeat(ctx, req)
+		require.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		require.Empty(t, resp.CommandBatch.Commands)
+		require.Empty(t, s.store.hakeeperCheckWakeup)
 	}
 	runServiceTest(t, true, true, fn)
 }
@@ -417,6 +438,12 @@ func TestServiceHandleTNHeartbeat(t *testing.T) {
 			s.store.addScheduleCommands(ctx, 1, []pb.ScheduleCommand{sc1, sc2, sc3}))
 		resp := s.handleTNHeartbeat(ctx, req)
 		require.Equal(t, []pb.ScheduleCommand{sc1, sc3}, resp.CommandBatch.Commands)
+		require.Len(t, s.store.hakeeperCheckWakeup, 1)
+		<-s.store.hakeeperCheckWakeup
+		resp = s.handleTNHeartbeat(ctx, req)
+		require.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
+		require.Empty(t, resp.CommandBatch.Commands)
+		require.Empty(t, s.store.hakeeperCheckWakeup)
 	}
 	runServiceTest(t, true, true, fn)
 }

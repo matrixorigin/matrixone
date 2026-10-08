@@ -106,7 +106,7 @@ func (ctr *container) generateCompares(fs []*plan.OrderBySpec) {
 		}
 
 		exprTyp := fs[i].Expr.Typ
-		typ := types.NewWithCharset(types.T(exprTyp.Id), exprTyp.Width, exprTyp.Scale, uint8(exprTyp.Charset))
+		typ := types.MustTypeFromPlan(exprTyp)
 		ctr.compares[i] = compare.NewOrder(typ, desc, nullsLast)
 	}
 }
@@ -311,7 +311,7 @@ func (ctr *container) advanceInMemoryBatchByChunk(proc *process.Process, index i
 func (ctr *container) removeInMemoryBatch(proc *process.Process, index int) error {
 	bat := ctr.batchList[index]
 	cols := ctr.orderCols[index]
-	ctr.spillMemUsage -= int64(bat.Size())
+	ctr.spillMemUsage -= int64(bat.Allocated())
 	if ctr.inMemoryHeap != nil {
 		heap.Remove(ctr.inMemoryHeap, ctr.inMemoryHeapPos[index])
 	}
@@ -496,12 +496,25 @@ func (mergeOrder *MergeOrder) Prepare(proc *process.Process) (err error) {
 
 	ctr := &mergeOrder.ctr
 	ctr.setSpillThreshold(mergeOrder.SpillThreshold)
+	registeredGrowth := false
 	if ctr.allocationAccount != nil {
 		ctr.budget, err = proc.GetExecutionResourceBudget()
 		if err != nil {
 			return err
 		}
+		if ctr.growthParticipant == nil {
+			ctr.growthParticipant, err = ctr.budget.RegisterMemoryGrowthParticipant()
+			if err != nil {
+				return err
+			}
+			registeredGrowth = true
+		}
 	}
+	defer func() {
+		if err != nil && registeredGrowth {
+			ctr.releaseGrowthParticipant()
+		}
+	}()
 	if len(mergeOrder.ctr.executors) == 0 {
 		ctr.batchList = make([]*batch.Batch, 0, defaultCacheBatchSize)
 		ctr.orderCols = make([][]*vector.Vector, 0, defaultCacheBatchSize)
@@ -556,6 +569,7 @@ func (mergeOrder *MergeOrder) Call(
 			}
 
 			if input.Batch == nil {
+				ctr.releaseGrowthParticipant()
 				// The child may cancel the process while returning EOF, after this
 				// MergeOrder invocation has passed vm.Exec's entry cancellation check.
 				if err, canceled := vm.CancelCheck(proc); canceled {
@@ -600,7 +614,7 @@ func (mergeOrder *MergeOrder) Call(
 				return vm.CancelResult, evalErr
 			}
 
-			if ctr.shouldSpill(int64(input.Batch.Size())) || len(ctr.batchList) >= maxResidentBatches {
+			if ctr.shouldSpill(int64(input.Batch.Allocated())) || len(ctr.batchList) >= maxResidentBatches {
 				if !ctr.spilling {
 					ctr.generateCompares(mergeOrder.OrderBySpecs)
 					if err = ctr.spillCachedRuns(proc, analyzer); err != nil {
@@ -656,7 +670,7 @@ func (mergeOrder *MergeOrder) Call(
 			analyzer.Alloc(int64(bat.Size()))
 			ctr.batchList = append(ctr.batchList, bat)
 			ctr.orderCols = append(ctr.orderCols, orderCols)
-			ctr.spillMemUsage += int64(bat.Size())
+			ctr.spillMemUsage += int64(bat.Allocated())
 			if ctr.shouldSpill(0) {
 				if err = ctr.spillCachedRuns(proc, analyzer); err != nil {
 					return vm.CancelResult, err

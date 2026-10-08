@@ -112,18 +112,38 @@ func fixedTypeCastRule1(s1, s2 types.Type) (bool, types.Type, types.Type) {
 // domain as UINT64 with a signed bigint. Keeping this adjustment here, rather
 // than changing fixedTypeCastRule1, leaves comparison coercion unchanged.
 func arithmeticTypeCastRule1(s1, s2 types.Type) (bool, types.Type, types.Type) {
+	// JSON is a dynamic scalar domain. Numeric arithmetic must retain its
+	// fractional values instead of borrowing an integer peer's domain.
+	hasJSON := s1.Oid == types.T_json || s2.Oid == types.T_json
+	s1, s2 = numericJSONType(s1), numericJSONType(s2)
+	if temporalArithmeticUsesFloat(s1, s2) {
+		// Temporal values participate as packed numeric values. Approximate or
+		// string operands select DOUBLE without discarding fractional seconds.
+		return true, types.T_float64.ToType(), types.T_float64.ToType()
+	}
 	if s1.Oid == types.T_bit && s2.Oid == types.T_int64 {
 		s1.Oid = types.T_uint64
 	} else if s1.Oid == types.T_int64 && s2.Oid == types.T_bit {
 		s2.Oid = types.T_uint64
 	}
-	return fixedTypeCastRule1(s1, s2)
+	cast, left, right := fixedTypeCastRule1(s1, s2)
+	return cast || hasJSON, left, right
+}
+
+func temporalArithmeticUsesFloat(left, right types.Type) bool {
+	return (left.Oid.IsDateRelate() && (right.Oid.IsFloat() || right.Oid.IsMySQLString())) ||
+		(right.Oid.IsDateRelate() && (left.Oid.IsFloat() || left.Oid.IsMySQLString()))
 }
 
 // a fixed type cast rule for
 //  1. Div
 //  2. IntegerDiv
 func fixedTypeCastRule2(s1, s2 types.Type) (bool, types.Type, types.Type) {
+	hasJSON := s1.Oid == types.T_json || s2.Oid == types.T_json
+	s1, s2 = numericJSONType(s1), numericJSONType(s2)
+	if temporalArithmeticUsesFloat(s1, s2) {
+		return true, types.T_float64.ToType(), types.T_float64.ToType()
+	}
 	check := fixedBinaryCastRule2[s1.Oid][s2.Oid]
 	if check.cast {
 		t1, t2 := check.left.ToType(), check.right.ToType()
@@ -171,7 +191,14 @@ func fixedTypeCastRule2(s1, s2 types.Type) (bool, types.Type, types.Type) {
 
 		return true, t1, t2
 	}
-	return false, s1, s2
+	return hasJSON, s1, s2
+}
+
+func numericJSONType(source types.Type) types.Type {
+	if source.Oid == types.T_json {
+		return types.T_float64.ToType()
+	}
+	return source
 }
 
 type matchCheckStatus int
@@ -185,6 +212,88 @@ const (
 // a fixed type match method.
 func fixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 	return fixedTypeMatchExcept(overloads, inputs, -1)
+}
+
+// Native temporal inputs avoid formatting and reparsing. Other inputs retain
+// the historical character coercion (including numeric and NULL arguments).
+func lastDayTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) == 1 {
+		if inputs[0].Oid == types.T_date {
+			return fixedTypeMatchOnly(overloads, inputs, 2)
+		}
+		if inputs[0].Oid == types.T_datetime {
+			return fixedTypeMatchOnly(overloads, inputs, 3)
+		}
+	}
+	return fixedTypeMatch(overloads[:2], inputs)
+}
+
+// Persisted 4.2 expressions keep overloads 0..4 and their original physical
+// results. Only newly bound EXTRACT expressions select the numeric results.
+func extractNumericTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	// A marker or text column must reach the same tolerant parser as a
+	// VARCHAR literal. Choosing DATETIME by overload order would reject
+	// durations and partial/zero calendars before EXTRACT sees them.
+	if len(inputs) == 2 && (inputs[1].Oid.IsMySQLString() || inputs[1].Oid == types.T_any) {
+		r := fixedTypeMatch(overloads[8:9], inputs)
+		if r.status == succeedMatched || r.status == succeedWithCast {
+			r.idx += 8
+		}
+		return r
+	}
+	r := fixedTypeMatch(overloads[5:], inputs)
+	if r.status == succeedMatched || r.status == succeedWithCast {
+		r.idx += 5
+	}
+	return r
+}
+
+func addTimeTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	return timeArithmeticTypeMatch(overloads, inputs, 9)
+}
+
+func subTimeTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	return timeArithmeticTypeMatch(overloads, inputs, 11)
+}
+
+func timeArithmeticTypeMatch(overloads []overload, inputs []types.Type, legacyCount int) checkResult {
+	r := fixedTypeMatch(overloads[:legacyCount], inputs)
+	if len(inputs) == 2 && (inputs[1].Oid == types.T_float32 || inputs[1].Oid == types.T_float64) &&
+		r.status == succeedWithCast && len(r.finalType) == 2 &&
+		(r.finalType[1].Oid == types.T_varchar || r.finalType[1].Oid == types.T_char) {
+		// FLOAT has no declared decimal scale, but its duration can carry
+		// microseconds. The implicit text cast must not force FSP 0.
+		r.finalType[1].Scale = 6
+	}
+	if (r.status == succeedMatched || r.status == succeedWithCast) && r.idx >= 6 {
+		// The input signatures are unchanged; string results are appended
+		// after the legacy DATETIME-producing string overloads.
+		r.idx += legacyCount - 6
+	}
+	return r
+}
+
+// inetNtoaTypeMatch keeps native numeric inputs on their existing, allocation-
+// free executors while routing value-domain inputs through INET_NTOA's local
+// dynamic executor. This is deliberately a function-local matcher: adding
+// BOOL/temporal/string conversions to the global implicit-cast lattice would
+// silently change unrelated overload resolution.
+func inetNtoaTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) != 1 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	prefer := inputs[0].Oid
+	switch prefer {
+	case types.T_any, types.T_bool, types.T_date, types.T_datetime, types.T_timestamp,
+		types.T_time, types.T_year, types.T_json, types.T_char, types.T_varchar, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_blob:
+		for i, over := range overloads {
+			if len(over.args) == 1 && over.args[0] == prefer {
+				return newCheckResultWithSuccess(i)
+			}
+		}
+	}
+	return fixedTypeMatch(overloads, inputs)
 }
 
 // fixedTypeMatchExcept is the fixed matcher with one overload omitted. Keeping
@@ -241,6 +350,7 @@ func fixedTypeMatchSelection(overloads []overload, inputs []types.Type, excluded
 				// collation. Retaining it here prevents an implicit overload cast
 				// from erasing metadata before a derived-string return callback runs.
 				castType[i].Charset = inputs[i].Charset
+				castType[i].CollationVersion = inputs[i].CollationVersion
 			}
 		}
 	}
@@ -397,71 +507,33 @@ func stringDomainFixedTypeMatch(overloads []overload, inputs []types.Type) check
 	return stringDomainFixedTypeMatchIf(overloads, inputs, func(oid types.T) bool { return oid.IsMySQLString() })
 }
 
-// hexTypeMatch keeps HEX's byte-preserving string domains while treating BOOL
-// as the numeric value 0/1. BOOL must not be added to the global implicit-cast
-// lattice because unrelated string/binary functions intentionally stringify it.
-func hexTypeMatch(overloads []overload, inputs []types.Type) checkResult {
-	if len(inputs) == 1 {
-		switch inputs[0].Oid {
-		case types.T_bool:
-			return fixedTypeMatchWithBoolNumericCast(overloads, inputs)
-		case types.T_float32:
-			return newCheckResultWithSuccess(HexFloat32Overload)
-		case types.T_float64:
-			return newCheckResultWithSuccess(HexFloat64Overload)
-		}
-	}
-	return stringDomainFixedTypeMatch(overloads, inputs)
-}
-
-// sha2TypeMatch defers an unknown hash-length operand to SHA2's string
-// overload. A parameter marker is represented as T_any during prepare, but a
-// later execution may bind a character value such as "256tail". Resolving it
-// to the BIGINT overload at prepare time would perform a strict cast before
-// SHA2 can apply MySQL's prefix conversion.
-func sha2TypeMatch(overloads []overload, inputs []types.Type) checkResult {
-	if len(inputs) == 2 && inputs[1].Oid == types.T_any {
-		for i, ov := range overloads {
-			if len(ov.args) == 2 && ov.args[0] == types.T_varchar && ov.args[1] == types.T_varchar {
-				return stringDomainMatchSingleOverload(overloads, inputs, i)
+// spatialDistanceTypeMatch keeps the historical integer third argument for
+// ST_DISTANCE while making a statically string-backed third argument select
+// the MySQL length-unit overload. fixedTypeMatch treats both conversions as
+// equally valid and then lets registration order choose the SRID overload,
+// which makes a TEXT column containing "kilometre" fail at execution time.
+// T_any remains ambiguous and intentionally follows the legacy SRID overload;
+// the prepared execution rebinder can select the unit overload once the value
+// domain is known.
+func spatialDistanceTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	// The two-argument Fréchet/Hausdorff contracts were corrected to use
+	// geodetic meters for SRID 4326. Keep overloads 0/1 as the historical
+	// planar identities for old serialized plans, and select the new 4/5
+	// identities for newly bound SQL. ST_DISTANCE has no such two-argument
+	// replacement, so the shape check below leaves it on the ordinary matcher.
+	if len(inputs) == 2 {
+		for i := 4; i < len(overloads); i++ {
+			if len(overloads[i].args) == 2 &&
+				overloads[i].args[0] == inputs[0].Oid &&
+				overloads[i].args[1] == inputs[1].Oid {
+				return newCheckResultWithSuccess(i)
 			}
 		}
 	}
-	return stringDomainFixedTypeMatch(overloads, inputs)
-}
-
-func stringDomainMatchSingleOverload(overloads []overload, inputs []types.Type, index int) checkResult {
-	if index < 0 || index >= len(overloads) || len(overloads[index].args) != len(inputs) {
-		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	if len(inputs) == 3 && inputs[2].Oid.IsMySQLString() {
+		return stringDomainFixedTypeMatch(overloads, inputs)
 	}
-
-	ov := overloads[index]
-	targets := make([]types.Type, len(inputs))
-	needsCast := false
-	for i, expected := range ov.args {
-		if expected.IsMySQLString() && inputs[i].Oid.IsMySQLString() {
-			targets[i] = inputs[i]
-			continue
-		}
-		status, _ := tryToMatch([]types.Type{inputs[i]}, []types.T{expected})
-		if status == matchFailed {
-			return newCheckResultWithFailure(failedFunctionParametersWrong)
-		}
-		if status == matchByCast {
-			needsCast = true
-			targets[i] = expected.ToType()
-			if expected == types.T_varchar && !inputs[i].Oid.IsMySQLString() {
-				targets[i] = formattedScalarStringType(inputs[i])
-			}
-			SetTargetScaleFromSource(&inputs[i], &targets[i])
-		} else {
-			targets[i] = inputs[i]
-		}
-	}
-	if needsCast {
-		return newCheckResultWithCast(index, targets)
-	}
-	return newCheckResultWithSuccess(index)
+	return fixedTypeMatch(overloads, inputs)
 }
 
 // crc32TypeMatch retains CRC32's historical acceptance of every varlen type
@@ -774,6 +846,22 @@ func fixedImplicitTypeCast(from types.Type, to types.T) (canCast bool, cost int)
 	return rule.canCast, rule.preferLevel
 }
 
+// Opaque aggregate states use bytes from any SQL string domain. Keep their
+// physical ABI VARBINARY without imposing the SQL default width on the state.
+func opaqueStateTypeCheck(inputs []types.Type, failure overloadCheckSituation) checkResult {
+	if len(inputs) == 1 {
+		if inputs[0].Oid == types.T_varbinary {
+			return newCheckResultWithSuccess(0)
+		}
+		if inputs[0].Oid == types.T_any || inputs[0].Oid.IsMySQLString() {
+			target := types.T_varbinary.ToType()
+			target.Width = 0
+			return newCheckResultWithCast(0, []types.Type{target})
+		}
+	}
+	return newCheckResultWithFailure(failure)
+}
+
 // a fixed type check method for Agg(only one column).
 // do not do any implicit type conversion.
 func fixedUnaryAggTypeCheck(inputs []types.Type, supported []types.T) checkResult {
@@ -900,6 +988,50 @@ func SetTargetScaleFromSource(source, target *types.Type) {
 		}
 		return
 	}
+}
+
+func isTemporalFSPType(oid types.T) bool {
+	return oid == types.T_time || oid == types.T_datetime || oid == types.T_timestamp
+}
+
+// commonTemporalType makes the FSP part of conditional-type resolution rather
+// than leaving it to whichever branch happens to win overload ordering. A
+// temporal value with a larger FSP must not be cast through a scale-zero
+// target, otherwise the executor loses fractional digits before CASE/IF or
+// COALESCE can select the branch.
+func commonTemporalType(result types.Type, source []types.Type) types.Type {
+	if !isTemporalFSPType(result.Oid) {
+		return result
+	}
+	maxScale := result.Scale
+	if maxScale < 0 {
+		maxScale = 0
+	}
+	for _, typ := range source {
+		if isTemporalFSPType(typ.Oid) && typ.Scale > maxScale {
+			maxScale = typ.Scale
+		}
+	}
+	result.Scale = maxScale
+	// Plan temporal widths are the display/FSP marker. A default overload type
+	// has width zero; materialize the selected precision there, while retaining
+	// a caller-provided physical/test width when it is already meaningful.
+	if maxScale > 0 && result.Width <= 0 {
+		result.Width = maxScale
+	}
+	return result
+}
+
+func needTemporalMetadataCast(source []types.Type, target types.Type) bool {
+	if !isTemporalFSPType(target.Oid) {
+		return false
+	}
+	for _, typ := range source {
+		if typ.Oid != target.Oid || typ.Scale != target.Scale {
+			return true
+		}
+	}
+	return false
 }
 
 func setMaxScaleFromSource(t *types.Type, source []types.Type) {

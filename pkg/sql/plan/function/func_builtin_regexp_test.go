@@ -559,7 +559,7 @@ func Test_BuiltIn_RegexpBinaryPositions(t *testing.T) {
 				},
 				NewFunctionTestResult(types.T_int64.ToType(), false, []int64{4}, nil),
 				newOpBuiltInRegexp().builtInRegexpInstr)
-			ok, info := instr.Run()
+			ok, info := instr.RunAndFree()
 			require.True(t, ok, info)
 
 			instrEnd := NewFunctionTestCase(proc,
@@ -572,7 +572,7 @@ func Test_BuiltIn_RegexpBinaryPositions(t *testing.T) {
 				},
 				NewFunctionTestResult(types.T_int64.ToType(), false, []int64{7}, nil),
 				newOpBuiltInRegexp().builtInRegexpInstr)
-			ok, info = instrEnd.Run()
+			ok, info = instrEnd.RunAndFree()
 			require.True(t, ok, info)
 
 			substr := NewFunctionTestCase(proc,
@@ -583,7 +583,7 @@ func Test_BuiltIn_RegexpBinaryPositions(t *testing.T) {
 				},
 				NewFunctionTestResult(types.T_varbinary.ToType(), false, []string{"中"}, nil),
 				newOpBuiltInRegexp().builtInRegexpSubstr)
-			ok, info = substr.Run()
+			ok, info = substr.RunAndFree()
 			require.True(t, ok, info)
 
 			replace := NewFunctionTestCase(proc,
@@ -596,7 +596,7 @@ func Test_BuiltIn_RegexpBinaryPositions(t *testing.T) {
 				},
 				NewFunctionTestResult(types.T_varbinary.ToType(), false, []string{"中X"}, nil),
 				newOpBuiltInRegexp().builtInRegexpReplace)
-			ok, info = replace.Run()
+			ok, info = replace.RunAndFree()
 			require.True(t, ok, info)
 		})
 	}
@@ -799,6 +799,7 @@ func Test_BuiltIn_RegexpUsesRowStringDomainAndSurvivesRebind(t *testing.T) {
 	instr := NewFunctionTestCase(proc, inputs,
 		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{4, 2}, nil),
 		op.builtInRegexpInstr)
+	defer instr.Free()
 	require.NoError(t, instr.parameters[0].SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringBinary, proc.Mp()))
 	ok, info := instr.Run()
 	require.True(t, ok, info)
@@ -806,6 +807,7 @@ func Test_BuiltIn_RegexpUsesRowStringDomainAndSurvivesRebind(t *testing.T) {
 	substr := NewFunctionTestCase(proc, inputs,
 		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"中", "中"}, nil),
 		op.builtInRegexpSubstr)
+	defer substr.Free()
 	require.NoError(t, substr.parameters[0].SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringBinary, proc.Mp()))
 	ok, info = substr.Run()
 	require.True(t, ok, info)
@@ -836,6 +838,7 @@ func Test_BuiltIn_RegexpUsesRowStringDomainAndSurvivesRebind(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"中X", "中X"}, nil),
 		op.builtInRegexpReplace)
+	defer replace.Free()
 	require.NoError(t, replace.parameters[0].SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringBinary, proc.Mp()))
 	ok, info = replace.Run()
 	require.True(t, ok, info)
@@ -854,7 +857,7 @@ func Test_BuiltIn_RegexpUsesMatchOperandDomain(t *testing.T) {
 
 	for _, tc := range []struct {
 		name string
-		fn   fEvalFn
+		fn   executeLogicOfOverload
 	}{
 		{name: "regexp", fn: newOpBuiltInRegexp().builtInRegMatch},
 		{name: "not_regexp", fn: newOpBuiltInRegexp().builtInNotRegMatch},
@@ -871,6 +874,7 @@ func Test_BuiltIn_RegexpUsesMatchOperandDomain(t *testing.T) {
 					NewFunctionTestInput(varchar, []string{"..", ".."}, nil),
 				},
 				NewFunctionTestResult(types.T_bool.ToType(), false, want, nil), tc.fn)
+			defer testCase.Free()
 			setFirstRowBinary(t, &testCase, 1)
 			ok, info := testCase.Run()
 			require.True(t, ok, info)
@@ -885,6 +889,7 @@ func Test_BuiltIn_RegexpUsesMatchOperandDomain(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{4, 2}, nil),
 		newOpBuiltInRegexp().builtInRegexpInstr)
+	defer instr.Free()
 	setFirstRowBinary(t, &instr, 1)
 	ok, info := instr.Run()
 	require.True(t, ok, info)
@@ -897,6 +902,7 @@ func Test_BuiltIn_RegexpUsesMatchOperandDomain(t *testing.T) {
 		},
 		NewFunctionTestResult(varchar, false, []string{"中", "中"}, nil),
 		newOpBuiltInRegexp().builtInRegexpSubstr)
+	defer substr.Free()
 	setFirstRowBinary(t, &substr, 1)
 	ok, info = substr.Run()
 	require.True(t, ok, info)
@@ -921,6 +927,7 @@ func Test_BuiltIn_RegexpUsesMatchOperandDomain(t *testing.T) {
 				},
 				NewFunctionTestResult(varchar, false, tc.want, nil),
 				newOpBuiltInRegexp().builtInRegexpReplace)
+			defer replace.Free()
 			setFirstRowBinary(t, &replace, tc.binaryParameter)
 			setFirstRowBinary(t, &replace, 2)
 			ok, info := replace.Run()
@@ -961,6 +968,7 @@ func Test_BuiltIn_RegexpUsesMatchOperandDomain(t *testing.T) {
 			replace := NewFunctionTestCase(proc, inputs,
 				NewFunctionTestResult(varchar, false, []string{tc.want}, nil),
 				newOpBuiltInRegexp().builtInRegexpReplace)
+			defer replace.Free()
 			setFirstRowBinary(t, &replace, 2)
 			ok, info := replace.Run()
 			require.True(t, ok, info)
@@ -979,6 +987,7 @@ func Test_BuiltIn_RegexpUsesMatchOperandDomain(t *testing.T) {
 		},
 		NewFunctionTestResult(varchar, false, []string{"X"}, nil),
 		newOpBuiltInRegexp().builtInRegexpReplace)
+	defer replaceWithUnicodePattern.Free()
 	setFirstRowBinary(t, &replaceWithUnicodePattern, 2)
 	ok, info = replaceWithUnicodePattern.Run()
 	require.True(t, ok, info)
@@ -1065,7 +1074,7 @@ func Test_BuiltIn_RegexpHonorsSelectList(t *testing.T) {
 		name     string
 		inputs   []FunctionTestInput
 		expected FunctionTestResult
-		fn       fEvalFn
+		fn       executeLogicOfOverload
 	}{
 		{
 			name: "instr",
@@ -1155,7 +1164,7 @@ func Test_BuiltIn_RegexpHonorsSelectList(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ft := NewFunctionTestCase(proc, tc.inputs, tc.expected, tc.fn).WithSelectList(maskedSecond)
-			ok, info := ft.Run()
+			ok, info := ft.RunAndFree()
 			require.True(t, ok, info)
 		})
 	}
@@ -1168,21 +1177,22 @@ func TestRegexpFunctionsPreserveBinaryOverloadDomain(t *testing.T) {
 		int64Type := types.T_int64.ToType()
 		int8Type := types.T_int8.ToType()
 		for _, tc := range []struct {
-			name string
-			args []types.Type
+			name     string
+			args     []types.Type
+			wantCast bool
 		}{
 			{name: "ord", args: []types.Type{subject}},
 			{name: "regexp_instr", args: []types.Type{subject, subject}},
 			{name: "regexp_substr", args: []types.Type{subject, subject}},
 			{name: "regexp_replace", args: []types.Type{subject, subject, subject}},
-			{name: "regexp_instr", args: []types.Type{subject, subject, int64Type, int64Type, int8Type, text}},
+			{name: "regexp_instr", args: []types.Type{subject, subject, int64Type, int64Type, int8Type, text}, wantCast: true},
 			{name: "regexp_substr", args: []types.Type{subject, subject, int64Type, int64Type, text}},
 			{name: "regexp_replace", args: []types.Type{subject, subject, subject, int64Type, int64Type, text}},
 		} {
 			resolved, err := GetFunctionByName(context.Background(), tc.name, tc.args)
 			require.NoError(t, err)
 			_, needsCast := resolved.ShouldDoImplicitTypeCast()
-			require.False(t, needsCast, "%s(%s)", tc.name, oid)
+			require.Equal(t, tc.wantCast, needsCast, "%s(%s)", tc.name, oid)
 			if tc.name == "regexp_substr" || tc.name == "regexp_replace" {
 				require.Equal(t, types.StringDomainBinary, types.StaticStringDomain(resolved.GetReturnType()))
 			}
@@ -1525,7 +1535,7 @@ func Test_BuiltIn_RegexpEmptySubject(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		name     string
-		fn       fEvalFn
+		fn       executeLogicOfOverload
 		expected FunctionTestResult
 	}{
 		{
@@ -1546,7 +1556,7 @@ func Test_BuiltIn_RegexpEmptySubject(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tcc := NewFunctionTestCase(proc, defaultInputs, tc.expected, tc.fn)
-			succeed, errInfo := tcc.Run()
+			succeed, errInfo := tcc.RunAndFree()
 			require.True(t, succeed, errInfo)
 		})
 	}
@@ -1555,7 +1565,7 @@ func Test_BuiltIn_RegexpEmptySubject(t *testing.T) {
 		NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 1, 1, 1}, []bool{false, false, false, false}))
 	for _, tc := range []struct {
 		name     string
-		fn       fEvalFn
+		fn       executeLogicOfOverload
 		expected FunctionTestResult
 	}{
 		{
@@ -1571,7 +1581,7 @@ func Test_BuiltIn_RegexpEmptySubject(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tcc := NewFunctionTestCase(proc, explicitInputs, tc.expected, tc.fn)
-			succeed, errInfo := tcc.Run()
+			succeed, errInfo := tcc.RunAndFree()
 			require.True(t, succeed, errInfo)
 		})
 	}
@@ -1627,6 +1637,7 @@ func Test_BuiltIn_RegexpEmptySubject(t *testing.T) {
 			tcc := NewFunctionTestCase(proc, inputs,
 				NewFunctionTestResult(types.T_int64.ToType(), false, nil, nil),
 				op.builtInRegexpInstr)
+			defer tcc.Free()
 			_, err := tcc.DebugRun()
 			require.Error(t, err)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
@@ -1710,6 +1721,7 @@ func Test_BuiltIn_RegexpLikeRebindsBinaryCaseSensitivity(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, nil),
 		newOpBuiltInRegexp().builtInRegexpLike)
+	defer testCase.Free()
 
 	testCase.parameters[0].SetIsBinaryString(true)
 	testCase.parameters[1].SetIsBinaryString(true)
@@ -1741,7 +1753,7 @@ func Test_BuiltIn_RegexpValueFunctionsRejectEmptyPattern(t *testing.T) {
 
 	for _, tc := range []struct {
 		name       string
-		fn         fEvalFn
+		fn         executeLogicOfOverload
 		inputs     []FunctionTestInput
 		resultType types.Type
 	}{
@@ -1759,7 +1771,7 @@ func Test_BuiltIn_RegexpValueFunctionsRejectEmptyPattern(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			tcc := NewFunctionTestCase(
 				proc, tc.inputs, NewFunctionTestResult(tc.resultType, true, nil, nil), tc.fn)
-			require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
+			defer tcc.Free()
 			_, err := tcc.DebugRun()
 			require.Error(t, err)
 			var moErr *moerr.Error
@@ -1796,7 +1808,7 @@ func Test_BuiltIn_RegexpValidatesPresentArgumentsBeforeNullableResult(t *testing
 
 	for _, tc := range []struct {
 		name       string
-		fn         fEvalFn
+		fn         executeLogicOfOverload
 		inputs     []FunctionTestInput
 		resultType types.Type
 	}{
@@ -1822,7 +1834,7 @@ func Test_BuiltIn_RegexpValidatesPresentArgumentsBeforeNullableResult(t *testing
 		t.Run(tc.name, func(t *testing.T) {
 			tcc := NewFunctionTestCase(
 				proc, tc.inputs, NewFunctionTestResult(tc.resultType, true, nil, nil), tc.fn)
-			require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
+			defer tcc.Free()
 			_, err := tcc.DebugRun()
 			require.Error(t, err)
 		})
@@ -1831,7 +1843,7 @@ func Test_BuiltIn_RegexpValidatesPresentArgumentsBeforeNullableResult(t *testing
 	nullMatchType := NewFunctionTestInput(text, []string{""}, []bool{true})
 	for _, tc := range []struct {
 		name       string
-		fn         fEvalFn
+		fn         executeLogicOfOverload
 		inputs     []FunctionTestInput
 		resultType types.Type
 		values     any
@@ -1886,7 +1898,7 @@ func Test_BuiltIn_RegexpValidatesPresentArgumentsBeforeNullableResult(t *testing
 			NewFunctionTestResult(tc.resultType, false, tc.values, []bool{true}),
 			tc.fn,
 		)
-		ok, info := control.Run()
+		ok, info := control.RunAndFree()
 		require.True(t, ok, "%s: %s", tc.name, info)
 	}
 }
@@ -1921,8 +1933,8 @@ func Test_BuiltIn_RegexpLikeRejectsEmptyPattern(t *testing.T) {
 				NewFunctionTestResult(types.T_bool.ToType(), true, []bool{false}, []bool{false}),
 				newOpBuiltInRegexp().builtInRegexpLike,
 			)
+			defer tcc.Free()
 
-			require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
 			_, err := tcc.DebugRun()
 			require.Error(t, err)
 
@@ -1940,7 +1952,7 @@ func Test_BuiltIn_RegMatchRejectsEmptyPattern(t *testing.T) {
 
 	for _, tc := range []struct {
 		name string
-		fn   fEvalFn
+		fn   executeLogicOfOverload
 	}{
 		{name: "reg_match", fn: newOpBuiltInRegexp().builtInRegMatch},
 		{name: "not_reg_match", fn: newOpBuiltInRegexp().builtInNotRegMatch},
@@ -1955,8 +1967,8 @@ func Test_BuiltIn_RegMatchRejectsEmptyPattern(t *testing.T) {
 				NewFunctionTestResult(types.T_bool.ToType(), true, []bool{false}, []bool{false}),
 				tc.fn,
 			)
+			defer tcc.Free()
 
-			require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
 			_, err := tcc.DebugRun()
 			require.Error(t, err)
 
@@ -1981,7 +1993,7 @@ func Test_BuiltIn_RegMatchPreservesNullPattern(t *testing.T) {
 		newOpBuiltInRegexp().builtInRegMatch,
 	)
 
-	succeed, errInfo := tcc.Run()
+	succeed, errInfo := tcc.RunAndFree()
 	require.True(t, succeed, errInfo)
 }
 
@@ -1992,7 +2004,7 @@ func Test_BuiltIn_RegMatchPreservesValidPatterns(t *testing.T) {
 		name     string
 		pattern  string
 		expected bool
-		fn       fEvalFn
+		fn       executeLogicOfOverload
 	}{
 		{name: "reg_match", pattern: "^a", expected: true, fn: newOpBuiltInRegexp().builtInRegMatch},
 		{name: "not_reg_match", pattern: "^z", expected: true, fn: newOpBuiltInRegexp().builtInNotRegMatch},
@@ -2008,7 +2020,7 @@ func Test_BuiltIn_RegMatchPreservesValidPatterns(t *testing.T) {
 				tc.fn,
 			)
 
-			succeed, errInfo := tcc.Run()
+			succeed, errInfo := tcc.RunAndFree()
 			require.True(t, succeed, errInfo)
 		})
 	}
@@ -2021,31 +2033,31 @@ func Test_BuiltIn_DynamicRegexpPatternCacheOwnsKeys(t *testing.T) {
 		name       string
 		resultType types.Type
 		want       func(string) any
-		fn         func(*opBuiltInRegexp) fEvalFn
+		fn         func(*opBuiltInRegexp) executeLogicOfOverload
 	}{
 		{
 			name:       "regexp_instr",
 			resultType: types.T_int64.ToType(),
 			want:       func(string) any { return []int64{1} },
-			fn:         func(op *opBuiltInRegexp) fEvalFn { return op.builtInRegexpInstr },
+			fn:         func(op *opBuiltInRegexp) executeLogicOfOverload { return op.builtInRegexpInstr },
 		},
 		{
 			name:       "regexp_substr",
 			resultType: types.T_varchar.ToType(),
 			want:       func(s string) any { return []string{s} },
-			fn:         func(op *opBuiltInRegexp) fEvalFn { return op.builtInRegexpSubstr },
+			fn:         func(op *opBuiltInRegexp) executeLogicOfOverload { return op.builtInRegexpSubstr },
 		},
 		{
 			name:       "regexp_operator",
 			resultType: types.T_bool.ToType(),
 			want:       func(string) any { return []bool{true} },
-			fn:         func(op *opBuiltInRegexp) fEvalFn { return op.builtInRegMatch },
+			fn:         func(op *opBuiltInRegexp) executeLogicOfOverload { return op.builtInRegMatch },
 		},
 		{
 			name:       "regexp_like_control",
 			resultType: types.T_bool.ToType(),
 			want:       func(string) any { return []bool{true} },
-			fn:         func(op *opBuiltInRegexp) fEvalFn { return op.builtInRegexpLike },
+			fn:         func(op *opBuiltInRegexp) executeLogicOfOverload { return op.builtInRegexpLike },
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2059,6 +2071,7 @@ func Test_BuiltIn_DynamicRegexpPatternCacheOwnsKeys(t *testing.T) {
 				NewFunctionTestResult(tc.resultType, false, tc.want("aaaa"), nil),
 				tc.fn(op),
 			)
+			defer tcc.Free()
 
 			pattern, _ := vector.GenerateFunctionStrParameter(tcc.parameters[1]).GetStrValue(0)
 			collision := findRegexpCacheHashCollision(t, op.regMap.mp, pattern)
@@ -2164,7 +2177,7 @@ func Test_BuiltIn_LikeUTF8Underscore(t *testing.T) {
 				newOpBuiltInRegexp().likeFn,
 			)
 
-			succeed, errInfo := tcc.Run()
+			succeed, errInfo := tcc.RunAndFree()
 			require.True(t, succeed, errInfo)
 		})
 	}
@@ -2235,7 +2248,7 @@ func Test_BuiltIn_LikeWithEscape(t *testing.T) {
 		name     string
 		inputs   []FunctionTestInput
 		expected FunctionTestResult
-		fn       fEvalFn
+		fn       executeLogicOfOverload
 	}{
 		{
 			name: "constant escape",
@@ -2342,7 +2355,7 @@ func Test_BuiltIn_LikeWithEscape(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			tcc := NewFunctionTestCase(proc, tc.inputs, tc.expected, tc.fn)
-			succeed, errInfo := tcc.Run()
+			succeed, errInfo := tcc.RunAndFree()
 			require.True(t, succeed, errInfo)
 		})
 	}
@@ -2386,7 +2399,7 @@ func Test_BuiltIn_LikeWithEscapeSQLMode(t *testing.T) {
 				NewFunctionTestResult(types.T_bool.ToType(), true, []bool{false}, nil),
 				newOpBuiltInRegexp().likeFn,
 			)
-			succeed, errInfo := tcc.Run()
+			succeed, errInfo := tcc.RunAndFree()
 			require.True(t, succeed, errInfo)
 		})
 	}
@@ -2410,7 +2423,7 @@ func Test_BuiltIn_LikeWithNullEscapeSQLMode(t *testing.T) {
 		NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true}, nil),
 		newOpBuiltInRegexp().likeFn,
 	)
-	succeed, errInfo := tcc.Run()
+	succeed, errInfo := tcc.RunAndFree()
 	require.True(t, succeed, errInfo)
 	require.False(t, resolverCalled, "NULL ESCAPE must bypass explicit-empty SQL-mode validation")
 }

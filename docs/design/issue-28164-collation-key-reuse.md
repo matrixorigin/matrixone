@@ -1,15 +1,6 @@
 # Collation-aware keys using existing indexes (#28164)
 
-Status: Draft design and implementation review for #28164. The local
-integration branch contains candidate code and focused regression coverage;
-production format freeze, SQL/storage acceptance and QA remain pending. Native
-0900 admission is explicitly closed by the temporary default-closed planner and
-remote fences; the durable cluster gate is not implemented.
-
-See [the comparative selection report](issue-28164-collation-selection.md) and
-[its evidence](issue-28164-selection-evidence.json). These supersede earlier
-provisional backend/format conclusions; local prototype bytes are not frozen
-as a production format.
+Status: replacement design baseline; implementation is staged in PR1–PR4 and product acceptance remains pending.
 
 ## 1. Scope and supersession
 
@@ -26,31 +17,22 @@ selects the correct existing row; indexed and unindexed queries return identical
 original values. Physical lookup and filtering use the same transformed domain
 as physical storage. No independent sidecar or transaction state machine is added.
 
-The implementation is maintained in the separate `codex/issue-28164-collation-integration`
-worktree. This PR records its design and evidence; it does not claim that live
-SQL, persisted-object pruning, migration recovery or distributed QA have passed.
+This file remains the design baseline. The staged PR1–PR4 commits contain the
+weight adapter, schema-aware tuple metadata, SQL consumers and index wiring;
+migration, performance, distributed validation and production activation remain
+separate gates.
 
 ## 2. Verified baseline (do not reuse the earlier checkout's assumptions)
 
 The earlier discussion inspected `816c913bf02c`, which lacked the newer metadata
-path. Keep these three states separate; a field or spelling observed on the
-integration branch is not evidence that it exists in the upstream baseline:
+path. The current baseline already has:
 
-- **Upstream baseline** `bb358ea76aeb44a6eed5079616e7e75ba35e75b9`: `Type.charset`
-  (field 8) and persisted classes Legacy=0, Binary=1, UTF8MB4Bin=2 and UTF8=3.
-  It does not contain native identities 4/5 or the candidate key-format gate.
-- **Candidate integration** `72a659dff2`: adds independent native identities
-  AI=4 and BIN=5, key-format metadata and the Vitess v0.24.0 adapter. These are
-  candidate semantics behind a default-closed admission fence, not baseline
-  data.
-- **Target design**: preserve the baseline meanings and introduce native 0900
-  only through explicit metadata, a frozen physical-format version and a
-  completed durable cluster gate. The current implementation keeps the
-  temporary default-closed fence; historical aliases are never upgraded by
-  reinterpretation.
-- In the baseline, `pkg/sql/plan/build_util.go` may accept the spelling
-  `utf8mb4_0900_ai_ci` as the legacy general-ci class. That spelling must not be
-  presented as native UCA 9.0; the candidate identity is a separate mapping.
+- `proto/plan.proto`: `Type.charset` (field 8), `TableDef.default_charset` (39).
+- `pkg/container/types/types.go`: persisted semantic classes Legacy=0, Binary=1,
+  UTF8MB4Bin=2 (text PAD SPACE), UTF8=3 (general-ci).
+- `pkg/sql/plan/build_util.go`: column/table attribute resolution and explicit
+  compatibility aliases. The spelling `utf8mb4_0900_ai_ci` currently maps to the
+  general-ci class; it is NOT native MySQL UCA 9.0 NO PAD semantics.
 - `pkg/sql/colexec/aggexec/utf8mb4_general_ci.go`: a TiDB-derived weight table,
   original source commit `6cbbd222c786948379edc50ef8a8c37e485957c0`, with MO-specific
   malformed-byte handling. Existing MIN/MAX comparison is not by itself proof
@@ -63,14 +45,11 @@ integration branch is not evidence that it exists in the upstream baseline:
 Reuse this metadata and these structures. Do not allocate new protobuf numbers,
 copy a second weight table, or redefine zero-valued old metadata casually.
 
-Evidence labels are tied to the exact record that produced them. The historical
-comparison and tuple counts remain `PASS_HISTORICAL_V0221`; the v0.24.0 import and
-focused implementation tests are separate `PASS` evidence. A complete v0.24.0
-MySQL oracle, tuple byte freeze, live SQL/index behavior, persisted filtering,
-  migration/recovery, and mixed-version rejection are `NOT_RUN` or blocked by the
-  temporary default-closed production fence. The durable cluster gate is not
-  implemented; CI for this documentation PR cannot substitute
-for those implementation and cluster checks.
+The implementation stack is intentionally separate from this upstream baseline:
+PR1 pins the Vitess v0.24.0 adapter and freezes the candidate V1 payload;
+PR2–PR4 carry its semantic/version metadata through tuple, SQL and index paths.
+Those changes do not reinterpret legacy objects or enable the new format by
+themselves.
 
 ## 3. Representation and non-negotiable invariants
 
@@ -100,11 +79,15 @@ retain the existing numeric codecs; no new all-type key format is introduced.
 
 Inspected candidates (pinned source, not moving branch names):
 
+The table below records the historical selection research. The implementation
+pins Vitess v0.24.0 as recorded in `issue-28164-weight-key-v1.md`; the older
+Vitess v22.0.1 row is retained as provenance, not as a second dependency choice.
+
 | Candidate | Relevant API | Decision |
 | --- | --- | --- |
-| Existing MO TiDB-derived general-ci weights; TiDB v8.5.3 `dc2548aac79a712265e831cff2a3a896bc0a5a38` | `Collator.Compare`, `Key`, `KeyWithoutTrimRightSpace`, `CanUseRawMemAsKey` | Evaluated against Vitess and actual MySQL. Recommended for the narrowly scoped existing general-ci class after that comparison; not a universal Unicode backend. See the selection report for performance, API and remaining format gates. |
-| Vitess v0.24.0 `e8d9fa81d351066497a8d99f92e9e9f2ecfd69d0` | `colldata.Collation.Collate`, `WeightString`, `WeightStringLen` | Fixed candidate backend for native `utf8mb4_0900_ai_ci` and `utf8mb4_0900_bin`. The MO adapter validates UTF-8, uses unpadded weights for NO PAD, and keeps tuple framing outside the payload. Full dependency-closure and MySQL byte-freeze evidence remain pending. |
-| `golang.org/x/text/collate` (MO already depends on x/text v0.35.0) | `Key`, `KeyFromString`, `Compare` | Useful Unicode API, but locale options do not establish MySQL named-collation compatibility. Not the selected backend. |
+| Existing MO TiDB-derived general-ci weights; TiDB v8.5.3 `dc2548aac79a712265e831cff2a3a896bc0a5a38` | `Collator.Compare`, `Key`, `KeyWithoutTrimRightSpace`, `CanUseRawMemAsKey` | Primary implementation route for the existing supported general-ci class: extract the already present weight owner into a dependency-light shared package and add an append-to-buffer key adapter. Do not import all of TiDB. |
+| Vitess v22.0.1 `aafd40357555438f9df7b7e28afe7e0828502896` | `colldata.Collation.Collate`, `WeightString`, `WeightStringLen` | MySQL-oriented reference and alternative if the existing mapping fails the agreed compatibility oracle. Its padding/length options require an explicit adapter; do not call with an arbitrary buffer capacity. |
+| `golang.org/x/text/collate` (MO already depends on x/text v0.35.0) | `Key`, `KeyFromString`, `Compare` | Useful Unicode API, but locale options do not establish MySQL named-collation compatibility. Not the production selection for this issue. |
 | MySQL `MY_COLLATION_HANDLER::strnxfrm` | charset-specific transformation | Semantics reference. A direct C integration/port needs dependency, license and deployment evaluation; it is not needed merely because the analogous C API exists. |
 
 The TiDB snapshot's unknown-collation fallback and malformed-input behavior must
@@ -112,19 +95,19 @@ not be copied blindly. Resolve only supported domains; preserve MO's existing
 malformed legacy-value contract until a separately tested policy changes it.
 Do not use process-global libc locale state for persisted keys.
 
-The independent comparison now supports a scoped backend recommendation,
-recorded in the selection report. The final production byte format is NOT
-frozen: actual tuple malformed-input checks failed and metadata/admission plus
-consumer review remain open.
-If that spike fails, revise the adapter/selection before connecting writers.
-Do not compensate for a comparator mismatch by creating another storage layer.
+The PR1 adapter freezes a candidate V1 byte contract after the independent
+weight and tuple checks recorded in `issue-28164-weight-key-v1-evidence.json`.
+That freeze applies to the staged implementation; SQL consumers, persisted
+filtering, migration and rollout still require their own evidence. If a later
+compatibility gate invalidates the candidate, introduce an explicit new format
+and migration rather than silently changing V1 bytes or creating a sidecar.
 
 Sources:
 
 - [TiDB interface](https://github.com/pingcap/tidb/blob/dc2548aac79a712265e831cff2a3a896bc0a5a38/pkg/util/collate/collate.go)
 - [TiDB general-ci](https://github.com/pingcap/tidb/blob/dc2548aac79a712265e831cff2a3a896bc0a5a38/pkg/util/collate/general_ci.go)
 - [TiDB binary/PAD variants](https://github.com/pingcap/tidb/blob/dc2548aac79a712265e831cff2a3a896bc0a5a38/pkg/util/collate/bin.go)
-- [Vitess weight-string contract](https://github.com/vitessio/vitess/blob/e8d9fa81d351066497a8d99f92e9e9f2ecfd69d0/go/mysql/collations/colldata/collation.go)
+- [Vitess weight-string contract](https://github.com/vitessio/vitess/blob/aafd40357555438f9df7b7e28afe7e0828502896/go/mysql/collations/colldata/collation.go)
 - [Go collation API](https://pkg.go.dev/golang.org/x/text/collate)
 - [MySQL strnxfrm contract](https://dev.mysql.com/doc/dev/mysql-server/8.0.45/structMY__COLLATION__HANDLER.html)
 
@@ -390,8 +373,7 @@ coverage. #28519's formal CHANGES_REQUESTED remains the reviewer's decision.
 
 Review must explicitly accept the supported-domain/alias policy, final PAD/order
 adapter, original-value retrieval tradeoff and rollout boundary. Source research
-and independent Vitess/MO/MySQL comparison are now recorded in the selection
-report. Native comparisons and valid tuple checks passed for the
-selected experimental adapters; generic tuple malformed-input validation failed.
-Design approval, production format freeze, full implementation, BVT, upgrade and
-QA remain pending. No timing or exact-head CI statement in an older PR is reused here.
+and the local candidate probe are complete for this document; PR1 records the
+independent native weight/tuple evidence, while SQL consumers, BVT, upgrade,
+distributed validation and QA remain pending. No timing or exact-head CI
+statement in an older PR is reused here.

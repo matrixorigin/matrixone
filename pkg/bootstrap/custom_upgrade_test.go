@@ -19,10 +19,9 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
-	"github.com/golang/mock/gomock"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
@@ -31,57 +30,119 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
 func Test_UpgradeOneTenant(t *testing.T) {
-	sid := ""
-	runtime.RunTest(
-		sid,
-		func(rt runtime.Runtime) {
-			defer func() {
-				if r := recover(); r != nil {
-					t.Errorf("Expected no panic")
-				}
-			}()
-
-			wantSql1 := "select create_version from mo_account where account_id = 2"
-
-			sqlExecutor := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
-				if wantSql1 == sql {
-					time.Sleep(time.Second)
-					return executor.Result{}, moerr.NewInternalErrorNoCtx("return error")
-				}
-				return executor.Result{}, nil
+	runtime.RunTest("", func(rt runtime.Runtime) {
+		wantSQL := "select create_version from mo_account where account_id = 2"
+		wantErr := moerr.NewInternalErrorNoCtx("version lookup failed")
+		var queries []string
+		sqlExecutor := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			queries = append(queries, sql)
+			return executor.Result{}, wantErr
+		})
+		b := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0), nil, sqlExecutor,
+			func(s *service) {
+				s.handles = append(s.handles,
+					newTestVersionHandler("1.2.0", "1.1.0", versions.Yes, versions.No, 10),
+					newTestVersionHandler("2.0.0", "1.2.0", versions.Yes, versions.No, 2))
 			})
+		defer b.Close()
+		require.ErrorIs(t, b.UpgradeOneTenant(context.Background(), 2), wantErr)
+		require.Equal(t, []string{wantSQL}, queries)
+		require.False(t, b.mu.tenants[2])
+	})
+}
 
-			b := newServiceForTest(
-				sid,
-				&memLocker{},
-				clock.NewHLCClock(func() int64 { return 0 }, 0),
-				nil,
-				sqlExecutor,
-				func(s *service) {
-					h1 := newTestVersionHandler("1.2.0", "1.1.0", versions.Yes, versions.No, 10)
-					h2 := newTestVersionHandler("2.0.0", "1.2.0", versions.Yes, versions.No, 2)
-					s.handles = append(s.handles, h1)
-					s.handles = append(s.handles, h2)
-				},
-			)
-
-			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
-			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
-
-			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*10)
-			defer cancel()
-
-			err := b.UpgradeOneTenant(ctx, 2)
-			assert.Error(t, err)
-		},
-	)
+func TestUpgradeTenantRetry(t *testing.T) {
+	for _, closeDuringBackoff := range []bool{false, true} {
+		name := "failure then success"
+		if closeDuringBackoff {
+			name = "Close during backoff"
+		}
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				runtime.RunTest("", func(rt runtime.Runtime) {
+					const tenantID = int32(2)
+					const currentVersion = "4.0.0"
+					const offset = uint32(3)
+					tenantSQL := "select create_version from mo_account where account_id = 2"
+					accountSQL := "select account_id, account_name from mo_catalog.mo_account where account_name = 'tenant'"
+					latestSQL := fmt.Sprintf("select version, version_offset, state from %s order by create_at desc limit 1", catalog.MOVersionTable)
+					// The memory executor lends this fixture-owned lookup row once.
+					accountRow := buildUpgradeTenantAccountRows([]int32{tenantID}, []string{"tenant"})
+					defer accountRow.Close()
+					attempts := make(chan struct{}, 3)
+					called := 0
+					sqlExecutor := executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
+						switch {
+						case sql == tenantSQL:
+							called++
+							attempts <- struct{}{}
+							if called == 1 || closeDuringBackoff {
+								return executor.Result{}, moerr.NewInternalErrorNoCtx("version lookup failed")
+							}
+							return buildTenantVersionResult(currentVersion), nil
+						case sql == accountSQL:
+							return accountRow, nil
+						case sql == latestSQL:
+							return buildLatestVersionResult(currentVersion, offset, versions.StateReady), nil
+						case strings.Contains(sql, "FROM mo_catalog.mo_tables tbl"):
+							return buildExistsResult(), nil
+						case strings.Contains(sql, "from mo_catalog.mo_upgrade") || strings.Contains(sql, "from mo_upgrade"):
+							return executor.Result{}, nil
+						default:
+							return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
+						}
+					}, &testTxnOperator{})
+					b := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0), nil, sqlExecutor,
+						func(s *service) {
+							s.handles = append(s.handles, newTestVersionHandler(currentVersion, currentVersion, versions.Yes, versions.Yes, offset))
+							s.upgrade.finalVersionCompleted.Store(true)
+						})
+					defer b.Close()
+					ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+					defer cancel()
+					accepted, err := b.UpgradeTenant(ctx, "tenant", 3, false)
+					require.NoError(t, err)
+					require.True(t, accepted)
+					select {
+					case <-attempts:
+					case <-ctx.Done():
+						t.Fatal("tenant retry was not registered")
+					}
+					synctest.Wait()
+					if !closeDuringBackoff {
+						select {
+						case <-attempts:
+						case <-ctx.Done():
+							t.Fatal("tenant retry did not succeed")
+						}
+						synctest.Wait()
+					}
+					closed := make(chan struct{})
+					go func() { _ = b.Close(); close(closed) }()
+					select {
+					case <-closed:
+					case <-time.After(100 * time.Millisecond):
+						t.Error("bootstrap Close remained blocked behind upgrade retry backoff")
+					}
+					<-closed
+					wantCalls := 2
+					if closeDuringBackoff {
+						wantCalls = 1
+					}
+					require.Equal(t, wantCalls, called)
+					b.mu.RLock()
+					completed := b.mu.tenants[tenantID]
+					b.mu.RUnlock()
+					require.Equal(t, !closeDuringBackoff, completed)
+				})
+			})
+		})
+	}
 }
 
 func Test_UpgradeOneTenant_SameVersionWithCurrentOffsetRunsTenantHandler(t *testing.T) {

@@ -32,6 +32,39 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestGetNodeBasicInfoAdaptiveTop(t *testing.T) {
+	for _, verbose := range []bool{false, true} {
+		node := &plan2.Node{NodeType: plan2.Node_ADAPTIVE_TOP, NodeId: 3}
+		got, err := NewNodeDescriptionImpl(node).GetNodeBasicInfo(context.Background(),
+			&ExplainOptions{Format: EXPLAIN_FORMAT_TEXT, Verbose: verbose})
+		require.NoError(t, err)
+		require.Contains(t, got, "Adaptive Top")
+		if verbose {
+			require.Contains(t, got, "[3]")
+		}
+	}
+}
+
+func TestGetNodeBasicInfoScalarVectorQuery(t *testing.T) {
+	for _, tc := range []struct {
+		kind plan2.Node_NodeType
+		name string
+	}{
+		{plan2.Node_VECTOR_QUERY_TOP, "Scalar Vector Query"},
+		{plan2.Node_VECTOR_QUERY_SOURCE, "Scalar Vector Source"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, verbose := range []bool{false, true} {
+				node := &plan2.Node{NodeType: tc.kind, NodeId: 3}
+				got, err := NewNodeDescriptionImpl(node).GetNodeBasicInfo(context.Background(),
+					&ExplainOptions{Format: EXPLAIN_FORMAT_TEXT, Verbose: verbose})
+				require.NoError(t, err)
+				require.Contains(t, got, tc.name)
+			}
+		})
+	}
+}
+
 func TestGetNodeBasicInfoApplyType(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -149,7 +182,7 @@ func TestSingleSql(t *testing.T) {
 	//input := "explain verbose SELECT l.L_ORDERKEY a FROM CUSTOMER c, ORDERS o, LINEITEM l WHERE c.C_CUSTKEY = o.O_CUSTKEY and l.L_ORDERKEY = o.O_ORDERKEY and o.O_ORDERKEY < 10"
 	//input := "explain verbose update emp set sal = sal + 500, comm = 1200 where deptno = 10"
 	input := "explain verbose select case when p_type like 'PROMO%' then l_extendedprice * (1 - l_discount) when p_type like 'PRX%' then l_extendedprice * (2 - l_discount) else 0 end from lineitem,part where l_shipdate < date '1996-04-01' + interval '1' month"
-	mock := plan.NewMockOptimizer(true)
+	mock := plan.NewMockOptimizer(true, newPlanTestProcess(t))
 	err := runOneStmt(mock, t, input)
 	if err != nil {
 		t.Fatalf("%+v", err)
@@ -173,7 +206,7 @@ func TestBasicSqlExplain(t *testing.T) {
 		"explain verbose select case when p_type like 'PROMO%' then l_extendedprice * (1 - l_discount) when p_type like 'PRX%' then l_extendedprice * (2 - l_discount) else 0 end from lineitem,part where l_shipdate < date '1996-04-01' + interval '1' month",
 		"explain verbose select column_2 from (values row(0, 1, cast('[3, 4, 5]' as vecf32(3)))) as v",
 	}
-	mockOptimizer := plan.NewMockOptimizer(false)
+	mockOptimizer := plan.NewMockOptimizer(false, newPlanTestProcess(t))
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
@@ -208,7 +241,7 @@ func TestSingleTableQuery(t *testing.T) {
 		// "explain verbose SELECT N_REGIONKEY FROM NATION where N_REGIONKEY is null and N_NAME is not null",
 		// "explain SELECT N_REGIONKEY FROM NATION where N_REGIONKEY is null and N_NAME is not null",
 	}
-	mockOptimizer := plan.NewMockOptimizer(false)
+	mockOptimizer := plan.NewMockOptimizer(false, newPlanTestProcess(t))
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
@@ -241,7 +274,7 @@ func TestJoinQuery(t *testing.T) {
 		"explain verbose SELECT * FROM NATION a join REGION b on a.N_REGIONKEY = b.R_REGIONKEY WHERE a.N_REGIONKEY > 0",
 		"explain SELECT * FROM NATION a join REGION b on a.N_REGIONKEY = b.R_REGIONKEY WHERE a.N_REGIONKEY > 0",
 	}
-	mockOptimizer := plan.NewMockOptimizer(false)
+	mockOptimizer := plan.NewMockOptimizer(false, newPlanTestProcess(t))
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
@@ -268,7 +301,7 @@ func TestNestedQuery(t *testing.T) {
 				l_partkey = p_partkey
 		);`, //tpch q17
 	}
-	mockOptimizer := plan.NewMockOptimizer(false)
+	mockOptimizer := plan.NewMockOptimizer(false, newPlanTestProcess(t))
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
@@ -286,7 +319,7 @@ func TestDerivedTableQuery(t *testing.T) {
 		"explain select * from (select c_custkey, count(C_NATIONKEY) ff from CUSTOMER group by c_custkey ) a join NATION b on a.c_custkey = b.N_REGIONKEY where b.N_NATIONKEY > 10",
 		"explain verbose select * from (select c_custkey, count(C_NATIONKEY) ff from CUSTOMER group by c_custkey ) a join NATION b on a.c_custkey = b.N_REGIONKEY where b.N_NATIONKEY > 10",
 	}
-	mockOptimizer := plan.NewMockOptimizer(false)
+	mockOptimizer := plan.NewMockOptimizer(false, newPlanTestProcess(t))
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
@@ -309,7 +342,7 @@ func TestCollectionQuery(t *testing.T) {
 		"explain verbose SELECT distinct(l.L_ORDERKEY) FROM LINEITEM AS l WHERE l.L_SHIPINSTRUCT='DELIVER IN PERSON' UNION SELECT distinct(l.L_ORDERKEY) FROM LINEITEM AS l WHERE l.L_SHIPMODE='AIR' OR  l.L_SHIPMODE='AIR REG'",
 		"explain verbose SELECT distinct(l.L_ORDERKEY) FROM LINEITEM AS l WHERE l.L_SHIPMODE IN ('AIR','AIR REG') EXCEPT SELECT distinct(l.L_ORDERKEY) FROM LINEITEM AS l WHERE l.L_SHIPINSTRUCT='DELIVER IN PERSON'",
 	}
-	mockOptimizer := plan.NewMockOptimizer(false)
+	mockOptimizer := plan.NewMockOptimizer(false, newPlanTestProcess(t))
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
@@ -324,7 +357,7 @@ func TestDMLInsert(t *testing.T) {
 		"explain verbose insert ignore into nation select * from nation2",
 		"explain verbose insert into nation select * from nation2 on duplicate key update n_comment = n_name",
 	}
-	mockOptimizer := plan.NewMockOptimizer(false)
+	mockOptimizer := plan.NewMockOptimizer(false, newPlanTestProcess(t))
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
@@ -337,7 +370,7 @@ func TestDMLUpdate(t *testing.T) {
 		"explain UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=N_REGIONKEY+2 WHERE N_NATIONKEY > 10 LIMIT 20",
 		"explain verbose UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=N_REGIONKEY+2 WHERE N_NATIONKEY > 10 LIMIT 20",
 	}
-	mockOptimizer := plan.NewMockOptimizer(true)
+	mockOptimizer := plan.NewMockOptimizer(true, newPlanTestProcess(t))
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
@@ -354,7 +387,7 @@ func TestDMLDelete(t *testing.T) {
 		"explain verbose UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=N_REGIONKEY+2 WHERE N_NATIONKEY > 10 LIMIT 20",
 		"explain verbose UPDATE NATION,NATION2 SET NATION.N_NAME ='U1',NATION2.N_NATIONKEY=15 WHERE NATION.N_NATIONKEY = NATION2.N_NATIONKEY",
 	}
-	mockOptimizer := plan.NewMockOptimizer(true)
+	mockOptimizer := plan.NewMockOptimizer(true, newPlanTestProcess(t))
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
@@ -372,7 +405,7 @@ func TestSystemVariableAndUserVariable(t *testing.T) {
 		"explain verbose select @@session.autocommit,@val from NATION",
 		"explain verbose select @@session.autocommit,@val,N_NAME from NATION",
 	}
-	mockOptimizer := plan.NewMockOptimizer(false)
+	mockOptimizer := plan.NewMockOptimizer(false, newPlanTestProcess(t))
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
@@ -389,7 +422,7 @@ func TestSingleTableDeleteSQL(t *testing.T) {
 		"explain verbose delete from emp where deptno = 20 order by sal limit 2",
 		"explain verbose delete from emp where empno > 7800 order by empno limit 2",
 	}
-	mockOptimizer := plan.NewMockOptimizer(true)
+	mockOptimizer := plan.NewMockOptimizer(true, newPlanTestProcess(t))
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
@@ -407,7 +440,7 @@ func TestCompositeUniqueIndexTableDeleteSQL(t *testing.T) {
 		"explain verbose delete employees, dept from employees, dept where employees.deptno = dept.deptno and sal > 2000",
 		"explain verbose DELETE FROM employees, dept USING employees INNER JOIN dept WHERE employees.deptno = dept.deptno",
 	}
-	mockOptimizer := plan.NewMockOptimizer(true)
+	mockOptimizer := plan.NewMockOptimizer(true, newPlanTestProcess(t))
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
@@ -421,7 +454,7 @@ func TestMultiTableDeleteSQL(t *testing.T) {
 		"explain verbose delete emp,dept from emp ,dept where emp.deptno = dept.deptno and empno = 7839",
 		"explain verbose DELETE FROM emp, dept USING emp INNER JOIN dept WHERE emp.deptno = dept.deptno",
 	}
-	mockOptimizer := plan.NewMockOptimizer(true)
+	mockOptimizer := plan.NewMockOptimizer(true, newPlanTestProcess(t))
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
 

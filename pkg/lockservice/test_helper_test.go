@@ -16,13 +16,16 @@ package lockservice
 
 import (
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap/zapcore"
 )
 
 func TestLockServiceTestSocketDirectoriesAreIsolated(t *testing.T) {
@@ -150,4 +153,40 @@ func TestRunLockServicesForTestCleansUpAfterCallbackPanic(t *testing.T) {
 	require.True(t, closing)
 	_, err := os.Stat(socketDir)
 	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestRunLockServicesForTestStartsAllocatorBeforeServices(t *testing.T) {
+	const disconnectDuration = 123 * time.Millisecond
+	constructed := 0
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.DebugLevel,
+		[]string{"s1", "s2"},
+		time.Second,
+		func(allocator *lockTableAllocator, services []*service) {
+			require.Len(t, services, 2)
+			require.Equal(t, 2, constructed)
+			require.Equal(t, disconnectDuration, allocator.options.removeDisconnectDuration)
+			for _, service := range services {
+				require.Equal(t, disconnectDuration, service.cfg.removeDisconnectDuration)
+			}
+		},
+		func(cfg *Config) {
+			cfg.removeDisconnectDuration = disconnectDuration
+		},
+		func(service *service) {
+			constructed++
+			// Options run inside NewLockService before its keeper starts. A real
+			// connection at this point proves allocator readiness without sleeps
+			// or depending on which goroutine wins the startup race.
+			serviceSocket := strings.TrimPrefix(service.cfg.ListenAddress, "unix://")
+			allocatorSocket := filepath.Join(filepath.Dir(serviceSocket), "allocator.sock")
+			conn, err := net.DialTimeout("unix", allocatorSocket, 10*time.Second)
+			if err != nil {
+				t.Errorf("allocator must listen before service construction: %v", err)
+				return
+			}
+			require.NoError(t, conn.Close())
+		},
+	)
 }

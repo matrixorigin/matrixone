@@ -27,6 +27,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestOrderedCollectionCompatibilityAliases(t *testing.T) {
+	listAgg, err := GetFunctionByName(
+		t.Context(), "listagg", []types.Type{types.T_varchar.ToType()})
+	require.NoError(t, err)
+	listAggID, _ := DecodeOverloadID(listAgg.GetEncodedOverloadID())
+	require.Equal(t, int32(GROUP_CONCAT), listAggID)
+	require.Equal(t, types.T_text, listAgg.GetReturnType().Oid)
+
+	arrayAgg, err := GetFunctionByName(
+		t.Context(), "array_agg", []types.Type{types.T_varchar.ToType()})
+	require.NoError(t, err)
+	arrayAggID, _ := DecodeOverloadID(arrayAgg.GetEncodedOverloadID())
+	require.Equal(t, int32(JSON_ARRAYAGG), arrayAggID)
+	require.Equal(t, types.T_json, arrayAgg.GetReturnType().Oid)
+}
+
 func TestJSONObjectAggNumericKeyResolution(t *testing.T) {
 	ctx := context.Background()
 	valueType := types.T_varchar.ToType()
@@ -76,6 +92,35 @@ func TestMySQLNumericAggTypeCheck(t *testing.T) {
 	}
 }
 
+func TestJSONNumericAggResolution(t *testing.T) {
+	for _, name := range []string{
+		"sum", "avg", "var_pop", "var_samp", "stddev_pop", "stddev_samp",
+		"variance", "std", "stddev",
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := GetFunctionByName(context.Background(), name, []types.Type{types.T_json.ToType()})
+			require.NoError(t, err)
+			castTypes, shouldCast := got.ShouldDoImplicitTypeCast()
+			require.True(t, shouldCast)
+			require.Equal(t, []types.Type{types.T_float64.ToType()}, castTypes)
+			require.Equal(t, types.T_float64, got.GetReturnType().Oid)
+		})
+	}
+}
+
+func TestJSONNumericAggResolutionRejectsInvalidShapes(t *testing.T) {
+	for _, name := range []string{
+		"sum", "avg", "var_pop", "var_samp", "stddev_pop", "stddev_samp",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := GetFunctionByName(context.Background(), name, nil)
+			require.Error(t, err)
+			_, err = GetFunctionByName(context.Background(), name, []types.Type{types.T_bool.ToType()})
+			require.Error(t, err)
+		})
+	}
+}
+
 func TestMySQLNumericAggSupportsDecimal256(t *testing.T) {
 	input := types.New(types.T_decimal256, 65, 30)
 	for _, name := range []string{"var_pop", "var_samp", "stddev_pop", "stddev_samp"} {
@@ -100,6 +145,23 @@ func TestBitSumAvgUsesExistingUnsignedDomain(t *testing.T) {
 			unsigned, err := GetFunctionByName(context.Background(), name, []types.Type{types.T_uint64.ToType()})
 			require.NoError(t, err)
 			require.Equal(t, unsigned.GetReturnType(), got.GetReturnType())
+		}
+	}
+}
+
+func TestEnumSumAvgUsesOrdinalDomain(t *testing.T) {
+	for _, name := range []string{"sum", "avg"} {
+		got, err := GetFunctionByName(context.Background(), name, []types.Type{types.T_enum.ToType()})
+		require.NoError(t, err)
+		casts, cast := got.ShouldDoImplicitTypeCast()
+		require.True(t, cast)
+		require.Equal(t, []types.Type{types.T_uint16.ToType()}, casts)
+		ordinal, err := GetFunctionByName(context.Background(), name, casts)
+		require.NoError(t, err)
+		require.Equal(t, ordinal.GetReturnType(), got.GetReturnType())
+		for _, inputs := range [][]types.Type{nil, {types.T_enum.ToType(), types.T_enum.ToType()}, {types.T_varchar.ToType()}} {
+			_, err := GetFunctionByName(context.Background(), name, inputs)
+			require.Error(t, err)
 		}
 	}
 }

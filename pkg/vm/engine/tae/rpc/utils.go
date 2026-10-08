@@ -171,7 +171,7 @@ func traverseCatalogForNewAccounts(c *catalog.Catalog, memo *logtail.TNUsageMemo
 		}
 
 		accId := entry.GetTenantID()
-		if !slices.Contains(ids, uint64(accId)) {
+		if !slices.Contains(ids, uint64(accId)) { //nolint:govet // inline: cannot inline generic call (type-param inference unsupported)
 			return nil
 		}
 

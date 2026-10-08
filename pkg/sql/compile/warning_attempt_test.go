@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -39,6 +40,7 @@ import (
 	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -138,7 +140,7 @@ func TestGroupConcatWarningAttemptOutcomes(t *testing.T) {
 				}
 				return "STRICT_TRANS_TABLES", nil
 			})
-			compilerCtx := plan2.NewEmptyCompilerContext()
+			compilerCtx := plan2.NewEmptyCompilerContext(newPlanTestProcess(t))
 			compilerCtx.SetContext(ctx)
 			sql := "select group_concat(s order by s separator '') from (select 'abc' s union all select 'def') t"
 			stmts, err := mysql.Parse(ctx, sql, 1)
@@ -248,14 +250,31 @@ func TestWarningAttemptNestedAndBounded(t *testing.T) {
 	require.Zero(t, session.totalWarnings)
 
 	attempt := newWarningAttempt(proc, false)
-	for i := 0; i < 1000; i++ {
+	for i := 0; i < process.WarningDiagnosticDefaultRetentionLimit+10; i++ {
 		attempt.collector.AppendWarningDiagnostic(1260, "bounded")
 	}
 	attempt.finish(true, session)
-	require.Equal(t, uint64(1000), session.totalWarnings)
-	require.Len(t, session.warnings, remoteWarningRetentionLimit)
+	require.Equal(t, uint64(process.WarningDiagnosticDefaultRetentionLimit+10), session.totalWarnings)
+	require.Len(t, session.warnings, process.WarningDiagnosticDefaultRetentionLimit)
 	attempt.finish(true, session)
-	require.Equal(t, uint64(1000), session.totalWarnings, "one-shot publish")
+	require.Equal(t, uint64(process.WarningDiagnosticDefaultRetentionLimit+10), session.totalWarnings, "one-shot publish")
+}
+
+func TestWarningAttemptCapturesStatementRetentionSnapshot(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.MaxErrorCount = 2
+	proc.Base.SessionInfo.MaxErrorCountSet = true
+	session := &remoteWarningSession{}
+	proc.Session = session
+	attempt := newWarningAttempt(proc, false)
+	require.NotNil(t, attempt)
+	attempt.collector.AppendWarningBatch(3,
+		[]uint16{1, 2, 3}, []string{"first", "second", "third"})
+	attempt.finish(true, session)
+	require.Equal(t, uint64(3), session.totalWarnings)
+	require.Len(t, session.warnings, 2)
+	require.Equal(t, uint16(1), session.warnings[0].code)
+	require.Equal(t, uint16(2), session.warnings[1].code)
 }
 
 func TestStringAssignmentWarningAttemptDiscard(t *testing.T) {
@@ -288,6 +307,57 @@ func TestStringAssignmentWarningAttemptDiscard(t *testing.T) {
 	require.Nil(t, proc.WarningSink)
 }
 
+func TestWarningAttemptTransfersAndDiscardsStatementBudgetOwnership(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	budget := process.NewWarningDiagnosticBudget(process.WarningDiagnosticMaxBytes)
+	session := &remoteWarningCollector{
+		maxRetained:    int(^uint16(0)),
+		maxRetainedSet: true,
+		warningBudget:  budget,
+	}
+	proc.Session = session
+	longMessage := strings.Repeat("x", process.WarningDiagnosticMaxMessageBytes*2)
+
+	attempt := newWarningAttempt(proc, false)
+	attempt.collector.AppendWarningDiagnostic(1260, longMessage)
+	charged := budget.Used()
+	require.Positive(t, charged)
+	attempt.finish(true, session)
+	require.Equal(t, charged, budget.Used(), "same-budget transfer must not double-charge the retained string")
+	total, retained := session.SnapshotWarnings()
+	require.Equal(t, uint64(1), total)
+	require.Len(t, retained, 1)
+
+	failed := newWarningAttempt(proc, false)
+	failed.collector.AppendWarningDiagnostic(1260, "failed attempt")
+	require.Greater(t, budget.Used(), charged)
+	failed.finish(false, session)
+	require.Equal(t, charged, budget.Used(), "failed attempt must release its private charge")
+
+	session.closeWarnings(false)
+	require.Zero(t, budget.Used(), "reset/close must release the session-owned retained payload")
+}
+
+func TestWarningAttemptNarrowsRemoteCollectorBudgetToProcessLimit(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.Base.Lim.Size = 1024
+	session := &remoteWarningCollector{}
+	proc.Session = session
+
+	attempt := newWarningAttempt(proc, false)
+	require.NotNil(t, attempt)
+	require.Equal(t, uint64(1024), session.GetWarningDiagnosticBudget().Limit())
+	require.Same(t, session.warningBudget, attempt.collector.warningBudget)
+
+	attempt.collector.AppendWarningDiagnostic(1260, strings.Repeat("x", 2000))
+	attempt.collector.AppendWarningDiagnostic(1261, "later short warning")
+	_, retained := attempt.collector.SnapshotWarnings()
+	require.Empty(t, retained, "a rejected remote prefix must seal later short diagnostics")
+
+	attempt.finish(false, session)
+	require.Zero(t, session.warningBudget.Used())
+}
+
 func TestPreparedGroupConcatFloorFreshAndRetryCompile(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	proc := testutil.NewProcess(t)
@@ -301,7 +371,7 @@ func TestPreparedGroupConcatFloorFreshAndRetryCompile(t *testing.T) {
 		}
 		return "STRICT_TRANS_TABLES", nil
 	})
-	compilerCtx := plan2.NewEmptyCompilerContext()
+	compilerCtx := plan2.NewEmptyCompilerContext(newPlanTestProcess(t))
 	compilerCtx.SetContext(ctx)
 	sql := "select group_concat(s order by s separator '') from (select 'abc' s union all select 'def') t"
 	stmts, err := mysql.Parse(ctx, sql, 1)
@@ -460,6 +530,8 @@ func TestGroupConcatMarkerSurvivesNestedDiagnosticLimit(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	proc.Session = nil
+	proc.Base.SessionInfo.MaxErrorCount = remoteWarningRetentionLimit
+	proc.Base.SessionInfo.MaxErrorCountSet = true
 	parent := newWarningAttempt(proc, true)
 	childProc := proc.NewNoContextChildProc(0)
 	child := newWarningAttempt(childProc, false)

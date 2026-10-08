@@ -54,9 +54,14 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 
 	if builder != nil {
 		bc.lower = builder.compCtx.GetLowerCaseTableNames()
+		if parent == nil && builder.persistedViewTarget != "" {
+			requiredProtocol := int64(0)
+			bc.persistedExpressionProtocolRequirement = &requiredProtocol
+		}
 	}
 
 	if parent != nil {
+		bc.persistedExpressionProtocolRequirement = parent.persistedExpressionProtocolRequirement
 		bc.existentialBlock = parent.existentialBlock
 		bc.subqueryNestingDepth = parent.subqueryNestingDepth
 		bc.lower = parent.lower
@@ -70,11 +75,7 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 		bc.snapshot = parent.snapshot
 		bc.remapOption = parent.remapOption
 		bc.numericCteByName = parent.numericCteByName
-		bc.assignmentIgnore = parent.assignmentIgnore
-		if len(parent.viewChain) > 0 {
-			bc.viewChain = append([]string{}, parent.viewChain...)
-		}
-		bc.directView = parent.directView
+		bc.viewPath = append([]*plan.ViewStep(nil), parent.viewPath...)
 		bc.restoreViewMySQLSpecialTypes = parent.restoreViewMySQLSpecialTypes
 		bc.captureViewStarExpansion = parent.captureViewStarExpansion
 		bc.expandedSelectLists = parent.expandedSelectLists

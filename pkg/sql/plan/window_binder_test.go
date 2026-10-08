@@ -21,9 +21,12 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -56,6 +59,10 @@ func (b *stubWindowBinder) bindPreparedWindowFrameBound(expr tree.Expr, typ *pla
 
 func (b *stubWindowBinder) makeFrameConstValue(expr tree.Expr, typ *planpb.Type) (*planpb.Expr, error) {
 	return b.makeFrameValueFunc(expr, typ)
+}
+
+func (b *stubWindowBinder) mysqlSpecialOrderKey(expr *planpb.Expr, typ *planpb.Type) (*planpb.Expr, error) {
+	return makeMySQLSpecialOrderKey(b.GetContext(), expr, typ)
 }
 
 func (b *stubWindowBinder) GetContext() context.Context {
@@ -168,7 +175,7 @@ func testWindowValidationBinder() *stubWindowBinder {
 const preparedWindowFrameSQL = "select sum(n_nationkey) over (order by n_nationkey rows between ? preceding and ? following) from nation"
 
 func TestPreparedWindowFrameMarkers(t *testing.T) {
-	optimizer := NewMockOptimizer(false)
+	optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 	stmts, err := parsers.Parse(optimizer.CurrentContext().GetContext(), dialect.MYSQL, preparedWindowFrameSQL, 1)
 	require.NoError(t, err)
 
@@ -180,7 +187,7 @@ func TestPreparedWindowFrameMarkers(t *testing.T) {
 }
 
 func TestBuildPlanRejectsNegativeTemporalWindowBounds(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	units := []string{"microsecond", "second", "minute", "hour", "day", "month", "year"}
 	for _, unit := range units {
 		t.Run(unit, func(t *testing.T) {
@@ -194,7 +201,7 @@ func TestBuildPlanRejectsNegativeTemporalWindowBounds(t *testing.T) {
 }
 
 func TestNthValueRequiresConstantPositiveOffset(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	tests := []struct {
 		name    string
 		sql     string
@@ -238,7 +245,7 @@ func TestNthValueRequiresConstantPositiveOffset(t *testing.T) {
 }
 
 func TestLagLeadRejectInvalidConstantOffset(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	for _, name := range []string{"lag", "lead"} {
 		for _, offset := range []string{
 			"-1",
@@ -275,7 +282,7 @@ func TestLagLeadRejectInvalidConstantOffset(t *testing.T) {
 }
 
 func TestPreparedNthValueAcceptsPositionalOffset(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	stmt, err := parsers.ParseOne(
 		context.Background(),
 		dialect.MYSQL,
@@ -325,7 +332,7 @@ func TestPreparedNthValueAcceptsPositionalOffset(t *testing.T) {
 	require.Equal(t, "2", firstWindowSpec(t, binaryFilled).WindowFunc.GetF().Args[1].GetLit().GetSval())
 
 	logicPlan, err := runOneStmt(
-		NewMockOptimizer(false),
+		NewMockOptimizer(false, newPlanTestProcess(t)),
 		t,
 		"prepare nth_param from 'select nth_value(a, ?) over (order by a) from select_test.bind_select'",
 	)
@@ -339,7 +346,7 @@ func TestPreparedNthValueAcceptsPositionalOffset(t *testing.T) {
 }
 
 func TestPreparedWindowRangeFrameMarkers(t *testing.T) {
-	optimizer := NewMockOptimizer(false)
+	optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 	stmts, err := parsers.Parse(
 		optimizer.CurrentContext().GetContext(),
 		dialect.MYSQL,
@@ -357,7 +364,7 @@ func TestPreparedWindowRangeFrameMarkers(t *testing.T) {
 }
 
 func TestPreparedWindowRangeFrameMarkersInBothBounds(t *testing.T) {
-	optimizer := NewMockOptimizer(false)
+	optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 	stmts, err := parsers.Parse(
 		optimizer.CurrentContext().GetContext(),
 		dialect.MYSQL,
@@ -374,7 +381,7 @@ func TestPreparedWindowRangeFrameMarkersInBothBounds(t *testing.T) {
 }
 
 func TestPreparedWindowRangeFrameMarkerRequiresNumericOrder(t *testing.T) {
-	optimizer := NewMockOptimizer(false)
+	optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 	stmts, err := parsers.Parse(
 		optimizer.CurrentContext().GetContext(),
 		dialect.MYSQL,
@@ -390,7 +397,7 @@ func TestPreparedWindowRangeFrameMarkerRequiresNumericOrder(t *testing.T) {
 func TestPreparedWindowIntervalFrameMarkersAreUnsupported(t *testing.T) {
 	for _, frameType := range []string{"rows", "range"} {
 		t.Run(frameType, func(t *testing.T) {
-			optimizer := NewMockOptimizer(false)
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 			stmts, err := parsers.Parse(
 				optimizer.CurrentContext().GetContext(),
 				dialect.MYSQL,
@@ -408,7 +415,7 @@ func TestPreparedWindowIntervalFrameMarkersAreUnsupported(t *testing.T) {
 func TestPreparedWindowNestedIntervalFrameMarkersAreUnsupported(t *testing.T) {
 	for _, frameType := range []string{"rows", "range"} {
 		t.Run(frameType, func(t *testing.T) {
-			optimizer := NewMockOptimizer(false)
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 			stmts, err := parsers.Parse(
 				optimizer.CurrentContext().GetContext(),
 				dialect.MYSQL,
@@ -547,7 +554,7 @@ func buildNamedWindowPlan(t *testing.T, sql string) (*planpb.Plan, error) {
 	if err != nil {
 		return nil, err
 	}
-	return BuildPlan(NewMockCompilerContext(true), stmt, false)
+	return BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
 }
 
 func TestNamedWindowSpecHelpers(t *testing.T) {
@@ -828,7 +835,7 @@ func TestPreparedNamedWindowParameterMetadata(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			logicPlan, err := runOneStmt(
-				NewMockOptimizer(false),
+				NewMockOptimizer(false, newPlanTestProcess(t)),
 				t,
 				"prepare named_window_param from '"+test.sql+"'",
 			)
@@ -842,7 +849,7 @@ func TestPreparedNamedWindowParameterMetadata(t *testing.T) {
 
 	t.Run("nested definitions are globally deduplicated", func(t *testing.T) {
 		logicPlan, err := runOneStmt(
-			NewMockOptimizer(false),
+			NewMockOptimizer(false, newPlanTestProcess(t)),
 			t,
 			`prepare nested_named_window_param from '
 				select 1 from nation
@@ -864,9 +871,9 @@ func TestNamedWindowValidationRetainsDependencies(t *testing.T) {
 	t.Run("ordinary plan", func(t *testing.T) {
 		queryPlan, err := buildNamedWindowPlan(t, sql)
 		require.NoError(t, err)
-		require.Len(t, queryPlan.GetQuery().GetCatalogDependencies(), 1)
-		dependency := queryPlan.GetQuery().GetCatalogDependencies()[0]
-		require.Equal(t, "region", dependency.GetObjName())
+		dependencies := queryPlan.GetQuery().GetCatalogDependencies()
+		require.Len(t, dependencies, 2)
+		require.ElementsMatch(t, []string{"nation", "region"}, []string{dependencies[0].ObjName, dependencies[1].ObjName})
 		require.False(t, queryHasReachableTable(queryPlan.GetQuery(), "region"))
 	})
 
@@ -874,13 +881,14 @@ func TestNamedWindowValidationRetainsDependencies(t *testing.T) {
 		queryPlan, err := buildNamedWindowPlan(t,
 			"select sum(n_nationkey) over unused_w from nation window unused_w as (order by (select r_name from region limit 1))")
 		require.NoError(t, err)
-		require.Len(t, queryPlan.GetQuery().GetCatalogDependencies(), 1)
-		require.Equal(t, "region", queryPlan.GetQuery().GetCatalogDependencies()[0].GetObjName())
+		dependencies := queryPlan.GetQuery().GetCatalogDependencies()
+		require.Len(t, dependencies, 2)
+		require.ElementsMatch(t, []string{"nation", "region"}, []string{dependencies[0].ObjName, dependencies[1].ObjName})
 	})
 
 	t.Run("prepare schema invalidation", func(t *testing.T) {
 		logicPlan, err := runOneStmt(
-			NewMockOptimizer(false), t,
+			NewMockOptimizer(false, newPlanTestProcess(t)), t,
 			"prepare unused_named_window_dependency from '"+sql+"'",
 		)
 		require.NoError(t, err)
@@ -895,8 +903,8 @@ func TestNamedWindowValidationRetainsDependencies(t *testing.T) {
 }
 
 func TestWindowValidationPrivilegeCarriersAreCompactAndDeduplicated(t *testing.T) {
-	owner := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
-	validation := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	owner := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
+	validation := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	wideTable := &planpb.TableDef{
 		TableType: "ordinary",
 		Cols:      make([]*planpb.ColDef, 1024),
@@ -948,14 +956,20 @@ func TestWindowValidationPrivilegeCarriersAreCompactAndDeduplicated(t *testing.T
 	// A different view path is a distinct authorization context, even for the
 	// same relation and snapshot.
 	validation.qry.Nodes = []*planpb.Node{{
-		NodeType:    planpb.Node_TABLE_SCAN,
-		ObjRef:      ordinary.ObjRef,
-		TableDef:    wideTable,
-		OriginViews: []string{"tpch.region_view"},
-		DirectView:  "tpch.region_view",
+		NodeType: planpb.Node_TABLE_SCAN,
+		ObjRef:   ordinary.ObjRef,
+		TableDef: wideTable,
+		ViewPath: []*planpb.ViewStep{{DatabaseName: "tpch", ViewName: "region_view", Snapshot: &planpb.Snapshot{Tenant: &planpb.SnapshotTenant{}}}},
 	}}
 	appendWindowValidationPrivilegeScans(owner, validation)
 	require.Len(t, owner.windowValidationScans, 4)
+	// An inner snapshot difference cannot disappear when compacting carriers.
+	validation.qry.Nodes[0].ViewPath[0].Snapshot.TS = &timestamp.Timestamp{PhysicalTime: 42, LogicalTime: 7}
+	appendWindowValidationPrivilegeScans(owner, validation)
+	require.Len(t, owner.windowValidationScans, 5)
+	validation.qry.Nodes[0].ViewPath[0].Snapshot.TS.LogicalTime = 8
+	require.Equal(t, uint32(7), owner.windowValidationScans[4].ViewPath[0].Snapshot.TS.LogicalTime)
+
 }
 
 func namedWindowsSQL(prefix string, count int) string {
@@ -1018,7 +1032,7 @@ func TestNamedWindowLimitPerQueryBlock(t *testing.T) {
 }
 
 func TestSnapshotWindowValidationCTEState(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	ctx := NewBindContext(builder, nil)
 	declarationCtx := NewBindContext(builder, nil)
 	declarationCtx.views = []string{"original_view"}
@@ -1162,7 +1176,7 @@ func requirePreparedWindowFrameParam(t *testing.T, expr *planpb.Expr, typ types.
 }
 
 func TestProjectionAndHavingBinderBindExprOnWindowAlias(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindCtx := NewBindContext(builder, nil)
 	bindCtx.windowTag = builder.GenNewBindTag()
 
@@ -1185,7 +1199,7 @@ func TestProjectionAndHavingBinderBindExprOnWindowAlias(t *testing.T) {
 }
 
 func TestProjectionBinderBindWinFuncCachesWindowExpr(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindCtx := NewBindContext(builder, nil)
 	bindCtx.windowTag = builder.GenNewBindTag()
 
@@ -1215,7 +1229,7 @@ func TestProjectionBinderBindWinFuncCachesWindowExpr(t *testing.T) {
 }
 
 func TestProjectionBinderRejectsNestedWindowFuncFromSQL(t *testing.T) {
-	builder, bindCtx := genBuilderAndCtx()
+	builder, bindCtx := genBuilderAndCtx(t)
 	bindCtx.windowTag = builder.GenNewBindTag()
 
 	havingBinder := NewHavingBinder(builder, bindCtx)
@@ -1235,7 +1249,7 @@ func TestProjectionBinderRejectsNestedWindowFuncFromSQL(t *testing.T) {
 }
 
 func TestBuildPlanWindowDependencyValidation(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 
 	tests := []struct {
 		name    string
@@ -1293,7 +1307,7 @@ func TestBuildPlanWindowDependencyValidation(t *testing.T) {
 
 func TestHavingBinderBindWinFuncCoversFrameAndGuard(t *testing.T) {
 	t.Run("inside aggregate rejects window func", func(t *testing.T) {
-		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 		bindCtx := NewBindContext(builder, nil)
 		bindCtx.windowTag = builder.GenNewBindTag()
 
@@ -1305,7 +1319,7 @@ func TestHavingBinderBindWinFuncCoversFrameAndGuard(t *testing.T) {
 	})
 
 	t.Run("range frame binds frame constants", func(t *testing.T) {
-		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 		bindCtx := NewBindContext(builder, nil)
 		bindCtx.windowTag = builder.GenNewBindTag()
 
@@ -1649,6 +1663,30 @@ func TestBindWindowFuncExprValidationAndHelpers(t *testing.T) {
 
 func TestWindowFrameConstValueHelpers(t *testing.T) {
 	proc := testutil.NewProc(t)
+	t.Run("decimal256 singleton retains value and provenance", func(t *testing.T) {
+		source := makePlan2Int64ConstExprWithType(11)
+		source.GetLit().DecimalLiteralRequiresV82 = true
+		got, err := makeWindowFrameConstValue(
+			func(tree.Expr, int32, bool) (*Expr, error) { return source, nil },
+			proc, t.Context(), testNumVal(11),
+			&planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 2},
+		)
+		require.NoError(t, err)
+		require.NotNil(t, got.GetVec())
+		require.Equal(t, int32(1), got.GetVec().Len)
+		var decoded vector.Vector
+		require.NoError(t, decoded.UnmarshalBinary(got.GetVec().Data))
+		require.Equal(t, types.Decimal256FromInt64(1100), vector.GetFixedAtNoTypeCheck[types.Decimal256](&decoded, 0))
+		wire, err := got.Marshal()
+		require.NoError(t, err)
+		var restored planpb.Expr
+		require.NoError(t, restored.Unmarshal(wire))
+		for _, copy := range []*planpb.Expr{got, DeepCopyExpr(got), &restored} {
+			required, err := RequiredPersistedExpressionProtocolVersion(copy)
+			require.NoError(t, err)
+			require.Equal(t, int64(defines.MORPCVersion89), required)
+		}
+	})
 
 	t.Run("typ nil returns bound expr directly", func(t *testing.T) {
 		expected := makePlan2Int64ConstExprWithType(7)
@@ -1677,6 +1715,58 @@ func TestWindowFrameConstValueHelpers(t *testing.T) {
 		)
 		require.NoError(t, err)
 		require.Equal(t, int64(11), got.GetLit().Value.(*planpb.Literal_I64Val).I64Val)
+	})
+
+	t.Run("numeric range bounds preserve decimal protocol provenance", func(t *testing.T) {
+		rt := moruntime.ServiceRuntime(proc.GetService())
+		oldFloor, hadFloor := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor)
+		t.Cleanup(func() {
+			if hadFloor {
+				rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, oldFloor)
+			} else if current, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor); ok {
+				rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolFloor, current)
+			}
+		})
+
+		for _, bound := range []string{"start", "end"} {
+			t.Run(bound, func(t *testing.T) {
+				source := makePlan2Int64ConstExprWithType(11)
+				source.GetLit().DecimalLiteralRequiresV82 = true
+				got, err := makeWindowFrameConstValue(
+					func(tree.Expr, int32, bool) (*Expr, error) { return source, nil },
+					proc,
+					context.Background(),
+					testNumVal(11),
+					&planpb.Type{Id: int32(types.T_int64)},
+				)
+				require.NoError(t, err)
+				require.True(t, got.GetLit().DecimalLiteralRequiresV82)
+
+				required, err := RequiredPersistedExpressionProtocolVersion(got)
+				require.NoError(t, err)
+				require.Equal(t, int64(defines.MORPCVersion89), required)
+
+				rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion88))
+				require.ErrorContains(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, got), "protocol version 89")
+				rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion89))
+				require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, got))
+			})
+		}
+
+		unmarked, err := makeWindowFrameConstValue(
+			func(tree.Expr, int32, bool) (*Expr, error) {
+				return makePlan2Int64ConstExprWithType(11), nil
+			},
+			proc,
+			context.Background(),
+			testNumVal(11),
+			&planpb.Type{Id: int32(types.T_int64)},
+		)
+		require.NoError(t, err)
+		require.False(t, unmarked.GetLit().DecimalLiteralRequiresV82)
+		required, err := RequiredPersistedExpressionProtocolVersion(unmarked)
+		require.NoError(t, err)
+		require.Zero(t, required)
 	})
 
 	t.Run("interval expr is normalized through helper", func(t *testing.T) {
@@ -1745,7 +1835,7 @@ func TestResetWindowIntervalExprRejectsNegativeValues(t *testing.T) {
 }
 
 func TestBinderMakeFrameConstValueWrappers(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindCtx := NewBindContext(builder, nil)
 
 	havingBinder := NewHavingBinder(builder, bindCtx)

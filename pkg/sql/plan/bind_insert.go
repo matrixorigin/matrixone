@@ -930,10 +930,10 @@ func (builder *QueryBuilder) buildIrregularIndexInsertMaintenance(
 
 	// During a copy-based ALTER TABLE, an irregular index whose columns are not
 	// affected by the change is shallow-cloned into the new table (see
-	// cloneUnaffectedIndexes in compile/alter.go) rather than rebuilt. The data
-	// copy runs as a normal INSERT, so skip sync maintenance for such indexes here
-	// — exactly as the regular-index path skips them via SkipIndexesCopy — to avoid
-	// inserting every row's entries twice (cloned + rebuilt).
+	// cloneUnaffectedIndexes in compile/alter.go) rather than rebuilt. A newly
+	// added plugin index is rebuilt after the base-table copy. The data copy runs
+	// as a normal INSERT, so skip synchronous maintenance in both cases to avoid
+	// populating the hidden index table twice.
 	var alterCopyOpt *plan.AlterCopyOpt
 	if v := builder.compCtx.GetContext().Value(defines.AlterCopyOpt{}); v != nil {
 		if opt, ok := v.(*plan.AlterCopyOpt); ok && opt.TargetTableName == tableDef.Name {
@@ -951,9 +951,15 @@ func (builder *QueryBuilder) buildIrregularIndexInsertMaintenance(
 		if !indexdef.TableExist {
 			continue
 		}
-		if alterCopyOpt != nil && alterCopyOpt.SkipIndexesCopy[indexdef.IndexName] {
-			// cloned by the ALTER, not rebuilt by this copy insert
-			continue
+		if alterCopyOpt != nil {
+			if alterCopyOpt.SkipIndexesCopy[indexdef.IndexName] {
+				// cloned by the ALTER, not rebuilt by this copy insert
+				continue
+			}
+			if alterCopyOpt.NewPluginIndexes[indexdef.IndexName] {
+				// rebuilt after the replacement table contains all source rows
+				continue
+			}
 		}
 		indexSourceStep := builder.irregularMaintenanceSourceStep(indexdef, sourceStep)
 		switch {
@@ -2721,7 +2727,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 					return 0, moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "auto_increment default value")
 				}
 
-				updateExpr, err = getDefaultExpr(builder.GetContext(), colDef)
+				updateExpr, err = getDefaultExprForAssignment(builder.GetContext(), colDef, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 				if err != nil {
 					return 0, err
 				}
@@ -2733,7 +2739,14 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				// missing input column.
 				replaceColRefTag(updateExpr, 0, scanTag)
 			} else {
-				updateExpr, err = binder.BindAssignmentExpr(astExpr, colDef.Typ)
+				if isNullAstExpr(astExpr) {
+					updateExpr, err = buildLegacyTimestampNullAssignment(builder.compCtx, colDef)
+					if updateExpr == nil && err == nil {
+						updateExpr, err = binder.BindAssignmentExpr(astExpr, colDef.Typ)
+					}
+				} else {
+					updateExpr, err = binder.BindAssignmentExpr(astExpr, colDef.Typ)
+				}
 				if err != nil {
 					return 0, err
 				}
@@ -2752,6 +2765,10 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				continue
 			}
 
+			updateExpr, err = builder.wrapLegacyTimestampAssignment(colDef, updateExpr)
+			if err != nil {
+				return 0, err
+			}
 			updateExpr, err = builder.forceAssignmentCastExpr(updateExpr, colDef.Typ, builder.isInsertIgnore)
 			if err != nil {
 				return 0, err
@@ -2805,10 +2822,13 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			if col.GeneratedCol == nil {
 				continue
 			}
-			genExpr := builder.applyGeneratedColumnAssignmentCast(
+			genExpr, err := builder.applyGeneratedColumnAssignmentCast(
 				DeepCopyExpr(col.GeneratedCol.Expr),
 				builder.isInsertIgnore,
 			)
+			if err != nil {
+				return 0, err
+			}
 			replaceColRefTag(genExpr, 0, scanTag)
 			updateExprs[col.Name] = genExpr
 			updateColIdxList = append(updateColIdxList, int32(i))
@@ -4688,7 +4708,7 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		astSelect = astRows
 
 		subCtx := NewBindContext(builder, bindCtx)
-		subCtx.numericProjectionTypes = insertProjectionTypes(insertColumns, tableDef)
+		subCtx.numericProjectionTypes = insertProjectionTypes(insertColumns, tableDef, builder.isInsertIgnore)
 		lastNodeID, err = builder.bindSelect(astSelect, subCtx, false)
 		if err != nil {
 			return 0, nil, nil, -1, err
@@ -4702,7 +4722,7 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		astSelect = selectImpl.Select
 
 		subCtx := NewBindContext(builder, bindCtx)
-		subCtx.numericProjectionTypes = insertProjectionTypes(insertColumns, tableDef)
+		subCtx.numericProjectionTypes = insertProjectionTypes(insertColumns, tableDef, builder.isInsertIgnore)
 		lastNodeID, err = builder.bindSelect(astSelect, subCtx, false)
 		if err != nil {
 			return 0, nil, nil, -1, err
@@ -4728,6 +4748,15 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 // the projection the column came from, used to recognize display-value
 // projections of MySQL special types.
 func (builder *QueryBuilder) castInsertSourceColumn(projExpr, sourceExpr *plan.Expr, colDef *plan.ColDef) (*plan.Expr, error) {
+	var err error
+	projExpr, err = builder.wrapLegacyTimestampAssignment(colDef, projExpr)
+	if err != nil {
+		return nil, err
+	}
+	if sourceExpr != nil && sourceExpr.GetLit() != nil && sourceExpr.GetLit().Isnull &&
+		isLegacyImplicitTimestampColumn(builder.compCtx, colDef) {
+		return buildImplicitCurrentTimestampExpr(colDef.Typ, builder.compCtx.GetProcess())
+	}
 	typ := colDef.Typ
 	switch {
 	case isEnumPlanType(&typ):
@@ -4779,7 +4808,7 @@ func (builder *QueryBuilder) appendInsertReplaceSourceCasts(bindCtx *BindContext
 		lastNodeID, colName2Idx, skipUniqueIdx, err := builder.appendNodesForReplaceStmt(bindCtx, lastNodeID, tableDef, objRef, insertColToExpr)
 		return lastNodeID, colName2Idx, skipUniqueIdx, -1, err
 	} else {
-		return builder.appendNodesForInsertStmt(bindCtx, lastNodeID, tableDef, objRef, insertColToExpr)
+		return builder.appendNodesForInsertStmt(bindCtx, lastNodeID, tableDef, objRef, insertColToExpr, builder.isInsertIgnore)
 	}
 }
 
@@ -4997,13 +5026,29 @@ func isNumericAssignmentTarget(typ Type) bool {
 	return makeTypeByPlan2Type(typ).IsNumeric()
 }
 
-func insertProjectionTypes(insertColumns []string, tableDef *plan.TableDef) []Type {
+// useNumericAssignmentContext keeps IGNORE conversion at the final assignment
+// cast. A destination hint must not insert an ordinary strict cast into its
+// source expression. Functions and aggregates establish their own numeric
+// consumer contexts independently.
+func useNumericAssignmentContext(typ Type, ignore bool) bool {
+	return isNumericAssignmentTarget(typ) && !(ignore && useIgnoreConversionAssignmentCast(typ))
+}
+
+func isPreparedAssignmentParam(builder *QueryBuilder, expr tree.Expr) bool {
+	if builder == nil || !builder.isReusablePlan() {
+		return false
+	}
+	_, ok := unwrapParenExpr(expr).(*tree.ParamExpr)
+	return ok
+}
+
+func insertProjectionTypes(insertColumns []string, tableDef *plan.TableDef, ignore bool) []Type {
 	// only numeric targets may seed the numeric assignment context; a zero
 	// Type keeps the projection binder on the default binding path
 	targets := make([]Type, len(insertColumns))
 	for i, column := range insertColumns {
 		typ := tableDef.Cols[tableDef.Name2ColIndex[column]].Typ
-		if isNumericAssignmentTarget(typ) {
+		if useNumericAssignmentContext(typ, ignore) {
 			targets[i] = typ
 		}
 	}
@@ -5016,6 +5061,7 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 	tableDef *TableDef,
 	objRef *ObjectRef,
 	insertColToExpr map[string]*Expr,
+	assignmentIgnore bool,
 ) (int32, map[string]int32, []bool, int32, error) {
 	colName2Idx := make(map[string]int32)
 	hasAutoCol := false
@@ -5116,7 +5162,7 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 			projList2 = append(projList2, nil)
 			colName2Idx[tableDef.Name+"."+col.Name] = int32(len(projList2) - 1)
 		} else {
-			defExpr, err := getDefaultExpr(builder.GetContext(), col)
+			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), assignmentIgnore)
 			if err != nil {
 				return 0, nil, nil, -1, err
 			}
@@ -5151,10 +5197,13 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 
 	for _, i := range generatedColIdxs {
 		col := tableDef.Cols[i]
-		genExpr := builder.applyGeneratedColumnAssignmentCast(
+		genExpr, err := builder.applyGeneratedColumnAssignmentCast(
 			DeepCopyExpr(col.GeneratedCol.Expr),
-			builder.isInsertIgnore,
+			assignmentIgnore,
 		)
+		if err != nil {
+			return 0, nil, nil, -1, err
+		}
 		proj1Pos := genColIdxToProj1Pos[i]
 		columnExprs[int32(i)] = genExpr
 		colIdxToProjPos[int32(i)] = int32(proj1Pos)
@@ -5409,7 +5458,7 @@ func (builder *QueryBuilder) buildValueScan(
 		}
 		var defExpr *plan.Expr
 		if isAllDefault {
-			defExpr, err := getDefaultExpr(builder.GetContext(), col)
+			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 			if err != nil {
 				return 0, nil, err
 			}
@@ -5445,6 +5494,21 @@ func (builder *QueryBuilder) buildValueScan(
 				funcBinder = defaultFuncBinder
 			}
 			for _, r := range stmt.Rows {
+				// With explicit_defaults_for_timestamp=OFF, an explicit NULL
+				// assignment to the legacy implicit TIMESTAMP column has the same
+				// semantics as DEFAULT. Handle it before the literal fast path,
+				// which otherwise materializes a NULL expression and lets the
+				// NOT NULL assignment cast reject it.
+				if isNullAstExpr(r[i]) {
+					defExpr, err = buildLegacyTimestampNullAssignment(builder.compCtx, col)
+					if err != nil {
+						return 0, nil, err
+					}
+					if defExpr != nil {
+						appendValueExpr(i, defExpr)
+						continue
+					}
+				}
 				if nv, ok := r[i].(*tree.NumVal); ok && builder.isInsertIgnore {
 					expr, handled, err := makeInsertIgnoreMySQLSpecialTypeConstExpr(builder.GetContext(), nv, col.Typ)
 					if err != nil {
@@ -5467,14 +5531,17 @@ func (builder *QueryBuilder) buildValueScan(
 				}
 
 				if _, ok := r[i].(*tree.DefaultVal); ok {
-					defExpr, err = getDefaultExpr(builder.GetContext(), col)
+					defExpr, err = getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 					if err != nil {
 						return 0, nil, err
 					}
 				} else {
 					valueBinder := binder
+					if types.T(col.Typ.Id).IsInteger() {
+						valueBinder = funcBinder
+					}
 					boundWithNumericContext := false
-					if isNumericAssignmentTarget(col.Typ) {
+					if useNumericAssignmentContext(col.Typ, builder.isInsertIgnore) {
 						if builder.isPrepareStatement {
 							// Analyze prepared functions with the target-free binder. The
 							// explicit numeric context below supplies the assignment domain only
@@ -5489,19 +5556,12 @@ func (builder *QueryBuilder) buildValueScan(
 							if err != nil {
 								return 0, nil, err
 							}
-							// A bare marker is the source value of the assignment, not a
-							// numeric expression.  In an IGNORE assignment it must remain
-							// TEXT until the outer cast_ignore runs; otherwise the prepare-time
-							// numeric context creates an ordinary cast(? AS INT/DECIMAL), and
-							// malformed values fail before the IGNORE warning/adjustment mode
-							// is reached.  Keep numeric context for compound expressions such
-							// as ? + 1, whose operands genuinely need numeric binding.
-							directPreparedParam := false
-							if _, ok := unwrapParenExpr(r[i]).(*tree.ParamExpr); ok {
-								directPreparedParam = true
-							}
-							if scan.hasParam && !(builder.isInsertIgnore && directPreparedParam &&
-								useIgnoreConversionAssignmentCast(targetTyp.Typ)) {
+							// The target type shapes compound numeric expressions, but a
+							// bare marker is still the assignment source. Preserve it for the
+							// final assignment cast, including string-to-BIT byte semantics and
+							// IGNORE conversion warnings. Expressions such as ? + 1 still bind
+							// in the target numeric context.
+							if scan.hasParam && !isPreparedAssignmentParam(builder, r[i]) {
 								switch numericBinder := funcBinder.(type) {
 								case *DefaultBinder:
 									defExpr, err = numericBinder.bindNumericExprWithContext(r[i], 0, &col.Typ)
@@ -5519,7 +5579,7 @@ func (builder *QueryBuilder) buildValueScan(
 						if !boundWithNumericContext && valuesExprIsFuncCall(r[i]) {
 							valueBinder = funcBinder
 						}
-					} else if valuesExprIsFuncCall(r[i]) {
+					} else if valuesExprIsFuncCall(r[i]) || (builder.isInsertIgnore && isNumericAssignmentTarget(col.Typ)) {
 						// Geometry and other non-numeric functions need their
 						// arguments to bind independently of the destination type.
 						valueBinder = funcBinder
@@ -5546,6 +5606,10 @@ func (builder *QueryBuilder) buildValueScan(
 							return 0, nil, err
 						}
 					}
+				}
+				defExpr, err = builder.wrapLegacyTimestampAssignment(col, defExpr)
+				if err != nil {
+					return 0, nil, err
 				}
 				defExpr, err = builder.forceCastExpr2(defExpr, colTyp, targetTyp, builder.isInsertIgnore)
 				if err != nil {
@@ -5626,7 +5690,7 @@ func (builder *QueryBuilder) buildValueScan(
 			col := tableDef.Cols[colIdx]
 			colTyp := makeTypeByPlan2Type(col.Typ)
 			targetTyp := &plan.Expr{Typ: col.Typ, Expr: &plan.Expr_T{T: &plan.TargetType{}}}
-			defExpr, err := getDefaultExpr(builder.GetContext(), col)
+			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 			if err != nil {
 				return 0, nil, err
 			}

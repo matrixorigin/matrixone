@@ -137,7 +137,7 @@ func (rule *GetParamRule) MatchNode(node *Node) bool {
 // a FUNCTION_SCAN, so ResetPreparePlan cannot recover these objects by walking
 // the final plan alone.
 func (builder *QueryBuilder) recordPreparedPluginDependencies(scanNode *Node) error {
-	if !builder.isPrepareStatement || scanNode == nil || scanNode.ObjRef == nil || scanNode.TableDef == nil {
+	if !builder.isReusablePlan() || scanNode == nil || scanNode.ObjRef == nil || scanNode.TableDef == nil {
 		return nil
 	}
 
@@ -229,7 +229,7 @@ func (rule *GetParamRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 }
 
 func (rule *GetParamRule) SetParamOrder() {
-	argPos := []int{}
+	argPos := make([]int, 0, len(rule.params))
 	for pos := range rule.params {
 		argPos = append(argPos, pos)
 	}
@@ -437,13 +437,16 @@ type ResetParamRefRule struct {
 	ctx      context.Context
 	params   []*Expr
 	exprMemo map[*plan.Expr]*plan.Expr
+	// Runtime value sources reached through integer-consumer lineage, including
+	// bare markers and producers behind PROJECT, set, aggregate or window nodes.
+	integerSourceRoots    map[*plan.Expr]struct{}
+	integerPredicateRoots map[*plan.Expr]map[int32]struct{}
 	// preserveRoots contains DML write expressions whose outer shape must
 	// remain stable while nested parameters are rebound.  The write operator
 	// consumes these expressions positionally; rebuilding the outer function
 	// can change its assignment-cast contract even when the predicate needs a
 	// different execute-time overload.
-	preserveRoots        map[*plan.Expr]struct{}
-	validateFunctionArgs func(string, []*Expr) error
+	preserveRoots map[*plan.Expr]struct{}
 	// specialized is set when execute-time rebinding changes the cached plan's
 	// execution semantics, including value-only rewrites whose overload and
 	// result type remain stable.
@@ -485,15 +488,26 @@ type ResetParamRefRule struct {
 	// provisional prepare-time coercions and bind against the runtime domain.
 	numericPrefixDependent map[*plan.Expr]bool
 	// sqlExecuteNumericDependent tracks expressions whose numeric result domain
-	// was selected from a SQL EXECUTE user variable's source type. Unlike a
-	// direct marker, a dependent child must propagate through enclosing numeric
-	// consumers so their provisional prepare-time envelopes are rebound too.
+	// was selected from an execute-time source, including deferred numeric
+	// fallbacks. Unlike a direct marker, a dependent child must propagate
+	// through enclosing numeric consumers so their provisional prepare-time
+	// envelopes are rebound too.
 	sqlExecuteNumericDependent  map[*plan.Expr]bool
 	serializedDecimalParamTypes map[*plan.Expr]types.Type
 	// preparedPlan locates existing numeric scalar-subquery fallback sources.
 	// String-domain lineage is self-contained in sparse expression metadata and
 	// does not add a plan-graph walk to prepared execution.
 	preparedPlan *Plan
+	// exactProjectedParam records only transparent output-to-marker identity
+	// before ParamRefs are materialized. Domain summaries are not value sources.
+	exactProjectedParam  map[preparedSetOperationNullKey]int32
+	projectedParamDomain map[preparedSetOperationNullKey]int32
+	setArmParam          map[preparedSetOperationInputKey]int32
+	// preparedTemporalNullEnvelopeExprs marks runtime-only casts that restore a
+	// strict NULL TIME-arithmetic envelope. Deferred numeric consumers must keep
+	// these casts intact instead of pairing their target-type argument with the
+	// original arithmetic children during a later fallback rebind.
+	preparedTemporalNullEnvelopeExprs map[*plan.Expr]struct{}
 	// paramKinds is populated by the execute-time replacement path.  It is
 	// deliberately kept on the rule rather than inferred from Expr.Typ: a
 	// prepared marker is TEXT at prepare time while COM_STMT carries the
@@ -728,6 +742,9 @@ func preparedNumericPrefixPositionContext(
 	default:
 		return false
 	}
+	if preparedCommonValueFixedDecimalPeer(name, args, positions, nil) {
+		return true
+	}
 
 	hasEligibleParam := false
 	hasRuntimeDecimal := false
@@ -750,6 +767,11 @@ func preparedNumericPrefixPositionContext(
 			hasEligibleParam = true
 			hasRuntimeDecimal = hasRuntimeDecimal || kind == types.StringConversionDecimal
 			continue
+		}
+		if isPreparedCommonValueFunction(name) {
+			if peer, ok := provisionalNumericPeerSource(source); ok {
+				source = peer
+			}
 		}
 		if source == nil {
 			continue
@@ -784,6 +806,134 @@ func preparedNumericPrefixPositionContext(
 	return hasEligibleParam && (hasDecimalPeer || hasRuntimeDecimal) && !hasFloatPeer && !hasCommonValueBoundary
 }
 
+// A prepared common-value call can use the numeric prefix of a text parameter when
+// a fixed DECIMAL operand establishes its result domain. Other string and
+// FLOAT operands keep their normal mixed-type semantics.
+func preparedCommonValueFixedDecimalPeer[P any](name string, args []*plan.Expr, positions map[int]P, paramValues []any) bool {
+	if !isPreparedCommonValueFunction(name) || len(positions) == 0 {
+		return false
+	}
+	hasParam, hasDecimalPeer, hasConcretePeer := false, false, false
+	for _, arg := range args {
+		if pos, ok := preparedParamPosition(arg); ok && preparedParamCastAllowsNumericPrefix(arg) {
+			if preparedConcreteStringCommonValueBoundary(pos, paramValues) {
+				return false
+			}
+			if _, eligible := positions[pos]; eligible {
+				hasParam = true
+				continue
+			}
+		}
+		source := unwrapPreparedImplicitCast(arg, false)
+		if peer, ok := provisionalNumericPeerSource(source); ok {
+			source = peer
+		}
+		for source != nil && source.GetPreparedNumeric().GetProvisionalResultCast() {
+			cast := source.GetF()
+			if cast == nil || cast.Func == nil || cast.Func.GetObjName() != "cast" ||
+				len(cast.Args) == 0 || cast.GetSyntaxExplicitCast() {
+				break
+			}
+			source = cast.Args[0]
+		}
+		if source == nil {
+			continue
+		}
+		if fn := source.GetF(); fn != nil && fn.Func != nil &&
+			preparedCommonValueFixedDecimalPeer(fn.Func.GetObjName(), fn.Args, positions, paramValues) {
+			hasDecimalPeer = true
+			hasConcretePeer = true
+			continue
+		}
+		oid := types.T(source.Typ.Id)
+		if literal := source.GetLit(); literal != nil && literal.Isnull && oid == types.T_any {
+			// MySQL infers markers from the first non-marker operand. A
+			// plain NULL before any concrete peer cannot inherit a later
+			// DECIMAL domain; typed NULLs retain their explicit domain.
+			if !hasConcretePeer {
+				return false
+			}
+			continue
+		}
+		if oid.IsFloat() || !preparedNumericCommonOperandType(oid) {
+			return false
+		}
+		hasConcretePeer = true
+		hasDecimalPeer = hasDecimalPeer || oid.IsDecimal() &&
+			(!preparedExprContainsParam(arg) || isExplicitPreparedCast(source) ||
+				preparedExprHasFixedDecimalSource(source))
+	}
+	return hasParam && hasDecimalPeer
+}
+
+// Child calls may acquire their exact result type only after execute-time
+// rebinding. Use the rebound semantic type, not the child's function name, to
+// decide the enclosing common-value domain.
+func preparedBoundCommonValueFixedDecimalPeer[P any](name string, originalArgs, boundArgs []*plan.Expr, positions map[int]P, paramValues []any) bool {
+	if !isPreparedCommonValueFunction(name) || len(originalArgs) != len(boundArgs) {
+		return false
+	}
+	hasParam, hasDecimalPeer := false, false
+	for i, original := range originalArgs {
+		if pos, ok := preparedParamPosition(original); ok && preparedParamCastAllowsNumericPrefix(original) {
+			if preparedConcreteStringCommonValueBoundary(pos, paramValues) {
+				return false
+			}
+			if _, eligible := positions[pos]; eligible {
+				hasParam = true
+				continue
+			}
+		}
+		source := unwrapPreparedImplicitCast(boundArgs[i], false)
+		if source == nil {
+			continue
+		}
+		oid := types.T(source.Typ.Id)
+		if oid.IsFloat() || !preparedNumericCommonOperandType(oid) {
+			return false
+		}
+		hasDecimalPeer = hasDecimalPeer || oid.IsDecimal() && preparedExprHasFixedDecimalSource(original)
+	}
+	return hasParam && hasDecimalPeer
+}
+
+func preparedConcreteStringCommonValueBoundary(pos int, values []any) bool {
+	if pos < 0 || pos >= len(values) {
+		return false
+	}
+	param, ok := values[pos].(ParamValue)
+	if !ok || param.IsBinaryProtocol || !param.HasSourceType || !param.SourceType.Oid.IsMySQLString() {
+		return false
+	}
+	if param.Value == nil {
+		return param.SourceType.Oid == types.T_char || param.SourceType.Oid == types.T_varchar
+	}
+	_, numeric := planfunction.GetNumericStringPrefix(preparedParamValueText(param))
+	return !numeric
+}
+
+// A rebound DECIMAL result derived only from markers is not a fixed peer:
+// its domain can change on the next EXECUTE. A column, literal, or explicit
+// DECIMAL cast establishes the domain even beneath another scalar function.
+func preparedExprHasFixedDecimalSource(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if types.T(expr.Typ.Id).IsDecimal() {
+		if expr.GetCol() != nil || expr.GetLit() != nil || isExplicitPreparedCast(expr) {
+			return true
+		}
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if preparedExprHasFixedDecimalSource(arg) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func preparedParamCastAllowsNumericPrefix(expr *plan.Expr) bool {
 	if !isImplicitPreparedParamCast(expr) {
 		return true
@@ -810,6 +960,152 @@ func NewResetParamRefRule(ctx context.Context, params []*Expr) *ResetParamRefRul
 
 func (rule *ResetParamRefRule) setPreparedPlan(preparePlan *Plan) {
 	rule.preparedPlan = preparePlan
+	rule.integerSourceRoots = make(map[*plan.Expr]struct{})
+	rule.integerPredicateRoots = make(map[*plan.Expr]map[int32]struct{})
+	query := preparePlan.GetQuery()
+	if query == nil {
+		return
+	}
+	positions := make(map[int32]struct{})
+	var checkedProjectedParam map[preparedSetOperationNullKey]struct{}
+	for nodeID, node := range query.Nodes {
+		if node == nil {
+			continue
+		}
+		if isPreparedSetOperationNode(node.NodeType) {
+			for branchIdx, childID := range node.Children {
+				if childID < 0 || int(childID) >= len(query.Nodes) {
+					continue
+				}
+				child := query.Nodes[childID]
+				if child == nil {
+					continue
+				}
+				for colPos, output := range child.ProjectList {
+					if colPos >= len(node.ProjectList) || node.ProjectList[colPos] == nil {
+						continue
+					}
+					source := unwrapPreparedSetOperationCoercion(query, childID, colPos,
+						node.ProjectList[colPos].Typ, output)
+					if pos, ok := preparedProjectedParamPosition(query, child, source,
+						make(map[preparedSetOperationNullKey]bool), false); ok {
+						if rule.setArmParam == nil {
+							rule.setArmParam = make(map[preparedSetOperationInputKey]int32)
+						}
+						rule.setArmParam[preparedSetOperationInputKey{
+							node: node, branchIdx: branchIdx, colPos: colPos,
+						}] = pos
+					}
+				}
+			}
+		}
+		registerProjectedParam := func(col *plan.ColRef) {
+			if col == nil || col.RelPos < 0 || col.ColPos < 0 || int(col.RelPos) >= len(node.Children) {
+				return
+			}
+			key := preparedSetOperationNullKey{nodeID: node.Children[col.RelPos], colPos: col.ColPos}
+			if _, checked := checkedProjectedParam[key]; checked {
+				return
+			}
+			if checkedProjectedParam == nil {
+				checkedProjectedParam = make(map[preparedSetOperationNullKey]struct{})
+			}
+			checkedProjectedParam[key] = struct{}{}
+			if pos, exact := preparedProjectedOutputParamPosition(query, key.nodeID, key.colPos,
+				make(map[preparedSetOperationNullKey]bool), false); exact {
+				if rule.exactProjectedParam == nil {
+					rule.exactProjectedParam = make(map[preparedSetOperationNullKey]int32)
+				}
+				if rule.projectedParamDomain == nil {
+					rule.projectedParamDomain = make(map[preparedSetOperationNullKey]int32)
+				}
+				rule.exactProjectedParam[key] = pos
+				rule.projectedParamDomain[key] = pos
+			} else if pos, domain := preparedProjectedOutputParamPosition(query, key.nodeID, key.colPos,
+				make(map[preparedSetOperationNullKey]bool), true); domain {
+				if rule.projectedParamDomain == nil {
+					rule.projectedParamDomain = make(map[preparedSetOperationNullKey]int32)
+				}
+				rule.projectedParamDomain[key] = pos
+			}
+		}
+		_ = plan.VisitExpressionsInOwner(node, func(root *plan.Expr) error {
+			return plan.VisitExprTree(root, func(expr *plan.Expr) error {
+				if fn := expr.GetF(); fn != nil {
+					if expr.GetPreparedNumeric().GetProvisionalResultCast() && len(fn.Args) > 0 {
+						registerProjectedParam(fn.Args[0].GetCol())
+					}
+					if fn.Func != nil {
+						for i, arg := range fn.Args {
+							if preparedProjectedValueOperand(fn.Func.GetObjName(), i, len(fn.Args)) {
+								registerProjectedParam(arg.GetCol())
+							}
+						}
+					}
+				}
+				for _, source := range integerArgumentSources(expr) {
+					collectPreparedIntegerArgumentParamPositions(query, int32(nodeID), source,
+						positions, make(map[[2]int32]struct{}), rule.integerSourceRoots)
+				}
+				return nil
+			})
+		})
+	}
+	// A numeric peer in NULLIF establishes a separate comparison domain. Its
+	// provisional casts need rebinding for numeric EXECUTE values, but TEXT
+	// comparisons must not inherit the integer result source contract.
+	for _, node := range query.Nodes {
+		if node == nil {
+			continue
+		}
+		_ = plan.VisitExpressionsInOwner(node, func(root *plan.Expr) error {
+			return plan.VisitExprTree(root, func(expr *plan.Expr) error {
+				fn := expr.GetF()
+				if fn == nil || fn.Func == nil || fn.Func.ObjName != "case" || len(fn.Args) != 3 ||
+					!preparedNullValueExpr(fn.Args[1]) || !preparedComparisonHasNumericLiteral(fn.Args[0]) {
+					return nil
+				}
+				if _, source := rule.integerSourceRoots[expr]; !source {
+					return nil
+				}
+				positions := preparedNumericValueParamPositions(fn.Args[0])
+				if len(positions) == 0 || !preparedComparisonUsesResultMarker(positions, fn.Args[2]) {
+					return nil
+				}
+				return plan.VisitExprTree(fn.Args[0], func(predicate *plan.Expr) error {
+					if predicate.GetF() != nil || predicate.GetP() != nil {
+						rule.integerSourceRoots[predicate] = struct{}{}
+						rule.integerPredicateRoots[predicate] = positions
+					}
+					return nil
+				})
+			})
+		})
+	}
+	// BIT_COUNT owns its marker's text-vs-numeric dispatch. Keep the complete
+	// function as an integer source, but let its descendants pass through the
+	// ordinary BIT_COUNT fallback path instead of forcing protocol TEXT.
+	for _, node := range query.Nodes {
+		if node == nil {
+			continue
+		}
+		_ = plan.VisitExpressionsInOwner(node, func(root *plan.Expr) error {
+			return plan.VisitExprTree(root, func(expr *plan.Expr) error {
+				fn := expr.GetF()
+				if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.ObjName, "bit_count") {
+					return nil
+				}
+				for _, arg := range fn.Args {
+					_ = plan.VisitExprTree(arg, func(descendant *plan.Expr) error {
+						delete(rule.integerSourceRoots, descendant)
+						delete(rule.integerPredicateRoots, descendant)
+						return nil
+					})
+				}
+				return nil
+			})
+		})
+	}
 }
 
 // SetParamKinds is used by the plan-level replacement tests and by callers
@@ -953,7 +1249,7 @@ func (rule *ResetParamRefRule) preparedBitCountUsesNumericRuntime(expr *plan.Exp
 
 func (rule *ResetParamRefRule) runtimeParamType(pos int) (types.Type, bool) {
 	value, kind, ok := rule.runtimeParamValue(pos)
-	if !ok || value == nil {
+	if !ok {
 		return types.Type{}, false
 	}
 	if pos < len(rule.paramValues) {
@@ -972,6 +1268,9 @@ func (rule *ResetParamRefRule) runtimeParamType(pos int) (types.Type, bool) {
 				return param.SourceType, true
 			}
 		}
+	}
+	if value == nil {
+		return types.Type{}, false
 	}
 	switch kind {
 	case vector.PrepareParamInteger:
@@ -992,6 +1291,31 @@ func (rule *ResetParamRefRule) runtimeParamType(pos int) (types.Type, bool) {
 		}
 	}
 	return types.Type{}, false
+}
+
+func (rule *ResetParamRefRule) hasNumericRuntimeParam(pos int) bool {
+	_, kind, ok := rule.runtimeParamValue(pos)
+	if !ok {
+		return false
+	}
+	switch kind {
+	case vector.PrepareParamInteger, vector.PrepareParamDecimal,
+		vector.PrepareParamFloat, vector.PrepareParamBoolean:
+		return true
+	}
+	if pos < 0 || pos >= len(rule.paramValues) {
+		return false
+	}
+	param, ok := rule.paramValues[pos].(ParamValue)
+	if !ok {
+		return false
+	}
+	if param.HasSourceType {
+		return param.SourceType.IsNumeric() || param.SourceType.Oid == types.T_bool ||
+			param.SourceType.Oid == types.T_year
+	}
+	return param.HasRuntimeType && (param.RuntimeType.IsNumeric() ||
+		param.RuntimeType.Oid == types.T_bool || param.RuntimeType.Oid == types.T_year)
 }
 
 // typedIntegerParamExpr materializes the exact integer representation of a
@@ -1047,6 +1371,12 @@ func (rule *ResetParamRefRule) typedDecimalParamExpr(pos int32) (*Expr, bool, er
 }
 
 func (rule *ResetParamRefRule) typedRuntimeParamExpr(pos int) (*Expr, bool, error) {
+	if value, _, ok := rule.runtimeParamValue(pos); ok && value == nil {
+		// A NULL still has a source domain (or is genuinely ANY). Rebinding
+		// the enclosing numeric expression from that source lets its overload
+		// be selected as if the same value had appeared in the direct query.
+		return rule.preparedRuntimeSourceExpr(pos, false)
+	}
 	if bound, ok := rule.typedIntegerParamExpr(int32(pos)); ok {
 		return bound, true, nil
 	}
@@ -1290,6 +1620,11 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExprWithBound(
 	if expr == nil {
 		return bound, false, nil
 	}
+	if bound != nil {
+		if _, marked := rule.preparedTemporalNullEnvelopeExprs[bound]; marked {
+			return bound, false, nil
+		}
+	}
 	if param := expr.GetP(); param != nil {
 		if _, ok := positions[param.Pos]; !ok {
 			if bound != nil {
@@ -1421,7 +1756,7 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExprWithBound(
 		// prepare-time envelope. Source-less scientific literals and explicit
 		// FLOAT casts are semantic FLOAT boundaries and must remain unchanged.
 		for i, arg := range copy.GetF().Args {
-			if source, sourceOK := provisionalExactNumericSource(arg); sourceOK {
+			if source, sourceOK := provisionalNumericPeerSource(arg); sourceOK {
 				copy.GetF().Args[i] = source
 			}
 		}
@@ -1430,6 +1765,22 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExprWithBound(
 			return copy.GetF().Args[0], true, nil
 		}
 		restorePreparedIntegerArithmeticOperands(name, copy.GetF().Args)
+		if isPreparedTemporalIntegerArithmetic(name) {
+			if temporalPeer, ok := preparedTemporalNumericPeerFromArgs(fn.Args); ok {
+				// Reconstruct the same TIME boundary as the main rebind path.
+				// The recursive fallback removes provisional marker casts, so
+				// coerce the completed integer operand before choosing an overload.
+				for i, original := range fn.Args {
+					coerced, _, err := rule.coercePreparedTemporalIntegerOperand(
+						original, copy.GetF().Args[i], temporalPeer,
+						len(preparedNumericValueParamPositions(original)) > 0)
+					if err != nil {
+						return nil, false, err
+					}
+					copy.GetF().Args[i] = coerced
+				}
+			}
+		}
 		bound, err := BindFuncExprImplByPlanExpr(rule.ctx, name, copy.GetF().Args)
 		if err != nil {
 			return nil, false, err
@@ -1483,6 +1834,36 @@ func rebindExplicitPreparedCast(ctx context.Context, original *Expr, args []*Exp
 	bound := DeepCopyExpr(original)
 	bound.GetF().Args = args
 	return bound, nil
+}
+
+// provisionalNumericPeerSource restores a semantic numeric peer that PREPARE
+// temporarily converted to TEXT to coexist with an unresolved marker. Unlike
+// provisionalExactNumericSource, FLOAT is valid here: it remains a deliberate
+// semantic boundary and is restored only after a numeric runtime source proves
+// that the enclosing common-type function must be rebound numerically.
+func provisionalNumericPeerSource(expr *plan.Expr) (*Expr, bool) {
+	if source, ok := provisionalExactNumericSource(expr); ok {
+		return source, true
+	}
+	if expr == nil || !expr.GetPreparedNumeric().GetProvisionalResultPeer() {
+		return nil, false
+	}
+	literal := expr.GetLit()
+	if literal == nil || literal.Src == nil {
+		return nil, false
+	}
+	source := literal.Src
+	if fn := source.GetF(); fn != nil && fn.Func != nil && fn.Func.GetObjName() == "cast" &&
+		!fn.GetSyntaxExplicitCast() && len(fn.Args) > 0 && types.T(source.Typ.Id).IsMySQLString() {
+		_, overload := planfunction.DecodeOverloadID(fn.Func.Obj)
+		if overload == 0 {
+			source = fn.Args[0]
+		}
+	}
+	if source != nil && preparedNumericCommonOperandType(makeTypeByPlan2Expr(source).Oid) {
+		return DeepCopyExpr(source), true
+	}
+	return nil, false
 }
 
 func provisionalExactNumericSource(expr *plan.Expr) (*Expr, bool) {
@@ -1540,6 +1921,331 @@ func restorePreparedIntegerArithmeticOperands(name string, args []*Expr) {
 	}
 }
 
+func preparedTemporalNumericPeer(expr *Expr) (types.Type, bool) {
+	if expr == nil {
+		return types.Type{}, false
+	}
+	if metadata := expr.GetPreparedNumeric(); metadata.GetProvisionalResultPeer() &&
+		metadata.GetProvisionalResultPeerTypeId() == int32(types.T_time) {
+		return makeTypeByPlan2Expr(expr), true
+	}
+	if literal := expr.GetLit(); literal != nil && literal.Src != nil &&
+		types.T(literal.Src.Typ.Id) == types.T_time {
+		return makeTypeByPlan2Expr(expr), true
+	}
+	if fn := expr.GetF(); fn != nil && fn.Func != nil &&
+		strings.EqualFold(fn.Func.GetObjName(), "cast") && !isExplicitPreparedCast(expr) && len(fn.Args) > 0 &&
+		types.T(fn.Args[0].Typ.Id) == types.T_time {
+		return makeTypeByPlan2Expr(expr), true
+	}
+	return types.Type{}, false
+}
+
+func preparedTemporalNumericPeerFromArgs(args []*Expr) (types.Type, bool) {
+	for _, arg := range args {
+		peerType, ok := preparedTemporalNumericPeer(arg)
+		if ok && peerType.Oid.IsDecimal() {
+			return peerType, true
+		}
+	}
+	return types.Type{}, false
+}
+
+func isPreparedTemporalIntegerArithmetic(name string) bool {
+	switch name {
+	case "+", "-", "%", "mod":
+		return true
+	default:
+		return false
+	}
+}
+
+// coercePreparedTemporalIntegerOperand applies the TIME numeric coercion at
+// the boundary where the completed operand meets TIME. Rebinding individual
+// parameter leaves would move the TIME scale into an inner integer operation
+// and can change both its overflow behavior and its result. Keep the inner
+// expression in its execute-time integer domain, then cast the whole integer
+// result to the TIME peer's DECIMAL64 domain with scale zero.
+func (rule *ResetParamRefRule) coercePreparedTemporalIntegerOperand(
+	original, bound *Expr,
+	temporalPeer types.Type,
+	hasNumericValueParam bool,
+) (*Expr, bool, error) {
+	if original == nil || bound == nil ||
+		!hasNumericValueParam ||
+		!types.T(bound.Typ.Id).IsInteger() || !temporalPeer.Oid.IsDecimal() {
+		return bound, false, nil
+	}
+	temporalPeer.Scale = 0
+	coerced, err := appendCastBeforeExpr(rule.ctx, bound, makePlan2Type(&temporalPeer))
+	return coerced, true, err
+}
+
+// preparedTemporalStrictNullNestedArithmetic reports whether expr is a nested
+// arithmetic expression whose result is forced NULL by the current execution
+// parameters. Keep this separate from the integer boundary coercion: a NULL
+// marker has no execute-time numeric domain, so the prepared decimal envelope
+// is the only stable result metadata for a strict nested operation.
+func (rule *ResetParamRefRule) preparedTemporalStrictNullNestedArithmetic(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if fn := expr.GetF(); fn != nil && fn.Func != nil {
+		name := strings.ToLower(fn.Func.GetObjName())
+		if name == "cast" && len(fn.Args) > 0 {
+			return rule.preparedTemporalStrictNullNestedArithmetic(fn.Args[0])
+		}
+		if !isPreparedTemporalIntegerArithmetic(name) {
+			return false
+		}
+		for _, arg := range fn.Args {
+			if rule.preparedTemporalStrictNullValue(arg) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (rule *ResetParamRefRule) preparedTemporalStrictNullValue(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if param := expr.GetP(); param != nil && param.Pos >= 0 {
+		return rule.preparedRuntimeParamIsNull(int(param.Pos))
+	}
+	if literal := expr.GetLit(); literal != nil {
+		return literal.GetIsnull()
+	}
+	if fn := expr.GetF(); fn != nil && fn.Func != nil {
+		name := strings.ToLower(fn.Func.GetObjName())
+		if name == "cast" && len(fn.Args) > 0 {
+			return rule.preparedTemporalStrictNullValue(fn.Args[0])
+		}
+		if isPreparedTemporalIntegerArithmetic(name) {
+			for _, arg := range fn.Args {
+				if rule.preparedTemporalStrictNullValue(arg) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func (rule *ResetParamRefRule) preparedRuntimeParamSelected(pos int) bool {
+	if pos < 0 {
+		return false
+	}
+	// A nil params slice is used by direct helper tests that provide runtime
+	// values through SetParamValues. The execute-time plan replacement path
+	// always supplies a slot for every marker; an absent slot there means the
+	// position was deliberately left unselected.
+	if rule.params == nil {
+		return true
+	}
+	return pos < len(rule.params) && rule.params[pos] != nil
+}
+
+func (rule *ResetParamRefRule) preparedRuntimeParamIsNull(pos int) bool {
+	if pos < 0 {
+		return false
+	}
+	// A position-scoped specialization leaves unselected entries absent from
+	// rule.params while its parallel ParamValue slot is the zero value. That
+	// zero value is not an execute-time NULL and must not participate in the
+	// unresolved envelope inference.
+	if !rule.preparedRuntimeParamSelected(pos) {
+		return false
+	}
+	if pos < len(rule.paramValues) {
+		if param, ok := rule.paramValues[pos].(ParamValue); ok {
+			return preparedParamValueIsNull(param)
+		}
+	}
+	value, _, ok := rule.runtimeParamValue(pos)
+	return ok && value == nil
+}
+
+// inferPreparedTemporalNullExpr derives one operand type for the unresolved
+// NULL envelope without changing the executable expression. A domainless NULL
+// uses the complete DECIMAL128 operand domain for inference only; a concrete
+// marker uses its current execute-time numeric type. Provisional casts are
+// transparent, while explicit casts and non-arithmetic control-flow functions
+// remain semantic boundaries.
+func (rule *ResetParamRefRule) inferPreparedTemporalNullExpr(
+	expr *plan.Expr,
+) (types.Type, bool, error) {
+	if expr == nil {
+		return types.Type{}, false, nil
+	}
+	if param := expr.GetP(); param != nil && param.Pos >= 0 {
+		if !rule.preparedRuntimeParamSelected(int(param.Pos)) {
+			return types.Type{}, false, nil
+		}
+		if rule.preparedRuntimeParamIsNull(int(param.Pos)) {
+			return types.New(types.T_decimal128, 38, 0), true, nil
+		}
+		typ, ok := rule.runtimeParamType(int(param.Pos))
+		if !ok || !typ.IsNumeric() {
+			return types.Type{}, false, nil
+		}
+		return typ, true, nil
+	}
+	if literal := expr.GetLit(); literal != nil {
+		if literal.GetIsnull() {
+			// Constant folding can erase an explicit CAST(NULL AS ...)
+			// wrapper while retaining the literal's declared type. Only a
+			// T_any NULL is domainless; a typed NULL must keep its explicit
+			// integer/decimal boundary during envelope inference.
+			typedNull := makeTypeByPlan2Expr(expr)
+			if typedNull.Oid != types.T_any {
+				return typedNull, true, nil
+			}
+			return types.New(types.T_decimal128, 38, 0), true, nil
+		}
+		return makeTypeByPlan2Expr(expr), true, nil
+	}
+	if len(preparedNumericValueParamPositions(expr)) == 0 &&
+		!rule.preparedTemporalStrictNullValue(expr) {
+		return makeTypeByPlan2Expr(expr), true, nil
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return types.Type{}, false, nil
+	}
+	name := strings.ToLower(fn.Func.GetObjName())
+	if name == "cast" && len(fn.Args) > 0 {
+		if isExplicitPreparedCast(expr) {
+			return makeTypeByPlan2Expr(expr), true, nil
+		}
+		// Binder-inserted casts around a marker or a marker-bearing arithmetic
+		// subtree are provisional overload artifacts. Infer from their source;
+		// keeping this cast would reintroduce the DECIMAL64 PREPARE hint.
+		return rule.inferPreparedTemporalNullExpr(fn.Args[0])
+	}
+	if !isPreparedTemporalIntegerArithmetic(name) {
+		// In particular, do not cross COALESCE/IFNULL/CASE: those functions can
+		// turn a NULL marker into a concrete value before TIME arithmetic sees it.
+		return types.Type{}, false, nil
+	}
+	argTypes := make([]types.Type, len(fn.Args))
+	for i, arg := range fn.Args {
+		typ, ok, err := rule.inferPreparedTemporalNullExpr(arg)
+		if err != nil || !ok {
+			return types.Type{}, false, err
+		}
+		argTypes[i] = typ
+	}
+	resolved, err := planfunction.GetFunctionByName(rule.ctx, name, argTypes)
+	if err != nil {
+		return types.Type{}, false, nil
+	}
+	return resolved.GetReturnType(), true, nil
+}
+
+// preparedTemporalNullEnvelopeType resolves the guarded outer operation from
+// its original operands. originalTyp is intentionally only a scale fallback:
+// it is the narrow PREPARE-time hint, not the NULL execution envelope.
+func (rule *ResetParamRefRule) preparedTemporalNullEnvelopeType(
+	functionName string,
+	temporalPeer types.Type,
+	originalTyp plan.Type,
+	originalArgs []*Expr,
+) (plan.Type, bool, error) {
+	argTypes := make([]types.Type, len(originalArgs))
+	for i, arg := range originalArgs {
+		if peer, ok := preparedTemporalNumericPeer(arg); ok && peer.Oid.IsDecimal() {
+			argTypes[i] = peer
+			continue
+		}
+		typ, ok, err := rule.inferPreparedTemporalNullExpr(arg)
+		if err != nil || !ok {
+			return plan.Type{}, false, err
+		}
+		// The executable TIME boundary first coerces a completed integer
+		// operand into the TIME peer's DECIMAL64 domain. Reproduce that boundary
+		// in the type-only inference as well; resolving DECIMAL64 + INT directly
+		// would widen an explicit CAST(... AS SIGNED/UNSIGNED) to DECIMAL128.
+		if types.T(typ.Oid).IsInteger() {
+			integerPeer := temporalPeer
+			integerPeer.Scale = 0
+			typ = integerPeer
+		}
+		argTypes[i] = typ
+	}
+	resolved, err := planfunction.GetFunctionByName(rule.ctx, functionName, argTypes)
+	if err != nil {
+		return plan.Type{}, false, nil
+	}
+	target := resolved.GetReturnType()
+	if target.Scale < originalTyp.Scale {
+		target.Scale = originalTyp.Scale
+	}
+	if target.Scale < temporalPeer.Scale {
+		target.Scale = temporalPeer.Scale
+	}
+	return makePlan2Type(&target), true, nil
+}
+
+// restorePreparedTemporalNullEnvelope keeps the result metadata selected when
+// a prepared TIME arithmetic expression had no runtime numeric category. It
+// is deliberately limited to strict nested arithmetic: COALESCE/IFNULL/CASE
+// can turn a NULL marker into a value and must continue through normal
+// execute-time type inference.
+func (rule *ResetParamRefRule) restorePreparedTemporalNullEnvelope(
+	functionName string,
+	originalTyp plan.Type,
+	originalArgs []*Expr,
+	rewritten *Expr,
+) (*Expr, bool, error) {
+	if rewritten == nil || !isPreparedTemporalIntegerArithmetic(functionName) ||
+		!types.T(originalTyp.Id).IsDecimal() {
+		return rewritten, false, nil
+	}
+	temporalPeer, ok := preparedTemporalNumericPeerFromArgs(originalArgs)
+	if !ok {
+		return rewritten, false, nil
+	}
+	strictNull := false
+	for _, arg := range originalArgs {
+		if rule.preparedTemporalStrictNullNestedArithmetic(arg) {
+			strictNull = true
+			break
+		}
+	}
+	if !strictNull {
+		return rewritten, false, nil
+	}
+	target, ok, inferErr := rule.preparedTemporalNullEnvelopeType(
+		functionName, temporalPeer, originalTyp, originalArgs)
+	if inferErr != nil {
+		return rewritten, false, inferErr
+	}
+	if !ok || (types.T(rewritten.Typ.Id) == types.T(target.Id) &&
+		rewritten.Typ.Width == target.Width &&
+		rewritten.Typ.Scale == target.Scale &&
+		rewritten.Typ.SameCollation(target) &&
+		rewritten.Typ.NotNullable == target.NotNullable) {
+		return rewritten, false, nil
+	}
+	// A strict nested NULL is nullable even if the prepare-time hint was
+	// marked non-nullable by the provisional overload.
+	target.NotNullable = false
+	restored, err := appendCastBeforeExpr(rule.ctx, rewritten, target)
+	if err == nil && restored != nil {
+		restored.Typ.NotNullable = false
+		if cast := restored.GetF(); cast != nil && len(cast.Args) > 1 && cast.Args[1] != nil {
+			cast.Args[1].Typ.NotNullable = false
+		}
+		if rule.preparedTemporalNullEnvelopeExprs == nil {
+			rule.preparedTemporalNullEnvelopeExprs = make(map[*plan.Expr]struct{})
+		}
+		rule.preparedTemporalNullEnvelopeExprs[restored] = struct{}{}
+	}
+	return restored, true, err
+}
+
 func (rule *ResetParamRefRule) rebindPreparedIntegerExpr(expr *plan.Expr) (*Expr, bool, error) {
 	positions := preparedNumericValueParamPositions(expr)
 	if len(positions) == 0 {
@@ -1585,6 +2291,9 @@ func (rule *ResetParamRefRule) refreshPreparedNumericSource(expr *plan.Expr) (*E
 		if typ, ok := rule.preparedNumericSourceType(expr); ok && !reflect.DeepEqual(expr.Typ, typ) {
 			copy := DeepCopyExpr(expr)
 			copy.Typ = typ
+			// The producer owns the value domain, but an outer join can add
+			// NULLs at this occurrence even for a non-nullable aggregate.
+			copy.Typ.NotNullable = typ.NotNullable && expr.Typ.NotNullable
 			return copy, true, nil
 		}
 		return expr, false, nil
@@ -1608,6 +2317,9 @@ func (rule *ResetParamRefRule) refreshPreparedNumericSource(expr *plan.Expr) (*E
 			return nil, false, err
 		}
 		preserveReboundFunctionMetadata(fn, bound.GetF())
+		// Rebinding a child must not erase the enclosing expression's
+		// provenance (notably an IFNULL common-value boundary).
+		bound.PreparedNumeric = copyPreparedNumericMetadata(expr.PreparedNumeric)
 		return bound, true, nil
 	}
 	if list := expr.GetList(); list != nil {
@@ -1666,7 +2378,34 @@ func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 	}
 	var rewritten *plan.Expr
 	var err error
-	if _, preserve := rule.preserveRoots[e]; preserve {
+	_, source := rule.integerSourceRoots[e]
+	if positions, predicate := rule.integerPredicateRoots[e]; predicate {
+		// All markers participating in this separate comparison must have a
+		// numeric execution domain. One numeric result cannot coerce a TEXT
+		// comparison peer into an integer value source.
+		source = len(positions) > 0
+		for pos := range positions {
+			if pos < 0 || int(pos) >= len(rule.paramValues) ||
+				!PreparedParamValueHasNumericRuntime(rule.paramValues[pos]) {
+				source = false
+				break
+			}
+		}
+	}
+	if source {
+		// This occurrence already uses the actual runtime domain. A second
+		// numeric-fallback pass would infer a number from real TEXT again.
+		fallbackSource = nil
+		rewritten, err = rule.integerArgumentRuntimeSource(e)
+		rule.specialized = true
+	} else if hasSourceDependentIntegerArguments(e) {
+		fallbackSource = nil
+		rewritten, err = rule.rebindSourceDependentIntegerArguments(e)
+	} else if isIntegerArgumentCast(e) {
+		rewritten, err = rule.rebindIntegerArgumentCast(e)
+	} else if _, preserve := rule.preserveRoots[e]; preserve {
+		rewritten, err = rule.applyExprPreservingRoot(e)
+	} else if _, directAssignment := directIntegerAssignmentParam(e); directAssignment {
 		rewritten, err = rule.applyExprPreservingRoot(e)
 	} else {
 		rewritten, err = rule.applyExpr(e)
@@ -1738,12 +2477,84 @@ func (rule *ResetParamRefRule) applyExprPreservingRoot(e *plan.Expr) (*plan.Expr
 	if e == nil {
 		return nil, nil
 	}
+	// The writer's integer type stays fixed, but a directly assigned numeric
+	// parameter must not be interpreted as TEXT merely because of transport.
+	// Do not reinterpret string parameters or descend through user expressions.
+	if pos, ok := directIntegerAssignmentParam(e); ok {
+		if pos < len(rule.paramValues) {
+			if param, ok := rule.paramValues[pos].(ParamValue); ok &&
+				((param.IsBinaryProtocol && (!param.HasRuntimeType || param.RuntimeType.Oid.IsMySQLString())) ||
+					(param.HasSourceType && param.SourceType.Oid.IsMySQLString())) {
+				return e, nil
+			}
+		}
+		if typ, known := rule.runtimeParamType(pos); known && typ.IsNumeric() {
+			if source, bound, err := rule.typedRuntimeParamExpr(pos); err != nil {
+				return nil, err
+			} else if bound {
+				rule.specialized = true
+				return forceAssignmentCastExprWithName(rule.ctx, source, e.Typ, e.GetF().Func.GetObjName())
+			}
+		}
+		// A textual marker remains parameterized: generic parameter replacement
+		// may infer numeric-prefix types for other consumers of the same marker.
+		return e, nil
+	}
+	// A sibling direct assignment marker must keep its runtime vector metadata
+	// (notably PrepareParamKind for BIT). Replacing it with a TEXT literal while
+	// another assignment triggers specialization changes numeric values to bytes.
+	if fn := e.GetF(); fn != nil && len(fn.Args) == 2 && !types.T(e.Typ.Id).IsInteger() {
+		switch fn.Func.GetObjName() {
+		case "cast", "cast_strict", "cast_assign", "cast_ignore":
+			if param := fn.Args[0].GetP(); param != nil {
+				position := int(param.Pos)
+				if position >= 0 && position < len(rule.paramValues) {
+					if value, ok := rule.paramValues[position].(ParamValue); ok &&
+						(value.PrepareParamKind != vector.PrepareParamNone ||
+							(value.HasSourceType && value.SourceType.IsNumeric()) ||
+							(value.HasRuntimeType && value.RuntimeType.IsNumeric())) {
+						return e, nil
+					}
+				}
+				bound, err := rule.ApplyExpr(fn.Args[0])
+				if err != nil {
+					return nil, err
+				}
+				rule.retainRuntimeParamRef(int(param.Pos), bound)
+				fn.Args[0] = bound
+				return e, nil
+			}
+		}
+	}
 	switch exprImpl := e.Expr.(type) {
 	case *plan.Expr_P:
 		return e, nil
 	case *plan.Expr_F:
 		if exprImpl.F == nil {
 			return e, nil
+		}
+		if exprImpl.F.Func != nil && strings.EqualFold(exprImpl.F.Func.GetObjName(), "inet_ntoa") &&
+			len(exprImpl.F.Args) == 1 {
+			// INET_NTOA owns the source-domain contract for a direct marker. A
+			// matching VARCHAR assignment cast may make this function a preserved
+			// DML write root, but preserving the root must not bypass the same
+			// execute-time JSON/temporal rebinding used by SELECT. Keep the
+			// destination-facing result type stable after rebinding.
+			_, direct := preparedParamPosition(exprImpl.F.Args[0])
+			if !direct {
+				_, direct = preparedResultParamPosition(exprImpl.F.Args[0], "inet_ntoa")
+			}
+			if direct {
+				originalTyp := e.Typ
+				rewritten, err := rule.applyExpr(e)
+				if err != nil {
+					return nil, err
+				}
+				if rewritten != nil {
+					rewritten.Typ = originalTyp
+				}
+				return rewritten, nil
+			}
 		}
 		if isPreparedGeometrySRIDFunction(exprImpl.F.Func.GetObjName()) &&
 			len(exprImpl.F.Args) >= 2 {
@@ -1752,11 +2563,6 @@ func (rule *ResetParamRefRule) applyExprPreservingRoot(e *plan.Expr) (*plan.Expr
 				// result metadata. It cannot remain a preserved write root or
 				// the destination cast would see the prepare-time undefined SRID.
 				return rule.applyExpr(e)
-			}
-		}
-		if rule.validateFunctionArgs != nil {
-			if err := rule.validateFunctionArgs(exprImpl.F.Func.GetObjName(), exprImpl.F.Args); err != nil {
-				return nil, err
 			}
 		}
 		for i, arg := range exprImpl.F.Args {
@@ -1821,27 +2627,55 @@ func (rule *ResetParamRefRule) isSQLExecuteNumericDependent(expr *plan.Expr) boo
 	return expr != nil && rule.sqlExecuteNumericDependent[expr]
 }
 
+type preparedStringDomainParamLookup func(int) (any, types.Type, bool)
+
+func (rule *ResetParamRefRule) stringDomainParamLookup(pos int) (any, types.Type, bool) {
+	if pos < 0 || pos >= len(rule.paramValues) {
+		return nil, types.Type{}, false
+	}
+	fallback := types.T_text.ToType()
+	if pos < len(rule.params) && rule.params[pos] != nil {
+		fallback = makeTypeByPlan2Expr(rule.params[pos])
+	}
+	return rule.paramValues[pos], fallback, true
+}
+
+func (rule *ResetParamRefRule) preparedExecutionExprType(expr *Expr) (types.Type, bool, bool, error) {
+	return preparedExecutionExprType(rule.ctx, expr, rule.stringDomainParamLookup)
+}
+
 // preparedExecutionParamType returns the current parameter type used only for
 // execute-time regexp compatibility and result-domain rebinding. COM_STMT
 // string packets deliberately keep a text-shaped transport type, so their
 // binary domain must come from IsBinaryString rather than RuntimeType.
-func (rule *ResetParamRefRule) preparedExecutionParamType(
+func preparedExecutionParamType(
+	ctx context.Context,
 	expr *plan.Expr,
 	pos int,
+	lookup preparedStringDomainParamLookup,
 ) (typ types.Type, dynamic, domainless bool, err error) {
-	if pos < 0 || pos >= len(rule.paramValues) {
-		return types.Type{}, false, false,
-			moerr.NewInternalErrorf(rule.ctx, "get prepare params error, index %d not exists", pos)
+	value, fallback, found := lookup(pos)
+	if !found {
+		return types.Type{}, false, false, moerr.NewInternalErrorf(ctx, "get prepare params error, index %d not exists", pos)
 	}
-	value := rule.paramValues[pos]
+	markerType := makeTypeByPlan2Expr(expr)
+	if markerType.Oid == types.T_any {
+		markerType = types.T_text.ToType()
+	}
+
 	if param, ok := value.(ParamValue); ok {
 		if param.Value == nil {
 			// A NULL execution does not erase the marker's PREPARE-time type.
 			// This differs from a bare NULL literal, which has no domain. MySQL
 			// therefore still rejects a prepared text marker paired with a fixed
 			// binary regexp operand when the current marker value is NULL.
-			preparedType := makeTypeByPlan2Expr(expr)
-			return preparedType, true, preparedType.Oid == types.T_any, nil
+			return markerType, true, false, nil
+		}
+		if param.RuntimeStringDomain == types.RuntimeStringText {
+			return types.T_varchar.ToType(), true, false, nil
+		}
+		if param.RuntimeStringDomain == types.RuntimeStringBinary {
+			return types.T_varbinary.ToType(), true, false, nil
 		}
 		if param.IsBinaryString ||
 			(param.HasSourceType && types.StaticStringDomain(param.SourceType) == types.StringDomainBinary) ||
@@ -1859,13 +2693,9 @@ func (rule *ResetParamRefRule) preparedExecutionParamType(
 		}
 	}
 	if value == nil {
-		preparedType := makeTypeByPlan2Expr(expr)
-		return preparedType, true, preparedType.Oid == types.T_any, nil
+		return markerType, true, false, nil
 	}
-	if pos < len(rule.params) && rule.params[pos] != nil {
-		return makeTypeByPlan2Expr(rule.params[pos]), true, false, nil
-	}
-	return types.T_text.ToType(), true, false, nil
+	return fallback, true, false, nil
 }
 
 // preparedExecutionExprType evaluates only the type/domain transfer of a
@@ -1873,8 +2703,10 @@ func (rule *ResetParamRefRule) preparedExecutionParamType(
 // plan. Explicit casts terminate the transfer; fixed-output functions keep
 // their prepared type; domain-preserving functions are resolved from current
 // child types through the normal function registry.
-func (rule *ResetParamRefRule) preparedExecutionExprType(
+func preparedExecutionExprType(
+	ctx context.Context,
 	expr *plan.Expr,
+	lookup preparedStringDomainParamLookup,
 ) (typ types.Type, dynamic, domainless bool, err error) {
 	if expr == nil {
 		return types.Type{}, false, false, nil
@@ -1886,28 +2718,28 @@ func (rule *ResetParamRefRule) preparedExecutionExprType(
 	if isImplicitPreparedParamCast(expr) {
 		fn := expr.GetF()
 		if fn != nil && len(fn.Args) > 0 {
-			return rule.preparedExecutionExprType(fn.Args[0])
+			return preparedExecutionExprType(ctx, fn.Args[0], lookup)
 		}
 	}
 
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_P:
-		return rule.preparedExecutionParamType(expr, int(exprImpl.P.Pos))
+		return preparedExecutionParamType(ctx, expr, int(exprImpl.P.Pos), lookup)
 	case *plan.Expr_Lit:
 		if exprImpl.Lit != nil && exprImpl.Lit.Src != nil &&
 			preparedExprContainsParam(exprImpl.Lit.Src) {
-			return rule.preparedExecutionExprType(exprImpl.Lit.Src)
+			return preparedExecutionExprType(ctx, exprImpl.Lit.Src, lookup)
 		}
 		return preparedType, false, exprImpl.Lit != nil && exprImpl.Lit.GetIsnull() &&
 			exprImpl.Lit.GetStringSource() == 0, nil
 	case *plan.Expr_Sub:
 		if exprImpl.Sub != nil {
-			return rule.preparedExecutionExprType(exprImpl.Sub.Child)
+			return preparedExecutionExprType(ctx, exprImpl.Sub.Child, lookup)
 		}
 		return preparedType, false, false, nil
 	case *plan.Expr_Col:
 		if source := expr.GetPreparedNumeric().GetStringDomainSource(); source != nil {
-			return rule.preparedExecutionExprType(source)
+			return preparedExecutionExprType(ctx, source, lookup)
 		}
 		return preparedType, false, false, nil
 	case *plan.Expr_F:
@@ -1915,20 +2747,29 @@ func (rule *ResetParamRefRule) preparedExecutionExprType(
 			!preparedFunctionStringDomainDependsOnRuntimeParam(expr) {
 			return preparedType, false, false, nil
 		}
+		functionName := strings.ToLower(exprImpl.F.Func.GetObjName())
 		argTypes := make([]types.Type, len(exprImpl.F.Args))
 		var stringDomainModes []planfunction.StringDomainCheckMode
-		stringOperands := preparedRegexpCompatibilityStringOperandCount(
-			strings.ToLower(exprImpl.F.Func.GetObjName()), len(exprImpl.F.Args))
+		stringOperands := preparedRegexpCompatibilityStringOperandCount(functionName, len(exprImpl.F.Args))
 		if stringOperands > 0 {
 			stringDomainModes = make([]planfunction.StringDomainCheckMode, len(exprImpl.F.Args))
 		}
 		for i, arg := range exprImpl.F.Args {
-			currentType, _, childDomainless, childErr := rule.preparedExecutionExprType(arg)
+			currentType, _, childDomainless, childErr := preparedExecutionExprType(ctx, arg, lookup)
 			if childErr != nil {
 				return types.Type{}, false, false, childErr
 			}
 			if currentType.Oid == types.T_any && !childDomainless {
 				currentType = makeTypeByPlan2Expr(arg)
+			}
+			if pos, direct := preparedParamPosition(arg); direct {
+				if value, _, found := lookup(pos); found {
+					if param, ok := value.(ParamValue); ok {
+						if target, ok := preparedSQLExecuteTextConsumerType(functionName, arg, param); ok {
+							currentType, childDomainless = target, false
+						}
+					}
+				}
 			}
 			argTypes[i] = currentType
 			if i < stringOperands {
@@ -1943,10 +2784,10 @@ func (rule *ResetParamRefRule) preparedExecutionExprType(
 		var resolveErr error
 		if stringDomainModes != nil {
 			resolved, resolveErr = planfunction.GetFunctionByNameWithStringDomainCheckModes(
-				rule.ctx, exprImpl.F.Func.GetObjName(), argTypes, stringDomainModes)
+				ctx, exprImpl.F.Func.GetObjName(), argTypes, stringDomainModes)
 		} else {
 			resolved, resolveErr = planfunction.GetFunctionByName(
-				rule.ctx, exprImpl.F.Func.GetObjName(), argTypes)
+				ctx, exprImpl.F.Func.GetObjName(), argTypes)
 		}
 		if resolveErr != nil {
 			return types.Type{}, false, false, resolveErr
@@ -1961,37 +2802,66 @@ func (rule *ResetParamRefRule) preparedExecutionExprType(
 	}
 }
 
-func (rule *ResetParamRefRule) resolvePreparedRegexpStringDomainCheckModes(
-	name string,
-	boundArgs, originalArgs []*plan.Expr,
-) ([]planfunction.StringDomainCheckMode, error) {
-	stringOperands := preparedRegexpCompatibilityStringOperandCount(name, len(boundArgs))
+func preparedRegexpLookupDomains(ctx context.Context, name string, args []*Expr,
+	lookupTypes []types.Type, lookup preparedStringDomainParamLookup) ([]types.Type, []planfunction.StringDomainCheckMode, error) {
+	stringOperands := preparedRegexpCompatibilityStringOperandCount(name, len(args))
 	if stringOperands == 0 {
-		return nil, nil
+		return lookupTypes, nil, nil
 	}
-	modes := make([]planfunction.StringDomainCheckMode, len(boundArgs))
-	for i := 0; i < stringOperands && i < len(originalArgs); i++ {
-		currentType, dynamic, currentDomainless, err :=
-			rule.preparedExecutionExprType(originalArgs[i])
+	lookupTypes = append([]types.Type(nil), lookupTypes...)
+	modes := make([]planfunction.StringDomainCheckMode, len(args))
+	for i := 0; i < stringOperands; i++ {
+		typ, dynamic, domainless, err := preparedExecutionExprType(ctx, args[i], lookup)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		if currentDomainless {
+		if domainless {
 			modes[i] = planfunction.StringDomainCheckDomainless
-			continue
-		}
-		if _, directMarker := preparedParamPosition(originalArgs[i]); directMarker {
+		} else if _, direct := preparedParamPosition(args[i]); direct ||
+			(preparedBindingState(ctx) != nil && preparedRegexpMarkerOperand(args[i])) {
 			modes[i] = planfunction.StringDomainCheckParamMarker
 		}
-		if !dynamic {
+		if dynamic {
+			lookupTypes[i] = typ
+		}
+	}
+	return lookupTypes, modes, nil
+}
+
+func preparedRegexpMarkerOperand(expr *Expr) bool {
+	if expr == nil || isExplicitPreparedCast(expr) {
+		return false
+	}
+	if _, marker := preparedParamPosition(expr); marker {
+		return true
+	}
+	if source := expr.GetPreparedNumeric().GetStringDomainSource(); source != nil {
+		_, marker := preparedParamPosition(source)
+		return marker
+	}
+	if sub := expr.GetSub(); sub != nil {
+		return preparedRegexpMarkerOperand(sub.Child)
+	}
+	return false
+}
+
+func (rule *ResetParamRefRule) resolvePreparedRegexpStringDomainCheckModes(name string,
+	boundArgs, originalArgs []*Expr) ([]planfunction.StringDomainCheckMode, error) {
+	lookupTypes := make([]types.Type, len(boundArgs))
+	for i, arg := range boundArgs {
+		lookupTypes[i] = makeTypeByPlan2Expr(arg)
+	}
+	lookupTypes, modes, err := preparedRegexpLookupDomains(rule.ctx, name, originalArgs, lookupTypes, rule.stringDomainParamLookup)
+	if err != nil || modes == nil {
+		return nil, err
+	}
+	for i, arg := range boundArgs {
+		if makeTypeByPlan2Expr(arg) == lookupTypes[i] {
 			continue
 		}
-		if boundArgs[i] == nil {
-			continue
-		}
-		currentArg := *boundArgs[i]
-		currentArg.Typ = makePlan2Type(&currentType)
-		boundArgs[i] = &currentArg
+		current := *arg
+		current.Typ = makePlan2Type(&lookupTypes[i])
+		boundArgs[i] = &current
 	}
 	return modes, nil
 }
@@ -2003,7 +2873,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		var originalTemporalExpr *Expr
 		if exprImpl.F.Func != nil {
 			switch strings.ToLower(exprImpl.F.Func.GetObjName()) {
-			case "date_add", "date_sub", "str_to_date", "to_date":
+			case "date_add", "date_sub", "str_to_date", "to_date", "addtime", "subtime", "timediff", "time":
 				originalTemporalExpr = DeepCopyExpr(e)
 			}
 		}
@@ -2035,11 +2905,6 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		if isPreparedPrefixFilter(exprImpl.F.Func.GetObjName()) {
 			rule.markSerializedDecimalParamTypes(e)
 		}
-		if rule.validateFunctionArgs != nil {
-			if err := rule.validateFunctionArgs(exprImpl.F.Func.GetObjName(), exprImpl.F.Args); err != nil {
-				return nil, err
-			}
-		}
 		originalTyp := e.Typ
 		originalFuncObj := int64(0)
 		originalArgTypes := make([]plan.Type, len(exprImpl.F.Args))
@@ -2054,6 +2919,13 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			}
 		}
 		functionName = strings.ToLower(functionName)
+		fixedDecimalCommonValue := preparedCommonValueFixedDecimalPeer(
+			functionName, originalArgs, rule.numericPrefixParamPositions, rule.paramValues)
+		var temporalPeer types.Type
+		hasTemporalPeer := false
+		if isPreparedTemporalIntegerArithmetic(functionName) {
+			temporalPeer, hasTemporalPeer = preparedTemporalNumericPeerFromArgs(originalArgs)
+		}
 		// A regexp check deferred at PREPARE must run at every EXECUTE even
 		// when a nested dynamic result happens to resolve back to the same type.
 		// Type equality alone cannot prove that all current sibling domains are
@@ -2077,6 +2949,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		numericPrefixDependent := false
 		sqlExecuteNumericSourceDependent := false
 		sqlExecuteNumericNestedDependent := false
+		commonValueSourceChanged := false
 		numericComparisonFallback := false
 		boundArgs := make([]*plan.Expr, len(exprImpl.F.Args))
 		// An implicit cast around a COM_STMT text marker is provisional.  For a
@@ -2106,16 +2979,35 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				originalArgFuncObj = preparedExprFunctionObj(arg)
 			}
 			implicitParamCast := isImplicitPreparedParamCast(arg)
+			provisionalCommonValueCast := false
+			commonValueResultArg := (isPreparedCommonValueFunction(functionName) || functionName == "if" ||
+				functionName == "ifnull" || functionName == "case") &&
+				preparedSQLExecuteNumericResultValueArg(functionName, i, len(exprImpl.F.Args))
+			if commonValueResultArg &&
+				originalArgs[i] != nil && originalArgs[i].GetPreparedNumeric().GetProvisionalResultCast() {
+				if cast := arg.GetF(); cast != nil && cast.Func != nil &&
+					cast.Func.GetObjName() == "cast" && len(cast.Args) == 2 && cast.Args[0] != nil &&
+					!cast.GetSyntaxExplicitCast() && cast.Args[0].GetCol() == nil {
+					// A relational source is refreshed after its producer. Keep its
+					// annotated envelope until that pass can resolve the column.
+					_, overload := planfunction.DecodeOverloadID(cast.Func.GetObj())
+					provisionalCommonValueCast = overload == 0
+				}
+			}
 			bitwiseParamCast := isPreparedBitwiseOperator(functionName) &&
 				isPreparedBitwiseParamCast(arg)
 			paramPos, hasParamPos := preparedParamPosition(arg)
+			bareCommonValueNull := commonValueResultArg && hasParamPos &&
+				arg.GetP() != nil && rule.preparedRuntimeParamIsNull(paramPos)
 			var preparedBitwiseSource *plan.Expr
 			var hasPreparedBitwiseSource bool
 			var nestedPreparedBitwiseSource *plan.Expr
+			hasPreparedNumericValue := hasTemporalPeer &&
+				len(preparedNumericValueParamPositions(originalArgs[i])) > 0
 			if hasParamPos && isPreparedBitwiseAggregate(functionName) && i == 0 &&
 				isBitwiseAggregatePrivateCast(arg) {
 				preparedBitwiseSource, hasPreparedBitwiseSource, err =
-					rule.preparedBitwiseAggregateSource(paramPos)
+					rule.preparedRuntimeSourceExpr(paramPos, false)
 				if err != nil {
 					return nil, err
 				}
@@ -2131,6 +3023,36 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			if !hasParamPos && preparedFunctionArgUsesSQLExecuteNumericSource(
 				e, functionName, i, len(exprImpl.F.Args)) {
 				paramPos, hasParamPos = preparedResultParamPosition(arg, functionName)
+			}
+			// The prepare-time cast around a marker is only an overload hint.
+			// FIELD and the variadic extrema compare the complete runtime tuple;
+			// a SQL user variable's source domain must reach that comparison before
+			// any numeric-prefix or provisional cast can reinterpret it.
+			// A bare marker already typed by its consumer (for example the uint64
+			// LIMIT inside a generated vector-index overfetch budget) is not a
+			// provisional comparison operand; keep that consumer's domain.
+			variadicSource := false
+			if hasParamPos && !isExplicitPreparedCast(arg) &&
+				!(fixedDecimalCommonValue && rule.numericPrefixParamPositions[paramPos]) &&
+				(implicitParamCast || types.T(arg.Typ.Id).IsMySQLString() || types.T(arg.Typ.Id) == types.T_any) &&
+				(functionName == "field" || functionName == "greatest" || functionName == "least") &&
+				paramPos < len(rule.paramValues) {
+				if param, ok := rule.paramValues[paramPos].(ParamValue); ok &&
+					((param.Value == nil && (param.IsBinaryProtocol || param.HasSourceType || param.HasRuntimeType)) ||
+						(!param.IsBinaryProtocol && param.HasSourceType && param.SourceType.Oid != types.T_any) ||
+						(functionName == "field" && param.IsBinaryProtocol && param.HasRuntimeType &&
+							param.RuntimeType.Oid != types.T_any && preparedNumericCommonOperandType(param.RuntimeType.Oid))) {
+					variadicSource = true
+				}
+			}
+			var preparedInetNtoaSource *plan.Expr
+			var hasPreparedInetNtoaSource bool
+			if hasParamPos && functionName == "inet_ntoa" {
+				preparedInetNtoaSource, hasPreparedInetNtoaSource, err =
+					rule.preparedInetNtoaSourceExpr(paramPos)
+				if err != nil {
+					return nil, err
+				}
 			}
 			var preparedCharSource *plan.Expr
 			var hasPreparedCharSource bool
@@ -2155,7 +3077,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			useSQLExecuteNumericSource := hasParamPos &&
 				preparedFunctionArgUsesSQLExecuteNumericSource(
 					e, functionName, i, len(exprImpl.F.Args)) &&
-				(hasPreparedBitwiseSource || hasPreparedCharSource || charStringSourceFallback || (paramPos >= 0 &&
+				(hasPreparedBitwiseSource || hasPreparedCharSource || hasPreparedInetNtoaSource || charStringSourceFallback || (paramPos >= 0 &&
 					paramPos < len(rule.sqlExecuteNumericParams) &&
 					rule.sqlExecuteNumericParams[paramPos] != nil)) &&
 				preparedSQLExecuteNumericSourceOwnsResultDomain(
@@ -2172,7 +3094,15 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			}
 			prefixEligibleOccurrence := !(sharedControlParam &&
 				paramPos < len(rule.sqlExecuteStringBackedParams) && rule.sqlExecuteStringBackedParams[paramPos])
-			if hasParamPos && rule.numericPrefixParamPositions[paramPos] && prefixEligibleOccurrence {
+			// Common results preserve concrete SQL strings, including typed NULL.
+			// Prefix eligibility belongs to transport-only text and numeric consumers.
+			if hasParamPos && isPreparedCommonValueFunction(functionName) && !fixedDecimalCommonValue && paramPos < len(rule.paramValues) {
+				if param, ok := rule.paramValues[paramPos].(ParamValue); ok && !param.IsBinaryProtocol &&
+					param.HasSourceType && param.SourceType.Oid.IsMySQLString() {
+					prefixEligibleOccurrence = false
+				}
+			}
+			if hasParamPos && rule.numericPrefixParamPositions[paramPos] && prefixEligibleOccurrence && !variadicSource {
 				numericPrefixArgs[i] = true
 				numericPrefixKinds[i] = rule.numericPrefixParamKinds[paramPos]
 			}
@@ -2197,6 +3127,25 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				needResetFunction = true
 			}
 			var rewrittenArg *plan.Expr
+			numericTemporalArg := false
+			switch functionName {
+			case "to_interval_microsecond", "time", "from_unixtime", "sec_to_time":
+				numericTemporalArg = i == 0
+			case "date_add", "date_sub":
+				numericTemporalArg = i == 1 && len(originalArgs) == 3 &&
+					originalArgs[0].Typ.Id == int32(types.T_time)
+			case "addtime", "subtime":
+				numericTemporalArg = i == 1
+			}
+			numericTemporalSource := false
+			if numericTemporalArg && hasParamPos && !isExplicitPreparedCast(arg) &&
+				paramPos < len(rule.paramValues) {
+				if param, ok := rule.paramValues[paramPos].(ParamValue); ok {
+					numericTemporalSource = !param.IsBinaryProtocol && param.HasSourceType &&
+						(param.SourceType.IsDecimal() || param.SourceType.Oid == types.T_float32 ||
+							param.SourceType.Oid == types.T_float64)
+				}
+			}
 			if nestedPreparedBitwiseSource != nil {
 				var applyErr error
 				rewrittenArg, applyErr = rule.ApplyExpr(DeepCopyExpr(nestedPreparedBitwiseSource))
@@ -2206,6 +3155,63 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				needResetFunction = true
 				compareArgTypes = true
 				rule.specialized = true
+			} else if hasParamPos && !isExplicitPreparedCast(arg) &&
+				((functionName == "json_arrayagg" && i == 0) ||
+					(functionName == "json_objectagg" && i == 1)) {
+				// JSON aggregate values preserve the source SQL domain. The
+				// prepared TEXT marker (and its implicit cast) is only a
+				// placeholder, not a request to stringify DECIMAL or JSON.
+				source, known, sourceErr := rule.preparedRuntimeSourceExpr(paramPos, true)
+				if sourceErr != nil {
+					return nil, sourceErr
+				}
+				if known {
+					rewrittenArg = source
+					needResetFunction = true
+					compareArgTypes = true
+					rule.specialized = true
+				} else {
+					rewrittenArg, err = rule.ApplyExpr(arg)
+					if err != nil {
+						return nil, err
+					}
+				}
+			} else if numericTemporalSource {
+				// SQL EXECUTE transports DECIMAL and FLOAT variables as text. These
+				// temporal consumers need the numeric source, including TIME's raw
+				// interval argument, without changing the interval string grammar.
+				var known bool
+				rewrittenArg, known, err = rule.preparedRuntimeSourceExpr(paramPos, false)
+				if err != nil {
+					return nil, err
+				}
+				if !known {
+					return nil, moerr.NewInternalErrorNoCtx("missing prepared numeric temporal source type")
+				}
+				needResetFunction = true
+				compareArgTypes = true
+				rule.specialized = true
+			} else if variadicSource {
+				var sourceOK bool
+				rewrittenArg, sourceOK, err = rule.preparedRuntimeSourceExpr(paramPos, false)
+				if err != nil {
+					return nil, err
+				}
+				if !sourceOK {
+					return nil, moerr.NewInternalErrorNoCtx("missing prepared variadic source type")
+				}
+				needResetFunction = true
+				compareArgTypes = true
+				rule.specialized = true
+				if (functionName == "greatest" || functionName == "least" || functionName == "field") &&
+					preparedNumericCommonOperandType(types.T(rewrittenArg.Typ.Id)) &&
+					types.T(rewrittenArg.Typ.Id) != types.T_any {
+					// A numeric runtime marker also invalidates a peer literal's
+					// prepare-time TEXT envelope. Restore that peer only when the
+					// complete tuple has no actual string operand.
+					sqlExecuteNumericSourceDependent = true
+					sqlExecuteNumericSourceArgs[i] = true
+				}
 			} else if useSQLExecuteNumericSource {
 				sqlExecuteNumericSourceDependent = true
 				sqlExecuteNumericSourceArgs[i] = true
@@ -2216,6 +3222,9 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				source := preparedBitwiseSource
 				if source == nil {
 					source = preparedCharSource
+				}
+				if source == nil {
+					source = preparedInetNtoaSource
 				}
 				if source == nil && paramPos >= 0 && paramPos < len(rule.sqlExecuteNumericParams) {
 					source = rule.sqlExecuteNumericParams[paramPos]
@@ -2236,6 +3245,33 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					}
 				}
 				rewrittenArg = DeepCopyExpr(source)
+			} else if provisionalCommonValueCast || bareCommonValueNull {
+				commonValueSourceChanged = true
+				// The outer cast was selected while the result operand was an
+				// unresolved TEXT marker. Rebind its source for this EXECUTE so a
+				// nested numeric function can supply its actual result domain.
+				source := arg
+				if provisionalCommonValueCast {
+					source = arg.GetF().Args[0]
+				}
+				if marker := source.GetP(); marker != nil {
+					var known bool
+					rewrittenArg, known, err = rule.preparedRuntimeSourceExpr(int(marker.Pos), false)
+					if err != nil {
+						return nil, err
+					}
+					if !known {
+						rewrittenArg, err = rule.ApplyExpr(source)
+					}
+				} else {
+					rewrittenArg, err = rule.ApplyExpr(source)
+				}
+				if err != nil {
+					return nil, err
+				}
+				needResetFunction = true
+				compareArgTypes = true
+				rule.specialized = true
 			} else {
 				var applyErr error
 				disablePrefix := sharedControlParam && paramPos >= 0 &&
@@ -2260,9 +3296,22 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					return nil, err
 				}
 			}
+			if preparedType, textContext := rule.preparedSQLExecuteTextFunctionParamType(
+				functionName, originalArgs[i]); textContext {
+				textArg, known, textErr := rule.preparedSQLExecuteTextFunctionArg(paramPos, preparedType)
+				if textErr != nil {
+					return nil, textErr
+				}
+				if known {
+					rewrittenArg = textArg
+					needResetFunction = true
+					compareArgTypes = true
+					rule.specialized = true
+				}
+			}
 			if geometrySRIDParamPos >= 0 && i == len(exprImpl.F.Args)-1 &&
 				hasParamPos && paramPos == geometrySRIDParamPos {
-				sourceIsNull := len(boundArgs) > 0 && geometrySRIDSourceIsStaticNull(boundArgs[0])
+				sourceIsNull := len(boundArgs) > 0 && geometrySRIDSourceIsNull(rule.ctx, boundArgs[0])
 				geometryArg, known, geometryErr := rule.preparedGeometrySRIDParamExpr(paramPos, sourceIsNull)
 				if geometryErr != nil {
 					return nil, geometryErr
@@ -2276,6 +3325,44 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					compareArgTypes = true
 					rule.specialized = true
 				}
+			}
+			// ST_DISTANCE has a legacy third-argument SRID overload and a
+			// MySQL-compatible length-unit overload. A marker is provisionally
+			// wrapped as BIGINT during PREPARE, so a string-backed EXECUTE value
+			// must be rebound from the marker's text expression rather than from
+			// that stale implicit cast. Numeric SQL variables keep the explicit
+			// SRID overload and its existing conversion contract.
+			if hasParamPos && isPreparedSpatialUnitFunction(functionName, i) {
+				if preparedParamValueUsesStringDomain(rule.paramValues[paramPos]) {
+					if cast := rewrittenArg.GetF(); cast != nil &&
+						cast.Func != nil && cast.Func.GetObjName() == "cast" &&
+						isImplicitPreparedParamCast(rewrittenArg) && len(cast.Args) > 0 {
+						rewrittenArg = cast.Args[0]
+					}
+					// TEXT-to-VARCHAR is otherwise costed as a conversion to the
+					// legacy BIGINT overload. Normalize the runtime string marker to
+					// VARCHAR so the unit overload is selected unambiguously while
+					// preserving the original string payload.
+					stringType := types.T_varchar.ToType()
+					rewrittenArg.Typ = makePlan2Type(&stringType)
+				} else if param, ok := rule.paramValues[paramPos].(ParamValue); ok &&
+					param.Value != nil && param.PrepareParamKind != vector.PrepareParamNone {
+					// SQL EXECUTE still materializes the value through a text
+					// transport literal. Recreate the assignment-time numeric
+					// literal before rebinding, otherwise the already-selected unit
+					// overload would see the textual spelling of an SRID (for
+					// example, "4326") and fail as an unknown length unit.
+					numeric, numericOK, numericErr := rule.typedRuntimeParamExpr(paramPos)
+					if numericErr != nil {
+						return nil, numericErr
+					}
+					if numericOK {
+						rewrittenArg = numeric
+					}
+				}
+				boundArgs[i] = rewrittenArg
+				needResetFunction = true
+				compareArgTypes = true
 			}
 			exprImpl.F.Args[i] = rewrittenArg
 			boundArgs[i] = rewrittenArg
@@ -2298,6 +3385,21 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			) {
 				numericComparisonFallback = true
 			}
+			if !implicitParamCast && hasPreparedNumericValue {
+				coerced, coercedChanged, coercedErr := rule.coercePreparedTemporalIntegerOperand(
+					originalArgs[i], rewrittenArg, temporalPeer, hasPreparedNumericValue)
+				if coercedErr != nil {
+					return nil, coercedErr
+				}
+				if coercedChanged {
+					rewrittenArg = coerced
+					exprImpl.F.Args[i] = rewrittenArg
+					boundArgs[i] = rewrittenArg
+					needResetFunction = true
+					compareArgTypes = true
+					rule.specialized = true
+				}
+			}
 			if rule.isNumericPrefixDependent(rewrittenArg) {
 				if !preparedSQLExecuteNumericResultConsumer(functionName) ||
 					preparedSQLExecuteNumericResultValueArg(functionName, i, len(exprImpl.F.Args)) {
@@ -2312,7 +3414,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			if rule.isSQLExecuteNumericDependent(rewrittenArg) &&
 				((functionName == "cast" && !isExplicitPreparedCast(e)) ||
 					isPreparedNumericComparisonContext(functionName) ||
-					isPreparedCommonValueFunction(functionName) ||
+					isPreparedCommonValueFunction(functionName) || functionName == "field" ||
 					preparedFunctionArgUsesSQLExecuteNumericSource(e, functionName, i, len(exprImpl.F.Args))) {
 				sqlExecuteNumericSourceDependent = true
 				sqlExecuteNumericNestedDependent = true
@@ -2332,6 +3434,37 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				}
 			}
 			if implicitParamCast {
+				// Numeric arithmetic uses the prepare-time cast only to make a
+				// TEXT marker resolvable. Once an execute-time numeric source is
+				// available, rebind from that source instead of narrowing it to the
+				// provisional decimal hint used for a TIME operand. Explicit CAST
+				// expressions do not enter this branch because implicitParamCast
+				// excludes them.
+				if isNumericContextFunction(functionName) && hasParamPos &&
+					rule.hasNumericRuntimeParam(paramPos) {
+					typed, typedOK, typedErr := rule.typedRuntimeParamExpr(paramPos)
+					if typedErr != nil {
+						return nil, typedErr
+					}
+					if typedOK {
+						if hasPreparedNumericValue {
+							coerced, coercedChanged, coercedErr :=
+								rule.coercePreparedTemporalIntegerOperand(
+									originalArgs[i], typed, temporalPeer, hasPreparedNumericValue)
+							if coercedErr != nil {
+								return nil, coercedErr
+							}
+							if coercedChanged {
+								typed = coerced
+							}
+						}
+						boundArgs[i] = typed
+						needResetFunction = true
+						compareArgTypes = true
+						rule.specialized = true
+						continue
+					}
+				}
 				// Keep decimal casts: decimal arithmetic requires every operand to
 				// be materialized as a decimal vector, even when the protocol value
 				// was encoded as an integer. For casts to other numeric domains, use
@@ -2413,9 +3546,73 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			rule.specialized = true
 			return explicit, nil
 		}
-		sqlExecuteNumericPeerDependent := sqlExecuteNumericNestedDependent ||
+		if !fixedDecimalCommonValue && preparedBoundCommonValueFixedDecimalPeer(
+			functionName, originalArgs, boundArgs, rule.numericPrefixParamPositions, rule.paramValues) {
+			fixedDecimalCommonValue = true
+			for i, original := range originalArgs {
+				if pos, ok := preparedParamPosition(original); ok &&
+					preparedParamCastAllowsNumericPrefix(original) && rule.numericPrefixParamPositions[pos] {
+					numericPrefixArgs[i] = true
+					numericPrefixKinds[i] = rule.numericPrefixParamKinds[pos]
+				}
+			}
+		}
+		if fixedDecimalCommonValue {
+			for i, original := range originalArgs {
+				if source, ok := provisionalNumericPeerSource(original); ok &&
+					!preparedExprContainsParam(original) {
+					boundArgs[i] = source
+					needResetFunction = true
+					compareArgTypes = true
+				}
+				if source := unwrapPreparedImplicitCast(boundArgs[i], false); source != nil &&
+					types.T(source.Typ.Id).IsDecimal() && source != boundArgs[i] {
+					boundArgs[i] = source
+					needResetFunction = true
+					compareArgTypes = true
+				}
+			}
+		}
+		if supportsGenericNumericFunctionContext(functionName) {
+			for i, original := range originalArgs {
+				if original == nil || boundArgs[i] == nil {
+					continue
+				}
+				cast := original.GetF()
+				if cast == nil || cast.Func == nil || cast.Func.GetObjName() != "cast" ||
+					cast.GetSyntaxExplicitCast() || len(cast.Args) != 2 ||
+					cast.Args[0].GetF() == nil || !preparedExprContainsParam(cast.Args[0]) {
+					continue
+				}
+				source := unwrapPreparedImplicitCast(boundArgs[i], false)
+				if source == nil || source == boundArgs[i] || !types.T(source.Typ.Id).IsDecimal() ||
+					reflect.DeepEqual(cast.Args[0].Typ, source.Typ) || reflect.DeepEqual(boundArgs[i].Typ, source.Typ) {
+					continue
+				}
+				// This cast selected an overload against the PREPARE-time child.
+				// Its domain is stale once that child has rebound to DECIMAL.
+				boundArgs[i] = source
+				needResetFunction = true
+				compareArgTypes = true
+			}
+		}
+		variadicStringBoundary := false
+		if functionName == "greatest" || functionName == "least" {
+			for i, arg := range boundArgs {
+				if arg == nil || !types.T(arg.Typ.Id).IsMySQLString() || sqlExecuteNumericSourceArgs[i] {
+					continue
+				}
+				if _, numericPeer := provisionalNumericPeerSource(originalArgs[i]); !numericPeer {
+					variadicStringBoundary = true
+					break
+				}
+			}
+		}
+		// A concrete string/typed NULL also invalidates the provisional peer
+		// envelope. Resolve the whole original tuple, including result metadata.
+		sqlExecuteNumericPeerDependent := commonValueSourceChanged || !variadicStringBoundary && (sqlExecuteNumericNestedDependent ||
 			(sqlExecuteNumericSourceDependent &&
-				(functionName == "/" || preparedSQLExecuteNumericResultConsumer(functionName)))
+				(functionName == "/" || functionName == "field" || preparedSQLExecuteNumericResultConsumer(functionName))))
 		if numericPrefixDependent || sqlExecuteNumericPeerDependent {
 			var sqlExecuteResultType plan.Type
 			if sqlExecuteNumericPeerDependent {
@@ -2435,13 +3632,13 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				candidate := arg
 				if sqlExecuteNumericPeerDependent && !sqlExecuteNumericSourceArgs[i] && originalArgs[i] != nil {
 					candidate = originalArgs[i]
-					if source, ok := provisionalExactNumericSource(candidate); ok {
+					if source, ok := provisionalNumericPeerSource(candidate); ok {
 						boundArgs[i] = source
 						candidate = source
 						needResetFunction = true
 						compareArgTypes = true
 					} else if literal := candidate.GetLit(); literal != nil &&
-						(candidate.GetPreparedNumeric().GetProvisionalResultPeer() || literal.GetStringSource() != 0) &&
+						candidate.GetPreparedNumeric().GetProvisionalResultPeer() &&
 						types.T(candidate.Typ.Id).IsMySQLString() && preparedNumericCommonOperandType(types.T(sqlExecuteResultType.Id)) {
 						peerType := sqlExecuteResultType
 						metadata := candidate.GetPreparedNumeric()
@@ -2475,9 +3672,10 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				}
 			}
 		}
-		if contextualArgs, changed, contextualErr := rule.preparedNumericPrefixArgs(
-			exprImpl.F.Func.GetObjName(), boundArgs,
+		if contextualArgs, changed, contextualErr := preparedNumericPrefixArgs(
+			rule.ctx, exprImpl.F.Func.GetObjName(), boundArgs, boundArgs,
 			numericPrefixArgs, numericPrefixKinds, numericPrefixListArgs, numericPrefixListKinds,
+			fixedDecimalCommonValue,
 		); contextualErr != nil {
 			return nil, contextualErr
 		} else if changed {
@@ -2513,7 +3711,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				}
 				if changed {
 					reboundArgs := []*Expr{refreshed}
-					if functionName == "elt" {
+					if len(boundArgs) > 1 {
 						reboundArgs = append([]*Expr(nil), boundArgs...)
 						reboundArgs[0] = refreshed
 					}
@@ -2524,6 +3722,9 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					}
 					preserveReboundFunctionMetadata(exprImpl.F, rewritten.GetF())
 					rule.specialized = true
+					if makeTypeByPlan2Expr(rewritten).IsNumeric() {
+						rule.markSQLExecuteNumericDependent(e, rewritten)
+					}
 					return rewritten, nil
 				}
 			}
@@ -2537,7 +3738,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				}
 				if changed {
 					reboundArgs := []*Expr{rebound}
-					if functionName == "elt" {
+					if len(boundArgs) > 1 {
 						reboundArgs = append([]*Expr(nil), boundArgs...)
 						reboundArgs[0] = rebound
 					}
@@ -2548,6 +3749,9 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					}
 					preserveReboundFunctionMetadata(exprImpl.F, rewritten.GetF())
 					rule.specialized = true
+					if makeTypeByPlan2Expr(rewritten).IsNumeric() {
+						rule.markSQLExecuteNumericDependent(e, rewritten)
+					}
 					return rewritten, nil
 				}
 			}
@@ -2559,6 +3763,25 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					resultArg != nil && resultArg.GetLit().GetIsnull() {
 					resultArg.Typ = *sharedControlReturnType
 				}
+			}
+		}
+		if functionName == "cast" && !isExplicitPreparedCast(e) && len(boundArgs) == 2 &&
+			boundArgs[0] != nil && boundArgs[1] != nil && boundArgs[1].GetT() != nil &&
+			originalArgs[0] != nil && originalArgs[1] != nil &&
+			originalArgs[0].Typ.Scale == originalArgs[1].Typ.Scale &&
+			boundArgs[0].Typ.Scale > originalArgs[0].Typ.Scale {
+			source := types.T(boundArgs[0].Typ.Id)
+			target := types.T(boundArgs[1].Typ.Id)
+			if (source == types.T_time || source == types.T_datetime || source == types.T_timestamp) &&
+				(target == types.T_time || target == types.T_datetime || target == types.T_timestamp) {
+				// PREPARE fixed this implicit temporal cast to the marker's provisional
+				// FSP. Its target must follow a nested function rebound at EXECUTE;
+				// otherwise the cast truncates microseconds before the parent rebinds.
+				boundArgs[1] = DeepCopyExpr(boundArgs[1])
+				boundArgs[1].Typ.Scale = boundArgs[0].Typ.Scale
+				boundArgs[1].Typ.Width = boundArgs[0].Typ.Scale
+				needResetFunction = true
+				compareArgTypes = true
 			}
 		}
 
@@ -2587,21 +3810,37 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				return nil, err
 			}
 			preserveReboundFunctionMetadata(exprImpl.F, rewritten.GetF())
+			if restored, restoredChanged, restoreErr := rule.restorePreparedTemporalNullEnvelope(
+				functionName, originalTyp, originalArgs, rewritten,
+			); restoreErr != nil {
+				return nil, restoreErr
+			} else if restoredChanged {
+				rewritten = restored
+				rule.specialized = true
+			}
 			if functionBindingChanged(originalTyp, originalFuncObj, originalArgTypes, rewritten, compareArgTypes) {
 				rule.specialized = true
 			}
 			if numericPrefixDependent && !isExplicitPreparedCast(e) {
 				rule.markNumericPrefixDependent(e, rewritten)
 			}
-			if sqlExecuteNumericSourceDependent && !isExplicitPreparedCast(e) {
+			if (sqlExecuteNumericSourceDependent || commonValueSourceChanged) && !isExplicitPreparedCast(e) {
 				rule.markSQLExecuteNumericDependent(e, rewritten)
 			}
 			return rewritten, nil
 		}
+		if restored, restoredChanged, restoreErr := rule.restorePreparedTemporalNullEnvelope(
+			functionName, originalTyp, originalArgs, e,
+		); restoreErr != nil {
+			return nil, restoreErr
+		} else if restoredChanged {
+			rule.specialized = true
+			return restored, nil
+		}
 		if numericPrefixDependent && !isExplicitPreparedCast(e) {
 			rule.markNumericPrefixDependent(e)
 		}
-		if sqlExecuteNumericSourceDependent && !isExplicitPreparedCast(e) {
+		if (sqlExecuteNumericSourceDependent || commonValueSourceChanged) && !isExplicitPreparedCast(e) {
 			rule.markSQLExecuteNumericDependent(e)
 		}
 		return e, nil
@@ -2676,6 +3915,55 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	}
 }
 
+func isPreparedSpatialUnitFunction(name string, argIndex int) bool {
+	if argIndex != 2 {
+		return false
+	}
+	switch name {
+	case "st_distance", "st_frechetdistance", "st_hausdorffdistance":
+		return true
+	default:
+		return false
+	}
+}
+
+func preparedParamValueUsesStringDomain(value any) bool {
+	param, ok := value.(ParamValue)
+	if !ok || param.Value == nil {
+		return false
+	}
+	// SQL EXECUTE uses the marker's string type as a transport placeholder. Its
+	// assignment-time PrepareParamKind is the stronger signal: a numeric user
+	// variable must keep the legacy SRID overload even when the marker itself
+	// was provisionally typed VARCHAR during PREPARE.
+	if !param.IsBinaryProtocol && param.PrepareParamKind != vector.PrepareParamNone {
+		return false
+	}
+	// SQL EXECUTE transports user variables through a TEXT vector. When the
+	// assignment was numeric, the transport type remains TEXT but the prepared
+	// parameter kind is the authoritative numeric domain. Do not reinterpret
+	// that neutral transport type as a length-unit string.
+	if param.HasRuntimeType {
+		return isStringBackedType(param.RuntimeType)
+	}
+	if param.HasSourceType {
+		if param.SourceType.Oid == types.T_text && param.PrepareParamKind != vector.PrepareParamNone {
+			return false
+		}
+		return isStringBackedType(param.SourceType)
+	}
+	// An explicit non-string source/runtime type is authoritative even when
+	// PrepareParamKind is left at None (the SQL EXECUTE path does not attach a
+	// protocol category). Do not mistake a numeric SRID marker for a unit name.
+	if param.HasSourceType || param.HasRuntimeType {
+		return false
+	}
+	if param.IsBinaryProtocol {
+		return param.PrepareParamKind == vector.PrepareParamNone
+	}
+	return param.PrepareParamKind == vector.PrepareParamNone
+}
+
 // preparedComparisonExactIntegerExpr keeps an exact integral text prefix in
 // the comparison peer's integer domain. Routing it through DOUBLE first loses
 // adjacent BIGINT/BIT values above 2^53. Fractional and out-of-range values are
@@ -2701,7 +3989,16 @@ func preparedComparisonExactIntegerExpr(
 	}
 	targetType := makeTypeByPlan2Type(target)
 	bits := 0
+	signed := false
 	switch targetType.Oid {
+	case types.T_int8:
+		bits, signed = 8, true
+	case types.T_int16:
+		bits, signed = 16, true
+	case types.T_int32:
+		bits, signed = 32, true
+	case types.T_int64:
+		bits, signed = 64, true
 	case types.T_uint8:
 		bits = 8
 	case types.T_uint16:
@@ -2718,6 +4015,14 @@ func preparedComparisonExactIntegerExpr(
 	default:
 		return nil, false, nil
 	}
+	if signed {
+		_, err := strconv.ParseInt(integerText, 10, bits)
+		if err != nil {
+			return nil, false, nil
+		}
+		expr, err := preparedRuntimeParamExpr(ctx, integerText, false, targetType)
+		return expr, err == nil, err
+	}
 	if strings.HasPrefix(integerText, "-") {
 		return nil, false, nil
 	}
@@ -2728,126 +4033,8 @@ func preparedComparisonExactIntegerExpr(
 	return expr, err == nil, err
 }
 
-// preparedBoundedExactIntegerPrefix normalizes a decimal/scientific prefix to
-// an integer string of at most 20 digits without constructing an arbitrary-
-// precision number. The scan is linear in the supplied text and allocates only
-// the bounded result, so inputs such as 1e1000000 cannot amplify memory.
 func preparedBoundedExactIntegerPrefix(prefix string) (string, bool) {
-	if prefix == "" {
-		return "", false
-	}
-	i := 0
-	negative := false
-	if prefix[i] == '+' || prefix[i] == '-' {
-		negative = prefix[i] == '-'
-		i++
-		if i == len(prefix) {
-			return "", false
-		}
-	}
-	mantissaEnd := len(prefix)
-	for j := i; j < len(prefix); j++ {
-		if prefix[j] == 'e' || prefix[j] == 'E' {
-			mantissaEnd = j
-			break
-		}
-	}
-	digitCount, fractionalDigits := 0, 0
-	firstNonZero, lastNonZero := -1, -1
-	seenDot := false
-	for j := i; j < mantissaEnd; j++ {
-		switch c := prefix[j]; {
-		case c >= '0' && c <= '9':
-			if c != '0' {
-				if firstNonZero < 0 {
-					firstNonZero = digitCount
-				}
-				lastNonZero = digitCount
-			}
-			digitCount++
-			if seenDot {
-				fractionalDigits++
-			}
-		case c == '.' && !seenDot:
-			seenDot = true
-		default:
-			return "", false
-		}
-	}
-	if digitCount == 0 {
-		return "", false
-	}
-	if firstNonZero < 0 {
-		return "0", true
-	}
-
-	exponent := 0
-	if mantissaEnd < len(prefix) {
-		j := mantissaEnd + 1
-		exponentNegative := false
-		if j < len(prefix) && (prefix[j] == '+' || prefix[j] == '-') {
-			exponentNegative = prefix[j] == '-'
-			j++
-		}
-		if j == len(prefix) {
-			return "", false
-		}
-		capValue := len(prefix) + 64
-		for ; j < len(prefix); j++ {
-			c := prefix[j]
-			if c < '0' || c > '9' {
-				return "", false
-			}
-			if exponent < capValue {
-				digit := int(c - '0')
-				if exponent > (capValue-digit)/10 {
-					exponent = capValue
-				} else {
-					exponent = exponent*10 + digit
-				}
-			}
-		}
-		if exponentNegative {
-			exponent = -exponent
-		}
-	}
-
-	scale := fractionalDigits - exponent
-	endDigit := digitCount
-	appendZeros := 0
-	if scale > 0 {
-		if scale > digitCount-1-lastNonZero {
-			return "", false
-		}
-		endDigit -= scale
-	} else if scale < 0 {
-		appendZeros = -scale
-	}
-	resultDigits := endDigit - firstNonZero + appendZeros
-	if resultDigits <= 0 || resultDigits > 20 {
-		return "", false
-	}
-
-	var normalized strings.Builder
-	normalized.Grow(resultDigits + 1)
-	if negative {
-		normalized.WriteByte('-')
-	}
-	digitIndex := 0
-	for j := i; j < mantissaEnd && digitIndex < endDigit; j++ {
-		c := prefix[j]
-		if c == '.' {
-			continue
-		}
-		if digitIndex >= firstNonZero {
-			normalized.WriteByte(c)
-		}
-		digitIndex++
-	}
-	for range appendZeros {
-		normalized.WriteByte('0')
-	}
-	return normalized.String(), true
+	return planfunction.NormalizeExactIntegerString(prefix)
 }
 
 func preparedComparisonTextNeedsDoubleFallback(value string, target plan.Type) bool {
@@ -3001,13 +4188,15 @@ func preparedComparisonTextLosesDoublePrecision(prefix string, numeric float64) 
 	return accuracy != big.Exact || exact.Cmp(runtime) != 0
 }
 
-func (rule *ResetParamRefRule) preparedNumericPrefixArgs(
+func preparedNumericPrefixArgs(
+	ctx context.Context,
 	name string,
-	args []*plan.Expr,
+	args, witnesses []*plan.Expr,
 	prefixArgs []bool,
 	prefixKinds []types.StringConversionKind,
 	prefixListArgs [][]bool,
 	prefixListKinds [][]types.StringConversionKind,
+	fixedDecimalCommonValue bool,
 ) ([]*plan.Expr, bool, error) {
 	if !preparedNumericPrefixContext(
 		name, args, prefixArgs, prefixKinds, prefixListArgs, prefixListKinds,
@@ -3045,7 +4234,7 @@ func (rule *ResetParamRefRule) preparedNumericPrefixArgs(
 				if i < len(prefixListKinds) && itemIndex < len(prefixListKinds[i]) {
 					kind = prefixListKinds[i][itemIndex]
 				}
-				cast, castChanged, err := rule.preparedNumericPrefixCast(item, kind)
+				cast, castChanged, err := preparedNumericPrefixCast(ctx, item, unwrapPreparedImplicitCast(witnesses[i].GetList().List[itemIndex], eligible), kind)
 				if err != nil {
 					return nil, false, err
 				}
@@ -3062,14 +4251,15 @@ func (rule *ResetParamRefRule) preparedNumericPrefixArgs(
 		if i < len(prefixKinds) {
 			kind = prefixKinds[i]
 		}
-		cast, castChanged, err := rule.preparedNumericPrefixCast(sources[i], kind)
+		cast, castChanged, err := preparedNumericPrefixCast(ctx, sources[i], unwrapPreparedImplicitCast(witnesses[i], true), kind)
 		if err != nil {
 			return nil, false, err
 		}
 		sources[i] = cast
 		changed = changed || castChanged
 	}
-	normalized, commonTypeChanged, err := rule.normalizePreparedNumericCommonArgs(name, sources)
+	normalized, commonTypeChanged, err := normalizePreparedNumericCommonArgs(
+		ctx, name, sources, args, witnesses, prefixArgs, fixedDecimalCommonValue)
 	if err != nil {
 		return nil, false, err
 	}
@@ -3161,9 +4351,13 @@ func preparedNumericCommonOperandType(oid types.T) bool {
 		oid.IsInteger() || oid.IsFloat() || oid.IsDecimal()
 }
 
-func (rule *ResetParamRefRule) normalizePreparedNumericCommonArgs(
+func normalizePreparedNumericCommonArgs(
+	ctx context.Context,
 	name string,
 	args []*plan.Expr,
+	sourceArgs, witnessArgs []*plan.Expr,
+	prefixArgs []bool,
+	fixedDecimalCommonValue bool,
 ) ([]*plan.Expr, bool, error) {
 	numericArgCount := len(args)
 	if name == "in_range" && numericArgCount > 3 {
@@ -3184,12 +4378,37 @@ func (rule *ResetParamRefRule) normalizePreparedNumericCommonArgs(
 	if !ok {
 		return args, false, nil
 	}
-
 	changed := false
+	if fixedDecimalCommonValue && target.Oid.IsFloat() {
+		exactTarget, exactOK, err := preparedFixedDecimalCommonType(ctx, operands, witnessArgs, prefixArgs)
+		if err != nil {
+			return nil, false, err
+		}
+		if exactOK {
+			target = exactTarget
+			for i, arg := range args {
+				if i >= len(prefixArgs) || !prefixArgs[i] || arg == nil ||
+					!types.T(arg.Typ.Id).IsFloat() {
+					continue
+				}
+				// Keep the executable operand. Only its conversion domain comes
+				// from the value witness; the prefix parser also handles underflow.
+				prefixTarget := target
+				prefixTarget.Charset = 255
+				args[i], err = makePlan2CastExpr(ctx,
+					unwrapPreparedImplicitCast(sourceArgs[i], true), makePlan2Type(&prefixTarget))
+				if err != nil {
+					return nil, false, err
+				}
+				changed = true
+			}
+		}
+	}
+
 	for i := 0; i < numericArgCount; i++ {
 		if list := args[i].GetList(); list != nil {
 			for itemIndex, item := range list.List {
-				cast, castChanged, err := castPreparedNumericCommonExpr(rule.ctx, item, target)
+				cast, castChanged, err := castPreparedNumericCommonExpr(ctx, item, target)
 				if err != nil {
 					return nil, false, err
 				}
@@ -3198,7 +4417,7 @@ func (rule *ResetParamRefRule) normalizePreparedNumericCommonArgs(
 			}
 			continue
 		}
-		cast, castChanged, err := castPreparedNumericCommonExpr(rule.ctx, args[i], target)
+		cast, castChanged, err := castPreparedNumericCommonExpr(ctx, args[i], target)
 		if err != nil {
 			return nil, false, err
 		}
@@ -3206,6 +4425,98 @@ func (rule *ResetParamRefRule) normalizePreparedNumericCommonArgs(
 		changed = changed || castChanged
 	}
 	return args, changed, nil
+}
+
+// Only an eligible text marker may lose fractional digits when the exact
+// common type exceeds Decimal256. A fixed peer keeps its own scale; an actual
+// FLOAT operand continues to select the normal approximate domain.
+func preparedFixedDecimalCommonType(
+	ctx context.Context,
+	operands, originalArgs []*plan.Expr,
+	prefixArgs []bool,
+) (types.Type, bool, error) {
+	maxIntegral, maxScale, fixedScale := int32(0), int32(0), int32(0)
+	type textShape struct {
+		integral    int32
+		coefficient string
+		exponent    int64
+	}
+	var textShapes []textShape
+	for i, operand := range operands {
+		typ := makeTypeByPlan2Expr(operand)
+		eligibleText := i < len(prefixArgs) && prefixArgs[i] &&
+			i < len(originalArgs) && originalArgs[i] != nil &&
+			types.T(unwrapPreparedImplicitCast(originalArgs[i], true).Typ.Id).IsMySQLString()
+		switch {
+		case typ.Oid.IsFloat():
+			if !eligibleText {
+				return types.Type{}, false, nil
+			}
+			original := unwrapPreparedImplicitCast(originalArgs[i], true)
+			literal := original.GetLit()
+			if literal == nil {
+				return types.Type{}, false, nil
+			}
+			integral, scale, coefficient, exponent, bounded := preparedNumericPrefixWidths(literal.GetSval())
+			if !bounded {
+				prefix, _ := planfunction.GetNumericStringPrefix(literal.GetSval())
+				approximate, _ := strconv.ParseFloat(prefix, 64)
+				if math.Abs(approximate) < 1 {
+					scale = int64(types.T_decimal256.ToType().Width) + 1
+				} else {
+					integral = int64(types.T_decimal256.ToType().Width) + 1
+				}
+			} else {
+				textShapes = append(textShapes, textShape{
+					int32(min(integral, int64(types.T_decimal256.ToType().Width)+1)), coefficient, exponent,
+				})
+			}
+			maxIntegral = max(maxIntegral, int32(min(integral, int64(types.T_decimal256.ToType().Width)+1)))
+			maxScale = max(maxScale, int32(min(scale, int64(types.T_decimal256.ToType().Width)+1)))
+		case typ.Oid.IsDecimal():
+			width := typ.Width
+			if width <= 0 {
+				width = typ.Oid.ToType().Width
+			}
+			scale := max(typ.Scale, int32(0))
+			maxIntegral = max(maxIntegral, width-scale)
+			maxScale = max(maxScale, scale)
+			if !eligibleText {
+				fixedScale = max(fixedScale, scale)
+			}
+		case typ.Oid.IsInteger(), typ.Oid == types.T_bit, typ.Oid == types.T_bool, typ.Oid == types.T_year:
+			maxIntegral = max(maxIntegral, preparedIntegerIntegralWidth(typ.Oid))
+		default:
+			return types.Type{}, false, nil
+		}
+	}
+	maxWidth := types.T_decimal256.ToType().Width
+	if maxIntegral > maxWidth || maxWidth-maxIntegral < fixedScale {
+		return types.Type{}, false, moerr.NewOutOfRange(ctx, "DECIMAL", "prepared common type exceeds exact precision")
+	}
+	scale := min(maxScale, maxWidth-maxIntegral)
+	if scale < maxScale {
+		for _, shape := range textShapes {
+			if shape.integral >= maxIntegral &&
+				preparedNumericPrefixIntegralCarry(shape.coefficient, shape.exponent, scale) {
+				maxIntegral++
+				if maxWidth-maxIntegral < fixedScale {
+					return types.Type{}, false, moerr.NewOutOfRange(ctx, "DECIMAL", "prepared common type exceeds exact precision")
+				}
+				scale = min(maxScale, maxWidth-maxIntegral)
+				break
+			}
+		}
+	}
+	width := max(maxIntegral+scale, int32(1))
+	switch {
+	case width <= types.T_decimal64.ToType().Width:
+		return types.New(types.T_decimal64, width, scale), true, nil
+	case width <= types.T_decimal128.ToType().Width:
+		return types.New(types.T_decimal128, width, scale), true, nil
+	default:
+		return types.New(types.T_decimal256, width, scale), true, nil
+	}
 }
 
 func preparedNumericCommonType(operands []*plan.Expr) (types.Type, bool) {
@@ -3309,14 +4620,15 @@ func castPreparedNumericCommonExpr(
 	return cast, cast != expr || !reflect.DeepEqual(before, cast.Typ), nil
 }
 
-func (rule *ResetParamRefRule) preparedNumericPrefixCast(
-	expr *plan.Expr,
+func preparedNumericPrefixCast(
+	ctx context.Context,
+	expr, witness *plan.Expr,
 	kind types.StringConversionKind,
 ) (*plan.Expr, bool, error) {
 	if expr == nil {
 		return expr, false, nil
 	}
-	literal := expr.GetLit()
+	literal := witness.GetLit()
 	if types.T(expr.Typ.Id) == types.T_bool && literal != nil && !literal.Isnull {
 		value := uint8(0)
 		if literal.GetBval() {
@@ -3351,8 +4663,12 @@ func (rule *ResetParamRefRule) preparedNumericPrefixCast(
 			runtimeType = PreparedNumericPrefixTypeFromString(literal.GetSval())
 		}
 		if runtimeType.Oid != types.T_any {
-			materialized, err := preparedRuntimeParamExpr(rule.ctx, literal.GetSval(), literal.IsBin, runtimeType)
-			return materialized, err == nil, err
+			if expr.GetLit() != nil {
+				materialized, err := preparedRuntimeParamExpr(ctx, literal.GetSval(), literal.IsBin, runtimeType)
+				return materialized, err == nil, err
+			}
+			cast, err := makePlan2CastExpr(ctx, expr, makePlan2Type(&runtimeType))
+			return cast, err == nil, err
 		}
 	}
 	target := types.New(types.T_decimal64, 1, 0)
@@ -3362,7 +4678,7 @@ func (rule *ResetParamRefRule) preparedNumericPrefixCast(
 	if target.IsDecimal() {
 		target.Charset = 255
 	}
-	cast, err := makePlan2CastExpr(rule.ctx, expr, makePlan2Type(&target))
+	cast, err := makePlan2CastExpr(ctx, expr, makePlan2Type(&target))
 	return cast, err == nil, err
 }
 
@@ -3487,7 +4803,7 @@ func windowHasNumericPrefixDependency(
 
 func preparedSQLExecuteNumericResultConsumer(name string) bool {
 	return preparedNumericResultPolymorphicFunction(name) || strings.EqualFold(name, "char") ||
-		isPreparedBitwiseAggregate(name)
+		strings.EqualFold(name, "inet_ntoa") || isPreparedBitwiseAggregate(name)
 }
 
 func preparedSQLExecuteNumericResultValueArg(name string, argIndex, argCount int) bool {
@@ -3504,6 +4820,8 @@ func preparedSQLExecuteNumericResultValueArg(name string, argIndex, argCount int
 		return argCount == 1 && argIndex == 0
 	case "first_value", "last_value", "lag", "lead", "nth_value", "max_by", "max_by_non_null":
 		return argCount > 0 && argIndex == 0
+	case "inet_ntoa":
+		return argCount == 1 && argIndex == 0
 	default: // greatest, least
 		return true
 	}
@@ -3524,7 +4842,8 @@ func preparedRuntimeResultOccurrenceType(value any, fallback plan.Type) plan.Typ
 		return fallback
 	}
 	switch source.Oid {
-	case types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob,
+		types.T_date, types.T_time, types.T_datetime, types.T_timestamp, types.T_json:
 		return makePlan2Type(&source)
 	default:
 		return fallback
@@ -3564,6 +4883,49 @@ func isPreparedBitwiseAggregate(name string) bool {
 	}
 }
 
+func isInetNtoaDomainSourceType(typ types.Type) bool {
+	switch typ.Oid {
+	case types.T_date, types.T_time, types.T_datetime, types.T_timestamp, types.T_json:
+		return true
+	default:
+		return false
+	}
+}
+
+// preparedInetNtoaSourceExpr is deliberately separate from the shared SQL
+// EXECUTE numeric-source builder.  Temporal and JSON provenance is meaningful
+// to INET_NTOA, but making it a generic numeric source would change unrelated
+// arithmetic (for example JSON 1.6 + 0) by forcing an integer-domain cast.
+func (rule *ResetParamRefRule) preparedInetNtoaSourceExpr(pos int) (*Expr, bool, error) {
+	if pos < 0 || pos >= len(rule.paramValues) {
+		return nil, false, nil
+	}
+	param, ok := rule.paramValues[pos].(ParamValue)
+	if !ok || param.Value == nil {
+		return nil, false, nil
+	}
+	sourceType := param.SourceType
+	hasSourceType := param.HasSourceType
+	if param.HasInetNtoaSourceType {
+		sourceType = param.InetNtoaSourceType
+		hasSourceType = true
+	}
+	if !hasSourceType || !isInetNtoaDomainSourceType(sourceType) {
+		return nil, false, nil
+	}
+	value := param.Value
+	if param.MaterializedValue != "" {
+		value = param.MaterializedValue
+	}
+	source, err := preparedRuntimeParamExpr(
+		rule.ctx, value, param.IsBin, sourceType)
+	if err != nil {
+		return nil, false, err
+	}
+	rule.retainRuntimeParamRef(pos, source)
+	return source, true, nil
+}
+
 // preparedCharSourceExpr keeps CHAR's two string contracts separate at
 // execute time. SQL EXECUTE and COM_STMT string values are text-backed
 // transport values, but a bare prepared marker in CHAR receives numeric
@@ -3579,49 +4941,25 @@ func (rule *ResetParamRefRule) preparedCharSourceExpr(pos int) (*plan.Expr, bool
 	if !ok || param.Value == nil {
 		return nil, false, nil
 	}
-
-	if param.HasSourceType && isStringBackedType(param.SourceType) {
-		raw := preparedParamValueText(param)
-		runtimeType, typeOK := PreparedCharSourceTypeFromString(raw)
-		if !typeOK {
-			return DeepCopyExpr(rule.params[pos]), true, nil
-		}
-
-		bound, err := preparedRuntimeParamExpr(rule.ctx, raw, param.IsBin, runtimeType)
-		if err != nil {
-			return nil, false, err
-		}
-		rule.retainRuntimeParamRef(pos, bound)
-		return bound, true, nil
-	}
-
-	comStmtText := param.IsBinaryProtocol &&
-		param.PrepareParamKind == vector.PrepareParamNone &&
+	comStmtText := param.IsBinaryProtocol && param.PrepareParamKind == vector.PrepareParamNone &&
 		(param.Value != nil || param.HasRuntimeType)
-	if (param.HasRuntimeType && isStringBackedType(param.RuntimeType)) || comStmtText {
-		raw := preparedParamValueText(param)
-		runtimeType, typeOK := PreparedCharSourceTypeFromString(raw)
-		if !typeOK {
-			// Invalid and suffix-bearing strings must keep CHAR's ordinary
-			// numeric-prefix parser; routing them through the provisional INT64
-			// cast would turn a valid prefix conversion into a strict cast error.
-			return DeepCopyExpr(rule.params[pos]), true, nil
-		}
-		bound, err := preparedRuntimeParamExpr(rule.ctx, raw, param.IsBin, runtimeType)
-		if err != nil {
-			return nil, false, err
-		}
-		rule.retainRuntimeParamRef(pos, bound)
-		return bound, true, nil
+	if !(param.HasSourceType && isStringBackedType(param.SourceType)) &&
+		!(param.HasRuntimeType && isStringBackedType(param.RuntimeType)) && !comStmtText {
+		return nil, false, nil
 	}
-	return nil, false, nil
+	source := DeepCopyExpr(rule.params[pos])
+	bound, err := preparedCharSourceCast(rule.ctx, source, preparedParamValueText(param))
+	if err != nil {
+		return nil, false, err
+	}
+	rule.retainRuntimeParamRef(pos, bound)
+	return bound, true, nil
 }
 
-// preparedBitwiseAggregateSource reconstructs the execute-time operand using
-// its protocol type or SQL user-variable source type. Keeping the original
-// source domain lets the aggregate binder choose the integer or byte-string
-// path again instead of inheriting the provisional CAST4(INT64) from PREPARE.
-func (rule *ResetParamRefRule) preparedBitwiseAggregateSource(pos int) (*plan.Expr, bool, error) {
+// preparedRuntimeSourceExpr reconstructs an execute-time operand using its
+// protocol type or SQL user-variable source type, including text and typed
+// NULL. Consumers must not infer a numeric type from a textual value here.
+func (rule *ResetParamRefRule) preparedRuntimeSourceExpr(pos int, preserveProtocolText bool) (*plan.Expr, bool, error) {
 	if pos < 0 || pos >= len(rule.paramValues) || pos >= len(rule.params) {
 		return nil, false, nil
 	}
@@ -3634,14 +4972,20 @@ func (rule *ResetParamRefRule) preparedBitwiseAggregateSource(pos int) (*plan.Ex
 	switch {
 	case param.IsBinaryProtocol && param.HasRuntimeType:
 		sourceType = param.RuntimeType
+	case param.IsBinaryProtocol && preserveProtocolText:
+		// An absent concrete protocol domain denotes text, not an invitation
+		// to infer DECIMAL from its spelling in an integer context.
+		sourceType = types.T_text.ToType()
 	case param.HasSourceType:
 		sourceType = param.SourceType
 	case param.HasRuntimeType:
 		sourceType = param.RuntimeType
+	case param.Value == nil && param.IsBinaryProtocol:
+		sourceType = types.T_any.ToType()
 	default:
 		return nil, false, nil
 	}
-	if sourceType.Oid == types.T_any {
+	if sourceType.Oid == types.T_any && param.Value != nil {
 		return nil, false, nil
 	}
 	if sourceType.Oid.IsMySQLString() &&
@@ -3684,6 +5028,87 @@ func (rule *ResetParamRefRule) preparedBitwiseAggregateSource(pos int) (*plan.Ex
 	setPreparedRuntimeStringDomain(source, domain)
 	rule.retainRuntimeParamRef(pos, source)
 	return source, true, nil
+}
+
+func preparedStringMarkerType(expr *plan.Expr) types.Type {
+	for expr != nil && isImplicitPreparedParamCast(expr) {
+		fn := expr.GetF()
+		if fn == nil || len(fn.Args) == 0 {
+			break
+		}
+		expr = fn.Args[0]
+	}
+	if expr == nil {
+		return types.T_text.ToType()
+	}
+	typ := makeTypeByPlan2Expr(expr)
+	if !typ.Oid.IsMySQLString() || types.StaticStringDomain(typ) == types.StringDomainBinary ||
+		(typ.Width <= 0 && typ.Oid != types.T_text) {
+		return types.T_text.ToType()
+	}
+	typ.Charset = types.CharsetUTF8
+	return typ
+}
+
+// preparedSQLExecuteTextFunctionParamType identifies only bare SQL EXECUTE
+// markers passed to SOUNDEX/QUOTE whose user-variable source is binary. MySQL
+// prepares these markers in a text context; preserve the payload and apply that
+// context at this consumer rather than changing the variable's domain globally.
+func (rule *ResetParamRefRule) preparedSQLExecuteTextFunctionParamType(functionName string, expr *plan.Expr) (types.Type, bool) {
+	pos, ok := preparedParamPosition(expr)
+	if !ok || pos < 0 || pos >= len(rule.paramValues) {
+		return types.Type{}, false
+	}
+	param, ok := rule.paramValues[pos].(ParamValue)
+	if !ok {
+		return types.Type{}, false
+	}
+	return preparedSQLExecuteTextConsumerType(functionName, expr, param)
+}
+
+func preparedSQLExecuteTextConsumerType(functionName string, expr *Expr, param ParamValue) (types.Type, bool) {
+	switch strings.ToLower(functionName) {
+	case "soundex", "quote":
+	default:
+		return types.Type{}, false
+	}
+	if param.IsBinaryProtocol {
+		return types.Type{}, false
+	}
+	isBinarySource := param.IsBin || param.IsBinaryString ||
+		param.RuntimeStringDomain == types.RuntimeStringBinary ||
+		(param.HasSourceType && types.StaticStringDomain(param.SourceType) == types.StringDomainBinary)
+	if !isBinarySource {
+		return types.Type{}, false
+	}
+	return preparedStringMarkerType(expr), true
+}
+
+// preparedSQLExecuteTextFunctionArg performs a byte-preserving cast into the
+// marker's prepared text type. Unlike a global parameter-domain change, the
+// cast is local to the SOUNDEX/QUOTE occurrence and leaves explicit binary
+// casts and unrelated uses of the same SQL variable untouched.
+func (rule *ResetParamRefRule) preparedSQLExecuteTextFunctionArg(
+	pos int,
+	targetType types.Type,
+) (*plan.Expr, bool, error) {
+	source, ok, err := rule.preparedRuntimeSourceExpr(pos, false)
+	if err != nil || !ok {
+		return source, ok, err
+	}
+	textExpr, err := preparedSQLExecuteTextConsumerCast(rule.ctx, source, targetType)
+	if err != nil {
+		return nil, false, err
+	}
+	return textExpr, true, nil
+}
+
+func preparedSQLExecuteTextConsumerCast(ctx context.Context, source *Expr, targetType types.Type) (*Expr, error) {
+	if !targetType.Oid.IsMySQLString() || types.StaticStringDomain(targetType) == types.StringDomainBinary {
+		targetType = types.T_text.ToType()
+	}
+	targetType.Charset = types.CharsetUTF8
+	return makePlan2CastExpr(ctx, source, makePlan2Type(&targetType))
 }
 
 func isBitwiseAggregatePrivateCast(expr *plan.Expr) bool {
@@ -4057,6 +5482,14 @@ func (restore restorePreparedRuntimeParamRefRule) ApplyExpr(expr *Expr) (*Expr, 
 			// as an explicit cast in the reusable specialized plan.
 			restored.Typ = plan.Type{Id: int32(types.T_text)}
 			target := types.New(types.T(candidate.Typ.Id), candidate.Typ.Width, candidate.Typ.Scale)
+			if target.Oid.IsInteger() && types.T(lit.Src.Typ.Id).IsMySQLString() {
+				decimal := types.New(types.T_decimal128, 38, 0)
+				var err error
+				restored, err = makePlan2CastExpr(restore.ctx, restored, makePlan2Type(&decimal))
+				if err != nil {
+					return err
+				}
+			}
 			cast, err := makePlan2CastExpr(restore.ctx, restored, makePlan2Type(&target))
 			if err != nil {
 				return err

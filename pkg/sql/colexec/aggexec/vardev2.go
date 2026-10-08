@@ -17,6 +17,7 @@ package aggexec
 import (
 	"math"
 	"slices"
+	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -57,7 +58,24 @@ func dec256ToF(d types.Decimal256, scale int32) float64 {
 }
 
 func fToDec128(f float64, scale int32) (types.Decimal128, error) {
-	return types.Decimal128FromFloat64(f, 38, scale)
+	if math.IsInf(f, 0) || math.IsNaN(f) || scale < 0 || scale > 38 {
+		return types.Decimal128FromFloat64(f, 38, scale)
+	}
+
+	// Decimal variance is accumulated in float64, but materializing its binary
+	// ULP tail as decimal digits makes large otherwise-stable results diverge
+	// from MySQL. Parse the shortest round-trip decimal representation instead.
+	// Parse the magnitude first so positive and negative precision bounds remain
+	// symmetric, then restore the sign.
+	result, err := types.ParseDecimal128(
+		strconv.FormatFloat(math.Abs(f), 'g', -1, 64), 38, scale)
+	if err != nil {
+		return types.Decimal128{}, err
+	}
+	if math.Signbit(f) {
+		result = result.Minus()
+	}
+	return result, nil
 }
 
 func VarStdDevReturnType(typs []types.Type) types.Type {

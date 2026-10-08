@@ -138,6 +138,13 @@ func resolveLeastGreatestType(inputs []types.Type) (leastGreatestResolution, boo
 		}
 	}
 	if sameOid {
+		if baseOid.IsArrayRelate() {
+			for _, input := range nonNull[1:] {
+				if input.Width != nonNull[0].Width {
+					return leastGreatestResolution{}, false
+				}
+			}
+		}
 		if !leastGreatestExecutorSupportsOid(baseOid) {
 			return leastGreatestResolution{}, false
 		}

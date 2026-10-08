@@ -8,6 +8,10 @@ lowering. The prepared-percentile and extended-`PERCENTILE_DISC` contract is a
 separate protocol-bearing extension described in
 [Prepared percentiles and sortable discrete percentiles](20260910-prepared-and-discrete-percentiles.md).
 
+The later [`ordered-set window` design](20260919-ordered-set-window-functions.md)
+adds the `WITHIN GROUP (...) OVER (...)` form that was outside this original
+revision.
+
 ## Contract
 
 MatrixOne accepts the existing aggregate form:

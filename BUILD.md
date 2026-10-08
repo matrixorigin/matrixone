@@ -8,7 +8,7 @@ Before building MatrixOne, ensure you have the following installed:
 
 ### Required Tools
 
-1. **Go** (version 1.26.4 or later)
+1. **Go** (version 1.27.0 or later)
    - [Installation Guide](https://go.dev/doc/install)
    - Verify: `go version`
 
@@ -516,7 +516,7 @@ profile/CN_uuid_20240101_120000.000000_mutex.pprof.gz
 
 **Go version mismatch:**
 ```bash
-go version  # Must be 1.26.4 or later
+go version  # Must be 1.27.0 or later
 ```
 
 **Missing dependencies:**

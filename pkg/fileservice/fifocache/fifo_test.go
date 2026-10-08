@@ -351,6 +351,320 @@ func TestCachePressureAdmissionAdmitsGhostByEvictingCold(t *testing.T) {
 	assert.Equal(t, int64(2), cache.used())
 }
 
+func seedDeletedQueue2(t *testing.T, cache *Cache[int, int], ctx context.Context, hot int, followers ...int) {
+	t.Helper()
+	keys := append([]int{hot}, followers...)
+	cache.queueLock.Lock()
+	for index, key := range keys {
+		item := &_CacheItem[int, int]{
+			key:     key,
+			value:   key,
+			valueOK: true,
+			size:    1,
+			queue:   cacheItemQueue2,
+			seq:     cache.nextSeq.Add(1),
+		}
+		if index == 0 {
+			// The deleted head is hot. evict2 must first demote its hit count,
+			// then continue past deleted followers whose used2 decrement is the
+			// only progress signal.
+			item.count.Store(1)
+		}
+		shard := &cache.shards[cache.keyShardFunc(key)%numShards]
+		shard.Lock()
+		shard.values[key] = item
+		shard.Unlock()
+		cache.queue2.enqueue(item)
+		cache.used2 += item.size
+	}
+	cache.queueLock.Unlock()
+
+	for _, key := range keys {
+		cache.Delete(ctx, key)
+	}
+}
+
+func seedGhost(t *testing.T, cache *Cache[int, int], key int) {
+	t.Helper()
+	const size = int64(1)
+	item := &_CacheItem[int, int]{
+		key:   key,
+		size:  size,
+		queue: cacheItemGhost,
+		seq:   cache.nextSeq.Add(1),
+	}
+	cache.queueLock.Lock()
+	shard := &cache.shards[cache.keyShardFunc(key)%numShards]
+	shard.Lock()
+	shard.values[key] = item
+	shard.Unlock()
+	cache.ghost.enqueue(item)
+	cache.ghostSize += size
+	cache.queueLock.Unlock()
+}
+
+func TestEvictContinuesAfterDeletedQueue2Record(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		target int64
+		want   int64
+	}{
+		{name: "target-zero", target: 0, want: 0},
+		{name: "target-nonzero", target: 1, want: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := t.Context()
+			cache := New[int, int](fscache.ConstCapacity(10), ShardInt[int], nil, nil, nil)
+			seedDeletedQueue2(t, cache, ctx, 1, 2, 3)
+
+			got := cache.EvictToTargetWithWait(ctx, test.target)
+			assert.Equal(t, test.want, got)
+			assert.Equal(t, test.want, cache.used())
+			assert.Equal(t, test.want, cache.used2)
+			assert.Zero(t, cache.used1)
+		})
+	}
+}
+
+func TestAdmissionContinuesAfterDeletedQueue2Record(t *testing.T) {
+	ctx := t.Context()
+	cache := New[int, int](fscache.ConstCapacity(10), ShardInt[int], nil, nil, nil)
+	seedDeletedQueue2(t, cache, ctx, 1, 2, 3)
+	seedGhost(t, cache, 10)
+	cache.SetAdmissionTarget(func(int64) (int64, bool) { return 1, true })
+
+	inserted, rejected := cache.Set(ctx, 10, 10, 1)
+	assert.True(t, inserted)
+	assert.False(t, rejected)
+	assert.True(t, cache.Contains(10))
+	assert.Equal(t, int64(1), cache.used())
+	assert.Equal(t, int64(1), cache.used2)
+	assert.Zero(t, cache.used1)
+	for _, key := range []int{1, 2, 3} {
+		assert.False(t, cache.Contains(key))
+	}
+}
+
+func TestEvictContinuesAfterDeletedHotQueue2RecordAPI(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		target int64
+	}{
+		{name: "target-zero", target: 0},
+		{name: "target-nonzero", target: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := t.Context()
+			cache := New[int, int](fscache.ConstCapacity(6), ShardInt[int], nil, nil, nil)
+			for key := 1; key <= 6; key++ {
+				inserted, rejected := cache.Set(ctx, key, key, 1)
+				assert.True(t, inserted)
+				assert.False(t, rejected)
+			}
+
+			// Each target reduction promotes one hot queue-1 item into queue 2
+			// and evicts one cold follower, leaving three hot queue-2 entries.
+			for _, key := range []int{1, 3, 5} {
+				for range 2 {
+					_, ok := cache.Get(ctx, key)
+					assert.True(t, ok)
+				}
+				want := int64(6 - (key+1)/2)
+				assert.Equal(t, want, cache.EvictToTargetWithWait(ctx, want))
+			}
+
+			// Delete the hot queue-2 head. Its stale queue record must not
+			// short-circuit eviction of the live followers.
+			cache.Delete(ctx, 1)
+			assert.Equal(t, test.target, cache.EvictToTargetWithWait(ctx, test.target))
+			assert.Equal(t, test.target, cache.Used())
+			if test.target == 0 {
+				assert.False(t, cache.Contains(3))
+				assert.False(t, cache.Contains(5))
+			}
+		})
+	}
+}
+
+type accountingGuardProbe struct {
+	sync.Mutex
+	callbackSawUnlocked atomic.Bool
+}
+
+func TestPressureAccountingCommitPanicCleansPendingEviction(t *testing.T) {
+	ctx := t.Context()
+	guard := new(accountingGuardProbe)
+	var setResults []bool
+	var postEvictCalls atomic.Int64
+	var finishEvictCalls atomic.Int64
+
+	cache := newCache[int, int](
+		fscache.ConstCapacity(2),
+		ShardInt[int],
+		func(context.Context, int, int, int64, uint64) func(bool) {
+			return func(inserted bool) { setResults = append(setResults, inserted) }
+		},
+		nil,
+		nil,
+		func(int, int, int64, uint64) func() {
+			return func() { finishEvictCalls.Add(1) }
+		},
+		func(context.Context, int, int, int64, uint64) {
+			postEvictCalls.Add(1)
+			if guard.TryLock() {
+				guard.callbackSawUnlocked.Store(true)
+				guard.Unlock()
+			}
+		},
+	)
+	cache.setAccountingGuard(guard, func(value int) {
+		if value == 3 {
+			panic("accounting commit")
+		}
+	})
+
+	inserted, rejected := cache.Set(ctx, 1, 1, 1)
+	assert.True(t, inserted)
+	assert.False(t, rejected)
+	inserted, rejected = cache.Set(ctx, 2, 2, 1)
+	assert.True(t, inserted)
+	assert.False(t, rejected)
+	assert.Equal(t, int64(2), cache.Used())
+
+	// Move key 1 to the ghost queue so the pressure admission path can evict
+	// key 2 and produce pending post-evict cleanup before commit panics.
+	assert.Equal(t, int64(1), cache.EvictToTargetWithWait(ctx, 1))
+	cache.SetAdmissionTarget(func(int64) (int64, bool) { return 1, true })
+	postEvictCalls.Store(0)
+	finishEvictCalls.Store(0)
+	guard.callbackSawUnlocked.Store(false)
+
+	assert.PanicsWithValue(t, "accounting commit", func() {
+		cache.Set(ctx, 1, 3, 1)
+	})
+
+	assert.True(t, cache.Contains(1))
+	assert.Equal(t, int64(1), cache.Used())
+	assert.Equal(t, int64(1), postEvictCalls.Load())
+	assert.Equal(t, int64(1), finishEvictCalls.Load())
+	assert.True(t, guard.callbackSawUnlocked.Load())
+	assert.True(t, guard.TryLock())
+	guard.Unlock()
+	assert.Len(t, setResults, 3)
+	assert.True(t, setResults[2], "panic after admission must finish prepareSet as inserted")
+}
+
+func TestAccountingReservationIsHeldThroughPreEnqueuePostSet(t *testing.T) {
+	ctx := t.Context()
+	guard := new(sync.Mutex)
+	var reserved atomic.Int64
+	var committed atomic.Bool
+	var callbackUsed atomic.Int64
+	var callbackReserved atomic.Int64
+	var callbackAdmissionBlocked atomic.Bool
+	var commitOutsideGuard atomic.Bool
+	var commitUsed atomic.Int64
+
+	var cache *Cache[int, int]
+	cache = NewWithPrepareSet[int, int](
+		fscache.ConstCapacity(1),
+		ShardInt[int],
+		nil,
+		func(context.Context, int, int, int64, uint64) {
+			// Regular enqueue has not charged FIFO usage yet, but the external
+			// reservation is still visible to an allocator admission probe.
+			callbackUsed.Store(cache.Used())
+			callbackReserved.Store(reserved.Load())
+			callbackAdmissionBlocked.Store(cache.Used()+reserved.Load()+1 > cache.Capacity())
+		},
+		nil,
+		nil,
+	)
+	cache.setAccountingGuard(guard, func(int) {
+		if guard.TryLock() {
+			commitOutsideGuard.Store(true)
+			guard.Unlock()
+		}
+		commitUsed.Store(cache.Used())
+		reserved.Add(-1)
+		committed.Store(true)
+	})
+	reserved.Store(1)
+
+	inserted, rejected := cache.Set(ctx, 1, 1, 1)
+	assert.True(t, inserted)
+	assert.False(t, rejected)
+	assert.Zero(t, callbackUsed.Load())
+	assert.Equal(t, int64(1), callbackReserved.Load())
+	assert.True(t, callbackAdmissionBlocked.Load())
+	assert.Equal(t, int64(1), cache.Used())
+	assert.Equal(t, int64(1), commitUsed.Load())
+	assert.Zero(t, reserved.Load())
+	assert.True(t, committed.Load())
+	assert.False(t, commitOutsideGuard.Load())
+}
+
+func TestAccountingCommitChargesPendingEnqueueBeforeSetReturn(t *testing.T) {
+	ctx := t.Context()
+	guard := new(sync.Mutex)
+	var commits atomic.Int64
+	cache := NewWithPrepareSet[int, int](
+		fscache.ConstCapacity(4),
+		ShardInt[int],
+		nil,
+		func(context.Context, int, int, int64, uint64) {},
+		nil,
+		nil,
+	)
+	var commitOutsideGuard atomic.Bool
+	var commitPendingBytes atomic.Int64
+	cache.setAccountingGuard(guard, func(int) {
+		if guard.TryLock() {
+			commitOutsideGuard.Store(true)
+			guard.Unlock()
+		}
+		commitPendingBytes.Store(cache.pendingBytes.Load())
+		commits.Add(1)
+	})
+
+	cache.queueLock.Lock()
+	type setResult struct {
+		inserted bool
+		rejected bool
+	}
+	result := make(chan setResult, 1)
+	done := make(chan struct{})
+	go func() {
+		inserted, rejected := cache.Set(ctx, 1, 1, 4)
+		result <- setResult{inserted: inserted, rejected: rejected}
+		close(done)
+	}()
+	select {
+	case <-done:
+		got := <-result
+		assert.True(t, got.inserted)
+		assert.False(t, got.rejected)
+	case <-time.After(2 * time.Second):
+		cache.queueLock.Unlock()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+		}
+		t.Fatal("timed out waiting for pending enqueue Set")
+	}
+	// queueLock is intentionally still held. Probe the atomic pending charge,
+	// not Used(), which would try to acquire the held queue RLock.
+	assert.Equal(t, int64(4), cache.pendingBytes.Load())
+	assert.Equal(t, int64(1), commits.Load())
+	assert.Equal(t, int64(4), commitPendingBytes.Load())
+	assert.False(t, commitOutsideGuard.Load())
+	cache.queueLock.Unlock()
+
+	cache.Evict(ctx, nil, 0)
+	assert.Zero(t, cache.pendingBytes.Load())
+	assert.Equal(t, int64(4), cache.Used())
+}
+
 func TestReplaceUpdatesUsedBytes(t *testing.T) {
 	cache := New[int, int](
 		fscache.ConstCapacity(20),

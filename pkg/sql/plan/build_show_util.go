@@ -78,6 +78,11 @@ func constructCreateTableSQL(
 	includeChecks bool,
 	sourceSubscription *SubscriptionMeta,
 ) (string, tree.Statement, error) {
+	// Replaying native metadata through a legacy SQL alias would change its
+	// semantics. Until activation, reject rather than emit a lossy dump.
+	if err := plan.RequireLegacyCollations(tableDef); err != nil {
+		return "", nil, err
+	}
 	var err error
 	var createStr string
 	sqlMode := ""
@@ -1223,6 +1228,19 @@ func FormatColType(colType plan.Type) string {
 			ts = "MEDIUMTEXT"
 		case types.MaxLongTextLen:
 			ts = "LONGTEXT"
+		}
+	} else if typ.Oid == types.T_blob {
+		switch {
+		case colType.Width == 0:
+			// Legacy catalog BLOBs used width zero to mean unbounded. Emit the
+			// widest SQL family so recreation and dump/restore cannot narrow them.
+			ts = "LONGBLOB"
+		case colType.Width > 0 && colType.Width <= types.MaxTinyTextLen:
+			ts = "TINYBLOB"
+		case colType.Width > types.MaxStringSize && colType.Width <= types.MaxMediumTextLen:
+			ts = "MEDIUMBLOB"
+		case colType.Width > types.MaxMediumTextLen:
+			ts = "LONGBLOB"
 		}
 	}
 	// after decimal fix, remove this

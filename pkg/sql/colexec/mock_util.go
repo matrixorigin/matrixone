@@ -135,9 +135,9 @@ func (op *MockOperator) Call(proc *process.Process) (vm.CallResult, error) {
 	return result, nil
 }
 
-func makeMockVecs(mp *mpool.MPool) []*vector.Vector {
+func makeMockVecs(mp *mpool.MPool, values []int32, nulls []uint64) []*vector.Vector {
 	vecs := make([]*vector.Vector, 5)
-	vecs[0] = testutil.MakeInt32Vector([]int32{1, 1000}, nil, mp)
+	vecs[0] = testutil.MakeInt32Vector(values, nulls, mp)
 	uuid1, _ := types.BuildUuid()
 	uuid2, _ := types.BuildUuid()
 	vecs[1] = testutil.MakeUUIDVector([]types.Uuid{uuid1, uuid2}, nil, mp)
@@ -150,7 +150,7 @@ func makeMockVecs(mp *mpool.MPool) []*vector.Vector {
 // new batchs with schema : (a int, b uuid, c varchar, d json, e datetime)
 func MakeMockBatchs(mp *mpool.MPool) *batch.Batch {
 	bat := batch.New([]string{"a", "b", "c", "d", "e"})
-	vecs := makeMockVecs(mp)
+	vecs := makeMockVecs(mp, []int32{1, 1000}, nil)
 	bat.Vecs = vecs
 	bat.SetRowCount(vecs[0].Length())
 	return bat
@@ -191,7 +191,7 @@ func MakeMockTimeWinBatchs(mp *mpool.MPool) *batch.Batch {
 // new batchs with schema : (a int, b uuid, c varchar, d json, e date)
 func MakeMockBatchsWithRowID(mp *mpool.MPool) *batch.Batch {
 	bat := batch.New([]string{catalog.Row_ID, "a", "b", "c", "d", "e"})
-	vecs := makeMockVecs(mp)
+	vecs := makeMockVecs(mp, []int32{1, 1000}, nil)
 
 	uuid1 := objectio.NewSegmentid()
 	blkId1 := objectio.NewBlockid(uuid1, 0, 0)
@@ -209,8 +209,7 @@ func MakeMockBatchsWithRowID(mp *mpool.MPool) *batch.Batch {
 // vecs[0] is null,  use for test preinsert...
 func MakeMockBatchsWithNullVec(mp *mpool.MPool) *batch.Batch {
 	bat := batch.New([]string{"a", "b", "c", "d", "e"})
-	vecs := makeMockVecs(mp)
-	vecs[0] = testutil.MakeInt32Vector([]int32{1, 1}, []uint64{0, 1}, mp)
+	vecs := makeMockVecs(mp, []int32{1, 1}, []uint64{0, 1})
 	bat.Vecs = vecs
 	bat.SetRowCount(vecs[0].Length())
 	return bat
@@ -218,8 +217,7 @@ func MakeMockBatchsWithNullVec(mp *mpool.MPool) *batch.Batch {
 
 func MakeMockBatchsWithNullVec1(mp *mpool.MPool) *batch.Batch {
 	bat := batch.New([]string{"a", "b", "c", "d", "e"})
-	vecs := makeMockVecs(mp)
-	vecs[0] = testutil.MakeInt32Vector([]int32{1, 1}, []uint64{1}, mp)
+	vecs := makeMockVecs(mp, []int32{1, 1}, []uint64{1})
 	bat.Vecs = vecs
 	bat.SetRowCount(vecs[0].Length())
 	return bat
