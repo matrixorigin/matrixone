@@ -245,6 +245,8 @@ select cast(col9 as double) from t8;
 111.22233334444556
 delete from t8 where col9 is not NULL;
 insert into t8(col9) values ('1000000000000000000000000000000000000000');
+set @text_1_saved_sql_mode = @@session.sql_mode;
+set session sql_mode = concat_ws(',', nullif(@text_1_saved_sql_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 select cast(col9 as float) from t8;
 ➤ cast(col9 as float)[7,24,0]  𝄀
 3.4028235E38
@@ -260,6 +262,8 @@ select cast(col9 as double) from t8;
 ➤ cast(col9 as double)[8,54,0]  𝄀
 1.0E39
 delete from t8 where col9 is not NULL;
+set session sql_mode = @text_1_saved_sql_mode;
+set @text_1_saved_sql_mode = NULL;
 insert into t8(col10) values ('this is a char type');
 insert into t8(col10) values ('this is a varchar type');
 select cast(col10 as char) from t8;

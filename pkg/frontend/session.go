@@ -1382,6 +1382,18 @@ func (ses *Session) sqlModeHasMatrixOneNative() bool {
 	return ok && has
 }
 
+func (ses *Session) sqlModeHasMySQLNumericCompatibility() bool {
+	if ses == nil {
+		return false
+	}
+	value, err := ses.GetSessionSysVar("sql_mode")
+	if err != nil {
+		return false
+	}
+	has, ok := sqlModeHasMySQLNumericCompatibilityValue(value)
+	return ok && has
+}
+
 func (ses *Session) sqlModeHasOnlyFullGroupBy() bool {
 	if ses == nil {
 		return false

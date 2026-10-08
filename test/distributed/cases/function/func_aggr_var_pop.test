@@ -1,3 +1,9 @@
+# This legacy aggregate fixture intentionally exercises MySQL string-to-number
+# coercion for the character columns below. Keep the compatibility behavior
+# explicit now that the default mode is strict.
+SET @func_aggr_var_pop_saved_sql_mode = @@session.sql_mode;
+SET SESSION sql_mode = CONCAT_WS(',', NULLIF(@func_aggr_var_pop_saved_sql_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
+
 #NULL
 SELECT var_pop(null);
 
@@ -152,6 +158,8 @@ select var_pop(a) from test06;
 drop table test06;
 
 drop database test;
+SET SESSION sql_mode = @func_aggr_var_pop_saved_sql_mode;
+SET @func_aggr_var_pop_saved_sql_mode = NULL;
 # ============================================================
 # VARIANCE() alias comprehensive tests (VARIANCE = VAR_POP,
 # verified in function_id.go:682)

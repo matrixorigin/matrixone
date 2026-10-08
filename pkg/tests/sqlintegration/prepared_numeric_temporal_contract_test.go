@@ -60,6 +60,37 @@ func TestPreparedNumericTemporalContracts(t *testing.T) {
 			require.NoError(t, conn.QueryRowContext(ctx, q, args...).Scan(&s), q)
 			return s
 		}
+		withNumericCompatibility := func(t *testing.T, run func()) {
+			t.Helper()
+			var originalSQLMode string
+			require.NoError(t, conn.QueryRowContext(ctx, "select @@session.sql_mode").Scan(&originalSQLMode))
+			defer func() {
+				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cleanupCancel()
+				_, restoreErr := conn.ExecContext(cleanupCtx, fmt.Sprintf(
+					"set session sql_mode = '%s'", strings.ReplaceAll(originalSQLMode, "'", "''")))
+				require.NoError(t, restoreErr, "restore session sql_mode")
+			}()
+			compatibilitySQLMode := originalSQLMode
+			if !strings.Contains(compatibilitySQLMode, "MYSQL_NUMERIC_COMPATIBILITY") {
+				if compatibilitySQLMode != "" {
+					compatibilitySQLMode += ","
+				}
+				compatibilitySQLMode += "MYSQL_NUMERIC_COMPATIBILITY"
+			}
+			_, setErr := conn.ExecContext(ctx, fmt.Sprintf(
+				"set session sql_mode = '%s'", strings.ReplaceAll(compatibilitySQLMode, "'", "''")))
+			require.NoError(t, setErr, "enable numeric compatibility for legacy malformed value")
+			run()
+		}
+		assertStrictNumericInputError := func(t *testing.T, err error, input string) {
+			t.Helper()
+			var sqlError *mysql.MySQLError
+			require.ErrorAs(t, err, &sqlError)
+			require.Equal(t, uint16(20301), sqlError.Number)
+			require.Contains(t, sqlError.Message, input)
+			require.Contains(t, sqlError.Message, "invalid numeric string")
+		}
 		t.Run("guarded integer ranges", func(t *testing.T) {
 			exec(t, "create table range_keys(id int primary key,k int,v int,key k_1(k),key kv_1(k,v))")
 			exec(t, "insert into range_keys values(1,-2147483648,0),(2,-1,0),(3,null,0),(4,0,0),(5,1,0),(6,1,0),(7,8,0),(8,2147483647,0)")
@@ -136,17 +167,23 @@ func TestPreparedNumericTemporalContracts(t *testing.T) {
 				t.Run(tc.name, func(t *testing.T) {
 					p, err := conn.PrepareContext(ctx, "select id from range_keys where "+tc.predicate+" order by id")
 					require.NoError(t, err)
-					defer p.Close()
-					got, err := readPreparedContractIDs(p.QueryContext(ctx, "1tail", int64(2)))
-					require.NoError(t, err, tc.name)
-					require.Equal(t, tc.want, got, tc.name)
-					count, err := strconv.Atoi(scalar(t, "select @@warning_count"))
-					require.NoError(t, err)
-					wantWarnings := 0
-					if tc.warn {
-						wantWarnings = 1
+					defer func() { require.NoError(t, p.Close()) }()
+					if tc.name == "active warning" {
+						_, strictErr := readPreparedContractIDs(p.QueryContext(ctx, "1tail", int64(2)))
+						assertStrictNumericInputError(t, strictErr, "1tail")
 					}
-					require.Equal(t, wantWarnings, count, tc.name)
+					withNumericCompatibility(t, func() {
+						got, err := readPreparedContractIDs(p.QueryContext(ctx, "1tail", int64(2)))
+						require.NoError(t, err, tc.name)
+						require.Equal(t, tc.want, got, tc.name)
+						count, err := strconv.Atoi(scalar(t, "select @@warning_count"))
+						require.NoError(t, err)
+						wantWarnings := 0
+						if tc.warn {
+							wantWarnings = 1
+						}
+						require.Equal(t, wantWarnings, count, tc.name)
+					})
 				})
 			}
 		})
@@ -518,7 +555,7 @@ func TestPreparedNumericTemporalContracts(t *testing.T) {
 			}
 			p, err := conn.PrepareContext(ctx, "select id from keys_t where id=? order by id")
 			require.NoError(t, err)
-			defer p.Close()
+			defer func() { require.NoError(t, p.Close()) }()
 			for _, v := range []any{"9007199254740993", target, nil, "9007199254740993E0", "9007199254740993" + strings.Repeat("0", 60) + "E-60", "0." + strings.Repeat("0", 60) + "9007199254740993E76", "9007199254740993"} {
 				want := []int64{target}
 				if v == nil {
@@ -538,6 +575,16 @@ func TestPreparedNumericTemporalContracts(t *testing.T) {
 				{"9007199254740993tail", []int64{target - 1, target}},
 				{"9007199254740993", []int64{target}},
 			} {
+				if tc.value == "notnumber" || tc.value == "9007199254740993tail" {
+					_, strictErr := readPreparedContractIDs(p.QueryContext(ctx, tc.value))
+					assertStrictNumericInputError(t, strictErr, tc.value)
+					withNumericCompatibility(t, func() {
+						got, err := readPreparedContractIDs(p.QueryContext(ctx, tc.value))
+						require.NoError(t, err)
+						require.Equal(t, tc.want, got, tc.value)
+					})
+					continue
+				}
 				got, err := readPreparedContractIDs(p.QueryContext(ctx, tc.value))
 				require.NoError(t, err)
 				require.Equal(t, tc.want, got, tc.value)

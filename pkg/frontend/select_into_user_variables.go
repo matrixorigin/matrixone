@@ -104,7 +104,7 @@ func (collector *selectIntoUserVariables) capture(ctx context.Context, ses FeSes
 			return err
 		}
 		for i, vec := range bat.Vecs {
-			collector.rowIsBin[i] = vec.GetIsBin()
+			collector.rowIsBin[i] = vec.GetIsBinAt(0)
 			collector.rowDomain[i] = vec.GetRuntimeStringDomainAt(0)
 			collector.row[i], collector.rowType[i] = selectIntoUserVariableValueAndType(collector.row[i], *vec.GetType())
 		}

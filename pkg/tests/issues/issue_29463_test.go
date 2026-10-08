@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -40,6 +41,28 @@ func TestIssue29463PreparedCompositeKeyDomains(t *testing.T) {
 		conn, err := db.Conn(ctx)
 		require.NoError(t, err)
 		defer conn.Close()
+		withNumericCompatibility := func(t *testing.T) {
+			t.Helper()
+			var originalSQLMode string
+			require.NoError(t, conn.QueryRowContext(ctx, "select @@session.sql_mode").Scan(&originalSQLMode))
+			t.Cleanup(func() {
+				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cleanupCancel()
+				_, restoreErr := conn.ExecContext(cleanupCtx, fmt.Sprintf(
+					"set session sql_mode = '%s'", strings.ReplaceAll(originalSQLMode, "'", "''")))
+				require.NoError(t, restoreErr, "restore session sql_mode")
+			})
+			compatibilitySQLMode := originalSQLMode
+			if !strings.Contains(compatibilitySQLMode, "MYSQL_NUMERIC_COMPATIBILITY") {
+				if compatibilitySQLMode != "" {
+					compatibilitySQLMode += ","
+				}
+				compatibilitySQLMode += "MYSQL_NUMERIC_COMPATIBILITY"
+			}
+			_, err = conn.ExecContext(ctx, fmt.Sprintf(
+				"set session sql_mode = '%s'", strings.ReplaceAll(compatibilitySQLMode, "'", "''")))
+			require.NoError(t, err, "enable numeric compatibility for legacy prefix case")
+		}
 		dbName := testutils.GetDatabaseName(t)
 		mustExec(t, ctx, conn, "create database "+dbName)
 		defer func() {
@@ -93,6 +116,9 @@ func TestIssue29463PreparedCompositeKeyDomains(t *testing.T) {
 					}
 					for _, protocol := range []string{"binary", "text"} {
 						t.Run(fmt.Sprintf("%s/%s/%s/%T:%v", key, protocol, op, tc.value, tc.value), func(t *testing.T) {
+							if tc.warnings > 0 {
+								withNumericCompatibility(t)
+							}
 							var rows *sql.Rows
 							var err error
 							if protocol == "binary" {
@@ -148,16 +174,26 @@ func TestIssue29463PreparedCompositeKeyDomains(t *testing.T) {
 		mustExec(t, ctx, conn, "insert into string_key values(1,'02'),(1,'2'),(1,'3'),(1,'invalid'),(2,'2')")
 		strings, err := conn.PrepareContext(ctx, "select count(*) from string_key where k1=? and k2=?")
 		require.NoError(t, err)
-		defer strings.Close()
+		defer func() { require.NoError(t, strings.Close()) }()
+		var count int
+		strictErr := strings.QueryRowContext(ctx, int64(1), int64(2)).Scan(&count)
+		require.ErrorContains(t, strictErr, `"invalid" is invalid numeric string`,
+			"strict numeric comparison must reject the malformed stored VARCHAR key")
 		for _, tc := range []struct {
 			value any
 			count int
 		}{
 			{"2", 1}, {int64(2), 2}, {float64(2), 2}, {"invalid", 1}, {nil, 0}, {"3", 1},
 		} {
-			var count int
-			require.NoError(t, strings.QueryRowContext(ctx, int64(1), tc.value).Scan(&count))
-			require.Equal(t, tc.count, count, "binding %T:%v", tc.value, tc.value)
+			t.Run(fmt.Sprintf("%T:%v", tc.value, tc.value), func(t *testing.T) {
+				switch tc.value.(type) {
+				case int64, float64:
+					withNumericCompatibility(t)
+				}
+				var count int
+				require.NoError(t, strings.QueryRowContext(ctx, int64(1), tc.value).Scan(&count))
+				require.Equal(t, tc.count, count, "binding %T:%v", tc.value, tc.value)
+			})
 		}
 		require.NoError(t, strings.Close())
 		mustExec(t, ctx, conn, "drop table string_key")

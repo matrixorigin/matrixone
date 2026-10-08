@@ -47,6 +47,14 @@ func (c *Compile) constrainRemoteExpressionWorkers(qry *plan.Query) error {
 		return nil
 	}
 	required := remoteExpressionProtocolVersion(features)
+	if requiresStringNumericCompatibilityProtocol(c.proc, features) {
+		if c.proc != nil && c.proc.Base != nil && c.proc.GetSessionInfo().LegacyNumericCompatibilityMode {
+			return moerr.NewNotSupportedNoCtx(
+				"string numeric compatibility cannot run with a legacy session contract",
+			)
+		}
+		required = max(required, defines.MORPCVersion107)
+	}
 	if required == 0 {
 		return nil
 	}

@@ -467,6 +467,7 @@ func newExpressionExecutorWithAllocation(
 		{
 			// init function information for evaluation.
 			executor.overloadID = overloadID
+			executor.syntaxExplicitCast = t.F.GetSyntaxExplicitCast()
 			// Dynamic casts retain row-level diagnostics. Only the designated
 			// coordinator filter may fold a literal cast once per execution.
 			executor.stringToNumericCast = !overload.CannotFold() &&
@@ -502,6 +503,9 @@ func newExpressionExecutorWithAllocation(
 				return nil, paramErr
 			}
 			executor.SetParameter(i, subExecutor)
+		}
+		if (executor.fid == function.CEIL || executor.fid == function.FLOOR) && len(t.F.Args) == 2 {
+			executor.constantMathPrecision = isRowIndependentMathPrecision(proc.Ctx, t.F.Args[1])
 		}
 		if deferDiagnostic {
 			wrapped := &deferredJoinConstantExecutor{
@@ -542,6 +546,35 @@ func isStringToNumericCast(expr *plan.Expr, foldOwnedLiteral bool) bool {
 	}
 	return name != "cast" || f.GetSyntaxExplicitCast() || !foldOwnedLiteral ||
 		!function.IsStatementConstantInput(f.Args[0])
+}
+
+// CEIL/FLOOR require constant precision, but a deterministic scalar cast can
+// produce a flat vector because its warnings must be emitted for every active
+// row. Prove independence from input rows, not equality within one batch.
+func isRowIndependentMathPrecision(ctx context.Context, expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_T:
+		return true
+	case *plan.Expr_F:
+		if e.F == nil || e.F.Func == nil {
+			return false
+		}
+		overload, err := function.GetFunctionById(ctx, e.F.Func.Obj)
+		if err != nil || overload.CannotFold() || overload.IsRealTimeRelated() {
+			return false
+		}
+		for _, arg := range e.F.Args {
+			if !isRowIndependentMathPrecision(ctx, arg) {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
 }
 
 func newExpressionOffHeapVector(
@@ -621,11 +654,18 @@ type FixedVectorExpressionExecutor struct {
 type FunctionExpressionExecutor struct {
 	m          *mpool.MPool
 	allocation *vector.AllocationAccountSelection
+	// syntaxExplicitCast distinguishes a user-written CAST from a binder-added
+	// overload-0 cast. Syntax-explicit casts share the legacy overload ID on the
+	// wire, but remain provenance boundaries.
+	syntaxExplicitCast bool
 	// resultType is the declared function return type. Some built-ins refine
 	// result metadata (for example temporal scale or decimal width/scale) at
 	// runtime, so reusable result vectors must start each evaluation from this
 	// stable type before the function applies the current runtime metadata.
 	resultType types.Type
+	// A warning-bearing scalar precision is evaluated normally before a
+	// temporary constant vector is passed to the CEIL/FLOOR kernel.
+	constantMathPrecision bool
 	functionInformationForEval
 	folded      functionFolding
 	selectList1 []bool
@@ -653,6 +693,7 @@ type FunctionExpressionExecutor struct {
 	flowControlKinds         []vector.PrepareParamKind
 	flowControlStringDomains []types.RuntimeStringDomain
 	flowControlStringSources []types.StringSource
+	flowControlIsBinRows     []bool
 	iffNullResults           [2]*vector.Vector
 }
 
@@ -1207,6 +1248,9 @@ func (expr *FunctionExpressionExecutor) resetFlowControlPrepareParamKind() {
 	if expr.flowControlStringSources != nil {
 		expr.flowControlStringSources = expr.flowControlStringSources[:0]
 	}
+	if expr.flowControlIsBinRows != nil {
+		expr.flowControlIsBinRows = expr.flowControlIsBinRows[:0]
+	}
 }
 
 func (expr *FunctionExpressionExecutor) ensureFlowControlPrepareParamRows(rows int) {
@@ -1249,6 +1293,19 @@ func (expr *FunctionExpressionExecutor) ensureFlowControlStringSourceRows(rows i
 		expr.flowControlStringSources, make([]types.StringSource, rows-old)...)
 }
 
+func (expr *FunctionExpressionExecutor) ensureFlowControlIsBinRows(rows int) {
+	if rows <= len(expr.flowControlIsBinRows) {
+		return
+	}
+	old := len(expr.flowControlIsBinRows)
+	if rows <= cap(expr.flowControlIsBinRows) {
+		expr.flowControlIsBinRows = expr.flowControlIsBinRows[:rows]
+		clear(expr.flowControlIsBinRows[old:])
+		return
+	}
+	expr.flowControlIsBinRows = append(expr.flowControlIsBinRows, make([]bool, rows-old)...)
+}
+
 // observeFlowControlPrepareParamKind inspects only rows that can reach one
 // IF/CASE/COALESCE arm. Column executors intentionally return their full input
 // vector even under a row mask, so checking value.AllNull() would incorrectly
@@ -1263,7 +1320,7 @@ func (expr *FunctionExpressionExecutor) observeFlowControlPrepareParamKind(
 		return
 	}
 	resultDomain := types.StaticStringDomain(expr.resultType)
-	if !value.HasNull() && !value.HasBinaryStringMetadata() &&
+	if !value.HasNull() && !value.HasBinaryStringMetadata() && !value.HasIsBinMetadata() &&
 		!value.HasPrepareParamKind() && len(value.GetPrepareParamKinds()) == 0 &&
 		!value.HasStringSourceMetadata() &&
 		types.StaticStringDomain(*value.GetType()) == resultDomain &&
@@ -1287,6 +1344,11 @@ func (expr *FunctionExpressionExecutor) observeFlowControlPrepareParamKind(
 			}
 			if value.IsNull(uint64(row)) {
 				continue
+			}
+			isBin := value.GetIsBinAt(row)
+			if isBin || len(expr.flowControlIsBinRows) != 0 {
+				expr.ensureFlowControlIsBinRows(len(selection))
+				expr.flowControlIsBinRows[row] = isBin
 			}
 			domain := value.GetRuntimeStringDomainAt(row)
 			if domain == types.RuntimeStringInherit {
@@ -1323,12 +1385,13 @@ func (expr *FunctionExpressionExecutor) observeFlowControlPrepareParamKind(
 }
 
 // flowControlSelectedValueSource unwraps only binder-inserted casts. Explicit
-// CAST uses overload 1 and remains a semantic boundary. An implicit cast has
-// already evaluated its source, so this does not execute an expression twice.
+// CAST uses a nonzero overload or SyntaxExplicitCast and remains a semantic
+// boundary. An implicit cast has already evaluated its source, so this does
+// not execute an expression twice.
 func flowControlSelectedValueSource(value *vector.Vector, executor ExpressionExecutor) *vector.Vector {
 	for {
 		fn, ok := executor.(*FunctionExpressionExecutor)
-		if !ok || fn.fid != function.CAST || len(fn.parameterResults) == 0 ||
+		if !ok || fn.fid != function.CAST || fn.syntaxExplicitCast || len(fn.parameterResults) == 0 ||
 			len(fn.parameterExecutor) == 0 || fn.parameterResults[0] == nil {
 			return value
 		}
@@ -1348,6 +1411,12 @@ func (expr *FunctionExpressionExecutor) applyFlowControlPrepareParamKinds(
 ) error {
 	if result == nil || rows <= 0 {
 		return nil
+	}
+	if len(expr.flowControlIsBinRows) != 0 {
+		expr.ensureFlowControlIsBinRows(rows)
+		if err := result.SetIsBinRowsWithMP(expr.flowControlIsBinRows[:rows], mp); err != nil {
+			return err
+		}
 	}
 	if len(expr.flowControlStringDomains) != 0 {
 		expr.ensureFlowControlBinaryStringRows(rows)
@@ -1375,7 +1444,7 @@ func (expr *FunctionExpressionExecutor) applyFlowControlPrepareParamKinds(
 }
 
 func (expr *FunctionExpressionExecutor) isImplicitCast() bool {
-	if expr.fid != function.CAST {
+	if expr.fid != function.CAST || expr.syntaxExplicitCast {
 		return false
 	}
 	_, overload := function.DecodeOverloadID(expr.overloadID)
@@ -1427,14 +1496,33 @@ func applyTransparentStringSource(
 	// consumers such as JSON_STORAGE can reject an ENUM value that travelled
 	// through the text transport instead of accepting it as VARCHAR.
 	result.SetPrepareParamType(source.GetPrepareParamType())
+	var err error
 	if source.GetStringSources() == nil {
-		return result.SetStringSource(source.GetStringSource())
+		err = result.SetStringSource(source.GetStringSource())
+	} else {
+		sources := make([]types.StringSource, rows)
+		for row := range sources {
+			sources[row] = source.GetStringSourceAt(row)
+		}
+		err = result.SetStringSourcesWithMP(sources, mp)
 	}
-	sources := make([]types.StringSource, rows)
-	for row := range sources {
-		sources[row] = source.GetStringSourceAt(row)
+	if err != nil {
+		return err
 	}
-	return result.SetStringSourcesWithMP(sources, mp)
+	// Numeric HEX/BIT provenance is independent of the string's runtime domain.
+	// Preserve it only across implicit string-to-string coercions; casts to a
+	// numeric type consume the marker, and explicit casts are not transparent.
+	if source.GetType().Oid.IsMySQLString() && result.GetType().Oid.IsMySQLString() {
+		if source.HasIsBinRows() {
+			isBinRows := make([]bool, rows)
+			for row := range isBinRows {
+				isBinRows[row] = source.GetIsBinAt(row)
+			}
+			return result.SetIsBinRowsWithMP(isBinRows, mp)
+		}
+		result.SetIsBin(source.GetIsBin())
+	}
+	return nil
 }
 
 func (expr *FunctionExpressionExecutor) getFlowControlPrepareParamKind() vector.PrepareParamKind {
@@ -1652,7 +1740,7 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 	if err := expr.selectedResult.PreExtendAndReset(selectedCount); err != nil {
 		return nil, err
 	}
-	if err := expr.evalFn(
+	if err := expr.evalWithConstantMathPrecision(
 		expr.selectedParameterResults, expr.selectedResult, proc, selectedCount, nil); err != nil {
 		return nil, err
 	}
@@ -1700,7 +1788,7 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 		expr.selectedNullResult.SetType(runtimeType)
 		expr.selectedNullResult.SetLength(1)
 	}
-	expr.selectedNullResult.SetIsBin(selectedResult.GetIsBin())
+	expr.selectedNullResult.SetIsBin(false)
 	selectedRow := int64(0)
 	for row := 0; row < rowCount; row++ {
 		if selectList[row] {
@@ -1811,7 +1899,7 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 		}
 	}
 
-	if err = expr.evalFn(
+	if err = expr.evalWithConstantMathPrecision(
 		expr.parameterResults, expr.resultVector, proc, rowCount, &expr.selectList); err != nil {
 		return nil, err
 	}
@@ -1834,6 +1922,33 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 	}
 
 	return expr.resultVector.GetResultVector(), nil
+}
+
+func (expr *FunctionExpressionExecutor) evalWithConstantMathPrecision(
+	parameters []*vector.Vector, result vector.FunctionResultWrapper,
+	proc *process.Process, rowCount int, selectList *function.FunctionSelectList,
+) error {
+	if !expr.constantMathPrecision || rowCount == 0 {
+		return expr.evalFn(parameters, result, proc, rowCount, selectList)
+	}
+	precision := parameters[1]
+	if precision.IsConst() || precision.Length() == 0 || precision.GetType().Oid != types.T_int64 || precision.IsNull(0) {
+		return expr.evalFn(parameters, result, proc, rowCount, selectList)
+	}
+	// All children have already evaluated the active rows, including their
+	// warnings. The selected-row path has compacted those rows, so index zero
+	// is active here. Never mutate or fold the child-owned result vector.
+	constant, err := newExpressionConstFixed(*precision.GetType(),
+		vector.GetFixedAtWithTypeCheck[int64](precision, 0), rowCount, expr.m, expr.allocation)
+	if err != nil {
+		return err
+	}
+	parameters[1] = constant
+	defer func() {
+		parameters[1] = precision
+		constant.Free(expr.m)
+	}()
+	return expr.evalFn(parameters, result, proc, rowCount, selectList)
 }
 
 func (expr *FunctionExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {

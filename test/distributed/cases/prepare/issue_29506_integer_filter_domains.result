@@ -52,9 +52,13 @@ execute equal_key using @key;
 ➤ count(*)[-5,64,0]  𝄀
 0
 set @key = '12345tail';
+set @issue_29506_saved_sql_mode = @@session.sql_mode;
+set session sql_mode = concat_ws(',', nullif(@@session.sql_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 execute equal_key using @key;
 ➤ count(*)[-5,64,0]  𝄀
 1
+set session sql_mode = @issue_29506_saved_sql_mode;
+set @issue_29506_saved_sql_mode = null;
 deallocate prepare equal_key;
 prepare between_keys from 'select count(*) from keys32 where id between ? and ?';
 set @lo = '12344';

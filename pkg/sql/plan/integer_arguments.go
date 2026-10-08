@@ -124,7 +124,80 @@ func (b *baseBinder) bindIntegerSourceAst(ast tree.Expr, depth int32, target typ
 	if function.IntegerArgumentSourceDependent(name, position) {
 		return appendSourceDependentIntegerArgument(b.GetContext(), source, name, position)
 	}
+	if nativeTarget, native := function.IntegerArgumentNativeOrdinaryCastTarget(name, position, types.T(source.Typ.Id)); native && preparedMathPrecisionUsesNativeSource(b.GetContext(), source, name, position) {
+		return appendIntegerArgument(b.GetContext(), source, nativeTarget, false)
+	}
+	if ordinaryTarget, ordinary := function.IntegerArgumentOrdinaryCastTarget(name, position); ordinary {
+		typ := ordinaryTarget.ToType()
+		return appendCastBeforeExpr(b.GetContext(), source, makePlan2Type(&typ))
+	}
 	return appendIntegerArgument(b.GetContext(), source, target, false)
+}
+
+// preparedMathPrecisionUsesNativeSource distinguishes a proven SQL EXECUTE
+// numeric source from binary-protocol or runtime-inferred values. Those latter
+// values keep the ordinary INT64 CAST contract even when their bound type is
+// floating point.
+func preparedMathPrecisionUsesNativeSource(ctx context.Context, source *Expr, name string, position int) bool {
+	if source == nil || source.GetP() == nil {
+		return true
+	}
+	state := preparedBindingState(ctx)
+	if state == nil {
+		return true
+	}
+	positionInValues := source.GetP().Pos
+	if positionInValues < 0 || int(positionInValues) >= len(state.values) {
+		return false
+	}
+	param, ok := state.values[positionInValues].(ParamValue)
+	if !ok || param.IsBinaryProtocol || !param.HasSourceType {
+		return false
+	}
+	_, ok = function.IntegerArgumentNativeOrdinaryCastTarget(name, position, param.SourceType.Oid)
+	return ok
+}
+
+// bindOrdinaryMathPrecisionAst preserves normal expression binding for
+// explicit casts and value selectors. Only a bare native numeric precision
+// source uses the legacy integer conversion; text still uses strict INT64
+// casting.
+func (b *baseBinder) bindOrdinaryMathPrecisionAst(ast tree.Expr, depth int32, target types.T, name string, position int) (*Expr, error) {
+	ast = unwrapParenExpr(ast)
+	_, explicitCast := ast.(*tree.CastExpr)
+	selecting := false
+	switch value := ast.(type) {
+	case *tree.CaseExpr:
+		selecting = true
+	case *tree.FuncExpr:
+		switch numericAstFunctionName(value) {
+		case "if", "iff", "nullif":
+			selecting = true
+		}
+	}
+	if !explicitCast && !selecting {
+		return b.bindIntegerSourceAst(ast, depth, target, name, position)
+	}
+
+	source, err := b.impl.BindExpr(ast, depth, false)
+	if err != nil {
+		return nil, err
+	}
+	if selecting {
+		source, err = b.integerArgumentStorageSource(source)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if nativeTarget, native := function.IntegerArgumentNativeOrdinaryCastTarget(name, position, types.T(source.Typ.Id)); native && !explicitCast {
+		return appendIntegerArgument(b.GetContext(), source, nativeTarget, false)
+	}
+	ordinaryTarget, ok := function.IntegerArgumentOrdinaryCastTarget(name, position)
+	if !ok {
+		return appendIntegerArgument(b.GetContext(), source, target, false)
+	}
+	typ := ordinaryTarget.ToType()
+	return appendCastBeforeExpr(b.GetContext(), source, makePlan2Type(&typ))
 }
 
 // Recover only direct display wrappers or established reversible provenance.

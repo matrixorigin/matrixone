@@ -297,16 +297,17 @@ func (ec *engineColumnInfo) GetType() types.T {
 type PrepareStmt struct {
 	// Monotonic high-water mark for GROUP_CONCAT across this prepared lifetime,
 	// including executions whose AP or specialization path discards the compile.
-	groupConcatMaxLenFloor uint64
-	Name                   string
-	Sql                    string
-	PreparePlan            *plan.Plan
-	PrepareStmt            tree.Statement
-	NativeMode             bool
-	OnlyFullGroupBy        bool
-	BoolSumAvg             bool
-	NoUnsignedSubtraction  bool
-	divPrecisionIncrement  int64
+	groupConcatMaxLenFloor        uint64
+	Name                          string
+	Sql                           string
+	PreparePlan                   *plan.Plan
+	PrepareStmt                   tree.Statement
+	NativeMode                    bool
+	MySQLNumericCompatibilityMode bool
+	OnlyFullGroupBy               bool
+	BoolSumAvg                    bool
+	NoUnsignedSubtraction         bool
+	divPrecisionIncrement         int64
 	// sqlModeFlagsSet distinguishes captured disabled modes (OnlyFullGroupBy,
 	// BoolSumAvg) from legacy or minimal in-memory fixtures that predate these
 	// plan dependencies.

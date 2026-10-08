@@ -34,6 +34,7 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 	if features.SpecialIntegerConsumers {
 		integerArgumentsVersion = defines.MORPCVersion98
 	}
+	numericCompatibility := requiresStringNumericCompatibilityProtocol(proc, features)
 	gates := [...]struct {
 		enabled              bool
 		version              int64
@@ -63,6 +64,9 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		{features.StringNumericResultContracts, defines.MORPCVersion80,
 			"corrected string numeric result contracts require a versioned remote destination",
 			"remote destination does not support corrected string numeric result contracts (MORPC version %d)"},
+		{numericCompatibility, defines.MORPCVersion107,
+			"string numeric compatibility requires a versioned remote destination",
+			"remote destination does not support string numeric compatibility (MORPC version %d)"},
 		{features.BoundedConditionalStringDomains, defines.MORPCVersion83,
 			"bounded conditional string domains require a versioned remote destination",
 			"remote destination does not support bounded conditional string domains (MORPC version %d)"},

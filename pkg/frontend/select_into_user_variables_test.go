@@ -93,8 +93,10 @@ func TestSelectIntoUserVariablesPreservesBinaryFlagPerColumn(t *testing.T) {
 
 	bat := batch.NewWithSize(2)
 	bat.Vecs[0] = vector.NewVec(types.T_binary.ToType())
-	bat.Vecs[0].SetIsBin(true)
 	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("AB\x00\x00"), false, mp))
+	// SQL HEX/BIT literal provenance is attached after the value is materialized;
+	// a raw bytes append is an ordinary (non-literal) value append.
+	bat.Vecs[0].SetIsBin(true)
 	require.NoError(t, bat.Vecs[0].SetRuntimeStringDomainWithMP(types.RuntimeStringText, mp))
 	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
 	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("text"), false, mp))
