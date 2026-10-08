@@ -530,3 +530,72 @@ func TestCompatibilityForV12PropagatesAppendError(t *testing.T) {
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrMPoolCapacity), err)
 	require.Zero(t, dest.RowCount())
 }
+
+func TestCompatibilityForV12PropagatesEveryAppendError(t *testing.T) {
+	sourceMP := mpool.MustNewZero()
+	defer mpool.DeleteMPool(sourceMP)
+
+	source := containers.BuildBatch(
+		[]string{"base0", "base1", "object_stats", "db_id", "table_id", "create_ts", "delete_ts"},
+		[]types.Type{
+			types.T_int8.ToType(),
+			types.T_int8.ToType(),
+			types.T_char.ToType(),
+			types.T_uint64.ToType(),
+			types.T_uint64.ToType(),
+			types.T_TS.ToType(),
+			types.T_TS.ToType(),
+		},
+		containers.Options{Allocator: sourceMP},
+	)
+	defer source.Close()
+
+	stats := objectio.NewObjectStats()
+	name := objectio.MockObjectName()
+	require.NoError(t, objectio.SetObjectStatsObjectName(stats, name))
+	require.NoError(t, objectio.SetObjectStatsSize(stats, 1))
+	require.NoError(t, vector.AppendFixed(
+		source.Vecs[0].GetDownstreamVector(), int8(0), false, sourceMP))
+	require.NoError(t, vector.AppendBytes(
+		source.Vecs[ObjectInfo_ObjectStats_Idx+2].GetDownstreamVector(),
+		stats[:], false, sourceMP))
+	require.NoError(t, vector.AppendFixed(
+		source.Vecs[ObjectInfo_DBID_Idx+2].GetDownstreamVector(),
+		uint64(1), false, sourceMP))
+	require.NoError(t, vector.AppendFixed(
+		source.Vecs[ObjectInfo_TID_Idx+2].GetDownstreamVector(),
+		uint64(1), false, sourceMP))
+	now := types.NextGlobalTsForTest()
+	require.NoError(t, vector.AppendFixed(
+		source.Vecs[ObjectInfo_CreateAt_Idx+2].GetDownstreamVector(), now, false, sourceMP))
+	require.NoError(t, vector.AppendFixed(
+		source.Vecs[ObjectInfo_DeleteAt_Idx+2].GetDownstreamVector(), now, false, sourceMP))
+
+	// Vary the remaining capacity so that each destination vector becomes the
+	// first allocation to fail. This keeps the regression test deterministic
+	// while covering every error return in the conversion closure.
+	const capacity = 1 << 20
+	for remaining := 1; remaining <= 256; remaining++ {
+		t.Run(fmt.Sprintf("remaining-%d", remaining), func(t *testing.T) {
+			destMP, err := mpool.NewMPool("v12-compatibility-errors", capacity, mpool.NoFixed)
+			require.NoError(t, err)
+			defer mpool.DeleteMPool(destMP)
+			held, err := destMP.Alloc(capacity-remaining, true)
+			require.NoError(t, err)
+			defer destMP.Free(held)
+
+			dest := ckputil.MakeDataScanTableIDBatch()
+			defer dest.Clean(destMP)
+			err = compatibilityForV12(
+				objectio.NewBlockid(objectio.NewSegmentid(), 0, 0),
+				source,
+				source,
+				dest,
+				destMP,
+			)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrMPoolCapacity), err)
+			require.Zero(t, dest.RowCount())
+		})
+	}
+}
