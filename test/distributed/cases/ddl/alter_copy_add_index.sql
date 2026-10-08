@@ -114,7 +114,7 @@ where table_id = (
 and algo = 'hnsw'
 order by algo_table_type;
 select id from vectors order by l2_distance(embedding, '[1,0,0]') limit 1;
--- @regex("hnsw_search", true)
+-- @regex("Vector Index Scan on", true)
 explain select id from vectors order by l2_distance(embedding, '[1,0,0]') limit 1;
 set experimental_hnsw_index = 0;
 

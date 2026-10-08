@@ -1713,11 +1713,9 @@ func resultColumnSourceFromIndexSearchScan(scan *plan.IndexSearchScan, vectorTab
 		return nil
 	}
 
-	// Only IVFFlat's synthetic schema (pkid, score, __mo_index_include_<name>) is
-	// understood here. Any other algorithm's INDEX_SEARCH_SCAN has a different
-	// schema, so fail closed rather than mis-resolve it as IVFFlat (#29212).
-	// GetIndexAlgo is nil-safe, so a missing Index also fails closed.
-	if !catalog.IsIvfIndexAlgo(scan.Index.GetIndexAlgo()) {
+	// Every INDEX_SEARCH_SCAN emits the synthetic schema (pkid, score,
+	// __mo_index_include_<name>); any other column name fails closed (#29212).
+	if scan.Index == nil {
 		return nil
 	}
 

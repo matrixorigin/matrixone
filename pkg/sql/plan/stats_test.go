@@ -1118,7 +1118,7 @@ func TestGetExecType_IndexSearchScanUsesMultiCN(t *testing.T) {
 			NodeId:          0,
 			NodeType:        planpb.Node_INDEX_SEARCH_SCAN,
 			Stats:           &planpb.Stats{BlockNum: 1, Cost: 1, Outcnt: 1},
-			IndexSearchScan: &planpb.IndexSearchScan{},
+			IndexSearchScan: &planpb.IndexSearchScan{Index: testIvfIndex},
 		}},
 	}
 	require.Equal(t, ExecTypeAP_MULTICN, GetExecType(query, false, false))
@@ -1132,7 +1132,7 @@ func TestGetExecType_IndexSearchScanRespectsOneCNAndDDL(t *testing.T) {
 				NodeId:          0,
 				NodeType:        planpb.Node_INDEX_SEARCH_SCAN,
 				Stats:           &planpb.Stats{BlockNum: 1, Cost: 1, Outcnt: 1, ForceOneCN: force},
-				IndexSearchScan: &planpb.IndexSearchScan{},
+				IndexSearchScan: &planpb.IndexSearchScan{Index: testIvfIndex},
 			}},
 		}
 	}
@@ -3214,4 +3214,25 @@ func TestCachedPlanStrictStatsReachability(t *testing.T) {
 			require.True(t, changed, "background contracts retain exact admission")
 		})
 	}
+}
+
+func TestGetExecType_UnpartitionedIndexSearchScanPlansLikeATableFunction(t *testing.T) {
+	query := func(stats *planpb.Stats) *planpb.Query {
+		return &planpb.Query{
+			Steps: []int32{0},
+			Nodes: []*planpb.Node{{
+				NodeId:          0,
+				NodeType:        planpb.Node_INDEX_SEARCH_SCAN,
+				Stats:           stats,
+				IndexSearchScan: &planpb.IndexSearchScan{Index: &planpb.IndexDef{IndexAlgo: "hnsw"}},
+				RuntimeFilterProbeList: []*planpb.RuntimeFilterSpec{
+					{MustApply: true, UseMembershipFilter: true},
+				},
+			}},
+		}
+	}
+	require.Equal(t, ExecTypeTP, GetExecType(query(&planpb.Stats{BlockNum: 1, Cost: 1, Outcnt: 1}), false, false))
+	require.Equal(t, ExecTypeAP_MULTICN, GetExecType(query(&planpb.Stats{
+		BlockNum: int32(BlockThresholdForOneCN) + 1, Cost: float64(costThresholdForOneCN) + 1,
+	}), false, false), "a large query can still use every CN")
 }

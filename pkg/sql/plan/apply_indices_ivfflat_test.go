@@ -2349,7 +2349,7 @@ func TestGetResultColumnsFromPlanFailsClosedForInvalidVectorIndexSource(t *testi
 // INDEX_SEARCH_SCAN. The same node resolves under the IVFFlat algo but yields no source metadata
 // for any other algo (or a missing Index), so a future non-IVFFlat INDEX_SEARCH_SCAN cannot inherit
 // IVFFlat's schema by accident. Guards the resolver relocated from build.go (PR #28833).
-func TestResultColumnSourceFromIndexSearchScanFailsClosedForNonIvfflat(t *testing.T) {
+func TestResultColumnSourceFromIndexSearchScanResolvesEveryAlgorithm(t *testing.T) {
 	sourceTable := &plan.TableDef{
 		Name:          "source_table",
 		DbName:        "source_db",
@@ -2357,29 +2357,26 @@ func TestResultColumnSourceFromIndexSearchScanFailsClosedForNonIvfflat(t *testin
 		Cols:          []*plan.ColDef{{Name: "id", Primary: true}, {Name: "payload"}},
 		Name2ColIndex: map[string]int32{"id": 0, "payload": 1},
 	}
-	vectorTableDef := &plan.TableDef{Cols: []*plan.ColDef{{Name: "pkid"}, {Name: "score"}}}
+	vectorTableDef := &plan.TableDef{Cols: []*plan.ColDef{{Name: "pkid"}, {Name: "score"}, {Name: "doc"}}}
 	sourceRef := &plan.ObjectRef{SchemaName: "source_db", ObjName: "source_table"}
 
-	// IVFFlat resolves the pkid slot to the source primary key.
-	ivf := &plan.IndexSearchScan{
-		SourceTable:    sourceRef,
-		SourceTableDef: sourceTable,
-		Index:          &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()},
+	// Every algorithm emits the same synthetic schema: pkid resolves to the
+	// source primary key.
+	for _, algo := range []string{catalog.MoIndexIvfFlatAlgo.ToString(), catalog.MoIndexHnswAlgo.ToString()} {
+		scan := &plan.IndexSearchScan{
+			SourceTable:    sourceRef,
+			SourceTableDef: sourceTable,
+			Index:          &plan.IndexDef{IndexAlgo: algo},
+		}
+		got := resultColumnSourceFromIndexSearchScan(scan, vectorTableDef, 0)
+		require.NotNil(t, got, algo)
+		require.Equal(t, "id", got.columnName)
+		require.True(t, got.primary)
+		// A column outside the synthetic schema fails closed.
+		require.Nil(t, resultColumnSourceFromIndexSearchScan(scan, vectorTableDef, 2), algo)
 	}
-	got := resultColumnSourceFromIndexSearchScan(ivf, vectorTableDef, 0)
-	require.NotNil(t, got)
-	require.Equal(t, "id", got.columnName)
-	require.True(t, got.primary)
 
-	// A non-IVFFlat algorithm fails closed -- no source metadata.
-	nonIvf := &plan.IndexSearchScan{
-		SourceTable:    sourceRef,
-		SourceTableDef: sourceTable,
-		Index:          &plan.IndexDef{IndexAlgo: "hnsw"},
-	}
-	require.Nil(t, resultColumnSourceFromIndexSearchScan(nonIvf, vectorTableDef, 0))
-
-	// A missing Index also fails closed (GetIndexAlgo is nil-safe).
+	// A missing Index fails closed.
 	missingIndex := &plan.IndexSearchScan{SourceTable: sourceRef, SourceTableDef: sourceTable}
 	require.Nil(t, resultColumnSourceFromIndexSearchScan(missingIndex, vectorTableDef, 0))
 }

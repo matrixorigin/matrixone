@@ -563,6 +563,7 @@ func TestCompileIndexSearchScanUsesAllQueryCNs(t *testing.T) {
 			Tenant: &plan.SnapshotTenant{TenantID: 7},
 		},
 		IndexSearchScan: &plan.IndexSearchScan{
+			Index: &plan.IndexDef{IndexAlgo: "ivfflat"},
 			ScanSnapshot: &plan.Snapshot{
 				TS:     &timestamp.Timestamp{PhysicalTime: 123},
 				Tenant: &plan.SnapshotTenant{TenantID: 7},
@@ -937,4 +938,21 @@ func newStubEngineForGenerateNodes(dbName, tblName string) *stubEngine {
 	db.rels[tblName] = newStubRelation(tblName)
 	e.dbs[dbName] = db
 	return e
+}
+
+func TestCompileUnpartitionedIndexSearchScanRunsInOneLocalScope(t *testing.T) {
+	c, client := vectorPlacementCompile(t, engine.Nodes{
+		{Id: "cn1", Addr: "cn-local:6001", Mcpu: 4},
+		{Id: "cn2", Addr: "cn-remote:6001", Mcpu: 8},
+	})
+	node := vectorPlacementNode()
+	node.IndexSearchScan.Index.IndexAlgo = "hnsw"
+	scopes, err := c.compileIndexSearchScan(node)
+	require.NoError(t, err)
+	t.Cleanup(func() { ReleaseScopes(scopes) })
+	require.Len(t, scopes, 1)
+	require.Equal(t, "cn-local:6001", scopes[0].NodeInfo.Addr)
+	require.Equal(t, int32(1), scopes[0].NodeInfo.CNCNT)
+	require.Equal(t, 1, scopes[0].NodeInfo.Mcpu)
+	require.Zero(t, client.calls, "a local search needs no worker capability probe")
 }

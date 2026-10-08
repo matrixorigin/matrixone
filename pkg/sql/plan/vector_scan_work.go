@@ -125,21 +125,34 @@ func vectorScanDOP(ncpu int32, spec *plan.IndexSearchScan, isPrepare bool) int32
 // indexSearchScanCanParallelize reports whether the search plugin of spec can
 // split it into partitioned readers.
 func indexSearchScanCanParallelize(spec *plan.IndexSearchScan) bool {
-	if spec == nil || spec.Index == nil {
-		return false
-	}
-	p, ok := indexplugin.Get(spec.Index.IndexAlgo)
-	if !ok {
-		return false
-	}
-	searcher, ok := p.(indexplugin.SearchPlugin)
-	if !ok {
-		return false
-	}
-	parallel, ok := searcher.Search().(searchplugin.ParallelHooks)
+	parallel, ok := indexSearchParallelHooks(spec)
 	if !ok {
 		return false
 	}
 	can, err := parallel.CanParallelize(spec)
 	return err == nil && can
+}
+
+// IndexSearchScanPartitioned reports whether the index algorithm of spec reads
+// its index in object partitions, so its scan can run on several CNs and in
+// several local readers. Other algorithms search their whole index once.
+func IndexSearchScanPartitioned(spec *plan.IndexSearchScan) bool {
+	_, ok := indexSearchParallelHooks(spec)
+	return ok
+}
+
+func indexSearchParallelHooks(spec *plan.IndexSearchScan) (searchplugin.ParallelHooks, bool) {
+	if spec == nil || spec.Index == nil {
+		return nil, false
+	}
+	p, ok := indexplugin.Get(spec.Index.IndexAlgo)
+	if !ok {
+		return nil, false
+	}
+	searcher, ok := p.(indexplugin.SearchPlugin)
+	if !ok {
+		return nil, false
+	}
+	parallel, ok := searcher.Search().(searchplugin.ParallelHooks)
+	return parallel, ok
 }

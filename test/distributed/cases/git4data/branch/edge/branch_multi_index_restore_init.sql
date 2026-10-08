@@ -79,7 +79,7 @@ select id from leaf_t
 where match(body) against('+branch' in boolean mode) order by id;
 
 -- @separator:table
--- @regex("Table Function on hnsw_search", true)
+-- @regex("Vector Index Scan on", true)
 explain select id from leaf_t
 order by l2_distance(v, '[0,0,0]') limit 2;
 select id from leaf_t

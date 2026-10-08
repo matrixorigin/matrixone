@@ -101,3 +101,10 @@ type ParallelHooks interface {
 type ExplainHooks interface {
 	ExplainSettings(spec *plan.IndexSearchScan) ([]string, error)
 }
+
+// CandidateBudgetHooks optionally sizes the candidate budget of a scan whose
+// results are post-filtered (IndexSearchScan.PostFilterOverFetch). Without it
+// the budget is overfetch.FilteredPostModeLimit(resultLimit).
+type CandidateBudgetHooks interface {
+	PostFilterCandidateBudget(resultLimit uint64) uint64
+}

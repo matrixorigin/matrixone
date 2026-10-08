@@ -3493,7 +3493,7 @@ func TestBuildVectorIndexReadersRejectsIncompleteRuntimeState(t *testing.T) {
 	require.ErrorContains(t, err, "result limit is not uint64")
 
 	noReaderPlugin := &plan.IndexSearchScan{
-		Index:          &plan.IndexDef{IndexAlgo: "hnsw"},
+		Index:          &plan.IndexDef{IndexAlgo: "fulltext"},
 		QueryPayload:   query,
 		CandidateLimit: plan2.MakePlan2Uint64ConstExprWithType(1),
 	}

@@ -5393,6 +5393,7 @@ func (c *Compile) compileIndexSearchScan(node *plan.Node) ([]*Scope, error) {
 	required := requiredVectorMembership(node)
 	distributedPRE := required && qualified && vectorID == node.NodeId
 	if c.execType == plan2.ExecTypeAP_MULTICN && len(c.cnList) > 1 &&
+		plan2.IndexSearchScanPartitioned(node.IndexSearchScan) &&
 		(workspace == nil || workspace.Readonly()) &&
 		((node.Stats == nil || !node.Stats.ForceOneCN) && !required || distributedPRE) {
 		nodes = make(engine.Nodes, len(c.cnList))

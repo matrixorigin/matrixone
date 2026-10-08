@@ -692,11 +692,13 @@ func TestApplyIndicesForSortUsingHnsw_JoinThroughKeepsProviderChild(t *testing.T
 	require.NoError(t, err)
 	require.Equal(t, tc.projNodeID, newNodeID)
 
-	funcScan := findFirstNodeByType(tc.builder, plan.Node_FUNCTION_SCAN)
-	require.NotNil(t, funcScan)
-	require.Equal(t, []int32{tc.providerNodeID}, funcScan.Children)
-	require.Equal(t, tc.providerNodeID, funcScan.Children[0])
-	require.Equal(t, int32(1), funcScan.TblFuncExprList[1].GetCol().ColPos)
+	vectorScan := findFirstNodeByType(tc.builder, plan.Node_INDEX_SEARCH_SCAN)
+	require.NotNil(t, vectorScan)
+	require.Empty(t, vectorScan.Children)
+	require.Equal(t, int32(1), vectorScan.IndexSearchScan.QueryPayload.GetCol().ColPos)
+	applyNode := findFirstNodeByType(tc.builder, plan.Node_APPLY)
+	require.NotNil(t, applyNode)
+	require.Equal(t, []int32{tc.providerNodeID, vectorScan.NodeId}, applyNode.Children)
 }
 
 func TestApplyIndicesForSortUsingIvfflat_JoinThroughKeepsProviderChild(t *testing.T) {
@@ -763,9 +765,11 @@ func TestApplyIndicesForProject_JoinThroughReachesVectorRule(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, tc.projNodeID, newNodeID)
 
-	funcScan := findFirstNodeByType(tc.builder, plan.Node_FUNCTION_SCAN)
-	require.NotNil(t, funcScan)
-	require.Equal(t, []int32{tc.providerNodeID}, funcScan.Children)
+	vectorScan := findFirstNodeByType(tc.builder, plan.Node_INDEX_SEARCH_SCAN)
+	require.NotNil(t, vectorScan)
+	applyNode := findFirstNodeByType(tc.builder, plan.Node_APPLY)
+	require.NotNil(t, applyNode)
+	require.Equal(t, []int32{tc.providerNodeID, vectorScan.NodeId}, applyNode.Children)
 }
 
 func TestGetArgsFromDistFnForJoinBranches(t *testing.T) {

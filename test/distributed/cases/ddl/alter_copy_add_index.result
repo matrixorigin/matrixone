@@ -130,7 +130,7 @@ select id from vectors order by l2_distance(embedding, '[1,0,0]') limit 1;
 ➤ id[-5,64,0]  𝄀
 1
 explain select id from vectors order by l2_distance(embedding, '[1,0,0]') limit 1;
--- @regex("hnsw_search", true)
+-- @regex("Vector Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀

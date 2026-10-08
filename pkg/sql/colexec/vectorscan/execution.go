@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -305,7 +306,7 @@ func requestForValues(
 ) searchplugin.Request {
 	candidateBudget := resultLimit
 	if spec.PostFilterOverFetch {
-		candidateBudget = overfetch.FilteredPostModeLimit(resultLimit)
+		candidateBudget = postFilterCandidateBudget(spec, resultLimit)
 	}
 	return searchplugin.Request{
 		QueryPayload:    query,
@@ -316,4 +317,17 @@ func requestForValues(
 		DistanceRange:   spec.DistanceRange,
 		Identity:        identity,
 	}
+}
+
+// postFilterCandidateBudget returns the candidate budget the search plugin of
+// spec sizes for a post-filtered result of resultLimit rows.
+func postFilterCandidateBudget(spec *plan.IndexSearchScan, resultLimit uint64) uint64 {
+	if p, ok := indexplugin.Get(spec.GetIndex().GetIndexAlgo()); ok {
+		if searcher, ok := p.(indexplugin.SearchPlugin); ok {
+			if budget, ok := searcher.Search().(searchplugin.CandidateBudgetHooks); ok {
+				return budget.PostFilterCandidateBudget(resultLimit)
+			}
+		}
+	}
+	return overfetch.FilteredPostModeLimit(resultLimit)
 }
