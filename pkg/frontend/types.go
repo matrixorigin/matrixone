@@ -300,13 +300,17 @@ type PrepareStmt struct {
 	groupConcatMaxLenFloor uint64
 	Name                   string
 	Sql                    string
-	PreparePlan            *plan.Plan
-	PrepareStmt            tree.Statement
-	NativeMode             bool
-	OnlyFullGroupBy        bool
-	BoolSumAvg             bool
-	NoUnsignedSubtraction  bool
-	divPrecisionIncrement  int64
+	// statementFingerprint is captured from the prepared body before its first
+	// plan build and reused by text and binary EXECUTE telemetry.
+	statementFingerprint          string
+	statementFingerprintAttempted bool
+	PreparePlan                   *plan.Plan
+	PrepareStmt                   tree.Statement
+	NativeMode                    bool
+	OnlyFullGroupBy               bool
+	BoolSumAvg                    bool
+	NoUnsignedSubtraction         bool
+	divPrecisionIncrement         int64
 	// sqlModeFlagsSet distinguishes captured disabled modes (OnlyFullGroupBy,
 	// BoolSumAvg) from legacy or minimal in-memory fixtures that predate these
 	// plan dependencies.
