@@ -8619,6 +8619,12 @@ func possibleStringDomainsForExpr(expr *plan.Expr) uint8 {
 		}
 	case "coalesce", "ifnull", "greatest", "least":
 		selected = fn.Args
+	case "max", "min", "any_value":
+		// Aggregate common return types do not erase fixed domain
+		// contributors in the returned operand (also used by windows).
+		if len(fn.Args) > 0 {
+			selected = fn.Args[:1]
+		}
 	}
 	if len(selected) > 0 {
 		domains := uint8(0)

@@ -33,9 +33,16 @@ func TestPreparedFieldNullifRelationalReturnDomain(t *testing.T) {
 		binary  bool
 	}{
 		{"nullif((select ? limit 1),null)", false},
+		{"nullif(max(coalesce(?,_binary'B')),null)", true},
+		{"nullif(min(coalesce(?,_binary'B')),null)", true},
+		{"nullif(any_value(coalesce(?,_binary'B')),null)", true},
+		{"nullif(max(coalesce(?,_binary'B')) over (),null)", true},
+		{"nullif(max(coalesce(?,cast('B' as binary(1)))),null)", true},
+		{"nullif(max(coalesce(?,cast('B' as binary(1)))) over (),null)", true},
 		{"nullif((select coalesce(?,_binary'B') limit 1),null)", true},
 		{"nullif((select max(coalesce(?,_binary'B'))),null)", true},
 		{"nullif((select v from (select coalesce(?,_binary'B') as v) s limit 1),null)", true},
+		{"nullif((select v from (select max(coalesce(?,_binary'B')) over () as v) s limit 1),null)", true},
 	} {
 		t.Run(tc.operand, func(t *testing.T) {
 			query := "select field(" + tc.operand + ",?)"

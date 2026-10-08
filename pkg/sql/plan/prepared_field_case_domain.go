@@ -29,6 +29,17 @@ import (
 // The boolean marks value-derived decimal precision that must not be cached
 // under a source-type-only key. Source domains and cached plans stay immutable.
 func BindPreparedFieldCaseDomains(ctx context.Context, p *Plan, domains map[int32]types.Type, bindings []PreparedSourceBinding, values []any) (map[int32]types.Type, bool, error) {
+	return bindPreparedFieldCaseDomains(ctx, p, domains, bindings, values, false)
+}
+
+// BindPreparedFieldNullFirstCaseDomains admits only an initial untyped NULL
+// for COM_STMT. Ordinary typed protocol executions keep their existing rules;
+// once admitted, numeric re-resolution uses the same owned CASE contract.
+func BindPreparedFieldNullFirstCaseDomains(ctx context.Context, p *Plan, domains map[int32]types.Type, bindings []PreparedSourceBinding, values []any) (map[int32]types.Type, bool, error) {
+	return bindPreparedFieldCaseDomains(ctx, p, domains, bindings, values, true)
+}
+
+func bindPreparedFieldCaseDomains(ctx context.Context, p *Plan, domains map[int32]types.Type, bindings []PreparedSourceBinding, values []any, nullAdmissionOnly bool) (map[int32]types.Type, bool, error) {
 	valueDependent := false
 	var sources map[int32]types.Type
 	pending := domains
@@ -74,23 +85,44 @@ func BindPreparedFieldCaseDomains(ctx context.Context, p *Plan, domains map[int3
 				}
 			}
 			numericSource := false
+			nullFirst := !found
 			for _, marker := range collector.args {
-				if param := marker.GetP(); param != nil && sources[param.Pos].IsNumeric() {
+				param := marker.GetP()
+				if sources[param.Pos].IsNumeric() {
 					numericSource = true
 				}
+				pos := int(param.Pos)
+				if sources[param.Pos].Oid != types.T_any || pos < 0 || pos >= len(values) {
+					nullFirst = false
+				} else {
+					value := values[pos]
+					if paramValue, ok := value.(ParamValue); ok {
+						value = paramValue.Value
+					}
+					if value != nil {
+						nullFirst = false
+					}
+				}
+			}
+			if nullAdmissionOnly && !found && !nullFirst {
+				return nil
 			}
 			reparseNumeric := numericSource && current.IsNumeric() && (!found || target.Oid.IsMySQLString() ||
 				preparedCaseNumericRank(current) > preparedCaseNumericRank(target) ||
 				current.Oid.IsInteger() && target.Oid.IsInteger() && current.Oid != target.Oid)
 			if !found || reparseNumeric {
 				for _, marker := range collector.args {
-					if param := marker.GetP(); param != nil && !sources[param.Pos].Oid.IsMySQLString() && !numericSource {
-						// Untyped NULL and numeric value roles do not resolve a
-						// string-domain contract merely because FIELD casts them.
+					if param := marker.GetP(); param != nil && !sources[param.Pos].Oid.IsMySQLString() && !numericSource && !nullFirst {
+						// Without NULL-first evidence, non-string value roles do not
+						// resolve a string domain merely because FIELD casts them.
 						return nil
 					}
 				}
-				if current.IsNumeric() && numericSource {
+				if nullFirst {
+					// An untyped NULL first execution resolves the default binary
+					// string CASE domain; later strings are assignable to it.
+					target = types.T_blob.ToType()
+				} else if current.IsNumeric() && numericSource {
 					target = current
 				} else if !current.Oid.IsMySQLString() {
 					return nil
@@ -101,6 +133,9 @@ func BindPreparedFieldCaseDomains(ctx context.Context, p *Plan, domains map[int3
 					target.Width = -1
 				}
 				target.Charset, target.CollationVersion = current.Charset, current.CollationVersion
+				if nullFirst {
+					target.Charset, target.CollationVersion = types.CharsetBinary, types.CollationVersionLegacy
+				}
 				if !copied {
 					pending = make(map[int32]types.Type, len(domains)+1)
 					for pos, typ := range domains {

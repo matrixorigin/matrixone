@@ -1738,7 +1738,7 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 		bindingKey := preparedExecutionBindingKey(cwft.paramBindings, cwft.paramVals)
 		key := bindingKey
-		if !binaryExecute && pendingFieldCaseRevision != 0 {
+		if pendingFieldCaseRevision != 0 {
 			key += "|field-case:" + strconv.FormatUint(pendingFieldCaseRevision, 10)
 		}
 		var proof func(*plan.Expr) bool
@@ -1776,9 +1776,13 @@ func initExecuteStmtParamWithResolverInSession(
 				return nil, nil, nil, originSQL, false, err
 			}
 			executionPlan = bound.Plan
-			if !binaryExecute {
+			{
 				var caseValueDependent bool
-				pendingFieldCaseDomains, caseValueDependent, err = plan2.BindPreparedFieldCaseDomains(reqCtx, executionPlan, prepareStmt.fieldCaseDomains, cwft.paramBindings, cwft.paramVals)
+				if binaryExecute {
+					pendingFieldCaseDomains, caseValueDependent, err = plan2.BindPreparedFieldNullFirstCaseDomains(reqCtx, executionPlan, prepareStmt.fieldCaseDomains, cwft.paramBindings, cwft.paramVals)
+				} else {
+					pendingFieldCaseDomains, caseValueDependent, err = plan2.BindPreparedFieldCaseDomains(reqCtx, executionPlan, prepareStmt.fieldCaseDomains, cwft.paramBindings, cwft.paramVals)
+				}
 				bound.ValueDependent = bound.ValueDependent || caseValueDependent
 				if err != nil {
 					return nil, nil, nil, originSQL, false, err

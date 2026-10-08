@@ -20,10 +20,84 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/stretchr/testify/require"
 )
+
+func TestPreparedBinaryFieldCaseNullFirst(t *testing.T) {
+	ses, prepared, cw, execCtx := newPreparedExecuteEnvForSQL(t, 1, "select field(case when ? then null else ? end,?)")
+	defer func() { cw.proc.SetPrepareParams(nil); prepared.Close() }()
+	for _, wireType := range []defines.MysqlType{defines.MYSQL_TYPE_NULL, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_BLOB} {
+		func() {
+			cw.proc.SetPrepareParams(nil)
+			if prepared.params != nil {
+				prepared.params.Free(cw.proc.Mp())
+			}
+			prepared.params = vector.NewVec(types.T_text.ToType())
+			require.NoError(t, vector.AppendBytes(prepared.params, []byte("0"), false, cw.proc.Mp()))
+			require.NoError(t, vector.AppendBytes(prepared.params, []byte("A"), wireType == defines.MYSQL_TYPE_NULL, cw.proc.Mp()))
+			require.NoError(t, vector.AppendBytes(prepared.params, []byte("a"), false, cw.proc.Mp()))
+			prepared.ParamTypes = []byte{byte(defines.MYSQL_TYPE_LONGLONG), 0, byte(wireType), 0, byte(defines.MYSQL_TYPE_VAR_STRING), 0}
+			_, runtime, stmt, _, owned, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepared.Name)
+			require.NoError(t, err)
+			if owned && stmt != nil {
+				defer stmt.Free()
+			}
+			query := runtime.GetQuery()
+			project := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList[0]
+			executor, err := colexec.NewExpressionExecutor(cw.proc, project)
+			require.NoError(t, err)
+			defer executor.Free()
+			result, err := executor.Eval(cw.proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+			require.NoError(t, err)
+			require.Equal(t, int64(0), vector.GetFixedAtWithTypeCheck[int64](result, 0), project.String())
+		}()
+	}
+}
+
+func TestPreparedSQLFieldCaseNullFirst(t *testing.T) {
+	ses, prepared, cw, execCtx := newPreparedExecuteEnvForSQL(t, 1, "select field(case when ? then null else ? end,?)")
+	defer prepared.Close()
+	execCtx.input.isBinaryProtExecute = false
+	cw.binaryPrepare = false
+	args := []*plan.Expr{
+		{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "condition"}}},
+		{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "subject"}}},
+		{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "candidate"}}},
+	}
+	for _, source := range []types.T{types.T_any, types.T_varchar, types.T_varbinary} {
+		func() {
+			require.NoError(t, ses.SetUserDefinedVar("condition", int64(0), ""))
+			var value any = "A"
+			if source == types.T_any {
+				value = nil
+			}
+			typ := plan.Type{Id: int32(source)}
+			if source == types.T_varchar {
+				typ.Charset = uint32(types.CharsetUTF8)
+			} else if source == types.T_varbinary {
+				typ.Charset = uint32(types.CharsetBinary)
+			}
+			require.NoError(t, ses.setUserDefinedVarWithType("subject", value, "", false, typ))
+			require.NoError(t, ses.SetUserDefinedVar("candidate", "a", ""))
+			_, runtime, stmt, _, owned, err := initExecuteStmtParam(execCtx, ses, cw, &plan.Execute{Name: prepared.Name, Args: args}, "")
+			require.NoError(t, err)
+			if owned && stmt != nil {
+				defer stmt.Free()
+			}
+			query := runtime.GetQuery()
+			project := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList[0]
+			executor, err := colexec.NewExpressionExecutor(cw.proc, project)
+			require.NoError(t, err)
+			defer executor.Free()
+			result, err := executor.Eval(cw.proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+			require.NoError(t, err)
+			require.Equal(t, int64(0), vector.GetFixedAtWithTypeCheck[int64](result, 0), source.String())
+		}()
+	}
+}
 
 func TestPreparedSQLFieldCaseDomainLifetime(t *testing.T) {
 	for _, initial := range []types.T{types.T_varchar, types.T_varbinary} {

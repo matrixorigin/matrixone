@@ -833,7 +833,9 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 		// Migration replays SQL against the current assignment; it does not
 		// transfer this statement's original static type and row-domain binding.
 		// Keep the connection here until the statement is deallocated.
-		if plan.HasBoundStringVariable(st.PreparePlan) {
+		// Resolved CASE types are lifetime-owned, not reconstructible from
+		// SQL plus the current values. The migration wire has no such state.
+		if len(st.fieldCaseDomains) > 0 || plan.HasBoundStringVariable(st.PreparePlan) {
 			return moerr.GetOkExpectedNotSafeToStartTransfer()
 		}
 		// A server cursor retains its result and fetch offset only on this CN.

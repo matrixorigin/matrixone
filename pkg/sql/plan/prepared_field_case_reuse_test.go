@@ -30,6 +30,42 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestPreparedFieldCaseNullFirstAdmission(t *testing.T) {
+	ctx := context.Background()
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select field(case when ? then null else ? end,?)", 1)
+	require.NoError(t, err)
+	t.Cleanup(stmt.Free)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	bindings := []PreparedSourceBinding{{Position: 0, Type: types.T_int64.ToType()}, {Position: 1, Type: types.T_any.ToType()}, {Position: 2, Type: types.T_varchar.ToType()}}
+	values := []any{ParamValue{Value: int64(0), SourceType: bindings[0].Type, HasSourceType: true}, ParamValue{Value: nil, SourceType: bindings[1].Type, HasSourceType: true}, ParamValue{Value: "a", SourceType: bindings[2].Type, HasSourceType: true}}
+	bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, bindings, values)
+	require.NoError(t, err)
+	for _, plainNull := range []bool{false, true} {
+		candidate := append([]any(nil), values...)
+		if plainNull {
+			candidate[1] = nil
+		}
+		for _, bind := range []func(context.Context, *Plan, map[int32]types.Type, []PreparedSourceBinding, []any) (map[int32]types.Type, bool, error){BindPreparedFieldCaseDomains, BindPreparedFieldNullFirstCaseDomains} {
+			domains, dependent, err := bind(ctx, DeepCopyPlan(bound.Plan), nil, bindings, candidate)
+			require.NoError(t, err)
+			require.False(t, dependent)
+			require.Equal(t, types.StringDomainBinary, types.StaticStringDomain(domains[1]))
+			domains, _, err = bind(ctx, DeepCopyPlan(bound.Plan), nil, bindings, nil)
+			require.NoError(t, err)
+			require.Empty(t, domains, "missing values are not evidence of a NULL execution")
+		}
+	}
+	for _, typ := range []types.T{types.T_varchar, types.T_int64} {
+		bindings[1].Type = typ.ToType()
+		values[1] = ParamValue{Value: nil, SourceType: bindings[1].Type, HasSourceType: true}
+		bound, err = BuildPreparedExecutionPlan(&mock.ctxt, stmt, bindings, values)
+		require.NoError(t, err)
+		domains, _, err := BindPreparedFieldNullFirstCaseDomains(ctx, bound.Plan, nil, bindings, values)
+		require.NoError(t, err)
+		require.Empty(t, domains, "typed NULL retains the protocol's existing rules")
+	}
+}
+
 func TestPreparedFieldCaseDecimalExactPrefix(t *testing.T) {
 	ctx := context.Background()
 	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select field(case when ? then null else ? end,?)", 1)

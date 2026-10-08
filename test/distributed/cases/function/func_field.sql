@@ -299,6 +299,31 @@ set @field_candidate = 'a';
 execute field_case_reuse using @field_condition,@field_subject,@field_candidate;
 deallocate prepare field_case_reuse;
 
+-- NULL-first CASE resolves a binary domain; direct aggregate/window returns retain fixed contributors.
+set @field_condition = 0;
+set @field_subject = null;
+set @field_candidate = 'a';
+prepare field_case_null_first from 'select field(case when ? then null else ? end,?) as null_first';
+execute field_case_null_first using @field_condition,@field_subject,@field_candidate;
+set @field_subject = 'A';
+execute field_case_null_first using @field_condition,@field_subject,@field_candidate;
+set @field_subject = X'41';
+set @field_candidate = X'61';
+execute field_case_null_first using @field_condition,@field_subject,@field_candidate;
+set @field_subject = 42;
+set @field_candidate = 42;
+execute field_case_null_first using @field_condition,@field_subject,@field_candidate;
+set @field_subject = 'A';
+set @field_candidate = 'a';
+execute field_case_null_first using @field_condition,@field_subject,@field_candidate;
+deallocate prepare field_case_null_first;
+prepare field_direct_aggregate from 'select field(nullif(max(coalesce(?,_binary''B'')),null),?) as direct_aggregate';
+execute field_direct_aggregate using @field_subject,@field_candidate;
+deallocate prepare field_direct_aggregate;
+prepare field_direct_window from 'select field(nullif(max(coalesce(?,_binary''B'')) over (),null),?) as direct_window';
+execute field_direct_window using @field_subject,@field_candidate;
+deallocate prepare field_direct_window;
+
 -- Numeric transitions re-resolve CASE and keep exact DECIMAL values before FIELD comparison.
 set @c=0,@a=X'41',@b=X'61';
 prepare field_case_numeric from 'select field(case when ? then null else ? end,?) as int_epoch';
