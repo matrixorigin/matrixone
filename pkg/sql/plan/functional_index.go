@@ -150,6 +150,14 @@ func functionalExpressionEligible(expr *Expr, cols []*ColDef, visiting map[int32
 				if from.IsInteger() && to.IsInteger() && from.IsUnsignedInt() == to.IsUnsignedInt() && from.TypeLen() <= to.TypeLen() {
 					break
 				}
+				// WithModeIndependentStringLiterals renders text containing a
+				// backslash as cast(0x... as varchar). The source is a binary-form
+				// literal, so this form is deterministic across SQL modes
+				// and is safe to replay as a persisted functional expression.
+				if functionalTextType(expr.Typ) && functionalTextType(e.F.Args[0].Typ) &&
+					e.F.Args[0].GetLit() != nil && e.F.Args[0].GetLit().IsBin {
+					break
+				}
 			}
 			// Identity casts inserted by generated-column assignment are safe.
 			if len(e.F.Args) != 2 || e.F.Args[0].Typ.Id != expr.Typ.Id ||
@@ -248,7 +256,7 @@ func lowerFunctionalIndex(ctx CompilerContext, table *TableDef, index *tree.Inde
 		}
 		col := &ColDef{Name: name, OriginName: name, Hidden: true, Typ: expr.Typ,
 			Alg: pb.CompressType_Lz4, Default: &pb.Default{NullAbility: true},
-			GeneratedCol: &pb.GeneratedCol{Expr: expr, OriginString: tree.StringWithOpts(key.Expr, dialect.MYSQL, tree.WithQuoteIdentifier()), IsStored: false}}
+			GeneratedCol: &pb.GeneratedCol{Expr: expr, OriginString: tree.StringWithOpts(key.Expr, dialect.MYSQL, tree.WithQuoteIdentifier(), tree.WithSingleQuoteString(), tree.WithModeIndependentStringLiterals()), IsStored: false}}
 		replacement := &tree.KeyPart{ColName: tree.NewUnresolvedColName(name)}
 		if err := checkIndexColumnSupportability(ctx.GetContext(), col, replacement, "index"); err != nil {
 			return nil, err
@@ -376,7 +384,7 @@ func rewriteFunctionalColumnDependency(ctx context.Context, col *ColDef, names [
 	if err != nil {
 		return nil, err
 	}
-	return &pb.GeneratedCol{Expr: bound, OriginString: tree.StringWithOpts(expr, dialect.MYSQL, tree.WithQuoteIdentifier()), IsStored: false}, nil
+	return &pb.GeneratedCol{Expr: bound, OriginString: tree.StringWithOpts(expr, dialect.MYSQL, tree.WithQuoteIdentifier(), tree.WithSingleQuoteString(), tree.WithModeIndependentStringLiterals()), IsStored: false}, nil
 }
 
 func sameFunctionalValueType(a, b Type) bool {

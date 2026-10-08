@@ -295,3 +295,60 @@ func TestFunctionalCompositeIndexDDL(t *testing.T) {
 		})
 	}
 }
+
+func TestFunctionalIndexOriginStringQuotesLiterals(t *testing.T) {
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+	rt := runtime.ServiceRuntime(ctx.GetProcess().GetService())
+	old, _ := rt.GetGlobalVariables(runtime.MOProtocolVersion)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion107)
+	t.Cleanup(func() { rt.SetGlobalVariables(runtime.MOProtocolVersion, old) })
+
+	build := func(sql string) *TableDef {
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		plan, err := BuildPlan(ctx, stmt, false)
+		require.NoError(t, err)
+		return plan.GetDdl().GetCreateTable().TableDef
+	}
+
+	for _, tc := range []struct {
+		name, expression, want, value string
+	}{
+		{name: "same named column", expression: "lower('abc')", want: "lower('abc')", value: "abc"},
+		{name: "quoted literal", expression: "lower('a''b')", want: "lower('a''b')", value: "a'b"},
+		{name: "backslash literal", expression: `lower('a\\b')`, want: "lower(cast(0x615c62 as varchar))", value: "a\\b"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			table := build("create table fi (abc varchar(40), index ix ((" + tc.expression + ")))")
+			owner := functionalIndexColumn(table, table.Indexes[0])
+			require.NotNil(t, owner)
+			require.Equal(t, tc.want, owner.GeneratedCol.OriginString)
+			require.Equal(t, tc.value, functionalIndexLiteralValue(owner.GeneratedCol.Expr))
+
+			ddl, _, err := constructCreateTableSQL(ctx, table, nil, false, nil, false, nil)
+			require.NoError(t, err)
+			rebuilt := build(ddl)
+			rebuiltOwner := functionalIndexColumn(rebuilt, rebuilt.Indexes[0])
+			require.Equal(t, tc.want, rebuiltOwner.GeneratedCol.OriginString)
+			require.Equal(t, tc.value, functionalIndexLiteralValue(rebuiltOwner.GeneratedCol.Expr))
+		})
+	}
+}
+
+func functionalIndexLiteralValue(expr *Expr) string {
+	if fn := expr.GetF(); fn != nil && len(fn.Args) == 1 {
+		expr = fn.Args[0]
+	}
+	for {
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || len(fn.Args) != 2 {
+			break
+		}
+		expr = fn.Args[0]
+	}
+	if lit := expr.GetLit(); lit != nil {
+		return lit.GetSval()
+	}
+	return ""
+}

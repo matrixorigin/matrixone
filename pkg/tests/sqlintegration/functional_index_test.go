@@ -466,6 +466,27 @@ func TestFunctionalIndexLifecycle(t *testing.T) {
 		require.Contains(t, strings.Join(lines, "\n"), "Index Table Scan on t.il")
 		require.Contains(t, strings.Join(lines, "\n"), "lower(t.name)")
 		count("select count(*) from information_schema.statistics where table_schema='functional_index_lifecycle' and table_name='t' and index_name='il' and column_name is null and expression is not null", 1)
+		t.Run("literal_expression_roundtrip", func(t *testing.T) {
+			exec("create table literal_source (abc varchar(40), index ix ((lower('AbC')), (lower('a''b')), (lower('a\\\\b'))))")
+			var tableName, ddl string
+			require.NoError(t, conn.QueryRowContext(ctx, "show create table literal_source").Scan(&tableName, &ddl))
+			require.Contains(t, ddl, "lower('AbC')")
+			require.Contains(t, ddl, "lower('a''b')")
+			require.Contains(t, ddl, "lower(cast(0x615c62 as varchar))")
+			count("select count(*) from information_schema.statistics where table_schema='functional_index_lifecycle' and table_name='literal_source' and expression is not null", 3)
+
+			// The persisted form must replay independently of the session's
+			// backslash-escape mode, both through LIKE and COPY ALTER.
+			exec("set sql_mode='NO_BACKSLASH_ESCAPES'")
+			exec("create table literal_like like literal_source")
+			exec("alter table literal_source add column extra int first")
+			require.NoError(t, conn.QueryRowContext(ctx, "show create table literal_like").Scan(&tableName, &ddl))
+			require.Contains(t, ddl, "lower('AbC')")
+			require.Contains(t, ddl, "lower('a''b')")
+			require.Contains(t, ddl, "lower(cast(0x615c62 as varchar))")
+			_, err := conn.ExecContext(ctx, "set sql_mode='STRICT_TRANS_TABLES'")
+			require.NoError(t, err)
+		})
 		var backing string
 		require.NoError(t, conn.QueryRowContext(ctx, "select attname from mo_catalog.mo_columns where att_database='functional_index_lifecycle' and att_relname='t' and attr_has_generated=1 order by attname limit 1").Scan(&backing))
 		_, err = conn.ExecContext(ctx, "insert into t(id,"+backing+") values(10,default)")
