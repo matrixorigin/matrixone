@@ -194,11 +194,15 @@ func TestShuffleWithAllocationAccountUsesAlternateCapacityClass(t *testing.T) {
 	vec := newAccountedTestVector(t, types.T_int64.ToType(), ordinary)
 	require.NoError(t, AppendFixedList(
 		vec, []int64{3, 1, 2}, nil, mp))
+	require.NoError(t, vec.SetIsBinRowsWithMP([]bool{true, false, true}, mp))
 	ordinaryController.failAt = ordinaryController.calls + 1
 	require.NoError(t, vec.ShuffleWithAllocationAccount(
 		[]int64{1, 2, 0}, mp, recovery))
 	require.Equal(t, []int64{1, 2, 3},
 		MustFixedColWithTypeCheck[int64](vec))
+	require.Equal(t, []bool{false, true, true}, []bool{
+		vec.GetIsBinAt(0), vec.GetIsBinAt(1), vec.GetIsBinAt(2),
+	})
 	require.Same(t, ordinary, vec.AllocationAccountSelection())
 	require.False(t, ordinaryController.rejected)
 	require.Zero(t, ordinaryController.used)
@@ -248,6 +252,7 @@ func TestUnionBatchWithAllocationAccountDoesNotPropagateCapacityClass(t *testing
 	source := NewVec(types.T_int64.ToType())
 	require.NoError(t, AppendFixedList(
 		source, []int64{3, 1, 2}, nil, mp))
+	require.NoError(t, source.SetIsBinRowsWithMP([]bool{true, false, true}, mp))
 	destination := newAccountedTestVector(
 		t, types.T_int64.ToType(), ordinary)
 	ordinaryController.failAt = ordinaryController.calls + 1
@@ -255,6 +260,9 @@ func TestUnionBatchWithAllocationAccountDoesNotPropagateCapacityClass(t *testing
 		source, 0, source.Length(), nil, mp, recovery))
 	require.Equal(t, []int64{3, 1, 2},
 		MustFixedColWithTypeCheck[int64](destination))
+	require.Equal(t, []bool{true, false, true}, []bool{
+		destination.GetIsBinAt(0), destination.GetIsBinAt(1), destination.GetIsBinAt(2),
+	})
 	require.Same(t, ordinary, destination.AllocationAccountSelection())
 	require.False(t, ordinaryController.rejected)
 	require.Zero(t, ordinaryController.used)
@@ -2015,6 +2023,51 @@ func TestNumericBinaryLiteralSingleRowCopyAndRawAppendAllocation(t *testing.T) {
 
 		vec.Free(mp)
 		finalizeTestVectorAllocationAccount(t, state)
+	})
+
+	t.Run("ordinary-append-recovers-after-capacity-rejection", func(t *testing.T) {
+		registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+		require.NoError(t, err)
+		controller := &rejectNextVectorAllocation{}
+		account, err := registry.OpenWithController(1<<20, controller)
+		require.NoError(t, err)
+		selection, err := NewAllocationAccountSelection(
+			account,
+			testVectorAllocationOwner,
+			testVectorDataAllocationSite,
+			testVectorAreaAllocationSite,
+			testVectorNullAllocationSite,
+			testVectorGroupAllocationSite,
+		)
+		require.NoError(t, err)
+		state := testVectorAllocationAccount{registry: registry, account: account, selection: selection}
+		mp := mpool.MustNewZero()
+		vec := newAccountedTestVector(t, types.T_int64.ToType(), selection)
+		t.Cleanup(func() {
+			vec.Free(mp)
+			finalizeTestVectorAllocationAccount(t, state)
+			require.Zero(t, mp.CurrNB())
+		})
+
+		require.NoError(t, vec.PreExtend(2, mp))
+		require.NoError(t, AppendFixed(vec, int64(10), false, mp))
+		vec.SetIsBin(true)
+		controller.failAt = controller.calls + 1
+
+		err = AppendFixed(vec, int64(20), false, mp)
+		require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+		require.True(t, controller.rejected)
+		require.Equal(t, 1, vec.Length())
+		require.Equal(t, int64(10), MustFixedColNoTypeCheck[int64](vec)[0])
+		require.True(t, vec.GetIsBinAt(0))
+		require.False(t, vec.HasIsBinRows())
+
+		require.NoError(t, AppendFixed(vec, int64(20), false, mp))
+		require.Equal(t, 2, vec.Length())
+		require.Equal(t, []bool{true, false}, []bool{
+			vec.GetIsBinAt(0), vec.GetIsBinAt(1),
+		})
+		require.True(t, vec.HasIsBinRows())
 	})
 }
 

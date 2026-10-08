@@ -81,7 +81,7 @@ string overloads use the same effective-mode decision.
   the transport owner and remains trailer v3, independently numbered from
   MORPC; stable vector/batch bytes and the ordinary runtime-domain sidecar
   remain unchanged.
-- Provenance-sensitive flow-control output is fenced at MORPC v103 in every SQL
+- Provenance-sensitive flow-control output is fenced at MORPC v107 in every SQL
   mode when it can select a non-NULL HEX/BIT value. This includes mixed rows,
   uniformly marked results, and marked-plus-NULL results: older flow-control
   executors can drop the marker even when no mixed-row bitmap is needed.
@@ -98,9 +98,9 @@ accounts.
 ### Remote compatibility
 
 MORPC v101 retains the upstream JSON/YearBit contract. This change's
-string-numeric and flow-control provenance behavior uses MORPC v103. For
+string-numeric and flow-control provenance behavior uses MORPC v107. For
 expressions requiring the new numeric contract, placement falls back to local
-execution when a worker is below v103 or has unknown capability; sender
+execution when a worker is below v107 or has unknown capability; sender
 preflight rejects a destination downgrade; and receivers reject the changed
 feature when its protocol or session marker is legacy. Unchanged expressions
 retain their existing compatibility gates.
@@ -211,7 +211,7 @@ function-wide zonemap optimization is included.
 | Roles and boundaries | Value/control argument tests; precision remains `INT64`; nested ownership; explicit CAST stops provenance; unknown/non-owning function controls |
 | HEX/BIT row provenance | CASE/IF/COALESCE tests for mixed, uniform, marked-plus-NULL, text, ordinary BINARY, explicit casts, and nested/implicit casts; selected-row/vector/batch lifecycle tests |
 | Wire lifecycle | Batch v1/v2/v3 round trips, malformed/truncated rejection, legacy sender, stale/reused vector reset, and remote trailer tests |
-| Mixed-version admission | v101/raw-v102 local fallback plus destination and receiver rejection; v103 placement/send/receive acceptance; upstream JSON/YearBit v101 controls; default/MySQL/native modes; legacy-session rejection |
+| Mixed-version admission | v106 local fallback plus destination and receiver rejection; v107 placement/send/receive acceptance; upstream JSON/YearBit v101 controls; default/MySQL/native modes; legacy-session rejection |
 | SessionInfo wire allocation | Unrelated varints at fields 22/23 are not interpreted as numeric mode/marker; fields 24/25 round trip the explicit mode and sender marker; forwarding preserves a zero legacy marker |
 | Prepared-plan reuse | Type changes, error-to-success, NULL-to-success, and restoration of the cached base plan |
 | Numeric correctness and pruning | Integer/DECIMAL/FLOAT source controls; zonemap endpoint traps must not prune matching rows |
