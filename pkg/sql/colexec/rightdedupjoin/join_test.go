@@ -48,7 +48,7 @@ func newRightDedupTestProcess(t *testing.T, pessimistic bool) (*process.Process,
 	}
 	txnOp.EXPECT().Txn().Return(meta).AnyTimes()
 
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.SetMessageBoard(message.NewMessageBoard())
 	proc.Base.TxnOperator = txnOp
 	return proc, ctrl
@@ -401,7 +401,7 @@ func runRightDedupSpilledInputKeysUniqueWithBuild(t *testing.T, pessimistic bool
 }
 
 func TestRightDedupResetAndPrepareRetry(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	typ := types.T_int32.ToType()
 	valid := newExpr(0, typ)
 	invalid := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int32)}}
@@ -428,7 +428,7 @@ func TestRightDedupResetAndPrepareRetry(t *testing.T) {
 }
 
 func TestRightDedupEmptyMapUsesEvaluatedKeyType(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	varcharTyp := types.T_varchar.ToType()
 	arg := &RightDedupJoin{
 		LeftTypes:  []types.Type{types.T_int32.ToType()},

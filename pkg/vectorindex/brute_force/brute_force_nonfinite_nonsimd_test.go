@@ -56,7 +56,7 @@ func TestBruteForceScalarFallbackNoNaN29496(t *testing.T) {
 	cand1[0] = 1
 	cand2[0] = 2
 
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	sqlproc := sqlexec.NewSqlProcess(proc)
 	idx := &GoBruteForceIndex[float32, float32]{
 		Dataset:   [][]float32{cand0, cand1, cand2},

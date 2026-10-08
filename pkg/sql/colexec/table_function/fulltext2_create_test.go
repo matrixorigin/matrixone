@@ -111,7 +111,7 @@ func TestFulltext2CreatePrepare(t *testing.T) {
 
 func TestFulltext2CreateStartValidation(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	// non-varchar config.
 	{
@@ -157,7 +157,7 @@ func TestFulltext2CreateStartValidation(t *testing.T) {
 // builder accumulates docs (below capacity ⇒ no seal, so no DB access).
 func TestFulltext2CreateStartFeedsBuilder(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	st := &fulltext2CreateState{}
 	tf, _ := ft2CreateArgVecs(t, mp, ft2CreateCfg(t, fulltext2.ParserNgram, false), 1, "hello world")
@@ -185,7 +185,7 @@ func TestFulltext2CreateStartFeedsBuilder(t *testing.T) {
 
 func TestFulltext2CreatePartialNullKeepsInclude(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	cfg, err := sonic.Marshal(fulltext2.TableConfig{
 		DbName: "db", IndexTable: "__idx", Parser: fulltext2.ParserNgram,
 		IncludeTypes: []int32{int32(types.T_varchar)},
@@ -226,7 +226,7 @@ func TestFulltext2CreatePartialNullKeepsInclude(t *testing.T) {
 // ngram / json / json_value parsers and NULL/empty inputs, without touching the DB.
 func TestFulltext2CreateRowTerms(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	run := func(parser string, texts ...string) ([]fulltext2.WordPos, error) {
 		st := &fulltext2CreateState{tblcfg: fulltext2.TableConfig{Parser: parser}}
@@ -276,7 +276,7 @@ func TestFulltext2CreateRowTerms(t *testing.T) {
 
 func TestFulltext2CreateRowTermsNullColumnMatrix(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	tests := []struct {
 		name       string
@@ -384,7 +384,7 @@ func TestFulltext2CreateRowTermsNullColumnMatrix(t *testing.T) {
 
 func TestFulltext2CreateRowTermsJSONTupleSkipsNull(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	st := &fulltext2CreateState{tblcfg: fulltext2.TableConfig{Parser: fulltext2.ParserJSON}}
 	tf, _ := ft2CreateNullableArgVecs(t, mp, "{}", 1, `{"a":"left"}`, nil, `{"b":"right"}`)
 
@@ -401,7 +401,7 @@ func TestFulltext2CreateRowTermsJSONTupleSkipsNull(t *testing.T) {
 
 func TestFulltext2CreateRowTermsBinaryJSONNullSibling(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	st := &fulltext2CreateState{tblcfg: fulltext2.TableConfig{Parser: fulltext2.ParserJSON}}
 
 	pk := vector.NewVec(types.T_int64.ToType())
@@ -423,7 +423,7 @@ func TestFulltext2CreateRowTermsBinaryJSONNullSibling(t *testing.T) {
 
 func TestFulltext2CreateRowTermsNullBitmapAndConstNull(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	st := &fulltext2CreateState{tblcfg: fulltext2.TableConfig{Parser: fulltext2.ParserNgram}}
 
 	// Two rows carry opposite NULL patterns. Each row must use its own bitmap;
@@ -466,7 +466,7 @@ func TestFulltext2CreateRowTermsNullBitmapAndConstNull(t *testing.T) {
 
 func TestFulltext2CreateRowTermsMalformedJSONWithNullSibling(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	st := &fulltext2CreateState{tblcfg: fulltext2.TableConfig{Parser: fulltext2.ParserJSONValue}}
 	for _, values := range [][]any{
 		{nil, "{bad"},
@@ -512,7 +512,7 @@ func TestFulltext2CreateEndNotInited(t *testing.T) {
 // (empty) segment and evicts the cache.
 func TestFulltext2CreateSealAndEnd(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	prev := fulltext2_runSql
 	defer func() { fulltext2_runSql = prev }()

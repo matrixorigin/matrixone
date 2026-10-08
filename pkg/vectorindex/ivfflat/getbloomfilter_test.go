@@ -34,7 +34,7 @@ import (
 // getBloomFilter's WaitUniqueJoinKeys receives it.
 func setupKeyFilter(t *testing.T, n int) *sqlexec.SqlProcess {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	mb := message.NewMessageBoard()
 	proc.SetMessageBoard(mb)
 	sqlproc := sqlexec.NewSqlProcess(proc)

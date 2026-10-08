@@ -51,7 +51,7 @@ type spillTestHarness struct {
 
 func newSpillTestHarness(t *testing.T, limit uint64) *spillTestHarness {
 	t.Helper()
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	budget := process.MustNewExecutionResourceBudget(limit, limit)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
@@ -292,7 +292,7 @@ func TestEstimatedResidentBuildBytesUsesRowCountUpperBound(t *testing.T) {
 }
 
 func BenchmarkAutoSpillRetainedProjection(b *testing.B) {
-	proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(b, "", mpool.MustNewZero())
 	defer proc.Free()
 	input := testutil.NewBatch([]types.Type{types.T_int64.ToType()}, true, colexec.DefaultBatchSize, proc.Mp())
 	defer input.Clean(proc.Mp())
@@ -345,7 +345,7 @@ func TestAutoSpillProjectsIncomingGroupingKeys(t *testing.T) {
 		{name: "borrowed key sentinel", column: 0, want: true, borrowed: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			defer proc.Free()
 			input := testutil.NewBatch([]types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, true, 513, proc.Mp())
 			defer input.Clean(proc.Mp())
@@ -501,7 +501,7 @@ func TestAccountedSpillCoalescesWithoutDuplicateOwnership(t *testing.T) {
 }
 
 func TestSpillWithoutAllocationAccountFailsClosed(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	bat := testutil.NewBatch([]types.Type{types.T_int32.ToType()}, true, 1, proc.Mp())
 	defer bat.Clean(proc.Mp())
@@ -545,7 +545,7 @@ func TestSpillMinimumUnitPressureIsControlled(t *testing.T) {
 }
 
 func TestWriteSpillPayloadCancellationStopsBeforeIO(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	ctx, cancel := context.WithCancelCause(proc.Ctx)
 	process.ReplacePipelineCtx(proc, ctx, cancel)
