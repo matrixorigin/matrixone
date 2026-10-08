@@ -138,10 +138,14 @@ func lockMaterializedViewDefinition(ctx context.Context, service string, txn cli
 	for i, name := range names {
 		quoted[i] = sqlquote.String(name)
 	}
-	queries := []struct {
+	queries := make([]struct {
 		sql  string
 		rows int
-	}{{fmt.Sprintf("SELECT dat_id FROM mo_catalog.mo_database WHERE account_id=%d AND datname IN (%s) ORDER BY datname FOR SHARE", d.AccountID, strings.Join(quoted, ",")), len(names)}}
+	}, 0, 2)
+	queries = append(queries, struct {
+		sql  string
+		rows int
+	}{fmt.Sprintf("SELECT dat_id FROM mo_catalog.mo_database WHERE account_id=%d AND datname IN (%s) ORDER BY datname FOR SHARE", d.AccountID, strings.Join(quoted, ",")), len(names)})
 	sort.Slice(relations, func(i, j int) bool {
 		if relations[i].Database != relations[j].Database {
 			return relations[i].Database < relations[j].Database

@@ -1878,8 +1878,8 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			tbl.tableDef.CollationVersion = tbl.extraInfo.CollationVersion
 			tbl.tableDef.KeyFormat = tbl.extraInfo.KeyFormat
 		}
-		mvdefinition.PlannerKind(tbl.tableDef)
 	}
+	mvdefinition.PlannerKind(tbl.tableDef)
 	return tbl.tableDef
 }
 
