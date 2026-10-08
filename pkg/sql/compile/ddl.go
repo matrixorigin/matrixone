@@ -2441,6 +2441,10 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 
 func (c *Compile) populateCreatedTable(qry *plan.CreateTable, isTemp bool, dbName, aliasName, tblName string) error {
 	if createAsSelectSql := qry.GetCreateAsSelectSql(); createAsSelectSql != "" {
+		// CTAS is executed as a generated internal INSERT ... SELECT. Preserve
+		// the outer role/session rewrite hint across this SQL boundary so the
+		// source scan cannot regain rows hidden by the original policy.
+		createAsSelectSql = prependCTASRewriteHint(c.originSQL, createAsSelectSql)
 		if isTemp {
 			aliasTable := fmt.Sprintf("`%s`.`%s`", dbName, aliasName)
 			realTable := fmt.Sprintf("`%s`.`%s`", dbName, tblName)
@@ -2546,6 +2550,14 @@ func (c *Compile) populateCreatedTable(qry *plan.CreateTable, isTemp bool, dbNam
 	}
 
 	return nil
+}
+
+func prependCTASRewriteHint(originSQL, sql string) string {
+	hint, ok := leadingRewriteHint(originSQL)
+	if !ok {
+		return sql
+	}
+	return hint + " " + sql
 }
 
 func physicalTemporaryTableName(proc *process.Process, dbName, alias string) string {

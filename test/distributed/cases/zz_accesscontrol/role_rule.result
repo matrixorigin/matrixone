@@ -67,10 +67,16 @@ alter role test_rule_role add rule "select * from db1.t1 where age > 28" on tabl
 create user test_rule_user identified by '123456' default role test_rule_role;
 grant connect on account * to test_rule_role;
 grant select on table *.* to test_rule_role;
+grant create table,drop table on database db1 to test_rule_role;
 set enable_remap_hint = 1;
 select * from db1.t1;
 ➤ a[4,32,0]  ¦  age[4,32,0]  𝄀
 100  ¦  30
+create table db1.t1_ctas as select a from db1.t1 order by a;
+select * from db1.t1_ctas order by a;
+➤ a[4,32,0]  𝄀
+100
+drop table db1.t1_ctas;
 set enable_remap_hint = 0;
 select * from db1.t1;
 ➤ a[4,32,0]  ¦  age[4,32,0]  𝄀

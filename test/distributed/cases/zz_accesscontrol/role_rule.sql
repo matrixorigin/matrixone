@@ -74,9 +74,14 @@ alter role test_rule_role add rule "select * from db1.t1 where age > 28" on tabl
 create user test_rule_user identified by '123456' default role test_rule_role;
 grant connect on account * to test_rule_role;
 grant select on table *.* to test_rule_role;
+grant create table,drop table on database db1 to test_rule_role;
 -- @session:id=1&user=sys:test_rule_user:test_rule_role&password=123456
 set enable_remap_hint = 1;
 select * from db1.t1;
+-- CTAS must apply the same row rule to its generated INSERT ... SELECT.
+create table db1.t1_ctas as select a from db1.t1 order by a;
+select * from db1.t1_ctas order by a;
+drop table db1.t1_ctas;
 -- #29142: disabling the optional remap hint must not bypass mandatory role rules
 set enable_remap_hint = 0;
 select * from db1.t1;
