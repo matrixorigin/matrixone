@@ -211,7 +211,6 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 		panic(err)
 	}
 	sess := NewSession(ctx, ie.service, ie.proto, mp)
-	sess.disableTrace = true
 
 	var t *TenantInfo
 	if accountId, err := defines.GetAccountId(ctx); err == nil {
@@ -568,6 +567,6 @@ func (ip *internalProtocol) WriteLocalInfileRequest(filename string) error {
 	return nil
 }
 
-func (ip *internalProtocol) MakeColumnDefData(ctx context.Context, columns []*planPb.ColDef) ([][]byte, error) {
+func (ip *internalProtocol) MakeColumnDefData(ctx context.Context, columns []*planPb.ColDef, directIntegerLengths ...uint32) ([][]byte, error) {
 	return nil, nil
 }

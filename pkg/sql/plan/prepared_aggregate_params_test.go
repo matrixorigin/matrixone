@@ -24,19 +24,48 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
 
 func buildPreparedAggregatePlan(t *testing.T, sql string) *planpb.Prepare {
 	t.Helper()
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t, fmt.Sprintf("prepare stmt1 from '%s'", sql))
 	require.NoError(t, err)
 	prepare := logicPlan.GetDcl().GetPrepare()
 	require.NotNil(t, prepare)
 	require.NotNil(t, prepare.GetPlan().GetQuery())
 	return prepare
+}
+
+func TestPreparedBinaryStateMarkersUseVarbinaryDomain(t *testing.T) {
+	for _, sql := range []string{
+		"select hll_cardinality(?)",
+		"select hll_merge_agg(?) from nation",
+		"select bitmap_or_agg(?) from nation",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			prepare := buildPreparedAggregatePlan(t, sql)
+			require.Equal(t, []int32{0}, preparedParamPositions(prepare))
+			name := "hll_cardinality"
+			if sql == "select hll_merge_agg(?) from nation" {
+				name = "hll_merge_agg"
+			} else if sql == "select bitmap_or_agg(?) from nation" {
+				name = "bitmap_or_agg"
+			}
+			fn := findPlanFunctionExpr(prepare.Plan, name)
+			require.NotNil(t, fn)
+			require.Len(t, fn.GetF().Args, 1)
+			arg := fn.GetF().Args[0]
+			require.Equal(t, int32(types.T_varbinary), arg.Typ.Id)
+			require.Zero(t, arg.Typ.Width, "opaque state cast must not impose the SQL VARBINARY width")
+			require.Equal(t, "cast", arg.GetF().GetFunc().GetObjName())
+			require.Equal(t, int32(types.T_text), arg.GetF().Args[0].Typ.Id)
+		})
+	}
 }
 
 func TestPreparedPercentileParameters(t *testing.T) {
@@ -57,7 +86,7 @@ func TestPreparedPercentileParameters(t *testing.T) {
 		"select percentile_disc(0.5) within group (order by n_name) from nation")
 	require.False(t, PreparedPlanHasPercentileParams(literal.Plan))
 
-	_, err := runOneStmt(NewMockOptimizer(false), t,
+	_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"select percentile_disc(n_regionkey) within group (order by n_name) from nation")
 	require.ErrorContains(t, err, "non-null constant or parameter")
 }
@@ -140,7 +169,7 @@ func TestPreparedPercentileParameterExpressionsRejectRowDependentOrArbitraryFunc
 		"prepare stmt_string_cast from 'select percentile_cont(cast(? as char) / 100.0) within group (order by n_nationkey) from nation'",
 	} {
 		t.Run(sql, func(t *testing.T) {
-			_, err := runOneStmt(NewMockOptimizer(false), t, sql)
+			_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, sql)
 			require.ErrorContains(t, err, "non-null constant or parameter")
 		})
 	}
@@ -417,6 +446,101 @@ func TestPreparedNumericAggregateParameterIdentity(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestPreparedJSONAggregateValueNeedsRuntimeSpecialization(t *testing.T) {
+	for _, test := range []struct {
+		sql  string
+		name string
+	}{
+		{"select json_arrayagg(?) from nation", "json_arrayagg"},
+		{"select json_objectagg(''k'', ?) from nation", "json_objectagg"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			prepare := buildPreparedAggregatePlan(t, test.sql)
+			for _, value := range []struct {
+				text   string
+				typ    types.Type
+				isNull bool
+			}{
+				{text: "123.4500", typ: types.New(types.T_decimal128, 20, 4)},
+				{text: `{"a":1}`, typ: types.T_json.ToType()},
+				{text: "plain", typ: types.T_text.ToType()},
+				{typ: types.New(types.T_decimal128, 20, 4), isNull: true},
+			} {
+				for _, binary := range []bool{false, true} {
+					param := ParamValue{IsBinaryProtocol: binary, RetainParamRef: true}
+					if !value.isNull {
+						param.Value = value.text
+					}
+					if binary {
+						param.RuntimeType, param.HasRuntimeType = value.typ, true
+					} else {
+						param.SourceType, param.HasSourceType = value.typ, true
+					}
+					filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+						context.Background(), prepare.Plan, []any{param})
+					require.NoError(t, err)
+					require.True(t, specialized)
+					aggregate := findPlanFunctionExpr(filled, test.name)
+					require.NotNil(t, aggregate)
+					if !value.isNull {
+						require.Equal(t, int32(value.typ.Oid), aggregate.GetF().Args[len(aggregate.GetF().Args)-1].Typ.Id)
+					}
+					require.NoError(t, RestorePreparedRuntimeParamRefs(context.Background(), filled))
+					require.True(t, preparedExprContainsParam(aggregate.GetF().Args[len(aggregate.GetF().Args)-1]),
+						"runtime cache must not retain the first EXECUTE value")
+				}
+			}
+		})
+	}
+}
+
+func TestPreparedJSONAggregateValueWithoutRuntimeMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		sql string
+		fn  string
+	}{
+		{sql: "select json_arrayagg(?) from nation", fn: "json_arrayagg"},
+		{sql: "select json_objectagg(''k'', ?) from nation", fn: "json_objectagg"},
+	} {
+		t.Run(tc.fn, func(t *testing.T) {
+			prepared := buildPreparedAggregatePlan(t, tc.sql)
+			preparedAggregate := findPlanFunctionExpr(prepared.Plan, tc.fn)
+			require.NotNil(t, preparedAggregate)
+			preparedArg := preparedAggregate.GetF().Args
+			preparedType := preparedArg[len(preparedArg)-1].Typ.Id
+
+			// A caller without source-type metadata must keep the prepared
+			// marker domain, not infer a JSON atom from the text value.
+			filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+				context.Background(), prepared.Plan,
+				[]any{ParamValue{Value: "plain", RetainParamRef: true}})
+			require.NoError(t, err)
+			require.False(t, specialized, "unknown source type must not invalidate the cached compile")
+			aggregate := findPlanFunctionExpr(filled, tc.fn)
+			require.NotNil(t, aggregate)
+			args := aggregate.GetF().Args
+			require.Equal(t, preparedType, args[len(args)-1].Typ.Id)
+			require.NoError(t, RestorePreparedRuntimeParamRefs(context.Background(), filled))
+			require.True(t, preparedExprContainsParam(args[len(args)-1]))
+
+			// The fallback must not poison the cached template for a later
+			// execution that does supply a concrete source type.
+			filled, specialized, err = FillValuesOfParamsInPlanWithSpecialization(
+				context.Background(), prepared.Plan,
+				[]any{ParamValue{
+					Value: "123.4500", SourceType: types.New(types.T_decimal128, 20, 4),
+					HasSourceType: true, RetainParamRef: true,
+				}})
+			require.NoError(t, err)
+			require.True(t, specialized)
+			aggregate = findPlanFunctionExpr(filled, tc.fn)
+			require.NotNil(t, aggregate)
+			args = aggregate.GetF().Args
+			require.Equal(t, int32(types.T_decimal128), args[len(args)-1].Typ.Id)
+		})
+	}
+}
+
 func TestSQLPreparedNullRetainsBinarySourceTypeAndRuntimeDomain(t *testing.T) {
 	prepare := buildPreparedAggregatePlan(t, "select char_length(?) from nation")
 	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
@@ -513,7 +637,6 @@ func TestPreparedMaxByRuntimeTypeReachesResultProjection(t *testing.T) {
 	for _, name := range []string{"max_by", "max_by_non_null"} {
 		t.Run(name, func(t *testing.T) {
 			prepare := buildPreparedAggregatePlan(t, fmt.Sprintf("select %s(?, 1, 1) from nation", name))
-			require.True(t, PreparedPlanNeedsRuntimeSpecialization(prepare.Plan))
 			filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
 				context.Background(),
 				prepare.Plan,
@@ -542,12 +665,10 @@ func TestPreparedBitwiseAggregateScansForRuntimeSpecialization(t *testing.T) {
 	privateCast := aggregate.GetF().Args[0]
 	require.True(t, isBitwiseAggregatePrivateCast(privateCast))
 	require.False(t, isExplicitPreparedCast(privateCast))
-	require.True(t, PreparedPlanNeedsRuntimeSpecialization(prepare.Plan))
 }
 
 func TestPreparedBitwiseAggregateRebindsChangedValueWithinSameDomain(t *testing.T) {
 	prepare := buildPreparedAggregatePlan(t, "select bit_and(?) from nation")
-	require.True(t, PreparedPlanNeedsRuntimeSpecialization(prepare.Plan))
 	decimalType := types.New(types.T_decimal64, 2, 1)
 
 	for _, test := range []struct {
@@ -645,33 +766,11 @@ func TestPreparedBitwiseAggregateProjectionRefreshPreservesPrivateCast(t *testin
 	}
 }
 
-func TestPreparedRuntimeSpecializationCoversResultDomainAggregates(t *testing.T) {
-	for _, name := range []string{
-		"min", "max", "any_value", "max_by", "max_by_non_null",
-	} {
-		t.Run(name, func(t *testing.T) {
-			require.True(t, preparedRuntimeSpecializationFunction(name))
-		})
-	}
-}
-
 func TestPreparedRuntimeSpecializationCoversBinaryStringSemantics(t *testing.T) {
-	for _, name := range []string{
-		"ord", "char_length", "character_length",
-		"left", "right", "substring", "substr", "mid", "reverse",
-		"lower", "lcase", "upper", "ucase", "trim", "ltrim", "rtrim",
-		"locate", "instr", "position", "insert", "replace", "lpad", "rpad",
-		"substring_index", "split_part", "repeat", "concat", "concat_ws",
-		"charset", "collation",
-	} {
-		require.True(t, preparedRuntimeSpecializationFunction(name), name)
-	}
-
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare binary_domains from 'select charset(left(?, 1)), char_length(?), ord(?)'")
 	require.NoError(t, err)
 	preparedPlan := prepared.GetDcl().GetPrepare().Plan
-	require.True(t, PreparedPlanNeedsRuntimeSpecialization(preparedPlan))
 
 	binaryParam := ParamValue{
 		Value: "\xe4\xbd\xa0", SourceType: types.T_varbinary.ToType(), HasSourceType: true,
@@ -694,37 +793,12 @@ func TestPreparedRuntimeSpecializationCoversBinaryStringSemantics(t *testing.T) 
 }
 
 func TestPreparedDMLRuntimeSpecializationPreservesWriteParameters(t *testing.T) {
-	predicateOnly := buildPreparedAggregatePlan(t,
-		"update nation set n_comment = ''x'' where ? = ?")
-	require.True(t, PreparedPlanNeedsRuntimeSpecialization(predicateOnly.Plan))
-
 	withWriteParameter := buildPreparedAggregatePlan(t,
 		"update nation set n_comment = ? where ? = ?")
-	// The predicate still needs execute-time comparison specialization. The
-	// write projection is materialized with its original assignment cast so a
-	// fresh DML compile cannot change the positional write layout.
-	require.True(t, PreparedPlanNeedsRuntimeSpecialization(withWriteParameter.Plan))
-
-	writeExpressionPredicate := buildPreparedAggregatePlan(t,
-		"update nation set n_comment = (? = ?) where n_nationkey = 1")
-	// A domain-sensitive expression may be nested below the assignment cast;
-	// scanning must descend into the write root while preserving its outer
-	// positional contract.
-	require.True(t, PreparedPlanNeedsRuntimeSpecialization(writeExpressionPredicate.Plan))
-
-	nestedWriteExpression := buildPreparedAggregatePlan(t,
-		"update nation set n_comment = (select d.v from (select ? = ? as v) d) where n_nationkey = 1")
-	// A derived-table projection is not a positional DML write root. Its
-	// marker comparison must therefore remain visible to the specialization
-	// scan instead of being preserved as if it were an assignment cast.
-	require.True(t, PreparedPlanNeedsRuntimeSpecialization(nestedWriteExpression.Plan))
-
 	columnBoundPredicate := buildPreparedAggregatePlan(t,
 		"update nation set n_comment = ? where n_nationkey = ? and n_regionkey = ?")
-	// The generic overload scan can still reuse the cached indexed plan; the
-	// separate text-comparison scan must select the engine DOUBLE conversion.
-	require.False(t, PreparedPlanNeedsRuntimeSpecialization(columnBoundPredicate.Plan))
-	require.True(t, PreparedPlanNeedsRuntimeTextComparisonSpecialization(
+	// The live text-comparison scan still identifies text markers beside numeric columns.
+	require.NotEmpty(t, preparedNumericComparisonTextParamPositions(
 		columnBoundPredicate.Plan,
 		[]types.Type{types.T_text.ToType(), types.T_text.ToType(), types.T_text.ToType()},
 	))
@@ -736,7 +810,7 @@ func TestPreparedDMLRuntimeSpecializationPreservesWriteParameters(t *testing.T) 
 	} {
 		columnExpressionPredicate := buildPreparedAggregatePlan(t,
 			"update nation set n_comment = n_comment where "+predicate)
-		require.True(t, PreparedPlanNeedsRuntimeTextComparisonSpecialization(
+		require.NotEmpty(t, preparedNumericComparisonTextParamPositions(
 			columnExpressionPredicate.Plan, []types.Type{types.T_text.ToType()}), predicate)
 	}
 
@@ -780,8 +854,8 @@ func TestPreparedDMLRuntimeSpecializationPreservesWriteParameters(t *testing.T) 
 }
 
 func TestPreparedNtileParameter(t *testing.T) {
-	prepare := buildPreparedAggregatePlan(t,
-		"select n_nationkey, ntile(?) over (partition by n_regionkey order by n_nationkey) from nation")
+	const sql = "select n_nationkey, ntile(?) over (partition by n_regionkey order by n_nationkey) from nation"
+	prepare := buildPreparedAggregatePlan(t, sql)
 	require.Equal(t, []int32{int32(types.T_any)}, prepare.ParamTypes)
 	require.Equal(t, []int32{0}, preparedParamPositions(prepare))
 
@@ -795,6 +869,51 @@ func TestPreparedNtileParameter(t *testing.T) {
 	require.NotSame(t, first, second)
 	require.Equal(t, []int32{0}, preparedParamPositions(prepare))
 	require.Equal(t, originalTypes, preparedEffectiveParamTypes(t, prepare))
+
+	// EXECUTE now binds the current source type before optimization instead
+	// of merely filling the PREPARE template. Its integer consumer must keep
+	// the string ParamRef and perform a strict conversion at execution time.
+	template := prepare.Plan.String()
+	for _, source := range []types.T{types.T_text, types.T_varchar} {
+		t.Run("runtime_source/"+source.String(), func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			proc := mock.ctxt.GetProcess()
+			params := vector.NewVec(types.T_text.ToType())
+			t.Cleanup(func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) })
+			require.NoError(t, vector.AppendBytes(params, []byte("2"), false, proc.Mp()))
+			proc.SetPrepareParams(params)
+			sourceType := source.ToType()
+			bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
+				[]PreparedSourceBinding{{Position: 0, Type: sourceType}},
+				[]any{ParamValue{Value: "2", SourceType: sourceType, HasSourceType: true, IsBinaryProtocol: true}})
+			require.NoError(t, err)
+			var argument *planpb.Expr
+			require.NoError(t, planpb.VisitExpressionsInOwner(bound.Plan, func(root *planpb.Expr) error {
+				return planpb.VisitExprTree(root, func(expr *planpb.Expr) error {
+					if fn := expr.GetF(); fn != nil && fn.Func.GetObjName() == "ntile" {
+						require.Len(t, fn.Args, 1)
+						argument = fn.Args[0]
+					}
+					return nil
+				})
+			}))
+			require.NotNil(t, argument, "execution plan must contain NTILE")
+			require.Equal(t, int32(types.T_int64), argument.Typ.Id)
+			cast := argument.GetF()
+			require.NotNil(t, cast)
+			require.Equal(t, "cast", cast.Func.GetObjName())
+			require.False(t, cast.GetSyntaxExplicitCast(), "implicit bucket conversion must not use explicit CAST prefix semantics")
+			require.Len(t, cast.Args, 2)
+			require.Equal(t, int32(source), cast.Args[0].Typ.Id)
+			require.NotNil(t, cast.Args[0].GetP(), "a cached plan must read each EXECUTE's current parameter")
+			require.Zero(t, cast.Args[0].GetP().Pos)
+			require.False(t, bound.ValueDependent, "bucket conversion must not depend on the current string value")
+			require.Equal(t, template, prepare.Plan.String(), "EXECUTE must not mutate the PREPARE template")
+		})
+	}
 }
 
 func TestPreparedLagLeadOffsetParameter(t *testing.T) {
@@ -850,7 +969,7 @@ func TestNtileRequiresIntegerArgument(t *testing.T) {
 		"select ntile(cast(? as char)) over (order by n_nationkey) from nation",
 	} {
 		t.Run(sql, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			_, err := runOneStmt(mock, t, fmt.Sprintf("prepare stmt1 from '%s'", sql))
 			require.ErrorContains(t, err, "invalid argument function ntile")
 		})
@@ -867,7 +986,7 @@ func TestPreparedNumericAggregateDoesNotCoerceStrings(t *testing.T) {
 	}
 	for _, sql := range tests {
 		t.Run(sql, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			_, err := runOneStmt(mock, t, fmt.Sprintf("prepare stmt1 from '%s'", sql))
 			require.ErrorContains(t, err, "invalid argument aggregate function")
 		})

@@ -197,7 +197,7 @@ inet_ntoa(json_extract(json_array('258'), '$[0]')) as json_string_integer,
 inet_ntoa(json_extract(json_array('bad'), '$[0]')) as json_string_bad,
 inet_ntoa(json_extract(json_array('1e100'), '$[0]')) as json_string_overflow;
 ➤ bool_value[12,31,0]  ¦  date_value[12,31,0]  ¦  time_value[12,31,0]  ¦  json_number[12,31,0]  ¦  json_extract_number[12,31,0]  ¦  json_true[12,31,0]  ¦  json_false[12,31,0]  ¦  json_string_integer[12,31,0]  ¦  json_string_bad[12,31,0]  ¦  json_string_overflow[12,31,0]  𝄀
-0.0.0.1  ¦  1.52.214.230  ¦  0.0.0.2  ¦  0.0.0.2  ¦  0.0.0.2  ¦  0.0.0.1  ¦  0.0.0.0  ¦  0.0.1.2  ¦  0.0.0.0  ¦  null
+0.0.0.1  ¦  1.52.214.230  ¦  0.0.0.3  ¦  0.0.0.2  ¦  0.0.0.2  ¦  0.0.0.1  ¦  0.0.0.0  ¦  0.0.1.2  ¦  0.0.0.0  ¦  null
 prepare inet_ntoa_contract_reuse from 'select inet_ntoa(?) as ip_text';
 set @inet_value = 1.6;
 execute inet_ntoa_contract_reuse using @inet_value;

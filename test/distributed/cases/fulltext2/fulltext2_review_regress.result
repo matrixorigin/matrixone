@@ -31,7 +31,9 @@ select cast(bk as unsigned) as k, prio from b2 where match(body) against('fox') 
 ➤ k[-5,64,0]  ¦  prio[4,32,0]  𝄀
 7  ¦  30
 select cast(bk as unsigned) as k, prio from b2 where match(body) against('fox') and bk in (5,7) order by k;
-invalid argument operator in, bad value [BIT BIT]
+➤ k[-5,64,0]  ¦  prio[4,32,0]  𝄀
+5  ¦  10  𝄀
+7  ¦  30
 select cast(bk as unsigned) as k, prio from b2 where match(body) against('fox') and bk > 5 order by k;
 ➤ k[-5,64,0]  ¦  prio[4,32,0]  𝄀
 6  ¦  20  𝄀

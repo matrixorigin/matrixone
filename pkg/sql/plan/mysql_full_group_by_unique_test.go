@@ -78,7 +78,7 @@ func TestOnlyFullGroupByNotNullUniqueKey(t *testing.T) {
 		}, wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			optimizer := NewMockOptimizer(false)
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 			optimizer.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
 			table := optimizer.ctxt.tablesByQualifiedName[mockQualifiedTableName("constraint_test", "emp")]
 			require.NotNil(t, table)

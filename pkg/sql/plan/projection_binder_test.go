@@ -432,7 +432,7 @@ func extractInt64ValueFromExpr(expr *plan.Expr) int64 {
 // TestProjectionBinderResetIntervalComprehensive tests resetInterval with full ProjectionBinder setup
 // to achieve high code coverage
 func TestProjectionBinderResetIntervalComprehensive(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindCtx := NewBindContext(builder, nil)
 	havingBinder := NewHavingBinder(builder, bindCtx)
 	projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
@@ -459,8 +459,8 @@ func TestProjectionBinderResetIntervalComprehensive(t *testing.T) {
 			name:                 "INTERVAL '1.5' SECOND (varchar)",
 			intervalValueExpr:    makeVarcharConstForProjection("1.5"),
 			intervalUnit:         "SECOND",
-			expectedIntervalVal:  math.MaxInt64, // "1.5" is invalid format for SECOND, returns MaxInt64
-			expectedIntervalType: types.Second,
+			expectedIntervalVal:  1500000, // fractional SECOND text is normalized to microseconds
+			expectedIntervalType: types.MicroSecond,
 		},
 		{
 			name:                 "INTERVAL '1' DAY (char)",
@@ -680,7 +680,7 @@ func TestProjectionBinderResetIntervalComprehensive(t *testing.T) {
 // TestProjectionBinderResetIntervalAdditionalCoverage tests additional edge cases
 // to improve code coverage for resetInterval function, focusing on uncovered branches
 func TestProjectionBinderResetIntervalAdditionalCoverage(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindCtx := NewBindContext(builder, nil)
 	havingBinder := NewHavingBinder(builder, bindCtx)
 	projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
@@ -907,7 +907,7 @@ func TestProjectionBinderResetIntervalDecimalTypeCheck(t *testing.T) {
 
 // TestProjectionBinderBindExpr tests BindExpr with various context lookups
 func TestProjectionBinderBindExpr(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindCtx := NewBindContext(builder, nil)
 	havingBinder := NewHavingBinder(builder, bindCtx)
 	projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
@@ -1082,7 +1082,7 @@ func TestIsNRange(t *testing.T) {
 
 // TestProjectionBinderMakeFrameConstValue tests makeFrameConstValue function
 func TestProjectionBinderMakeFrameConstValue(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindCtx := NewBindContext(builder, nil)
 	havingBinder := NewHavingBinder(builder, bindCtx)
 	projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
@@ -1162,7 +1162,7 @@ func TestProjectionBinderMakeFrameConstValue(t *testing.T) {
 
 // TestProjectionBinderBindWinFunc tests BindWinFunc with various scenarios
 func TestProjectionBinderBindWinFunc(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindCtx := NewBindContext(builder, nil)
 	havingBinder := NewHavingBinder(builder, bindCtx)
 	projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)

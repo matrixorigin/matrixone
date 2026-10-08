@@ -25,6 +25,9 @@ import (
 type MySQLErrorClassifier struct{}
 
 var mysqlRetryableErrorCodes = map[uint16]struct{}{
+	// Timeout reading/writing communication packets.
+	1159: {},
+	1161: {},
 	// Lock wait timeout exceeded; try restarting transaction
 	1205: {},
 	// Deadlock found when trying to get lock; try restarting transaction

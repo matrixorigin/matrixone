@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillio"
 	"github.com/matrixorigin/matrixone/pkg/util/list"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -742,7 +743,7 @@ func (ctr *container) openSpillBucket(
 			return err
 		}
 	}
-	file, err := spillfs.CreateAndRemoveFile(proc.Ctx, bkt.name)
+	file, err := spillfs.CreateFile(proc.Ctx, bkt.name)
 	if err != nil {
 		if fdToken != nil {
 			fdToken.Release()
@@ -753,20 +754,14 @@ func (ctr *container) openSpillBucket(
 		return err
 	}
 	bkt.file = file
-	bkt.writer, err = newGroupSpillWriter(ctr, file, proc.Ctx, diskToken)
-	if err != nil {
-		_ = file.Close()
-		bkt.file = nil
-		if fdToken != nil {
-			fdToken.Release()
-		}
-		if diskToken != nil {
-			diskToken.Release()
-		}
-		return err
-	}
+	bkt.fileFS = spillfs
 	bkt.fdToken = fdToken
 	bkt.diskToken = diskToken
+	bkt.writer, err = newGroupSpillWriter(ctr, file, proc.Ctx, diskToken)
+	if err != nil {
+		_ = bkt.free()
+		return err
+	}
 	return nil
 }
 
@@ -1399,7 +1394,7 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 				if err, canceled := vm.CancelCheck(proc); canceled {
 					return false, err
 				}
-				if err := bkt.flushWriter(); err != nil {
+				if err := bkt.finishWriting(); err != nil {
 					bkt.free()
 					ctr.currentSpillBkt[i] = nil
 					return false, err
@@ -1427,6 +1422,7 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 	// popped bkt must be defer freed.
 	bkt := ctr.spillBkts.PopBack().Value
 	defer func() {
+		spillio.DropReadCache(bkt.file)
 		if err := bkt.free(); err != nil && retErr == nil {
 			retErr = err
 		}
@@ -1456,6 +1452,9 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 	}
 	defer recordReloadTime()
 
+	if err := bkt.openReader(proc.Ctx, ctr.budget); err != nil {
+		return false, err
+	}
 	// reposition to the start of the file.
 	if _, err := bkt.file.Seek(0, io.SeekStart); err != nil {
 		return false, err
@@ -1582,7 +1581,11 @@ reloadLoop:
 		observeHashGrowth(opStats, "GroupHashReload", hashBytesBefore, ctr.hr.Hash.Size())
 		hashMergeNanos += time.Since(mergeStart).Nanoseconds()
 
-		if ctr.needSpill(opAnalyzer) && canRepartitionGroupSpill(bkt) {
+		needSpill, err := ctr.shouldSpill(opAnalyzer)
+		if err != nil {
+			return false, err
+		}
+		if needSpill && canRepartitionGroupSpill(bkt) {
 			ctr.freeSpillReloadStaging()
 			if bytes, rows, err := ctr.spillDataToDisk(proc, opAnalyzer, bkt); err != nil {
 				return false, err
@@ -1783,6 +1786,65 @@ func (ctr *container) needSpill(opAnalyzer process.Analyzer) bool {
 	return memUsed > ctr.spillMem
 }
 
+// needAdaptiveSpill divides the live query/CN/physical growth headroom among
+// every spill-capable operator which can still retain input. The decision is
+// advisory; the execution-resource ledger remains the hard allocation gate.
+// An empty hash has nothing useful to externalize, so it is always allowed to
+// establish a new resident prefix.
+func (ctr *container) needAdaptiveSpill(
+	opAnalyzer process.Analyzer,
+) (bool, error) {
+	return ctr.needAdaptiveSpillForGrowth(opAnalyzer, 0)
+}
+
+func (ctr *container) needAdaptiveSpillForGrowth(
+	opAnalyzer process.Analyzer,
+	projectedGrowth uint64,
+) (bool, error) {
+	if ctr == nil || !ctr.autoSpill || ctr.mtyp == H0 ||
+		ctr.memoryGrowthParticipant == nil || ctr.hr.IsEmpty() ||
+		ctr.hr.Hash.GroupCount() == 0 {
+		return false, nil
+	}
+	used := ctr.memUsed()
+	if used < 0 {
+		return false, process.ErrExecutionResourceInvalid
+	}
+	limit, err := ctr.memoryGrowthParticipant.RetainedLimit(uint64(used))
+	if err != nil {
+		return false, err
+	}
+	if opAnalyzer != nil {
+		stats := opAnalyzer.GetOpStats()
+		stats.AddExtraStat("GroupAdaptiveSpillChecks", 1)
+		stats.SetMaxExtraStat("GroupAdaptiveRetainedBytes", used)
+		stats.SetMaxExtraStat(
+			"GroupAdaptiveLimitBytes", int64(min(limit, uint64(math.MaxInt64))))
+	}
+	projected := uint64(used)
+	if projectedGrowth > math.MaxUint64-projected {
+		projected = math.MaxUint64
+	} else {
+		projected += projectedGrowth
+	}
+	spill := projected >= limit
+	if spill && opAnalyzer != nil {
+		opAnalyzer.GetOpStats().AddExtraStat("GroupAdaptiveSpillTriggers", 1)
+	}
+	return spill, nil
+}
+
+func (ctr *container) shouldSpill(
+	opAnalyzer process.Analyzer,
+) (bool, error) {
+	staticSpill := ctr.needSpill(opAnalyzer)
+	adaptiveSpill, err := ctr.needAdaptiveSpill(opAnalyzer)
+	if err != nil {
+		return false, err
+	}
+	return staticSpill || adaptiveSpill, nil
+}
+
 func (ctr *container) makeAggList(aggExprs []aggexec.AggFuncExecExpression) ([]aggexec.GroupAggFuncExec, error) {
 	return ctr.makeAggListForMode(aggExprs, ctr.aggregateAllocation, ctr.mtyp == H0)
 }
@@ -1838,13 +1900,16 @@ func (ctr *container) makeAggListWithAllocation(
 	singleGroup bool,
 ) ([]aggexec.GroupAggFuncExec, error) {
 	var err error
+	limit := process.WarningDiagnosticDefaultRetentionLimit
+	if ctr.warningRetentionSet {
+		limit = ctr.warningRetentionLimit
+	}
+	ctr.groupConcatWarnings.SetWarningRetentionLimit(limit)
 	aggList := make([]aggexec.GroupAggFuncExec, len(aggExprs))
 	for i, agExpr := range aggExprs {
 		typs := make([]types.Type, len(agExpr.GetArgExpressions()))
 		for j, arg := range agExpr.GetArgExpressions() {
-			typs[j] = types.NewWithCharset(
-				types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale, uint8(arg.Typ.Charset),
-			)
+			typs[j] = types.MustTypeFromPlan(arg.Typ)
 		}
 		if ctr.legacyTextMinMax || ctr.legacyVarianceState ||
 			ctr.legacyDecimalSumState || ctr.legacyDecimalSumResult {
@@ -1872,6 +1937,7 @@ func (ctr *container) makeAggListWithAllocation(
 			freeAggListPartial(aggList, i)
 			return nil, err
 		}
+		aggexec.ConfigureGroupConcatWarningRetention(aggList[i], limit)
 		if ctr.legacyApproxPercentileState {
 			aggexec.ConfigureApproxPercentileLegacyState(aggList[i])
 		}
@@ -1882,9 +1948,11 @@ func (ctr *container) makeAggListWithAllocation(
 				aggexec.ConfigureHLLLegacyState(aggList[i])
 			}
 		} else if (ctr.legacyVectorHLLState && hllVectorStateSupported(agExpr)) ||
-			(ctr.legacyTextHLLAddState && hllTextAddStateSupported(agExpr)) {
+			(ctr.legacyTextHLLAddState && hllTextAddStateSupported(agExpr)) ||
+			(ctr.legacyFloatHLLAddState && hllFloatAddStateSupported(agExpr)) {
 			// Keep each producer on v2 until its type family's protocol contract
-			// is understood by every peer (vectors at v88, CHAR/JSON at v89).
+			// is understood by every peer (vectors at v88, CHAR/JSON at v91,
+			// FLOAT/DOUBLE at v92).
 			aggexec.ConfigureHLLLegacyState(aggList[i])
 		}
 		if ctr.legacyDistinctFloatKeys {
@@ -1893,6 +1961,8 @@ func (ctr *container) makeAggListWithAllocation(
 				return nil, err
 			}
 		}
+		aggexec.ConfigureGroupConcatWarningBudget(
+			aggList[i], ctr.groupConcatWarnings.WarningBudget())
 		aggexec.ConfigureGroupConcatTimeZone(aggList[i], ctr.timeZone)
 		// Preserve the mode used to construct this list. A merge partial's wire
 		// header may be the first authoritative mode before ctr.mtyp is published;
@@ -1954,6 +2024,18 @@ func hllTextAddStateSupported(agg aggexec.AggFuncExecExpression) bool {
 	}
 	return types.T(args[0].Typ.Id) == types.T_char ||
 		types.T(args[0].Typ.Id) == types.T_json
+}
+
+func hllFloatAddStateSupported(agg aggexec.AggFuncExecExpression) bool {
+	if agg.GetAggID() != aggexec.AggIdOfHllAdd {
+		return false
+	}
+	args := agg.GetArgExpressions()
+	if len(args) == 0 || args[0] == nil {
+		return false
+	}
+	return types.T(args[0].Typ.Id) == types.T_float32 ||
+		types.T(args[0].Typ.Id) == types.T_float64
 }
 
 func useLegacyTextMinMaxForRemote(proc *process.Process) bool {
@@ -2068,6 +2150,20 @@ func useLegacyTextHLLAddStateForRemote(proc *process.Process) bool {
 		GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
 	return !ok || !valid || version < defines.MORPCVersion91
+}
+
+func useLegacyFloatHLLAddStateForRemote(proc *process.Process) bool {
+	if proc == nil || proc.Ctx == nil {
+		return false
+	}
+	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
+	if !remote {
+		return false
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return !ok || !valid || version < defines.MORPCVersion92
 }
 
 func useFloatZeroHLLStateForRemote(proc *process.Process) bool {

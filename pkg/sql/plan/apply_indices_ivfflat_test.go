@@ -61,186 +61,138 @@ func makeConsistentIvfMultiTableIndexForTest(indexName, idxAlgoParams string, pa
 	}
 }
 
-// TestPrepareIvfIndexContext_NilVecCtx tests the case where vecCtx is nil
-func TestPrepareIvfIndexContext_NilVecCtx(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
-	multiTableIndex := &MultiTableIndex{}
-
-	result, err := builder.prepareIvfIndexContext(nil, multiTableIndex)
-	assert.NoError(t, err)
-	assert.Nil(t, result)
-}
-
-// TestPrepareIvfIndexContext_NilMultiTableIndex tests the case where multiTableIndex is nil
-func TestPrepareIvfIndexContext_NilMultiTableIndex(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
-	vecCtx := &vectorSortContext{}
-
-	result, err := builder.prepareIvfIndexContext(vecCtx, nil)
-	assert.NoError(t, err)
-	assert.Nil(t, result)
-}
-
-// TestPrepareIvfIndexContext_NilDistFnExpr tests the case where distFnExpr is nil
-func TestPrepareIvfIndexContext_NilDistFnExpr(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
-	vecCtx := &vectorSortContext{
-		distFnExpr: nil,
-	}
-	multiTableIndex := &MultiTableIndex{}
-
-	result, err := builder.prepareIvfIndexContext(vecCtx, multiTableIndex)
-	assert.NoError(t, err)
-	assert.Nil(t, result)
-}
-
-// TestPrepareIvfIndexContext_ForceModeEnabled tests the case where rankOption.Mode is "force"
-func TestPrepareIvfIndexContext_ForceModeEnabled(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
-	vecCtx := &vectorSortContext{
-		distFnExpr: &plan.Function{
-			Func: &ObjectRef{
-				ObjName: "l2_distance",
+func TestPrepareIvfIndexContextRejectsUnsupportedInputs(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
+	distFn := &plan.Function{Func: &ObjectRef{ObjName: "l2_distance"}}
+	cases := []struct {
+		name   string
+		vecCtx *vectorSortContext
+		index  *MultiTableIndex
+	}{
+		{
+			name:   "NilVecCtx",
+			vecCtx: nil,
+			index:  &MultiTableIndex{},
+		},
+		{
+			name:   "NilMultiTableIndex",
+			vecCtx: &vectorSortContext{},
+			index:  nil,
+		},
+		{
+			name: "NilDistFnExpr",
+			vecCtx: &vectorSortContext{
+				distFnExpr: nil,
+			},
+			index: &MultiTableIndex{},
+		},
+		{
+			name: "ForceModeEnabled",
+			vecCtx: &vectorSortContext{
+				distFnExpr: distFn,
+				rankOption: &plan.RankOption{
+					Mode: "force",
+				},
+			},
+			index: &MultiTableIndex{},
+		},
+		{
+			name: "NilMetaDef",
+			vecCtx: &vectorSortContext{
+				distFnExpr: distFn,
+			},
+			index: &MultiTableIndex{
+				IndexDefs: map[string]*plan.IndexDef{
+					catalog.SystemSI_IVFFLAT_TblType_Metadata:  nil,
+					catalog.SystemSI_IVFFLAT_TblType_Centroids: {},
+					catalog.SystemSI_IVFFLAT_TblType_Entries:   {},
+				},
 			},
 		},
-		rankOption: &plan.RankOption{
-			Mode: "force",
-		},
-	}
-	multiTableIndex := &MultiTableIndex{}
-
-	result, err := builder.prepareIvfIndexContext(vecCtx, multiTableIndex)
-	assert.NoError(t, err)
-	assert.Nil(t, result)
-}
-
-// TestPrepareIvfIndexContext_NilMetaDef tests the case where metaDef is nil
-func TestPrepareIvfIndexContext_NilMetaDef(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
-	vecCtx := &vectorSortContext{
-		distFnExpr: &plan.Function{
-			Func: &ObjectRef{
-				ObjName: "l2_distance",
+		{
+			name: "NilIdxDef",
+			vecCtx: &vectorSortContext{
+				distFnExpr: distFn,
+			},
+			index: &MultiTableIndex{
+				IndexDefs: map[string]*plan.IndexDef{
+					catalog.SystemSI_IVFFLAT_TblType_Metadata:  {},
+					catalog.SystemSI_IVFFLAT_TblType_Centroids: nil,
+					catalog.SystemSI_IVFFLAT_TblType_Entries:   {},
+				},
 			},
 		},
-	}
-	multiTableIndex := &MultiTableIndex{
-		IndexDefs: map[string]*plan.IndexDef{
-			catalog.SystemSI_IVFFLAT_TblType_Metadata:  nil,
-			catalog.SystemSI_IVFFLAT_TblType_Centroids: {},
-			catalog.SystemSI_IVFFLAT_TblType_Entries:   {},
-		},
-	}
-
-	result, err := builder.prepareIvfIndexContext(vecCtx, multiTableIndex)
-	assert.NoError(t, err)
-	assert.Nil(t, result)
-}
-
-// TestPrepareIvfIndexContext_NilIdxDef tests the case where idxDef is nil
-func TestPrepareIvfIndexContext_NilIdxDef(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
-	vecCtx := &vectorSortContext{
-		distFnExpr: &plan.Function{
-			Func: &ObjectRef{
-				ObjName: "l2_distance",
+		{
+			name: "NilEntriesDef",
+			vecCtx: &vectorSortContext{
+				distFnExpr: distFn,
+			},
+			index: &MultiTableIndex{
+				IndexDefs: map[string]*plan.IndexDef{
+					catalog.SystemSI_IVFFLAT_TblType_Metadata:  {},
+					catalog.SystemSI_IVFFLAT_TblType_Centroids: {},
+					catalog.SystemSI_IVFFLAT_TblType_Entries:   nil,
+				},
 			},
 		},
-	}
-	multiTableIndex := &MultiTableIndex{
-		IndexDefs: map[string]*plan.IndexDef{
-			catalog.SystemSI_IVFFLAT_TblType_Metadata:  {},
-			catalog.SystemSI_IVFFLAT_TblType_Centroids: nil,
-			catalog.SystemSI_IVFFLAT_TblType_Entries:   {},
-		},
-	}
-
-	result, err := builder.prepareIvfIndexContext(vecCtx, multiTableIndex)
-	assert.NoError(t, err)
-	assert.Nil(t, result)
-}
-
-// TestPrepareIvfIndexContext_NilEntriesDef tests the case where entriesDef is nil
-func TestPrepareIvfIndexContext_NilEntriesDef(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
-	vecCtx := &vectorSortContext{
-		distFnExpr: &plan.Function{
-			Func: &ObjectRef{
-				ObjName: "l2_distance",
+		{
+			name: "InvalidIndexAlgoParams",
+			vecCtx: &vectorSortContext{
+				distFnExpr: distFn,
+			},
+			index: &MultiTableIndex{
+				IndexDefs: map[string]*plan.IndexDef{
+					catalog.SystemSI_IVFFLAT_TblType_Metadata: {
+						IndexAlgoParams: "invalid json",
+					},
+					catalog.SystemSI_IVFFLAT_TblType_Centroids: {},
+					catalog.SystemSI_IVFFLAT_TblType_Entries:   {},
+				},
 			},
 		},
-	}
-	multiTableIndex := &MultiTableIndex{
-		IndexDefs: map[string]*plan.IndexDef{
-			catalog.SystemSI_IVFFLAT_TblType_Metadata:  {},
-			catalog.SystemSI_IVFFLAT_TblType_Centroids: {},
-			catalog.SystemSI_IVFFLAT_TblType_Entries:   nil,
+		{
+			name: "OpTypeNotString",
+			vecCtx: &vectorSortContext{
+				distFnExpr: distFn,
+			},
+			index: &MultiTableIndex{
+				IndexDefs: map[string]*plan.IndexDef{
+					catalog.SystemSI_IVFFLAT_TblType_Metadata: {
+						IndexAlgoParams: `{"op_type":123}`,
+					},
+					catalog.SystemSI_IVFFLAT_TblType_Centroids: {},
+					catalog.SystemSI_IVFFLAT_TblType_Entries:   {},
+				},
+			},
 		},
-	}
-
-	result, err := builder.prepareIvfIndexContext(vecCtx, multiTableIndex)
-	assert.NoError(t, err)
-	assert.Nil(t, result)
-}
-
-// TestPrepareIvfIndexContext_InvalidIndexAlgoParams tests the case where IndexAlgoParams is invalid JSON
-func TestPrepareIvfIndexContext_InvalidIndexAlgoParams(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
-	vecCtx := &vectorSortContext{
-		distFnExpr: &plan.Function{
-			Func: &ObjectRef{
-				ObjName: "l2_distance",
+		{
+			name: "OpTypeMismatch",
+			vecCtx: &vectorSortContext{
+				distFnExpr: distFn,
+			},
+			index: &MultiTableIndex{
+				IndexDefs: map[string]*plan.IndexDef{
+					catalog.SystemSI_IVFFLAT_TblType_Metadata: {
+						IndexAlgoParams: `{"op_type": "cosine_similarity"}`,
+					},
+					catalog.SystemSI_IVFFLAT_TblType_Centroids: {},
+					catalog.SystemSI_IVFFLAT_TblType_Entries:   {},
+				},
 			},
 		},
 	}
-	multiTableIndex := &MultiTableIndex{
-		IndexDefs: map[string]*plan.IndexDef{
-			catalog.SystemSI_IVFFLAT_TblType_Metadata: {
-				IndexAlgoParams: "invalid json",
-			},
-			catalog.SystemSI_IVFFLAT_TblType_Centroids: {},
-			catalog.SystemSI_IVFFLAT_TblType_Entries:   {},
-		},
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := builder.prepareIvfIndexContext(tc.vecCtx, tc.index)
+			require.NoError(t, err)
+			require.Nil(t, result)
+		})
 	}
-
-	result, err := builder.prepareIvfIndexContext(vecCtx, multiTableIndex)
-	assert.NoError(t, err)
-	assert.Nil(t, result)
-
-	multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexAlgoParams = `{"op_type":123}`
-	result, err = builder.prepareIvfIndexContext(vecCtx, multiTableIndex)
-	assert.NoError(t, err)
-	assert.Nil(t, result)
-}
-
-// TestPrepareIvfIndexContext_OpTypeMismatch tests the case where op_type doesn't match the distance function
-func TestPrepareIvfIndexContext_OpTypeMismatch(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
-	vecCtx := &vectorSortContext{
-		distFnExpr: &plan.Function{
-			Func: &ObjectRef{
-				ObjName: "l2_distance",
-			},
-		},
-	}
-	multiTableIndex := &MultiTableIndex{
-		IndexDefs: map[string]*plan.IndexDef{
-			catalog.SystemSI_IVFFLAT_TblType_Metadata: {
-				IndexAlgoParams: `{"op_type": "cosine_similarity"}`,
-			},
-			catalog.SystemSI_IVFFLAT_TblType_Centroids: {},
-			catalog.SystemSI_IVFFLAT_TblType_Entries:   {},
-		},
-	}
-
-	result, err := builder.prepareIvfIndexContext(vecCtx, multiTableIndex)
-	assert.NoError(t, err)
-	assert.Nil(t, result)
 }
 
 // TestPrepareIvfIndexContext_ArgsNotFound tests the case where getArgsFromDistFn returns found=false
 func TestPrepareIvfIndexContext_ArgsNotFound(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 
 	scanNode := &plan.Node{
 		TableDef: &plan.TableDef{
@@ -305,7 +257,7 @@ func TestPrepareIvfIndexContext_ArgsNotFound(t *testing.T) {
 
 // TestPrepareIvfIndexContext_ResolveVariableError_IvfThreads tests the case where ResolveVariable returns error for ivf_threads_search
 func TestPrepareIvfIndexContext_ResolveVariableError_IvfThreads(t *testing.T) {
-	baseMockCtx := NewMockCompilerContext(true)
+	baseMockCtx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	mockCtx := &customMockCompilerContext{
 		MockCompilerContext: baseMockCtx,
 		resolveVarFunc: func(varName string, isSystem, isGlobal bool) (interface{}, error) {
@@ -318,33 +270,7 @@ func TestPrepareIvfIndexContext_ResolveVariableError_IvfThreads(t *testing.T) {
 
 	builder := NewQueryBuilder(plan.Query_SELECT, mockCtx, false, true)
 
-	scanNode := &plan.Node{
-		TableDef: &plan.TableDef{
-			Name: "test_table",
-			Name2ColIndex: map[string]int32{
-				"vec_col": 0,
-				"id":      1,
-			},
-			Cols: []*plan.ColDef{
-				{
-					Name: "vec_col",
-					Typ: plan.Type{
-						Id: int32(types.T_array_float32),
-					},
-				},
-				{
-					Name: "id",
-					Typ: plan.Type{
-						Id:    int32(types.T_int64),
-						Width: 64,
-					},
-				},
-			},
-			Pkey: &plan.PrimaryKeyDef{
-				PkeyColName: "id",
-			},
-		},
-	}
+	scanNode := vectorProviderScanNode()
 
 	vecCtx := &vectorSortContext{
 		distFnExpr: &plan.Function{
@@ -385,7 +311,7 @@ func TestPrepareIvfIndexContext_ResolveVariableError_IvfThreads(t *testing.T) {
 
 // TestPrepareIvfIndexContext_ResolveVariableError_ProbeLimit tests the case where ResolveVariable returns error for probe_limit
 func TestPrepareIvfIndexContext_ResolveVariableError_ProbeLimit(t *testing.T) {
-	baseMockCtx := NewMockCompilerContext(true)
+	baseMockCtx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	mockCtx := &customMockCompilerContext{
 		MockCompilerContext: baseMockCtx,
 		resolveVarFunc: func(varName string, isSystem, isGlobal bool) (interface{}, error) {
@@ -401,33 +327,7 @@ func TestPrepareIvfIndexContext_ResolveVariableError_ProbeLimit(t *testing.T) {
 
 	builder := NewQueryBuilder(plan.Query_SELECT, mockCtx, false, true)
 
-	scanNode := &plan.Node{
-		TableDef: &plan.TableDef{
-			Name: "test_table",
-			Name2ColIndex: map[string]int32{
-				"vec_col": 0,
-				"id":      1,
-			},
-			Cols: []*plan.ColDef{
-				{
-					Name: "vec_col",
-					Typ: plan.Type{
-						Id: int32(types.T_array_float32),
-					},
-				},
-				{
-					Name: "id",
-					Typ: plan.Type{
-						Id:    int32(types.T_int64),
-						Width: 64,
-					},
-				},
-			},
-			Pkey: &plan.PrimaryKeyDef{
-				PkeyColName: "id",
-			},
-		},
-	}
+	scanNode := vectorProviderScanNode()
 
 	vecCtx := &vectorSortContext{
 		distFnExpr: &plan.Function{
@@ -468,7 +368,7 @@ func TestPrepareIvfIndexContext_ResolveVariableError_ProbeLimit(t *testing.T) {
 
 // TestPrepareIvfIndexContext_ProbeLimitNotInt64 tests the case where probe_limit is not int64
 func TestPrepareIvfIndexContext_ProbeLimitNotInt64(t *testing.T) {
-	baseMockCtx := NewMockCompilerContext(true)
+	baseMockCtx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	mockCtx := &customMockCompilerContext{
 		MockCompilerContext: baseMockCtx,
 		resolveVarFunc: func(varName string, isSystem, isGlobal bool) (interface{}, error) {
@@ -484,33 +384,7 @@ func TestPrepareIvfIndexContext_ProbeLimitNotInt64(t *testing.T) {
 
 	builder := NewQueryBuilder(plan.Query_SELECT, mockCtx, false, true)
 
-	scanNode := &plan.Node{
-		TableDef: &plan.TableDef{
-			Name: "test_table",
-			Name2ColIndex: map[string]int32{
-				"vec_col": 0,
-				"id":      1,
-			},
-			Cols: []*plan.ColDef{
-				{
-					Name: "vec_col",
-					Typ: plan.Type{
-						Id: int32(types.T_array_float32),
-					},
-				},
-				{
-					Name: "id",
-					Typ: plan.Type{
-						Id:    int32(types.T_int64),
-						Width: 64,
-					},
-				},
-			},
-			Pkey: &plan.PrimaryKeyDef{
-				PkeyColName: "id",
-			},
-		},
-	}
+	scanNode := vectorProviderScanNode()
 
 	vecCtx := &vectorSortContext{
 		distFnExpr: &plan.Function{
@@ -551,7 +425,7 @@ func TestPrepareIvfIndexContext_ProbeLimitNotInt64(t *testing.T) {
 
 // TestPrepareIvfIndexContext_Success tests the successful case
 func TestPrepareIvfIndexContext_Success(t *testing.T) {
-	baseMockCtx := NewMockCompilerContext(true)
+	baseMockCtx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	mockCtx := &customMockCompilerContext{
 		MockCompilerContext: baseMockCtx,
 		resolveVarFunc: func(varName string, isSystem, isGlobal bool) (interface{}, error) {
@@ -567,33 +441,7 @@ func TestPrepareIvfIndexContext_Success(t *testing.T) {
 
 	builder := NewQueryBuilder(plan.Query_SELECT, mockCtx, false, true)
 
-	scanNode := &plan.Node{
-		TableDef: &plan.TableDef{
-			Name: "test_table",
-			Name2ColIndex: map[string]int32{
-				"vec_col": 0,
-				"id":      1,
-			},
-			Cols: []*plan.ColDef{
-				{
-					Name: "vec_col",
-					Typ: plan.Type{
-						Id: int32(types.T_array_float32),
-					},
-				},
-				{
-					Name: "id",
-					Typ: plan.Type{
-						Id:    int32(types.T_int64),
-						Width: 64,
-					},
-				},
-			},
-			Pkey: &plan.PrimaryKeyDef{
-				PkeyColName: "id",
-			},
-		},
-	}
+	scanNode := vectorProviderScanNode()
 
 	vecCtx := &vectorSortContext{
 		distFnExpr: &plan.Function{
@@ -638,7 +486,7 @@ func TestPrepareIvfIndexContext_Success(t *testing.T) {
 	assert.Equal(t, "l2_distance", result.origFuncName)
 	assert.Equal(t, int32(0), result.partPos)
 	assert.Equal(t, int32(1), result.pkPos)
-	assert.Equal(t, idxAlgoParams, result.params)
+	assert.False(t, result.lossyEntries)
 	assert.Equal(t, int64(4), result.nThread)
 	assert.Equal(t, int64(10), result.nProbe)
 	assert.NotNil(t, result.vecLitArg)
@@ -646,7 +494,7 @@ func TestPrepareIvfIndexContext_Success(t *testing.T) {
 
 // TestCalculateAdaptiveNprobe tests the calculateAdaptiveNprobe function
 func TestCalculateAdaptiveNprobe(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 
 	tests := []struct {
 		name        string
@@ -714,7 +562,7 @@ func TestCalculateAdaptiveNprobe(t *testing.T) {
 // TestPrepareIvfIndexContext_AdaptiveNprobeAndFinalPostCandidate verifies that
 // the resolved AUTO parameters and INCLUDE coverage reach the final POST scan.
 func TestPrepareIvfIndexContext_AdaptiveNprobeAndFinalPostCandidate(t *testing.T) {
-	baseMockCtx := NewMockCompilerContext(true)
+	baseMockCtx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	mockCtx := &customMockCompilerContext{
 		MockCompilerContext: baseMockCtx,
 		resolveVarFunc: func(varName string, isSystem, isGlobal bool) (interface{}, error) {
@@ -920,7 +768,7 @@ func TestPrepareIvfIndexContext_AdaptiveNprobeAndFinalPostCandidate(t *testing.T
 }
 
 func TestPrepareIvfIndexContext_ImplicitDescendingOrderDisablesIvfRewrite(t *testing.T) {
-	baseMockCtx := NewMockCompilerContext(true)
+	baseMockCtx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	mockCtx := &customMockCompilerContext{
 		MockCompilerContext: baseMockCtx,
 		resolveVarFunc: func(varName string, isSystem, isGlobal bool) (interface{}, error) {
@@ -936,28 +784,7 @@ func TestPrepareIvfIndexContext_ImplicitDescendingOrderDisablesIvfRewrite(t *tes
 
 	builder := NewQueryBuilder(plan.Query_SELECT, mockCtx, false, true)
 
-	scanNode := &plan.Node{
-		TableDef: &plan.TableDef{
-			Name: "test_table",
-			Name2ColIndex: map[string]int32{
-				"vec_col": 0,
-				"id":      1,
-			},
-			Cols: []*plan.ColDef{
-				{
-					Name: "vec_col",
-					Typ:  plan.Type{Id: int32(types.T_array_float32)},
-				},
-				{
-					Name: "id",
-					Typ:  plan.Type{Id: int32(types.T_int64), Width: 64},
-				},
-			},
-			Pkey: &plan.PrimaryKeyDef{
-				PkeyColName: "id",
-			},
-		},
-	}
+	scanNode := vectorProviderScanNode()
 
 	vecCtx := &vectorSortContext{
 		distFnExpr: &plan.Function{
@@ -996,7 +823,7 @@ func TestPrepareIvfIndexContext_ImplicitDescendingOrderDisablesIvfRewrite(t *tes
 }
 
 func TestPrepareIvfIndexContext_ExplicitDescendingOrderFallsBackToOriginalSearch(t *testing.T) {
-	baseMockCtx := NewMockCompilerContext(true)
+	baseMockCtx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	mockCtx := &customMockCompilerContext{
 		MockCompilerContext: baseMockCtx,
 		resolveVarFunc: func(varName string, isSystem, isGlobal bool) (interface{}, error) {
@@ -1012,28 +839,7 @@ func TestPrepareIvfIndexContext_ExplicitDescendingOrderFallsBackToOriginalSearch
 
 	builder := NewQueryBuilder(plan.Query_SELECT, mockCtx, false, true)
 
-	scanNode := &plan.Node{
-		TableDef: &plan.TableDef{
-			Name: "test_table",
-			Name2ColIndex: map[string]int32{
-				"vec_col": 0,
-				"id":      1,
-			},
-			Cols: []*plan.ColDef{
-				{
-					Name: "vec_col",
-					Typ:  plan.Type{Id: int32(types.T_array_float32)},
-				},
-				{
-					Name: "id",
-					Typ:  plan.Type{Id: int32(types.T_int64), Width: 64},
-				},
-			},
-			Pkey: &plan.PrimaryKeyDef{
-				PkeyColName: "id",
-			},
-		},
-	}
+	scanNode := vectorProviderScanNode()
 
 	vecCtx := &vectorSortContext{
 		distFnExpr: &plan.Function{
@@ -1077,7 +883,7 @@ func TestPrepareIvfIndexContext_ExplicitDescendingOrderFallsBackToOriginalSearch
 // ============================================================================
 
 func TestShouldUseForceMode(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 
 	tests := []struct {
 		name        string
@@ -1171,7 +977,7 @@ func TestShouldUseForceMode(t *testing.T) {
 }
 
 func TestShouldUseForceMode_NilLimit(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 
 	vecCtx := &vectorSortContext{
 		scanNode: &plan.Node{
@@ -1185,7 +991,7 @@ func TestShouldUseForceMode_NilLimit(t *testing.T) {
 }
 
 func TestShouldUseForceMode_NonLiteralLimit(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 
 	// Limit is a column reference, not a literal
 	vecCtx := &vectorSortContext{
@@ -1208,7 +1014,7 @@ func TestShouldUseForceMode_NonLiteralLimit(t *testing.T) {
 // ============================================================================
 
 func TestResolveVectorSearchMode(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 
 	// Create a vecCtx with stats that won't trigger force mode
 	largeTableCtx := func() *vectorSortContext {
@@ -1331,7 +1137,7 @@ func TestResolveVectorSearchMode(t *testing.T) {
 }
 
 func TestResolveVectorSearchMode_AutoModeTriggersForce(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 
 	// Small table that should trigger force mode in auto
 	vecCtx := &vectorSortContext{
@@ -1376,14 +1182,14 @@ func TestBuildPkExprFromNode_NilBuilder(t *testing.T) {
 
 // TestBuildPkExprFromNode_NegativeNodeID tests when nodeID is negative
 func TestBuildPkExprFromNode_NegativeNodeID(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	result := builder.buildPkExprFromNode(-1, plan.Type{}, "id")
 	assert.Nil(t, result)
 }
 
 // TestBuildPkExprFromNode_TableScan_Success tests TABLE_SCAN node with valid setup
 func TestBuildPkExprFromNode_TableScan_Success(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 
 	scanNode := &plan.Node{
 		NodeType: plan.Node_TABLE_SCAN,
@@ -1414,7 +1220,7 @@ func TestBuildPkExprFromNode_TableScan_Success(t *testing.T) {
 }
 
 func TestBuildPkExprFromNode_IndexTableScan_UsesIndexPrimaryColumn(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 
 	scanNode := &plan.Node{
 		NodeType: plan.Node_TABLE_SCAN,
@@ -1445,7 +1251,7 @@ func TestBuildPkExprFromNode_IndexTableScan_UsesIndexPrimaryColumn(t *testing.T)
 
 // TestBuildPkExprFromNode_TableScan_NilTableDef tests TABLE_SCAN with nil TableDef
 func TestBuildPkExprFromNode_TableScan_NilTableDef(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 
 	scanNode := &plan.Node{
 		NodeType: plan.Node_TABLE_SCAN,
@@ -1459,7 +1265,7 @@ func TestBuildPkExprFromNode_TableScan_NilTableDef(t *testing.T) {
 
 // TestBuildPkExprFromNode_TableScan_NoBindingTags tests TABLE_SCAN with no BindingTags
 func TestBuildPkExprFromNode_TableScan_NoBindingTags(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 
 	scanNode := &plan.Node{
 		NodeType: plan.Node_TABLE_SCAN,
@@ -1477,7 +1283,7 @@ func TestBuildPkExprFromNode_TableScan_NoBindingTags(t *testing.T) {
 
 // TestBuildPkExprFromNode_Project_Success tests PROJECT node
 func TestBuildPkExprFromNode_Project_Success(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	builder.nameByColRef = make(map[[2]int32]string)
 	builder.nameByColRef[[2]int32{100, 0}] = "id"
 
@@ -1507,7 +1313,7 @@ func TestBuildPkExprFromNode_Project_Success(t *testing.T) {
 
 // TestBuildPkExprFromNode_Project_Recursive tests PROJECT node that recurses to child
 func TestBuildPkExprFromNode_Project_Recursive(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 
 	scanNode := &plan.Node{
 		NodeType: plan.Node_TABLE_SCAN,
@@ -1532,7 +1338,7 @@ func TestBuildPkExprFromNode_Project_Recursive(t *testing.T) {
 
 // TestBuildPkExprFromNode_Join_Recursive tests JOIN node
 func TestBuildPkExprFromNode_Join_Recursive(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 
 	scanNode := &plan.Node{
 		NodeType: plan.Node_TABLE_SCAN,
@@ -1555,7 +1361,7 @@ func TestBuildPkExprFromNode_Join_Recursive(t *testing.T) {
 }
 
 func TestBuildPkExprFromNode_Project_ExposesPk_Success(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	builder.nameByColRef = make(map[[2]int32]string)
 	builder.nameByColRef[[2]int32{200, 1}] = "id"
 
@@ -1590,7 +1396,7 @@ func TestBuildPkExprFromNode_Project_ExposesPk_Success(t *testing.T) {
 // ============================================================================
 
 func TestFindScanNodeByTag_FindsMatchingScan(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 
 	scanNode := &plan.Node{
 		NodeType:    plan.Node_TABLE_SCAN,
@@ -1608,7 +1414,7 @@ func TestFindScanNodeByTag_FindsMatchingScan(t *testing.T) {
 }
 
 func TestFindScanNodeByTag_CycleDoesNotLoop(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 
 	// Create a malformed graph cycle: node0 -> node1 -> node0.
 	node0 := &plan.Node{
@@ -1632,7 +1438,7 @@ func TestFindScanNodeByTag_CycleDoesNotLoop(t *testing.T) {
 
 // TestGetColName_NilCol tests when col is nil
 func TestGetColName_NilCol(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	result := builder.getColName(nil)
 	assert.Equal(t, "", result)
 }
@@ -1647,7 +1453,7 @@ func TestGetColName_NilBuilder(t *testing.T) {
 
 // TestGetColName_NilNameByColRef tests when nameByColRef is nil
 func TestGetColName_NilNameByColRef(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	builder.nameByColRef = nil
 	col := &plan.ColRef{Name: "test_col"}
 	result := builder.getColName(col)
@@ -1656,7 +1462,7 @@ func TestGetColName_NilNameByColRef(t *testing.T) {
 
 // TestGetColName_FoundInMap tests when name is found in map
 func TestGetColName_FoundInMap(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	builder.nameByColRef = make(map[[2]int32]string)
 	builder.nameByColRef[[2]int32{100, 5}] = "mapped_name"
 
@@ -1672,7 +1478,7 @@ func TestGetColName_FoundInMap(t *testing.T) {
 
 // TestGetColName_NotFoundInMap tests when name is not in map
 func TestGetColName_NotFoundInMap(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	builder.nameByColRef = make(map[[2]int32]string)
 
 	col := &plan.ColRef{
@@ -1691,14 +1497,14 @@ func TestGetColName_NotFoundInMap(t *testing.T) {
 
 // TestRebindScanNode_NilNode tests when scanNode is nil
 func TestRebindScanNode_NilNode(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	// Should not panic
 	builder.rebindScanNode(nil)
 }
 
 // TestRebindScanNode_NoBindingTags tests when BindingTags is empty
 func TestRebindScanNode_NoBindingTags(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	scanNode := &plan.Node{
 		BindingTags: []int32{},
 	}
@@ -1708,7 +1514,7 @@ func TestRebindScanNode_NoBindingTags(t *testing.T) {
 
 // TestRebindScanNode_Success tests successful rebinding
 func TestRebindScanNode_Success(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 
 	oldTag := int32(100)
 	scanNode := &plan.Node{
@@ -1862,14 +1668,14 @@ func TestReplaceColRefTag_List(t *testing.T) {
 
 // TestCanApplyRegularIndex_NilNode tests when node is nil
 func TestCanApplyRegularIndex_NilNode(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	result := builder.canApplyRegularIndex(nil)
 	assert.False(t, result)
 }
 
 // TestCanApplyRegularIndex_NilTableDef tests when TableDef is nil
 func TestCanApplyRegularIndex_NilTableDef(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	node := &plan.Node{
 		TableDef: nil,
 	}
@@ -1879,7 +1685,7 @@ func TestCanApplyRegularIndex_NilTableDef(t *testing.T) {
 
 // TestCanApplyRegularIndex_ZeroCols tests when there are no columns
 func TestCanApplyRegularIndex_ZeroCols(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	node := &plan.Node{
 		TableDef: &plan.TableDef{
 			Cols: []*plan.ColDef{},
@@ -1891,7 +1697,7 @@ func TestCanApplyRegularIndex_ZeroCols(t *testing.T) {
 
 // TestCanApplyRegularIndex_NoFilters tests when there are no filters
 func TestCanApplyRegularIndex_NoFilters(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	node := &plan.Node{
 		TableDef: &plan.TableDef{
 			Cols: []*plan.ColDef{
@@ -1907,7 +1713,7 @@ func TestCanApplyRegularIndex_NoFilters(t *testing.T) {
 
 // TestCanApplyRegularIndex_ColRefOutOfRange tests when colPos is out of range
 func TestCanApplyRegularIndex_ColRefOutOfRange(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	node := &plan.Node{
 		TableDef: &plan.TableDef{
 			Cols: []*plan.ColDef{
@@ -1931,7 +1737,7 @@ func TestCanApplyRegularIndex_ColRefOutOfRange(t *testing.T) {
 
 // TestCanApplyRegularIndex_Success tests successful case
 func TestCanApplyRegularIndex_Success(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	node := &plan.Node{
 		TableDef: &plan.TableDef{
 			Cols: []*plan.ColDef{
@@ -2159,4 +1965,545 @@ func TestColRefsWithin_NestedFunction(t *testing.T) {
 	}
 	result := colRefsWithin(expr, 10)
 	assert.True(t, result)
+}
+
+func TestGetResultColumnsFromPlanMapsVectorIndexSourceSlots(t *testing.T) {
+	tableDef := &plan.TableDef{
+		Name:         "source_alias",
+		OriginalName: "source_table",
+		DbName:       "source_db",
+		Pkey:         &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+		Cols: []*plan.ColDef{
+			{Name: "embedding", Typ: plan.Type{Id: int32(types.T_array_float32)}},
+			{Name: "payload", Typ: plan.Type{Id: int32(types.T_varchar), Width: 64}},
+			{
+				Name:    "id",
+				Primary: true,
+				Typ: plan.Type{
+					Id:          int32(types.T_int64),
+					NotNullable: true,
+					AutoIncr:    true,
+				},
+			},
+			{Name: "category", NotNull: true, Typ: plan.Type{Id: int32(types.T_varchar), Width: 32}},
+			{Name: "unused", Typ: plan.Type{Id: int32(types.T_int32)}},
+		},
+		Name2ColIndex: map[string]int32{
+			"embedding": 0,
+			"payload":   1,
+			"id":        2,
+			"category":  3,
+			"unused":    4,
+		},
+		Indexes: []*plan.IndexDef{{Parts: []string{"category"}, Unique: true}},
+	}
+	vectorScan := &plan.VectorIndexScan{
+		SourceTable:    &plan.ObjectRef{SchemaName: "source_db", ObjName: "source_table"},
+		SourceTableDef: tableDef,
+		Index:          &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()},
+		IncludedColumns: []string{
+			"category",
+			"payload",
+		},
+	}
+	scoreType := plan.Type{Id: int32(types.T_float64), Width: 8}
+	vectorNodeProjectList := []*plan.Expr{
+		// The scan projection is deliberately reordered. ColPos remains the
+		// synthetic vector output slot, so lineage must follow the reference
+		// instead of the projection-list index.
+		{Typ: scoreType, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 10, ColPos: 1, Name: "score"}}},
+		{Typ: tableDef.Cols[3].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 10, ColPos: 2, Name: "category"}}},
+		{Typ: tableDef.Cols[2].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 10, ColPos: 0, Name: "pkid"}}},
+		{Typ: tableDef.Cols[1].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 10, ColPos: 3, Name: "payload"}}},
+	}
+	projectList := []*plan.Expr{
+		{Typ: tableDef.Cols[2].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 10, ColPos: 0, Name: "pkid"}}},
+		{Typ: tableDef.Cols[3].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 10, ColPos: 2, Name: "category"}}},
+		{Typ: scoreType, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 10, ColPos: 1, Name: "score"}}},
+		{Typ: tableDef.Cols[1].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 10, ColPos: 3, Name: "payload"}}},
+	}
+
+	got := GetResultColumnsFromPlan(&plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Steps:    []int32{1},
+		Nodes: []*plan.Node{
+			{
+				NodeId:      0,
+				NodeType:    plan.Node_VECTOR_INDEX_SCAN,
+				BindingTags: []int32{10},
+				TableDef: &plan.TableDef{Cols: []*plan.ColDef{
+					{Name: "pkid", Typ: tableDef.Cols[2].Typ},
+					{Name: "score", Typ: scoreType},
+					{Name: "__mo_index_include_category", Typ: tableDef.Cols[3].Typ},
+					{Name: "__mo_index_include_payload", Typ: tableDef.Cols[1].Typ},
+				}},
+				ProjectList:     vectorNodeProjectList,
+				VectorIndexScan: vectorScan,
+			},
+			{NodeId: 1, NodeType: plan.Node_PROJECT, Children: []int32{0}, ProjectList: projectList},
+		},
+		Headings: []string{"id", "category", "score", "payload"},
+	}}})
+
+	require.Len(t, got, 4)
+	require.Equal(t, "source_db", got[0].DbName)
+	require.Equal(t, "source_table", got[0].TblName)
+	require.Equal(t, "source_table", got[0].OriginTblName)
+	require.Equal(t, "id", got[0].OriginName)
+	require.True(t, got[0].Primary)
+	require.True(t, got[0].NotNull)
+	require.True(t, got[0].Typ.NotNullable)
+	require.True(t, got[0].Typ.AutoIncr)
+
+	// The distance score is synthetic and must not inherit source metadata.
+	require.Empty(t, got[2].DbName)
+	require.Empty(t, got[2].TblName)
+	require.Empty(t, got[2].OriginTblName)
+	require.Empty(t, got[2].OriginName)
+	require.False(t, got[2].Primary)
+	require.False(t, got[2].Unique)
+
+	require.Equal(t, "category", got[1].OriginName)
+	require.Equal(t, "source_table", got[1].OriginTblName)
+	require.True(t, got[1].Unique)
+	require.True(t, got[1].NotNull)
+	require.False(t, got[3].Unique)
+	require.False(t, got[3].NotNull)
+	require.Equal(t, "payload", got[3].OriginName)
+}
+
+func TestGetResultColumnsFromPlanMapsPrunedVectorIndexSlotsByName(t *testing.T) {
+	sourceTable := &plan.TableDef{
+		Name:   "source_table",
+		DbName: "source_db",
+		Pkey:   &plan.PrimaryKeyDef{PkeyColName: "id"},
+		Cols: []*plan.ColDef{
+			{Name: "embedding", Typ: plan.Type{Id: int32(types.T_array_float32)}},
+			{Name: "payload", Typ: plan.Type{Id: int32(types.T_varchar)}},
+			{Name: "id", Primary: true, Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true}},
+			{Name: "category", NotNull: true, Typ: plan.Type{Id: int32(types.T_varchar)}},
+		},
+		Name2ColIndex: map[string]int32{"embedding": 0, "payload": 1, "id": 2, "category": 3},
+		Indexes:       []*plan.IndexDef{{Parts: []string{"category"}, Unique: true}},
+	}
+	vectorSpec := &plan.VectorIndexScan{
+		SourceTable:    &plan.ObjectRef{SchemaName: "source_db", ObjName: "source_table"},
+		SourceTableDef: sourceTable,
+		Index:          &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()},
+		IncludedColumns: []string{
+			"category",
+			"payload",
+		},
+	}
+	makePlan := func(vectorCols, resultCols []*plan.ColDef, headings []string) *plan.Plan {
+		projectList := make([]*plan.Expr, len(vectorCols))
+		for i, col := range vectorCols {
+			projectList[i] = &plan.Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: 0,
+					ColPos: int32(i),
+					Name:   col.Name,
+				}},
+			}
+		}
+		resultProjectList := make([]*plan.Expr, len(resultCols))
+		for i, col := range resultCols {
+			resultProjectList[i] = &plan.Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: 0,
+					ColPos: int32(i),
+					Name:   col.Name,
+				}},
+			}
+		}
+		return &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+			StmtType: plan.Query_SELECT,
+			Steps:    []int32{1},
+			Nodes: []*plan.Node{
+				{
+					NodeId:      0,
+					NodeType:    plan.Node_VECTOR_INDEX_SCAN,
+					TableDef:    &plan.TableDef{Cols: vectorCols},
+					ProjectList: projectList,
+					VectorIndexScan: &plan.VectorIndexScan{
+						SourceTable:     vectorSpec.SourceTable,
+						SourceTableDef:  vectorSpec.SourceTableDef,
+						Index:           vectorSpec.Index,
+						IncludedColumns: vectorSpec.IncludedColumns,
+					},
+				},
+				{NodeId: 1, NodeType: plan.Node_PROJECT, Children: []int32{0}, ProjectList: resultProjectList},
+			},
+			Headings: headings,
+		}}}
+	}
+
+	// Column pruning can leave score and an included column at local positions
+	// zero and one even though pkid was slot zero in the original schema.
+	prunedScoreAndInclude := makePlan(
+		[]*plan.ColDef{
+			{Name: "score", Typ: plan.Type{Id: int32(types.T_float64)}},
+			{Name: "__mo_index_include_category", Typ: sourceTable.Cols[3].Typ},
+		},
+		[]*plan.ColDef{
+			{Name: "score", Typ: plan.Type{Id: int32(types.T_float64)}},
+			{Name: "category", Typ: sourceTable.Cols[3].Typ},
+		},
+		[]string{"score", "category"},
+	)
+	got := GetResultColumnsFromPlan(prunedScoreAndInclude)
+	require.Len(t, got, 2)
+	require.Empty(t, got[0].OriginName)
+	require.Equal(t, "category", got[1].OriginName)
+	require.True(t, got[1].Unique)
+	require.True(t, got[1].NotNull)
+
+	// A different pruning pass can keep pkid and an included column while
+	// removing score; pkid must still resolve to the nonzero source position.
+	prunedPkAndInclude := makePlan(
+		[]*plan.ColDef{
+			{Name: "pkid", Typ: sourceTable.Cols[2].Typ},
+			{Name: "__mo_index_include_category", Typ: sourceTable.Cols[3].Typ},
+		},
+		[]*plan.ColDef{
+			{Name: "pkid", Typ: sourceTable.Cols[2].Typ},
+			{Name: "category", Typ: sourceTable.Cols[3].Typ},
+		},
+		[]string{"id", "category"},
+	)
+	got = GetResultColumnsFromPlan(prunedPkAndInclude)
+	require.Len(t, got, 2)
+	require.Equal(t, "id", got[0].OriginName)
+	require.True(t, got[0].Primary)
+	require.True(t, got[0].NotNull)
+	require.Equal(t, "category", got[1].OriginName)
+
+	// Sort nodes can expose a compact local output list while retaining the
+	// child scan's original source positions. The lineage walker must bridge
+	// that local position before resolving the vector slot by name. Keeping two
+	// included columns catches collisions where a local slot equals another
+	// child's source position.
+	sortPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Steps:    []int32{2},
+		Nodes: []*plan.Node{
+			{
+				NodeId: 0, NodeType: plan.Node_VECTOR_INDEX_SCAN,
+				TableDef: &plan.TableDef{Cols: []*plan.ColDef{
+					{Name: "pkid", Typ: sourceTable.Cols[2].Typ},
+					{Name: "score", Typ: plan.Type{Id: int32(types.T_float64)}},
+					{Name: "__mo_index_include_category", Typ: sourceTable.Cols[3].Typ},
+					{Name: "__mo_index_include_payload", Typ: sourceTable.Cols[1].Typ},
+				}},
+				ProjectList: []*plan.Expr{
+					{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0, Name: "pkid"}}},
+					{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 1, Name: "score"}}},
+					{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 2, Name: "__mo_index_include_category"}}},
+					{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 3, Name: "__mo_index_include_payload"}}},
+				},
+				VectorIndexScan: vectorSpec,
+			},
+			{NodeId: 1, NodeType: plan.Node_SORT, Children: []int32{0}, ProjectList: []*plan.Expr{
+				{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}}},
+				{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 2}}},
+				{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 3}}},
+			}},
+			{NodeId: 2, NodeType: plan.Node_PROJECT, Children: []int32{1}, ProjectList: []*plan.Expr{
+				{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}}},
+				{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 1}}},
+				{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 2}}},
+			}},
+		},
+		Headings: []string{"id", "category", "payload"},
+	}}}
+	got = GetResultColumnsFromPlan(sortPlan)
+	require.Len(t, got, 3)
+	require.Equal(t, "id", got[0].OriginName)
+	require.Equal(t, "category", got[1].OriginName)
+	require.Equal(t, "payload", got[2].OriginName)
+
+	// JOIN resolves its selected child slot before descending. That reference
+	// is already a source position, so a compact SORT child must not interpret
+	// it as a second local slot (SORT outputs [0, 2, 3] here).
+	joinTable := &plan.TableDef{
+		Name:   "join_table",
+		DbName: "source_db",
+		Pkey:   &plan.PrimaryKeyDef{PkeyColName: "id"},
+		Cols: []*plan.ColDef{
+			{Name: "id", Primary: true, Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true}},
+			{Name: "payload", Typ: plan.Type{Id: int32(types.T_varchar)}},
+			{Name: "category", NotNull: true, Typ: plan.Type{Id: int32(types.T_varchar)}},
+			{Name: "extra", Typ: plan.Type{Id: int32(types.T_int32)}},
+		},
+		Name2ColIndex: map[string]int32{"id": 0, "payload": 1, "category": 2, "extra": 3},
+		Indexes:       []*plan.IndexDef{{Parts: []string{"category"}, Unique: true}},
+	}
+	leftScanProjects := make([]*plan.Expr, len(joinTable.Cols))
+	for i, col := range joinTable.Cols {
+		leftScanProjects[i] = &plan.Expr{Typ: col.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			RelPos: 7, ColPos: int32(i), Name: col.Name,
+		}}}
+	}
+	rightScanProjects := []*plan.Expr{{Typ: joinTable.Cols[0].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+		RelPos: 8, ColPos: 0, Name: "id",
+	}}}}
+	joinPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Steps:    []int32{4},
+		Nodes: []*plan.Node{
+			{NodeId: 0, NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{7}, TableDef: joinTable, ProjectList: leftScanProjects},
+			{NodeId: 1, NodeType: plan.Node_SORT, Children: []int32{0}, ProjectList: []*plan.Expr{
+				{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 7, ColPos: 0}}},
+				{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 7, ColPos: 2}}},
+				{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 7, ColPos: 3}}},
+			}},
+			{NodeId: 2, NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{8}, TableDef: joinTable, ProjectList: rightScanProjects},
+			{NodeId: 3, NodeType: plan.Node_JOIN, Children: []int32{1, 2}, ProjectList: []*plan.Expr{
+				{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 1}}},
+			}},
+			{NodeId: 4, NodeType: plan.Node_PROJECT, Children: []int32{3}, ProjectList: []*plan.Expr{
+				{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 1}}},
+			}},
+		},
+		Headings: []string{"category"},
+	}}}
+	got = GetResultColumnsFromPlan(joinPlan)
+	require.Len(t, got, 1)
+	require.Equal(t, "category", got[0].OriginName)
+
+	// When a transparent node is itself the result step, its expressions are
+	// already source references. The entry point must not reinterpret ColPos as
+	// a local output index.
+	sortResultPlan := *sortPlan
+	sortResultQuery := *sortPlan.GetQuery()
+	sortResultQuery.Steps = []int32{1}
+	sortResultQuery.Headings = []string{"id", "category", "payload"}
+	sortResultPlan.Plan = &plan.Plan_Query{Query: &sortResultQuery}
+	got = GetResultColumnsFromPlan(&sortResultPlan)
+	require.Len(t, got, 3)
+	require.Equal(t, "id", got[0].OriginName)
+	require.Equal(t, "category", got[1].OriginName)
+	require.Equal(t, "payload", got[2].OriginName)
+}
+
+func TestGetResultColumnsFromPlanFailsClosedForInvalidVectorIndexSource(t *testing.T) {
+	tableDef := &plan.TableDef{
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"},
+		Cols: []*plan.ColDef{{Name: "id", Primary: true}, {Name: "category"}},
+	}
+	vectorScan := &plan.VectorIndexScan{
+		SourceTableDef:  tableDef,
+		Index:           &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()},
+		IncludedColumns: []string{"missing"},
+	}
+	// The vector scan node's synthetic result schema (as the ivfflat emitter always sets it):
+	// pkid, score, and an include column naming a source column that does not exist.
+	vectorTableDef := &plan.TableDef{Cols: []*plan.ColDef{
+		{Name: "pkid"},
+		{Name: "score"},
+		{Name: catalog.SystemSI_IVFFLAT_IncludeColPrefix + "missing"},
+	}}
+	projectList := []*plan.Expr{
+		{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}},
+		{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}}},
+		{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 2}}},
+		{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 4}}},
+	}
+
+	got := GetResultColumnsFromPlan(&plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Steps:    []int32{1},
+		Nodes: []*plan.Node{
+			{NodeId: 0, NodeType: plan.Node_VECTOR_INDEX_SCAN, TableDef: vectorTableDef, VectorIndexScan: vectorScan},
+			{NodeId: 1, NodeType: plan.Node_PROJECT, Children: []int32{0}, ProjectList: projectList},
+		},
+		Headings: []string{"id", "score", "missing", "invalid"},
+	}}})
+
+	require.Len(t, got, 4)
+	require.Equal(t, "id", got[0].OriginName) // pkid -> source primary key
+	require.Empty(t, got[1].OriginName)       // score -> no source column
+	require.Empty(t, got[2].OriginName)       // include names a column absent from the source
+	require.Empty(t, got[3].OriginName)       // ColPos out of the synthetic schema
+
+	// A vector spec without its source primary-key definition cannot safely
+	// claim key metadata from the synthetic pkid slot.
+	vectorScan.SourceTableDef.Pkey = nil
+	got = GetResultColumnsFromPlan(&plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Steps:    []int32{1},
+		Nodes: []*plan.Node{
+			{NodeId: 0, NodeType: plan.Node_VECTOR_INDEX_SCAN, TableDef: vectorTableDef, VectorIndexScan: vectorScan},
+			{NodeId: 1, NodeType: plan.Node_PROJECT, Children: []int32{0}, ProjectList: projectList},
+		},
+		Headings: []string{"id", "score", "missing", "invalid"},
+	}}})
+	require.Len(t, got, 4)
+	require.Empty(t, got[0].OriginName)
+}
+
+// TestResultColumnSourceFromVectorIndexScanFailsClosedForNonIvfflat pins #29212: the IVFFlat
+// synthetic-schema resolver (pkid/score/__mo_index_include_*) must only be applied to an IVFFlat
+// VECTOR_INDEX_SCAN. The same node resolves under the IVFFlat algo but yields no source metadata
+// for any other algo (or a missing Index), so a future non-IVFFlat VECTOR_INDEX_SCAN cannot inherit
+// IVFFlat's schema by accident. Guards the resolver relocated from build.go (PR #28833).
+func TestResultColumnSourceFromVectorIndexScanFailsClosedForNonIvfflat(t *testing.T) {
+	sourceTable := &plan.TableDef{
+		Name:          "source_table",
+		DbName:        "source_db",
+		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+		Cols:          []*plan.ColDef{{Name: "id", Primary: true}, {Name: "payload"}},
+		Name2ColIndex: map[string]int32{"id": 0, "payload": 1},
+	}
+	vectorTableDef := &plan.TableDef{Cols: []*plan.ColDef{{Name: "pkid"}, {Name: "score"}}}
+	sourceRef := &plan.ObjectRef{SchemaName: "source_db", ObjName: "source_table"}
+
+	// IVFFlat resolves the pkid slot to the source primary key.
+	ivf := &plan.VectorIndexScan{
+		SourceTable:    sourceRef,
+		SourceTableDef: sourceTable,
+		Index:          &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()},
+	}
+	got := resultColumnSourceFromVectorIndexScan(ivf, vectorTableDef, 0)
+	require.NotNil(t, got)
+	require.Equal(t, "id", got.columnName)
+	require.True(t, got.primary)
+
+	// A non-IVFFlat algorithm fails closed -- no source metadata.
+	nonIvf := &plan.VectorIndexScan{
+		SourceTable:    sourceRef,
+		SourceTableDef: sourceTable,
+		Index:          &plan.IndexDef{IndexAlgo: "hnsw"},
+	}
+	require.Nil(t, resultColumnSourceFromVectorIndexScan(nonIvf, vectorTableDef, 0))
+
+	// A missing Index also fails closed (GetIndexAlgo is nil-safe).
+	missingIndex := &plan.VectorIndexScan{SourceTable: sourceRef, SourceTableDef: sourceTable}
+	require.Nil(t, resultColumnSourceFromVectorIndexScan(missingIndex, vectorTableDef, 0))
+}
+
+// TestResultColumnSourceFromVectorIndexScanFailClosedBranches exercises every fail-closed
+// branch of the IVFFlat synthetic-schema resolver so a malformed/pruned VECTOR_INDEX_SCAN
+// can never mis-resolve a source column (#29212).
+func TestResultColumnSourceFromVectorIndexScanFailClosedBranches(t *testing.T) {
+	sourceTable := &plan.TableDef{
+		Name:          "source_table",
+		DbName:        "source_db",
+		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+		Cols:          []*plan.ColDef{{Name: "id", Primary: true}, {Name: "payload"}},
+		Name2ColIndex: map[string]int32{"id": 0, "payload": 1},
+	}
+	ivfIndex := &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()}
+	newScan := func() *plan.VectorIndexScan {
+		return &plan.VectorIndexScan{SourceTableDef: sourceTable, Index: ivfIndex}
+	}
+	includeCol := catalog.SystemSI_IVFFLAT_IncludeColPrefix + "payload"
+	vecCols := func(names ...string) *plan.TableDef {
+		cols := make([]*plan.ColDef, len(names))
+		for i, n := range names {
+			cols[i] = &plan.ColDef{Name: n}
+		}
+		return &plan.TableDef{Cols: cols}
+	}
+
+	// nil-guard branch (scan/SourceTableDef/vectorTableDef nil, negative colPos).
+	require.Nil(t, resultColumnSourceFromVectorIndexScan(nil, vecCols("pkid"), 0))
+	require.Nil(t, resultColumnSourceFromVectorIndexScan(&plan.VectorIndexScan{Index: ivfIndex}, vecCols("pkid"), 0))
+	require.Nil(t, resultColumnSourceFromVectorIndexScan(newScan(), nil, 0))
+	require.Nil(t, resultColumnSourceFromVectorIndexScan(newScan(), vecCols("pkid"), -1))
+
+	// colPos past the synthetic schema.
+	require.Nil(t, resultColumnSourceFromVectorIndexScan(newScan(), vecCols("pkid"), 5))
+
+	// nil column slot.
+	require.Nil(t, resultColumnSourceFromVectorIndexScan(newScan(), &plan.TableDef{Cols: []*plan.ColDef{nil}}, 0))
+
+	// score slot never maps to a source column.
+	require.Nil(t, resultColumnSourceFromVectorIndexScan(newScan(), vecCols("score"), 0))
+
+	// include prefix with an empty include name.
+	require.Nil(t, resultColumnSourceFromVectorIndexScan(newScan(), vecCols(catalog.SystemSI_IVFFLAT_IncludeColPrefix), 0))
+
+	// include name not listed in IncludedColumns.
+	require.Nil(t, resultColumnSourceFromVectorIndexScan(newScan(), vecCols(includeCol), 0))
+
+	// include name listed but absent from the source table.
+	missingScan := newScan()
+	missingScan.IncludedColumns = []string{"payload"}
+	missingScan.SourceTableDef = &plan.TableDef{
+		Name:          "source_table",
+		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+		Cols:          []*plan.ColDef{{Name: "id", Primary: true}},
+		Name2ColIndex: map[string]int32{"id": 0},
+	}
+	require.Nil(t, resultColumnSourceFromVectorIndexScan(missingScan, vecCols(includeCol), 0))
+
+	// unknown synthetic column name (default branch).
+	require.Nil(t, resultColumnSourceFromVectorIndexScan(newScan(), vecCols("mystery"), 0))
+
+	// pkid slot but the source primary key is unresolvable (position not found).
+	noPkScan := newScan()
+	noPkScan.SourceTableDef = &plan.TableDef{
+		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+		Cols:          []*plan.ColDef{{Name: "payload"}},
+		Name2ColIndex: map[string]int32{"payload": 0},
+	}
+	require.Nil(t, resultColumnSourceFromVectorIndexScan(noPkScan, vecCols("pkid"), 0))
+}
+
+// TestResultColumnSourceFromVectorIndexScanCompletesNamesFromObjectRef covers the ObjectRef
+// name-completion branch: when SourceTableDef leaves db/table names empty, the resolved source
+// is completed from the scan's authoritative ObjectRef (DbName, then SchemaName, then ObjName).
+func TestResultColumnSourceFromVectorIndexScanCompletesNamesFromObjectRef(t *testing.T) {
+	// SourceTableDef with no db/table names so the resolved source starts blank.
+	sourceTable := &plan.TableDef{
+		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+		Cols:          []*plan.ColDef{{Name: "id", Primary: true}},
+		Name2ColIndex: map[string]int32{"id": 0},
+	}
+	vectorTableDef := &plan.TableDef{Cols: []*plan.ColDef{{Name: "pkid"}}}
+
+	// DbName present on the ObjectRef fills the db name; ObjName fills the table name.
+	byDbName := &plan.VectorIndexScan{
+		SourceTable:    &plan.ObjectRef{DbName: "db1", ObjName: "tbl1"},
+		SourceTableDef: sourceTable,
+		Index:          &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()},
+	}
+	got := resultColumnSourceFromVectorIndexScan(byDbName, vectorTableDef, 0)
+	require.NotNil(t, got)
+	require.Equal(t, "db1", got.dbName)
+	require.Equal(t, "tbl1", got.tableName)
+
+	// With an empty DbName the SchemaName is used as the fallback.
+	bySchema := &plan.VectorIndexScan{
+		SourceTable:    &plan.ObjectRef{SchemaName: "schema1", ObjName: "tbl2"},
+		SourceTableDef: sourceTable,
+		Index:          &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()},
+	}
+	got = resultColumnSourceFromVectorIndexScan(bySchema, vectorTableDef, 0)
+	require.NotNil(t, got)
+	require.Equal(t, "schema1", got.dbName)
+	require.Equal(t, "tbl2", got.tableName)
+}
+
+// TestResultColumnPositionByNameGuards covers the nil/empty guards of the by-name lookup helper.
+func TestResultColumnPositionByNameGuards(t *testing.T) {
+	pos, ok := resultColumnPositionByName(nil, "id")
+	require.False(t, ok)
+	require.Equal(t, int32(-1), pos)
+
+	pos, ok = resultColumnPositionByName(&plan.TableDef{}, "")
+	require.False(t, ok)
+	require.Equal(t, int32(-1), pos)
+}
+
+// TestResultColumnPrimaryKeyPositionUnresolvable covers the branch where the declared primary
+// key column name is not present among the table columns.
+func TestResultColumnPrimaryKeyPositionUnresolvable(t *testing.T) {
+	require.Equal(t, int32(-1), resultColumnPrimaryKeyPosition(&plan.TableDef{
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"},
+		Cols: []*plan.ColDef{{Name: "payload"}},
+	}))
 }

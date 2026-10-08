@@ -70,6 +70,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minusall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mongoscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
@@ -178,6 +179,8 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.NeedAllocateSels = t.NeedAllocateSels
 		op.IsShuffle = t.IsShuffle
 		op.Conditions = t.Conditions
+		op.OwnsConstantFilterDiagnostics = t.OwnsConstantFilterDiagnostics
+		op.JoinDiagnostic = t.JoinDiagnostic
 		op.JoinMapTag = t.JoinMapTag
 		op.JoinMapRefCnt = t.JoinMapRefCnt
 		if t.IsShuffle && t.ShuffleIdx == -1 {
@@ -222,6 +225,8 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.JoinType = t.JoinType
 		op.IsRightJoin = t.IsRightJoin
 		op.NonEqCond = t.NonEqCond
+		op.OwnsConstantFilterDiagnostics = t.OwnsConstantFilterDiagnostics
+		op.JoinDiagnostic = t.JoinDiagnostic
 		op.ResultCols = t.ResultCols
 		op.LeftTypes = t.LeftTypes
 		op.RightTypes = t.RightTypes
@@ -258,6 +263,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.LeftTypes = t.LeftTypes
 		op.RightTypes = t.RightTypes
 		op.NonEqCond = t.NonEqCond
+		op.OwnsConstantFilterDiagnostics = t.OwnsConstantFilterDiagnostics
 		op.JoinMapTag = t.JoinMapTag
 		op.JoinType = t.JoinType
 		op.MarkPos = t.MarkPos
@@ -325,6 +331,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.FilterExprs = t.FilterExprs
 		op.RuntimeFilterExprs = t.RuntimeFilterExprs
 		op.IsAssert = t.IsAssert
+		op.OwnsConstantCastWarnings = t.OwnsConstantCastWarnings
 		op.SetInfo(&info)
 		return op
 	case vm.Top:
@@ -384,6 +391,12 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 	case vm.Minus: // 2
 		t := sourceOp.(*minus.Minus)
 		op := minus.NewArgument()
+		op.KeyExprs = t.KeyExprs
+		op.SetInfo(&info)
+		return op
+	case vm.MinusAll:
+		t := sourceOp.(*minusall.MinusAll)
+		op := minusall.NewArgument()
 		op.KeyExprs = t.KeyExprs
 		op.SetInfo(&info)
 		return op
@@ -622,6 +635,14 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		t := sourceOp.(*value_scan.ValueScan)
 		op := value_scan.NewArgument()
 		op.ProjectList = t.ProjectList
+		op.SetInfo(&info)
+		return op
+	case vm.UnionAll:
+		t := sourceOp.(*unionall.UnionAll)
+		if t.SequentialBranches != 0 {
+			panic("cannot duplicate a sequential UNION ALL scheduler")
+		}
+		op := unionall.NewArgument()
 		op.SetInfo(&info)
 		return op
 	case vm.Apply:
@@ -905,7 +926,10 @@ func constructPreInsert(nodes []*plan.Node, node *plan.Node, eng engine.Engine, 
 	op.Attrs = attrs
 	op.IsOldUpdate = preCtx.IsOldUpdate
 	op.IsNewUpdate = preCtx.IsNewUpdate
-	op.EstimatedRowCount = int64(nodes[node.Children[0]].Stats.Outcnt)
+	op.EstimatedRowCount = 0
+	if preCtx.HasAutoCol && nodes[node.Children[0]].Stats != nil {
+		op.EstimatedRowCount = plan2.EstimatedRowsInt64(nodes[node.Children[0]].Stats.Outcnt)
+	}
 	op.CompPkeyExpr = preCtx.CompPkeyExpr
 	op.ClusterByExpr = preCtx.ClusterByExpr
 	op.ColOffset = preCtx.ColOffset
@@ -1538,6 +1562,10 @@ func constructHashJoin(node, left *plan.Node, left_types, right_types []types.Ty
 	arg.RightTypes = right_types
 	arg.ResultCols = result
 	arg.NonEqCond = nonEqCond
+	arg.OwnsConstantFilterDiagnostics = containsStatementInvariantDiagnosticInList(proc, node.OnList)
+	if arg.OwnsConstantFilterDiagnostics {
+		arg.JoinDiagnostic = new(colexec.DeferredJoinDiagnostic)
+	}
 	arg.EqConds = constructJoinConditions(eqConds, proc)
 	arg.RuntimeFilterSpecs = node.RuntimeFilterBuildList
 	arg.HashOnPK = node.Stats.HashmapStats != nil && node.Stats.HashmapStats.HashOnPK
@@ -1791,8 +1819,8 @@ func constructTimeWindow(_ context.Context, node *plan.Node, proc *process.Proce
 		aggregationExpressions = append(
 			aggregationExpressions,
 			aggexec.MakeAggFunctionExpression(functionID, isDistinct, args, cfg))
-		typs = append(typs, types.NewWithCharset(
-			types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale, uint8(e.Typ.Charset),
+		typs = append(typs, types.MustTypeFromPlan(
+			e.Typ,
 		))
 	}
 	wStart := layout.WStartSlot != plan2.TimeWindowSlotNone
@@ -1911,8 +1939,8 @@ func constructGroup(_ context.Context, node, childNode *plan.Node, needEval bool
 
 	typs := make([]types.Type, len(childNode.ProjectList))
 	for i, e := range childNode.ProjectList {
-		typs[i] = types.NewWithCharset(
-			types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale, uint8(e.Typ.Charset),
+		typs[i] = types.MustTypeFromPlan(
+			e.Typ,
 		)
 	}
 
@@ -2171,6 +2199,9 @@ func evaluateAggregateConfigString(proc *process.Process, expr *plan.Expr) (stri
 		return "", err
 	}
 	defer free()
+	if vec.Length() == 0 || vec.IsConstNull() || vec.IsNull(0) {
+		return "", nil
+	}
 	return vec.GetStringAt(0), nil
 }
 
@@ -2308,9 +2339,9 @@ func constructShuffleOperatorForJoin(bucketNum int32, node *plan.Node, left bool
 	arg.StringHashKey = isStringShuffleKeyType(typ)
 	switch types.T(typ) {
 	case types.T_int64, types.T_int32, types.T_int16:
-		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
+		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, plan2.EstimatedRowsInt64(node.Stats.TableCnt))
 	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit, types.T_datalink:
-		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
+		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, plan2.EstimatedRowsInt64(node.Stats.TableCnt))
 	}
 	if left && len(node.RuntimeFilterProbeList) > 0 {
 		arg.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(node.RuntimeFilterProbeList[0])
@@ -2334,9 +2365,9 @@ func constructShuffleArgForGroup(bucketNum int32, node *plan.Node) *shuffle.Shuf
 	arg.StringHashKey = isStringShuffleKeyType(typ)
 	switch types.T(typ) {
 	case types.T_int64, types.T_int32, types.T_int16:
-		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
+		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, plan2.EstimatedRowsInt64(node.Stats.TableCnt))
 	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit, types.T_datalink:
-		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
+		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, plan2.EstimatedRowsInt64(node.Stats.TableCnt))
 	}
 	return arg
 }
@@ -2416,8 +2447,8 @@ func constructMergeGroup(
 	if arg.EmptyGroupingSet || len(arg.EmptyGroupingSetIDs) > 0 {
 		arg.GroupByTypes = make([]types.Type, len(node.GroupBy))
 		for i, expr := range node.GroupBy {
-			arg.GroupByTypes[i] = types.NewWithCharset(
-				types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale, uint8(expr.Typ.Charset))
+			arg.GroupByTypes[i] = types.MustTypeFromPlan(
+				expr.Typ)
 		}
 	}
 	return arg
@@ -2493,6 +2524,7 @@ func constructLoopJoin(node *plan.Node, leftTypes, rightTypes []types.Type, proc
 	arg.LeftTypes = leftTypes
 	arg.RightTypes = rightTypes
 	arg.NonEqCond = colexec.RewriteFilterExprList(node.OnList)
+	arg.OwnsConstantFilterDiagnostics = containsStatementInvariantDiagnosticInList(proc, node.OnList)
 	arg.JoinType = node.JoinType
 	for i := range node.SendMsgList {
 		if node.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
@@ -2574,6 +2606,8 @@ func constructBroadcastHashBuild(op vm.Operator, proc *process.Process, mcpu int
 			buildConditions = arg.EqConds[0]
 		}
 		ret.Conditions = rewriteJoinExprToHashBuildExpr(buildConditions)
+		ret.OwnsConstantFilterDiagnostics = arg.JoinDiagnostic != nil
+		ret.JoinDiagnostic = arg.JoinDiagnostic
 
 		ret.NeedBatches = arg.NeedBuildBatches()
 

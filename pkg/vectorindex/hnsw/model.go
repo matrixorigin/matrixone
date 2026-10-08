@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	vimemory "github.com/matrixorigin/matrixone/pkg/vectorindex/memory"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	usearch "github.com/unum-cloud/usearch/golang"
 )
@@ -997,5 +998,12 @@ func (idx *HnswModel[T]) Search(query []T, limit uint) (keys []usearch.Key, dist
 	}
 
 	defer runtime.KeepAlive(query)
-	return idx.Index.SearchUnsafe(util.UnsafePointer(&query[0]), limit)
+	keys, distances, serr := idx.Index.SearchUnsafe(util.UnsafePointer(&query[0]), limit)
+	if serr != nil {
+		return nil, nil, serr
+	}
+	if err := metric.CheckFiniteDists(distances, "vector index search"); err != nil {
+		return nil, nil, err
+	}
+	return keys, distances, nil
 }

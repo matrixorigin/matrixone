@@ -29,7 +29,7 @@ Consult the referenced material before acting:
 |------|------|--------|
 | **G-MODIFY** | Before editing any `colexec` operator or `process` signal type | Read [operator-pipeline.md](references/operator-pipeline.md). |
 | **G-CGO-ERR** | Any build/test returns module/vendor, header, link, `dyld`, or shared-library errors | Read [cgo-build-test.md](references/cgo-build-test.md) and identify the failing layer before changing code. |
-| **G-GPU** | Before a GPU build/test (`MO_CL_CUDA=1`), or on CUDA/cuVS errors (`CONDA_PREFIX`, `nvcc`, `-lcuvs`/`-lcudart`, `unsupported index type: ivfpq\|cagra`) | Read [cgo-build-test.md](references/cgo-build-test.md) section 6. |
+| **G-GPU** | Before a GPU build/test (`MO_CL_CUDA=1`), or on CUDA/cuVS errors (missing Pixi activation, `gmake` jobserver, `nvcc`, `-lcuvs`/`-lcudart`, `unsupported index type: ivfpq\|cagra`) | Read [cgo-build-test.md](references/cgo-build-test.md) section 6. |
 | **G-IDXPLUGIN** | Before adding/editing an index-algorithm plugin, OR adding any `switch`/`if` on an index **algo** name in `pkg/sql/{compile,plan}` or `pkg/catalog` | Read [index-plugin.md](references/index-plugin.md). Route through `pkg/indexplugin`; new algo switches are forbidden. |
 | **G-IDXREVIEW** | Reviewing a diff that touches index-algorithm dispatch, `pkg/vectorindex/<algo>/plugin/`, `pkg/fulltext/plugin`, or `pkg/indexplugin` | Read [index-plugin.md](references/index-plugin.md) section 9 and run its greps. |
 | **G-DONE** | Before declaring "done"/"complete"/"passes" | Apply the completion gate below. |
@@ -100,10 +100,14 @@ CUDA/cuvs link flags and implies `-tags gpu`. It is required both for gpu-tagged
 packages AND for any package once `cgo/libmo.so` has been built with CUDA, since
 a CUDA libmo carries undefined `cu*` symbols that every test binary linking it
 must resolve. The wrapper detects that libmo and says so rather than letting the
-linker emit a page of `undefined reference to cuInit`:
+linker emit a page of `undefined reference to cuInit`. GPU runs need the Pixi
+environment from `optools/gpu` (`pixi run --frozen`, or a shell activated with
+`pixi shell-hook`; see [cgo-build-test.md](references/cgo-build-test.md) section 6):
 
 ```bash
-MO_CL_CUDA=1 .agents/skills/mo-dev/scripts/mo-cgo-test -count=1 -timeout=300s ./pkg/vectorindex/metric/
+cd optools/gpu
+pixi run --frozen env MO_CL_CUDA=1 \
+  ../../.agents/skills/mo-dev/scripts/mo-cgo-test -count=1 -timeout=300s ./pkg/vectorindex/metric/
 ```
 
 Rule: "`go build` passes" does not mean "`go test` will pass." Test binaries link more CGo.

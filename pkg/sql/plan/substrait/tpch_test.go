@@ -30,7 +30,7 @@ import (
 )
 
 func TestExportCanonicalTPCHPlans(t *testing.T) {
-	mock := planbuilder.NewMockOptimizer(false)
+	mock := planbuilder.NewMockOptimizer(false, newPlanTestProcess(t))
 	// Exact DECIMAL arithmetic and SUM widening make these plans contain
 	// Decimal256 expressions. Substrait decimal is capped at precision 38, so
 	// declining Sirius offload preserves MatrixOne's wider arithmetic semantics.
@@ -87,6 +87,48 @@ func TestExportCanonicalTPCHPlans(t *testing.T) {
 			require.NoError(t, proto.Unmarshal(wirePlan, plan))
 			require.Len(t, plan.Relations, len(query.Steps))
 			require.Equal(t, query.Headings, plan.Relations[len(plan.Relations)-1].GetRoot().Names)
+		})
+	}
+}
+
+func TestExportExtractSemanticBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		expression string
+		eligible   bool
+	}{
+		{"extract(year from l_shipdate)", true},
+		{"extract(month from l_shipdate)", true},
+		{"extract(day from l_shipdate)", true},
+		{"extract(quarter from l_shipdate)", true},
+		{"extract(week from l_shipdate)", false}, // MO mode 0, backend ISO
+		{"extract(year_month from l_shipdate)", false},
+		{"extract(year from l_comment)", false}, // tolerant text vs no overload
+		{"extract(week from l_comment)", false},
+	} {
+		t.Run(tc.expression, func(t *testing.T) {
+			mock := planbuilder.NewMockOptimizer(false, newPlanTestProcess(t))
+			statements, err := parsers.Parse(t.Context(), dialect.MYSQL,
+				"select "+tc.expression+" from lineitem", 1)
+			require.NoError(t, err)
+			defer statements[0].Free()
+			query, err := mock.Optimize(statements[0])
+			require.NoError(t, err)
+			for _, node := range query.Nodes {
+				if node != nil && node.TableDef != nil && node.ObjRef != nil {
+					node.TableDef.DbId, node.TableDef.TblId, node.ObjRef.Obj = 7, 42, 42
+				}
+			}
+			candidate, err := Export(query)
+			if tc.eligible {
+				require.NoError(t, err)
+				require.NotNil(t, candidate)
+			} else {
+				require.Nil(t, candidate)
+				require.True(t, IsNotEligible(err), "%v", err)
+				reason, ok := NotEligibleReason(err)
+				require.True(t, ok)
+				require.Equal(t, EligibilityExpression, reason)
+			}
 		})
 	}
 }

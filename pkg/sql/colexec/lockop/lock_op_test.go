@@ -69,7 +69,17 @@ var (
 	sid = ""
 )
 
+func TestWriterFairLockRequestContext(t *testing.T) {
+	require.False(t, isWriterFairLockRequest(context.Background()))
+	require.True(t, isWriterFairLockRequest(
+		defines.AttachLockWriterFair(context.Background())))
+}
+
 type immediateLockTimestampWaiter struct{}
+
+type failAfterInitialTimestampWaiter struct {
+	calls int
+}
 
 type lockServiceConfigOverride struct {
 	lockservice.LockService
@@ -90,6 +100,23 @@ func (immediateLockTimestampWaiter) GetTimestamp(
 func (immediateLockTimestampWaiter) NotifyLatestCommitTS(timestamp.Timestamp) {}
 func (immediateLockTimestampWaiter) Close()                                   {}
 func (immediateLockTimestampWaiter) LatestTS() timestamp.Timestamp {
+	return timestamp.Timestamp{}
+}
+
+func (w *failAfterInitialTimestampWaiter) GetTimestamp(
+	_ context.Context,
+	ts timestamp.Timestamp,
+) (timestamp.Timestamp, error) {
+	w.calls++
+	if w.calls > 1 {
+		return timestamp.Timestamp{}, assert.AnError
+	}
+	return ts.Next(), nil
+}
+
+func (*failAfterInitialTimestampWaiter) NotifyLatestCommitTS(timestamp.Timestamp) {}
+func (*failAfterInitialTimestampWaiter) Close()                                   {}
+func (*failAfterInitialTimestampWaiter) LatestTS() timestamp.Timestamp {
 	return timestamp.Timestamp{}
 }
 
@@ -285,24 +312,259 @@ func TestLockOpHelpers(t *testing.T) {
 		WithLockSharding(lock.Sharding_ByRow).
 		WithLockGroup(7).
 		WithLockMode(lock.LockMode_Shared).
-		WithLockTable(true, true)
+		WithLockTable(true, true).
+		WithTableSnapshotRefresh(true)
 	require.Equal(t, lock.Sharding_ByRow, opts.sharding)
 	require.Equal(t, uint32(7), opts.group)
 	require.Equal(t, lock.LockMode_Shared, opts.mode)
 	require.True(t, opts.lockTable)
 	require.True(t, opts.changeDef)
+	require.True(t, opts.refreshTableSnapshot)
 }
 
-func TestLockTableRefreshPolicy(t *testing.T) {
+func TestLockRefreshPolicy(t *testing.T) {
 	refreshTS := timestamp.Timestamp{PhysicalTime: 1}
-	require.NoError(t, lockTableRefreshError(false, timestamp.Timestamp{}, true))
-	require.ErrorIs(t, lockTableRefreshError(false, refreshTS, true), retryError)
-	require.NoError(t, lockTableRefreshError(false, refreshTS, false),
+	require.NoError(t, lockRefreshError(false, timestamp.Timestamp{}, true))
+	require.ErrorIs(t, lockRefreshError(false, refreshTS, true), retryError)
+	require.NoError(t, lockRefreshError(false, refreshTS, false),
 		"a stronger caller-owned barrier will install the refreshed snapshot")
 	require.ErrorIs(t,
-		lockTableRefreshError(true, refreshTS, false),
+		lockRefreshError(true, refreshTS, false),
 		retryWithDefChangedError,
 		"a freshness barrier cannot validate a stale logical definition")
+}
+
+func TestLockRowsForSnapshotRefresh(t *testing.T) {
+	tests := []struct {
+		name       string
+		preRead    bool
+		defChanged bool
+		useSI      bool
+		scanErr    error
+		waiter     func() client.TimestampWaiter
+		wantErr    error
+		advance    bool
+	}{
+		{name: "ordinary row lock retries", wantErr: retryError, advance: true},
+		{name: "pre-read row lock accepts refresh", preRead: true, advance: true},
+		{name: "definition change still retries", preRead: true, defChanged: true,
+			wantErr: retryWithDefChangedError, advance: true},
+		{name: "lower-layer retry propagates", preRead: true, scanErr: retryError,
+			wantErr: retryError},
+		{name: "SI conflict propagates", preRead: true, useSI: true},
+		{name: "logtail wait failure propagates", preRead: true,
+			waiter:  func() client.TimestampWaiter { return &failAfterInitialTimestampWaiter{} },
+			wantErr: assert.AnError},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			waiter := client.TimestampWaiter(immediateLockTimestampWaiter{})
+			if tt.waiter != nil {
+				waiter = tt.waiter()
+			}
+			runLockOpTest(t, func(proc *process.Process) {
+				if tt.useSI {
+					proc.GetTxnOperator().TxnRef().Isolation = txnpb.TxnIsolation_SI
+				}
+				ctrl := gomock.NewController(t)
+				rel := mock_frontend.NewMockRelation(ctrl)
+				rel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{DbName: "db"})
+				rel.EXPECT().GetTableName().Return("gate")
+				if !tt.defChanged && !tt.useSI && tt.waiter == nil {
+					rel.EXPECT().PrimaryKeysMayBeModified(gomock.Any(), gomock.Any(), gomock.Any(),
+						gomock.Any(), int32(0), int32(-1)).Return(true, tt.scanErr)
+				}
+
+				runtime.SetupServiceRuntimeTestingContext(proc.GetService())
+				testingContext := runtime.MustGetTestingContext(proc.GetService())
+				testingContext.SetBeforeLockFunc(func(_ []byte, _ uint64) {})
+				defer testingContext.SetBeforeLockFunc(nil)
+				snapshot := proc.GetTxnOperator().Txn().SnapshotTS
+				commitTS := snapshot.Next()
+				testingContext.SetAdjustLockResultFunc(func(_ []byte, _ uint64, result *lock.Result) {
+					result.NewLockAdd = true
+					result.HasConflict = tt.useSI
+					result.HasPrevCommit = tt.useSI
+					result.Timestamp = commitTS
+					if tt.defChanged {
+						result.TableDefChangedAt = &commitTS
+					}
+				})
+				defer testingContext.SetAdjustLockResultFunc(nil)
+
+				bat := batch.NewWithSize(1)
+				bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+				require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(1), false, proc.Mp()))
+				bat.SetRowCount(1)
+				defer bat.Clean(proc.Mp())
+
+				lockFn := LockRows
+				if tt.preRead {
+					lockFn = LockRowsForSnapshotRefresh
+				}
+				err := lockFn(nil, proc, rel, 1, bat, 0, types.T_int32.ToType(),
+					lock.LockMode_Shared, lock.Sharding_None, 0)
+				if tt.useSI {
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict), "%v", err)
+				} else if tt.wantErr == nil {
+					require.NoError(t, err)
+				} else {
+					require.ErrorIs(t, err, tt.wantErr)
+				}
+				require.True(t, proc.GetTxnOperator().HasLockTable(1))
+				if tt.advance {
+					require.False(t, proc.GetTxnOperator().Txn().SnapshotTS.Less(commitTS))
+				} else {
+					require.Equal(t, snapshot, proc.GetTxnOperator().Txn().SnapshotTS)
+				}
+			}, client.WithTimestampWaiter(waiter))
+		})
+	}
+}
+
+func TestLockTableRefreshesForNewerWholeTableCommit(t *testing.T) {
+	tests := []struct {
+		name            string
+		commitTS        func(timestamp.Timestamp) timestamp.Timestamp
+		waiter          func() client.TimestampWaiter
+		snapshotRefresh bool
+		useSI           bool
+		wantAdvance     bool
+		wantWWConflict  bool
+		wantErr         error
+	}{
+		{
+			name: "newer commit",
+			commitTS: func(snapshot timestamp.Timestamp) timestamp.Timestamp {
+				return snapshot.Next()
+			},
+			waiter: func() client.TimestampWaiter {
+				return immediateLockTimestampWaiter{}
+			},
+			snapshotRefresh: true,
+			wantAdvance:     true,
+		},
+		{
+			name: "commit visible at snapshot",
+			commitTS: func(snapshot timestamp.Timestamp) timestamp.Timestamp {
+				return snapshot
+			},
+			waiter: func() client.TimestampWaiter {
+				return immediateLockTimestampWaiter{}
+			},
+			snapshotRefresh: true,
+		},
+		{
+			name: "SI rejects a newer whole-table commit",
+			commitTS: func(snapshot timestamp.Timestamp) timestamp.Timestamp {
+				return snapshot.Next()
+			},
+			waiter:          func() client.TimestampWaiter { return immediateLockTimestampWaiter{} },
+			snapshotRefresh: true,
+			useSI:           true,
+			wantWWConflict:  true,
+		},
+		{
+			name: "SI accepts a commit already visible at snapshot",
+			commitTS: func(snapshot timestamp.Timestamp) timestamp.Timestamp {
+				return snapshot
+			},
+			waiter:          func() client.TimestampWaiter { return immediateLockTimestampWaiter{} },
+			snapshotRefresh: true,
+			useSI:           true,
+		},
+		{
+			name: "SI accepts an older whole-table commit",
+			commitTS: func(snapshot timestamp.Timestamp) timestamp.Timestamp {
+				return snapshot.Prev()
+			},
+			waiter:          func() client.TimestampWaiter { return immediateLockTimestampWaiter{} },
+			snapshotRefresh: true,
+			useSI:           true,
+		},
+		{
+			name: "logtail wait failure",
+			commitTS: func(snapshot timestamp.Timestamp) timestamp.Timestamp {
+				return snapshot.Next()
+			},
+			waiter: func() client.TimestampWaiter {
+				return &failAfterInitialTimestampWaiter{}
+			},
+			snapshotRefresh: true,
+			wantErr:         assert.AnError,
+		},
+		{
+			name: "ordinary table lock preserves snapshot",
+			commitTS: func(snapshot timestamp.Timestamp) timestamp.Timestamp {
+				return snapshot.Next()
+			},
+			waiter: func() client.TimestampWaiter {
+				return immediateLockTimestampWaiter{}
+			},
+		},
+		{
+			name: "ordinary SI table lock preserves policy",
+			commitTS: func(snapshot timestamp.Timestamp) timestamp.Timestamp {
+				return snapshot.Next()
+			},
+			waiter: func() client.TimestampWaiter { return immediateLockTimestampWaiter{} },
+			useSI:  true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runLockOpTest(
+				t,
+				func(proc *process.Process) {
+					if test.useSI {
+						proc.GetTxnOperator().TxnRef().Isolation = txnpb.TxnIsolation_SI
+					}
+					runtime.SetupServiceRuntimeTestingContext(proc.GetService())
+					testingContext := runtime.MustGetTestingContext(proc.GetService())
+					testingContext.SetBeforeLockFunc(func(_ []byte, _ uint64) {})
+					defer testingContext.SetBeforeLockFunc(nil)
+
+					snapshot := proc.GetTxnOperator().Txn().SnapshotTS
+					commitTS := test.commitTS(snapshot)
+					testingContext.SetAdjustLockResultFunc(func(
+						_ []byte,
+						_ uint64,
+						result *lock.Result,
+					) {
+						result.NewLockAdd = true
+						result.HasConflict = false
+						result.Timestamp = commitTS
+					})
+					defer testingContext.SetAdjustLockResultFunc(nil)
+
+					var err error
+					if test.snapshotRefresh {
+						err = LockTableForSnapshotRefreshWithContext(
+							proc.Ctx, nil, proc, 1, types.T_int32.ToType(), lock.LockMode_Exclusive, false)
+					} else {
+						err = LockTable(nil, proc, 1, types.T_int32.ToType(), false)
+					}
+					if test.wantErr != nil {
+						require.ErrorIs(t, err, test.wantErr)
+						return
+					}
+					if test.wantWWConflict {
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict), "%v", err)
+						require.Equal(t, snapshot, proc.GetTxnOperator().Txn().SnapshotTS)
+						return
+					}
+					require.NoError(t, err)
+					if test.wantAdvance {
+						require.False(t, proc.GetTxnOperator().Txn().SnapshotTS.Less(commitTS))
+					} else {
+						require.True(t, proc.GetTxnOperator().Txn().SnapshotTS.LessEq(snapshot))
+					}
+				},
+				client.WithTimestampWaiter(test.waiter()),
+			)
+		})
+	}
 }
 
 func TestRefreshLockWaitOptionsUsesRemainingDeadline(t *testing.T) {
@@ -777,6 +1039,46 @@ func TestLockWithRetryDoesNotRetryBackendErrorWhenLockTableAlreadyHeld(t *testin
 	)
 	require.ErrorIs(t, err, expectedErr)
 	require.Less(t, time.Since(start), defaultWaitTimeOnRetryLock)
+}
+
+// A stale admission can be retried, but the next request may discover that
+// this CN is already draining. That terminal rejection must not loop.
+func TestLockWithRetryStopsAfterBindChangedThenDrainRejection(t *testing.T) {
+	forceLockRetryMemoryPressure(t, lockRetryMemoryPressureNormal)
+	ctrl := gomock.NewController(t)
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	expected := moerr.NewNewTxnInCNRollingRestart()
+	gomock.InOrder(
+		lockSvc.EXPECT().Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), lock.LockOptions{}).
+			Return(lock.Result{}, moerr.NewLockTableBindChangedNoCtx()),
+		txnOp.EXPECT().HasLockTable(uint64(1)).Return(false),
+		lockSvc.EXPECT().Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), lock.LockOptions{}).
+			Return(lock.Result{}, expected),
+	)
+	_, err := lockWithRetry(ctx, lockSvc, 1, nil, []byte("txn1"), lock.LockOptions{},
+		txnOp, nil, nil, LockOptions{}, types.Type{})
+	require.ErrorIs(t, err, expected)
+}
+
+func TestLockWithRetryBindChangeHonorsCancellation(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	expected := moerr.NewLockTableBindChangedNoCtx()
+	lockSvc.EXPECT().Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), lock.LockOptions{}).
+		DoAndReturn(func(context.Context, uint64, [][]byte, []byte, lock.LockOptions) (lock.Result, error) {
+			cancel()
+			return lock.Result{}, expected
+		}).Times(1)
+	_, err := lockWithRetry(ctx, lockSvc, 1, nil, []byte("txn1"), lock.LockOptions{},
+		txnOp, nil, nil, LockOptions{}, types.Type{})
+	// Bounded retry preserves the bind failure for the existing txn rollback path.
+	require.ErrorIs(t, err, expected)
 }
 
 func TestLockWithRetryRetriesBindChangedInExplicitUserTxnBeforeLockHeld(t *testing.T) {

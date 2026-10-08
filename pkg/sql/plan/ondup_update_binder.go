@@ -292,7 +292,10 @@ func (b *OndupUpdateBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool
 }
 
 func (b *OndupUpdateBinder) BindAssignmentExpr(astExpr tree.Expr, target Type) (*plan.Expr, error) {
-	if !isNumericAssignmentTarget(target) {
+	if !useNumericAssignmentContext(target, b.builder.isInsertIgnore) {
+		return b.BindExpr(astExpr, 0, true)
+	}
+	if isPreparedAssignmentParam(b.builder, astExpr) {
 		return b.BindExpr(astExpr, 0, true)
 	}
 	if subquery, ok := scalarSubqueryExpr(astExpr); ok && !subquery.Exists {

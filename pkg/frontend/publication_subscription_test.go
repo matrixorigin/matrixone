@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -47,6 +48,54 @@ func TestIsUserDatabaseType(t *testing.T) {
 	}
 	require.False(t, isUserDatabaseType(catalog.SystemDBTypeDataBranch, defines.MORPCVersion74))
 	require.True(t, isUserDatabaseType(catalog.SystemDBTypeDataBranch, defines.MORPCVersion75))
+}
+
+func TestPublicationMutationUsesLifecycleOwnerTxn(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		run  func(context.Context, *Session) error
+	}{
+		{
+			name: "alter",
+			run: func(ctx context.Context, ses *Session) error {
+				return doAlterPublication(ctx, ses, &tree.AlterPublication{})
+			},
+		},
+		{
+			name: "drop",
+			run: func(ctx context.Context, ses *Session) error {
+				return doDropPublication(ctx, ses, &tree.DropPublication{})
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			ctx := context.Background()
+			ses := newTestSession(t, ctrl)
+			defer ses.Close()
+			ses.SetTenantInfo(&TenantInfo{
+				Tenant:      sysAccountName,
+				DefaultRole: moAdminRoleName,
+			})
+			bh := &backgroundExecTest{}
+			bh.init()
+			beginErr := errors.New("begin failed")
+			bh.sql2err["begin;"] = beginErr
+			oldNewBackgroundExec := NewBackgroundExec
+			defer func() { NewBackgroundExec = oldNewBackgroundExec }()
+			forcedPessimisticRC := false
+			NewBackgroundExec = func(_ context.Context, _ FeSession, opts ...*BackgroundExecOption) BackgroundExec {
+				for _, opt := range opts {
+					forcedPessimisticRC = forcedPessimisticRC || opt != nil && opt.forcePessimisticRC
+				}
+				return bh
+			}
+
+			err := testCase.run(ctx, ses)
+			require.ErrorIs(t, err, beginErr)
+			require.True(t, forcedPessimisticRC)
+		})
+	}
 }
 
 func Test_doCreatePublication(t *testing.T) {
@@ -90,6 +139,8 @@ func Test_doCreatePublication(t *testing.T) {
 	}
 
 	convey.Convey("check create publication", t, func() {
+		lockStub := gostub.StubFunc(&lockPublicationDatabase, catalog.SystemDBTypeDataBranch, nil)
+		defer lockStub.Reset()
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -293,6 +344,8 @@ func Test_doAlterPublication(t *testing.T) {
 	}
 
 	convey.Convey("check alter publication", t, func() {
+		lockStub := gostub.StubFunc(&lockPublicationDatabase, catalog.SystemDBTypeDataBranch, nil)
+		defer lockStub.Reset()
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -540,6 +593,8 @@ func TestDoAlterPublicationDataBranchIdentityCapability(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			lockStub := gostub.StubFunc(&lockPublicationDatabase, catalog.SystemDBTypeDataBranch, nil)
+			t.Cleanup(lockStub.Reset)
 			ctrl := gomock.NewController(t)
 			tenant := &TenantInfo{
 				Tenant:        sysAccountName,
@@ -568,7 +623,7 @@ func TestDoAlterPublicationDataBranchIdentityCapability(t *testing.T) {
 				{int64(sysAccountID), sysAccountName, "open", uint64(1), nil},
 				{int64(1), "acc1", "open", uint64(1), nil},
 			})
-			columnCheckSQL := "select 1 from mo_catalog.mo_columns where att_database = 'mo_catalog' and att_relname = 'mo_pubs' and attname = 'account_name'"
+			columnCheckSQL := "select 1 from mo_catalog.mo_columns where account_id = 0 and att_database = 'mo_catalog' and att_relname = 'mo_pubs' and attname = 'account_name'"
 			bh.sql2result[columnCheckSQL] = newMrsForRestoreStringRows([]string{"exists"}, [][]interface{}{{1}})
 			publicationAccounts := test.publicationAccounts
 			if publicationAccounts == "" {
@@ -795,6 +850,36 @@ func TestGetSqlForGetDbIdAndType(t *testing.T) {
 	}
 }
 
+func TestShowPublicationsEmptyResultMetadata(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.SV.SetDefaultValues()
+	setPu("", pu)
+	ctx := context.WithValue(t.Context(), config.ParameterUnitKey, pu)
+	ctx = defines.AttachAccount(ctx, sysAccountID, rootID, moAdminRoleID)
+	ses := newSes(nil, ctrl)
+	ses.tenant = &TenantInfo{Tenant: sysAccountName, TenantID: sysAccountID}
+
+	bh := mock_frontend.NewMockBackgroundExec(ctrl)
+	stub := gostub.StubFunc(&NewBackgroundExec, bh)
+	t.Cleanup(stub.Reset)
+	bh.EXPECT().Close()
+	bh.EXPECT().ClearExecResultSet().Times(2)
+	bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).Times(2)
+	result := mock_frontend.NewMockExecResult(ctrl)
+	result.EXPECT().GetRowCount().Return(uint64(0)).AnyTimes()
+	bh.EXPECT().GetExecResultSet().Return([]interface{}{result}).Times(2)
+
+	require.NoError(t, doShowPublications(ctx, ses, &tree.ShowPublications{}))
+	require.Empty(t, ses.mrs.Data)
+	require.Len(t, ses.mrs.Columns, 8)
+	for i, name := range []string{"publication", "database", "tables", "sub_account", "subscribed_accounts", "create_time", "update_time", "comments"} {
+		require.Equal(t, name, ses.mrs.Columns[i].Name())
+	}
+	require.Equal(t, defines.MYSQL_TYPE_BLOB, ses.mrs.Columns[2].ColumnType())
+	require.Equal(t, defines.MYSQL_TYPE_TIMESTAMP, ses.mrs.Columns[5].ColumnType())
+}
+
 func Test_doShowSubscriptions(t *testing.T) {
 	convey.Convey("do show subscriptions", t, func() {
 		ctrl := gomock.NewController(t)
@@ -873,24 +958,70 @@ func Test_getSqlForDbPubCount(t *testing.T) {
 }
 
 func Test_checkColExists(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
+	execErr := errors.New("catalog lookup failed")
+	for _, tc := range []struct {
+		name      string
+		table     string
+		column    string
+		rows      uint64
+		execErr   error
+		badResult bool
+	}{
+		{name: "publication-current", table: "mo_pubs", column: "account_name", rows: 1},
+		{name: "publication-legacy", table: "mo_pubs", column: "account_name"},
+		{name: "subscription-current", table: "mo_subs", column: "sub_account_name", rows: 1},
+		{name: "subscription-legacy", table: "mo_subs", column: "sub_account_name"},
+		{name: "execution-error", table: "mo_subs", column: "sub_account_name", execErr: execErr},
+		{name: "canceled", table: "mo_subs", column: "sub_account_name", execErr: context.Canceled},
+		{name: "invalid-result", table: "mo_pubs", column: "account_name", badResult: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			bh := mock_frontend.NewMockBackgroundExec(ctrl)
+			ctx := defines.AttachAccountId(context.Background(), uint32(42))
+			if tc.execErr == context.Canceled {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				cancel()
+			}
+			// This independent SQL expectation also fails on the unscoped lookup.
+			sql := fmt.Sprintf("select 1 from mo_catalog.mo_columns where account_id = 0 and att_database = 'mo_catalog' and att_relname = '%s' and attname = '%s'", tc.table, tc.column)
+			bh.EXPECT().ClearExecResultSet()
+			bh.EXPECT().Exec(gomock.Any(), sql).DoAndReturn(func(execCtx context.Context, _ string) error {
+				accountID, err := defines.GetAccountId(execCtx)
+				require.NoError(t, err)
+				require.Equal(t, catalog.System_Account, accountID)
+				if tc.execErr == context.Canceled {
+					require.ErrorIs(t, execCtx.Err(), context.Canceled)
+				}
+				return tc.execErr
+			})
+			if tc.execErr == nil {
+				var results []interface{}
+				if tc.badResult {
+					results = []interface{}{struct{}{}}
+				} else {
+					er := mock_frontend.NewMockExecResult(ctrl)
+					er.EXPECT().GetRowCount().Return(tc.rows)
+					results = []interface{}{er}
+				}
+				bh.EXPECT().GetExecResultSet().Return(results)
+			}
 
-	bh := mock_frontend.NewMockBackgroundExec(ctrl)
-	bh.EXPECT().Close().Return().AnyTimes()
-	bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
-
-	mockedResults := func(ctrl *gomock.Controller) []interface{} {
-		er := mock_frontend.NewMockExecResult(ctrl)
-		er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
-		return []interface{}{er}
+			exists, err := checkColExists(ctx, bh, "mo_catalog", tc.table, tc.column)
+			if tc.execErr != nil {
+				require.ErrorIs(t, err, tc.execErr)
+			} else if tc.badResult {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, tc.execErr == nil && !tc.badResult && tc.rows > 0, exists)
+			callerID, callerErr := defines.GetAccountId(ctx)
+			require.NoError(t, callerErr)
+			require.Equal(t, uint32(42), callerID)
+		})
 	}
-	bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	bh.EXPECT().GetExecResultSet().Return(mockedResults(ctrl))
-
-	exists, err := checkColExists(context.Background(), bh, "mo_catalog", "mo_pubs", "pub_name")
-	require.NoError(t, err)
-	require.True(t, exists)
 }
 
 func Test_extractPubInfosFromExecResultOld(t *testing.T) {

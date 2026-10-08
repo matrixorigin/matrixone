@@ -241,6 +241,7 @@ var _ SystemVariableType = SystemVariableDoubleType{}
 var _ SystemVariableType = SystemVariableEnumType{}
 var _ SystemVariableType = SystemVariableSetType{}
 var _ SystemVariableType = SystemVariableStringType{}
+var _ SystemVariableType = SystemVariableLocaleType{}
 var _ SystemVariableType = SystemVariableNullType{}
 
 type SystemVariableNullType struct {
@@ -979,6 +980,43 @@ type SystemVariableStringType struct {
 	name string
 }
 
+// SystemVariableLocaleType validates lc_time_names at SET time. Keep the
+// canonical spelling returned by MySQL while accepting case-insensitive input.
+type SystemVariableLocaleType struct{}
+
+func (SystemVariableLocaleType) String() string { return "STRING" }
+
+func (SystemVariableLocaleType) Convert(value interface{}) (interface{}, error) {
+	if value == nil {
+		return "en_US", nil
+	}
+	s, ok := value.(string)
+	if !ok {
+		return nil, errorConvertToStringFailed
+	}
+	return normalizeTimeLocale(s)
+}
+
+func (SystemVariableLocaleType) Type() types.T { return types.T_varchar }
+
+func (SystemVariableLocaleType) MysqlType() defines.MysqlType { return defines.MYSQL_TYPE_VARCHAR }
+
+func (SystemVariableLocaleType) Zero() interface{} { return "en_US" }
+
+func (SystemVariableLocaleType) ConvertFromString(value string) (interface{}, error) {
+	return normalizeTimeLocale(value)
+}
+
+func normalizeTimeLocale(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	for _, locale := range []string{"en_US", "fr_FR", "de_DE", "ja_JP"} {
+		if strings.EqualFold(value, locale) {
+			return locale, nil
+		}
+	}
+	return "", moerr.NewInvalidInputf(context.Background(), "Unknown locale: '%s'", value)
+}
+
 func InitSystemVariableStringType(name string) SystemVariableStringType {
 	return SystemVariableStringType{
 		name: name,
@@ -1144,18 +1182,38 @@ type SystemVariables struct {
 const (
 	transactionIsolationSystemVariable      = "transaction_isolation"
 	transactionIsolationSystemVariableAlias = "tx_isolation"
+	transactionReadOnlySystemVariable       = "transaction_read_only"
+	transactionReadOnlySystemVariableAlias  = "tx_read_only"
 )
 
 func canonicalSystemVariableName(name string) string {
 	name = strings.ToLower(name)
-	if name == transactionIsolationSystemVariableAlias {
+	switch name {
+	case transactionIsolationSystemVariableAlias:
 		return transactionIsolationSystemVariable
+	case transactionReadOnlySystemVariableAlias:
+		return transactionReadOnlySystemVariable
 	}
 	return name
 }
 
 func isTransactionIsolationSystemVariable(name string) bool {
 	return canonicalSystemVariableName(name) == transactionIsolationSystemVariable
+}
+
+func isTransactionReadOnlySystemVariable(name string) bool {
+	return canonicalSystemVariableName(name) == transactionReadOnlySystemVariable
+}
+
+func transactionSystemVariableAlias(name string) string {
+	switch canonicalName := canonicalSystemVariableName(name); canonicalName {
+	case transactionIsolationSystemVariable:
+		return transactionIsolationSystemVariableAlias
+	case transactionReadOnlySystemVariable:
+		return transactionReadOnlySystemVariableAlias
+	default:
+		return ""
+	}
 }
 
 func (sv *SystemVariables) getMutationGeneration() uint64 {
@@ -1191,11 +1249,14 @@ func (sv *SystemVariables) Get(name string) interface{} {
 	defer sv.mu.Unlock()
 	name = canonicalSystemVariableName(name)
 	value, ok := sv.mp[name]
-	if !ok && name == transactionIsolationSystemVariable {
+	if !ok {
 		// Accept an in-memory snapshot produced by an older node that only
-		// populated the legacy alias. Catalog loading normalizes this state, but
-		// the fallback also keeps rolling upgrades and tests deterministic.
-		return sv.mp[transactionIsolationSystemVariableAlias]
+		// populated a legacy transaction-variable alias. Catalog loading
+		// normalizes this state, but the fallback keeps rolling upgrades and
+		// tests deterministic.
+		if alias := transactionSystemVariableAlias(name); alias != "" {
+			value = sv.mp[alias]
+		}
 	}
 	return value
 }
@@ -1205,10 +1266,10 @@ func (sv *SystemVariables) Set(name string, value interface{}) {
 	defer sv.mu.Unlock()
 	name = canonicalSystemVariableName(name)
 	sv.mp[name] = value
-	if name == transactionIsolationSystemVariable {
+	if alias := transactionSystemVariableAlias(name); alias != "" {
 		// Keep SHOW-style map iteration and any legacy direct lookup coherent
 		// while all semantic reads resolve through the canonical name.
-		sv.mp[transactionIsolationSystemVariableAlias] = value
+		sv.mp[alias] = value
 	}
 	sv.mutationGeneration++
 }
@@ -2090,6 +2151,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("explicit_defaults_for_timestamp"),
 		Default:           int64(1),
 	},
+	"timestamp": {
+		Name:              "timestamp",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableDoubleType("timestamp", 0, float64(math.MaxInt64)/1e9),
+		Default:           float64(0),
+	},
 	"external_user": {
 		Name:              "external_user",
 		Scope:             ScopeSession,
@@ -2367,8 +2436,8 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableStringType("lc_time_names"),
-		Default:           "",
+		Type:              SystemVariableLocaleType{},
+		Default:           "en_US",
 	},
 	"local_infile": {
 		Name:              "local_infile",
@@ -3788,6 +3857,11 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("transaction_operator_open_log"),
 		Default:           int64(0),
 	},
+	// Inert setting retained for stopped-version rollback; transaction tracing is retired.
+	// SET/SHOW use generic variable storage only; there is no tracing consumer.
+	// TODO(retire-txn-trace, #29249): remove this declaration and its inert-setting
+	// tests once the rollback window excludes collector-bearing versions and
+	// client/session initialization no longer sends this setting.
 	"disable_txn_trace": {
 		Name:              "disable_txn_trace",
 		Scope:             ScopeSession,
@@ -4569,7 +4643,7 @@ func inferUserDefinedVarType(value interface{}) planpb.Type {
 	case []int8:
 		return planpb.Type{Id: int32(types.T_array_int8), Width: int32(len(v))}
 	case nil:
-		oid = types.T_text
+		oid = types.T_any
 	default:
 		oid = types.T_text
 	}

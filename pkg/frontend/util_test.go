@@ -715,10 +715,10 @@ func TestBindSetVariableResultExprUsesPreparedModeForDecimalParam(t *testing.T) 
 	selectStmt := stmt.(*tree.Select)
 	expr := selectStmt.Select.(*tree.SelectClause).Exprs[0].Expr
 
-	_, err = bindSetVariableResultExpr(expr, plan.NewEmptyCompilerContext(), false)
+	_, err = bindSetVariableResultExpr(expr, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), false)
 	require.ErrorContains(t, err, "only prepare statement can use ? expr")
 
-	bound, err := bindSetVariableResultExpr(expr, plan.NewEmptyCompilerContext(), true)
+	bound, err := bindSetVariableResultExpr(expr, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), true)
 	require.NoError(t, err)
 	require.NotNil(t, bound)
 }
@@ -853,7 +853,7 @@ func TestGetExprValue(t *testing.T) {
 		txnOperator.EXPECT().GetWorkspace().Return(ws).AnyTimes()
 		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 		txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
-		txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+
 		txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
 		txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().GetWaitActiveCost().Return(time.Duration(0)).AnyTimes()
@@ -972,7 +972,7 @@ func TestGetExprValue(t *testing.T) {
 		txnOperator.EXPECT().GetWorkspace().Return(ws).AnyTimes()
 		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 		txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
-		txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+
 		txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
 		txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 		txnOperator.EXPECT().GetWaitActiveCost().Return(time.Duration(0)).AnyTimes()
@@ -1478,6 +1478,28 @@ func TestNormalizeViewDependencyKeyForRestoreTopology(t *testing.T) {
 	normalized, err = normalizeViewDependencyKey(key)
 	require.NoError(t, err)
 	require.Equal(t, genKey("db#part", "view#part"), normalized)
+}
+
+func TestFrontendTextWireResultColumns(t *testing.T) {
+	for _, wireType := range []defines.MysqlType{
+		defines.MYSQL_TYPE_TINY_BLOB, defines.MYSQL_TYPE_BLOB,
+		defines.MYSQL_TYPE_MEDIUM_BLOB, defines.MYSQL_TYPE_LONG_BLOB,
+	} {
+		column := &MysqlColumn{}
+		column.SetName("text_result")
+		column.SetColumnType(wireType)
+		column.SetCharset(charsetVarchar)
+		result, columnTypes, names, err := mysqlColDef2PlanResultColDef([]Column{column})
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_text), result.ResultCols[0].Typ.Id)
+		require.Equal(t, types.T_text, columnTypes[0].Oid)
+		require.Equal(t, []string{"text_result"}, names)
+		require.Equal(t, wireType, column.ColumnType(), "conversion must not mutate wire metadata")
+
+		column.SetCharset(charsetBinary)
+		_, _, _, err = mysqlColDef2PlanResultColDef([]Column{column})
+		require.Error(t, err, "binary BLOB must not be silently treated as TEXT")
+	}
 }
 
 func Test_convertRowsIntoBatch(t *testing.T) {
@@ -2081,7 +2103,7 @@ func TestJdbcResultMetadataForTextTemporalAndYear(t *testing.T) {
 }
 
 func TestResultColumnMetadataDistinguishesBlobFromText(t *testing.T) {
-	mock := plan.NewMockOptimizer(false)
+	mock := plan.NewMockOptimizer(false, newPlanTestProcess(t))
 	queryPlan, err := buildSingleSql(mock, t,
 		"select partition_info, aes_encrypt(rel_createsql, 'key'), rel_createsql, relname from mo_catalog.mo_tables")
 	require.NoError(t, err)
@@ -2465,7 +2487,7 @@ func Test_isLegal(t *testing.T) {
 		want bool
 	}
 
-	tests := []kase{}
+	tests := make([]kase, 0, len(trueNames))
 	for i, name := range trueNames {
 		tests = append(tests, kase{
 			name: fmt.Sprintf("t%d", i),
@@ -2605,8 +2627,21 @@ func Test_BuildTableDefFromMoColumns(t *testing.T) {
 		})
 		bh.sql2result[sql] = mrs
 
-		_, err = buildTableDefFromMoColumns(ctx, uint64(tenant.TenantID), "db1", "t1", ses)
+		actual, err := buildTableDefFromMoColumns(ctx, uint64(tenant.TenantID), "db1", "t1", ses)
 		convey.So(err, convey.ShouldBeNil)
+		convey.So(len(actual.Cols), convey.ShouldEqual, 1)
+		convey.So(actual.TblId, convey.ShouldEqual, 100)
+		convey.So(actual.Version, convey.ShouldEqual, 3)
+		convey.So(actual.DbId, convey.ShouldEqual, 10)
+
+		// A View must be rebound, even if its persisted type blob is invalid.
+		bh.sql2result[sql] = newMrsForTableColumnDef([][]interface{}{{
+			"old", "invalid type", 1, 0, "invalid default", 0, 0, catalog.SystemViewRel,
+		}})
+		actual, err = buildTableDefFromMoColumns(ctx, uint64(tenant.TenantID), "db1", "t1", ses)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(actual.TableType, convey.ShouldEqual, catalog.SystemViewRel)
+		convey.So(len(actual.Cols), convey.ShouldEqual, 0)
 	})
 }
 
@@ -2648,8 +2683,24 @@ func newMrsForTableColumnDef(rows [][]interface{}) *MysqlResultSet {
 	mrs.AddColumn(col5)
 	mrs.AddColumn(col6)
 	mrs.AddColumn(col7)
+	kind := &MysqlColumn{}
+	kind.SetName("relkind")
+	kind.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(kind)
+	for _, name := range []string{"rel_id", "rel_version", "reldatabase_id"} {
+		column := &MysqlColumn{}
+		column.SetName(name)
+		column.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+		mrs.AddColumn(column)
+	}
 
 	for _, row := range rows {
+		if len(row) == 7 {
+			row = append(row, catalog.SystemOrdinaryRel)
+		}
+		if len(row) == 8 {
+			row = append(row, uint64(100), uint32(3), uint64(10))
+		}
 		mrs.AddRow(row)
 	}
 
@@ -2670,7 +2721,7 @@ func Test_getTableColumnDefSql(t *testing.T) {
 			accountId: 1,
 			dbName:    "db1",
 			tableName: "tbl1",
-			want:      fmt.Sprintf(getTableColumnDefFormat, 1, "db1", "tbl1"),
+			want:      fmt.Sprintf(getTableColumnDefFormat, 1, "'db1'", "'tbl1'"),
 			wantErr:   false,
 		},
 	}

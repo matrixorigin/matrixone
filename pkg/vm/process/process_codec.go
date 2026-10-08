@@ -147,6 +147,17 @@ func (proc *Process) BuildProcessInfo(
 		if loc == nil {
 			loc = time.Local
 		}
+		maxErrorCount := proc.Base.SessionInfo.MaxErrorCount
+		maxErrorCountSet := proc.Base.SessionInfo.MaxErrorCountSet
+		if provider, ok := proc.WarningSink.(WarningDiagnosticRetentionLimitProvider); ok {
+			maxErrorCount = clampWarningRetentionLimit(provider.GetWarningRetentionLimit())
+			maxErrorCountSet = true
+		}
+		if maxErrorCountSet &&
+			(maxErrorCount < 0 || maxErrorCount > int(^uint16(0))) {
+			return procInfo, moerr.NewInvalidInputNoCtxf(
+				"invalid max_error_count %d", maxErrorCount)
+		}
 		timeBytes, err := time.Time{}.In(loc).MarshalBinary()
 		if err != nil {
 			return procInfo, err
@@ -168,7 +179,16 @@ func (proc *Process) BuildProcessInfo(
 			SqlMode:                resolveSqlMode(proc),
 			AutoIncrementIncrement: proc.Base.SessionInfo.AutoIncrementIncrement,
 			AutoIncrementOffset:    proc.Base.SessionInfo.AutoIncrementOffset,
+			MaxErrorCount:          uint32(maxErrorCount),
+			MaxErrorCountSet:       maxErrorCountSet,
 		}
+		weekMode, weekModeSet, err := ResolveDefaultWeekFormatMode(proc)
+		if err != nil {
+			return procInfo, err
+		}
+		procInfo.SessionInfo.DefaultWeekFormat = uint32(weekMode)
+		procInfo.SessionInfo.DefaultWeekFormatSet = weekModeSet
+		procInfo.SessionInfo.LcTimeNames = resolveLCTimeNames(proc)
 		nullifyZeroTemporal, err := ResolveExplicitZeroTemporalCastReturnsNull(proc)
 		if err != nil {
 			return procInfo, err
@@ -454,6 +474,10 @@ func ConvertToProcessLimitation(
 func ConvertToProcessSessionInfo(
 	sei pipeline.SessionInfo,
 ) (SessionInfo, error) {
+	if sei.MaxErrorCountSet && sei.MaxErrorCount > uint32(^uint16(0)) {
+		return SessionInfo{}, moerr.NewInvalidInputNoCtxf(
+			"invalid max_error_count %d", sei.MaxErrorCount)
+	}
 	sessionInfo := SessionInfo{
 		User:                                sei.User,
 		Host:                                sei.Host,
@@ -468,8 +492,13 @@ func ConvertToProcessSessionInfo(
 		MatrixOneNativeMode:                 sei.MatrixoneNativeMode,
 		ExplicitZeroTemporalCastReturnsNull: sei.ExplicitZeroTemporalCastReturnsNull,
 		SqlMode:                             sei.SqlMode,
+		DefaultWeekFormat:                   uint8(sei.DefaultWeekFormat),
+		DefaultWeekFormatSet:                sei.DefaultWeekFormatSet,
+		LCTimeNames:                         sei.LcTimeNames,
 		AutoIncrementIncrement:              sei.AutoIncrementIncrement,
 		AutoIncrementOffset:                 sei.AutoIncrementOffset,
+		MaxErrorCount:                       int(sei.MaxErrorCount),
+		MaxErrorCountSet:                    sei.MaxErrorCountSet,
 	}
 	if sei.TimeZoneName != "" {
 		if sei.TimeZoneName == "Local" {
@@ -489,6 +518,25 @@ func ConvertToProcessSessionInfo(
 	}
 	sessionInfo.TimeZone = t.Location()
 	return sessionInfo, nil
+}
+
+func resolveLCTimeNames(proc *Process) string {
+	if proc == nil {
+		return ""
+	}
+	if f := proc.GetResolveVariableFunc(); f != nil {
+		if v, err := f("lc_time_names", true, false); err == nil {
+			if s, ok := v.(string); ok && s != "" {
+				return s
+			}
+		}
+	}
+	if proc.Base == nil {
+		return ""
+	}
+	// The resolver is intentionally absent on remote CN processes. Preserve
+	// the already effective value when a process is forwarded again.
+	return proc.Base.SessionInfo.LCTimeNames
 }
 
 func resolveSqlMode(proc *Process) string {

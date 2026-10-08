@@ -93,6 +93,7 @@ func (ses *Session) snapshotUserDefinedVars(ctx context.Context) ([]*query.Migra
 		if err != nil {
 			return nil, err
 		}
+		typ := *plan2.DeepCopyType(&variable.Type)
 		item := &query.MigrateUserDefinedVar{
 			Name:                name,
 			Value:               value,
@@ -100,16 +101,7 @@ func (ses *Session) snapshotUserDefinedVars(ctx context.Context) ([]*query.Migra
 			IsBin:               variable.IsBin,
 			PrepareParamKind:    uint32(variable.PrepareParamKind),
 			RuntimeStringDomain: uint32(variable.RuntimeStringDomain),
-			Type: &plan.Type{
-				Id:          variable.Type.Id,
-				NotNullable: variable.Type.NotNullable,
-				AutoIncr:    variable.Type.AutoIncr,
-				Width:       variable.Type.Width,
-				Scale:       variable.Type.Scale,
-				Table:       variable.Type.Table,
-				Enumvalues:  variable.Type.Enumvalues,
-				Charset:     variable.Type.Charset,
-			},
+			Type:                &typ,
 		}
 		result = append(result, item)
 	}
@@ -126,12 +118,19 @@ func (ses *Session) snapshotSessionSystemVars(ctx context.Context) ([]*query.Mig
 		if def.Scope == ScopeGlobal || !def.Dynamic {
 			continue
 		}
-		canonicalName := canonicalSystemVariableName(name)
-		if _, ok := seen[canonicalName]; ok {
+		exportName := canonicalSystemVariableName(name)
+		// Keep both read-only spellings on the wire. Older targets do not
+		// canonicalize tx_read_only, so dropping that entry would lose the
+		// session mode during a rolling upgrade. decodeSessionSystemVars
+		// collapses the pair again with the canonical value taking precedence.
+		if isTransactionReadOnlySystemVariable(name) {
+			exportName = strings.ToLower(name)
+		}
+		if _, ok := seen[exportName]; ok {
 			continue
 		}
-		seen[canonicalName] = struct{}{}
-		names = append(names, canonicalName)
+		seen[exportName] = struct{}{}
+		names = append(names, exportName)
 	}
 	sort.Strings(names)
 	var nextTxnIsolationValue string
@@ -225,7 +224,7 @@ func decodeUserDefinedVars(
 		}
 		typ := plan.Type{}
 		if item.Type != nil {
-			typ = *item.Type
+			typ = *plan2.DeepCopyType(item.Type)
 		}
 		if typ.Id == 0 {
 			typ = inferUserDefinedVarType(value)
@@ -257,6 +256,8 @@ func decodeSessionSystemVars(ctx context.Context, vars []*query.MigrateSystemVar
 	}
 	seen := make(map[string]struct{}, len(vars)*2)
 	result := make([]migratedSystemVariable, 0, len(vars))
+	readOnlyIndex := -1
+	readOnlySource := ""
 	for _, item := range vars {
 		if err := context.Cause(ctx); err != nil {
 			return nil, err
@@ -264,22 +265,29 @@ func decodeSessionSystemVars(ctx context.Context, vars []*query.MigrateSystemVar
 		if item == nil || item.Name == "" {
 			return nil, moerr.NewInternalError(ctx, "invalid session system variable in connection migration")
 		}
-		name := canonicalSystemVariableName(item.Name)
+		rawName := strings.ToLower(item.Name)
+		if _, ok := gSysVarsDefs[rawName]; !ok {
+			return nil, moerr.NewInternalErrorf(ctx,
+				"unknown session system variable %q in connection migration", rawName)
+		}
+		name := canonicalSystemVariableName(rawName)
 		if item.NextTransaction && name != transactionIsolationSystemVariable {
 			return nil, moerr.NewInternalErrorf(ctx,
 				"next transaction scope is invalid for session system variable %q", name)
 		}
 		seenKey := name
-		if item.NextTransaction {
+		if isTransactionReadOnlySystemVariable(name) {
+			// A canonical and a legacy read-only entry are the two accepted
+			// spellings of one value. Reject duplicate spellings, validate both
+			// payloads, and let the canonical spelling win regardless of order.
+			seenKey = rawName
+		} else if item.NextTransaction {
 			seenKey += ":next"
 		}
 		if _, exists := seen[seenKey]; exists {
 			return nil, moerr.NewInternalErrorf(ctx, "duplicate session system variable %q in connection migration", name)
 		}
 		seen[seenKey] = struct{}{}
-		if _, ok := gSysVarsDefs[name]; !ok {
-			return nil, moerr.NewInternalErrorf(ctx, "unknown session system variable %q in connection migration", name)
-		}
 		value, err := decodeUserDefinedVarValue(ctx, item.Value)
 		if err != nil {
 			return nil, err
@@ -301,13 +309,26 @@ func decodeSessionSystemVars(ctx context.Context, vars []*query.MigrateSystemVar
 				return nil, err
 			}
 		}
-		result = append(result, migratedSystemVariable{
+		migrated := migratedSystemVariable{
 			name:                name,
 			value:               value,
 			runtimeValue:        runtimeValue,
 			runtimeValuePresent: runtimeValuePresent,
 			nextTransaction:     item.NextTransaction,
-		})
+		}
+		if isTransactionReadOnlySystemVariable(name) {
+			if readOnlyIndex < 0 {
+				readOnlyIndex = len(result)
+				readOnlySource = rawName
+				result = append(result, migrated)
+			} else if rawName == transactionReadOnlySystemVariable &&
+				readOnlySource == transactionReadOnlySystemVariableAlias {
+				result[readOnlyIndex] = migrated
+				readOnlySource = rawName
+			}
+			continue
+		}
+		result = append(result, migrated)
 	}
 	return result, nil
 }

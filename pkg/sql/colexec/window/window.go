@@ -527,15 +527,17 @@ func (ctr *container) newAggregateExecutor(
 	argExprs := ag.GetArgExpressions()
 	argTypes := make([]types.Type, len(argExprs))
 	for j, arg := range argExprs {
-		argTypes[j] = types.NewWithCharset(
-			types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale, uint8(arg.Typ.Charset),
-		)
+		argTypes[j] = types.MustTypeFromPlan(arg.Typ)
 	}
 
 	exec, err := aggexec.MakeAgg(proc.Mp(), ag.GetAggID(), ag.IsDistinct(), argTypes...)
 	if err != nil {
 		return nil, err
 	}
+	aggexec.ConfigureGroupConcatWarningRetention(
+		exec, process.WarningDiagnosticRetentionLimitForProcess(proc))
+	aggexec.ConfigureGroupConcatWarningBudget(
+		exec, process.WarningDiagnosticBudgetForProcess(proc))
 	aggexec.ConfigureGroupConcatTimeZone(exec, proc.Base.SessionInfo.TimeZone)
 	succeeded := false
 	defer func() {
@@ -915,8 +917,8 @@ func partitionEnd(partitions []int64, partition int, rowCount int) int {
 
 // cumulativePartitionUsesRunning compares the prefix Fill calls saved by a
 // running aggregate with the AggBatchSize physical state chunk initialized for
-// that partition. Small partitions stay on the direct evaluator; large
-// partitions use one running state. Evaluating this per partition avoids both
+// that partition. Small partitions use output-local state; large partitions
+// may need one running state. Evaluating this per partition avoids both
 // allocation churn on high-cardinality inputs and quadratic work in mixed
 // inputs that contain a few large partitions.
 func cumulativePartitionUsesRunning(start, end int) bool {
@@ -928,10 +930,9 @@ func cumulativePartitionUsesRunning(start, end int) bool {
 	return savedFills > uint64(aggexec.AggBatchSize)
 }
 
-// processCumulativeAggregateFuncRange evaluates small partitions directly and
-// advances one retained aggregate state for each large partition. The running
-// state changes large cumulative aggregates from O(partitionRows^2) Fill calls
-// to O(partitionRows), while remaining valid across output chunks.
+// processCumulativeAggregateFuncRange reuses unflushed output-group states
+// where possible. Large partitions crossing output chunks retain a separate
+// running state; neither path repeatedly evaluates the entire prefix.
 func (ctr *container) processCumulativeAggregateFuncRange(
 	idx int,
 	ap *Window,
@@ -955,6 +956,11 @@ func (ctr *container) processCumulativeAggregateFuncRange(
 		currentPartitionStart = int(ctr.ps[ctr.runningPartition])
 	}
 	currentPartitionEnd := partitionEnd(ctr.ps, ctr.runningPartition, n)
+	_, resultType := ctr.batAggs[idx].TypesInfo()
+	// Fixed-width, non-DISTINCT states can be copied between different groups
+	// of this source-preserving executor. Varlen states may grow an area shared
+	// with the source group, while DISTINCT may retain/consume saved arguments.
+	reuseOutputPrefix := !resultType.IsVarlen() && !ctr.batAggs[idx].IsDistinct()
 	for j := outputStart; j < outputEnd; j++ {
 		if err := checkCanceled(proc, j-outputStart); err != nil {
 			return nil, err
@@ -970,7 +976,9 @@ func (ctr *container) processCumulativeAggregateFuncRange(
 		}
 
 		group := j - outputStart
-		if cumulativePartitionUsesRunning(currentPartitionStart, currentPartitionEnd) {
+		partitionFitsOutput := currentPartitionStart >= outputStart && currentPartitionEnd <= outputEnd
+		if cumulativePartitionUsesRunning(currentPartitionStart, currentPartitionEnd) &&
+			!(reuseOutputPrefix && partitionFitsOutput) {
 			if ctr.runningAgg == nil {
 				ctr.runningAgg, retErr = ctr.newAggregateExecutor(idx, ap, proc, 1)
 				if retErr != nil {
@@ -984,8 +992,19 @@ func (ctr *container) processCumulativeAggregateFuncRange(
 				return nil, err
 			}
 		} else {
-			for k := currentPartitionStart; k <= j; k++ {
-				if err := checkCanceled(proc, k-currentPartitionStart); err != nil {
+			first := currentPartitionStart
+			if j-currentPartitionStart > 1 && group > 0 && reuseOutputPrefix {
+				// The previous output group still owns its unflushed prefix state.
+				// One Merge replaces at least two repeated Fill calls, without a
+				// separate running-state allocation. At a chunk/partition boundary
+				// reconstruct the first prefix through the original evaluator.
+				if err := ctr.batAggs[idx].Merge(ctr.batAggs[idx], group, group-1); err != nil {
+					return nil, err
+				}
+				first = j
+			}
+			for k := first; k <= j; k++ {
+				if err := checkCanceled(proc, k-first); err != nil {
 					return nil, err
 				}
 				if err := ctr.batAggs[idx].Fill(group, k, ctr.aggVecs[idx].Vec); err != nil {
@@ -1345,10 +1364,7 @@ func (ctr *container) processValueFuncRange(
 
 	// aggVecs already evaluated by caller (eval case in Call)
 	srcVec := ctr.aggVecs[idx].Vec[0] // the expression column
-	retType := types.NewWithCharset(
-		types.T(w.WindowFunc.Typ.Id), w.WindowFunc.Typ.Width, w.WindowFunc.Typ.Scale,
-		uint8(w.WindowFunc.Typ.Charset),
-	)
+	retType := types.MustTypeFromPlan(w.WindowFunc.Typ)
 	localResult := vector.NewVec(retType)
 	defer func() {
 		if err != nil && localResult != nil {

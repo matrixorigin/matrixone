@@ -38,23 +38,17 @@
 #
 # make proto-vendor
 #
-# To compile mo-service with GPU support,
-# 1. install CUDA toolkit (version 13.3 or above)
-# 2. install cuVS Go bindings with conda
-#  % conda env create --name go -f optools/images/gpu/go_cuda-133_arch-$(uname -m).yaml
-#  % conda activate go
-# 3. compile matrixone
-#  % cd matrixone
-#  % MO_CL_CUDA=1 make
+# To compile mo-service with GPU support, use the frozen Pixi profile described
+# in optools/gpu/README.md. CPU-only builds do not require Pixi.
 
 # Go toolchain (override with `make GO=/path/to/go ...`); defaults to `go`.
-# Requires Go 1.26+ for the arch-specific SIMD kernels (built by default on x86_64).
+# Requires Go 1.27+ for the arch-specific SIMD kernels (built by default on x86_64 and arm64).
 ifeq ($(GO),)
 	GO=go
 endif
 
 # where am I
-ROOT_DIR = $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
+ROOT_DIR := $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 BIN_NAME := mo-service
 # MatrixOne is a single-module repository. Official Make targets must not
 # inherit a parent or user-selected go.work that can replace dependencies.
@@ -235,7 +229,8 @@ JIEBA_DICT_SRC_DIR=$(ROOT_DIR)/pkg/monlp/tokenizer/dict
 RACE_OPT :=
 DEBUG_OPT :=
 CGO_DEBUG_OPT :=
-TAGS :=
+BUILD_TAGS :=
+TAGS = $(if $(strip $(BUILD_TAGS)),-tags "$(strip $(BUILD_TAGS))")
 
 # Native artifacts are reusable only when every semantic build input matches.
 # Keep these dimensions independent so adding one feature cannot silently alias
@@ -244,22 +239,38 @@ NATIVE_PROVENANCE_ACCELERATOR = $(if $(filter 1,$(MO_CL_CUDA)),gpu,cpu)
 NATIVE_PROVENANCE_OPTIMIZATION = $(if $(filter debug,$(CGO_DEBUG_OPT)),debug,release)
 NATIVE_PROVENANCE_SIMSIMD = $(if $(filter 1,$(MO_CL_SIMSIMD)),1,0)
 
-# Env-var prefix for the build command. On x86_64 the arch-specific SIMD kernels in
-# pkg/vectorindex/metric are compiled by default (ARCHSIMD=1): GOAMD64 defaults to v3
-# (Haswell baseline -- AVX2/FMA/BMI, required by the Go simd experiment) and
-# GOEXPERIMENT defaults to simd (enables the goexperiment.simd build tag on Go 1.26+).
+# Env-var prefix for the build command. The arch-specific SIMD kernels in
+# pkg/vectorindex/metric are compiled by default (ARCHSIMD=1) on both x86_64 and
+# arm64; GOEXPERIMENT defaults to simd, which enables the goexperiment.simd build
+# tag. On x86_64 GOAMD64 additionally defaults to v3 (Haswell baseline --
+# AVX2/FMA/BMI, required by the Go simd experiment); arm64 needs no equivalent
+# knob because NEON is ARMv8 baseline.
 # Disable the SIMD kernels with:
-#   make ARCHSIMD=0 build                       # plain x86 build, no SIMD kernels
+#   make ARCHSIMD=0 build                       # plain build, no SIMD kernels
 # Either default can still be overridden individually, e.g. `make GOAMD64=v4 build`.
+#
+# NOTE the kernels require Go 1.27+: simd/archsimd gained arm64 (NEON) types in
+# 1.27, and the same release renamed the amd64 slice loaders, so the build tags
+# on those files are `go1.27`, not `go1.26`.
 GOEXPERIMENT_OPT ?=
+ARCHSIMD_ARCH :=
 ifeq ("$(UNAME_M)", "x86_64")
+  ARCHSIMD_ARCH := amd64
+endif
+ifneq ($(filter arm64 aarch64,$(UNAME_M)),)
+  ARCHSIMD_ARCH := arm64
+endif
+
+ifneq ($(ARCHSIMD_ARCH),)
   ARCHSIMD ?= 1
   ifeq ($(ARCHSIMD),1)
-	# DECISION (owner: cpegeric): raising the default x86 baseline to v3 (Haswell:
-	# AVX2/FMA/BMI) is intentional. The narrow-vector (bf16/f16/int8/uint8) SIMD
-	# kernels in pkg/vectorindex/metric require it, and the Go simd experiment
-	# mandates a v3 baseline. Pre-Haswell CPUs must build with `make ARCHSIMD=0`.
-	GOAMD64 ?= v3
+	ifeq ($(ARCHSIMD_ARCH),amd64)
+	  # DECISION (owner: cpegeric): raising the default x86 baseline to v3 (Haswell:
+	  # AVX2/FMA/BMI) is intentional. The narrow-vector (bf16/f16/int8/uint8) SIMD
+	  # kernels in pkg/vectorindex/metric require it, and the Go simd experiment
+	  # mandates a v3 baseline. Pre-Haswell CPUs must build with `make ARCHSIMD=0`.
+	  GOAMD64 ?= v3
+	endif
 	GOEXPERIMENT_SIMD ?= simd
   endif
   ifneq ($(GOAMD64),)
@@ -271,22 +282,53 @@ ifeq ("$(UNAME_M)", "x86_64")
 endif
 
 ifeq ($(MO_CL_CUDA),1)
-  ifeq ($(CONDA_PREFIX),)
-    $(error CONDA_PREFIX env variable not found.)
-  endif
-	CUVS_CFLAGS := -I$(CONDA_PREFIX)/include
-	CUVS_LDFLAGS := -L$(CONDA_PREFIX)/lib -lcuvs -lcuvs_c
-	CUDA_CFLAGS := -I/usr/local/cuda/include $(CUVS_CFLAGS)
-	CUDA_LDFLAGS := -L/usr/local/cuda/lib64/stubs -lcuda -L/usr/local/cuda/lib64 -lcudart $(CUVS_LDFLAGS) -lstdc++
-	TAGS += -tags "gpu"
+	include $(ROOT_DIR)/cgo/gpu-toolchain.mk
+	CUDA_CFLAGS := $(MO_GPU_CFLAGS)
+	CUDA_LDFLAGS := $(MO_GPU_LDFLAGS)
+	BUILD_TAGS += gpu
 endif
 
 ifeq ($(TYPECHECK),1)
-	TAGS += -tags "typecheck"
+	BUILD_TAGS += typecheck
 endif
 
-CGO_OPTS :=CGO_CFLAGS="-I$(CGO_DIR) -I$(THIRDPARTIES_INSTALL_DIR)/include $(CUDA_CFLAGS)"
-GOLDFLAGS=-ldflags="-extldflags '$(CUDA_LDFLAGS) -L$(CGO_DIR) -lmo -L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,\$${ORIGIN}/lib -fopenmp' $(VERSION_INFO)"
+SIRIUS_SDK ?=
+SIRIUS_BUILD_MODE ?= release
+SIRIUS_MERGED_REF ?=
+SIRIUS_PREPARED := $(ROOT_DIR)/.sirius-sdk
+ifeq ($(MO_SIRIUS),1)
+ifneq ($(UNAME_S)/$(UNAME_M),linux/x86_64)
+$(error MO_SIRIUS=1 requires Linux amd64)
+endif
+ifeq ($(strip $(SIRIUS_SDK)),)
+$(error MO_SIRIUS=1 requires a generated SIRIUS_SDK directory)
+endif
+ifneq ($(PIXI_ENVIRONMENT_NAME),mo)
+$(error MO_SIRIUS=1 requires pixi run --frozen -e mo)
+endif
+ifeq ($(strip $(PIXI_PROJECT_ROOT)),)
+$(error MO_SIRIUS=1 requires an activated Sirius Pixi project)
+endif
+ifeq ($(strip $(CONDA_PREFIX)),)
+$(error MO_SIRIUS=1 requires an activated Sirius Pixi prefix)
+endif
+ifneq ($(realpath $(CONDA_PREFIX)),$(realpath $(PIXI_PROJECT_ROOT)/.pixi/envs/mo))
+$(error MO_SIRIUS=1 requires the Sirius mo Pixi prefix)
+endif
+	BUILD_TAGS += sirius
+	# Go's cache does not track external headers/archives behind an unchanged
+	# include path or response file. Bind CGo compilation to the verified SDK.
+	SIRIUS_SDK_FINGERPRINT := $(shell python3 -c 'import hashlib; print(hashlib.sha256(open("$(SIRIUS_SDK)/link.json", "rb").read()).hexdigest())')
+	SIRIUS_CFLAGS := -I$(abspath $(SIRIUS_SDK)) -DSIRIUS_SDK_BUILD_$(SIRIUS_SDK_FINGERPRINT)=1
+	SIRIUS_LDFLAGS := @$(SIRIUS_PREPARED)/link.rsp
+	SIRIUS_CC := $(shell python3 -c 'import json; print(json.load(open("$(SIRIUS_SDK)/link.json"))["c_compiler"])')
+	SIRIUS_CXX := $(shell python3 -c 'import json; print(json.load(open("$(SIRIUS_SDK)/link.json"))["compiler"])')
+	SIRIUS_CGO_ENV := CC="$(SIRIUS_CC)" CXX="$(SIRIUS_CXX)"
+	SIRIUS_EXTLD := -extld=$(SIRIUS_CXX)
+endif
+
+CGO_OPTS :=$(SIRIUS_CGO_ENV) CGO_CFLAGS="-I$(CGO_DIR) -I$(THIRDPARTIES_INSTALL_DIR)/include $(CUDA_CFLAGS) $(SIRIUS_CFLAGS)"
+GOLDFLAGS=-ldflags="$(SIRIUS_EXTLD) -extldflags '$(CUDA_LDFLAGS) -L$(CGO_DIR) -lmo -L$(THIRDPARTIES_INSTALL_DIR)/lib $(SIRIUS_LDFLAGS) -Wl,-rpath,\$${ORIGIN}/lib -fopenmp' $(VERSION_INFO)"
 
 ifeq ("$(UNAME_S)","darwin")
 GOLDFLAGS:=-ldflags="-extldflags '-L$(CGO_DIR) -lmo -L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,@executable_path/lib' $(VERSION_INFO)"
@@ -296,6 +338,18 @@ endif
 # may differ in how native dependencies are produced, never in the Go binary
 # they emit.
 MO_SERVICE_BUILD=$(GOEXPERIMENT_OPT) $(CGO_OPTS) $(GO) build $(GO_MODULE_MODE) $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
+
+define SIRIUS_PREPARE
+$(if $(filter 1,$(MO_SIRIUS)),python3 "$(ROOT_DIR)/optools/sirius_sdk.py" prepare --sdk "$(SIRIUS_SDK)" --mode "$(SIRIUS_BUILD_MODE)" --merged-ref "$(SIRIUS_MERGED_REF)" --mo-root "$(ROOT_DIR)" --output "$(SIRIUS_PREPARED)")
+endef
+
+.PHONY: sirius-sdk-prepare
+sirius-sdk-prepare:
+	$(SIRIUS_PREPARE)
+
+define SIRIUS_PACKAGE
+$(if $(filter 1,$(MO_SIRIUS)),python3 "$(ROOT_DIR)/optools/sirius_sdk.py" package --prepared "$(SIRIUS_PREPARED)" --binary "$(ROOT_DIR)/$(BIN_NAME)" --output "$(ROOT_DIR)/lib")
+endef
 
 ifeq ($(GOBUILD_OPT),)
 	GOBUILD_OPT :=
@@ -398,8 +452,10 @@ jieba-dict:
 # build mo-service binary
 .PHONY: build
 build: config cgo jieba-dict
+	$(SIRIUS_PREPARE)
 	$(info [Build binary])
 	$(MO_SERVICE_BUILD)
+	$(SIRIUS_PACKAGE)
 
 # Build with native libraries supplied by a prebuilt stage or image. This target
 # is for CI image builds: unlike build, it must not rebuild cgo or thirdparties
@@ -408,8 +464,18 @@ build: config cgo jieba-dict
 build-with-prebuilt-native: config jieba-dict
 	@test -f "$(CGO_DIR)/libmo.so" || test -f "$(CGO_DIR)/libmo.dylib"
 	@test -f "$(THIRDPARTIES_INSTALL_DIR)/lib/libusearch_c.so" || test -f "$(THIRDPARTIES_INSTALL_DIR)/lib/libusearch_c.dylib"
+	@"$(ROOT_DIR)/cgo/mo-stage-native-libs" "$(THIRDPARTIES_INSTALL_DIR)/lib" "$(ROOT_DIR)/lib"
+	@"$(ROOT_DIR)/cgo/mo-stage-native-libs" --file \
+		"$(CGO_DIR)/$(LIBMO_NAME)" "$(ROOT_DIR)/lib/$(LIBMO_NAME)"
+ifeq ($(MO_CL_CUDA),1)
+	@"$(ROOT_DIR)/cgo/mo-stage-native-libs" --file \
+		"$(ROOT_DIR)/cgo/cuda/mocl_kernel64.fatbin" \
+		"$(ROOT_DIR)/mocl_kernel64.fatbin"
+endif
+	$(SIRIUS_PREPARE)
 	$(info [Build binary with prebuilt native libraries])
 	$(MO_SERVICE_BUILD)
+	$(SIRIUS_PACKAGE)
 
 # https://wiki.musl-libc.org/getting-started.html
 # https://musl.cc/
@@ -1445,7 +1511,7 @@ fmt:
 
 .PHONY: install-static-check-tools
 install-static-check-tools:
-	@GOBIN="$(GOPATH)/bin" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.6.2
+	@GOBIN="$(GOPATH)/bin" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
 	@go install github.com/matrixorigin/linter/cmd/molint@v0.0.0-20260602145143-222a0b8adf07
 	@go install github.com/apache/skywalking-eyes/cmd/license-eye@v0.4.0
 

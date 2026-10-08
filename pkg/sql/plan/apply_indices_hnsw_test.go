@@ -68,237 +68,104 @@ func makeConsistentHnswMultiTableIndexForTest(indexName, idxAlgoParams string, p
 	}
 }
 
-// TestPrepareHnswIndexContext_NilVecCtx tests the case where vecCtx is nil
-func TestPrepareHnswIndexContext_NilVecCtx(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
-	multiTableIndex := &MultiTableIndex{}
-
-	result, err := builder.prepareHnswIndexContext(nil, multiTableIndex)
-	assert.NoError(t, err)
-	assert.Nil(t, result)
-}
-
-// TestPrepareHnswIndexContext_NilMultiTableIndex tests the case where multiTableIndex is nil
-func TestPrepareHnswIndexContext_NilMultiTableIndex(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
-	vecCtx := &vectorSortContext{}
-
-	result, err := builder.prepareHnswIndexContext(vecCtx, nil)
-	assert.NoError(t, err)
-	assert.Nil(t, result)
-}
-
-// TestPrepareHnswIndexContext_NilDistFnExpr tests the case where distFnExpr is nil
-func TestPrepareHnswIndexContext_NilDistFnExpr(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
-	vecCtx := &vectorSortContext{
-		distFnExpr: nil,
-	}
-	multiTableIndex := &MultiTableIndex{}
-
-	result, err := builder.prepareHnswIndexContext(vecCtx, multiTableIndex)
-	assert.NoError(t, err)
-	assert.Nil(t, result)
-}
-
-// TestPrepareHnswIndexContext_ForceModeEnabled tests the case where rankOption.Mode is "force"
-func TestPrepareHnswIndexContext_ForceModeEnabled(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
-	vecCtx := &vectorSortContext{
-		distFnExpr: &plan.Function{
-			Func: &ObjectRef{
-				ObjName: "l2_distance",
+// Early rejection is read-only and needs one planner process for all cases.
+func TestPrepareHnswIndexContextRejectsUnsupportedInputs(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
+	distance := &plan.Function{Func: &ObjectRef{ObjName: "l2_distance"}}
+	cases := []struct {
+		name   string
+		vecCtx *vectorSortContext
+		index  *MultiTableIndex
+	}{
+		{name: "NilVecCtx", vecCtx: nil, index: &MultiTableIndex{}},
+		{name: "NilMultiTableIndex", vecCtx: &vectorSortContext{}, index: nil},
+		{name: "NilDistFnExpr", vecCtx: &vectorSortContext{
+			distFnExpr: nil,
+		}, index: &MultiTableIndex{}},
+		{name: "ForceModeEnabled", vecCtx: &vectorSortContext{
+			distFnExpr: distance,
+			rankOption: &plan.RankOption{
+				Mode: "force",
 			},
-		},
-		rankOption: &plan.RankOption{
-			Mode: "force",
-		},
-	}
-	multiTableIndex := &MultiTableIndex{}
-
-	result, err := builder.prepareHnswIndexContext(vecCtx, multiTableIndex)
-	assert.NoError(t, err)
-	assert.Nil(t, result)
-}
-
-func TestPrepareHnswIndexContext_ImplicitDescendingOrderDisablesRewrite(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
-	vecCtx := &vectorSortContext{
-		distFnExpr: &plan.Function{
-			Func: &ObjectRef{
-				ObjName: "l2_distance",
+		}, index: &MultiTableIndex{}},
+		{name: "ImplicitDescendingOrderDisablesRewrite", vecCtx: &vectorSortContext{
+			distFnExpr:    distance,
+			sortDirection: plan.OrderBySpec_DESC,
+		}, index: &MultiTableIndex{}},
+		{name: "ExplicitDescendingOrderFallsBackToOriginalSearch", vecCtx: &vectorSortContext{
+			distFnExpr:    distance,
+			sortDirection: plan.OrderBySpec_DESC,
+			rankOption:    &plan.RankOption{Mode: "post"},
+		}, index: &MultiTableIndex{}},
+		{name: "NilMetaDef", vecCtx: &vectorSortContext{
+			distFnExpr: distance,
+		}, index: &MultiTableIndex{
+			IndexDefs: map[string]*plan.IndexDef{
+				catalog.Hnsw_TblType_Metadata: nil,
+				catalog.Hnsw_TblType_Storage:  {},
 			},
-		},
-		sortDirection: plan.OrderBySpec_DESC,
-	}
-	multiTableIndex := &MultiTableIndex{}
-
-	result, err := builder.prepareHnswIndexContext(vecCtx, multiTableIndex)
-	assert.NoError(t, err)
-	assert.Nil(t, result)
-}
-
-func TestPrepareHnswIndexContext_ExplicitDescendingOrderFallsBackToOriginalSearch(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
-	vecCtx := &vectorSortContext{
-		distFnExpr: &plan.Function{
-			Func: &ObjectRef{
-				ObjName: "l2_distance",
+		}},
+		{name: "NilIdxDef", vecCtx: &vectorSortContext{
+			distFnExpr: distance,
+		}, index: &MultiTableIndex{
+			IndexDefs: map[string]*plan.IndexDef{
+				catalog.Hnsw_TblType_Metadata: {},
+				catalog.Hnsw_TblType_Storage:  nil,
 			},
-		},
-		sortDirection: plan.OrderBySpec_DESC,
-		rankOption:    &plan.RankOption{Mode: "post"},
-	}
-	multiTableIndex := &MultiTableIndex{}
-
-	result, err := builder.prepareHnswIndexContext(vecCtx, multiTableIndex)
-	assert.NoError(t, err)
-	assert.Nil(t, result)
-}
-
-// TestPrepareHnswIndexContext_NilMetaDef tests the case where metaDef is nil
-func TestPrepareHnswIndexContext_NilMetaDef(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
-	vecCtx := &vectorSortContext{
-		distFnExpr: &plan.Function{
-			Func: &ObjectRef{
-				ObjName: "l2_distance",
+		}},
+		{name: "InvalidIndexAlgoParams", vecCtx: &vectorSortContext{
+			distFnExpr: distance,
+		}, index: &MultiTableIndex{
+			IndexDefs: map[string]*plan.IndexDef{
+				catalog.Hnsw_TblType_Metadata: {
+					IndexAlgoParams: "invalid json",
+				},
+				catalog.Hnsw_TblType_Storage: {},
 			},
-		},
-	}
-	multiTableIndex := &MultiTableIndex{
-		IndexDefs: map[string]*plan.IndexDef{
-			catalog.Hnsw_TblType_Metadata: nil,
-			catalog.Hnsw_TblType_Storage:  {},
-		},
-	}
-
-	result, err := builder.prepareHnswIndexContext(vecCtx, multiTableIndex)
-	assert.NoError(t, err)
-	assert.Nil(t, result)
-}
-
-// TestPrepareHnswIndexContext_NilIdxDef tests the case where idxDef is nil
-func TestPrepareHnswIndexContext_NilIdxDef(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
-	vecCtx := &vectorSortContext{
-		distFnExpr: &plan.Function{
-			Func: &ObjectRef{
-				ObjName: "l2_distance",
+		}},
+		{name: "MissingOpType", vecCtx: &vectorSortContext{
+			distFnExpr: distance,
+		}, index: &MultiTableIndex{
+			IndexDefs: map[string]*plan.IndexDef{
+				catalog.Hnsw_TblType_Metadata: {
+					IndexAlgoParams: `{"other_field": "value"}`,
+				},
+				catalog.Hnsw_TblType_Storage: {},
 			},
-		},
-	}
-	multiTableIndex := &MultiTableIndex{
-		IndexDefs: map[string]*plan.IndexDef{
-			catalog.Hnsw_TblType_Metadata: {},
-			catalog.Hnsw_TblType_Storage:  nil,
-		},
-	}
-
-	result, err := builder.prepareHnswIndexContext(vecCtx, multiTableIndex)
-	assert.NoError(t, err)
-	assert.Nil(t, result)
-}
-
-// TestPrepareHnswIndexContext_InvalidIndexAlgoParams tests the case where IndexAlgoParams is invalid JSON
-func TestPrepareHnswIndexContext_InvalidIndexAlgoParams(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
-	vecCtx := &vectorSortContext{
-		distFnExpr: &plan.Function{
-			Func: &ObjectRef{
-				ObjName: "l2_distance",
+		}},
+		{name: "OpTypeNotString", vecCtx: &vectorSortContext{
+			distFnExpr: distance,
+		}, index: &MultiTableIndex{
+			IndexDefs: map[string]*plan.IndexDef{
+				catalog.Hnsw_TblType_Metadata: {
+					IndexAlgoParams: `{"op_type": 123}`,
+				},
+				catalog.Hnsw_TblType_Storage: {},
 			},
-		},
-	}
-	multiTableIndex := &MultiTableIndex{
-		IndexDefs: map[string]*plan.IndexDef{
-			catalog.Hnsw_TblType_Metadata: {
-				IndexAlgoParams: "invalid json",
+		}},
+		{name: "OpTypeMismatch", vecCtx: &vectorSortContext{
+			distFnExpr: distance,
+		}, index: &MultiTableIndex{
+			IndexDefs: map[string]*plan.IndexDef{
+				catalog.Hnsw_TblType_Metadata: {
+					IndexAlgoParams: `{"op_type": "cosine_similarity"}`,
+				},
+				catalog.Hnsw_TblType_Storage: {},
 			},
-			catalog.Hnsw_TblType_Storage: {},
-		},
+		}},
 	}
-
-	result, err := builder.prepareHnswIndexContext(vecCtx, multiTableIndex)
-	assert.NoError(t, err)
-	assert.Nil(t, result)
-}
-
-// TestPrepareHnswIndexContext_MissingOpType tests the case where op_type field is missing
-func TestPrepareHnswIndexContext_MissingOpType(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
-	vecCtx := &vectorSortContext{
-		distFnExpr: &plan.Function{
-			Func: &ObjectRef{
-				ObjName: "l2_distance",
-			},
-		},
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := builder.prepareHnswIndexContext(tc.vecCtx, tc.index)
+			require.NoError(t, err)
+			require.Nil(t, result)
+		})
 	}
-	multiTableIndex := &MultiTableIndex{
-		IndexDefs: map[string]*plan.IndexDef{
-			catalog.Hnsw_TblType_Metadata: {
-				IndexAlgoParams: `{"other_field": "value"}`,
-			},
-			catalog.Hnsw_TblType_Storage: {},
-		},
-	}
-
-	result, err := builder.prepareHnswIndexContext(vecCtx, multiTableIndex)
-	assert.NoError(t, err)
-	assert.Nil(t, result)
-}
-
-// TestPrepareHnswIndexContext_OpTypeNotString tests the case where op_type is not a string
-func TestPrepareHnswIndexContext_OpTypeNotString(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
-	vecCtx := &vectorSortContext{
-		distFnExpr: &plan.Function{
-			Func: &ObjectRef{
-				ObjName: "l2_distance",
-			},
-		},
-	}
-	multiTableIndex := &MultiTableIndex{
-		IndexDefs: map[string]*plan.IndexDef{
-			catalog.Hnsw_TblType_Metadata: {
-				IndexAlgoParams: `{"op_type": 123}`,
-			},
-			catalog.Hnsw_TblType_Storage: {},
-		},
-	}
-
-	result, err := builder.prepareHnswIndexContext(vecCtx, multiTableIndex)
-	assert.NoError(t, err)
-	assert.Nil(t, result)
-}
-
-// TestPrepareHnswIndexContext_OpTypeMismatch tests the case where op_type doesn't match the distance function
-func TestPrepareHnswIndexContext_OpTypeMismatch(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
-	vecCtx := &vectorSortContext{
-		distFnExpr: &plan.Function{
-			Func: &ObjectRef{
-				ObjName: "l2_distance",
-			},
-		},
-	}
-	multiTableIndex := &MultiTableIndex{
-		IndexDefs: map[string]*plan.IndexDef{
-			catalog.Hnsw_TblType_Metadata: {
-				IndexAlgoParams: `{"op_type": "cosine_similarity"}`,
-			},
-			catalog.Hnsw_TblType_Storage: {},
-		},
-	}
-
-	result, err := builder.prepareHnswIndexContext(vecCtx, multiTableIndex)
-	assert.NoError(t, err)
-	assert.Nil(t, result)
 }
 
 // TestPrepareHnswIndexContext_ArgsNotFound tests the case where getArgsFromDistFn returns found=false
 func TestPrepareHnswIndexContext_ArgsNotFound(t *testing.T) {
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 
 	// Create a scan node with proper table def
 	scanNode := &plan.Node{
@@ -366,7 +233,7 @@ func TestPrepareHnswIndexContext_ArgsNotFound(t *testing.T) {
 
 // TestPrepareHnswIndexContext_ResolveVariableError tests the case where ResolveVariable returns an error
 func TestPrepareHnswIndexContext_ResolveVariableError(t *testing.T) {
-	baseMockCtx := NewMockCompilerContext(true)
+	baseMockCtx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	mockCtx := &customMockCompilerContext{
 		MockCompilerContext: baseMockCtx,
 		resolveVarFunc: func(varName string, isSystem, isGlobal bool) (interface{}, error) {
@@ -446,7 +313,7 @@ func TestPrepareHnswIndexContext_ResolveVariableError(t *testing.T) {
 
 // TestPrepareHnswIndexContext_Success tests the successful case where all conditions are met
 func TestPrepareHnswIndexContext_Success(t *testing.T) {
-	baseMockCtx := NewMockCompilerContext(true)
+	baseMockCtx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	mockCtx := &customMockCompilerContext{
 		MockCompilerContext: baseMockCtx,
 		resolveVarFunc: func(varName string, isSystem, isGlobal bool) (interface{}, error) {
@@ -537,7 +404,7 @@ func TestPrepareHnswIndexContext_Success(t *testing.T) {
 }
 
 func TestApplyIndicesForSortUsingHnswKeepsFiltersOnScan(t *testing.T) {
-	baseMockCtx := NewMockCompilerContext(true)
+	baseMockCtx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	mockCtx := &customMockCompilerContext{
 		MockCompilerContext: baseMockCtx,
 		resolveVarFunc: func(varName string, isSystem, isGlobal bool) (interface{}, error) {
@@ -669,7 +536,7 @@ func TestApplyIndicesForSortUsingHnswKeepsFiltersOnScan(t *testing.T) {
 // the TVF node itself.
 func applyHnswAndGetTableConfig(t *testing.T, limit *plan.Expr) (vectorindex.IndexTableConfig, *plan.Node) {
 	t.Helper()
-	baseMockCtx := NewMockCompilerContext(true)
+	baseMockCtx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	mockCtx := &customMockCompilerContext{
 		MockCompilerContext: baseMockCtx,
 		resolveVarFunc: func(varName string, isSystem, isGlobal bool) (interface{}, error) {
@@ -843,9 +710,11 @@ func TestPrepareHnswIndexContext_DifferentDistanceFunctions(t *testing.T) {
 			shouldHaveOp: true,
 		},
 		{
+			// A normalized (non-degenerate) cosine query now uses the index; a zero/subnormal
+			// query vector is rejected at runtime in Search (TestHnswSearchCosineRejected), not here.
 			name:         "cosine_distance",
 			funcName:     "cosine_distance",
-			shouldHaveOp: false,
+			shouldHaveOp: true,
 		},
 		{
 			name:         "l1_distance",
@@ -863,7 +732,7 @@ func TestPrepareHnswIndexContext_DifferentDistanceFunctions(t *testing.T) {
 				return
 			}
 
-			baseMockCtx := NewMockCompilerContext(true)
+			baseMockCtx := NewMockCompilerContext(true, newPlanTestProcess(t))
 			mockCtx := &customMockCompilerContext{
 				MockCompilerContext: baseMockCtx,
 				resolveVarFunc: func(varName string, isSystem, isGlobal bool) (interface{}, error) {
@@ -884,45 +753,24 @@ func TestPrepareHnswIndexContext_DifferentDistanceFunctions(t *testing.T) {
 						"id":      1,
 					},
 					Cols: []*plan.ColDef{
-						{
-							Name: "vec_col",
-							Typ: plan.Type{
-								Id: int32(types.T_array_float32),
-							},
-						},
-						{
-							Name: "id",
-							Typ: plan.Type{
-								Id:    int32(types.T_int64),
-								Width: 64,
-							},
-						},
+						{Name: "vec_col", Typ: plan.Type{Id: int32(types.T_array_float32)}},
+						{Name: "id", Typ: plan.Type{Id: int32(types.T_int64), Width: 64}},
 					},
-					Pkey: &plan.PrimaryKeyDef{
-						PkeyColName: "id",
-					},
+					Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"},
 				},
 			}
 
 			vecCtx := &vectorSortContext{
 				distFnExpr: &plan.Function{
-					Func: &ObjectRef{
-						ObjName: tc.funcName,
-					},
+					Func: &ObjectRef{ObjName: tc.funcName},
 					Args: []*plan.Expr{
 						{
-							Typ: plan.Type{Id: int32(types.T_array_float32)},
-							Expr: &plan.Expr_Col{
-								Col: &plan.ColRef{
-									ColPos: 0,
-								},
-							},
+							Typ:  plan.Type{Id: int32(types.T_array_float32)},
+							Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
 						},
 						{
-							Typ: plan.Type{Id: int32(types.T_array_float32)},
-							Expr: &plan.Expr_Lit{
-								Lit: &plan.Literal{},
-							},
+							Typ:  plan.Type{Id: int32(types.T_array_float32)},
+							Expr: &plan.Expr_Lit{Lit: &plan.Literal{}},
 						},
 					},
 				},

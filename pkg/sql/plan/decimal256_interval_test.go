@@ -129,7 +129,7 @@ func TestDecimal256IntervalPreservesFractionalSeconds(t *testing.T) {
 }
 
 func TestDecimal256IntervalPreparedConstantKeepsMicroseconds(t *testing.T) {
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare decimal256_interval from select date_add(cast('2026-01-01 00:00:00' as datetime(6)), interval 1.25000000000000000000000000000000000000 second)")
 	require.NoError(t, err)
 	plan := prepared.GetDcl().GetPrepare().GetPlan()
@@ -169,7 +169,7 @@ func TestDecimal256IntervalUnarySignPreservesFractionalSeconds(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			stmt, err := runOneStmt(NewMockOptimizer(false), t, tc.sql)
+			stmt, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, tc.sql)
 			require.NoError(t, err)
 			root := stmt.GetQuery().Nodes[stmt.GetQuery().Steps[len(stmt.GetQuery().Steps)-1]]
 			require.Len(t, root.ProjectList, 1)
@@ -480,11 +480,12 @@ func TestDecimal256IntervalGuardsAndProtocolPaths(t *testing.T) {
 func TestDecimal256IntervalRejectsInt64OverflowAfterRounding(t *testing.T) {
 	ctx := context.Background()
 	dateExpr := makeDatetimeConst("2026-01-01 00:00:00")
-	_, err := resetDateFunctionArgs(ctx, dateExpr, makeIntervalExpr(
+	args, err := resetDateFunctionArgs(ctx, dateExpr, makeIntervalExpr(
 		makeWideDecimalIntervalExpr(t, "9223372036854.77580800000000000000000000000000000000"),
 		"SECOND"))
-	require.Error(t, err)
-	require.ErrorContains(t, err, "out of range")
+	require.NoError(t, err)
+	require.Equal(t, "to_interval_microsecond", args[1].GetF().GetFunc().GetObjName(),
+		"overflow is decided at execution, after branch selection")
 }
 
 func TestDecimal256IntervalRoundsExactlyBeforeWindowValidation(t *testing.T) {

@@ -53,14 +53,15 @@ import (
 )
 
 const (
-	tableDumpFormatVersion = 1
-	tableDumpManifestName  = "manifest.json"
-	tableDumpReadyName     = "READY"
-	tableDumpMaxManifest   = 64 << 20
-	tableDumpMaxRelations  = 4_096
-	tableDumpMaxObjects    = 250_000
-	tableDumpMaxBlocks     = 1_000_000
-	tableDumpMaxAutoIncr   = tableDumpMaxRelations * 16
+	tableDumpFormatVersion      = 1
+	tableDumpBoundFormatVersion = 2
+	tableDumpManifestName       = "manifest.json"
+	tableDumpReadyName          = "READY"
+	tableDumpMaxManifest        = 64 << 20
+	tableDumpMaxRelations       = 4_096
+	tableDumpMaxObjects         = 250_000
+	tableDumpMaxBlocks          = 1_000_000
+	tableDumpMaxAutoIncr        = tableDumpMaxRelations * 16
 
 	// Keep LOAD object installation separate from real catalog table locks.
 	// The high synthetic table ID follows the existing user-level-lock
@@ -69,13 +70,15 @@ const (
 )
 
 type tableDumpManifest struct {
-	Version        int                 `json:"version"`
-	SourceDatabase string              `json:"source_database"`
-	SourceTable    string              `json:"source_table"`
-	CreateSQL      string              `json:"create_sql,omitempty"`
-	SchemaHash     string              `json:"schema_hash"`
-	MetadataOnly   bool                `json:"metadata_only"`
-	Relations      []tableDumpRelation `json:"relations"`
+	Version          int                 `json:"version"`
+	SourceDatabase   string              `json:"source_database"`
+	SourceTable      string              `json:"source_table"`
+	CreateSQL        string              `json:"create_sql,omitempty"`
+	SchemaHash       string              `json:"schema_hash"`
+	BoundExpressions []byte              `json:"bound_expressions,omitempty"`
+	ExpressionHash   string              `json:"expression_hash,omitempty"`
+	MetadataOnly     bool                `json:"metadata_only"`
+	Relations        []tableDumpRelation `json:"relations"`
 }
 
 type tableDumpRelation struct {
@@ -842,13 +845,20 @@ func readTableDumpManifest(ctx context.Context, fs fileservice.FileService) (*ta
 	if err != nil {
 		return nil, moerr.NewInvalidInputNoCtxf("invalid table dump manifest: %v", err)
 	}
-	if manifest.Version != tableDumpFormatVersion {
+	if manifest.Version != tableDumpFormatVersion && manifest.Version != tableDumpBoundFormatVersion {
 		return nil, moerr.NewInvalidInputNoCtxf("unsupported table dump format version %d", manifest.Version)
+	}
+	if manifest.Version == tableDumpBoundFormatVersion &&
+		(len(manifest.BoundExpressions) == 0 || manifest.ExpressionHash == "") {
+		return nil, moerr.NewInvalidInputNoCtx("table dump is missing bound expression metadata")
 	}
 	return manifest, nil
 }
 
 func decodeTableDumpManifest(data []byte) (*tableDumpManifest, error) {
+	if err := rejectDuplicateTableDumpFields(data); err != nil {
+		return nil, err
+	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	start, err := decoder.Token()
 	if err != nil {
@@ -878,6 +888,10 @@ func decodeTableDumpManifest(data []byte) (*tableDumpManifest, error) {
 			err = decoder.Decode(&manifest.CreateSQL)
 		case "schema_hash":
 			err = decoder.Decode(&manifest.SchemaHash)
+		case "bound_expressions":
+			err = decoder.Decode(&manifest.BoundExpressions)
+		case "expression_hash":
+			err = decoder.Decode(&manifest.ExpressionHash)
 		case "metadata_only":
 			err = decoder.Decode(&manifest.MetadataOnly)
 		case "relations":
@@ -904,6 +918,57 @@ func decodeTableDumpManifest(data []byte) (*tableDumpManifest, error) {
 		return nil, err
 	}
 	return manifest, nil
+}
+
+// encoding/json accepts duplicate object keys and silently keeps the last
+// value. A dump is an untrusted restore instruction, so reject ambiguous
+// metadata at every nesting level before interpreting it.
+func rejectDuplicateTableDumpFields(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	type frame struct {
+		object    bool
+		fieldName bool
+		seen      map[string]struct{}
+	}
+	var stack []frame
+	for {
+		token, err := decoder.Token()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if delimiter, ok := token.(json.Delim); ok && (delimiter == '}' || delimiter == ']') {
+			if len(stack) == 0 {
+				return moerr.NewInvalidInputNoCtx("invalid table dump JSON")
+			}
+			stack = stack[:len(stack)-1]
+			continue
+		}
+		if len(stack) != 0 && stack[len(stack)-1].object && stack[len(stack)-1].fieldName {
+			name, ok := token.(string)
+			if !ok {
+				return moerr.NewInvalidInputNoCtx("invalid table dump field name")
+			}
+			current := &stack[len(stack)-1]
+			if _, exists := current.seen[name]; exists {
+				return moerr.NewInvalidInputNoCtxf("duplicate table dump field %s", name)
+			}
+			current.seen[name] = struct{}{}
+			current.fieldName = false
+			continue
+		}
+		if len(stack) != 0 && stack[len(stack)-1].object {
+			stack[len(stack)-1].fieldName = true
+		}
+		if delimiter, ok := token.(json.Delim); ok && (delimiter == '{' || delimiter == '[') {
+			if len(stack) >= 64 {
+				return moerr.NewInvalidInputNoCtx("table dump JSON nesting exceeds limit")
+			}
+			stack = append(stack, frame{object: delimiter == '{', fieldName: delimiter == '{', seen: make(map[string]struct{})})
+		}
+	}
 }
 
 func decodeTableDumpRelations(
@@ -1198,6 +1263,20 @@ func handleDumpTable(ctx context.Context, ses *Session, stmt *tree.DumpTable) er
 		Version: tableDumpFormatVersion, SourceDatabase: dbName, SourceTable: tableName,
 		CreateSQL: manifestCreateSQL, SchemaHash: refs[0].SchemaHash, MetadataOnly: stmt.MetadataOnly,
 		Relations: make([]tableDumpRelation, 0, len(refs)),
+	}
+	if tableDumpMayDependOnDivision(def) {
+		var sensitive bool
+		sensitive, err = sqlplan.AnalyzeTableDumpBindings(ses.GetTxnCompileCtx(), def, def)
+		if err != nil {
+			return err
+		}
+		if sensitive {
+			manifest.Version = tableDumpBoundFormatVersion
+			manifest.BoundExpressions, manifest.ExpressionHash, err = tableDumpBoundExpressions(def)
+			if err != nil {
+				return err
+			}
+		}
 	}
 	dumpFS, closeDumpFS, err := openTableDumpFS(ctx, ses, stmt.Path)
 	if err != nil {
@@ -1612,6 +1691,28 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 	if targetRefs[0].SchemaHash != manifest.SchemaHash {
 		return moerr.NewInvalidInputNoCtx("target table schema does not match table dump")
 	}
+	var restoredDef *plan.TableDef
+	var restoreExpressions bool
+	if manifest.Version == tableDumpBoundFormatVersion {
+		restoredDef, restoreExpressions, err = tableDumpRestoredExpressions(
+			targetDef, manifest.BoundExpressions, manifest.ExpressionHash)
+		if err != nil {
+			return err
+		}
+		if _, err = sqlplan.AnalyzeTableDumpBindings(ses.GetTxnCompileCtx(), targetDef, restoredDef); err != nil {
+			return err
+		}
+	} else if tableDumpMayDependOnDivision(targetDef) {
+		var sensitive bool
+		sensitive, err = sqlplan.AnalyzeTableDumpBindings(ses.GetTxnCompileCtx(), targetDef, nil)
+		if err != nil {
+			return err
+		}
+		if sensitive {
+			return moerr.NewInvalidInputNoCtx(
+				"legacy table dump cannot verify persisted division bindings; create a new dump")
+		}
+	}
 	if len(targetRefs) != len(manifest.Relations) {
 		return moerr.NewInvalidInputNoCtx("target table index topology does not match table dump")
 	}
@@ -1661,7 +1762,6 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 			return moerr.NewNotSupportedNoCtx("LOAD TABLE installing objects with this transaction workspace")
 		}
 	}
-	sharedObjects := make([]string, 0)
 	seenRelations := make(map[string]struct{}, len(manifest.Relations))
 	seenObjects := make(map[string]struct{})
 	var totalBlocks uint64
@@ -1710,6 +1810,27 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 					return moerr.NewInvalidInputNoCtxf("metadata-only object %s is not present in target storage", item.Name)
 				}
 			}
+		}
+	}
+	if restoreExpressions {
+		if err = sqlplan.RequirePersistedExpressionProtocol(ctx, ses.GetProc(), restoredDef); err != nil {
+			return err
+		}
+		creator, owner, createdTime, ownerErr := tableDumpTargetOwnership(ctx, ses, targetDef.TblId)
+		if ownerErr != nil {
+			return ownerErr
+		}
+		if err = rel.AlterTable(ctx, nil, []*api.AlterTableReq{
+			api.NewGuardedReplaceDefReq(
+				targetDef.DbId, targetDef.TblId, targetDef.Version,
+				creator, owner, createdTime, restoredDef),
+		}); err != nil {
+			return err
+		}
+	}
+	sharedObjects := make([]string, 0)
+	for _, relationDump := range manifest.Relations {
+		for _, item := range relationDump.Objects {
 			// Object creation has no cross-CN ownership token. Protect every
 			// installed or reused name from transaction rollback and let the
 			// reference-aware object GC reclaim files left by a failed LOAD.

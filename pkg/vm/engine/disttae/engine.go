@@ -546,6 +546,7 @@ func loadNameByIdFromStorage(
 	if err != nil {
 		return "", "", err
 	}
+	defer result.Close()
 	for _, b := range result.Batches {
 		for i := 0; i < b.RowCount(); i++ {
 			tblanmes = append(tblanmes, b.Vecs[0].GetStringAt(i))
@@ -591,8 +592,9 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 	accountId, _ := defines.GetAccountId(ctx)
 	txn := op.GetWorkspace().(*Transaction)
 	dbName, tableName, deleted := txn.tableOps.queryNameByTid(tableId)
+	latestCatalogFallback := false
 	if tableName == "" && deleted {
-		return "", "", nil, moerr.NewInternalErrorf(ctx, "can not find table by id %d: accountId: %d. Deleted in txn", tableId, accountId)
+		return "", "", nil, moerr.NewNoSuchTablef(ctx, "can not find table by id %d: accountId: %d. Deleted in txn", tableId, accountId)
 	}
 
 	// not found in tableOps, try cache
@@ -601,8 +603,11 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 		cacheItem := cache.GetTableByIdAndTime(accountId, 0 /*db is not specified */, tableId, txn.op.SnapshotTS())
 		if cacheItem == nil {
 			latest := cache.GetTableById(accountId, 0, tableId)
-			if latest != nil && latest.Kind == catalog.SystemTemporaryTable && defines.IsTempTableName(latest.Name) {
+			if latest != nil && isSessionTemporaryCatalogItem(
+				cache, latest, accountId, latest.DatabaseId, latest.DatabaseName,
+			) {
 				cacheItem = latest
+				latestCatalogFallback = true
 			}
 		}
 		if cacheItem != nil {
@@ -645,7 +650,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 
 	if tableName == "" {
 		accountId, _ := defines.GetAccountId(ctx)
-		return "", "", nil, moerr.NewInternalErrorf(
+		return "", "", nil, moerr.NewNoSuchTablef(
 			ctx,
 			"can not find table by id %d: accountId: %d",
 			tableId, accountId,
@@ -680,6 +685,19 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 			zap.Error(err),
 		)
 		return "", "", nil, err
+	}
+	if latestCatalogFallback {
+		var resolvedTableID uint64
+		if txnTable != nil {
+			resolvedTableID = txnTable.GetTableID(ctx)
+		}
+		if resolvedTableID != tableId {
+			return "", "", nil, moerr.NewInternalErrorf(
+				ctx,
+				"can not find table by id %d: accountId: %d. latest catalog name resolved to table id %d",
+				tableId, accountId, resolvedTableID,
+			)
+		}
 	}
 
 	return dbName, tableName, txnTable, nil
@@ -731,6 +749,7 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	if err != nil {
 		return err
 	}
+	defer res.Close()
 	if len(res.Batches) != 1 || res.Batches[0].Vecs[0].Length() != 1 {
 		logutil.Error(
 			"engine.delete.relation.bad",

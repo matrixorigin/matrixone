@@ -47,6 +47,7 @@ func (intersect *Intersect) Prepare(proc *process.Process) error {
 	if err != nil {
 		return err
 	}
+	intersect.ctr.iterator = intersect.ctr.hashTable.NewIterator()
 	return intersect.ctr.keyEvaluator.Prepare(proc, intersect.KeyExprs)
 }
 
@@ -87,8 +88,12 @@ func (intersect *Intersect) Call(proc *process.Process) (vm.CallResult, error) {
 // build hash table
 func (intersect *Intersect) buildHashTable(proc *process.Process, analyzer process.Analyzer, idx int) error {
 	ctr := &intersect.ctr
+	child, err := vm.GetChild(intersect, idx)
+	if err != nil {
+		return err
+	}
 	for {
-		input, err := vm.ChildrenCall(intersect.GetChildren(idx), proc, analyzer)
+		input, err := vm.ChildrenCall(child, proc, analyzer)
 		if err != nil {
 			return err
 		}
@@ -108,7 +113,6 @@ func (intersect *Intersect) buildHashTable(proc *process.Process, analyzer proce
 			return err
 		}
 		cnt := input.Batch.RowCount()
-		itr := ctr.hashTable.NewIterator()
 		for i := 0; i < cnt; i += hashmap.UnitLimit {
 			rowcnt := ctr.hashTable.GroupCount()
 
@@ -117,7 +121,7 @@ func (intersect *Intersect) buildHashTable(proc *process.Process, analyzer proce
 				n = hashmap.UnitLimit
 			}
 
-			vs, zs, err := itr.Insert(i, n, keyVecs)
+			vs, zs, err := ctr.iterator.Insert(i, n, keyVecs)
 			if err != nil {
 				return err
 			}
@@ -139,8 +143,12 @@ func (intersect *Intersect) buildHashTable(proc *process.Process, analyzer proce
 
 func (intersect *Intersect) probeHashTable(proc *process.Process, analyzer process.Analyzer, idx int, result *vm.CallResult) (bool, error) {
 	ctr := &intersect.ctr
+	child, err := vm.GetChild(intersect, idx)
+	if err != nil {
+		return false, err
+	}
 	for {
-		input, err := vm.ChildrenCall(intersect.GetChildren(idx), proc, analyzer)
+		input, err := vm.ChildrenCall(child, proc, analyzer)
 		if err != nil {
 			return false, err
 		}
@@ -169,7 +177,6 @@ func (intersect *Intersect) probeHashTable(proc *process.Process, analyzer proce
 		needInsert := make([]uint8, hashmap.UnitLimit)
 		resetsNeedInsert := make([]uint8, hashmap.UnitLimit)
 		cnt := input.Batch.RowCount()
-		itr := ctr.hashTable.NewIterator()
 		for i := 0; i < cnt; i += hashmap.UnitLimit {
 			n := cnt - i
 			if n > hashmap.UnitLimit {
@@ -179,7 +186,7 @@ func (intersect *Intersect) probeHashTable(proc *process.Process, analyzer proce
 			copy(needInsert, resetsNeedInsert)
 			insertcnt := 0
 
-			vs, zs, err := itr.Find(i, n, keyVecs)
+			vs, zs, err := ctr.iterator.Find(i, n, keyVecs)
 			if err != nil {
 				return false, err
 			}

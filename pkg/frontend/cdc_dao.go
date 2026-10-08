@@ -142,6 +142,24 @@ func (t *CDCDao) CreateTask(
 		ctx context.Context,
 		tx taskservice.SqlExecutor,
 	) (ret int, err error) {
+		// The protocol version can advance before this catalog upgrade commits.
+		// Check the exact columns in the task-creation transaction.
+		columns, queryErr := tx.QueryContext(ctx,
+			"SELECT pending_source_table_id, target_identity FROM mo_catalog.mo_cdc_watermark LIMIT 0")
+		if queryErr != nil {
+			return 0, moerr.NewNotSupportedf(ctx,
+				"CDC target identity catalog columns are not available: %v", queryErr)
+		}
+		defer columns.Close()
+		for columns.Next() {
+			return 0, moerr.NewInternalError(ctx, "CDC target identity catalog probe unexpectedly returned a row")
+		}
+		if err = columns.Err(); err != nil {
+			return 0, err
+		}
+		if err = columns.Close(); err != nil {
+			return 0, err
+		}
 		var (
 			insertSql    string
 			rowsAffected int64
@@ -570,9 +588,6 @@ func (t *CDCDao) syncCommitTimestamp(ctx context.Context) error {
 	}
 
 	cluster := clusterservice.GetMOCluster(qc.ServiceID())
-	if cluster == nil {
-		return moerr.NewInternalError(ctx, "cluster service is nil")
-	}
 
 	addresses := make([]string, 0, 4)
 	cluster.GetCNService(

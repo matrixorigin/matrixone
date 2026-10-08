@@ -40,7 +40,7 @@ func TestPreparedNoKeyODKUParameters(t *testing.T) {
 		}
 		for _, tc := range cases {
 			t.Run(modifier+tc.name, func(t *testing.T) {
-				mock := NewMockOptimizer(true)
+				mock := NewMockOptimizer(true, newPlanTestProcess(t))
 				sql := fmt.Sprintf(
 					"prepare s from insert %sinto insert_fk_no_key_c values (?, ?) on duplicate key update pid = %s",
 					modifier,

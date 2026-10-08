@@ -460,6 +460,9 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 		}
 		idx := tblInfo.alias[alias]
 		tblDef := tblInfo.tableDefs[idx]
+		if err := checkCatalogDMLTarget(ctx.GetContext(), tblInfo.objRef[idx], true); err != nil {
+			return nil, err
+		}
 		newTblInfo.objRef = append(newTblInfo.objRef, tblInfo.objRef[idx])
 		newTblInfo.tableDefs = append(newTblInfo.tableDefs, tblDef)
 		newTblInfo.isClusterTable = append(newTblInfo.isClusterTable, tblInfo.isClusterTable[idx])
@@ -569,6 +572,11 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 	}
 	if tableDef == nil {
 		return moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
+	}
+	if tblInfo.typ != "update" {
+		if err := checkCatalogDMLTarget(ctx.GetContext(), obj, false); err != nil {
+			return err
+		}
 	}
 	if err := validateTableIndexDefinitions(tableDef); err != nil {
 		return err
@@ -837,7 +845,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		astSlt = stmt.Rows
 
 		subCtx := NewBindContext(builder, bindCtx)
-		subCtx.numericProjectionTypes = insertProjectionTypes(insertColumns, tableDef)
+		subCtx.numericProjectionTypes = insertProjectionTypes(insertColumns, tableDef, builder.isInsertIgnore)
 		info.rootId, err = builder.bindSelect(astSlt, subCtx, false)
 		if err != nil {
 			return false, nil, nil, err
@@ -848,7 +856,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		astSlt = slt.Select
 
 		subCtx := NewBindContext(builder, bindCtx)
-		subCtx.numericProjectionTypes = insertProjectionTypes(insertColumns, tableDef)
+		subCtx.numericProjectionTypes = insertProjectionTypes(insertColumns, tableDef, builder.isInsertIgnore)
 		info.rootId, err = builder.bindSelect(astSlt, subCtx, false)
 		if err != nil {
 			return false, nil, nil, err
@@ -1295,28 +1303,32 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	return existAutoPkCol, insertWithoutUniqueKeyMap, ifInsertFromUniqueColMap, nil
 }
 
-func deleteToSelect(builder *QueryBuilder, bindCtx *BindContext, node *tree.Delete, haveConstraint bool, tblInfo *dmlTableInfo) (int32, error) {
+func deleteToSelect(builder *QueryBuilder, bindCtx *BindContext, node *tree.Delete, haveConstraint bool, tblInfo *dmlTableInfo) (int32, []map[string]int32, error) {
 	var selectList []tree.SelectExpr
 	fromTables := &tree.From{}
+	colName2Idx := make([]map[string]int32, len(tblInfo.tableDefs))
 
 	getResolveExpr := func(alias string) {
 		var ret *tree.UnresolvedName
+		defIdx := tblInfo.alias[alias]
+		colName2Idx[defIdx] = make(map[string]int32)
 		if haveConstraint {
-			defIdx := tblInfo.alias[alias]
 			for _, col := range tblInfo.tableDefs[defIdx].Cols {
+				colName2Idx[defIdx][col.Name] = int32(len(selectList))
 				ret = tree.NewUnresolvedName(tree.NewCStr(alias, bindCtx.lower), tree.NewCStr(col.Name, 1))
 				selectList = append(selectList, tree.SelectExpr{
 					Expr: ret,
 				})
 			}
 		} else {
-			defIdx := tblInfo.alias[alias]
+			colName2Idx[defIdx][catalog.Row_ID] = int32(len(selectList))
 			ret = tree.NewUnresolvedName(tree.NewCStr(alias, bindCtx.lower), tree.NewCStr(catalog.Row_ID, 1))
 			selectList = append(selectList, tree.SelectExpr{
 				Expr: ret,
 			})
 			pkName := getTablePriKeyName(tblInfo.tableDefs[defIdx].Pkey)
 			if pkName != "" {
+				colName2Idx[defIdx][pkName] = int32(len(selectList))
 				ret = tree.NewUnresolvedName(tree.NewCStr(alias, bindCtx.lower), tree.NewCStr(pkName, 1))
 				selectList = append(selectList, tree.SelectExpr{
 					Expr: ret,
@@ -1361,7 +1373,8 @@ func deleteToSelect(builder *QueryBuilder, bindCtx *BindContext, node *tree.Dele
 	// sql := ftCtx.String()
 	// fmt.Print(sql)
 
-	return builder.bindSelect(astSelect, bindCtx, false)
+	lastNodeID, err := builder.bindSelect(astSelect, bindCtx, false)
+	return lastNodeID, colName2Idx, err
 }
 
 func checkNotNull(ctx context.Context, expr *Expr, tableDef *TableDef, col *ColDef) error {
@@ -2183,11 +2196,8 @@ func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colTyp
 		// invalid-input error before the statement's strict/IGNORE policy and
 		// warning sink are available.
 		if numVal.ValType == tree.P_char {
-			value := numVal.String()
-			if _, outOfRange := types.IsTimeStringOutOfInternalRange(value, colType.Scale); outOfRange {
-				expr := MakePlan2StringConstExprWithType(value)
-				return forceAssignmentCastExprWithProcess(proc.Ctx, expr, makePlan2Type(colType), isIgnore, proc)
-			}
+			expr := MakePlan2StringConstExprWithType(numVal.String())
+			return forceAssignmentCastExprWithProcess(proc.Ctx, expr, makePlan2Type(colType), isIgnore, proc)
 		}
 		canInsert, isnull, num, err := util.SetInsertValueTime(proc, numVal, colType)
 		if err != nil || !canInsert {
@@ -2208,6 +2218,10 @@ func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colTyp
 
 		return MakePlan2DateConstExprWithType(int32(num)), err
 	case types.T_datetime:
+		if numVal.ValType == tree.P_char {
+			expr := MakePlan2StringConstExprWithType(numVal.String())
+			return forceAssignmentCastExprWithProcess(proc.Ctx, expr, makePlan2Type(colType), isIgnore, proc)
+		}
 		canInsert, isnull, num, err := util.SetInsertValueDateTime(proc, numVal, colType)
 		if err != nil || !canInsert {
 			return nil, err
@@ -2217,6 +2231,10 @@ func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colTyp
 		}
 		return MakePlan2DateTimeConstExprWithType(int64(num)), err
 	case types.T_timestamp:
+		if numVal.ValType == tree.P_char {
+			expr := MakePlan2StringConstExprWithType(numVal.String())
+			return forceAssignmentCastExprWithProcess(proc.Ctx, expr, makePlan2Type(colType), isIgnore, proc)
+		}
 		canInsert, isnull, num, err := util.SetInsertValueTimeStamp(proc, numVal, colType)
 		if err != nil || !canInsert {
 			return nil, err
@@ -2299,6 +2317,20 @@ func buildValueScan(
 			binder := NewDefaultBinder(builder.GetContext(), nil, nil, sourceType, nil)
 			binder.builder = builder
 			for _, r := range slt.Rows {
+				// Keep legacy implicit TIMESTAMP NULL semantics consistent with
+				// the main INSERT value-scan path. This must run before the
+				// literal fast path, which otherwise materializes a NULL value.
+				if isNullAstExpr(r[i]) {
+					defExpr, err = buildLegacyTimestampNullAssignment(builder.compCtx, col)
+					if err != nil {
+						return nil, err
+					}
+					if defExpr != nil {
+						hasLocalDefaultRefs = hasLocalDefaultRefs || exprHasLocalColumnRef(defExpr)
+						rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, &plan.RowsetExpr{Expr: defExpr})
+						continue
+					}
+				}
 				if nv, ok := r[i].(*tree.NumVal); ok && builder.isInsertIgnore {
 					expr, handled, err := makeInsertIgnoreMySQLSpecialTypeConstExpr(builder.GetContext(), nv, col.Typ)
 					if err != nil {

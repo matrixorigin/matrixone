@@ -128,7 +128,7 @@ func TestRecoverAdmittedReadReleasesOrRetainsRetryableOwner(t *testing.T) {
 	admitted, err := substrait.AdmitReads(context.Background(), substrait.AdmissionRequest{
 		Candidate: candidate, Provider: siriusRuntimeTestProvider{schema: candidate.Reads()[0].Schema}, Leases: leases,
 		AccountID: 1, QueryID: bytes.Repeat([]byte{'q'}, 16), SnapshotTS: make([]byte, 12),
-		AuthorizedClientSPKIHash: make([]byte, 32), TTL: time.Minute, ReadOnly: true,
+		AuthorizedClientSPKIHash: bytes.Repeat([]byte{1}, 32), TTL: time.Minute, ReadOnly: true,
 	})
 	require.NoError(t, err)
 	require.Len(t, leases.PendingExecutions(), 1)
@@ -140,7 +140,7 @@ func TestRecoverAdmittedReadReleasesOrRetainsRetryableOwner(t *testing.T) {
 	admitted, err = substrait.AdmitReads(context.Background(), substrait.AdmissionRequest{
 		Candidate: candidate, Provider: siriusRuntimeTestProvider{schema: candidate.Reads()[0].Schema}, Leases: leases,
 		AccountID: 1, QueryID: bytes.Repeat([]byte{'r'}, 16), SnapshotTS: make([]byte, 12),
-		AuthorizedClientSPKIHash: make([]byte, 32), TTL: time.Minute, ReadOnly: true,
+		AuthorizedClientSPKIHash: bytes.Repeat([]byte{1}, 32), TTL: time.Minute, ReadOnly: true,
 	})
 	require.NoError(t, err)
 	protector.failUnregister = true
@@ -182,6 +182,44 @@ func TestSiriusCompileFastRejections(t *testing.T) {
 	require.NoError(t, (*siriusReadOwner)(nil).finish(context.Background(), false))
 	err = (&Compile{}).runSiriusRead(context.Background())
 	require.ErrorContains(t, err, "missing Sirius execution owner")
+}
+
+type siriusAdmissionBackend struct {
+	SiriusBackend
+	accepting bool
+}
+
+func (b *siriusAdmissionBackend) Accepting() bool { return b.accepting }
+
+func TestEmbeddedSiriusAdmissionNeverSilentlyFallsBack(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	runtime := moruntime.ServiceRuntime(proc.GetService())
+	previous, existed := runtime.GetGlobalVariables(SiriusRuntimeKey)
+	backend := &siriusAdmissionBackend{accepting: true}
+	configured := &SiriusRuntime{EmbeddedMO: true, Backend: backend, CleanupTimeout: time.Second}
+	runtime.SetGlobalVariables(SiriusRuntimeKey, configured)
+	t.Cleanup(func() {
+		if existed {
+			runtime.SetGlobalVariables(SiriusRuntimeKey, previous)
+		} else {
+			runtime.CompareAndDeleteGlobalVariables(SiriusRuntimeKey, configured)
+		}
+	})
+	c := &Compile{proc: proc, stmt: &tree.Select{}}
+	ctx := WithSiriusOffload(context.Background())
+	for _, query := range []*planpb.Plan{nil, {Plan: &planpb.Plan_Query{Query: &planpb.Query{}}}} {
+		offloaded, err := c.tryCompileSiriusRead(ctx, query)
+		require.False(t, offloaded)
+		require.Error(t, err)
+		backend.accepting = false
+		offloaded, err = c.tryCompileSiriusRead(ctx, query)
+		require.False(t, offloaded)
+		require.ErrorContains(t, err, "admission is sealed")
+		backend.accepting = true
+	}
+	offloaded, err := c.tryCompileSiriusRead(context.Background(), nil)
+	require.False(t, offloaded)
+	require.NoError(t, err)
 }
 
 func TestSQLSelectLimitIsMaterializedBeforeSiriusExport(t *testing.T) {

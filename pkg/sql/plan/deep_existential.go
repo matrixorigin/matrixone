@@ -15,6 +15,8 @@
 package plan
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -90,7 +92,7 @@ func (builder *QueryBuilder) readExistentialRelation(id int32) (*existentialRela
 		if builder.ctxByNode[id].queryBlockOwner != owner {
 			return nil, false
 		}
-		if n.Limit != nil || n.Offset != nil || len(n.OrderBy) != 0 || len(n.LockTargets) != 0 || len(n.OriginViews) != 0 || n.DirectView != "" {
+		if n.Limit != nil || n.Offset != nil || len(n.OrderBy) != 0 || len(n.LockTargets) != 0 || len(n.ViewPath) != 0 {
 			return nil, false
 		}
 		r.filters = append(r.filters, n.FilterList...)
@@ -465,7 +467,7 @@ func (builder *QueryBuilder) lowerDeepExistential(id int32, outer *plan.Subquery
 		}
 	}
 	if len(arms) == 0 {
-		arms = []*plan.Expr{constTrue}
+		arms = []*plan.Expr{newSubqueryBoolConst(true)}
 	}
 	descriptors := make([]*existentialArm, 0, len(arms))
 	for _, p := range arms {
@@ -576,7 +578,7 @@ func (builder *QueryBuilder) emitExistentialArm(id int32, middle, inner *existen
 			id = builder.appendNode(&plan.Node{NodeType: plan.Node_FILTER, Children: []int32{id}, FilterList: gates}, ctx)
 		}
 		id = builder.appendNode(&plan.Node{NodeType: plan.Node_JOIN, JoinType: jt, Children: []int32{id, anchorID}, OnList: keys, SpillMem: builder.joinSpillMem}, ctx)
-		return id, DeepCopyExpr(constTrue), nil
+		return id, newSubqueryBoolConst(true), nil
 	} else {
 		id, marker, err = builder.insertMarkJoin(id, anchorID, keys, nil, false, ctx)
 	}
@@ -613,7 +615,7 @@ func (builder *QueryBuilder) attachExistentialSummary(id, input int32, ctx *Bind
 	if err != nil {
 		return 0, nil, err
 	}
-	id = builder.appendNode(&plan.Node{NodeType: plan.Node_JOIN, JoinType: plan.Node_INNER, Children: []int32{id, agg}, OnList: []*plan.Expr{DeepCopyExpr(constTrue)}, SpillMem: builder.joinSpillMem}, ctx)
+	id = builder.appendNode(&plan.Node{NodeType: plan.Node_JOIN, JoinType: plan.Node_INNER, Children: []int32{id, agg}, OnList: []*plan.Expr{newSubqueryBoolConst(true)}, SpillMem: builder.joinSpillMem}, ctx)
 	return id, marker, nil
 }
 
@@ -666,7 +668,7 @@ func existentialPredicateSafe(e *plan.Expr) bool {
 		if lit == nil || lit.Src != nil || !types.T(arg.Typ.Id).IsInteger() || !types.T(x.Typ.Id).IsInteger() {
 			return
 		}
-		if checkNoNeedCast(makeTypeByPlan2Expr(arg), makeTypeByPlan2Expr(x), arg) {
+		if checkNoNeedCast(context.Background(), makeTypeByPlan2Expr(arg), makeTypeByPlan2Expr(x), arg) {
 			x.Expr = DeepCopyExpr(arg).Expr
 		}
 	})
@@ -731,7 +733,7 @@ func (builder *QueryBuilder) addExistentialHashGate(input int32, keys, gates []*
 		}
 	}
 	gatePos := int32(len(projects))
-	projects = append(projects, DeepCopyExpr(constTrue))
+	projects = append(projects, newSubqueryBoolConst(true))
 	input = builder.appendNode(&plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{input}, BindingTags: []int32{tag}, ProjectList: projects}, ctx)
 	if builder.existentialGateProjects == nil {
 		builder.existentialGateProjects = make(map[int32]struct{})
@@ -745,7 +747,7 @@ func (builder *QueryBuilder) addExistentialHashGate(input int32, keys, gates []*
 	if err != nil {
 		return 0, nil, err
 	}
-	buildGate := &plan.Expr{Typ: constTrue.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: tag, ColPos: gatePos}}}
+	buildGate := &plan.Expr{Typ: newSubqueryBoolConst(true).Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: tag, ColPos: gatePos}}}
 	condition, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{gate, buildGate})
 	if err != nil {
 		return 0, nil, err

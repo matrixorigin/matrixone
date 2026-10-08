@@ -36,6 +36,10 @@ func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 		!proc.GroupConcatSourceRowProvenanceTrusted()
 	mergeGroup.ctr.prepareParamKind.Reset(mergeGroup.Aggs)
 	mergeGroup.ctr.aggExprs = mergeGroup.Aggs
+	mergeGroup.ctr.warningRetentionLimit = process.WarningDiagnosticRetentionLimitForProcess(proc)
+	mergeGroup.ctr.warningRetentionSet = true
+	mergeGroup.ctr.groupConcatWarnings.SetWarningBudget(
+		process.WarningDiagnosticBudgetForProcess(proc))
 	mergeGroup.ctr.prepareParamKindWireV1 = prepareParamKindWireV1Enabled(proc) &&
 		hasPrepareParamKindPreservingAgg(mergeGroup.Aggs)
 	mergeGroup.ctr.mp = mpool.MustNewNoLock("merge_group_mpool")
@@ -65,6 +69,7 @@ func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 	mergeGroup.ctr.floatZeroHLLState = useFloatZeroHLLStateForRemote(proc)
 	mergeGroup.ctr.legacyVectorHLLState = useLegacyVectorHLLStateForRemote(proc)
 	mergeGroup.ctr.legacyTextHLLAddState = useLegacyTextHLLAddStateForRemote(proc)
+	mergeGroup.ctr.legacyFloatHLLAddState = useLegacyFloatHLLAddStateForRemote(proc)
 	// MergeGroup is a receiver. It canonicalizes legacy producer payloads into
 	// the current in-memory DISTINCT domain, so its destination uses the modern
 	// key policy even when the incoming peer is below v79.
@@ -303,6 +308,9 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 			return false, retryErr
 		}
 	}
+	if err := mergeGroup.ctr.ensureMemoryGrowthParticipant(); err != nil {
+		return false, err
+	}
 
 	// merge intermediate results with only Aggregation.
 	if len(bat.Vecs) == 0 {
@@ -340,6 +348,26 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 						preview.values = mergeGroup.ctr.hr.insertPlan.Values()
 						preview.inserted = mergeGroup.ctr.hr.insertPlan.Inserted()
 						preview.newGroups = int(mergeGroup.ctr.hr.insertPlan.NewGroups())
+					}
+					if err == nil && preview.newGroups > 0 {
+						var growth uint64
+						growth, err = mergeGroup.ctr.recoveryCapacityGrowth(preview.newGroups)
+						if err == nil {
+							var spill bool
+							spill, err = mergeGroup.ctr.needAdaptiveSpillForGrowth(
+								mergeGroup.OpAnalyzer, growth)
+							if err == nil && spill {
+								mergeGroup.ctr.freeSpillAggList()
+								if retried, retryErr := mergeGroup.retryBuildBatchAfterCapacity(
+									proc, mpool.ErrAllocationAccountCapacity); !retried {
+									return false, retryErr
+								}
+								if err = mergeGroup.prepareBuildBatch(proc, bat); err != nil {
+									return false, err
+								}
+								continue
+							}
+						}
 					}
 					if err == nil &&
 						!mergeGroup.ctr.recoveryCapacityCovers(preview.newGroups) {
@@ -425,7 +453,10 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 			return false, err
 		}
 	}
-	needSpill := mergeGroup.ctr.needSpill(mergeGroup.OpAnalyzer)
+	needSpill, err := mergeGroup.ctr.shouldSpill(mergeGroup.OpAnalyzer)
+	if err != nil {
+		return false, err
+	}
 	if needSpill && mergeGroup.ctr.distinctSpill == nil {
 		hasDistinct, err := mergeGroup.ctr.hasExactCountDistinctArguments()
 		if err != nil {
@@ -436,7 +467,10 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 				proc, mergeGroup.OpAnalyzer); err != nil {
 				return false, err
 			}
-			needSpill = mergeGroup.ctr.needSpill(mergeGroup.OpAnalyzer)
+			needSpill, err = mergeGroup.ctr.shouldSpill(mergeGroup.OpAnalyzer)
+			if err != nil {
+				return false, err
+			}
 		}
 	}
 	return needSpill, nil

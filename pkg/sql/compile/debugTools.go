@@ -28,6 +28,7 @@ import (
 var debugInstructionNames = map[vm.OpType]string{
 	vm.Top:                     "top",
 	vm.AdaptiveTop:             "adaptive top",
+	vm.VectorQuery:             "scalar vector query",
 	vm.Limit:                   "limit",
 	vm.Merge:                   "merge",
 	vm.Order:                   "order",
@@ -60,6 +61,7 @@ var debugInstructionNames = map[vm.OpType]string{
 	vm.External:                "external",
 	vm.MongoScan:               "mongodb scan",
 	vm.Minus:                   "minus",
+	vm.MinusAll:                "minus all",
 	vm.Intersect:               "intersect",
 	vm.IntersectAll:            "intersect all",
 	vm.UnionAll:                "union all",

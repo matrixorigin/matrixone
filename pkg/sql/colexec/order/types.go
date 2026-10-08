@@ -90,17 +90,29 @@ type container struct {
 	desc      []bool // ds[i] == true: the attrs[i] are in descending order
 	nullsLast []bool
 
-	sortExprExecutor []colexec.ExpressionExecutor
-	sortVectors      []*vector.Vector
-	resultOrderList  []int64
-	resultOrderMP    *mpool.MPool
-	sortScratch      mosort.ByVectorsScratch
-	sortPartitionsMP *mpool.MPool
-	sortDiffsMP      *mpool.MPool
-	appendScratch    *mpool.AccountedBuffer
+	sortExprExecutor       []colexec.ExpressionExecutor
+	sortVectors            []*vector.Vector
+	resultOrderList        []int64
+	resultOrderMP          *mpool.MPool
+	sortScratch            mosort.ByVectorsScratch
+	sortPartitionsMP       *mpool.MPool
+	sortDiffsMP            *mpool.MPool
+	appendScratch          *mpool.AccountedBuffer
+	growthParticipant      *process.ExecutionMemoryGrowthParticipant
+	recoveryCapacity       *process.ExecutionRecoveryCapacity
+	recoveryCapacityClass  mpool.AllocationCapacityClass
+	recoveryCapacityActive bool
+	recoveryCapacityFloor  uint64
+	finalizationAllocation *vector.AllocationAccountSelection
+	// pendingInput is borrowed from the child. When memory pressure closes the
+	// current run, keep the just-received batch here instead of copying it while
+	// that run is still live. The child is not called again until pendingInput
+	// has been consumed, so the borrowed batch remains valid.
+	pendingInput *batch.Batch
 
 	allocationAccount    *mpool.AllocationAccount
 	retainedAllocation   *vector.AllocationAccountSelection
+	recoveryAllocation   *vector.AllocationAccountSelection
 	expressionAllocation *vector.AllocationAccountSelection
 }
 
@@ -173,6 +185,7 @@ func (ctr *container) setAllocationAccount(account *mpool.AllocationAccount) err
 		return mpool.ErrAllocationAccountMismatch
 	}
 	if ctr.batWaitForSort != nil || ctr.rbat != nil || ctr.appendScratch != nil ||
+		ctr.pendingInput != nil ||
 		len(ctr.sortExprExecutor) != 0 || cap(ctr.resultOrderList) != 0 ||
 		ctr.resultOrderMP != nil || cap(ctr.sortScratch.Partitions) != 0 ||
 		ctr.sortPartitionsMP != nil || cap(ctr.sortScratch.Diffs) != 0 ||
@@ -201,9 +214,38 @@ func (ctr *container) setAllocationAccount(account *mpool.AllocationAccount) err
 	if err != nil {
 		return err
 	}
+	recoveryCapacity := process.NewExecutionRecoveryCapacitySlot()
+	recoveryClass, err := account.RegisterCapacityController(recoveryCapacity)
+	if err != nil {
+		return err
+	}
+	rollbackRecovery := func(cause error) error {
+		_ = account.UnregisterCapacityController(recoveryClass, recoveryCapacity)
+		return cause
+	}
+	recovery, err := vector.NewAllocationAccountSelectionWithCapacityClass(
+		account,
+		mpool.AllocationOwnerOrder,
+		ordersites.OrderRetainedData,
+		ordersites.OrderRetainedArea,
+		ordersites.OrderRetainedNulls,
+		ordersites.OrderRetainedGrouping,
+		recoveryClass,
+	)
+	if err != nil {
+		return rollbackRecovery(err)
+	}
 	ctr.allocationAccount = account
 	ctr.retainedAllocation = retained
+	ctr.recoveryAllocation = recovery
 	ctr.expressionAllocation = expression
+	ctr.recoveryCapacity = recoveryCapacity
+	ctr.recoveryCapacityClass = recoveryClass
+	// The floor is admitted before a child batch is retained. Charge both the
+	// retained run and its replacement shuffle to that same floor; reserving
+	// progress capacity while allocating the run from the ordinary class can
+	// otherwise strand an entirely unused floor at a saturated query cap.
+	ctr.finalizationAllocation = recovery
 	return nil
 }
 
@@ -215,15 +257,88 @@ func (ctr *container) clearAllocationAccount(account *mpool.AllocationAccount) e
 		return mpool.ErrAllocationAccountMismatch
 	}
 	if ctr.batWaitForSort != nil || ctr.rbat != nil || ctr.appendScratch != nil ||
+		ctr.pendingInput != nil ||
 		len(ctr.sortExprExecutor) != 0 || cap(ctr.resultOrderList) != 0 ||
 		ctr.resultOrderMP != nil || cap(ctr.sortScratch.Partitions) != 0 ||
 		ctr.sortPartitionsMP != nil || cap(ctr.sortScratch.Diffs) != 0 ||
 		ctr.sortDiffsMP != nil {
 		return mpool.ErrAllocationAccountInvariant
 	}
+	if err := ctr.clearRecoveryCapacity(account); err != nil {
+		return err
+	}
 	ctr.allocationAccount = nil
 	ctr.retainedAllocation = nil
+	ctr.recoveryAllocation = nil
 	ctr.expressionAllocation = nil
+	return nil
+}
+
+func (ctr *container) installRecoveryCapacity(
+	budget *process.ExecutionResourceGeneration,
+) error {
+	if ctr == nil || ctr.allocationAccount == nil || budget == nil ||
+		ctr.recoveryCapacity == nil ||
+		ctr.recoveryCapacityClass == mpool.AllocationCapacityClassDefault ||
+		ctr.finalizationAllocation == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if ctr.recoveryCapacityActive {
+		return nil
+	}
+	if err := ctr.recoveryCapacity.Activate(budget); err != nil {
+		return err
+	}
+	ctr.recoveryCapacityActive = true
+	return nil
+}
+
+func (ctr *container) releaseRecoveryCapacity() error {
+	if ctr == nil || ctr.recoveryCapacity == nil || !ctr.recoveryCapacityActive {
+		return nil
+	}
+	if err := ctr.recoveryCapacity.Close(); err != nil {
+		return err
+	}
+	ctr.recoveryCapacityActive = false
+	ctr.recoveryCapacityFloor = 0
+	return nil
+}
+
+func (ctr *container) trimRecoveryCapacity() error {
+	if ctr == nil || ctr.recoveryCapacity == nil || !ctr.recoveryCapacityActive {
+		return nil
+	}
+	capacity, err := ctr.recoveryCapacity.TrimUnusedCapacity()
+	if err != nil {
+		return err
+	}
+	ctr.recoveryCapacityFloor = capacity
+	return nil
+}
+
+func (ctr *container) clearRecoveryCapacity(
+	account *mpool.AllocationAccount,
+) error {
+	if ctr == nil || ctr.recoveryCapacity == nil {
+		return nil
+	}
+	if account == nil || account != ctr.allocationAccount ||
+		ctr.recoveryCapacityClass == mpool.AllocationCapacityClassDefault {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	if err := ctr.releaseRecoveryCapacity(); err != nil {
+		return err
+	}
+	capacity := ctr.recoveryCapacity
+	class := ctr.recoveryCapacityClass
+	if err := account.UnregisterCapacityController(class, capacity); err != nil {
+		return err
+	}
+	ctr.recoveryCapacity = nil
+	ctr.recoveryCapacityClass = mpool.AllocationCapacityClassDefault
+	ctr.recoveryAllocation = nil
+	ctr.finalizationAllocation = nil
 	return nil
 }
 
@@ -234,6 +349,21 @@ func growOrderSlice[T any](
 	proc *process.Process,
 	account *mpool.AllocationAccount,
 	site mpool.AllocationSite,
+) ([]T, *mpool.MPool, error) {
+	return growOrderSliceWithCapacityClass(
+		values, owner, required, proc, account, site,
+		mpool.AllocationCapacityClassDefault,
+	)
+}
+
+func growOrderSliceWithCapacityClass[T any](
+	values []T,
+	owner *mpool.MPool,
+	required int,
+	proc *process.Process,
+	account *mpool.AllocationAccount,
+	site mpool.AllocationSite,
+	capacityClass mpool.AllocationCapacityClass,
 ) ([]T, *mpool.MPool, error) {
 	if required < 0 || proc == nil ||
 		(account == nil && owner != nil) ||
@@ -259,12 +389,13 @@ func growOrderSlice[T any](
 		return nil, owner, mpool.ErrAllocationAllocatorLimit
 	}
 	capacity := int((uint64(nextBytes) + elementSize - 1) / elementSize)
-	next, err := mpool.MakeSliceAccounted[T](
+	next, err := mpool.MakeSliceAccountedWithCapacityClass[T](
 		capacity,
 		proc.Mp(),
 		account,
 		mpool.AllocationOwnerOrder,
 		site,
+		capacityClass,
 	)
 	if err != nil {
 		return nil, owner, err
@@ -285,11 +416,16 @@ func (ctr *container) appendCheckpoints(
 	}
 	if ctr.appendScratch == nil {
 		var err error
-		ctr.appendScratch, err = mpool.NewAccountedBuffer(
+		capacityClass := mpool.AllocationCapacityClassDefault
+		if ctr.recoveryCapacityActive {
+			capacityClass = ctr.recoveryCapacityClass
+		}
+		ctr.appendScratch, err = mpool.NewAccountedBufferWithCapacityClass(
 			proc.Mp(),
 			ctr.allocationAccount,
 			mpool.AllocationOwnerOrder,
 			ordersites.OrderAppendCheckpoints,
+			capacityClass,
 		)
 		if err != nil {
 			return nil, err
@@ -330,12 +466,25 @@ func (ctr *container) releaseSlices() {
 }
 
 func (ctr *container) releaseAttempt() {
+	ctr.releaseGrowthParticipant()
+	// pendingInput is child-owned. Dropping the reference is sufficient; the
+	// normal child Reset/Free path remains its sole cleanup owner.
+	ctr.pendingInput = nil
 	ctr.releaseSlices()
 	if ctr.appendScratch != nil {
 		ctr.appendScratch.Free()
 		ctr.appendScratch = nil
 	}
 	ctr.releaseExpressionExecutors()
+	_ = ctr.releaseRecoveryCapacity()
+}
+
+func (ctr *container) releaseGrowthParticipant() {
+	if ctr == nil || ctr.growthParticipant == nil {
+		return
+	}
+	ctr.growthParticipant.Release()
+	ctr.growthParticipant = nil
 }
 
 func (ctr *container) releaseExpressionExecutors() {
@@ -368,7 +517,8 @@ func orderTerminalCapacityError(ctx context.Context, err error) error {
 		!mpool.IsMPoolCapacityFailure(err) {
 		return moerr.NewResourceExhaustedf(
 			ctx,
-			"order memory capacity exceeded; reduce sort width or query concurrency, or increase processLimitationSize",
+			"order memory capacity exceeded: %v; reduce sort width or query concurrency, or increase processLimitationSize",
+			err,
 		)
 	}
 	return err

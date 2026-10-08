@@ -156,7 +156,8 @@ func TestCodecCancelsContextAfterDecodeError(t *testing.T) {
 	codec := newTestCodec().(*messageCodec)
 	codec.bc.headerCodecs = []HeaderCodec{&deadlineContextCodec{}, header}
 
-	data := []byte{flagHasCustomHeader}
+	data := make([]byte, 0, 9)
+	data = append(data, flagHasCustomHeader)
 	deadline := buf.NewByteBuf(8)
 	require.NoError(t, deadline.WriteInt64(int64(time.Hour)))
 	data = append(data, deadline.RawSlice(0, 8)...)
@@ -174,7 +175,8 @@ func TestCodecCancelsContextAfterDecodeError(t *testing.T) {
 
 func TestCodecRejectsPayloadFlagForNonPayloadMessage(t *testing.T) {
 	codec := NewMessageCodec("", func() Message { return &codecBodyMessage{} })
-	data := []byte{flagHashPayload, 0, 0, 0, 1}
+	data := make([]byte, 0, 14)
+	data = append(data, flagHashPayload, 0, 0, 0, 1)
 	data = append(data, make([]byte, 9)...)
 
 	_, ok, err := codec.Decode(newCodecFrame(t, data))

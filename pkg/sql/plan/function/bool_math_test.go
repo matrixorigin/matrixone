@@ -36,6 +36,7 @@ func TestPreparedBooleanFloatCast(t *testing.T) {
 				NewFunctionTestInput(types.T_text.ToType(), []string{"true", "false", "true", "1", "0", "bad"}, []bool{false, false, false, false, false, true}),
 				NewFunctionTestInput(target.ToType(), empty, nil),
 			}, NewFunctionTestResult(target.ToType(), false, want, []bool{false, false, false, false, false, true}), NewCast)
+			defer tc.Free()
 			tc.parameters[0].SetPrepareParamKinds([]vector.PrepareParamKind{
 				vector.PrepareParamBoolean, vector.PrepareParamBoolean, vector.PrepareParamNone,
 				vector.PrepareParamBoolean, vector.PrepareParamBoolean, vector.PrepareParamBoolean,
@@ -184,7 +185,7 @@ func TestMathBoolCastTargetsPreserveValuesAndNulls(t *testing.T) {
 				NewFunctionTestResult(tc.targetType, false, tc.want, []bool{false, true, false}),
 				NewCast)
 
-			succeed, info := caseTest.Run()
+			succeed, info := caseTest.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -192,59 +193,54 @@ func TestMathBoolCastTargetsPreserveValuesAndNulls(t *testing.T) {
 
 func TestMathBoolCastsHonorMaskedRows(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	input := newVectorByType(proc.Mp(), types.T_bool.ToType(), []bool{true, false}, nil)
-	target := newVectorByType(proc.Mp(), types.T_float64.ToType(), []float64{0, 0}, nil)
-	result := vector.NewFunctionResultWrapper(types.T_float64.ToType(), proc.Mp())
-	defer input.Free(proc.Mp())
-	defer target.Free(proc.Mp())
-	defer result.Free()
-	require.NoError(t, result.PreExtendAndReset(2))
-	require.NoError(t, NewCast([]*vector.Vector{input, target}, result, proc, 2,
-		&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}))
-
-	got := result.GetResultVector()
-	require.Equal(t, float64(1), vector.GetFixedAtNoTypeCheck[float64](got, 0))
-	require.False(t, got.GetNulls().Contains(0))
-	require.True(t, got.GetNulls().Contains(1))
+	fc := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false}, nil),
+		NewFunctionTestInput(types.T_float64.ToType(), []float64{0, 0}, nil),
+	}, NewFunctionTestResult(types.T_float64.ToType(), false, []float64{1, 0}, []bool{false, true}), NewCast).
+		WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}})
+	ok, info := fc.RunAndFree()
+	require.True(t, ok, info)
 }
 
 func TestMathBooleanValuesReachMathExecutors(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	ctx := proc.Ctx
 
-	castInput := func(t *testing.T, values []bool, targetType types.Type, targetValues []float64) (*vector.Vector, func()) {
-		t.Helper()
-		input := newVectorByType(proc.Mp(), types.T_bool.ToType(), values, nil)
-		target := newVectorByType(proc.Mp(), targetType, targetValues, nil)
-		castResult := vector.NewFunctionResultWrapper(targetType, proc.Mp())
-		require.NoError(t, castResult.PreExtendAndReset(len(values)))
-		require.NoError(t, NewCast([]*vector.Vector{input, target}, castResult, proc, len(values), nil))
-		return castResult.GetResultVector(), func() {
-			castResult.Free()
-			input.Free(proc.Mp())
-			target.Free(proc.Mp())
-		}
+	castInput := func(values []bool, wanted []float64) FunctionTestCase {
+		return NewFunctionTestCase(proc, []FunctionTestInput{
+			NewFunctionTestInput(types.T_bool.ToType(), values, nil),
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{0, 0}, nil),
+		}, NewFunctionTestResult(types.T_float64.ToType(), false, wanted, nil), NewCast)
 	}
 
 	sin, err := GetFunctionByName(ctx, "sin", []types.Type{types.T_bool.ToType()})
 	require.NoError(t, err)
-	sinInput, releaseSinInput := castInput(t, []bool{true, false}, types.T_float64.ToType(), []float64{0, 0})
-	defer releaseSinInput()
+	sinCase := castInput([]bool{true, false}, []float64{1, 0})
+	defer sinCase.Free()
+	ok, info := sinCase.Run()
+	require.True(t, ok, info)
+	sinInput := sinCase.GetResultVectorDirectly()
 	sinOutput, err := RunFunctionDirectly(proc, sin.GetEncodedOverloadID(), []*vector.Vector{sinInput}, 2)
 	require.NoError(t, err)
+	defer sinOutput.Free(proc.Mp())
 	require.Equal(t, []float64{0.8414709848078965, 0}, vector.MustFixedColNoTypeCheck[float64](sinOutput))
-	sinOutput.Free(proc.Mp())
 
 	power, err := GetFunctionByName(ctx, "power", []types.Type{types.T_bool.ToType(), types.T_bool.ToType()})
 	require.NoError(t, err)
-	left, releaseLeft := castInput(t, []bool{true, false}, types.T_float64.ToType(), []float64{0, 0})
-	right, releaseRight := castInput(t, []bool{false, true}, types.T_float64.ToType(), []float64{0, 0})
-	defer releaseLeft()
-	defer releaseRight()
+	leftCase := castInput([]bool{true, false}, []float64{1, 0})
+	defer leftCase.Free()
+	ok, info = leftCase.Run()
+	require.True(t, ok, info)
+	left := leftCase.GetResultVectorDirectly()
+	rightCase := castInput([]bool{false, true}, []float64{0, 1})
+	defer rightCase.Free()
+	ok, info = rightCase.Run()
+	require.True(t, ok, info)
+	right := rightCase.GetResultVectorDirectly()
 	powerOutput, err := RunFunctionDirectly(proc, power.GetEncodedOverloadID(), []*vector.Vector{left, right}, 2)
 	require.NoError(t, err)
+	defer powerOutput.Free(proc.Mp())
 	require.Equal(t, []float64{1, 0}, vector.MustFixedColNoTypeCheck[float64](powerOutput))
-	powerOutput.Free(proc.Mp())
 }
 
 func TestFixedTypeMatchWithBoolNumericCastKeepsNonNumericFallback(t *testing.T) {

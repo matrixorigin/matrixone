@@ -15,12 +15,36 @@
 package plan
 
 import (
+	"context"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
+
+// checkCatalogDMLTarget keeps SQL writes away from catalog rows whose TN
+// entries are interpreted as database/table DDL. The upgrade-only mo_columns
+// UPDATE has its own explicit statement capability and write protocol.
+func checkCatalogDMLTarget(ctx context.Context, obj *plan.ObjectRef, allowColumnsUpdate bool) error {
+	if obj == nil || !strings.EqualFold(obj.SchemaName, catalog.MO_CATALOG) {
+		return nil
+	}
+	switch {
+	case strings.EqualFold(obj.ObjName, catalog.MO_DATABASE),
+		strings.EqualFold(obj.ObjName, catalog.MO_TABLES):
+	case strings.EqualFold(obj.ObjName, catalog.MO_COLUMNS):
+		if allowColumnsUpdate && ctx.Value(defines.MoColumnsUpdateKey{}) != nil {
+			return nil
+		}
+	default:
+		return nil
+	}
+	return moerr.NewInvalidInputf(ctx, "direct DML on %s.%s is not allowed", obj.SchemaName, obj.ObjName)
+}
 
 type DMLContext struct {
 	objRefs         []*plan.ObjectRef
@@ -150,6 +174,9 @@ func (dmlCtx *DMLContext) ResolveUpdateTables(ctx CompilerContext, stmt *tree.Up
 	dmlCtx.updateAssignments = make([][]UpdateAssignment, len(dmlCtx.tableDefs))
 	for alias, columnMap := range usedTbl {
 		idx := dmlCtx.aliasMap[alias]
+		if err := checkCatalogDMLTarget(ctx.GetContext(), dmlCtx.objRefs[idx], true); err != nil {
+			return err
+		}
 		dmlCtx.updateCol2Expr[idx] = columnMap
 		dmlCtx.updateColOrder[idx] = updateColOrder[alias]
 		dmlCtx.updateAssignments[idx] = updateAssignments[alias]
@@ -430,6 +457,11 @@ func (dmlCtx *DMLContext) resolveSingleTable(
 	}
 	if tableDef == nil {
 		return moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
+	}
+	if !allowReadOnlySources {
+		if err := checkCatalogDMLTarget(ctx.GetContext(), objRef, false); err != nil {
+			return err
+		}
 	}
 	if err := validateTableIndexDefinitions(tableDef); err != nil {
 		return err

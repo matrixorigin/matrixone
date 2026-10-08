@@ -52,6 +52,7 @@ type cancellationUpgradeExecutor struct {
 	entered      chan context.Context
 	abort        chan struct{}
 	current      atomic.Bool
+	finalVersion string
 	active       atomic.Bool
 	transactions atomic.Int32
 	result       func(string) executor.Result
@@ -66,9 +67,9 @@ func (e *cancellationUpgradeExecutor) ExecTxn(
 	txn := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
 		switch sql {
 		case "select create_version from mo_account where account_id = 11":
-			version := "4.0.7"
+			version := "4.0.9"
 			if e.current.Load() {
-				version = "4.0.8"
+				version = e.finalVersion
 			}
 			return e.result(version), nil
 		case "select version, version_offset, state from mo_version order by create_at desc limit 1":
@@ -107,20 +108,22 @@ func TestSessionTenantUpgradeCancellationReleasesCNConsumer(t *testing.T) {
 		txn.EXPECT().Commit(gomock.Any()).Return(nil).Times(1)
 		exec := &cancellationUpgradeExecutor{
 			txn: txn, entered: make(chan context.Context, 1), abort: make(chan struct{}),
-			result: func(kind string) executor.Result {
-				switch kind {
-				case "cluster":
-					return tenantUpgradeSQLResult(t, "4.0.8", uint32(1), int32(versions.StateCreated))
-				case "route":
-					return tenantUpgradeSQLResult(t, uint64(100), "4.0.7", "4.0.8", "4.0.8", uint32(1),
-						int32(versions.StateCreated), int32(0), int32(versions.No), int32(versions.Yes), int32(1), int32(0))
-				default:
-					return tenantUpgradeSQLResult(t, kind)
-				}
-			},
 		}
 		b := bootstrap.NewService(sid, nil, clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec)
 		defer b.Close()
+		exec.finalVersion = b.GetFinalVersion()
+		finalOffset := uint32(b.GetFinalVersionOffset())
+		exec.result = func(kind string) executor.Result {
+			switch kind {
+			case "cluster":
+				return tenantUpgradeSQLResult(t, exec.finalVersion, finalOffset, int32(versions.StateCreated))
+			case "route":
+				return tenantUpgradeSQLResult(t, uint64(100), "4.0.9", exec.finalVersion, exec.finalVersion, finalOffset,
+					int32(versions.StateCreated), int32(0), int32(versions.No), int32(versions.Yes), int32(1), int32(0))
+			default:
+				return tenantUpgradeSQLResult(t, kind)
+			}
+		}
 		cfg := new(Config)
 		cfg.UUID = sid
 		s := &service{cfg: cfg, bootstrapService: b, sessionMgr: queryservice.NewSessionManager()}
@@ -129,7 +132,7 @@ func TestSessionTenantUpgradeCancellationReleasesCNConsumer(t *testing.T) {
 		exited := make(chan struct{})
 		go func() {
 			defer close(exited)
-			done <- ses.MaybeUpgradeTenant(ctx, "4.0.7", 11)
+			done <- ses.MaybeUpgradeTenant(ctx, "4.0.9", 11)
 		}()
 		// Abort and join the worker even if the regression fails on the old wrapper.
 		defer func() {
@@ -163,9 +166,9 @@ func TestSessionTenantUpgradeCancellationReleasesCNConsumer(t *testing.T) {
 		// A subsequent successful check must execute SQL: cancellation must not
 		// have populated bootstrap's checked-tenant cache. Only that check is cached.
 		exec.current.Store(true)
-		require.NoError(t, ses.MaybeUpgradeTenant(t.Context(), "4.0.7", 11))
+		require.NoError(t, ses.MaybeUpgradeTenant(t.Context(), "4.0.9", 11))
 		require.Equal(t, int32(2), exec.transactions.Load())
-		require.NoError(t, ses.MaybeUpgradeTenant(t.Context(), "4.0.7", 11))
+		require.NoError(t, ses.MaybeUpgradeTenant(t.Context(), "4.0.9", 11))
 		require.Equal(t, int32(2), exec.transactions.Load())
 		closed := make(chan error, 1)
 		go func() { closed <- s.closeBootstrapService() }()
