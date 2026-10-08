@@ -20,6 +20,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gogo/protobuf/proto"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -39,6 +40,87 @@ func legacyCRC32Expr() *planpb.Expr {
 		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.CRC32, function.CRC32LegacyOverload), ObjName: "crc32"},
 		Args: []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_json)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0, Name: "j"}}}},
 	}}}
+}
+
+func TestCRC32LegacyCheckCopyReplay(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		typ    types.T
+		replay bool
+	}{
+		{"reorder_integer", types.T_int32, true},
+		{"reorder_json", types.T_json, true},
+		{"no_replay", types.T_json, false},
+		{"changed_input_type", types.T_int64, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			expr, err := BindFuncExprImplByPlanExpr(mock.ctxt.GetContext(), ">", []*Expr{legacyCRC32Expr(), MakePlan2Uint64ConstExprWithType(0)})
+			require.NoError(t, err)
+			original := &planpb.TableDef{Name: "original", Cols: []*planpb.ColDef{
+				{ColId: 1, Name: "j", Typ: planpb.Type{Id: int32(types.T_json)}},
+				{ColId: 2, Name: "x", Typ: planpb.Type{Id: int32(tc.typ)}},
+			}, Checks: []*planpb.CheckDef{{Name: "ck", Check: expr}}}
+			target := proto.Clone(original).(*planpb.TableDef)
+			target.Name = "copy"
+			target.Cols[0], target.Cols[1] = target.Cols[1], target.Cols[0]
+			if tc.name == "changed_input_type" {
+				target.Cols[1].Typ.Id = int32(types.T_int64)
+			}
+			ctx := context.WithValue(mock.ctxt.GetContext(), defines.CRC32CopyExpressionsKey{}, target)
+			if tc.replay {
+				ctx = WithPersistedDDLReplay(ctx, original, target)
+			}
+			mock.ctxt.SetContext(ctx)
+			created := &planpb.TableDef{Name: target.Name, Cols: target.Cols}
+			err = appendCheckDef(&mock.ctxt, created, "ck", nil, -1)
+			if tc.name == "changed_input_type" || !tc.replay {
+				require.ErrorContains(t, err, "explicit table rebuild")
+				require.Empty(t, created.Checks)
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, created.Checks, 1)
+			got := created.Checks[0].Check.GetF().Args[0]
+			require.True(t, containsLegacyCRC32(got))
+			require.Equal(t, int32(1), got.GetF().Args[0].GetCol().ColPos)
+			got.GetF().Args[0].GetCol().ColPos = 99
+			require.Equal(t, int32(0), original.Checks[0].Check.GetF().Args[0].GetF().Args[0].GetCol().ColPos)
+			require.Equal(t, int32(0), target.Checks[0].Check.GetF().Args[0].GetF().Args[0].GetCol().ColPos)
+		})
+	}
+}
+
+func TestCRC32LegacyCheckAlterRejectsInputConversion(t *testing.T) {
+	for _, sql := range []string{
+		`alter table constraint_test.t_on_update_gen modify column val bigint`,
+		`alter table constraint_test.t_on_update_gen change column val val varchar(32)`,
+	} {
+		t.Run(sql, func(t *testing.T) {
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			base := mock.ctxt.tables["t_on_update_gen"]
+			base.Indexes = nil
+			base.Name2ColIndex = make(map[string]int32, len(base.Cols))
+			for i, col := range base.Cols {
+				base.Name2ColIndex[col.Name] = int32(i)
+				col.GeneratedCol = nil // CHECK, not generated-column protection, must reject this ALTER.
+				col.OnUpdate = nil
+			}
+			pos := mockTableColPos(t, base, "val")
+			base.Cols[pos].Typ = planpb.Type{Id: int32(types.T_json)}
+			base.Cols[pos].Default = &planpb.Default{NullAbility: true}
+			legacy := legacyCRC32Expr()
+			legacy.GetF().Args[0].GetCol().ColPos = pos
+			legacy.GetF().Args[0].GetCol().Name = "val"
+			expr, err := BindFuncExprImplByPlanExpr(mock.ctxt.GetContext(), ">", []*Expr{legacy, MakePlan2Uint64ConstExprWithType(0)})
+			require.NoError(t, err)
+			base.Checks = []*planpb.CheckDef{{Name: "ck", Check: expr}}
+			_, err = runOneStmt(mock, t, sql)
+			require.ErrorContains(t, err, "explicit table rebuild")
+			require.Equal(t, int32(types.T_json), base.Cols[pos].Typ.Id)
+			require.Equal(t, pos, legacy.GetF().Args[0].GetCol().ColPos)
+		})
+	}
 }
 
 func TestCRC32CopyRetainsBoundGeneratedIdentity(t *testing.T) {

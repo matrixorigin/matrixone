@@ -4267,33 +4267,17 @@ func appendCheckDef(
 	if err := requireCheckConstraintProtocol(ctx.GetContext(), ctx.GetProcess()); err != nil {
 		return err
 	}
-	if source, _ := ctx.GetContext().Value(defines.CRC32CopyExpressionsKey{}).(*plan.TableDef); source != nil {
-		for _, check := range source.Checks {
-			if check.Name == name && containsLegacyCRC32(check.Check) {
-				if err := RequirePersistedIPFunctionProtocolForAuthoring(ctx.GetContext(), ctx.GetProcess(), check.Check); err != nil {
-					return err
-				}
-				if err := validateCheckExpr(ctx.GetContext(), tableDef, check.Check, columnPos); err != nil {
-					return err
-				}
-				for _, existing := range tableDef.Checks {
-					if existing.Name == name {
-						return moerr.NewInvalidInputf(ctx.GetContext(), "duplicate check constraint name '%s'", name)
-					}
-				}
-				owned := *check
-				owned.Check = DeepCopyExpr(check.Check)
-				tableDef.Checks = append(tableDef.Checks, &owned)
-				return nil
-			}
-		}
+	checkName := name
+	if checkName == "" {
+		checkName = fmt.Sprintf("__mo_chk_%d", len(tableDef.Checks)+1)
 	}
 	if replay := ddlReplayForTable(ctx.GetContext(), tableDef.Name); replay != nil {
-		checkName := name
-		if checkName == "" {
-			checkName = fmt.Sprintf("__mo_chk_%d", len(tableDef.Checks)+1)
-		}
 		if preserved := replay.checks[strings.ToLower(checkName)]; preserved != nil {
+			if containsLegacyCRC32(preserved.Check) {
+				if err := RequirePersistedIPFunctionProtocolForAuthoring(ctx.GetContext(), ctx.GetProcess(), preserved.Check); err != nil {
+					return err
+				}
+			}
 			for _, check := range tableDef.Checks {
 				if strings.EqualFold(check.Name, checkName) {
 					return moerr.NewInvalidInputf(ctx.GetContext(), "duplicate check constraint name '%s'", checkName)
@@ -4305,6 +4289,16 @@ func appendCheckDef(
 			}
 			tableDef.Checks = append(tableDef.Checks, copy)
 			return nil
+		}
+	}
+	if source, _ := ctx.GetContext().Value(defines.CRC32CopyExpressionsKey{}).(*plan.TableDef); source != nil {
+		for _, check := range source.Checks {
+			if strings.EqualFold(check.Name, checkName) && containsLegacyCRC32(check.Check) {
+				// Raw catalog coordinates belong to the old schema. Only replay
+				// can preserve them after a reorder and verify input compatibility.
+				// Neither copying them nor rebinding display SQL is a safe fallback.
+				return moerr.NewNotSupported(ctx.GetContext(), "changing a legacy CRC32 JSON check constraint requires an explicit table rebuild")
+			}
 		}
 	}
 	colNames := make([]string, 0, len(tableDef.Cols))

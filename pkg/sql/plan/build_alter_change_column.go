@@ -163,6 +163,11 @@ func buildColumnAndConstraint(
 			return nil, err
 		}
 	}
+	for _, check := range targetTableDef.Checks {
+		if err := validateLegacyCRC32GeneratedInputs(ctx.GetContext(), check.GetCheck(), defaultScope); err != nil {
+			return nil, moerr.NewNotSupported(ctx.GetContext(), "changing a legacy CRC32 JSON check constraint requires an explicit table rebuild")
+		}
+	}
 
 	// If the column null property is not specified, it defaults to allowing null
 	hasNullFlag := false

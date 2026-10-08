@@ -112,6 +112,27 @@ select id,c,c=crc32(j) as consistent from crc32_generated_convert order by id;
 select id from crc32_generated_convert where c=2212294583 order by id;
 drop table crc32_generated_convert;
 
+-- A current CHECK must keep its input after COPY reorders two JSON columns.
+drop table if exists crc32_check_copy;
+create table crc32_check_copy(id int primary key,j json,x json,constraint ck_crc32 check(crc32(j)=2212294583));
+insert into crc32_check_copy values(1,'1','2');
+alter table crc32_check_copy modify column j json after x;
+insert into crc32_check_copy(id,j,x) values(2,'1','2');
+insert into crc32_check_copy(id,j,x) values(3,'2','1');
+update crc32_check_copy set j='2',x='1' where id=1;
+select id from crc32_check_copy order by id;
+create table crc32_check_like like crc32_check_copy;
+insert into crc32_check_like(id,j,x) values(4,'1','2');
+insert into crc32_check_like(id,j,x) values(5,'2','1');
+select id from crc32_check_like order by id;
+-- New text-semantic CHECKs, unlike legacy binary-JSON contracts, may rebind.
+alter table crc32_check_copy modify column j bigint;
+insert into crc32_check_copy(id,j,x) values(6,1,'2');
+insert into crc32_check_copy(id,j,x) values(7,2,'1');
+select id from crc32_check_copy order by id;
+drop table crc32_check_like;
+drop table crc32_check_copy;
+
 drop table if exists crc32_binary;
 create table crc32_binary(id int, b varbinary(2));
 insert into crc32_binary values (1,X'00FF'),(2,X'00'),(3,X'FF'),(4,X''),(5,NULL);
