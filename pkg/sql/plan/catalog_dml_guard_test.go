@@ -51,7 +51,7 @@ func TestProtectedCatalogDMLReadSourceAndUpgradeCapability(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	sql := "UPDATE mo_catalog.mo_columns SET att_is_unsigned = 1 WHERE account_id = 0"
 	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)

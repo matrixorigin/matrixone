@@ -161,6 +161,124 @@ func TestVectorAllocationAccountConfiguration(t *testing.T) {
 	finalizeTestVectorAllocationAccount(t, state)
 }
 
+func TestShuffleWithAllocationAccountUsesAlternateCapacityClass(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	ordinaryController := &rejectNextVectorAllocation{}
+	account, err := registry.OpenWithController(1<<20, ordinaryController)
+	require.NoError(t, err)
+	ordinary, err := NewAllocationAccountSelection(
+		account,
+		testVectorAllocationOwner,
+		testVectorDataAllocationSite,
+		testVectorAreaAllocationSite,
+		testVectorNullAllocationSite,
+		testVectorGroupAllocationSite,
+	)
+	require.NoError(t, err)
+	recoveryController := &rejectNextVectorAllocation{}
+	class, err := account.RegisterCapacityController(recoveryController)
+	require.NoError(t, err)
+	recovery, err := NewAllocationAccountSelectionWithCapacityClass(
+		account,
+		testVectorAllocationOwner,
+		testVectorDataAllocationSite,
+		testVectorAreaAllocationSite,
+		testVectorNullAllocationSite,
+		testVectorGroupAllocationSite,
+		class,
+	)
+	require.NoError(t, err)
+
+	vec := newAccountedTestVector(t, types.T_int64.ToType(), ordinary)
+	require.NoError(t, AppendFixedList(
+		vec, []int64{3, 1, 2}, nil, mp))
+	ordinaryController.failAt = ordinaryController.calls + 1
+	require.NoError(t, vec.ShuffleWithAllocationAccount(
+		[]int64{1, 2, 0}, mp, recovery))
+	require.Equal(t, []int64{1, 2, 3},
+		MustFixedColWithTypeCheck[int64](vec))
+	require.Same(t, ordinary, vec.AllocationAccountSelection())
+	require.False(t, ordinaryController.rejected)
+	require.Zero(t, ordinaryController.used)
+	require.Positive(t, recoveryController.used)
+
+	vec.Free(mp)
+	require.Zero(t, recoveryController.used)
+	require.NoError(t,
+		account.UnregisterCapacityController(class, recoveryController))
+	snapshot := account.Seal()
+	require.Zero(t, snapshot.Used)
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestUnionBatchWithAllocationAccountDoesNotPropagateCapacityClass(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	ordinaryController := &rejectNextVectorAllocation{}
+	account, err := registry.OpenWithController(1<<20, ordinaryController)
+	require.NoError(t, err)
+	ordinary, err := NewAllocationAccountSelection(
+		account,
+		testVectorAllocationOwner,
+		testVectorDataAllocationSite,
+		testVectorAreaAllocationSite,
+		testVectorNullAllocationSite,
+		testVectorGroupAllocationSite,
+	)
+	require.NoError(t, err)
+	recoveryController := &rejectNextVectorAllocation{}
+	class, err := account.RegisterCapacityController(recoveryController)
+	require.NoError(t, err)
+	recovery, err := NewAllocationAccountSelectionWithCapacityClass(
+		account,
+		testVectorAllocationOwner,
+		testVectorDataAllocationSite,
+		testVectorAreaAllocationSite,
+		testVectorNullAllocationSite,
+		testVectorGroupAllocationSite,
+		class,
+	)
+	require.NoError(t, err)
+
+	source := NewVec(types.T_int64.ToType())
+	require.NoError(t, AppendFixedList(
+		source, []int64{3, 1, 2}, nil, mp))
+	destination := newAccountedTestVector(
+		t, types.T_int64.ToType(), ordinary)
+	ordinaryController.failAt = ordinaryController.calls + 1
+	require.NoError(t, destination.UnionBatchWithAllocationAccount(
+		source, 0, source.Length(), nil, mp, recovery))
+	require.Equal(t, []int64{3, 1, 2},
+		MustFixedColWithTypeCheck[int64](destination))
+	require.Same(t, ordinary, destination.AllocationAccountSelection())
+	require.False(t, ordinaryController.rejected)
+	require.Zero(t, ordinaryController.used)
+	require.Positive(t, recoveryController.used)
+
+	// The private class applies only to the retained copy. A downstream copy
+	// follows the persistent ordinary selection and therefore cannot borrow the
+	// producer's recovery floor.
+	_, err = destination.Dup(mp)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	require.True(t, ordinaryController.rejected)
+
+	destination.Free(mp)
+	source.Free(mp)
+	require.Zero(t, recoveryController.used)
+	require.NoError(t,
+		account.UnregisterCapacityController(class, recoveryController))
+	snapshot := account.Seal()
+	require.Zero(t, snapshot.Used)
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestAllocationAccountSelectionsEqual(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 1<<20, 8)
 	equivalent, err := NewAllocationAccountSelection(

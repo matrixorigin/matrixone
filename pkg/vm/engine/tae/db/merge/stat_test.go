@@ -277,7 +277,7 @@ func TestIsConstantObj(t *testing.T) {
 }
 
 func TestOverlapStatsWithoutInitializedZoneMap(t *testing.T) {
-	stats := []*objectio.ObjectStats{}
+	stats := make([]*objectio.ObjectStats, 0, 1)
 	tasks, err := GatherOverlapMergeTasks(context.Background(), stats, NewOverlapOptions(), 0)
 	require.Nil(t, tasks)
 	require.NoError(t, err)
@@ -402,14 +402,15 @@ func TestCalculateOverlapStats(t *testing.T) {
 
 func TestL0Stats(t *testing.T) {
 	size := uint32(20 * common.Const1MBytes)
-	stats := []*objectio.ObjectStats{
+	stats := make([]*objectio.ObjectStats, 0, 7)
+	stats = append(stats,
 		newTestObjectStats(t, 1, 100, size, 2, 1, nil, 0),
 		newTestObjectStats(t, 1, 100, size, 2, 0, nil, 1),
 		newTestObjectStats(t, 1, 100, size, 2, 0, nil, 2),
 		newTestObjectStats(t, 1, 100, size, 2, 0, nil, 2),
 		newTestObjectStats(t, 1, 100, size, 2, 0, nil, 2),
 		newTestObjectStats(t, 1, 100, size, 2, 0, nil, 2),
-	}
+	)
 
 	ctx := context.Background()
 	opts := NewLayerZeroOpts()

@@ -6,7 +6,8 @@ drop database if exists issue_29514_decimal_expr;
 create database issue_29514_decimal_expr;
 use issue_29514_decimal_expr;
 create table t(d decimal(12,2));
-insert into t select result from generate_series(1, 100000) g;
+-- Keep the sorted 13-block fixture; 0.10 exposes unsafe rounding of 0.104.
+insert into t select case when result = 1 then 0.10 else result end from generate_series(1, 100000) g;
 
 explain select count(*) from t where d = (select cast(54321 as double));
 -- @ignore:0
@@ -33,43 +34,120 @@ select count(*) from t where d = (select cast(null as double));
 select count(*) from t join (select cast(null as double) as v) x on t.d = x.v;
 select count(*) from t join (select d as v from t where d in (54321, 54322)) x on t.d = x.v;
 
--- #29515: execution-time DOUBLE parameters in equivalent expression shapes.
+-- #29515: prove scan volume and current bindings across equivalent shapes.
+-- ANALYZE regexes target the scan; COUNT/MIN independently check result identity.
 set @v = cast(54321 as double);
-prepare scalar_peer from 'select count(*) from t where d = (select ?)';
--- @ignore:0
+set @one = 1;
+prepare direct_peer from 'select count(*), min(d) from t where d = ?';
+-- @regex("Table Scan on issue_29514_decimal_expr[.]t\b[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=1\s+inputRows=8192\b",true)
+explain analyze force execute direct_peer using @v;
+execute direct_peer using @v;
+prepare scalar_peer from 'select count(*), min(d) from t where d = (select ?)';
+-- @regex("Table Scan on issue_29514_decimal_expr[.]t\b[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=1\s+inputRows=8192\b",true)
 explain analyze force execute scalar_peer using @v;
 execute scalar_peer using @v;
-prepare abs_peer from 'select count(*) from t where d = abs(?)';
--- @ignore:0
+prepare abs_peer from 'select count(*), min(d) from t where d = abs(?)';
+-- @regex("Table Scan on issue_29514_decimal_expr[.]t\b[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=1\s+inputRows=8192\b",true)
 explain analyze force execute abs_peer using @v;
 execute abs_peer using @v;
-prepare derived_peer from 'select count(*) from t join (select ? as v) x on t.d = x.v';
--- @ignore:0
+prepare scalar_abs_peer from 'select count(*), min(d) from t where d = (select abs(?))';
+-- @regex("Table Scan on issue_29514_decimal_expr[.]t\b[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=1\s+inputRows=8192\b",true)
+explain analyze force execute scalar_abs_peer using @v;
+execute scalar_abs_peer using @v;
+prepare derived_peer from 'select count(*), min(t.d) from t join (select ? as v) x on t.d = x.v';
+-- @regex("Table Scan on issue_29514_decimal_expr[.]t\b[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=1\s+inputRows=8192\b",true)
 explain analyze force execute derived_peer using @v;
 execute derived_peer using @v;
-prepare derived_abs_peer from 'select count(*) from t join (select abs(?) as v) x on t.d = x.v';
--- @ignore:0
+prepare derived_abs_peer from 'select count(*), min(t.d) from t join (select abs(?) as v) x on t.d = x.v';
+-- @regex("Table Scan on issue_29514_decimal_expr[.]t\b[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=1\s+inputRows=8192\b",true)
 explain analyze force execute derived_abs_peer using @v;
 execute derived_abs_peer using @v;
-set @one = 1;
-prepare second_peer from 'select count(*) from t where ? = 1 and d = abs(?)';
--- @ignore:0
+prepare second_peer from 'select count(*), min(d) from t where ? = 1 and d = abs(?)';
+-- @regex("Table Scan on issue_29514_decimal_expr[.]t\b[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=1\s+inputRows=8192\b",true)
 explain analyze force execute second_peer using @one, @v;
 execute second_peer using @one, @v;
+
+-- The stored 0.10 must not match a DOUBLE between scale points.
 set @v = cast(0.104 as double);
+execute direct_peer using @v;
 execute scalar_peer using @v;
 execute abs_peer using @v;
+execute scalar_abs_peer using @v;
 execute derived_peer using @v;
 execute derived_abs_peer using @v;
 execute second_peer using @one, @v;
+
+-- NULL must not reuse the preceding value.
 set @v = null;
+execute direct_peer using @v;
 execute scalar_peer using @v;
 execute abs_peer using @v;
+execute scalar_abs_peer using @v;
 execute derived_peer using @v;
 execute derived_abs_peer using @v;
 execute second_peer using @one, @v;
+
+-- Only ABS forms match the positive key.
+set @v = cast(-54321 as double);
+execute direct_peer using @v;
+execute scalar_peer using @v;
+execute abs_peer using @v;
+execute scalar_abs_peer using @v;
+execute derived_peer using @v;
+execute derived_abs_peer using @v;
+execute second_peer using @one, @v;
+
+-- Same source type, different safe value: MIN must change.
+set @v = cast(54322 as double);
+-- @regex("Table Scan on issue_29514_decimal_expr[.]t\b[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=1\s+inputRows=8192\b",true)
+explain analyze force execute direct_peer using @v;
+execute direct_peer using @v;
+-- @regex("Table Scan on issue_29514_decimal_expr[.]t\b[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=1\s+inputRows=8192\b",true)
+explain analyze force execute scalar_peer using @v;
+execute scalar_peer using @v;
+-- @regex("Table Scan on issue_29514_decimal_expr[.]t\b[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=1\s+inputRows=8192\b",true)
+explain analyze force execute abs_peer using @v;
+execute abs_peer using @v;
+-- @regex("Table Scan on issue_29514_decimal_expr[.]t\b[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=1\s+inputRows=8192\b",true)
+explain analyze force execute scalar_abs_peer using @v;
+execute scalar_abs_peer using @v;
+-- @regex("Table Scan on issue_29514_decimal_expr[.]t\b[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=1\s+inputRows=8192\b",true)
+explain analyze force execute derived_peer using @v;
+execute derived_peer using @v;
+-- @regex("Table Scan on issue_29514_decimal_expr[.]t\b[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=1\s+inputRows=8192\b",true)
+explain analyze force execute derived_abs_peer using @v;
+execute derived_abs_peer using @v;
+-- @regex("Table Scan on issue_29514_decimal_expr[.]t\b[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=1\s+inputRows=8192\b",true)
+explain analyze force execute second_peer using @one, @v;
+execute second_peer using @one, @v;
+
+-- Recover selective scanning after unsafe/NULL bindings.
+set @v = cast(54321 as double);
+-- @regex("Table Scan on issue_29514_decimal_expr[.]t\b[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=1\s+inputRows=8192\b",true)
+explain analyze force execute direct_peer using @v;
+execute direct_peer using @v;
+-- @regex("Table Scan on issue_29514_decimal_expr[.]t\b[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=1\s+inputRows=8192\b",true)
+explain analyze force execute scalar_peer using @v;
+execute scalar_peer using @v;
+-- @regex("Table Scan on issue_29514_decimal_expr[.]t\b[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=1\s+inputRows=8192\b",true)
+explain analyze force execute abs_peer using @v;
+execute abs_peer using @v;
+-- @regex("Table Scan on issue_29514_decimal_expr[.]t\b[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=1\s+inputRows=8192\b",true)
+explain analyze force execute scalar_abs_peer using @v;
+execute scalar_abs_peer using @v;
+-- @regex("Table Scan on issue_29514_decimal_expr[.]t\b[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=1\s+inputRows=8192\b",true)
+explain analyze force execute derived_peer using @v;
+execute derived_peer using @v;
+-- @regex("Table Scan on issue_29514_decimal_expr[.]t\b[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=1\s+inputRows=8192\b",true)
+explain analyze force execute derived_abs_peer using @v;
+execute derived_abs_peer using @v;
+-- @regex("Table Scan on issue_29514_decimal_expr[.]t\b[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=1\s+inputRows=8192\b",true)
+explain analyze force execute second_peer using @one, @v;
+execute second_peer using @one, @v;
+deallocate prepare direct_peer;
 deallocate prepare scalar_peer;
 deallocate prepare abs_peer;
+deallocate prepare scalar_abs_peer;
 deallocate prepare derived_peer;
 deallocate prepare derived_abs_peer;
 deallocate prepare second_peer;
@@ -192,5 +270,35 @@ execute range_peers using @a, @b;
 set @a = cast(54323 as double);
 execute range_peers using @a, @b;
 deallocate prepare range_peers;
+
+-- Integer source domains reuse exact DECIMAL admission without stale values.
+set @v = 54321;
+prepare integer_peer from 'select count(*), min(d) from t where d = ?';
+-- @regex("Table Scan on issue_29514_decimal_expr[.]t\b[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=1\s+inputRows=8192\b",true)
+explain analyze force execute integer_peer using @v;
+execute integer_peer using @v;
+set @v = 54322;
+execute integer_peer using @v;
+set @v = 9223372036854775807;
+execute integer_peer using @v;
+set @v = null;
+execute integer_peer using @v;
+set @v = 54321;
+execute integer_peer using @v;
+deallocate prepare integer_peer;
+prepare integer_cast_peer from 'select count(*), min(d) from t where d = cast(? as double)';
+execute integer_cast_peer using @v;
+set @v = 54322;
+execute integer_cast_peer using @v;
+set @v = null;
+execute integer_cast_peer using @v;
+set @v = 54321;
+execute integer_cast_peer using @v;
+deallocate prepare integer_cast_peer;
+-- Adjacent DECIMAL keys above 2^53 must still both match the DOUBLE peer.
+set @v = 9007199254740992;
+prepare integer_collision_peer from 'select count(*) from wide where d = cast(? as double)';
+execute integer_collision_peer using @v;
+deallocate prepare integer_collision_peer;
 
 drop database issue_29514_decimal_expr;

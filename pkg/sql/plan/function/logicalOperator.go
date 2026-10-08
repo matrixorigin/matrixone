@@ -20,12 +20,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var xorFn = generalFunctionTemplateFactor[bool, bool](
-	nil, true,
-	nil, true,
-	func(v1, v2 bool) (bool, bool) { return v1 != v2, false }, true,
-	nil, true, true,
-)
+func xorFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opBinaryFixedFixedToFixed[bool, bool, bool](parameters, result, proc, length, func(v1, v2 bool) bool { return v1 != v2 }, selectList)
+}
 
 func notFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixed[bool, bool](parameters, result, proc, length, func(v bool) bool {

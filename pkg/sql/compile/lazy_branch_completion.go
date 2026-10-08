@@ -35,8 +35,7 @@ func (b *lazyBranchCompletion) finish(result scopeRunResult) {
 func (b *lazyBranchCompletion) wait(ctx context.Context) error {
 	select {
 	case <-b.done:
-		result, _ := b.result.resolveCancelCause()
-		return result.err
+		return b.result.err
 	case <-ctx.Done():
 		// 此处只终止等待，不代表分支已清理；MergeRun 仍会 wg.Wait 收尾。
 		return context.Cause(ctx)

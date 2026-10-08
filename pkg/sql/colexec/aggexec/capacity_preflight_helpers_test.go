@@ -202,10 +202,10 @@ func TestCapacityPreflightHelperApplicationAndJSONPaths(t *testing.T) {
 	require.NoError(t, err)
 	jsonVec := vector.NewVec(types.T_json.ToType())
 	require.NoError(t, vector.AppendBytes(jsonVec, encoded, false, mp))
-	size, err := accountedJSONValueSize(jsonVec, 0)
+	size, err := accountedJSONValueSize(jsonVec, 0, nil)
 	require.NoError(t, err)
 	require.Positive(t, size)
-	_, err = accountedJSONValueSize(nil, 0)
+	_, err = accountedJSONValueSize(nil, 0, nil)
 	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
 
 	var argNeeds [hashmap.UnitLimit]argumentChunkCapacity

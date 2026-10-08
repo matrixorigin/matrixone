@@ -67,7 +67,7 @@ func TestTPCHNumericEligibilityInventory(t *testing.T) {
 	}
 	require.Len(t, inventory, 22)
 
-	mock := planbuilder.NewMockOptimizer(false)
+	mock := planbuilder.NewMockOptimizer(false, newPlanTestProcess(t))
 	for index, tc := range inventory {
 		require.Equal(t, index+1, tc.queryNumber, "inventory must cover Q1-Q22 in order")
 		t.Run(fmt.Sprintf("q%d", tc.queryNumber), func(t *testing.T) {

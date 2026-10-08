@@ -28,6 +28,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -2836,13 +2837,17 @@ func unswapUUIDTimeParts(u types.Uuid) types.Uuid {
 	}
 }
 
-func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	if len(parameters) == 0 {
 		rs := vector.MustFunctionResult[int64](result)
-		val := types.CurrentTimestamp().Unix()
+		// The executor stores the query timestamp here, including the session
+		// timestamp override. Do not read the wall clock again.
+		// The no-argument form is integer seconds. Fractional precision belongs
+		// to the timestamp argument overload.
+		val := proc.GetUnixTime() / int64(time.Second)
 		for i := uint64(0); i < uint64(length); i++ {
 			if err := rs.Append(val, false); err != nil {
-				return nil
+				return err
 			}
 		}
 		return nil
@@ -4743,6 +4748,16 @@ func builtInConvertUsingCharset(parameters []*vector.Vector, result vector.Funct
 		return nil
 	}
 
+	var identity collation.Identity
+	var err error
+	if parameters[1].IsConst() && length > 0 {
+		if charset, isNull := p2.GetStrValue(0); !isNull {
+			identity, err = resolveConvertCharset(charset)
+			if err != nil {
+				return err
+			}
+		}
+	}
 	for i := uint64(0); i < uint64(length); i++ {
 		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(i) {
 			if err := rs.AppendMustNullForBytesResult(); err != nil {
@@ -4769,7 +4784,13 @@ func builtInConvertUsingCharset(parameters []*vector.Vector, result vector.Funct
 			continue
 		}
 
-		if isUTF8Charset(charset) && !utf8.Valid(value) {
+		if !parameters[1].IsConst() {
+			identity, err = resolveConvertCharset(charset)
+			if err != nil {
+				return err
+			}
+		}
+		if identity != collation.BinaryIdentity && !utf8.Valid(value) {
 			if err := rs.AppendMustNullForBytesResult(); err != nil {
 				return err
 			}
@@ -4783,10 +4804,12 @@ func builtInConvertUsingCharset(parameters []*vector.Vector, result vector.Funct
 	return nil
 }
 
-func isUTF8Charset(charset []byte) bool {
-	return strings.EqualFold(string(charset), "utf8") ||
-		strings.EqualFold(string(charset), "utf8mb3") ||
-		strings.EqualFold(string(charset), "utf8mb4")
+func resolveConvertCharset(charset []byte) (collation.Identity, error) {
+	identity, ok := collation.ResolveCharset(string(charset))
+	if !ok {
+		return 0, moerr.NewInvalidInputNoCtxf("unsupported character set '%s'", charset)
+	}
+	return identity, nil
 }
 
 func builtInToUpper(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

@@ -17,35 +17,17 @@ package client
 import (
 	"context"
 	"errors"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 )
 
-// TxnEvent txn events
-type EventType struct {
-	Value int
-	Name  string
-}
+// EventType identifies transaction lifecycle callbacks.
+type EventType uint8
 
-var (
-	OpenEvent            = EventType{0, "open"}
-	WaitActiveEvent      = EventType{1, "wait-active"}
-	UpdateSnapshotEvent  = EventType{2, "update-snapshot"}
-	LockEvent            = EventType{3, "lock"}
-	UnlockEvent          = EventType{4, "unlock"}
-	RangesEvent          = EventType{5, "ranges"}
-	BuildPlanEvent       = EventType{6, "build-plan"}
-	ExecuteSQLEvent      = EventType{7, "execute-sql"}
-	CompileEvent         = EventType{8, "compile"}
-	TableScanEvent       = EventType{9, "table-scan"}
-	WorkspaceWriteEvent  = EventType{10, "workspace-write"}
-	WorkspaceAdjustEvent = EventType{11, "workspace-adjust"}
-	CommitEvent          = EventType{95, "commit"}
-	CommitResponseEvent  = EventType{96, "commit-response"}
-	CommitWaitApplyEvent = EventType{97, "wait-applied"}
-	RollbackEvent        = EventType{98, "rollback"}
-	ClosedEvent          = EventType{99, "closed"}
+const (
+	CommitEvent   EventType = 95
+	RollbackEvent EventType = 98
+	ClosedEvent   EventType = 99
 )
 
 // defaultTxnEventCallbacks is initialized once by txnClient and is immutable
@@ -129,7 +111,7 @@ func (tc *txnOperator) RollbackStatementCallbacks(ctx context.Context) error {
 	meta.Status = txn.TxnStatus_Aborted // The detached actions, not the transaction, abort.
 	tc.mu.Unlock()
 
-	event := newEvent(ClosedEvent, meta, 0, nil)
+	event := newEvent(ClosedEvent, meta, nil)
 	var err error
 	for _, callback := range detached {
 		err = errors.Join(err, callback.Func(ctx, tc, event, callback.Value))
@@ -164,32 +146,10 @@ func (tc *txnOperator) triggerEventLocked(ctx context.Context, event TxnEvent) (
 	return
 }
 
-func newCostEvent(
-	event EventType,
-	txn txn.TxnMeta,
-	Sequence uint64,
-	err error,
-	cost time.Duration) TxnEvent {
-	return TxnEvent{
-		Event:     event,
-		Txn:       txn,
-		Sequence:  Sequence,
-		Err:       err,
-		Cost:      cost,
-		CostEvent: true,
-	}
+func newCompletionEvent(event EventType, meta txn.TxnMeta, err error) TxnEvent {
+	return TxnEvent{Event: event, Txn: meta, Err: err, CostEvent: true}
 }
 
-func newEvent(
-	event EventType,
-	txn txn.TxnMeta,
-	Sequence uint64,
-	err error) TxnEvent {
-	return TxnEvent{
-		Event:     event,
-		Txn:       txn,
-		Sequence:  Sequence,
-		Err:       err,
-		CostEvent: false,
-	}
+func newEvent(event EventType, meta txn.TxnMeta, err error) TxnEvent {
+	return TxnEvent{Event: event, Txn: meta, Err: err}
 }

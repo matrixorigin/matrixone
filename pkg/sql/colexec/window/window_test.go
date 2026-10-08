@@ -204,13 +204,6 @@ func makeTestCases(t *testing.T) []winTestCase {
 			arg: &Window{
 				WinSpecList: []*plan.Expr{makeWindowSpec()},
 				Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
-				OperatorBase: vm.OperatorBase{
-					OperatorInfo: vm.OperatorInfo{
-						Idx:     0,
-						IsFirst: false,
-						IsLast:  false,
-					},
-				},
 			},
 		},
 		{
@@ -221,23 +214,16 @@ func makeTestCases(t *testing.T) []winTestCase {
 			arg: &Window{
 				WinSpecList: []*plan.Expr{makeAggWindowSpec("json_objectagg")},
 				Aggs:        []aggexec.AggFuncExecExpression{newJsonObjectAggExpr(t)},
-				OperatorBase: vm.OperatorBase{
-					OperatorInfo: vm.OperatorInfo{
-						Idx:     0,
-						IsFirst: false,
-						IsLast:  false,
-					},
-				},
 			},
 		},
 	}
 }
 
 func TestString(t *testing.T) {
-	buf := new(bytes.Buffer)
-	for _, tc := range makeTestCases(t) {
-		tc.arg.String(buf)
-	}
+	var buf bytes.Buffer
+	arg := &Window{}
+	arg.String(&buf)
+	require.Equal(t, "window: window", buf.String())
 }
 
 func TestPrepare(t *testing.T) {
@@ -2512,6 +2498,14 @@ func TestCumulativeMaxUsesRunningAggregateAcrossChunks(t *testing.T) {
 	require.Nil(t, ctr.runningAgg)
 	third.Free(proc.Mp())
 
+	// Reuse after completion, now with both whole partitions in one output
+	// chunk. Neither partition needs a state surviving beyond this call.
+	whole, err := ctr.processAggregateFuncRange(0, arg, proc, 0, len(values))
+	require.NoError(t, err)
+	require.Equal(t, want, vector.MustFixedColWithTypeCheck[int32](whole))
+	require.Nil(t, ctr.runningAgg)
+	whole.Free(proc.Mp())
+
 	bat.Clean(proc.Mp())
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
@@ -2533,6 +2527,128 @@ func TestCumulativePartitionUsesRunning(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			require.Equal(t, test.want,
 				cumulativePartitionUsesRunning(test.start, test.end))
+		})
+	}
+}
+
+// Compare unflushed prefix-state reuse with independent, ordered Fill calls.
+// Small explicit output ranges cross both a partition and a chunk boundary.
+func TestCumulativePrefixWithinOutputChunk(t *testing.T) {
+	for _, tc := range []struct {
+		name, function string
+		typ            types.Type
+		distinct       bool
+	}{
+		{"integer", "sum", types.T_int32.ToType(), false},
+		{"decimal", "sum", types.New(types.T_decimal128, 38, 2), false},
+		{"float-average", "avg", types.T_float64.ToType(), false},
+		{"fixed-winner", "max", types.T_int32.ToType(), false},
+		{"distinct-control", "sum", types.T_int32.ToType(), true},
+		{"varlen-control", "max", types.T_varchar.ToType(), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vector.NewVec(tc.typ)
+			input := bat.Vecs[0]
+			t.Cleanup(func() {
+				bat.Clean(proc.Mp())
+				proc.Free()
+				require.Zero(t, proc.Mp().CurrNB())
+			})
+			for row, value := range []int32{0, 3, 2, 2, 0, 5, 5, 4} {
+				isNull := row == 0 || row == 4
+				switch tc.typ.Oid {
+				case types.T_int32:
+					require.NoError(t, vector.AppendFixed(input, value, isNull, proc.Mp()))
+				case types.T_decimal128:
+					require.NoError(t, vector.AppendFixed(input, types.Decimal128FromInt64(int64(value)), isNull, proc.Mp()))
+				case types.T_float64:
+					values := []float64{0, math.Copysign(0, -1), math.Float64frombits(0x7ff8000000000001), math.Float64frombits(0x7ff8000000000002), 0, 1e16, -1e16, 1}
+					require.NoError(t, vector.AppendFixed(input, values[row], isNull, proc.Mp()))
+				case types.T_varchar:
+					require.NoError(t, vector.AppendBytes(input, []byte(strings.Repeat(fmt.Sprint(value), 80)), isNull, proc.Mp()))
+				}
+			}
+			bat.SetRowCount(8)
+			if tc.function == "max" {
+				require.NoError(t, input.SetStringSource(types.StringSourceLiteral))
+				require.NoError(t, input.SetStringSourceAtWithMP(6, types.StringSourceUserVariable, proc.Mp()))
+				require.NoError(t, input.SetPrepareParamKindAtWithMP(5, vector.PrepareParamInteger, proc.Mp()))
+				if tc.typ.IsVarlen() {
+					require.NoError(t, input.SetRuntimeStringDomainWithMP(types.RuntimeStringText, proc.Mp()))
+				}
+			}
+			overload, err := function.GetFunctionByName(proc.Ctx, tc.function, []types.Type{tc.typ})
+			require.NoError(t, err)
+			expression := aggexec.MakeAggFunctionExpression(overload.GetEncodedOverloadID(), tc.distinct, []*plan.Expr{newColExprWithType(0, tc.typ)}, nil)
+			spec := makeAggWindowSpec(tc.function)
+			spec.GetW().Frame = makeCumulativeFrame()
+			arg := &Window{WinSpecList: []*plan.Expr{spec}, Aggs: []aggexec.AggFuncExecExpression{expression}}
+			ctr := &container{bat: bat, ps: []int64{0, 4}, aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{input}}}}
+			t.Cleanup(ctr.freeRunningAgg)
+			oracle, err := ctr.newAggregateExecutor(0, arg, proc, 8)
+			require.NoError(t, err)
+			t.Cleanup(oracle.Free)
+			for group := 0; group < 8; group++ {
+				for row := group / 4 * 4; row <= group; row++ {
+					require.NoError(t, oracle.Fill(group, row, []*vector.Vector{input}))
+				}
+			}
+			want, err := oracle.Flush()
+			require.NoError(t, err)
+			require.Len(t, want, 1)
+			t.Cleanup(func() { want[0].Free(proc.Mp()) })
+			start := 0
+			for _, end := range []int{2, 5, 8} {
+				got, err := ctr.processAggregateFuncRange(0, arg, proc, start, end)
+				require.NoError(t, err)
+				t.Cleanup(func() { got.Free(proc.Mp()) })
+				require.Equal(t, end-start, got.Length())
+				for row := 0; row < got.Length(); row++ {
+					expected := start + row
+					require.Equal(t, want[0].IsNull(uint64(expected)), got.IsNull(uint64(row)))
+					if !got.IsNull(uint64(row)) {
+						require.Equal(t, want[0].GetRawBytesAt(expected), got.GetRawBytesAt(row))
+						require.Equal(t, want[0].GetPrepareParamKindAt(expected), got.GetPrepareParamKindAt(row))
+						require.Equal(t, want[0].GetStringSourceAt(expected), got.GetStringSourceAt(row))
+						require.Equal(t, want[0].GetRuntimeStringDomainAt(expected), got.GetRuntimeStringDomainAt(row))
+					}
+				}
+				start = end
+			}
+			require.Nil(t, ctr.runningAgg)
+		})
+	}
+}
+
+func BenchmarkCumulativeSmallPartitions(b *testing.B) {
+	for _, rows := range []int{1, 2, 16, 64, 128, 256} {
+		b.Run(fmt.Sprintf("partition_rows=%d", rows), func(b *testing.B) {
+			proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+			defer proc.Free()
+			values := make([]int32, 256)
+			for i := range values {
+				values[i] = int32(i % rows)
+			}
+			bat := makeInt32Batch(proc.Mp(), values)
+			defer bat.Clean(proc.Mp())
+			partitions := make([]int64, 0, len(values)/rows)
+			for row := 0; row < len(values); row += rows {
+				partitions = append(partitions, int64(row))
+			}
+			arg := makeWindowWithFrame(makeCumulativeFrame())
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				ctr := &container{bat: bat, ps: partitions, aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}}}
+				got, err := ctr.processAggregateFuncRange(0, arg, proc, 0, len(values))
+				if err != nil {
+					b.Fatal(err)
+				}
+				got.Free(proc.Mp())
+				ctr.freeRunningAgg()
+			}
 		})
 	}
 }

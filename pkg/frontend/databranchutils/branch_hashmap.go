@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -78,7 +79,7 @@ type BranchHashmap interface {
 	// ForEachShardParallel provides exclusive access to each shard. The callback
 	// receives a cursor offering read-only iteration plus mutation helpers that
 	// avoid blocking other shards. parallelism <= 0 selects the default value:
-	// min(runtime.NumCPU(), shardCount), clamped to [1, shardCount].
+	// min(system.GoMaxProcs(), shardCount), clamped to [1, shardCount].
 	ForEachShardParallel(fn func(cursor ShardCursor) error, parallelism int) error
 	// Project rebuilds a new hashmap using the provided keyCols from the current
 	// rows. parallelism controls shard-level fan-out; see ForEachShardParallel
@@ -235,11 +236,16 @@ func WithBranchHashmapSpillSegmentMaxBytes(maxBytes uint64) BranchHashmapOption 
 	}
 }
 
-// WithBranchHashmapShardCount sets the shard count. Values outside [4, 64] are clamped.
+// WithBranchHashmapShardCount sets the shard count. Values outside [4, 128] are clamped.
 func WithBranchHashmapShardCount(shards int) BranchHashmapOption {
 	return func(bh *branchHashmap) {
 		bh.shardCount = shards
 	}
+}
+
+// Preserve the historical bare-metal default while respecting the CPU budget.
+func defaultBranchHashmapShardCount(visibleCPUs, cpuBudget int) int {
+	return min(visibleCPUs/2, max(1, cpuBudget))
 }
 
 // NewBranchHashmap constructs a new branchHashmap.
@@ -263,8 +269,7 @@ func NewBranchHashmap(opts ...BranchHashmapOption) (BranchHashmap, error) {
 		return nil, moerr.NewInternalErrorNoCtx("branchHashmap requires a non-nil allocator")
 	}
 	if bh.shardCount <= 0 {
-		cpu := runtime.NumCPU() / 2
-		bh.shardCount = cpu
+		bh.shardCount = defaultBranchHashmapShardCount(runtime.NumCPU(), system.GoMaxProcs())
 	}
 	if bh.shardCount < minShardCount {
 		bh.shardCount = minShardCount
@@ -927,7 +932,7 @@ func (bh *branchHashmap) ForEachShardParallel(fn func(cursor ShardCursor) error,
 	}
 
 	if parallelism <= 0 {
-		parallelism = runtime.NumCPU()
+		parallelism = system.GoMaxProcs()
 	}
 	if parallelism <= 0 {
 		parallelism = 1

@@ -46,10 +46,10 @@ func makeTestCases(t *testing.T) []mergeRecTestCase {
 }
 
 func TestString(t *testing.T) {
-	buf := new(bytes.Buffer)
-	for _, tc := range makeTestCases(t) {
-		tc.arg.String(buf)
-	}
+	var buf bytes.Buffer
+	arg := &MergeRecursive{}
+	arg.String(&buf)
+	require.Equal(t, "merge_recursive: merge recursive ", buf.String())
 }
 
 func TestPrepare(t *testing.T) {

@@ -216,3 +216,29 @@ func requireValuesSource(t *testing.T, stmt *tree.Select) {
 	require.True(t, values.RowWord)
 	require.Len(t, values.Rows, 2)
 }
+
+func TestParseOneStatementCount(t *testing.T) {
+	for _, tc := range []struct {
+		name, sql string
+		valid     bool
+	}{
+		{name: "empty", sql: ""},
+		{name: "multiple pooled DDL", sql: "create database a; create database b"},
+		{name: "single pooled DDL", sql: "create database a", valid: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), tc.sql, 1)
+			if !tc.valid {
+				require.Error(t, err)
+				require.Nil(t, stmt)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, stmt)
+			defer stmt.Free()
+			ddl, ok := stmt.(*tree.CreateDatabase)
+			require.True(t, ok)
+			require.Equal(t, tree.Identifier("a"), ddl.Name)
+		})
+	}
+}

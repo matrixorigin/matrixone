@@ -56,6 +56,10 @@ func AddressFunc(
 		cns := make([]pb.CNStore, 0, len(details.CNStores))
 		labeled_cns := make([]pb.CNStore, 0, len(details.CNStores))
 		for _, cn := range details.CNStores {
+			if admission := details.ViewMetadataAdmission; admission != nil &&
+				(admission.Preparing || admission.Enabled) && !cn.ViewMetadataAdmissionReady {
+				continue
+			}
 			if cn.WorkState == metadata.WorkState_Working {
 				cns = append(cns, cn)
 				// get logging cn label name

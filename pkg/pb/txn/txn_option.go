@@ -22,17 +22,11 @@ var (
 	// Keep it unused so snapshots that contain later feature bits retain their
 	// interpretation.
 	txnFeatureCheckDup          = uint32(1 << 4)
-	txnFeatureDisableTrace      = uint32(1 << 5)
 	txnFeatureDisableWaitPaused = uint32(1 << 6)
 )
 
 func (m TxnOptions) WithDisableWaitPaused() TxnOptions {
 	m.Features |= txnFeatureDisableWaitPaused
-	return m
-}
-
-func (m TxnOptions) WithDisableTrace() TxnOptions {
-	m.Features |= txnFeatureDisableTrace
 	return m
 }
 
@@ -58,10 +52,6 @@ func (m TxnOptions) WithUserTxn() TxnOptions {
 
 func (m TxnOptions) CacheWriteEnabled() bool {
 	return m.featureEnabled(txnFeatureCacheWrite)
-}
-
-func (m TxnOptions) TraceDisabled() bool {
-	return m.featureEnabled(txnFeatureDisableTrace)
 }
 
 func (m TxnOptions) WaitPausedDisabled() bool {

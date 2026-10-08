@@ -159,8 +159,14 @@ func (p *Pipeline) CleanRootOperator(proc *process.Process, pipelineFailed bool,
 // Cleanup do memory release work for whole pipeline.
 // we deliver the error because some operator may need to know what the error it is.
 func (p *Pipeline) Cleanup(proc *process.Process, pipelineFailed bool, isPrepare bool, err error) {
-	// cancel the context to stop its pre-pipelines.
-	proc.Cancel(err)
+	// Cancel controls liveness; it is not the execution result. Successful
+	// consumers retire inputs with explicit provenance, while failures survive.
+	err = process.NormalizePipelineCleanupError(pipelineFailed, err)
+	cause := err
+	if cause == nil {
+		cause = process.ErrPipelineStopped
+	}
+	proc.Cancel(cause)
 	resetDone := make(map[vm.Operator]struct{})
 	resetChildOwners(p.rootOp, resetDone, proc, pipelineFailed, err)
 

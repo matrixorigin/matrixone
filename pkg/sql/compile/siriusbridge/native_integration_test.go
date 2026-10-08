@@ -140,6 +140,12 @@ func TestNativeBridgeDataAndCancellation(t *testing.T) {
 			t.Fatalf("native rows: %v", got)
 		}
 		closeNativeQuery(t, query)
+		stats, ready := query.Statistics()
+		if !ready || stats.SourceMask != 1 || stats.Fatal || stats.ResultRows != 3 ||
+			stats.GPUTasksStarted == 0 || stats.GPUTasksStarted != stats.GPUTasksCompleted ||
+			stats.MOInputUnits == 0 || stats.MOInputRetainedBytes != 0 || stats.ResultRetainedBytes != 0 {
+			t.Fatalf("terminal native execution statistics: ready=%v stats=%+v", ready, stats)
+		}
 		if started.Load() != 1 || released.Load() != 1 {
 			t.Fatalf("producer/release counts: %d/%d", started.Load(), released.Load())
 		}

@@ -94,7 +94,7 @@ func TestHashJoinUniqueProjectionPreservesSelectionMetadata(t *testing.T) {
 
 func TestHashJoinUniqueProjectionResumesAndReuses(t *testing.T) {
 	typ := types.T_int32.ToType()
-	tc := newTestCase(t, []bool{false}, []types.Type{typ}, nil,
+	tc := newTestCase(t, []types.Type{typ}, nil,
 		[][]*plan.Expr{{newExpr(0, typ)}, {newExpr(0, typ)}})
 	tc.arg.JoinType, tc.arg.NonEqCond = plan.Node_INNER, nil
 	tc.arg.ResultCols = []colexec.ResultPos{{Rel: 0, Pos: 0}, {Rel: 1, Pos: 0}}
@@ -181,6 +181,12 @@ func TestHashJoinUniqueProjectionPropagatesAllocationFailure(t *testing.T) {
 	require.NoError(t, arg.resetResultBat())
 	arg.ctr.leftBat, arg.ctr.vs, arg.ctr.zvs = left, []uint64{1}, []int64{1}
 	matched, err := arg.ctr.appendUniqueMatches(arg, proc, 1)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	require.Zero(t, matched)
+	require.Zero(t, arg.ctr.resBat.RowCount())
+	require.Zero(t, account.Snapshot().Used)
+	arg.ctr.probeLeftSemi = true
+	matched, err = arg.ctr.appendMembershipMatches(arg, proc, 1)
 	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 	require.Zero(t, matched)
 	require.Zero(t, arg.ctr.resBat.RowCount())
