@@ -4717,9 +4717,7 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) (err error
 	defer func() {
 		err = finishTxn(ctx, bh, err)
 		if err == nil {
-			ses.ruleCacheMu.Lock()
-			ses.ruleCache = nil
-			ses.ruleCacheMu.Unlock()
+			invalidateRoleRuleCaches(ses)
 		}
 	}()
 	if err != nil {
