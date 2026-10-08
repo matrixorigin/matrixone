@@ -975,6 +975,9 @@ func getColumnNullAbility(col *tree.ColumnTableDef) bool {
 
 func buildGeneratedExpr(bindCtx context.Context, col *tree.ColumnTableDef, typ plan.Type, existingCols []*ColDef, proc *process.Process, sources ...*ColDef) (*plan.GeneratedCol, error) {
 	if source := crc32SourceColumn(proc.Ctx, col.Name.ColName(), sources); source != nil && source.GeneratedCol != nil && containsLegacyCRC32(source.GeneratedCol.Expr) {
+		if err := validateLegacyCRC32GeneratedInputs(bindCtx, source.GeneratedCol.Expr, existingCols); err != nil {
+			return nil, err
+		}
 		value := *source.GeneratedCol
 		value.Expr = DeepCopyExpr(value.Expr)
 		if err := RequirePersistedIPFunctionProtocolForAuthoring(proc.Ctx, proc, value.Expr); err != nil {

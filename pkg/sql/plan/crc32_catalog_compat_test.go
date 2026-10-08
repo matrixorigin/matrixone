@@ -57,6 +57,14 @@ func TestCRC32CopyRetainsBoundGeneratedIdentity(t *testing.T) {
 	require.True(t, containsLegacyCRC32(got.Expr))
 	got.Expr.GetF().Func.Obj = function.EncodeOverloadID(function.CRC32, function.CRC32JSONTextOverload)
 	require.True(t, containsLegacyCRC32(source.GeneratedCol.Expr), "copy must not mutate source catalog")
+	for _, inputType := range []types.T{types.T_int64, types.T_varchar} {
+		t.Run(inputType.String(), func(t *testing.T) {
+			changed := []*planpb.ColDef{{Name: "j", Typ: planpb.Type{Id: int32(inputType)}}, source}
+			_, err := buildGeneratedExpr(proc.Ctx, col, typ, changed, proc)
+			require.ErrorContains(t, err, "explicit table rebuild")
+			require.Equal(t, int32(types.T_json), source.GeneratedCol.Expr.GetF().Args[0].Typ.Id)
+		})
+	}
 	for _, attr := range col.Attributes {
 		if generated, ok := attr.(*tree.AttributeGeneratedAlways); ok {
 			preserved, handled, err := preserveLegacyCRC32Generated(proc.Ctx, source, generated, typ)
@@ -192,6 +200,9 @@ func TestCRC32LegacyCatalogLikeAndAlter(t *testing.T) {
 		`alter table constraint_test.t_on_update_gen rename column val to payload`,
 		`alter table constraint_test.t_on_update_gen rename column g to checksum`,
 		`alter table constraint_test.t_on_update_gen modify column g bigint unsigned generated always as (crc32(val)) stored first`,
+		`alter table constraint_test.t_on_update_gen modify column val bigint`,
+		`alter table constraint_test.t_on_update_gen change column val val varchar(32)`,
+		`alter table constraint_test.t_on_update_gen modify column val json first`,
 	} {
 		t.Run(sql, func(t *testing.T) {
 			mock := NewMockOptimizer(true, newPlanTestProcess(t))
@@ -216,6 +227,12 @@ func TestCRC32LegacyCatalogLikeAndAlter(t *testing.T) {
 			generated.GeneratedCol = &planpb.GeneratedCol{Expr: expr, OriginString: "crc32(val)", IsStored: true}
 			base.Cols[mockTableColPos(t, base, "updated_at")].OnUpdate = nil
 			built, err := runOneStmt(mock, t, sql)
+			if strings.Contains(sql, "val bigint") || strings.Contains(sql, "val varchar") {
+				require.ErrorContains(t, err, "explicit table rebuild")
+				require.Equal(t, int32(types.T_json), base.Cols[pos].Typ.Id, "rejected ALTER must leave source catalog unchanged")
+				require.True(t, containsLegacyCRC32(generated.GeneratedCol.Expr))
+				return
+			}
 			if strings.Contains(sql, "rename column val") {
 				// Existing DDL rejects renaming a dependency; this must remain
 				// an explicit rejection, never an implicit algorithm upgrade.
@@ -260,7 +277,6 @@ func TestCRC32CopyPreservesFoldedDefaultWithoutSource(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(3719146973), got.Expr.GetLit().GetU64Val())
 	require.NotSame(t, source.Default.Expr, got.Expr)
-	require.True(t, tableHasLegacyCRC32(&planpb.TableDef{Cols: []*planpb.ColDef{source}}))
 }
 
 func TestCRC32UnchangedDefaultClauseRetainsIdentity(t *testing.T) {

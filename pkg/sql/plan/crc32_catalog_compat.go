@@ -73,21 +73,28 @@ func crc32SourceColumn(ctx context.Context, name string, sources []*planpb.ColDe
 	return crc32CopyColumn(ctx, name)
 }
 
-func tableHasLegacyCRC32(def *planpb.TableDef) bool {
-	if def == nil {
-		return false
+// A bound legacy generated expression cannot be copied onto a different input
+// representation. Reject before COPY mutates the catalog, and also guard the
+// internal CREATE fallback when ordinary persisted-expression replay declines it.
+func validateLegacyCRC32GeneratedInputs(ctx context.Context, expr *planpb.Expr, cols []*planpb.ColDef) error {
+	if !containsLegacyCRC32(expr) {
+		return nil
 	}
-	for _, col := range def.Cols {
-		if containsLegacyCRC32(col.GetGeneratedCol().GetExpr()) || preserveCRC32Default(col.GetDefault()) || containsLegacyCRC32(col.GetOnUpdate().GetExpr()) {
-			return true
+	return planpb.VisitExprTree(expr, func(e *planpb.Expr) error {
+		ref := e.GetCol()
+		if ref == nil {
+			return nil
 		}
-	}
-	for _, check := range def.Checks {
-		if containsLegacyCRC32(check.GetCheck()) {
-			return true
+		if ref.RelPos != 0 || ref.ColPos < 0 || int(ref.ColPos) >= len(cols) || cols[ref.ColPos] == nil {
+			return moerr.NewNotSupported(ctx, "changing a legacy CRC32 JSON generated column requires an explicit table rebuild")
 		}
-	}
-	return false
+		typ := cols[ref.ColPos].Typ
+		if e.Typ.Id != typ.Id || e.Typ.Width != typ.Width || e.Typ.Scale != typ.Scale ||
+			e.Typ.Enumvalues != typ.Enumvalues || !e.Typ.SameCollation(typ) || e.Typ.PadSpace != typ.PadSpace {
+			return moerr.NewNotSupported(ctx, "changing a legacy CRC32 JSON generated column requires an explicit table rebuild")
+		}
+		return nil
+	})
 }
 
 // Older constant defaults can lack Literal.Src. Preserve their authoritative

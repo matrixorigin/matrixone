@@ -158,6 +158,11 @@ func buildColumnAndConstraint(
 			defaultScope[i] = col
 		}
 	}
+	for _, col := range targetTableDef.Cols {
+		if err := validateLegacyCRC32GeneratedInputs(ctx.GetContext(), col.GetGeneratedCol().GetExpr(), defaultScope); err != nil {
+			return nil, err
+		}
+	}
 
 	// If the column null property is not specified, it defaults to allowing null
 	hasNullFlag := false

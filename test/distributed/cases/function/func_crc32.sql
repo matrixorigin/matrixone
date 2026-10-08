@@ -103,6 +103,15 @@ insert ignore into crc32_generated(id,j) values (3,'{"t1":"a"}');
 select count(*) as row_count from crc32_generated;
 drop table crc32_generated;
 
+drop table if exists crc32_generated_convert;
+create table crc32_generated_convert(id int primary key, j json, c bigint unsigned generated always as (crc32(j)) stored, key idx_c(c));
+insert into crc32_generated_convert(id,j) values (1,'1');
+alter table crc32_generated_convert modify column j bigint;
+insert into crc32_generated_convert(id,j) values (2,1);
+select id,c,c=crc32(j) as consistent from crc32_generated_convert order by id;
+select id from crc32_generated_convert where c=2212294583 order by id;
+drop table crc32_generated_convert;
+
 drop table if exists crc32_binary;
 create table crc32_binary(id int, b varbinary(2));
 insert into crc32_binary values (1,X'00FF'),(2,X'00'),(3,X'FF'),(4,X''),(5,NULL);
