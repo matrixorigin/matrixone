@@ -52,6 +52,8 @@ func TestRunTasksInParallel(t *testing.T) {
 		wg.Add(2)
 		started := make(chan struct{}, 2)
 		release := make(chan struct{})
+		releaseOnce := sync.OnceFunc(func() { close(release) })
+		defer releaseOnce()
 		r.RegisterExecutor(0, func(ctx context.Context, task task.Task) error {
 			started <- struct{}{}
 			<-release
@@ -68,7 +70,7 @@ func TestRunTasksInParallel(t *testing.T) {
 				t.Fatal("parallel executors did not start")
 			}
 		}
-		close(release)
+		releaseOnce()
 		wg.Wait()
 	}, WithRunnerParallelism(2),
 		WithRunnerFetchInterval(time.Millisecond))
