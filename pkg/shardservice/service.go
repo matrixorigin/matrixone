@@ -148,7 +148,7 @@ func (s *service) Close() error {
 	s.stopper.Stop()
 	close(s.createC)
 	close(s.deleteC)
-	return s.remote.client.Close()
+	return errors.Join(s.remote.server.Close(), s.remote.client.Close())
 }
 
 func (s *service) Config() Config {
