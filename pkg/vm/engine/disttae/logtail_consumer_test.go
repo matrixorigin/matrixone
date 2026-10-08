@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -382,34 +383,6 @@ func TestWaitServerReady(t *testing.T) {
 		assert.Panics(t, func() {
 			waitServerReady(context.Background(), remoteAddr)
 		})
-	})
-}
-
-func TestPushClient_UnusedTableGCTicker(t *testing.T) {
-	orig := unsubscribeProcessTicker
-	unsubscribeProcessTicker = time.Millisecond
-	defer func() {
-		unsubscribeProcessTicker = orig
-	}()
-	t.Run("subscriber nil", func(t *testing.T) {
-		var c PushClient
-		ctx, cancel := context.WithCancel(context.Background())
-		done := startTickerForTest(t, func() {
-			c.unusedTableGCTicker(ctx)
-		})
-		cancel()
-		waitTickerStopped(t, done)
-	})
-
-	t.Run("context done", func(t *testing.T) {
-		var c PushClient
-		c.subscriber = &logTailSubscriber{}
-		ctx, cancel := context.WithCancel(context.Background())
-		done := startTickerForTest(t, func() {
-			c.unusedTableGCTicker(ctx)
-		})
-		cancel()
-		waitTickerStopped(t, done)
 	})
 }
 
@@ -3720,5 +3693,91 @@ func TestLogtailStreamFailurePreservesClientOwnership(t *testing.T) {
 		_, _, err = DefaultNewRpcStreamToTnLogTailService(ctx, "", "unused", client)
 		require.ErrorIs(t, err, context.Canceled)
 		require.Equal(t, before, promtestutil.ToFloat64(gauge), "stream failure closed the caller's RPC client")
+	})
+}
+
+// Retired generations share consumeErrC. Reconnect consumes one error to
+// trigger recovery, but does not drain the remaining consumerNumber-1 errors.
+// Use a real update command blocked on the real partition lock; owner close
+// cancels that lock acquisition, producing a real consumer error.
+func TestEngineCloseWithPriorGenerationConsumerErrors(t *testing.T) {
+	for _, pending := range []int{0, consumerNumber - 1} {
+		t.Run(fmt.Sprint(pending), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				e := &Engine{partitions: make(map[[2]uint64]*logtailreplay.Partition)}
+				c := &e.pClient
+				ctx := c.start(context.Background())
+				e.globalStats = &GlobalStats{ctx: ctx}
+				c.consumeErrC = make(chan error, consumerNumber)
+				for range pending {
+					c.consumeErrC <- errors.New("previous generation apply failure")
+				}
+				part := logtailreplay.NewPartition("", nil, 0, 10, 20, nil)
+				e.partitions[[2]uint64{10, 20}] = part
+				require.NoError(t, part.Lock(context.Background()))
+				defer part.Unlock()
+				for i := 0; i < 2; i++ {
+					rc := c.createRoutineToConsumeLogTails(ctx, i, 1, e)
+					rc.sendTableLogTail(logtail.TableLogtail{Table: &api.TableID{DbId: 10, TbId: 20}}, time.Now())
+				}
+				synctest.Wait() // Both production actions are blocked in Partition.Lock.
+				done := make(chan error, 1)
+				go func() { done <- e.Close() }()
+				synctest.Wait()
+				blocked := false
+				select {
+				case err := <-done:
+					require.NoError(t, err)
+				default:
+					blocked = true
+				}
+				// Retire every test worker even when the contract is violated.
+				if blocked {
+					for {
+						select {
+						case err := <-done:
+							require.NoError(t, err)
+							t.Errorf("Engine.Close blocked on consumer error reporting after owner cancellation, prior errors=%d", pending)
+							return
+						case <-c.consumeErrC:
+						}
+					}
+				}
+			})
+		})
+	}
+}
+
+// Inject the command failure only; production consumers own reporting and retirement.
+type failingConsumerCommand func() error
+
+func (cmd failingConsumerCommand) action(context.Context, *Engine, *routineController) error {
+	return cmd()
+}
+
+func TestLogtailConsumerPreservesLiveOwnerError(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := &PushClient{consumeErrC: make(chan error, 1)}
+		ctx := c.start(context.Background())
+		defer c.Close()
+		prior := errors.New("previous consumer failure")
+		failure := errors.New("current apply failure")
+		c.consumeErrC <- prior
+		rc := c.createRoutineToConsumeLogTails(ctx, 0, 1, nil)
+		applied := 0
+		require.True(t, rc.send(failingConsumerCommand(func() error { return failure })))
+		synctest.Wait() // Error reporting is blocked on the full queue, not cancellation.
+		require.True(t, rc.send(failingConsumerCommand(func() error { applied++; return nil })))
+		require.ErrorIs(t, <-c.consumeErrC, prior)
+		synctest.Wait()
+		select {
+		case err := <-c.consumeErrC:
+			require.ErrorIs(t, err, failure)
+		default:
+			t.Fatal("live-owner apply error was discarded")
+		}
+		require.Zero(t, applied, "consumer must stop applying commands after failure")
+		rc.close()
+		rc.wait()
 	})
 }

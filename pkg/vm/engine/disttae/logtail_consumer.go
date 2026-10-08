@@ -1332,28 +1332,6 @@ func (c *PushClient) doGCUnusedTable(ctx context.Context) {
 	}
 }
 
-func (c *PushClient) unusedTableGCTicker(ctx context.Context) {
-	ticker := time.NewTicker(unsubscribeProcessTicker)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			logutil.Infof("%s unsubscribe process exit.", logTag)
-			return
-
-		case <-ticker.C:
-			if c.subscriber == nil {
-				continue
-			}
-			if !c.subscriber.ready() {
-				continue
-			}
-		}
-
-		c.doGCUnusedTable(ctx)
-	}
-}
-
 func (c *PushClient) doGCPartitionState(ctx context.Context, e *Engine) {
 	parts := make(map[[2]uint64]*logtailreplay.Partition)
 	e.Lock()
@@ -2702,7 +2680,12 @@ func (c *PushClient) createRoutineToConsumeLogTails(
 				}
 				if err := cmd.action(ctx, engine, receiver); err != nil {
 					errHappen = true
-					errRet <- err
+					// The supervisor may already have exited on owner cancellation.
+					select {
+					case errRet <- err:
+					case <-ctx.Done():
+						return
+					}
 				}
 
 			case <-receiver.closeChan:
