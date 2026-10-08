@@ -729,9 +729,12 @@ func (d *dynamicCtx) LogDynamicCtx() string {
 
 func (d *dynamicCtx) Close() {
 	d.closeOnce.Do(func() {
+		d.Lock()
 		d.closed.Store(true)
-		if d.cancel != nil {
-			d.cancel()
+		cancel := d.cancel
+		d.Unlock()
+		if cancel != nil {
+			cancel()
 		}
 		d.roots.Wait()
 		if d.alphaTaskPool != nil {
