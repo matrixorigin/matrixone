@@ -151,6 +151,9 @@ func informationSchemaViewsAccountGone(accountID int32, err error) bool {
 }
 
 func informationSchemaViewsProtocolReady(txn executor.TxnExecutor) (bool, error) {
+	if !v4_0_7.InformationSchemaViewsAuthoringProtocolReady(txn) {
+		return false, nil
+	}
 	err := versions.CheckCommonProtocolVersion(txn, defines.MORPCVersion107)
 	if moerr.IsMoErrCode(err, moerr.ErrNotSupported) {
 		return false, nil
