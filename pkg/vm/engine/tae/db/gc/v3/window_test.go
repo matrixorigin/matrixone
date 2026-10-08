@@ -75,6 +75,7 @@ func TestGCWindowScanCheckpointsPropagatesReaderError(t *testing.T) {
 			return reader, nil
 		},
 		nil,
+		nil,
 		buffer,
 	)
 	require.ErrorContains(t, err, "checkpoint reader failure")
