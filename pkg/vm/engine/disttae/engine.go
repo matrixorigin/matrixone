@@ -105,8 +105,14 @@ func New(
 	if publish == nil {
 		panic("disttae engine requires an owner")
 	}
-	cluster := clusterservice.GetMOCluster(service)
-	services := cluster.GetAllTNServices()
+	cluster, err := clusterservice.GetMOClusterWithContext(ctx, service)
+	if err != nil {
+		panic(err)
+	}
+	services, err := clusterservice.GetAllTNServicesWithContext(ctx, cluster)
+	if err != nil {
+		panic(err)
+	}
 
 	var tnID string
 	if len(services) > 0 {

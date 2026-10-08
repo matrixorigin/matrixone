@@ -56,6 +56,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/address"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 )
 
 type closeErrorMOServer struct {
@@ -1380,4 +1381,75 @@ func Test_tenant(t *testing.T) {
 
 	err = sv.UpgradeTenant(ctx, "acc3", 1, true)
 	assert.Error(t, err)
+}
+
+// Use the real constructor and an actual engine scheduler. Options publish the
+// owner without requiring a network cluster; failure is through the real next
+// constructor boundary, not a standalone copy of its defer.
+type constructionFailureHAKeeper struct {
+	testHAKClient
+	fail func(context.Context) (uint64, error)
+}
+
+func (c *constructionFailureHAKeeper) AllocateIDByKey(ctx context.Context, _ string) (uint64, error) {
+	return c.fail(ctx)
+}
+
+func TestNewServiceFailureRetiresPublishedEngine(t *testing.T) {
+	for _, mode := range []string{"error", "cancel", "panic"} {
+		t.Run(mode, func(t *testing.T) {
+			sid := "00000000-0000-0000-0000-000000000077"
+			moruntime.RunTest(sid, func(rt moruntime.Runtime) {
+				local, err := fileservice.NewMemoryFS(defines.LocalFileServiceName, fileservice.CacheConfig{}, nil)
+				require.NoError(t, err)
+				defer local.Close(context.Background())
+				etl, err := fileservice.NewMemoryFS(defines.ETLFileServiceName, fileservice.CacheConfig{}, nil)
+				require.NoError(t, err)
+				defer etl.Close(context.Background())
+				fs, err := fileservice.NewFileServices(defines.LocalFileServiceName, local, etl)
+				require.NoError(t, err)
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				owner := &disttae.Engine{}
+				defer owner.Close()
+				require.NoError(t, owner.StartGCScheduler(ctx))
+				primary := errors.New("construction failure")
+				cleanup := errors.New("cleanup failure")
+				calls := 0
+				// Options run before stopper creation. Engine cleanup must tolerate that
+				// partially initialized service and preserve the original panic.
+				optionWithoutStop := func(s *service) {
+					s.storeEngine = closableEngine{closeFn: func() error { calls++; return errors.Join(owner.Close(), cleanup) }}
+					s.initHakeeperClientOnce.Do(func() {})
+					s._hakeeperClient = &constructionFailureHAKeeper{fail: func(ctx context.Context) (uint64, error) {
+						if mode == "cancel" {
+							return 0, ctx.Err()
+						}
+						return 0, primary
+					}}
+					if mode == "cancel" {
+						cancel()
+					}
+					if mode == "panic" {
+						panic(primary)
+					}
+				}
+				cfg := &Config{UUID: sid}
+				if mode == "panic" {
+					require.PanicsWithValue(t, primary, func() { _, _ = NewService(cfg, ctx, fs, nil, optionWithoutStop) })
+				} else {
+					result, err := NewService(cfg, ctx, fs, nil, optionWithoutStop)
+					require.Nil(t, result)
+					require.ErrorIs(t, err, cleanup)
+					if mode == "cancel" {
+						require.ErrorIs(t, err, context.Canceled)
+					} else {
+						require.ErrorIs(t, err, primary)
+					}
+				}
+				require.Equal(t, 1, calls, "the constructor must close its published engine before returning")
+				require.Error(t, owner.StartGCScheduler(context.Background()), "the actual owner must be retired")
+			})
+		})
+	}
 }

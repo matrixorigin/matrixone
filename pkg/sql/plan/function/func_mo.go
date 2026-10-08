@@ -52,9 +52,6 @@ const (
 // Mo function unit tests are not ported, because it is too heavy and does not test enough cases.
 // Mo functions are better tested with bvt.
 
-var MoTableRowsSizeUseOldImpl atomic.Bool
-var MoTableRowsSizeForceUpdate atomic.Bool
-
 const (
 	MoTableRowsSizeForceUpdateVarName    = "mo_table_stats.force_update"
 	MoTableRowSizeUseOldImplVarName      = "mo_table_stats.use_old_impl"
@@ -140,7 +137,7 @@ func MoTableSize(
 ) (err error) {
 
 	useOldStr := GetUseOldImplVariable(proc)
-	if (MoTableRowsSizeUseOldImpl.Load()) || useOldStr {
+	if useOldStr {
 		// the old implement
 		return MoTableSizeOld(iVecs, result, proc, length, selectList)
 	}
@@ -157,7 +154,7 @@ func MoTableRows(
 ) (err error) {
 
 	useOldStr := GetUseOldImplVariable(proc)
-	if (MoTableRowsSizeUseOldImpl.Load()) || useOldStr {
+	if useOldStr {
 		// the old implement
 		return MoTableRowsOld(iVecs, result, proc, length, selectList)
 	}
@@ -172,9 +169,11 @@ func MoTableRows(
 // some special cases:
 // 1. cluster table
 
+// GetMoTableSizeRowsFuncType dispatches to the caller engine. A nil error
+// with handled=false requests the existing old SQL implementation.
 type GetMoTableSizeRowsFuncType = func(
 	context.Context, []uint64, []uint64, []uint64,
-	engine.Engine, bool, bool) ([]uint64, error)
+	engine.Engine, bool, bool) (values []uint64, err error, handled bool)
 
 var GetMoTableSizeFunc atomic.Pointer[GetMoTableSizeRowsFuncType]
 var GetMoTableRowsFunc atomic.Pointer[GetMoTableSizeRowsFuncType]
@@ -294,6 +293,7 @@ func MoTableSizeRowsHelper(
 	length int,
 	selectList *FunctionSelectList,
 	executor *atomic.Pointer[GetMoTableSizeRowsFuncType],
+	fallback executeLogicOfOverload,
 ) (err error) {
 
 	var (
@@ -310,6 +310,7 @@ func MoTableSizeRowsHelper(
 		txn client.TxnOperator
 
 		ret                   []uint64
+		positions             = make([]int, length)
 		accIds, dbIds, tblIds []uint64
 
 		forceUpdate     = GetForceUpdateVariable(proc)
@@ -365,16 +366,12 @@ func MoTableSizeRowsHelper(
 
 	for i := uint64(0); i < uint64(length); i++ {
 		if dbName, tblName, ok = decodeNames(i); !ok {
-			if err = rs.Append(0, true); err != nil {
-				return err
-			}
+			positions[i] = -1 // NULL
 			continue
 		}
 
 		if ok, err = specialTableFilterForNonSys(proc.Ctx, dbName, tblName); ok && err == nil {
-			if err = rs.Append(int64(0), false); err != nil {
-				return err
-			}
+			positions[i] = -2 // special table
 			continue
 		}
 
@@ -390,6 +387,7 @@ func MoTableSizeRowsHelper(
 			return err
 		}
 
+		positions[i] = len(tblIds)
 		var sub subscription
 		if sub, err = isSubscribedTable(
 			proc, accountId, db, dbName, tblName); err != nil {
@@ -418,17 +416,28 @@ func MoTableSizeRowsHelper(
 	if fn == nil {
 		return moerr.NewInternalError(proc.Ctx, "MoTableSizeRows: statistics executor is nil")
 	}
-	ret, err = (*fn)(
+	var handled bool
+	ret, err, handled = (*fn)(
 		proc.Ctx, accIds, dbIds, tblIds, eng,
-		forceUpdate || MoTableRowsSizeForceUpdate.Load(),
+		forceUpdate,
 		resetUpdateTime)
 
 	if err != nil {
 		return err
 	}
 
-	for _, val := range ret {
-		if err = rs.Append(int64(val), false); err != nil {
+	if !handled {
+		return fallback(iVecs, result, proc, length, selectList)
+	}
+	if len(ret) != len(tblIds) {
+		return moerr.NewInternalError(proc.Ctx, "MoTableSizeRows: invalid statistics cardinality")
+	}
+	for _, position := range positions {
+		var value int64
+		if position >= 0 {
+			value = int64(ret[position])
+		}
+		if err = rs.Append(value, position == -1); err != nil {
 			return err
 		}
 	}
@@ -444,7 +453,7 @@ func MoTableSizeNew(
 	selectList *FunctionSelectList,
 ) (err error) {
 
-	return MoTableSizeRowsHelper(iVecs, result, proc, length, selectList, &GetMoTableSizeFunc)
+	return MoTableSizeRowsHelper(iVecs, result, proc, length, selectList, &GetMoTableSizeFunc, MoTableSizeOld)
 }
 
 func MoTableRowsNew(
@@ -455,7 +464,7 @@ func MoTableRowsNew(
 	selectList *FunctionSelectList,
 ) (err error) {
 
-	return MoTableSizeRowsHelper(iVecs, result, proc, length, selectList, &GetMoTableRowsFunc)
+	return MoTableSizeRowsHelper(iVecs, result, proc, length, selectList, &GetMoTableRowsFunc, MoTableRowsOld)
 }
 
 //#endregion MoTableSizeRows New Implements

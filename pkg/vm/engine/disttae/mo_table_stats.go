@@ -314,13 +314,13 @@ func moTableSizeFunc() *function.GetMoTableSizeRowsFuncType {
 		eng engine.Engine,
 		forceUpdate bool,
 		resetUpdateTime bool,
-	) ([]uint64, error) {
+	) ([]uint64, error, bool) {
 		e, ok := asDisttaeEngine(eng)
 		if !ok {
-			return nil, moerr.NewInternalErrorNoCtx("MoTableSizeRows: engine is not a disttae engine")
+			return nil, moerr.NewInternalErrorNoCtx("MoTableSizeRows: engine is not a disttae engine"), false
 		}
 		if e.dynamicCtx.closed.Load() {
-			return nil, moerr.NewInvalidStateNoCtx("MoTableSizeRows: engine is closed")
+			return nil, moerr.NewInvalidStateNoCtx("MoTableSizeRows: engine is closed"), false
 		}
 		return e.dynamicCtx.MTSTableSize(
 			ctx, accs, dbs, tbls, eng, forceUpdate, resetUpdateTime)
@@ -335,13 +335,13 @@ func moTableRowsFunc() *function.GetMoTableSizeRowsFuncType {
 		eng engine.Engine,
 		forceUpdate bool,
 		resetUpdateTime bool,
-	) ([]uint64, error) {
+	) ([]uint64, error, bool) {
 		e, ok := asDisttaeEngine(eng)
 		if !ok {
-			return nil, moerr.NewInternalErrorNoCtx("MoTableSizeRows: engine is not a disttae engine")
+			return nil, moerr.NewInternalErrorNoCtx("MoTableSizeRows: engine is not a disttae engine"), false
 		}
 		if e.dynamicCtx.closed.Load() {
-			return nil, moerr.NewInvalidStateNoCtx("MoTableSizeRows: engine is closed")
+			return nil, moerr.NewInvalidStateNoCtx("MoTableSizeRows: engine is closed"), false
 		}
 		return e.dynamicCtx.MTSTableRows(
 			ctx, accs, dbs, tbls, eng, forceUpdate, resetUpdateTime)
@@ -405,7 +405,7 @@ func initMoTableStatsConfig(
 
 		eng.dynamicCtx.conf = eng.config.statsConf
 
-		function.MoTableRowsSizeUseOldImpl.Store(eng.dynamicCtx.conf.DisableStatsTask)
+		eng.dynamicCtx.conf.StatsUsingOldImpl = eng.dynamicCtx.conf.StatsUsingOldImpl || eng.dynamicCtx.conf.DisableStatsTask
 
 		eng.dynamicCtx.executorPool = sync.Pool{
 			New: func() interface{} {
@@ -929,8 +929,6 @@ func (d *dynamicCtx) restoreDefaultSetting(ok bool) string {
 	defer d.Unlock()
 
 	d.conf = d.defaultConf
-	function.MoTableRowsSizeUseOldImpl.Store(d.conf.StatsUsingOldImpl)
-	function.MoTableRowsSizeForceUpdate.Store(d.conf.ForceUpdate)
 
 	return fmt.Sprintf("move_on(%v), use_old_impl(%v), force_update(%v)",
 		!d.conf.DisableStatsTask,
@@ -960,7 +958,6 @@ func (d *dynamicCtx) setUseOldImpl(newVal bool) string {
 	defer d.Unlock()
 
 	oldState := d.conf.StatsUsingOldImpl
-	function.MoTableRowsSizeUseOldImpl.Store(newVal)
 	d.conf.StatsUsingOldImpl = newVal
 
 	ret := fmt.Sprintf("use old impl: %v to %v", oldState, newVal)
@@ -978,7 +975,6 @@ func (d *dynamicCtx) setForceUpdate(newVal bool) string {
 	defer d.Unlock()
 
 	oldState := d.conf.ForceUpdate
-	function.MoTableRowsSizeForceUpdate.Store(newVal)
 	d.conf.ForceUpdate = newVal
 
 	ret := fmt.Sprintf("force update: %v to %v", oldState, newVal)
@@ -1447,8 +1443,12 @@ func (d *dynamicCtx) QueryTableStats(
 	resetUpdateTime bool,
 ) (statsVals [][]any, err error, ok bool) {
 
+	if err := ctx.Err(); err != nil {
+		return nil, err, false
+	}
 	d.Lock()
 	useOld := d.conf.StatsUsingOldImpl
+	forceUpdate = forceUpdate || d.conf.ForceUpdate
 	d.Unlock()
 	if useOld {
 		return
@@ -1490,18 +1490,20 @@ func (d *dynamicCtx) MTSTableSize(
 	eng engine.Engine,
 	forceUpdate bool,
 	resetUpdateTime bool,
-) (sizes []uint64, err error) {
+) (sizes []uint64, err error, handled bool) {
 
-	statsVals, err, _ := d.QueryTableStats(
+	statsVals, err, handled := d.QueryTableStats(
 		ctx, []int{TableStatsTableSize},
 		accs, dbs, tbls,
 		forceUpdate, resetUpdateTime)
-	if err != nil {
-		return nil, err
+	if err != nil || !handled {
+		return nil, err, handled
 	}
-
-	if len(statsVals) == 0 {
-		return
+	if len(tbls) == 0 {
+		return nil, nil, true
+	}
+	if len(statsVals) != 1 || len(statsVals[0]) != len(tbls) {
+		return nil, moerr.NewInternalErrorNoCtx("MoTableSizeRows: invalid statistics cardinality"), true
 	}
 
 	for i := range statsVals[0] {
@@ -1517,18 +1519,20 @@ func (d *dynamicCtx) MTSTableRows(
 	eng engine.Engine,
 	forceUpdate bool,
 	resetUpdateTime bool,
-) (sizes []uint64, err error) {
+) (sizes []uint64, err error, handled bool) {
 
-	statsVals, err, _ := d.QueryTableStats(
+	statsVals, err, handled := d.QueryTableStats(
 		ctx, []int{TableStatsTableRows},
 		accs, dbs, tbls,
 		forceUpdate, resetUpdateTime)
-	if err != nil {
-		return nil, err
+	if err != nil || !handled {
+		return nil, err, handled
 	}
-
-	if len(statsVals) == 0 {
-		return
+	if len(tbls) == 0 {
+		return nil, nil, true
+	}
+	if len(statsVals) != 1 || len(statsVals[0]) != len(tbls) {
+		return nil, moerr.NewInternalErrorNoCtx("MoTableSizeRows: invalid statistics cardinality"), true
 	}
 
 	for i := range statsVals[0] {
