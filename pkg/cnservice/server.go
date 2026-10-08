@@ -164,6 +164,24 @@ func NewService(
 		addressMgr:  address.NewAddressManager(cfg.ServiceHost, cfg.PortBase),
 		gossipNode:  gossipNode,
 	}
+	// Ownership transfers only when NewService returns the service. The engine
+	// is published during construction so failures can retire partial owners.
+	defer func() {
+		if result != nil {
+			return
+		}
+		srv.closeViewMetadataAdmission()
+		if srv.cancelMoServerFunc != nil {
+			srv.cancelMoServerFunc()
+		}
+		if closeErr := srv.closeStoreEngine(); closeErr != nil {
+			if err != nil {
+				err = errors.Join(err, closeErr)
+			} else {
+				logutil.Error("failed to retire CN engine construction", zap.Error(closeErr))
+			}
+		}
+	}()
 	srv.colexecServer = colexec.NewServer(cfg.UUID)
 
 	srv.requestHandler = func(ctx context.Context,
@@ -206,11 +224,6 @@ func NewService(
 	if err = srv.initViewMetadataAdmission(ctx); err != nil {
 		return nil, err
 	}
-	defer func() {
-		if err != nil {
-			srv.closeViewMetadataAdmission()
-		}
-	}()
 	if err = srv.initQueryService(); err != nil {
 		return nil, err
 	}
@@ -573,6 +586,7 @@ func (s *service) closeService() error {
 		}
 		withdrawErr := s.withdrawViewMetadataAdmission()
 		localErr := closeCNServiceSteps(
+			s.closeStoreEngine,
 			s.stopRPCs,
 			func() error {
 				// stop I/O pipeline
@@ -603,6 +617,16 @@ func (s *service) closeService() error {
 		s.closeErr = errors.Join(withdrawErr, localErr)
 	})
 	return s.closeErr
+}
+
+func (s *service) closeStoreEngine() error {
+	if s.storeEngine == nil {
+		return nil
+	}
+	if closer, ok := s.storeEngine.(interface{ Close() error }); ok {
+		return closer.Close()
+	}
+	return nil
 }
 
 // CloseComplete certifies local teardown, not a successful remote generation

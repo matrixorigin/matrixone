@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -38,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -294,6 +296,13 @@ type Engine struct {
 
 	gcPool *ants.Pool
 
+	gcMu              sync.Mutex
+	gcSchedulerCancel context.CancelFunc
+	gcSchedulerDone   chan struct{}
+
+	closeOnce sync.Once
+	closeErr  error
+
 	// XXX related to cn push model
 	pClient PushClient
 
@@ -335,9 +344,22 @@ func (e *Engine) SetService(svr string) {
 	e.service = svr
 }
 
-func (e *Engine) ResetGCWorkerPool(pool *ants.Pool) {
-	e.gcPool.Release()
+func (e *Engine) ResetGCWorkerPool(pool *ants.Pool) error {
+	if e.dynamicCtx.closed.Load() {
+		return moerr.NewInvalidStateNoCtx("engine GC is closed")
+	}
+	e.gcMu.Lock()
+	defer e.gcMu.Unlock()
+	if e.dynamicCtx.closed.Load() {
+		return moerr.NewInvalidStateNoCtx("engine GC is closed")
+	}
+	if e.gcPool != nil {
+		if err := e.gcPool.ReleaseContext(context.Background()); err != nil {
+			return err
+		}
+	}
 	e.gcPool = pool
+	return nil
 }
 
 // GetCCPRTxnCache returns the CCPR transaction cache
@@ -995,6 +1017,23 @@ const (
 )
 
 func gcFiles(txn *Transaction, scope cloneGCScope, names ...string) error {
+	if len(names) == 0 {
+		return nil
+	}
+	// A cleanup request admitted before close retains ownership of all its batches.
+	e := txn.engine
+	if e.dynamicCtx.closed.Load() {
+		return moerr.NewInvalidStateNoCtx("engine GC is closed")
+	}
+	e.gcMu.Lock()
+	defer e.gcMu.Unlock()
+	if e.dynamicCtx.closed.Load() {
+		return moerr.NewInvalidStateNoCtx("engine GC is closed")
+	}
+	if e.gcPool == nil {
+		return moerr.NewInvalidStateNoCtx("engine GC pool is unavailable")
+	}
+
 	if txn.isCloneTxn {
 		names = readutil.RemoveIf(names, func(name string) bool {
 			txnID := txn.op.Txn().ID
@@ -1010,63 +1049,23 @@ func gcFiles(txn *Transaction, scope cloneGCScope, names ...string) error {
 		return nil
 	}
 
-	//getCaller := func(depth int) (str []string) {
-	//	pc := make([]uintptr, depth)
-	//	n := runtime.Callers(2, pc)
-	//	frames := runtime.CallersFrames(pc[:n])
-	//
-	//	i := 0
-	//	for {
-	//		frame, more := frames.Next()
-	//		funcName := filepath.Base(frame.Function)
-	//		str = append(str, funcName)
-	//		i++
-	//		if !more || i >= depth {
-	//			break
-	//		}
-	//	}
-	//	return
-	//}
-
-	logutil.Info("GC-WORKSPACE-FILES",
-		zap.Strings("names", names),
-		zap.String("txn-info", txn.op.Txn().DebugString()),
-		//zap.String("stack", strings.Join(getCaller(5), "<-")),
-	)
-
-	//gc the objects asynchronously.
-	//TODO:: to handle the failure when CN is down.
-	step := GCBatchOfFileCount
-	if len(names) > 0 && len(names) < step {
-		if err := txn.engine.gcPool.Submit(func() {
-			if err := txn.engine.fs.Delete(context.Background(), names...); err != nil {
-				logutil.Warnf("failed to delete objects:%v, err:%v", names, err)
-			}
-		}); err != nil {
-			return err
-		}
-
-		return nil
-	}
-
-	for i := 0; i < len(names); i += step {
-		if i+step > len(names) {
-			step = len(names) - i
-		}
-		start := i
-		end := i + step
-		if err := txn.engine.gcPool.Submit(func() {
-			//notice that the closure can't capture the loop variable i, so we need to use start and end.
-			if err := txn.engine.fs.Delete(context.Background(), names[start:end]...); err != nil {
-				logutil.Warnf("failed to delete objects:%v, err:%v", names[i:i+step], err)
+	logutil.Info("GC-WORKSPACE-FILES", zap.Strings("names", names),
+		zap.String("txn-info", txn.op.Txn().DebugString()))
+	fs := e.fs
+	for start := 0; start < len(names); start += GCBatchOfFileCount {
+		end := min(start+GCBatchOfFileCount, len(names))
+		batch := append([]string(nil), names[start:end]...)
+		if err := e.gcPool.Submit(func() {
+			// Rollback cleanup must survive query cancellation. The existing helper
+			// bounds each storage attempt; engine close waits for the actual return.
+			if _, err := ioutil.DeleteUnpublishedObjects(context.Background(), fs, batch...); err != nil {
+				logutil.Warnf("failed to delete objects:%v, err:%v", batch, err)
 			}
 		}); err != nil {
 			return err
 		}
 	}
-
 	return nil
-
 }
 
 func (txn *Transaction) GCObjsByStats(sl ...objectio.ObjectStats) (err error) {
