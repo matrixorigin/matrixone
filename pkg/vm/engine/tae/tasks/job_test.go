@@ -18,7 +18,6 @@ import (
 	"context"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/assert"
@@ -64,6 +63,8 @@ func TestParallelJobScheduler_ConcurrentScheduleAndStop(t *testing.T) {
 
 	var wg sync.WaitGroup
 	stopCh := make(chan struct{})
+	started := make(chan struct{})
+	var startOnce sync.Once
 
 	// Start multiple goroutines that continuously schedule jobs
 	for i := 0; i < 10; i++ {
@@ -77,7 +78,7 @@ func TestParallelJobScheduler_ConcurrentScheduleAndStop(t *testing.T) {
 				default:
 					job := &Job{}
 					job.Init(context.Background(), "concurrent-job", JTAny, func(ctx context.Context) *JobResult {
-						time.Sleep(time.Millisecond)
+						startOnce.Do(func() { close(started) })
 						return &JobResult{Res: "done"}
 					})
 					err := scheduler.Schedule(job)
@@ -92,8 +93,9 @@ func TestParallelJobScheduler_ConcurrentScheduleAndStop(t *testing.T) {
 		}()
 	}
 
-	// Let some jobs run
-	time.Sleep(50 * time.Millisecond)
+	// Wait for the scheduler to execute a real job before stopping it. This
+	// preserves the concurrent Schedule/Stop race without a wall-clock guess.
+	<-started
 
 	// Stop the scheduler while jobs are being scheduled
 	scheduler.Stop()

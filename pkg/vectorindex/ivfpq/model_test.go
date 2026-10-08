@@ -170,7 +170,7 @@ func buildTestModel(t *testing.T, id string, ids []int64) *IvfpqModel[float32, f
 
 func TestModelStreamError(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	orig := runSql_streaming
@@ -200,7 +200,7 @@ func TestModelStreamError(t *testing.T) {
 
 func TestModelBuildAndLoad(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	idxcfg := testIdxcfg()
@@ -293,7 +293,7 @@ func TestModelBuildAndLoad(t *testing.T) {
 
 func TestModelLoadFromDB(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	idxcfg := testIdxcfg()

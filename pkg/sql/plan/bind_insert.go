@@ -5531,6 +5531,8 @@ func valuesExprIsFuncCall(e tree.Expr) bool {
 			e = v.Expr
 		case *tree.CastExpr:
 			e = v.Expr
+		case *tree.SerialExtractExpr:
+			return true
 		case *tree.FuncExpr:
 			// mod() is arithmetic and shares the numeric-context binder with the
 			// binary operators (see numericAstFunctionName); every other function
