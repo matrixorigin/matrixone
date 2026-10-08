@@ -1518,13 +1518,13 @@ func TestIsMaterializedViewStateTableDefUsesCatalogOwner(t *testing.T) {
 }
 
 func TestCreateTableRejectsMaterializedViewStateReservedTarget(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	_, err := runOneStmt(mock, t, "create table tpch.__mo_mv_state_0123456789abcdef (a bigint)")
 	require.ErrorContains(t, err, "reserved for materialized view state")
 }
 
 func TestDropMaterializedViewStateAllowsInternalDatabaseCleanup(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	name := "__mo_mv_state_0123456789abcdef"
 	mock.ctxt.objects[name] = &plan.ObjectRef{SchemaName: "tpch", ObjName: name, Obj: 424241}
 	mock.ctxt.tables[name] = &plan.TableDef{
@@ -1542,7 +1542,7 @@ func TestDropMaterializedViewStateAllowsInternalDatabaseCleanup(t *testing.T) {
 }
 
 func TestInsertRejectsMaterializedViewStateReservedTarget(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	name := "__mo_mv_state_0123456789abcdef"
 	mock.ctxt.objects[name] = &plan.ObjectRef{SchemaName: "tpch", ObjName: name, Obj: 424242}
 	mock.ctxt.tables[name] = &plan.TableDef{
@@ -1559,7 +1559,7 @@ func TestInsertRejectsMaterializedViewStateReservedTarget(t *testing.T) {
 }
 
 func TestInsertRejectsMaterializedViewTarget(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	name := "mv_events"
 	mock.ctxt.objects[name] = &plan.ObjectRef{SchemaName: "tpch", ObjName: name, Obj: 424243}
 	mock.ctxt.tables[name] = &plan.TableDef{
@@ -1572,7 +1572,7 @@ func TestInsertRejectsMaterializedViewTarget(t *testing.T) {
 }
 
 func TestValidateMaterializedViewSources(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	mv, d := testMaterializedViewTable(t, "mv")
 	d.Sources[0].Name = "missing_orders"
 	encoded, err := mvdefinition.Encode(d)
@@ -1587,7 +1587,7 @@ func TestValidateMaterializedViewSources(t *testing.T) {
 }
 
 func TestValidateMaterializedViewSourceTableRejectsUnsupportedRelations(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	ctx.tables["missing_orders"] = &plan.TableDef{Name: "missing_orders", DbName: "tpch", TableType: catalog.SystemOrdinaryRel}
 	ctx.tables["external_orders"] = &plan.TableDef{Name: "external_orders", DbName: "tpch", TableType: catalog.SystemExternalRel}
 	ctx.tables["view_orders"] = &plan.TableDef{Name: "view_orders", DbName: "tpch", TableType: catalog.SystemViewRel}
@@ -1642,7 +1642,7 @@ func TestBuildMaterializedViewRefreshModes(t *testing.T) {
 		t.Fatalf("unexpected property %s", key)
 		return ""
 	}
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	for name, def := range mock.ctxt.tables {
 		def.DbName = "tpch"
 		def.DbId = 1
@@ -2199,7 +2199,7 @@ func TestMaterializedViewIncrementalPlannerHelpers(t *testing.T) {
 }
 
 func TestMaterializedViewRefreshCanWriteHiddenState(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	ctx := &mock.ctxt
 	ctx.SetContext(context.Background())
 	def := &TableDef{
