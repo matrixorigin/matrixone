@@ -19,6 +19,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/lni/goutils/leaktest"
@@ -52,11 +53,12 @@ func TestRunTasksInParallel(t *testing.T) {
 		wg.Add(2)
 		started := make(chan struct{}, 2)
 		release := make(chan struct{})
-		releaseOnce := sync.OnceFunc(func() { close(release) })
-		defer releaseOnce()
 		r.RegisterExecutor(0, func(ctx context.Context, task task.Task) error {
 			started <- struct{}{}
-			<-release
+			select {
+			case <-release:
+			case <-ctx.Done():
+			}
 			defer wg.Done()
 			return nil
 		})
@@ -70,53 +72,60 @@ func TestRunTasksInParallel(t *testing.T) {
 				t.Fatal("parallel executors did not start")
 			}
 		}
-		releaseOnce()
+		close(release)
 		wg.Wait()
 	}, WithRunnerParallelism(2),
 		WithRunnerFetchInterval(time.Millisecond))
 }
 
 func TestTooMuchTasksWillBlockAndEventuallyCanBeExecuted(t *testing.T) {
-	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
-		c := make(chan struct{})
-		continueC := make(chan struct{})
-		firstStarted := make(chan struct{})
-		v := atomic.Uint32{}
-		r.RegisterExecutor(0, func(ctx context.Context, task task.Task) error {
-			n := v.Add(1)
-			if n == 2 {
-				defer close(c) // second task close the chan
-			}
-			if n == 1 {
-				close(firstStarted)
-				<-continueC
-			}
+	synctest.Test(t, func(t *testing.T) {
+		runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
+			c := make(chan struct{})
+			continueC := make(chan struct{})
+			firstStarted := make(chan struct{})
+			v := atomic.Uint32{}
+			r.RegisterExecutor(0, func(ctx context.Context, task task.Task) error {
+				n := v.Add(1)
+				if n == 2 {
+					defer close(c) // second task close the chan
+				}
+				if n == 1 {
+					close(firstStarted)
+					select {
+					case <-continueC:
+					case <-ctx.Done():
+					}
+				}
 
-			return nil
-		})
-		mustAddTestAsyncTask(t, store, 1, newTestAsyncTask("t1"))
-		mustAddTestAsyncTask(t, store, 1, newTestAsyncTask("t2"))
-		mustAllocTestTask(t, s, store, map[string]string{"t1": r.runnerID, "t2": r.runnerID})
-		select {
-		case <-firstStarted:
-		case <-time.After(time.Second):
-			t.Fatal("first task did not start")
-		}
-		select {
-		case <-c:
-			assert.Fail(t, "second task started while parallelism was occupied")
-		default:
-		}
-		assert.Equal(t, uint32(1), v.Load())
-		close(continueC) // second task can be run
-		select {
-		case <-c:
-		case <-time.After(time.Second):
-			t.Fatal("second task did not run after parallelism was released")
-		}
-		assert.Equal(t, uint32(2), v.Load())
-	}, WithRunnerParallelism(1),
-		WithRunnerFetchInterval(time.Millisecond))
+				return nil
+			})
+			mustAddTestAsyncTask(t, store, 1, newTestAsyncTask("t1"))
+			mustAddTestAsyncTask(t, store, 1, newTestAsyncTask("t2"))
+			mustAllocTestTask(t, s, store, map[string]string{"t1": r.runnerID, "t2": r.runnerID})
+			select {
+			case <-firstStarted:
+			case <-time.After(time.Second):
+				t.Fatal("first task did not start")
+			}
+			synctest.Wait() // the second fetched task is blocked on admission
+			select {
+			case <-c:
+				assert.Fail(t, "second task started while parallelism was occupied")
+			default:
+			}
+			assert.Equal(t, uint32(1), v.Load())
+			close(continueC) // second task can be run
+			select {
+			case <-c:
+			case <-time.After(time.Second):
+				t.Fatal("second task did not run after parallelism was released")
+			}
+			assert.Equal(t, uint32(2), v.Load())
+		}, WithRunnerParallelism(1),
+			WithRunnerFetchLimit(2),
+			WithRunnerFetchInterval(time.Millisecond))
+	})
 }
 
 func TestHeartbeatWithRunningTask(t *testing.T) {
@@ -128,7 +137,10 @@ func TestHeartbeatWithRunningTask(t *testing.T) {
 			if n.Add(1) == 2 {
 				close(c)
 			}
-			<-completeC
+			select {
+			case <-completeC:
+			case <-ctx.Done():
+			}
 			return nil
 		})
 		mustAddTestAsyncTask(t, store, 1, newTestAsyncTask("t1"))
@@ -228,6 +240,7 @@ func TestRetryDrainsAllDueTasks(t *testing.T) {
 	})
 
 	r.retryDueTasks(now, nil)
+	require.Empty(t, r.retryTasks.s) // extraction finishes before dispatch returns
 	<-r.doneC
 	<-r.doneC
 	require.Equal(t, uint32(2), n.Load())
