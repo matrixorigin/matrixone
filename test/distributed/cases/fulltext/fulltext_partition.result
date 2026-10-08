@@ -181,6 +181,35 @@ select id from ft_prepared where match(body) against('beta') order by id;
 id
 802
 deallocate prepare p_update;
+create table ft_auto(id int primary key, body varchar(200), payload datetime default current_timestamp on update current_timestamp, embedding vecf32(3), g datetime as (payload) stored, fulltext fti_auto(body)) partition by range columns(g)(partition p0 values less than ('2025-01-01'), partition p1 values less than (maxvalue));
+insert into ft_auto(id,body,payload,embedding) values (1101,'automatic alpha','2024-01-01','[1,2,3]'), (1102,'automatic beta','2024-01-01','[1,2,3]');
+update ft_auto set embedding = embedding where id = 1102;
+select id, payload = '2024-01-01' as historical, g <=> payload as recomputed from ft_auto order by id;
+id	historical	recomputed
+1101	1	1
+1102	1	1
+update ft_auto set embedding = '[3,4,5]' where id = 1101;
+select id, payload = '2024-01-01' as historical, g <=> payload as recomputed from ft_auto order by id;
+id	historical	recomputed
+1101	0	1
+1102	1	1
+select id from ft_auto where match(body) against('alpha') order by id;
+id
+1101
+begin;
+update ft_auto set embedding = '[3,4,5]' where id = 1102;
+rollback;
+select id, payload = '2024-01-01' as historical, g <=> payload as recomputed from ft_auto order by id;
+id	historical	recomputed
+1101	0	1
+1102	1	1
+select id from ft_auto where match(body) against('beta') order by id;
+id
+1102
+delete from ft_auto where id = 1101;
+select id from ft_auto where match(body) against('alpha') order by id;
+id
+drop table ft_auto;
 drop table ft_range;
 drop table ft_list;
 drop table ft_key;

@@ -42,6 +42,63 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestPartitionS3WriterSeparatesDeleteAndInsertPhases(t *testing.T) {
+	_, _, proc := prepareTestCtx(t, true)
+	defer proc.Free()
+	before := proc.Mp().CurrNB()
+	raw := &MultiUpdate{Action: UpdateWriteS3, IsRemote: true}
+	op := &PartitionMultiUpdate{raw: raw, writers: make(map[uint64]*s3WriterDelegate)}
+	defer op.freePartitionWriters(proc)
+	target := &partitionUpdateTarget{writerIDs: make(map[partitionWriterKey]uint64)}
+	ref, def := getTestSecondaryIndexTable(catalog.FullTextIndexTableNamePrefix + "same_partition")
+	ref.Obj, def.TblId = 701, 701
+	contexts := []*MultiUpdateCtx{{ObjRef: ref, TableDef: def, InsertCols: []int{0, 1}, DeleteCols: []int{2, 0}, IgnoreAffectedRows: true}}
+	raw.addAffectedRowsFunc = op.doAddAffectedRows
+	raw.MultiUpdateCtx = clonePartitionPhaseContexts(contexts, true)
+	raw.resetMultiUpdateCtxs()
+	deleteID := op.writerID(target, 701, s3WriterAction(raw.MultiUpdateCtx))
+	deleteWriter, err := op.getS3Writer(proc.GetService(), deleteID)
+	require.NoError(t, err)
+	require.Equal(t, actionDelete, deleteWriter.action)
+	raw.MultiUpdateCtx = clonePartitionPhaseContexts(contexts, false)
+	raw.resetMultiUpdateCtxs()
+	insertID := op.writerID(target, 701, s3WriterAction(raw.MultiUpdateCtx))
+	insertWriter, err := op.getS3Writer(proc.GetService(), insertID)
+	require.NoError(t, err)
+	require.NotEqual(t, deleteID, insertID, "a writer captures the phase context; a same-partition insert must not reuse a delete-only writer")
+	require.NotSame(t, deleteWriter, insertWriter)
+	require.Equal(t, actionInsert, insertWriter.action)
+	require.Equal(t, insertID, op.writerID(target, 701, actionInsert), "the same phase still reuses its writer")
+	input := batch.New([]string{def.Cols[0].Name, def.Cols[1].Name, catalog.Row_ID})
+	input.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	input.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	input.Vecs[2] = vector.NewVec(types.T_Rowid.ToType())
+	require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte("same partition token"), false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(input.Vecs[1], int64(42), false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(input.Vecs[2], types.BuildTestRowid(1, 1), false, proc.Mp()))
+	input.SetRowCount(1)
+	analyzer := process.NewAnalyzer(0, false, false, "partition-phase")
+	func() {
+		defer input.Clean(proc.Mp())
+		require.NoError(t, deleteWriter.append(proc, analyzer, input))
+		require.NoError(t, insertWriter.append(proc, analyzer, input))
+	}()
+	seenActions := make(map[actionType]uint64)
+	for writer := op.getFlushableS3Writer(); writer != nil; writer = op.getFlushableS3Writer() {
+		require.NoError(t, writer.flushTailAndWriteToOutput(proc, analyzer))
+		actions := vector.MustFixedColNoTypeCheck[uint8](writer.outputBat.Vecs[0])
+		ids := vector.MustFixedColNoTypeCheck[uint64](writer.outputBat.Vecs[1])
+		counts := vector.MustFixedColNoTypeCheck[uint64](writer.outputBat.Vecs[2])
+		for i, action := range actions {
+			require.Equal(t, uint64(701), ids[i], "phase IDs are execution-only, not physical table IDs")
+			seenActions[actionType(action)] += counts[i]
+		}
+	}
+	require.Equal(t, map[actionType]uint64{actionDelete: 1, actionInsert: 1}, seenActions)
+	op.freePartitionWriters(proc)
+	require.Equal(t, before, proc.Mp().CurrNB())
+}
+
 func TestPartitionIndexS3WritersFlushPhysicalTableIDs(t *testing.T) {
 	_, _, proc := prepareTestCtx(t, true)
 	defer proc.Free()
@@ -49,7 +106,7 @@ func TestPartitionIndexS3WritersFlushPhysicalTableIDs(t *testing.T) {
 	raw := &MultiUpdate{Action: UpdateWriteS3, IsRemote: true}
 	op := &PartitionMultiUpdate{raw: raw, writers: make(map[uint64]*s3WriterDelegate)}
 	defer op.freePartitionWriters(proc)
-	target := &partitionUpdateTarget{writerIDs: make(map[uint64]uint64)}
+	target := &partitionUpdateTarget{writerIDs: make(map[partitionWriterKey]uint64)}
 	analyzer := process.NewAnalyzer(0, false, false, "partition-index-s3")
 	// Alternate physical targets to catch accidental reuse of the last context.
 	for seq, tableID := range []uint64{1001, 2001, 1001} {
@@ -58,7 +115,7 @@ func TestPartitionIndexS3WritersFlushPhysicalTableIDs(t *testing.T) {
 		raw.MultiUpdateCtx = []*MultiUpdateCtx{{ObjRef: ref, TableDef: def, InsertCols: []int{0, 1}, IgnoreAffectedRows: true}}
 		raw.resetMultiUpdateCtxs()
 		raw.addAffectedRowsFunc = op.doAddAffectedRows
-		writer, err := op.getS3Writer(proc.GetService(), op.writerID(target, tableID))
+		writer, err := op.getS3Writer(proc.GetService(), op.writerID(target, tableID, actionInsert))
 		require.NoError(t, err)
 		input := batch.New([]string{def.Cols[0].Name, def.Cols[1].Name, "partition_route"})
 		input.Vecs[0] = vector.NewVec(types.T_varchar.ToType())

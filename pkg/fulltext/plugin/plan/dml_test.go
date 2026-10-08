@@ -73,4 +73,21 @@ func TestDMLMaintenanceNoOpColumns(t *testing.T) {
 			require.Nil(t, columns)
 		})
 	}
+
+	t.Run("partition route is an index-owned no-op dependency", func(t *testing.T) {
+		tableDef.Partition = &planpb.Partition{PartitionDefs: []*planpb.PartitionDef{{
+			Def: &planpb.Expr{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{Name: "t.summary", ColPos: 2}}},
+		}}}
+		t.Cleanup(func() { tableDef.Partition = nil })
+		columns, supported, err := Hooks{}.DMLMaintenanceNoOpColumns(tableDef, &planpb.IndexDef{Parts: []string{"body"}})
+		require.NoError(t, err)
+		require.True(t, supported)
+		require.Equal(t, []string{"id", "body", "summary"}, columns)
+		tableDef.Partition.PartitionDefs[0].Def.GetCol().ColPos = 99
+		tableDef.Partition.PartitionDefs[0].Def.GetCol().Name = "missing"
+		columns, supported, err = Hooks{}.DMLMaintenanceNoOpColumns(tableDef, &planpb.IndexDef{Parts: []string{"body"}})
+		require.NoError(t, err)
+		require.False(t, supported, "unresolvable route metadata cannot prove posting equality")
+		require.Nil(t, columns)
+	})
 }

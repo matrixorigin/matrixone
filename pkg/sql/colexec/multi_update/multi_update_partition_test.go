@@ -373,13 +373,13 @@ func TestBuildPartitionUpdateTargetsKeepsPhysicalTargetsIndependent(t *testing.T
 }
 
 func TestPartitionWriterIDsSeparateAliasesOfSamePhysicalTable(t *testing.T) {
-	first := &partitionUpdateTarget{writerIDs: make(map[uint64]uint64)}
-	second := &partitionUpdateTarget{writerIDs: make(map[uint64]uint64)}
+	first := &partitionUpdateTarget{writerIDs: make(map[partitionWriterKey]uint64)}
+	second := &partitionUpdateTarget{writerIDs: make(map[partitionWriterKey]uint64)}
 	op := &PartitionMultiUpdate{}
 
-	firstID := op.writerID(first, 100)
-	require.Equal(t, firstID, op.writerID(first, 100))
-	require.NotEqual(t, firstID, op.writerID(second, 100))
+	firstID := op.writerID(first, 100, actionUpdate)
+	require.Equal(t, firstID, op.writerID(first, 100, actionUpdate))
+	require.NotEqual(t, firstID, op.writerID(second, 100, actionUpdate))
 }
 
 func TestNewPartitionMultiUpdateFrom(t *testing.T) {
@@ -411,7 +411,7 @@ func TestPartitionMultiUpdateSetRejectZeroTemporalUpdatesWriters(t *testing.T) {
 
 func TestPartitionMultiUpdateResetReleasesWriters(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	target := &partitionUpdateTarget{writerIDs: map[uint64]uint64{10: 1}}
+	target := &partitionUpdateTarget{writerIDs: map[partitionWriterKey]uint64{{physicalTableID: 10, action: actionUpdate}: 1}}
 	op := &PartitionMultiUpdate{
 		raw:          &MultiUpdate{},
 		targets:      []*partitionUpdateTarget{target},

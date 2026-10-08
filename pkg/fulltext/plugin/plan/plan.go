@@ -23,6 +23,8 @@
 package plan
 
 import (
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -80,6 +82,47 @@ func (Hooks) DMLMaintenanceNoOpColumns(
 		}
 		seen[name] = struct{}{}
 		columns = append(columns, name)
+	}
+	// Physical posting ownership follows the final parent route even when
+	// doc_id and tokenization inputs compare equal. The plugin owns this
+	// dependency declaration for every SQL-layer no-op consumer.
+	if tableDef.Partition != nil {
+		for _, partition := range tableDef.Partition.PartitionDefs {
+			if partition == nil {
+				continue
+			}
+			valid := true
+			err := plan.VisitExprTree(partition.Def, func(expr *plan.Expr) error {
+				ref := expr.GetCol()
+				if ref == nil {
+					return nil
+				}
+				name := catalog.ResolveAlias(ref.Name)
+				if dot := strings.LastIndexByte(name, '.'); dot >= 0 {
+					name = name[dot+1:]
+				}
+				pos, ok := tableDef.Name2ColIndex[name]
+				if !ok {
+					pos = ref.ColPos
+				}
+				if pos < 0 || int(pos) >= len(tableDef.Cols) || tableDef.Cols[pos] == nil {
+					valid = false
+					return nil
+				}
+				name = tableDef.Cols[pos].Name
+				if _, exists := seen[name]; !exists {
+					seen[name] = struct{}{}
+					columns = append(columns, name)
+				}
+				return nil
+			})
+			if err != nil {
+				return nil, false, err
+			}
+			if !valid {
+				return nil, false, nil
+			}
+		}
 	}
 	return columns, len(columns) > 0, nil
 }
