@@ -245,18 +245,31 @@ func TestMessageBoardFinalizerDestroysQueuedMessages(t *testing.T) {
 
 func TestAccountedSpillFileOwnership(t *testing.T) {
 	var releases atomic.Int32
-	newFile := func() (*SpillFile, string) {
-		fd, err := os.CreateTemp("", "test_accounted_spill_*")
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	newFile := func(t *testing.T) *SpillFile {
+		fd, err := os.CreateTemp(t.TempDir(), "test_accounted_spill_*")
 		require.NoError(t, err)
-		return NewSpillFile(fd, 7, 11, func() { releases.Add(1) }), fd.Name()
+		defer fd.Close()
+		_, err = fd.Write(make([]byte, 11))
+		require.NoError(t, err)
+		require.NoError(t, fd.Close())
+		name := fd.Name()
+		file := NewReopenableSpillFile(
+			func(context.Context) (*os.File, error) { return os.Open(name) },
+			func() error { return os.Remove(name) },
+			7, 11, func() { releases.Add(1) },
+		)
+		t.Cleanup(func() { require.NoError(t, file.Close()) })
+		return file
 	}
 
 	t.Run("free_closes_and_releases_once", func(t *testing.T) {
 		releases.Store(0)
-		file, name := newFile()
-		defer os.Remove(name)
-		fd := file.File()
-		jm := NewJoinMap(GroupSels{}, nil, nil, nil, nil, mpool.MustNewZero())
+		file := newFile(t)
+		fd, err := file.Open(context.Background())
+		require.NoError(t, err)
+		jm := NewJoinMap(GroupSels{}, nil, nil, nil, nil, mp)
 		jm.IncRef(1)
 		require.NoError(t, jm.SetSpillBuildPayload(SpillBuildPayload{
 			Files:     []*SpillFile{file},
@@ -269,15 +282,15 @@ func TestAccountedSpillFileOwnership(t *testing.T) {
 		jm.FreeMemory()
 		jm.FreeMemory()
 		require.Equal(t, int32(1), releases.Load())
-		_, err := fd.Stat()
+		_, err = fd.Stat()
 		require.Error(t, err)
+		require.NoFileExists(t, fd.Name())
 	})
 
 	t.Run("take_moves_complete_ownership", func(t *testing.T) {
 		releases.Store(0)
-		file, name := newFile()
-		defer os.Remove(name)
-		jm := NewJoinMap(GroupSels{}, nil, nil, nil, nil, mpool.MustNewZero())
+		file := newFile(t)
+		jm := NewJoinMap(GroupSels{}, nil, nil, nil, nil, mp)
 		jm.IncRef(1)
 		budgetIdentity := &struct{ generation uint64 }{generation: 9}
 		require.NoError(t, jm.SetSpillBuildPayload(SpillBuildPayload{
@@ -288,6 +301,7 @@ func TestAccountedSpillFileOwnership(t *testing.T) {
 		payload, err := jm.TakeSpillBuildPayload()
 		require.NoError(t, err)
 		require.Len(t, payload.Files, 1)
+		require.True(t, payload.Files[0].NeedsOpen())
 		require.Same(t, budgetIdentity, payload.BudgetRef)
 		_, err = jm.TakeSpillBuildPayload()
 		require.ErrorIs(t, err, ErrSpillBuildPayloadTaken)
@@ -300,14 +314,14 @@ func TestAccountedSpillFileOwnership(t *testing.T) {
 
 	t.Run("shared_map_rejected_without_ownership_transfer", func(t *testing.T) {
 		releases.Store(0)
-		file, name := newFile()
-		defer os.Remove(name)
-		fd := file.File()
-		jm := NewJoinMap(GroupSels{}, nil, nil, nil, nil, mpool.MustNewZero())
+		file := newFile(t)
+		fd, err := file.Open(context.Background())
+		require.NoError(t, err)
+		jm := NewJoinMap(GroupSels{}, nil, nil, nil, nil, mp)
 		jm.IncRef(2)
 		payload := SpillBuildPayload{Files: []*SpillFile{file}, BudgetRef: struct{}{}}
 
-		err := jm.SetSpillBuildPayload(payload)
+		err = jm.SetSpillBuildPayload(payload)
 		require.ErrorIs(t, err, ErrSpillBuildShared)
 		require.False(t, jm.IsSpilled())
 		jm.FreeMemory()
@@ -320,14 +334,14 @@ func TestAccountedSpillFileOwnership(t *testing.T) {
 
 	t.Run("missing_budget_reference_is_rejected_without_transfer", func(t *testing.T) {
 		releases.Store(0)
-		file, name := newFile()
-		defer os.Remove(name)
-		fd := file.File()
-		jm := NewJoinMap(GroupSels{}, nil, nil, nil, nil, mpool.MustNewZero())
+		file := newFile(t)
+		fd, err := file.Open(context.Background())
+		require.NoError(t, err)
+		jm := NewJoinMap(GroupSels{}, nil, nil, nil, nil, mp)
 		jm.IncRef(1)
 		payload := SpillBuildPayload{Files: []*SpillFile{file}}
 
-		err := jm.SetSpillBuildPayload(payload)
+		err = jm.SetSpillBuildPayload(payload)
 		require.ErrorIs(t, err, ErrSpillBuildBudgetRef)
 		require.False(t, jm.IsSpilled())
 		jm.FreeMemory()
@@ -340,9 +354,8 @@ func TestAccountedSpillFileOwnership(t *testing.T) {
 
 	t.Run("concurrent_take_moves_files_and_budget_together_once", func(t *testing.T) {
 		releases.Store(0)
-		file, name := newFile()
-		defer os.Remove(name)
-		jm := NewJoinMap(GroupSels{}, nil, nil, nil, nil, mpool.MustNewZero())
+		file := newFile(t)
+		jm := NewJoinMap(GroupSels{}, nil, nil, nil, nil, mp)
 		jm.IncRef(1)
 		budgetIdentity := &struct{ generation uint64 }{generation: 11}
 		require.NoError(t, jm.SetSpillBuildPayload(SpillBuildPayload{

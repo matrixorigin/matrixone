@@ -4046,6 +4046,7 @@ func TestJsonQuoteRejectsInvalidUTF8(t *testing.T) {
 }
 
 func TestJsonQuoteRejectsBinaryDomain(t *testing.T) {
+	proc := testutil.NewProcess(t)
 	for _, tc := range []struct {
 		name string
 		typ  types.Type
@@ -4057,7 +4058,6 @@ func TestJsonQuoteRejectsBinaryDomain(t *testing.T) {
 		{name: "binary invalid utf8", typ: types.New(types.T_varbinary, 1, 0), data: []string{string([]byte{0xff})}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcess(t)
 			ftc := NewFunctionTestCase(proc,
 				[]FunctionTestInput{
 					NewFunctionTestInput(tc.typ, tc.data, []bool{false}),
@@ -4070,7 +4070,6 @@ func TestJsonQuoteRejectsBinaryDomain(t *testing.T) {
 	}
 
 	t.Run("typed binary NULL remains NULL", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
 		ftc := NewFunctionTestCase(proc,
 			[]FunctionTestInput{
 				NewFunctionTestInput(types.T_varbinary.ToType(), []string{"ignored"}, []bool{true}),
@@ -4082,7 +4081,6 @@ func TestJsonQuoteRejectsBinaryDomain(t *testing.T) {
 	})
 
 	t.Run("mixed runtime domains", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
 		ftc := NewFunctionTestCase(proc,
 			[]FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(), []string{"text", "binary"}, []bool{false, false}),
@@ -4096,7 +4094,6 @@ func TestJsonQuoteRejectsBinaryDomain(t *testing.T) {
 	})
 
 	t.Run("masked binary row is not evaluated", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
 		ftc := NewFunctionTestCase(proc,
 			[]FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(), []string{"binary", "text"}, []bool{false, false}),
@@ -4274,8 +4271,8 @@ func TestJsonUnquoteBinaryDomainDefersErrorUntilValue(t *testing.T) {
 }
 
 func TestJsonUnquoteUsesEvaluatedRowStringDomain(t *testing.T) {
+	proc := testutil.NewProcess(t)
 	t.Run("runtime binary provenance is rejected", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
 		tc := NewFunctionTestCase(proc,
 			[]FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(), []string{"plain", "text"}, []bool{false, false}),
@@ -4289,7 +4286,6 @@ func TestJsonUnquoteUsesEvaluatedRowStringDomain(t *testing.T) {
 	})
 
 	t.Run("static binary text override skips masked binary row", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
 		tc := NewFunctionTestCase(proc,
 			[]FunctionTestInput{
 				NewFunctionTestInput(types.T_varbinary.ToType(), []string{"text", "binary"}, []bool{false, false}),
@@ -4306,7 +4302,6 @@ func TestJsonUnquoteUsesEvaluatedRowStringDomain(t *testing.T) {
 	})
 
 	t.Run("prepared text binary text rebind", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
 		tc := NewFunctionTestCase(proc,
 			[]FunctionTestInput{
 				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"plain"}, []bool{false}),

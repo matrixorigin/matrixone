@@ -714,7 +714,16 @@ func getExprNdv(expr *plan.Expr, builder *QueryBuilder) float64 {
 			return getExprNdv(exprImpl.F.Args[0], builder)
 		}
 	case *plan.Expr_Col:
-		return builder.getColNdv(exprImpl.Col)
+		ndv := builder.getColNdv(exprImpl.Col)
+		if ndv >= 0 {
+			return ndv
+		}
+		if _, ok := builder.syntheticNDVCols[[2]int32{
+			exprImpl.Col.RelPos, exprImpl.Col.ColPos,
+		}]; ok && expr.Ndv > 0 {
+			return expr.Ndv
+		}
+		return ndv
 	}
 	return -1
 }
@@ -1414,6 +1423,59 @@ func sortFilterListByStats(ctx context.Context, nodeID int32, builder *QueryBuil
 			})
 		}
 	}
+}
+
+// residualInequalityBuildCapacityBound separates join-order cardinality from the
+// capacity envelope used to select a spillable hash-build topology. Residual
+// inequality filters currently use a heuristic 5% selectivity, but != and <>
+// can retain nearly every input row. When such a filter is the direct build
+// child, its input cardinality is a more conservative planning bound that does
+// not require accurate predicate statistics.
+func residualInequalityBuildCapacityBound(nodeID int32, builder *QueryBuilder) (float64, bool) {
+	node := builder.qry.Nodes[nodeID]
+	if node == nil || node.Stats == nil {
+		return 0, false
+	}
+	cardinality := node.Stats.Outcnt
+	if node.NodeType != plan.Node_FILTER || len(node.Children) != 1 ||
+		!containsResidualInequality(node.FilterList) {
+		return 0, false
+	}
+	child := builder.qry.Nodes[node.Children[0]]
+	if child != nil && child.Stats != nil && child.Stats.Outcnt > cardinality {
+		return child.Stats.Outcnt, true
+	}
+	return cardinality, true
+}
+
+func containsResidualInequality(filters []*plan.Expr) bool {
+	for _, filter := range filters {
+		if containsInequalityExpr(filter) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsInequalityExpr(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil {
+		return false
+	}
+	switch fn.Func.ObjName {
+	case "!=", "<>":
+		return true
+	case "and", "or":
+		for _, arg := range fn.Args {
+			if containsInequalityExpr(arg) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNode bool, needResetHashMapStats bool) {
@@ -2365,9 +2427,9 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 	switch node.JoinType {
 	case plan.Node_INNER, plan.Node_OUTER:
 		if node.JoinType == plan.Node_INNER {
-			leftMarked := builder.subtreeContainsCTEHashBuildScan(
+			leftMarked := builder.joinInputContainsCTEHashBuildScan(
 				node.Children[0], make(map[int32]bool))
-			rightMarked := builder.subtreeContainsCTEHashBuildScan(
+			rightMarked := builder.joinInputContainsCTEHashBuildScan(
 				node.Children[1], make(map[int32]bool))
 			if leftMarked || rightMarked {
 				// CTE drain admission marked one exact equality-hash build.
@@ -2430,8 +2492,8 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 		// SEMI join must fully consume their build input. Preserve that proof: a
 		// right-sided choice would turn the marked reader into the probe input,
 		// which may stop without draining it.
-		if (node.JoinType == plan.Node_LEFT || node.JoinType == plan.Node_SEMI) &&
-			builder.subtreeContainsCTEHashBuildScan(node.Children[1], make(map[int32]bool)) {
+		if (node.JoinType == plan.Node_LEFT || node.JoinType == plan.Node_SEMI || node.JoinType == plan.Node_SINGLE) &&
+			builder.joinInputContainsCTEHashBuildScan(node.Children[1], make(map[int32]bool)) {
 			node.IsRightJoin = false
 			break
 		}
@@ -2819,7 +2881,7 @@ func estimatedRetainedBytes(rows, rowSize float64) (float64, bool) {
 	return rows * rowSize, true
 }
 
-func (builder *QueryBuilder) subtreeContainsCTEHashBuildScan(nodeID int32, seen map[int32]bool) bool {
+func (builder *QueryBuilder) joinInputContainsCTEHashBuildScan(nodeID int32, seen map[int32]bool) bool {
 	if seen[nodeID] {
 		return false
 	}
@@ -2829,8 +2891,14 @@ func (builder *QueryBuilder) subtreeContainsCTEHashBuildScan(nodeID int32, seen 
 		node.ExtraOptions == materialized.CTEHashBuildScanOption {
 		return true
 	}
+	// A marker below another join pins that nested join, not this ancestor.
+	// Looking through the boundary can make two independent build requirements
+	// appear to conflict and reject an otherwise safe shared computation.
+	if node.NodeType == plan.Node_JOIN {
+		return false
+	}
 	for _, childID := range node.Children {
-		if builder.subtreeContainsCTEHashBuildScan(childID, seen) {
+		if builder.joinInputContainsCTEHashBuildScan(childID, seen) {
 			return true
 		}
 	}

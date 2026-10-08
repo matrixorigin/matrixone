@@ -39,8 +39,9 @@ type CollationDefinition struct {
 // SupportedCollationDefinitions is a presentation of the common capability
 // owner, not a second registry. Native-but-disabled domains are not advertised.
 var SupportedCollationDefinitions = func() []CollationDefinition {
-	var result []CollationDefinition
-	for _, d := range collation.Advertised() {
+	advertised := collation.Advertised()
+	result := make([]CollationDefinition, 0, len(advertised))
+	for _, d := range advertised {
 		row := CollationDefinition{Name: d.Name, Charset: d.Charset.Name(), ID: int64(d.ProtocolID),
 			IsCompiled: "Yes", SortLen: d.SortLen, PadAttribute: "NO PAD", Advertised: true}
 		if d.Default {
@@ -72,7 +73,8 @@ func DefaultCollationForCharset(charset string) string {
 // The exact row count also detects duplicate or obsolete advertised charsets.
 func InformationSchemaCharacterSetsCheckSQL() string {
 	charsets := []string{"binary", "utf8", "utf8mb4"}
-	clauses := []string{fmt.Sprintf("(SELECT COUNT(*) FROM information_schema.CHARACTER_SETS) = %d", len(charsets))}
+	clauses := make([]string, 0, 1+len(charsets))
+	clauses = append(clauses, fmt.Sprintf("(SELECT COUNT(*) FROM information_schema.CHARACTER_SETS) = %d", len(charsets)))
 	for _, charset := range charsets {
 		clauses = append(clauses, fmt.Sprintf(
 			"EXISTS (SELECT 1 FROM information_schema.CHARACTER_SETS "+

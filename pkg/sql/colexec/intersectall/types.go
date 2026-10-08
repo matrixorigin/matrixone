@@ -36,6 +36,7 @@ type container struct {
 
 	// built for the smaller of the two relations
 	hashTable *hashmap.StrHashMap
+	iterator  hashmap.Iterator
 
 	inserted      []uint8
 	resetInserted []uint8
@@ -110,6 +111,8 @@ func (intersectAll *IntersectAll) ExecProjection(proc *process.Process, input *b
 }
 
 func (ctr *container) cleanHashMap() {
+	hashmap.IteratorClearOwner(ctr.iterator)
+	ctr.iterator = nil
 	if ctr.hashTable != nil {
 		ctr.hashTable.Free()
 		ctr.hashTable = nil

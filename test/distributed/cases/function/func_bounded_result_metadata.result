@@ -68,7 +68,7 @@ aes_text_v  ¦  VARBINARY(64)  ¦  YES
 select length(compressed_v), length(compressed_binary_v), uncompressed_v,
 length(aes_v), length(aes_text_v) from bounded_binary_ctas;
 ➤ length(compressed_v)[-5,64,0]  ¦  length(compressed_binary_v)[-5,64,0]  ¦  uncompressed_v[-4,65535,0]  ¦  length(aes_v)[-5,64,0]  ¦  length(aes_text_v)[-5,64,0]  𝄀
-21  ¦  28  ¦  hello  ¦  16  ¦  16
+22  ¦  29  ¦  hello  ¦  16  ¦  16
 select count(*) as concat_contract_failures
 from source
 where not (concat('x') <=> 'x')

@@ -1974,7 +1974,10 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		}
 		childNodeID := node.Children[0]
 		childNode := nodes[childNodeID]
-		if isLocalPreAggregationGroup(node, childNode) &&
+		if canPreserveParallelUnionAllBranches(childNode) &&
+			c.canCompileParallelUnionAllAggregate(node) {
+			ss, err = c.compileParallelUnionAllInput(step, childNodeID, nodes)
+		} else if isLocalPreAggregationGroup(node, childNode) &&
 			!c.hasUnsupportedRemoteGroupWire(node) {
 			ss, err = c.compileLocalPreAggregationScope(step, childNodeID, nodes)
 		} else {
@@ -2044,7 +2047,13 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		ss = c.compileProjection(node, c.compileRestrict(node, c.compileFill(node, ss)))
 		return ss, nil
 	case plan.Node_JOIN:
-		left, err = c.compilePlanScope(step, node.Children[0], nodes)
+		leftNode := nodes[node.Children[0]]
+		if node.JoinType == plan.Node_INNER &&
+			canPreserveParallelUnionAllBranches(leftNode) {
+			left, err = c.compileParallelUnionAllInput(step, node.Children[0], nodes)
+		} else {
+			left, err = c.compilePlanScope(step, node.Children[0], nodes)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -6250,10 +6259,13 @@ func (c *Compile) compileMinusAndIntersect(node *plan.Node, left []*Scope, right
 	if c.IsSingleScope(left) && c.IsSingleScope(right) {
 		return c.compileTpMinusAndIntersect(node, left, right, nodeType)
 	}
-	if nodeType == plan.Node_MINUS_ALL || nodeType == plan.Node_INTERSECT_ALL {
+	broadcastDistinct := (nodeType == plan.Node_MINUS || nodeType == plan.Node_INTERSECT) &&
+		!node.GetStats().GetHashmapStats().GetShuffle()
+	if nodeType == plan.Node_MINUS_ALL || nodeType == plan.Node_INTERSECT_ALL || broadcastDistinct {
 		// Multiset operations need one owner of every occurrence from both
-		// inputs. The existing parallel set-op path broadcasts rows to workers;
-		// using it here would multiply the result cardinality.
+		// inputs. Broadcast DISTINCT inputs also need only one owner to avoid
+		// repeating the same set work across workers. Preserve parallel upstream
+		// scopes and merge them into that single owner.
 		return c.compileTpMinusAndIntersect(
 			node,
 			[]*Scope{c.newMergeScope(left)},
@@ -6367,6 +6379,74 @@ func (c *Compile) compileUnionAll(
 	c.anal.isFirst = false
 
 	return []*Scope{rs}
+}
+
+// canPreserveParallelUnionAllBranches identifies a UNION ALL whose row stream
+// may be handed directly to a downstream consumer. LIMIT/OFFSET/order are
+// deliberately excluded because they require one whole-union owner.
+func canPreserveParallelUnionAllBranches(node *plan.Node) bool {
+	return node != nil && node.NodeType == plan.Node_UNION_ALL &&
+		len(node.Children) == 2 && node.Limit == nil && node.Offset == nil &&
+		len(node.OrderBy) == 0 && len(node.FilterList) == 0 &&
+		!node.FilterIsBarrier && !nodeHasUserLevelLockFunction(node)
+}
+
+func (c *Compile) canCompileParallelUnionAllAggregate(node *plan.Node) bool {
+	return !hasOrderedGroupConcat(node) && !hasOrderedSetPercentile(node) &&
+		!c.hasUnsupportedRemoteGroupWire(node) &&
+		!plan2.RequiresSingleStageDistinctAgg(node)
+}
+
+// compileParallelUnionAllInput preserves independent UNION ALL branches only
+// for consumers that explicitly request them (currently parallel aggregation
+// and the probe side of INNER JOIN). Ordinary UNION ALL compilation keeps its
+// established one-stream contract for result, DML, and other consumers.
+func (c *Compile) compileParallelUnionAllInput(
+	step int32,
+	nodeID int32,
+	nodes []*plan.Node,
+) ([]*Scope, error) {
+	// TP consumers rely on IsSingleScope and only attach their operator to
+	// the first scope. Keep the ordinary merged input instead of exposing
+	// independent branches that those consumers would silently ignore.
+	if c.IsTpQuery() {
+		return c.compilePlanScope(step, nodeID, nodes)
+	}
+	node := nodes[nodeID]
+	left, err := c.compileParallelUnionAllBranch(step, node.Children[0], nodes)
+	if err != nil {
+		return nil, err
+	}
+	right, err := c.compileParallelUnionAllBranch(step, node.Children[1], nodes)
+	if err != nil {
+		ReleaseScopes(left)
+		return nil, err
+	}
+
+	c.setAnalyzeCurrent(left, int(nodeID))
+	c.setAnalyzeCurrent(right, int(nodeID))
+	inputs := make([]*Scope, 0, len(left)+len(right))
+	inputs = append(inputs, left...)
+	inputs = append(inputs, right...)
+	currentFirstFlag := c.anal.isFirst
+	for _, input := range inputs {
+		op := constructUnionAll(node)
+		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+		input.setRootOperator(op)
+	}
+	c.anal.isFirst = false
+	return c.ensureCoordinatorOnlyFunctions(node, inputs), nil
+}
+
+func (c *Compile) compileParallelUnionAllBranch(
+	step int32,
+	nodeID int32,
+	nodes []*plan.Node,
+) ([]*Scope, error) {
+	if canPreserveParallelUnionAllBranches(nodes[nodeID]) {
+		return c.compileParallelUnionAllInput(step, nodeID, nodes)
+	}
+	return c.compilePlanScope(step, nodeID, nodes)
 }
 
 // lazyUnionAllBranches transfers a directly nested lazy UNION ALL's branch
@@ -7116,8 +7196,17 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 		return rs
 	}
 
-	if rs[0].RootOp.OpType() == vm.Product {
-		return c.compileSharedBroadcastProduct(node, rs, buildScopes[0])
+	stageNodes := c.queryWorkerStageNodes()
+	probeScopeGroups := c.groupBroadcastProbeScopesByCN(rs, stageNodes)
+	probeType := rs[0].RootOp.OpType()
+	// A HashBuild shared by independent colocated probes cannot belong to
+	// one consumer: that consumer may finish without calling its child, while
+	// a peer still needs the build. Reuse the common producer-region owner.
+	// Limit the extension to the HashJoin/LoopJoin lifecycle domain; other
+	// operators keep their existing ownership and execution placement.
+	if probeType == vm.Product ||
+		((probeType == vm.HashJoin || probeType == vm.LoopJoin) && hasMultiScopeGroup(probeScopeGroups)) {
+		return c.compileSharedBroadcastJoin(node, rs, buildScopes[0], probeScopeGroups)
 	}
 
 	buildScopeAttached := false
@@ -7132,9 +7221,7 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 		rs[0].PreScopes = append(rs[0].PreScopes, buildScopes[0])
 	}
 
-	stageNodes := c.queryWorkerStageNodes()
 	buildOpScopes := make([]*Scope, 0, len(stageNodes))
-	probeScopeGroups := c.groupBroadcastProbeScopesByCN(rs, stageNodes)
 
 	if len(rs) > len(stageNodes) || hasMultiScopeGroup(probeScopeGroups) {
 		for _, tmp := range probeScopeGroups {
@@ -7190,7 +7277,7 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 	return rs
 }
 
-// pendingProductBuild owns detached producers only during compilation.
+// pendingProductBuild owns detached shared HashBuild producers only during compilation.
 // Probe templates are non-owning references used to finalize worker counts.
 type pendingProductBuild struct {
 	source *Scope
@@ -7200,8 +7287,7 @@ type pendingProductBuild struct {
 
 // Keep the data plane parallel; choose producer ownership only after downstream
 // Group, Limit, Sort and Join placement is complete.
-func (c *Compile) compileSharedBroadcastProduct(node *plan.Node, probes []*Scope, source *Scope) []*Scope {
-	groups := c.groupBroadcastProbeScopesByCN(probes, c.queryWorkerStageNodes())
+func (c *Compile) compileSharedBroadcastJoin(node *plan.Node, probes []*Scope, source *Scope, groups [][]*Scope) []*Scope {
 	pending := &pendingProductBuild{source: source, groups: groups}
 	c.pendingProductBuilds = append(c.pendingProductBuilds, pending)
 	for _, group := range groups {
@@ -7214,16 +7300,33 @@ func (c *Compile) compileSharedBroadcastProduct(node *plan.Node, probes []*Scope
 		build.setRootOperator(constructJoinBuildOperator(c, group[0].RootOp, 0, node.RuntimeFilterBuildList))
 		pending.builds = append(pending.builds, build)
 	}
-	// Dispatch is wired now, while the Product still owns the join-node analysis.
-	// Run dispatch locally so independent remote build/probe fragments share only
-	// the existing statement MessageBoard, never a foreign in-process receiver.
-	if !sameExecutionNode(source.NodeInfo, toEngineNode(c.currentCNWorker())) {
+	// Dispatch is wired now, while the probe still owns the join-node analysis.
+	// Preserve the existing Product placement. HashJoin/LoopJoin keep the source
+	// on its original CN instead of relaying the build payload via the coordinator.
+	isProduct := probes[0].RootOp.OpType() == vm.Product
+	if isProduct && !sameExecutionNode(source.NodeInfo, toEngineNode(c.currentCNWorker())) {
 		source = c.newMergeScope([]*Scope{source})
 		pending.source = source
 	}
 	dispatchOp := constructDispatch(0, pending.builds, source, node, false)
 	dispatchOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
 	source.setRootOperator(dispatchOp)
+	if !isProduct {
+		// A build, unlike a probe, must consume the source to completion. Put
+		// the source under the independent build on the same CN (or the first
+		// build when no probe uses that CN, as in the original placement). The
+		// local Dispatch receiver then stays in the same RemoteRun scope tree.
+		owner := pending.builds[0]
+		for _, build := range pending.builds {
+			if sameExecutionNode(source.NodeInfo, build.NodeInfo) {
+				owner = build
+				break
+			}
+		}
+		owner.PreScopes = append(owner.PreScopes, source)
+		owner.ConcurrentPreScopes = true
+		pending.source = nil // ownership transferred to pending.builds
+	}
 	return probes
 }
 
@@ -7276,7 +7379,9 @@ func (c *Compile) finishProductBuilds(scopes []*Scope, mergeResults bool) []*Sco
 		// Build connectors belong to the job, not to the result receiver set. Thus
 		// ordinary/ordered/partial result merges retain their existing semantics.
 		job := c.newMergeScope(pending.builds)
-		job.PreScopes = append(job.PreScopes, pending.source)
+		if pending.source != nil {
+			job.PreScopes = append(job.PreScopes, pending.source)
+		}
 		job.ConcurrentPreScopes = true
 		if c.auxiliaryProductScopes == nil {
 			c.auxiliaryProductScopes = make(map[*Scope]bool)

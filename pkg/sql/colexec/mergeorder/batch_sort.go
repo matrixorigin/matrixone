@@ -376,7 +376,7 @@ func (ctr *container) appendSortedChunk(
 
 	ctr.batchList = append(ctr.batchList, chunk)
 	ctr.orderCols = append(ctr.orderCols, orderCols)
-	ctr.spillMemUsage += int64(chunk.Size())
+	ctr.spillMemUsage += int64(chunk.Allocated())
 	if ctr.shouldSpill(0) {
 		return ctr.spillCachedRuns(proc, analyzer)
 	}

@@ -838,7 +838,7 @@ func (e *Engine) getOrCreateSnapPartBy(
 	err = snap.ConsumeSnapCkps(ctx, ckps, func(
 		checkpoint *checkpoint.CheckpointEntry,
 		state *logtailreplay.PartitionState) error {
-		locs := make([]string, 0)
+		locs := make([]string, 0, 2)
 		locs = append(locs, checkpoint.GetLocation().String())
 		locs = append(locs, strconv.Itoa(int(checkpoint.GetVersion())))
 		locations := strings.Join(locs, ";")

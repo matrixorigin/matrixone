@@ -22,7 +22,8 @@ import (
 )
 
 func BenchmarkGroupByDependencyPlanning(b *testing.B) {
-	cases := []struct{ name, sql string }{{"ordinary", "select empno,ename from constraint_test.emp where empno=1"}}
+	cases := make([]struct{ name, sql string }, 0, 9)
+	cases = append(cases, struct{ name, sql string }{"ordinary", "select empno,ename from constraint_test.emp where empno=1"})
 	for _, depth := range []int{8, 32} {
 		query := "select empno,ename,sal from constraint_test.emp"
 		for i := 0; i < depth; i++ {

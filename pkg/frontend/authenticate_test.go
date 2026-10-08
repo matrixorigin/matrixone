@@ -279,7 +279,7 @@ func TestViewMetadataSQLAcceptsQuotedIdentifiers(t *testing.T) {
 	require.Contains(t, snapshotSQL, "relname = "+escapeSQLString(viewName))
 	require.Contains(t, snapshotSQL, "reldatabase = "+escapeSQLString(dbName))
 
-	queries := []string{checkSQL, metaSQL, snapshotSQL}
+	queries := append(make([]string, 0, 9), checkSQL, metaSQL, snapshotSQL)
 	for _, build := range []func() (string, error){
 		func() (string, error) { return getSqlForCheckDatabase(ctx, dbName) },
 		func() (string, error) { return getSqlForCheckDatabaseByAccount(ctx, dbName) },
@@ -6261,9 +6261,9 @@ func TestExtractPrivilegeTipsFromPlanKeepsUserDedupJoinSources(t *testing.T) {
 		typ   PrivilegeType
 		table string
 	}
-	got := make([]tipKey, 0)
 	tips, err := extractPrivilegeTipsFromPlan(p)
 	require.NoError(t, err)
+	got := make([]tipKey, 0, len(tips))
 	for _, tip := range tips {
 		got = append(got, tipKey{typ: tip.typ, table: tip.tableName})
 	}
@@ -12117,7 +12117,7 @@ func Test_doDropAccount(t *testing.T) {
 		sql = fmt.Sprintf(getPubInfoSql, 1) + " order by update_time desc, created_time desc"
 		bh.sql2result[sql] = newMrsForSqlForGetPubs([][]interface{}{})
 
-		sql = "select 1 from mo_catalog.mo_columns where att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
+		sql = "select 1 from mo_catalog.mo_columns where account_id = 0 and att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
 		bh.sql2result[sql] = newMrsForSqlForGetSubs([][]interface{}{{1}})
 
 		sql = getSubsSql + " and sub_account_id = 1"
@@ -12351,7 +12351,7 @@ func Test_doDropAccount_InTransaction(t *testing.T) {
 			sql = fmt.Sprintf(getPubInfoSql, 1) + " order by update_time desc, created_time desc"
 			bh.sql2result[sql] = newMrsForSqlForGetPubs([][]interface{}{})
 
-			sql = "select 1 from mo_catalog.mo_columns where att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
+			sql = "select 1 from mo_catalog.mo_columns where account_id = 0 and att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
 			bh.sql2result[sql] = newMrsForSqlForGetSubs([][]interface{}{{1}})
 
 			sql = getSubsSql
@@ -12425,7 +12425,7 @@ func Test_doDropAccount_InTransaction(t *testing.T) {
 			sql = fmt.Sprintf(getPubInfoSql, 1) + " order by update_time desc, created_time desc"
 			bh.sql2result[sql] = newMrsForSqlForGetPubs([][]interface{}{})
 
-			sql = "select 1 from mo_catalog.mo_columns where att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
+			sql = "select 1 from mo_catalog.mo_columns where account_id = 0 and att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
 			bh.sql2result[sql] = newMrsForSqlForGetSubs([][]interface{}{{1}})
 
 			sql = getSubsSql
@@ -12515,7 +12515,7 @@ func Test_doDropAccount_AccountOwnedMetadataCleanupError(t *testing.T) {
 
 	sql = fmt.Sprintf(getPubInfoSql, 1) + " order by update_time desc, created_time desc"
 	bh.sql2result[sql] = newMrsForSqlForGetPubs([][]interface{}{})
-	sql = "select 1 from mo_catalog.mo_columns where att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
+	sql = "select 1 from mo_catalog.mo_columns where account_id = 0 and att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
 	bh.sql2result[sql] = newMrsForSqlForGetSubs([][]interface{}{{1}})
 	sql = getSubsSql + " and sub_account_id = 1"
 	bh.sql2result[sql] = newMrsForSqlForGetSubs([][]interface{}{})
