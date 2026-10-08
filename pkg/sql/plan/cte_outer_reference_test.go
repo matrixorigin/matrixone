@@ -373,7 +373,7 @@ func TestLocalCTEOuterReferencesExecutablePlan(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			logicPlan, err := runOneStmt(NewMockOptimizer(false), t, tc.sql)
+			logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, tc.sql)
 			require.NoError(t, err)
 			query := logicPlan.GetQuery()
 			require.NotNil(t, query)
@@ -383,7 +383,7 @@ func TestLocalCTEOuterReferencesExecutablePlan(t *testing.T) {
 }
 
 func TestLocalCTEDomainAdmissionIsAtomic(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false), false, false)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false, newPlanTestProcess(t)), false, false)
 	ctx := NewBindContext(builder, nil)
 	rowType := &planpb.Type{Id: int32(types.T_Rowid), NotNullable: true}
 	valueType := &planpb.Type{Id: int32(types.T_int32)}
@@ -413,6 +413,17 @@ func TestLocalCTEDomainAdmissionIsAtomic(t *testing.T) {
 	after, err := builder.qry.Marshal()
 	require.NoError(t, err)
 	require.Equal(t, before, after, "rejecting a later producer must not publish the earlier rewrite")
+
+	// Logical view provenance survives scan elimination and is now carried
+	// by ViewPath. It must still exclude this outer relation from replay.
+	builder.qry.Nodes[outerID].ViewPath = []*planpb.ViewStep{{DatabaseName: "db", ViewName: "v"}}
+	before, err = builder.qry.Marshal()
+	require.NoError(t, err)
+	_, err = builder.parameterizeLocalCTEs(outerID, good, ctx, planpb.SubqueryRef_SCALAR, false)
+	require.ErrorContains(t, err, "outer input cannot be safely replayed")
+	after, err = builder.qry.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, before, after, "rejecting view replay must not publish plan changes")
 }
 
 func TestPreparedLocalCTEOuterReferences(t *testing.T) {
@@ -438,7 +449,7 @@ func TestPreparedLocalCTEOuterReferences(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, tc.sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			logicPlan, err := BuildPlan(NewMockCompilerContext(true), stmt, true)
+			logicPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, true)
 			require.NoError(t, err)
 			query := logicPlan.GetQuery()
 			assertReachablePlanHasNoCorrelatedExpr(t, query)
@@ -459,7 +470,7 @@ func TestPreparedLocalCTEOuterReferences(t *testing.T) {
 }
 
 func TestLocalCTERuntimeDemandFollowsConsumerFilter(t *testing.T) {
-	logicPlan, err := runOneStmt(NewMockOptimizer(false), t,
+	logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		`select p.n_nationkey, (with q(n) as (select p.n_nationkey)
 		select count(*) from q where n<0 and p.n_nationkey=@demand) from tpch.nation p`)
 	require.NoError(t, err)
@@ -498,7 +509,7 @@ func TestLocalCTERuntimeDemandRetainsDerivedInputBoundary(t *testing.T) {
 	for _, result := range []string{"n", "count(*)"} {
 		for _, demand := range []string{"@demand", "cast(@demand as signed)"} {
 			t.Run(result+"/"+demand, func(t *testing.T) {
-				logicPlan, err := runOneStmt(NewMockOptimizer(false), t,
+				logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 					`select p.n_nationkey, (with q(n) as (select p.n_nationkey)
 					select `+result+` from (select n from q where n<0) d
 					where p.n_nationkey=`+demand+`) from tpch.nation p`)
@@ -545,7 +556,7 @@ func TestLocalCTEVariableDemandPreservesReferences(t *testing.T) {
 			sql := `select p.n_nationkey, (with recursive q(n) as (
 				select p.n_nationkey union all select n from q where n=1)
 				select count(*) from q where p.n_nationkey=` + tc.sqlVar + `) from tpch.nation p`
-			logicPlan, err := runOneStmt(NewMockOptimizer(false), t, sql)
+			logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, sql)
 			require.NoError(t, err)
 			query := logicPlan.GetQuery()
 			assertReachablePlanHasNoCorrelatedExpr(t, query)
@@ -842,7 +853,7 @@ func TestLocalCTEOuterReferencesRejectUnsafeDomains(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := runOneStmt(NewMockOptimizer(false), t, tc.sql)
+			_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, tc.sql)
 			require.ErrorContains(t, err, "correlated local CTE")
 		})
 	}

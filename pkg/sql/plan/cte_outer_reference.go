@@ -507,7 +507,7 @@ func (d *localCTEDomain) admit() error {
 	outerTag := rowID.GetCol().RelPos
 	for id := d.outerID; ; {
 		n := b.qry.Nodes[id]
-		if n.Limit != nil || n.Offset != nil || len(n.LockTargets) != 0 || n.DirectView != "" || len(n.OriginViews) != 0 {
+		if n.Limit != nil || n.Offset != nil || len(n.LockTargets) != 0 || len(n.ViewPath) != 0 {
 			return d.unsupported("outer input cannot be safely replayed")
 		}
 		for _, e := range n.ProjectList {
