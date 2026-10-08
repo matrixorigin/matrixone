@@ -16,6 +16,7 @@ package lockop
 
 import (
 	"bytes"
+	"cmp"
 	"fmt"
 	"math"
 	"strings"
@@ -24,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"golang.org/x/exp/constraints"
 )
 
 var (
@@ -818,7 +818,7 @@ func fetchVarlenaRows(
 	return len(rows) > 0, rows, lock.Granularity_Row
 }
 
-func fetchFixedRows[T constraints.Ordered](
+func fetchFixedRows[T cmp.Ordered](
 	vec *vector.Vector,
 	max int,
 	fn func(v T) []byte,

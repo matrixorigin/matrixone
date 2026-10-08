@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 )
 
 // workspaceCommitBuilder is the only bridge from CN workspace state to the
@@ -166,7 +165,6 @@ func (b *workspaceCommitBuilder) Build(ctx context.Context) ([]txn.TxnRequest, e
 		return nil, nil
 	}
 
-	trace.GetService(b.service).TxnCommit(b.op, entries)
 	payload, err := types.Encode(&api.PrecommitWriteCmd{
 		EntryList:           entries,
 		SyncProtectionJobId: b.syncProtectionJobID,

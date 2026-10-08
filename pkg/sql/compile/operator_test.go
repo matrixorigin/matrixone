@@ -47,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightdedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
 	windowop "github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
@@ -84,6 +85,21 @@ func TestDupOperator(t *testing.T) {
 	duplicatedFilter := dupOperator(assertFilter, 0, 1).(*filter.Filter)
 	defer duplicatedFilter.Release()
 	require.True(t, duplicatedFilter.IsAssert)
+}
+
+func TestDupOperatorUnionAllMarker(t *testing.T) {
+	source := unionall.NewArgument()
+	defer source.Release()
+
+	duplicated := dupOperator(source, 2, 4).(*unionall.UnionAll)
+	defer duplicated.Release()
+	require.Zero(t, duplicated.SequentialBranches)
+	require.Equal(t, int32(2), duplicated.GetOperatorBase().ParallelID)
+	require.Equal(t, int32(4), duplicated.GetOperatorBase().MaxParallel)
+
+	sequential := unionall.NewArgument().WithSequentialBranches(2)
+	defer sequential.Release()
+	require.Panics(t, func() { dupOperator(sequential, 0, 1) })
 }
 
 func TestConstructMergeGroupCarriesEmptyGroupingSetMetadata(t *testing.T) {
@@ -659,7 +675,7 @@ func TestConstructAggregateConfigOrderedPercentileNormalizesStaticCast(t *testin
 		{name: "discrete descending", fn: plan2.NamePercentileDisc, desc: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := plan2.NewMockCompilerContext(false)
+			ctx := plan2.NewMockCompilerContext(false, newPlanTestProcess(t))
 			direction := ""
 			if tc.desc {
 				direction = " desc"
@@ -701,7 +717,7 @@ func TestConstructAggregateConfigOrderedPercentileNormalizesStaticCast(t *testin
 }
 
 func TestConstructAggregateConfigApproxPercentileNormalizesStaticCast(t *testing.T) {
-	ctx := plan2.NewMockCompilerContext(false)
+	ctx := plan2.NewMockCompilerContext(false, newPlanTestProcess(t))
 	stmt, err := parsers.ParseOne(
 		context.Background(), dialect.MYSQL,
 		"select approx_percentile(0.5) within group (order by n_nationkey) from nation", 1)
@@ -1320,6 +1336,23 @@ func TestConstructAggregateConfigCoversLegacyConfigurationFailures(t *testing.T)
 
 }
 
+func TestGroupConcatNullSeparatorConfig(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return int64(1024), nil
+	})
+	value := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}}
+	f := &plan.Function{
+		Func: &plan.ObjectRef{ObjName: plan2.NameGroupConcat},
+		Args: []*plan.Expr{value, plan2.MakePlan2NullTextConstExprWithType("NULL")},
+	}
+	args, config, err := constructAggregateConfigWithError(f, proc)
+	require.NoError(t, err)
+	require.Len(t, args, 1)
+	require.Equal(t, aggexec.EncodeGroupConcatConfig("", 1024), config)
+}
+
 func TestConstructAggregateConfigPreservesOtherSpecialConfigs(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
@@ -1917,4 +1950,31 @@ func TestDupOperatorApplyPreservesFulltextReferences(t *testing.T) {
 	dup := dupOperator(op, 0, 1).(*apply.Apply)
 	require.Equal(t, tableFunction.FulltextSourceRef, dup.TableFunction.FulltextSourceRef)
 	require.Equal(t, tableFunction.FulltextIndexRef, dup.TableFunction.FulltextIndexRef)
+}
+
+func TestPreInsertEstimatedRowsAreOnlyBoundedPrefetchHints(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, tc := range []struct {
+		name  string
+		auto  bool
+		stats *plan.Stats
+		want  int64
+	}{
+		{"finite", true, &plan.Stats{Outcnt: 5}, 5},
+		{"finite_conservative_bound", true, &plan.Stats{Outcnt: math.MaxUint32}, math.MaxUint32},
+		{"saturating", true, &plan.Stats{Outcnt: float64(math.MaxUint64)}, math.MaxInt64},
+		{"nan", true, &plan.Stats{Outcnt: math.NaN()}, 0},
+		{"missing", true, nil, 0},
+		{"no_auto", false, &plan.Stats{Outcnt: 5}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			child := &plan.Node{Stats: tc.stats}
+			node := &plan.Node{Children: []int32{0}, PreInsertCtx: &plan.PreInsertCtx{
+				Ref: &plan.ObjectRef{}, TableDef: &plan.TableDef{}, HasAutoCol: tc.auto}}
+			op, err := constructPreInsert([]*plan.Node{child}, node, nil, proc)
+			require.NoError(t, err)
+			defer op.Release()
+			require.Equal(t, tc.want, op.EstimatedRowCount)
+		})
+	}
 }

@@ -151,6 +151,10 @@ func (l *localLockTable) doLock(
 				}
 				c.txn.clearBlocked(old, l.logger)
 			}
+			// The new dependency is now visible without the physical lock-table
+			// mutex. Check it promptly; the periodic checker remains the fallback
+			// when detector admission is busy or traversal is transiently blocked.
+			_ = l.events.addToDeadlockCheck(c.w)
 
 			// we handle remote lock on current rpc io read goroutine, so we can not wait here, otherwise
 			// the rpc will be blocked.
@@ -971,6 +975,17 @@ func (l *localLockTable) doAcquireLock(c *lockContext) error {
 		return err
 	}
 
+	if c.opts.KeepRows {
+		if c.opts.Granularity != pb.Granularity_Row || len(c.rows) == 0 {
+			return moerr.NewInvalidInputNoCtx("exact-row admission requires nonempty rows")
+		}
+		if h := c.txn.lockHolders[l.bind.Group]; h != nil {
+			if _, coarsened := h.coarsenedTables()[l.bind.Table]; coarsened {
+				return moerr.NewLockNeedUpgradeNoCtx()
+			}
+		}
+	}
+
 	for {
 		var err error
 		switch c.opts.Granularity {
@@ -1025,6 +1040,9 @@ func (l *localLockTable) acquireRowLockLocked(c *lockContext) error {
 		if ok &&
 			(bytes.Equal(key, row) ||
 				lock.isLockRangeEnd()) {
+			if c.opts.KeepRows && !lock.isLockRow() && lock.holders.contains(c.txn.txnID) {
+				return moerr.NewLockNeedUpgradeNoCtx()
+			}
 			hold, newHolder, err := lock.tryHold(
 				l.logger,
 				c,
@@ -1050,6 +1068,11 @@ func (l *localLockTable) acquireRowLockLocked(c *lockContext) error {
 				return err
 			}
 			if hold {
+				if c.opts.KeepRows && !newHolder {
+					// Re-entry skips lockAdded; mark only after real ownership is
+					// confirmed, so a zero-grant failure leaves no policy behind.
+					c.txn.markTableNonCoarsenableLocked(c.txn.getHoldLocksLocked(l.bind.Group), l.bind.Table, c.opts.LockOptions)
+				}
 				if c.w != nil {
 					l.removeOwnerLocalWaitEdgeLocked(c.w)
 					c.w = nil
@@ -1181,6 +1204,9 @@ func (l *localLockTable) handleLockConflictLocked(
 
 	c.w.conflictKey.Store(&key)
 	c.w.lt.Store(l)
+	// Queue admission checks the requested mode for opt-in writer fairness.
+	// Set it before publication for both synchronous and asynchronous waits.
+	c.w.lockWaitMode = c.opts.Mode
 	clear(c.w.waitFor)
 	c.w.waitFor = c.w.waitFor[:0]
 	waitForSharedHolderChange :=
@@ -1194,15 +1220,6 @@ func (l *localLockTable) handleLockConflictLocked(
 			return true
 		}
 		c.w.waitFor = append(c.w.waitFor, txn.TxnID)
-		return true
-	})
-	c.result.ConflictKey = key
-	if len(c.w.waitFor) > 0 {
-		c.result.ConflictTxn = c.w.waitFor[0]
-	}
-	c.result.Waiters = uint32(conflictWith.waiters.size())
-	conflictWith.waiters.iter(func(w *waiter) bool {
-		c.result.PrevWaiter = w.txn.TxnID
 		return true
 	})
 

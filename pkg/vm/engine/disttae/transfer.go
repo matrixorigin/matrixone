@@ -36,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
@@ -66,26 +65,20 @@ func (staged *stagedTombstoneTransfer) cleanMetadata(mp *mpool.MPool) {
 func prepareInmemTombstones(
 	ctx context.Context,
 	txn *Transaction,
+	tables map[tombstoneTransferKey]tombstoneTransferTable,
 	start, end types.TS,
 	staged *stagedTombstoneTransfer,
 ) (err error) {
 
 	return txn.forEachTableHasDeletesLocked(
-		false,
-		func(tbl *txnTable) error {
+		tables, 0,
+		func(tbl *txnTable, _ string) error {
 			state, err := tbl.getPartitionState(ctx)
 			if err != nil {
 				return err
 			}
 
 			deleteObjs, createObjs := state.GetChangedObjsBetween(start, end)
-
-			trace.GetService(txn.proc.GetService()).ApplyFlush(
-				tbl.db.op.Txn().ID,
-				tbl.tableId,
-				start.ToTimestamp(),
-				tbl.db.op.SnapshotTS(),
-				len(deleteObjs))
 
 			if len(deleteObjs) > 0 {
 				if err := prepareTombstones(
@@ -108,18 +101,20 @@ func prepareInmemTombstones(
 func prepareTombstoneObjects(
 	ctx context.Context,
 	txn *Transaction,
+	tables map[tombstoneTransferKey]tombstoneTransferTable,
 	start, end types.TS,
 	staged *stagedTombstoneTransfer,
 ) (err error) {
 
-	fs, err := colexec.GetSharedFSFromProc(txn.proc)
-	if err != nil {
-		return
-	}
-
+	var fs fileservice.FileService
 	return txn.forEachTableHasDeletesLocked(
-		true,
-		func(tbl *txnTable) (callbackErr error) {
+		tables, 1,
+		func(tbl *txnTable, writeName string) (callbackErr error) {
+			if fs == nil {
+				if fs, callbackErr = colexec.GetSharedFSFromProc(txn.proc); callbackErr != nil {
+					return callbackErr
+				}
+			}
 			now := time.Now()
 			flow, logs, callbackErr := ConstructCNTombstoneObjectsTransferFlow(
 				ctx, start, end, tbl, txn, txn.proc.Mp(), fs)
@@ -179,7 +174,7 @@ func prepareTombstoneObjects(
 						databaseId:         tbl.db.databaseId,
 						tableId:            tbl.tableId,
 						databaseName:       tbl.db.databaseName,
-						tableName:          tbl.tableName,
+						tableName:          writeName,
 						fileName:           fileName,
 						bat:                bat,
 						tnStore:            txn.tnStores[0],
@@ -372,7 +367,8 @@ func prepareTombstones(
 				return
 			}
 
-			if transferIntents.Length() >= 8192 {
+			if transferBatchLimitReached(transferIntents.Length(),
+				transferIntents.Size()+searchPKColumn.Size()+searchMutation.Size()+searchBatPos.Size(), true) {
 				transferCnt += transferIntents.Length()
 				if err = batchTransferToTombstones(
 					ctx,

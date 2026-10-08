@@ -44,7 +44,6 @@ import (
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -388,8 +387,6 @@ type Transaction struct {
 	removed bool
 	pkCount int
 
-	adjustCount int
-
 	haveDDL             atomic.Bool
 	isCloneTxn          bool
 	loadCleanupTimeout  time.Duration
@@ -622,6 +619,9 @@ func (txn *Transaction) StartStatement() {
 	if err := txn.workspace.beginStatementExecution(); err != nil {
 		logutil.Fatal(err.Error())
 	}
+	if callbacks, ok := txn.op.(client.StatementCallbackOperator); ok {
+		callbacks.BeginStatementCallbacks()
+	}
 }
 
 func (txn *Transaction) EndStatement() {
@@ -782,25 +782,6 @@ func (txn *Transaction) BeginWriteAttempt() client.WorkspaceWriteMark {
 // exactly-once completion here. Concurrent Compile branches may close in any
 // order within the same statement attempt.
 func (txn *Transaction) Adjust(mark client.WorkspaceWriteMark) error {
-	start := time.Now()
-	seq := txn.op.NextSequence()
-	trace.GetService(txn.proc.GetService()).AddTxnDurationAction(
-		txn.op,
-		client.WorkspaceAdjustEvent,
-		seq,
-		0,
-		0,
-		nil)
-	defer func() {
-		trace.GetService(txn.proc.GetService()).AddTxnDurationAction(
-			txn.op,
-			client.WorkspaceAdjustEvent,
-			seq,
-			0,
-			time.Since(start),
-			nil)
-	}()
-
 	txn.Lock()
 	defer txn.Unlock()
 	if err := txn.workspace.adjustAttempt(mark); err != nil {
@@ -813,42 +794,6 @@ func (txn *Transaction) Adjust(mark client.WorkspaceWriteMark) error {
 	// 	return err
 	// }
 
-	return txn.traceWorkspaceLocked(false)
-}
-
-func (txn *Transaction) traceWorkspaceLocked(commit bool) error {
-	traceService := trace.GetService(txn.proc.GetService())
-	if !traceService.Enabled(trace.FeatureTraceTxnWorkspace) {
-		// Workspace tracing is disabled by default. Do not materialize and pin
-		// every active mutation only for TxnAdjustWorkspace to discard the
-		// snapshot at its own feature gate. Keep adjustCount advancing so a
-		// trace enabled later in the same transaction observes the same
-		// statement index sequence as before.
-		txn.adjustCount++
-		return nil
-	}
-	entries, err := txn.workspace.commitEntries()
-	if err != nil {
-		return err
-	}
-	defer entries.Close()
-	index := txn.adjustCount
-	if commit {
-		index = -1
-	}
-	idx := 0
-	traceService.TxnAdjustWorkspace(
-		txn.op,
-		index,
-		func() (tableID uint64, typ string, bat *batch.Batch, more bool) {
-			if idx == len(entries.entries) {
-				return 0, "", nil, false
-			}
-			e := entries.entries[idx]
-			idx++
-			return e.tableId, typesNames[e.typ], e.bat, true
-		})
-	txn.adjustCount++
 	return nil
 }
 
@@ -995,9 +940,16 @@ func (txn *Transaction) gcWorkspaceEntries(
 	return gcFiles(txn, scope, objsName...)
 }
 
-func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
+func (txn *Transaction) RollbackLastStatement(ctx context.Context) (err error) {
 	txn.op.EnterRollbackStmt()
 	defer txn.op.ExitRollbackStmt()
+	// This defer runs after the workspace mutex is released. Cache retirement
+	// can wait for allocator work that needs the workspace.
+	defer func() {
+		if callbacks, ok := txn.op.(client.StatementCallbackOperator); ok {
+			err = errors.Join(err, callbacks.RollbackStatementCallbacks(ctx))
+		}
+	}()
 	v2.TxnRollbackLastStatementCounter.Inc()
 	var (
 		beforeEntries int
@@ -1013,10 +965,7 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 			)
 		})
 	}()
-	var (
-		rolledBack *workspaceRollback
-		err        error
-	)
+	var rolledBack *workspaceRollback
 	if txn.op.Txn().IsRCIsolation() {
 		rolledBack, err = txn.workspace.rollbackCurrentAttemptWithRC()
 	} else {
@@ -1086,9 +1035,6 @@ func (txn *Transaction) advanceSnapshot(
 // including the first statement in an explicit transaction.
 func (txn *Transaction) handleRCSnapshot(ctx context.Context, commit bool) (bool, error) {
 	if !commit {
-		trace.GetService(txn.proc.GetService()).TxnUpdateSnapshot(
-			txn.op, 0, "before execute")
-
 		return true, txn.advanceSnapshot(ctx, timestamp.Timestamp{})
 	}
 
@@ -1261,7 +1207,6 @@ type txnTable struct {
 	fake bool
 }
 
-// FIXME: no pointer here
 type blockSortHelper struct {
 	blk *objectio.BlockInfo
 	zm  index.ZM

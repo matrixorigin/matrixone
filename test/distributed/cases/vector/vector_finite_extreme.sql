@@ -69,6 +69,17 @@ select id, inner_product(v, '[1e20,-1e20]') from tip order by id;
 select a.id, inner_product(a.v, b.v) from tip a join tip b on b.id = 1 where a.id = 1;
 select id, inner_product(v, '[1,1]') from tip where id = 2;
 
+-- inner_product on a NARROW vector type (vecbf16, which carries float32's exponent range) rejects
+-- the same out-of-domain dot. The bf16 kernel accumulates in float32 and returns a raw non-finite
+-- value; the SQL scalar boundary (arrayDistanceNarrow) rejects it, matching the vecf32 path above
+-- (#29496). vecf16/vecint8 cannot overflow (f16 max is 65504, int8 is integral), so they have no
+-- such error case.
+create table tipbf(id int primary key, v vecbf16(2));
+insert into tipbf values (1, '[1e20,1e20]'), (2, '[1,2]');
+select id, inner_product(v, '[1e20,-1e20]') from tipbf order by id;
+select a.id, inner_product(a.v, b.v) from tipbf a join tipbf b on b.id = 1 where a.id = 1;
+select id, inner_product(v, '[1,1]') from tipbf where id = 2;
+
 -- A float64 vector whose squared norm underflows has no computable cosine; it is rejected rather
 -- than reported as maximally dissimilar (distance 1) against itself.
 create table tu(id int primary key, v vecf64(2));
@@ -97,5 +108,21 @@ select l2_distance_sq(cast('[1e40,0]' as vecf64(2)), cast('[0,0]' as vecf64(2)))
 select l2_distance_sq_xc(cast('[1e40,0]' as vecf64(2)), cast('[0,0]' as vecf64(2)));
 select l2_distance(cast('[3,4]' as vecf64(2)), cast('[0,0]' as vecf64(2))) as go_path,
        l2_distance_xc(cast('[3,4]' as vecf64(2)), cast('[0,0]' as vecf64(2))) as c_path;
+
+-- l1_norm / l2_norm are DOUBLE functions, not index scores. A finite VECF32 whose norm exceeds the
+-- float32 range but fits double returns that representable double: the norm is accumulated in float64,
+-- so it neither overflows to +Inf nor errors (#29083).
+select l1_norm(cast('[2e38,2e38]' as vecf32(2)));
+select l2_norm(cast('[2.5e38,2.5e38]' as vecf32(2)));
+-- The norm does NOT share the distance kernel's float32-square contract: this vector has a finite
+-- L2 norm even though l2_distance(v,0) rejects its float32-squared intermediate.
+select l2_norm(cast('[1e20,0]' as vecf32(2))) as l2n_finite;
+select l2_distance(cast('[1e20,0]' as vecf32(2)), cast('[0,0]' as vecf32(2)));
+-- Ordinary VECF32 norms are exact.
+select l2_norm(cast('[3,4]' as vecf32(2))) as l2n,
+       l1_norm(cast('[3,-4]' as vecf32(2))) as l1n;
+-- VECF64 norms keep their existing float64-domain behavior.
+select l2_norm(cast('[1e300,1e300]' as vecf64(2))) as l2n64,
+       l1_norm(cast('[1e300,1e300]' as vecf64(2))) as l1n64;
 
 drop database vec_extreme;

@@ -22,7 +22,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -32,58 +31,72 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func runStrToStrWidth(t *testing.T, mp *mpool.MPool, proc *process.Process, input string, toType types.Type, strict, allowTrim bool) (string, bool, error) {
-	t.Helper()
-	src := vector.NewVec(types.T_varchar.ToType())
-	require.NoError(t, vector.AppendBytes(src, []byte(input), false, mp))
-	defer src.Free(mp)
-
-	from := vector.GenerateFunctionStrParameter(src)
-	rsw := vector.NewFunctionResultWrapper(toType, mp)
-	to := rsw.(*vector.FunctionResult[types.Varlena])
-	defer to.Free()
-	require.NoError(t, to.PreExtendAndReset(1))
-
-	if err := strToStr(context.Background(), proc, from, to, 1, toType, strict, allowTrim, allowTrim, castModeNormal); err != nil {
-		return "", false, err
-	}
-	got, null := vector.GenerateFunctionStrParameter(to.GetResultVector()).GetStrValue(0)
-	return string(got), null, nil
-}
-
-// TestStrToStrWidthEnforcement covers the CHAR/VARCHAR over-length matrix:
-// strict vs non-strict, and the trailing-space exemption (allowTrailingSpaceTrim).
-func TestStrToStrWidthEnforcement(t *testing.T) {
-	mp := mpool.MustNewZero()
-	vc3 := types.New(types.T_varchar, 3, 0)
-
+// TestCastStringWidthContracts preserves the string and JSON width-owner contracts.
+func TestCastStringWidthContracts(t *testing.T) {
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() {
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+	target := types.New(types.T_varchar, 3, 0)
 	cases := []struct {
-		name      string
-		input     string
-		strict    bool
-		allowTrim bool
-		want      string
-		wantErr   bool
+		source            types.T
+		name, input       string
+		strict, allowTrim bool
+		want              string
+		errCode           uint16
 	}{
-		{"fits", "abc", true, true, "abc", false},
-		{"strict_overlen_reject", "abcd", true, false, "", true},
-		{"strict_overlen_reject_even_with_trimflag", "abcd", true, true, "", true},
-		{"nonstrict_truncate", "abcd", false, true, "abc", false},
-		{"nonstrict_truncate_no_trimflag", "abcd", false, false, "abc", false},
-		{"trailing_space_exempt_under_strict", "abc   ", true, true, "abc", false},
-		{"trailing_space_not_exempt_for_ddl", "abc   ", true, false, "", true},
-		{"trailing_space_exempt_multibyte", "你好世   ", true, true, "你好世", false},
+		{types.T_varchar, "fits", "abc", true, true, "abc", 0},
+		{types.T_varchar, "strict_overlen_reject", "abcd", true, false, "", moerr.ErrInternal},
+		{types.T_varchar, "strict_overlen_reject_even_with_trimflag", "abcd", true, true, "", moerr.ErrCastWidthExceeded},
+		{types.T_varchar, "nonstrict_truncate", "abcd", false, true, "abc", 0},
+		{types.T_varchar, "nonstrict_truncate_no_trimflag", "abcd", false, false, "abc", 0},
+		{types.T_varchar, "trailing_space_exempt_under_strict", "abc   ", true, true, "abc", 0},
+		{types.T_varchar, "trailing_space_not_exempt_for_ddl", "abc   ", true, false, "", moerr.ErrInternal},
+		{types.T_varchar, "trailing_space_exempt_multibyte", "你好世   ", true, true, "你好世", 0},
+		{types.T_json, "fits", `"abc"`, true, true, "abc", 0},
+		{types.T_json, "trailing_space_exempt_strict_dml", `"abc   "`, true, true, "abc", 0},
+		{types.T_json, "real_overlen_dml_reject", `"abcd"`, true, true, "", moerr.ErrCastWidthExceeded},
+		{types.T_json, "real_overlen_cast_strict_reject", `"abcd"`, true, false, "", moerr.ErrInternal},
+		{types.T_json, "nonstrict_truncate", `"abcd"`, false, true, "abc", 0},
+		{types.T_json, "trailing_space_not_exempt_cast_strict", `"abc   "`, true, false, "", moerr.ErrInternal},
+		{types.T_json, "multibyte_trailing_space_exempt", `"你好世   "`, true, true, "你好世", 0},
+		{types.T_json, "multibyte_fits_strict", `"你好"`, true, true, "你好", 0},
+		{types.T_json, "multibyte_fits_nonstrict", `"你好"`, false, true, "你好", 0},
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			proc := testutil.NewProcess(t)
-			got, _, err := runStrToStrWidth(t, mp, proc, c.input, vc3, c.strict, c.allowTrim)
-			if c.wantErr {
-				require.Error(t, err)
+	for _, tc := range cases {
+		t.Run(tc.source.String()+"/"+tc.name, func(t *testing.T) {
+			input := tc.input
+			if tc.source == types.T_json {
+				input = makeJSONEncodedFromText(t, []string{input}, nil)[0]
+			}
+			baseline := proc.Mp().CurrNB()
+			fc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{NewFunctionTestInput(tc.source.ToType(), []string{input}, nil)},
+				NewFunctionTestResult(target, false, []string{tc.want}, nil),
+				func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ *FunctionSelectList) error {
+					from := vector.GenerateFunctionStrParameter(parameters[0])
+					to := result.(*vector.FunctionResult[types.Varlena])
+					if tc.source == types.T_json {
+						return jsonToStr(proc, context.Background(), from, to, length, nil, tc.strict, tc.allowTrim, tc.allowTrim, false, tc.allowTrim)
+					}
+					return strToStr(context.Background(), proc, from, to, length, target, tc.strict, tc.allowTrim, tc.allowTrim, castModeNormal)
+				})
+			t.Cleanup(func() {
+				fc.Free()
+				require.Equal(t, baseline, proc.Mp().CurrNB())
+			})
+			actual, err := fc.DebugRun()
+			if tc.errCode != 0 {
+				require.True(t, moerr.IsMoErrCode(err, tc.errCode), "expected error code %d, got %v", tc.errCode, err)
 				return
 			}
 			require.NoError(t, err)
-			require.Equal(t, c.want, got)
+			require.Equal(t, target, *actual.GetType())
+			require.Equal(t, 1, actual.Length())
+			got, isNull := vector.GenerateFunctionStrParameter(actual).GetStrValue(0)
+			require.False(t, isNull)
+			require.Equal(t, tc.want, string(got))
 		})
 	}
 }
@@ -851,69 +864,6 @@ func TestGeometryToZeroWidthCharVarchar(t *testing.T) {
 				require.Equal(t, "POINT(1 2)", got)
 			})
 		}
-	}
-}
-
-func runJSONToStrWidth(t *testing.T, mp *mpool.MPool, jsonText string, toType types.Type, strict, allowTrim bool) (string, error) {
-	t.Helper()
-	proc := testutil.NewProcess(t)
-	encoded := makeJSONEncodedFromText(t, []string{jsonText}, nil)[0]
-	src := vector.NewVec(types.T_json.ToType())
-	require.NoError(t, vector.AppendBytes(src, []byte(encoded), false, mp))
-	defer src.Free(mp)
-
-	from := vector.GenerateFunctionStrParameter(src)
-	rsw := vector.NewFunctionResultWrapper(toType, mp)
-	to := rsw.(*vector.FunctionResult[types.Varlena])
-	defer to.Free()
-	require.NoError(t, to.PreExtendAndReset(1))
-
-	if err := jsonToStr(proc, context.Background(), from, to, 1, nil, strict, allowTrim, allowTrim, allowTrim); err != nil {
-		return "", err
-	}
-	got, _ := vector.GenerateFunctionStrParameter(to.GetResultVector()).GetStrValue(0)
-	return string(got), nil
-}
-
-// TestJSONToStrWidthEnforcement mirrors TestStrToStrWidthEnforcement for the
-// JSON->CHAR/VARCHAR path: the trailing-space exemption, sql_mode gating, and
-// the DML 1406 and stable cast_strict contracts must apply to JSON sources too.
-func TestJSONToStrWidthEnforcement(t *testing.T) {
-	mp := mpool.MustNewZero()
-	vc3 := types.New(types.T_varchar, 3, 0)
-
-	cases := []struct {
-		name      string
-		jsonText  string
-		strict    bool
-		allowTrim bool
-		want      string
-		wantErr   bool
-		errCode   uint16 // 0 = not asserted
-	}{
-		{"fits", `"abc"`, true, true, "abc", false, 0},
-		{"trailing_space_exempt_strict_dml", `"abc   "`, true, true, "abc", false, 0},
-		{"real_overlen_dml_reject", `"abcd"`, true, true, "", true, moerr.ErrCastWidthExceeded},
-		{"real_overlen_cast_strict_reject", `"abcd"`, true, false, "", true, moerr.ErrInternal},
-		{"nonstrict_truncate", `"abcd"`, false, true, "abc", false, 0},
-		{"trailing_space_not_exempt_cast_strict", `"abc   "`, true, false, "", true, moerr.ErrInternal},
-		{"multibyte_trailing_space_exempt", `"你好世   "`, true, true, "你好世", false, 0},
-		{"multibyte_fits_strict", `"你好"`, true, true, "你好", false, 0},
-		{"multibyte_fits_nonstrict", `"你好"`, false, true, "你好", false, 0},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			got, err := runJSONToStrWidth(t, mp, c.jsonText, vc3, c.strict, c.allowTrim)
-			if c.wantErr {
-				require.Error(t, err)
-				if c.errCode != 0 {
-					require.Equal(t, c.errCode, err.(*moerr.Error).ErrorCode())
-				}
-				return
-			}
-			require.NoError(t, err)
-			require.Equal(t, c.want, got)
-		})
 	}
 }
 

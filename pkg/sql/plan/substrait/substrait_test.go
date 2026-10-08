@@ -46,6 +46,49 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+func TestCollationMetadataSubstraitBoundaries(t *testing.T) {
+	for _, mutate := range []func(*planpb.TableDef){
+		func(table *planpb.TableDef) { table.KeyFormat = 1 },
+		func(table *planpb.TableDef) { table.Indexes = []*planpb.IndexDef{{KeyFormat: 1}} },
+		func(table *planpb.TableDef) {
+			table.Cols[0].Typ = planpb.Type{Id: int32(types.T_varchar), Width: 32, Charset: 3, CollationVersion: 1}
+		},
+	} {
+		q := scanQuery()
+		candidate, err := Export(q)
+		require.NoError(t, err)
+		table := q.Nodes[0].TableDef
+		mutate(table)
+		_, err = Export(q)
+		require.ErrorContains(t, err, "unsupported collation metadata")
+		// Revalidate a candidate whose caller-owned plan changed after admission.
+		_, err = candidate.Build(nil)
+		require.ErrorContains(t, err, "unsupported collation metadata")
+		_, err = CanonicalSchema(table)
+		require.ErrorContains(t, err, "unsupported collation metadata")
+
+		q = embeddedProjectedScanQuery()
+		embedded, err := ExportEmbeddedMO(q)
+		require.NoError(t, err)
+		reads, err := embedded.EmbeddedMOReads()
+		require.NoError(t, err)
+		require.Len(t, reads, 1)
+		bindings := map[int32]EmbeddedReadBinding{0: {BindingID: 1, Source: EmbeddedReadMO}}
+		wire, err := embedded.BuildEmbedded(bindings)
+		require.NoError(t, err)
+		require.NotEmpty(t, wire)
+		mutate(q.Nodes[0].TableDef)
+		_, err = ExportEmbeddedMO(q)
+		require.ErrorContains(t, err, "unsupported collation metadata")
+		reads, err = embedded.EmbeddedMOReads()
+		require.ErrorContains(t, err, "unsupported collation metadata")
+		require.Nil(t, reads)
+		wire, err = embedded.BuildEmbedded(bindings)
+		require.ErrorContains(t, err, "unsupported collation metadata")
+		require.Nil(t, wire)
+	}
+}
+
 func TestExportBuildSupportedSubset(t *testing.T) {
 	q := scanQuery()
 	q.Nodes = append(q.Nodes, &planpb.Node{NodeId: 1, NodeType: planpb.Node_FILTER, Children: []int32{0}, FilterList: []*planpb.Expr{fn(">", boolType(), col(0), i64(7))}})
@@ -576,6 +619,17 @@ func TestSemanticNullabilityUsesConcreteNonNullLiteralFact(t *testing.T) {
 	require.False(t, nonNullLiteral.Typ.NotNullable, "the planner literal annotation is deliberately conservative")
 	require.True(t, semanticNotNullable(
 		resolved.GetEncodedOverloadID(), []*planpb.Expr{notNullColumn, nonNullLiteral}))
+	// Folding a previously nullable expression need not rewrite its parent's
+	// conservative annotation. Both annotations describe the same safe call.
+	ref := &planpb.ObjectRef{ObjName: "=", Obj: resolved.GetEncodedOverloadID()}
+	for _, notNullable := range []bool{false, true} {
+		out := boolType()
+		out.NotNullable = notNullable
+		supported, err := hasSemanticCapability(semanticScalar, "equal", ref,
+			[]*planpb.Expr{notNullColumn, nonNullLiteral}, &out)
+		require.NoError(t, err)
+		require.True(t, supported)
+	}
 
 	nullLiteral := i64(1)
 	nullLiteral.GetLit().Isnull = true
@@ -2690,7 +2744,7 @@ func boundSQLQuery(t *testing.T, sql string) *planpb.Query {
 	t.Helper()
 	statement, err := mysql.ParseOne(context.Background(), sql, 1)
 	require.NoError(t, err)
-	built, err := planbuilder.BuildPlan(planbuilder.NewMockCompilerContext(false), statement, false)
+	built, err := planbuilder.BuildPlan(planbuilder.NewMockCompilerContext(false, newPlanTestProcess(t)), statement, false)
 	require.NoError(t, err)
 	query := built.GetQuery()
 	require.NotNil(t, query)

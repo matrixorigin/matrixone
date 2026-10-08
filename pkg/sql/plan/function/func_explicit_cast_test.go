@@ -59,7 +59,7 @@ func TestExplicitCastStringIntegerOverflow(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			testCase := NewFunctionTestCase(proc, test.inputs, test.expect, NewExplicitCast)
-			succeed, info := testCase.Run()
+			succeed, info := testCase.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -95,7 +95,7 @@ func TestExplicitCastStringIntegerPrefix(t *testing.T) {
 			}
 			expect := NewFunctionTestResult(test.target, false, test.expect, nil)
 			testCase := NewFunctionTestCase(proc, inputs, expect, NewExplicitCast)
-			succeed, info := testCase.Run()
+			succeed, info := testCase.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -114,7 +114,7 @@ func TestExplicitCastStringFloatPrefix(t *testing.T) {
 	}
 	expect := NewFunctionTestResult(types.T_float64.ToType(), false, []float64{-1.5, 12}, nil)
 	testCase := NewFunctionTestCase(proc, inputs, expect, NewExplicitCast)
-	succeed, info := testCase.Run()
+	succeed, info := testCase.RunAndFree()
 	require.True(t, succeed, info)
 }
 
@@ -166,7 +166,7 @@ func TestImplicitStringToIntegerUsesIntegerPrefixDiagnostics(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{2, 2, 2, 0, 0}, nil),
 		NewComparisonCast)
-	succeed, info := testCase.Run()
+	succeed, info := testCase.RunAndFree()
 	require.True(t, succeed, info)
 
 	require.Len(t, session.warnings, 4)
@@ -203,7 +203,7 @@ func TestImplicitStringToIntegerNegativeRangeDiagnostics(t *testing.T) {
 		NewFunctionTestResult(types.T_int64.ToType(), false,
 			[]int64{math.MinInt64, math.MinInt64}, nil),
 		NewComparisonCast)
-	succeed, info := testCase.Run()
+	succeed, info := testCase.RunAndFree()
 	require.True(t, succeed, info)
 	require.Len(t, session.warnings, 1)
 	require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE, session.warnings[0].code)
@@ -220,7 +220,7 @@ func TestExplicitCastFloatToUnsigned(t *testing.T) {
 	expect := NewFunctionTestResult(types.T_uint64.ToType(), false,
 		[]uint64{math.MaxUint64, 0, 1, 2, 0}, []bool{false, false, false, false, true})
 	testCase := NewFunctionTestCase(proc, inputs, expect, NewExplicitCast)
-	succeed, info := testCase.Run()
+	succeed, info := testCase.RunAndFree()
 	require.True(t, succeed, info)
 }
 
@@ -234,7 +234,7 @@ func TestExplicitCastFloatToSigned(t *testing.T) {
 	expect := NewFunctionTestResult(types.T_int64.ToType(), false, []int64{-1, 0, 1, 2, 0},
 		[]bool{false, false, false, false, true})
 	testCase := NewFunctionTestCase(proc, inputs, expect, NewExplicitCast)
-	succeed, info := testCase.Run()
+	succeed, info := testCase.RunAndFree()
 	require.True(t, succeed, info)
 }
 
@@ -254,7 +254,7 @@ func TestExplicitCastFloatRoundingToEven(t *testing.T) {
 			inputs := []FunctionTestInput{source.input, NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil)}
 			expect := NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0, 2, 2, 0, -2, -2}, nil)
 			testCase := NewFunctionTestCase(proc, inputs, expect, NewExplicitCast)
-			succeed, info := testCase.Run()
+			succeed, info := testCase.RunAndFree()
 			require.True(t, succeed, info)
 		})
 		t.Run(source.name+" to unsigned", func(t *testing.T) {
@@ -262,7 +262,7 @@ func TestExplicitCastFloatRoundingToEven(t *testing.T) {
 			expect := NewFunctionTestResult(types.T_uint64.ToType(), false,
 				[]uint64{0, 2, 2, 0, math.MaxUint64 - 1, math.MaxUint64 - 1}, nil)
 			testCase := NewFunctionTestCase(proc, inputs, expect, NewExplicitCast)
-			succeed, info := testCase.Run()
+			succeed, info := testCase.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -289,7 +289,7 @@ func TestExplicitCastFloatOverflowErrors(t *testing.T) {
 			}
 			expect := NewFunctionTestResult(test.target, true, test.zero, []bool{false})
 			testCase := NewFunctionTestCase(proc, inputs, expect, NewExplicitCast)
-			succeed, info := testCase.Run()
+			succeed, info := testCase.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -333,7 +333,7 @@ func TestExplicitCastDecimalsToUnsigned(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			expect := NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{math.MaxUint64, 0}, []bool{false, true})
 			testCase := NewFunctionTestCase(proc, test.inputs, expect, NewExplicitCast)
-			succeed, info := testCase.Run()
+			succeed, info := testCase.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -368,7 +368,7 @@ func TestExplicitCastDecimalsToSigned(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			expect := NewFunctionTestResult(types.T_int64.ToType(), false, []int64{-1, 0}, []bool{false, true})
 			testCase := NewFunctionTestCase(proc, test.inputs, expect, NewExplicitCast)
-			succeed, info := testCase.Run()
+			succeed, info := testCase.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -405,7 +405,7 @@ func TestExplicitCastDecimalRoundingToIntegers(t *testing.T) {
 			expect := NewFunctionTestResult(types.T_int64.ToType(), false,
 				[]int64{-3, -2, -2, -1, -1, 1, 1, 2, 2, 3, 0}, nulls)
 			testCase := NewFunctionTestCase(proc, inputs, expect, NewExplicitCast)
-			succeed, info := testCase.Run()
+			succeed, info := testCase.RunAndFree()
 			require.True(t, succeed, info)
 		})
 		t.Run(test.name+" to unsigned", func(t *testing.T) {
@@ -414,7 +414,7 @@ func TestExplicitCastDecimalRoundingToIntegers(t *testing.T) {
 				[]uint64{math.MaxUint64 - 2, math.MaxUint64 - 1, math.MaxUint64 - 1, math.MaxUint64,
 					math.MaxUint64, 1, 1, 2, 2, 3, 0}, nulls)
 			testCase := NewFunctionTestCase(proc, inputs, expect, NewExplicitCast)
-			succeed, info := testCase.Run()
+			succeed, info := testCase.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -450,7 +450,7 @@ func TestExplicitCastDecimalRoundingAtSignedBoundaries(t *testing.T) {
 			expect := NewFunctionTestResult(types.T_int64.ToType(), false,
 				[]int64{math.MaxInt64, math.MaxInt64, math.MinInt64, math.MinInt64}, nil)
 			testCase := NewFunctionTestCase(proc, inputs, expect, NewExplicitCast)
-			succeed, info := testCase.Run()
+			succeed, info := testCase.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -479,7 +479,7 @@ func TestExplicitCastDecimalPositiveOverflowToSigned(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			expect := NewFunctionTestResult(types.T_int64.ToType(), false, []int64{math.MaxInt64}, nil)
 			testCase := NewFunctionTestCase(proc, test.inputs, expect, NewExplicitCast)
-			succeed, info := testCase.Run()
+			succeed, info := testCase.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -494,7 +494,7 @@ func TestExplicitCastNegativeIntegerToUnsigned(t *testing.T) {
 	expect := NewFunctionTestResult(types.T_uint64.ToType(), false,
 		[]uint64{math.MaxUint64, 0, 1}, nil)
 	testCase := NewFunctionTestCase(proc, inputs, expect, NewExplicitCast)
-	succeed, info := testCase.Run()
+	succeed, info := testCase.RunAndFree()
 	require.True(t, succeed, info)
 }
 
@@ -506,7 +506,7 @@ func TestExplicitCastUnsignedIntegerToSigned(t *testing.T) {
 	}
 	expect := NewFunctionTestResult(types.T_int64.ToType(), false, []int64{-1, 0, 1}, nil)
 	testCase := NewFunctionTestCase(proc, inputs, expect, NewExplicitCast)
-	succeed, info := testCase.Run()
+	succeed, info := testCase.RunAndFree()
 	require.True(t, succeed, info)
 }
 
@@ -521,7 +521,7 @@ func TestExplicitCastStringDecimalOverflow(t *testing.T) {
 	expect := NewFunctionTestResult(target, false,
 		[]types.Decimal64{999999, types.Decimal64(999999).Minus(), types.Decimal64(999999).Minus(), 999999}, nil)
 	testCase := NewFunctionTestCase(proc, inputs, expect, NewExplicitCast)
-	succeed, info := testCase.Run()
+	succeed, info := testCase.RunAndFree()
 	require.True(t, succeed, info)
 }
 
@@ -537,7 +537,7 @@ func TestExplicitCastStringDecimal128Overflow(t *testing.T) {
 	}
 	expect := NewFunctionTestResult(target, false, []types.Decimal128{max, max.Minus()}, nil)
 	testCase := NewFunctionTestCase(proc, inputs, expect, NewExplicitCast)
-	succeed, info := testCase.Run()
+	succeed, info := testCase.RunAndFree()
 	require.True(t, succeed, info)
 }
 
@@ -553,7 +553,7 @@ func TestExplicitCastStringDecimal256Overflow(t *testing.T) {
 	}
 	expect := NewFunctionTestResult(target, false, []types.Decimal256{max, max.Minus()}, nil)
 	testCase := NewFunctionTestCase(proc, inputs, expect, NewExplicitCast)
-	succeed, info := testCase.Run()
+	succeed, info := testCase.RunAndFree()
 	require.True(t, succeed, info)
 }
 
@@ -577,7 +577,7 @@ func TestExplicitCastStringDecimalRejectsNonFinite(t *testing.T) {
 				}
 				expect := NewFunctionTestResult(test.target, true, test.zero, nil)
 				testCase := NewFunctionTestCase(proc, inputs, expect, NewExplicitCast)
-				succeed, info := testCase.Run()
+				succeed, info := testCase.RunAndFree()
 				require.True(t, succeed, info)
 			})
 		}
@@ -662,7 +662,7 @@ func TestExplicitCastNumericDecimalOverflow(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			testCase := NewFunctionTestCase(proc, test.inputs, test.expect, NewExplicitCast)
-			succeed, info := testCase.Run()
+			succeed, info := testCase.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -691,7 +691,7 @@ func TestExplicitCastFloatToDecimalPreservesInRangeValues(t *testing.T) {
 			}
 			expect := NewFunctionTestResult(test.target, false, []types.Decimal64{test.want}, nil)
 			testCase := NewFunctionTestCase(proc, inputs, expect, NewExplicitCast)
-			succeed, info := testCase.Run()
+			succeed, info := testCase.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -720,7 +720,7 @@ func TestExplicitCastFloat64ToDecimal128PreservesScaledIntegerPrecision(t *testi
 		expect,
 		NewExplicitCast,
 	)
-	succeed, info := testCase.Run()
+	succeed, info := testCase.RunAndFree()
 	require.True(t, succeed, info)
 }
 
@@ -739,7 +739,7 @@ func TestExplicitCastFloat64ToDecimal128ClampsRoundedOverflow(t *testing.T) {
 		expect,
 		NewExplicitCast,
 	)
-	succeed, info := testCase.Run()
+	succeed, info := testCase.RunAndFree()
 	require.True(t, succeed, info)
 }
 
@@ -763,20 +763,20 @@ func TestExplicitCastOverflowHelperBoundaries(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(-128), value)
 
-	decimal64, err := clampDecimal64CastString("0xFFFFFF", 6, 2)
+	decimal64, err := ParseExplicitDecimal64CastString("0xFFFFFF", 6, 2)
 	require.NoError(t, err)
 	require.Equal(t, types.Decimal64(999999), decimal64)
-	_, err = clampDecimal64CastString("0xGG", 6, 2)
+	_, err = ParseExplicitDecimal64CastString("0xGG", 6, 2)
 	require.Error(t, err)
-	_, err = clampDecimal64CastString("1", 0, 0)
+	_, err = ParseExplicitDecimal64CastString("1", 0, 0)
 	require.Error(t, err)
 
-	decimal128, err := clampDecimal128CastString("999", 2, 2)
+	decimal128, err := ParseExplicitDecimal128CastString("999", 2, 2)
 	require.NoError(t, err)
 	want, err := types.ParseDecimal128("0.99", 2, 2)
 	require.NoError(t, err)
 	require.Equal(t, want, decimal128)
-	_, err = clampDecimal128CastString("1", 2, 3)
+	_, err = ParseExplicitDecimal128CastString("1", 2, 3)
 	require.Error(t, err)
 }
 
@@ -805,7 +805,7 @@ func TestOrdinaryCastOverflowRemainsStrict(t *testing.T) {
 	require.Error(t, err)
 	_, err = parseUnsignedExplicitCastString("not-a-number", 64)
 	require.Error(t, err)
-	_, err = clampDecimal64CastString("not-a-number", 6, 2)
+	_, err = ParseExplicitDecimal64CastString("not-a-number", 6, 2)
 	require.Error(t, err)
 }
 
@@ -830,7 +830,7 @@ func TestMatrixOneExtendedIntegerTargetsRemainStrict(t *testing.T) {
 			}
 			expect := NewFunctionTestResult(test.target, true, test.zero, []bool{false})
 			testCase := NewFunctionTestCase(proc, inputs, expect, NewCast)
-			succeed, info := testCase.Run()
+			succeed, info := testCase.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}

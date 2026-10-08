@@ -16,8 +16,10 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -25,16 +27,20 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	rt "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 )
@@ -816,45 +822,36 @@ func TestLocalDisttaeDataSource_getBlockZMs(t *testing.T) {
 	// This simulates the bug scenario where ColPos=8 would incorrectly point to remark
 	// but we should find created_at by name.
 	// With empty rangeSlice, getBlockZMs should complete without trying to load blocks
-	require.NotPanics(t, func() {
-		ls.getBlockZMs()
-	}, "getBlockZMs should find created_at by name, not panic on column lookup")
+	zms, err := ls.getBlockZMs(ctx)
+	require.NoError(t, err)
 
 	// Verify that blockZMS was initialized (even if empty)
-	require.NotNil(t, ls.blockZMS, "blockZMS should be initialized")
-	require.Equal(t, 0, len(ls.blockZMS), "blockZMS should be empty when rangeSlice is empty")
+	require.NotNil(t, zms)
+	require.Empty(t, zms)
 
 	// Test case 2: Test with simple column name (without table prefix)
 	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.Name = "created_at"
 	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.ColPos = 8 // Still wrong ColPos
-	ls.blockZMS = nil
-	require.NotPanics(t, func() {
-		ls.getBlockZMs()
-	}, "getBlockZMs should work with simple column name")
+	_, err = ls.getBlockZMs(ctx)
+	require.NoError(t, err)
 
 	// Test case 3: Test fallback to ColPos when name lookup fails
 	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.Name = "nonexistent_column"
 	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.ColPos = 9 // Valid ColPos as fallback (points to created_at)
-	ls.blockZMS = nil
-	require.NotPanics(t, func() {
-		ls.getBlockZMs()
-	}, "getBlockZMs should fallback to ColPos when name lookup fails")
+	_, err = ls.getBlockZMs(ctx)
+	require.NoError(t, err)
 
-	// Test case 4: Test panic when both name lookup and ColPos fail
+	// Test case 4: Report a plan error when both name lookup and ColPos fail
 	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.Name = "nonexistent_column"
 	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.ColPos = 999 // Invalid ColPos
-	ls.blockZMS = nil
-	require.Panics(t, func() {
-		ls.getBlockZMs()
-	}, "getBlockZMs should panic when both name lookup and ColPos fail")
+	_, err = ls.getBlockZMs(ctx)
+	require.ErrorContains(t, err, "cannot find column for ORDER BY")
 
 	// Test case 5: Test with Name2ColIndex (O(1) lookup)
 	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.Name = "created_at"
 	ls.OrderBy[0].Expr.Expr.(*plan.Expr_Col).Col.ColPos = 8 // Wrong ColPos
-	ls.blockZMS = nil
-	require.NotPanics(t, func() {
-		ls.getBlockZMs()
-	}, "getBlockZMs should use Name2ColIndex for O(1) lookup")
+	_, err = ls.getBlockZMs(ctx)
+	require.NoError(t, err)
 }
 
 // TestLocalDisttaeDataSource_getBlockZMs_ColumnNameExtraction tests column name extraction
@@ -909,11 +906,92 @@ func TestLocalDisttaeDataSource_getBlockZMs_ColumnNameExtraction(t *testing.T) {
 
 	// Should extract "created_at" from "db.table.created_at"
 	// Since rangeSlice is empty, getBlockZMs should complete without trying to load blocks
-	require.NotPanics(t, func() {
-		ls.getBlockZMs()
-	}, "getBlockZMs should extract column name from qualified name and handle empty rangeSlice")
+	zms, err := ls.getBlockZMs(ctx)
+	require.NoError(t, err)
 
 	// Verify that blockZMS was initialized (even if empty)
-	require.NotNil(t, ls.blockZMS, "blockZMS should be initialized")
-	require.Equal(t, 0, len(ls.blockZMS), "blockZMS should be empty when rangeSlice is empty")
+	require.NotNil(t, zms)
+	require.Empty(t, zms)
+}
+
+type filteredPrefetchFS struct {
+	fileservice.FileService
+	calls atomic.Int32
+	done  chan struct{}
+}
+
+func (fs *filteredPrefetchFS) PrefetchFile(context.Context, string) error {
+	fs.calls.Add(1)
+	fs.done <- struct{}{}
+	return nil
+}
+func TestLocalDataSourceFilteredPrefetch(t *testing.T) {
+	proc := testutil.NewProc(t)
+	table := &txnTable{db: &txnDatabase{}}
+	table.proc.Store(proc)
+	for _, count := range []int{3, 4} {
+		for _, skip := range []bool{false, true} {
+			t.Run(fmt.Sprintf("blocks=%d/skip=%v", count, skip), func(t *testing.T) {
+				data := readutil.NewBlockListRelationData(0)
+				for i := 0; i < count; i++ {
+					loc := objectio.NewRandomLocation(uint16(i), 1)
+					oid := loc.ObjectId()
+					block := objectio.BlockInfo{BlockID: types.NewBlockidWithObjectID(&oid, uint16(i)), MetaLoc: objectio.ObjectLocation(loc)}
+					data.AppendBlockInfo(&block)
+				}
+				fs := &filteredPrefetchFS{done: make(chan struct{}, 4)}
+				ls := &LocalDisttaeDataSource{table: table, fs: fs, rangeSlice: data.GetBlockInfoSlice(), iteratePhase: engine.Persisted, memPKFilter: &readutil.MemPKFilter{}}
+				ls.rc.prefetchDisabled = count < 4
+				ctx := proc.Ctx
+				if skip {
+					ctx = fileservice.WithFileServicePolicy(ctx, fileservice.SkipFullFilePreloads)
+				}
+				rt.SetupServiceBasedRuntime(t.Name(), rt.DefaultRuntime())
+				proc.Base.LockService = &prefetchTestLockService{id: t.Name()}
+				t.Cleanup(func() { proc.Base.LockService = nil })
+				if !skip {
+					ioutil.Start(proc.GetService())
+					t.Cleanup(func() { ioutil.Stop(proc.GetService()) })
+				}
+				for i := 0; i < count; i++ {
+					blk, state, err := ls.Next(ctx, []string{"id"}, nil, nil, 0, nil, nil, nil)
+					require.NoError(t, err)
+					require.Equal(t, engine.Persisted, state)
+					require.Equal(t, data.GetBlockInfo(i).BlockID, blk.BlockID)
+				}
+				if count >= 4 && !skip {
+					for i := 0; i < count; i++ {
+						select {
+						case <-fs.done:
+						case <-time.After(5 * time.Second):
+							t.Fatal("data prefetch did not execute")
+						}
+					}
+				}
+				if !skip {
+					ioutil.Stop(proc.GetService())
+				}
+				expected := int32(0)
+				if count >= 4 && !skip {
+					expected = int32(count)
+				}
+				require.Equal(t, expected, fs.calls.Load())
+				if !skip && count >= 4 {
+					require.Equal(t, count, ls.rc.batchPrefetchCursor)
+				} else {
+					require.Zero(t, ls.rc.batchPrefetchCursor)
+				}
+			})
+		}
+	}
+}
+
+// A filtered scan must not submit data prefetch: this service intentionally has no IO pipeline.
+type prefetchTestLockService struct {
+	lockservice.LockService
+	id string
+}
+
+func (ls *prefetchTestLockService) GetConfig() lockservice.Config {
+	return lockservice.Config{ServiceID: ls.id}
 }

@@ -38,11 +38,7 @@ import (
 // accepted commit; after restart the multi-row statement is wholly visible or
 // wholly absent, and the restarted cluster accepts a new transaction.
 func TestIssue28012And28013AcceptedCommitDuringStandaloneShutdown(t *testing.T) {
-	var (
-		faultEnabledHere bool
-		ctx              context.Context
-		cancel           context.CancelFunc
-	)
+	var faultEnabledHere bool
 	commitWaiters := "issue28012_28013_commit_waiters"
 	drainWaiters := "issue28012_28013_drain_waiters"
 	handlersDrainedWaiters := "issue28012_28013_handlers_drained_waiters"
@@ -73,10 +69,6 @@ func TestIssue28012And28013AcceptedCommitDuringStandaloneShutdown(t *testing.T) 
 		for _, point := range faultPoints {
 			_, _ = fault.RemoveFaultPoint(context.Background(), point)
 		}
-		if cancel != nil {
-			cancel()
-		}
-
 		cleanupErr := waitIssue28012And28013Goroutines(&goroutines, 30*time.Second)
 		for _, db := range dbs {
 			cleanupErr = errors.Join(cleanupErr, db.Close())
@@ -96,7 +88,7 @@ func TestIssue28012And28013AcceptedCommitDuringStandaloneShutdown(t *testing.T) 
 	// Cluster admission can wait behind other coverage tests for minutes.
 	// Start the SQL deadline only after this test owns a running cluster.
 	faultEnabledHere = fault.Enable()
-	ctx, cancel = context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	sysDB := openIssue28012And28013DB(t, ctx, cluster, "dump:111", &dbs)
 	accountName := fmt.Sprintf("issue28012_%d", time.Now().UnixNano())
@@ -105,6 +97,8 @@ func TestIssue28012And28013AcceptedCommitDuringStandaloneShutdown(t *testing.T) 
 	var accountID uint32
 	require.NoError(t, sysDB.QueryRowContext(ctx,
 		"select account_id from mo_catalog.mo_account where account_name = ?", accountName).Scan(&accountID))
+	// Close the setup-only pool before shutting down its cluster generation.
+	require.NoError(t, sysDB.Close())
 	db := openIssue28012And28013DB(t, ctx, cluster, accountName+"#root#accountadmin:111", &dbs)
 	dbName := fmt.Sprintf("issue_28012_28013_%d", time.Now().UnixNano())
 	mustExecIssue28012And28013(t, ctx, db, "create database "+dbName)
@@ -186,11 +180,16 @@ func TestIssue28012And28013AcceptedCommitDuringStandaloneShutdown(t *testing.T) 
 	for _, point := range faultPoints {
 		_, _ = fault.RemoveFaultPoint(context.Background(), point)
 	}
+	// Restart can wait behind other embedded-cluster tests for admission. The
+	// pre-shutdown SQL deadline must not include that unrelated queue time.
+	cancel()
 	require.NoError(t, cluster.Start())
+	restartCtx, restartCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer restartCancel()
 
-	restartedDB := openIssue28012And28013DB(t, ctx, cluster, accountName+"#root#accountadmin:111", &dbs)
+	restartedDB := openIssue28012And28013DB(t, restartCtx, cluster, accountName+"#root#accountadmin:111", &dbs)
 	var count, total int
-	queryErr := restartedDB.QueryRowContext(ctx,
+	queryErr := restartedDB.QueryRowContext(restartCtx,
 		"select count(*), coalesce(sum(v), 0) from "+dbName+".t").Scan(&count, &total)
 	if commitErr == nil {
 		require.NoError(t, queryErr)
@@ -203,11 +202,11 @@ func TestIssue28012And28013AcceptedCommitDuringStandaloneShutdown(t *testing.T) 
 		require.Equal(t, []int{3, 60}, []int{count, total},
 			"unknown commit may be wholly durable but must not be partial")
 	}
-	mustExecIssue28012And28013(t, ctx, restartedDB,
+	mustExecIssue28012And28013(t, restartCtx, restartedDB,
 		"create table if not exists "+dbName+".t (id int primary key, v int)")
-	mustExecIssue28012And28013(t, ctx, restartedDB, "insert into "+dbName+".t values (4, 40)")
+	mustExecIssue28012And28013(t, restartCtx, restartedDB, "insert into "+dbName+".t values (4, 40)")
 	var finalCount int
-	require.NoError(t, restartedDB.QueryRowContext(ctx, "select count(*) from "+dbName+".t").Scan(&finalCount))
+	require.NoError(t, restartedDB.QueryRowContext(restartCtx, "select count(*) from "+dbName+".t").Scan(&finalCount))
 	require.Contains(t, []int{1, 4}, finalCount, "restarted standalone cluster must accept a new transaction")
 }
 

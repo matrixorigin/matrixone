@@ -435,7 +435,10 @@ func (mp *MysqlProtocolImpl) Write(execCtx *ExecCtx, crs *perfcounter.CounterSet
 }
 
 func (mp *MysqlProtocolImpl) WriteHandshake() error {
-	hsV10pkt := mp.makeHandshakeV10Payload()
+	hsV10pkt, err := mp.makeHandshakeV10Payload()
+	if err != nil {
+		return err
+	}
 	return mp.writePackets(hsV10pkt)
 }
 
@@ -749,7 +752,7 @@ func (mp *MysqlProtocolImpl) setChangeUserState(ses *Session, req changeUserRequ
 		connectAttrs: req.connectAttrs,
 	}
 	if req.hasCollation {
-		collation := collationID2CharsetAndName[req.collationID]
+		collation, _ := lookupSupportedProtocolCollation(req.collationID)
 		state.collationID = req.collationID
 		state.collationName = collation.collationName
 		state.charset = collation.charset
@@ -802,7 +805,7 @@ func (mp *MysqlProtocolImpl) parseChangeUserRequest(ctx context.Context, data []
 			return req, moerr.NewInvalidInput(ctx, "malformed COM_CHANGE_USER character set")
 		}
 		req.collationID = int(collationID)
-		if _, exists := collationID2CharsetAndName[req.collationID]; !exists {
+		if _, exists := lookupSupportedProtocolCollation(req.collationID); !exists {
 			return req, moerr.NewInvalidInputf(ctx, "unsupported COM_CHANGE_USER character set %d", collationID)
 		}
 		req.hasCollation = true
@@ -1755,16 +1758,15 @@ func (mp *MysqlProtocolImpl) HandleHandshake(ctx context.Context, payload []byte
 			return true, nil
 		}
 
+		nameAndCharset, admitted := lookupSupportedProtocolCollation(int(resp41.collationID))
+		if !admitted {
+			return false, moerr.NewInvalidInputf(ctx, "unsupported handshake character set %d", resp41.collationID)
+		}
 		mp.authResponse = resp41.authResponse
 		mp.capability = mp.capability & resp41.capabilities
-
-		if nameAndCharset, ok3 := collationID2CharsetAndName[int(resp41.collationID)]; !ok3 {
-			return false, moerr.NewInternalError(ctx, "get collationName and charset failed")
-		} else {
-			mp.collationID = int(resp41.collationID)
-			mp.collationName = nameAndCharset.collationName
-			mp.charset = nameAndCharset.charset
-		}
+		mp.collationID = int(resp41.collationID)
+		mp.collationName = nameAndCharset.collationName
+		mp.charset = nameAndCharset.charset
 
 		mp.maxClientPacketSize = resp41.maxPacketSize
 		mp.username.Store(resp41.username)
@@ -1837,7 +1839,18 @@ func (mp *MysqlProtocolImpl) Authenticate(ctx context.Context) error {
 
 // the server makes a handshake v10 packet
 // return handshake packet
-func (mp *MysqlProtocolImpl) makeHandshakeV10Payload() []byte {
+func (mp *MysqlProtocolImpl) makeHandshakeV10Payload() ([]byte, error) {
+	mp.m.Lock()
+	closed := mp.quit.Load()
+	salt := append([]byte(nil), mp.salt...)
+	mp.m.Unlock()
+	if closed {
+		return nil, moerr.NewInternalErrorNoCtx("connection closed before handshake")
+	}
+	if len(salt) != 20 {
+		return nil, moerr.NewInternalErrorNoCtxf("invalid handshake salt length: %d", len(salt))
+	}
+
 	var data = make([]byte, HeaderOffset+256)
 	var pos = HeaderOffset
 	//int<1> protocol version
@@ -1849,7 +1862,7 @@ func (mp *MysqlProtocolImpl) makeHandshakeV10Payload() []byte {
 	pos = mp.io.WriteUint32(data, pos, mp.ConnectionID())
 
 	//string[8] auth-plugin-data-part-1
-	pos = mp.writeCountOfBytes(data, pos, mp.GetSalt()[0:8])
+	pos = mp.writeCountOfBytes(data, pos, salt[:8])
 
 	//int<1> filler 0
 	pos = mp.io.WriteUint8(data, pos, 0)
@@ -1869,7 +1882,7 @@ func (mp *MysqlProtocolImpl) makeHandshakeV10Payload() []byte {
 	if (DefaultCapability & CLIENT_PLUGIN_AUTH) != 0 {
 		//int<1>              length of auth-plugin-data
 		//set 21 always
-		pos = mp.io.WriteUint8(data, pos, uint8(len(mp.GetSalt())+1))
+		pos = mp.io.WriteUint8(data, pos, uint8(len(salt)+1))
 	} else {
 		//int<1>              [00]
 		//set 0 always
@@ -1881,7 +1894,7 @@ func (mp *MysqlProtocolImpl) makeHandshakeV10Payload() []byte {
 
 	if (DefaultCapability & CLIENT_SECURE_CONNECTION) != 0 {
 		//string[$len]   auth-plugin-data-part-2 ($len=MAX(13, length of auth-plugin-data - 8))
-		pos = mp.writeCountOfBytes(data, pos, mp.GetSalt()[8:])
+		pos = mp.writeCountOfBytes(data, pos, salt[8:])
 		pos = mp.io.WriteUint8(data, pos, 0)
 	}
 
@@ -1890,7 +1903,7 @@ func (mp *MysqlProtocolImpl) makeHandshakeV10Payload() []byte {
 		pos = mp.writeStringNUL(data, pos, AuthNativePassword)
 	}
 
-	return data[:pos]
+	return data[:pos], nil
 }
 
 // the server analyses handshake response41 info from the client
@@ -2048,7 +2061,7 @@ func (mp *MysqlProtocolImpl) handleClientResponse41(resp41 response41) error {
 	mp.capability = DefaultCapability & resp41.capabilities
 
 	//character set
-	if nameAndCharset, ok := collationID2CharsetAndName[int(resp41.collationID)]; !ok {
+	if nameAndCharset, ok := lookupSupportedProtocolCollation(int(resp41.collationID)); !ok {
 		return moerr.NewInternalError(requestCtx, "get collationName and charset failed")
 	} else {
 		mp.collationID = int(resp41.collationID)
@@ -2648,7 +2661,7 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow(mrs *MysqlResultSet, rowId
 				bitLength := mysqlColumn.ColumnImpl.Length()
 				byteLength := (bitLength + 7) / 8
 				b := types.EncodeUint64(&value)[:byteLength]
-				slices.Reverse(b)
+				slices.Reverse(b) //nolint:govet // inline: cannot inline generic slices.Reverse (type-param inference unsupported)
 				err = AppendCountOfBytesLenEnc(mp, b)
 				if err != nil {
 					return err
@@ -2851,7 +2864,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow(mrs *MysqlResultSet, r uint6
 				bitLength := mysqlColumn.ColumnImpl.Length()
 				byteLength := (bitLength + 7) / 8
 				b := types.EncodeUint64(&value)[:byteLength]
-				slices.Reverse(b)
+				slices.Reverse(b) //nolint:govet // inline: cannot inline generic slices.Reverse (type-param inference unsupported)
 				err = mp.appendStringLenEnc(string(b))
 				if err != nil {
 					return err
@@ -3158,7 +3171,7 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 			bitLength := mysqlColumn.ColumnImpl.Length()
 			byteLength := (bitLength + 7) / 8
 			b := types.EncodeUint64(&value)[:byteLength]
-			slices.Reverse(b)
+			slices.Reverse(b) //nolint:govet // inline: cannot inline generic slices.Reverse (type-param inference unsupported)
 			err = AppendCountOfBytesLenEnc(mp, b)
 			if err != nil {
 				return err
@@ -3453,7 +3466,7 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 			bitLength := mysqlColumn.ColumnImpl.Length()
 			byteLength := (bitLength + 7) / 8
 			b := types.EncodeUint64(&value)[:byteLength]
-			slices.Reverse(b)
+			slices.Reverse(b) //nolint:govet // inline: cannot inline generic call (type-param inference unsupported)
 			err = AppendCountOfBytesLenEnc(mp, b)
 			if err != nil {
 				return err
@@ -4097,7 +4110,7 @@ func (mp *MysqlProtocolImpl) writePackets(payload []byte) error {
 }
 
 // MakeHandshakePayload exposes (*MysqlProtocolImpl).makeHandshakeV10Payload() function.
-func (mp *MysqlProtocolImpl) MakeHandshakePayload() []byte {
+func (mp *MysqlProtocolImpl) MakeHandshakePayload() ([]byte, error) {
 	return mp.makeHandshakeV10Payload()
 }
 
@@ -4144,6 +4157,10 @@ func (mp *MysqlProtocolImpl) receiveExtraInfo(rs *Conn) {
 			mp.ses.Error(mp.ctx, "failed to get extra info",
 				zap.Error(err))
 		}
+		return
+	}
+	if len(i.Salt) != 20 {
+		mp.ses.Error(mp.ctx, "invalid proxy salt length", zap.Int("length", len(i.Salt)))
 		return
 	}
 

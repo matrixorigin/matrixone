@@ -45,6 +45,36 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestWorkspaceCatalogResolutionPreservesWriteName(t *testing.T) {
+	txn := newTransactionWithActivePKTableForTest(t, "pk")
+	defer closeWorkspaceForTest(t, txn)
+	txn.op.(*mock_frontend.MockTxnOperator).EXPECT().IsSnapOp().Return(false).AnyTimes()
+	txn.tableCache = new(sync.Map)
+	physicalKey := genTableKey(0, catalog.MO_COLUMNS, catalog.MO_CATALOG_ID, catalog.MO_CATALOG)
+	relation := &txnTableDelegate{origin: &txnTable{tableId: catalog.MO_COLUMNS_ID, tableName: catalog.MO_COLUMNS}}
+	txn.tableCache.Store(physicalKey, relation)
+	writeKey := genTableKey(0, catalog.MO_COLUMNS_UPDATE, catalog.MO_CATALOG_ID, catalog.MO_CATALOG)
+	entry := Entry{databaseId: catalog.MO_CATALOG_ID, tableId: catalog.MO_COLUMNS_ID,
+		databaseName: catalog.MO_CATALOG, tableName: catalog.MO_COLUMNS_UPDATE}
+	txn.Lock()
+	defer txn.Unlock()
+	dumpTables, err := txn.resolveDumpTablesLocked(context.Background(), &workspaceSpillAttempt{
+		sources: []workspaceSpillSource{{entry: entry}},
+	})
+	require.NoError(t, err)
+	require.Same(t, relation, dumpTables[writeKey])
+	require.NotContains(t, dumpTables, physicalKey, "commit metadata must retain the authorized write name")
+	compactTables, err := txn.resolveCompactTablesLocked(context.Background(), workspaceObjectDeleteSnapshot{
+		objects: map[types.Objectid]workspaceObjectMetadata{{}: {
+			databaseID: entry.databaseId, tableID: entry.tableId,
+			databaseName: entry.databaseName, tableName: entry.tableName,
+		}},
+	})
+	require.NoError(t, err)
+	require.Same(t, relation, compactTables[writeKey])
+	require.NotContains(t, compactTables, physicalKey)
+}
+
 func TestValidateAutoIncrEpochAdvance(t *testing.T) {
 	require.NoError(t, validateAutoIncrEpochAdvance(0, 0))
 	require.NoError(t, validateAutoIncrEpochAdvance(math.MaxUint32-1, 1))
@@ -879,10 +909,16 @@ func TestIssue25589RollbackLastStatementRestoresWorkspaceAccounting(t *testing.T
 	rolledBack := newInsertBatchWithRowIDForTest(t, proc, []int64{3, 4, 5})
 	rolledBackDelete := newDeleteBatchForTest(t, proc, []int64{1, 2})
 	txn.appendWorkspaceEntryLocked(Entry{typ: INSERT, databaseId: 7, tableId: 42, bat: committed})
+	require.NoError(t, txn.workspace.markTableDropped(0, 7, 43))
 	txn.workspace.advanceStatement()
 	txn.appendWorkspaceEntryLocked(Entry{typ: INSERT, databaseId: 7, tableId: 42, bat: rolledBack})
 	txn.appendWorkspaceEntryLocked(Entry{typ: DELETE, databaseId: 7, tableId: 42, bat: rolledBackDelete})
+	require.NoError(t, txn.workspace.markTableDropped(0, 7, 42))
+	require.True(t, txn.IsTableDeletedAtTxnClose(42))
+	require.True(t, txn.IsTableDeletedAtTxnClose(43))
 	require.NoError(t, txn.RollbackLastStatement(context.Background()))
+	require.False(t, txn.IsTableDeletedAtTxnClose(42))
+	require.True(t, txn.IsTableDeletedAtTxnClose(43))
 	entries := workspaceEntriesForTest(t, txn)
 	require.Len(t, entries, 1)
 	require.Same(t, committed, entries[0].bat)
@@ -1330,21 +1366,21 @@ func newTxnOperatorForTest(t *testing.T) *mock_frontend.MockTxnOperator {
 }
 
 func newTxnOperatorForTestWithWorkspace(
-	t *testing.T,
+	t testing.TB,
 	workspace client.Workspace,
 ) *mock_frontend.MockTxnOperator {
 	t.Helper()
 	ctrl := gomock.NewController(t)
 	op := mock_frontend.NewMockTxnOperator(ctrl)
 	op.EXPECT().Txn().Return(txnpb.TxnMeta{ID: []byte("txn-test")}).AnyTimes()
-	op.EXPECT().NextSequence().Return(uint64(1)).AnyTimes()
+
 	op.EXPECT().Status().Return(txnpb.TxnStatus_Active).AnyTimes()
 	op.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
 	return op
 }
 
 func newTransactionWithActivePKTableForTest(
-	t *testing.T,
+	t testing.TB,
 	pkName string,
 ) *Transaction {
 	t.Helper()

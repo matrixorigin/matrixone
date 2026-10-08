@@ -99,9 +99,7 @@ func TestAsofBuildLeftAcrossSpilledBuckets(t *testing.T) {
 	keyType := types.T_int32.ToType()
 	timeType := types.T_timestamp.ToType()
 	equality := [][]*plan.Expr{{newExpr(0, keyType)}, {newExpr(0, keyType)}}
-	tc := newTestCase(t,
-		[]bool{false, true},
-		[]types.Type{keyType, keyType},
+	tc := newTestCase(t, []types.Type{keyType, keyType},
 		[]colexec.ResultPos{
 			colexec.NewResultPos(0, 0),
 			colexec.NewResultPos(1, 1),
@@ -243,9 +241,7 @@ func TestEmptyProbeDoesNotPanic(t *testing.T) {
 // consumer must repartition it before producing the exact join cardinality.
 func TestShuffleJoinFiniteBudgetInitialSpillAndReSpill(t *testing.T) {
 	tc := newTestCase(
-		t,
-		[]bool{false},
-		[]types.Type{types.T_int32.ToType()},
+		t, []types.Type{types.T_int32.ToType()},
 		[]colexec.ResultPos{colexec.NewResultPos(0, 0)},
 		[][]*plan.Expr{makeKeyExpr(), makeKeyExpr()},
 	)
@@ -313,7 +309,7 @@ func TestShuffleJoinFiniteBudgetInitialSpillAndReSpill(t *testing.T) {
 
 func TestShuffleJoinCompressedRowCountAcrossSpilledBuckets(t *testing.T) {
 	tc := newTestCase(
-		t, []bool{false}, []types.Type{types.T_int32.ToType()}, nil,
+		t, []types.Type{types.T_int32.ToType()}, nil,
 		[][]*plan.Expr{makeKeyExpr(), makeKeyExpr()},
 	)
 	defer func() {
@@ -381,9 +377,7 @@ func TestShuffleJoinCompressedRowCountAcrossSpilledBuckets(t *testing.T) {
 
 func TestShuffleFullOuterSpillTracksBuildMatchesWithoutRightOrientation(t *testing.T) {
 	tc := newTestCase(
-		t,
-		[]bool{true},
-		[]types.Type{types.T_int32.ToType()},
+		t, []types.Type{types.T_int32.ToType()},
 		[]colexec.ResultPos{
 			colexec.NewResultPos(0, 0),
 			colexec.NewResultPos(1, 0),
@@ -533,9 +527,7 @@ func TestShuffleJoinSpillUsesCanonicalGroupingPartitionKey(t *testing.T) {
 				}},
 			}}
 			tc := newTestCase(
-				t,
-				[]bool{false},
-				[]types.Type{test.typ},
+				t, []types.Type{test.typ},
 				[]colexec.ResultPos{colexec.NewResultPos(0, 0)},
 				[][]*plan.Expr{keyExpr, keyExpr},
 			)
@@ -603,9 +595,7 @@ func TestShuffleJoinSpillUsesCanonicalGroupingPartitionKey(t *testing.T) {
 
 func TestShuffleJoinHardBudgetRejectTransitionsToSpill(t *testing.T) {
 	tc := newTestCase(
-		t,
-		[]bool{false},
-		[]types.Type{types.T_int32.ToType()},
+		t, []types.Type{types.T_int32.ToType()},
 		[]colexec.ResultPos{colexec.NewResultPos(0, 0)},
 		[][]*plan.Expr{makeKeyExpr(), makeKeyExpr()},
 	)

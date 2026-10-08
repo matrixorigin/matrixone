@@ -12,6 +12,12 @@ group by g order by g;
 select listagg(distinct v) within group (order by pos desc) as distinct_values
 from t_list_array_compat where g = 1;
 
+select length(listagg(v, NULL)) as null_delimiter_length
+from t_list_array_compat where g = 1;
+
+select listagg(v, NULL) within group (order by pos) as null_delimiter_ordered
+from t_list_array_compat where g = 1;
+
 select json_type(array_agg(v)) as result_type,
        json_length(array_agg(v)) as element_count
 from t_list_array_compat where g = 1;

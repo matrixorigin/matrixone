@@ -41,22 +41,21 @@ const (
 	// filter, prunes replacement objects, and builds a reader.  One object block
 	// (8192 rows) made large updates pay that setup cost thousands of times.
 	// Aggregate up to eight blocks, with an 8 MiB soft limit that flushes wide
-	// primary keys at the next source-batch boundary.
+	// primary keys per row in memory or at persisted source-batch boundaries.
 	transferBatchRowLimit  = objectio.BlockMaxRows * 8
 	transferBatchSizeLimit = mpool.MB * 8
 )
 
-func transferBatchLimitReached(rowCount, byteSize int, sourceBatchDone bool) bool {
+func transferBatchLimitReached(rowCount, byteSize int, checkSize bool) bool {
 	if rowCount == 0 {
 		return false
 	}
 	if rowCount >= transferBatchRowLimit {
 		return true
 	}
-	// Computing Batch.Size for every row would add work to the hot path.  The
-	// source reader already bounds its batches, so enforce the byte limit once
-	// per source batch and bound any overshoot by that source batch.
-	return sourceBatchDone && byteSize >= transferBatchSizeLimit
+	// Persisted readers bound source batches and check their byte size once per
+	// batch. In-memory staging checks after each appended row.
+	return checkSize && byteSize >= transferBatchSizeLimit
 }
 
 func newDeletedObjectFilter(

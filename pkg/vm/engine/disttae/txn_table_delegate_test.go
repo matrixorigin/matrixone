@@ -18,14 +18,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/shard"
+	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	txnpb "github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/assert"
@@ -147,4 +153,86 @@ func TestTxnTableDelegate_Delete(t *testing.T) {
 	assert.PanicsWithValue(t, "BUG: cannot delete data to partition primary table", func() {
 		table.Delete(context.Background(), &batch.Batch{}, "")
 	})
+}
+
+func TestNonlocalStatsRejectLocalWorkspaceBound(t *testing.T) {
+	txn := newTransactionWithActivePKTableForTest(t, "pk")
+	origin := txn.workspace.activeTable(genTableKey(1, "tbl", 7, "db"))
+	tbl := &txnTableDelegate{origin: origin, isLocal: func() (bool, error) { return false, nil }}
+	bat := batch.NewWithSize(0)
+	bat.SetRowCount(5)
+	txn.appendWorkspaceEntryLocked(Entry{typ: INSERT, accountId: 1, databaseId: 7, tableId: 42, bat: bat})
+	t.Cleanup(func() { closeWorkspaceForTest(t, txn) })
+	stats, err := tbl.Stats(context.Background(), false)
+	require.NoError(t, err)
+	require.Equal(t, float64(^uint64(0)), stats.TableCnt,
+		"remote completed metadata cannot include this CN's own writes; do not forward a partial local count")
+	require.Empty(t, stats.TableName)
+	txn.Lock()
+	stats, err = tbl.Stats(context.Background(), false)
+	txn.Unlock()
+	require.NoError(t, err)
+	require.Equal(t, float64(^uint64(0)), stats.TableCnt)
+}
+
+// statsReadService exercises the real delegate request/response boundary.
+type statsReadService struct {
+	shardservice.ShardService
+	response []byte
+	err      error
+}
+
+func (s statsReadService) Read(_ context.Context, req shardservice.ReadRequest, _ shardservice.ReadOptions) error {
+	if s.err != nil {
+		return s.err
+	}
+	req.Apply(s.response)
+	return nil
+}
+
+func TestRemoteStatsPreserveByteWidth(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		observation *statsinfo.StatsInfo
+		bytes       map[string]uint64
+		rows        float64
+		width       float64
+	}{
+		{"anonymous overflow", &statsinfo.StatsInfo{TableCnt: 5, SizeMap: map[string]uint64{"v": 40}}, nil, float64(math.MaxUint64), 6.4},
+		{"anonymous representable", &statsinfo.StatsInfo{TableCnt: 8, SizeMap: map[string]uint64{"v": 1}}, map[string]uint64{"v": 1 << 61}, float64(math.MaxUint64), 0.125},
+		{"completed", &statsinfo.StatsInfo{TableName: "tbl", TableCnt: 5, SizeMap: map[string]uint64{"v": 40}}, map[string]uint64{"v": 40}, 5, 8},
+		{"no response", nil, nil, float64(math.MaxUint64), 6.4},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			txn := newTransactionWithActivePKTableForTest(t, "pk")
+			origin := txn.workspace.activeTable(genTableKey(1, "tbl", 7, "db"))
+			op := txn.op.(*mock_frontend.MockTxnOperator)
+			op.EXPECT().Snapshot().Return(txnpb.CNTxnSnapshot{}, nil).AnyTimes()
+			op.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
+			origin.remoteWorkspace = true
+			txn.proc.Base.TxnOperator = op
+			origin.proc.Store(txn.proc)
+			var response []byte
+			if tc.observation != nil {
+				var err error
+				response, err = tc.observation.Marshal()
+				require.NoError(t, err)
+			}
+			tbl := &txnTableDelegate{origin: origin, isLocal: func() (bool, error) { return false, nil }}
+			tbl.shard.service = statsReadService{response: response}
+			got, err := tbl.Stats(t.Context(), true)
+			require.NoError(t, err)
+			require.Equal(t, tc.rows, got.TableCnt)
+			assert.Equal(t, tc.bytes, got.SizeMap)
+			assertRelationScanWidth(t, got, tc.width)
+			if tc.observation != nil {
+				require.Equal(t, tc.observation.TableName, got.TableName)
+			}
+			failure := errors.New("remote stats unavailable")
+			tbl.shard.service = statsReadService{err: failure}
+			got, err = tbl.Stats(t.Context(), true)
+			require.Nil(t, got)
+			require.ErrorIs(t, err, failure)
+		})
+	}
 }

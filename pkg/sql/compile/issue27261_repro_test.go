@@ -24,7 +24,6 @@ import (
 	mock_morpc "github.com/matrixorigin/matrixone/pkg/common/morpc/mock_morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
@@ -34,7 +33,6 @@ import (
 	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
@@ -55,39 +53,6 @@ type issue27261BlockingRelation struct {
 	engine.Relation
 	started chan struct{}
 	once    sync.Once
-}
-
-type issue27261Engine struct {
-	engine.Engine
-	database engine.Database
-}
-
-func (e *issue27261Engine) Database(
-	context.Context,
-	string,
-	client.TxnOperator,
-) (engine.Database, error) {
-	return e.database, nil
-}
-
-type issue27261Database struct {
-	engine.Database
-	relation engine.Relation
-}
-
-func (db *issue27261Database) Relation(
-	context.Context,
-	string,
-	any,
-) (engine.Relation, error) {
-	return db.relation, nil
-}
-
-func (r *issue27261BlockingRelation) Ranges(
-	context.Context,
-	engine.RangesParam,
-) (engine.RelData, error) {
-	return readutil.NewBlockListRelationData(0), nil
 }
 
 func TestReaderContextFollowsSourceScopeBeforeCompileFallback(t *testing.T) {
@@ -133,35 +98,6 @@ func (op *issue27261BlockingScan) Call(proc *process.Process) (vm.CallResult, er
 	op.once.Do(func() { close(op.started) })
 	<-proc.Ctx.Done()
 	return vm.CancelResult, proc.Ctx.Err()
-}
-
-func issue27261ReaderBuildFixture(
-	ctrl *gomock.Controller,
-	proc *process.Process,
-	relation engine.Relation,
-) (*Compile, *plan.Node) {
-	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
-	txnOperator.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
-	txnOperator.EXPECT().IsSnapOp().Return(false).AnyTimes()
-	proc.Base.TxnOperator = txnOperator
-
-	tableDef := &plan.TableDef{Name: "issue27261_reader_build"}
-	node := &plan.Node{
-		NodeType: plan.Node_TABLE_SCAN,
-		ObjRef: &plan.ObjectRef{
-			SchemaName: "issue27261",
-			ObjName:    tableDef.Name,
-		},
-		TableDef: tableDef,
-		Stats:    &plan.Stats{},
-	}
-	compile := &Compile{
-		proc: proc,
-		e: &issue27261Engine{
-			database: &issue27261Database{relation: relation},
-		},
-	}
-	return compile, node
 }
 
 // This is a deterministic reduction of the production failure. A normal
@@ -222,94 +158,91 @@ func TestIssue27261StopSendingCancelsOnlyRemotePipeline(t *testing.T) {
 	}
 }
 
-// A remote SAMPLE scan can still be constructing its parallel readers when a
-// downstream LIMIT sends StopSending. ParallelRun owns cleanup until the
-// parallel scope has been built, so it must normalize that internal
-// cancellation before Connector.Reset chooses End versus Error. The other
-// producer on the shared edge models a genuine fan-in sibling that has already
-// ended normally.
+// StopSending can arrive while readers are being built, before DOP workers
+// exist. The original sender must retire every planned worker's output, not
+// merely publish one End. Exercise the production construction and cleanup.
 func TestIssue27261StopSendingDuringParallelReaderBuildStaysGraceful(t *testing.T) {
-	cleanupCounter := metricv2.PipelineCleanupEventCounter.WithLabelValues(
-		parallelScopeBuildInternalCancel,
-	)
-	cleanupCountBefore := promtestutil.ToFloat64(cleanupCounter)
+	for _, tc := range []struct {
+		name    string
+		dop     int
+		prepare bool
+	}{
+		{"single", 1, false}, {"parallel", 2, false}, {"prepared parallel", 8, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cleanupCounter := metricv2.PipelineCleanupEventCounter.WithLabelValues(
+				parallelScopeBuildInternalCancel,
+			)
+			cleanupCountBefore := promtestutil.ToFloat64(cleanupCounter)
 
-	oldRuntime := runtime.ServiceRuntime("")
-	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
-	t.Cleanup(func() { runtime.SetupServiceBasedRuntime("", oldRuntime) })
+			oldRuntime := runtime.ServiceRuntime("")
+			runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+			t.Cleanup(func() { runtime.SetupServiceBasedRuntime("", oldRuntime) })
 
-	server := colexec.NewServer("")
-	ctrl := gomock.NewController(t)
-	session := mock_morpc.NewMockClientSession(ctrl)
-	session.EXPECT().SessionCtx().Return(context.Background()).AnyTimes()
+			server := colexec.NewServer("")
+			ctrl := gomock.NewController(t)
+			session := mock_morpc.NewMockClientSession(ctrl)
+			session.EXPECT().SessionCtx().Return(context.Background()).AnyTimes()
 
-	rootProc := testutil.NewProcess(t)
-	remoteCtx := context.WithValue(rootProc.GetTopContext(), defines.RemoteRunContext{}, true)
-	queryCtx := rootProc.Base.GetContextBase().BuildQueryCtx(remoteCtx)
-	rootProc.BuildPipelineContext(queryCtx)
-	t.Cleanup(func() { rootProc.Cancel(nil) })
+			rootProc := testutil.NewProcess(t)
+			remoteCtx := context.WithValue(rootProc.GetTopContext(), defines.RemoteRunContext{}, true)
+			queryCtx := rootProc.Base.GetContextBase().BuildQueryCtx(remoteCtx)
+			rootProc.BuildPipelineContext(queryCtx)
+			t.Cleanup(func() { rootProc.Cancel(nil) })
 
-	const streamID = uint64(2)
-	server.RecordBuiltPipeline(session, streamID, rootProc)
-	t.Cleanup(func() { server.RemoveRelatedPipeline(session, streamID) })
+			const streamID = uint64(2)
+			server.RecordBuiltPipeline(session, streamID, rootProc)
+			t.Cleanup(func() { server.RemoveRelatedPipeline(session, streamID) })
 
-	reg := process.NewPipelineEdge(2, 2)
-	completedConnector := connector.NewArgument().WithReg(reg)
-	completedConnector.AppendChild(colexec.NewMockOperator())
-	completedScope := &Scope{
-		Proc:   rootProc.NewContextChildProc(0),
-		RootOp: completedConnector,
+			reg := process.NewPipelineEdge(tc.dop, tc.dop)
+			compile := &Compile{proc: rootProc, isPrepare: tc.prepare}
+
+			relation := &issue27261BlockingRelation{started: make(chan struct{})}
+			scan := table_scan.NewArgument()
+			blockedConnector := connector.NewArgument().WithReg(reg)
+			blockedConnector.AppendChild(scan)
+			blockedScope := &Scope{
+				Proc:     rootProc.NewContextChildProc(0),
+				RootOp:   blockedConnector,
+				NodeInfo: engine.Node{Mcpu: tc.dop},
+				DataSource: &Source{
+					Rel: relation,
+				},
+			}
+
+			configureReaderPathTest(t, compile, blockedScope)
+			result := make(chan error, 1)
+			go func() { result <- blockedScope.ParallelRun(compile) }()
+
+			select {
+			case <-relation.started:
+			case <-time.After(time.Second):
+				t.Fatal("parallel reader construction did not start")
+			}
+
+			server.CancelPipelineSending(session, streamID)
+
+			select {
+			case err := <-result:
+				require.NoError(t, err)
+			case <-time.After(time.Second):
+				t.Fatal("parallel reader construction did not stop")
+			}
+
+			receiver := process.InitPipelineSignalReceiver(
+				context.Background(),
+				[]*process.WaitRegister{reg},
+			)
+			require.True(t, receiver.WaitingEndWithTimeout(time.Second), "unexpanded DOP did not retire: %+v", receiver.State())
+			require.Zero(t, receiver.State().Alive)
+			require.NoError(t, reg.Err(), "StopSending cancellation must publish End, not Error")
+			require.NoError(t, rootProc.GetQueryContextError(),
+				"StopSending must leave the remote query context active")
+			require.Equal(t, cleanupCountBefore+1, promtestutil.ToFloat64(cleanupCounter),
+				"the cleanup decision must leave a durable internal-cancellation signal")
+
+		})
 	}
-	compile := &Compile{proc: rootProc}
-	require.NoError(t, completedScope.Run(compile))
-
-	relation := &issue27261BlockingRelation{started: make(chan struct{})}
-	compile, node := issue27261ReaderBuildFixture(ctrl, rootProc, relation)
-	scan := table_scan.NewArgument()
-	blockedConnector := connector.NewArgument().WithReg(reg)
-	blockedConnector.AppendChild(scan)
-	blockedScope := &Scope{
-		Proc:     rootProc.NewContextChildProc(0),
-		RootOp:   blockedConnector,
-		NodeInfo: engine.Node{Mcpu: 2, CNCNT: 1},
-		DataSource: &Source{
-			Rel:                relation,
-			node:               node,
-			TableDef:           node.TableDef,
-			RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
-		},
-	}
-
-	result := make(chan error, 1)
-	go func() { result <- blockedScope.ParallelRun(compile) }()
-
-	select {
-	case <-relation.started:
-	case <-time.After(time.Second):
-		t.Fatal("parallel reader construction did not start")
-	}
-
-	server.CancelPipelineSending(session, streamID)
-
-	select {
-	case err := <-result:
-		require.NoError(t, err)
-	case <-time.After(time.Second):
-		t.Fatal("parallel reader construction did not stop")
-	}
-
-	receiver := process.InitPipelineSignalReceiver(
-		context.Background(),
-		[]*process.WaitRegister{reg},
-	)
-	batch, err := receiver.GetNextBatch(nil)
-	require.NoError(t, err)
-	require.Nil(t, batch)
-	require.NoError(t, reg.Err(), "StopSending cancellation must publish End, not Error")
-	require.NoError(t, rootProc.GetQueryContextError(),
-		"StopSending must leave the remote query context active")
-	require.Equal(t, cleanupCountBefore+1, promtestutil.ToFloat64(cleanupCounter),
-		"the cleanup decision must leave a durable internal-cancellation signal")
 }
 
 func TestParallelReaderBuildPreservesQueryCancellation(t *testing.T) {
@@ -318,7 +251,6 @@ func TestParallelReaderBuildPreservesQueryCancellation(t *testing.T) {
 	)
 	cleanupCountBefore := promtestutil.ToFloat64(cleanupCounter)
 
-	ctrl := gomock.NewController(t)
 	rootProc := testutil.NewProcess(t)
 	queryCtx := rootProc.Base.GetContextBase().BuildQueryCtx(rootProc.GetTopContext())
 	_, cancelQuery := process.GetQueryCtxFromProc(rootProc)
@@ -327,7 +259,6 @@ func TestParallelReaderBuildPreservesQueryCancellation(t *testing.T) {
 
 	reg := process.NewPipelineEdge(1, 1)
 	relation := &issue27261BlockingRelation{started: make(chan struct{})}
-	compile, node := issue27261ReaderBuildFixture(ctrl, rootProc, relation)
 	scan := table_scan.NewArgument()
 	conn := connector.NewArgument().WithReg(reg)
 	conn.AppendChild(scan)
@@ -336,13 +267,12 @@ func TestParallelReaderBuildPreservesQueryCancellation(t *testing.T) {
 		RootOp:   conn,
 		NodeInfo: engine.Node{Mcpu: 2, CNCNT: 1},
 		DataSource: &Source{
-			Rel:                relation,
-			node:               node,
-			TableDef:           node.TableDef,
-			RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
+			Rel: relation,
 		},
 	}
 
+	compile := &Compile{proc: rootProc}
+	configureReaderPathTest(t, compile, scope)
 	result := make(chan error, 1)
 	go func() { result <- scope.ParallelRun(compile) }()
 

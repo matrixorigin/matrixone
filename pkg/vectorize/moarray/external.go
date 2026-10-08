@@ -21,11 +21,25 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
-	"gonum.org/v1/gonum/blas/blas32"
 	"gonum.org/v1/gonum/blas/blas64"
 )
 
 // These functions are exposed externally via SQL API.
+
+// checkVectorFinite returns the controlled-overflow error when any component is non-finite, so
+// vector-vector arithmetic rejects an overflowed (or NaN) result instead of persisting it, the same
+// way ScalarOp guards vector-scalar arithmetic. It uses the metric.CheckFinite* test x-x != 0 (0 for
+// every finite x, NaN for +Inf/-Inf/NaN alike): it also catches a NaN produced from a non-finite
+// input (e.g. Inf-Inf) that a math.IsInf check would miss, and stays in T's domain with no float64
+// widening per element.
+func checkVectorFinite[T types.RealNumbers](x []T) error {
+	for i := range x {
+		if x[i]-x[i] != 0 {
+			return moerr.NewInternalErrorNoCtx("vector contains infinity values")
+		}
+	}
+	return nil
+}
 
 func Add[T types.RealNumbers](p, q []T) ([]T, error) {
 	if len(p) != len(q) {
@@ -56,6 +70,9 @@ func Add[T types.RealNumbers](p, q []T) ([]T, error) {
 	for i < n {
 		x[i] = p[i] + q[i]
 		i++
+	}
+	if err := checkVectorFinite(x); err != nil {
+		return nil, err
 	}
 	return x, nil
 }
@@ -90,6 +107,9 @@ func Subtract[T types.RealNumbers](p, q []T) ([]T, error) {
 		x[i] = p[i] - q[i]
 		i++
 	}
+	if err := checkVectorFinite(x); err != nil {
+		return nil, err
+	}
 	return x, nil
 }
 
@@ -122,6 +142,9 @@ func Multiply[T types.RealNumbers](p, q []T) ([]T, error) {
 	for i < n {
 		x[i] = p[i] * q[i]
 		i++
+	}
+	if err := checkVectorFinite(x); err != nil {
+		return nil, err
 	}
 	return x, nil
 }
@@ -162,6 +185,9 @@ func Divide[T types.RealNumbers](p, q []T) ([]T, error) {
 	for i < n {
 		x[i] = p[i] / q[i]
 		i++
+	}
+	if err := checkVectorFinite(x); err != nil {
+		return nil, err
 	}
 	return x, nil
 }
@@ -275,8 +301,16 @@ func NormalizeL2[T types.RealNumbers](v1 []T, normalized []T) error {
 func L1Norm[T types.RealNumbers](v []T) (float64, error) {
 	switch any(v).(type) {
 	case []float32:
-		_v := blas32.Vector{N: len(v), Inc: 1, Data: any(v).([]float32)}
-		return float64(blas32.Asum(_v)), nil
+		// l1_norm is a DOUBLE function. Accumulate in float64 so a finite VECF32 whose L1 norm
+		// exceeds the float32 range still returns its representable double value; reducing in
+		// float32 (blas32.Asum) would overflow it to +Inf (#29083). A float32-element sum cannot
+		// overflow float64.
+		vv := any(v).([]float32)
+		var sum float64
+		for _, x := range vv {
+			sum += math.Abs(float64(x))
+		}
+		return sum, nil
 	case []float64:
 		_v := blas64.Vector{N: len(v), Inc: 1, Data: any(v).([]float64)}
 		return blas64.Asum(_v), nil
@@ -289,8 +323,17 @@ func L1Norm[T types.RealNumbers](v []T) (float64, error) {
 func L2Norm[T types.RealNumbers](v []T) (float64, error) {
 	switch any(v).(type) {
 	case []float32:
-		_v := blas32.Vector{N: len(v), Inc: 1, Data: any(v).([]float32)}
-		return float64(blas32.Nrm2(_v)), nil
+		// l2_norm is a DOUBLE function. Accumulate the squares in float64 so a finite VECF32 whose
+		// L2 norm exceeds the float32 range still returns its representable double value; reducing in
+		// float32 (blas32.Nrm2) would overflow it to +Inf (#29083). A sum of float32-element squares
+		// cannot overflow float64.
+		vv := any(v).([]float32)
+		var sumSq float64
+		for _, x := range vv {
+			d := float64(x)
+			sumSq += d * d
+		}
+		return math.Sqrt(sumSq), nil
 	case []float64:
 		_v := blas64.Vector{N: len(v), Inc: 1, Data: any(v).([]float64)}
 		return blas64.Nrm2(_v), nil

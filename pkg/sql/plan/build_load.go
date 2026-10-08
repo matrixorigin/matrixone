@@ -413,7 +413,26 @@ func estimateLoadRowsize(param *tree.ExternParam, tableDef *TableDef, inputSize 
 		return rowSize
 	}
 	if tableDef != nil {
-		if rowSize := GetRowSizeFromTableDef(tableDef, true) * 0.8; rowSize > 0 {
+		estimateDef := tableDef
+		if param != nil && param.Format == tree.PARQUET {
+			// BLOB family widths are assignment limits, not observed payload
+			// lengths. Counting a BLOB's 65535-byte capacity as its average
+			// size underestimates input rows and can disable distributed LOAD.
+			// Keep the catalog type intact for assignment validation, using
+			// the legacy BLOB estimate until source statistics are available.
+			copyDef := *tableDef
+			copyDef.Cols = make([]*ColDef, len(tableDef.Cols))
+			for i, col := range tableDef.Cols {
+				copyDef.Cols[i] = col
+				if col.Typ.Id == int32(types.T_blob) && col.Typ.Width > 0 {
+					copyCol := *col
+					copyCol.Typ.Width = 0
+					copyDef.Cols[i] = &copyCol
+				}
+			}
+			estimateDef = &copyDef
+		}
+		if rowSize := GetRowSizeFromTableDef(estimateDef, true) * 0.8; rowSize > 0 {
 			return clampLoadRowsize(rowSize, inputSize)
 		}
 	}
@@ -1080,21 +1099,34 @@ func checkNullMap(stmt *tree.Load, Cols []*ColDef, ctx CompilerContext) error {
 }
 
 func getCompressType(param *tree.ExternParam, filepath string) string {
-	if param.CompressType != "" && param.CompressType != tree.AUTO {
-		return param.CompressType
+	return GetCompressType(param.CompressType, filepath)
+}
+
+// GetCompressType is the one place that decides how a load source is
+// compressed: an explicit compression option wins, otherwise the file name's
+// extension decides.  Planning (bind-time parallel and S3-write decisions) and
+// execution (choosing the decompressor) both call it, so they cannot disagree
+// about the same file.  The result is lower case.
+func GetCompressType(compressType string, filepath string) string {
+	if compressType != "" && !strings.EqualFold(compressType, tree.AUTO) {
+		return strings.ToLower(compressType)
 	}
-	index := strings.LastIndex(filepath, ".")
-	if index == -1 {
-		return tree.NOCOMPRESS
-	}
-	tail := string([]byte(filepath)[index+1:])
-	switch tail {
-	case "gz", "gzip":
+	filepath = strings.ToLower(filepath)
+	switch {
+	case strings.HasSuffix(filepath, ".tar.gz") || strings.HasSuffix(filepath, ".tar.gzip"):
+		return tree.TAR_GZ
+	case strings.HasSuffix(filepath, ".tar.bz2") || strings.HasSuffix(filepath, ".tar.bzip2"):
+		return tree.TAR_BZ2
+	case strings.HasSuffix(filepath, ".gz") || strings.HasSuffix(filepath, ".gzip"):
 		return tree.GZIP
-	case "bz2", "bzip2":
+	case strings.HasSuffix(filepath, ".bz2") || strings.HasSuffix(filepath, ".bzip2"):
 		return tree.BZIP2
-	case "lz4":
+	case strings.HasSuffix(filepath, ".lz4"):
 		return tree.LZ4
+	case strings.HasSuffix(filepath, ".zst") || strings.HasSuffix(filepath, ".zstd"):
+		return tree.ZSTD
+	case strings.HasSuffix(filepath, ".zip"):
+		return tree.ZIP
 	default:
 		return tree.NOCOMPRESS
 	}

@@ -161,6 +161,8 @@ type workspaceMutation struct {
 	memoryInsert       bool
 	pkIndexComplete    bool
 	rowIDIndexComplete bool
+	insertRows         uint64
+	insertRowsUnknown  bool
 	// accessIndexRevision is the first revision described by pkKeys, rowIDs,
 	// indexedRows and the completeness flags above. Physical generation
 	// replacement advances it while retaining the preceding access facts in
@@ -364,7 +366,9 @@ func (s *orderedMutationSet) equalIDs(expected map[workspaceMutationID]struct{})
 // appendMutationLocked before transferring Batch ownership to PayloadStore;
 // overlay indexes therefore never need to reopen or rescan payloads.
 type workspaceMutationIndexData struct {
-	objectIDs []types.Objectid
+	insertRows        uint64
+	insertRowsUnknown bool
+	objectIDs         []types.Objectid
 	// objectNames retains the exact ObjectName strings referenced by an
 	// ObjectMeta payload. Clone protection is keyed by this physical name, not
 	// by Objectid, so both indexes are derived once from the same publication.
@@ -391,6 +395,8 @@ type workspaceOverlayKey struct {
 // than payload positions. All fields are protected by txnWorkspace.mu; logical
 // visibility remains authoritative in txnWorkspace.mutations.
 type tableOverlay struct {
+	insertRows             uint64
+	unknownInsertMutations uint64
 	// retiredMutations is the history needed only by ReadViews published by
 	// the currently executing statement. EndStatement expires those views and
 	// clears this journal; history therefore never grows with transaction age.
@@ -1807,6 +1813,7 @@ func classifyWorkspaceMutation(
 		blockMeta: entry.typ == INSERT && bat != nil && !bat.IsEmpty() &&
 			len(bat.Attrs) != 0 && bat.Attrs[0] == catalog.BlockMeta_BlockInfo,
 	}
+	data.insertRows, data.insertRowsUnknown = workspaceInsertRows(entry, bat)
 	data.memoryInsert = entry.typ == INSERT && entry.fileName == "" &&
 		bat != nil && !bat.IsEmpty() && !data.blockMeta
 	if bat == nil || bat.IsEmpty() || entry.fileName != "" {
@@ -1842,6 +1849,52 @@ func classifyWorkspaceMutation(
 			vector.MustFixedColNoTypeCheck[objectio.Rowid](bat.Vecs[0]))
 	}
 	return data
+}
+
+// workspaceInsertRows derives the planner's conservative row bound once per
+// physical generation. Selections may overestimate, but never hide writes.
+func workspaceInsertRows(entry Entry, bat *batch.Batch) (uint64, bool) {
+	if entry.typ != INSERT || bat == nil || bat.IsEmpty() {
+		return 0, false
+	}
+	if entry.fileName == "" {
+		return uint64(bat.RowCount()), false
+	}
+	idx := slices.Index(bat.Attrs, catalog.ObjectMeta_ObjectStats)
+	if idx < 0 || idx >= len(bat.Vecs) || bat.Vecs[idx] == nil || bat.Vecs[idx].GetType().Oid != types.T_varchar {
+		return 0, true
+	}
+	vec := bat.Vecs[idx]
+	if vec.Length() != bat.RowCount() {
+		return 0, true
+	}
+	var rows uint64
+	for j := 0; j < vec.Length(); j++ {
+		data := vec.GetBytesAt(j)
+		if vec.IsNull(uint64(j)) || len(data) != objectio.ObjectStatsLen {
+			return 0, true
+		}
+		var stats objectio.ObjectStats
+		stats.UnMarshal(data)
+		if stats.Rows() == 0 {
+			return 0, true
+		}
+		rows += uint64(stats.Rows())
+	}
+	return rows, false
+}
+
+func (w *txnWorkspace) tableInsertRowEstimate(key workspaceOverlayKey) float64 {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	overlay := w.overlays[key]
+	if overlay == nil {
+		return 0
+	}
+	if overlay.unknownInsertMutations != 0 {
+		return float64(^uint64(0))
+	}
+	return float64(overlay.insertRows)
 }
 
 func visibleWorkspaceRows(rowCount int, selections []int64) []bool {
@@ -1947,17 +2000,19 @@ func (w *txnWorkspace) validateUsage() error {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	type expectedActiveOverlay struct {
-		mutations            map[workspaceMutationID]struct{}
-		pkCandidate          map[workspaceMutationID]struct{}
-		compaction           map[workspaceMutationID]struct{}
-		blockMeta            map[workspaceMutationID]struct{}
-		memoryDelete         map[workspaceMutationID]struct{}
-		objectDelete         map[workspaceMutationID]struct{}
-		insertPK             map[string]map[workspaceMutationID]uint32
-		unindexedInsert      map[workspaceMutationID]struct{}
-		insertRowID          map[objectio.Rowid]map[workspaceMutationID]uint32
-		unindexedInsertRowID map[workspaceMutationID]struct{}
-		memoryRows           map[objectio.Blockid]map[uint32]uint32
+		insertRows             uint64
+		unknownInsertMutations uint64
+		mutations              map[workspaceMutationID]struct{}
+		pkCandidate            map[workspaceMutationID]struct{}
+		compaction             map[workspaceMutationID]struct{}
+		blockMeta              map[workspaceMutationID]struct{}
+		memoryDelete           map[workspaceMutationID]struct{}
+		objectDelete           map[workspaceMutationID]struct{}
+		insertPK               map[string]map[workspaceMutationID]uint32
+		unindexedInsert        map[workspaceMutationID]struct{}
+		insertRowID            map[objectio.Rowid]map[workspaceMutationID]uint32
+		unindexedInsertRowID   map[workspaceMutationID]struct{}
+		memoryRows             map[objectio.Blockid]map[uint32]uint32
 	}
 	actual := workspaceUsage{}
 	expectedActiveMutations := make(map[workspaceMutationID]struct{})
@@ -2004,6 +2059,11 @@ func (w *txnWorkspace) validateUsage() error {
 			expectedActiveOverlays[key] = expectedOverlay
 		}
 		expectedOverlay.mutations[id] = struct{}{}
+		rows, unknown := workspaceInsertRows(mutation.entry, bat)
+		expectedOverlay.insertRows += rows
+		if unknown {
+			expectedOverlay.unknownInsertMutations++
+		}
 		if mutation.entry.pkCheck.enabled {
 			expectedOverlay.pkCandidate[id] = struct{}{}
 			expectedPKCandidates[id] = struct{}{}
@@ -2184,6 +2244,10 @@ func (w *txnWorkspace) validateUsage() error {
 				unindexedInsertRowID: map[workspaceMutationID]struct{}{},
 				memoryRows:           map[objectio.Blockid]map[uint32]uint32{},
 			}
+		}
+		if overlay.insertRows != expectedOverlay.insertRows ||
+			overlay.unknownInsertMutations != expectedOverlay.unknownInsertMutations {
+			return moerr.NewInternalErrorNoCtx("workspace planner row estimate mismatch")
 		}
 		if !overlay.activeMutations.equalIDs(expectedOverlay.mutations) ||
 			!setsEqual(overlay.activeMemoryDeleteMutations, expectedOverlay.memoryDelete) ||
@@ -2920,6 +2984,8 @@ func (w *txnWorkspace) publishMutationAtCommitOrderLocked(
 		memoryInsert:        indexData.memoryInsert,
 		pkIndexComplete:     indexData.pkIndexComplete,
 		rowIDIndexComplete:  indexData.rowIDIndexComplete,
+		insertRows:          indexData.insertRows,
+		insertRowsUnknown:   indexData.insertRowsUnknown,
 		accessIndexRevision: revision,
 	}
 	w.mutations[m.id] = m
@@ -2977,6 +3043,10 @@ func (w *txnWorkspace) addMutationAccessIndexesLocked(
 	mutation *workspaceMutation,
 	selections []int64,
 ) {
+	overlay.insertRows += mutation.insertRows
+	if mutation.insertRowsUnknown {
+		overlay.unknownInsertMutations++
+	}
 	rowCount := max(len(mutation.pkKeys), len(mutation.rowIDs))
 	mutation.indexedRows = visibleWorkspaceRows(rowCount, selections)
 	if mutation.entry.typ == INSERT {
@@ -3024,6 +3094,10 @@ func (w *txnWorkspace) removeMutationAccessIndexesLocked(
 	overlay *tableOverlay,
 	mutation *workspaceMutation,
 ) {
+	overlay.insertRows -= mutation.insertRows
+	if mutation.insertRowsUnknown {
+		overlay.unknownInsertMutations--
+	}
 	if mutation.entry.typ == INSERT {
 		delete(overlay.activeUnindexedMemoryInserts, mutation.id)
 		delete(overlay.activeUnindexedMemoryInsertRowIDs, mutation.id)
@@ -3164,6 +3238,8 @@ func (w *txnWorkspace) refreshMutationAccessIndexesLocked(
 	mutation.memoryInsert = indexData.memoryInsert
 	mutation.pkIndexComplete = indexData.pkIndexComplete
 	mutation.rowIDIndexComplete = indexData.rowIDIndexComplete
+	mutation.insertRows = indexData.insertRows
+	mutation.insertRowsUnknown = indexData.insertRowsUnknown
 	mutation.accessIndexRevision = newRevision
 	w.addMutationAccessIndexesLocked(overlay, mutation, selections)
 }
@@ -3607,6 +3683,7 @@ func (w *txnWorkspace) replaceSelections(
 		pkKeys: m.pkKeys, rowIDs: m.rowIDs,
 		memoryInsert: m.memoryInsert, pkIndexComplete: m.pkIndexComplete,
 		rowIDIndexComplete: m.rowIDIndexComplete,
+		insertRows:         m.insertRows, insertRowsUnknown: m.insertRowsUnknown,
 	}, selections, newRevision)
 	w.journal.recordSelectionUndo(id, current)
 	w.revision = newRevision
@@ -4288,6 +4365,7 @@ func (w *txnWorkspace) addMutationSelections(
 		memoryInsert:       m.memoryInsert,
 		pkIndexComplete:    m.pkIndexComplete,
 		rowIDIndexComplete: m.rowIDIndexComplete,
+		insertRows:         m.insertRows, insertRowsUnknown: m.insertRowsUnknown,
 	}, next, newRevision)
 	w.journal.recordSelectionUndo(id, current)
 	w.revision = newRevision
@@ -4590,7 +4668,7 @@ func (w *txnWorkspace) tableMemoryDeleteOffsets(
 	}
 	deleted = make([]int64, 0, min(len(candidates), len(offsets)))
 	for _, offset := range candidates {
-		if offset >= 0 && offsets[uint32(offset)] != 0 {
+		if offset >= 0 && offset < 1<<32 && offsets[uint32(offset)] != 0 {
 			deleted = append(deleted, offset)
 		}
 	}
@@ -5205,6 +5283,7 @@ func (w *txnWorkspace) rollbackCurrentAttemptAtBoundary(
 					memoryInsert:       mutation.memoryInsert,
 					pkIndexComplete:    mutation.pkIndexComplete,
 					rowIDIndexComplete: mutation.rowIDIndexComplete,
+					insertRows:         mutation.insertRows, insertRowsUnknown: mutation.insertRowsUnknown,
 				}, current.selectionUndo[id], rollbackRevision)
 				w.queueCompactionLocked(mutation)
 			}

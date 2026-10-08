@@ -18,6 +18,13 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
+var MemObjectIOPooledSerialBytesGauge = prometheus.NewGauge(prometheus.GaugeOpts{
+	Namespace: "mo",
+	Subsystem: "mem",
+	Name:      "objectio_pooled_serial_bytes",
+	Help:      "Retained Go-heap serialization-buffer capacity in pooled object writers.",
+})
+
 var (
 	memMPoolAllocatedSizeGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -114,5 +121,15 @@ var (
 			Help:      "Current off-heap bytes allocated via C malloc/calloc/realloc; labeled by component (mpool, memory-cache, io, session, hashmap, default, etc.)",
 		},
 		[]string{"type"},
+	)
+
+	CAllocatorTrimCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "mem",
+			Name:      "c_allocator_trim_total",
+			Help:      "Process-wide libc arena trim attempts, labeled by whether pages were released.",
+		},
+		[]string{"result"},
 	)
 )

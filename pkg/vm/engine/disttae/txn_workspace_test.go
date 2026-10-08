@@ -907,7 +907,7 @@ func TestTxnWorkspaceMemoryDeleteIndexTracksCurrentPayload(t *testing.T) {
 	historical := workspace.currentReadView()
 
 	deleted, indexed, err := workspace.tableMemoryDeleteOffsets(
-		workspace.currentReadView(), 1, 2, 10, blockID, []int64{0, 1, 2, 3})
+		workspace.currentReadView(), 1, 2, 10, blockID, []int64{-1, 0, 1, 2, 3, (1 << 32) + 1})
 	require.NoError(t, err)
 	require.True(t, indexed)
 	require.Equal(t, []int64{1, 3}, deleted)
@@ -1864,6 +1864,40 @@ func TestTxnWorkspaceRewriteMutationsPublishesMetadataAndPayloadAtomically(t *te
 	oldEntries.Close()
 	newEntries.Close()
 	require.NoError(t, workspace.close(proc.Mp()))
+}
+
+func TestTxnWorkspaceInsertRowEstimateFollowsRewriteAndRollback(t *testing.T) {
+	proc := testutil.NewProc(t)
+	w := newTxnWorkspace()
+	t.Cleanup(func() { require.NoError(t, w.close(proc.Mp())) })
+	key := workspaceOverlayKey{accountID: 1, databaseID: 2, tableID: 3}
+	oldBat := newInt64BatchForTest(t, proc, []string{"pk"}, []int64{1, 2, 3})
+	entry := Entry{typ: INSERT, accountId: 1, databaseId: 2, tableId: 3, bat: oldBat}
+	id := w.append(entry)
+	require.Equal(t, float64(3), w.tableInsertRowEstimate(key))
+	w.advanceStatement()
+	require.NoError(t, w.addMutationSelections(id, []int64{1}))
+	require.Equal(t, float64(3), w.tableInsertRowEstimate(key), "selection keeps a conservative upper bound")
+
+	entry.bat = newInt64BatchForTest(t, proc, []string{"pk"}, []int64{1, 3})
+	_, err := w.rewriteMutations([]workspaceMutationRewrite{{mutationID: id, oldBat: oldBat, entry: entry}})
+	require.NoError(t, err)
+	require.Equal(t, float64(2), w.tableInsertRowEstimate(key))
+	require.NoError(t, w.validateUsage())
+
+	rolledBack, err := w.rollbackCurrentAttempt()
+	require.NoError(t, err)
+	rolledBack.Close()
+	require.Equal(t, float64(3), w.tableInsertRowEstimate(key), "rollback restores the earlier generation's bound")
+	require.NoError(t, w.validateUsage())
+	active, err := w.commitEntries()
+	require.NoError(t, err)
+	require.Len(t, active.entries, 1)
+	restoredID := active.entries[0].workspaceMutationID
+	active.Close()
+	require.NoError(t, w.retireMutations([]workspaceMutationID{restoredID}))
+	require.Zero(t, w.tableInsertRowEstimate(key))
+	require.NoError(t, w.validateUsage())
 }
 
 func TestTxnWorkspaceRollbackRestoresMutationRewrite(t *testing.T) {

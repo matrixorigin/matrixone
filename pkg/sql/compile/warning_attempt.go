@@ -39,7 +39,25 @@ func newWarningAttempt(proc *process.Process, required bool) *warningAttempt {
 	if !single && !batch && !count && !required {
 		return nil
 	}
-	a := &warningAttempt{collector: &remoteWarningCollector{requiresCutReporting: required}, previous: make(map[*process.Process]any)}
+	var warningBudget *process.WarningDiagnosticBudget
+	if remote, ok := destination.(*remoteWarningCollector); ok && remote != nil {
+		// The remote collector is itself a budget provider. Initialize or narrow
+		// that provider before using it, otherwise its lazy compatibility budget
+		// would hide a smaller process limitation from this new attempt.
+		warningBudget = remote.ensureProcessWarningBudget(
+			process.WarningDiagnosticBudgetLimitForProcess(proc))
+	} else {
+		warningBudget = process.WarningDiagnosticBudgetForProcess(proc)
+	}
+	a := &warningAttempt{
+		collector: &remoteWarningCollector{
+			maxRetained:          process.WarningDiagnosticRetentionLimitForProcess(proc),
+			maxRetainedSet:       true,
+			warningBudget:        warningBudget,
+			requiresCutReporting: required,
+		},
+		previous: make(map[*process.Process]any),
+	}
 	a.bindProcess(proc)
 	return a
 }
@@ -128,7 +146,7 @@ func (a *warningAttempt) finish(success bool, destination any) {
 	if a == nil {
 		return
 	}
-	total, warnings, cut, cutMessage, incomplete := a.collector.closeWarnings(success)
+	total, warnings, cut, cutMessage, incomplete, budget, charged := a.collector.closeWarnings(success)
 	a.restore()
 	if incomplete {
 		if marker, ok := destination.(groupConcatCutMarker); ok {
@@ -141,6 +159,7 @@ func (a *warningAttempt) finish(success bool, destination any) {
 		}
 	}
 	if total == 0 {
+		budget.Release(charged)
 		return
 	}
 	codes := make([]uint16, len(warnings))
@@ -148,7 +167,7 @@ func (a *warningAttempt) finish(success bool, destination any) {
 	for i, w := range warnings {
 		codes[i], messages[i] = w.Code, w.Message
 	}
-	appendWarningBatchToSink(destination, total, codes, messages)
+	process.AppendWarningBatchToSinkOwned(destination, total, codes, messages, budget, charged)
 }
 
 func (a *warningAttempt) discard() {

@@ -25,6 +25,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
@@ -506,36 +507,13 @@ func applyCharsetToPlanType(typ *plan.Type, charset uint32) {
 }
 
 func charsetForName(name string) (uint32, bool) {
-	switch strings.ToLower(name) {
-	case "binary":
-		return uint32(types.CharsetBinary), true
-	case "utf8", "utf8mb3", "utf8mb4", "latin1", "ascii":
-		// MatrixOne stores text as UTF-8. Accept MySQL's single-byte charset
-		// spellings for DDL compatibility and normalize them to the supported
-		// general-ci text identity rather than pretending to preserve encoding.
-		return uint32(types.CharsetUTF8), true
-	default:
-		return 0, false
-	}
+	identity, ok := collation.ResolveDDLCharset(name)
+	return uint32(identity), ok
 }
 
 func collationForName(name string) (uint32, bool) {
-	switch strings.ToLower(name) {
-	case "binary":
-		return uint32(types.CharsetBinary), true
-	case "utf8_bin", "utf8mb3_bin", "utf8mb4_bin":
-		return uint32(types.CharsetUTF8MB4Bin), true
-	case "utf8_general_ci", "utf8mb3_general_ci", "utf8mb4_general_ci", "utf8mb4_0900_ai_ci",
-		"latin1_swedish_ci", "ascii_general_ci":
-		// MySQL 8 uses utf8mb4_0900_ai_ci by default. Accept that exact spelling
-		// as a DDL compatibility alias, but normalize it to MatrixOne's existing
-		// general-ci identity instead of claiming native UCA 9.0 semantics.
-		return uint32(types.CharsetUTF8), true
-	default:
-		// Do not silently alias other advertised UCA/0900 collations to either
-		// legacy general_ci or byte ordering. Their weight and padding contracts differ.
-		return 0, false
-	}
+	identity, ok := collation.ResolveDDLCollation(name)
+	return uint32(identity), ok
 }
 
 func unsupportedCollationError(ctx context.Context, name string) error {
@@ -578,14 +556,11 @@ func charsetAndCollationCompatible(charset, collation string) bool {
 }
 
 func canonicalCharsetName(name string) string {
-	switch strings.ToLower(name) {
-	case "utf8", "utf8mb3", "utf8mb4":
-		// MatrixOne implements the accepted utf8/utf8mb3/utf8mb4 general_ci
-		// and _bin spellings with the same internal collation identities.
-		return "utf8mb4"
-	default:
-		return strings.ToLower(name)
+	if identity, ok := collation.ResolveDDLCharset(name); ok {
+		d, _ := collation.EffectiveDefinition(uint32(identity), 0)
+		return d.Charset.Name()
 	}
+	return collation.CanonicalCharsetName(name)
 }
 
 func tableDefaultCharset(ctx CompilerContext, options []tree.TableOption) (uint32, error) {
@@ -646,14 +621,139 @@ func tableDefaultCharset(ctx CompilerContext, options []tree.TableOption) (uint3
 	return tableCharset, nil
 }
 
-func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Process) (*plan.Default, error) {
-	return buildDefaultExprWithColumns(col, typ, proc, nil)
+func buildDefaultExpr(bindCtx context.Context, col *tree.ColumnTableDef, typ plan.Type, proc *process.Process) (*plan.Default, error) {
+	return buildDefaultExprWithColumns(bindCtx, col, typ, proc, nil)
+}
+
+func legacyImplicitTimestampDefaults(ctx CompilerContext) bool {
+	if ctx == nil {
+		return false
+	}
+	value, err := ctx.ResolveVariable("explicit_defaults_for_timestamp", true, false)
+	if err != nil {
+		return false
+	}
+	switch value := value.(type) {
+	case int:
+		return value == 0
+	case int8:
+		return value == 0
+	case int32:
+		return value == 0
+	case int64:
+		return value == 0
+	case uint:
+		return value == 0
+	case uint8:
+		return value == 0
+	case uint32:
+		return value == 0
+	case uint64:
+		return value == 0
+	case bool:
+		return !value
+	default:
+		return false
+	}
+}
+
+func hasExplicitNullableAttribute(col *tree.ColumnTableDef) bool {
+	for _, attr := range col.Attributes {
+		if nullAttr, ok := attr.(*tree.AttributeNull); ok && nullAttr.Is {
+			return true
+		}
+	}
+	return false
+}
+
+func hasExplicitDefaultAttribute(col *tree.ColumnTableDef) bool {
+	for _, attr := range col.Attributes {
+		if defaultAttr, ok := attr.(*tree.AttributeDefault); ok && defaultAttr.Expr != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func buildImplicitCurrentTimestampExpr(typ plan.Type, proc *process.Process) (*plan.Expr, error) {
+	ast := &tree.FuncExpr{
+		Func:  tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName("current_timestamp")),
+		Exprs: tree.Exprs{tree.NewNumVal(int64(typ.Scale), fmt.Sprint(typ.Scale), false, tree.P_int64)},
+	}
+	binder := NewDefaultBinder(proc.Ctx, nil, nil, typ, nil)
+	bound, err := binder.BindExpr(ast, 0, false)
+	if err != nil {
+		return nil, err
+	}
+	return makePlan2AssignmentCastExpr(proc.Ctx, bound, typ)
+}
+
+func buildImplicitCurrentTimestampDefault(typ plan.Type, proc *process.Process) (*plan.Default, error) {
+	expr, err := buildImplicitCurrentTimestampExpr(typ, proc)
+	if err != nil {
+		return nil, err
+	}
+	return &plan.Default{NullAbility: false, Expr: expr, OriginString: "CURRENT_TIMESTAMP()"}, nil
+}
+
+// isLegacyImplicitTimestampColumn identifies a non-nullable TIMESTAMP under
+// the legacy explicit_defaults_for_timestamp=OFF assignment rule. The rule is
+// about the effective column policy, not the exact CURRENT_TIMESTAMP strings
+// produced by one DDL path; persisted and explicitly-defaulted definitions
+// must follow the same NULL assignment semantics.
+func isLegacyImplicitTimestampColumn(ctx CompilerContext, col *plan.ColDef) bool {
+	return legacyImplicitTimestampDefaults(ctx) && col != nil &&
+		types.T(col.Typ.Id) == types.T_timestamp &&
+		col.Default != nil && !col.Default.NullAbility
+}
+
+// buildLegacyTimestampNullAssignment implements the legacy MySQL assignment
+// rule. NULL assigned to a non-nullable TIMESTAMP is the current timestamp;
+// it is not the column's literal DEFAULT value. Keep this policy at the DML
+// assignment boundary so INSERT, UPDATE and duplicate-key UPDATE agree.
+func buildLegacyTimestampNullAssignment(ctx CompilerContext, col *plan.ColDef) (*plan.Expr, error) {
+	if !isLegacyImplicitTimestampColumn(ctx, col) {
+		return nil, nil
+	}
+	return buildImplicitCurrentTimestampExpr(col.Typ, ctx.GetProcess())
+}
+
+// wrapLegacyTimestampAssignment applies the same rule to runtime NULLs (for
+// example a source-column or prepared parameter), which cannot be recognized
+// from the AST. Repeated volatile operands share the existing expression-local
+// memo owner; deterministic column/literal operands need no additional state.
+func (builder *QueryBuilder) wrapLegacyTimestampAssignment(col *plan.ColDef, expr *plan.Expr) (*plan.Expr, error) {
+	ctx := builder.compCtx
+	if !isLegacyImplicitTimestampColumn(ctx, col) || expr == nil {
+		return expr, nil
+	}
+	source := DeepCopyExpr(expr)
+	if containsVolatileFunction(source) {
+		binder := &baseBinder{builder: builder, sysCtx: ctx.GetContext()}
+		memoID, err := binder.allocateVolatileExprMemoID()
+		if err != nil {
+			return nil, err
+		}
+		source.AuxId = memoID
+	}
+	nullExpr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "isnull", []*plan.Expr{DeepCopyExpr(source)})
+	if err != nil {
+		return nil, err
+	}
+	currentExpr, err := buildImplicitCurrentTimestampExpr(col.Typ, ctx.GetProcess())
+	if err != nil {
+		return nil, err
+	}
+	return BindFuncExprImplByPlanExpr(ctx.GetContext(), "if", []*plan.Expr{
+		nullExpr, currentExpr, source,
+	})
 }
 
 // buildDefaultExprWithColumns is the scoped form of buildDefaultExpr.  The
 // unscoped form remains for call sites that bind an expression which is not a
 // table-row default (for example internal compatibility expressions).
 func buildDefaultExprWithColumns(
+	bindCtx context.Context,
 	col *tree.ColumnTableDef,
 	typ plan.Type,
 	proc *process.Process,
@@ -682,16 +782,16 @@ func buildDefaultExprWithColumns(
 	colNameOrigin := col.Name.ColNameOrigin()
 	if typ.Id == int32(types.T_json) {
 		if semanticExpr != nil && !isNullAstExpr(semanticExpr) && !isExpressionDefault {
-			return nil, moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("JSON column '%s' cannot have default value", colNameOrigin))
+			return nil, moerr.NewNotSupported(bindCtx, fmt.Sprintf("JSON column '%s' cannot have default value", colNameOrigin))
 		}
 	}
 	if isGeometryPlanType(&typ) {
 		if semanticExpr != nil && !isNullAstExpr(semanticExpr) {
-			return nil, moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("GEOMETRY column '%s' cannot have default value", colNameOrigin))
+			return nil, moerr.NewNotSupported(bindCtx, fmt.Sprintf("GEOMETRY column '%s' cannot have default value", colNameOrigin))
 		}
 	}
 	if !nullAbility && isNullAstExpr(semanticExpr) {
-		return nil, moerr.NewInvalidInputf(proc.Ctx, "invalid default value for column '%s'", colNameOrigin)
+		return nil, moerr.NewInvalidInputf(bindCtx, "invalid default value for column '%s'", colNameOrigin)
 	}
 
 	if expr == nil {
@@ -703,18 +803,18 @@ func buildDefaultExprWithColumns(
 	}
 	var binder *DefaultBinder
 	if columns != nil {
-		binder = NewDefaultBinderWithColumns(proc.Ctx, typ, columns)
+		binder = NewDefaultBinderWithColumns(bindCtx, typ, columns)
 	} else {
-		binder = NewDefaultBinder(proc.Ctx, nil, nil, typ, nil)
+		binder = NewDefaultBinder(bindCtx, nil, nil, typ, nil)
 	}
-	planExpr, err := binder.BindExpr(semanticExpr, 0, false)
+	planExpr, err := binder.bindPersistedExpr(semanticExpr, 0, false)
 	if err != nil {
 		return nil, err
 	}
-	if err = preservePersistedFormatCompatibility(proc.Ctx, planExpr); err != nil {
+	if err = preservePersistedFormatCompatibility(bindCtx, planExpr); err != nil {
 		return nil, err
 	}
-	if err = RequirePersistedIPFunctionProtocolForAuthoring(proc.Ctx, proc, planExpr); err != nil {
+	if err = RequirePersistedIPFunctionProtocolForAuthoring(bindCtx, proc, planExpr); err != nil {
 		return nil, err
 	}
 	if exprHasLocalColumnRef(planExpr) {
@@ -725,11 +825,11 @@ func buildDefaultExprWithColumns(
 
 	if defaultFunc := planExpr.GetF(); defaultFunc != nil {
 		if int(typ.Id) != int(types.T_uuid) && defaultFunc.Func.ObjName == "uuid" && !isExpressionDefault {
-			return nil, moerr.NewInvalidInputf(proc.Ctx, "invalid default value for column '%s'", colNameOrigin)
+			return nil, moerr.NewInvalidInputf(bindCtx, "invalid default value for column '%s'", colNameOrigin)
 		}
 	}
 
-	defaultExpr, err := makePlan2AssignmentCastExpr(proc.Ctx, planExpr, typ)
+	defaultExpr, err := makePlan2AssignmentCastExpr(bindCtx, planExpr, typ)
 	if err != nil {
 		return nil, err
 	}
@@ -742,7 +842,20 @@ func buildDefaultExprWithColumns(
 	// try to calculate default value, return err if fails
 	newExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(defaultExpr), proc, false, true)
 	if err != nil {
-		return nil, mapDDLAssignmentCastError(proc.Ctx, typ, colNameOrigin, err)
+		return nil, mapDDLAssignmentCastError(bindCtx, typ, colNameOrigin, err)
+	}
+	if typ.Id == int32(types.T_timestamp) && newExpr.GetLit() != nil &&
+		!newExpr.GetLit().Isnull && newExpr.GetLit().GetTimestampval() == int64(types.ZeroTimestamp) {
+		var mode interface{} = proc.GetSessionInfo().SqlMode
+		if resolve := proc.GetResolveVariableFunc(); resolve != nil {
+			mode, err = resolve("sql_mode", true, false)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if process.IsStrictNoZeroDateMode(mode) {
+			return nil, moerr.NewErrInvalidDefault(bindCtx, colNameOrigin)
+		}
 	}
 
 	if lit := newExpr.GetLit(); lit != nil && exprContainsHexOverload(defaultExpr, 0) {
@@ -776,7 +889,7 @@ func requireExpressionDefaultProtocol(proc *process.Process) error {
 		"column-reference defaults require all CNs to support protocol version 60")
 }
 
-func buildOnUpdate(col *tree.ColumnTableDef, typ plan.Type, proc *process.Process) (*plan.OnUpdate, error) {
+func buildOnUpdate(bindCtx context.Context, col *tree.ColumnTableDef, typ plan.Type, proc *process.Process) (*plan.OnUpdate, error) {
 	var expr tree.Expr = nil
 
 	for _, attr := range col.Attributes {
@@ -790,19 +903,19 @@ func buildOnUpdate(col *tree.ColumnTableDef, typ plan.Type, proc *process.Proces
 		return nil, nil
 	}
 
-	binder := NewDefaultBinder(proc.Ctx, nil, nil, typ, nil)
-	planExpr, err := binder.BindExpr(expr, 0, false)
+	binder := NewDefaultBinder(bindCtx, nil, nil, typ, nil)
+	planExpr, err := binder.bindPersistedExpr(expr, 0, false)
 	if err != nil {
 		return nil, err
 	}
-	if err = preservePersistedFormatCompatibility(proc.Ctx, planExpr); err != nil {
+	if err = preservePersistedFormatCompatibility(bindCtx, planExpr); err != nil {
 		return nil, err
 	}
-	if err = RequirePersistedIPFunctionProtocolForAuthoring(proc.Ctx, proc, planExpr); err != nil {
+	if err = RequirePersistedIPFunctionProtocolForAuthoring(bindCtx, proc, planExpr); err != nil {
 		return nil, err
 	}
 
-	onUpdateExpr, err := makePlan2AssignmentCastExpr(proc.Ctx, planExpr, typ)
+	onUpdateExpr, err := makePlan2AssignmentCastExpr(bindCtx, planExpr, typ)
 	if err != nil {
 		return nil, err
 	}
@@ -815,7 +928,7 @@ func buildOnUpdate(col *tree.ColumnTableDef, typ plan.Type, proc *process.Proces
 	defer executor.Free()
 	_, err = executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 	if err != nil {
-		return nil, mapDDLAssignmentCastError(proc.Ctx, typ, col.Name.ColNameOrigin(), err)
+		return nil, mapDDLAssignmentCastError(bindCtx, typ, col.Name.ColNameOrigin(), err)
 	}
 
 	ret := &plan.OnUpdate{
@@ -839,7 +952,7 @@ func getColumnNullAbility(col *tree.ColumnTableDef) bool {
 	return true
 }
 
-func buildGeneratedExpr(col *tree.ColumnTableDef, typ plan.Type, existingCols []*ColDef, proc *process.Process) (*plan.GeneratedCol, error) {
+func buildGeneratedExpr(bindCtx context.Context, col *tree.ColumnTableDef, typ plan.Type, existingCols []*ColDef, proc *process.Process) (*plan.GeneratedCol, error) {
 	var genAttr *tree.AttributeGeneratedAlways
 	for _, attr := range col.Attributes {
 		if ga, ok := attr.(*tree.AttributeGeneratedAlways); ok {
@@ -856,19 +969,19 @@ func buildGeneratedExpr(col *tree.ColumnTableDef, typ plan.Type, existingCols []
 	// Validate: generated column cannot have DEFAULT
 	for _, attr := range col.Attributes {
 		if _, ok := attr.(*tree.AttributeDefault); ok {
-			return nil, moerr.NewInvalidInputf(proc.Ctx, "generated column '%s' cannot have a default value", colNameOrigin)
+			return nil, moerr.NewInvalidInputf(bindCtx, "generated column '%s' cannot have a default value", colNameOrigin)
 		}
 	}
 	// Validate: generated column cannot have ON UPDATE
 	for _, attr := range col.Attributes {
 		if _, ok := attr.(*tree.AttributeOnUpdate); ok {
-			return nil, moerr.NewInvalidInputf(proc.Ctx, "generated column '%s' cannot have ON UPDATE", colNameOrigin)
+			return nil, moerr.NewInvalidInputf(bindCtx, "generated column '%s' cannot have ON UPDATE", colNameOrigin)
 		}
 	}
 	// Validate: generated column cannot have AUTO_INCREMENT
 	for _, attr := range col.Attributes {
 		if _, ok := attr.(*tree.AttributeAutoIncrement); ok {
-			return nil, moerr.NewInvalidInputf(proc.Ctx, "generated column '%s' cannot have AUTO_INCREMENT", colNameOrigin)
+			return nil, moerr.NewInvalidInputf(bindCtx, "generated column '%s' cannot have AUTO_INCREMENT", colNameOrigin)
 		}
 	}
 
@@ -880,30 +993,30 @@ func buildGeneratedExpr(col *tree.ColumnTableDef, typ plan.Type, existingCols []
 		colTypes[i] = c.Typ
 	}
 
-	binder := NewGeneratedColBinder(proc.Ctx, colNames, colTypes)
-	planExpr, err := binder.BindExpr(genAttr.Expr, 0, false)
+	binder := NewGeneratedColBinder(bindCtx, colNames, colTypes)
+	planExpr, err := binder.bindPersistedExpr(genAttr.Expr, 0, false)
 	if err != nil {
 		return nil, err
 	}
-	if err = preservePersistedFormatCompatibility(proc.Ctx, planExpr); err != nil {
+	if err = preservePersistedFormatCompatibility(bindCtx, planExpr); err != nil {
 		return nil, err
 	}
-	if err = RequirePersistedIPFunctionProtocolForAuthoring(proc.Ctx, proc, planExpr); err != nil {
+	if err = RequirePersistedIPFunctionProtocolForAuthoring(bindCtx, proc, planExpr); err != nil {
 		return nil, err
 	}
 
 	// Validate: generated column expression cannot contain non-deterministic functions
-	if err := checkExprForVolatileFunc(proc.Ctx, planExpr); err != nil {
+	if err := checkExprForVolatileFunc(bindCtx, planExpr); err != nil {
 		return nil, err
 	}
-	if err := checkGeneratedExprReferences(proc.Ctx, planExpr, colNameOrigin, existingCols, make(map[int32]bool)); err != nil {
+	if err := checkGeneratedExprReferences(bindCtx, planExpr, colNameOrigin, existingCols, make(map[int32]bool)); err != nil {
 		return nil, err
 	}
 
 	// Persist only stable function IDs in generated-column catalog metadata.
 	// DML plan construction rewrites this wrapper to cast_assign/cast_ignore
 	// when the active protocol supports those functions.
-	genExpr, err := makePlan2AssignmentCastExpr(proc.Ctx, planExpr, typ)
+	genExpr, err := makePlan2AssignmentCastExpr(bindCtx, planExpr, typ)
 	if err != nil {
 		return nil, err
 	}
@@ -2440,7 +2553,7 @@ func hasParamExprReflectively(value reflect.Value, visited map[paramExprVisit]st
 		}
 		return hasParamExprReflectively(value.Elem(), visited)
 
-	case reflect.Ptr:
+	case reflect.Pointer:
 		if value.IsNil() {
 			return false
 		}

@@ -26,6 +26,7 @@ import (
 
 	mruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -87,6 +88,109 @@ func TestWaitTaskServiceReadyHonorsCancellation(t *testing.T) {
 	require.ErrorIs(t, <-done, context.Canceled)
 }
 
+type readinessTaskStorage struct {
+	taskservice.TaskStorage
+	query func(context.Context) error
+}
+
+func (s *readinessTaskStorage) QueryDaemonTask(ctx context.Context, _ ...taskservice.Condition) ([]task.DaemonTask, error) {
+	return nil, s.query(ctx)
+}
+
+func TestWaitTaskServiceReadyObservesStorage(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	queried, release := make(chan struct{}), make(chan struct{})
+	store := taskservice.NewMemTaskStorage()
+	calls := 0
+	service := taskservice.NewTaskService(mruntime.DefaultRuntime(), &readinessTaskStorage{
+		TaskStorage: store,
+		query: func(ctx context.Context) error {
+			calls++
+			if calls == 1 {
+				return fmt.Errorf("initial refresh: %w", taskservice.ErrNotReady)
+			}
+			close(queried)
+			select {
+			case <-release:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		},
+	})
+	defer func() { require.NoError(t, service.Close()) }()
+	getter := newDelayedTaskServiceGetter()
+	getter.set(service)
+	done := make(chan error, 1)
+	go func() {
+		err := waitTaskServiceReady(ctx, getter, 0)
+		if err == nil {
+			_, err = store.AddDaemonTask(ctx, task.DaemonTask{Metadata: task.TaskMetadata{ID: "once"}})
+		}
+		done <- err
+	}()
+	joined := false
+	defer func() {
+		cancel()
+		if !joined {
+			<-done
+		}
+	}()
+	select {
+	case <-queried:
+	case err := <-done:
+		joined = true
+		t.Fatalf("fixture admitted before storage observation: %v", err)
+	case <-ctx.Done():
+		t.Fatal("storage observation did not start")
+	}
+	rows, err := store.QueryDaemonTask(ctx)
+	require.NoError(t, err)
+	require.Empty(t, rows, "no business write before readiness")
+	close(release)
+	err = <-done
+	joined = true
+	require.NoError(t, err)
+	require.Equal(t, 2, calls)
+	rows, err = store.QueryDaemonTask(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 1, "one business write after readiness")
+}
+
+func TestWaitTaskServiceReadyStorageErrors(t *testing.T) {
+	for _, name := range []string{"fatal", "cancel during read", "cancel while not ready"} {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			want := errors.New("storage failure")
+			calls := 0
+			service := taskservice.NewTaskService(mruntime.DefaultRuntime(), &readinessTaskStorage{
+				TaskStorage: taskservice.NewMemTaskStorage(),
+				query: func(context.Context) error {
+					calls++
+					if name == "fatal" {
+						return want
+					}
+					cancel()
+					if name == "cancel while not ready" {
+						return taskservice.ErrNotReady
+					}
+					return nil
+				},
+			})
+			defer func() { require.NoError(t, service.Close()) }()
+			getter := newDelayedTaskServiceGetter()
+			getter.set(service)
+			if name != "fatal" {
+				want = context.Canceled
+			}
+			require.ErrorIs(t, waitTaskServiceReady(ctx, getter, time.Hour), want)
+			require.Equal(t, 1, calls, "fatal errors and cancellation must not be retried")
+		})
+	}
+}
+
 func TestWaitBasicClusterTaskServicesRejectsMissingCN(t *testing.T) {
 	err := waitBasicClusterTaskServices(context.Background(), &cluster{}, 1)
 	require.ErrorContains(t, err, "service not found")
@@ -126,23 +230,29 @@ func TestWaitBasicClusterTaskServicesReportsReadinessCancellation(t *testing.T) 
 
 	err := waitBasicClusterTaskServices(ctx, c, 1)
 	require.ErrorContains(t, err, "task service did not become ready")
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestBasicClusterUsesShortStartupRetryIntervals(t *testing.T) {
-	services := []*operator{
-		{serviceType: metadata.ServiceType_LOG, cfg: newServiceConfig()},
-		{serviceType: metadata.ServiceType_TN, cfg: newServiceConfig()},
-		{serviceType: metadata.ServiceType_CN, cfg: newServiceConfig()},
+	c, err := NewCluster(WithTesting(), WithPreStart(adjustBasicClusterService))
+	if c != nil {
+		t.Cleanup(func() { require.NoError(t, c.Close()) })
 	}
-	for _, service := range services {
-		adjustBasicClusterService(service)
-	}
-
-	assert.Equal(t, time.Second, services[0].cfg.LogService.HAKeeperCheckInterval.Duration)
-	assert.Equal(t, 500*time.Millisecond, services[0].cfg.LogService.HAKeeperBootstrapRetryInterval.Duration)
-	assert.Equal(t, 100*time.Millisecond, services[1].cfg.HAKeeperRunningRetryInterval.Duration)
-	assert.Equal(t, 100*time.Millisecond, services[2].cfg.TNShardReadyRetryInterval.Duration)
-	assert.True(t, services[2].cfg.CN.AutoIncrement.EnableAutoIDCache)
+	require.NoError(t, err)
+	c.ForeachServices(func(service ServiceOperator) bool {
+		cfg := service.GetServiceConfig()
+		switch service.ServiceType() {
+		case metadata.ServiceType_LOG:
+			assert.Equal(t, time.Second, cfg.LogService.HAKeeperCheckInterval.Duration)
+			assert.Equal(t, 500*time.Millisecond, cfg.LogService.HAKeeperBootstrapRetryInterval.Duration)
+		case metadata.ServiceType_TN:
+			assert.Equal(t, 100*time.Millisecond, cfg.HAKeeperRunningRetryInterval.Duration)
+		case metadata.ServiceType_CN:
+			assert.Equal(t, 100*time.Millisecond, cfg.TNShardReadyRetryInterval.Duration)
+			assert.True(t, cfg.CN.AutoIncrement.EnableAutoIDCache)
+		}
+		return true
+	})
 }
 
 type panicTestReporter struct{}

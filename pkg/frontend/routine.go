@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
@@ -829,6 +830,17 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 	resp.LastInsertIDExported = true
 	prepareStmts := ses.GetPrepareStmts()
 	for _, st := range prepareStmts {
+		// Migration replays SQL against the current assignment; it does not
+		// transfer this statement's original static type and row-domain binding.
+		// Keep the connection here until the statement is deallocated.
+		if plan.HasBoundStringVariable(st.PreparePlan) {
+			return moerr.GetOkExpectedNotSafeToStartTransfer()
+		}
+		// A server cursor retains its result and fetch offset only on this CN.
+		// Even an empty cursor remains fetchable until the client closes it.
+		if st.cursor != nil {
+			return moerr.GetOkExpectedNotSafeToStartTransfer()
+		}
 		// COM_STMT_SEND_LONG_DATA has no protocol response and its parameter
 		// buffers are not part of the migration payload. Reject the snapshot at
 		// the authoritative session owner instead of relying on the proxy to
@@ -837,6 +849,7 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 			return moerr.GetOkExpectedNotSafeToStartTransfer()
 		}
 	}
+	resp.PreparedStmtCursorsChecked = true
 	resp.PreparedStmtLongDataChecked = true
 	resp.FoundRows = ses.GetLastFoundRows()
 	if currentProtocolVersion(ses.proc) >= defines.MORPCVersion22 {

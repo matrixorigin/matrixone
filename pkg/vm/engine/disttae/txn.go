@@ -39,7 +39,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
@@ -428,24 +427,6 @@ func (txn *Transaction) writeBatchWithAutoIncrEpochKnown(
 	if err := txn.requireAutoIncrEpochFenceCommit(autoIncrEpoch, autoIncrEpochKnown); err != nil {
 		return nil, err
 	}
-	start := time.Now()
-	seq := txn.op.NextSequence()
-	trace.GetService(txn.proc.GetService()).AddTxnDurationAction(
-		txn.op,
-		client.WorkspaceWriteEvent,
-		seq,
-		tableId,
-		0,
-		nil)
-	defer func() {
-		trace.GetService(txn.proc.GetService()).AddTxnDurationAction(
-			txn.op,
-			client.WorkspaceWriteEvent,
-			seq,
-			tableId,
-			time.Since(start),
-			nil)
-	}()
 
 	txn.readOnly.Store(false)
 
@@ -583,7 +564,6 @@ func (txn *Transaction) writeBatchWithAutoIncrEpochKnown(
 	txn.appendWorkspaceEntryLocked(e)
 	txn.pkCount += bat.RowCount()
 
-	trace.GetService(txn.proc.GetService()).TxnWrite(txn.op, tableId, typesNames[typ], bat)
 	return
 }
 
@@ -1053,7 +1033,7 @@ func (txn *Transaction) resolveDumpTablesLocked(
 	attempt *workspaceSpillAttempt,
 ) (tables map[tableKey]engine.Relation, err error) {
 	var keys []tableKey
-	seen := make(map[tableKey]bool)
+	relationNames := make(map[tableKey]string)
 	for _, source := range attempt.sources {
 		e := &source.entry
 		k := tableKey{
@@ -1062,8 +1042,8 @@ func (txn *Transaction) resolveDumpTablesLocked(
 			dbName:     e.databaseName,
 			name:       e.tableName,
 		}
-		if !seen[k] {
-			seen[k] = true
+		if _, seen := relationNames[k]; !seen {
+			relationNames[k] = physicalCatalogTableName(e.databaseId, e.tableId, e.tableName)
 			keys = append(keys, k)
 		}
 	}
@@ -1075,7 +1055,7 @@ func (txn *Transaction) resolveDumpTablesLocked(
 
 	txn.Unlock()
 	for _, k := range keys {
-		tbl, terr := txn.getTable(ctx, k.accountId, k.dbName, k.name)
+		tbl, terr := txn.getTable(ctx, k.accountId, k.dbName, relationNames[k])
 		if terr != nil {
 			txn.Lock()
 			return nil, terr
@@ -1145,6 +1125,14 @@ func (txn *Transaction) getTable(
 		return nil, err
 	}
 	return tbl, nil
+}
+
+func physicalCatalogTableName(databaseId, tableId uint64, tableName string) string {
+	if databaseId == catalog.MO_CATALOG_ID && tableId == catalog.MO_COLUMNS_ID &&
+		tableName == catalog.MO_COLUMNS_UPDATE {
+		return catalog.MO_COLUMNS
+	}
+	return tableName
 }
 
 func (txn *Transaction) resolveWorkspacePKMetadataForWrite(
@@ -1490,27 +1478,6 @@ func (txn *Transaction) deleteBatch(
 	accountID uint32,
 	databaseId, tableId uint64,
 ) *batch.Batch {
-	start := time.Now()
-	seq := txn.op.NextSequence()
-	trace.GetService(txn.proc.GetService()).AddTxnDurationAction(
-		txn.op,
-		client.WorkspaceWriteEvent,
-		seq,
-		tableId,
-		0,
-		nil)
-	defer func() {
-		trace.GetService(txn.proc.GetService()).AddTxnDurationAction(
-			txn.op,
-			client.WorkspaceWriteEvent,
-			seq,
-			tableId,
-			time.Since(start),
-			nil)
-	}()
-
-	trace.GetService(txn.proc.GetService()).TxnWrite(txn.op, tableId, typesNames[DELETE], bat)
-
 	var (
 		mp             = make(map[types.Rowid]uint8)
 		rowids         = vector.MustFixedColWithTypeCheck[types.Rowid](bat.GetVector(0))
@@ -1730,16 +1697,15 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 // pipeline locks the workspace — the worker would then wait for the lock
 // owner that waits for the worker. So all tables are resolved up front, with
 // the lock released around the getTable calls (same contract as
-// resolveDumpTablesLocked). Because other goroutines may add deletions while
-// the lock is released, the scan-resolve cycle repeats until every table
-// referenced by the workspace pending-object-delete snapshot is resolved.
+// resolveDumpTablesLocked). The caller validates the captured snapshot after
+// resolution before publishing any replacement objects.
 func (txn *Transaction) resolveCompactTablesLocked(
 	ctx context.Context,
 	snapshot workspaceObjectDeleteSnapshot,
 ) (map[tableKey]engine.Relation, error) {
 	tables := make(map[tableKey]engine.Relation)
 	missing := make([]tableKey, 0)
-	seen := make(map[tableKey]struct{})
+	relationNames := make(map[tableKey]string)
 	for _, metadata := range snapshot.objects {
 		key := tableKey{
 			accountId:  metadata.accountID,
@@ -1747,16 +1713,16 @@ func (txn *Transaction) resolveCompactTablesLocked(
 			dbName:     metadata.databaseName,
 			name:       metadata.tableName,
 		}
-		if _, ok := seen[key]; ok {
+		if _, ok := relationNames[key]; ok {
 			continue
 		}
-		seen[key] = struct{}{}
+		relationNames[key] = physicalCatalogTableName(metadata.databaseID, metadata.tableID, metadata.tableName)
 		missing = append(missing, key)
 	}
 
 	txn.Unlock()
 	for _, key := range missing {
-		table, err := txn.getTable(ctx, key.accountId, key.dbName, key.name)
+		table, err := txn.getTable(ctx, key.accountId, key.dbName, relationNames[key])
 		if err != nil {
 			txn.Lock()
 			return nil, err
@@ -2087,40 +2053,77 @@ func collectObjectStatsFromEntry(entry Entry) []objectio.ObjectStats {
 	return statsList
 }
 
-func (txn *Transaction) forEachTableHasDeletesLocked(
-	isObject bool,
-	f func(tbl *txnTable) error) error {
-	candidates, err := txn.workspace.deleteTableCandidates(isObject)
-	if err != nil {
-		return err
-	}
+type tombstoneTransferKey struct {
+	accountId           uint32
+	databaseId, tableId uint64
+}
 
-	tables := make(map[uint64]*txnTable, len(candidates))
-	for _, entry := range candidates {
-		ctx := context.WithValue(txn.proc.Ctx, defines.TenantIDKey{}, entry.accountId)
-		// Database might craft a sql on the current txn to get the table,
-		// so we need to unlock the txn
-		txn.Unlock()
-		db, err := txn.engine.Database(ctx, entry.databaseName, txn.op)
+type tombstoneTransferTable struct {
+	databaseName string
+	writeNames   [2]string
+	hasDeletes   [2]bool
+	table        *txnTable
+}
+
+// collectTombstoneTransferTablesLocked retains only scalar lookup metadata for
+// this invocation. Relation lookup may unlock and reenter the workspace.
+func (txn *Transaction) collectTombstoneTransferTablesLocked() (map[tombstoneTransferKey]tombstoneTransferTable, error) {
+	var tables map[tombstoneTransferKey]tombstoneTransferTable
+	for kind := range 2 {
+		candidates, err := txn.workspace.deleteTableCandidates(kind == 1)
 		if err != nil {
-			txn.Lock()
-			return err
+			return nil, err
 		}
-		rel, err := db.Relation(ctx, entry.tableName, nil)
-		if err != nil {
-			txn.Lock()
-			return err
-		}
-		txn.Lock()
-		if v, ok := rel.(*txnTableDelegate); ok {
-			tables[entry.tableId] = v.origin
-		} else {
-			tables[entry.tableId] = rel.(*txnTable)
+		for _, e := range candidates {
+			key := tombstoneTransferKey{e.accountId, e.databaseId, e.tableId}
+			if tables == nil {
+				tables = make(map[tombstoneTransferKey]tombstoneTransferTable)
+			}
+			t := tables[key]
+			if !t.hasDeletes[0] && !t.hasDeletes[1] {
+				t.databaseName = e.databaseName
+			}
+			if !t.hasDeletes[kind] {
+				t.hasDeletes[kind] = true
+				t.writeNames[kind] = e.tableName
+				tables[key] = t
+			}
 		}
 	}
-	for _, tbl := range tables {
-		if err := f(tbl); err != nil {
+	return tables, nil
+}
+
+func (txn *Transaction) forEachTableHasDeletesLocked(
+	tables map[tombstoneTransferKey]tombstoneTransferTable,
+	kind int,
+	f func(tbl *txnTable, writeName string) error) error {
+	for key, t := range tables {
+		if !t.hasDeletes[kind] || t.table != nil {
+			continue
+		}
+		name := physicalCatalogTableName(key.databaseId, key.tableId, t.writeNames[kind])
+		dbName := t.databaseName
+		// Database lookup may run internal SQL on this transaction.
+		rel, err := func() (engine.Relation, error) {
+			txn.Unlock()
+			defer txn.Lock()
+			return txn.getTable(txn.proc.Ctx, key.accountId, dbName, name)
+		}()
+		if err != nil {
 			return err
+		}
+		if v, ok := rel.(*txnTableDelegate); ok {
+			t.table = v.origin
+		} else {
+			t.table = rel.(*txnTable)
+		}
+		tables[key] = t
+	}
+	for _, t := range tables {
+		if t.hasDeletes[kind] {
+			if err := f(t.table, t.writeNames[kind]); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -2230,10 +2233,6 @@ func (txn *Transaction) Commit(ctx context.Context) (reqs []txn.TxnRequest, err 
 			msg = "injected commit failure after workspace dump"
 		}
 		return nil, moerr.NewInternalError(ctx, msg)
-	}
-
-	if err := txn.traceWorkspaceLocked(true); err != nil {
-		return nil, err
 	}
 
 	usage := txn.workspace.usageSnapshot()
@@ -2445,10 +2444,14 @@ func (txn *Transaction) transferTombstonesRange(
 		}
 	}()
 
-	if err = prepareInmemTombstones(ctx, txn, start, end, &staged); err != nil {
+	tables, err := txn.collectTombstoneTransferTablesLocked()
+	if err != nil {
 		return err
 	}
-	if err = prepareTombstoneObjects(ctx, txn, start, end, &staged); err != nil {
+	if err = prepareInmemTombstones(ctx, txn, tables, start, end, &staged); err != nil {
+		return err
+	}
+	if err = prepareTombstoneObjects(ctx, txn, tables, start, end, &staged); err != nil {
 		return err
 	}
 	_, err = txn.workspace.publishRCBoundaryWithTransition(
@@ -2549,6 +2552,14 @@ func (txn *Transaction) delTransaction() {
 		)
 		txn.extraWriteWorkspaceThreshold = 0
 	}
+}
+
+var _ client.TerminalTableDeletionView = (*Transaction)(nil)
+
+// IsTableDeletedAtTxnClose reads the surviving physical deletion set after
+// statement rollback and commit preparation without acquiring txn.Lock.
+func (txn *Transaction) IsTableDeletedAtTxnClose(physicalTableID uint64) bool {
+	return txn.workspace.droppedTablesSnapshot().containsTableID(physicalTableID)
 }
 
 func (txn *Transaction) clearTableCache() {

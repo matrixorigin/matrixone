@@ -312,13 +312,17 @@ SELECT TIMESTAMPADD(DAY, 1, '2024-02-29') AS feb29_plus_one_leap;
 feb29_plus_one_leap
 2024-03-01
 SELECT TIMESTAMPADD(DAY, 5, '2024-13-45') AS invalid_date_string;
-invalid input: invalid datetime value 2024-13-45
+➤ invalid_date_string[12,65535,0]  𝄀
+null
 SELECT TIMESTAMPADD(DAY, 5, 'not-a-date') AS invalid_date_format;
-invalid input: invalid datetime value not-a-date
+➤ invalid_date_format[12,65535,0]  𝄀
+null
 SELECT TIMESTAMPADD(DAY, 5, '2024-02-30') AS invalid_feb_date;
-invalid input: invalid datetime value 2024-02-30
+➤ invalid_feb_date[12,65535,0]  𝄀
+null
 SELECT TIMESTAMPADD(DAY, 5, '2024-04-31') AS invalid_apr_date;
-invalid input: invalid datetime value 2024-04-31
+➤ invalid_apr_date[12,65535,0]  𝄀
+null
 SELECT TIMESTAMPADD(DAY, 5, NULL) AS null_date;
 null_date
 null

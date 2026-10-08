@@ -16,9 +16,11 @@ package compile
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/golang/mock/gomock"
@@ -37,7 +39,7 @@ import (
 
 func TestRemoteNotifyReadsDispatchTerminal(t *testing.T) {
 	for _, phase := range []string{"before attach", "after attach", "closed with waiter"} {
-		for _, outcome := range []string{"empty success", "source failure", "query canceled", "query timeout"} {
+		for _, outcome := range []string{"empty success", "source failure", "stopped source failure", "query canceled", "query timeout"} {
 			t.Run(phase+"/"+outcome, func(t *testing.T) {
 				proc := testutil.NewProcess(t)
 				queryCtx := proc.Base.GetContextBase().BuildQueryCtx(context.Background())
@@ -56,7 +58,7 @@ func TestRemoteNotifyReadsDispatchTerminal(t *testing.T) {
 				require.NoError(t, err)
 				t.Cleanup(registration.Cleanup)
 				var sourceErr error
-				if outcome == "source failure" {
+				if outcome == "source failure" || outcome == "stopped source failure" {
 					sourceErr = moerr.NewInternalErrorNoCtx("build failed")
 				}
 				messageCtx := context.Background()
@@ -82,7 +84,12 @@ func TestRemoteNotifyReadsDispatchTerminal(t *testing.T) {
 					}
 					return context.Background()
 				}).AnyTimes()
-				receiver := &messageReceiverOnServer{messageCtx: messageCtx, connectionCtx: context.Background(), messageId: 7, messageTyp: pb.Method_PrepareDoneNotifyMessage, messageUuid: uid, clientSession: session, colexecServer: server}
+				receiver := &messageReceiverOnServer{messageCtx: messageCtx, connectionCtx: context.Background(), messageId: 7, messageTyp: pb.Method_PrepareDoneNotifyMessage, messageUuid: uid, clientSession: session, colexecServer: server, streamLifecycle: &pipelineStreamLifecycle{batchFlow: newPipelineBatchFlow(2, 1024)}}
+				if outcome == "stopped source failure" {
+					flow := newPipelineBatchFlow(2, 1024)
+					flow.stop(process.ErrPipelineStopped)
+					receiver.streamLifecycle = &pipelineStreamLifecycle{batchFlow: flow}
+				}
 				finish := func() {
 					proc.Cancel(sourceErr) // Cleanup cancels even on successful termination.
 					d.Reset(proc, sourceErr != nil, sourceErr)
@@ -116,7 +123,7 @@ func TestRemoteNotifyReadsDispatchTerminal(t *testing.T) {
 				switch outcome {
 				case "empty success":
 					require.NoError(t, got)
-				case "source failure":
+				case "source failure", "stopped source failure":
 					require.ErrorIs(t, got, sourceErr)
 				case "query canceled":
 					require.ErrorIs(t, got, context.Canceled)
@@ -328,4 +335,146 @@ func TestRemoteNotifyCancellationUsesRegistrationGeneration(t *testing.T) {
 			server.RemoveRelatedPipeline(session, receiver.messageId)
 		})
 	}
+}
+
+// StopSending must wake a notify whose producer never registered. Use the real
+// handler and a durable-block barrier, rather than a timing-dependent sleep.
+func TestRemoteNotifyStopsBeforeRegistration(t *testing.T) {
+	for _, outcome := range []string{"stop before wait", "stop during wait", "reuse disabled/stop before wait", "reuse disabled/stop during wait", "reuse disabled/published failure", "reuse disabled/query canceled", "reuse disabled/connection closed", "nil contexts", "published failure", "source abort", "abort stop sentinel", "query canceled", "connection closed"} {
+		t.Run(outcome, func(t *testing.T) {
+			server := colexec.NewServer("")
+			synctest.Test(t, func(t *testing.T) {
+				reuseDisabled := strings.HasPrefix(outcome, "reuse disabled/")
+				outcome = strings.TrimPrefix(outcome, "reuse disabled/")
+				messageCtx, cancelMessage := context.WithCancelCause(context.Background())
+				defer cancelMessage(context.Canceled)
+				connectionCtx, cancelConnection := context.WithCancel(context.Background())
+				defer cancelConnection()
+				flow := newPipelineBatchFlow(2, 1024)
+				uid := uuid.Must(uuid.NewV7())
+				receiver := &messageReceiverOnServer{messageTyp: pb.Method_PrepareDoneNotifyMessage, messageUuid: uid, messageCtx: messageCtx, connectionCtx: connectionCtx, colexecServer: server, streamLifecycle: &pipelineStreamLifecycle{batchFlow: flow}}
+				if reuseDisabled {
+					receiver.streamLifecycle = nil
+					defer server.RemoveRelatedPipeline(receiver.clientSession, receiver.messageId)
+				}
+				stop := func() {
+					if receiver.streamLifecycle == nil {
+						require.NoError(t, handlePipelineMessage(&messageReceiverOnServer{
+							messageTyp: pb.Method_StopSending, messageId: receiver.messageId,
+							clientSession: receiver.clientSession, colexecServer: server,
+						}))
+					} else {
+						flow.stop(process.ErrPipelineStopped)
+					}
+				}
+				beforeWait := outcome == "stop before wait"
+				if outcome == "nil contexts" {
+					receiver.messageCtx, receiver.connectionCtx = nil, nil
+				}
+				if beforeWait {
+					stop()
+				}
+				done := make(chan error, 1)
+				go func() { done <- handlePipelineMessage(receiver) }()
+				synctest.Wait()
+				sourceErr := moerr.NewInternalErrorNoCtx("unattached notify source abort")
+				if !beforeWait {
+					select {
+					case <-done:
+						t.Fatal("notify returned before its stop or failure")
+					default:
+					}
+					switch outcome {
+					case "published failure":
+						// A credit wake is not publication or a stop. Keep the
+						// waiter across it so later Finished evidence survives.
+						seq, err := flow.reserve(messageCtx, connectionCtx, 10)
+						require.NoError(t, err)
+						flow.rollback(seq)
+						synctest.Wait()
+						terminal := colexec.NewRemoteReceiverTerminal(nil)
+						terminal.Finish(sourceErr)
+						ch := make(process.RemotePipelineInformationChannel, 1)
+						require.NoError(t, server.PutProcIntoUuidMapWithTerminal(uid, &process.Process{}, ch, terminal))
+						server.CloseRemoteReceivers([]uuid.UUID{uid}, ch)
+						stop()
+					case "source abort":
+						flow.abort(sourceErr)
+					case "abort stop sentinel":
+						flow.abort(process.ErrPipelineStopped)
+					case "query canceled":
+						cancelMessage(sourceErr)
+						flow.stop(process.ErrPipelineStopped)
+					case "connection closed":
+						cancelConnection()
+						flow.stop(process.ErrPipelineStopped)
+					default:
+						stop()
+					}
+					synctest.Wait()
+				}
+				err := <-done
+				switch outcome {
+				case "source abort", "query canceled", "published failure":
+					require.ErrorIs(t, err, sourceErr)
+				case "abort stop sentinel":
+					require.ErrorIs(t, err, process.ErrPipelineStopped)
+					require.True(t, process.IsPipelineFailure(err))
+				case "connection closed":
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrStreamClosed))
+				default:
+					require.NoError(t, err)
+				}
+				// Retiring this attempt must not consume or tombstone a later producer.
+				proc := &process.Process{}
+				ch := make(process.RemotePipelineInformationChannel, 1)
+				require.NoError(t, server.PutProcIntoUuidMapWithTerminal(uid, proc, ch, colexec.NewRemoteReceiverTerminal(nil)))
+				p, _, state, waiter, _ := server.AttachProcByUuidOrWait(uid)
+				waiter.Close()
+				require.Equal(t, colexec.RemoteReceiverAttachedNow, state)
+				require.Same(t, proc, p)
+				server.RemoveUuidsOwned([]uuid.UUID{uid}, ch)
+			})
+		})
+	}
+}
+
+func TestRemoteNotifyDisabledReuseHandoffPreservesFailure(t *testing.T) {
+	server := colexec.NewServer("")
+	synctest.Test(t, func(t *testing.T) {
+		sourceCtx, cancelSource := context.WithCancelCause(context.Background())
+		defer cancelSource(context.Canceled)
+		siblingCtx, cancelSibling := context.WithCancelCause(context.Background())
+		defer cancelSibling(context.Canceled)
+		server.RecordPipelineCancellation(nil, 8, cancelSibling)
+		defer server.RemoveRelatedPipeline(nil, 7)
+		defer server.RemoveRelatedPipeline(nil, 8)
+		uid := uuid.Must(uuid.NewV7())
+		terminal := colexec.NewRemoteReceiverTerminal(nil)
+		ch := make(process.RemotePipelineInformationChannel, 1)
+		require.NoError(t, server.PutProcIntoUuidMapWithTerminal(uid, &process.Process{Ctx: sourceCtx}, ch, terminal))
+		defer server.RemoveUuidsOwned([]uuid.UUID{uid}, ch)
+		receiver := &messageReceiverOnServer{messageTyp: pb.Method_PrepareDoneNotifyMessage, messageId: 7, messageUuid: uid, messageCtx: context.Background(), connectionCtx: context.Background(), colexecServer: server}
+		done := make(chan error, 1)
+		go func() { done <- handlePipelineMessage(receiver) }()
+		synctest.Wait()
+		attached := <-ch
+		require.NoError(t, handlePipelineMessage(&messageReceiverOnServer{messageTyp: pb.Method_StopSending, messageId: 7, colexecServer: server}))
+		require.NotNil(t, attached.ReserveBatch)
+		seq, err := attached.ReserveBatch(sourceCtx, 10)
+		require.Zero(t, seq)
+		require.ErrorIs(t, err, process.ErrPipelineStopped)
+		require.True(t, attached.ReceiverStopped())
+		require.Zero(t, attached.BatchCredits)
+		require.Zero(t, attached.ByteCredits)
+		require.Nil(t, attached.RollbackBatch)
+		require.NoError(t, sourceCtx.Err(), "the shared producer remains live")
+		require.NoError(t, siblingCtx.Err(), "another stream remains live")
+		// Retiring this subscription must not turn the producer's actual failure
+		// into successful completion of the remote notification.
+		sourceErr := moerr.NewInternalErrorNoCtx("producer failed after receiver stop")
+		terminal.Finish(sourceErr)
+		synctest.Wait()
+		require.ErrorIs(t, <-done, sourceErr)
+	})
 }

@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -81,16 +82,7 @@ type DataStreamScan = plan.DataStreamScan
 type ForeignScan = plan.ForeignScan
 type KafkaScan = plan.KafkaScan
 
-const ViewSnapshotKeySuffix = "@ts="
 const viewDependencyKeyPrefix = "\x00mo_view_dependency\x00"
-
-// FormatViewKeyWithSnapshot appends snapshot information to a view key for privilege checks.
-func FormatViewKeyWithSnapshot(viewKey string, snapshot *Snapshot) string {
-	if !IsSnapshotValid(snapshot) || snapshot.TS == nil {
-		return viewKey
-	}
-	return fmt.Sprintf("%s%s%d", viewKey, ViewSnapshotKeySuffix, snapshot.TS.PhysicalTime)
-}
 
 // FormatViewDependencyKey preserves database and view identifiers separately,
 // plus the complete optional table-level snapshot used to resolve the view.
@@ -343,6 +335,14 @@ type UserVariableTypeResolver interface {
 	ResolveVariableType(varName string, isSystemVar, isGlobalVar bool) (Type, error)
 }
 
+// UserVariableStringDomainResolver exposes the assigned value's domain override
+// at binding time. A variable expression captures that domain in its VarRef,
+// independently of its static Type. It does not rewrite the session value or
+// EXECUTE USING parameters.
+type UserVariableStringDomainResolver interface {
+	ResolveVariableStringDomain(varName string, isSystemVar, isGlobalVar bool) (types.RuntimeStringDomain, error)
+}
+
 type Optimizer interface {
 	Optimize(stmt tree.Statement) (*Query, error)
 	CurrentContext() CompilerContext
@@ -374,6 +374,7 @@ type ViewData struct {
 }
 
 type QueryBuilder struct {
+	preparedBindingProof *bool
 	// Deep existential regions are owned by a SQL block, never by a partially
 	// constructed node. The registry stays nil on the ordinary flattening path.
 	nextExistentialBlock    uint64
@@ -408,7 +409,11 @@ type QueryBuilder struct {
 	// detached CTE contexts cannot lose the private system-function owner.
 	persistedViewTarget string
 
-	ctxByNode               []*BindContext
+	ctxByNode []*BindContext
+	// Synthetic scalar reaggregations preserve earlier scalar outputs as
+	// grouping keys. Each alias keeps its original column identity through
+	// final column pruning without changing the executable plan format.
+	scalarReaggAliases      map[int32][]scalarReaggAlias
 	headingProvenanceByNode map[int32]headingProvenanceMap
 	windowValidationScans   []*plan.Node
 	nameByColRef            map[[2]int32]string
@@ -471,10 +476,17 @@ type QueryBuilder struct {
 
 	tag2Table  map[int32]*TableDef
 	tag2NodeID map[int32]int32
+	// syntheticNDVCols is an explicit allowlist for planner-generated column
+	// bindings whose Expr.Ndv was copied from a real source expression. Unknown
+	// synthetic bindings must not make arbitrary carried estimates authoritative.
+	syntheticNDVCols map[[2]int32]struct{}
 
 	nextBindTag      int32
 	nextMsgTag       int32
 	nextSQLUdfCallID uint64
+	// Negative AuxIds identify memoized expression sources across every bind
+	// context that can contribute expressions to this query.
+	nextVolatileExprMemoID int32
 
 	isPrepareStatement     bool
 	mysqlCompatible        bool
@@ -484,6 +496,7 @@ type QueryBuilder struct {
 	// window, PREPARE) reads the same decision.
 	boolSumAvgCompat      bool
 	noUnsignedSubtraction bool
+	divPrecisionIncrement int32
 	isForUpdate           bool // if it's a query plan for update
 	isRestore             bool
 	isRestoreByTs         bool
@@ -536,6 +549,10 @@ type QueryBuilder struct {
 	// common input can be shared after CTE reuse has established any nested
 	// producer boundaries.
 	groupingSetCandidates []groupingSetCandidate
+	// splitGroupingSetCoarseAggs marks the large coarser half of a direct
+	// ROLLUP split. Keep its partial aggregation local: shuffling a key that
+	// the coarser sets roll up creates a hot owner for those sets.
+	splitGroupingSetCoarseAggs map[*plan.Node]struct{}
 	// sharedMaterializationMemoryBytes and sharedMaterializationSpillBytes are
 	// the conservative cumulative reservations made by planner-introduced CTE
 	// and grouping-set sources. They prevent individually valid rewrites from
@@ -949,7 +966,6 @@ type BindContext struct {
 	projectByExpr          map[string]int32
 	timeByAst              map[string]int32
 	whereFilters           []*plan.Expr
-	volatileExprMemoID     int32
 	flattenedVolatileExprs map[int32]*plan.Expr
 	// gapFillWhereFilters preserves the complete bound WHERE tree before
 	// subqueries are flattened into joins. Bounded GAPFILL inference must see
@@ -970,11 +986,6 @@ type BindContext struct {
 	numericTableProjectionTypes     map[string][]Type
 	numericTableProjectionAmbiguous map[string][]bool
 	numericCteByName                map[string]*tree.CTE
-	// assignmentIgnore marks a prepared UPDATE IGNORE projection. A direct
-	// parameter must stay TEXT until the writer's cast_ignore; otherwise the
-	// numeric projection context can materialize an ordinary strict cast during
-	// PREPARE and reject malformed values before IGNORE can adjust them.
-	assignmentIgnore bool
 
 	timeAsts []tree.Expr
 
@@ -1020,10 +1031,8 @@ type BindContext struct {
 	views []string
 	//view in binding or already bound
 	boundViews map[[2]string]*tree.CreateView
-	// viewChain tracks view lineage for the current bind context.
-	viewChain []string
-	// directView tracks the outermost view referenced by the user.
-	directView string
+	// viewPath contains immutable per-view binding contexts, in authorization order.
+	viewPath []*plan.ViewStep
 
 	// lower is sys var lower_case_table_names
 	lower int64
@@ -1107,9 +1116,13 @@ type baseBinder struct {
 	ctx       *BindContext
 	impl      Binder
 	boundCols []boundColumn
+	// Catalog FORMAT must choose its legacy string contract before binding
+	// precision: some historical source types (e.g. DATE) cannot cast to INT64.
+	persistedFormatCompatibility bool
 	// Integer consumers own the source domain of their operands. An enclosing
 	// default/assignment target must not pre-convert their numeric literals.
 	integerArgumentSourceContext     bool
+	preparedFieldArgumentContext     bool
 	numericParamType                 *Type
 	numericSubqueryTarget            *Type
 	numericFunctionTarget            bool

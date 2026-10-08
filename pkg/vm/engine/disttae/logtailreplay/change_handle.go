@@ -3205,7 +3205,7 @@ func getObjectsFromCheckpointEntries(
 	dataCNObjMap := make(map[string]*objectio.ObjectEntry)
 	tombstoneAobjMap := make(map[string]*objectio.ObjectEntry)
 	tombstoneCNObjMap := make(map[string]*objectio.ObjectEntry)
-	readers := make([]checkpointEntryReader, 0)
+	readers := make([]checkpointEntryReader, 0, len(checkpoint))
 	for _, entry := range checkpoint {
 		reader := newCKPReaderWithTableID(entry.GetVersion(), entry.GetLocation(), tid, mp, fs)
 		readers = append(readers, reader)

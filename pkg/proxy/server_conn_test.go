@@ -347,7 +347,11 @@ func testHandle(h *testHandler) {
 	reader := bufio.NewReader(h.conn.RawConn())
 	_ = extraInfo.Decode(reader)
 	// server writes init handshake.
-	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeHandshakePayload())
+	handshake, err := h.mysqlProto.MakeHandshakePayload()
+	if err != nil {
+		return
+	}
+	_ = h.mysqlProto.WritePacket(handshake)
 	// server reads auth information from client.
 	_, _ = h.conn.Read(goetty.ReadOptions{})
 	// server writes ok packet.
@@ -792,12 +796,13 @@ func TestServerConnRejectsOversizedBackendPacket(t *testing.T) {
 
 	peerDone := make(chan error, 1)
 	go func() {
-		header := []byte{
-			byte((proxyBackendPacketLimit + 1) & 0xff),
-			byte(((proxyBackendPacketLimit + 1) >> 8) & 0xff),
-			byte(((proxyBackendPacketLimit + 1) >> 16) & 0xff),
+		header := make([]byte, 0, proxyIOSessionBufferSize)
+		header = append(header,
+			byte((proxyBackendPacketLimit+1)&0xff),
+			byte(((proxyBackendPacketLimit+1)>>8)&0xff),
+			byte(((proxyBackendPacketLimit+1)>>16)&0xff),
 			0,
-		}
+		)
 		packetPrefix := append(header, make([]byte, proxyIOSessionBufferSize-len(header))...)
 		if _, err := remote.Write(packetPrefix); err != nil {
 			peerDone <- err

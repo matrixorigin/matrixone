@@ -137,7 +137,7 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 	retSchema := make([]types.Type, len(tblArg.Rets))
 	for i := range tblArg.Rets {
 		typ := tblArg.Rets[i].Typ
-		retSchema[i] = types.NewWithCharset(types.T(typ.Id), typ.Width, typ.Scale, uint8(typ.Charset))
+		retSchema[i] = types.MustTypeFromPlan(typ)
 	}
 	tblArg.ctr.retSchema = retSchema
 
@@ -176,6 +176,8 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 		tblArg.ctr.state, err = checkConstraintsPrepare(proc, tblArg)
 	case "mo_current_roles":
 		tblArg.ctr.state, err = currentRolesPrepare(proc, tblArg)
+	case "mo_view_columns", "mo_subscription_view_columns":
+		tblArg.ctr.state, err = viewColumnsPrepare(proc, tblArg)
 	case subscriptionTablesFunctionName, subscriptionColumnsFunctionName:
 		tblArg.ctr.state, err = subscriptionMetadataPrepare(proc, tblArg)
 	case "fulltext_index_scan":

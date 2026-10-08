@@ -129,7 +129,9 @@ func decimal256BatchArith(parameters []*vector.Vector, result vector.FunctionRes
 		}
 		magnitude := value
 		d256Abs(&magnitude)
-		if !magnitude.Less(limit) {
+		// Abs(MinInt256) is the unsigned magnitude 2^255. It retains
+		// the sign bit and exceeds every constrained precision limit.
+		if magnitude.Sign() || !magnitude.Less(limit) {
 			return moerr.NewOutOfRangef(proc.Ctx, "decimal256",
 				"value '%s' exceeds DECIMAL(%d,%d)",
 				value.Format(resultType.Scale), resultType.Width, resultType.Scale)
@@ -584,13 +586,16 @@ func divFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 		}, selectList)
 	case types.T_decimal64:
 		shouldError := checkDivisionByZeroBehavior(proc, selectList)
-		return decimalBatchArith[types.Decimal64, types.Decimal128](parameters, result, proc, length, d64DivKernel(shouldError), selectList)
+		resultScale := result.GetResultVector().GetType().Scale
+		return decimalBatchArith[types.Decimal64, types.Decimal128](parameters, result, proc, length, d64DivKernelAtScale(shouldError, resultScale), selectList)
 	case types.T_decimal128:
 		shouldError := checkDivisionByZeroBehavior(proc, selectList)
-		return decimalBatchArith[types.Decimal128, types.Decimal128](parameters, result, proc, length, d128DivKernel(shouldError), selectList)
+		resultScale := result.GetResultVector().GetType().Scale
+		return decimalBatchArith[types.Decimal128, types.Decimal128](parameters, result, proc, length, d128DivKernelAtScale(shouldError, resultScale), selectList)
 	case types.T_decimal256:
 		shouldError := checkDivisionByZeroBehavior(proc, selectList)
-		return decimalBatchArith[types.Decimal256, types.Decimal256](parameters, result, proc, length, d256DivKernel(shouldError), selectList)
+		resultScale := result.GetResultVector().GetType().Scale
+		return decimal256BatchArith(parameters, result, proc, length, d256DivKernelAtScale(shouldError, resultScale), selectList)
 	case types.T_array_float32:
 		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, divFnArray[float32], selectList)
 	case types.T_array_float64:

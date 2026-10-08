@@ -251,6 +251,7 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 	if err != nil {
 		return nil, err
 	}
+	defer res.Close()
 	if len(res.Batches) != 1 || res.Batches[0].Vecs[0].Length() != 1 {
 		logutil.Error(
 			"FIND_TABLE deleteTableError",
@@ -272,6 +273,7 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 	if err != nil {
 		return nil, err
 	}
+	defer res.Close()
 	for _, b := range res.Batches {
 		for i, v := 0, b.Vecs[0]; i < v.Length(); i++ {
 			rowids = append(rowids, vector.GetFixedAtNoTypeCheck[types.Rowid](v, i))
@@ -708,8 +710,13 @@ func (db *txnDatabase) getTableItem(
 		// A session-owned definition may have committed after this data snapshot.
 		// Only the schema is made visible; txn row/object timestamps stay unchanged.
 		if defines.IsTempTableName(name) {
-			latest := cache.TableItem{Name: name, DatabaseId: db.databaseId, AccountId: accountID, Ts: types.MaxTs().ToTimestamp()}
-			if c.GetTable(&latest) && latest.Kind == catalog.SystemTemporaryTable {
+			latest := cache.TableItem{
+				Name: name, DatabaseId: db.databaseId, DatabaseName: db.databaseName,
+				AccountId: accountID, Ts: types.MaxTs().ToTimestamp(),
+			}
+			if c.GetTable(&latest) && isSessionTemporaryCatalogItem(
+				c, &latest, accountID, db.databaseId, db.databaseName,
+			) {
 				return &latest, nil
 			}
 		}
