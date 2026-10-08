@@ -39,6 +39,8 @@ jobs:
     continue-on-error: true
     env:
       MO_ICEBERG_REPORT_DIR: test/iceberg/reports/iceberg-e2e-local-${{ github.run_id }}
+      # Reuse the checksum-pinned MinIO builds from Compose BVT in CI.
+      COMPOSE_FILE: docker-compose.yml:docker-compose.ci.yml
     steps:
       - uses: actions/checkout@v4
 
