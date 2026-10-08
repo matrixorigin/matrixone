@@ -2059,6 +2059,7 @@ func (d *dynamicCtx) betaTask(
 
 		bulkWait sync.WaitGroup
 	)
+	defer bulkWait.Wait()
 
 	for {
 		select {
@@ -2576,9 +2577,18 @@ func (d *dynamicCtx) gamaTask(
 	eng engine.Engine,
 ) {
 
-	var (
-		de = eng.(*Engine)
-	)
+	de := eng.(*Engine)
+	var jobs sync.WaitGroup
+	defer jobs.Wait()
+	submit := func(fn func()) {
+		jobs.Add(1)
+		if err := d.gama.taskPool.Submit(func() {
+			defer jobs.Done()
+			fn()
+		}); err != nil {
+			jobs.Done()
+		}
+	}
 
 	d.Lock()
 	gamaDur := d.conf.CorrectionDuration
@@ -2607,38 +2617,38 @@ func (d *dynamicCtx) gamaTask(
 			return
 
 		case <-tickerA.C:
-			d.gama.taskPool.Submit(func() {
+			submit(func() {
 				d.gamaUpdateForgotten(ctx, service, de, gamaLimit)
 			})
 			tickerA.Reset(randDuration(baseFactory))
 
 		case <-d.updateForgottenQueue:
-			d.gama.taskPool.Submit(func() {
+			submit(func() {
 				d.gamaUpdateForgotten(ctx, service, de, gamaLimit)
 			})
 			tickerA.Reset(randDuration(baseFactory))
 
 		case <-tickerB.C:
-			d.gama.taskPool.Submit(func() {
+			submit(func() {
 				d.gamaCleanDeletes(ctx, de)
 			})
 			tickerB.Reset(randDuration(baseFactory))
 
 		case <-d.cleanDeletesQueue:
 			// emergence, do clean now
-			d.gama.taskPool.Submit(func() {
+			submit(func() {
 				d.gamaCleanDeletes(ctx, de)
 			})
 			tickerB.Reset(randDuration(baseFactory))
 
 		case <-tickerC.C:
-			d.gama.taskPool.Submit(func() {
+			submit(func() {
 				d.gamaInsertNewTables(ctx, service, de)
 			})
 			tickerC.Reset(randDuration(baseFactory))
 
 		case <-d.insertNewTableQueue:
-			d.gama.taskPool.Submit(func() {
+			submit(func() {
 				d.gamaInsertNewTables(ctx, service, de)
 			})
 			tickerC.Reset(randDuration(baseFactory))

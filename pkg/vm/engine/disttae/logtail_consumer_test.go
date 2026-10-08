@@ -23,8 +23,10 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
+	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -39,15 +41,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	log "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service"
@@ -258,18 +263,22 @@ func TestGetLogTailServiceAddr(t *testing.T) {
 	t.Run("ok1", func(t *testing.T) {
 		clusterClient := &testHAKeeperClient{}
 		moc := clusterservice.NewMOCluster("", clusterClient, time.Hour)
+		t.Cleanup(moc.Close)
 		runtime.ServiceRuntime("").SetGlobalVariables(
 			runtime.ClusterService,
 			moc,
 		)
 		clusterClient.addTN(log.NormalState, "tn1", "a")
 		moc.ForceRefresh(true)
-		assert.Equal(t, "a", e.getLogTailServiceAddr())
+		addr, err := e.getLogTailServiceAddr(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, "a", addr)
 	})
 
 	t.Run("ok2", func(t *testing.T) {
 		clusterClient := &testHAKeeperClient{}
 		moc := clusterservice.NewMOCluster("", clusterClient, time.Hour)
+		t.Cleanup(moc.Close)
 		runtime.ServiceRuntime("").SetGlobalVariables(
 			runtime.ClusterService,
 			moc,
@@ -279,7 +288,9 @@ func TestGetLogTailServiceAddr(t *testing.T) {
 			clusterClient.addTN(log.NormalState, "tn1", "a")
 			moc.ForceRefresh(true)
 		}()
-		assert.Equal(t, "a", e.getLogTailServiceAddr())
+		addr, err := e.getLogTailServiceAddr(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, "a", addr)
 	})
 
 	t.Run("fail, empty addr", func(t *testing.T) {
@@ -290,6 +301,7 @@ func TestGetLogTailServiceAddr(t *testing.T) {
 		}()
 		clusterClient := &testHAKeeperClient{}
 		moc := clusterservice.NewMOCluster("", clusterClient, time.Hour)
+		t.Cleanup(moc.Close)
 		runtime.ServiceRuntime("").SetGlobalVariables(
 			runtime.ClusterService,
 			moc,
@@ -297,7 +309,7 @@ func TestGetLogTailServiceAddr(t *testing.T) {
 		clusterClient.addTN(log.NormalState, "tn1", "")
 		moc.ForceRefresh(true)
 		assert.Panics(t, func() {
-			e.getLogTailServiceAddr()
+			e.getLogTailServiceAddr(context.Background())
 		})
 	})
 
@@ -309,12 +321,13 @@ func TestGetLogTailServiceAddr(t *testing.T) {
 		}()
 		clusterClient := &testHAKeeperClient{}
 		moc := clusterservice.NewMOCluster("", clusterClient, time.Hour)
+		t.Cleanup(moc.Close)
 		runtime.ServiceRuntime("").SetGlobalVariables(
 			runtime.ClusterService,
 			moc,
 		)
 		assert.Panics(t, func() {
-			e.getLogTailServiceAddr()
+			e.getLogTailServiceAddr(context.Background())
 		})
 	})
 }
@@ -339,7 +352,7 @@ func TestWaitServerReady(t *testing.T) {
 		defer func() {
 			assert.NoError(t, l.Close())
 		}()
-		waitServerReady(remoteAddr)
+		waitServerReady(context.Background(), remoteAddr)
 	})
 
 	t.Run("retry", func(t *testing.T) {
@@ -357,7 +370,7 @@ func TestWaitServerReady(t *testing.T) {
 			}()
 			<-c
 		}()
-		waitServerReady(remoteAddr)
+		waitServerReady(context.Background(), remoteAddr)
 		c <- struct{}{}
 	})
 
@@ -367,7 +380,7 @@ func TestWaitServerReady(t *testing.T) {
 		remoteAddr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
 		assert.NoError(t, os.RemoveAll(remoteAddr))
 		assert.Panics(t, func() {
-			waitServerReady(remoteAddr)
+			waitServerReady(context.Background(), remoteAddr)
 		})
 	})
 }
@@ -2017,9 +2030,12 @@ func (s *closeRaceStream) Close(bool) error {
 func TestPushClientCloseRacingInitDoesNotPublishTransport(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
 	stream := newCloseRaceStream()
 	c := &PushClient{}
 	ownerCtx := c.start(context.Background())
+	t.Cleanup(func() { unblock(); _ = c.Close() })
 	c.LogtailRPCClientFactory = func(
 		context.Context,
 		string,
@@ -2039,8 +2055,13 @@ func TestPushClientCloseRacingInitDoesNotPublishTransport(t *testing.T) {
 
 	closeDone := make(chan error, 1)
 	go func() { closeDone <- c.Close() }()
-	require.Eventually(t, c.closed.Load, time.Second, time.Millisecond)
-	close(release)
+	<-ownerCtx.Done()
+	select {
+	case <-closeDone:
+		t.Fatal("close returned before admitted initialization finished")
+	default:
+	}
+	unblock()
 
 	require.ErrorIs(t, <-initDone, context.Canceled)
 	require.NoError(t, <-closeDone)
@@ -3529,4 +3550,175 @@ func TestWaitCanServeTableSnapshotCancellation(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	require.False(t, ready)
 	require.Nil(t, state, "cancellation cannot admit a stale pre-apply snapshot")
+}
+
+// Closing the owner must release readiness waits even when their producers
+// have not published a timestamp or service inventory.
+func TestPushClientCloseCancelsTimestampWait(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := &PushClient{}
+		ctx := c.start(context.Background())
+		result := make(chan error, 1)
+		require.True(t, c.runOwned(func() { result <- c.waitTimestamp(ctx) }))
+		synctest.Wait()
+		require.NoError(t, c.Close())
+		require.ErrorIs(t, <-result, context.Canceled)
+	})
+}
+
+func TestPushClientReadinessCancellation(t *testing.T) {
+	t.Run("missing cluster", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			e := &Engine{service: t.Name()}
+			result := make(chan error, 1)
+			go func() { _, err := e.getLogTailServiceAddr(ctx); result <- err }()
+			synctest.Wait()
+			cancel()
+			require.ErrorIs(t, <-result, context.Canceled)
+		})
+	})
+	t.Run("canceled startup", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		e := &Engine{service: t.Name()}
+		require.ErrorIs(t, e.InitLogTailPushModel(ctx, nil), context.Canceled)
+		require.Nil(t, e.pClient.subscriber)
+		require.NoError(t, e.pClient.Close())
+	})
+	t.Run("server", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		require.ErrorIs(t, waitServerReady(ctx, FakeLogtailServerAddress), context.Canceled)
+		require.NoError(t, waitServerReady(context.Background(), FakeLogtailServerAddress))
+	})
+}
+
+func TestPushClientCloseDuringConsumerPublication(t *testing.T) {
+	c := &PushClient{receiver: make([]*routineController, consumerNumber)}
+	ctx := c.start(context.Background())
+	publish := make(chan struct{})
+	require.True(t, c.runOwned(func() {
+		<-publish
+		c.startConsumers(ctx, &Engine{})
+	}))
+	close(publish)
+	require.NoError(t, c.Close())
+	for _, receiver := range c.receiver {
+		require.NotNil(t, receiver)
+		select {
+		case <-receiver.done:
+		default:
+			t.Fatal("consumer survived terminal close")
+		}
+	}
+}
+
+func TestPushClientInitAfterCloseRejectsTransport(t *testing.T) {
+	c := &PushClient{}
+	ctx := c.start(context.Background())
+	require.NoError(t, c.Close())
+	c.LogtailRPCClientFactory = func(context.Context, string, string, morpc.RPCClient) (morpc.RPCClient, morpc.Stream, error) {
+		t.Fatal("closed owner admitted transport initialization")
+		return nil, nil, nil
+	}
+	require.ErrorIs(t, c.init(ctx, "addr", nil, &Engine{}), context.Canceled)
+	require.Nil(t, c.subscriber)
+}
+
+func TestPushClientTimestampReadiness(t *testing.T) {
+	t.Run("published", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			c := &PushClient{}
+			c.receivedLogTailTime.initLogTailTimestamp(nil)
+			for i := range c.receivedLogTailTime.tList {
+				c.receivedLogTailTime.tList[i].Store(timestamp.Timestamp{PhysicalTime: 1})
+			}
+			require.NoError(t, c.waitTimestamp(context.Background()))
+		})
+	})
+	t.Run("live owner timeout", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			c := &PushClient{}
+			require.PanicsWithValue(t, "cannot receive timestamp", func() {
+				_ = c.waitTimestamp(context.Background())
+			})
+		})
+	})
+}
+
+func TestWaitServerReadyDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	require.ErrorIs(t, waitServerReady(ctx, t.TempDir()+"/missing.sock"), context.DeadlineExceeded)
+}
+
+// Leave the built-in cluster's first refresh pending until its owner closes.
+// This reaches the readiness wait below the address poll, not only its ticker.
+type pendingLogtailClusterClient struct {
+	*testHAKeeperClient
+	started chan struct{}
+}
+
+func (c *pendingLogtailClusterClient) GetClusterDetails(ctx context.Context) (log.ClusterDetails, error) {
+	close(c.started)
+	<-ctx.Done()
+	return log.ClusterDetails{}, ctx.Err()
+}
+
+func TestLogtailInventoryWaitCancellation(t *testing.T) {
+	for _, initialRefresh := range []bool{false, true} {
+		t.Run(fmt.Sprintf("initial refresh pending=%v", initialRefresh), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				sid := t.Name()
+				rt := runtime.NewRuntime(metadata.ServiceType_CN, sid, logutil.GetGlobalLogger())
+				runtime.SetupServiceBasedRuntime(sid, rt)
+				client := &pendingLogtailClusterClient{testHAKeeperClient: &testHAKeeperClient{}, started: make(chan struct{})}
+				var opts []clusterservice.Option
+				if !initialRefresh {
+					opts = append(opts, clusterservice.WithDisableRefresh())
+				}
+				cluster := clusterservice.NewMOCluster(sid, client, time.Hour, opts...)
+				t.Cleanup(cluster.Close)
+				rt.SetGlobalVariables(runtime.ClusterService, cluster)
+				if initialRefresh {
+					<-client.started
+				}
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				result := make(chan error, 1)
+				go func() { _, err := (&Engine{service: sid}).getLogTailServiceAddr(ctx); result <- err }()
+				synctest.Wait()
+				cancel()
+				require.ErrorIs(t, <-result, context.Canceled)
+			})
+		})
+	}
+}
+
+func TestLogtailStreamFailurePreservesClientOwnership(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	t.Run("acquired client", func(t *testing.T) {
+		gauge := v2.NewRPCClientActiveGaugeByName("logtail-client")
+		before := promtestutil.ToFloat64(gauge)
+		rpcClient, stream, err := DefaultNewRpcStreamToTnLogTailService(ctx, "", "unused", nil)
+		require.ErrorIs(t, err, context.Canceled)
+		require.Nil(t, rpcClient)
+		require.Nil(t, stream)
+		require.Equal(t, before, promtestutil.ToFloat64(gauge), "failed creation retained an acquired RPC client")
+	})
+	t.Run("incoming client", func(t *testing.T) {
+		// Cancellation is checked before backend creation, so this control
+		// requires no backend or socket. Only its caller may close the client.
+		client, err := morpc.NewClient("logtail-unwind-control", nil)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, client.Close()) })
+		gauge := v2.NewRPCClientActiveGaugeByName("logtail-unwind-control")
+		before := promtestutil.ToFloat64(gauge)
+		_, _, err = DefaultNewRpcStreamToTnLogTailService(ctx, "", "unused", client)
+		require.ErrorIs(t, err, context.Canceled)
+		require.Equal(t, before, promtestutil.ToFloat64(gauge), "stream failure closed the caller's RPC client")
+	})
 }
