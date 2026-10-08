@@ -416,6 +416,42 @@ func TestNewIvfflatSqlWriterAsyncReloadPreservesIncludeColumns(t *testing.T) {
 	require.Contains(t, sql, "'news'")
 }
 
+func TestNewIvfflatSqlWriterAffineQuantizationUsesVectorBeforeInclude(t *testing.T) {
+	for _, quantization := range []string{"int8", "uint8"} {
+		for _, opType := range []string{"vector_l2_ops", "vector_l2sq_ops"} {
+			t.Run(quantization+"/"+opType, func(t *testing.T) {
+				tabledef := newTestIvfflatTableDef(
+					"pk", types.T_enum, "vec", types.T_array_float32, 3,
+					ivfflatIncludeColSpec{name: "rank", typ: types.T_int32},
+					ivfflatIncludeColSpec{name: "status", typ: types.T_enum},
+				)
+				tabledef.Cols[0].Typ.Enumvalues = "first,second"
+				tabledef.Cols[4].Typ.Enumvalues = "cold,hot"
+				for _, indexDef := range tabledef.Indexes {
+					indexDef.IndexAlgoParams = `{"included_columns":"rank,status","lists":"16","op_type":"` + opType + `","quantization":"` + quantization + `"}`
+				}
+				writer, err := NewIvfflatSqlWriter("ivfflat", newTestJobID(), newTestConsumerInfo(), tabledef, tabledef.Indexes)
+				require.NoError(t, err)
+				for _, write := range []func(context.Context, []any) error{writer.Insert, writer.Upsert} {
+					require.NoError(t, write(t.Context(), []any{types.Enum(1), []float32{1, 2, 3}, nil, int32(7), types.Enum(2)}))
+					require.NoError(t, write(t.Context(), []any{types.Enum(2), []float32{3, 2, 1}, nil, nil, nil}))
+					sqlBytes, err := writer.ToSql()
+					require.NoError(t, err)
+					sql := string(sqlBytes)
+					require.Contains(t, sql, "SERIAL_EXTRACT(src0, 0 as ENUM('first','second')), ")
+					require.Contains(t, sql, "), src2, SERIAL_EXTRACT(src3, 0 as ENUM('cold','hot')) FROM src")
+					require.Contains(t, sql, "cast(cast(src1")
+					require.NotContains(t, sql, "src2 *")
+					require.NotContains(t, sql, "src3 *")
+					stmt, err := mysql.ParseOne(t.Context(), sql, 1)
+					require.NoError(t, err)
+					stmt.Free()
+				}
+			})
+		}
+	}
+}
+
 func TestNewIvfflatSqlWriterDelete(t *testing.T) {
 	var ctx context.Context
 

@@ -777,7 +777,8 @@ func (w *IvfflatSqlWriter) toIvfflatUpsert(upsert bool) ([]byte, error) {
 
 	cols := strings.Join(coldefs, ", ")
 
-	// Entry projection. The last src column is the vector that becomes the entry.
+	// Entry projection. src0 is the primary key and src1 is the first indexed
+	// vector part; INCLUDE columns follow the vector and must remain unchanged.
 	// For int8 QUANTIZATION the entry must be scaled by the trained quantizer
 	// (q(x)=x*mul+add, mul=255/(max-min), add=-min*mul-128) just like the
 	// synchronous build (compile.go) and search; otherwise the implicit
@@ -787,7 +788,8 @@ func (w *IvfflatSqlWriter) toIvfflatUpsert(upsert bool) ([]byte, error) {
 	// (pure-async indexes that never trained bounds — search also uses identity
 	// there, so the two stay consistent). float16/bf16 narrow losslessly via the
 	// implicit cast, so only int8 needs this.
-	entryProj := projCols[len(projCols)-1]
+	const vectorPos = 1
+	entryProj := projCols[vectorPos]
 	if qt, ok := quantizer.ToVectorType(w.ivfparam.Quantization); ok && (qt == types.T_array_int8 || qt == types.T_array_uint8) {
 		metaTbl := sqlquote.QualifiedIdent(w.info.DBName, w.meta_tbl)
 		sub := func(k string) string {
@@ -798,12 +800,12 @@ func (w *IvfflatSqlWriter) toIvfflatUpsert(upsert bool) ([]byte, error) {
 		minS := sub(catalog.SystemSI_IVFFLAT_Metadata_QuantizeMin)
 		maxS := sub(catalog.SystemSI_IVFFLAT_Metadata_QuantizeMax)
 		if qt == types.T_array_uint8 {
-			entryProj = quantizer.Uint8EntrySQLFromBounds(cnames[len(cnames)-1], minS, maxS, w.partsType[0].Width)
+			entryProj = quantizer.Uint8EntrySQLFromBounds(cnames[vectorPos], minS, maxS, w.partsType[0].Width)
 		} else {
-			entryProj = quantizer.Int8EntrySQLFromBounds(cnames[len(cnames)-1], minS, maxS, w.partsType[0].Width)
+			entryProj = quantizer.Int8EntrySQLFromBounds(cnames[vectorPos], minS, maxS, w.partsType[0].Width)
 		}
 	}
-	projCols[len(projCols)-1] = entryProj
+	projCols[vectorPos] = entryProj
 	cnames_str := strings.Join(projCols, ", ")
 
 	if upsert {

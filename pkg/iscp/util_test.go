@@ -16,13 +16,16 @@ package iscp
 
 import (
 	"context"
+	"math"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -141,7 +144,7 @@ func mockUtilVector(t *testing.T, proc *process.Process) (*batch.Batch, []string
 		bat.Vecs[i] = vector.NewVec(types.New(types.T_timestamp, 8, 0))
 		v := 0
 		vector.AppendFixed[types.Timestamp](bat.Vecs[i], types.Timestamp(v), false, proc.Mp())
-		res[i] = "'0001-01-01 00:00:00'"
+		res[i] = "bit_cast(unhex('0000000000000000') AS TIMESTAMP)"
 		i += 1
 	}
 
@@ -213,6 +216,48 @@ func mockUtilVector(t *testing.T, proc *process.Process) (*batch.Batch, []string
 	bat.SetRowCount(1)
 	return bat, res
 }
+
+func TestConvertColIntoSQLSpecialValues(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name string
+		data any
+		typ  *types.Type
+		want string
+	}{
+		{name: "float nan", data: math.NaN(), typ: ptrType(types.T_float64.ToType()), want: "bit_cast(unhex('010000000000f87f') AS DOUBLE)"},
+		{name: "float plus infinity", data: math.Inf(1), typ: ptrType(types.T_float64.ToType()), want: "bit_cast(unhex('000000000000f07f') AS DOUBLE)"},
+		{name: "float minus infinity", data: float32(math.Inf(-1)), typ: ptrType(types.T_float32.ToType()), want: "bit_cast(unhex('000080ff') AS FLOAT)"},
+		{name: "bit quote byte", data: uint64(0x27), typ: ptrType(types.New(types.T_bit, 8, 0)), want: "x'27'"},
+		{name: "bit backslash byte", data: uint64(0x5c), typ: ptrType(types.New(types.T_bit, 8, 0)), want: "x'5c'"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := convertColIntoSql(ctx, tc.data, tc.typ, nil)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, string(got))
+			_, err = mysql.ParseOne(ctx, "SELECT "+string(got), 1)
+			require.NoError(t, err)
+		})
+	}
+
+	bj, err := bytejson.ParseFromString(`{"s":"O'Reilly\\path"}`)
+	require.NoError(t, err)
+	got, err := convertColIntoSql(ctx, bj, ptrType(types.T_json.ToType()), nil)
+	require.NoError(t, err)
+	require.Equal(t, `'{"s": "O\'Reilly\\\\path"}'`, string(got))
+	_, err = mysql.ParseOne(ctx, "SELECT "+string(got), 1)
+	require.NoError(t, err)
+
+	value, err := types.ParseTimestamp(time.UTC, "2026-01-02 03:04:05.123456", 6)
+	require.NoError(t, err)
+	got, err = convertColIntoSql(ctx, value.String2(time.UTC, 6), ptrType(types.New(types.T_timestamp, 0, 6)), nil)
+	require.NoError(t, err)
+	require.Equal(t, "bit_cast(unhex('80957af55d07e300') AS TIMESTAMP)", string(got))
+	_, err = mysql.ParseOne(ctx, "SELECT "+string(got), 1)
+	require.NoError(t, err)
+}
+
+func ptrType(t types.Type) *types.Type { return &t }
 
 func TestRowFromVector(t *testing.T) {
 	m := mpool.MustNewZero()
