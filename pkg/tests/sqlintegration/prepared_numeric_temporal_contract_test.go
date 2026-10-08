@@ -167,7 +167,7 @@ func TestPreparedNumericTemporalContracts(t *testing.T) {
 				t.Run(tc.name, func(t *testing.T) {
 					p, err := conn.PrepareContext(ctx, "select id from range_keys where "+tc.predicate+" order by id")
 					require.NoError(t, err)
-					defer p.Close()
+					defer func() { require.NoError(t, p.Close()) }()
 					if tc.name == "active warning" {
 						_, strictErr := readPreparedContractIDs(p.QueryContext(ctx, "1tail", int64(2)))
 						assertStrictNumericInputError(t, strictErr, "1tail")
@@ -555,7 +555,7 @@ func TestPreparedNumericTemporalContracts(t *testing.T) {
 			}
 			p, err := conn.PrepareContext(ctx, "select id from keys_t where id=? order by id")
 			require.NoError(t, err)
-			defer p.Close()
+			defer func() { require.NoError(t, p.Close()) }()
 			for _, v := range []any{"9007199254740993", target, nil, "9007199254740993E0", "9007199254740993" + strings.Repeat("0", 60) + "E-60", "0." + strings.Repeat("0", 60) + "9007199254740993E76", "9007199254740993"} {
 				want := []int64{target}
 				if v == nil {
