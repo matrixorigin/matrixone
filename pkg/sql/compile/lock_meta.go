@@ -78,7 +78,10 @@ func (l *LockMeta) appendMetaTables(objRes *plan.ObjectRef) {
 		// do not lock meta table for meta table
 	} else {
 		key := fmt.Sprintf("%s %s", objRes.SchemaName, objRes.ObjName)
-		l.metaTables[key] = struct{}{}
+		if _, exists := l.metaTables[key]; !exists {
+			l.metaTables[key] = struct{}{}
+			l.lockTableVec, l.lockDbVec = nil, nil
+		}
 	}
 }
 
@@ -93,24 +96,39 @@ func (l *LockMeta) doLock(e engine.Engine, proc *process.Process) error {
 		return err
 	}
 
-	tables := make([]string, 0, lockLen)
+	if err := l.initLockExe(e, proc); err != nil {
+		return err
+	}
+	if err := l.buildLockVectors(proc, accountId); err != nil {
+		return err
+	}
+
+	// A borrowed view, reused only after each synchronous lock call returns.
+	b := &batch.Batch{Vecs: make([]*vector.Vector, 1)}
+	b.SetVector(0, l.lockTableVec)
+	if err = l.lockMetaRows(e, proc, l.table_rel, b, accountId, l.table_table_id); err != nil {
+		return err
+	}
+	b.SetVector(0, l.lockDbVec)
+	return l.lockMetaRows(e, proc, l.database_rel, b, accountId, l.database_table_id)
+}
+
+func (l *LockMeta) buildLockVectors(proc *process.Process, accountId uint32) error {
+	if l.lockTableVec != nil && l.lockDbVec != nil {
+		return nil
+	}
+	l.lockTableVec, l.lockDbVec = nil, nil
+
+	tables := make([]string, 0, len(l.metaTables))
 	for table := range l.metaTables {
 		tables = append(tables, table)
 	}
 	sort.Strings(tables)
-
-	if err := l.initLockExe(e, proc); err != nil {
-		return err
-	}
-
 	if len(l.lockMetaVecs) == 0 {
-		accountIdVec := vector.NewVec(types.T_uint32.ToType())
-		dbName := vector.NewVec(types.T_varchar.ToType())
-		tableName := vector.NewVec(types.T_varchar.ToType())
 		l.lockMetaVecs = []*vector.Vector{
-			accountIdVec,
-			dbName,
-			tableName,
+			vector.NewVec(types.T_uint32.ToType()),
+			vector.NewVec(types.T_varchar.ToType()),
+			vector.NewVec(types.T_varchar.ToType()),
 		}
 	} else {
 		for _, vec := range l.lockMetaVecs {
@@ -119,84 +137,59 @@ func (l *LockMeta) doLock(e engine.Engine, proc *process.Process) error {
 	}
 
 	lockDbs := make(map[string]struct{})
-	lockVec := l.lockTableVec
-
-	bat := batch.NewWithSize(3)
-	if l.lockTableVec == nil {
-		for _, table := range tables {
-			names := strings.SplitN(table, " ", 2)
-			err = vector.AppendFixed(l.lockMetaVecs[0], accountId, false, proc.GetMPool()) //account_id
-			if err != nil {
-				return err
-			}
-			err = vector.AppendBytes(l.lockMetaVecs[1], []byte(names[0]), false, proc.GetMPool()) //db_name
-			if err != nil {
-				return err
-			}
-			err = vector.AppendBytes(l.lockMetaVecs[2], []byte(names[1]), false, proc.GetMPool()) //table_name
-			if err != nil {
-				return err
-			}
-			lockDbs[names[0]] = struct{}{}
-		}
-
-		// call serial function to lock mo_tables
-		bat.Vecs = l.lockMetaVecs
-
-		bat.SetRowCount(l.lockMetaVecs[0].Length())
-		lockVec, err = l.lockTableExe.Eval(proc, []*batch.Batch{bat}, nil)
-		if err != nil {
+	for _, table := range tables {
+		names := strings.SplitN(table, " ", 2)
+		if err := vector.AppendFixed(l.lockMetaVecs[0], accountId, false, proc.GetMPool()); err != nil {
 			return err
 		}
-		l.lockTableVec = lockVec
+		if err := vector.AppendBytes(l.lockMetaVecs[1], []byte(names[0]), false, proc.GetMPool()); err != nil {
+			return err
+		}
+		if err := vector.AppendBytes(l.lockMetaVecs[2], []byte(names[1]), false, proc.GetMPool()); err != nil {
+			return err
+		}
+		lockDbs[names[0]] = struct{}{}
 	}
-
-	err = l.lockMetaRows(e, proc, l.table_rel, lockVec, accountId, l.table_table_id)
+	bat := &batch.Batch{Vecs: l.lockMetaVecs}
+	bat.SetRowCount(l.lockMetaVecs[0].Length())
+	tableVec, err := l.lockTableExe.Eval(proc, []*batch.Batch{bat}, nil)
 	if err != nil {
 		return err
 	}
 
-	// recall serial function to lock mo_databases
-	lockVec = l.lockDbVec
-	if l.lockDbVec == nil {
-		l.lockMetaVecs[0].CleanOnlyData()
-		l.lockMetaVecs[1].CleanOnlyData()
-		if len(lockDbs) > 1 {
-			for dbName := range lockDbs {
-				err = vector.AppendFixed(l.lockMetaVecs[0], accountId, false, proc.GetMPool()) //account_id
-				if err != nil {
-					return err
-				}
-				err = vector.AppendBytes(l.lockMetaVecs[1], []byte(dbName), false, proc.GetMPool()) //db_name
-				if err != nil {
-					return err
-				}
+	l.lockMetaVecs[0].CleanOnlyData()
+	l.lockMetaVecs[1].CleanOnlyData()
+	// Preserve the existing single-database admission policy.
+	if len(lockDbs) > 1 {
+		for dbName := range lockDbs {
+			if err = vector.AppendFixed(l.lockMetaVecs[0], accountId, false, proc.GetMPool()); err != nil {
+				return err
+			}
+			if err = vector.AppendBytes(l.lockMetaVecs[1], []byte(dbName), false, proc.GetMPool()); err != nil {
+				return err
 			}
 		}
-		bat.Vecs = l.lockMetaVecs[:2]
-		bat.SetRowCount(l.lockMetaVecs[0].Length())
-		lockVec, err = l.lockDbExe.Eval(proc, []*batch.Batch{bat}, nil)
-		if err != nil {
-			return err
-		}
-		l.lockDbVec = lockVec
 	}
-
-	return l.lockMetaRows(e, proc, l.database_rel, lockVec, accountId, l.database_table_id)
+	bat.Vecs = l.lockMetaVecs[:2]
+	bat.SetRowCount(l.lockMetaVecs[0].Length())
+	dbVec, err := l.lockDbExe.Eval(proc, []*batch.Batch{bat}, nil)
+	if err != nil {
+		return err
+	}
+	// Eval results belong to their executors. Publish only the complete pair:
+	// a failed table lock must not leave the next execution without database keys.
+	l.lockTableVec, l.lockDbVec = tableVec, dbVec
+	return nil
 }
 
-func (l *LockMeta) lockMetaRows(e engine.Engine, proc *process.Process, rel engine.Relation, lockVec *vector.Vector, accountId uint32, tableId uint64) error {
-	b := batch.NewWithSize(1)
-	b.SetVector(0, lockVec)
+func (l *LockMeta) lockMetaRows(e engine.Engine, proc *process.Process, rel engine.Relation, b *batch.Batch, accountId uint32, tableId uint64) error {
+	lockVec := b.GetVector(0)
 	if err := lockop.LockRows(e, proc, rel, tableId, b, 0, *lockVec.GetType(), lock.LockMode_Shared, lock.Sharding_None, accountId); err != nil {
-		// if get error in locking mocatalog.mo_tables by it's dbName & tblName
-		// that means the origin table's schema was changed. then return NeedRetryWithDefChanged err
+		// A conflicting catalog definition requires rebuilding the statement.
 		if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
 			moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 			return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
 		}
-
-		// other errors, just throw  out
 		return err
 	}
 	return nil
@@ -310,6 +303,7 @@ func (l *LockMeta) initLockExe(e engine.Engine, proc *process.Process) error {
 }
 
 func (l *LockMeta) clearInitializedState() {
+	l.lockTableVec, l.lockDbVec = nil, nil
 	if l.lockDbExe != nil {
 		l.lockDbExe.Free()
 		l.lockDbExe = nil
