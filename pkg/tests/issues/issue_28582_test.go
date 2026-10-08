@@ -69,7 +69,9 @@ func TestIssue28582PreparedNumericCastKeepsRuntimeKind(t *testing.T) {
 		assertSQLExecute("decimal negative non-half", "-1.6", "-2", "18446744073709551614")
 
 		binaryStmt, err := db.PrepareContext(ctx, "select cast(? as signed), cast(? as unsigned)")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatal(err)
+		}
 		defer binaryStmt.Close()
 		for _, test := range []struct {
 			name         string
