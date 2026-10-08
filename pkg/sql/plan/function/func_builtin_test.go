@@ -1569,7 +1569,7 @@ func TestPadRejectsAccountedAllocationBeforeBuildingResult(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			mp, err := mpool.NewMPool("pad-allocation-rejection", 1<<20, mpool.NoFixed)
 			require.NoError(t, err)
-			proc := testutil.NewProcessWithMPool(t, "", mp)
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 			tc := NewFunctionTestCase(proc, []FunctionTestInput{
 				NewFunctionTestConstInput(types.T_text.ToType(), []string{"x"}, nil),
 				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{300000}, nil),
@@ -1685,7 +1685,7 @@ func TestExpandingFunctionsRejectMPoolBeforeBuildingResult(t *testing.T) {
 
 	mp, err := mpool.NewMPool("expanding-allocation-rejection", 1<<20, mpool.NoFixed)
 	require.NoError(t, err)
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	tc := NewFunctionTestCase(proc, []FunctionTestInput{
 		NewFunctionTestConstInput(types.T_blob.ToType(), []string{strings.Repeat("a", 2000)}, nil),
 		NewFunctionTestConstInput(types.T_blob.ToType(), []string{"a"}, nil),

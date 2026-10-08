@@ -292,7 +292,7 @@ func TestTimeWinBroadcastsPreparedPartitionKind(t *testing.T) {
 	require.NoError(t, err)
 	for _, gapFill := range []bool{false, true} {
 		t.Run(map[bool]string{false: "sliding", true: "gapfill"}[gapFill], func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			var first, second *batch.Batch
 			var arg *TimeWin
 			t.Cleanup(func() {
@@ -427,7 +427,7 @@ func runTemporalBoundArg(t testing.TB, arg *TimeWin, proc *process.Process, inpu
 }
 
 func TestTimeWinSlidingKeepsZeroDatetimeSeparateFromEpoch(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	sliding, err := calcDatetime(5, types.Second)
 	require.NoError(t, err)
 
@@ -448,7 +448,7 @@ func TestTimeWinSlidingKeepsZeroDatetimeSeparateFromEpoch(t *testing.T) {
 }
 
 func TestTimeWinSlidingMicrosecondWindows(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	interval, err := calcDatetime(1000, types.MicroSecond)
 	require.NoError(t, err)
 	sliding, err := calcDatetime(500, types.MicroSecond)
@@ -483,7 +483,7 @@ func TestTimeWinSlidingMicrosecondWindows(t *testing.T) {
 }
 
 func TestBoundedGapFillZeroTemporalLiteralFallsBackToObservedRange(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	in := makePartInput(t, proc.Mp(), []row{
 		{"0000-00-00 00:00:00", 10, 1},
 		{"0001-01-01 00:00:00", 20, 1},
@@ -508,7 +508,7 @@ func TestBoundedGapFillZeroTemporalLiteralFallsBackToObservedRange(t *testing.T)
 func TestTimeWinMicrosecondBoundariesPreservePrecisionAcrossInputScales(t *testing.T) {
 	for _, scale := range []int32{0, 3, 6} {
 		t.Run(types.T_datetime.ToTypeWithScale(scale).String(), func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			oneMicrosecond, err := calcDatetime(1, types.MicroSecond)
 			require.NoError(t, err)
 
@@ -551,7 +551,7 @@ func TestTimeWinMicrosecondBoundariesPreservePrecisionAcrossInputScales(t *testi
 }
 
 func TestBoundedGapFillPreparedZeroFallbackReevaluatesAfterReset(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	params := vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(
 		params, []byte("0000-00-00 00:00:00"), false, proc.Mp()))
@@ -596,7 +596,7 @@ func TestBoundedGapFillPreparedZeroFallbackReevaluatesAfterReset(t *testing.T) {
 // restart that state. Each partition must produce exactly the windows it would
 // have produced on its own.
 func TestTimeWinSlidingPartitionResetsWindowState(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	sliding, err := calcDatetime(5, 2) // 5 seconds, interval is 5s => tumbling-by-slide
 	require.NoError(t, err)
 
@@ -632,7 +632,7 @@ func TestTimeWinSlidingPartitionResetsWindowState(t *testing.T) {
 // must emit them before the next partition starts; dropping them silently
 // loses rows.
 func TestTimeWinPartitionEmitsTrailingWindows(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	sliding, err := calcDatetime(5, 2)
 	require.NoError(t, err)
 
@@ -669,7 +669,7 @@ func TestGapFillGeneratesOnlyInteriorBuckets(t *testing.T) {
 		{name: "gapfill", gapFill: true, wantStarts: []string{"2023-08-01 00:00:00", "2023-08-01 00:00:05", "2023-08-01 00:00:10"}, wantNull: []bool{false, true, false}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			sliding, err := calcDatetime(5, types.Second)
 			require.NoError(t, err)
 			in := makePartInput(t, proc.Mp(), []row{
@@ -709,7 +709,7 @@ func TestGapFillGeneratesOnlyInteriorBuckets(t *testing.T) {
 }
 
 func TestBoundedGapFillCoversLeadingAndTrailingBuckets(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	in := makePartInput(t, proc.Mp(), []row{
 		{"2023-08-01 00:00:10", 20, 0},
 		{"2023-08-01 00:00:20", 40, 0},
@@ -739,7 +739,7 @@ func TestBoundedGapFillCoversLeadingAndTrailingBuckets(t *testing.T) {
 }
 
 func TestBoundedGapFillPreservesSlidingWindowOverlap(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	in := makePartInput(t, proc.Mp(), []row{
 		{"2023-08-01 00:00:07", 10, 0},
 	})
@@ -767,7 +767,7 @@ func TestBoundedGapFillPreservesSlidingWindowOverlap(t *testing.T) {
 }
 
 func TestBoundedGapFillSlidingReplaysAllBoundaryTiesAcrossBatches(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	rows := []row{
 		{"2023-08-01 00:00:03", 6, 0},
 		{"2023-08-01 00:00:07", 4, 0},
@@ -809,7 +809,7 @@ func TestBoundedGapFillSlidingReplaysAllBoundaryTiesAcrossBatches(t *testing.T) 
 }
 
 func TestBoundedGapFillConvertsTimestampBoundsInSessionTimezone(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	zone := time.FixedZone("UTC+08", 8*60*60)
 	proc.GetSessionInfo().TimeZone = zone
 	arg := newBoundedPartArg(
@@ -862,7 +862,7 @@ func TestTimestampDayWindowsPreserveDSTCivilBoundaries(t *testing.T) {
 	} {
 		for _, gapFill := range []bool{false, true} {
 			t.Run(tc.name+"/"+map[bool]string{false: "ordinary", true: "gapfill"}[gapFill], func(t *testing.T) {
-				proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+				proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 				var arg *TimeWin
 				if gapFill {
 					arg = newBoundedPartArg(t, proc, tc.start, tc.end, false)
@@ -917,7 +917,7 @@ func TestTimestampFoldGapFillKeepsBothCivilOccurrences(t *testing.T) {
 
 	for _, gapFill := range []bool{false, true} {
 		t.Run(map[bool]string{false: "ordinary", true: "gapfill"}[gapFill], func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			arg := newPartArg(t, proc, hour, false)
 			arg.TsType = plan.Type{Id: int32(types.T_timestamp), Scale: 6}
 			arg.Interval = hour
@@ -950,7 +950,7 @@ func TestTimestampFoldGapFillKeepsBothCivilOccurrences(t *testing.T) {
 }
 
 func TestBoundedTimestampNonDivisorFoldGapFill(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	zone, err := time.LoadLocation("America/New_York")
 	require.NoError(t, err)
 	proc.GetSessionInfo().TimeZone = zone
@@ -985,7 +985,7 @@ func TestBoundedTimestampNonDivisorFoldGapFill(t *testing.T) {
 }
 
 func TestBoundedGapFillConvertsDateBounds(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	arg := newBoundedPartArg(
 		t, proc,
 		"1992-01-01 00:00:00", "1992-01-03 00:00:00",
@@ -1034,7 +1034,7 @@ func TestBoundedGapFillExecutesNormalizedTimeAndYearBounds(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			arg := newBoundedPartArg(
 				t, proc,
 				"2023-08-01 00:00:00", "2023-08-01 00:00:15",
@@ -1056,7 +1056,7 @@ func TestBoundedGapFillExecutesNormalizedTimeAndYearBounds(t *testing.T) {
 }
 
 func TestBoundedGapFillEmitsGridForEmptyInput(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	arg := newBoundedPartArg(
 		t, proc,
 		"2023-08-01 00:00:00", "2023-08-01 00:00:15",
@@ -1083,7 +1083,7 @@ func TestBoundedGapFillEmitsGridForEmptyInput(t *testing.T) {
 }
 
 func TestBoundedGapFillTimestampDSTBoundarySequence(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	zone, err := time.LoadLocation("America/New_York")
 	require.NoError(t, err)
 	proc.GetSessionInfo().TimeZone = zone
@@ -1180,7 +1180,7 @@ func TestBoundedGapFillTimestampDSTBoundarySequence(t *testing.T) {
 }
 
 func TestBoundedGapFillLordHoweNonHourlyFold(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	zone, err := time.LoadLocation("Australia/Lord_Howe")
 	require.NoError(t, err)
 	proc.GetSessionInfo().TimeZone = zone
@@ -1234,7 +1234,7 @@ func TestBoundedGapFillLordHoweNonHourlyFold(t *testing.T) {
 }
 
 func TestUnboundedGapFillEmptyInputDoesNotSynthesizeRows(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	arg := newPartArg(t, proc, makeInterval(), false)
 	arg.GapFill = true
 
@@ -1249,7 +1249,7 @@ func TestUnboundedGapFillEmptyInputDoesNotSynthesizeRows(t *testing.T) {
 }
 
 func TestBoundedGapFillSkipsEmptyChildBatches(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	in := makePartInput(t, proc.Mp(), nil)
 	arg := newBoundedPartArg(
 		t, proc,
@@ -1286,7 +1286,7 @@ func TestBoundedGapFillValidatesDomain(t *testing.T) {
 		{name: "unpaired", start: "2023-08-01 00:00:00", finish: "2023-08-01 00:00:05", dropFinish: true, wantError: "both start and finish"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			arg := newBoundedPartArg(t, proc, tc.start, tc.finish, false)
 			if tc.dropFinish {
 				arg.GapFillEnd = nil
@@ -1307,7 +1307,7 @@ func TestBoundedGapFillValidatesDomain(t *testing.T) {
 }
 
 func TestBoundedGapFillTreatsPreparedNullBoundAsEmptyAndReevaluatesAfterReset(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	params := vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(params, nil, true, proc.Mp()))
 	proc.SetPrepareParams(params)
@@ -1340,7 +1340,7 @@ func TestBoundedGapFillTreatsPreparedNullBoundAsEmptyAndReevaluatesAfterReset(t 
 }
 
 func TestBoundedGapFillReuseAfterReset(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	arg := newBoundedPartArg(
 		t, proc,
 		"2023-08-01 00:00:00", "2023-08-01 00:00:15",
@@ -1359,7 +1359,7 @@ func TestBoundedGapFillReuseAfterReset(t *testing.T) {
 }
 
 func TestBoundedGapFillEmptyInputAcrossInternalFlushes(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	start := time.Date(2023, time.August, 1, 0, 0, 0, 0, time.UTC)
 	windowCount := 2*maxTimeWindowRows + 5
 	finish := start.Add(time.Duration(windowCount) * 5 * time.Second)
@@ -1386,7 +1386,7 @@ func TestBoundedGapFillEmptyInputAcrossInternalFlushes(t *testing.T) {
 func TestBoundedGapFillObservedRowAcrossInternalFlushes(t *testing.T) {
 	for _, observedWindow := range []int{maxTimeWindowRows, maxTimeWindowRows + 2} {
 		t.Run(fmt.Sprintf("observed_window_%d", observedWindow), func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			start := time.Date(2023, time.August, 1, 0, 0, 0, 0, time.UTC)
 			windowCount := 2*maxTimeWindowRows + 5
 			finish := start.Add(time.Duration(windowCount) * 5 * time.Second)
@@ -1421,7 +1421,7 @@ func TestBoundedGapFillObservedRowAcrossInternalFlushes(t *testing.T) {
 }
 
 func TestBoundedGapFillAppliesDomainPerObservedPartition(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	in := makePartInput(t, proc.Mp(), []row{
 		{"2023-08-01 00:00:05", 10, 1},
 		{"2023-08-01 00:00:10", 20, 2},
@@ -1452,7 +1452,7 @@ func TestBoundedGapFillAppliesDomainPerObservedPartition(t *testing.T) {
 }
 
 func TestBoundedGapFillRejectsOversizedDomainBeforeReading(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	arg := newBoundedPartArg(
 		t, proc,
 		"2023-01-01 00:00:00", "2023-03-01 00:00:00",
@@ -1501,12 +1501,12 @@ func TestTimeWinSinglePartitionMatchesNoPartition(t *testing.T) {
 	sliding, err := calcDatetime(5, 2)
 	require.NoError(t, err)
 
-	procA := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	procA := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	inA := makePartInput(t, procA.Mp(), rows)
 	argA := newPartArg(t, procA, sliding, true)
 	startsA, sumsA, partsA := runPartArg(t, argA, procA, inA)
 
-	procB := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	procB := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	inB := makePartInput(t, procB.Mp(), rows)
 	argB := newPartArg(t, procB, sliding, false)
 	startsB, sumsB, partsB := runPartArg(t, argB, procB, inB)
@@ -1530,7 +1530,7 @@ func TestTimeWinSinglePartitionMatchesNoPartition(t *testing.T) {
 // GROUP BY folds NULL keys into one group, so the window must treat two NULL
 // keys as the same partition rather than as a boundary.
 func TestTimeWinPartitionNullKeysGroupTogether(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 	bat := batch.New([]string{"ts", "val", "part"})
 	bat.Vecs[0] = testutil.NewVector(2, types.T_datetime.ToType(), proc.Mp(), false,
@@ -1557,7 +1557,7 @@ func TestTimeWinPartitionNullKeysGroupTogether(t *testing.T) {
 }
 
 func TestTimeWinAnyNullPartitionKey(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	rows := []row{
 		{"2023-08-01 00:00:00", 10, 0},
 		{"2023-08-01 00:00:01", 20, 0},
@@ -1642,7 +1642,7 @@ func TestAnyPartitionKeyRejectsNonNullValue(t *testing.T) {
 }
 
 func TestSamePartition(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	ctr := &container{}
 	ctr.partExe = make([]colexec.ExpressionExecutor, 1)
 
@@ -1663,7 +1663,7 @@ func TestSamePartition(t *testing.T) {
 // the operator only decorates it. The partition key must pass straight through
 // rather than be broadcast per window.
 func TestTimeWinIntervalPathForwardsPartitionKeys(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 	in := makePartInput(t, proc.Mp(), []row{
 		{"2023-08-01 00:00:00", 10, 1},
@@ -1722,7 +1722,7 @@ func TestTimeWinReuseAfterReset(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 			arg := newPartArg(t, proc, sliding, tc.withPartition)
 
@@ -1759,7 +1759,7 @@ func TestTimeWinReuseAfterReset(t *testing.T) {
 // The interval pass-through path buffers one vector set per child batch,
 // indexed by the same cursor; reuse must restart it at zero as well.
 func TestTimeWinIntervalPathReuseAfterReset(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 	rows := []row{
 		{"2023-08-01 00:00:00", 10, 1},
@@ -1850,7 +1850,7 @@ func runPartArgBats(t testing.TB, arg *TimeWin, proc *process.Process, bats []*b
 }
 
 func BenchmarkBoundedGapFillEmptyRange(b *testing.B) {
-	proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(b, "", mpool.MustNewZero())
 	start := time.Date(2023, time.August, 1, 0, 0, 0, 0, time.UTC)
 	const windows = 100_000
 	finish := start.Add(windows * 5 * time.Second)
@@ -1917,7 +1917,7 @@ func requireStrictWindowSequence(t *testing.T, starts []types.Datetime, sliding 
 }
 
 func TestTimeWinSkipsInvisibleEmptySlidingWindows(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
 	interval, err := calcDatetime(10, types.Second)
@@ -1949,7 +1949,7 @@ func TestTimeWinSkipsInvisibleEmptySlidingWindows(t *testing.T) {
 }
 
 func TestTimeWinDoesNotSkipGapFillEmptySlidingWindows(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
 	interval, err := calcDatetime(10, types.Second)
@@ -1996,7 +1996,7 @@ func TestTimeWinGapFillInternalFlushKeepsWindowsUnique(t *testing.T) {
 		{name: "second internal flush", gap: 2*maxTimeWindowRows + 5},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			rows := makeFlushBoundaryRows(tc.gap, 1)
 			bats := []*batch.Batch{
 				makePartInput(t, proc.Mp(), rows[:1]),
@@ -2031,7 +2031,7 @@ func TestTimeWinGapFillInternalFlushKeepsWindowsUnique(t *testing.T) {
 // existing semantics must remain unchanged even though the replacement
 // generation now resumes through the explicit post-flush state.
 func TestTimeWinInternalFlushPreservesDenseWindowsWithoutGapFill(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	sliding, err := calcDatetime(5, types.Second)
 	require.NoError(t, err)
 	rows := makeDenseWindowRows(maxTimeWindowRows+3, 1)
@@ -2062,7 +2062,7 @@ func TestTimeWinInternalFlushPreservesDenseWindowsWithoutGapFill(t *testing.T) {
 }
 
 func TestTimeWinGapFillInternalFlushResetsPerPartition(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	sliding, err := calcDatetime(5, types.Second)
 	require.NoError(t, err)
 	rows := append(makeFlushBoundaryRows(maxTimeWindowRows+2, 1), makeFlushBoundaryRows(maxTimeWindowRows+1, 2)...)
@@ -2097,7 +2097,7 @@ func TestTimeWinGapFillInternalFlushResetsPerPartition(t *testing.T) {
 }
 
 func TestTimeWinGapFillInternalFlushReuseAfterReset(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	sliding, err := calcDatetime(5, types.Second)
 	require.NoError(t, err)
 	rows := makeFlushBoundaryRows(maxTimeWindowRows+2, 1)
@@ -2163,7 +2163,7 @@ func TestTimeWinPartitionAcrossChildBatches(t *testing.T) {
 	for _, split := range splits {
 		sizes := split.sizes
 		t.Run(split.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 			var bats []*batch.Batch
 			offset := 0

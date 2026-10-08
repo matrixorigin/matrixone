@@ -164,7 +164,7 @@ func TestEvaluateZoneMapFunctionCleanup(t *testing.T) {
 		const capacity = 1024 * 1024
 		mp, err := mpool.NewMPool("zone map allocation failure", capacity, mpool.NoFixed)
 		require.NoError(t, err)
-		proc := testutil.NewProcessWithMPool(t, "", mp)
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 		defer proc.Free()
 		pressure, err := mp.Alloc(capacity-8, true)
 		require.NoError(t, err)

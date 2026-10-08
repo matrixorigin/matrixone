@@ -61,7 +61,7 @@ func TestFulltextSQLProcessNoSnapshotLeavesTSNil(t *testing.T) {
 // apart.
 func TestFulltextSQLProcessPublisherOutranksSnapshotTenant(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 	// The read txn is NEWER than the snapshot, so the snapshot TS is genuinely historical.
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
@@ -107,7 +107,7 @@ func TestFulltextSQLProcessPublisherOutranksSnapshotTenant(t *testing.T) {
 // case ApplyScanSnapshot exists for.
 func TestFulltextSQLProcessSnapshotTenantAppliesWithoutAPublisher(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOp.EXPECT().Txn().Return(txn.TxnMeta{
