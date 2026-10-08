@@ -2788,7 +2788,7 @@ func (tbl *txnTable) getLatestPartitionState(ctx context.Context) (*logtailrepla
 	if err != nil {
 		return nil, false, err
 	}
-	if createdInTxn || tbl.isLogicalView(ctx) {
+	if createdInTxn || strings.ToUpper(tbl.relKind) == "V" {
 		ps := tbl.getTxn().engine.GetOrCreateLatestPart(ctx, uint64(tbl.accountId), tbl.db.databaseId, tbl.tableId).Snapshot()
 		return ps, true, nil
 	}
