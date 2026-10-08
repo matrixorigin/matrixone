@@ -44,7 +44,11 @@ func (c *strCompare) Compare(veci, vecj int, vi, vj int64) int {
 	}
 	x := c.vs[veci].GetBytesAt(int(vi))
 	y := c.vs[vecj].GetBytesAt(int(vj))
-	cmp = types.CompareStringValues(*c.vs[veci].GetType(), x, y)
+	// The plan type is the semantic owner of the comparison domain. Runtime
+	// vectors can be materialized through a storage or spill path that only
+	// preserves the physical string OID, so deriving collation from the vector
+	// would silently fall back to byte order.
+	cmp = types.CompareStringValues(c.typ, x, y)
 	if c.desc {
 		return -cmp
 	}

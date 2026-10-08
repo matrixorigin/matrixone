@@ -75,15 +75,37 @@ func CollationKeyOrOriginal(charset uint8, value []byte) []byte {
 	return out
 }
 
+// ValidateCollationValue checks the admission contract for a typed native
+// Unicode string. Unlike CollationKeyOrOriginal, which deliberately retains a
+// tagged fallback for comparison-only callers, typed values must not carry
+// malformed UTF-8 or a value outside the charset repertoire. Rejecting those
+// bytes at the typed write boundary prevents a binary payload from aliasing a
+// valid UCA key after a later vector loses its collation metadata.
+func ValidateCollationValue(typ Type, value []byte) error {
+	if !IsUnicodeCollation(typ.Charset) || !isUnicodeStringType(typ.Oid) {
+		return nil
+	}
+	_, err := CollationKey(typ.Charset, nil, value)
+	return err
+}
+
+func isUnicodeStringType(oid T) bool {
+	switch oid {
+	case T_char, T_varchar, T_blob, T_text:
+		return true
+	default:
+		// BINARY and VARBINARY are opaque byte domains even when a caller
+		// happens to carry a non-zero charset in their physical metadata.
+		return false
+	}
+}
+
 // CompareStringValues compares two values in one resolved text identity. The
-// native UCA domains compare their transformed keys; all other identities keep
-// the caller's historical byte order. Invalid native input uses a deterministic
-// per-value fallback because vector comparator interfaces cannot return errors.
-//
-// Valid and invalid values are separate comparison classes. Choosing the raw
-// byte order only when both values are invalid keeps the fallback independent
-// of the other operand, so an invalid value cannot change the ordering of two
-// otherwise equal valid values.
+// native UCA domains compare the same tagged representation used by hash and
+// membership consumers; all other identities keep the caller's historical byte
+// order. Using one canonical representation is important for values that the
+// native domain cannot encode: a raw fallback must not compare equal to a valid
+// UCA key, and its ordering must not depend on the other operand.
 func CompareStringValues(typ Type, left, right []byte) int {
 	if !IsUnicodeCollation(typ.Charset) {
 		if typ.Oid == T_char {
@@ -91,16 +113,8 @@ func CompareStringValues(typ Type, left, right []byte) int {
 		}
 		return bytes.Compare(left, right)
 	}
-	leftKey, leftErr := CollationKey(typ.Charset, nil, left)
-	rightKey, rightErr := CollationKey(typ.Charset, nil, right)
-	if leftErr != nil {
-		if rightErr == nil {
-			return 1
-		}
-		return bytes.Compare(left, right)
-	}
-	if rightErr != nil {
-		return -1
-	}
-	return bytes.Compare(leftKey, rightKey)
+	return bytes.Compare(
+		CollationKeyOrOriginal(typ.Charset, left),
+		CollationKeyOrOriginal(typ.Charset, right),
+	)
 }

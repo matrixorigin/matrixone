@@ -522,6 +522,57 @@ func SortByVectors(
 	SortByVectorsWithScratch(os, vectors, desc, nullsLast, nil)
 }
 
+// SortByVectorsWithTypes is the SQL-order variant of SortByVectors with the
+// semantic type of each expression supplied by the plan. A materialized
+// vector may retain only its physical string OID after a storage/spill round
+// trip; using the plan type keeps native Unicode collations active in that
+// case without mutating the owned vector metadata.
+func SortByVectorsWithTypes(
+	os []int64,
+	vectors []*vector.Vector,
+	desc []bool,
+	nullsLast []bool,
+	semanticTypes []types.Type,
+) {
+	SortByVectorsWithTypesAndScratch(os, vectors, desc, nullsLast, semanticTypes, nil)
+}
+
+// SortByVectorsWithTypesAndScratch is the allocation-aware counterpart of
+// SortByVectorsWithTypes.
+func SortByVectorsWithTypesAndScratch(
+	os []int64,
+	vectors []*vector.Vector,
+	desc []bool,
+	nullsLast []bool,
+	semanticTypes []types.Type,
+	scratch *ByVectorsScratch,
+) {
+	if len(semanticTypes) != 0 && len(semanticTypes) != len(vectors) {
+		panic("sort: mismatched multi-column semantic types")
+	}
+	if len(semanticTypes) == 0 {
+		SortByVectorsWithScratch(os, vectors, desc, nullsLast, scratch)
+		return
+	}
+	views := make([]*vector.Vector, len(vectors))
+	for i, vec := range vectors {
+		views[i] = vectorWithSemanticType(vec, semanticTypes[i])
+	}
+	SortByVectorsWithScratch(os, views, desc, nullsLast, scratch)
+}
+
+// vectorWithSemanticType creates a read-only metadata view. Sorting and
+// partitioning only inspect the vector, so the shallow view does not acquire
+// ownership and cannot affect the source vector's allocation or payload.
+func vectorWithSemanticType(vec *vector.Vector, typ types.Type) *vector.Vector {
+	if vec == nil || *vec.GetType() == typ {
+		return vec
+	}
+	view := *vec
+	view.SetType(typ)
+	return &view
+}
+
 // SortByVectorsWithScratch sorts row selectors like SortByVectors and reuses
 // the supplied buffers when sorting by multiple keys. The buffers must be
 // large enough for os; passing nil retains the legacy allocation behavior.

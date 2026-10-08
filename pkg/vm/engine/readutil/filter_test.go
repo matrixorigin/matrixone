@@ -2393,6 +2393,29 @@ func TestConstructBasePKFilterUnicodeFailsOpen(t *testing.T) {
 	filter.Cleanup()
 }
 
+func TestConstructBasePKFilterUnicodeFailsOpenWithoutColumnIndex(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+
+	typ := types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetUTF8MB4UnicodeCI)
+	tableDef := &plan.TableDef{
+		Name: "unicode_pk_without_name_index",
+		Pkey: &plan.PrimaryKeyDef{Names: []string{"a"}, PkeyColName: "a"},
+		Cols: []*plan.ColDef{{Name: "a", Typ: plan2.MakePlan2Type(&typ)}},
+	}
+	value := &plan.Expr{
+		Typ:  plan2.MakePlan2Type(&typ),
+		Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{IsConst: true, Data: []byte("a")}},
+	}
+	expr := MakeFunctionExprForTest("=", []*plan.Expr{MakeColExprForTest(0, types.T_varchar), value})
+	expr.GetF().Args[0].Typ.Charset = uint32(types.CharsetUTF8MB4UnicodeCI)
+
+	filter, err := ConstructBasePKFilter(expr, tableDef, mp)
+	require.NoError(t, err)
+	require.False(t, filter.Valid)
+	filter.Cleanup()
+}
+
 func TestCompileFilterExprUnicodeFailsOpen(t *testing.T) {
 	typ := types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetUTF8MB4UnicodeCI)
 	tableDef := &plan.TableDef{

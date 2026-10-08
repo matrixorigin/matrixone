@@ -93,6 +93,7 @@ func (ctr *container) generateCompares(fs []*plan.OrderBySpec) {
 	if len(ctr.compares) > 0 {
 		return
 	}
+	ctr.orderTypes = make([]types.Type, len(fs))
 	var desc, nullsLast bool
 	ctr.compares = make([]compare.Compare, len(fs))
 	for i := range ctr.compares {
@@ -107,6 +108,7 @@ func (ctr *container) generateCompares(fs []*plan.OrderBySpec) {
 
 		exprTyp := fs[i].Expr.Typ
 		typ := types.MustTypeFromPlan(exprTyp)
+		ctr.orderTypes[i] = typ
 		ctr.compares[i] = compare.NewOrder(typ, desc, nullsLast)
 	}
 }

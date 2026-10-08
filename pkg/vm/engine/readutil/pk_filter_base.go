@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"math"
 	"math/bits"
+	"strings"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -178,14 +179,24 @@ func tablePrimaryKeyUsesUnicodeCollation(tblDef *plan.TableDef) bool {
 		return false
 	}
 	check := func(name string) bool {
-		if name == "" || tblDef.Name2ColIndex == nil {
+		if name == "" {
 			return false
 		}
-		pos, ok := tblDef.Name2ColIndex[name]
-		if !ok || pos < 0 || int(pos) >= len(tblDef.Cols) || tblDef.Cols[pos] == nil {
-			return false
+		if tblDef.Name2ColIndex != nil {
+			if pos, ok := tblDef.Name2ColIndex[name]; ok && pos >= 0 &&
+				int(pos) < len(tblDef.Cols) && tblDef.Cols[pos] != nil {
+				return types.IsUnicodeCollation(uint8(tblDef.Cols[pos].Typ.Charset))
+			}
 		}
-		return types.IsUnicodeCollation(uint8(tblDef.Cols[pos].Typ.Charset))
+		// Reader table definitions assembled from a snapshot or an index path
+		// are not required to carry Name2ColIndex. Failing to find the column in
+		// that optional map must not re-enable a raw-byte PK probe.
+		for _, col := range tblDef.Cols {
+			if col != nil && strings.EqualFold(col.Name, name) {
+				return types.IsUnicodeCollation(uint8(col.Typ.Charset))
+			}
+		}
+		return false
 	}
 	if check(tblDef.Pkey.PkeyColName) {
 		return true

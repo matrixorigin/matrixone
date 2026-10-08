@@ -114,6 +114,25 @@ func TestOperatorUnicodeInUsesCollationKeys(t *testing.T) {
 	}
 }
 
+func TestOperatorUnicodeInUsesLeftComparisonDomain(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	leftType := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI)
+	// Prepared/literal list vectors can carry the transport charset even when
+	// the left column owns a native Unicode collation.
+	listType := types.T_varchar.ToType()
+	tc := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(leftType, []string{"A", "ß", "b"}, nil),
+			NewFunctionTestInput(listType, []string{"a", "ss"}, nil),
+		},
+		NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, true, false}, nil),
+		newOpOperatorStrIn().operatorIn,
+	)
+	ok, errInfo := tc.RunAndFree()
+	require.True(t, ok, errInfo)
+}
+
 func TestOperatorCharBetweenUsesPadSpaceOrdering(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	charType := types.New(types.T_char, 8, 0)

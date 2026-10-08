@@ -48,14 +48,23 @@ func TestUnicodeCollationComparisonKeys(t *testing.T) {
 	require.Equal(t, bytes.Compare(invalid, []byte{0xff}),
 		CompareStringValues(unicode, invalid, []byte{0xff}))
 
-	// Invalid input is retained by the vector APIs, so its comparison class
-	// must be chosen per value rather than by falling back for both operands.
-	// In particular, equivalent valid values must have the same ordering
-	// against every third value.
+	// Comparison-only callers can still receive an invalid value from an
+	// opaque/binary source. Its comparison class must be chosen per value rather
+	// than by falling back for both operands. In particular, equivalent valid
+	// values must have the same ordering against every third value.
 	require.Equal(t, 0, CompareStringValues(unicode, []byte("A"), []byte("a")))
 	leftInvalid := CompareStringValues(unicode, []byte("A"), invalid)
 	rightInvalid := CompareStringValues(unicode, []byte("a"), invalid)
 	require.Equal(t, leftInvalid, rightInvalid)
+
+	// A malformed value whose bytes happen to equal a valid UCA key must stay
+	// in a separate comparison class. The comparator and hash/membership key
+	// owner therefore agree on both equality and ordering.
+	validKey, err := CollationKey(CharsetUTF8MB3UnicodeCI, nil, []byte("A"))
+	require.NoError(t, err)
+	rawKey := append([]byte(nil), validKey...)
+	require.NotEqual(t, 0, CompareStringValues(unicode, rawKey, []byte("A")))
+	require.NotEqual(t, 0, CompareStringValues(unicode, []byte("A"), rawKey))
 }
 
 func TestMergeStringCharsetKeepsSupplementaryRepertoire(t *testing.T) {

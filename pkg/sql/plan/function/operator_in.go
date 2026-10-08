@@ -88,11 +88,20 @@ func (op *opOperatorFixedIn[T]) init(tuple *vector.Vector) {
 	}
 }
 
-func (op *opOperatorStrIn) init(tuple *vector.Vector) {
+func (op *opOperatorStrIn) init(left, tuple *vector.Vector) {
 	op.ready = true
 	op.hasNull = false
-	op.padSpace = tuple.GetType().Oid == types.T_char
 	op.typ = *tuple.GetType()
+	// The left operand is the resolved comparison domain for an IN
+	// expression. A prepared/literal list can arrive with the transport
+	// charset, so deriving the key type from the list alone silently drops a
+	// native Unicode collation. Keep a Unicode type from either side and prefer
+	// the left operand when both sides already agree on the domain.
+	if left != nil && (types.IsUnicodeCollation(left.GetType().Charset) ||
+		!types.IsUnicodeCollation(op.typ.Charset)) {
+		op.typ = *left.GetType()
+	}
+	op.padSpace = op.typ.Oid == types.T_char || tuple.GetType().Oid == types.T_char
 
 	if tuple.IsConstNull() {
 		op.hasNull = true
@@ -198,7 +207,7 @@ func (op *opOperatorFixedIn[T]) operatorNotIn(parameters []*vector.Vector, resul
 
 func (op *opOperatorStrIn) operatorIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	if !op.ready {
-		op.init(parameters[1])
+		op.init(parameters[0], parameters[1])
 	}
 
 	p := vector.GenerateFunctionStrParameter(parameters[0])
@@ -227,7 +236,7 @@ func (op *opOperatorStrIn) operatorIn(parameters []*vector.Vector, result vector
 
 func (op *opOperatorStrIn) operatorNotIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	if !op.ready {
-		op.init(parameters[1])
+		op.init(parameters[0], parameters[1])
 	}
 
 	p := vector.GenerateFunctionStrParameter(parameters[0])
