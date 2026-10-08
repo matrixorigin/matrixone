@@ -1218,8 +1218,13 @@ func TestConsumerStart(t *testing.T) {
 		c.loopWorkInterval = time.Millisecond
 		leaderChecks := make(chan struct{}, 8)
 		lc.getLeaderIDEvent = leaderChecks
+		leaderGate := make(chan struct{})
+		lc.getLeaderIDGate = leaderGate
+		lc.getLeaderIDGateAt = 3
 		readEntries := make(chan struct{}, 1)
 		lc.readEntriesEvent = readEntries
+		readEntriesGate := make(chan struct{})
+		lc.readEntriesGate = readEntriesGate
 		done := make(chan struct{})
 		go func() {
 			c.Start(ctx)
@@ -1229,13 +1234,17 @@ func TestConsumerStart(t *testing.T) {
 		<-leaderChecks
 		<-leaderChecks
 		<-readEntries
-		// Consume the check that began the next loop iteration while the old
-		// leader is still installed, then change the role before the following
-		// check.
+		close(readEntriesGate)
+		// The third leader check is held before it reads the role. Change the
+		// role while it is held, then let it observe the demotion. The loop must
+		// return before another read.
 		<-leaderChecks
 		lc.setLeaderID(20)
-		// The next check observes the role change and returns from loop.
+		close(leaderGate)
+		// The next check observes the role change. No second read may start.
 		<-leaderChecks
+		calls, _ := lc.callStats("readEntries")
+		require.Equal(t, 1, calls, "role loss must stop log consumption before another read")
 		cancel()
 		select {
 		case <-done:
