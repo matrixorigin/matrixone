@@ -78,7 +78,7 @@ func lockRoleRuleLifecycleTable(
 	if err != nil {
 		return err
 	}
-	return lockTableForSnapshotRefresh(ctx, eng, proc, rel, false)
+	return lockTableForSnapshotRefresh(ctx, eng, proc, rel, "", false)
 }
 
 // LockRoleRuleLifecycle serializes every frontend writer of mo_role_rule with
