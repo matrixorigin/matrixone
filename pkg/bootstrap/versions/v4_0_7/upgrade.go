@@ -74,6 +74,13 @@ func (v *versionHandle) Prepare(ctx context.Context, txn executor.TxnExecutor, f
 
 func (v *versionHandle) HandleTenantUpgrade(ctx context.Context, tenantID int32, txn executor.TxnExecutor) error {
 	for _, upgEntry := range tenantUpgEntries {
+		if upgEntry.TableName == "VIEWS" &&
+			!InformationSchemaViewsAuthoringProtocolReady(txn) {
+			// The tenant version can advance while the durable VIEWS row remains
+			// on the predecessor definition. The bootstrap maintenance pass will
+			// retry this row after the local catalog admission fence is published.
+			continue
+		}
 		start := time.Now()
 		if err := upgEntry.Upgrade(txn, uint32(tenantID)); err != nil {
 			getLogger(txn.Txn().TxnOptions().CN).Error("tenant upgrade entry execute error",
