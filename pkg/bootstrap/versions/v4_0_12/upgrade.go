@@ -58,6 +58,11 @@ func (v *versionHandle) Prepare(ctx context.Context, txn executor.TxnExecutor, f
 }
 
 func (v *versionHandle) HandleTenantUpgrade(ctx context.Context, tenantID int32, txn executor.TxnExecutor) error {
+	// Login compensation invokes this handler without the cluster-upgrade
+	// scheduler, so enforce the same floor before any catalog mutation.
+	if err := versions.CheckCommonProtocolVersion(txn, v.metadata.RequiredProtocolVersion); err != nil {
+		return err
+	}
 	logger := runtime.ServiceRuntime(txn.Txn().TxnOptions().CN).Logger()
 	for _, entry := range v4_0_7.PythonRevisionUpgradeEntries() {
 		start := time.Now()
