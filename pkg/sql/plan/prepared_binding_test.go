@@ -1534,6 +1534,12 @@ func TestPreparedIntegerComparisonProofDiagnostics(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			proc := mock.ctxt.GetProcess()
+			if tc.name == "warning" {
+				info := proc.GetSessionInfo()
+				previousCompatibilityMode := info.MySQLNumericCompatibilityMode
+				info.MySQLNumericCompatibilityMode = true
+				defer func() { info.MySQLNumericCompatibilityMode = previousCompatibilityMode }()
+			}
 			params := vector.NewVec(types.T_text.ToType())
 			defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
 			require.NoError(t, vector.AppendBytes(params, []byte(tc.value), tc.null, proc.Mp()))
