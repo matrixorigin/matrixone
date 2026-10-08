@@ -786,7 +786,8 @@ var predefinedFunids = map[int]int{
 	ONNX_RUN:                       556,
 	APPROX_PERCENTILE:              557,
 	MO_IS_LEGACY_TEMPORARY_TABLE:   558,
-	MO_VIEW_DEFINITION:             578,
+	MO_VIEW_DEFINITION:             591,
+	MO_VIEW_CHECK_OPTION:           592,
 	MAX_BY:                         559,
 	MAX_BY_NON_NULL:                560,
 	CHECK_CONSTRAINT_ASSERT:        561,
@@ -822,6 +823,7 @@ var predefinedFunids = map[int]int{
 	TO_INTERVAL_MICROSECOND: 583,
 	UUID_SHORT:              587,
 	FUNCTION_END_NUMBER:     591,
+	FUNCTION_END_NUMBER:     593
 }
 
 func Test_funids(t *testing.T) {
