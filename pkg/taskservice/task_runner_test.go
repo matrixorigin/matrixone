@@ -182,11 +182,15 @@ func TestRunTaskWithRetry(t *testing.T) {
 			require.Fail(t, "timeout waiting for retry task to execute")
 		}
 		require.Equal(t, uint32(2), n.Load())
-		require.Eventually(t, func() bool {
-			v := mustGetTestAsyncTask(t, store, 1)[0]
-			return v.Status == task.TaskStatus_Completed &&
-				v.ExecuteResult != nil &&
-				v.ExecuteResult.Code == task.ResultCode_Success
+		require.EventuallyWithT(t, func(c *assert.CollectT) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			tasks, err := store.QueryAsyncTask(ctx)
+			require.NoError(c, err, "query retry task")
+			require.Len(c, tasks, 1)
+			require.Equal(c, task.TaskStatus_Completed, tasks[0].Status)
+			require.NotNil(c, tasks[0].ExecuteResult)
+			require.Equal(c, task.ResultCode_Success, tasks[0].ExecuteResult.Code)
 		}, 5*time.Second, 10*time.Millisecond)
 		require.Eventually(t, func() bool {
 			r.retryTasks.Lock()
@@ -306,8 +310,13 @@ func TestCancelRunningTask(t *testing.T) {
 		v.Epoch++
 		mustUpdateTestAsyncTask(t, store, 1, []task.AsyncTask{v})
 		close(cancelC)
-		require.Eventually(t, func() bool {
-			return mustGetTestAsyncTask(t, store, 1)[0].Status == task.TaskStatus_Completed
+		require.EventuallyWithT(t, func(c *assert.CollectT) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			tasks, err := store.QueryAsyncTask(ctx)
+			require.NoError(c, err, "query canceled task")
+			require.Len(c, tasks, 1)
+			require.Equal(c, task.TaskStatus_Completed, tasks[0].Status)
 		}, 10*time.Second, 10*time.Millisecond, "task did not complete after cancellation")
 		require.Eventually(t, func() bool {
 			r.runningTasks.RLock()
@@ -531,7 +540,7 @@ func mustWaitTestTaskHasHeartbeat(t *testing.T, store TaskStorage, expectHasHear
 		require.NoError(c, err, "query running tasks")
 		require.Len(c, tasks, expectHasHeartbeatCount)
 		for _, v := range tasks {
-			require.NotZero(c, v.LastHeartbeat, "task %d has no heartbeat", v.ID)
+			require.Positive(c, v.LastHeartbeat, "task %d has no positive heartbeat", v.ID)
 		}
 	}, 10*time.Second, 10*time.Millisecond, "wait heartbeat timeout")
 }
