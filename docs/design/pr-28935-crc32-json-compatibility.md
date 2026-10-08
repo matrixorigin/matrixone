@@ -210,8 +210,49 @@ TCP-connect assertion confused a bound socket with admitted SQL ingress. Both
 failed receipts are retained. Corrected runs use the supported single-service
 `-cfg` entry and actual SQL probes; these failures are not hidden product PASSes.
 
-Still NOT_RUN: supported-release-created table upgrade/restart/restore and
-rollback, and real mixed-CN rolling remote execution/placement. Old main is not
-a supported-release binary. These remaining aptend/aunjgr acceptance criteria
-and cumulative capability allocation at landing are not waived. This evidence
-increment alone does not resolve those findings or authorize automatic re-review.
+At this point, supported-release-created table lifecycle and real mixed-CN
+rolling remote execution remained NOT_RUN. The actual release attempt below
+supersedes that status only for the executed cases. Old main is not a
+supported-release binary. The remaining aptend/aunjgr acceptance criteria and
+cumulative capability allocation at landing are not waived.
+
+## Supported-release attempt on 2026-10-08
+
+Official Linux/x86_64 v4.2.5 (`1a44f3d`, MORPC10) and the coverage-instrumented
+shared-build artifact for exact head `4f431b020093b6724a96a59a36642475925d08dc`
+were executed separately on mo-50. `BUILD_INFO`, executable version output and
+SHA256 were verified before execution. This was a correctness experiment with
+an 8 GiB memory cap, four-CPU quota and bounded runtime, not a performance run.
+
+- PASS: the release created the legacy generated/index table and materialized
+  3719146973; an offline whole-datastore backup preserved all26 file hashes.
+- FAIL: candidate upgrade did not reach SQL readiness. Its catalog4.0.11
+  migration attempted `pending_source_table_id ... after owner_generation`,
+  but the release's CDC watermark table had neither `source_table_id` nor
+  `owner_generation`. Authentication waited on tenant upgrade and timed out.
+  This migration file is byte-identical to main base `bab4b328`; the CRC32
+  delta does not modify it. No exact-base Linux control was executed, so this
+  is a diagnosed inherited prerequisite, not a completed regression attribution.
+- PASS: restore of the preserved cold backup into a fresh private directory
+  and actual v4.2.5 startup recovered the original row and legacy checksum.
+  Its catalog version was4.0.6, with the original six CDC watermark columns.
+  This proves pre-upgrade backup rollback, not downgrade of activated v107 data.
+- NOT_RUN: release-to-candidate DML/restart/snapshot/cold-restore continuation,
+  release downgrade after successful activation, and rolling remote placement.
+  The failed upgrade must be fixed or satisfied before these cases proceed.
+
+The initial rollback probe failed a wildcard-listener collision after a
+loopback-only preflight; the failed receipt is retained. A separately reviewed
+runner used the original free endpoint range and succeeded. All three owned
+units/processes stopped; the successful endpoint range was independently
+verified released. Failed upgraded data, both rollback directories, release
+backup and raw evidence are retained; no other service or port owner was changed.
+
+Binary SHA256: release
+`5d136df6fab5e7a5bdf4ba3e678470d898c8d681f3fdae99095ecd9c4205d2ed`;
+candidate `c3320fd306fd74c52390374c46c08aa2a5cd57235be30664167ac3721c4ab2d8`.
+Frozen release runner SHA256
+`b93157f996272da396b7b46227c7a90469417616fda306fe538c554b9745da56`;
+successful rollback runner SHA256
+`28b8da6b3ea13acd0b3c03be826d860b3afc89e54ddfef724caf7d0b018c493e`.
+This evidence does not close any reviewer finding or authorize automatic re-review.
