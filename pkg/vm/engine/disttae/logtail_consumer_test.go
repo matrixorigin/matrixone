@@ -578,7 +578,6 @@ func TestPushClient_UnusedTableGCTicker(t *testing.T) {
 		done := startTickerForTest(t, func() {
 			c.unusedTableGCTicker(ctx)
 		})
-		time.Sleep(time.Millisecond * 10)
 		cancel()
 		waitTickerStopped(t, done)
 	})
@@ -590,7 +589,6 @@ func TestPushClient_UnusedTableGCTicker(t *testing.T) {
 		done := startTickerForTest(t, func() {
 			c.unusedTableGCTicker(ctx)
 		})
-		time.Sleep(time.Millisecond * 10)
 		cancel()
 		waitTickerStopped(t, done)
 	})
@@ -699,7 +697,6 @@ func TestPushClient_PartitionStateGCTicker(t *testing.T) {
 		var c PushClient
 		ctx, cancel := context.WithCancel(context.Background())
 		done := startPStateGCTicker(t, &c, ctx)
-		time.Sleep(time.Millisecond * 10)
 		cancel()
 		waitTickerStopped(t, done)
 	})
@@ -710,8 +707,6 @@ func TestPushClient_PartitionStateGCTicker(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 
 		done := startPStateGCTicker(t, &c, ctx)
-
-		time.Sleep(time.Millisecond * 10)
 		cancel()
 		waitTickerStopped(t, done)
 	})
