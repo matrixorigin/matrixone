@@ -10,6 +10,8 @@ SELECT INNER_PRODUCT('[1,2,3]', '[-4,-5,-6]'); -- -32
 
 该约定适用于常量和列，以及 vecf32、vecf64、vecbf16、vecf16、vecint8、vecuint8。NULL 传播、维度错误、非有限结果拒绝及既有精度约定不变。自点积为向量范数平方；L2 距离、cosine_similarity、cosine_distance 不变。
 
+浮点分数不承诺跨 CPU/SIMD/GPU 归约路径逐位一致。测试非整数点积时，应使用独立参考值和与元素精度、维度相称的误差界，而不是固化某台机器的浮点尾数。
+
 ## 排序与向量索引
 
 - `ORDER BY INNER_PRODUCT(v, q) DESC LIMIT k`：取内积最高的 k 行。`vector_ip_ops` 近邻索引可以服务这一方向，返回数学点积分数（可为负数）。
