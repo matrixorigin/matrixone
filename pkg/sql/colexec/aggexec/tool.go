@@ -17,6 +17,7 @@ package aggexec
 import (
 	"bytes"
 	io "io"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -159,6 +160,59 @@ func (vs *Vectors[T]) MarshalBinary() ([]byte, error) {
 	return bbuf.Bytes(), nil
 }
 
+// MarshalBinarySize includes the vector count and each vector's original uint32
+// frame. Keep the existing segmentation so old and new encoders produce the
+// same bytes, without materializing a second complete group.
+func (vs *Vectors[T]) MarshalBinarySize() (int, error) {
+	size := 8
+	for _, vec := range vs.vecs {
+		plan, err := vec.PrepareMarshalBinary()
+		if err != nil {
+			return 0, err
+		}
+		if uint64(plan.Size()) > math.MaxUint32 || plan.Size() > math.MaxInt-size-4 {
+			return 0, moerr.NewInvalidInputNoCtx("median vector group exceeds marshal format")
+		}
+		size += 4 + plan.Size()
+	}
+	return size, nil
+}
+
+func (vs *Vectors[T]) MarshalBinaryTo(writer io.Writer) error {
+	if writer == nil {
+		return io.ErrClosedPipe
+	}
+	count := int64(len(vs.vecs))
+	written, err := writer.Write(types.EncodeInt64(&count))
+	if err != nil {
+		return err
+	}
+	if written != 8 {
+		return io.ErrShortWrite
+	}
+	for _, vec := range vs.vecs {
+		plan, err := vec.PrepareMarshalBinary()
+		if err != nil {
+			return err
+		}
+		if uint64(plan.Size()) > math.MaxUint32 {
+			return moerr.NewInvalidInputNoCtx("median vector exceeds marshal format")
+		}
+		size := uint32(plan.Size())
+		written, err = writer.Write(types.EncodeUint32(&size))
+		if err != nil {
+			return err
+		}
+		if written != 4 {
+			return io.ErrShortWrite
+		}
+		if err = plan.MarshalTo(writer); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (vs *Vectors[T]) Unmarshal(data []byte, typ types.Type, mp *mpool.MPool) error {
 	bbuf := bytes.NewBuffer(data)
 	length := int64(0)
@@ -180,23 +234,62 @@ func (vs *Vectors[T]) Unmarshal(data []byte, typ types.Type, mp *mpool.MPool) er
 	return nil
 }
 
+// vectorGroupFrame retains the final sorted flag so the reader path enforces
+// the same boolean validation as UnmarshalBinaryWithCopy. Len keeps vector
+// allocation preflight bounded by the declared frame.
+type vectorGroupFrame struct {
+	*io.LimitedReader
+	lastByte byte
+}
+
+func (r *vectorGroupFrame) Read(data []byte) (int, error) {
+	n, err := r.LimitedReader.Read(data)
+	if n != 0 {
+		r.lastByte = data[n-1]
+	}
+	return n, err
+}
+
+func (r *vectorGroupFrame) Len() int { return int(r.N) }
+
 func (vs *Vectors[T]) UnmarshalFromReader(r io.Reader, typ types.Type, mp *mpool.MPool) error {
 	length := int64(0)
 	if _, err := io.ReadFull(r, types.EncodeInt64(&length)); err != nil {
 		return err
+	}
+	if length < 0 {
+		return moerr.NewInvalidInputNoCtx("negative median vector count")
 	}
 	for i := int64(0); i < length; i++ {
 		sz, err := types.ReadUint32(r)
 		if err != nil {
 			return err
 		}
-		lr := io.LimitReader(r, int64(sz))
+		if parent, ok := r.(*io.LimitedReader); ok && int64(sz) > parent.N {
+			return io.ErrUnexpectedEOF
+		}
+		lr := &vectorGroupFrame{LimitedReader: &io.LimitedReader{R: r, N: int64(sz)}}
 		vec := vector.NewOffHeapVecWithType(typ)
-		if err := vec.UnmarshalWithReader(lr, mp); err != nil {
+		if mp == nil {
+			// Preserve the legacy borrowed-vector behavior when no pool is given.
+			data := make([]byte, int(sz))
+			if _, err = io.ReadFull(lr, data); err == nil {
+				err = vec.UnmarshalBinary(data)
+			}
+		} else {
+			err = vec.UnmarshalWithReader(lr, mp)
+		}
+		if err != nil {
+			vec.Free(mp)
 			return err
 		}
-		if _, err := io.Copy(io.Discard, lr); err != nil {
-			return err
+		if lr.N != 0 {
+			vec.Free(mp)
+			return moerr.NewInvalidInputNoCtx("trailing median vector wire data")
+		}
+		if lr.lastByte > 1 {
+			vec.Free(mp)
+			return moerr.NewInvalidInputNoCtx("invalid vector sorted flag")
 		}
 		vs.vecs = append(vs.vecs, vec)
 	}

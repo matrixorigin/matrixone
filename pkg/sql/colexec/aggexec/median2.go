@@ -117,22 +117,38 @@ func (exec *medianColumnExecSelf[T, R]) UnmarshalFromReader(reader io.Reader, mp
 	if ngrp < 0 || ngrp != int64(expectedGroups) {
 		return moerr.NewInternalErrorNoCtxf("median unmarshal: invalid group count %d, expected %d", ngrp, expectedGroups)
 	}
+	for _, group := range exec.groups {
+		if group != nil {
+			group.Free(exec.mp)
+		}
+	}
+	exec.groups = nil
 	if ngrp != 0 {
 		exec.groups = make([]*Vectors[T], ngrp)
 		for i := range exec.groups {
-			_, bs, err := types.ReadSizeBytes(reader)
+			size, err := types.ReadInt32(reader)
 			if err != nil {
 				return err
 			}
-			grp := NewVectors[T](exec.argType)
-			for _, vec := range grp.vecs {
-				vec.Free(mp)
+			if size < 8 {
+				return moerr.NewInvalidInputNoCtx("invalid median group size")
 			}
-			grp.vecs = nil
-			if err = grp.Unmarshal(bs, exec.argType, mp); err != nil {
+			limited := &io.LimitedReader{R: reader, N: int64(size)}
+			grp := &Vectors[T]{}
+			// Publish the partial owner before decoding. Successful vectors stay
+			// reachable by exec.Free if a later vector or group is truncated.
+			exec.groups[i] = grp
+			if err = grp.UnmarshalFromReader(limited, exec.argType, mp); err != nil {
 				return err
 			}
-			exec.groups[i] = grp
+			// Legacy groups ignored trailing bytes inside the size frame. Consume
+			// them without reading the next group or aggregate's framing.
+			if _, err = io.Copy(io.Discard, limited); err != nil {
+				return err
+			}
+			if limited.N != 0 {
+				return io.ErrUnexpectedEOF
+			}
 		}
 	}
 	if exec.IsDistinct() {
