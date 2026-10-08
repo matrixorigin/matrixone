@@ -36,6 +36,32 @@ func TestPrependCTASRewriteHint(t *testing.T) {
 	require.Equal(t, generated, prependCTASRewriteHint("create table db1.copy as select * from db1.t1", generated))
 }
 
+func TestLeadingRewriteHintValidation(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+		want string
+		ok   bool
+	}{
+		{
+			name: "bang hint",
+			sql:  `/*!+ {"rewrites":{"db1.t1":"select 1"}} */ select 1`,
+			want: `/*!+ {"rewrites":{"db1.t1":"select 1"}} */`,
+			ok:   true,
+		},
+		{name: "non-json hint", sql: "/*+ select 1", ok: false},
+		{name: "unterminated hint", sql: "/*+ {\"rewrites\":{}} select 1", ok: false},
+		{name: "ordinary sql", sql: "select 1", ok: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := leadingRewriteHint(tt.sql)
+			require.Equal(t, tt.ok, ok)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestInternalCTASRewriteHintAttachesToSource(t *testing.T) {
 	sql := `/*+    {"rewrites":{"db1.t1":"select * from db1.t1 where tenant_id = 1"}} */ insert into db1.copy select * from db1.t1`
 	stmts, err := parsers.Parse(context.Background(), dialect.MYSQL, sql, 1)
