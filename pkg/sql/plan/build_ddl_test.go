@@ -1133,7 +1133,7 @@ func TestBuildCreateViewPersistsParserDerivedInformationSchemaMetadata(t *testin
 			defer stmt.Free()
 
 			ctx := &rootSQLCompilerContext{
-				MockCompilerContext: NewMockCompilerContext(false),
+				MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 				rootSQL:             test.sql,
 			}
 			built, err := BuildPlan(ctx, stmt, false)
@@ -1163,7 +1163,7 @@ func TestBuildCreateViewPersistsParserDerivedInformationSchemaMetadata(t *testin
 				require.NoError(t, err)
 				defer replayStmt.Free()
 				replayCtx := &rootSQLCompilerContext{
-					MockCompilerContext: NewMockCompilerContext(false),
+					MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 					rootSQL:             replaySQL,
 				}
 				replayed, err := BuildPlan(replayCtx, replayStmt, false)
@@ -1195,7 +1195,7 @@ func TestBuildCreateViewDefinitionReplaysStringValuesAcrossSQLModes(t *testing.T
 			defer stmt.Free()
 
 			ctx := &rootSQLCompilerContext{
-				MockCompilerContext: NewMockCompilerContext(false),
+				MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 				rootSQL:             rootSQL,
 			}
 			ctx.SetSqlModeOverride(mode)
@@ -1232,7 +1232,7 @@ func TestBuildCreateViewDefinitionReplaysStringValuesAcrossSQLModes(t *testing.T
 func TestBuildCreateViewDefinitionReplaysExpressionHeading(t *testing.T) {
 	const rootSQL = "CREATE VIEW v AS SELECT n_nationkey + 1 FROM nation"
 	ctx := &rootSQLCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(false),
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		rootSQL:             rootSQL,
 	}
 
@@ -1255,7 +1255,7 @@ func TestBuildCreateViewDefinitionReplaysExpressionHeading(t *testing.T) {
 	require.NoError(t, err)
 	defer replayStmt.Free()
 	replayCtx := &rootSQLCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(false),
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		rootSQL:             replaySQL,
 	}
 	replayed, err := BuildPlan(replayCtx, replayStmt, false)
@@ -1268,7 +1268,7 @@ func TestBuildCreateViewDefinitionReplaysExpressionHeading(t *testing.T) {
 func TestBuildCreateViewDefinitionReplaysUnaliasedBinaryHeading(t *testing.T) {
 	const rootSQL = "CREATE VIEW v AS SELECT _binary 'ab'"
 	ctx := &rootSQLCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(false),
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		rootSQL:             rootSQL,
 	}
 
@@ -1292,7 +1292,7 @@ func TestBuildCreateViewDefinitionReplaysUnaliasedBinaryHeading(t *testing.T) {
 	require.NoError(t, err)
 	defer replayStmt.Free()
 	replayCtx := &rootSQLCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(false),
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		rootSQL:             replaySQL,
 	}
 	replayed, err := BuildPlan(replayCtx, replayStmt, false)
@@ -1319,7 +1319,7 @@ func TestBuildCreateViewDefinitionReplaysEmptyBinaryAcrossSQLModes(t *testing.T)
 			defer stmt.Free()
 
 			ctx := &rootSQLCompilerContext{
-				MockCompilerContext: NewMockCompilerContext(false),
+				MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 				rootSQL:             rootSQL,
 			}
 			ctx.SetSqlModeOverride(mode)
@@ -1852,7 +1852,7 @@ func TestGenViewTableDefPersistsExpandedStarSelectList(t *testing.T) {
 func TestGenViewTableDefPersistsExpandedStarForMultiStatementRootSQL(t *testing.T) {
 	const rootSQL = "create view v_star_multi as select * from nation; select 1"
 	ctx := &rootSQLCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(false),
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		rootSQL:             rootSQL,
 	}
 	statements, err := parsers.Parse(context.Background(), dialect.MYSQL, rootSQL, 1)

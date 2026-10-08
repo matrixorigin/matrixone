@@ -822,8 +822,7 @@ var predefinedFunids = map[int]int{
 	UPDATEXML:               582,
 	TO_INTERVAL_MICROSECOND: 583,
 	UUID_SHORT:              587,
-	FUNCTION_END_NUMBER:     591,
-	FUNCTION_END_NUMBER:     593
+	FUNCTION_END_NUMBER:     593,
 }
 
 func Test_funids(t *testing.T) {

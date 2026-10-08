@@ -1041,7 +1041,7 @@ func TestRegenerateLegacyViewDefinitionUsesParserDerivedMetadata(t *testing.T) {
 			persisted, err := json.Marshal(ViewData{Stmt: test.stmt, DefaultDatabase: "tpch"})
 			require.NoError(t, err)
 
-			regenerated, err := RegenerateViewDefinition(NewMockCompilerContext(false), string(persisted))
+			regenerated, err := RegenerateViewDefinition(NewMockCompilerContext(false, newPlanTestProcess(t)), string(persisted))
 			require.NoError(t, err)
 			var data ViewData
 			require.NoError(t, json.Unmarshal([]byte(regenerated.TableDef.ViewSql.View), &data))
@@ -1068,7 +1068,7 @@ func TestRegenerateLegacyViewDefinitionUsesParserDerivedMetadata(t *testing.T) {
 				require.NoError(t, err)
 				defer replayStmt.Free()
 				replayCtx := &rootSQLCompilerContext{
-					MockCompilerContext: NewMockCompilerContext(false),
+					MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 					rootSQL:             replaySQL,
 				}
 				replayed, err := BuildPlan(replayCtx, replayStmt, false)

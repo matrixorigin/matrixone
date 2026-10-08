@@ -11,7 +11,7 @@
 `information_schema.VIEWS.VIEW_DEFINITION` must expose the defining SELECT,
 not the original CREATE statement. New views persist a parser-derived definition
 and legacy rows are read through parser-aware metadata functions. The functions
-are new distributed plan functions (IDs 586 and 587), so the catalog contract is fenced by MORPC
+are new distributed plan functions (IDs 587 and 588), so the catalog contract is fenced by MORPC
 v107.
 
 ## Problem and invariant
@@ -44,7 +44,7 @@ This bounded, side-effect-free fallback avoids a second SQL regexp lexer and
 does not depend on background recovery.
 
 When either function identity occurs in a persisted view expression, the
-planner writes `required_protocol_version: 94` into `ViewData`, including when
+planner writes `required_protocol_version: 107` into `ViewData`, including when
 the call is nested under another expression. The real view bind/Prepare path
 reapplies that marker. It uses the existing two-floor admission lifecycle:
 HAKeeper publishes the durable read floor during the v107 decoder barrier, while
@@ -91,10 +91,10 @@ public catalog contract from being reported as fully successful, while the
 bounded VIEWS page remains independently rollback-safe.
 
 MORPC v107 is allocated as `MORPCLatestVersion + 1` from official main v106 at
-`bab4b3286a0dd5683a9b291763817722233e586c`, which owns the current protocol
-floor. The current main function end marker is 586 after its EXTRACTVALUE and
-UPDATEXML additions; the two VIEWS function IDs are 586 and 587, and the end
-marker advances to 588. These IDs are allocated from the rebased official main and are
+`ca5008de9aa1569504d593350ed92059217c85e4`, which owns the current protocol
+floor. The current main function end marker is 587 after its JSON_ARRAY_INSERT
+addition; the two VIEWS function IDs are 587 and 588, and the end
+marker advances to 589. These IDs are allocated from the rebased official main and are
 distinct from all existing function registrations.
 The capability is specific to these functions and the persisted VIEWS definition.
 A sender probes the selected destination CN as well as its local runtime before
@@ -109,7 +109,9 @@ reuses the guarded transactional entry to converge missing or stale VIEWS
 definitions to the current contract. Any cluster with a CN below v107, including
 the immediate predecessors v104, v105, and v106, preserves the predecessor VIEWS
 definition while retaining each existing protocol-specific metadata contract,
-including the v58 COLUMNS contract. Pipeline preparation, remote marshal, and
+including the independent v100 COLUMNS contract. COLUMNS installation still
+requires a positive common-v100 probe; unknown local runtime versions retain
+the minimum supported catalog contract. Pipeline preparation, remote marshal, and
 remote unmarshal reject a
 pipeline containing either function ID below v107. The receiver check protects
 stale prepared work as well as normal sender dispatch. Before the v107 HAKeeper

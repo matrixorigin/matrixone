@@ -63,7 +63,7 @@ func TestViewDefinitionFunctionsPersistAndEnforceProtocol(t *testing.T) {
 		runtime.SetGlobalVariables(
 			moruntime.PersistedExpressionProtocolAuthoringFloor, authoringFloor)
 		ctx := &rootSQLCompilerContext{
-			MockCompilerContext: NewMockCompilerContext(false),
+			MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 			rootSQL:             rootSQL,
 		}
 		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, rootSQL, 1)
@@ -102,7 +102,7 @@ func TestViewDefinitionFunctionsPersistAndEnforceProtocol(t *testing.T) {
 		runtime.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, readFloor)
 		runtime.SetGlobalVariables(
 			moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion107))
-		bindCtx := NewMockCompilerContext(false)
+		bindCtx := NewMockCompilerContext(false, newPlanTestProcess(t))
 		builder := NewQueryBuilder(planpb.Query_SELECT, bindCtx, true, false)
 		_, err := builder.bindView(
 			NewBindContext(builder, nil),
@@ -177,7 +177,7 @@ func TestViewDefinitionProtocolSurvivesConstantFolding(t *testing.T) {
 		runtime.SetGlobalVariables(
 			moruntime.PersistedExpressionProtocolAuthoringFloor, authoringFloor)
 		ctx := &rootSQLCompilerContext{
-			MockCompilerContext: NewMockCompilerContext(false),
+			MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 			rootSQL:             rootSQL,
 		}
 		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, rootSQL, 1)

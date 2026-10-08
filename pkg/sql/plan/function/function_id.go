@@ -874,7 +874,6 @@ const (
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
 	UUID_SHORT = 587
 
-	FUNCTION_END_NUMBER = 591
 	FUNCTION_END_NUMBER = 593
 )
 

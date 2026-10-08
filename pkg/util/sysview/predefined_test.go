@@ -302,9 +302,12 @@ func TestInitInformationSchemaSysTablesForProtocol(t *testing.T) {
 	assert.NotContains(t, strings.Join(latest, "\n"), "mo_subscription_view_columns")
 	assert.Contains(t, strings.Join(latest, "\n"), "WHEN 3 then 'utf8mb4'")
 	for _, protocol := range []int64{defines.MORPCVersion58 + 1, defines.MORPCVersion94, defines.MORPCVersion95, defines.MORPCVersion96, defines.MORPCVersion97, defines.MORPCVersion98, defines.MORPCVersion99, defines.MORPCVersion100, defines.MORPCVersion101, defines.MORPCVersion102, defines.MORPCVersion103, defines.MORPCVersion104, defines.MORPCVersion105, defines.MORPCVersion106} {
-		assert.Contains(t, InitInformationSchemaSysTablesForProtocol(protocol), InformationSchemaColumnsV58DDL())
-		assert.NotContains(t, strings.Join(InitInformationSchemaSysTablesForProtocol(protocol), "\n"),
-			"mo_subscription_view_columns")
+		if protocol < defines.MORPCVersion100 {
+			assert.Contains(t, InitInformationSchemaSysTablesForProtocol(protocol), InformationSchemaColumnsV58DDL())
+			assert.NotContains(t, strings.Join(InitInformationSchemaSysTablesForProtocol(protocol), "\n"), "mo_subscription_view_columns")
+		} else {
+			assert.Contains(t, InitInformationSchemaSysTablesForProtocol(protocol), InformationSchemaColumnsDDL)
+		}
 		assert.Contains(t, InitInformationSchemaSysTablesForProtocol(protocol), InformationSchemaViewsLegacyDDL)
 	}
 	assert.Contains(t, InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion100), InformationSchemaColumnsV100DDL())
