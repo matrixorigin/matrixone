@@ -85,3 +85,54 @@ func TestContainerBoundsNesting(t *testing.T) {
 		t.Fatalf("over-depth chain was traversed: visits=%d", visits)
 	}
 }
+
+func TestStoredContainerSharesBoundsAndWork(t *testing.T) {
+	accept := func(byte, []byte) bool { return true }
+	data := testLiteralArray()
+	valid, depthExceeded := StoredContainer(typeArray, data, accept, 3)
+	if !valid || depthExceeded {
+		t.Fatal("root plus two inline entries must fit the exact work limit")
+	}
+	valid, depthExceeded = StoredContainer(typeArray, data, accept, 2)
+	if valid || depthExceeded {
+		t.Fatal("stored entry budget must reject before exceeding its limit")
+	}
+	data = testWrapArray(data, 1, false)
+	valid, _ = StoredContainer(typeArray, data, accept, 4)
+	if valid {
+		t.Fatal("descendants must share, not reset, the stored work budget")
+	}
+	valid, _ = StoredContainer(typeArray, data, accept, 5)
+	if !valid {
+		t.Fatal("canonical distinct child fits the exact shared budget")
+	}
+	integer := make([]byte, headerSize+valEntrySize+numberSize)
+	binary.LittleEndian.PutUint32(integer, 1)
+	binary.LittleEndian.PutUint32(integer[docSizeOff:], uint32(len(integer)))
+	integer[headerSize] = typeInt64
+	binary.LittleEndian.PutUint32(integer[headerSize+valTypeSize:], headerSize+valEntrySize)
+	valid, _ = StoredContainer(typeArray, integer, accept, 2)
+	if valid {
+		t.Fatal("non-inline scalar must charge its own stored work unit")
+	}
+	valid, _ = StoredContainer(typeArray, integer, accept, 3)
+	if !valid {
+		t.Fatal("non-inline scalar fits the exact stored work budget")
+	}
+	for i := 1; i < 100; i++ {
+		data = testWrapArray(data, 1, false)
+	}
+	valid, depthExceeded = StoredContainer(typeArray, data, accept, ^uint64(0))
+	if valid || !depthExceeded {
+		t.Fatal("stored traversal must retain the distinct over-depth result")
+	}
+	data = testLiteralArray()
+	for i := 0; i < 18; i++ {
+		data = testWrapArray(data, 2, true)
+	}
+	visits := 0
+	valid, _ = StoredContainer(typeArray, data, func(byte, []byte) bool { visits++; return true }, ^uint64(0))
+	if valid || visits > len(data) {
+		t.Fatalf("stored alias accepted=%v scalar visits=%d bytes=%d", valid, visits, len(data))
+	}
+}

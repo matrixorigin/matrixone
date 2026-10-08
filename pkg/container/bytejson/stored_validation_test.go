@@ -15,6 +15,8 @@
 package bytejson
 
 import (
+	"bytes"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -199,4 +201,155 @@ func TestStoredJSONValidationWorkBound(t *testing.T) {
 	var work uint64
 	require.NoError(t, chargeStoredJSONValidationWork(&work, 4, 4))
 	require.Error(t, chargeStoredJSONValidationWork(&work, 4, 1))
+	work = ^uint64(0)
+	require.Error(t, chargeStoredJSONValidationWork(&work, ^uint64(0)-1, 0))
+	require.Error(t, chargeStoredJSONValidationWork(&work, ^uint64(0), 1))
+}
+
+func TestValidateStoredJSONDocumentPreservesScalarGuards(t *testing.T) {
+	for _, tp := range []byte{TpCodeLiteral, TpCodeInt64, TpCodeUint64, TpCodeFloat64,
+		TpCodeString, TpCodeDecimal, TpCodeDate, TpCodeTime, TpCodeDatetime,
+		TpCodeBlob, TpCodeOpaque, TpCodeBit, 0xff} {
+		for _, data := range [][]byte{nil, {0}, {LiteralFalse}, {0, 0}, {0x80, 0},
+			{1, 'x'}, {1, 0xff}, {2, '1', '2'}, make([]byte, numberSize), make([]byte, numberSize+1)} {
+			t.Run(fmt.Sprintf("type=%x/data=%x", tp, data), func(t *testing.T) {
+				value := ByteJson{Type: tp, Data: data}
+				// Existing scalar semantics plus UTF-8 is the conjunction that
+				// admission required before traversal consolidation.
+				expected := IsValidByteJson(value)
+				if tp == TpCodeString && len(data) == 2 && data[1] == 0xff {
+					expected = false
+				}
+				require.Equal(t, expected, ValidateStoredJSONDocument(value) == nil)
+				childSize := len(data)
+				if tp == TpCodeLiteral {
+					if len(data) != 1 {
+						return // Inline literals cannot encode extra payload bytes.
+					}
+					childSize = 0
+				}
+				array := make([]byte, headerSize+valEntrySize+childSize)
+				endian.PutUint32(array, 1)
+				endian.PutUint32(array[docSizeOff:], uint32(len(array)))
+				array[headerSize] = tp
+				if tp == TpCodeLiteral {
+					array[headerSize+valTypeSize] = data[0]
+				} else {
+					endian.PutUint32(array[headerSize+valTypeSize:], headerSize+valEntrySize)
+					copy(array[headerSize+valEntrySize:], data)
+				}
+				// A child's exact encoding may leave unused trailing bytes in
+				// the parent. Match the existing structural validator there.
+				expected = IsValidByteJson(ByteJson{Type: TpCodeArray, Data: array})
+				if tp == TpCodeString && len(data) == 2 && data[1] == 0xff {
+					expected = false
+				}
+				require.Equal(t, expected, ValidateStoredJSONDocument(ByteJson{Type: TpCodeArray, Data: array}) == nil)
+			})
+		}
+	}
+	for _, floating := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		data := make([]byte, numberSize)
+		endian.PutUint64(data, math.Float64bits(floating))
+		require.Error(t, ValidateStoredJSONDocument(ByteJson{Type: TpCodeFloat64, Data: data}))
+	}
+}
+
+func TestValidateStoredJSONDocumentDoesNotAllocateFrames(t *testing.T) {
+	for _, count := range []int{16, 4096} {
+		document, err := ParseFromString(`{"keep":1,"large":[` + strings.Repeat("1,", count-1) + "1]}")
+		require.NoError(t, err)
+		require.NoError(t, ValidateStoredJSONDocument(document))
+		var validationErr error
+		allocs := testing.AllocsPerRun(10, func() { validationErr = ValidateStoredJSONDocument(document) })
+		require.NoError(t, validationErr)
+		require.Zero(t, allocs, "width-dependent validation slices must not return")
+	}
+}
+
+func TestValidateStoredJSONDocumentCanonicalKeyGuards(t *testing.T) {
+	for _, mutation := range []string{"duplicate", "invalid utf8", "overlapping key ranges", "overflowing count"} {
+		t.Run(mutation, func(t *testing.T) {
+			document, err := ParseFromString(`{"a":1,"ab":2}`)
+			require.NoError(t, err)
+			require.NoError(t, ValidateStoredJSONDocument(document))
+			firstOffset := endian.Uint32(document.Data[headerSize:])
+			secondEntry := headerSize + keyEntrySize
+			switch mutation {
+			case "duplicate":
+				endian.PutUint16(document.Data[secondEntry+keyOriginOff:], 1)
+			case "invalid utf8":
+				document.Data[firstOffset] = 0xff
+			case "overlapping key ranges":
+				// Bytes "ab" are already present at the second key. Make
+				// the first key its prefix: sorting passes, ranges do not.
+				secondOffset := endian.Uint32(document.Data[secondEntry:])
+				endian.PutUint32(document.Data[headerSize:], secondOffset)
+			case "overflowing count":
+				endian.PutUint32(document.Data, ^uint32(0))
+			}
+			require.Error(t, ValidateStoredJSONDocument(document))
+		})
+	}
+}
+
+func TestValidateStoredJSONDocumentHistoricalTypedScalars(t *testing.T) {
+	// Fixed bytes and explicit outcomes are independent of IsValidByteJson.
+	// These are the uvarint/typed layouts of the existing SQL and binary
+	// producers, including binary fallback and non-semantic temporal checks.
+	for _, test := range []struct {
+		name  string
+		value ByteJson
+		valid bool
+	}{
+		{"null", ByteJson{TpCodeLiteral, []byte{LiteralNull}}, true},
+		{"integer", ByteJson{TpCodeInt64, []byte{1, 0, 0, 0, 0, 0, 0, 0}}, true},
+		{"uint max", ByteJson{TpCodeUint64, bytes.Repeat([]byte{0xff}, 8)}, true},
+		{"float one", ByteJson{TpCodeFloat64, []byte{0, 0, 0, 0, 0, 0, 0xf0, 0x3f}}, true},
+		{"string", ByteJson{TpCodeString, []byte{1, 'x'}}, true},
+		{"decimal", ByteJson{TpCodeDecimal, []byte("\x06123.45")}, true},
+		{"decimal exponent", ByteJson{TpCodeDecimal, []byte("\x091e1000000")}, true},
+		{"date", ByteJson{TpCodeDate, []byte("\x0a2024-01-01")}, true},
+		{"time", ByteJson{TpCodeTime, []byte("\x0812:34:56")}, true},
+		{"datetime", ByteJson{TpCodeDatetime, []byte("\x132024-01-01 12:34:56")}, true},
+		{"temporal encoding only", ByteJson{TpCodeDate, []byte("\x08not-date")}, true},
+		{"opaque raw bytes", ByteJson{TpCodeOpaque, []byte{2, 0, 0xff}}, true},
+		{"bit raw bytes", ByteJson{TpCodeBit, []byte{1, 0xff}}, true},
+		{"legacy blob", ByteJson{TpCodeBlob, []byte("\x04AQ==")}, true},
+		{"legacy blob fallback", ByteJson{TpCodeBlob, []byte("\x0anot-base64")}, true},
+		{"legacy opaque fallback", ByteJson{TpCodeBlob, []byte("\x18base64:type16:not-base64")}, true},
+		{"empty decimal", ByteJson{TpCodeDecimal, []byte{0}}, false},
+		{"nonnumeric decimal", ByteJson{TpCodeDecimal, []byte{1, 'x'}}, false},
+		{"nonminimal decimal", ByteJson{TpCodeDecimal, []byte{0x81, 0, '1'}}, false},
+		{"nonminimal date", ByteJson{TpCodeDate, []byte{0x81, 0, 'x'}}, false},
+		{"nonminimal opaque", ByteJson{TpCodeOpaque, []byte{0x81, 0, 0xff}}, false},
+		{"truncated bit", ByteJson{TpCodeBit, []byte{2, 0xff}}, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			before := bytes.Clone(test.value.Data)
+			err := ValidateStoredJSONDocument(test.value) // No vector admission.
+			if test.valid {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
+			require.Equal(t, before, test.value.Data)
+			array := make([]byte, headerSize+valEntrySize)
+			endian.PutUint32(array, 1)
+			array[headerSize] = test.value.Type
+			if test.value.Type == TpCodeLiteral {
+				array[headerSize+valTypeSize] = test.value.Data[0]
+			} else {
+				endian.PutUint32(array[headerSize+valTypeSize:], uint32(len(array)))
+				array = append(array, test.value.Data...)
+			}
+			endian.PutUint32(array[docSizeOff:], uint32(len(array)))
+			err = ValidateStoredJSONDocument(ByteJson{Type: TpCodeArray, Data: array})
+			if test.valid {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
+		})
+	}
 }

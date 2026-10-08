@@ -449,10 +449,23 @@ func isValidByteJsonStringEncoding(data []byte) bool {
 }
 
 func isValidByteJsonContainer(value ByteJson) bool {
-	return bytejsonvalidate.Container(value.Type, value.Data, func(tp byte, data []byte) bool {
-		_, ok := byteJsonTypeRank(ByteJson{Type: TpCode(tp), Data: data})
+	return bytejsonvalidate.Container(value.Type, value.Data, validByteJsonScalar)
+}
+
+// Container traversal has already sliced each child to its exact encoding.
+// Avoid computing an unused comparison rank for the common scalar domains.
+func validByteJsonScalar(tp byte, data []byte) bool {
+	switch tp {
+	case TpCodeInt64, TpCodeUint64:
+		return len(data) == numberSize
+	case TpCodeFloat64:
+		return isValidNumericEncoding(ByteJson{Type: tp, Data: data})
+	case TpCodeString, TpCodeDate, TpCodeTime, TpCodeDatetime:
+		return isValidByteJsonStringEncoding(data)
+	default:
+		_, ok := byteJsonTypeRank(ByteJson{Type: tp, Data: data})
 		return ok
-	})
+	}
 }
 
 func compareByteJsonContainer(left, right ByteJson, rank jsonTypeRank) (cmp int) {
