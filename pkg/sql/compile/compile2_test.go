@@ -315,16 +315,21 @@ func TestCompileResetBeginsSQLCalcFoundRowsExecution(t *testing.T) {
 func TestMarkInsertTableScansNotLockMetaDoesNotMutateWriteTarget(t *testing.T) {
 	targetRef := &plan.ObjectRef{SchemaName: "db", ObjName: "target"}
 	sourceRef := &plan.ObjectRef{SchemaName: "db", ObjName: "source"}
+	indexRef := &plan.ObjectRef{SchemaName: "db", ObjName: "__mo_index_unique_target"}
+	indexScan := &plan.Node{NodeType: plan.Node_TABLE_SCAN, ObjRef: indexRef}
 	targetScan := &plan.Node{NodeType: plan.Node_TABLE_SCAN, ObjRef: targetRef}
 	sourceScan := &plan.Node{NodeType: plan.Node_TABLE_SCAN, ObjRef: sourceRef}
 	write := &plan.Node{
 		NodeType: plan.Node_MULTI_UPDATE,
 		UpdateCtxList: []*plan.UpdateCtx{{
 			ObjRef: targetRef,
+		}, {
+			ObjRef: indexRef,
 		}},
 	}
 	query := &plan.Query{Nodes: []*plan.Node{
 		targetScan,
+		indexScan,
 		sourceScan,
 		{NodeType: plan.Node_TABLE_SCAN},
 		write,
@@ -333,6 +338,10 @@ func TestMarkInsertTableScansNotLockMetaDoesNotMutateWriteTarget(t *testing.T) {
 	markInsertTableScansNotLockMeta(query)
 
 	require.NotSame(t, targetRef, targetScan.ObjRef)
+	require.NotSame(t, indexRef, indexScan.ObjRef)
+	require.True(t, indexScan.ObjRef.NotLockMeta)
+	require.False(t, indexRef.NotLockMeta)
+	require.Same(t, indexRef, write.UpdateCtxList[1].ObjRef)
 	require.NotSame(t, sourceRef, sourceScan.ObjRef)
 	require.True(t, targetScan.ObjRef.NotLockMeta)
 	require.True(t, sourceScan.ObjRef.NotLockMeta)
@@ -342,9 +351,11 @@ func TestMarkInsertTableScansNotLockMetaDoesNotMutateWriteTarget(t *testing.T) {
 
 	c := &Compile{needLockMeta: true, lockMeta: NewLockMeta()}
 	c.appendMetaTables(targetScan.ObjRef)
+	c.appendMetaTables(indexScan.ObjRef)
+	c.appendMetaTables(write.UpdateCtxList[1].ObjRef)
 	c.appendMetaTables(sourceScan.ObjRef)
 	c.appendMetaTables(write.UpdateCtxList[0].ObjRef)
-	require.Equal(t, map[string]struct{}{"db target": {}}, c.lockMeta.metaTables)
+	require.Equal(t, map[string]struct{}{"db target": {}, "db __mo_index_unique_target": {}}, c.lockMeta.metaTables)
 }
 
 func TestSelectMetaLockRequirement(t *testing.T) {
