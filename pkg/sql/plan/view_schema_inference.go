@@ -108,6 +108,11 @@ func (c *viewSchemaCompiler) record(obj *ObjectRef, def *TableDef, snapshot *Sna
 	if def.ViewSql != nil && len(def.ViewSql.View) > viewSchemaInputLimit {
 		return nil, nil, ErrViewSchemaLimit
 	}
+	if def.TableType == catalog.SystemViewRel {
+		if err := requireViewSchemaCreationContext(c.ctx, def.ViewSql.View); err != nil {
+			return nil, nil, err
+		}
+	}
 	size := def.ProtoSize() + obj.ProtoSize()
 	if snapshot != nil {
 		size += snapshot.ProtoSize()

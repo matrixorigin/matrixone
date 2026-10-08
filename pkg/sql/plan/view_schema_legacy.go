@@ -15,11 +15,29 @@
 package plan
 
 import (
+	"context"
+	"encoding/json"
 	"reflect"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
+
+// requireViewSchemaCreationContext rejects unknown historical name modes before
+// any root or nested binding/memo lookup. Read only the required metadata, not
+// the SQL text; the ordinary public binder retains its compatibility fallback.
+func requireViewSchemaCreationContext(ctx context.Context, definition string) error {
+	var metadata struct {
+		LowerCaseTableNames *int64 `json:"lower_case_table_names"`
+	}
+	if err := json.Unmarshal([]byte(definition), &metadata); err != nil {
+		return err
+	}
+	if metadata.LowerCaseTableNames == nil {
+		return moerr.NewNotSupported(ctx, "LEGACY_CONTEXT_UNAVAILABLE: persisted View has no creation-time lower_case_table_names")
+	}
+	return nil
+}
 
 // rejectViewSchemaUnstableStar checks every query block in a persisted View,
 // including CTEs, derived tables and subqueries. COUNT(*) is not an output

@@ -50,7 +50,10 @@ type viewSchemaTestCompiler struct {
 	namedSnapshot *Snapshot
 	resolve       func(context.Context, string, string, *Snapshot) error
 	lookups       atomic.Int64
+	lower         int64
 }
+
+func (c *viewSchemaTestCompiler) GetLowerCaseTableNames() int64 { return c.lower }
 
 func (c *viewSchemaTestCompiler) GetSnapshot() *Snapshot { return c.snapshot }
 func (c *viewSchemaTestCompiler) SetSnapshot(snapshot *Snapshot) {
@@ -91,7 +94,7 @@ func newViewSchemaTestFixture(t testing.TB) *viewSchemaTestFixture {
 	mock.SetContext(t.Context())
 	mock.GetAccountIdFunc = func() (uint32, error) { return 42, nil }
 	mock.GetDatabaseIdFunc = func(string, *Snapshot) (uint64, error) { return 7, nil }
-	f := &viewSchemaTestFixture{compiler: &viewSchemaTestCompiler{MockCompilerContext: mock}, nextID: 1000}
+	f := &viewSchemaTestFixture{compiler: &viewSchemaTestCompiler{MockCompilerContext: mock, lower: 1}, nextID: 1000}
 	for i, name := range []string{"nation", "region"} {
 		def := mock.tables[name]
 		def.DbId, def.DbName = 7, "tpch"
@@ -132,7 +135,8 @@ func (f *viewSchemaTestFixture) addView(t testing.TB, name, selectSQL string) *T
 func (f *viewSchemaTestFixture) addDefinition(t testing.TB, name, statement string) *TableDef {
 	t.Helper()
 	f.nextID++
-	data, err := json.Marshal(ViewData{Stmt: statement, DefaultDatabase: "tpch"})
+	lower := f.compiler.GetLowerCaseTableNames()
+	data, err := json.Marshal(ViewData{Stmt: statement, DefaultDatabase: "tpch", LowerCaseTableNames: &lower})
 	require.NoError(t, err)
 	def := &TableDef{
 		Name: name, DbName: "tpch", DbId: 7, TblId: f.nextID, LogicalId: f.nextID + 10000,
@@ -517,7 +521,7 @@ func TestViewSchemaRequestSharedProjectionMemoMatchesCacheOff(t *testing.T) {
 	}
 }
 
-func TestViewSchemaRequestNestedMemoUsesEffectiveLowerCaseMode(t *testing.T) {
+func TestViewSchemaRequestNestedMemoUsesPersistedLowerCaseMode(t *testing.T) {
 	for _, upperTableExists := range []bool{false, true} {
 		t.Run(fmt.Sprintf("uppercase table exists %t", upperTableExists), func(t *testing.T) {
 			f := newViewSchemaTestFixture(t)
@@ -528,9 +532,16 @@ func TestViewSchemaRequestNestedMemoUsesEffectiveLowerCaseMode(t *testing.T) {
 				f.compiler.tables["NATION"] = upper
 				f.compiler.objects["NATION"] = &ObjectRef{Db: 7, Obj: 99, SchemaName: "tpch", ObjName: "NATION"}
 			}
-			// A legacy nested definition inherits each parent's persisted mode.
-			// The statement-local session mode remains 1 throughout this test.
-			f.addView(t, "shared_v", "select n_name as label from NATION")
+			// A nested definition always uses its own persisted mode, not its
+			// parent's. Warm mode 1, then replace the saved mode with 0.
+			shared := f.addView(t, "shared_v", "select n_name as label from NATION")
+			var sharedData ViewData
+			require.NoError(t, json.Unmarshal([]byte(shared.ViewSql.View), &sharedData))
+			mode := int64(0)
+			sharedData.LowerCaseTableNames = &mode
+			encoded, err := json.Marshal(sharedData)
+			require.NoError(t, err)
+			shared.ViewSql.View = string(encoded)
 			for i, rootName := range []string{"folded_v", "sensitive_v"} {
 				root := f.addView(t, rootName, "select label from shared_v")
 				var data ViewData
@@ -572,8 +583,16 @@ func TestViewSchemaRequestNestedMemoUsesEffectiveLowerCaseMode(t *testing.T) {
 			oracle.Close()
 
 			cached := f.request(t)
+			mode = 1
+			encoded, err = json.Marshal(sharedData)
+			require.NoError(t, err)
+			shared.ViewSql.View = string(encoded)
 			viewSchemaTestResult(t, cached, "folded_v").Release()
 			require.NotEmpty(t, cached.nestedMemo)
+			mode = 0
+			encoded, err = json.Marshal(sharedData)
+			require.NoError(t, err)
+			shared.ViewSql.View = string(encoded)
 			warm, gotErr := cached.Describe("tpch", "sensitive_v", nil)
 			if warm != nil {
 				t.Cleanup(warm.Release)
@@ -591,9 +610,97 @@ func TestViewSchemaRequestNestedMemoUsesEffectiveLowerCaseMode(t *testing.T) {
 				require.Equal(t, wantDependencies, gotDependencies)
 				warm.Release()
 			}
-			require.Zero(t, cached.hits, "legacy nested results from lower=1 cannot answer a lower=0 root")
+			require.Zero(t, cached.hits, "nested results from saved lower=1 cannot answer saved lower=0")
 			cached.Close()
 			require.Zero(t, f.generation.Used())
+		})
+	}
+}
+
+func TestViewSchemaRequestRequiresPersistedCreationMode(t *testing.T) {
+	for _, nested := range []bool{false, true} {
+		for _, caller := range []int64{0, 1} {
+			for _, saved := range []bool{false, true} {
+				for _, disabled := range []bool{false, true} {
+					t.Run(fmt.Sprintf("nested=%t/caller=%d/saved=%t/memoOff=%t", nested, caller, saved, disabled), func(t *testing.T) {
+						f := newViewSchemaTestFixture(t)
+						f.compiler.lower = caller
+						upper := proto.Clone(f.compiler.tables["nation"]).(*TableDef)
+						upper.Name, upper.TblId, upper.LogicalId = "NATION", 99, 199
+						upper.Cols[1].Typ = planpb.Type{Id: int32(types.T_int64)}
+						f.compiler.tables["NATION"] = upper
+						f.compiler.objects["NATION"] = &ObjectRef{Db: 7, Obj: 99, SchemaName: "tpch", ObjName: "NATION"}
+						def := f.addView(t, "source_v", "select n_name as label from NATION")
+						name := "source_v"
+						if nested {
+							f.addView(t, "root_v", "select label from source_v")
+							name = "root_v"
+						}
+						var data ViewData
+						require.NoError(t, json.Unmarshal([]byte(def.ViewSql.View), &data))
+						mode := int64(0)
+						data.LowerCaseTableNames = &mode
+						if !saved {
+							data.LowerCaseTableNames = nil
+						}
+						encoded, err := json.Marshal(data)
+						require.NoError(t, err)
+						def.ViewSql.View = string(encoded)
+						r := f.request(t)
+						r.memoDisabled = disabled
+						for i := 0; i < 2; i++ {
+							result, err := r.Describe("tpch", name, nil)
+							if result != nil {
+								t.Cleanup(result.Release)
+							}
+							if !saved {
+								if result != nil {
+									result.Release()
+								}
+								require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+								require.ErrorContains(t, err, "LEGACY_CONTEXT_UNAVAILABLE")
+								require.Nil(t, result)
+							} else {
+								require.NoError(t, err)
+								columns, err := result.Columns()
+								require.NoError(t, err)
+								require.Equal(t, int32(types.T_int64), columns[0].Typ.Id,
+									"saved mode 0 must bind NATION even for caller 1")
+								result.Release()
+							}
+						}
+					})
+				}
+			}
+		}
+	}
+}
+
+func TestViewSchemaRequestMissingCreationModeCannotUseWarmMemo(t *testing.T) {
+	for _, nested := range []bool{false, true} {
+		t.Run(fmt.Sprintf("nested=%t", nested), func(t *testing.T) {
+			f := newViewSchemaTestFixture(t)
+			source := f.addView(t, "source_v", "select n_name as label from nation")
+			f.addView(t, "first_v", "select label from source_v")
+			f.addView(t, "second_v", "select label from source_v")
+			r := f.request(t)
+			viewSchemaTestResult(t, r, "first_v").Release()
+			name, def := "first_v", f.compiler.tables["first_v"]
+			if nested {
+				name, def = "second_v", source
+			}
+			var data ViewData
+			require.NoError(t, json.Unmarshal([]byte(def.ViewSql.View), &data))
+			data.LowerCaseTableNames = nil
+			encoded, err := json.Marshal(data)
+			require.NoError(t, err)
+			def.ViewSql.View = string(encoded)
+			result, err := r.Describe("tpch", name, nil)
+			if result != nil {
+				result.Release()
+			}
+			require.ErrorContains(t, err, "LEGACY_CONTEXT_UNAVAILABLE")
+			require.Nil(t, result)
 		})
 	}
 }
@@ -707,7 +814,8 @@ func TestViewSchemaRequestRejectsInvalidNestedDefinitionsWithOrWithoutMemo(t *te
 							"multiple statements":  "create view middle_v as select n_nationkey as k from nation; select 1",
 							"not a view statement": "select n_nationkey as k from nation",
 						}[kind]
-						encoded, err := json.Marshal(ViewData{Stmt: statement, DefaultDatabase: "tpch"})
+						lower := f.compiler.GetLowerCaseTableNames()
+						encoded, err := json.Marshal(ViewData{Stmt: statement, DefaultDatabase: "tpch", LowerCaseTableNames: &lower})
 						require.NoError(t, err)
 						middle.ViewSql.View = string(encoded)
 					}
@@ -883,7 +991,8 @@ func TestViewSchemaRequestRejectsInvalidRootsAndRecovers(t *testing.T) {
 			case "json":
 				root.ViewSql.View = "{"
 			case "sql":
-				data, err := json.Marshal(ViewData{Stmt: "create view root_v as select from", DefaultDatabase: "tpch"})
+				lower := f.compiler.GetLowerCaseTableNames()
+				data, err := json.Marshal(ViewData{Stmt: "create view root_v as select from", DefaultDatabase: "tpch", LowerCaseTableNames: &lower})
 				require.NoError(t, err)
 				root.ViewSql.View = string(data)
 			}
@@ -1335,7 +1444,8 @@ func TestViewSchemaRequestLegacyStarCannotUsePreviousMemo(t *testing.T) {
 	viewSchemaTestResult(t, r, "first_v").Release()
 	// Keep the object identity but replace its persisted SQL. The second root
 	// must not reuse the previously bound nested metadata for a legacy star.
-	encoded, err := json.Marshal(ViewData{Stmt: "create view middle_v as select * from nation", DefaultDatabase: "tpch"})
+	lower := f.compiler.GetLowerCaseTableNames()
+	encoded, err := json.Marshal(ViewData{Stmt: "create view middle_v as select * from nation", DefaultDatabase: "tpch", LowerCaseTableNames: &lower})
 	require.NoError(t, err)
 	middle.ViewSql.View = string(encoded)
 	result, err := r.Describe("tpch", "second_v", nil)
@@ -1347,7 +1457,7 @@ func TestViewSchemaRequestLegacyStarCannotUsePreviousMemo(t *testing.T) {
 	// The root memo key also incorporates its persisted SQL, even if its
 	// catalog identity has not changed.
 	root := f.compiler.tables["first_v"]
-	encoded, err = json.Marshal(ViewData{Stmt: "create view first_v as select * from nation", DefaultDatabase: "tpch"})
+	encoded, err = json.Marshal(ViewData{Stmt: "create view first_v as select * from nation", DefaultDatabase: "tpch", LowerCaseTableNames: &lower})
 	require.NoError(t, err)
 	root.ViewSql.View = string(encoded)
 	result, err = r.Describe("tpch", "first_v", nil)
