@@ -134,6 +134,41 @@ func TestIrregularIndexAffectedByUpdate(t *testing.T) {
 	}
 }
 
+func TestIrregularIndexAffectedByGeneratedColumnSourceUpdate(t *testing.T) {
+	tableDef := &TableDef{
+		Pkey:          &PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+		Name2ColIndex: map[string]int32{"id": 0, "src": 1, "gmid": 2, "gvec": 3, "payload": 4, "ginclude": 5},
+		Cols: []*ColDef{
+			{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+			{Name: "src", Typ: planpb.Type{Id: int32(types.T_int32)}},
+			{Name: "gmid", Typ: planpb.Type{Id: int32(types.T_int32)}, GeneratedCol: &planpb.GeneratedCol{Expr: &planpb.Expr{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 1}}}}},
+			{Name: "gvec", Typ: planpb.Type{Id: int32(types.T_array_float32), Width: 2}, GeneratedCol: &planpb.GeneratedCol{Expr: &planpb.Expr{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 2}}}}},
+			{Name: "payload", Typ: planpb.Type{Id: int32(types.T_int32)}},
+			{Name: "ginclude", Typ: planpb.Type{Id: int32(types.T_int32)}, GeneratedCol: &planpb.GeneratedCol{Expr: &planpb.Expr{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 2}}}}},
+		},
+	}
+	idx := &IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(), Parts: []string{"gvec"}, IncludedColumns: []string{"ginclude"}}
+	for _, tc := range []struct {
+		name string
+		cols map[string]tree.Expr
+		want bool
+	}{
+		{name: "generated part", cols: map[string]tree.Expr{"src": nil}, want: true},
+		{name: "generated include", cols: map[string]tree.Expr{"src": nil}, want: true},
+		{name: "unrelated", cols: map[string]tree.Expr{"payload": nil}, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			candidate := idx
+			if tc.name == "generated include" {
+				candidate = &IndexDef{IndexAlgo: idx.IndexAlgo, Parts: []string{"payload"}, IncludedColumns: []string{"ginclude"}}
+			}
+			got, err := irregularIndexAffectedByUpdate(tableDef, candidate, tc.cols)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
 type updateIndexBuildTestContext struct {
 	*MockCompilerContext
 	statsCache *StatsCache

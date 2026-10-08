@@ -411,6 +411,26 @@ func TestNewIvfflatSqlWriterAsyncReloadPreservesIncludeColumns(t *testing.T) {
 	require.Contains(t, sql, "'news'")
 }
 
+func TestNewIvfflatSqlWriterAffineQuantizationUsesVectorBeforeInclude(t *testing.T) {
+	tabledef := newTestIvfflatTableDef(
+		"pk", types.T_int64, "vec", types.T_array_float32, 3,
+		ivfflatIncludeColSpec{name: "rank", typ: types.T_int32},
+	)
+	for _, indexDef := range tabledef.Indexes {
+		indexDef.IndexAlgoParams = `{"included_columns":"rank","lists":"16","op_type":"vector_l2_ops","quantization":"int8"}`
+	}
+	writer, err := NewIvfflatSqlWriter("ivfflat", newTestJobID(), newTestConsumerInfo(), tabledef, tabledef.Indexes)
+	require.NoError(t, err)
+	require.NoError(t, writer.Insert(context.Background(), []any{int64(1), []float32{1, 2, 3}, nil, int32(7)}))
+	sqlBytes, err := writer.ToSql()
+	require.NoError(t, err)
+	sql := string(sqlBytes)
+	require.Contains(t, sql, "src0, ")
+	require.Contains(t, sql, "), src2 FROM src")
+	require.Contains(t, sql, "cast(cast(src1")
+	require.NotContains(t, sql, "src2 *")
+}
+
 func TestNewIvfflatSqlWriterDelete(t *testing.T) {
 	var ctx context.Context
 

@@ -16,6 +16,7 @@ package iscp
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -234,10 +235,8 @@ func convertColIntoSql(
 	var temp string
 	switch typ.Oid { //get col
 	case types.T_json:
-		sqlBuff = appendByte(sqlBuff, '\'')
 		temp = data.(bytejson.ByteJson).String()
-		sqlBuff = appendString(sqlBuff, temp)
-		sqlBuff = appendByte(sqlBuff, '\'')
+		sqlBuff = appendSQLString(sqlBuff, temp)
 	case types.T_bool:
 		b := data.(bool)
 		if b {
@@ -252,9 +251,7 @@ func convertColIntoSql(
 		byteLength := (bitLength + 7) / 8
 		b := types.EncodeUint64(&value)[:byteLength]
 		slices.Reverse(b)
-		sqlBuff = appendByte(sqlBuff, '\'')
-		sqlBuff = appendBytes(sqlBuff, b)
-		sqlBuff = appendByte(sqlBuff, '\'')
+		sqlBuff = appendHex(sqlBuff, b)
 	case types.T_int8:
 		value := data.(int8)
 		sqlBuff = appendInt64(sqlBuff, int64(value))
@@ -345,9 +342,11 @@ func convertColIntoSql(
 		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_timestamp:
 		value := data.(string)
-		sqlBuff = appendByte(sqlBuff, '\'')
-		sqlBuff = appendString(sqlBuff, value)
-		sqlBuff = appendByte(sqlBuff, '\'')
+		ts, err := types.ParseTimestamp(time.UTC, value, typ.Scale)
+		if err != nil {
+			return nil, err
+		}
+		sqlBuff = appendTimestampSQL(sqlBuff, ts, typ.Scale)
 	case types.T_decimal64:
 		value := data.(string)
 		sqlBuff = appendByte(sqlBuff, '\'')
@@ -400,6 +399,29 @@ func appendHex(dst []byte, src []byte) []byte {
 	return dst
 }
 
+func appendSQLString(dst []byte, value string) []byte {
+	dst = appendByte(dst, '\'')
+	for i := 0; i < len(value); i++ {
+		switch value[i] {
+		case '\\', '\'':
+			dst = appendByte(dst, '\\')
+		}
+		dst = appendByte(dst, value[i])
+	}
+	return appendByte(dst, '\'')
+}
+
+func appendTimestampSQL(dst []byte, value types.Timestamp, scale int32) []byte {
+	// Timestamp is stored as a signed microsecond count.  Serializing that
+	// representation through BIT_CAST avoids parsing a session-timezone
+	// dependent string and preserves fractional values and zero timestamps.
+	_ = scale // the target column's type controls the effective scale on cast
+	buf := types.EncodeTimestamp(&value)
+	dst = appendString(dst, "bit_cast(unhex('")
+	dst = hex.AppendEncode(dst, buf)
+	return appendString(dst, "') AS TIMESTAMP)")
+}
+
 func appendByte(buf []byte, d byte) []byte {
 	return append(buf, d)
 }
@@ -421,13 +443,19 @@ func appendUint64(buf []byte, value uint64) []byte {
 }
 
 func appendFloat64(buf []byte, value float64, bitSize int) []byte {
-	if !math.IsInf(value, 0) {
+	if !math.IsNaN(value) && !math.IsInf(value, 0) {
 		buf = strconv.AppendFloat(buf, value, 'f', -1, bitSize)
 	} else {
-		if math.IsInf(value, 1) {
-			buf = append(buf, []byte("+Infinity")...)
+		buf = append(buf, []byte("bit_cast(unhex('")...)
+		var raw [8]byte
+		if bitSize == 32 {
+			binary.LittleEndian.PutUint32(raw[:4], math.Float32bits(float32(value)))
+			buf = hex.AppendEncode(buf, raw[:4])
+			buf = append(buf, []byte("') AS FLOAT)")...)
 		} else {
-			buf = append(buf, []byte("-Infinity")...)
+			binary.LittleEndian.PutUint64(raw[:], math.Float64bits(value))
+			buf = hex.AppendEncode(buf, raw[:])
+			buf = append(buf, []byte("') AS DOUBLE)")...)
 		}
 	}
 	return buf
