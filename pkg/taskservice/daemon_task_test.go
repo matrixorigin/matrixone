@@ -710,7 +710,11 @@ func TestLifecyclePublishesClaimBeforeReplacementAndHeartbeat(t *testing.T) {
 }
 
 func TestStableCDCHeartbeatFailureRecoveryAndSupersession(t *testing.T) {
-	for _, code := range []task.TaskCode{task.TaskCode_InitCdcStableEpoch, task.TaskCode_InitCdcLosslessStart} {
+	for _, code := range []task.TaskCode{
+		task.TaskCode_InitCdcStableEpoch,
+		task.TaskCode_InitCdcLosslessStart,
+		task.TaskCode_InitCdcSourcePatternV1,
+	} {
 		t.Run(code.String(), func(t *testing.T) {
 			r, store := newDaemonHandleTestRunner(t)
 			t.Cleanup(r.stopper.Stop)
@@ -1581,7 +1585,7 @@ func TestStableEpochCDCTaskRejectsLegacyRunnerBeforeClaim(t *testing.T) {
 
 	dt := newDaemonTaskForTest(1, task.TaskStatus_Running, "new-cn-at-S")
 	dt.Metadata.ID = "stable-epoch-handoff"
-	dt.Metadata.Executor = task.TaskCode_InitCdcStableEpoch
+	dt.Metadata.Executor = task.TaskCode_InitCdcSourcePatternV1
 	dt.LastHeartbeat = time.Now().Add(-legacyRunner.options.heartbeatTimeout - time.Second)
 	mustAddTestDaemonTask(t, store, 1, dt)
 
@@ -1590,7 +1594,7 @@ func TestStableEpochCDCTaskRejectsLegacyRunnerBeforeClaim(t *testing.T) {
 	legacyCandidates := legacyRunner.startTasks(context.Background())
 	require.Len(t, legacyCandidates, 1)
 	_, err := legacyRunner.newDaemonTask(legacyCandidates[0])
-	require.ErrorContains(t, err, "executor with code 14 not exists")
+	require.ErrorContains(t, err, "executor with code 16 not exists")
 
 	legacyRunner.dispatchTaskHandle(context.Background())
 	require.Zero(t, len(legacyRunner.pendingTaskHandle))
@@ -1611,7 +1615,7 @@ func TestStableEpochCDCTaskRejectsLegacyRunnerBeforeClaim(t *testing.T) {
 	t.Cleanup(newRunner.stopper.Stop)
 	done := make(chan struct{})
 	schedulerInjected := false
-	newRunner.RegisterExecutor(task.TaskCode_InitCdcStableEpoch, func(ctx context.Context, _ task.Task) error {
+	newRunner.RegisterExecutor(task.TaskCode_InitCdcSourcePatternV1, func(ctx context.Context, _ task.Task) error {
 		schedulerInjected = TaskExecutorTaskSchedulerFromContext(ctx) != nil
 		for key, value := range snapshotAtS {
 			target[key] = value

@@ -99,6 +99,7 @@ func newCodecTestProcess(t *testing.T) (*Process, client.TxnOperator) {
 		AutoIncrementOffset:                 4,
 		MaxErrorCount:                       128,
 		MaxErrorCountSet:                    true,
+		LCTimeNames:                         "fr_FR",
 	}
 	sp := NewStmtProfile(uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), uuid.MustParse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"))
 	sp.SetTxnId([]byte("txn-profile-123456"))
@@ -715,6 +716,10 @@ func TestBuildProcessInfoAndMockProcessInfoWithPro(t *testing.T) {
 	require.Equal(t, uint64(4), info.SessionInfo.AutoIncrementOffset)
 	require.Equal(t, uint32(128), info.SessionInfo.MaxErrorCount)
 	require.True(t, info.SessionInfo.MaxErrorCountSet)
+	require.Equal(t, "fr_FR", info.SessionInfo.LcTimeNames)
+	decodedSession, err := ConvertToProcessSessionInfo(info.SessionInfo)
+	require.NoError(t, err)
+	require.Equal(t, "fr_FR", decodedSession.LCTimeNames)
 	require.Equal(t, pipeline.SessionLoggerInfo_Warn, info.SessionLogger.LogLevel)
 
 	// A rolling-upgrade receiver compiled before LockWaitTimeoutSet ignores the
@@ -861,6 +866,7 @@ func TestCodecServiceEncodeDecodeAndLookup(t *testing.T) {
 	require.Equal(t, info.SessionInfo.MatrixoneNativeMode, decodedProc.Base.SessionInfo.MatrixOneNativeMode)
 	require.False(t, decodedProc.Base.SessionInfo.ExplicitZeroTemporalCastReturnsNull)
 	require.Equal(t, info.SessionInfo.SqlMode, decodedProc.Base.SessionInfo.SqlMode)
+	require.Equal(t, info.SessionInfo.LcTimeNames, decodedProc.Base.SessionInfo.LCTimeNames)
 	require.Equal(t, info.SessionInfo.LockWaitTimeoutSet, decodedProc.Base.SessionInfo.LockWaitTimeoutSet)
 	require.Equal(t, info.SessionInfo.AutoIncrementIncrement, decodedProc.Base.SessionInfo.AutoIncrementIncrement)
 	require.Equal(t, info.SessionInfo.AutoIncrementOffset, decodedProc.Base.SessionInfo.AutoIncrementOffset)

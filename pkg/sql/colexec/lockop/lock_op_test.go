@@ -1041,6 +1041,46 @@ func TestLockWithRetryDoesNotRetryBackendErrorWhenLockTableAlreadyHeld(t *testin
 	require.Less(t, time.Since(start), defaultWaitTimeOnRetryLock)
 }
 
+// A stale admission can be retried, but the next request may discover that
+// this CN is already draining. That terminal rejection must not loop.
+func TestLockWithRetryStopsAfterBindChangedThenDrainRejection(t *testing.T) {
+	forceLockRetryMemoryPressure(t, lockRetryMemoryPressureNormal)
+	ctrl := gomock.NewController(t)
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	expected := moerr.NewNewTxnInCNRollingRestart()
+	gomock.InOrder(
+		lockSvc.EXPECT().Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), lock.LockOptions{}).
+			Return(lock.Result{}, moerr.NewLockTableBindChangedNoCtx()),
+		txnOp.EXPECT().HasLockTable(uint64(1)).Return(false),
+		lockSvc.EXPECT().Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), lock.LockOptions{}).
+			Return(lock.Result{}, expected),
+	)
+	_, err := lockWithRetry(ctx, lockSvc, 1, nil, []byte("txn1"), lock.LockOptions{},
+		txnOp, nil, nil, LockOptions{}, types.Type{})
+	require.ErrorIs(t, err, expected)
+}
+
+func TestLockWithRetryBindChangeHonorsCancellation(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	expected := moerr.NewLockTableBindChangedNoCtx()
+	lockSvc.EXPECT().Lock(ctx, uint64(1), gomock.Nil(), []byte("txn1"), lock.LockOptions{}).
+		DoAndReturn(func(context.Context, uint64, [][]byte, []byte, lock.LockOptions) (lock.Result, error) {
+			cancel()
+			return lock.Result{}, expected
+		}).Times(1)
+	_, err := lockWithRetry(ctx, lockSvc, 1, nil, []byte("txn1"), lock.LockOptions{},
+		txnOp, nil, nil, LockOptions{}, types.Type{})
+	// Bounded retry preserves the bind failure for the existing txn rollback path.
+	require.ErrorIs(t, err, expected)
+}
+
 func TestLockWithRetryRetriesBindChangedInExplicitUserTxnBeforeLockHeld(t *testing.T) {
 	forceLockRetryMemoryPressure(t, lockRetryMemoryPressureNormal)
 

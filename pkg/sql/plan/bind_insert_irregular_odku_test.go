@@ -202,7 +202,7 @@ func inspectFulltextODKUPlan(t *testing.T, mock *MockOptimizer, sql string) full
 
 func fulltextODKUPlanShape(t *testing.T, sql string) fulltextODKUShape {
 	t.Helper()
-	return inspectFulltextODKUPlan(t, NewMockOptimizer(true), sql)
+	return inspectFulltextODKUPlan(t, NewMockOptimizer(true, newPlanTestProcess(t)), sql)
 }
 
 func TestPartitionedFulltextMaintenanceUsesIndexOnlyMultiUpdate(t *testing.T) {
@@ -210,7 +210,7 @@ func TestPartitionedFulltextMaintenanceUsesIndexOnlyMultiUpdate(t *testing.T) {
 	postdml_flag = true
 	t.Cleanup(func() { postdml_flag = oldPostDML })
 
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	base := mock.ctxt.tables["docs_ft"]
 	base.FeatureFlag |= features.Partitioned
 	base.Partition = &planpb.Partition{PartitionDefs: []*planpb.PartitionDef{
@@ -286,7 +286,7 @@ func TestPartitionedFulltextMaintenanceUsesIndexOnlyMultiUpdate(t *testing.T) {
 }
 
 func TestPartitionedFulltextMaintenanceRebuildsWhenPartitionColumnChanges(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	base := mock.ctxt.tables["docs_ft"]
 	base.FeatureFlag |= features.Partitioned
 	partitionExpr := &planpb.Expr{
@@ -341,7 +341,7 @@ func TestPartitionedFulltextMaintenanceRebuildsWhenPartitionColumnChanges(t *tes
 	})
 
 	t.Run("document primary key changes rebuild both branches", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		base := mock.ctxt.tables["docs_ft"]
 		base.FeatureFlag |= features.Partitioned
 		base.Partition = &planpb.Partition{PartitionDefs: []*planpb.PartitionDef{
@@ -376,7 +376,7 @@ func TestPartitionedFulltextConflictDMLKeepsOldAndNewPartitionKeys(t *testing.T)
 		"replace into constraint_test.docs_ft(id, body, payload, embedding) values (1, 'incoming', 1, '[1,2,3]')",
 	} {
 		t.Run(sql, func(t *testing.T) {
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			base := mock.ctxt.tables["docs_ft"]
 			base.FeatureFlag |= features.Partitioned
 			cond, err := BindFuncExprImplByPlanExpr(mock.ctxt.GetContext(), ">=", []*Expr{
@@ -422,7 +422,7 @@ func TestPartitionedFulltextKeyMovesKeepRegularIndexes(t *testing.T) {
 		"insert into constraint_test.docs_ft_dual(id, body, summary, payload) values (1, 'body', 'new', 7) on duplicate key update summary = values(summary)",
 	} {
 		t.Run(sql, func(t *testing.T) {
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			base := mock.ctxt.tables["docs_ft_dual"]
 			base.FeatureFlag |= features.Partitioned
 			cond, err := BindFuncExprImplByPlanExpr(mock.ctxt.GetContext(), "=", []*Expr{
@@ -455,7 +455,7 @@ func TestPartitionedFulltextKeyMovesKeepRegularIndexes(t *testing.T) {
 }
 
 func TestPartitionedFulltextDMLShapesBuildRoutedMaintenance(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	base := mock.ctxt.tables["docs_ft"]
 	base.FeatureFlag |= features.Partitioned
 	cond, err := BindFuncExprImplByPlanExpr(mock.ctxt.GetContext(), ">=", []*Expr{
@@ -501,7 +501,7 @@ func TestPartitionedFulltextDMLShapesBuildRoutedMaintenance(t *testing.T) {
 }
 
 func TestPartitionedFulltextDeleteRoutesRegularHiddenIndexes(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	base := mock.ctxt.tables["docs_ft_dual"]
 	require.NotNil(t, base)
 	base.FeatureFlag |= features.Partitioned
@@ -639,7 +639,7 @@ func TestOnDuplicateIrregularMaintenanceUsesOnlyEligibleRows(t *testing.T) {
 	})
 
 	t.Run("raw vector without ANN index has no irregular maintenance", func(t *testing.T) {
-		logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
+		logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
 			"insert into constraint_test.docs_vec_raw(id, embedding, payload) values (1, '[1,2,3]', 1) on duplicate key update payload = values(payload)")
 		require.NoError(t, err)
 		for _, node := range logicPlan.GetQuery().Nodes {
@@ -679,7 +679,7 @@ func assertEverySinkStepHasConsumer(t *testing.T, query *planpb.Query) {
 
 func TestOnDuplicateIrregularMaintenanceBuildsPerIndexValueMarkers(t *testing.T) {
 	t.Run("multi-column fulltext compares every indexed value", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		base := mock.ctxt.tables["docs_ft_dual"]
 		require.NotNil(t, base)
 		base.Indexes = []*planpb.IndexDef{base.Indexes[0]}
@@ -723,7 +723,7 @@ func configureMockGeneratedFulltext(t *testing.T, mock *MockOptimizer) {
 
 func TestOnDuplicateGeneratedFulltextUsesDependencyClosure(t *testing.T) {
 	t.Run("unrelated update remains insert only", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		configureMockGeneratedFulltext(t, mock)
 		shape := inspectFulltextODKUPlan(t, mock,
 			"insert into constraint_test.docs_ft_dual(id, summary, payload) values (1, 'same summary', 1) "+
@@ -735,7 +735,7 @@ func TestOnDuplicateGeneratedFulltextUsesDependencyClosure(t *testing.T) {
 	})
 
 	t.Run("source update compares the final generated value", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		configureMockGeneratedFulltext(t, mock)
 		shape := inspectFulltextODKUPlan(t, mock,
 			"insert into constraint_test.docs_ft_dual(id, summary, payload) values (1, 'new summary', 1) "+
@@ -946,7 +946,7 @@ func TestOnDuplicateIrregularValueMarkerRejectsInvalidPositions(t *testing.T) {
 		{name: "missing value marker", newRowMarkerPos: 0, valueMarkerPos: 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true), false, true)
+			builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 			bindCtx := NewBindContext(builder, nil)
 			finalProjTag := builder.genNewBindTag()
 			finalProjID := builder.appendNode(&planpb.Node{
@@ -969,7 +969,7 @@ func TestOnDuplicateIrregularValueMarkerRejectsInvalidPositions(t *testing.T) {
 }
 
 func TestDeletePkColExprUsesSourceSpecificPruneMap(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	builder.qry.Nodes = append(builder.qry.Nodes, &planpb.Node{
 		NodeType:    planpb.Node_SINK,
 		ProjectList: []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_int64)}}},
@@ -997,14 +997,14 @@ func TestIrregularIVFMaintenancePropagatesInvalidParams(t *testing.T) {
 	tableDef := &planpb.TableDef{Indexes: []*planpb.IndexDef{indexDef}}
 
 	t.Run("insert", func(t *testing.T) {
-		builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true), false, true)
+		builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 		bindCtx := NewBindContext(builder, nil)
 		err := builder.buildIrregularIndexInsertMaintenance(bindCtx, 0, tableDef)
 		require.Error(t, err)
 	})
 
 	t.Run("delete", func(t *testing.T) {
-		builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true), false, true)
+		builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 		bindCtx := NewBindContext(builder, nil)
 		builder.irregularMaintTableDef = tableDef
 		builder.irregularMaintDeleteStep = 0
@@ -1014,7 +1014,7 @@ func TestIrregularIVFMaintenancePropagatesInvalidParams(t *testing.T) {
 }
 
 func TestAlterCopySkipsClonedAndNewPluginIndexInsertMaintenance(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	ctx.SetContext(context.WithValue(context.Background(), defines.AlterCopyOpt{}, &planpb.AlterCopyOpt{
 		TargetTableName:  "copy_t",
 		SkipIndexesCopy:  map[string]bool{"cloned_ft": true},

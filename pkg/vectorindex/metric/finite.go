@@ -74,6 +74,22 @@ func CheckFiniteDist[T types.RealNumbers](d T, what string) (T, error) {
 
 const nonFiniteMsg = ": vector magnitude is too large, the result overflows the element domain"
 
+// nanToPosInf maps a NaN distance to +Inf. A SIMD kernel that sums signed products
+// in several float lanes can produce NaN (a lane overflowing to +Inf cancelling one
+// at -Inf) where a sequential sum would stay finite. NaN is unordered, so it breaks
+// ranking: it never compares as the max a top-k heap must evict, so it is retained
+// in a slot and drops a valid candidate. +Inf is well-ordered -- the largest
+// distance -- so it is always evicted first: the overflowing candidate ranks last
+// (never selected as nearest) and every finite candidate ranks correctly. A genuine
+// +/-Inf is left as is, and the score boundary still rejects any non-finite result
+// (#29496).
+func nanToPosInf[T types.RealNumbers](d T) T {
+	if math.IsNaN(float64(d)) {
+		return T(math.Inf(1))
+	}
+	return d
+}
+
 // anyNonZero reports whether v holds a value that is not zero. Used where a norm reads 0: that is
 // either a genuinely zero vector, which has its own documented convention, or one whose squares
 // all underflowed, which has no computable answer.

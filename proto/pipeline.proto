@@ -800,6 +800,8 @@ message SessionInfo {
   // from a process sent by an older coordinator.
   uint32 default_week_format = 20;
   bool default_week_format_set = 21;
+  // Effective locale captured for locale-sensitive temporal functions.
+  string lc_time_names = 22;
 }
 
 message SessionLoggerInfo {

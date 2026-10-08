@@ -384,7 +384,7 @@ func (st *specialTableInfo) trim() {
 }
 
 func (st *specialTableInfo) getTombstonesStats() []objectio.ObjectStats {
-	tombstonesStats := make([]objectio.ObjectStats, 0)
+	tombstonesStats := make([]objectio.ObjectStats, 0, len(st.tombstones))
 	for _, obj := range st.tombstones {
 		tombstonesStats = append(tombstonesStats, obj.stats)
 	}

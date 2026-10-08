@@ -13,7 +13,8 @@ insert into ft values
   (2, 'aaaaaaaaaaaaaaaaaaaaaaa'),
   (3, 'hello bbbbbbbbbbbbbbbbbbbbbbbbbb'),
   (4, 'short'),
-  (5, 'aяяяяяяяяяяяя');
+  (5, 'aяяяяяяяяяяяя'),
+  (6, 'ȺȺȺȺȺȺȺȺ');
 create fulltext2 index fi on ft(body) with parser ngram;
 
 -- 26 b's are stored as the first 23. NL / BM25 / quoted-boolean must find docs 1 and 3.
@@ -29,6 +30,17 @@ select id from ft where match(body) against('hello bbbbbbbbbbbbbbbbbbbbbbbbbb') 
 select id from ft where match(body) against('aяяяяяяяяяяяя') order by id;
 select id from ft where match(body) against('aяяяяяяяяяяяя' in bm25 mode) order by id;
 select id from ft where match(body) against('"aяяяяяяяяяяяя"' in boolean mode) order by id;
+
+-- #29271 P2 (expanding fold): U+023A (Ⱥ, Latin <0x7FF, 2 bytes) folds to U+2C65 (ⱥ, 3 bytes). A run of
+-- 8×Ⱥ (16 input bytes) folds to 24 bytes and is stored re-capped to 7×ⱥ (21 bytes). NL / BM25 /
+-- quoted-boolean must build the query term with the SAME post-fold cap and find doc 6 -- each returned
+-- 0 rows before the reader was synchronized with the folded-token cap (it looked up the unstored 24-byte
+-- term). This row actually indexes the expanding value, which the classic panic test did not.
+select id from ft where match(body) against('ȺȺȺȺȺȺȺȺ') order by id;
+select id from ft where match(body) against('ȺȺȺȺȺȺȺȺ' in bm25 mode) order by id;
+select id from ft where match(body) against('"ȺȺȺȺȺȺȺȺ"' in boolean mode) order by id;
+-- 7×Ⱥ folds to exactly 21 bytes -- the SAME stored token as 8×Ⱥ -- so it also finds doc 6 (boundary control).
+select id from ft where match(body) against('ȺȺȺȺȺȺȺ') order by id;
 
 -- Controls (already worked): unquoted boolean truncates via the tokenizer; the exact 23-byte token hits.
 select id from ft where match(body) against('bbbbbbbbbbbbbbbbbbbbbbbbbb' in boolean mode) order by id;

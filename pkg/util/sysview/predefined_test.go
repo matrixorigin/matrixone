@@ -518,9 +518,12 @@ func TestInformationSchemaColumnsUsesTypeCharsetIdentity(t *testing.T) {
 }
 
 func TestInformationSchemaCharacterSetsData(t *testing.T) {
+	assert.Equal(t, int32(4), characterSetMaxBytes("utf8mb3"))
+	assert.Equal(t, int32(0), characterSetMaxBytes("latin1"))
+	assert.Equal(t, "utf8_general_ci", DefaultCollationForCharset("utf8mb3"))
 	for _, expected := range []string{
 		"('binary','binary','Binary pseudo charset',1)",
-		"('utf8','utf8_general_ci','UTF-8 Unicode',3)",
+		"('utf8','utf8_general_ci','UTF-8 Unicode',4)",
 		"('utf8mb4','utf8mb4_general_ci','UTF-8 Unicode',4)",
 	} {
 		assert.Contains(t, InformationSchemaCharacterSetsData, expected)

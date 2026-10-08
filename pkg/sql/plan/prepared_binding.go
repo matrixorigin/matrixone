@@ -17,12 +17,15 @@ package plan
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 // A binding fixes a parser ordinal's execution slot and SQL source domain.
@@ -86,6 +89,7 @@ type preparedSourceBindingState struct {
 	bindings             []PreparedSourceBinding
 	values               []any
 	valueDependent       bool
+	selectStatement      bool
 	diagnosticCandidates []*Expr
 	diagnosticFree       bool
 }
@@ -159,6 +163,29 @@ func preparedConfigurationValue(ctx context.Context, expr *Expr) (any, bool) {
 	return value, true
 }
 
+func preparedBoundDoubleValue(ctx context.Context, expr *Expr) (float64, bool) {
+	raw, present := preparedConfigurationValue(ctx, expr)
+	if !present {
+		return 0, false
+	}
+	switch value := raw.(type) {
+	case float64:
+		return value, true
+	case string:
+		parsed, err := strconv.ParseFloat(value, 64)
+		return parsed, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func preparedNumericValueSpelling(value any) string {
+	if bytes, ok := value.([]byte); ok {
+		return string(bytes)
+	}
+	return fmt.Sprint(value)
+}
+
 func preparedSourceBindingAt(ctx context.Context, ordinal int) (PreparedSourceBinding, error) {
 	bindings := preparedSourceBindings(ctx)
 	if ordinal <= 0 || ordinal > len(bindings) {
@@ -190,6 +217,114 @@ func integerDomainFits(source, target types.T) bool {
 		return source.TypeLen() <= target.TypeLen()
 	}
 	return source.IsUnsignedInt() && !target.IsUnsignedInt() && source.TypeLen() < target.TypeLen()
+}
+
+// Direct signed integer consumers share this admission. Keep the full cast
+// before rewrites can remove the consumer; the existing per-EXECUTE diagnostic
+// probe guards reuse while the executable expression retains its ParamRef.
+func bindPreparedIntegerValue(ctx context.Context, column, source *Expr) (*Expr, bool, error) {
+	state := preparedBindingState(ctx)
+	if state == nil || column.GetCol() == nil || source.GetP() == nil {
+		return source, false, nil
+	}
+	target := types.T(column.Typ.Id)
+	// A signed source remains a signed marker here. Reject unsupported domains
+	// before the linear lookup; the binding still owns positive admission.
+	if !types.T(source.Typ.Id).IsSignedInt() || !target.IsSignedInt() || target.TypeLen() > 4 {
+		return source, false, nil
+	}
+	binding, ok := state.bindingForPosition(source.GetP().Pos)
+	if !ok || !binding.Type.Oid.IsSignedInt() || binding.Type.Oid.TypeLen() <= target.TypeLen() {
+		return source, false, nil
+	}
+	wasValueDependent := state.valueDependent
+	value, present := preparedConfigurationValue(ctx, source)
+	if !present || value == nil {
+		return source, false, nil
+	}
+	_, exact, err := preparedComparisonExactIntegerExpr(ctx, preparedNumericValueSpelling(value), column.Typ)
+	if err != nil || !exact {
+		// Unsafe fallbacks must not replace a valid cached narrowing plan.
+		return source, false, err
+	}
+	converted, err := makePlan2CastExpr(ctx, source, column.Typ)
+	if err != nil {
+		return nil, false, err
+	}
+	state.diagnosticCandidates = append(state.diagnosticCandidates, DeepCopyExpr(converted))
+	state.valueDependent = wasValueDependent
+	// A decoded binary signed integer that fits the target has identical
+	// text→source→target and text→target results. Lower only this consumer's
+	// copy to one transport conversion; retain the original full guard above,
+	// source marker, sibling consumers and source-domain cache key.
+	if binding.Type.Oid == types.T(source.Typ.Id) {
+		if value, ok := state.values[source.GetP().Pos].(ParamValue); ok &&
+			value.IsBinaryProtocol && !value.IsBin && !value.IsBinaryString &&
+			value.PrepareParamKind == vector.PrepareParamInteger {
+			narrowed := DeepCopyExpr(source)
+			narrowed.Typ = converted.Typ
+			return narrowed, true, nil
+		}
+	}
+	return converted, true, nil
+}
+
+// A closed range is published only after both bounds preserve the column's
+// domain. A failed bound discards this attempt's guards and leaves the original
+// expression for normal comparison binding; its value dependency stays live.
+func bindPreparedIntegerBetween(ctx context.Context, args []*Expr) ([]*Expr, bool, error) {
+	state := preparedBindingState(ctx)
+	if state == nil || !state.selectStatement || len(args) != 3 || args[0] == nil || args[0].GetCol() == nil {
+		return args, false, nil
+	}
+	column := args[0]
+	target := types.T(column.Typ.Id)
+	if !target.IsSignedInt() || target.TypeLen() > 4 {
+		return args, false, nil
+	}
+	// Reject derived/mixed domains before inspecting any current values.
+	for _, source := range args[1:] {
+		if source == nil || !types.T(source.Typ.Id).IsSignedInt() || (source.GetP() == nil && source.GetLit() == nil) {
+			return args, false, nil
+		}
+		if param := source.GetP(); param != nil {
+			binding, ok := state.bindingForPosition(param.Pos)
+			if !ok || binding.Type.Oid != types.T(source.Typ.Id) {
+				return args, false, nil
+			}
+		}
+	}
+	guardCount, wasValueDependent := len(state.diagnosticCandidates), state.valueDependent
+	published := false
+	defer func() {
+		if !published {
+			if len(state.diagnosticCandidates) > guardCount {
+				state.valueDependent = true
+				clear(state.diagnosticCandidates[guardCount:])
+			}
+			state.diagnosticCandidates = state.diagnosticCandidates[:guardCount]
+		}
+	}()
+	converted := append([]*Expr(nil), args...)
+	for i, source := range args[1:] {
+		var err error
+		if integerDomainFits(types.T(source.Typ.Id), target) || source.GetLit() != nil &&
+			checkNoNeedCast(ctx, makeTypeByPlan2Expr(source), makeTypeByPlan2Expr(column), source) {
+			converted[i+1], err = makePlan2CastExpr(ctx, source, column.Typ)
+		} else {
+			var admitted bool
+			converted[i+1], admitted, err = bindPreparedIntegerValue(ctx, column, source)
+			if !admitted || err != nil {
+				return args, false, err
+			}
+		}
+		if err != nil {
+			return args, false, err
+		}
+	}
+	state.valueDependent = wasValueDependent
+	published = true
+	return converted, true, nil
 }
 
 // Capture before relational rewrites can remove or duplicate a predicate.
@@ -302,6 +437,17 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 		return args, nil
 	}
 	name = strings.ToLower(name)
+	if name == "between" {
+		converted, admitted, err := bindPreparedIntegerBetween(ctx, args)
+		if err != nil {
+			return nil, err
+		}
+		if admitted {
+			// This whole native range already owns its conversion and guards.
+			// Generic numeric witnesses must not replace its consumer domain.
+			return converted, nil
+		}
+	}
 	args = append([]*Expr(nil), args...)
 	for i, source := range args {
 		if source == nil {
@@ -333,6 +479,42 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 				Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: source.GetP().Pos}}}
 			continue
 		}
+		if len(args) == 2 && state.selectStatement && isDecimalComparisonOperator(name) &&
+			binding.Type.Oid.IsInteger() && args[1-i] != nil && args[1-i].GetCol() != nil &&
+			types.T(args[1-i].Typ.Id).IsDecimal() {
+			// Reuse the column's exact domain only while the current integer
+			// fits it. The existing conversion probe guards future EXECUTEs;
+			// wide fallbacks must not replace a reusable native plan.
+			wasValueDependent := state.valueDependent
+			if value, present := preparedConfigurationValue(ctx, source); present && value != nil {
+				witness, exact, err := makePlan2ExactDecimalStringExprWithType(ctx, preparedNumericValueSpelling(value))
+				if err != nil {
+					return nil, err
+				}
+				if exact {
+					column := args[1-i]
+					target, fits := mergeExactDecimalComparisonType(column.Typ, witness.Typ)
+					if fits && sameDecimalComparisonType(target, column.Typ) {
+						converted, err := makePlan2CastExpr(ctx, source, column.Typ)
+						if err != nil {
+							return nil, err
+						}
+						// Integer-to-DECIMAL conversion does not check declared
+						// precision. Probe the exact transport spelling instead.
+						transport := DeepCopyExpr(source)
+						transport.Typ = makeSimplePlan2Type(types.T_text)
+						guard, err := makePlan2CastExpr(ctx, transport, column.Typ)
+						if err != nil {
+							return nil, err
+						}
+						state.diagnosticCandidates = append(state.diagnosticCandidates, guard)
+						state.valueDependent = wasValueDependent
+						args[i] = converted
+						continue
+					}
+				}
+			}
+		}
 		if len(args) == 2 && isPreparedNumericComparisonContext(name) &&
 			args[1-i] != nil && args[1-i].Typ.Id == int32(types.T_float32) &&
 			binding.Type.IsNumeric() && int(source.GetP().Pos) < len(state.values) {
@@ -348,17 +530,57 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 				continue
 			}
 		}
-		if len(args) == 2 && isPreparedNumericComparisonContext(name) &&
-			binding.Type.Oid.IsMySQLString() && args[1-i] != nil &&
-			(types.T(args[1-i].Typ.Id).IsUnsignedInt() || args[1-i].Typ.Id == int32(types.T_bit)) {
-			// A proven integral string must compare in an exact UINT/BIT
-			// domain before the generic matcher can round it through DOUBLE.
-			// The proof depends on this execution's value, so the existing
-			// binding state keeps the resulting plan out of the type-only cache.
+		if len(args) == 2 && state.selectStatement && isPreparedNumericComparisonContext(name) &&
+			binding.Type.Oid == types.T_float64 && args[1-i] != nil && args[1-i].GetCol() != nil &&
+			types.T(args[1-i].Typ.Id).IsDecimal() {
+			if value, ok := preparedBoundDoubleValue(ctx, source); ok &&
+				decimalFloatComparisonHasUniqueValue(value, makeTypeByPlan2Expr(args[1-i])) {
+				converted, castErr := makePlan2CastExpr(ctx, source, args[1-i].Typ)
+				if castErr != nil {
+					return nil, castErr
+				}
+				args[i] = converted
+				continue
+			}
+		}
+		// These signed domains share the same guarded conversion in SELECT,
+		// DML and IN. On a guard miss, keep the original wide comparison and
+		// its dependency instead of retrying the same value proof below.
+		guardedIntegerKey := len(args) == 2 && args[1-i] != nil && args[1-i].GetCol() != nil &&
+			binding.Type.Oid.IsSignedInt() && types.T(source.Typ.Id).IsSignedInt() &&
+			types.T(args[1-i].Typ.Id).IsSignedInt() && types.T(args[1-i].Typ.Id).TypeLen() <= 4 &&
+			binding.Type.Oid.TypeLen() > types.T(args[1-i].Typ.Id).TypeLen()
+		if guardedIntegerKey && isPreparedNumericComparisonContext(name) {
+			converted, _, err := bindPreparedIntegerValue(ctx, args[1-i], source)
+			if err != nil {
+				return nil, err
+			}
+			args[i] = converted
+			continue
+		}
+		if len(args) == 2 && isPreparedNumericComparisonContext(name) && args[1-i] != nil &&
+			(types.T(args[1-i].Typ.Id).IsInteger() || args[1-i].Typ.Id == int32(types.T_bit)) &&
+			(binding.Type.Oid.IsMySQLString() ||
+				(binding.Type.Oid.IsFloat() && types.T(args[1-i].Typ.Id).IsSignedInt()) ||
+				(state.selectStatement && binding.Type.Oid.IsInteger() &&
+					(binding.Type.Oid.TypeLen() > types.T(args[1-i].Typ.Id).TypeLen() ||
+						binding.Type.Oid.IsSignedInt() != types.T(args[1-i].Typ.Id).IsSignedInt()))) {
+			// A proven integral value can compare in the peer's integer domain
+			// without casting the indexed column to a wider domain.
+			// Other source domains retain their existing value dependency.
 			if value, present := preparedConfigurationValue(ctx, source); present && value != nil {
-				_, exact, proofErr := preparedComparisonExactIntegerExpr(ctx, fmt.Sprint(value), args[1-i].Typ)
+				spelling := preparedNumericValueSpelling(value)
+				_, exact, proofErr := preparedComparisonExactIntegerExpr(ctx, spelling, args[1-i].Typ)
 				if proofErr != nil {
 					return nil, proofErr
+				}
+				if binding.Type.Oid.IsInteger() || binding.Type.Oid.IsFloat() {
+					// Some mixed integer comparisons enter an approximate domain.
+					// Keep the existing comparison at values
+					// whose adjacent integers may collide in DOUBLE.
+					normalized, _ := planfunction.NormalizeExactIntegerString(spelling)
+					integer, err := strconv.ParseInt(normalized, 10, 54)
+					exact = exact && err == nil && integer >= -(1<<53)+1 && integer <= (1<<53)-1
 				}
 				if exact {
 					target := args[1-i].Typ
@@ -368,16 +590,18 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 						unsigned := types.T_uint64.ToType()
 						target = makePlan2Type(&unsigned)
 					}
-					// The proof accepts complete decimal/scientific spellings such
-					// as "100.0" and "1e2". String→UINT's integer parser does
-					// not accept those spellings, while DECIMAL(38,0) parses them
-					// exactly without rounding adjacent values above 2^53.
-					decimalType := types.New(types.T_decimal128, 38, 0)
-					decimalValue, castErr := makePlan2CastExpr(ctx, source, makePlan2Type(&decimalType))
-					if castErr != nil {
-						return nil, castErr
+					converted := source
+					var castErr error
+					if binding.Type.Oid.IsMySQLString() {
+						// Decimal/scientific text needs an exact intermediate parser;
+						// direct string→integer casts reject those spellings.
+						decimalType := types.New(types.T_decimal128, 38, 0)
+						converted, castErr = makePlan2CastExpr(ctx, source, makePlan2Type(&decimalType))
+						if castErr != nil {
+							return nil, castErr
+						}
 					}
-					converted, castErr := makePlan2CastExpr(ctx, decimalValue, target)
+					converted, castErr = makePlan2CastExpr(ctx, converted, target)
 					if castErr != nil {
 						return nil, castErr
 					}
@@ -429,9 +653,12 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 			if target.Oid == types.T_any && (binding.Type.Oid.IsMySQLString() || binding.Type.Oid == types.T_any) {
 				target = types.T_varbinary.ToType()
 			}
-		case name == "ntile" && len(args) == 1 && binding.Type.Oid == types.T_any:
-			// Keep a NULL bucket count executable so NTILE reports its
-			// runtime argument error instead of a binder ANY overload error.
+		case name == "ntile" && len(args) == 1 &&
+			(binding.Type.Oid == types.T_any || binding.Type.Oid.IsMySQLString()):
+			// Rebinding must retain NTILE's prepared integer consumer for
+			// numeric text, without changing the marker's source domain.
+			// The implicit cast rejects fractional/invalid text; NULL still
+			// reaches NTILE's runtime argument check.
 			target = types.T_int64.ToType()
 		case len(args) == 1 && binding.Type.Oid.IsMySQLString() &&
 			(name == "sum" || name == "avg"):
@@ -570,6 +797,25 @@ type PreparedExecutionPlan struct {
 	ValueDependent       bool
 }
 
+// EXPLAIN must profile the same binding semantics as its underlying statement.
+// Keep the wrapper for planning/authorization, and never classify explained DML
+// as SELECT merely because it is wrapped in a diagnostic statement.
+func preparedUnderlyingSelect(stmt tree.Statement) bool {
+	for stmt != nil {
+		switch wrapped := stmt.(type) {
+		case *tree.ExplainStmt:
+			stmt = wrapped.Statement
+		case *tree.ExplainAnalyze:
+			stmt = wrapped.Statement
+		case *tree.ExplainPhyPlan:
+			stmt = wrapped.Statement
+		default:
+			return stmt.GetQueryType() == tree.QueryTypeDQL
+		}
+	}
+	return false
+}
+
 // BuildPreparedExecutionPlan binds SQL source domains before optimization.
 // The caller installs the current Process parameter vector before invoking it.
 func BuildPreparedExecutionPlan(ctx CompilerContext, stmt tree.Statement,
@@ -579,6 +825,7 @@ func BuildPreparedExecutionPlan(ctx CompilerContext, stmt tree.Statement,
 		return nil, moerr.NewInvalidInput(previous, "Incorrect arguments to EXECUTE")
 	}
 	planning := withPreparedSourceBindings(previous, bindings, values)
+	preparedBindingState(planning).selectStatement = preparedUnderlyingSelect(stmt)
 	ctx.SetContext(planning)
 	defer ctx.SetContext(previous)
 	query, err := NewPrepareOptimizer(ctx).Optimize(stmt, false)

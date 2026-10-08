@@ -231,7 +231,7 @@ func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, nod
 	if parentType == plan.Node_DISTINCT || parentType == plan.Node_UNKNOWN {
 		return false
 	}
-	if parentType == plan.Node_UNION || parentType == plan.Node_UNION_ALL || parentType == plan.Node_ADAPTIVE_TOP {
+	if parentType == plan.Node_UNION || parentType == plan.Node_UNION_ALL || parentType == plan.Node_ADAPTIVE_TOP || parentType == plan.Node_VECTOR_QUERY_TOP {
 		return false
 	}
 	if parentType == plan.Node_MINUS || parentType == plan.Node_MINUS_ALL {
@@ -806,7 +806,8 @@ END:
 }
 
 func dedupJoinMetadataCols(ctx *plan.DedupJoinCtx) []*plan.ColRef {
-	cols := []*plan.ColRef{ctx.AffectedRowsCol, ctx.PhysicalChangedRowsCol, ctx.ActionFinalCol}
+	cols := make([]*plan.ColRef, 0, 3+len(ctx.ForeignKeyChecks))
+	cols = append(cols, ctx.AffectedRowsCol, ctx.PhysicalChangedRowsCol, ctx.ActionFinalCol)
 	for i := range ctx.ForeignKeyChecks {
 		cols = append(cols, ctx.ForeignKeyChecks[i].EligibilityCol)
 	}
@@ -1938,7 +1939,7 @@ func singleRowCastIsTotal(source, target plan.Type) bool {
 	// source, that cast cannot reject or truncate any source value.
 	if targetID == types.T_char &&
 		(sourceID == types.T_char || sourceID == types.T_varchar) &&
-		source.Charset == target.Charset && source.Width > 0 &&
+		source.SameCollation(target) && source.Width > 0 &&
 		target.Width >= source.Width {
 		return true
 	}
@@ -2392,10 +2393,13 @@ func (builder *QueryBuilder) parseOptimizeHints() {
 	}
 }
 
-func (builder *QueryBuilder) optimizeFilters(rootID int32) int32 {
+func (builder *QueryBuilder) optimizeFilters(rootID int32) (int32, error) {
 	rootID, _ = builder.pushdownFilters(rootID, nil, false)
 	transposeTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID)
 	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID, false)
+	if err := builder.rewriteNumericDomainFilters(rootID, plan.Node_TABLE_SCAN); err != nil {
+		return rootID, err
+	}
 	ReCalcNodeStats(rootID, builder, true, true, true)
 	builder.rewriteInDomainNotInFilters(rootID)
 	compositePartBlockFilters := builder.collectCompositePartBlockFilters(rootID)
@@ -2408,7 +2412,7 @@ func (builder *QueryBuilder) optimizeFilters(rootID int32) int32 {
 	builder.appendCompoundKeyBlockFilters(rootID)
 	builder.appendCompositePartBlockFilters(compositePartBlockFilters)
 	sortFilterListByStats(builder.GetContext(), rootID, builder)
-	return rootID
+	return rootID, nil
 }
 
 // plan for dml  don't go optimizer, which cause some problem, and this need refactoring

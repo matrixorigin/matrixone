@@ -32,7 +32,7 @@ func TestPatternPhrase(t *testing.T) {
 	tests := []TestCase{
 		{
 			pattern: "\"Ma'trix     Origin\"",
-			expect:  "(phrase (text 0 0 ma'trix) (text 1 12 origin))",
+			expect:  "(phrase (text 0 0 ma) (text 1 3 trix) (text 2 12 origin))",
 		},
 		{
 			pattern: "\"Matrix Origin\"",
@@ -52,7 +52,41 @@ func TestPatternPhrase(t *testing.T) {
 		},
 		{
 			pattern: "\"  你好嗎? Hello World  在一起  Happy  再见  \"",
-			expect:  "(phrase (text 0 0 你好嗎?) (text 1 11 hello) (text 2 17 world) (text 3 24 在一起) (text 4 35 happy) (text 5 42 再见))",
+			expect:  "(phrase (text 0 0 你好嗎) (text 1 11 hello) (text 2 17 world) (text 3 24 在一起) (text 4 35 happy) (* 5 42 再见*))",
+		},
+		// #29271 P2: a SHORT (< ngram) phrase that mixes scripts or contains a breaker must
+		// still tokenize like the index -- a raw whole-string leaf ('a中', 'a-', '中。') never
+		// matches the stored tokens ('a'@0, '中'@1; the hyphen/punctuation is a discarded
+		// breaker). Each emitted token is classified short-Latin-exact (TEXT) / short-CJK-prefix
+		// (STAR), matching the >= ngram path.
+		{
+			pattern: "\"a-\"",
+			expect:  "(phrase (text 0 0 a))",
+		},
+		{
+			pattern: "\"-a\"",
+			expect:  "(phrase (text 0 1 a))",
+		},
+		{
+			pattern: "\"a中\"",
+			expect:  "(phrase (text 0 0 a) (* 1 1 中*))",
+		},
+		{
+			pattern: "\"中a\"",
+			expect:  "(phrase (* 0 0 中*) (text 1 3 a))",
+		},
+		{
+			pattern: "\"中。\"",
+			expect:  "(phrase (* 0 0 中*))",
+		},
+		// Single short tokens are unchanged: short Latin -> exact, short CJK -> prefix.
+		{
+			pattern: "\"a\"",
+			expect:  "(phrase (text 0 0 a))",
+		},
+		{
+			pattern: "\"中\"",
+			expect:  "(phrase (* 0 0 中*))",
 		},
 	}
 
@@ -1066,4 +1100,61 @@ func TestFullTextCombine(t *testing.T) {
 	require.Nil(t, err)
 
 	assert.Equal(t, result[0], float32(2))
+}
+
+// #29271: a quoted BOOLEAN phrase on the ""/default/ngram parser must be decomposed by SimpleTokenizer
+// -- the same tokenizer the index build uses -- not looked up as the raw whole string, which is never
+// an indexed token. Covers the three reported shapes: a CJK phrase (stored as trigrams), a Latin run
+// longer than MAX_TOKEN_SIZE=23 (stored truncated), and a hyphen/apostrophe phrase (SimpleTokenizer
+// breaks on both). A short CJK tail stays a prefix STAR (苹果 is only ever a prefix of a stored
+// trigram like 苹果甜); a short Latin word is stored whole so it matches exactly.
+func TestBooleanPhraseDecomposesLikeIndex29271(t *testing.T) {
+	tests := []TestCase{
+		// CJK phrase: overlapping trigrams positioned as the index stored them.
+		{pattern: `"苹果香蕉"`, expect: "(phrase (text 0 0 苹果香) (text 1 3 果香蕉))"},
+		// short CJK phrase: prefix, so it reaches 苹果甜 in 红苹果甜.
+		{pattern: `"苹果"`, expect: "(phrase (* 0 0 苹果*))"},
+		// hyphen and apostrophe are breakers at index time, so the phrase splits on them too.
+		{pattern: `"full-text search"`, expect: "(phrase (text 0 0 full) (text 1 5 text) (text 2 10 search))"},
+		// a Latin run over 23 bytes is stored truncated to 23; the phrase looks up the same 23 bytes.
+		{pattern: `"bbbbbbbbbbbbbbbbbbbbbbbbbb"`, expect: "(phrase (text 0 0 bbbbbbbbbbbbbbbbbbbbbbb))"},
+		// a short Latin word is stored whole, so it stays an exact TEXT (not a prefix).
+		{pattern: `"is not red"`, expect: "(phrase (text 0 0 is) (text 1 3 not) (text 2 7 red))"},
+		// a whole short Latin phrase is matched exactly (not a prefix, which would false-match a
+		// longer word since a single-word phrase has no positional anchor).
+		{pattern: `"is"`, expect: "(phrase (text 0 0 is))"},
+		{pattern: `"a"`, expect: "(phrase (text 0 0 a))"},
+	}
+	for _, c := range tests {
+		result, err := PatternToStringWithPosition(c.pattern, int64(tree.FULLTEXT_BOOLEAN))
+		require.Nil(t, err, c.pattern)
+		assert.Equal(t, c.expect, result, c.pattern)
+	}
+}
+
+// A phrase whose body tokenizes to nothing (only breakers/punctuation) is rejected rather than
+// looked up as the raw string, matching natural-language mode on the same input (#29271).
+func TestBooleanPhraseRejectsEmptyTokenization29271(t *testing.T) {
+	for _, p := range []string{`"---"`, `"-.-"`} {
+		_, err := PatternToStringWithPosition(p, int64(tree.FULLTEXT_BOOLEAN))
+		require.NotNil(t, err, p)
+		require.Contains(t, err.Error(), "converted to empty pattern", p)
+	}
+}
+
+// Validate accepts a STAR child in a PHRASE (SqlPhrase resolves it as a positional prefix_eq) but
+// still rejects a compound child (#29271).
+func TestPhraseValidateAllowsStarRejectsCompound29271(t *testing.T) {
+	ok := &Pattern{Operator: PHRASE, Children: []*Pattern{
+		{Operator: TEXT, Text: "abc"},
+		{Operator: STAR, Text: "de*"},
+	}}
+	require.Nil(t, ok.Validate())
+
+	bad := &Pattern{Operator: PHRASE, Children: []*Pattern{
+		{Operator: PLUS, Children: []*Pattern{{Operator: TEXT, Text: "x"}}},
+	}}
+	err := bad.Validate()
+	require.NotNil(t, err)
+	require.Contains(t, err.Error(), "PHRASE can only have text or star Pattern")
 }

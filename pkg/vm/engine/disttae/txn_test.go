@@ -1277,21 +1277,21 @@ func newTxnOperatorForTest(t *testing.T) *mock_frontend.MockTxnOperator {
 }
 
 func newTxnOperatorForTestWithWorkspace(
-	t *testing.T,
+	t testing.TB,
 	workspace client.Workspace,
 ) *mock_frontend.MockTxnOperator {
 	t.Helper()
 	ctrl := gomock.NewController(t)
 	op := mock_frontend.NewMockTxnOperator(ctrl)
 	op.EXPECT().Txn().Return(txnpb.TxnMeta{ID: []byte("txn-test")}).AnyTimes()
-	op.EXPECT().NextSequence().Return(uint64(1)).AnyTimes()
+
 	op.EXPECT().Status().Return(txnpb.TxnStatus_Active).AnyTimes()
 	op.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
 	return op
 }
 
 func newTransactionWithActivePKTableForTest(
-	t *testing.T,
+	t testing.TB,
 	pkName string,
 ) *Transaction {
 	t.Helper()

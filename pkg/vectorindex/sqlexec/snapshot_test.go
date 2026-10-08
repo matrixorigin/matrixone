@@ -33,7 +33,6 @@ import (
 func TestTxnForRunHistoricalSnapshotClones(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
 	original := mock_frontend.NewMockTxnOperator(ctrl)
 	clone := mock_frontend.NewMockTxnOperator(ctrl)
 	proc.Base.TxnOperator = original
@@ -49,7 +48,6 @@ func TestTxnForRunHistoricalSnapshotClones(t *testing.T) {
 func TestTxnForRunNoSnapshotUsesCurrent(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
 	original := mock_frontend.NewMockTxnOperator(ctrl)
 	proc.Base.TxnOperator = original
 
@@ -62,7 +60,6 @@ func TestTxnForRunNoSnapshotUsesCurrent(t *testing.T) {
 func TestTxnForRunNonHistoricalSnapshotUsesCurrent(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
 	original := mock_frontend.NewMockTxnOperator(ctrl)
 	proc.Base.TxnOperator = original
 
@@ -77,7 +74,6 @@ func TestTxnForRunNonHistoricalSnapshotUsesCurrent(t *testing.T) {
 func TestTxnForRunEmptySnapshotUsesCurrent(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
 	original := mock_frontend.NewMockTxnOperator(ctrl)
 	proc.Base.TxnOperator = original
 
@@ -94,7 +90,6 @@ func TestTxnForRunEmptySnapshotUsesCurrent(t *testing.T) {
 
 func TestEffectiveSnapshotTSNilTxnOperatorIsNotHistorical(t *testing.T) {
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
 	proc.Base.TxnOperator = nil
 
 	snapshotTS := timestamp.Timestamp{PhysicalTime: 8}
@@ -113,7 +108,6 @@ func TestEffectiveSnapshotTSNilProcIsNotHistorical(t *testing.T) {
 func TestEffectiveSnapshotTSHistoricalReturnsTheTS(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOp.EXPECT().Txn().Return(txn.TxnMeta{SnapshotTS: timestamp.Timestamp{PhysicalTime: 10}}).AnyTimes()
 	proc.Base.TxnOperator = txnOp
@@ -130,7 +124,6 @@ func TestEffectiveSnapshotTSHistoricalReturnsTheTS(t *testing.T) {
 func TestApplyScanSnapshotBindsTenantAndTS(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
 	original := mock_frontend.NewMockTxnOperator(ctrl)
 	proc.Base.TxnOperator = original
 	original.EXPECT().Txn().Return(txn.TxnMeta{SnapshotTS: timestamp.Timestamp{PhysicalTime: 10}}).AnyTimes()
@@ -158,7 +151,6 @@ func TestApplyScanSnapshotBindsTenantAndTS(t *testing.T) {
 func TestApplyScanSnapshotNonHistoricalBindsNothing(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
 	original := mock_frontend.NewMockTxnOperator(ctrl)
 	proc.Base.TxnOperator = original
 	original.EXPECT().Txn().Return(txn.TxnMeta{SnapshotTS: timestamp.Timestamp{PhysicalTime: 10}}).AnyTimes()
@@ -176,7 +168,6 @@ func TestApplyScanSnapshotNonHistoricalBindsNothing(t *testing.T) {
 func TestApplyScanSnapshotWithoutTenantOnlyBindsTS(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
 	original := mock_frontend.NewMockTxnOperator(ctrl)
 	proc.Base.TxnOperator = original
 	original.EXPECT().Txn().Return(txn.TxnMeta{SnapshotTS: timestamp.Timestamp{PhysicalTime: 10}}).AnyTimes()
@@ -201,7 +192,6 @@ func TestApplyScanSnapshotNilIsNoop(t *testing.T) {
 func TestBuildSnapshotTSFromProc(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
 	op := mock_frontend.NewMockTxnOperator(ctrl)
 	proc.Base.TxnOperator = op
 	op.EXPECT().Txn().Return(txn.TxnMeta{SnapshotTS: timestamp.Timestamp{PhysicalTime: 4242, LogicalTime: 7}}).AnyTimes()
@@ -230,7 +220,6 @@ func TestBuildSnapshotTSUnknownWithoutTxn(t *testing.T) {
 	require.EqualValues(t, 0, (&SqlProcess{SqlCtx: &SqlContext{}}).BuildSnapshotTS())
 
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
 	proc.Base.TxnOperator = nil
 	require.EqualValues(t, 0, (&SqlProcess{Proc: proc}).BuildSnapshotTS())
 }

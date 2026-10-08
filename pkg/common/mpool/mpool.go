@@ -383,14 +383,14 @@ func (d *mpoolDetails) reportJson() string {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	ret := `{"alloc": {`
-	allocs := make([]string, 0)
+	allocs := make([]string, 0, len(d.alloc))
 	for k, v := range d.alloc {
 		kvs := fmt.Sprintf("\"%s\": [%d, %d]", k, v.cnt, v.bytes)
 		allocs = append(allocs, kvs)
 	}
 	ret += strings.Join(allocs, ",")
 	ret += `}, "free": {`
-	frees := make([]string, 0)
+	frees := make([]string, 0, len(d.free))
 	for k, v := range d.free {
 		kvs := fmt.Sprintf("\"%s\": [%d, %d]", k, v.cnt, v.bytes)
 		frees = append(frees, kvs)
@@ -1181,6 +1181,7 @@ func (mp *MPool) allocAccounted(
 	globalHeld := false
 	poolHeld := false
 	physicalHeld := false
+	backingCommitted := false
 	published := false
 	defer func() {
 		if published {
@@ -1188,6 +1189,9 @@ func (mp *MPool) allocAccounted(
 		}
 		if physicalHeld {
 			simpleCAllocator().Deallocate(bs, uint64(sz))
+		}
+		if backingCommitted {
+			request.account.registry.releaseCommittedCapacity(uint64(sz))
 		}
 		if poolHeld {
 			mp.stats.RecordFree(mp.tag, sz)
@@ -1252,6 +1256,8 @@ func (mp *MPool) allocAccounted(
 			"physical allocator rejected %d bytes: %v", sz, err)
 	}
 	physicalHeld = true
+	request.account.registry.addCommittedCapacity(uint64(sz))
+	backingCommitted = true
 
 	ptr := unsafe.Pointer(&bs[0])
 	if err = mp.recordAccountedPtrMetadata(
@@ -1757,6 +1763,10 @@ func MPoolControl(tag string, cmd string) string {
 }
 
 var simpleCAllocator = sync.OnceValue(func() *malloc.SimpleCAllocator {
+	const (
+		libcTrimMinFreedBytes = 64 << 20
+		libcTrimCooldown      = time.Second
+	)
 	sca := malloc.NewSimpleCAllocator(
 		v2.MallocCounter.WithLabelValues("mpool-allocate"),
 		v2.MallocGauge.WithLabelValues("mpool-inuse"),
@@ -1773,6 +1783,12 @@ var simpleCAllocator = sync.OnceValue(func() *malloc.SimpleCAllocator {
 			return uint64(min(GlobalCap()/4, GB))
 		},
 		v2.OffHeapInuseGauge.WithLabelValues("mpool-cache"),
+	)
+	sca.EnableLibcTrim(
+		libcTrimMinFreedBytes,
+		libcTrimCooldown,
+		v2.CAllocatorTrimCounter.WithLabelValues("released"),
+		v2.CAllocatorTrimCounter.WithLabelValues("noop"),
 	)
 	return sca
 })

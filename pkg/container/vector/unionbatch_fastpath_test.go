@@ -487,6 +487,68 @@ func BenchmarkConstBroadcastFill(b *testing.B) {
 	})
 }
 
+func TestUnionBatchFixedNullableRange(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		nulls []uint64
+	}{
+		{name: "sparse", nulls: []uint64{0, 2, 6}},
+		{name: "all", nulls: []uint64{0, 1, 2, 3, 4, 6}},
+		{name: "outside-range", nulls: []uint64{0, 6}},
+	} {
+		for _, preflighted := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/preflighted-%t", test.name, preflighted), func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				t.Cleanup(func() {
+					defer mpool.DeleteMPool(mp)
+					require.Zero(t, mp.CurrNB())
+				})
+				source := NewVec(types.T_int64.ToType())
+				defer source.Free(mp)
+				require.NoError(t, AppendFixedList(source, []int64{10, 11, 12, 13, 14, 15, 16}, nil, mp))
+				source.GetNulls().Add(test.nulls...)
+				source.GetGrouping().Add(1, 3, 6)
+				source.SetLength(5) // Retain stale bits outside the logical range.
+				source.SetPrepareParamKind(PrepareParamInteger)
+				require.NoError(t, source.SetStringSource(types.StringSourceLiteral))
+				destination := NewVec(types.T_int64.ToType())
+				defer destination.Free(mp)
+				require.NoError(t, AppendFixed(destination, int64(99), false, mp))
+				if preflighted {
+					// The preflight API requires explicit flags, so this also
+					// checks the unchanged flagged-copy control.
+					flags := []uint8{1, 1, 1}
+					require.NoError(t, destination.PreExtendSelectedBatch(source, 2, 3, flags, 4, mp))
+					require.NoError(t, destination.UnionBatchPreflighted(source, 2, 3, flags, mp))
+				} else {
+					require.NoError(t, destination.UnionBatch(source, 2, 3, nil, mp))
+				}
+				require.Equal(t, 4, destination.Length())
+				require.Equal(t, int64(99), GetFixedAtNoTypeCheck[int64](destination, 0))
+				require.False(t, destination.IsNull(0))
+				require.Equal(t, types.StringSourceExpression, destination.GetStringSourceAt(0))
+				require.Equal(t, PrepareParamNone, destination.GetPrepareParamKindAt(0))
+				require.False(t, destination.GetIsBinaryStringAt(0))
+				for row := 1; row < 4; row++ {
+					isNull := test.name == "all" || test.name == "sparse" && row == 1
+					require.Equal(t, isNull, destination.IsNull(uint64(row)))
+					require.Equal(t, row == 2, destination.GetGrouping().Contains(uint64(row)))
+					require.Equal(t, types.StringSourceLiteral, destination.GetStringSourceAt(row))
+					require.False(t, destination.GetIsBinaryStringAt(row))
+					if !isNull {
+						require.Equal(t, int64(11+row), GetFixedAtNoTypeCheck[int64](destination, row))
+						require.Equal(t, PrepareParamInteger, destination.GetPrepareParamKindAt(row))
+					} else {
+						require.Equal(t, PrepareParamNone, destination.GetPrepareParamKindAt(row))
+					}
+				}
+				require.False(t, destination.GetNulls().Contains(5))
+				require.False(t, destination.GetGrouping().Contains(5))
+			})
+		}
+	}
+}
+
 // TestUnionBatchNullFastPath exercises the UnionBatch full-append fast path with
 // nulls and grouping bits, appended into a non-empty target (baseOff != 0 so the
 // offset-rebase and null-header-clear interact), cross-checked against per-row

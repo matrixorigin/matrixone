@@ -396,7 +396,7 @@ invalid argument cast to uint64, bad value a10
 select 10+'a';
 invalid argument cast to int, bad value a
 select 10.0+cast('a' as decimal(38,0));
-invalid input: a beyond the range, can't be converted to Decimal128(38,0).
+invalid input: "a" is invalid decimal string
 select 10E+0+'a';
 ➤ 10e+0 + a[8,54,0]  𝄀
 10.0

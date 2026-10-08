@@ -55,7 +55,7 @@ func TestAESEncryptDecryptECB(t *testing.T) {
 		NewFunctionTestResult(types.T_blob.ToType(), false, []string{string(ciphertext)}, []bool{false}),
 		AESEncrypt,
 	)
-	ok, info := encryptCase.Run()
+	ok, info := encryptCase.RunAndFree()
 	require.True(t, ok, fmt.Sprintf("encrypt ecb failed: %s", info))
 
 	decryptCase := NewFunctionTestCase(proc,
@@ -66,7 +66,7 @@ func TestAESEncryptDecryptECB(t *testing.T) {
 		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{plain}, []bool{false}),
 		AESDecrypt,
 	)
-	ok, info = decryptCase.Run()
+	ok, info = decryptCase.RunAndFree()
 	require.True(t, ok, fmt.Sprintf("decrypt ecb failed: %s", info))
 }
 
@@ -90,7 +90,7 @@ func TestAESEncryptDecryptCBC(t *testing.T) {
 		NewFunctionTestResult(types.T_blob.ToType(), false, []string{string(ciphertext)}, []bool{false}),
 		AESEncrypt,
 	)
-	ok, info := encryptCase.Run()
+	ok, info := encryptCase.RunAndFree()
 	require.True(t, ok, fmt.Sprintf("encrypt cbc failed: %s", info))
 
 	decryptCase := NewFunctionTestCase(proc,
@@ -102,7 +102,7 @@ func TestAESEncryptDecryptCBC(t *testing.T) {
 		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{plain}, []bool{false}),
 		AESDecrypt,
 	)
-	ok, info = decryptCase.Run()
+	ok, info = decryptCase.RunAndFree()
 	require.True(t, ok, fmt.Sprintf("decrypt cbc failed: %s", info))
 }
 
@@ -119,7 +119,7 @@ func TestAESEncryptCBCMissingIV(t *testing.T) {
 		NewFunctionTestResult(types.T_blob.ToType(), true, nil, nil),
 		AESEncrypt,
 	)
-	ok, info := encryptCase.Run()
+	ok, info := encryptCase.RunAndFree()
 	require.True(t, ok, fmt.Sprintf("encrypt cbc missing iv failed: %s", info))
 }
 
@@ -133,7 +133,7 @@ func TestAESDecryptCBCMissingIV(t *testing.T) {
 		NewFunctionTestResult(types.T_varchar.ToType(), true, nil, nil),
 		AESDecrypt,
 	)
-	ok, info := decryptCase.Run()
+	ok, info := decryptCase.RunAndFree()
 	require.True(t, ok, fmt.Sprintf("decrypt cbc missing iv failed: %s", info))
 }
 
@@ -148,7 +148,7 @@ func TestAESInvalidModeReturnsNull(t *testing.T) {
 		NewFunctionTestResult(types.T_blob.ToType(), false, []string{""}, []bool{true}),
 		AESEncrypt,
 	)
-	ok, info := encryptCase.Run()
+	ok, info := encryptCase.RunAndFree()
 	require.True(t, ok, fmt.Sprintf("encrypt invalid mode failed: %s", info))
 
 	decryptCase := NewFunctionTestCase(proc,
@@ -159,7 +159,7 @@ func TestAESInvalidModeReturnsNull(t *testing.T) {
 		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}),
 		AESDecrypt,
 	)
-	ok, info = decryptCase.Run()
+	ok, info = decryptCase.RunAndFree()
 	require.True(t, ok, fmt.Sprintf("decrypt invalid mode failed: %s", info))
 }
 
@@ -175,7 +175,7 @@ func TestAESDecryptInvalidCiphertextReturnsNull(t *testing.T) {
 		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}),
 		AESDecrypt,
 	)
-	ok, info := decryptCase.Run()
+	ok, info := decryptCase.RunAndFree()
 	require.True(t, ok, fmt.Sprintf("decrypt invalid ciphertext failed: %s", info))
 }
 
@@ -192,7 +192,7 @@ func TestAESCBCIVTooShortReturnsError(t *testing.T) {
 		NewFunctionTestResult(types.T_blob.ToType(), true, nil, nil),
 		AESEncrypt,
 	)
-	ok, info := encryptCase.Run()
+	ok, info := encryptCase.RunAndFree()
 	require.True(t, ok, fmt.Sprintf("encrypt short iv failed: %s", info))
 
 	decryptCase := NewFunctionTestCase(proc,
@@ -204,14 +204,14 @@ func TestAESCBCIVTooShortReturnsError(t *testing.T) {
 		NewFunctionTestResult(types.T_varchar.ToType(), true, nil, nil),
 		AESDecrypt,
 	)
-	ok, info = decryptCase.Run()
+	ok, info = decryptCase.RunAndFree()
 	require.True(t, ok, fmt.Sprintf("decrypt short iv failed: %s", info))
 }
 
 func TestAESCBCInvalidIVErrorCodes(t *testing.T) {
 	tests := []struct {
 		name       string
-		fn         fEvalFn
+		fn         executeLogicOfOverload
 		proc       *process.Process
 		inputs     []FunctionTestInput
 		resultType types.Type
@@ -262,6 +262,7 @@ func TestAESCBCInvalidIVErrorCodes(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			caseData := NewFunctionTestCase(tt.proc, tt.inputs,
 				NewFunctionTestResult(tt.resultType, true, nil, nil), tt.fn)
+			defer caseData.Free()
 			require.NoError(t, caseData.result.PreExtendAndReset(caseData.fnLength))
 			err := caseData.fn(caseData.parameters, caseData.result, caseData.proc, caseData.fnLength, nil)
 			require.Error(t, err)
@@ -300,7 +301,7 @@ func TestAESCBCInvalidIVInMaskedRowIsIgnored(t *testing.T) {
 			true,
 		},
 	})
-	ok, info := caseData.Run()
+	ok, info := caseData.RunAndFree()
 	require.True(t, ok, info)
 }
 

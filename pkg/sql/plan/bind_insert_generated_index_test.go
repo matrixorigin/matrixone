@@ -234,7 +234,7 @@ func configureMockOnUpdateGeneratedUniqueIndex(t *testing.T, mock *MockOptimizer
 }
 
 func TestInsertOnDupOnUpdateGeneratedUniqueKeyRejected(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	configureMockOnUpdateGeneratedUniqueIndex(t, mock)
 
 	_, err := runOneStmt(mock, t,
@@ -289,7 +289,7 @@ func configureMockGeneratedPrimaryKey(t *testing.T, mock *MockOptimizer) {
 }
 
 func TestInsertOnDupGeneratedUniqueKeyRejected(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	configureMockGeneratedIndex(t, mock, true)
 
 	_, err := runOneStmt(mock, t,
@@ -299,7 +299,7 @@ func TestInsertOnDupGeneratedUniqueKeyRejected(t *testing.T) {
 }
 
 func TestInsertOnDupUnrelatedColumnWithGeneratedUniqueKeySucceeds(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	configureMockGeneratedIndex(t, mock, true)
 
 	_, err := runOneStmt(mock, t,
@@ -309,7 +309,7 @@ func TestInsertOnDupUnrelatedColumnWithGeneratedUniqueKeySucceeds(t *testing.T) 
 }
 
 func TestInsertOnDupGeneratedPrimaryKeyRejected(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	configureMockGeneratedPrimaryKey(t, mock)
 
 	_, err := runOneStmt(mock, t,
@@ -342,7 +342,7 @@ func hasTableScanForTable(query *planpb.Query, tableName string) bool {
 }
 
 func TestInsertOnDupGeneratedNonUniqueIndexMaintainsOldAndNewKeys(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	indexTableName := configureMockGeneratedIndex(t, mock, false)
 
 	logicPlan, err := runOneStmt(mock, t,
@@ -358,7 +358,7 @@ func TestInsertOnDupGeneratedNonUniqueIndexMaintainsOldAndNewKeys(t *testing.T) 
 }
 
 func TestInsertOnDupUnrelatedColumnSkipsGeneratedIndexDelete(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	indexTableName := configureMockGeneratedIndex(t, mock, false)
 
 	logicPlan, err := runOneStmt(mock, t,

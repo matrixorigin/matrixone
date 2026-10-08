@@ -15,12 +15,11 @@
 package taskservice
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"strings"
 	"time"
-
-	"golang.org/x/exp/constraints"
 
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
@@ -435,7 +434,7 @@ func (c *sqlTaskRunnerCond) sql() string {
 	return fmt.Sprintf("runner_cn%s'%s'", OpName[c.op], c.runner)
 }
 
-func compare[T constraints.Ordered](op Op, a T, b T) bool {
+func compare[T cmp.Ordered](op Op, a T, b T) bool {
 	switch op {
 	case EQ:
 		return a == b

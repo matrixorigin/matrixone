@@ -29,7 +29,7 @@ import (
 )
 
 func TestDoMergeFiltersOnCompositeKeyKeepsNonSortKeyRanges(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
 	tag := builder.genNewBindTag()
 	tableDef := makeExprOptCompositeSortKeyTableDef()
@@ -46,7 +46,7 @@ func TestDoMergeFiltersOnCompositeKeyKeepsNonSortKeyRanges(t *testing.T) {
 }
 
 func TestDoMergeFiltersOnCompositeKeyMergesSortKeyRanges(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
 	tag := builder.genNewBindTag()
 	tableDef := makeExprOptCompositeSortKeyTableDef()
@@ -70,7 +70,7 @@ func TestLeadingCompositeRangeKeepsRowFilterAndAddsObjectFilter(t *testing.T) {
 	} {
 		for _, op := range []string{"<", "<=", ">", ">=", "between", "in_range"} {
 			t.Run(key.name+"/"+op, func(t *testing.T) {
-				ctx := NewMockCompilerContext(true)
+				ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 				builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
 				tag := builder.genNewBindTag()
 				col := makeExprOptInt64Col(tag, 0, "a")
@@ -135,7 +135,7 @@ func TestLeadingCompositeRangeRejectsUnsafeEncoding(t *testing.T) {
 		{"decimal scale mismatch", types.T_decimal64, 2, makeDecimal64Const(1.001, 3), makeDecimal64Const(2.002, 3)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := NewMockCompilerContext(true)
+			ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 			builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
 			tag := builder.genNewBindTag()
 			table := makeExprOptCompositeClusterKeyTableDef()
@@ -152,7 +152,7 @@ func TestLeadingCompositeRangeRejectsUnsafeEncoding(t *testing.T) {
 }
 
 func TestLeadingCompositePairedBoundsRemainIndependent(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
 	tag := builder.genNewBindTag()
 	table := makeExprOptCompositeClusterKeyTableDef()
@@ -169,7 +169,7 @@ func TestLeadingCompositePairedBoundsRemainIndependent(t *testing.T) {
 }
 
 func TestLeadingCompositeRangeWithReversedOperands(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
 	tag := builder.genNewBindTag()
 	table := makeExprOptCompositeClusterKeyTableDef()
@@ -186,7 +186,7 @@ func TestLeadingCompositeRangeWithReversedOperands(t *testing.T) {
 }
 
 func TestLeadingCompositeRangeReachableFromSQL(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	table := makeExprOptCompositeClusterKeyTableDef()
 	table.Name = "range_probe"
 	table.TblId = 29507
@@ -243,7 +243,7 @@ func TestLeadingCompositeRangeReachableFromSQL(t *testing.T) {
 }
 
 func TestCompositePartBlockFilterDoesNotReadRewrittenPart(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	table := makeExprOptCompositeClusterKeyTableDef()
 	table.Name = "part_probe"
 	table.TblId = 29508
@@ -309,7 +309,7 @@ func TestDoMergeFiltersOnCompositeKeySupportsFoldedInVector(t *testing.T) {
 	for _, rhsKind := range []string{"list", "folded vector"} {
 		for _, tc := range testCases {
 			t.Run(rhsKind+"/"+tc.name, func(t *testing.T) {
-				ctx := NewMockCompilerContext(true)
+				ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 				builder := NewQueryBuilder(planpb.Query_SELECT, ctx, rhsKind == "folded vector", false)
 				tag := builder.genNewBindTag()
 				aEq := makeExprOptBinaryInt64Expr(t, ctx, "=", makeExprOptInt64Col(tag, 0, "a"), 1)
@@ -339,7 +339,7 @@ func TestDoMergeFiltersOnCompositeKeySupportsFoldedInVector(t *testing.T) {
 }
 
 func TestDoMergeFiltersOnCompositeKeyConsumesConstantFoldedInVector(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, true, false)
 	tag := builder.genNewBindTag()
 	aEq := makeExprOptBinaryInt64Expr(t, ctx, "=", makeExprOptInt64Col(tag, 0, "a"), 1)
@@ -355,7 +355,7 @@ func TestDoMergeFiltersOnCompositeKeyConsumesConstantFoldedInVector(t *testing.T
 }
 
 func TestDoMergeFiltersOnCompositeKeyPreservesNullableFoldedInVector(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, true, false)
 	tag := builder.genNewBindTag()
 	aEq := makeExprOptBinaryInt64Expr(t, ctx, "=", makeExprOptInt64Col(tag, 0, "a"), 1)
@@ -372,7 +372,7 @@ func TestDoMergeFiltersOnCompositeKeyPreservesNullableFoldedInVector(t *testing.
 }
 
 func TestDoMergeFiltersOnCompositeKeySupportsFoldedStringInVector(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, true, false)
 	tag := builder.genNewBindTag()
 	tableDef := makeExprOptCompositeSortKeyTableDef()
@@ -398,7 +398,7 @@ func TestDoMergeFiltersOnCompositeKeySupportsFoldedStringInVector(t *testing.T) 
 }
 
 func TestDoMergeFiltersOnCompositeKeyHandlesConstAndEmptyFoldedInVectors(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, true, false)
 	tag := builder.genNewBindTag()
 	tableDef := makeExprOptCompositeSortKeyTableDef()
@@ -433,7 +433,7 @@ func TestDoMergeFiltersOnCompositeKeyHandlesConstAndEmptyFoldedInVectors(t *test
 }
 
 func TestCompositeKeyFoldedInVectorRetainsPartBlockFilters(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, true, false)
 	tag := builder.genNewBindTag()
 	tableDef := makeExprOptCompositeSortKeyTableDef()
@@ -465,7 +465,7 @@ func TestCompositeKeyFoldedInVectorRetainsPartBlockFilters(t *testing.T) {
 }
 
 func TestDoMergeFiltersOnCompositeKeyMergesFoldedInVectorInsideOr(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, true, false)
 	tag := builder.genNewBindTag()
 	foldedValues := MakePlan2Int64VecExprWithType(ctx.GetProcess().Mp(), 1, 2)
@@ -489,7 +489,7 @@ func TestDoMergeFiltersOnCompositeKeyMergesFoldedInVectorInsideOr(t *testing.T) 
 }
 
 func TestDoMergeFiltersOnCompositeKeyRejectsMalformedFoldedInVector(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, true, false)
 	tag := builder.genNewBindTag()
 	aEq := makeExprOptBinaryInt64Expr(t, ctx, "=", makeExprOptInt64Col(tag, 0, "a"), 1)
@@ -516,7 +516,7 @@ func TestDoMergeFiltersOnCompositeKeyRejectsMalformedFoldedInVector(t *testing.T
 }
 
 func TestDoMergeFiltersOnCompositeKeyRejectsFoldedInVectorTypeMismatch(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, true, false)
 	tag := builder.genNewBindTag()
 	aEq := makeExprOptBinaryInt64Expr(t, ctx, "=", makeExprOptInt64Col(tag, 0, "a"), 1)
@@ -546,7 +546,7 @@ func TestDoMergeFiltersOnCompositeKeyRejectsFoldedInVectorTypeMismatch(t *testin
 }
 
 func TestDoMergeFiltersOnCompositeKeySupportsScaleSensitiveFoldedInVector(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, true, false)
 	tag := builder.genNewBindTag()
 	tableDef := makeExprOptCompositeSortKeyTableDef()
@@ -587,7 +587,7 @@ func TestDoMergeFiltersOnCompositeKeySupportsScaleSensitiveFoldedInVector(t *tes
 }
 
 func TestDoMergeFiltersOnCompositeKeyRetainsMalformedPredicate(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
 	tag := builder.genNewBindTag()
 	bCol := makeExprOptInt64Col(tag, 1, "b")
@@ -622,7 +622,7 @@ func TestDoMergeFiltersOnCompositeKeyRetainsMalformedPredicate(t *testing.T) {
 }
 
 func TestDoMergeFiltersOnCompositeKeyRetainsUnaryNonMergeableOr(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
 	tag := builder.genNewBindTag()
 	arm := MakePlan2BoolConstExprWithType(true)
@@ -742,7 +742,7 @@ func TestInRHSValuesRejectsOversizedFoldedVector(t *testing.T) {
 }
 
 func TestCompositeKeyPushesCompoundAndPartBlockFilters(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
 	tag := builder.genNewBindTag()
 	tableDef := makeExprOptCompositeSortKeyTableDef()
@@ -789,7 +789,7 @@ func TestCompositeKeyPushesCompoundAndPartBlockFilters(t *testing.T) {
 }
 
 func TestCompositeKeyPartBlockFiltersRespectDisableHint(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
 	builder.optimizerHints = &OptimizerHints{blockFilter: 2}
 	tag := builder.genNewBindTag()
@@ -811,7 +811,7 @@ func TestCompositeKeyPartBlockFiltersRespectDisableHint(t *testing.T) {
 }
 
 func TestCompositeKeyPreservesPartWhenRewriteMutatesPredicateInPlace(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
 	tag := builder.genNewBindTag()
 	tableDef := makeExprOptCompositeSortKeyTableDef()
@@ -833,7 +833,7 @@ func TestCompositeKeyPreservesPartWhenRewriteMutatesPredicateInPlace(t *testing.
 }
 
 func TestMergeFiltersOnCompositeKeySkipsUnboundInternalScan(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
 	builder.qry.Nodes = []*planpb.Node{{
 		NodeType: planpb.Node_TABLE_SCAN,
@@ -846,7 +846,7 @@ func TestMergeFiltersOnCompositeKeySkipsUnboundInternalScan(t *testing.T) {
 }
 
 func TestCompositeKeyPartBlockFiltersDoNotRestoreUnchangedPredicates(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
 	tag := builder.genNewBindTag()
 	filter := makeExprOptBinaryInt64Expr(t, ctx, ">", makeExprOptInt64Col(tag, 1, "b"), 2)
@@ -863,7 +863,7 @@ func TestCompositeKeyPartBlockFiltersDoNotRestoreUnchangedPredicates(t *testing.
 }
 
 func TestCompositeKeyPartBlockFiltersTrackCanonicalizedPredicateIdentity(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
 	tag := builder.genNewBindTag()
 	filter := makeExprOptBinaryInt64Expr(t, ctx, "=", makeExprOptInt64Col(tag, 1, "b"), 2)
@@ -882,7 +882,7 @@ func TestCompositeKeyPartBlockFiltersTrackCanonicalizedPredicateIdentity(t *test
 }
 
 func TestDeduplicateBlockFiltersAcrossPlannerRepresentations(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	tag := int32(1)
 	a := makeExprOptBinaryInt64Expr(t, ctx, ">", makeExprOptInt64Col(tag, 0, "a"), 1)
 	b := makeExprOptBinaryInt64Expr(t, ctx, ">", makeExprOptInt64Col(tag, 0, "a"), 2)
@@ -923,7 +923,7 @@ func TestDeduplicateBlockFiltersAcrossPlannerRepresentations(t *testing.T) {
 }
 
 func TestDeduplicateBlockFiltersHandlesConstantLiteralVec(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	tag := int32(1)
 	listIn := makeExprOptInExpr(t, ctx, tag, 1, 42, 42)
 	mp := mpool.MustNew(t.Name())
@@ -1014,7 +1014,7 @@ func TestConstLiteralKeyIgnoresSerializedProvenance(t *testing.T) {
 }
 
 func TestDeduplicateBlockFiltersRetainsDifferentCompoundPredicates(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	tag := int32(1)
 	tableDef := makeExprOptCompositeSortKeyTableDef()
 	left := makeExprOptInExpr(t, ctx, tag, 3, 11, 15)
@@ -1074,7 +1074,7 @@ func BenchmarkDeduplicateBlockFiltersLargeIN(b *testing.B) {
 
 func BenchmarkDoMergeFiltersOnCompositeKeyInRepresentations(b *testing.B) {
 	const valueCount = 256
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(b))
 	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, true)
 	tag := builder.genNewBindTag()
 	tableDef := makeExprOptCompositeSortKeyTableDef()

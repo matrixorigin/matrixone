@@ -1426,13 +1426,9 @@ func TestLockServiceDiscoveryUsesPendingCNInventory(t *testing.T) {
 	cluster := clusterservice.NewMOCluster(
 		service,
 		&fixedClusterClient{details: logpb.ClusterDetails{
-			ViewMetadataAdmission: &logpb.ViewMetadataAdmission{
-				Enabled: true,
-				Epoch:   4,
-			},
+			ViewMetadataAdmission: &logpb.ViewMetadataAdmission{Preparing: true, Epoch: 4},
 			CNStores: []logpb.CNStore{{
-				UUID:                            "cn-id",
-				LockServiceAddress:              "cn.example:18101",
+				UUID: "cn-id", LockServiceAddress: "cn.example:18101",
 				WorkState:                       metadata.WorkState_Working,
 				ViewMetadataAdmissionGeneration: 11,
 			}},
@@ -1463,6 +1459,7 @@ func TestLockServiceDiscoveryUsesPendingCNInventory(t *testing.T) {
 		service:          service,
 		cluster:          cluster,
 		client:           normalRPCClient,
+		keeperClient:     normalRPCClient,
 		activeTxnClient:  activeTxnRPCClient,
 		validationClient: validationRPCClient,
 		logger:           getLogger(service),
@@ -1477,7 +1474,7 @@ func TestLockServiceDiscoveryUsesPendingCNInventory(t *testing.T) {
 	require.True(t, present, "pending public admission must not suppress active-txn recovery")
 
 	_, err = c.AsyncSend(context.Background(), &lock.Request{
-		Method:    lock.Method_Unlock,
+		Method:    lock.Method_KeepRemoteLock,
 		LockTable: lock.LockTable{ServiceID: serviceID},
 	})
 	require.NoError(t, err)

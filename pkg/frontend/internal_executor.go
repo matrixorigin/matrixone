@@ -211,7 +211,6 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 		panic(err)
 	}
 	sess := NewSession(ctx, ie.service, ie.proto, mp)
-	sess.disableTrace = true
 
 	var t *TenantInfo
 	if accountId, err := defines.GetAccountId(ctx); err == nil {

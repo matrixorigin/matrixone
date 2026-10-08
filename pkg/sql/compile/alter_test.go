@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"slices"
 	"strings"
 	"testing"
@@ -479,18 +478,21 @@ func TestShouldAdvanceAlterDataBranchLineageSnapshot(t *testing.T) {
 	require.False(t, shouldAdvanceAlterDataBranchLineageSnapshot(false, false))
 }
 
-func TestAdvanceAlterDataBranchLineageSnapshotRejectsOverflow(t *testing.T) {
+func TestAdvanceAlterDataBranchLineageSnapshotUsesWorkspace(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
-	txnOp.EXPECT().SnapshotTS().Return(timestamp.Timestamp{
-		PhysicalTime: math.MaxInt64 - int64(time.Microsecond) + 1,
-	})
-
+	op := mock_frontend.NewMockTxnOperator(ctrl)
+	ws := mock_frontend.NewMockWorkspace(ctrl)
 	proc := testutil.NewProcess(t)
-	proc.Base.TxnOperator = txnOp
-	c := &Compile{proc: proc}
-	_, err := c.advanceAlterDataBranchLineageSnapshot()
-	require.ErrorContains(t, err, "timestamp limit")
+	proc.Base.TxnOperator = op
+	gomock.InOrder(
+		op.EXPECT().SnapshotTS().Return(timestamp.Timestamp{PhysicalTime: 1000}),
+		op.EXPECT().GetWorkspace().Return(ws),
+		ws.EXPECT().AdvanceSnapshot(proc.Ctx, timestamp.Timestamp{PhysicalTime: 2000}).Return(nil),
+		op.EXPECT().SnapshotTS().Return(timestamp.Timestamp{PhysicalTime: 2001}),
+	)
+	cloneTS, err := (&Compile{proc: proc}).advanceAlterDataBranchLineageSnapshot()
+	require.NoError(t, err)
+	require.Equal(t, int64(2000), cloneTS)
 }
 
 func TestIsAlterAffectedPluginIndexMatchesIndexNamePartsAndIncludedColumns(t *testing.T) {

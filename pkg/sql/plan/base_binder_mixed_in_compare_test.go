@@ -117,7 +117,7 @@ func TestMixedStringNumericInBindsNumericComparisonsAsFloat64(t *testing.T) {
 }
 
 func TestMixedStringNumericInConstantFoldsToTrue(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	expr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "in", []*planpb.Expr{
 		makePlan2StringConstExprWithType("9.50"), mixedStringNumericInList(t, ctx.GetContext()),
 	})
@@ -131,7 +131,7 @@ func TestMixedStringNumericInConstantFoldsToTrue(t *testing.T) {
 }
 
 func TestMixedStringNumericNotInBindsAndFoldsToFalse(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	expr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "not_in", []*planpb.Expr{
 		makePlan2StringConstExprWithType("9.50"), mixedStringNumericInList(t, ctx.GetContext()),
 	})
@@ -171,7 +171,7 @@ func TestMixedStringNumericNotInBindsAndFoldsToFalse(t *testing.T) {
 }
 
 func TestPromotedPadSpaceStringInUsesCanonicalKey(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	for _, tc := range []struct {
 		name string
 		fn   string
@@ -216,7 +216,7 @@ func TestPromotedPadSpaceComparisonBuiltinsUseCanonicalArguments(t *testing.T) {
 		{name: "greatest", sql: "select greatest(" + value + ", 'MO') from nation", fn: "greatest"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.sql)
 			require.NoError(t, err)
 
 			var found bool

@@ -861,9 +861,9 @@ func (op *PartitionMultiUpdate) getFlushableS3Writer() *s3WriterDelegate {
 
 func (op *PartitionMultiUpdate) doAddAffectedRows(affectedRows uint64) {
 	// Index-only partition maintenance carries the same IgnoreAffectedRows
-	// contract as the raw MultiUpdate.  The raw writer classifies a classic
-	// FULLTEXT table as a main table by name, so checking only tableType would
-	// otherwise expose physical token rows as the statement's affected rows.
+	// contract as the raw MultiUpdate. Checking only physical tableType must
+	// not override that explicit contract and expose token rows as the
+	// statement's affected rows.
 	if op.currentTargetIgnoresAffectedRows() {
 		return
 	}

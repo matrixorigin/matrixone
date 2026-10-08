@@ -72,7 +72,7 @@ func TestRecursiveUnionDistinctPlan(t *testing.T) {
 					select n + 1 from r where n < 10
 				)
 				select * from r`, test.union)
-			logicPlan, err := runOneStmt(NewMockOptimizer(false), t, query)
+			logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, query)
 			require.NoError(t, err)
 
 			var recursiveNode *planpb.Node
@@ -89,7 +89,7 @@ func TestRecursiveUnionDistinctPlan(t *testing.T) {
 }
 
 func TestRecursiveUnionRejectsMixedModes(t *testing.T) {
-	_, err := runOneStmt(NewMockOptimizer(false), t, `
+	_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, `
 		with recursive r(n) as (
 			select 1
 			union all
@@ -156,7 +156,7 @@ func TestRecursiveCteAggregateQueryBlockScope(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
 			if test.wantError == "" {
 				require.NoError(t, err)
 				return
@@ -200,7 +200,7 @@ func TestRecursiveCteConsumerAliases(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			logicPlan, err := runOneStmt(NewMockOptimizer(false), t, test.query)
+			logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.query)
 			require.NoError(t, err)
 			require.Equal(t, test.expectedHeadings, logicPlan.GetQuery().Headings)
 		})
@@ -228,7 +228,7 @@ func TestRecursiveCteCanReferencePrecedingCte(t *testing.T) {
 		)
 		select * from seq`,
 	} {
-		_, err := runOneStmt(NewMockOptimizer(false), t, query)
+		_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, query)
 		require.NoError(t, err)
 	}
 }
@@ -252,7 +252,7 @@ func TestRecursiveCteFilteredPrecedingCteStaysInline(t *testing.T) {
 				where seq.n < 8
 			)
 			%s`, consumer)
-			logicPlan, err := runOneStmt(NewMockOptimizer(false), t, query)
+			logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, query)
 			require.NoError(t, err)
 			for _, node := range logicPlan.GetQuery().Nodes {
 				require.NotEqual(t, materialized.CTESinkOption, node.ExtraOptions,
@@ -284,7 +284,7 @@ func TestRecursiveCtePrecedingCteReuseStepGraphGuards(t *testing.T) {
 		select count(*) from seq cross join base`,
 	}
 	for _, query := range queries {
-		logicPlan, err := runOneStmt(NewMockOptimizer(false), t, query)
+		logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, query)
 		require.NoError(t, err)
 		for _, node := range logicPlan.GetQuery().Nodes {
 			require.NotEqual(t, materialized.CTESinkOption, node.ExtraOptions)
@@ -308,20 +308,20 @@ func TestRecursiveCteConsumerColumnAliasList(t *testing.T) {
 	aliased := join.Left.(*tree.AliasedTableExpr)
 	aliased.As.Cols = tree.IdentifierList{tree.Identifier("renamed_n")}
 
-	logicPlan, err := BuildPlan(NewMockOptimizer(false).CurrentContext(), stmt, false)
+	logicPlan, err := BuildPlan(NewMockOptimizer(false, newPlanTestProcess(t)).CurrentContext(), stmt, false)
 	require.NoError(t, err)
 	require.Equal(t, []string{"renamed_n", "renamed_n"}, logicPlan.GetQuery().Headings)
 }
 
 func TestRecursiveCteExplicitAliasHidesOriginalName(t *testing.T) {
-	_, err := runOneStmt(NewMockOptimizer(false), t, recursiveSequenceSQL(`
+	_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, recursiveSequenceSQL(`
 		select seq.n from seq as a`))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "seq")
 }
 
 func TestRecursiveCteDuplicateExplicitAliasStillErrors(t *testing.T) {
-	_, err := runOneStmt(NewMockOptimizer(false), t, recursiveSequenceSQL(`
+	_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, recursiveSequenceSQL(`
 		select a.n from seq as a cross join seq as a`))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "table 'a' specified more than once")
@@ -358,7 +358,7 @@ func TestRecursiveCteStringAnchorUsesAssignmentCast(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			rt.SetGlobalVariables(runtime.MOProtocolVersion, test.version)
-			logicPlan, err := runOneStmt(NewMockOptimizer(false), t, query)
+			logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, query)
 			require.NoError(t, err)
 
 			functionNames := recursivePlanFunctionNames(logicPlan)
@@ -371,7 +371,7 @@ func TestRecursiveCteStringAnchorUsesAssignmentCast(t *testing.T) {
 }
 
 func TestRecursiveCteDecimalAnchorKeepsCheckedCast(t *testing.T) {
-	logicPlan, err := runOneStmt(NewMockOptimizer(false), t, `
+	logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, `
 		with recursive r(n) as (
 			select cast(999.99 as decimal(5, 2))
 			union all
@@ -432,7 +432,7 @@ func TestOrdinaryAliasesRemainUnchanged(t *testing.T) {
 		{query: "select n.n_name from nation as n", heading: "n_name"},
 		{query: "select d.n from (select 1 as n) as d", heading: "n"},
 	} {
-		logicPlan, err := runOneStmt(NewMockOptimizer(false), t, test.query)
+		logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.query)
 		require.NoError(t, err)
 		require.Equal(t, []string{test.heading}, logicPlan.GetQuery().Headings)
 	}

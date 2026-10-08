@@ -15,6 +15,7 @@
 package compile
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 
@@ -24,10 +25,79 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
+
+func TestPartitionFulltextRouteDestinationAdmission(t *testing.T) {
+	for _, kind := range []string{"preinsert", "multi_update"} {
+		t.Run(kind, func(t *testing.T) {
+			c, client := expressionProtocolTestCompile(t)
+			instruction := &pipeline.Instruction{}
+			if kind == "preinsert" {
+				instruction.PreInsert = &pipeline.PreInsert{PreserveInput: true}
+			} else {
+				instruction.MultiUpdate = &pipeline.MultiUpdate{UpdateCtxList: []*plan.UpdateCtx{nil, {PartitionIndexCtx: &plan.PartitionIndexCtx{}}}}
+			}
+			p := &pipeline.Pipeline{Node: &pipeline.NodeInfo{Id: "old-worker", Addr: "remote:6001"}, Children: []*pipeline.Pipeline{nil, {InstructionList: []*pipeline.Instruction{nil, instruction}}}}
+			// Reuse one endpoint across sends: successful admission is never cached.
+			for _, version := range []int64{defines.MORPCVersion106, defines.MORPCVersion107, defines.MORPCVersion106} {
+				client.version = version
+				calls, releases := client.calls, client.releases
+				err := validateRemoteExpressionDestination(c.proc, p, plan.RemoteExpressionFeatures{DecimalDivisionSemantics: true})
+				if version < defines.MORPCVersion107 {
+					require.ErrorContains(t, err, "partitioned FULLTEXT routing (MORPC protocol version 107)")
+				} else {
+					require.NoError(t, err)
+				}
+				require.Equal(t, 1, client.calls-calls, "expression and routing floors share one observation")
+				require.Equal(t, 1, client.releases-releases)
+			}
+			client.customResponse = true
+			require.Error(t, validateRemoteExpressionDestination(c.proc, p, plan.RemoteExpressionFeatures{}))
+			client.sendErr = errors.New("unreachable destination")
+			require.Error(t, validateRemoteExpressionDestination(c.proc, p, plan.RemoteExpressionFeatures{}))
+			require.Error(t, validateRemoteExpressionDestination(nil, p, plan.RemoteExpressionFeatures{}))
+			p.Node = nil
+			require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, p, plan.RemoteExpressionFeatures{}), "versioned remote destination")
+			// An ordinary pipeline imposes no routing floor and performs no probe.
+			p.Children = nil
+			calls := client.calls
+			require.NoError(t, validateRemoteExpressionDestination(c.proc, p, plan.RemoteExpressionFeatures{}))
+			require.Equal(t, calls, client.calls)
+		})
+	}
+}
+
+func TestPartitionFulltextRouteSendAdmission(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	op := preinsert.NewArgument()
+	op.TableDef = &plan.TableDef{}
+	op.PreserveInput = true
+	t.Cleanup(op.Release)
+	scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
+	for _, version := range []int64{defines.MORPCVersion106, defines.MORPCVersion107, defines.MORPCVersion106} {
+		client.version = version
+		calls := client.calls
+		data, err := encodeRemoteScope(scope, c.proc)
+		if version < defines.MORPCVersion107 {
+			require.ErrorContains(t, err, "partitioned FULLTEXT routing (MORPC protocol version 107)")
+			require.Empty(t, data)
+		} else {
+			require.NoError(t, err)
+			require.NotEmpty(t, data)
+		}
+		require.Equal(t, 1, client.calls-calls)
+	}
+	op.PreserveInput = false
+	calls := client.calls
+	_, err := encodeRemoteScope(scope, c.proc)
+	require.NoError(t, err)
+	require.Equal(t, calls, client.calls)
+}
 
 // Codec tests need only the admission capability, not metadata storage.
 type codecPartitionService struct {
@@ -42,7 +112,7 @@ func TestPartitionMultiUpdateRemoteConstructorRoundTrip(t *testing.T) {
 	proc.Base.PartitionService = codecPartitionService{}
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	old, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion102)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion107)
 	t.Cleanup(func() { rt.SetGlobalVariables(moruntime.MOProtocolVersion, old) })
 	ctx := &scopeContext{id: 1, root: &scopeContext{}, parent: &scopeContext{}, scope: &Scope{Proc: proc}}
 	for _, kind := range []string{"parent", "index", "plain"} {
@@ -148,20 +218,20 @@ func TestPartitionMultiUpdateRemoteProtocol(t *testing.T) {
 				PartitionIndexCtx: &plan.PartitionIndexCtx{PartitionCol: plan.ColRef{ColPos: 2}},
 			}}}
 			op := multi_update.NewPartitionMultiUpdate(raw)
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion102)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion107)
 			_, instruction, err := convertToPipelineInstruction(op, proc, ctx, 1)
 			require.NoError(t, err)
 			p := &pipeline.Pipeline{Children: []*pipeline.Pipeline{{InstructionList: []*pipeline.Instruction{instruction}}}}
 			require.NoError(t, validateRemoteStatementLastInsertIDPipelineProtocol(proc, p))
 			data, err := p.Marshal()
 			require.NoError(t, err)
-			for _, version := range []int64{defines.MORPCVersion88, defines.MORPCVersion100, defines.MORPCVersion101} {
+			for _, version := range []int64{defines.MORPCVersion88, defines.MORPCVersion100, defines.MORPCVersion101, defines.MORPCVersion102, defines.MORPCVersion103, defines.MORPCVersion104, defines.MORPCVersion105, defines.MORPCVersion106} {
 				rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 				_, _, err = convertToPipelineInstruction(op, proc, ctx, 1)
-				require.ErrorContains(t, err, "MORPC protocol version 102")
-				require.ErrorContains(t, validateRemoteStatementLastInsertIDPipelineProtocol(proc, p), "MORPC protocol version 102")
+				require.ErrorContains(t, err, "MORPC protocol version 107")
+				require.ErrorContains(t, validateRemoteStatementLastInsertIDPipelineProtocol(proc, p), "MORPC protocol version 107")
 				_, err = decodeScope(data, proc, true, nil)
-				require.ErrorContains(t, err, "MORPC protocol version 102")
+				require.ErrorContains(t, err, "MORPC protocol version 107")
 			}
 			raw.MultiUpdateCtx[0].PartitionIndexCtx = nil
 			_, _, err = convertToPipelineInstruction(raw, proc, ctx, 1)
