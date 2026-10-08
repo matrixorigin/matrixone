@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -1014,7 +1015,13 @@ func (s *trackingTempTableSession) RemoveTempTable(dbName, alias string) {
 	delete(s.tables, dbName+"."+alias)
 }
 
-func (s *trackingTempTableSession) RemoveTempTableByRealName(string) {}
+func (s *trackingTempTableSession) RemoveTempTableByRealName(realName string) {
+	for alias, real := range s.tables {
+		if real == realName {
+			delete(s.tables, alias)
+		}
+	}
+}
 
 func (s *trackingTempTableSession) GetSqlModeNoAutoValueOnZero() (bool, bool) {
 	return false, false
@@ -2188,4 +2195,162 @@ func TestDropTableSingleSkipsMissingFkTables(t *testing.T) {
 		FkChildTblsReferToMe: []uint64{43},
 	})
 	require.NoError(t, err)
+}
+
+type indexChildAutoIncrement struct {
+	incrservice.AutoIncrementService
+	err   error
+	calls int
+}
+
+func (s *indexChildAutoIncrement) Delete(context.Context, uint64, client.TxnOperator) error {
+	s.calls++
+	return s.err
+}
+
+func TestDropIndexChildRelationPreservesCleanupOnFailure(t *testing.T) {
+	failure := errors.New("child cleanup failed")
+	for _, tc := range []struct {
+		name                          string
+		lookupErr, incrErr, deleteErr error
+		temporary                     bool
+	}{
+		{name: "lookup", lookupErr: failure, temporary: true},
+		{name: "auto increment", incrErr: failure, temporary: true},
+		{name: "delete", deleteErr: failure, temporary: true},
+		{name: "temporary success", temporary: true},
+		{name: "persistent success"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			proc := &process.Process{Ctx: context.Background(), Base: &process.BaseProcess{}}
+			session := &trackingTempTableSession{tables: map[string]string{"db.uk": "hidden", "db.keep": "other"}}
+			proc.Session = session
+			service := &indexChildAutoIncrement{err: tc.incrErr}
+			rt := moruntime.ServiceRuntime(proc.GetService())
+			old, exists := rt.GetGlobalVariables(moruntime.AutoIncrementService)
+			incrservice.SetAutoIncrementServiceByID(proc.GetService(), service)
+			defer func() {
+				if exists {
+					rt.SetGlobalVariables(moruntime.AutoIncrementService, old)
+				} else {
+					rt.CompareAndDeleteGlobalVariables(moruntime.AutoIncrementService, service)
+				}
+			}()
+			db := mock_frontend.NewMockDatabase(ctrl)
+			rel := mock_frontend.NewMockRelation(ctrl)
+			db.EXPECT().Relation(gomock.Any(), "hidden", gomock.Any()).Return(rel, tc.lookupErr)
+			if tc.lookupErr == nil {
+				rel.EXPECT().GetTableID(gomock.Any()).Return(uint64(77))
+				rel.EXPECT().GetTableDef(gomock.Any()).Return(&plan2.TableDef{Cols: []*plan2.ColDef{{Typ: plan2.Type{AutoIncr: true}}}})
+				if tc.incrErr == nil {
+					db.EXPECT().Delete(gomock.Any(), "hidden").Return(tc.deleteErr)
+				}
+			}
+			c := &Compile{proc: proc}
+			err := c.dropIndexChildRelation(db, "hidden", tc.temporary)
+			if tc.lookupErr != nil || tc.incrErr != nil || tc.deleteErr != nil {
+				require.ErrorIs(t, err, failure)
+			} else {
+				require.NoError(t, err)
+			}
+			if err == nil && tc.temporary {
+				_, ok := session.GetTempTable("db", "uk")
+				require.False(t, ok)
+			} else {
+				real, ok := session.GetTempTable("db", "uk")
+				require.True(t, ok)
+				require.Equal(t, "hidden", real)
+			}
+			require.Equal(t, "other", session.tables["db.keep"])
+			if tc.lookupErr != nil {
+				require.Zero(t, service.calls)
+			} else {
+				require.Equal(t, 1, service.calls)
+			}
+		})
+	}
+}
+
+func TestDropIndexParentAdmission(t *testing.T) {
+	failure := errors.New("parent admission failed")
+	schemaRead := errors.New("admitted before schema read")
+	retry := moerr.NewTxnNeedRetryNoCtx()
+	defChanged := moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+	for _, tc := range []struct {
+		name                    string
+		optimistic              bool
+		metadataErr, storageErr error
+	}{
+		{name: "admitted"},
+		{name: "metadata retry", metadataErr: retry},
+		{name: "metadata definition retry", metadataErr: defChanged},
+		{name: "metadata failure", metadataErr: failure},
+		{name: "storage retry", storageErr: retry},
+		{name: "storage definition retry", storageErr: defChanged},
+		{name: "storage failure", storageErr: failure},
+		{name: "optimistic", optimistic: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+			mode := txn.TxnMode_Pessimistic
+			if tc.optimistic {
+				mode = txn.TxnMode_Optimistic
+			}
+			txnOp.EXPECT().Txn().Return(txn.TxnMeta{Mode: mode}).AnyTimes()
+			proc := &process.Process{Ctx: context.Background(), Base: &process.BaseProcess{TxnOperator: txnOp}}
+			proc.Session = &trackingTempTableSession{tables: map[string]string{"qualified.alias": "real"}}
+			eng := mock_frontend.NewMockEngine(ctrl)
+			db := mock_frontend.NewMockDatabase(ctrl)
+			rel := mock_frontend.NewMockRelation(ctrl)
+			eng.EXPECT().Database(gomock.Any(), "qualified", txnOp).Return(db, nil)
+			db.EXPECT().Relation(gomock.Any(), "real", nil).Return(rel, nil)
+			var calls []string
+			stubs := gostub.Stub(&lockMoDatabase, func(_ *Compile, name string, mode lock.LockMode) error {
+				require.Equal(t, "qualified", name)
+				require.Equal(t, lock.LockMode_Shared, mode)
+				calls = append(calls, "database")
+				return nil
+			})
+			defer stubs.Reset()
+			stubs.Stub(&lockMoTable, func(_ *Compile, dbname, name string, mode lock.LockMode) error {
+				require.Equal(t, "qualified", dbname)
+				require.Equal(t, "real", name)
+				require.Equal(t, lock.LockMode_Exclusive, mode)
+				calls = append(calls, "metadata")
+				return tc.metadataErr
+			})
+			stubs.Stub(&lockTable, func(_ context.Context, _ engine.Engine, _ *process.Process, r engine.Relation, dbname string, changed bool) error {
+				require.Same(t, rel, r)
+				require.Equal(t, "qualified", dbname)
+				require.True(t, changed)
+				calls = append(calls, "storage")
+				return tc.storageErr
+			})
+			admitted := tc.metadataErr == nil && tc.storageErr == nil
+			if admitted || tc.optimistic {
+				rel.EXPECT().GetTableDef(gomock.Any()).DoAndReturn(func(context.Context) *plan2.TableDef { calls = append(calls, "schema"); return &plan2.TableDef{} })
+				rel.EXPECT().TableDefs(gomock.Any()).Return(nil, schemaRead)
+			}
+			s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{Definition: &plan2.DataDefinition_DropIndex{DropIndex: &plan2.DropIndex{Database: "qualified", Table: "alias", IndexName: "uk"}}}}}}
+			err := s.DropIndex(&Compile{proc: proc, e: eng, db: "different"})
+			want := []string{"database"}
+			if !tc.optimistic {
+				want = append(want, "metadata")
+				if tc.metadataErr == nil {
+					want = append(want, "storage")
+				}
+			}
+			if admitted || tc.optimistic {
+				want = append(want, "schema")
+				require.ErrorIs(t, err, schemaRead)
+			} else if tc.metadataErr == failure || tc.storageErr == failure {
+				require.ErrorIs(t, err, failure)
+			} else {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
+			}
+			require.Equal(t, want, calls)
+		})
+	}
 }
