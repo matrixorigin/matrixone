@@ -15,7 +15,7 @@
 // CPU-only unit coverage for the fulltext2 plan-layer hooks. plan.go's inert
 // vector-sort redirects (CanApply / ApplyForSort), schema.go's hidden-table
 // builder (BuildFullTextIndexDefs) + buildFullText2Params, and tablefunc.go's
-// pure TVF builders (buildFullText2Create / buildFullText2Search /
+// pure TVF builders (buildFullText2Create /
 // getFullText2Params) are all reachable without a live cluster. The
 // happy-path builders call two planplugin helper vars (production wires them
 // in pkg/sql/plan's init) which the init() below stubs to avoid an import
@@ -508,31 +508,6 @@ func TestBuildFullText2Create_OK(t *testing.T) {
 }
 
 // --- tablefunc.go: buildFullText2Search ------------------------------------
-
-func TestBuildFullText2Search_BadArgCount(t *testing.T) {
-	b := newStubPlanBuilder()
-	_, err := buildFullText2Search(b, numValTblFunc(`{}`), nil, makeArgs(3), nil)
-	require.Error(t, err)
-	_, err = buildFullText2Search(b, numValTblFunc(`{}`), nil, makeArgs(5), nil)
-	require.Error(t, err)
-}
-
-func TestBuildFullText2Search_BadParams(t *testing.T) {
-	b := newStubPlanBuilder()
-	_, err := buildFullText2Search(b, nonNumValTblFunc(), nil, makeArgs(4), nil)
-	require.Error(t, err)
-}
-
-func TestBuildFullText2Search_OK(t *testing.T) {
-	b := newStubPlanBuilder()
-	id, err := buildFullText2Search(b, numValTblFunc(`{"parser":"ngram"}`), nil, makeArgs(4), nil)
-	require.NoError(t, err)
-	node := b.nodes[id]
-	require.Equal(t, plan.Node_FUNCTION_SCAN, node.NodeType)
-	require.Equal(t, FullText2SearchFuncName, node.TableDef.TblFunc.Name)
-	require.False(t, node.TableDef.TblFunc.IsSingle)
-	require.Len(t, node.TblFuncExprList, 3) // param stripped from the 4 args
-}
 
 // --- tablefunc.go: buildFullText2Compact -----------------------------------
 

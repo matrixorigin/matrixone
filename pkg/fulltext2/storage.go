@@ -48,8 +48,8 @@ import (
 const MORPCVersionProbeTail = defines.MORPCVersion82
 
 // TableConfig locates a fulltext2 index's persistent segment store + metadata
-// table; it is the JSON const arg passed to the fulltext2_create / fulltext2_search
-// TVFs. Mirrors bm25.wand.TableConfig.
+// table; it is the JSON config of the fulltext2_create TVF and the fulltext2
+// search scan. Mirrors bm25.wand.TableConfig.
 type TableConfig struct {
 	DbName        string `json:"db"`
 	SrcTable      string `json:"src"`
@@ -87,7 +87,7 @@ type TableConfig struct {
 	// cfg so Fulltext2Search.Search can map a covering query's RequestedIncludeColumns (by
 	// name) to each result's positional Include values. nil ⇒ no INCLUDE columns.
 	IncludeColumns []string `json:"include_columns,omitempty"`
-	// ProbeTail marks a MANDATORY json_extract probe that the fulltext2_search operator must
+	// ProbeTail marks a MANDATORY json_extract probe that the fulltext2 search reader must
 	// self-complete: after searching the bulk index it binds the generation it actually searched
 	// (BuildTS) and emits a table_changes(searched, snapshot] tail so no row committed after the
 	// index's generation is dropped. Set by the planner for an async json probe (current or

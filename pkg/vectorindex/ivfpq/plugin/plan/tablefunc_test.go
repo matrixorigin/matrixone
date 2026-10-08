@@ -153,31 +153,3 @@ func TestBuildIvfpqCreate_OK(t *testing.T) {
 	require.Len(t, node.TblFuncExprList, 3)
 	require.True(t, node.TableDef.TblFunc.IsSingle)
 }
-
-func TestBuildIvfpqSearch_BadArgCount(t *testing.T) {
-	b := newStubPlanBuilder()
-	_, err := buildIvfpqSearch(b, makeNumValTblFunc(`{}`), nil, makeBuildArgs(2), nil)
-	require.Error(t, err)
-	_, err = buildIvfpqSearch(b, makeNumValTblFunc(`{}`), nil, makeBuildArgs(5), nil)
-	require.Error(t, err)
-}
-
-func TestBuildIvfpqSearch_BadParams(t *testing.T) {
-	b := newStubPlanBuilder()
-	un := tree.NewUnresolvedName(tree.NewCStr("x", 0))
-	tbl := &tree.TableFunction{Func: &tree.FuncExpr{Exprs: tree.Exprs{un}}}
-	_, err := buildIvfpqSearch(b, tbl, nil, makeBuildArgs(3), nil)
-	require.Error(t, err)
-}
-
-func TestBuildIvfpqSearch_OK(t *testing.T) {
-	for _, n := range []int{3, 4} {
-		b := newStubPlanBuilder()
-		id, err := buildIvfpqSearch(b, makeNumValTblFunc(`{"lists":"4"}`), nil, makeBuildArgs(n), nil)
-		require.NoError(t, err)
-		node := b.nodes[id]
-		require.Equal(t, plan.Node_FUNCTION_SCAN, node.NodeType)
-		require.Equal(t, IVFPQSearchFuncName, node.TableDef.TblFunc.Name)
-		require.Len(t, node.TblFuncExprList, n-1)
-	}
-}

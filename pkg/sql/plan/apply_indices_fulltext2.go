@@ -85,7 +85,7 @@ func fulltext2PeelablePkColName(scanNode *plan.Node) string {
 }
 
 // buildFulltext2SearchCfg validates a MATCH against a fulltext2 index and returns
-// the fulltext2_search config JSON ({db,index,metadata[,parser]}). It resolves the
+// the fulltext2 search config JSON ({db,index,metadata[,parser]}). It resolves the
 // storage/metadata hidden tables and rejects NL/BOOLEAN modes on a POSITION_FREE
 // index (which has no positions — only IN BM25 MODE bag-of-words is valid).
 func (builder *QueryBuilder) buildFulltext2SearchCfg(scanNode *plan.Node, idxdef *plan.IndexDef, mode int64) (string, error) {
@@ -156,10 +156,10 @@ func (builder *QueryBuilder) buildFulltext2SearchCfg(scanNode *plan.Node, idxdef
 	return string(cfgBytes), nil
 }
 
-// ft2SearchBaseColDefs returns the fulltext2_search TVF's built-in output coldefs: the same
+// ft2SearchBaseColDefs returns the fulltext2 search scan's built-in output coldefs: the same
 // (pk, relevance) shape and types as classic fulltext's ftIndexColdefs, but RENAMED to the
 // reserved __mo_ft_* aliases. The covered path emits INCLUDE columns as sibling outputs and
-// the runtime (fulltext2_search.go start()) classifies the output batch BY NAME, so the pk/
+// the runtime (fulltext2/plugin/search) classifies the output batch BY NAME, so the pk/
 // score outputs must use names no user INCLUDE column can equal — otherwise an INCLUDE column
 // named "doc_id"/"score" collides and is misrouted (silent wrong output / shuffle panic).
 // This is also what decouples fulltext2 from classic fulltext's coldef list (it only borrowed

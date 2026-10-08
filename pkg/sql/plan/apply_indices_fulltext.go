@@ -89,7 +89,7 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 
 	// Covered fast path (Phase 6): a fully-covered SELECT over a single fulltext2 index
 	// WITH include columns can DROP the base-table JOIN and serve pk/score/include-cols
-	// straight from the fulltext2_search TVF. Purely additive: when not covered, falls
+	// straight from the fulltext2 search scan. Purely additive: when not covered, falls
 	// through to the existing JOIN path below byte-for-byte.
 	//
 	// A wrapped MATCH that survived deduplication is by definition a DIFFERENT match than the
@@ -552,7 +552,7 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 
 	// fulltext2 INCLUDE/pk prefilter pushdown: when the driving index is a fulltext2 index
 	// WITH INCLUDE columns, peel the WHERE predicates on those INCLUDE columns (and the pk)
-	// out of scanNode.FilterList into the ivfpq-aligned predicate JSON, which fulltext2_search
+	// out of scanNode.FilterList into the ivfpq-aligned predicate JSON, which the fulltext2 search reader
 	// evaluates against the stored per-doc values inside the WAND walk (bounding the pushed
 	// LIMIT to the filtered set). Reusing buildFilterPredicateJSON keeps this correctness-safe:
 	// it peels only NUMERIC + pk predicates exactly and leaves varchar/others residual (so a
@@ -636,8 +636,8 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		}
 		mode := modeLit.GetI64Val()
 
-		// Dispatch the per-match TVF by the resolved index's algo: fulltext2 ->
-		// fulltext2_search, classic fulltext -> fulltext_index_scan. Both emit the same
+		// Dispatch the per-match search scan by the resolved index's algo: fulltext2 or
+		// classic fulltext. Both emit the same
 		// (doc_id, score) shape and take the search pattern as an EXPRESSION (fn.Args[0]),
 		// so a prepared-statement '?' pattern flows through either path unchanged. This
 		// 2-member dispatch stays inline (not an index-plugin hook) because building the
@@ -1144,7 +1144,7 @@ func (builder *QueryBuilder) buildFullTextCandidateLimit(
 
 // tryApplyCoveredFulltext2 implements the covered fast path (Phase 6): a fully-covered
 // projection over a SINGLE fulltext2 index WITH include columns drops the base-table JOIN
-// and reads pk/score/include-cols straight from the fulltext2_search TVF. It returns
+// and reads pk/score/include-cols straight from the fulltext2 search scan. It returns
 // (handled=true) only when EVERY guard holds:
 //
 //	(a) a single MATCH driving a single fulltext2 index (len(filterids)==1, and any
@@ -1965,7 +1965,7 @@ func (builder *QueryBuilder) findMatchFullTextIndex(fn *plan.Function, scanNode 
 		}
 		// A fulltext2 index has two hidden-table defs (storage + metadata) sharing the
 		// IndexName; resolve against the STORAGE def so IndexTableName/Parts are the ones
-		// the fulltext2_search TVF expects. Classic fulltext has a single def.
+		// the fulltext2 search scan expects. Classic fulltext has a single def.
 		if catalog.IsFullText2IndexAlgo(idx.IndexAlgo) {
 			if idx.IndexAlgoTableType != catalog.FullText2Index_TblType_Storage {
 				continue
@@ -2387,7 +2387,7 @@ func collectDrivingFullTextMatches(expr *plan.Expr, out []*plan.Expr) []*plan.Ex
 }
 
 // fulltext2ScoreRangeFromFilters builds the relevance interval implied by the AND-reachable
-// `MATCH(...) <op> const` comparisons on ONE served match, for pushing into fulltext2_search.
+// `MATCH(...) <op> const` comparisons on ONE served match, for pushing into the fulltext2 search scan.
 //
 // Only fulltext2 has an engine that can use it (the WAND search scores documents itself);
 // classic fulltext_index_scan has no equivalent, so callers only build this for fulltext2.

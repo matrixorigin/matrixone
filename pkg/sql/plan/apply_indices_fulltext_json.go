@@ -372,8 +372,8 @@ func (builder *QueryBuilder) addJSONFulltextProbes(scanNode *plan.Node) {
 		if !ok {
 			continue
 		}
-		// Mixed-version fence. The json probe emits a fulltext2_search TVF whose TableConfig carries
-		// probe_tail/source/bar/predicate for self-completion. That TVF can be serialized into a remote
+		// Mixed-version fence. The json probe emits a fulltext2 search scan whose TableConfig carries
+		// probe_tail/source/bar/predicate for self-completion. That scan can be serialized into a remote
 		// scope (broadcast-join build side) and executed on any selected worker; a CN that predates this
 		// contract decodes the config into an older TableConfig, silently drops those fields, and runs
 		// only a stale bulk probe -- which then loses rows the tail would have supplied at the mandatory
@@ -525,7 +525,7 @@ func jsonLiteralToSQL(lit *plan.Literal) (string, bool) {
 	return "", false
 }
 
-// jsonProbeTailSQL reconstructs, for display, what the fulltext2_search operator runs to self-complete
+// jsonProbeTailSQL reconstructs, for display, what the fulltext2 search reader runs to self-complete
 // an async json probe. The operator picks ONE of three at execution, against the generation it ACTUALLY
 // searched, so no single SQL is literally "the" query -- this renders the representative BEHIND tail
 // (table_changes inserts after the searched generation up to the read, filtered by whereSQL, projected
@@ -599,8 +599,8 @@ const (
 	// jsonProbeCovered: a synchronous index, OR an async index that is CAUGHT UP for the read --
 	// emit a mandatory probe with NO tail (the index already reflects every row the read sees).
 	jsonProbeCovered
-	// jsonProbePartial: an async index that is BEHIND -- emit a mandatory probe the fulltext2_search
-	// operator SELF-COMPLETES, binding the generation it searched at runtime and unioning a
+	// jsonProbePartial: an async index that is BEHIND -- emit a mandatory probe the fulltext2 search
+	// reader SELF-COMPLETES, binding the generation it searched at runtime and unioning a
 	// table_changes tail up to the read snapshot. Covers both current and {snapshot=...} reads.
 	jsonProbePartial
 )
@@ -826,7 +826,7 @@ func (builder *QueryBuilder) dedupFulltextDocIDs(ctx *BindContext, ftNodeID int3
 	if builder.jsonProbeFtNodes == nil {
 		builder.jsonProbeFtNodes = make(map[int32]bool)
 	}
-	// Record the immediate child, the fulltext2_search SCAN (the id the score-sort/runtime-filter
+	// Record the immediate child, the fulltext2 search SCAN (the id the score-sort/runtime-filter
 	// passes hold in ret_filter_node_ids). A self-completing async probe emits its table_changes tail
 	// INSIDE that same scan node (no separate UNION arm), so the child is always the scan.
 	builder.jsonProbeFtNodes[ftNodeID] = true

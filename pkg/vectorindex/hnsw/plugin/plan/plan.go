@@ -18,7 +18,7 @@
 // in pkg/sql/plan/apply_indices_hnsw.go as methods on *QueryBuilder.
 // Plugin Hooks are thin one-line redirects via the planplugin.PlanBuilder
 // facade. Hidden-table schema (BuildSecondaryIndexDefs in schema.go) and
-// the hnsw_create / hnsw_search table-function builders (tablefunc.go)
+// the hnsw_create table-function builder (tablefunc.go)
 // stay here.
 package plan
 

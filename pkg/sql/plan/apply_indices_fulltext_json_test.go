@@ -830,7 +830,7 @@ func TestDecideJSONProbeMatrix(t *testing.T) {
 	require.Equal(t, jsonProbeCovered, kind)
 }
 
-// The self-completing json probe emits a fulltext2_search TVF that can execute on a remote worker;
+// The self-completing json probe emits a fulltext2 search scan that can execute on a remote worker;
 // a CN predating the probe_tail contract mishandles it and loses rows. addJSONFulltextProbes must
 // decline the probe (plain Table Scan) until MOProtocolVersion reaches the gate (#28917 review).
 func TestSelfCompletingJSONProbeGate(t *testing.T) {

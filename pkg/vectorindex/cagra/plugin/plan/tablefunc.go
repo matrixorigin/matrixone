@@ -22,14 +22,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-// CAGRA table-function plumbing — the build*/search* node constructors
-// invoked when the planner sees `cagra_create(...)` / `cagra_search(...)`
-// in SQL. Lifted from pkg/sql/plan/cagra.go (now deleted).
+// CAGRA table-function plumbing — the node constructor invoked when the
+// planner sees `cagra_create(...)` in SQL. Lifted from pkg/sql/plan/cagra.go (now deleted).
 
-const (
-	CAGRACreateFuncName = "cagra_create"
-	CAGRASearchFuncName = "cagra_search"
-)
+const CAGRACreateFuncName = "cagra_create"
 
 var (
 	cagraBuildIndexColDefs = []*plan.ColDef{
@@ -65,7 +61,6 @@ var (
 
 func init() {
 	planplugin.RegisterTableFunc(CAGRACreateFuncName, buildCagraCreate)
-	planplugin.RegisterTableFunc(CAGRASearchFuncName, buildCagraSearch)
 }
 
 func buildCagraCreate(pb planplugin.PlanBuilder, tbl *tree.TableFunction, ctx planplugin.BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
@@ -90,37 +85,6 @@ func buildCagraCreate(pb planplugin.PlanBuilder, tbl *tree.TableFunction, ctx pl
 				Name:     CAGRACreateFuncName,
 				Param:    []byte(params),
 				IsSingle: true,
-			},
-			Cols: colDefs,
-		},
-		BindingTags:     []int32{pb.GenNewBindTag()},
-		TblFuncExprList: exprs,
-		Children:        children,
-	}
-	return pb.AppendNode(node, ctx), nil
-}
-
-func buildCagraSearch(pb planplugin.PlanBuilder, tbl *tree.TableFunction, ctx planplugin.BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
-	if len(exprs) != 3 && len(exprs) != 4 {
-		return 0, moerr.NewInvalidInput(pb.GetContext(), "Invalid number of arguments (NARGS must be 3 or 4).")
-	}
-
-	colDefs := planplugin.DeepCopyColDefList(CAGRASearchColDefs)
-
-	params, err := getCagraParams(pb, tbl.Func)
-	if err != nil {
-		return 0, err
-	}
-	exprs = exprs[1:]
-
-	node := &plan.Node{
-		NodeType: plan.Node_FUNCTION_SCAN,
-		Stats:    &plan.Stats{},
-		TableDef: &plan.TableDef{
-			TableType: "func_table",
-			TblFunc: &plan.TableFunction{
-				Name:  CAGRASearchFuncName,
-				Param: []byte(params),
 			},
 			Cols: colDefs,
 		},

@@ -332,30 +332,3 @@ func TestBuildHnswCreate_OK(t *testing.T) {
 	require.Len(t, node.TblFuncExprList, 3)
 	require.True(t, node.TableDef.TblFunc.IsSingle)
 }
-
-// Search takes 3 args, or 4 with a filter payload.
-func TestBuildHnswSearch_BadArgCount(t *testing.T) {
-	_, err := buildHnswSearch(newStubPlanBuilder(), makeNumValTblFunc(`{}`), nil, makeBuildArgs(2), nil)
-	require.Error(t, err)
-	_, err = buildHnswSearch(newStubPlanBuilder(), makeNumValTblFunc(`{}`), nil, makeBuildArgs(5), nil)
-	require.Error(t, err)
-}
-
-func TestBuildHnswSearch_BadParams(t *testing.T) {
-	_, err := buildHnswSearch(newStubPlanBuilder(), nonLiteralTblFunc(), nil, makeBuildArgs(3), nil)
-	require.Error(t, err)
-}
-
-// Search is not single-threaded, unlike create.
-func TestBuildHnswSearch_OK(t *testing.T) {
-	for _, n := range []int{3, 4} {
-		b := newStubPlanBuilder()
-		id, err := buildHnswSearch(b, makeNumValTblFunc(`{"m":"48"}`), nil, makeBuildArgs(n), nil)
-		require.NoError(t, err)
-		node := b.nodes[id]
-		require.Equal(t, planpb.Node_FUNCTION_SCAN, node.NodeType)
-		require.Equal(t, HNSWSearchFuncName, node.TableDef.TblFunc.Name)
-		require.Len(t, node.TblFuncExprList, n-1)
-		require.False(t, node.TableDef.TblFunc.IsSingle)
-	}
-}

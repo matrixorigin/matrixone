@@ -25,10 +25,7 @@ import (
 // HNSW table-function plumbing — lifted from pkg/sql/plan/hnsw.go (now
 // deleted).
 
-const (
-	HNSWCreateFuncName = "hnsw_create"
-	HNSWSearchFuncName = "hnsw_search"
-)
+const HNSWCreateFuncName = "hnsw_create"
 
 var (
 	hnswBuildIndexColDefs = []*plan.ColDef{
@@ -64,7 +61,6 @@ var (
 
 func init() {
 	planplugin.RegisterCoordinatorTableFunc(HNSWCreateFuncName, buildHnswCreate)
-	planplugin.RegisterTableFunc(HNSWSearchFuncName, buildHnswSearch)
 }
 
 // arg list [param, hnsw.IndexTableConfig (JSON), pkid, vec]
@@ -89,38 +85,6 @@ func buildHnswCreate(pb planplugin.PlanBuilder, tbl *tree.TableFunction, ctx pla
 				Name:     HNSWCreateFuncName,
 				Param:    []byte(params),
 				IsSingle: true,
-			},
-			Cols: colDefs,
-		},
-		BindingTags:     []int32{pb.GenNewBindTag()},
-		TblFuncExprList: exprs,
-		Children:        children,
-	}
-	return pb.AppendNode(node, ctx), nil
-}
-
-// arg list [param, hnsw.IndexTableConfig (JSON), search_vec, filter_payload?]
-func buildHnswSearch(pb planplugin.PlanBuilder, tbl *tree.TableFunction, ctx planplugin.BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
-	if len(exprs) != 3 && len(exprs) != 4 {
-		return 0, moerr.NewInvalidInput(pb.GetContext(), "Invalid number of arguments (NARGS must be 3 or 4).")
-	}
-
-	colDefs := planplugin.DeepCopyColDefList(HNSWSearchColDefs)
-
-	params, err := getHnswParams(pb, tbl.Func)
-	if err != nil {
-		return 0, err
-	}
-	exprs = exprs[1:]
-
-	node := &plan.Node{
-		NodeType: plan.Node_FUNCTION_SCAN,
-		Stats:    &plan.Stats{},
-		TableDef: &plan.TableDef{
-			TableType: "func_table",
-			TblFunc: &plan.TableFunction{
-				Name:  HNSWSearchFuncName,
-				Param: []byte(params),
 			},
 			Cols: colDefs,
 		},

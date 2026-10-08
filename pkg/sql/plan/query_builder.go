@@ -13522,9 +13522,8 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 
 	id := tbl.Id()
 
-	// Plugin-registered table functions (hnsw_create / hnsw_search /
-	// ivf_create / cagra_create / cagra_search /
-	// ivfpq_create / ivfpq_search) live under
+	// Plugin-registered table functions (hnsw_create / ivf_create /
+	// cagra_create / ivfpq_create) live under
 	// pkg/vectorindex/<algo>/plugin/plan/tablefunc.go. The plugin
 	// registers each builder via planplugin.RegisterTableFunc at init
 	// time; this lookup routes the parser-side dispatch through that

@@ -147,8 +147,8 @@ func TestIssue29566IndexRebuildCoordinator(t *testing.T) {
 	for _, tc := range []struct {
 		name, table, index, algo, match, want, search, metaType string
 	}{
-		{"fulltext2", "docs", "ft", "fulltext2", "select id from docs where match(body) against('bbbbbbbbbbbbbbbbbbbbbbbbbb') order by id", "1\n3", "fulltext2_search", catalog.FullText2Index_TblType_Metadata},
-		{"hnsw", "vectors", "hx", "hnsw", "select id from vectors order by l2_distance(v,'[0,0]') limit 3 by rank with option 'mode=post'", "1\n2\n3", "hnsw_search", catalog.Hnsw_TblType_Metadata},
+		{"fulltext2", "docs", "ft", "fulltext2", "select id from docs where match(body) against('bbbbbbbbbbbbbbbbbbbbbbbbbb') order by id", "1\n3", "Fulltext Index Scan", catalog.FullText2Index_TblType_Metadata},
+		{"hnsw", "vectors", "hx", "hnsw", "select id from vectors order by l2_distance(v,'[0,0]') limit 3 by rank with option 'mode=post'", "1\n2\n3", "Vector Index Scan", catalog.Hnsw_TblType_Metadata},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			conn = conns[0]

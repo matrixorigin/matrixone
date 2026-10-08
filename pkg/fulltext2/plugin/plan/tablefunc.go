@@ -15,28 +15,12 @@
 package plan
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
-
-// FullText2SearchFuncName is the search TVF: MATCH over a fulltext2 index →
-// ranked (doc_id, score). Registered into the plan-side TVF dispatch like the
-// vector plugins' *_search. Args: [param, TableConfig(JSON), pattern].
-const FullText2SearchFuncName = "fulltext2_search"
-
-// Must match the executor (fulltext2_search.go): doc_id via AppendAny (the pk's own
-// type — int/varchar/uuid/…, so T_any, NOT T_int64), score via AppendFixed[float32]
-// (T_float32/Width 4, NOT T_float64 — an 8-byte score column read 4-byte writes as
-// garbage). Same shape as the MATCH-rewrite path's ftIndexColdefs; a direct
-// `FROM fulltext2_search(...)` call uses THESE defs, so they must be correct too.
-var fulltext2SearchColDefs = []*plan.ColDef{
-	{Name: catalog.FullText2Search_OutCol_DocId, Typ: plan.Type{Id: int32(types.T_any)}},
-	{Name: catalog.FullText2Search_OutCol_Score, Typ: plan.Type{Id: int32(types.T_float32), Width: 4}},
-}
 
 // FullText2CreateFuncName is the build TVF: CROSS APPLY'd over the source table
 // at CREATE INDEX / REINDEX time, it tokenizes each row (datalink/json/parser
@@ -52,7 +36,7 @@ var fulltext2CreateColDefs = []*plan.ColDef{
 // FullText2CompactFuncName is the standalone MERGE-compaction TVF:
 // `fulltext2_compact(db, store, meta, capacity[, position_free[, posting_capacity]])`.
 // No driving table; args are passed as-is (no leading param strip, unlike
-// search/create). Output: a single `live_docs` count row.
+// create). Output: a single `live_docs` count row.
 const FullText2CompactFuncName = "fulltext2_compact"
 
 var fulltext2CompactColDefs = []*plan.ColDef{
@@ -60,7 +44,6 @@ var fulltext2CompactColDefs = []*plan.ColDef{
 }
 
 func init() {
-	planplugin.RegisterTableFunc(FullText2SearchFuncName, buildFullText2Search)
 	planplugin.RegisterCoordinatorTableFunc(FullText2CreateFuncName, buildFullText2Create)
 	planplugin.RegisterTableFunc(FullText2CompactFuncName, buildFullText2Compact)
 }
@@ -98,7 +81,7 @@ func buildFullText2Create(pb planplugin.PlanBuilder, tbl *tree.TableFunction, ct
 
 // buildFullText2Compact — the standalone `fulltext2_compact(db, store, meta,
 // capacity, ...)` MERGE table function. No driving table; the varchar args are
-// passed through as-is (no leading param strip). Mirrors the search/create
+// passed through as-is (no leading param strip). Mirrors the create
 // registration so the plan-side dispatch routes through the plugin registry
 // (query_builder.go) instead of a hardcoded switch case.
 func buildFullText2Compact(pb planplugin.PlanBuilder, tbl *tree.TableFunction, ctx planplugin.BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
@@ -125,35 +108,4 @@ func getFullText2Params(pb planplugin.PlanBuilder, fn *tree.FuncExpr) (string, e
 		return fn.Exprs[0].String(), nil
 	}
 	return "", moerr.NewNoConfig(pb.GetContext(), "first parameter must be string")
-}
-
-// buildFullText2Search — arg list: [param, TableConfig(JSON), pattern, mode].
-// param is stripped; the exec side (fulltext2_search.go) reads [cfg, pattern, mode].
-func buildFullText2Search(pb planplugin.PlanBuilder, tbl *tree.TableFunction, ctx planplugin.BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
-	if len(exprs) != 4 {
-		return 0, moerr.NewInvalidInput(pb.GetContext(), "fulltext2_search: invalid number of arguments (NARGS != 4)")
-	}
-	colDefs := planplugin.DeepCopyColDefList(fulltext2SearchColDefs)
-	params, err := getFullText2Params(pb, tbl.Func)
-	if err != nil {
-		return 0, err
-	}
-	exprs = exprs[1:]
-
-	node := &plan.Node{
-		NodeType: plan.Node_FUNCTION_SCAN,
-		Stats:    &plan.Stats{},
-		TableDef: &plan.TableDef{
-			TableType: "func_table",
-			TblFunc: &plan.TableFunction{
-				Name:  FullText2SearchFuncName,
-				Param: []byte(params),
-			},
-			Cols: colDefs,
-		},
-		BindingTags:     []int32{pb.GenNewBindTag()},
-		TblFuncExprList: exprs,
-		Children:        children,
-	}
-	return pb.AppendNode(node, ctx), nil
 }

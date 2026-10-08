@@ -22,7 +22,7 @@ import (
 )
 
 // TableFuncBuilder is the signature a vector-index plugin's table-function
-// builder (e.g. ivfpq_create / ivfpq_search) must satisfy. Construct and
+// builder (e.g. ivfpq_create) must satisfy. Construct and
 // append the FUNCTION_SCAN node; return its node ID. Use the PlanBuilder
 // facade for any bind-tag / node-assembly primitives.
 type TableFuncBuilder func(pb PlanBuilder, tbl *tree.TableFunction, ctx BindContext, exprs []*plan.Expr, children []int32) (int32, error)

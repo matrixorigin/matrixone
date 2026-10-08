@@ -132,12 +132,12 @@ func (u *fulltextState) start(tf *TableFunction, proc *process.Process, nthRow i
 
 	// Wait for the unique-join-keys runtime filter if configured (pre-filter pushdown)
 	if u.scan.MembershipFilter() == nil && len(tf.RuntimeFilterSpecs) > 0 {
-		bfResult, bfErr := waitFulltextMembershipFilter(proc, tf.RuntimeFilterSpecs)
+		filter, bfErr := waitFulltextMembershipFilter(proc, tf.RuntimeFilterSpecs)
 		if bfErr != nil {
 			return bfErr
 		}
-		if bfResult != nil {
-			u.scan.SetMembershipFilter(bfResult.membershipFilterBytes)
+		if filter != nil {
+			u.scan.SetMembershipFilter(filter)
 		}
 	}
 
@@ -167,23 +167,10 @@ func fulltextIndexScanPrepare(proc *process.Process, tableFunction *TableFunctio
 	return st, err
 }
 
-type fulltextMembershipFilterStatus uint8
-
-const (
-	fulltextMembershipFilterReady fulltextMembershipFilterStatus = iota
-	fulltextMembershipFilterPass
-	fulltextMembershipFilterDrop
-)
-
-// fulltextMembershipFilterResult holds the result from waiting for a unique-join-keys runtime filter.
-type fulltextMembershipFilterResult struct {
-	membershipFilterBytes []byte // serialized membership-filter payload for reader-level filtering
-	status                fulltextMembershipFilterStatus
-}
-
-// waitFulltextMembershipFilter waits for a unique-join-keys runtime filter message,
-// deserializes the PK vector, and builds the doc_id membership filter for reader-level filtering.
-func waitFulltextMembershipFilter(proc *process.Process, specs []*plan.RuntimeFilterSpec) (*fulltextMembershipFilterResult, error) {
+// waitFulltextMembershipFilter waits for a unique-join-keys runtime filter message
+// and builds the doc_id membership filter for reader-level filtering; nil means
+// no filter.
+func waitFulltextMembershipFilter(proc *process.Process, specs []*plan.RuntimeFilterSpec) ([]byte, error) {
 	if len(specs) == 0 {
 		return nil, nil
 	}
@@ -199,62 +186,6 @@ func waitFulltextMembershipFilter(proc *process.Process, specs []*plan.RuntimeFi
 	if err != nil || len(vecbytes) == 0 {
 		return nil, err
 	}
-
-	payload, err := buildFulltextMembershipFilter(proc, vecbytes)
-	if err != nil {
-		return nil, err
-	}
-	return &fulltextMembershipFilterResult{
-		membershipFilterBytes: payload,
-		status:                fulltextMembershipFilterReady,
-	}, nil
-}
-
-// waitFulltext2MembershipFilter preserves PASS and DROP terminal states. A
-// FULLTEXT2 candidate LIMIT is only safe while an exact membership filter is
-// available; PASS must therefore fall back to an unbounded search, while DROP
-// can terminate the search with an empty result.
-func waitFulltext2MembershipFilter(proc *process.Process, specs []*plan.RuntimeFilterSpec) (*fulltextMembershipFilterResult, error) {
-	if !hasFulltextMembershipFilterSpec(specs) {
-		return nil, nil
-	}
-
-	sqlProc := sqlexec.NewSqlProcess(proc)
-	sqlProc.RuntimeFilterSpecs = specs
-	vecbytes, status, err := sqlexec.WaitUniqueJoinKeysWithStatus(sqlProc)
-	if err != nil {
-		return nil, err
-	}
-	switch status {
-	case sqlexec.UniqueJoinKeysPass, sqlexec.UniqueJoinKeysNone:
-		return &fulltextMembershipFilterResult{status: fulltextMembershipFilterPass}, nil
-	case sqlexec.UniqueJoinKeysDrop:
-		return &fulltextMembershipFilterResult{status: fulltextMembershipFilterDrop}, nil
-	case sqlexec.UniqueJoinKeysAvailable:
-		if len(vecbytes) == 0 {
-			return &fulltextMembershipFilterResult{status: fulltextMembershipFilterPass}, nil
-		}
-		payload, err := buildFulltextMembershipFilter(proc, vecbytes)
-		if err != nil {
-			return nil, err
-		}
-		if len(payload) == 0 {
-			return &fulltextMembershipFilterResult{status: fulltextMembershipFilterPass}, nil
-		}
-		return &fulltextMembershipFilterResult{
-			membershipFilterBytes: payload,
-			status:                fulltextMembershipFilterReady,
-		}, nil
-	default:
-		return &fulltextMembershipFilterResult{status: fulltextMembershipFilterPass}, nil
-	}
-}
-
-func hasFulltextMembershipFilterSpec(specs []*plan.RuntimeFilterSpec) bool {
-	return len(specs) > 0 && specs[0].UseMembershipFilter
-}
-
-func buildFulltextMembershipFilter(proc *process.Process, vecbytes []byte) ([]byte, error) {
 	return fulltext.BuildMembershipFilter(proc, vecbytes)
 }
 

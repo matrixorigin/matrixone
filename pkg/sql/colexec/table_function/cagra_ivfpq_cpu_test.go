@@ -43,8 +43,7 @@ func newStubTableFunction(name string) *TableFunction {
 }
 
 // runStubLifecycle drives prepare → start → call → end → reset → free
-// for the simple CPU stub state machines (cagra_create, cagra_search,
-// ivfpq_create, ivfpq_search). All four share the same skeleton.
+// for the simple CPU stub state machines (cagra_create, ivfpq_create).
 func runStubLifecycle(t *testing.T, prep func(p *process.Process, tf *TableFunction) (tvfState, error), name string) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
@@ -78,22 +77,14 @@ func TestCagraCreateCpuLifecycle(t *testing.T) {
 	runStubLifecycle(t, cagraCreatePrepare, "cagra_create")
 }
 
-func TestCagraSearchCpuLifecycle(t *testing.T) {
-	runStubLifecycle(t, cagraSearchPrepare, "cagra_search")
-}
-
 func TestIvfpqCreateCpuLifecycle(t *testing.T) {
 	runStubLifecycle(t, ivfpqCreatePrepare, "ivfpq_create")
-}
-
-func TestIvfpqSearchCpuLifecycle(t *testing.T) {
-	runStubLifecycle(t, ivfpqSearchPrepare, "ivfpq_search")
 }
 
 // TestTableFunctionPrepareCagraIvfpq exercises the dispatch in Prepare for
 // the new cagra_*/ivfpq_* table functions, covering the new switch arms.
 func TestTableFunctionPrepareCagraIvfpq(t *testing.T) {
-	names := []string{"cagra_create", "cagra_search", "ivfpq_create", "ivfpq_search"}
+	names := []string{"cagra_create", "ivfpq_create"}
 	for _, n := range names {
 		t.Run(n, func(t *testing.T) {
 			m := mpool.MustNewZero()
