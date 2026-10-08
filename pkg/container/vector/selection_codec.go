@@ -320,11 +320,11 @@ metadataTrailers:
 	if kindMode == selectedRowsKindRows {
 		for i := 0; i < count; i++ {
 			row := rowAt(i)
-			encoded := byte(v.GetPrepareParamKindAt(row))
+			kindAndIsBin := byte(v.GetPrepareParamKindAt(row))
 			if v.GetIsBinAt(row) {
-				encoded |= selectedRowsKindIsBin
+				kindAndIsBin |= selectedRowsKindIsBin
 			}
-			if err := writeSelectedRowsByte(w, encoded, &encoded); err != nil {
+			if err := writeSelectedRowsByte(w, kindAndIsBin, &encoded); err != nil {
 				return err
 			}
 		}
