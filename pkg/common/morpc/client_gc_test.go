@@ -625,28 +625,33 @@ func TestGlobalClientGC_UnregisteredClientIgnored(t *testing.T) {
 	factory := newTestBackendFactory()
 	c, err := NewClient("test-client", factory)
 	require.NoError(t, err)
-	defer c.Close()
 	client := c.(*client)
+	t.Cleanup(func() { assert.NoError(t, c.Close()) })
+
+	// Register and then unregister
 	mgr.register(client)
 	mgr.unregister(client)
 
+	// Try to trigger GC on unregistered client
+	mgr.triggerGCInactive(client, "b1")
 	client.mu.Lock()
 	generation := client.backendGenerationLocked("b1")
 	client.mu.Unlock()
 	state, admitted := mgr.triggerCreateAtGenerationState(client, "b1", generation)
 	require.True(t, admitted)
-
-	// Observe worker rejection while the manager is live; stop can discard
-	// queued work without exercising the registration check.
+	require.NotNil(t, state)
 	select {
 	case <-state.done:
 	case <-time.After(time.Second):
 		t.Fatal("unregistered create request did not complete")
 	}
+
 	factory.RLock()
 	attempts := factory.id
 	factory.RUnlock()
 	require.Zero(t, attempts, "unregistered client must not enter the factory")
+
+	// Should not process requests for unregistered client
 	client.mu.Lock()
 	backends := client.mu.backends["b1"]
 	client.mu.Unlock()
