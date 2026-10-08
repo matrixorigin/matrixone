@@ -47,26 +47,6 @@ type lifecycleCN struct {
 	closes   int
 }
 
-type lifecycleClusterCN struct {
-	cnservice.Service
-	closeErr error
-	status   ServiceStatus
-	closes   int
-}
-
-func (s *lifecycleClusterCN) Close() error {
-	s.closes++
-	if s.closeErr == nil {
-		s.status = ServiceClosed
-	}
-	return s.closeErr
-}
-
-func (s *lifecycleClusterCN) Status() ServiceStatus        { return s.status }
-func (s *lifecycleClusterCN) ID() string                   { return "cn" }
-func (s *lifecycleClusterCN) SQLAddress() string           { return "" }
-func (s *lifecycleClusterCN) SetCancel(context.CancelFunc) {}
-
 type lifecycleClusterTN struct {
 	tnservice.Service
 	closeErr error
@@ -132,6 +112,19 @@ func TestCNWrapperClosesAcquiredBackendBeforeStart(t *testing.T) {
 	}
 }
 
+func TestCNWrapperRefreshesCompletionCertificate(t *testing.T) {
+	failure := moerr.NewInternalErrorNoCtx("CN drain incomplete")
+	backend := &lifecycleCN{closeErr: failure}
+	owner := &cnService{status: ServiceInitialized, svc: backend}
+
+	require.ErrorIs(t, owner.Close(), failure)
+	require.Equal(t, ServiceInitialized, owner.Status())
+	backend.complete = true
+	require.ErrorIs(t, owner.Close(), failure)
+	require.Equal(t, ServiceClosed, owner.Status())
+	require.Equal(t, 1, backend.closes)
+}
+
 type partialBatchHAKeeperClient struct{}
 
 func (partialBatchHAKeeperClient) Close() error { return nil }
@@ -195,7 +188,8 @@ func newLifecycleTestCluster(t *testing.T) (*testCluster, *trackedFileService) {
 func TestClusterCloseRetainsOwnersWhenServiceDrainIsIncomplete(t *testing.T) {
 	failure := moerr.NewInternalErrorNoCtx("CN drain incomplete")
 	c, fs := newLifecycleTestCluster(t)
-	cn := &lifecycleClusterCN{closeErr: failure, status: ServiceStarted}
+	backend := &lifecycleCN{closeErr: failure}
+	cn := &cnService{status: ServiceInitialized, svc: backend}
 	tn := &lifecycleClusterTN{status: ServiceStarted}
 	log := &lifecycleClusterLog{status: ServiceStarted}
 	c.cn.svcs = []CNService{cn}
@@ -204,7 +198,7 @@ func TestClusterCloseRetainsOwnersWhenServiceDrainIsIncomplete(t *testing.T) {
 
 	err := c.Close()
 	require.ErrorIs(t, err, failure)
-	require.Equal(t, 1, cn.closes)
+	require.Equal(t, 1, backend.closes)
 	require.Zero(t, tn.closes)
 	require.Zero(t, log.closes)
 	require.Zero(t, fs.closes)
@@ -213,9 +207,9 @@ func TestClusterCloseRetainsOwnersWhenServiceDrainIsIncomplete(t *testing.T) {
 
 	// A later retry can finish the incomplete owner and then release the
 	// dependencies that were intentionally retained by the first attempt.
-	cn.closeErr = nil
-	cn.status = ServiceClosed
-	require.NoError(t, c.Close())
+	backend.complete = true
+	require.ErrorIs(t, c.Close(), failure)
+	require.Equal(t, 1, backend.closes)
 	require.Equal(t, 1, fs.closes)
 	require.Nil(t, c.mu.admission)
 	require.False(t, c.mu.running)
