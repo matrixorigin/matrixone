@@ -56,7 +56,7 @@ func writeBatchToBucketForTest(sp *ShufflePool, src *batch.Batch, proc *process.
 }
 
 func TestShufflePoolStopsOnlyAfterEveryWriter(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	sp := NewShufflePool(2, 2, false)
 	require.True(t, sp.hold())
@@ -72,7 +72,7 @@ func TestShufflePoolStopsOnlyAfterEveryWriter(t *testing.T) {
 }
 
 func TestShufflePoolDrainAllBucketsIsFair(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	sp := NewShufflePool(3, 1, true)
 
@@ -96,7 +96,7 @@ func TestShufflePoolDrainAllBucketsIsFair(t *testing.T) {
 }
 
 func TestShufflePoolAbortDefersCleanupUntilLastHolderAndIsIdempotent(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	sp := NewShufflePool(2, 2, false)
 	require.True(t, sp.hold())
@@ -117,7 +117,7 @@ func TestShufflePoolAbortDefersCleanupUntilLastHolderAndIsIdempotent(t *testing.
 }
 
 func TestShufflePoolGracefulCleanupWaitsForAllExpectedHolders(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	sp := NewShufflePool(1, 2, false)
 	require.True(t, sp.hold())
@@ -142,7 +142,7 @@ func TestShufflePoolGracefulCleanupWaitsForAllExpectedHolders(t *testing.T) {
 }
 
 func TestShufflePoolBoundsReadyBatchesAndResumes(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	sp := NewShufflePool(1, 1, true)
 	require.True(t, sp.hold())
@@ -195,7 +195,7 @@ func TestShufflePoolBoundsReadyBatchesAndResumes(t *testing.T) {
 
 func TestShufflePoolReservesReadyCreditForProvenanceChange(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	defer proc.Free()
 	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
 	require.NoError(t, err)
@@ -246,7 +246,7 @@ func TestShufflePoolReservesReadyCreditForProvenanceChange(t *testing.T) {
 
 func TestShufflePoolKeepsIndependentProducerTails(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	defer proc.Free()
 	registry, err := mpool.NewAllocationAccountRegistry(2, 64)
 	require.NoError(t, err)
@@ -354,7 +354,7 @@ func TestShufflePoolMatchingProducersCoalesce(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			const producers = 16
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			defer proc.Free()
 			sp := NewShufflePool(1, producers, tc.drainAll)
 			defer sp.abort(proc.Mp())
@@ -457,7 +457,7 @@ func TestShufflePoolMatchingProducersCoalesce(t *testing.T) {
 }
 
 func TestShufflePoolSplitsInputsAtProducerLaneCapacity(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	sp := NewShufflePool(1, 16, false)
 	defer sp.abort(proc.Mp())
@@ -519,7 +519,7 @@ func TestShufflePoolSplitsInputsAtProducerLaneCapacity(t *testing.T) {
 }
 
 func TestShufflePoolFixedBucketsHaveIndependentBackpressure(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	sp := NewShufflePool(2, 2, false)
 
@@ -581,7 +581,7 @@ func TestShufflePoolFinalDrainDoesNotStealClaimedReadyBatch(t *testing.T) {
 		{name: "full batch and partial tail", rows: objectio.BlockMaxRows + 1, tailRows: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			defer proc.Free()
 			sp := NewShufflePool(1, 2, true)
 			require.True(t, sp.hold())
@@ -635,7 +635,7 @@ func TestShufflePoolFinalDrainDoesNotStealClaimedReadyBatch(t *testing.T) {
 }
 
 func TestShufflePoolRecycleCacheUsesWorkerBound(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	sp := NewShufflePool(128, 2, false)
 	for i := range sp.readyLimit + 3 {
@@ -683,7 +683,7 @@ func TestShufflePoolRecycleCacheReusesAcrossBucketLayouts(t *testing.T) {
 		{name: "drain-all", bucketNum: 128, maxHolders: 1, drainAll: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			defer proc.Free()
 			sp := NewShufflePool(tc.bucketNum, tc.maxHolders, tc.drainAll)
 
@@ -716,7 +716,7 @@ func TestShufflePoolRecycleCacheReusesAcrossBucketLayouts(t *testing.T) {
 }
 
 func TestShufflePoolRecycleCacheFollowsProducerAcrossDestinations(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	sp := NewShufflePool(128, 16, false)
 
@@ -760,7 +760,7 @@ func TestShufflePoolRecycleCacheConcurrentReuse(t *testing.T) {
 		workersPerShard = 2
 		iterations      = 100
 	)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	sp := NewShufflePool(128, shards, false)
 	pooled := fillShufflePoolRecycleCache(t, sp, proc, 1)
@@ -809,7 +809,7 @@ func BenchmarkShufflePoolRecycleCache(b *testing.B) {
 		{name: "multi-cn-1024-buckets", bucketNum: 1024, maxHolders: 16},
 	} {
 		b.Run("pool-round-robin/"+tc.name, func(b *testing.B) {
-			proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(b, "", mpool.MustNewZero())
 			defer proc.Free()
 			sp := NewShufflePool(tc.bucketNum, tc.maxHolders, false)
 			defer sp.abort(proc.Mp())
@@ -831,7 +831,7 @@ func BenchmarkShufflePoolRecycleCache(b *testing.B) {
 
 	b.Run("pool-parallel/fixed-16-workers", func(b *testing.B) {
 		const workers = 16
-		proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+		proc := testutil.NewProcessWithOwnedMPool(b, "", mpool.MustNewZero())
 		defer proc.Free()
 		sp := NewShufflePool(128, workers, false)
 		defer sp.abort(proc.Mp())
@@ -904,7 +904,7 @@ func BenchmarkShufflePoolProducerTails(b *testing.B) {
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			mp := mpool.MustNewZero()
-			proc := testutil.NewProcessWithMPool(b, "", mp)
+			proc := testutil.NewProcessWithOwnedMPool(b, "", mp)
 			registry, err := mpool.NewAllocationAccountRegistry(
 				producerCount, 1<<20,
 			)
@@ -1010,7 +1010,7 @@ func benchmarkShufflePoolTryWrite(
 	drainAll bool,
 	phased bool,
 ) {
-	proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(b, "", mpool.MustNewZero())
 	defer proc.Free()
 	sp := NewShufflePool(bucketNum, maxHolders, drainAll)
 	defer sp.abort(proc.Mp())
@@ -1057,7 +1057,7 @@ func benchmarkShufflePoolTryWrite(
 
 func benchmarkShufflePoolTryWriteParallel(b *testing.B) {
 	const workers = 16
-	proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(b, "", mpool.MustNewZero())
 	defer proc.Free()
 	sp := NewShufflePool(128, workers, false)
 	defer sp.abort(proc.Mp())
@@ -1106,7 +1106,7 @@ func benchmarkShufflePoolTryWriteParallel(b *testing.B) {
 }
 
 func TestShufflePoolPeakIsReportedByExactlyOneHolder(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	sp := NewShufflePool(2, 2, false)
 	args := []*Shuffle{NewArgument(), NewArgument()}
@@ -1136,7 +1136,7 @@ func TestShufflePoolPeakIsReportedByExactlyOneHolder(t *testing.T) {
 }
 
 func TestShufflePoolMemoryAccountingAcrossShards(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	sp := NewShufflePool(64, 64, false)
 
