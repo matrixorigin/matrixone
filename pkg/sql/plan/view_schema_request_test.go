@@ -1283,6 +1283,8 @@ func TestViewSchemaRequestRejectsUnfrozenLegacyProjectionStar(t *testing.T) {
 		{"nested qualified", "select nation.* from nation", "select n_name from middle_v"},
 		{"CTE output", "", "with c as (select * from nation) select n_name from c"},
 		{"derived table", "", "select n_name from (select * from nation) as c"},
+		{"SAMPLE subquery", "", "select sample((select * from nation union all select 1), 1 rows) from nation"},
+		{"nested SAMPLE subquery", "select sample((select * from nation union all select 1), 1 rows) from nation", "select n_name from middle_v"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newViewSchemaTestFixture(t)
@@ -1310,6 +1312,18 @@ func TestViewSchemaRequestRejectsUnfrozenLegacyProjectionStar(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestViewSchemaRequestSampleSubqueryExplicitProjectionIsNotLegacyStar(t *testing.T) {
+	f := newViewSchemaTestFixture(t)
+	def := f.addView(t, "root_v", "select sample((select n_name from nation union all select 'x'), 1 rows) from nation")
+	parsed, err := parsePersistedViewDefinition(f.compiler, def.ViewSql.View)
+	require.NoError(t, err)
+	defer parsed.free()
+	r := f.request(t)
+	require.NoError(t, r.open())
+	require.NoError(t, rejectViewSchemaUnstableStar(r, parsed.selectStmt),
+		"an explicit nested projection is not a legacy star even inside SAMPLE")
 }
 
 func TestViewSchemaRequestLegacyStarCannotUsePreviousMemo(t *testing.T) {

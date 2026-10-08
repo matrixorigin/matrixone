@@ -59,6 +59,15 @@ func rejectViewSchemaUnstableStar(request *ViewSchemaRequest, statement *tree.Se
 				continue
 			}
 			visited[key] = struct{}{}
+			// SampleExpr keeps its expressions in a private field. Follow the
+			// public accessor so a subquery inside SAMPLE cannot hide its own
+			// unfrozen output star from the query-block check below.
+			if sample, ok := value.Interface().(*tree.SampleExpr); ok {
+				columns, _ := sample.GetColumns()
+				for _, column := range columns {
+					pending = append(pending, reflect.ValueOf(column))
+				}
+			}
 			if clause, ok := value.Interface().(*tree.SelectClause); ok && selectClauseOutputHasStar(clause) {
 				return moerr.NewNotSupported(request.workCtx, "LEGACY_STAR_UNAVAILABLE: persisted View projection has an unfrozen star")
 			}
