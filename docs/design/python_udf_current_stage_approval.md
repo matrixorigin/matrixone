@@ -69,7 +69,7 @@ review step after the design record is accepted by the relevant reviewers.
 ## r3 maintenance addendum (2026-10-05)
 
 The current document proposes protocol 107 and repair catalog 4.0.12 against
-upstream `856e9ddbdd69b52d18f727c763ecd963e66644de`. It adds explicit sender,
+upstream `c65991043b10fb39988d45b72af1485560ac5433`. It adds explicit sender,
 receiver, prepared-reuse and physical execution admission, and schedules repair
 for a tenant already at upstream-final 4.0.11. These are conservative corrections
 within the opt-in development scope. The immutable r1 blobs above describe that

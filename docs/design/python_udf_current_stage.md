@@ -4,7 +4,7 @@
 | --- | --- |
 | Design revision | `python-udf-current-stage-r3-2026-10-05` |
 | Applies to | MatrixOne PR #29152, test/development-stage Python UDF |
-| Upstream repair baseline | `856e9ddbdd69b52d18f727c763ecd963e66644de` (MORPC 106, catalog 4.0.11) |
+| Upstream repair baseline | `c65991043b10fb39988d45b72af1485560ac5433` (MORPC 106, catalog 4.0.11) |
 | Approval | Feature owner approved the r1 current-stage contract on 2026-09-24 in [PR comment](https://github.com/matrixorigin/matrixone/pull/29152#issuecomment-5809313638). The r3 repair adds catalog 4.0.12 and protocol 107 admission, including prepared reuse and physical/remote execution. Independent Architecture and SQL/Planner approval of this revision is pending; no production or security scope is added. The immutable approval artifact and independent-review status remain recorded in the [design approval record](python_udf_current_stage_approval.md). |
 | Not covered | Production tenant isolation, sandbox, Operator rollout, or cross-version rollback/restore |
 
@@ -92,7 +92,8 @@ entries. Upstream handlers `4.0.8` through `4.0.11` remain unchanged. Thus a ten
 already at upstream final `4.0.11`, including one lacking revision tables, still
 receives the repair; earlier tenants traverse the normal chain first. Missing,
 partial and complete schemas converge through idempotent checks. Repair metadata
-requires protocol 107 before tenant tasks are created; `Prepare` only selects
+requires protocol 107 before tenant tasks are created, and the repair handler
+rechecks every CN before catalog access on login compensation or direct replay; `Prepare` only selects
 `mo_catalog` and performs no DDL.
 
 Python DDL probes the required tenant schema and refuses admission until it is
