@@ -1322,9 +1322,11 @@ func expectTaskStatus(
 ) {
 	dt.TaskStatus = before
 	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{dt})
-	require.Eventually(t, func() bool {
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
 		tasks, err := store.QueryDaemonTask(context.Background(), WithTaskIDCond(EQ, dt.ID))
-		return err == nil && len(tasks) == 1 && tasks[0].TaskStatus == after
+		require.NoError(c, err, "query daemon task %d", dt.ID)
+		require.Len(c, tasks, 1)
+		require.Equal(c, after, tasks[0].TaskStatus, "daemon task %d", dt.ID)
 	}, 5*time.Second, 10*time.Millisecond, "daemon task did not reach %s", after)
 }
 

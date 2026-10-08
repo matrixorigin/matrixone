@@ -526,33 +526,23 @@ func mustAllocTestTask(t *testing.T, s TaskService, store TaskStorage, alloc map
 }
 
 func mustWaitTestTaskHasHeartbeat(t *testing.T, store TaskStorage, expectHasHeartbeatCount int) {
-	require.Eventually(t, func() bool {
-		ctx := context.Background()
-		tasks, err := store.QueryAsyncTask(ctx, WithTaskStatusCond(task.TaskStatus_Running))
-		if err != nil || len(tasks) != expectHasHeartbeatCount {
-			return false
-		}
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		tasks, err := store.QueryAsyncTask(context.Background(), WithTaskStatusCond(task.TaskStatus_Running))
+		require.NoError(c, err, "query running tasks")
+		require.Len(c, tasks, expectHasHeartbeatCount)
 		for _, v := range tasks {
-			if v.LastHeartbeat == 0 {
-				return false
-			}
+			require.NotZero(c, v.LastHeartbeat, "task %d has no heartbeat", v.ID)
 		}
-		return true
 	}, 10*time.Second, 10*time.Millisecond, "wait heartbeat timeout")
 }
 
 func mustWaitTestTaskHasExecuteResult(t *testing.T, store TaskStorage, expectCount int) {
-	require.Eventually(t, func() bool {
-		ctx := context.Background()
-		tasks, err := store.QueryAsyncTask(ctx, WithTaskStatusCond(task.TaskStatus_Completed))
-		if err != nil || len(tasks) != expectCount {
-			return false
-		}
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		tasks, err := store.QueryAsyncTask(context.Background(), WithTaskStatusCond(task.TaskStatus_Completed))
+		require.NoError(c, err, "query completed tasks")
+		require.Len(c, tasks, expectCount)
 		for _, v := range tasks {
-			if v.ExecuteResult == nil {
-				return false
-			}
+			require.NotNil(c, v.ExecuteResult, "task %d has no execute result", v.ID)
 		}
-		return true
 	}, 10*time.Second, 10*time.Millisecond, "wait execute result timeout")
 }
