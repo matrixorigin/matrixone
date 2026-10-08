@@ -1037,13 +1037,17 @@ func TestRestartStartFailureReleasesClaimForRetry(t *testing.T) {
 		},
 	}).Handle(context.Background()))
 
-	require.Eventually(t, func() bool {
-		got := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
-		return len(got) == 1 &&
-			got[0].TaskStatus == task.TaskStatus_RestartRequested &&
-			got[0].TaskRunner == "" &&
-			got[0].LastHeartbeat.IsZero() &&
-			got[0].Details.Error == "CDC restart startup failed"
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		got, err := store.QueryDaemonTask(ctx, WithTaskIDCond(EQ, dt.ID))
+		require.NoError(c, err)
+		require.Len(c, got, 1)
+		require.Equal(c, task.TaskStatus_RestartRequested, got[0].TaskStatus)
+		require.Empty(c, got[0].TaskRunner)
+		require.True(c, got[0].LastHeartbeat.IsZero())
+		require.NotNil(c, got[0].Details)
+		require.Equal(c, "CDC restart startup failed", got[0].Details.Error)
 	}, time.Second, time.Millisecond)
 	require.True(t, restartAdmission.Load())
 }
