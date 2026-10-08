@@ -1708,8 +1708,9 @@ func restoreSystemDatabase(
 		}
 
 		getLogger(sid).Debug(fmt.Sprintf("[%s] start to restore system table: %v.%v", snapshotName, moCatalog, tblInfo.tblName))
-		// Sequences use their CREATE definition; table schemas belong to CLONE.
-		if isSequence(tblInfo) {
+		// Sequences need their definition; routine catalogs need the source
+		// schema to preserve revision metadata. Other schemas belong to CLONE.
+		if isSequence(tblInfo) || isCurrentSchemaUserDefinedFunctionCatalog(tblInfo) || isCurrentFunctionRevisionCatalog(tblInfo) {
 			tblInfo.createSql, err = getCreateTableSql(ctx, bh, tempSnap, dbName, tblInfo.tblName)
 			if err != nil {
 				return err

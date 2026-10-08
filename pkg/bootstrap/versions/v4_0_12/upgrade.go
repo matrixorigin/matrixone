@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
-	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -28,19 +27,17 @@ import (
 	"go.uber.org/zap"
 )
 
-// 4.0.12 replays only the idempotent shared Python UDF catalog entries.
-// An upstream-final 4.0.11 tenant may lack these entries; a strictly newer
-// registered handler ensures the upgrade framework schedules their repair.
-// Earlier tenants first traverse the unchanged upstream handlers through
-// 4.0.11. Complete, partial and absent revision schemas converge on retry.
+// Already-upgraded tenants must run the charset metadata refresh. An offset
+// change is insufficient: old tenant workers compare only ToVersion. Keep the
+// preceding semantic upgrade and its protocol floor; no new key format is enabled.
 var Handler = &versionHandle{
 	metadata: versions.Version{
 		Version:                 "4.0.12",
 		MinUpgradeVersion:       "4.0.11",
 		UpgradeCluster:          versions.No,
 		UpgradeTenant:           versions.Yes,
-		VersionOffset:           uint32(len(v4_0_7.PythonRevisionUpgradeEntries())),
-		RequiredProtocolVersion: defines.MORPCVersion107,
+		VersionOffset:           uint32(len(tenantUpgEntries)),
+		RequiredProtocolVersion: defines.MORPCVersion106,
 	},
 }
 
@@ -58,13 +55,8 @@ func (v *versionHandle) Prepare(ctx context.Context, txn executor.TxnExecutor, f
 }
 
 func (v *versionHandle) HandleTenantUpgrade(ctx context.Context, tenantID int32, txn executor.TxnExecutor) error {
-	// Login compensation invokes this handler without the cluster-upgrade
-	// scheduler, so enforce the same floor before any catalog mutation.
-	if err := versions.CheckCommonProtocolVersion(txn, v.metadata.RequiredProtocolVersion); err != nil {
-		return err
-	}
 	logger := runtime.ServiceRuntime(txn.Txn().TxnOptions().CN).Logger()
-	for _, entry := range v4_0_7.PythonRevisionUpgradeEntries() {
+	for _, entry := range tenantUpgEntries {
 		start := time.Now()
 		if err := entry.Upgrade(txn, uint32(tenantID)); err != nil {
 			logger.Error("tenant upgrade entry execute error",
