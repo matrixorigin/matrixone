@@ -1239,11 +1239,10 @@ func (v *Vector) SetPreparedJSONComparisonParam() {
 	v.preparedJSONComparisonParam = true
 }
 
-// CopyExpressionMetadataTo preserves scalar identity when a single expression
-// result is materialized at different row coordinates. It does not merge sources
-// or copy row sidecars; the row materializer owns their selection mapping.
+// CopyExpressionMetadataTo preserves scalar expression identity when a result
+// is materialized at different row coordinates. It does not copy numeric
+// literal provenance: the row materializer owns that selection mapping.
 func (v *Vector) CopyExpressionMetadataTo(dst *Vector) {
-	dst.isBin = v.isBin
 	dst.prepareParamType = v.prepareParamType
 	dst.preparedJSONComparisonParam = v.preparedJSONComparisonParam
 }
@@ -4122,9 +4121,9 @@ func (v *Vector) prepareRemappedStringRows(rowsBitmap *bitmap.Bitmap, sels []int
 	if v.allocationAccount == nil {
 		storage, err = mpool.MakeSlice[uint64](words, mp, v.offHeap)
 	} else {
-		storage, err = mpool.MakeSliceAccounted[uint64](
+		storage, err = mpool.MakeSliceAccountedWithCapacityClass[uint64](
 			words, mp, v.allocationAccount.account, v.allocationAccount.owner,
-			v.allocationAccount.nullsSite)
+			v.allocationAccount.nullsSite, v.allocationAccount.capacityClass)
 	}
 	if err != nil {
 		return remapped, nil, err
@@ -4168,9 +4167,9 @@ func (v *Vector) prepareRemappedNumericBinaryLiteralRows(sels []int64, mp *mpool
 	if v.allocationAccount == nil {
 		storage, err = mpool.MakeSlice[uint64](words, mp, v.offHeap)
 	} else {
-		storage, err = mpool.MakeSliceAccounted[uint64](
+		storage, err = mpool.MakeSliceAccountedWithCapacityClass[uint64](
 			words, mp, v.allocationAccount.account, v.allocationAccount.owner,
-			v.allocationAccount.nullsSite)
+			v.allocationAccount.nullsSite, v.allocationAccount.capacityClass)
 	}
 	if err != nil {
 		return remapped, nil, err
@@ -9194,6 +9193,7 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 	plainMetadata := v.prepareParamKinds == nil && w.prepareParamKinds == nil &&
 		v.prepareParamKind == PrepareParamNone && w.prepareParamKind == PrepareParamNone &&
 		!v.binaryStringRowsActive && !w.binaryStringRowsActive && !v.binaryString && !w.binaryString &&
+		!v.HasIsBinMetadata() && !w.HasIsBinMetadata() &&
 		v.stringSources == nil && w.stringSources == nil &&
 		(v.length == 0 || v.stringSource == w.stringSource)
 
@@ -10522,7 +10522,8 @@ func (v *Vector) prepareSingleAppendMetadata(isNull bool, source *types.StringSo
 	// scalar provenance, row sidecars, and an outstanding source preflight.
 	if source == nil && v.prepareParamKind == PrepareParamNone && v.prepareParamKinds == nil &&
 		v.stringSource == types.StringSourceExpression && v.stringSources == nil &&
-		!v.binaryString && !v.binaryStringRowsActive && !v.preflightStringSourceReady {
+		!v.binaryString && !v.binaryStringRowsActive && !v.HasIsBinMetadata() &&
+		!v.preflightStringSourceReady {
 		return nil
 	}
 	if source == nil {
@@ -10541,7 +10542,8 @@ func (v *Vector) publishSingleAppend(source *types.StringSource) {
 	if source == nil {
 		// The caller has admitted data/bitmap capacity and metadata. Without
 		// either row sidecar, setLengthAfterExtend only publishes the length.
-		if v.prepareParamKinds == nil && v.stringSources == nil {
+		if v.prepareParamKinds == nil && v.stringSources == nil &&
+			!v.numericBinaryLiteralRowsActive {
 			v.length++
 			return
 		}

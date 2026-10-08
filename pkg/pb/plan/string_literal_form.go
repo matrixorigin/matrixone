@@ -863,7 +863,7 @@ func classifyNumericBinaryLiteralValue(expr *Expr) numericBinaryLiteralValueClas
 
 // isFlowControlNumericBinaryLiteralSource identifies a CASE/IF/COALESCE result
 // that can carry a selected non-NULL HEX/BIT marker. Uniformly marked values
-// still need the v103 contract: older flow-control executors dropped the scalar
+// still need the v107 contract: older flow-control executors dropped the scalar
 // marker, so a downstream numeric cast could produce a different result.
 // NULL-only alternatives do not create a marker, but a marked value alongside
 // NULL still does.

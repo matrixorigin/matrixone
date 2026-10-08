@@ -2494,6 +2494,45 @@ func TestNumericBinaryLiteralMetadataVectorLifecycle(t *testing.T) {
 }
 
 func TestNumericBinaryLiteralMetadataBulkUnionBatch(t *testing.T) {
+	t.Run("union-multi preserves marked destination and ordinary source", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		destination := NewVec(types.T_int64.ToType())
+		source := NewVec(types.T_int64.ToType())
+		defer func() {
+			destination.Free(mp)
+			source.Free(mp)
+			require.Zero(t, mp.CurrNB())
+		}()
+
+		require.NoError(t, AppendFixed(destination, int64(10), false, mp))
+		destination.SetIsBin(true)
+		require.NoError(t, AppendFixed(source, int64(20), false, mp))
+		require.NoError(t, destination.UnionMulti(source, 0, 2, mp))
+		require.Equal(t, []bool{true, false, false}, []bool{
+			destination.GetIsBinAt(0), destination.GetIsBinAt(1), destination.GetIsBinAt(2),
+		})
+	})
+
+	t.Run("union-multi preserves marked source", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		destination := NewVec(types.T_int64.ToType())
+		source := NewVec(types.T_int64.ToType())
+		defer func() {
+			destination.Free(mp)
+			source.Free(mp)
+			require.Zero(t, mp.CurrNB())
+		}()
+
+		require.NoError(t, AppendFixedList(destination, []int64{10, 20}, nil, mp))
+		require.NoError(t, AppendFixed(source, int64(30), false, mp))
+		source.SetIsBin(true)
+		require.NoError(t, destination.UnionMulti(source, 0, 2, mp))
+		require.Equal(t, []bool{false, false, true, true}, []bool{
+			destination.GetIsBinAt(0), destination.GetIsBinAt(1),
+			destination.GetIsBinAt(2), destination.GetIsBinAt(3),
+		})
+	})
+
 	t.Run("unmarked whole-vector append remains metadata-free", func(t *testing.T) {
 		mp := mpool.MustNewZero()
 		source := NewVec(types.T_int64.ToType())
@@ -2659,6 +2698,51 @@ func TestRawAppendClearsNumericBinaryLiteralProvenance(t *testing.T) {
 		})
 	}
 	require.Zero(t, mp.CurrNB())
+}
+
+func TestSingleAppendExtendsNumericBinaryLiteralRows(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytesList(vec, [][]byte{[]byte("hex"), []byte("ordinary")}, nil, mp))
+	require.NoError(t, vec.SetIsBinRowsWithMP([]bool{true, false}, mp))
+	defer func() {
+		vec.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	require.NoError(t, AppendBytes(vec, []byte("new ordinary"), false, mp))
+	require.True(t, vec.HasIsBinRows(), "an active sidecar must remain row-aligned after append")
+	require.Equal(t, []bool{true, false, false}, []bool{
+		vec.GetIsBinAt(0), vec.GetIsBinAt(1), vec.GetIsBinAt(2),
+	})
+}
+
+func TestCopyExpressionMetadataDoesNotOverwriteNumericSelection(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_text.ToType())
+	selected := NewVec(types.T_text.ToType())
+	nullOnly := NewVec(types.T_text.ToType())
+	defer func() {
+		nullOnly.Free(mp)
+		selected.Free(mp)
+		source.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	require.NoError(t, AppendBytesList(source, [][]byte{[]byte("hex"), []byte("ordinary")}, nil, mp))
+	require.NoError(t, source.SetIsBinRowsWithMP([]bool{true, false}, mp))
+	// The row sidecar is authoritative, but a stale legacy summary can still be
+	// observed by expression-copy callers. It must not become selected lineage.
+	source.isBin = true
+	require.NoError(t, selected.Union(source, []int64{1}, mp))
+	require.False(t, selected.GetIsBinAt(0))
+	source.CopyExpressionMetadataTo(selected)
+	require.False(t, selected.GetIsBinAt(0), "selected ordinary rows remain authoritative")
+	require.False(t, selected.HasIsBinMetadata())
+
+	require.NoError(t, AppendNull(nullOnly, mp))
+	source.CopyExpressionMetadataTo(nullOnly)
+	require.False(t, nullOnly.GetIsBinAt(0), "NULL-only output remains unmarked")
 }
 
 func TestNumericBinaryLiteralRowsClearBeforeNullNormalization(t *testing.T) {
