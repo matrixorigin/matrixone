@@ -27,6 +27,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -914,26 +915,28 @@ func TestExecutor_execWithRetry_NonRetryableError(t *testing.T) {
 }
 
 func TestExecutor_execWithRetry_DurationLimit(t *testing.T) {
-	executor := &Executor{
-		retryTimes:    -1,
-		retryDuration: 10 * time.Millisecond,
-	}
-	executor.initRetryPolicy()
-	require.NotNil(t, executor.retryPolicy.Backoff,
-		"initRetryPolicy must install a backoff strategy")
-	// This test isolates the retry-duration cutoff from backoff delay.
-	executor.retryPolicy.Backoff = nil
+	synctest.Test(t, func(t *testing.T) {
+		executor := &Executor{
+			retryTimes:    -1,
+			retryDuration: 10 * time.Millisecond,
+		}
+		executor.initRetryPolicy()
+		require.NotNil(t, executor.retryPolicy.Backoff,
+			"initRetryPolicy must install a backoff strategy")
+		// This test isolates the retry-duration cutoff from backoff delay.
+		executor.retryPolicy.Backoff = nil
 
-	attempts := 0
-	err := executor.execWithRetry(context.Background(), nil, func() error {
-		attempts++
-		time.Sleep(5 * time.Millisecond)
-		return driver.ErrBadConn
+		attempts := 0
+		err := executor.execWithRetry(context.Background(), nil, func() error {
+			attempts++
+			time.Sleep(5 * time.Millisecond)
+			return driver.ErrBadConn
+		})
+
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "retry limit exceeded")
+		require.GreaterOrEqual(t, attempts, 1)
 	})
-
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "retry limit exceeded")
-	require.GreaterOrEqual(t, attempts, 1)
 }
 
 func TestExecutor_execWithRetry_CircuitBreakerOpens(t *testing.T) {

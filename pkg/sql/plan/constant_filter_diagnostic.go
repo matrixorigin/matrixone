@@ -95,7 +95,7 @@ func containsStatementInvariantFilterDiagnostic(proc *process.Process, expr *pla
 	if expr == nil {
 		return false
 	}
-	if function.MayDiagnoseStatementParameter(expr) && !provenFree {
+	if !provenFree && function.MayDiagnoseStatementParameter(expr) {
 		return true
 	}
 	if fn := expr.GetF(); fn != nil {

@@ -16,20 +16,101 @@ package shardservice
 
 import (
 	"context"
+	"errors"
+	"io"
+	"net"
 	"os"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// A live connection proves the listener was started before Close, while the
+// failed dial after fixture teardown proves it stopped accepting new work.
+func TestServiceCloseListener(t *testing.T) {
+	var address string
+	var conn net.Conn
+	defer func() {
+		if conn != nil {
+			assert.NoError(t, conn.Close())
+		}
+	}()
+	runServicesTest(t, "cn1", func(_ context.Context, _ *server, services []*service) {
+		address = services[0].cfg.ListenAddress[7:]
+		var err error
+		conn, err = net.DialTimeout("unix", address, time.Second)
+		require.NoError(t, err)
+	}, nil)
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(time.Second)))
+	_, err := conn.Read(make([]byte, 1))
+	require.True(t, errors.Is(err, io.EOF) || errors.Is(err, syscall.ECONNRESET),
+		"Close must disconnect accepted connections, got %v", err)
+	reopened, err := net.DialTimeout("unix", address, time.Second)
+	if reopened != nil {
+		assert.NoError(t, reopened.Close())
+	}
+	require.Error(t, err, "closed shard service still accepts connections")
+}
+
+type closeTestShardServer struct {
+	morpc.MethodBasedServer[*pb.Request, *pb.Response]
+	err   error
+	calls int
+}
+
+func (s *closeTestShardServer) Close() error { s.calls++; return s.err }
+
+type closeTestShardClient struct {
+	morpc.MethodBasedClient[*pb.Request, *pb.Response]
+	err   error
+	calls int
+}
+
+func (c *closeTestShardClient) Close() error { c.calls++; return c.err }
+
+func TestServiceCloseErrors(t *testing.T) {
+	serverErr, clientErr := errors.New("server close failed"), errors.New("client close failed")
+	for _, tc := range []struct {
+		name                 string
+		serverErr, clientErr error
+	}{
+		{"success", nil, nil}, {"server_error", serverErr, nil},
+		{"client_error", nil, clientErr}, {"both_errors", serverErr, clientErr},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &service{stopper: stopper.NewStopper(t.Name()), createC: make(chan uint64), deleteC: make(chan uint64)}
+			defer s.stopper.Stop()
+			server := &closeTestShardServer{err: tc.serverErr}
+			client := &closeTestShardClient{err: tc.clientErr}
+			s.remote.server, s.remote.client = server, client
+			err := s.Close()
+			if tc.serverErr == nil && tc.clientErr == nil {
+				require.NoError(t, err)
+			}
+			if tc.serverErr != nil {
+				require.ErrorIs(t, err, tc.serverErr)
+			}
+			if tc.clientErr != nil {
+				require.ErrorIs(t, err, tc.clientErr)
+			}
+			require.Equal(t, 1, server.calls)
+			require.Equal(t, 1, client.calls)
+			require.ErrorIs(t, s.stopper.RunTask(func(context.Context) {}), stopper.ErrUnavailable)
+		})
+	}
+}
 
 func TestServiceWaitCNReported(t *testing.T) {
 	for _, tc := range []struct {
@@ -779,8 +860,9 @@ func runServicesTest(
 	fn func(context.Context, *server, []*service),
 	adjustConfigFunc func(*Config) []Option,
 ) {
-	leaktest.AfterTest(t)()
+	defer leaktest.AfterTest(t)()
 	cns, tn := initTestCluster(cluster)
+	defer clusterservice.GetMOCluster(sid).Close()
 
 	cfg := Config{
 		Enable:        true,
@@ -792,6 +874,7 @@ func runServicesTest(
 		adjustConfigFunc(&cfg)
 	}
 	server := NewShardServer(cfg, runtime.ServiceRuntime(sid).Logger()).(*server)
+	defer func() { assert.NoError(t, server.Close()) }()
 
 	services := make([]*service, 0, len(cns))
 	for _, cn := range cns {
@@ -812,7 +895,10 @@ func runServicesTest(
 			opts = adjustConfigFunc(&cfg)
 		}
 
-		s := NewService(cfg, NewMemShardStorage(runtime.ServiceRuntime(sid).Logger()), opts...)
+		store := NewMemShardStorage(runtime.ServiceRuntime(sid).Logger()).(*MemShardStorage)
+		defer store.waiter.Close()
+		s := NewService(cfg, store, opts...)
+		defer func() { assert.NoError(t, s.Close()) }()
 		services = append(services, s.(*service))
 	}
 
@@ -820,9 +906,4 @@ func runServicesTest(
 	defer cancel()
 
 	fn(ctx, server, services)
-
-	for _, s := range services {
-		require.NoError(t, s.Close())
-	}
-	require.NoError(t, server.Close())
 }

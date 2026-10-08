@@ -399,7 +399,7 @@ func TestInternalExecutorViewChildWithoutDelegateIsIsolated(t *testing.T) {
 
 func TestInternalExecutorSubscriptionViewWithoutFrontendDelegate(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	relation := mock_frontend.NewMockRelation(ctrl)
 	relation.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{Name: "v"})
 	relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(42))
@@ -430,7 +430,7 @@ func TestCompilerContext_Database(t *testing.T) {
 	engine.EXPECT().Database(gomock.Any(), "", nil).Return(database, nil).Times(2)
 
 	c := &compilerContext{
-		proc:   testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+		proc:   testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero()),
 		engine: engine,
 	}
 
@@ -446,7 +446,7 @@ func TestCompilerContext_Database(t *testing.T) {
 
 func TestCompilerContextBuildTableDefByMoColumns(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	tableDef := &plan.TableDef{
 		Name: "src",
 		Cols: []*plan.ColDef{
@@ -475,7 +475,7 @@ func TestCompilerContextBuildTableDefByMoColumns(t *testing.T) {
 
 func TestCompilerContextBuildTableDefByMoColumnsPropagatesRelationError(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	relationErr := moerr.NewInternalErrorNoCtx("relation failed")
 
 	database := mock_frontend.NewMockDatabase(ctrl)
@@ -495,7 +495,7 @@ func TestCompilerContextBuildTableDefByMoColumnsPropagatesRelationError(t *testi
 
 func TestCompilerContextBuildTableDefByMoColumnsNoSuchTable(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 	database := mock_frontend.NewMockDatabase(ctrl)
 	database.EXPECT().Relation(gomock.Any(), "src", nil).Return(nil, nil)
@@ -531,7 +531,7 @@ func TestCompilerContextResolveDatabaseErrors(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			eng := mock_frontend.NewMockEngine(ctrl)
 			eng.EXPECT().Database(gomock.Any(), "db", gomock.Any()).Return(nil, tc.databaseErr)
 
@@ -556,7 +556,7 @@ func TestCompilerContextResolveDatabaseErrors(t *testing.T) {
 
 func TestInternalCompilerContextDropTableIfExistsExpectedEOBNoop(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	eng := mock_frontend.NewMockEngine(ctrl)
 	eng.EXPECT().Database(gomock.Any(), "gone", gomock.Any()).
 		Return(nil, moerr.GetOkExpectedEOB())

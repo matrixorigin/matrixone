@@ -77,7 +77,7 @@ func (s *scriptedRelationScanner) ScanRelation(req sqlexec.RelationScanRequest) 
 
 func TestGetVersionUsesTypedRelationScan(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	scanner := &scriptedRelationScanner{t: t}
 	scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
 		require.Equal(t, "db1", req.Schema)
@@ -123,7 +123,7 @@ func TestValidateIvfQueryDimensions(t *testing.T) {
 
 func TestScanEntriesUsesTypedFilterAndPhysicalTop(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	scanner := &scriptedRelationScanner{t: t}
 	scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
 		require.Zero(t, req.ReadPolicy)
@@ -211,7 +211,7 @@ func TestScanEntriesUsesTypedFilterAndPhysicalTop(t *testing.T) {
 
 func TestScanEntriesKeepsPostFilterTopKForResiduals(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	residual, err := ivfFuncExpr(proc.Ctx, "=", ivfInt64Expr(1), ivfInt64Expr(1))
 	require.NoError(t, err)
 	scanner := &scriptedRelationScanner{t: t}
@@ -261,7 +261,7 @@ func TestScanEntriesKeepsPostFilterTopKForResiduals(t *testing.T) {
 
 func TestScanEntriesPrunesFilteredSearchToSelectedCentroids(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	residual, err := ivfFuncExpr(proc.Ctx, "=", ivfInt64Expr(1), ivfInt64Expr(1))
 	require.NoError(t, err)
 	scanner := &scriptedRelationScanner{t: t}
@@ -302,7 +302,7 @@ func TestScanEntriesPrunesFilteredSearchToSelectedCentroids(t *testing.T) {
 }
 
 func TestStorageTopKEligibility(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	sqlproc := sqlexec.NewSqlProcess(proc)
 	centroids := []int64{1}
 	require.True(t, canUseStorageTopK(sqlproc, centroids, nil, 1, true))
@@ -456,7 +456,7 @@ func TestScanEntriesPushesDistanceRangeToStorageTopK(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
-			proc := testutil.NewProcessWithMPool(t, "", mp)
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 			scanner := &scriptedRelationScanner{t: t}
 			scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
 				require.False(t, req.PostFilterTopOnly)
@@ -583,7 +583,7 @@ func TestScanEntriesFallsBackForUnsafeDistanceRanges(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
-			proc := testutil.NewProcessWithMPool(t, "", mp)
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 			scanner := &scriptedRelationScanner{t: t}
 			scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
 				require.True(t, req.PostFilterTopOnly)
@@ -636,7 +636,7 @@ func TestScanEntriesFallsBackForUnsafeDistanceRanges(t *testing.T) {
 
 func TestScanEntriesFallsBackBeforeL2LowerBoundTopK(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	scanner := &scriptedRelationScanner{t: t}
 	scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
 		require.True(t, req.PostFilterTopOnly)
@@ -683,7 +683,7 @@ func TestScanEntriesFallsBackBeforeL2LowerBoundTopK(t *testing.T) {
 
 func TestScanEntriesFailsClosedAtTopKBoundaries(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	baseConfig := func() vectorindex.IndexConfig {
 		cfg := vectorindex.IndexConfig{}
 		cfg.Ivfflat.Metric = uint16(metric.Metric_L2sqDistance)
@@ -766,7 +766,7 @@ func TestRuntimeMembershipLowersToTypedSourcePkPredicate(t *testing.T) {
 	require.NoError(t, vector.AppendFixedList(keys, []int32{3, 4}, nil, mp))
 	data, err := keys.MarshalBinary()
 	require.NoError(t, err)
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	expr, err := ivfRuntimeMembershipExpr(proc.Ctx, data,
 		ivfColExpr(2, plan.Type{Id: int32(types.T_int32)}))
@@ -919,7 +919,7 @@ func TestDistanceRangeFiltersBeforeTopInSourceUnits(t *testing.T) {
 
 func TestFilterRelationBatchAppliesResidualBeforeTop(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	bat := batch.NewWithSize(2)
 	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
 	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
@@ -946,7 +946,7 @@ func TestFilterRelationBatchAppliesResidualBeforeTop(t *testing.T) {
 
 func TestRelationFilterAndTopHelpersCoverEmptyAndDescendingCases(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	filter, err := ivfFuncExpr(proc.Ctx, "=",
 		ivfColExpr(0, plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}),
 		ivfStringExpr("keep"))
@@ -981,7 +981,7 @@ func TestRelationFilterAndTopHelpersCoverEmptyAndDescendingCases(t *testing.T) {
 
 func TestRelationSearchBoundaryBranches(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	floatLiteral := func(value float64) *plan.Expr {
 		return &plan.Expr{
 			Typ: plan.Type{Id: int32(types.T_float64)},
@@ -2091,7 +2091,7 @@ func TestSearchPlanReaderUsesBoundedMembershipStorageTopK(t *testing.T) {
 	t.Cleanup(func() { cache.Cache.Remove(cacheKey) })
 
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	scanner := &scriptedRelationScanner{t: t}
 	currentFunction := metric.DistFn_L2Distance
 	scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
