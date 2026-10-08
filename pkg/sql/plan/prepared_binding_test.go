@@ -671,7 +671,8 @@ func TestPreparedFieldSQLMarkerComparisonDomain(t *testing.T) {
 	fixed := &Expr{Typ: makeSimplePlan2Type(types.T_text), Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
 		Value: &planpb.Literal_Sval{Sval: "A"}, LiteralForm: planpb.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER,
 	}}}
-	fixedInputs := []*Expr{fixed}
+	fixedInputs := make([]*Expr, 1, 4)
+	fixedInputs[0] = fixed
 	for _, oid := range []types.T{types.T_binary, types.T_varbinary, types.T_blob} {
 		cast := DeepCopyExpr(explicit)
 		cast.Typ = makeSimplePlan2Type(oid)

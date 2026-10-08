@@ -402,6 +402,12 @@ type PrepareStmt struct {
 	// belongs to the current prepared-plan generation. A zero entry means that
 	// the corresponding BIT_COUNT marker has not observed a numeric value.
 	bitCountNumericParamTypes []types.Type
+	// SQL FIELD's NULL-only dynamic CASE keeps its resolved domain across
+	// assignable sources; numeric re-resolution advances the cache revision.
+	// Keys are returned-value marker occurrences, not plan node IDs.
+	// Fixed-size types only; no retained plan/value graph and no COM_STMT use.
+	fieldCaseDomains  map[int32]types.Type
+	fieldCaseRevision uint64
 	// conversionParamPositions identifies BIN/CONV value markers once per
 	// prepared-plan generation. SQL EXECUTE uses it to restore the variable's
 	// concrete domain without walking the plan for every execution.
@@ -861,6 +867,8 @@ func (prepareStmt *PrepareStmt) clearRuntimeSpecializationCache() {
 }
 
 func (prepareStmt *PrepareStmt) Close() {
+	prepareStmt.fieldCaseDomains = nil
+	prepareStmt.fieldCaseRevision = 0
 	prepareStmt.closeCursor()
 	prepareStmt.releaseLongDataBuffers()
 	prepareStmt.longDataErr = nil

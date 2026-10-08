@@ -1727,6 +1727,8 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 	}
 	runtimePlanApplied := false
+	pendingFieldCaseDomains := prepareStmt.fieldCaseDomains
+	pendingFieldCaseRevision := prepareStmt.fieldCaseRevision
 	var cachedRuntimeCompile *compile.Compile
 	if sourceBindingQuery {
 		prepareStmt.rememberBitCountSourceTypes(cwft.paramVals)
@@ -1734,7 +1736,11 @@ func initExecuteStmtParamWithResolverInSession(
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}
-		key := preparedExecutionBindingKey(cwft.paramBindings, cwft.paramVals)
+		bindingKey := preparedExecutionBindingKey(cwft.paramBindings, cwft.paramVals)
+		key := bindingKey
+		if !binaryExecute && pendingFieldCaseRevision != 0 {
+			key += "|field-case:" + strconv.FormatUint(pendingFieldCaseRevision, 10)
+		}
 		var proof func(*plan.Expr) bool
 		if binaryExecute {
 			proof = func(expr *plan.Expr) bool { return preparedBinaryIntegerCastDiagnosticFree(prepareStmt, expr, true) }
@@ -1770,6 +1776,31 @@ func initExecuteStmtParamWithResolverInSession(
 				return nil, nil, nil, originSQL, false, err
 			}
 			executionPlan = bound.Plan
+			if !binaryExecute {
+				var caseValueDependent bool
+				pendingFieldCaseDomains, caseValueDependent, err = plan2.BindPreparedFieldCaseDomains(reqCtx, executionPlan, prepareStmt.fieldCaseDomains, cwft.paramBindings, cwft.paramVals)
+				bound.ValueDependent = bound.ValueDependent || caseValueDependent
+				if err != nil {
+					return nil, nil, nil, originSQL, false, err
+				}
+				if len(pendingFieldCaseDomains) > 0 {
+					// Consumer-local CASE conversions were added after binding's
+					// original proof. Retain that proof and also check the new plan.
+					candidates := plan2.PreparedPlanDiagnosticCandidates(executionPlan)
+					safe, probeErr := plan2.ProbePreparedDiagnosticCandidates(cwft.proc, candidates)
+					if probeErr != nil {
+						return nil, nil, nil, originSQL, false, probeErr
+					}
+					for _, candidate := range candidates {
+						bound.DiagnosticCandidates = append(bound.DiagnosticCandidates, plan2.DeepCopyExpr(candidate))
+					}
+					bound.DiagnosticFree = bound.DiagnosticFree && safe
+				}
+				if !maps.Equal(pendingFieldCaseDomains, prepareStmt.fieldCaseDomains) {
+					pendingFieldCaseRevision++
+					key = bindingKey + "|field-case:" + strconv.FormatUint(pendingFieldCaseRevision, 10)
+				}
+			}
 			runtimePlanApplied = true
 			cwft.preparedJoinDiagnosticFree = bound.DiagnosticFree
 			cacheable := bound.DiagnosticFree && !bound.ValueDependent && !prepareStmt.hasPaginationParams && !prepareStmt.hasPercentileParams
@@ -1855,6 +1886,10 @@ func initExecuteStmtParamWithResolverInSession(
 		prepareStmt.groupConcatMaxLenFloor = groupConcatMaxLenFloor
 	}
 	if sourceBindingQuery {
+		// Like result metadata, publish CASE domains only after binding,
+		// diagnostics and all execution metadata construction have succeeded.
+		prepareStmt.fieldCaseDomains = pendingFieldCaseDomains
+		prepareStmt.fieldCaseRevision = pendingFieldCaseRevision
 		prepareStmt.compileNeedsRebuild = false
 	}
 	rebuildPublished = true

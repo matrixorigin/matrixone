@@ -5191,24 +5191,23 @@ func preparedFieldOperandComparisonType(ctx context.Context, expr *Expr, lookup 
 		return types.Type{}, false, nil
 	}
 	typ, _, _, err := preparedExecutionExprType(ctx, probe, markerLookup)
+	// Relational binding can resolve a projection to static domain leaves;
+	// the absence of remaining marker nodes does not erase a fixed BINARY
+	// contributor in the binder-owned return witness.
+	fixedValues := stringDomainWitnessCollector{seen: make(map[string]struct{})}
+	fixedValues.collect(probe, make(map[*Expr]struct{}))
+	hasFixedBinary := fixedValues.staticDomains&possibleStringDomainBinary != 0
+	if err == nil && hasFixedBinary {
+		typ.Charset = types.CharsetBinary
+		typ.CollationVersion = types.CollationVersionLegacy
+	}
 	if err == nil && preparedFieldOnlyMarkerAndNull(probe) {
 		typ.Charset = types.CharsetBinary
 		if preparedFieldNullCaseHasDynamicCondition(probe) {
-			// Unlike fixed-predicate CASE and COALESCE/IF, a prepared CASE
-			// predicate leaves the NULL-only value type unresolved. Its value
-			// markers keep their bound charset, not FIELD's synthetic TEXT.
-			collector := stringDomainWitnessCollector{seen: make(map[string]struct{})}
-			preparedFieldMarkerNullValues(probe, &collector)
-			typ.Charset = types.CharsetUTF8
-			for _, marker := range collector.args {
-				origin, _, _, typeErr := preparedExecutionParamType(ctx, marker, int(marker.GetP().Pos), lookup)
-				if typeErr != nil {
-					return types.Type{}, false, typeErr
-				}
-				if types.StaticStringDomain(origin) == types.StringDomainBinary {
-					typ.Charset = types.CharsetBinary
-				}
-			}
+			// Dynamic CASE owns its resolved value domain. FIELD must not
+			// override it using this EXECUTE's marker origins or NULL-selector
+			// inference; ordinary binding preserves the handle's resolved type.
+			return types.Type{}, false, nil
 		}
 	}
 	// This is a comparison-domain conversion, not a width/DDL boundary.
@@ -5219,7 +5218,7 @@ func preparedFieldOperandComparisonType(ctx context.Context, expr *Expr, lookup 
 	} else {
 		typ.Oid, typ.Width = types.T_text, -1
 	}
-	return typ, err == nil && hasSQLStringMarker && types.StaticStringDomain(typ) != types.StringDomainNone, err
+	return typ, err == nil && (hasSQLStringMarker || hasFixedBinary) && types.StaticStringDomain(typ) != types.StringDomainNone, err
 }
 
 // preparedFieldOnlyMarkerAndNull recognizes selectors whose only value

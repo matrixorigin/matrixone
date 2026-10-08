@@ -621,9 +621,23 @@ func TestPreparedNullifDomainWitnessBudget(t *testing.T) {
 func TestPreparedFieldTextCaseReuse(t *testing.T) {
 	for _, operand := range []string{"case when ? then null else ? end", "coalesce(case when ? then null else ? end,null)"} {
 		query := "select field(" + operand + ", ?)"
-		p, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "prepare p from '"+query+"'")
+		// Model the handle after its first text binding, not an unresolved
+		// PREPARE-only template rebound afresh for each source type.
+		mock := NewMockOptimizer(false, newPlanTestProcess(t))
+		stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, query, 1)
 		require.NoError(t, err)
-		template := p.GetDcl().GetPrepare().Plan
+		defer stmt.Free()
+		initial := []any{
+			ParamValue{Value: int64(0), SourceType: types.T_int64.ToType(), HasSourceType: true},
+			ParamValue{Value: "A", SourceType: types.T_varchar.ToType(), HasSourceType: true},
+			ParamValue{Value: "a", SourceType: types.T_varchar.ToType(), HasSourceType: true},
+		}
+		bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, []PreparedSourceBinding{
+			{Position: 0, Type: types.T_int64.ToType()},
+			{Position: 1, Type: types.T_varchar.ToType()}, {Position: 2, Type: types.T_varchar.ToType()},
+		}, initial)
+		require.NoError(t, err)
+		template := bound.Plan
 		before := template.String()
 		for _, source := range []types.T{types.T_varchar, types.T_varbinary, types.T_varchar} {
 			for _, condition := range []int64{0, 1, 0} {
@@ -641,10 +655,9 @@ func TestPreparedFieldTextCaseReuse(t *testing.T) {
 					defer executor.Free()
 					out, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 					require.NoError(t, err)
+					// The cached PREPARE has already resolved the value domain to
+					// text. Rebinding a binary-origin value must not change that domain.
 					want := int64(1 - condition)
-					if source == types.T_varbinary {
-						want = 0
-					}
 					require.Equal(t, want, vector.GetFixedAtWithTypeCheck[int64](out, 0))
 					mock := NewMockOptimizer(false, newPlanTestProcess(t))
 					mock.ctxt.SetContext(withPreparedSourceBindings(context.Background(), []PreparedSourceBinding{
@@ -659,6 +672,11 @@ func TestPreparedFieldTextCaseReuse(t *testing.T) {
 					defer boundExecutor.Free()
 					boundOut, err := boundExecutor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 					require.NoError(t, err)
+					// A fresh source-bound plan resolves its own initial domain; it
+					// is not the same handle as the cached text-domain PREPARE above.
+					if source == types.T_varbinary {
+						want = 0
+					}
 					require.Equal(t, want, vector.GetFixedAtWithTypeCheck[int64](boundOut, 0))
 				}()
 			}

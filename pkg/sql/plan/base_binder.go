@@ -4743,6 +4743,9 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 					// Record NULLIF's return-domain ownership before CASE lowering
 					// erases its identity. This compact witness is metadata only;
 					// CASE, including its separate equality conversions, is executable.
+					// Return lineage is independent of comparison lineage. A scalar
+					// result otherwise becomes an opaque ColRef after flattening.
+					b.markPreparedStringDomainSubquerySource(args[2], make(map[[2]int32]struct{}))
 					valueWitness := preparedNullifDomainWitness(args[2])
 					if _, unresolved := nullIfValueSyntax.(*tree.ParamExpr); unresolved {
 						// Only an unresolved PARAM_ITEM takes its type from the peer.
@@ -6070,6 +6073,14 @@ func (b *baseBinder) markPreparedStringDomainSubquerySource(
 		for _, arg := range fn.Args {
 			dynamic = b.markPreparedStringDomainSubquerySource(arg, visited) || dynamic
 		}
+		if fn.Func != nil && len(fn.Args) > 0 {
+			switch strings.ToLower(fn.Func.ObjName) {
+			case "max", "min", "any_value":
+				// These aggregates return their value operand's domain, not an
+				// independent numeric result like COUNT/SUM.
+				return dynamic && possibleStringDomainsForExpr(fn.Args[0]) != 0
+			}
+		}
 		return dynamic && (preparedFunctionStringDomainDependsOnRuntimeParam(expr) || preparedFieldOnlyMarkerAndNull(expr))
 	}
 	if list := expr.GetList(); list != nil {
@@ -6088,15 +6099,24 @@ func (b *baseBinder) markPreparedStringDomainSubquerySource(
 			return false
 		}
 		node := b.builder.qry.Nodes[nodeID]
-		if node == nil || col.ColPos < 0 || int(col.ColPos) >= len(node.ProjectList) {
+		if node == nil || col.ColPos < 0 {
 			return false
 		}
-		key := [2]int32{nodeID, col.ColPos}
+		outputs := node.ProjectList
+		if node.NodeType == plan.Node_AGG && len(node.BindingTags) > 1 && col.RelPos == node.BindingTags[1] {
+			outputs = node.AggList
+		}
+		if int(col.ColPos) >= len(outputs) {
+			return false
+		}
+		// An AGG node owns both group and aggregate output tags. The same
+		// column ordinal in those two lists is not the same source identity.
+		key := [2]int32{col.RelPos, col.ColPos}
 		if _, seen := visited[key]; seen {
 			return false
 		}
 		visited[key] = struct{}{}
-		source := node.ProjectList[col.ColPos]
+		source := outputs[col.ColPos]
 		if !b.markPreparedStringDomainSubquerySource(source, visited) {
 			return false
 		}
@@ -6178,6 +6198,12 @@ func stringDomainSourceWitness(source *Expr, domains uint8) *Expr {
 	}
 	if provenance := source.GetPreparedNumeric().GetStringDomainSource(); provenance != nil {
 		return stringDomainSourceWitness(provenance, domains)
+	}
+	if fn := source.GetF(); fn != nil && fn.Func != nil && len(fn.Args) > 0 {
+		switch strings.ToLower(fn.Func.ObjName) {
+		case "max", "min", "any_value":
+			return stringDomainSourceWitness(fn.Args[0], domains)
+		}
 	}
 	if preparedFieldOnlyMarkerAndNull(source) {
 		if fn := source.GetF(); fn != nil && fn.Func != nil && len(fn.Args) > 0 {
