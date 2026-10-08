@@ -81,7 +81,7 @@ select mo_ctl('dn','flush','arithmetic_predicate_semantics.scaled_product');
 select v from scaled_product where round(v*cast('0.00000001' as decimal(16,8)),8)=0.00000001;
 -- @regex("Analyze:",true)
 -- @regex("Block Filter Cond",false)
-explain (analyze true, check '["outputRows=1"]') select v from scaled_product where round(v*cast('0.00000001' as decimal(16,8)),8)=0.00000001;
+explain (analyze true, check '["outputRows=1", "inputBlocks=1 inputRows=1"]') select v from scaled_product where round(v*cast('0.00000001' as decimal(16,8)),8)=0.00000001;
 -- Independent column bounds contain an overflowing ROUND endpoint absent
 -- from either actual row. Losing this proof must keep the matching row.
 create table correlated(v bigint,w bigint);
@@ -92,7 +92,7 @@ select mo_ctl('dn','flush','arithmetic_predicate_semantics.correlated');
 select w from correlated where round(v+w,-1)=100;
 -- @regex("Analyze:",true)
 -- @regex("Block Filter Cond",false)
-explain (analyze true, check '["outputRows=1"]') select w from correlated where round(v+w,-1)=100;
+explain (analyze true, check '["outputRows=1", "inputBlocks=1 inputRows=2"]') select w from correlated where round(v+w,-1)=100;
 set optimizer_hints='blockFilter=2';
 select w from correlated where round(v+w,-1)=100;
 -- @session}
