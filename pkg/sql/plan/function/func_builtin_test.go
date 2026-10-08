@@ -1144,11 +1144,13 @@ func TestBuiltInConvertUsingCodecCancellation(t *testing.T) {
 
 func TestBuiltInConvertUsingEmptyAndNUL(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	inline := strings.Repeat("a", types.VarlenaInlineSize)
+	external := inline + "a"
 	fc := NewFunctionTestCase(proc, []FunctionTestInput{
-		NewFunctionTestInput(types.T_varchar.ToType(), []string{"", "\x00\xff", "\x00", "\ufffd", ""}, []bool{false, false, false, false, true}),
-		NewFunctionTestInput(types.T_varchar.ToType(), []string{"utf8mb4", "binary", "utf8mb3", "utf8", "utf8mb4"}, []bool{false, false, false, false, false}),
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"", "\x00\xff", "\x00", "\ufffd", "", external, inline}, []bool{false, false, false, false, true, false, false}),
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"utf8mb4", "binary", "utf8mb3", "utf8", "utf8mb4", "utf8mb4", "binary"}, []bool{false, false, false, false, false, false, false}),
 	}, NewFunctionTestResult(types.T_varchar.ToType(), false,
-		[]string{"", "\x00\xff", "\x00", "\ufffd", ""}, []bool{false, false, false, false, true}), builtInConvertUsingCharset)
+		[]string{"", "\x00\xff", "\x00", "\ufffd", "", external, inline}, []bool{false, false, false, false, true, false, false}), builtInConvertUsingCharset)
 	ok, info := fc.RunAndFree()
 	require.True(t, ok, info)
 }

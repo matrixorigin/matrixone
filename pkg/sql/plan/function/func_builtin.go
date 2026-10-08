@@ -4798,7 +4798,10 @@ func builtInConvertUsingCharset(parameters []*vector.Vector, result vector.Funct
 		}
 		// The existing evaluator interprets internal bytes in the target
 		// repertoire. SQL admission above still resolves utf8 aliases to MB4.
-		limit := mpool.MaxAllocationSize() - int64(len(rs.GetResultVector().GetArea()))
+		limit := mpool.MaxAllocationSize()
+		if len(value) > types.VarlenaInlineSize {
+			limit -= int64(len(rs.GetResultVector().GetArea()))
+		}
 		converted, owned, isNull, err := encoding.Convert(
 			proc.Ctx, proc.Mp(), collation.CharsetBinary, dst, encoding.ConvertUsing, value, limit)
 		if err != nil {
