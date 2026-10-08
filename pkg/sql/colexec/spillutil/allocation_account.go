@@ -46,8 +46,9 @@ const SpillAllocationSiteReadBuffer mpool.AllocationSite = 60
 // SpillAllocationAccount is the allocation provenance for one spill
 // engine.
 type SpillAllocationAccount struct {
-	account *mpool.AllocationAccount
-	owner   mpool.AllocationOwner
+	account       *mpool.AllocationAccount
+	owner         mpool.AllocationOwner
+	capacityClass mpool.AllocationCapacityClass
 
 	decoded  *vector.AllocationAccountSelection
 	selected *vector.AllocationAccountSelection
@@ -57,33 +58,48 @@ func NewSpillAllocationAccount(
 	account *mpool.AllocationAccount,
 	owner mpool.AllocationOwner,
 ) (*SpillAllocationAccount, error) {
-	decoded, err := vector.NewAllocationAccountSelection(
+	return NewSpillAllocationAccountWithCapacityClass(
+		account, owner, mpool.AllocationCapacityClassDefault)
+}
+
+// NewSpillAllocationAccountWithCapacityClass keeps spill allocation
+// provenance unchanged while routing its physical growth through one
+// execution-local capacity controller.
+func NewSpillAllocationAccountWithCapacityClass(
+	account *mpool.AllocationAccount,
+	owner mpool.AllocationOwner,
+	capacityClass mpool.AllocationCapacityClass,
+) (*SpillAllocationAccount, error) {
+	decoded, err := vector.NewAllocationAccountSelectionWithCapacityClass(
 		account,
 		owner,
 		SpillAllocationSiteDecodedData,
 		SpillAllocationSiteDecodedArea,
 		SpillAllocationSiteDecodedNulls,
 		SpillAllocationSiteDecodedGrouping,
+		capacityClass,
 	)
 	if err != nil {
 		return nil, err
 	}
-	selected, err := vector.NewAllocationAccountSelection(
+	selected, err := vector.NewAllocationAccountSelectionWithCapacityClass(
 		account,
 		owner,
 		SpillAllocationSiteSelectedData,
 		SpillAllocationSiteSelectedArea,
 		SpillAllocationSiteSelectedNulls,
 		SpillAllocationSiteSelectedGrouping,
+		capacityClass,
 	)
 	if err != nil {
 		return nil, err
 	}
 	return &SpillAllocationAccount{
-		account:  account,
-		owner:    owner,
-		decoded:  decoded,
-		selected: selected,
+		account:       account,
+		owner:         owner,
+		capacityClass: capacityClass,
+		decoded:       decoded,
+		selected:      selected,
 	}, nil
 }
 
@@ -164,12 +180,13 @@ func GrowAccountedSlice[T any](
 		}
 		newCapacity *= 2
 	}
-	next, err := mpool.MakeSliceAccounted[T](
+	next, err := mpool.MakeSliceAccountedWithCapacityClass[T](
 		newCapacity,
 		mp,
 		allocation.account,
 		allocation.owner,
 		site,
+		allocation.capacityClass,
 	)
 	if err != nil {
 		return nil, err
@@ -198,10 +215,11 @@ func (a *SpillAllocationAccount) newBuffer(
 	if err := a.validate(); err != nil {
 		return nil, err
 	}
-	return mpool.NewAccountedBuffer(
+	return mpool.NewAccountedBufferWithCapacityClass(
 		mp,
 		a.account,
 		a.owner,
 		site,
+		a.capacityClass,
 	)
 }

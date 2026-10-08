@@ -25,6 +25,39 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestUnionDistinctChainKeepsFinalDedup(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		sql      string
+		distinct int
+		all      int
+		prepare  bool
+	}{
+		{"common numeric chain", "select 1 as x union select 2 union select 3 union select 4", 1, 2, false},
+		{"decimal and null coercion", "select 1 as x union select 2.5 union select null", 1, 1, false},
+		{"two inputs retain distinct", "select 1 as x union select 2", 1, 0, false},
+		{"all suffix retains earlier distinct", "select 1 as x union select 2 union all select 3", 1, 1, false},
+		{"all chain remains a bag", "select 1 as x union all select 2 union all select 3", 0, 2, false},
+		{"parenthesized limit is a boundary", "(select 1 as x union select 2 order by x limit 1) union select 3", 2, 0, false},
+		{"right branch is independently bound", "select 1 as x union (select 2 union select 3)", 2, 0, false},
+		{"multiplicity subtraction is a boundary", "select 1 as x union select 2 except all select 3 union select 4", 2, 0, false},
+		{"string equality keeps existing path", "select 'a' as x union select 'b' union select 'c'", 2, 0, false},
+		{"prepared chain keeps specialization path", "select 1 as x union select 2 union select 3", 2, 0, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			logicPlan, err := BuildPlan(mock.CurrentContext(), stmt, test.prepare)
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+			require.Equal(t, test.distinct, countReachableNodeType(query, planpb.Node_UNION))
+			require.Equal(t, test.all, countReachableNodeType(query, planpb.Node_UNION_ALL))
+		})
+	}
+}
+
 func TestUnionDecimalLiteralCommonType(t *testing.T) {
 	for _, test := range []struct {
 		name     string

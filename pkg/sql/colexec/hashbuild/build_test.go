@@ -20,7 +20,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"os"
 	"strings"
 	"testing"
 
@@ -111,10 +110,13 @@ func TestBuild(t *testing.T) {
 		tc.marg.Reset(tc.proc, false, nil)
 		tc.proc.GetMessageBoard().Reset()
 
+		// Projection metadata must not leak from a previous execution generation.
+		tc.arg.ctr.autoSpillHasGrouping = true
 		err = tc.marg.Prepare(tc.proc)
 		require.NoError(t, err)
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
+		require.False(t, tc.arg.ctr.autoSpillHasGrouping)
 		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(newBatch(tc.types, tc.proc, Rows), nil, tc.proc.Mp())
 		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(batch.EmptyBatch, nil, tc.proc.Mp())
 		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
@@ -183,7 +185,6 @@ func TestBroadcastBudgetFailurePublishesTerminalAndCleansBudget(t *testing.T) {
 	require.Contains(t, buildErr.Error(), "processLimitationSize")
 	require.NotErrorIs(t, buildErr, process.ErrExecutionResourceAdmission)
 	require.Zero(t, tc.arg.OpAnalyzer.GetOpStats().ExtraStats["HashBuildSpillStarts"])
-	require.Empty(t, tc.arg.ctr.spilledFds)
 	require.Nil(t, tc.arg.ctr.spillBundle)
 
 	terminal, receiveErr := message.ReceiveJoinMapResult(
@@ -1123,7 +1124,7 @@ func TestShuffleDedupAdmissionAfterRewriteDoesNotSpillPartialInput(
 	require.True(t, forcedUnsafeReject)
 	require.False(t,
 		tc.arg.ctr.hashmapBuilder.retainedBatchRecoverySafe)
-	require.Empty(t, tc.arg.ctr.spilledFds,
+	require.Nil(t, tc.arg.ctr.spillBundle,
 		"partially rewritten Dedup input must never become a spill payload")
 
 	joinResult, err := message.ReceiveJoinMapResult(
@@ -2626,9 +2627,7 @@ func TestSpilledBuildRuntimeFilterPassesInsteadOfDropping(t *testing.T) {
 		Expr:       newExpr(0, types.T_int32.ToType()),
 	}
 	tc.arg.ctr.hashmapBuilder.InputBatchRowCount = 1
-	file, err := os.CreateTemp(t.TempDir(), "hashbuild-spilled-runtime-filter")
-	require.NoError(t, err)
-	tc.arg.ctr.spilledFds = []*os.File{file}
+	tc.arg.ctr.spillBundle = &spillFileBundle{}
 
 	require.NoError(t, tc.arg.handleRuntimeFilter(tc.proc))
 	receiver := message.NewMessageReceiver(
@@ -3004,6 +3003,8 @@ func TestShuffleHashBuildAccountedSpillLifecycle(t *testing.T) {
 	)
 	_, err = vm.Exec(tc.arg, tc.proc)
 	require.NoError(t, err)
+	require.Zero(t, generation.SpillFDUsed(),
+		"queued initial-spill buckets must not retain file descriptors")
 	result, err := message.ReceiveJoinMapResult(
 		tc.arg.JoinMapTag,
 		true,
@@ -3140,6 +3141,8 @@ func TestShuffleHashBuildDirectSpillUsesActualAllocation(t *testing.T) {
 	replaceTestHashBuildAllocation(t, tc.arg, account)
 	require.NoError(t, tc.marg.Prepare(tc.proc))
 	require.NoError(t, tc.arg.Prepare(tc.proc))
+	// Use the fixture's disk ledger too, independent of the host temporary filesystem.
+	tc.arg.ctr.hashmapBuilder.setBudget(generation)
 
 	build := newBatch(tc.types, tc.proc, rows)
 	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(

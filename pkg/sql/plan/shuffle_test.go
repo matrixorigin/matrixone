@@ -626,6 +626,72 @@ func TestDetermineShuffleForJoinNDVGuard(t *testing.T) {
 	require.False(t, lowNDVJoin.Stats.HashmapStats.Shuffle)
 }
 
+func TestDetermineShuffleForJoinUsesResidualInequalityCapacityBound(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		operator    string
+		wantShuffle bool
+	}{
+		{name: "inequality uses input bound", operator: "<>", wantShuffle: true},
+		{name: "other residual keeps estimate", operator: ">", wantShuffle: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			left := &plan.Node{
+				NodeType:    plan.Node_TABLE_SCAN,
+				BindingTags: []int32{1},
+				Stats:       &plan.Stats{Outcnt: 1_000_000, HashmapStats: &plan.HashMapStats{}},
+			}
+			buildInput := &plan.Node{
+				NodeType:    plan.Node_TABLE_SCAN,
+				BindingTags: []int32{2},
+				Stats:       &plan.Stats{Outcnt: 5_000_000, HashmapStats: &plan.HashMapStats{}},
+			}
+			buildFilter := &plan.Node{
+				NodeType: plan.Node_FILTER,
+				Children: []int32{1},
+				FilterList: []*plan.Expr{{
+					Expr: &plan.Expr_F{F: &plan.Function{
+						Func: &plan.ObjectRef{ObjName: test.operator},
+						Args: []*plan.Expr{
+							{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 2, ColPos: 1}}},
+							{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 2, ColPos: 2}}},
+						},
+					}},
+				}},
+				Stats: &plan.Stats{Outcnt: 250_000, HashmapStats: &plan.HashMapStats{}},
+			}
+			leftKey := &plan.Expr{
+				Typ:  plan.Type{Id: int32(types.T_int64)},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 0}},
+			}
+			rightKey := &plan.Expr{
+				Typ:  plan.Type{Id: int32(types.T_int64)},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 2, ColPos: 0}},
+			}
+			condition, err := BindFuncExprImplByPlanExpr(
+				context.Background(), "=", []*plan.Expr{leftKey, rightKey})
+			require.NoError(t, err)
+			condition.Ndv = 100_000
+			join := &plan.Node{
+				NodeType: plan.Node_JOIN,
+				JoinType: plan.Node_INNER,
+				Children: []int32{0, 2},
+				OnList:   []*plan.Expr{condition},
+				Stats: &plan.Stats{HashmapStats: &plan.HashMapStats{
+					HashmapSize: 250_000,
+				}},
+			}
+			builder := &QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{left, buildInput, buildFilter, join}}}
+
+			determineShuffleForJoin(join, builder)
+
+			require.Equal(t, test.wantShuffle, join.Stats.HashmapStats.Shuffle)
+			require.Equal(t, float64(250_000), join.Stats.HashmapStats.HashmapSize,
+				"capacity bound must not replace the expected cardinality")
+		})
+	}
+}
+
 func TestDetermineShuffleForGroupByCanUseDependentHighNDVColumn(t *testing.T) {
 	child := &plan.Node{
 		NodeType: plan.Node_TABLE_SCAN,
