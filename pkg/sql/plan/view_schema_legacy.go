@@ -23,11 +23,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-// requireViewSchemaCreationContext rejects unknown historical name modes before
+// requireViewSchemaCreationContext rejects unknown historical binding context before
 // any root or nested binding/memo lookup. Read only the required metadata, not
 // the SQL text; the ordinary public binder retains its compatibility fallback.
 func requireViewSchemaCreationContext(ctx context.Context, definition string) error {
 	var metadata struct {
+		DefaultDatabase     string
 		LowerCaseTableNames *int64 `json:"lower_case_table_names"`
 	}
 	if err := json.Unmarshal([]byte(definition), &metadata); err != nil {
@@ -35,6 +36,9 @@ func requireViewSchemaCreationContext(ctx context.Context, definition string) er
 	}
 	if metadata.LowerCaseTableNames == nil {
 		return moerr.NewNotSupported(ctx, "LEGACY_CONTEXT_UNAVAILABLE: persisted View has no creation-time lower_case_table_names")
+	}
+	if metadata.DefaultDatabase == "" {
+		return moerr.NewNotSupported(ctx, "LEGACY_CONTEXT_UNAVAILABLE: persisted View has no creation-time DefaultDatabase")
 	}
 	return nil
 }

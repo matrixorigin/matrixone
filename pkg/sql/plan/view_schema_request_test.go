@@ -72,6 +72,9 @@ func (c *viewSchemaTestCompiler) Resolve(database, name string, snapshot *Snapsh
 			return nil, nil, err
 		}
 	}
+	if def := c.tables[database+"."+name]; def != nil {
+		return c.objects[database+"."+name], def, nil
+	}
 	return c.objects[name], c.tables[name], nil
 }
 
@@ -673,6 +676,102 @@ func TestViewSchemaRequestRequiresPersistedCreationMode(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestViewSchemaRequestRequiresPersistedDefaultDatabase(t *testing.T) {
+	for _, nested := range []bool{false, true} {
+		for _, field := range []string{"absent", "empty", "null", "saved"} {
+			for _, disabled := range []bool{false, true} {
+				t.Run(fmt.Sprintf("nested=%t/database=%s/memoOff=%t", nested, field, disabled), func(t *testing.T) {
+					f := newViewSchemaTestFixture(t)
+					other := proto.Clone(f.compiler.tables["nation"]).(*TableDef)
+					other.DbId, other.DbName, other.TblId, other.LogicalId = 8, "other", 99, 199
+					other.Cols[1].Typ = planpb.Type{Id: int32(types.T_int64)}
+					f.compiler.tables["other.nation"] = other
+					f.compiler.objects["other.nation"] = &ObjectRef{Db: 8, Obj: 99, SchemaName: "other", ObjName: "nation"}
+					def := f.addView(t, "source_v", "select n_name as label from nation")
+					name := "source_v"
+					if nested {
+						f.addView(t, "root_v", "select label from source_v")
+						name = "root_v"
+					}
+					var metadata map[string]any
+					require.NoError(t, json.Unmarshal([]byte(def.ViewSql.View), &metadata))
+					switch field {
+					case "absent":
+						delete(metadata, "DefaultDatabase")
+					case "empty":
+						metadata["DefaultDatabase"] = ""
+					case "null":
+						metadata["DefaultDatabase"] = nil
+					case "saved":
+						metadata["DefaultDatabase"] = "other"
+					}
+					encoded, err := json.Marshal(metadata)
+					require.NoError(t, err)
+					def.ViewSql.View = string(encoded)
+					r := f.request(t)
+					r.memoDisabled = disabled
+					for i := 0; i < 2; i++ {
+						result, err := r.Describe("tpch", name, nil)
+						if result != nil {
+							t.Cleanup(result.Release)
+						}
+						if field == "saved" {
+							require.NoError(t, err)
+							columns, err := result.Columns()
+							require.NoError(t, err)
+							require.Equal(t, int32(types.T_int64), columns[0].Typ.Id,
+								"the View's saved database must select other.nation, not tpch.nation")
+							result.Release()
+						} else {
+							if result != nil {
+								result.Release()
+							}
+							require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+							require.ErrorContains(t, err, "LEGACY_CONTEXT_UNAVAILABLE")
+							require.ErrorContains(t, err, "DefaultDatabase")
+							require.Nil(t, result)
+							require.Empty(t, r.memo)
+							require.Empty(t, r.nestedMemo, "failed derivation must not populate nested memo")
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestViewSchemaRequestMissingDefaultDatabaseCannotUseWarmMemo(t *testing.T) {
+	for _, nested := range []bool{false, true} {
+		t.Run(fmt.Sprintf("nested=%t", nested), func(t *testing.T) {
+			f := newViewSchemaTestFixture(t)
+			source := f.addView(t, "source_v", "select n_name as label from nation")
+			f.addView(t, "first_v", "select label from source_v")
+			f.addView(t, "second_v", "select label from source_v")
+			r := f.request(t)
+			viewSchemaTestResult(t, r, "first_v").Release()
+			name, def := "first_v", f.compiler.tables["first_v"]
+			if nested {
+				name, def = "second_v", source
+			}
+			var data ViewData
+			require.NoError(t, json.Unmarshal([]byte(def.ViewSql.View), &data))
+			data.DefaultDatabase = ""
+			encoded, err := json.Marshal(data)
+			require.NoError(t, err)
+			def.ViewSql.View = string(encoded)
+			beforeHits := r.hits
+			result, err := r.Describe("tpch", name, nil)
+			if result != nil {
+				result.Release()
+			}
+			require.ErrorContains(t, err, "LEGACY_CONTEXT_UNAVAILABLE")
+			require.ErrorContains(t, err, "DefaultDatabase")
+			require.Nil(t, result)
+			require.Equal(t, beforeHits, r.hits, "incomplete context must not hit warmed memo")
+		})
 	}
 }
 
