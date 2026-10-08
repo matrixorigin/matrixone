@@ -18,8 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -752,64 +750,6 @@ func TestReplay1(t *testing.T) {
 	}
 
 	d.Close()
-}
-
-func TestReplay2(t *testing.T) {
-	t.Skip("debug")
-
-	service, ccfg := initTest(t)
-	defer service.Close()
-
-	cfg := NewConfig(
-		"",
-		WithConfigOptClientConfig("", ccfg),
-		WithConfigOptClientBufSize(100),
-	)
-	driver := NewLogServiceDriver(&cfg)
-
-	entryCount := 10000
-	entries := make([]*entry.Entry, entryCount)
-
-	for i := 0; i < entryCount; i++ {
-		payload := []byte(fmt.Sprintf("payload %d", i))
-		e := entry.MockEntryWithPayload(payload)
-		driver.Append(e)
-		entries[i] = e
-	}
-
-	synced := driver.getCommittedDSNWatermark()
-	driver.Truncate(synced)
-
-	for i, e := range entries {
-		e.WaitDone()
-		assert.Equal(t, uint64(i+1), e.DSN)
-	}
-
-	truncated, err := driver.GetTruncated()
-	i := truncated
-	t.Logf("truncate %d", i)
-	assert.NoError(t, err)
-	h := func(e *entry.Entry) {
-		entryPayload := e.Entry.GetPayload()
-		strs := strings.Split(string(entryPayload), " ")
-		id, err := strconv.Atoi(strs[1])
-		assert.NoError(t, err)
-		if id <= int(truncated) {
-			return
-		}
-
-		payload := []byte(fmt.Sprintf("payload %d", i))
-		assert.Equal(t, payload, entryPayload)
-		i++
-	}
-
-	driver = restartDriver(t, driver, h)
-
-	for _, e := range entries {
-		e.Entry.Free()
-	}
-
-	driver.Close()
 }
 
 // func Test_TokenController(t *testing.T) {
