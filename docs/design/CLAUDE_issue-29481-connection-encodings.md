@@ -1,6 +1,6 @@
 # C02：连接编码与协议边界设计草案
 
-状态：r2，2026-10-07，**待评审，不批准生产实现或上线**。修订依据：两条 inline P2 与整体设计 review；r2 定义可观测参数语义、既有 staging 状态转换和实际参考字节。
+状态：r3，2026-10-08，**待评审，不批准生产实现或上线**。保留 r2 已评审的架构决策；本修订修复新增 P2 指出的参考请求/响应配对损坏，提供同一 send buffer 的可复现探测及紧接部分结果错误的成功请求。
 
 所属任务：[#29481](https://github.com/matrixorigin/matrixone/issues/29481)；上位任务 [#29479](https://github.com/matrixorigin/matrixone/issues/29479)；基础 [C01](CLAUDE_issue-29480-collation-metadata.md) / [#29503](https://github.com/matrixorigin/matrixone/pull/29503)。基线：`d9eb0e0ce88bec403dce4cd6c7fbdf15f19e1b03`。
 
@@ -80,12 +80,12 @@ Validate(ctx context.Context, charset collation.Charset, input []byte) error
 
 具体 trace（第 7.1 节 raw-wire 参考）：
 
-1. 初始 client/connection/results=utf8mb4。发送 `SET NAMES utf8mb4; SET character_set_connection=ascii,sql_mode='NO_BACKSLASH_ESCAPES'; SELECT HEX('a\\nb'); BAD SQL; SELECT 1`。前两条仅含 ASCII 语法字节；第二条成功发布 connection=ascii 与新 sql_mode，client/results 仍为 utf8mb4。第三条在 next-statement 边界读取这四项，反斜杠不再处理，结果是 ASCII 字节 `615C6E62`（该 HEX 结果本身的 wire hex 为 `3631354336453632`）。
+1. 初始 client/connection/results=utf8mb4。发送 `SET NAMES utf8mb4; SET character_set_connection=ascii,sql_mode='NO_BACKSLASH_ESCAPES'; SELECT HEX('a\nb'); BAD SQL; SELECT 1`。前两条仅含 ASCII 语法字节；第二条成功发布 connection=ascii 与新 sql_mode，client/results 仍为 utf8mb4。第三条在 next-statement 边界读取这四项，反斜杠不再处理，结果是 ASCII 字节 `615C6E62`（该 HEX 结果本身的 wire hex 为 `3631354336453632`）。
 2. 第四条用同一新状态解析，返回 1064/42000；第五条不执行。第二条成功的编码/sql_mode 状态保持，不因后续 parse error 回滚；下一请求可查询这组值。
 3. `SET NAMES ascii; SELECT '<c3a9>'` 中第二条以**新 client=ascii** 解读其原字节，而不是请求开始的 utf8mb4。MySQL 的 identity 路径保留 c3a9；而只 SET connection=ascii、保留 client=utf8mb4 时 c3a9→3f。两者不可混为一个“先整包 decode”的路径。首批 MO 只执行已准入组合；ascii connection gate 未通过则第一条拒绝，不提前执行后续语句。
 4. COM_RESET_CONNECTION 进入已有 session reset owner，释放 prepared/转换资源、恢复现有 reset 默认 tuple 和 sql_mode；下一请求重新从该 tuple 开始。参考 MySQL 的 reset 回到服务器 utf8mb4/0900 默认，而非握手 ID 45；MO 保持自己的既有产品 reset 默认，不顺带改成 MySQL 默认。
 
-scanner 先在当前 client/sql_mode 下处理语法与 escape，再由 introducer 指定文字源编码；introducer 不更改 escape 规则。sql_mode='' 下 `_binary'a\\nb'` 与 `_utf8mb4'a\\nb'` 都得到 `610A62`；NO_BACKSLASH_ESCAPES 时两者都保留 `615C6E62`。binary introducer 保留的是 escape 后的 literal 字节，不保证原 SQL token 一字不变。hex/bit literal 的显式字节沿现有路径解码。认证、长度前缀、数值不转码；标识符/COM_INIT_DB 纳入文本路径。SQL PREPARE 和 COM_STMT_PREPARE 复用相应语义入口。
+scanner 先在当前 client/sql_mode 下处理语法与 escape，再由 introducer 指定文字源编码；introducer 不更改 escape 规则。sql_mode='' 下 `_binary'a\nb'` 与 `_utf8mb4'a\nb'` 都得到 `610A62`；NO_BACKSLASH_ESCAPES 时两者都保留 `615C6E62`。binary introducer 保留的是 escape 后的 literal 字节，不保证原 SQL token 一字不变。hex/bit literal 的显式字节沿现有路径解码。认证、长度前缀、数值不转码；标识符/COM_INIT_DB 纳入文本路径。SQL PREPARE 和 COM_STMT_PREPARE 复用相应语义入口。
 
 CONVERT USING 使用 SQL 可观测源域和目标编码，复用同一个 policy；不能借该路径启用 C01 禁用 collation，也不扩大 C04/C06 比较范围。
 
@@ -164,7 +164,18 @@ C01 冻结 backend 的已有 MySQL fixtures 不是连接转换 oracle；版本�
 
 参考服务器为本机 **MySQL Community 8.4.11（Homebrew macos arm64）**，运行进程的 mysqld SHA-256 为 `b2521ed46ab48f2d840daf2bc8073a8c5fa5dc3aec77cf1fac8230a8dd36de37`；不是声称运行了 MySQL 8.0。默认 utf8mb4/utf8mb4_0900_ai_ci，max_allowed_packet=67108864，sql_mode 为 `ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION`。需要其它参考版本时另取得其证据，不混用 golden。
 
-参数 driver 源固定 [go-sql-driver/mysql v1.9.3](https://github.com/go-sql-driver/mysql/blob/v1.9.3/packets.go#L1103)，检查 []byte/string 的 type=254、flag=0 与 lenenc 分支；source digest 见 [参考字节记录](CLAUDE_issue-29481-oracle.json)。这是 driver 源代码证据，不声称已运行完整 driver matrix。参考执行使用 Python 标准库 socket 构造 Protocol 4.1 包，不经 mysql CLI/Unicode 重新编码；登录 collation=45，capability mask/每个 query_hex、列名 hex、charset、length、type、row/error 包均在 JSON。无 CREATE/DDL/全局赋值，只有独立连接中的 SET/SELECT/PREPARE/EXECUTE/RESET/CLOSE，连接在 finally 关闭；未启动或删除已有 MySQL 实例。每个 COM_QUERY 重置 seq=0；prepared EXECUTE 构造一参数的 null bitmap/new-types flag/type pair/value，long-data 构造两次 param-index=0，二进制行记录完整 payload hex（含 header/null bitmap）。这是参考手工探测快照，不是 MO acceptance test。
+参数 driver 源固定 [go-sql-driver/mysql v1.9.3](https://github.com/go-sql-driver/mysql/blob/v1.9.3/packets.go#L1103)，检查 []byte/string 的 type=254、flag=0 与 lenenc 分支；source digest 见 [参考字节记录](CLAUDE_issue-29481-oracle.json)。这是 driver 源代码证据，不声称已运行完整 driver matrix。参考执行使用 Python 标准库 socket 构造 Protocol 4.1 包，不经 mysql CLI/Unicode 重新编码；登录 collation=45，capability mask/每个 query_hex、列名 hex、charset、length、type、row/error 包均在 JSON。无 CREATE/DDL/全局赋值，只有独立连接中的 SET/SELECT/PREPARE/EXECUTE/RESET/CLOSE，连接在 finally 关闭；未启动或删除已有 MySQL 实例。每个 COM_QUERY 重置 seq=0；prepared EXECUTE 构造一参数的 null bitmap/new-types flag/type pair/value，long-data 构造两次 param-index=0，二进制行记录完整 payload hex（含 header/null bitmap）。这是参考探测快照，不是 MO acceptance test。
+
+**r3 配对修复：** r2 在汇总生命周期记录时又通过嵌在 shell 字符串中的 Python 常量重构了两条 SQL，导致单引号/美元号消失、`5c6e` 变成换行 `0a`。原 JSON 配对不成立，不能作为这两个行为的证据。本次没有只编辑 query_hex 或期望响应：使用 [定向 probe](CLAUDE_issue-29481-oracle-probe.py) 在同版本/digest MySQL 的新连接上重新采集完整请求/响应及状态/reset，连跑两次输出一致；query_hex 只取真正传给 send 的 `payload[1:]`，response_payloads_hex 取对应 recv 的 payload。原 quote-corrupted JSON 会被 offline check 拒绝。未受影响的其它记录保留，新增记录与旧记录的来源由 recaptured_traces 区分。
+
+```sh
+# 不通过 shell 拼接 SQL；capture 只支持本地无密码参考账户，且不覆盖已有文件。
+python3 docs/design/CLAUDE_issue-29481-oracle-probe.py --capture /tmp/CLAUDE_c02_new_capture.json
+# 无需 MySQL：核对确切 SQL、引号/美元号/单反斜杠、对应输出、错误及后续成功请求。
+python3 docs/design/CLAUDE_issue-29481-oracle-probe.py --check docs/design/CLAUDE_issue-29481-oracle.json
+```
+
+定向序列包含一次版本/配置查询，再执行五个 COM_QUERY 和一个 COM_RESET_CONNECTION，socket 操作超时 5s、连接 finally 关闭。部分结果请求为 `SET NAMES utf8mb4; SELECT JSON_EXTRACT(x,'$') FROM (SELECT '1' x UNION ALL SELECT 'bad') t`，其后**不插入其它命令**发送 `SELECT 1` 并记录成功列定义/行/EOF；连接复用不再靠叙述或另一条失败请求推断。上面的 inline `a\nb` 表示 SQL 中一个反斜杠后跟 n（hex `615c6e62`），不是两个反斜杠，也不是实际换行。
 
 | 入口/输入 | 实测输出及设计 policy |
 | --- | --- |
@@ -195,4 +206,4 @@ r2 不撤销既有兼容决定：严格 utf8mb3 验收延期，但不阻断兼�
 - reference JSON 为实际 MySQL 探测，不是 MO 通过证据，且不覆盖所有 prepare/cursor/列写入/取消排列。实际消费者 UT/raw-wire/BVT 仍按地图补齐；ascii repertoire acceptance 不能由 MySQL identity 保留畸形字节推导为已满足。
 - 如后续要求严格 utf8mb3，必须由用户单独批准兼容/发布合同，不能通过本次 review 修复顺带改变。
 
-评审范围：整个 C02 workstream；触发：client/server 协议、配置兼容、多 owner 边界及生命周期。r2 未批准，生产实现仍等待设计批准；可以继续评审本草案。#29481 保持未修复，验收 checkbox 不改变。
+评审范围：整个 C02 workstream；触发：client/server 协议、配置兼容、多 owner 边界及生命周期。r3 未批准，生产实现仍等待设计批准；可以继续评审本草案。#29481 保持未修复，验收 checkbox 不改变。
