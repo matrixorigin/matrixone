@@ -10170,7 +10170,10 @@ func Test_RecordParseErrorStatement(t *testing.T) {
 		Ctx:  context.TODO(),
 	}
 
-	motrace.GetTracerProvider().SetEnable(true)
+	provider := motrace.GetTracerProvider()
+	wasEnabled := provider.IsEnable()
+	provider.SetEnable(true)
+	t.Cleanup(func() { provider.SetEnable(wasEnabled) })
 	_, err := RecordParseErrorStatement(context.TODO(), ses, proc, time.Now(), nil, nil, moerr.NewInternalErrorNoCtx("test"))
 	assert.Nil(t, err)
 
