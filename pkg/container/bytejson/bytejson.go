@@ -1180,6 +1180,12 @@ func (bj ByteJson) QuerySimpleContainPath(path *Path) (ByteJson, bool) {
 }
 
 func (bj ByteJson) querySimpleExist(path *Path, autowrapScalarIndex bool) (ByteJson, bool) {
+	return bj.querySimpleExistWithWrapping(path, autowrapScalarIndex, true)
+}
+
+// querySimpleExistWithWrapping keeps scalar and object index wrapping explicit.
+// ARRAY_INSERT must follow only real arrays when seeking its parent.
+func (bj ByteJson) querySimpleExistWithWrapping(path *Path, autowrapScalarIndex, autowrapObjectIndex bool) (ByteJson, bool) {
 	cur := bj
 	// don't go through th step(), recursive call route.  We know
 	// we have a simple path, each step will bring us to ONE SINGLE next value.
@@ -1188,6 +1194,9 @@ func (bj ByteJson) querySimpleExist(path *Path, autowrapScalarIndex bool) (ByteJ
 		if cur.Type == TpCodeObject {
 			switch sub.tp {
 			case subPathIdx:
+				if !autowrapObjectIndex {
+					return Null, false
+				}
 				// obj[0] is itself, continue
 				start, _, _ := sub.idx.genIndex(1)
 				if start != 0 {

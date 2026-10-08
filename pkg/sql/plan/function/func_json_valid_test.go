@@ -2861,6 +2861,31 @@ func TestJsonArrayAppendCheckFn(t *testing.T) {
 func TestJsonArrayInsert(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
+	t.Run("strict parent lookup text and binary JSON", func(t *testing.T) {
+		for _, tc := range []struct {
+			doc, path, want string
+		}{
+			{`{"a":[1,2]}`, "$[0].a[1]", `{"a": [1, 2]}`},
+			{`{"a":[1,2]}`, "$[last].a[1]", `{"a": [1, 2]}`},
+			{`{"o":{"a":[1,2]}}`, "$.o[0].a[1]", `{"o": {"a": [1, 2]}}`},
+			{`[{"a":[1,2]}]`, "$[0].a[1]", `[{"a": [1, 9, 2]}]`},
+			{`{"a":[1,2]}`, "$.a[1]", `{"a": [1, 9, 2]}`},
+		} {
+			for _, typ := range []types.Type{types.T_varchar.ToType(), types.T_json.ToType()} {
+				doc := tc.doc
+				if typ.Oid == types.T_json {
+					doc = mustJsonBinaryString(t, doc)
+				}
+				vec := runJsonFunctionWithSelectList(t, proc, []FunctionTestInput{
+					NewFunctionTestInput(typ, []string{doc}, nil),
+					NewFunctionTestConstInput(types.T_varchar.ToType(), []string{tc.path}, nil),
+					NewFunctionTestConstInput(types.T_int64.ToType(), []int64{9}, nil),
+				}, types.T_json.ToType(), newOpBuiltInJsonSet().buildJsonArrayInsert, nil)
+				require.Equal(t, tc.want, jsonVectorRowString(t, vec, 0), tc.path)
+			}
+		}
+	})
+
 	t.Run("insert paths and left to right pairs", func(t *testing.T) {
 		vec := runJsonFunctionWithSelectList(t, proc,
 			[]FunctionTestInput{
@@ -2955,6 +2980,7 @@ func TestJsonArrayInsert(t *testing.T) {
 			expect: NewFunctionTestResult(types.T_json.ToType(), true, nil, nil),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonSet().buildJsonArrayInsert)
+		t.Cleanup(fcTC.Free)
 		s, info := fcTC.Run()
 		require.True(t, s, info)
 	})

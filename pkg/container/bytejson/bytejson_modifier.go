@@ -117,7 +117,7 @@ func (bm *bytejsonModifier) arrayInsert(path *Path, newBj ByteJson) (ByteJson, e
 		return Null, moerr.NewInvalidArgNoCtx("invalid json array insert path", path.String())
 	}
 
-	parent, exists := bm.bj.querySimpleExist(&parentPath, false)
+	parent, exists := bm.bj.querySimpleExistWithWrapping(&parentPath, false, false)
 	if !exists || parent.Type != TpCodeArray {
 		return bm.bj, nil
 	}

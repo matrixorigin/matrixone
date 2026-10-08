@@ -1,3 +1,21 @@
+SELECT JSON_ARRAY_INSERT('{"a":[1,2]}', '$[0].a[1]', 9) AS result;
+➤ result[-1,2147483647,0]  𝄀
+{"a": [1, 2]}
+SELECT JSON_ARRAY_INSERT('{"a":[1,2]}', '$[last].a[1]', 9) AS result;
+➤ result[-1,2147483647,0]  𝄀
+{"a": [1, 2]}
+SELECT JSON_ARRAY_INSERT('{"o":{"a":[1,2]}}', '$.o[0].a[1]', 9) AS result;
+➤ result[-1,2147483647,0]  𝄀
+{"o": {"a": [1, 2]}}
+SELECT JSON_ARRAY_INSERT(CAST('{"a":[1,2]}' AS JSON), '$[0].a[1]', 9) AS result;
+➤ result[-1,2147483647,0]  𝄀
+{"a": [1, 2]}
+SELECT JSON_ARRAY_INSERT('[{"a":[1,2]}]', '$[0].a[1]', 9) AS result;
+➤ result[-1,2147483647,0]  𝄀
+[{"a": [1, 9, 2]}]
+SELECT JSON_ARRAY_INSERT('{"a":[1,2]}', '$.a[1]', 9) AS result;
+➤ result[-1,2147483647,0]  𝄀
+{"a": [1, 9, 2]}
 SELECT JSON_ARRAY_INSERT('{"arr":[1,2,3]}', '$.arr[1]', 9) AS result;
 ➤ result[-1,2147483647,0]  𝄀
 {"arr": [1, 9, 2, 3]}

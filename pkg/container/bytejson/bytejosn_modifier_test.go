@@ -344,6 +344,34 @@ func TestArrayInsert(t *testing.T) {
 	}
 }
 
+func TestArrayInsertStrictParent(t *testing.T) {
+	for _, tc := range []struct {
+		name, doc, path, want string
+	}{
+		{"object zero", `{"a":[1,2]}`, "$[0].a[1]", `{"a": [1, 2]}`},
+		{"object last", `{"a":[1,2]}`, "$[last].a[1]", `{"a": [1, 2]}`},
+		{"object one", `{"a":[1,2]}`, "$[1].a[1]", `{"a": [1, 2]}`},
+		{"nested object zero", `{"o":{"a":[1,2]}}`, "$.o[0].a[1]", `{"o": {"a": [1, 2]}}`},
+		{"nested object last", `{"o":{"a":[1,2]}}`, "$.o[last].a[1]", `{"o": {"a": [1, 2]}}`},
+		{"real array zero", `[{"a":[1,2]}]`, "$[0].a[1]", `[{"a": [1, 9, 2]}]`},
+		{"real array last", `[{"a":[1,2]}]`, "$[last].a[1]", `[{"a": [1, 9, 2]}]`},
+		{"real array out of range", `[{"a":[1,2]}]`, "$[1].a[1]", `[{"a": [1, 2]}]`},
+		{"direct member", `{"a":[1,2]}`, "$.a[1]", `{"a": [1, 9, 2]}`},
+		{"scalar zero", `1`, "$[0][1]", `1`},
+		{"null last", `null`, "$[last][1]", `null`},
+		{"empty array", `[]`, "$[0].a[1]", `[]`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bj := mustParseByteJson(t, tc.doc)
+			path, err := ParseJsonPath(tc.path)
+			require.NoError(t, err)
+			got, err := bj.Modify([]*Path{&path}, []ByteJson{mustParseByteJson(t, "9")}, JsonModifyArrayInsert)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, mustMarshalByteJson(t, got))
+		})
+	}
+}
+
 func TestArrayInsertRejectsInvalidPaths(t *testing.T) {
 	bj := mustParseByteJson(t, `{"a":[1]}`)
 	value := mustParseByteJson(t, `2`)

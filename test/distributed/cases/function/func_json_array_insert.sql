@@ -1,3 +1,9 @@
+SELECT JSON_ARRAY_INSERT('{"a":[1,2]}', '$[0].a[1]', 9) AS result;
+SELECT JSON_ARRAY_INSERT('{"a":[1,2]}', '$[last].a[1]', 9) AS result;
+SELECT JSON_ARRAY_INSERT('{"o":{"a":[1,2]}}', '$.o[0].a[1]', 9) AS result;
+SELECT JSON_ARRAY_INSERT(CAST('{"a":[1,2]}' AS JSON), '$[0].a[1]', 9) AS result;
+SELECT JSON_ARRAY_INSERT('[{"a":[1,2]}]', '$[0].a[1]', 9) AS result;
+SELECT JSON_ARRAY_INSERT('{"a":[1,2]}', '$.a[1]', 9) AS result;
 SELECT JSON_ARRAY_INSERT('{"arr":[1,2,3]}', '$.arr[1]', 9) AS result;
 SELECT JSON_ARRAY_INSERT('[1,2]', '$[99]', 9) AS result;
 SELECT JSON_ARRAY_INSERT('[1,2,3]', '$[last]', 9) AS result;
