@@ -1,6 +1,6 @@
 # C02：连接编码与协议边界设计草案
 
-状态：r1，2026-10-07，**待评审，不批准生产实现或上线**。
+状态：r2，2026-10-07，**待评审，不批准生产实现或上线**。修订依据：两条 inline P2 与整体设计 review；r2 定义可观测参数语义、既有 staging 状态转换和实际参考字节。
 
 所属任务：[#29481](https://github.com/matrixorigin/matrixone/issues/29481)；上位任务 [#29479](https://github.com/matrixorigin/matrixone/issues/29479)；基础 [C01](CLAUDE_issue-29480-collation-metadata.md) / [#29503](https://github.com/matrixorigin/matrixone/pull/29503)。基线：`d9eb0e0ce88bec403dce4cd6c7fbdf15f19e1b03`。
 
@@ -20,14 +20,16 @@
 
 ## 2. 范围、不变量与否定例
 
-范围为 binary、ascii、utf8mb3、utf8mb4 的显式连接/表达式转换，以及供 C10 接入 GBK 的有界接口；包含握手、COM_CHANGE_USER、SET、文字 introducer、CONVERT USING、文本/预处理输入与结果输出。编码能力与 collation 比较能力分别准入，不能因为协议转换可用就启用新的 column/index 域。
+可实施首批保留 binary/utf8mb4 及 utf8/utf8mb3→utf8mb4 兼容映射，闭合会话联动、协议字节/metadata、binary 可观测域与失败清理；补 ascii client/results 的边界转换，不为此启用 ascii 列/index 比较域。ascii connection/SET NAMES ascii 的默认 collation 若尚无完整执行消费者，继续拒绝，直到相关 gate 通过。严格 utf8mb3 与 GBK 不作为首批实现前提；严格三字节拒绝的 issue 验收项明确延期，不能将首批交付标为完整修复。codec 可内部验证严格三字节，但不公开激活。
+
+完整 C02 跟踪范围仍包含握手、COM_CHANGE_USER、SET、introducer、CONVERT USING、文本/预处理输入与所有输出边界，以及 C10 可接入的有界 GBK 接口。编码能力与 collation 比较能力分别准入，不能因为协议转换可用就启用新的 column/index 域。
 
 不改变产品默认值、既有对象身份、存储格式或比较/key 算法；不实现 GBK、latin1、其它未列字符集、分区表、存储过程、UDF 或 warning 数量/文本兼容。既有 UTF32 的 DDL 兼容拼写不授权协议/表达式转换。
 
 不变量：
 
 1. 会话对每个方向只有一个有效编码状态；协商值、sysvar 展示与实际消费者一致。
-2. `client → connection → 内部文本 → results` 在明确的语义边界执行；binary 值始终按长度保留原字节，包括 NUL 和非法 UTF-8。
+2. `client → connection → 内部文本 → results` 在明确的语义边界执行；仅对 wire/SQL 可观测的 binary 源域承诺原字节保留（NUL、0xff），不承诺恢复客户端语言层 string/[]byte 身份。相同 wire、相同 session 与 SQL 必须产生相同行为。
 3. connection 编码不等于列 repertoire。连接转换成功不豁免列写入校验；连接失败不得进入列写入。
 4. 准入/转换失败不能留下半更新的相互依赖会话状态、半更新绑定或静默 fallback。
 5. 新 latin1/latin1_* 请求始终拒绝；历史恢复能力不是新请求准入。
@@ -45,7 +47,18 @@
 | 在每个 SQL 函数、算子、驱动层分别转码 | 重复解码；破坏 binary 来源；所有权与热路径成本扩大 | 不采用 |
 | 由共同 codec 执行显式边界转换，前端/表达式保留来源与状态 | 复用准入、能区分方向和 binary；需要协议、lexer 与绑定共同验证 | 建议，待阻断决策关闭后批准 |
 
-复用 `pkg/common/collation` 的静态字符集身份目录，不引入第二个动态 registry。codec 位置建议为该共同包或其无 frontend 依赖的子包；包/API 最终签名在设计批准时冻结。它接收源/目标编码、明确的文本/binary 来源、输出预算和调用上下文；返回借用输入或调用方拥有的转换结果及明确错误，不缓存 payload，不创建 goroutine。GBK 后续使用同一预算/错误/所有权契约，当前请求仍拒绝。
+复用 `pkg/common/collation` 静态身份，codec 放在其无 frontend 依赖的 `encoding` 子包，不添加动态 registry。拟冻结两个窄 API：
+
+```go
+// src/dst 来自已有字符集枚举；policy 仅区分 identity、connection、result、CONVERT。
+Convert(ctx context.Context, pool *mpool.MPool, src, dst collation.Charset,
+    policy Policy, input []byte, limit int64) (output []byte, owned bool, isNull bool, err error)
+Validate(ctx context.Context, charset collation.Charset, input []byte) error
+```
+
+实际目录枚举名以 `metadata.go` 的 `Charset` 为准。成功 `owned=false` 表示借用 input（不修改，生命周期不得超过 input）；`owned=true` 表示唯一 owner 为调用者，使用同一个 `pool.Free(output)` 一次释放，移交到 vector/packet 时先复制后释放，不能把 mpool slice 当作普通 Go backing array 留在 cache。CONVERT 的 NULL 成功返回 `nil,false,true,nil`；空字符串返回 isNull=false，与 NULL 不混淆；SQL NULL 输入由 caller 直接传播，不调用 codec。失败返回 `nil,false,false,error`，helper 自行释放尚未移交的分配。`Validate` 无 payload 分配；身份相同的 conversion 与 repertoire 校验不是同一操作（见第 7.1 节）。
+
+使用调用所属 `proc.Mp()`，通过 `MPool.Alloc(size,true)` 分配并注册 cleanup，不能偷偷改用无会计的 make。先计算所需输出长度，再分配精确长度；检查 `limit=min(max_allowed_packet,mpool.MaxAllocationSize(),调用者剩余 vector-area 限额)` 和 int 溢出。首批输出长度不超过输入字节数，替换为单字节 0x3f；取消每最多 4096 个输入字节以及分配/发布前检查 context。后续 GBK 的实测最坏扩张上界必须先补设计，当前 GBK 仍拒绝。无 payload cache、goroutine 或重试。
 
 ### 3.2 会话状态
 
@@ -53,27 +66,48 @@
 
 握手先校验并构造候选状态，认证成功后与 session 初始化一致发布；认证响应、salt 和密码材料不可转码。COM_CHANGE_USER 复用现有认证/重置状态流程，不在认证失败后发布候选编码，保留当前既定的连接关闭策略。COM_RESET_CONNECTION 必须恢复经过批准的初始状态，不能残留结果编码或转换内存。
 
-SET NAMES 预先解析字符集、显式/默认 collation 和所有受影响 sysvar；SET CHARACTER SET 的 connection 继承数据库默认规则由固定 MySQL oracle 决定。单个直接赋值触发的 charset/collation 联动也由同一候选状态计算。完成现有类型/scope/权限/runtime hook 预检后一次发布；中途失败保留原状态。这里不承诺任意混合 SET 语句的所有非编码副作用整体回滚。
+`doSetVar` 是发布 owner：在既有赋值顺序中计算相互依赖的编码 tuple，复用正常变量转换/scope/权限检查；不由 scanner 发布。SET NAMES 同时设置 client/connection/results，connection collation 取显式匹配值或该有效字符集默认值；SET CHARACTER SET 设置 client/results 为请求字符集，connection/collation 取当前数据库默认值。直接修改 character_set_connection 选择其默认 collation；修改 collation_connection 同时派生对应 connection 字符集；client/results 赋值不改变 connection。DEFAULT 按现有有效默认解析，不能用历史快照入口绕过新请求检查。
+
+先预检完整编码 tuple，再把 sysvar 值和 migration replayability 作为一个发布单元更新；编码变量本身不调用未知外部副作用 hook。发生其它 SET runtime hook 错误时不发布候选编码 tuple。同一 SET 同时含 sql_mode 时，sql_mode 复用现有 `SetSessionSysVar` 的类型转换、`sesSysVars.Set` 与 `updateSqlModeNoAutoValueOnZero` 路径，成功返回后下一个 statement 才读取两者；失败不会解析下一条。这里不承诺混合 SET 的其它非编码副作用整体回滚，也不改变既有事务错误 owner。
 
 全局默认值继续由现有账户级持久化和缓存所有者负责；新请求拒绝与历史加载保持分开。SET GLOBAL 的既有权限、scope、成功发布点不能被 codec 绕过。
 
 ### 3.3 SQL 输入与表达式
 
-不得对整个 SQL packet 无差别解码，否则 `_binary`、hex/bit literal 及 introducer 会丢失字节来源。scanner 应先区分语法、文字 token 和 introducer，再按各自编码解释字节；SQL escape 处理、client 解码和 connection 转换顺序由 oracle 固定。认证、长度前缀及数值编码不经过字符转换。标识符、数据库名与 COM_INIT_DB 也纳入文本路径检查。
+保留整个 COM_QUERY 的原始字节，不在请求入口一次性转码。第一条 statement 使用请求开始时有效 client/connection/sql_mode；剩余原字节在每条成功 statement 后重新按当前 session 字段解释。请求快照只用于第一条和不随 SET 改变的 rewrite-policy 等已有请求来源，不冻结整个请求的 client 编码。
 
-multi-statement COM_QUERY 的词法 client 编码和每条语句执行时的 connection 状态必须分别建模；SET 在请求中的生效时点是设计阻断问题，不能靠 parse-all 后统一替换猜测。SQL PREPARE 文本与 COM_STMT_PREPARE 复用相应公开输入路径，不能只支持 COM_QUERY。
+直接扩展 `prepareSQLModeStagedExecution` / `nextSQLModeStatementInput` 和 `doComQuery` 的 staged loop，将“影响后续解析的 SET”识别扩为编码变量及 SET NAMES/CHARACTER SET（含与 sql_mode 混合的 SET）。这只是扩大既有 owner 的输入与 parser 参数，不引入独立 parse/execute 状态机；未来 GBK 下不能用初始模式 parse-all 找分号，必须由该 owner 用当前状态 ParseFirst 取得字节 offset。`newSQLStatementInput` 保留原请求 provenance；`rewriteSQLStatementInput`、`refreshStatementScopedSessionInfo`、hasMore/result flags、事务错误和 parse-error 记录仍用原路径。
 
-introducer 选择文字源编码；CONVERT USING 使用表达式实际源域和目标编码；binary 来源不先假定 UTF-8。两者不改变 C01 的 collation 原生准入、不自动扩大 C04/C06 比较/函数范围。
+具体 trace（第 7.1 节 raw-wire 参考）：
+
+1. 初始 client/connection/results=utf8mb4。发送 `SET NAMES utf8mb4; SET character_set_connection=ascii,sql_mode='NO_BACKSLASH_ESCAPES'; SELECT HEX('a\\nb'); BAD SQL; SELECT 1`。前两条仅含 ASCII 语法字节；第二条成功发布 connection=ascii 与新 sql_mode，client/results 仍为 utf8mb4。第三条在 next-statement 边界读取这四项，反斜杠不再处理，结果是 ASCII 字节 `615C6E62`（该 HEX 结果本身的 wire hex 为 `3631354336453632`）。
+2. 第四条用同一新状态解析，返回 1064/42000；第五条不执行。第二条成功的编码/sql_mode 状态保持，不因后续 parse error 回滚；下一请求可查询这组值。
+3. `SET NAMES ascii; SELECT '<c3a9>'` 中第二条以**新 client=ascii** 解读其原字节，而不是请求开始的 utf8mb4。MySQL 的 identity 路径保留 c3a9；而只 SET connection=ascii、保留 client=utf8mb4 时 c3a9→3f。两者不可混为一个“先整包 decode”的路径。首批 MO 只执行已准入组合；ascii connection gate 未通过则第一条拒绝，不提前执行后续语句。
+4. COM_RESET_CONNECTION 进入已有 session reset owner，释放 prepared/转换资源、恢复现有 reset 默认 tuple 和 sql_mode；下一请求重新从该 tuple 开始。参考 MySQL 的 reset 回到服务器 utf8mb4/0900 默认，而非握手 ID 45；MO 保持自己的既有产品 reset 默认，不顺带改成 MySQL 默认。
+
+scanner 先在当前 client/sql_mode 下处理语法与 escape，再由 introducer 指定文字源编码；introducer 不更改 escape 规则。sql_mode='' 下 `_binary'a\\nb'` 与 `_utf8mb4'a\\nb'` 都得到 `610A62`；NO_BACKSLASH_ESCAPES 时两者都保留 `615C6E62`。binary introducer 保留的是 escape 后的 literal 字节，不保证原 SQL token 一字不变。hex/bit literal 的显式字节沿现有路径解码。认证、长度前缀、数值不转码；标识符/COM_INIT_DB 纳入文本路径。SQL PREPARE 和 COM_STMT_PREPARE 复用相应语义入口。
+
+CONVERT USING 使用 SQL 可观测源域和目标编码，复用同一个 policy；不能借该路径启用 C01 禁用 collation，也不扩大 C04/C06 比较范围。
 
 ### 3.4 预处理参数与结果
 
-在执行绑定边界明确区分文本、binary、数值与 NULL；不能仅凭 MYSQL_TYPE_VARCHAR 将 binary 参数当文本，也不能仅凭 BLOB 编号猜测全部应用语义。使用现有 prepare provenance/domain 与固定驱动 oracle 决定可表达的分类；没有可靠来源时的策略须先定案。
+wire type/flag 与 SQL 是唯一可用证据：go-sql-driver/mysql v1.9.3 的非 nil []byte 和 string 都发送 type=254、flag=0、同一 lenenc payload；相同 payload 不可区分，**统一按 client 编码的文本参数处理**。不建立应用语言 provenance 或依赖 Go string/vector.T_text 猜测来源。unsigned flag 只控制数值，不选择 binary。复用现有准备参数 kind/domain 表示实际协议分类，但不得填入客户端未传送的身份。
 
-long-data 累积原字节，物化完整值后再转换，使跨 chunk 字符合法。执行时使用该次有效类型绑定和编码快照；新类型向量和新参数值在完整解析/转换成功后才能替换上一成功状态。错误后清理该执行拥有的临时值；保留/清除未执行 long-data 的规则遵守既有协议和 oracle，不新增隐式重试。
+明确 binary wire 类型 BLOB/TINY_BLOB/MEDIUM_BLOB/LONG_BLOB/GEOMETRY 的 payload 是 byte 域；BIT 保留现有 typed bit 路径、不作文本转换；STRING/VAR_STRING/VARCHAR 是文本域。SQL `_binary`/hex literal 或显式 binary 类型运算是其它可观测 byte 域；它们保留已取得的字节，不追回输入阶段已经发生的文本转换。给 binary 列写入并不授权在协议阶段猜测原应用类型。用户用 driver 的 []byte 想传任意字节时必须使用可观测 binary wire 类型、显式 binary client 模式或明确的 SQL 字节路径；单靠 []byte 不提供保证。JSON/DECIMAL 仍走各自已有 typed 校验，不放入二进制逃生分支。
+
+NULL bitmap 是值缺失，不引发转换；MySQL 的既有 long-data 优先级（包括零长度 chunk）保留。long-data 只累积字节，不决定类型；EXECUTE 的成功新 type vector 决定解释，new-params-bound=0 复用上一成功 type vector（缺失则拒绝），不会复用上次语言类型。按当前执行 client/connection tuple 处理，不冻结 SEND_LONG_DATA 时编码。`c3|a9` 两块在完整值上按文本处理，与单块 c3a9 相同；显式 BLOB 下 ff 保持 ff，STRING 下遵循参考转换行为而非 binary 承诺。
+
+失败重绑沿已有 owner 收敛：`ParseExecuteData` 先借用旧 ParamTypes、在调用内暂存新 type vector；candidate vector 由该次 proc.Mp() 拥有且暂不挂到 PrepareStmt/process。逐参数从 packet/longDataBuffers 借用源，转换后复制到 candidate，立即释放 owned 转换输出；成功复制某 long-data 值后释放对应 buffer。完整解析/转换后一次挂接 candidate、再提交新 ParamTypes，并释放被替代参数 vector；运行 compile 只能在该提交后读取参数。
+
+失败时释放 candidate 与剩余转换输出，通过 `ExecRequest` 现有 `clearBinaryParamState` 清理本次 long-data、参数和 process 引用；失败新 type vector 不覆盖上一成功 ParamTypes。**不承诺保留上一执行参数值**：现有每次执行结束会清理 params，但保留 type vector 以便下一次复用。已消费的 long-data 不恢复、不隐式重试；SEND_LONG_DATA 自身错误仍按 `latchLongDataError` 保留首错至 reset/close。Close、COM_STMT_RESET、disconnect 沿原 PrepareStmt/session owner 清理；取消/分配失败同样进入清理。
+
+峰值为旧参数 area（若尚存在）+剩余 long-data容量+candidate area+一个最大转换输出+小型 type vector，而不是所有参数的转换副本同时驻留。这些 payload 共用 proc.Mp() 的会计上限；每参数/总 area 预检继承 max_allowed_packet/MaxAllocationSize。不得为原子性另存 long-data 的历史副本，或要求无界地保留旧执行值。
 
 所有结果生产入口共用序列化边界：普通文本行、binary row、ColumnSlices 快速路径、cursor/fetch、列定义及 prepare metadata。文本值/字段名称按有效 results 策略输出；binary 值和数值/null bitmap 不转码。results=NULL 不转换，但元数据必须按 oracle 保留来源，不能把 NULL 当作声明 binary。字节长度与最大字符宽度须对应输出编码。准备时 metadata 与执行时 results 变化的关系必须通过客户端验证。
 
-输出前完成字段转换再写其长度，避免已写长度与字节不匹配；一旦已有结果包发出，不能假装回滚整条查询。转换失败后的 ERR/关闭策略及消息编码在第 8 节定案，保持报文流可解析。
+输出前完成字段转换再写其 lenenc 字节长度；ColumnDefinition41 的 length 则为声明最大字符容量×目标编码最大字节数（binary/数值按原 typed 路径），不是当前行长度。results=ascii 的文本元数据采用默认 ascii 协议 ID 11；协议 ID 11 作为 transport-only 默认投影纳入已有静态能力目录（不是第二套 registry），不参与 `ResolveSQL`；这不批准 ascii_general_ci 的 SQL 比较域。results=NULL 保留来源 ID，不改为 63。
+
+不可表示输出按第 7.1 节替换为 0x3f；转换中的畸形源按该入口 policy 处理，不能用 generic strict error 代替参考规则。取消/OOM 等实际错误：尚未写出的当前 row 丢弃，已完整发送的列定义/行不能回滚，发送一个正常 ERR 包终止结果（无成功 EOF、不再执行后续 statement），编码消息按 results 策略；SQLSTATE/error number 为 ASCII 固定字段、不转码。第 7.1 节的 3141/22032 部分结果实测证明 ERR 后连接可复用。网络短写、context 导致无法完整发送 ERR 或 packet 序列已经破坏时由原连接 owner 关闭，不在坏流上重试。
 
 ## 4. 资源、失败、安全与性能预算
 
@@ -102,7 +136,7 @@ long-data 累积原字节，物化完整值后再转换，使跨 chunk 字符合
 
 | 契约 | 最便宜内部证据 | 必须的公开证据 |
 | --- | --- | --- |
-| repertoire 与 codec | ASCII 0x7f/0x80；U+FFFF/U+10000；畸形、空、NUL、NULL、binary 0xff；原子错误和分配预算 | 原始字节、error number/SQLSTATE、结果 metadata 与固定 MySQL 对比 |
+| repertoire 与 codec | ASCII 0x7f/0x80；严格 U+FFFF/U+10000 仅内部；畸形 identity/跨编码/CONVERT 分开，空、NUL、NULL、binary 0xff；原子错误与预算 | 原始字节、error number/SQLSTATE、结果 metadata 与固定 MySQL 对比，兼容四字节仍接受 |
 | 会话发布 | SET 候选状态成功/失败，显式 COLLATE、DEFAULT、results=NULL、scope | 握手/change-user/SET 后逐项状态和行为；latin1 拒绝后原状态不变 |
 | 文本输入/表达式 | scanner/token 来源、escape/introducer/CONVERT 与近邻控制 | COM_QUERY/INIT_DB/PREPARE、SQL PREPARE、多语句 SET、literal 字节 |
 | prepared 参数 | 同编号不同来源、NULL、类型复用/重绑、拆分 chunk、转换/分配失败 | 真驱动字符串/字节绑定及 raw-wire 对照，不只调用 helper |
@@ -114,7 +148,7 @@ long-data 累积原字节，物化完整值后再转换，使跨 chunk 字符合
 
 SQL result 由 mo-tester 生成、人工审查再 comparison，清理后同实例重复；协议 oracle 保存真正的输入/输出字节与 metadata。基线 oracle 未固定前，不写由当前实现自产的“期望结果”。
 
-建议分批：①固定兼容和 oracle、批准设计；②无新准入 codec/状态基础及 UT；③token/表达式/prepared 输入；④所有结果生产者；⑤公开协议、失败与性能证据；⑥通过适用发布门槛后激活。实现 PR 链接批准设计的具体 commit；任何契约偏离先更新并重新评审。
+建议分批：①批准本设计与实际 oracle；②按兼容 utf8mb4/binary 闭合状态/staging/metadata 与 UT；③token/表达式/prepared 输入；④结果与 ascii client/results；⑤公开协议、失败与性能证据；⑥通过适用发布门槛激活；严格 utf8mb3、ascii connection 比较域和 GBK 另行满足各自契约。实现 PR 链接批准设计具体 commit；偏离先更新并重新评审。
 
 ## 7. 规范参考
 
@@ -126,16 +160,39 @@ SQL result 由 mo-tester 生成、人工审查再 comparison，清理后同实�
 
 C01 冻结 backend 的已有 MySQL fixtures 不是连接转换 oracle；版本或语义测试不同不能自动复用。
 
-## 8. 阻断决策与评审记录
+### 7.1 已固定且实际运行的参考
 
-| 阻断事项 | 所有者与批准时点 |
+参考服务器为本机 **MySQL Community 8.4.11（Homebrew macos arm64）**，运行进程的 mysqld SHA-256 为 `b2521ed46ab48f2d840daf2bc8073a8c5fa5dc3aec77cf1fac8230a8dd36de37`；不是声称运行了 MySQL 8.0。默认 utf8mb4/utf8mb4_0900_ai_ci，max_allowed_packet=67108864，sql_mode 为 `ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION`。需要其它参考版本时另取得其证据，不混用 golden。
+
+参数 driver 源固定 [go-sql-driver/mysql v1.9.3](https://github.com/go-sql-driver/mysql/blob/v1.9.3/packets.go#L1103)，检查 []byte/string 的 type=254、flag=0 与 lenenc 分支；source digest 见 [参考字节记录](CLAUDE_issue-29481-oracle.json)。这是 driver 源代码证据，不声称已运行完整 driver matrix。参考执行使用 Python 标准库 socket 构造 Protocol 4.1 包，不经 mysql CLI/Unicode 重新编码；登录 collation=45，capability mask/每个 query_hex、列名 hex、charset、length、type、row/error 包均在 JSON。无 CREATE/DDL/全局赋值，只有独立连接中的 SET/SELECT/PREPARE/EXECUTE/RESET/CLOSE，连接在 finally 关闭；未启动或删除已有 MySQL 实例。每个 COM_QUERY 重置 seq=0；prepared EXECUTE 构造一参数的 null bitmap/new-types flag/type pair/value，long-data 构造两次 param-index=0，二进制行记录完整 payload hex（含 header/null bitmap）。这是参考手工探测快照，不是 MO acceptance test。
+
+| 入口/输入 | 实测输出及设计 policy |
 | --- | --- |
-| 严格 utf8mb3 是否允许撤销已确认的静默 utf8mb4 映射；若只在新的显式模式启用，其准入、展示、协议 ID、迁移与 release 门槛如何表达 | 用户/兼容策略 owner；生产编码行为实施前 |
-| 固定 MySQL 参考二进制精确版本/digest、sql_mode、默认字符集、驱动版本；逐入口确定畸形输入/不可表示输出是错误还是替换，error number/SQLSTATE、状态与部分输出策略 | C02 与 C12；codec 行为实施前 |
-| MYSQL_TYPE_VARCHAR/BLOB 无法独立证明参数来源时，真实驱动和现有 provenance 可以表达哪些语义，以及不可区分时的可互操作规则 | C02；prepared 输入实施前 |
-| multi-statement SET 的 client/connection 生效时点、文字 escape 次序、SET CHARACTER SET 默认继承及直接变量联动 | C02/C12；lexer/状态设计批准前 |
-| codec 具体签名/分配 owner/取消粒度/输出扩张上界、session reset 与 proxy snapshot 的具体 reader/writer 闭包，以及可执行激活条件 | C02/C11；基础接口设计批准前 |
+| utf8mb4 identity literal `ff`、`_binary'ff'`、`_utf8mb4'ff'` | SELECT 均成功返回 ff；两种文本列 ID=255，binary ID=63。identity 不额外施加 strict repertoire 校验，列写入校验仍独立 |
+| `CONVERT(_binary 0xff USING utf8mb4)` | NULL；不能把这个入口实现成 identity 或笼统错误 |
+| client=utf8mb4，connection=ascii，literal c3a9 | 转为 3f；HEX 为 3346。connection 跨编码替换不可表示字符，不是假装所有输入非法都报错 |
+| SET NAMES ascii 后 identity literal c3a9 | 保留 c3a9，列 ID=11；是参考行为的事实，不声称 ascii 严格 repertoire 验收已经满足；严格列校验不由此放开 |
+| results=ascii，畸形 utf8mb4 literal ff | 空字符串；prepared/text 两种输出都不发 ff，也不是 NULL |
+| results=ascii，utf8mb4 literal c3a9f09f9880，别名 c3a9 | 行为 3f3f，别名 3f，ID=11、length=2；输出替换而非查询 ERR |
+| results=NULL，literal/别名 c3a9 | 两者保持 c3a9，ID=255、length=4，连接可复用 |
+| prepared `SELECT ?`，STRING(254) c3a9 / 复用类型 ff，results=ascii | binary row `0000013f` / `000000`；后者是空字符串，不是 NULL 或原 ff，不能以简单 Validate+error 取代该入口行为 |
+| 同一 prepared 新类型 BLOB(252) ff / NULL bitmap | `000001ff` / `0004`；ff byte 不被 results 转换。该参考的参数列 metadata 仍 ID=11，不可用结果列 ID 反推输入域 |
+| long-data c3、a9，最终 type STRING | 行 `0000013f`，与单次 c3a9 相同；不逐 chunk 解码 |
+| NO_BACKSLASH_ESCAPES、encoding SET、后续 BAD SQL | 前序结果成功，BAD SQL 为 1064/42000；后续 SELECT 1 未执行，成功发布的 tuple/mode 保留；RESET 后回服务器默认 |
+| results=ascii，查询不存在的 mysql.é | 1146/42S02，错误消息以 ASCII 转义 `\00E9` 表示名称，而不是发送未转换 c3a9；error number/SQLSTATE 不变 |
+| SELECT JSON_EXTRACT(x,'$')，x 依次为 '1'、'bad' | 列定义和第一行 31 后 ERR 3141/22032，无成功终止，下一请求成功；采用已有结果流 owner 发送 ERR，不关闭仍完整的连接 |
 
-这些是实质设计阻断，本文不替它们假造决策。后续批准版本必须补齐 oracle、具体 API、状态 reader/writer 和门槛，再开始生产实现。用户要求继续创建 PR 只授权交付 draft，不意味着这些互相冲突的行为已获得批准。
+codec 需针对 identity、connection、result、CONVERT 保持这些不同 policy；本参考 prepared/text 的 ff→空是同一个 result policy 的畸形源处理，不是基于客户端语言身份的差别。不得将结果替换、CONVERT 的 NULL 与结果畸形转为空收敛为同一个 Validate 失败。该表固定已测边界；更复杂畸形序列、实际列写入/握手/cursor metadata 仍需扩充最小 reference fixtures 后实现，不能把未测组合归结为“通用框架以后处理”。warning 数量/文本仍不在范围。严格 repertoire 适用的列/显式校验与连接兼容 policy 分开验证。
 
-评审范围：整个 C02 workstream；触发：client/server 协议、配置兼容、多 owner 边界及生命周期。设计 r1 未批准；实现状态 BLOCKED。文档可作为 design-first draft 提交；#29481 保持未修复，验收 checkbox 不改变。
+## 8. 决策与仍未取得的批准
+
+r2 不撤销既有兼容决定：严格 utf8mb3 验收延期，但不阻断兼容首批。参数按 wire 可观测域分类，不恢复客户端语言身份；复用现有 staged owner；codec/发布/失败释放顺序已在第 3 节明确。错误/替换不再以“所有畸形字节都拒绝”猜测，参照第 7.1 节的入口分工。
+
+仍需设计批准及有针对性的证据：
+
+- reviewer 批准首批 API/state/metadata、错误与内存闭包；本作者不自签 PASS。
+- 新的 ascii client/results 准入、proxy/session snapshot 实际 reader/writer 与 C11/C12 的可执行上线条件需在激活 PR 给出；首批只迁移现有可表达的兼容 tuple，新域若无法版本化则拒绝迁移/不开启。sysvar 已有 replayability/snapshot owner，不新增第二份状态 wire。
+- reference JSON 为实际 MySQL 探测，不是 MO 通过证据，且不覆盖所有 prepare/cursor/列写入/取消排列。实际消费者 UT/raw-wire/BVT 仍按地图补齐；ascii repertoire acceptance 不能由 MySQL identity 保留畸形字节推导为已满足。
+- 如后续要求严格 utf8mb3，必须由用户单独批准兼容/发布合同，不能通过本次 review 修复顺带改变。
+
+评审范围：整个 C02 workstream；触发：client/server 协议、配置兼容、多 owner 边界及生命周期。r2 未批准，生产实现仍等待设计批准；可以继续评审本草案。#29481 保持未修复，验收 checkbox 不改变。
