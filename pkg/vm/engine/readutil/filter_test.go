@@ -4176,7 +4176,13 @@ func TestCompileFilterExpr_PrefixInRangeAllFlags(t *testing.T) {
 		},
 	}
 
-	m := mpool.MustNew(t.Name())
+	poolTag := t.Name()
+	t.Cleanup(func() { require.Equal(t, "[]", mpool.ReportMemUsage(poolTag)) })
+	m := mpool.MustNew(poolTag)
+	t.Cleanup(func() { mpool.DeleteMPool(m) })
+	t.Cleanup(func() {
+		require.NotEqual(t, "[]", mpool.ReportMemUsage(poolTag), "shared pool must survive process and file-service cleanup")
+	})
 
 	flags := []struct {
 		flag uint8
@@ -4196,7 +4202,7 @@ func TestCompileFilterExpr_PrefixInRangeAllFlags(t *testing.T) {
 			plan2.MakePlan2Uint8ConstExprWithType(tc.flag),
 		})
 
-		proc := testutil.NewProcessWithOwnedMPool(t, "", m)
+		proc := testutil.NewProcessWithMPool(t, "", m)
 		var exes []colexec.ExpressionExecutor
 		plan2.ReplaceFoldExpr(proc, expr, &exes)
 		plan2.EvalFoldExpr(proc, expr, &exes)
@@ -4489,7 +4495,13 @@ func TestCompileFilterExpr_InRange(t *testing.T) {
 		{3, RangeBothOpen},
 	}
 
-	m := mpool.MustNew(t.Name())
+	poolTag := t.Name()
+	t.Cleanup(func() { require.Equal(t, "[]", mpool.ReportMemUsage(poolTag)) })
+	m := mpool.MustNew(poolTag)
+	t.Cleanup(func() { mpool.DeleteMPool(m) })
+	t.Cleanup(func() {
+		require.NotEqual(t, "[]", mpool.ReportMemUsage(poolTag), "shared pool must survive process and file-service cleanup")
+	})
 
 	for _, tc := range flags {
 		expr := MakeFunctionExprForTest("in_range", []*plan.Expr{
@@ -4499,7 +4511,7 @@ func TestCompileFilterExpr_InRange(t *testing.T) {
 			plan2.MakePlan2Uint8ConstExprWithType(tc.flag),
 		})
 
-		proc := testutil.NewProcessWithOwnedMPool(t, "", m)
+		proc := testutil.NewProcessWithMPool(t, "", m)
 		var exes []colexec.ExpressionExecutor
 		plan2.ReplaceFoldExpr(proc, expr, &exes)
 		plan2.EvalFoldExpr(proc, expr, &exes)
@@ -4526,10 +4538,17 @@ func TestCompileFilterExpr_InRange(t *testing.T) {
 // bare `return` in the switch default leave Valid=true,Op=0 (= EQUAL), which
 // would corrupt range ops into equality filters.
 func TestConstructBasePKFilter_InvalidRangeFlagNotValid(t *testing.T) {
-	m := mpool.MustNew(t.Name())
+	poolTag := t.Name()
+	t.Cleanup(func() { require.Equal(t, "[]", mpool.ReportMemUsage(poolTag)) })
+	m := mpool.MustNew(poolTag)
+	t.Cleanup(func() { mpool.DeleteMPool(m) })
+	t.Cleanup(func() {
+		require.NotEqual(t, "[]", mpool.ReportMemUsage(poolTag), "shared pool must survive process and file-service cleanup")
+	})
 
 	for _, fn := range []string{"in_range", "prefix_in_range"} {
 		t.Run(fn, func(t *testing.T) {
+			require.NotEqual(t, "[]", mpool.ReportMemUsage(poolTag), "parent pool must survive sibling cleanup")
 			tableDef := &plan.TableDef{
 				Name:          "test_idx",
 				Name2ColIndex: map[string]int32{"k": 0},
@@ -4549,7 +4568,7 @@ func TestConstructBasePKFilter_InvalidRangeFlagNotValid(t *testing.T) {
 				plan2.MakePlan2Uint8ConstExprWithType(99), // invalid
 			})
 
-			proc := testutil.NewProcessWithOwnedMPool(t, "", m)
+			proc := testutil.NewProcessWithMPool(t, "", m)
 			var exes []colexec.ExpressionExecutor
 			plan2.ReplaceFoldExpr(proc, expr, &exes)
 			plan2.EvalFoldExpr(proc, expr, &exes)
@@ -4561,6 +4580,7 @@ func TestConstructBasePKFilter_InvalidRangeFlagNotValid(t *testing.T) {
 			require.NoError(t, err)
 			require.False(t, basePKFilter.Valid, "invalid flag must produce Valid=false")
 		})
+		require.NotEqual(t, "[]", mpool.ReportMemUsage(poolTag), "child cleanup must not delete the parent pool")
 	}
 }
 
@@ -4583,7 +4603,13 @@ func TestCompileFilterExpr_PrefixSortedSeekOps(t *testing.T) {
 		},
 	}
 
-	m := mpool.MustNew(t.Name())
+	poolTag := t.Name()
+	t.Cleanup(func() { require.Equal(t, "[]", mpool.ReportMemUsage(poolTag)) })
+	m := mpool.MustNew(poolTag)
+	t.Cleanup(func() { mpool.DeleteMPool(m) })
+	t.Cleanup(func() {
+		require.NotEqual(t, "[]", mpool.ReportMemUsage(poolTag), "shared pool must survive process and file-service cleanup")
+	})
 
 	exprs := map[string]*plan.Expr{
 		"prefix_eq": MakeFunctionExprForTest("prefix_eq", []*plan.Expr{
@@ -4599,7 +4625,8 @@ func TestCompileFilterExpr_PrefixSortedSeekOps(t *testing.T) {
 
 	for name, expr := range exprs {
 		t.Run(name, func(t *testing.T) {
-			proc := testutil.NewProcessWithOwnedMPool(t, "", m)
+			require.NotEqual(t, "[]", mpool.ReportMemUsage(poolTag), "parent pool must survive sibling cleanup")
+			proc := testutil.NewProcessWithMPool(t, "", m)
 			var exes []colexec.ExpressionExecutor
 			plan2.ReplaceFoldExpr(proc, expr, &exes)
 			plan2.EvalFoldExpr(proc, expr, &exes)
@@ -4613,6 +4640,7 @@ func TestCompileFilterExpr_PrefixSortedSeekOps(t *testing.T) {
 			require.NotNil(t, blockFilterOp)
 			require.NotNil(t, seekOp, "seekOp should be set for sorted %s", name)
 		})
+		require.NotEqual(t, "[]", mpool.ReportMemUsage(poolTag), "child cleanup must not delete the parent pool")
 	}
 }
 

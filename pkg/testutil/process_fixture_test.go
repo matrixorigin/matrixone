@@ -98,6 +98,8 @@ func TestProcessFixtureOwnedLifetimes(t *testing.T) {
 func TestProcessFixtureBorrowedDependencies(t *testing.T) {
 	ensureAutoIncrService("")
 	const tag = "fixture-borrowed-pool"
+	before := fixturePoolCount(t, tag)
+	t.Cleanup(func() { require.Equal(t, before, fixturePoolCount(t, tag)) })
 	mp := mpool.MustNew(tag)
 	t.Cleanup(func() { mpool.DeleteMPool(mp) })
 	defaultBefore := fixturePoolCount(t, "must_new_zero_no_fixed")
@@ -122,11 +124,14 @@ func TestProcessFixtureBorrowedDependencies(t *testing.T) {
 	block, err := mp.Alloc(1, true)
 	require.NoError(t, err)
 	mp.Free(block)
-	require.True(t, t.Run("supplied-pool-constructor", func(t *testing.T) {
-		proc := NewProcessWithMPool(t, "", mp)
-		require.Same(t, mp, proc.Mp())
-	}))
-	require.Equal(t, 1, fixturePoolCount(t, tag))
+	for _, name := range []string{"supplied-pool-first", "supplied-pool-second"} {
+		require.True(t, t.Run(name, func(t *testing.T) {
+			require.Equal(t, before+1, fixturePoolCount(t, tag))
+			proc := NewProcessWithMPool(t, "", mp)
+			require.Same(t, mp, proc.Mp())
+		}))
+		require.Equal(t, before+1, fixturePoolCount(t, tag), "child cleanup must preserve the parent-owned pool")
+	}
 	require.True(t, t.Run("explicit-nil", func(t *testing.T) {
 		tb := &fixtureProbeTB{TB: t}
 		proc := NewProcess(tb, WithMPool(nil), WithFileService(nil))

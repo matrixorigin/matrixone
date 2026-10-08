@@ -187,10 +187,16 @@ func TestIvfflatSearchFloat32_BadQueryType(t *testing.T) {
 // bucket-1-only routing model that pins stale results on one CN (#29011). A generation with a
 // real centroid, and a not-yet-loaded search, report false.
 func TestIvfflatEmptyGeneration(t *testing.T) {
-	mp := mpool.MustNewZero()
+	poolTag := t.Name()
+	t.Cleanup(func() { require.Equal(t, "[]", mpool.ReportMemUsage(poolTag)) })
+	mp := mpool.MustNew(poolTag)
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	t.Cleanup(func() {
+		require.NotEqual(t, "[]", mpool.ReportMemUsage(poolTag), "shared pool must survive index, process and file-service cleanup")
+	})
 
 	load := func(id int64, isNull bool) *IvfflatSearch[float32] {
-		proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+		proc := testutil.NewProcessWithMPool(t, "", mp)
 		sqlproc := sqlexec.NewSqlProcess(proc)
 		sqlproc.RelationScanner = &scriptedRelationScanner{t: t, run: func(req sqlexec.RelationScanRequest) executor.Result {
 			bat := batch.NewWithSize(3)
