@@ -23,6 +23,26 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
+// ON EMPTY must not reserve the existing EMPTY function or column name.
+func TestJSONTableEmptyKeywordPreservesFunctionCalls(t *testing.T) {
+	for _, sql := range []string{
+		"SELECT EMPTY(''), empty(NULL), EmPtY('value')",
+		"SELECT empty /* keyword-function control */ ('')",
+		"INSERT INTO char_test(str2) VALUES(EMPTY(CONCAT_WS(' ', 'ABCDE', 'JKFL')))",
+		"CREATE TABLE string04 AS SELECT oct(col2), empty(col3), length(col1) FROM string01",
+		"SELECT empty FROM t",
+		"SELECT * FROM JSON_TABLE('[1]', '$[*]' COLUMNS(v INT PATH '$' NULL ON EMPTY ERROR ON ERROR)) jt",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), sql, 1)
+			if err != nil {
+				t.Fatalf("EMPTY keyword compatibility rejected: %v", err)
+			}
+			stmt.Free()
+		})
+	}
+}
+
 // These forms must reach the planner before consumer regressions can run.
 func TestJSONTableConsumerSyntax(t *testing.T) {
 	for _, tc := range []struct{ name, sql string }{
