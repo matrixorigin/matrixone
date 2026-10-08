@@ -6000,7 +6000,6 @@ func TestICKPPreservesTableIDHistoryWhileGCKPIntentIsPending(t *testing.T) {
 }
 
 func TestDelete4(t *testing.T) {
-	t.Skip(any("This case crashes occasionally, is being fixed, skip it for now"))
 	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
@@ -6018,64 +6017,89 @@ func TestDelete4(t *testing.T) {
 	bat := catalog.MockBatch(schema, 1)
 	bat.Vecs[1].Update(0, uint32(0), false)
 	defer bat.Close()
-	tae.CreateRelAndAppend(bat, true)
+	// Persist the system-catalog rows as well as the user row. Without them a
+	// restart cannot resolve the table and the replay test exercises an invalid
+	// fixture rather than the delete/append lifecycle.
+	tae.CreateRelAndAppend2(bat, true)
 
 	filter := handle.NewEQFilter(bat.Vecs[0].Get(0))
 	var wg sync.WaitGroup
 	var count atomic.Uint32
+	const (
+		workerCount    = 20
+		updatesPerWork = 5
+	)
 
-	run := func() {
-		defer wg.Done()
-		time.Sleep(time.Duration(rand.Intn(20)+1) * time.Millisecond)
-		cloneBat := bat.CloneWindow(0, 1)
-		defer cloneBat.Close()
-		txn, rel := tae.GetRelation()
-		id, offset, err := rel.GetByFilter(context.Background(), filter)
-		if err != nil {
-			txn.Rollback(context.Background())
-			return
-		}
-		v, _, err := rel.GetValue(id, offset, 1, false)
-		if err != nil {
-			txn.Rollback(context.Background())
-			return
-		}
-		oldV := v.(uint32)
-		newV := oldV + 1
-		if err := rel.RangeDelete(id, offset, offset, handle.DT_Normal); err != nil {
-			txn.Rollback(context.Background())
-			return
-		}
-		cloneBat.Vecs[1].Update(0, newV, false)
-		if err := rel.Append(context.Background(), cloneBat); err != nil {
-			txn.Rollback(context.Background())
-			return
-		}
-		if err := txn.Commit(context.Background()); err == nil {
-			ok := count.CompareAndSwap(oldV, newV)
-			for !ok {
-				ok = count.CompareAndSwap(oldV, newV)
+	run := func(start <-chan struct{}, updates int) func() {
+		return func() {
+			defer wg.Done()
+			<-start
+			for i := 0; i < updates; i++ {
+				cloneBat := bat.CloneWindow(0, 1)
+				txn, rel := tae.GetRelation()
+				id, offset, err := rel.GetByFilter(context.Background(), filter)
+				if err != nil {
+					_ = txn.Rollback(context.Background())
+					cloneBat.Close()
+					continue
+				}
+				v, _, err := rel.GetValue(id, offset, 1, false)
+				if err != nil {
+					_ = txn.Rollback(context.Background())
+					cloneBat.Close()
+					continue
+				}
+				oldV := v.(uint32)
+				newV := oldV + 1
+				if err := rel.RangeDelete(id, offset, offset, handle.DT_Normal); err != nil {
+					_ = txn.Rollback(context.Background())
+					cloneBat.Close()
+					continue
+				}
+				cloneBat.Vecs[1].Update(0, newV, false)
+				if err := rel.Append(context.Background(), cloneBat); err != nil {
+					_ = txn.Rollback(context.Background())
+					cloneBat.Close()
+					continue
+				}
+				if err := txn.Commit(context.Background()); err == nil {
+					count.Add(1)
+				} else {
+					_ = txn.Rollback(context.Background())
+				}
+				cloneBat.Close()
 			}
-			t.Logf("RangeDelete block-%d, offset-%d, old %d newV %d, %s", id.BlockID, offset, oldV, newV, txn.GetCommitTS().ToString())
 		}
 	}
 
-	p, _ := ants.NewPool(20)
+	p, err := ants.NewPool(workerCount)
+	require.NoError(t, err)
 	defer p.Release()
-	for i := 0; i < 100; i++ {
-		wg.Add(1)
-		_ = p.Submit(run)
+	submit := func(n int, start <-chan struct{}) {
+		for i := 0; i < n; i++ {
+			wg.Add(1)
+			if err := p.Submit(run(start, updatesPerWork)); err != nil {
+				wg.Done()
+				t.Fatalf("submit update: %v", err)
+			}
+		}
 	}
+	start := make(chan struct{})
+	submit(workerCount, start)
+	close(start)
 	wg.Wait()
+	require.NotZero(t, count.Load())
 
 	t.Logf("count=%v", count.Load())
 
 	getValueFn := func() {
 		txn, rel := tae.GetRelation()
 		v, _, err := rel.GetValueByFilter(context.Background(), filter, 1)
-		assert.NoError(t, err)
-		assert.Equal(t, int(count.Load()), int(v.(uint32)))
-		assert.NoError(t, txn.Commit(context.Background()))
+		require.NoError(t, err)
+		got, ok := v.(uint32)
+		require.True(t, ok)
+		require.Equal(t, count.Load(), got)
+		require.NoError(t, txn.Commit(context.Background()))
 		t.Logf("GetV=%v, %s", v, txn.GetStartTS().ToString())
 	}
 	scanFn := func() {
@@ -6086,7 +6110,7 @@ func TestDelete4(t *testing.T) {
 			for j := 0; j < blk.BlkCnt(); j++ {
 				var view *containers.Batch
 				err := blk.HybridScan(ctx, &view, uint16(j), []int{0}, common.DefaultAllocator)
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				view.Compact()
 				if view.Length() != 0 {
 					t.Logf("block-%d, data=%s", j, logtail.ToStringTemplate(view.Vecs[0], -1))
@@ -6095,7 +6119,7 @@ func TestDelete4(t *testing.T) {
 			}
 		}
 		it.Close()
-		txn.Commit(context.Background())
+		require.NoError(t, txn.Commit(context.Background()))
 	}
 
 	for i := 0; i < 20; i++ {
@@ -6106,10 +6130,9 @@ func TestDelete4(t *testing.T) {
 
 		getValueFn()
 		scanFn()
-		for j := 0; j < 100; j++ {
-			wg.Add(1)
-			p.Submit(run)
-		}
+		start := make(chan struct{})
+		submit(workerCount, start)
+		close(start)
 		wg.Wait()
 	}
 	t.Log(tae.Catalog.SimplePPString(common.PPL3))
