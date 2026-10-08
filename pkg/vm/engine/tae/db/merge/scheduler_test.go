@@ -479,6 +479,24 @@ func TestScheduler(t *testing.T) {
 
 }
 
+func TestSchedulerQueryDeadlineUsesInjectedClock(t *testing.T) {
+	clock := newFakeClock()
+	db := catalog.MockDBEntryWithAccInfo(1, 1001)
+	table := catalog.ToMergeTable(catalog.MockTableEntryWithDB(db, 1001))
+	sched := NewMergeScheduler(time.Hour, &dummyCatalogSource{}, &dummyExecutor{}, clock)
+	sched.handleAddTable(table)
+	answer := make(chan *QueryAnswer, 1)
+	for _, remaining := range []time.Duration{time.Hour, 0, -time.Second} {
+		sched.handleQuery(MMsgQuery{Table: table, Answer: answer})
+		require.Equal(t, remaining, (<-answer).NextCheckDue)
+		if remaining == time.Hour {
+			clock.Advance(time.Hour)
+		} else {
+			clock.Advance(time.Second)
+		}
+	}
+}
+
 func TestVacuumRecheckArmsOnFullHollowTopKUsingInjectedClock(t *testing.T) {
 	clock := newFakeClock()
 	db := catalog.MockDBEntryWithAccInfo(1, 1001)

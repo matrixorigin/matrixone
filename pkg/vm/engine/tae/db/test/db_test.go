@@ -5999,6 +5999,95 @@ func TestICKPPreservesTableIDHistoryWhileGCKPIntentIsPending(t *testing.T) {
 	require.True(t, globalEnd.GT(&secondICKPEnd))
 }
 
+func TestReplacementChecksConcurrentDestinationKey(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, config.WithLongScanAndCKPOpts(nil))
+	defer tae.Close()
+	schema := catalog.NewEmptySchema("replacement_destination")
+	schema.AppendPKCol("name", types.T_varchar.ToType(), 0)
+	schema.AppendCol("offset", types.T_uint32.ToType())
+	schema.Finalize(false)
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 2)
+	defer bat.Close()
+	old := bat.CloneWindow(0, 1)
+	defer old.Close()
+	fresh := bat.CloneWindow(1, 1)
+	defer fresh.Close()
+	tae.CreateRelAndAppend2(old, true)
+	updateTxn, updateRel := tae.GetRelation()
+	defer updateTxn.Rollback(ctx)
+	id, offset, err := updateRel.GetByFilter(ctx, handle.NewEQFilter(old.Vecs[0].Get(0)))
+	require.NoError(t, err)
+	require.NoError(t, updateRel.RangeDelete(id, offset, offset, handle.DT_Normal))
+	require.NoError(t, updateRel.Append(ctx, fresh))
+	tae.DoAppend(fresh)
+	err = updateTxn.Commit(ctx)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) || moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry), "unexpected commit result: %v", err)
+	_ = updateTxn.Rollback(ctx)
+	readTxn, readRel := tae.GetRelation()
+	defer readTxn.Rollback(ctx)
+	for _, row := range []*containers.Batch{old, fresh} {
+		value, _, err := readRel.GetValueByFilter(ctx, handle.NewEQFilter(row.Vecs[0].Get(0)), 1)
+		require.NoError(t, err)
+		require.Equal(t, row.Vecs[1].Get(0), value)
+	}
+	require.NoError(t, readTxn.Commit(ctx))
+}
+
+func TestReplacementRejectsCompetingPredecessor(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, config.WithLongScanAndCKPOpts(nil))
+	defer tae.Close()
+	schema := catalog.NewEmptySchema("replacement")
+	schema.AppendPKCol("name", types.T_varchar.ToType(), 0)
+	schema.AppendCol("offset", types.T_uint32.ToType())
+	schema.Finalize(false)
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 1)
+	defer bat.Close()
+	bat.Vecs[1].Update(0, uint32(0), false)
+	tae.CreateRelAndAppend2(bat, true)
+	filter := handle.NewEQFilter(bat.Vecs[0].Get(0))
+	first, firstRel := tae.GetRelation()
+	defer first.Rollback(ctx)
+	second, secondRel := tae.GetRelation()
+	defer second.Rollback(ctx)
+	stage := func(rel handle.Relation) {
+		id, offset, err := rel.GetByFilter(ctx, filter)
+		require.NoError(t, err)
+		value, _, err := rel.GetValue(id, offset, 1, false)
+		require.NoError(t, err)
+		require.Equal(t, uint32(0), value)
+		require.NoError(t, rel.RangeDelete(id, offset, offset, handle.DT_Normal))
+		clone := bat.CloneWindow(0, 1)
+		defer clone.Close()
+		clone.Vecs[1].Update(0, uint32(1), false)
+		require.NoError(t, rel.Append(ctx, clone))
+	}
+	stage(firstRel)
+	stage(secondRel)
+	require.NoError(t, first.Commit(ctx))
+	err := second.Commit(ctx)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) || moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry), "unexpected commit result: %v", err)
+	_ = second.Rollback(ctx)
+	for i := 0; i < 2; i++ {
+		func() {
+			txn, rel := tae.GetRelation()
+			defer txn.Rollback(ctx)
+			value, _, err := rel.GetValueByFilter(ctx, filter, 1)
+			require.NoError(t, err)
+			require.Equal(t, uint32(1), value)
+			require.NoError(t, txn.Commit(ctx))
+		}()
+		if i == 0 {
+			tae.Restart(ctx)
+		}
+	}
+}
+
 func TestDelete4(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	ctx := context.Background()
@@ -6094,6 +6183,7 @@ func TestDelete4(t *testing.T) {
 
 	getValueFn := func() {
 		txn, rel := tae.GetRelation()
+		defer txn.Rollback(ctx)
 		v, _, err := rel.GetValueByFilter(context.Background(), filter, 1)
 		require.NoError(t, err)
 		got, ok := v.(uint32)
@@ -6104,21 +6194,28 @@ func TestDelete4(t *testing.T) {
 	}
 	scanFn := func() {
 		txn, rel := tae.GetRelation()
+		defer txn.Rollback(ctx)
 		it := rel.MakeObjectIt(false)
+		defer it.Close()
 		for it.Next() {
 			blk := it.GetObject()
 			for j := 0; j < blk.BlkCnt(); j++ {
-				var view *containers.Batch
-				err := blk.HybridScan(ctx, &view, uint16(j), []int{0}, common.DefaultAllocator)
-				require.NoError(t, err)
-				view.Compact()
-				if view.Length() != 0 {
-					t.Logf("block-%d, data=%s", j, logtail.ToStringTemplate(view.Vecs[0], -1))
-				}
-				view.Close()
+				func() {
+					var view *containers.Batch
+					defer func() {
+						if view != nil {
+							view.Close()
+						}
+					}()
+					err := blk.HybridScan(ctx, &view, uint16(j), []int{0}, common.DefaultAllocator)
+					require.NoError(t, err)
+					view.Compact()
+					if view.Length() != 0 {
+						t.Logf("block-%d, data=%s", j, logtail.ToStringTemplate(view.Vecs[0], -1))
+					}
+				}()
 			}
 		}
-		it.Close()
 		require.NoError(t, txn.Commit(context.Background()))
 	}
 
@@ -6135,6 +6232,11 @@ func TestDelete4(t *testing.T) {
 		close(start)
 		wg.Wait()
 	}
+	getValueFn()
+	scanFn()
+	tae.Restart(ctx)
+	getValueFn()
+	scanFn()
 	t.Log(tae.Catalog.SimplePPString(common.PPL3))
 }
 
