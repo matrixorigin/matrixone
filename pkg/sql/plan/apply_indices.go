@@ -89,26 +89,6 @@ type regularIndexTopSortContext struct {
 	pushOrderedLimit bool
 }
 
-// overFetchDisplayLimit returns the plan-time over-fetched candidate budget for a
-// LITERAL limit, for EXPLAIN display only (IndexReaderParam.OverFetchLimit) — 0
-// for a prepared LIMIT ? (unknown at plan time) or when no over-fetch applies.
-// It calls the same overfetch functions the TVF uses at EXECUTE, so the displayed
-// value equals the runtime budget. filteredPostMode selects ivfflat's factor.
-func overFetchDisplayLimit(limit *plan.Expr, overFetch bool, filteredPostMode bool) uint64 {
-	if !overFetch || limit == nil {
-		return 0
-	}
-	lit := limit.GetLit()
-	if lit == nil {
-		return 0
-	}
-	k := lit.GetU64Val()
-	if filteredPostMode {
-		return overfetch.FilteredPostModeLimit(k)
-	}
-	return overfetch.PostFilterLimit(k)
-}
-
 // BuildOverFetchLimitExpr returns an expression evaluating to the over-fetched
 // candidate budget k' = overfetch.PostFilterLimit(k), for a k that may only be known
 // at EXECUTE (a prepared LIMIT ?). A literal k is folded here; a parameterized one

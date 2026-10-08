@@ -46,14 +46,6 @@ func testAlgoExpr(spec *plan.IndexSearchScan, name string) *plan.Expr {
 	return nil
 }
 
-// testIvfAlgoOptions returns the algo_options bytes of opts.
-func testIvfAlgoOptions(t *testing.T, opts ivfflatplan.ScanOptions) []byte {
-	t.Helper()
-	data, err := ivfflatplan.EncodeScanOptions(opts)
-	require.NoError(t, err)
-	return data
-}
-
 // isFullTextSearchScan reports whether node is the index search scan of a
 // classic fulltext index.
 func isFullTextSearchScan(node *plan.Node) bool {

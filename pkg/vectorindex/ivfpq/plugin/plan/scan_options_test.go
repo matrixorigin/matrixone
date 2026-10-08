@@ -24,7 +24,7 @@ import (
 )
 
 func TestScanOptionsRoundTrip(t *testing.T) {
-	for _, opts := range []ScanOptions{{}, ScanOptions{ThreadsSearch: 2, BatchWindow: 64, GpuMultiSimulation: 2, Nprobe: 16, KeyPartType: int32(types.T_array_float16), FilterJSON: `[{"op":"="}]`}} {
+	for _, opts := range []ScanOptions{{}, {ThreadsSearch: 2, BatchWindow: 64, GpuMultiSimulation: 2, Nprobe: 16, KeyPartType: int32(types.T_array_float16), FilterJSON: `[{"op":"="}]`}} {
 		data, err := EncodeScanOptions(opts)
 		require.NoError(t, err)
 		got, err := DecodeScanOptions(data)
