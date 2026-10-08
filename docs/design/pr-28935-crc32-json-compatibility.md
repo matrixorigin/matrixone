@@ -120,11 +120,19 @@ for the actual CRC32 authoring floor, rather than the older View-metadata floor.
   admit candidate v107. Owning codec, function, planner, compiler, executor, and
   upgrade packages also pass. Function fixtures follow main's explicit vector
   ownership contract; their final focused and owning revalidation also passes.
-- LIMITED: these light tests linked existing local native artifacts whose
-  provenance stamp is missing. They are not current-native build evidence;
-  native rebuild and embedded prepared integration were not allocated.
-- NOT_RUN: BVT on this integrated candidate, real O/N rolling execution,
-  old-release-created generated/index table upgrade/restart/physical restore,
-  and old-CN rejoin/downgrade after activation.
+- PASS: fresh native generation through `make cgo`, its provenance verification,
+  and `make build` with Go 1.27.0 on Darwin/arm64. Revalidated all seven owning
+  packages with the worktree's controlled CGo wrapper: 26,916 tests/subtests,
+  zero failures. This supersedes the earlier tests with unverified native
+  artifacts; those earlier runs are not the acceptance evidence.
+- PASS: `TestCRC32JSONBinaryPrepared` on the fresh native generation, including
+  real SQL/binary PREPARE, schema-change reprepare and generated/index DML.
+- PASS: canonical mo-tester `func_crc32.sql` (115 statements) and
+  `generated_column.sql` (334 statements), each twice on an isolated single-CN
+  instance using the freshly built candidate; zero failures, ignored statements
+  or abnormal results. Inputs were copied byte-identically, not regenerated.
+  Runner source: `b95f5c09930c42bdbe77828b6ae72d39f2be48ed`; Java 17.0.15.
+- NOT_RUN: real O/N rolling execution, old-release-created generated/index table
+  upgrade/restart/physical restore, and old-CN rejoin/downgrade after activation.
 - OPEN: coordinated capability allocation at landing. This candidate does not
   resolve or request re-review of the outstanding compatibility acceptance CRs.
