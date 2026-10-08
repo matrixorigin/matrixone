@@ -222,3 +222,21 @@ The five explicitly selected cases reproduce DISTINCT_FROM, CTE (TPCH/TPCDS),
 the old user-defined-literal expected-message mismatch and an empty-plan root
 failure. Full distribution CI is not green; C-unit CI remains pending. No SQL
 assertion is relaxed, skipped or changed to obtain these results.
+
+## Merged importer follow-up (2026-10-09)
+
+Importer #5 merged as `99c7ca3b6f8f3159239e119ed2982d42f98c4690`, with
+the same source tree as the tested final fix. Sirius #28 now pins that merged
+revision at head `433cadd43a10442b0825a23234fb6d859207e9d5` and is ready
+for review. Its clean frozen-Pixi build passes 852 assertions / 81 native
+binding cases and 1468 / 8 production numeric C ABI GPU cases. The independent
+C consumer passes real GPU work, credit accounting and runtime cleanup/reuse.
+All eight SDK exporter tests and pinned changed-file hooks pass. The regenerated
+ABI-v1 SDK records the exact clean head, with all 73 artifact fingerprints,
+C header and canonical literal schema verified. Current-head CI is reported
+separately; these local results do not imply its compiler jobs passed.
+
+The recorded MO pin remains merged Native B until Sirius #28 merges. Then
+advance C to that merged Sirius revision and rerun all-22 native preparation
+and the full public numeric fixture. No unmerged native pin or full acceptance
+is claimed, and D still follows merged, validated C.
