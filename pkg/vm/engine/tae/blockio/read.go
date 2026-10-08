@@ -72,6 +72,8 @@ func ReadDataByFilter(
 	cacheVectors containers.Vectors,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
+	stats *objectio.IndexReaderTopStats,
+	policy fileservice.Policy,
 ) (sels []int64, err error) {
 	if cachedSearch != nil {
 		cacheVectors.Free(mp)
@@ -89,10 +91,13 @@ func ReadDataByFilter(
 			cachedSearchSorted,
 			visibilityTS,
 			mp,
-			fileservice.Policy(0),
+			policy,
 		)
 		if err != nil {
 			return
+		}
+		if stats != nil {
+			stats.StorageFilterInputRows += uint64(info.MetaLocation().Rows())
 		}
 	} else {
 		deleteMask, release, readErr := readBlockData(
@@ -102,7 +107,7 @@ func ReadDataByFilter(
 			-1,
 			info,
 			ts,
-			fileservice.Policy(0),
+			policy,
 			cacheVectors,
 			mp,
 			fs,
@@ -113,6 +118,9 @@ func ReadDataByFilter(
 		defer release()
 		defer deleteMask.Release()
 
+		if stats != nil && len(cacheVectors) > 0 {
+			stats.StorageFilterInputRows += uint64(cacheVectors[0].Length())
+		}
 		sels = searchFunc(cacheVectors)
 		if !deleteMask.IsEmpty() {
 			sels = removeIf(sels, func(i int64) bool {
@@ -124,6 +132,9 @@ func ReadDataByFilter(
 		return
 	}
 	sels, err = ds.ApplyTombstones(ctx, &info.BlockID, sels, engine.Policy_CheckAll)
+	if err == nil && stats != nil {
+		stats.StorageFilterOutputRows += uint64(len(sels))
+	}
 	return
 }
 
@@ -356,6 +367,46 @@ func blockDataRead(
 	)
 
 	searchFunc := filter.DecideSearchFunc(info.IsSorted())
+	var topStats *objectio.IndexReaderTopStats
+	if orderByLimit != nil {
+		topStats = orderByLimit.Stats
+	}
+	if canFuseExactMembershipTopK(
+		info,
+		filter,
+		searchFunc,
+		filterSeqnums,
+		orderByLimit,
+		phyAddrColumnPos,
+		len(columns),
+		applyFilter,
+	) {
+		cacheVectors.Free(mp)
+		v2.TxnSelReadFilterTotal.Observe(1.0)
+		filterRows := 0
+		err = blockDataReadWithExactMembershipTopK(
+			ctx,
+			info,
+			ds,
+			columns,
+			colTypes,
+			phyAddrColumnPos,
+			filterSeqnums,
+			filterColTypes,
+			searchFunc,
+			filter.CachedMembership,
+			orderByLimit,
+			policy,
+			bat,
+			mp,
+			fs,
+			&filterRows,
+		)
+		if err == nil && filterRows == 0 {
+			v2.TxnSelReadFilterFiltered.Observe(1.0)
+		}
+		return err
+	}
 
 	if searchFunc != nil {
 		if sels, err = ReadDataByFilter(
@@ -372,6 +423,8 @@ func blockDataRead(
 			cacheVectors,
 			mp,
 			fs,
+			topStats,
+			policy,
 		); err != nil {
 			return err
 		}
@@ -427,6 +480,152 @@ func blockDataRead(
 
 	if applyFilter == nil {
 		bat.SetRowCount(bat.Vecs[0].Length())
+	}
+	return nil
+}
+
+func canFuseExactMembershipTopK(
+	info *objectio.BlockInfo,
+	filter objectio.BlockReadFilter,
+	searchFunc objectio.ReadFilterSearchFuncType,
+	filterColumns []uint16,
+	top *objectio.IndexReaderTopOp,
+	phyAddrColumnPos int,
+	columnCount int,
+	applyFilter engine.ReaderFilter,
+) bool {
+	if info == nil || info.IsAppendable() || !filter.ExactMembership || filter.HasFakePK ||
+		filter.CachedSearch != nil || searchFunc == nil || len(filterColumns) == 0 ||
+		top == nil || top.OrderedLimit || top.Desc || !top.Typ.IsArrayRelate() || applyFilter != nil {
+		return false
+	}
+	topColumnPos := int(top.ColPos)
+	if topColumnPos < 0 || topColumnPos >= columnCount || topColumnPos == phyAddrColumnPos {
+		return false
+	}
+	for _, column := range filterColumns {
+		if column >= objectio.SEQNUM_UPPER {
+			return false
+		}
+	}
+	return true
+}
+
+func blockDataReadWithExactMembershipTopK(
+	ctx context.Context,
+	info *objectio.BlockInfo,
+	ds engine.DataSource,
+	columns []uint16,
+	colTypes []types.Type,
+	phyAddrColumnPos int,
+	filterColumns []uint16,
+	filterTypes []types.Type,
+	searchFunc objectio.ReadFilterSearchFuncType,
+	cachedMembership *objectio.ReadFilterMembership,
+	top *objectio.IndexReaderTopOp,
+	policy fileservice.Policy,
+	output *batch.Batch,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+	filterRows *int,
+) error {
+	if ds == nil {
+		return moerr.NewInvalidInputNoCtx("nil data source for exact-membership block topn")
+	}
+	if output == nil || len(columns) != len(colTypes) || len(output.Vecs) < len(columns) {
+		return moerr.NewInvalidInputNoCtx("invalid exact-membership block output")
+	}
+	topColumnPos := int(top.ColPos)
+	materializeColumns := make([]uint16, 0, len(columns)-1)
+	materializeTypes := make([]types.Type, 0, len(columns)-1)
+	materializeDestinations := make([]*vector.Vector, 0, len(columns)-1)
+	materializePositions := make([]int, 0, len(columns)-1)
+	for position, column := range columns {
+		if position == phyAddrColumnPos || position == topColumnPos {
+			continue
+		}
+		if column >= objectio.SEQNUM_UPPER {
+			return moerr.NewInvalidInputNoCtxf(
+				"unsupported exact-membership output column %d", column,
+			)
+		}
+		materializeColumns = append(materializeColumns, column)
+		materializeTypes = append(materializeTypes, colTypes[position])
+		materializeDestinations = append(materializeDestinations, output.Vecs[position])
+		materializePositions = append(materializePositions, position)
+	}
+
+	finalize := func(selected []int64, inputRows int) ([]int64, error) {
+		if top.Stats != nil {
+			top.Stats.StorageFilterInputRows += uint64(inputRows)
+		}
+		if len(selected) == 0 {
+			if filterRows != nil {
+				*filterRows = 0
+			}
+			return []int64{}, nil
+		}
+		selected, err := ds.ApplyTombstones(ctx, &info.BlockID, selected, engine.Policy_CheckAll)
+		if err != nil {
+			return nil, err
+		}
+		if top.Stats != nil {
+			top.Stats.StorageFilterOutputRows += uint64(len(selected))
+		}
+		if filterRows != nil {
+			*filterRows = len(selected)
+		}
+		if len(selected) == 0 {
+			return []int64{}, nil
+		}
+		return selected, nil
+	}
+	var (
+		topRows   []int64
+		distances []float64
+		err       error
+	)
+	// Only varlen filter columns benefit from skipping a cache snapshot.
+	// Fixed-width membership-only reads already avoid that copy and reuse
+	// reader-owned offsets in searchFunc; keep them on that existing path.
+	// Inspect the actual filter types, not the (varlen) Top-K output column.
+	if cachedMembership != nil && slices.ContainsFunc(filterTypes, func(typ types.Type) bool { return typ.IsVarlen() }) {
+		topRows, distances, _, err = objectio.ReadBlockByMembershipAndTopN(
+			ctx, filterColumns, filterTypes, materializeColumns, materializeTypes,
+			materializeDestinations, columns[topColumnPos], colTypes[topColumnPos],
+			cachedMembership, info.IsSorted(), finalize, top, fs, info.MetaLocation(), mp, policy,
+		)
+	} else {
+		topRows, distances, _, err = objectio.ReadBlockBySearchAndTopN(
+			ctx, filterColumns, filterTypes, materializeColumns, materializeTypes,
+			materializeDestinations, columns[topColumnPos], colTypes[topColumnPos],
+			func(filterVectors []vector.Vector) ([]int64, error) {
+				return finalize(searchFunc(containers.Vectors(filterVectors)), filterVectors[0].Length())
+			}, top, fs, info.MetaLocation(), mp, policy,
+		)
+	}
+	if err != nil {
+		return err
+	}
+	output.Vecs[topColumnPos].CleanOnlyData()
+	if phyAddrColumnPos >= 0 {
+		if len(topRows) == 0 {
+			output.Vecs[phyAddrColumnPos].CleanOnlyData()
+		} else if err = buildRowidColumn(info, output.Vecs[phyAddrColumnPos], topRows, mp); err != nil {
+			return err
+		}
+	}
+	output.SetRowCount(len(topRows))
+	if err = appendVectorTopNDistances(output, len(columns), distances, mp); err != nil {
+		return err
+	}
+	for _, position := range materializePositions {
+		if output.Vecs[position].Length() != len(topRows) {
+			return moerr.NewInvalidStateNoCtxf(
+				"exact-membership output column %d has %d rows, expected %d",
+				position, output.Vecs[position].Length(), len(topRows),
+			)
+		}
 	}
 	return nil
 }

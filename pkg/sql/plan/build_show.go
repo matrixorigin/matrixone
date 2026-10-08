@@ -18,11 +18,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
@@ -472,7 +474,22 @@ func buildShowColumnNumber(stmt *tree.ShowColumnNumber, ctx CompilerContext) (*P
 		}()
 	}
 
-	if accountId == catalog.System_Account {
+	var dependencies []*ObjectRef
+	var dependsOnUdf bool
+	if isUserViewMetadata(dbName, tableDef) {
+		var columns []*ColDef
+		columns, dependencies, dependsOnUdf, err = describeViewForMetadata(ctx, tableDef, accountId)
+		if err != nil {
+			return nil, err
+		}
+		count := 0
+		for _, column := range columns {
+			if !column.Hidden {
+				count++
+			}
+		}
+		sql = fmt.Sprintf("SELECT CAST(%d AS BIGINT) AS %s", count, sqlquote.Ident("Number of columns in "+tblName))
+	} else if accountId == catalog.System_Account {
 		mustShowTable := "att_relname = 'mo_database' or att_relname = 'mo_tables' or att_relname = 'mo_columns'"
 		clusterTable := ""
 		if util.TableIsClusterTable(tableDef.GetTableType()) {
@@ -486,7 +503,12 @@ func buildShowColumnNumber(stmt *tree.ShowColumnNumber, ctx CompilerContext) (*P
 		sql = fmt.Sprintf(sql, tblName, MO_CATALOG_DB_NAME, dbName, tblName)
 	}
 
-	return returnByRewriteSQL(ctx, sql, ddlType)
+	result, err := returnByRewriteSQL(ctx, sql, ddlType)
+	if err != nil {
+		return nil, err
+	}
+	setShowMetadataDependencies(result.GetQuery(), obj, tableDef, dependencies, dependsOnUdf)
+	return result, nil
 }
 
 func buildShowTableValues(stmt *tree.ShowTableValues, ctx CompilerContext) (*Plan, error) {
@@ -514,33 +536,62 @@ func buildShowTableValues(stmt *tree.ShowTableValues, ctx CompilerContext) (*Pla
 		}()
 	}
 
-	ddlType := plan.DataDefinition_SHOW_TARGET
+	columns := tableDef.Cols
+	var dependencies []*ObjectRef
+	var dependsOnUdf bool
+	if isUserViewMetadata(dbName, tableDef) {
+		accountID, accountErr := ctx.GetAccountId()
+		if accountErr != nil {
+			return nil, accountErr
+		}
+		if obj.PubInfo != nil {
+			accountID = uint32(obj.PubInfo.TenantId)
+		}
+		columns, dependencies, dependsOnUdf, err = describeViewForMetadata(ctx, tableDef, accountID)
+		if err != nil {
+			return nil, err
+		}
+	}
 
-	sql := "SELECT"
+	projections := make([]string, 0, 2*len(columns))
 	isAllNull := true
-	for _, col := range tableDef.Cols {
+	for _, col := range columns {
 		if col.Hidden {
 			continue
 		}
-		colName := col.Name
-		if types.T(col.GetTyp().Id) == types.T_json {
-			sql += " null as `max(%s)`, null as `min(%s)`,"
-			sql = fmt.Sprintf(sql, colName, colName)
-		} else {
-			sql += " max(%s), min(%s),"
-			sql = fmt.Sprintf(sql, colName, colName)
-			isAllNull = false
+		for _, aggregate := range []string{"max", "min"} {
+			expr := aggregate + "(" + sqlquote.Ident(col.Name) + ")"
+			if types.T(col.GetTyp().Id) == types.T_json {
+				expr = "null"
+			} else {
+				isAllNull = false
+			}
+			projections = append(projections, expr+" AS "+sqlquote.Ident(aggregate+"("+col.Name+")"))
 		}
 	}
-	sql = sql[:len(sql)-1]
-	sql += " FROM %s"
-
+	sql := "SELECT " + strings.Join(projections, ", ") + " FROM " + sqlquote.Ident(dbName) + "." + sqlquote.Ident(tblName)
 	if isAllNull {
 		sql += " LIMIT 1"
 	}
-	sql = fmt.Sprintf(sql, tblName)
+	result, err := returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_TARGET)
+	if err != nil {
+		return nil, err
+	}
+	setShowMetadataDependencies(result.GetQuery(), obj, tableDef, dependencies, dependsOnUdf)
+	return result, nil
+}
 
-	return returnByRewriteSQL(ctx, sql, ddlType)
+func isUserViewMetadata(database string, def *TableDef) bool {
+	return def.ViewSql != nil && def.ViewSql.View != "" &&
+		!slices.Contains(catalog.SystemDatabases, strings.ToLower(database))
+}
+
+func setShowMetadataDependencies(query *Query, obj *ObjectRef, def *TableDef, dependencies []*ObjectRef, dependsOnUdf bool) {
+	query.CatalogDependencies = appendPrepareSchemas(query.CatalogDependencies, dependencies...)
+	// Include ordinary targets too: replacing a table with a View changes the
+	// metadata row source, not just the values stored in the catalog.
+	query.CatalogDependencies = appendPrepareSchemas(query.CatalogDependencies, prepareSchemaRefWithSnapshot(obj, def, nil))
+	query.ViewMetadataDependsOnUdf = query.ViewMetadataDependsOnUdf || dependsOnUdf
 }
 
 func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error) {
@@ -670,18 +721,32 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 		sql = fmt.Sprintf(sql, keyStr, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, dbName, tblName)
 	}
 
-	if stmt.Where != nil {
-		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
+	var viewDependencies []*ObjectRef
+	var viewMetadataDependsOnUdf bool
+	if isUserViewMetadata(dbName, tableDef) {
+		columns, dependencies, dependsOnUdf, err := viewDescriptionRelation(ctx, tableDef, accountId, dbName, tblName)
+		if err != nil {
+			return nil, err
+		}
+		sql = strings.Replace(sql, "FROM "+MO_CATALOG_DB_NAME+".mo_columns col", "FROM "+columns+" col", 1)
+		viewDependencies = dependencies
+		viewMetadataDependsOnUdf = dependsOnUdf
 	}
-
-	if stmt.Like != nil {
-		// append filter [AND ma.attname like stmt.Like] to WHERE clause
+	var result *Plan
+	if stmt.Where != nil {
+		result, err = returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
+	} else if stmt.Like != nil {
 		likeExpr := stmt.Like
 		likeExpr.Left = tree.NewUnresolvedColName("attname")
-		return returnByLikeAndSQL(ctx, sql, likeExpr, ddlType)
+		result, err = returnByLikeAndSQL(ctx, sql, likeExpr, ddlType)
+	} else {
+		result, err = returnByRewriteSQL(ctx, sql, ddlType)
 	}
-
-	return returnByRewriteSQL(ctx, sql, ddlType)
+	if err != nil {
+		return nil, err
+	}
+	setShowMetadataDependencies(result.GetQuery(), obj, tableDef, viewDependencies, viewMetadataDependsOnUdf)
+	return result, nil
 }
 
 func buildShowTableStatus(stmt *tree.ShowTableStatus, ctx CompilerContext) (*Plan, error) {
@@ -781,7 +846,21 @@ func buildShowTarget(stmt *tree.ShowTarget, ctx CompilerContext) (*Plan, error) 
 	sql := ""
 	switch stmt.Type {
 	case tree.ShowCharset:
-		sql = "select '' as `Charset`, '' as `Description`, '' as `Default collation`, '' as `Maxlen` where 0"
+		// CHARACTER_SETS is populated from the shared collation capability owner.
+		// Do not maintain another charset registry or return the old empty stub.
+		sql = "SELECT CHARACTER_SET_NAME AS `Charset`, DESCRIPTION AS `Description`, " +
+			"DEFAULT_COLLATE_NAME AS `Default collation`, MAXLEN AS `Maxlen` " +
+			"FROM information_schema.character_sets ORDER BY CHARACTER_SET_NAME"
+		if stmt.Like != nil && stmt.Where != nil {
+			return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
+		}
+		if stmt.Where != nil {
+			return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
+		}
+		if stmt.Like != nil {
+			stmt.Like.Left = tree.NewUnresolvedColName("CHARACTER_SET_NAME")
+			return returnByLikeAndSQL(ctx, sql, stmt.Like, ddlType)
+		}
 	case tree.ShowTriggers:
 		return buildShowTriggers(stmt, ctx)
 	default:
@@ -900,6 +979,9 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 		}()
 	}
 
+	// Older mo_indexes rows leave algo empty for ordinary, unique, and primary
+	// indexes. SHOW INDEX follows MySQL and exposes those rows as BTREE rather
+	// than leaking the internal empty metadata representation.
 	sql := "select " +
 		"'%s' as `Table`, " +
 		"if(`idx`.`type` IN ('PRIMARY', 'UNIQUE'), 0, 1) as `Non_unique`, " +
@@ -910,7 +992,7 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 		"'NULL' as `Sub_part`, " +
 		"'NULL' as `Packed`, " +
 		"if(`tcl`.`attnotnull` = 0, 'YES', '') as `Null`, " +
-		"`idx`.`algo` as 'Index_type', " +
+		"coalesce(nullif(`idx`.`algo`, ''), 'BTREE') as 'Index_type', " +
 		"'' as `Comment`, " +
 		"`idx`.`comment` as `Index_comment`, " +
 		"`idx`.`algo_params` as `Index_params`, " +

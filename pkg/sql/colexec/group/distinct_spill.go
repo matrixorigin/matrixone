@@ -295,6 +295,20 @@ func (c *distinctSpillController) writeRecord(
 	row int32,
 	payload []byte,
 ) (int64, error) {
+	return c.writeRecordWithRepresentative(
+		target, routeHash, groupHash, aggregate, groups, row, payload, nil)
+}
+
+func (c *distinctSpillController) writeRecordWithRepresentative(
+	target io.Writer,
+	routeHash uint64,
+	groupHash uint64,
+	aggregate int,
+	groups *batch.Batch,
+	row int32,
+	payload []byte,
+	representative []byte,
+) (int64, error) {
 	if c == nil || c.closed || target == nil || groups == nil ||
 		aggregate < 0 || row < 0 || int(row) >= groups.RowCount() {
 		return 0, moerr.NewInvalidInputNoCtx("invalid distinct spill record")
@@ -321,6 +335,11 @@ func (c *distinctSpillController) writeRecord(
 	}
 	if err := types.WriteSizeBytes(payload, c.record); err != nil {
 		return 0, err
+	}
+	if representative != nil {
+		if err := types.WriteSizeBytes(representative, c.record); err != nil {
+			return 0, err
+		}
 	}
 	if c.record.Len() > math.MaxInt32 {
 		return 0, moerr.NewInvalidInputNoCtx(
@@ -363,6 +382,23 @@ func (c *distinctSpillController) readRecord(
 	groupHash uint64,
 	aggregate int,
 	payload []byte,
+	eof bool,
+	err error,
+) {
+	routeHash, groupHash, aggregate, payload, _, eof, err =
+		c.readRecordWithRepresentative(reader, groups)
+	return
+}
+
+func (c *distinctSpillController) readRecordWithRepresentative(
+	reader io.Reader,
+	groups *batch.Batch,
+) (
+	routeHash uint64,
+	groupHash uint64,
+	aggregate int,
+	payload []byte,
+	representative []byte,
 	eof bool,
 	err error,
 ) {
@@ -477,10 +513,28 @@ func (c *distinctSpillController) readRecord(
 	if _, err = payloadReader.Seek(int64(payloadLength), io.SeekCurrent); err != nil {
 		return
 	}
+	if payloadReader.Len() == 0 {
+		return
+	}
+	representativeLength, readErr := types.ReadInt32AsInt(payloadReader)
+	if readErr != nil {
+		err = readErr
+		return
+	}
+	if representativeLength < 0 || representativeLength > payloadReader.Len() {
+		err = moerr.NewInvalidInputNoCtx(
+			"invalid distinct spill representative length")
+		return
+	}
+	representativeOffset := len(c.record.Bytes()) - payloadReader.Len()
+	representative = c.record.Bytes()[representativeOffset : representativeOffset+representativeLength]
+	if _, err = payloadReader.Seek(
+		int64(representativeLength), io.SeekCurrent); err != nil {
+		return
+	}
 	if payloadReader.Len() != 0 {
 		err = moerr.NewInvalidInputNoCtx(
-			"distinct spill record has trailing payload")
-		return
+			"distinct spill record has trailing representative")
 	}
 	return
 }
@@ -846,8 +900,9 @@ func (c *distinctSpillController) repartition(
 		if err, canceled := vm.CancelCheck(proc); canceled {
 			return children, false, err
 		}
-		routeHash, groupHash, aggregate, payload, eof, err := c.readRecord(
-			reader, groups)
+		routeHash, groupHash, aggregate, payload, representative, eof, err :=
+			c.readRecordWithRepresentative(
+				reader, groups)
 		if err != nil {
 			return children, false, err
 		}
@@ -862,7 +917,7 @@ func (c *distinctSpillController) repartition(
 				return children, false, err
 			}
 		}
-		if _, err := c.writeRecord(
+		if _, err := c.writeRecordWithRepresentative(
 			target.writer,
 			routeHash,
 			groupHash,
@@ -870,6 +925,7 @@ func (c *distinctSpillController) repartition(
 			groups,
 			0,
 			payload,
+			representative,
 		); err != nil {
 			return children, false, err
 		}
@@ -1513,39 +1569,40 @@ func (ctr *container) drainExactCountDistinct(
 	}
 	for i := range prepared {
 		aggregate := prepared[i].aggregate
-		err = prepared[i].drain.ForEach(func(group int, payload []byte) error {
-			if err, canceled := vm.CancelCheck(proc); canceled {
-				return err
-			}
-			if group < 0 || group >= len(ctr.spillHashCodes) {
-				return moerr.NewInternalErrorNoCtx(
-					"distinct spill group exceeds hash state")
-			}
-			groups, row, err := ctr.groupBatchRow(group)
-			if err != nil {
-				return err
-			}
-			hash := controller.hash(ctr.spillHashCodes[group], aggregate, payload)
-			bucket := int(hash & (distinctSpillNumBuckets - 1))
-			target := wave[bucket]
-			if target.file == nil {
-				if err := ctr.openSpillBucket(proc, spillfs, target); err != nil {
+		err = prepared[i].drain.ForEachWithRepresentative(
+			func(group int, payload, representative []byte) error {
+				if err, canceled := vm.CancelCheck(proc); canceled {
 					return err
 				}
-			}
-			written, err := controller.writeRecord(
-				target.writer, hash, ctr.spillHashCodes[group],
-				aggregate, groups, row, payload)
-			if err != nil {
-				return err
-			}
-			if written <= 0 {
-				return moerr.NewInternalErrorNoCtx(
-					"distinct spill wrote an empty record")
-			}
-			target.cnt++
-			return nil
-		})
+				if group < 0 || group >= len(ctr.spillHashCodes) {
+					return moerr.NewInternalErrorNoCtx(
+						"distinct spill group exceeds hash state")
+				}
+				groups, row, err := ctr.groupBatchRow(group)
+				if err != nil {
+					return err
+				}
+				hash := controller.hash(ctr.spillHashCodes[group], aggregate, payload)
+				bucket := int(hash & (distinctSpillNumBuckets - 1))
+				target := wave[bucket]
+				if target.file == nil {
+					if err := ctr.openSpillBucket(proc, spillfs, target); err != nil {
+						return err
+					}
+				}
+				written, err := controller.writeRecordWithRepresentative(
+					target.writer, hash, ctr.spillHashCodes[group],
+					aggregate, groups, row, payload, representative)
+				if err != nil {
+					return err
+				}
+				if written <= 0 {
+					return moerr.NewInternalErrorNoCtx(
+						"distinct spill wrote an empty record")
+				}
+				target.cnt++
+				return nil
+			})
 		if err != nil {
 			return false, err
 		}
@@ -2902,6 +2959,7 @@ func (ctr *container) insertDistinctPartialRecord(
 	decodeGroups *batch.Batch,
 	aggregate int,
 	payload []byte,
+	representative []byte,
 ) error {
 	if ctr == nil || proc == nil || decodeGroups == nil || aggregate < 0 ||
 		aggregate >= len(ctr.aggList) {
@@ -2971,7 +3029,8 @@ func (ctr *container) insertDistinctPartialRecord(
 		}
 		group = int(values[0] - 1)
 	}
-	return target.InsertDistinctArgument(group, payload)
+	return target.InsertDistinctArgumentWithRepresentative(
+		group, payload, representative)
 }
 
 func (ctr *container) loadNextDistinctPartialLeaf(
@@ -3062,8 +3121,9 @@ func (ctr *container) loadNextDistinctPartialLeaf(
 			return false, err
 		}
 		recordStart := reader.Position()
-		_, _, aggregate, payload, eof, err := controller.readRecord(
-			reader, decodeGroups)
+		_, _, aggregate, payload, representative, eof, err :=
+			controller.readRecordWithRepresentative(
+				reader, decodeGroups)
 		if err != nil {
 			return false, err
 		}
@@ -3071,7 +3131,7 @@ func (ctr *container) loadNextDistinctPartialLeaf(
 			break
 		}
 		if err := ctr.insertDistinctPartialRecord(
-			proc, decodeGroups, aggregate, payload); err != nil {
+			proc, decodeGroups, aggregate, payload, representative); err != nil {
 			if !mpool.IsRetryableAllocationCapacity(err) {
 				return false, err
 			}

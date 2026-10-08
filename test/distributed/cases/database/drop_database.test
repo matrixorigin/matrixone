@@ -1,10 +1,60 @@
 -- @suite
 -- @setup
-drop database if exists test01;
-drop database if exists drop_database;
+drop database if exists drop_database_bvt;
+drop database if exists drop_database_keep;
+drop database if exists drop_database_views;
 -- @case
--- @desc:test for drop database
+-- @desc:empty database and missing IF EXISTS
 -- @label:bvt
-create database test01;
-drop database test01;
-show databases;
+create database drop_database_bvt;
+drop database drop_database_bvt;
+select count(*) as empty_database_left from mo_catalog.mo_database where account_id = 0 and datname = 'drop_database_bvt';
+
+-- @case
+-- @desc:rollback and committed cleanup of tables, hidden indexes, view and sequence
+-- @label:bvt
+create database drop_database_keep;
+create table drop_database_keep.guard(id int primary key);
+insert into drop_database_keep.guard values (99);
+create database drop_database_bvt;
+create table drop_database_bvt.p(id int primary key auto_increment, v int unique);
+create table drop_database_bvt.c(id int primary key, pid int, foreign key(pid) references drop_database_bvt.p(id));
+insert into drop_database_bvt.p(v) values (7);
+insert into drop_database_bvt.c values (1, 1);
+create temporary table drop_database_bvt.tmp_ai(id bigint primary key auto_increment, v int);
+insert into drop_database_bvt.tmp_ai(v) values (7);
+create view drop_database_bvt.v as select id, v from drop_database_bvt.p;
+create sequence drop_database_bvt.s;
+set @drop_db_id = (select dat_id from mo_catalog.mo_database where account_id = 0 and datname = 'drop_database_bvt');
+set @drop_p_id = (select rel_id from mo_catalog.mo_tables where account_id = 0 and reldatabase_id = @drop_db_id and relname = 'p');
+set @drop_tmp_id = (select rel_id from mo_catalog.mo_tables where account_id = 0 and reldatabase_id = @drop_db_id and relkind = 'temporary_table');
+select count(*) as temp_allocator_before from mo_catalog.mo_increment_columns where table_id = @drop_tmp_id;
+begin;
+drop database drop_database_bvt;
+rollback;
+select count(*) as temp_allocator_after_rollback from mo_catalog.mo_increment_columns where table_id = @drop_tmp_id;
+select dat_id = @drop_db_id as same_database from mo_catalog.mo_database where account_id = 0 and datname = 'drop_database_bvt';
+select rel_id = @drop_p_id as same_table from mo_catalog.mo_tables where account_id = 0 and reldatabase_id = @drop_db_id and relname = 'p';
+select id, v from drop_database_bvt.p;
+select id, pid from drop_database_bvt.c;
+select id, v from drop_database_bvt.v;
+drop database drop_database_bvt;
+select 1 as connection_alive;
+select count(*) as databases_left from mo_catalog.mo_database where account_id = 0 and dat_id = @drop_db_id;
+select count(*) as relations_left from mo_catalog.mo_tables where account_id = 0 and reldatabase_id = @drop_db_id;
+select count(*) as columns_left from mo_catalog.mo_columns where account_id = 0 and att_database_id = @drop_db_id;
+select count(*) as indexes_left from mo_catalog.mo_indexes where database_id = @drop_db_id;
+select id from drop_database_keep.guard;
+
+-- @case
+-- @desc:view and sequence are removed by database residual cleanup
+-- @label:bvt
+create database drop_database_views;
+create view drop_database_views.v as select id from drop_database_keep.guard;
+create sequence drop_database_views.s;
+set @drop_views_id = (select dat_id from mo_catalog.mo_database where account_id = 0 and datname = 'drop_database_views');
+drop database drop_database_views;
+select count(*) as view_database_left from mo_catalog.mo_database where account_id = 0 and dat_id = @drop_views_id;
+select count(*) as view_relations_left from mo_catalog.mo_tables where account_id = 0 and reldatabase_id = @drop_views_id;
+select id from drop_database_keep.guard;
+drop database drop_database_keep;

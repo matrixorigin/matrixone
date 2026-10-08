@@ -60,7 +60,7 @@ func Test_IntegerDivFn_Int64Boundary(t *testing.T) {
 				[]int64{0}, []bool{false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, integerDivFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -78,7 +78,7 @@ func Test_IntegerDivFn_Int64Boundary(t *testing.T) {
 				[]int64{math.MaxInt64, -4611686018427387904, 4611686018427387904, -3}, []bool{false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, integerDivFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -96,7 +96,7 @@ func Test_IntegerDivFn_Int64Boundary(t *testing.T) {
 				[]int64{128}, []bool{false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, integerDivFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -114,7 +114,7 @@ func Test_IntegerDivFn_Int64Boundary(t *testing.T) {
 				[]int64{0}, []bool{false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, integerDivFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 	{
@@ -130,7 +130,7 @@ func Test_IntegerDivFn_Int64Boundary(t *testing.T) {
 				[]int64{math.MaxInt64}, []bool{false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, integerDivFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -152,7 +152,7 @@ func Test_IntegerDivFn_FloatOverflow(t *testing.T) {
 				[]int64{0}, []bool{false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, integerDivFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -170,7 +170,7 @@ func Test_IntegerDivFn_FloatOverflow(t *testing.T) {
 				[]int64{0}, []bool{false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, integerDivFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -188,7 +188,7 @@ func Test_IntegerDivFn_FloatOverflow(t *testing.T) {
 				[]int64{0}, []bool{false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, integerDivFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -206,7 +206,7 @@ func Test_IntegerDivFn_FloatOverflow(t *testing.T) {
 				[]int64{1 << 62, -9000000000000000000, 3, -3}, []bool{false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, integerDivFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -224,7 +224,7 @@ func Test_IntegerDivFn_FloatOverflow(t *testing.T) {
 				[]int64{0}, []bool{false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, integerDivFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 	{
@@ -240,7 +240,7 @@ func Test_IntegerDivFn_FloatOverflow(t *testing.T) {
 				[]int64{33, 0}, []bool{false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, integerDivFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -258,7 +258,7 @@ func Test_IntegerDivFn_FloatOverflow(t *testing.T) {
 				[]int64{0}, []bool{true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, integerDivFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -280,7 +280,7 @@ func Test_ModFn_IntegerBoundary(t *testing.T) {
 				[]int64{0, 0, 1, -1}, []bool{false, false, false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, modFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -298,7 +298,7 @@ func Test_ModFn_IntegerBoundary(t *testing.T) {
 				[]int64{0, 1}, []bool{true, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, modFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -316,7 +316,7 @@ func Test_ModFn_IntegerBoundary(t *testing.T) {
 				[]int64{1}, []bool{false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, modFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 	{
@@ -332,7 +332,7 @@ func Test_ModFn_IntegerBoundary(t *testing.T) {
 				[]int64{0}, []bool{true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, modFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -352,7 +352,7 @@ func Test_ModFn_IntegerBoundary(t *testing.T) {
 				[]int64{1, 0, 0}, []bool{false, true, true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, modFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -370,7 +370,7 @@ func Test_ModFn_IntegerBoundary(t *testing.T) {
 				[]int64{1, 0}, []bool{false, true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, modFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -388,7 +388,7 @@ func Test_ModFn_IntegerBoundary(t *testing.T) {
 				[]int64{0, 0}, []bool{true, true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, modFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -410,7 +410,7 @@ func Test_ModFn_FloatSemantics(t *testing.T) {
 				[]float64{1.5, -1.5}, []bool{false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, modFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -428,7 +428,7 @@ func Test_ModFn_FloatSemantics(t *testing.T) {
 				[]float64{0}, []bool{true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, modFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -451,7 +451,7 @@ func Test_DivFn_TemplateBranches(t *testing.T) {
 				[]float64{5}, []bool{false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, divFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -469,7 +469,7 @@ func Test_DivFn_TemplateBranches(t *testing.T) {
 				[]float64{0}, []bool{false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, divFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -489,7 +489,7 @@ func Test_DivFn_TemplateBranches(t *testing.T) {
 				[]float64{5, 0, 0}, []bool{false, true, true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, divFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -507,7 +507,7 @@ func Test_DivFn_TemplateBranches(t *testing.T) {
 				[]float64{0, 0}, []bool{false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, divFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -525,7 +525,7 @@ func Test_DivFn_TemplateBranches(t *testing.T) {
 				[]float64{0, 0}, []bool{true, true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, divFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -543,7 +543,7 @@ func Test_DivFn_TemplateBranches(t *testing.T) {
 				[]float64{0, 0}, []bool{true, true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, divFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -561,7 +561,7 @@ func Test_DivFn_TemplateBranches(t *testing.T) {
 				[]float64{0.5, 0}, []bool{false, true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, divFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -579,7 +579,7 @@ func Test_DivFn_TemplateBranches(t *testing.T) {
 				[]float64{0, 0}, []bool{false, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, divFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -597,7 +597,7 @@ func Test_DivFn_TemplateBranches(t *testing.T) {
 				[]float64{5, 0, 0}, []bool{false, true, true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, divFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -615,7 +615,7 @@ func Test_DivFn_TemplateBranches(t *testing.T) {
 				[]float64{0}, []bool{false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, divFn)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }
@@ -630,20 +630,21 @@ func Test_DivFn_SelectListSkipsMaskedRows(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	maskRow1 := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}
 
-	runMasked := func(info string, fn fEvalFn, inputs []FunctionTestInput, rsTyp types.Type) *vector.Vector {
+	runMasked := func(info string, fn executeLogicOfOverload, inputs []FunctionTestInput, rsTyp types.Type) any {
 		tcc := NewFunctionTestCase(proc, inputs,
 			NewFunctionTestResult(rsTyp, false, nil, nil), fn)
+		defer tcc.Free()
 		require.NoError(t, tcc.result.PreExtendAndReset(2), info)
 		require.NoError(t, tcc.fn(tcc.parameters, tcc.result, proc, 2, maskRow1), info)
 		rsVec := tcc.GetResultVectorDirectly()
 		require.True(t, rsVec.GetNulls().Contains(1), info)
 		require.False(t, rsVec.GetNulls().Contains(0), info)
-		return rsVec
+		return vector.GetAny(rsVec, 0, false)
 	}
 
 	// divFn vector / const: masked row 1 would overflow to +Inf
 	{
-		rsVec := runMasked("select case when .. then float64_col / 1e-308 end",
+		value := runMasked("select case when .. then float64_col / 1e-308 end",
 			divFn,
 			[]FunctionTestInput{
 				NewFunctionTestInput(types.T_float64.ToType(),
@@ -652,13 +653,13 @@ func Test_DivFn_SelectListSkipsMaskedRows(t *testing.T) {
 					[]float64{1e-308, 1e-308}, []bool{false, false}),
 			},
 			types.T_float64.ToType())
-		require.Equal(t, 1e308, vector.MustFixedColNoTypeCheck[float64](rsVec)[0])
+		require.Equal(t, 1e308, value)
 	}
 
 	// integerDivFn float branch (specialTemplateForDivFunction) vector / const:
 	// masked row 1 would exceed BIGINT range
 	{
-		rsVec := runMasked("select case when .. then float64_col DIV 1 end",
+		value := runMasked("select case when .. then float64_col DIV 1 end",
 			integerDivFn,
 			[]FunctionTestInput{
 				NewFunctionTestInput(types.T_float64.ToType(),
@@ -667,12 +668,12 @@ func Test_DivFn_SelectListSkipsMaskedRows(t *testing.T) {
 					[]float64{1, 1}, []bool{false, false}),
 			},
 			types.T_int64.ToType())
-		require.Equal(t, int64(7), vector.MustFixedColNoTypeCheck[int64](rsVec)[0])
+		require.Equal(t, int64(7), value)
 	}
 
 	// divFn vector / vector: masked-row overflow must be skipped too
 	{
-		rsVec := runMasked("select case when .. then float64_col1 / float64_col2 end",
+		value := runMasked("select case when .. then float64_col1 / float64_col2 end",
 			divFn,
 			[]FunctionTestInput{
 				NewFunctionTestInput(types.T_float64.ToType(),
@@ -681,12 +682,12 @@ func Test_DivFn_SelectListSkipsMaskedRows(t *testing.T) {
 					[]float64{2, 1e-308}, []bool{false, false}),
 			},
 			types.T_float64.ToType())
-		require.Equal(t, 0.5, vector.MustFixedColNoTypeCheck[float64](rsVec)[0])
+		require.Equal(t, 0.5, value)
 	}
 
 	// integerDivSigned vector / const: masked MinInt64 DIV 1 must not raise
 	{
-		rsVec := runMasked("select case when .. then int64_col DIV 1 end",
+		value := runMasked("select case when .. then int64_col DIV 1 end",
 			integerDivFn,
 			[]FunctionTestInput{
 				NewFunctionTestInput(types.T_int64.ToType(),
@@ -695,12 +696,12 @@ func Test_DivFn_SelectListSkipsMaskedRows(t *testing.T) {
 					[]int64{1, 1}, []bool{false, false}),
 			},
 			types.T_int64.ToType())
-		require.Equal(t, int64(7), vector.MustFixedColNoTypeCheck[int64](rsVec)[0])
+		require.Equal(t, int64(7), value)
 	}
 
 	// integerDivSigned vector / vector: masked MinInt64 DIV -1 must not raise
 	{
-		rsVec := runMasked("select case when .. then int64_col1 DIV int64_col2 end",
+		value := runMasked("select case when .. then int64_col1 DIV int64_col2 end",
 			integerDivFn,
 			[]FunctionTestInput{
 				NewFunctionTestInput(types.T_int64.ToType(),
@@ -709,12 +710,12 @@ func Test_DivFn_SelectListSkipsMaskedRows(t *testing.T) {
 					[]int64{1, -1}, []bool{false, false}),
 			},
 			types.T_int64.ToType())
-		require.Equal(t, int64(7), vector.MustFixedColNoTypeCheck[int64](rsVec)[0])
+		require.Equal(t, int64(7), value)
 	}
 
 	// integerDivUnsigned vector / vector: masked MaxUint64 DIV 1 must not raise
 	{
-		rsVec := runMasked("select case when .. then uint64_col1 DIV uint64_col2 end",
+		value := runMasked("select case when .. then uint64_col1 DIV uint64_col2 end",
 			integerDivFn,
 			[]FunctionTestInput{
 				NewFunctionTestInput(types.T_uint64.ToType(),
@@ -723,7 +724,7 @@ func Test_DivFn_SelectListSkipsMaskedRows(t *testing.T) {
 					[]uint64{1, 1}, []bool{false, false}),
 			},
 			types.T_int64.ToType())
-		require.Equal(t, int64(7), vector.MustFixedColNoTypeCheck[int64](rsVec)[0])
+		require.Equal(t, int64(7), value)
 	}
 
 	// integerDivSigned vector / vector: masked zero divisor must not raise
@@ -731,7 +732,7 @@ func Test_DivFn_SelectListSkipsMaskedRows(t *testing.T) {
 	{
 		atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 1)
 		defer atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, -1)
-		rsVec := runMasked("select case when .. then int64_col1 DIV int64_col2 end",
+		value := runMasked("select case when .. then int64_col1 DIV int64_col2 end",
 			integerDivFn,
 			[]FunctionTestInput{
 				NewFunctionTestInput(types.T_int64.ToType(),
@@ -740,6 +741,6 @@ func Test_DivFn_SelectListSkipsMaskedRows(t *testing.T) {
 					[]int64{1, 0}, []bool{false, false}),
 			},
 			types.T_int64.ToType())
-		require.Equal(t, int64(7), vector.MustFixedColNoTypeCheck[int64](rsVec)[0])
+		require.Equal(t, int64(7), value)
 	}
 }

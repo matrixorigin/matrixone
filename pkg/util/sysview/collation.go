@@ -14,7 +14,12 @@
 
 package sysview
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
+)
 
 // CollationDefinition is the canonical metadata for a collation identity that
 // MatrixOne can execute or expose through compatibility metadata. SHOW
@@ -31,18 +36,24 @@ type CollationDefinition struct {
 	Advertised   bool
 }
 
-// SupportedCollationDefinitions is the single source of truth for the
-// supported collation mapping. The information_schema.COLLATIONS table and
-// COLLATION_CHARACTER_SET_APPLICABILITY view are populated from every entry;
-// the protocol SHOW COLLATION implementation uses the same advertised set.
-var SupportedCollationDefinitions = []CollationDefinition{
-	{Name: "utf8_general_ci", Charset: "utf8", ID: 33, IsDefault: "YES", IsCompiled: "Yes", SortLen: 1, PadAttribute: "PAD SPACE", Advertised: true},
-	{Name: "binary", Charset: "binary", ID: 63, IsDefault: "YES", IsCompiled: "Yes", SortLen: 1, PadAttribute: "NO PAD", Advertised: true},
-	{Name: "utf8_bin", Charset: "utf8", ID: 83, IsDefault: "", IsCompiled: "Yes", SortLen: 1, PadAttribute: "PAD SPACE", Advertised: true},
-	{Name: "utf8mb4_general_ci", Charset: "utf8mb4", ID: 45, IsDefault: "YES", IsCompiled: "Yes", SortLen: 1, PadAttribute: "PAD SPACE", Advertised: true},
-	{Name: "utf8mb4_bin", Charset: "utf8mb4", ID: 46, IsDefault: "", IsCompiled: "Yes", SortLen: 1, PadAttribute: "PAD SPACE", Advertised: true},
-	{Name: "utf8mb4_0900_ai_ci", Charset: "utf8mb4", ID: 255, IsDefault: "", IsCompiled: "Yes", SortLen: 1, PadAttribute: "PAD SPACE", Advertised: true},
-}
+// SupportedCollationDefinitions is a presentation of the common capability
+// owner, not a second registry. Native-but-disabled domains are not advertised.
+var SupportedCollationDefinitions = func() []CollationDefinition {
+	advertised := collation.Advertised()
+	result := make([]CollationDefinition, 0, len(advertised))
+	for _, d := range advertised {
+		row := CollationDefinition{Name: d.Name, Charset: d.Charset.Name(), ID: int64(d.ProtocolID),
+			IsCompiled: "Yes", SortLen: d.SortLen, PadAttribute: "NO PAD", Advertised: true}
+		if d.Default {
+			row.IsDefault = "YES"
+		}
+		if d.PadSpace {
+			row.PadAttribute = "PAD SPACE"
+		}
+		result = append(result, row)
+	}
+	return result
+}()
 
 // DefaultCollationForCharset returns the canonical default collation exposed
 // by the information_schema and SHOW COLLATION compatibility surfaces.
@@ -50,9 +61,36 @@ var SupportedCollationDefinitions = []CollationDefinition{
 // default for the requested character set.
 func DefaultCollationForCharset(charset string) string {
 	for _, definition := range SupportedCollationDefinitions {
-		if strings.EqualFold(definition.Charset, charset) && definition.IsDefault == "YES" {
+		if strings.EqualFold(definition.Charset, collation.CanonicalCharsetName(charset)) && definition.IsDefault == "YES" {
 			return definition.Name
 		}
 	}
 	return ""
+}
+
+// InformationSchemaCharacterSetsCheckSQL is shared by tenant upgrades so their
+// completion predicate uses the same effective capacities as fresh catalogs.
+// The exact row count also detects duplicate or obsolete advertised charsets.
+func InformationSchemaCharacterSetsCheckSQL() string {
+	charsets := []string{"binary", "utf8", "utf8mb4"}
+	clauses := make([]string, 0, 1+len(charsets))
+	clauses = append(clauses, fmt.Sprintf("(SELECT COUNT(*) FROM information_schema.CHARACTER_SETS) = %d", len(charsets)))
+	for _, charset := range charsets {
+		clauses = append(clauses, fmt.Sprintf(
+			"EXISTS (SELECT 1 FROM information_schema.CHARACTER_SETS "+
+				"WHERE CHARACTER_SET_NAME = '%s' AND DEFAULT_COLLATE_NAME = '%s' AND MAXLEN = %d)",
+			charset, DefaultCollationForCharset(charset), characterSetMaxBytes(charset)))
+	}
+	return "SELECT 1 WHERE " + strings.Join(clauses, " AND ")
+}
+
+// Report the admitted encoding's capacity, not the strict native domain's.
+// utf8/utf8mb3 are four-byte UTF-8 compatibility spellings in current SQL.
+func characterSetMaxBytes(charset string) int32 {
+	identity, ok := collation.ResolveCharset(charset)
+	if !ok {
+		return 0
+	}
+	d, _ := collation.EffectiveDefinition(uint32(identity), 0)
+	return d.Charset.MaxBytes()
 }

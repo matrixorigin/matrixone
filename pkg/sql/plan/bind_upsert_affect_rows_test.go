@@ -187,7 +187,31 @@ func noopFilterNotBranch(expr *planpb.Expr) *planpb.Function {
 // weights independently of its final physical-write decision. REPLACE retains
 // the legacy delete+insert count; plain INSERT remains unchanged.
 func TestUpsertAffectRowsPlan(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+
+	t.Run("INSERT IGNORE with ODKU keeps UPDATE action", func(t *testing.T) {
+		p, err := runOneStmt(mock, t,
+			"insert ignore into constraint_test.dept(deptno, dname, loc) values (1, 'A', 'B') on duplicate key update loc = values(loc)")
+		require.NoError(t, err)
+		dedup := odkuDedupCtx(t, p)
+		require.NotNil(t, dedup)
+	})
+
+	t.Run("INSERT IGNORE with ODKU keeps pure-ignore auto increment metadata out", func(t *testing.T) {
+		tableDef := mock.ctxt.tables["dept"]
+		wasAutoIncrement := tableDef.Cols[0].Typ.AutoIncr
+		defer func() { tableDef.Cols[0].Typ.AutoIncr = wasAutoIncrement }()
+		tableDef.Cols[0].Typ.AutoIncr = true
+		p, err := runOneStmt(mock, t,
+			"insert ignore into constraint_test.dept(deptno, dname, loc) values (NULL, 'A', 'B') on duplicate key update loc = values(loc)")
+		require.NoError(t, err)
+		for _, node := range p.GetQuery().Nodes {
+			if preInsert := node.GetPreInsertCtx(); preInsert != nil {
+				require.False(t, preInsert.TrackAutoIncrementGenerated,
+					"ODKU must not carry INSERT IGNORE-only auto-increment provenance")
+			}
+		}
+	})
 
 	t.Run("ODKU carries logical count and physical marker", func(t *testing.T) {
 		// dept goes through the dedup-join + MULTI_UPDATE path; loc is not part of
@@ -245,7 +269,7 @@ func TestUpsertAffectRowsPlan(t *testing.T) {
 	})
 
 	t.Run("ODKU unrelated update skips CHECK action stream", func(t *testing.T) {
-		m := NewMockOptimizer(true)
+		m := NewMockOptimizer(true, newPlanTestProcess(t))
 		addPositiveCheck(t, m, "emp", "deptno")
 		p, err := runOneStmt(m, t,
 			"insert into constraint_test.emp(empno, ename, job, deptno) values (1, 'A', 'B', 1) on duplicate key update sal = sal")
@@ -258,7 +282,7 @@ func TestUpsertAffectRowsPlan(t *testing.T) {
 	t.Run("ODKU action checks remain independent when FK checks are disabled", func(t *testing.T) {
 		newMock := func(t *testing.T) *MockOptimizer {
 			t.Helper()
-			m := NewMockOptimizer(true)
+			m := NewMockOptimizer(true, newPlanTestProcess(t))
 			m.ctxt.ResolveVariableFunc = func(name string, _, _ bool) (interface{}, error) {
 				switch name {
 				case "foreign_key_checks":

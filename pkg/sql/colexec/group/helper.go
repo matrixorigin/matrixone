@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillio"
 	"github.com/matrixorigin/matrixone/pkg/util/list"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -742,7 +743,7 @@ func (ctr *container) openSpillBucket(
 			return err
 		}
 	}
-	file, err := spillfs.CreateAndRemoveFile(proc.Ctx, bkt.name)
+	file, err := spillfs.CreateFile(proc.Ctx, bkt.name)
 	if err != nil {
 		if fdToken != nil {
 			fdToken.Release()
@@ -753,20 +754,14 @@ func (ctr *container) openSpillBucket(
 		return err
 	}
 	bkt.file = file
-	bkt.writer, err = newGroupSpillWriter(ctr, file, proc.Ctx, diskToken)
-	if err != nil {
-		_ = file.Close()
-		bkt.file = nil
-		if fdToken != nil {
-			fdToken.Release()
-		}
-		if diskToken != nil {
-			diskToken.Release()
-		}
-		return err
-	}
+	bkt.fileFS = spillfs
 	bkt.fdToken = fdToken
 	bkt.diskToken = diskToken
+	bkt.writer, err = newGroupSpillWriter(ctr, file, proc.Ctx, diskToken)
+	if err != nil {
+		_ = bkt.free()
+		return err
+	}
 	return nil
 }
 
@@ -845,6 +840,9 @@ func (ctr *container) writeSpillRecord(
 	clear(prepareParamKindSources)
 	hasPrepareParamKinds := false
 	for i, ag := range ctr.aggList {
+		// Generic spill is local state, so retain GROUP_CONCAT source rows even
+		// when this operator is currently connected to a legacy partial peer.
+		aggexec.SetGroupConcatSourceRowWire(ag, true)
 		if fullFlags != nil {
 			// The stable intermediate format predates the bounded spill codec and
 			// accepts one flag slice per aggregate chunk. Legacy callers do not
@@ -1396,7 +1394,7 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 				if err, canceled := vm.CancelCheck(proc); canceled {
 					return false, err
 				}
-				if err := bkt.flushWriter(); err != nil {
+				if err := bkt.finishWriting(); err != nil {
 					bkt.free()
 					ctr.currentSpillBkt[i] = nil
 					return false, err
@@ -1424,6 +1422,7 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 	// popped bkt must be defer freed.
 	bkt := ctr.spillBkts.PopBack().Value
 	defer func() {
+		spillio.DropReadCache(bkt.file)
 		if err := bkt.free(); err != nil && retErr == nil {
 			retErr = err
 		}
@@ -1453,6 +1452,9 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 	}
 	defer recordReloadTime()
 
+	if err := bkt.openReader(proc.Ctx, ctr.budget); err != nil {
+		return false, err
+	}
 	// reposition to the start of the file.
 	if _, err := bkt.file.Seek(0, io.SeekStart); err != nil {
 		return false, err
@@ -1579,7 +1581,11 @@ reloadLoop:
 		observeHashGrowth(opStats, "GroupHashReload", hashBytesBefore, ctr.hr.Hash.Size())
 		hashMergeNanos += time.Since(mergeStart).Nanoseconds()
 
-		if ctr.needSpill(opAnalyzer) && canRepartitionGroupSpill(bkt) {
+		needSpill, err := ctr.shouldSpill(opAnalyzer)
+		if err != nil {
+			return false, err
+		}
+		if needSpill && canRepartitionGroupSpill(bkt) {
 			ctr.freeSpillReloadStaging()
 			if bytes, rows, err := ctr.spillDataToDisk(proc, opAnalyzer, bkt); err != nil {
 				return false, err
@@ -1658,6 +1664,13 @@ func (ctr *container) getNextFinalResult(
 					ctr.groupByBatches[j].Vecs, vecs[j])
 			}
 		}
+		// Collect diagnostics only after every final vector has materialized; a
+		// later vector/allocation error must not expose warnings for a failed
+		// statement. Publication is deferred until every resident/spilled bucket
+		// has completed so warning order and bounded retention are global.
+		for _, ag := range ctr.aggList {
+			ctr.groupConcatWarnings.Add(ag)
+		}
 
 		ctr.freeAggList()
 	}
@@ -1695,6 +1708,7 @@ func (ctr *container) outputOneBatchFinal(proc *process.Process, opAnalyzer proc
 	if err := ctr.releaseFinalRecoveryCapacity(); err != nil {
 		return vm.CancelResult, err
 	}
+	ctr.groupConcatWarnings.Report(proc.GetWarningSink())
 	return res, nil
 }
 
@@ -1772,14 +1786,88 @@ func (ctr *container) needSpill(opAnalyzer process.Analyzer) bool {
 	return memUsed > ctr.spillMem
 }
 
+// needAdaptiveSpill divides the live query/CN/physical growth headroom among
+// every spill-capable operator which can still retain input. The decision is
+// advisory; the execution-resource ledger remains the hard allocation gate.
+// An empty hash has nothing useful to externalize, so it is always allowed to
+// establish a new resident prefix.
+func (ctr *container) needAdaptiveSpill(
+	opAnalyzer process.Analyzer,
+) (bool, error) {
+	return ctr.needAdaptiveSpillForGrowth(opAnalyzer, 0)
+}
+
+func (ctr *container) needAdaptiveSpillForGrowth(
+	opAnalyzer process.Analyzer,
+	projectedGrowth uint64,
+) (bool, error) {
+	if ctr == nil || !ctr.autoSpill || ctr.mtyp == H0 ||
+		ctr.memoryGrowthParticipant == nil || ctr.hr.IsEmpty() ||
+		ctr.hr.Hash.GroupCount() == 0 {
+		return false, nil
+	}
+	used := ctr.memUsed()
+	if used < 0 {
+		return false, process.ErrExecutionResourceInvalid
+	}
+	limit, err := ctr.memoryGrowthParticipant.RetainedLimit(uint64(used))
+	if err != nil {
+		return false, err
+	}
+	if opAnalyzer != nil {
+		stats := opAnalyzer.GetOpStats()
+		stats.AddExtraStat("GroupAdaptiveSpillChecks", 1)
+		stats.SetMaxExtraStat("GroupAdaptiveRetainedBytes", used)
+		stats.SetMaxExtraStat(
+			"GroupAdaptiveLimitBytes", int64(min(limit, uint64(math.MaxInt64))))
+	}
+	projected := uint64(used)
+	if projectedGrowth > math.MaxUint64-projected {
+		projected = math.MaxUint64
+	} else {
+		projected += projectedGrowth
+	}
+	spill := projected >= limit
+	if spill && opAnalyzer != nil {
+		opAnalyzer.GetOpStats().AddExtraStat("GroupAdaptiveSpillTriggers", 1)
+	}
+	return spill, nil
+}
+
+func (ctr *container) shouldSpill(
+	opAnalyzer process.Analyzer,
+) (bool, error) {
+	staticSpill := ctr.needSpill(opAnalyzer)
+	adaptiveSpill, err := ctr.needAdaptiveSpill(opAnalyzer)
+	if err != nil {
+		return false, err
+	}
+	return staticSpill || adaptiveSpill, nil
+}
+
 func (ctr *container) makeAggList(aggExprs []aggexec.AggFuncExecExpression) ([]aggexec.GroupAggFuncExec, error) {
-	return ctr.makeAggListWithAllocation(aggExprs, ctr.aggregateAllocation)
+	return ctr.makeAggListForMode(aggExprs, ctr.aggregateAllocation, ctr.mtyp == H0)
 }
 
 func (ctr *container) makeSpillAggList(
 	aggExprs []aggexec.AggFuncExecExpression,
 ) ([]aggexec.GroupAggFuncExec, error) {
-	return ctr.makeAggListWithAllocation(aggExprs, ctr.spillAggregateAllocation)
+	return ctr.makeAggListForMode(aggExprs, ctr.spillAggregateAllocation, ctr.mtyp == H0)
+}
+
+func (ctr *container) makeSpillAggListForMode(
+	aggExprs []aggexec.AggFuncExecExpression,
+	singleGroup bool,
+) ([]aggexec.GroupAggFuncExec, error) {
+	return ctr.makeAggListForMode(aggExprs, ctr.spillAggregateAllocation, singleGroup)
+}
+
+func (ctr *container) makeAggListForMode(
+	aggExprs []aggexec.AggFuncExecExpression,
+	allocation *aggexec.AllocationAccount,
+	singleGroup bool,
+) ([]aggexec.GroupAggFuncExec, error) {
+	return ctr.makeAggListWithAllocation(aggExprs, allocation, singleGroup)
 }
 
 func (ctr *container) buildSpillReloadHashTable(
@@ -1809,26 +1897,32 @@ func (ctr *container) buildSpillReloadHashTable(
 func (ctr *container) makeAggListWithAllocation(
 	aggExprs []aggexec.AggFuncExecExpression,
 	allocation *aggexec.AllocationAccount,
+	singleGroup bool,
 ) ([]aggexec.GroupAggFuncExec, error) {
 	var err error
+	limit := process.WarningDiagnosticDefaultRetentionLimit
+	if ctr.warningRetentionSet {
+		limit = ctr.warningRetentionLimit
+	}
+	ctr.groupConcatWarnings.SetWarningRetentionLimit(limit)
 	aggList := make([]aggexec.GroupAggFuncExec, len(aggExprs))
 	for i, agExpr := range aggExprs {
 		typs := make([]types.Type, len(agExpr.GetArgExpressions()))
 		for j, arg := range agExpr.GetArgExpressions() {
-			typs[j] = types.NewWithCharset(
-				types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale, uint8(arg.Typ.Charset),
-			)
+			typs[j] = types.MustTypeFromPlan(arg.Typ)
 		}
-		singleGroup := ctr.mtyp == H0
-		if ctr.legacyTextMinMax || ctr.legacyVarianceState {
+		if ctr.legacyTextMinMax || ctr.legacyVarianceState ||
+			ctr.legacyDecimalSumState || ctr.legacyDecimalSumResult {
 			if singleGroup {
 				aggList[i], err = aggexec.MakeSingleGroupAggWithLegacyRemoteState(
 					ctr.mp, agExpr.GetAggID(), agExpr.IsDistinct(), ctr.legacyTextMinMax,
-					ctr.legacyVarianceState, allocation, agExpr.GetExtraInformation(), typs...)
+					ctr.legacyVarianceState, ctr.legacyDecimalSumState, ctr.legacyDecimalSumResult,
+					allocation, agExpr.GetExtraInformation(), typs...)
 			} else {
 				aggList[i], err = aggexec.MakeGroupAggWithLegacyRemoteState(
 					ctr.mp, agExpr.GetAggID(), agExpr.IsDistinct(), ctr.legacyTextMinMax,
-					ctr.legacyVarianceState, allocation, agExpr.GetExtraInformation(), typs...)
+					ctr.legacyVarianceState, ctr.legacyDecimalSumState, ctr.legacyDecimalSumResult,
+					allocation, agExpr.GetExtraInformation(), typs...)
 			}
 		} else if singleGroup {
 			aggList[i], err = aggexec.MakeSingleGroupAgg(
@@ -1843,9 +1937,42 @@ func (ctr *container) makeAggListWithAllocation(
 			freeAggListPartial(aggList, i)
 			return nil, err
 		}
+		aggexec.ConfigureGroupConcatWarningRetention(aggList[i], limit)
+		if ctr.legacyApproxPercentileState {
+			aggexec.ConfigureApproxPercentileLegacyState(aggList[i])
+		}
+		if ctr.legacyHLLState {
+			if ctr.floatZeroHLLState && hllFloatZeroStateSupported(agExpr.GetAggID()) {
+				aggexec.ConfigureHLLFloatZeroState(aggList[i])
+			} else {
+				aggexec.ConfigureHLLLegacyState(aggList[i])
+			}
+		} else if (ctr.legacyVectorHLLState && hllVectorStateSupported(agExpr)) ||
+			(ctr.legacyTextHLLAddState && hllTextAddStateSupported(agExpr)) ||
+			(ctr.legacyFloatHLLAddState && hllFloatAddStateSupported(agExpr)) {
+			// Keep each producer on v2 until its type family's protocol contract
+			// is understood by every peer (vectors at v88, CHAR/JSON at v91,
+			// FLOAT/DOUBLE at v92).
+			aggexec.ConfigureHLLLegacyState(aggList[i])
+		}
+		if ctr.legacyDistinctFloatKeys {
+			if err := aggexec.ConfigureLegacyDistinctFloatKeys(aggList[i], true); err != nil {
+				freeAggListPartial(aggList, i+1)
+				return nil, err
+			}
+		}
+		aggexec.ConfigureGroupConcatWarningBudget(
+			aggList[i], ctr.groupConcatWarnings.WarningBudget())
+		aggexec.ConfigureGroupConcatTimeZone(aggList[i], ctr.timeZone)
+		// Preserve the mode used to construct this list. A merge partial's wire
+		// header may be the first authoritative mode before ctr.mtyp is published;
+		// deriving this from ctr.mtyp would configure a grouped median as H0.
+		aggexec.SetGroupConcatMultiGroupContext(aggList[i], !singleGroup)
+		aggexec.SetGroupConcatSourceRowsTrusted(
+			aggList[i], !ctr.groupConcatSourceRowsUntrusted)
 	}
 
-	if ctr.mtyp != H0 {
+	if !singleGroup {
 		aggexec.SyncAggregatorsToChunkSize(aggList, aggBatchSize)
 	} else {
 		aggexec.SyncAggregatorsToChunkSize(aggList, 1)
@@ -1857,6 +1984,58 @@ func (ctr *container) makeAggListWithAllocation(
 		}
 	}
 	return aggList, nil
+}
+
+// hllFloatZeroStateSupported is deliberately limited to APPROX_COUNT
+// families. Protocol v76 introduced signed-zero canonicalization for those
+// newly versioned states; persisted HLL_ADD_AGG/HLL_MERGE_AGG states retain
+// their v2 raw-value wire contract until a future explicit migration.
+func hllFloatZeroStateSupported(aggID int64) bool {
+	return aggID == aggexec.AggIdOfApproxCount ||
+		aggID == aggexec.AggIdOfApproxCountDistinct
+}
+
+func hllVectorStateSupported(
+	agg aggexec.AggFuncExecExpression,
+) bool {
+	if agg.GetAggID() != aggexec.AggIdOfHllAdd {
+		return false
+	}
+	args := agg.GetArgExpressions()
+	if len(args) == 0 || args[0] == nil {
+		return false
+	}
+	switch types.T(args[0].Typ.Id) {
+	case types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16:
+		return true
+	default:
+		return false
+	}
+}
+
+func hllTextAddStateSupported(agg aggexec.AggFuncExecExpression) bool {
+	if agg.GetAggID() != aggexec.AggIdOfHllAdd {
+		return false
+	}
+	args := agg.GetArgExpressions()
+	if len(args) == 0 || args[0] == nil {
+		return false
+	}
+	return types.T(args[0].Typ.Id) == types.T_char ||
+		types.T(args[0].Typ.Id) == types.T_json
+}
+
+func hllFloatAddStateSupported(agg aggexec.AggFuncExecExpression) bool {
+	if agg.GetAggID() != aggexec.AggIdOfHllAdd {
+		return false
+	}
+	args := agg.GetArgExpressions()
+	if len(args) == 0 || args[0] == nil {
+		return false
+	}
+	return types.T(args[0].Typ.Id) == types.T_float32 ||
+		types.T(args[0].Typ.Id) == types.T_float64
 }
 
 func useLegacyTextMinMaxForRemote(proc *process.Process) bool {
@@ -1885,6 +2064,148 @@ func useLegacyVarianceStateForRemote(proc *process.Process) bool {
 		GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
 	return !ok || !valid || version < defines.MORPCVersion35
+}
+
+// Decimal SUM must use the pre-v73 state on every side of a distributed
+// aggregation while the cluster protocol is still mixed. Unlike the older
+// remote-only gates, this includes the coordinator's local MergeGroup: it may
+// consume a partial produced by an older CN.
+func useLegacyDecimalSumState(proc *process.Process) bool {
+	if proc == nil {
+		return true
+	}
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	if rt == nil {
+		return true
+	}
+	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return !ok || !valid || version < defines.MORPCVersion73
+}
+
+func useLegacyApproxPercentileStateForRemote(proc *process.Process) bool {
+	if proc == nil || proc.Ctx == nil {
+		return false
+	}
+	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
+	if !remote {
+		return false
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return !ok || !valid || version < defines.MORPCVersion76
+}
+
+// An old coordinator can send a final Group to an upgraded worker without
+// running the upgraded shuffle-plan gate. Below v73 that Group must preserve
+// the old Decimal128 result contract. Partial Groups still use the legacy wire
+// state, while local final Groups and coordinator MergeGroups publish the
+// widened result selected by the upgraded plan.
+func useLegacyDecimalSumResultForRemote(proc *process.Process, needEval bool) bool {
+	if !needEval || !useLegacyDecimalSumState(proc) || proc == nil || proc.Ctx == nil {
+		return false
+	}
+	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
+	return remote
+}
+
+func useLegacyHLLStateForRemote(proc *process.Process) bool {
+	if proc == nil || proc.Ctx == nil {
+		return false
+	}
+	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
+	if !remote {
+		return false
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return !ok || !valid || version < defines.MORPCVersion77
+}
+
+func useLegacyVectorHLLStateForRemote(proc *process.Process) bool {
+	if proc == nil || proc.Ctx == nil {
+		return false
+	}
+	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
+	if !remote {
+		return false
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return !ok || !valid || version < defines.MORPCVersion88
+}
+
+func useLegacyTextHLLAddStateForRemote(proc *process.Process) bool {
+	if proc == nil || proc.Ctx == nil {
+		return false
+	}
+	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
+	if !remote {
+		return false
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return !ok || !valid || version < defines.MORPCVersion91
+}
+
+func useLegacyFloatHLLAddStateForRemote(proc *process.Process) bool {
+	if proc == nil || proc.Ctx == nil {
+		return false
+	}
+	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
+	if !remote {
+		return false
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return !ok || !valid || version < defines.MORPCVersion92
+}
+
+func useFloatZeroHLLStateForRemote(proc *process.Process) bool {
+	if proc == nil || proc.Ctx == nil {
+		return false
+	}
+	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
+	if !remote {
+		return false
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return ok && valid && version == defines.MORPCVersion76
+}
+
+func groupHashStringWireEnabled(proc *process.Process) bool {
+	if proc == nil || proc.Ctx == nil {
+		return true
+	}
+	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
+	if !remote {
+		return true
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return ok && valid && version >= defines.MORPCVersion78
+}
+
+func canonicalDistinctKeyWireEnabled(proc *process.Process) bool {
+	if proc == nil || proc.Ctx == nil {
+		return true
+	}
+	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
+	if !remote {
+		return true
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return ok && valid && version >= defines.MORPCVersion79
 }
 
 // freeAggListPartial frees the first n aggregators in the list.

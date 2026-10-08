@@ -17,6 +17,7 @@ package sort
 import (
 	"math/bits"
 
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -31,6 +32,29 @@ import (
 type ByVectorsScratch struct {
 	Partitions []int64
 	Diffs      []bool
+}
+
+// JSONOrderScratch carries decoded and validated JSON values across peer-group
+// sorts in one multi-key SQL ordering operation.
+type JSONOrderScratch struct {
+	values   []jsonOrderValue
+	prepared bool
+}
+
+// Prepare decodes and validates each selected non-NULL JSON row once for the
+// vector. The scratch value is intended to be reused for peer-group sorts in
+// the same operation.
+func (s *JSONOrderScratch) Prepare(os []int64, vec *vector.Vector) {
+	if s == nil {
+		return
+	}
+	s.prepared = false
+	if vec == nil || vec.GetType().Oid != types.T_json || vec.IsConst() || len(os) <= 1 {
+		return
+	}
+	data, area := vector.MustVarlenaRawData(vec)
+	s.values = prepareJSONOrderValues(s.values, os, data, area, vec.GetNulls())
+	s.prepared = true
 }
 
 const (
@@ -83,6 +107,16 @@ func GenericLess[T types.OrderedT](a, b T) bool {
 	return a < b
 }
 
+// ByteJsonPhysicalLess compares the pre-SQL-order relation used by persisted
+// JSON cluster keys. The varlena strings point into immutable vector storage;
+// converting them with UnsafeStringToBytes avoids a comparator allocation.
+func ByteJsonPhysicalLess(a, b string) bool {
+	return bytejson.CompareByteJsonPhysical(
+		types.DecodeJson(util.UnsafeStringToBytes(a)),
+		types.DecodeJson(util.UnsafeStringToBytes(b)),
+	) < 0
+}
+
 func BoolLess(a, b bool) bool { return !a && b }
 
 func Decimal64Less(a, b types.Decimal64) bool { return a.Lt(b) }
@@ -103,17 +137,39 @@ func RowidLess(a, b types.Rowid) bool     { return a.LT(&b) }
 func BlockidLess(a, b types.Blockid) bool { return a.LT(&b) }
 
 func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector) {
-	sortByVector(desc, nullsLast, hasNull, os, vec, false)
+	sortByVector(desc, nullsLast, hasNull, os, vec, false, nil)
 }
 
 // SortForSQLOrder sorts selectors with the SQL ORDER BY relation. Keep Sort's
 // legacy floating-point behavior for physical/storage callers whose ordering
 // is part of an existing persisted-data contract.
 func SortForSQLOrder(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector) {
-	sortByVector(desc, nullsLast, hasNull, os, vec, true)
+	sortByVector(desc, nullsLast, hasNull, os, vec, true, nil)
 }
 
-func sortByVector(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector, sqlOrder bool) {
+// SortForSQLOrderWithScratch sorts one selector range using values prepared by
+// JSONOrderScratch. A missing or unprepared scratch value falls back to the
+// regular SQL ordering path.
+func SortForSQLOrderWithScratch(
+	desc, nullsLast, hasNull bool,
+	os []int64,
+	vec *vector.Vector,
+	scratch *JSONOrderScratch,
+) {
+	if scratch == nil || !scratch.prepared {
+		SortForSQLOrder(desc, nullsLast, hasNull, os, vec)
+		return
+	}
+	sortByVector(desc, nullsLast, hasNull, os, vec, true, scratch.values)
+}
+
+func sortByVector(
+	desc, nullsLast, hasNull bool,
+	os []int64,
+	vec *vector.Vector,
+	sqlOrder bool,
+	jsonValues []jsonOrderValue,
+) {
 	if hasNull {
 		sz := len(os)
 		if nullsLast { // move null rows to the tail
@@ -391,10 +447,46 @@ func sortByVector(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector,
 			data []types.Varlena
 			area []byte
 		}{data: data, area: area}
+		if !sqlOrder {
+			// JSON cluster keys are persisted and merged in their serialized
+			// pre-SQL order. Changing this to the SQL relation would make old
+			// and newly written objects incompatible during physical merge.
+			if !desc {
+				genericSort(col, os, byteJSONPhysicalLess)
+			} else {
+				genericSort(col, os, byteJSONPhysicalGreater)
+			}
+			break
+		}
+		if len(os) <= 1 {
+			break
+		}
+		values := jsonValues
+		if values == nil {
+			values = prepareJSONOrderValues(nil, os, data, area, vec.GetNulls())
+		}
+		compare := func(i, j int64) int {
+			left := values[i]
+			right := values[j]
+			if left.valid && right.valid {
+				return bytejson.CompareByteJsonTrusted(left.value, right.value)
+			}
+			return bytejson.CompareByteJson(left.value, right.value)
+		}
 		if !desc {
-			genericSort(col, os, jsonLess)
+			genericSort(col, os, func(_ struct {
+				data []types.Varlena
+				area []byte
+			}, i, j int64) bool {
+				return compare(i, j) < 0
+			})
 		} else {
-			genericSort(col, os, jsonGreater)
+			genericSort(col, os, func(_ struct {
+				data []types.Varlena
+				area []byte
+			}, i, j int64) bool {
+				return compare(i, j) > 0
+			})
 		}
 	}
 }
@@ -427,7 +519,7 @@ func SortByVectorsWithScratch(
 		panic("sort: mismatched multi-column sort metadata")
 	}
 
-	sortSelectorsByVector(os, vectors[0], desc[0], nullsLast[0])
+	sortSelectorsByVector(os, vectors[0], desc[0], nullsLast[0], nil)
 	if len(vectors) == 1 {
 		return
 	}
@@ -445,10 +537,17 @@ func SortByVectorsWithScratch(
 		diffs = scratch.Diffs[:len(os)]
 		clear(diffs)
 	}
+	var scratchJSONOrder JSONOrderScratch
 	previous := vectors[0]
 	for i := 1; i < len(vectors); i++ {
 		partitions = mopartition.PartitionForOrder(os, diffs, partitions, previous)
 		vec := vectors[i]
+		var jsonScratch *JSONOrderScratch
+		nullCount := vec.GetNulls().Count()
+		if !vec.IsConst() && vec.GetType().Oid == types.T_json && nullCount < vec.Length() {
+			jsonScratch = &scratchJSONOrder
+			scratchJSONOrder.Prepare(os, vec)
+		}
 		if !vec.IsConst() {
 			for j := range partitions {
 				end := len(os)
@@ -456,7 +555,7 @@ func SortByVectorsWithScratch(
 					end = int(partitions[j+1])
 				}
 				start := int(partitions[j])
-				sortSelectorsByVector(os[start:end], vec, desc[i], nullsLast[i])
+				sortSelectorsByVector(os[start:end], vec, desc[i], nullsLast[i], jsonScratch)
 			}
 		}
 		previous = vec
@@ -467,12 +566,21 @@ func SortByVectorsWithScratch(
 	}
 }
 
-func sortSelectorsByVector(os []int64, vec *vector.Vector, desc, nullsLast bool) {
+func sortSelectorsByVector(
+	os []int64,
+	vec *vector.Vector,
+	desc, nullsLast bool,
+	jsonScratch *JSONOrderScratch,
+) {
 	if vec.IsConst() {
 		return
 	}
 	nullCount := vec.GetNulls().Count()
 	if nullCount < vec.Length() {
+		if jsonScratch != nil && vec.GetType().Oid == types.T_json {
+			SortForSQLOrderWithScratch(desc, nullsLast, nullCount > 0, os, vec, jsonScratch)
+			return
+		}
 		SortForSQLOrder(desc, nullsLast, nullCount > 0, os, vec)
 	}
 }
@@ -590,31 +698,61 @@ func varlenaLess(vs struct {
 	return vs.data[i].UnsafeGetString(vs.area) < vs.data[j].UnsafeGetString(vs.area)
 }
 
-func jsonLess(vs struct {
+func byteJSONPhysicalLess(vs struct {
 	data []types.Varlena
 	area []byte
 }, i, j int64) bool {
-	left := types.DecodeJson(vs.data[i].GetByteSlice(vs.area))
-	right := types.DecodeJson(vs.data[j].GetByteSlice(vs.area))
-
-	cmp := bytejson.CompareByteJson(left, right)
-	if cmp != 0 {
-		return cmp < 0
-	}
-	return false
+	return bytejson.CompareByteJsonPhysical(
+		types.DecodeJson(vs.data[i].GetByteSlice(vs.area)),
+		types.DecodeJson(vs.data[j].GetByteSlice(vs.area)),
+	) < 0
 }
 
-func jsonGreater(vs struct {
+func byteJSONPhysicalGreater(vs struct {
 	data []types.Varlena
 	area []byte
 }, i, j int64) bool {
-	left := types.DecodeJson(vs.data[i].GetByteSlice(vs.area))
-	right := types.DecodeJson(vs.data[j].GetByteSlice(vs.area))
-	cmp := bytejson.CompareByteJson(left, right)
-	if cmp != 0 {
-		return cmp > 0
+	return bytejson.CompareByteJsonPhysical(
+		types.DecodeJson(vs.data[i].GetByteSlice(vs.area)),
+		types.DecodeJson(vs.data[j].GetByteSlice(vs.area)),
+	) > 0
+}
+
+type jsonOrderValue struct {
+	value    bytejson.ByteJson
+	valid    bool
+	prepared bool
+}
+
+func prepareJSONOrderValues(
+	values []jsonOrderValue,
+	os []int64,
+	data []types.Varlena,
+	area []byte,
+	nsp *nulls.Nulls,
+) []jsonOrderValue {
+	if cap(values) < len(data) {
+		values = make([]jsonOrderValue, len(data))
+	} else {
+		values = values[:len(data)]
+		clear(values)
 	}
-	return false
+	for _, selector := range os {
+		index := int(selector)
+		if nsp != nil && nulls.Contains(nsp, uint64(index)) {
+			continue
+		}
+		if values[index].prepared {
+			continue
+		}
+		value := types.DecodeJson(data[index].GetByteSlice(area))
+		values[index] = jsonOrderValue{
+			value:    value,
+			valid:    bytejson.IsValidByteJson(value),
+			prepared: true,
+		}
+	}
+	return values
 }
 
 func varlenaGreater(vs struct {

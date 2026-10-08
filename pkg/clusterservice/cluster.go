@@ -450,6 +450,22 @@ func (c *cluster) DebugUpdateCNLabel(uuid string, kvs map[string][]string) error
 func (c *cluster) DebugUpdateCNWorkState(uuid string, state int) error {
 	ctx, cancel := context.WithTimeoutCause(context.TODO(), time.Second*3, moerr.CauseDebugUpdateCNWorkState)
 	defer cancel()
+	return c.DebugUpdateCNWorkStateWithContext(ctx, uuid, state)
+}
+
+// DebugUpdateCNWorkStateWithContext submits a CN work-state update using the
+// caller's deadline. The legacy method above remains the default for existing
+// operational callers.
+func (c *cluster) DebugUpdateCNWorkStateWithContext(ctx context.Context, uuid string, state int) error {
+	if ctx == nil {
+		return moerr.NewInvalidInputNoCtx("nil context")
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		return moerr.NewInvalidInput(ctx, "HAKeeper client context deadline not set")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	wstate := logpb.CNWorkState{
 		UUID:  uuid,
 		State: metadata.WorkState(state),

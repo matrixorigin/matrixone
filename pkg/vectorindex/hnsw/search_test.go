@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -139,6 +140,40 @@ func TestHnswSearchFloat32(t *testing.T) {
 	}
 }
 
+func TestHnswSearchFloat64Overflow(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
+	idxcfg.Usearch.Metric = usearch.L2sq
+	idxcfg.Usearch.Quantization = usearch.F64
+	tblcfg := vectorindex.IndexTableConfig{}
+
+	s := NewHnswSearch[float64](idxcfg, tblcfg)
+
+	idx, err := usearch.NewIndex(idxcfg.Usearch)
+	require.NoError(t, err)
+	defer idx.Destroy()
+	require.NoError(t, idx.Reserve(1))
+
+	model := &HnswModel[float64]{Id: "abc-0", Index: idx}
+	require.NoError(t, model.Add(0, []float64{0, 0, 0}))
+	s.Indexes = []*HnswModel[float64]{model}
+
+	// A finite float64 query whose squared L2 distance (1e40) overflows float32; usearch
+	// returns the distance as float32 (+Inf), so Search must fail fast rather than serve the
+	// saturated score (#29040 / #29050).
+	rt := vectorindex.RuntimeConfig{Limit: 4, OrigFuncName: metric.DistFn_L2Distance}
+	_, _, err = s.Search(sqlproc, []float64{1e20, 0, 0}, rt)
+	require.Error(t, err)
+
+	// A small-magnitude float64 query stays finite -- no false reject.
+	_, dists, err := s.Search(sqlproc, []float64{1, 0, 0}, rt)
+	require.NoError(t, err)
+	require.NotEmpty(t, dists)
+}
+
 func TestHnswSearchFloat32_BadQueryType(t *testing.T) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
@@ -154,6 +189,40 @@ func TestHnswSearchFloat32_BadQueryType(t *testing.T) {
 	// pass non-[]float32 query — Search returns error, SearchFloat32 propagates it
 	err := s.SearchFloat32(sqlproc, "wrong", rt, nil, nil)
 	require.Error(t, err)
+}
+
+func TestHnswSearchCosineRejected(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
+	idxcfg.Usearch.Metric = usearch.Cosine
+	s := NewHnswSearch[float32](idxcfg, vectorindex.IndexTableConfig{})
+
+	// A zero or subnormal (float32-squared-norm-underflowing) cosine query cannot be scored on the
+	// index to the SQL contract; it is rejected fail-fast, not silently rewritten (#29082).
+	_, _, err := s.Search(sqlproc, []float32{0, 0, 0}, vectorindex.RuntimeConfig{
+		Limit:        1,
+		OrigFuncName: "cosine_distance",
+	})
+	require.ErrorContains(t, err, "normalized")
+
+	_, _, err = s.Search(sqlproc, []float32{1e-20, 1e-20, 1e-20}, vectorindex.RuntimeConfig{
+		Limit:        1,
+		OrigFuncName: "cosine_distance",
+	})
+	require.ErrorContains(t, err, "normalized")
+
+	// A normalized cosine query is NOT rejected: it proceeds to the index; with no loaded index
+	// files it simply returns an empty result.
+	keys, dists, err := s.Search(sqlproc, []float32{1, 0, 0}, vectorindex.RuntimeConfig{
+		Limit:        1,
+		OrigFuncName: "cosine_distance",
+	})
+	require.NoError(t, err)
+	require.Empty(t, keys)
+	require.Empty(t, dists)
 }
 
 func TestBoundedHnswSearchLimits(t *testing.T) {
@@ -242,10 +311,8 @@ func TestHnsw(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < iterations; j++ {
-				cache.Cache.Once()
-
 				algo := NewHnswSearch[float32](idxcfg, tblcfg)
-				anykeys, distances, err := cache.Cache.Search(sqlproc, tblcfg.IndexTable, algo, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+				anykeys, distances, err := testCache.Search(sqlproc, tblcfg.IndexTable, algo, fp32a, vectorindex.RuntimeConfig{Limit: 4})
 				require.Nil(t, err)
 				keys, ok := anykeys.([]int64)
 				require.True(t, ok)
@@ -260,14 +327,23 @@ func TestHnsw(t *testing.T) {
 
 	wg.Wait()
 
-	require.Eventually(t, func() bool {
-		empty := true
-		testCache.IndexMap.Range(func(_, _ any) bool {
-			empty = false
-			return false
-		})
-		return empty
-	}, 3*cacheTTL, 10*time.Millisecond, "cache entry must expire after searches stop")
+	// This stress test intentionally does not start the cache ticker.  Starting
+	// it would introduce a second eviction owner: the ticker can claim the
+	// entry, pause before deleting it, and make the synchronous assertion below
+	// observe an intermediate state.  The cache package owns wall-clock ticker
+	// coverage; this test owns concurrent HNSW load/search and the explicit
+	// idle-eviction invariant.
+	value, loaded := testCache.IndexMap.Load(tblcfg.IndexTable)
+	require.True(t, loaded, "concurrent HNSW searches must leave a resident cache entry")
+	entry, ok := value.(*cache.VectorIndexSearch)
+	require.True(t, ok, "HNSW cache must contain VectorIndexSearch entries")
+	entry.ExpireAt.Store(time.Now().Add(-time.Second).UnixMicro())
+	testCache.HouseKeeping()
+
+	_, loaded = testCache.IndexMap.Load(tblcfg.IndexTable)
+	require.False(t, loaded, "an idle expired HNSW entry must be evicted by HouseKeeping")
+	require.Equal(t, int32(cache.STATUS_DESTROYED), entry.Status.Load(),
+		"HouseKeeping must finish destroying the evicted HNSW entry")
 }
 
 func makeMetaBatch(proc *process.Process) *batch.Batch {
@@ -529,4 +605,81 @@ func TestQueryHnswGenerationReadError(t *testing.T) {
 // TestSearchIntoUnsupported covers the SearchInto stub.
 func TestSearchIntoUnsupported(t *testing.T) {
 	require.ErrorContains(t, (&HnswSearch[float32]{}).SearchInto(nil, nil, vectorindex.RuntimeConfig{}, nil), "not supported")
+}
+
+// Before Load the models carry metadata only, so GetIndexSize estimates from nrow rather than
+// reporting 0 -- that estimate is what lets the cache reclaim room for an hnsw load ahead of it.
+// The per-row constant is measured against usearch's own memory_usage(); see
+// hnswViewedBytesPerRow.
+// The pre-load estimate is BOTH terms, on the same basis the post-load charge uses: nrow
+// predicts usearch's allocation (measured within 0.4% of MemoryUsage) and FileSize is the
+// mapping. Estimating on the same basis is what makes the reservation match the charge.
+func TestGetIndexSizeEstimatesFromNrowBeforeLoad(t *testing.T) {
+	const file = int64(13 << 20)
+	s := &HnswSearch[float32]{Indexes: []*HnswModel[float32]{
+		{Id: "a", Nrow: 20000, FileSize: file},
+		{Id: "b", Nrow: 5000},
+	}}
+	host, device := s.GetIndexSize()
+	require.EqualValues(t, 25000*hnswViewedBytesPerRow+file, host,
+		"pre-load cost is the allocation estimate PLUS the mapping it will take")
+	require.EqualValues(t, 0, device, "hnsw is never device resident")
+}
+
+// A generation written before the nrow column existed reports 0, and the entry is charged after
+// its load instead. It must not fall back to FileSize, which over-states the host cost ~80x.
+// A generation written before the nrow column existed contributes nothing for the allocation
+// term -- but its mapping is real and its size is known, so FileSize is still charged. Charging
+// zero here is what let N such generations sit resident while the governor saw none of them.
+func TestGetIndexSizeUnknownNrowStillChargesTheMapping(t *testing.T) {
+	const file = int64(13 << 20)
+	s := &HnswSearch[float32]{Indexes: []*HnswModel[float32]{
+		{Id: "legacy", Nrow: 0, FileSize: file},
+	}}
+	host, _ := s.GetIndexSize()
+	require.EqualValues(t, file, host,
+		"an unknown row count drops only the allocation term, never the mapping")
+}
+
+// TestHnswEmptyGeneration: a loaded generation with no models, or only empty (0-vector) models
+// (a freshly created index, or the async-build window before the first model is written), reports
+// EmptyGeneration -> true, so the cache does not retain a vector-less generation. A generation
+// with any populated model reports false.
+func TestHnswEmptyGeneration(t *testing.T) {
+	newModel := func(withVec bool) *HnswModel[float32] {
+		idxcfg := usearch.DefaultConfig(3)
+		idxcfg.Metric = usearch.L2sq
+		uidx, err := usearch.NewIndex(idxcfg)
+		require.NoError(t, err)
+		if withVec {
+			require.NoError(t, uidx.Reserve(1))
+			require.NoError(t, uidx.Add(usearch.Key(0), []float32{1, 2, 3}))
+		}
+		return &HnswModel[float32]{Index: uidx}
+	}
+
+	// No models loaded -> empty generation.
+	require.True(t, (&HnswSearch[float32]{}).EmptyGeneration())
+
+	// All loaded models empty (usearch Len 0) -> empty generation.
+	e1 := newModel(false)
+	defer func() { require.NoError(t, e1.Index.Destroy()) }()
+	require.True(t, (&HnswSearch[float32]{Indexes: []*HnswModel[float32]{e1}}).EmptyGeneration())
+
+	// At least one populated model -> not empty.
+	e2 := newModel(false)
+	defer func() { require.NoError(t, e2.Index.Destroy()) }()
+	full := newModel(true)
+	defer func() { require.NoError(t, full.Index.Destroy()) }()
+	require.False(t, (&HnswSearch[float32]{Indexes: []*HnswModel[float32]{e2, full}}).EmptyGeneration())
+
+	// A model whose size cannot be read (nil usearch handle -> Empty errors) fails CLOSED:
+	// counting it as vector-less would evict a full generation and re-stream every model file
+	// on the next query.
+	e3 := newModel(false)
+	defer func() { require.NoError(t, e3.Index.Destroy()) }()
+	unreadable := &HnswModel[float32]{Id: "no-handle"}
+	_, err := unreadable.Empty()
+	require.Error(t, err, "a nil usearch handle is what makes this model unreadable")
+	require.False(t, (&HnswSearch[float32]{Indexes: []*HnswModel[float32]{e3, unreadable}}).EmptyGeneration())
 }

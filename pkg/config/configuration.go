@@ -66,9 +66,6 @@ var (
 	//mempool factor.
 	defaultMempoolFactor = 8
 
-	//process.Limitation.Size.  10 << 32 = 42949672960
-	defaultProcessLimitationSize = 42949672960
-
 	//process.Limitation.BatchRows.  10 << 32 = 42949672960
 	defaultProcessLimitationBatchRows = 42949672960
 
@@ -293,9 +290,9 @@ const (
 	arrowLoadDistributedEnabledConfigured
 )
 
-// ArrowLoadParameters controls the LOAD-only Arrow IPC surface. Local files are
-// disabled by default. Each source and execution surface requires an explicit
-// deployment opt-in until its release-readiness gates are accepted.
+// ArrowLoadParameters controls the LOAD-only Arrow IPC surface. Local files,
+// S3-backed sources, and distributed execution are available by default; the
+// three enable fields remain explicit deployment kill switches.
 //
 // configuredFields distinguishes an omitted TOML key from an explicit false.
 // defaultsApplied makes repeated service validation idempotent, so a later
@@ -313,8 +310,8 @@ type ArrowLoadParameters struct {
 	defaultsApplied  bool
 }
 
-// NewArrowLoadParameters returns the default fail-closed Arrow LOAD settings.
-// Callers that adjust a programmatic service configuration should start from
+// NewArrowLoadParameters returns the default-on Arrow LOAD settings. Callers
+// that adjust a programmatic service configuration should start from
 // this value so an explicit setting survives later validation and defaulting
 // passes.
 func NewArrowLoadParameters() *ArrowLoadParameters {
@@ -368,12 +365,20 @@ func (parameters *ArrowLoadParameters) UnmarshalTOML(value interface{}) error {
 	return nil
 }
 
-// SetDefaultValues preserves the zero-value fail-closed policy. Deployment
-// configuration must explicitly opt in to Arrow LOAD; S3-backed sources and
-// distributed execution require their corresponding opt-ins as well.
+// SetDefaultValues enables every supported Arrow LOAD source and execution
+// mode unless the corresponding TOML key was explicitly configured.
 func (parameters *ArrowLoadParameters) SetDefaultValues() {
 	if parameters.defaultsApplied {
 		return
+	}
+	if parameters.configuredFields&arrowLoadEnabledConfigured == 0 {
+		parameters.Enabled = true
+	}
+	if parameters.configuredFields&arrowLoadS3EnabledConfigured == 0 {
+		parameters.S3Enabled = true
+	}
+	if parameters.configuredFields&arrowLoadDistributedEnabledConfigured == 0 {
+		parameters.DistributedEnabled = true
 	}
 	parameters.defaultsApplied = true
 }
@@ -601,7 +606,8 @@ type FrontendParameters struct {
 	//mempool factor. default: 8
 	MempoolFactor int64 `toml:"mempoolFactor"`
 
-	//process.Limitation.Size. default: 10 << 32 = 42949672960
+	// ProcessLimitationSize is an optional per-query execution-memory cap.
+	// Zero leaves the cgroup/host/mpool-derived CN ceiling authoritative.
 	ProcessLimitationSize int64 `toml:"processLimitationSize"`
 
 	// process.Limitation.SpillSize. Zero selects the bounded query default.
@@ -780,10 +786,6 @@ func (fp *FrontendParameters) SetDefaultValues() {
 
 	if fp.MempoolFactor == 0 {
 		fp.MempoolFactor = int64(defaultMempoolFactor)
-	}
-
-	if fp.ProcessLimitationSize == 0 {
-		fp.ProcessLimitationSize = int64(toml.ByteSize(defaultProcessLimitationSize))
 	}
 
 	if fp.ProcessLimitationBatchRows == 0 {

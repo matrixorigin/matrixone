@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -29,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -63,6 +65,7 @@ type planReader struct {
 
 	recordExplainDiagnostics bool
 	explainDiagnostics       []*plan.Query
+	executionStats           *vectorindex.IvfExecutionDiagnostic
 }
 
 var _ engine.Reader = (*planReader)(nil)
@@ -87,23 +90,23 @@ func NewPlanReader(proc *process.Process, spec *plan.VectorIndexScan, req search
 		req:                      req,
 		recordExplainDiagnostics: req.CollectExplainDiagnostics,
 	}
+	if req.CollectExplainDiagnostics {
+		r.executionStats = new(vectorindex.IvfExecutionDiagnostic)
+	}
 	r.scanner = &relationScanner{
 		proc:           proc,
 		partitionCount: req.Identity.PartitionCount,
 		partitionIndex: req.Identity.PartitionIndex,
-		ownsInMemory:   ownsInMemoryPartition(req.Identity.PartitionCount, req.Identity.PartitionIndex),
+		ownsInMemory:   req.Identity.PartitionCount <= 1 || !req.Identity.IsRemote,
 		txnOffset:      req.Identity.TxnOffset,
 		snapshot:       cloneIvfSnapshot(req.Identity.Snapshot),
+		executionStats: r.executionStats,
 	}
 	if req.Identity.PhysicalAccountID != nil {
 		accountID := *req.Identity.PhysicalAccountID
 		r.scanner.accountID = &accountID
 	}
 	return r, nil
-}
-
-func ownsInMemoryPartition(partitionCount, partitionIndex int32) bool {
-	return partitionCount <= 1 || partitionIndex == 0
 }
 
 func cloneIvfSnapshot(snapshot *plan.Snapshot) *plan.Snapshot {
@@ -136,6 +139,7 @@ func (r *planReader) Close() error {
 	r.includeData = nil
 	r.includeNulls = nil
 	r.explainDiagnostics = nil
+	r.executionStats = nil
 	r.scanner = nil
 	r.req.MembershipFilter = nil
 	if r.ownsContext && r.proc != nil && r.proc.Cancel != nil {
@@ -217,10 +221,33 @@ func (*planReader) SetIndexParam(*plan.IndexReaderParam) {}
 func (*planReader) SetFilterZM(objectio.ZoneMap)         {}
 
 func (r *planReader) initialize() error {
+	var err error
 	if r.generation != nil {
-		return r.generation.search(r)
+		err = r.generation.search(r)
+	} else {
+		err = r.prepareSearch(false)
 	}
-	return r.prepareSearch(false)
+	if err != nil {
+		return err
+	}
+	r.publishExecutionDiagnostic()
+	return nil
+}
+
+func (r *planReader) publishExecutionDiagnostic() {
+	if r == nil || !r.recordExplainDiagnostics || r.executionStats == nil {
+		return
+	}
+	if r.scanner == nil || r.scanner.partitionIndex == 0 {
+		r.executionStats.SearchCount++
+	}
+	r.executionStats.OutputRows += uint64(len(r.keys))
+	r.explainDiagnostics = append(r.explainDiagnostics,
+		vectorindex.EncodeIvfExecutionDiagnostic(*r.executionStats))
+	r.executionStats = nil
+	if r.scanner != nil {
+		r.scanner.executionStats = nil
+	}
 }
 
 func (r *planReader) newSearchProcess() *sqlexec.SqlProcess {
@@ -429,12 +456,16 @@ func searchPlanReader[T types.RealNumbers](
 ) error {
 	cache.Cache.Once()
 	algo := NewIvfflatSearch[T](idxcfg, tblcfg)
+	algo.forceCPURoute = r.req.MembershipFilterRequired && r.req.Identity.PartitionCount > 1
 	key := fmt.Sprintf("%s:%d", tblcfg.IndexTable, idxcfg.Ivfflat.Version)
 	if source := r.spec.SourceTable; source != nil && source.PubInfo != nil {
 		key = fmt.Sprintf("tenant=%d:%s", source.PubInfo.TenantId, key)
 	}
 	if r.req.Identity.PartitionCount > 1 {
 		key = fmt.Sprintf("%s:%d/%d", key, r.req.Identity.PartitionIndex, r.req.Identity.PartitionCount)
+	}
+	if algo.forceCPURoute {
+		key += ":cpu-route-v1"
 	}
 	if prepareOnly {
 		cursor := new(vectorindex.IvfSearchCursor)
@@ -628,6 +659,7 @@ type relationScanner struct {
 	partitionIndex int32
 	ownsInMemory   bool
 	txnOffset      int
+	executionStats *vectorindex.IvfExecutionDiagnostic
 }
 
 var _ sqlexec.RelationScanExecutor = (*relationScanner)(nil)
@@ -638,6 +670,9 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 		defer req.FilterHint.BF.Free()
 	}
 	ctx := s.proc.Ctx
+	if req.ReadPolicy != 0 {
+		ctx = fileservice.WithFileServicePolicy(ctx, fileservice.GetFileServicePolicy(ctx)|req.ReadPolicy)
+	}
 	if s.accountID != nil {
 		ctx = defines.AttachAccountId(ctx, *s.accountID)
 	}
@@ -666,6 +701,10 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 	tableDef := rel.GetTableDef(ctx)
 	if tableDef == nil {
 		return res, moerr.NewInvalidStateNoCtxf("ivfflat hidden relation %s.%s has no table definition", req.Schema, req.Table)
+	}
+	var statsStart time.Time
+	if s.executionStats != nil {
+		statsStart = time.Now()
 	}
 
 	partitionCount := req.PartitionCount
@@ -698,6 +737,10 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 	if err != nil {
 		return res, err
 	}
+	selectedBlocks := 0
+	if relData != nil {
+		selectedBlocks = relData.DataCnt()
+	}
 	readers, err := rel.BuildReaders(
 		ctx,
 		s.proc,
@@ -711,6 +754,15 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 	)
 	if err != nil {
 		return res, err
+	}
+	var readerTopStats []objectio.IndexReaderTopStats
+	if s.executionStats != nil && tableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
+		readerTopStats = make([]objectio.IndexReaderTopStats, len(readers))
+		for i, reader := range readers {
+			if provider, ok := reader.(engine.ExplainVectorTopStatsReader); ok {
+				provider.SetExplainVectorTopStats(&readerTopStats[i])
+			}
+		}
 	}
 	var filterExecutor colexec.ExpressionExecutor
 	if req.Filter != nil {
@@ -836,13 +888,64 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 			return res, err
 		}
 	}
+	if s.executionStats != nil {
+		s.recordRelationExecutionStats(
+			tableDef.TableType,
+			selectedBlocks,
+			len(readers),
+			resultRowCount(res.Batches),
+			time.Since(statsStart),
+			readerTopStats,
+		)
+	}
 	return res, nil
 }
 
+func (s *relationScanner) recordRelationExecutionStats(
+	tableType string,
+	blocks int,
+	readers int,
+	rows int,
+	elapsed time.Duration,
+	topStats []objectio.IndexReaderTopStats,
+) {
+	if s == nil || s.executionStats == nil {
+		return
+	}
+	blockCount := uint64(max(blocks, 0))
+	rowCount := uint64(max(rows, 0))
+	elapsedNS := uint64(max(elapsed.Nanoseconds(), int64(0)))
+	switch tableType {
+	case catalog.SystemSI_IVFFLAT_TblType_Metadata:
+		s.executionStats.MetadataBlocks += blockCount
+		s.executionStats.MetadataRows += rowCount
+		s.executionStats.MetadataTimeNS += elapsedNS
+	case catalog.SystemSI_IVFFLAT_TblType_Centroids:
+		s.executionStats.CentroidBlocks += blockCount
+		s.executionStats.CentroidRows += rowCount
+		s.executionStats.CentroidTimeNS += elapsedNS
+	case catalog.SystemSI_IVFFLAT_TblType_Entries:
+		s.executionStats.ReaderCount += uint64(max(readers, 0))
+		s.executionStats.EntryBlocksSelected += blockCount
+		s.executionStats.EntryOutputRows += rowCount
+		s.executionStats.EntryTimeNS += elapsedNS
+		for _, stats := range topStats {
+			s.executionStats.EntryBlocksRead += stats.BlocksRead
+			s.executionStats.StorageFilterInputRows += stats.StorageFilterInputRows
+			s.executionStats.StorageFilterOutputRows += stats.StorageFilterOutputRows
+			s.executionStats.VectorRowsScored += stats.VectorRowsScored
+			s.executionStats.VectorChunksRead += stats.VectorChunksRead
+			s.executionStats.VectorChunkCacheHits += stats.VectorChunkCacheHits
+			s.executionStats.VectorCompressedBytes += stats.VectorCompressedBytes
+			s.executionStats.VectorDecodedBytes += stats.VectorDecodedBytes
+			s.executionStats.TopKOutputRows += stats.TopKOutputRows
+		}
+	}
+}
+
 // relationScanPolicy mirrors the distributed table-scan ownership contract:
-// partition zero owns committed in-memory/appendable rows, while every other
-// partition reads only persisted objects assigned by object ID. The scheduler
-// pins the coordinator-local CN at ordinal zero for VECTOR_INDEX_SCAN queries.
+// the coordinator owns in-memory rows independently of its object partition
+// ordinal. Remote partitions read only persisted objects assigned by object ID.
 // Replicated metadata/centroid requests set partitionCount=1 and therefore
 // read all visible data on every executing CN.
 func relationScanPolicy(partitionCount int32, ownsInMemory bool) engine.DataCollectPolicy {
@@ -875,12 +978,18 @@ func filterRelationBatchRows(
 			sels = append(sels, int64(row))
 		}
 	}
+	return selectRelationBatchRows(bat, sels, loadedColumns), nil
+}
+
+// selectRelationBatchRows preserves unloaded slots when columns were materialized
+// selectively. A nil column list denotes a fully materialized batch.
+func selectRelationBatchRows(bat *batch.Batch, sels []int64, loadedColumns []int) engine.ReaderFilterResult {
 	if len(sels) == bat.RowCount() {
-		return engine.ReaderFilterResult{All: true}, nil
+		return engine.ReaderFilterResult{All: true}
 	}
 	if len(sels) == 0 {
 		bat.CleanOnlyData()
-		return engine.ReaderFilterResult{Sels: sels}, nil
+		return engine.ReaderFilterResult{Sels: sels}
 	}
 	if loadedColumns == nil {
 		bat.Shrink(sels, false)
@@ -890,7 +999,7 @@ func filterRelationBatchRows(
 		}
 		bat.SetRowCount(len(sels))
 	}
-	return engine.ReaderFilterResult{Sels: sels}, nil
+	return engine.ReaderFilterResult{Sels: sels}
 }
 
 // relationFilterEarlyColumns returns the output positions that must be loaded

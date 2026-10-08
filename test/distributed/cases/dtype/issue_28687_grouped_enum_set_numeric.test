@@ -1,0 +1,45 @@
+-- @suite
+-- @case
+-- @desc: preserve ENUM ordinal and SET bitmap semantics in numeric contexts after grouping
+-- @label:bvt
+
+drop database if exists issue_28687_grouped_numeric;
+create database issue_28687_grouped_numeric;
+use issue_28687_grouped_numeric;
+
+create table grouped_values (
+    id int primary key,
+    e enum('red', 'green', 'blue'),
+    s set('a', 'b', 'c')
+);
+
+insert into grouped_values values
+    (1, 'red', 'a'),
+    (2, 'red', 'a,b'),
+    (3, 'green', 'c'),
+    (4, 'blue', 'a,b,c'),
+    (5, null, null);
+
+-- An invalid ENUM label is stored as ordinal 0 under INSERT IGNORE. Its empty
+-- display must remain distinguishable from NULL when the group is converted.
+insert ignore into grouped_values values (6, 'invalid', null);
+
+select id, e + 0, s + 0 from grouped_values order by id;
+select e, e + 0, count(*) from grouped_values group by e order by e + 0;
+select s, s + 0, count(*) from grouped_values group by s order by s + 0;
+
+select e, e in (1, 2), e not in (1, 2)
+from grouped_values group by e order by e + 0;
+
+select 1 in (select e from grouped_values group by e);
+select 1 not in (select e from grouped_values group by e);
+select 99 not in (select e from grouped_values group by e);
+select (e, 1) in (select 1, e from grouped_values group by e)
+from grouped_values group by e order by e + 0;
+select 1 = any (select e from grouped_values group by e);
+
+select d.e + 0
+from (select e from grouped_values group by e) d
+order by d.e + 0;
+
+drop database issue_28687_grouped_numeric;

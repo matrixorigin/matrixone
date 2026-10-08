@@ -85,7 +85,11 @@ func CloneExtra(info *SchemaExtra) *SchemaExtra {
 		ParentTableID:     info.ParentTableID,
 		AutoIncrOffset:    info.AutoIncrOffset,
 		AutoIncrEpoch:     info.AutoIncrEpoch,
+		AutoIdCache:       info.AutoIdCache,
 		DefaultCharset:    info.DefaultCharset,
+		CollationVersion:  info.CollationVersion,
+		KeyFormat:         info.KeyFormat,
+		XXX_unrecognized:  append([]byte(nil), info.XXX_unrecognized...),
 		Checks:            checks,
 	}
 }

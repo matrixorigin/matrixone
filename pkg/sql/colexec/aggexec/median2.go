@@ -564,8 +564,8 @@ func (exec *medianColumnExecSelf[T, R]) writeLegacyMedianGroup(
 			}
 		}
 	} else {
-		if err := state.iter(row, func(key []byte) error {
-			payload := aggPayloadFromKey(&exec.accounted.aggInfo, key)
+		if err := state.iterWithValue(row, func(key, stored []byte) error {
+			payload := aggPayloadFromKeyValue(&exec.accounted.aggInfo, key, stored)
 			if len(payload) != typeSize {
 				return moerr.NewInvalidInputNoCtx("invalid median retained argument")
 			}
@@ -616,7 +616,7 @@ func (exec *medianColumnExecSelf[T, R]) unmarshalAccountedIntermediate(
 		return err
 	}
 	defer result.Free(mp)
-	if err = result.UnmarshalWithReader(reader, mp); err != nil {
+	if err = unmarshalAggregateVector(result, reader, mp); err != nil {
 		return err
 	}
 	if !result.GetType().Eq(exec.retType) || result.Length() != int(rows) {
@@ -631,7 +631,7 @@ func (exec *medianColumnExecSelf[T, R]) unmarshalAccountedIntermediate(
 		return err
 	}
 	defer empty.Free(mp)
-	if err = empty.UnmarshalWithReader(reader, mp); err != nil {
+	if err = unmarshalAggregateVector(empty, reader, mp); err != nil {
 		return err
 	}
 	if !empty.GetType().Eq(types.T_bool.ToType()) || empty.Length() != int(rows) {
@@ -705,7 +705,7 @@ func (exec *medianColumnExecSelf[T, R]) unmarshalAccountedIntermediate(
 			if err != nil {
 				return err
 			}
-			if err = source.UnmarshalWithReader(wire, mp); err != nil {
+			if err = unmarshalAggregateVector(source, wire, mp); err != nil {
 				source.Free(mp)
 				return err
 			}
@@ -1811,8 +1811,8 @@ func flushAccountedMedianNumeric[T numeric](
 				return nil, err
 			}
 			index := 0
-			err = state.iter(row, func(key []byte) error {
-				payload := aggPayloadFromKey(&exec.accounted.aggInfo, key)
+			err = state.iterWithValue(row, func(key, stored []byte) error {
+				payload := aggPayloadFromKeyValue(&exec.accounted.aggInfo, key, stored)
 				if len(payload) != exec.argType.TypeSize() || index >= len(scratch) {
 					return moerr.NewInternalErrorNoCtx("median has invalid retained argument")
 				}
@@ -1889,8 +1889,8 @@ func flushAccountedMedianDecimal[T types.Decimal64 | types.Decimal128](
 				return nil, err
 			}
 			index := 0
-			err = state.iter(row, func(key []byte) error {
-				payload := aggPayloadFromKey(&exec.accounted.aggInfo, key)
+			err = state.iterWithValue(row, func(key, stored []byte) error {
+				payload := aggPayloadFromKeyValue(&exec.accounted.aggInfo, key, stored)
 				if len(payload) != exec.argType.TypeSize() || index >= len(scratch) {
 					return moerr.NewInternalErrorNoCtx("median has invalid retained argument")
 				}
@@ -1967,8 +1967,8 @@ func markMedianGroupNotEmpty[T types.FixedSizeTExceptStrType](ret *aggResultWith
 
 func medianDecimal64FromState(st aggState, idx uint16, info *aggInfo) (types.Decimal128, error) {
 	vals := make([]types.Decimal64, 0, st.argCnt[idx])
-	if err := st.iter(idx, func(k []byte) error {
-		vals = append(vals, types.DecodeDecimal64(aggPayloadFromKey(info, k)))
+	if err := st.iterWithValue(idx, func(k, stored []byte) error {
+		vals = append(vals, types.DecodeDecimal64(aggPayloadFromKeyValue(info, k, stored)))
 		return nil
 	}); err != nil {
 		return types.Decimal128{}, err
@@ -1978,8 +1978,8 @@ func medianDecimal64FromState(st aggState, idx uint16, info *aggInfo) (types.Dec
 
 func medianDecimal128FromState(st aggState, idx uint16, info *aggInfo) (types.Decimal128, error) {
 	vals := make([]types.Decimal128, 0, st.argCnt[idx])
-	if err := st.iter(idx, func(k []byte) error {
-		vals = append(vals, types.DecodeDecimal128(aggPayloadFromKey(info, k)))
+	if err := st.iterWithValue(idx, func(k, stored []byte) error {
+		vals = append(vals, types.DecodeDecimal128(aggPayloadFromKeyValue(info, k, stored)))
 		return nil
 	}); err != nil {
 		return types.Decimal128{}, err

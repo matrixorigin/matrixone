@@ -103,7 +103,7 @@ func TestRemoveImpliedSemiJoin(t *testing.T) {
 }
 
 func TestImpliedSemiJoinPlanRewrite(t *testing.T) {
-	logicPlan, err := runOneStmt(NewMockOptimizer(false), t, `
+	logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, `
 		with multi_part_suppliers as (
 			select l1.l_suppkey
 			from lineitem l1, lineitem l2
@@ -125,7 +125,7 @@ func TestImpliedSemiJoinPlanRewrite(t *testing.T) {
 	require.Equal(t, 2, countReachableTableScans(query, "lineitem"))
 	require.Equal(t, 1, countReachableSemiJoins(query))
 
-	control, err := runOneStmt(NewMockOptimizer(false), t, `
+	control, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, `
 		with multi_part_suppliers as (
 			select l1.l_suppkey
 			from lineitem l1, lineitem l2
@@ -142,6 +142,25 @@ func TestImpliedSemiJoinPlanRewrite(t *testing.T) {
 		)`)
 	require.NoError(t, err)
 	require.Equal(t, 2, countReachableSemiJoins(control.GetQuery()))
+}
+
+func TestSemiContainmentMaterializedScanIdentity(t *testing.T) {
+	intType := planpb.Type{Id: int32(types.T_int64), NotNullable: true}
+	makeScan := func(sourceStep, colPos int32) *planpb.Node {
+		return &planpb.Node{
+			NodeType:   planpb.Node_SINK_SCAN,
+			SourceStep: []int32{sourceStep},
+			ProjectList: []*planpb.Expr{
+				GetColExpr(intType, 10+sourceStep, colPos),
+			},
+		}
+	}
+
+	require.True(t, sameSemiContainmentScan(makeScan(1, 0), makeScan(1, 0)))
+	require.False(t, sameSemiContainmentScan(makeScan(1, 0), makeScan(2, 0)),
+		"different materialized producers are not the same relation")
+	require.False(t, sameSemiContainmentScan(makeScan(1, 0), makeScan(1, 1)),
+		"different producer columns are not interchangeable")
 }
 
 func countReachableTableScans(query *planpb.Query, table string) int {

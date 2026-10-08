@@ -1,6 +1,7 @@
 # #23684 Arrow LOAD release-readiness evidence
 
-Review date: 2026-09-08. Rebased base: `up/main@479c445b1d6d66295344fc32e75e0dbcebb00e35`. The versioned
+Review date: 2026-09-10. Original evidence base: `up/main@479c445b1d6d66295344fc32e75e0dbcebb00e35`. The #28517 candidate was rechecked against
+`up/main@269d59addd032d20897cc4d86f58de3e387a6d76` before delivery. The versioned
 [Arrow LOAD design](../23684_arrow_load_design.md) defines the protocol,
 ownership, rollout, and acceptance contracts. This record covers
 the local release rehearsal; it does not claim cloud-provider or human-owner
@@ -12,9 +13,9 @@ approval.
 | --- | --- | --- |
 | F-031 through F-040 | fixed, tested, committed in the branch history | complete |
 | Rebase | branch rebased onto the stated `up/main` base | recheck immediately before delivery |
-| Default admission and flag rollback | no-config Arrow LOAD rejection plus explicit enable/disable/drain/restart coverage | fail-closed pending approval |
-| S3/stage and distributed admission | explicit per-CN opt-in is required | fail-closed pending aggregate quota, provider, and owner gates |
-| Mixed-version upgrade | default-disabled Arrow does not advertise the new remote pipeline capability | rerun required before enabling distributed execution |
+| Default admission and flag rollback | no-config File/Stream, S3/stage, and distributed Arrow LOAD plus explicit disable/drain/restart coverage | default-on contract; validation rerun required |
+| S3/stage and distributed admission | omitted fields enable the paths; explicit per-CN `false` values remain kill switches | pending aggregate quota, provider, and owner gates |
+| Mixed-version upgrade | MORPC v57 remains the remote compatibility gate; rollback uses explicit distributed/primary switches | rerun required for exact release artifacts |
 | Commit failure/CN shutdown/cancellation | deterministic commit fault injection, cluster lifecycle, and blocked S3 request cancellation passed | local complete |
 | Aggregate pin quota/range planner/deployment stress | deliberately deferred | blocker for S3/distributed production |
 | Real AWS/OSS/COS | delegated to provider test owners | external blocker |
@@ -22,26 +23,26 @@ approval.
 | Arrow-Go supply chain | license/SBOM/size/platform/CVE review recorded | security and packaging blockers remain |
 | Formal owner approval | packet below prepared | pending human approval |
 
-## Default fail-closed and mixed-version status
+## Default-on and mixed-version status
 
-The current product policy keeps every Arrow surface fail-closed: a candidate CN
-using an existing configuration with no Arrow section rejects Arrow LOAD before
-I/O. Local File/Stream requires `enabled=true`; direct S3-compatible sources,
-S3-backed stages, and distributed record-batch fanout additionally require
-explicit `s3-enabled=true` and/or `distributed-enabled=true` configuration on
-every participating CN. `TestArrowLoadBVT` and `TestArrowLoadMultiCN` exercise
-these opt-in paths; configuration, planner, and public-path gate tests prove
-that omitted settings keep them closed.
+The current product policy enables every Arrow surface when the Arrow section or
+its gate fields are omitted. Local File/Stream, direct S3-compatible sources,
+S3-backed stages, and distributed record-batch fanout are therefore available by
+default. Explicit `enabled=false`, `s3-enabled=false`, or
+`distributed-enabled=false` values remain per-surface rollback switches, and
+configuration, planner, worker, and public-path tests must prove those values
+survive repeated validation and restart. `TestArrowLoadBVT`, including its
+`DistributedRecordBatchFanout` subtest, exercises the no-config paths.
 
 The earlier two-binary rehearsal remains evidence that the old binary rejects
-Arrow syntax. Before distributed execution can be enabled in a release artifact,
+Arrow syntax. Before treating default-on distributed execution as release-ready,
 the exact artifact must repeat the mixed-version upgrade test, including routing
 a parallel statement while an old CN is present and documenting the supported
 upgrade order.
 
 `TestArrowLoadRolloutRollbackDrain` separately holds a small LOAD after range
 admission and conversion, before batch publication, then initiates cluster
-shutdown. On restart with every gate disabled, the table is either fully
+shutdown. On restart with every gate explicitly disabled, the table is either fully
 committed when shutdown drained the statement or empty when it canceled; a
 partial commit is forbidden. A missing-file LOAD proves rejection occurs before
 I/O. Re-enabling local LOAD while distributed execution remains off makes
@@ -102,8 +103,8 @@ any accepted exception. Author self-review cannot substitute for these entries.
 
 ## Release decision
 
-Arrow LOAD is disabled by default. Every mode requires explicit deployment
-opt-in. Deferred aggregate pin quota/range-planner pressure work, real-provider
-testing, deployment A/B, exact Linux artifacts, mixed-version rerun, and formal
-owner approval remain release-readiness gates and must not be inferred complete
-from local validation.
+Arrow LOAD is enabled by default when its gate fields are omitted. Explicit
+`false` values remain rollback controls. Deferred aggregate pin quota/range-
+planner pressure work, real-provider testing, deployment A/B, exact Linux
+artifacts, mixed-version rerun, and formal owner approval remain release-
+readiness gates and must not be inferred complete from local validation.

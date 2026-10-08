@@ -645,6 +645,16 @@ func TestQueryAndStopBoundedWhenIOQueueFull(t *testing.T) {
 	defer cancelSend()
 	_, err = sched.Query(sendCtx, nil)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
+	configDone := make(chan error, 1)
+	go func() {
+		configDone <- sched.SendConfig(table.ID(), DefaultMergeSettings,
+			types.BuildTS(100, 0))
+	}()
+	tableDone := make(chan struct{})
+	go func() {
+		sched.OnCreateTableCommit(table)
+		close(tableDone)
+	}()
 
 	stopDone := make(chan struct{})
 	go func() {
@@ -656,7 +666,77 @@ func TestQueryAndStopBoundedWhenIOQueueFull(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("scheduler stop blocked behind the full I/O queue")
 	}
+	select {
+	case err := <-configDone:
+		require.ErrorIs(t, err, ErrMergeSchedulerStopped)
+	case <-time.After(2 * time.Second):
+		t.Fatal("config notification blocked after scheduler stop")
+	}
+	select {
+	case <-tableDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("catalog notification blocked after scheduler stop")
+	}
 	releaseIO()
+}
+
+func TestMergeConfigCommitOrderAndMetadataEvent(t *testing.T) {
+	db := catalog.MockDBEntryWithAccInfo(1, 1001)
+	table := catalog.ToMergeTable(catalog.MockTableEntryWithDB(db, 1001))
+	sched := NewMergeScheduler(time.Hour,
+		&dummyCatalogSource{initTables: []catalog.MergeTable{table}},
+		&dummyExecutor{}, NewStdClock())
+	sched.Start()
+	t.Cleanup(sched.Stop)
+
+	old := DefaultMergeSettings.Clone()
+	old.L0MaxCountStart = 32
+	newer := DefaultMergeSettings.Clone()
+	newer.L0MaxCountStart = 99
+	oldTS := types.BuildTS(100, 0)
+	newTS := types.BuildTS(101, 0)
+	require.NoError(t, sched.SendConfig(table.ID(), newer, newTS))
+	want := requireQuery(t, sched, table).BaseTrigger
+	require.NotEmpty(t, want)
+
+	// ALTER emits another table-create event for the same table ID. It must
+	// retain both the setting and its commit watermark.
+	sched.OnCreateTableCommit(table)
+	require.Equal(t, want, requireQuery(t, sched, table).BaseTrigger)
+	require.NoError(t, sched.SendConfig(table.ID(), old, oldTS))
+	require.Equal(t, want, requireQuery(t, sched, table).BaseTrigger)
+
+	// A later delete blocks a delayed older set from resurrecting config.
+	require.NoError(t, sched.SendConfig(table.ID(), nil, types.BuildTS(102, 0)))
+	require.Empty(t, requireQuery(t, sched, table).BaseTrigger)
+	require.NoError(t, sched.SendConfig(table.ID(), old, oldTS))
+	require.Empty(t, requireQuery(t, sched, table).BaseTrigger)
+
+	// UPDATE uses delete followed by set at the same commit timestamp.
+	equalTS := types.BuildTS(103, 0)
+	require.NoError(t, sched.SendConfig(table.ID(), nil, equalTS))
+	require.NoError(t, sched.SendConfig(table.ID(), newer, equalTS))
+	require.Equal(t, want, requireQuery(t, sched, table).BaseTrigger)
+
+	invalid := DefaultMergeSettings.Clone()
+	invalid.L0MaxCountDecayControl = nil
+	require.Error(t, sched.SendConfig(table.ID(), invalid, types.BuildTS(104, 0)))
+	require.Empty(t, requireQuery(t, sched, table).BaseTrigger)
+	require.NoError(t, sched.SendConfig(table.ID(), old, oldTS))
+	require.Empty(t, requireQuery(t, sched, table).BaseTrigger)
+}
+
+func TestCatalogNotificationBeforeFirstStart(t *testing.T) {
+	db := catalog.MockDBEntryWithAccInfo(1, 1001)
+	table := catalog.ToMergeTable(catalog.MockTableEntryWithDB(db, 1001))
+	sched := NewMergeScheduler(time.Hour,
+		&dummyCatalogSource{}, &dummyExecutor{}, NewStdClock())
+
+	// WAL replay can commit a table after the initial scan, before Start.
+	sched.OnCreateTableCommit(table)
+	sched.Start()
+	t.Cleanup(sched.Stop)
+	require.False(t, requireQuery(t, sched, table).NotExists)
 }
 
 func TestStoppedGenerationIOCannotCrossRestart(t *testing.T) {

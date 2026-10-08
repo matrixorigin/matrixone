@@ -161,6 +161,9 @@ func PlanDefToCstrDef(tableDef *plan.TableDef) *ConstraintDef {
 }
 
 var PlanDefsToExeDefs = func(tableDef *plan.TableDef) ([]TableDef, *api.SchemaExtra, error) {
+	if err := plan.RequireLegacyCollations(tableDef); err != nil {
+		return nil, nil, err
+	}
 	planDefs := tableDef.GetDefs()
 	var exeDefs []TableDef
 	var propDef *PropertiesDef
@@ -184,11 +187,14 @@ var PlanDefsToExeDefs = func(tableDef *plan.TableDef) ([]TableDef, *api.SchemaEx
 		exeDefs = append(exeDefs, propDef)
 	}
 	extra := &api.SchemaExtra{
-		FeatureFlag:    tableDef.FeatureFlag,
-		AutoIncrOffset: tableDef.AutoIncrOffset,
-		AutoIncrEpoch:  tableDef.AutoIncrEpoch,
-		Checks:         tableDef.Checks,
-		DefaultCharset: tableDef.DefaultCharset,
+		FeatureFlag:      tableDef.FeatureFlag,
+		AutoIncrOffset:   tableDef.AutoIncrOffset,
+		AutoIncrEpoch:    tableDef.AutoIncrEpoch,
+		AutoIdCache:      tableDef.AutoIdCache,
+		Checks:           tableDef.Checks,
+		DefaultCharset:   tableDef.DefaultCharset,
+		CollationVersion: tableDef.CollationVersion,
+		KeyFormat:        tableDef.KeyFormat,
 	}
 	propDef.Properties = append(
 		propDef.Properties,
@@ -242,9 +248,7 @@ func PlanColsToExeCols(planCols []*plan.ColDef) []TableDef {
 			alg = compress.Lz4
 		}
 		colTyp := col.GetTyp()
-		exeTyp := types.NewWithCharset(
-			types.T(colTyp.GetId()), colTyp.GetWidth(), colTyp.GetScale(), uint8(colTyp.GetCharset()),
-		)
+		exeTyp := types.MustTypeFromPlan(colTyp)
 		exeCols[i] = &AttributeDef{
 			Attr: Attribute{
 				Name:          col.GetOriginCaseName(),
@@ -1173,8 +1177,6 @@ type Relation interface {
 	PrimaryKeysMayBeUpserted(ctx context.Context, from types.TS, to types.TS, batch *batch.Batch, pkIndex int32) (bool, error)
 
 	ApproxObjectsNum(ctx context.Context) int
-	MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, targetObjSize uint32) (*api.MergeCommitEntry, error)
-	GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error)
 
 	// GetFlushTS returns the flush timestamp of the relation.
 	GetFlushTS(ctx context.Context) (types.TS, error)
@@ -1189,6 +1191,21 @@ type Relation interface {
 // exclusively owned, reusable handle over the shared relation.
 type RelationHandleFactory interface {
 	NewRelationHandle() Relation
+}
+
+// SourceCommitTSProvider is an optional relation capability used by async
+// indexes that must prove their source-table coverage.  It is intentionally not
+// part of Relation: engines without a logtail partition state simply do not
+// provide the proof and planners fail closed to a table scan.
+//
+// mustExceed is an early-exit hint, not a filter: the caller only needs to know
+// whether the true source commit is greater than this value (the index build_ts),
+// so an implementation may return as soon as it establishes that -- skipping the
+// per-object I/O it would otherwise do to compute the exact maximum. An empty
+// mustExceed disables the short-circuit and returns the exact maximum. The result
+// is always a valid lower bound: >= mustExceed when it short-circuits, else exact.
+type SourceCommitTSProvider interface {
+	SourceCommitTS(ctx context.Context, mustExceed types.TS) (types.TS, error)
 }
 
 // NewRelationHandle returns an exclusively owned handle when the engine
@@ -1220,6 +1237,13 @@ type Reader interface {
 // ownership to the caller and must not return the same diagnostic twice.
 type ExplainDiagnosticReader interface {
 	TakeExplainDiagnostics() []*plan.Query
+}
+
+// ExplainVectorTopStatsReader is an optional Reader capability used only by
+// standalone EXPLAIN ANALYZE. The reader borrows stats until Close and updates
+// it synchronously while executing vector Top-K pushdown.
+type ExplainVectorTopStatsReader interface {
+	SetExplainVectorTopStats(*objectio.IndexReaderTopStats)
 }
 
 // ReaderFilterResult describes which rows survived a ReaderFilter. Sels must

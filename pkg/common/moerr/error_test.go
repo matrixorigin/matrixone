@@ -16,11 +16,41 @@ package moerr
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/stretchr/testify/require"
 )
+
+func TestFormatDuplicateEntryMatchesErrorMessageWithoutReporting(t *testing.T) {
+	previousReporter := errutil.GetReportErrorFunc()
+	reports := 0
+	errutil.SetErrorReporter(func(context.Context, error, int) {
+		reports++
+	})
+	t.Cleanup(func() {
+		errutil.SetErrorReporter(previousReporter)
+	})
+
+	for _, tc := range []struct {
+		entry string
+		key   string
+	}{
+		{entry: "1", key: "PRIMARY"},
+		{entry: "", key: "unique_%"},
+		{entry: "重复%值", key: "idx_name"},
+	} {
+		want := NewDuplicateEntry(NoReportContext(), tc.entry, tc.key).Error()
+		require.Equal(t, want, FormatDuplicateEntry(tc.entry, tc.key))
+	}
+	require.Zero(t, reports)
+
+	_ = NewDuplicateEntry(context.Background(), "1", "PRIMARY")
+	require.Equal(t, 1, reports)
+}
 
 func pf1() {
 	panic("foo")
@@ -94,6 +124,12 @@ func TestNew_MyErrorCode(t *testing.T) {
 	err = NewOutOfRange(context.TODO(), "int8", "1111")
 	require.Equal(t, ER_DATA_OUT_OF_RANGE, err.MySQLCode())
 
+	err = NewCannotConvertString(context.TODO(), "A\\xffB", "binary", "utf8mb4")
+	require.Equal(t, ErrCannotConvertString, err.ErrorCode())
+	require.Equal(t, ER_CANNOT_CONVERT_STRING, err.MySQLCode())
+	require.Equal(t, MySQLDefaultSqlState, err.SqlState())
+	require.Equal(t, "Cannot convert string 'A\\xffB' from binary to utf8mb4", err.Error())
+
 	err = NewPreparedParamOutOfRange(context.TODO(), "unsigned integer", "EXECUTE")
 	require.Equal(t, ErrPreparedParamOutOfRange, err.ErrorCode())
 	require.Equal(t, ER_DATA_OUT_OF_RANGE, err.MySQLCode())
@@ -162,6 +198,20 @@ func TestMaxPreparedStmtCountReachedMySQLError(t *testing.T) {
 	require.Equal(t,
 		"Can't create more than max_prepared_stmt_count statements (current value: 2)",
 		err.Error())
+}
+
+func TestInvalidBitwiseOperandsSizeMySQLError(t *testing.T) {
+	for _, err := range []*Error{
+		NewInvalidBitwiseOperandsSize(context.Background()),
+		NewInvalidBitwiseOperandsSizeNoCtx(),
+	} {
+		require.Equal(t, ErrInvalidBitwiseOperandsSize, err.ErrorCode())
+		require.Equal(t, ER_INVALID_BITWISE_OPERANDS_SIZE, err.MySQLCode())
+		require.Equal(t, "HY000", err.SqlState())
+		require.Equal(t,
+			"Binary operands of bitwise operators must be of equal length",
+			err.Error())
+	}
 }
 
 func TestIsMoErrCode(t *testing.T) {
@@ -317,6 +367,20 @@ func TestTooLongIdentMySQLError(t *testing.T) {
 	require.Equal(t, "Identifier name 'identifier' is too long", err.Error())
 }
 
+func TestUserLockWrongNameMySQLError(t *testing.T) {
+	err := NewUserLockWrongName(context.Background(), "NULL")
+	require.Equal(t, ErrUserLockWrongName, err.ErrorCode())
+	require.Equal(t, uint16(ER_USER_LOCK_WRONG_NAME), err.MySQLCode())
+	require.Equal(t, "42000", err.SqlState())
+	require.Equal(t, "Incorrect user-level lock name 'NULL'.", err.Error())
+
+	data, marshalErr := err.MarshalBinary()
+	require.NoError(t, marshalErr)
+	decoded := new(Error)
+	require.NoError(t, decoded.UnmarshalBinary(data))
+	require.Equal(t, err, decoded)
+}
+
 type fakeErr struct {
 }
 
@@ -401,6 +465,11 @@ func TestNewErrTooBigPrecision(t *testing.T) {
 
 func Test_ForCoverage(t *testing.T) {
 	ctx := context.Background()
+	cut := NewGroupConcatCut(ctx, "Row 2 was cut by GROUP_CONCAT()")
+	require.True(t, IsMoErrCode(cut, ErrGroupConcatCut))
+	require.Equal(t, ER_CUT_VALUE_GROUP_CONCAT, cut.MySQLCode())
+	require.Equal(t, "Row 2 was cut by GROUP_CONCAT()", cut.Error())
+
 	err := NewDataTruncatedf(ctx, "test", "test")
 	require.True(t, IsMoErrCode(err, ErrDataTruncated))
 
@@ -476,4 +545,59 @@ func TestNewErrCastWidthExceeded(t *testing.T) {
 	require.Equal(t,
 		"Can't cast 'abcd' to VARCHAR type. Src length 4 is larger than Dest length 3",
 		err.Error())
+}
+
+// ConvertGoError keeps a cancellation or deadline recognisable: errors.Is still
+// matches the context sentinel, also after an RPC round trip, while the result
+// stays a *moerr.Error for the RPC encoders.
+func TestConvertGoErrorKeepsContextIdentity(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		cause, other error
+		code         uint16
+		mysqlCode    uint16
+	}{
+		{context.Canceled, context.DeadlineExceeded, ErrContextCanceled, ER_QUERY_INTERRUPTED},
+		{context.DeadlineExceeded, context.Canceled, ErrDeadlineExceeded, ER_UNKNOWN_ERROR},
+	} {
+		for _, in := range []error{
+			tc.cause,
+			fmt.Errorf("reading magic footer of parquet file: %w (read: 0)", tc.cause),
+		} {
+			got := ConvertGoError(ctx, in)
+			me, ok := got.(*Error)
+			require.True(t, ok, "RPC encoders type-assert *moerr.Error")
+			require.Equal(t, tc.code, me.ErrorCode())
+			require.Equal(t, tc.mysqlCode, me.MySQLCode())
+			require.Equal(t, in.Error(), me.Error(), "the original text is kept")
+			require.ErrorIs(t, got, tc.cause)
+			require.NotErrorIs(t, got, tc.other)
+
+			// RPC serializes the code: identity survives the round trip.
+			data, err := me.MarshalBinary()
+			require.NoError(t, err)
+			var decoded Error
+			require.NoError(t, decoded.UnmarshalBinary(data))
+			require.ErrorIs(t, &decoded, tc.cause)
+		}
+	}
+
+	// A deadline joined with a cancellation is not hidden by it.
+	joined := errors.Join(context.Canceled, context.DeadlineExceeded)
+	require.True(t, IsMoErrCode(ConvertGoError(ctx, joined), ErrDeadlineExceeded))
+
+	// Only errors converted from context errors match: a killed query or a
+	// statement timeout built directly keeps its existing errors.Is behaviour.
+	require.NotErrorIs(t, NewQueryInterrupted(ctx), context.Canceled)
+	require.NotErrorIs(t, NewQueryTimeout(ctx), context.DeadlineExceeded)
+	require.NotErrorIs(t, NewInternalErrorNoCtx("context canceled"), context.Canceled)
+	// Identity comparison of moerr values is unchanged.
+	qi := NewQueryInterrupted(ctx)
+	require.ErrorIs(t, qi, qi)
+
+	// Other errors convert as before.
+	plain := ConvertGoError(ctx, fmt.Errorf("disk on fire"))
+	require.True(t, IsMoErrCode(plain, ErrInternal))
+	require.True(t, IsMoErrCode(ConvertGoError(ctx, io.EOF), ErrUnexpectedEOF))
+	require.Nil(t, ConvertGoError(ctx, nil))
 }

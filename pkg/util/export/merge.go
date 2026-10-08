@@ -92,6 +92,8 @@ type Merge struct {
 	// flow ctrl
 	ctx        context.Context
 	cancelFunc context.CancelFunc
+
+	isRecordExisted func(context.Context, []string, *table.Table, db_holder.DBConnProvider) (bool, error)
 }
 
 type MergeOption func(*Merge)
@@ -165,11 +167,12 @@ func NewMerge(
 ) (*Merge, error) {
 	var err error
 	m := &Merge{
-		service:      service,
-		pathBuilder:  table.NewAccountDatePathBuilder(),
-		MaxFileSize:  defaultMaxFileSize,
-		MaxMergeJobs: 1,
-		logger:       runtime.ServiceRuntime(service).Logger().WithContext(ctx).Named(LoggerNameETLMerge),
+		service:         service,
+		pathBuilder:     table.NewAccountDatePathBuilder(),
+		MaxFileSize:     defaultMaxFileSize,
+		MaxMergeJobs:    1,
+		logger:          runtime.ServiceRuntime(service).Logger().WithContext(ctx).Named(LoggerNameETLMerge),
+		isRecordExisted: db_holder.IsRecordExisted,
 	}
 	m.ctx, m.cancelFunc = context.WithCancel(ctx)
 	for _, opt := range opts {
@@ -223,11 +226,17 @@ type FileMeta struct {
 
 // Main do list all accounts, all dates which belong to m.table.GetName()
 func (m *Merge) Main(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	var files = make([]*FileMeta, 0, 1000)
 	var totalSize int64
 
 	m.logger.Debug(fmt.Sprintf("merge task with max file: %v MB", m.MaxFileSize/mpool.MB))
 	for account, err := range m.fs.List(ctx, "/") {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if err != nil {
 			return err
 		}
@@ -249,12 +258,18 @@ func (m *Merge) Main(ctx context.Context) error {
 
 		// get all file entry
 		for _, rootPath := range rootPaths {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			m.logger.Info("start merge", logutil.TableField(m.table.GetIdentify()), logutil.PathField(rootPath),
 				zap.String("metadata.ID", m.task.Metadata.ID))
 
 			files = files[:0]
 			totalSize = 0
 			for f, err := range m.fs.List(ctx, rootPath) {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
 				if err != nil {
 					return err
 				}
@@ -281,7 +296,7 @@ func (m *Merge) Main(ctx context.Context) error {
 		}
 	}
 
-	return nil
+	return ctx.Err()
 }
 
 func (m *Merge) getAllTargetPath(ctx context.Context, filePath string) ([]string, error) {
@@ -295,11 +310,17 @@ func (m *Merge) getAllTargetPath(ctx context.Context, filePath string) ([]string
 	}
 
 	for i := 1; i < len(pathDir); i++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		length := l.Len()
 		for j := 0; j < length; j++ {
 			elem := l.Remove(l.Front())
 			prefix := elem.(string)
 			for entry, err := range m.fs.List(ctx, prefix) {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
 				if err != nil {
 					return nil, err
 				}
@@ -331,11 +352,18 @@ func (m *Merge) getAllTargetPath(ctx context.Context, filePath string) ([]string
 // Upload the files to SQL table
 // Delete the files from FileService
 func (m *Merge) doMergeFiles(ctx context.Context, files []*FileMeta) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	ctx, span := trace.Start(ctx, "doMergeFiles")
 	defer span.End()
 
 	// Control task concurrency
-	m.runningJobs <- struct{}{}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case m.runningJobs <- struct{}{}:
+	}
 	defer func() {
 		<-m.runningJobs
 	}()
@@ -378,8 +406,11 @@ func (m *Merge) doMergeFiles(ctx context.Context, files []*FileMeta) error {
 			}
 
 			// Check if the first record already exists in the database
-			existed, err = db_holder.IsRecordExisted(ctx, firstLine, m.table, db_holder.GetOrInitDBConn)
+			existed, err = m.isRecordExisted(ctx, firstLine, m.table, db_holder.GetOrInitDBConn)
 			if err != nil {
+				if err == db_holder.ErrIncompatibleStatementInfoRecord {
+					return m.discardIncompatibleFile(ctx, fp, err)
+				}
 				v2.TraceETLMergeExistFailedCounter.Inc()
 				m.logger.Error("error checking if the first record exists",
 					logutil.TableField(m.table.GetIdentify()),
@@ -452,10 +483,19 @@ func (m *Merge) doMergeFiles(ctx context.Context, files []*FileMeta) error {
 
 	successCnt := 0
 	for _, fp := range files {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if err = uploadFile(ctx, fp); err != nil {
-			// todo: adjust the sleep settings
-			// Sleep 10 seconds to wait for the database to recover
-			time.Sleep(10 * time.Second)
+			// Back off while the database recovers, but let task-runner shutdown
+			// interrupt the wait and retain remaining files for the next run.
+			retry := time.NewTimer(10 * time.Second)
+			select {
+			case <-ctx.Done():
+				retry.Stop()
+				return ctx.Err()
+			case <-retry.C:
+			}
 			m.logger.Error("failed to upload file to MO",
 				logutil.TableField(m.table.GetIdentify()),
 				logutil.PathField(fp.FilePath),
@@ -472,6 +512,22 @@ func (m *Merge) doMergeFiles(ctx context.Context, files []*FileMeta) error {
 	)
 
 	return err
+}
+
+// discardIncompatibleFile removes a CSV that cannot be loaded by the current
+// table schema. Keeping it would make every merge interval retry the same
+// permanent parse failure and prevent subsequent files from being merged.
+func (m *Merge) discardIncompatibleFile(ctx context.Context, fp *FileMeta, cause error) error {
+	m.logger.Warn("discard incompatible ETL file",
+		logutil.TableField(m.table.GetIdentify()),
+		logutil.PathField(fp.FilePath),
+		logutil.ErrorField(cause),
+	)
+	if err := m.fs.Delete(ctx, fp.FilePath); err != nil {
+		v2.TraceETLMergeDeleteFailedCounter.Inc()
+		return err
+	}
+	return nil
 }
 
 func SubStringPrefixLimit(str string, length int) string {
@@ -697,6 +753,9 @@ func LongRunETLMerge(
 	logger *log.MOLogger,
 	opts ...MergeOption,
 ) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	// should init once in/with schema-init.
 	tables := table.GetAllTables()
 	if len(tables) == 0 {
@@ -704,7 +763,7 @@ func LongRunETLMerge(
 		return nil
 	}
 
-	var newOptions []MergeOption
+	newOptions := make([]MergeOption, 0, len(opts)+1+1)
 	newOptions = append(newOptions, opts...)
 	newOptions = append(newOptions, WithTask(task))
 	newOptions = append(newOptions, WithTable(tables[0]))
@@ -717,13 +776,16 @@ func LongRunETLMerge(
 	v2.TraceETLMergeJobCounter.Inc()
 	// handle today
 	for _, tbl := range tables {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		merge.table = tbl
 		if err = merge.Main(ctx); err != nil {
 			logger.Error("merge metric failed", zap.Error(err))
 		}
 	}
 
-	return nil
+	return ctx.Err()
 }
 
 func MergeTaskExecutorFactory(

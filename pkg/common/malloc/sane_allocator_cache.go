@@ -18,9 +18,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/prometheus/client_golang/prometheus"
-	"golang.org/x/sys/unix"
 )
 
 const simpleCAllocatorMmapCacheIdle = time.Second
@@ -154,13 +152,7 @@ func (c *simpleCAllocatorMmapCache) updateGaugeLocked() {
 func unmapSimpleCAllocatorCacheEntries(entries map[uint64][][]byte) {
 	for _, slices := range entries {
 		for _, slice := range slices {
-			if err := unix.Munmap(slice); err != nil {
-				panic(moerr.NewInternalErrorNoCtxf(
-					"failed to unmap cached %d-byte allocation: %v",
-					len(slice),
-					err,
-				))
-			}
+			unmapMemory(slice)
 		}
 	}
 }

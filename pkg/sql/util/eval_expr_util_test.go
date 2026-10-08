@@ -218,6 +218,9 @@ func TestGenVectorByVarValueInternalFixedTypes(t *testing.T) {
 func TestHexToInt(t *testing.T) {
 	var val uint64
 	var err error
+	val, err = HexToInt("0x")
+	require.NoError(t, err)
+	require.Zero(t, val)
 
 	val, err = HexToInt("0x1")
 	require.NoError(t, err)
@@ -229,6 +232,79 @@ func TestHexToInt(t *testing.T) {
 
 	_, err = HexToInt("0xg")
 	require.Error(t, err)
+}
+
+func TestSetInsertValueBoolUsesNonZeroNumericSemantics(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	testCases := []struct {
+		name  string
+		value func() *tree.NumVal
+		want  bool
+	}{
+		{
+			name:  "signed zero",
+			value: func() *tree.NumVal { return tree.NewNumVal(int64(0), "0", false, tree.P_int64) },
+			want:  false,
+		},
+		{
+			name:  "signed one",
+			value: func() *tree.NumVal { return tree.NewNumVal(int64(1), "1", false, tree.P_int64) },
+			want:  true,
+		},
+		{
+			name:  "signed positive non-one",
+			value: func() *tree.NumVal { return tree.NewNumVal(int64(2), "2", false, tree.P_int64) },
+			want:  true,
+		},
+		{
+			name:  "signed negative",
+			value: func() *tree.NumVal { return tree.NewNumVal(int64(-1), "-1", true, tree.P_int64) },
+			want:  true,
+		},
+		{
+			name: "signed minimum",
+			value: func() *tree.NumVal {
+				return tree.NewNumVal(int64(math.MinInt64), "-9223372036854775808", true, tree.P_int64)
+			},
+			want: true,
+		},
+		{
+			name: "signed maximum",
+			value: func() *tree.NumVal {
+				return tree.NewNumVal(int64(math.MaxInt64), "9223372036854775807", false, tree.P_int64)
+			},
+			want: true,
+		},
+		{
+			name:  "unsigned zero",
+			value: func() *tree.NumVal { return tree.NewNumVal(uint64(0), "0", false, tree.P_uint64) },
+			want:  false,
+		},
+		{
+			name:  "unsigned one",
+			value: func() *tree.NumVal { return tree.NewNumVal(uint64(1), "1", false, tree.P_uint64) },
+			want:  true,
+		},
+		{
+			name:  "unsigned positive non-one",
+			value: func() *tree.NumVal { return tree.NewNumVal(uint64(2), "2", false, tree.P_uint64) },
+			want:  true,
+		},
+		{
+			name:  "unsigned maximum",
+			value: func() *tree.NumVal { return tree.NewNumVal(^uint64(0), "18446744073709551615", false, tree.P_uint64) },
+			want:  true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			canInsert, got, err := SetInsertValueBool(proc, tc.value())
+			require.NoError(t, err)
+			require.True(t, canInsert)
+			require.Equal(t, tc.want, got)
+		})
+	}
 }
 
 func TestSetInsertValueStringBinaryHexPadding(t *testing.T) {
@@ -315,6 +391,9 @@ func TestSetInsertValueStringBinaryStringKeepsLegacyWidthBehavior(t *testing.T) 
 func TestBinaryToInt(t *testing.T) {
 	var val uint64
 	var err error
+	val, err = BinaryToInt("0b")
+	require.NoError(t, err)
+	require.Zero(t, val)
 
 	val, err = BinaryToInt("0x1")
 	require.NoError(t, err)

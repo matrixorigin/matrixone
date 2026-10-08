@@ -17,16 +17,32 @@ package rule
 import (
 	"context"
 	"fmt"
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
+
+func TestFoldedDecimalDependencySurvivesPackedVector(t *testing.T) {
+	for _, marked := range []bool{false, true} {
+		for _, null := range []bool{false, true} {
+			source := &plan.Expr{Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{DecimalLiteralRequiresV82: marked}}}
+			result := &plan.Literal{Isnull: null, Value: &plan.Literal_Bval{Bval: true}}
+			PreserveFoldedDecimalLiteralSemantics(source, result)
+			require.Equal(t, marked, result.DecimalLiteralRequiresV82)
+			require.Equal(t, null, result.Isnull)
+			require.True(t, result.GetBval())
+		}
+	}
+}
 
 func TestGetConstantValue2AppendsEnumLiteralWithEnumWidth(t *testing.T) {
 	proc := testutil.NewProcess(t)
@@ -310,9 +326,16 @@ func TestPreparedConstantFoldKeepsSqlModeDependentTemporalCast(t *testing.T) {
 		types.New(types.T_timestamp, 0, 6),
 	} {
 		t.Run(targetType.Oid.String(), func(t *testing.T) {
-			expr := makeConstantCastExpr(t, "cast", stringType, targetType, "2024-01-02 03:04:05")
+			expr := makeConstantCastExpr(t, "cast", stringType, targetType, "0000-00-00 00:00:00")
 			folded := NewConstantFold(true).constantFold(expr, proc)
 			require.NotNil(t, folded.GetF())
+			valid := makeConstantCastExpr(t, "cast", stringType, targetType, "2024-01-02 03:04:05")
+			validFolded := NewConstantFold(true).constantFold(valid, proc)
+			if targetType.Oid == types.T_timestamp {
+				require.NotNil(t, validFolded.GetF()) // session time_zone changes at EXECUTE
+			} else {
+				require.NotNil(t, validFolded.GetLit())
+			}
 		})
 	}
 }
@@ -467,4 +490,88 @@ func TestConstantFoldPreservesSerializedResultProvenance(t *testing.T) {
 		require.False(t, literal.GetIsBin(), "NULL must not acquire binary identity metadata")
 		require.False(t, literal.GetIsSerialized(), "NULL must not acquire serialized provenance")
 	})
+}
+
+type foldTestWarnings struct{ count int }
+
+func (s *foldTestWarnings) AppendWarningDiagnostic(uint16, string) { s.count++ }
+
+func TestConstantFoldDefersDiagnosticExpressions(t *testing.T) {
+	for _, prepared := range []bool{false, true} {
+		for _, value := range []string{"838:59:59", "12:00:00"} {
+			proc := testutil.NewProcess(t)
+			sink := &foldTestWarnings{}
+			proc.WarningSink = sink
+			expr := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar), Width: 29, Scale: 6}, Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(function.ADDTIME, 9)},
+				Args: []*plan.Expr{
+					{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: value}}}},
+					{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "00:00:01"}}}},
+				},
+			}}}
+			got := NewConstantFold(prepared).constantFold(expr, proc)
+			require.Zero(t, sink.count)
+			require.Same(t, sink, proc.GetWarningSink())
+			if value == "838:59:59" {
+				require.NotNil(t, got.GetF())
+			} else {
+				require.NotNil(t, got.GetLit())
+			}
+		}
+	}
+}
+
+func TestEvaluateConstantExpressionKernelFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []int64
+		fail bool
+	}{
+		{"round", []int64{5000000000000000000, -19}, true},
+		{"abs", []int64{math.MinInt64}, true},
+		{"round", []int64{-11, -1}, false},
+	} {
+		t.Run(fmt.Sprintf("%s/fail=%t", tc.name, tc.fail), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			t.Cleanup(func() {
+				defer proc.Free()
+				require.Equal(t, [2]int64{}, [2]int64{proc.Mp().CurrNB(), proc.Mp().OnHeapCurrNB()})
+			})
+			args := make([]*plan.Expr, len(tc.args))
+			argTypes := make([]types.Type, len(tc.args))
+			for i, value := range tc.args {
+				argTypes[i] = types.T_int64.ToType()
+				args[i] = &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: value}}}}
+			}
+			fn, err := function.GetFunctionByName(proc.Ctx, tc.name, argTypes)
+			require.NoError(t, err)
+			expr := &plan.Expr{Typ: plan.Type{Id: int32(fn.GetReturnType().Oid)}, Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{Obj: fn.GetEncodedOverloadID(), ObjName: tc.name}, Args: args}}}
+			var vec *vector.Vector
+			var free func()
+			var warned bool
+			var escaped any
+			originalSink := &foldTestWarnings{count: 7}
+			proc.WarningSink = originalSink
+			func() {
+				defer func() { escaped = recover() }()
+				vec, free, warned, err = EvaluateConstantExpression(proc, expr, batch.EmptyForConstFoldBatch)
+			}()
+			if free != nil {
+				t.Cleanup(free)
+			}
+			require.Nil(t, escaped, "speculative failure must use the folder error channel")
+			require.Same(t, originalSink, proc.WarningSink)
+			require.Equal(t, 7, originalSink.count)
+			require.False(t, warned)
+			if tc.fail {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange))
+				require.Nil(t, vec)
+				require.Nil(t, free)
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, free)
+				require.Equal(t, int64(-10), vector.MustFixedColNoTypeCheck[int64](vec)[0])
+			}
+		})
+	}
 }

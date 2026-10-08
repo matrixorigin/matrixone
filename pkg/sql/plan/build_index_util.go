@@ -190,11 +190,15 @@ func indexTableKeyTypeForSinglePart(col *ColDef, keyPart *tree.KeyPart) Type {
 	// either fails (nil-pointer panic) or compares values in incompatible
 	// representations.
 	return Type{
-		Id:         col.Typ.Id,
-		Width:      col.Typ.Width,
-		Scale:      col.Typ.Scale,
-		Enumvalues: col.Typ.Enumvalues,
-		Charset:    col.Typ.Charset,
+		Id:                       col.Typ.Id,
+		Width:                    col.Typ.Width,
+		Scale:                    col.Typ.Scale,
+		Enumvalues:               col.Typ.Enumvalues,
+		Charset:                  col.Typ.Charset,
+		CollationVersion:         col.Typ.CollationVersion,
+		CollationCoercibility:    col.Typ.CollationCoercibility,
+		CollationCoercibilitySet: col.Typ.CollationCoercibilitySet,
+		CollationMergeConflict:   col.Typ.CollationMergeConflict,
 	}
 }
 
@@ -202,9 +206,13 @@ func indexTableKeyTypeForPrefix(colType Type) (Type, bool) {
 	switch colType.Id {
 	case int32(types.T_text):
 		return Type{
-			Id:      int32(types.T_varchar),
-			Width:   types.MaxVarcharLen,
-			Charset: colType.Charset,
+			Id:                       int32(types.T_varchar),
+			Width:                    types.MaxVarcharLen,
+			Charset:                  colType.Charset,
+			CollationVersion:         colType.CollationVersion,
+			CollationCoercibility:    colType.CollationCoercibility,
+			CollationCoercibilitySet: colType.CollationCoercibilitySet,
+			CollationMergeConflict:   colType.CollationMergeConflict,
 		}, true
 	case int32(types.T_blob):
 		return Type{

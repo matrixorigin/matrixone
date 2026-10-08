@@ -16,7 +16,6 @@ package dispatch
 
 import (
 	"bytes"
-	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 
@@ -133,6 +132,16 @@ func (dispatch *Dispatch) ActivatesAllocationAccountLifecycle() bool {
 func (dispatch *Dispatch) ClearAllocationAccount(
 	account *mpool.AllocationAccount,
 ) error {
+	if err := dispatch.DrainAllocationAccount(account); err != nil {
+		return err
+	}
+	dispatch.allocationAccount = nil
+	return nil
+}
+
+// DrainAllocationAccount releases transferred batches after every producer and
+// consumer has quiesced, before their source operators retire capacity classes.
+func (dispatch *Dispatch) DrainAllocationAccount(account *mpool.AllocationAccount) error {
 	if dispatch.allocationAccount == nil {
 		return nil
 	}
@@ -146,7 +155,6 @@ func (dispatch *Dispatch) ClearAllocationAccount(
 		dispatch.cleanupSpool.FinalizeAfterConsumersQuiesced()
 		dispatch.cleanupSpool = nil
 	}
-	dispatch.allocationAccount = nil
 	return nil
 }
 
@@ -189,79 +197,31 @@ func (dispatch *Dispatch) AdoptCleanupState(from *Dispatch) {
 	from.ctr = nil
 }
 
-// sendTerminalSignalsToLocalRegs sends terminalSignal to each local receiver.
-// It first tries non-blocking sends via TrySendPipelineSignal, then retries
-// any pending receivers with the caller-provided cleanup context.
-// Timeout failures are logged via WarnPipelineCleanupf.
-func sendTerminalSignalsToLocalRegs(ctx context.Context, proc *process.Process, localRegs []*process.WaitRegister, signal process.PipelineSignal, pipelineFailed bool, err error) []bool {
-	if ctx == nil {
-		ctx = context.TODO()
-	}
-	delivered := make([]bool, len(localRegs))
-	pendingLocalRegs := make([]int, 0, len(localRegs))
+// Publish once per sender/receiver. Queue delivery is only an optimization;
+// the edge owns durable completion and the first fatal cause.
+func publishTerminalSignalsToLocalRegs(proc *process.Process, localRegs []*process.WaitRegister, signal process.PipelineSignal) bool {
+	allEnded := true
 	for i, reg := range localRegs {
-		if process.TrySendPipelineSignal(reg, signal) {
-			delivered[i] = true
+		effective, ok := reg.PublishTerminal(signal)
+		if ok {
+			if effective.EventType != process.EventEnd {
+				allEnded = false
+			}
 			continue
 		}
-		pendingLocalRegs = append(pendingLocalRegs, i)
-	}
-	if len(pendingLocalRegs) == 0 {
-		return delivered
-	}
-	for _, i := range pendingLocalRegs {
-		if process.SendPipelineSignalWithContext(ctx, localRegs[i], signal) {
-			delivered[i] = true
-			continue
-		}
-		chLen, chCap := process.WaitRegisterChannelState(localRegs[i])
+		allEnded = false
+		chLen, chCap := process.WaitRegisterChannelState(reg)
 		process.WarnPipelineCleanupf(
 			proc,
 			"dispatch_cleanup_send_terminal_signal",
-			"dispatch cleanup timed out sending terminal %s signal: timeout=%s local_reg_idx=%d channel_len=%d channel_cap=%d pipeline_failed=%t err=%v",
+			"dispatch cleanup could not publish terminal %s signal: local_reg_idx=%d channel_len=%d channel_cap=%d err=%v",
 			signal.EventType.String(),
-			process.PipelineSignalSendTimeout,
 			i,
 			chLen,
 			chCap,
-			pipelineFailed,
-			err)
+			signal.TerminalErr())
 	}
-	return delivered
-}
-
-func allTerminalSignalsDelivered(delivered []bool) bool {
-	for _, ok := range delivered {
-		if !ok {
-			return false
-		}
-	}
-	return true
-}
-
-func sendAbortSignalsToFailedLocalRegs(ctx context.Context, proc *process.Process, localRegs []*process.WaitRegister, delivered []bool, err error) {
-	if ctx == nil {
-		ctx = context.TODO()
-	}
-	fallbackSignal := process.NewAbortSignal(err)
-	for i, ok := range delivered {
-		if ok {
-			continue
-		}
-		if process.SendPipelineSignalWithContext(ctx, localRegs[i], fallbackSignal) {
-			continue
-		}
-		chLen, chCap := process.WaitRegisterChannelState(localRegs[i])
-		process.WarnPipelineCleanupf(
-			proc,
-			"dispatch_cleanup_send_fallback_abort_signal",
-			"dispatch cleanup timed out sending fallback abort signal after end delivery failure: timeout=%s local_reg_idx=%d channel_len=%d channel_cap=%d err=%v",
-			process.PipelineSignalSendTimeout,
-			i,
-			chLen,
-			chCap,
-			err)
-	}
+	return allEnded
 }
 
 func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err error) {
@@ -277,29 +237,6 @@ func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err 
 			if dispatch.ctr.remoteTerminal != nil {
 				dispatch.ctr.remoteTerminal.Finish(terminalErr)
 			}
-			for _, r := range dispatch.ctr.remoteReceivers {
-				if r == nil || r.Err == nil {
-					process.WarnPipelineCleanupf(
-						proc,
-						"dispatch_cleanup_remote_receiver_nil",
-						"dispatch cleanup skipped remote receiver error notification because receiver is nil: pipeline_failed=%t err=%v",
-						pipelineFailed,
-						terminalErr)
-					continue
-				}
-				select {
-				case r.Err <- terminalErr:
-				default:
-					process.WarnPipelineCleanupf(
-						proc,
-						"dispatch_cleanup_remote_err_channel_full",
-						"dispatch cleanup skipped remote receiver error notification because channel is full: receiver_uuid=%s msg_id=%d pipeline_failed=%t err=%v",
-						r.Uid.String(),
-						r.MsgId,
-						pipelineFailed,
-						terminalErr)
-				}
-			}
 
 			uuids := make([]uuid.UUID, 0, len(dispatch.RemoteRegs))
 			for i := range dispatch.RemoteRegs {
@@ -311,23 +248,21 @@ func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err 
 		}
 	}
 
-	signalCtx, signalCancel := context.WithTimeout(context.TODO(), process.PipelineSignalSendTimeout)
-	defer signalCancel()
-
+	allEnded := publishTerminalSignalsToLocalRegs(proc, dispatch.LocalRegs, terminalSignal)
 	if dispatch.ctr != nil && dispatch.ctr.sp != nil {
 		sp := dispatch.ctr.sp
 
-		// Send typed terminal signals to all local receivers.
-		terminalDelivered := sendTerminalSignalsToLocalRegs(signalCtx, proc, dispatch.LocalRegs, terminalSignal, pipelineFailed, terminalErr)
-
-		if terminalSignal.EventType == process.EventEnd && allTerminalSignalsDelivered(terminalDelivered) {
+		if terminalSignal.EventType == process.EventEnd && allEnded {
 			dispatch.cleanupSpool = sp
 		} else {
 			abortErr := terminalErr
-			if terminalSignal.EventType == process.EventEnd {
-				fallbackErr := process.ResolvePipelineSpoolAbortError(dispatch.LocalRegs...)
-				sendAbortSignalsToFailedLocalRegs(signalCtx, proc, dispatch.LocalRegs, terminalDelivered, fallbackErr)
-				abortErr = fallbackErr
+			if !allEnded {
+				// The common resolver prefers a substantive recorded cause over
+				// synthetic delivery fallout on an earlier receiver.
+				effectiveErr := process.ResolvePipelineSpoolAbortError(dispatch.LocalRegs...)
+				if abortErr == nil || effectiveErr != process.ErrPipelineEndSignalDeliveryFailed {
+					abortErr = effectiveErr
+				}
 			}
 			sp.Abort(abortErr)
 			if dispatch.allocationAccount != nil {
@@ -337,13 +272,6 @@ func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err 
 			}
 		}
 		dispatch.ctr.sp = nil
-	} else {
-		// No spool: send typed terminal signals directly.
-		terminalDelivered := sendTerminalSignalsToLocalRegs(signalCtx, proc, dispatch.LocalRegs, terminalSignal, pipelineFailed, terminalErr)
-		if terminalSignal.EventType == process.EventEnd && !allTerminalSignalsDelivered(terminalDelivered) {
-			fallbackErr := process.ErrPipelineEndSignalDeliveryFailed
-			sendAbortSignalsToFailedLocalRegs(signalCtx, proc, dispatch.LocalRegs, terminalDelivered, fallbackErr)
-		}
 	}
 	dispatch.ctr = nil
 }

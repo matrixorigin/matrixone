@@ -293,6 +293,17 @@ func checkMethodVersion(
 		return moerr.NewNotSupportedNoCtx(
 			"owner-local lock wait snapshot is unavailable in the current protocol version")
 	}
+	if err != nil && req.Method == pb.Method_LockWriterFair {
+		// This method is deliberately capability-bearing. A local rollout gate
+		// below v99 is equivalent to an old remote owner: reject before admission
+		// so remoteLockTable can retry the logical request as Exclusive.
+		return moerr.NewNotSupportedNoCtx(
+			"writer-fair lock admission is unavailable in the current protocol version")
+	}
+	if err != nil && (req.Method == pb.Method_BeginDrain || req.Method == pb.Method_QueryDrain) {
+		return moerr.NewNotSupportedNoCtx(
+			"instance-bound lock-service drain is unavailable in the current protocol version")
+	}
 	return err
 }
 
@@ -319,6 +330,17 @@ func (c *client) lookupLockServiceAddress(
 		},
 	)
 	return address, err
+}
+
+// activeTxnOwnerPresent consults the local raw membership view, without an RPC,
+// a discovery refresh, or a connection reset. Absence is only a reason to defer
+// probing: it is not an authoritative negative GetActiveTxn response.
+func (c *client) activeTxnOwnerPresent(ctx context.Context, serviceID string) (bool, error) {
+	address, err := c.lookupLockServiceAddress(ctx, getUUIDFromServiceIdentifier(serviceID))
+	if err == nil && address == "" {
+		v2.TxnLockActiveTxnRecoveryCounter.WithLabelValues("owner-absent").Inc()
+	}
+	return address != "", err
 }
 
 func (c *client) asyncSend(
@@ -349,6 +371,7 @@ func (c *client) asyncSend(
 			sid = getUUIDFromServiceIdentifier(request.Lock.Options.ForwardTo)
 			address, lookupErr = c.lookupLockServiceAddress(ctx, sid)
 		case pb.Method_Lock,
+			pb.Method_LockWriterFair,
 			pb.Method_Unlock,
 			pb.Method_BatchUnlock,
 			pb.Method_GetTxnLock,
@@ -1314,24 +1337,26 @@ func writeResponseWithDeadline(
 		if extraFields != nil {
 			extra = extraFields()
 		}
-		fields := []zap.Field{
+		fields := make([]zap.Field, 0, 5+len(extra))
+		fields = append(fields,
 			zap.Error(err),
 			zap.Uint64("request-id", requestID),
 			zap.String("method", method),
 			zap.String("remote", remote),
 			zap.String("response", detail),
-		}
+		)
 		fields = append(fields, extra...)
 		logger.Error("write response failed", fields...)
 		// A dropped response leaves the peer's Future waiting unless the
 		// session is closed and the client-side backend fails pending futures.
 		if closeErr := cs.Close(); closeErr != nil {
-			closeFields := []zap.Field{
+			closeFields := make([]zap.Field, 0, 4+len(extra))
+			closeFields = append(closeFields,
 				zap.Error(closeErr),
 				zap.Uint64("request-id", requestID),
 				zap.String("method", method),
 				zap.String("remote", remote),
-			}
+			)
 			closeFields = append(closeFields, extra...)
 			logger.Error("close client session after write response failed", closeFields...)
 		}

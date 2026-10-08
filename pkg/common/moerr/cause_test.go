@@ -45,7 +45,6 @@ var causeArray = []error{
 	CauseSaveProfile,
 	CauseHeartbeat,
 	CauseCanClaimDaemonTask,
-	CauseMergeObject,
 	CauseRSSCacheEvict,
 
 	CauseDeadlineContextCodec,
@@ -78,6 +77,12 @@ var causeArray = []error{
 	CauseIcebergCredential,
 	CauseIcebergResidency,
 	CauseIcebergInternal,
+
+	CauseISCPIterationTimeout,
+	CauseISCPFlushJobStatusTimeout,
+	CauseISCPFlushPermanentErrorMessageTimeout,
+	CauseISCPTransactionFinishTimeout,
+	CauseISCPGetTaskRunnerTimeout,
 
 	CauseWorkspaceRSSCacheEvict,
 
@@ -216,21 +221,6 @@ var causeArray = []error{
 
 	CauseSaveLog,
 	CauseNewCatalogHandler,
-
-	CauseWatch,
-	CauseUpdateState,
-	CauseAddTableFilter,
-	CauseClearTableFilters,
-	CauseRefreshTableFilters,
-	CauseWriteToMO,
-	CauseWriteToS3,
-	CauseAddStatementFilter,
-	CauseClearStatementFilters,
-	CauseRefreshStatementFilters,
-	CauseAddTxnFilter,
-	CauseClearTxnFilters,
-	CauseRefreshTxnFilters,
-	CauseDoAddTxnError,
 
 	CauseAddressFunc,
 

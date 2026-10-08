@@ -21,6 +21,7 @@ import json
 import re
 import sys
 from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -132,6 +133,109 @@ def summarize_records(
 
 def summarize(report_path: Path) -> Dict[Tuple[str, str], List[float]]:
     return summarize_records(setup_records(report_path))
+
+
+def admission_holders(report_path: Path) -> List[str]:
+    """Explain holder time separately from overlapping admission waits.
+
+    Package termination bounds an OS-owned lease but does not prove service
+    cleanup. Concurrent invocations of the same package cannot be associated
+    with terminal events without a PID, so leave those generations unresolved.
+    Keep only lifecycle metadata, not the potentially large test output.
+    """
+    leases = []
+    active = {}
+    invocations = defaultdict(int)
+    current_invocations = {}
+    live = defaultdict(int)
+    ambiguous = set()
+    terminals = {}
+    invocation_pids = defaultdict(set)
+    with report_path.open(encoding="utf-8") as report:
+        for line in report:
+            try:
+                event = json.loads(line)
+                if not isinstance(event, dict):
+                    continue
+                package = event.get("Package")
+                if not isinstance(package, str) or not package:
+                    continue
+                stamp = datetime.fromisoformat(event["Time"].replace("Z", "+00:00"))
+                if stamp.tzinfo is None:
+                    continue
+                timestamp = stamp.timestamp()
+            except (ValueError, KeyError, TypeError, AttributeError):
+                continue
+            action = event.get("Action")
+            if action == "start":
+                if live[package]:
+                    ambiguous.add(package)
+                invocations[package] += 1
+                live[package] += 1
+                current_invocations[package] = invocations[package]
+            invocation = (package, current_invocations.get(package, 0))
+            if action in ("pass", "fail", "skip") and not event.get("Test"):
+                terminals[invocation] = timestamp
+                live[package] = max(0, live[package] - 1)
+                # A later startless capture must not inherit this process's
+                # start event or overwrite its terminal bound.
+                current_invocations.pop(package, None)
+            output = event.get("Output", "")
+            if not isinstance(output, str):
+                continue
+            for output_line in output.splitlines():
+                marker = output_line.find("MO_UT_SETUP ")
+                if marker < 0:
+                    continue
+                fields = dict(FIELD_RE.findall(output_line[marker + 12 :]))
+                if fields.get("fixture") != "embedded-cluster":
+                    continue
+                pid, cluster = fields.get("pid"), fields.get("cluster_id")
+                if not pid or not cluster:
+                    continue
+                invocation_pids[invocation].add(pid)
+                key = (invocation, pid, cluster)
+                if fields.get("phase") == "admission-acquire" and fields.get("status") == "ready":
+                    lease = {
+                        "invocation": invocation, "pid": pid, "cluster": cluster,
+                        "start": timestamp, "end": None, "evidence": "open-at-capture",
+                        "test": event.get("Test", "?"),
+                    }
+                    leases.append(lease)
+                    active[key] = lease
+                elif fields.get("admission_released") == "true" and key in active:
+                    lease = active.pop(key)
+                    if timestamp >= lease["start"]:
+                        lease.update(end=timestamp, evidence="explicit")
+    for lease in leases:
+        invocation = lease["invocation"]
+        terminal = terminals.get(invocation)
+        if (lease["end"] is None and invocation[1] > 0 and invocation[0] not in ambiguous
+                and len(invocation_pids[invocation]) == 1
+                and terminal is not None and terminal >= lease["start"]):
+            lease.update(end=terminal, evidence="process-exit-inferred")
+    if not leases:
+        return []
+    counts = defaultdict(int)
+    for lease in leases:
+        counts[lease["evidence"]] += 1
+    lines = [
+        "[ut_setup] admission generations: "
+        f"explicit={counts['explicit']} process-exit-inferred={counts['process-exit-inferred']} "
+        f"unresolved={counts['open-at-capture']}; "
+        "process exit is an upper bound, not clean service shutdown; "
+        "wait totals overlap holder work and are not potential wall-time savings"
+    ]
+    bounded = [lease for lease in leases if lease["end"] is not None]
+    bounded.sort(key=lambda lease: lease["end"] - lease["start"], reverse=True)
+    for lease in bounded[:5]:
+        lines.append(
+            "[ut_setup] admission holder "
+            f"duration={format_duration(lease['end'] - lease['start'])} "
+            f"evidence={lease['evidence']} package={lease['invocation'][0]} "
+            f"acquire_test={lease['test']} pid={lease['pid']} cluster={lease['cluster']}"
+        )
+    return lines
 
 
 def summarize_embedded_diagnostics(
@@ -292,6 +396,8 @@ def main(argv: List[str]) -> int:
     diagnosis = summarize_embedded_diagnostics(records)
     if diagnosis is not None:
         print(diagnosis)
+    for line in admission_holders(report_path):
+        print(line)
     return 0
 
 

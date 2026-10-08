@@ -187,6 +187,9 @@ func ParseOneWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode s
 		return nil, err
 	}
 	if len(lexer.stmts) != 1 {
+		for _, s := range lexer.stmts {
+			s.Free()
+		}
 		return nil, moerr.NewParseError(ctx, "syntax error, or too many sql to parse")
 	}
 	return lexer.stmts[0], nil
@@ -260,6 +263,49 @@ func (l *Lexer) HasSQLMode(flag SQLModeFlag) bool {
 	return l.sqlMode.Has(flag)
 }
 
+func (l *Lexer) isSQLModeReservedFunctionName(name string) bool {
+	if !isSQLModeSensitiveFunctionName(name) {
+		return false
+	}
+	// MySQL permits a reserved function name as a component after the
+	// qualification dot, for example `src.count`. The identifier reduction is
+	// shared by unqualified names and qualified-name components, so preserve
+	// that distinction before applying the function-name rule.
+	if l.previousToken == int('.') {
+		return false
+	}
+	if l.HasSQLMode(SQLModeIgnoreSpace) {
+		return true
+	}
+
+	// Without IGNORE_SPACE, a sensitive function token is still reserved when
+	// it is followed immediately by `(`. The lexer turns the whitespace form
+	// into ID, but leaves the no-whitespace form as the keyword token. During
+	// ident reduction the scanner may still point at `(`; the token-state
+	// fallback covers the case where that lookahead has already been fetched.
+	keywordID, ok := keywords[strings.ToLower(name)]
+	if !ok {
+		return false
+	}
+	if l.scanner.Pos < len(l.scanner.buf) && l.scanner.buf[l.scanner.Pos] == '(' {
+		return true
+	}
+	return l.lastToken == int('(') && l.previousToken == keywordID
+}
+
+func rejectSQLModeReservedFunctionName(yylex yyLexer, name string) bool {
+	lexer := yylex.(*Lexer)
+	if !lexer.isSQLModeReservedFunctionName(name) {
+		return false
+	}
+	message := fmt.Sprintf("function name '%s' is reserved", name)
+	if lexer.HasSQLMode(SQLModeIgnoreSpace) {
+		message += " in IGNORE_SPACE mode"
+	}
+	lexer.Error(message)
+	return true
+}
+
 func (l *Lexer) GetParamIndex() int {
 	l.paramIndex = l.paramIndex + 1
 	return l.paramIndex
@@ -272,6 +318,11 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	typ, str := l.scanner.Scan()
 	lval.pos = l.scanner.Pos
 	l.scanner.LastToken = str
+	// yacc precedence is static, so HIGH_NOT_PRECEDENCE uses a distinct token
+	// that the grammar places at the unary-operator precedence.
+	if typ == NOT && l.HasSQLMode(SQLModeHighNotPrecedence) {
+		typ = HIGH_NOT
+	}
 	if typ == OFFSET && l.syntaxLastToken == int(')') && l.lastClosedTableParen && l.scanner.offsetAliasColumnListAhead() {
 		// OFFSET is non-reserved. In a table-factor context, the established
 		// `(...) offset (c1, c2)` syntax is an implicit alias plus column list,

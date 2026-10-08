@@ -43,6 +43,10 @@ service-addresses = ["logservice:32001"]
 #disableTrace = true
 #disableMetric = true
 
+# Fresh BVT cluster opt-in; all CN/TN images must support AUTO_ID_CACHE.
+[cn.auto-increment]
+enable-auto-id-cache = true
+
 [cn]
 uuid = "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf"
 port-base = 18200

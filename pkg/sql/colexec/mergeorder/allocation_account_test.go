@@ -15,10 +15,10 @@
 package mergeorder
 
 import (
-	"errors"
 	"io"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -282,15 +282,49 @@ func TestAccountedMergeOrderPhysicalPressureSpillsBelowPolicyHint(t *testing.T) 
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestAccountedMergeOrderDynamicShareSpillsBelowPolicyHint(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	op := newAccountedMergeOrder()
+	op.SpillThreshold = 1 << 30
+	state := installMergeOrderTestAllocation(t, op, proc, 64<<20)
+	first := newValuesBatch(proc, make([]int8, 4096))
+	second := newValuesBatch(proc, make([]int8, 4096))
+	op.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{first, second}))
+	require.NoError(t, op.Prepare(proc))
+	require.NotNil(t, op.ctr.growthParticipant)
+	require.True(t, op.ctr.growthParticipant.Release())
+
+	batchBytes := uint64(first.Size())
+	budget := process.MustNewExecutionResourceBudget(
+		batchBytes+batchBytes/2,
+		batchBytes+batchBytes/2,
+	)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	op.ctr.growthParticipant, err = generation.RegisterMemoryGrowthParticipant()
+	require.NoError(t, err)
+
+	require.Len(t, collectInt8Results(t, op, proc, 0), 8192)
+	require.Positive(t, op.OpAnalyzer.GetOpStats().SpillSize)
+	require.Nil(t, op.ctr.growthParticipant)
+	require.Zero(t, generation.Snapshot().MemoryGrowthParticipants)
+
+	op.Children[0].Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	finalizeMergeOrderTestAllocation(t, op, state)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 func TestAccountedMergeOrderSpillResourceAdmissionCleans(t *testing.T) {
 	tests := []struct {
-		name      string
-		component process.ExecutionResourceComponent
-		reserve   func(*process.ExecutionResourceGeneration) (func(), error)
+		name    string
+		message string
+		reserve func(*process.ExecutionResourceGeneration) (func(), error)
 	}{
 		{
-			name:      "disk",
-			component: process.ExecutionResourceComponentSpillDisk,
+			name:    "disk",
+			message: "merge order spill disk budget exceeded",
 			reserve: func(generation *process.ExecutionResourceGeneration) (func(), error) {
 				token, err := generation.ReserveSpillDisk(generation.SpillDiskCap())
 				return func() {
@@ -301,8 +335,8 @@ func TestAccountedMergeOrderSpillResourceAdmissionCleans(t *testing.T) {
 			},
 		},
 		{
-			name:      "file-descriptor",
-			component: process.ExecutionResourceComponentSpillFD,
+			name:    "file-descriptor",
+			message: "merge order spill file descriptor budget exceeded",
 			reserve: func(generation *process.ExecutionResourceGeneration) (func(), error) {
 				token, err := generation.ReserveSpillFD(generation.SpillFDCap())
 				return func() {
@@ -326,22 +360,21 @@ func TestAccountedMergeOrderSpillResourceAdmissionCleans(t *testing.T) {
 					releaseBlocker()
 				}
 			}()
+			op.SpillThreshold = 1
+			child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{
+				newValuesBatch(proc, []int8{1, 2, 3}),
+			})
+			op.AppendChild(child)
 			require.NoError(t, op.Prepare(proc))
 
-			bat := newValuesBatch(proc, []int8{1, 2, 3})
-			_, err = op.ctr.spillBatchToNewRun(
-				proc,
-				bat,
-				nil,
-				process.NewAnalyzer(0, false, false, "mergeorder-admission"),
-			)
-			bat.Clean(proc.Mp())
-			var resourceErr *process.ExecutionResourceError
-			require.True(t, errors.As(err, &resourceErr))
-			require.Equal(t, tc.component, resourceErr.Component)
+			_, err = vm.Exec(op, proc)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrOOM), err)
+			require.Contains(t, err.Error(), tc.message)
+			require.NotContains(t, err.Error(), process.ErrExecutionResourceAdmission.Error())
 
 			releaseBlocker()
 			released = true
+			child.Free(proc, true, err)
 			op.Free(proc, true, err)
 			require.Zero(t, state.generation.SpillDiskUsed())
 			require.Zero(t, state.generation.SpillFDUsed())

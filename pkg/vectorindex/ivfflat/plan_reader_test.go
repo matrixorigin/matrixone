@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -103,10 +104,7 @@ func TestGetVersionUsesTypedRelationScan(t *testing.T) {
 	require.Len(t, scanner.requests, 1)
 }
 
-func TestRelationScanPolicyAssignsInMemoryRowsOnlyToPartitionZero(t *testing.T) {
-	require.True(t, ownsInMemoryPartition(1, 0))
-	require.True(t, ownsInMemoryPartition(2, 0))
-	require.False(t, ownsInMemoryPartition(2, 1))
+func TestRelationScanPolicyAssignsInMemoryRowsOnlyToCoordinator(t *testing.T) {
 	require.Equal(t, engine.DataCollectPolicy(engine.Policy_CollectAllData), relationScanPolicy(1, false))
 	require.Equal(t, engine.DataCollectPolicy(engine.Policy_CollectAllData), relationScanPolicy(2, true))
 	require.Equal(t, engine.DataCollectPolicy(engine.Policy_CollectCommittedPersistedData), relationScanPolicy(2, false))
@@ -127,6 +125,7 @@ func TestScanEntriesUsesTypedFilterAndPhysicalTop(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mp)
 	scanner := &scriptedRelationScanner{t: t}
 	scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
+		require.Zero(t, req.ReadPolicy)
 		require.Equal(t, "entries1", req.Table)
 		require.NotNil(t, req.Filter)
 		require.NotNil(t, req.IndexParam)
@@ -442,85 +441,143 @@ func TestStorageTopKEligibilityMatchesVectorTopNDirection(t *testing.T) {
 }
 
 func TestScanEntriesPushesDistanceRangeToStorageTopK(t *testing.T) {
-	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
-	scanner := &scriptedRelationScanner{t: t}
-	scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
-		require.False(t, req.PostFilterTopOnly)
-		require.Equal(t, metric.DistFn_L2Distance, req.IndexParam.OrigFuncName)
-		require.NotNil(t, req.IndexParam.DistRange)
-		require.Equal(t, float64(2), req.IndexParam.DistRange.UpperBound.GetLit().GetDval())
-		require.Equal(t, []byte{1}, req.FilterHint.MembershipFilterBytes)
-
-		bat := batch.NewWithSize(len(req.Columns) + 1)
-		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-		bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
-		bat.Vecs[3] = vector.NewVec(types.New(types.T_array_float32, 1, 0))
-		bat.Vecs[4] = vector.NewVec(types.T_varchar.ToType())
-		bat.Vecs[5] = vector.NewVec(types.T_float64.ToType())
-		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, mp))
-		require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(2), false, mp))
-		require.NoError(t, vector.AppendFixed(bat.Vecs[2], int64(7), false, mp))
-		require.NoError(t, vector.AppendArray(bat.Vecs[3], []float32{2}, false, mp))
-		require.NoError(t, vector.AppendBytes(bat.Vecs[4], []byte("cpkey"), false, mp))
-		require.NoError(t, vector.AppendFixed(bat.Vecs[5], float64(4), false, mp))
-		bat.SetRowCount(1)
-		return executor.Result{Batches: []*batch.Batch{bat}, Mp: mp}
+	for _, tc := range []struct {
+		name          string
+		upper         float64
+		wantIDs       []int64
+		wantDistances []float64
+		malformed     bool
+	}{
+		{name: "all", upper: 3, wantIDs: []int64{7, 8}, wantDistances: []float64{1, 6.25}},
+		{name: "none", upper: 0},
+		{name: "partial", upper: 2.49999999, wantIDs: []int64{7}, wantDistances: []float64{1}},
+		{name: "empty_scalar", upper: 3, malformed: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			proc := testutil.NewProcessWithMPool(t, "", mp)
+			scanner := &scriptedRelationScanner{t: t}
+			scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
+				require.False(t, req.PostFilterTopOnly)
+				require.Equal(t, metric.DistFn_L2Distance, req.IndexParam.OrigFuncName)
+				require.Equal(t, tc.upper, req.IndexParam.DistRange.UpperBound.GetLit().GetDval())
+				require.Equal(t, []byte{1}, req.FilterHint.MembershipFilterBytes)
+				bat := batch.NewWithSize(len(req.Columns) + 1)
+				for pos := 0; pos < 3; pos++ {
+					bat.Vecs[pos] = vector.NewVec(types.T_int64.ToType())
+				}
+				bat.Vecs[3] = vector.NewVec(types.New(types.T_array_float32, 1, 0))
+				bat.Vecs[4] = vector.NewVec(types.T_varchar.ToType())
+				bat.Vecs[5] = vector.NewVec(types.T_varchar.ToType())
+				bat.Vecs[6] = vector.NewVec(types.T_float64.ToType())
+				for row, distance := range []float64{1, 6.25} {
+					require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, mp))
+					require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(2), false, mp))
+					if !tc.malformed {
+						require.NoError(t, vector.AppendFixed(bat.Vecs[2], int64(7+row), false, mp))
+					}
+					require.NoError(t, vector.AppendBytes(bat.Vecs[4], []byte(fmt.Sprintf("payload-%d", row)), row == 0, mp))
+					require.NoError(t, vector.AppendBytes(bat.Vecs[5], []byte("cpkey"), false, mp))
+					require.NoError(t, vector.AppendFixed(bat.Vecs[6], distance, false, mp))
+				}
+				bat.SetRowCount(2)
+				return executor.Result{Batches: []*batch.Batch{bat}, Mp: mp}
+			}
+			sqlproc := sqlexec.NewSqlProcess(proc)
+			sqlproc.RelationScanner = scanner
+			sqlproc.IvfHasMembershipFilter = true
+			sqlproc.IvfMembershipFilter = []byte{1}
+			sqlproc.IndexReaderParam = &plan.IndexReaderParam{DistRange: &plan.DistRange{
+				LowerBoundType: plan.BoundType_UNBOUNDED, UpperBoundType: plan.BoundType_INCLUSIVE,
+				UpperBound: ivfFloat64Expr(tc.upper),
+			}}
+			idxcfg := vectorindex.IndexConfig{}
+			idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2sqDistance)
+			idxcfg.Ivfflat.VectorType = int32(types.T_array_float32)
+			res, err := (&IvfflatSearchIndex[float32]{QuantMul: 1}).scanEntries(sqlproc, idxcfg, vectorindex.IndexTableConfig{
+				DbName: "db", EntriesTable: "entries", PKeyType: int32(types.T_int64), OrigFuncName: metric.DistFn_L2Distance, IncludeColumns: []string{"payload"},
+			}, []float32{0}, 1, []int64{2}, []string{"payload"}, nil, 2)
+			if tc.malformed {
+				require.ErrorContains(t, err, "storage Top-K column 2 has 0 rows, expected 2")
+				return
+			}
+			require.NoError(t, err)
+			defer res.Close()
+			var ids []int64
+			var distances []float64
+			for _, bat := range res.Batches {
+				require.Equal(t, len(tc.wantIDs), bat.RowCount())
+				ids = append(ids, vector.MustFixedColWithTypeCheck[int64](bat.Vecs[0])...)
+				distances = append(distances, vector.MustFixedColWithTypeCheck[float64](bat.Vecs[1])...)
+				for row, id := range vector.MustFixedColWithTypeCheck[int64](bat.Vecs[0]) {
+					require.Equal(t, id == 7, bat.Vecs[2].IsNull(uint64(row)))
+					if id == 8 {
+						require.Equal(t, "payload-1", bat.Vecs[2].GetStringAt(row))
+					}
+				}
+			}
+			require.Equal(t, tc.wantIDs, ids)
+			require.Equal(t, tc.wantDistances, distances)
+		})
 	}
-
-	sqlproc := sqlexec.NewSqlProcess(proc)
-	sqlproc.RelationScanner = scanner
-	sqlproc.IvfHasMembershipFilter = true
-	sqlproc.IvfMembershipFilter = []byte{1}
-	sqlproc.IndexReaderParam = &plan.IndexReaderParam{DistRange: &plan.DistRange{
-		LowerBoundType: plan.BoundType_UNBOUNDED,
-		UpperBoundType: plan.BoundType_INCLUSIVE,
-		UpperBound:     ivfFloat64Expr(2),
-	}}
-	idxcfg := vectorindex.IndexConfig{}
-	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2sqDistance)
-	idxcfg.Ivfflat.VectorType = int32(types.T_array_float32)
-	idx := &IvfflatSearchIndex[float32]{QuantMul: 1}
-	res, err := idx.scanEntries(sqlproc, idxcfg, vectorindex.IndexTableConfig{
-		DbName: "db", EntriesTable: "entries", PKeyType: int32(types.T_int64),
-		OrigFuncName: metric.DistFn_L2Distance,
-	}, []float32{0}, 1, []int64{2}, nil, nil, 1)
-	require.NoError(t, err)
-	defer res.Close()
-	require.Len(t, res.Batches, 1)
-	require.Equal(t, []int64{7}, vector.MustFixedColWithTypeCheck[int64](res.Batches[0].Vecs[0]))
-	require.Equal(t, []float64{4}, vector.MustFixedColWithTypeCheck[float64](res.Batches[0].Vecs[1]))
 }
 
 func TestScanEntriesFallsBackForUnsafeDistanceRanges(t *testing.T) {
-	makeRange := func(lower bool, bound float64) *plan.DistRange {
+	makeRange := func(lower, excl bool, bound float64) *plan.DistRange {
 		r := &plan.DistRange{}
+		bt := plan.BoundType_INCLUSIVE
+		if excl {
+			bt = plan.BoundType_EXCLUSIVE
+		}
 		if lower {
-			r.LowerBoundType = plan.BoundType_INCLUSIVE
+			r.LowerBoundType = bt
 			r.LowerBound = ivfFloat64Expr(bound)
 		} else {
-			r.UpperBoundType = plan.BoundType_INCLUSIVE
+			r.UpperBoundType = bt
 			r.UpperBound = ivfFloat64Expr(bound)
 		}
 		return r
 	}
+	// exposedL2 is the entry's distance in the float32 domain the post-filter compares in:
+	// float32(sqrt(rawSquared / QuantMul^2)), QuantMul=255.
+	exposedL2 := func(raw int) float64 { return float64(float32(math.Sqrt(float64(raw) / (255.0 * 255.0)))) }
 
 	for _, test := range []struct {
-		name     string
-		lower    bool
-		raw      int
-		entry    []int8
-		bound    float64
-		wantDist float64
+		name      string
+		lower     bool
+		excl      bool
+		raw       int
+		entry     []int8
+		bound     float64
+		wantDist  float64
+		wantEmpty bool
 	}{
 		{
+			// #29040 blocker: exclusive upper bound one f64 ULP ABOVE the entry's exposed distance.
+			// `exposed < bound` is true, so the row must be KEPT. The previous code rounded the bound
+			// into float32 -- which rounds back DOWN to the exposed distance -- making `exposed < exposed`
+			// false and dropping the row (rowCount 0 instead of 1). Keeping the raw f64 bound fixes it.
+			name: "exclusive upper one ULP above exposed keeps row", entry: []int8{7, 2, 2}, raw: 57, excl: true,
+			bound: math.Nextafter(exposedL2(57), math.Inf(1)), wantDist: 57,
+		},
+		{
+			// upper bound sqrt(57)/255 (raw f64). The entry's exposed distance is
+			// float32(sqrt(57/255^2)) = 0.029607193544507027, just BELOW the bound
+			// 0.029607193863806863, so `<= bound` keeps it -- matching the scalar l2_distance for the
+			// dequantized vector. The post-filter compares the f32 distance against the RAW f64 bound;
+			// it must NOT round the bound (#29040).
 			name: "quantized upper rounding boundary", entry: []int8{7, 2, 2}, raw: 57,
 			bound: math.Sqrt(57.0 / (255.0 * 255.0)), wantDist: 57,
 		},
 		{
+			// lower bound sqrt(11)/255 (raw f64). The entry's exposed distance
+			// float32(sqrt(11/255^2)) = 0.013006371445953846 is just BELOW that bound
+			// (0.01300637172688392), so `>= bound` is FALSE and the row is dropped -- exactly what the
+			// scalar l2_distance predicate does for the dequantized vector. The previous bound-rounding
+			// wrongly rounded the bound down to the entry and kept the row, diverging from the scalar
+			// (#29040).
 			name: "quantized lower rounding boundary", lower: true, entry: []int8{3, 1, 1}, raw: 11,
-			bound: math.Sqrt(11.0 / (255.0 * 255.0)), wantDist: 11,
+			bound: math.Sqrt(11.0 / (255.0 * 255.0)), wantEmpty: true,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -550,7 +607,7 @@ func TestScanEntriesFallsBackForUnsafeDistanceRanges(t *testing.T) {
 			sqlproc := sqlexec.NewSqlProcess(proc)
 			sqlproc.RelationScanner = scanner
 			sqlproc.IndexReaderParam = &plan.IndexReaderParam{
-				DistRange: makeRange(test.lower, test.bound),
+				DistRange: makeRange(test.lower, test.excl, test.bound),
 			}
 			idxcfg := vectorindex.IndexConfig{}
 			idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2sqDistance)
@@ -563,6 +620,11 @@ func TestScanEntriesFallsBackForUnsafeDistanceRanges(t *testing.T) {
 			require.NoError(t, err)
 			defer res.Close()
 			require.Len(t, res.Batches, 1)
+			if test.wantEmpty {
+				require.Zero(t, res.Batches[0].RowCount(),
+					"exposed f32 distance below the raw f64 lower bound must be dropped, matching the scalar predicate")
+				return
+			}
 			require.Equal(t, []int64{int64(test.raw)},
 				vector.MustFixedColWithTypeCheck[int64](res.Batches[0].Vecs[0]))
 			require.Equal(t, []float64{test.wantDist},
@@ -718,6 +780,20 @@ func TestRuntimeMembershipLowersToTypedSourcePkPredicate(t *testing.T) {
 	_, err = ivfRuntimeMembershipExpr(proc.Ctx, []byte("not-a-vector"),
 		ivfColExpr(2, plan.Type{Id: int32(types.T_int32)}))
 	require.Error(t, err)
+
+	bitKeys := vector.NewVec(types.New(types.T_bit, 64, 0))
+	defer bitKeys.Free(mp)
+	require.NoError(t, vector.AppendFixedList(bitKeys, []uint64{uint64(1) << 63, ^uint64(0)}, nil, mp))
+	bitData, err := bitKeys.MarshalBinary()
+	require.NoError(t, err)
+	bitExpr, err := ivfRuntimeMembershipExpr(proc.Ctx, bitData,
+		ivfColExpr(2, plan.Type{Id: int32(types.T_bit)}))
+	require.NoError(t, err)
+	require.Equal(t, function.InFunctionName, bitExpr.GetF().Func.ObjName)
+	require.Equal(t, int32(types.T_bit), bitExpr.GetF().Args[0].Typ.Id)
+	require.Equal(t, int32(types.T_bit), bitExpr.GetF().Args[1].Typ.Id)
+	require.Equal(t, 2, int(bitExpr.GetF().Args[1].GetVec().Len))
+	require.Equal(t, bitData, bitExpr.GetF().Args[1].GetVec().Data)
 }
 
 func TestPlanReaderSortsAndBoundsCandidates(t *testing.T) {
@@ -831,7 +907,7 @@ func TestDistanceRangeFiltersBeforeTopInSourceUnits(t *testing.T) {
 	}
 
 	require.NoError(t, idx.filterEntryDistanceRange(
-		&res, distRange, metric.DistFn_L2Distance, metric.Metric_L2sqDistance))
+		&res, distRange, metric.DistFn_L2Distance, metric.Metric_L2sqDistance, nil))
 	require.NoError(t, compactRelationTop(&res, 2, false))
 
 	require.Equal(t, []int64{2, 3}, vector.MustFixedColWithTypeCheck[int64](res.Batches[0].Vecs[0]))
@@ -954,15 +1030,15 @@ func TestRelationSearchBoundaryBranches(t *testing.T) {
 		return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}
 	}
 	idx := &IvfflatSearchIndex[float32]{QuantMul: 1}
-	require.NoError(t, idx.filterEntryDistanceRange(nil, rangeExclusive, metric.DistFn_L2sqDistance, metric.Metric_L2sqDistance))
+	require.NoError(t, idx.filterEntryDistanceRange(nil, rangeExclusive, metric.DistFn_L2sqDistance, metric.Metric_L2sqDistance, nil))
 	unbounded := &plan.DistRange{LowerBoundType: plan.BoundType_UNBOUNDED, UpperBoundType: plan.BoundType_UNBOUNDED}
 	all := newResult(1, 2)
-	require.NoError(t, idx.filterEntryDistanceRange(&all, unbounded, metric.DistFn_L2sqDistance, metric.Metric_L2sqDistance))
+	require.NoError(t, idx.filterEntryDistanceRange(&all, unbounded, metric.DistFn_L2sqDistance, metric.Metric_L2sqDistance, nil))
 	require.Equal(t, 2, all.Batches[0].RowCount())
 	all.Close()
 	all = newResult(1, 2)
 	noneRange := &plan.DistRange{LowerBoundType: plan.BoundType_INCLUSIVE, LowerBound: floatLiteral(3), UpperBoundType: plan.BoundType_UNBOUNDED}
-	require.NoError(t, idx.filterEntryDistanceRange(&all, noneRange, metric.DistFn_L2sqDistance, metric.Metric_L2sqDistance))
+	require.NoError(t, idx.filterEntryDistanceRange(&all, noneRange, metric.DistFn_L2sqDistance, metric.Metric_L2sqDistance, nil))
 	require.Zero(t, all.Batches[0].RowCount())
 	all.Close()
 
@@ -1183,14 +1259,18 @@ func TestCollectRelationFilterColumnsAcceptsOnlySafeExpressionShapes(t *testing.
 }
 
 type fixedRelationReader struct {
-	emitted bool
-	closed  int
-	rows    [][2]int64
+	checkContext func(context.Context)
+	emitted      bool
+	closed       int
+	rows         [][2]int64
 }
 
 var _ engine.Reader = (*fixedRelationReader)(nil)
 
-func (r *fixedRelationReader) Read(_ context.Context, _ []string, _ *plan.Expr, mp *mpool.MPool, out *batch.Batch) (bool, error) {
+func (r *fixedRelationReader) Read(ctx context.Context, _ []string, _ *plan.Expr, mp *mpool.MPool, out *batch.Batch) (bool, error) {
+	if r.checkContext != nil {
+		r.checkContext(ctx)
+	}
 	if r.emitted {
 		return true, nil
 	}
@@ -1400,7 +1480,10 @@ func (*filteredTopKRelationReader) SetFilterZM(objectio.ZoneMap) {}
 func TestRelationScannerExecutesTypedReaderLifecycle(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
+	proc.Ctx = fileservice.WithFileServicePolicy(proc.Ctx, fileservice.SkipDiskCacheWrites)
+	checkPolicy := func(ctx context.Context) {
+		require.Equal(t, fileservice.Policy(fileservice.SkipDiskCacheWrites|fileservice.SkipFullFilePreloads), fileservice.GetFileServicePolicy(ctx))
+	}
 	eng := mock_frontend.NewMockEngine(ctrl)
 	db := mock_frontend.NewMockDatabase(ctrl)
 	rel := mock_frontend.NewMockRelation(ctrl)
@@ -1414,12 +1497,13 @@ func TestRelationScannerExecutesTypedReaderLifecycle(t *testing.T) {
 		},
 		Name2ColIndex: map[string]int32{"version": 0, "id": 1},
 	}
-	reader := &fixedRelationReader{rows: [][2]int64{{7, 11}, {7, 12}}}
+	reader := &fixedRelationReader{checkContext: checkPolicy, rows: [][2]int64{{7, 11}, {7, 12}}}
 	eng.EXPECT().Database(gomock.Any(), "db", nil).Return(db, nil)
 	db.EXPECT().Relation(gomock.Any(), "entries", proc).Return(rel, nil)
 	rel.EXPECT().GetTableDef(gomock.Any()).Return(tableDef)
 	rel.EXPECT().Ranges(gomock.Any(), gomock.Any()).DoAndReturn(
-		func(_ context.Context, param engine.RangesParam) (engine.RelData, error) {
+		func(ctx context.Context, param engine.RangesParam) (engine.RelData, error) {
+			checkPolicy(ctx)
 			require.Equal(t, engine.DataCollectPolicy(engine.Policy_CollectCommittedPersistedData), param.Policy)
 			require.Equal(t, int32(2), param.Rsp.CNCNT)
 			require.Equal(t, int32(1), param.Rsp.CNIDX)
@@ -1437,9 +1521,10 @@ func TestRelationScannerExecutesTypedReaderLifecycle(t *testing.T) {
 		ownsInMemory:   false,
 	}
 	res, err := scanner.ScanRelation(sqlexec.RelationScanRequest{
-		Schema:  "db",
-		Table:   "entries",
-		Columns: []string{"version", "id"},
+		ReadPolicy: fileservice.SkipFullFilePreloads,
+		Schema:     "db",
+		Table:      "entries",
+		Columns:    []string{"version", "id"},
 	})
 	require.NoError(t, err)
 	defer res.Close()
@@ -1447,12 +1532,12 @@ func TestRelationScannerExecutesTypedReaderLifecycle(t *testing.T) {
 	require.Equal(t, []int64{7, 7}, vector.MustFixedColWithTypeCheck[int64](res.Batches[0].Vecs[0]))
 	require.Equal(t, []int64{11, 12}, vector.MustFixedColWithTypeCheck[int64](res.Batches[0].Vecs[1]))
 	require.Equal(t, 1, reader.closed)
+	require.Equal(t, fileservice.Policy(fileservice.SkipDiskCacheWrites), fileservice.GetFileServicePolicy(proc.Ctx))
 }
 
 func TestRelationScannerPropagatesStorageFailure(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
 	eng := mock_frontend.NewMockEngine(ctrl)
 	proc.Base.SessionInfo.StorageEngine = eng
 	eng.EXPECT().Database(gomock.Any(), "db", nil).Return(nil, errors.New("database unavailable"))
@@ -1465,7 +1550,6 @@ func TestRelationScannerPropagatesStorageFailure(t *testing.T) {
 func TestRelationScannerUsesSnapshotCloneAndPublisherAccount(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
 	original := mock_frontend.NewMockTxnOperator(ctrl)
 	clone := mock_frontend.NewMockTxnOperator(ctrl)
 	proc.Base.TxnOperator = original
@@ -1511,7 +1595,6 @@ func TestRelationScannerKeepsCurrentTxnForEqualAndAheadSnapshots(t *testing.T) {
 		t.Run(snapshotTS.DebugString(), func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			proc := testutil.NewProc(t)
-			t.Cleanup(proc.Free)
 			original := mock_frontend.NewMockTxnOperator(ctrl)
 			proc.Base.TxnOperator = original
 			original.EXPECT().Txn().Return(txn.TxnMeta{
@@ -1585,7 +1668,6 @@ func TestRelationScannerPropagatesRelationSetupFailures(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			proc := testutil.NewProc(t)
-			t.Cleanup(proc.Free)
 			eng := mock_frontend.NewMockEngine(ctrl)
 			db := mock_frontend.NewMockDatabase(ctrl)
 			rel := mock_frontend.NewMockRelation(ctrl)
@@ -1600,7 +1682,6 @@ func TestRelationScannerPropagatesRelationSetupFailures(t *testing.T) {
 func TestRelationScannerFiltersBeforeApplyingTopLimit(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
 	eng := mock_frontend.NewMockEngine(ctrl)
 	db := mock_frontend.NewMockDatabase(ctrl)
 	rel := mock_frontend.NewMockRelation(ctrl)
@@ -1663,7 +1744,6 @@ func TestRelationScannerFiltersBeforeApplyingTopLimit(t *testing.T) {
 func TestRelationScannerDefersWideVectorUntilAfterIncludeFilter(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
 	eng := mock_frontend.NewMockEngine(ctrl)
 	db := mock_frontend.NewMockDatabase(ctrl)
 	rel := mock_frontend.NewMockRelation(ctrl)
@@ -1733,7 +1813,6 @@ func TestRelationScannerDefersWideVectorUntilAfterIncludeFilter(t *testing.T) {
 func TestRelationScannerUsesFilterBeforeStorageTopKCapability(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
 	eng := mock_frontend.NewMockEngine(ctrl)
 	db := mock_frontend.NewMockDatabase(ctrl)
 	rel := mock_frontend.NewMockRelation(ctrl)
@@ -1794,7 +1873,6 @@ func TestRelationScannerUsesFilterBeforeStorageTopKCapability(t *testing.T) {
 func TestRelationScannerFallsBackWhenReaderCannotDelayVectorLoading(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
 	eng := mock_frontend.NewMockEngine(ctrl)
 	db := mock_frontend.NewMockDatabase(ctrl)
 	rel := mock_frontend.NewMockRelation(ctrl)
@@ -2012,6 +2090,7 @@ func TestSearchPlanReaderUsesBoundedMembershipStorageTopK(t *testing.T) {
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", mp)
 	scanner := &scriptedRelationScanner{t: t}
+	currentFunction := metric.DistFn_L2Distance
 	scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
 		switch req.Table {
 		case "centroids_plan_reader":
@@ -2030,6 +2109,7 @@ func TestSearchPlanReaderUsesBoundedMembershipStorageTopK(t *testing.T) {
 		case "entries_plan_reader":
 			require.NotNil(t, req.IndexParam)
 			require.Equal(t, uint64(12), req.IndexParam.GetLimit().GetLit().GetU64Val())
+			require.Equal(t, currentFunction, req.IndexParam.OrigFuncName)
 			require.False(t, req.PostFilterTopOnly)
 			require.NotNil(t, req.IndexParam.DistRange)
 			require.Equal(t, float64(3), req.IndexParam.DistRange.UpperBound.GetLit().GetDval())
@@ -2107,35 +2187,51 @@ func TestSearchPlanReaderUsesBoundedMembershipStorageTopK(t *testing.T) {
 	membership, err := membershipVec.MarshalBinary()
 	require.NoError(t, err)
 	sqlproc.IvfHasMembershipFilter = true
-	r := &planReader{
-		spec: &plan.VectorIndexScan{
-			InitialProbeCount: 1,
-			DistanceFunction:  metric.DistFn_L2Distance,
-			IncludedColumns:   []string{"payload"},
-			SourceTable:       &plan.ObjectRef{PubInfo: &plan.PubInfo{TenantId: 42}},
-		},
-		req: searchplugin.Request{
-			ResultLimit:         2,
-			CandidateBudget:     12,
-			MembershipFilter:    membership,
-			HasMembershipFilter: true,
-			DistanceRange: &plan.DistRange{
-				LowerBoundType: plan.BoundType_UNBOUNDED,
-				UpperBoundType: plan.BoundType_INCLUSIVE,
-				UpperBound:     ivfFloat64Expr(3),
-			},
-			Identity: searchplugin.ScanIdentity{
-				PartitionCount: 2,
-				PartitionIndex: 1,
-			},
-		},
-	}
 
-	require.NoError(t, searchPlanReader(r, sqlproc, idxcfg, tblcfg, []float32{0, 0}, false))
-	require.Equal(t, []any{int64(1), int64(2), int64(3), int64(4)}, r.keys)
-	require.Equal(t, []float64{0, 1, 2, 3}, r.distances)
-	require.Equal(t, []any{int32(10), int32(20), int32(30), int32(40)}, r.includeData["payload"])
-	require.Len(t, scanner.requests, 2)
+	for _, cachedFunction := range []string{metric.DistFn_L2Distance, metric.DistFn_L2sqDistance} {
+		cache.Cache.Remove(cacheKey)
+		tblcfg.OrigFuncName = cachedFunction
+		for _, requestFunction := range []string{cachedFunction, metric.DistFn_L2Distance, metric.DistFn_L2sqDistance, cachedFunction} {
+			currentFunction = requestFunction
+			r := &planReader{
+				spec: &plan.VectorIndexScan{
+					InitialProbeCount: 1,
+					DistanceFunction:  requestFunction,
+					IncludedColumns:   []string{"payload"},
+					SourceTable:       &plan.ObjectRef{PubInfo: &plan.PubInfo{TenantId: 42}},
+				},
+				req: searchplugin.Request{
+					ResultLimit:         2,
+					CandidateBudget:     12,
+					MembershipFilter:    membership,
+					HasMembershipFilter: true,
+					DistanceRange: &plan.DistRange{
+						LowerBoundType: plan.BoundType_UNBOUNDED,
+						UpperBoundType: plan.BoundType_INCLUSIVE,
+						UpperBound:     ivfFloat64Expr(3),
+					},
+					Identity: searchplugin.ScanIdentity{
+						PartitionCount: 2,
+						PartitionIndex: 1,
+					},
+				},
+			}
+
+			require.NoError(t, searchPlanReader(r, sqlproc, idxcfg, tblcfg, []float32{0, 0}, false))
+
+			if requestFunction == metric.DistFn_L2Distance {
+				require.Equal(t, []any{int64(1), int64(2), int64(3), int64(4)}, r.keys)
+				require.Equal(t, []float64{0, 1, 2, 3}, r.distances)
+				require.Equal(t, []any{int32(10), int32(20), int32(30), int32(40)}, r.includeData["payload"])
+			} else {
+				require.Equal(t, []any{int64(1), int64(2)}, r.keys)
+				require.Equal(t, []float64{0, 1}, r.distances)
+				require.Equal(t, []any{int32(10), int32(20)}, r.includeData["payload"])
+			}
+			require.Equal(t, cachedFunction, tblcfg.OrigFuncName)
+		}
+	}
+	require.Len(t, scanner.requests, 10) // One centroid load and four searches per generation.
 }
 
 func TestPlanReaderInitializesThroughTypedEngineRelations(t *testing.T) {
@@ -2148,13 +2244,27 @@ func TestPlanReadersSharePreparedGeneration(t *testing.T) {
 	}
 }
 
-func testTypedPlanReaders(t *testing.T, parallelism int) {
+func TestDistributedPlanReadersRetainIdentityAndMemoryOwner(t *testing.T) {
+	for _, identity := range []searchplugin.ScanIdentity{
+		{PartitionCount: 2, PartitionIndex: 1, IsRemote: false},
+		{PartitionCount: 2, PartitionIndex: 0, IsRemote: true},
+	} {
+		t.Run(fmt.Sprint(identity.PartitionIndex), func(t *testing.T) { testTypedPlanReaders(t, 1, identity) })
+	}
+}
+
+func testTypedPlanReaders(t *testing.T, parallelism int, identity ...searchplugin.ScanIdentity) {
 	cache.Cache.Once()
 	cache.Cache.Remove("centroids_init:991")
 	t.Cleanup(func() { cache.Cache.Remove("centroids_init:991") })
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
+	// The search caches the loaded index under "<centroid table>:<version>", in a cache that is
+	// process-global. Left behind, the SECOND -count pass is served from it and never opens the
+	// relations this test exists to watch -- metadataReader.closed stays 0 and the assertions
+	// below fail on a run that proved nothing was wrong. Registered before the cache can be
+	// populated so it also runs after a failed assertion.
+	t.Cleanup(func() { cache.Cache.RemovePrefix("centroids_init") })
 	eng := mock_frontend.NewMockEngine(ctrl)
 	db := mock_frontend.NewMockDatabase(ctrl)
 	proc.Base.SessionInfo.StorageEngine = eng
@@ -2168,7 +2278,8 @@ func testTypedPlanReaders(t *testing.T, parallelism int) {
 	}
 
 	metadataDef := &plan.TableDef{
-		Name: "metadata_init",
+		Name:      "metadata_init",
+		TableType: catalog.SystemSI_IVFFLAT_TblType_Metadata,
 		Cols: []*plan.ColDef{
 			{Name: catalog.SystemSI_IVFFLAT_TblCol_Metadata_key, Typ: plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}},
 			{Name: catalog.SystemSI_IVFFLAT_TblCol_Metadata_val, Typ: plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}},
@@ -2179,7 +2290,8 @@ func testTypedPlanReaders(t *testing.T, parallelism int) {
 		},
 	}
 	centroidDef := &plan.TableDef{
-		Name: "centroids_init",
+		Name:      "centroids_init",
+		TableType: catalog.SystemSI_IVFFLAT_TblType_Centroids,
 		Cols: []*plan.ColDef{
 			{Name: catalog.SystemSI_IVFFLAT_TblCol_Centroids_version, Typ: plan.Type{Id: int32(types.T_int64)}},
 			{Name: catalog.SystemSI_IVFFLAT_TblCol_Centroids_id, Typ: plan.Type{Id: int32(types.T_int64)}},
@@ -2192,7 +2304,8 @@ func testTypedPlanReaders(t *testing.T, parallelism int) {
 		},
 	}
 	entriesDef := &plan.TableDef{
-		Name: "entries_init",
+		Name:      "entries_init",
+		TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
 		Cols: []*plan.ColDef{
 			{Name: catalog.SystemSI_IVFFLAT_TblCol_Entries_version, Typ: plan.Type{Id: int32(types.T_int64)}},
 			{Name: catalog.SystemSI_IVFFLAT_TblCol_Entries_id, Typ: plan.Type{Id: int32(types.T_int64)}},
@@ -2298,8 +2411,14 @@ func testTypedPlanReaders(t *testing.T, parallelism int) {
 	ranges := make(chan int32, max(1, parallelism))
 	entriesRel.EXPECT().GetTableDef(gomock.Any()).Return(entriesDef).AnyTimes()
 	entriesRel.EXPECT().Ranges(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, param engine.RangesParam) (engine.RelData, error) {
-		require.Equal(t, int32(max(1, parallelism)), param.Rsp.CNCNT)
-		require.Equal(t, param.Rsp.CNIDX == 0, param.Rsp.IsLocalCN)
+		if len(identity) != 0 {
+			require.Equal(t, identity[0].PartitionCount, param.Rsp.CNCNT)
+			require.Equal(t, identity[0].PartitionIndex, param.Rsp.CNIDX)
+			require.Equal(t, !identity[0].IsRemote, param.Rsp.IsLocalCN)
+		} else {
+			require.Equal(t, int32(max(1, parallelism)), param.Rsp.CNCNT)
+			require.Equal(t, param.Rsp.CNIDX == 0, param.Rsp.IsLocalCN)
+		}
 		ranges <- param.Rsp.CNIDX
 		return nil, nil
 	}).Times(max(1, parallelism))
@@ -2376,6 +2495,9 @@ func testTypedPlanReaders(t *testing.T, parallelism int) {
 			r.req.Identity.Snapshot = &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 10}}
 		}
 		spec.ScanWork = &plan.VectorIndexScanWork{Rows: 2, Blocks: 2, Objects: 2, VectorBytesPerRow: 8}
+		if len(identity) != 0 {
+			r.req.Identity = identity[0]
+		}
 		readers, err = NewPlanReaders(proc, spec, r.req, parallelism)
 		require.NoError(t, err)
 		require.Len(t, readers, parallelism)
@@ -2387,9 +2509,16 @@ func testTypedPlanReaders(t *testing.T, parallelism int) {
 			rr := reader.(*planReader)
 			shards[rr.proc] = i
 			require.Same(t, generation, rr.generation)
-			require.Equal(t, int32(i), rr.scanner.partitionIndex)
-			require.Equal(t, i == 0, rr.scanner.ownsInMemory)
-			require.Equal(t, int32(0), rr.req.Identity.PartitionCount, "local shards do not change logical cache identity")
+			if len(identity) != 0 {
+				require.Equal(t, identity[0].PartitionIndex, rr.scanner.partitionIndex)
+				require.Equal(t, identity[0].PartitionCount, rr.scanner.partitionCount)
+				require.Equal(t, !identity[0].IsRemote, rr.scanner.ownsInMemory)
+				require.Equal(t, identity[0], rr.req.Identity)
+			} else {
+				require.Equal(t, int32(i), rr.scanner.partitionIndex)
+				require.Equal(t, i == 0, rr.scanner.ownsInMemory)
+				require.Equal(t, int32(0), rr.req.Identity.PartitionCount, "local shards do not change logical cache identity")
+			}
 			require.Same(t, &payload[0], &rr.req.MembershipFilter[0])
 			require.Same(t, generation.membership, rr.newSearchProcess().IvfMembershipFilterObject)
 		}
@@ -2432,11 +2561,28 @@ func testTypedPlanReaders(t *testing.T, parallelism int) {
 		require.Equal(t, 1, reader.closed)
 	}
 	if generation != nil {
-		var roundCount int
+		var roundCount, executionCount int
+		var executionSummary vectorindex.IvfExecutionDiagnostic
 		for ds := range diagnostics {
-			roundCount += len(ds)
+			for _, diagnostic := range ds {
+				if _, ok := vectorindex.DecodeIvfSearchRoundDiagnostic(diagnostic); ok {
+					roundCount++
+					continue
+				}
+				if execution, ok := vectorindex.DecodeIvfExecutionDiagnostic(diagnostic); ok {
+					executionCount++
+					executionSummary.Merge(execution)
+				}
+			}
 		}
 		require.Equal(t, 1, roundCount)
+		require.Equal(t, len(readers), executionCount)
+		logicalSearchCount := uint64(1)
+		if len(identity) != 0 && identity[0].PartitionIndex != 0 {
+			logicalSearchCount = 0
+		}
+		require.Equal(t, logicalSearchCount, executionSummary.SearchCount)
+		require.Equal(t, uint64(len(readers)), executionSummary.ReaderCount)
 		first := readers[0].(*planReader)
 		childCtx, sharedCtx := first.proc.Ctx, generation.proc.Ctx
 		require.NoError(t, first.Close())
@@ -2462,7 +2608,6 @@ func TestNewPlanReaderOwnsItsExecutionState(t *testing.T) {
 
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
 	proc.Base.TxnOperator = mock_frontend.NewMockTxnOperator(ctrl)
 	proc.Base.SessionInfo.StorageEngine = mock_frontend.NewMockEngine(ctrl)
 	_, err := NewPlanReader(proc, nil, searchplugin.Request{})
@@ -2483,6 +2628,7 @@ func TestNewPlanReaderOwnsItsExecutionState(t *testing.T) {
 	}, searchplugin.Request{Identity: searchplugin.ScanIdentity{
 		PartitionCount: 2,
 		PartitionIndex: 1,
+		IsRemote:       true,
 	}})
 	require.NoError(t, err)
 	r := reader.(*planReader)
@@ -2524,6 +2670,38 @@ func TestNewPlanReaderOwnsItsExecutionState(t *testing.T) {
 	snapshotPlanReader := snapshotReader.(*planReader)
 	require.Equal(t, uint32(3), *snapshotPlanReader.scanner.accountID)
 	require.Equal(t, int64(8), snapshotPlanReader.scanner.snapshot.TS.PhysicalTime)
+}
+
+func TestNewPlanReaderExecutionRouteOwnsMemory(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProc(t)
+	proc.Base.TxnOperator = mock_frontend.NewMockTxnOperator(ctrl)
+	proc.Base.SessionInfo.StorageEngine = mock_frontend.NewMockEngine(ctrl)
+	for _, tc := range []struct {
+		name         string
+		count, index int32
+		remote, owns bool
+	}{
+		{"local nonzero", 2, 1, false, true},
+		{"remote zero", 2, 0, true, false},
+		{"legacy local", 2, 0, false, true},
+		{"legacy remote", 2, 1, true, false},
+		{"single", 1, 0, false, true},
+		{"replicated", 1, 0, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reader, err := NewPlanReader(proc, &plan.VectorIndexScan{
+				Index: &plan.IndexDef{}, SourceTable: &plan.ObjectRef{},
+			}, searchplugin.Request{Identity: searchplugin.ScanIdentity{
+				PartitionCount: tc.count, PartitionIndex: tc.index, IsRemote: tc.remote,
+			}})
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, reader.Close()) })
+			scanner := reader.(*planReader).scanner
+			require.Equal(t, tc.owns, scanner.ownsInMemory)
+			require.Equal(t, tc.index, scanner.partitionIndex)
+		})
+	}
 }
 
 // Centroid IDs reach ivfCentroidPrefixFilter ranked by distance to the query, not

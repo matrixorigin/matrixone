@@ -52,150 +52,39 @@ func TestAppendValuePreservesBinaryStringProvenance(t *testing.T) {
 }
 
 func makeTestCases(t *testing.T) []fillTestCase {
-	return []fillTestCase{
-		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+	cases := make([]fillTestCase, 0, 5)
+	for _, mode := range []plan.Node_FillType{
+		plan.Node_VALUE, plan.Node_PREV, plan.Node_NONE, plan.Node_NEXT, plan.Node_LINEAR,
+	} {
+		cases = append(cases, fillTestCase{
+			proc: testutil.NewProcess(t),
 			arg: &Fill{
-				FillType: plan.Node_VALUE,
-				FillVal: []*plan.Expr{
-					{
-						Expr: &plan.Expr_Lit{Lit: &plan.Literal{
-							Isnull: false,
-							Value: &plan.Literal_I64Val{
-								I64Val: 1,
-							},
-						}},
-						Typ: plan.Type{
-							Id: int32(types.T_int64),
-						},
-					},
-				},
-				OperatorBase: vm.OperatorBase{
-					OperatorInfo: vm.OperatorInfo{
-						Idx:     0,
-						IsFirst: false,
-						IsLast:  false,
-					},
-				},
+				FillType: mode,
+				FillVal: []*plan.Expr{{
+					Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+						Value: &plan.Literal_I64Val{I64Val: 1},
+					}},
+					Typ: plan.Type{Id: int32(types.T_int64)},
+				}},
 			},
-		},
-		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
-			arg: &Fill{
-				FillType: plan.Node_PREV,
-				FillVal: []*plan.Expr{
-					{
-						Expr: &plan.Expr_Lit{Lit: &plan.Literal{
-							Isnull: false,
-							Value: &plan.Literal_I64Val{
-								I64Val: 1,
-							},
-						}},
-						Typ: plan.Type{
-							Id: int32(types.T_int64),
-						},
-					},
-				},
-				OperatorBase: vm.OperatorBase{
-					OperatorInfo: vm.OperatorInfo{
-						Idx:     0,
-						IsFirst: false,
-						IsLast:  false,
-					},
-				},
-			},
-		},
-		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
-			arg: &Fill{
-				FillType: plan.Node_NONE,
-				FillVal: []*plan.Expr{
-					{
-						Expr: &plan.Expr_Lit{Lit: &plan.Literal{
-							Isnull: false,
-							Value: &plan.Literal_I64Val{
-								I64Val: 1,
-							},
-						}},
-						Typ: plan.Type{
-							Id: int32(types.T_int64),
-						},
-					},
-				},
-				OperatorBase: vm.OperatorBase{
-					OperatorInfo: vm.OperatorInfo{
-						Idx:     0,
-						IsFirst: false,
-						IsLast:  false,
-					},
-				},
-			},
-		},
-
-		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
-			arg: &Fill{
-				FillType: plan.Node_NEXT,
-				FillVal: []*plan.Expr{
-					{
-						Expr: &plan.Expr_Lit{Lit: &plan.Literal{
-							Isnull: false,
-							Value: &plan.Literal_I64Val{
-								I64Val: 1,
-							},
-						}},
-						Typ: plan.Type{
-							Id: int32(types.T_int64),
-						},
-					},
-				},
-				OperatorBase: vm.OperatorBase{
-					OperatorInfo: vm.OperatorInfo{
-						Idx:     0,
-						IsFirst: false,
-						IsLast:  false,
-					},
-				},
-			},
-		},
-		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
-			arg: &Fill{
-				FillType: plan.Node_LINEAR,
-				FillVal: []*plan.Expr{
-					{
-						Expr: &plan.Expr_Lit{Lit: &plan.Literal{
-							Isnull: false,
-							Value: &plan.Literal_I64Val{
-								I64Val: 1,
-							},
-						}},
-						Typ: plan.Type{
-							Id: int32(types.T_int64),
-						},
-					},
-				},
-				OperatorBase: vm.OperatorBase{
-					OperatorInfo: vm.OperatorInfo{
-						Idx:     0,
-						IsFirst: false,
-						IsLast:  false,
-					},
-				},
-			},
-		},
+		})
 	}
+	return cases
 }
 
 func TestString(t *testing.T) {
-	buf := new(bytes.Buffer)
-	for _, tc := range makeTestCases(t) {
-		tc.arg.String(buf)
-	}
+	var buf bytes.Buffer
+	arg := &Fill{}
+	arg.String(&buf)
+	require.Equal(t, "fill: fill", buf.String())
 }
 
 func TestPrepare(t *testing.T) {
 	for _, tc := range makeTestCases(t) {
+		t.Cleanup(func() {
+			tc.arg.Free(tc.proc, false, nil)
+			require.Zero(t, tc.proc.Mp().CurrNB())
+		})
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 	}
@@ -203,21 +92,22 @@ func TestPrepare(t *testing.T) {
 
 func TestFill(t *testing.T) {
 	for _, tc := range makeTestCases(t) {
+		t.Cleanup(func() {
+			tc.arg.Free(tc.proc, false, nil)
+			require.Zero(t, tc.proc.Mp().CurrNB())
+			require.Zero(t, tc.proc.Mp().OnHeapCurrNB())
+		})
 		tc.arg.ctr.bats = make([]*batch.Batch, 10)
-		resetChildren(tc.arg, tc.proc.Mp())
-		err := tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-		_, _ = vm.Exec(tc.arg, tc.proc)
-
-		tc.arg.Reset(tc.proc, false, nil)
-
-		resetChildren(tc.arg, tc.proc.Mp())
-		err = tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-		_, _ = vm.Exec(tc.arg, tc.proc)
-		tc.arg.Free(tc.proc, false, nil)
-		tc.proc.Free()
-		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+		for range 2 {
+			func() {
+				child := resetChildren(tc.arg, tc.proc.Mp())
+				defer child.Free(tc.proc, false, nil)
+				defer tc.arg.Reset(tc.proc, false, nil)
+				require.NoError(t, tc.arg.Prepare(tc.proc))
+				_, err := vm.Exec(tc.arg, tc.proc)
+				require.NoError(t, err)
+			}()
+		}
 	}
 }
 
@@ -565,12 +455,13 @@ func BenchmarkSetLinearInterpolatedValueDecimal256(b *testing.B) {
 	}
 }
 
-func resetChildren(arg *Fill, m *mpool.MPool) {
+func resetChildren(arg *Fill, m *mpool.MPool) *colexec.MockOperator {
 	bat1 := colexec.MakeMockBatchsWithNullVec1(m)
 	bat := colexec.MakeMockBatchsWithNullVec(m)
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat1, bat, bat})
 	arg.Children = nil
 	arg.AppendChild(op)
+	return op
 }
 
 func Test_appendValue(t *testing.T) {
@@ -1527,6 +1418,12 @@ func TestConsumeNextStabilizesSelfAliasedVarlenSources(t *testing.T) {
 
 			const rows = 1001
 			payload := bytes.Repeat([]byte("b"), 256)
+			if typ.Oid == types.T_json {
+				value, err := types.ParseStringToByteJson(`"` + string(payload) + `"`)
+				require.NoError(t, err)
+				payload, err = types.EncodeJson(value)
+				require.NoError(t, err)
+			}
 			vec := vector.NewOffHeapVecWithType(typ)
 			require.NoError(t, vec.PreExtend(rows, proc.Mp()))
 			vec.SetLength(rows)

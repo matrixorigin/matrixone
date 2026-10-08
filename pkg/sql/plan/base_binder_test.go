@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -29,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -82,6 +84,65 @@ func TestStoredProcedureVariablesUseDeclaredDecimalType(t *testing.T) {
 	}
 }
 
+func TestFullTextPatternRequiresStoredProcedureVariable(t *testing.T) {
+	scopes := []map[string]interface{}{{"q": "outer"}, {"q": "engine"}}
+	typeScopes := []map[string]plan.Type{{"q": {Id: int32(types.T_varchar)}}, {"q": {Id: int32(types.T_varchar)}}}
+	ctx := context.WithValue(context.Background(), defines.VarScopeKey{}, &scopes)
+	ctx = context.WithValue(ctx, defines.VarScopeTypeKey{}, &typeScopes)
+	ctx = context.WithValue(ctx, defines.InSp{}, true)
+
+	name := tree.NewUnresolvedColName("q")
+	binder := NewDefaultBinder(ctx, nil, nil, plan.Type{}, nil)
+	bound, err := binder.BindExpr(name, 0, false)
+	require.NoError(t, err)
+	require.True(t, isStoredProcedureFullTextPattern(ctx, name, bound))
+
+	column := &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{}}}
+	require.False(t, isStoredProcedureFullTextPattern(ctx, name, column))
+	require.False(t, isStoredProcedureFullTextPattern(ctx, tree.NewUnresolvedName(tree.NewCStr("t", 1), tree.NewCStr("q", 1)), bound))
+	require.False(t, isStoredProcedureFullTextPattern(context.Background(), name, bound))
+
+	otherScopes := []map[string]interface{}{{"body": "engine"}}
+	noVariable := context.WithValue(ctx, defines.VarScopeKey{}, &otherScopes)
+	require.False(t, isStoredProcedureFullTextPattern(noVariable, name, bound))
+}
+
+func TestIgnoreSpaceGenericFunctionsDoNotUseBuiltins(t *testing.T) {
+	tests := []struct {
+		name    string
+		query   string
+		mode    string
+		wantErr bool
+	}{
+		{name: "spaced now uses stored function path", query: "select now ()", mode: "STRICT_TRANS_TABLES", wantErr: true},
+		{name: "spaced substring uses stored function path", query: "select substring ('abcdef', 2, 3)", mode: "STRICT_TRANS_TABLES", wantErr: true},
+		{name: "spaced date add uses stored function path", query: "select date_add ('2024-01-01', interval 1 day)", mode: "STRICT_TRANS_TABLES", wantErr: true},
+		{name: "spaced trim string uses stored function path", query: "select trim (' x ') as trimmed", mode: "STRICT_TRANS_TABLES", wantErr: true},
+		{name: "spaced trim numeric uses stored function path", query: "select trim (0) as trimmed", mode: "STRICT_TRANS_TABLES", wantErr: true},
+		{name: "spaced group concat uses stored function path", query: "select group_concat (1) as grouped", mode: "STRICT_TRANS_TABLES", wantErr: true},
+		{name: "native now remains builtin", query: "select now()", mode: "STRICT_TRANS_TABLES"},
+		{name: "ignore space makes spaced now builtin", query: "select now ()", mode: "STRICT_TRANS_TABLES,IGNORE_SPACE"},
+		{name: "ignore space makes spaced trim string builtin", query: "select trim (' x ') as trimmed", mode: "STRICT_TRANS_TABLES,IGNORE_SPACE"},
+		{name: "ignore space makes spaced trim numeric builtin", query: "select trim (0) as trimmed", mode: "STRICT_TRANS_TABLES,IGNORE_SPACE"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOneWithSQLMode(context.Background(), dialect.MYSQL, test.query, 1, test.mode)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
+			if test.wantErr {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "function '")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 // TestBindFuncExprImplByPlanExpr_PowAlias tests that "pow" is correctly
 // remapped to "power" (line ~1781 in base_binder.go:
 // case "pow": name = "power").
@@ -112,6 +173,88 @@ func TestBindFuncExprImplByPlanExpr_PowAlias(t *testing.T) {
 		require.NotNil(t, f)
 		require.Equal(t, "power", f.Func.GetObjName())
 	})
+}
+
+func TestBindFuncExprImplByPlanExpr_OctKeepsNumericConsumersNumeric(t *testing.T) {
+	ctx := context.Background()
+	makeOct := func(value int64) *plan.Expr {
+		oct, err := BindFuncExprImplByPlanExpr(ctx, "oct", []*plan.Expr{
+			makePlan2Int64ConstExprWithType(value),
+		})
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_varchar), oct.Typ.Id)
+		return oct
+	}
+
+	result, err := BindFuncExprImplByPlanExpr(ctx, "+", []*plan.Expr{
+		makeOct(8),
+		makeOct(1),
+	})
+	require.NoError(t, err)
+	require.Equal(t, "+", result.GetF().GetFunc().GetObjName())
+	require.Equal(t, int32(types.T_float64), result.Typ.Id)
+	for _, arg := range result.GetF().Args {
+		require.Equal(t, "cast", arg.GetF().GetFunc().GetObjName())
+		require.Equal(t, int32(types.T_float64), arg.Typ.Id)
+	}
+
+	ordinaryText, err := BindFuncExprImplByPlanExpr(ctx, "+", []*plan.Expr{
+		makePlan2StringConstExprWithType("1"),
+		makePlan2StringConstExprWithType("2"),
+	})
+	require.NoError(t, err)
+	require.Equal(t, "concat", ordinaryText.GetF().GetFunc().GetObjName())
+}
+
+func TestOctExactDecimal(t *testing.T) {
+	ctx := context.Background()
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	for _, tc := range []struct{ input, want string }{
+		{"cast('9007199254740991' as decimal(18,0))", "377777777777777777"},
+		{"cast('9007199254740993' as decimal(18,0))", "400000000000000001"},
+		{"cast('9223372036854775807' as decimal(38,0))", "777777777777777777777"},
+		{"cast('9223372036854775808' as decimal(38,0))", "1000000000000000000000"},
+		{"cast('18446744073709551615' as decimal(38,0))", "1777777777777777777777"},
+		{"cast('18446744073709551616' as decimal(38,0))", "1777777777777777777777"},
+		{"cast('-18446744073709551615' as decimal(38,0))", "1"},
+		{"cast('-18446744073709551616' as decimal(38,0))", "0"},
+		{"cast('9007199254740993.9' as decimal(38,1))", "400000000000000001"},
+		{"cast('-1.9' as decimal(18,1))", "1777777777777777777777"},
+		{"cast('0.9' as decimal(18,1))", "0"},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select oct("+tc.input+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			ast := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+			bound, err := NewDefaultBinder(ctx, nil, nil, plan.Type{}, nil).BindExpr(ast, 0, false)
+			require.NoError(t, err)
+			require.Equal(t, int32(types.T_varchar), bound.GetF().Args[0].Typ.Id)
+			folded, err := ConstantFold(batch.EmptyForConstFoldBatch, bound, proc, false, true)
+			require.NoError(t, err)
+			require.NotNil(t, folded.GetLit())
+			require.Equal(t, tc.want, folded.GetLit().GetSval())
+		})
+	}
+}
+
+func TestOctDecimalColumnBinding(t *testing.T) {
+	for _, oid := range []types.T{types.T_decimal64, types.T_decimal128, types.T_decimal256} {
+		for _, notNullable := range []bool{false, true} {
+			input := &plan.Expr{
+				Typ:  plan.Type{Id: int32(oid), Scale: 1, NotNullable: notNullable},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{}},
+			}
+			bound, err := BindFuncExprImplByPlanExpr(context.Background(), "oct", []*plan.Expr{input})
+			require.NoError(t, err)
+			cast := bound.GetF().Args[0]
+			require.Equal(t, int32(types.T_varchar), cast.Typ.Id)
+			require.GreaterOrEqual(t, cast.Typ.Width, int32(78))
+			require.Equal(t, notNullable, cast.Typ.NotNullable)
+			require.Equal(t, input.Typ, cast.GetF().Args[0].Typ)
+		}
+	}
 }
 
 func TestIsPositiveIntegerLiteral(t *testing.T) {
@@ -244,7 +387,7 @@ func TestBindSQLUDFTableReadCorrelatesColumnArgument(t *testing.T) {
 		}
 	}()
 
-	ctx := &sqlUdfMockCompilerContext{MockCompilerContext: NewMockCompilerContext(true)}
+	ctx := &sqlUdfMockCompilerContext{MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t))}
 	built, err := BuildPlan(ctx, stmts[0], false)
 	require.NoError(t, err)
 
@@ -274,7 +417,7 @@ func TestBindSQLUDFArgumentMarkersFollowLexerSemantics(t *testing.T) {
 				}
 			}()
 
-			ctx := &sqlUdfMockCompilerContext{MockCompilerContext: NewMockCompilerContext(true)}
+			ctx := &sqlUdfMockCompilerContext{MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t))}
 			_, err = BuildPlan(ctx, stmts[0], false)
 			require.NoError(t, err)
 		})
@@ -691,15 +834,14 @@ func TestBinaryLiteralComparisonKeepsVarbinaryColumnUncast(t *testing.T) {
 	testCases := []struct {
 		name   string
 		filter string
-		colArg int
 	}{
-		{name: "column on left", filter: "a = binary x'41'", colArg: 0},
-		{name: "column on right", filter: "binary x'41' = a", colArg: 1},
+		{name: "column on left", filter: "a = binary x'41'"},
+		{name: "column on right", filter: "binary x'41' = a"},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			mock.ctxt.tables["bind_select"].Cols[0].Typ = plan.Type{
 				Id:      int32(types.T_varbinary),
 				Width:   8,
@@ -723,14 +865,18 @@ func TestBinaryLiteralComparisonKeepsVarbinaryColumnUncast(t *testing.T) {
 			require.NotNil(t, eq)
 			require.Equal(t, "=", eq.Func.ObjName)
 			require.Len(t, eq.Args, 2)
-			require.NotNil(t, eq.Args[tc.colArg].GetCol(),
+			require.NotNil(t, eq.Args[0].GetCol(),
 				"the indexed VARBINARY column must not be wrapped in a cast")
+			require.Equal(t, int32(types.T_varbinary), eq.Args[0].Typ.Id)
+			require.Equal(t, int32(8), eq.Args[0].Typ.Width)
+			require.Equal(t, uint32(types.CharsetBinary), eq.Args[0].Typ.Charset)
+			require.Equal(t, int32(types.T_varbinary), eq.Args[1].Typ.Id)
 		})
 	}
 }
 
 func TestMinMaxSerialExpressionsKeepBinaryCollation(t *testing.T) {
-	p, err := runOneStmt(NewMockOptimizer(true), t,
+	p, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
 		"select min(serial(a, b)), max(serial(a, b)), "+
 			"min(serial_full(a, b)), max(serial_full(a, b)) "+
 			"from select_test.bind_select")
@@ -755,7 +901,7 @@ func TestMinMaxSerialExpressionsKeepBinaryCollation(t *testing.T) {
 }
 
 func TestMinMaxConcatExpressionsKeepBinaryCollation(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	mock.ctxt.tables["bind_select"].Cols[2].Typ = plan.Type{
 		Id:      int32(types.T_varchar),
 		Width:   10,
@@ -790,7 +936,7 @@ func TestMinMaxConcatExpressionsKeepBinaryCollation(t *testing.T) {
 }
 
 func TestMinMaxCastTextUsesExplicitGeneralCICollation(t *testing.T) {
-	p, err := runOneStmt(NewMockOptimizer(true), t,
+	p, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
 		"select min(cast(c as char)), max(cast(c as varchar(20))), "+
 			"min(cast(c as text)) from select_test.bind_select")
 	require.NoError(t, err)
@@ -815,7 +961,7 @@ func TestMinMaxCastTextUsesExplicitGeneralCICollation(t *testing.T) {
 }
 
 func TestMinMaxDerivedStringExpressionsKeepCollation(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	mock.ctxt.tables["bind_select"].Cols[2].Typ = plan.Type{
 		Id:      int32(types.T_varchar),
 		Width:   10,
@@ -863,7 +1009,7 @@ func TestMinMaxDerivedStringExpressionsKeepCollation(t *testing.T) {
 }
 
 func TestMinMaxConditionalStringExpressionsKeepCollation(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	mock.ctxt.tables["bind_select"].Cols[1].Typ = plan.Type{
 		Id:      int32(types.T_varchar),
 		Width:   80,
@@ -907,7 +1053,7 @@ func TestMinMaxConditionalStringExpressionsKeepCollation(t *testing.T) {
 }
 
 func TestMinMaxParseJSONLStringUsesExplicitGeneralCICollation(t *testing.T) {
-	p, err := runOneStmt(NewMockOptimizer(true), t,
+	p, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
 		"select min(col0), max(col0) from parse_jsonl_data($$[\"a\"]\n[\"B\"]$$, 's') t")
 	require.NoError(t, err)
 
@@ -953,7 +1099,7 @@ func TestMinMaxGeneratedTableFunctionStringsUseExplicitGeneralCICollation(t *tes
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			p, err := runOneStmt(NewMockOptimizer(true), t, test.query)
+			p, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, test.query)
 			require.NoError(t, err)
 
 			var aggregates []*plan.Expr
@@ -976,7 +1122,7 @@ func TestMinMaxGeneratedTableFunctionStringsUseExplicitGeneralCICollation(t *tes
 }
 
 func TestMinOverUnionTreatsPureNullAsCollationNeutral(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	mock.ctxt.tables["bind_select"].Cols[2].Typ = plan.Type{
 		Id:      int32(types.T_varchar),
 		Width:   1,
@@ -1046,7 +1192,7 @@ func TestMinOverUnionTreatsPureNullAsCollationNeutral(t *testing.T) {
 }
 
 func TestMinOverGroupConcatPreservesTextShapedBinaryCollation(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	mock.ctxt.tables["bind_select"].Cols[2].Typ = plan.Type{
 		Id:      int32(types.T_varchar),
 		Width:   10,
@@ -1081,10 +1227,45 @@ func TestMinOverGroupConcatPreservesTextShapedBinaryCollation(t *testing.T) {
 		minCharsets)
 }
 
-func TestConvertUsingRejectsUnsupportedCharset(t *testing.T) {
-	_, err := runOneStmt(NewMockOptimizer(true), t,
-		"select convert(c using latin1) from select_test.bind_select")
-	require.ErrorContains(t, err, "unsupported character set 'latin1' for CONVERT USING")
+func TestConvertUsingCharsetAdmissionMatchesEvaluator(t *testing.T) {
+	for _, charset := range []string{"utf32", "UTF32", "latin1", "ascii", "gbk"} {
+		for _, prefix := range []string{"", "create view select_test.c01_convert_view as "} {
+			sql := prefix + "select convert(c using " + charset + ") as c from select_test.bind_select"
+			t.Run(sql, func(t *testing.T) {
+				stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+				p, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
+				require.ErrorContains(t, err, "for CONVERT USING")
+				if charset == "latin1" {
+					require.ErrorContains(t, err, "unsupported character set 'latin1' for CONVERT USING")
+				} else {
+					require.ErrorContains(t, err, "unsupported character set")
+				}
+				require.Nil(t, p, "unsupported conversion must not publish a SELECT or durable view plan")
+			})
+		}
+	}
+	for _, charset := range []string{"utf8", "utf8mb3", "utf8mb4", "binary"} {
+		for _, prefix := range []string{"", "create view select_test.c01_convert_view as "} {
+			sql := prefix + "select convert(c using " + charset + ") as c from select_test.bind_select"
+			t.Run(sql, func(t *testing.T) {
+				stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+				p, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
+				require.NoError(t, err)
+				require.NotNil(t, p)
+			})
+		}
+	}
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"create table c01_utf32_ddl(c varchar(1)) default charset=utf32", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+	require.NoError(t, err)
+	require.Equal(t, uint32(types.CharsetUTF8), p.GetDdl().GetCreateTable().GetTableDef().DefaultCharset)
 }
 
 func TestBindSerialFunctionOverEmptyExprListDoesNotPanic(t *testing.T) {
@@ -1109,7 +1290,7 @@ func TestBindSerialFunctionOverEmptyExprListDoesNotPanic(t *testing.T) {
 }
 
 func TestBindUnaryMinusUint64MinInt64Boundary(t *testing.T) {
-	builder, bindCtx := genBuilderAndCtx()
+	builder, bindCtx := genBuilderAndCtx(t)
 	whereBinder := NewWhereBinder(builder, bindCtx)
 
 	testCases := []struct {
@@ -1259,7 +1440,7 @@ func TestBindFuncExprImplByPlanExpr_NonConstantTemporalComparisonUsesCommonKeyTy
 }
 
 func TestBuildPlan_DatetimeTimestampComparisonIsZonemappable(t *testing.T) {
-	compilerCtx := NewMockCompilerContext(true)
+	compilerCtx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	compilerCtx.dbs["system"] = true
 	compilerCtx.objects["statement_info"] = &plan.ObjectRef{
 		SchemaName: "system",
@@ -1293,7 +1474,7 @@ func TestBuildPlan_DatetimeTimestampComparisonIsZonemappable(t *testing.T) {
 	require.Len(t, filterArgs, 2)
 	require.NotNil(t, filterArgs[0].GetCol())
 	require.Equal(t, int32(types.T_datetime), filterArgs[0].Typ.Id)
-	require.Equal(t, int32(types.T_timestamp), filterArgs[1].Typ.Id)
+	require.Equal(t, int32(types.T_datetime), filterArgs[1].Typ.Id)
 	require.True(t, ExprIsZonemappable(compilerCtx.GetContext(), scan.FilterList[0]))
 }
 
@@ -1466,7 +1647,7 @@ func TestBindNameConstConstArgs(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			require.NoError(t, bindNameConstSelect(tc.sql))
+			require.NoError(t, bindNameConstSelect(t, tc.sql))
 		})
 	}
 }
@@ -1522,7 +1703,7 @@ func TestBindNameConstInvalidArgs(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			require.Error(t, bindNameConstSelect(tc.sql))
+			require.Error(t, bindNameConstSelect(t, tc.sql))
 		})
 	}
 }
@@ -1569,17 +1750,17 @@ func TestGeneratedColBinderAcceptsNameConstUnaryPlusLiteral(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func bindNameConstSelect(sql string) error {
+func bindNameConstSelect(t testing.TB, sql string) error {
 	stmts, err := parsers.Parse(context.Background(), dialect.MYSQL, sql, 1)
 	if err != nil {
 		return err
 	}
-	_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	_, err = BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 	return err
 }
 
 func TestBindFuncExprImplByAstExpr_IntervalDisambiguation(t *testing.T) {
-	builder, bindCtx := genBuilderAndCtx()
+	builder, bindCtx := genBuilderAndCtx(t)
 	whereBinder := NewWhereBinder(builder, bindCtx)
 
 	t.Run("function style keeps interval builtin", func(t *testing.T) {

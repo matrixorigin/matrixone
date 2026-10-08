@@ -115,10 +115,11 @@ func TestReplaceScoreFnInExprBy(t *testing.T) {
 // matchFn builds a bound fulltext_match: (pattern, mode, index-part columns...), the shape
 // equalsFullTextMatchFunc compares.
 func matchFn(pattern string, mode int64, cols ...string) *plan.Function {
-	args := []*plan.Expr{
+	args := make([]*plan.Expr, 0, 2+len(cols))
+	args = append(args,
 		makePlan2StringConstExprWithType(pattern),
 		makePlan2Int64ConstExprWithType(mode),
-	}
+	)
 	for _, c := range cols {
 		args = append(args, &plan.Expr{
 			Typ:  plan.Type{Id: int32(types.T_varchar)},
@@ -130,6 +131,32 @@ func matchFn(pattern string, mode int64, cols ...string) *plan.Function {
 
 func matchExpr(fn *plan.Function) *plan.Expr {
 	return &plan.Expr{Typ: plan.Type{Id: int32(types.T_float32)}, Expr: &plan.Expr_F{F: fn}}
+}
+
+func TestEqualsFullTextMatchIgnoresBindingProvenance(t *testing.T) {
+	left := matchFn("hello", 0, "title", "body")
+	right := matchFn("hello", 0, "ft.title", "ft.body")
+	for i := 2; i < len(left.Args); i++ {
+		left.Args[i].GetCol().RelPos = 7
+		left.Args[i].GetCol().ColPos = int32(i)
+		right.Args[i].GetCol().RelPos = 7
+		right.Args[i].GetCol().ColPos = int32(i)
+	}
+	right.Args[0].GetLit().DecimalLiteralRequiresV82 = true
+	right.Args[1].GetLit().DecimalLiteralRequiresV82 = true
+
+	require.True(t, (&QueryBuilder{}).equalsFullTextMatchFunc(left, right))
+}
+
+func TestEqualsFullTextMatchDoesNotAliasDifferentBoundColumns(t *testing.T) {
+	left := matchFn("hello", 0, "body")
+	right := matchFn("hello", 0, "a.body")
+	left.Args[2].GetCol().RelPos = 7
+	left.Args[2].GetCol().ColPos = 2
+	right.Args[2].GetCol().RelPos = 7
+	right.Args[2].GetCol().ColPos = 3
+
+	require.False(t, (&QueryBuilder{}).equalsFullTextMatchFunc(left, right))
 }
 
 // ftScanNode is a stand-in for the fulltext TVF node: col 1 is the score.
@@ -480,7 +507,7 @@ func TestGetWrappedFullTextMatches(t *testing.T) {
 
 	// A projection MATCH drives too, and a bare projection position is skipped as already served.
 	proj := &plan.Node{NodeType: plan.Node_PROJECT, ProjectList: []*plan.Expr{
-		bodyMatch(tag, "bare"),                                  // projids says this is served
+		bodyMatch(tag, "bare"), // projids says this is served
 		scoreFn("round", bodyMatch(tag, "wrapped"), scoreLit()), // this one needs a stream
 	}}
 	exprs, _ = builder.getWrappedFullTextMatches(proj, ftScanNodeWithIndex(tag), nil, []int32{0})

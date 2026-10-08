@@ -21,11 +21,16 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type vecViewCtx struct{}
+type vecViewCtx struct{ proc *process.Process }
 
 func (vecViewCtx) GetContext() context.Context { return context.Background() }
+
+// A zero-value context suffices for view validation; schema fixtures inject their process.
+func (c vecViewCtx) GetProcess() *process.Process { return c.proc }
+
 func (vecViewCtx) ResolveVariable(string, bool, bool) (interface{}, error) {
 	return nil, nil
 }

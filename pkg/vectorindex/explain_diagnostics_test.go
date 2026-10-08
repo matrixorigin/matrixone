@@ -63,3 +63,46 @@ func TestIvfSearchRoundDiagnosticSurvivesRemoteJSONTransport(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, want, got)
 }
+
+func TestIvfExecutionDiagnosticRoundTripAndMerge(t *testing.T) {
+	first := IvfExecutionDiagnostic{
+		SearchCount: 1, ReaderCount: 1, MetadataBlocks: 2, MetadataRows: 1,
+		MetadataTimeNS: 3, EntryBlocksSelected: 4, EntryBlocksRead: 3, EntryOutputRows: 5, EntryTimeNS: 6,
+		StorageFilterInputRows: 7, StorageFilterOutputRows: 3,
+		VectorRowsScored: 3, VectorChunksRead: 2, VectorChunkCacheHits: 1,
+		VectorCompressedBytes: 8, VectorDecodedBytes: 16, TopKOutputRows: 2, OutputRows: 2,
+	}
+	second := IvfExecutionDiagnostic{
+		ReaderCount: 1, CentroidBlocks: 1, CentroidRows: 9, CentroidTimeNS: 10,
+		EntryBlocksSelected: 2, EntryBlocksRead: 1, EntryOutputRows: 1, VectorRowsScored: 1, OutputRows: 1,
+	}
+	want := first
+	want.Merge(second)
+
+	payload, err := json.Marshal(EncodeIvfExecutionDiagnostic(want))
+	require.NoError(t, err)
+	var query plan.Query
+	require.NoError(t, json.Unmarshal(payload, &query))
+	got, ok := DecodeIvfExecutionDiagnostic(&query)
+	require.True(t, ok)
+	require.Equal(t, want, got)
+}
+
+func TestIvfExecutionDiagnosticRejectsMalformedCarriers(t *testing.T) {
+	valid := EncodeIvfExecutionDiagnostic(IvfExecutionDiagnostic{SearchCount: 1})
+	invalidNumber := EncodeIvfExecutionDiagnostic(IvfExecutionDiagnostic{SearchCount: 1})
+	invalidNumber.Headings[2] = "not-a-number"
+	for _, query := range []*plan.Query{
+		nil,
+		{},
+		{Headings: []string{ivfExecutionDiagnosticHeading}},
+		{Headings: append([]string(nil), valid.Headings[:21]...)},
+		invalidNumber,
+	} {
+		_, ok := DecodeIvfExecutionDiagnostic(query)
+		require.False(t, ok, "query=%v", query)
+	}
+	got, ok := DecodeIvfExecutionDiagnostic(EncodeIvfExecutionDiagnostic(IvfExecutionDiagnostic{}))
+	require.True(t, ok)
+	require.Equal(t, IvfExecutionDiagnostic{}, got)
+}

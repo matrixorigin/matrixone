@@ -135,7 +135,7 @@ func writeSpillAllocationTestRecords(
 	batches ...*batch.Batch,
 ) *os.File {
 	t.Helper()
-	payload := make([]byte, 0)
+	payload := make([]byte, 0, len(batches))
 	for _, bat := range batches {
 		payload = append(payload, marshalTestSpillRecord(bat)...)
 	}
@@ -857,9 +857,8 @@ func TestSpillAllocationAccountExpressionPressureReducesBeforePublication(t *tes
 
 // BenchmarkSpillScatterAccounting measures the steady streaming closure with
 // the same selected-vector, hash/row-ID, marshal, and coalesce owners used by
-// initial and recursive join spill. /dev/null keeps the benchmark bounded and
-// retains the write syscall without turning repeated measurements into a disk
-// capacity test.
+// initial and recursive join spill. Each iteration removes its named files so
+// repeated measurements cannot accumulate disk usage or queued descriptors.
 func BenchmarkSpillScatterAccounting(b *testing.B) {
 	proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
 	defer proc.Free()
@@ -880,17 +879,8 @@ func BenchmarkSpillScatterAccounting(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
+	defer engine.Cleanup(proc)
 	writers := engine.makeBucketWriters("benchmark-discard")
-	for i := range writers {
-		writers[i].Fd, err = os.OpenFile(os.DevNull, os.O_WRONLY, 0)
-		if err != nil {
-			b.Fatal(err)
-		}
-		writers[i].diskReservation, err = state.generation.ReserveSpillDisk(0)
-		if err != nil {
-			b.Fatal(err)
-		}
-	}
 	defer func() {
 		for i := range writers {
 			writers[i].Close()
@@ -917,9 +907,7 @@ func BenchmarkSpillScatterAccounting(b *testing.B) {
 			b.Fatal(err)
 		}
 		for i := range writers {
-			if _, err = writers[i].diskReservation.ReconcileDown(0); err != nil {
-				b.Fatal(err)
-			}
+			writers[i].Close()
 			writers[i].Rows = 0
 			writers[i].Bytes = 0
 		}

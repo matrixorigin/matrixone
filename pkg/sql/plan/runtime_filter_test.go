@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -22,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	statspb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
@@ -66,10 +68,10 @@ func makeMixedSideRuntimeFilterResidual(typ planpb.Type, leftTag, rightTag int32
 	}
 }
 
-func newRuntimeFilterSingleTestBuilder(rightSingle bool) *QueryBuilder {
+func newRuntimeFilterSingleTestBuilder(t testing.TB, rightSingle bool) *QueryBuilder {
 	pkType := planpb.Type{Id: int32(types.T_int64), NotNullable: true}
 	return &QueryBuilder{
-		compCtx: NewMockCompilerContext(true),
+		compCtx: NewMockCompilerContext(true, newPlanTestProcess(t)),
 		qry: &planpb.Query{Nodes: []*planpb.Node{
 			{
 				NodeType:    planpb.Node_TABLE_SCAN,
@@ -136,9 +138,106 @@ func configureRuntimeFilterCompositePK(builder *QueryBuilder) (*planpb.Node, *pl
 	return probe, build
 }
 
+func TestCompositeLeadingColumnRuntimeFilter(t *testing.T) {
+	// Use a small configured budget to test the boundary without large data or
+	// inventing statistics for an actual table. Restore the shared mock runtime.
+
+	setPlanTestGlobalVariable(t, "", "runtime_filter_limit_in", int64(3))
+
+	tests := []struct {
+		name   string
+		mutate func(*QueryBuilder)
+		want   bool
+	}{
+		{name: "leading component at ordinary-column budget", want: true},
+		{name: "below ordinary-column budget", want: true, mutate: func(b *QueryBuilder) {
+			b.qry.Nodes[2].Stats.HashmapStats.HashmapSize = 2
+		}},
+		{name: "above ordinary-column budget", mutate: func(b *QueryBuilder) {
+			b.qry.Nodes[2].Stats.HashmapStats.HashmapSize = 4
+		}},
+		{name: "right semi retains distributed placement", mutate: func(b *QueryBuilder) {
+			b.qry.Nodes[2].JoinType = planpb.Node_SEMI
+			b.qry.Nodes[2].IsRightJoin = true
+		}},
+		{name: "fallible scan predicate is not truncated", mutate: func(b *QueryBuilder) {
+			b.qry.Nodes[0].FilterList = []*planpb.Expr{
+				makeMixedSideRuntimeFilterResidual(b.qry.Nodes[0].TableDef.Cols[0].Typ, 1, 1),
+			}
+		}},
+		{name: "nonleading component retains cost gate", mutate: func(b *QueryBuilder) {
+			col := b.qry.Nodes[2].OnList[0].GetF().Args[0].GetCol()
+			col.ColPos, col.Name = 1, "b"
+		}},
+		{name: "unselective build retains cost gate", mutate: func(b *QueryBuilder) {
+			b.qry.Nodes[2].Stats.HashmapStats.HashmapSize = 100
+		}},
+		{name: "incompatible equality representation", mutate: func(b *QueryBuilder) {
+			b.qry.Nodes[2].OnList[0].GetF().Args[1].Typ.Id = int32(types.T_uint64)
+		}},
+		{name: "disabled by optimizer hint", mutate: func(b *QueryBuilder) {
+			b.optimizerHints = &OptimizerHints{runtimeFilter: 1}
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			builder := newRuntimeFilterSingleTestBuilder(t, false)
+			probe, _ := configureRuntimeFilterCompositePK(builder)
+			join := builder.qry.Nodes[2]
+			join.JoinType = planpb.Node_INNER
+			join.OnList = join.OnList[:1]
+			join.OnList[0].GetF().Args[0].GetCol().Name = "a"
+			if test.mutate != nil {
+				test.mutate(builder)
+			}
+			builder.generateRuntimeFilters(2)
+			if !test.want {
+				require.Empty(t, join.RuntimeFilterBuildList)
+				require.Empty(t, probe.RuntimeFilterProbeList)
+				return
+			}
+			require.Len(t, join.RuntimeFilterBuildList, 1)
+			require.Len(t, probe.RuntimeFilterProbeList, 1)
+			buildSpec, probeSpec := join.RuntimeFilterBuildList[0], probe.RuntimeFilterProbeList[0]
+			require.Equal(t, buildSpec.Tag, probeSpec.Tag)
+			require.True(t, probeSpec.NotOnPk, "a component must not use full primary-key lookup")
+			require.True(t, buildSpec.NotOnPk)
+			require.False(t, probeSpec.MatchPrefix)
+			require.Equal(t, int32(0), probeSpec.Expr.GetCol().ColPos)
+			require.Equal(t, int32(types.T_int64), probeSpec.Expr.Typ.Id)
+			require.Equal(t, planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_RAW_V1, buildSpec.KeyEncoding)
+			require.Equal(t, int32(3), buildSpec.UpperLimit)
+		})
+	}
+}
+
+func TestCompositeRuntimeFilterResolvesHiddenKeyBeforeAdmission(t *testing.T) {
+	builder := newRuntimeFilterSingleTestBuilder(t, false)
+	probe, build := configureRuntimeFilterCompositePK(builder)
+	builder.compCtx = &statsCacheCompilerContext{
+		MockCompilerContext: builder.compCtx.(*MockCompilerContext),
+		statsCache:          NewStatsCache(),
+	}
+	builder.tag2Table = map[int32]*TableDef{1: probe.TableDef, 2: build.TableDef}
+	join := builder.qry.Nodes[2]
+	join.JoinType = planpb.Node_INNER
+	keyType := probe.TableDef.Cols[2].Typ
+	build.TableDef.Cols[0].Typ = keyType
+	join.OnList = []*planpb.Expr{makeRuntimeFilterTestEq(keyType, 1, 2, 2, 0)}
+	// Resolving NDV also supplies the initially absent column name. This is
+	// the full serialized key, not a component subject to the new admission.
+	probe.FilterList = []*planpb.Expr{makeMixedSideRuntimeFilterResidual(probe.TableDef.Cols[0].Typ, 1, 1)}
+	builder.generateRuntimeFilters(2)
+	require.Equal(t, catalog.CPrimaryKeyColName, join.OnList[0].GetF().Args[0].GetCol().Name)
+	require.Len(t, join.RuntimeFilterBuildList, 1)
+	require.Len(t, probe.RuntimeFilterProbeList, 1)
+	require.False(t, probe.RuntimeFilterProbeList[0].NotOnPk)
+	require.Equal(t, GetInFilterCardLimitOnPK(builder.compCtx.GetProcess().GetService(), probe.Stats.TableCnt), join.RuntimeFilterBuildList[0].UpperLimit)
+}
+
 func TestRightSingleRuntimeFilterSemanticAndDeliveryContract(t *testing.T) {
 	t.Run("right single filters only the discardable probe and is colocated", func(t *testing.T) {
-		builder := newRuntimeFilterSingleTestBuilder(true)
+		builder := newRuntimeFilterSingleTestBuilder(t, true)
 		probeStatsBefore := DeepCopyStats(builder.qry.Nodes[0].Stats)
 
 		builder.generateRuntimeFilters(2)
@@ -159,7 +258,7 @@ func TestRightSingleRuntimeFilterSemanticAndDeliveryContract(t *testing.T) {
 	})
 
 	t.Run("left single preserves unmatched probe rows", func(t *testing.T) {
-		builder := newRuntimeFilterSingleTestBuilder(false)
+		builder := newRuntimeFilterSingleTestBuilder(t, false)
 		builder.generateRuntimeFilters(2)
 		builder.forceJoinOnOneCN(2, false)
 
@@ -169,7 +268,7 @@ func TestRightSingleRuntimeFilterSemanticAndDeliveryContract(t *testing.T) {
 	})
 
 	t.Run("residual condition remains on the join", func(t *testing.T) {
-		builder := newRuntimeFilterSingleTestBuilder(true)
+		builder := newRuntimeFilterSingleTestBuilder(t, true)
 		builder.qry.Nodes[2].OnList = append(builder.qry.Nodes[2].OnList, MakeFalseExpr())
 
 		builder.generateRuntimeFilters(2)
@@ -180,7 +279,7 @@ func TestRightSingleRuntimeFilterSemanticAndDeliveryContract(t *testing.T) {
 	})
 
 	t.Run("mixed-side equality remains residual and is not used as an RF key", func(t *testing.T) {
-		builder := newRuntimeFilterSingleTestBuilder(true)
+		builder := newRuntimeFilterSingleTestBuilder(t, true)
 		pkType := builder.qry.Nodes[0].TableDef.Cols[0].Typ
 		mixed := makeMixedSideRuntimeFilterResidual(pkType, 1, 2)
 		builder.qry.Nodes[2].OnList = append(builder.qry.Nodes[2].OnList, mixed)
@@ -194,7 +293,7 @@ func TestRightSingleRuntimeFilterSemanticAndDeliveryContract(t *testing.T) {
 }
 
 func TestScalarPredicateRuntimeFilterPreservesSinglePosition(t *testing.T) {
-	logicPlan, err := runOneStmt(NewMockOptimizer(true), t, `
+	logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, `
 		select n.n_name
 		from tpch.nation n join tpch.region r
 			on n.n_regionkey = r.r_regionkey
@@ -241,26 +340,11 @@ func TestScalarPredicateRuntimeFilterPreservesSinglePosition(t *testing.T) {
 }
 
 func TestScalarPredicateRuntimeFilterProtocolGate(t *testing.T) {
-	optimizer := NewMockOptimizer(true)
+	optimizer := NewMockOptimizer(true, newPlanTestProcess(t))
 	ctx := optimizer.CurrentContext()
-	rt := moruntime.ServiceRuntime(ctx.GetProcess().GetService())
-	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	oldHints, hadHints := rt.GetGlobalVariables("optimizer_hints")
-	t.Cleanup(func() {
-		if hadVersion {
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
-		} else {
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-		}
-		if hadHints {
-			rt.SetGlobalVariables("optimizer_hints", oldHints)
-		} else {
-			rt.SetGlobalVariables("optimizer_hints", "")
-		}
-	})
 
 	build := func(version int64) *planpb.Query {
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+		setPlanTestGlobalVariable(t, ctx.GetProcess().GetService(), moruntime.MOProtocolVersion, version)
 		logicPlan, err := runOneStmt(optimizer, t, `
 			select n.n_name from tpch.nation n
 			where n.n_regionkey = (
@@ -283,13 +367,13 @@ func TestScalarPredicateRuntimeFilterProtocolGate(t *testing.T) {
 	require.False(t, hasScalarFilter(build(defines.MORPCVersion42)),
 		"an older participant would decode the optional field as false")
 	require.True(t, hasScalarFilter(build(defines.MORPCVersion43)))
-	rt.SetGlobalVariables("optimizer_hints", "subqueryPredicatePlanning=1")
+	setPlanTestGlobalVariable(t, ctx.GetProcess().GetService(), "optimizer_hints", "subqueryPredicatePlanning=1")
 	require.False(t, hasScalarFilter(build(defines.MORPCVersion43)),
 		"the cohort rollback must retain the historical plan")
 }
 
 func TestCorrelatedScalarPredicateDoesNotCreateRuntimeFilter(t *testing.T) {
-	logicPlan, err := runOneStmt(NewMockOptimizer(true), t, `
+	logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, `
 		select n.n_name from tpch.nation n
 		where n.n_regionkey = (
 			select r.r_regionkey from tpch.region r
@@ -315,19 +399,22 @@ func TestCorrelatedScalarPredicateDoesNotCreateRuntimeFilter(t *testing.T) {
 func TestScalarRuntimeFilterScanColumnStopsAtSemanticBarriers(t *testing.T) {
 	typ := planpb.Type{Id: int32(types.T_int64)}
 	tests := []struct {
-		name       string
-		nodeType   planpb.Node_NodeType
-		joinType   planpb.Node_JoinType
-		childPos   int32
-		rightJoin  bool
-		shuffle    bool
-		unsafeOn   bool
-		unsafeScan bool
-		wantProbe  bool
+		name        string
+		nodeType    planpb.Node_NodeType
+		joinType    planpb.Node_JoinType
+		childPos    int32
+		rightJoin   bool
+		shuffle     bool
+		unsafeOn    bool
+		unsafeScan  bool
+		unsafePeer  bool
+		unboundPeer bool
+		wantProbe   bool
 	}{
 		{name: "inner left", nodeType: planpb.Node_JOIN, joinType: planpb.Node_INNER, wantProbe: true},
-		{name: "shuffled inner lineage", nodeType: planpb.Node_JOIN, joinType: planpb.Node_INNER, shuffle: true},
-		{name: "inner build side", nodeType: planpb.Node_JOIN, joinType: planpb.Node_INNER, childPos: 1},
+		{name: "shuffled inner lineage", nodeType: planpb.Node_JOIN, joinType: planpb.Node_INNER, shuffle: true, wantProbe: true},
+		{name: "inner build side with safe unbound scan peer", nodeType: planpb.Node_JOIN, joinType: planpb.Node_INNER, childPos: 1, unboundPeer: true, wantProbe: true},
+		{name: "inner build side with fallible peer", nodeType: planpb.Node_JOIN, joinType: planpb.Node_INNER, childPos: 1, unsafePeer: true},
 		{name: "semi preserved side", nodeType: planpb.Node_JOIN, joinType: planpb.Node_SEMI, wantProbe: true},
 		{name: "semi build side", nodeType: planpb.Node_JOIN, joinType: planpb.Node_SEMI, childPos: 1},
 		{name: "right semi physical build side", nodeType: planpb.Node_JOIN, joinType: planpb.Node_SEMI, rightJoin: true},
@@ -348,8 +435,18 @@ func TestScalarRuntimeFilterScanColumnStopsAtSemanticBarriers(t *testing.T) {
 				children = []int32{0, 1}
 			}
 			builder := &QueryBuilder{qry: &planpb.Query{Nodes: []*planpb.Node{
-				{NodeType: planpb.Node_TABLE_SCAN, ProjectList: []*planpb.Expr{GetColExpr(typ, 10, 0)}},
-				{NodeType: planpb.Node_TABLE_SCAN, ProjectList: []*planpb.Expr{GetColExpr(typ, 11, 0)}},
+				{
+					NodeType:    planpb.Node_TABLE_SCAN,
+					ProjectList: []*planpb.Expr{GetColExpr(typ, 10, 0)},
+					BindingTags: []int32{10},
+					TableDef:    &planpb.TableDef{Cols: []*planpb.ColDef{{Typ: typ}}},
+				},
+				{
+					NodeType:    planpb.Node_TABLE_SCAN,
+					ProjectList: []*planpb.Expr{GetColExpr(typ, 11, 0)},
+					BindingTags: []int32{11},
+					TableDef:    &planpb.TableDef{Cols: []*planpb.ColDef{{Typ: typ}}},
+				},
 				{
 					NodeType:    tc.nodeType,
 					JoinType:    tc.joinType,
@@ -367,6 +464,12 @@ func TestScalarRuntimeFilterScanColumnStopsAtSemanticBarriers(t *testing.T) {
 			}
 			if tc.unsafeScan {
 				builder.qry.Nodes[0].FilterList = []*planpb.Expr{unsafePredicate}
+			}
+			if tc.unsafePeer {
+				builder.qry.Nodes[0].ProjectList = []*planpb.Expr{unsafePredicate}
+			}
+			if tc.unboundPeer {
+				builder.qry.Nodes[0].BindingTags = nil
 			}
 
 			_, _, ok := builder.scalarRuntimeFilterScanColumn(
@@ -386,23 +489,7 @@ func TestSubqueryPredicatePlanningOptimizerHint(t *testing.T) {
 }
 
 func TestFloatRuntimeFilterUsesOnlySoundEncoding(t *testing.T) {
-	protocolProbe := newRuntimeFilterSingleTestBuilder(true)
-	rt := moruntime.ServiceRuntime(
-		protocolProbe.compCtx.GetProcess().GetService())
-	original, hadOriginal := rt.GetGlobalVariables(
-		moruntime.MOProtocolVersion)
-	rt.SetGlobalVariables(
-		moruntime.MOProtocolVersion, defines.MORPCVersion8)
-	t.Cleanup(func() {
-		if hadOriginal {
-			rt.SetGlobalVariables(
-				moruntime.MOProtocolVersion, original)
-		} else {
-			rt.SetGlobalVariables(
-				moruntime.MOProtocolVersion,
-				defines.MORPCLatestVersion)
-		}
-	})
+	setPlanTestGlobalVariable(t, "", moruntime.MOProtocolVersion, defines.MORPCVersion8)
 
 	tests := []struct {
 		name     string
@@ -429,7 +516,7 @@ func TestFloatRuntimeFilterUsesOnlySoundEncoding(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			builder := newRuntimeFilterSingleTestBuilder(true)
+			builder := newRuntimeFilterSingleTestBuilder(t, true)
 			builder.qry.Nodes[0].TableDef.Cols[0].Typ = test.typ
 			builder.qry.Nodes[1].TableDef.Cols[0].Typ = test.typ
 			builder.qry.Nodes[2].OnList = []*planpb.Expr{
@@ -453,7 +540,7 @@ func TestFloatRuntimeFilterUsesOnlySoundEncoding(t *testing.T) {
 	}
 
 	t.Run("different decimal scales", func(t *testing.T) {
-		builder := newRuntimeFilterSingleTestBuilder(true)
+		builder := newRuntimeFilterSingleTestBuilder(t, true)
 		probeType := planpb.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 2}
 		buildType := planpb.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 3}
 		builder.qry.Nodes[0].TableDef.Cols[0].Typ = probeType
@@ -471,7 +558,7 @@ func TestFloatRuntimeFilterUsesOnlySoundEncoding(t *testing.T) {
 	})
 
 	t.Run("same decimal scale carries explicit raw pair contract", func(t *testing.T) {
-		builder := newRuntimeFilterSingleTestBuilder(true)
+		builder := newRuntimeFilterSingleTestBuilder(t, true)
 		decimalType := planpb.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 3}
 		builder.qry.Nodes[0].TableDef.Cols[0].Typ = decimalType
 		builder.qry.Nodes[1].TableDef.Cols[0].Typ = decimalType
@@ -492,7 +579,7 @@ func TestFloatRuntimeFilterUsesOnlySoundEncoding(t *testing.T) {
 	})
 
 	t.Run("different varchar widths remain raw-compatible", func(t *testing.T) {
-		builder := newRuntimeFilterSingleTestBuilder(true)
+		builder := newRuntimeFilterSingleTestBuilder(t, true)
 		probeType := planpb.Type{Id: int32(types.T_varchar), Width: 10}
 		buildType := planpb.Type{Id: int32(types.T_varchar), Width: 20}
 		builder.qry.Nodes[0].TableDef.Cols[0].Typ = probeType
@@ -515,7 +602,7 @@ func TestFloatRuntimeFilterUsesOnlySoundEncoding(t *testing.T) {
 
 	t.Run("float closure follows the deployment rollout gate", func(t *testing.T) {
 		build := func(version int64) *QueryBuilder {
-			builder := newRuntimeFilterSingleTestBuilder(true)
+			builder := newRuntimeFilterSingleTestBuilder(t, true)
 			floatType := planpb.Type{Id: int32(types.T_float64)}
 			builder.qry.Nodes[0].TableDef.Cols[0].Typ = floatType
 			builder.qry.Nodes[1].TableDef.Cols[0].Typ = floatType
@@ -523,23 +610,10 @@ func TestFloatRuntimeFilterUsesOnlySoundEncoding(t *testing.T) {
 				makeRuntimeFilterTestEq(floatType, 1, 2, 0, 0),
 			}
 			sid := builder.compCtx.GetProcess().GetService()
-			moruntime.ServiceRuntime(sid).SetGlobalVariables(
-				moruntime.MOProtocolVersion, version)
+			setPlanTestGlobalVariable(t, sid, moruntime.MOProtocolVersion, version)
 			builder.generateRuntimeFilters(2)
 			return builder
 		}
-
-		probe := newRuntimeFilterSingleTestBuilder(true)
-		sid := probe.compCtx.GetProcess().GetService()
-		rt := moruntime.ServiceRuntime(sid)
-		original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-		t.Cleanup(func() {
-			if hadOriginal {
-				rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
-			} else {
-				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-			}
-		})
 
 		gateV7 := build(defines.MORPCVersion7)
 		require.Empty(t, gateV7.qry.Nodes[2].RuntimeFilterBuildList)
@@ -557,27 +631,14 @@ func TestFloatRuntimeFilterUsesOnlySoundEncoding(t *testing.T) {
 	})
 
 	t.Run("raw contract remains enabled below the rollout gate", func(t *testing.T) {
-		builder := newRuntimeFilterSingleTestBuilder(true)
+		builder := newRuntimeFilterSingleTestBuilder(t, true)
 		sid := builder.compCtx.GetProcess().GetService()
-		rt := moruntime.ServiceRuntime(sid)
-		original, hadOriginal := rt.GetGlobalVariables(
-			moruntime.MOProtocolVersion)
-		t.Cleanup(func() {
-			if hadOriginal {
-				rt.SetGlobalVariables(
-					moruntime.MOProtocolVersion, original)
-			} else {
-				rt.SetGlobalVariables(
-					moruntime.MOProtocolVersion,
-					defines.MORPCLatestVersion)
-			}
-		})
+
 		typ := planpb.Type{Id: int32(types.T_int64)}
 		probeExpr := GetColExpr(typ, 1, 0)
 		buildExpr := GetColExpr(typ, -1, 0)
 
-		rt.SetGlobalVariables(
-			moruntime.MOProtocolVersion, defines.MORPCVersion7)
+		setPlanTestGlobalVariable(t, sid, moruntime.MOProtocolVersion, defines.MORPCVersion7)
 		_, preRollout, ok := builder.makeExactRuntimeFilterPair(
 			1, false, 100, probeExpr, buildExpr, false)
 		require.True(t, ok)
@@ -589,16 +650,14 @@ func TestFloatRuntimeFilterUsesOnlySoundEncoding(t *testing.T) {
 		require.True(t,
 			exprStructuralEqual(preRollout.Expr, preRollout.BuildExpr))
 
-		rt.SetGlobalVariables(
-			moruntime.MOProtocolVersion, defines.MORPCVersion8)
+		setPlanTestGlobalVariable(t, sid, moruntime.MOProtocolVersion, defines.MORPCVersion8)
 		_, versioned, ok := builder.makeExactRuntimeFilterPair(
 			1, false, 100, probeExpr, buildExpr, false)
 		require.True(t, ok)
 		require.Nil(t, versioned.Expr)
 		require.NotNil(t, versioned.BuildExpr)
 
-		rt.SetGlobalVariables(
-			moruntime.MOProtocolVersion, defines.MORPCVersion7)
+		setPlanTestGlobalVariable(t, sid, moruntime.MOProtocolVersion, defines.MORPCVersion7)
 		_, loweredGate, ok := builder.makeExactRuntimeFilterPair(
 			1, false, 100, probeExpr, buildExpr, false)
 		require.True(t, ok)
@@ -629,8 +688,7 @@ func TestFloatRuntimeFilterUsesOnlySoundEncoding(t *testing.T) {
 		require.False(t, ok,
 			"ENUM RAW must wait for versioned consumers with ENUM IN")
 
-		rt.SetGlobalVariables(
-			moruntime.MOProtocolVersion, defines.MORPCVersion8)
+		setPlanTestGlobalVariable(t, sid, moruntime.MOProtocolVersion, defines.MORPCVersion8)
 		_, decimalV8, ok := builder.makeExactRuntimeFilterPair(
 			2, false, 100, decimalProbe, decimalBuild, false)
 		require.True(t, ok)
@@ -649,7 +707,7 @@ func TestFloatRuntimeFilterUsesOnlySoundEncoding(t *testing.T) {
 }
 
 func TestExactRuntimeFilterPairRequiresMaterializableShape(t *testing.T) {
-	builder := newRuntimeFilterSingleTestBuilder(true)
+	builder := newRuntimeFilterSingleTestBuilder(t, true)
 	varcharType := planpb.Type{
 		Id: int32(types.T_varchar), Width: types.MaxVarcharLen,
 	}
@@ -758,20 +816,10 @@ func TestSerializedRuntimeFilterComponentColRejectsForgedShape(t *testing.T) {
 }
 
 func TestSerializedExactRuntimeFilterPairContract(t *testing.T) {
-	builder := newRuntimeFilterSingleTestBuilder(true)
+	builder := newRuntimeFilterSingleTestBuilder(t, true)
 	sid := builder.compCtx.GetProcess().GetService()
-	rt := moruntime.ServiceRuntime(sid)
-	original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	t.Cleanup(func() {
-		if hadOriginal {
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
-		} else {
-			rt.SetGlobalVariables(
-				moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-		}
-	})
-	rt.SetGlobalVariables(
-		moruntime.MOProtocolVersion, defines.MORPCVersion8)
+
+	setPlanTestGlobalVariable(t, sid, moruntime.MOProtocolVersion, defines.MORPCVersion8)
 
 	varcharType := planpb.Type{
 		Id: int32(types.T_varchar), Width: types.MaxVarcharLen,
@@ -989,8 +1037,7 @@ func TestSerializedExactRuntimeFilterPairContract(t *testing.T) {
 	})
 
 	t.Run("pre-rollout deployment omits tuple contract", func(t *testing.T) {
-		rt.SetGlobalVariables(
-			moruntime.MOProtocolVersion, defines.MORPCVersion7)
+		setPlanTestGlobalVariable(t, sid, moruntime.MOProtocolVersion, defines.MORPCVersion7)
 		build, err := BindFuncExprImplByPlanExpr(
 			builder.GetContext(),
 			function.SerialFunctionName,
@@ -1012,51 +1059,22 @@ func TestSerializedExactRuntimeFilterPairContract(t *testing.T) {
 }
 
 func TestSortedMembershipFilterProtocolGate(t *testing.T) {
-	builder := newRuntimeFilterSingleTestBuilder(true)
+	builder := newRuntimeFilterSingleTestBuilder(t, true)
 	sid := builder.compCtx.GetProcess().GetService()
-	rt := moruntime.ServiceRuntime(sid)
-	original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	t.Cleanup(func() {
-		if hadOriginal {
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
-		} else {
-			rt.SetGlobalVariables(
-				moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-		}
-	})
 
-	rt.SetGlobalVariables(
-		moruntime.MOProtocolVersion, defines.MORPCVersion9)
+	setPlanTestGlobalVariable(t, sid, moruntime.MOProtocolVersion, defines.MORPCVersion9)
 	require.False(t, localProtocolEnablesSortedMembershipFilter(sid))
-	rt.SetGlobalVariables(
-		moruntime.MOProtocolVersion, defines.MORPCVersion10)
+	setPlanTestGlobalVariable(t, sid, moruntime.MOProtocolVersion, defines.MORPCVersion10)
 	require.True(t, localProtocolEnablesSortedMembershipFilter(sid))
-	rt.SetGlobalVariables(
-		moruntime.MOProtocolVersion, defines.MORPCVersion9)
+	setPlanTestGlobalVariable(t, sid, moruntime.MOProtocolVersion, defines.MORPCVersion9)
 	require.False(t, localProtocolEnablesSortedMembershipFilter(sid))
 }
 
 func TestFinalizeFuzzyRuntimeFilterKeepsDecisionAtomic(t *testing.T) {
-	protocolProbe := newRuntimeFilterSingleTestBuilder(true)
-	rt := moruntime.ServiceRuntime(
-		protocolProbe.compCtx.GetProcess().GetService())
-	original, hadOriginal := rt.GetGlobalVariables(
-		moruntime.MOProtocolVersion)
-	rt.SetGlobalVariables(
-		moruntime.MOProtocolVersion, defines.MORPCVersion8)
-	t.Cleanup(func() {
-		if hadOriginal {
-			rt.SetGlobalVariables(
-				moruntime.MOProtocolVersion, original)
-		} else {
-			rt.SetGlobalVariables(
-				moruntime.MOProtocolVersion,
-				defines.MORPCLatestVersion)
-		}
-	})
+	setPlanTestGlobalVariable(t, "", moruntime.MOProtocolVersion, defines.MORPCVersion8)
 
-	newBuilder := func(tableCost, sinkCost float64) (*QueryBuilder, *planpb.Node, *planpb.Node, *planpb.Node) {
-		builder := newRuntimeFilterSingleTestBuilder(true)
+	newBuilder := func(t testing.TB, tableCost, sinkCost float64) (*QueryBuilder, *planpb.Node, *planpb.Node, *planpb.Node) {
+		builder := newRuntimeFilterSingleTestBuilder(t, true)
 		tableScan := builder.qry.Nodes[0]
 		sinkScan := builder.qry.Nodes[1]
 		fuzzy := builder.qry.Nodes[2]
@@ -1088,7 +1106,7 @@ func TestFinalizeFuzzyRuntimeFilterKeepsDecisionAtomic(t *testing.T) {
 	}
 
 	t.Run("build on table clears only candidate state", func(t *testing.T) {
-		builder, tableScan, _, fuzzy := newBuilder(20, 100)
+		builder, tableScan, _, fuzzy := newBuilder(t, 20, 100)
 		before := DeepCopyStats(tableScan.Stats)
 
 		builder.finalizeFuzzyRuntimeFilter(fuzzy)
@@ -1102,7 +1120,7 @@ func TestFinalizeFuzzyRuntimeFilterKeepsDecisionAtomic(t *testing.T) {
 	})
 
 	t.Run("malformed pair cannot publish optimistic state", func(t *testing.T) {
-		builder, tableScan, _, fuzzy := newBuilder(100, 100)
+		builder, tableScan, _, fuzzy := newBuilder(t, 100, 100)
 		before := DeepCopyStats(tableScan.Stats)
 		fuzzy.RuntimeFilterBuildList[0].BuildExpr.GetCol().ColPos = 1
 
@@ -1118,23 +1136,11 @@ func TestFinalizeFuzzyRuntimeFilterKeepsDecisionAtomic(t *testing.T) {
 	})
 
 	t.Run("pre rollout fuzzy transport removes both dependency ends", func(t *testing.T) {
-		builder, tableScan, _, fuzzy := newBuilder(300_000, 1_000_000)
+		builder, tableScan, _, fuzzy := newBuilder(t, 300_000, 1_000_000)
 		sid := builder.compCtx.GetProcess().GetService()
-		rt := moruntime.ServiceRuntime(sid)
-		original, hadOriginal := rt.GetGlobalVariables(
-			moruntime.MOProtocolVersion)
-		rt.SetGlobalVariables(
-			moruntime.MOProtocolVersion, defines.MORPCVersion7)
-		t.Cleanup(func() {
-			if hadOriginal {
-				rt.SetGlobalVariables(
-					moruntime.MOProtocolVersion, original)
-			} else {
-				rt.SetGlobalVariables(
-					moruntime.MOProtocolVersion,
-					defines.MORPCLatestVersion)
-			}
-		})
+
+		setPlanTestGlobalVariable(t, sid, moruntime.MOProtocolVersion, defines.MORPCVersion7)
+
 		before := DeepCopyStats(tableScan.Stats)
 
 		builder.finalizeFuzzyRuntimeFilter(fuzzy)
@@ -1149,7 +1155,7 @@ func TestFinalizeFuzzyRuntimeFilterKeepsDecisionAtomic(t *testing.T) {
 	})
 
 	t.Run("build on sink publishes pair placement and stats together", func(t *testing.T) {
-		builder, tableScan, sinkScan, fuzzy := newBuilder(300_000, 1_000_000)
+		builder, tableScan, sinkScan, fuzzy := newBuilder(t, 300_000, 1_000_000)
 		tableScan.Stats.TableCnt = 1_000_000
 		sinkScan.Stats.Outcnt = 1
 
@@ -1175,7 +1181,7 @@ func TestFinalizeFuzzyRuntimeFilterKeepsDecisionAtomic(t *testing.T) {
 
 func TestSingleJoinStatsUseSemanticPreservedSide(t *testing.T) {
 	t.Run("left SINGLE preserves physical left stats", func(t *testing.T) {
-		builder := newRuntimeFilterSingleTestBuilder(false)
+		builder := newRuntimeFilterSingleTestBuilder(t, false)
 
 		reCalcNodeStatsAfterSwap(2, builder, false, false, false)
 
@@ -1186,7 +1192,7 @@ func TestSingleJoinStatsUseSemanticPreservedSide(t *testing.T) {
 	})
 
 	t.Run("right SINGLE preserves physical right stats after child swap", func(t *testing.T) {
-		builder := newRuntimeFilterSingleTestBuilder(true)
+		builder := newRuntimeFilterSingleTestBuilder(t, true)
 		builder.qry.Nodes = append(builder.qry.Nodes, &planpb.Node{
 			NodeType: planpb.Node_PROJECT,
 			NodeId:   3,
@@ -1205,7 +1211,7 @@ func TestSingleJoinStatsUseSemanticPreservedSide(t *testing.T) {
 	})
 
 	t.Run("right SINGLE cardinality sizes a downstream join build side", func(t *testing.T) {
-		builder := newRuntimeFilterSingleTestBuilder(true)
+		builder := newRuntimeFilterSingleTestBuilder(t, true)
 		pkType := builder.qry.Nodes[0].TableDef.Cols[0].Typ
 		downstreamProbe := &planpb.Node{
 			NodeType:    planpb.Node_TABLE_SCAN,
@@ -1247,13 +1253,61 @@ func TestSingleJoinStatsUseSemanticPreservedSide(t *testing.T) {
 	})
 
 	t.Run("right SINGLE applies limit after selecting the preserved side", func(t *testing.T) {
-		builder := newRuntimeFilterSingleTestBuilder(true)
+		builder := newRuntimeFilterSingleTestBuilder(t, true)
 		builder.qry.Nodes[2].Limit = MakePlan2Uint64ConstExprWithType(1)
 
 		reCalcNodeStatsAfterSwap(2, builder, false, false, false)
 
 		require.Equal(t, float64(1), builder.qry.Nodes[2].Stats.Outcnt)
 	})
+}
+
+func TestSemiJoinStatsUseSemanticPreservedSide(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		preservedRows     float64
+		matchingSel       float64
+		preservedSel      float64
+		wantLogicalLeft   float64
+		wantPhysicalRight float64
+		limit             *planpb.Expr
+	}{
+		{name: "unfiltered", preservedRows: 5, matchingSel: 1, preservedSel: 1, wantLogicalLeft: 40, wantPhysicalRight: 5},
+		{name: "directional filtering", preservedRows: 5, matchingSel: 0, preservedSel: 1, wantLogicalLeft: 40, wantPhysicalRight: 0},
+		{name: "empty preserved input", matchingSel: 1, preservedSel: 1, wantLogicalLeft: 40},
+		{name: "limit zero", preservedRows: 5, matchingSel: 1, preservedSel: 1, limit: MakePlan2Uint64ConstExprWithType(0)},
+		{name: "limit one", preservedRows: 5, matchingSel: 1, preservedSel: 1, wantLogicalLeft: 1, wantPhysicalRight: 1, limit: MakePlan2Uint64ConstExprWithType(1)},
+		{name: "limit above preserved input", preservedRows: 5, matchingSel: 1, preservedSel: 1, wantLogicalLeft: 7, wantPhysicalRight: 5, limit: MakePlan2Uint64ConstExprWithType(7)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			builder := newRuntimeFilterSingleTestBuilder(t, true)
+			matching, preserved, join := builder.qry.Nodes[0], builder.qry.Nodes[1], builder.qry.Nodes[2]
+			matching.Stats = &planpb.Stats{Cost: 40, Outcnt: 40, TableCnt: 40, BlockNum: 11, Selectivity: tc.matchingSel}
+			preserved.Stats = &planpb.Stats{Cost: tc.preservedRows, Outcnt: tc.preservedRows, TableCnt: tc.preservedRows, BlockNum: 7, Selectivity: tc.preservedSel}
+			join.JoinType, join.Limit = planpb.Node_SEMI, tc.limit
+
+			// IsRightJoin is set before the physical swap. The ordinary pass
+			// must still preserve the logical left input at this point.
+			ReCalcNodeStats(2, builder, false, false, false)
+			require.Equal(t, tc.wantLogicalLeft, join.Stats.Outcnt)
+			require.Equal(t, matching.Stats.BlockNum, join.Stats.BlockNum)
+
+			builder.qry.Nodes = append(builder.qry.Nodes,
+				&planpb.Node{NodeType: planpb.Node_PROJECT, NodeId: 3, Children: []int32{2}, Stats: DefaultStats()},
+				&planpb.Node{NodeType: planpb.Node_JOIN, NodeId: 4, Children: []int32{0, 3}, JoinType: planpb.Node_INNER, Stats: DefaultStats()},
+			)
+			for range 2 {
+				reCalcNodeStatsAfterSwap(4, builder, true, false, false)
+				require.Equal(t, tc.wantPhysicalRight, join.Stats.Outcnt)
+				require.LessOrEqual(t, join.Stats.Outcnt, preserved.Stats.Outcnt)
+				require.Equal(t, preserved.Stats.BlockNum, join.Stats.BlockNum)
+				require.Equal(t, preserved.Stats.Outcnt, join.Stats.HashmapStats.HashmapSize)
+				require.Equal(t, matching.Stats.Cost+preserved.Stats.Cost, join.Stats.Cost)
+				require.Equal(t, tc.wantPhysicalRight, builder.qry.Nodes[3].Stats.Outcnt)
+				require.Equal(t, tc.wantPhysicalRight, builder.qry.Nodes[4].Stats.HashmapStats.HashmapSize)
+			}
+		})
+	}
 }
 
 func TestRightSingleRuntimeFilterConservativeEligibility(t *testing.T) {
@@ -1343,7 +1397,7 @@ func TestRightSingleRuntimeFilterConservativeEligibility(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			builder := newRuntimeFilterSingleTestBuilder(true)
+			builder := newRuntimeFilterSingleTestBuilder(t, true)
 			test.mutate(builder)
 
 			builder.generateRuntimeFilters(2)
@@ -1354,7 +1408,7 @@ func TestRightSingleRuntimeFilterConservativeEligibility(t *testing.T) {
 	}
 
 	t.Run("unavailable build statistics use bounded runtime fallback when query is already local", func(t *testing.T) {
-		builder := newRuntimeFilterSingleTestBuilder(true)
+		builder := newRuntimeFilterSingleTestBuilder(t, true)
 		builder.qry.Nodes[1].Stats = DefaultStats()
 		require.NotEqual(t, ExecTypeAP_MULTICN, GetExecType(builder.qry, false, false))
 
@@ -1368,7 +1422,7 @@ func TestRightSingleRuntimeFilterConservativeEligibility(t *testing.T) {
 	})
 
 	t.Run("leading cluster key remains prunable with non-PK row filtering", func(t *testing.T) {
-		builder := newRuntimeFilterSingleTestBuilder(true)
+		builder := newRuntimeFilterSingleTestBuilder(t, true)
 		probe := builder.qry.Nodes[0]
 		probeType := probe.TableDef.Cols[0].Typ
 		probe.TableDef.Cols = append(probe.TableDef.Cols, &planpb.ColDef{Name: "cluster_key", Typ: probeType})
@@ -1390,7 +1444,7 @@ func TestRightSingleRuntimeFilterConservativeEligibility(t *testing.T) {
 	})
 
 	t.Run("non-leading composite key does not sacrifice multi-CN scan", func(t *testing.T) {
-		builder := newRuntimeFilterSingleTestBuilder(true)
+		builder := newRuntimeFilterSingleTestBuilder(t, true)
 		probe := builder.qry.Nodes[0]
 		pkType := probe.TableDef.Cols[0].Typ
 		probe.TableDef.Cols = []*planpb.ColDef{
@@ -1418,7 +1472,7 @@ func TestRightSingleRuntimeFilterConservativeEligibility(t *testing.T) {
 	})
 
 	t.Run("full composite primary key builds serialized runtime filter", func(t *testing.T) {
-		builder := newRuntimeFilterSingleTestBuilder(true)
+		builder := newRuntimeFilterSingleTestBuilder(t, true)
 		probe, build := configureRuntimeFilterCompositePK(builder)
 
 		builder.generateRuntimeFilters(2)
@@ -1443,7 +1497,7 @@ func TestRightSingleRuntimeFilterConservativeEligibility(t *testing.T) {
 	})
 
 	t.Run("wider join keys are narrowed into composite key domain", func(t *testing.T) {
-		builder := newRuntimeFilterSingleTestBuilder(true)
+		builder := newRuntimeFilterSingleTestBuilder(t, true)
 		probe, _ := configureRuntimeFilterCompositePK(builder)
 		intType := planpb.Type{Id: int32(types.T_int32), NotNullable: true}
 		wideType := planpb.Type{Id: int32(types.T_int64), NotNullable: true}
@@ -1472,7 +1526,7 @@ func TestRightSingleRuntimeFilterConservativeEligibility(t *testing.T) {
 	})
 
 	t.Run("composite primary key encoding follows key order", func(t *testing.T) {
-		builder := newRuntimeFilterSingleTestBuilder(true)
+		builder := newRuntimeFilterSingleTestBuilder(t, true)
 		probe, _ := configureRuntimeFilterCompositePK(builder)
 		join := builder.qry.Nodes[2]
 		join.OnList[0], join.OnList[1] = join.OnList[1], join.OnList[0]
@@ -1487,8 +1541,8 @@ func TestRightSingleRuntimeFilterConservativeEligibility(t *testing.T) {
 			join.RuntimeFilterBuildList[0].KeyComponentProbeTypes)
 	})
 
-	t.Run("leading composite prefix is omitted until HashBuild can materialize it", func(t *testing.T) {
-		builder := newRuntimeFilterSingleTestBuilder(true)
+	t.Run("leading composite component does not introduce local-only placement", func(t *testing.T) {
+		builder := newRuntimeFilterSingleTestBuilder(t, true)
 		probe, _ := configureRuntimeFilterCompositePK(builder)
 		builder.qry.Nodes[2].OnList = builder.qry.Nodes[2].OnList[:1]
 
@@ -1502,7 +1556,7 @@ func TestRightSingleRuntimeFilterConservativeEligibility(t *testing.T) {
 	})
 
 	t.Run("composite probe preserves existing runtime filters", func(t *testing.T) {
-		builder := newRuntimeFilterSingleTestBuilder(true)
+		builder := newRuntimeFilterSingleTestBuilder(t, true)
 		probe, _ := configureRuntimeFilterCompositePK(builder)
 		existing := &planpb.RuntimeFilterSpec{Tag: 99, Expr: GetColExpr(probe.TableDef.Cols[0].Typ, 1, 0)}
 		probe.RuntimeFilterProbeList = []*planpb.RuntimeFilterSpec{existing}
@@ -1580,7 +1634,7 @@ func TestForceJoinOnOneCNRuntimeFilterPolicy(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			builder := newRuntimeFilterSingleTestBuilder(test.right)
+			builder := newRuntimeFilterSingleTestBuilder(t, test.right)
 			join := builder.qry.Nodes[2]
 			join.JoinType = test.joinType
 			join.IsRightJoin = test.right
@@ -1596,7 +1650,7 @@ func TestForceJoinOnOneCNRuntimeFilterPolicy(t *testing.T) {
 }
 
 func TestDisableRightSingleRuntimeFilterHint(t *testing.T) {
-	builder := newRuntimeFilterSingleTestBuilder(true)
+	builder := newRuntimeFilterSingleTestBuilder(t, true)
 	builder.optimizerHints = &OptimizerHints{}
 
 	handleOptimizerHints("disableRightSingleRF=1", builder)
@@ -1605,4 +1659,28 @@ func TestDisableRightSingleRuntimeFilterHint(t *testing.T) {
 	require.Equal(t, 1, builder.optimizerHints.disableRightSingleRF)
 	require.Empty(t, builder.qry.Nodes[2].RuntimeFilterBuildList)
 	require.Empty(t, builder.qry.Nodes[0].RuntimeFilterProbeList)
+}
+
+func TestSingletonRuntimeFilterBenefitBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		ndv  float64
+		want bool
+	}{{9, false}, {10, false}, {11, true}, {10000, true}, {30000, true}} {
+		t.Run(fmt.Sprintf("ndv=%g", tc.ndv), func(t *testing.T) {
+			b := newRuntimeFilterSingleTestBuilder(t, false)
+			probe, join := b.qry.Nodes[0], b.qry.Nodes[2]
+			probe.TableDef.TblId = 41
+			probe.Stats.TableCnt, probe.Stats.Outcnt = tc.ndv, tc.ndv
+			ctx := &statsCacheCompilerContext{MockCompilerContext: b.compCtx.(*MockCompilerContext), statsCache: NewStatsCache()}
+			ctx.statsCache.Set(41, &statspb.StatsInfo{NdvMap: map[string]float64{"id": tc.ndv}})
+			b.compCtx = ctx
+			b.tag2Table = map[int32]*TableDef{1: probe.TableDef}
+			join.JoinType = planpb.Node_INNER
+			join.Stats.HashmapStats.HashmapSize = 1
+			b.qry.Nodes[1].Stats.Outcnt = 1
+			b.generateRuntimeFilters(2)
+			require.Equal(t, tc.want, len(join.RuntimeFilterBuildList) == 1)
+			require.Equal(t, tc.want, len(probe.RuntimeFilterProbeList) == 1)
+		})
+	}
 }

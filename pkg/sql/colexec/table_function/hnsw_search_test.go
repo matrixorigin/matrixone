@@ -105,6 +105,8 @@ func (m *MockSearch) Search(sqlproc *sqlexec.SqlProcess, query any, rt vectorind
 	return []int64{1}, []float64{2.0}, nil
 }
 
+func (m *MockSearch) Preload(*sqlexec.SqlProcess) error { return nil }
+func (m *MockSearch) GetIndexSize() (int64, int64)      { return 0, 0 }
 func (m *MockSearch) Destroy() {
 }
 
@@ -477,3 +479,6 @@ func TestNewHnswAlgoFn(t *testing.T) {
 func (m *MockSearch) SearchInto(_ *sqlexec.SqlProcess, _ any, _ vectorindex.RuntimeConfig, _ *vectorindex.SearchOutput) error {
 	return nil
 }
+
+// BuildTS stubs (fulltext2 async-freshness interface method).
+func (m *MockSearch) BuildTS() int64 { return 0 }

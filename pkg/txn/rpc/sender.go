@@ -388,13 +388,14 @@ func (s *sender) logBackendRetryStop(
 	request txn.TxnRequest,
 	retryState backendRetryState,
 ) {
-	fields := []zap.Field{
+	fields := make([]zap.Field, 0, 6)
+	fields = append(fields,
 		zap.String("address", tn.Address),
 		zap.String("txn-id", hex.EncodeToString(request.Txn.ID)),
 		zap.String("method", request.Method.String()),
 		zap.Error(err),
 		zap.Duration("retry-budget", defaultMaxWaitTimeOnRetryBackendSend),
-	}
+	)
 	if defaultMaxWaitTimeOnRetryBackendSend <= 0 || retryState.deadline.IsZero() {
 		s.rt.Logger().Warn("txn sender backend retry disabled by non-positive budget", fields...)
 		return
@@ -450,13 +451,14 @@ func (s *sender) logBackendStreamRetryStop(
 	size int,
 	retryState backendRetryState,
 ) {
-	fields := []zap.Field{
+	fields := make([]zap.Field, 0, 6)
+	fields = append(fields,
 		zap.String("address", tn.Address),
 		zap.Uint64("shard-id", tn.ShardID),
 		zap.Int("batch-size", size),
 		zap.Error(err),
 		zap.Duration("retry-budget", defaultMaxWaitTimeOnRetryBackendSend),
-	}
+	)
 	if defaultMaxWaitTimeOnRetryBackendSend <= 0 || retryState.deadline.IsZero() {
 		s.rt.Logger().Warn("txn sender stream backend retry disabled by non-positive budget", fields...)
 		return

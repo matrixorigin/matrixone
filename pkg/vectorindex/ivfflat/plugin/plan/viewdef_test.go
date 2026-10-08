@@ -21,11 +21,17 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type vecViewCtx struct{}
 
 func (vecViewCtx) GetContext() context.Context { return context.Background() }
+
+// GetProcess returns nil: these tests plan without a service runtime, and the capability
+// gates read that as "not activated" and build the legacy shape.
+func (vecViewCtx) GetProcess() *process.Process { return nil }
+
 func (vecViewCtx) ResolveVariable(string, bool, bool) (interface{}, error) {
 	return nil, nil
 }

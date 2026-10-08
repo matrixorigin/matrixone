@@ -119,18 +119,23 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 				if mergeCTE.ctr.curNodeCnt == 0 {
 					mergeCTE.ctr.last = true
 					mergeCTE.ctr.curNodeCnt = int32(mergeCTE.NodeCnt)
-					mergeCTE.ctr.recursiveLevel++
-					maxRecursion := moDefaultRecursionMax
-					if resolveFunc := proc.GetResolveVariableFunc(); resolveFunc != nil {
-						if val, err := resolveFunc("cte_max_recursion_depth", true, false); err == nil {
-							if v, ok := val.(int64); ok {
-								maxRecursion = int(v)
+					hasRecursiveRows := mergeCTE.ctr.hasRecursiveRows
+					mergeCTE.ctr.hasRecursiveRows = false
+					if hasRecursiveRows {
+						nextLevel := mergeCTE.ctr.recursiveLevel + 1
+						maxRecursion := moDefaultRecursionMax
+						if resolveFunc := proc.GetResolveVariableFunc(); resolveFunc != nil {
+							if val, err := resolveFunc("cte_max_recursion_depth", true, false); err == nil {
+								if v, ok := val.(int64); ok {
+									maxRecursion = int(v)
+								}
 							}
 						}
-					}
-					if mergeCTE.ctr.recursiveLevel > maxRecursion {
-						result.Status = vm.ExecStop
-						return result, moerr.NewCheckRecursiveLevel(proc.Ctx)
+						if nextLevel > maxRecursion {
+							result.Status = vm.ExecStop
+							return result, moerr.NewCheckRecursiveLevel(proc.Ctx)
+						}
+						mergeCTE.ctr.recursiveLevel = nextLevel
 					}
 					appBat, err := ctr.cacheBatch(proc, analyzer, result.Batch)
 					if err != nil {
@@ -145,6 +150,9 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 				if err != nil {
 					result.Status = vm.ExecStop
 					return result, err
+				}
+				if appBat.RowCount() > 0 {
+					mergeCTE.ctr.hasRecursiveRows = true
 				}
 				ctr.bats = append(ctr.bats, appBat)
 			}

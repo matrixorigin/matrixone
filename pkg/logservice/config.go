@@ -67,6 +67,10 @@ var (
 
 // Config defines the Configurations supported by the Log Service.
 type Config struct {
+	// CatalogMetadataMaintenance requires the controlled stop of all legacy
+	// HAKeeper executors before enabling; its durable latch cannot be unset.
+	CatalogMetadataMaintenance bool `toml:"catalog-metadata-maintenance"`
+
 	// FS is the underlying virtual FS used by the log service. Leave it as empty
 	// in production.
 	FS vfs.FS
@@ -289,7 +293,7 @@ func (c *Config) GetHAKeeperConfig() hakeeper.Config {
 }
 
 func (c *Config) GetHAKeeperClientConfig() HAKeeperClientConfig {
-	saddr := make([]string, 0)
+	saddr := make([]string, 0, len(c.HAKeeperClientConfig.ServiceAddresses))
 	saddr = append(saddr, c.HAKeeperClientConfig.ServiceAddresses...)
 	return HAKeeperClientConfig{
 		DiscoveryAddress:   c.HAKeeperClientConfig.DiscoveryAddress,

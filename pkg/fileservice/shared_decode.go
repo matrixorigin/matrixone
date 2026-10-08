@@ -38,10 +38,13 @@ type DecodeSharing struct {
 }
 
 const (
-	sharedDecodeMaxBytes        = 64 << 20
-	sharedDecodeMaxEntries      = 64
-	sharedDecodeMaxParticipants = 128
-	sharedDecodeWait            = 200 * time.Millisecond
+	sharedDecodeMaxBytes            = 64 << 20
+	sharedDecodeMaxEntries          = 64
+	sharedDecodeMaxParticipants     = 128
+	sharedDecodeWait                = 200 * time.Millisecond
+	sharedDecodeFillMaxGenerations  = 64
+	sharedDecodeFillMaxParticipants = 128
+	sharedDecodeFillWait            = time.Second
 )
 
 type decodedReadKey struct {
@@ -61,15 +64,24 @@ type decodedRead struct {
 	bytes        int64
 }
 
+type decodedFill struct {
+	key          decodedReadKey
+	done         chan struct{}
+	finished     bool
+	participants int
+}
+
 type decodedReadRegistry struct {
-	mu      sync.Mutex
-	entries map[decodedReadKey]*decodedRead
-	limit   int64
-	bytes   int64
-	count   int // includes detached generations awaiting final release
-	reads   int // guarded S3FS reads, not Top-K consumers
-	closed  bool
-	retire  func()
+	mu        sync.Mutex
+	entries   map[decodedReadKey]*decodedRead
+	fills     map[decodedReadKey]*decodedFill
+	limit     int64
+	bytes     int64
+	count     int // includes detached generations awaiting final release
+	fillCount int // includes completed generations awaiting final release
+	reads     int // guarded S3FS reads, not Top-K consumers
+	closed    bool
+	retire    func()
 }
 
 type decodedReadLease struct {
@@ -78,8 +90,19 @@ type decodedReadLease struct {
 	released atomic.Bool
 }
 
+type decodedFillTicket struct {
+	registry   *decodedReadRegistry
+	generation *decodedFill
+	leader     bool
+	released   atomic.Bool
+}
+
 func newDecodedReadRegistry(limit int64) *decodedReadRegistry {
-	return &decodedReadRegistry{entries: make(map[decodedReadKey]*decodedRead), limit: max(0, min(limit, sharedDecodeMaxBytes))}
+	return &decodedReadRegistry{
+		entries: make(map[decodedReadKey]*decodedRead),
+		fills:   make(map[decodedReadKey]*decodedFill),
+		limit:   max(0, min(limit, sharedDecodeMaxBytes)),
+	}
 }
 
 func sharedDecodeClosed() error {
@@ -109,6 +132,105 @@ func (r *decodedReadRegistry) endRead() {
 	}
 }
 
+// acquireFill admits a read-scope notification generation. It deliberately
+// carries no decoded data or byte reservation; the memory cache remains the
+// only publication and ownership boundary.
+func (r *decodedReadRegistry) acquireFill(key decodedReadKey, mayStart bool) (*decodedFillTicket, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return nil, sharedDecodeClosed()
+	}
+	if generation := r.fills[key]; generation != nil {
+		if generation.participants >= sharedDecodeFillMaxParticipants {
+			return nil, nil
+		}
+		generation.participants++
+		return &decodedFillTicket{registry: r, generation: generation}, nil
+	}
+	if !mayStart || r.fillCount >= sharedDecodeFillMaxGenerations {
+		return nil, nil
+	}
+	generation := &decodedFill{
+		key:          key,
+		done:         make(chan struct{}),
+		participants: 1,
+	}
+	r.fills[key] = generation
+	r.fillCount++
+	return &decodedFillTicket{registry: r, generation: generation, leader: true}, nil
+}
+
+func (r *decodedReadRegistry) completeFill(generation *decodedFill) {
+	if generation == nil {
+		return
+	}
+	r.mu.Lock()
+	if !generation.finished {
+		generation.finished = true
+		if r.fills[generation.key] == generation {
+			delete(r.fills, generation.key)
+		}
+		close(generation.done)
+	}
+	r.mu.Unlock()
+}
+
+func (ticket *decodedFillTicket) wait(ctx context.Context, timeout time.Duration) error {
+	if ticket == nil || ticket.leader {
+		return nil
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-ticket.generation.done:
+		return ticket.waitResult(ctx)
+	case <-timer.C:
+		return ticket.waitResult(ctx)
+	}
+}
+
+func (ticket *decodedFillTicket) waitResult(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	ticket.registry.mu.Lock()
+	closed := ticket.registry.closed
+	ticket.registry.mu.Unlock()
+	if closed {
+		return sharedDecodeClosed()
+	}
+	return nil
+}
+
+func (ticket *decodedFillTicket) finish() {
+	if ticket == nil {
+		return
+	}
+	if ticket.leader {
+		ticket.registry.completeFill(ticket.generation)
+	}
+	ticket.release()
+}
+
+func (ticket *decodedFillTicket) release() {
+	if ticket == nil || !ticket.released.CompareAndSwap(false, true) {
+		return
+	}
+	r, generation := ticket.registry, ticket.generation
+	r.mu.Lock()
+	generation.participants--
+	if generation.participants == 0 {
+		if !generation.finished && r.fills[generation.key] == generation {
+			delete(r.fills, generation.key)
+		}
+		r.fillCount--
+	}
+	r.mu.Unlock()
+}
+
 func (r *decodedReadRegistry) close(retire func()) {
 	r.mu.Lock()
 	if r.closed {
@@ -121,6 +243,13 @@ func (r *decodedReadRegistry) close(retire func()) {
 		if !entry.finished {
 			entry.finished, entry.err = true, sharedDecodeClosed()
 			close(entry.done)
+		}
+	}
+	for key, generation := range r.fills {
+		delete(r.fills, key)
+		if !generation.finished {
+			generation.finished = true
+			close(generation.done)
 		}
 	}
 	if r.reads != 0 {
@@ -320,13 +449,46 @@ func (r *decodedReadRegistry) decode(ctx context.Context, key decodedReadKey, by
 	return
 }
 
+// This is only an admission hint. Used cache data may be evicted, but pending
+// reservations cannot make room for a new fill. Existing fills still accept joins.
+func sharedDecodeFillMayStart(m *MemCache, decodedSize int64) bool {
+	m.capacityMu.Lock()
+	capacity := m.cache.Capacity()
+	available := capacity - m.reservedBytes.Load()
+	m.capacityMu.Unlock()
+	if decodedSize > available || int64(m.BackingSize(int(decodedSize))) > available {
+		return false
+	}
+	_, pressureActive := memoryCachePressureTarget(capacity)
+	return !pressureActive
+}
+
+func sharedDecodeDiskFillAvailable(d *DiskCache, path string, vector *IOVector) bool {
+	if d == nil || d.cache == nil {
+		return false
+	}
+	if d.cache.Contains(d.pathForFile(path)) {
+		return true
+	}
+	return len(vector.Entries) == 1 && d.cache.Contains(d.pathForIOEntry(path, vector.Entries[0]))
+}
+
 // prepareSharedDecode is called only after a memory-cache miss. The wrapper
 // shares conversion, not I/O or cache-update outcomes. Its finalizer runs after
 // the enclosing read's deferred cache updates and transfers the ticket to the
 // final entry (which helper reads may have replaced).
 func (s *S3FS) prepareSharedDecode(vector *IOVector) (func(), error) {
+	finish, _, _, err := s.prepareSharedDecodeInternal(vector, false)
+	return finish, err
+}
+
+func (s *S3FS) prepareSharedDecodeForRead(vector *IOVector) (func(), *decodedFillTicket, bool, error) {
+	return s.prepareSharedDecodeInternal(vector, true)
+}
+
+func (s *S3FS) prepareSharedDecodeInternal(vector *IOVector, coordinateFill bool) (func(), *decodedFillTicket, bool, error) {
 	if s.decodedReads == nil || len(vector.Caches) != 0 || vector.Policy.Any(SkipMemoryCache) {
-		return nil, nil
+		return nil, nil, false, nil
 	}
 	index := -1
 	for i := range vector.Entries {
@@ -336,12 +498,12 @@ func (s *S3FS) prepareSharedDecode(vector *IOVector) (func(), error) {
 		// One selected entry per request. Do not grow per-entry wrapper state
 		// or silently choose a winner when a caller marks multiple columns.
 		if index >= 0 {
-			return nil, nil
+			return nil, nil, false, nil
 		}
 		index = i
 	}
 	if index < 0 {
-		return nil, nil
+		return nil, nil, false, nil
 	}
 	entry := &vector.Entries[index]
 	sharing := entry.DecodeSharing
@@ -349,16 +511,28 @@ func (s *S3FS) prepareSharedDecode(vector *IOVector) (func(), error) {
 		entry.Offset < 0 || entry.Size <= 0 || entry.CachedDataSize <= 0 || entry.CachedDataSize > int64(^uint(0)>>1) ||
 		entry.ToCacheData == nil || entry.WriterForRead != nil || entry.ReadCloserForRead != nil || entry.ReaderForWrite != nil ||
 		entry.done || entry.Data != nil || entry.CachedData != nil || entry.decodeLease != nil {
-		return nil, nil
+		return nil, nil, false, nil
 	}
 	path, err := parseFilePathAtService(vector.FilePath, s.name)
 	if err != nil {
-		return nil, err
+		return nil, nil, false, err
 	}
 	if !s.decodedReads.beginRead() {
-		return nil, sharedDecodeClosed()
+		return nil, nil, false, sharedDecodeClosed()
 	}
 	key := decodedReadKey{path: path.File, offset: entry.Offset, size: entry.Size, decoded: entry.CachedDataSize, policy: vector.Policy, codec: sharing}
+	var fill *decodedFillTicket
+	fillAttempted := false
+	if coordinateFill && !vector.Policy.Any(SkipDiskCacheReads) &&
+		sharedDecodeDiskFillAvailable(s.diskCache, path.File, vector) {
+		mayStart := sharedDecodeFillMayStart(s.memCache, entry.CachedDataSize)
+		fill, err = s.decodedReads.acquireFill(key, mayStart)
+		fillAttempted = mayStart || fill != nil
+		if err != nil {
+			s.decodedReads.endRead()
+			return nil, nil, false, err
+		}
+	}
 	original := entry.ToCacheData
 	var lease *decodedReadLease
 	entry.ToCacheData = func(ctx context.Context, reader io.Reader, data []byte, allocator CacheDataAllocator) (fscache.Data, error) {
@@ -379,5 +553,5 @@ func (s *S3FS) prepareSharedDecode(vector *IOVector) (func(), error) {
 			lease.release()
 		}
 		s.decodedReads.endRead()
-	}, nil
+	}, fill, fillAttempted, nil
 }

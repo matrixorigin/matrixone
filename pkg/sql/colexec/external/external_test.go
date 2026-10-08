@@ -128,7 +128,6 @@ func (r *checkLockTableBindsReader) Close() error {
 
 func newTestCase(t *testing.T, format, jsondata string) externalTestCase {
 	proc := testutil.NewProcess(t)
-	proc.Base.FileService = testutil.NewFS(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	return externalTestCase{
 		proc:  proc,
@@ -1427,6 +1426,7 @@ func TestIcebergParquetProfileStats(t *testing.T) {
 
 func TestReadFileOffsetCompressedUnsafe(t *testing.T) {
 	fs := testutil.NewFS(t)
+	t.Cleanup(func() { fs.Close(context.Background()) })
 	content := []byte("0,0,1,2,0,0,3,4,0,0,abc,2024-01-01,2024-01-01 00:00:01,2024-01-01 00:00:01,1,1.23,txt,aaa,bbb,ccc\n")
 	var buf bytes.Buffer
 	zw := zlib.NewWriter(&buf)
@@ -1717,7 +1717,6 @@ func TestReadDirSymlink(t *testing.T) {
 			case ev := <-evChan:
 				t.Logf("notify: %+v", ev)
 			case <-testDone:
-				time.Sleep(time.Second * 3) // wait event
 				// drain
 				for {
 					select {
@@ -1842,6 +1841,9 @@ func TestReadDirSymlink(t *testing.T) {
 	assert.Nil(t, err)
 	t.Logf("Test file removed, waiting for file system events to settle")
 
+	if evChan != nil {
+		notify.Stop(evChan)
+	}
 	close(testDone)
 	<-fsLogDone
 	t.Logf("TestReadDirSymlink completed successfully")

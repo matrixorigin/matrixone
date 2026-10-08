@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -24,6 +25,47 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
+
+func TestGroupingSetStatsIgnoreInactiveKeys(t *testing.T) {
+	statsCache := NewStatsCache()
+	stats := NewStatsInfo()
+	stats.TableCnt = 1000
+	stats.NdvMap["active_key"] = 10
+	stats.NdvMap["rolled_key"] = 100
+	statsCache.Set(1, stats)
+	ctx := &statsCacheCompilerContext{
+		MockCompilerContext: &MockCompilerContext{ctx: context.Background()},
+		statsCache:          statsCache,
+	}
+	builder := NewQueryBuilder(pbplan.Query_SELECT, ctx, false, false)
+	table := &pbplan.TableDef{
+		TblId: 1,
+		Cols: []*pbplan.ColDef{
+			{Name: "active_key", Typ: pbplan.Type{Id: int32(types.T_int64)}},
+			{Name: "rolled_key", Typ: pbplan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+	builder.tag2Table[1] = table
+	builder.qry.Nodes = []*pbplan.Node{
+		{
+			NodeId: 0, NodeType: pbplan.Node_TABLE_SCAN, TableDef: table,
+			BindingTags: []int32{1},
+			Stats:       &pbplan.Stats{Outcnt: 1000, Cost: 1000, Selectivity: 1},
+		},
+		{
+			NodeId: 1, NodeType: pbplan.Node_AGG, Children: []int32{0},
+			GroupBy: []*pbplan.Expr{
+				groupHashKeyTestCol(1, 0),
+				groupHashKeyTestCol(1, 1),
+			},
+			GroupingFlag: []bool{true, false},
+			Stats:        &pbplan.Stats{},
+		},
+	}
+
+	ReCalcNodeStats(1, builder, false, false, true)
+	require.Equal(t, float64(10), builder.qry.Nodes[1].Stats.Outcnt)
+}
 
 func groupHashKeyTestCol(tag, pos int32) *pbplan.Expr {
 	return &pbplan.Expr{
@@ -194,7 +236,7 @@ func TestDetermineGroupByHashKeys(t *testing.T) {
 
 func TestBuildPlanUsesPrimaryKeyAsPhysicalGroupKey(t *testing.T) {
 	logicPlan, err := runOneStmt(
-		NewMockOptimizer(false),
+		NewMockOptimizer(false, newPlanTestProcess(t)),
 		t,
 		"select empno, ename, sum(sal) from constraint_test.emp group by empno, ename",
 	)
@@ -222,7 +264,7 @@ func TestBuildPlanKeepsAllPhysicalGroupKeysForIncompatiblePrimaryKey(t *testing.
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			optimizer := NewMockOptimizer(false)
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 			table := optimizer.ctxt.tablesByQualifiedName[mockQualifiedTableName("constraint_test", "emp")]
 			require.NotNil(t, table)
 			require.NotNil(t, table.Pkey)
@@ -519,10 +561,10 @@ func TestAggPullupRequiresTypeMetadataToMatchReferencedColumns(t *testing.T) {
 }
 
 func TestBuildPlanAnnotatesDistinctRewriteAggregate(t *testing.T) {
-	for _, aggregate := range []string{"count", "sum"} {
+	for _, aggregate := range []string{"count", "sum", "avg"} {
 		t.Run(aggregate, func(t *testing.T) {
 			logicPlan, err := runOneStmt(
-				NewMockOptimizer(false),
+				NewMockOptimizer(false, newPlanTestProcess(t)),
 				t,
 				fmt.Sprintf(
 					"select empno, ename, %s(distinct deptno) from constraint_test.emp group by empno, ename",
@@ -556,7 +598,7 @@ func TestBuildPlanAnnotatesDistinctRewriteAggregate(t *testing.T) {
 
 func TestBuildPlanKeepsMixedCountDistinctParallelMergeable(t *testing.T) {
 	logicPlan, err := runOneStmt(
-		NewMockOptimizer(false),
+		NewMockOptimizer(false, newPlanTestProcess(t)),
 		t,
 		"select e.deptno, count(d.deptno), count(distinct d.loc) "+
 			"from constraint_test.emp e left join constraint_test.dept d on e.deptno = d.deptno "+
@@ -585,7 +627,7 @@ func TestBuildPlanKeepsMixedCountDistinctParallelMergeable(t *testing.T) {
 
 func TestBuildPlanAnnotatesJoinDistinctRewriteAggregate(t *testing.T) {
 	logicPlan, err := runOneStmt(
-		NewMockOptimizer(false),
+		NewMockOptimizer(false, newPlanTestProcess(t)),
 		t,
 		"select e.empno, e.ename, count(distinct d.loc) "+
 			"from constraint_test.emp e left join constraint_test.dept d on e.deptno = d.deptno "+
@@ -606,7 +648,7 @@ func TestBuildPlanAnnotatesJoinDistinctRewriteAggregate(t *testing.T) {
 
 func TestBuildPlanAnnotatesJoinPromotedCharDistinctRewriteAggregate(t *testing.T) {
 	logicPlan, err := runOneStmt(
-		NewMockOptimizer(false),
+		NewMockOptimizer(false, newPlanTestProcess(t)),
 		t,
 		"select e.empno, e.ename, count(distinct "+
 			"coalesce(cast(d.dname as char(8)), cast(d.loc as varchar(8)))) "+

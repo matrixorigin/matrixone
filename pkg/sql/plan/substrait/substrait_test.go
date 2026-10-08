@@ -46,6 +46,49 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+func TestCollationMetadataSubstraitBoundaries(t *testing.T) {
+	for _, mutate := range []func(*planpb.TableDef){
+		func(table *planpb.TableDef) { table.KeyFormat = 1 },
+		func(table *planpb.TableDef) { table.Indexes = []*planpb.IndexDef{{KeyFormat: 1}} },
+		func(table *planpb.TableDef) {
+			table.Cols[0].Typ = planpb.Type{Id: int32(types.T_varchar), Width: 32, Charset: 3, CollationVersion: 1}
+		},
+	} {
+		q := scanQuery()
+		candidate, err := Export(q)
+		require.NoError(t, err)
+		table := q.Nodes[0].TableDef
+		mutate(table)
+		_, err = Export(q)
+		require.ErrorContains(t, err, "unsupported collation metadata")
+		// Revalidate a candidate whose caller-owned plan changed after admission.
+		_, err = candidate.Build(nil)
+		require.ErrorContains(t, err, "unsupported collation metadata")
+		_, err = CanonicalSchema(table)
+		require.ErrorContains(t, err, "unsupported collation metadata")
+
+		q = embeddedProjectedScanQuery()
+		embedded, err := ExportEmbeddedMO(q)
+		require.NoError(t, err)
+		reads, err := embedded.EmbeddedMOReads()
+		require.NoError(t, err)
+		require.Len(t, reads, 1)
+		bindings := map[int32]EmbeddedReadBinding{0: {BindingID: 1, Source: EmbeddedReadMO}}
+		wire, err := embedded.BuildEmbedded(bindings)
+		require.NoError(t, err)
+		require.NotEmpty(t, wire)
+		mutate(q.Nodes[0].TableDef)
+		_, err = ExportEmbeddedMO(q)
+		require.ErrorContains(t, err, "unsupported collation metadata")
+		reads, err = embedded.EmbeddedMOReads()
+		require.ErrorContains(t, err, "unsupported collation metadata")
+		require.Nil(t, reads)
+		wire, err = embedded.BuildEmbedded(bindings)
+		require.ErrorContains(t, err, "unsupported collation metadata")
+		require.Nil(t, wire)
+	}
+}
+
 func TestExportBuildSupportedSubset(t *testing.T) {
 	q := scanQuery()
 	q.Nodes = append(q.Nodes, &planpb.Node{NodeId: 1, NodeType: planpb.Node_FILTER, Children: []int32{0}, FilterList: []*planpb.Expr{fn(">", boolType(), col(0), i64(7))}})
@@ -576,6 +619,17 @@ func TestSemanticNullabilityUsesConcreteNonNullLiteralFact(t *testing.T) {
 	require.False(t, nonNullLiteral.Typ.NotNullable, "the planner literal annotation is deliberately conservative")
 	require.True(t, semanticNotNullable(
 		resolved.GetEncodedOverloadID(), []*planpb.Expr{notNullColumn, nonNullLiteral}))
+	// Folding a previously nullable expression need not rewrite its parent's
+	// conservative annotation. Both annotations describe the same safe call.
+	ref := &planpb.ObjectRef{ObjName: "=", Obj: resolved.GetEncodedOverloadID()}
+	for _, notNullable := range []bool{false, true} {
+		out := boolType()
+		out.NotNullable = notNullable
+		supported, err := hasSemanticCapability(semanticScalar, "equal", ref,
+			[]*planpb.Expr{notNullColumn, nonNullLiteral}, &out)
+		require.NoError(t, err)
+		require.True(t, supported)
+	}
 
 	nullLiteral := i64(1)
 	nullLiteral.GetLit().Isnull = true
@@ -2326,6 +2380,113 @@ func TestSubstraitTypeAndLiteralMappings(t *testing.T) {
 	require.ErrorContains(t, err, "negative char width")
 }
 
+func TestBoundCharacterSubstringResultWidths(t *testing.T) {
+	query := boundSQLQuery(t, "select substring(c_phone, 1, 2) as prefix from tpch.customer")
+	project := boundNode(t, query, planpb.Node_PROJECT)
+	require.Equal(t, int32(2), project.ProjectList[0].Typ.Width)
+	buildSubstraitPlan(t, query)
+
+	for _, oid := range []types.T{types.T_char, types.T_varchar} {
+		t.Run(oid.String(), func(t *testing.T) {
+			source := &planpb.Expr{Typ: planpb.Type{Id: int32(oid), Width: 15}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
+			for _, literalLength := range []bool{true, false} {
+				length := col(1)
+				if literalLength {
+					length = i64(2)
+				}
+				bound, err := planbuilder.BindFuncExprImplByPlanExpr(context.Background(), "substring", []*planpb.Expr{source, i64(1), length})
+				require.NoError(t, err)
+				f := bound.GetF()
+				require.NotNil(t, f)
+				wantWidth := int32(15)
+				if literalLength {
+					wantWidth = 2
+				}
+				require.Equal(t, wantWidth, bound.Typ.Width)
+				for _, width := range []int32{2, 3, 15} {
+					out := bound.Typ
+					out.Width = width
+					supported, err := hasSemanticCapability(semanticScalar, "substring", f.Func, f.Args, &out)
+					require.NoError(t, err)
+					require.Equal(t, width == 15 || literalLength && width == 2, supported, "literal=%t width=%d", literalLength, width)
+				}
+				for _, mutate := range []func(*planpb.Type){
+					func(out *planpb.Type) { out.Id = int32(types.T_varbinary) },
+					func(out *planpb.Type) { out.Scale++ },
+					func(out *planpb.Type) { out.Charset = uint32(types.CharsetBinary) },
+					func(out *planpb.Type) { out.NotNullable = !out.NotNullable },
+				} {
+					out := bound.Typ
+					mutate(&out)
+					supported, err := hasSemanticCapability(semanticScalar, "substring", f.Func, f.Args, &out)
+					require.NoError(t, err)
+					require.False(t, supported)
+				}
+				wrongOverload := *f.Func
+				wrongOverload.Obj = function.EncodeOverloadID(function.SUBSTRING, 999)
+				supported, err := hasSemanticCapability(semanticScalar, "substring", &wrongOverload, f.Args, &bound.Typ)
+				require.NoError(t, err)
+				require.False(t, supported)
+			}
+		})
+	}
+}
+
+func TestCharacterSubstringExportDomainProof(t *testing.T) {
+	query := boundSQLQuery(t, "select substring(substring(c_phone, 1, 5), 1, 2) as prefix from tpch.customer")
+	buildSubstraitPlan(t, query)
+	query = boundSQLQuery(t, "select substring(case when c_custkey > 1 then c_phone else c_phone end, 1, 2) as prefix from tpch.customer")
+	buildSubstraitPlan(t, query)
+	caseSource := boundNode(t, query, planpb.Node_PROJECT).ProjectList[0].GetF().Args[0]
+	require.True(t, tpchCharacterSliceSourceIsText(caseSource))
+	caseSource.GetF().Args[2] = &planpb.Expr{Typ: caseSource.Typ, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Isnull: true}}}
+	require.True(t, tpchCharacterSliceSourceIsText(caseSource), "a folded NULL arm contributes no runtime string domain")
+	// BuildPlan retains CAST(ANY NULL AS VARCHAR) in this spelling. That
+	// child cast was already ineligible even with the legacy parent width.
+	query = boundSQLQuery(t, "select substring(case when c_custkey > 1 then c_phone else NULL end, 1, 2) as prefix from tpch.customer")
+	boundNode(t, query, planpb.Node_PROJECT).ProjectList[0].Typ.Width = 15
+	_, err := Export(query)
+	require.Error(t, err)
+	require.True(t, IsNotEligible(err))
+	query = boundSQLQuery(t, "select substring(cast(c_phone as varchar(3)), 1, 2) as prefix from tpch.customer")
+	_, err = Export(query)
+	require.Error(t, err, "narrow substring must not hide an ineligible truncating child cast")
+	require.True(t, IsNotEligible(err))
+
+	source := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar), Width: 15}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}
+	bound, err := planbuilder.BindFuncExprImplByPlanExpr(context.Background(), "substring", []*planpb.Expr{source, i64(1), i64(2)})
+	require.NoError(t, err)
+	binary := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varbinary), Width: 15}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}
+	for _, mutate := range []func(*planpb.Expr){
+		func(e *planpb.Expr) { e.Typ.Charset = uint32(types.CharsetBinary) },
+		func(e *planpb.Expr) { e.Typ.Charset = 256 },
+		func(e *planpb.Expr) { e.Expr = &planpb.Expr_P{P: &planpb.ParamRef{}} },
+		func(e *planpb.Expr) { e.PreparedNumeric = &planpb.PreparedNumericMetadata{StringDomainSource: binary} },
+		func(e *planpb.Expr) {
+			e.Expr = &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: "abcd"}, LiteralForm: planpb.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER}}
+		},
+		func(e *planpb.Expr) {
+			e.Expr = &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: "abcd"}, Src: binary}}
+		},
+	} {
+		forged := planbuilder.DeepCopyExpr(bound)
+		mutate(forged.GetF().Args[0])
+		f := forged.GetF()
+		supported, err := hasSemanticCapability(semanticScalar, "substring", f.Func, f.Args, &forged.Typ)
+		require.NoError(t, err)
+		require.False(t, supported)
+	}
+	forged := planbuilder.DeepCopyExpr(bound)
+	forged.GetF().Args[2].Expr = &planpb.Expr_Lit{Lit: &planpb.Literal{Isnull: true}}
+	for _, width := range []int32{2, 15} {
+		forged.Typ.Width = width
+		f := forged.GetF()
+		supported, err := hasSemanticCapability(semanticScalar, "substring", f.Func, f.Args, &forged.Typ)
+		require.NoError(t, err)
+		require.Equal(t, width == 15, supported)
+	}
+}
+
 func TestCharUsesTheVarcharSemanticFamily(t *testing.T) {
 	charType := planpb.Type{Id: int32(types.T_char), Width: 10, NotNullable: true}
 	varcharType := planpb.Type{Id: int32(types.T_varchar), Width: 10, NotNullable: true}
@@ -2583,7 +2744,7 @@ func boundSQLQuery(t *testing.T, sql string) *planpb.Query {
 	t.Helper()
 	statement, err := mysql.ParseOne(context.Background(), sql, 1)
 	require.NoError(t, err)
-	built, err := planbuilder.BuildPlan(planbuilder.NewMockCompilerContext(false), statement, false)
+	built, err := planbuilder.BuildPlan(planbuilder.NewMockCompilerContext(false, newPlanTestProcess(t)), statement, false)
 	require.NoError(t, err)
 	query := built.GetQuery()
 	require.NotNil(t, query)

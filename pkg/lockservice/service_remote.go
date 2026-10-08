@@ -94,6 +94,7 @@ func (c *asyncLockAdmissionCompletion) finalize() {
 
 var methodVersions = map[pb.Method]int64{
 	pb.Method_Lock:                         defines.MORPCVersion1,
+	pb.Method_LockWriterFair:               defines.MORPCVersion99,
 	pb.Method_ForwardLock:                  defines.MORPCVersion1,
 	pb.Method_Unlock:                       defines.MORPCVersion1,
 	pb.Method_BatchUnlock:                  defines.MORPCVersion31,
@@ -103,6 +104,8 @@ var methodVersions = map[pb.Method]int64{
 	pb.Method_GetTxnWaitingListOnLockTable: defines.MORPCVersion28,
 	pb.Method_KeepRemoteLock:               defines.MORPCVersion1,
 	pb.Method_GetBind:                      defines.MORPCVersion1,
+	pb.Method_BeginDrain:                   defines.MORPCVersion105,
+	pb.Method_QueryDrain:                   defines.MORPCVersion105,
 	pb.Method_KeepLockTableBind:            defines.MORPCVersion1,
 	pb.Method_ForwardUnlock:                defines.MORPCVersion1,
 	pb.Method_SetRestartService:            defines.MORPCVersion2,
@@ -141,6 +144,19 @@ func supportsLockProtocolV31(serviceID string) bool {
 	}
 	version, ok := value.(int64)
 	return ok && version >= defines.MORPCVersion31
+}
+
+func supportsLockProtocolV99(serviceID string) bool {
+	rt := moruntime.ServiceRuntime(serviceID)
+	if rt == nil {
+		return false
+	}
+	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	version, ok := value.(int64)
+	return ok && version >= defines.MORPCVersion99
 }
 
 func (s *service) initRemote() {
@@ -334,6 +350,8 @@ func sendRemoteActiveTxnCheck(
 func (s *service) initRemoteHandler() {
 	s.remote.server.RegisterMethodHandler(pb.Method_Lock,
 		s.handleRemoteLock)
+	s.remote.server.RegisterMethodHandler(pb.Method_LockWriterFair,
+		s.handleRemoteWriterFairLock)
 	s.remote.server.RegisterMethodHandler(pb.Method_ForwardLock,
 		s.handleForwardLock)
 	s.remote.server.RegisterMethodHandler(pb.Method_Unlock,
@@ -358,6 +376,35 @@ func (s *service) initRemoteHandler() {
 		s.handleCheckActiveTxn)
 	s.remote.server.RegisterMethodHandler(pb.Method_AbortRemoteDeadlockTxn,
 		s.handleAbortRemoteDeadlockTxn)
+}
+
+// handleRemoteWriterFairLock is a capability-bearing entry point. An owner
+// rejects the method before lock admission when writer-fair semantics are not
+// active locally; the origin can then retry the same logical request as an
+// Exclusive lock without allowing a Shared reader to barge first.
+func (s *service) handleRemoteWriterFairLock(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	req *pb.Request,
+	resp *pb.Response,
+	cs morpc.ClientSession,
+) {
+	if !supportsLockProtocolV99(s.cfg.ServiceID) ||
+		req.Lock.Options.Mode != pb.LockMode_Shared ||
+		req.Lock.Options.Granularity != pb.Granularity_Row ||
+		!req.Lock.Options.WriterFair {
+		_ = writeResponseWithDeadline(
+			s.logger,
+			cancel,
+			resp,
+			moerr.NewNotSupportedNoCtx("writer-fair lock admission is unavailable"),
+			cs,
+			defaultRPCWriteTimeout,
+			remoteLockResponseLogFields(req),
+		)
+		return
+	}
+	s.handleRemoteLock(ctx, cancel, req, resp, cs)
 }
 
 func (s *service) handleRemoteLock(
@@ -463,6 +510,7 @@ func (s *service) handleRemoteLock(
 	if err := s.acquireTxnBindRef(txn, bind, &admission); err != nil {
 		txn.Unlock()
 		s.bindChangeMu.RUnlock()
+		s.detachRejectedRemoteBind(bind)
 		_ = writeResponseWithDeadline(s.logger, cancel, resp, err, cs, defaultRPCWriteTimeout, logFields)
 		return
 	}
@@ -629,6 +677,7 @@ func (s *service) handleForwardLock(
 	if err := s.acquireTxnBindRef(txn, bind, &admission); err != nil {
 		txn.Unlock()
 		s.bindChangeMu.RUnlock()
+		s.detachRejectedRemoteBind(bind)
 		_ = writeResponseWithDeadline(s.logger, cancel, resp, err, cs, defaultRPCWriteTimeout, logFields)
 		return
 	}
@@ -749,6 +798,12 @@ func (s *service) handleGetActiveTxn(
 			return true
 		})
 	}
+	if resp.GetActiveTxn.Valid {
+		s.externalTxns.iter(func(txnID []byte) bool {
+			resp.GetActiveTxn.Txn = append(resp.GetActiveTxn.Txn, txnID)
+			return true
+		})
+	}
 	writeResponse(s.logger, cancel, resp, nil, cs)
 }
 
@@ -762,11 +817,14 @@ func (s *service) handleCheckActiveTxn(
 	if resp.CheckActiveTxn.Valid && s.unknownCommitResolver != nil {
 		// TxnIterFunc tracks frontend transaction operators. An unknown Commit
 		// can already have removed its operator while lockservice is still
-		// retaining it to finish a remote proxy ReplaceTo. Only that resolver-
-		// owned state must delay orphan cleanup. activeTxnHolder also contains
-		// ordinary lockservice holders, whose liveness must remain governed by
-		// TxnIterFunc.
+		// retaining it to finish a remote proxy ReplaceTo, so the resolver keeps
+		// that txn live until cleanup completes. Ordinary activeTxnHolder entries
+		// are not authoritative liveness; externally owned session locks are
+		// tracked separately below.
 		resp.CheckActiveTxn.Active = s.unknownCommitResolver.isPending(req.CheckActiveTxn.Txn)
+	}
+	if resp.CheckActiveTxn.Valid && !resp.CheckActiveTxn.Active {
+		resp.CheckActiveTxn.Active = s.externalTxns.contains(req.CheckActiveTxn.Txn)
 	}
 	if resp.CheckActiveTxn.Valid && !resp.CheckActiveTxn.Active && s.cfg.TxnIterFunc != nil {
 		s.cfg.TxnIterFunc(func(txnID []byte) bool {
@@ -1178,6 +1236,9 @@ func (s *service) checkTxnTimeout(ctx context.Context) {
 }
 
 func (s *service) canUnlockLocalTxn(t []byte) (bool, timestamp.Timestamp) {
+	if s.externalTxns.contains(t) {
+		return false, timestamp.Timestamp{}
+	}
 	if s.cfg.TxnIterFunc == nil {
 		return false, timestamp.Timestamp{}
 	}
@@ -1246,6 +1307,11 @@ func getLockTableBindWithContext(
 	}
 	defer releaseResponse(resp)
 	v := resp.GetBind.LockTable
+	// An older allocator or a drain racing admission can return an empty bind.
+	// Do not publish it as a lock-table owner, even if the RPC itself succeeded.
+	if !v.Valid || v.ServiceID == "" || v.Group != group || v.Table != tableID {
+		return pb.LockTable{}, allocatorState{}, ErrLockTableBindChanged
+	}
 	return v, allocatorState{
 		id:      resp.GetBind.AllocatorID,
 		version: resp.GetBind.AllocatorVersion,

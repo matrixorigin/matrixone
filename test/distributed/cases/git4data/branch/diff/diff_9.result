@@ -425,13 +425,12 @@ select mo_ctl('dn', 'flush', 'test_gc_diff.c4_leaf');
   ]
 }
 
-select mo_ctl('cn', 'mergeobjects', 't:test_gc_diff.c4_leaf:overlap');
-➤ mo_ctl(cn, mergeobjects, t:test_gc_diff.c4_leaf:overlap)[12,65535,0]  𝄀
-
-nmerged success
-01a024f7-bc90-7bf6-b9ac-86a98dfacbc9_00000, rows 12001, blks 2, osize 393.2KiB, csize 171.4KiB
-
-
+select mo_ctl('dn', 'inspect', 'merge trigger -t test_gc_diff.c4_leaf --kind l0 --l0-oneshot');
+➤ mo_ctl(dn, inspect, merge trigger -t test_gc_diff.c4_leaf --kind l0 --l0-oneshot)[12,65535,0]  𝄀
+\nmsg: trigger l0 merge for table 0-c4_leaf, oneshot: true\n\n
+select count(*) as merged_objects from metadata_scan('test_gc_diff.c4_leaf', 'id') having count(*) = 1;
+➤ merged_objects[-5,64,0]  𝄀
+1
 data branch diff c4_leaf against c4_root;
 ➤ diff c4_leaf against c4_root[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,32,0]  ¦  v[4,32,0]  ¦  note[12,20,0]  𝄀
 c4_root  ¦  UPDATE  ¦  1  ¦  100001  ¦  root-update  𝄀
@@ -634,13 +633,12 @@ select mo_ctl('dn', 'flush', 'test_gc_diff.c5_leaf');
   ]
 }
 
-select mo_ctl('cn', 'mergeobjects', 't:test_gc_diff.c5_leaf:overlap');
-➤ mo_ctl(cn, mergeobjects, t:test_gc_diff.c5_leaf:overlap)[12,65535,0]  𝄀
-
-mmerged success
-01a02744-557e-7061-83d6-5eb796b1a1eb_00000, rows 4000, blks 1, osize 54.19KiB, csize 37.69KiB
-
-
+select mo_ctl('dn', 'inspect', 'merge trigger -t test_gc_diff.c5_leaf --kind l0 --l0-oneshot');
+➤ mo_ctl(dn, inspect, merge trigger -t test_gc_diff.c5_leaf --kind l0 --l0-oneshot)[12,65535,0]  𝄀
+\nmsg: trigger l0 merge for table 0-c5_leaf, oneshot: true\n\n
+select count(*) as merged_objects from metadata_scan('test_gc_diff.c5_leaf', 'id') having count(*) = 1;
+➤ merged_objects[-5,64,0]  𝄀
+1
 select mo_ctl('dn', 'globalcheckpoint', '');
 ➤ mo_ctl(dn, globalcheckpoint, )[12,65535,0]  𝄀
 {

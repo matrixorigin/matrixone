@@ -23,20 +23,37 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+// ft2RunStreamingSql indirects the streaming SQL executor so the self-completing json-probe tail
+// (startProbeTail) can be driven by a unit test without a live cluster. It carries a per-statement
+// optimizer_hints string: the probe passes "applyIndices=1" so the fallback/tail SQL's base-table
+// scan skips the index rewrite and does not re-trigger the probe and recurse.
+var ft2RunStreamingSql = sqlexec.RunStreamingSqlWithOptimizerHints
+
+// ft2TailSpansSchema indirects the schema-version span check so a unit test can drive the behind
+// branch's tail-vs-fallback decision without a live engine.
+var ft2TailSpansSchema = func(u *fulltext2SearchState, proc *process.Process, searched int64) bool {
+	return u.probeTailSpansSchema(proc, searched)
+}
 
 // fulltext2SearchState answers a MATCH over a fulltext2 index: it loads the
 // index's segments (base + CDC tail) once via the shared VectorIndexCache and reuses
@@ -88,6 +105,28 @@ type fulltext2SearchState struct {
 	scoreVecIdx  int
 	includeOut   []ft2IncludeOut
 	includeNames []string
+
+	// Self-completing json probe (TableConfig.ProbeTail). After the bulk search drains, the operator
+	// runs table_changes(searched, snapshot] ITSELF and emits the gap pks as (doc_id, score=0), bound
+	// to the generation the search actually reached -- so a row committed after that generation is
+	// recovered rather than dropped. tailSp/tailSearch/tailSnap are captured in start(); the tail
+	// query runs lazily on the first call() after the bulk ends, and its result is paged like the bulk.
+	// The base scan re-checks the json predicate, so the tail need only be a superset.
+	probeTail bool
+	tailSp    *sqlexec.SqlProcess
+	// tailSearchedBuildTS is the build_ts of the generation the bulk search ran on, captured
+	// atomically with the search under the cache entry lock (rt.SearchedBuildTS), so the tail's
+	// lower bound is exactly what was searched -- never a newer generation a concurrent reload
+	// published after the search returned.
+	tailSearchedBuildTS int64
+	tailSnap            timestamp.Timestamp
+	tailStarted         bool
+	// The tail runs table_changes via RunStreamingSql so a large gap streams in bounded batches
+	// rather than materializing every gap pk (OOM guard). A producer goroutine feeds tailStreamCh;
+	// emitProbeTail drains one result per call(). tailCancel stops the producer on early abort.
+	tailStreamCh chan executor.Result
+	tailErrCh    chan error
+	tailCancel   context.CancelFunc
 }
 
 // ft2IncludeOut maps one surviving INCLUDE output vector to its source: vecIdx is the
@@ -134,6 +173,9 @@ func (u *fulltext2SearchState) reset(tf *TableFunction, proc *process.Process) {
 	u.streaming = false
 	u.errCh = nil
 	u.done = false
+	u.closeProbeTail()
+	u.probeTail = false
+	u.tailSp = nil
 	// u.out is kept and REUSED across queries (SearchInto Resets its buffers per query) so
 	// the LIMIT path is alloc-free after warmup; includeColumns is stable (cfg-derived).
 }
@@ -157,6 +199,7 @@ func (u *fulltext2SearchState) stopStream() {
 
 func (u *fulltext2SearchState) free(tf *TableFunction, proc *process.Process, pipelineFailed bool, err error) {
 	u.stopStream()
+	u.closeProbeTail()
 	if u.batch != nil {
 		u.batch.Clean(proc.Mp())
 	}
@@ -167,7 +210,9 @@ func (u *fulltext2SearchState) call(tf *TableFunction, proc *process.Process) (v
 
 	if u.streaming {
 		if u.done {
-			return vm.CancelResult, nil
+			// Bulk stream exhausted; self-complete with the table_changes tail (no-op if not a
+			// probe_tail probe).
+			return u.emitProbeTail(proc)
 		}
 		select {
 		case b, ok := <-u.streamCh:
@@ -178,7 +223,7 @@ func (u *fulltext2SearchState) call(tf *TableFunction, proc *process.Process) (v
 				if e := <-u.errCh; e != nil {
 					return vm.CancelResult, e
 				}
-				return vm.CancelResult, nil
+				return u.emitProbeTail(proc)
 			}
 			// b ownership (its pooled Keys buffer) was received from the producer; recycle it
 			// on EVERY exit from here (incl. the append error paths in appendOutputRange), else
@@ -198,10 +243,10 @@ func (u *fulltext2SearchState) call(tf *TableFunction, proc *process.Process) (v
 	}
 
 	// start() bailed before running SearchInto (e.g. a NULL/empty pattern) — u.out is nil, or
-	// (on a reused operator) was emptied in start()'s reset. Either way no results this row →
-	// signal end of stream. (Before the SearchOutput migration this was a nil u.keys slice.)
+	// (on a reused operator) was emptied in start()'s reset. Either way no bulk results this row;
+	// still self-complete the tail when this is a probe_tail probe (else end of stream).
 	if u.out == nil || u.out.Keys == nil {
-		return vm.CancelResult, nil
+		return u.emitProbeTail(proc)
 	}
 
 	// LIMIT (non-streaming) path: page the box-free SearchInto result (u.out) into this
@@ -225,7 +270,9 @@ func (u *fulltext2SearchState) call(tf *TableFunction, proc *process.Process) (v
 	u.offset += n
 	u.batch.SetRowCount(n)
 	if u.batch.RowCount() == 0 {
-		return vm.CancelResult, nil
+		// Bulk result fully paged; self-complete with the table_changes tail (no-op if not a
+		// probe_tail probe).
+		return u.emitProbeTail(proc)
 	}
 	return vm.CallResult{Status: vm.ExecNext, Batch: u.batch}, nil
 }
@@ -268,6 +315,248 @@ func (u *fulltext2SearchState) appendOutputRange(out *vectorindex.SearchOutput, 
 		}
 	}
 	return nil
+}
+
+// emitProbeTail self-completes a mandatory json probe. On the FIRST call after the bulk drains it
+// launches the table_changes(searched, snapshot] gap query (bound to the generation the bulk search
+// actually reached) as a STREAM; on this and each subsequent call it drains one streamed result into
+// u.batch as (doc_id=pk, score=0) rows. A no-op (CancelResult) when this is not a probe_tail probe,
+// the gap is empty, or the stream is exhausted.
+func (u *fulltext2SearchState) emitProbeTail(proc *process.Process) (vm.CallResult, error) {
+	if !u.probeTail {
+		return vm.CancelResult, nil
+	}
+	if !u.tailStarted {
+		u.tailStarted = true
+		if err := u.startProbeTail(proc); err != nil {
+			return vm.CancelResult, err
+		}
+	}
+	if u.tailStreamCh == nil {
+		return vm.CancelResult, nil // empty gap: no stream was started
+	}
+	for {
+		select {
+		case res, ok := <-u.tailStreamCh:
+			if !ok {
+				// producer finished; surface any error it buffered before closing. Call cancel() (not
+				// just drop it) so the WithCancel context created in startProbeStream releases its
+				// resources on the normal-completion path -- closeProbeTail only cancels when tailCancel
+				// is still set, and this path clears it.
+				u.tailStreamCh = nil
+				if u.tailCancel != nil {
+					u.tailCancel()
+					u.tailCancel = nil
+				}
+				select {
+				case err := <-u.tailErrCh:
+					return vm.CancelResult, err
+				default:
+					return vm.CancelResult, nil
+				}
+			}
+			n, err := u.appendTailResult(&res, proc)
+			res.Close()
+			if err != nil {
+				return vm.CancelResult, err
+			}
+			if n == 0 {
+				continue // empty streamed result; pull the next
+			}
+			u.batch.SetRowCount(n)
+			return vm.CallResult{Status: vm.ExecNext, Batch: u.batch}, nil
+		case err := <-u.tailErrCh:
+			return vm.CancelResult, err
+		case <-proc.Ctx.Done():
+			return vm.CancelResult, proc.Ctx.Err()
+		}
+	}
+}
+
+// startProbeTail chooses how to self-complete the probe based on the generation the bulk search
+// ACTUALLY reached (tailSearchedBuildTS, set under the cache entry lock via rt.SearchedBuildTS -- so
+// it is immune to a concurrent evict+reload and to a held in-flight load, and it is what the plan
+// could not know). Every choice is validated against the read; whichever query it picks streams pks
+// that the group-by dedup and INNER JOIN above narrow, and the base scan re-checks the json predicate.
+//
+//   - searched > read snapshot: the generation is NEWER than the read (it may have removed a posting a
+//     long-running transaction must still see). A forward tail cannot recover a deletion, and the bulk
+//     is already unsound -> FALLBACK to a full pk scan as of the read.
+//   - searched >= bar (max source commit as of the read): CAUGHT UP. The bulk already reflects every
+//     row the read sees -> NO tail. (Common CREATE-INDEX-on-existing-data case: build_ts predates the
+//     create's schema-version bump, but there is nothing to recover, so we neither tail -- which would
+//     span the bump -- nor fall back.)
+//   - behind, and (searched, S] crosses a schema-version change: table_changes cannot span a DDL ->
+//     FALLBACK to a full pk scan.
+//   - behind, single schema version: run table_changes(searched, S].
+func (u *fulltext2SearchState) startProbeTail(proc *process.Process) error {
+	if u.tblcfg.SrcTable == "" || u.tblcfg.PKey == "" {
+		return moerr.NewInternalError(proc.Ctx, "fulltext2_search: probe_tail requires source table and pk in config")
+	}
+	searched := u.tailSearchedBuildTS
+	// Newer than the read -> the generation may have removed a posting a long-running read must still
+	// see, which a forward tail cannot recover -> FALLBACK. build_ts is physical-only (the logical
+	// component is dropped at write, e.g. GetToTS().Physical()), so at EQUAL physical time we cannot
+	// prove the generation is not newer: one built at (P, L>0) records build_ts P, and a read at
+	// (P, L'<L) would be kept here by a strict `>` compare, then have the (P, L) deletion dropped at
+	// the mandatory join. Fall back whenever searched >= the read's physical time; only a strictly
+	// older physical generation is provably not newer and reaches the caught-up/tail logic below.
+	if searched >= u.tailSnap.PhysicalTime {
+		return u.startProbeStream(proc, u.probeFallbackSQL())
+	}
+	// Caught up iff the searched generation covers the full bar. build_ts is physical-only, so compare
+	// it as BuildTS(searched, 0) against the FULL bar (physical + logical): a bar of (P, L>0) is NOT
+	// covered by a generation at physical P -- it may miss the (P, L) commit -- so a physical-only
+	// compare would skip the tail and drop that row at the mandatory join.
+	bar := types.BuildTS(u.tblcfg.ProbeTailBar, u.tblcfg.ProbeTailBarLogical)
+	sTS := types.BuildTS(searched, 0)
+	if !sTS.LT(&bar) { // caught up: bulk is complete, no tail
+		return nil
+	}
+	if ft2TailSpansSchema(u, proc, searched) { // behind across a DDL: table_changes can't span it
+		return u.startProbeStream(proc, u.probeFallbackSQL())
+	}
+	return u.startProbeStream(proc, u.probeTailSQL(searched))
+}
+
+// probeTailSQL is table_changes(searched, S] restricted to inserts (and, when the planner could
+// render it, the json predicate), projected to the pk. table_changes is ALIASED so its reserved
+// metadata columns (change_type) bind. Both endpoints live in one schema version (guaranteed by the
+// caller), so it never hits the schema-span guard.
+func (u *fulltext2SearchState) probeTailSQL(searched int64) string {
+	fromStr := fmt.Sprintf("%d-%d", searched, 0)
+	to := types.TimestampToTS(u.tailSnap)
+	toStr := fmt.Sprintf("%d-%d", to.Physical(), to.Logical())
+	const tc = "mo_tc"
+	sql := fmt.Sprintf("SELECT %s.%s FROM table_changes(%s, %s, %s, %s) AS %s WHERE %s.%s = 'insert'",
+		tc, sqlquote.Ident(u.tblcfg.PKey),
+		sqlquote.String(u.tblcfg.DbName), sqlquote.String(u.tblcfg.SrcTable),
+		sqlquote.String(fromStr), sqlquote.String(toStr),
+		tc, tc, catalog.TableChangesAttrChangeType)
+	if u.tblcfg.ProbeTailWhere != "" {
+		sql += " AND (" + u.tblcfg.ProbeTailWhere + ")"
+	}
+	return sql
+}
+
+// probeFallbackSQL is a selective full scan of the source as of the read: `SELECT pk FROM db.src
+// WHERE <json predicate>`, projecting the matching pks the INNER JOIN + base re-check turn into the
+// correct answer -- i.e. the query degrades to a full scan, but only the matching rows flow into the
+// join (not every pk, which would make the mandatory join a full self-join). The predicate
+// (ProbeTailWhere) uses the json_extract_*_internal twins: this scans the BASE table, where the public
+// json_extract name would re-trigger the probe rewrite and recurse. Used when the searched generation
+// is incompatible with the read (newer than it, or a DDL sits in the gap so table_changes cannot span
+// the window). The planner only sets ProbeTail when the predicate rendered, so ProbeTailWhere is
+// non-empty here; if it somehow is not, fall back to the (sound but unselective) all-pks scan.
+func (u *fulltext2SearchState) probeFallbackSQL() string {
+	sql := fmt.Sprintf("SELECT %s FROM %s",
+		sqlquote.Ident(u.tblcfg.PKey), sqlquote.QualifiedIdent(u.tblcfg.DbName, u.tblcfg.SrcTable))
+	if u.tblcfg.ProbeTailWhere != "" {
+		sql += " WHERE " + u.tblcfg.ProbeTailWhere
+	}
+	return sql
+}
+
+// probeTailSpansSchema reports whether (searched, S] crosses a schema-version change on the source,
+// which table_changes refuses to span. It reuses table_changes' own resolution/comparison at the two
+// endpoints. Fail-closed: any resolve failure returns true so the caller takes the safe full-scan
+// fallback rather than emit a tail that would error.
+func (u *fulltext2SearchState) probeTailSpansSchema(proc *process.Process, searched int64) bool {
+	e, ok := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
+	if !ok {
+		return true
+	}
+	atSearched, err1 := tableChangesTableDefAt(proc.Ctx, e, proc, u.tblcfg.DbName, u.tblcfg.SrcTable, types.BuildTS(searched, 0))
+	atRead, err2 := tableChangesTableDefAt(proc.Ctx, e, proc, u.tblcfg.DbName, u.tblcfg.SrcTable, types.TimestampToTS(u.tailSnap))
+	if err1 != nil || err2 != nil {
+		return true
+	}
+	return !sameTableChangesSchema(atSearched, atRead)
+}
+
+// startProbeStream launches sql on tailSp (which carries the read's snapshot/tenant) as a stream that
+// emitProbeTail drains. On abort, closeProbeTail cancels this context and drains to the producer's close.
+func (u *fulltext2SearchState) startProbeStream(proc *process.Process, sql string) error {
+	u.tailStreamCh = make(chan executor.Result, 8)
+	u.tailErrCh = make(chan error, 2)
+	ctx, cancel := context.WithCancel(proc.Ctx)
+	u.tailCancel = cancel
+	go func() {
+		_, e := ft2RunStreamingSql(ctx, u.tailSp, sql, "applyIndices=1", u.tailStreamCh, u.tailErrCh)
+		if e != nil {
+			u.tailErrCh <- e // buffered(2): send before close so emitProbeTail reads it after drain
+		}
+		close(u.tailStreamCh)
+	}()
+	return nil
+}
+
+// appendTailResult writes every row of a streamed table_changes result (pk column) into u.batch,
+// returning the row count appended. Each streamed result is one executor batch, bounded, so u.batch
+// never holds more than one streamed chunk.
+func (u *fulltext2SearchState) appendTailResult(res *executor.Result, proc *process.Process) (int, error) {
+	n := 0
+	for _, b := range res.Batches {
+		if b == nil || len(b.Vecs) == 0 {
+			continue
+		}
+		if err := u.appendTailRows(b.Vecs[0], 0, b.RowCount(), proc); err != nil {
+			return n, err
+		}
+		n += b.RowCount()
+	}
+	return n, nil
+}
+
+// appendTailRows writes n rows [start, start+n) of a table_changes pk column into u.batch as
+// (doc_id <- pk, score <- 0), name-driven exactly like appendOutputRange. A json probe node emits
+// only (doc_id, score); should an INCLUDE output survive column pruning it is filled with NULLs so
+// the batch stays column-aligned.
+func (u *fulltext2SearchState) appendTailRows(pkVec *vector.Vector, start, n int, proc *process.Process) error {
+	mp := proc.Mp()
+	if u.pkVecIdx >= 0 {
+		dst := u.batch.Vecs[u.pkVecIdx]
+		for i := start; i < start+n; i++ {
+			if err := dst.UnionOne(pkVec, int64(i), mp); err != nil {
+				return err
+			}
+		}
+	}
+	if u.scoreVecIdx >= 0 {
+		vec := u.batch.Vecs[u.scoreVecIdx]
+		for i := 0; i < n; i++ {
+			if err := vector.AppendFixed[float32](vec, 0, false, mp); err != nil {
+				return err
+			}
+		}
+	}
+	for _, ic := range u.includeOut {
+		vec := u.batch.Vecs[ic.vecIdx]
+		for i := 0; i < n; i++ {
+			if err := vector.AppendAny(vec, nil, true, mp); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// closeProbeTail cancels the tail's streaming producer (if any) and drains its channel until the
+// producer closes it, so no goroutine leaks past the query, then rewinds so a reused operator does
+// not carry a prior query's tail. Safe to call when no tail ran.
+func (u *fulltext2SearchState) closeProbeTail() {
+	if u.tailCancel != nil {
+		u.tailCancel()
+	}
+	if u.tailStreamCh != nil {
+		for res := range u.tailStreamCh { // drain to the producer's close()
+			res.Close()
+		}
+	}
+	u.tailCancel = nil
+	u.tailStreamCh = nil
+	u.tailErrCh = nil
+	u.tailStarted = false
 }
 
 func fulltext2SearchPrepare(proc *process.Process, arg *TableFunction) (tvfState, error) {
@@ -347,6 +636,8 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 	u.dropFilter = false
 	u.streaming = false
 	u.done = false
+	u.closeProbeTail()
+	u.probeTail = false
 	// u.out is kept and REUSED across queries (SearchInto Resets it per query), but EMPTY it
 	// here too: a subsequent early-return below (NULL/empty pattern) skips SearchInto, so
 	// without this a reused operator would page the PREVIOUS query's results as this row's
@@ -404,6 +695,15 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 	sp := sqlexec.NewSqlProcess(proc)
 	veccache.Cache.Once()
 
+	// Named-snapshot MATCH (#27941): sp.SnapshotTS makes the index-load SQL run on a txn
+	// cloned at that TS, and cacheKey carries the same TS so the historical index is a
+	// separate cache entry from the current one. EffectiveSnapshotTS is nil for a
+	// non-historical TS, leaving the key and the read unchanged.
+	cacheKey := u.tblcfg.IndexTable
+	if ets := sp.ApplyScanSnapshot(tf.ScanSnapshot); ets != nil {
+		cacheKey = veccache.SnapshotKey(u.tblcfg.IndexTable, *ets)
+	}
+
 	// mode (argVecs[2], a query const): boolean → operator query, else NL phrase.
 	var mode int64
 	if mv := tf.ctr.argVecs[2]; mv != nil && mv.Length() > 0 {
@@ -452,6 +752,23 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 		IncludePredsJSON: includePreds,
 	}
 
+	// A mandatory json probe against an async index SELF-COMPLETES: after the bulk search this
+	// operator runs table_changes(searched, snapshot] itself and emits the gap pks, bound to the
+	// generation THIS search actually reached. That generation's build_ts is captured atomically with
+	// the search via rt.SearchedBuildTS (wired below) -- NOT read afterward, which a concurrent
+	// evict+reload could advance past what was searched, dropping the gap. Capture what emitProbeTail
+	// needs now; the tail runs lazily once the bulk drains. The snapshot upper bound is the read
+	// point: the historical TS for a {snapshot=...} read, else the current txn snapshot.
+	u.probeTail = q.JSONProbe && u.tblcfg.ProbeTail
+	if u.probeTail {
+		u.tailSp = sp
+		u.tailSearchedBuildTS = 0
+		u.tailSnap = proc.GetTxnOperator().SnapshotTS()
+		if ets := sp.EffectiveSnapshotTS(); ets != nil {
+			u.tailSnap = *ets
+		}
+	}
+
 	if u.limit == 0 {
 		// No pushed LIMIT: STREAM every matching doc in bounded batches (no top-K heap,
 		// no materialization of the whole result set). A producer goroutine runs the
@@ -477,8 +794,11 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 		if len(u.includeNames) > 0 {
 			rt.RequestedIncludeColumns = u.includeNames
 		}
+		if u.probeTail {
+			rt.SearchedBuildTS = &u.tailSearchedBuildTS // captured under the cache lock during the search
+		}
 		go func() {
-			_, _, serr := veccache.Cache.Search(sp, u.tblcfg.IndexTable, newsearch, q, rt)
+			_, _, serr := veccache.Cache.Search(sp, cacheKey, newsearch, q, rt)
 			u.errCh <- serr // buffered(1): send before close so call() reads it after drain
 			close(u.streamCh)
 		}()
@@ -498,7 +818,11 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 	if u.out == nil {
 		u.out = &vectorindex.SearchOutput{}
 	}
-	return veccache.Cache.SearchInto(sp, u.tblcfg.IndexTable, newsearch, q, rt, u.out)
+	if u.probeTail {
+		rt.SearchedBuildTS = &u.tailSearchedBuildTS // captured under the cache lock during the search
+	}
+	serr := veccache.Cache.SearchInto(sp, cacheKey, newsearch, q, rt, u.out)
+	return serr
 }
 
 // fulltext2ScoreAlgo resolves the relevance formula from fulltext2's OWN session

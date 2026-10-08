@@ -59,6 +59,60 @@ func splitFiltersByVectorIndexCoverage(
 	return pushdownFilters, remainingFilters
 }
 
+func hasVectorIndexIncludedColumnFilter(
+	filters []*plan.Expr,
+	scanNode *plan.Node,
+	includeColumns []string,
+) bool {
+	if scanNode == nil || scanNode.TableDef == nil || len(scanNode.BindingTags) == 0 || len(includeColumns) == 0 {
+		return false
+	}
+	included := make(map[string]struct{}, len(includeColumns))
+	for _, name := range includeColumns {
+		included[name] = struct{}{}
+	}
+	for _, expr := range filters {
+		if vectorIndexExprRefsIncludedColumn(expr, scanNode.BindingTags[0], scanNode.TableDef, included) {
+			return true
+		}
+	}
+	return false
+}
+
+func vectorIndexExprRefsIncludedColumn(
+	expr *plan.Expr,
+	scanTag int32,
+	tableDef *plan.TableDef,
+	included map[string]struct{},
+) bool {
+	if expr == nil {
+		return false
+	}
+	switch impl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		name, ok := vectorIndexColumnNameFromTableDef(impl.Col, tableDef, scanTag)
+		if !ok {
+			return false
+		}
+		_, ok = included[name]
+		return ok
+	case *plan.Expr_F:
+		for _, arg := range impl.F.Args {
+			if vectorIndexExprRefsIncludedColumn(arg, scanTag, tableDef, included) {
+				return true
+			}
+		}
+		return false
+	case *plan.Expr_List:
+		for _, sub := range impl.List.List {
+			if vectorIndexExprRefsIncludedColumn(sub, scanTag, tableDef, included) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func vectorIndexColumnNameFromTableDef(col *plan.ColRef, tableDef *plan.TableDef, scanTag int32) (string, bool) {
 	if col == nil || tableDef == nil {
 		return "", false

@@ -16,6 +16,37 @@
 
 GO_UT_ANALYSIS_VERSION="v0.0.0-20250711025253-f31acb12d3b1"
 
+# make ut already owns native preparation. Its invocation-local indication is
+# accepted only with the existing source/platform/artifact provenance proof.
+# Direct script calls, archives, and stale artifacts keep the build fallback.
+function prepare_ut_native() {
+    local accelerator optimization simsimd extra platform
+    local goos goarch hostos hostarch library
+    local expected_accelerator=cpu expected_simsimd=0
+    [[ "${MO_CL_CUDA:-0}" == 1 ]] && expected_accelerator=gpu
+    [[ "${MO_CL_SIMSIMD:-0}" == 1 ]] && expected_simsimd=1
+    IFS=: read -r accelerator optimization simsimd extra <<< "${UT_NATIVE_PREPARED:-}"
+    if [[ -z "${extra}" && "${accelerator}" == "${expected_accelerator}" &&
+          ( "${optimization}" == release || "${optimization}" == debug ) &&
+          "${simsimd}" == "${expected_simsimd}" ]]; then
+        if platform=$(go env GOOS GOARCH GOHOSTOS GOHOSTARCH); then
+            read -r goos goarch hostos hostarch <<< "$(printf '%s' "${platform}" | tr '\n' ' ')"
+            library=""
+            case "${goos}" in
+                darwin) library=libmo.dylib ;;
+                linux) library=libmo.so ;;
+            esac
+            if [[ -n "${library}" && "${goos}" == "${hostos}" && "${goarch}" == "${hostarch}" ]] &&
+                ./cgo/mo-native-provenance verify "$PWD" "$PWD/cgo/${library}" \
+                    "${goos}" "${goarch}" "${accelerator}" "${optimization}" "${simsimd}"; then
+                printf '%s\n' '[ut_native] verified Makefile-prepared artifacts; reuse native preparation'
+                return 0
+            fi
+        fi
+    fi
+    make cgo
+}
+
 function retry_command() {
     if (( $# < 3 )); then
         echo "Usage: retry_command MAX_ATTEMPTS DELAY_SECONDS COMMAND [ARG...]" >&2
@@ -55,6 +86,22 @@ function retry_command() {
 function install_go_ut_analysis() {
     local max_attempts=${1:-3}
     local delay_seconds=${2:-5}
+
+    # Persistent runners may already have this exact tool. Inspect build
+    # metadata without executing an unknown/stale binary; replacements are not
+    # the pinned release. Missing or unreadable metadata falls back to install.
+    local installed_tool
+    local build_info
+    if installed_tool=$(command -v go-ut-analysis) &&
+       [[ -f "${installed_tool}" && -x "${installed_tool}" ]] &&
+       build_info=$(go version -m "${installed_tool}" 2>/dev/null) &&
+       printf '%s\n' "${build_info}" | awk -v version="${GO_UT_ANALYSIS_VERSION}" '
+           $1 == "mod" && $2 == "github.com/matrixorigin/go-ut-analysis" && $3 == version { pinned = 1 }
+           $1 == "=>" { replaced = 1 }
+           END { exit !(pinned && !replaced) }
+       '; then
+        return 0
+    fi
 
     retry_command "${max_attempts}" "${delay_seconds}" \
         go install "github.com/matrixorigin/go-ut-analysis@${GO_UT_ANALYSIS_VERSION}"

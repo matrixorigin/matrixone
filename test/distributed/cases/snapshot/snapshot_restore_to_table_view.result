@@ -252,6 +252,7 @@ department_name    individual_sales    department_summary_sales
 Sales    2700.00    2700.00
 Engineering    2000.00    2000.00
 Human Resources    1000.00    0.00
+use test01;
 drop table if exists employees;
 drop table if exists departments;
 drop table if exists orders;

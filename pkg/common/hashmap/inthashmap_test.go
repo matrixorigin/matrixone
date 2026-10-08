@@ -79,6 +79,37 @@ func TestIntHashMapRejectsJoinNaN(t *testing.T) {
 	require.Equal(t, []int64{1, 1}, zValues)
 }
 
+func TestIntHashMapCharUsesPadSpaceEquality(t *testing.T) {
+	mp := mpool.MustNewZero()
+	m, err := NewIntHashMap(false, mp)
+	require.NoError(t, err)
+	defer func() {
+		m.Free()
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	values := vector.NewVec(types.New(types.T_char, 4, 0))
+	defer values.Free(mp)
+	for _, value := range []string{"a", "a ", "a  ", "b"} {
+		require.NoError(t, vector.AppendBytes(values, []byte(value), false, mp))
+	}
+
+	groups, _, err := m.NewIterator().Insert(0, values.Length(), []*vector.Vector{values})
+	require.NoError(t, err)
+	require.Equal(t, []uint64{1, 1, 1, 2}, groups)
+	groups, _, err = m.NewIterator().Find(0, values.Length(), []*vector.Vector{values})
+	require.NoError(t, err)
+	require.Equal(t, []uint64{1, 1, 1, 2}, groups)
+
+	constant, err := vector.NewConstBytes(
+		types.New(types.T_char, 4, 0), []byte("a "), 3, mp)
+	require.NoError(t, err)
+	defer constant.Free(mp)
+	groups, _, err = m.NewIterator().Find(0, constant.Length(), []*vector.Vector{constant})
+	require.NoError(t, err)
+	require.Equal(t, []uint64{1, 1, 1}, groups)
+}
+
 func TestIntHashMapProbeGroupingDoesNotMatchRawKey(t *testing.T) {
 	mp := mpool.MustNewZero()
 	hashMap, err := NewIntHashMap(false, mp)

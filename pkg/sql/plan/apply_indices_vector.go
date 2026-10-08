@@ -1458,6 +1458,25 @@ func exprCallsFunc(expr *plan.Expr, fnName string) bool {
 				return true
 			}
 		}
+	case *plan.Expr_W:
+		// A MATCH inside a window spec (function arg, PARTITION BY, ORDER BY) must be detected
+		// too, mirroring replaceScoreFnInExprBy's Expr_W traversal (#28974). Guard e.W like that
+		// sibling does, so a partially-built Expr_W with a nil spec does not panic here.
+		if e.W != nil {
+			if exprCallsFunc(e.W.WindowFunc, fnName) {
+				return true
+			}
+			for _, p := range e.W.PartitionBy {
+				if exprCallsFunc(p, fnName) {
+					return true
+				}
+			}
+			for _, o := range e.W.OrderBy {
+				if o != nil && exprCallsFunc(o.Expr, fnName) {
+					return true
+				}
+			}
+		}
 	}
 	return false
 }
@@ -1484,6 +1503,22 @@ func replaceScoreFnInExprBy(expr *plan.Expr, rewrite func(*plan.Function) *plan.
 	case *plan.Expr_List:
 		for i, sub := range e.List.List {
 			e.List.List[i] = replaceScoreFnInExprBy(sub, rewrite)
+		}
+	case *plan.Expr_W:
+		// A window spec carries its function and OVER partition/order-by as nested exprs. Recurse so a
+		// served MATCH inside a window function argument or its OVER order-by is rewritten to the score
+		// column too -- reached only from the WINDOW fulltext anchor; aggregate/projection exprs never
+		// hold an Expr_W, so existing callers are unaffected.
+		if e.W != nil {
+			e.W.WindowFunc = replaceScoreFnInExprBy(e.W.WindowFunc, rewrite)
+			for i, p := range e.W.PartitionBy {
+				e.W.PartitionBy[i] = replaceScoreFnInExprBy(p, rewrite)
+			}
+			for i, o := range e.W.OrderBy {
+				if o != nil {
+					e.W.OrderBy[i].Expr = replaceScoreFnInExprBy(o.Expr, rewrite)
+				}
+			}
 		}
 	}
 	return expr

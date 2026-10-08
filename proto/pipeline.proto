@@ -36,6 +36,8 @@ enum Method {
   PipelineStreamFinish = 5;
   PipelineStreamFinishAck = 6;
   PipelineBatchAck = 7;
+  // Admission on the execution stream before sending a vector partition-zero pipeline.
+  PipelineProtocolCheck = 8;
 }
 
 // StreamTeardownMode negotiates whether a completed logical pipeline stream can
@@ -73,6 +75,8 @@ message Message {
   uint64 accepted_batch_credit_bytes = 16;
   uint64 batch_sequence = 17;
   uint64 batch_ack_sequence = 18;
+  // Request: minimum required version. Response: actual receiver version.
+  int64 protocol_version = 19;
 }
 
 message Connector {
@@ -671,6 +675,9 @@ message Instruction {
   // MERGE_TOP only: consume one independently ordered stream from every
   // receiver. This is serialized for per-CN ordered gathers sent by RemoteRun.
   bool merge_top_ordered_streams = 63;
+  // PARTITION Top-N only: retain all peers of the Nth row. Planning is gated
+  // by MORPCVersion69 so an older receiver cannot silently drop RANK ties.
+  bool partition_top_n_with_ties = 64;
 }
 
 message AnalysisList {
@@ -781,6 +788,19 @@ message SessionInfo {
   // value of one on the receiving CN.
   uint64 auto_increment_increment = 15;
   uint64 auto_increment_offset = 16;
+  // IANA identity preserves historical and DST rules. Empty means the legacy
+  // time_zone bytes describe a fixed-offset location.
+  string time_zone_name = 17;
+  // Statement-scoped diagnostic retention capacity. The explicit-set bit
+  // distinguishes a configured zero from an absent field on older CNs.
+  uint32 max_error_count = 18;
+  bool max_error_count_set = 19;
+  // Effective value captured for this execution; presence distinguishes zero
+  // from a process sent by an older coordinator.
+  uint32 default_week_format = 20;
+  bool default_week_format_set = 21;
+  // Effective locale captured for locale-sensitive temporal functions.
+  string lc_time_names = 22;
 }
 
 message SessionLoggerInfo {

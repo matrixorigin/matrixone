@@ -85,6 +85,11 @@ func (shuffle *Shuffle) Prepare(proc *process.Process) error {
 		}
 	}
 	if !shuffle.ctr.shufflePool.hold() {
+		// Preserve cancellation and the primary execution failure for the
+		// scope collector; a generic admission error would mask their cause.
+		if err := shuffle.ctr.shufflePool.terminalError(); err != nil {
+			return err
+		}
 		return moerr.NewInternalError(proc.Ctx, "shuffle pool was aborted before prepare completed")
 	}
 	shuffle.ctr.held = true
@@ -395,7 +400,8 @@ func (shuffle *Shuffle) failLocalProducer(proc *process.Process, err error) {
 }
 
 func (shuffle *Shuffle) stopWritingOnce() {
-	if shuffle.ctr.writingStopped || shuffle.ctr.shufflePool == nil {
+	// Only a successfully admitted holder may publish pool completion.
+	if !shuffle.ctr.held || shuffle.ctr.writingStopped || shuffle.ctr.shufflePool == nil {
 		return
 	}
 	shuffle.ctr.writingStopped = true
@@ -406,6 +412,7 @@ func (shuffle *Shuffle) flushPending(proc *process.Process) (bool, <-chan struct
 	nextBucket, nextOffset, waiter, done, err := shuffle.ctr.shufflePool.tryWrite(
 		shuffle.ctr.pendingBat,
 		shuffle.ctr.sels,
+		shuffle.CurrentShuffleIdx,
 		shuffle.ctr.pendingBucket,
 		shuffle.ctr.pendingOffset,
 		proc,

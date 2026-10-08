@@ -135,12 +135,23 @@ type SessionInfo struct {
 	// SqlMode is captured on the initiating CN and used when a remote process has
 	// no session variable resolver.
 	SqlMode string
+	// Captured per execution for one-argument WEEK on remote/forwarded CNs.
+	DefaultWeekFormat    uint8
+	DefaultWeekFormatSet bool
+	// Effective lc_time_names captured on the initiating CN and used when a
+	// remote process has no session-variable resolver.
+	LCTimeNames string
 	// AutoIncrementIncrement and AutoIncrementOffset are captured on the
 	// initiating CN and used by remote PRE_INSERT operators.  They are
 	// statement-scoped; zero means the default value one for compatibility with
 	// old process payloads and internal/background processes.
 	AutoIncrementIncrement uint64
 	AutoIncrementOffset    uint64
+	// MaxErrorCount is the statement-scoped capacity for retained diagnostic
+	// records. MaxErrorCountSet distinguishes an explicit zero from an older
+	// ProcessInfo payload which did not carry this field.
+	MaxErrorCount    int
+	MaxErrorCountSet bool
 	// ApplySQLSelectLimit distinguishes client statements from frontend
 	// background SQL, which may inherit a session-variable resolver but must not
 	// be affected by a client's row cap.
@@ -164,9 +175,12 @@ type SessionInfo struct {
 	SeqAddValues      map[uint64]string
 	SeqLastValue      []string
 	SqlHelper         sqlHelper
-	Buf               *buffer.Buffer
-	LogLevel          zapcore.Level
-	SessionId         uuid.UUID
+	// CompilerContext is request-local and never serialized. Origin-only metadata
+	// operators use it to bind View definitions in the executing transaction.
+	CompilerContext any
+	Buf             *buffer.Buffer
+	LogLevel        zapcore.Level
+	SessionId       uuid.UUID
 }
 
 type Session interface {
@@ -476,6 +490,8 @@ type BaseProcess struct {
 	messageBoard                        *message.MessageBoard
 	executionResourceBudgetMu           sync.Mutex
 	executionResourceBudget             *ExecutionResourceGeneration
+	warningDiagnosticBudgetMu           sync.Mutex
+	warningDiagnosticBudget             *WarningDiagnosticBudget
 	cteMemoryBudgetMu                   sync.Mutex
 	cteMemoryBudget                     *CTEMemoryBudget
 	logger                              *log.MOLogger
@@ -493,6 +509,18 @@ type BaseProcess struct {
 	// It is intentionally not part of SessionInfo: remote/rebuilt session state
 	// must not copy or replace a live synchronization object.
 	sequenceGate sequenceGate
+	// groupConcatInputRowCounters gives each logical Group operator one
+	// statement-scoped source-row cursor. A BaseProcess is shared by local
+	// parallel child processes, so partial producers do not restart at row 1.
+	// The map is reset with the query context and is not serialized to remote
+	// processes; remote state keeps the source rows assigned by its producer.
+	groupConcatInputRowCountersMu sync.Mutex
+	groupConcatInputRowCounters   map[int]*atomic.Uint64
+	// groupConcatSourceRowProvenanceUntrusted is true on a remote process that
+	// cannot share the coordinator's input-row namespace. It is kept on the
+	// shared BaseProcess so child pipelines inherit the same decision. The
+	// negative form keeps zero-value test processes compatible with local use.
+	groupConcatSourceRowProvenanceUntrusted bool
 	// incrStatementDisabled marks a process that executes internal SQL on a
 	// caller-owned transaction without opening a statement of its own
 	// (executor.Options.WithDisableIncrStatement). Compiles on such a process
@@ -570,6 +598,9 @@ type Process struct {
 	Ctx     context.Context
 	Cancel  context.CancelCauseFunc
 	Session Session
+	// WarningSink is an immutable execution-attempt destination. Children inherit
+	// the pointer; remote callbacks retain it after a failed attempt is sealed.
+	WarningSink any
 }
 
 type sqlHelper interface {
@@ -589,7 +620,6 @@ type WrapCs struct {
 	MsgId           uint64
 	Uid             uuid.UUID
 	Cs              morpc.ClientSession
-	Err             chan error
 	ReserveBatch    func(context.Context, uint64) (uint64, error)
 	RollbackBatch   func(uint64)
 	BatchCredits    uint32
@@ -620,6 +650,9 @@ func (proc *Process) SetStmtProfile(sp *StmtProfile) {
 		proc.Base.executionResourceBudget = nil
 	}
 	proc.Base.executionResourceBudgetMu.Unlock()
+	proc.Base.warningDiagnosticBudgetMu.Lock()
+	proc.Base.warningDiagnosticBudget = nil
+	proc.Base.warningDiagnosticBudgetMu.Unlock()
 	proc.Base.cteMemoryBudgetMu.Lock()
 	if proc.Base.cteMemoryBudget != nil {
 		proc.Base.cteMemoryBudget.Close()
@@ -1146,4 +1179,12 @@ func (proc *Process) DebugBreakDump(cond bool) {
 	if proc.Base.SessionInfo.User == "dump" && cond {
 		logutil.GetGlobalLogger().Info("debug break dump")
 	}
+}
+
+// GetWarningSink preserves session diagnostics outside an execution attempt.
+func (proc *Process) GetWarningSink() any {
+	if proc.WarningSink != nil {
+		return proc.WarningSink
+	}
+	return proc.Session
 }

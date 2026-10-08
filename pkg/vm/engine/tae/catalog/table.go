@@ -943,7 +943,10 @@ func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, re
 			Hints:             hints,
 			AutoIncrOffset:    newSchema.Extra.AutoIncrOffset,
 			AutoIncrEpoch:     newSchema.Extra.AutoIncrEpoch,
+			AutoIdCache:       newSchema.Extra.AutoIdCache,
 			DefaultCharset:    newSchema.Extra.DefaultCharset,
+			CollationVersion:  newSchema.Extra.CollationVersion,
+			KeyFormat:         newSchema.Extra.KeyFormat,
 			Checks:            checks,
 		}
 

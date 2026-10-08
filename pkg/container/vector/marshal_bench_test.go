@@ -64,3 +64,42 @@ func BenchmarkMarshalBinaryOwnedVarlena(b *testing.B) {
 		})
 	}
 }
+
+// BenchmarkMarshalBinarySelectedVarlena covers shuffle and hash-build spill
+// batches, which materialize bucket selections through UnionInt32 before
+// serialization.
+func BenchmarkMarshalBinarySelectedVarlena(b *testing.B) {
+	const rows = 8192
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_varchar.ToType())
+	value := bytes.Repeat([]byte{'x'}, 49)
+	sels := make([]int32, rows)
+	for row := 0; row < rows; row++ {
+		sels[row] = int32(row)
+		if err := AppendBytes(source, value, false, mp); err != nil {
+			b.Fatal(err)
+		}
+	}
+	defer source.Free(mp)
+
+	selected := NewVec(types.T_varchar.ToType())
+	if err := selected.PreExtend(rows, mp); err != nil {
+		b.Fatal(err)
+	}
+	if err := selected.UnionInt32(source, sels, mp); err != nil {
+		b.Fatal(err)
+	}
+	defer selected.Free(mp)
+
+	var buf bytes.Buffer
+	buf.Grow(selected.Size() + 64)
+	b.ReportAllocs()
+	b.SetBytes(int64(selected.Size()))
+	b.ResetTimer()
+	for range b.N {
+		buf.Reset()
+		if err := selected.MarshalBinaryWithBuffer(&buf); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

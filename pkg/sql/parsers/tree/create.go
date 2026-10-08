@@ -1156,6 +1156,8 @@ func (node *CreateTable) reset() {
 	if node.Options != nil {
 		for _, item := range node.Options {
 			switch opt := item.(type) {
+			case *TableOptionAutoIDCache:
+				opt.Free()
 			case *TableOptionProperties:
 				opt.Free()
 			case *TableOptionEngine:
@@ -2858,11 +2860,19 @@ func NewTableOptionSecondaryEngineNull() *TableOptionSecondaryEngineNull {
 type TableOptionCharset struct {
 	tableOptionImpl
 	Charset string
+	Collate string
+	// NonCharsetSyntax distinguishes historical ALTER no-op placeholders
+	// (FORCE, KEYS, TABLESPACE, VALIDATION) from actual charset requests.
+	NonCharsetSyntax bool
 }
 
 func (node *TableOptionCharset) Format(ctx *FmtCtx) {
 	ctx.WriteString("charset = ")
 	ctx.WriteString(node.Charset)
+	if node.Collate != "" {
+		ctx.WriteString(" collate = ")
+		ctx.WriteString(node.Collate)
+	}
 }
 
 func (node TableOptionCharset) TypeName() string { return "tree.TableOptionCharset" }
@@ -3936,6 +3946,8 @@ func (node *Partition) reset() {
 	if node.Options != nil {
 		for _, item := range node.Options {
 			switch opt := item.(type) {
+			case *TableOptionAutoIDCache:
+				opt.Free()
 			case *TableOptionProperties:
 				opt.Free()
 			case *TableOptionEngine:
@@ -4069,6 +4081,8 @@ func (node *SubPartition) reset() {
 	if node.Options != nil {
 		for _, item := range node.Options {
 			switch opt := item.(type) {
+			case *TableOptionAutoIDCache:
+				opt.Free()
 			case *TableOptionProperties:
 				opt.Free()
 			case *TableOptionEngine:

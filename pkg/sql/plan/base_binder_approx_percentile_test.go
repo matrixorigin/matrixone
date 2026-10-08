@@ -91,11 +91,11 @@ func TestBindApproxPercentileAcceptsFoldableConstants(t *testing.T) {
 		approxPercentileValueColumn(),
 		parameter,
 	})
-	require.ErrorContains(t, err, "must be a non-null constant")
+	require.NoError(t, err)
 }
 
 func TestBuildPlanApproxPercentileRejectsInvalidPercentileSQL(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	tests := []string{
 		"select approx_percentile(a, null) from select_test.bind_select",
 		"select approx_percentile(a, b) from select_test.bind_select",

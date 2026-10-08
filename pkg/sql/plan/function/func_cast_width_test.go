@@ -15,13 +15,13 @@
 package function
 
 import (
+	"bytes"
 	"context"
 	"strings"
 	"testing"
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -31,58 +31,72 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func runStrToStrWidth(t *testing.T, mp *mpool.MPool, proc *process.Process, input string, toType types.Type, strict, allowTrim bool) (string, bool, error) {
-	t.Helper()
-	src := vector.NewVec(types.T_varchar.ToType())
-	require.NoError(t, vector.AppendBytes(src, []byte(input), false, mp))
-	defer src.Free(mp)
-
-	from := vector.GenerateFunctionStrParameter(src)
-	rsw := vector.NewFunctionResultWrapper(toType, mp)
-	to := rsw.(*vector.FunctionResult[types.Varlena])
-	defer to.Free()
-	require.NoError(t, to.PreExtendAndReset(1))
-
-	if err := strToStr(context.Background(), proc, from, to, 1, toType, strict, allowTrim, allowTrim, castModeNormal); err != nil {
-		return "", false, err
-	}
-	got, null := vector.GenerateFunctionStrParameter(to.GetResultVector()).GetStrValue(0)
-	return string(got), null, nil
-}
-
-// TestStrToStrWidthEnforcement covers the CHAR/VARCHAR over-length matrix:
-// strict vs non-strict, and the trailing-space exemption (allowTrailingSpaceTrim).
-func TestStrToStrWidthEnforcement(t *testing.T) {
-	mp := mpool.MustNewZero()
-	vc3 := types.New(types.T_varchar, 3, 0)
-
+// TestCastStringWidthContracts preserves the string and JSON width-owner contracts.
+func TestCastStringWidthContracts(t *testing.T) {
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() {
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+	target := types.New(types.T_varchar, 3, 0)
 	cases := []struct {
-		name      string
-		input     string
-		strict    bool
-		allowTrim bool
-		want      string
-		wantErr   bool
+		source            types.T
+		name, input       string
+		strict, allowTrim bool
+		want              string
+		errCode           uint16
 	}{
-		{"fits", "abc", true, true, "abc", false},
-		{"strict_overlen_reject", "abcd", true, false, "", true},
-		{"strict_overlen_reject_even_with_trimflag", "abcd", true, true, "", true},
-		{"nonstrict_truncate", "abcd", false, true, "abc", false},
-		{"nonstrict_truncate_no_trimflag", "abcd", false, false, "abc", false},
-		{"trailing_space_exempt_under_strict", "abc   ", true, true, "abc", false},
-		{"trailing_space_not_exempt_for_ddl", "abc   ", true, false, "", true},
-		{"trailing_space_exempt_multibyte", "你好世   ", true, true, "你好世", false},
+		{types.T_varchar, "fits", "abc", true, true, "abc", 0},
+		{types.T_varchar, "strict_overlen_reject", "abcd", true, false, "", moerr.ErrInternal},
+		{types.T_varchar, "strict_overlen_reject_even_with_trimflag", "abcd", true, true, "", moerr.ErrCastWidthExceeded},
+		{types.T_varchar, "nonstrict_truncate", "abcd", false, true, "abc", 0},
+		{types.T_varchar, "nonstrict_truncate_no_trimflag", "abcd", false, false, "abc", 0},
+		{types.T_varchar, "trailing_space_exempt_under_strict", "abc   ", true, true, "abc", 0},
+		{types.T_varchar, "trailing_space_not_exempt_for_ddl", "abc   ", true, false, "", moerr.ErrInternal},
+		{types.T_varchar, "trailing_space_exempt_multibyte", "你好世   ", true, true, "你好世", 0},
+		{types.T_json, "fits", `"abc"`, true, true, "abc", 0},
+		{types.T_json, "trailing_space_exempt_strict_dml", `"abc   "`, true, true, "abc", 0},
+		{types.T_json, "real_overlen_dml_reject", `"abcd"`, true, true, "", moerr.ErrCastWidthExceeded},
+		{types.T_json, "real_overlen_cast_strict_reject", `"abcd"`, true, false, "", moerr.ErrInternal},
+		{types.T_json, "nonstrict_truncate", `"abcd"`, false, true, "abc", 0},
+		{types.T_json, "trailing_space_not_exempt_cast_strict", `"abc   "`, true, false, "", moerr.ErrInternal},
+		{types.T_json, "multibyte_trailing_space_exempt", `"你好世   "`, true, true, "你好世", 0},
+		{types.T_json, "multibyte_fits_strict", `"你好"`, true, true, "你好", 0},
+		{types.T_json, "multibyte_fits_nonstrict", `"你好"`, false, true, "你好", 0},
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			proc := testutil.NewProcess(t)
-			got, _, err := runStrToStrWidth(t, mp, proc, c.input, vc3, c.strict, c.allowTrim)
-			if c.wantErr {
-				require.Error(t, err)
+	for _, tc := range cases {
+		t.Run(tc.source.String()+"/"+tc.name, func(t *testing.T) {
+			input := tc.input
+			if tc.source == types.T_json {
+				input = makeJSONEncodedFromText(t, []string{input}, nil)[0]
+			}
+			baseline := proc.Mp().CurrNB()
+			fc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{NewFunctionTestInput(tc.source.ToType(), []string{input}, nil)},
+				NewFunctionTestResult(target, false, []string{tc.want}, nil),
+				func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ *FunctionSelectList) error {
+					from := vector.GenerateFunctionStrParameter(parameters[0])
+					to := result.(*vector.FunctionResult[types.Varlena])
+					if tc.source == types.T_json {
+						return jsonToStr(proc, context.Background(), from, to, length, nil, tc.strict, tc.allowTrim, tc.allowTrim, false, tc.allowTrim)
+					}
+					return strToStr(context.Background(), proc, from, to, length, target, tc.strict, tc.allowTrim, tc.allowTrim, castModeNormal)
+				})
+			t.Cleanup(func() {
+				fc.Free()
+				require.Equal(t, baseline, proc.Mp().CurrNB())
+			})
+			actual, err := fc.DebugRun()
+			if tc.errCode != 0 {
+				require.True(t, moerr.IsMoErrCode(err, tc.errCode), "expected error code %d, got %v", tc.errCode, err)
 				return
 			}
 			require.NoError(t, err)
-			require.Equal(t, c.want, got)
+			require.Equal(t, target, *actual.GetType())
+			require.Equal(t, 1, actual.Length())
+			got, isNull := vector.GenerateFunctionStrParameter(actual).GetStrValue(0)
+			require.False(t, isNull)
+			require.Equal(t, tc.want, string(got))
 		})
 	}
 }
@@ -320,6 +334,74 @@ func TestNewAssignCastHonorsSqlMode(t *testing.T) {
 	require.Error(t, NewStrictCast([]*vector.Vector{src, dst}, rs, proc, 1, nil))
 }
 
+func TestAssignStringWidthWarningDiagnostics(t *testing.T) {
+	cases := []struct {
+		name        string
+		target      types.T
+		input       string
+		want        string
+		wantWarning bool
+	}{
+		{name: "char non-space overflow", target: types.T_char, input: "abcd", want: "abc", wantWarning: true},
+		{name: "char multibyte overflow", target: types.T_char, input: "你好世界", want: "你好世", wantWarning: true},
+		{name: "varchar non-space overflow", target: types.T_varchar, input: "abcd", want: "abc", wantWarning: true},
+		{name: "varchar multibyte overflow", target: types.T_varchar, input: "你好世界", want: "你好世", wantWarning: true},
+		{name: "varchar trailing space overflow", target: types.T_varchar, input: "abc ", want: "abc", wantWarning: true},
+		{name: "char trailing space exemption", target: types.T_char, input: "abc ", want: "abc", wantWarning: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			session := &numericWarningSession{}
+			proc.Session = session
+			source := vector.NewVec(types.T_varchar.ToType())
+			defer source.Free(proc.Mp())
+			require.NoError(t, vector.AppendBytes(source, []byte(tc.input), false, proc.Mp()))
+			target := types.New(tc.target, 3, 0)
+			destination := vector.NewVec(target)
+			defer destination.Free(proc.Mp())
+			result := vector.NewFunctionResultWrapper(target, proc.Mp())
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(1))
+
+			require.NoError(t, NewAssignIgnoreCast([]*vector.Vector{source, destination}, result, proc, 1, nil))
+			got, null := vector.GenerateFunctionStrParameter(result.GetResultVector()).GetStrValue(0)
+			require.False(t, null)
+			require.Equal(t, tc.want, string(got))
+			if !tc.wantWarning {
+				require.Empty(t, session.warnings)
+				return
+			}
+			require.Len(t, session.warnings, 1)
+			require.Equal(t, moerr.WARN_DATA_TRUNCATED, session.warnings[0].code)
+			require.Contains(t, session.warnings[0].msg, "Data truncated for column")
+			require.Contains(t, session.warnings[0].msg, "row 1")
+		})
+	}
+}
+
+func TestAssignStringWidthWarningUsesExecutionAttemptSink(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	sink := &numericWarningSession{}
+	proc.WarningSink = sink
+
+	source := vector.NewVec(types.T_varchar.ToType())
+	defer source.Free(proc.Mp())
+	require.NoError(t, vector.AppendBytes(source, []byte("abcd"), false, proc.Mp()))
+	target := types.New(types.T_varchar, 3, 0)
+	destination := vector.NewVec(target)
+	defer destination.Free(proc.Mp())
+	result := vector.NewFunctionResultWrapper(target, proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(1))
+
+	require.NoError(t, NewAssignIgnoreCast([]*vector.Vector{source, destination}, result, proc, 1, nil))
+	require.Nil(t, proc.Session)
+	require.Len(t, sink.warnings, 1)
+	require.Equal(t, moerr.WARN_DATA_TRUNCATED, sink.warnings[0].code)
+}
+
 func TestNewAssignCastRemoteEmptyResolverUsesSessionSnapshot(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	// A remote CN has no frontend session. Its resolver may still be attached
@@ -396,6 +478,104 @@ func TestTinyTextAssignmentWidthUsesBytes(t *testing.T) {
 	got, err = run(t, "STRICT_TRANS_TABLES", strings.Repeat("b", types.MaxTinyTextLen+1), NewAssignIgnoreCast)
 	require.NoError(t, err)
 	require.Len(t, got, types.MaxTinyTextLen)
+}
+
+func TestTextBlobFamilyAssignmentWidthUsesBytes(t *testing.T) {
+	run := func(
+		t *testing.T,
+		sourceType, targetType types.Type,
+		input []byte,
+		sqlMode string,
+		cast func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error,
+	) ([]byte, []numericWarning, error) {
+		t.Helper()
+		proc := testutil.NewProcess(t)
+		proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+			require.Equal(t, "sql_mode", name)
+			return sqlMode, nil
+		})
+		session := &numericWarningSession{}
+		proc.Session = session
+
+		src := vector.NewVec(sourceType)
+		require.NoError(t, vector.AppendBytes(src, input, false, proc.Mp()))
+		defer src.Free(proc.Mp())
+		dst := vector.NewVec(targetType)
+		defer dst.Free(proc.Mp())
+		result := vector.NewFunctionResultWrapper(targetType, proc.Mp())
+		defer result.Free()
+		require.NoError(t, result.PreExtendAndReset(1))
+
+		err := cast([]*vector.Vector{src, dst}, result, proc, 1, nil)
+		if err != nil {
+			return nil, session.warnings, err
+		}
+		got, null := vector.GenerateFunctionStrParameter(result.GetResultVector()).GetStrValue(0)
+		require.False(t, null)
+		return bytes.Clone(got), session.warnings, nil
+	}
+
+	for _, tc := range []struct {
+		name       string
+		target     types.Type
+		input      []byte
+		wantPrefix []byte
+	}{
+		{
+			name:       "text",
+			target:     types.New(types.T_text, types.MaxStringSize, 0),
+			input:      []byte(strings.Repeat("t", types.MaxStringSize+1)),
+			wantPrefix: []byte(strings.Repeat("t", types.MaxStringSize)),
+		},
+		{
+			name:       "text_utf8_boundary",
+			target:     types.New(types.T_text, types.MaxStringSize, 0),
+			input:      append([]byte(strings.Repeat("a", types.MaxStringSize-1)), []byte("你")...),
+			wantPrefix: []byte(strings.Repeat("a", types.MaxStringSize-1)),
+		},
+		{
+			name:       "tinyblob_raw_bytes",
+			target:     types.New(types.T_blob, types.MaxTinyTextLen, 0),
+			input:      append(bytes.Repeat([]byte{0xff}, types.MaxTinyTextLen), 0x00),
+			wantPrefix: bytes.Repeat([]byte{0xff}, types.MaxTinyTextLen),
+		},
+		{
+			name:       "blob_raw_bytes",
+			target:     types.New(types.T_blob, types.MaxStringSize, 0),
+			input:      append(bytes.Repeat([]byte{0xff}, types.MaxStringSize), 0x00),
+			wantPrefix: bytes.Repeat([]byte{0xff}, types.MaxStringSize),
+		},
+	} {
+		t.Run(tc.name+"/strict", func(t *testing.T) {
+			_, _, err := run(t, types.T_varbinary.ToType(), tc.target, tc.input, "STRICT_TRANS_TABLES", NewAssignCast)
+			require.Error(t, err)
+			require.Equal(t, moerr.ErrCastWidthExceeded, err.(*moerr.Error).ErrorCode())
+			require.Equal(t, uint16(moerr.ER_DATA_TOO_LONG), err.(*moerr.Error).MySQLCode())
+		})
+		t.Run(tc.name+"/nonstrict", func(t *testing.T) {
+			got, warnings, err := run(t, types.T_varbinary.ToType(), tc.target, tc.input, "", NewAssignCast)
+			require.NoError(t, err)
+			require.True(t, bytes.Equal(tc.wantPrefix, got))
+			require.Len(t, warnings, 1)
+			require.Equal(t, moerr.WARN_DATA_TRUNCATED, warnings[0].code)
+		})
+		t.Run(tc.name+"/ignore", func(t *testing.T) {
+			got, warnings, err := run(t, types.T_varbinary.ToType(), tc.target, tc.input, "STRICT_TRANS_TABLES", NewAssignIgnoreCast)
+			require.NoError(t, err)
+			require.True(t, bytes.Equal(tc.wantPrefix, got))
+			require.Len(t, warnings, 1)
+			require.Equal(t, moerr.WARN_DATA_TRUNCATED, warnings[0].code)
+		})
+	}
+
+	// Width-zero BLOB is the legacy catalog representation shared by all four
+	// MySQL BLOB families. Keep it unbounded until a safe declaration marker is
+	// available instead of narrowing a historical MEDIUM/LONG BLOB to BLOB.
+	legacyValue := bytes.Repeat([]byte{'z'}, types.MaxStringSize+1)
+	got, warnings, err := run(t, types.T_varbinary.ToType(), types.T_blob.ToType(), legacyValue, "STRICT_TRANS_TABLES", NewAssignCast)
+	require.NoError(t, err)
+	require.Equal(t, legacyValue, got)
+	require.Empty(t, warnings)
 }
 
 func TestAssignmentCastTypedSource(t *testing.T) {
@@ -567,6 +747,29 @@ func TestGeometryToVarcharWidthEnforcement(t *testing.T) {
 	require.Equal(t, "POI", got)
 }
 
+func TestGeometryToTextAssignmentWidthFallback(t *testing.T) {
+	wkt := "LINESTRING (" + strings.Repeat("0 0, ", 100) + "0 0)"
+	targetType := types.T_text
+	targetWidth := int32(types.MaxTinyTextLen)
+
+	strictProc := testutil.NewProcess(t)
+	_, err := castGeometryToString(t, strictProc, wkt, types.T_geometry, targetType, targetWidth, false, NewStrictCast)
+	require.Error(t, err, "cast_strict must enforce TEXT-family byte width")
+
+	nonstrictProc := testutil.NewProcess(t)
+	nonstrictProc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		require.Equal(t, "sql_mode", name)
+		return "", nil
+	})
+	warnings := &numericWarningSession{}
+	nonstrictProc.Session = warnings
+	got, err := castGeometryToString(t, nonstrictProc, wkt, types.T_geometry, targetType, targetWidth, false, NewAssignCast)
+	require.NoError(t, err)
+	require.LessOrEqual(t, len([]byte(got)), types.MaxTinyTextLen)
+	require.Len(t, warnings.warnings, 1)
+	require.Equal(t, moerr.WARN_DATA_TRUNCATED, warnings.warnings[0].code)
+}
+
 func TestGeometryToZeroWidthCharVarchar(t *testing.T) {
 	newProc := func(sqlMode string) *process.Process {
 		proc := testutil.NewProcess(t)
@@ -664,64 +867,49 @@ func TestGeometryToZeroWidthCharVarchar(t *testing.T) {
 	}
 }
 
-func runJSONToStrWidth(t *testing.T, mp *mpool.MPool, jsonText string, toType types.Type, strict, allowTrim bool) (string, error) {
-	t.Helper()
-	encoded := makeJSONEncodedFromText(t, []string{jsonText}, nil)[0]
-	src := vector.NewVec(types.T_json.ToType())
-	require.NoError(t, vector.AppendBytes(src, []byte(encoded), false, mp))
-	defer src.Free(mp)
+func TestJSONBlobAssignmentWidthWarning(t *testing.T) {
+	input := `"` + strings.Repeat("x", types.MaxStringSize+1) + `"`
+	encoded := makeJSONEncodedFromText(t, []string{input}, nil)[0]
 
-	from := vector.GenerateFunctionStrParameter(src)
-	rsw := vector.NewFunctionResultWrapper(toType, mp)
-	to := rsw.(*vector.FunctionResult[types.Varlena])
-	defer to.Free()
-	require.NoError(t, to.PreExtendAndReset(1))
-
-	if err := jsonToStr(context.Background(), from, to, 1, nil, strict, allowTrim, allowTrim); err != nil {
-		return "", err
-	}
-	got, _ := vector.GenerateFunctionStrParameter(to.GetResultVector()).GetStrValue(0)
-	return string(got), nil
-}
-
-// TestJSONToStrWidthEnforcement mirrors TestStrToStrWidthEnforcement for the
-// JSON->CHAR/VARCHAR path: the trailing-space exemption, sql_mode gating, and
-// the DML 1406 and stable cast_strict contracts must apply to JSON sources too.
-func TestJSONToStrWidthEnforcement(t *testing.T) {
-	mp := mpool.MustNewZero()
-	vc3 := types.New(types.T_varchar, 3, 0)
-
-	cases := []struct {
-		name      string
-		jsonText  string
-		strict    bool
-		allowTrim bool
-		want      string
-		wantErr   bool
-		errCode   uint16 // 0 = not asserted
-	}{
-		{"fits", `"abc"`, true, true, "abc", false, 0},
-		{"trailing_space_exempt_strict_dml", `"abc   "`, true, true, "abc", false, 0},
-		{"real_overlen_dml_reject", `"abcd"`, true, true, "", true, moerr.ErrCastWidthExceeded},
-		{"real_overlen_cast_strict_reject", `"abcd"`, true, false, "", true, moerr.ErrInternal},
-		{"nonstrict_truncate", `"abcd"`, false, true, "abc", false, 0},
-		{"trailing_space_not_exempt_cast_strict", `"abc   "`, true, false, "", true, moerr.ErrInternal},
-		{"multibyte_trailing_space_exempt", `"你好世   "`, true, true, "你好世", false, 0},
-		{"multibyte_fits_strict", `"你好"`, true, true, "你好", false, 0},
-		{"multibyte_fits_nonstrict", `"你好"`, false, true, "你好", false, 0},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			got, err := runJSONToStrWidth(t, mp, c.jsonText, vc3, c.strict, c.allowTrim)
-			if c.wantErr {
-				require.Error(t, err)
-				if c.errCode != 0 {
-					require.Equal(t, c.errCode, err.(*moerr.Error).ErrorCode())
-				}
-				return
-			}
-			require.NoError(t, err)
-			require.Equal(t, c.want, got)
+	run := func(t *testing.T, sqlMode string, cast func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error) ([]byte, *numericWarningSession, error) {
+		t.Helper()
+		proc := testutil.NewProcess(t)
+		proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+			require.Equal(t, "sql_mode", name)
+			return sqlMode, nil
 		})
+		session := &numericWarningSession{}
+		proc.Session = session
+
+		source := vector.NewVec(types.T_json.ToType())
+		require.NoError(t, vector.AppendBytes(source, []byte(encoded), false, proc.Mp()))
+		defer source.Free(proc.Mp())
+		target := types.New(types.T_blob, types.MaxStringSize, 0)
+		destination := vector.NewVec(target)
+		defer destination.Free(proc.Mp())
+		result := vector.NewFunctionResultWrapper(target, proc.Mp())
+		defer result.Free()
+		require.NoError(t, result.PreExtendAndReset(1))
+		err := cast([]*vector.Vector{source, destination}, result, proc, 1, nil)
+		if err != nil {
+			return nil, session, err
+		}
+		got, null := vector.GenerateFunctionStrParameter(result.GetResultVector()).GetStrValue(0)
+		require.False(t, null)
+		return bytes.Clone(got), session, nil
 	}
+
+	_, _, err := run(t, "STRICT_TRANS_TABLES", NewAssignCast)
+	require.Error(t, err)
+	require.Equal(t, moerr.ErrCastWidthExceeded, err.(*moerr.Error).ErrorCode())
+	require.Equal(t, uint16(moerr.ER_DATA_TOO_LONG), err.(*moerr.Error).MySQLCode())
+
+	got, session, err := run(t, "", NewAssignCast)
+	require.NoError(t, err)
+	require.Len(t, got, types.MaxStringSize)
+	require.Len(t, session.warnings, 1)
+	require.Equal(t, moerr.WARN_DATA_TRUNCATED, session.warnings[0].code)
+
+	_, _, err = run(t, "", NewStrictCast)
+	require.Error(t, err, "the old-protocol cast_strict fallback must enforce BLOB width")
 }

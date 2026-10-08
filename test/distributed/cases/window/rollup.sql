@@ -188,7 +188,7 @@ insert into categories (category_id, category_name) values
 (2, 'Books');
 select * from categories;
 
--- @bvt:issue#20000
+-- Regression for #20000 / #29096: JOIN/ENUM ROLLUP without GROUPING projections.
 select
     year(o.order_date) as order_year,
     month(o.order_date) as order_month,
@@ -219,7 +219,6 @@ order by
     order_month,
     c.city,
     cat.category_name;
--- @bvt:issue
 
 select
     year(o.order_date) as order_year,
@@ -903,6 +902,7 @@ select column_name, is_nullable from information_schema.columns where table_sche
 create view grouping_extension_rollup_v as select a, b, sum(v) as s from grouping_extension_metadata_src group by a, b with rollup;
 select column_name, is_nullable from information_schema.columns where table_schema = database() and table_name = 'grouping_extension_rollup_v' and column_name in ('a', 'b') order by ordinal_position;
 select count(*) from grouping_extension_rollup_v where a is null or b is null;
+select count(*) from grouping_extension_rollup_v where b = 10;
 create view grouping_extension_cube_v as select a, b, sum(v) as s from grouping_extension_metadata_src group by cube(a, b);
 select column_name, is_nullable from information_schema.columns where table_schema = database() and table_name = 'grouping_extension_cube_v' and column_name in ('a', 'b') order by ordinal_position;
 select count(*) from grouping_extension_cube_v where a is null or b is null;
@@ -942,5 +942,42 @@ from grouping_set_empty_input
 group by grouping sets ((a, b), (a), ())
 order by g, a, b;
 drop table grouping_set_empty_input;
+
+-- Checked fixed-width SUM is not associative in error semantics. Reusing a
+-- finer aggregate as SUM(SUM(v)) would overflow on the A/B partial sums even
+-- though every legacy ROLLUP level succeeds in raw input order.
+drop table if exists grouping_set_decimal_sum_order;
+create table grouping_set_decimal_sum_order (a varchar(4), b varchar(4), c varchar(4), v decimal(38, 0));
+insert into grouping_set_decimal_sum_order
+select 'seed', cast(result as varchar), 'seed', 0 from generate_series(1, 1000, 1) g;
+delete from grouping_set_decimal_sum_order;
+insert into grouping_set_decimal_sum_order values
+    ('X', 'A', 'a', 90000000000000000000000000000000000000),
+    ('X', 'B', 'b1', 0),
+    ('X', 'C', 'c', -90000000000000000000000000000000000000),
+    ('X', 'B', 'b2', 90000000000000000000000000000000000000),
+    ('X', 'D', 'd', null);
+set @saved_optimizer_hints = @@optimizer_hints;
+set optimizer_hints = '';
+select a, b, c, sum(v) as s, grouping(a, b, c) as g
+from grouping_set_decimal_sum_order
+group by rollup(a, b, c)
+order by g, a, b, c;
+set optimizer_hints = 'sharedComputation=1';
+select a, b, c, sum(v) as s, grouping(a, b, c) as g
+from grouping_set_decimal_sum_order
+group by rollup(a, b, c)
+order by g, a, b, c;
+set optimizer_hints = '';
+select a, b, c, sum(v) as s, grouping(a, b, c) as g
+from grouping_set_decimal_sum_order
+where false
+group by rollup(a, b, c)
+order by g, a, b, c;
+set optimizer_hints = @saved_optimizer_hints;
+drop table grouping_set_decimal_sum_order;
+
+-- A dummy VALUE_SCAN must not discard a filter retained above expansion.
+select count(*) from (select 1 as k, count(*) as n from dual group by rollup(1)) d where k is null;
 
 drop database rollup_test;

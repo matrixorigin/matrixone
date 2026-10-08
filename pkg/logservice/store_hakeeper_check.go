@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -42,6 +43,8 @@ var (
 )
 
 type idAllocator struct {
+	mu sync.Mutex
+
 	// [nextID, lastID] is the range of IDs that can be assigned.
 	// the next ID to be assigned is nextID
 	nextID                uint64
@@ -56,6 +59,9 @@ func newIDAllocator() hakeeper.IDAllocator {
 }
 
 func (a *idAllocator) Next() (uint64, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
 	if a.nextID <= a.lastID {
 		v := a.nextID
 		a.nextID++
@@ -65,6 +71,9 @@ func (a *idAllocator) Next() (uint64, bool) {
 }
 
 func (a *idAllocator) Set(next uint64, last uint64) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
 	// make sure that this id allocator never emit any id smaller than
 	// K8SIDRangeEnd
 	if next < hakeeper.K8SIDRangeEnd {
@@ -75,6 +84,9 @@ func (a *idAllocator) Set(next uint64, last uint64) {
 }
 
 func (a *idAllocator) Capacity() uint64 {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
 	if a.nextID <= a.lastID {
 		return (a.lastID - a.nextID) + 1
 	}
@@ -82,6 +94,9 @@ func (a *idAllocator) Capacity() uint64 {
 }
 
 func (a *idAllocator) discardForRestoreGeneration(generation uint64) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
 	if generation > a.restoreGenerationSeen {
 		a.nextID = 1
 		a.lastID = 0
@@ -161,6 +176,7 @@ func (l *store) setInitialClusterInfoWithRecoveryResult(
 		l.runtime.Logger().Error("initial cluster info already set")
 		return false, nil
 	}
+	l.notifyHAKeeperCheck()
 	return true, nil
 }
 
@@ -334,6 +350,11 @@ func (l *store) hakeeperCheck() *pb.CheckerState {
 		err = moerr.AttachCause(ctx, err)
 		l.runtime.Logger().Debug("view metadata admission activation deferred", zap.Error(err))
 	}
+	if l.catalogExecutor.enabled {
+		if err := l.reconcileCatalogMembership(ctx, nil); err != nil {
+			l.runtime.Logger().Debug("catalog membership reconciliation deferred", zap.Error(err))
+		}
+	}
 	cancel()
 
 	switch state.State {
@@ -360,7 +381,9 @@ func (l *store) hakeeperCheck() *pb.CheckerState {
 }
 
 func (l *store) assertHAKeeperState(s pb.HAKeeperState) {
-	state, err := l.getCheckerState()
+	ctx, cancel := context.WithTimeoutCause(context.Background(), hakeeperDefaultTimeout, moerr.CauseGetCheckerState)
+	defer cancel()
+	state, err := l.readCheckerState(ctx, &hakeeper.StateQuery{StateOnly: true})
 	if err != nil {
 		// TODO: check whether this is temp error
 		l.runtime.Logger().Error("failed to get checker state", zap.Error(err))
@@ -588,7 +611,11 @@ func (l *store) getCheckerState() (*pb.CheckerState, error) {
 }
 
 func (l *store) getCheckerStateWithContext(ctx context.Context) (*pb.CheckerState, error) {
-	s, err := l.read(ctx, hakeeper.DefaultHAKeeperShardID, &hakeeper.StateQuery{})
+	return l.readCheckerState(ctx, &hakeeper.StateQuery{})
+}
+
+func (l *store) readCheckerState(ctx context.Context, query *hakeeper.StateQuery) (*pb.CheckerState, error) {
+	s, err := l.read(ctx, hakeeper.DefaultHAKeeperShardID, query)
 	if err != nil {
 		return &pb.CheckerState{}, moerr.AttachCause(ctx, err)
 	}

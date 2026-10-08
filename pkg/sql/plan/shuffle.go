@@ -126,9 +126,9 @@ func shuffleByZonemap(rsp *engine.RangesShuffleParam, zm objectio.ZoneMap, bucke
 		rsp.Init = true
 		switch zm.GetType() {
 		case types.T_int64, types.T_int32, types.T_int16:
-			rsp.ShuffleRangeInt64 = ShuffleRangeReEvalSigned(rsp.Node.Stats.HashmapStats.Ranges, bucketNum, rsp.Node.Stats.HashmapStats.Nullcnt, int64(rsp.Node.Stats.TableCnt))
+			rsp.ShuffleRangeInt64 = ShuffleRangeReEvalSigned(rsp.Node.Stats.HashmapStats.Ranges, bucketNum, rsp.Node.Stats.HashmapStats.Nullcnt, EstimatedRowsInt64(rsp.Node.Stats.TableCnt))
 		case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit, types.T_datalink:
-			rsp.ShuffleRangeUint64 = ShuffleRangeReEvalUnsigned(rsp.Node.Stats.HashmapStats.Ranges, bucketNum, rsp.Node.Stats.HashmapStats.Nullcnt, int64(rsp.Node.Stats.TableCnt))
+			rsp.ShuffleRangeUint64 = ShuffleRangeReEvalUnsigned(rsp.Node.Stats.HashmapStats.Ranges, bucketNum, rsp.Node.Stats.HashmapStats.Nullcnt, EstimatedRowsInt64(rsp.Node.Stats.TableCnt))
 		}
 	}
 
@@ -143,27 +143,30 @@ func shuffleByZonemap(rsp *engine.RangesShuffleParam, zm objectio.ZoneMap, bucke
 	return shuffleIDX
 }
 
-func shuffleByValueExtractedFromZonemap(rsp *engine.RangesShuffleParam, zm objectio.ZoneMap, bucketNum int) uint64 {
+func shuffleByValueExtractedFromZonemap(rsp *engine.RangesShuffleParam, zm objectio.ZoneMap, bucketNum int) (uint64, bool) {
 	t := types.T(rsp.Node.Stats.HashmapStats.ShuffleColIdx) // actually this is specially used for sort key column type
 	if !rsp.Init {
 		rsp.Init = true
 		switch t {
 		case types.T_int64, types.T_int32, types.T_int16:
-			rsp.ShuffleRangeInt64 = ShuffleRangeReEvalSigned(rsp.Node.Stats.HashmapStats.Ranges, bucketNum, rsp.Node.Stats.HashmapStats.Nullcnt, int64(rsp.Node.Stats.TableCnt))
+			rsp.ShuffleRangeInt64 = ShuffleRangeReEvalSigned(rsp.Node.Stats.HashmapStats.Ranges, bucketNum, rsp.Node.Stats.HashmapStats.Nullcnt, EstimatedRowsInt64(rsp.Node.Stats.TableCnt))
 		case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit, types.T_datalink:
-			rsp.ShuffleRangeUint64 = ShuffleRangeReEvalUnsigned(rsp.Node.Stats.HashmapStats.Ranges, bucketNum, rsp.Node.Stats.HashmapStats.Nullcnt, int64(rsp.Node.Stats.TableCnt))
+			rsp.ShuffleRangeUint64 = ShuffleRangeReEvalUnsigned(rsp.Node.Stats.HashmapStats.Ranges, bucketNum, rsp.Node.Stats.HashmapStats.Nullcnt, EstimatedRowsInt64(rsp.Node.Stats.TableCnt))
 		}
 	}
 
-	var shuffleIDX uint64
 	if len(rsp.ShuffleRangeUint64) > 0 {
-		shuffleIDX = GetRangeShuffleIndexForValuesExtractedFromZMUnsignedSlice(rsp.ShuffleRangeUint64, zm, t)
+		return GetRangeShuffleIndexForValuesExtractedFromZMUnsignedSlice(rsp.ShuffleRangeUint64, zm, t)
 	} else if len(rsp.ShuffleRangeInt64) > 0 {
-		shuffleIDX = GetRangeShuffleIndexForValuesExtractedFromZMSignedSlice(rsp.ShuffleRangeInt64, zm, t)
-	} else {
-		shuffleIDX = GetRangeShuffleIndexForExtractedZM(rsp.Node.Stats.HashmapStats.ShuffleColMin, rsp.Node.Stats.HashmapStats.ShuffleColMax, zm, uint64(bucketNum), t)
+		return GetRangeShuffleIndexForValuesExtractedFromZMSignedSlice(rsp.ShuffleRangeInt64, zm, t)
 	}
-	return shuffleIDX
+	return GetRangeShuffleIndexForExtractedZM(
+		rsp.Node.Stats.HashmapStats.ShuffleColMin,
+		rsp.Node.Stats.HashmapStats.ShuffleColMax,
+		zm,
+		uint64(bucketNum),
+		t,
+	)
 }
 
 func CalcRangeShuffleIDXForObj(rsp *engine.RangesShuffleParam, objstats *objectio.ObjectStats, bucketNum int) uint64 {
@@ -174,9 +177,15 @@ func CalcRangeShuffleIDXForObj(rsp *engine.RangesShuffleParam, objstats *objecti
 	}
 	if len(rsp.Node.TableDef.Pkey.Names) == 1 {
 		return shuffleByZonemap(rsp, zm, bucketNum)
-	} else {
-		return shuffleByValueExtractedFromZonemap(rsp, zm, bucketNum)
 	}
+	if shuffleIDX, ok := shuffleByValueExtractedFromZonemap(rsp, zm, bucketNum); ok {
+		return shuffleIDX
+	}
+	// A varlen zonemap stores at most a 30-byte prefix. If the first
+	// component cannot be decoded from that prefix, keep exactly-one-owner
+	// semantics by falling back to the same object hash used by hash shuffle.
+	objID := objstats.ObjectLocation().ObjectId()
+	return SimpleCharHashToRange(objID[:], uint64(bucketNum))
 }
 
 func ShouldSkipObjByShuffle(rsp *engine.RangesShuffleParam, objstats *objectio.ObjectStats) bool {
@@ -213,22 +222,39 @@ func GetCenterValueForZMSigned(zm objectio.ZoneMap) int64 {
 	}
 }
 
-func GetCenterValueExtractFromZMSigned(zm objectio.ZoneMap, t types.T) int64 {
-	idx := 0 //for now, it's always 0
-	minelms, _ := types.Unpack(zm.GetMinBuf())
-	maxelms, _ := types.Unpack(zm.GetMaxBuf())
-	minval := minelms[idx]
-	maxval := maxelms[idx]
+func GetCenterValueExtractFromZMSigned(zm objectio.ZoneMap, t types.T) (int64, bool) {
+	minval, mint, err := types.UnpackNthElement(zm.GetMinBuf(), 0)
+	if err != nil || mint != t {
+		return 0, false
+	}
+	maxval, maxt, err := types.UnpackNthElement(zm.GetMaxBuf(), 0)
+	if err != nil || maxt != t {
+		return 0, false
+	}
 	switch t {
 	case types.T_int64:
-		return minval.(int64)/2 + maxval.(int64)/2
+		min, minOK := minval.(int64)
+		max, maxOK := maxval.(int64)
+		if !minOK || !maxOK {
+			return 0, false
+		}
+		return min/2 + max/2, true
 	case types.T_int32:
-		return int64(minval.(int32)/2 + maxval.(int32)/2)
+		min, minOK := minval.(int32)
+		max, maxOK := maxval.(int32)
+		if !minOK || !maxOK {
+			return 0, false
+		}
+		return int64(min/2 + max/2), true
 	case types.T_int16:
-		return int64(minval.(int16)/2 + maxval.(int16)/2)
-	default:
-		panic("wrong type!")
+		min, minOK := minval.(int16)
+		max, maxOK := maxval.(int16)
+		if !minOK || !maxOK {
+			return 0, false
+		}
+		return int64(min/2 + max/2), true
 	}
+	return 0, false
 }
 
 func GetCenterValueForZMUnsigned(zm objectio.ZoneMap) uint64 {
@@ -246,24 +272,56 @@ func GetCenterValueForZMUnsigned(zm objectio.ZoneMap) uint64 {
 	}
 }
 
-func GetCenterValueExtractFromZMUnsigned(zm objectio.ZoneMap, t types.T) uint64 {
-	idx := 0 //for now, it's always 0
-	minelms, _ := types.Unpack(zm.GetMinBuf())
-	maxelms, _ := types.Unpack(zm.GetMaxBuf())
-	minval := minelms[idx]
-	maxval := maxelms[idx]
+func GetCenterValueExtractFromZMUnsigned(zm objectio.ZoneMap, t types.T) (uint64, bool) {
+	minval, mint, err := types.UnpackNthElement(zm.GetMinBuf(), 0)
+	if err != nil || !sameExtractedZoneMapType(t, mint) {
+		return 0, false
+	}
+	maxval, maxt, err := types.UnpackNthElement(zm.GetMaxBuf(), 0)
+	if err != nil || !sameExtractedZoneMapType(t, maxt) {
+		return 0, false
+	}
 	switch t {
 	case types.T_uint64:
-		return minval.(uint64)/2 + maxval.(uint64)/2
+		min, minOK := minval.(uint64)
+		max, maxOK := maxval.(uint64)
+		if !minOK || !maxOK {
+			return 0, false
+		}
+		return min/2 + max/2, true
 	case types.T_uint32:
-		return uint64(minval.(uint32)/2 + maxval.(uint32)/2)
+		min, minOK := minval.(uint32)
+		max, maxOK := maxval.(uint32)
+		if !minOK || !maxOK {
+			return 0, false
+		}
+		return uint64(min/2 + max/2), true
 	case types.T_uint16:
-		return uint64(minval.(uint16)/2 + maxval.(uint16)/2)
+		min, minOK := minval.(uint16)
+		max, maxOK := maxval.(uint16)
+		if !minOK || !maxOK {
+			return 0, false
+		}
+		return uint64(min/2 + max/2), true
 	case types.T_varchar, types.T_char, types.T_text:
-		return ByteSliceToUint64(minval.([]byte))/2 + ByteSliceToUint64(maxval.([]byte))/2
-	default:
-		panic("wrong type!")
+		min, minOK := minval.([]byte)
+		max, maxOK := maxval.([]byte)
+		if !minOK || !maxOK {
+			return 0, false
+		}
+		return ByteSliceToUint64(min)/2 + ByteSliceToUint64(max)/2, true
 	}
+	return 0, false
+}
+
+func sameExtractedZoneMapType(expected, actual types.T) bool {
+	if expected == actual {
+		return true
+	}
+	// Tuple string components are encoded and decoded as varchar regardless
+	// of whether the logical column is char, varchar, or text.
+	return actual == types.T_varchar &&
+		(expected == types.T_char || expected == types.T_text)
 }
 
 func GetRangeShuffleIndexForZM(minVal, maxVal int64, zm objectio.ZoneMap, upplerLimit uint64) uint64 {
@@ -277,14 +335,22 @@ func GetRangeShuffleIndexForZM(minVal, maxVal int64, zm objectio.ZoneMap, uppler
 	panic("unsupported shuffle type!")
 }
 
-func GetRangeShuffleIndexForExtractedZM(minVal, maxVal int64, zm objectio.ZoneMap, upplerLimit uint64, t types.T) uint64 {
+func GetRangeShuffleIndexForExtractedZM(minVal, maxVal int64, zm objectio.ZoneMap, upplerLimit uint64, t types.T) (uint64, bool) {
 	switch t {
 	case types.T_int64, types.T_int32, types.T_int16:
-		return GetRangeShuffleIndexSignedMinMax(minVal, maxVal, GetCenterValueExtractFromZMSigned(zm, t), upplerLimit)
+		center, ok := GetCenterValueExtractFromZMSigned(zm, t)
+		if !ok {
+			return 0, false
+		}
+		return GetRangeShuffleIndexSignedMinMax(minVal, maxVal, center, upplerLimit), true
 	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
-		return GetRangeShuffleIndexUnsignedMinMax(uint64(minVal), uint64(maxVal), GetCenterValueExtractFromZMUnsigned(zm, t), upplerLimit)
+		center, ok := GetCenterValueExtractFromZMUnsigned(zm, t)
+		if !ok {
+			return 0, false
+		}
+		return GetRangeShuffleIndexUnsignedMinMax(uint64(minVal), uint64(maxVal), center, upplerLimit), true
 	}
-	panic("unsupported shuffle type!")
+	return 0, false
 }
 
 func GetRangeShuffleIndexForZMSignedSlice(val []int64, zm objectio.ZoneMap) uint64 {
@@ -295,12 +361,16 @@ func GetRangeShuffleIndexForZMSignedSlice(val []int64, zm objectio.ZoneMap) uint
 	panic("wrong type!")
 }
 
-func GetRangeShuffleIndexForValuesExtractedFromZMSignedSlice(val []int64, zm objectio.ZoneMap, t types.T) uint64 {
+func GetRangeShuffleIndexForValuesExtractedFromZMSignedSlice(val []int64, zm objectio.ZoneMap, t types.T) (uint64, bool) {
 	switch t {
 	case types.T_int64, types.T_int32, types.T_int16:
-		return GetRangeShuffleIndexSignedSlice(val, GetCenterValueExtractFromZMSigned(zm, t))
+		center, ok := GetCenterValueExtractFromZMSigned(zm, t)
+		if !ok {
+			return 0, false
+		}
+		return GetRangeShuffleIndexSignedSlice(val, center), true
 	}
-	panic("wrong type!")
+	return 0, false
 }
 
 func GetRangeShuffleIndexForZMUnsignedSlice(val []uint64, zm objectio.ZoneMap) uint64 {
@@ -311,12 +381,16 @@ func GetRangeShuffleIndexForZMUnsignedSlice(val []uint64, zm objectio.ZoneMap) u
 	panic("wrong type!")
 }
 
-func GetRangeShuffleIndexForValuesExtractedFromZMUnsignedSlice(val []uint64, zm objectio.ZoneMap, t types.T) uint64 {
+func GetRangeShuffleIndexForValuesExtractedFromZMUnsignedSlice(val []uint64, zm objectio.ZoneMap, t types.T) (uint64, bool) {
 	switch t {
 	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
-		return GetRangeShuffleIndexUnsignedSlice(val, GetCenterValueExtractFromZMUnsigned(zm, t))
+		center, ok := GetCenterValueExtractFromZMUnsigned(zm, t)
+		if !ok {
+			return 0, false
+		}
+		return GetRangeShuffleIndexUnsignedSlice(val, center), true
 	}
-	panic("wrong type!")
+	return 0, false
 }
 
 func GetRangeShuffleIndexSignedMinMax(minVal, maxVal, currentVal int64, upplerLimit uint64) uint64 {
@@ -612,10 +686,38 @@ func determineShuffleTypeWithColRefMode(
 	}
 
 	if child, reusable := reusableShuffleChild(col, node, builder, afterRemap); reusable {
-		reuseShuffleStrategy(node.Stats.HashmapStats, child)
-		return
+		// String range ownership is derived from an eight-byte prefix.  A
+		// downstream aggregate must not inherit that lossy distribution, but a
+		// reusable full-key hash distribution remains valid and useful.
+		if !isStringAggregateShuffleKey(node, col) ||
+			child.Stats.HashmapStats.ShuffleType != plan.ShuffleType_Range {
+			reuseShuffleStrategy(node.Stats.HashmapStats, child)
+			return
+		}
 	}
 	determineNonReusableShuffleType(col, node, builder, afterRemap)
+}
+
+func isStringAggregateShuffleKey(node *plan.Node, col *plan.ColRef) bool {
+	if node == nil || node.NodeType != plan.Node_AGG || col == nil {
+		return false
+	}
+	for _, groupBy := range node.GroupBy {
+		if groupBy == nil {
+			continue
+		}
+		groupCol, typ := GetHashColumn(groupBy)
+		if groupCol == nil || groupCol.RelPos != col.RelPos || groupCol.ColPos != col.ColPos {
+			continue
+		}
+		switch types.T(typ) {
+		case types.T_char, types.T_varchar, types.T_text:
+			return true
+		default:
+			return false
+		}
+	}
+	return false
 }
 
 func determineNonReusableShuffleType(
@@ -670,6 +772,14 @@ func determineNonReusableShuffleType(
 		return
 	}
 	s := w.GetStats()
+	if isStringAggregateShuffleKey(node, col) {
+		// ShuffleRange for strings is encoded with only the first eight bytes,
+		// while equality and hash aggregation use the complete value.  Without
+		// a full-key quantile sketch, the range metadata cannot prove balanced
+		// aggregate ownership.  Keep the existing hash/no-shuffle decision and
+		// leave range strategy available to joins and numeric keys.
+		return
+	}
 	if node.NodeType == plan.Node_AGG {
 		if shouldUseHashShuffle(s.ShuffleRangeMap[colName]) {
 			return
@@ -899,6 +1009,23 @@ func determineShuffleForJoinWithColRefMode(node *plan.Node, builder *QueryBuilde
 	// for now, if join children is merge group or filter, do not allow shuffle
 	if dontShuffle(builder.qry.Nodes[node.Children[0]], builder) || dontShuffle(builder.qry.Nodes[node.Children[1]], builder) {
 		return
+	}
+
+	// Join ordering keeps the expected cardinality, while shuffle admission
+	// must be safe when a residual inequality retains far more than its 5%
+	// heuristic. Use the pre-filter input only during topology selection, then
+	// restore the estimate consumed by runtime-filter planning and EXPLAIN.
+	buildChild := node.Children[1]
+	if node.JoinType == plan.Node_DEDUP && node.IsRightJoin {
+		buildChild = node.Children[0]
+	}
+	estimatedHashmapSize := node.Stats.HashmapStats.HashmapSize
+	capacityHashmapSize, hasCapacityBound := residualInequalityBuildCapacityBound(buildChild, builder)
+	if hasCapacityBound && capacityHashmapSize > estimatedHashmapSize {
+		node.Stats.HashmapStats.HashmapSize = capacityHashmapSize
+		defer func() {
+			node.Stats.HashmapStats.HashmapSize = estimatedHashmapSize
+		}()
 	}
 
 	leftTags := make(map[int32]bool)
@@ -1309,6 +1436,16 @@ func determineShuffleForGroupBy(node *plan.Node, builder *QueryBuilder) {
 		return
 	}
 
+	// The split rule admits only large strict-prefix ROLLUPs. Its coarser
+	// aggregate includes the empty set, so no data key can distribute every
+	// level; preserve local partial aggregation and MergeGroup. For ordinary
+	// grouping-set plans, especially smaller inputs, a shuffle can still be
+	// cheaper than merging partial groups.
+	if _, splitCoarse := builder.splitGroupingSetCoarseAggs[node]; splitCoarse {
+		resetShuffleStrategy(node.Stats.HashmapStats)
+		node.Stats.HashmapStats.Shuffle = false
+		return
+	}
 	child := builder.qry.Nodes[node.Children[0]]
 
 	// for now, if agg children is agg or filter, do not allow shuffle
@@ -1505,10 +1642,15 @@ func determineShuffleForScan(node *plan.Node, builder *QueryBuilder) {
 	var firstSortColName string
 	if node.TableDef.ClusterBy != nil {
 		firstSortColName = util.GetClusterByFirstColumn(node.TableDef.ClusterBy.Name)
-	} else if node.TableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
-		return
 	} else {
-		firstSortColName = node.TableDef.Pkey.Names[0]
+		// Catalog-only scans retain identity for cache invalidation without
+		// loading sort-key metadata. Cached statistics do not prove a key;
+		// keep hash shuffle unless the definition supplies that evidence.
+		pkey := node.TableDef.Pkey
+		if pkey == nil || len(pkey.Names) == 0 || pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+			return
+		}
+		firstSortColName = pkey.Names[0]
 	}
 
 	s := w.GetStats()

@@ -24,7 +24,9 @@ import (
 	"time"
 
 	mysql "github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/stretchr/testify/require"
 )
 
@@ -185,11 +187,31 @@ func TestIssue277xxDDLConsistency(t *testing.T) {
 				}
 			}
 
-			require.Equal(t, 4, queryIssue277xxInt(t, ctx, db0,
-				"select count(*) from mo_catalog.mo_columns where att_database = ? "+
-					"and att_relname = 't' and attname like 'c\\_%'", database))
-			require.Equal(t, 1, queryIssue277xxInt(t, ctx, db0,
-				"select count(*) from `"+database+"`.`t` force index(idx_v) where v = 7"))
+			// Each ALTER commits on its own CN. An ALTER response only guarantees
+			// visibility on the committing CN, so a read on CN0 can otherwise race
+			// CN1's logtail application and observe three columns. Synchronize both
+			// CNs to the latest commit before asserting the final image; this keeps
+			// the concurrent ALTER window intact and does not retry the ALTERs.
+			latestCommitTS := cn0.RawService().(cnservice.Service).GetTxnClient().GetLatestCommitTS()
+			cn1CommitTS := cn1.RawService().(cnservice.Service).GetTxnClient().GetLatestCommitTS()
+			if latestCommitTS.Less(cn1CommitTS) {
+				latestCommitTS = cn1CommitTS
+			}
+			require.False(t, latestCommitTS.IsEmpty(), "concurrent ALTERs must publish a commit timestamp")
+			testutils.WaitLogtailApplied(t, latestCommitTS, cn0)
+			testutils.WaitLogtailApplied(t, latestCommitTS, cn1)
+
+			expectedColumns := []string{"c_1_0", "c_1_1", "c_2_0", "c_2_1"}
+			for i, db := range []*sql.DB{db0, db1} {
+				require.Equal(t, expectedColumns, queryIssue277xxColumnNames(t, ctx, db, database),
+					"CN%d must observe the complete committed catalog image", i)
+				require.Equal(t, 1, queryIssue277xxInt(t, ctx, db,
+					"select count(*) from `"+database+"`.`t` force index(idx_v) where v = 7"),
+					"CN%d must resolve the final physical index", i)
+				require.Equal(t, []int64{0, 1, 0, 1}, queryIssue277xxIntValues(t, ctx, db,
+					"select c_1_0, c_1_1, c_2_0, c_2_1 from `"+database+"`.`t` where v = 7"),
+					"CN%d must preserve defaults from both ALTERs", i)
+			}
 		})
 	})
 }
@@ -212,6 +234,35 @@ func queryIssue277xxInt(t *testing.T, ctx context.Context, db *sql.DB, query str
 	var value int
 	require.NoError(t, db.QueryRowContext(ctx, query, args...).Scan(&value), "query failed: %s", query)
 	return value
+}
+
+func queryIssue277xxColumnNames(t *testing.T, ctx context.Context, db *sql.DB, database string) []string {
+	t.Helper()
+	rows, err := db.QueryContext(ctx,
+		"select attname from mo_catalog.mo_columns where att_database = ? "+
+			"and att_relname = 't' and attname like 'c\\_%' order by attname", database)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var names []string
+	for rows.Next() {
+		var name string
+		require.NoError(t, rows.Scan(&name))
+		names = append(names, name)
+	}
+	require.NoError(t, rows.Err())
+	return names
+}
+
+func queryIssue277xxIntValues(t *testing.T, ctx context.Context, db *sql.DB, query string) []int64 {
+	t.Helper()
+	values := make([]int64, 4)
+	dest := make([]any, len(values))
+	for i := range values {
+		dest[i] = &values[i]
+	}
+	require.NoError(t, db.QueryRowContext(ctx, query).Scan(dest...), "query failed: %s", query)
+	return values
 }
 
 func requireIssue277xxMySQLError(t *testing.T, err error, code uint16) {

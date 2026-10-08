@@ -2813,6 +2813,7 @@ func (builder *QueryBuilder) appendRowNumberMappingGuardNode(
 		}},
 		WindowIdx:   0,
 		BindingTags: []int32{windowTag},
+		SpillMem:    builder.sortSpillMem,
 	}, bindCtx)
 
 	rowNumberCol, err := makePlan2CastExpr(builder.GetContext(), &plan.Expr{

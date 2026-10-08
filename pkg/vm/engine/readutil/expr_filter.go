@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
@@ -143,7 +144,7 @@ func (m zoneMapMatch) and(other zoneMapMatch) zoneMapMatch {
 }
 
 func rawZoneMapComparable(zm objectio.ZoneMap, columnType types.T) bool {
-	return zm.IsInited() && zm.GetType() == columnType
+	return columnType != types.T_json && zm.IsInited() && zm.GetType() == columnType
 }
 
 func anyLTByBound(
@@ -389,10 +390,10 @@ func seekFirstBlockByZoneMap(
 func zoneMapMetadataComparable(
 	zm objectio.ZoneMap, bound objectio.ZoneMap, columnType types.T,
 ) bool {
-	if !zm.IsInited() || zm.GetType() != columnType {
+	if !rawZoneMapComparable(zm, columnType) {
 		return false
 	}
-	return bound == nil || (bound.IsInited() && bound.GetType() == columnType)
+	return bound == nil || rawZoneMapComparable(bound, columnType)
 }
 
 type temporalFilterRange struct {
@@ -858,6 +859,10 @@ func compileFilterExpr(
 	// case *plan.Expr_Lit:
 	// case *plan.Expr_Col:
 	case *plan.Expr_F:
+		if function.GetZoneMapEvaluation(exprImpl.F) == function.ZoneMapUnsupported {
+			canCompile = false
+			return
+		}
 		if op1, op2, op3, op4, op5, can, hsh, handled := compileTemporalFilterExpr(
 			expr, exprImpl, tableDef, fs, zone,
 		); handled {
@@ -1561,45 +1566,29 @@ func compileFilterExpr(
 				}
 			}
 			// ok
-		case "isnull", "is_null":
-			colExpr, _, ok := mustColConstValueFromBinaryFuncExpr(exprImpl)
-			if !ok {
+		case "isnull", "is_null", "isnotnull", "is_not_null":
+			if len(exprImpl.F.Args) != 1 || exprImpl.F.Args[0].GetCol() == nil {
 				canCompile = false
 				return
 			}
-			colDef := getColDefByName(expr, colExpr.Col.Name, colExpr.Col.ColPos, tableDef)
+			colExpr := exprImpl.F.Args[0].GetCol()
+			colDef := getColDefByName(expr, colExpr.Name, colExpr.ColPos, tableDef)
+			fid, _ := function.DecodeOverloadID(exprImpl.F.Func.GetObj())
+			matches := func(nulls, rows uint32) bool {
+				if fid == function.ISNULL {
+					return nulls != 0
+				}
+				return nulls < rows
+			}
 			fastFilterOp = nil
 			loadOp = loadMetadataOnlyOpFactory(fs)
 			seqNum := colDef.Seqnum
 			objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
 				dataMeta := meta.MustDataMeta()
-				return dataMeta.MustGetColumn(uint16(seqNum)).NullCnt() != 0, nil
+				return matches(dataMeta.MustGetColumn(uint16(seqNum)).NullCnt(), dataMeta.BlockHeader().Rows()), nil
 			}
-			blockFilterOp = func(
-				_ int, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
-			) (bool, bool, error) {
-				return false, blkMeta.MustGetColumn(uint16(seqNum)).NullCnt() != 0, nil
-			}
-
-			// ok
-		case "isnotnull", "is_not_null":
-			colExpr, _, ok := mustColConstValueFromBinaryFuncExpr(exprImpl)
-			if !ok {
-				canCompile = false
-				return
-			}
-			colDef := getColDefByName(expr, colExpr.Col.Name, colExpr.Col.ColPos, tableDef)
-			fastFilterOp = nil
-			loadOp = loadMetadataOnlyOpFactory(fs)
-			seqNum := colDef.Seqnum
-			objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
-				dataMeta := meta.MustDataMeta()
-				return dataMeta.MustGetColumn(uint16(seqNum)).NullCnt() < dataMeta.BlockHeader().Rows(), nil
-			}
-			blockFilterOp = func(
-				_ int, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
-			) (bool, bool, error) {
-				return false, blkMeta.MustGetColumn(uint16(seqNum)).NullCnt() < blkMeta.GetRows(), nil
+			blockFilterOp = func(_ int, blkMeta objectio.BlockObject, _ objectio.BloomFilter) (bool, bool, error) {
+				return false, matches(blkMeta.MustGetColumn(uint16(seqNum)).NullCnt(), blkMeta.GetRows()), nil
 			}
 
 		case "in":
@@ -1610,6 +1599,10 @@ func compileFilterExpr(
 			}
 			vec := vector.NewVec(types.T_any.ToType())
 			if err := vec.UnmarshalBinary(val); err != nil {
+				canCompile = false
+				return
+			}
+			if vec.GetType().Oid == types.T_char {
 				canCompile = false
 				return
 			}

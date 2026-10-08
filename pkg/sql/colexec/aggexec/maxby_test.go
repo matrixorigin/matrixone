@@ -55,13 +55,17 @@ func maxByInputs(t *testing.T, mp *mpool.MPool, values []string, nullValue map[i
 }
 
 func TestMaxByEqualCandidatesMergeStringSourcesForAllPhysicalFamilies(t *testing.T) {
+	jsonValue, err := types.ParseStringToByteJson(`{"v":7}`)
+	require.NoError(t, err)
+	jsonBytes, err := types.EncodeJson(jsonValue)
+	require.NoError(t, err)
 	for _, valueType := range []struct {
 		name  string
 		typ   types.Type
 		value any
 	}{
 		{name: "fixed", typ: types.T_int64.ToType(), value: int64(7)},
-		{name: "json", typ: types.T_json.ToType(), value: []byte(`{"v":7}`)},
+		{name: "json", typ: types.T_json.ToType(), value: jsonBytes},
 		{name: "array", typ: types.T_array_float32.ToType(), value: types.ArrayToBytes([]float32{7})},
 	} {
 		for _, sources := range [][]types.StringSource{
@@ -675,7 +679,7 @@ func TestMaxBySpillPreservesBinaryStringProvenanceAcrossGroups(t *testing.T) {
 func TestMaxByMergeIsCommutativeAndAssociative(t *testing.T) {
 	mp := mpool.MustNewZero()
 	params := []types.Type{types.T_varchar.ToType(), types.T_int64.ToType(), types.T_varchar.ToType()}
-	inputs := []*vector.Vector(nil)
+	inputs := make([]*vector.Vector, 0, 3)
 	for _, candidate := range []string{"alpha", "gamma", "beta"} {
 		inputs = append(inputs, maxByInputs(t, mp, []string{candidate}, nil, []int64{10}, []string{"same"})...)
 	}

@@ -25,10 +25,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
@@ -114,7 +120,7 @@ func TestSubscriptionMetadataEnumerationObservesCancellation(t *testing.T) {
 }
 
 func TestActiveSubscriptionMetadataCandidatesAreBoundedAtCatalogQuery(t *testing.T) {
-	columnCheckSQL := "select 1 from mo_catalog.mo_columns where att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
+	columnCheckSQL := "select 1 from mo_catalog.mo_columns where account_id = 0 and att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
 
 	for _, test := range []struct {
 		name          string
@@ -228,7 +234,7 @@ func subscriptionPublisherAccountResult(rows ...[]interface{}) *MysqlResultSet {
 }
 
 func TestLegacySubscriptionMetadataResolvesPublisherAccountAtCatalogBoundary(t *testing.T) {
-	columnCheckSQL := "select 1 from mo_catalog.mo_columns where att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
+	columnCheckSQL := "select 1 from mo_catalog.mo_columns where account_id = 0 and att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
 	candidateSQL := getSubsSqlOld +
 		" and sub_account_id = 7 and status = 0 and sub_name is not null and sub_name <> '' limit 2"
 	lookupSQL := subscriptionPublisherAccountLookupSQL([]string{"publisher"})
@@ -497,6 +503,98 @@ func TestExecCtxCloseClearsRootSQLOverride(t *testing.T) {
 	require.Nil(t, execCtx.rootSQLOverride)
 }
 
+func TestRecoverTableDefForPlanMigratesLegacyHex(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion74)
+
+	hexExpr := &pbplan.Expr{Typ: plan2.MakePlan2Type(&types.Type{Oid: types.T_varchar}), Expr: &pbplan.Expr_F{
+		F: &pbplan.Function{
+			Func: &pbplan.ObjectRef{Obj: function.EncodeOverloadID(function.HEX, 5), ObjName: "hex"},
+			Args: []*pbplan.Expr{plan2.MakePlan2Float64ConstExprWithType(14.5)},
+		},
+	}}
+	tableDef := &pbplan.TableDef{DbName: "db", Checks: []*pbplan.CheckDef{{Check: hexExpr}}}
+	tcc := &TxnCompilerContext{execCtx: &ExecCtx{reqCtx: context.Background(), proc: proc}}
+
+	require.NoError(t, tcc.recoverLegacyTinyText(context.Background(), "db", tableDef, nil, nil))
+	_, overloadID := function.DecodeOverloadID(tableDef.Checks[0].Check.GetF().GetFunc().GetObj())
+	require.Equal(t, int32(function.HexFloat64Overload), overloadID)
+}
+
+func TestCollationMetadataResolveRejectsBeforeLegacyRecovery(t *testing.T) {
+	for _, catalogDef := range []*pbplan.TableDef{
+		{Cols: []*pbplan.ColDef{{Name: "v", Typ: pbplan.Type{Id: int32(types.T_varchar), Charset: 4, CollationVersion: 1}}}},
+		{DefaultCharset: 3, CollationVersion: 1},
+		{KeyFormat: 1},
+		{Indexes: []*pbplan.IndexDef{{KeyFormat: 1}}},
+	} {
+		proc := testutil.NewProcess(t)
+		ctrl := gomock.NewController(t)
+		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+		storage := mock_frontend.NewMockEngine(ctrl)
+		relation := mock_frontend.NewMockRelation(ctrl)
+		storage.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(42)).Return("db", "t", relation, nil)
+		relation.EXPECT().GetTableDef(gomock.Any()).Return(catalogDef)
+		ses, _ := newObservedProtocolSession()
+		ses.txnHandler = InitTxnHandler("", storage, proc.Ctx, txnOp)
+		tcc := &TxnCompilerContext{execCtx: &ExecCtx{reqCtx: proc.Ctx, ses: ses, proc: proc}}
+		before, err := catalogDef.Marshal()
+		require.NoError(t, err)
+		obj, resolved, err := tcc.ResolveById(42, nil)
+		require.ErrorContains(t, err, "disabled")
+		require.Nil(t, obj)
+		require.Nil(t, resolved)
+		after, err := catalogDef.Marshal()
+		require.NoError(t, err)
+		require.Equal(t, before, after)
+	}
+}
+
+func TestResolveByIdPreservesUnassignableLegacyHexDefault(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previous, present := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion74)
+	t.Cleanup(func() {
+		if present {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion74)
+		}
+	})
+	typ := pbplan.Type{Id: int32(types.T_decimal64), Width: 5, Scale: 1}
+	catalogDef := &pbplan.TableDef{DbName: "db", Name: "t", Cols: []*pbplan.ColDef{{Name: "v", Typ: typ,
+		Default: &pbplan.Default{OriginString: "(hex(cast(15.5 as double)))", Expr: &pbplan.Expr{Typ: typ,
+			Expr: &pbplan.Expr_Lit{Lit: &pbplan.Literal{Value: &pbplan.Literal_Decimal64Val{
+				Decimal64Val: &pbplan.Decimal64{A: 100},
+			}}},
+		}},
+	}}}
+	wire, err := catalogDef.Marshal()
+	require.NoError(t, err)
+	ctrl := gomock.NewController(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	storage := mock_frontend.NewMockEngine(ctrl)
+	relation := mock_frontend.NewMockRelation(ctrl)
+	storage.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(42)).Return("db", "t", relation, nil).Times(2)
+	relation.EXPECT().GetTableDef(gomock.Any()).Return(catalogDef).Times(2)
+	ses, _ := newObservedProtocolSession()
+	ses.txnHandler = InitTxnHandler("", storage, proc.Ctx, txnOp)
+	tcc := &TxnCompilerContext{execCtx: &ExecCtx{reqCtx: proc.Ctx, ses: ses, proc: proc}}
+	for range 2 {
+		obj, resolved, err := tcc.ResolveById(42, nil)
+		require.NoError(t, err)
+		require.Equal(t, "t", obj.ObjName)
+		require.Equal(t, int64(100), resolved.Cols[0].Default.Expr.GetLit().GetDecimal64Val().A)
+		require.Same(t, catalogDef.Cols[0].Default, resolved.Cols[0].Default)
+	}
+	after, err := catalogDef.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, wire, after)
+}
+
 func TestDatabaseExistsSuppressesOnlyExpectedEOBLog(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ctx := context.Background()
@@ -518,6 +616,33 @@ func TestDatabaseExistsSuppressesOnlyExpectedEOBLog(t *testing.T) {
 	require.False(t, tcc.DatabaseExists("broken", nil))
 	require.Equal(t, 1, logs.Len())
 	require.Equal(t, "Failed to get database", logs.All()[0].Message)
+}
+
+func TestResolveSubscriptionViewByIDUsesSnapshot(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := defines.AttachAccountId(context.Background(), 7)
+	current := mock_frontend.NewMockTxnOperator(ctrl)
+	historical := mock_frontend.NewMockTxnOperator(ctrl)
+	current.EXPECT().Txn().Return(txn.TxnMeta{SnapshotTS: timestamp.Timestamp{PhysicalTime: 100}})
+	current.EXPECT().CloneSnapshotOp(timestamp.Timestamp{PhysicalTime: 50}).Return(historical)
+	storage := mock_frontend.NewMockEngine(ctrl)
+	relation := mock_frontend.NewMockRelation(ctrl)
+	storage.EXPECT().GetRelationById(gomock.Any(), historical, uint64(42)).DoAndReturn(
+		func(got context.Context, _ client.TxnOperator, _ uint64) (string, string, engine.Relation, error) {
+			accountID, err := defines.GetAccountId(got)
+			require.NoError(t, err)
+			require.Equal(t, uint32(23), accountID)
+			return "pub", "v", relation, nil
+		})
+	relation.EXPECT().GetTableDef(gomock.Any()).Return(&pbplan.TableDef{Name: "v"})
+	ses, _ := newObservedProtocolSession()
+	ses.txnHandler = InitTxnHandler("", storage, ctx, current)
+	compiler := &TxnCompilerContext{execCtx: &ExecCtx{reqCtx: ctx, ses: ses}}
+	compiler.SetSnapshot(&pbplan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 50}})
+	obj, def, err := compiler.ResolveSubscriptionTableById(42, &pbplan.SubscriptionMeta{AccountId: 23})
+	require.NoError(t, err)
+	require.Equal(t, "v", obj.ObjName)
+	require.Equal(t, "v", def.Name)
 }
 
 func TestResolveViewDependencyAccount(t *testing.T) {

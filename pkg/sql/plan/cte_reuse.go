@@ -105,8 +105,8 @@ func (builder *QueryBuilder) reusableCTEProducer(
 		return 0, nil, false
 	}
 	producerRootID := first.rootID
-	sharedPredicate, predicateAware, rowDomainExact := builder.cteSharedConsumerPredicate(
-		rootID, cteRef.occurrences)
+	sharedPredicate, predicateAware, rowDomainExact := builder.cteSharedConsumerPredicateWithDrainRequirements(
+		rootID, cteRef.occurrences, hashBuildOccurrences)
 	if !rowDomainExact && !builder.cteProducerEvaluationIsTotal(
 		first.rootID, first.rootID, first.ctx, make(map[int32]bool),
 	) {
@@ -867,7 +867,7 @@ func samePlanType(left, right planpb.Type) bool {
 	return left.Id == right.Id && left.NotNullable == right.NotNullable &&
 		left.AutoIncr == right.AutoIncr && left.Width == right.Width &&
 		left.Scale == right.Scale && left.Table == right.Table &&
-		left.Enumvalues == right.Enumvalues && left.Charset == right.Charset
+		left.Enumvalues == right.Enumvalues && left.SameCollation(right)
 }
 
 func statementStableFunctionScan(node *planpb.Node) bool {
@@ -1098,6 +1098,12 @@ func (builder *QueryBuilder) cteHasDrainWitness(rootID int32, occurrences []cteO
 	return ok
 }
 
+type cteConsumerDrainProof struct {
+	hashBuildOccurrences map[int32]bool
+	drainedOccurrences   map[int32]bool
+	hasWitness           bool
+}
+
 // cteConsumerDrainRequirements proves that at least one legacy occurrence must
 // evaluate the complete producer. That witness makes eager materialization
 // preserve the producer's error/evaluation domain; other readers may stop
@@ -1110,10 +1116,19 @@ func (builder *QueryBuilder) cteConsumerDrainRequirements(
 	rootID int32,
 	occurrences []cteOccurrence,
 ) (map[int32]bool, bool) {
+	proof := builder.proveCTEConsumerDrainRequirements(rootID, occurrences)
+	return proof.hashBuildOccurrences, proof.hasWitness
+}
+
+func (builder *QueryBuilder) proveCTEConsumerDrainRequirements(
+	rootID int32,
+	occurrences []cteOccurrence,
+) cteConsumerDrainProof {
 	parents := make(map[int32][]int32)
 	reachable := make(map[int32]bool)
 	builder.collectCTEParents(rootID, parents, reachable)
 	hashBuildOccurrences := make(map[int32]bool)
+	drainedOccurrences := make(map[int32]bool)
 	requiredBuildChildByJoin := make(map[int32]int32)
 	hasDrainWitness := false
 
@@ -1124,12 +1139,18 @@ func (builder *QueryBuilder) cteConsumerDrainRequirements(
 		// consumer in place and make later mutating planner passes visit the
 		// shared subtree twice.
 		if !reachable[occurrence.rootID] {
-			return nil, false
+			return cteConsumerDrainProof{}
 		}
 		type consumerPath struct {
 			nodeID            int32
 			childID           int32
 			requiresHashBuild bool
+			// inputDrained records that a blocking descendant has already
+			// consumed this occurrence completely before producing its first
+			// row. A LIMIT on a transparent ancestor cannot shorten that work,
+			// although intervening joins must still prove that the descendant is
+			// executed at all.
+			inputDrained bool
 		}
 		queue := make([]consumerPath, 0, len(parents[occurrence.rootID]))
 		for _, nodeID := range parents[occurrence.rootID] {
@@ -1146,11 +1167,21 @@ func (builder *QueryBuilder) cteConsumerDrainRequirements(
 			}
 			seen[path] = true
 			node := builder.qry.Nodes[path.nodeID]
+			// A blocking descendant only proves that this occurrence drains after
+			// its branch starts. A partially consumed multi-input operator may never
+			// start this exact child (lazy UNION ALL is the common case). Joins are
+			// checked below with child-specific build/probe rules; every other
+			// multi-input boundary drops the carried witness until a new blocking
+			// ancestor establishes one.
+			if path.inputDrained && len(node.Children) > 1 && node.NodeType != planpb.Node_JOIN {
+				path.inputDrained = false
+			}
 			// LIMIT can stop the subtree before it completes. Only a positive
 			// literal limit on a proven blocking operator is a witness: LIMIT 0 is
 			// compiled without its input steps, and a dynamic limit may be zero at
 			// execution time. OFFSET alone does not shorten a fully consumed stream.
-			if node.Limit != nil && !cteLimitPreservesFullInput(node) {
+			if node.Limit != nil &&
+				(!cteLimitIsPositive(node.Limit) || !path.inputDrained && !cteLimitPreservesFullInput(node)) {
 				continue
 			}
 			// APPLY may skip its right input when the left side is empty. Block
@@ -1158,6 +1189,9 @@ func (builder *QueryBuilder) cteConsumerDrainRequirements(
 			// Neither node can carry a complete-evaluation witness upward.
 			if node.NodeType == planpb.Node_APPLY || node.NodeType == planpb.Node_SAMPLE {
 				continue
+			}
+			if node.NodeType == planpb.Node_AGG || node.NodeType == planpb.Node_SORT {
+				path.inputDrained = true
 			}
 			if node.NodeType == planpb.Node_JOIN {
 				switch node.JoinType {
@@ -1168,7 +1202,8 @@ func (builder *QueryBuilder) cteConsumerDrainRequirements(
 					// preserve it with the marker below. A fixed join-order hint
 					// forbids that physical move and therefore accepts only the
 					// already-right child.
-					if len(node.Children) != 2 || !builder.IsEquiJoin(node) ||
+					if len(node.Children) != 2 ||
+						(!builder.IsEquiJoin(node) && !builder.cteInnerJoinGetsEquiCondition(path.nodeID, parents)) ||
 						path.childID != node.Children[0] && path.childID != node.Children[1] {
 						continue
 					}
@@ -1189,7 +1224,7 @@ func (builder *QueryBuilder) cteConsumerDrainRequirements(
 					if path.childID == siblingID {
 						siblingID = node.Children[1]
 					}
-					if builder.subtreeContainsCTEHashBuildScan(siblingID, make(map[int32]bool)) {
+					if builder.joinInputContainsCTEHashBuildScan(siblingID, make(map[int32]bool)) {
 						continue
 					}
 					if requiredChild, exists := requiredBuildChildByJoin[path.nodeID]; exists && requiredChild != path.childID {
@@ -1197,13 +1232,20 @@ func (builder *QueryBuilder) cteConsumerDrainRequirements(
 					}
 					requiredBuildChildByJoin[path.nodeID] = path.childID
 					path.requiresHashBuild = true
-				case planpb.Node_LEFT:
+				case planpb.Node_LEFT, planpb.Node_SINGLE:
+					// Fully consuming a normal LEFT/SINGLE join consumes its
+					// preserved logical-left input, even when the right build is
+					// empty. Keep walking toward the root; only the nullable/right
+					// input needs a pinned build-side proof at this boundary.
+					if !node.IsRightJoin && len(node.Children) == 2 && path.childID == node.Children[0] {
+						break
+					}
 					// LEFT hash/loop joins consume the complete logical right build
 					// before probing. Preserve the non-right physical orientation;
 					// the nullable/probe side can never establish this witness.
 					if node.IsRightJoin || len(node.Children) != 2 ||
 						path.childID != node.Children[1] ||
-						builder.subtreeContainsCTEHashBuildScan(node.Children[0], make(map[int32]bool)) {
+						builder.joinInputContainsCTEHashBuildScan(node.Children[0], make(map[int32]bool)) {
 						continue
 					}
 					if requiredChild, exists := requiredBuildChildByJoin[path.nodeID]; exists && requiredChild != path.childID {
@@ -1214,7 +1256,7 @@ func (builder *QueryBuilder) cteConsumerDrainRequirements(
 				case planpb.Node_SEMI:
 					if node.IsRightJoin || len(node.Children) != 2 ||
 						path.childID != node.Children[1] ||
-						builder.subtreeContainsCTEHashBuildScan(node.Children[0], make(map[int32]bool)) ||
+						builder.joinInputContainsCTEHashBuildScan(node.Children[0], make(map[int32]bool)) ||
 						!builder.IsEquiJoin(node) {
 						continue
 					}
@@ -1226,7 +1268,7 @@ func (builder *QueryBuilder) cteConsumerDrainRequirements(
 				case planpb.Node_MARK:
 					if node.IsRightJoin || len(node.Children) != 2 ||
 						path.childID != node.Children[1] ||
-						builder.subtreeContainsCTEHashBuildScan(node.Children[0], make(map[int32]bool)) ||
+						builder.joinInputContainsCTEHashBuildScan(node.Children[0], make(map[int32]bool)) ||
 						!builder.cteMarkJoinBecomesHashSemi(path.nodeID, parents) {
 						continue
 					}
@@ -1254,17 +1296,66 @@ func (builder *QueryBuilder) cteConsumerDrainRequirements(
 				queue = append(queue, consumerPath{
 					nodeID: parentID, childID: path.nodeID,
 					requiresHashBuild: path.requiresHashBuild,
+					inputDrained:      path.inputDrained,
 				})
 			}
 		}
 		if witnessWithoutHashBuild || witnessWithHashBuild {
 			hasDrainWitness = true
+			drainedOccurrences[occurrence.rootID] = true
 			if !witnessWithoutHashBuild && witnessWithHashBuild {
 				hashBuildOccurrences[occurrence.rootID] = true
 			}
 		}
 	}
-	return hashBuildOccurrences, hasDrainWitness
+	return cteConsumerDrainProof{
+		hashBuildOccurrences: hashBuildOccurrences,
+		drainedOccurrences:   drainedOccurrences,
+		hasWitness:           hasDrainWitness,
+	}
+}
+
+// cteInnerJoinGetsEquiCondition recognizes the binder's comma-join shape before
+// optimizeFilters moves a direct parent Filter equality into Join.OnList. The
+// later optimizer pass is mandatory for SELECT plans, so this is the same
+// physical equality proof as IsEquiJoin, observed one phase earlier. Only a
+// direct, non-barrier Filter is accepted; LIMIT/OFFSET and outer-scope or
+// volatile expressions keep the conservative inline plan.
+func (builder *QueryBuilder) cteInnerJoinGetsEquiCondition(
+	nodeID int32,
+	parents map[int32][]int32,
+) bool {
+	if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return false
+	}
+	node := builder.qry.Nodes[nodeID]
+	if node == nil || node.NodeType != planpb.Node_JOIN || node.JoinType != planpb.Node_INNER ||
+		len(node.Children) != 2 || len(parents[nodeID]) != 1 {
+		return false
+	}
+	parent := builder.qry.Nodes[parents[nodeID][0]]
+	if parent == nil || parent.NodeType != planpb.Node_FILTER || parent.FilterIsBarrier ||
+		parent.Limit != nil || parent.Offset != nil {
+		return false
+	}
+
+	leftTags := make(map[int32]bool)
+	for _, tag := range builder.enumerateTags(node.Children[0]) {
+		leftTags[tag] = true
+	}
+	rightTags := make(map[int32]bool)
+	for _, tag := range builder.enumerateTags(node.Children[1]) {
+		rightTags[tag] = true
+	}
+	for _, predicate := range parent.FilterList {
+		if predicate == nil || ContainsVolatileFunction(predicate) {
+			continue
+		}
+		if isEquiCond(DeepCopyExpr(predicate), leftTags, rightTags) {
+			return true
+		}
+	}
+	return false
 }
 
 func cteLimitPreservesFullInput(node *planpb.Node) bool {
@@ -1277,7 +1368,11 @@ func cteLimitPreservesFullInput(node *planpb.Node) bool {
 	if node.NodeType != planpb.Node_AGG && node.NodeType != planpb.Node_SORT {
 		return false
 	}
-	literal := node.Limit.GetLit()
+	return cteLimitIsPositive(node.Limit)
+}
+
+func cteLimitIsPositive(limit *planpb.Expr) bool {
+	literal := limit.GetLit()
 	if literal == nil || literal.Isnull {
 		return false
 	}
@@ -1385,9 +1480,10 @@ func isCTEPositiveMarkFilter(expr *planpb.Expr, markTag int32) bool {
 // three-valued logic is preserved: if a row can pass consumer i, it necessarily
 // passes P1 OR ... OR Pn at the producer. rowDomainExact additionally proves
 // that no truncation-safe local predicate was omitted from that union.
-func (builder *QueryBuilder) cteSharedConsumerPredicate(
+func (builder *QueryBuilder) cteSharedConsumerPredicateWithDrainRequirements(
 	rootID int32,
 	occurrences []cteOccurrence,
+	hashBuildOccurrences map[int32]bool,
 ) (*planpb.Expr, bool, bool) {
 	parents := make(map[int32][]int32)
 	reachable := make(map[int32]bool)
@@ -1403,7 +1499,8 @@ func (builder *QueryBuilder) cteSharedConsumerPredicate(
 		}
 		var ok bool
 		localPredicates[i], localDomainsComplete[i], ok =
-			builder.cteOccurrenceLocalPredicates(occurrence, parents)
+			builder.cteOccurrenceLocalPredicatesWithDrainRequirement(
+				occurrence, parents, hashBuildOccurrences[occurrence.rootID])
 		if !ok {
 			return nil, false, false
 		}
@@ -1529,23 +1626,34 @@ func ctePredicateSingleOutputColumn(expr *planpb.Expr, tag int32) (int32, bool) 
 // involving another CTE occurrence; those are join semantics, not producer
 // bounds. CTE occurrences are trees before reuse, but the parent walk keeps a
 // visited set to fail closed if a future binder introduces a DAG here.
-func (builder *QueryBuilder) cteOccurrenceLocalPredicates(
+func (builder *QueryBuilder) cteOccurrenceLocalPredicatesWithDrainRequirement(
 	occurrence cteOccurrence,
 	parents map[int32][]int32,
+	requiresHashBuild bool,
 ) ([]*planpb.Expr, bool, bool) {
 	tagSet := map[int32]bool{occurrence.rootTag: true}
 	predicates := make([]*planpb.Expr, 0, 2)
 	domainComplete := true
-	queue := append([]int32(nil), parents[occurrence.rootID]...)
-	seen := make(map[int32]bool)
+	type consumerPath struct {
+		nodeID                int32
+		childID               int32
+		protectedJoinID       int32
+		protectedBuildChildID int32
+		hasProtectedBuild     bool
+	}
+	queue := make([]consumerPath, 0, len(parents[occurrence.rootID]))
+	for _, nodeID := range parents[occurrence.rootID] {
+		queue = append(queue, consumerPath{nodeID: nodeID, childID: occurrence.rootID})
+	}
+	seen := make(map[consumerPath]bool)
 	for len(queue) > 0 {
-		nodeID := queue[0]
+		path := queue[0]
 		queue = queue[1:]
-		if seen[nodeID] {
+		if seen[path] {
 			return nil, false, false
 		}
-		seen[nodeID] = true
-		node := builder.qry.Nodes[nodeID]
+		seen[path] = true
+		node := builder.qry.Nodes[path.nodeID]
 		if node.Limit != nil || node.Offset != nil {
 			// A full-drain operator such as Top-N SORT can read every input row
 			// while still delaying unneeded output expressions until after the
@@ -1562,10 +1670,24 @@ func (builder *QueryBuilder) cteOccurrenceLocalPredicates(
 			}
 			candidates = node.FilterList
 		case planpb.Node_JOIN:
-			// A join can remove rows from at least one input. Treat every join
-			// shape as an inexact output-evaluation boundary; the INNER case
-			// below is traversed only to collect safe producer bounds.
-			domainComplete = false
+			markedBuildBoundary := requiresHashBuild && builder.cteMarkedHashBuildBoundary(
+				path.nodeID, path.childID, parents,
+			)
+			if markedBuildBoundary {
+				// The replacement scan is pinned to this build side. Cross-input and
+				// probe-only predicates at this join or its direct binder Filter
+				// cannot narrow the producer's evaluation domain, but build-local
+				// predicates can still be pushed into it and must be collected.
+				path.protectedJoinID = path.nodeID
+				path.protectedBuildChildID = path.childID
+				path.hasProtectedBuild = true
+			} else {
+				// A join can remove rows from at least one input. Treat every join
+				// shape without a pinned build contract as an inexact output-
+				// evaluation boundary; the INNER case below is traversed only to
+				// collect safe producer bounds.
+				domainComplete = false
+			}
 			if node.JoinType != planpb.Node_INNER || node.Limit != nil || node.Offset != nil {
 				continue
 			}
@@ -1585,21 +1707,31 @@ func (builder *QueryBuilder) cteOccurrenceLocalPredicates(
 				node.NodeType == planpb.Node_SAMPLE {
 				domainComplete = false
 			}
-			queue = append(queue, parents[nodeID]...)
-			continue
 		}
 
 		for _, predicate := range candidates {
 			if predicate == nil || !containsTag(predicate, occurrence.rootTag) {
 				// A constant, parameter, or volatile predicate can reduce every
-				// occurrence row even though it has no CTE column reference.
+				// occurrence row even though it has no CTE column reference. A probe-
+				// dependent predicate at a guaranteed build boundary cannot: the
+				// complete build is evaluated before that predicate matters.
+				if path.hasProtectedBuild && builder.ctePredicateCannotNarrowHashBuild(
+					predicate, path.protectedJoinID, path.protectedBuildChildID,
+				) {
+					continue
+				}
 				domainComplete = false
 				continue
 			}
 			if !containsOnlyTags(predicate, tagSet) {
 				// A cross-relation predicate cannot be copied into the producer,
-				// but it can still shrink the inline occurrence's evaluation domain.
-				domainComplete = false
+				// but it can shrink the inline occurrence's evaluation domain unless
+				// it depends on the probe at a guaranteed hash-build boundary.
+				if !path.hasProtectedBuild || !builder.ctePredicateCannotNarrowHashBuild(
+					predicate, path.protectedJoinID, path.protectedBuildChildID,
+				) {
+					domainComplete = false
+				}
 				continue
 			}
 			if !exprCanRemoveProject(predicate) {
@@ -1616,9 +1748,81 @@ func (builder *QueryBuilder) cteOccurrenceLocalPredicates(
 			}
 			predicates = append(predicates, predicate)
 		}
-		queue = append(queue, parents[nodeID]...)
+		for _, parentID := range parents[path.nodeID] {
+			next := consumerPath{nodeID: parentID, childID: path.nodeID}
+			// The binder keeps comma-join predicates in one direct FILTER. Do not
+			// carry this classification through a projection or other binding
+			// boundary where a new tag could disguise a build-local predicate.
+			if node.NodeType == planpb.Node_JOIN && path.hasProtectedBuild {
+				next.protectedJoinID = path.protectedJoinID
+				next.protectedBuildChildID = path.protectedBuildChildID
+				next.hasProtectedBuild = true
+			}
+			queue = append(queue, next)
+		}
 	}
 	return predicates, domainComplete, true
+}
+
+func (builder *QueryBuilder) ctePredicateCannotNarrowHashBuild(
+	predicate *planpb.Expr,
+	joinID, buildChildID int32,
+) bool {
+	if predicate == nil || !exprCanRemoveProject(predicate) ||
+		joinID < 0 || int(joinID) >= len(builder.qry.Nodes) {
+		return false
+	}
+	join := builder.qry.Nodes[joinID]
+	if join == nil || len(join.Children) != 2 ||
+		buildChildID != join.Children[0] && buildChildID != join.Children[1] {
+		return false
+	}
+	probeChildID := join.Children[0]
+	if buildChildID == probeChildID {
+		probeChildID = join.Children[1]
+	}
+	allTags := make(map[int32]bool)
+	for _, childID := range join.Children {
+		for _, tag := range builder.enumerateTags(childID) {
+			allTags[tag] = true
+		}
+	}
+	if !containsOnlyTags(predicate, allTags) {
+		return false
+	}
+	for _, tag := range builder.enumerateTags(probeChildID) {
+		if containsTag(predicate, tag) {
+			return true
+		}
+	}
+	return false
+}
+
+func (builder *QueryBuilder) cteMarkedHashBuildBoundary(
+	nodeID, childID int32,
+	parents map[int32][]int32,
+) bool {
+	if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return false
+	}
+	node := builder.qry.Nodes[nodeID]
+	if node == nil || len(node.Children) != 2 {
+		return false
+	}
+	switch node.JoinType {
+	case planpb.Node_INNER:
+		return (childID == node.Children[0] || childID == node.Children[1]) &&
+			(builder.IsEquiJoin(node) || builder.cteInnerJoinGetsEquiCondition(nodeID, parents))
+	case planpb.Node_LEFT, planpb.Node_SINGLE:
+		return !node.IsRightJoin && childID == node.Children[1]
+	case planpb.Node_SEMI:
+		return !node.IsRightJoin && childID == node.Children[1] && builder.IsEquiJoin(node)
+	case planpb.Node_MARK:
+		return !node.IsRightJoin && childID == node.Children[1] &&
+			builder.cteMarkJoinBecomesHashSemi(nodeID, parents)
+	default:
+		return false
+	}
 }
 
 func (builder *QueryBuilder) combineCTEPredicates(
