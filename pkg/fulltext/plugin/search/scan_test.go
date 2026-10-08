@@ -116,7 +116,7 @@ func TestFulltextResolveExecutionTarget(t *testing.T) {
 }
 
 func TestRunCountStarUsesCountOnlyForTFIDF(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	s := &fulltext.SearchAccum{TblName: "idx_table", ScoreAlgo: fulltext.ALGO_TFIDF}
 
 	prev := RunSql
@@ -136,7 +136,7 @@ func TestRunCountStarUsesCountOnlyForTFIDF(t *testing.T) {
 }
 
 func TestRunCountStarUsesDedupedDocLenForBM25(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	s := &fulltext.SearchAccum{TblName: "idx_table", ScoreAlgo: fulltext.ALGO_BM25}
 
 	prev := RunSql
@@ -156,7 +156,7 @@ func TestRunCountStarUsesDedupedDocLenForBM25(t *testing.T) {
 }
 
 func TestSortTopKReleasesAggregates(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	s, err := fulltext.NewSearchAccum("src", "index", "pattern", 0, "", fulltext.ALGO_TFIDF)
 	require.NoError(t, err)
 	s.Nrow = 100
@@ -185,7 +185,7 @@ func TestSortTopKReleasesAggregates(t *testing.T) {
 }
 
 func TestReturnResultUsesCachedBinaryDocID(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	st := &Scan{
 		docIDMap: map[any]any{
 			"doc-key": []byte{0x01, 0x02, 0x03},
@@ -204,7 +204,7 @@ func TestReturnResultUsesCachedBinaryDocID(t *testing.T) {
 }
 
 func TestReturnResultUsesCachedBinaryDocIDWithOneAttr(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	st := &Scan{
 		docIDMap: map[any]any{
 			"doc-key": []byte{0x04, 0x05, 0x06},
@@ -221,7 +221,7 @@ func TestReturnResultUsesCachedBinaryDocIDWithOneAttr(t *testing.T) {
 }
 
 func TestEvaluateKeepsBinaryDocIDUntilOutput(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	s, err := fulltext.NewSearchAccum("src", "index", "pattern", 0, "", fulltext.ALGO_TFIDF)
 	require.NoError(t, err)
 	s.Nrow = 100
@@ -257,7 +257,7 @@ func TestEvaluateKeepsBinaryDocIDUntilOutput(t *testing.T) {
 }
 
 func TestSortTopKPreservesBinaryDocIDUntilOutput(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	s, err := fulltext.NewSearchAccum("src", "index", "pattern", 0, "", fulltext.ALGO_TFIDF)
 	require.NoError(t, err)
 	s.Nrow = 100
@@ -295,7 +295,7 @@ func TestSortTopKPreservesBinaryDocIDUntilOutput(t *testing.T) {
 }
 
 func TestSortTopKRankingReleasesFilteredDocs(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	s, err := fulltext.NewSearchAccum("src", "index", "+apple -banana", int64(tree.FULLTEXT_BOOLEAN), "", fulltext.ALGO_TFIDF)
 	require.NoError(t, err)
 	s.Nrow = 100
@@ -351,7 +351,7 @@ func TestSortTopKRankingReleasesFilteredDocs(t *testing.T) {
 // partition order; each spilled partition must be materialized a bounded
 // number of times — at most once per pass — regardless of map hash order.
 func TestSortTopKBoundedUnspills(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	s, err := fulltext.NewSearchAccum("src", "index", "pattern", 0, "", fulltext.ALGO_TFIDF)
 	require.NoError(t, err)
 	s.Nrow = 1000
@@ -401,7 +401,7 @@ func TestSortTopKBoundedUnspills(t *testing.T) {
 // discovered (a per-batch rebuild would score it), and (c) unspill I/O stays
 // bounded by the partition count across ALL batches.
 func TestEvaluateMultiBatchBoundedWork(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	s, err := fulltext.NewSearchAccum("src", "index", "pattern", 0, "", fulltext.ALGO_TFIDF)
 	require.NoError(t, err)
 	s.Nrow = 100000
@@ -484,7 +484,7 @@ func TestEvaluateMultiBatchBoundedWork(t *testing.T) {
 // it must be gated on the pool's heap budget instead of allocated
 // unconditionally (#25692 review).
 func TestEvaluateOrderingBudgetGated(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	s, err := fulltext.NewSearchAccum("src", "index", "pattern", 0, "", fulltext.ALGO_TFIDF)
 	require.NoError(t, err)
 	s.Nrow = 1000
@@ -534,7 +534,7 @@ func measureTotalAlloc(f func()) uint64 {
 // headers). The flat-buffer constructor allocates exactly what
 // scoreTraversalEstimate admits.
 func TestScoreTraversalWorkspaceExact(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	s, err := fulltext.NewSearchAccum("src", "index", "pattern", 0, "", fulltext.ALGO_TFIDF)
 	require.NoError(t, err)
 	s.Nrow = 1000000
@@ -591,7 +591,7 @@ func TestScoreTraversalWorkspaceExact(t *testing.T) {
 // call. Candidates must be freed and deleted as they are consumed, so the
 // all-filtered call allocates only the (budget-admitted) traversal plus O(1).
 func TestEvaluateSparseScoreBounded(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	s, err := fulltext.NewSearchAccum("src", "index", "pattern", 0, "", fulltext.ALGO_TFIDF)
 	require.NoError(t, err)
 	s.Nrow = 1000000
@@ -674,7 +674,7 @@ func TestFulltextSQLProcessNoSnapshotLeavesTSNil(t *testing.T) {
 // apart.
 func TestFulltextSQLProcessPublisherOutranksSnapshotTenant(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 	// The read txn is NEWER than the snapshot, so the snapshot TS is genuinely historical.
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
@@ -720,7 +720,7 @@ func TestFulltextSQLProcessPublisherOutranksSnapshotTenant(t *testing.T) {
 // case ApplyScanSnapshot exists for.
 func TestFulltextSQLProcessSnapshotTenantAppliesWithoutAPublisher(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOp.EXPECT().Txn().Return(txn.TxnMeta{
@@ -754,7 +754,7 @@ func TestFulltextResetRowStateClearsSnapshot(t *testing.T) {
 }
 
 func newFTTestProcess(t *testing.T, m *mpool.MPool, algo fulltext.FullTextScoreAlgo) *process.Process {
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
 		if varName == fulltext.FulltextRelevancyAlgo {
 			if algo == fulltext.ALGO_BM25 {

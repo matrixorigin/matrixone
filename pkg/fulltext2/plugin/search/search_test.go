@@ -183,7 +183,7 @@ func TestReadReportsStartErrors(t *testing.T) {
 // output batches, then the reader ends.
 func TestReadMaterialized(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	u := &reader{
 		proc: proc, inited: true, started: true, limit: 10,
@@ -211,7 +211,7 @@ func TestReadMaterialized(t *testing.T) {
 // bulk-appended by segPos, NULL-aware.
 func TestReadMaterializedCovered(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	// One include col ("prio" int64): [10, NULL, 30].
 	prio := &vectorindex.ColumnBuffer{Type: types.T_int64}
@@ -270,7 +270,7 @@ func streamingReader(proc *process.Process) *reader {
 
 func TestReadStreaming(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	// happy path: one batch then a clean (nil-error) close.
 	u := streamingReader(proc)
@@ -314,7 +314,7 @@ func TestReadStreaming(t *testing.T) {
 // column-major and are decoded box-free, preserving NULLs.
 func TestReadStreamingCovered(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	u := streamingReader(proc)
 	u.includeOut = []includeOut{{vecIdx: 2, segPos: 0, name: "tag"}}
@@ -389,7 +389,7 @@ func captureTailSQL(t *testing.T, mp *mpool.MPool, pks ...[]int64) *string {
 // emitProbeTail pages each streamed result into the output as (doc_id=pk, score=0).
 func TestProbeTailStreams(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	stubTailSpansSchema(t, false)
 	sql := captureTailSQL(t, mp, []int64{}, []int64{42, 43})
 
@@ -423,7 +423,7 @@ func TestProbeTailStreams(t *testing.T) {
 // the read sees -- start no stream and run no tail query.
 func TestProbeTailCaughtUp(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	sql := captureTailSQL(t, mp)
 
 	u := probeTailReader(proc)
@@ -438,7 +438,7 @@ func TestProbeTailCaughtUp(t *testing.T) {
 // P, so searched == bar.physical with bar.logical > 0 must run the tail.
 func TestProbeTailLogicalBoundary(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	stubTailSpansSchema(t, false)
 	sql := captureTailSQL(t, mp)
 
@@ -456,7 +456,7 @@ func TestProbeTailLogicalBoundary(t *testing.T) {
 func TestProbeTailFallbacks(t *testing.T) {
 	const fallback = "SELECT `id` FROM `db`.`t` WHERE json_extract_string(`j`, '$.foo') = 'needle'"
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	for _, tc := range []struct {
 		name  string
@@ -498,7 +498,7 @@ func TestProbeTailRequiresSourceAndKey(t *testing.T) {
 // TestProbeTailStreamError surfaces an error the tail producer reports.
 func TestProbeTailStreamError(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	stubTailSpansSchema(t, false)
 	orig := runStreamingSql
 	t.Cleanup(func() { runStreamingSql = orig })
