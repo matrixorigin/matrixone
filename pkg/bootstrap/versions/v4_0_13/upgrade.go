@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -27,9 +28,10 @@ import (
 	"go.uber.org/zap"
 )
 
-// Use a new semantic version after the existing 4.0.11 CDC and 4.0.12
-// CHARACTER_SETS migrations. An old worker must not treat this STATISTICS
-// refresh as already handled merely because it knows one of those versions.
+// 4.0.13 replays the idempotent shared Python UDF catalog entries together
+// with the statistics view refresh introduced by the preceding main revision.
+// An upstream-final 4.0.12 tenant may lack either set of objects; the newer
+// handler converges both sets on retry after all CNs support MORPC v108.
 var Handler = &versionHandle{
 	metadata: versions.Version{
 		Version:                 "4.0.13",
@@ -37,7 +39,7 @@ var Handler = &versionHandle{
 		UpgradeCluster:          versions.No,
 		UpgradeTenant:           versions.Yes,
 		VersionOffset:           uint32(len(tenantUpgEntries)),
-		RequiredProtocolVersion: defines.MORPCVersion107,
+		RequiredProtocolVersion: defines.MORPCVersion108,
 	},
 }
 
@@ -55,6 +57,11 @@ func (v *versionHandle) Prepare(_ context.Context, txn executor.TxnExecutor, _ b
 }
 
 func (v *versionHandle) HandleTenantUpgrade(_ context.Context, tenantID int32, txn executor.TxnExecutor) error {
+	// Login compensation invokes this handler without the cluster-upgrade
+	// scheduler, so enforce the same floor before any catalog mutation.
+	if err := versions.CheckCommonProtocolVersion(txn, v.metadata.RequiredProtocolVersion); err != nil {
+		return err
+	}
 	logger := runtime.ServiceRuntime(txn.Txn().TxnOptions().CN).Logger()
 	for _, entry := range tenantUpgEntries {
 		start := time.Now()
