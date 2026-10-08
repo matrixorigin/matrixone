@@ -47,6 +47,61 @@ type lifecycleCN struct {
 	closes   int
 }
 
+type lifecycleClusterCN struct {
+	cnservice.Service
+	closeErr error
+	status   ServiceStatus
+	closes   int
+}
+
+func (s *lifecycleClusterCN) Close() error {
+	s.closes++
+	if s.closeErr == nil {
+		s.status = ServiceClosed
+	}
+	return s.closeErr
+}
+
+func (s *lifecycleClusterCN) Status() ServiceStatus        { return s.status }
+func (s *lifecycleClusterCN) ID() string                   { return "cn" }
+func (s *lifecycleClusterCN) SQLAddress() string           { return "" }
+func (s *lifecycleClusterCN) SetCancel(context.CancelFunc) {}
+
+type lifecycleClusterTN struct {
+	tnservice.Service
+	closeErr error
+	status   ServiceStatus
+	closes   int
+}
+
+func (s *lifecycleClusterTN) Close() error {
+	s.closes++
+	if s.closeErr == nil {
+		s.status = ServiceClosed
+	}
+	return s.closeErr
+}
+
+func (s *lifecycleClusterTN) Status() ServiceStatus { return s.status }
+func (s *lifecycleClusterTN) ID() string            { return "tn" }
+
+type lifecycleClusterLog struct {
+	*logservice.WrappedService
+	closeErr error
+	status   ServiceStatus
+	closes   int
+}
+
+func (s *lifecycleClusterLog) Close() error {
+	s.closes++
+	if s.closeErr == nil {
+		s.status = ServiceClosed
+	}
+	return s.closeErr
+}
+
+func (s *lifecycleClusterLog) Status() ServiceStatus { return s.status }
+
 func (s *lifecycleCN) Close() error {
 	s.closes++
 	return s.closeErr
@@ -112,6 +167,79 @@ func TestClusterAdmissionCoversServiceClusterLifecycle(t *testing.T) {
 	c.mu.running = true
 	require.NoError(t, c.Close())
 	require.Nil(t, c.mu.admission)
+}
+
+func newLifecycleTestCluster(t *testing.T) (*testCluster, *trackedFileService) {
+	shared := &trackedFileService{}
+	c := &testCluster{
+		t:       t,
+		logger:  zap.NewNop(),
+		stopper: stopper.NewStopper(t.Name()),
+		opt:     DefaultOptions(),
+		fileservices: &fileServices{
+			s3FS:  shared,
+			etlFS: shared,
+		},
+	}
+	c.opt.keepData = true
+	c.mu.running = true
+	require.NoError(t, c.acquireAdmissionLocked())
+	t.Cleanup(func() {
+		if c.mu.admission != nil {
+			_ = c.Close()
+		}
+	})
+	return c, shared
+}
+
+func TestClusterCloseRetainsOwnersWhenServiceDrainIsIncomplete(t *testing.T) {
+	failure := moerr.NewInternalErrorNoCtx("CN drain incomplete")
+	c, fs := newLifecycleTestCluster(t)
+	cn := &lifecycleClusterCN{closeErr: failure, status: ServiceStarted}
+	tn := &lifecycleClusterTN{status: ServiceStarted}
+	log := &lifecycleClusterLog{status: ServiceStarted}
+	c.cn.svcs = []CNService{cn}
+	c.tn.svcs = []TNService{tn}
+	c.log.svcs = []LogService{log}
+
+	err := c.Close()
+	require.ErrorIs(t, err, failure)
+	require.Equal(t, 1, cn.closes)
+	require.Zero(t, tn.closes)
+	require.Zero(t, log.closes)
+	require.Zero(t, fs.closes)
+	require.True(t, c.mu.running)
+	require.NotNil(t, c.mu.admission)
+
+	// A later retry can finish the incomplete owner and then release the
+	// dependencies that were intentionally retained by the first attempt.
+	cn.closeErr = nil
+	cn.status = ServiceClosed
+	require.NoError(t, c.Close())
+	require.Equal(t, 1, fs.closes)
+	require.Nil(t, c.mu.admission)
+	require.False(t, c.mu.running)
+}
+
+func TestClusterCloseContinuesAfterCompletedDiagnostic(t *testing.T) {
+	diagnostic := moerr.NewInternalErrorNoCtx("CN remote withdrawal diagnostic")
+	c, fs := newLifecycleTestCluster(t)
+	backend := &lifecycleCN{closeErr: diagnostic, complete: true}
+	cn := &cnService{status: ServiceInitialized, svc: backend}
+	tn := &lifecycleClusterTN{status: ServiceClosed}
+	log := &lifecycleClusterLog{status: ServiceClosed}
+	c.cn.svcs = []CNService{cn}
+	c.tn.svcs = []TNService{tn}
+	c.log.svcs = []LogService{log}
+
+	err := c.Close()
+	require.ErrorIs(t, err, diagnostic)
+	require.Equal(t, 1, backend.closes)
+	require.Equal(t, 1, tn.closes)
+	require.Equal(t, 1, log.closes)
+	require.Equal(t, 1, fs.closes)
+	require.Nil(t, c.mu.admission)
+	require.False(t, c.mu.running)
 }
 
 func TestInitTNServicesRetainsPublishedOwnersOnPartialBatchFailure(t *testing.T) {
