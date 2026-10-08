@@ -71,7 +71,7 @@ func runPartitionTableCreateAndDeleteTestsWithAware(
 			require.NotEqual(t, 0, len(metadata.Partitions))
 			require.Equal(t, method, metadata.Method)
 
-			var tables []string
+			tables := make([]string, 0, len(metadata.Partitions))
 			for idx, p := range metadata.Partitions {
 				tables = append(tables, p.PartitionTableName)
 				require.NotEqual(t, uint64(0), p.PartitionID)

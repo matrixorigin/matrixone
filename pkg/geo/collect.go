@@ -19,7 +19,7 @@ package geo
 // GeometryCollection otherwise. Nested multis and collections are flattened
 // into their atomic parts first.
 func Collect(gs ...Geometry) Geometry {
-	var parts []Geometry
+	parts := make([]Geometry, 0, len(gs))
 	for _, g := range gs {
 		parts = append(parts, flattenParts(g)...)
 	}

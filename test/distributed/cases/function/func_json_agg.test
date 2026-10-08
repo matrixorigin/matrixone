@@ -335,3 +335,25 @@ EXECUTE typed_object USING @agg_decimal;
 EXECUTE typed_object USING @agg_json;
 EXECUTE typed_object USING @agg_text;
 DEALLOCATE PREPARE typed_object;
+
+# A scanned aggregate must retain the JSON atom of a user variable, including after rebinding.
+DROP DATABASE IF EXISTS remote_json_24799;
+CREATE DATABASE remote_json_24799;
+USE remote_json_24799;
+DROP TABLE IF EXISTS t_remote_json_24799;
+CREATE TABLE t_remote_json_24799(id INT);
+INSERT INTO t_remote_json_24799 VALUES (1),(2);
+SET @agg_remote_json_24799 = CAST('{"i":1,"f":1.0}' AS JSON);
+SELECT JSON_TYPE(JSON_EXTRACT(JSON_ARRAYAGG(@agg_remote_json_24799),'$[0]')) AS atom_type FROM t_remote_json_24799;
+SELECT JSON_TYPE(JSON_EXTRACT(JSON_OBJECTAGG(CAST(id AS CHAR),@agg_remote_json_24799),'$."1"')) AS atom_type FROM t_remote_json_24799;
+PREPARE remote_typed_array_24799 FROM 'SELECT JSON_TYPE(JSON_EXTRACT(JSON_ARRAYAGG(?),''$[0]'')) AS atom_type FROM t_remote_json_24799';
+EXECUTE remote_typed_array_24799 USING @agg_remote_json_24799;
+SET @agg_remote_json_24799 = CAST('null' AS JSON);
+EXECUTE remote_typed_array_24799 USING @agg_remote_json_24799;
+SET @agg_remote_json_24799 = NULL;
+EXECUTE remote_typed_array_24799 USING @agg_remote_json_24799;
+SET @agg_remote_json_24799 = CAST('"after"' AS JSON);
+EXECUTE remote_typed_array_24799 USING @agg_remote_json_24799;
+DEALLOCATE PREPARE remote_typed_array_24799;
+DROP TABLE t_remote_json_24799;
+DROP DATABASE remote_json_24799;

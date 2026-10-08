@@ -20,6 +20,7 @@ import (
 	"errors"
 	"math"
 	"slices"
+	"time"
 
 	"github.com/cespare/xxhash/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/arenaskl"
@@ -3337,32 +3338,35 @@ func (e *bmpExecCommon) preflightBitmapMerge(
 func accountedJSONValueSize(
 	vec *vector.Vector,
 	logicalRow int,
+	locations ...*time.Location,
 ) (int, error) {
-	return accountedJSONValueSizeWithProtocol(vec, logicalRow, 0)
+	return accountedJSONValueSizeWithProtocol(vec, logicalRow, 0, locations...)
 }
 
 func accountedJSONValueSizeWithProtocol(
 	vec *vector.Vector,
 	logicalRow int,
 	protocolVersion int64,
+	locations ...*time.Location,
 ) (int, error) {
 	row, err := preflightPhysicalRow(vec, logicalRow)
 	if err != nil {
 		return 0, err
 	}
-	return jsonAggregateValueSizeWithProtocol(vec, uint64(row), protocolVersion)
+	return jsonAggregateValueSizeWithProtocol(vec, uint64(row), protocolVersion, locations...)
 }
 
 func accountedJSONArrayValueSizeWithProtocol(
 	vec *vector.Vector,
 	logicalRow int,
 	protocolVersion int64,
+	locations ...*time.Location,
 ) (int, error) {
 	row, err := preflightPhysicalRow(vec, logicalRow)
 	if err != nil {
 		return 0, err
 	}
-	return jsonArrayAggregateValueSizeWithProtocol(vec, uint64(row), protocolVersion)
+	return jsonArrayAggregateValueSizeWithProtocol(vec, uint64(row), protocolVersion, locations...)
 }
 
 func addJSONArgumentCapacity(
@@ -3428,7 +3432,7 @@ func (exec *jsonArrayAggExec) PreflightBatchFill(
 			continue
 		}
 		valueSize, err := accountedJSONArrayValueSizeWithProtocol(
-			vectors[0], offset+i, exec.opaqueProtocolVersion)
+			vectors[0], offset+i, exec.opaqueProtocolVersion, exec.timeZone)
 		if err != nil {
 			return err
 		}
@@ -3446,7 +3450,7 @@ func (exec *jsonArrayAggExec) PreflightBatchFill(
 					return nil, err
 				}
 				return appendJSONArrayAggregateValueWithProtocol(
-					dst, vectors[0], uint64(row), exec.opaqueProtocolVersion)
+					dst, vectors[0], uint64(row), exec.opaqueProtocolVersion, exec.timeZone)
 			})
 		if err != nil {
 			return err
@@ -3501,7 +3505,7 @@ func (exec *jsonObjectAggExec) PreflightBatchFill(
 			return err
 		}
 		valueSize, err := accountedJSONValueSizeWithProtocol(
-			vectors[1], offset+i, exec.opaqueProtocolVersion)
+			vectors[1], offset+i, exec.opaqueProtocolVersion, exec.timeZone)
 		if err != nil {
 			return err
 		}
@@ -3521,7 +3525,7 @@ func (exec *jsonObjectAggExec) PreflightBatchFill(
 					return nil, err
 				}
 				return appendJSONAggregateValueWithProtocol(
-					dst, vectors[1], uint64(row), exec.opaqueProtocolVersion)
+					dst, vectors[1], uint64(row), exec.opaqueProtocolVersion, exec.timeZone)
 			})
 		if err != nil {
 			return err

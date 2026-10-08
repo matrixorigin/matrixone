@@ -34,16 +34,23 @@ func TestResponseSize(t *testing.T) {
 
 	/* --- Fetch a segment --- */
 	prev := pool.Acquire()
+	require.Empty(t, prev.Payload)
+	// Eager capacity is not required, but the wire-size boundary is unchanged.
+	prev.Payload = make([]byte, maxMessageSize)
 	t.Log("segment size:", prev.ProtoSize())
 	require.True(t, prev.ProtoSize() > maxMessageSize)
+	previousSize := prev.ProtoSize()
 
 	/* --- Release it --- */
 	pool.Release(prev)
 
 	/* --- Fetch again --- */
 	curr := pool.Acquire()
+	// sync.Pool may discard retained segments, including under -race.
+	// Prepare the wire oracle independently of whether this fetch was reused.
+	curr.Payload = make([]byte, maxMessageSize)
 	t.Log("segment size:", curr.ProtoSize())
-	require.Equal(t, prev.ProtoSize(), curr.ProtoSize())
+	require.Equal(t, previousSize, curr.ProtoSize())
 
 	curr.StreamID = math.MaxUint64
 	curr.Sequence = math.MaxInt32

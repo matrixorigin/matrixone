@@ -46,7 +46,7 @@ func TestReplaceConflictLookupUsesEquiJoins(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, test.sql)
+			logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, test.sql)
 			require.NoError(t, err)
 
 			requireReplaceConflictLookupPlan(t, logicPlan.GetQuery(), test.wantUnion)

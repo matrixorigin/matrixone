@@ -109,6 +109,55 @@ use db_v1;
 select * from v1;
 -- @session
 
+-- Constant-view authorization survives optimizer elimination and revoke.
+create view v_const as select cast(42 as int) as id;
+create view v_const_chain as select id from v_const;
+grant select on view db_v1.v_const_chain to role_v1;
+-- @session:id=1&user=user_v1&password=111
+select id from db_v1.v_const_chain;
+-- @session
+revoke select on view db_v1.v_const_chain from role_v1;
+-- @session:id=1&user=user_v1&password=111
+select id from db_v1.v_const_chain;
+select count(*) from db_v1.v_const where false;
+select cast(42 as int) as id;
+-- @session
+grant select on view db_v1.v_const to role_v1;
+-- @session:id=1&user=user_v1&password=111
+select id from db_v1.v_const_chain;
+-- @session
+grant select on view db_v1.v_const_chain to role_v1;
+-- @session:id=1&user=user_v1&password=111
+select id from db_v1.v_const_chain;
+-- @session
+
+-- A live INVOKER wrapper must use the nested view's historical security type.
+use db_v1;
+set view_security_type='INVOKER';
+create view hist_inv as select id from v_const;
+set view_security_type='DEFINER';
+create view hist_def as select id from v_const;
+grant select on view db_v1.hist_inv to role_v1;
+grant select on view db_v1.hist_def to role_v1;
+create snapshot grant_view_nested_snapshot for account sys;
+alter view hist_inv as select cast(7 as int) as id;
+set view_security_type='INVOKER';
+alter view hist_def as select id from v_const;
+create view wrap_inv as select id from hist_inv {snapshot='grant_view_nested_snapshot'};
+create view wrap_def as select id from hist_def {snapshot='grant_view_nested_snapshot'};
+grant select on view db_v1.wrap_inv to role_v1;
+grant select on view db_v1.wrap_def to role_v1;
+revoke select on view db_v1.v_const from role_v1;
+set view_security_type='DEFINER';
+-- @session:id=1&user=user_v1&password=111
+select id from db_v1.hist_inv;
+select id from db_v1.hist_inv {snapshot='grant_view_nested_snapshot'};
+select id from db_v1.wrap_inv;
+select id from db_v1.hist_def {snapshot='grant_view_nested_snapshot'};
+select id from db_v1.wrap_def;
+-- @session
+drop snapshot grant_view_nested_snapshot;
+
 -- cleanup
 drop user user_v1;
 drop user user_no_db;

@@ -386,6 +386,9 @@ func (group *Group) Call(
 			group.ctr.resetForSpill()
 			group.ctr.state = vm.Build
 		}
+		if err = group.ctr.ensureMemoryGrowthParticipant(); err != nil {
+			return vm.CancelResult, err
+		}
 
 		// receive all data, loop till exhuasted.
 		for !group.ctr.inputDone {
@@ -487,6 +490,9 @@ func (group *Group) Call(
 				proc, group.OpAnalyzer); err != nil {
 				return vm.CancelResult, err
 			}
+		}
+		if !group.NeedEval && group.ctr.state != vm.Build {
+			group.ctr.releaseMemoryGrowthParticipant()
 		}
 
 		return group.outputOneBatch(proc)
@@ -665,6 +671,23 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 						preview.inserted = group.ctr.hr.insertPlan.Inserted()
 						preview.newGroups = int(group.ctr.hr.insertPlan.NewGroups())
 					}
+					if err == nil && preview.newGroups > 0 {
+						var growth uint64
+						growth, err = group.ctr.recoveryCapacityGrowth(preview.newGroups)
+						if err == nil {
+							var spill bool
+							spill, err = group.ctr.needAdaptiveSpillForGrowth(
+								group.OpAnalyzer, growth)
+							if err == nil && spill {
+								if retried, retryErr := group.retryBuildBatchAfterCapacity(
+									proc, mpool.ErrAllocationAccountCapacity); !retried {
+									return false, retryErr
+								}
+								evaluated = false
+								continue
+							}
+						}
+					}
 					// Reserve only for the groups the immutable preview proved this
 					// unit will publish. Rejection is still before hash/key/aggregate
 					// mutation, so the resident prefix can be spilled and this same
@@ -765,7 +788,10 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 		// Compact group state may still require existing group-hash spill. Before
 		// its first record is written, move every eligible exact key to the
 		// independent spool so no pre-activation hot-group record can survive.
-		needSpill := group.ctr.needSpill(group.OpAnalyzer)
+		needSpill, err := group.ctr.shouldSpill(group.OpAnalyzer)
+		if err != nil {
+			return false, err
+		}
 		if needSpill && group.ctr.distinctSpill == nil {
 			hasDistinct, err := group.ctr.hasExactCountDistinctArguments()
 			if err != nil {
@@ -776,7 +802,10 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 					proc, group.OpAnalyzer); err != nil {
 					return false, err
 				}
-				needSpill = group.ctr.needSpill(group.OpAnalyzer)
+				needSpill, err = group.ctr.shouldSpill(group.OpAnalyzer)
+				if err != nil {
+					return false, err
+				}
 			}
 		}
 		group.ctr.inputRowCount += uint64(bat.RowCount())

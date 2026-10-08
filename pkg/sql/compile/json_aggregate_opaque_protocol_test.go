@@ -81,13 +81,19 @@ func TestJSONAggregateOpaqueRejectsPreviousCapability(t *testing.T) {
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
 	worker := engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 
-	// The original base, reused v94 and cumulative predecessor lack this
-	// executor. Reject each rather than relying on an obsolete v84 boundary.
+	// The original base and main's cumulative prefix lack this executor.
+	// Reject the reused v101 and immediate predecessor v106 in particular.
 	for _, version := range []int64{
 		defines.MORPCVersion93,
 		defines.MORPCVersion94,
 		defines.MORPCVersion99,
 		defines.MORPCVersion100,
+		defines.MORPCVersion101,
+		defines.MORPCVersion102,
+		defines.MORPCVersion103,
+		defines.MORPCVersion104,
+		defines.MORPCVersion105,
+		defines.MORPCVersion106,
 	} {
 		client.version = version
 		c.execType = plan2.ExecTypeAP_MULTICN
@@ -118,13 +124,19 @@ func TestJSONAggregateOpaqueRejectsPreviousCapability(t *testing.T) {
 	require.ErrorContains(t, err, fmt.Sprintf("MORPC protocol version %d", jsonAggregateOpaqueCapabilityVersion))
 
 	wire := jsonAggregateOpaqueTestPipeline()
-	// The receiver-side gates must reject the same lowered plan from either
-	// current-main capability.
+	// The receiver-side gates must reject the same lowered plan throughout
+	// the current-main prefix.
 	for _, version := range []int64{
 		defines.MORPCVersion93,
 		defines.MORPCVersion94,
 		defines.MORPCVersion99,
 		defines.MORPCVersion100,
+		defines.MORPCVersion101,
+		defines.MORPCVersion102,
+		defines.MORPCVersion103,
+		defines.MORPCVersion104,
+		defines.MORPCVersion105,
+		defines.MORPCVersion106,
 	} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		require.ErrorContains(t,
@@ -170,7 +182,7 @@ func TestJSONAggregateOpaqueQueryServiceCapabilityProbe(t *testing.T) {
 		workerRT = moruntime.ServiceRuntime(workerID)
 	}
 	oldWorkerVersion, hadWorkerVersion := workerRT.GetGlobalVariables(moruntime.MOProtocolVersion)
-	workerRT.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion100)
+	workerRT.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion106)
 
 	cluster := clusterservice.NewMOCluster(
 		coordinatorService,
@@ -218,7 +230,7 @@ func TestJSONAggregateOpaqueQueryServiceCapabilityProbe(t *testing.T) {
 	qry := jsonAggregateOpaqueTestQuery()
 
 	// This same-binary QueryService probe checks real capability RPC routing.
-	// It does not execute an old decoder or an aggregate pipeline. The v100
+	// It does not execute an old decoder or an aggregate pipeline. The v106
 	// response must keep opaque aggregation local.
 	supported, err := remoteWorkersSupportProtocol(
 		c.proc, worker, jsonAggregateOpaqueCapabilityVersion)
@@ -245,7 +257,7 @@ func TestJSONAggregateOpaqueQueryServiceCapabilityProbe(t *testing.T) {
 	// placement admission succeed. The receiver-local gate is checked at both
 	// advertised versions as well.
 	workerRT.SetGlobalVariables(moruntime.MOProtocolVersion, jsonAggregateOpaqueCapabilityVersion)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion100)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion106)
 	wire := jsonAggregateOpaqueTestPipeline()
 	require.ErrorContains(t,
 		validateJSONAggregateOpaquePipelineProtocol(c.proc, wire),
@@ -326,7 +338,7 @@ func TestJSONAggregateOpaqueFallbackRespectsPlacement(t *testing.T) {
 	for _, probeFails := range []bool{false, true} {
 		t.Run(fmt.Sprintf("probe-fails=%t", probeFails), func(t *testing.T) {
 			c, client := expressionProtocolTestCompile(t)
-			client.version = defines.MORPCVersion100
+			client.version = defines.MORPCVersion106
 			if probeFails {
 				client.customResponse = true
 				client.sendErr = errors.New("probe failed")

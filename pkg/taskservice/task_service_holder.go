@@ -797,7 +797,7 @@ type mysqlBasedStorageFactory struct {
 // newMySQLBasedTaskStorageFactory creates a mysql based task storage factory using the special username, password and database
 func newMySQLBasedTaskStorageFactory(username, password, database string) TaskStorageFactory {
 	return &mysqlBasedStorageFactory{
-		dsnTemplate: fmt.Sprintf("%s:%s@tcp(%s)/%s?readTimeout=15s&writeTimeout=15s&timeout=15s&parseTime=true&loc=Local&disable_txn_trace=1",
+		dsnTemplate: fmt.Sprintf("%s:%s@tcp(%s)/%s?readTimeout=15s&writeTimeout=15s&timeout=15s&parseTime=true&loc=Local",
 			username,
 			password,
 			"%s", database),

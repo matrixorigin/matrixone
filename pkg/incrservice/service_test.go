@@ -760,6 +760,50 @@ func TestCurrentValueBuilderCannotReviveCacheAfterDelete(t *testing.T) {
 	})
 }
 
+func TestRolledBackDeleteKeepsCurrentValueBuilder(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(
+			defines.AttachAccountId(context.Background(), catalog.System_Account),
+			10*time.Second,
+		)
+		defer cancel()
+		store := &blockingGetColumnsStore{IncrValueStore: NewMemStore()}
+		require.NoError(t, store.Create(ctx, 0, newTestTableDef(1), nil))
+		s := NewIncrService("", store, Config{CountPerAllocate: 1}).(*service)
+		defer s.Close()
+
+		started, release := store.blockNext()
+		defer release()
+		result := make(chan error, 1)
+		go func() {
+			_, err := s.CurrentValue(ctx, 0, "auto_0")
+			result <- err
+		}()
+		select {
+		case <-started:
+		case <-ctx.Done():
+			require.FailNow(t, "CurrentValue did not reach blocked GetColumns")
+		}
+
+		op, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		op.AddWorkspace(&terminalDeleteWorkspace{deleted: map[uint64]bool{}})
+		require.NoError(t, s.Delete(ctx, 0, op))
+		require.NoError(t, op.Commit(ctx))
+
+		release()
+		require.NoError(t, <-result)
+		s.mu.Lock()
+		_, installed := s.mu.tables[0]
+		_, destroyed := s.mu.destroyed[0]
+		s.mu.Unlock()
+		require.True(t, installed)
+		require.False(t, destroyed)
+		_, err = s.CurrentValue(ctx, 0, "auto_0")
+		require.NoError(t, err)
+	})
+}
+
 func TestCurrentValueRejectsBuilderInvalidatedByReload(t *testing.T) {
 	ctx, cancel := context.WithTimeout(
 		defines.AttachAccountId(context.Background(), catalog.System_Account),
@@ -1090,8 +1134,11 @@ func TestDeleteWithTxnAborted(t *testing.T) {
 			checkStoreCachesCommitted(t, s.store.(*memStore), 2)
 
 			op2 := ops[1]
+			workspace := &terminalDeleteWorkspace{deleted: map[uint64]bool{0: true}}
+			op2.AddWorkspace(workspace)
 			require.NoError(t, s.Delete(ctx, 0, op2))
 			require.NoError(t, op2.Rollback(ctx))
+			require.Empty(t, workspace.reads)
 			checkStoreCachesCommitted(t, s.store.(*memStore), 2)
 		})
 }
@@ -1178,6 +1225,138 @@ func TestResetStatementRollbackKeepsOriginalCache(t *testing.T) {
 		// This test verifies cache lifecycle only: memStore models transaction
 		// close, not statement-level catalog rollback for TRUNCATE.
 	})
+}
+
+type terminalDeleteWorkspace struct {
+	client.Workspace
+	deleted   map[uint64]bool
+	reads     []uint64
+	commitErr error
+	prepared  bool
+	finalized bool
+}
+
+func (w *terminalDeleteWorkspace) Readonly() bool { return false }
+
+func (w *terminalDeleteWorkspace) Commit(context.Context) ([]txn.TxnRequest, error) {
+	if w.commitErr != nil {
+		return nil, w.commitErr
+	}
+	w.prepared = true
+	return nil, nil
+}
+
+func (w *terminalDeleteWorkspace) Rollback(context.Context) error { return nil }
+
+func (w *terminalDeleteWorkspace) FinalizeCommit(context.Context) { w.finalized = true }
+
+func (w *terminalDeleteWorkspace) IsTableDeletedAtTxnClose(id uint64) bool {
+	if !w.prepared {
+		panic("terminal deletion view read before workspace preparation")
+	}
+	if w.finalized {
+		panic("terminal deletion view read after workspace finalization")
+	}
+	w.reads = append(w.reads, id)
+	return w.deleted[id]
+}
+
+func TestDeletePreparationFailureDoesNotReadTerminalView(t *testing.T) {
+	runServiceTests(t, 2, func(ctx context.Context, ss []*service, ops []client.TxnOperator) {
+		s := ss[0]
+		require.NoError(t, s.Create(ctx, 42, newTestTableDef(1), ops[0]))
+		require.NoError(t, ops[0].Commit(ctx))
+		prepareErr := errors.New("workspace preparation failed")
+		workspace := &terminalDeleteWorkspace{
+			deleted: map[uint64]bool{42: true}, commitErr: prepareErr,
+		}
+		op := ops[1]
+		op.AddWorkspace(workspace)
+		require.NoError(t, s.Delete(ctx, 42, op))
+		require.ErrorIs(t, op.Commit(ctx), prepareErr)
+		require.Empty(t, workspace.reads)
+		s.mu.Lock()
+		_, present := s.mu.tables[42]
+		_, destroyed := s.mu.destroyed[42]
+		s.mu.Unlock()
+		require.True(t, present)
+		require.False(t, destroyed)
+	})
+}
+
+func TestDeletePublishesOnlySurvivingPhysicalDrops(t *testing.T) {
+	runServiceTests(t, 2, func(ctx context.Context, ss []*service, ops []client.TxnOperator) {
+		s := ss[0]
+		for _, id := range []uint64{42, 43} {
+			require.NoError(t, s.Create(ctx, id, newTestTableDef(1), ops[0]))
+		}
+		require.NoError(t, ops[0].Commit(ctx))
+		s.mu.Lock()
+		originalGeneration := s.mu.generation[43]
+		s.mu.Unlock()
+
+		op := ops[1]
+		workspace := &terminalDeleteWorkspace{deleted: map[uint64]bool{42: true}}
+		op.AddWorkspace(workspace)
+		for _, id := range []uint64{42, 43} {
+			require.NoError(t, s.Delete(ctx, id, op))
+		}
+		require.NoError(t, op.Commit(ctx))
+
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		_, droppedCache := s.mu.tables[42]
+		_, restoredCache := s.mu.tables[43]
+		_, restoredQueued := s.mu.destroyed[43]
+		require.False(t, droppedCache)
+		require.True(t, restoredCache)
+		require.False(t, restoredQueued)
+		require.Equal(t, originalGeneration, s.mu.generation[43])
+		require.True(t, workspace.finalized)
+		require.Equal(t, []uint64{42, 43}, workspace.reads)
+	})
+}
+
+func TestCreateThenDeleteUsesSurvivingPhysicalDrop(t *testing.T) {
+	for _, deleted := range []bool{false, true} {
+		t.Run(fmt.Sprintf("deleted=%t", deleted), func(t *testing.T) {
+			runServiceTests(t, 1, func(ctx context.Context, ss []*service, ops []client.TxnOperator) {
+				s, op := ss[0], ops[0]
+				workspace := &terminalDeleteWorkspace{deleted: map[uint64]bool{42: deleted}}
+				op.AddWorkspace(workspace)
+				require.NoError(t, s.Create(ctx, 42, newTestTableDef(1), op))
+				require.NoError(t, s.Delete(ctx, 42, op))
+				require.NoError(t, op.Commit(ctx))
+				s.mu.Lock()
+				_, present := s.mu.tables[42]
+				s.mu.Unlock()
+				require.Equal(t, !deleted, present)
+				require.Equal(t, []uint64{42}, workspace.reads)
+			})
+		})
+	}
+}
+
+func TestResetRetiresOnlySurvivingOldPhysicalDrop(t *testing.T) {
+	for _, capable := range []bool{false, true} {
+		t.Run(fmt.Sprintf("capable=%t", capable), func(t *testing.T) {
+			runServiceTests(t, 2, func(ctx context.Context, ss []*service, ops []client.TxnOperator) {
+				s := ss[0]
+				require.NoError(t, s.Create(ctx, 42, newTestTableDef(1), ops[0]))
+				require.NoError(t, ops[0].Commit(ctx))
+				op := ops[1]
+				if capable {
+					op.AddWorkspace(&terminalDeleteWorkspace{deleted: map[uint64]bool{}})
+				}
+				require.NoError(t, s.Reset(ctx, 42, 44, false, op))
+				require.NoError(t, op.Commit(ctx))
+				s.mu.Lock()
+				_, oldPresent := s.mu.tables[42]
+				s.mu.Unlock()
+				require.Equal(t, capable, oldPresent)
+			})
+		})
+	}
 }
 
 func TestDeleteOnOtherService(t *testing.T) {

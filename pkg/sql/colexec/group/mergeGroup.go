@@ -309,6 +309,9 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 			return false, retryErr
 		}
 	}
+	if err := mergeGroup.ctr.ensureMemoryGrowthParticipant(); err != nil {
+		return false, err
+	}
 
 	// merge intermediate results with only Aggregation.
 	if len(bat.Vecs) == 0 {
@@ -346,6 +349,26 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 						preview.values = mergeGroup.ctr.hr.insertPlan.Values()
 						preview.inserted = mergeGroup.ctr.hr.insertPlan.Inserted()
 						preview.newGroups = int(mergeGroup.ctr.hr.insertPlan.NewGroups())
+					}
+					if err == nil && preview.newGroups > 0 {
+						var growth uint64
+						growth, err = mergeGroup.ctr.recoveryCapacityGrowth(preview.newGroups)
+						if err == nil {
+							var spill bool
+							spill, err = mergeGroup.ctr.needAdaptiveSpillForGrowth(
+								mergeGroup.OpAnalyzer, growth)
+							if err == nil && spill {
+								mergeGroup.ctr.freeSpillAggList()
+								if retried, retryErr := mergeGroup.retryBuildBatchAfterCapacity(
+									proc, mpool.ErrAllocationAccountCapacity); !retried {
+									return false, retryErr
+								}
+								if err = mergeGroup.prepareBuildBatch(proc, bat); err != nil {
+									return false, err
+								}
+								continue
+							}
+						}
 					}
 					if err == nil &&
 						!mergeGroup.ctr.recoveryCapacityCovers(preview.newGroups) {
@@ -431,7 +454,10 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 			return false, err
 		}
 	}
-	needSpill := mergeGroup.ctr.needSpill(mergeGroup.OpAnalyzer)
+	needSpill, err := mergeGroup.ctr.shouldSpill(mergeGroup.OpAnalyzer)
+	if err != nil {
+		return false, err
+	}
 	if needSpill && mergeGroup.ctr.distinctSpill == nil {
 		hasDistinct, err := mergeGroup.ctr.hasExactCountDistinctArguments()
 		if err != nil {
@@ -442,7 +468,10 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 				proc, mergeGroup.OpAnalyzer); err != nil {
 				return false, err
 			}
-			needSpill = mergeGroup.ctr.needSpill(mergeGroup.OpAnalyzer)
+			needSpill, err = mergeGroup.ctr.shouldSpill(mergeGroup.OpAnalyzer)
+			if err != nil {
+				return false, err
+			}
 		}
 	}
 	return needSpill, nil

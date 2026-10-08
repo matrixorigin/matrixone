@@ -44,6 +44,7 @@ type cloneDatabaseSource struct {
 	fkTableMap         map[string]*tableInfo
 	hasFkCycle         bool
 	snapshot           *plan.Snapshot
+	requestSnapshot    *plan.Snapshot
 	opAccountId        uint32
 	toAccountId        uint32
 }
@@ -550,7 +551,10 @@ func collectCloneDatabaseSource(
 	if err := validateCloneDatabaseAccounts(ctx, accounts); err != nil {
 		return source, err
 	}
+	// A subscription uses the publisher account to read physical objects, but
+	// the caller's snapshot still names the subscriber's logical database.
 	snapshot := accounts.snapshot
+	requestSnapshot := snapshot
 
 	srcDBName := stmt.SrcDatabase.String()
 	subMeta, err := ses.GetTxnCompileCtx().GetSubscriptionMeta(srcDBName, snapshot)
@@ -560,6 +564,8 @@ func collectCloneDatabaseSource(
 	if subMeta != nil {
 		srcDBName = subMeta.DbName
 		if snapshot != nil {
+			copy := *snapshot
+			snapshot = &copy
 			snapshot.Tenant = &plan.SnapshotTenant{TenantID: uint32(subMeta.AccountId)}
 		} else {
 			snapshot = &plan.Snapshot{
@@ -597,7 +603,7 @@ func collectCloneDatabaseSource(
 	}
 	mergeFkDeps(fkDeps, schemaFkDeps)
 	sortedFkTbls, hasFkCycle := cloneFkTableOrder(fkDeps)
-	fkTableMap, err := getTableInfoMap(ctx, ses.GetService(), bh, snapshot, srcDBName, "", sortedFkTbls)
+	fkTableMap, err := getTableInfoMap(ctx, ses.GetService(), bh, snapshot, srcDBName, "", sortedFkTbls, nil)
 	if err != nil {
 		return source, err
 	}
@@ -616,6 +622,7 @@ func collectCloneDatabaseSource(
 	source.fkTableMap = fkTableMap
 	source.hasFkCycle = hasFkCycle
 	source.snapshot = snapshot
+	source.requestSnapshot = requestSnapshot
 	source.opAccountId = accounts.opAccountId
 	source.toAccountId = accounts.toAccountId
 	return source, nil
@@ -778,6 +785,24 @@ func restoreCloneDatabaseUserDefinedFunctions(
 	return nil
 }
 
+// cloneTargetContext keeps same-account ownership and assigns cross-account
+// creations to the target administrator. Override DDL ownership as well as the
+// execution role: the request may carry a source-account DDL-owner provider.
+// RESTORE uses its separate historical ownership contract, not this policy.
+func cloneTargetContext(ctx context.Context, callerAccount, targetAccount uint32) context.Context {
+	ctx = defines.AttachAccountId(ctx, targetAccount)
+	if callerAccount == targetAccount {
+		return ctx
+	}
+	userID, roleID := uint32(GetAdminUserId()), uint32(accountAdminRoleID)
+	if targetAccount == sysAccountID {
+		admin := getDefaultAccount()
+		userID, roleID = admin.GetUserID(), admin.GetDefaultRoleID()
+	}
+	ctx = defines.AttachAccount(ctx, targetAccount, userID, roleID)
+	return defines.AttachDDLOwnerRoleId(ctx, roleID)
+}
+
 // resolveCloneDatabaseRoutineTenant preserves the caller identity for a
 // same-account clone and uses the target account's administrator identity for
 // a cross-account clone. Routine metadata must not pair a target account with
@@ -806,13 +831,14 @@ func resolveCloneDatabaseRoutineTenant(
 	if len(rows) != 1 {
 		return nil, moerr.NewInternalErrorNoCtxf("target account %d has no administrator metadata", targetAccountID)
 	}
+	targetCtx := cloneTargetContext(ctx, caller.GetTenantID(), targetAccountID)
 	return &TenantInfo{
 		Tenant:        rows[0][0],
 		User:          rows[0][1],
 		DefaultRole:   accountAdminRoleName,
 		TenantID:      targetAccountID,
-		UserID:        GetAdminUserId(),
-		DefaultRoleID: accountAdminRoleID,
+		UserID:        defines.GetUserId(targetCtx),
+		DefaultRoleID: defines.GetRoleId(targetCtx),
 	}, nil
 }
 

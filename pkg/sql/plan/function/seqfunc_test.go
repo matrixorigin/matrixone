@@ -41,17 +41,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// sequenceGateProbeContext makes admission observable without changing the
-// production gate API. AcquireSequence evaluates Context.Done before it can
-// block on the shared permit, so this gives concurrent-function tests a
-// deterministic proof that the sibling actually reached the gate.
-type sequenceGateProbeContext struct {
+// admissionProbeContext observes the first Context.Done evaluation without
+// changing the production API. Each caller must establish which admission
+// branch evaluates Done before relying on this signal as a phase boundary.
+type admissionProbeContext struct {
 	context.Context
 	doneCalled chan struct{}
 	once       sync.Once
 }
 
-func (c *sequenceGateProbeContext) Done() <-chan struct{} {
+func (c *admissionProbeContext) Done() <-chan struct{} {
 	c.once.Do(func() { close(c.doneCalled) })
 	return c.Context.Done()
 }
@@ -579,7 +578,7 @@ func TestNextvalChildProcessesSerializeMetadataAndSessionPublication(t *testing.
 	}
 
 	rightGateCalled := make(chan struct{})
-	right.Ctx = &sequenceGateProbeContext{Context: right.Ctx, doneCalled: rightGateCalled}
+	right.Ctx = &admissionProbeContext{Context: right.Ctx, doneCalled: rightGateCalled}
 	rightResult := make(chan struct {
 		value string
 		err   error
@@ -814,9 +813,9 @@ func TestMixedSequenceOperationsSerializeStatePublication(t *testing.T) {
 	currProc := parent.NewContextChildProc(0)
 	lastProc := parent.NewContextChildProc(0)
 	currGateCalled := make(chan struct{})
-	currProc.Ctx = &sequenceGateProbeContext{Context: currProc.Ctx, doneCalled: currGateCalled}
+	currProc.Ctx = &admissionProbeContext{Context: currProc.Ctx, doneCalled: currGateCalled}
 	lastGateCalled := make(chan struct{})
-	lastProc.Ctx = &sequenceGateProbeContext{Context: lastProc.Ctx, doneCalled: lastGateCalled}
+	lastProc.Ctx = &admissionProbeContext{Context: lastProc.Ctx, doneCalled: lastGateCalled}
 	setDone := make(chan struct{})
 	currDone := make(chan struct{})
 	lastDone := make(chan struct{})

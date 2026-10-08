@@ -491,8 +491,8 @@ func TestMySQLBufferMaxAllowedPacket(t *testing.T) {
 			mysqlRrWr: &MysqlProtocolImpl{io: NewIOPackage(true), tcpConn: cReader},
 		}
 		cReader.SetSession(ses)
-		exceptPayload := make([][]byte, 0)
-		actualPayload := make([][]byte, 0)
+		exceptPayload := make([][]byte, 0, 3)
+		actualPayload := make([][]byte, 0, 2)
 		err = cWriter.BeginPacket()
 		assert.Nil(t, err)
 		exceptRow := generateRandomBytes(int(MaxPayloadSize) / 2)

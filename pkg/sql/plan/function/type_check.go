@@ -112,18 +112,38 @@ func fixedTypeCastRule1(s1, s2 types.Type) (bool, types.Type, types.Type) {
 // domain as UINT64 with a signed bigint. Keeping this adjustment here, rather
 // than changing fixedTypeCastRule1, leaves comparison coercion unchanged.
 func arithmeticTypeCastRule1(s1, s2 types.Type) (bool, types.Type, types.Type) {
+	// JSON is a dynamic scalar domain. Numeric arithmetic must retain its
+	// fractional values instead of borrowing an integer peer's domain.
+	hasJSON := s1.Oid == types.T_json || s2.Oid == types.T_json
+	s1, s2 = numericJSONType(s1), numericJSONType(s2)
+	if temporalArithmeticUsesFloat(s1, s2) {
+		// Temporal values participate as packed numeric values. Approximate or
+		// string operands select DOUBLE without discarding fractional seconds.
+		return true, types.T_float64.ToType(), types.T_float64.ToType()
+	}
 	if s1.Oid == types.T_bit && s2.Oid == types.T_int64 {
 		s1.Oid = types.T_uint64
 	} else if s1.Oid == types.T_int64 && s2.Oid == types.T_bit {
 		s2.Oid = types.T_uint64
 	}
-	return fixedTypeCastRule1(s1, s2)
+	cast, left, right := fixedTypeCastRule1(s1, s2)
+	return cast || hasJSON, left, right
+}
+
+func temporalArithmeticUsesFloat(left, right types.Type) bool {
+	return (left.Oid.IsDateRelate() && (right.Oid.IsFloat() || right.Oid.IsMySQLString())) ||
+		(right.Oid.IsDateRelate() && (left.Oid.IsFloat() || left.Oid.IsMySQLString()))
 }
 
 // a fixed type cast rule for
 //  1. Div
 //  2. IntegerDiv
 func fixedTypeCastRule2(s1, s2 types.Type) (bool, types.Type, types.Type) {
+	hasJSON := s1.Oid == types.T_json || s2.Oid == types.T_json
+	s1, s2 = numericJSONType(s1), numericJSONType(s2)
+	if temporalArithmeticUsesFloat(s1, s2) {
+		return true, types.T_float64.ToType(), types.T_float64.ToType()
+	}
 	check := fixedBinaryCastRule2[s1.Oid][s2.Oid]
 	if check.cast {
 		t1, t2 := check.left.ToType(), check.right.ToType()
@@ -171,7 +191,14 @@ func fixedTypeCastRule2(s1, s2 types.Type) (bool, types.Type, types.Type) {
 
 		return true, t1, t2
 	}
-	return false, s1, s2
+	return hasJSON, s1, s2
+}
+
+func numericJSONType(source types.Type) types.Type {
+	if source.Oid == types.T_json {
+		return types.T_float64.ToType()
+	}
+	return source
 }
 
 type matchCheckStatus int
@@ -185,6 +212,20 @@ const (
 // a fixed type match method.
 func fixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 	return fixedTypeMatchExcept(overloads, inputs, -1)
+}
+
+// Native temporal inputs avoid formatting and reparsing. Other inputs retain
+// the historical character coercion (including numeric and NULL arguments).
+func lastDayTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) == 1 {
+		if inputs[0].Oid == types.T_date {
+			return fixedTypeMatchOnly(overloads, inputs, 2)
+		}
+		if inputs[0].Oid == types.T_datetime {
+			return fixedTypeMatchOnly(overloads, inputs, 3)
+		}
+	}
+	return fixedTypeMatch(overloads[:2], inputs)
 }
 
 // Persisted 4.2 expressions keep overloads 0..4 and their original physical
@@ -309,6 +350,7 @@ func fixedTypeMatchSelection(overloads []overload, inputs []types.Type, excluded
 				// collation. Retaining it here prevents an implicit overload cast
 				// from erasing metadata before a derived-string return callback runs.
 				castType[i].Charset = inputs[i].Charset
+				castType[i].CollationVersion = inputs[i].CollationVersion
 			}
 		}
 	}
@@ -802,6 +844,22 @@ func fixedImplicitTypeCast(from types.Type, to types.T) (canCast bool, cost int)
 	}
 	rule := fixedCanImplicitCastRule[from.Oid].toList[to]
 	return rule.canCast, rule.preferLevel
+}
+
+// Opaque aggregate states use bytes from any SQL string domain. Keep their
+// physical ABI VARBINARY without imposing the SQL default width on the state.
+func opaqueStateTypeCheck(inputs []types.Type, failure overloadCheckSituation) checkResult {
+	if len(inputs) == 1 {
+		if inputs[0].Oid == types.T_varbinary {
+			return newCheckResultWithSuccess(0)
+		}
+		if inputs[0].Oid == types.T_any || inputs[0].Oid.IsMySQLString() {
+			target := types.T_varbinary.ToType()
+			target.Width = 0
+			return newCheckResultWithCast(0, []types.Type{target})
+		}
+	}
+	return newCheckResultWithFailure(failure)
 }
 
 // a fixed type check method for Agg(only one column).

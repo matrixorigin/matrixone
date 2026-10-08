@@ -2635,7 +2635,7 @@ func TestGetLockHolderRemoteReturnsBindChangedAfterBindRefresh(t *testing.T) {
 	}()
 
 	n := 0
-	refreshedBind := pb.LockTable{ServiceID: "s1", Table: 1, Version: 2}
+	refreshedBind := pb.LockTable{ServiceID: "s1", Table: 1, Version: 2, Valid: true}
 	runRemoteLockTableTests(
 		t,
 		pb.LockTable{ServiceID: "s1", Table: 1, Version: 1},
@@ -2756,6 +2756,7 @@ func TestRemoteWithBindChanged(t *testing.T) {
 		ServiceID: "s2",
 		Table:     1,
 		Version:   2,
+		Valid:     true,
 	}
 
 	c := make(chan pb.LockTable, 1)

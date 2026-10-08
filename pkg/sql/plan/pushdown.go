@@ -321,6 +321,12 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 	}
 
 	var canPushdown, cantPushdown []*plan.Expr
+	if _, expandsGroupingSets := DecodeGroupingSetExpandOption(node.ExtraOptions); expandsGroupingSets {
+		// Expansion synthesizes NULL keys and an empty-input grouping row.
+		// Its output predicates cannot be evaluated against the input domain.
+		cantPushdown = append(cantPushdown, filters...)
+		filters = nil
+	}
 
 	if node.Limit != nil || node.Offset != nil {
 		// can not push down over limit or offset: a predicate above OFFSET filters the
@@ -978,7 +984,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 	case plan.Node_PROJECT:
 		child := builder.qry.Nodes[node.Children[0]]
 		if (child.NodeType == plan.Node_VALUE_SCAN || child.NodeType == plan.Node_EXTERNAL_SCAN) && child.RowsetData == nil {
-			cantPushdown = filters
+			cantPushdown = append(cantPushdown, filters...)
 			break
 		}
 

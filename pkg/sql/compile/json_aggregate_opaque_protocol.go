@@ -29,8 +29,10 @@ import (
 // MORPC v52 describes the scalar MySQL opaque JSON representation. It does
 // not establish that a peer has the JSON aggregate consumer, which was added
 // here. Keep the aggregate capability on its own protocol version so a
-// predecessor v100 peer cannot be admitted as an aggregate worker.
-const jsonAggregateOpaqueCapabilityVersion = defines.MORPCVersion101
+// predecessor v106 peer cannot be admitted as an aggregate worker. This is a
+// candidate allocation after main v106; it must be reassigned at landing if
+// another capability extends the cumulative main prefix first.
+const jsonAggregateOpaqueCapabilityVersion = defines.MORPCVersion107
 
 func (c *Compile) constrainJSONAggregateOpaqueWorkers(qry *plan.Query) error {
 	if c.execType != plan2.ExecTypeAP_MULTICN {

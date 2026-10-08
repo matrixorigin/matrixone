@@ -1079,23 +1079,42 @@ func TestRestartTxnKeepsRunSQLSealedUntilAdmissionCompletes(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, op.Rollback(ctx))
 
-		registrationErr := make(chan error, 1)
-		terminalErr := make(chan error, 1)
-		client.txnOpenedCallbacks = []func(TxnOperator){func(opened TxnOperator) {
-			_, sqlCancel := context.WithCancel(context.Background())
-			token, err := TryEnterRunSqlWithTokenAndSQL(opened, sqlCancel, "late old-generation sql")
-			require.Zero(t, token)
-			registrationErr <- err
-			terminalErr <- opened.Commit(ctx)
-		}}
-
-		restarted, err := client.RestartTxn(ctx, op, timestamp.Timestamp{})
-		require.NoError(t, err)
-		require.True(t, moerr.IsMoErrCode(<-registrationErr, moerr.ErrTxnClosed))
-		require.True(t, moerr.IsMoErrCode(<-terminalErr, moerr.ErrTxnClosed))
+		waiter := &selectedSuccessTimestampWaiter{
+			entered: make(chan struct{}), notify: make(chan struct{}),
+			selected: make(chan struct{}), release: make(chan struct{}),
+		}
+		client.timestampWaiter = waiter
+		close(waiter.notify)
+		var release sync.Once
+		defer release.Do(func() { close(waiter.release) })
+		resultC := make(chan txnCreateResult, 1)
+		go func() {
+			restarted, err := client.RestartTxn(ctx, op, timestamp.Timestamp{})
+			resultC <- txnCreateResult{op: restarted, err: err}
+		}()
+		select {
+		case <-waiter.selected:
+		case <-ctx.Done():
+			t.Fatal("restart did not enter snapshot admission")
+		}
+		_, lateCancel := context.WithCancel(context.Background())
+		defer lateCancel()
+		token, err := TryEnterRunSqlWithTokenAndSQL(op, lateCancel, "late old-generation sql")
+		require.Zero(t, token)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
+		require.True(t, moerr.IsMoErrCode(op.Commit(ctx), moerr.ErrTxnClosed))
+		release.Do(func() { close(waiter.release) })
+		var result txnCreateResult
+		select {
+		case result = <-resultC:
+		case <-ctx.Done():
+			t.Fatal("restart did not finish snapshot admission")
+		}
+		require.NoError(t, result.err)
+		restarted := result.op
 
 		_, sqlCancel := context.WithCancel(context.Background())
-		token, err := TryEnterRunSqlWithTokenAndSQL(restarted, sqlCancel, "new-generation sql")
+		token, err = TryEnterRunSqlWithTokenAndSQL(restarted, sqlCancel, "new-generation sql")
 		require.NoError(t, err)
 		require.NotZero(t, token)
 		restarted.ExitRunSqlWithToken(token)
@@ -1906,7 +1925,12 @@ func TestCloseCancelsAdmittedSnapshotWait(t *testing.T) {
 			case <-time.After(time.Second):
 				t.Fatal("admitted snapshot wait did not return after client close")
 			}
-			require.Zero(t, tc.(*txnClient).atomic.activeTxnCount.Load())
+			client := tc.(*txnClient)
+			require.Zero(t, client.atomic.activeTxnCount.Load())
+			client.mu.RLock()
+			defer client.mu.RUnlock()
+			require.Zero(t, client.mu.users)
+			require.Empty(t, client.mu.waitActiveTxns)
 		},
 		WithTimestampWaiter(waiter),
 	)
@@ -1978,48 +2002,6 @@ func TestCloseCancelsRealTimestampWait(t *testing.T) {
 		},
 		WithTimestampWaiter(tw),
 	)
-}
-
-func TestCloseDuringAdmittedNewCleansActiveState(t *testing.T) {
-	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
-	opened := make(chan struct{}, 1)
-	release := make(chan struct{})
-	c := NewTxnClient(
-		"",
-		newTestTxnSender(),
-		WithTxnOpenedCallback([]func(TxnOperator){func(TxnOperator) {
-			opened <- struct{}{}
-			<-release
-		}}),
-	)
-	c.Resume()
-
-	errC := make(chan error, 1)
-	go func() {
-		_, err := c.New(context.Background(), timestamp.Timestamp{}, WithUserTxn())
-		errC <- err
-	}()
-	select {
-	case <-opened:
-	case <-time.After(time.Second):
-		t.Fatal("New did not finish admission")
-	}
-
-	require.NoError(t, c.Close())
-	close(release)
-	select {
-	case err := <-errC:
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrClientClosed))
-	case <-time.After(time.Second):
-		t.Fatal("admitted New did not return after client close")
-	}
-
-	client := c.(*txnClient)
-	require.Zero(t, client.atomic.activeTxnCount.Load())
-	client.mu.RLock()
-	defer client.mu.RUnlock()
-	require.Zero(t, client.mu.users)
-	require.Empty(t, client.mu.waitActiveTxns)
 }
 
 func TestCloseCancelsLegacySnapshotWait(t *testing.T) {

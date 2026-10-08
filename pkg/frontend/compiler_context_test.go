@@ -120,7 +120,7 @@ func TestSubscriptionMetadataEnumerationObservesCancellation(t *testing.T) {
 }
 
 func TestActiveSubscriptionMetadataCandidatesAreBoundedAtCatalogQuery(t *testing.T) {
-	columnCheckSQL := "select 1 from mo_catalog.mo_columns where att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
+	columnCheckSQL := "select 1 from mo_catalog.mo_columns where account_id = 0 and att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
 
 	for _, test := range []struct {
 		name          string
@@ -234,7 +234,7 @@ func subscriptionPublisherAccountResult(rows ...[]interface{}) *MysqlResultSet {
 }
 
 func TestLegacySubscriptionMetadataResolvesPublisherAccountAtCatalogBoundary(t *testing.T) {
-	columnCheckSQL := "select 1 from mo_catalog.mo_columns where att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
+	columnCheckSQL := "select 1 from mo_catalog.mo_columns where account_id = 0 and att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
 	candidateSQL := getSubsSqlOld +
 		" and sub_account_id = 7 and status = 0 and sub_name is not null and sub_name <> '' limit 2"
 	lookupSQL := subscriptionPublisherAccountLookupSQL([]string{"publisher"})
@@ -521,6 +521,35 @@ func TestRecoverTableDefForPlanMigratesLegacyHex(t *testing.T) {
 	require.NoError(t, tcc.recoverLegacyTinyText(context.Background(), "db", tableDef, nil, nil))
 	_, overloadID := function.DecodeOverloadID(tableDef.Checks[0].Check.GetF().GetFunc().GetObj())
 	require.Equal(t, int32(function.HexFloat64Overload), overloadID)
+}
+
+func TestCollationMetadataResolveRejectsBeforeLegacyRecovery(t *testing.T) {
+	for _, catalogDef := range []*pbplan.TableDef{
+		{Cols: []*pbplan.ColDef{{Name: "v", Typ: pbplan.Type{Id: int32(types.T_varchar), Charset: 4, CollationVersion: 1}}}},
+		{DefaultCharset: 3, CollationVersion: 1},
+		{KeyFormat: 1},
+		{Indexes: []*pbplan.IndexDef{{KeyFormat: 1}}},
+	} {
+		proc := testutil.NewProcess(t)
+		ctrl := gomock.NewController(t)
+		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+		storage := mock_frontend.NewMockEngine(ctrl)
+		relation := mock_frontend.NewMockRelation(ctrl)
+		storage.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(42)).Return("db", "t", relation, nil)
+		relation.EXPECT().GetTableDef(gomock.Any()).Return(catalogDef)
+		ses, _ := newObservedProtocolSession()
+		ses.txnHandler = InitTxnHandler("", storage, proc.Ctx, txnOp)
+		tcc := &TxnCompilerContext{execCtx: &ExecCtx{reqCtx: proc.Ctx, ses: ses, proc: proc}}
+		before, err := catalogDef.Marshal()
+		require.NoError(t, err)
+		obj, resolved, err := tcc.ResolveById(42, nil)
+		require.ErrorContains(t, err, "disabled")
+		require.Nil(t, obj)
+		require.Nil(t, resolved)
+		after, err := catalogDef.Marshal()
+		require.NoError(t, err)
+		require.Equal(t, before, after)
+	}
 }
 
 func TestResolveByIdPreservesUnassignableLegacyHexDefault(t *testing.T) {

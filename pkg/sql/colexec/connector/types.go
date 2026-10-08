@@ -15,8 +15,6 @@
 package connector
 
 import (
-	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -97,6 +95,16 @@ func (connector *Connector) ActivatesAllocationAccountLifecycle() bool {
 func (connector *Connector) ClearAllocationAccount(
 	account *mpool.AllocationAccount,
 ) error {
+	if err := connector.DrainAllocationAccount(account); err != nil {
+		return err
+	}
+	connector.allocationAccount = nil
+	return nil
+}
+
+// DrainAllocationAccount releases transferred batches after every producer and
+// consumer has quiesced, before their source operators retire capacity classes.
+func (connector *Connector) DrainAllocationAccount(account *mpool.AllocationAccount) error {
 	if connector.allocationAccount == nil {
 		return nil
 	}
@@ -110,7 +118,6 @@ func (connector *Connector) ClearAllocationAccount(
 		connector.cleanupSpool.FinalizeAfterConsumersQuiesced()
 		connector.cleanupSpool = nil
 	}
-	connector.allocationAccount = nil
 	return nil
 }
 
@@ -123,22 +130,20 @@ func (connector *Connector) Release() {
 func (connector *Connector) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	terminalSignal := process.BuildCleanupSignal(pipelineFailed, err)
 	terminalErr := terminalSignal.TerminalErr()
-	signalCtx, signalCancel := context.WithTimeout(context.TODO(), process.PipelineSignalSendTimeout)
-	defer signalCancel()
-
-	terminalDelivered := connector.sendTerminalWithLog(signalCtx, proc, terminalSignal, pipelineFailed, terminalErr)
+	effective, published := connector.publishTerminalWithLog(proc, terminalSignal)
+	if published && effective.EventType != process.EventEnd {
+		terminalErr = effective.TerminalErr()
+	}
 
 	if connector.ctr.sp != nil {
 		sp := connector.ctr.sp
 
-		if terminalSignal.EventType == process.EventEnd && terminalDelivered {
+		if terminalSignal.EventType == process.EventEnd && published && effective.EventType == process.EventEnd {
 			connector.cleanupSpool = sp
 		} else {
 			abortErr := terminalErr
-			if terminalSignal.EventType == process.EventEnd && !terminalDelivered {
-				fallbackErr := process.ResolvePipelineSpoolAbortError(connector.Reg)
-				connector.sendTerminalWithLog(signalCtx, proc, process.NewAbortSignal(fallbackErr), true, fallbackErr)
-				abortErr = fallbackErr
+			if !published && abortErr == nil {
+				abortErr = process.ResolvePipelineSpoolAbortError(connector.Reg)
 			}
 			sp.Abort(abortErr)
 			if connector.allocationAccount != nil {
@@ -148,39 +153,33 @@ func (connector *Connector) Reset(proc *process.Process, pipelineFailed bool, er
 			}
 		}
 		connector.ctr.sp = nil
-	} else if terminalSignal.EventType == process.EventEnd && !terminalDelivered {
-		fallbackErr := process.ErrPipelineEndSignalDeliveryFailed
-		connector.sendTerminalWithLog(signalCtx, proc, process.NewAbortSignal(fallbackErr), true, fallbackErr)
 	}
 }
 
-// sendTerminalWithLog sends a terminal signal to Reg, logging a warning on failure.
-func (connector *Connector) sendTerminalWithLog(ctx context.Context, proc *process.Process, signal process.PipelineSignal, pipelineFailed bool, err error) bool {
+func (connector *Connector) publishTerminalWithLog(proc *process.Process, signal process.PipelineSignal) (process.PipelineSignal, bool) {
 	if connector.Reg == nil {
 		process.WarnPipelineCleanupf(
 			proc,
 			"connector_cleanup_nil_reg",
 			"connector cleanup skipped terminal %s signal because Reg is nil: pipeline_failed=%t err=%v",
 			signal.EventType.String(),
-			pipelineFailed,
-			err)
-		return false
+			signal.EventType != process.EventEnd,
+			signal.TerminalErr())
+		return process.PipelineSignal{}, false
 	}
-	if process.SendPipelineSignalWithContext(ctx, connector.Reg, signal) {
-		return true
+	if effective, ok := connector.Reg.PublishTerminal(signal); ok {
+		return effective, true
 	}
 	chLen, chCap := process.WaitRegisterChannelState(connector.Reg)
 	process.WarnPipelineCleanupf(
 		proc,
 		"connector_cleanup_send_terminal_signal",
-		"connector cleanup timed out sending terminal %s signal: timeout=%s channel_len=%d channel_cap=%d pipeline_failed=%t err=%v",
+		"connector cleanup could not publish terminal %s signal: channel_len=%d channel_cap=%d err=%v",
 		signal.EventType.String(),
-		process.PipelineSignalSendTimeout,
 		chLen,
 		chCap,
-		pipelineFailed,
-		err)
-	return false
+		signal.TerminalErr())
+	return process.PipelineSignal{}, false
 }
 
 // CleanupDeferredSpool reclaims spool cache memory after the paired Merge

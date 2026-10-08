@@ -28,7 +28,7 @@ import (
 )
 
 func TestBuildForeignTVF(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	sqls := []string{
 		// schema mode, long format
 		`select * from sql_tvf('select 1', '{"cols":[{"name":"a","type":"int64"},{"name":"b","type":"string"}]}') x`,
@@ -209,7 +209,7 @@ func TestIsForeignTableDef(t *testing.T) {
 // TestBuildParseJsonlSpecs covers the refactored parse_jsonl schema dispatch
 // (shared helper + jsonl-only format validation) through the binder.
 func TestBuildParseJsonlSpecs(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	sqls := []string{
 		`select * from parse_jsonl_data('[1]', 'I') x`,
 		`select * from parse_jsonl_data('{"a":1}', '{"format":"object","cols":[{"name":"a","type":"int64"}]}') x`,
@@ -228,7 +228,7 @@ func TestBuildParseJsonlSpecs(t *testing.T) {
 // ESQL|SQL DDL branch: option validation, inline-config JSON validation, the
 // envelope + feature-flag stamping, and the error cases.
 func TestBuildCreateForeignTable(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	sqls := []string{
 		`create external table t1 (a int, b varchar(10)) engine = sql with ('config'='{"driver":"mysql","dsn":"u@h/db"}', 'query'='select 1')`,
 		`create external table t2 (a int) engine = esql with ('config'='{"addresses":["http://es:9200"]}')`,
@@ -257,7 +257,7 @@ func TestBuildCreateForeignTable(t *testing.T) {
 // mock catalog and drives the SELECT-side recognition (FOREIGN_TB dispatch +
 // hidden __mo_query column) and the ALTER guard.
 func TestSelectAndAlterForeignTable(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	mcc := mock.CurrentContext().(*MockCompilerContext)
 	env := foreignext.BuildCreateSQLEnvelope(foreignext.Config{Kind: "sql", ConfigJSON: `{"driver":"mysql","dsn":"x"}`})
 	mcc.tables["foreign_t"] = &TableDef{
@@ -315,7 +315,7 @@ func TestSelectAndAlterForeignTable(t *testing.T) {
 // ColId) stays hidden. New schemas cannot create the name (reservation), so
 // this covers upgrade compatibility only.
 func TestPreexistingMoQueryColumnStaysVisible(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	mcc := mock.CurrentContext().(*MockCompilerContext)
 	mcc.tables["legacy_t"] = &TableDef{
 		TableType: catalog.SystemOrdinaryRel,

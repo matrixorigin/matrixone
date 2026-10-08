@@ -143,7 +143,7 @@ func BuildUniqueKeyBatch(
 				}
 			}
 		}
-		vs := make([]*vector.Vector, 0)
+		vs := make([]*vector.Vector, 0, len(parts))
 		for _, part := range parts {
 			v := cIndexVecMap[part]
 			vs = append(vs, v)

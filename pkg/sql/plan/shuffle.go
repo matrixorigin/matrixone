@@ -126,9 +126,9 @@ func shuffleByZonemap(rsp *engine.RangesShuffleParam, zm objectio.ZoneMap, bucke
 		rsp.Init = true
 		switch zm.GetType() {
 		case types.T_int64, types.T_int32, types.T_int16:
-			rsp.ShuffleRangeInt64 = ShuffleRangeReEvalSigned(rsp.Node.Stats.HashmapStats.Ranges, bucketNum, rsp.Node.Stats.HashmapStats.Nullcnt, int64(rsp.Node.Stats.TableCnt))
+			rsp.ShuffleRangeInt64 = ShuffleRangeReEvalSigned(rsp.Node.Stats.HashmapStats.Ranges, bucketNum, rsp.Node.Stats.HashmapStats.Nullcnt, EstimatedRowsInt64(rsp.Node.Stats.TableCnt))
 		case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit, types.T_datalink:
-			rsp.ShuffleRangeUint64 = ShuffleRangeReEvalUnsigned(rsp.Node.Stats.HashmapStats.Ranges, bucketNum, rsp.Node.Stats.HashmapStats.Nullcnt, int64(rsp.Node.Stats.TableCnt))
+			rsp.ShuffleRangeUint64 = ShuffleRangeReEvalUnsigned(rsp.Node.Stats.HashmapStats.Ranges, bucketNum, rsp.Node.Stats.HashmapStats.Nullcnt, EstimatedRowsInt64(rsp.Node.Stats.TableCnt))
 		}
 	}
 
@@ -149,9 +149,9 @@ func shuffleByValueExtractedFromZonemap(rsp *engine.RangesShuffleParam, zm objec
 		rsp.Init = true
 		switch t {
 		case types.T_int64, types.T_int32, types.T_int16:
-			rsp.ShuffleRangeInt64 = ShuffleRangeReEvalSigned(rsp.Node.Stats.HashmapStats.Ranges, bucketNum, rsp.Node.Stats.HashmapStats.Nullcnt, int64(rsp.Node.Stats.TableCnt))
+			rsp.ShuffleRangeInt64 = ShuffleRangeReEvalSigned(rsp.Node.Stats.HashmapStats.Ranges, bucketNum, rsp.Node.Stats.HashmapStats.Nullcnt, EstimatedRowsInt64(rsp.Node.Stats.TableCnt))
 		case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit, types.T_datalink:
-			rsp.ShuffleRangeUint64 = ShuffleRangeReEvalUnsigned(rsp.Node.Stats.HashmapStats.Ranges, bucketNum, rsp.Node.Stats.HashmapStats.Nullcnt, int64(rsp.Node.Stats.TableCnt))
+			rsp.ShuffleRangeUint64 = ShuffleRangeReEvalUnsigned(rsp.Node.Stats.HashmapStats.Ranges, bucketNum, rsp.Node.Stats.HashmapStats.Nullcnt, EstimatedRowsInt64(rsp.Node.Stats.TableCnt))
 		}
 	}
 
@@ -1011,6 +1011,23 @@ func determineShuffleForJoinWithColRefMode(node *plan.Node, builder *QueryBuilde
 		return
 	}
 
+	// Join ordering keeps the expected cardinality, while shuffle admission
+	// must be safe when a residual inequality retains far more than its 5%
+	// heuristic. Use the pre-filter input only during topology selection, then
+	// restore the estimate consumed by runtime-filter planning and EXPLAIN.
+	buildChild := node.Children[1]
+	if node.JoinType == plan.Node_DEDUP && node.IsRightJoin {
+		buildChild = node.Children[0]
+	}
+	estimatedHashmapSize := node.Stats.HashmapStats.HashmapSize
+	capacityHashmapSize, hasCapacityBound := residualInequalityBuildCapacityBound(buildChild, builder)
+	if hasCapacityBound && capacityHashmapSize > estimatedHashmapSize {
+		node.Stats.HashmapStats.HashmapSize = capacityHashmapSize
+		defer func() {
+			node.Stats.HashmapStats.HashmapSize = estimatedHashmapSize
+		}()
+	}
+
 	leftTags := make(map[int32]bool)
 	for _, tag := range builder.enumerateTags(node.Children[0]) {
 		leftTags[tag] = true
@@ -1419,6 +1436,16 @@ func determineShuffleForGroupBy(node *plan.Node, builder *QueryBuilder) {
 		return
 	}
 
+	// The split rule admits only large strict-prefix ROLLUPs. Its coarser
+	// aggregate includes the empty set, so no data key can distribute every
+	// level; preserve local partial aggregation and MergeGroup. For ordinary
+	// grouping-set plans, especially smaller inputs, a shuffle can still be
+	// cheaper than merging partial groups.
+	if _, splitCoarse := builder.splitGroupingSetCoarseAggs[node]; splitCoarse {
+		resetShuffleStrategy(node.Stats.HashmapStats)
+		node.Stats.HashmapStats.Shuffle = false
+		return
+	}
 	child := builder.qry.Nodes[node.Children[0]]
 
 	// for now, if agg children is agg or filter, do not allow shuffle
@@ -1615,10 +1642,15 @@ func determineShuffleForScan(node *plan.Node, builder *QueryBuilder) {
 	var firstSortColName string
 	if node.TableDef.ClusterBy != nil {
 		firstSortColName = util.GetClusterByFirstColumn(node.TableDef.ClusterBy.Name)
-	} else if node.TableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
-		return
 	} else {
-		firstSortColName = node.TableDef.Pkey.Names[0]
+		// Catalog-only scans retain identity for cache invalidation without
+		// loading sort-key metadata. Cached statistics do not prove a key;
+		// keep hash shuffle unless the definition supplies that evidence.
+		pkey := node.TableDef.Pkey
+		if pkey == nil || len(pkey.Names) == 0 || pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+			return
+		}
+		firstSortColName = pkey.Names[0]
 	}
 
 	s := w.GetStats()

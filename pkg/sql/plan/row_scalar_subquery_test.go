@@ -69,7 +69,7 @@ func BenchmarkFlattenSubqueriesWithoutSubquery(b *testing.B) {
 }
 
 func TestScalarAggregateSubqueryRefreshesConsumerNullability(t *testing.T) {
-	logicPlan, err := runOneStmt(NewMockOptimizer(false), t, `
+	logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, `
 		select ps.PS_PARTKEY from PARTSUPP ps
 		where ps.PS_SUPPLYCOST = (
 			select min(inner_ps.PS_SUPPLYCOST) from PARTSUPP inner_ps
@@ -115,7 +115,7 @@ func TestScalarAggregateSubqueryRefreshesConsumerNullability(t *testing.T) {
 }
 
 func TestScalarAggregateSubqueryRefreshPreservesIfNullContract(t *testing.T) {
-	logicPlan, err := runOneStmt(NewMockOptimizer(false), t, `
+	logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, `
 		select ifnull((
 			select min(r.R_REGIONKEY) from REGION r
 			where r.R_REGIONKEY = n.N_REGIONKEY), 0),
@@ -216,7 +216,7 @@ func TestRowConstructorScalarSubqueryComparisonBuilds(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			logicPlan, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
 			require.NoError(t, err)
 			require.NotNil(t, logicPlan.GetQuery())
 			require.False(t, queryContainsSubqueryRef(logicPlan.GetQuery()))
@@ -226,13 +226,13 @@ func TestRowConstructorScalarSubqueryComparisonBuilds(t *testing.T) {
 }
 
 func TestRowConstructorQuantifiedSubqueryStillRejectsNestedLeftSubquery(t *testing.T) {
-	_, err := runOneStmt(NewMockOptimizer(false), t,
+	_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"select ((select 0), 'AFRICA') in (select R_REGIONKEY, R_NAME from REGION)")
 	require.ErrorContains(t, err, "a quantified subquery's left operand can't contain subquery")
 }
 
 func TestRowConstructorCorrelatedAggregateUnsupportedWrapperFailsClosed(t *testing.T) {
-	_, err := runOneStmt(NewMockOptimizer(false), t, `select N_NATIONKEY from NATION n
+	_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, `select N_NATIONKEY from NATION n
 		where (0, null) <=>
 			(select count(*), sum(r.R_REGIONKEY) from REGION r
 				where r.R_REGIONKEY = n.N_REGIONKEY limit 0)`)
@@ -240,7 +240,7 @@ func TestRowConstructorCorrelatedAggregateUnsupportedWrapperFailsClosed(t *testi
 }
 
 func TestRowConstructorNonEqAggregateMasksDistinctLiteral(t *testing.T) {
-	logicPlan, err := runOneStmt(NewMockOptimizer(false), t, `select n.N_NATIONKEY
+	logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, `select n.N_NATIONKEY
 		from NATION n where (1,2) <=>
 		(select count(distinct 1),sum(1) from REGION r where r.R_REGIONKEY<n.N_REGIONKEY)`)
 	require.NoError(t, err)
@@ -288,7 +288,7 @@ func TestRowConstructorNonEqAggregateRejectsUnsafeComposition(t *testing.T) {
 			(select count(*),sum(r.R_REGIONKEY) from REGION r where r.R_REGIONKEY<n.N_REGIONKEY)
 			from NATION n`, "outer composition cannot be safely decorrelated"},
 	} {
-		_, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+		_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
 		require.ErrorContains(t, err, test.want)
 	}
 }
@@ -314,7 +314,7 @@ func TestNonEqAggregateFallbackRejectsBypassedBoundariesBeforeAppend(t *testing.
 		innerBinding := &Binding{tag: 20, cols: []string{"k", catalog.Row_ID},
 			colIsHidden: []bool{false, true}, types: []*planpb.Type{&intType, &rowIDType}}
 		builder := &QueryBuilder{
-			compCtx: NewMockCompilerContext(true),
+			compCtx: NewMockCompilerContext(true, newPlanTestProcess(t)),
 			qry: &planpb.Query{Nodes: []*planpb.Node{
 				newScan(10), newScan(20),
 				{NodeType: planpb.Node_AGG, Children: []int32{1}, BindingTags: []int32{30, 31},
@@ -397,7 +397,7 @@ func TestRowConstructorCorrelatedVolatileProjectionFailsClosed(t *testing.T) {
 			(select n.N_REGIONKEY, nextval('row_scalar_seq') from REGION r
 			 where r.R_REGIONKEY = n.N_REGIONKEY limit 1)`,
 	} {
-		_, err := runOneStmt(NewMockOptimizer(false), t, sql)
+		_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, sql)
 		require.ErrorContains(t, err, "wrapped correlated scalar projection cannot be safely decorrelated")
 	}
 }
@@ -412,39 +412,39 @@ func TestRowConstructorScalarOrderingDoesNotDuplicateVolatileFields(t *testing.T
 		{"subquery projection", "select (1, 0) < (select nextval('row_cmp_seq'), 1)"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
 			require.ErrorContains(t, err, "volatile row ordering comparison")
 		})
 	}
 
-	_, err := runOneStmt(NewMockOptimizer(false), t,
+	_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"select (1, nextval('row_cmp_seq')) < (select 1, 2)")
 	require.NoError(t, err, "the final field appears only once in the comparison")
 	for _, sql := range []string{
 		"select (nextval('row_cmp_seq'), 0) < any (select 1, 1)",
 		"select (nextval('row_cmp_seq'), 0) < all (select R_REGIONKEY, 1 from REGION)",
 	} {
-		_, err = runOneStmt(NewMockOptimizer(false), t, sql)
+		_, err = runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, sql)
 		require.NoError(t, err, "quantified row comparisons retain their existing planning path")
 	}
 }
 
 func TestRowConstructorCorrelatedAggregateVolatileHavingFailsClosed(t *testing.T) {
-	_, err := runOneStmt(NewMockOptimizer(false), t, `select N_NATIONKEY from NATION n
+	_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, `select N_NATIONKEY from NATION n
 		where (0, null) <=>
 			(select count(*), sum(r.R_REGIONKEY) from REGION r
 			 where r.R_REGIONKEY = n.N_REGIONKEY + 100
 			 having nextval('row_having_seq') = 1)`)
 	require.ErrorContains(t, err, "volatile correlated scalar HAVING")
 
-	_, err = runOneStmt(NewMockOptimizer(false), t, `select (select count(*) from REGION r
+	_, err = runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, `select (select count(*) from REGION r
 		where r.R_REGIONKEY = n.N_REGIONKEY having nextval('row_having_seq') = 1)
 		from NATION n`)
 	require.NoError(t, err, "ordinary one-column scalar HAVING keeps its existing plan")
 }
 
 func TestRowConstructorScalarSubqueryComparisonRejectsArityMismatch(t *testing.T) {
-	_, err := runOneStmt(NewMockOptimizer(false), t,
+	_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"select (1, 2) = (select R_REGIONKEY, R_NAME, R_COMMENT from REGION where R_REGIONKEY = 0)")
 	require.ErrorContains(t, err, "subquery should return 2 columns")
 }
