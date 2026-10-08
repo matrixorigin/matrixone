@@ -9,7 +9,7 @@ insert into binary_base values
 (x'ff', 40);
 data branch create table binary_branch from binary_base;
 select hex(k) as k, v from binary_branch order by k;
-➤ k[12,-1,0]  ¦  v[4,32,0]  𝄀
+➤ k[12,8,0]  ¦  v[4,32,0]  𝄀
 00000000  ¦  10  𝄀
 00610000  ¦  20  𝄀
 61000000  ¦  30  𝄀
@@ -29,7 +29,7 @@ insert into varbinary_base values
 (x'ff', 40);
 data branch create table varbinary_branch from varbinary_base;
 select hex(k) as k, v from varbinary_branch order by k;
-➤ k[12,-1,0]  ¦  v[4,32,0]  𝄀
+➤ k[12,16,0]  ¦  v[4,32,0]  𝄀
 00  ¦  10  𝄀
 0001  ¦  20  𝄀
 61  ¦  30  𝄀
@@ -41,4 +41,174 @@ select v as varbinary_base_v from varbinary_base where k = x'61';
 select v as varbinary_branch_v from varbinary_branch where k = x'61';
 ➤ varbinary_branch_v[4,32,0]  𝄀
 31
+data branch merge binary_branch into binary_base when conflict accept;
+data branch diff binary_branch against binary_base output count;
+➤ COUNT(*)[-5,0,0]  𝄀
+0
+select hex(k) as k, v from binary_base order by k;
+➤ k[12,8,0]  ¦  v[4,32,0]  𝄀
+00000000  ¦  10  𝄀
+00610000  ¦  20  𝄀
+61000000  ¦  31  𝄀
+FF000000  ¦  40
+create table loaded_base(id int primary key, v int, b binary(255), key(v));
+load data infile '$resources/load_data/branch_binary_short.csv' into table loaded_base
+fields terminated by '|' lines terminated by '\n' parallel 'true';
+select id, v, octet_length(b) as bytes, hex(b) as b from loaded_base order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  ¦  bytes[-5,64,0]  ¦  b[12,510,0]  𝄀
+1  ¦  10  ¦  2  ¦  4142  𝄀
+2  ¦  20  ¦  2  ¦  4344
+data branch create table loaded_branch from loaded_base;
+update loaded_branch set v = v + 1;
+data branch diff loaded_branch against loaded_base output count;
+➤ COUNT(*)[-5,0,0]  𝄀
+2
+data branch merge loaded_branch into loaded_base when conflict accept;
+data branch diff loaded_branch against loaded_base output count;
+➤ COUNT(*)[-5,0,0]  𝄀
+0
+select id, v, octet_length(b) as bytes, hex(b) as b from loaded_base order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  ¦  bytes[-5,64,0]  ¦  b[12,510,0]  𝄀
+1  ¦  11  ¦  2  ¦  4142  𝄀
+2  ¦  21  ¦  2  ¦  4344
+select id from loaded_base where v = 11;
+➤ id[4,32,0]  𝄀
+1
+insert into loaded_branch select id + 2, v + 10, b from loaded_base;
+delete from loaded_branch where id = 1;
+data branch merge loaded_branch into loaded_base when conflict accept;
+data branch diff loaded_branch against loaded_base output count;
+➤ COUNT(*)[-5,0,0]  𝄀
+0
+select id, v, octet_length(b) as bytes, hex(b) as b from loaded_base order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  ¦  bytes[-5,64,0]  ¦  b[12,510,0]  𝄀
+2  ¦  21  ¦  2  ¦  4344  𝄀
+3  ¦  21  ¦  2  ¦  4142  𝄀
+4  ¦  31  ¦  2  ¦  4344
+select hex(serial_extract(serial(x'4142'), 0 as binary(4))) as decoded,
+hex(cast(x'4142' as binary(4))) as converted;
+➤ decoded[12,8,0]  ¦  converted[12,8,0]  𝄀
+4142  ¦  41420000
+create table byte_base(id int primary key, b binary(255), v int);
+insert into byte_base values
+(1, serial_extract(serial(x''), 0 as binary(255)), 10),
+(2, NULL, 20),
+(3, serial_extract(serial(x'00ff005c27'), 0 as binary(255)), 30),
+(4, serial_extract(serial(repeat('Z', 255)), 0 as binary(255)), 40);
+data branch create table byte_branch from byte_base;
+update byte_branch set v = v + 1;
+data branch diff byte_branch against byte_base output as byte_diff;
+➤ TABLE CREATED[12,0,0]  𝄀
+`branch_binary_pk`.`byte_diff`
+select __mo_diff_flag, id, b is null as is_null, octet_length(b) as bytes,
+hex(b) = hex(serial_extract(serial(x'00ff005c27'), 0 as binary(255))) as exact_special
+from byte_diff order by id;
+➤ __mo_diff_flag[12,16,0]  ¦  id[4,32,0]  ¦  is_null[-7,1,0]  ¦  bytes[-5,64,0]  ¦  exact_special[-7,1,0]  𝄀
+UPDATE  ¦  1  ¦  0  ¦  0  ¦  0  𝄀
+UPDATE  ¦  2  ¦  1  ¦  null  ¦  null  𝄀
+UPDATE  ¦  3  ¦  0  ¦  5  ¦  1  𝄀
+UPDATE  ¦  4  ¦  0  ¦  255  ¦  0
+data branch merge byte_branch into byte_base when conflict accept;
+data branch diff byte_branch against byte_base output count;
+➤ COUNT(*)[-5,0,0]  𝄀
+0
+select id, b is null as is_null, octet_length(b) as bytes, v from byte_base order by id;
+➤ id[4,32,0]  ¦  is_null[-7,1,0]  ¦  bytes[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  0  ¦  0  ¦  11  𝄀
+2  ¦  1  ¦  null  ¦  21  𝄀
+3  ¦  0  ¦  5  ¦  31  𝄀
+4  ¦  0  ¦  255  ¦  41
+data branch create table byte_pick from byte_base;
+update byte_branch set v = v + 1;
+data branch pick byte_branch into byte_pick keys(1, 2, 3, 4);
+data branch diff byte_branch against byte_pick output count;
+➤ COUNT(*)[-5,0,0]  𝄀
+0
+select id, b is null as is_null, octet_length(b) as bytes, v from byte_pick order by id;
+➤ id[4,32,0]  ¦  is_null[-7,1,0]  ¦  bytes[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  0  ¦  0  ¦  12  𝄀
+2  ¦  1  ¦  null  ¦  22  𝄀
+3  ¦  0  ¦  5  ¦  32  𝄀
+4  ¦  0  ¦  255  ¦  42
+create table no_pk_base(b binary(4), v int);
+insert into no_pk_base values
+(serial_extract(serial(x'4142'), 0 as binary(4)), 10),
+(serial_extract(serial(x'414200'), 0 as binary(4)), 20);
+data branch create table no_pk_branch from no_pk_base;
+delete from no_pk_branch where hex(b) = '4142';
+update no_pk_branch set v = 21;
+data branch merge no_pk_branch into no_pk_base when conflict accept;
+select hex(b) as b, v from no_pk_branch;
+➤ b[12,8,0]  ¦  v[4,32,0]  𝄀
+414200  ¦  21
+select hex(b) as b, v from no_pk_base;
+➤ b[12,8,0]  ¦  v[4,32,0]  𝄀
+414200  ¦  21
+create table short_pk(k binary(4) primary key, v int);
+insert into short_pk values
+(serial_extract(serial(x'4142'), 0 as binary(4)), 10),
+(serial_extract(serial(x'414200'), 0 as binary(4)), 20);
+data branch create table short_pk_branch from short_pk;
+update short_pk_branch set v = v + 1;
+delete from short_pk_branch where hex(k) = '414200';
+insert into short_pk_branch values (serial_extract(serial(x'ff'), 0 as binary(4)), 30);
+data branch merge short_pk_branch into short_pk when conflict accept;
+data branch diff short_pk_branch against short_pk output count;
+➤ COUNT(*)[-5,0,0]  𝄀
+0
+select hex(k) as k, v from short_pk order by k;
+➤ k[12,8,0]  ¦  v[4,32,0]  𝄀
+4142  ¦  11  𝄀
+FF  ¦  30
+create table composite_pk(id int, k binary(4), v int, primary key(id, k));
+insert into composite_pk values
+(1, serial_extract(serial(x'4142'), 0 as binary(4)), 10),
+(1, serial_extract(serial(x'414200'), 0 as binary(4)), 20);
+data branch create table composite_branch from composite_pk;
+update composite_branch set v = v + 1;
+data branch merge composite_branch into composite_pk when conflict accept;
+data branch diff composite_branch against composite_pk output count;
+➤ COUNT(*)[-5,0,0]  𝄀
+0
+select id, hex(k) as k, v from composite_pk order by id, k;
+➤ id[4,32,0]  ¦  k[12,8,0]  ¦  v[4,32,0]  𝄀
+1  ¦  4142  ¦  11  𝄀
+1  ¦  414200  ¦  21
+create table historical_base(id int primary key, k binary(4), v int);
+insert into historical_base values
+(1, serial_extract(serial(x'4142'), 0 as binary(4)), 10),
+(2, serial_extract(serial(x'414200'), 0 as binary(4)), 20);
+data branch create table historical_source from historical_base;
+update historical_source set v = v + 1;
+drop snapshot if exists branch_binary_history;
+create snapshot branch_binary_history for table branch_binary_pk historical_source;
+update historical_source set k = x'43', v = 99 where id = 1;
+data branch create table historical_target from historical_base;
+update historical_target set v = 0;
+data branch merge historical_source{snapshot='branch_binary_history'} into historical_target when conflict accept;
+data branch diff historical_source{snapshot='branch_binary_history'} against historical_target output count;
+➤ COUNT(*)[-5,0,0]  𝄀
+0
+select id, hex(k) as k, v from historical_target order by id, k;
+➤ id[4,32,0]  ¦  k[12,8,0]  ¦  v[4,32,0]  𝄀
+1  ¦  4142  ¦  11  𝄀
+2  ¦  414200  ¦  21
+drop snapshot branch_binary_history;
+data branch create table conflict_branch from short_pk;
+update conflict_branch set v = 101 where hex(k) = '4142';
+update short_pk set v = 202 where hex(k) = '4142';
+data branch merge conflict_branch into short_pk;
+internal error: conflict: conflict_branch DELETE and short_pk DELETE on pk(serial_extract(serial(x'4142'),0 as BINARY(4))) with different values
+select hex(k) as k, v from short_pk order by k;
+➤ k[12,8,0]  ¦  v[4,32,0]  𝄀
+4142  ¦  202  𝄀
+FF  ¦  30
+data branch merge conflict_branch into short_pk when conflict accept;
+data branch diff conflict_branch against short_pk output count;
+➤ COUNT(*)[-5,0,0]  𝄀
+0
+select hex(k) as k, v from short_pk order by k;
+➤ k[12,8,0]  ¦  v[4,32,0]  𝄀
+4142  ¦  101  𝄀
+FF  ¦  30
 drop database branch_binary_pk;

@@ -59,7 +59,7 @@ func (c *testAppendCapacityController) ReleaseAllocationCapacity(size uint64) {
 
 func BenchmarkCopyIntoBatchesPartialTail(b *testing.B) {
 	const rowsPerInput = 128
-	proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(b, "", mpool.MustNewZero())
 	defer proc.Free()
 	input := testutil.NewBatch(
 		[]types.Type{
@@ -88,7 +88,7 @@ func BenchmarkCopyIntoBatchesPartialTail(b *testing.B) {
 
 func TestBatches(t *testing.T) {
 	var batches Batches
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	inputBatch := testutil.NewBatch([]types.Type{types.T_int32.ToType()}, true, int(100000), proc.Mp())
 	err := batches.CopyIntoBatches(inputBatch, proc)
 	inputBatch.Clean(proc.Mp())
@@ -139,7 +139,7 @@ func TestBatches(t *testing.T) {
 }
 
 func TestBatchesShrinkPreservesAllocationAndRollback(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	input := testutil.NewBatch(
 		[]types.Type{types.T_int32.ToType()},
@@ -195,7 +195,7 @@ func TestBatchesShrinkPreservesAllocationAndRollback(t *testing.T) {
 }
 
 func TestCopyIntoBatchesAcceptsEquivalentAllocationSelection(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
 	require.NoError(t, err)
@@ -228,7 +228,7 @@ func TestCopyIntoBatchesAcceptsEquivalentAllocationSelection(t *testing.T) {
 }
 
 func TestCopyIntoBatchesAllocationFailureRollsBackPartialTail(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	controller := &testAppendCapacityController{}
 	controller.limit.Store(1 << 60)
@@ -277,7 +277,7 @@ func TestCopyIntoBatchesAllocationFailureRollsBackPartialTail(t *testing.T) {
 }
 
 func TestCopyIntoBatchesFailureRollsBackEarlierTailChunk(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	controller := &testAppendCapacityController{}
 	controller.limit.Store(1 << 60)
