@@ -265,6 +265,7 @@ func TestPreparedNumericPredicateFiltering(t *testing.T) {
 			defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
 			bindings := make([]PreparedSourceBinding, len(tc.values))
 			values := make([]any, len(tc.values))
+			paramIsBin := make([]bool, len(tc.values))
 			for i, value := range tc.values {
 				bindings[i] = PreparedSourceBinding{Position: int32(i), Type: types.T_float64.ToType()}
 				if tc.integerKey {
@@ -279,9 +280,14 @@ func TestPreparedNumericPredicateFiltering(t *testing.T) {
 					paramValue.IsBin = true
 				}
 				values[i] = paramValue
+				paramIsBin[i] = paramValue.IsBin
 				require.NoError(t, vector.AppendBytes(params, []byte(value), false, proc.Mp()))
 			}
-			proc.SetPrepareParams(params)
+			proc.SetPrepareParamsWithIsBin(params, paramIsBin)
+			if tc.name == "binary bytes zero precision collision" {
+				require.True(t, proc.GetPrepareParamIsBin(0))
+				require.False(t, proc.GetPrepareParamIsBin(1))
+			}
 			if tc.name == "decimal between" {
 				originalCtx := mock.ctxt.GetContext()
 				ctx := withPreparedSourceBindings(originalCtx, bindings, values)
