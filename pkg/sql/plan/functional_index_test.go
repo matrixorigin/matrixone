@@ -245,7 +245,10 @@ func TestFunctionalCompositeIndexDDL(t *testing.T) {
 	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	rt := runtime.ServiceRuntime(ctx.GetProcess().GetService())
 	old, _ := rt.GetGlobalVariables(runtime.MOProtocolVersion)
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion105)
+	// Functional-index metadata is a new persisted contract.  The current main
+	// predecessor stops at v106; successful composite authoring must run with
+	// the newly allocated cumulative capability v107.
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion107)
 	t.Cleanup(func() { rt.SetGlobalVariables(runtime.MOProtocolVersion, old) })
 	build := func(sql string) (*Plan, error) {
 		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
