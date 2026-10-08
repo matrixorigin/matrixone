@@ -1402,7 +1402,7 @@ func TestQueryBuilderSortRollupFallsBackForDistinct(t *testing.T) {
 				t.Run(fmt.Sprintf("query-%d", i), func(t *testing.T) {
 					stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1)
 					require.NoError(t, err)
-					queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+					queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 					require.NoError(t, err)
 					require.False(t, planHasSortRollup(queryPlan.GetQuery()),
 						"SELECT DISTINCT must use the legacy NULL-normalizing rollup path under %s", algorithm)
