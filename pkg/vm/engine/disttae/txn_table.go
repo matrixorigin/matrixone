@@ -251,7 +251,13 @@ func (tbl *txnTable) PrefetchAllMeta(ctx context.Context) bool {
 
 func (tbl *txnTable) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error) {
 	published, err := tbl.getPublishedStats(ctx, sync)
-	if err != nil || strings.ToUpper(tbl.relKind) == "V" {
+	isLogicalView := strings.EqualFold(tbl.relKind, "V")
+	if isLogicalView {
+		def := tbl.GetTableDef(ctx)
+		isLogicalView = mvdefinition.PropertyValue(def, mvdefinition.Property) == "" &&
+			mvdefinition.PropertyValue(def, mvdefinition.OwnerProperty) == ""
+	}
+	if err != nil || isLogicalView {
 		return published, err
 	}
 	if tbl.remoteWorkspace {
