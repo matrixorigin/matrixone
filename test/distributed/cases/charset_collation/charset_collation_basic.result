@@ -209,15 +209,15 @@ INSERT INTO t_utf8mb4_unicode_ci VALUES
 (1, 'Z'), (2, 'a'), (3, 'A'), (4, 'b');
 SELECT id FROM t_utf8mb4_unicode_ci WHERE name = 'a' ORDER BY id;
 ➤ id[4,32,0]  𝄀
-2
+2  𝄀
 3
 SELECT id FROM t_utf8mb4_unicode_ci WHERE name IN ('a') ORDER BY id;
 ➤ id[4,32,0]  𝄀
-2
+2  𝄀
 3
 SELECT id FROM t_utf8mb4_unicode_ci WHERE name NOT IN ('a') ORDER BY id;
 ➤ id[4,32,0]  𝄀
-1
+1  𝄀
 4
 SELECT id, DENSE_RANK() OVER (ORDER BY name) AS r
 FROM t_utf8mb4_unicode_ci ORDER BY id;

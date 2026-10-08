@@ -2425,7 +2425,7 @@ func TestCompileFilterExprUnicodeFailsOpen(t *testing.T) {
 	}
 	expr := MakeFunctionExprForTest("=", []*plan.Expr{
 		MakeColExprForTest(0, types.T_varchar),
-		&plan.Expr{
+		{
 			Typ: plan2.MakePlan2Type(&typ),
 			Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{
 				IsConst: true,
