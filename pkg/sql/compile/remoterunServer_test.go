@@ -1087,7 +1087,7 @@ func TestMessageReceiverSendBatchPreservesMetadataAndRejectsOldProtocol(t *testi
 	require.Equal(t, types.StringSourceSQLPrepare, decodedWithSources.Vecs[0].GetStringSourceAt(1))
 }
 
-func TestMessageReceiverSendBatchRequiresV103ForNumericBinaryLiteralProvenance(t *testing.T) {
+func TestMessageReceiverSendBatchRequiresV107ForNumericBinaryLiteralProvenance(t *testing.T) {
 	runtime := rt.ServiceRuntime("")
 	original, hadOriginal := runtime.GetGlobalVariables(rt.MOProtocolVersion)
 	t.Cleanup(func() {
@@ -1117,11 +1117,14 @@ func TestMessageReceiverSendBatchRequiresV103ForNumericBinaryLiteralProvenance(t
 		maxMessageSize:  1 << 20,
 	}
 	runtime.SetGlobalVariables(rt.MOProtocolVersion, int64(101))
-	require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion103",
-		"the sender must reject a pre-v103 downgrade before writing a batch")
+	require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion107",
+		"the sender must reject a pre-v107 downgrade before writing a batch")
 	runtime.SetGlobalVariables(rt.MOProtocolVersion, int64(102))
-	require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion103",
-		"the sender must reject a v102 downgrade before writing a batch")
+	require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion107",
+		"the sender must reject a pre-v107 downgrade before writing a batch")
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion106)
+	require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion107",
+		"the sender must reject a v106 downgrade before writing a batch")
 
 	var sent *pipeline.Message
 	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
@@ -1129,7 +1132,7 @@ func TestMessageReceiverSendBatchRequiresV103ForNumericBinaryLiteralProvenance(t
 			sent = message.(*pipeline.Message)
 			return nil
 		})
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion103)
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion107)
 	require.NoError(t, receiver.sendBatch(bat))
 	require.NotNil(t, sent)
 	decoded := batch.NewOffHeapEmpty()

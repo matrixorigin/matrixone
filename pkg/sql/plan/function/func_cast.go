@@ -8311,8 +8311,8 @@ func strToDecimal64(
 	var l = uint64(length)
 	var dft types.Decimal64
 	totype := to.GetType()
-	isb := from.GetSourceVector().GetIsBin()
-	if totype.Charset == 255 && (!isb || from.GetSourceVector().IsConst()) {
+	source := from.GetSourceVector()
+	if totype.Charset == 255 && !source.HasIsBinMetadata() {
 		return opUnaryStrToFixedWithErrorCheck([]*vector.Vector{from.GetSourceVector()}, to, proc, length,
 			func(s string, _ uint64) (types.Decimal64, error) {
 				return parseMySQLDecimal64Prefix(s, totype.Width, totype.Scale)
@@ -8331,9 +8331,19 @@ func strToDecimal64(
 				return err
 			}
 		} else {
-			isb := from.GetSourceVector().GetIsBinAt(int(i))
+			isb := source.GetIsBinAt(int(i))
 			s := convertByteSliceToString(v)
 			if !isb {
+				if totype.Charset == 255 {
+					result, err := parseMySQLDecimal64Prefix(s, totype.Width, totype.Scale)
+					if err != nil {
+						return err
+					}
+					if err = to.Append(result, false); err != nil {
+						return err
+					}
+					continue
+				}
 				isExplicit := mode == castModeExplicit
 				var result types.Decimal64
 				var err error
@@ -8653,8 +8663,8 @@ func strToDecimal128(
 	var l = uint64(length)
 	var dft types.Decimal128
 	totype := to.GetType()
-	isb := from.GetSourceVector().GetIsBin()
-	if totype.Charset == 255 && (!isb || from.GetSourceVector().IsConst()) {
+	source := from.GetSourceVector()
+	if totype.Charset == 255 && !source.HasIsBinMetadata() {
 		return opUnaryStrToFixedWithErrorCheck([]*vector.Vector{from.GetSourceVector()}, to, proc, length,
 			func(s string, _ uint64) (types.Decimal128, error) {
 				return parseMySQLDecimal128Prefix(s, totype.Width, totype.Scale)
@@ -8673,9 +8683,19 @@ func strToDecimal128(
 				return err
 			}
 		} else {
-			isb := from.GetSourceVector().GetIsBinAt(int(i))
+			isb := source.GetIsBinAt(int(i))
 			s := convertByteSliceToString(v)
 			if !isb {
+				if totype.Charset == 255 {
+					result, err := parseMySQLDecimal128Prefix(s, totype.Width, totype.Scale)
+					if err != nil {
+						return err
+					}
+					if err = to.Append(result, false); err != nil {
+						return err
+					}
+					continue
+				}
 				isExplicit := mode == castModeExplicit
 				var result types.Decimal128
 				var err error
@@ -8750,8 +8770,8 @@ func strToDecimal256(
 	var l = uint64(length)
 	var dft types.Decimal256
 	totype := to.GetType()
-	isb := from.GetSourceVector().GetIsBin()
-	if totype.Charset == 255 && (!isb || from.GetSourceVector().IsConst()) {
+	source := from.GetSourceVector()
+	if totype.Charset == 255 && !source.HasIsBinMetadata() {
 		return opUnaryStrToFixedWithErrorCheck([]*vector.Vector{from.GetSourceVector()}, to, proc, length,
 			func(s string, _ uint64) (types.Decimal256, error) {
 				return parseMySQLDecimal256Prefix(s, totype.Width, totype.Scale)
@@ -8770,9 +8790,19 @@ func strToDecimal256(
 				return err
 			}
 		} else {
-			isb := from.GetSourceVector().GetIsBinAt(int(i))
+			isb := source.GetIsBinAt(int(i))
 			s := convertByteSliceToString(v)
 			if !isb {
+				if totype.Charset == 255 {
+					result, err := parseMySQLDecimal256Prefix(s, totype.Width, totype.Scale)
+					if err != nil {
+						return err
+					}
+					if err = to.Append(result, false); err != nil {
+						return err
+					}
+					continue
+				}
 				isExplicit := mode == castModeExplicit
 				var result types.Decimal256
 				var err error
