@@ -740,7 +740,7 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 		}
 	}
 
-	newsearch := fulltext2.NewFulltext2Search(u.tblcfg)
+	newsearch := fulltext2.NewFulltext2SearchForExecution(u.tblcfg, proc.GetService())
 	q := fulltext2.Fulltext2Query{
 		ScoreRange:       scoreRange,
 		Pattern:          []byte(pattern),

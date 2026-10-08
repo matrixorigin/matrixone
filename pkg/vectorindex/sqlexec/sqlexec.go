@@ -74,8 +74,12 @@ func (s *SqlContext) SetResolveVariableFunc(f func(varName string, isSystemVar, 
 // Either process.Process or SqlContext is used in SqlProcess.
 // We will look for process.Process first before SqlContext
 type SqlProcess struct {
-	Proc   *process.Process
-	SqlCtx *SqlContext
+	// operationContext belongs to a scoped copy, never to the caller's process.
+	// It changes cancellation only; transaction, snapshot and execution identity
+	// continue to come from the original Proc/SqlCtx and overrides.
+	operationContext context.Context
+	Proc             *process.Process
+	SqlCtx           *SqlContext
 
 	// Optional RuntimeFilterSpec
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
@@ -306,6 +310,9 @@ func (s *SqlProcess) executionStatementOption() executor.StatementOption {
 }
 
 func (s *SqlProcess) GetContext() context.Context {
+	if s.operationContext != nil {
+		return s.operationContext
+	}
 	if s.Proc != nil {
 		return s.Proc.Ctx
 	}
@@ -313,10 +320,21 @@ func (s *SqlProcess) GetContext() context.Context {
 }
 
 func (s *SqlProcess) GetTopContext() context.Context {
+	if s.operationContext != nil {
+		return s.operationContext
+	}
 	if s.Proc != nil {
 		return s.Proc.GetTopContext()
 	}
 	return s.SqlCtx.Ctx
+}
+
+// WithContext returns a request-local copy for an owner's cancellable operation.
+// It does not mutate Proc, SqlCtx, or any execution/snapshot identity.
+func (s *SqlProcess) WithContext(ctx context.Context) *SqlProcess {
+	scoped := *s
+	scoped.operationContext = ctx
+	return &scoped
 }
 
 func (s *SqlProcess) GetResolveVariableFunc() func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
@@ -349,7 +367,16 @@ func (s *SqlProcess) GetAccountID() (uint32, error) {
 
 // run SQL in batch mode. Result batches will stored in memory and return once all result batches received.
 func RunSql(sqlproc *SqlProcess, sql string) (executor.Result, error) {
-	return runSql(sqlproc, sql, "")
+	return runSqlWithContext(sqlproc.GetTopContext(), sqlproc, sql, "")
+}
+
+// RunSqlWithContext is RunSql with an explicit cancellation context.  The
+// caller's SqlProcess still supplies the transaction, identity and executor;
+// the context controls only this internal statement.  This is used by
+// owner-scoped optional loaders so service shutdown can cancel an already
+// admitted metadata read instead of waiting for the query's context forever.
+func RunSqlWithContext(ctx context.Context, sqlproc *SqlProcess, sql string) (executor.Result, error) {
+	return runSqlWithContext(ctx, sqlproc, sql, "")
 }
 
 // RunSqlWithOptimizerHints is RunSql with a per-statement optimizer_hints string (same
@@ -361,6 +388,13 @@ func RunSqlWithOptimizerHints(sqlproc *SqlProcess, sql string, optimizerHints st
 }
 
 func runSql(sqlproc *SqlProcess, sql string, optimizerHints string) (executor.Result, error) {
+	return runSqlWithContext(sqlproc.GetTopContext(), sqlproc, sql, optimizerHints)
+}
+
+func runSqlWithContext(ctx context.Context, sqlproc *SqlProcess, sql string, optimizerHints string) (executor.Result, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	stmtOpt := sqlproc.executionStatementOption()
 	if optimizerHints != "" {
 		stmtOpt = stmtOpt.WithOptimizerHints(optimizerHints)
@@ -373,7 +407,7 @@ func runSql(sqlproc *SqlProcess, sql string, optimizerHints string) (executor.Re
 		}
 
 		//-------------------------------------------------------
-		topContext := sqlproc.executionContext(proc.GetTopContext())
+		topContext := sqlproc.executionContext(ctx)
 		// Attach optional membership filter payload to context for internal executor.
 		if len(sqlproc.IvfMembershipFilter) > 0 {
 			topContext = context.WithValue(topContext, defines.IvfMembershipFilter{}, sqlproc.IvfMembershipFilter)
@@ -414,7 +448,7 @@ func runSql(sqlproc *SqlProcess, sql string, optimizerHints string) (executor.Re
 		}
 
 		accountId := sqlproc.executionAccountID(sqlctx.AccountId)
-		execCtx := sqlproc.executionContext(sqlctx.Ctx)
+		execCtx := sqlproc.executionContext(ctx)
 
 		exec := v.(executor.SQLExecutor)
 		// SqlCtx is the background entry point (no frontend session) —

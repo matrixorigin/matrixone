@@ -17,6 +17,7 @@ package fulltext2
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -118,8 +119,9 @@ type TableConfig struct {
 // compaction). Production points them at the real executor; tests swap them for fakes
 // that return synthetic result batches, optionally dispatching by SQL text.
 var (
-	runSql          = sqlexec.RunSql
-	runStreamingSql = sqlexec.RunStreamingSql
+	runSql            = sqlexec.RunSql
+	runSqlWithContext = sqlexec.RunSqlWithContext
+	runStreamingSql   = sqlexec.RunStreamingSql
 )
 
 // SubIndexId is the index_id for the i-th tag=0 base sub-index of a build
@@ -418,12 +420,24 @@ func DeleteTailSqls(cfg TableConfig) []string {
 
 // readMetadata fetches an index id's metadata (checksum + filesize + recency).
 func readMetadata(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string) (checksum string, filesize, recency int64, found bool, err error) {
+	return readMetadataWithRunner(sqlproc, cfg, id, func(sql string) (executor.Result, error) {
+		return runSql(sqlproc, sql)
+	})
+}
+
+func readMetadataWithContext(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string, ctx context.Context) (checksum string, filesize, recency int64, found bool, err error) {
+	return readMetadataWithRunner(sqlproc, cfg, id, func(sql string) (executor.Result, error) {
+		return runSqlWithContext(ctx, sqlproc, sql)
+	})
+}
+
+func readMetadataWithRunner(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string, run func(string) (executor.Result, error)) (checksum string, filesize, recency int64, found bool, err error) {
 	sql := fmt.Sprintf("SELECT %s, %s, %s FROM %s WHERE %s = %s",
 		catalog.FullText2Index_TblCol_Metadata_Checksum, catalog.FullText2Index_TblCol_Metadata_Filesize,
 		catalog.FullText2Index_TblCol_Metadata_Recency,
 		sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable),
 		catalog.FullText2Index_TblCol_Metadata_Index_Id, sqlquote.String(id))
-	res, err := runSql(sqlproc, sql)
+	res, err := run(sql)
 	if err != nil {
 		return "", 0, 0, false, err
 	}
@@ -562,11 +576,71 @@ func LoadAllBases(sqlproc *sqlexec.SqlProcess, cfg TableConfig) ([]*Segment, err
 	return bases, nil
 }
 
+// loadAllBasesWithPool is the opt-in prototype path used only by the internal
+// Base-file reuse experiment. It shares immutable files, never decoded
+// Segments, with the normal loader. Compaction and direct storage callers stay
+// on LoadAllBases.
+func loadAllBasesWithPool(sqlproc *sqlexec.SqlProcess, cfg TableConfig, pool *baseFilePool) ([]*Segment, error) {
+	return loadAllBasesWithPoolOwner(sqlproc, cfg, pool, nil)
+}
+
+func loadAllBasesWithOwner(sqlproc *sqlexec.SqlProcess, cfg TableConfig, owner *baseFileOwner) ([]*Segment, error) {
+	if owner == nil {
+		return nil, errBaseFileOwnerClosed
+	}
+	pool, err := owner.poolForSearch()
+	if err != nil {
+		return nil, err
+	}
+	return loadAllBasesWithPoolOwner(sqlproc, cfg, pool, owner)
+}
+
+func loadAllBasesWithPoolOwner(sqlproc *sqlexec.SqlProcess, cfg TableConfig, pool *baseFilePool, owner *baseFileOwner) ([]*Segment, error) {
+	idSQL := fmt.Sprintf("SELECT %s FROM %s WHERE %s",
+		catalog.FullText2Index_TblCol_Metadata_Index_Id,
+		sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable), notTailFrame())
+	res, err := runSql(sqlproc, idSQL)
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for _, bat := range res.Batches {
+		if bat == nil {
+			continue
+		}
+		for i := 0; i < bat.RowCount(); i++ {
+			ids = append(ids, bat.Vecs[0].GetStringAt(i))
+		}
+	}
+	res.Close()
+
+	bases := make([]*Segment, 0, len(ids))
+	for _, id := range ids {
+		var m *Segment
+		var lerr error
+		if owner == nil {
+			m, lerr = loadFromStorageWithPool(sqlproc, cfg, id, pool)
+		} else {
+			m, lerr = loadFromStorageWithOwner(sqlproc, cfg, id, owner, pool)
+		}
+		if lerr != nil {
+			freeSegs(bases)
+			return nil, lerr
+		}
+		bases = append(bases, m)
+	}
+	return bases, nil
+}
+
 // LoadFromStorage reads an index id's metadata + chunks, verifies the checksum,
 // and deserializes it. Chunks stream by chunk_id offset into a temp file so the
 // mpool never holds the whole index.
 func LoadFromStorage(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string) (*Segment, error) {
-	checksum, filesize, recency, found, err := readMetadata(sqlproc, cfg, id)
+	return loadFromStorageWithContext(sqlproc, cfg, id, sqlproc.GetTopContext())
+}
+
+func loadFromStorageWithContext(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string, ctx context.Context) (*Segment, error) {
+	checksum, filesize, recency, found, err := readMetadataWithContext(sqlproc, cfg, id, ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -595,7 +669,7 @@ func LoadFromStorage(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string) (*
 		cleanup()
 		return nil, err
 	}
-	if err = streamChunksToFile(sqlproc, cfg, id, filesize, fp); err != nil {
+	if err = streamChunksToFileContext(ctx, sqlproc, cfg, id, filesize, fp); err != nil {
 		cleanup()
 		return nil, err
 	}
@@ -623,6 +697,153 @@ func LoadFromStorage(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string) (*
 	if err := m.decodeSegment(data); err != nil {
 		m.Free()
 		return nil, err
+	}
+	m.Recency = recency
+	return m, nil
+}
+
+func loadFromStorageWithPool(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string, pool *baseFilePool) (*Segment, error) {
+	return loadFromStorageWithPoolOwnerContext(sqlproc, cfg, id, pool, nil, sqlproc.GetTopContext())
+}
+
+func loadFromStorageWithOwner(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string, fileOwner *baseFileOwner, pool *baseFilePool) (*Segment, error) {
+	return fileOwner.run(sqlproc.GetTopContext(), func(ctx context.Context) (*Segment, error) {
+		return loadFromStorageWithPoolOwnerContext(sqlproc, cfg, id, pool, fileOwner, ctx)
+	})
+}
+
+func loadFromStorageWithPoolOwner(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string, pool *baseFilePool, fileOwner *baseFileOwner) (*Segment, error) {
+	return loadFromStorageWithPoolOwnerContext(sqlproc, cfg, id, pool, fileOwner, sqlproc.GetTopContext())
+}
+
+func loadFromStorageWithPoolOwnerContext(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string, pool *baseFilePool, fileOwner *baseFileOwner, ctx context.Context) (*Segment, error) {
+	checksum, filesize, recency, found, err := readMetadataWithContext(sqlproc, cfg, id, ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, moerr.NewInternalError(sqlproc.GetContext(), fmt.Sprintf("fulltext2 index %s metadata not found", id))
+	}
+	if filesize <= 0 {
+		return nil, moerr.NewInternalError(sqlproc.GetContext(), fmt.Sprintf("fulltext2 index %s has empty filesize", id))
+	}
+	owner := sqlproc.GetService()
+	// Match the tenant used by the SQL executor, including trusted publisher
+	// and historical-snapshot overrides, not merely the caller's session.
+	account, accountErr := sqlproc.EffectiveAccountID()
+	if owner == "" || accountErr != nil || id == "" || checksum == "" {
+		// A missing durable identity must never turn into account 0 or an empty
+		// segment key. The optimization is optional, so use the ordinary loader
+		// when isolation cannot be proved.
+		if fileOwner != nil && fileOwner.isClosing() {
+			return nil, errBaseFileOwnerClosed
+		}
+		return loadFromStorageWithContext(sqlproc, cfg, id, ctx)
+	}
+	key := baseFileKey{
+		owner: owner, account: account, db: cfg.DbName, src: cfg.SrcTable,
+		index: cfg.IndexTable, metadata: cfg.MetadataTable, pkey: cfg.PKey,
+		id: id, checksum: checksum, size: filesize,
+	}
+	lease, err := pool.acquire(ctx, key, func(fillCtx context.Context) (*baseFileHandle, error) {
+		fp, path, ferr := createLocalTempFile(sqlproc, "ft2idx_pool")
+		if ferr != nil {
+			return nil, ferr
+		}
+		cleanup := func() {
+			_ = fp.Close()
+			if path != "" {
+				_ = os.Remove(path)
+			}
+		}
+		if ferr = fp.Truncate(filesize); ferr != nil {
+			cleanup()
+			return nil, ferr
+		}
+		if ferr = streamChunksToFileContext(fillCtx, sqlproc, cfg, id, filesize, fp); ferr != nil {
+			cleanup()
+			return nil, ferr
+		}
+		// Validate checksum and decodability before publishing READY. The
+		// validation mapping is short-lived; every successful lease maps the
+		// immutable file independently.
+		data, ferr := mmapReadOnly(fp)
+		if ferr != nil {
+			cleanup()
+			return nil, ferr
+		}
+		if vectorindex.CheckSumFromBuffer(data) != checksum {
+			unmapErr := munmap(data)
+			if unmapErr != nil {
+				return &baseFileHandle{file: fp, path: path, validationData: data}, fmt.Errorf("fulltext2 base validation mmap release: %w", unmapErr)
+			}
+			cleanup()
+			return nil, moerr.NewInternalError(sqlproc.GetContext(), fmt.Sprintf("fulltext2 index %s checksum mismatch", id))
+		}
+		probe := &Segment{Id: id}
+		ferr = probe.decodeSegment(data)
+		probe.ranking, probe.blocks, probe.positions = nil, nil, nil
+		if unmapErr := munmap(data); unmapErr != nil {
+			// Do not publish a READY file while its validation mapping is still
+			// owned by this fill attempt. The fill therefore fails closed; the
+			// ordinary cleanup below only handles the file descriptor/path.
+			if ferr == nil {
+				ferr = fmt.Errorf("fulltext2 base validation mmap release: %w", unmapErr)
+			}
+			return &baseFileHandle{file: fp, path: path, validationData: data}, ferr
+		}
+		if ferr != nil {
+			cleanup()
+			return nil, ferr
+		}
+		return &baseFileHandle{file: fp, path: path, validated: true}, nil
+	})
+	if err != nil {
+		if errors.Is(err, errBaseFilePoolCapacity) || errors.Is(err, errBaseFilePoolReadyCorrupt) {
+			// Pool admission and a published READY-file failure are optimization
+			// concerns.  Retry the ordinary loader exactly once; it owns its own
+			// temporary file and never re-enters the pool.
+			if fileOwner != nil && fileOwner.isClosing() {
+				return nil, errBaseFileOwnerClosed
+			}
+			return loadFromStorageWithContext(sqlproc, cfg, id, ctx)
+		}
+		if errors.Is(err, errBaseFilePoolLeaderCanceled) {
+			// The leader must observe its own cancellation. A healthy waiter may
+			// take over once with its own transaction/context, but a canceled
+			// leader must not resurrect work after its request ended.
+			if ctx != nil && ctx.Err() != nil {
+				return nil, context.Cause(ctx)
+			}
+			if fileOwner != nil && fileOwner.isClosing() {
+				return nil, errBaseFileOwnerClosed
+			}
+			return loadFromStorageWithContext(sqlproc, cfg, id, ctx)
+		}
+		return nil, err
+	}
+	data, err := lease.MapReadOnly()
+	if err != nil {
+		lease.Release()
+		if errors.Is(err, errBaseFilePoolReadyCorrupt) {
+			if fileOwner != nil && fileOwner.isClosing() {
+				return nil, errBaseFileOwnerClosed
+			}
+			return loadFromStorageWithContext(sqlproc, cfg, id, ctx)
+		}
+		return nil, err
+	}
+	m := &Segment{Id: id, mmapData: data, mmapRelease: lease.Release, mmapRetryPool: pool}
+	if err = m.decodeSegment(data); err != nil {
+		lease.Invalidate()
+		m.Free()
+		// A READY file that cannot be decoded is treated like a damaged cache
+		// artifact. Retire it and make one ordinary-loader attempt; the source
+		// error is returned if that attempt also fails.
+		if fileOwner != nil && fileOwner.isClosing() {
+			return nil, errBaseFileOwnerClosed
+		}
+		return loadFromStorageWithContext(sqlproc, cfg, id, ctx)
 	}
 	m.Recency = recency
 	return m, nil
@@ -942,11 +1163,15 @@ func LoadTailSegmentsWithin(sqlproc *sqlexec.SqlProcess, cfg TableConfig, reserv
 // streamChunksToFile streams a tag=0 index's chunk rows, writing each at
 // chunk_id*MaxChunkSize into fp; the assembled bytes must fill filesize exactly.
 func streamChunksToFile(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string, filesize int64, fp *os.File) error {
+	return streamChunksToFileContext(sqlproc.GetTopContext(), sqlproc, cfg, id, filesize, fp)
+}
+
+func streamChunksToFileContext(ctx context.Context, sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string, filesize int64, fp *os.File) error {
 	sql := fmt.Sprintf("SELECT %s, %s FROM %s WHERE %s = %s",
 		catalog.FullText2Index_TblCol_Storage_Chunk_Id, catalog.FullText2Index_TblCol_Storage_Data,
 		sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
 		catalog.FullText2Index_TblCol_Storage_Index_Id, sqlquote.String(id))
-	written, _, err := streamChunkRowsToFile(sqlproc, sql, 0, filesize, fp)
+	written, _, err := streamChunkRowsToFileContext(ctx, sqlproc, sql, 0, filesize, fp)
 	if err != nil {
 		return err
 	}
@@ -961,9 +1186,13 @@ func streamChunksToFile(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string,
 // at (chunk_id-baseChunk)*MaxChunkSize into fp, bounding the mpool to the stream
 // buffer. Returns bytes written + chunk-row count.
 func streamChunkRowsToFile(sqlproc *sqlexec.SqlProcess, sql string, baseChunk, bound int64, fp *os.File) (written, nchunks int64, err error) {
+	return streamChunkRowsToFileContext(sqlproc.GetTopContext(), sqlproc, sql, baseChunk, bound, fp)
+}
+
+func streamChunkRowsToFileContext(ctx context.Context, sqlproc *sqlexec.SqlProcess, sql string, baseChunk, bound int64, fp *os.File) (written, nchunks int64, err error) {
 	streamCh := make(chan executor.Result, 2)
 	errorCh := make(chan error, 2)
-	ctx, cancel := context.WithCancelCause(sqlproc.GetTopContext())
+	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 
 	var wg sync.WaitGroup

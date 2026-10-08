@@ -999,6 +999,11 @@ var afterIdleClaim func(key string)
 // the override still reaches the live ticker.
 var serveStartBarrier func()
 
+// afterServiceScan runs after DestroyByService has identified the entries it
+// intends to destroy and before it claims any of them. Nil in production; a
+// test sets it to place a replacement-generation race in that window.
+var afterServiceScan func()
+
 // evictIdleEntry evicts key ONLY if no search is in flight on it, and holds that claim through
 // removal and destroy so the entry cannot become busy in between. Returns false if a search
 // holds it, or if it lost the same races evictEntry can lose.
@@ -1572,4 +1577,50 @@ func (c *VectorIndexCache) RemovePrefix(prefix string) {
 	for _, k := range keys {
 		c.Remove(k)
 	}
+}
+
+// DestroyByService tears down only entries whose algorithm explicitly belongs
+// to service.  This is used by service-scoped optional caches during CN
+// shutdown: the service must release resident Search objects before its owner
+// closes the files those objects pin.  Algorithms that do not implement the
+// optional identity method are left untouched.
+//
+// The map entry is removed before Destroy, just like ordinary eviction, so a
+// concurrent cache miss cannot observe a half-destroyed object.  Destroy may
+// wait for an in-flight search; callers use this only after service request
+// admission has been drained.
+func (c *VectorIndexCache) DestroyByService(service string) int {
+	if c == nil || service == "" {
+		return 0
+	}
+	type candidate struct {
+		key   string
+		entry *VectorIndexSearch
+	}
+	candidates := make([]candidate, 0, 4)
+	c.IndexMap.Range(func(key, value any) bool {
+		k, ok := key.(string)
+		if !ok {
+			return true
+		}
+		entry, ok := value.(*VectorIndexSearch)
+		if !ok || entry.Algo == nil {
+			return true
+		}
+		owned, ok := entry.Algo.(interface{ CacheServiceID() string })
+		if ok && owned.CacheServiceID() == service {
+			candidates = append(candidates, candidate{key: k, entry: entry})
+		}
+		return true
+	})
+	if afterServiceScan != nil {
+		afterServiceScan()
+	}
+	destroyed := 0
+	for _, item := range candidates {
+		if c.evictEntry(item.key, item.entry, "service_shutdown") {
+			destroyed++
+		}
+	}
+	return destroyed
 }

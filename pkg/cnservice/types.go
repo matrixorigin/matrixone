@@ -856,14 +856,18 @@ type service struct {
 	beforeViewMetadataAdmissionHandoff func()
 	// viewMetadataCloseFn is a deterministic test hook for the asynchronous
 	// close request issued after synchronous ingress revocation.
-	viewMetadataCloseFn func() error
-	aicm                *defines.AutoIncrCacheManager
-	lifecycleMu         sync.Mutex
-	frontendLifecycleMu sync.Mutex
-	lifecycle           serviceLifecycleState
-	closeOnce           sync.Once
-	closeErr            error
-	closeComplete       bool
+	viewMetadataCloseFn     func() error
+	aicm                    *defines.AutoIncrCacheManager
+	lifecycleMu             sync.Mutex
+	frontendLifecycleMu     sync.Mutex
+	lifecycle               serviceLifecycleState
+	closeOnce               sync.Once
+	closeErr                error
+	closeComplete           bool
+	fulltext2BaseReuseOwner *fulltext2BaseReuseOwnerToken
+	// Only owner cleanup may be retried after local teardown. Remote admission
+	// withdrawal errors are diagnostic and must not prevent that retry finishing.
+	fulltext2BaseReuseClosePending bool
 
 	task struct {
 		sync.RWMutex

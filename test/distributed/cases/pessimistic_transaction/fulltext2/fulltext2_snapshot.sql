@@ -67,5 +67,24 @@ select id from t where match(body) against('+beta' in boolean mode) order by id;
 select id, body from t {snapshot='ft2_snap_case_sp'} where match(body) against('+alpha' in boolean mode);
 select id from t {snapshot='ft2_snap_case_sp'} where match(body) against('+beta' in boolean mode);
 
+-- Same logical names are not a Base identity. Keep the historical Search warm,
+-- recreate the live table/index, and then rebuild it; historical MATCH must
+-- continue to select the old metadata, while current MATCH uses the new Base.
+drop table t;
+create table t(id bigint primary key, body text);
+insert into t values (11,'replacement alpha'),(12,'replacement beta');
+create fulltext2 index idx on t(body);
+set @ft2_recreated_index = (select index_table_name from mo_catalog.mo_indexes where name = 'idx' and algo = 'fulltext2' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 't') limit 1);
+set @wait_recreated_sql = concat('select count(*) > 0 as ready from `', database(), '`.`', @ft2_recreated_index, '` where tag = 0');
+prepare wait_recreated from @wait_recreated_sql;
+-- @wait_expect(1, 120)
+execute wait_recreated;
+deallocate prepare wait_recreated;
+select id from t where match(body) against('+alpha' in boolean mode) order by id;
+select id from t {snapshot='ft2_snap_case_sp'} where match(body) against('+alpha' in boolean mode) order by id;
+alter table t alter reindex idx fulltext2 force_sync;
+select id from t where match(body) against('+alpha' in boolean mode) order by id;
+select id from t {snapshot='ft2_snap_case_sp'} where match(body) against('+alpha' in boolean mode) order by id;
+
 drop snapshot ft2_snap_case_sp;
 drop database ft2_snap_case;

@@ -73,6 +73,18 @@ type Fulltext2Search struct {
 	idx    *Index
 	loaded bool
 
+	// basePool is nil for every normal production search. The package-private
+	// constructor below enables the bounded immutable-file experiment without
+	// adding a SQL variable, public configuration, or changing cache ownership.
+	basePool        *baseFilePool
+	basePoolOwned   bool
+	baseOwner       *baseFileOwner
+	baseOwnerClosed bool
+	// baseOwnerService identifies the CN owner for the optional cache drain. It
+	// is deliberately only an identity string; the owner/token remain the
+	// source of lifecycle authority.
+	baseOwnerService string
+
 	// Generation captured at Load (same txn snapshot as the loaded data) for the cache's
 	// cross-CN freshness check (IsStale, called off the housekeeping goroutine): loadedTs =
 	// MAX(metadata.timestamp) (REBUILD/MERGE), loadedTail = MAX(tag=1 CdcTail chunk_id) (CDC
@@ -119,6 +131,40 @@ func NewFulltext2Search(cfg TableConfig) *Fulltext2Search {
 	return &Fulltext2Search{cfg: cfg}
 }
 
+// newFulltext2SearchWithBasePool is intentionally package-private and used by
+// the local Base-file reuse prototype only. A pooled file never supplies a
+// shared Segment; Load still creates an independent mmap, Index and liveness
+// state for every search object. The caller owns the pool and must close it at
+// the CN/cache shutdown boundary; Destroy only releases this handle's leases.
+func newFulltext2SearchWithBasePool(cfg TableConfig, pool *baseFilePool) *Fulltext2Search {
+	return &Fulltext2Search{cfg: cfg, basePool: pool}
+}
+
+func newFulltext2SearchWithBaseOwner(cfg TableConfig, owner *baseFileOwner) *Fulltext2Search {
+	return newFulltext2SearchWithBaseOwnerForService(cfg, owner, "")
+}
+
+func newFulltext2SearchWithBaseOwnerForService(cfg TableConfig, owner *baseFileOwner, service string) *Fulltext2Search {
+	if owner == nil {
+		return &Fulltext2Search{cfg: cfg}
+	}
+	pool, err := owner.poolForSearch()
+	if err != nil {
+		return &Fulltext2Search{cfg: cfg, baseOwner: owner, baseOwnerService: service, baseOwnerClosed: true}
+	}
+	return &Fulltext2Search{cfg: cfg, basePool: pool, baseOwner: owner, baseOwnerService: service}
+}
+
+// CacheServiceID is consumed by the optional VectorIndexCache shutdown drain.
+// Ordinary searches return an empty identity and are never selected by that
+// service-scoped operation.
+func (s *Fulltext2Search) CacheServiceID() string {
+	if s == nil {
+		return ""
+	}
+	return s.baseOwnerService
+}
+
 // Load reads the index from the chunk store: the tag=0 base sub-indexes plus the
 // tag=1 CdcTail delta frames (+ delete set), assembled into a queryable Index with
 // global stats and per-pk liveness. An index created on an empty table has no tag=0
@@ -127,6 +173,25 @@ func NewFulltext2Search(cfg TableConfig) *Fulltext2Search {
 // from -- without loading or mapping any of them, so the cache can reclaim room for this index
 // before Load claims it.
 func (s *Fulltext2Search) Preload(sqlproc *sqlexec.SqlProcess) error {
+	if s.baseOwnerClosed {
+		return errBaseFileOwnerClosed
+	}
+	if s.baseOwner != nil {
+		return s.baseOwner.runOperation(sqlproc.GetTopContext(), func(ctx context.Context) error {
+			err := s.preload(sqlproc.WithContext(ctx))
+			if err == nil {
+				err = context.Cause(ctx)
+			}
+			if err != nil {
+				s.preloaded = false
+			}
+			return err
+		})
+	}
+	return s.preload(sqlproc)
+}
+
+func (s *Fulltext2Search) preload(sqlproc *sqlexec.SqlProcess) error {
 	ndoc, bytes, err := baseDocCountAndBytes(sqlproc, s.cfg)
 	if err != nil {
 		return err
@@ -145,6 +210,31 @@ func (s *Fulltext2Search) Preload(sqlproc *sqlexec.SqlProcess) error {
 }
 
 func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) error {
+	// A service-owned experiment handle must fail closed after its owner has
+	// shut down. Do this before the ordinary budget queries: a closed owner is
+	// not permission to silently fall back to a normal Search or to create a new
+	// owner behind the cache lifecycle boundary.
+	if s.baseOwnerClosed {
+		return errBaseFileOwnerClosed
+	}
+	if s.baseOwner != nil {
+		return s.baseOwner.runOperation(sqlproc.GetTopContext(), func(ctx context.Context) error {
+			err := s.load(sqlproc.WithContext(ctx))
+			// Generation capture intentionally tolerates SQL errors on the normal
+			// path. It must not turn owner cancellation into a successful load.
+			if err == nil {
+				err = context.Cause(ctx)
+			}
+			if err != nil {
+				s.Destroy()
+			}
+			return err
+		})
+	}
+	return s.load(sqlproc)
+}
+
+func (s *Fulltext2Search) load(sqlproc *sqlexec.SqlProcess) error {
 	// Fail fast on the QUERY path if the bases' per-doc metadata won't fit the heap
 	// budget, rather than OOM-killing the CN (which takes down every query on the node).
 	// This guard is on Load, NOT LoadAllBases, so CompactSegments (MERGE) — the remedy —
@@ -158,7 +248,15 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) error {
 	} else if err := checkBaseLoadBudget(sqlproc, s.cfg); err != nil {
 		return err
 	}
-	bases, err := LoadAllBases(sqlproc, s.cfg)
+	var bases []*Segment
+	var err error
+	if s.baseOwner != nil {
+		bases, err = loadAllBasesWithOwner(sqlproc, s.cfg, s.baseOwner)
+	} else if s.basePool != nil {
+		bases, err = loadAllBasesWithPool(sqlproc, s.cfg, s.basePool)
+	} else {
+		bases, err = LoadAllBases(sqlproc, s.cfg)
+	}
 	if err != nil {
 		return err
 	}
@@ -209,11 +307,13 @@ func (s *Fulltext2Search) EmptyGeneration() bool {
 // resident, so the device figure is 0.
 // GetIndexSize charges the doc heap PLUS the file this entry maps.
 //
-// The mapping is not shared between cache entries: LoadFromStorage spills to a fresh LOCAL file
-// per load and mmaps it whole, so a second named-snapshot key of the same index maps its own
-// copy. Reporting only the heap made a multi-megabyte mapping look like a few hundred bytes, and
-// N generations could pin N files while the governor saw almost nothing. Same shape as hnsw:
-// rows x per-row heap, plus the mapped file.
+// The normal mapping is not shared between cache entries: LoadFromStorage spills to a fresh
+// LOCAL file per load and mmaps it whole, so a second named-snapshot key of the same index maps
+// its own copy. The experimental Base-file pool may share the immutable file backing those
+// mappings, but still charges each independent mapping here. Reporting only the heap made a
+// multi-megabyte mapping look like a few hundred bytes, and N generations could pin N files
+// while the governor saw almost nothing. Same shape as hnsw: rows x per-row heap, plus mapped
+// bytes.
 func (s *Fulltext2Search) GetIndexSize() (hostBytes, deviceBytes int64) {
 	if !s.loaded || s.idx == nil {
 		// Between Preload and Load: report what Load is about to cost, mapping included.
@@ -495,11 +595,48 @@ func (s *Fulltext2Search) SearchFloat32(proc *sqlexec.SqlProcess, query any, rt 
 // are views into those mappings), then drops it. The cache holds the write lock
 // around this, so no search is in flight.
 func (s *Fulltext2Search) Destroy() {
+	pool := s.basePool
+	poolOwned := s.basePoolOwned
+	owner := s.baseOwner
 	if s.idx != nil {
 		s.idx.Free()
 	}
+	if pool != nil {
+		// A failed munmap leaves the Segment and its lease in the pool's
+		// deferred-owner queue; retry once at the same lifecycle boundary before
+		// dropping the search handle.
+		pool.retryDeferred()
+	}
 	s.idx = nil
 	s.loaded = false
+	// A service-owned experimental pool is closed by its owner lifecycle hook,
+	// not by this Search handle. A caller that injects a shared CN-level pool
+	// likewise retains ownership. The ordinary constructor leaves basePool nil.
+	if pool != nil && poolOwned {
+		pool.Close()
+	}
+	// A legacy private-owned pool remains attached while an OS mapping still
+	// needs a retry. Service-owned pools are held by baseOwner and are detached
+	// here; the service owner remains reachable for a later shutdown retry.
+	if pool != nil && poolOwned && pool.deferredCount() != 0 {
+		s.basePool = pool
+		s.basePoolOwned = true
+		s.baseOwner = owner
+		if owner != nil {
+			s.baseOwnerClosed = owner.isClosing()
+		}
+		return
+	}
+	s.basePool = nil
+	s.basePoolOwned = false
+	// The VectorIndexCache may retry the same newalgo after it destroys an
+	// entry. Keep its service owner binding so a normal retry can reuse the
+	// pool, and a retry after CN shutdown fails closed instead of silently
+	// falling back to LoadAllBases.
+	s.baseOwner = owner
+	if owner != nil {
+		s.baseOwnerClosed = owner.isClosing()
+	}
 }
 
 // SetReservedAhead receives what the governor has already promised to loads ahead of this one,

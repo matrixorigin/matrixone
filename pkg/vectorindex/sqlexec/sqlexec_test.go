@@ -63,6 +63,90 @@ func (m *identityCapturingSQLExecutor) ExecTxn(context.Context, func(executor.Tx
 	return nil
 }
 
+type contextBlockingSQLExecutor struct {
+	entered chan struct{}
+	rescue  <-chan struct{}
+	ctx     context.Context
+	opts    executor.Options
+}
+
+func (m *contextBlockingSQLExecutor) Exec(ctx context.Context, _ string, opts executor.Options) (executor.Result, error) {
+	m.ctx = ctx
+	m.opts = opts
+	close(m.entered)
+	select {
+	case <-ctx.Done():
+		return executor.Result{}, ctx.Err()
+	case <-m.rescue:
+		// The rescue path is used only by cleanup.  It must not be the
+		// successful cancellation signal tested by the body above.
+		return executor.Result{}, context.Canceled
+	}
+}
+
+func (m *contextBlockingSQLExecutor) ExecTxn(context.Context, func(executor.TxnExecutor) error, executor.Options) error {
+	return nil
+}
+
+func TestRunSqlWithContextPreservesTxnIdentityAndCancellation(t *testing.T) {
+	const uuid = "fulltext-owner-cancel"
+	ctrl := gomock.NewController(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	rescue := make(chan struct{})
+	spy := &contextBlockingSQLExecutor{entered: make(chan struct{}), rescue: rescue}
+	rt := moruntime.DefaultRuntime()
+	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, spy)
+	t.Cleanup(func() { rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, spy) })
+	moruntime.SetupServiceBasedRuntime(uuid, rt)
+
+	type contextKey struct{}
+	key := contextKey{}
+	baseCtx := context.WithValue(context.Background(), key, "request")
+	sqlproc := NewSqlProcessWithContext(
+		NewSqlContext(baseCtx, uuid, txnOp, 7, nil)).WithExecutionIdentity(42, "ft2")
+	ownerCtx, cancel := context.WithCancel(context.WithValue(context.Background(), key, "owner"))
+	done := make(chan error, 1)
+	exited := make(chan struct{})
+	t.Cleanup(func() {
+		// Keep this rescue path independent of the assertions below.  If an
+		// assertion or the entry wait fails, the executor must still be released
+		// before the runtime global is restored.
+		cancel()
+		close(rescue)
+		select {
+		case <-exited:
+		case <-time.After(5 * time.Second):
+			t.Errorf("RunSqlWithContext goroutine did not terminate during cleanup")
+		}
+	})
+	go func() {
+		defer close(exited)
+		_, err := RunSqlWithContext(ownerCtx, sqlproc, "select 1")
+		done <- err
+	}()
+
+	select {
+	case <-spy.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("SQL executor did not start")
+	}
+	accountID, err := defines.GetAccountId(spy.ctx)
+	require.NoError(t, err)
+	require.Equal(t, uint32(42), accountID)
+	require.Equal(t, "owner", spy.ctx.Value(key))
+	require.Same(t, txnOp, spy.opts.Txn(), "explicit cancellation must not replace the caller transaction")
+	require.Equal(t, uint32(42), spy.opts.AccountID())
+	require.Equal(t, "ft2", spy.opts.Database())
+
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunSqlWithContext did not return after cancellation")
+	}
+}
+
 func TestSqlProcessExecutionIdentityOverride(t *testing.T) {
 	uuid := "fulltext-publisher-identity"
 	spy := &identityCapturingSQLExecutor{}
@@ -158,6 +242,20 @@ func TestSqlProcessExecutionIdentityOverrideFromProcess(t *testing.T) {
 	_, err := RunSql(sqlproc, "select 1")
 	require.NoError(t, err)
 	assertExecutionIdentity("subscriber")
+
+	ownerCtx, cancelOwner := context.WithCancel(context.WithValue(subscriberCtx, key, "owner"))
+	t.Cleanup(cancelOwner)
+	scoped := sqlproc.WithContext(ownerCtx)
+	require.Same(t, proc, scoped.Proc)
+	require.Same(t, ownerCtx, scoped.GetContext())
+	require.Same(t, ownerCtx, scoped.GetTopContext())
+	_, err = RunSql(scoped, "select 1")
+	require.NoError(t, err)
+	assertExecutionIdentity("owner")
+	cancelOwner()
+	require.ErrorIs(t, scoped.GetTopContext().Err(), context.Canceled)
+	require.NoError(t, sqlproc.GetTopContext().Err())
+	require.Equal(t, "subscriber", sqlproc.GetTopContext().Value(key))
 
 	streamCtx := context.WithValue(context.Background(), key, "stream")
 	streamCtx = defines.AttachAccountId(streamCtx, 7)

@@ -21,12 +21,13 @@ import (
 	"syscall"
 )
 
-// mmapReadOnly maps the whole file into a shared, read-only region. One mapping is
-// created per cached base segment at load and shared by all concurrent queries —
-// reads are plain memory loads (no lock), the kernel serializes page faults, and
-// the OS page cache (reclaimable, unlike our off-heap C-malloc) is the residency
-// manager. Unmapped by munmap under the cache's eviction write-lock (no reader in
-// flight). Returns nil for a zero-length file.
+var munmapFn = syscall.Munmap
+
+// mmapReadOnly maps the whole file into a shared, read-only region. Normal
+// loading creates one mapping per Segment; the experimental file pool creates
+// one independent mapping per lease while the kernel still shares the backing
+// OS page cache. Reads are plain memory loads and the cache's Segment lifetime
+// controls munmap. Returns nil for a zero-length file.
 func mmapReadOnly(f *os.File) ([]byte, error) {
 	fi, err := f.Stat()
 	if err != nil {
@@ -43,5 +44,5 @@ func munmap(b []byte) error {
 	if len(b) == 0 {
 		return nil
 	}
-	return syscall.Munmap(b)
+	return munmapFn(b)
 }

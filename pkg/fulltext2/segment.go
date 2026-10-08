@@ -395,6 +395,14 @@ type Segment struct {
 	// in-memory (tail) segment, whose bytes are GC-managed Go slices.
 	mmapData []byte
 	mmapPath string
+	// mmapRelease is set only for the experimental Base-file pool path. It
+	// releases the file lease after this Segment's private mapping is gone.
+	// Ordinary storage loads leave it nil and keep their existing ownership.
+	mmapRelease func()
+	// mmapRetryPool retains this Segment when munmap fails during Destroy or a
+	// decode-failure cleanup. The pool is the explicit owner for a later retry;
+	// it is nil on ordinary and build-side segments.
+	mmapRetryPool *baseFilePool
 }
 
 // numDocs is the segment's document count, valid for both a build-side segment (== len(pks))
@@ -684,12 +692,30 @@ func cbAppendNull(k *vectorindex.ColumnBuffer, fixedW int, fixed bool) {
 // munmap reclaims them — there is no off-heap buffer to deallocate.
 func (s *Segment) Free() {
 	if s.mmapData != nil {
-		_ = munmap(s.mmapData)
+		if err := munmap(s.mmapData); err != nil {
+			// Keep the mapping, backing path, and lease until a later Free can
+			// retry. Releasing the pool lease before munmap succeeds could let
+			// the pool close or reuse the file while this mapping is live.
+			if s.mmapRetryPool != nil {
+				s.mmapRetryPool.deferSegment(s)
+			}
+			return
+		}
 		s.mmapData = nil
 	}
 	if s.mmapPath != "" {
 		_ = os.Remove(s.mmapPath)
 		s.mmapPath = ""
+	}
+	if s.mmapRelease != nil {
+		release := s.mmapRelease
+		s.mmapRelease = nil
+		release()
+	}
+	if s.mmapRetryPool != nil {
+		pool := s.mmapRetryPool
+		s.mmapRetryPool = nil
+		pool.undeferSegment(s)
 	}
 	s.ranking, s.blocks, s.positions = nil, nil, nil
 }

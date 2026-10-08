@@ -36,6 +36,93 @@ type MockSearch struct {
 	BuildTs int64
 }
 
+type serviceOwnedMockSearch struct {
+	MockSearch
+	service   string
+	destroyed bool
+}
+
+func (m *serviceOwnedMockSearch) CacheServiceID() string { return m.service }
+
+func (m *serviceOwnedMockSearch) Destroy() { m.destroyed = true }
+
+func TestVectorIndexCacheDestroyByService(t *testing.T) {
+	c := NewVectorIndexCache()
+	match := &serviceOwnedMockSearch{service: "cn-a"}
+	other := &serviceOwnedMockSearch{service: "cn-b"}
+	ordinary := &MockSearch{}
+	c.IndexMap.Store("match", newVectorIndexSearch(match))
+	c.IndexMap.Store("other", newVectorIndexSearch(other))
+	c.IndexMap.Store("ordinary", newVectorIndexSearch(ordinary))
+
+	require.Equal(t, 1, c.DestroyByService("cn-a"))
+	require.True(t, match.destroyed)
+	require.False(t, other.destroyed)
+	_, ok := c.IndexMap.Load("match")
+	require.False(t, ok)
+	_, ok = c.IndexMap.Load("other")
+	require.True(t, ok)
+	_, ok = c.IndexMap.Load("ordinary")
+	require.True(t, ok)
+}
+
+func TestVectorIndexCacheDestroyByServiceDoesNotDeleteReplacement(t *testing.T) {
+	c := NewVectorIndexCache()
+	const key = "same-generation-key"
+	oldSearch := &serviceOwnedMockSearch{service: "cn-a"}
+	oldEntry := newVectorIndexSearch(oldSearch)
+	c.IndexMap.Store(key, oldEntry)
+
+	scanned := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	exited := make(chan struct{})
+	previousHook := afterServiceScan
+	afterServiceScan = func() {
+		close(scanned)
+		<-release
+	}
+	t.Cleanup(func() {
+		afterServiceScan = previousHook
+		c.IndexMap.Delete(key)
+	})
+	t.Cleanup(func() {
+		// Release the scan independently of the behavior under test, then join
+		// before restoring the package hook, including on a timed-out wait.
+		releaseOnce.Do(func() { close(release) })
+		<-exited
+	})
+
+	destroyed := make(chan int, 1)
+	go func() {
+		defer close(exited)
+		destroyed <- c.DestroyByService("cn-a")
+	}()
+	select {
+	case <-scanned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("service drain did not reach its scan barrier")
+	}
+
+	replacementSearch := &serviceOwnedMockSearch{service: "cn-a"}
+	replacementEntry := newVectorIndexSearch(replacementSearch)
+	c.IndexMap.Store(key, replacementEntry)
+	releaseOnce.Do(func() { close(release) })
+
+	select {
+	case n := <-destroyed:
+		require.Equal(t, 0, n, "the scan must not evict a newer entry at the same key")
+	case <-time.After(2 * time.Second):
+		t.Fatal("service drain did not finish after scan release")
+	}
+	<-exited
+	require.False(t, oldSearch.destroyed)
+	require.False(t, replacementSearch.destroyed)
+	value, ok := c.IndexMap.Load(key)
+	require.True(t, ok)
+	require.Same(t, replacementEntry, value)
+}
+
 func (m *MockSearch) Search(sqlproc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
 	//time.Sleep(2 * time.Millisecond)
 	return []int64{1}, []float64{2.0}, nil

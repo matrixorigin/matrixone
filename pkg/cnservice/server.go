@@ -444,6 +444,9 @@ func (s *service) Start() (err error) {
 		}
 		s.lifecycle = serviceStarted
 	}()
+	if s.fulltext2BaseReuseOwner, err = initializeFulltext2BaseReuseOwner(s.cfg.UUID); err != nil {
+		return err
+	}
 
 	if err = s.waitForClusterSelfReady(false); err != nil {
 		return err
@@ -602,7 +605,20 @@ func (s *service) closeService() error {
 		s.closeComplete = localErr == nil
 		s.closeErr = errors.Join(withdrawErr, localErr)
 	})
-	return s.closeErr
+	// Keep this retryable operation outside closeOnce.  A pinned mapping or a
+	// deferred munmap may make the first owner close return pending; a later
+	// service Close must be able to retry it after Search handles release their
+	// leases.  The owner itself has already rejected new work, and closeService's
+	// once body has drained the service entry points before reaching here.
+	if !s.closeComplete && !s.fulltext2BaseReuseClosePending {
+		// Preserve the fail-stop drain contract: a local producer/dependency
+		// teardown failure is not permission to destroy its cached consumers.
+		return s.closeErr
+	}
+	ownerErr := closeFulltext2BaseReuseOwner(s.cfg.UUID, s.fulltext2BaseReuseOwner)
+	s.fulltext2BaseReuseClosePending = ownerErr != nil
+	s.closeComplete = ownerErr == nil
+	return errors.Join(s.closeErr, ownerErr)
 }
 
 // CloseComplete certifies local teardown, not a successful remote generation

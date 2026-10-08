@@ -15,8 +15,10 @@
 package fulltext2
 
 import (
+	"context"
 	"math"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -67,6 +69,36 @@ func TestFulltext2SearchNewAndUnloaded(t *testing.T) {
 	s.Destroy()
 	require.Nil(t, s.idx)
 	require.False(t, s.loaded)
+}
+
+func TestBaseFileReusePrototypeIsDefaultOff(t *testing.T) {
+	plain := NewFulltext2Search(TableConfig{IndexTable: "idx"})
+	require.Nil(t, plain.basePool, "normal search construction must not enable the prototype")
+	token, err := InitializeBaseFileReuseOwner("cn-default-off-test")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, CloseBaseFileReuseOwner(token)) })
+	execution := NewFulltext2SearchForExecution(TableConfig{IndexTable: "idx"}, "cn-default-off-test")
+	t.Cleanup(execution.Destroy)
+	defaultFactory := newExperimentalFulltext2Search(TableConfig{IndexTable: "idx"}, 1024, 2)
+	t.Cleanup(defaultFactory.Destroy)
+	if experimentalBaseFileReuseEnabled {
+		require.NotNil(t, defaultFactory.basePool, "the private build tag must enable the experimental factory")
+		require.NotNil(t, defaultFactory.baseOwner, "the tagged factory must borrow a service owner")
+		require.NotNil(t, execution.basePool, "tagged SQL construction must borrow the experiment owner")
+	} else {
+		require.Nil(t, defaultFactory.basePool, "the experimental factory is inert without its private build tag")
+		require.Nil(t, defaultFactory.baseOwner)
+		require.Nil(t, execution.basePool, "ordinary SQL construction must remain pool-free")
+	}
+	pool := newBaseFilePool(1024, 2)
+	defer pool.Close()
+	experimental := newFulltext2SearchWithBasePool(TableConfig{IndexTable: "idx"}, pool)
+	require.Same(t, pool, experimental.basePool)
+	experimental.Destroy()
+	require.Nil(t, experimental.basePool, "destroy must detach a caller-owned experiment pool")
+	lease, err := pool.acquire(context.Background(), testPoolKey("owner", 1, "x"), testPoolFill(t, new(atomic.Int32), "x"))
+	require.NoError(t, err, "an injected pool remains owned by its caller")
+	lease.Release()
 }
 
 func TestFulltext2SearchLoad(t *testing.T) {
