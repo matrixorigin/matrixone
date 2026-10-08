@@ -16,8 +16,10 @@ package plan
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -139,7 +141,7 @@ func TestInsertRowAliasCorrelatedSubqueryIsRejectedBeforeBuild(t *testing.T) {
 		"insert into constraint_test.dept(deptno, dname, loc) values (1, 'Sales', 'NY') as n(id, name, location) "+
 			"on duplicate key update loc = (select cast(e.ename as json) from constraint_test.emp as e "+
 			"where e.deptno = constraint_test.dept.deptno)")
-	require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause)
+	require.ErrorContains(t, err, odkuRowAliasSubqueryCause)
 }
 
 func TestInsertRowAliasTargetCorrelatedSubqueryIsRejectedBeforeBuild(t *testing.T) {
@@ -147,7 +149,7 @@ func TestInsertRowAliasTargetCorrelatedSubqueryIsRejectedBeforeBuild(t *testing.
 		"insert into constraint_test.dept(deptno, dname, loc) values (999, 'Sales', 'NY') as n(id, name, location) "+
 			"on duplicate key update loc = (select e.ename from constraint_test.emp as e "+
 			"where e.deptno = coalesce(constraint_test.dept.deptno, 0))")
-	require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause)
+	require.ErrorContains(t, err, odkuRowAliasSubqueryCause)
 }
 
 func TestInsertRowAliasCandidateCorrelatedSubqueryIsRejectedBeforeBuild(t *testing.T) {
@@ -155,7 +157,7 @@ func TestInsertRowAliasCandidateCorrelatedSubqueryIsRejectedBeforeBuild(t *testi
 		"insert into constraint_test.dept(deptno, dname, loc) values (999, 'Sales', 'NY') as n(id, name, location) "+
 			"on duplicate key update loc = (select e.ename from constraint_test.emp as e "+
 			"where e.deptno = n.id)")
-	require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause)
+	require.ErrorContains(t, err, odkuRowAliasSubqueryCause)
 }
 
 func TestInsertRowAliasCandidateCorrelatedRejectsMultiRowInput(t *testing.T) {
@@ -163,7 +165,7 @@ func TestInsertRowAliasCandidateCorrelatedRejectsMultiRowInput(t *testing.T) {
 		"insert into constraint_test.dept(deptno, dname, loc) values (1, 'Sales', 'NY'), (1, 'Marketing', 'LA') as n(id, name, location) "+
 			"on duplicate key update loc = (select max(e.ename) from constraint_test.emp as e "+
 			"where e.deptno = n.id)")
-	require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause)
+	require.ErrorContains(t, err, odkuRowAliasSubqueryCause)
 }
 
 func TestInsertRowAliasNestedCandidateCorrelationIsRejected(t *testing.T) {
@@ -171,12 +173,12 @@ func TestInsertRowAliasNestedCandidateCorrelationIsRejected(t *testing.T) {
 		"insert into constraint_test.dept(deptno, dname, loc) values (999, 'Sales', 'NY') as n(id, name, location) "+
 			"on duplicate key update loc = (select (select q.ename from constraint_test.emp as q) "+
 			"from constraint_test.emp as e where e.deptno = n.id)")
-	require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause)
+	require.ErrorContains(t, err, odkuRowAliasSubqueryCause)
 }
 
-func TestInsertRowAliasIgnoresLocalAliasMatchingTarget(t *testing.T) {
+func TestLegacyOndupIgnoresLocalAliasMatchingTarget(t *testing.T) {
 	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
-		"insert into constraint_test.dept(deptno, dname, loc) values (999, 'Sales', 'NY') as n(id, name, location) "+
+		"insert into constraint_test.dept(deptno, dname, loc) values (999, 'Sales', 'NY') "+
 			"on duplicate key update loc = (select dept.ename from constraint_test.emp as dept "+
 			"where dept.deptno = (select 1))")
 	require.NoError(t, err)
@@ -188,7 +190,7 @@ func TestInsertRowAliasCorrelatedRejectsOrderedAssignmentComposition(t *testing.
 		"insert into constraint_test.dept(deptno, dname, loc) values (1, 'Sales', 'NY') as n(id, name, location) "+
 			"on duplicate key update dname = 'changed', loc = (select max(e.ename) from constraint_test.emp as e "+
 			"where e.deptno = constraint_test.dept.deptno)")
-	require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause)
+	require.ErrorContains(t, err, odkuRowAliasSubqueryCause)
 }
 
 func TestInsertRowAliasCorrelatedRejectsMultiRowInput(t *testing.T) {
@@ -196,7 +198,7 @@ func TestInsertRowAliasCorrelatedRejectsMultiRowInput(t *testing.T) {
 		"insert into constraint_test.dept(deptno, dname, loc) values (1, 'Sales', 'NY'), (1, 'Marketing', 'LA') as n(id, name, location) "+
 			"on duplicate key update loc = (select max(e.ename) from constraint_test.emp as e "+
 			"where e.deptno = constraint_test.dept.deptno)")
-	require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause)
+	require.ErrorContains(t, err, odkuRowAliasSubqueryCause)
 }
 
 func TestInsertRowAliasTargetCorrelatedSubqueryWithUniqueConflictIsRejected(t *testing.T) {
@@ -204,7 +206,7 @@ func TestInsertRowAliasTargetCorrelatedSubqueryWithUniqueConflictIsRejected(t *t
 		"insert into constraint_test.dept(deptno, dname, loc) values (999, 'Sales', 'NY') as n(id, name, location) "+
 			"on duplicate key update loc = (select e.ename from constraint_test.emp as e "+
 			"where e.deptno = constraint_test.dept.deptno)")
-	require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause)
+	require.ErrorContains(t, err, odkuRowAliasSubqueryCause)
 }
 
 func TestInsertRowAliasTargetCorrelatedSubqueryWithFakePrimaryIsRejected(t *testing.T) {
@@ -212,7 +214,7 @@ func TestInsertRowAliasTargetCorrelatedSubqueryWithFakePrimaryIsRejected(t *test
 		"insert into constraint_test.fake_pk_t(a, b) values (1, 'x') as n(k, v) "+
 			"on duplicate key update b = (select e.ename from constraint_test.emp as e "+
 			"where e.deptno = constraint_test.fake_pk_t.a)")
-	require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause)
+	require.ErrorContains(t, err, odkuRowAliasSubqueryCause)
 }
 
 func TestInsertRowAliasNestedCorrelationIsRejected(t *testing.T) {
@@ -221,7 +223,7 @@ func TestInsertRowAliasNestedCorrelationIsRejected(t *testing.T) {
 			"on duplicate key update loc = (select max(e.ename) from constraint_test.emp as e "+
 			"where e.deptno = (select max(e2.deptno) from constraint_test.emp as e2 "+
 			"where e2.deptno = constraint_test.dept.deptno))")
-	require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause)
+	require.ErrorContains(t, err, odkuRowAliasSubqueryCause)
 }
 
 func TestOndupUpdateBinderDetectsNestedTargetCorrelationBeforeBinding(t *testing.T) {
@@ -272,7 +274,7 @@ func TestInsertRowAliasNestedBareCandidateCorrelationIsRejected(t *testing.T) {
 		"insert into constraint_test.dept(deptno, dname, loc) values (1, 'Sales', 'NY'), (1, 'Marketing', 'LA') as n(k, incoming_a, incoming_b) "+
 			"on duplicate key update loc = (select (select q.ename from constraint_test.emp as q) "+
 			"from constraint_test.emp as s where s.deptno = k)")
-	require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause)
+	require.ErrorContains(t, err, odkuRowAliasSubqueryCause)
 }
 
 func TestInsertRowAliasNestedBareCandidateCorrelationSingleRowIsRejected(t *testing.T) {
@@ -280,12 +282,12 @@ func TestInsertRowAliasNestedBareCandidateCorrelationSingleRowIsRejected(t *test
 		"insert into constraint_test.dept(deptno, dname, loc) values (999, 'Sales', 'NY') as n(k, incoming_a, incoming_b) "+
 			"on duplicate key update loc = (select (select q.ename from constraint_test.emp as q) "+
 			"from constraint_test.emp as s where s.deptno = k)")
-	require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause)
+	require.ErrorContains(t, err, odkuRowAliasSubqueryCause)
 }
 
-func TestInsertRowAliasNestedBareLocalColumnDoesNotCountAsCandidate(t *testing.T) {
+func TestLegacyOndupNestedBareLocalColumnDoesNotCountAsCandidate(t *testing.T) {
 	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
-		"insert into constraint_test.dept(deptno, dname, loc) values (999, 'Sales', 'NY'), (1000, 'Marketing', 'LA') as n(empno, incoming_a, incoming_b) "+
+		"insert into constraint_test.dept(deptno, dname, loc) values (999, 'Sales', 'NY'), (1000, 'Marketing', 'LA') "+
 			"on duplicate key update loc = (select (select q.ename from constraint_test.emp as q) "+
 			"from constraint_test.emp as s where s.deptno = empno)")
 	require.NoError(t, err)
@@ -297,12 +299,12 @@ func TestInsertRowAliasNestedBareTargetCorrelationIsRejected(t *testing.T) {
 		"insert into constraint_test.single_idx_t(id, val) values (1, 10) as n(k, v) "+
 			"on duplicate key update val = (select (select q.empno from constraint_test.emp as q) "+
 			"from constraint_test.emp as s where s.empno = id)")
-	require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause)
+	require.ErrorContains(t, err, odkuRowAliasSubqueryCause)
 }
 
-func TestInsertRowAliasNestedBareLocalColumnDoesNotCountAsTarget(t *testing.T) {
+func TestLegacyOndupNestedBareLocalColumnDoesNotCountAsTarget(t *testing.T) {
 	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
-		"insert into constraint_test.single_idx_t(id, val) values (1, 10) as n(k, v) "+
+		"insert into constraint_test.single_idx_t(id, val) values (1, 10) "+
 			"on duplicate key update val = (select (select q.empno from constraint_test.emp as q) "+
 			"from constraint_test.self_ref as s where s.parent_id = id)")
 	require.NoError(t, err)
@@ -368,9 +370,9 @@ func TestInsertRowAliasImplicitGeneratedColumnsRemainInAlias(t *testing.T) {
 	}
 }
 
-func TestInsertRowAliasUncorrelatedScalarSubqueryDoesNotAddTargetLookup(t *testing.T) {
+func TestLegacyOndupUncorrelatedScalarSubqueryDoesNotAddTargetLookup(t *testing.T) {
 	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
-		"insert into constraint_test.dept(deptno, dname, loc) values (999, 'Sales', 'NY') as n(id, name, location) "+
+		"insert into constraint_test.dept(deptno, dname, loc) values (999, 'Sales', 'NY') "+
 			"on duplicate key update loc = (select max(e.deptno) from constraint_test.emp as e)")
 	require.NoError(t, err)
 
@@ -389,7 +391,7 @@ func TestInsertRowAliasTargetCorrelationThenUncorrelatedSubqueryKeepsBindings(t 
 		"insert into constraint_test.emp(empno, ename, job, sal, comm) values (999, 'Sales', 'X', 1, 2) as n(id, name, role, salary, commission) "+
 			"on duplicate key update sal = (select max(e.sal) from constraint_test.emp as e "+
 			"where e.empno = constraint_test.emp.empno), comm = (select max(e.sal) from constraint_test.emp as e)")
-	require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause)
+	require.ErrorContains(t, err, odkuRowAliasSubqueryCause)
 }
 
 func TestInsertRowAliasBinderRejectsAmbiguousAndInvalidNames(t *testing.T) {
@@ -668,4 +670,44 @@ func TestInsertRowAliasParamOffsetsHandleEmptyExpressions(t *testing.T) {
 	require.NoError(t, err)
 	insert := stmt.(*tree.Insert)
 	require.Nil(t, collectParamExprOffsets(insert.OnDuplicateUpdate[0].Expr))
+}
+
+// The approved row-alias subset excludes all RHS subqueries, including an
+// uncorrelated query whose cardinality would otherwise fail before DEDUP.
+func TestInsertRowAliasRejectsEveryRHSSubqueryBeforeFallback(t *testing.T) {
+	for _, target := range []struct{ name, prefix string }{
+		{"keyed", "insert into constraint_test.dept(deptno, dname, loc) values (1, 'Sales', 'NY') as n on duplicate key update loc = "},
+		{"no_key", "insert into constraint_test.insert_fk_no_key_c(id, pid) values (1, 2) as n on duplicate key update pid = "},
+	} {
+		for i, rhs := range []string{
+			"(select 1)", "coalesce((select 1), 0)",
+			"case when false then (select 1) else 2 end",
+			"exists (select 1)", "1 in (select 1)",
+			"(select (select 1))", "(select missing from nonexistent)",
+			"(select n.pid)", "(select ?)",
+		} {
+			t.Run(fmt.Sprintf("%s/%d", target.name, i), func(t *testing.T) {
+				sql := target.prefix + rhs
+				if rhs == "(select ?)" {
+					sql = "prepare rejected_alias from " + sql
+				}
+				_, err := runOneStmt(NewMockOptimizer(true), t, sql)
+				require.Error(t, err)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrUnsupportedDML), "%v", err)
+				require.EqualError(t, err, "unsupported DML: row-alias subqueries in on duplicate key update cannot be evaluated before duplicate-key action")
+			})
+		}
+	}
+}
+
+func TestInsertRowAliasDirectRHSAndLegacyNoKeySubqueryRemainSupported(t *testing.T) {
+	for _, sql := range []string{
+		"insert into constraint_test.dept(deptno, dname, loc) values (1, 'Sales', 'NY') as n on duplicate key update loc = coalesce(n.loc, 'X')",
+		"prepare direct_alias from insert into constraint_test.insert_fk_no_key_c(id, pid) values (?, ?) as n on duplicate key update pid = coalesce(n.pid + ?, 0)",
+		"insert into constraint_test.insert_fk_no_key_c(id, pid) values (1, 2) on duplicate key update pid = (select 1)",
+	} {
+		p, err := runOneStmt(NewMockOptimizer(true), t, sql)
+		require.NoError(t, err, sql)
+		require.NotNil(t, p, sql)
+	}
 }
