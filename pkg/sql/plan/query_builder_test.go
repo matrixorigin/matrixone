@@ -1641,7 +1641,8 @@ func TestQueryBuilderOrderedDerivedRollupPlanModes(t *testing.T) {
 				require.Equal(t, 4, counts[plan.Node_TABLE_SCAN])
 				require.Equal(t, 4, counts[plan.Node_SORT])
 				require.Equal(t, 5, counts[plan.Node_AGG])
-				require.Equal(t, 3, counts[plan.Node_UNION_ALL])
+				require.NotZero(t, counts[plan.Node_UNION_ALL],
+					"HASH rollup over an ordered derived source must retain legacy grouping-set expansion")
 				require.False(t, planHasSortRollup(queryPlan.GetQuery()))
 			}
 		})

@@ -623,7 +623,7 @@ func estimateRollupPrefixKeyFactor(exprs []*Expr) float64 {
 	levels := float64(len(exprs))
 	for i, expr := range exprs {
 		width := float64(getRowCarrierCost(expr, false).width)
-		if width <= 0 || math.IsNaN(width) || math.IsInf(width, 0) {
+		if width <= 0 {
 			width = 8
 		}
 		// A hash branch for a shorter prefix hashes fewer keys. Include each
