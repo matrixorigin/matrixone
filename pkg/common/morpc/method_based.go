@@ -61,10 +61,6 @@ type handleFuncCtx[REQ, RESP MethodBasedMessage] struct {
 	async      bool
 }
 
-type asyncRequest struct {
-	cancel context.CancelFunc
-}
-
 func (c *handleFuncCtx[REQ, RESP]) call(
 	ctx context.Context,
 	req REQ,
@@ -92,12 +88,13 @@ type methodBasedServer[REQ, RESP MethodBasedMessage] struct {
 	// admission gate and join count for this method server; its parent may
 	// otherwise destroy dependencies while an accepted handler is still using
 	// them.
-	asyncMu   sync.Mutex
-	asyncWG   sync.WaitGroup
-	asyncReqs map[*asyncRequest]struct{}
-	closeOnce sync.Once
-	closeErr  error
-	closed    bool
+	asyncMu     sync.Mutex
+	asyncWG     sync.WaitGroup
+	closeOnce   sync.Once
+	closeErr    error
+	closed      bool
+	asyncCtx    context.Context
+	cancelAsync context.CancelFunc
 
 	// respReleaseFunc is the function to release response.
 	respReleaseFunc func(Message)
@@ -132,11 +129,10 @@ func NewMessageHandler[REQ, RESP MethodBasedMessage](
 	opts ...HandlerOption[REQ, RESP],
 ) (MethodBasedServer[REQ, RESP], error) {
 	s := &methodBasedServer[REQ, RESP]{
-		logger:    getLogger(sid),
-		cfg:       &cfg,
-		pool:      pool,
-		handlers:  make(map[uint32]handleFuncCtx[REQ, RESP]),
-		asyncReqs: make(map[*asyncRequest]struct{}),
+		logger:   getLogger(sid),
+		cfg:      &cfg,
+		pool:     pool,
+		handlers: make(map[uint32]handleFuncCtx[REQ, RESP]),
 	}
 	s.cfg.Adjust()
 	for _, opt := range opts {
@@ -149,6 +145,7 @@ func NewMessageHandler[REQ, RESP MethodBasedMessage](
 		}
 	}
 
+	s.asyncCtx, s.cancelAsync = context.WithCancel(context.Background())
 	rpc, err := s.cfg.NewServer(
 		sid,
 		name,
@@ -158,6 +155,7 @@ func NewMessageHandler[REQ, RESP MethodBasedMessage](
 		WithServerDisableAutoCancelContext(),
 	)
 	if err != nil {
+		s.cancelAsync()
 		return nil, err
 	}
 	rpc.RegisterRequestHandler(s.onMessage)
@@ -175,19 +173,9 @@ func (s *methodBasedServer[REQ, RESP]) Close() error {
 		s.closed = true
 		s.asyncMu.Unlock()
 
+		// Cancel before closing ingress, which may itself wait on inline work.
+		s.cancelAsync()
 		s.closeErr = s.rpc.Close()
-
-		s.asyncMu.Lock()
-		cancels := make([]context.CancelFunc, 0, len(s.asyncReqs))
-		for req := range s.asyncReqs {
-			if req.cancel != nil {
-				cancels = append(cancels, req.cancel)
-			}
-		}
-		s.asyncMu.Unlock()
-		for _, cancel := range cancels {
-			cancel()
-		}
 		s.asyncWG.Wait()
 	})
 	return s.closeErr
@@ -258,7 +246,6 @@ func (s *methodBasedServer[REQ, RESP]) onMessage(
 	}
 
 	if handlerCtx.async {
-		admission := &asyncRequest{cancel: request.Cancel}
 		s.asyncMu.Lock()
 		if s.closed {
 			s.asyncMu.Unlock()
@@ -273,20 +260,18 @@ func (s *methodBasedServer[REQ, RESP]) onMessage(
 			}
 			return nil
 		}
-		if s.asyncReqs == nil {
-			s.asyncReqs = make(map[*asyncRequest]struct{})
+		var stopCancel func() bool
+		if request.Cancel != nil {
+			stopCancel = context.AfterFunc(s.asyncCtx, request.Cancel)
 		}
-		s.asyncReqs[admission] = struct{}{}
 		s.asyncWG.Add(1)
 		s.asyncMu.Unlock()
 
 		run := func() {
-			defer func() {
-				s.asyncMu.Lock()
-				delete(s.asyncReqs, admission)
-				s.asyncMu.Unlock()
-				s.asyncWG.Done()
-			}()
+			defer s.asyncWG.Done()
+			if stopCancel != nil {
+				defer stopCancel()
+			}
 			fn(request)
 		}
 		if err := ants.Submit(run); err != nil {

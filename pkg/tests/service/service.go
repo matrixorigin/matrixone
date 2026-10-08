@@ -391,46 +391,35 @@ func (c *testCluster) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if !c.mu.running {
-		if c.fileservices != nil {
-			c.fileservices.Close(context.Background())
-		}
-		err := c.releaseAdmissionLocked()
-		c.stopper.Stop()
-		return err
-	}
-
-	var closeErr error
-	// close all cn services first
-	err, complete := c.closeCNServices()
-	closeErr = errors.Join(closeErr, err)
+	// A diagnostic does not retain dependencies after local CN retirement.
+	complete, closeErr := c.closeCNServices()
 	if !complete {
 		return closeErr
 	}
 
 	// close all tn services
-	err, complete = c.closeTNServices()
-	closeErr = errors.Join(closeErr, err)
-	if !complete {
-		return closeErr
+	if err := c.closeTNServices(); err != nil {
+		return errors.Join(closeErr, err)
 	}
 
 	// close all log services
-	err, complete = c.closeLogServices()
-	closeErr = errors.Join(closeErr, err)
-	if !complete {
-		return closeErr
+	if err := c.closeLogServices(); err != nil {
+		return errors.Join(closeErr, err)
 	}
 
 	c.mu.running = false
 	if c.fileservices != nil {
 		c.fileservices.Close(context.Background())
 	}
-	closeErr = errors.Join(closeErr, c.releaseAdmissionLocked())
 	c.stopper.Stop()
+	if err := c.releaseAdmissionLocked(); err != nil {
+		return errors.Join(closeErr, err)
+	}
 
 	if !c.opt.keepData {
-		closeErr = errors.Join(closeErr, os.RemoveAll(c.opt.rootDataDir))
+		if err := os.RemoveAll(c.opt.rootDataDir); err != nil {
+			return errors.Join(closeErr, err)
+		}
 	}
 	return closeErr
 }
@@ -1561,43 +1550,49 @@ func (c *testCluster) startCNServices(ctx context.Context) error {
 }
 
 // closeTNServices closes all tn services.
-func (c *testCluster) closeTNServices() (error, bool) {
+func (c *testCluster) closeTNServices() error {
 	c.logger.Info("start to close tn services")
-	return closeServices(c.tn.svcs, c.logger, "tn")
+
+	for i, ds := range c.tn.svcs {
+		c.logger.Info("close tn service", zap.Int("index", i))
+		if err := ds.Close(); err != nil {
+			return err
+		}
+		c.logger.Info("dn service closed", zap.Int("index", i))
+	}
+
+	return nil
 }
 
 // closeLogServices closes all log services.
-func (c *testCluster) closeLogServices() (error, bool) {
+func (c *testCluster) closeLogServices() error {
 	defer logutil.LogClose(c.logger, "tests-framework/logservices")()
-	return closeServices(c.log.svcs, c.logger, "log")
-}
 
-func (c *testCluster) closeCNServices() (error, bool) {
-	defer logutil.LogClose(c.logger, "tests-framework/cnservices")()
-	return closeServices(c.cn.svcs, c.logger, "cn")
-}
-
-type clusterService interface {
-	Close() error
-	Status() ServiceStatus
-}
-
-func closeServices[T clusterService](services []T, logger *zap.Logger, kind string) (error, bool) {
-	var closeErr error
-	for i, service := range services {
-		logger.Info("close service", zap.String("kind", kind), zap.Int("index", i))
-		err := service.Close()
-		closeErr = errors.Join(closeErr, err)
-		if service.Status() != ServiceClosed {
-			if err == nil {
-				closeErr = errors.Join(closeErr,
-					moerr.NewInternalErrorNoCtxf("%s service %d did not reach closed state", kind, i))
-			}
-			return closeErr, false
+	for i, ls := range c.log.svcs {
+		c.logger.Info("close log service", zap.Int("index", i))
+		if err := ls.Close(); err != nil {
+			return err
 		}
-		logger.Info("service closed", zap.String("kind", kind), zap.Int("index", i))
+		c.logger.Info("log service closed", zap.Int("index", i))
 	}
-	return closeErr, true
+
+	return nil
+}
+
+func (c *testCluster) closeCNServices() (bool, error) {
+	defer logutil.LogClose(c.logger, "tests-framework/cnservices")()
+	var closeErr error
+	for i, cs := range c.cn.svcs {
+		c.logger.Info("close cn service", zap.Int("index", i))
+		if err := cs.Close(); err != nil {
+			closeErr = errors.Join(closeErr, err)
+			if cs.Status() != ServiceClosed {
+				return false, closeErr
+			}
+		}
+		c.logger.Info("cn service closed", zap.Int("index", i))
+	}
+	return true, closeErr
 }
 
 // getClusterState fetches cluster state from arbitrary hakeeper.

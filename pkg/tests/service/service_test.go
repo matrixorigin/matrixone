@@ -47,41 +47,6 @@ type lifecycleCN struct {
 	closes   int
 }
 
-type lifecycleClusterTN struct {
-	tnservice.Service
-	closeErr error
-	status   ServiceStatus
-	closes   int
-}
-
-func (s *lifecycleClusterTN) Close() error {
-	s.closes++
-	if s.closeErr == nil {
-		s.status = ServiceClosed
-	}
-	return s.closeErr
-}
-
-func (s *lifecycleClusterTN) Status() ServiceStatus { return s.status }
-func (s *lifecycleClusterTN) ID() string            { return "tn" }
-
-type lifecycleClusterLog struct {
-	*logservice.WrappedService
-	closeErr error
-	status   ServiceStatus
-	closes   int
-}
-
-func (s *lifecycleClusterLog) Close() error {
-	s.closes++
-	if s.closeErr == nil {
-		s.status = ServiceClosed
-	}
-	return s.closeErr
-}
-
-func (s *lifecycleClusterLog) Status() ServiceStatus { return s.status }
-
 func (s *lifecycleCN) Close() error {
 	s.closes++
 	return s.closeErr
@@ -112,17 +77,61 @@ func TestCNWrapperClosesAcquiredBackendBeforeStart(t *testing.T) {
 	}
 }
 
-func TestCNWrapperRefreshesCompletionCertificate(t *testing.T) {
-	failure := moerr.NewInternalErrorNoCtx("CN drain incomplete")
-	backend := &lifecycleCN{closeErr: failure}
-	owner := &cnService{status: ServiceInitialized, svc: backend}
-
-	require.ErrorIs(t, owner.Close(), failure)
-	require.Equal(t, ServiceInitialized, owner.Status())
-	backend.complete = true
-	require.ErrorIs(t, owner.Close(), failure)
-	require.Equal(t, ServiceClosed, owner.Status())
-	require.Equal(t, 1, backend.closes)
+func TestClusterCloseDistinguishesCompletionFromDiagnostics(t *testing.T) {
+	cnErr := moerr.NewInternalErrorNoCtx("completed CN diagnostic")
+	tnErr := moerr.NewInternalErrorNoCtx("incomplete TN close")
+	for _, tc := range []struct {
+		name      string
+		complete  bool
+		tnFailure bool
+	}{
+		{name: "completed diagnostic", complete: true},
+		{name: "incomplete CN"},
+		{name: "completed CN then incomplete TN", complete: true, tnFailure: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			first := &lifecycleCN{closeErr: cnErr, complete: tc.complete}
+			next := &lifecycleCN{}
+			fs := &trackedFileService{}
+			c := &testCluster{logger: zap.NewNop(), stopper: stopper.NewStopper(t.Name()), fileservices: &fileServices{s3FS: fs}}
+			c.opt.keepData = true
+			c.mu.running = true
+			c.cn.svcs = []CNService{&cnService{svc: first, status: ServiceStarted}, &cnService{svc: next, status: ServiceStarted}}
+			if tc.tnFailure {
+				c.tn.svcs = []TNService{&tnService{svc: &lifecycleTN{closeErr: tnErr}, status: ServiceStarted}}
+			}
+			require.NoError(t, c.acquireAdmissionLocked())
+			t.Cleanup(func() {
+				// No live service workers are created by this fixture.
+				require.NoError(t, c.releaseAdmissionLocked())
+				c.stopper.Stop()
+			})
+			for attempt := 0; attempt < 2; attempt++ {
+				err := c.Close()
+				require.ErrorIs(t, err, cnErr)
+				require.Equal(t, 1, first.closes)
+				if tc.complete {
+					require.Equal(t, ServiceClosed, c.cn.svcs[0].Status())
+					require.Equal(t, 1, next.closes)
+				} else {
+					require.Equal(t, ServiceStarted, c.cn.svcs[0].Status())
+					require.Zero(t, next.closes)
+				}
+				if tc.complete && !tc.tnFailure {
+					require.Equal(t, 1, fs.closes)
+					require.False(t, c.mu.running)
+					require.Nil(t, c.mu.admission)
+				} else {
+					require.Zero(t, fs.closes)
+					require.True(t, c.mu.running)
+					require.NotNil(t, c.mu.admission)
+				}
+				if tc.tnFailure {
+					require.ErrorIs(t, err, tnErr)
+				}
+			}
+		})
+	}
 }
 
 type partialBatchHAKeeperClient struct{}
@@ -160,80 +169,6 @@ func TestClusterAdmissionCoversServiceClusterLifecycle(t *testing.T) {
 	c.mu.running = true
 	require.NoError(t, c.Close())
 	require.Nil(t, c.mu.admission)
-}
-
-func newLifecycleTestCluster(t *testing.T) (*testCluster, *trackedFileService) {
-	shared := &trackedFileService{}
-	c := &testCluster{
-		t:       t,
-		logger:  zap.NewNop(),
-		stopper: stopper.NewStopper(t.Name()),
-		opt:     DefaultOptions(),
-		fileservices: &fileServices{
-			s3FS:  shared,
-			etlFS: shared,
-		},
-	}
-	c.opt.keepData = true
-	c.mu.running = true
-	require.NoError(t, c.acquireAdmissionLocked())
-	t.Cleanup(func() {
-		if c.mu.admission != nil {
-			_ = c.Close()
-		}
-	})
-	return c, shared
-}
-
-func TestClusterCloseRetainsOwnersWhenServiceDrainIsIncomplete(t *testing.T) {
-	failure := moerr.NewInternalErrorNoCtx("CN drain incomplete")
-	c, fs := newLifecycleTestCluster(t)
-	backend := &lifecycleCN{closeErr: failure}
-	cn := &cnService{status: ServiceInitialized, svc: backend}
-	tn := &lifecycleClusterTN{status: ServiceStarted}
-	log := &lifecycleClusterLog{status: ServiceStarted}
-	c.cn.svcs = []CNService{cn}
-	c.tn.svcs = []TNService{tn}
-	c.log.svcs = []LogService{log}
-
-	err := c.Close()
-	require.ErrorIs(t, err, failure)
-	require.Equal(t, 1, backend.closes)
-	require.Zero(t, tn.closes)
-	require.Zero(t, log.closes)
-	require.Zero(t, fs.closes)
-	require.True(t, c.mu.running)
-	require.NotNil(t, c.mu.admission)
-
-	// A later retry can finish the incomplete owner and then release the
-	// dependencies that were intentionally retained by the first attempt.
-	backend.complete = true
-	require.ErrorIs(t, c.Close(), failure)
-	require.Equal(t, 1, backend.closes)
-	require.Equal(t, 1, fs.closes)
-	require.Nil(t, c.mu.admission)
-	require.False(t, c.mu.running)
-}
-
-func TestClusterCloseContinuesAfterCompletedDiagnostic(t *testing.T) {
-	diagnostic := moerr.NewInternalErrorNoCtx("CN remote withdrawal diagnostic")
-	c, fs := newLifecycleTestCluster(t)
-	backend := &lifecycleCN{closeErr: diagnostic, complete: true}
-	cn := &cnService{status: ServiceInitialized, svc: backend}
-	tn := &lifecycleClusterTN{status: ServiceClosed}
-	log := &lifecycleClusterLog{status: ServiceClosed}
-	c.cn.svcs = []CNService{cn}
-	c.tn.svcs = []TNService{tn}
-	c.log.svcs = []LogService{log}
-
-	err := c.Close()
-	require.ErrorIs(t, err, diagnostic)
-	require.Equal(t, 1, backend.closes)
-	require.Equal(t, 1, tn.closes)
-	require.Equal(t, 1, log.closes)
-	require.Equal(t, 1, fs.closes)
-	require.Nil(t, c.mu.admission)
-	require.False(t, c.mu.running)
 }
 
 func TestInitTNServicesRetainsPublishedOwnersOnPartialBatchFailure(t *testing.T) {
