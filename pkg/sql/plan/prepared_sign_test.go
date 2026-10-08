@@ -190,7 +190,7 @@ func TestPreparedEltRebindsRuntimeNumericDomain(t *testing.T) {
 
 func TestPreparedEltRebindsNumericTextWithStringRuntimeMetadata(t *testing.T) {
 	ctx := context.Background()
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare stmt_elt_text_metadata from 'select elt(?, ''a'', ''b'', ''c'')'")
 	require.NoError(t, err)
 	preparePlan := prepared.GetDcl().GetPrepare().Plan

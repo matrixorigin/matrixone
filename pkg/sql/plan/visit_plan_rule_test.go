@@ -2533,7 +2533,7 @@ func TestFillValuesOfParamsMaterializesNativePrecisionSources(t *testing.T) {
 	ctx := context.Background()
 	for _, name := range []string{"round", "truncate"} {
 		t.Run(name, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t,
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 				"prepare stmt_native_precision from 'select "+name+"(1.25, ?)'")
 			require.NoError(t, err)
 			for _, test := range []struct {

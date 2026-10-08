@@ -1533,7 +1533,7 @@ func TestPreparedMathStringParametersRebindToNumericOverloads(t *testing.T) {
 		{name: "nested/mod plus integer", sql: "prepare stmt_nested_mod_int from 'select mod(? + 0, 2)'", fn: "mod", value: int64(2), runtimeType: types.T_int64.ToType(), want: types.T_int64},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
 			require.NoError(t, err)
 			preparedPlan := prepared.GetDcl().GetPrepare().Plan
 			if test.directEligible {
@@ -1579,9 +1579,10 @@ func TestMathStringPlannerBindsLiteralsAndVarcharColumnsToDouble(t *testing.T) {
 		t.Run(query.name, func(t *testing.T) {
 			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, query.sql, 1)
 			require.NoError(t, err)
-			built, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+			proc := newPlanTestProcess(t)
+			built, err := BuildPlan(NewMockCompilerContext(false, proc), stmt, false)
 			require.NoError(t, err)
-			optimized, err := NewBaseOptimizer(NewMockCompilerContext(false)).Optimize(stmt, false)
+			optimized, err := NewBaseOptimizer(NewMockCompilerContext(false, proc)).Optimize(stmt, false)
 			require.NoError(t, err)
 			optimizedPlan := &planpb.Plan{Plan: &planpb.Plan_Query{Query: optimized}}
 
@@ -1667,7 +1668,8 @@ func TestPreparedMathStringValueAndPrecisionRoles(t *testing.T) {
 
 	for _, name := range []string{"round", "truncate", "ceil", "floor"} {
 		t.Run(name+" rejects non-integer precision without DOUBLE prefix", func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t,
+			proc := newPlanTestProcess(t)
+			prepared, err := runOneStmt(NewMockOptimizer(false, proc), t,
 				"prepare stmt_math_precision from 'select "+name+"(?, ?)'")
 			require.NoError(t, err)
 			preparePlan := prepared.GetDcl().GetPrepare().Plan
@@ -1690,7 +1692,7 @@ func TestPreparedMathStringValueAndPrecisionRoles(t *testing.T) {
 			require.Equal(t, int32(types.T_text), precisionCast.GetF().Args[0].Typ.Id,
 				"precision must retain the INT64 cast's text source, not a DOUBLE source")
 			require.Equal(t, precision, precisionCast.GetF().Args[0].GetLit().GetSval())
-			direct, err := runOneStmt(NewMockOptimizer(false), t,
+			direct, err := runOneStmt(NewMockOptimizer(false, proc), t,
 				fmt.Sprintf("select %s('1.5', '%s')", name, precision))
 			require.NoError(t, err)
 			directFn := findPlanFunctionExpr(direct, name)
@@ -1719,7 +1721,7 @@ func TestPreparedMathStringValueAndPrecisionRoles(t *testing.T) {
 
 		if name == "round" {
 			t.Run(name+" precision keeps actual source and ordinary cast", func(t *testing.T) {
-				prepared, err := runOneStmt(NewMockOptimizer(false), t,
+				prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 					"prepare stmt_precision_sources from 'select "+name+"(1.25, ?)'")
 				require.NoError(t, err)
 				preparePlan := prepared.GetDcl().GetPrepare().Plan
@@ -1773,7 +1775,7 @@ func TestPreparedMathStringValueAndPrecisionRoles(t *testing.T) {
 		}
 
 		t.Run(name+" value marker still uses numeric-prefix source", func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t,
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 				"prepare stmt_math_value from 'select "+name+"(?, 0)'")
 			require.NoError(t, err)
 			filled, _, err := FillValuesOfParamsInPlanWithSpecialization(ctx,
@@ -1794,7 +1796,7 @@ func TestPreparedMathStringValueAndPrecisionRoles(t *testing.T) {
 		})
 
 		t.Run(name+" value runtime domains keep precision separate", func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t,
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 				"prepare stmt_math_runtime_domains from 'select "+name+"(?, ?)'")
 			require.NoError(t, err)
 			preparePlan := prepared.GetDcl().GetPrepare().Plan
@@ -1856,7 +1858,7 @@ func TestPreparedMathStringValueAndPrecisionRoles(t *testing.T) {
 		{function: "truncate", sql: "prepare stmt_nested_truncate_precision from 'select abs(truncate(1, ?))'"},
 	} {
 		t.Run("nested ABS does not upgrade "+tc.function+" precision", func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t, tc.sql)
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, tc.sql)
 			require.NoError(t, err)
 			filled, _, err := FillValuesOfParamsInPlanWithSpecialization(ctx,
 				prepared.GetDcl().GetPrepare().Plan, []any{stringParam("1.5tail")})
@@ -1886,7 +1888,7 @@ func TestPreparedMathStringValueAndPrecisionRoles(t *testing.T) {
 		{name: "floor precision selector", sql: "prepare stmt_floor_selector from 'select floor(12.34, if(true, cast(? as double), 0e0))'", fn: "floor", want: "12.34"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t, tc.sql)
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, tc.sql)
 			require.NoError(t, err)
 			filled, _, err := FillValuesOfParamsInPlanWithSpecialization(ctx,
 				prepared.GetDcl().GetPrepare().Plan, []any{stringParam("1.5tail")})
@@ -1956,7 +1958,7 @@ func TestPreparedMathStringValueAndPrecisionRoles(t *testing.T) {
 		"prepare stmt_mod_right from 'select mod(2, ?)'",
 	} {
 		t.Run(sql, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t, sql)
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, sql)
 			require.NoError(t, err)
 			filled, _, err := FillValuesOfParamsInPlanWithSpecialization(ctx,
 				prepared.GetDcl().GetPrepare().Plan, []any{stringParam("1.5tail")})
@@ -1976,7 +1978,7 @@ func TestPreparedMathStringValueAndPrecisionRoles(t *testing.T) {
 		})
 	}
 	t.Run("shared ParamRef keeps value and precision source channels isolated", func(t *testing.T) {
-		prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 			"prepare stmt_shared_param_roles from 'select round(abs(?), ?)'")
 		require.NoError(t, err)
 		preparePlan := prepared.GetDcl().GetPrepare().Plan
@@ -2002,7 +2004,7 @@ func TestPreparedMathStringValueAndPrecisionRoles(t *testing.T) {
 		require.ErrorContains(t, evalErr, "invalid argument cast to int, bad value 1.5tail")
 	})
 	t.Run("same prepared template rechecks incomplete token after mode flip", func(t *testing.T) {
-		prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 			"prepare stmt_mode_flip from 'select abs(?)'")
 		require.NoError(t, err)
 		filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx,
@@ -2033,7 +2035,8 @@ func TestPreparedMathStringValueAndPrecisionRoles(t *testing.T) {
 	})
 	for _, name := range []string{"round", "truncate"} {
 		t.Run(name+" explicit value CAST matches direct SQL", func(t *testing.T) {
-			directPlan, err := runOneStmt(NewMockOptimizer(false), t,
+			proc := newPlanTestProcess(t)
+			directPlan, err := runOneStmt(NewMockOptimizer(false, proc), t,
 				"select "+name+"(cast('1.5tail' as signed), 0)")
 			require.NoError(t, err)
 			directFn := findPlanFunctionExpr(directPlan, name)
@@ -2050,7 +2053,7 @@ func TestPreparedMathStringValueAndPrecisionRoles(t *testing.T) {
 			require.Equal(t, types.T_int64, directResult.typ)
 			require.Equal(t, int64(1), directResult.value)
 
-			prepared, err := runOneStmt(NewMockOptimizer(false), t,
+			prepared, err := runOneStmt(NewMockOptimizer(false, proc), t,
 				"prepare stmt_explicit_value_cast_"+name+
 					" from 'select "+name+"(cast(? as signed), ?)'")
 			require.NoError(t, err)
@@ -2081,7 +2084,7 @@ func TestPreparedMathStringValueAndPrecisionRoles(t *testing.T) {
 		})
 	}
 	t.Run("ceil precision explicit char remains strict", func(t *testing.T) {
-		prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 			"prepare stmt_ceil_explicit_char from 'select ceil(123.456, cast(? as char))'")
 		require.NoError(t, err)
 		filled, _, err := FillValuesOfParamsInPlanWithSpecialization(ctx,
