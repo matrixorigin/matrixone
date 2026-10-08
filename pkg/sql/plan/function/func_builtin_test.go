@@ -2192,6 +2192,65 @@ func TestSerialExtract(t *testing.T) {
 	}
 }
 
+func TestSerialExtractBinaryReturnType(t *testing.T) {
+	legacy := types.New(types.T_binary, 255, -1)
+	legacy.Charset = types.CharsetLegacy
+	versioned := types.New(types.T_binary, 255, -1)
+	versioned.CollationVersion = types.CollationVersionV1
+	for _, target := range []types.Type{
+		types.New(types.T_binary, 1, -1),
+		types.New(types.T_binary, 255, -1),
+		types.New(types.T_binary, 255, 0),
+		types.New(types.T_varbinary, 255, 0),
+		types.New(types.T_decimal128, 16, 6),
+		legacy,
+		versioned,
+	} {
+		inputs := []types.Type{types.T_varchar.ToType(), types.T_int64.ToType(), target}
+		fn, err := GetFunctionByName(t.Context(), "serial_extract", inputs)
+		require.NoError(t, err)
+		want := target
+		if want.Oid == types.T_binary && want.Scale == -1 {
+			want.Scale = 0
+		}
+		require.Equal(t, want, fn.GetReturnType())
+		require.Equal(t, target, inputs[2])
+	}
+}
+
+func TestSerialExtractBinaryBytes(t *testing.T) {
+	values := []string{"", "AB", "AB\x00", "\x00\xff\x00\\'", strings.Repeat("Z", 255), ""}
+	nulls := []bool{false, false, false, false, false, true}
+	packed := make([]string, len(values))
+	packer := types.NewPacker()
+	defer packer.Close()
+	for i, value := range values {
+		packer.Reset()
+		if nulls[i] {
+			packer.EncodeNull()
+		} else {
+			packer.EncodeStringType([]byte(value))
+		}
+		packed[i] = string(packer.Bytes())
+	}
+	proc := testutil.NewProcess(t)
+	target := types.New(types.T_binary, 255, -1)
+	resultType := types.New(types.T_binary, 255, 0)
+	for _, constantIndex := range []bool{false, true} {
+		index := NewFunctionTestInput(types.T_int64.ToType(), make([]int64, len(values)), nil)
+		if constantIndex {
+			index = NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, nil)
+		}
+		fc := NewFunctionTestCase(proc, []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), packed, nil),
+			index,
+			NewFunctionTestConstInput(target, []string{""}, nil),
+		}, NewFunctionTestResult(resultType, false, values, nulls), builtInSerialExtract)
+		ok, info := fc.RunAndFree()
+		require.True(t, ok, info)
+	}
+}
+
 func TestSerialExtractNegativeIndexReturnsError(t *testing.T) {
 	ps := types.NewPacker()
 	defer ps.Close()
