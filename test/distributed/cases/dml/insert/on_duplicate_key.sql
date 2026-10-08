@@ -256,7 +256,7 @@ insert into t_odku_row_alias values (1, 5, 0), (1, 6, 0) as n(x, y, z) on duplic
 
 delete from t_odku_row_alias;
 insert into t_odku_row_alias values (1, 10, 0);
--- @regex("row-alias subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
+-- @regex("target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
 insert into t_odku_row_alias (id, a, b) select 1, 5, 0 on duplicate key update b = (select s.y + t_odku_row_alias.a from t_odku_scope_source as s where s.x = t_odku_row_alias.id);
 
 -- A target-correlated subquery is rejected even when the source alias does not
