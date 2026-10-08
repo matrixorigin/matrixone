@@ -202,6 +202,14 @@ func regexpDeclaredStringType(expr *Expr) types.Type {
 	case "repeat":
 		if len(fn.Args) == 2 {
 			count, signed, known := regexpConstantInteger(fn.Args[1])
+			// MySQL declares MAX_BLOB_WIDTH for NULL or nonconstant counts,
+			// even when the source is empty. Runtime emptiness cannot narrow it.
+			if !known {
+				if types.StaticStringDomain(typ) == types.StringDomainBinary {
+					return types.T_blob.ToType()
+				}
+				return types.T_text.ToType()
+			}
 			source := parameters[0]
 			bound, bounded := function.StringResultByteBound(source)
 			// A zero source contributes no declared width even when the signed

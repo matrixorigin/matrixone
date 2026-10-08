@@ -917,3 +917,42 @@ SELECT REGEXP_LIKE(CAST(LEFT(LEFT('abc',3),CEIL(65536.1)) AS BINARY),'a');
 Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
 SELECT REGEXP_LIKE(CAST(SUBSTRING(LEFT('abc',3),1,CEIL(65536.1)) AS BINARY),'a');
 Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(CAST(REPEAT('',NULL) AS BINARY),'a');
+➤ REGEXP_LIKE(cast(REPEAT(, null) as binary), a)[-7,1,0]  𝄀
+null
+SELECT REGEXP_INSTR(CAST(REPEAT('',NULL) AS BINARY),'a');
+➤ REGEXP_INSTR(cast(REPEAT(, null) as binary), a)[-5,64,0]  𝄀
+null
+SELECT REGEXP_SUBSTR(CAST(REPEAT('',NULL) AS BINARY),'a');
+➤ REGEXP_SUBSTR(cast(REPEAT(, null) as binary), a)[-4,2147483647,0]  𝄀
+null
+SELECT REGEXP_REPLACE(CAST(REPEAT('',NULL) AS BINARY),'a','x');
+➤ REGEXP_REPLACE(cast(REPEAT(, null) as binary), a, x)[-4,2147483647,0]  𝄀
+null
+SELECT REGEXP_LIKE(CAST(REPEAT('',CAST(NULL AS SIGNED)) AS BINARY),'a');
+➤ REGEXP_LIKE(cast(REPEAT(, cast(null as signed)) as binary), a)[-7,1,0]  𝄀
+null
+SELECT REGEXP_LIKE(CAST(REPEAT(CAST('abc' AS CHAR(0)),NULL) AS BINARY),'a');
+➤ REGEXP_LIKE(cast(REPEAT(cast(abc as char(0)), null) as binary), a)[-7,1,0]  𝄀
+null
+SELECT REGEXP_LIKE(CAST(REPEAT(CAST('' AS BINARY(0)),NULL) AS BINARY),'a');
+➤ REGEXP_LIKE(cast(REPEAT(cast( as binary(0)), null) as binary), a)[-7,1,0]  𝄀
+null
+PREPARE repeat_unknown FROM 'SELECT REGEXP_LIKE(CAST(REPEAT('''',?) AS BINARY),''a'')';
+SET @repeat_count = NULL;
+EXECUTE repeat_unknown USING @repeat_count;
+➤ REGEXP_LIKE(cast(REPEAT(, ?) as binary), a)[-7,1,0]  𝄀
+null
+SET @repeat_count = -1;
+EXECUTE repeat_unknown USING @repeat_count;
+➤ REGEXP_LIKE(cast(REPEAT(, ?) as binary), a)[-7,1,0]  𝄀
+0
+SET @repeat_count = 0;
+EXECUTE repeat_unknown USING @repeat_count;
+➤ REGEXP_LIKE(cast(REPEAT(, ?) as binary), a)[-7,1,0]  𝄀
+0
+SET @repeat_count = 1;
+EXECUTE repeat_unknown USING @repeat_count;
+➤ REGEXP_LIKE(cast(REPEAT(, ?) as binary), a)[-7,1,0]  𝄀
+0
+DEALLOCATE PREPARE repeat_unknown;

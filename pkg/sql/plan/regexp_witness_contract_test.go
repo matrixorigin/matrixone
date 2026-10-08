@@ -22,6 +22,7 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
 
@@ -43,6 +44,11 @@ func TestRegexpWitnessDeclarationConservation(t *testing.T) {
 		{"substring(left(@str_var,3),1,ceil(65536.1))", true},
 		{"repeat('',0)", true},
 		{"repeat('',1)", true},
+		{"repeat('',null)", false},
+		{"repeat('',cast(null as signed))", false},
+		{"repeat('',@n)", false},
+		{"repeat(cast('abc' as char(0)),null)", false},
+		{"repeat(cast('' as binary(0)),null)", false},
 		{"repeat('abc',-1)", false},
 		{"repeat(@str_var,-1)", false},
 		{"repeat(cast(null as char(0)),-1)", true},
@@ -64,6 +70,37 @@ func TestRegexpWitnessDeclarationConservation(t *testing.T) {
 				})
 			}
 		}
+	}
+}
+
+func TestRegexpRepeatUnknownCountPrepare(t *testing.T) {
+	for _, consumer := range []string{
+		"regexp_like(cast(repeat('',?) as binary),'a')",
+		"regexp_instr(cast(repeat('',?) as binary),'a')",
+		"regexp_substr(cast(repeat('',?) as binary),'a')",
+		"regexp_replace(cast(repeat('',?) as binary),'a','x')",
+	} {
+		query := "prepare repeat_unknown from 'select " + strings.ReplaceAll(consumer, "'", "''") + "'"
+		t.Run(query, func(t *testing.T) {
+			_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, query)
+			require.NoError(t, err, "unknown marker count must retain an unbounded declaration")
+		})
+	}
+}
+
+func TestRegexpRepeatUnknownCountDeclaredType(t *testing.T) {
+	for _, source := range []string{"repeat('',null)", "repeat('',cast(null as signed))", "repeat('',@n)"} {
+		t.Run(source, func(t *testing.T) {
+			p, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "select "+source)
+			require.NoError(t, err)
+			q := p.GetQuery()
+			expr := q.Nodes[q.Steps[len(q.Steps)-1]].ProjectList[0]
+			declared := regexpDeclaredStringType(expr)
+			require.Equal(t, types.T_text, declared.Oid, "unknown count cannot declare zero VARCHAR")
+			_, bounded := function.StringResultByteBound(declared)
+			require.False(t, bounded)
+			require.Equal(t, declared, regexpDeclaredStringType(DeepCopyExpr(expr)))
+		})
 	}
 }
 
