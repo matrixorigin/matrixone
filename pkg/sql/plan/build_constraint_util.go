@@ -763,7 +763,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		astSlt = stmt.Rows
 
 		subCtx := NewBindContext(builder, bindCtx)
-		subCtx.numericProjectionTypes = insertProjectionTypes(insertColumns, tableDef)
+		subCtx.numericProjectionTypes = insertProjectionTypes(insertColumns, tableDef, builder.isInsertIgnore)
 		info.rootId, err = builder.bindSelect(astSlt, subCtx, false)
 		if err != nil {
 			return false, nil, nil, err
@@ -774,7 +774,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		astSlt = slt.Select
 
 		subCtx := NewBindContext(builder, bindCtx)
-		subCtx.numericProjectionTypes = insertProjectionTypes(insertColumns, tableDef)
+		subCtx.numericProjectionTypes = insertProjectionTypes(insertColumns, tableDef, builder.isInsertIgnore)
 		info.rootId, err = builder.bindSelect(astSlt, subCtx, false)
 		if err != nil {
 			return false, nil, nil, err
@@ -2083,11 +2083,8 @@ func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colTyp
 		// invalid-input error before the statement's strict/IGNORE policy and
 		// warning sink are available.
 		if numVal.ValType == tree.P_char {
-			value := numVal.String()
-			if _, outOfRange := types.IsTimeStringOutOfInternalRange(value, colType.Scale); outOfRange {
-				expr := MakePlan2StringConstExprWithType(value)
-				return forceAssignmentCastExprWithProcess(proc.Ctx, expr, makePlan2Type(colType), isIgnore, proc)
-			}
+			expr := MakePlan2StringConstExprWithType(numVal.String())
+			return forceAssignmentCastExprWithProcess(proc.Ctx, expr, makePlan2Type(colType), isIgnore, proc)
 		}
 		canInsert, isnull, num, err := util.SetInsertValueTime(proc, numVal, colType)
 		if err != nil || !canInsert {
@@ -2108,6 +2105,10 @@ func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colTyp
 
 		return MakePlan2DateConstExprWithType(int32(num)), err
 	case types.T_datetime:
+		if numVal.ValType == tree.P_char {
+			expr := MakePlan2StringConstExprWithType(numVal.String())
+			return forceAssignmentCastExprWithProcess(proc.Ctx, expr, makePlan2Type(colType), isIgnore, proc)
+		}
 		canInsert, isnull, num, err := util.SetInsertValueDateTime(proc, numVal, colType)
 		if err != nil || !canInsert {
 			return nil, err
@@ -2117,6 +2118,10 @@ func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colTyp
 		}
 		return MakePlan2DateTimeConstExprWithType(int64(num)), err
 	case types.T_timestamp:
+		if numVal.ValType == tree.P_char {
+			expr := MakePlan2StringConstExprWithType(numVal.String())
+			return forceAssignmentCastExprWithProcess(proc.Ctx, expr, makePlan2Type(colType), isIgnore, proc)
+		}
 		canInsert, isnull, num, err := util.SetInsertValueTimeStamp(proc, numVal, colType)
 		if err != nil || !canInsert {
 			return nil, err
@@ -2198,6 +2203,20 @@ func buildValueScan(
 			binder := NewDefaultBinder(builder.GetContext(), nil, nil, sourceType, nil)
 			binder.builder = builder
 			for _, r := range slt.Rows {
+				// Keep legacy implicit TIMESTAMP NULL semantics consistent with
+				// the main INSERT value-scan path. This must run before the
+				// literal fast path, which otherwise materializes a NULL value.
+				if isNullAstExpr(r[i]) {
+					defExpr, err = buildLegacyTimestampNullAssignment(builder.compCtx, col)
+					if err != nil {
+						return nil, err
+					}
+					if defExpr != nil {
+						hasLocalDefaultRefs = hasLocalDefaultRefs || exprHasLocalColumnRef(defExpr)
+						rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, &plan.RowsetExpr{Expr: defExpr})
+						continue
+					}
+				}
 				if nv, ok := r[i].(*tree.NumVal); ok && builder.isInsertIgnore {
 					expr, handled, err := makeInsertIgnoreMySQLSpecialTypeConstExpr(builder.GetContext(), nv, col.Typ)
 					if err != nil {

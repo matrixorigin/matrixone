@@ -16,7 +16,9 @@ package publication
 
 import (
 	"context"
+	"fmt"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/cdc"
@@ -112,50 +114,65 @@ func TestResult_Err(t *testing.T) {
 
 func TestParseUpstreamConn(t *testing.T) {
 	tests := []struct {
-		name        string
-		connStr     string
-		wantAccount string
-		wantUser    string
-		wantHost    string
-		wantPort    int
-		wantErr     bool
-		errContains string
+		name         string
+		connStr      string
+		wantAccount  string
+		wantUser     string
+		wantPassword string
+		wantHost     string
+		wantPort     int
+		wantErr      bool
+		errContains  string
 	}{
 		{
-			name:        "valid connection with account",
-			connStr:     "mysql://acc#user:password@127.0.0.1:6001",
-			wantAccount: "acc",
-			wantUser:    "user",
-			wantHost:    "127.0.0.1",
-			wantPort:    6001,
-			wantErr:     false,
+			name:         "valid connection with account",
+			connStr:      "mysql://acc#user:password@127.0.0.1:6001",
+			wantAccount:  "acc",
+			wantUser:     "user",
+			wantPassword: "password",
+			wantHost:     "127.0.0.1",
+			wantPort:     6001,
+			wantErr:      false,
 		},
 		{
-			name:        "valid connection without account",
-			connStr:     "mysql://user:password@127.0.0.1:6001",
-			wantAccount: "",
-			wantUser:    "user",
-			wantHost:    "127.0.0.1",
-			wantPort:    6001,
-			wantErr:     false,
+			name:         "valid connection without account",
+			connStr:      "mysql://user:password@127.0.0.1:6001",
+			wantAccount:  "",
+			wantUser:     "user",
+			wantPassword: "password",
+			wantHost:     "127.0.0.1",
+			wantPort:     6001,
+			wantErr:      false,
 		},
 		{
-			name:        "valid connection with complex password",
-			connStr:     "mysql://acc#user:pass:word@localhost:3306",
-			wantAccount: "acc",
-			wantUser:    "user",
-			wantHost:    "localhost",
-			wantPort:    3306,
-			wantErr:     false,
+			name:         "valid connection with complex password",
+			connStr:      "mysql://acc#user:pass:word@localhost:3306",
+			wantAccount:  "acc",
+			wantUser:     "user",
+			wantPassword: "pass:word",
+			wantHost:     "localhost",
+			wantPort:     3306,
+			wantErr:      false,
 		},
 		{
-			name:        "valid connection with query parameters",
-			connStr:     "mysql://acc#user:password@127.0.0.1:6001/dbname?param=value",
-			wantAccount: "acc",
-			wantUser:    "user",
-			wantHost:    "127.0.0.1",
-			wantPort:    6001,
-			wantErr:     false,
+			name:         "valid connection with query parameters",
+			connStr:      "mysql://acc#user:password@127.0.0.1:6001/dbname?param=value",
+			wantAccount:  "acc",
+			wantUser:     "user",
+			wantPassword: "password",
+			wantHost:     "127.0.0.1",
+			wantPort:     6001,
+			wantErr:      false,
+		},
+		{
+			name:         "valid connection with colon in standard password",
+			connStr:      "mysql://user:pa:ss:word@127.0.0.1:6001",
+			wantAccount:  "",
+			wantUser:     "user",
+			wantPassword: "pa:ss:word",
+			wantHost:     "127.0.0.1",
+			wantPort:     6001,
+			wantErr:      false,
 		},
 		{
 			name:        "empty connection string",
@@ -174,6 +191,12 @@ func TestParseUpstreamConn(t *testing.T) {
 			connStr:     "mysql://user:password",
 			wantErr:     true,
 			errContains: "missing '@'",
+		},
+		{
+			name:        "missing user colon",
+			connStr:     "mysql://user@host:3306",
+			wantErr:     true,
+			errContains: "invalid user:password format",
 		},
 		{
 			name:        "empty user with account",
@@ -233,6 +256,7 @@ func TestParseUpstreamConn(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantAccount, config.Account)
 			assert.Equal(t, tt.wantUser, config.User)
+			assert.Equal(t, tt.wantPassword, config.Password)
 			assert.Equal(t, tt.wantHost, config.Host)
 			assert.Equal(t, tt.wantPort, config.Port)
 			assert.NotEmpty(t, config.Timeout)
@@ -444,78 +468,200 @@ func TestUpstreamConnConfig(t *testing.T) {
 }
 
 func TestUpstreamExecutor_ExecWithRetry(t *testing.T) {
-	t.Run("context cancelled", func(t *testing.T) {
-		e := &UpstreamExecutor{
-			retryTimes: 3,
-		}
-		e.initRetryPolicy(&mockClassifier{retryable: true})
-
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel() // Cancel immediately
-
-		_, _, err := e.execWithRetry(ctx, nil, 0, func(ctx context.Context) (*Result, error) {
-			return nil, assert.AnError
+	for _, timeout := range []time.Duration{0, 2 * time.Second} {
+		t.Run("context cancelled/"+timeout.String(), func(t *testing.T) {
+			e := &UpstreamExecutor{retryTimes: 3}
+			e.initRetryPolicy(DefaultClassifier{})
+			e.retryPolicy.Backoff = nil
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			cancel()
+			calls := 0
+			result, cleanup, err := e.execWithRetry(ctx, nil, timeout, func(context.Context) (*Result, error) {
+				calls++
+				return nil, assert.AnError
+			})
+			if cleanup != nil {
+				t.Cleanup(cleanup)
+			}
+			require.ErrorIs(t, err, context.Canceled)
+			require.Nil(t, result)
+			require.Nil(t, cleanup)
+			require.Zero(t, calls)
 		})
-		assert.Error(t, err)
-	})
+	}
 
-	t.Run("active routine paused", func(t *testing.T) {
-		e := &UpstreamExecutor{
-			retryTimes: 3,
-		}
-		e.initRetryPolicy(&mockClassifier{retryable: true})
-
-		ar := NewActiveRoutine()
-		ar.ClosePause() // Close pause channel
-
-		_, _, err := e.execWithRetry(context.Background(), ar, 0, func(ctx context.Context) (*Result, error) {
-			return nil, assert.AnError
+	for _, signal := range []string{"cancelled", "deadline"} {
+		t.Run("parent stop after transient failure/"+signal, func(t *testing.T) {
+			for _, timeout := range []time.Duration{0, 2 * time.Second} {
+				t.Run(timeout.String(), func(t *testing.T) {
+					synctest.Test(t, func(t *testing.T) {
+						ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+						defer cancel()
+						e := &UpstreamExecutor{retryTimes: 3, retryDuration: time.Minute}
+						e.initRetryPolicy(DefaultClassifier{})
+						e.retryPolicy.Backoff = nil
+						wantErr := context.Canceled
+						if signal == "deadline" {
+							wantErr = context.DeadlineExceeded
+							e.retryPolicy.Backoff = ExponentialBackoff{Base: time.Hour}
+						}
+						var attemptCtx context.Context
+						calls := 0
+						result, cleanup, err := e.execWithRetry(ctx, nil, timeout, func(child context.Context) (*Result, error) {
+							calls++
+							attemptCtx = child
+							if signal == "cancelled" {
+								cancel()
+							}
+							return nil, moerr.NewInternalErrorNoCtx("connection reset")
+						})
+						if cleanup != nil {
+							t.Cleanup(cleanup)
+						}
+						require.ErrorIs(t, err, wantErr)
+						require.Nil(t, result)
+						require.Nil(t, cleanup)
+						require.Equal(t, 1, calls)
+						require.ErrorIs(t, attemptCtx.Err(), wantErr)
+					})
+				})
+			}
 		})
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "paused")
-	})
+	}
 
-	t.Run("active routine cancelled", func(t *testing.T) {
-		e := &UpstreamExecutor{
-			retryTimes: 3,
+	for _, tc := range []struct {
+		name string
+		stop func(*ActiveRoutine)
+	}{
+		{name: "paused", stop: (*ActiveRoutine).ClosePause},
+		{name: "cancelled", stop: (*ActiveRoutine).CloseCancel},
+	} {
+		for _, phase := range []string{"before admission", "after transient failure"} {
+			t.Run("active routine "+tc.name+"/"+phase, func(t *testing.T) {
+				for _, timeout := range []time.Duration{0, 2 * time.Second} {
+					t.Run(timeout.String(), func(t *testing.T) {
+						e := &UpstreamExecutor{retryTimes: 5, retryDuration: time.Minute}
+						e.initRetryPolicy(DefaultClassifier{})
+						e.retryPolicy.Backoff = nil
+						ar := NewActiveRoutine()
+						wantCalls := 0
+						if phase == "before admission" {
+							tc.stop(ar)
+						} else {
+							wantCalls = 1
+						}
+						ctx, cancel := context.WithCancel(context.Background())
+						defer cancel()
+						var attemptCtx context.Context
+						calls := 0
+						result, cleanup, err := e.execWithRetry(ctx, ar, timeout, func(child context.Context) (*Result, error) {
+							calls++
+							attemptCtx = child
+							tc.stop(ar)
+							return nil, moerr.NewInternalErrorNoCtx("connection reset")
+						})
+						if cleanup != nil {
+							t.Cleanup(cleanup)
+						}
+						require.ErrorContains(t, err, "task "+tc.name)
+						require.Nil(t, result)
+						require.Nil(t, cleanup)
+						require.Equal(t, wantCalls, calls)
+						require.NoError(t, ctx.Err(), "routine stop must not cancel the borrowed parent")
+						if attemptCtx != nil && timeout > 0 {
+							require.ErrorIs(t, attemptCtx.Err(), context.Canceled)
+						}
+					})
+				}
+			})
 		}
-		e.initRetryPolicy(&mockClassifier{retryable: true})
+	}
 
-		ar := NewActiveRoutine()
-		ar.CloseCancel() // Close cancel channel
-
-		_, _, err := e.execWithRetry(context.Background(), ar, 0, func(ctx context.Context) (*Result, error) {
-			return nil, assert.AnError
+	for _, timeout := range []time.Duration{0, 2 * time.Second} {
+		t.Run("success on first attempt/"+timeout.String(), func(t *testing.T) {
+			e := &UpstreamExecutor{retryTimes: 3}
+			e.initRetryPolicy(DefaultClassifier{})
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			want := &Result{}
+			var attemptCtx context.Context
+			calls := 0
+			result, cleanup, err := e.execWithRetry(ctx, nil, timeout, func(child context.Context) (*Result, error) {
+				calls++
+				attemptCtx = child
+				return want, nil
+			})
+			if cleanup != nil {
+				t.Cleanup(cleanup)
+			}
+			if result != nil {
+				t.Cleanup(func() { require.NoError(t, result.Close()) })
+			}
+			require.NoError(t, err)
+			require.Same(t, want, result)
+			require.Equal(t, 1, calls)
+			require.NoError(t, attemptCtx.Err())
+			if timeout > 0 {
+				require.NotNil(t, cleanup)
+				cleanup()
+				require.ErrorIs(t, attemptCtx.Err(), context.Canceled)
+			} else {
+				require.Nil(t, cleanup)
+			}
+			require.NoError(t, ctx.Err())
 		})
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "cancelled")
-	})
+	}
 
-	t.Run("success on first attempt", func(t *testing.T) {
-		e := &UpstreamExecutor{
-			retryTimes: 3,
-		}
-		e.initRetryPolicy(&mockClassifier{retryable: true})
-
-		expectedResult := &Result{}
-		result, _, err := e.execWithRetry(context.Background(), nil, 0, func(ctx context.Context) (*Result, error) {
-			return expectedResult, nil
+	for _, tc := range []struct {
+		name      string
+		err       error
+		retries   int
+		wantCalls int
+		wantLimit bool
+	}{
+		{name: "non-retryable error", err: assert.AnError, retries: 3, wantCalls: 1},
+		{name: "explicit stop", err: ErrNonRetryable, retries: 3, wantCalls: 1, wantLimit: true},
+		{name: "wrapped explicit stop", err: fmt.Errorf("operation: %w", ErrNonRetryable), retries: 3, wantCalls: 1, wantLimit: true},
+		{name: "attempts exhausted", err: moerr.NewInternalErrorNoCtx("connection reset"), retries: 2, wantCalls: 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, timeout := range []time.Duration{0, 2 * time.Second} {
+				t.Run(timeout.String(), func(t *testing.T) {
+					e := &UpstreamExecutor{retryTimes: tc.retries, retryDuration: time.Minute}
+					e.initRetryPolicy(DefaultClassifier{})
+					e.retryPolicy.Backoff = nil
+					ctx, cancel := context.WithCancel(context.Background())
+					defer cancel()
+					var attemptContexts []context.Context
+					result, cleanup, err := e.execWithRetry(ctx, nil, timeout, func(child context.Context) (*Result, error) {
+						attemptContexts = append(attemptContexts, child)
+						return nil, tc.err
+					})
+					if cleanup != nil {
+						t.Cleanup(cleanup)
+					}
+					if tc.wantLimit {
+						require.ErrorContains(t, err, "retry limit exceeded")
+					} else {
+						require.ErrorIs(t, err, tc.err)
+					}
+					require.Nil(t, result)
+					require.Nil(t, cleanup)
+					require.Len(t, attemptContexts, tc.wantCalls)
+					require.NoError(t, ctx.Err())
+					for _, child := range attemptContexts {
+						if timeout > 0 {
+							require.ErrorIs(t, child.Err(), context.Canceled)
+						} else {
+							require.Same(t, ctx, child)
+						}
+					}
+				})
+			}
 		})
-		assert.NoError(t, err)
-		assert.Equal(t, expectedResult, result)
-	})
+	}
 
-	t.Run("non-retryable error", func(t *testing.T) {
-		e := &UpstreamExecutor{
-			retryTimes: 3,
-		}
-		e.initRetryPolicy(&mockClassifier{retryable: false})
-
-		_, _, err := e.execWithRetry(context.Background(), nil, 0, func(ctx context.Context) (*Result, error) {
-			return nil, assert.AnError
-		})
-		assert.Error(t, err)
-	})
 }
 
 func TestOpenDbConn_Validation(t *testing.T) {

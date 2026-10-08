@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
@@ -123,6 +124,27 @@ func TestUserDefinedVarMigrationPreservesType(t *testing.T) {
 	restored, err := decodeUserDefinedVars(context.Background(), snapshot, false)
 	require.NoError(t, err)
 	require.Equal(t, typ, restored["amount"].Type)
+}
+
+func TestUserDefinedVarMigrationPreservesCollationMetadata(t *testing.T) {
+	typ := plan.Type{
+		Id: int32(types.T_varchar), Charset: 4, CollationVersion: 1,
+		CollationCoercibility: 2, CollationCoercibilitySet: true, CollationMergeConflict: true,
+		XXX_unrecognized: []byte{0xa0, 0x06, 0x01},
+	}
+	source := &Session{userDefinedVars: map[string]*UserDefinedVar{
+		"v": {Value: "x", Type: typ},
+	}}
+	snapshot, err := source.snapshotUserDefinedVars(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, typ, *snapshot[0].Type)
+	typ.XXX_unrecognized[2] = 2
+	require.Equal(t, byte(1), snapshot[0].Type.XXX_unrecognized[2])
+	restored, err := decodeUserDefinedVars(t.Context(), snapshot, false)
+	require.NoError(t, err)
+	require.Equal(t, *snapshot[0].Type, restored["v"].Type)
+	snapshot[0].Type.XXX_unrecognized[2] = 3
+	require.Equal(t, byte(1), restored["v"].Type.XXX_unrecognized[2])
 }
 
 func TestUserDefinedVarMigrationPreservesRuntimeStringDomain(t *testing.T) {
@@ -503,4 +525,27 @@ func TestUserDefinedVarRepeatedMigrationDoesNotReevaluateExpressions(t *testing.
 		require.Equal(t, "2026-08-07 04:20:01.123456", target.userDefinedVars["table_value"].Value)
 		source = target
 	}
+}
+
+func TestMigratedLegacyTextNullUsesPreparedSourceBinding(t *testing.T) {
+	ses, prepared, cw, ec := newPreparedExecuteEnvForSQL(t, 320, "select cast('00:00:01' as time(0)) * ?")
+	defer func() { cw.proc.SetPrepareParams(nil); prepared.Close() }()
+	value, err := encodeUserDefinedVarValue(ec.reqCtx, nil, false)
+	require.NoError(t, err)
+	snapshot := []*query.MigrateUserDefinedVar{{Name: "legacy_null", Value: value, Type: &plan.Type{Id: int32(types.T_text)}}}
+	restored, err := decodeUserDefinedVars(ec.reqCtx, snapshot, false)
+	require.NoError(t, err)
+	ses.userDefinedVars = restored
+	ec.input.isBinaryProtExecute = false
+	execute := &plan.Execute{Name: prepared.Name, Args: []*plan.Expr{{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "legacy_null"}}}}}
+	_, bound, _, _, _, err := initExecuteStmtParam(ec, ses, cw, execute, "")
+	require.NoError(t, err)
+	require.Equal(t, types.T_text, cw.paramBindings[0].Type.Oid)
+	q := bound.GetQuery()
+	result, free, err := colexec.GetReadonlyResultFromExpression(cw.proc, q.Nodes[q.Steps[0]].ProjectList[0], []*batch.Batch{batch.EmptyForConstFoldBatch})
+	if free != nil {
+		defer free()
+	}
+	require.NoError(t, err)
+	require.True(t, result.IsNull(0))
 }

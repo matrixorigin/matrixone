@@ -233,7 +233,7 @@ type FeTxnOption struct {
 	// statements. They need real pessimistic locks but retain the transaction's
 	// selected isolation level (including an existing SI snapshot).
 	forcePessimisticLifecycleMode bool
-	// implicitCommitBefore marks a top-level TRUNCATE statement. Its old
+	// implicitCommitBefore marks a top-level implicit-commit DDL statement. Its old
 	// transaction has already been committed before authorization/planning;
 	// the transaction created for the statement must be finalized separately.
 	implicitCommitBefore bool
@@ -582,7 +582,7 @@ func (th *TxnHandler) Create(execCtx *ExecCtx) error {
 	// BEGIN and implicit-commit statements own a fresh transaction.  The latter
 	// has already committed any previous transaction at the statement boundary;
 	// keeping this condition here also makes the post-boundary transaction
-	// explicit and prevents TRUNCATE from reusing a stale workspace.
+	// explicit and prevents TRUNCATE/RENAME from reusing a stale workspace.
 	if execCtx.txnOpt.byBegin || execCtx.txnOpt.implicitCommitBefore || !th.inActiveTxnUnsafe() {
 		//commit existed txn anyway
 		err = th.createUnsafe(execCtx)
@@ -708,6 +708,14 @@ func requiresPessimisticObjectLifecycleTxn(
 	defaultDatabase string,
 ) bool {
 	switch st := stmt.(type) {
+	case *tree.CreateTable:
+		// An explicit optimistic transaction must not publish a persistent
+		// catalog mapping outside the CDC lifecycle guard.  Autocommit CREATE
+		// TABLE statements already get their own transaction and must retain
+		// the normal DDL path; forcing every such statement through the CDC
+		// target protocol would also serialize unrelated DDL.  The admission
+		// check in TxnHandler.Create rejects an active non-pessimistic txn.
+		return !st.Temporary && ses != nil && ses.GetTxnHandler().InActiveTxn()
 	case *tree.TruncateTable, *tree.CreatePitr, *tree.DropPitr, *tree.AlterPitr,
 		*tree.DropDatabase, *tree.DropView, *tree.DropSequence, *tree.AlterView,
 		*tree.AlterSequence, *tree.DataBranchDeleteTable, *tree.DataBranchDeleteDatabase,
@@ -794,23 +802,6 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 	if execCtx.ses.GetFromRealUser() {
 		opts = append(opts,
 			txnclient.WithUserTxn())
-	}
-
-	if execCtx.ses.IsBackgroundSession() ||
-		execCtx.ses.DisableTrace() {
-		opts = append(opts, txnclient.WithDisableTrace(true))
-	} else {
-		varVal, err := execCtx.ses.GetSessionSysVar("disable_txn_trace")
-		if err != nil {
-			return err
-		}
-		if def, ok := gSysVarsDefs["disable_txn_trace"]; ok {
-			if boolType, ok := def.GetType().(SystemVariableBoolType); ok {
-				if boolType.IsTrue(varVal) {
-					opts = append(opts, txnclient.WithDisableTrace(true))
-				}
-			}
-		}
 	}
 
 	// Attach session-level lock_wait_timeout to the txn so the lock service
@@ -940,7 +931,7 @@ func (th *TxnHandler) Commit(execCtx *ExecCtx) error {
 // commitBeforeStatement ends the transaction that precedes a statement with
 // MySQL's implicit-commit-before rule.  It intentionally bypasses Commit's
 // option-bit policy: an explicit BEGIN or AUTOCOMMIT=0 must not keep the old
-// workspace alive across TRUNCATE.  The existing unsafe path remains the sole
+// workspace alive across TRUNCATE or RENAME TABLE. The unsafe path remains the sole
 // owner of commit-result-unknown, temporary-table, and DDL-generation cleanup.
 func (th *TxnHandler) commitBeforeStatement(execCtx *ExecCtx) error {
 	if th == nil || execCtx == nil {

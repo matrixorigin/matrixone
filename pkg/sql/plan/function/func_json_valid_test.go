@@ -69,7 +69,7 @@ func TestJsonLength(t *testing.T) {
 				[]bool{false, false, false, false, false}),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonLength)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info)
 	})
 
@@ -90,7 +90,7 @@ func TestJsonLength(t *testing.T) {
 				[]bool{false, true, true, false}), // missing path → NULL
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonLength)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info)
 	})
 
@@ -108,7 +108,7 @@ func TestJsonLength(t *testing.T) {
 				[]bool{false, false, true}),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonLength)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info)
 	})
 
@@ -130,7 +130,7 @@ func TestJsonKeys(t *testing.T) {
 				[]bool{false, false}),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonKeys)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info)
 	})
 
@@ -147,7 +147,7 @@ func TestJsonKeys(t *testing.T) {
 				[]bool{true, true, true}), // all NULL
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonKeys)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info)
 	})
 
@@ -197,7 +197,7 @@ func TestJsonPretty(t *testing.T) {
 				[]bool{false, false, false, false}),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonPretty)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info)
 	})
 
@@ -214,7 +214,7 @@ func TestJsonPretty(t *testing.T) {
 				[]bool{false}),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonPretty)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info)
 	})
 
@@ -231,7 +231,7 @@ func TestJsonPretty(t *testing.T) {
 				[]bool{false}),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonPretty)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info)
 	})
 
@@ -248,7 +248,7 @@ func TestJsonPretty(t *testing.T) {
 				[]bool{false, true}), // null → NULL
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonPretty)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info)
 	})
 }
@@ -272,7 +272,7 @@ func TestJsonSchemaValid(t *testing.T) {
 				[]bool{false, false}),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonSchemaValid)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info)
 	})
 
@@ -292,7 +292,7 @@ func TestJsonSchemaValid(t *testing.T) {
 				[]bool{false, false}),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonSchemaValid)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info)
 	})
 
@@ -312,7 +312,7 @@ func TestJsonSchemaValid(t *testing.T) {
 				[]bool{false, true, true}), // null → null
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonSchemaValid)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info)
 	})
 
@@ -330,7 +330,7 @@ func TestJsonSchemaValid(t *testing.T) {
 			expect: NewFunctionTestResult(types.T_bool.ToType(), true, []bool{false}, []bool{false}),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonSchemaValid)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info)
 	})
 
@@ -348,7 +348,7 @@ func TestJsonSchemaValid(t *testing.T) {
 			expect: NewFunctionTestResult(types.T_bool.ToType(), true, []bool{false}, []bool{false}),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonSchemaValid)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info)
 	})
 
@@ -366,7 +366,7 @@ func TestJsonSchemaValid(t *testing.T) {
 			expect: NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, []bool{true}),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonSchemaValid)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info)
 	})
 
@@ -384,7 +384,7 @@ func TestJsonSchemaValid(t *testing.T) {
 			expect: NewFunctionTestResult(types.T_json.ToType(), false, []string{``}, []bool{true}),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonSchemaValidationReport)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info)
 	})
 }
@@ -451,7 +451,7 @@ func TestJsonSchemaMySQLDraft4Dialect(t *testing.T) {
 			expect: NewFunctionTestResult(types.T_bool.ToType(), false, want, make([]bool, len(want))),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonSchemaValid)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info)
 	})
 
@@ -465,7 +465,7 @@ func TestJsonSchemaMySQLDraft4Dialect(t *testing.T) {
 			expect: NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, true}, []bool{false, false}),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonSchemaValid)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info)
 	})
 
@@ -480,7 +480,7 @@ func TestJsonSchemaMySQLDraft4Dialect(t *testing.T) {
 			expect: NewFunctionTestResult(types.T_json.ToType(), false, []string{validReport, validReport, validReport, validReport}, []bool{false, false, false, false}),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonSchemaValidationReport)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info)
 	})
 
@@ -494,7 +494,7 @@ func TestJsonSchemaMySQLDraft4Dialect(t *testing.T) {
 			expect: NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, true}, []bool{false, false}),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonSchemaValid)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info)
 	})
 }
@@ -585,7 +585,7 @@ func TestJsonSchemaMixedOverloads(t *testing.T) {
 			expect: NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true}, []bool{false}),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonSchemaValid)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info)
 	})
 
@@ -603,7 +603,7 @@ func TestJsonSchemaMixedOverloads(t *testing.T) {
 			expect: NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, []bool{false}),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonSchemaValid)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info)
 	})
 
@@ -621,7 +621,7 @@ func TestJsonSchemaMixedOverloads(t *testing.T) {
 			expect: NewFunctionTestResult(types.T_json.ToType(), false, []string{mustJsonBinaryString(t, `{"valid": true}`)}, []bool{false}),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonSchemaValidationReport)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info)
 	})
 
@@ -639,7 +639,7 @@ func TestJsonSchemaMixedOverloads(t *testing.T) {
 			expect: NewFunctionTestResult(types.T_json.ToType(), false, []string{mustJsonBinaryString(t, `{"valid": true}`)}, []bool{false}),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonSchemaValidationReport)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info)
 	})
 }
@@ -702,7 +702,7 @@ func TestJsonSchemaRefKeywordDetection(t *testing.T) {
 			expect: NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true}, []bool{false}),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonSchemaValid)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info)
 	})
 
@@ -720,7 +720,7 @@ func TestJsonSchemaRefKeywordDetection(t *testing.T) {
 			expect: NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, true}, []bool{false, false}),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonSchemaValid)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info)
 	})
 
@@ -738,7 +738,7 @@ func TestJsonSchemaRefKeywordDetection(t *testing.T) {
 			expect: NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true}, []bool{false}),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonSchemaValid)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info)
 	})
 
@@ -749,7 +749,7 @@ func TestJsonSchemaNonStringRefsAtSchemaPositions(t *testing.T) {
 	functions := []struct {
 		name    string
 		retType types.Type
-		fn      fEvalFn
+		fn      executeLogicOfOverload
 	}{
 		{name: "json_schema_valid", retType: types.T_bool.ToType(), fn: JsonSchemaValid},
 		{name: "json_schema_validation_report", retType: types.T_json.ToType(), fn: JsonSchemaValidationReport},
@@ -790,7 +790,7 @@ func TestJsonSchemaNonStringRefsAtSchemaPositions(t *testing.T) {
 						expect = NewFunctionTestResult(function.retType, false, []string{mustJsonBinaryString(t, `{"valid":true}`)}, []bool{false})
 					}
 					tc := NewFunctionTestCase(proc, []FunctionTestInput{schemaInput, documentInput}, expect, function.fn)
-					s, info := tc.Run()
+					s, info := tc.RunAndFree()
 					require.True(t, s, info)
 				})
 			}
@@ -803,7 +803,7 @@ func TestJsonSchemaMySQLIgnoredInvalidExclusiveBounds(t *testing.T) {
 	functions := []struct {
 		name    string
 		retType types.Type
-		fn      fEvalFn
+		fn      executeLogicOfOverload
 	}{
 		{name: "json_schema_valid", retType: types.T_bool.ToType(), fn: JsonSchemaValid},
 		{name: "json_schema_validation_report", retType: types.T_json.ToType(), fn: JsonSchemaValidationReport},
@@ -846,7 +846,7 @@ func TestJsonSchemaMySQLIgnoredInvalidExclusiveBounds(t *testing.T) {
 						expect = NewFunctionTestResult(function.retType, false, []string{mustJsonBinaryString(t, report)}, []bool{false})
 					}
 					tc := NewFunctionTestCase(proc, []FunctionTestInput{schemaInput, documentInput}, expect, function.fn)
-					s, info := tc.Run()
+					s, info := tc.RunAndFree()
 					require.True(t, s, info)
 				})
 			}
@@ -859,7 +859,7 @@ func TestJsonSchemaStringRefDetection(t *testing.T) {
 	functions := []struct {
 		name    string
 		retType types.Type
-		fn      fEvalFn
+		fn      executeLogicOfOverload
 	}{
 		{name: "json_schema_valid", retType: types.T_bool.ToType(), fn: JsonSchemaValid},
 		{name: "json_schema_validation_report", retType: types.T_json.ToType(), fn: JsonSchemaValidationReport},
@@ -895,6 +895,7 @@ func TestJsonSchemaStringRefDetection(t *testing.T) {
 							NewFunctionTestInput(types.T_varchar.ToType(), []string{`1`}, []bool{false}),
 						},
 						NewFunctionTestResult(function.retType, false, nil, nil), function.fn)
+					defer tc.Free()
 					require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
 					err := tc.fn(tc.parameters, tc.result, tc.proc, tc.fnLength, nil)
 					require.Error(t, err)
@@ -1031,7 +1032,7 @@ func TestJsonSchemaLocalReferenceURIFragmentsThroughSQLFunctions(t *testing.T) {
 			for _, function := range []struct {
 				name string
 				ret  types.Type
-				fn   fEvalFn
+				fn   executeLogicOfOverload
 			}{
 				{name: "json_schema_valid", ret: types.T_bool.ToType(), fn: JsonSchemaValid},
 				{name: "json_schema_validation_report", ret: types.T_json.ToType(), fn: JsonSchemaValidationReport},
@@ -1051,7 +1052,7 @@ func TestJsonSchemaLocalReferenceURIFragmentsThroughSQLFunctions(t *testing.T) {
 							[]string{mustJsonBinaryString(t, `{"valid":true}`)}, []bool{false})
 					}
 					fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, function.fn)
-					s, info := fcTC.Run()
+					s, info := fcTC.RunAndFree()
 					require.True(t, s, info)
 				})
 			}
@@ -1158,7 +1159,7 @@ func TestJsonSchemaScalarPropertyValuesReturnSchemaError(t *testing.T) {
 	functions := []struct {
 		name string
 		ret  types.Type
-		fn   fEvalFn
+		fn   executeLogicOfOverload
 	}{
 		{name: "json_schema_valid", ret: types.T_bool.ToType(), fn: JsonSchemaValid},
 		{name: "json_schema_validation_report", ret: types.T_json.ToType(), fn: JsonSchemaValidationReport},
@@ -1174,6 +1175,7 @@ func TestJsonSchemaScalarPropertyValuesReturnSchemaError(t *testing.T) {
 						NewFunctionTestInput(types.T_varchar.ToType(), []string{`{}`}, []bool{false}),
 					},
 					NewFunctionTestResult(function.ret, false, nil, nil), function.fn)
+				defer tc.Free()
 				require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
 				err := tc.fn(tc.parameters, tc.result, tc.proc, tc.fnLength, nil)
 				require.Error(t, err)
@@ -1188,7 +1190,7 @@ func TestJsonSchemaIDAliasesCannotRebindLocalReferences(t *testing.T) {
 	functions := []struct {
 		name string
 		ret  types.Type
-		fn   fEvalFn
+		fn   executeLogicOfOverload
 	}{
 		{name: "json_schema_valid", ret: types.T_bool.ToType(), fn: JsonSchemaValid},
 		{name: "json_schema_validation_report", ret: types.T_json.ToType(), fn: JsonSchemaValidationReport},
@@ -1227,7 +1229,7 @@ func TestJsonSchemaIDAliasesCannotRebindLocalReferences(t *testing.T) {
 							NewFunctionTestInput(types.T_varchar.ToType(), []string{`1`}, []bool{false}),
 						},
 						NewFunctionTestResult(function.ret, false, wanted, []bool{false}), function.fn)
-					s, info := tc.Run()
+					s, info := tc.RunAndFree()
 					require.True(t, s, info)
 				})
 			}
@@ -1240,7 +1242,7 @@ func TestJsonSchemaIDAliasesInUnknownValuesCannotRebindLocalReferences(t *testin
 	functions := []struct {
 		name string
 		ret  types.Type
-		fn   fEvalFn
+		fn   executeLogicOfOverload
 	}{
 		{name: "json_schema_valid", ret: types.T_bool.ToType(), fn: JsonSchemaValid},
 		{name: "json_schema_validation_report", ret: types.T_json.ToType(), fn: JsonSchemaValidationReport},
@@ -1312,7 +1314,7 @@ func TestJsonSchemaIDAliasesInUnknownValuesCannotRebindLocalReferences(t *testin
 							NewFunctionTestInput(types.T_varchar.ToType(), []string{`1`, `"wrong-target"`}, []bool{false, false}),
 						},
 						NewFunctionTestResult(function.ret, false, wanted, []bool{false, false}), function.fn)
-					s, info := tc.Run()
+					s, info := tc.RunAndFree()
 					require.True(t, s, info)
 				})
 			}
@@ -1431,7 +1433,7 @@ func TestJsonSchemaLocalReferencesThroughSQLFunctions(t *testing.T) {
 			for _, function := range []struct {
 				name string
 				ret  types.Type
-				fn   fEvalFn
+				fn   executeLogicOfOverload
 			}{
 				{name: "valid", ret: types.T_bool.ToType(), fn: JsonSchemaValid},
 				{name: "report", ret: types.T_json.ToType(), fn: JsonSchemaValidationReport},
@@ -1453,7 +1455,7 @@ func TestJsonSchemaLocalReferencesThroughSQLFunctions(t *testing.T) {
 						}, []bool{false, false})
 					}
 					fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, function.fn)
-					s, info := fcTC.Run()
+					s, info := fcTC.RunAndFree()
 					require.True(t, s, info)
 				})
 			}
@@ -1679,7 +1681,7 @@ func TestJsonValue(t *testing.T) {
 				[]bool{false}),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonValue)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info)
 	})
 
@@ -1699,7 +1701,7 @@ func TestJsonValue(t *testing.T) {
 				[]bool{false}),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonValue)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info)
 	})
 
@@ -1719,7 +1721,7 @@ func TestJsonValue(t *testing.T) {
 				[]bool{true}), // NULL
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonValue)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info)
 	})
 
@@ -1739,7 +1741,7 @@ func TestJsonValue(t *testing.T) {
 				[]bool{false, false, false, false, false, false, false}),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonValue)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info)
 	})
 
@@ -1796,7 +1798,7 @@ func TestJsonValue(t *testing.T) {
 				[]string{`[12]`, `{"k": 1}`}, []bool{false, false}),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonValue)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info)
 	})
 
@@ -1820,7 +1822,7 @@ func TestJsonValue(t *testing.T) {
 				[]bool{true, true, false}),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonValue)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info)
 	})
 
@@ -1840,7 +1842,7 @@ func TestJsonValue(t *testing.T) {
 				[]bool{false, true}), // null → NULL
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, JsonValue)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info)
 	})
 
@@ -1858,7 +1860,7 @@ func TestJsonValue(t *testing.T) {
 			tc := NewFunctionTestCase(proc, inputs,
 				NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{false}),
 				JsonValue)
-			s, _ := tc.Run()
+			s, _ := tc.RunAndFree()
 			require.False(t, s)
 		}
 	})
@@ -2700,7 +2702,7 @@ func TestJsonExtractConstNullPathAfterNonSimplePath(t *testing.T) {
 			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{`$[*]`}, []bool{false}),
 		},
 		NewFunctionTestResult(types.T_varchar.ToType(), true, nil, nil), op.jsonExtractString)
-	s, info := errTC.Run()
+	s, info := errTC.RunAndFree()
 	require.True(t, s, info)
 
 	vec := runJsonFunctionWithSelectList(t, proc,
@@ -2749,7 +2751,7 @@ func TestJsonExtractStringTypedScalars(t *testing.T) {
 		expect: NewFunctionTestResult(types.T_varchar.ToType(), false, want, nulls),
 	}
 	fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonExtract().jsonExtractString)
-	s, info := fcTC.Run()
+	s, info := fcTC.RunAndFree()
 	require.True(t, s, info)
 }
 
@@ -2773,7 +2775,7 @@ func TestJsonExtractStringPreservesPayloadBoundaryQuotes(t *testing.T) {
 		},
 		NewFunctionTestResult(types.T_varchar.ToType(), false, values, nulls),
 		newOpBuiltInJsonExtract().jsonExtractString)
-	s, info := tc.Run()
+	s, info := tc.RunAndFree()
 	require.True(t, s, info)
 }
 
@@ -3025,7 +3027,7 @@ func TestJsonRemoveNullAndInvalidPaths(t *testing.T) {
 				expect: NewFunctionTestResult(types.T_json.ToType(), true, nil, nil),
 			}
 			fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonRemove().buildJsonRemove)
-			s, info := fcTC.Run()
+			s, info := fcTC.RunAndFree()
 			require.True(t, s, info)
 		})
 	}
@@ -3199,6 +3201,7 @@ func TestJsonMergeDepthValidation(t *testing.T) {
 			NewFunctionTestResult(types.T_json.ToType(), true, nil, nil),
 			newOpBuiltInJsonMerge().buildJsonMergePatch,
 		)
+		defer testCase.Free()
 		require.NoError(t, testCase.result.PreExtendAndReset(testCase.fnLength))
 		err := testCase.fn(
 			testCase.parameters,
@@ -3212,7 +3215,7 @@ func TestJsonMergeDepthValidation(t *testing.T) {
 
 	tests := []struct {
 		name   string
-		fn     fEvalFn
+		fn     executeLogicOfOverload
 		inputs []FunctionTestInput
 	}{
 		{
@@ -3249,6 +3252,7 @@ func TestJsonMergeDepthValidation(t *testing.T) {
 				NewFunctionTestResult(types.T_json.ToType(), true, nil, nil),
 				tt.fn,
 			)
+			defer testCase.Free()
 			require.NoError(t, testCase.result.PreExtendAndReset(testCase.fnLength))
 			err := testCase.fn(
 				testCase.parameters,
@@ -3372,7 +3376,7 @@ func TestJsonArrayAppend(t *testing.T) {
 			expect: NewFunctionTestResult(types.T_json.ToType(), true, nil, nil),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonSet().buildJsonArrayAppend)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info)
 	})
 }
@@ -3502,7 +3506,7 @@ func TestJsonContains(t *testing.T) {
 				[]bool{false, false, false, false, false, true, false, true, false}),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonContains().jsonContains)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info)
 	})
 
@@ -3522,7 +3526,7 @@ func TestJsonContains(t *testing.T) {
 				[]bool{false, false, false, false, false}),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonContains().jsonContains)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info)
 	})
 
@@ -3587,7 +3591,7 @@ func TestJsonContains(t *testing.T) {
 				notNulls),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonContains().jsonContains)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info)
 	})
 
@@ -3607,7 +3611,7 @@ func TestJsonContains(t *testing.T) {
 				[]bool{false, false, false, false, false}),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonContains().jsonContains)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info)
 	})
 
@@ -3643,7 +3647,7 @@ func TestJsonContains(t *testing.T) {
 				[]bool{false, false, false, false, false, false, false}),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonContains().jsonContains)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info)
 	})
 
@@ -3670,7 +3674,7 @@ func TestJsonContains(t *testing.T) {
 				[]bool{false, false, false}),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonContains().jsonContains)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info)
 	})
 
@@ -3693,7 +3697,7 @@ func TestJsonContains(t *testing.T) {
 				[]bool{false, false, false, false, false, false, false}),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonContains().jsonContains)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info)
 	})
 
@@ -3716,7 +3720,7 @@ func TestJsonContains(t *testing.T) {
 				[]bool{false, true, false, false, false}),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonContains().jsonContains)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info)
 	})
 }
@@ -3735,7 +3739,7 @@ func TestJsonContainsErrors(t *testing.T) {
 			expect: NewFunctionTestResult(types.T_int64.ToType(), true, nil, nil),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonContains().jsonContains)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info)
 	})
 
@@ -3750,7 +3754,7 @@ func TestJsonContainsErrors(t *testing.T) {
 			expect: NewFunctionTestResult(types.T_int64.ToType(), true, nil, nil),
 		}
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonContains().jsonContains)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, info)
 	})
 }
@@ -3778,7 +3782,7 @@ func TestJsonContainsPath(t *testing.T) {
 			[]bool{false, false, false, false, true, true}),
 	}
 	fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonContainsPath().jsonContainsPath)
-	s, info := fcTC.Run()
+	s, info := fcTC.RunAndFree()
 	require.True(t, s, info)
 }
 
@@ -3809,7 +3813,7 @@ func TestJsonContainsPathMySQLRegressionSemantics(t *testing.T) {
 			[]bool{false, false, false, false}),
 	}
 	fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonContainsPath().jsonContainsPath)
-	s, info := fcTC.Run()
+	s, info := fcTC.RunAndFree()
 	require.True(t, s, info)
 
 	typedJSON := tcTemp{
@@ -3824,7 +3828,7 @@ func TestJsonContainsPathMySQLRegressionSemantics(t *testing.T) {
 		expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1}, []bool{false}),
 	}
 	fcTC = NewFunctionTestCase(proc, typedJSON.inputs, typedJSON.expect, newOpBuiltInJsonContainsPath().jsonContainsPath)
-	s, info = fcTC.Run()
+	s, info = fcTC.RunAndFree()
 	require.True(t, s, info)
 }
 
@@ -3878,7 +3882,7 @@ func TestJsonContainsPathEvaluationOrder(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			fcTC := NewFunctionTestCase(proc, tt.inputs, tt.expect, newOpBuiltInJsonContainsPath().jsonContainsPath)
-			s, info := fcTC.Run()
+			s, info := fcTC.RunAndFree()
 			require.True(t, s, info)
 		})
 	}
@@ -4061,7 +4065,7 @@ func TestJsonSetValueTypes(t *testing.T) {
 		for _, tc := range []struct {
 			name     string
 			document string
-			fn       fEvalFn
+			fn       executeLogicOfOverload
 		}{
 			{name: "set", document: `{"a":0}`, fn: newOpBuiltInJsonSet().buildJsonSet},
 			{name: "insert", document: `{}`, fn: newOpBuiltInJsonSet().buildJsonInsert},
@@ -4086,6 +4090,7 @@ func TestJsonSetValueTypes(t *testing.T) {
 				}
 				fcTC := NewFunctionTestCase(proc, inputs,
 					NewFunctionTestResult(types.T_json.ToType(), false, nil, nil), tc.fn)
+				defer fcTC.Free()
 				fcTC.parameters[2].SetPrepareParamKinds([]vector.PrepareParamKind{
 					vector.PrepareParamInteger,
 					vector.PrepareParamInteger,
@@ -4247,7 +4252,7 @@ func TestJsonInsertRejectsNonSimplePath(t *testing.T) {
 		expect: NewFunctionTestResult(types.T_json.ToType(), true, nil, nil),
 	}
 	fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonSet().buildJsonInsert)
-	s, info := fcTC.Run()
+	s, info := fcTC.RunAndFree()
 	require.True(t, s, info)
 }
 
@@ -4394,7 +4399,7 @@ func TestJsonValid(t *testing.T) {
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, JsonValid)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
 }
@@ -4633,9 +4638,11 @@ func TestJsonFunctionsRespectSelectList(t *testing.T) {
 	})
 }
 
-func runJsonFunctionWithSelectList(t *testing.T, proc *process.Process, inputs []FunctionTestInput, retType types.Type, fn fEvalFn, selectList *FunctionSelectList) *vector.Vector {
+func runJsonFunctionWithSelectList(t *testing.T, proc *process.Process, inputs []FunctionTestInput, retType types.Type, fn executeLogicOfOverload, selectList *FunctionSelectList) *vector.Vector {
 	t.Helper()
 	fcTC := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(retType, false, nil, nil), fn)
+	// The returned vector is borrowed until this test scope finishes.
+	t.Cleanup(fcTC.Free)
 	require.NoError(t, fcTC.result.PreExtendAndReset(fcTC.fnLength))
 	require.NoError(t, fcTC.fn(fcTC.parameters, fcTC.result, fcTC.proc, fcTC.fnLength, selectList))
 	return fcTC.result.GetResultVector()

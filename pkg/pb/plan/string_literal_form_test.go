@@ -565,7 +565,7 @@ func TestRequiredRemoteExpressionFeaturesBoundedConditionalStringDomains(t *test
 		"the existing character overload remains wire-compatible")
 }
 
-func TestRequiresMORPCVersion101JSONValueContract(t *testing.T) {
+func TestRequiresMORPCVersion107JSONValueContract(t *testing.T) {
 	jsonValueContract := &Expr{Expr: &Expr_F{F: &Function{
 		Func: &ObjectRef{Obj: int64(462)<<32 | 2, ObjName: "json_value"},
 		Args: make([]*Expr, 7),
@@ -575,11 +575,11 @@ func TestRequiresMORPCVersion101JSONValueContract(t *testing.T) {
 		Args: make([]*Expr, 2),
 	}}}
 
-	required, err := RequiresMORPCVersion101JSONValueContract(jsonValueContract)
+	required, err := RequiresMORPCVersion107JSONValueContract(jsonValueContract)
 	require.NoError(t, err)
 	require.True(t, required)
 
-	required, err = RequiresMORPCVersion101JSONValueContract(legacy)
+	required, err = RequiresMORPCVersion107JSONValueContract(legacy)
 	require.NoError(t, err)
 	require.False(t, required)
 }

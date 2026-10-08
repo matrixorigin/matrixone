@@ -36,7 +36,7 @@ func TestJSONValueBindingContract(t *testing.T) {
 		}
 		defer stmt.Free()
 		selectStmt := stmt.(*tree.Select).Select.(*tree.SelectClause)
-		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), prepare, true)
+		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), prepare, true)
 		binder := NewDefaultBinder(context.Background(), builder, nil, plan.Type{}, nil)
 		return binder.BindExpr(selectStmt.Exprs[0].Expr, 0, false)
 	}
@@ -100,7 +100,7 @@ func TestJSONValueBindingContract(t *testing.T) {
 }
 
 func TestJSONValueProtocolGatePreservesLegacyPlans(t *testing.T) {
-	compilerContext := NewMockCompilerContext(true)
+	compilerContext := NewMockCompilerContext(true, newPlanTestProcess(t))
 	proc := compilerContext.GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	previous, hadPrevious := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -129,10 +129,10 @@ func TestJSONValueProtocolGatePreservesLegacyPlans(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, legacy.GetF().Args, 2)
 
-	_, err = bind(defines.MORPCVersion99, `select json_value('1', '$' returning unsigned)`)
-	require.ErrorContains(t, err, "MORPC protocol version 101")
+	_, err = bind(defines.MORPCVersion106, `select json_value('1', '$' returning unsigned)`)
+	require.ErrorContains(t, err, "MORPC protocol version 107")
 
-	contract, err := bind(defines.MORPCVersion101, `select json_value('1', '$' returning unsigned)`)
+	contract, err := bind(defines.MORPCVersion107, `select json_value('1', '$' returning unsigned)`)
 	require.NoError(t, err)
 	require.Len(t, contract.GetF().Args, 7)
 }
@@ -143,7 +143,7 @@ func TestJSONValueBindingRejectsInvalidUnusedDefault(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 	selectStmt := stmt.(*tree.Select).Select.(*tree.SelectClause)
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	binder := NewDefaultBinder(context.Background(), builder, nil, plan.Type{}, nil)
 	_, err = binder.BindExpr(selectStmt.Exprs[0].Expr, 0, false)
 	require.Error(t, err)
@@ -164,7 +164,7 @@ func TestJSONValueImplicitTypeSurvivesSQLRoundTrip(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
 			expr := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
-			builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+			builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 			binder := NewDefaultBinder(context.Background(), builder, nil, plan.Type{}, nil)
 			bound, err := binder.BindExpr(expr, 0, false)
 			require.NoError(t, err)
@@ -185,7 +185,7 @@ func TestJSONValueBindingTypeAndDefaultBoundaries(t *testing.T) {
 		}
 		defer stmt.Free()
 		selectStmt := stmt.(*tree.Select).Select.(*tree.SelectClause)
-		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 		binder := NewDefaultBinder(context.Background(), builder, nil, plan.Type{}, nil)
 		return binder.BindExpr(selectStmt.Exprs[0].Expr, 0, false)
 	}
@@ -403,7 +403,7 @@ func TestJSONValueTargetValidationBoundaries(t *testing.T) {
 
 func TestJSONValueBindingRejectsMalformedStructuredCalls(t *testing.T) {
 	ctx := context.Background()
-	binder := NewDefaultBinder(ctx, NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true), nil, plan.Type{}, nil)
+	binder := NewDefaultBinder(ctx, NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true), nil, plan.Type{}, nil)
 	document := tree.NewNumVal("1", "1", false, tree.P_char)
 	path := tree.NewNumVal("$", "$", false, tree.P_char)
 

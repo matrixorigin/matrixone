@@ -34,7 +34,6 @@ import (
 // A snapshotted MATCH puts the snapshot TS on the SqlProcess.
 func TestFulltextSQLProcessCarriesSnapshotTS(t *testing.T) {
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
 
 	ts := timestamp.Timestamp{PhysicalTime: 1700000000, LogicalTime: 7}
 	u := &fulltextState{scanSnapshot: &plan.Snapshot{TS: &ts}}
@@ -48,7 +47,6 @@ func TestFulltextSQLProcessCarriesSnapshotTS(t *testing.T) {
 // Without a snapshot the SqlProcess carries no TS.
 func TestFulltextSQLProcessNoSnapshotLeavesTSNil(t *testing.T) {
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
 
 	require.Nil(t, (&fulltextState{}).sqlProcess(proc).SnapshotTS,
 		"an unsnapshotted MATCH must leave the read at the current txn")
@@ -64,7 +62,6 @@ func TestFulltextSQLProcessNoSnapshotLeavesTSNil(t *testing.T) {
 func TestFulltextSQLProcessPublisherOutranksSnapshotTenant(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	t.Cleanup(proc.Free)
 
 	// The read txn is NEWER than the snapshot, so the snapshot TS is genuinely historical.
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
@@ -111,7 +108,6 @@ func TestFulltextSQLProcessPublisherOutranksSnapshotTenant(t *testing.T) {
 func TestFulltextSQLProcessSnapshotTenantAppliesWithoutAPublisher(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	t.Cleanup(proc.Free)
 
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOp.EXPECT().Txn().Return(txn.TxnMeta{
@@ -135,7 +131,6 @@ func TestFulltextSQLProcessSnapshotTenantAppliesWithoutAPublisher(t *testing.T) 
 // resetRowState clears the snapshot.
 func TestFulltextResetRowStateClearsSnapshot(t *testing.T) {
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
 
 	ts := timestamp.Timestamp{PhysicalTime: 1700000000}
 	u := &fulltextState{scanSnapshot: &plan.Snapshot{TS: &ts}}

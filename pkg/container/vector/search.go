@@ -630,7 +630,7 @@ func CollectOffsetsByPrefixBetweenFactory(lval, rval []byte) func(*Vector) []int
 		end := sort.Search(lvlen, func(i int) bool {
 			return types.PrefixCompare(lcol[i].GetByteSlice(larea), rval) > 0
 		})
-		if start == end {
+		if start >= end {
 			return nil
 		}
 		sels := make([]int64, end-start)

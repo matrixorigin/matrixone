@@ -13,7 +13,9 @@ two-argument calls preserve the legacy SQL NULL document shortcut, including
 when the supplied path is invalid. The new grammar accepts the same expression
 path as the legacy form.
 
-The default return type is nullable `VARCHAR(512)` in `utf8mb4_bin`. Supported
+For clause-bearing calls, the default return type is nullable `VARCHAR(512)`
+in `utf8mb4_bin`. Bare two-argument overloads 0/1 retain their legacy unbounded
+VARCHAR metadata and text behavior. Supported
 explicit targets are `CHAR`, `BINARY`, `SIGNED`, `UNSIGNED`, `DECIMAL`, `FLOAT`,
 `DOUBLE`, `DATE`, `TIME`, `DATETIME`, `YEAR`, and `JSON`. `DEFAULT` values are
 signed literals and are converted and validated while binding/preparing the
@@ -54,33 +56,35 @@ on generic strict-function NULL short-circuiting.
 
 ## Compatibility and rollout
 
-Existing two-argument calls remain valid on the legacy two-argument plan and
-receive the MySQL default type and collation. Existing persisted generated
+Existing two-argument calls remain on the legacy two-argument plan with their
+original type, collation and unbounded text behavior; the new default applies
+only when a RETURNING/ON EMPTY/ON ERROR clause selects overload 2. Existing persisted generated
 values are not automatically recomputed. Upgrade validation covers views,
 generated columns, indexes, values over the 512-character boundary, and the
 explicit rebuild procedure.
 
-### Versioned compatibility decision (revision 4, 2026-09-28)
+### Versioned compatibility decision (revision 5, 2026-10-08)
 
 Status: independent maintainer approval pending. This revision supersedes
-revision 3/v85; superseded details remain in PR history rather than this contract.
+revision 4/v101; superseded details remain in PR history rather than this contract.
 Approval must identify
 this revision's immutable commit and an independent approver. Author replies,
 thread resolution and approvals of earlier revisions do not approve this one.
 
-The current allocation candidate is MORPC v101 for JSON_VALUE function ID 462,
-overload 2. Main at 466eb8ff4f65752ad25d7e19274770459f5ef934 allocates v100 to
-on-demand view metadata and v85 through v99 to other capabilities. The final
-allocation must be coordinated and checked again before merge; this document
-does not reserve a mainline number.
+The current allocation candidate is MORPC v107 for JSON_VALUE function ID 462,
+overload 2. Actual main `bab4b3286a0dd5683a9b291763817722233e586c` already
+allocates v101-v106 to other landed capabilities. v107 is not reserved: other
+live candidates may use the same next number. Landing order requires maintainer
+coordination and each later PR must integrate its actual cumulative predecessor
+and reallocate. No independent approval is carried forward to revision 5.
 All gates, tests and this decision must move together if that allocation changes.
 
-The planner requires the deployment-wide MOProtocolVersion to be at least 101
+The planner requires the deployment-wide MOProtocolVersion to be at least 107
 for RETURNING, ON EMPTY or ON ERROR. Bare two-argument calls keep the legacy
 plan and its NULL-document short circuit. In the new clause-bearing contract,
 a non-NULL invalid path is a hard error even when the document is SQL NULL.
 
-Both current sender and receiver validate overload 2 against v101 before remote
+Both current sender and receiver validate overload 2 against v107 before remote
 execution. Those checks do not retrofit an old receiver: the deployment minimum
 and old-node admission must prevent sending the new plan to an old binary.
 Missing runtime capability state rejects new remote plans. Function lookup also
@@ -95,7 +99,7 @@ The SQL grammar rejects JSON_VALUE in ON UPDATE; internal owner-walk coverage
 does not imply SQL support for that combination. Prepared execution is tested separately; a session prepared statement is not
 assumed to be a durable catalog object.
 
-Do not admit pre-v101 CNs after committing a v101 durable floor. The existing
+Do not admit pre-v107 CNs after committing a v107 durable floor. The existing
 floor advances monotonically; deleting views/generated expressions or indexes
 does not by itself lower it. In-place rollback below that floor is unsupported
 unless a separately supported, validated floor-lowering procedure exists.
@@ -135,76 +139,17 @@ rejection and rollback restriction, and retained validation/performance disposit
 - Independent approval of this revision followed by implementation re-review and
   deployment QA. None is implied by this document or local test success.
 
-### Revision 4 validation record (2026-09-28)
+### Evidence status for revision 5
 
-Code and permanent tests: [021c9ba226a0fa2e9eea9e69168556a1e0a4733e](https://github.com/matrixorigin/matrixone/tree/021c9ba226a0fa2e9eea9e69168556a1e0a4733e).
-The candidate integrates main `466eb8ff4f65752ad25d7e19274770459f5ef934`
-in merge commit `29e3dc6091287eb807d2e23bafdc851785360125`, followed by the
-legacy/response-contract repair in the linked commit.
-Allocation was rechecked at main `466eb8ff4f65752ad25d7e19274770459f5ef934`:
-v100 is allocated to on-demand view metadata; v101 is reserved for this
-JSON_VALUE contract after the conflict resolution.
+Historical measurements and revision-4 validation diary remain in git/PR history
+at immutable source `88c5d3e65be9a887a5094ae584d371d35d4e95d2`; they are not
+new-head PASS evidence. In particular, admitted-extraction benchmarks exclude
+generic vector ingestion/unmarshal and cannot answer their regression cost.
 
-| Check | Result and scope |
-| --- | --- |
-| Counterexample before repair | Expected FAIL: TIME lost the date under NULL/DEFAULT/ERROR (varchar and JSON inputs); binding accepted an invalid unused TIME DEFAULT. |
-| Normal owning packages | PASS: types, bytejson, function, plan, pb/plan and parsers/...; native/CGo build completed in the isolated worktree. |
-| Remote boundary | PASS: `TestRemoteExpressionProtocolValidation`, including v100 rejection and v101 admission. Runtime integer tests are not old-binary rollout tests. |
-| Race | PASS: JSON_VALUE and stored-JSON tests in bytejson/function. |
-| Legacy/response contract repair | PASS: legacy two-argument text remains unbounded; malformed source JSON is a statement error; explicit scalar text rejects composite values through `ON ERROR`; implicit clause targets retain `VARCHAR(512)`. |
-| SQL publication | PASS: parser/binder/DDL/catalog paths; failed admission leaves no tables, columns or index metadata; legacy control, generated-column index, read/write separation, failed ALTER VIEW preserving its definition, real CN restart, rebind and subsequent indexed writes. |
-| Prepared protocol | PASS: DATE/TIME NULL/DEFAULT/ERROR, repeated COM_STMT_EXECUTE, and invalid unused DEFAULT rejected by COM_STMT_PREPARE. |
-| Canonical SQL BVT | PASS twice: 117/117 each, zero failures/ignored/abnormal; table and per-case database teardown verified between runs. SQL PREPARE is included. |
-| Historical CI | INCONCLUSIVE cause: old-head Ubuntu UT failed; job logs expired and the run has no artifacts. No unsupported code/environment attribution or blind rerun. New-head CI remains a separate gate. |
-| Independent design approval, actual mixed binaries and QA | PENDING / NOT_RUN. No maintainer acceptance, old-node rejoin, full storage restart or downgrade acceptance is claimed. |
-
-The SQL publication scenario reuses the existing sequential one-CN fixture;
-its measured scenario body was 3.573 seconds including CN restart. The binary
-prepare scenario body was 0.040 seconds. Admission is injected through a
-scoped test-only runtime reader, so heartbeat publication cannot overwrite the
-selected state. The SQL-built physical index owner was also checked: it contains materialized
-keys and no JSON_VALUE expression; its generated-column table owner requires
-v101. No new production test hook is added. The constant-folding SQL
-counterexample passed the existing unified gate, so no speculative parallel
-gate or observer modification was introduced.
-
-BVT used the unmodified canonical `mo-tester -n -g -o -p` path. Its result-file
-lookup rewrites dot-suffixes throughout an absolute path, including `.codex`,
-so byte-identical source/result files were staged outside that hidden directory.
-Initial driver setup/path failures ran no SQL assertions and were retained as
-failed evidence. The first actual comparison exposed six newly added expected
-TIME rows whose zero fractional digits JDBC omits; only those expected rows
-were corrected. Binary protocol checks still assert TIME(6)'s six digits.
-Neither server formatting nor fractional-precision semantics changed.
-
-#### Retained-validation measurement
-
-`BenchmarkJSONValueStoredLargeDocumentSmallPath`, Go 1.26.4, darwin/arm64,
-Apple M1, GOMAXPROCS=4, `-benchmem -benchtime=500ms -count=3`:
-
-| Elements | Stored bytes | Entry | Median ns/op (min-max) | B/op | allocs/op |
-| --- | ---: | --- | ---: | ---: | ---: |
-| 16 | 264 | validated | 1087 (974-1347) | 2224 | 11 |
-| 16 | 264 | admitted | 1486 (545.9-1779) | 384 | 5 |
-| 16 | 264 | vector | 6206 (4911-6407) | 1288 | 28 |
-| 256 | 3384 | validated | 9507 (8190-16133) | 34097 | 15 |
-| 256 | 3384 | admitted | 2659 (2579-4268) | 384 | 5 |
-| 256 | 3384 | vector | 3563 (3322-3886) | 1288 | 28 |
-| 4096 | 53304 | validated | 173960 (163801-380511) | 663622 | 21 |
-| 4096 | 53304 | admitted | 37726 (31774-65958) | 384 | 5 |
-| 4096 | 53304 | vector | 38755 (34568-40116) | 1288 | 28 |
-
-All entries use the same document and assert extraction of 1. Initialization
-and stored admission occur outside the timed loop. `validated` calls complete
-stored validation then extraction; `admitted` calls admitted extraction with
-its retained recursive descendant check; `vector` calls the seven-argument
-`JsonValue` executor on a JSON column with RETURNING SIGNED. Helper extraction
-and complete vector conversion are different measured entry points.
-
-These local samples show substantial run-to-run variation; they do not establish
-a speedup, regression threshold or production acceptance. The admitted path
-still scans descendants. The old benchmark labeled admitted actually measured
-the complete validation entry and must not be cited as admitted-path evidence.
-Removing validation is not part of this repair. The performance CR stays open
-until the reviewer explicitly accepts the retained-check/deferred-optimization
-disposition.
+Current maintenance validates the merged grammar and protocol107 predecessor106
+boundaries separately. Real predecessor/new binaries, old-node rejoin, durable
+floor restart/restore/downgrade, deployment QA and independent approval remain
+required and are not claimed complete. A focused base/head ingestion/unmarshal
+and legacy two-argument JSON_VALUE comparison must include actual measurements,
+equivalent inputs, environment and variation, plus a retained-cost decision.
+Preserve structural and canonical JSON safety checks while that evidence is pending.

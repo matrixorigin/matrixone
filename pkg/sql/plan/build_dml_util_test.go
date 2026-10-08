@@ -98,7 +98,7 @@ func TestGetSqlForFkReferredToEscapesStringLiterals(t *testing.T) {
 }
 
 func TestForeignKeyCatalogLayoutIsExtendedOnlyAfterAllColumnsExist(t *testing.T) {
-	ctx := NewEmptyCompilerContext()
+	ctx := NewEmptyCompilerContext(nil)
 	ctx.tables[catalog.MOForeignKeys] = &TableDef{
 		Name: catalog.MOForeignKeys,
 		Cols: []*ColDef{{Name: "referenced_index_name"}, {Name: "on_delete_origin"}},
@@ -220,6 +220,8 @@ func TestGetSqlForCheckHasDBRefersToEscapesStringLiterals(t *testing.T) {
 	sql := getSqlForCheckHasDBRefersTo("db'name")
 	require.Contains(t, sql, "refer_db_name = 'db\\'name'")
 	require.Contains(t, sql, "db_name != 'db\\'name'")
+	require.Contains(t, sql, "refer_table_name in (select relname from `mo_catalog`.`mo_tables`")
+	require.Contains(t, sql, "account_id = current_account_id() and reldatabase = 'db\\'name' and relkind != '"+catalog.SystemViewRel+"'")
 }
 
 func TestGetSqlForTransferAlterCopyFk(t *testing.T) {
@@ -292,7 +294,9 @@ func TestFkCatalogMutationSqlEscapesIdentifiers(t *testing.T) {
 		"update `mo_catalog`.`mo_foreign_keys` set refer_column_name = 'new\\'name\\\\part' where refer_db_name = 'db\\'name\\\\part' and refer_table_name = 'table\\'name\\\\part' and refer_column_name = 'old\\'name\\\\part' ; ",
 	}, getSqlForRenameColumn(db, table, oldName, newName))
 	require.Equal(t,
-		"select count(*) > 0 from `mo_catalog`.`mo_foreign_keys` where refer_db_name = 'db\\'name\\\\part' and db_name != 'db\\'name\\\\part';",
+		"select count(*) > 0 from `mo_catalog`.`mo_foreign_keys` where refer_db_name = 'db\\'name\\\\part' and db_name != 'db\\'name\\\\part' "+
+			"and refer_table_name in (select relname from `mo_catalog`.`mo_tables` "+
+			"where account_id = current_account_id() and reldatabase = 'db\\'name\\\\part' and relkind != '"+catalog.SystemViewRel+"');",
 		getSqlForCheckHasDBRefersTo(db))
 }
 
@@ -542,7 +546,7 @@ func TestAppendIndexPrefixProjection(t *testing.T) {
 	newBuilder := func(t *testing.T) (*QueryBuilder, *BindContext, int32) {
 		t.Helper()
 
-		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 		bindCtx := NewBindContext(builder, nil)
 		lastNodeID := builder.appendNode(&plan.Node{
 			NodeType: plan.Node_PROJECT,
@@ -653,7 +657,7 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 	newBuilder := func(t *testing.T) (*QueryBuilder, *BindContext, int32) {
 		t.Helper()
 
-		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 		bindCtx := NewBindContext(builder, nil)
 		lastNodeID := builder.appendNode(&plan.Node{
 			NodeType: plan.Node_PROJECT,
@@ -912,7 +916,7 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 }
 
 func TestUniqueIndexDeletePreservesTagThroughFilterAndLock(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	builder := NewQueryBuilder(plan.Query_DELETE, ctx, false, false)
 	bindCtx := NewBindContext(builder, nil)
 	sourceTag := builder.genNewBindTag()
@@ -983,7 +987,7 @@ func TestUniqueIndexDeletePreservesTagThroughFilterAndLock(t *testing.T) {
 }
 
 func TestPrefixIndexDMLPlansMaterializePrefixKeys(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	emp := mock.ctxt.tables["emp"]
 	require.NotNil(t, emp)
 	require.NotEmpty(t, emp.Indexes)

@@ -15,6 +15,8 @@
 package plan
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -90,7 +92,7 @@ func (builder *QueryBuilder) readExistentialRelation(id int32) (*existentialRela
 		if builder.ctxByNode[id].queryBlockOwner != owner {
 			return nil, false
 		}
-		if n.Limit != nil || n.Offset != nil || len(n.OrderBy) != 0 || len(n.LockTargets) != 0 || len(n.OriginViews) != 0 || n.DirectView != "" {
+		if n.Limit != nil || n.Offset != nil || len(n.OrderBy) != 0 || len(n.LockTargets) != 0 || len(n.ViewPath) != 0 {
 			return nil, false
 		}
 		r.filters = append(r.filters, n.FilterList...)
@@ -666,7 +668,7 @@ func existentialPredicateSafe(e *plan.Expr) bool {
 		if lit == nil || lit.Src != nil || !types.T(arg.Typ.Id).IsInteger() || !types.T(x.Typ.Id).IsInteger() {
 			return
 		}
-		if checkNoNeedCast(makeTypeByPlan2Expr(arg), makeTypeByPlan2Expr(x), arg) {
+		if checkNoNeedCast(context.Background(), makeTypeByPlan2Expr(arg), makeTypeByPlan2Expr(x), arg) {
 			x.Expr = DeepCopyExpr(arg).Expr
 		}
 	})

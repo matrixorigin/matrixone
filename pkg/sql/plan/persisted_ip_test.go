@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -105,7 +106,7 @@ func TestPersistedDecimalDivisionRequiresV97(t *testing.T) {
 }
 
 func TestPersistedDecimalDivisionViewAdmissionBeforeFold(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	proc := ctx.GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -202,7 +203,7 @@ func TestPersistedDecimalLiteralProtocolAdmission(t *testing.T) {
 }
 
 func TestPersistedDecimalLiteralTargetTypedDefaultAdmission(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	proc := ctx.GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -378,7 +379,7 @@ func TestPersistedDecimalLiteralMarkerSurvivesConstantFold(t *testing.T) {
 }
 
 func TestPersistedIPFunctionProtocolAdmission(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	proc := ctx.GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	old, exists := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -547,18 +548,53 @@ func TestPersistedProtocolVersionAdmissionSeparatesReadAndAuthoringFloors(t *tes
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(0))
 	require.NoError(t, RequirePersistedProtocolVersion(
 		proc.Ctx, proc, defines.MORPCVersion72))
-	require.ErrorContains(t, RequirePersistedProtocolVersionForAuthoring(
-		proc.Ctx, proc, defines.MORPCVersion72), "protocol version 72")
+	err := RequirePersistedProtocolVersionForAuthoring(proc.Ctx, proc, defines.MORPCVersion72)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+	require.ErrorContains(t, err, "protocol version 72")
+	require.ErrorContains(t, err, fmt.Sprintf("CN %q: local protocol=%d, authoring floor=0", proc.GetService(), defines.MORPCLatestVersion))
 
 	// After the enabled/admitted/catalog-fenced snapshot, the write gate opens.
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor,
 		int64(defines.MORPCVersion72))
 	require.NoError(t, RequirePersistedProtocolVersionForAuthoring(
 		proc.Ctx, proc, defines.MORPCVersion72))
+	for _, tc := range []struct {
+		name     string
+		protocol any
+		floor    any
+		want     string
+	}{
+		{"low protocol", int64(71), int64(72), "local protocol=71, authoring floor=72"},
+		{"low floor", defines.MORPCLatestVersion, int64(71), fmt.Sprintf("local protocol=%d, authoring floor=71", defines.MORPCLatestVersion)},
+		{"invalid protocol", "not a protocol", int64(72), "local protocol=invalid, authoring floor=72"},
+		{"invalid floor", defines.MORPCLatestVersion, "not a floor", fmt.Sprintf("local protocol=%d, authoring floor=invalid", defines.MORPCLatestVersion)},
+		{"missing protocol", nil, int64(72), "local protocol=missing, authoring floor=72"},
+		{"missing floor with low protocol", int64(71), nil, "local protocol=71, authoring floor=missing"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for key, value := range map[string]any{moruntime.MOProtocolVersion: tc.protocol, moruntime.PersistedExpressionProtocolAuthoringFloor: tc.floor} {
+				if value != nil {
+					rt.SetGlobalVariables(key, value)
+				} else if old, ok := rt.GetGlobalVariables(key); ok {
+					rt.CompareAndDeleteGlobalVariables(key, old)
+				}
+			}
+			err := RequirePersistedProtocolVersionForAuthoring(nil, proc, defines.MORPCVersion72)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+			require.ErrorContains(t, err, tc.want)
+		})
+	}
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	value, _ := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor)
+	rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, value)
+	require.NoError(t, RequirePersistedProtocolVersionForAuthoring(nil, proc, defines.MORPCVersion72), "standalone missing-floor fallback is unchanged")
+	err = RequirePersistedProtocolVersionForAuthoring(nil, nil, defines.MORPCVersion72)
+	require.ErrorContains(t, err, "local protocol=unavailable, authoring floor=unavailable")
+	require.NoError(t, RequirePersistedProtocolVersionForAuthoring(nil, nil, 0))
 }
 
 func TestPersistedIPFunctionProtocolAdmissionForCatalogBuilders(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	proc := ctx.GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	old, exists := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -659,7 +695,7 @@ func TestPersistedStringNumericResultProtocolAdmission(t *testing.T) {
 }
 
 func TestPersistedDynamicIPViewProtocolSurvivesConstantFolding(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	proc := ctx.GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -703,7 +739,7 @@ func TestPersistedDynamicIPViewProtocolSurvivesConstantFolding(t *testing.T) {
 }
 
 func TestPersistedViewProtocolAdmissionCapturesBindTimeBetweenFold(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	proc := ctx.GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -746,7 +782,7 @@ func TestPersistedViewProtocolAdmissionCapturesBindTimeBetweenFold(t *testing.T)
 }
 
 func TestPersistedMixedTemporalViewProtocolAdmission(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	proc := ctx.GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -1109,6 +1145,31 @@ func mustBindPersistedFollowupExpr(t *testing.T, ctx context.Context, name strin
 	return expr
 }
 
+func TestJSONValuePersistedFloorComposesWithLandedJSONContracts(t *testing.T) {
+	jsonValue := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_varchar), Width: 512},
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{Obj: int64(462)<<32 | 2, ObjName: "json_value"},
+			Args: make([]*planpb.Expr, 7),
+		}},
+	}
+	jsonInput := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_varchar)},
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.CONCAT, 0), ObjName: "concat"},
+			Args: []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_json)}}},
+		}},
+	}
+	owner := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{jsonValue, jsonInput}}}}
+	features, err := planpb.RequiredRemoteExpressionFeatures(owner)
+	require.NoError(t, err)
+	require.True(t, features.JSONValueContract)
+	require.True(t, features.JSONInputContracts)
+	required, err := RequiredPersistedExpressionProtocolVersion(owner)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion107, required)
+}
+
 func TestJSONValuePersistedProtocolAdmissionAcrossOwners(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	rt := moruntime.ServiceRuntime(proc.GetService())
@@ -1176,27 +1237,27 @@ func TestJSONValuePersistedProtocolAdmissionAcrossOwners(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			required, err := RequiredPersistedExpressionProtocolVersion(tc.owner)
 			require.NoError(t, err)
-			require.Equal(t, int64(defines.MORPCVersion101), required)
+			require.Equal(t, int64(defines.MORPCVersion107), required)
 
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion99)
-			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion99))
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion106)
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion106))
 			require.ErrorContains(t,
-				RequirePersistedExpressionProtocol(proc.Ctx, proc, tc.owner), "protocol version 101")
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion101)
-			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion101))
+				RequirePersistedExpressionProtocol(proc.Ctx, proc, tc.owner), "protocol version 107")
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion107)
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion107))
 			require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, tc.owner))
 		})
 	}
 
 	for _, tc := range owners {
 		owner := tc.owner
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion101)
-		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion101))
-		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion99))
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion107)
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion107))
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion106))
 		require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, owner))
 		require.ErrorContains(t,
-			RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, owner), "protocol version 101")
-		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion101))
+			RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, owner), "protocol version 107")
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion107))
 		require.NoError(t, RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, owner))
 	}
 
@@ -1214,7 +1275,7 @@ func checkAdmissionResult(t *testing.T, version int64, err error, required int64
 // Exercise parser/binder/DDL owners rather than supplying prebuilt expressions.
 // Publication and restart remain separate service-level acceptance obligations.
 func TestJSONValuePersistedSQLAdmission(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	proc := ctx.GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	keys := []string{moruntime.MOProtocolVersion, moruntime.PersistedExpressionProtocolFloor, moruntime.PersistedExpressionProtocolAuthoringFloor}
@@ -1252,9 +1313,9 @@ func TestJSONValuePersistedSQLAdmission(t *testing.T) {
 		protocol, authoring int64
 		allowed             bool
 	}{
-		{"old CN", defines.MORPCVersion99, defines.MORPCVersion99, false},
-		{"read only admission", defines.MORPCVersion101, defines.MORPCVersion99, false},
-		{"authoring admitted", defines.MORPCVersion101, defines.MORPCVersion101, true},
+		{"old CN", defines.MORPCVersion106, defines.MORPCVersion106, false},
+		{"read only admission", defines.MORPCVersion107, defines.MORPCVersion106, false},
+		{"authoring admitted", defines.MORPCVersion107, defines.MORPCVersion107, true},
 	} {
 		t.Run(state.name, func(t *testing.T) {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, state.protocol)
@@ -1267,14 +1328,14 @@ func TestJSONValuePersistedSQLAdmission(t *testing.T) {
 					defer stmt.Free()
 					built, err := BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: sql}, stmt, false)
 					if !state.allowed {
-						require.ErrorContains(t, err, "protocol version 101")
+						require.ErrorContains(t, err, "protocol version 107")
 						return
 					}
 					require.NoError(t, err)
 					if table := built.GetDdl().GetCreateTable(); table != nil && table.GetTableDef().GetName() == "jv_index" {
 						required, err := RequiredPersistedExpressionProtocolVersion(table.GetTableDef())
 						require.NoError(t, err)
-						require.Equal(t, int64(defines.MORPCVersion101), required)
+						require.Equal(t, int64(defines.MORPCVersion107), required)
 						require.Len(t, table.GetIndexTables(), 1)
 						// The SQL builder's physical index stores materialized
 						// keys, not the generated expression owned by its table.
@@ -1286,7 +1347,7 @@ func TestJSONValuePersistedSQLAdmission(t *testing.T) {
 						var data ViewData
 						require.NoError(t, json.Unmarshal([]byte(view.GetTableDef().GetViewSql().GetView()), &data))
 						require.NotNil(t, data.RequiredProtocolVersion)
-						require.Equal(t, int64(defines.MORPCVersion101), *data.RequiredProtocolVersion)
+						require.Equal(t, int64(defines.MORPCVersion107), *data.RequiredProtocolVersion)
 					}
 				})
 			}

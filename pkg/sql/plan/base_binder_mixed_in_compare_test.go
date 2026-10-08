@@ -117,7 +117,7 @@ func TestMixedStringNumericInBindsNumericComparisonsAsFloat64(t *testing.T) {
 }
 
 func TestMixedStringNumericInConstantFoldsToTrue(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	expr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "in", []*planpb.Expr{
 		makePlan2StringConstExprWithType("9.50"), mixedStringNumericInList(t, ctx.GetContext()),
 	})
@@ -131,7 +131,7 @@ func TestMixedStringNumericInConstantFoldsToTrue(t *testing.T) {
 }
 
 func TestMixedStringNumericNotInBindsAndFoldsToFalse(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	expr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "not_in", []*planpb.Expr{
 		makePlan2StringConstExprWithType("9.50"), mixedStringNumericInList(t, ctx.GetContext()),
 	})
@@ -171,7 +171,7 @@ func TestMixedStringNumericNotInBindsAndFoldsToFalse(t *testing.T) {
 }
 
 func TestPromotedPadSpaceStringInUsesCanonicalKey(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	for _, tc := range []struct {
 		name string
 		fn   string
@@ -216,7 +216,7 @@ func TestPromotedPadSpaceComparisonBuiltinsUseCanonicalArguments(t *testing.T) {
 		{name: "greatest", sql: "select greatest(" + value + ", 'MO') from nation", fn: "greatest"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.sql)
 			require.NoError(t, err)
 
 			var found bool
@@ -288,5 +288,30 @@ func TestNumericInStringLiteralKeepsExactNumericComparison(t *testing.T) {
 			require.Equal(t, int32(tc.expected), comparison.Args[0].Typ.Id)
 			require.Equal(t, int32(tc.expected), comparison.Args[1].Typ.Id)
 		})
+	}
+}
+
+func TestIntegerColumnStringLiteralProof(t *testing.T) {
+	for _, tc := range []struct {
+		text string
+		oid  types.T
+		fits bool
+	}{
+		{"9223372036854775806", types.T_int64, true},
+		{"9223372036854775807", types.T_int64, true},
+		{"-9223372036854775808", types.T_int64, true},
+		{"9223372036854775808", types.T_int64, false},
+		{"18446744073709551615", types.T_uint64, true},
+		{"18446744073709551616", types.T_uint64, false},
+		{"-1", types.T_uint64, false}, {"256", types.T_uint8, false},
+		{"2.5", types.T_int32, false}, {"2x", types.T_int32, false},
+		{"2e0", types.T_int32, false}, {" \t+2\r\n", types.T_int32, true},
+	} {
+		column := &planpb.Expr{Typ: makeSimplePlan2Type(tc.oid), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
+		literal := makePlan2StringConstExprWithType(tc.text)
+		require.Equal(t, tc.fits, integerColumnStringLiteralFits(column, literal), tc.text)
+		require.False(t, integerColumnStringLiteralFits(makePlan2Int64ConstExprWithType(2), literal))
+		literal.GetLit().IsBin = true
+		require.False(t, integerColumnStringLiteralFits(column, literal))
 	}
 }

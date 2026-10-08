@@ -67,7 +67,7 @@ func makeHnswIndexWithInclude(vecCol string, includeCols ...string) *tree.Index 
 }
 
 func TestBuildIvfFlatSecondaryIndexDef_StoresIncludeColumnsInIndexDef(t *testing.T) {
-	ctx := NewMockOptimizer(false).CurrentContext()
+	ctx := NewMockOptimizer(false, newPlanTestProcess(t)).CurrentContext()
 	indexInfo := makeIvfIndexWithInclude("embedding", "title", "category")
 	colMap := map[string]*ColDef{
 		"id":        makeTestColDef("id", types.T_int64),
@@ -91,7 +91,7 @@ func TestBuildIvfFlatSecondaryIndexDef_StoresIncludeColumnsInIndexDef(t *testing
 }
 
 func TestBuildHnswSecondaryIndexDef_RejectsIncludeColumns(t *testing.T) {
-	ctx := NewMockOptimizer(false).CurrentContext()
+	ctx := NewMockOptimizer(false, newPlanTestProcess(t)).CurrentContext()
 	indexInfo := makeHnswIndexWithInclude("embedding", "title", "category")
 	colMap := map[string]*ColDef{
 		"id":        makeTestColDef("id", types.T_int64),
@@ -108,7 +108,7 @@ func TestBuildHnswSecondaryIndexDef_RejectsIncludeColumns(t *testing.T) {
 }
 
 func TestBuildIvfFlatSecondaryIndexDef_ExtendsEntriesTableWithIncludeColumns(t *testing.T) {
-	ctx := NewMockOptimizer(false).CurrentContext()
+	ctx := NewMockOptimizer(false, newPlanTestProcess(t)).CurrentContext()
 	indexInfo := makeIvfIndexWithInclude("embedding", "title", "category")
 	colMap := map[string]*ColDef{
 		"id":        makeTestColDef("id", types.T_int64),
@@ -134,7 +134,7 @@ func TestBuildIvfFlatSecondaryIndexDef_ExtendsEntriesTableWithIncludeColumns(t *
 }
 
 func TestBuildIvfFlatSecondaryIndexDef_RejectsTooManyIncludeColumns(t *testing.T) {
-	ctx := NewMockOptimizer(false).CurrentContext()
+	ctx := NewMockOptimizer(false, newPlanTestProcess(t)).CurrentContext()
 
 	includeCols := make([]string, 11)
 	colMap := map[string]*ColDef{
@@ -210,7 +210,7 @@ func TestBuildIvfFlatSecondaryIndexDef_RejectsInvalidIncludeColumns(t *testing.T
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := NewMockOptimizer(false).CurrentContext()
+			ctx := NewMockOptimizer(false, newPlanTestProcess(t)).CurrentContext()
 			_, _, err := ivfflatplan.Hooks{}.BuildSecondaryIndexDefs(
 				ctx,
 				makeIvfIndexWithInclude("embedding", tc.includeCols...),
@@ -235,7 +235,7 @@ func TestBuildIvfFlatSecondaryIndexDef_RejectsIncludeTypesUnsupportedByISCP(t *t
 		types.T_geometry32,
 	} {
 		t.Run(oid.String(), func(t *testing.T) {
-			ctx := NewMockOptimizer(false).CurrentContext()
+			ctx := NewMockOptimizer(false, newPlanTestProcess(t)).CurrentContext()
 			colMap := map[string]*ColDef{
 				"id":        makeTestColDef("id", types.T_int64),
 				"embedding": makeTestColDef("embedding", types.T_array_float32),

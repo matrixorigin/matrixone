@@ -1943,6 +1943,9 @@ type ParamExpr struct {
 }
 
 func (node *ParamExpr) Format(ctx *FmtCtx) {
+	if ctx.parameterCount != nil {
+		*ctx.parameterCount = max(*ctx.parameterCount, node.Offset)
+	}
 	ctx.WriteByte('?')
 	if ctx.paramExprOffset {
 		ctx.WriteString(strconv.Itoa(node.Offset))

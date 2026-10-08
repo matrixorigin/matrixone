@@ -66,7 +66,7 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 	builder.sqlCalcFoundRows = selectHasSQLCalcFoundRows(stmt)
 	builder.persistedViewTarget = persistedViewTarget
 	builder.sessionSelectLimitMayStopEarly = sessionSelectLimitMayStopEarly(
-		ctx, stmt, isPrepareStmt,
+		ctx, stmt, builder.isReusablePlan(),
 	)
 	bindCtx := NewBindContext(builder, nil)
 	bindCtx.restoreViewMySQLSpecialTypes = restoreViewMySQLSpecialTypes
@@ -80,6 +80,9 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 
 	rootId, err := builder.bindSelect(stmt, bindCtx, true)
 	if err != nil {
+		return nil, err
+	}
+	if err = builder.bindPreparedPredicateDiagnostics(); err != nil {
 		return nil, err
 	}
 	builder.skipStats = skipStats
@@ -623,7 +626,15 @@ func selectTreeHasExportParam(value reflect.Value) bool {
 	return false
 }
 
-func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*Plan, error) {
+func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (result *Plan, err error) {
+	defer func() {
+		if err == nil {
+			err = plan.RequireLegacyCollations(result)
+			if err != nil {
+				result = nil
+			}
+		}
+	}()
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementBuildPlanHistogram.Observe(time.Since(start).Seconds())
@@ -1035,6 +1046,19 @@ func findResultColumnSourceAtNode(
 		if source := resultColumnSourceFromTableDef(node.TableDef, ref.ColPos); source != nil {
 			return source
 		}
+	}
+
+	if node.NodeType == plan.Node_VECTOR_QUERY_TOP {
+		// The provider is control input. Result provenance belongs to the
+		// preserved relational branch, not its one-column vector schema.
+		if len(node.Children) != 3 {
+			return nil
+		}
+		childRef := resultColumnJoinChildProjectionRef(query, node, 2, ref.ColPos)
+		if childRef == nil {
+			return nil
+		}
+		return findResultColumnSourceAtNode(query, node.Children[2], childRef, visited, false)
 	}
 
 	if node.NodeType == plan.Node_JOIN {
