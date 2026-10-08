@@ -399,7 +399,7 @@ func TestCTASRepeatedDerivedStringDomainReferenceStaysConservative(t *testing.T)
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	plan, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+	plan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
 	require.NoError(t, err)
 	var visible []*planpb.ColDef
 	for _, col := range plan.GetDdl().GetCreateTable().GetTableDef().GetCols() {

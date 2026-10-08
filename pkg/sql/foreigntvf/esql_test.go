@@ -68,9 +68,19 @@ func TestConnectESQLAndQuery(t *testing.T) {
 		fmt.Fprint(w, "a,b\r\n1,x\r\n2,y\r\n")
 	})
 
-	conn, err := connectESQL(ctx, esConfigJSON(srv.URL))
+	cache := newFakeConnCache()
+	cfg := esConfigJSON(srv.URL)
+	conn, handle, err := ResolveOrConnect(ctx, cache, KindESQL, cfg)
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, conn.Close()) })
 	require.Equal(t, KindESQL, conn.Kind())
+	reused, reusedHandle, err := ResolveOrConnect(ctx, cache, KindESQL, cfg)
+	require.NoError(t, err)
+	require.Same(t, conn, reused)
+	require.Equal(t, handle, reusedHandle)
+	byHandle, err := ByHandle(ctx, cache, handle)
+	require.NoError(t, err)
+	require.Same(t, conn, byHandle)
 
 	stream, err := conn.Query(ctx, "FROM idx | LIMIT 2")
 	require.NoError(t, err)
@@ -79,6 +89,12 @@ func TestConnectESQLAndQuery(t *testing.T) {
 	require.NoError(t, stream.Close())
 	require.Equal(t, "a,b\r\n1,x\r\n2,y\r\n", string(data))
 	require.Equal(t, "FROM idx | LIMIT 2", gotQuery)
+
+	removed, ok := cache.RemoveForeignConn(handle)
+	require.True(t, ok)
+	require.Same(t, conn, removed)
+	_, err = ByHandle(ctx, cache, handle)
+	require.ErrorContains(t, err, "not found or disconnected")
 
 	// Close releases idle sockets and is idempotent.
 	require.NoError(t, conn.Close())
@@ -98,16 +114,26 @@ func TestConnectESQLErrors(t *testing.T) {
 }
 
 func TestEsqlQueryErrorStatus(t *testing.T) {
-	ctx := context.Background()
-	srv := fakeES(t, func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprint(w, `{"error":{"reason":"unknown index [nope]"}}`)
-	})
-	conn, err := connectESQL(ctx, esConfigJSON(srv.URL))
-	require.NoError(t, err)
-	_, err = conn.Query(ctx, "FROM nope")
-	require.ErrorContains(t, err, "query error")
-	require.ErrorContains(t, err, "unknown index")
+	for _, tc := range []struct{ name, body, want string }{
+		{"reason", `{"error":{"reason":"unknown index [nope]"}}`, "unknown index"},
+		{"bounded body", strings.Repeat("x", 8193), strings.Repeat("x", 8192)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := fakeES(t, func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = io.WriteString(w, tc.body)
+			})
+			conn, err := connectESQL(t.Context(), esConfigJSON(srv.URL))
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, conn.Close()) })
+			_, err = conn.Query(t.Context(), "FROM nope")
+			require.ErrorContains(t, err, "query error")
+			require.ErrorContains(t, err, tc.want)
+			if len(tc.body) > 8192 {
+				require.NotContains(t, err.Error(), tc.body)
+			}
+		})
+	}
 }
 
 // TestEsqlQueryTruncatedResponse proves a mid-stream connection drop surfaces
@@ -250,28 +276,50 @@ func TestConnectESQLRejectsEmptyConfig(t *testing.T) {
 // connects against a 401 endpoint left 8 server connections in StateIdle for
 // IdleConnTimeout).
 func TestConnectESQLFailedHandshakeClosesTransport(t *testing.T) {
-	ctx := context.Background()
-	var open atomic.Int64
-	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Elastic-Product", "Elasticsearch")
-		w.WriteHeader(http.StatusUnauthorized)
-	}))
-	srv.Config.ConnState = func(c net.Conn, s http.ConnState) {
-		switch s {
-		case http.StateNew:
-			open.Add(1)
-		case http.StateClosed, http.StateHijacked:
-			open.Add(-1)
-		}
+	for _, tc := range []struct {
+		name, product, message string
+		status, attempts       int
+	}{
+		{"unauthorized", "Elasticsearch", "elasticsearch returned", http.StatusUnauthorized, 8},
+		{"missing product", "", "cannot reach elasticsearch", http.StatusOK, 1},
+		{"wrong product", "other", "cannot reach elasticsearch", http.StatusOK, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			t.Cleanup(cancel)
+			var open atomic.Int64
+			srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("X-Elastic-Product", tc.product)
+				w.WriteHeader(tc.status)
+				// An empty 401 response returns its socket to the idle pool;
+				// only failed-connect cleanup can drain that connection.
+				// Product failures also exercise closing an unread body.
+				if tc.status != http.StatusUnauthorized {
+					_, _ = io.WriteString(w, "{}")
+				}
+			}))
+			srv.Config.ConnState = func(c net.Conn, s http.ConnState) {
+				switch s {
+				case http.StateNew:
+					open.Add(1)
+				case http.StateClosed, http.StateHijacked:
+					open.Add(-1)
+				}
+			}
+			srv.Start()
+			t.Cleanup(srv.Close)
+			cache := newFakeConnCache()
+			cfg := esConfigJSON(srv.URL)
+			for i := 0; i < tc.attempts; i++ {
+				conn, _, err := ResolveOrConnect(ctx, cache, KindESQL, cfg)
+				require.Nil(t, conn)
+				require.ErrorContains(t, err, tc.message)
+				_, admitted := cache.GetForeignConn(MakeHandle(KindESQL, cfg))
+				require.False(t, admitted)
+			}
+			require.Eventually(t, func() bool { return open.Load() == 0 },
+				5*time.Second, 20*time.Millisecond,
+				"failed connects must close response bodies and private sockets before server teardown")
+		})
 	}
-	srv.Start()
-	t.Cleanup(srv.Close)
-
-	for i := 0; i < 8; i++ {
-		_, err := connectESQL(ctx, esConfigJSON(srv.URL))
-		require.ErrorContains(t, err, "elasticsearch returned")
-	}
-	require.Eventually(t, func() bool { return open.Load() == 0 },
-		5*time.Second, 20*time.Millisecond,
-		"failed connects must not leave open keep-alive connections")
 }

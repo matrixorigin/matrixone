@@ -69,7 +69,7 @@ func TestBuildPlanWithPrepareModeReusesJSONMergeWarningLifecycle(t *testing.T) {
 	defer stmt.Free()
 
 	sink := new(frontendJSONMergeWarningSink)
-	compilerCtx := plan.NewEmptyCompilerContext()
+	compilerCtx := plan.NewEmptyCompilerContext(newPlanTestProcess(t))
 	compilerCtx.SetContext(plan.WithJSONMergeWarningContext(
 		ctx, sink, plan.JSONMergeWarningUser))
 

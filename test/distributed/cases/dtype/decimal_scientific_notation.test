@@ -43,3 +43,17 @@ SELECT * FROM t;
 DROP TABLE t;
 DROP TABLE t2;
 
+
+-- Destination precision, not mantissa spelling, determines conversion.
+select cast('12345678901234567890100000000000000000000E-20' as decimal(38,0)) as v;
+select cast(concat('123456789012345678901', repeat('0',80), 'E-80') as decimal(65,0)) as v;
+select cast(concat('0.', repeat('0',80), '123E81') as decimal(5,2)) as v;
+select cast(concat('1.234', repeat('9',80), 'e0') as decimal(5,2)) as v;
+select cast('-1.235E0' as decimal(5,2)) as v;
+select cast('1E99999999999999999999999' as decimal(5,2)) as v;
+select cast('1E-99999999999999999999999' as decimal(5,2)) as v;
+select cast(null as decimal(38,0)) as v;
+prepare scientific_cast from 'select cast(? as decimal(38,0)) as v';
+set @scientific_value = concat('123456789012345678901', repeat('0',80), 'E-80');
+execute scientific_cast using @scientific_value;
+deallocate prepare scientific_cast;

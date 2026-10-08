@@ -679,7 +679,7 @@ func TestMaxBySpillPreservesBinaryStringProvenanceAcrossGroups(t *testing.T) {
 func TestMaxByMergeIsCommutativeAndAssociative(t *testing.T) {
 	mp := mpool.MustNewZero()
 	params := []types.Type{types.T_varchar.ToType(), types.T_int64.ToType(), types.T_varchar.ToType()}
-	inputs := []*vector.Vector(nil)
+	inputs := make([]*vector.Vector, 0, 3)
 	for _, candidate := range []string{"alpha", "gamma", "beta"} {
 		inputs = append(inputs, maxByInputs(t, mp, []string{candidate}, nil, []int64{10}, []string{"same"})...)
 	}

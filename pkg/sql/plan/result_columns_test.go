@@ -156,7 +156,7 @@ func TestGetResultColumnsFromPlanPreservesReorderedConstraintMetadata(t *testing
 }
 
 func TestGetResultColumnsFromPlanCarriesJoinedColumnMetadata(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicalPlan, err := runOneStmt(mock, t,
 		"select n.n_nationkey from nation n join region r on n.n_regionkey = r.r_regionkey")
 	require.NoError(t, err)
@@ -169,7 +169,7 @@ func TestGetResultColumnsFromPlanCarriesJoinedColumnMetadata(t *testing.T) {
 }
 
 func TestGetResultColumnsFromPlanClearsNotNullForOuterJoinedColumn(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicalPlan, err := runOneStmt(mock, t,
 		"select r.r_regionkey from nation n left join region r on n.n_regionkey = r.r_regionkey")
 	require.NoError(t, err)
@@ -182,7 +182,7 @@ func TestGetResultColumnsFromPlanClearsNotNullForOuterJoinedColumn(t *testing.T)
 }
 
 func TestGetResultColumnsFromPlanCarriesOriginMetadata(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicalPlan, err := runOneStmt(mock, t,
 		"select n.n_nationkey as key_alias from nation as n")
 	require.NoError(t, err)
@@ -203,7 +203,7 @@ func TestGetResultColumnsFromPlanCarriesOriginMetadata(t *testing.T) {
 }
 
 func TestGetResultColumnsFromPlanLeavesComputedOriginEmpty(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicalPlan, err := runOneStmt(mock, t,
 		"select n.n_nationkey + 1 as derived_key from nation as n")
 	require.NoError(t, err)

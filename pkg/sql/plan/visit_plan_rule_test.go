@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -40,7 +41,7 @@ func TestHexPreparedArgumentUsesSQLExecuteSourceType(t *testing.T) {
 	require.False(t, preparedFunctionArgUsesSQLExecuteNumericSource(nil, "hex", 0, 2))
 
 	ctx := context.Background()
-	prepared, err := runOneStmt(NewMockOptimizer(false), t, "prepare stmt_hex from 'select hex(?)'")
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "prepare stmt_hex from 'select hex(?)'")
 	require.NoError(t, err)
 	preparedPlan := prepared.GetDcl().GetPrepare().Plan
 	preparedHex := findPlanFunctionExpr(preparedPlan, "hex")
@@ -101,7 +102,7 @@ func TestHexPreparedArgumentUsesSQLExecuteSourceType(t *testing.T) {
 }
 
 func TestPreparedProjectedExplicitCastDomain(t *testing.T) {
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		`prepare projected_cast from 'select hex(x) from (select cast(? as double) x) d'`)
 	require.NoError(t, err)
 	original := prepared.GetDcl().GetPrepare().Plan
@@ -126,7 +127,7 @@ func TestPreparedProjectedExplicitCastDomain(t *testing.T) {
 }
 
 func TestPreparedDerivedSelectorCommonDomain(t *testing.T) {
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		`prepare derived_selector from 'select hex(x) from (select if(true,?,?) as x) d'`)
 	require.NoError(t, err)
 	original := prepared.GetDcl().GetPrepare().Plan
@@ -150,7 +151,7 @@ func TestPreparedDerivedSelectorCommonDomain(t *testing.T) {
 }
 
 func TestPreparedGroupedIfnullSourceDomain(t *testing.T) {
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		`prepare grouped_source from 'select hex(char(ifnull((select ? group by 1 limit 1),1.5e0)))'`)
 	require.NoError(t, err)
 	bound, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), prepared.GetDcl().GetPrepare().Plan, []any{
@@ -165,7 +166,7 @@ func TestPreparedGroupedIfnullSourceDomain(t *testing.T) {
 }
 
 func TestPreparedAggregateIntegerSourceDomain(t *testing.T) {
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		`prepare aggregate_source from 'select make_set((select max(?)),"a","b")'`)
 	require.NoError(t, err)
 	original := prepared.GetDcl().GetPrepare().Plan
@@ -204,7 +205,7 @@ func TestHexIfNullPreservesCommonNumericValue(t *testing.T) {
 		{"case selector", "select hex(case when true then cast(2.5 as decimal(20,1)) else 1.5e0 end)", "3"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			bound, err := runOneStmt(NewMockOptimizer(false), t, tc.sql)
+			bound, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, tc.sql)
 			require.NoError(t, err)
 			hexExpr := findPlanFunctionExpr(bound, "hex")
 			require.NotNil(t, hexExpr)
@@ -233,7 +234,7 @@ func TestHexPreparedCoalesceRebindsNumericSourceDomain(t *testing.T) {
 		{"ifnull decimal source", "select hex(ifnull(?,1.5e0))", "2", ParamValue{Value: "2.5", SourceType: types.New(types.T_decimal64, 20, 1), HasSourceType: true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t, "prepare stmt_hex_coalesce from '"+tc.sql+"'")
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "prepare stmt_hex_coalesce from '"+tc.sql+"'")
 			require.NoError(t, err)
 			filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(),
 				prepared.GetDcl().GetPrepare().Plan, []any{tc.param})
@@ -253,7 +254,7 @@ func TestHexPreparedCoalesceRebindsNumericSourceDomain(t *testing.T) {
 
 func TestInetNtoaPreparedArgumentUsesSQLExecuteSourceType(t *testing.T) {
 	ctx := context.Background()
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare stmt_inet_ntoa from 'select inet_ntoa(?)'")
 	require.NoError(t, err)
 	preparedPlan := prepared.GetDcl().GetPrepare().Plan
@@ -552,7 +553,7 @@ func TestCollectPrepareDdlSchemas(t *testing.T) {
 
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			mock := NewMockCompilerContext(false)
+			mock := NewMockCompilerContext(false, newPlanTestProcess(t))
 			for i, name := range []string{"t1", "t2"} {
 				mock.objects[name] = &planpb.ObjectRef{SchemaName: "tpch", ObjName: name}
 				mock.tables[name] = &planpb.TableDef{Name: name, DbId: 10, TblId: uint64(20 + i), Version: 30}
@@ -581,7 +582,7 @@ func TestCollectPrepareDdlSchemas(t *testing.T) {
 }
 
 func TestCollectPrepareDdlSchemasRecordsMissingTable(t *testing.T) {
-	mock := NewMockCompilerContext(false)
+	mock := NewMockCompilerContext(false, newPlanTestProcess(t))
 	statements, err := mysql.Parse(context.Background(), "drop table if exists missing", 1)
 	require.NoError(t, err)
 	defer statements[0].Free()
@@ -594,7 +595,7 @@ func TestCollectPrepareDdlSchemasRecordsMissingTable(t *testing.T) {
 }
 
 func TestCollectPrepareDdlSchemasRecordsMissingDatabase(t *testing.T) {
-	mock := NewMockCompilerContext(false)
+	mock := NewMockCompilerContext(false, newPlanTestProcess(t))
 	mock.DatabaseExistsFunc = func(string, *Snapshot) bool { return false }
 	statements, err := mysql.Parse(context.Background(), "drop table if exists future_db.missing", 1)
 	require.NoError(t, err)
@@ -609,7 +610,7 @@ func TestCollectPrepareDdlSchemasRecordsMissingDatabase(t *testing.T) {
 
 func TestCollectPrepareDdlSchemasPropagatesResolveError(t *testing.T) {
 	expected := errors.New("resolve failed")
-	ctx := &resolveErrorCompilerContext{MockCompilerContext: NewMockCompilerContext(false), err: expected}
+	ctx := &resolveErrorCompilerContext{MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)), err: expected}
 	statements, err := mysql.Parse(context.Background(), "truncate table t1", 1)
 	require.NoError(t, err)
 	defer statements[0].Free()
@@ -639,7 +640,7 @@ func TestCollectPrepareDdlSchemasUsesCloneSourceMetadata(t *testing.T) {
 		}},
 	}}}
 
-	schemas, err := collectPrepareDdlSchemas(NewMockCompilerContext(false), statements[0], clonePlan)
+	schemas, err := collectPrepareDdlSchemas(NewMockCompilerContext(false, newPlanTestProcess(t)), statements[0], clonePlan)
 	require.NoError(t, err)
 	require.Equal(t, []*planpb.ObjectRef{
 		{
@@ -663,7 +664,7 @@ func TestCollectPrepareDdlSchemasTracksCreateTargetDatabase(t *testing.T) {
 			require.NoError(t, err)
 			defer statements[0].Free()
 
-			mock := NewMockCompilerContext(false)
+			mock := NewMockCompilerContext(false, newPlanTestProcess(t))
 			mock.DatabaseExistsFunc = func(name string, _ *Snapshot) bool { return name == "db1" }
 			schemas, err := collectPrepareDdlSchemas(mock, statements[0], &planpb.Plan{
 				Plan: &planpb.Plan_Ddl{Ddl: &planpb.DataDefinition{}},
@@ -684,7 +685,7 @@ func TestCollectPrepareDdlSchemasCollectsForeignKeyParents(t *testing.T) {
 	)
 	require.NoError(t, err)
 	defer statements[0].Free()
-	mock := NewMockCompilerContext(false)
+	mock := NewMockCompilerContext(false, newPlanTestProcess(t))
 	mock.objects["parent"] = &planpb.ObjectRef{SchemaName: "tpch", ObjName: "parent"}
 	mock.tables["parent"] = &planpb.TableDef{Name: "parent", DbId: 10, TblId: 20, Version: 30}
 	createPlan := &planpb.Plan{Plan: &planpb.Plan_Ddl{Ddl: &planpb.DataDefinition{
@@ -705,7 +706,7 @@ func TestCollectPrepareDdlSchemasCollectsExpandedForeignKeyParents(t *testing.T)
 	statements, err := mysql.Parse(context.Background(), "create table child like src", 1)
 	require.NoError(t, err)
 	defer statements[0].Free()
-	mock := NewMockCompilerContext(false)
+	mock := NewMockCompilerContext(false, newPlanTestProcess(t))
 	for i, name := range []string{"src", "parent"} {
 		mock.objects[name] = &planpb.ObjectRef{SchemaName: "tpch", ObjName: name}
 		mock.tables[name] = &planpb.TableDef{Name: name, DbId: 10, TblId: uint64(20 + i), Version: 30}
@@ -729,7 +730,7 @@ func TestCollectPrepareDdlSchemasCollectsForwardReferenceChildren(t *testing.T) 
 	statements, err := mysql.Parse(context.Background(), "create table parent (id int primary key)", 1)
 	require.NoError(t, err)
 	defer statements[0].Free()
-	mock := NewMockCompilerContext(false)
+	mock := NewMockCompilerContext(false, newPlanTestProcess(t))
 	mock.objects["child"] = &planpb.ObjectRef{SchemaName: "tpch", ObjName: "child"}
 	mock.tables["child"] = &planpb.TableDef{Name: "child", DbId: 10, TblId: 20, Version: 30}
 	createPlan := &planpb.Plan{Plan: &planpb.Plan_Ddl{Ddl: &planpb.DataDefinition{
@@ -751,7 +752,7 @@ func TestCollectPrepareDdlSchemasCollectsViewQuery(t *testing.T) {
 	require.NoError(t, err)
 	defer statements[0].Free()
 
-	schemas, err := collectPrepareDdlSchemas(NewMockCompilerContext(false), statements[0], &planpb.Plan{
+	schemas, err := collectPrepareDdlSchemas(NewMockCompilerContext(false, newPlanTestProcess(t)), statements[0], &planpb.Plan{
 		Plan: &planpb.Plan_Ddl{Ddl: &planpb.DataDefinition{}},
 	})
 	require.NoError(t, err)
@@ -817,7 +818,7 @@ func TestResetPreparePlanCollectsDdlQuerySchemas(t *testing.T) {
 		},
 	}}}
 
-	schemas, _, err := ResetPreparePlan(NewMockCompilerContext(false), ddlPlan)
+	schemas, _, err := ResetPreparePlan(NewMockCompilerContext(false, newPlanTestProcess(t)), ddlPlan)
 	require.NoError(t, err)
 	require.Len(t, schemas, 1)
 	require.Equal(t, "src", schemas[0].ObjName)
@@ -840,7 +841,7 @@ func TestResetPreparePlanCollectsExternalScans(t *testing.T) {
 				}},
 			}}}
 
-			schemas, _, err := ResetPreparePlan(NewMockCompilerContext(false), queryPlan)
+			schemas, _, err := ResetPreparePlan(NewMockCompilerContext(false, newPlanTestProcess(t)), queryPlan)
 			require.NoError(t, err)
 			require.Len(t, schemas, 1)
 			require.Equal(t, "src", schemas[0].ObjName)
@@ -861,7 +862,7 @@ func TestResetPreparePlanSkipsScanWithoutCatalogIdentity(t *testing.T) {
 		}},
 	}}}
 
-	schemas, _, err := ResetPreparePlan(NewMockCompilerContext(false), queryPlan)
+	schemas, _, err := ResetPreparePlan(NewMockCompilerContext(false, newPlanTestProcess(t)), queryPlan)
 	require.NoError(t, err)
 	require.Empty(t, schemas)
 }
@@ -880,7 +881,7 @@ func TestResetPreparePlanPreservesScanSnapshot(t *testing.T) {
 		}},
 	}}}
 
-	schemas, _, err := ResetPreparePlan(NewMockCompilerContext(false), queryPlan)
+	schemas, _, err := ResetPreparePlan(NewMockCompilerContext(false, newPlanTestProcess(t)), queryPlan)
 	require.NoError(t, err)
 	require.Len(t, schemas, 1)
 	require.Equal(t, snapshot, schemas[0].GetSnapshot())
@@ -903,7 +904,7 @@ func TestAppendPrepareSchemasKeepsDistinctSnapshots(t *testing.T) {
 }
 
 func TestCollectPrepareViewSchemasPreservesIdentity(t *testing.T) {
-	mock := NewMockCompilerContext(false)
+	mock := NewMockCompilerContext(false, newPlanTestProcess(t))
 	snapshot := &Snapshot{
 		TS:     &timestamp.Timestamp{PhysicalTime: 42, LogicalTime: 7},
 		Tenant: &SnapshotTenant{TenantID: 11, TenantName: "publisher"},
@@ -941,20 +942,20 @@ func TestCollectPrepareViewSchemasPreservesIdentity(t *testing.T) {
 
 func TestCollectPrepareViewSchemasKeepsLogicalSubscriptions(t *testing.T) {
 	ctx := &viewDependencyCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(false),
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		views:               []string{"subscription_one#v", "subscription_two#v"},
 	}
 	ctx.resolve = func(databaseName, tableName string, _ *Snapshot) (*ObjectRef, *TableDef, error) {
 		return &ObjectRef{
-				SchemaName:       "publisher_db",
-				ObjName:          tableName,
-				Obj:              20,
-				SubscriptionName: databaseName,
-				PubInfo:          &planpb.PubInfo{TenantId: 11},
-			}, &TableDef{
-				DbName: "publisher_db", Name: tableName,
-				DbId: 10, TblId: 20, Version: 30,
-			}, nil
+			SchemaName:       "publisher_db",
+			ObjName:          tableName,
+			Obj:              20,
+			SubscriptionName: databaseName,
+			PubInfo:          &planpb.PubInfo{TenantId: 11},
+		}, &TableDef{
+			DbName: "publisher_db", Name: tableName,
+			DbId: 10, TblId: 20, Version: 30,
+		}, nil
 	}
 
 	schemas, err := collectPrepareViewSchemas(ctx)
@@ -1006,7 +1007,7 @@ func TestBindViewRecordsCompleteTableSnapshot(t *testing.T) {
 		TS:     &timestamp.Timestamp{PhysicalTime: 42, LogicalTime: 7},
 		Tenant: &SnapshotTenant{TenantID: 11, TenantName: "publisher"},
 	}
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false), true, false)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false, newPlanTestProcess(t)), true, false)
 	bindCtx := NewBindContext(builder, nil)
 	viewRef := &ObjectRef{
 		SchemaName: "db",
@@ -1082,7 +1083,7 @@ func TestCollectPrepareViewSchemasRejectsInvalidDependencies(t *testing.T) {
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			ctx := &viewDependencyCompilerContext{
-				MockCompilerContext: NewMockCompilerContext(false),
+				MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 				views:               []string{testCase.view},
 				resolve: func(string, string, *Snapshot) (*ObjectRef, *TableDef, error) {
 					t.Fatal("invalid dependency must fail before resolution")
@@ -1098,7 +1099,7 @@ func TestCollectPrepareViewSchemasRejectsInvalidDependencies(t *testing.T) {
 func TestCollectPrepareViewSchemasPropagatesResolutionFailures(t *testing.T) {
 	resolveErr := errors.New("resolve failed")
 	ctx := &viewDependencyCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(false),
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		views:               []string{"db#v"},
 		resolve: func(string, string, *Snapshot) (*ObjectRef, *TableDef, error) {
 			return nil, nil, resolveErr
@@ -1116,7 +1117,7 @@ func TestCollectPrepareViewSchemasPropagatesResolutionFailures(t *testing.T) {
 
 func TestBuildPrepareClearsViewsFromPreviousStatement(t *testing.T) {
 	ctx := &viewDependencyCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(false),
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		views:               []string{"dropped_db#dropped_view"},
 		resolve: func(databaseName, tableName string, _ *Snapshot) (*ObjectRef, *TableDef, error) {
 			require.NotEqual(t, "dropped_db", databaseName)
@@ -1150,7 +1151,7 @@ func TestResetPreparePlanPreservesSubscriptionIdentity(t *testing.T) {
 		},
 	}}}
 
-	schemas, _, err := ResetPreparePlan(NewMockCompilerContext(false), ddlPlan)
+	schemas, _, err := ResetPreparePlan(NewMockCompilerContext(false, newPlanTestProcess(t)), ddlPlan)
 	require.NoError(t, err)
 	require.Len(t, schemas, 1)
 	require.Equal(t, "subscriber_db", schemas[0].SubscriptionName)
@@ -1195,7 +1196,7 @@ func TestDecrementParamOrdinalRuleTraversesFunctionsAndLists(t *testing.T) {
 
 func TestResetPreparePlanCollectsHiddenIndexSchemas(t *testing.T) {
 	const hiddenTable = "__mo_index_hidden"
-	mock := NewMockCompilerContext(false)
+	mock := NewMockCompilerContext(false, newPlanTestProcess(t))
 	mock.objects[hiddenTable] = &planpb.ObjectRef{
 		Db:               10,
 		Obj:              20,
@@ -1247,7 +1248,7 @@ func TestRecordPreparedPluginDependenciesSurvivesScanRemoval(t *testing.T) {
 	snapshot := &planpb.Snapshot{
 		TS: &timestamp.Timestamp{PhysicalTime: 42, LogicalTime: 7},
 	}
-	mock := NewMockCompilerContext(false)
+	mock := NewMockCompilerContext(false, newPlanTestProcess(t))
 	mock.objects[hiddenTable] = &planpb.ObjectRef{
 		Db:         10,
 		Obj:        20,
@@ -1323,7 +1324,7 @@ func TestRecordPreparedPluginDependenciesSurvivesScanRemoval(t *testing.T) {
 }
 
 func TestPrepareSkipsNilIndexMetadata(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	tableDef := mock.ctxt.tables["single_idx_t"]
 	require.NotNil(t, tableDef)
 	require.NotEmpty(t, tableDef.Indexes)
@@ -1363,13 +1364,13 @@ func TestResetPreparedSetMergesTransientCatalogDependencies(t *testing.T) {
 	}
 
 	schemas, _, err := resetPreparePlan(
-		NewMockCompilerContext(false), preparePlan, transientQuery)
+		NewMockCompilerContext(false, newPlanTestProcess(t)), preparePlan, transientQuery)
 	require.NoError(t, err)
 	require.Equal(t, []*planpb.ObjectRef{dependency}, schemas)
 }
 
 func TestRecordPreparedPluginDependenciesIsAtomicOnResolutionFailure(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false), true, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false, newPlanTestProcess(t)), true, true)
 	scanNode := &planpb.Node{
 		NodeType: planpb.Node_TABLE_SCAN,
 		ObjRef: &planpb.ObjectRef{
@@ -1415,7 +1416,7 @@ func TestResetPreparePlanResetsWindowParameterOrder(t *testing.T) {
 		}},
 	}
 
-	_, paramTypes, err := ResetPreparePlan(NewMockCompilerContext(false), queryPlan)
+	_, paramTypes, err := ResetPreparePlan(NewMockCompilerContext(false, newPlanTestProcess(t)), queryPlan)
 	require.NoError(t, err)
 	require.Len(t, paramTypes, 5)
 	require.Equal(t, int32(4), window.WindowFunc.GetF().Args[0].GetP().Pos)
@@ -1445,7 +1446,7 @@ func TestResetPreparePlanCollectsSubqueryParameters(t *testing.T) {
 		},
 	}}}
 
-	_, paramTypes, err := ResetPreparePlan(NewMockCompilerContext(false), queryPlan)
+	_, paramTypes, err := ResetPreparePlan(NewMockCompilerContext(false, newPlanTestProcess(t)), queryPlan)
 	require.NoError(t, err)
 	require.Len(t, paramTypes, 1)
 	require.Equal(t, int32(0), param.GetP().Pos)
@@ -1927,7 +1928,7 @@ func TestPreparedBitwiseAggregateReconcilesSetOperationBranches(t *testing.T) {
 	require.Len(t, setNode.Children, 2)
 	require.Len(t, setNode.ProjectList, 1)
 
-	staticPlan, err := runOneStmt(NewMockOptimizer(false), t,
+	staticPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"select bit_and(3) as b union all select bit_and(cast(X'02' as varbinary(1)))")
 	require.NoError(t, err)
 	var staticSetNode *planpb.Node
@@ -2000,7 +2001,7 @@ func TestPreparedSetOperationCommonTypeTreatsPureNullAsNeutral(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, specialized)
 
-			staticPlan, err := runOneStmt(NewMockOptimizer(false), t, test.static)
+			staticPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.static)
 			require.NoError(t, err)
 			findUnionAll := func(query *planpb.Query) *planpb.Node {
 				for _, node := range query.Nodes {
@@ -2505,7 +2506,7 @@ func TestFillValuesOfParamsInstallsValueOnlyNumericSourceRewrite(t *testing.T) {
 	ctx := context.Background()
 	for _, name := range []string{"round", "truncate"} {
 		t.Run(name, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t,
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 				"prepare stmt_precision from 'select "+name+"(1.25, ?)'")
 			require.NoError(t, err)
 			filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
@@ -2559,7 +2560,7 @@ func TestFillValuesOfParamsInPlanUsesSQLExecuteSourceTypeInPreparedResultConsume
 		{name: "ifnull with explicit decimal peer", sql: "select ifnull(?, cast(1 as decimal(38,10)))", function: "case"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t,
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 				"prepare stmt_numeric_source from '"+test.sql+"'")
 			require.NoError(t, err)
 			filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
@@ -2588,7 +2589,7 @@ func TestFillValuesOfParamsInPlanUsesSQLExecuteSourceTypeInPreparedResultConsume
 	}
 
 	t.Run("nullif preserves varbinary result occurrence", func(t *testing.T) {
-		prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 			"prepare stmt_binary_nullif from 'select nullif(?, cast(1 as decimal(38,10)))'")
 		require.NoError(t, err)
 		filled, _, err := FillValuesOfParamsInPlanWithSpecialization(
@@ -2604,7 +2605,7 @@ func TestFillValuesOfParamsInPlanUsesSQLExecuteSourceTypeInPreparedResultConsume
 }
 
 func TestFillValuesOfParamsPreservesSQLExecuteRuntimeStringDomain(t *testing.T) {
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare stmt_runtime_domain from 'select char_length(?)'")
 	require.NoError(t, err)
 	original := prepared.GetDcl().GetPrepare().Plan
@@ -2881,6 +2882,10 @@ func TestPreparedComparisonExactIntegerExpr(t *testing.T) {
 		want   int64
 	}{
 		{name: "signed text", value: "-54321.0", target: int64Type, want: -54321},
+		{name: "positive identity", value: "9007199254740993", target: int64Type, want: 9007199254740993},
+		{name: "negative identity", value: "-9007199254740993", target: int64Type, want: -9007199254740993},
+		{name: "signed maximum", value: "9223372036854775807", target: int64Type, want: 9223372036854775807},
+		{name: "signed minimum", value: "-9223372036854775808", target: int64Type, want: -9223372036854775808},
 		{name: "signed exponent", value: "5.4321e4", target: int64Type, want: 54321},
 		{name: "last safe positive", value: "9007199254740991", target: int64Type, want: 9007199254740991},
 		{name: "last safe negative", value: "-9007199254740991", target: int64Type, want: -9007199254740991},
@@ -2902,8 +2907,6 @@ func TestPreparedComparisonExactIntegerExpr(t *testing.T) {
 		{name: "uint64 overflow", value: "18446744073709551616", target: uint64Type},
 		{name: "negative unsigned", value: "-1", target: uint64Type},
 		{name: "int64 overflow", value: "9223372036854775808", target: int64Type},
-		{name: "double collision positive", value: "9007199254740992", target: int64Type},
-		{name: "double collision negative", value: "-9007199254740992", target: int64Type},
 		{name: "signed fractional", value: "54321.5", target: int64Type},
 		{name: "signed suffix", value: "54321tail", target: int64Type},
 		{name: "nonnumeric", value: "tail", target: bit64Type},
@@ -3550,7 +3553,7 @@ func TestVisitPlanDeduplicatesAliasedWindowPartitionExpr(t *testing.T) {
 		paramExpr := func(pos int32) *planpb.Expr {
 			return &planpb.Expr{Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: pos}}}
 		}
-		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false), false, true)
+		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false, newPlanTestProcess(t)), false, true)
 		bindCtx := NewBindContext(builder, nil)
 		bindCtx.windowTag = builder.GenNewBindTag()
 		inputID := builder.appendNode(&planpb.Node{NodeType: planpb.Node_VALUE_SCAN}, bindCtx)
@@ -3601,4 +3604,39 @@ func TestVisitPlanDeduplicatesAliasedWindowPartitionExpr(t *testing.T) {
 		require.Equal(t, int64(13), window.PartitionBy[0].GetLit().GetI64Val())
 		require.Same(t, partitionNode.OrderBy[0].Expr, window.PartitionBy[0])
 	})
+}
+
+func TestRestorePreparedExactIntegerTextExecutesNormalization(t *testing.T) {
+	ctx := context.Background()
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	for _, sourceType := range []types.T{types.T_text, types.T_int64} {
+		func() {
+			source := &planpb.Expr{Typ: planpb.Type{Id: int32(sourceType)}, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+			witness := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: 9007199254740993}, Src: source}}}
+			prepared := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{Steps: []int32{0}, Nodes: []*planpb.Node{{NodeType: planpb.Node_VALUE_SCAN, ProjectList: []*planpb.Expr{witness}}}}}}
+			require.NoError(t, RestorePreparedRuntimeParamRefs(ctx, prepared))
+			restored := prepared.GetQuery().Nodes[0].ProjectList[0]
+			require.Equal(t, int32(types.T_int64), restored.Typ.Id)
+			if sourceType == types.T_text {
+				require.Equal(t, int32(types.T_decimal128), restored.GetF().Args[0].Typ.Id)
+			} else {
+				require.NotNil(t, restored.GetF().Args[0].GetP())
+			}
+			params := vector.NewVec(types.T_text.ToType())
+			proc.SetPrepareParams(params)
+			defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
+			value := "9007199254740993"
+			if sourceType == types.T_text {
+				value += strings.Repeat("0", 60) + "E-60"
+			}
+			require.NoError(t, vector.AppendBytes(params, []byte(value), false, proc.Mp()))
+			executor, err := colexec.NewExpressionExecutor(proc, restored)
+			require.NoError(t, err)
+			defer executor.Free()
+			result, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+			require.NoError(t, err)
+			require.Equal(t, int64(9007199254740993), vector.GetFixedAtNoTypeCheck[int64](result, 0))
+		}()
+	}
 }

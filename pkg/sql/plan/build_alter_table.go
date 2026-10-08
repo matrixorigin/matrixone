@@ -1270,6 +1270,9 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	if err := validateAlterTableIdentifierDestinations(ctx.GetContext(), stmt.Options); err != nil {
 		return nil, err
 	}
+	if err := validateAlterTableCharsetOptions(ctx, stmt.Options); err != nil {
+		return nil, err
+	}
 	for _, option := range stmt.Options {
 		if rename, ok := option.(*tree.AlterOptionTableName); ok {
 			if err := rejectCrossDatabaseTableRename(ctx.GetContext(), schemaName, rename); err != nil {
@@ -1351,6 +1354,30 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	} else {
 		return buildAlterTableInplace(stmt, ctx)
 	}
+}
+
+// Charset options remain compatibility no-ops, not conversions. Admit requests
+// before either ALTER algorithm can ignore, rewrite, or discard their metadata.
+func validateAlterTableCharsetOptions(ctx CompilerContext, options []tree.AlterTableOption) error {
+	var charsetOptions []tree.TableOption
+	for _, option := range options {
+		switch opt := option.(type) {
+		case *tree.TableOptionCharset:
+			if !opt.NonCharsetSyntax {
+				charsetOptions = append(charsetOptions, opt)
+				if opt.Collate != "" {
+					charsetOptions = append(charsetOptions, &tree.TableOptionCollate{Collate: opt.Collate})
+				}
+			}
+		case *tree.TableOptionCollate:
+			charsetOptions = append(charsetOptions, opt)
+		}
+	}
+	if len(charsetOptions) != 0 {
+		_, err := tableDefaultCharset(ctx, charsetOptions)
+		return err
+	}
+	return nil
 }
 
 func validateAlterTableIdentifierDestinations(ctx context.Context, options []tree.AlterTableOption) error {

@@ -47,6 +47,7 @@ func (minus *Minus) Prepare(proc *process.Process) error {
 	if err != nil {
 		return err
 	}
+	minus.ctr.iterator = minus.ctr.hashTable.NewIterator()
 	return minus.ctr.keyEvaluator.Prepare(proc, minus.KeyExprs)
 }
 
@@ -121,14 +122,13 @@ func (minus *Minus) buildHashTable(proc *process.Process, analyzer process.Analy
 		if err != nil {
 			return err
 		}
-		itr := ctr.hashTable.NewIterator()
 		count := input.Batch.Vecs[0].Length()
 		for i := 0; i < count; i += hashmap.UnitLimit {
 			n := count - i
 			if n > hashmap.UnitLimit {
 				n = hashmap.UnitLimit
 			}
-			_, _, err := itr.Insert(i, n, keyVecs)
+			_, _, err := ctr.iterator.Insert(i, n, keyVecs)
 			if err != nil {
 				return err
 			}
@@ -180,7 +180,6 @@ func (minus *Minus) probeHashTable(proc *process.Process, analyzer process.Analy
 			return false, err
 		}
 		count := input.Batch.Vecs[0].Length()
-		itr := minus.ctr.hashTable.NewIterator()
 		for i := 0; i < count; i += hashmap.UnitLimit {
 			oldHashGroup := minus.ctr.hashTable.GroupCount()
 
@@ -188,7 +187,7 @@ func (minus *Minus) probeHashTable(proc *process.Process, analyzer process.Analy
 			if n > hashmap.UnitLimit {
 				n = hashmap.UnitLimit
 			}
-			vs, _, err := itr.Insert(i, n, keyVecs)
+			vs, _, err := minus.ctr.iterator.Insert(i, n, keyVecs)
 			if err != nil {
 				return false, err
 			}

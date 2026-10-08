@@ -30,7 +30,7 @@ import (
 )
 
 func TestExportCanonicalTPCHPlans(t *testing.T) {
-	mock := planbuilder.NewMockOptimizer(false)
+	mock := planbuilder.NewMockOptimizer(false, newPlanTestProcess(t))
 	// Exact DECIMAL arithmetic and SUM widening make these plans contain
 	// Decimal256 expressions. Substrait decimal is capped at precision 38, so
 	// declining Sirius offload preserves MatrixOne's wider arithmetic semantics.
@@ -106,7 +106,7 @@ func TestExportExtractSemanticBoundary(t *testing.T) {
 		{"extract(week from l_comment)", false},
 	} {
 		t.Run(tc.expression, func(t *testing.T) {
-			mock := planbuilder.NewMockOptimizer(false)
+			mock := planbuilder.NewMockOptimizer(false, newPlanTestProcess(t))
 			statements, err := parsers.Parse(t.Context(), dialect.MYSQL,
 				"select "+tc.expression+" from lineitem", 1)
 			require.NoError(t, err)

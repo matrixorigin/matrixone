@@ -34,7 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
@@ -46,11 +45,12 @@ import (
 func transferInmemTombstones(
 	ctx context.Context,
 	txn *Transaction,
+	tables map[tombstoneTransferKey]tombstoneTransferTable,
 	start, end types.TS,
 ) (err error) {
 
 	return txn.forEachTableHasDeletesLocked(
-		false,
+		tables, 0,
 		func(tbl *txnTable, _ string) error {
 			state, err := tbl.getPartitionState(ctx)
 			if err != nil {
@@ -58,13 +58,6 @@ func transferInmemTombstones(
 			}
 
 			deleteObjs, createObjs := state.GetChangedObjsBetween(start, end)
-
-			trace.GetService(txn.proc.GetService()).ApplyFlush(
-				tbl.db.op.Txn().ID,
-				tbl.tableId,
-				start.ToTimestamp(),
-				tbl.db.op.SnapshotTS(),
-				len(deleteObjs))
 
 			if len(deleteObjs) > 0 {
 				if err := transferTombstones(
@@ -86,6 +79,7 @@ func transferInmemTombstones(
 func transferTombstoneObjects(
 	ctx context.Context,
 	txn *Transaction,
+	tables map[tombstoneTransferKey]tombstoneTransferTable,
 	start, end types.TS,
 ) (err error) {
 
@@ -95,13 +89,14 @@ func transferTombstoneObjects(
 		flow *TransferFlow
 	)
 
-	if fs, err = colexec.GetSharedFSFromProc(txn.proc); err != nil {
-		return
-	}
-
 	return txn.forEachTableHasDeletesLocked(
-		true,
+		tables, 1,
 		func(tbl *txnTable, writeName string) error {
+			if fs == nil {
+				if fs, err = colexec.GetSharedFSFromProc(txn.proc); err != nil {
+					return err
+				}
+			}
 			now := time.Now()
 			if flow, logs, err = ConstructCNTombstoneObjectsTransferFlow(
 				ctx, start, end, tbl, txn, txn.proc.Mp(), fs); err != nil {
@@ -111,9 +106,7 @@ func transferTombstoneObjects(
 				return nil
 			}
 
-			defer func() {
-				err = flow.Close()
-			}()
+			defer flow.Close()
 
 			if err = flow.Process(ctx); err != nil {
 				return err
@@ -126,6 +119,7 @@ func transferTombstoneObjects(
 			}
 
 			bat := colexec.AllocCNS3ResultBat(true)
+			defer bat.Clean(txn.proc.Mp())
 			if err = bat.PreExtend(txn.proc.Mp(), len(slist)); err != nil {
 				return err
 			}
@@ -314,7 +308,8 @@ func transferTombstones(
 				return
 			}
 
-			if transferIntents.Length() >= 8192 {
+			if transferBatchLimitReached(transferIntents.Length(),
+				transferIntents.Size()+searchPKColumn.Size()+searchEntryPos.Size()+searchBatPos.Size(), true) {
 				transferCnt += transferIntents.Length()
 				if err = batchTransferToTombstones(
 					ctx,

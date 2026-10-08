@@ -46,7 +46,6 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -250,7 +249,169 @@ func (tbl *txnTable) PrefetchAllMeta(ctx context.Context) bool {
 }
 
 func (tbl *txnTable) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error) {
-	//Stats only stats the committed data of the table.
+	published, err := tbl.getPublishedStats(ctx, sync)
+	if err != nil || strings.ToUpper(tbl.relKind) == "V" {
+		return published, err
+	}
+	if tbl.remoteWorkspace {
+		if plan2.StatsInfoUsableForCache(published) && tbl.getTxn().Readonly() {
+			return published, nil
+		}
+		return transientTableStats(published, float64(^uint64(0))), nil
+	}
+	workspaceRows := tbl.workspaceInsertRowEstimate()
+	if workspaceRows == 0 && plan2.StatsInfoUsable(published) {
+		return published, nil
+	}
+	if tbl.getTxn().tableOps.existCreatedInTxn(tbl.tableId) {
+		if workspaceRows == 0 {
+			return published, nil
+		}
+		return transientTableStats(published, workspaceRows), nil
+	}
+	if workspaceRows >= float64(^uint64(0)) {
+		return transientTableStats(published, workspaceRows), nil
+	}
+
+	part, ready, err := tbl.getLatestPartitionState(ctx)
+	if err != nil || !ready || part == nil {
+		if cause := context.Cause(ctx); cause != nil {
+			return nil, cause
+		}
+		// Optional statistics must neither replay historical checkpoints nor
+		// replace unavailable metadata with a new, misleadingly small estimate.
+		return transientTableStats(published, float64(^uint64(0))), nil
+	}
+	rows, err := partitionRowEstimate(part, types.TimestampToTS(tbl.db.op.SnapshotTS()))
+	if err != nil {
+		return transientTableStats(published, float64(^uint64(0))), nil
+	}
+	if plan2.StatsInfoUsable(published) {
+		rows = math.Max(rows, published.TableCnt)
+	}
+	rows = math.Min(rows+workspaceRows, float64(^uint64(0)))
+	if rows == 0 {
+		return published, nil
+	}
+	return transientTableStats(published, rows), nil
+}
+
+// transientTableStats borrows immutable published maps without modifying their
+// generation. An anonymous estimate must be refreshed at statement admission.
+func transientTableStats(published *pb.StatsInfo, rows float64) *pb.StatsInfo {
+	var stats pb.StatsInfo
+	if published != nil {
+		stats = *published
+		validCounts := published.TableCnt > 0 && !math.IsInf(published.TableCnt, 0) &&
+			!math.IsNaN(published.TableCnt) && rows > 0 && !math.IsInf(rows, 0) && !math.IsNaN(rows)
+		if len(published.SizeMap) != 0 && (rows > published.TableCnt || !validCounts) {
+			// SizeMap contains total bytes, so a changed row denominator must
+			// retain the observed average width. Only transient growth copies
+			// this map; completed read-only statistics keep their fast owner.
+			stats.SizeMap = nil
+			if validCounts {
+				sizes := make(map[string]uint64, len(published.SizeMap))
+				var sum uint64
+				for name, total := range published.SizeMap {
+					width := float64(total) / published.TableCnt
+					scaled := math.Ceil(width * rows)
+					if scaled >= float64(math.MaxUint64) || math.IsNaN(scaled) {
+						// An unrepresentable total must use the existing incomplete
+						// width model, rather than expose a partial/shrunken map.
+						sizes = nil
+						break
+					}
+					bytes := uint64(scaled)
+					if float64(bytes)/rows < width || bytes > math.MaxUint64-sum {
+						sizes = nil
+						break
+					}
+					sum += bytes
+					sizes[name] = bytes
+				}
+				stats.SizeMap = sizes
+			}
+		}
+	}
+	stats.TableName = ""
+	stats.TableCnt = rows
+	return &stats
+}
+
+func partitionRowEstimate(part *logtailreplay.PartitionState, snapshot types.TS) (float64, error) {
+	rows := float64(part.ApproxInMemRows())
+	if part.ApproxDataObjectsNum() == 0 {
+		return rows, nil
+	}
+	iter, err := part.NewObjectsIter(snapshot, true, false)
+	if err != nil {
+		return 0, err
+	}
+	defer iter.Close()
+	for iter.Next() {
+		obj := iter.Entry()
+		objectRows := obj.Rows()
+		if (obj.GetAppendable() && obj.DeleteTime.IsEmpty()) || objectRows == 0 {
+			// Deleted appendable objects are sealed; their recorded rows bound
+			// historical snapshots. Only growing/incomplete objects need the
+			// structural uint32 capacity instead of a zero/partial bound.
+			objectRows = math.MaxUint32
+		}
+		rows += float64(objectRows)
+	}
+	return math.Min(rows, float64(^uint64(0))), nil
+}
+
+// workspaceInsertRowEstimate bounds all existing writes using only metadata.
+// Execution visibility is still owned by the statement prefix, advanced after
+// planning; including the log tail conservatively avoids missing prior writes.
+// TryLock also permits internal SQL while a dump owns the workspace mutex;
+// unavailable observations fail closed, without waiting.
+func (tbl *txnTable) workspaceInsertRowEstimate() float64 {
+	txn := tbl.getTxn()
+	if txn.Readonly() {
+		return 0
+	}
+	if !txn.TryLock() {
+		return float64(^uint64(0))
+	}
+	defer txn.Unlock()
+	var rows float64
+	for i := range txn.writes {
+		entry := &txn.writes[i]
+		if entry.typ != INSERT || entry.databaseId != tbl.db.databaseId || entry.tableId != tbl.tableId || entry.bat == nil || entry.bat.IsEmpty() {
+			continue
+		}
+		if entry.fileName == "" {
+			rows += float64(entry.bat.RowCount())
+			continue
+		}
+		idx := slices.Index(entry.bat.Attrs, catalog.ObjectMeta_ObjectStats)
+		if idx < 0 || idx >= len(entry.bat.Vecs) || entry.bat.Vecs[idx] == nil || entry.bat.Vecs[idx].GetType().Oid != types.T_varchar {
+			return float64(^uint64(0))
+		}
+		vec := entry.bat.Vecs[idx]
+		if vec.Length() != entry.bat.RowCount() {
+			return float64(^uint64(0))
+		}
+		for j := 0; j < vec.Length(); j++ {
+			data := vec.GetBytesAt(j)
+			if vec.IsNull(uint64(j)) || len(data) != objectio.ObjectStatsLen {
+				return float64(^uint64(0))
+			}
+			var stats objectio.ObjectStats
+			stats.UnMarshal(data)
+			if stats.Rows() == 0 {
+				return float64(^uint64(0))
+			}
+			rows += float64(stats.Rows())
+		}
+	}
+	return math.Min(rows, float64(^uint64(0)))
+}
+
+func (tbl *txnTable) getPublishedStats(ctx context.Context, sync bool) (*pb.StatsInfo, error) {
+	// Published statistics retain their original committed-data contract.
 	if tbl.db.getTxn().tableOps.existCreatedInTxn(tbl.tableId) ||
 		strings.ToUpper(tbl.relKind) == "V" {
 		return nil, nil
@@ -345,7 +506,7 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 		}
 	}
 
-	s, _ := tbl.Stats(ctx, true)
+	s, _ := tbl.getPublishedStats(ctx, true)
 	if s == nil {
 		return szInPart, nil
 	}
@@ -1126,9 +1287,7 @@ func (tbl *txnTable) getObjList(ctx context.Context, rangesParam engine.RangesPa
 }
 
 func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesParam) (data engine.RelData, err error) {
-	sid := tbl.proc.Load().GetService()
 	start := time.Now()
-	seq := tbl.db.op.NextSequence()
 
 	var part *logtailreplay.PartitionState
 	var uncommittedObjects []objectio.ObjectStats
@@ -1137,14 +1296,6 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 		rangesParam.Policy&engine.Policy_CollectUncommittedInmemData != 0 {
 		blocks.AppendBlockInfo(&objectio.EmptyBlockInfo)
 	}
-
-	trace.GetService(sid).AddTxnDurationAction(
-		tbl.db.op,
-		client.RangesEvent,
-		seq,
-		tbl.tableId,
-		0,
-		nil)
 
 	defer func() {
 		cost := time.Since(start)
@@ -1198,23 +1349,6 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 				zap.Error(err),
 			)
 		}
-
-		trace.GetService(sid).AddTxnAction(
-			tbl.db.op,
-			client.RangesEvent,
-			seq,
-			tbl.tableId,
-			int64(blocks.Len()),
-			"blocks",
-			err)
-
-		trace.GetService(sid).AddTxnDurationAction(
-			tbl.db.op,
-			client.RangesEvent,
-			seq,
-			tbl.tableId,
-			cost,
-			err)
 
 		v2.TxnTableRangeDurationHistogram.Observe(cost.Seconds())
 		if err != nil {
@@ -1325,10 +1459,17 @@ func (tbl *txnTable) rangesOnePart(
 		)
 	}
 
-	hasFoldExpr := plan2.HasFoldExprForList(rangesParam.BlockFilters)
-	if hasFoldExpr {
-		rangesParam.BlockFilters = nil
+	// Fold is a materialized statement value, not a reason to discard every
+	// predicate. Only standalone unavailable values have no metadata proof.
+	// Use a private slice so the caller's reusable filter list stays intact.
+	filters := make([]*plan.Expr, 0, len(rangesParam.BlockFilters))
+	for _, expr := range rangesParam.BlockFilters {
+		if folded, ok := expr.Expr.(*plan.Expr_Fold); ok && (folded.Fold == nil || folded.Fold.Data == nil) {
+			continue
+		}
+		filters = append(filters, expr)
 	}
+	rangesParam.BlockFilters = filters
 
 	var (
 		objMeta    objectio.ObjectMeta
@@ -1592,14 +1733,15 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 					Name:       name,
 					OriginName: attr.Attr.Name,
 					Typ: plan.Type{
-						Id:          int32(attr.Attr.Type.Oid),
-						Width:       attr.Attr.Type.Width,
-						Scale:       attr.Attr.Type.Scale,
-						AutoIncr:    attr.Attr.AutoIncrement,
-						Table:       tbl.tableName,
-						NotNullable: attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
-						Enumvalues:  attr.Attr.EnumVlaues,
-						Charset:     uint32(attr.Attr.Type.Charset),
+						Id:               int32(attr.Attr.Type.Oid),
+						Width:            attr.Attr.Type.Width,
+						Scale:            attr.Attr.Type.Scale,
+						AutoIncr:         attr.Attr.AutoIncrement,
+						Table:            tbl.tableName,
+						NotNullable:      attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
+						Enumvalues:       attr.Attr.EnumVlaues,
+						Charset:          uint32(attr.Attr.Type.Charset),
+						CollationVersion: uint32(attr.Attr.Type.CollationVersion),
 					},
 					Primary:      attr.Attr.Primary,
 					Default:      attr.Attr.Default,
@@ -1732,6 +1874,8 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			tbl.tableDef.AutoIdCache = tbl.extraInfo.AutoIdCache
 			tbl.tableDef.Checks = tbl.extraInfo.Checks
 			tbl.tableDef.DefaultCharset = tbl.extraInfo.DefaultCharset
+			tbl.tableDef.CollationVersion = tbl.extraInfo.CollationVersion
+			tbl.tableDef.KeyFormat = tbl.extraInfo.KeyFormat
 		}
 	}
 	return tbl.tableDef
@@ -2635,84 +2779,40 @@ func (tbl *txnTable) BuildShardingReaders(
 	panic("Not Support")
 }
 
-func (tbl *txnTable) getPartitionState(
-	ctx context.Context,
-) (ps *logtailreplay.PartitionState, err error) {
-	// defer func() {
-	// 	if tbl.tableId == catalog.MO_COLUMNS_ID {
-	// 		logutil.Info("open partition state for mo_columns",
-	// 			zap.String("txn", tbl.db.op.Txn().DebugString()),
-	// 			zap.String("desc", ps.Desc(true)),
-	// 			zap.String("pointer", fmt.Sprintf("%p", ps)))
-	// 	}
-	// }()
-
-	var (
-		eng          = tbl.eng.(*Engine)
-		createdInTxn bool
-		pending      bool
-	)
-
-	createdInTxn, err = tbl.isCreatedInTxn(ctx)
+// getLatestPartitionState owns subscription and the pending-logtail fence.
+// Statistics reuse this admission without triggering historical checkpoint I/O.
+func (tbl *txnTable) getLatestPartitionState(ctx context.Context) (*logtailreplay.PartitionState, bool, error) {
+	createdInTxn, err := tbl.isCreatedInTxn(ctx)
 	if err != nil {
+		return nil, false, err
+	}
+	if createdInTxn || strings.ToUpper(tbl.relKind) == "V" {
+		ps := tbl.getTxn().engine.GetOrCreateLatestPart(ctx, uint64(tbl.accountId), tbl.db.databaseId, tbl.tableId).Snapshot()
+		return ps, true, nil
+	}
+	eng := tbl.eng.(*Engine)
+	var pending bool
+	ps, err := eng.PushClient().toSubscribeTable(ctx, uint64(tbl.accountId), tbl.tableId, tbl.tableName,
+		tbl.db.databaseId, tbl.db.databaseName, &pending)
+	if err != nil {
+		logutil.Error("Txn-Table-ToSubscribeTable-Failed",
+			zap.String("db-name", tbl.db.databaseName), zap.Uint64("db-id", tbl.db.databaseId),
+			zap.String("tbl-name", tbl.tableName), zap.Uint64("tbl-id", tbl.tableId),
+			zap.String("txn-info", tbl.db.op.Txn().DebugString()), zap.Bool("is-snapshot-op", tbl.db.op.IsSnapOp()), zap.Error(err))
+		return ps, false, err
+	}
+	return eng.PushClient().waitCanServeTableSnapshot(ctx, uint64(tbl.accountId), tbl.db.databaseId,
+		tbl.tableId, ps, pending, tbl.db.op.SnapshotTS())
+}
+
+func (tbl *txnTable) getPartitionState(ctx context.Context) (ps *logtailreplay.PartitionState, err error) {
+	var ready bool
+	ps, ready, err = tbl.getLatestPartitionState(ctx)
+	if err != nil && !moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
 		return nil, err
 	}
-
-	// no need to subscribe a view
-	// for issue #19192
-	if createdInTxn || strings.ToUpper(tbl.relKind) == "V" {
-		//return an empty partition state.
-		ps = tbl.getTxn().engine.GetOrCreateLatestPart(
-			ctx,
-			uint64(tbl.accountId),
-			tbl.db.databaseId,
-			tbl.tableId).Snapshot()
-		return
-	}
-
-	// Subscribe a latest partition state
-	if ps, err = eng.PushClient().toSubscribeTable(
-		ctx,
-		uint64(tbl.accountId),
-		tbl.tableId,
-		tbl.tableName,
-		tbl.db.databaseId,
-		tbl.db.databaseName,
-		&pending,
-	); err != nil {
-		logutil.Error(
-			"Txn-Table-ToSubscribeTable-Failed",
-			zap.String("db-name", tbl.db.databaseName),
-			zap.Uint64("db-id", tbl.db.databaseId),
-			zap.String("tbl-name", tbl.tableName),
-			zap.Uint64("tbl-id", tbl.tableId),
-			zap.String("txn-info", tbl.db.op.Txn().DebugString()),
-			zap.Bool("is-snapshot-op", tbl.db.op.IsSnapOp()),
-			zap.Error(err),
-		)
-
-		// if the table not exists, try snapshot read
-		if !moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
-			return nil, err
-		}
-
-	} else {
-		var ok bool
-		ps, ok, err = eng.PushClient().waitCanServeTableSnapshot(
-			ctx,
-			uint64(tbl.accountId),
-			tbl.db.databaseId,
-			tbl.tableId,
-			ps,
-			pending,
-			tbl.db.op.SnapshotTS(),
-		)
-		if err != nil {
-			return nil, err
-		}
-		if ok {
-			return
-		}
+	if ready {
+		return ps, nil
 	}
 
 	//Try to create a snapshot partition state for the table through consume the history checkpoints.
@@ -3508,7 +3608,7 @@ func (tbl *txnTable) getCommittedRows(
 		}
 		rows++
 	}
-	s, _ := tbl.Stats(ctx, true)
+	s, _ := tbl.getPublishedStats(ctx, true)
 	if s == nil {
 		return rows, nil
 	}

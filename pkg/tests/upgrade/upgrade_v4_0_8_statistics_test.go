@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
-	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_10"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_8"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -136,11 +135,17 @@ func TestV408UpgradeRefreshesStatistics(t *testing.T) {
 
 				for run := 0; run < 2; run++ {
 					var creates int
+					// Run the tenant-upgrade transaction as the sys account, mirroring the
+					// production driver (service.MaybeUpgradeTenant scopes the txn to
+					// System_Account and targets the tenant via the tenantID passed to
+					// HandleTenantUpgrade, whose per-tenant statements carry
+					// UpgradeStatementOption(tenantID)). The cluster-wide protocol-version check
+					// runs mo_ctl, which only the sys account may execute.
 					require.NoError(t, sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
 						return v4_0_8.Handler.HandleTenantUpgrade(ctx, int32(test.accountID),
 							&statisticsUpgradeTxn{TxnExecutor: txn, creates: &creates})
 					}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).
-						WithAccountID(test.accountID).WithWaitCommittedLogApplied()))
+						WithAccountID(catalog.System_Account).WithWaitCommittedLogApplied()))
 					if run == 0 {
 						require.Equal(t, 1, creates, "the old view must be recreated")
 					} else {
@@ -241,7 +246,11 @@ func TestV408LoginRepairsTenantCreatedAfterUpgradeSnapshot(t *testing.T) {
 		}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).WithWaitCommittedLogApplied()))
 		require.NoError(t, catalogExec(ctx,
 			fmt.Sprintf("update mo_catalog.mo_upgrade_tenant set ready = 1 where upgrade_id = %d", upgradeID)))
-		final := v4_0_10.Handler.Metadata()
+		// Follow the actual CN/bootstrap version, not the historical handler
+		// whose STATISTICS repair this late-login scenario exercises.
+		final := versions.Version{Version: cn.RawService().(frontend.BaseService).GetFinalVersion()}
+		require.NoError(t, sysDB.QueryRowContext(ctx,
+			"select version_offset from mo_catalog.mo_version where version = ?", final.Version).Scan(&final.VersionOffset))
 		require.NoError(t, sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
 			return versions.UpdateVersionState(final.Version, final.VersionOffset, versions.StateReady, txn)
 		}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).WithWaitCommittedLogApplied()))
@@ -317,7 +326,8 @@ func TestV408LoginRejectsAccountDroppedAfterAuthentication(t *testing.T) {
 		defer authConn.Close()
 		var connID uint32
 		require.NoError(t, authConn.QueryRowContext(ctx, "select connection_id()").Scan(&connID))
-		sessionManager := cn.RawService().(frontend.BaseService).SessionMgr()
+		base := cn.RawService().(frontend.BaseService)
+		sessionManager := base.SessionMgr()
 		var ses *frontend.Session
 		for _, candidate := range sessionManager.GetAllSessions() {
 			candidate := candidate.(*frontend.Session)
@@ -327,23 +337,28 @@ func TestV408LoginRejectsAccountDroppedAfterAuthentication(t *testing.T) {
 			}
 		}
 		require.NotNil(t, ses)
-		// Normal handshaking registers a session only after compensation. Remove
-		// the borrowed sys session before changing its authenticated tenant.
+		// Remove query-registry exposure before changing the authenticated tenant;
+		// the live routine retains ownership and DROP ACCOUNT may still close it.
 		sessionManager.RemoveSession(ses)
 		// Exercise the actual AuthenticateUser catalog transaction, splitting the
 		// same two steps as the MySQL wrapper at their deterministic race window.
 		_, err = ses.AuthenticateUser(ctx, accountName+"#root#accountadmin", "", nil, nil,
 			func([]byte, []byte, []byte) bool { return true })
 		require.NoError(t, err)
-		require.Equal(t, "4.0.7", ses.GetCreateVersion())
-		require.Equal(t, uint32(tenantID), ses.GetTenantInfo().GetTenantID())
+		authenticatedVersion := ses.GetCreateVersion()
+		authenticatedTenantID := ses.GetTenantInfo().GetTenantID()
+		require.Equal(t, "4.0.7", authenticatedVersion)
+		require.Equal(t, uint32(tenantID), authenticatedTenantID)
+		require.LessOrEqual(t, versions.Compare(authenticatedVersion, base.GetFinalVersion()), 0)
 		_, err = admin.ExecContext(ctx, "drop account "+accountName)
 		require.NoError(t, err)
 
 		for range 2 {
-			// Retry also proves that no successful checked-tenant cache entry was
-			// published for the failed post-authentication compensation.
-			err = ses.MaybeUpgradeTenant(ctx, ses.GetCreateVersion(), int64(tenantID))
+			// DROP ACCOUNT can close the authenticated routine and destroy ses.
+			// Check compensation through its stable CN owner, also used by
+			// MaybeUpgradeTenant, rather than calling a destroyed session. Retry
+			// proves a failed check did not populate the checked-tenant cache.
+			err = base.CheckTenantUpgrade(ctx, int64(authenticatedTenantID))
 			var notFound *moerr.Error
 			require.ErrorAs(t, err, &notFound)
 			require.True(t, moerr.IsMoErrCode(notFound, moerr.ErrNotFound), "unexpected error: %v", err)

@@ -24,6 +24,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -3304,6 +3305,18 @@ func (b *baseBinder) bindPreparedNumericPrecisionFuncExpr(
 		return b.bindFuncExprImplByAstExpr(name, astArgs, depth)
 	}
 
+	// A surrounding result cast must not round the source before this function
+	// applies its own precision. Bind in the value consumer's domain, including
+	// scalar subqueries, while preserving explicit casts within the argument.
+	parentParamType, parentSubqueryTarget := b.numericParamType, b.numericSubqueryTarget
+	parentFunctionTarget := b.numericFunctionTarget
+	b.numericParamType, b.numericSubqueryTarget = nil, nil
+	b.numericFunctionTarget = false
+	defer func() {
+		b.numericParamType, b.numericSubqueryTarget = parentParamType, parentSubqueryTarget
+		b.numericFunctionTarget = parentFunctionTarget
+	}()
+
 	doubleType := types.T_float64.ToType()
 	target := makePlan2Type(&doubleType)
 	hasExplicitFloatCast := containsExplicitFloatCast(astArgs[0])
@@ -4364,6 +4377,26 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			args[idx] = expr
 		}
 	}
+	if preparedBindingState(b.GetContext()) != nil {
+		var err error
+		if isIfNull && len(args) == 3 {
+			results := []*Expr{args[2], args[1]}
+			results, err = bindPreparedCommonValueResultArguments(b.GetContext(), results, nil)
+			if err == nil {
+				// CASE lowering must not hide IFNULL's fixed result peer from
+				// the existing common-value parameter conversion contract.
+				results, err = bindPreparedConsumerArguments(b.GetContext(), "coalesce", results)
+			}
+			if err == nil {
+				args = []*Expr{args[0], results[1], results[0]}
+			}
+		} else if isPreparedCommonValueFunction(name) {
+			args, err = bindPreparedCommonValueResultArguments(b.GetContext(), args, nil)
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
 	preparedNumericPeer := false
 	preparedNumericProvenance := false
 	if b.builder != nil && b.builder.isPrepareStatement &&
@@ -5388,6 +5421,7 @@ func bindFuncExprAndConstFoldInternal(
 	allowInternalFunctionArgs bool,
 	observer func(*plan.Expr) error,
 ) (*plan.Expr, error) {
+	foldFloatComparisonConstants(proc, name, args)
 	if err := foldDecimalStringComparisonConstants(ctx, proc, name, args); err != nil {
 		return nil, err
 	}
@@ -5457,11 +5491,14 @@ func bindFuncExprAndConstFoldInternal(
 			}
 		}
 
-		rangeCheckFn, _ := BindFuncExprImplByPlanExpr(ctx, "<=", []*plan.Expr{arg1, arg2})
-		rangeCheckRes, _ := ConstantFold(batch.EmptyForConstFoldBatch, rangeCheckFn, proc, false, true)
-		rangeCheckVal := rangeCheckRes.GetLit()
-		if rangeCheckVal == nil || !rangeCheckVal.GetBval() {
-			if !containsDynamicParam(arg1) && !containsDynamicParam(arg2) {
+		// Only static bounds can establish their order at bind time. A
+		// throwaway comparison of markers cannot fold and must not add a
+		// value dependency to an otherwise reusable closed range.
+		if !containsDynamicParam(arg1) && !containsDynamicParam(arg2) {
+			rangeCheckFn, _ := BindFuncExprImplByPlanExpr(ctx, "<=", []*plan.Expr{arg1, arg2})
+			rangeCheckRes, _ := ConstantFold(batch.EmptyForConstFoldBatch, rangeCheckFn, proc, false, true)
+			rangeCheckVal := rangeCheckRes.GetLit()
+			if rangeCheckVal == nil || !rangeCheckVal.GetBval() {
 				goto between_fallback
 			}
 		}
@@ -6575,11 +6612,20 @@ func bindFuncExprImplByPlanExpr(
 	originalBoundExpr *Expr,
 	allowInternalFunctionArgs bool,
 ) (*plan.Expr, error) {
+	var err error
+	// Validate before rewriting or converting argument metadata. Checked public
+	// binding must not turn an unknown identity into a MustTypeFromPlan panic.
+	for _, arg := range args {
+		if arg != nil {
+			if err := arg.Typ.ValidateCollation(); err != nil {
+				return nil, err
+			}
+		}
+	}
 	if name == "between" && preparedBetweenHasMixedNumericText(ctx, args) &&
 		(!containsVolatileFunction(args[0]) || args[0].AuxId < 0) {
 		return bindBetweenAsComparisons(ctx, args)
 	}
-	var err error
 	args, err = bindPreparedConsumerArguments(ctx, name, args)
 	if err != nil {
 		return nil, err
@@ -7168,13 +7214,22 @@ func bindFuncExprImplByPlanExpr(
 					orExprList = append(orExprList, rightVal)
 					continue
 				}
-				if partitionIn || exactIntegerList || checkNoNeedCast(ctx, makeTypeByPlan2Expr(rightVal), typLeft, rightVal) {
-					inExpr := rightVal
+				inExpr, guardedInteger := rightVal, false
+				if !partitionIn && len(rightList.List) > 1 && !exactIntegerList &&
+					!checkNoNeedCast(ctx, makeTypeByPlan2Expr(rightVal), typLeft, rightVal) {
+					if state := preparedBindingState(ctx); state != nil && state.selectStatement {
+						inExpr, guardedInteger, err = bindPreparedIntegerValue(ctx, args[0], rightVal)
+						if err != nil {
+							return nil, err
+						}
+					}
+				}
+				if partitionIn || exactIntegerList || guardedInteger || checkNoNeedCast(ctx, makeTypeByPlan2Expr(rightVal), typLeft, rightVal) {
 					// Keep the partition-IN coercion path unchanged. Ordinary IN can
 					// retain an already same-typed constant cast; casting UUID to UUID
 					// is both redundant and unsupported.
-					if partitionIn || !makeTypeByPlan2Expr(rightVal).Eq(typLeft) {
-						inExpr, err = appendCastBeforeExpr(ctx, rightVal, args[0].Typ)
+					if partitionIn || !makeTypeByPlan2Expr(inExpr).Eq(typLeft) {
+						inExpr, err = appendCastBeforeExpr(ctx, inExpr, args[0].Typ)
 						if err != nil {
 							return nil, err
 						}
@@ -7382,6 +7437,14 @@ func bindFuncExprImplByPlanExpr(
 	if name == "convert" {
 		returnType = function.ConvertReturnTypeForBinder(argsType)
 	}
+	if name == "convert_tz" && len(argsType) > 0 {
+		// CONVERT_TZ preserves the source temporal precision.  The overload
+		// lookup may use the implicit DATETIME cast target (whose default scale
+		// is zero), so restore the source scale for view/CTAS metadata.
+		returnType.Oid = types.T_datetime
+		returnType.Scale = argsType[0].Scale
+		returnType.Width = argsType[0].Width
+	}
 	adjustControlFlowMetadata(name, args, argsType, &returnType, argsCastType)
 	adjustDateFormatMetadata(name, args, &returnType)
 
@@ -7407,6 +7470,17 @@ func bindFuncExprImplByPlanExpr(
 							return checkNoNeedCast(ctx, otherType, colType, otherExpr)
 						}
 						return integerDomainFits(otherOid, colOid)
+					}
+
+					if colOid.IsInteger() && otherOid.IsDecimal() {
+						return exactDecimalIntegerFits(otherExpr, colOid)
+					}
+
+					if (colOid == types.T_float32 && otherOid != types.T_float32) ||
+						((colOid == types.T_float32 || colOid == types.T_float64) && colType.Width > 0 && colType.Scale >= 0) {
+						// Mixed numeric comparisons resolve to DOUBLE. A row-dependent
+						// peer cannot prove that narrowing it to FLOAT preserves results.
+						return checkNoNeedCast(ctx, otherType, colType, otherExpr)
 					}
 
 					// For float types, check if conversion is safe
@@ -7442,10 +7516,8 @@ func bindFuncExprImplByPlanExpr(
 						}
 						return false
 					}
-					if colOid.IsDecimal() && otherOid == types.T_float64 && otherExpr != nil {
-						if value, ok := decimalFloatComparisonConstant(otherExpr); ok {
-							return decimalFloatComparisonHasUniqueValue(value, colType)
-						}
+					if colOid.IsDecimal() && (otherOid == types.T_float32 || otherOid == types.T_float64) {
+						return checkNoNeedCast(ctx, otherType, colType, otherExpr)
 					}
 
 					return false
@@ -7644,6 +7716,9 @@ func bindFuncExprImplByPlanExpr(
 			}
 			returnType.Scale = fsp
 		}
+		// CTAS and view materialization use Width as the persisted temporal
+		// precision marker. Keep the string TIMEDIFF overload's FSP visible.
+		returnType.Width = returnType.Scale
 
 	case "time":
 		if len(args) == 1 {
@@ -7779,7 +7854,10 @@ func bindFuncExprImplByPlanExpr(
 					if inputType.Oid == types.T_date {
 						returnType = types.T_datetime.ToTypeWithScale(6)
 					} else {
-						returnType.Oid = inputType.Oid
+						// MySQL's temporal arithmetic returns DATETIME for a
+						// TIMESTAMP operand. Keep the wall-clock result domain
+						// independent from the source's timezone-aware storage type.
+						returnType.Oid = types.T_datetime
 						returnType.Scale = inputType.Scale
 						if returnType.Scale < 6 {
 							returnType.Scale = 6
@@ -7798,7 +7876,7 @@ func bindFuncExprImplByPlanExpr(
 						}
 					}
 				} else {
-					returnType.Oid = inputType.Oid
+					returnType.Oid = types.T_datetime
 					returnType.Scale = inputType.Scale
 					if unit == types.MicroSecond && returnType.Scale < 6 {
 						returnType.Scale = 6
@@ -7813,6 +7891,9 @@ func bindFuncExprImplByPlanExpr(
 			switch inputType.Oid {
 			case types.T_datetime, types.T_timestamp, types.T_time:
 				returnType.Oid, returnType.Scale, returnType.Width = inputType.Oid, inputType.Scale, inputType.Width
+				if inputType.Oid == types.T_timestamp {
+					returnType.Oid = types.T_datetime
+				}
 				unit, known := dateFunctionUnitFromPlanExpr(args[2])
 				if !known || unit == types.MicroSecond ||
 					(inputType.Oid == types.T_time && argsType[1].Oid != types.T_int64 && unit != types.Hour_Minute) {
@@ -8586,20 +8667,15 @@ func bindConvertUsingCharset(ctx context.Context, args []*plan.Expr) error {
 		return moerr.NewInvalidInput(ctx, "CONVERT USING requires a constant character set")
 	}
 
-	var charset uint32
-	switch strings.ToLower(charsetLiteral.GetSval()) {
-	case "binary":
-		charset = uint32(types.CharsetBinary)
-	case "utf8", "utf8mb3", "utf8mb4":
-		charset = uint32(types.CharsetUTF8)
-	default:
+	charset, ok := collation.ResolveCharset(charsetLiteral.GetSval())
+	if !ok {
 		return moerr.NewInvalidInputf(ctx, "unsupported character set '%s' for CONVERT USING", charsetLiteral.GetSval())
 	}
 
 	// The parser lowers the USING name to a synthetic string literal. Record the
 	// selected charset on that argument so the overload's return-type callback
 	// can carry it into the bound result without inspecting expression values.
-	args[1].Typ.Charset = charset
+	args[1].Typ.Charset = uint32(charset)
 	return nil
 }
 
@@ -9389,17 +9465,34 @@ func integerMetadataWidth(oid types.T) int32 {
 	}
 }
 
-func decimalFloatComparisonConstant(expr *Expr) (float64, bool) {
-	if expr == nil || expr.Typ.Id != int32(types.T_float64) {
+// decimalComparisonFloat64 matches the executor's DECIMAL-to-DOUBLE CAST.
+// The approximate types conversion helpers are suitable for estimates, not
+// proofs that change the comparison domain.
+func decimalComparisonFloat64[T interface {
+	types.Decimal64 | types.Decimal128
+	Format(int32) string
+}](value T, scale int32) float64 {
+	result, err := strconv.ParseFloat(value.Format(scale), 64)
+	if err != nil {
+		return math.NaN()
+	}
+	return result
+}
+
+func floatingComparisonConstant(expr *Expr) (float64, bool) {
+	if expr == nil || (expr.Typ.Id != int32(types.T_float64) && expr.Typ.Id != int32(types.T_float32)) {
 		return 0, false
 	}
-	if literal := expr.GetLit(); literal != nil {
+	if literal := expr.GetLit(); literal != nil && !literal.Isnull {
+		if value, ok := literal.GetValue().(*plan.Literal_Fval); ok {
+			return float64(value.Fval), true
+		}
 		if value, ok := literal.GetValue().(*plan.Literal_Dval); ok {
 			return value.Dval, true
 		}
 	}
 	fn := expr.GetF()
-	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) != 2 {
+	if expr.Typ.Id != int32(types.T_float64) || fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) != 2 {
 		return 0, false
 	}
 	if expr.Typ.Width != 0 || expr.Typ.Scale >= 0 {
@@ -9416,18 +9509,18 @@ func decimalFloatComparisonConstant(expr *Expr) (float64, bool) {
 			case types.T_decimal64:
 				decimal, err := types.ParseDecimal64(text.GetSval(), source.Typ.Width, source.Typ.Scale)
 				if err == nil {
-					return types.Decimal64ToFloat64(decimal, source.Typ.Scale), true
+					return decimalComparisonFloat64(decimal, source.Typ.Scale), true
 				}
 			case types.T_decimal128:
 				decimal, err := types.ParseDecimal128(text.GetSval(), source.Typ.Width, source.Typ.Scale)
 				if err == nil {
-					return types.Decimal128ToFloat64(decimal, source.Typ.Scale), true
+					return decimalComparisonFloat64(decimal, source.Typ.Scale), true
 				}
 			}
 		}
 	}
 	literal := source.GetLit()
-	if literal == nil {
+	if literal == nil || literal.Isnull {
 		return 0, false
 	}
 	switch value := literal.GetValue().(type) {
@@ -9439,12 +9532,12 @@ func decimalFloatComparisonConstant(expr *Expr) (float64, bool) {
 		return value.Dval, true
 	case *plan.Literal_Decimal64Val:
 		if value.Decimal64Val != nil {
-			return types.Decimal64ToFloat64(types.Decimal64(value.Decimal64Val.A), fn.Args[0].Typ.Scale), true
+			return decimalComparisonFloat64(types.Decimal64(value.Decimal64Val.A), fn.Args[0].Typ.Scale), true
 		}
 	case *plan.Literal_Decimal128Val:
 		if value.Decimal128Val != nil {
 			coefficient := types.Decimal128{B0_63: uint64(value.Decimal128Val.A), B64_127: uint64(value.Decimal128Val.B)}
-			return types.Decimal128ToFloat64(coefficient, fn.Args[0].Typ.Scale), true
+			return decimalComparisonFloat64(coefficient, fn.Args[0].Typ.Scale), true
 		}
 	}
 	return 0, false
@@ -9461,24 +9554,64 @@ func decimalFloatComparisonHasUniqueValue(value float64, column types.Type) bool
 	switch column.Oid {
 	case types.T_decimal64:
 		candidate, err := types.Decimal64FromFloat64(value, column.Width, column.Scale)
-		if err != nil || types.Decimal64ToFloat64(candidate, column.Scale) != value {
+		if err != nil || decimalComparisonFloat64(candidate, column.Scale) != value {
 			return false
 		}
-		return types.Decimal64ToFloat64(candidate-1, column.Scale) != value &&
-			types.Decimal64ToFloat64(candidate+1, column.Scale) != value
+		return decimalComparisonFloat64(candidate-1, column.Scale) != value &&
+			decimalComparisonFloat64(candidate+1, column.Scale) != value
 	case types.T_decimal128:
 		candidate, err := types.Decimal128FromFloat64(value, column.Width, column.Scale)
-		if err != nil || types.Decimal128ToFloat64(candidate, column.Scale) != value {
+		if err != nil || decimalComparisonFloat64(candidate, column.Scale) != value {
 			return false
 		}
 		previous, err := candidate.Add128(types.Decimal128{B0_63: 1}.Minus())
-		if err != nil || types.Decimal128ToFloat64(previous, column.Scale) == value {
+		if err != nil || decimalComparisonFloat64(previous, column.Scale) == value {
 			return false
 		}
 		next, err := candidate.Add128(types.Decimal128{B0_63: 1})
-		return err == nil && types.Decimal128ToFloat64(next, column.Scale) != value
+		return err == nil && decimalComparisonFloat64(next, column.Scale) != value
 	default:
 		return false
+	}
+}
+
+// foldFloatComparisonConstants lets the shared admission check inspect numeric
+// constants without treating arbitrary expressions as safe narrowing conversions.
+// Reuse the executor-backed folder; prepared and volatile sources stay intact.
+func foldFloatComparisonConstants(proc *process.Process, name string, args []*Expr) {
+	if proc == nil {
+		return
+	}
+	fold := func(column, candidate *Expr) *Expr {
+		if column.GetCol() == nil ||
+			(types.T(column.Typ.Id) != types.T_float32 && types.T(column.Typ.Id) != types.T_float64) ||
+			candidate.GetLit() != nil {
+			return candidate
+		}
+		oid := types.T(candidate.Typ.Id)
+		if (!oid.IsInteger() && !oid.IsFloat() && oid != types.T_decimal64 && oid != types.T_decimal128) ||
+			!staticIntegerComparisonPeer(candidate) {
+			return candidate
+		}
+		folded, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(candidate), proc, false, true)
+		if err == nil && folded != nil && folded.Typ.Id == candidate.Typ.Id &&
+			folded.GetLit() != nil && !folded.GetLit().Isnull {
+			return folded
+		}
+		return candidate
+	}
+	if isDecimalComparisonOperator(name) && len(args) == 2 {
+		args[1] = fold(args[0], args[1])
+		args[0] = fold(args[1], args[0])
+	} else if (name == "in" || name == "not_in") && len(args) == 2 {
+		if list := args[1].GetList(); list != nil {
+			for i, item := range list.List {
+				list.List[i] = fold(args[0], item)
+			}
+		}
+	} else if (name == "between" && len(args) == 3) || (name == "in_range" && len(args) == 4) {
+		args[1] = fold(args[0], args[1])
+		args[2] = fold(args[0], args[2])
 	}
 }
 

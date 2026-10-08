@@ -15,7 +15,11 @@
 package colexec
 
 import (
+	"runtime"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -92,4 +96,87 @@ func makeInternalVarcharZoneMap(values ...string) objectio.ZoneMap {
 		index.UpdateZM(zm, []byte(value))
 	}
 	return zm
+}
+
+// The metadata proof may fail; it must not hide internal failures or retain
+// temporary results, including a partially written result.
+func TestEvaluateZoneMapFunctionCleanup(t *testing.T) {
+	arithmetic := moerr.NewOutOfRangeNoCtx("int64", "ROUND")
+	internal := moerr.NewInternalErrorNoCtx("metadata test")
+	for _, tc := range []struct {
+		name         string
+		returned     error
+		panicked     any
+		cleanupPanic bool
+		known        bool
+	}{
+		{name: "success", known: true},
+		{name: "returned error", returned: internal},
+		{name: "arithmetic panic", panicked: arithmetic},
+		{name: "internal panic", panicked: internal},
+		{name: "runtime panic", panicked: &runtime.TypeAssertionError{}},
+		{name: "untyped panic", panicked: "unexpected"},
+		{name: "cleanup panic", panicked: arithmetic, cleanupPanic: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			baseline := proc.Mp().CurrNB()
+			zm := index.NewZM(types.T_int64, 0)
+			old := int64(123)
+			index.UpdateZM(zm, types.EncodeInt64(&old))
+			frees := 0
+			var result objectio.ZoneMap
+			var recovered any
+			func() {
+				defer func() { recovered = recover() }()
+				result = evaluateZoneMapFunction(proc, types.T_int64.ToType(), zm, func(result vector.FunctionResultWrapper) error {
+					require.NoError(t, vector.MustFunctionResult[int64](result).Append(1, false))
+					if tc.panicked != nil && !tc.cleanupPanic {
+						panic(tc.panicked)
+					}
+					if tc.known {
+						require.NoError(t, vector.MustFunctionResult[int64](result).Append(2, false))
+					}
+					return tc.returned
+				}, func() error {
+					frees++
+					if tc.cleanupPanic {
+						panic(tc.panicked)
+					}
+					return nil
+				}, nil)
+			}()
+			require.Equal(t, 1, frees)
+			require.Equal(t, baseline, proc.Mp().CurrNB(), "assert before process teardown")
+			if tc.cleanupPanic || tc.panicked != nil && tc.panicked != arithmetic {
+				require.Equal(t, tc.panicked, recovered)
+			} else {
+				require.Nil(t, recovered)
+				require.Equal(t, tc.known, result.IsInited())
+				if tc.known {
+					require.Equal(t, int64(1), types.DecodeInt64(result.GetMinBuf()))
+				}
+			}
+		})
+	}
+	t.Run("allocation failure", func(t *testing.T) {
+		const capacity = 1024 * 1024
+		mp, err := mpool.NewMPool("zone map allocation failure", capacity, mpool.NoFixed)
+		require.NoError(t, err)
+		proc := testutil.NewProcessWithMPool(t, "", mp)
+		defer proc.Free()
+		pressure, err := mp.Alloc(capacity-8, true)
+		require.NoError(t, err)
+		defer mp.Free(pressure)
+		baseline := mp.CurrNB()
+		frees := 0
+		result := evaluateZoneMapFunction(proc, types.T_int64.ToType(), index.NewZM(types.T_int64, 0), func(vector.FunctionResultWrapper) error {
+			t.Error("callback must not run after allocation failure")
+			return nil
+		}, func() error { frees++; return nil }, nil)
+		require.False(t, result.IsInited())
+		require.Equal(t, 1, frees)
+		require.Equal(t, baseline, mp.CurrNB())
+	})
 }

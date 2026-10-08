@@ -51,8 +51,10 @@ func ft2CreateArgVecs(t *testing.T, mp *mpool.MPool, cfg string, pk int64, texts
 	t.Helper()
 	pkVec := vector.NewVec(types.T_int64.ToType())
 	require.NoError(t, vector.AppendFixed[int64](pkVec, pk, false, mp))
-	vecs := []*vector.Vector{ft2ConstStr(t, mp, cfg), pkVec}
-	args := []*plan.Expr{makeStrConstExpr(cfg), makeStrConstExpr("pk")}
+	vecs := make([]*vector.Vector, 0, 2+len(texts))
+	vecs = append(vecs, ft2ConstStr(t, mp, cfg), pkVec)
+	args := make([]*plan.Expr, 0, 2+len(texts))
+	args = append(args, makeStrConstExpr(cfg), makeStrConstExpr("pk"))
 	for _, s := range texts {
 		tv := vector.NewVec(types.T_varchar.ToType())
 		require.NoError(t, vector.AppendBytes(tv, []byte(s), false, mp))
@@ -73,8 +75,10 @@ func ft2CreateNullableArgVecs(t *testing.T, mp *mpool.MPool, cfg string, pk int6
 	t.Helper()
 	pkVec := vector.NewVec(types.T_int64.ToType())
 	require.NoError(t, vector.AppendFixed[int64](pkVec, pk, false, mp))
-	vecs := []*vector.Vector{ft2ConstStr(t, mp, cfg), pkVec}
-	args := []*plan.Expr{makeStrConstExpr(cfg), makeStrConstExpr("pk")}
+	vecs := make([]*vector.Vector, 0, 2+len(values))
+	vecs = append(vecs, ft2ConstStr(t, mp, cfg), pkVec)
+	args := make([]*plan.Expr, 0, 2+len(values))
+	args = append(args, makeStrConstExpr(cfg), makeStrConstExpr("pk"))
 	for _, value := range values {
 		tv := vector.NewVec(types.T_varchar.ToType())
 		s, ok := value.(string)
