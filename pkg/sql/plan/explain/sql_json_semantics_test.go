@@ -90,7 +90,7 @@ func TestSQLJSONPlannerLiteralVectorDifferentials(t *testing.T) {
 					MatrixOne sqlJSONMatrixOne `json:"matrixone"`
 				}
 				require.NoError(t, json.Unmarshal(data, &document))
-				var filters []string
+				filters := make([]string, 0, len(document.MatrixOne.Nodes))
 				for _, n := range document.MatrixOne.Nodes {
 					filters = append(filters, n.Filter)
 				}
@@ -111,7 +111,7 @@ func TestSQLJSONPlannerLiteralVectorBeyondDisplayLimit(t *testing.T) {
 	}
 	render := func() string {
 		nodes := buildPlannerSQLJSONNodes(t, "select n_name from nation where n_nationkey in ("+strings.Join(values, ",")+")")
-		var filters []string
+		filters := make([]string, 0, len(nodes))
 		for _, n := range nodes {
 			filters = append(filters, n.Filter)
 		}
@@ -339,7 +339,7 @@ func TestSQLJSONFillBoundaryRoles(t *testing.T) {
 func TestSQLJSONPlannerSerializedPredicates(t *testing.T) {
 	for _, form := range []string{"n_name in (%s, serial(cast(100000 as decimal(38,0))))", "n_name = %s", "n_name between %s and serial(cast(100000 as decimal(38,0)))"} {
 		t.Run(form, func(t *testing.T) {
-			var filters []string
+			filters := make([]string, 0, 2)
 			for _, value := range []string{"99999", "99998"} {
 				sql := "select n_name from nation where " + fmt.Sprintf(form, "serial(cast("+value+" as decimal(38,0)))")
 				stmt, err := mysql.ParseOne(t.Context(), sql, 1)
@@ -381,7 +381,7 @@ func TestSQLJSONPlannerSerializedPredicates(t *testing.T) {
 					MatrixOne sqlJSONMatrixOne `json:"matrixone"`
 				}
 				require.NoError(t, json.Unmarshal(data, &doc))
-				var parts []string
+				parts := make([]string, 0, len(doc.MatrixOne.Nodes))
 				for _, node := range doc.MatrixOne.Nodes {
 					parts = append(parts, node.Filter)
 				}
