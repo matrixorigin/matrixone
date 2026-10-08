@@ -84,7 +84,7 @@ func TestJsonLengthOperator(t *testing.T) {
 				[]bool{false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, jsonLength)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -102,7 +102,7 @@ func TestJsonLengthOperator(t *testing.T) {
 				[]bool{false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, jsonLength)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -120,7 +120,7 @@ func TestJsonLengthOperator(t *testing.T) {
 				[]bool{false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, jsonLength)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -138,7 +138,7 @@ func TestJsonLengthOperator(t *testing.T) {
 				[]bool{false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, jsonLength)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -156,7 +156,7 @@ func TestJsonLengthOperator(t *testing.T) {
 				[]bool{false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, jsonLength)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -174,7 +174,7 @@ func TestJsonLengthOperator(t *testing.T) {
 				[]bool{false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, jsonLength)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -192,7 +192,7 @@ func TestJsonLengthOperator(t *testing.T) {
 				[]bool{false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, jsonLength)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -210,7 +210,7 @@ func TestJsonLengthOperator(t *testing.T) {
 				[]bool{false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, jsonLength)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -228,7 +228,7 @@ func TestJsonLengthOperator(t *testing.T) {
 				[]bool{true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, jsonLength)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -246,7 +246,7 @@ func TestJsonLengthOperator(t *testing.T) {
 				[]bool{true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, jsonLength)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -267,7 +267,7 @@ func TestJsonLengthOperator(t *testing.T) {
 				[]bool{false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, jsonLength)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -288,7 +288,7 @@ func TestJsonLengthOperator(t *testing.T) {
 				[]bool{true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, jsonLength)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 
@@ -306,7 +306,7 @@ func TestJsonLengthOperator(t *testing.T) {
 				nil),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, jsonLength)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 	// json_length with wildcard path: {"a":{"x":1,"y":2}}, $.a.* → 2
@@ -326,7 +326,7 @@ func TestJsonLengthOperator(t *testing.T) {
 				[]bool{false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, jsonLength)
-		succeed, info := tcc.Run()
+		succeed, info := tcc.RunAndFree()
 		require.True(t, succeed, tc.info, info)
 	}
 }

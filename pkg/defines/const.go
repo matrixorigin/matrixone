@@ -136,8 +136,14 @@ const (
 	MORPCVersion98     int64 = 98  // canonical FORMAT precision and MAKEDATE/MAKETIME integer signatures
 	MORPCVersion99     int64 = 99  // owner-atomic writer-fair row-lock admission
 	MORPCVersion100    int64 = 100 // on-demand View metadata column descriptions
-	MORPCVersion101    int64 = 101 // CRC32 normalized JSON text-byte execution identity
-	MORPCLatestVersion       = MORPCVersion101
+	MORPCVersion101    int64 = 101 // JSON source domains for CONCAT and JSON_DEPTH
+	MORPCVersion102    int64 = 102 // sys-admin vector-index cache freshness-interval, cache-info, evict, and list-keys ctl
+	MORPCVersion103    int64 = 103 // distributed required IVF PRE domains and CPU centroid routing
+	MORPCVersion104    int64 = 104 // preserve typed JSON scalar literals across CNs
+	MORPCVersion105    int64 = 105 // instance-bound lock-service drain confirmation
+	MORPCVersion106    int64 = 106 // CDC durable target identity and generation-aware task admission
+	MORPCVersion107    int64 = 107 // candidate CRC32 normalized JSON text-byte execution identity; reallocate against cumulative main before landing
+	MORPCLatestVersion       = MORPCVersion107
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

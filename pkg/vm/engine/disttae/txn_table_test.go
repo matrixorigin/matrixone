@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -34,6 +35,7 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	pbstats "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -267,7 +269,6 @@ func newResetTxnForTest(t *testing.T, eng *Engine) (client.TxnOperator, *Transac
 	op, closeFn := client.NewTestTxnOperator(context.Background())
 	t.Cleanup(closeFn)
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
 	txn := &Transaction{
 		op:          op,
 		proc:        proc,
@@ -501,7 +502,6 @@ func newPrimaryKeyCheckTableForTest(t *testing.T) (*txnTable, *Engine) {
 	op, closeFn := client.NewTestTxnOperator(context.Background())
 	t.Cleanup(closeFn)
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
 
 	tbl := &txnTable{
 		accountId: 1,
@@ -888,5 +888,231 @@ func BenchmarkTxnTableInsert(b *testing.B) {
 			makeBatchForTest(mp, i),
 		)
 		assert.Nil(b, err)
+	}
+}
+
+func TestWorkspaceInsertRowEstimate(t *testing.T) {
+	txn := newTransactionWithActivePKTableForTest(t, "pk")
+	tbl := txn.tableOps.existAndActive(genTableKey(1, "tbl", 7, "db"))
+	mem := batch.NewWithSize(0)
+	mem.SetRowCount(5)
+	other := batch.NewWithSize(0)
+	other.SetRowCount(500)
+	meta := batch.NewWithSize(1)
+	meta.Attrs = []string{catalog.ObjectMeta_ObjectStats}
+	meta.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	t.Cleanup(func() { meta.Clean(txn.proc.Mp()) })
+	for _, rows := range []uint32{8192, 1844} {
+		stats := objectio.NewObjectStats()
+		require.NoError(t, objectio.SetObjectStatsRowCnt(stats, rows))
+		require.NoError(t, vector.AppendBytes(meta.Vecs[0], stats.Marshal(), false, txn.proc.Mp()))
+	}
+	meta.SetRowCount(2)
+	txn.writes = []Entry{
+		{typ: INSERT, databaseId: 7, tableId: 42, bat: mem},
+		{typ: INSERT, databaseId: 7, tableId: 43, bat: other},
+		{typ: DELETE, databaseId: 7, tableId: 42, bat: mem},
+		{typ: INSERT, databaseId: 7, tableId: 42, bat: meta, fileName: "object"},
+	}
+	txn.snapshotWriteOffset.Store(0)
+	require.Equal(t, float64(10041), tbl.workspaceInsertRowEstimate(),
+		"planning precedes execution boundary advancement; include prior writes, ignoring unrelated inserts/deletes")
+	txn.writes = txn.writes[:3]
+	require.Equal(t, float64(5), tbl.workspaceInsertRowEstimate(), "rolled-back entries no longer contribute")
+	txn.writes = txn.writes[:4]
+	txn.Lock()
+	got := tbl.workspaceInsertRowEstimate()
+	txn.Unlock()
+	require.Equal(t, float64(^uint64(0)), got, "internal SQL must not reenter the workspace mutex")
+	txn.readOnly.Store(true)
+	txn.Lock()
+	got = tbl.workspaceInsertRowEstimate()
+	txn.Unlock()
+	require.Zero(t, got, "read-only fast path neither locks nor scans")
+	txn.readOnly.Store(false)
+	meta.Attrs[0] = "wrong_attribute"
+	require.Equal(t, float64(^uint64(0)), tbl.workspaceInsertRowEstimate(), "missing object metadata cannot leave a partial low bound")
+	meta.Attrs[0] = catalog.ObjectMeta_ObjectStats
+	meta.SetRowCount(3)
+	require.Equal(t, float64(^uint64(0)), tbl.workspaceInsertRowEstimate(), "incomplete metadata cannot leave a partial low bound")
+}
+
+func TestTransientTableStatsPreservePublishedOwner(t *testing.T) {
+	published := &pbstats.StatsInfo{TableName: "events", TableCnt: 5, AccurateObjectNumber: 1,
+		NdvMap: map[string]float64{"id": 5}, SizeMap: map[string]uint64{"id": 40, "payload": 40960}}
+	got := transientTableStats(published, 10005)
+	require.Equal(t, float64(10005), got.TableCnt)
+	require.Empty(t, got.TableName)
+	require.Equal(t, published.AccurateObjectNumber, got.AccurateObjectNumber)
+	require.Equal(t, published.NdvMap, got.NdvMap)
+	require.Equal(t, map[string]uint64{"id": 80040, "payload": 81960960}, got.SizeMap)
+	require.Equal(t, float64(8192), float64(got.SizeMap["payload"])/got.TableCnt)
+	got.SizeMap["payload"] = 1
+	require.Equal(t, uint64(40960), published.SizeMap["payload"], "temporary byte estimates cannot mutate the published map")
+	require.Equal(t, "events", published.TableName)
+	require.Equal(t, float64(5), published.TableCnt, "workspace overlay cannot mutate committed Rows/Size statistics")
+	txn := newTransactionWithActivePKTableForTest(t, "pk")
+	tbl := txn.tableOps.existAndActive(genTableKey(1, "tbl", 7, "db"))
+	tbl.tableId = 43 // a committed table, distinct from the fixture's created ID
+	eng := mock_frontend.NewMockEngine(gomock.NewController(t))
+	tbl.eng = eng
+	eng.EXPECT().Stats(gomock.Any(), gomock.Any(), false).Return(published).AnyTimes()
+	txn.readOnly.Store(true)
+	actual, err := tbl.Stats(context.Background(), false)
+	require.NoError(t, err)
+	require.Same(t, published, actual, "readonly completed observation retains the original fast owner")
+	tbl.remoteWorkspace = true
+	actual, err = tbl.Stats(context.Background(), false)
+	require.NoError(t, err)
+	require.Same(t, published, actual, "remote readonly completed observation remains available")
+	txn.readOnly.Store(false)
+	actual, err = tbl.Stats(context.Background(), false)
+	require.NoError(t, err)
+	require.Equal(t, float64(^uint64(0)), actual.TableCnt, "remote workspace cannot publish a partial global bound")
+	require.Empty(t, actual.TableName)
+}
+
+func TestPartitionRowEstimate(t *testing.T) {
+	state := logtailreplay.NewPartitionState("test", false, 42, false)
+	rows, err := partitionRowEstimate(state, types.MaxTs())
+	require.NoError(t, err)
+	require.Zero(t, rows)
+	mp := mpool.MustNew("transient-stat-test")
+	bat := batch.NewWithSize(1)
+	bat.Attrs = []string{"v"}
+	bat.Vecs[0] = testutil.MakeVarcharVector([]string{"a", "b", "c"}, nil, mp)
+	bat.SetRowCount(3)
+	defer bat.Clean(mp)
+	insert, err := fillRandomRowidAndZeroTs(bat, mp)
+	require.NoError(t, err)
+	packer := types.NewPacker()
+	defer packer.Close()
+	state.HandleRowsInsert(context.Background(), insert, 0, packer, mp)
+	rows, err = partitionRowEstimate(state, types.MaxTs())
+	require.NoError(t, err)
+	require.Equal(t, float64(3), rows)
+	for i, count := range []uint32{8192, 1844, 0} {
+		oid := types.NewObjectid()
+		stats := objectio.NewObjectStatsWithObjectID(&oid, false, false, false)
+		require.NoError(t, objectio.SetObjectStatsRowCnt(stats, count))
+		require.NoError(t, objectio.SetObjectStatsSize(stats, 1))
+		require.NoError(t, state.HandleObjectEntry(context.Background(), nil, objectio.ObjectEntry{
+			ObjectStats: *stats, CreateTime: types.BuildTS(int64(i+1), 0),
+		}, false))
+	}
+	rows, err = partitionRowEstimate(state, types.MaxTs())
+	require.NoError(t, err)
+	require.Equal(t, float64(3+8192+1844)+float64(^uint32(0)), rows, "unknown object is not a partial zero bound")
+	state.UpdateDuration(types.BuildTS(10, 0), types.MaxTs())
+	_, err = partitionRowEstimate(state, types.BuildTS(9, 0))
+	require.Error(t, err, "historical state must not be admitted as current statistics")
+}
+
+func TestPartitionRowEstimateAfterAppendableFlush(t *testing.T) {
+	state := logtailreplay.NewPartitionState("test", false, 42, false)
+	for i, spec := range []struct {
+		rows             uint32
+		appendable       bool
+		created, deleted int64
+	}{{5, true, 10, 20}, {5, false, 20, 0}, {7, false, 30, 0}, {0, true, 40, 50}} {
+		oid := types.NewObjectid()
+		stats := objectio.NewObjectStatsWithObjectID(&oid, spec.appendable, false, false)
+		require.NoError(t, objectio.SetObjectStatsRowCnt(stats, spec.rows))
+		require.NoError(t, objectio.SetObjectStatsSize(stats, 1))
+		require.NoError(t, objectio.SetObjectStatsBlkCnt(stats, 1))
+		entry := objectio.ObjectEntry{ObjectStats: *stats, CreateTime: types.BuildTS(spec.created, 0)}
+		if spec.deleted != 0 {
+			entry.DeleteTime = types.BuildTS(spec.deleted, 0)
+		}
+		require.NoError(t, state.HandleObjectEntry(context.Background(), nil, entry, false), i)
+	}
+	for _, snapshot := range []int64{15, 20, 25} {
+		rows, err := partitionRowEstimate(state, types.BuildTS(snapshot, 0))
+		require.NoError(t, err)
+		require.Equal(t, float64(5), rows, "sealed historical appendable objects must not inflate a five-row source")
+	}
+	rows, err := partitionRowEstimate(state, types.BuildTS(30, 0))
+	require.NoError(t, err)
+	require.Equal(t, float64(12), rows, "future objects become eligible only at their creation snapshot")
+	rows, err = partitionRowEstimate(state, types.BuildTS(45, 0))
+	require.NoError(t, err)
+	require.Equal(t, float64(12)+float64(math.MaxUint32), rows, "visible sealed metadata with unknown rows still fails closed")
+	rows, err = partitionRowEstimate(state, types.BuildTS(50, 0))
+	require.NoError(t, err)
+	require.Equal(t, float64(12), rows, "a deleted unknown object cannot inflate a later snapshot")
+
+}
+
+func TestTransientTableStatsByteBounds(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		oldRows, newRows float64
+		sizes, want      map[string]uint64
+	}{
+		{"round_up", 3, 5, map[string]uint64{"v": 2, "empty": 0}, map[string]uint64{"v": 4, "empty": 0}},
+		{"same", 5, 5, map[string]uint64{"v": 40960}, map[string]uint64{"v": 40960}},
+		{"smaller", 5, 3, map[string]uint64{"v": 40960}, map[string]uint64{"v": 40960}},
+		{"missing_denominator", 0, 5, map[string]uint64{"v": 1}, nil},
+		{"nan_denominator", math.NaN(), 5, map[string]uint64{"v": 1}, nil},
+		{"infinite_denominator", math.Inf(1), 5, map[string]uint64{"v": 1}, nil},
+		{"invalid_new_rows", 5, math.Inf(1), map[string]uint64{"v": 1}, nil},
+		{"individual_overflow", 5, 10, map[string]uint64{"v": math.MaxUint64, "small": 1}, nil},
+		{"sum_overflow", 5, 10, map[string]uint64{"a": math.MaxUint64 / 3, "b": math.MaxUint64 / 3}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			published := &pbstats.StatsInfo{TableCnt: tc.oldRows, SizeMap: tc.sizes}
+			got := transientTableStats(published, tc.newRows)
+			require.Equal(t, tc.want, got.SizeMap)
+			require.Equal(t, tc.sizes, published.SizeMap)
+		})
+	}
+}
+
+func TestWorkspaceEstimateUnderConcurrentWriter(t *testing.T) {
+	txn := newTransactionWithActivePKTableForTest(t, "pk")
+	tbl := txn.tableOps.existAndActive(genTableKey(1, "tbl", 7, "db"))
+	bat := batch.NewWithSize(0)
+	bat.SetRowCount(5)
+	txn.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			txn.Unlock()
+		}
+	}()
+	result := make(chan float64, 1)
+	go func() { result <- tbl.workspaceInsertRowEstimate() }()
+	select {
+	case rows := <-result:
+		require.Equal(t, float64(^uint64(0)), rows, "unavailable workspace must not wait or expose a partial small estimate")
+	case <-time.After(time.Second):
+		t.Fatal("planner waited for a workspace writer")
+	}
+	txn.writes = []Entry{{typ: INSERT, databaseId: 7, tableId: 42, bat: bat}}
+	txn.Unlock()
+	locked = false
+	require.Equal(t, float64(5), tbl.workspaceInsertRowEstimate(), "subsequent admission observes the released writer")
+}
+
+func BenchmarkWorkspaceInsertRowEstimate(b *testing.B) {
+	for _, entries := range []int{100, 10000, 100000} {
+		b.Run(fmt.Sprint(entries), func(b *testing.B) {
+			txn := newTransactionWithActivePKTableForTest(b, "pk")
+			tbl := txn.tableOps.existAndActive(genTableKey(1, "tbl", 7, "db"))
+			bat := batch.NewWithSize(0)
+			bat.SetRowCount(5)
+			txn.writes = make([]Entry, entries)
+			for i := range txn.writes {
+				txn.writes[i] = Entry{typ: INSERT, databaseId: 7, tableId: 43, bat: bat}
+			}
+			txn.writes[0].tableId = 42
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				if tbl.workspaceInsertRowEstimate() != 5 {
+					b.Fatal("unexpected target estimate")
+				}
+			}
+		})
 	}
 }

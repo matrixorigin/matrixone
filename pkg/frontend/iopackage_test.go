@@ -217,7 +217,8 @@ func TestBasicIOPackage_ReadUint64(t *testing.T) {
 func Test_AppendUint(t *testing.T) {
 	convey.Convey("AppendUint succ bigEndian", t, func() {
 		var io IOPackageImpl
-		var data, data2 = []byte{'a'}, []byte{'a', 'b'}
+		var data = []byte{'a'}
+		var data2 = append(make([]byte, 0, 16), 'a', 'b')
 		var value uint8 = 'b'
 		data = io.AppendUint8(data, value)
 		convey.So(data, convey.ShouldResemble, data2)
@@ -252,7 +253,8 @@ func Test_AppendUint(t *testing.T) {
 	convey.Convey("AppendUint succ littleEndian", t, func() {
 		var io IOPackageImpl
 		io.endian = true
-		var data, data2 = []byte{'a'}, []byte{'a', 'b'}
+		var data = []byte{'a'}
+		var data2 = append(make([]byte, 0, 16), 'a', 'b')
 		var value uint8 = 'b'
 		data = io.AppendUint8(data, value)
 		convey.So(data, convey.ShouldResemble, data2)

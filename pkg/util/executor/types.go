@@ -62,7 +62,6 @@ type Options struct {
 	timeZone                *time.Location
 	statementOptions        StatementOption
 	txnOpts                 []client.TxnOption
-	enableTrace             bool
 	lower                   *int64
 	streaming               bool
 	stream_chan             chan Result
@@ -104,6 +103,7 @@ type StatementOption struct {
 	paramNulls               []bool
 	preparedParamValues      []ParamValue
 	alterCopyOpt             *plan.AlterCopyOpt
+	prePipelineLockTableID   uint64
 	disableDropAutoIncrement bool
 	skipDataBranchReclaim    bool
 	keepAutoIncrement        uint64

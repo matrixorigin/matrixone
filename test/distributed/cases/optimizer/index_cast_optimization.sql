@@ -20,7 +20,6 @@ INSERT INTO t_int32 VALUES (1, 9), (2, 10), (3, 100);
 EXPLAIN SELECT * FROM t_int32 WHERE val = 9;
 
 -- Should use index: INT32 = DECIMAL with zero fractional part (9.0)
--- Note: Currently may not optimize due to complexity, but should not break
 -- @separator:table
 EXPLAIN SELECT * FROM t_int32 WHERE val = 9.0;
 

@@ -16,8 +16,11 @@ package compile
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/golang/mock/gomock"
@@ -35,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
@@ -127,7 +131,7 @@ func TestNewMessageSenderOnClientSetsDeadlineBeforeNewStream(t *testing.T) {
 	require.True(t, client.useInternalTimeout)
 	require.NotNil(t, client.ctxCancel)
 
-	client.close()
+	client.close(context.Background())
 }
 
 // TestNewMessageSenderOnClientPropagatesBackendCreateTimeout verifies the
@@ -254,19 +258,6 @@ func TestNewMessageSenderOnClientReturnsErrorOnNilStream(t *testing.T) {
 }
 
 func TestMessageSenderOnClientNegotiatedStreamTeardown(t *testing.T) {
-	t.Run("negotiated retry terminal needs explicit cleanup authorization", func(t *testing.T) {
-		sender := &messageSenderOnClient{expectedEnd: pipeline.Method_PrepareDoneNotifyMessage}
-		message := &pipeline.Message{
-			Cmd:                  pipeline.Method_PrepareDoneNotifyMessage,
-			Sid:                  pipeline.Status_MessageEnd,
-			AcceptedTeardownMode: pipeline.StreamTeardownMode_FinishAck,
-		}
-		sender.markTerminal(message, false)
-		require.True(t, sender.terminalNegotiated)
-		require.False(t, sender.reuseEligible)
-		sender.prepareForLocalCleanup()
-		require.True(t, sender.reuseEligible)
-	})
 
 	t.Run("accepted FIN ACK reuses backend", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
@@ -294,8 +285,8 @@ func TestMessageSenderOnClientNegotiatedStreamTeardown(t *testing.T) {
 			safeToClose:   true,
 			reuseEligible: true,
 		}
-		sender.close()
-		sender.close()
+		sender.close(context.Background())
+		sender.close(context.Background())
 	})
 
 	t.Run("legacy End closes backend", func(t *testing.T) {
@@ -307,7 +298,7 @@ func TestMessageSenderOnClientNegotiatedStreamTeardown(t *testing.T) {
 			streamSender: stream,
 			safeToClose:  true,
 		}
-		sender.close()
+		sender.close(context.Background())
 	})
 
 	for _, tt := range []struct {
@@ -341,8 +332,8 @@ func TestMessageSenderOnClientNegotiatedStreamTeardown(t *testing.T) {
 			require.True(t, sender.receiveClosed)
 			require.False(t, sender.reuseEligible)
 
-			sender.close()
-			sender.close()
+			sender.close(context.Background())
+			sender.close(context.Background())
 		})
 	}
 
@@ -362,7 +353,7 @@ func TestMessageSenderOnClientNegotiatedStreamTeardown(t *testing.T) {
 			reuseEligible: true,
 		}
 
-		sender.close()
+		sender.close(context.Background())
 		require.True(t, sender.receiveClosed)
 		require.False(t, sender.reuseEligible)
 	})
@@ -382,7 +373,7 @@ func TestMessageSenderOnClientNegotiatedStreamTeardown(t *testing.T) {
 			safeToClose:   true,
 			reuseEligible: true,
 		}
-		sender.close()
+		sender.close(context.Background())
 	})
 
 	t.Run("query cancellation after End poisons backend", func(t *testing.T) {
@@ -398,13 +389,13 @@ func TestMessageSenderOnClientNegotiatedStreamTeardown(t *testing.T) {
 			safeToClose:   true,
 			reuseEligible: true,
 		}
-		sender.close()
+		sender.close(context.Background())
 	})
 
-	t.Run("successful local cleanup cancellation still reuses backend", func(t *testing.T) {
+	t.Run("certified local cleanup cancellation still reuses backend", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		stream := mock_morpc.NewMockStream(ctrl)
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancelCause(context.Background())
 		responses := make(chan morpc.Message, 1)
 		responses <- &pipeline.Message{
 			Id:                   11,
@@ -422,9 +413,8 @@ func TestMessageSenderOnClientNegotiatedStreamTeardown(t *testing.T) {
 			safeToClose:   true,
 			reuseEligible: true,
 		}
-		sender.prepareForLocalCleanup()
-		cancel()
-		sender.close()
+		cancel(process.ErrPipelineStopped)
+		sender.close(context.Background())
 	})
 
 	t.Run("cancellation before cleanup completion poisons backend", func(t *testing.T) {
@@ -440,7 +430,7 @@ func TestMessageSenderOnClientNegotiatedStreamTeardown(t *testing.T) {
 			reuseEligible: true,
 		}
 		cancelPipeline()
-		sender.close()
+		sender.close(context.Background())
 	})
 
 	t.Run("FIN ACK timeout poisons backend", func(t *testing.T) {
@@ -459,7 +449,9 @@ func TestMessageSenderOnClientNegotiatedStreamTeardown(t *testing.T) {
 			safeToClose:   true,
 			reuseEligible: true,
 		}
-		sender.close()
+		cleanupCtx, cancel := newRemoteCleanupContext(nil)
+		defer cancel()
+		sender.close(cleanupCtx)
 	})
 
 	t.Run("clean StopSending End reuses backend", func(t *testing.T) {
@@ -493,14 +485,13 @@ func TestMessageSenderOnClientNegotiatedStreamTeardown(t *testing.T) {
 		)
 		stream.EXPECT().Close(false).Return(nil)
 		sender := &messageSenderOnClient{
-			ctx:                      context.Background(),
-			streamSender:             stream,
-			receiveCh:                responses,
-			safeToClose:              false,
-			expectedEnd:              pipeline.Method_PipelineMessage,
-			allowCleanupCancellation: true,
+			ctx:          context.Background(),
+			streamSender: stream,
+			receiveCh:    responses,
+			safeToClose:  false,
+			expectedEnd:  pipeline.Method_PipelineMessage,
 		}
-		sender.close()
+		sender.close(context.Background())
 	})
 }
 
@@ -572,11 +563,15 @@ func TestRemoteRunNormalizesPipelineCancellationCause(t *testing.T) {
 		cancelQuery                bool
 		deadlineQuery              bool
 		remoteErr                  error
+		receiveRemoteTerminal      bool
+		terminalAnalysis           []byte
+		wantErrorContains          string
 		stopResponseErr            error
 		stopSendErr                error
 		closeStopResponse          bool
 		timeoutStopResponse        bool
 		assertTerminalBeforeCancel bool
+		stopWaitsForLocalEnd       bool
 		wantErr                    error
 		wantErrCode                uint16
 		wantStopSendingCount       int
@@ -609,56 +604,51 @@ func TestRemoteRunNormalizesPipelineCancellationCause(t *testing.T) {
 			wantStopSendingCount: 1,
 		},
 		{
+			name:                 "remote terminal waits for local cleanup",
+			stopWaitsForLocalEnd: true,
+			wantStopSendingCount: 1,
+		},
+		{
+			name:                 "late failure after local cleanup remains terminal",
+			stopWaitsForLocalEnd: true,
+			stopResponseErr:      moerr.NewQueryInterrupted(context.Background()),
+			wantErrCode:          moerr.ErrQueryInterrupted,
+			wantStopSendingCount: 1,
+		},
+		{
+			name:                 "malformed terminal cannot complete parent successfully",
+			stopWaitsForLocalEnd: true, terminalAnalysis: []byte("{"),
+			wantErrorContains: "unexpected end of JSON input", wantStopSendingCount: 1,
+		},
+		{
+			name:                  "malformed normal terminal fails parent",
+			receiveRemoteTerminal: true, terminalAnalysis: []byte("{"),
+			wantErrorContains: "unexpected end of JSON input",
+		},
+		{
+			name:                  "normal terminal retry survives malformed analysis",
+			receiveRemoteTerminal: true, terminalAnalysis: []byte("{"),
+			remoteErr: moerr.NewTxnNeedRetry(context.Background()), wantErrCode: moerr.ErrTxnNeedRetry,
+		},
+		{
+			name:                 "stop terminal retry survives malformed analysis",
+			stopWaitsForLocalEnd: true, terminalAnalysis: []byte("{"),
+			stopResponseErr: moerr.NewTxnNeedRetry(context.Background()),
+			wantErrCode:     moerr.ErrTxnNeedRetry, wantStopSendingCount: 1,
+		},
+		{
 			name:                 "normal internal cancellation remains secondary",
 			wantStopSendingCount: 1,
 		},
 		{
-			name:                 "query cancellation remains terminal",
-			cancelQuery:          true,
-			wantErr:              context.Canceled,
-			wantStopSendingCount: 1,
+			name:        "query cancellation skips optional StopSending",
+			cancelQuery: true,
+			wantErr:     context.Canceled,
 		},
 		{
-			name:                 "query cancellation survives StopSending send failure",
-			cancelQuery:          true,
-			stopSendErr:          moerr.NewBackendClosedNoCtx(),
-			wantErr:              context.Canceled,
-			wantStopSendingCount: 1,
-		},
-		{
-			name:                 "query cancellation survives StopSending response closure",
-			cancelQuery:          true,
-			closeStopResponse:    true,
-			wantErr:              context.Canceled,
-			wantStopSendingCount: 1,
-		},
-		{
-			name:                 "query cancellation survives StopSending timeout",
-			cancelQuery:          true,
-			timeoutStopResponse:  true,
-			wantErr:              context.Canceled,
-			wantStopSendingCount: 1,
-		},
-		{
-			name:                 "query deadline survives StopSending send failure",
-			deadlineQuery:        true,
-			stopSendErr:          moerr.NewBackendClosedNoCtx(),
-			wantErr:              context.DeadlineExceeded,
-			wantStopSendingCount: 1,
-		},
-		{
-			name:                 "query deadline survives StopSending response closure",
-			deadlineQuery:        true,
-			closeStopResponse:    true,
-			wantErr:              context.DeadlineExceeded,
-			wantStopSendingCount: 1,
-		},
-		{
-			name:                 "query deadline survives StopSending timeout",
-			deadlineQuery:        true,
-			timeoutStopResponse:  true,
-			wantErr:              context.DeadlineExceeded,
-			wantStopSendingCount: 1,
+			name:          "query deadline skips optional StopSending",
+			deadlineQuery: true,
+			wantErr:       context.DeadlineExceeded,
 		},
 		{
 			name:                       "remote failure reaches receiver before scope cancellation",
@@ -675,8 +665,9 @@ func TestRemoteRunNormalizesPipelineCancellationCause(t *testing.T) {
 			wantStopSendingCount: 1,
 		},
 		{
-			name:                 "remote cancellation returned after internal cancellation remains secondary",
+			name:                 "remote interrupted Error survives successful stop",
 			stopResponseErr:      moerr.NewQueryInterrupted(context.Background()),
+			wantErrCode:          moerr.ErrQueryInterrupted,
 			wantStopSendingCount: 1,
 		},
 		{
@@ -706,9 +697,12 @@ func TestRemoteRunNormalizesPipelineCancellationCause(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if tt.timeoutStopResponse {
+			if tt.timeoutStopResponse || tt.stopWaitsForLocalEnd {
 				oldTimeout := pipelineStopSendingClientTimeout
 				pipelineStopSendingClientTimeout = 10 * time.Millisecond
+				if tt.stopWaitsForLocalEnd {
+					pipelineStopSendingClientTimeout = time.Second
+				}
 				defer func() { pipelineStopSendingClientTimeout = oldTimeout }()
 			}
 			ctrl := gomock.NewController(t)
@@ -723,10 +717,11 @@ func TestRemoteRunNormalizesPipelineCancellationCause(t *testing.T) {
 			_, cancelQuery := process.GetQueryCtxFromProc(proc)
 			t.Cleanup(cancelQuery)
 			proc.BuildPipelineContext(queryCtx)
-			txnCli, txnOp := newTestTxnClientAndOp(ctrl)
+			txnCli, txnOp := newTestTxnClientAndOpWithIsolation(ctrl, txn.TxnIsolation_RC)
 			proc.Base.TxnClient = txnCli
 			proc.Base.TxnOperator = txnOp
 
+			reg := process.NewPipelineEdge(1, 0)
 			responses := make(chan morpc.Message, 1)
 			stream := mock_morpc.NewMockStream(ctrl)
 			stream.EXPECT().Receive().Return(responses, nil)
@@ -737,15 +732,20 @@ func TestRemoteRunNormalizesPipelineCancellationCause(t *testing.T) {
 					message := request.(*pipeline.Message)
 					switch message.GetCmd() {
 					case pipeline.Method_PipelineMessage:
-						if tt.remoteErr != nil {
+						if tt.remoteErr != nil || tt.receiveRemoteTerminal {
 							response := &pipeline.Message{Sid: pipeline.Status_MessageEnd}
 							response.SetMessageType(pipeline.Method_PipelineMessage)
+							response.Analyse = tt.terminalAnalysis
 							response.SetMoError(context.Background(), tt.remoteErr)
 							responses <- response
 						} else if tt.cancelQuery {
 							cancelQuery()
 						} else {
-							proc.Cancel(tt.cancelCause)
+							cause := tt.cancelCause
+							if cause == nil {
+								cause = process.ErrPipelineStopped
+							}
+							proc.Cancel(cause)
 						}
 					case pipeline.Method_StopSending:
 						stopSendingCount++
@@ -761,10 +761,20 @@ func TestRemoteRunNormalizesPipelineCancellationCause(t *testing.T) {
 						}
 						response := &pipeline.Message{Sid: pipeline.Status_MessageEnd}
 						response.SetMessageType(pipeline.Method_PipelineMessage)
+						response.Analyse = tt.terminalAnalysis
 						if tt.stopResponseErr != nil {
 							response.SetMoError(context.Background(), tt.stopResponseErr)
 						}
-						responses <- response
+						if tt.stopWaitsForLocalEnd {
+							// The remote Merge cannot finish until this retained local
+							// sender releases its input. Model that dependency explicitly.
+							go func() {
+								<-reg.Done()
+								responses <- response
+							}()
+						} else {
+							responses <- response
+						}
 					}
 					return nil
 				}).AnyTimes()
@@ -790,7 +800,6 @@ func TestRemoteRunNormalizesPipelineCancellationCause(t *testing.T) {
 			)
 			c.anal = &AnalyzeModule{qry: &plan.Query{}}
 
-			reg := process.NewPipelineEdge(1, 0)
 			root := connector.NewArgument().WithReg(reg)
 			defer root.Release()
 			if tt.assertTerminalBeforeCancel {
@@ -810,25 +819,43 @@ func TestRemoteRunNormalizesPipelineCancellationCause(t *testing.T) {
 			}
 
 			err := s.RemoteRun(c)
-			if tt.wantErrCode != 0 {
-				require.True(t, moerr.IsMoErrCode(err, tt.wantErrCode), err)
+			if tt.wantErrorContains != "" {
+				require.ErrorContains(t, err, tt.wantErrorContains)
+			} else if tt.wantErrCode != 0 {
+				require.True(t, moerr.IsMoErrCode(process.UnwrapPipelineFailure(err), tt.wantErrCode), err)
 			} else if tt.wantErr == nil {
 				require.NoError(t, err)
 			} else {
 				require.ErrorIs(t, err, tt.wantErr)
 			}
 			require.Equal(t, tt.wantStopSendingCount, stopSendingCount)
+			if tt.terminalAnalysis != nil {
+				results := make(chan scopeRunResult, 1)
+				results <- newScopeRunResult(err, s)
+				parentErr := c.collectMergeRunResults(proc, scopeRunResult{}, results, nil, context.Background())
+				require.Error(t, parentErr, "parent must not consume malformed completion as success")
+				require.NoError(t, queryCtx.Err(), "fault is independent of user cancellation")
+				if tt.wantErrCode == moerr.ErrTxnNeedRetry {
+					require.True(t, c.canRetry(parentErr), "parent must preserve actual RC retry policy")
+				} else {
+					require.ErrorContains(t, parentErr, tt.wantErrorContains)
+				}
+			}
 
 			select {
 			case signal := <-reg.Ch2:
 				_, terminalErr := signal.Action()
-				if tt.wantErrCode == 0 && tt.wantErr == nil {
+				if tt.remoteErr == nil && !tt.receiveRemoteTerminal && tt.cancelCause == nil && !tt.cancelQuery && !tt.deadlineQuery {
+					// Late handshake failures are retained by RemoteRun, after the
+					// local terminal has released consumers needed for remote cleanup.
 					require.Equal(t, process.EventEnd, signal.EventType)
 					require.NoError(t, terminalErr)
 				} else {
 					require.Equal(t, process.EventError, signal.EventType)
-					if tt.wantErrCode != 0 {
-						require.True(t, moerr.IsMoErrCode(terminalErr, tt.wantErrCode), terminalErr)
+					if tt.wantErrorContains != "" {
+						require.ErrorContains(t, terminalErr, tt.wantErrorContains)
+					} else if tt.wantErrCode != 0 {
+						require.True(t, moerr.IsMoErrCode(process.UnwrapPipelineFailure(terminalErr), tt.wantErrCode), terminalErr)
 					} else {
 						require.ErrorIs(t, terminalErr, tt.wantErr)
 					}
@@ -890,11 +917,11 @@ func TestRemoteRunFailureReleasesPendingRetainedDispatchAttach(t *testing.T) {
 	registrations, err := registerLocalDispatchReceivers([]*Scope{s}, c.addr)
 	require.NoError(t, err)
 	defer registrations.cleanup()
-	registeredProc, notifyCh, err := (&messageReceiverOnServer{
+	registeredProc, notifyCh, _, err := (&messageReceiverOnServer{
 		colexecServer: colexec.GetServer(""),
 		connectionCtx: context.Background(),
 		messageCtx:    context.Background(),
-	}).TryGetProcByUuid(uid)
+	}).getRemoteDispatchReceiver(uid, nil)
 	require.NoError(t, err)
 	require.Same(t, proc, registeredProc)
 
@@ -903,7 +930,7 @@ func TestRemoteRunFailureReleasesPendingRetainedDispatchAttach(t *testing.T) {
 	go func() {
 		close(started)
 		select {
-		case notifyCh <- &process.WrapCs{Uid: uid, Err: make(chan error, 1)}:
+		case notifyCh <- &process.WrapCs{Uid: uid}:
 			pendingDone <- "attached"
 		case <-proc.Ctx.Done():
 			pendingDone <- "canceled"
@@ -929,8 +956,248 @@ func TestRemoteRunFailureReleasesPendingRetainedDispatchAttach(t *testing.T) {
 		t.Fatal("RemoteRun failure did not release the pending retained-root attach")
 	}
 	registrations.cleanup()
-	registeredProc, notifyCh, ok := colexec.GetServer("").GetProcByUuid(uid, false)
-	require.False(t, ok)
+	registeredProc, notifyCh, attachState, lookupWaiter, _ := colexec.GetServer("").AttachProcByUuidOrWait(uid)
+	lookupWaiter.Close()
+	require.Equal(t, colexec.RemoteReceiverMissing, attachState)
 	require.Nil(t, registeredProc)
 	require.Nil(t, notifyCh)
+}
+
+// Exercise the two real terminal consumers with the same protocol faults.
+func TestRemoteTerminalValidationAndReuse(t *testing.T) {
+	for _, stop := range []bool{false, true} {
+		for _, outcome := range []string{"valid", "bad analysis", "retry", "bad analysis plus retry", "bad error bytes", "closed transport"} {
+			name := "receive/" + outcome
+			if stop {
+				name = "stop/" + outcome
+			}
+			t.Run(name, func(t *testing.T) {
+				stream := mock_morpc.NewMockStream(gomock.NewController(t))
+				responses := make(chan morpc.Message, 1)
+				terminal := &pipeline.Message{Id: 7, Cmd: pipeline.Method_PipelineMessage,
+					Sid: pipeline.Status_MessageEnd, Analyse: []byte("{}"),
+					AcceptedTeardownMode: pipeline.StreamTeardownMode_FinishAck}
+				malformed := outcome == "bad analysis" || outcome == "bad analysis plus retry" || outcome == "bad error bytes"
+				if outcome == "bad analysis" || outcome == "bad analysis plus retry" {
+					terminal.Analyse = []byte("{")
+				}
+				if outcome == "retry" || outcome == "bad analysis plus retry" {
+					terminal.SetMoError(context.Background(), moerr.NewTxnNeedRetry(context.Background()))
+				}
+				if outcome == "bad error bytes" {
+					terminal.Err = []byte{255}
+				}
+				if outcome == "closed transport" {
+					close(responses)
+				} else {
+					responses <- terminal
+				}
+				stream.EXPECT().ID().Return(uint64(7)).AnyTimes()
+				if stop {
+					stream.EXPECT().Send(gomock.Any(), gomock.Any()).Return(nil)
+				}
+				sender := &messageSenderOnClient{ctx: context.Background(), streamSender: stream,
+					receiveCh: responses, expectedEnd: pipeline.Method_PipelineMessage}
+				var err error
+				if stop {
+					err = finalizeRemoteResult(nil, sender)
+				} else {
+					_, _, err = sender.receiveBatch()
+				}
+				if outcome == "valid" {
+					require.NoError(t, err)
+				} else {
+					require.Error(t, err)
+				}
+				if outcome == "retry" || outcome == "bad analysis plus retry" {
+					require.True(t, moerr.IsMoErrCode(process.UnwrapPipelineFailure(err), moerr.ErrTxnNeedRetry))
+				} else if outcome == "bad analysis" {
+					var syntax *json.SyntaxError
+					require.ErrorAs(t, err, &syntax)
+				}
+				if malformed || outcome != "valid" {
+					require.False(t, sender.reuseEligible)
+					stream.EXPECT().Close(true).Return(nil).Times(1)
+					sender.close(context.Background())
+					sender.close(context.Background())
+				} else {
+					require.True(t, sender.reuseEligible, "valid negotiated completion retains reuse")
+				}
+			})
+		}
+	}
+}
+
+// Exercise the existing parent collector and sender cleanup with production
+// budgets; virtual time controls absent ACKs without scheduler-sized deadlines.
+func TestRemoteCleanupSharedBudget(t *testing.T) {
+	for _, mode := range []string{"query canceled", "live missing FIN", "cancel during FIN", "Stop fallback", "Stop then FIN", "normal then deferred", "certified stop reuse"} {
+		t.Run(mode, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			synctest.Test(t, func(t *testing.T) {
+				ctrl := gomock.NewController(t)
+				queryCtx := proc.Base.GetContextBase().BuildQueryCtx(context.Background())
+				_, cancelQuery := process.GetQueryCtxFromProc(proc)
+				defer cancelQuery()
+				proc.BuildPipelineContext(queryCtx)
+				proc.Cancel(process.ErrPipelineStopped)
+				cleanupCtx, cancel := newRemoteCleanupContext(proc)
+				defer cancel()
+				if mode == "query canceled" {
+					cancelQuery()
+				}
+				original := moerr.NewInternalErrorNoCtx("producer failure")
+				results := make(chan notifyMessageResult, 3)
+				for i := 0; i < 3; i++ {
+					stream := mock_morpc.NewMockStream(ctrl)
+					responses := make(chan morpc.Message, 1)
+					stream.EXPECT().ID().Return(uint64(i + 1)).AnyTimes()
+					sends := 0
+					if mode == "certified stop reuse" || (i == 0 && mode != "query canceled") {
+						sends = 1
+					}
+					if i == 0 && mode == "Stop then FIN" {
+						sends = 2
+					}
+					sendCall := stream.EXPECT().Send(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, msg morpc.Message) error {
+						m := msg.(*pipeline.Message)
+						if m.GetCmd() != pipeline.Method_StopSending {
+							require.Equal(t, cleanupCtx, ctx, "FIN receives the parent context")
+						}
+						if mode == "Stop fallback" || m.GetCmd() == pipeline.Method_StopSending {
+							// Stop uses a child cap of the same absolute parent deadline.
+							parentDeadline, _ := cleanupCtx.Deadline()
+							deadline, _ := ctx.Deadline()
+							require.Equal(t, parentDeadline, deadline)
+							if mode == "Stop then FIN" {
+								go func() {
+									time.Sleep(29 * time.Second)
+									responses <- &pipeline.Message{Id: m.GetID(), Cmd: pipeline.Method_PipelineMessage, Sid: pipeline.Status_MessageEnd, AcceptedTeardownMode: pipeline.StreamTeardownMode_FinishAck}
+								}()
+							}
+						}
+						if mode == "cancel during FIN" {
+							cancelQuery()
+						}
+						if mode == "certified stop reuse" {
+							responses <- &pipeline.Message{Id: m.GetID(), Cmd: pipeline.Method_PipelineStreamFinishAck, Sid: pipeline.Status_MessageEnd, AcceptedTeardownMode: pipeline.StreamTeardownMode_FinishAck}
+						}
+						return nil
+					})
+					if mode == "Stop fallback" && i > 0 {
+						// Equal-deadline child and parent timer callbacks may run in
+						// either order; a claimed Stop still inherits the expired budget.
+						sendCall.MaxTimes(1)
+					} else {
+						sendCall.Times(sends)
+					}
+					stream.EXPECT().Close(mode != "certified stop reuse").Return(nil).Times(1)
+					sender := &messageSenderOnClient{ctx: proc.Ctx, streamSender: stream, receiveCh: responses, safeToClose: true, reuseEligible: true, expectedEnd: pipeline.Method_PipelineMessage}
+					result := notifyMessageResult{sender: sender}
+					if mode == "Stop fallback" {
+						sender.safeToClose = false
+						sender.reuseEligible = false
+						result.err = original
+					}
+					if mode == "Stop then FIN" {
+						sender.safeToClose = false
+					}
+					results <- result
+				}
+				started := time.Now()
+				if mode == "normal then deferred" {
+					result := <-results
+					result.clean(proc, cleanupCtx)
+				}
+				got := (&Compile{proc: proc}).collectMergeRunResults(proc, scopeRunResult{}, nil, results, cleanupCtx)
+				if mode == "Stop fallback" {
+					require.Same(t, original, got)
+				} else {
+					require.NoError(t, got)
+				}
+				expected := time.Duration(0)
+				if mode == "live missing FIN" || mode == "Stop fallback" || mode == "Stop then FIN" || mode == "normal then deferred" {
+					expected = 30 * time.Second
+				}
+				require.Equal(t, expected, time.Since(started))
+				require.Empty(t, results)
+				require.Zero(t, proc.Mp().CurrNB())
+			})
+		})
+	}
+}
+
+func TestRemoteCleanupCancellationAuthority(t *testing.T) {
+	for _, mode := range []string{"certified during FIN", "generic during FIN", "wrapped stop", "marked stop", "query canceled after certified stop", "query deadline"} {
+		t.Run(mode, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			queryCtx, cancelQuery := context.WithCancel(context.Background())
+			defer cancelQuery()
+			if mode == "query deadline" {
+				var cancel context.CancelFunc
+				queryCtx, cancel = context.WithDeadline(queryCtx, time.Now().Add(-time.Second))
+				defer cancel()
+			}
+			senderCtx, cancelSender := context.WithCancelCause(queryCtx)
+			defer cancelSender(nil)
+			switch mode {
+			case "wrapped stop":
+				cancelSender(fmt.Errorf("wrapped: %w", process.ErrPipelineStopped))
+			case "marked stop":
+				cancelSender(process.MarkPipelineFailure(process.ErrPipelineStopped))
+			case "query canceled after certified stop":
+				cancelSender(process.ErrPipelineStopped)
+			}
+			stream := mock_morpc.NewMockStream(ctrl)
+			responses := make(chan morpc.Message, 1)
+			responses <- &pipeline.Message{Id: 7, Cmd: pipeline.Method_PipelineStreamFinishAck, Sid: pipeline.Status_MessageEnd, AcceptedTeardownMode: pipeline.StreamTeardownMode_FinishAck}
+			sends := 0
+			if mode == "certified during FIN" || mode == "generic during FIN" || mode == "query canceled after certified stop" {
+				sends = 1
+			}
+			stream.EXPECT().ID().Return(uint64(7)).AnyTimes()
+			stream.EXPECT().Send(gomock.Any(), gomock.Any()).DoAndReturn(func(context.Context, morpc.Message) error {
+				switch mode {
+				case "certified during FIN":
+					cancelSender(process.ErrPipelineStopped)
+				case "generic during FIN":
+					cancelSender(nil)
+				case "query canceled after certified stop":
+					cancelQuery()
+				}
+				return nil
+			}).Times(sends)
+			stream.EXPECT().Close(mode != "certified during FIN").Return(nil).Times(1)
+			sender := &messageSenderOnClient{ctx: senderCtx, streamSender: stream, receiveCh: responses, safeToClose: true, reuseEligible: true}
+			sender.close(queryCtx)
+			sender.close(queryCtx)
+		})
+	}
+}
+
+func TestRemoteSettlementSurvivesExpiredCleanup(t *testing.T) {
+	for _, terminalErr := range []error{moerr.NewInternalErrorNoCtx("late remote failure"), moerr.NewTxnNeedRetry(context.Background())} {
+		t.Run(terminalErr.Error(), func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			stream := mock_morpc.NewMockStream(ctrl)
+			responses := make(chan morpc.Message, 1)
+			cleanupCtx, cancel := context.WithCancel(context.Background())
+			cancel()
+			stream.EXPECT().ID().Return(uint64(9)).AnyTimes()
+			stream.EXPECT().Send(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, request morpc.Message) error {
+				require.NoError(t, ctx.Err(), "required settlement has independent authority")
+				require.Equal(t, pipeline.Method_StopSending, request.(*pipeline.Message).GetCmd())
+				response := &pipeline.Message{Id: 9, Cmd: pipeline.Method_PipelineMessage, Sid: pipeline.Status_MessageEnd, AcceptedTeardownMode: pipeline.StreamTeardownMode_FinishAck}
+				response.SetMoError(context.Background(), terminalErr)
+				responses <- response
+				return nil
+			}).Times(1)
+			stream.EXPECT().Close(true).Return(nil).Times(1)
+			sender := &messageSenderOnClient{ctx: cleanupCtx, streamSender: stream, receiveCh: responses, expectedEnd: pipeline.Method_PipelineMessage}
+			got := finalizeRemoteResult(nil, sender)
+			require.Equal(t, terminalErr.Error(), process.UnwrapPipelineFailure(got).Error())
+			sender.close(cleanupCtx)
+			sender.close(cleanupCtx)
+		})
+	}
 }

@@ -1062,7 +1062,7 @@ func BitCountBinaryString(ivecs []*vector.Vector, result vector.FunctionResultWr
 }
 
 func BitLengthFunc(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryStrToFixed[int64](ivecs, result, proc, length, func(v string) int64 {
+	return opUnaryBytesToFixed[int64](ivecs, result, proc, length, func(v []byte) int64 {
 		return int64(len(v) * 8)
 	}, selectList)
 }
@@ -1809,7 +1809,7 @@ func geomFromWKBSubtype(payload []byte, maxPoints int64, want string) ([]byte, e
 	return geo.WriteWKB(g), nil
 }
 
-func stFromWKBSubtype(want string) fEvalFn {
+func stFromWKBSubtype(want string) executeLogicOfOverload {
 	return func(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 		maxPoints := maxPointsInGeometryLimit(proc)
 		return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
@@ -8002,7 +8002,7 @@ func ConnectionID(_ []*vector.Vector, result vector.FunctionResultWrapper, proc 
 // HexString returns a hexadecimal string representation of a string.
 // See https://dev.mysql.com/doc/refman/5.7/en/string-functions.html#function_hex
 func HexString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToStr(ivecs, result, proc, length, hexEncodeString, selectList)
+	return opUnaryBytesToBytes(ivecs, result, proc, length, hexEncodeBytes, selectList)
 }
 
 func HexInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -8188,8 +8188,8 @@ func HexArray(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	}, selectList)
 }
 
-func hexEncodeString(xs []byte) string {
-	return strings.ToUpper(hex.EncodeToString(xs))
+func hexEncodeBytes(xs []byte) []byte {
+	return functionUtil.QuickStrToBytes(strings.ToUpper(hex.EncodeToString(xs)))
 }
 
 func hexEncodeInt64(xs int64) string {
@@ -9455,6 +9455,13 @@ func VecFromBase64[T types.ArrayElement](parameters []*vector.Vector, result vec
 			return moerr.NewInvalidInputNoCtxf("vec_from_base64: decoded length %d is not a multiple of %d bytes", n, elemSize)
 		}
 
+		// The payload is raw IEEE-754 bytes, so a NaN/Inf bit pattern would otherwise decode straight
+		// into a vector column, bypassing the finite check the text cast and direct insert enforce
+		// (#29084). Reject non-finite decoded elements before storing.
+		if err = rejectNonFiniteVectorElems(types.BytesToArray[T](buf[:n])); err != nil {
+			return err
+		}
+
 		if err = rs.AppendBytes(buf[:n], false); err != nil {
 			return err
 		}
@@ -9726,11 +9733,7 @@ func Uncompress(parameters []*vector.Vector, result vector.FunctionResultWrapper
 }
 
 func Length(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryStrToFixed[int64](ivecs, result, proc, length, strLength, selectList)
-}
-
-func strLength(xs string) int64 {
-	return int64(len(xs))
+	return opUnaryBytesToFixed[int64](ivecs, result, proc, length, func(v []byte) int64 { return int64(len(v)) }, selectList)
 }
 
 func LengthUTF8(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -11055,30 +11058,33 @@ func TimestampToDayOfWeek(ivecs []*vector.Vector, result vector.FunctionResultWr
 
 // DateToDayName returns the weekday name for date (e.g., "Sunday", "Monday", ...)
 func DateToDayName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	locale := temporalLocaleForProcess(proc)
 	return opUnaryFixedToStrWithNullOnError[types.Date](ivecs, result, proc, length, func(v types.Date) (string, error) {
 		if v == types.ZeroDate {
 			return "", moerr.NewInvalidInputNoCtx("zero date")
 		}
 		// DayOfWeek() returns 0=Sunday, 1=Monday, ..., 6=Saturday
 		// Use String() method to get the weekday name
-		return v.DayOfWeek().String(), nil
+		return locale.localizedWeekday(int(v.DayOfWeek())), nil
 	}, selectList)
 }
 
 // DatetimeToDayName returns the weekday name for datetime (e.g., "Sunday", "Monday", ...)
 func DatetimeToDayName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	locale := temporalLocaleForProcess(proc)
 	return opUnaryFixedToStrWithNullOnError[types.Datetime](ivecs, result, proc, length, func(v types.Datetime) (string, error) {
 		if v == types.ZeroDatetime {
 			return "", moerr.NewInvalidInputNoCtx("zero datetime")
 		}
 		// DayOfWeek() returns 0=Sunday, 1=Monday, ..., 6=Saturday
 		// Use String() method to get the weekday name
-		return v.DayOfWeek().String(), nil
+		return locale.localizedWeekday(int(v.DayOfWeek())), nil
 	}, selectList)
 }
 
 // TimestampToDayName returns the weekday name for timestamp (e.g., "Sunday", "Monday", ...)
 func TimestampToDayName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	locale := temporalLocaleForProcess(proc)
 	return opUnaryFixedToStrWithNullOnError[types.Timestamp](ivecs, result, proc, length, func(v types.Timestamp) (string, error) {
 		if v == types.ZeroTimestamp {
 			return "", moerr.NewInvalidInputNoCtx("zero timestamp")
@@ -11090,24 +11096,26 @@ func TimestampToDayName(ivecs []*vector.Vector, result vector.FunctionResultWrap
 		dt := v.ToDatetime(loc)
 		// DayOfWeek() returns 0=Sunday, 1=Monday, ..., 6=Saturday
 		// Use String() method to get the weekday name
-		return dt.DayOfWeek().String(), nil
+		return locale.localizedWeekday(int(dt.DayOfWeek())), nil
 	}, selectList)
 }
 
 func DateStringToDayName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	locale := temporalLocaleForProcess(proc)
 	return dateStringToStringWithNullOnError(ivecs, result, proc, length, selectList, func(parts dateExtractParts) (string, bool) {
 		if !parts.valid {
 			return "", false
 		}
 		if parts.year == 0 {
-			return types.DayOfWeekFromCalendar(parts.year, parts.month, parts.day).String(), true
+			return locale.localizedWeekday(int(types.DayOfWeekFromCalendar(parts.year, parts.month, parts.day))), true
 		}
-		return parts.date.DayOfWeek().String(), true
+		return locale.localizedWeekday(int(parts.date.DayOfWeek())), true
 	})
 }
 
 // DateToMonthName returns the month name for date (e.g., "January", "February", ...)
 func DateToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	locale := temporalLocaleForProcess(proc)
 	return opUnaryFixedToStrWithNullOnError[types.Date](ivecs, result, proc, length, func(v types.Date) (string, error) {
 		if v == types.ZeroDate {
 			return "", moerr.NewInvalidInputNoCtx("zero date")
@@ -11115,7 +11123,7 @@ func DateToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 		// Month() returns 1-12
 		month := v.Month()
 		if month >= 1 && month <= 12 {
-			return MonthNames[month-1], nil
+			return locale.localizedMonth(int(month)), nil
 		}
 		return "", nil
 	}, selectList)
@@ -11123,6 +11131,7 @@ func DateToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 
 // DatetimeToMonthName returns the month name for datetime (e.g., "January", "February", ...)
 func DatetimeToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	locale := temporalLocaleForProcess(proc)
 	return opUnaryFixedToStrWithNullOnError[types.Datetime](ivecs, result, proc, length, func(v types.Datetime) (string, error) {
 		if v == types.ZeroDatetime {
 			return "", moerr.NewInvalidInputNoCtx("zero datetime")
@@ -11130,7 +11139,7 @@ func DatetimeToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWra
 		// Month() returns 1-12
 		month := v.Month()
 		if month >= 1 && month <= 12 {
-			return MonthNames[month-1], nil
+			return locale.localizedMonth(int(month)), nil
 		}
 		return "", nil
 	}, selectList)
@@ -11138,6 +11147,7 @@ func DatetimeToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWra
 
 // TimestampToMonthName returns the month name for timestamp (e.g., "January", "February", ...)
 func TimestampToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	locale := temporalLocaleForProcess(proc)
 	return opUnaryFixedToStrWithNullOnError[types.Timestamp](ivecs, result, proc, length, func(v types.Timestamp) (string, error) {
 		if v == types.ZeroTimestamp {
 			return "", moerr.NewInvalidInputNoCtx("zero timestamp")
@@ -11150,19 +11160,20 @@ func TimestampToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWr
 		// Month() returns 1-12
 		month := dt.Month()
 		if month >= 1 && month <= 12 {
-			return MonthNames[month-1], nil
+			return locale.localizedMonth(int(month)), nil
 		}
 		return "", nil
 	}, selectList)
 }
 
 func DateStringToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	locale := temporalLocaleForProcess(proc)
 	return dateStringToStringWithNullOnError(ivecs, result, proc, length, selectList, func(parts dateExtractParts) (string, bool) {
 		month := parts.month
 		if month < 1 || month > 12 {
 			return "", false
 		}
-		return MonthNames[month-1], true
+		return locale.localizedMonth(int(month)), true
 	})
 }
 
@@ -13921,60 +13932,74 @@ func SHA1Func(
 	}, selectList)
 }
 
-func LastDay(
-	ivecs []*vector.Vector,
-	result vector.FunctionResultWrapper,
-	_ *process.Process,
-	length int,
-	selectList *FunctionSelectList,
-) error {
+// lastDayDate is shared by native temporal inputs and the tolerant text parser.
+func lastDayDate(dt types.Date) (types.Date, bool) {
+	year, month, _, _ := dt.Calendar(true)
+	if dt == types.ZeroDate || month == 0 {
+		return 0, true
+	}
+	return types.DateFromCalendar(year, month, types.LastDay(year, month)), false
+}
+
+func LastDay(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
+	_ *process.Process, length int, selectList *FunctionSelectList) error {
+	switch ivecs[0].GetType().Oid {
+	case types.T_date:
+		return opUnaryFixedToFixedWithNullCheck[types.Date, types.Date](ivecs, result, length, lastDayDate, selectList)
+	case types.T_datetime:
+		return opUnaryFixedToFixedWithNullCheck[types.Datetime, types.Date](ivecs, result, length,
+			func(dt types.Datetime) (types.Date, bool) { return lastDayDate(dt.ToDate()) }, selectList)
+	}
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
-	rs := vector.MustFunctionResult[types.Varlena](result)
-
+	// Stopped upgrades can still load old catalog expressions with VARCHAR
+	// results and released overload IDs. Keep their physical wrapper executable.
+	legacy, oldResult := result.(*vector.FunctionResult[types.Varlena])
+	var dates *vector.FunctionResult[types.Date]
+	if !oldResult {
+		dates = vector.MustFunctionResult[types.Date](result)
+	}
+	appendDate := func(dt types.Date, null bool) error {
+		if oldResult {
+			if null {
+				return legacy.AppendBytes(nil, true)
+			}
+			return legacy.AppendBytes([]byte(dt.String()), false)
+		}
+		return dates.Append(dt, null)
+	}
 	for i := uint64(0); i < uint64(length); i++ {
-		v1, null1 := p1.GetStrValue(i)
-		if null1 {
-			if err := rs.AppendBytes(nil, true); err != nil {
+		if functionRowSkipped(selectList, i) {
+			if err := appendDate(0, true); err != nil {
 				return err
 			}
+			continue
+		}
+		v, null := p1.GetStrValue(i)
+		if null {
+			if err := appendDate(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		day := functionUtil.QuickBytesToStr(v)
+		var dt types.Date
+		var err error
+		if len(day) < 14 {
+			dt, err = types.ParseDateCast(day)
 		} else {
-			day := functionUtil.QuickBytesToStr(v1)
-			var dt types.Date
-			var err error
-			var dtt types.Datetime
-			if len(day) < 14 {
-				dt, err = types.ParseDateCast(day)
-				if err != nil {
-					if err := rs.AppendBytes(nil, true); err != nil {
-						return err
-					}
-					continue
-				}
-			} else {
-				dtt, err = types.ParseDatetime(day, 6)
-				if err != nil {
-					if err := rs.AppendBytes(nil, true); err != nil {
-						return err
-					}
-					continue
-				}
-				dt = dtt.ToDate()
-			}
-
-			year := dt.Year()
-			month := dt.Month()
-			if dt == types.ZeroDate || month == 0 {
-				if err := rs.AppendBytes(nil, true); err != nil {
-					return err
-				}
-				continue
-			}
-
-			lastDay := types.LastDay(int32(year), month)
-			resDt := types.DateFromCalendar(int32(year), month, lastDay)
-			if err := rs.AppendBytes([]byte(resDt.String()), false); err != nil {
+			var datetime types.Datetime
+			datetime, err = types.ParseDatetime(day, 6)
+			dt = datetime.ToDate()
+		}
+		if err != nil {
+			if err := appendDate(0, true); err != nil {
 				return err
 			}
+			continue
+		}
+		dt, null = lastDayDate(dt)
+		if err := appendDate(dt, null); err != nil {
+			return err
 		}
 	}
 	return nil

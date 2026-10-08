@@ -336,6 +336,39 @@ func TestAccountedTopRuntimeCapacityRejectionCleans(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestAccountedTopRecoveryFloorPublishesAtFullOrdinaryBudget(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	op := newAccountedTop(3)
+	state := installTopTestAllocation(t, op, proc, 4<<20)
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{
+		newInt64TopBatch(t, proc, []int64{5, 1, 3, 2, 4}),
+	})
+	op.AppendChild(child)
+	require.NoError(t, op.Prepare(proc))
+	capacity, borrowed := op.ctr.recoveryCapacity.Snapshot()
+	require.Positive(t, capacity)
+	require.Positive(t, borrowed)
+	require.Less(t, borrowed, capacity)
+
+	snapshot := state.generation.Snapshot()
+	require.Less(t, snapshot.Used, snapshot.Cap)
+	ordinaryBlocker := snapshot.Cap - snapshot.Used
+	require.NoError(t,
+		state.generation.AcquireAllocationCapacity(ordinaryBlocker))
+
+	require.Equal(t, []int64{1, 2, 3}, collectTopInt64(t, op, proc))
+	capacity, borrowed = op.ctr.recoveryCapacity.Snapshot()
+	require.Positive(t, borrowed)
+	require.Equal(t, borrowed, capacity)
+
+	child.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	state.generation.ReleaseAllocationCapacity(ordinaryBlocker)
+	finalizeTopTestAllocation(t, op, state)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 func TestAccountedTopSmallVarlenSpillRejectionCleans(t *testing.T) {
 	testAccountedTopSmallVarlenSpillRejectionCleans(t, false)
 }

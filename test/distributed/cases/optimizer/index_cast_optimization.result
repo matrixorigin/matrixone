@@ -9,16 +9,17 @@ KEY idx_val (val)
 );
 INSERT INTO t_int32 VALUES (1, 9), (2, 10), (3, 100);
 EXPLAIN SELECT * FROM t_int32 WHERE val = 9;
-➤ TP QUERY PLAN[12,0,0]  𝄀
+➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Index Table Scan on t_int32.idx_val  𝄀
-        Filter Cond: prefix_eq(__mo_index_idx_col)
+        Filter Cond: prefix_eq(__mo_index_idx_col)  𝄀
+        Block Filter Cond: prefix_eq(__mo_index_idx_col)
 EXPLAIN SELECT * FROM t_int32 WHERE val = 9.0;
-➤ TP QUERY PLAN[12,0,0]  𝄀
+➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
-  ->  Table Scan on index_cast_optimization.t_int32  𝄀
-        Filter Cond: (cast(t_int32.val AS DECIMAL128(11, 1)) = 9.0)
-              -- HINT: Cast expression may prevent index usage
+  ->  Index Table Scan on t_int32.idx_val  𝄀
+        Filter Cond: prefix_eq(__mo_index_idx_col)  𝄀
+        Block Filter Cond: prefix_eq(__mo_index_idx_col)
 EXPLAIN SELECT * FROM t_int32 WHERE val = 9.5;
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
@@ -95,10 +96,11 @@ KEY idx_val (val)
 );
 INSERT INTO t_decimal VALUES (1, 9.00), (2, 9.50), (3, 10.00);
 EXPLAIN SELECT * FROM t_decimal WHERE val = 9.0;
-➤ TP QUERY PLAN[12,0,0]  𝄀
+➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Index Table Scan on t_decimal.idx_val  𝄀
-        Filter Cond: prefix_eq(__mo_index_idx_col)
+        Filter Cond: prefix_eq(__mo_index_idx_col)  𝄀
+        Block Filter Cond: prefix_eq(__mo_index_idx_col)
 SELECT * FROM t_decimal WHERE val = 9.0;
 ➤ id[4,32,0]  ¦  val[3,10,2]  𝄀
 1  ¦  9.00

@@ -277,8 +277,7 @@ func (s *sqlExecutor) adjustOptions(
 				opts.AccountID(),
 				"",
 				"sql-executor",
-				0),
-			client.WithDisableTrace(!opts.EnableTrace()))
+				0))
 		txnOp, err := s.txnClient.New(
 			ctx,
 			opts.MinCommittedTS(),
@@ -582,6 +581,7 @@ func (exec *txnExecutor) Exec(
 	c.ignorePublish = statementOption.IgnorePublish()
 	c.ignoreCheckExperimental = statementOption.IgnoreCheckExperimental()
 	c.disableLock = statementOption.DisableLock()
+	c.prePipelineLockTableID = statementOption.PrePipelineLockTable()
 
 	defer c.Release()
 

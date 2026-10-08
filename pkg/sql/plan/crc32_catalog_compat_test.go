@@ -80,7 +80,7 @@ func TestCRC32CopyRetainsBoundGeneratedIdentity(t *testing.T) {
 }
 
 func TestCRC32PreparedAndLegacyBinding(t *testing.T) {
-	prepared, err := runOneStmt(NewMockOptimizer(false), t, "prepare crc32_stmt from 'select crc32(?)'")
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "prepare crc32_stmt from 'select crc32(?)'")
 	require.NoError(t, err)
 	original := prepared.GetDcl().GetPrepare().Plan
 	for _, tc := range []struct {
@@ -134,7 +134,7 @@ func TestCRC32LegacyGeneratedDMLPlans(t *testing.T) {
 		`insert into constraint_test.t_on_update_gen(id,val,updated_at) values(1,'{"t1":"a"}',null) on duplicate key update val=values(val)`,
 	} {
 		t.Run(sql, func(t *testing.T) {
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			base := mock.ctxt.tables["t_on_update_gen"]
 			sourcePos := mockTableColPos(t, base, "val")
 			generatedPos := mockTableColPos(t, base, "g")
@@ -163,16 +163,16 @@ func TestCRC32LegacyGeneratedDMLPlans(t *testing.T) {
 }
 
 func TestCRC32PersistedDDLAdmissionBeforeFold(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	proc := mock.ctxt.GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	saved, present := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, int64(defines.MORPCVersion99))
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, int64(defines.MORPCVersion106))
 	t.Cleanup(func() {
 		if present {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, saved)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, int64(defines.MORPCVersion99))
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, int64(defines.MORPCVersion106))
 		}
 	})
 	for _, sql := range []string{
@@ -181,7 +181,7 @@ func TestCRC32PersistedDDLAdmissionBeforeFold(t *testing.T) {
 		`create view crc32_gate_view as select crc32(cast('{"a":1}' as json)) as c`,
 	} {
 		_, err := runOneStmt(mock, t, sql)
-		require.ErrorContains(t, err, "protocol version 101", sql)
+		require.ErrorContains(t, err, "protocol version 107", sql)
 	}
 }
 
@@ -194,7 +194,7 @@ func TestCRC32LegacyCatalogLikeAndAlter(t *testing.T) {
 		`alter table constraint_test.t_on_update_gen modify column g bigint unsigned generated always as (crc32(val)) stored first`,
 	} {
 		t.Run(sql, func(t *testing.T) {
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			base := mock.ctxt.tables["t_on_update_gen"]
 			base.Indexes = nil
 			base.Name2ColIndex = make(map[string]int32, len(base.Cols))
@@ -291,7 +291,7 @@ func TestCRC32FoldedDefaultRetainsCapability(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got.Expr.GetLit())
 	require.Equal(t, uint64(4012824821), got.Expr.GetLit().GetU64Val())
-	required, err := planpb.RequiresMORPCVersion101CRC32JSONTextBytes(got)
+	required, err := planpb.RequiresMORPCVersion107CRC32JSONTextBytes(got)
 	require.NoError(t, err)
 	require.True(t, required)
 }

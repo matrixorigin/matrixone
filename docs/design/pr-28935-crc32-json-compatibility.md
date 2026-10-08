@@ -10,7 +10,7 @@ PR data.
 | Identity | Binding and execution |
 | --- | --- |
 | CRC32 overload 0 | Existing catalog/wire expressions hash binary JSON; ordinary non-JSON calls retain their original bytes and scalar casts. |
-| CRC32 overload 1 | New JSON or unresolved bindings hash normalized MarshalJSON bytes for JSON; requires MORPC v101. |
+| CRC32 overload 1 | New JSON or unresolved bindings hash normalized MarshalJSON bytes for JSON; requires candidate MORPC v107. |
 
 The result stays UINT64; the executor also retains the historic UINT32 wrapper.
 A stored legacy generated value can intentionally differ from a freshly bound
@@ -20,7 +20,7 @@ INSERT, UPDATE, REPLACE, ODKU, prepared rebinding and index maintenance.
 ## Boundaries
 
 Placement checks workers and falls back to one CN. Sending rechecks the actual
-worker at v101; receiving checks the new identity. Old coordinators send identity
+worker at candidate v107; receiving checks the new identity. Old coordinators send identity
 0, which new workers still implement. Unknown capabilities fail closed.
 
 Catalog read and authoring use the existing separate durable admission floors.
@@ -39,13 +39,18 @@ is not a lossless way to preserve a legacy generated expression's algorithm.
 
 ## Upgrade and rollback
 
-Supported sources include main through v100 and supported released versions, not
+Supported sources include main through v106 and supported released versions, not
 earlier unmerged experiment binaries that changed overload 0 in place. Such data
 cannot be distinguished by identity and must not be admitted as a supported
-upgrade source. The integration preserves main protocols v94 through v100 and assigns this
-new execution identity to v101; v100 remains the independent View-metadata contract.
+upgrade source. The maintenance candidate integrates main
+`bab4b3286a0dd5683a9b291763817722233e586c`, preserving all contracts through v106,
+including v101's JSON source domains for CONCAT and JSON_DEPTH. CRC32 uses
+candidate v107. This number is not claimed unique among other unmerged maintenance
+candidates. Before landing, reallocate it against the actual cumulative main and
+rerun the predecessor/admission tests; a higher number cannot advertise missing
+predecessor capabilities. Cross-PR allocation coordination remains open.
 
-Publishing new persisted expressions requires the durable v101 authoring barrier.
+Publishing new persisted expressions requires the durable candidate v107 authoring barrier.
 Once the durable floor is raised, old CNs must stay excluded, including after
 restart. A failed activation does not imply the floor can be lowered. Rollback
 must respect the existing admission mechanism; this change adds no floor reset.
@@ -94,8 +99,32 @@ predates the later v101 reassignment after main claimed v100 for View metadata.
   statements) cases, twice each, zero failures or ignored statements, with
   actual authoring-floor/ISCP readiness and database teardown checks.
 - PASS (historical): immediate pre-feature v99 destination rejection and v100 admission.
-- COVERED BY UNIT TEST (must rerun on this post-sync head): a v100
+- COVERED BY UNIT TEST (historical v101 candidate): a v100
   View-metadata peer is rejected for CRC32 overload 1, while a v101 peer is
   admitted.
 - NOT_RUN: the real mixed-binary and persisted upgrade/restore/downgrade
   acceptance scenarios described above. These remain required QA evidence.
+
+## Maintenance candidate on 2026-10-08
+
+Normal merge preserves main's unified expression placement and send validation
+and its legacy TIMESTAMP defaults. CRC32 participates in the unified maximum
+floor and single destination probe. Mixed persisted owners also take the maximum:
+a v101 JSON source contract cannot lower the candidate CRC32 v107 requirement.
+The latest v4.0.12 bootstrap handler carries the candidate floor; the historical
+v4.0.10 View-metadata handler remains at v100. The embedded prepared test waits
+for the actual CRC32 authoring floor, rather than the older View-metadata floor.
+
+- PASS: focused codec, CRC32 execution, planner/catalog, placement/send, and
+  receiver tests on the integrated candidate explicitly reject main v106 and
+  admit candidate v107. Owning codec, function, planner, compiler, executor, and
+  upgrade packages also pass. Function fixtures follow main's explicit vector
+  ownership contract; their final focused and owning revalidation also passes.
+- LIMITED: these light tests linked existing local native artifacts whose
+  provenance stamp is missing. They are not current-native build evidence;
+  native rebuild and embedded prepared integration were not allocated.
+- NOT_RUN: BVT on this integrated candidate, real O/N rolling execution,
+  old-release-created generated/index table upgrade/restart/physical restore,
+  and old-CN rejoin/downgrade after activation.
+- OPEN: coordinated capability allocation at landing. This candidate does not
+  resolve or request re-review of the outstanding compatibility acceptance CRs.

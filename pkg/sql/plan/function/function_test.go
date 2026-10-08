@@ -42,6 +42,31 @@ func TestGetFunctionByIdRejectsUnknownOverload(t *testing.T) {
 	require.False(t, GetFunctionIsWinOrderFunById(unknown))
 }
 
+func TestDecimalFloatAdditionResolvesToDouble(t *testing.T) {
+	decimal := types.New(types.T_decimal64, 10, 2)
+	double := types.T_float64.ToType()
+	doubleScale2 := types.T_float64.ToTypeWithScale(2)
+	for _, test := range []struct {
+		name string
+		in   [2]types.Type
+		want [2]types.Type
+	}{
+		{"double control", [2]types.Type{decimal, double}, [2]types.Type{doubleScale2, double}},
+		{"float32 promotes", [2]types.Type{decimal, types.T_float32.ToType()}, [2]types.Type{doubleScale2, double}},
+		{"float32 first", [2]types.Type{types.T_float32.ToType(), decimal}, [2]types.Type{double, doubleScale2}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(context.Background(), "+", test.in[:])
+			require.NoError(t, err)
+			targets, shouldCast := resolved.ShouldDoImplicitTypeCast()
+			require.True(t, shouldCast)
+			require.Equal(t, test.want[:], targets)
+			require.Equal(t, test.want[0], resolved.GetReturnType())
+			require.Equal(t, int32(0), resolved.overloadId)
+		})
+	}
+}
+
 func Test_fixedTypeCastRule1(t *testing.T) {
 	inputs := []struct {
 		shouldCast bool
@@ -1728,7 +1753,7 @@ func TestCastNanoToTimestamp(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, CastNanoToTimestamp)
-		s, info := fcTC.Run()
+		s, info := fcTC.RunAndFree()
 		require.True(t, s, fmt.Sprintf("err info is '%s'", info))
 	}
 
@@ -1756,4 +1781,53 @@ func initCastNanoToTimestampTestCase(inputs []string, outputs []int64) []tcTemp 
 func convertStringToTimeUtcNano(str string) int64 {
 	ts, _ := time.Parse("2006-01-02 15:04:05.999999999", str)
 	return ts.UTC().UnixNano()
+}
+
+func TestZoneMapComparisonDomain(t *testing.T) {
+	for _, fid := range []int32{EQUAL, NULL_SAFE_EQUAL, NOT_EQUAL, GREAT_THAN, GREAT_EQUAL, LESS_THAN, LESS_EQUAL, BETWEEN} {
+		args := []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_varchar)}}, {Typ: plan.Type{Id: int32(types.T_varchar)}}}
+		id := EncodeOverloadID(fid, 0)
+		require.True(t, CanUseZoneMapComparison(id, args))
+		args[0].Typ.Id = int32(types.T_char)
+		require.False(t, CanUseZoneMapComparison(id, args), "CHAR comparison domain %d", fid)
+		args[0].Typ.Id = int32(types.T_varchar)
+		args[1].Typ.Id = int32(types.T_char)
+		require.True(t, CanUseZoneMapComparison(id, args), "VARCHAR domain with CHAR-declared rhs %d", fid)
+		args[0] = &plan.Expr{Typ: plan.Type{Id: int32(types.T_char)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: ""}}}}
+		require.True(t, CanUseZoneMapComparison(id, args), "literal uses canonical VARCHAR domain %d", fid)
+		args[0].GetLit().Isnull = true
+		require.False(t, CanUseZoneMapComparison(id, args), "unknown NULL domain %d", fid)
+	}
+	char := []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_char)}}}
+	for _, fid := range []int32{PREFIX_EQ, PREFIX_BETWEEN, AND, OR} {
+		require.True(t, CanUseZoneMapComparison(EncodeOverloadID(fid, 0), char), "separate operator domain %d", fid)
+	}
+}
+
+func TestZoneMapMembershipDomain(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(func() { require.Zero(t, proc.Mp().CurrNB()); proc.Free() })
+	for _, oid := range []types.T{types.T_char, types.T_varchar} {
+		t.Run(oid.String(), func(t *testing.T) {
+			typ := plan.Type{Id: int32(oid), Width: 8}
+			v := vector.NewVec(types.New(oid, 8, 0))
+			t.Cleanup(func() { v.Free(proc.Mp()) })
+			require.NoError(t, vector.AppendBytes(v, []byte("MO "), false, proc.Mp()))
+			data, err := v.MarshalBinary()
+			require.NoError(t, err)
+			// The SQL tuple declaration is preserved by constant folding. Its actual
+			// item or encoded vector type determines PAD SPACE membership semantics.
+			list := &plan.Expr{Typ: plan.Type{Id: int32(types.T_tuple)}, Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{{Typ: typ}}}}}
+			vec := &plan.Expr{Typ: list.Typ, Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Data: data}}}
+			fold := &plan.Expr{Typ: list.Typ, Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{Data: data}}}
+			for _, fid := range []int32{IN, NOT_IN} {
+				require.Equal(t, oid != types.T_char, CanUseZoneMapComparison(EncodeOverloadID(fid, 0), []*plan.Expr{{Typ: typ}, list}))
+				for _, rhs := range []*plan.Expr{vec, fold} {
+					require.True(t, CanUseZoneMapComparison(EncodeOverloadID(fid, 0), []*plan.Expr{{Typ: typ}, rhs}), "encoded domain is validated at the actual decoder")
+				}
+				malformed := &plan.Expr{Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Data: []byte{1, 2, 3}}}}
+				require.True(t, CanUseZoneMapComparison(EncodeOverloadID(fid, 0), []*plan.Expr{{Typ: typ}, malformed}), "admission does not duplicate checked decoding")
+			}
+		})
+	}
 }

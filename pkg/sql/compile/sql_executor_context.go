@@ -347,7 +347,7 @@ func (c *compilerContext) statsWithTableDefVersion(
 	if w := c.GetStatsCache().Get(tableID); w.Exists() {
 		if time.Now().Unix()-w.GetLastVisit() < 3 {
 			s := w.GetStats()
-			if plan.StatsInfoUsable(s) {
+			if plan.StatsCacheEligible(c.proc, snapshot) && plan.StatsInfoUsableForCache(s) {
 				return s, nil
 			}
 			// Stats is nil or empty, need to re-check
@@ -360,8 +360,16 @@ func (c *compilerContext) statsWithTableDefVersion(
 		return nil, err
 	}
 
-	// Cache the result
-	if c.GetStatsCache().SetAndReportReset(tableID, result) {
+	// NDV/range consumers read the table-ID wrapper during this planning pass.
+	// Keep snapshot maps there without permitting a later ordinary fast hit;
+	// return the completed observation itself so named empty remains usable.
+	cachedResult := result
+	if plan.IsSnapshotValid(snapshot) && result != nil {
+		copy := *result
+		copy.TableName = ""
+		cachedResult = &copy
+	}
+	if c.GetStatsCache().SetAndReportReset(tableID, cachedResult) {
 		clear(c.statsCacheVersions)
 	}
 	if tableDefVersion != nil {
@@ -700,11 +708,13 @@ func (c *compilerContext) ResolveVariable(varName string, isSystemVar bool, isGl
 	//
 	// Replay may carry the original frontend context; other internal SQL can
 	// carry a partial session resolver on its process (e.g. ALTER TABLE).
-	// Prefer the former, then request only the persisted division variable.
+	// Prefer the former, then forward only explicit precision and DOP settings.
 	if delegate := c.resolveDelegate(); delegate != nil {
 		return delegate.ResolveVariable(varName, isSystemVar, isGlobalVar)
 	}
-	if isSystemVar && !isGlobalVar && strings.EqualFold(varName, "div_precision_increment") && c.proc != nil {
+	if isSystemVar && !isGlobalVar && c.proc != nil &&
+		(strings.EqualFold(varName, "div_precision_increment") ||
+			strings.EqualFold(varName, "max_dop")) {
 		if resolve := c.proc.GetResolveVariableFunc(); resolve != nil {
 			return resolve(varName, isSystemVar, isGlobalVar)
 		}

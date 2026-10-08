@@ -287,15 +287,21 @@ including no-match and NULL-key cases. Empty input, inactive CASE, reset and
 free discard pending diagnostics. PERIOD's SQL wrong-arguments error may be
 deferred; cancellation, resource and internal errors remain immediate.
 
-After final parameter binding, isolated evaluation of relevant ON and filter
-operands can prove them diagnostic-free for the current execution. A successful
-proof permits an execution-local replan and physical hash JOIN selection,
-including guarded CASE/COALESCE expressions. Unrelated projection diagnostics
-do not invalidate that scoped proof. Active diagnostics and unproven operands
-retain the conservative plan; resource and internal failures terminate the
-execution. The proof reaches physical compilation and retry, and is renewed on
-each execution. Neither the proof nor the specialized plan is published into
-the reusable prepared-plan cache, and probing publishes no statement warning.
+Issue #29429's earlier execution-local replan and dual-template amendment were
+superseded by the source-domain binding route in #29462. The original PREPARE
+parameter ordinals are fixed before optimization; each QUERY execution and retry
+binds its actual SQL/protocol source types from the original AST before overload,
+comparison, key, and index lowering. Parameter references remain executable.
+Each builder captures diagnostic candidates before rewrites and proves the
+current binding afresh. Active or unproven diagnostics retain their original
+execution owner; cancellation, resource, and internal failures propagate.
+
+Each prepared generation may cache one bounded runtime plan/compile entry keyed
+by source metadata, with value-dependent configurations excluded. The proof is
+never cached. Compile success gates publication, and a displaced compile is
+released after statement cleanup. The current contract and revision-labelled
+performance evidence are in
+`docs/design/prepared-filter-diagnostic-performance.md`.
 
 Keeping all eligible hash keys avoids a potentially quadratic intermediate
 result when a prepared temporal key accompanies a duplicate key. The

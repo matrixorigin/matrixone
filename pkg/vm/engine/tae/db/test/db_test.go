@@ -4009,7 +4009,8 @@ func TestFlushTransferTombstonesVisibleAtParentCommit(t *testing.T) {
 	// unit. Check every timestamp where that result could change, rather than
 	// relying only on the latest snapshot.
 	flushCommitTS := flushTxn.GetCommitTS()
-	snapshotTSs := []types.TS{flushCommitTS.Prev(), flushCommitTS}
+	snapshotTSs := make([]types.TS, 0, 2+len(newTombstones)+1)
+	snapshotTSs = append(snapshotTSs, flushCommitTS.Prev(), flushCommitTS)
 	for _, tombstone := range newTombstones {
 		createdAt := tombstone.GetCreatedAt()
 		require.False(t, flushCommitTS.LT(&createdAt))
@@ -5415,10 +5416,10 @@ func TestBlockRead(t *testing.T) {
 			metaloc.SetRows(schema.Extra.BlockMaxRows)
 			info.SetMetaLocation(metaloc)
 
-			columns := make([]string, 0)
-			colIdxs := make([]uint16, 0)
-			colTyps := make([]types.Type, 0)
 			defs := schema.ColDefs[:]
+			columns := make([]string, 0, len(defs))
+			colIdxs := make([]uint16, 0, len(defs))
+			colTyps := make([]types.Type, 0, len(defs))
 			rand.Shuffle(len(defs), func(i, j int) { defs[i], defs[j] = defs[j], defs[i] })
 			for _, col := range defs {
 				columns = append(columns, col.Name)
@@ -5429,7 +5430,7 @@ func TestBlockRead(t *testing.T) {
 			fs := tae.DB.Runtime.Fs
 			pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 			assert.NoError(t, err)
-			infos := make([]*objectio.BlockInfo, 0)
+			infos := make([]*objectio.BlockInfo, 0, 1)
 			infos = append(infos, info)
 			err = ioutil.Prefetch("", fs, infos[0].MetaLocation())
 			assert.NoError(t, err)
@@ -5562,10 +5563,10 @@ func TestBlockRead2(t *testing.T) {
 			metaloc.SetRows(schema.Extra.BlockMaxRows)
 			info.SetMetaLocation(metaloc)
 
-			columns := make([]string, 0)
-			colIdxs := make([]uint16, 0)
-			colTyps := make([]types.Type, 0)
 			defs := schema.ColDefs[:]
+			columns := make([]string, 0, len(defs))
+			colIdxs := make([]uint16, 0, len(defs))
+			colTyps := make([]types.Type, 0, len(defs))
 			rand.Shuffle(len(defs), func(i, j int) { defs[i], defs[j] = defs[j], defs[i] })
 			for _, col := range defs {
 				columns = append(columns, col.Name)
@@ -5576,7 +5577,7 @@ func TestBlockRead2(t *testing.T) {
 			fs := tae.DB.Runtime.Fs
 			pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 			assert.NoError(t, err)
-			infos := make([]*objectio.BlockInfo, 0)
+			infos := make([]*objectio.BlockInfo, 0, 1)
 			infos = append(infos, info)
 			err = ioutil.Prefetch("", fs, infos[0].MetaLocation())
 			assert.NoError(t, err)
@@ -10650,7 +10651,7 @@ func TestCommitS3Blocks(t *testing.T) {
 	tae.CreateRelAndAppend(datas[0], true)
 	datas = datas[1:]
 
-	statsVecs := make([]containers.Vector, 0)
+	statsVecs := make([]containers.Vector, 0, len(datas))
 	for _, bat := range datas {
 		nobjid := objectio.NewObjectid()
 		name := objectio.BuildObjectNameWithObjectID(&nobjid)

@@ -79,7 +79,7 @@ func TestCRC32Uint64ResultWrapper(t *testing.T) {
 	result := NewFunctionTestResult(types.T_uint64.ToType(), false,
 		[]uint64{907060870, 0}, []bool{false, false})
 	caseData := NewFunctionTestCase(proc, []FunctionTestInput{input}, result, newCrc32ExecContext().builtInCrc32)
-	succeed, info := caseData.Run()
+	succeed, info := caseData.RunAndFree()
 	require.True(t, succeed, info)
 }
 func TestCRC32JSONUsesSerializedText(t *testing.T) {
@@ -120,7 +120,7 @@ func TestCRC32JSONUsesSerializedText(t *testing.T) {
 			[]bool{false, false, false, false, false, false, false, true}),
 		newCrc32JSONTextExecContext().builtInCrc32,
 	)
-	succeed, info := testCase.Run()
+	succeed, info := testCase.RunAndFree()
 	require.True(t, succeed, info)
 }
 
@@ -137,7 +137,7 @@ func TestCRC32PreservesTextAndBinaryBytes(t *testing.T) {
 			[]uint32{2363233923, 3030484594, 0}, nil),
 		newCrc32JSONTextExecContext().builtInCrc32,
 	)
-	succeed, info := textCase.Run()
+	succeed, info := textCase.RunAndFree()
 	require.True(t, succeed, info)
 
 	binaryCase := NewFunctionTestCase(
@@ -149,7 +149,7 @@ func TestCRC32PreservesTextAndBinaryBytes(t *testing.T) {
 			[]uint32{1826356594, 3523407757, 4278190080, 0}, nil),
 		newCrc32JSONTextExecContext().builtInCrc32,
 	)
-	succeed, info = binaryCase.Run()
+	succeed, info = binaryCase.RunAndFree()
 	require.True(t, succeed, info)
 }
 
@@ -167,7 +167,7 @@ func TestCRC32JSONConstSelectionAndContextReuse(t *testing.T) {
 			[]uint32{4128176518, 4128176518, 4128176518}, nil),
 		newCrc32JSONTextExecContext().builtInCrc32,
 	)
-	succeed, info := constCase.Run()
+	succeed, info := constCase.RunAndFree()
 	require.True(t, succeed, info)
 
 	constNullCase := NewFunctionTestCase(
@@ -179,7 +179,7 @@ func TestCRC32JSONConstSelectionAndContextReuse(t *testing.T) {
 			[]uint32{0, 0, 0}, []bool{true, true, true}),
 		newCrc32JSONTextExecContext().builtInCrc32,
 	)
-	succeed, info = constNullCase.Run()
+	succeed, info = constNullCase.RunAndFree()
 	require.True(t, succeed, info)
 
 	// The masked row is deliberately not a valid stored JSON value. A
@@ -197,7 +197,7 @@ func TestCRC32JSONConstSelectionAndContextReuse(t *testing.T) {
 	stored, null := vector.GenerateFunctionStrParameter(selectionCase.parameters[0]).GetStrValue(0)
 	require.False(t, null)
 	stored[0] = 0xff
-	succeed, info = selectionCase.Run()
+	succeed, info = selectionCase.RunAndFree()
 	require.True(t, succeed, info)
 
 	// One executor context is reused across batches. Reset must prevent the
@@ -220,7 +220,7 @@ func TestCRC32JSONConstSelectionAndContextReuse(t *testing.T) {
 				NewFunctionTestResult(types.T_uint32.ToType(), false, []uint32{test.want}, nil),
 				contextFn,
 			)
-			succeed, info := caseRun.Run()
+			succeed, info := caseRun.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -249,7 +249,7 @@ func TestCRC32JSONLongSerializedValues(t *testing.T) {
 		NewFunctionTestResult(types.T_uint32.ToType(), false, expected, nil),
 		newCrc32JSONTextExecContext().builtInCrc32,
 	)
-	succeed, info := testCase.Run()
+	succeed, info := testCase.RunAndFree()
 	require.True(t, succeed, info)
 }
 
@@ -288,8 +288,8 @@ func TestCRC32ExecutionIdentityPreservesLegacyJSON(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f, err := GetFunctionById(proc.Ctx, EncodeOverloadID(CRC32, tc.overload))
 			require.NoError(t, err)
-			run := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(types.T_json.ToType(), encoded, nil)}, NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{tc.want}, nil), fEvalFn(f.newOp()))
-			ok, info := run.Run()
+			run := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(types.T_json.ToType(), encoded, nil)}, NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{tc.want}, nil), f.newOp())
+			ok, info := run.RunAndFree()
 			require.True(t, ok, info)
 		})
 	}
@@ -319,7 +319,7 @@ func TestCRC32LegacyJSONShapesAndReuse(t *testing.T) {
 	ctx := newCrc32ExecContext()
 	for i := 0; i < 2; i++ {
 		c := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(types.T_json.ToType(), encoded, nulls)}, NewFunctionTestResult(types.T_uint32.ToType(), false, want, nulls), ctx.builtInCrc32)
-		ok, info := c.Run()
+		ok, info := c.RunAndFree()
 		require.True(t, ok, info)
 	}
 }

@@ -26,7 +26,7 @@ import (
 
 func TestPreparedGetLockTimeoutPreservesRuntimeType(t *testing.T) {
 	ctx := context.Background()
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare stmt_get_lock_timeout from 'select get_lock(''prepared_lock'', ?)'")
 	require.NoError(t, err)
 	preparePlan := prepared.GetDcl().GetPrepare().Plan
@@ -34,8 +34,6 @@ func TestPreparedGetLockTimeoutPreservesRuntimeType(t *testing.T) {
 	require.NotNil(t, fn)
 	require.Equal(t, int32(types.T_float64), fn.GetF().Args[1].Typ.Id,
 		"a bare marker has a stable prepare-time DOUBLE domain")
-	require.True(t, PreparedPlanNeedsRuntimeSpecialization(preparePlan),
-		"the registered GET_LOCK overload changes with the timeout marker's runtime numeric type")
 
 	for _, test := range []struct {
 		name         string
@@ -95,12 +93,10 @@ func TestPreparedGetLockExplicitTimeoutCastKeepsItsDomain(t *testing.T) {
 		{name: "double", typeName: "DOUBLE", wantArgType: types.T_float64, wantOverload: 0},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t,
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 				"prepare stmt_get_lock_explicit from 'select get_lock(''prepared_lock'', cast(? as "+test.typeName+"))'")
 			require.NoError(t, err)
 			preparePlan := prepared.GetDcl().GetPrepare().Plan
-			require.False(t, PreparedPlanNeedsRuntimeSpecialization(preparePlan),
-				"an explicit cast owns the timeout conversion domain")
 			fn := findPlanFunctionExpr(preparePlan, "get_lock")
 			require.NotNil(t, fn)
 			_, overload := function.DecodeOverloadID(fn.GetF().GetFunc().GetObj())

@@ -103,16 +103,16 @@ func (c *viewDescriptionDependencyContext) ResolveViewDependencyAccount(
 	return accountID, err
 }
 
-// viewDescriptionRelation returns the column row source used by SHOW's existing
-// formatting and filtering expressions. No rows are read from the persisted
-// View column snapshot, and no generated definition is written back.
-func viewDescriptionRelation(
-	ctx CompilerContext, def *TableDef, accountID uint32, databaseName, viewName string,
-) (string, []*ObjectRef, bool, error) {
+// describeViewForMetadata owns the isolated binding used by SHOW consumers.
+// Columns and their complete dependency evidence must travel together: callers
+// may embed the description in a reusable plan without retaining source scans.
+func describeViewForMetadata(
+	ctx CompilerContext, def *TableDef, accountID uint32,
+) ([]*ColDef, []*ObjectRef, bool, error) {
 	if provider, ok := ctx.(ViewDescriptionContextProvider); ok {
 		child, cleanup, err := provider.NewViewDescriptionCompilerContext(ctx.GetContext())
 		if err != nil {
-			return "", nil, false, err
+			return nil, nil, false, err
 		}
 		defer cleanup()
 		if sub := ctx.GetQueryingSubscription(); sub != nil {
@@ -121,7 +121,7 @@ func viewDescriptionRelation(
 		}
 		ctx = child
 	} else if ctx.GetQueryingSubscription() != nil {
-		return "", nil, false, moerr.NewNotSupported(ctx.GetContext(), "subscription View description requires an isolated binding context")
+		return nil, nil, false, moerr.NewNotSupported(ctx.GetContext(), "subscription View description requires an isolated binding context")
 	}
 	dependencies := &viewDescriptionDependencyContext{CompilerContext: ctx}
 	if ctx.GetQueryingSubscription() != nil {
@@ -130,13 +130,26 @@ func viewDescriptionRelation(
 	}
 	cols, err := DescribeViewColumns(dependencies, def.ViewSql.View)
 	if err != nil {
-		return "", nil, false, err
+		return nil, nil, false, err
 	}
 	if len(cols) > MaxViewMetadataColumns {
-		return "", nil, false, moerr.NewInternalError(ctx.GetContext(), "View metadata exceeds its column budget")
+		return nil, nil, false, moerr.NewInternalError(ctx.GetContext(), "View metadata exceeds its column budget")
 	}
 	if len(cols) == 0 {
-		return "", nil, false, moerr.NewInternalError(ctx.GetContext(), "View has no output columns")
+		return nil, nil, false, moerr.NewInternalError(ctx.GetContext(), "View has no output columns")
+	}
+	return cols, dependencies.refs, dependencies.dependsOnUdf, nil
+}
+
+// viewDescriptionRelation returns the column row source used by SHOW's existing
+// formatting and filtering expressions. No rows are read from the persisted
+// View column snapshot, and no generated definition is written back.
+func viewDescriptionRelation(
+	ctx CompilerContext, def *TableDef, accountID uint32, databaseName, viewName string,
+) (string, []*ObjectRef, bool, error) {
+	cols, dependencies, dependsOnUdf, err := describeViewForMetadata(ctx, def, accountID)
+	if err != nil {
+		return "", nil, false, err
 	}
 	rows := make([]string, 0, len(cols))
 	for i, col := range cols {
@@ -168,5 +181,5 @@ func viewDescriptionRelation(
 	}
 	return "(select * from (values " + strings.Join(rows, ",") + ") as view_columns(" +
 		"account_id,att_relname_id,att_database,att_relname,attname,attnum,atttyp,attr_enum,attnotnull," +
-		"att_default,att_is_hidden,att_is_auto_increment,attr_has_generated,attr_generated,att_comment))", dependencies.refs, dependencies.dependsOnUdf, nil
+		"att_default,att_is_hidden,att_is_auto_increment,attr_has_generated,attr_generated,att_comment))", dependencies, dependsOnUdf, nil
 }

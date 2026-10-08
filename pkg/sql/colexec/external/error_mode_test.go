@@ -60,7 +60,6 @@ func errorModeParam(t *testing.T, format string, jsonData string, keep int) (*Ex
 	cols := all[:keep]
 
 	proc := testutil.NewProcess(t)
-	t.Cleanup(proc.Free)
 
 	attrs := make([]plan.ExternAttr, len(cols))
 	names := make([]string, len(cols))
@@ -398,7 +397,6 @@ func TestKafkaErrorModeTolerates(t *testing.T) {
 // after upgrade.
 func TestLookalikeUserColumnStillReadsItsData(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	t.Cleanup(proc.Free)
 
 	// (a int, __mo_error_message varchar) -- both ordinary columns, ColId 0
 	cols := []*plan.ColDef{
@@ -505,7 +503,6 @@ func TestJSONArrayArityIgnoresSyntheticColumns(t *testing.T) {
 // refuses an unknown shape rather than silently producing no fields.
 func TestJSONLineUnsupportedFormatRejected(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	t.Cleanup(proc.Free)
 	r := &CsvReader{}
 	_, err := r.transJson2Lines(proc.Ctx, `{"a":1}`, nil, nil, "neither")
 	require.Error(t, err)
@@ -516,7 +513,6 @@ func TestJSONLineUnsupportedFormatRejected(t *testing.T) {
 // carried through as its raw JSON rather than its printed form.
 func TestJSONArrayJSONColumnKeepsRawJSON(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	t.Cleanup(proc.Free)
 	attrs := []plan.ExternAttr{
 		{ColName: "a", ColIndex: 0, ColFieldIndex: 0},
 		{ColName: "j", ColIndex: 1, ColFieldIndex: 1},
