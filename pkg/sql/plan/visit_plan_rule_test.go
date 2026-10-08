@@ -1150,7 +1150,7 @@ func (c *lowerCaseTableNamesCompilerContext) GetLowerCaseTableNames() int64 {
 	return c.lowerCaseTableNames
 
 func TestBindViewRejectsFutureProtocolBeforePreparedBinding(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	proc := ctx.GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	previous, hadPrevious := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
