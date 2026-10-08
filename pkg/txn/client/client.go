@@ -1233,36 +1233,30 @@ func (client *txnClient) activateWaitActiveTxns(ops []*txnOperator) {
 	}
 }
 
-// claimWaitActiveOpsLocked performs one stable O(n) queue compaction. It drops
-// canceled ownership, claims at most limit live entries in FIFO order, retains
-// the rest, and clears detached backing-array references.
+// claimWaitActiveOpsLocked consumes the FIFO prefix needed for admission.
+// Canceled entries in that prefix cannot reserve slots. Untouched suffix entries
+// retain their existing cancellation/ClosedEvent owner; promotion must not scan
+// or lock them. Clear detached references before advancing the queue slice.
 func (client *txnClient) claimWaitActiveOpsLocked(limit int) []*txnOperator {
 	queued := client.mu.waitActiveTxns
-	remaining := queued[:0]
-	capacity := limit
-	if capacity < 0 {
-		capacity = 0
+	if limit <= 0 || len(queued) == 0 {
+		return nil
 	}
+	capacity := limit
 	if capacity > len(queued) {
 		capacity = len(queued)
 	}
 	claimed := make([]*txnOperator, 0, capacity)
-	for _, waitOp := range queued {
-		if len(claimed) < limit {
-			if waitOp.reset.waiter.claimPromotion() {
-				claimed = append(claimed, waitOp)
-			}
-			// A failed claim means cancellation already owns terminal cleanup;
-			// either way this entry no longer belongs in the queue.
-			continue
+	consumed := 0
+	for consumed < len(queued) && len(claimed) < limit {
+		waitOp := queued[consumed]
+		consumed++
+		if waitOp.reset.waiter.claimPromotion() {
+			claimed = append(claimed, waitOp)
 		}
-		if waitOp.reset.waiter.canceled() {
-			continue
-		}
-		remaining = append(remaining, waitOp)
 	}
-	clear(queued[len(remaining):])
-	client.mu.waitActiveTxns = remaining
+	clear(queued[:consumed])
+	client.mu.waitActiveTxns = queued[consumed:]
 	return claimed
 }
 

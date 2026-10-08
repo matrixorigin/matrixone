@@ -670,23 +670,49 @@ func TestClaimWaitActiveOpsSkipsCanceledAndPreservesFIFO(t *testing.T) {
 	secondCanceled := newWaiting("second-canceled")
 	second := newWaiting("second")
 	third := newWaiting("third")
-	require.ErrorIs(t, firstCanceled.reset.waiter.abort(context.Canceled), context.Canceled)
-	require.ErrorIs(t, secondCanceled.reset.waiter.abort(context.Canceled), context.Canceled)
+	tailCanceled := newWaiting("tail-canceled")
+	for _, op := range []*txnOperator{firstCanceled, secondCanceled, tailCanceled} {
+		require.ErrorIs(t, op.reset.waiter.abort(context.Canceled), context.Canceled)
+	}
+	backing := make([]*txnOperator, 6, 8)
+	copy(backing, []*txnOperator{firstCanceled, first, secondCanceled, second, third, tailCanceled})
+	client.mu.waitActiveTxns = backing
 
+	// Promotion must not inspect an untouched waiter, even when that waiter's
+	// cancellation owner holds its mutex. Cleanup also joins on a fatal failure.
+	third.reset.waiter.mu.Lock()
+	completed := make(chan []*txnOperator, 1)
+	joined := make(chan struct{})
+	t.Cleanup(func() { third.reset.waiter.mu.Unlock(); <-joined })
+	go func() {
+		defer close(joined)
+		client.mu.Lock()
+		claimed := client.claimWaitActiveOpsLocked(2)
+		client.mu.Unlock()
+		completed <- claimed
+	}()
+	select {
+	case claimed := <-completed:
+		require.Equal(t, []*txnOperator{first, second}, claimed)
+	case <-time.After(time.Second):
+		t.Fatal("promotion inspected an untouched tail waiter")
+	}
+	require.Equal(t, []*txnOperator{third, tailCanceled}, client.mu.waitActiveTxns)
+	for _, detached := range backing[:4] {
+		require.Nil(t, detached)
+	}
+
+	// Tail cancellation is removed by its existing ClosedEvent owner, without
+	// requiring another available slot or a promoter to sweep the suffix.
 	client.mu.Lock()
-	client.mu.waitActiveTxns = make([]*txnOperator, 5, 8)
-	copy(client.mu.waitActiveTxns, []*txnOperator{
-		firstCanceled, first, secondCanceled, second, third,
-	})
-	claimed := client.claimWaitActiveOpsLocked(2)
-	client.mu.Unlock()
-
-	require.Equal(t, []*txnOperator{first, second}, claimed)
+	defer client.mu.Unlock()
+	for _, limit := range []int{0, -1} {
+		require.Empty(t, client.claimWaitActiveOpsLocked(limit))
+		require.Equal(t, []*txnOperator{third, tailCanceled}, client.mu.waitActiveTxns)
+	}
+	require.True(t, client.removeFromWaitActiveLocked(tailCanceled.reset.txnID))
 	require.Equal(t, []*txnOperator{third}, client.mu.waitActiveTxns)
-	require.Nil(t, client.mu.waitActiveTxns[:cap(client.mu.waitActiveTxns)][1])
-	require.Nil(t, client.mu.waitActiveTxns[:cap(client.mu.waitActiveTxns)][2])
-	require.Nil(t, client.mu.waitActiveTxns[:cap(client.mu.waitActiveTxns)][3])
-	require.Nil(t, client.mu.waitActiveTxns[:cap(client.mu.waitActiveTxns)][4])
+	require.Nil(t, backing[5])
 }
 
 func TestNewTxnAndReset(t *testing.T) {

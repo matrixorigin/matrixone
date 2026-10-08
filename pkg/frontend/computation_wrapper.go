@@ -1320,10 +1320,11 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 	}
 	previousGroupConcatMaxLenFloor := prepareStmt.groupConcatMaxLenFloor
-	currentNativeMode := owner.sqlModeHasMatrixOneNative()
-	currentOnlyFullGroupBy := owner.sqlModeHasOnlyFullGroupBy()
-	currentBoolSumAvg := owner.sqlModeHasEnableBoolSumAvg()
-	currentNoUnsignedSubtraction := owner.sqlModeHasNoUnsignedSubtraction()
+	currentSQLMode := sessionSQLMode(owner)
+	currentNativeMode := mysql.HasMatrixOneNativeSQLMode(currentSQLMode)
+	currentOnlyFullGroupBy := mysql.HasSQLMode(currentSQLMode, "ONLY_FULL_GROUP_BY")
+	currentBoolSumAvg := mysql.HasEnableBoolSumAvgSQLMode(currentSQLMode)
+	currentNoUnsignedSubtraction := mysql.HasSQLMode(currentSQLMode, "NO_UNSIGNED_SUBTRACTION")
 	currentDivPrecisionIncrement := owner.currentDivPrecisionIncrement()
 	reqCtx = function.WithNoUnsignedSubtraction(reqCtx, currentNoUnsignedSubtraction)
 	reqCtx = function.WithDivPrecisionIncrement(reqCtx, int32(currentDivPrecisionIncrement))
