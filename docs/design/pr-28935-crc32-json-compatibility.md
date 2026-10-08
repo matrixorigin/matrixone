@@ -132,7 +132,86 @@ for the actual CRC32 authoring floor, rather than the older View-metadata floor.
   instance using the freshly built candidate; zero failures, ignored statements
   or abnormal results. Inputs were copied byte-identically, not regenerated.
   Runner source: `b95f5c09930c42bdbe77828b6ae72d39f2be48ed`; Java 17.0.15.
-- NOT_RUN: real O/N rolling execution, old-release-created generated/index table
-  upgrade/restart/physical restore, and old-CN rejoin/downgrade after activation.
+- At the time of the earlier maintenance validation, real O/N rolling execution,
+  old-created table upgrade/restart/restore and old-CN rejoin/downgrade were
+  NOT_RUN. The real old-main evidence below now covers the latter lifecycle
+  paths; it does not cover supported-release or rolling remote execution.
 - OPEN: coordinated capability allocation at landing. This candidate does not
   resolve or request re-review of the outstanding compatibility acceptance CRs.
+
+## Real old-main lifecycle acceptance on 2026-10-08
+
+Two independently compiled binaries were executed on Darwin/arm64. The old
+binary is main `bab4b3286a0dd5683a9b291763817722233e586c`, advertising v106;
+the candidate is production content `5a884a0cc3cdcc2909ff248bc404414b640b9066`,
+advertising v107. The tested PR head
+`f9c00b54c10327f5fedab24662a0528d64b4ac3c` differs from that production content
+only in this document. No runtime protocol values were overridden.
+
+Binary SHA256:
+
+- Old main: `be6b71abaaf9281889686a9bd443d583f60335bacb60bf7fc94051c2fff2f50d`.
+- Candidate: `43020148613ac6176da04eee6a18e0e25977c1a8d1ad4cf8103887b525288398`.
+
+The old Go executable used Go 1.27.1 without SIMD after a Go 1.27.0 SIMD
+toolchain startup failure; the candidate used Go 1.27.0 with SIMD. This is a
+CRC32 correctness/lifecycle test, not a matched-toolchain performance comparison.
+Makefile, CGo and third-party sources are identical between these two source
+versions. The independently compiled old Go executable reused the candidate's
+verified native generation via explicit include/library/rpath settings.
+
+The old binary created the following table and inserted `{"t1":"a"}`:
+
+```sql
+CREATE TABLE t(id INT PRIMARY KEY, j JSON,
+  c BIGINT UNSIGNED GENERATED ALWAYS AS (CRC32(j)) STORED, INDEX idx_c(c));
+```
+
+| Actual execution | Persisted `c` | Fresh `CRC32(j)` | Result |
+| --- | --- | --- | --- |
+| Old binary INSERT | 3719146973 | 3719146973 | PASS |
+| Candidate upgrade, UPDATE and INSERT | 3719146973 | 4012824821 | PASS |
+| Candidate whole-launch restart | 3719146973 | 4012824821 | PASS |
+| Restore old-created table snapshot, then INSERT | 3719146973 | 4012824821 | PASS |
+| Restore old binary's offline whole datastore, then UPDATE and INSERT | 3719146973 | 4012824821 | PASS |
+| Candidate recovery after rejected whole-launch downgrade | 3719146973 | 4012824821 | PASS |
+
+`FORCE INDEX(idx_c)` returned both legacy rows; EXPLAIN confirmed the physical
+`__mo_index` path. A newly created generated column materialized 4012824821.
+The physical-restore arm stopped the old whole launch before copying all 23
+datastore files, recorded their SHA256 manifest, verified the copy and restored
+bytes, and retained the earlier activated datastore separately. This is an
+offline local DISK-V2 whole-datastore restore, not SQL replay and not a claim
+about production cloud/backup-tool restore. Table snapshot restore was a separate
+SQL restore arm and is not mislabeled as whole-datastore restore.
+
+After the durable floor had advanced and survived candidate restart, three
+sequential old-main CN incarnations each terminated with the actual
+`requires persisted expression protocol version 107 (local version 106)`
+diagnostic. Actual MySQL handshake/query probes observed no usable SQL; sockets
+were closed after termination and the candidate remained healthy. A separate
+whole old-binary launch on the activated datastore was also rejected by that
+durable floor, with no usable SQL. The candidate subsequently recovered both
+identities without resetting the floor. Every experiment-owned process stopped.
+
+Retained evidence includes frozen runner versions, executable hashes, configs,
+SQL receipts, EXPLAIN output, service logs, cold-backup hashes and cleanup
+receipts. Runner hashes are:
+
+- Initial upgrade/restart/table-snapshot arm:
+  `685c0bd54b4e706cde2203582030b349d0ab8879b85305eb040aa822438c8803`.
+- Actual SQL-admission rejoin arm:
+  `d992f414dc73d73db7be6a6f4886cfc9de181abc068abe53f18ee182effe974a`.
+- Offline physical restore/whole-launch downgrade arm:
+  `b2bf85ca418802939d79285ee1b16f400c5f0eedc9bc40aad8783832d7e0b2ae`.
+
+The initial CN-only launch manifest failed before admission; a later immediate
+TCP-connect assertion confused a bound socket with admitted SQL ingress. Both
+failed receipts are retained. Corrected runs use the supported single-service
+`-cfg` entry and actual SQL probes; these failures are not hidden product PASSes.
+
+Still NOT_RUN: supported-release-created table upgrade/restart/restore and
+rollback, and real mixed-CN rolling remote execution/placement. Old main is not
+a supported-release binary. These remaining aptend/aunjgr acceptance criteria
+and cumulative capability allocation at landing are not waived. This evidence
+increment alone does not resolve those findings or authorize automatic re-review.
