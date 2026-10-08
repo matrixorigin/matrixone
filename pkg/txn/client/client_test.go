@@ -261,6 +261,158 @@ func (w *selectedSuccessTimestampWaiter) NotifyLatestCommitTS(timestamp.Timestam
 func (*selectedSuccessTimestampWaiter) Close()                        {}
 func (*selectedSuccessTimestampWaiter) LatestTS() timestamp.Timestamp { return timestamp.Timestamp{} }
 
+func TestGetLatestSnapshotPolicyAndOwnership(t *testing.T) {
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	for _, freshness := range []bool{false, true} {
+		for _, cnConsistency := range []bool{false, true} {
+			for _, minimum := range []int64{50, 200} {
+				waiter := &snapshotTimestampWaiter{}
+				c := NewTxnClient("", newTestTxnSender(), WithTimestampWaiter(waiter)).(*txnClient)
+				c.Resume()
+				t.Cleanup(func() { _ = c.Close() })
+				c.clock = clock.NewHLCClock(func() int64 { return 100 }, 0)
+				c.enableSacrificingFreshness = !freshness
+				c.enableCNBasedConsistency = cnConsistency
+				c.atomic.latestCommitTS.Store(&timestamp.Timestamp{PhysicalTime: 150})
+				want := minimum
+				if freshness && want < 100 {
+					want = 100
+				} else if !freshness && cnConsistency && want < 150 {
+					want = 150
+				}
+				got, err := c.GetLatestSnapshot(context.Background(), timestamp.Timestamp{PhysicalTime: minimum})
+				require.NoError(t, err)
+				require.Equal(t, timestamp.Timestamp{PhysicalTime: want}, waiter.got)
+				require.Equal(t, waiter.got, got, "the waiter owns exclusive snapshot presentation")
+				require.Zero(t, c.atomic.activeTxnCount.Load())
+				require.Zero(t, c.mu.users)
+				require.Empty(t, c.mu.waitActiveTxns)
+				require.NoError(t, c.Close())
+			}
+		}
+	}
+	c := NewTxnClient("", newTestTxnSender())
+	c.Resume()
+	defer c.Close()
+	got, err := c.GetLatestSnapshot(context.Background(), timestamp.Timestamp{PhysicalTime: 200})
+	require.NoError(t, err)
+	require.True(t, got.IsEmpty(), "without a timestamp waiter no visibility proof exists")
+}
+
+func TestGetLatestSnapshotAdmissionWaits(t *testing.T) {
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	for _, scenario := range []struct{ phase, exit string }{
+		{"pause", "resume"}, {"pause", "cancel"}, {"pause", "close"},
+		{"limiter", "cancel"}, {"limiter", "close"},
+	} {
+		t.Run(scenario.phase+"/"+scenario.exit, func(t *testing.T) {
+			c := NewTxnClient("", newTestTxnSender(), WithTimestampWaiter(immediateTimestampWaiter{})).(*txnClient)
+			ctx, cancel := context.WithCancel(context.Background())
+			observed := &observedWaitContext{Context: ctx, waiting: make(chan struct{})}
+			waiting := observed.waiting
+			if scenario.phase == "limiter" {
+				c.Resume()
+				limiter := &blockingTxnRateLimiter{entered: make(chan struct{}, 1)}
+				c.limiter = limiter
+				waiting = limiter.entered
+			}
+			t.Cleanup(func() { cancel(); _ = c.Close() })
+			type result struct {
+				snapshot timestamp.Timestamp
+				err      error
+			}
+			completed := make(chan result, 1)
+			go func() {
+				snapshot, err := c.GetLatestSnapshot(observed, timestamp.Timestamp{})
+				completed <- result{snapshot, err}
+			}()
+			select {
+			case <-waiting:
+			case <-time.After(time.Second):
+				t.Fatal("snapshot did not enter admission wait")
+			}
+			switch scenario.exit {
+			case "resume":
+				c.Resume()
+			case "cancel":
+				cancel()
+			case "close":
+				require.NoError(t, c.Close())
+			}
+			select {
+			case got := <-completed:
+				switch scenario.exit {
+				case "resume":
+					require.NoError(t, got.err)
+					require.False(t, got.snapshot.IsEmpty())
+				case "cancel":
+					require.ErrorIs(t, got.err, context.Canceled)
+					require.True(t, got.snapshot.IsEmpty())
+				case "close":
+					require.True(t, moerr.IsMoErrCode(got.err, moerr.ErrClientClosed))
+					require.True(t, got.snapshot.IsEmpty())
+				}
+			case <-time.After(time.Second):
+				t.Fatal("snapshot remained blocked after admission ended")
+			}
+			require.Zero(t, c.atomic.activeTxnCount.Load())
+		})
+	}
+}
+
+func TestGetLatestSnapshotRejectsLateSuccess(t *testing.T) {
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	for _, closeClient := range []bool{false, true} {
+		waiter := &selectedSuccessTimestampWaiter{
+			entered: make(chan struct{}), notify: make(chan struct{}),
+			selected: make(chan struct{}), release: make(chan struct{}),
+		}
+		c := NewTxnClient("", newTestTxnSender(), WithTimestampWaiter(waiter))
+		c.Resume()
+		ctx, cancel := context.WithCancel(context.Background())
+		release := sync.OnceFunc(func() { close(waiter.release) })
+		t.Cleanup(func() { cancel(); release(); _ = c.Close() })
+		result := make(chan error, 1)
+		go func() {
+			snapshot, err := c.GetLatestSnapshot(ctx, timestamp.Timestamp{PhysicalTime: 100})
+			if !snapshot.IsEmpty() {
+				result <- errors.New("published a snapshot after close/cancel")
+				return
+			}
+			result <- err
+		}()
+		select {
+		case <-waiter.entered:
+		case <-time.After(time.Second):
+			t.Fatal("snapshot did not enter timestamp wait")
+		}
+		waiter.NotifyLatestCommitTS(timestamp.Timestamp{PhysicalTime: 100})
+		select {
+		case <-waiter.selected:
+		case <-time.After(time.Second):
+			t.Fatal("waiter did not select success")
+		}
+		if closeClient {
+			require.NoError(t, c.Close())
+		} else {
+			cancel()
+		}
+		release()
+		select {
+		case err := <-result:
+			if closeClient {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrClientClosed))
+			} else {
+				require.ErrorIs(t, err, context.Canceled)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("snapshot did not finish")
+		}
+		cancel()
+		require.NoError(t, c.Close())
+	}
+}
+
 func TestAdjustClient(t *testing.T) {
 	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 	c := &txnClient{}

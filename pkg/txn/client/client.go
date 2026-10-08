@@ -878,6 +878,46 @@ func (client *txnClient) WaitLogTailAppliedAt(
 	return value, err
 }
 
+// GetLatestSnapshot observes an admitted logtail snapshot without creating a
+// transaction. Snapshot selection and readiness use the same owners as New.
+func (client *txnClient) GetLatestSnapshot(
+	ctx context.Context, minimum timestamp.Timestamp,
+) (timestamp.Timestamp, error) {
+	if client.isClosed() {
+		return timestamp.Timestamp{}, moerr.NewClientClosedNoCtx()
+	}
+	if err := client.limiter.Wait(ctx, client.closeCtx); err != nil {
+		if client.isClosed() {
+			err = moerr.NewClientClosedNoCtx()
+		}
+		return timestamp.Timestamp{}, err
+	}
+	client.mu.Lock()
+	err := client.waitForReadyLocked(ctx, false, false, nil)
+	client.mu.Unlock()
+	if err != nil {
+		return timestamp.Timestamp{}, err
+	}
+	snapshot, err := client.WaitLogTailAppliedAt(ctx, client.determineTxnSnapshot(minimum))
+	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrClientClosed) {
+			return timestamp.Timestamp{}, err
+		}
+		return timestamp.Timestamp{}, errors.Join(err, moerr.NewTxnError(ctx, "update txn snapshot"))
+	}
+	// A waiter may select success before Close, then return after it. Publish
+	// only while holding the existing lifecycle gate; never hold it while waiting.
+	client.lifecycle.gate.RLock()
+	defer client.lifecycle.gate.RUnlock()
+	if client.isClosed() {
+		return timestamp.Timestamp{}, moerr.NewClientClosedNoCtx()
+	}
+	if err := ctx.Err(); err != nil {
+		return timestamp.Timestamp{}, err
+	}
+	return snapshot, nil
+}
+
 func (client *txnClient) getTxnIsolation() txn.TxnIsolation {
 	if v, ok := runtime.ServiceRuntime(client.sid).GetGlobalVariables(runtime.TxnIsolation); ok {
 		return v.(txn.TxnIsolation)
@@ -970,48 +1010,45 @@ func (client *txnClient) GetSyncLatestCommitTSTimes() uint64 {
 	return client.atomic.forceSyncCommitTimes.Load()
 }
 
-func (client *txnClient) openTxn(ctx context.Context, op *txnOperator) error {
-	client.mu.Lock()
+// waitForReadyLocked retains client.mu on every return, dropping it only
+// while waiting on the existing readiness and shutdown channels.
+func (client *txnClient) waitForReadyLocked(
+	ctx context.Context, skipWaitPushClient, waitPausedDisabled bool, txnID []byte,
+) error {
 	if client.isClosed() {
-		client.mu.Unlock()
 		return moerr.NewClientClosedNoCtx()
 	}
 
 	if err := client.waitMarkAllActiveAbortedLocked(ctx); err != nil {
-		client.mu.Unlock()
 		return err
 	}
 
-	if !op.opts.skipWaitPushClient {
+	if !skipWaitPushClient {
 		for client.mu.state == paused {
 			if client.isClosed() {
-				client.mu.Unlock()
 				return moerr.NewClientClosedNoCtx()
 			}
 			if err := ctx.Err(); err != nil {
-				client.mu.Unlock()
 				return err
 			}
 			if client.normalStateNoWait {
 				activeCount := client.atomic.activeTxnCount.Load()
 				waitQueueSize := len(client.mu.waitActiveTxns)
-				client.mu.Unlock()
 				v2.TxnActiveQueueSizeGauge.Set(float64(activeCount))
 				v2.TxnWaitActiveQueueSizeGauge.Set(float64(waitQueueSize))
 				return moerr.NewInternalErrorNoCtx("cn service is not ready, retry later")
 			}
 
-			if op.opts.options.WaitPausedDisabled() {
+			if waitPausedDisabled {
 				activeCount := client.atomic.activeTxnCount.Load()
 				waitQueueSize := len(client.mu.waitActiveTxns)
-				client.mu.Unlock()
 				v2.TxnActiveQueueSizeGauge.Set(float64(activeCount))
 				v2.TxnWaitActiveQueueSizeGauge.Set(float64(waitQueueSize))
 				return moerr.NewInvalidStateNoCtx("txn client is in pause state")
 			}
 
 			client.logger.Warn("txn client is in pause state, wait for it to be ready",
-				zap.String("txn ID", hex.EncodeToString(op.reset.txnID)))
+				zap.String("txn ID", hex.EncodeToString(txnID)))
 			if client.mu.pausedC == nil {
 				client.mu.pausedC = make(chan struct{})
 			}
@@ -1020,21 +1057,32 @@ func (client *txnClient) openTxn(ctx context.Context, op *txnOperator) error {
 			client.mu.Unlock()
 			select {
 			case <-ctx.Done():
+				client.mu.Lock()
 				return ctx.Err()
 			case <-closedC:
+				client.mu.Lock()
 				return moerr.NewClientClosedNoCtx()
 			case <-pausedC:
 			}
 			client.mu.Lock()
 			client.logger.Warn("txn client is in ready state",
-				zap.String("txn ID", hex.EncodeToString(op.reset.txnID)))
+				zap.String("txn ID", hex.EncodeToString(txnID)))
 		}
 	}
 	if client.isClosed() {
-		client.mu.Unlock()
 		return moerr.NewClientClosedNoCtx()
 	}
 	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (client *txnClient) openTxn(ctx context.Context, op *txnOperator) error {
+	client.mu.Lock()
+	if err := client.waitForReadyLocked(ctx, op.opts.skipWaitPushClient,
+		op.opts.options.WaitPausedDisabled(), op.reset.txnID); err != nil {
 		client.mu.Unlock()
 		return err
 	}
