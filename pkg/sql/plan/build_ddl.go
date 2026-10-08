@@ -301,9 +301,6 @@ func genViewTableDef(
 	if err = ValidateUnresolvedIndexHints(ctx.GetContext(), query); err != nil {
 		return nil, err
 	}
-	if err = RequirePersistedIPFunctionProtocol(ctx.GetContext(), ctx.GetProcess(), query); err != nil {
-		return nil, err
-	}
 	// Must run on the OPTIMIZED plan, which is why it is not part of the validate hook
 	// above: that hook fires before createQuery, where every MATCH is still an unresolved
 	// function whether or not an index exists.
@@ -317,6 +314,8 @@ func genViewTableDef(
 	if preOptimizeViewRequiredProtocol > viewRequiredProtocol {
 		viewRequiredProtocol = preOptimizeViewRequiredProtocol
 	}
+	// Admit the complete requirement once, using the caller's read/write phase.
+	// A read check here would mask the authoring gate's CN/floor diagnostic.
 	if viewRequiredProtocol > 0 {
 		if forAuthoring {
 			err = RequirePersistedProtocolVersionForAuthoring(

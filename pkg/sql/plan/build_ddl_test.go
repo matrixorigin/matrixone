@@ -1505,6 +1505,56 @@ func TestGenViewTableDefPreservesJSONValueReturnType(t *testing.T) {
 	require.Equal(t, tableDef.Cols[0].Typ, rebound.GetDdl().GetCreateView().GetTableDef().Cols[0].Typ)
 }
 
+func TestGenViewTableDefProtocolAdmissionUsesCallerPhase(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		local     int64
+		authoring int64
+		write     bool
+		wantError string
+	}{
+		{"old CN authoring", defines.MORPCVersion71, defines.MORPCVersion80, true, "local protocol=71"},
+		{"read admitted write fenced", defines.MORPCVersion80, defines.MORPCVersion71, true, "authoring floor=71"},
+		{"read unaffected by write fence", defines.MORPCVersion80, defines.MORPCVersion71, false, ""},
+		{"old CN reading", defines.MORPCVersion71, defines.MORPCVersion80, false, "persisted expression semantics require all CNs"},
+		{"write admitted", defines.MORPCVersion80, defines.MORPCVersion80, true, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+			rt := moruntime.ServiceRuntime(ctx.GetProcess().GetService())
+			for _, key := range []string{moruntime.MOProtocolVersion, moruntime.PersistedExpressionProtocolFloor, moruntime.PersistedExpressionProtocolAuthoringFloor} {
+				old, present := rt.GetGlobalVariables(key)
+				t.Cleanup(func() {
+					if present {
+						rt.SetGlobalVariables(key, old)
+					} else if current, ok := rt.GetGlobalVariables(key); ok {
+						rt.CompareAndDeleteGlobalVariables(key, current)
+					}
+				})
+			}
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, tc.local)
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion80))
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, tc.authoring)
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+				`select find_in_set('b', 'a,b') as pos, strcmp('a', 'b') as cmp`, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			table, err := genViewTableDef(ctx, stmt.(*tree.Select), nil, "tpch", "protocol_view", tc.write)
+			if tc.wantError != "" {
+				require.ErrorContains(t, err, tc.wantError)
+				require.Nil(t, table)
+				return
+			}
+			require.NoError(t, err)
+			var data ViewData
+			require.NoError(t, json.Unmarshal([]byte(table.GetViewSql().GetView()), &data))
+			require.NotNil(t, data.RequiredProtocolVersion)
+			require.Equal(t, int64(defines.MORPCVersion80), *data.RequiredProtocolVersion,
+				"constant folding must not erase the persisted contract")
+		})
+	}
+}
+
 func TestGenViewTableDefPersistsExpandedStarSelectList(t *testing.T) {
 	const rootSQL = "create view v_star as select * from nation"
 	ctx := &rootSQLCompilerContext{
