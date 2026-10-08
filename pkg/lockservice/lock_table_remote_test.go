@@ -2499,12 +2499,13 @@ func TestUnlockRemoteWithRetry(t *testing.T) {
 			defer cancel()
 			require.NoError(t, l.unlockWithContext(ctx, txn, nil, timestamp.Timestamp{}))
 			require.True(t, failed.failed.Load())
-			require.Equal(t, 2, n, "valid bind must still retry the owner")
 			select {
 			case <-c:
 			default:
 				t.Fatal("unlock returned before the owner acknowledged cleanup")
 			}
+			// Receiving c synchronizes with the handler before reading its count.
+			require.Equal(t, 2, n, "valid bind must still retry the owner")
 
 		},
 		func(lt pb.LockTable) {},
