@@ -30,6 +30,15 @@ when strict `NO_ZERO_DATE` mode would otherwise reject them. The effective
 session mode is evaluated for each execution, including reused prepared DML;
 changing `sql_mode` after prepare therefore changes the write result.
 
+This is an explicit configuration contract, not transparent compatibility for
+applications that omit the session setting. In particular, the original YShop
+SQL that relies on `0000-00-00 00:00:00` still does not run unchanged under the
+default strict mode unless the connection or deployment supplies the permissive
+`sql_mode` above. Replacing the sentinel with `1970-01-01` is not an equivalent
+workaround when the zero date has application meaning. A server-level switch to
+accept and retain zero dates without connection configuration is not introduced
+by this document and requires a separate compatibility design.
+
 For new schemas, use `NULL` for an unknown or unavailable nullable datetime
 instead of relying on the legacy zero-date sentinel. The regression matrix for
 these rules is maintained in
@@ -99,7 +108,7 @@ SELECT TIMEDIFF('15:30:45', '2000-01-01 15:30:45') AS mixed_format;
 |----------|-------------|--------|
 | [#29138](https://github.com/matrixorigin/matrixone/issues/29138) | `cte_max_recursion_depth` and empty convergence rounds | MatrixOne intentionally counts only productive recursive levels |
 | [#23464](https://github.com/matrixorigin/matrixone/issues/23464) | TIMEDIFF() and SUBTIME() results incompatible with MySQL | TIMEDIFF: MO behavior is more reasonable |
-| [#29207](https://github.com/matrixorigin/matrixone/issues/29207) | Zero DATETIME literals and application schema loading | Configure a permissive session `sql_mode` when legacy zero dates are required |
+| [#29207](https://github.com/matrixorigin/matrixone/issues/29207) | Zero DATETIME literals and application schema loading | This document defines the session-mode contract; unchanged applications still require a permissive connection/deployment configuration |
 
 ---
 
