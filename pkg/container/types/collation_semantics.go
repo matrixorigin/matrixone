@@ -20,6 +20,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/collation"
 )
 
+const (
+	// Collation keys used by equality/hash consumers carry a small domain
+	// marker.  A raw fallback for malformed/repertoire-invalid input must not
+	// be able to collide with a valid UCA weight string.
+	validCollationKeyTag   byte = 0
+	invalidCollationKeyTag byte = 1
+)
+
 // CollationDomainForCharset resolves the executable key domain for a text
 // identity. Keeping this mapping beside Type prevents SQL consumers from
 // silently treating utf8*_unicode_ci as the existing general_ci class.
@@ -45,16 +53,26 @@ func CollationKey(charset uint8, scratch, value []byte) ([]byte, error) {
 	return domain.Key(scratch, value)
 }
 
-// CollationKeyOrOriginal is used by legacy serializer APIs that cannot return
-// an error. Valid UTF-8 is required by the native collations; malformed input
-// keeps the old deterministic byte representation until the owning SQL write
-// path can surface a typed error.
+// CollationKeyOrOriginal returns the canonical equality/hash/physical-key
+// representation for a native Unicode collation. The leading domain marker
+// keeps a malformed or repertoire-invalid raw fallback disjoint from valid UCA
+// weight bytes. Callers that need generic SERIAL's lossless value contract must
+// keep using the original bytes instead.
 func CollationKeyOrOriginal(charset uint8, value []byte) []byte {
-	key, err := CollationKey(charset, nil, value)
-	if err != nil {
+	if !IsUnicodeCollation(charset) {
 		return value
 	}
-	return key
+	key, err := CollationKey(charset, nil, value)
+	if err != nil {
+		out := make([]byte, 1+len(value))
+		out[0] = invalidCollationKeyTag
+		copy(out[1:], value)
+		return out
+	}
+	out := make([]byte, 1+len(key))
+	out[0] = validCollationKeyTag
+	copy(out[1:], key)
+	return out
 }
 
 // CompareStringValues compares two values in one resolved text identity. The

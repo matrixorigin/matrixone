@@ -2,10 +2,29 @@
 
 ## Scope
 
-This is a dependency of native `utf8mb4_unicode_ci` / `utf8_unicode_ci`
-support, **not an SQL feature activation or a fix closing #29206**. No parser,
-planner, persisted type ID, catalog, index writer, or admission gate changes.
-Existing Domain values and frozen comparison keys retain their meaning.
+This document is the implementation contract for native
+`utf8mb4_unicode_ci` / `utf8_unicode_ci` support in #29206. The native names
+are admitted only as their versioned UCA400 identities (`RevisionV1` with the
+legacy physical key format); they are never silently collapsed to
+`general_ci`. Existing legacy identities and frozen comparison keys retain
+their meaning.
+
+The SQL admission boundary is deliberately narrow. Planner and execution
+owners validate the versioned metadata before a plan is published, while
+unknown revisions, key formats, and unsupported transport owners fail closed.
+The integration is complete only when every consumer below observes the same
+resolved comparison domain:
+
+* scalar comparison, `IN`/`NOT IN`, grouping/hash/join, `ORDER BY`, and window
+  peer/partition evaluation use the UCA key relation;
+* generic `SERIAL` remains lossless and physical index serialization opts into
+  the tagged UCA key explicitly;
+* raw primary-key, index, and zone-map probes fail open to a residual/base
+  scan when their persisted bytes cannot prove the UCA relation;
+* malformed or out-of-repertoire values use a tagged raw fallback, so they
+  cannot collide with valid UCA keys;
+* the distributed charset/collation regression covers equality, membership,
+  grouping, full and limited ordering, and window peers/partitions.
 
 The two appended library domains share MySQL's partial UCA 4.0.0 primary
 weights. The mb3 domain rejects supplementary characters before touching
@@ -65,14 +84,17 @@ prefixes, repeated SPACE, U+FFFF boundaries, scratch reuse, malformed UTF-8,
 invalid key framing, size overflow, and mb3 repertoire. A separate U4P1
 sample digest freezes bytes; existing V1 golden tests must remain unchanged.
 
-## Subsequent integration gates
+## Integration and rollout gates
 
-Reuse/reconcile the metadata/tuple, SQL-consumer and index work in
-#29055/#29056/#29057; do not assume these drafts enable native collation.
-Persist semantic identity and key format independently of the local Domain
-enum. Comparison, grouping/hash/join, PK/UNIQUE/backfill/ODKU, index lookup,
-persisted filtering, recovery and mixed-version admission must agree before
-accepting either SQL name. Coordinate default inheritance with #29374.
-Preserve old object identities and key bytes; conversions require explicit
-rebuild and collision checks. Restore/SHOW/I_S and the utf8mb3 repertoire
-contract also belong to that integration, not to this library foundation.
+PR #29601 is the integration point for the metadata/tuple, SQL-consumer, and
+index work tracked by #29055/#29056/#29057. Persisted semantic identity and
+key format remain independent of the local Domain enum. Legacy objects keep
+their original identity and bytes; conversion requires an explicit rebuild
+and collision check. Restore/SHOW/I_S preserve the native name and the
+utf8mb3 repertoire contract.
+
+Mixed-version plans and foreign pipeline owners still pass through
+`RequireLegacyCollations`; they must carry the explicit UCA400 revision and
+legacy physical key format. A missing or unknown version fails closed. Before
+merge, the maintainer approval for this contract should be recorded on PR
+#29601 together with the distributed semantic regression result.

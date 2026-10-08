@@ -41,8 +41,9 @@ func TestUnicodeCollationComparisonKeys(t *testing.T) {
 	require.NotEmpty(t, key)
 
 	invalid := []byte{0x5a, 0xff}
-	require.Equal(t, invalid,
-		CollationKeyOrOriginal(CharsetUTF8MB3UnicodeCI, invalid))
+	invalidKey := CollationKeyOrOriginal(CharsetUTF8MB3UnicodeCI, invalid)
+	require.Equal(t, byte(1), invalidKey[0])
+	require.Equal(t, invalid, invalidKey[1:])
 	unicode := NewWithCharset(T_varchar, 64, 0, CharsetUTF8MB3UnicodeCI)
 	require.Equal(t, bytes.Compare(invalid, []byte{0xff}),
 		CompareStringValues(unicode, invalid, []byte{0xff}))

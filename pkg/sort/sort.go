@@ -373,7 +373,27 @@ func sortByVector(
 			data []types.Varlena
 			area []byte
 		}{data: data, area: area}
-		if !desc {
+		if sqlOrder && types.IsUnicodeCollation(vec.GetType().Charset) {
+			// Native Unicode collations must use the same resolved comparison
+			// domain as scalar predicates and top/merge comparison. The legacy
+			// byte comparator remains the fast path for all other string types.
+			typ := *vec.GetType()
+			if !desc {
+				genericSort(col, os, func(v struct {
+					data []types.Varlena
+					area []byte
+				}, i, j int64) bool {
+					return types.CompareStringValues(typ, v.data[i].GetByteSlice(v.area), v.data[j].GetByteSlice(v.area)) < 0
+				})
+			} else {
+				genericSort(col, os, func(v struct {
+					data []types.Varlena
+					area []byte
+				}, i, j int64) bool {
+					return types.CompareStringValues(typ, v.data[i].GetByteSlice(v.area), v.data[j].GetByteSlice(v.area)) > 0
+				})
+			}
+		} else if !desc {
 			genericSort(col, os, varlenaLess)
 		} else {
 			genericSort(col, os, varlenaGreater)

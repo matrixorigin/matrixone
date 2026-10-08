@@ -1906,6 +1906,25 @@ func TestSerialAndSerialFullEncodeNonNullRowsIdentically(t *testing.T) {
 	}
 }
 
+func TestSerialFullUnicodeKeepsOriginalValue(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	unicodeType := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI)
+	input := newVectorByType(proc.Mp(), unicodeType, []string{"b"}, nil)
+	defer input.Free(proc.Mp())
+
+	result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(1))
+	op := newOpSerial()
+	defer op.Close()
+	require.NoError(t, op.BuiltInSerialFull([]*vector.Vector{input}, result, proc, 1, nil))
+
+	tuple, err := types.Unpack(result.GetResultVector().GetBytesAt(0))
+	require.NoError(t, err)
+	require.Len(t, tuple, 1)
+	require.Equal(t, []byte("b"), tuple[0])
+}
+
 func Test_BuiltIn_SerialFull(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

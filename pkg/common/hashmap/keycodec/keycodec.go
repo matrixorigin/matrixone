@@ -597,11 +597,7 @@ func ComputeXXHash(keyVecs []*vector.Vector, hashValues []uint64, seed uint64) {
 		if types.IsUnicodeCollation(vec.GetType().Charset) && vec.GetType().Oid.IsMySQLString() {
 			charset := vec.GetType().Charset
 			computeCanonicalVarlenaXXHash(vec, hashValues, func(dst, value []byte) []byte {
-				key, err := types.CollationKey(charset, dst, value)
-				if err != nil {
-					return append(dst, value...)
-				}
-				return key
+				return append(dst, types.CollationKeyOrOriginal(charset, value)...)
 			})
 			continue
 		}
@@ -760,12 +756,8 @@ func CanonicalBytesAt(vec *vector.Vector, row int, scratch []byte) (canonical, r
 		row = 0
 	}
 	if types.IsUnicodeCollation(vec.GetType().Charset) && vec.GetType().Oid.IsMySQLString() {
-		key, err := types.CollationKey(
-			vec.GetType().Charset, scratch[:0], vec.GetRawBytesAt(row))
-		if err == nil {
-			return key, key
-		}
-		return vec.GetRawBytesAt(row), scratch
+		key := types.CollationKeyOrOriginal(vec.GetType().Charset, vec.GetRawBytesAt(row))
+		return key, key
 	}
 	switch vec.GetType().Oid {
 	case types.T_float32:

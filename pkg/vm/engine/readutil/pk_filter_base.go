@@ -151,6 +151,14 @@ func ConstructBasePKFilter(
 	mp *mpool.MPool,
 ) (filter BasePKFilter, err error) {
 	cleanup := &basePKFilterCleanup{}
+	// Zone maps and primary-key readers currently store original bytes. Native
+	// Unicode collations compare UCA weights, so a raw PK probe can discard a
+	// true match (for example `A = 'a'`) before the residual row comparator
+	// runs. Leave this optional fast path disabled until the persisted summary
+	// format carries the same collation domain.
+	if tablePrimaryKeyUsesUnicodeCollation(tblDef) {
+		return BasePKFilter{}, nil
+	}
 	filter, err = constructBasePKFilter(expr, tblDef, mp, cleanup)
 	if err != nil || !filter.Valid {
 		cleanup.run()
@@ -163,6 +171,34 @@ func ConstructBasePKFilter(
 		filter.cleanup = cleanup
 	}
 	return filter, nil
+}
+
+func tablePrimaryKeyUsesUnicodeCollation(tblDef *plan.TableDef) bool {
+	if tblDef == nil || tblDef.Pkey == nil {
+		return false
+	}
+	check := func(name string) bool {
+		if name == "" || tblDef.Name2ColIndex == nil {
+			return false
+		}
+		pos, ok := tblDef.Name2ColIndex[name]
+		if !ok || pos < 0 || int(pos) >= len(tblDef.Cols) || tblDef.Cols[pos] == nil {
+			return false
+		}
+		return types.IsUnicodeCollation(uint8(tblDef.Cols[pos].Typ.Charset))
+	}
+	if check(tblDef.Pkey.PkeyColName) {
+		return true
+	}
+	for _, name := range tblDef.Pkey.Names {
+		if check(name) {
+			return true
+		}
+	}
+	if tblDef.Pkey.CompPkeyCol != nil {
+		return types.IsUnicodeCollation(uint8(tblDef.Pkey.CompPkeyCol.Typ.Charset))
+	}
+	return false
 }
 
 func constructBasePKFilter(

@@ -38,6 +38,7 @@ type opOperatorStrIn struct {
 	ready    bool
 	hasNull  bool
 	padSpace bool
+	typ      types.Type
 	mp       map[string]bool
 }
 
@@ -91,6 +92,7 @@ func (op *opOperatorStrIn) init(tuple *vector.Vector) {
 	op.ready = true
 	op.hasNull = false
 	op.padSpace = tuple.GetType().Oid == types.T_char
+	op.typ = *tuple.GetType()
 
 	if tuple.IsConstNull() {
 		op.hasNull = true
@@ -125,6 +127,13 @@ func (op *opOperatorStrIn) init(tuple *vector.Vector) {
 func (op *opOperatorStrIn) key(value []byte) string {
 	if op.padSpace {
 		value = bytes.TrimRight(value, " ")
+	}
+	if types.IsUnicodeCollation(op.typ.Charset) {
+		// IN/NOT IN must use the same tagged comparison domain as equality and
+		// grouping. In particular, an invalid/repertoire-invalid value gets a
+		// distinct marker instead of being inserted as an untagged raw key that
+		// can collide with a valid UCA weight string.
+		value = types.CollationKeyOrOriginal(op.typ.Charset, value)
 	}
 	return string(value)
 }

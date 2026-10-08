@@ -3358,11 +3358,6 @@ func (op *opSerial) BuiltInSerialFull(parameters []*vector.Vector, result vector
 }
 
 func getPackFun(v *vector.Vector) (func(v *vector.Vector, idx int, ps *types.Packer), error) {
-	if types.IsUnicodeCollation(v.GetType().Charset) {
-		return func(v *vector.Vector, idx int, ps *types.Packer) {
-			ps.EncodeStringType(types.CollationKeyOrOriginal(v.GetType().Charset, v.GetBytesAt(idx)))
-		}, nil
-	}
 	switch v.GetType().Oid {
 	case types.T_bool:
 		return func(v *vector.Vector, idx int, ps *types.Packer) {
@@ -3488,10 +3483,25 @@ func getPackFun(v *vector.Vector) (func(v *vector.Vector, idx int, ps *types.Pac
 	return nil, moerr.NewInternalErrorNoCtxf("not supported type %s", v.GetType().String())
 }
 
-// SerialHelper is unified function used in builtInSerial and BuiltInSerialFull
-// To use it inside builtInSerial, pass the bitMap pointer and set isFull false
-// To use it inside BuiltInSerialFull, pass the bitMap as nil and set isFull to true
+// SerialHelper encodes original values for the generic SERIAL/SERIAL_FULL
+// contract.  Generic serialization is intentionally lossless: transformed
+// comparison keys belong only to the physical index-key boundary.
+//
+// To use it inside builtInSerial, pass the bitMap pointer and set isFull false.
+// To use it inside BuiltInSerialFull, pass the bitMap as nil and set isFull to
+// true.
 func SerialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isFull bool) {
+	serialHelper(v, bitMap, ps, isFull, false)
+}
+
+// PhysicalSerialHelper is the schema-aware serializer used by secondary
+// index producers.  It keeps the generic SERIAL value contract separate from
+// the opaque UCA comparison-key domain used for native Unicode index parts.
+func PhysicalSerialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isFull bool) {
+	serialHelper(v, bitMap, ps, isFull, true)
+}
+
+func serialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isFull, physicalKey bool) {
 
 	if !isFull && bitMap == nil {
 		// if you are using it inside the builtInSerial then, you should pass bitMap
@@ -3928,15 +3938,22 @@ func SerialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 					}
 					continue
 				}
-				ps[i].EncodeStringType(types.CollationKeyOrOriginal(v.GetType().Charset, value))
+				ps[i].EncodeStringType(serialStringValue(*v.GetType(), value, physicalKey))
 			}
 		} else {
 			vs := vector.ExpandBytesCol(v)
 			for i := range vs {
-				ps[i].EncodeStringType(types.CollationKeyOrOriginal(v.GetType().Charset, vs[i]))
+				ps[i].EncodeStringType(serialStringValue(*v.GetType(), vs[i], physicalKey))
 			}
 		}
 	}
+}
+
+func serialStringValue(typ types.Type, value []byte, physicalKey bool) []byte {
+	if physicalKey && types.IsUnicodeCollation(typ.Charset) {
+		return types.CollationKeyOrOriginal(typ.Charset, value)
+	}
+	return value
 }
 
 // builtInSerialExtract is used to extract a tupleElement from the serial vector.

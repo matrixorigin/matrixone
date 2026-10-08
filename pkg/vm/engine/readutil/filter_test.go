@@ -2361,6 +2361,57 @@ func TestConstructBasePKFilterMalformedInFailsOpen(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestConstructBasePKFilterUnicodeFailsOpen(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	defer func() {
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	typ := types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetUTF8MB4UnicodeCI)
+	tableDef := &plan.TableDef{
+		Name:          "unicode_pk",
+		Name2ColIndex: map[string]int32{"a": 0},
+		Pkey:          &plan.PrimaryKeyDef{Names: []string{"a"}, PkeyColName: "a"},
+		Cols: []*plan.ColDef{{
+			Name: "a",
+			Typ:  plan2.MakePlan2Type(&typ),
+		}},
+	}
+	value := &plan.Expr{
+		Typ: plan2.MakePlan2Type(&typ),
+		Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{
+			IsConst: true,
+			Data:    []byte("a"),
+		}},
+	}
+	expr := MakeFunctionExprForTest("=", []*plan.Expr{MakeColExprForTest(0, types.T_varchar), value})
+	expr.GetF().Args[0].Typ.Charset = uint32(types.CharsetUTF8MB4UnicodeCI)
+
+	filter, err := ConstructBasePKFilter(expr, tableDef, mp)
+	require.NoError(t, err)
+	require.False(t, filter.Valid)
+	filter.Cleanup()
+}
+
+func TestCompileFilterExprUnicodeFailsOpen(t *testing.T) {
+	typ := types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetUTF8MB4UnicodeCI)
+	tableDef := &plan.TableDef{
+		Name:          "unicode_filter",
+		Name2ColIndex: map[string]int32{"a": 0},
+		Cols:          []*plan.ColDef{{Name: "a", Typ: plan2.MakePlan2Type(&typ)}},
+	}
+	expr := MakeFunctionExprForTest("=", []*plan.Expr{
+		MakeColExprForTest(0, types.T_varchar),
+		&plan.Expr{Typ: plan2.MakePlan2Type(&typ), Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{
+			IsConst: true,
+			Data:    []byte("a"),
+		}}},
+	})
+	expr.GetF().Args[0].Typ.Charset = uint32(types.CharsetUTF8MB4UnicodeCI)
+	_, _, _, _, _, canCompile, _ := CompileFilterExpr(expr, tableDef, nil)
+	require.False(t, canCompile)
+}
+
 func TestUnmarshalPKInVectorValidatesConstPhysicalValueOnce(t *testing.T) {
 	mp := mpool.MustNew(t.Name())
 	const logicalLength = 1 << 30

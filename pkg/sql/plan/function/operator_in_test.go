@@ -86,6 +86,34 @@ func TestOperatorCharInUsesPadSpaceKeys(t *testing.T) {
 	}
 }
 
+func TestOperatorUnicodeInUsesCollationKeys(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	unicodeType := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI)
+
+	for _, test := range []struct {
+		name string
+		fn   executeLogicOfOverload
+		want []bool
+	}{
+		{name: "in", fn: newOpOperatorStrIn().operatorIn, want: []bool{true, true, false}},
+		{name: "not in", fn: newOpOperatorStrIn().operatorNotIn, want: []bool{false, false, true}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			tc := NewFunctionTestCase(
+				proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(unicodeType, []string{"A", "ß", "b"}, nil),
+					NewFunctionTestInput(unicodeType, []string{"a", "ss"}, nil),
+				},
+				NewFunctionTestResult(types.T_bool.ToType(), false, test.want, nil),
+				test.fn,
+			)
+			ok, errInfo := tc.RunAndFree()
+			require.True(t, ok, errInfo)
+		})
+	}
+}
+
 func TestOperatorCharBetweenUsesPadSpaceOrdering(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	charType := types.New(types.T_char, 8, 0)

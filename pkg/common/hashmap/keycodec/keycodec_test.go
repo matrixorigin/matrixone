@@ -581,7 +581,7 @@ func TestCanonicalBytesAtUsesGroupingEquality(t *testing.T) {
 	right, _ := CanonicalBytesAt(unicodeValues, 1, reusable[:0])
 	require.Equal(t, leftCopy, right)
 	invalid, _ := CanonicalBytesAt(unicodeValues, 2, nil)
-	require.Equal(t, []byte{0xff}, invalid)
+	require.Equal(t, []byte{1, 0xff}, invalid)
 }
 
 func TestAppendCanonicalValueSizeMatchesEncoding(t *testing.T) {

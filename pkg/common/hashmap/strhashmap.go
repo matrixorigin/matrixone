@@ -385,13 +385,11 @@ func (itr *strHashmapIterator) encodeHashKeys(vecs []*vector.Vector, start, coun
 }
 
 func appendVarlenaHashKey(dst []byte, typ types.Type, value []byte) []byte {
-	if types.IsUnicodeCollation(typ.Charset) && typ.Oid.IsMySQLString() {
-		start := len(dst)
-		key, err := types.CollationKey(typ.Charset, dst[start:start], value)
-		if err == nil {
-			return key
-		}
-	}
+	// MySQL string vectors use fillStringGroupStr/fillGroupingAwareVarlena,
+	// which carry the resolved type into canonicalVarlenaHashValueForType.
+	// This helper is retained for JSON/array varlena encodings only; keeping a
+	// second Unicode branch here would be unreachable and would make the two
+	// string hash paths drift.
 	value = canonicalVarlenaHashValue(typ.Oid, value)
 	switch typ.Oid {
 	case types.T_json:

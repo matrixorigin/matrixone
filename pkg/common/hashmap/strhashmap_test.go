@@ -371,6 +371,30 @@ func TestStrHashMapCharKeysUsePadSpaceSemantics(t *testing.T) {
 	}
 }
 
+func TestStrHashMapUnicodeKeysUseOneNonCollidingDomain(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	typ := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI)
+	build := vector.NewVec(typ)
+	defer build.Free(mp)
+	values := [][]byte{
+		[]byte("A"), []byte("a"), []byte("ß"), []byte("ss"), []byte("b"),
+		[]byte("\xef\xbf\xbf"), {0x30, 0xfb, 0xc1, 0x30, 0xff, 0xff, 0x20},
+	}
+	for _, value := range values {
+		require.NoError(t, vector.AppendBytes(build, value, false, mp))
+	}
+
+	hashMap, err := NewStrHashMap(false, mp)
+	require.NoError(t, err)
+	defer hashMap.Free()
+	groups, zValues, err := hashMap.NewIterator().Insert(0, build.Length(), []*vector.Vector{build})
+	require.NoError(t, err)
+	require.Equal(t, []uint64{1, 1, 2, 2, 3, 4, 5}, groups)
+	require.Equal(t, []int64{1, 1, 1, 1, 1, 1, 1}, zValues)
+	require.Equal(t, uint64(5), hashMap.GroupCount())
+}
+
 func TestStrHashMapCanonicalVarlenaVectorShapes(t *testing.T) {
 	negativeZero := float32(math.Copysign(0, -1))
 	negativeZero64 := math.Copysign(0, -1)
