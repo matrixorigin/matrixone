@@ -91,7 +91,10 @@ GPU kernels agree on the encoding.
   finiteness checks; widening to `float32`/`float64` is exact.
 - **Not a key.** A `bf16`/`float16`/`float8`/`float4` column cannot be part of a primary
   key, unique key, secondary index or `CLUSTER BY` key; DDL rejects it. Key encoding,
-  row locking and TN merge/dedup have no support for these types.
+  row locking and TN merge/dedup have no support for these types. Nor can it be a `RANGE`
+  or `RANGE COLUMNS` partition column: a bound compared with the column rounds to the
+  column type, as a literal does, so a value rounding onto a bound would have no
+  partition. `KEY`, `HASH` and `LIST` partitioning compare by equality and accept it.
 - **External forms.** CDC and ISCP SQL, `SELECT … INTO OUTFILE` (CSV and JSON), external
   writes, JSON values and data-branch diff/merge use the widened float32 value; every
   value of these types is exact in float32, so the text converts back to the same bits.

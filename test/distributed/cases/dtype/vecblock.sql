@@ -271,4 +271,7 @@ select id, l2_distance(v, cast('[1.3,2.7,3.1]' as vecf8(3))) dq8 from iv order b
 drop table iv;
 set experimental_ivf_index = 0;
 
+-- percentile_disc sorts with unaccounted scratch: no vector type, as for vecf32
+select percentile_disc(0.5) within group (order by a) from t;
+select percentile_disc(0.5) within group (order by c) from t;
 drop database vecblock_db;

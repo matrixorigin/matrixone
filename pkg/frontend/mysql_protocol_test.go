@@ -2821,6 +2821,10 @@ func TestPreparedFloatingPointBinaryProtocolMetadata(t *testing.T) {
 	}{
 		{name: "float", sql: "select cast(12.3 as float) as result", typ: defines.MYSQL_TYPE_FLOAT, decimals: mysqlDecimalNotSpecified},
 		{name: "double", sql: "select cast(12.3 as double) as result", typ: defines.MYSQL_TYPE_DOUBLE, decimals: mysqlDecimalNotSpecified},
+		{name: "bf16", sql: "select cast(12.3 as bf16) as result", typ: defines.MYSQL_TYPE_FLOAT, decimals: mysqlDecimalNotSpecified},
+		{name: "float16", sql: "select cast(12.3 as float16) as result", typ: defines.MYSQL_TYPE_FLOAT, decimals: mysqlDecimalNotSpecified},
+		{name: "float8", sql: "select cast(12.3 as float8) as result", typ: defines.MYSQL_TYPE_FLOAT, decimals: mysqlDecimalNotSpecified},
+		{name: "float4", sql: "select cast(1.5 as float4) as result", typ: defines.MYSQL_TYPE_FLOAT, decimals: mysqlDecimalNotSpecified},
 		{name: "fixed float", sql: "select cast(12.3 as float(6, 2)) as result", typ: defines.MYSQL_TYPE_FLOAT, decimals: 2},
 		{name: "fixed double", sql: "select cast(12.3 as double(6, 2)) as result", typ: defines.MYSQL_TYPE_DOUBLE, decimals: 2},
 	}

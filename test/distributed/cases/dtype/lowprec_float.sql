@@ -313,4 +313,25 @@ SELECT CAST(6.0000001 AS float4);
 INSERT INTO fp VALUES (3, 6.0000001, 0);
 SELECT count(*) FROM fp;
 
+-- SAMPLE ... ROWS replaces pooled rows of every low-precision type
+CREATE TABLE sp (id INT, b bf16, h float16, e float8, q float4);
+INSERT INTO sp SELECT result, result % 7, result % 5, result % 3, result % 2 FROM generate_series(1, 50) g;
+SELECT count(*) FROM (SELECT sample(b, 5 rows) FROM sp) x;
+SELECT count(*) FROM (SELECT sample(*, 5 rows) FROM sp) x;
+SELECT count(*) FROM (SELECT sample(q, 3 rows) FROM sp) x;
+-- a RANGE bound would round to the column type: not a RANGE partition column;
+-- KEY, HASH and LIST compare by equality and are accepted
+CREATE TABLE pr1 (id INT, e float8) PARTITION BY RANGE COLUMNS(e) (PARTITION p0 VALUES LESS THAN (0), PARTITION p1 VALUES LESS THAN (100));
+CREATE TABLE pr2 (id INT, b bf16) PARTITION BY RANGE(b) (PARTITION p0 VALUES LESS THAN (0), PARTITION p1 VALUES LESS THAN (300));
+CREATE TABLE pr3 (id INT, h float16) PARTITION BY RANGE((h)) (PARTITION p0 VALUES LESS THAN (0));
+CREATE TABLE pr4 (id INT, e float8) PARTITION BY RANGE(id) (PARTITION p0 VALUES LESS THAN (10), PARTITION p1 VALUES LESS THAN (20));
+INSERT INTO pr4 VALUES (5, 99), (15, -3);
+SELECT count(*) FROM pr4;
+CREATE TABLE pk1 (id INT, e float8) PARTITION BY KEY(e) PARTITIONS 2;
+INSERT INTO pk1 VALUES (1, -3), (2, 99), (3, -3);
+SELECT count(*) FROM pk1 WHERE e = -3;
+CREATE TABLE pl1 (id INT, e float8) PARTITION BY LIST COLUMNS(e) (PARTITION p0 VALUES IN (-3, 0), PARTITION p1 VALUES IN (2.5, 99));
+INSERT INTO pl1 VALUES (1, -3), (2, 0), (3, 2.5), (4, 99);
+SELECT count(*) FROM pl1 WHERE e = 99;
+
 DROP DATABASE lowprec_float;

@@ -143,6 +143,18 @@ func init() {
 	replaceMethods[types.T_float32] = func(toVec, fromVec *vector.Vector, row1, row2 int, mp *mpool.MPool) error {
 		return vector.SetFixedAtNoTypeCheck[float32](toVec, row1, vector.GetFixedAtNoTypeCheck[float32](fromVec, row2))
 	}
+	replaceMethods[types.T_bf16] = func(toVec, fromVec *vector.Vector, row1, row2 int, mp *mpool.MPool) error {
+		return vector.SetFixedAtNoTypeCheck[types.BF16](toVec, row1, vector.GetFixedAtNoTypeCheck[types.BF16](fromVec, row2))
+	}
+	replaceMethods[types.T_float16] = func(toVec, fromVec *vector.Vector, row1, row2 int, mp *mpool.MPool) error {
+		return vector.SetFixedAtNoTypeCheck[types.Float16](toVec, row1, vector.GetFixedAtNoTypeCheck[types.Float16](fromVec, row2))
+	}
+	replaceMethods[types.T_float8] = func(toVec, fromVec *vector.Vector, row1, row2 int, mp *mpool.MPool) error {
+		return vector.SetFixedAtNoTypeCheck[types.Float8](toVec, row1, vector.GetFixedAtNoTypeCheck[types.Float8](fromVec, row2))
+	}
+	replaceMethods[types.T_float4] = func(toVec, fromVec *vector.Vector, row1, row2 int, mp *mpool.MPool) error {
+		return vector.SetFixedAtNoTypeCheck[types.Float4](toVec, row1, vector.GetFixedAtNoTypeCheck[types.Float4](fromVec, row2))
+	}
 	replaceMethods[types.T_float64] = func(toVec, fromVec *vector.Vector, row1, row2 int, mp *mpool.MPool) error {
 		return vector.SetFixedAtNoTypeCheck[float64](toVec, row1, vector.GetFixedAtNoTypeCheck[float64](fromVec, row2))
 	}

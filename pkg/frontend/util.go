@@ -2150,8 +2150,9 @@ func setMysqlColumnTypeMetadata(col *MysqlColumn, typ types.Type) {
 	}
 	// MySQL uses 0x1f (DECIMAL_NOT_SPECIFIED) for FLOAT and DOUBLE
 	// without an explicit display scale. Clients use this metadata when
-	// converting binary floating-point results to text.
-	if (typ.Oid == types.T_float32 || typ.Oid == types.T_float64) &&
+	// converting binary floating-point results to text. bf16, float16,
+	// float8 and float4 are sent as FLOAT.
+	if (typ.Oid == types.T_float32 || typ.Oid == types.T_float64 || typ.Oid.IsLowPrecisionFloat()) &&
 		(typ.Scale < 0 || typ.Width == 0 && typ.Scale == 0) {
 		col.SetDecimal(mysqlDecimalNotSpecified)
 		return

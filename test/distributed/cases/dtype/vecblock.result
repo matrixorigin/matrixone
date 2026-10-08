@@ -515,4 +515,8 @@ select id, l2_distance(v, cast('[1.3,2.7,3.1]' as vecf8(3))) dq8 from iv order b
 4  ¦  3.6228442192077637
 drop table iv;
 set experimental_ivf_index = 0;
+select percentile_disc(0.5) within group (order by a) from t;
+invalid argument aggregate function percentile_disc, bad value [VECF8 DECIMAL64]
+select percentile_disc(0.5) within group (order by c) from t;
+invalid argument aggregate function percentile_disc, bad value [VECF32 DECIMAL64]
 drop database vecblock_db;
