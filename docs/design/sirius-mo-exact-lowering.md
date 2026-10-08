@@ -153,6 +153,9 @@ bridge and CN owning-package suites pass. The full compile suite fails
 `TestRequiredIVFWorkersFallbackAsWholeQuery/{supported,canceled}`; both failures
 reproduce at the verified clean base with the same GPU-linked host test mode.
 They are not reported as a passing full compile suite.
+All four owning-package suites also pass in normal CPU mode, including the full
+compile suite. The reproduced IVF failure is specific to the GPU-tagged host
+test mode; changing or skipping that unrelated test is outside C.
 
 The combined Sirius/cuVS release build passes SDK verification, linking and
 packaging. Real MySQL tests pass fixed-width Decimal64/128/256 values and NULLs,
@@ -167,6 +170,9 @@ also pass. CPU-only release compilation and binary loading pass with the frozen
 compiler; the host compiler's failure in unchanged jemalloc is an environment
 failure, not a code result. The default full repository static-check gate and
 the affected closure with `gpu,sirius,sirius_integration` tags pass.
+The Sirius-enabled release profile without MO's separate cuVS flag also builds,
+packages, initializes the actual GPU runtime and passes the public all-width
+round-trip control. Sirius execution remains on the GPU in this profile.
 
 The review traces each changed hunk through the five closure rows above. Q1
 retains the existing input-lease publication/release owner and result-batch
@@ -193,3 +199,15 @@ that merged importer, and C pins the merged Sirius dependency. Then rerun all
 22 native preparations and the full public numeric fixture. No MO-side carrier
 name padding, coefficient narrowing, SQL rewrite, fallback or skipped assertion
 is an acceptable substitute. D remains dependent on merged and validated C.
+
+The user approved the prerequisite fix PRs on 2026-10-09. Importer
+[duckdb-substrait #5](https://github.com/matrixorigin/duckdb-substrait/pull/5)
+adds a query-scoped opaque-carrier policy and bounds both root-name consumers;
+it is ready for review. The Sirius callback and width-preserving following-column
+regression are prepared in draft
+[Sirius #28](https://github.com/matrixorigin/sirius/pull/28). Its importer pin
+remains at the prior merged revision until #5 merges. Joint development binding
+validation passes 999 assertions in 84 cases, including 147 assertions in three
+canonical importer cases. Pinned changed-file Sirius hooks pass. These results
+are not full C native/public acceptance or proof that the draft builds against
+its old importer pin. Merge and pin dependencies in order before C delivery.
