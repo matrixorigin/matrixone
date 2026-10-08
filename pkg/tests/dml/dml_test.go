@@ -203,7 +203,7 @@ func TestForcedMultiCNDeleteAndInsertIgnore(t *testing.T) {
 			remaining, execErr := internalExec.Exec(ctx,
 				"select a from "+deleteTable+" order by a", deleteOpts)
 			require.NoError(t, execErr)
-			var remainingKeys []string
+			remainingKeys := make([]string, 0, len(remaining.Batches))
 			for _, batch := range remaining.Batches {
 				remainingKeys = append(remainingKeys, executor.GetStringRows(batch.Vecs[0])...)
 			}

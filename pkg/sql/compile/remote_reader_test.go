@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -153,34 +154,83 @@ func TestBuildReadersChoosesOwnerByScanPlacement(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			proc := testutil.NewProcess(t)
-			captureEngine := new(readerPathCaptureEngine)
-			captureRelation := new(readerPathCaptureRelation)
-			scope := &Scope{
-				Proc:     proc,
-				IsRemote: test.isRemote,
-				DataSource: &Source{
-					Rel:                captureRelation,
-					TableDef:           &plan.TableDef{Name: "t"},
-					FilterList:         []*plan.Expr{plan2.MakeFalseExpr()},
-					RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
-				},
-				NodeInfo: engine.Node{
-					Mcpu:  1,
-					CNCNT: test.cnCount,
-				},
-			}
-			compile := NewMockCompile(t)
-			compile.proc = proc
-			compile.e = captureEngine
+		for _, admission := range []string{"PASS", "DROP", "FALSE", "required PASS", "canceled required wait"} {
+			t.Run(test.name+"/"+admission, func(t *testing.T) {
+				proc := testutil.NewProcess(t)
+				captureEngine := new(readerPathCaptureEngine)
+				captureRelation := new(readerPathCaptureRelation)
+				scope := &Scope{
+					Proc:     proc,
+					IsRemote: test.isRemote,
+					DataSource: &Source{
+						Rel:                captureRelation,
+						TableDef:           &plan.TableDef{Name: "t"},
+						RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
+					},
+					NodeInfo: engine.Node{
+						Mcpu:  1,
+						CNCNT: test.cnCount,
+					},
+				}
+				compile := NewMockCompile(t)
+				compile.proc = proc
+				compile.e = captureEngine
+				ranges := configureReaderPathTest(t, compile, scope)
+				board := message.NewMessageBoard()
+				defer board.Reset()
+				proc.SetMessageBoard(board)
+				scope.DataSource.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{{Tag: 101}}
+				typ := int32(message.RuntimeFilter_PASS)
+				if admission == "DROP" {
+					scope.NodeInfo.Mcpu = 3
+					typ = message.RuntimeFilter_DROP
+				}
+				if admission == "FALSE" {
+					scope.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
+				}
+				if admission == "required PASS" {
+					scope.DataSource.RuntimeFilterSpecs[0].MustApply = true
+				}
+				if admission == "canceled required wait" {
+					scope.DataSource.RuntimeFilterSpecs[0].MustApply = true
+					ctx, cancel := context.WithCancel(proc.Ctx)
+					cancel()
+					proc.Ctx = ctx
+				} else {
+					message.SendMessage(message.RuntimeFilterMessage{Tag: 101, Typ: typ}, board)
+				}
 
-			readers, err := scope.buildReaders(compile)
-			require.NoError(t, err)
-			require.Len(t, readers, 1)
-			require.Equal(t, test.wantRelationCalls, captureRelation.buildReadersCalls)
-			require.Equal(t, test.wantBlockReadCalls, captureEngine.buildBlockReadersCalls)
-		})
+				readers, err := scope.buildReaders(compile)
+				if admission == "required PASS" || admission == "canceled required wait" {
+					if admission == "required PASS" {
+						require.ErrorContains(t, err, "producer returned PASS")
+					} else {
+						require.ErrorIs(t, err, context.Canceled)
+					}
+					require.Empty(t, readers)
+					require.Zero(t, ranges.rangesCalls)
+					require.Zero(t, captureRelation.buildReadersCalls)
+					require.Zero(t, captureEngine.buildBlockReadersCalls)
+					return
+				}
+				require.NoError(t, err)
+				require.Len(t, readers, scope.NodeInfo.Mcpu)
+				if admission == "PASS" {
+					require.Equal(t, 1, ranges.rangesCalls)
+					require.Equal(t, test.wantRelationCalls, captureRelation.buildReadersCalls)
+					require.Equal(t, test.wantBlockReadCalls, captureEngine.buildBlockReadersCalls)
+				} else {
+					require.Nil(t, scope.NodeInfo.Data)
+					require.Zero(t, ranges.rangesCalls)
+					require.Zero(t, captureRelation.buildReadersCalls)
+					require.Zero(t, captureEngine.buildBlockReadersCalls)
+					require.IsType(t, &readutil.EmptyReader{}, readers[0])
+				}
+				for _, reader := range readers {
+					require.NoError(t, reader.Close())
+				}
+			})
+		}
 	}
 }
 
@@ -338,4 +388,32 @@ func TestDecodedRemoteScopePreservesReaderContract(t *testing.T) {
 			require.Equal(t, test.wantReaderAccount, accountID)
 		})
 	}
+}
+
+// configureReaderPathTest admits a real scan through range collection. FALSE
+// predicates cannot be used to bypass this stage in reader lifecycle tests.
+func configureReaderPathTest(t *testing.T, c *Compile, s *Scope) *readerPathCaptureRelation {
+	t.Helper()
+	if s.DataSource.TableDef == nil {
+		s.DataSource.TableDef = &plan.TableDef{Name: "t"}
+	}
+	s.DataSource.node = &plan.Node{ObjRef: &plan.ObjectRef{SchemaName: "test_db"}, TableDef: s.DataSource.TableDef, Stats: &plan.Stats{}}
+	ranges := &readerPathCaptureRelation{rangesData: readutil.BuildEmptyRelData()}
+	c.e = &readerPathTestEngine{Engine: c.e, database: &readerPathCaptureDatabase{relation: ranges}}
+	s.NodeInfo.Data = readutil.BuildEmptyRelData()
+	if s.IsRemote {
+		txn := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+		txn.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
+		c.proc.Base.TxnOperator = txn
+	}
+	return ranges
+}
+
+type readerPathTestEngine struct {
+	engine.Engine
+	database engine.Database
+}
+
+func (e *readerPathTestEngine) Database(context.Context, string, client.TxnOperator) (engine.Database, error) {
+	return e.database, nil
 }

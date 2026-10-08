@@ -13,7 +13,7 @@
 # Refreshed by the nightly image workflow (matrixorigin/CI image-build.yaml,
 # ci-builder job) as matrixorigin/matrixone:ci-builder. Keep the base image
 # in sync with optools/images/Dockerfile.
-FROM matrixorigin/golang:1.26.4-ubuntu22.04 AS warm
+FROM matrixorigin/golang:1.27.0-ubuntu22.04 AS warm
 
 ENV GOWORK=off
 # Keep the module cache world-writable: the default read-only directory
@@ -128,7 +128,7 @@ RUN if [ -x optools/images/ci-builder-fingerprint.sh ]; then \
 
 # Keep only the caches and prebuilt native artifacts; dropping the source
 # tree (and its .git) keeps the nightly image as small as the caches allow.
-FROM matrixorigin/golang:1.26.4-ubuntu22.04
+FROM matrixorigin/golang:1.27.0-ubuntu22.04
 
 ENV GOWORK=off
 ENV GOFLAGS=-modcacherw

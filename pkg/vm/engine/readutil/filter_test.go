@@ -1192,7 +1192,7 @@ func TestConstructBasePKFilterWithOr(t *testing.T) {
 		expr   *plan.Expr
 		expect expect
 	}
-	testCases := []testCase{
+	testCases := append(make([]testCase, 0, 10), []testCase{
 		{
 			name: "eq or eq",
 			expr: MakeFunctionExprForTest("or", []*plan.Expr{
@@ -1309,7 +1309,7 @@ func TestConstructBasePKFilterWithOr(t *testing.T) {
 				allowMore: true,
 			},
 		},
-	}
+	}...)
 	otherEq := func(v int64) *plan.Expr {
 		return MakeFunctionExprForTest("=", []*plan.Expr{
 			MakeColExprForTest(1, types.T_int64), plan2.MakePlan2Int64ConstExprWithType(v),
@@ -2066,8 +2066,8 @@ func TestConstructBlockPKFilterWithOr(t *testing.T) {
 		sortedVec, unsortedVec *vector.Vector,
 	) {
 		var (
-			singleSorted []objectio.ReadFilterSearchFuncType
-			singleUnsort []objectio.ReadFilterSearchFuncType
+			singleSorted = make([]objectio.ReadFilterSearchFuncType, 0, len(disjuncts))
+			singleUnsort = make([]objectio.ReadFilterSearchFuncType, 0, len(disjuncts))
 		)
 		for i := range disjuncts {
 			disjuncts[i].Valid = true
@@ -2091,7 +2091,7 @@ func TestConstructBlockPKFilterWithOr(t *testing.T) {
 		require.NotNil(t, combined.SortedSearchFunc, ty.String())
 		require.NotNil(t, combined.UnSortedSearchFunc, ty.String())
 
-		var sortedResults [][]int64
+		sortedResults := make([][]int64, 0, len(singleSorted))
 		sortedCache := containers.Vectors{*sortedVec}
 		for _, fn := range singleSorted {
 			sortedResults = append(sortedResults, fn(sortedCache))
@@ -2099,7 +2099,7 @@ func TestConstructBlockPKFilterWithOr(t *testing.T) {
 		expectedSorted := unionOffsets(sortedResults)
 		require.Equal(t, expectedSorted, combined.SortedSearchFunc(sortedCache), ty.String())
 
-		var unsortedResults [][]int64
+		unsortedResults := make([][]int64, 0, len(singleUnsort))
 		unsortedCache := containers.Vectors{*unsortedVec}
 		for _, fn := range singleUnsort {
 			unsortedResults = append(unsortedResults, fn(unsortedCache))

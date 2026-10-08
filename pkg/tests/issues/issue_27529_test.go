@@ -139,6 +139,45 @@ func TestIssue27529JSONStringsDoNotCompareAsBooleans(t *testing.T) {
 		assertIDs("select id from "+dbName+`.docs where json_extract(meta, '$.active') = true order by id`, 1)
 		assertIDs("select id from "+dbName+`.docs where json_extract(meta, '$.active') = false order by id`, 2)
 
+		// Aggregation must preserve the same JSON boolean filtering as row
+		// projection, including when a prepared statement is rebound (#29034).
+		for _, projection := range []string{
+			"count(*)", "sum(id)", "group_concat(id)", "group_concat(id order by id)",
+		} {
+			t.Run("aggregate "+projection, func(t *testing.T) {
+				conn, err := db.Conn(ctx)
+				require.NoError(t, err)
+				defer conn.Close()
+				query := "select " + projection + " from " + dbName +
+					`.docs where json_extract(meta, '$.active') = ?`
+				stmt, err := conn.PrepareContext(ctx, query)
+				require.NoError(t, err)
+				defer stmt.Close()
+				_, err = conn.ExecContext(ctx, `prepare json_bool_aggregate from "`+query+`"`)
+				require.NoError(t, err)
+				defer func() {
+					cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cleanupCancel()
+					_, cleanupErr := conn.ExecContext(cleanupCtx, "deallocate prepare json_bool_aggregate")
+					require.NoError(t, cleanupErr)
+				}()
+				for _, value := range []bool{true, false, true} {
+					expected := "1"
+					if !value && projection != "count(*)" {
+						expected = "2"
+					}
+					var binaryResult, textResult string
+					require.NoError(t, stmt.QueryRowContext(ctx, value).Scan(&binaryResult))
+					require.Equal(t, expected, binaryResult, "binary protocol, parameter %v", value)
+					_, err = conn.ExecContext(ctx, fmt.Sprintf("set @json_bool_aggregate = %t", value))
+					require.NoError(t, err)
+					require.NoError(t, conn.QueryRowContext(ctx,
+						"execute json_bool_aggregate using @json_bool_aggregate").Scan(&textResult))
+					require.Equal(t, expected, textResult, "SQL EXECUTE, parameter %v", value)
+				}
+			})
+		}
+
 		queryPreparedBool := func(query string, arg any) (bool, bool) {
 			t.Helper()
 			stmt, prepareErr := db.PrepareContext(ctx, query)

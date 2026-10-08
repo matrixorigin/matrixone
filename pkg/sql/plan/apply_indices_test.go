@@ -89,13 +89,14 @@ func TestCheckIndexFilterRejectsSignedZeroFloatColumns(t *testing.T) {
 			)
 			setIndexFilterArgumentType(orFilter.GetF().Args[0], planType)
 			setIndexFilterArgumentType(orFilter.GetF().Args[1], planType)
-			filters := []*planpb.Expr{
+			filters := make([]*planpb.Expr, 0, 6)
+			filters = append(filters,
 				makeEqFilterExpr(1),
 				makeParamInFilterExpr(0, 1, 2),
 				makeParamBetweenFilterExpr(0, 1, 0, 1),
 				makeParamRangeFilterExpr(0, 1, ">=", 0),
 				orFilter,
-			}
+			)
 			inRange := makeParamBetweenFilterExpr(0, 1, 0, 1)
 			inRange.GetF().Func.ObjName = "in_range"
 			filters = append(filters, inRange)
@@ -6037,10 +6038,11 @@ func makeJoinIndexTestScan(tableDef *planpb.TableDef, tag int32) *planpb.Node {
 }
 
 func makeFullTextMatchExpr(pattern string, mode int64, tableDef *planpb.TableDef, tag int32, colPositions []int32) *planpb.Expr {
-	args := []*planpb.Expr{
+	args := make([]*planpb.Expr, 0, 2+len(colPositions))
+	args = append(args,
 		makePlan2StringConstExprWithType(pattern, false),
 		makePlan2Int64ConstExprWithType(mode),
-	}
+	)
 	for _, pos := range colPositions {
 		args = append(args, ftjColExpr(tableDef, tag, pos))
 	}

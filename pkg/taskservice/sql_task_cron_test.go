@@ -47,10 +47,36 @@ func TestScheduleSQLTaskCatchUpPersistsTriggerState(t *testing.T) {
 	mustAddTestSQLTask(t, store, 1, sqlTask)
 	sqlTask = mustGetTestSQLTask(t, store, 1, WithTaskName(EQ, "task-scheduled"))[0]
 
+	type catchUpEvent struct {
+		serviceID string
+		taskID    uint64
+		started   bool
+	}
+	catchUp := make(chan catchUpEvent, 2)
+	restore := SetSQLTaskRefreshHookForTest(nil, func(serviceID string, taskID uint64, started bool) {
+		catchUp <- catchUpEvent{serviceID: serviceID, taskID: taskID, started: started}
+	})
+	defer restore()
+
 	ts.StartScheduleSQLTask()
 	defer ts.StopScheduleSQLTask()
 
-	waitHasTasks(t, store, 5*time.Second, WithTaskParentTaskIDCond(EQ, fmt.Sprintf("sql-task:%d", sqlTask.TaskID)))
+	select {
+	case event := <-catchUp:
+		require.Equal(t, ts.rt.ServiceUUID(), event.serviceID)
+		require.Equal(t, sqlTask.TaskID, event.taskID)
+		require.True(t, event.started)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for SQL task catch-up to start")
+	}
+	select {
+	case event := <-catchUp:
+		require.Equal(t, ts.rt.ServiceUUID(), event.serviceID)
+		require.Equal(t, sqlTask.TaskID, event.taskID)
+		require.False(t, event.started)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for SQL task catch-up to finish")
+	}
 
 	updated := mustGetTestSQLTask(t, store, 1, WithTaskIDCond(EQ, sqlTask.TaskID))[0]
 	require.Equal(t, uint64(1), updated.TriggerCount)
@@ -296,12 +322,14 @@ func TestSQLTaskRefreshObserverTracksOverdueExecution(t *testing.T) {
 	}()
 	var active atomic.Int64
 	snapshots := make(chan []uint64, 2)
+	finished := make(chan struct{}, 1)
 	restore := SetSQLTaskRefreshHookForTest(func(_ string, ids []uint64) { snapshots <- ids },
 		func(_ string, _ uint64, started bool) {
 			if started {
 				active.Add(1)
 			} else {
 				active.Add(-1)
+				finished <- struct{}{}
 			}
 		})
 	defer restore()
@@ -325,7 +353,12 @@ func TestSQLTaskRefreshObserverTracksOverdueExecution(t *testing.T) {
 	require.Empty(t, <-snapshots)
 	require.Equal(t, int64(1), active.Load(), "cache removal must not hide an in-flight catch-up")
 	unblock()
-	require.Eventually(t, func() bool { return active.Load() == 0 }, 5*time.Second, time.Millisecond)
+	select {
+	case <-finished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for overdue SQL task execution to finish")
+	}
+	require.Equal(t, int64(0), active.Load())
 }
 
 type blockedSQLTaskObserverStorage struct {

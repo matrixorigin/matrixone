@@ -46,7 +46,7 @@ func TestRestoreSubscriptionPropagatesErrors(t *testing.T) {
 	queries := []string{
 		fmt.Sprintf(getSubsSqlFmt, "{MO_TS = 42}") + " and sub_account_id = 10 and sub_name = 'subdb'",
 		accountSQL,
-		"select 1 from mo_catalog.mo_columns where att_database = 'mo_catalog' and att_relname = 'mo_pubs' and attname = 'account_name'",
+		"select 1 from mo_catalog.mo_columns where account_id = 0 and att_database = 'mo_catalog' and att_relname = 'mo_pubs' and attname = 'account_name'",
 		fmt.Sprintf(getPubInfoSql, 30) + " and pub_name = 'p'",
 		"select datname, '', cast(creator as char), cast(owner as char) from mo_catalog.mo_database {MO_TS = 42} where account_id = 10",
 		"select reldatabase, relname, cast(creator as char), cast(owner as char), relkind from mo_catalog.mo_tables {MO_TS = 42} where account_id = 10",

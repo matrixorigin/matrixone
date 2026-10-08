@@ -1011,6 +1011,23 @@ func determineShuffleForJoinWithColRefMode(node *plan.Node, builder *QueryBuilde
 		return
 	}
 
+	// Join ordering keeps the expected cardinality, while shuffle admission
+	// must be safe when a residual inequality retains far more than its 5%
+	// heuristic. Use the pre-filter input only during topology selection, then
+	// restore the estimate consumed by runtime-filter planning and EXPLAIN.
+	buildChild := node.Children[1]
+	if node.JoinType == plan.Node_DEDUP && node.IsRightJoin {
+		buildChild = node.Children[0]
+	}
+	estimatedHashmapSize := node.Stats.HashmapStats.HashmapSize
+	capacityHashmapSize, hasCapacityBound := residualInequalityBuildCapacityBound(buildChild, builder)
+	if hasCapacityBound && capacityHashmapSize > estimatedHashmapSize {
+		node.Stats.HashmapStats.HashmapSize = capacityHashmapSize
+		defer func() {
+			node.Stats.HashmapStats.HashmapSize = estimatedHashmapSize
+		}()
+	}
+
 	leftTags := make(map[int32]bool)
 	for _, tag := range builder.enumerateTags(node.Children[0]) {
 		leftTags[tag] = true
@@ -1419,6 +1436,16 @@ func determineShuffleForGroupBy(node *plan.Node, builder *QueryBuilder) {
 		return
 	}
 
+	// The split rule admits only large strict-prefix ROLLUPs. Its coarser
+	// aggregate includes the empty set, so no data key can distribute every
+	// level; preserve local partial aggregation and MergeGroup. For ordinary
+	// grouping-set plans, especially smaller inputs, a shuffle can still be
+	// cheaper than merging partial groups.
+	if _, splitCoarse := builder.splitGroupingSetCoarseAggs[node]; splitCoarse {
+		resetShuffleStrategy(node.Stats.HashmapStats)
+		node.Stats.HashmapStats.Shuffle = false
+		return
+	}
 	child := builder.qry.Nodes[node.Children[0]]
 
 	// for now, if agg children is agg or filter, do not allow shuffle

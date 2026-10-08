@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -206,11 +205,11 @@ func TestIssue27261StopSendingDuringParallelReaderBuildStaysGraceful(t *testing.
 				RootOp:   blockedConnector,
 				NodeInfo: engine.Node{Mcpu: tc.dop},
 				DataSource: &Source{
-					Rel:        relation,
-					FilterList: []*plan.Expr{plan2.MakeFalseExpr()},
+					Rel: relation,
 				},
 			}
 
+			configureReaderPathTest(t, compile, blockedScope)
 			result := make(chan error, 1)
 			go func() { result <- blockedScope.ParallelRun(compile) }()
 
@@ -267,13 +266,14 @@ func TestParallelReaderBuildPreservesQueryCancellation(t *testing.T) {
 		RootOp:   conn,
 		NodeInfo: engine.Node{Mcpu: 2},
 		DataSource: &Source{
-			Rel:        relation,
-			FilterList: []*plan.Expr{plan2.MakeFalseExpr()},
+			Rel: relation,
 		},
 	}
 
+	compile := &Compile{proc: rootProc}
+	configureReaderPathTest(t, compile, scope)
 	result := make(chan error, 1)
-	go func() { result <- scope.ParallelRun(&Compile{proc: rootProc}) }()
+	go func() { result <- scope.ParallelRun(compile) }()
 
 	select {
 	case <-relation.started:

@@ -778,12 +778,13 @@ func (w *IvfflatSqlWriter) toIvfflatUpsert(upsert bool) ([]byte, error) {
 		sql += fmt.Sprintf("REPLACE INTO %s ", sqlquote.QualifiedIdent(w.info.DBName, w.entries_tbl))
 	}
 
-	targetCols := []string{
+	targetCols := make([]string, 0, 4+len(w.includeCols))
+	targetCols = append(targetCols,
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
-	}
+	)
 	for _, includeCol := range w.includeCols {
 		targetCols = append(targetCols, catalog.SystemSI_IVFFLAT_IncludeColPrefix+includeCol)
 	}

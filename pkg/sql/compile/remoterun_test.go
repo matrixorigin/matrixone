@@ -1653,7 +1653,14 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 		require.ErrorContains(t, err, "FORMAT is missing its first argument")
 	})
 
-	tests := []struct {
+	tests := make([]struct {
+		name                string
+		expressions         []*planpb.Expr
+		incompatibleVersion int64
+		compatibleVersion   int64
+		errorContains       string
+	}, 0, 10)
+	tests = append(tests, []struct {
 		name                string
 		expressions         []*planpb.Expr
 		incompatibleVersion int64
@@ -1687,7 +1694,7 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 			compatibleVersion:   defines.MORPCVersion36,
 			errorContains:       "prepared JSON comparison parameters require MORPC protocol version 36",
 		},
-	}
+	}...)
 	for _, functionID := range []int32{0, 1, 406} {
 		for _, jsonOnLeft := range []bool{true, false} {
 			orientation := "json right"

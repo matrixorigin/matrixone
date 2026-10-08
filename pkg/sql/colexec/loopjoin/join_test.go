@@ -37,11 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const (
-	Rows          = 10     // default rows
-	BenchmarkRows = 100000 // default rows for benchmark
-)
-
 func TestLoopJoinAllocationSiteLedger(t *testing.T) {
 	require.Equal(t, uint8(92), uint8(loopJoinAllocationSiteMatched))
 	require.Equal(t, uint8(93), uint8(loopJoinAllocationSiteBatchOffsets))
@@ -53,13 +48,10 @@ func TestLoopJoinAllocationSiteLedger(t *testing.T) {
 
 // add unit tests for cases
 type joinTestCase struct {
-	arg         *LoopJoin
-	flgs        []bool // flgs[i] == true: nullable
-	types       []types.Type
-	proc        *process.Process
-	cancel      context.CancelFunc
-	barg        *hashbuild.HashBuild
-	resultBatch *batch.Batch
+	arg    *LoopJoin
+	proc   *process.Process
+	cancel context.CancelFunc
+	barg   *hashbuild.HashBuild
 }
 
 type loopJoinTestAllocationOwner interface {
@@ -194,14 +186,31 @@ var (
 
 func makeTestCases(t *testing.T) []joinTestCase {
 	return []joinTestCase{
-		newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)}),
+		newTestCase(t, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)}),
 	}
 }
 
 func TestString(t *testing.T) {
-	buf := new(bytes.Buffer)
-	for _, tc := range makeTestCases(t) {
-		tc.arg.String(buf)
+	for _, tc := range []struct {
+		name     string
+		joinType plan.Node_JoinType
+		want     string
+	}{
+		{name: "inner", joinType: plan.Node_INNER, want: "loop_join: loop inner join "},
+		{name: "anti", joinType: plan.Node_ANTI, want: "loop_join: loop anti join "},
+		{name: "left", joinType: plan.Node_LEFT, want: "loop_join: loop left join "},
+		{name: "mark", joinType: plan.Node_MARK, want: "loop_join: loop mark join "},
+		{name: "semi", joinType: plan.Node_SEMI, want: "loop_join: loop semi join "},
+		{name: "single", joinType: plan.Node_SINGLE, want: "loop_join: loop single join "},
+		{name: "outer", joinType: plan.Node_OUTER, want: "loop_join: loop full outer join "},
+		{name: "unknown", joinType: plan.Node_JoinType(-1), want: "loop_join"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			arg := &LoopJoin{JoinType: tc.joinType}
+			arg.String(&buf)
+			require.Equal(t, tc.want, buf.String())
+		})
 	}
 }
 
@@ -250,18 +259,20 @@ func TestJoin(t *testing.T) {
 		require.Equal(t, res.Batch == nil, true)
 		res, err = vm.Exec(tc.arg, tc.proc)
 		require.NoError(t, err)
-		require.Equal(t, res.Batch.RowCount(), tc.resultBatch.RowCount())
-		require.Equal(t, len(res.Batch.Vecs), len(tc.resultBatch.Vecs))
-		for i := range res.Batch.Vecs {
-			vec1 := res.Batch.Vecs[i]
-			vec2 := tc.resultBatch.Vecs[i]
-			require.Equal(t, vec1.GetType().Oid, vec2.GetType().Oid)
-			require.Equal(t, bytes.Compare(vec1.GetArea(), vec2.GetArea()), 0)
-			require.Equal(t, bytes.Compare(vec1.UnsafeGetRawData(), vec2.UnsafeGetRawData()), 0)
+		require.NotNil(t, res.Batch)
+		require.Equal(t, 2, res.Batch.RowCount())
+		require.Len(t, res.Batch.Vecs, len(tc.arg.ResultCols))
+		for _, vec := range res.Batch.Vecs {
+			require.Equal(t, types.T_int32, vec.GetType().Oid)
+			require.Equal(t, []int32{1, 1000}, vector.MustFixedColNoTypeCheck[int32](vec))
+			require.Empty(t, vec.GetArea())
+			require.False(t, vec.GetNulls().Any())
 		}
 
 		tc.arg.Reset(tc.proc, false, nil)
 		tc.barg.Reset(tc.proc, false, nil)
+		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
+		tc.barg.GetChildren(0).Free(tc.proc, false, nil)
 
 		resetChildren(tc.arg, tc.proc.Mp())
 		resetHashBuildChildren(tc.barg, tc.proc.Mp())
@@ -276,28 +287,31 @@ func TestJoin(t *testing.T) {
 		require.Equal(t, res.Batch == nil, true)
 		res, err = vm.Exec(tc.arg, tc.proc)
 		require.NoError(t, err)
-		require.Equal(t, res.Batch.RowCount(), tc.resultBatch.RowCount())
-		require.Equal(t, len(res.Batch.Vecs), len(tc.resultBatch.Vecs))
-		for i := range res.Batch.Vecs {
-			vec1 := res.Batch.Vecs[i]
-			vec2 := tc.resultBatch.Vecs[i]
-			require.Equal(t, vec1.GetType().Oid, vec2.GetType().Oid)
-			require.Equal(t, bytes.Compare(vec1.GetArea(), vec2.GetArea()), 0)
-			require.Equal(t, bytes.Compare(vec1.UnsafeGetRawData(), vec2.UnsafeGetRawData()), 0)
+		require.NotNil(t, res.Batch)
+		require.Equal(t, 2, res.Batch.RowCount())
+		require.Len(t, res.Batch.Vecs, len(tc.arg.ResultCols))
+		for _, vec := range res.Batch.Vecs {
+			require.Equal(t, types.T_int32, vec.GetType().Oid)
+			require.Equal(t, []int32{1, 1000}, vector.MustFixedColNoTypeCheck[int32](vec))
+			require.Empty(t, vec.GetArea())
+			require.False(t, vec.GetNulls().Any())
 		}
 
 		tc.arg.Reset(tc.proc, false, nil)
 		tc.barg.Reset(tc.proc, false, nil)
+		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
+		tc.barg.GetChildren(0).Free(tc.proc, false, nil)
 
 		tc.arg.Free(tc.proc, false, nil)
 		tc.barg.Free(tc.proc, false, nil)
 		tc.proc.Free()
+		require.Zero(t, tc.proc.Mp().OnHeapCurrNB())
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
 
 func TestLoopJoinPassesRecursiveMarker(t *testing.T) {
-	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
+	tc := newTestCase(t, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
 		colexec.NewResultPos(0, 0),
 		colexec.NewResultPos(1, 0),
 	})
@@ -332,7 +346,7 @@ func (source *recursiveLoopJoinProbe) OpType() vm.OpType {
 }
 
 func TestLoopJoinPassesRecursiveMarkerWithEmptyBuild(t *testing.T) {
-	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
+	tc := newTestCase(t, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
 		colexec.NewResultPos(0, 0),
 		colexec.NewResultPos(1, 0),
 	})
@@ -365,7 +379,7 @@ func TestLoopJoinPassesRecursiveMarkerWithEmptyBuild(t *testing.T) {
 }
 
 func TestLoopJoinPrepareRecomputesRecursiveProbeForFastPath(t *testing.T) {
-	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
+	tc := newTestCase(t, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
 		colexec.NewResultPos(0, 0),
 		colexec.NewResultPos(1, 0),
 	})
@@ -399,7 +413,7 @@ func TestLoopJoinPrepareRecomputesRecursiveProbeForFastPath(t *testing.T) {
 }
 
 func TestLoopJoinResetAfterEmptyProbe(t *testing.T) {
-	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
+	tc := newTestCase(t, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
 		colexec.NewResultPos(0, 0),
 		colexec.NewResultPos(1, 0),
 	})
@@ -480,7 +494,7 @@ func TestLoopJoinResetClearsResumeGeneration(t *testing.T) {
 }
 
 func TestLoopJoinConstNullAfterNonEmptyProbe(t *testing.T) {
-	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
+	tc := newTestCase(t, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{
 		colexec.NewResultPos(0, 0),
 		colexec.NewResultPos(1, 0),
 	})
@@ -536,9 +550,7 @@ func TestLoopJoinSingleRejectsMultipleRows(t *testing.T) {
 			name = "with condition"
 		}
 		t.Run(name, func(t *testing.T) {
-			tc := newTestCase(t,
-				[]bool{false},
-				[]types.Type{types.T_int32.ToType()},
+			tc := newTestCase(t, []types.Type{types.T_int32.ToType()},
 				[]colexec.ResultPos{colexec.NewResultPos(0, 0)})
 			tc.arg.JoinType = plan.Node_SINGLE
 			if !withCondition {
@@ -1494,37 +1506,7 @@ func makeVarcharLoopJoinBatch(mp *mpool.MPool, vals []string) *batch.Batch {
 	return bat
 }
 
-/*
-	func BenchmarkJoin(b *testing.B) {
-		for i := 0; i < b.N; i++ {
-			tcs = []joinTestCase{
-				newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)}),
-				newTestCase([]bool{true}, []types.Type{types.T_int8.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)}),
-			}
-			t := new(testing.T)
-			for _, tc := range tcs {
-				bats := hashBuild(t, tc)
-				err := tc.arg.Prepare(tc.proc)
-				require.NoError(t, err)
-				tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-				tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
-				tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-				tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-				tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-				tc.proc.Reg.MergeReceivers[0].Ch <- nil
-				tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(bats[1])
-				for {
-					ok, err := tc.arg.Call(tc.proc)
-					if ok.Status == vm.ExecStop || err != nil {
-						break
-					}
-				}
-			}
-		}
-	}
-*/
-
-func newTestCase(t *testing.T, flgs []bool, ts []types.Type, rp []colexec.ResultPos) joinTestCase {
+func newTestCase(t *testing.T, ts []types.Type, rp []colexec.ResultPos) joinTestCase {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	proc.SetMessageBoard(message.NewMessageBoard())
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1564,16 +1546,8 @@ func newTestCase(t *testing.T, flgs []bool, ts []types.Type, rp []colexec.Result
 			},
 		},
 	}
-	resultBatch := batch.NewWithSize(len(rp))
-	resultBatch.SetRowCount(2)
-	for i := range rp {
-		bat := colexec.MakeMockBatchs(proc.Mp())
-		resultBatch.Vecs[i] = bat.Vecs[rp[i].Pos]
-	}
 	tag++
 	testCase := joinTestCase{
-		types:  ts,
-		flgs:   flgs,
 		proc:   proc,
 		cancel: cancel,
 		arg: &LoopJoin{
@@ -1590,18 +1564,10 @@ func newTestCase(t *testing.T, flgs []bool, ts []types.Type, rp []colexec.Result
 			JoinMapTag: tag,
 		},
 		barg: &hashbuild.HashBuild{
-			NeedBatches: true,
-			OperatorBase: vm.OperatorBase{
-				OperatorInfo: vm.OperatorInfo{
-					Idx:     0,
-					IsFirst: false,
-					IsLast:  false,
-				},
-			},
+			NeedBatches:   true,
 			JoinMapTag:    tag,
 			JoinMapRefCnt: 1,
 		},
-		resultBatch: resultBatch,
 	}
 	installLoopJoinTestAllocation(t, testCase.arg, testCase.barg)
 	return testCase
