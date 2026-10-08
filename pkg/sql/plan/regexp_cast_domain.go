@@ -202,20 +202,28 @@ func regexpDeclaredStringType(expr *Expr) types.Type {
 	case "repeat":
 		if len(fn.Args) == 2 {
 			count, signed, known := regexpConstantInteger(fn.Args[1])
+			source := parameters[0]
+			bound, bounded := function.StringResultByteBound(source)
+			// A zero source contributes no declared width even when the signed
+			// count is negative. Do not widen that proven zero into unknown TEXT.
+			if bounded && bound == 0 {
+				if types.StaticStringDomain(source) == types.StringDomainBinary {
+					return regexpBinaryTypeForBound(0, true)
+				}
+				return types.NewWithCharset(types.T_varchar, 0, 0, typ.Charset)
+			}
 			if known && signed && int64(count) < 0 {
 				if types.StaticStringDomain(typ) == types.StringDomainBinary {
 					return types.T_blob.ToType()
 				}
 				return types.T_text.ToType()
 			}
-			source := parameters[0]
 			if known && count == 0 {
 				if types.StaticStringDomain(source) == types.StringDomainBinary {
 					return regexpBinaryTypeForBound(0, true)
 				}
 				return types.NewWithCharset(types.T_varchar, 0, 0, typ.Charset)
 			}
-			bound, bounded := function.StringResultByteBound(source)
 			if known && bounded && (count == 0 || bound <= math.MaxUint64/count) {
 				if types.StaticStringDomain(source) == types.StringDomainBinary {
 					return regexpBinaryTypeForBound(bound*count, true)
@@ -240,6 +248,14 @@ func regexpDeclaredStringType(expr *Expr) types.Type {
 					return types.T_text.ToType()
 				}
 				length = 0
+			}
+			if name != "lpad" && name != "rpad" {
+				// A slicing function cannot widen a proven finite source. Keep
+				// cap composition at the declaration owner for every representation,
+				// rather than preserving whole source chains just for LEFT/RIGHT.
+				if sourceBound, bounded := regexpDeclaredCharacterBound(parameters[0]); bounded {
+					length = min(length, sourceBound)
+				}
 			}
 			if length <= uint64(types.MaxVarcharLen) {
 				if types.StaticStringDomain(typ) == types.StringDomainBinary {

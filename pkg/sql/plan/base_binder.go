@@ -6044,7 +6044,8 @@ func (b *baseBinder) markPreparedStringDomainSubquerySource(
 	if expr == nil || isExplicitPreparedCast(expr) {
 		return false
 	}
-	if expr.GetP() != nil || expr.GetV() != nil || expr.GetPreparedNumeric().GetStringDomainSource() != nil {
+	if expr.GetP() != nil || expr.GetV() != nil ||
+		(expr.GetF() == nil && expr.GetPreparedNumeric().GetStringDomainSource() != nil) {
 		return true
 	}
 	if fn := expr.GetF(); fn != nil {
@@ -6235,13 +6236,19 @@ func stringDomainSourceFunctionWitness(source *Expr) (*Expr, bool) {
 		}
 		args[i] = compactStringDomainWitnessArg(arg)
 	}
-	return &Expr{
+	witness := &Expr{
 		Typ: source.Typ,
 		Expr: &plan.Expr_F{F: &plan.Function{
 			Func: &plan.ObjectRef{ObjName: fn.Func.GetObjName()},
 			Args: args,
 		}},
-	}, true
+	}
+	// Missing-input boundaries need runtime lineage and the independent local
+	// declaration. Function metadata never contains that lineage itself.
+	if declaration := source.GetPreparedNumeric().GetStringDomainSource(); declaration != nil {
+		ensurePreparedNumericMetadata(witness).StringDomainSource = DeepCopyExpr(declaration)
+	}
+	return witness, true
 }
 
 func preparedStringDomainSourceIndex(name string, arity int) int {
@@ -6288,10 +6295,7 @@ func compactStringDomainWitnessArg(arg *Expr) *Expr {
 	}
 	// The witness is never evaluated. NULL marks an unknown value: a synthetic
 	// zero would falsely prove a constant SUBSTRING/LEFT/RIGHT length.
-	placeholder := makePlan2Int64ConstExprWithType(0)
-	placeholder.Typ = arg.Typ
-	placeholder.GetLit().Isnull = true
-	return placeholder
+	return stringDeclarationWitnessArg(arg)
 }
 
 func stringDomainWitnessType(source *Expr, domains uint8) plan.Type {
@@ -6366,7 +6370,7 @@ func (c *stringDomainWitnessCollector) collect(expr *Expr, visited map[*Expr]str
 		return
 	}
 	visited[expr] = struct{}{}
-	if metadata := expr.GetPreparedNumeric(); metadata != nil && metadata.StringDomainSource != nil {
+	if metadata := expr.GetPreparedNumeric(); expr.GetF() == nil && metadata != nil && metadata.StringDomainSource != nil {
 		c.collect(metadata.StringDomainSource, visited)
 		return
 	}
@@ -6503,7 +6507,9 @@ func preparedExprStringDomainDependsOnRuntime(expr *plan.Expr) bool {
 	if expr == nil || isExplicitPreparedCast(expr) {
 		return false
 	}
-	if source := expr.GetPreparedNumeric().GetStringDomainSource(); source != nil {
+	// Real functions keep runtime dependencies in Args; their metadata is
+	// only a local declaration, not another dependency tree.
+	if source := expr.GetPreparedNumeric().GetStringDomainSource(); expr.GetF() == nil && source != nil {
 		return preparedExprStringDomainDependsOnRuntime(source)
 	}
 	return expr.GetP() != nil || expr.GetV() != nil ||
@@ -6534,7 +6540,7 @@ func preparedFunctionStringDomainDependsOnRuntimeParam(expr *plan.Expr) bool {
 	if expr == nil {
 		return false
 	}
-	if source := expr.GetPreparedNumeric().GetStringDomainSource(); source != nil {
+	if source := expr.GetPreparedNumeric().GetStringDomainSource(); expr.GetF() == nil && source != nil {
 		return preparedExprStringDomainDependsOnRuntime(source)
 	}
 	fn := expr.GetF()
@@ -8484,7 +8490,7 @@ func possibleStringDomainsForExpr(expr *plan.Expr) uint8 {
 		return domains
 	}
 
-	if metadata := expr.GetPreparedNumeric(); metadata != nil && metadata.StringDomainSource != nil {
+	if metadata := expr.GetPreparedNumeric(); expr.GetF() == nil && metadata != nil && metadata.StringDomainSource != nil {
 		sourceDomains := possibleStringDomainsForExpr(metadata.StringDomainSource)
 		if sourceDomains != 0 {
 			return sourceDomains

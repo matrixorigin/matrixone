@@ -49,7 +49,7 @@ func annotateStringLengthSource(expr *Expr, proc *process.Process) {
 			index = 1
 		}
 	}
-	if index < 0 || fn.Args[index].GetLit() != nil || !stringLengthConstantCandidate(fn.Args[index]) {
+	if index < 0 || !stringLengthConstantCandidate(fn.Args[index]) {
 		return
 	}
 	vec, free, warned, err := rule.EvaluateConstantExpression(proc, DeepCopyExpr(fn.Args[index]), batch.EmptyForConstFoldBatch)
@@ -70,39 +70,15 @@ func annotateStringLengthSource(expr *Expr, proc *process.Process) {
 	folded.GetLit().Src = nil
 	folded.PreparedNumeric = nil
 	folded.GetLit().StringSource = uint32(types.StringSourceExpression)
-	// Protobuf and DeepCopy expand pointers as trees. Referencing an execution
-	// child here duplicates its own metadata at every enclosing string function.
-	// Keep declaration/domain facts instead, including runtime marker identity.
+	// This owner stores only local declaration facts. Runtime dependencies stay
+	// in the real function args, and are summarized only at missing-input
+	// boundaries (folded values/columns/subqueries). No ancestor copies a chain.
 	args := make([]*Expr, len(fn.Args))
 	for i, arg := range fn.Args {
 		if i == index {
 			args[i] = folded
 		} else {
-			args[i] = compactStringDomainWitnessArg(arg)
-		}
-	}
-	if strings.EqualFold(fn.Func.ObjName, "left") || strings.EqualFold(fn.Func.ObjName, "right") {
-		count, signed, known := regexpConstantInteger(folded)
-		if known && (!signed || int64(count) >= 0) {
-			source := fn.Args[0]
-			for {
-				inner := source.GetF()
-				if metadata := source.GetPreparedNumeric().GetStringDomainSource(); metadata != nil {
-					inner = metadata.GetF()
-				}
-				if inner == nil || inner.Func == nil || len(inner.Args) != 2 ||
-					(!strings.EqualFold(inner.Func.ObjName, "left") && !strings.EqualFold(inner.Func.ObjName, "right")) {
-					break
-				}
-				n, innerSigned, innerKnown := regexpConstantInteger(inner.Args[1])
-				if !innerKnown || (innerSigned && int64(n) < 0) {
-					break
-				}
-				count = min(count, n)
-				source = inner.Args[0]
-			}
-			args[0] = compactStringDomainWitnessArg(source)
-			args[1] = makePlan2Uint64ConstExprWithType(count)
+			args[i] = stringDeclarationWitnessArg(arg)
 		}
 	}
 	witness := &Expr{Typ: expr.Typ, Expr: &planpb.Expr_F{F: &planpb.Function{
@@ -114,11 +90,36 @@ func annotateStringLengthSource(expr *Expr, proc *process.Process) {
 	expr.PreparedNumeric.StringDomainSource = witness
 }
 
+// stringDeclarationWitnessArg preserves the logical declaration, not the
+// execution envelope or value tree. NULL denotes an unknown value, not a zero
+// length. The non-NULL BINARY tag retains unknown CAST ownership too: a NULL
+// BINARY(-1) is the separate unassigned-variable zero-bound convention.
+func stringDeclarationWitnessArg(arg *Expr) *Expr {
+	if arg == nil {
+		return nil
+	}
+	declared := regexpDeclaredStringType(arg)
+	witness := &Expr{Typ: makePlan2Type(&declared), Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+		Isnull: true, StringSource: uint32(types.StringSourceExpression),
+	}}}
+	// Non-length positions need types, not SQL integer-prefix values. In
+	// particular '123' must not become an INT64 literal with a VARCHAR type.
+	if regexpOwnsBinaryCast(arg) && (declared.Oid == types.T_varbinary || declared.Oid == types.T_blob) {
+		witness.Typ.Id = int32(types.T_binary)
+		if declared.Oid == types.T_blob {
+			witness.Typ.Width = -1
+			witness.GetLit().Isnull = false
+			witness.GetLit().Value = &planpb.Literal_Sval{Sval: ""}
+		}
+	}
+	return witness
+}
+
 // Registered foldable builtins exclude arbitrary user functions, real-time
 // values, parameters and variable payloads. Failure to prove/evaluate a value
 // retains the unknown declaration and its original execution-time error.
 func stringLengthConstantCandidate(expr *Expr) bool {
-	if expr == nil || expr.GetPreparedNumeric().GetStringDomainSource() != nil {
+	if expr == nil || (expr.GetF() == nil && expr.GetPreparedNumeric().GetStringDomainSource() != nil) {
 		return false
 	}
 	if lit := expr.GetLit(); lit != nil {
