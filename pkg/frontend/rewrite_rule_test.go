@@ -25,12 +25,14 @@ import (
 	"unicode/utf8"
 
 	"github.com/golang/mock/gomock"
+	"github.com/google/uuid"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -367,6 +369,33 @@ func TestProperty10_CacheInvalidation(t *testing.T) {
 	if err := quick.Check(prop, cfg); err != nil {
 		t.Errorf("Property 10 (Cache invalidation clears rule cache) failed: %v", err)
 	}
+}
+
+func TestInvalidateRoleRuleCachesAcrossSessions(t *testing.T) {
+	rm := &RoutineManager{sessionManager: queryservice.NewSessionManager()}
+	newSession := func() *Session {
+		ses := &Session{
+			feSessionImpl: feSessionImpl{
+				uuid:   uuid.New(),
+				tenant: &TenantInfo{Tenant: sysAccountName},
+			},
+			ruleCache: map[string]string{"db.t": "select 1 from db.t"},
+		}
+		ses.setRoutineManager(rm)
+		rm.sessionManager.AddSession(ses)
+		return ses
+	}
+
+	mutatingSession := newSession()
+	otherSession := newSession()
+	invalidateRoleRuleCaches(mutatingSession)
+
+	mutatingSession.ruleCacheMu.RLock()
+	require.Nil(t, mutatingSession.ruleCache)
+	mutatingSession.ruleCacheMu.RUnlock()
+	otherSession.ruleCacheMu.RLock()
+	require.Nil(t, otherSession.ruleCache)
+	otherSession.ruleCacheMu.RUnlock()
 }
 
 // TestConcurrentRuleCacheAccess tests concurrent access to rule cache

@@ -1311,6 +1311,36 @@ type roleRuleLifecycleBackgroundExec interface {
 	execWithProcessHook(context.Context, string, backExecProcessHook) error
 }
 
+type roleRuleCacheInvalidator interface {
+	invalidateRoleRuleCache()
+}
+
+func (ses *Session) invalidateRoleRuleCache() {
+	ses.ruleCacheMu.Lock()
+	ses.ruleCache = nil
+	ses.ruleCacheMu.Unlock()
+}
+
+// invalidateRoleRuleCaches invalidates every active session cache on this CN.
+// Role rewrite rules are tenant metadata, so a successful change must not leave
+// another connection enforcing the previous policy indefinitely.
+func invalidateRoleRuleCaches(ses *Session) {
+	if ses == nil {
+		return
+	}
+
+	ses.invalidateRoleRuleCache()
+	rm := ses.getRoutineManager()
+	if rm == nil || rm.sessionManager == nil {
+		return
+	}
+	for _, candidate := range rm.sessionManager.GetAllSessions() {
+		if invalidator, ok := candidate.(roleRuleCacheInvalidator); ok {
+			invalidator.invalidateRoleRuleCache()
+		}
+	}
+}
+
 // lockRoleRuleLifecycleInBackground acquires the shared mo_role_rule gate in
 // the background executor's own transaction. The no-op SELECT gives the
 // executor a live process for the compile-layer lock protocol without
@@ -1351,9 +1381,7 @@ func handleAlterRoleAddRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRole
 	defer func() {
 		retErr = finishTxn(ctx, bh, retErr)
 		if retErr == nil {
-			ses.ruleCacheMu.Lock()
-			ses.ruleCache = nil
-			ses.ruleCacheMu.Unlock()
+			invalidateRoleRuleCaches(ses)
 		}
 	}()
 	if err != nil {
@@ -1431,9 +1459,7 @@ func handleAlterRoleDropRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRol
 	defer func() {
 		retErr = finishTxn(ctx, bh, retErr)
 		if retErr == nil {
-			ses.ruleCacheMu.Lock()
-			ses.ruleCache = nil
-			ses.ruleCacheMu.Unlock()
+			invalidateRoleRuleCaches(ses)
 		}
 	}()
 	if err != nil {

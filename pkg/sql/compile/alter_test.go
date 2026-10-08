@@ -174,6 +174,17 @@ func TestRoleRuleRenameAdmissionProtocol(t *testing.T) {
 		require.ErrorContains(t, err, "renaming a cluster table")
 	})
 
+	t.Run("temporary rename is excluded from role-rule admission", func(t *testing.T) {
+		temporaryRename := &plan2.AlterTable{
+			TableDef: &plan2.TableDef{IsTemporary: true},
+			Actions:  rename.Actions,
+		}
+		err := checkRoleRuleRenameAdmissionWithHooks(
+			t.Context(), []*plan2.AlterTable{temporaryRename}, false, false, roleRuleRenameAdmissionHooks{},
+		)
+		require.NoError(t, err)
+	})
+
 	t.Run("unsupported transaction mode fails closed", func(t *testing.T) {
 		err := checkRoleRuleRenameAdmissionWithHooks(
 			t.Context(), []*plan2.AlterTable{rename}, false, true, roleRuleRenameAdmissionHooks{},

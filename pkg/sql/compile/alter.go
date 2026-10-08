@@ -2031,6 +2031,9 @@ func checkRoleRuleRenameAdmissionBatch(c *Compile, qrys []*plan.AlterTable) erro
 		if !alterTableHasRename(qry) {
 			continue
 		}
+		if qry.GetTableDef().GetIsTemporary() {
+			continue
+		}
 		hasRename = true
 		if isClusterTableRename(qry) {
 			return moerr.NewNotSupported(
@@ -2101,6 +2104,9 @@ func checkRoleRuleRenameAdmissionWithHooks(
 	hasRename := false
 	for _, qry := range qrys {
 		if !alterTableHasRename(qry) {
+			continue
+		}
+		if qry.GetTableDef().GetIsTemporary() {
 			continue
 		}
 		hasRename = true
