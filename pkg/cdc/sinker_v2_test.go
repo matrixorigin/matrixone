@@ -22,6 +22,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -536,6 +537,10 @@ func TestMysqlSinker2_SendAfterClose_NoPanic(t *testing.T) {
 }
 
 func TestMysqlSinker2_CloseWhileSendUnblocks(t *testing.T) {
+	synctest.Test(t, testMysqlSinker2CloseWhileSend)
+}
+
+func testMysqlSinker2CloseWhileSend(t *testing.T) {
 	db, _, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()
@@ -572,7 +577,7 @@ func TestMysqlSinker2_CloseWhileSendUnblocks(t *testing.T) {
 		sinker.SendDummy()
 	}()
 
-	time.Sleep(10 * time.Millisecond)
+	synctest.Wait()
 
 	done := make(chan struct{})
 	go func() {
@@ -857,33 +862,35 @@ func TestMysqlSinker2_SendCommandCleanupOnClose(t *testing.T) {
 	})
 
 	t.Run("SendCommandWhileCloseCh_CleansBatch", func(t *testing.T) {
-		sinker := NewMysqlSinker2(
-			executor, 1, "task-2",
-			&DbTableInfo{SourceDbName: "src", SourceTblName: "test"},
-			nil, builder, NewCdcActiveRoutine(),
-		)
+		synctest.Test(t, func(t *testing.T) {
+			sinker := NewMysqlSinker2(
+				executor, 1, "task-2",
+				&DbTableInfo{SourceDbName: "src", SourceTblName: "test"},
+				nil, builder, NewCdcActiveRoutine(),
+			)
 
-		// Create a batch command
-		insertBatch := NewAtomicBatch(nil)
-		deleteBatch := NewAtomicBatch(nil)
-		cmd := NewInsertDeleteBatchCommand(insertBatch, deleteBatch, types.BuildTS(1, 0), types.BuildTS(2, 0))
+			// Create a batch command
+			insertBatch := NewAtomicBatch(nil)
+			deleteBatch := NewAtomicBatch(nil)
+			cmd := NewInsertDeleteBatchCommand(insertBatch, deleteBatch, types.BuildTS(1, 0), types.BuildTS(2, 0))
 
-		// cmdCh is unbuffered — sendCommand will block on it.
-		// Close sinker in another goroutine to unblock via closeCh.
-		var wg sync.WaitGroup
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			sinker.sendCommand(cmd)
-		}()
+			// cmdCh is unbuffered — sendCommand will block on it.
+			// Close sinker in another goroutine to unblock via closeCh.
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				sinker.sendCommand(cmd)
+			}()
 
-		time.Sleep(10 * time.Millisecond)
-		sinker.Close()
-		wg.Wait()
+			synctest.Wait()
+			sinker.Close()
+			wg.Wait()
 
-		// Batch should be cleaned via closeCh path
-		assert.Nil(t, cmd.InsertAtmBatch, "insert batch should be cleaned on closeCh")
-		assert.Nil(t, cmd.DeleteAtmBatch, "delete batch should be cleaned on closeCh")
+			// Batch should be cleaned via closeCh path
+			assert.Nil(t, cmd.InsertAtmBatch, "insert batch should be cleaned on closeCh")
+			assert.Nil(t, cmd.DeleteAtmBatch, "delete batch should be cleaned on closeCh")
+		})
 	})
 }
 
