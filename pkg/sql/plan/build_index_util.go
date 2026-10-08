@@ -239,8 +239,13 @@ func checkIndexColumnSupportability(ctx context.Context, col *ColDef, keyPart *t
 	}
 
 	colName := keyPart.ColName.ColNameOrigin()
-	if indexKind == "primary" {
+	switch indexKind {
+	case "primary":
 		if err := rejectNativeUnicodePrimaryKey(ctx, col.Typ, colName); err != nil {
+			return err
+		}
+	case "unique":
+		if err := rejectNativeUnicodeUniqueKey(ctx, col.Typ, colName); err != nil {
 			return err
 		}
 	}
@@ -306,6 +311,14 @@ func rejectNativeUnicodePrimaryKey(ctx context.Context, typ planpb.Type, columnN
 	if types.IsUnicodeCollation(uint8(typ.GetCharset())) {
 		return moerr.NewNotSupported(ctx,
 			fmt.Sprintf("native Unicode collation column '%s' cannot be in primary key until collation-aware primary-key deduplication is supported", columnName))
+	}
+	return nil
+}
+
+func rejectNativeUnicodeUniqueKey(ctx context.Context, typ planpb.Type, columnName string) error {
+	if types.IsUnicodeCollation(uint8(typ.GetCharset())) {
+		return moerr.NewNotSupported(ctx,
+			fmt.Sprintf("native Unicode collation column '%s' cannot be in unique index until collation-aware unique-index deduplication is supported", columnName))
 	}
 	return nil
 }

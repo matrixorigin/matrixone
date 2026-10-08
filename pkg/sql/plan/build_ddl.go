@@ -3474,6 +3474,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 						return moerr.NewNotSupported(ctx.GetContext(), "the auto_incr column is only support integer type now")
 					}
 				case *tree.AttributeUnique, *tree.AttributeUniqueKey:
+					if err := rejectNativeUnicodeUniqueKey(ctx.GetContext(), colType, colNameOrigin); err != nil {
+						return err
+					}
 					if isSetPlanType(&colType) {
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("SET column '%s' cannot be in unique index", colNameOrigin))
 

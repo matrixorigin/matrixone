@@ -313,6 +313,9 @@ func checkPrimaryKeyPartType(ctx context.Context, colType plan.Type, columnName 
 }
 
 func checkUniqueKeyPartType(ctx context.Context, colType plan.Type, columnName string) error {
+	if err := rejectNativeUnicodeUniqueKey(ctx, colType, columnName); err != nil {
+		return err
+	}
 	if colType.GetId() == int32(types.T_blob) {
 		return moerr.NewNotSupported(ctx, "blob type in primary key")
 	}

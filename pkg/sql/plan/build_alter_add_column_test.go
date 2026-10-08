@@ -90,6 +90,16 @@ func TestCheckNativeUnicodePrimaryKeyPartType(t *testing.T) {
 	require.Contains(t, err.Error(), "native Unicode collation column 'source'")
 }
 
+func TestCheckNativeUnicodeUniqueKeyPartType(t *testing.T) {
+	typ := plan.Type{
+		Id:      int32(types.T_varchar),
+		Charset: uint32(types.CharsetUTF8MB4UnicodeCI),
+	}
+	err := checkUniqueKeyPartType(context.Background(), typ, "source")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "native Unicode collation column 'source'")
+}
+
 func TestCheckAddColumnWithUniqueKeyVisibility(t *testing.T) {
 	tests := []struct {
 		name    string
