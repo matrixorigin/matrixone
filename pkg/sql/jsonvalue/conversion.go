@@ -17,7 +17,6 @@ package jsonvalue
 import (
 	"context"
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -232,7 +231,7 @@ func ConvertScalarWithContext(ctx context.Context, value bytejson.ByteJson, targ
 	case types.T_timestamp:
 		location := options.Location
 		if location == nil {
-			location = time.UTC
+			return Result{Status: StatusStatementError, Err: moerr.NewInvalidStateNoCtx("JSON_TABLE timestamp conversion requires execution location")}
 		}
 		v, err := types.ParseTimestamp(location, text, target.Scale)
 		if err != nil {
@@ -278,7 +277,7 @@ func ConvertPathMatchesContext(ctx context.Context, iterator *bytejson.PathItera
 
 // ConvertPathMatchesWithLimit is useful to deterministic unit tests and
 // controlled callers that need a stricter cell budget than the repository
-// default. Production JSON_TABLE uses ConvertPathMatches or its context form.
+// default. Session-dependent callers use ConvertPathMatchesWithOptions.
 func ConvertPathMatchesWithLimit(iterator *bytejson.PathIterator, target types.Type, maxBytes int) Result {
 	return ConvertPathMatchesWithLimitContext(context.Background(), iterator, target, maxBytes)
 }
@@ -289,6 +288,19 @@ func ConvertPathMatchesWithLimitContext(
 	ctx context.Context,
 	iterator *bytejson.PathIterator,
 	target types.Type,
+	maxBytes int,
+) Result {
+	return ConvertPathMatchesWithOptions(ctx, iterator, target, ConversionOptions{}, maxBytes)
+}
+
+// ConvertPathMatchesWithOptions owns the bounded path-match policy and carries
+// session inputs to scalar conversion. TIMESTAMP callers must supply their
+// execution location; convenience forms deliberately do not invent UTC.
+func ConvertPathMatchesWithOptions(
+	ctx context.Context,
+	iterator *bytejson.PathIterator,
+	target types.Type,
+	options ConversionOptions,
 	maxBytes int,
 ) Result {
 	if iterator == nil {
@@ -313,7 +325,7 @@ func ConvertPathMatchesWithLimitContext(
 		if target.Oid == types.T_json {
 			return convertJSONValueWithLimit(ctx, first, maxBytes)
 		}
-		return ConvertScalarWithContext(ctx, first, target, ConversionOptions{})
+		return ConvertScalarWithContext(ctx, first, target, options)
 	}
 	if target.Oid != types.T_json {
 		return Result{
@@ -473,7 +485,7 @@ func validJSONValue(value bytejson.ByteJson) bool {
 		_, ok := bytejsonvalidate.UvarintPayload(value.Data)
 		return ok
 	case bytejson.TpCodeDecimal:
-		return validDecimalJSONPayload(value.Data)
+		return bytejsonvalidate.DecimalJSONPayload(value.Data)
 	case bytejson.TpCodeArray, bytejson.TpCodeObject:
 		return bytejsonvalidate.Container(byte(value.Type), value.Data, validJSONScalar)
 	default:
@@ -483,24 +495,6 @@ func validJSONValue(value bytejson.ByteJson) bool {
 
 func validJSONScalar(tp byte, data []byte) bool {
 	return validJSONValue(bytejson.ByteJson{Type: bytejson.TpCode(tp), Data: data})
-}
-
-// validDecimalJSONPayload checks the producer contract for TpCodeDecimal.
-// Decimal bytes are emitted verbatim by ByteJson.MarshalJSON, so they must be
-// one complete JSON number. json.Valid performs only linear lexical scanning;
-// it does not parse the exponent into an unbounded numeric intermediate.
-func validDecimalJSONPayload(data []byte) bool {
-	payload, ok := bytejsonvalidate.UvarintPayload(data)
-	if !ok || len(payload) == 0 ||
-		(payload[0] != '-' && (payload[0] < '0' || payload[0] > '9')) {
-		return false
-	}
-	for _, ch := range payload {
-		if ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n' {
-			return false
-		}
-	}
-	return json.Valid(payload)
 }
 
 func safeScalarText(value bytejson.ByteJson) (text string, err error) {

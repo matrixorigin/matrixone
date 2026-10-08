@@ -21,6 +21,7 @@ import (
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/internal/bytejsonvalidate"
 )
 
 // ErrJSONTableCellLimit identifies a JSON_TABLE JSON result cell that would
@@ -298,7 +299,12 @@ func storageCompatibleDataSizeWithBudget(ctx context.Context, value ByteJson, li
 			}
 		}
 		return storageSizeWithinLimit(numberSize, limit, false)
-	case TpCodeString, TpCodeDecimal, TpCodeDate, TpCodeTime, TpCodeDatetime, TpCodeBlob:
+	case TpCodeDecimal:
+		if !bytejsonvalidate.DecimalJSONPayload(value.Data) {
+			return 0, false, moerr.NewInvalidInputNoCtx("invalid JSON decimal payload")
+		}
+		return storageSizeWithinLimit(len(value.Data), limit, false)
+	case TpCodeString, TpCodeDate, TpCodeTime, TpCodeDatetime, TpCodeBlob:
 		if !validStorageStringData(value.Data) {
 			return 0, false, moerr.NewInvalidInputNoCtx("invalid JSON string payload")
 		}

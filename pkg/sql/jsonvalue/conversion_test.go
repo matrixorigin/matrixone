@@ -1032,7 +1032,7 @@ func TestConversionStatusNamesAndScalarBoundaries(t *testing.T) {
 	}
 	for _, test := range invalid {
 		t.Run(test.name, func(t *testing.T) {
-			result := ConvertScalar(parseConversionValue(t, test.document), test.target)
+			result := ConvertScalarWithLocation(parseConversionValue(t, test.document), test.target, time.UTC)
 			require.Equal(t, test.status, result.Status)
 			require.Error(t, result.Err)
 		})
