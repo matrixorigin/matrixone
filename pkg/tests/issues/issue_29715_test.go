@@ -67,8 +67,12 @@ func TestIssue29715ODKUConcurrentDropIndex(t *testing.T) {
 			}
 			return true
 		})
-		for _, terminal := range []string{"commit", "rollback", "late admission", "DDL admitted first"} {
-			t.Run(terminal, func(t *testing.T) {
+		for _, scenario := range []struct{ entry, terminal string }{
+			{"ALTER", "commit"}, {"ALTER", "rollback"}, {"ALTER", "late admission"}, {"ALTER", "DDL admitted first"},
+			{"standalone", "commit"}, {"standalone", "rollback"}, {"standalone", "late admission"}, {"standalone", "DDL admitted first"},
+		} {
+			terminal := scenario.terminal
+			t.Run(scenario.entry+"/"+terminal, func(t *testing.T) {
 				execSQLRequire(t, ctx, writerDB, "create table "+database+".t (id int primary key, u int, v int, unique uk(u), key idx_v(v))")
 				defer execSQLMaybe(t, ctx, writerDB, "drop table if exists "+database+".t")
 				execSQLRequire(t, ctx, writerDB, "insert into "+database+".t values (1,1,0)")
@@ -80,7 +84,10 @@ func TestIssue29715ODKUConcurrentDropIndex(t *testing.T) {
 				require.NoError(t, err)
 				defer writer.Close()
 				const odku = "insert into issue_29715.t values (1,1,1) on duplicate key update v=v+1"
-				const drop = "alter table issue_29715.t drop index uk"
+				drop := "alter table issue_29715.t drop index uk"
+				if scenario.entry == "standalone" {
+					drop = "drop index uk on issue_29715.t"
+				}
 				if terminal == "late admission" {
 					testIssue29715LateAdmission(t, ctx, writer, ddlDB, writerCN.ServiceID(), odku, drop)
 				} else if terminal == "DDL admitted first" {
@@ -111,7 +118,7 @@ func TestIssue29715ODKUConcurrentDropIndex(t *testing.T) {
 					packer.Reset()
 					packer.EncodeStringType(serial)
 					key := bytes.Clone(packer.GetBuf())
-					require.True(t, issue29715MetadataState(services, txnID, key, false))
+					require.True(t, issue29715MetadataState(services, txnID, key, false, pblock.LockMode_Shared))
 					ddlCtx, stopDDL := context.WithCancel(ctx)
 					defer stopDDL()
 					done := make(chan error, 1)
@@ -130,7 +137,7 @@ func TestIssue29715ODKUConcurrentDropIndex(t *testing.T) {
 							}
 						}
 					}()
-					require.Eventually(t, func() bool { return issue29715MetadataState(services, txnID, key, true) },
+					require.Eventually(t, func() bool { return issue29715MetadataState(services, txnID, key, true, pblock.LockMode_Shared) },
 						20*time.Second, 10*time.Millisecond, "DROP must wait for ODKU's base metadata lock")
 					require.NoError(t, execIssue29715(ctx, writer, terminal))
 					select {
@@ -175,11 +182,11 @@ func TestIssue29715ODKUConcurrentDropIndex(t *testing.T) {
 
 // ODKU holds separate base and unique-index metadata keys. Observe the base
 // key explicitly instead of the older single-metadata-key fixture assumption.
-func issue29715MetadataState(services []lockservice.LockService, txnID, key []byte, waiter bool) bool {
+func issue29715MetadataState(services []lockservice.LockService, txnID, key []byte, waiter bool, mode pblock.LockMode) bool {
 	found := false
 	for _, service := range services {
 		service.IterLocks(func(tableID uint64, keys [][]byte, lock lockservice.Lock) bool {
-			if tableID == catalog.MO_TABLES_ID && lock.GetLockMode() == pblock.LockMode_Shared && len(keys) == 1 && bytes.Equal(keys[0], key) {
+			if tableID == catalog.MO_TABLES_ID && lock.GetLockMode() == mode && len(keys) == 1 && bytes.Equal(keys[0], key) {
 				if waiter {
 					lock.IterWaiters(func(_ pblock.WaitTxn) bool { found = true; return false })
 				} else {
@@ -359,7 +366,7 @@ func testIssue29715DDLFirst(t *testing.T, ctx context.Context, writer *sql.Conn,
 	go func() { writerDone <- execIssue29715(workCtx, writer, odku) }()
 	require.Eventually(t, func() bool {
 		txn, ok := owner.Load().([]byte)
-		return ok && issue29715MetadataState(services, txn, key, false)
+		return ok && issue29715MetadataState(services, txn, key, false, pblock.LockMode_Shared)
 	},
 		20*time.Second, 10*time.Millisecond, "ODKU must hold the hidden metadata key while waiting for ALTER's parent")
 	once.Do(func() { close(release) })
@@ -397,7 +404,11 @@ func TestIssue29715QualifiedDropIndexWithoutSessionDatabase(t *testing.T) {
 		}()
 		execSQLRequire(t, ctx, db, "create table "+database+".t (id int primary key,u int,unique uk(u))")
 		execSQLRequire(t, ctx, db, "insert into "+database+".t values(1,1)")
-		execSQLRequire(t, ctx, db, "alter table "+database+".t drop index uk")
+		for _, drop := range []string{"alter table " + database + ".t drop index uk", "drop index uk on " + database + ".t"} {
+			execSQLRequire(t, ctx, db, drop)
+			execSQLRequire(t, ctx, db, "create unique index uk on "+database+".t(u)")
+		}
+		execSQLRequire(t, ctx, db, "drop index uk on "+database+".t")
 		execSQLRequire(t, ctx, db, "insert into "+database+".t values(2,1)")
 		var count int
 		require.NoError(t, db.QueryRowContext(ctx, "select count(*) from "+database+".t").Scan(&count))
@@ -406,12 +417,24 @@ func TestIssue29715QualifiedDropIndexWithoutSessionDatabase(t *testing.T) {
 }
 
 func TestIssue29715StaleAlterIndexGeneration(t *testing.T) {
-	testIssue29715StaleAlterIndexGeneration(t, "alter table issue29715stale.t add column z int")
+	testIssue29715StaleAlterIndexGeneration(t, "alter table issue29715stale.t add column z int", false, false)
 }
 func TestIssue29715StaleAlterIndexGenerationInplace(t *testing.T) {
-	testIssue29715StaleAlterIndexGeneration(t, "alter table issue29715stale.t add index keepidx(v)")
+	testIssue29715StaleAlterIndexGeneration(t, "alter table issue29715stale.t add index keepidx(v)", false, false)
 }
-func testIssue29715StaleAlterIndexGeneration(t *testing.T, action string) {
+func TestIssue29715StandaloneDropIndexAdmission(t *testing.T) {
+	for _, action := range []struct{ name, sql string }{
+		{"COPY", "alter table issue29715stale.t add column z int"},
+		{"INPLACE", "alter table issue29715stale.t add index keepidx(v)"},
+	} {
+		for _, afterParent := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/after_parent_%t", action.name, afterParent), func(t *testing.T) {
+				testIssue29715StaleAlterIndexGeneration(t, action.sql, true, afterParent)
+			})
+		}
+	}
+}
+func testIssue29715StaleAlterIndexGeneration(t *testing.T, action string, standalone, afterParent bool) {
 	t.Helper()
 	runAuthenticatedClusterTest(t, func(c embed.Cluster) {
 		ctx, stop := context.WithTimeout(t.Context(), 90*time.Second)
@@ -434,12 +457,18 @@ func testIssue29715StaleAlterIndexGeneration(t *testing.T, action string) {
 		execSQLRequire(t, ctx, db, "create table issue29715stale.t(id int primary key,u int,v int,unique uk(u))")
 		execSQLRequire(t, ctx, db, "insert into issue29715stale.t values(1,1,0)")
 		syncAuthenticatedClusterCommit(t, ctx, c)
+		targetID := uint64(catalog.MO_TABLES_ID)
+		if afterParent {
+			require.NoError(t, db.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where reldatabase='issue29715stale' and relname='t'").Scan(&targetID))
+		}
+		var holder []byte
 		paused, release := make(chan struct{}), make(chan struct{})
 		var once sync.Once
 		var first atomic.Bool
 		tc := moruntime.MustGetTestingContext(cn0.ServiceID())
-		tc.SetBeforeLockFunc(func(_ []byte, id uint64) {
-			if id == catalog.MO_TABLES_ID && first.CompareAndSwap(false, true) {
+		tc.SetBeforeLockFunc(func(txn []byte, id uint64) {
+			if id == targetID && first.CompareAndSwap(false, true) {
+				holder = bytes.Clone(txn)
 				close(paused)
 				select {
 				case <-release:
@@ -474,9 +503,57 @@ func testIssue29715StaleAlterIndexGeneration(t *testing.T, action string) {
 		case <-ctx.Done():
 			t.Fatal(ctx.Err())
 		}
-		execSQLRequire(t, ctx, ddl, "alter table issue29715stale.t drop index uk")
-		syncAuthenticatedClusterCommit(t, ctx, c)
-		once.Do(func() { close(release) })
+		drop := "alter table issue29715stale.t drop index uk"
+		if standalone {
+			drop = "drop index uk on issue29715stale.t"
+		}
+		if afterParent {
+			var services []lockservice.LockService
+			c.ForeachServices(func(s embed.ServiceOperator) bool {
+				if s.ServiceType() == metadata.ServiceType_CN {
+					services = append(services, lockservice.GetLockServiceByServiceID(s.ServiceID()))
+				}
+				return true
+			})
+			packer := types.NewPacker()
+			defer packer.Close()
+			packer.EncodeUint32(0)
+			packer.EncodeStringType([]byte("issue29715stale"))
+			packer.EncodeStringType([]byte("t"))
+			serial := bytes.Clone(packer.GetBuf())
+			packer.Reset()
+			packer.EncodeStringType(serial)
+			key := bytes.Clone(packer.GetBuf())
+			require.True(t, issue29715MetadataState(services, holder, key, false, pblock.LockMode_Exclusive))
+			dropDone := make(chan error, 1)
+			dropJoined := false
+			defer func() {
+				cancel()
+				once.Do(func() { close(release) })
+				if !dropJoined {
+					select {
+					case <-dropDone:
+					case <-time.After(10 * time.Second):
+						t.Error("DROP worker did not stop")
+					}
+				}
+			}()
+			go func() { _, e := ddl.ExecContext(work, drop); dropDone <- e }()
+			require.Eventually(t, func() bool { return issue29715MetadataState(services, holder, key, true, pblock.LockMode_Exclusive) }, 20*time.Second, 10*time.Millisecond,
+				"standalone DROP must wait for ALTER's parent admission")
+			once.Do(func() { close(release) })
+			select {
+			case e := <-dropDone:
+				dropJoined = true
+				require.NoError(t, e, "DROP must rebuild after the preceding ALTER")
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+		} else {
+			execSQLRequire(t, ctx, ddl, drop)
+			syncAuthenticatedClusterCommit(t, ctx, c)
+			once.Do(func() { close(release) })
+		}
 		select {
 		case e := <-done:
 			joined = true

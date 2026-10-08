@@ -2817,6 +2817,22 @@ func (s *Scope) DropIndex(c *Compile) error {
 		return err
 	}
 
+	if c.proc.GetTxnOperator().Txn().IsPessimistic() {
+		// Join the same parent admission as ALTER before inspecting constraints
+		// or deleting children. A changed generation needs a fresh logical plan.
+		if err = lockMoTable(c, qry.Database, qry.Table, lock.LockMode_Exclusive); err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) || moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+				return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+			}
+			return err
+		}
+		if err = lockTable(c.proc.Ctx, c.e, c.proc, r, qry.Database, true); err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) || moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+				return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+			}
+			return err
+		}
+	}
 	// old tabledef
 	oldTableDef := r.GetTableDef(c.proc.Ctx)
 
