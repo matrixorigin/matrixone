@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"strconv"
 	"strings"
 	"testing"
@@ -133,6 +134,49 @@ func TestMySQLOpaqueTaggedValue(t *testing.T) {
 			require.Equal(t, value.String(), restored.String())
 		})
 	}
+}
+
+func TestMySQLOpaqueSizeAppendMatchesBuild(t *testing.T) {
+	sentinel := []byte("prefix")
+	for _, tc := range []struct {
+		name      string
+		fieldType uint8
+		payload   []byte
+		want      string
+	}{
+		{name: "empty-varbinary", fieldType: 15, want: "base64:type15:"},
+		{name: "bit-zero", fieldType: 16, payload: []byte{0}, want: "base64:type16:AA=="},
+		{name: "binary-nul", fieldType: 254, payload: []byte{0, 0xff, 'A'}, want: "base64:type254:AP9B"},
+		{name: "blob-tail", fieldType: 252, payload: []byte{0x00, 0x80}, want: "base64:type252:AIA="},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			size, err := MySQLOpaqueValueSize(MySQLOpaqueProtocolVersion, tc.fieldType, len(tc.payload))
+			require.NoError(t, err)
+			appended, err := AppendMySQLOpaque(append([]byte(nil), sentinel...),
+				MySQLOpaqueProtocolVersion, tc.fieldType, tc.payload)
+			require.NoError(t, err)
+			require.Len(t, appended, len(sentinel)+size)
+			require.Equal(t, sentinel, appended[:len(sentinel)])
+
+			built, err := NewMySQLOpaque(MySQLOpaqueProtocolVersion, tc.fieldType, tc.payload)
+			require.NoError(t, err)
+			require.Equal(t, append([]byte{byte(built.Type)}, built.Data...), appended[len(sentinel):])
+			require.Equal(t, strconv.Quote(tc.want), built.String())
+
+			var restored ByteJson
+			require.NoError(t, restored.Unmarshal(appended[len(sentinel):]))
+			require.Equal(t, built.String(), restored.String())
+		})
+	}
+
+	for _, payloadLen := range []int{-1, math.MaxInt} {
+		_, err := MySQLOpaqueValueSize(MySQLOpaqueProtocolVersion, 252, payloadLen)
+		require.Error(t, err)
+	}
+	unchanged := append([]byte(nil), sentinel...)
+	appended, err := AppendMySQLOpaque(unchanged, MySQLOpaqueProtocolVersion-1, 252, []byte("x"))
+	require.Error(t, err)
+	require.Equal(t, sentinel, appended)
 }
 
 func TestMySQLOpaqueRequiresRollingUpgradeAdmission(t *testing.T) {
