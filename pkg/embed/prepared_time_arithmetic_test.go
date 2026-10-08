@@ -346,6 +346,7 @@ func TestPreparedTimeArithmeticOverMySQLProtocol(t *testing.T) {
 			t.Run("binary/"+tc.name, func(t *testing.T) {
 				rows, err := binaryStmt.QueryContext(ctx, tc.value)
 				require.NoError(t, err)
+				defer rows.Close()
 				if tc.isDouble {
 					assertPreparedTimeDoubleResult(t, rows, 38006.40432)
 				} else {

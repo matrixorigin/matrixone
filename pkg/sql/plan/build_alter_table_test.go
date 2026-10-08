@@ -130,6 +130,49 @@ func newAutoIncrementAlterOptimizer(t testing.TB) *MockOptimizer {
 	return mock
 }
 
+func TestAlterTableCharsetAdmission(t *testing.T) {
+	for _, tc := range []struct {
+		option string
+		err    string
+	}{
+		{"character set latin1", "unsupported character set"},
+		{"convert to character set latin1", "unsupported character set"},
+		{"character set latin1, algorithm=copy", "unsupported character set"},
+		{"add column c int, character set latin1", "unsupported character set"},
+		{"character set utf8mb4 collate latin1_bin", "unsupported collation"},
+		{"convert to character set utf8mb4 collate utf8mb4_0900_bin", "unsupported collation"},
+		{"convert to character set utf8 collate 'binary'", "is not valid for CHARACTER SET"},
+		{"character set 'force'", "unsupported character set"},
+		{"character set utf8", ""},
+		{"convert to character set utf8mb3 collate utf8mb3_bin", ""},
+		{"force", ""},
+		{"enable keys", ""},
+		{"disable keys", ""},
+		{"discard tablespace", ""},
+		{"import tablespace", ""},
+		{"with validation", ""},
+		{"without validation", ""},
+	} {
+		t.Run(tc.option, func(t *testing.T) {
+			mock := newAutoIncrementAlterOptimizer(t)
+			source := mock.ctxt.tables["auto_incr_t"]
+			before, err := source.Marshal()
+			require.NoError(t, err)
+			p, err := buildSingleStmt(mock, t, "alter table auto_incr_t "+tc.option)
+			if tc.err == "" {
+				require.NoError(t, err)
+				require.NotNil(t, p)
+			} else {
+				require.ErrorContains(t, err, tc.err)
+				require.Nil(t, p)
+			}
+			after, err := source.Marshal()
+			require.NoError(t, err)
+			require.Equal(t, before, after, "admission must not rewrite the resolved table")
+		})
+	}
+}
+
 func TestAlterTableAutoIncrementPlan(t *testing.T) {
 	for _, tc := range []struct {
 		sql        string

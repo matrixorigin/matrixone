@@ -396,7 +396,7 @@ func TestPreparedNumericTemporalContracts(t *testing.T) {
 							q := fmt.Sprintf("select cast(round(%s,%d) as %s),cast(truncate(%s,%d) as %s)", tc.input, tc.precision, tc.output, tc.input, tc.precision, tc.output)
 							var queryRow func(*testing.T, binding) *sql.Row
 							if protocol == "binary" {
-								stmt, err := conn.PrepareContext(ctx, q)
+								stmt, err := conn.PrepareContext(ctx, q) //nolint:sqlclosecheck // closed by the deferred Close below; the queryRow closure captures stmt, which defeats the analyzer's tracking
 								require.NoError(t, err)
 								defer stmt.Close()
 								queryRow = func(_ *testing.T, b binding) *sql.Row {

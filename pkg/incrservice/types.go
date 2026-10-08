@@ -18,6 +18,7 @@ import (
 	"context"
 	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -225,6 +226,9 @@ type AutoColumn struct {
 	Step     uint64
 	// CacheSize is projected from the table's SchemaExtra, not stored in the allocator row.
 	CacheSize uint64
+	// isInternal is authoritative hidden fake-PK ownership from the table
+	// definition, not inferred from a name supplied by a SQL-visible column.
+	isInternal bool
 }
 
 // ValidateAutoColumnOffset rejects allocator offsets that cannot be represented
@@ -284,12 +288,13 @@ func getAutoColumnsFromDef(def *plan.TableDef, include func(*plan.ColDef) bool) 
 	for i, col := range def.Cols {
 		if col.Typ.AutoIncr && include(col) {
 			cols = append(cols, AutoColumn{
-				ColName:   col.Name,
-				TableID:   def.TblId,
-				Step:      1,
-				Offset:    def.AutoIncrOffset,
-				ColIndex:  i,
-				CacheSize: def.AutoIdCache,
+				ColName:    col.Name,
+				TableID:    def.TblId,
+				Step:       1,
+				Offset:     def.AutoIncrOffset,
+				ColIndex:   i,
+				CacheSize:  def.AutoIdCache,
+				isInternal: col.Hidden && col.Name == catalog.FakePrimaryKeyColName,
 			})
 		}
 	}

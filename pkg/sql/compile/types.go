@@ -284,6 +284,11 @@ type scopeContext struct {
 // Compile contains all the information needed for compilation.
 type Compile struct {
 	scopes []*Scope
+	// Shared broadcast HashBuild producers are attached after downstream placement.
+	pendingProductBuilds []*pendingProductBuild
+	// Non-owning producer regions: true marks an independent auxiliary job;
+	// false marks its result owner for original-error arbitration.
+	auxiliaryProductScopes map[*Scope]bool
 	// siriusRead is the single terminal owner for a hinted offload. It remains
 	// nil for every native statement.
 	siriusRead *siriusReadOwner

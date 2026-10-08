@@ -64,6 +64,139 @@ func TestPreparedDecimalFloatFilterUsesUniqueValueProof(t *testing.T) {
 	}
 }
 
+func TestPreparedDecimalComparisonPruning(t *testing.T) {
+	for _, decimal := range []types.Type{
+		types.New(types.T_decimal64, 12, 2),
+		types.New(types.T_decimal128, 18, 2),
+		types.New(types.T_decimal256, 30, 12),
+	} {
+		t.Run(decimal.String(), func(t *testing.T) {
+			for _, tc := range []struct {
+				name, predicate, value string
+				binding                types.T
+				native                 bool
+			}{
+				{"integer", "c=?", "16001", types.T_int64, true},
+				{"negative integer", "c>=?", "-16001", types.T_int64, true},
+				{"zero integer", "?<=c", "0", types.T_int64, true},
+				{"wide integer", "c=?", "9223372036854775807", types.T_int64, false},
+				{"wide negative integer", "c>=?", "-9223372036854775808", types.T_int64, false},
+				{"unsigned integer", "c=?", "16001", types.T_uint64, true},
+				{"wide unsigned integer", "c=?", "18446744073709551615", types.T_uint64, false},
+				{"varchar control", "c=?", "16001", types.T_varchar, true},
+				{"double control", "c=?", "16001", types.T_float64, true},
+			} {
+				if decimal.Oid == types.T_decimal256 && !tc.binding.IsInteger() {
+					continue
+				}
+				t.Run(tc.name, func(t *testing.T) {
+					mock := NewMockOptimizer(false, newPlanTestProcess(t))
+					table := makeExprOptCompositeSortKeyTableDef()
+					table.Name, table.TblId = "decimal_filters", 99004
+					table.Cols[2].Typ = makePlan2Type(&decimal)
+					mock.ctxt.tables[table.Name] = table
+					mock.ctxt.objects[table.Name] = &ObjectRef{ObjName: table.Name, Obj: int64(table.TblId)}
+					proc := mock.ctxt.GetProcess()
+					params := vector.NewVec(types.T_text.ToType())
+					defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
+					require.NoError(t, vector.AppendBytes(params, []byte(tc.value), false, proc.Mp()))
+					proc.SetPrepareParams(params)
+					stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+						"select c from decimal_filters where "+tc.predicate, 1)
+					require.NoError(t, err)
+					defer stmt.Free()
+					bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
+						[]PreparedSourceBinding{{Position: 0, Type: tc.binding.ToType()}},
+						[]any{ParamValue{Value: tc.value, IsBinaryProtocol: true}})
+					require.NoError(t, err)
+					if tc.binding.IsInteger() && tc.native {
+						require.False(t, bound.ValueDependent, "safe plans reuse the existing per-execution conversion guard")
+						require.NotEmpty(t, bound.DiagnosticCandidates)
+						safe, err := ProbePreparedDiagnosticCandidates(proc, bound.DiagnosticCandidates)
+						require.NoError(t, err)
+						require.True(t, safe)
+						max := strings.Repeat("9", int(decimal.Width-decimal.Scale))
+						overflow := "1" + strings.Repeat("0", int(decimal.Width-decimal.Scale))
+						for _, probe := range []struct {
+							value      string
+							null, safe bool
+						}{
+							{max, false, true}, {"-" + max, false, tc.binding == types.T_int64},
+							{overflow, false, false}, {"-" + overflow, false, false},
+							{"9223372036854775807", false, false}, {"", true, true},
+						} {
+							func() {
+								current := vector.NewVec(types.T_text.ToType())
+								defer func() { proc.SetPrepareParams(params); current.Free(proc.Mp()) }()
+								require.NoError(t, vector.AppendBytes(current, []byte(probe.value), probe.null, proc.Mp()))
+								proc.SetPrepareParams(current)
+								safe, err := ProbePreparedDiagnosticCandidates(proc, bound.DiagnosticCandidates)
+								require.NoError(t, err)
+								require.Equal(t, probe.safe, safe, "cached conversion guard for %q", probe.value)
+							}()
+						}
+					} else {
+						require.True(t, bound.ValueDependent, "wide or value-specific plans must not replace a reusable native plan")
+					}
+					found := false
+					for _, node := range bound.Plan.GetQuery().Nodes {
+						if node.NodeType != planpb.Node_TABLE_SCAN || node.TableDef.Name != table.Name {
+							continue
+						}
+						found = true
+						require.Len(t, node.FilterList, 1)
+						filter := node.FilterList[0]
+						args := filter.GetF().Args
+						if tc.native {
+							var column *Expr
+							for _, arg := range args {
+								if arg.GetCol() != nil {
+									column = arg
+								}
+							}
+							require.NotNil(t, column, "safe comparisons retain the native column")
+							require.True(t, sameDecimalComparisonType(column.Typ, makePlan2Type(&decimal)))
+							require.True(t, ExprIsZonemappable(context.Background(), filter))
+						} else {
+							require.Greater(t, args[1].Typ.Width, decimal.Width, "wide bindings retain their wider comparison domain")
+						}
+						require.True(t, function.ContainsParameter(filter), "retain the executable binding")
+					}
+					require.True(t, found)
+				})
+			}
+		})
+	}
+}
+
+func TestPreparedDecimalComparisonAdmissionOwnership(t *testing.T) {
+	for _, selectStatement := range []bool{false, true} {
+		for _, dependent := range []bool{false, true} {
+			ctx := withPreparedSourceBindings(context.Background(),
+				[]PreparedSourceBinding{{Position: 0, Type: types.T_int64.ToType()}}, []any{int64(7)})
+			state := preparedBindingState(ctx)
+			state.selectStatement, state.valueDependent = selectStatement, dependent
+			source := &Expr{Typ: makeSimplePlan2Type(types.T_int64), Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+			decimal := types.New(types.T_decimal128, 18, 2)
+			column := &Expr{Typ: makePlan2Type(&decimal), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}
+			args, err := bindPreparedConsumerArguments(ctx, "=", []*Expr{column, source})
+			require.NoError(t, err)
+			require.Equal(t, int32(types.T_int64), source.Typ.Id, "sibling source remains unchanged")
+			require.Equal(t, types.T_int64, state.bindings[0].Type.Oid)
+			if !selectStatement {
+				require.Empty(t, state.diagnosticCandidates, "DML does not enter the DECIMAL admission")
+				continue
+			}
+			require.NotSame(t, source, args[1])
+			require.Equal(t, dependent, state.valueDependent, "other consumers retain their value dependencies")
+			require.Len(t, state.diagnosticCandidates, 1)
+			guard := state.diagnosticCandidates[0]
+			require.True(t, sameDecimalComparisonType(guard.Typ, column.Typ))
+			require.Equal(t, int32(types.T_text), guard.GetF().Args[0].Typ.Id, "precision guard uses exact transport spelling")
+		}
+	}
+}
+
 func TestPreparedNumericPredicateFiltering(t *testing.T) {
 	for _, tc := range []struct {
 		name, predicate string
@@ -151,7 +284,7 @@ func TestPreparedNumericPredicateFiltering(t *testing.T) {
 				domain.Width = 38
 				promoted, err := appendCastBeforeExpr(ctx, column, domain)
 				require.NoError(t, err)
-				args := []*Expr{promoted}
+				args := append(make([]*Expr, 0, 3), promoted)
 				for pos := range 2 {
 					peer, err := appendCastBeforeExpr(ctx, &Expr{Typ: makeSimplePlan2Type(types.T_varchar), Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: int32(pos)}}}, domain)
 					require.NoError(t, err)

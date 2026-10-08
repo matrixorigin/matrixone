@@ -1347,9 +1347,10 @@ func TestSingleTableSQLBuilder(t *testing.T) {
 func TestRollupWindowRanksAfterRollupUnion(t *testing.T) {
 	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	for _, tc := range []struct {
-		name             string
-		sql              string
-		expectedHeadings []string
+		name                    string
+		sql                     string
+		expectedHeadings        []string
+		expectedWindowInputType plan.Node_NodeType
 	}{
 		{
 			name: "aliased aggregate output",
@@ -1365,7 +1366,8 @@ func TestRollupWindowRanksAfterRollupUnion(t *testing.T) {
 				group by l_returnflag, l_linestatus with rollup
 				having total_qty > 0
 				order by total_qty desc, l_returnflag, l_linestatus`,
-			expectedHeadings: []string{"l_returnflag", "l_linestatus", "total_qty", "row_num", "rank_num", "dense_rank_num"},
+			expectedHeadings:        []string{"l_returnflag", "l_linestatus", "total_qty", "row_num", "rank_num", "dense_rank_num"},
+			expectedWindowInputType: plan.Node_UNION_ALL,
 		},
 		{
 			name: "aggregate output without alias",
@@ -1380,7 +1382,8 @@ func TestRollupWindowRanksAfterRollupUnion(t *testing.T) {
 				from lineitem
 				group by l_returnflag, l_linestatus with rollup
 				order by sum(l_quantity) desc, l_returnflag, l_linestatus`,
-			expectedHeadings: []string{"l_returnflag", "l_linestatus", "sum(l_quantity)", "row_num", "rank_num", "dense_rank_num"},
+			expectedHeadings:        []string{"l_returnflag", "l_linestatus", "sum(l_quantity)", "row_num", "rank_num", "dense_rank_num"},
+			expectedWindowInputType: plan.Node_AGG,
 		},
 		{
 			name: "aggregate used only by windows",
@@ -1394,7 +1397,8 @@ func TestRollupWindowRanksAfterRollupUnion(t *testing.T) {
 				from lineitem
 				group by l_returnflag, l_linestatus with rollup
 				order by row_num`,
-			expectedHeadings: []string{"l_returnflag", "l_linestatus", "row_num", "rank_num", "dense_rank_num"},
+			expectedHeadings:        []string{"l_returnflag", "l_linestatus", "row_num", "rank_num", "dense_rank_num"},
+			expectedWindowInputType: plan.Node_AGG,
 		},
 		{
 			name: "window outputs only",
@@ -1405,7 +1409,8 @@ func TestRollupWindowRanksAfterRollupUnion(t *testing.T) {
 					dense_rank() over (order by 1) as dense_rank_num
 				from lineitem
 				group by l_returnflag with rollup`,
-			expectedHeadings: []string{"row_num", "rank_num", "dense_rank_num"},
+			expectedHeadings:        []string{"row_num", "rank_num", "dense_rank_num"},
+			expectedWindowInputType: plan.Node_AGG,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1417,19 +1422,28 @@ func TestRollupWindowRanksAfterRollupUnion(t *testing.T) {
 			require.Equal(t, tc.expectedHeadings, query.Headings)
 
 			windowCount := 0
-			windowAfterUnionCount := 0
+			windowAfterGroupingSetOutputCount := 0
+			windowInputTypes := make([]plan.Node_NodeType, 0, 3)
 			for _, node := range query.Nodes {
 				if node.NodeType == plan.Node_WINDOW {
 					windowCount++
 					require.Len(t, node.Children, 1)
-					if query.Nodes[node.Children[0]].NodeType == plan.Node_UNION_ALL {
-						windowAfterUnionCount++
+					input := query.Nodes[node.Children[0]]
+					windowInputTypes = append(windowInputTypes, input.NodeType)
+					if input.NodeType == tc.expectedWindowInputType {
+						if input.NodeType == plan.Node_AGG {
+							require.Len(t, input.Children, 1)
+							_, expanded := DecodeGroupingSetExpandOption(
+								query.Nodes[input.Children[0]].ExtraOptions)
+							require.True(t, expanded)
+						}
+						windowAfterGroupingSetOutputCount++
 					}
 				}
 			}
 
 			require.Equal(t, 3, windowCount)
-			require.Equal(t, 1, windowAfterUnionCount)
+			require.Equal(t, 1, windowAfterGroupingSetOutputCount, "window input types: %v", windowInputTypes)
 		})
 	}
 }
@@ -2825,28 +2839,25 @@ func TestUnionSqlBuilder(t *testing.T) {
 		"select n_name from nation intersect all select n_name from nation2",
 		"select n_name from nation except all select n_name from nation2",
 		"select n_name from nation minus all select n_name from nation2",
-		"(select n_name from nation for update) union all (select n_name from nation2 for update)",
-		"(select n_name from nation for update) union all (select n_name from nation2)",
-		"with qn as (select n_nationkey from nation union all select n_nationkey from nation2) select * from qn for update",
-		"with qn as (select n_nationkey from nation union all select n_nationkey from nation2) select * from qn limit 6 for update",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
-	forUpdateUnionPlan, err := runOneStmt(mock, t, "(select n_name from nation for update) union all (select n_name from nation2 for update)")
-	require.NoError(t, err)
-	require.Equal(t, 2, countLockOpNodes(forUpdateUnionPlan))
-
-	forUpdateUnionOneBranchPlan, err := runOneStmt(mock, t, "(select n_name from nation for update) union all (select n_name from nation2)")
-	require.NoError(t, err)
-	require.Equal(t, 1, countLockOpNodes(forUpdateUnionOneBranchPlan))
-
-	cteOuterForUpdatePlan, err := runOneStmt(mock, t, "with qn as (select n_nationkey from nation union all select n_nationkey from nation2) select * from qn for update")
-	require.NoError(t, err)
-	require.Equal(t, 0, countLockOpNodes(cteOuterForUpdatePlan))
-
-	cteOuterForUpdateLimitPlan, err := runOneStmt(mock, t, "with qn as (select n_nationkey from nation union all select n_nationkey from nation2) select * from qn limit 6 for update")
-	require.NoError(t, err)
-	require.Equal(t, 0, countLockOpNodes(cteOuterForUpdateLimitPlan))
+	for _, test := range []struct {
+		sql         string
+		wantLockOps int
+	}{
+		{"(select n_name from nation for update) union all (select n_name from nation2 for update)", 2},
+		{"(select n_name from nation for update) union all (select n_name from nation2)", 1},
+		{"with qn as (select n_nationkey from nation union all select n_nationkey from nation2) select * from qn for update", 0},
+		{"with qn as (select n_nationkey from nation union all select n_nationkey from nation2) select * from qn limit 6 for update", 0},
+	} {
+		t.Run(test.sql, func(t *testing.T) {
+			logicPlan, err := runOneStmt(mock, t, test.sql)
+			require.NoError(t, err)
+			testDeepCopy(logicPlan)
+			require.Equal(t, test.wantLockOps, countLockOpNodes(logicPlan))
+		})
+	}
 
 	// should error
 	sqls = []string{
@@ -3557,28 +3568,29 @@ const clusterGeneratedInsertTable = "cluster_generated_insert"
 func addClusterGeneratedInsertTableForTest(mock *MockOptimizer) {
 	intType := plan.Type{Id: int32(types.T_int32)}
 	accountType := plan.Type{Id: int32(types.T_uint32), NotNullable: true}
-	cols := []*plan.ColDef{
-		{ColId: 0, Name: "id", OriginName: "id", Typ: intType, NotNull: true,
+	cols := make([]*plan.ColDef, 0, 7)
+	cols = append(cols,
+		&plan.ColDef{ColId: 0, Name: "id", OriginName: "id", Typ: intType, NotNull: true,
 			Default: &plan.Default{NullAbility: false}},
-		{ColId: 1, Name: "base_value", OriginName: "base_value", Typ: intType,
+		&plan.ColDef{ColId: 1, Name: "base_value", OriginName: "base_value", Typ: intType,
 			Default: &plan.Default{NullAbility: true}},
-		{ColId: 2, Name: "stored_value", OriginName: "stored_value", Typ: intType,
+		&plan.ColDef{ColId: 2, Name: "stored_value", OriginName: "stored_value", Typ: intType,
 			Default: &plan.Default{NullAbility: true}, GeneratedCol: &plan.GeneratedCol{
 				Expr: &plan.Expr{Typ: intType, Expr: &plan.Expr_Col{Col: &plan.ColRef{
 					RelPos: 0, ColPos: 1, Name: "base_value",
 				}}},
 				IsStored: true,
 			}},
-		{ColId: 3, Name: "virtual_value", OriginName: "virtual_value", Typ: intType,
+		&plan.ColDef{ColId: 3, Name: "virtual_value", OriginName: "virtual_value", Typ: intType,
 			Default: &plan.Default{NullAbility: true}, GeneratedCol: &plan.GeneratedCol{
 				Expr: &plan.Expr{Typ: intType, Expr: &plan.Expr_Col{Col: &plan.ColRef{
 					RelPos: 0, ColPos: 1, Name: "base_value",
 				}}},
 				IsStored: false,
 			}},
-		{ColId: 4, Name: "account_id", OriginName: "account_id", Typ: accountType, NotNull: true,
+		&plan.ColDef{ColId: 4, Name: "account_id", OriginName: "account_id", Typ: accountType, NotNull: true,
 			Default: &plan.Default{NullAbility: false, Expr: makePlan2Uint32ConstExprWithType(catalog.System_Account)}},
-	}
+	)
 	compPkey := MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
 	compPkey.ColId = 5
 	compPkey.OriginName = catalog.CPrimaryKeyColName

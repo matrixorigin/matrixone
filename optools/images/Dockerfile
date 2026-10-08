@@ -1,4 +1,4 @@
-FROM matrixorigin/golang:1.26.4-ubuntu22.04-matrixone-native-1 AS build-base
+FROM matrixorigin/golang:1.27.0-ubuntu22.04-matrixone-native-1 AS build-base
 
 ENV GOWORK=off
 

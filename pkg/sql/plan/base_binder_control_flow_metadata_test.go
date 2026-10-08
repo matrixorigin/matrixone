@@ -662,7 +662,7 @@ func TestBindControlFlowBinaryCharacterCharsetWidth(t *testing.T) {
 		{name: "utf8mb4 general text", charset: types.CharsetUTF8, width: 8},
 		{name: "utf8mb4 binary collation", charset: types.CharsetUTF8MB4Bin, width: 8},
 		{name: "binary payload", charset: types.CharsetBinary, width: 2},
-		{name: "unknown text identity uses utf8mb4 bound", charset: 255, width: 8},
+		{name: "unknown text identity is rejected", charset: 255},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			character := makePlan2StringConstExprWithType("bc")
@@ -672,6 +672,11 @@ func TestBindControlFlowBinaryCharacterCharsetWidth(t *testing.T) {
 				makePlan2VarBinaryConstExprWithType("a"),
 				character,
 			})
+			if test.charset == 255 {
+				require.ErrorContains(t, err, "unknown collation")
+				require.Nil(t, expr)
+				return
+			}
 			require.NoError(t, err)
 			require.Equal(t, int32(types.T_varbinary), expr.Typ.Id)
 			require.Equal(t, test.width, expr.Typ.Width)

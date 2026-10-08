@@ -47,7 +47,7 @@ func TestIvfCreateStart_Error(t *testing.T) {
 		{
 			name:    "Invalid params json",
 			params:  `{"lists":"1"`,
-			wantErr: "Syntax error",
+			wantErr: "invalid ivf index params json",
 		},
 		{
 			name:    "Missing lists",

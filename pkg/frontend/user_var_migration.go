@@ -110,6 +110,7 @@ func (ses *Session) snapshotUserDefinedVars(ctx context.Context) ([]*query.Migra
 			// NULL and return nil before consulting its type.
 			value.Typ = plan.Type{Id: int32(types.T_text)}
 		}
+		typ := *plan2.DeepCopyType(&variable.Type)
 		item := &query.MigrateUserDefinedVar{
 			Name:                name,
 			Value:               value,
@@ -117,16 +118,7 @@ func (ses *Session) snapshotUserDefinedVars(ctx context.Context) ([]*query.Migra
 			IsBin:               variable.IsBin,
 			PrepareParamKind:    uint32(variable.PrepareParamKind),
 			RuntimeStringDomain: uint32(variable.RuntimeStringDomain),
-			Type: &plan.Type{
-				Id:          variable.Type.Id,
-				NotNullable: variable.Type.NotNullable,
-				AutoIncr:    variable.Type.AutoIncr,
-				Width:       variable.Type.Width,
-				Scale:       variable.Type.Scale,
-				Table:       variable.Type.Table,
-				Enumvalues:  variable.Type.Enumvalues,
-				Charset:     variable.Type.Charset,
-			},
+			Type:                &typ,
 		}
 		result = append(result, item)
 	}
@@ -249,7 +241,7 @@ func decodeUserDefinedVars(
 		}
 		typ := plan.Type{}
 		if item.Type != nil {
-			typ = *item.Type
+			typ = *plan2.DeepCopyType(item.Type)
 		}
 		if typ.Id == 0 {
 			typ = inferUserDefinedVarType(value)

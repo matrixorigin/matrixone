@@ -173,491 +173,6 @@ func BenchmarkAbsInt64(b *testing.B) {
 	}
 }
 
-func initAbsArrayTestCase() []tcTemp {
-	return []tcTemp{
-		{
-			info: "test abs float32 array",
-			typ:  types.T_array_float32,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float32.ToType(),
-					[][]float32{{-4, 9999999, -99999}, {0, -25, 49}},
-					[]bool{false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
-				[][]float32{{4, 9999999, 99999}, {0, 25, 49}},
-				[]bool{false, false}),
-		},
-		{
-			info: "test abs float64 array",
-			typ:  types.T_array_float64,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float64.ToType(),
-					[][]float64{{-4, 9999999, -99999}, {0, -25, 49}},
-					[]bool{false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_array_float64.ToType(), false,
-				[][]float64{{4, 9999999, 99999}, {0, 25, 49}},
-				[]bool{false, false}),
-		},
-	}
-}
-
-func TestAbsArray(t *testing.T) {
-	testCases := initAbsArrayTestCase()
-
-	proc := testutil.NewProcess(t)
-	for _, tc := range testCases {
-		var fcTC FunctionTestCase
-		switch tc.typ {
-		case types.T_array_float32:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, AbsArray[float32])
-		case types.T_array_float64:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, AbsArray[float64])
-		}
-		s, info := fcTC.RunAndFree()
-		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
-	}
-}
-
-func initNormalizeL2ArrayTestCase() []tcTemp {
-	return []tcTemp{
-		{
-			info: "test normalize_l2 float32 array",
-			typ:  types.T_array_float32,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float32.ToType(),
-					[][]float32{
-						{},
-						{1, 2, 3, 4},
-						{-1, 2, 3, 4},
-						{10, 3.333333333333333, 4, 5},
-						{1, 2, 3.6666666666666665, 4.666666666666666}},
-					[]bool{true, false, false, false, false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
-				[][]float32{
-					{},
-					{0.18257418, 0.36514837, 0.5477226, 0.73029673},
-					{-0.18257418, 0.36514837, 0.5477226, 0.73029673},
-					{0.8108108, 0.27027026, 0.32432434, 0.4054054},
-					{0.1576765, 0.315353, 0.5781472, 0.73582363},
-				},
-				[]bool{true, false, false, false, false, false}),
-		},
-		{
-			info: "test normalize_l2 float64 array",
-			typ:  types.T_array_float64,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float64.ToType(),
-					[][]float64{
-						{},
-						{1, 2, 3, 4},
-						{-1, 2, 3, 4},
-						{10, 3.333333333333333, 4, 5},
-						{1, 2, 3.6666666666666665, 4.666666666666666},
-					},
-					[]bool{true, false, false, false, false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_array_float64.ToType(), false,
-				[][]float64{
-					{},
-					{0.18257418583505536, 0.3651483716701107, 0.5477225575051661, 0.7302967433402214},
-					{-0.18257418583505536, 0.3651483716701107, 0.5477225575051661, 0.7302967433402214},
-					{0.8108108108108107, 0.27027027027027023, 0.3243243243243243, 0.4054054054054054},
-					{0.15767649936829103, 0.31535299873658207, 0.5781471643504004, 0.7358236637186913},
-				},
-				[]bool{true, false, false, false, false, false}),
-		},
-		{
-			// int8 input normalizes to a unit vector, which cannot be represented
-			// as int8 — the result must widen to vecf32 (not round back to int8).
-			info: "test normalize_l2 int8 array -> float32",
-			typ:  types.T_array_int8,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_int8.ToType(),
-					[][]int8{{1, 2, 3, 4}, {-1, 2, 3, 4}},
-					[]bool{false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
-				[][]float32{
-					{0.18257418, 0.36514837, 0.5477226, 0.73029673},
-					{-0.18257418, 0.36514837, 0.5477226, 0.73029673},
-				},
-				[]bool{false, false}),
-		},
-		{
-			info: "test normalize_l2 uint8 array -> float32",
-			typ:  types.T_array_uint8,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_uint8.ToType(),
-					[][]uint8{{0, 1, 2, 3}, {10, 20, 30, 40}},
-					[]bool{false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
-				[][]float32{
-					{0, 0.26726124, 0.5345225, 0.80178374},
-					{0.18257418, 0.36514837, 0.5477226, 0.73029673},
-				},
-				[]bool{false, false}),
-		},
-	}
-}
-
-func TestNormalizeL2Array(t *testing.T) {
-	testCases := initNormalizeL2ArrayTestCase()
-
-	proc := testutil.NewProcess(t)
-	for _, tc := range testCases {
-		var fcTC FunctionTestCase
-		switch tc.typ {
-		case types.T_array_float32:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, NormalizeL2Array[float32])
-		case types.T_array_float64:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, NormalizeL2Array[float64])
-		case types.T_array_int8:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, NormalizeL2Array[int8])
-		case types.T_array_uint8:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, NormalizeL2Array[uint8])
-		}
-		s, info := fcTC.RunAndFree()
-		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
-	}
-}
-
-func initSummationArrayTestCase() []tcTemp {
-	return []tcTemp{
-		{
-			info: "test summation float32 array",
-			typ:  types.T_array_float32,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float32.ToType(),
-					[][]float32{{1, 2, 3}, {4, 5, 6}},
-					[]bool{false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{6, 15},
-				[]bool{false, false}),
-		},
-		{
-			info: "test summation float64 array",
-			typ:  types.T_array_float64,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float64.ToType(),
-					[][]float64{{1, 2, 3}, {4, 5, 6}},
-					[]bool{false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{6, 15},
-				[]bool{false, false}),
-		},
-	}
-}
-
-func TestSummationArray(t *testing.T) {
-	testCases := initSummationArrayTestCase()
-
-	proc := testutil.NewProcess(t)
-	for _, tc := range testCases {
-		var fcTC FunctionTestCase
-		switch tc.typ {
-		case types.T_array_float32:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, SummationArray[float32])
-		case types.T_array_float64:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, SummationArray[float64])
-		}
-		s, info := fcTC.RunAndFree()
-		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
-	}
-}
-
-func initL1NormArrayTestCase() []tcTemp {
-	return []tcTemp{
-		{
-			info: "test L1Norm float32 array",
-			typ:  types.T_array_float32,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float32.ToType(),
-					[][]float32{{1, 2, 3}, {4, 5, 6}},
-					[]bool{false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{6, 15},
-				[]bool{false, false}),
-		},
-		{
-			info: "test L1Norm float64 array",
-			typ:  types.T_array_float64,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float64.ToType(),
-					[][]float64{{1, 2, 3}, {4, 5, 6}},
-					[]bool{false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{6, 15},
-				[]bool{false, false}),
-		},
-	}
-}
-
-func TestL1NormArray(t *testing.T) {
-	testCases := initL1NormArrayTestCase()
-
-	proc := testutil.NewProcess(t)
-	for _, tc := range testCases {
-		var fcTC FunctionTestCase
-		switch tc.typ {
-		case types.T_array_float32:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, L1NormArray[float32])
-		case types.T_array_float64:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, L1NormArray[float64])
-		}
-		s, info := fcTC.RunAndFree()
-		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
-	}
-}
-
-func initL2NormArrayTestCase() []tcTemp {
-	return []tcTemp{
-		{
-			info: "test L2Norm float32 array",
-			typ:  types.T_array_float32,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float32.ToType(),
-					[][]float32{{1, 2, 3}, {4, 5, 6}},
-					[]bool{false, false}),
-			},
-			// l2_norm is a DOUBLE function accumulated in float64 (#29083), so a VECF32 whose
-			// elements are exactly representable (1..6) yields the SAME value as the VECF64 case,
-			// not the older, less accurate float32-reduced result.
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{3.741657386773941, 8.774964387392124},
-				[]bool{false, false}),
-		},
-		{
-			info: "test L2Norm float64 array",
-			typ:  types.T_array_float64,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float64.ToType(),
-					[][]float64{{1, 2, 3}, {4, 5, 6}},
-					[]bool{false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{3.741657386773941, 8.774964387392124},
-				[]bool{false, false}),
-		},
-	}
-}
-
-func TestL2NormArray(t *testing.T) {
-	testCases := initL2NormArrayTestCase()
-
-	proc := testutil.NewProcess(t)
-	for _, tc := range testCases {
-		var fcTC FunctionTestCase
-		switch tc.typ {
-		case types.T_array_float32:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, L2NormArray[float32])
-		case types.T_array_float64:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, L2NormArray[float64])
-		}
-		s, info := fcTC.RunAndFree()
-		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
-	}
-}
-
-func initSubVectorTestCase() []tcTemp {
-	return []tcTemp{
-		{
-			info: "2",
-			typ:  types.T_array_float32,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
-				[][]float32{{1, 2, 3}},
-				[]bool{false}),
-		},
-		{
-			info: "2",
-			typ:  types.T_array_float32,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{2}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
-				[][]float32{{2, 3}},
-				[]bool{false}),
-		},
-		{
-			info: "2",
-			typ:  types.T_array_float32,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{3}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
-				[][]float32{{3}},
-				[]bool{false}),
-		},
-		{
-			info: "2",
-			typ:  types.T_array_float32,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{-1}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
-				[][]float32{{3}},
-				[]bool{false}),
-		},
-		{
-			info: "2",
-			typ:  types.T_array_float32,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{-2}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
-				[][]float32{{2, 3}},
-				[]bool{false}),
-		},
-		{
-			info: "2",
-			typ:  types.T_array_float32,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{-3}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
-				[][]float32{{1, 2, 3}},
-				[]bool{false}),
-		},
-		{
-			info: "2",
-			typ:  types.T_array_float32,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
-				[][]float32{{}},
-				[]bool{false}),
-		},
-		{
-			info: "2",
-			typ:  types.T_array_float64,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float64.ToType(), [][]float64{{1, 2, 3}}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_array_float64.ToType(), false,
-				[][]float64{{1, 2, 3}},
-				[]bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_array_float32,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
-				[][]float32{{1}},
-				[]bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_array_float32,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{2}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
-				[][]float32{{1, 2}},
-				[]bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_array_float32,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{3}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
-				[][]float32{{1, 2, 3}},
-				[]bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_array_float32,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{4}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
-				[][]float32{{1, 2, 3}},
-				[]bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_array_float32,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{-2}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{2}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
-				[][]float32{{2, 3}},
-				[]bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_array_float32,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{-3}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{2}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
-				[][]float32{{1, 2}},
-				[]bool{false}),
-		},
-	}
-}
-
-func TestSubVector(t *testing.T) {
-	testCases := initSubVectorTestCase()
-
-	proc := testutil.NewProcess(t)
-	for _, tc := range testCases {
-		var fcTC FunctionTestCase
-		switch tc.typ {
-		case types.T_array_float32:
-			switch tc.info {
-			case "2":
-				fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, SubVectorWith2Args[float32])
-			case "3":
-				fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, SubVectorWith3Args[float32])
-			}
-		case types.T_array_float64:
-			switch tc.info {
-			case "2":
-				fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, SubVectorWith2Args[float64])
-			case "3":
-				fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, SubVectorWith3Args[float64])
-			}
-		}
-
-		s, info := fcTC.RunAndFree()
-		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
-	}
-}
-
 func initAsciiStringTestCase() []tcTemp {
 	return []tcTemp{
 		{
@@ -4531,6 +4046,7 @@ func TestJsonQuoteRejectsInvalidUTF8(t *testing.T) {
 }
 
 func TestJsonQuoteRejectsBinaryDomain(t *testing.T) {
+	proc := testutil.NewProcess(t)
 	for _, tc := range []struct {
 		name string
 		typ  types.Type
@@ -4542,7 +4058,6 @@ func TestJsonQuoteRejectsBinaryDomain(t *testing.T) {
 		{name: "binary invalid utf8", typ: types.New(types.T_varbinary, 1, 0), data: []string{string([]byte{0xff})}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcess(t)
 			ftc := NewFunctionTestCase(proc,
 				[]FunctionTestInput{
 					NewFunctionTestInput(tc.typ, tc.data, []bool{false}),
@@ -4555,7 +4070,6 @@ func TestJsonQuoteRejectsBinaryDomain(t *testing.T) {
 	}
 
 	t.Run("typed binary NULL remains NULL", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
 		ftc := NewFunctionTestCase(proc,
 			[]FunctionTestInput{
 				NewFunctionTestInput(types.T_varbinary.ToType(), []string{"ignored"}, []bool{true}),
@@ -4567,7 +4081,6 @@ func TestJsonQuoteRejectsBinaryDomain(t *testing.T) {
 	})
 
 	t.Run("mixed runtime domains", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
 		ftc := NewFunctionTestCase(proc,
 			[]FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(), []string{"text", "binary"}, []bool{false, false}),
@@ -4581,7 +4094,6 @@ func TestJsonQuoteRejectsBinaryDomain(t *testing.T) {
 	})
 
 	t.Run("masked binary row is not evaluated", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
 		ftc := NewFunctionTestCase(proc,
 			[]FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(), []string{"binary", "text"}, []bool{false, false}),
@@ -4759,8 +4271,8 @@ func TestJsonUnquoteBinaryDomainDefersErrorUntilValue(t *testing.T) {
 }
 
 func TestJsonUnquoteUsesEvaluatedRowStringDomain(t *testing.T) {
+	proc := testutil.NewProcess(t)
 	t.Run("runtime binary provenance is rejected", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
 		tc := NewFunctionTestCase(proc,
 			[]FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(), []string{"plain", "text"}, []bool{false, false}),
@@ -4774,7 +4286,6 @@ func TestJsonUnquoteUsesEvaluatedRowStringDomain(t *testing.T) {
 	})
 
 	t.Run("static binary text override skips masked binary row", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
 		tc := NewFunctionTestCase(proc,
 			[]FunctionTestInput{
 				NewFunctionTestInput(types.T_varbinary.ToType(), []string{"text", "binary"}, []bool{false, false}),
@@ -4791,7 +4302,6 @@ func TestJsonUnquoteUsesEvaluatedRowStringDomain(t *testing.T) {
 	})
 
 	t.Run("prepared text binary text rebind", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
 		tc := NewFunctionTestCase(proc,
 			[]FunctionTestInput{
 				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"plain"}, []bool{false}),

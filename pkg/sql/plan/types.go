@@ -482,6 +482,10 @@ type QueryBuilder struct {
 
 	tag2Table  map[int32]*TableDef
 	tag2NodeID map[int32]int32
+	// syntheticNDVCols is an explicit allowlist for planner-generated column
+	// bindings whose Expr.Ndv was copied from a real source expression. Unknown
+	// synthetic bindings must not make arbitrary carried estimates authoritative.
+	syntheticNDVCols map[[2]int32]struct{}
 
 	nextBindTag      int32
 	nextMsgTag       int32
@@ -551,6 +555,10 @@ type QueryBuilder struct {
 	// common input can be shared after CTE reuse has established any nested
 	// producer boundaries.
 	groupingSetCandidates []groupingSetCandidate
+	// splitGroupingSetCoarseAggs marks the large coarser half of a direct
+	// ROLLUP split. Keep its partial aggregation local: shuffling a key that
+	// the coarser sets roll up creates a hot owner for those sets.
+	splitGroupingSetCoarseAggs map[*plan.Node]struct{}
 	// sharedMaterializationMemoryBytes and sharedMaterializationSpillBytes are
 	// the conservative cumulative reservations made by planner-introduced CTE
 	// and grouping-set sources. They prevent individually valid rewrites from

@@ -702,7 +702,7 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 		}
 		err = c.collectMergeRunResults(
 			s.Proc,
-			newScopeRunResultForProcess(err, s.Proc),
+			newScopeRunResult(err, s),
 			preScopeResultReceiveChan,
 			notifyMessageResultReceiveChan,
 			cleanupCtx)
@@ -1889,11 +1889,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	// StarCount-only path: aggOptimize already called rel.StarCount() and set PartialResults.
 	// Return EmptyReaders so no data flows; MergeGroup will use PartialResults only.
 	if s.StarCountOnly {
-		readers = make([]engine.Reader, s.NodeInfo.Mcpu)
-		for i := range readers {
-			readers[i] = new(readutil.EmptyReader)
-		}
-		return readers, nil
+		return emptyScanReaders(s.NodeInfo.Mcpu), nil
 	}
 
 	// receive runtime filter and optimize the datasource.
@@ -1906,7 +1902,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	}
 	if s.DataSource.node != nil && s.DataSource.node.NodeType == plan.Node_VECTOR_INDEX_SCAN {
 		if emptyScan {
-			return emptyVectorScanReaders(s.NodeInfo.Mcpu), nil
+			return emptyScanReaders(s.NodeInfo.Mcpu), nil
 		}
 		return s.buildVectorIndexReaders(runtimeFilterList)
 	}
@@ -1916,15 +1912,19 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			break
 		}
 	}
-	if !emptyScan {
-		blockFilterList, err = s.handleRuntimeFilters(c, runtimeFilterList)
-		if err != nil {
-			return
-		}
-		err = s.getRelData(c, blockFilterList)
-		if err != nil {
-			return
-		}
+	if emptyScan {
+		// DROP and constant-false predicates prove that this scan has no rows.
+		// Skipping only range collection still lets relation readers scan memory.
+		s.NodeInfo.Data = nil // No reader owns the assigned ranges or tombstones.
+		return emptyScanReaders(s.NodeInfo.Mcpu), nil
+	}
+	blockFilterList, err = s.handleRuntimeFilters(c, runtimeFilterList)
+	if err != nil {
+		return
+	}
+	err = s.getRelData(c, blockFilterList)
+	if err != nil {
+		return
 	}
 
 	switch {
@@ -2147,7 +2147,7 @@ func (s *Scope) buildVectorIndexReaders(runtimeFilters []receivedRuntimeFilter) 
 		return nil, err
 	}
 	if !hasQuery {
-		return emptyVectorScanReaders(s.NodeInfo.Mcpu), nil
+		return emptyScanReaders(s.NodeInfo.Mcpu), nil
 	}
 	if factory, ok := searcher.Search().(searchplugin.ParallelHooks); ok && req.MembershipFilterRequired {
 		readers, err := factory.NewReaders(s.Proc, spec, req, max(1, s.NodeInfo.Mcpu))
@@ -2174,7 +2174,7 @@ func (s *Scope) buildVectorIndexReaders(runtimeFilters []receivedRuntimeFilter) 
 	return []engine.Reader{reader}, nil
 }
 
-func emptyVectorScanReaders(count int) []engine.Reader {
+func emptyScanReaders(count int) []engine.Reader {
 	readers := make([]engine.Reader, max(1, count))
 	for i := range readers {
 		readers[i] = new(readutil.EmptyReader)
