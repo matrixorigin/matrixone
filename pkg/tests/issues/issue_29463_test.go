@@ -175,15 +175,25 @@ func TestIssue29463PreparedCompositeKeyDomains(t *testing.T) {
 		strings, err := conn.PrepareContext(ctx, "select count(*) from string_key where k1=? and k2=?")
 		require.NoError(t, err)
 		defer strings.Close()
+		var count int
+		strictErr := strings.QueryRowContext(ctx, int64(1), int64(2)).Scan(&count)
+		require.ErrorContains(t, strictErr, `"invalid" is invalid numeric string`,
+			"strict numeric comparison must reject the malformed stored VARCHAR key")
 		for _, tc := range []struct {
 			value any
 			count int
 		}{
 			{"2", 1}, {int64(2), 2}, {float64(2), 2}, {"invalid", 1}, {nil, 0}, {"3", 1},
 		} {
-			var count int
-			require.NoError(t, strings.QueryRowContext(ctx, int64(1), tc.value).Scan(&count))
-			require.Equal(t, tc.count, count, "binding %T:%v", tc.value, tc.value)
+			t.Run(fmt.Sprintf("%T:%v", tc.value, tc.value), func(t *testing.T) {
+				switch tc.value.(type) {
+				case int64, float64:
+					withNumericCompatibility(t)
+				}
+				var count int
+				require.NoError(t, strings.QueryRowContext(ctx, int64(1), tc.value).Scan(&count))
+				require.Equal(t, tc.count, count, "binding %T:%v", tc.value, tc.value)
+			})
 		}
 		require.NoError(t, strings.Close())
 		mustExec(t, ctx, conn, "drop table string_key")
