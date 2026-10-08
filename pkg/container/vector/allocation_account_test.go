@@ -194,7 +194,10 @@ func TestShuffleWithAllocationAccountUsesAlternateCapacityClass(t *testing.T) {
 	vec := newAccountedTestVector(t, types.T_int64.ToType(), ordinary)
 	require.NoError(t, AppendFixedList(
 		vec, []int64{3, 1, 2}, nil, mp))
+	ordinaryBeforeNumericRows := ordinaryController.used
 	require.NoError(t, vec.SetIsBinRowsWithMP([]bool{true, false, true}, mp))
+	require.Greater(t, ordinaryController.used, ordinaryBeforeNumericRows)
+	numericBitmapCharge := ordinaryController.used - ordinaryBeforeNumericRows
 	ordinaryController.failAt = ordinaryController.calls + 1
 	require.NoError(t, vec.ShuffleWithAllocationAccount(
 		[]int64{1, 2, 0}, mp, recovery))
@@ -205,10 +208,11 @@ func TestShuffleWithAllocationAccountUsesAlternateCapacityClass(t *testing.T) {
 	})
 	require.Same(t, ordinary, vec.AllocationAccountSelection())
 	require.False(t, ordinaryController.rejected)
-	require.Zero(t, ordinaryController.used)
+	require.Equal(t, numericBitmapCharge, ordinaryController.used)
 	require.Positive(t, recoveryController.used)
 
 	vec.Free(mp)
+	require.Zero(t, ordinaryController.used)
 	require.Zero(t, recoveryController.used)
 	require.NoError(t,
 		account.UnregisterCapacityController(class, recoveryController))
