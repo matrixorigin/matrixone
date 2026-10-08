@@ -41,6 +41,37 @@ func TestIssue26879PreparedCommonValueFollowup(t *testing.T) {
 		conn, err := db.Conn(ctx)
 		require.NoError(t, err)
 		defer conn.Close()
+		withNumericCompatibility := func(t *testing.T, run func()) {
+			t.Helper()
+			var originalSQLMode string
+			require.NoError(t, conn.QueryRowContext(ctx, "select @@session.sql_mode").Scan(&originalSQLMode))
+			defer func() {
+				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cleanupCancel()
+				_, restoreErr := conn.ExecContext(cleanupCtx, fmt.Sprintf(
+					"set session sql_mode = '%s'", strings.ReplaceAll(originalSQLMode, "'", "''")))
+				require.NoError(t, restoreErr, "restore session sql_mode")
+			}()
+			compatibilitySQLMode := originalSQLMode
+			if !strings.Contains(compatibilitySQLMode, "MYSQL_NUMERIC_COMPATIBILITY") {
+				if compatibilitySQLMode != "" {
+					compatibilitySQLMode += ","
+				}
+				compatibilitySQLMode += "MYSQL_NUMERIC_COMPATIBILITY"
+			}
+			_, setErr := conn.ExecContext(ctx, fmt.Sprintf(
+				"set session sql_mode = '%s'", strings.ReplaceAll(compatibilitySQLMode, "'", "''")))
+			require.NoError(t, setErr, "enable numeric compatibility for legacy malformed value")
+			run()
+		}
+		assertStrictNumericInputError := func(t *testing.T, err error, input string) {
+			t.Helper()
+			var sqlError *mysql.MySQLError
+			require.ErrorAs(t, err, &sqlError)
+			require.Equal(t, uint16(20301), sqlError.Number)
+			require.Contains(t, sqlError.Message, input)
+			require.Contains(t, sqlError.Message, "invalid numeric string")
+		}
 		mustExec(t, ctx, conn, "create database issue_26879_followup")
 		defer mustExec(t, ctx, conn, "drop database issue_26879_followup")
 		mustExec(t, ctx, conn, "use issue_26879_followup")
@@ -70,44 +101,60 @@ func TestIssue26879PreparedCommonValueFollowup(t *testing.T) {
 						require.NoError(t, err)
 						defer stmt.Close()
 					}
+					queryIDs := func(value any) ([]int, error) {
+						var rows *sql.Rows
+						var queryErr error
+						if protocol == "sql" {
+							literal := "NULL"
+							if value != nil {
+								literal = "'" + value.(string) + "'"
+							}
+							mustExec(t, ctx, conn, "set @followup="+literal)
+							rows, queryErr = conn.QueryContext(ctx, "execute followup using "+strings.TrimSuffix(strings.Repeat("@followup,", count), ","))
+						} else {
+							args := make([]any, count)
+							for i := range args {
+								args[i] = value
+							}
+							rows, queryErr = stmt.QueryContext(ctx, args...)
+						}
+						if queryErr != nil {
+							return nil, queryErr
+						}
+						defer rows.Close()
+						var got []int
+						for rows.Next() {
+							var id int
+							if scanErr := rows.Scan(&id); scanErr != nil {
+								return nil, scanErr
+							}
+							got = append(got, id)
+						}
+						return got, rows.Err()
+					}
 					for _, value := range []any{nil, "9007199254740992.0000000002", "9007199254740992.0000000003", nil, "not-a-number", "9007199254740992.0000000002"} {
-						func() {
-							var rows *sql.Rows
-							var queryErr error
-							if protocol == "sql" {
-								literal := "NULL"
-								if value != nil {
-									literal = "'" + value.(string) + "'"
-								}
-								mustExec(t, ctx, conn, "set @followup="+literal)
-								rows, queryErr = conn.QueryContext(ctx, "execute followup using "+strings.TrimSuffix(strings.Repeat("@followup,", count), ","))
-							} else {
-								args := make([]any, count)
-								for i := range args {
-									args[i] = value
-								}
-								rows, queryErr = stmt.QueryContext(ctx, args...)
+						if value == "not-a-number" {
+							if tc.name == "marker-derived result" {
+								_, strictErr := queryIDs(value)
+								assertStrictNumericInputError(t, strictErr, "not-a-number")
 							}
-							require.NoError(t, queryErr)
-							defer rows.Close()
-							var got []int
-							for rows.Next() {
-								var id int
-								require.NoError(t, rows.Scan(&id))
-								got = append(got, id)
-							}
-							require.NoError(t, rows.Err())
-							want := tc.want
-							switch value {
-							case nil:
-								want = tc.null
-							case "not-a-number":
-								want = tc.invalid
-							case "9007199254740992.0000000003":
-								want = tc.changed
-							}
-							require.Equal(t, want, got, "value=%v", value)
-						}()
+							withNumericCompatibility(t, func() {
+								got, queryErr := queryIDs(value)
+								require.NoError(t, queryErr)
+								require.Equal(t, tc.invalid, got, "value=%v", value)
+							})
+							continue
+						}
+						got, queryErr := queryIDs(value)
+						require.NoError(t, queryErr)
+						want := tc.want
+						switch value {
+						case nil:
+							want = tc.null
+						case "9007199254740992.0000000003":
+							want = tc.changed
+						}
+						require.Equal(t, want, got, "value=%v", value)
 					}
 				})
 			}
