@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	stdslices "slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -4764,7 +4765,7 @@ func appendDeleteIndexTablePlanWithRoute(
 	// route above it; JOIN result expressions themselves must remain columns.
 	lastNodeId = builder.appendNode(&plan.Node{
 		NodeType: plan.Node_PROJECT, Children: []int32{lastNodeId},
-		ProjectList: projection, BindingTags: slices.Clone(outputNode.BindingTags),
+		ProjectList: projection, BindingTags: stdslices.Clone(outputNode.BindingTags),
 	}, bindCtx)
 	return lastNodeId, routePos, nil
 }
@@ -6662,7 +6663,7 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 						"partitioned index delete is missing its route column")
 				} else {
 					if isUk {
-						inputTags := slices.Clone(builder.qry.Nodes[lastNodeId].BindingTags)
+						inputTags := stdslices.Clone(builder.qry.Nodes[lastNodeId].BindingTags)
 						rowIDRelPos := int32(0)
 						if len(inputTags) > 0 {
 							rowIDRelPos = inputTags[0]
