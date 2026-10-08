@@ -683,22 +683,13 @@ func restartDriver(t *testing.T, d *LogServiceDriver, h func(*entry.Entry)) *Log
 	for lsn, intervals := range d.sequence.psn2DSNMap {
 		t.Logf("%d %v", lsn, intervals)
 	}
-	// assert.Equal(t,len(preAddr),len(d.addr))
-	// for lsn,intervals := range preAddr{
-	// 	replayedInterval,ok:=d.addr[lsn]
-	// 	assert.True(t,ok)
-	// 	assert.Equal(t,intervals.Intervals[0].Start,replayedInterval.Intervals[0].Start)
-	// 	assert.Equal(t,intervals.Intervals[0].End,replayedInterval.Intervals[0].End)
-	// }
 	t.Logf("Valid lsn: %v", d.sequence.psns)
-	// assert.Equal(t,preLsns.GetCardinality(),d.validPSN.GetCardinality())
 	t.Logf("Truncated %d", d.truncateDSNIntent.Load())
 	t.Logf("LSTruncated %d", d.truncatedPSN)
 	return d
 }
 
 func TestReplay1(t *testing.T) {
-	// t.Skip("debug")
 	service, ccfg := initTest(t)
 	defer service.Close()
 
@@ -736,13 +727,6 @@ func TestReplay1(t *testing.T) {
 		e.WaitDone()
 	}
 
-	// i := 0
-	// h := func(e *entry.Entry) {
-	// 	payload := []byte(fmt.Sprintf("payload %d", i))
-	// 	assert.Equal(t, payload, e.Entry.GetPayload())
-	// 	i++
-	// }
-
 	d = restartDriver(t, d, nil)
 
 	for _, e := range entries {
@@ -751,25 +735,3 @@ func TestReplay1(t *testing.T) {
 
 	d.Close()
 }
-
-// func Test_TokenController(t *testing.T) {
-// 	c := newTokenController(100)
-// 	var wg sync.WaitGroup
-
-// 	pool, _ := ants.NewPool(64)
-// 	defer pool.Release()
-
-// 	now := time.Now()
-
-// 	for i := 0; i < 1000; i++ {
-// 		wg.Add(1)
-// 		pool.Submit(func() {
-// 			defer wg.Done()
-// 			token := c.Apply()
-// 			time.Sleep(time.Millisecond * time.Duration(rand.Intn(10)+1))
-// 			c.Putback(token)
-// 		})
-// 	}
-// 	wg.Wait()
-// 	t.Logf("time cost: %v", time.Since(now))
-// }
