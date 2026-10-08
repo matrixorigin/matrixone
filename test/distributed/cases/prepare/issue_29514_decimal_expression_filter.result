@@ -618,4 +618,51 @@ execute range_peers using @a, @b;
 ➤ count(*)[-5,64,0]  𝄀
 0
 deallocate prepare range_peers;
+set @v = 54321;
+prepare integer_peer from 'select count(*), min(d) from t where d = ?';
+explain analyze force execute integer_peer using @v;
+➤ tp query plan[12,-1,0]  𝄀
+execute integer_peer using @v;
+➤ count(*)[-5,64,0]  ¦  min(t.d)[3,12,2]  𝄀
+1  ¦  54321.00
+set @v = 54322;
+execute integer_peer using @v;
+➤ count(*)[-5,64,0]  ¦  min(t.d)[3,12,2]  𝄀
+1  ¦  54322.00
+set @v = 9223372036854775807;
+execute integer_peer using @v;
+➤ count(*)[-5,64,0]  ¦  min(t.d)[3,12,2]  𝄀
+0  ¦  null
+set @v = null;
+execute integer_peer using @v;
+➤ count(*)[-5,64,0]  ¦  min(t.d)[3,12,2]  𝄀
+0  ¦  null
+set @v = 54321;
+execute integer_peer using @v;
+➤ count(*)[-5,64,0]  ¦  min(t.d)[3,12,2]  𝄀
+1  ¦  54321.00
+deallocate prepare integer_peer;
+prepare integer_cast_peer from 'select count(*), min(d) from t where d = cast(? as double)';
+execute integer_cast_peer using @v;
+➤ count(*)[-5,64,0]  ¦  min(t.d)[3,12,2]  𝄀
+1  ¦  54321.00
+set @v = 54322;
+execute integer_cast_peer using @v;
+➤ count(*)[-5,64,0]  ¦  min(t.d)[3,12,2]  𝄀
+1  ¦  54322.00
+set @v = null;
+execute integer_cast_peer using @v;
+➤ count(*)[-5,64,0]  ¦  min(t.d)[3,12,2]  𝄀
+0  ¦  null
+set @v = 54321;
+execute integer_cast_peer using @v;
+➤ count(*)[-5,64,0]  ¦  min(t.d)[3,12,2]  𝄀
+1  ¦  54321.00
+deallocate prepare integer_cast_peer;
+set @v = 9007199254740992;
+prepare integer_collision_peer from 'select count(*) from wide where d = cast(? as double)';
+execute integer_collision_peer using @v;
+➤ count(*)[-5,64,0]  𝄀
+2
+deallocate prepare integer_collision_peer;
 drop database issue_29514_decimal_expr;
