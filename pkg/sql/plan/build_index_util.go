@@ -239,6 +239,11 @@ func checkIndexColumnSupportability(ctx context.Context, col *ColDef, keyPart *t
 	}
 
 	colName := keyPart.ColName.ColNameOrigin()
+	if indexKind == "primary" {
+		if err := rejectNativeUnicodePrimaryKey(ctx, col.Typ, colName); err != nil {
+			return err
+		}
+	}
 
 	switch col.Typ.Id {
 	case int32(types.T_blob):
@@ -288,6 +293,19 @@ func checkIndexColumnSupportability(ctx context.Context, col *ColDef, keyPart *t
 		default:
 			return moerr.NewNotSupported(ctx, fmt.Sprintf("GEOMETRY column '%s' cannot be in index", colName))
 		}
+	}
+	return nil
+}
+
+// Native Unicode primary-key bytes are not yet canonicalized by the storage
+// index and lock paths.  Rejecting new definitions is safer than allowing two
+// collation-equivalent values to commit as distinct keys.  Existing catalog
+// metadata is still handled conservatively by the planner's composite-key
+// rewrite guard.
+func rejectNativeUnicodePrimaryKey(ctx context.Context, typ planpb.Type, columnName string) error {
+	if types.IsUnicodeCollation(uint8(typ.GetCharset())) {
+		return moerr.NewNotSupported(ctx,
+			fmt.Sprintf("native Unicode collation column '%s' cannot be in primary key until collation-aware primary-key deduplication is supported", columnName))
 	}
 	return nil
 }

@@ -69,16 +69,17 @@ func TestUnicodeCollationConsumerContract(t *testing.T) {
 		exec("create database " + schema)
 		exec("use " + schema)
 
-		// The PK reader must fail open when persisted PK bytes cannot prove the
-		// UCA relation. Check the lookup both before and after DN flush.
-		exec("create table pk_lookup (s varchar(64) collate utf8mb4_unicode_ci primary key)")
-		exec("insert into pk_lookup values ('A')")
-		require.Equal(t, 1, queryCount("select count(*) from pk_lookup where s='a'"))
-		exec("select mo_ctl('dn','flush','" + schema + ".pk_lookup')")
-		require.Equal(t, 1, queryCount("select count(*) from pk_lookup where s='a'"))
+		// Native Unicode primary-key bytes are not yet canonicalized by the
+		// storage dedup/lock paths. Reject both single- and composite-key
+		// definitions instead of allowing collation-equivalent values to commit.
+		_, err = db.ExecContext(ctx, "create table pk_rejected (s varchar(64) collate utf8mb4_unicode_ci primary key)")
+		require.Error(t, err)
+		_, err = db.ExecContext(ctx, "create table composite_pk_rejected (s varchar(64) collate utf8mb4_unicode_ci, n int, primary key (s, n))")
+		require.Error(t, err)
 
 		exec("create table words (id int primary key, s varchar(64) collate utf8mb4_unicode_ci)")
 		exec("insert into words values (1,'Z'),(2,'a'),(3,'A'),(4,'b')")
+		require.Equal(t, 2, queryCount("select count(*) from words where lower(s)='a'"))
 		require.Equal(t, []string{"2", "3"}, queryStrings("select id from words where s='a' order by id"))
 		require.Equal(t, []string{"2", "3"}, queryStrings("select id from words where s in ('a','zz') order by id"))
 		require.Equal(t, []string{"1", "4"}, queryStrings("select id from words where s not in ('a','zz') order by id"))

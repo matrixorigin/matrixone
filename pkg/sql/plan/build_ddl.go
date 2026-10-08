@@ -3437,6 +3437,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				case *tree.AttributeGeneratedAlways:
 					isGenerated = true
 				case *tree.AttributePrimaryKey, *tree.AttributeKey:
+					if err := rejectNativeUnicodePrimaryKey(ctx.GetContext(), colType, colNameOrigin); err != nil {
+						return err
+					}
 					if colType.GetId() == int32(types.T_blob) {
 						return moerr.NewNotSupported(ctx.GetContext(), "blob type in primary key")
 					}
@@ -4000,6 +4003,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			}
 			// Reject VIRTUAL generated columns in PRIMARY KEY
 			col := colMap[primaryKey]
+			if err := rejectNativeUnicodePrimaryKey(ctx.GetContext(), col.Typ, col.OriginName); err != nil {
+				return err
+			}
 			if col.GeneratedCol != nil && !col.GeneratedCol.IsStored {
 				return moerr.NewNotSupported(ctx.GetContext(),
 					fmt.Sprintf("defining a virtual generated column '%s' as primary key", col.OriginName))

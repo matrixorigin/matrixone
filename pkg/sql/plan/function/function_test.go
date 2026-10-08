@@ -314,6 +314,19 @@ func TestComparisonTypeCastRuleNormalizesCharToVarchar(t *testing.T) {
 	require.Equal(t, types.CharsetLegacy, rightOut.Charset)
 }
 
+func TestComparisonTypeCastRulePreservesNativeUnicodeRevision(t *testing.T) {
+	native := types.NewWithCharset(types.T_varchar, 12, 0, types.CharsetUTF8MB4UnicodeCI)
+	defaultText := types.T_varchar.ToType()
+
+	hasCast, left, right := comparisonTypeCastRule(native, defaultText)
+
+	require.True(t, hasCast)
+	require.Equal(t, types.CharsetUTF8MB4UnicodeCI, left.Charset)
+	require.Equal(t, types.CharsetUTF8MB4UnicodeCI, right.Charset)
+	require.Equal(t, uint8(types.CollationVersionV1), left.CollationVersion)
+	require.Equal(t, uint8(types.CollationVersionV1), right.CollationVersion)
+}
+
 func Test_fixedTypeCastRule2(t *testing.T) {
 	inputs := []struct {
 		shouldCast bool
