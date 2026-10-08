@@ -17,10 +17,12 @@ package lockservice
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -1694,11 +1696,13 @@ func TestRemoteUnlockWithContextStopsOnCancellation(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
 	client := &blockingUnlockClient{unlockStarted: make(chan struct{}, 1)}
+	failed := &failOnceSendClient{Client: client, method: pb.Method_Unlock, err: &net.OpError{Op: "write", Net: "unix", Err: syscall.EPIPE}}
+
 	remote := newRemoteLockTable(
 		"s1",
 		time.Second,
 		pb.LockTable{ServiceID: "s2", Table: 1},
-		client,
+		failed,
 		func(pb.LockTable) {},
 		getLogger(""),
 	)
@@ -1707,8 +1711,15 @@ func TestRemoteUnlockWithContextStopsOnCancellation(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
+	finished := make(chan struct{})
 	go func() {
+		defer close(finished)
 		done <- remote.unlockWithContext(ctx, txn, nil, timestamp.Timestamp{})
+	}()
+	defer func() {
+		cancel()
+		<-finished
+		reuse.Free(txn, nil)
 	}()
 
 	select {
@@ -2481,9 +2492,20 @@ func TestUnlockRemoteWithRetry(t *testing.T) {
 		func(l *remoteLockTable, s Server) {
 			txnID := []byte("txn1")
 			txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(32), "")
-			l.unlock(txn, nil, timestamp.Timestamp{})
-			<-c
-			reuse.Free(txn, nil)
+			defer reuse.Free(txn, nil)
+			failed := &failOnceSendClient{Client: l.client, method: pb.Method_Unlock, err: &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}}
+			l.client = failed
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			require.NoError(t, l.unlockWithContext(ctx, txn, nil, timestamp.Timestamp{}))
+			require.True(t, failed.failed.Load())
+			require.Equal(t, 2, n, "valid bind must still retry the owner")
+			select {
+			case <-c:
+			default:
+				t.Fatal("unlock returned before the owner acknowledged cleanup")
+			}
+
 		},
 		func(lt pb.LockTable) {},
 	)
@@ -2856,6 +2878,27 @@ func TestRemoteWithBindChanged(t *testing.T) {
 				l.getLock(ctx, txnID, pb.WaitTxn{TxnID: []byte{1}}, nil),
 				ErrLockTableBindChanged)
 			requireRemoteBindChanged(t, ctx, c, newBind)
+			originalClient := l.client
+			defer func() { l.client = originalClient }()
+			for _, method := range []pb.Method{pb.Method_Lock, pb.Method_Unlock, pb.Method_GetTxnLock} {
+				failed := &failOnceSendClient{Client: originalClient, method: method,
+					err: &net.OpError{Op: "write", Net: "unix", Err: syscall.EPIPE}}
+				l.client = failed
+				switch method {
+				case pb.Method_Lock:
+					txn.Lock()
+					l.lock(ctx, txn, [][]byte{{1}}, LockOptions{}, func(_ pb.Result, err error) { lockErr = err })
+					txn.Unlock()
+					require.ErrorIs(t, lockErr, ErrLockTableBindChanged)
+				case pb.Method_Unlock:
+					require.NoError(t, l.unlockWithContext(ctx, txn, nil, timestamp.Timestamp{}))
+				case pb.Method_GetTxnLock:
+					require.ErrorIs(t, l.getLock(ctx, txnID, pb.WaitTxn{TxnID: []byte{1}}, nil), ErrLockTableBindChanged)
+				}
+				require.True(t, failed.failed.Load(), "method %s did not exercise transport failure", method)
+				requireRemoteBindChanged(t, ctx, c, newBind)
+			}
+
 			reuse.Free(txn, nil)
 		},
 		func(bind pb.LockTable) {
@@ -2915,12 +2958,25 @@ func TestRetryRemoteLockError(t *testing.T) {
 			err:  moerr.NewUnexpectedEOF(context.Background(), "test"),
 			want: true,
 		},
+		{name: "broken pipe", err: syscall.EPIPE, want: true},
+		{name: "wrapped write broken pipe", err: fmt.Errorf("send: %w", &net.OpError{Op: "write", Net: "unix", Err: &os.SyscallError{Syscall: "write", Err: syscall.EPIPE}}), want: true},
+		{name: "connection reset", err: syscall.ECONNRESET, want: true},
+		{name: "wrapped read reset", err: &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}, want: true},
+		{name: "closed connection", err: net.ErrClosed, want: true},
+		{name: "wrapped closed connection", err: fmt.Errorf("send: %w", net.ErrClosed), want: true},
+		{name: "nil", err: nil, want: false},
+		{name: "canceled", err: context.Canceled, want: false},
+		{name: "owner rejection", err: ErrTxnNotFound, want: false},
+		{name: "unsupported request", err: moerr.NewNotSupportedNoCtx("unsupported"), want: false},
+		{name: "permission denied", err: &net.OpError{Op: "write", Net: "unix", Err: os.ErrPermission}, want: false},
+		{name: "text alone", err: errors.New("broken pipe"), want: false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := retryRemoteLockError(tt.err)
 			assert.Equal(t, tt.want, got)
+			assert.Equal(t, tt.want, retryRemoteUnlockError(tt.err))
 		})
 	}
 }
