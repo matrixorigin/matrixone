@@ -13,8 +13,7 @@
 // limitations under the License.
 
 // Package search runs a classic fulltext IndexSearchScan: a MATCH over a
-// classic fulltext index. Scan holds the search itself; the remaining
-// fulltext_index_scan table function drives the same Scan.
+// classic fulltext index. Scan holds the search itself.
 package search
 
 import (

@@ -30,7 +30,6 @@ import (
 const opName = "table_function"
 
 const (
-	FULLTEXT_INDEX_SCAN     = "fulltext_index_scan"
 	FULLTEXT_INDEX_TOKENIZE = "fulltext_index_tokenize"
 )
 
@@ -180,8 +179,6 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 		tblArg.ctr.state, err = viewColumnsPrepare(proc, tblArg)
 	case subscriptionTablesFunctionName, subscriptionColumnsFunctionName:
 		tblArg.ctr.state, err = subscriptionMetadataPrepare(proc, tblArg)
-	case "fulltext_index_scan":
-		tblArg.ctr.state, err = fulltextIndexScanPrepare(proc, tblArg)
 	case "fulltext_index_tokenize":
 		tblArg.ctr.state, err = fulltextIndexTokenizePrepare(proc, tblArg)
 	case "fulltext2_create":

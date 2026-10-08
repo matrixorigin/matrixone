@@ -30,7 +30,7 @@ create database subscriber_database_alias from pub_ft_20210 publication pub_ft_d
 select id from subscriber_database_alias.all_articles where match(body) against('publication') order by id;
 select * from subscriber_table_alias.secret_table;
 select count(*) from mo_catalog.mo_indexes where algo = 'fulltext';
--- Direct string arguments cannot select the publisher account.
+-- The internal fulltext index search is not callable from SQL.
 select * from fulltext_index_scan('{}', '`pub-ft-db`.`secret_table`', '`pub-ft-db`.`secret_table`', 'hello', 0);
 prepare subscriber_match_stmt from 'select id from subscriber_table_alias.`articles-quoted` where match(body) against(\'hello\') order by id';
 -- Keep the prepared statement in an open transaction across publisher index maintenance.

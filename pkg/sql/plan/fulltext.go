@@ -28,7 +28,6 @@ import (
 
 // coldef shall copy index type
 var (
-	fulltext_index_scan_func_name     = "fulltext_index_scan"
 	fulltext_index_tokenize_func_name = "fulltext_index_tokenize"
 
 	ftIndexColdefs = []*plan.ColDef{
@@ -73,50 +72,6 @@ var (
 		},
 	}
 )
-
-// arg list [param, source_table_name, index_table_name, search_against, mode]
-func (builder *QueryBuilder) buildFullTextIndexScan(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
-
-	if len(exprs) != 5 {
-		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS != 5).")
-	}
-
-	params, err := builder.getFullTextParams(tbl.Func)
-	if err != nil {
-		return 0, err
-	}
-	// remove the first argment and put the first argument to Param
-	exprs = exprs[1:]
-
-	sql, err := builder.getFullTextSql(tbl.Func, params)
-	if err != nil {
-		return 0, err
-	}
-
-	return builder.buildFullTextIndexScanNode(ctx, exprs, children, params, sql)
-}
-
-func (builder *QueryBuilder) buildFullTextIndexScanNode(ctx *BindContext, exprs []*plan.Expr, children []int32, params string, sql string) (int32, error) {
-	colDefs := DeepCopyColDefList(ftIndexColdefs)
-
-	node := &plan.Node{
-		NodeType: plan.Node_FUNCTION_SCAN,
-		Stats:    &plan.Stats{Sql: sql},
-		TableDef: &plan.TableDef{
-			TableType: "func_table", //test if ok
-			//Name:               tbl.String(),
-			TblFunc: &plan.TableFunction{
-				Name:  fulltext_index_scan_func_name,
-				Param: []byte(params),
-			},
-			Cols: colDefs,
-		},
-		BindingTags:     []int32{builder.genNewBindTag()},
-		TblFuncExprList: exprs,
-		Children:        children,
-	}
-	return builder.appendNode(node, ctx), nil
-}
 
 // buildFullTextSearchScan builds the INDEX_SEARCH_SCAN of a MATCH resolved to the
 // classic fulltext index idxdef of scanNode, whose index table is idxObjRef. pattern is
@@ -167,31 +122,6 @@ func (builder *QueryBuilder) buildFullTextSearchScan(
 		IndexSearchScan: spec,
 	}
 	return builder.appendNode(node, ctx), nil
-}
-
-func (builder *QueryBuilder) getFullTextSql(fn *tree.FuncExpr, params string) (string, error) {
-	if _, ok := fn.Exprs[2].(*tree.NumVal); !ok {
-		return "", moerr.NewInvalidInput(builder.GetContext(), "index table name is not a constant")
-	}
-
-	idxtbl := fn.Exprs[2].String()
-
-	patternVal, ok := fn.Exprs[3].(*tree.NumVal)
-	if !ok {
-		return "", nil
-	}
-
-	pattern := patternVal.String()
-	modeVal, ok := fn.Exprs[4].(*tree.NumVal)
-	if !ok {
-		return "", moerr.NewInvalidInput(builder.GetContext(), "mode is not a constant")
-	}
-	mode, ok := modeVal.Int64()
-	if !ok {
-		return "", moerr.NewInvalidInput(builder.GetContext(), "mode is not an integer")
-	}
-
-	return builder.getFullTextIndexScanSql(params, idxtbl, pattern, mode)
 }
 
 func (builder *QueryBuilder) getFullTextIndexScanSql(params string, idxtbl string, pattern string, mode int64) (string, error) {

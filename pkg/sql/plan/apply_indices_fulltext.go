@@ -34,11 +34,11 @@ import (
 
 // The idea is as follows:
 // 1. Find fulltext_match() function from projection (projNode) and filters (ScanNode)
-// and then convert fulltext_match() to table function fulltext_index_scan().
-// 2. Do INNER JOIN fulltext_index_scan tables and source table with key doc_id
+// and then convert fulltext_match() to a fulltext index search scan.
+// 2. Do INNER JOIN the search scans and source table with key doc_id
 // 3. Add SORT node with score key DESC if SORT node does not exist.  If SORT node exists,
 // Add the JOIN node to SORT node.
-// 4. Replace the fulltext_match() in project list with ColRef score in fulltext_index_scan()
+// 4. Replace the fulltext_match() in project list with ColRef score of the search scan
 //
 // explain  select *, match(body, title) against('red')  from src where match(body) against('red');
 // +------------------------------------------------------------------------------------------+
@@ -54,10 +54,8 @@ import (
 // |               ->  Join                                                                   |
 // |                     Join Type: INNER                                                     |
 // |                     Join Cond: (mo_fulltext_alias_1.doc_id = mo_fulltext_alias_0.doc_id) |
-// |                     ->  Table Function on fulltext_index_scan                            |
-// |                           ->  Values Scan "*VALUES*"                                     |
-// |                     ->  Table Function on fulltext_index_scan                            |
-// |                           ->  Values Scan "*VALUES*"                                     |
+// |                     ->  Fulltext Index Scan on ftidx                                     |
+// |                     ->  Fulltext Index Scan on ftidx                                     |
 // +------------------------------------------------------------------------------------------+
 func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID int32, projNode *plan.Node, sortNode *plan.Node, scanNode *plan.Node,
 	filterids []int32, filterIndexDefs []*plan.IndexDef, projids []int32, projIndexDef []*plan.IndexDef,
@@ -277,8 +275,7 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 // |               Join Type: INNER                                 |
 // |               Join Cond: (src.id = mo_fulltext_alias_0.doc_id) |
 // |               ->  Table Scan on eric.src                       |
-// |               ->  Table Function on fulltext_index_scan        |
-// |                     ->  Values Scan "*VALUES*"                 |
+// |               ->  Fulltext Index Scan on ftidx                 |
 // +----------------------------------------------------------------+
 func (builder *QueryBuilder) applyIndicesForAggUsingFullTextIndex(nodeID int32, projNode *plan.Node, aggNode *plan.Node, scanNode *plan.Node,
 	filterids []int32, filterIndexDefs []*plan.IndexDef,
@@ -524,7 +521,7 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	//
 	//	Join
 	//	  Table Scan   Filter Cond: (fulltext_match('hello', 0, body) > 0)   <- throws
-	//	  Table Function on fulltext_index_scan                              <- index IS used
+	//	  Fulltext Index Scan on ftidx                                       <- index IS used
 	//
 	// Take them off the scan here; they are re-attached above the join once the score column
 	// exists, with each inner MATCH rewritten to reference the scan built for THAT match.
@@ -809,7 +806,7 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 
 	// Determine join structure based on whether scanNode still has non-fulltext filters.
 	// When filters remain, use pre-filter pushdown (nested JOIN + runtime filter)
-	// to reduce the number of doc_ids that fulltext_index_scan must process.
+	// to reduce the number of doc_ids that the fulltext search scan must process.
 	var joinnodeID int32
 
 	if pushdownEnabled {
@@ -2390,7 +2387,7 @@ func collectDrivingFullTextMatches(expr *plan.Expr, out []*plan.Expr) []*plan.Ex
 // `MATCH(...) <op> const` comparisons on ONE served match, for pushing into the fulltext2 search scan.
 //
 // Only fulltext2 has an engine that can use it (the WAND search scores documents itself);
-// classic fulltext_index_scan has no equivalent, so callers only build this for fulltext2.
+// classic fulltext search has no equivalent, so callers only build this for fulltext2.
 //
 // Two rules keep it safe:
 //

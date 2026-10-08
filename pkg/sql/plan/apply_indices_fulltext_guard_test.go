@@ -25,7 +25,7 @@ import (
 
 func TestFullTextRoutineVariablePatternReachesBothIndexScans(t *testing.T) {
 	for _, fulltext2 := range []bool{false, true} {
-		name := fulltext_index_scan_func_name
+		name := "fulltext"
 		if fulltext2 {
 			name = "fulltext2"
 		}

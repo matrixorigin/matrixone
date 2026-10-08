@@ -1027,8 +1027,6 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			IsSingle:               t.IsSingle,
 			IndexReaderParam:       t.IndexReaderParam,
 			RuntimeFilterProbeList: t.RuntimeFilterSpecs,
-			FulltextSourceRef:      t.FulltextSourceRef,
-			FulltextIndexRef:       t.FulltextIndexRef,
 		}
 		in.Limit = t.Limit
 
@@ -1212,8 +1210,6 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 				IsSingle:               t.TableFunction.IsSingle,
 				IndexReaderParam:       t.TableFunction.IndexReaderParam,
 				RuntimeFilterProbeList: t.TableFunction.RuntimeFilterSpecs,
-				FulltextSourceRef:      t.TableFunction.FulltextSourceRef,
-				FulltextIndexRef:       t.TableFunction.FulltextIndexRef,
 			}
 		}
 	case *multi_update.MultiUpdate:
@@ -1691,8 +1687,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.IsSingle = opr.TableFunction.IsSingle
 		arg.IndexReaderParam = opr.TableFunction.IndexReaderParam
 		arg.RuntimeFilterSpecs = opr.TableFunction.RuntimeFilterProbeList
-		arg.FulltextSourceRef = opr.TableFunction.FulltextSourceRef
-		arg.FulltextIndexRef = opr.TableFunction.FulltextIndexRef
 		arg.Limit = opr.Limit
 		op = arg
 	case vm.External:
@@ -1867,8 +1861,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 			arg.TableFunction.IsSingle = opr.TableFunction.IsSingle
 			arg.TableFunction.IndexReaderParam = opr.TableFunction.IndexReaderParam
 			arg.TableFunction.RuntimeFilterSpecs = opr.TableFunction.RuntimeFilterProbeList
-			arg.TableFunction.FulltextSourceRef = opr.TableFunction.FulltextSourceRef
-			arg.TableFunction.FulltextIndexRef = opr.TableFunction.FulltextIndexRef
 		}
 		op = arg
 	case vm.MultiUpdate:

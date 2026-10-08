@@ -616,11 +616,8 @@ message TableFunction {
   string name = 1;
   bytes param = 2;
   bool is_single = 3;
-  // Planner-resolved references for an internal FULLTEXT scan over a
-  // subscription. SQL arguments remain user-visible data and must never carry
-  // the publisher execution identity.
-  ObjectRef fulltext_source_ref = 4;
-  ObjectRef fulltext_index_ref = 5;
+  reserved 4, 5;
+  reserved "fulltext_source_ref", "fulltext_index_ref";
 }
 
 enum ShuffleType {

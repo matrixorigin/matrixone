@@ -39,11 +39,6 @@ type TableFunction struct {
 	Limit    *plan.Expr
 	IsSingle bool
 
-	// Planner-resolved references for internal FULLTEXT SQL over a subscription.
-	// They are never populated from table-function arguments.
-	FulltextSourceRef *plan.ObjectRef
-	FulltextIndexRef  *plan.ObjectRef
-
 	// Named-snapshot read timestamp from the FUNCTION_SCAN node (Node.ScanSnapshot). Set by
 	// the planner only, never from TVF arguments (#27941).
 	ScanSnapshot *plan.Snapshot

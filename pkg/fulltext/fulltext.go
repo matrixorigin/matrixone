@@ -66,7 +66,7 @@ func NewSearchAccum(srctbl string, tblname string, pattern string, mode int64, p
 }
 
 // parserFromParams extracts the "parser" field from a JSON params string
-// (the same payload threaded through fulltext_index_scan / _tokenize).
+// (the same payload threaded through the search scan / fulltext_index_tokenize).
 // An empty params string returns "".
 func parserFromParams(params string) (string, error) {
 	if len(params) == 0 {

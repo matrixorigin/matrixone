@@ -398,8 +398,7 @@ func TestSelectMetaLockRequirement(t *testing.T) {
 		{
 			name: "rewritten fulltext plan",
 			query: &plan.Query{Nodes: []*plan.Node{{
-				NodeType:    plan.Node_FUNCTION_SCAN,
-				ProjectList: []*plan.Expr{call("fulltext_index_scan")},
+				NodeType: plan.Node_INDEX_SEARCH_SCAN,
 			}}},
 		},
 	}

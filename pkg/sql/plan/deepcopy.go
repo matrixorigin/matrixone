@@ -754,10 +754,8 @@ func DeepCopyTableDef(table *plan.TableDef, withCols bool) *plan.TableDef {
 
 	if table.TblFunc != nil {
 		newTable.TblFunc = &plan.TableFunction{
-			Name:              table.TblFunc.Name,
-			Param:             slices.Clone(table.TblFunc.Param),
-			FulltextSourceRef: DeepCopyObjectRef(table.TblFunc.FulltextSourceRef),
-			FulltextIndexRef:  DeepCopyObjectRef(table.TblFunc.FulltextIndexRef),
+			Name:  table.TblFunc.Name,
+			Param: slices.Clone(table.TblFunc.Param),
 		}
 	}
 
