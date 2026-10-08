@@ -22,9 +22,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -52,7 +54,9 @@ func TestEmbeddedSiriusPublicMOReader(t *testing.T) {
 	db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
-	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
+	// USE, transactions and prepared division must share one public session.
+	db.SetMaxOpenConns(1)
+	ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
 	t.Cleanup(cancel)
 	for _, statement := range []string{
 		"create database sirius_reader_contract", "use sirius_reader_contract",
@@ -80,12 +84,127 @@ func TestEmbeddedSiriusPublicMOReader(t *testing.T) {
 	compare("select n,s from t order by n")
 	execSQLRequire(t, ctx, db, "rollback")
 	compare("select n,s from t order by n")
+	t.Run("exact decimal values and metadata", func(t *testing.T) {
+		execSQLRequire(t, ctx, db, "create table d (id int not null primary key, a decimal(15,2), b decimal(38,6), c decimal(65,8))")
+		execSQLRequire(t, ctx, db, "insert into d values (1,9007199254740.99,9007199254740993.000001,340282366920938463463374607431768211457.12345678),(2,-12.50,-25.000001,-340282366920938463463374607431768211457.12345678),(3,NULL,NULL,NULL),(4,0,0,0)")
+		for _, statement := range []string{
+			"select id,a,b,c from d order by id",
+			"select id,a+a,b-b,c+c,-c,a*b,c/c,c div c,c mod c from d order by id",
+			"select id,case when c>0 then c else -c end,coalesce(c,0),c is null,c is not null from d order by id",
+			"select sum(a),avg(a),min(a),max(a),sum(b),avg(b),min(b),max(b),sum(c),avg(c),min(c),max(c),count(c) from d",
+			"select sum(c),avg(c),min(c),max(c),count(c) from d where id=3",
+			"select sum(c),avg(c),min(c),max(c),count(c) from d where id<0",
+			"select x.id,x.c,y.c from d x join d y on x.c=y.c order by x.c,x.id,y.id",
+			"select c,count(c) from d group by c order by c",
+		} {
+			t.Run(statement, func(t *testing.T) {
+				names, values := readSiriusPublicRows(t, ctx, db, statement)
+				gpuNames, gpuValues := readSiriusPublicRows(t, ctx, db, "/*+ SIDECAR GPU */ "+statement)
+				require.Equal(t, names, gpuNames)
+				require.Equal(t, values, gpuValues)
+				var queryID string
+				require.NoError(t, db.QueryRowContext(ctx, "select last_query_id()").Scan(&queryID))
+				t.Logf("embedded decimal query_id=%s", queryID)
+			})
+		}
+	})
+	t.Run("numeric errors and healthy reuse", func(t *testing.T) {
+		execSQLRequire(t, ctx, db, "create table numeric_errors (id int not null primary key, v decimal(38,0), c decimal(65,0))")
+		execSQLRequire(t, ctx, db, "insert into numeric_errors values (1,99999999999999999999999999999999999999,99999999999999999999999999999999999999999999999999999999999999999),(2,99999999999999999999999999999999999999,99999999999999999999999999999999999999999999999999999999999999999)")
+		for _, tc := range []struct {
+			statement string
+			number    uint16
+			state     string
+		}{
+			{"select v*v from numeric_errors", 1690, "22003"},
+			{"select sum(v*v) from numeric_errors", 1690, "22003"},
+			{"select sum(c) from numeric_errors", 20301, "HY000"},
+		} {
+			t.Run(tc.statement, func(t *testing.T) {
+				for _, prefix := range []string{"", "/*+ SIDECAR GPU */ "} {
+					err := readSiriusPublicError(t, ctx, db, prefix+tc.statement)
+					var mysqlErr *mysql.MySQLError
+					require.ErrorAs(t, err, &mysqlErr)
+					require.Equal(t, tc.number, mysqlErr.Number)
+					require.Equal(t, tc.state, string(mysqlErr.SQLState[:]))
+				}
+				names, values := readSiriusPublicRows(t, ctx, db, "select sum(v) from numeric_errors")
+				gpuNames, gpuValues := readSiriusPublicRows(t, ctx, db, "/*+ SIDECAR GPU */ select sum(v) from numeric_errors")
+				require.Equal(t, names, gpuNames)
+				require.Equal(t, values, gpuValues)
+			})
+		}
+		for _, statement := range []string{
+			"select case when id<0 then v*v else v end from numeric_errors order by id",
+			"select coalesce(v,v*v) from numeric_errors order by id",
+			"select v/0 from numeric_errors order by id",
+		} {
+			t.Run(statement, func(t *testing.T) {
+				names, values := readSiriusPublicRows(t, ctx, db, statement)
+				gpuNames, gpuValues := readSiriusPublicRows(t, ctx, db, "/*+ SIDECAR GPU */ "+statement)
+				require.Equal(t, names, gpuNames)
+				require.Equal(t, values, gpuValues)
+			})
+		}
+	})
+	t.Run("prepared division rebinds values and metadata", func(t *testing.T) {
+		execSQLRequire(t, ctx, db, "create table division_input (a decimal(10,2), b decimal(10,2))")
+		execSQLRequire(t, ctx, db, "insert into division_input values (1,3)")
+		var original int
+		require.NoError(t, db.QueryRowContext(ctx, "select @@session.div_precision_increment").Scan(&original))
+		t.Cleanup(func() {
+			cleanup, stop := context.WithTimeout(context.Background(), 10*time.Second)
+			defer stop()
+			execSQLRequire(t, cleanup, db, fmt.Sprintf("set session div_precision_increment=%d", original))
+		})
+		control, err := db.PrepareContext(ctx, "select a/b as q from division_input")
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, control.Close()) })
+		embedded, err := db.PrepareContext(ctx, "/*+ SIDECAR GPU */ select a/b as q from division_input")
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, embedded.Close()) })
+		for _, increment := range []int{0, 4, 10, 30, 4} {
+			t.Run(fmt.Sprint(increment), func(t *testing.T) {
+				execSQLRequire(t, ctx, db, fmt.Sprintf("set session div_precision_increment=%d", increment))
+				rows, err := control.QueryContext(ctx)
+				require.NoError(t, err)
+				names, values := readSiriusPublicResult(t, rows)
+				rows, err = embedded.QueryContext(ctx)
+				require.NoError(t, err)
+				gpuNames, gpuValues := readSiriusPublicResult(t, rows)
+				require.Equal(t, names, gpuNames)
+				require.Equal(t, values, gpuValues)
+				scale := min(2+increment, 30)
+				require.Equal(t, [][]sql.NullString{{{String: "0." + strings.Repeat("3", scale), Valid: true}}}, gpuValues)
+				require.Contains(t, gpuNames[0], fmt.Sprintf("decimal=%d,%d/true", 12+increment, scale))
+			})
+		}
+	})
+}
+
+func readSiriusPublicError(t *testing.T, ctx context.Context, db *sql.DB, statement string) error {
+	t.Helper()
+	rows, err := db.QueryContext(ctx, statement)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		// Numeric errors may arrive after the result metadata. Drain to the
+		// terminal packet without retaining any rows from a failing query.
+	}
+	return rows.Err()
 }
 
 func readSiriusPublicRows(t *testing.T, ctx context.Context, db *sql.DB, statement string) ([]string, [][]sql.NullString) {
 	t.Helper()
 	rows, err := db.QueryContext(ctx, statement)
 	require.NoError(t, err)
+	return readSiriusPublicResult(t, rows)
+}
+
+func readSiriusPublicResult(t *testing.T, rows *sql.Rows) ([]string, [][]sql.NullString) {
+	t.Helper()
 	defer rows.Close()
 	names, err := rows.Columns()
 	require.NoError(t, err)

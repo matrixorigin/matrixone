@@ -53,6 +53,7 @@ type Candidate struct {
 	headings   []string
 	types      []planpb.Type
 	embeddedMO bool
+	profile    EmbeddedExportProfile
 }
 
 // Read identifies one physical table scan which needs a TaeRead lease.
@@ -97,17 +98,17 @@ func (c *Candidate) OutputTypes() []planpb.Type {
 
 // Export validates q without performing I/O.
 func Export(q *planpb.Query) (*Candidate, error) {
-	return exportCandidate(q, false)
+	return exportCandidate(q, false, EmbeddedExportProfile{})
 }
 
 // ExportEmbeddedMO validates a plan whose entire scans remain owned by MO.
 // Storage ordering hints are legal only at those scan boundaries; Flight
 // cannot claim their semantics because it bypasses the MO reader.
-func ExportEmbeddedMO(q *planpb.Query) (*Candidate, error) {
-	return exportCandidate(q, true)
+func ExportEmbeddedMO(q *planpb.Query, profile EmbeddedExportProfile) (*Candidate, error) {
+	return exportCandidate(q, true, profile)
 }
 
-func exportCandidate(q *planpb.Query, embeddedMO bool) (*Candidate, error) {
+func exportCandidate(q *planpb.Query, embeddedMO bool, profile EmbeddedExportProfile) (*Candidate, error) {
 	if q == nil {
 		return nil, moerr.NewInternalErrorNoCtx("substrait: missing query")
 	}
@@ -125,8 +126,8 @@ func exportCandidate(q *planpb.Query, embeddedMO bool) (*Candidate, error) {
 			return nil, notEligiblef(EligibilityOperator, "node %d carries unsupported rank semantics", nodeID)
 		}
 	}
-	c := &Candidate{query: q, embeddedMO: embeddedMO}
-	e := exporter{query: q, readValues: make(map[int32][]byte), validateOnly: true, embeddedMO: embeddedMO}
+	c := &Candidate{query: q, embeddedMO: embeddedMO, profile: profile}
+	e := exporter{query: q, readValues: make(map[int32][]byte), validateOnly: true, embeddedMO: embeddedMO, profile: profile}
 	for step, rootID := range q.Steps {
 		if rootID < 0 || int(rootID) >= len(q.Nodes) {
 			return nil, moerr.NewInternalErrorNoCtxf("substrait: invalid root node id %d at step %d", rootID, step)
@@ -159,6 +160,13 @@ func exportCandidate(q *planpb.Query, embeddedMO bool) (*Candidate, error) {
 	}
 	if len(c.types) != width {
 		return nil, moerr.NewInternalErrorNoCtxf("substrait: query root has %d output types for %d columns", len(c.types), width)
+	}
+	if profile.exactDecimalV1 {
+		for i := range c.types {
+			if exactDecimalBits(&c.types[i]) == 256 && c.types[i].Width > 65 {
+				return nil, notEligiblef(EligibilityType, "public exact decimal precision exceeds 65")
+			}
+		}
 	}
 	return c, nil
 }
@@ -205,6 +213,8 @@ func (c *Candidate) Build(readValues map[int32][]byte) ([]byte, error) {
 }
 
 type exporter struct {
+	profile          EmbeddedExportProfile
+	exactUsed        bool
 	embeddedMO       bool
 	query            *planpb.Query
 	readValues       map[int32][]byte
@@ -243,7 +253,7 @@ func (e *exporter) node(id int32) (*spb.Rel, error) {
 	switch n.NodeType {
 	case planpb.Node_TABLE_SCAN:
 		rel, err = e.read(n)
-		if err == nil && e.embeddedBindings != nil {
+		if err == nil && (e.embeddedBindings != nil || e.embeddedMO) {
 			return rel, nil
 		}
 	case planpb.Node_FILTER:
@@ -547,7 +557,7 @@ func (e *exporter) join(n *planpb.Node) (*spb.Rel, error) {
 	inputs := []int{leftWidth, rightWidth}
 	var condition *spb.Expression
 	if len(n.OnList) == 0 {
-		condition, err = literal(&planpb.Literal{Value: &planpb.Literal_Bval{Bval: true}}, &planpb.Type{Id: int32(types.T_bool), NotNullable: true})
+		condition, err = e.literal(&planpb.Literal{Value: &planpb.Literal_Bval{Bval: true}}, &planpb.Type{Id: int32(types.T_bool), NotNullable: true})
 	} else {
 		if err = validateExprFields(n.OnList, inputs); err != nil {
 			return nil, err
@@ -611,7 +621,7 @@ func (e *exporter) read(n *planpb.Node) (*spb.Rel, error) {
 	if n.IndexScanInfo.ProtoSize() != 0 || n.IndexReaderParam != nil {
 		return nil, notEligiblef(EligibilityOperator, "node %d carries unsupported index scan semantics", n.NodeId)
 	}
-	schema, err := namedStruct(n.TableDef)
+	schema, err := e.namedStruct(n.TableDef)
 	if err != nil {
 		return nil, err
 	}
@@ -639,21 +649,31 @@ func (e *exporter) read(n *planpb.Node) (*spb.Rel, error) {
 			})
 		}
 	}
-	if e.embeddedBindings != nil {
-		if e.embeddedReadSeen == nil {
-			e.embeddedReadSeen = make(map[int32]bool)
+	if e.embeddedBindings != nil || e.embeddedMO {
+		// Validation and emission consume the same post-scan contract. MO owns
+		// this scan's filters/projection/fetch; never validate them as a Flight
+		// expression and then silently omit them in the embedded build pass.
+		binding := EmbeddedReadBinding{BindingID: uint64(len(e.reads)), Source: EmbeddedReadMO}
+		if e.embeddedBindings != nil {
+			if e.embeddedReadSeen == nil {
+				e.embeddedReadSeen = make(map[int32]bool)
+			}
+			if e.embeddedReadSeen[n.NodeId] {
+				return nil, moerr.NewInternalErrorNoCtxf("substrait: embedded read node %d is replayed", n.NodeId)
+			}
+			e.embeddedReadSeen[n.NodeId] = true
+			var ok bool
+			binding, ok = e.embeddedBindings[n.NodeId]
+			if !ok {
+				return nil, moerr.NewInternalErrorNoCtxf("substrait: missing embedded binding for node %d", n.NodeId)
+			}
 		}
-		if e.embeddedReadSeen[n.NodeId] {
-			return nil, moerr.NewInternalErrorNoCtxf("substrait: embedded read node %d is replayed", n.NodeId)
-		}
-		e.embeddedReadSeen[n.NodeId] = true
-		binding, ok := e.embeddedBindings[n.NodeId]
-		if !ok {
-			return nil, moerr.NewInternalErrorNoCtxf("substrait: missing embedded binding for node %d", n.NodeId)
-		}
-		_, outputSchema, embeddedErr := embeddedMORead(n)
+		_, outputSchema, embeddedErr := embeddedMORead(n, e.profile)
 		if embeddedErr != nil {
 			return nil, embeddedErr
+		}
+		for _, typ := range outputSchema.Struct.Types {
+			e.exactUsed = e.exactUsed || typ.GetUserDefined() != nil
 		}
 		return embeddedNamedRead(binding, outputSchema), nil
 	}
@@ -732,7 +752,7 @@ func (e *exporter) aggregate(n *planpb.Node) (*spb.Rel, error) {
 		if len(n.GroupBy) == 0 && aggregateCanReturnNullOnEmpty(functionID) {
 			outputType.NotNullable = false
 		}
-		supported, capabilityErr := hasSemanticCapability(semanticAggregate, name, f.Func, f.Args, &outputType)
+		supported, capabilityErr := e.hasSemanticCapability(semanticAggregate, name, f.Func, f.Args, &outputType)
 		if capabilityErr != nil {
 			return nil, capabilityErr
 		}
@@ -750,9 +770,12 @@ func (e *exporter) aggregate(n *planpb.Node) (*spb.Rel, error) {
 			}
 			args[j] = valueArg(a)
 		}
-		out, xerr := substraitType(&outputType)
+		out, xerr := e.substraitType(&outputType)
 		if xerr != nil {
 			return nil, xerr
+		}
+		if e.profile.exactDecimalV1 && exactDecimalBits(&outputType) != 0 {
+			name = "mo_decimal_" + name
 		}
 		measures[i] = &spb.AggregateRel_Measure{Measure: &spb.AggregateFunction{FunctionReference: e.function(name), Arguments: args, OutputType: out, Phase: spb.AggregationPhase_AGGREGATION_PHASE_INITIAL_TO_RESULT, Invocation: spb.AggregateFunction_AGGREGATION_INVOCATION_ALL}}
 	}
@@ -890,7 +913,7 @@ func (e *exporter) expr(x *planpb.Expr, inputs []int) (*spb.Expression, error) {
 		}
 		return field(ordinal), nil
 	case *planpb.Expr_Lit:
-		return literal(v.Lit, &x.Typ)
+		return e.literal(v.Lit, &x.Typ)
 	case *planpb.Expr_List:
 		return nil, notEligiblef(EligibilityExpression, "an expression list is only valid as an IN argument")
 	case *planpb.Expr_F:
@@ -898,6 +921,9 @@ func (e *exporter) expr(x *planpb.Expr, inputs []int) (*spb.Expression, error) {
 			return nil, moerr.NewInternalErrorNoCtxf("substrait: malformed function")
 		}
 		functionID, _ := function.DecodeOverloadID(v.F.Func.Obj)
+		if e.profile.exactDecimalV1 && (decimalSignature(v.F.Args, &x.Typ) || functionID == function.COALESCE) {
+			return e.exactScalarExpr(x, v.F, inputs)
+		}
 		switch functionID {
 		case function.CAST:
 			return e.castExpr(x, v.F, inputs)
@@ -921,14 +947,14 @@ func (e *exporter) expr(x *planpb.Expr, inputs []int) (*spb.Expression, error) {
 		if err := validateScalarSignature(name, &x.Typ, v.F.Args); err != nil {
 			return nil, err
 		}
-		supported, capabilityErr := hasSemanticCapability(semanticScalar, name, v.F.Func, v.F.Args, &x.Typ)
+		supported, capabilityErr := e.hasSemanticCapability(semanticScalar, name, v.F.Func, v.F.Args, &x.Typ)
 		if capabilityErr != nil {
 			return nil, capabilityErr
 		}
 		if !supported {
 			return nil, notEligiblef(EligibilityExpression, "scalar overload %q has no declared Sirius semantic equivalence", v.F.Func.ObjName)
 		}
-		if _, err := substraitType(&x.Typ); err != nil {
+		if _, err := e.substraitType(&x.Typ); err != nil {
 			return nil, err
 		}
 		args := make([]*spb.Expression, len(v.F.Args))
@@ -949,7 +975,7 @@ func (e *exporter) unaryMinusExpr(result *planpb.Expr, call *planpb.Function, in
 	if len(call.Args) != 1 || call.Args[0] == nil || !isDecimalType(types.T(call.Args[0].Typ.Id)) || semanticTypeFromPlan(&call.Args[0].Typ) != semanticTypeFromPlan(&result.Typ) {
 		return nil, notEligiblef(EligibilityExpression, "unsupported unary minus signature")
 	}
-	supported, err := hasSemanticCapability(semanticScalar, "unary_minus", call.Func, call.Args, &result.Typ)
+	supported, err := e.hasSemanticCapability(semanticScalar, "unary_minus", call.Func, call.Args, &result.Typ)
 	if err != nil {
 		return nil, err
 	}
@@ -966,7 +992,7 @@ func (e *exporter) unaryMinusExpr(result *planpb.Expr, call *planpb.Function, in
 	} else {
 		zero.Value = &planpb.Literal_Decimal128Val{Decimal128Val: &planpb.Decimal128{}}
 	}
-	zeroExpr, err := literal(zero, &result.Typ)
+	zeroExpr, err := e.literal(zero, &result.Typ)
 	if err != nil {
 		return nil, err
 	}
@@ -1000,7 +1026,7 @@ func (e *exporter) castExpr(result *planpb.Expr, call *planpb.Function, inputs [
 	if len(call.Args) != 2 {
 		return nil, notEligiblef(EligibilityExpression, "cast requires a value and target type descriptor")
 	}
-	supported, err := hasSemanticCapability(semanticScalar, "cast", call.Func, call.Args, &result.Typ)
+	supported, err := e.hasSemanticCapability(semanticScalar, "cast", call.Func, call.Args, &result.Typ)
 	if err != nil {
 		return nil, err
 	}
@@ -1015,7 +1041,7 @@ func (e *exporter) castExpr(result *planpb.Expr, call *planpb.Function, inputs [
 	if err != nil {
 		return nil, err
 	}
-	target, err := substraitType(&result.Typ)
+	target, err := e.substraitType(&result.Typ)
 	if err != nil {
 		return nil, err
 	}
@@ -1028,7 +1054,7 @@ func (e *exporter) caseExpr(result *planpb.Expr, call *planpb.Function, inputs [
 	if len(call.Args) < 3 || len(call.Args)%2 == 0 {
 		return nil, notEligiblef(EligibilityExpression, "case requires condition/result pairs and an else expression")
 	}
-	supported, err := hasSemanticCapability(semanticScalar, "if_then", call.Func, call.Args, &result.Typ)
+	supported, err := e.hasSemanticCapability(semanticScalar, "if_then", call.Func, call.Args, &result.Typ)
 	if err != nil {
 		return nil, err
 	}
@@ -1061,7 +1087,7 @@ func (e *exporter) inExpr(result *planpb.Expr, call *planpb.Function, inputs []i
 	if len(call.Args) < 2 {
 		return nil, notEligiblef(EligibilityExpression, "in requires a value and at least one option")
 	}
-	supported, err := hasSemanticCapability(semanticScalar, "singular_or_list", call.Func, call.Args, &result.Typ)
+	supported, err := e.hasSemanticCapability(semanticScalar, "singular_or_list", call.Func, call.Args, &result.Typ)
 	if err != nil {
 		return nil, err
 	}
@@ -1169,7 +1195,7 @@ func (e *exporter) extractExpr(result *planpb.Expr, call *planpb.Function, input
 	default:
 		return nil, notEligiblef(EligibilityExpression, "extract field %q has no declared Sirius semantic equivalence", unit)
 	}
-	supported, err := hasSemanticCapability(semanticScalar, "extract", call.Func, call.Args, &result.Typ)
+	supported, err := e.hasSemanticCapability(semanticScalar, "extract", call.Func, call.Args, &result.Typ)
 	if err != nil {
 		return nil, err
 	}
@@ -1180,7 +1206,7 @@ func (e *exporter) extractExpr(result *planpb.Expr, call *planpb.Function, input
 	if err != nil {
 		return nil, err
 	}
-	output, err := substraitType(&result.Typ)
+	output, err := e.substraitType(&result.Typ)
 	if err != nil {
 		return nil, err
 	}
@@ -1194,7 +1220,7 @@ func (e *exporter) extractExpr(result *planpb.Expr, call *planpb.Function, input
 }
 
 func (e *exporter) scalar(name string, typ *planpb.Type, args ...*spb.Expression) *spb.Expression {
-	out, _ := substraitType(typ)
+	out, _ := e.substraitType(typ)
 	fargs := make([]*spb.FunctionArgument, len(args))
 	for i := range args {
 		fargs[i] = valueArg(args[i])
@@ -1203,6 +1229,9 @@ func (e *exporter) scalar(name string, typ *planpb.Type, args ...*spb.Expression
 }
 
 func (e *exporter) function(name string) uint32 {
+	if strings.HasPrefix(name, "mo_decimal_") {
+		e.exactUsed = true
+	}
 	if e.functions == nil {
 		e.functions = make(map[string]uint32)
 	}
@@ -1220,13 +1249,28 @@ func (e *exporter) extensions() []*extensions.SimpleExtensionDeclaration {
 		byAnchor[anchor] = name
 	}
 	result := make([]*extensions.SimpleExtensionDeclaration, 0, len(e.functions))
+	if e.exactUsed {
+		result = append(result, &extensions.SimpleExtensionDeclaration{MappingType: &extensions.SimpleExtensionDeclaration_ExtensionType_{
+			ExtensionType: &extensions.SimpleExtensionDeclaration_ExtensionType{
+				ExtensionUrnReference: exactDecimalURNAnchor, TypeAnchor: exactDecimalTypeAnchor, Name: "mo_exact_decimal",
+			},
+		}})
+	}
 	for anchor := 1; anchor < len(byAnchor); anchor++ {
-		result = append(result, &extensions.SimpleExtensionDeclaration{MappingType: &extensions.SimpleExtensionDeclaration_ExtensionFunction_{ExtensionFunction: &extensions.SimpleExtensionDeclaration_ExtensionFunction{FunctionAnchor: uint32(anchor), Name: byAnchor[anchor]}}})
+		ref := uint32(0)
+		if strings.HasPrefix(byAnchor[anchor], "mo_decimal_") {
+			ref = exactDecimalURNAnchor
+		}
+		result = append(result, &extensions.SimpleExtensionDeclaration{MappingType: &extensions.SimpleExtensionDeclaration_ExtensionFunction_{ExtensionFunction: &extensions.SimpleExtensionDeclaration_ExtensionFunction{FunctionAnchor: uint32(anchor), Name: byAnchor[anchor], ExtensionUrnReference: ref}}})
 	}
 	return result
 }
 
 func namedStruct(t *planpb.TableDef) (*spb.NamedStruct, error) {
+	return namedStructForProfile(t, EmbeddedExportProfile{})
+}
+
+func namedStructForProfile(t *planpb.TableDef, profile EmbeddedExportProfile) (*spb.NamedStruct, error) {
 	names := make([]string, 0, len(t.Cols))
 	fields := make([]*spb.Type, 0, len(t.Cols))
 	hidden := false
@@ -1241,7 +1285,7 @@ func namedStruct(t *planpb.TableDef) (*spb.NamedStruct, error) {
 		if hidden {
 			return nil, moerr.NewInternalErrorNoCtxf("substrait: table %q has non-suffix hidden columns", t.Name)
 		}
-		typ, err := substraitType(&c.Typ)
+		typ, err := profile.substraitType(&c.Typ)
 		if err != nil {
 			if IsNotEligible(err) {
 				return nil, err

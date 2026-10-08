@@ -56,6 +56,13 @@ and existing structural group/join/sort consumers. Unsupported reachable
 shapes fail before readers start. No new projection pushdown or MO fragment
 execution substitutes for an unsupported native operation.
 
+Retain Native B's signature limits, including SUM/AVG results whose physical
+width is at least their input width. A physically wide, low-precision input
+whose MO-bound SUM returns Decimal128 is declined; changing that result to
+Decimal256 would violate descriptor identity. Scan-owned filters remain MO
+reader work in both validation and emission, rather than being validated as
+Flight expressions and then omitted from the embedded wire plan.
+
 All decimal-bearing parts of one exact closure use the extension. Standard
 Flight emission stays on its existing type/function contract. Declaration
 anchors and serialization are deterministic. Original and encoded plans retain
@@ -130,3 +137,59 @@ retirement. A nil/unready lease manager is not proof that Flight is empty.
 No direct-TAE, storage/directory-lock, Docker image/base or fallback work is
 introduced here. #28968 remains open until D acceptance; #28966 remains open
 through cutover, verified release availability and retirement.
+
+## Implementation evidence (2026-10-09)
+
+The implementation base is `83d82b8ee0cd694e0c6a7146902d74ae4dfb415a`.
+The selected native SDK is generated from clean merged Sirius
+`5ea60cd31955d0dced2adcbcd3df0772207b79ef`, with importer
+`95d9ce8d78490db3991ab6145653716aa3ec42c9`. Tests use the current
+Go 1.27.1 toolchain and frozen Pixi `mo` environment.
+
+The complete Q1-Q22 MO exporter inventory passes validation and deterministic
+serialization. Focused descriptor/overload/literal, Decimal256 publication,
+borrowed-result, error-identity and schema-evidence tests pass. The exporter,
+bridge and CN owning-package suites pass. The full compile suite fails
+`TestRequiredIVFWorkersFallbackAsWholeQuery/{supported,canceled}`; both failures
+reproduce at the verified clean base with the same GPU-linked host test mode.
+They are not reported as a passing full compile suite.
+
+The combined Sirius/cuVS release build passes SDK verification, linking and
+packaging. Real MySQL tests pass fixed-width Decimal64/128/256 values and NULLs,
+scalar overflow (including inside SUM), SUM final overflow, healthy runtime
+reuse, and binary-prepared division at increments 0/4/10/30 with independent
+value and public metadata assertions. Terminal events confirm exact profile,
+capability mask 31, completed GPU tasks, no fallback and zero retained input
+and result credit after cleanup. Public fixture setup remains one isolated
+cluster; each selected run takes about 9 seconds including startup/teardown.
+CASE/COALESCE inactive-overflow masking and division-by-zero NULL controls
+also pass. CPU-only release compilation and binary loading pass with the frozen
+compiler; the host compiler's failure in unchanged jemalloc is an environment
+failure, not a code result. The default full repository static-check gate and
+the affected closure with `gpu,sirius,sirius_integration` tags pass.
+
+The review traces each changed hunk through the five closure rows above. Q1
+retains the existing input-lease publication/release owner and result-batch
+cleanup inside fill; query Close joins readers before destruction. Q2 retains
+the existing independent query cancellation/deadline and credit-release paths.
+Q3 retains 64 MiB windows, bounded descriptors and logical constant expansion;
+schema evidence adds at most the already validated 1024 descriptors once per
+terminal query. The capability/profile values are immutable before publication;
+this change adds no shared mutable state, worker, wait or accumulating registry.
+The independent public error/reuse cases close the new error-class path without
+changing general frontend error policy.
+
+**Merge blocker:** `TestExactEmbeddedTPCHNativePreparation/q1` crashes in the
+pinned importer's `SubstraitToDuckDB::TransformRootOp`. Its root-name iterator
+uses `SkipColumnNames` on DuckDB carrier types. Decimal256's private aliased
+four-field STRUCT carrier is an opaque Substrait user-defined scalar, so its
+limbs must not consume additional SQL root names. Advancing by four skips later
+headings and eventually reads outside `RelRoot.names`. The native crash stack
+and current importer source identify that exact path. Single-result numeric
+tests passing do not close this multi-result failure.
+
+C must remain a draft until a prerequisite importer fix is merged, Sirius pins
+that merged importer, and C pins the merged Sirius dependency. Then rerun all
+22 native preparations and the full public numeric fixture. No MO-side carrier
+name padding, coefficient narrowing, SQL rewrite, fallback or skipped assertion
+is an acceptable substitute. D remains dependent on merged and validated C.

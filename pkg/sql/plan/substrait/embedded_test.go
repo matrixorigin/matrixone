@@ -54,7 +54,7 @@ func TestEmbeddedMOAdmissionPreservesReaderOrderingWithoutChangingFlight(t *test
 	query.Nodes[0].OrderBy = []*planpb.OrderBySpec{{Expr: col(0), Flag: planpb.OrderBySpec_ASC}}
 	_, err := Export(query)
 	require.ErrorContains(t, err, "sort semantics outside a SORT node")
-	candidate, err := ExportEmbeddedMO(query)
+	candidate, err := ExportEmbeddedMO(query, EmbeddedExportProfile{})
 	require.NoError(t, err)
 	_, err = candidate.Build(map[int32][]byte{0: {1}})
 	require.ErrorContains(t, err, "cannot be emitted as Flight")
@@ -64,7 +64,7 @@ func TestEmbeddedMOAdmissionPreservesReaderOrderingWithoutChangingFlight(t *test
 	require.Len(t, query.Nodes[0].OrderBy, 1, "the MO producer must still receive the original ordering hint")
 	query.Nodes = append(query.Nodes, &planpb.Node{NodeId: 1, NodeType: planpb.Node_PROJECT, Children: []int32{0}, ProjectList: []*planpb.Expr{col(0)}, OrderBy: query.Nodes[0].OrderBy})
 	query.Steps = []int32{1}
-	_, err = ExportEmbeddedMO(query)
+	_, err = ExportEmbeddedMO(query, EmbeddedExportProfile{})
 	require.ErrorContains(t, err, "sort semantics outside a SORT node", "only MO-owned scan annotations are admitted")
 }
 
