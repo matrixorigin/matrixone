@@ -154,10 +154,29 @@ EXECUTE p_nested USING @p,@p;
 1  𝄀
 2  𝄀
 3
+-- @regex("invalid input: \"not-a-number\" is invalid numeric string",true)
+EXECUTE p_ifnull USING @p,@p;
+invalid input: "not-a-number" is invalid numeric string
+-- @regex("invalid input: \"not-a-number\" is invalid numeric string",true)
+EXECUTE p_marker_abs USING @p,@p,@p;
+invalid input: "not-a-number" is invalid numeric string
+SET @prepare_decimal_saved_sql_mode = @@session.sql_mode;
+SET SESSION sql_mode = CONCAT_WS(',', NULLIF(@prepare_decimal_saved_sql_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 EXECUTE p_ifnull USING @p,@p;
 ➤ id[4,32,0]
 EXECUTE p_marker_abs USING @p,@p,@p;
 ➤ id[4,32,0]
+SET SESSION sql_mode = @prepare_decimal_saved_sql_mode;
+SELECT @@session.sql_mode = @prepare_decimal_saved_sql_mode AS mode_restored;
+➤ mode_restored[-7,1,0]  𝄀
+1
+-- @regex("invalid input: \"not-a-number\" is invalid numeric string",true)
+EXECUTE p_ifnull USING @p,@p;
+invalid input: "not-a-number" is invalid numeric string
+-- @regex("invalid input: \"not-a-number\" is invalid numeric string",true)
+EXECUTE p_marker_abs USING @p,@p,@p;
+invalid input: "not-a-number" is invalid numeric string
+SET @prepare_decimal_saved_sql_mode = NULL;
 SET @p='9007199254740992.0000000002';
 EXECUTE p_nested USING @p,@p;
 ➤ id[4,32,0]  𝄀

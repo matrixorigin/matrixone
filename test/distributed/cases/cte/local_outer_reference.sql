@@ -541,7 +541,16 @@ execute wrapped_abs using @wrapped_demand;
 set @wrapped_demand=1;
 execute wrapped_abs using @wrapped_demand;
 set @wrapped_demand='bad';
+-- @regex("invalid input: \"bad\" is invalid numeric string",true)
 execute wrapped_abs using @wrapped_demand;
+set @local_outer_saved_sql_mode=@@session.sql_mode;
+set session sql_mode=concat_ws(',',nullif(@local_outer_saved_sql_mode,''),'MYSQL_NUMERIC_COMPATIBILITY');
+execute wrapped_abs using @wrapped_demand;
+set session sql_mode=@local_outer_saved_sql_mode;
+select @@session.sql_mode=@local_outer_saved_sql_mode as mode_restored;
+-- @regex("invalid input: \"bad\" is invalid numeric string",true)
+execute wrapped_abs using @wrapped_demand;
+set @local_outer_saved_sql_mode=null;
 set @wrapped_demand=2;
 execute wrapped_abs using @wrapped_demand;
 deallocate prepare wrapped_abs;

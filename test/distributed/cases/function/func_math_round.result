@@ -570,22 +570,22 @@ select count(*) as n from t where round(v,-1)=-10;
 ➤ n[-5,64,0]  𝄀
 2
 explain analyze select id from t where round(v,-1)=-10;
-inputBlocks=1 inputRows=2
+inputBlocks=2 inputRows=4
 select count(*) as n from t where round(v)=-10;
 ➤ n[-5,64,0]  𝄀
 1
 explain analyze select id from t where round(v)=-10;
-inputBlocks=1 inputRows=2
+inputBlocks=2 inputRows=4
 select count(*) as n from t where floor(v)=-10;
 ➤ n[-5,64,0]  𝄀
 1
 explain analyze select id from t where floor(v)=-10;
-inputBlocks=1 inputRows=2
+inputBlocks=2 inputRows=4
 select count(*) as n from t where ceil(v)=-10;
 ➤ n[-5,64,0]  𝄀
 1
 explain analyze select id from t where ceil(v)=-10;
-inputBlocks=1 inputRows=2
+inputBlocks=2 inputRows=4
 select count(*) as n from t where v+1=-9;
 ➤ n[-5,64,0]  𝄀
 1

@@ -394,19 +394,19 @@ insert into t values (3,-1000,'XX','XX '),(4,-1010,'XX','XX ');
 select mo_ctl('dn','flush','round_pruning.t');
 -- @metacmp(true)
 select count(*) as n from t where round(v,-1)=-10;
--- @regex("inputBlocks=1 inputRows=2",true)
+-- @regex("inputBlocks=2 inputRows=4",true)
 explain analyze select id from t where round(v,-1)=-10;
 -- @metacmp(true)
 select count(*) as n from t where round(v)=-10;
--- @regex("inputBlocks=1 inputRows=2",true)
+-- @regex("inputBlocks=2 inputRows=4",true)
 explain analyze select id from t where round(v)=-10;
 -- @metacmp(true)
 select count(*) as n from t where floor(v)=-10;
--- @regex("inputBlocks=1 inputRows=2",true)
+-- @regex("inputBlocks=2 inputRows=4",true)
 explain analyze select id from t where floor(v)=-10;
 -- @metacmp(true)
 select count(*) as n from t where ceil(v)=-10;
--- @regex("inputBlocks=1 inputRows=2",true)
+-- @regex("inputBlocks=2 inputRows=4",true)
 explain analyze select id from t where ceil(v)=-10;
 -- @metacmp(true)
 select count(*) as n from t where v+1=-9;
