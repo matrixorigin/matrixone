@@ -1265,58 +1265,6 @@ func estimateConjunctiveRangeSelectivity(
 		upper, hasUpper, upperInclusive), true
 }
 
-// numericLiteralFloat64 returns the value of a numeric literal by its payload, including a
-// decimal literal bound as a cast of its digits; ok is false for a NULL, a non-literal or a
-// non-numeric literal.
-func numericLiteralFloat64(expr *plan.Expr) (float64, bool) {
-	// a decimal literal binds as CAST('<digits>' AS DECIMAL(w, s))
-	if fn := expr.GetF(); fn != nil && fn.Func.GetObjName() == "cast" && len(fn.Args) > 0 {
-		lit := fn.Args[0].GetLit()
-		sval, isStr := lit.GetValue().(*plan.Literal_Sval)
-		if lit == nil || lit.Isnull || !isStr {
-			return 0, false
-		}
-		switch t := expr.Typ; types.T(t.Id) {
-		case types.T_decimal64, types.T_decimal128:
-			d, err := types.ParseDecimal128(sval.Sval, t.Width, t.Scale)
-			if err != nil {
-				return 0, false
-			}
-			return types.Decimal128ToFloat64(d, t.Scale), true
-		}
-		return 0, false
-	}
-	lit := expr.GetLit()
-	if lit == nil || lit.Isnull {
-		return 0, false
-	}
-	switch v := lit.Value.(type) {
-	case *plan.Literal_Dval:
-		return v.Dval, true
-	case *plan.Literal_Fval:
-		return float64(v.Fval), true
-	case *plan.Literal_I8Val:
-		return float64(v.I8Val), true
-	case *plan.Literal_I16Val:
-		return float64(v.I16Val), true
-	case *plan.Literal_I32Val:
-		return float64(v.I32Val), true
-	case *plan.Literal_I64Val:
-		return float64(v.I64Val), true
-	case *plan.Literal_U8Val:
-		return float64(v.U8Val), true
-	case *plan.Literal_U16Val:
-		return float64(v.U16Val), true
-	case *plan.Literal_U32Val:
-		return float64(v.U32Val), true
-	case *plan.Literal_U64Val:
-		return float64(v.U64Val), true
-	case *plan.Literal_Decimal64Val, *plan.Literal_Decimal128Val:
-		return getDecimalLiteralValue(lit, expr.Typ.Scale)
-	}
-	return 0, false
-}
-
 func rangeLiteralAsFloat64(expr *plan.Expr, typ types.T) (float64, bool) {
 	literal := expr.GetLit()
 	if literal == nil {
