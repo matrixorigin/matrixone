@@ -122,7 +122,7 @@ func TestValueScan(t *testing.T) {
 }
 
 func TestValueScanEvaluatesRowLocalDependencyAgainstMaterializedColumn(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	intType := planpb.Type{Id: int32(types.T_int64), Width: 64}
 	plus, err := function.GetFunctionByName(proc.Ctx, "+", []types.Type{types.T_int64.ToType(), types.T_int64.ToType()})
@@ -177,7 +177,7 @@ func TestValueScanEvaluatesRowLocalDependencyAgainstMaterializedColumn(t *testin
 }
 
 func TestInitExprExecListCleansPartialInitialization(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
 	intType := planpb.Type{Id: int32(types.T_int64), Width: 64}
@@ -200,7 +200,7 @@ func TestInitExprExecListCleansPartialInitialization(t *testing.T) {
 }
 
 func TestEvalRowsetDataUsesBoundedRowWindows(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	const rowCount = 128
 	intType := types.T_int64.ToType()
@@ -245,7 +245,7 @@ func TestEvalRowsetDataUsesBoundedRowWindows(t *testing.T) {
 }
 
 func TestValueScanEvaluatesVolatileSourceOnceForDependentColumn(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	floatType := planpb.Type{Id: int32(types.T_float64), Width: 64}
 	randFn, err := function.GetFunctionByName(proc.Ctx, "rand", nil)
@@ -296,7 +296,7 @@ func TestValueScanEvaluatesVolatileSourceOnceForDependentColumn(t *testing.T) {
 }
 
 func TestValueScanDependencyCanReadConstantSourceColumn(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	intType := planpb.Type{Id: int32(types.T_int64), Width: 64}
 	localCol := func(pos int32) *planpb.Expr {
@@ -395,7 +395,7 @@ func TestValueScanColumnOrder(t *testing.T) {
 }
 
 func TestEvalRowsetDataDoesNotEvaluateLocalDefaultOnOtherRows(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
 	floatType := planpb.Type{Id: int32(types.T_float64), Width: 64}
@@ -469,7 +469,7 @@ func TestGenSubBatchFromOriginBatch(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			vs := &ValueScan{
 				Batchs: make([]*batch.Batch, 2),
 			}

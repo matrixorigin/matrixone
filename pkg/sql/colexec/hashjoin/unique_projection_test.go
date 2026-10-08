@@ -30,7 +30,7 @@ import (
 )
 
 func TestHashJoinUniqueProjectionPreservesSelectionMetadata(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	left := makeInt32Batch(proc, []int32{0, 1, 2, 3, 4, 5, 6, 7})
 	arg := &HashJoin{ResultCols: []colexec.ResultPos{{Rel: 0, Pos: 0}, {Rel: 1, Pos: 0}}}
 	ctr := &arg.ctr
@@ -160,7 +160,7 @@ func TestHashJoinUniqueProjectionResumesAndReuses(t *testing.T) {
 }
 
 func TestHashJoinUniqueProjectionPropagatesAllocationFailure(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	left := makeInt32Batch(proc, []int32{1})
 	arg := &HashJoin{
 		LeftTypes:  []types.Type{types.T_int32.ToType()},
@@ -194,7 +194,7 @@ func TestHashJoinUniqueProjectionPropagatesAllocationFailure(t *testing.T) {
 }
 
 func BenchmarkHashJoinUniqueProjection(b *testing.B) {
-	proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(b, "", mpool.MustNewZero())
 	arg := &HashJoin{}
 	ctr := &arg.ctr
 	ctr.leftBat = batch.NewWithSize(4)

@@ -147,7 +147,7 @@ func writeSpillAllocationTestRecords(
 }
 
 func TestSpillAllocationAccountDecodedBatchLifecycle(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(
+	proc := testutil.NewProcessWithOwnedMPool(
 		t,
 		"",
 		mpool.MustNew("spill-allocation-decoded"),
@@ -218,7 +218,7 @@ func TestSpillAllocationAccountDecodedBatchLifecycle(t *testing.T) {
 }
 
 func TestSpillReadBufferFallsBackUnderAllocationPressure(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(
+	proc := testutil.NewProcessWithOwnedMPool(
 		t,
 		"",
 		mpool.MustNew("spill-read-buffer-fallback"),
@@ -258,7 +258,7 @@ func TestSpillReadBufferFallsBackUnderAllocationPressure(t *testing.T) {
 }
 
 func TestSpillReadBufferReleasesWhenRewindFails(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(
+	proc := testutil.NewProcessWithOwnedMPool(
 		t,
 		"",
 		mpool.MustNew("spill-read-buffer-rewind-failure"),
@@ -288,7 +288,7 @@ func TestSpillReadBufferReleasesWhenRewindFails(t *testing.T) {
 }
 
 func TestSpillAllocationAccountDecodedReuseRetriesFromCleanRecord(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(
+	proc := testutil.NewProcessWithOwnedMPool(
 		t,
 		"",
 		mpool.MustNew("spill-allocation-decoded-retry"),
@@ -373,7 +373,7 @@ func TestSpillAllocationAccountDecodedReuseRetriesFromCleanRecord(t *testing.T) 
 }
 
 func TestSpillAllocationAccountScatterScratchLifecycle(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(
+	proc := testutil.NewProcessWithOwnedMPool(
 		t,
 		"",
 		mpool.MustNew("spill-allocation-scatter"),
@@ -436,7 +436,7 @@ func TestSpillAllocationAccountScatterScratchLifecycle(t *testing.T) {
 }
 
 func TestSpillAllocationAccountScatterDoesNotReadmitBorrowedSource(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(
+	proc := testutil.NewProcessWithOwnedMPool(
 		t,
 		"",
 		mpool.MustNew("spill-allocation-scatter-source"),
@@ -496,7 +496,7 @@ func TestSpillAllocationAccountScatterDoesNotReadmitBorrowedSource(t *testing.T)
 }
 
 func TestSpillAllocationAccountScatterBroadcastsConstKey(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	state := newTestSpillAllocationAccount(t, 1<<20, 64)
 	engine, err := newSpillEngine(
@@ -547,7 +547,7 @@ func TestSpillAllocationAccountScatterBroadcastsConstKey(t *testing.T) {
 }
 
 func TestSpillAllocationAccountScatterReducesBroadcastConstKey(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(
+	proc := testutil.NewProcessWithOwnedMPool(
 		t, "", mpool.MustNew("spill-allocation-scatter-const-reduce"),
 	)
 	defer proc.Free()
@@ -604,7 +604,7 @@ func TestSpillAllocationAccountScatterReducesBroadcastConstKey(t *testing.T) {
 }
 
 func TestSpillAllocationAccountMarshalBufferLifecycle(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(
+	proc := testutil.NewProcessWithOwnedMPool(
 		t,
 		"",
 		mpool.MustNew("spill-allocation-marshal"),
@@ -644,7 +644,7 @@ func TestSpillAllocationAccountMarshalBufferLifecycle(t *testing.T) {
 }
 
 func TestSpillAllocationAccountCoalesceAdmissionFallback(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(
+	proc := testutil.NewProcessWithOwnedMPool(
 		t,
 		"",
 		mpool.MustNew("spill-allocation-coalesce-fallback"),
@@ -693,7 +693,7 @@ func TestSpillAllocationAccountCoalesceAdmissionFallback(t *testing.T) {
 }
 
 func TestSpillAllocationAccountScatterFailureCleanup(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(
+	proc := testutil.NewProcessWithOwnedMPool(
 		t,
 		"",
 		mpool.MustNew("spill-allocation-scatter-failure"),
@@ -746,7 +746,7 @@ func TestSpillAllocationAccountScatterFailureCleanup(t *testing.T) {
 }
 
 func TestSpillAllocationAccountScatterReducesUnpublishedInput(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(
+	proc := testutil.NewProcessWithOwnedMPool(
 		t,
 		"",
 		mpool.MustNew("spill-allocation-scatter-reduce"),
@@ -798,7 +798,7 @@ func TestSpillAllocationAccountScatterReducesUnpublishedInput(t *testing.T) {
 }
 
 func TestSpillAllocationAccountExpressionPressureReducesBeforePublication(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(
+	proc := testutil.NewProcessWithOwnedMPool(
 		t,
 		"",
 		mpool.MustNew("spill-allocation-expression-reduce"),
@@ -860,7 +860,7 @@ func TestSpillAllocationAccountExpressionPressureReducesBeforePublication(t *tes
 // initial and recursive join spill. Each iteration removes its named files so
 // repeated measurements cannot accumulate disk usage or queued descriptors.
 func BenchmarkSpillScatterAccounting(b *testing.B) {
-	proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(b, "", mpool.MustNewZero())
 	defer proc.Free()
 	values := make([]int64, 4_096)
 	for i := range values {
@@ -921,7 +921,7 @@ func BenchmarkSpillScatterAccounting(b *testing.B) {
 }
 
 func TestSpillAllocationAccountRebuildAndRecursiveSpillLifecycle(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(
+	proc := testutil.NewProcessWithOwnedMPool(
 		t,
 		"",
 		mpool.MustNew("spill-allocation-rebuild"),

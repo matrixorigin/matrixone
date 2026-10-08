@@ -98,14 +98,11 @@ func TestExporter(t *testing.T) {
 	var exp *metricExporter
 
 	withModifiedConfig(func() {
-		defer metric.SetGatherInterval(metric.SetGatherInterval(20 * time.Millisecond))
 		defer metric.SetRawHistBufLimit(metric.SetRawHistBufLimit(5))
 		defer metric.SetExportToProm(metric.SetExportToProm(false))
 		reg := prom.NewRegistry()
 		iexp := newMetricExporter(reg, dumCollect, "node_uuid", "monolithic")
 		exp = iexp.(*metricExporter)
-		exp.Start(context.TODO())
-		defer exp.Stop(false)
 		exp.now = dumClock
 		c := prom.NewCounter(prom.CounterOpts{Subsystem: "test", Name: "test_counter"})
 		reg.MustRegister(c)
@@ -116,28 +113,19 @@ func TestExporter(t *testing.T) {
 		h.WithNowFunction(dumClock)
 		reg.MustRegister(h)
 
-		wg := new(sync.WaitGroup)
-		wg.Add(1)
-		go func() {
-			// ~45ms, 2 rawHist full export
-			for i := 0; i < 14; i++ {
-				c.Add(1)
-				g.Add(2.0)
-				h.Observe(float64(i))
-			}
-			// wait 2 Gather()
-			time.Sleep(50 * time.Millisecond)
-			wg.Done()
-		}()
-		wg.Wait()
+		for i := 0; i < 14; i++ {
+			c.Add(1)
+			g.Add(2.0)
+			h.Observe(float64(i))
+		}
+
+		// Two full raw-histogram batches were sent synchronously by Observe.
+		// Gather twice to flush the remaining samples and exercise the regular
+		// counter/gauge export path without relying on a ticker or wall-clock wait.
+		exp.gatherAndSend()
+		exp.gatherAndSend()
 	})
-	time.Sleep(50 * time.Millisecond)
-	sendCnt := dumCollect.sendCnt()
-	if sendCnt != 4 {
-		// test involving timer is not stable, if not matched just return. just bypass for now
-		t.Logf("[Metric TODO]: collector receive %d batch metrics, want 4", sendCnt)
-		return
-	}
+	assert.Equal(t, 4, dumCollect.sendCnt())
 
 	// 14 Observe + 4 addCommonInfo
 	if dumClock()-1 != 14+4 {
@@ -177,4 +165,21 @@ func TestExporter(t *testing.T) {
 			t.Error("exporter buffer capacity should be 1")
 		}
 	}()
+}
+
+func TestExporterStartStop(t *testing.T) {
+	exp := newMetricExporter(nil, &dummyCollect{}, "node_uuid", "monolithic").(*metricExporter)
+
+	assert.True(t, exp.Start(context.Background()))
+	assert.False(t, exp.Start(context.Background()))
+	stopCh, stopped := exp.Stop(false)
+	assert.True(t, stopped)
+	assert.NotNil(t, stopCh)
+	select {
+	case <-stopCh:
+	case <-time.After(time.Second):
+		t.Fatal("exporter did not stop")
+	}
+	_, stopped = exp.Stop(false)
+	assert.False(t, stopped)
 }
