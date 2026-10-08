@@ -160,7 +160,9 @@ func NewTestDisttaeEngine(
 		de.txnClient,
 		hakeeper,
 		nil,
-		1, engineOpts...)
+		1,
+		func(owner *disttae.Engine) { de.Engine = owner },
+		engineOpts...)
 
 	de.Engine.PushClient().LogtailRPCClientFactory = rpcAgent.MockLogtailRPCClientFactory
 
@@ -224,8 +226,10 @@ func NewTestDisttaeEngine(
 		return de, err
 	}
 
-	// Start unified GC scheduler
-	go de.Engine.RunGCScheduler(de.ctx)
+	// Start the engine-owned GC scheduler. Engine.Close joins it.
+	if err = de.Engine.StartGCScheduler(de.ctx); err != nil {
+		return de, err
+	}
 
 	//err = de.prevSubscribeSysTables(ctx, rpcAgent)
 	return de, nil
