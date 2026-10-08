@@ -310,8 +310,8 @@ func asDisttaeEngine(eng engine.Engine) (*Engine, bool) {
 func moTableSizeFunc() *function.GetMoTableSizeRowsFuncType {
 	fn := function.GetMoTableSizeRowsFuncType(func(
 		ctx context.Context,
-		accs, dbs, tbls []uint64,
 		eng engine.Engine,
+		resolve function.MoTableStatsResolver,
 		forceUpdate bool,
 		resetUpdateTime bool,
 	) ([]uint64, error, bool) {
@@ -323,7 +323,7 @@ func moTableSizeFunc() *function.GetMoTableSizeRowsFuncType {
 			return nil, moerr.NewInvalidStateNoCtx("MoTableSizeRows: engine is closed"), false
 		}
 		return e.dynamicCtx.MTSTableSize(
-			ctx, accs, dbs, tbls, eng, forceUpdate, resetUpdateTime)
+			ctx, resolve, forceUpdate, resetUpdateTime)
 	})
 	return &fn
 }
@@ -331,8 +331,8 @@ func moTableSizeFunc() *function.GetMoTableSizeRowsFuncType {
 func moTableRowsFunc() *function.GetMoTableSizeRowsFuncType {
 	fn := function.GetMoTableSizeRowsFuncType(func(
 		ctx context.Context,
-		accs, dbs, tbls []uint64,
 		eng engine.Engine,
+		resolve function.MoTableStatsResolver,
 		forceUpdate bool,
 		resetUpdateTime bool,
 	) ([]uint64, error, bool) {
@@ -344,7 +344,7 @@ func moTableRowsFunc() *function.GetMoTableSizeRowsFuncType {
 			return nil, moerr.NewInvalidStateNoCtx("MoTableSizeRows: engine is closed"), false
 		}
 		return e.dynamicCtx.MTSTableRows(
-			ctx, accs, dbs, tbls, eng, forceUpdate, resetUpdateTime)
+			ctx, resolve, forceUpdate, resetUpdateTime)
 	})
 	return &fn
 }
@@ -1443,8 +1443,19 @@ func (d *dynamicCtx) QueryTableStats(
 	resetUpdateTime bool,
 ) (statsVals [][]any, err error, ok bool) {
 
+	statsVals, ok, _, err = d.queryTableStats(ctx, wantedStatsIdxes,
+		func() ([]uint64, []uint64, []uint64, error) { return accs, dbs, tbls, nil },
+		forceUpdate, resetUpdateTime)
+	return
+}
+
+func (d *dynamicCtx) queryTableStats(
+	ctx context.Context, wantedStatsIdxes []int,
+	resolve function.MoTableStatsResolver, forceUpdate, resetUpdateTime bool,
+) (statsVals [][]any, ok bool, tableCount int, err error) {
+
 	if err := ctx.Err(); err != nil {
-		return nil, err, false
+		return nil, false, 0, err
 	}
 	d.Lock()
 	useOld := d.conf.StatsUsingOldImpl
@@ -1452,6 +1463,15 @@ func (d *dynamicCtx) QueryTableStats(
 	d.Unlock()
 	if useOld {
 		return
+	}
+
+	accs, dbs, tbls, err := resolve()
+	if err != nil {
+		return nil, true, 0, err
+	}
+	tableCount = len(tbls)
+	if err := ctx.Err(); err != nil {
+		return nil, true, tableCount, err
 	}
 
 	var now = time.Now()
@@ -1476,70 +1496,41 @@ func (d *dynamicCtx) QueryTableStats(
 			accs, dbs, tbls,
 			resetUpdateTime,
 			"query table stats")
-		return statsVals, err, true
+		return statsVals, true, tableCount, err
 	}
 
 	statsVals, err = d.normalQuery(newCtx, wantedStatsIdxes, accs, dbs, tbls)
 
-	return statsVals, err, true
+	return statsVals, true, tableCount, err
 }
 
-func (d *dynamicCtx) MTSTableSize(
-	ctx context.Context,
-	accs, dbs, tbls []uint64,
-	eng engine.Engine,
-	forceUpdate bool,
-	resetUpdateTime bool,
-) (sizes []uint64, err error, handled bool) {
+func (d *dynamicCtx) MTSTableSize(ctx context.Context, resolve function.MoTableStatsResolver,
+	forceUpdate, resetUpdateTime bool) ([]uint64, error, bool) {
+	return d.queryTableStat(ctx, TableStatsTableSize, resolve, forceUpdate, resetUpdateTime)
+}
 
-	statsVals, err, handled := d.QueryTableStats(
-		ctx, []int{TableStatsTableSize},
-		accs, dbs, tbls,
-		forceUpdate, resetUpdateTime)
+func (d *dynamicCtx) MTSTableRows(ctx context.Context, resolve function.MoTableStatsResolver,
+	forceUpdate, resetUpdateTime bool) ([]uint64, error, bool) {
+	return d.queryTableStat(ctx, TableStatsTableRows, resolve, forceUpdate, resetUpdateTime)
+}
+
+func (d *dynamicCtx) queryTableStat(ctx context.Context, stat int, resolve function.MoTableStatsResolver,
+	forceUpdate, resetUpdateTime bool) ([]uint64, error, bool) {
+	statsVals, handled, count, err := d.queryTableStats(ctx, []int{stat}, resolve, forceUpdate, resetUpdateTime)
 	if err != nil || !handled {
 		return nil, err, handled
 	}
-	if len(tbls) == 0 {
+	if count == 0 {
 		return nil, nil, true
 	}
-	if len(statsVals) != 1 || len(statsVals[0]) != len(tbls) {
+	if len(statsVals) != 1 || len(statsVals[0]) != count {
 		return nil, moerr.NewInternalErrorNoCtx("MoTableSizeRows: invalid statistics cardinality"), true
 	}
-
-	for i := range statsVals[0] {
-		sizes = append(sizes, uint64(statsVals[0][i].(float64)))
+	values := make([]uint64, count)
+	for i, value := range statsVals[0] {
+		values[i] = uint64(value.(float64))
 	}
-
-	return
-}
-
-func (d *dynamicCtx) MTSTableRows(
-	ctx context.Context,
-	accs, dbs, tbls []uint64,
-	eng engine.Engine,
-	forceUpdate bool,
-	resetUpdateTime bool,
-) (sizes []uint64, err error, handled bool) {
-
-	statsVals, err, handled := d.QueryTableStats(
-		ctx, []int{TableStatsTableRows},
-		accs, dbs, tbls,
-		forceUpdate, resetUpdateTime)
-	if err != nil || !handled {
-		return nil, err, handled
-	}
-	if len(tbls) == 0 {
-		return nil, nil, true
-	}
-	if len(statsVals) != 1 || len(statsVals[0]) != len(tbls) {
-		return nil, moerr.NewInternalErrorNoCtx("MoTableSizeRows: invalid statistics cardinality"), true
-	}
-
-	for i := range statsVals[0] {
-		sizes = append(sizes, uint64(statsVals[0][i].(float64)))
-	}
-
-	return
+	return values, nil, true
 }
 
 /////////////// MoTableStats Implementation ///////////////

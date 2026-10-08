@@ -18,15 +18,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/require"
 )
 
@@ -185,4 +190,186 @@ func TestEngineConstructorReadyFailureRetiresOwner(t *testing.T) {
 	require.True(t, owner.gcPool.IsClosed(), "real acquired pool must retire before constructor panic escapes")
 	require.NoError(t, owner.Close())
 	require.Error(t, owner.StartGCScheduler(context.Background()))
+}
+
+// The gate observes real deletion contexts and delegates successful deletion
+// to the existing memory file service, so joining is checked against objects.
+type workspaceGCFileService struct {
+	mu sync.Mutex
+	fileservice.FileService
+	entered         chan context.Context
+	release         chan struct{}
+	returned        chan struct{}
+	batches         [][]string
+	waitForDeadline bool
+}
+
+func (f *workspaceGCFileService) Delete(ctx context.Context, names ...string) error {
+	f.mu.Lock()
+	f.batches = append(f.batches, append([]string(nil), names...))
+	f.mu.Unlock()
+	f.entered <- ctx
+	if f.waitForDeadline {
+		<-ctx.Done()
+		<-f.release
+		f.returned <- struct{}{}
+		return ctx.Err()
+	}
+	<-f.release
+	err := f.FileService.Delete(ctx, names...)
+	f.returned <- struct{}{}
+	return err
+}
+
+func TestEngineCloseJoinsWorkspaceGC(t *testing.T) {
+	for _, count := range []int{0, 1, 999, 1000, 1001, 2001} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(context.Background())
+				op, stop := client.NewTestTxnOperator(ctx)
+				defer stop()
+				pool, err := ants.NewPool(3)
+				require.NoError(t, err)
+				fs := &workspaceGCFileService{FileService: newCleanFS(t), entered: make(chan context.Context, 3), release: make(chan struct{}), returned: make(chan struct{}, 3)}
+				owner := &Engine{gcPool: pool, fs: fs}
+				released := false
+				defer func() {
+					if !released {
+						close(fs.release)
+					}
+					_ = owner.Close()
+				}()
+				stats := mockStatsList(t, count)
+				names := make([]string, count)
+				for i := range stats {
+					names[i] = stats[i].ObjectName().String()
+					require.NoError(t, writeObjectToFS(context.Background(), fs, names[i]))
+				}
+				txn := &Transaction{engine: owner, op: op}
+				cancel() // Query cancellation must not abandon rollback object cleanup.
+				submitted := make(chan error, 1)
+				go func() { submitted <- txn.GCObjsByStats(stats...) }()
+				if count == 0 {
+					require.NoError(t, <-submitted)
+					require.NoError(t, owner.Close())
+					require.Empty(t, fs.batches)
+					return
+				}
+				admitted := <-fs.entered
+				_, bounded := admitted.Deadline()
+				require.True(t, bounded)
+				require.NoError(t, admitted.Err())
+				closed := make(chan error, 2)
+				go func() { closed <- owner.Close() }()
+				time.Sleep(4 * time.Second) // Virtual time crosses the removed three-second close deadline.
+				synctest.Wait()
+				select {
+				case err := <-closed:
+					t.Fatalf("close returned before accepted deletion: %v", err)
+				default:
+				}
+				require.Error(t, txn.GCObjsByStats(stats[0]))
+				require.Error(t, owner.ResetGCWorkerPool(nil))
+				close(fs.release)
+				released = true
+				require.NoError(t, <-submitted)
+				require.NoError(t, <-closed)
+				require.NoError(t, owner.Close())
+				require.Zero(t, pool.Running())
+				var deleted []string
+				for _, batch := range fs.batches {
+					require.LessOrEqual(t, len(batch), GCBatchOfFileCount)
+					deleted = append(deleted, batch...)
+				}
+				require.ElementsMatch(t, names, deleted)
+				for _, name := range names {
+					_, err := fs.StatFile(context.Background(), name)
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), err)
+				}
+			})
+		})
+	}
+}
+
+func TestEngineCloseWaitsForExpiredGCToReturn(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		pool, err := ants.NewPool(1)
+		require.NoError(t, err)
+		op, stop := client.NewTestTxnOperator(context.Background())
+		defer stop()
+		fs := &workspaceGCFileService{FileService: newCleanFS(t), entered: make(chan context.Context, 1), release: make(chan struct{}), returned: make(chan struct{}, 1), waitForDeadline: true}
+		owner := &Engine{gcPool: pool, fs: fs}
+		released := false
+		defer func() {
+			if !released {
+				close(fs.release)
+			}
+			_ = owner.Close()
+		}()
+		txn := &Transaction{engine: owner, op: op}
+		require.NoError(t, txn.GCObjsByStats(mockStatsList(t, 1)...))
+		deletion := <-fs.entered
+		closed := make(chan error, 1)
+		go func() { closed <- owner.Close() }()
+		deadline, ok := deletion.Deadline()
+		require.True(t, ok)
+		time.Sleep(time.Until(deadline))
+		synctest.Wait()
+		require.ErrorIs(t, deletion.Err(), context.DeadlineExceeded)
+		select {
+		case err := <-closed:
+			t.Fatalf("close returned while storage still owns request: %v", err)
+		default:
+		}
+		close(fs.release)
+		released = true
+		<-fs.returned
+		require.NoError(t, <-closed)
+		require.Zero(t, pool.Running())
+		require.NoError(t, owner.Close())
+	})
+}
+
+func TestEngineCloseDrainsAdmittedGCBatches(t *testing.T) {
+	pool, err := ants.NewPool(1)
+	require.NoError(t, err)
+	op, stop := client.NewTestTxnOperator(context.Background())
+	defer stop()
+	fs := &workspaceGCFileService{FileService: newCleanFS(t), entered: make(chan context.Context, 3), release: make(chan struct{}), returned: make(chan struct{}, 3)}
+	owner := &Engine{gcPool: pool, fs: fs}
+	released := false
+	defer func() {
+		if !released {
+			close(fs.release)
+		}
+		_ = owner.Close()
+	}()
+	txn := &Transaction{engine: owner, op: op}
+	stats := mockStatsList(t, 2001)
+	for _, stat := range stats {
+		require.NoError(t, writeObjectToFS(context.Background(), fs, stat.ObjectName().String()))
+	}
+	submitted := make(chan error, 1)
+	go func() { submitted <- txn.GCObjsByStats(stats...) }()
+	<-fs.entered // The next submission is blocked by this occupied worker.
+	closed := make(chan error, 2)
+	go func() { closed <- owner.Close() }()
+	go func() { closed <- owner.Close() }()
+	require.Eventually(t, owner.dynamicCtx.closed.Load, 5*time.Second, time.Millisecond)
+	require.Error(t, txn.GCObjsByStats(stats[0]))
+	select {
+	case err := <-closed:
+		t.Fatalf("close abandoned admitted request: %v", err)
+	default:
+	}
+	close(fs.release)
+	released = true
+	require.NoError(t, <-submitted)
+	require.NoError(t, <-closed)
+	require.NoError(t, <-closed)
+	require.Len(t, fs.batches, 3)
+	require.Zero(t, pool.Running())
+	for _, stat := range stats {
+		require.False(t, objectExistsInFS(context.Background(), fs, stat.ObjectName().String()))
+	}
 }

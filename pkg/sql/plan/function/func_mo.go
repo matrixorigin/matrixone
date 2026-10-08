@@ -169,11 +169,13 @@ func MoTableRows(
 // some special cases:
 // 1. cluster table
 
+// MoTableStatsResolver is synchronous and must not be retained by the executor.
+type MoTableStatsResolver = func() (accs, dbs, tbls []uint64, err error)
+
 // GetMoTableSizeRowsFuncType dispatches to the caller engine. A nil error
 // with handled=false requests the existing old SQL implementation.
 type GetMoTableSizeRowsFuncType = func(
-	context.Context, []uint64, []uint64, []uint64,
-	engine.Engine, bool, bool) (values []uint64, err error, handled bool)
+	context.Context, engine.Engine, MoTableStatsResolver, bool, bool) (values []uint64, err error, handled bool)
 
 var GetMoTableSizeFunc atomic.Pointer[GetMoTableSizeRowsFuncType]
 var GetMoTableRowsFunc atomic.Pointer[GetMoTableSizeRowsFuncType]
@@ -310,7 +312,7 @@ func MoTableSizeRowsHelper(
 		txn client.TxnOperator
 
 		ret                   []uint64
-		positions             = make([]int, length)
+		positions             []int
 		accIds, dbIds, tblIds []uint64
 
 		forceUpdate     = GetForceUpdateVariable(proc)
@@ -364,52 +366,58 @@ func MoTableSizeRowsHelper(
 
 	txn = proc.GetTxnOperator()
 
-	for i := uint64(0); i < uint64(length); i++ {
-		if dbName, tblName, ok = decodeNames(i); !ok {
-			positions[i] = -1 // NULL
-			continue
-		}
+	resolve := func() ([]uint64, []uint64, []uint64, error) {
+		positions = make([]int, length)
 
-		if ok, err = specialTableFilterForNonSys(proc.Ctx, dbName, tblName); ok && err == nil {
-			positions[i] = -2 // special table
-			continue
-		}
-
-		if err != nil {
-			return err
-		}
-
-		if db, err = eng.Database(proc.Ctx, dbName, txn); err != nil {
-			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-				return moerr.NewInternalErrorNoCtxf("db not exist: %s(%s)",
-					dbName, "OkExpectedEOB")
+		for i := uint64(0); i < uint64(length); i++ {
+			if dbName, tblName, ok = decodeNames(i); !ok {
+				positions[i] = -1 // NULL
+				continue
 			}
-			return err
-		}
 
-		positions[i] = len(tblIds)
-		var sub subscription
-		if sub, err = isSubscribedTable(
-			proc, accountId, db, dbName, tblName); err != nil {
-			return err
-		} else if sub.valid {
-			// is subscription
-			accIds = append(accIds, sub.oriAccId)
-			dbIds = append(dbIds, sub.oriDatabaseId)
-			tblIds = append(tblIds, sub.oriTableId)
-		} else {
-			if rel, err = db.Relation(proc.Ctx, tblName, nil); err != nil {
+			if ok, err = specialTableFilterForNonSys(proc.Ctx, dbName, tblName); ok && err == nil {
+				positions[i] = -2 // special table
+				continue
+			}
+
+			if err != nil {
+				return nil, nil, nil, err
+			}
+
+			if db, err = eng.Database(proc.Ctx, dbName, txn); err != nil {
 				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-					return moerr.NewInternalErrorNoCtxf("tbl not exist: %s-%s(%s)",
-						dbName, tblName, "OkExpectedEOB")
+					return nil, nil, nil, moerr.NewInternalErrorNoCtxf("db not exist: %s(%s)",
+						dbName, "OkExpectedEOB")
 				}
-				return err
+				return nil, nil, nil, err
 			}
 
-			accIds = append(accIds, uint64(accountId))
-			dbIds = append(dbIds, uint64(rel.GetDBID(proc.Ctx)))
-			tblIds = append(tblIds, uint64(rel.GetTableID(proc.Ctx)))
+			positions[i] = len(tblIds)
+			var sub subscription
+			if sub, err = isSubscribedTable(
+				proc, accountId, db, dbName, tblName); err != nil {
+				return nil, nil, nil, err
+			} else if sub.valid {
+				// is subscription
+				accIds = append(accIds, sub.oriAccId)
+				dbIds = append(dbIds, sub.oriDatabaseId)
+				tblIds = append(tblIds, sub.oriTableId)
+			} else {
+				if rel, err = db.Relation(proc.Ctx, tblName, nil); err != nil {
+					if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+						return nil, nil, nil, moerr.NewInternalErrorNoCtxf("tbl not exist: %s-%s(%s)",
+							dbName, tblName, "OkExpectedEOB")
+					}
+					return nil, nil, nil, err
+				}
+
+				accIds = append(accIds, uint64(accountId))
+				dbIds = append(dbIds, uint64(rel.GetDBID(proc.Ctx)))
+				tblIds = append(tblIds, uint64(rel.GetTableID(proc.Ctx)))
+			}
 		}
+
+		return accIds, dbIds, tblIds, nil
 	}
 
 	fn := executor.Load()
@@ -418,7 +426,7 @@ func MoTableSizeRowsHelper(
 	}
 	var handled bool
 	ret, err, handled = (*fn)(
-		proc.Ctx, accIds, dbIds, tblIds, eng,
+		proc.Ctx, eng, resolve,
 		forceUpdate,
 		resetUpdateTime)
 
@@ -427,6 +435,9 @@ func MoTableSizeRowsHelper(
 	}
 
 	if !handled {
+		if err := proc.Ctx.Err(); err != nil {
+			return err
+		}
 		return fallback(iVecs, result, proc, length, selectList)
 	}
 	if len(ret) != len(tblIds) {

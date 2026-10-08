@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -164,7 +165,7 @@ func TestMoTableStatsPolicyAdmissionAndIsolation(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		defer close(done)
-		_, err, _ := (*callback)(context.Background(), []uint64{0}, []uint64{1}, []uint64{2}, first, false, false)
+		_, err, _ := (*callback)(context.Background(), first, func() ([]uint64, []uint64, []uint64, error) { return []uint64{0}, []uint64{1}, []uint64{2}, nil }, false, false)
 		done <- err
 	}()
 	defer func() { releaseQuery(); <-done }()
@@ -175,7 +176,7 @@ func TestMoTableStatsPolicyAdmissionAndIsolation(t *testing.T) {
 	second.dynamicCtx.setForceUpdate(true)
 	releaseQuery()
 	require.ErrorIs(t, <-done, sentinel, "changing policy cannot reinterpret admitted new-path work")
-	_, err, handled := (*callback)(context.Background(), []uint64{0}, []uint64{1}, []uint64{2}, first, false, false)
+	_, err, handled := (*callback)(context.Background(), first, func() ([]uint64, []uint64, []uint64, error) { return []uint64{0}, []uint64{1}, []uint64{2}, nil }, false, false)
 	require.NoError(t, err)
 	require.False(t, handled, "next admission uses the caller owner's updated mode")
 	first.dynamicCtx.setUseOldImpl(false)
@@ -184,18 +185,59 @@ func TestMoTableStatsPolicyAdmissionAndIsolation(t *testing.T) {
 	}}
 	for _, force := range []bool{false, true} {
 		first.dynamicCtx.setForceUpdate(force)
-		_, err, handled = (*callback)(context.Background(), []uint64{0}, []uint64{1}, []uint64{2}, &engine.EntireEngine{Engine: first}, false, false)
+		_, err, handled = (*callback)(context.Background(), &engine.EntireEngine{Engine: first}, func() ([]uint64, []uint64, []uint64, error) { return []uint64{0}, []uint64{1}, []uint64{2}, nil }, false, false)
 		require.ErrorIs(t, err, sentinel)
 		require.True(t, handled)
 		require.Equal(t, !force, strings.Contains(<-entered, "COALESCE"), "owner force-update must determine the query path independently")
 	}
 	first.dynamicCtx.defaultConf = MoTableStatsConfig{StatsUsingOldImpl: true}
 	first.dynamicCtx.restoreDefaultSetting(true)
-	_, err, handled = (*callback)(context.Background(), nil, nil, nil, first, false, false)
+	_, err, handled = (*callback)(context.Background(), first, nil, false, false)
 	require.NoError(t, err)
 	require.False(t, handled)
 	second.dynamicCtx.restoreDefaultSetting(true)
-	_, err, handled = (*callback)(context.Background(), nil, nil, nil, first, false, false)
+	_, err, handled = (*callback)(context.Background(), first, nil, false, false)
 	require.NoError(t, err)
 	require.False(t, handled, "restoring another owner's defaults must not affect this owner")
+}
+
+func TestMoTableStatsLazyResolutionUsesAdmissionPolicy(t *testing.T) {
+	for _, force := range []bool{false, true} {
+		t.Run(fmt.Sprint(force), func(t *testing.T) {
+			owner := &Engine{}
+			defer owner.Close()
+			owner.dynamicCtx.setForceUpdate(force)
+			sentinel := errors.New("selected query")
+			var query string
+			owner.dynamicCtx.executorPool.New = func() any {
+				return policyStatsExecutor{statsDispatchExecutor: statsDispatchExecutor{err: sentinel}, observe: func(sql string) { query = sql }}
+			}
+			resolved := 0
+			resolve := func() ([]uint64, []uint64, []uint64, error) {
+				resolved++
+				owner.dynamicCtx.setUseOldImpl(true)
+				owner.dynamicCtx.setForceUpdate(!force)
+				return []uint64{0}, []uint64{1}, []uint64{2}, nil
+			}
+			callback := moTableRowsFunc()
+			_, err, handled := (*callback)(context.Background(), owner, resolve, false, false)
+			require.ErrorIs(t, err, sentinel)
+			require.True(t, handled)
+			require.Equal(t, 1, resolved)
+			require.Equal(t, !force, strings.Contains(query, "COALESCE"))
+			_, err, handled = (*callback)(context.Background(), owner, resolve, false, false)
+			require.NoError(t, err)
+			require.False(t, handled)
+			require.Equal(t, 1, resolved, "old mode must not invoke metadata resolution")
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			_, err, _ = (*callback)(ctx, owner, resolve, false, false)
+			require.ErrorIs(t, err, context.Canceled)
+			require.Equal(t, 1, resolved)
+			require.NoError(t, owner.Close())
+			_, err, _ = (*callback)(context.Background(), owner, resolve, false, false)
+			require.Error(t, err)
+			require.Equal(t, 1, resolved)
+		})
+	}
 }

@@ -95,17 +95,17 @@ func TestMoTableStatsDispatchRejectsInvalidAndClosedEngines(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			callback := fn()
-			_, err, _ := (*callback)(ctx, nil, nil, nil, nil, false, false)
+			_, err, _ := (*callback)(ctx, nil, nil, false, false)
 			require.Error(t, err)
 
 			closed := &Engine{}
 			closed.dynamicCtx.closed.Store(true)
-			_, err, _ = (*callback)(ctx, nil, nil, nil, closed, false, false)
+			_, err, _ = (*callback)(ctx, closed, nil, false, false)
 			require.Error(t, err)
 			require.Contains(t, err.Error(), "engine is closed")
 
 			wrapped := &engine.EntireEngine{Engine: closed}
-			_, err, _ = (*callback)(ctx, nil, nil, nil, wrapped, false, false)
+			_, err, _ = (*callback)(ctx, wrapped, nil, false, false)
 			require.Error(t, err)
 			require.Contains(t, err.Error(), "engine is closed")
 		})
@@ -421,11 +421,11 @@ func TestMoTableStatsDispatchUsesCallerOwner(t *testing.T) {
 			}
 			callers := []engine.Engine{owners[0], &engine.EntireEngine{Engine: owners[1]}}
 			for i, caller := range callers {
-				_, err, _ := (*callback)(context.Background(), []uint64{0}, []uint64{1}, []uint64{2}, caller, false, false)
+				_, err, _ := (*callback)(context.Background(), caller, func() ([]uint64, []uint64, []uint64, error) { return []uint64{0}, []uint64{1}, []uint64{2}, nil }, false, false)
 				require.ErrorIs(t, err, errs[i])
 			}
 			require.NoError(t, owners[0].Close())
-			_, err, _ := (*callback)(context.Background(), []uint64{0}, []uint64{1}, []uint64{2}, callers[1], false, false)
+			_, err, _ := (*callback)(context.Background(), callers[1], func() ([]uint64, []uint64, []uint64, error) { return []uint64{0}, []uint64{1}, []uint64{2}, nil }, false, false)
 			require.ErrorIs(t, err, errs[1], "closing another CN must not retire this caller's statistics")
 		})
 	}

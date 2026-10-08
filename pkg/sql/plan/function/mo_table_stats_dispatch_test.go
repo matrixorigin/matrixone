@@ -54,9 +54,13 @@ func TestMoTableStatsSQLDispatch(t *testing.T) {
 					}
 					return "no", nil
 				})
-				eng.EXPECT().Database(gomock.Any(), "app", txn).Return(db, nil).AnyTimes()
-				db.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
-				db.EXPECT().Relation(gomock.Any(), "table", nil).Return(rel, nil).AnyTimes()
+				metadataCalls := 2
+				if mode == "error" {
+					metadataCalls = 0
+				}
+				eng.EXPECT().Database(gomock.Any(), "app", txn).Return(db, nil).Times(metadataCalls)
+				db.EXPECT().IsSubscription(gomock.Any()).Return(false).Times(metadataCalls)
+				db.EXPECT().Relation(gomock.Any(), "table", nil).Return(rel, nil).Times(metadataCalls)
 				rel.EXPECT().GetDBID(gomock.Any()).Return(uint64(10)).AnyTimes()
 				rel.EXPECT().GetTableID(gomock.Any()).Return(uint64(20)).AnyTimes()
 				if mode == "fallback" || mode == "session" {
@@ -69,13 +73,17 @@ func TestMoTableStatsSQLDispatch(t *testing.T) {
 				}
 				sentinel := errors.New("statistics unavailable")
 				count := 0
-				callback := GetMoTableSizeRowsFuncType(func(_ context.Context, accs, dbs, tbls []uint64, _ engine.Engine, force, reset bool) ([]uint64, error, bool) {
+				callback := GetMoTableSizeRowsFuncType(func(_ context.Context, _ engine.Engine, resolve MoTableStatsResolver, force, reset bool) ([]uint64, error, bool) {
 					count++
-					require.Equal(t, []uint64{1, 1}, accs)
-					require.Equal(t, []uint64{10, 10}, dbs)
-					require.Equal(t, []uint64{20, 20}, tbls)
 					require.False(t, force)
 					require.False(t, reset)
+					if mode == "new" || mode == "cardinality" {
+						accs, dbs, tbls, err := resolve()
+						require.NoError(t, err)
+						require.Equal(t, []uint64{1, 1}, accs)
+						require.Equal(t, []uint64{10, 10}, dbs)
+						require.Equal(t, []uint64{20, 20}, tbls)
+					}
 					switch mode {
 					case "fallback":
 						return nil, nil, false

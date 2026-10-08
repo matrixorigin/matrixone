@@ -89,6 +89,14 @@ func TestTableStatisticsOwnerPolicySQL(t *testing.T) {
 			require.GreaterOrEqual(t, otherSize, int64(0))
 			require.NoError(t, conns[oldOwner].QueryRowContext(ctx, query).Scan(&rows, &size))
 			require.Equal(t, int64(3), rows, "querying the new-mode CN must not change the old-mode CN policy")
+			_, err = conns[1-oldOwner].ExecContext(ctx, "set mo_table_stats.use_old_impl='yes'")
+			require.NoError(t, err)
+			require.NoError(t, conns[1-oldOwner].QueryRowContext(ctx, query).Scan(&otherRows, &otherSize))
+			require.Equal(t, rows, otherRows)
+			require.Equal(t, size, otherSize)
+			_, err = conns[1-oldOwner].ExecContext(ctx, "set mo_table_stats.use_old_impl='no'")
+			require.NoError(t, err)
+
 		}
 	})
 }

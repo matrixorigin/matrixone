@@ -243,10 +243,10 @@ func (e *Engine) Close() error {
 		// The scheduler reads pClient and snapshotMgr. Stop and join it before
 		// retiring either dependency so a tick already in flight cannot use a
 		// closed resource.
-		e.gcSchedulerMu.Lock()
+		e.gcMu.Lock()
 		cancel := e.gcSchedulerCancel
 		done := e.gcSchedulerDone
-		e.gcSchedulerMu.Unlock()
+		e.gcMu.Unlock()
 		if cancel != nil {
 			cancel()
 			<-done
@@ -266,7 +266,7 @@ func (e *Engine) Close() error {
 			e.globalStats.Close()
 		}
 		if e.gcPool != nil {
-			if err := e.gcPool.ReleaseTimeout(time.Second * 3); e.closeErr == nil {
+			if err := e.gcPool.ReleaseContext(context.Background()); e.closeErr == nil {
 				e.closeErr = err
 			}
 		}
@@ -1499,8 +1499,8 @@ func (e *Engine) StartGCScheduler(ctx context.Context) error {
 		return err
 	}
 
-	e.gcSchedulerMu.Lock()
-	defer e.gcSchedulerMu.Unlock()
+	e.gcMu.Lock()
+	defer e.gcMu.Unlock()
 	if e.dynamicCtx.closed.Load() {
 		return moerr.NewInvalidStateNoCtx("engine is closed")
 	}
