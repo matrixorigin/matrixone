@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
@@ -40,6 +41,28 @@ func UpgradeInformationSchemaViewsAfterProtocolCheck(
 	accountID uint32,
 ) error {
 	return tenantUpgEntries[0].UpgradeAfterProtocolCheck(txn, accountID)
+}
+
+// InformationSchemaViewsAuthoringProtocolReady reports the local write-side
+// admission fence. The common protocol check only proves that every CN can
+// decode v107; the VIEWS DDL also persists function IDs that must not be
+// authored until this CN has consumed the catalog-fenced admission snapshot.
+// A missing runtime or key is retained as ready for bootstrap unit tests and
+// older standalone callers that predate the admission lifecycle.
+func InformationSchemaViewsAuthoringProtocolReady(txn executor.TxnExecutor) bool {
+	if txn == nil || txn.Txn() == nil {
+		return true
+	}
+	rt := runtime.ServiceRuntime(txn.Txn().TxnOptions().CN)
+	if rt == nil {
+		return true
+	}
+	value, present := rt.GetGlobalVariables(runtime.PersistedExpressionProtocolAuthoringFloor)
+	if !present {
+		return true
+	}
+	floor, valid := value.(int64)
+	return valid && floor >= defines.MORPCVersion107
 }
 
 // upgradeInformationSchemaViews is deliberately scheduled in v4.0.7. The

@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
@@ -66,4 +67,25 @@ func TestViewsUpgradeBlocksBeforeDropOnOldCN(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestViewsUpgradeAuthoringProtocolGate(t *testing.T) {
+	rt := moruntime.ServiceRuntime("")
+	old, hadOld := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor)
+	t.Cleanup(func() {
+		if hadOld {
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, old)
+		} else if current, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor); ok {
+			rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, current)
+		}
+	})
+
+	txn := newVersionTxnExecutor(t, func(string) (executor.Result, error) {
+		return executor.Result{}, nil
+	})
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(0))
+	require.False(t, InformationSchemaViewsAuthoringProtocolReady(txn))
+
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion107))
+	require.True(t, InformationSchemaViewsAuthoringProtocolReady(txn))
 }
