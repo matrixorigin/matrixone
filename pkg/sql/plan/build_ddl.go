@@ -241,6 +241,9 @@ func genViewTableDef(
 	var preOptimizeViewRequiredProtocol int64
 	validate := func(query *Query) error {
 		for _, node := range query.Nodes {
+			if node != nil && node.NodeType == plan.Node_FUNCTION_SCAN && node.TableDef.GetTblFunc().GetName() == "json_table" {
+				return moerr.NewNotSupported(ctx.GetContext(), "JSON_TABLE views require the view compatibility gate")
+			}
 			if node == nil || node.NodeType != plan.Node_TABLE_SCAN || node.TableDef == nil {
 				continue
 			}

@@ -110,7 +110,6 @@ func TestJSONTableArrayBuilderPreservesEveryCopiedValue(t *testing.T) {
 	require.NoError(t, builder.Append(first))
 	// Append owns its input bytes. Mutating a source view after Append must not
 	// alter the eventual cell.
-	first.Data = append([]byte(nil), first.Data...)
 	first.Data[0] = 0xff
 	require.NoError(t, builder.Append(second))
 	require.NoError(t, builder.Append(object))

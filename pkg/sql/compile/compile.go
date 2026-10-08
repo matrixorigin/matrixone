@@ -5388,6 +5388,11 @@ func (c *Compile) compileTableFunction(node *plan.Node, ss []*Scope) ([]*Scope, 
 			return c.compileSingleTableFunction(node)
 		}
 	}
+	if node.TableDef.GetTblFunc().GetName() == "json_table" {
+		// G2 has no distributed keyed-once warning transport. Execute this
+		// consumer once on the coordinator; input scans may remain remote.
+		ss = []*Scope{c.newMergeScope(ss)}
+	}
 	for i := range ss {
 		op := constructTableFunction(node, c.pn.GetQuery())
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
@@ -7307,9 +7312,11 @@ func hasMultiScopeGroup(groups [][]*Scope) bool {
 }
 
 func (c *Compile) compileApply(node, right *plan.Node, rs []*Scope) []*Scope {
-	if right.GetTableDef().GetTblFunc().GetName() == "mo_view_columns" {
+	if name := right.GetTableDef().GetTblFunc().GetName(); name == "mo_view_columns" || name == "json_table" {
 		// Description owns an origin-session compiler context. Candidate scans
 		// may be distributed, but binding must run serially on the origin CN.
+		// JSON_TABLE likewise stays serial/local until its keyed-once transport
+		// exists; an ordinary remote warning_count is not a safe fallback.
 		rs = []*Scope{c.newMergeScope(rs)}
 	}
 

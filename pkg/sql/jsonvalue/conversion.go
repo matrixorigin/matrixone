@@ -303,6 +303,16 @@ func ConvertPathMatchesWithOptions(
 	options ConversionOptions,
 	maxBytes int,
 ) Result {
+	return convertPathMatchesWithOptions(ctx, iterator, target, options, maxBytes, false)
+}
+
+// ConvertTablePathMatchesWithOptions uses the same bounded match aggregation,
+// with the serial SQL consumer's explicit scalar compatibility admission.
+func ConvertTablePathMatchesWithOptions(ctx context.Context, iterator *bytejson.PathIterator, target types.Type, options ConversionOptions, maxBytes int) Result {
+	return convertPathMatchesWithOptions(ctx, iterator, target, options, maxBytes, true)
+}
+
+func convertPathMatchesWithOptions(ctx context.Context, iterator *bytejson.PathIterator, target types.Type, options ConversionOptions, maxBytes int, tableCore bool) Result {
 	if iterator == nil {
 		return Result{Status: StatusStatementError, Err: moerr.NewInvalidStateNoCtx("nil JSON_TABLE path iterator")}
 	}
@@ -324,6 +334,9 @@ func ConvertPathMatchesWithOptions(
 	if !ok {
 		if target.Oid == types.T_json {
 			return convertJSONValueWithLimit(ctx, first, maxBytes)
+		}
+		if tableCore {
+			return ConvertTableScalarWithContext(ctx, first, target, options)
 		}
 		return ConvertScalarWithContext(ctx, first, target, options)
 	}

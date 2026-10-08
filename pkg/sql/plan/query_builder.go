@@ -13142,6 +13142,68 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	}
 
 	if builder.qry.Nodes[rightChildID].NodeType == plan.Node_FUNCTION_SCAN {
+		right := builder.qry.Nodes[rightChildID]
+		if right.TableDef.TblFunc.Name == "json_table" && builder.tableFunctionDependsOnInput(right.TblFuncExprList, leftChildID) {
+			if joinType != plan.Node_INNER {
+				return 0, moerr.NewNotSupported(builder.GetContext(), "correlated JSON_TABLE requires INNER or CROSS JOIN")
+			}
+			right.Children = nil
+			if err = ctx.mergeContexts(builder.GetContext(), leftCtx, rightCtx); err != nil {
+				return 0, err
+			}
+			nodeID := builder.appendNode(&plan.Node{NodeType: plan.Node_APPLY, Children: []int32{leftChildID, rightChildID}, ApplyType: plan.Node_CROSSAPPLY}, ctx)
+			ctx.binder = NewJoinOnBinder(builder, ctx)
+			var filters []*plan.Expr
+			switch cond := tbl.Cond.(type) {
+			case *tree.OnJoinCond:
+				filters, err = splitAndBindCondition(cond.Expr, NoAlias, ctx)
+				if err != nil {
+					return 0, err
+				}
+				for i, filter := range filters {
+					if hasSubquery(filter) {
+						nodeID, filters[i], err = builder.flattenFilterSubqueries(nodeID, filter, ctx)
+						if err != nil {
+							return 0, err
+						}
+					}
+				}
+			case *tree.UsingJoinCond:
+				for _, col := range cond.Cols {
+					filter, err := ctx.addUsingCol(string(col), joinType, leftCtx, rightCtx)
+					if err != nil {
+						return 0, err
+					}
+					filters = append(filters, filter)
+				}
+			default:
+				if tbl.JoinType == tree.JOIN_TYPE_NATURAL {
+					leftCols := make(map[string]bool)
+					for _, binding := range leftCtx.bindings {
+						for i, col := range binding.cols {
+							if !binding.colIsHidden[i] {
+								leftCols[col] = true
+							}
+						}
+					}
+					for _, binding := range rightCtx.bindings {
+						for i, col := range binding.cols {
+							if !binding.colIsHidden[i] && leftCols[col] {
+								filter, err := ctx.addUsingCol(col, joinType, leftCtx, rightCtx)
+								if err != nil {
+									return 0, err
+								}
+								filters = append(filters, filter)
+							}
+						}
+					}
+				}
+			}
+			if len(filters) > 0 {
+				nodeID = builder.appendNode(&plan.Node{NodeType: plan.Node_FILTER, Children: []int32{nodeID}, FilterList: filters}, ctx)
+			}
+			return nodeID, nil
+		}
 		if joinType != plan.Node_INNER {
 			return 0, moerr.NewSyntaxError(builder.GetContext(), "table function can only be used in a inner join")
 		}
@@ -13381,6 +13443,8 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		nodeId, err = b(builder, tbl, ctx, exprs, nil)
 	} else {
 		switch id {
+		case "json_table":
+			nodeId, err = builder.buildJSONTable(tbl, ctx, exprs)
 		case "unnest":
 			nodeId, err = builder.buildUnnest(tbl, ctx, exprs, nil)
 		case "generate_series":
