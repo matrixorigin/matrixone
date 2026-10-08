@@ -4811,7 +4811,7 @@ func TestGetComputationWrapperUsesSameTemplateForBinaryBindings(t *testing.T) {
 	ses.loggerOnce.Do(func() {})
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	prepareString := tree.NewPrepareString("stmt1", "select ?")
-	preparePlan, err := buildPlan(ctx, nil, plan.NewEmptyCompilerContext(), prepareString)
+	preparePlan, err := buildPlan(ctx, nil, plan.NewEmptyCompilerContext(proc), prepareString)
 	require.NoError(t, err)
 	prepareBody := &tree.Select{}
 	prepared := &PrepareStmt{
