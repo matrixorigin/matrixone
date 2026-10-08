@@ -5,7 +5,7 @@
 | Record | `python-udf-current-stage-r1-2026-09-24-approval` |
 | Issue | [MatrixOne #28132](https://github.com/matrixorigin/matrixone/issues/28132) |
 | Implementation PR | [MatrixOne #29152](https://github.com/matrixorigin/matrixone/pull/29152) |
-| Current-stage proposal | [`python-udf-current-stage-r3-2026-10-05`](python_udf_current_stage.md); historical r1 approval retained below |
+| Current-stage proposal | [`python-udf-current-stage-r4-2026-10-09`](python_udf_current_stage.md); historical r1 approval retained below |
 | Scope | Explicitly enabled test/development adapter; no production rollout or production-readiness claim |
 
 This record separates the immutable current-stage design artifact, the feature
@@ -77,3 +77,7 @@ historical approval only; they are not the current proposal's content identity.
 Architecture and SQL/Planner approval remain pending, as recorded in reviews
 5302243148 and the exact-head review on 4ca229411166b9da09a702dbe1b799de43d8d694.
 Code review and passing tests do not substitute for those independent decisions.
+
+## r4 rebase maintenance addendum (2026-10-09)
+
+Against upstream `9df2c4006142a0593f9bb4c40019ee1a8cd2cde7`, the current repair catalog is 4.0.13 with minimum direct source 4.0.12. Upstream 4.0.12 owns the charset metadata refresh and remains unchanged. The shared-function repair replays its nine entries only in the new handler, so already-upgraded 4.0.12 tenants are scheduled. Protocol admission remains 107, immediate predecessor 106. This mechanical rebase correction and the historical-schema lookup correction for snapshot/TS/PITR restore remain within the existing development scope; independent approval remains pending.
