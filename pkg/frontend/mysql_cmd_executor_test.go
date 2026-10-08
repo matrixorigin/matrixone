@@ -36,6 +36,7 @@ import (
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -2798,6 +2799,70 @@ func TestRecordStatementSkippedInternalEmptyDoesNotOpenMemoryEpoch(t *testing.T)
 	require.True(t, ended)
 }
 
+func TestRecordStatementCopiesCapturedFingerprintToTelemetry(t *testing.T) {
+	ctx := context.Background()
+	sv := &config.FrontendParameters{}
+	sv.SetDefaultValues()
+	setPu("", config.NewParameterUnit(sv, nil, nil, nil))
+	provider := motrace.GetTracerProvider()
+	wasEnabled := provider.IsEnable()
+	provider.SetEnable(true)
+	t.Cleanup(func() { provider.SetEnable(wasEnabled) })
+
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	proc := ses.GetProc()
+	cw := InitTxnComputationWrapper(ses, &tree.Select{}, proc)
+	cw.setStatementFingerprint("captured-before-plan", true)
+
+	_, err := RecordStatement(ctx, ses, proc, cw, time.Now(), "select 1", constant.ExternSql, true)
+	require.NoError(t, err)
+	require.NotNil(t, ses.GetStmtInfo())
+	require.Equal(t, "captured-before-plan", ses.GetStmtInfo().StatementFingerprint)
+}
+
+func TestCachedPlanWithoutCapturedFingerprintIsEvictedBeforeBorrow(t *testing.T) {
+	provider := motrace.GetTracerProvider()
+	wasEnabled := provider.IsEnable()
+	provider.SetEnable(true)
+	t.Cleanup(func() { provider.SetEnable(wasEnabled) })
+
+	t.Run("cache created while tracing was disabled is reparsed", func(t *testing.T) {
+		ses := &Session{feSessionImpl: feSessionImpl{service: ""}, planCache: newPlanCache(1)}
+		stmt := &trackedStatement{}
+		ses.cachePlanWithSnapshotsAndStatsVersionsAndFingerprints(
+			"cache-key",
+			[]tree.Statement{stmt},
+			[]*plan.Plan{{}},
+			[]timestamp.Timestamp{{PhysicalTime: 1}},
+			[]map[optimizerStatsTableKey]uint64{nil},
+			[]string{""},
+			[]bool{false},
+		)
+
+		cached := cachedPlanForInput(ses, &UserInput{sql: "select 1", hashedSql: "cache-key"})
+		require.Nil(t, cached, "do not borrow a plan AST lacking an admission-time fingerprint")
+		require.Equal(t, 1, stmt.freed, "the cache still owns and releases its AST exactly once")
+	})
+
+	t.Run("attempted but unavailable fingerprint does not loop on reparse", func(t *testing.T) {
+		ses := &Session{feSessionImpl: feSessionImpl{service: ""}, planCache: newPlanCache(1)}
+		stmt := &trackedStatement{}
+		ses.cachePlanWithSnapshotsAndStatsVersionsAndFingerprints(
+			"cache-key",
+			[]tree.Statement{stmt},
+			[]*plan.Plan{{}},
+			[]timestamp.Timestamp{{PhysicalTime: 1}},
+			[]map[optimizerStatsTableKey]uint64{nil},
+			[]string{""},
+			[]bool{true},
+		)
+
+		cached := cachedPlanForInput(ses, &UserInput{sql: "select 1", hashedSql: "cache-key"})
+		require.NotNil(t, cached, "formatter absence is terminal best-effort state")
+		require.Zero(t, stmt.freed, "the cache keeps ownership while wrappers may borrow the AST")
+	})
+}
+
 func TestRecordDerivedStatementSharesParentResourceLifecycle(t *testing.T) {
 	ctx := context.Background()
 	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
@@ -4572,10 +4637,16 @@ func TestGetComputationWrapperRestoresPreparedStatementRemap(t *testing.T) {
 	prepareString := tree.NewPrepareString("stmt1", "select 1")
 	preparePlan, err := buildPlan(ctx, nil, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), prepareString)
 	require.NoError(t, err)
+	require.NoError(t, ses.SetPrepareStmt(ctx, "stmt1", &PrepareStmt{
+		Name:                          "stmt1",
+		statementFingerprint:          "prepared-template-fingerprint",
+		statementFingerprintAttempted: true,
+	}))
 	execCtx := newTestExecCtx(ctx, ctrl)
 	execCtx.ses = ses
 	execCtx.input = &UserInput{
 		sql:         "execute stmt1",
+		stmtName:    "stmt1",
 		stmt:        stmt,
 		preparePlan: preparePlan,
 		remapDb:     map[string]string{"src": "prepared_db"},
@@ -4587,7 +4658,243 @@ func TestGetComputationWrapperRestoresPreparedStatementRemap(t *testing.T) {
 	carrier, ok := cws[0].(interface{ GetRemapDb() map[string]string })
 	require.True(t, ok)
 	require.Equal(t, "prepared_db", carrier.GetRemapDb()["src"])
+	fingerprint, ok := cws[0].(interface{ getStatementFingerprint() string })
+	require.True(t, ok)
+	require.Equal(t, "prepared-template-fingerprint", fingerprint.getStatementFingerprint())
+	attempted, ok := cws[0].(interface{ statementFingerprintWasAttempted() bool })
+	require.True(t, ok)
+	require.True(t, attempted.statementFingerprintWasAttempted())
 	cws[0].Free()
+}
+
+func TestGetComputationWrapperUsesPreparedTemplateFingerprintInTextExecute(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	provider := motrace.GetTracerProvider()
+	wasEnabled := provider.IsEnable()
+	provider.SetEnable(true)
+	t.Cleanup(func() { provider.SetEnable(wasEnabled) })
+	require.NoError(t, ses.SetPrepareStmt(ctx, "stmt1", &PrepareStmt{
+		Name:                          "stmt1",
+		statementFingerprint:          "prepared-template-fingerprint",
+		statementFingerprintAttempted: true,
+	}))
+
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+	execCtx.input = &UserInput{sql: "select 1; execute stmt1; select 2"}
+	cws, err := GetComputationWrapper(execCtx, "", "root", nil, proc, ses)
+	require.NoError(t, err)
+	require.Len(t, cws, 3)
+	t.Cleanup(func() {
+		for _, cw := range cws {
+			cw.Free()
+		}
+	})
+
+	fingerprintAt := func(i int) (string, bool) {
+		carrier, ok := cws[i].(interface {
+			getStatementFingerprint() string
+			statementFingerprintWasAttempted() bool
+		})
+		require.True(t, ok)
+		return carrier.getStatementFingerprint(), carrier.statementFingerprintWasAttempted()
+	}
+	first, firstAttempted := fingerprintAt(0)
+	execute, executeAttempted := fingerprintAt(1)
+	last, lastAttempted := fingerprintAt(2)
+	require.True(t, firstAttempted)
+	require.True(t, lastAttempted)
+	require.NotEmpty(t, first)
+	require.NotEmpty(t, last)
+	require.Equal(t, "prepared-template-fingerprint", execute)
+	require.True(t, executeAttempted)
+}
+
+func TestRefreshPreparedStatementFingerprintAtExecutionBoundary(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	observedLoggerSession, logs := newObservedProtocolSession()
+	ses.logger = observedLoggerSession.logger
+	ses.logLevel = zap.ErrorLevel
+	ses.loggerOnce.Do(func() {})
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+
+	makeWrappers := func() []ComputationWrapper {
+		execCtx := newTestExecCtx(ctx, ctrl)
+		execCtx.ses = ses
+		execCtx.input = &UserInput{sql: "prepare stmt1 from 'select 1'; execute stmt1"}
+		cws, err := GetComputationWrapper(execCtx, "", "root", nil, proc, ses)
+		require.NoError(t, err)
+		require.Len(t, cws, 2)
+		t.Cleanup(func() {
+			for _, cw := range cws {
+				cw.Free()
+			}
+		})
+		return cws
+	}
+	assertFingerprint := func(cw ComputationWrapper, want string) {
+		carrier, ok := cw.(interface {
+			getStatementFingerprint() string
+			statementFingerprintWasAttempted() bool
+		})
+		require.True(t, ok)
+		require.True(t, carrier.statementFingerprintWasAttempted())
+		require.Equal(t, want, carrier.getStatementFingerprint())
+	}
+	newPrepared := func(fingerprint string) *PrepareStmt {
+		return &PrepareStmt{
+			Name:                          "stmt1",
+			statementFingerprint:          fingerprint,
+			statementFingerprintAttempted: true,
+		}
+	}
+
+	// All wrappers are built before PREPARE executes. The existing owner is
+	// therefore only an early snapshot; refresh must select the replacement.
+	require.NoError(t, ses.SetPrepareStmt(ctx, "stmt1", newPrepared("old-template")))
+	cws := makeWrappers()
+	executeCW := cws[1]
+	assertFingerprint(executeCW, "old-template")
+	require.NoError(t, ses.SetPrepareStmt(ctx, "stmt1", newPrepared("new-template")))
+	refreshPreparedStatementFingerprint(ctx, ses, executeCW)
+	assertFingerprint(executeCW, "new-template")
+
+	// A failed runtime lookup must clear the old snapshot so a deallocated
+	// EXECUTE cannot report a fingerprint for a statement it no longer resolves.
+	require.True(t, ses.RemovePrepareStmt("stmt1"))
+	refreshPreparedStatementFingerprint(ctx, ses, executeCW)
+	assertFingerprint(executeCW, "")
+	logs.TakeAll()
+
+	// A PREPARE followed by EXECUTE in the same request starts with no owner
+	// while wrappers are built, then must pick up the owner installed by PREPARE.
+	newStmtCWs := makeWrappers()
+	newExecuteCW := newStmtCWs[1]
+	assertFingerprint(newExecuteCW, "")
+	missingStmtLog := "prepared statement 'stmt1' does not exist on connection 0"
+	missingStmtLogs := logs.FilterMessage(missingStmtLog).All()
+	require.Empty(t, missingStmtLogs)
+	// Wrapper construction happens before PREPARE executes, so its optional
+	// remap/fingerprint snapshots must not log a runtime lookup failure.
+	// Rewriting exercises the additional remap lookup; both paths remain
+	// unresolved until the execution boundary refreshes the fingerprint.
+	ses.rewriteEnabled.Store(true)
+	rewrittenStmtCWs := makeWrappers()
+	rewrittenExecuteCW := rewrittenStmtCWs[1]
+	assertFingerprint(rewrittenExecuteCW, "")
+	require.Empty(t, logs.FilterMessage(missingStmtLog).All())
+	ses.rewriteEnabled.Store(false)
+	// A real runtime lookup still returns and logs the established error.
+	_, err := ses.GetPrepareStmt(ctx, "stmt1")
+	require.ErrorContains(t, err, "prepared statement 'stmt1' does not exist")
+	missingStmtLogs = logs.FilterMessage(missingStmtLog).All()
+	require.Len(t, missingStmtLogs, 1)
+	require.Equal(t, zap.ErrorLevel, missingStmtLogs[0].Level)
+	logs.TakeAll()
+	require.NoError(t, ses.SetPrepareStmt(ctx, "stmt1", newPrepared("created-template")))
+	refreshPreparedStatementFingerprint(ctx, ses, newExecuteCW)
+	assertFingerprint(newExecuteCW, "created-template")
+}
+
+func TestGetComputationWrapperUsesSameTemplateForBinaryBindings(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	observedLoggerSession, logs := newObservedProtocolSession()
+	ses.logger = observedLoggerSession.logger
+	ses.logLevel = zap.ErrorLevel
+	ses.loggerOnce.Do(func() {})
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	prepareString := tree.NewPrepareString("stmt1", "select ?")
+	preparePlan, err := buildPlan(ctx, nil, plan.NewEmptyCompilerContext(), prepareString)
+	require.NoError(t, err)
+	prepareBody := &tree.Select{}
+	prepared := &PrepareStmt{
+		Name:                          "stmt1",
+		PrepareStmt:                   prepareBody,
+		statementFingerprint:          "prepared-template-fingerprint",
+		statementFingerprintAttempted: true,
+	}
+	t.Cleanup(prepared.Close)
+	require.NoError(t, ses.SetPrepareStmt(ctx, "stmt1", prepared))
+
+	for _, binding := range []any{int64(1), int64(2)} {
+		execCtx := newTestExecCtx(ctx, ctrl)
+		execCtx.ses = ses
+		execCtx.input = &UserInput{
+			stmtName:            "stmt1",
+			stmt:                prepareBody,
+			preparePlan:         preparePlan,
+			isBinaryProtExecute: true,
+			preparedParamVals:   []any{binding},
+		}
+		cws, err := GetComputationWrapper(execCtx, "", "root", nil, proc, ses)
+		require.NoError(t, err)
+		require.Len(t, cws, 1)
+		fingerprint, ok := cws[0].(interface{ getStatementFingerprint() string })
+		require.True(t, ok)
+		require.Equal(t, "prepared-template-fingerprint", fingerprint.getStatementFingerprint())
+		cws[0].Free()
+	}
+
+	// This branch only snapshots optional fingerprint metadata. A prior
+	// protocol lookup owns execution validity; wrapper construction itself must
+	// not turn an absent snapshot into an error-level runtime diagnostic.
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+	execCtx.input = &UserInput{
+		stmtName:            "missing",
+		stmt:                prepareBody,
+		preparePlan:         preparePlan,
+		isBinaryProtExecute: true,
+	}
+	cws, err := GetComputationWrapper(execCtx, "", "root", nil, proc, ses)
+	require.NoError(t, err)
+	require.Len(t, cws, 1)
+	cws[0].Free()
+	require.Empty(t, logs.FilterMessage("prepared statement 'missing' does not exist on connection 0").All())
+}
+
+func TestGetComputationWrapperCapturesFingerprintAfterRemap(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	require.NoError(t, ses.SetSessionSysVar(ctx, "enable_remap_hint", int64(1)))
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	provider := motrace.GetTracerProvider()
+	wasEnabled := provider.IsEnable()
+	provider.SetEnable(true)
+	t.Cleanup(func() { provider.SetEnable(wasEnabled) })
+
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+	execCtx.input = &UserInput{sql: `/*+ {"remapdb":{"src":"dest"}} */ select * from src.t`}
+	cws, err := GetComputationWrapper(execCtx, "src", "root", nil, proc, ses)
+	require.NoError(t, err)
+	require.Len(t, cws, 1)
+	t.Cleanup(func() { cws[0].Free() })
+
+	carrier := cws[0].(interface {
+		getStatementFingerprint() string
+		statementFingerprintWasAttempted() bool
+	})
+	want, attempted := formatStatementFingerprint(ctx, cws[0].GetAst())
+	require.True(t, attempted)
+	require.NotEmpty(t, want)
+	require.True(t, carrier.statementFingerprintWasAttempted())
+	require.Equal(t, want, carrier.getStatementFingerprint())
+	require.Contains(t, tree.String(cws[0].GetAst(), dialect.MYSQL), "dest.t")
+
+	_, err = RecordStatement(ctx, ses, proc, cws[0], time.Now(), execCtx.input.getSql(), constant.ExternSql, true)
+	require.NoError(t, err)
+	require.NotNil(t, ses.GetStmtInfo())
+	require.Equal(t, want, ses.GetStmtInfo().StatementFingerprint,
+		"the admitted, remapped AST fingerprint must reach the existing telemetry record")
 }
 
 func TestInstallStatementRemapClearsPreviousPolicy(t *testing.T) {
@@ -4764,7 +5071,7 @@ func Test_GetComputationWrapper_InternalCmds(t *testing.T) {
 	})
 }
 
-func runTestHandle(funName string, t *testing.T, handleFun func(ses *Session) error) {
+func runTestHandle(funName string, t *testing.T, handleFun func(ses *Session) error, ioOptions ...IOSessionOption) {
 	ctx := context.TODO()
 	convey.Convey(fmt.Sprintf("%s succ", funName), t, func() {
 		ctrl := gomock.NewController(t)
@@ -4782,7 +5089,7 @@ func runTestHandle(funName string, t *testing.T, handleFun func(ses *Session) er
 		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 		pu.SV.SkipCheckUser = true
 		setPu("", pu)
-		ioses, err := NewIOSession(&testConn{}, pu, "")
+		ioses, err := NewIOSessionWithOptions(&testConn{}, pu, "", ioOptions...)
 		convey.So(err, convey.ShouldBeNil)
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, pu.SV)
 		ses := NewSession(ctx, "", proto, nil)
@@ -4832,6 +5139,85 @@ func Test_HandlePrepareStmt(t *testing.T) {
 			})
 		})
 	}
+}
+
+func TestHandlePrepareStmtCapturesFingerprintBeforePlanning(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	const sql = "prepare fp_stmt from select ? + 0"
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	// This literal is the independent SHA-256 of the expected canonical SQL
+	// bytes, "select ? + 0"; do not derive the oracle with the production helper.
+	const expectedFingerprint = "05513085fe7fd114153fa4a5831e9a63d5e169b95782ce38320d3f8af9088096"
+	const expectedPostPlanningFingerprint = "d27f7aa34ad690e7afb6b41fc09478966397baeef2e99b5cee0a3dcc3fb7b6e6"
+
+	originalBuildPlanWithAuthorization := buildPlanWithAuthorization
+	t.Cleanup(func() {
+		buildPlanWithAuthorization = originalBuildPlanWithAuthorization
+	})
+	plannerCalled := false
+	var plannedAST *tree.Select
+	buildPlanWithAuthorization = func(
+		reqCtx context.Context,
+		ses FeSession,
+		compilerCtx plan.CompilerContext,
+		planned tree.Statement,
+	) (*plan.Plan, error) {
+		prepareStmt, ok := planned.(*tree.PrepareStmt)
+		require.True(t, ok, "handlePrepareStmt must plan the actual PREPARE node")
+		selectStmt, ok := prepareStmt.Stmt.(*tree.Select)
+		require.True(t, ok, "PREPARE body must reach planning as its parsed SELECT AST")
+		plannedAST = selectStmt
+		// This planner-entry mutation distinguishes preplanning capture from a
+		// fingerprint recomputed from the AST after the real planner returns.
+		selectStmt.IsPerform = true
+		plannerCalled = true
+		return originalBuildPlanWithAuthorization(reqCtx, ses, compilerCtx, planned)
+	}
+
+	var preparedOwner *PrepareStmt
+	var ownerSession *Session
+	runTestHandle("prepared fingerprint captured before planning", t, func(ses *Session) error {
+		ownerSession = ses
+		// The prepared owner takes ownership of the inner statement AST. Remove
+		// it at test cleanup so PrepareStmt.Close frees that AST exactly once.
+		t.Cleanup(func() {
+			if ownerSession != nil {
+				ownerSession.RemovePrepareStmt("fp_stmt")
+			}
+		})
+		execCtx := &ExecCtx{
+			reqCtx: ctx,
+			proc:   ses.GetProc(),
+			ses:    ses,
+			resper: ses.respr,
+		}
+		var handleErr error
+		preparedOwner, handleErr = handlePrepareStmt(
+			ses, execCtx, stmt.(*tree.PrepareStmt), sql,
+		)
+		return handleErr
+	}, WithIOSessionAllocator(NewLeakCheckAllocator()))
+
+	require.True(t, plannerCalled, "the test must pass through the real PREPARE planner")
+	require.NotNil(t, preparedOwner)
+	require.True(t, plannedAST.IsPerform, "planner-entry mutation must remain visible after real planning")
+	postPlanningSQL := tree.String(plannedAST, dialect.MYSQL)
+	require.Equal(t, "perform select ? + 0", postPlanningSQL,
+		"the planner-entry AST mutation must change the canonical SQL bytes")
+	postPlanningFingerprint, attempted := formatStatementFingerprint(ctx, plannedAST)
+	require.True(t, attempted)
+	require.Equal(t, expectedPostPlanningFingerprint, postPlanningFingerprint,
+		"the mutated AST must have its independent postplanning canonical hash")
+	require.NotEqual(t, expectedFingerprint, postPlanningFingerprint,
+		"the planner-entry AST mutation must change the fingerprint")
+	require.Same(t, plannedAST, preparedOwner.PrepareStmt,
+		"the retained prepared AST must be the one mutated at planner entry")
+	require.True(t, preparedOwner.statementFingerprintAttempted)
+	require.Equal(t, expectedFingerprint, preparedOwner.statementFingerprint,
+		"PREPARE must retain the independent preplanning fingerprint after the planner mutates its AST")
 }
 
 func TestFailedPrepareReplacementRemovesPreviousStatement(t *testing.T) {
