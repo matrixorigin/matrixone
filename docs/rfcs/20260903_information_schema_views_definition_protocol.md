@@ -11,8 +11,8 @@
 `information_schema.VIEWS.VIEW_DEFINITION` must expose the defining SELECT,
 not the original CREATE statement. New views persist a parser-derived definition
 and legacy rows are read through parser-aware metadata functions. The functions
-are new distributed plan functions (IDs 583 and 584), so the catalog contract is fenced by MORPC
-v94.
+are new distributed plan functions (IDs 586 and 587), so the catalog contract is fenced by MORPC
+v107.
 
 ## Problem and invariant
 
@@ -47,10 +47,10 @@ When either function identity occurs in a persisted view expression, the
 planner writes `required_protocol_version: 94` into `ViewData`, including when
 the call is nested under another expression. The real view bind/Prepare path
 reapplies that marker. It uses the existing two-floor admission lifecycle:
-HAKeeper publishes the durable read floor during the v94 decoder barrier, while
+HAKeeper publishes the durable read floor during the v107 decoder barrier, while
 the authoring floor remains closed until the all-CN admission and catalog fence
-complete. Therefore an authoring or read floor of 0, v91, v92, or v93 fails
-closed, an all-v94 fenced CN can create the VIEWS definition, and an ordinary view
+complete. Therefore an authoring or read floor of 0, v104, v105, or v106 fails
+closed, an all-v107 fenced CN can create the VIEWS definition, and an ordinary view
 without either function remains unmarked.
 
 The fallback cannot infer metadata that is absent from a legacy row. In
@@ -61,10 +61,10 @@ snapshot to the legacy catalog format would be a separate compatibility
 migration and is outside this PR.
 
 The post-upgrade reconciliation uses the exact current
-`InformationSchemaViewsDDL` as its idempotence marker. After the common v94 gate
+`InformationSchemaViewsDDL` as its idempotence marker. After the common v107 gate
 is available, a bounded page may repair any tenant whose
 `information_schema.VIEWS` is missing or whose definition is not exactly that
-current DDL. This includes the v92 predecessor definition and older
+current DDL. This includes the v105 predecessor definition and older
 metadata-view definitions; it does not modify user views, user data, or any
 information-schema object other than `VIEWS`. The broader convergence rule is
 intentional: a tenant can have been created while capability discovery was
@@ -86,43 +86,43 @@ intentionally invokes VIEWS reconciliation before orphan-privilege maintenance
 and returns a visible error when reconciliation fails. Consequently,
 orphan-privilege maintenance is skipped on every failed VIEWS pass, including
 repeated failures; once VIEWS succeeds, that same pass proceeds to orphan
-cleanup. This serial ordering keeps a pass that failed to establish the v94
+cleanup. This serial ordering keeps a pass that failed to establish the v107
 public catalog contract from being reported as fully successful, while the
 bounded VIEWS page remains independently rollback-safe.
 
-MORPC v94 is allocated as `MORPCLatestVersion + 1` from official main v93 at
+MORPC v107 is allocated as `MORPCLatestVersion + 1` from official main v106 at
 `a6b6c2ccee73a467ba849b8af8e762f0f4da7150`, which owns the current protocol
-floor. The current main function bound is 583 after its EXTRACTVALUE and
-UPDATEXML additions; the two VIEWS function IDs are 583 and 584, and the bound
-advances to 585. These IDs are allocated from the rebased official main and are
+floor. The current main function end marker is 586 after its EXTRACTVALUE and
+UPDATEXML additions; the two VIEWS function IDs are 586 and 587, and the end
+marker advances to 588. These IDs are allocated from the rebased official main and are
 distinct from all existing function registrations.
 The capability is specific to these functions and the persisted VIEWS definition.
 A sender probes the selected destination CN as well as its local runtime before
 encoding a pipeline containing either function ID; an unknown or unavailable
 destination capability fails closed. The v4.0.6 VIEWS upgrade waits for common
-v94. New tenant initialization installs the new VIEWS DDL only after the local
-coordinator and every CN in the current inventory have positively confirmed v94;
+v107. New tenant initialization installs the new VIEWS DDL only after the local
+coordinator and every CN in the current inventory have positively confirmed v107;
 a mixed, unknown, RPC-failing, or incomplete capability probe records the
 predecessor VIEWS definition while still committing the final-version tenant
-row. A bounded post-upgrade reconciliation pass later rechecks common v94 and
+row. A bounded post-upgrade reconciliation pass later rechecks common v107 and
 reuses the guarded transactional entry to converge missing or stale VIEWS
-definitions to the current contract. Any cluster with a CN below v94, including
-the immediate predecessors v91, v92, and v93, preserves the predecessor VIEWS
+definitions to the current contract. Any cluster with a CN below v107, including
+the immediate predecessors v104, v105, and v106, preserves the predecessor VIEWS
 definition while retaining each existing protocol-specific metadata contract,
 including the v58 COLUMNS contract. Pipeline preparation, remote marshal, and
 remote unmarshal reject a
-pipeline containing either function ID below v94. The receiver check protects
-stale prepared work as well as normal sender dispatch. Before the v94 HAKeeper
+pipeline containing either function ID below v107. The receiver check protects
+stale prepared work as well as normal sender dispatch. Before the v107 HAKeeper
 protocol-floor activation is durably committed, a cancelled rollout may stop
-the v94 upgrade, keep or restore `InformationSchemaViewsLegacyDDL`
+the v107 upgrade, keep or restore `InformationSchemaViewsLegacyDDL`
 transactionally, wait for catalog and in-flight work to converge, and admit
-v93 only after verifying that no v94 maintenance worker can re-install the
-new definition. After the v94 floor is committed, the floor is monotonic and
-v91/v92/v93 binaries must not be admitted: restoring the view text alone cannot
-undo the decoder barrier. The supported recovery is forward recovery with v94-
+v106 only after verifying that no v107 maintenance worker can re-install the
+new definition. After the v107 floor is committed, the floor is monotonic and
+v104/v105/v106 binaries must not be admitted: restoring the view text alone cannot
+undo the decoder barrier. The supported recovery is forward recovery with v107-
 compatible log/CN services, or a coordinated restoration of cluster state from
 before the activation barrier; an ordinary in-place downgrade is unsupported.
-Merely draining below-v94 requests is not sufficient because the new persisted
+Merely draining below-v107 requests is not sufficient because the new persisted
 view text references the functions. The new JSON fields are additive and old
 binaries keep treating them as unknown.
 
@@ -132,7 +132,7 @@ Keeping raw SQL regexp extraction was rejected because it repeatedly diverged
 from the SQL lexer for comments and quoted strings. Eagerly rewriting every
 legacy row was rejected because the existing recovery lifecycle is deliberately
 inactive and a metadata read must not perform unbounded catalog writes. Allowing
-the DDL before v94 was rejected because an old CN cannot bind the metadata functions.
+the DDL before v107 was rejected because an old CN cannot bind the metadata functions.
 
 ## Bounds, security, and operations
 
@@ -151,25 +151,25 @@ Focused parser/function tests cover current and legacy definitions, quoted and
 commented inputs, malformed rows, frozen wildcard expansion, the documented
 legacy raw-wildcard boundary, explicit derived-table column lists with inner
 alias preservation, and CHECK OPTION.
-Protocol tests cover rejection at v91, v92, and v93 and acceptance at v94 at
+Protocol tests cover rejection at v104, v105, and v106 and acceptance at v107 at
 prepare, sender, and receiver boundaries, including a mixed-version destination
 probe and the all-CN capability fence.
 Generated ViewData tests cover both function IDs, nested detection, the
-authoring/read floor values 0, v91, v92, and v93, and binding the exact generated
+authoring/read floor values 0, v104, v105, and v106, and binding the exact generated
 metadata at the immediate predecessor and current protocol.
 System-view tests prove mixed, unknown, and RPC-failing CN capability probes
-fall back to the predecessor VIEWS DDL, while an all-v94 inventory uses the
+fall back to the predecessor VIEWS DDL, while an all-v107 inventory uses the
 parser-derived DDL. Tenant initialization keeps the final account version but
 records the predecessor VIEWS definition when capability discovery is
 incomplete. The post-upgrade bounded reconciliation pass rediscovers that
-durable definition marker, retries only after a positive all-CN v94 check, and
+durable definition marker, retries only after a positive all-CN v107 check, and
 uses the same guarded transactional entry to publish the parser-derived
 definition once it is safe. Upgrade tests prove both the v4.0.7 handler and
-its VIEWS entry require v94. The predecessor-init test proves that the
+its VIEWS entry require v107. The predecessor-init test proves that the
 restoration target has no function reference before an older CN is admitted;
 the cancellation-after-staging test additionally proves that a cancelled
 transaction preserves the legacy marker and page cursor, and that a later
-generation can retry and publish only after a committed v94 gate.
+generation can retry and publish only after a committed v107 gate.
 
 Maintenance acceptance additionally covers the broader convergence rule: a
 missing VIEWS object and a stale/non-current VIEWS definition are both repair
