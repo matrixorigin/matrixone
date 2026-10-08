@@ -222,7 +222,7 @@ func makeCreateDatabaseEntries(
 	if err != nil {
 		return nil, err
 	}
-	var entries []*api.Entry
+	entries := make([]*api.Entry, 0, 1)
 	entries = append(entries, createDbEntry)
 	return entries, nil
 

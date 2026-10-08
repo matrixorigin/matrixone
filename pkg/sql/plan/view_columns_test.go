@@ -23,7 +23,7 @@ import (
 )
 
 func TestBuildViewColumnsRejectsDirectUse(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
 		"select * from nation cross apply mo_view_columns(n_nationkey) mc", 1)
 	require.NoError(t, err)

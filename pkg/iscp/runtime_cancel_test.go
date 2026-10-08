@@ -17,7 +17,9 @@ package iscp
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -60,32 +62,86 @@ func TestGetExecutorRuntimeRequiresExactCN(t *testing.T) {
 }
 
 func TestCancelAndDrainJobConsumerFencesAndWaitsForRunningConsumer(t *testing.T) {
-	exec := newRuntimeTestExecutor()
-	key := NewJobRuntimeKey(1, 2, "index_idx01", 7)
-	consumerCtx, consumerCancel := context.WithCancel(context.Background())
-	defer consumerCancel()
-	retrieverCanceled := make(chan error, 1)
+	synctest.Test(t, func(t *testing.T) {
+		exec := newRuntimeTestExecutor()
+		key := NewJobRuntimeKey(1, 2, "index_idx01", 7)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		consumerCtx, consumerCancel := context.WithCancel(context.Background())
+		retrieverCanceled := make(chan error, 1)
 
-	h, ok := exec.RegisterRunningConsumer(key, 7, 11, consumerCancel, func(err error) {
-		retrieverCanceled <- err
+		h, ok := exec.RegisterRunningConsumer(key, 7, 11, consumerCancel, func(err error) {
+			retrieverCanceled <- err
+		})
+		require.True(t, ok)
+
+		cancelObserved := make(chan struct{})
+		release := make(chan struct{})
+		exited := make(chan struct{})
+		drainDone := make(chan error, 1)
+		releaseConsumer := sync.OnceFunc(func() { close(release) })
+		received := false
+		defer func() {
+			releaseConsumer()
+			consumerCancel()
+			cancel()
+			<-exited
+			if !received {
+				<-drainDone
+			}
+		}()
+
+		go func() {
+			defer close(exited)
+			<-consumerCtx.Done()
+			close(cancelObserved)
+			<-release
+			exec.UnregisterRunningConsumer(h)
+		}()
+		go func() {
+			drainDone <- exec.CancelAndDrainJobConsumer(
+				ctx, key.AccountID, key.TableID, key.JobName, key.JobID)
+		}()
+
+		select {
+		case <-cancelObserved:
+		case <-ctx.Done():
+			t.Fatal("consumer cancellation was not observed")
+		}
+
+		synctest.Wait()
+		var err error
+		select {
+		case err = <-drainDone:
+			received = true
+			t.Error("drain returned before consumer unregister")
+		default:
+		}
+
+		releaseConsumer()
+		if !received {
+			select {
+			case err = <-drainDone:
+				received = true
+			case <-ctx.Done():
+				t.Fatal("drain did not finish after release")
+			}
+		}
+		select {
+		case <-exited:
+		case <-ctx.Done():
+			t.Fatal("consumer did not exit")
+		}
+
+		require.NoError(t, err)
+		require.True(t, exec.IsJobFenced(key))
+		select {
+		case cancelErr := <-retrieverCanceled:
+			require.ErrorContains(t, cancelErr, "iscp job consumer canceled")
+		default:
+			t.Fatal("retriever cancellation was not observed")
+		}
 	})
-	require.True(t, ok)
-
-	exited := make(chan struct{})
-	go func() {
-		defer close(exited)
-		<-consumerCtx.Done()
-		time.Sleep(20 * time.Millisecond)
-		exec.UnregisterRunningConsumer(h)
-	}()
-
-	start := time.Now()
-	err := exec.CancelAndDrainJobConsumer(context.Background(), key.AccountID, key.TableID, key.JobName, key.JobID)
-	require.NoError(t, err)
-	require.GreaterOrEqual(t, time.Since(start), 20*time.Millisecond)
-	require.True(t, exec.IsJobFenced(key))
-	require.ErrorContains(t, <-retrieverCanceled, "iscp job consumer canceled")
-	<-exited
 }
 
 func TestRegisterRunningConsumerRejectsFencedJob(t *testing.T) {

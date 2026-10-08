@@ -75,10 +75,7 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 		bc.snapshot = parent.snapshot
 		bc.remapOption = parent.remapOption
 		bc.numericCteByName = parent.numericCteByName
-		if len(parent.viewChain) > 0 {
-			bc.viewChain = append([]string{}, parent.viewChain...)
-		}
-		bc.directView = parent.directView
+		bc.viewPath = append([]*plan.ViewStep(nil), parent.viewPath...)
 		bc.restoreViewMySQLSpecialTypes = parent.restoreViewMySQLSpecialTypes
 		bc.captureViewStarExpansion = parent.captureViewStarExpansion
 		bc.expandedSelectLists = parent.expandedSelectLists

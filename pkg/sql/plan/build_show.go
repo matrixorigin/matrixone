@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
@@ -473,7 +474,22 @@ func buildShowColumnNumber(stmt *tree.ShowColumnNumber, ctx CompilerContext) (*P
 		}()
 	}
 
-	if accountId == catalog.System_Account {
+	var dependencies []*ObjectRef
+	var dependsOnUdf bool
+	if isUserViewMetadata(dbName, tableDef) {
+		var columns []*ColDef
+		columns, dependencies, dependsOnUdf, err = describeViewForMetadata(ctx, tableDef, accountId)
+		if err != nil {
+			return nil, err
+		}
+		count := 0
+		for _, column := range columns {
+			if !column.Hidden {
+				count++
+			}
+		}
+		sql = fmt.Sprintf("SELECT CAST(%d AS BIGINT) AS %s", count, sqlquote.Ident("Number of columns in "+tblName))
+	} else if accountId == catalog.System_Account {
 		mustShowTable := "att_relname = 'mo_database' or att_relname = 'mo_tables' or att_relname = 'mo_columns'"
 		clusterTable := ""
 		if util.TableIsClusterTable(tableDef.GetTableType()) {
@@ -487,7 +503,12 @@ func buildShowColumnNumber(stmt *tree.ShowColumnNumber, ctx CompilerContext) (*P
 		sql = fmt.Sprintf(sql, tblName, MO_CATALOG_DB_NAME, dbName, tblName)
 	}
 
-	return returnByRewriteSQL(ctx, sql, ddlType)
+	result, err := returnByRewriteSQL(ctx, sql, ddlType)
+	if err != nil {
+		return nil, err
+	}
+	setShowMetadataDependencies(result.GetQuery(), obj, tableDef, dependencies, dependsOnUdf)
+	return result, nil
 }
 
 func buildShowTableValues(stmt *tree.ShowTableValues, ctx CompilerContext) (*Plan, error) {
@@ -515,33 +536,62 @@ func buildShowTableValues(stmt *tree.ShowTableValues, ctx CompilerContext) (*Pla
 		}()
 	}
 
-	ddlType := plan.DataDefinition_SHOW_TARGET
+	columns := tableDef.Cols
+	var dependencies []*ObjectRef
+	var dependsOnUdf bool
+	if isUserViewMetadata(dbName, tableDef) {
+		accountID, accountErr := ctx.GetAccountId()
+		if accountErr != nil {
+			return nil, accountErr
+		}
+		if obj.PubInfo != nil {
+			accountID = uint32(obj.PubInfo.TenantId)
+		}
+		columns, dependencies, dependsOnUdf, err = describeViewForMetadata(ctx, tableDef, accountID)
+		if err != nil {
+			return nil, err
+		}
+	}
 
-	sql := "SELECT"
+	projections := make([]string, 0, 2*len(columns))
 	isAllNull := true
-	for _, col := range tableDef.Cols {
+	for _, col := range columns {
 		if col.Hidden {
 			continue
 		}
-		colName := col.Name
-		if types.T(col.GetTyp().Id) == types.T_json {
-			sql += " null as `max(%s)`, null as `min(%s)`,"
-			sql = fmt.Sprintf(sql, colName, colName)
-		} else {
-			sql += " max(%s), min(%s),"
-			sql = fmt.Sprintf(sql, colName, colName)
-			isAllNull = false
+		for _, aggregate := range []string{"max", "min"} {
+			expr := aggregate + "(" + sqlquote.Ident(col.Name) + ")"
+			if types.T(col.GetTyp().Id) == types.T_json {
+				expr = "null"
+			} else {
+				isAllNull = false
+			}
+			projections = append(projections, expr+" AS "+sqlquote.Ident(aggregate+"("+col.Name+")"))
 		}
 	}
-	sql = sql[:len(sql)-1]
-	sql += " FROM %s"
-
+	sql := "SELECT " + strings.Join(projections, ", ") + " FROM " + sqlquote.Ident(dbName) + "." + sqlquote.Ident(tblName)
 	if isAllNull {
 		sql += " LIMIT 1"
 	}
-	sql = fmt.Sprintf(sql, tblName)
+	result, err := returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_TARGET)
+	if err != nil {
+		return nil, err
+	}
+	setShowMetadataDependencies(result.GetQuery(), obj, tableDef, dependencies, dependsOnUdf)
+	return result, nil
+}
 
-	return returnByRewriteSQL(ctx, sql, ddlType)
+func isUserViewMetadata(database string, def *TableDef) bool {
+	return def.ViewSql != nil && def.ViewSql.View != "" &&
+		!slices.Contains(catalog.SystemDatabases, strings.ToLower(database))
+}
+
+func setShowMetadataDependencies(query *Query, obj *ObjectRef, def *TableDef, dependencies []*ObjectRef, dependsOnUdf bool) {
+	query.CatalogDependencies = appendPrepareSchemas(query.CatalogDependencies, dependencies...)
+	// Include ordinary targets too: replacing a table with a View changes the
+	// metadata row source, not just the values stored in the catalog.
+	query.CatalogDependencies = appendPrepareSchemas(query.CatalogDependencies, prepareSchemaRefWithSnapshot(obj, def, nil))
+	query.ViewMetadataDependsOnUdf = query.ViewMetadataDependsOnUdf || dependsOnUdf
 }
 
 func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error) {
@@ -673,8 +723,7 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 
 	var viewDependencies []*ObjectRef
 	var viewMetadataDependsOnUdf bool
-	if tableDef.ViewSql != nil && tableDef.ViewSql.View != "" &&
-		!slices.Contains(catalog.SystemDatabases, strings.ToLower(dbName)) {
+	if isUserViewMetadata(dbName, tableDef) {
 		columns, dependencies, dependsOnUdf, err := viewDescriptionRelation(ctx, tableDef, accountId, dbName, tblName)
 		if err != nil {
 			return nil, err
@@ -683,11 +732,6 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 		viewDependencies = dependencies
 		viewMetadataDependsOnUdf = dependsOnUdf
 	}
-	// Even an ordinary table determines plan-time formatting and the metadata
-	// row source. If it is replaced by a View, reusing its catalog-only plan
-	// would bypass on-demand binding and expose the persisted View columns.
-	viewDependencies = appendPrepareSchemas(viewDependencies, prepareSchemaRefWithSnapshot(obj, tableDef, nil))
-
 	var result *Plan
 	if stmt.Where != nil {
 		result, err = returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
@@ -701,9 +745,7 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	if err != nil {
 		return nil, err
 	}
-	result.GetQuery().CatalogDependencies = appendPrepareSchemas(
-		result.GetQuery().CatalogDependencies, viewDependencies...)
-	result.GetQuery().ViewMetadataDependsOnUdf = viewMetadataDependsOnUdf
+	setShowMetadataDependencies(result.GetQuery(), obj, tableDef, viewDependencies, viewMetadataDependsOnUdf)
 	return result, nil
 }
 
@@ -804,7 +846,21 @@ func buildShowTarget(stmt *tree.ShowTarget, ctx CompilerContext) (*Plan, error) 
 	sql := ""
 	switch stmt.Type {
 	case tree.ShowCharset:
-		sql = "select '' as `Charset`, '' as `Description`, '' as `Default collation`, '' as `Maxlen` where 0"
+		// CHARACTER_SETS is populated from the shared collation capability owner.
+		// Do not maintain another charset registry or return the old empty stub.
+		sql = "SELECT CHARACTER_SET_NAME AS `Charset`, DESCRIPTION AS `Description`, " +
+			"DEFAULT_COLLATE_NAME AS `Default collation`, MAXLEN AS `Maxlen` " +
+			"FROM information_schema.character_sets ORDER BY CHARACTER_SET_NAME"
+		if stmt.Like != nil && stmt.Where != nil {
+			return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
+		}
+		if stmt.Where != nil {
+			return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
+		}
+		if stmt.Like != nil {
+			stmt.Like.Left = tree.NewUnresolvedColName("CHARACTER_SET_NAME")
+			return returnByLikeAndSQL(ctx, sql, stmt.Like, ddlType)
+		}
 	case tree.ShowTriggers:
 		return buildShowTriggers(stmt, ctx)
 	default:

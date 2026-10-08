@@ -19,7 +19,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -82,10 +81,8 @@ const (
 	checkSnapshotTsFormat = `select snapshot_id from mo_catalog.mo_snapshots where ts = %d order by snapshot_id;`
 
 	restoreTableDataByTsFmt = "create table %s clone %s {MO_TS = %d }"
-	//restoreTableDataByTsFmt = "insert into %s SELECT * FROM %s {MO_TS = %d }"
 
 	restoreTableDataByNameFmt = "create table %s clone %s {SNAPSHOT = %s}"
-	//restoreTableDataByNameFmt = "insert into %s SELECT * FROM %s {SNAPSHOT = %s}"
 
 	getPastAccountsFmt = "select account_id, account_name, admin_name, comments from mo_catalog.mo_account {MO_TS = %d } ORDER BY account_id ASC;"
 
@@ -99,8 +96,6 @@ const (
 )
 
 var (
-	isRestoreByCloneSql = regexp.MustCompile("create table.*clone")
-
 	skipDbs = []string{"mysql", "system", "system_metrics", "mo_task", "mo_debug", "information_schema", moCatalog}
 
 	// systemCatalogRestorePolicies is the ownership boundary for mo_catalog
@@ -923,11 +918,6 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		}
 	}
 
-	// drop foreign key related tables first
-	if err = deleteCurFkTables(ctx, ses.GetService(), bh, dbName, tblName, toAccountId); err != nil {
-		return
-	}
-
 	tempSnap := &plan.Snapshot{
 		TS:     &timestamp.Timestamp{PhysicalTime: snapshot.ts},
 		Tenant: &plan.SnapshotTenant{TenantID: restoreAccount},
@@ -947,6 +937,32 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		return stats, err
 	}
 
+	var source *partialRestoreSource
+	var selected map[restoreObjectName]struct{}
+	if dbName != "" {
+		source, selected, err = preparePartialRestoreSource(ctx, ses, bh, snapshotName, tempSnap, sourceTableInfos, restoreAccount, toAccountId)
+		if err != nil {
+			return stats, err
+		}
+	}
+	ownershipCtx, err := prepareRestoreOwnership(ctx, bh, snapshot.ts, restoreAccount, toAccountId, dbName, tblName, selected)
+	if err != nil {
+		return stats, err
+	}
+	ctx = ownershipCtx
+	var partialPrivileges *partialRestorePrivileges
+	if stmt.Level == tree.RESTORELEVELDATABASE || stmt.Level == tree.RESTORELEVELTABLE {
+		partialPrivileges, err = capturePartialRestorePrivileges(ctx, bh, toAccountId, dbName, tblName)
+		if err != nil {
+			return stats, err
+		}
+	}
+
+	// drop foreign key related tables first
+	if err = deleteCurFkTables(ctx, ses.GetService(), bh, dbName, tblName, toAccountId); err != nil {
+		return
+	}
+
 	// get topo sorted tables with foreign key
 	sortedFkTbls, err := fkTablesTopoSort(ctx, bh, tempSnap, dbName, tblName, sourceTableInfos)
 	if err != nil {
@@ -954,7 +970,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	}
 
 	// get foreign key table infos
-	fkTableMap, err := getTableInfoMap(ctx, ses.GetService(), bh, tempSnap, dbName, tblName, sortedFkTbls)
+	fkTableMap, err := getTableInfoMap(ctx, ses.GetService(), bh, tempSnap, dbName, tblName, sortedFkTbls, source)
 	if err != nil {
 		return
 	}
@@ -993,7 +1009,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 			snapshot.ts,
 			restoreAccount,
 			false,
-			nil); err != nil {
+			nil, source); err != nil {
 			return stats, err
 		}
 	case tree.RESTORELEVELTABLE:
@@ -1009,7 +1025,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 			fkTableMap,
 			viewMap,
 			snapshot.ts,
-			restoreAccount); err != nil {
+			restoreAccount, source); err != nil {
 			return stats, err
 		}
 	}
@@ -1026,11 +1042,13 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 
 	if len(viewMap) > 0 {
 		var sortedView []string
-		if sortedView, err = sortedViewInfos(
-			ctx, ses, bh, snapshotName, nil, viewMap,
-			restoreAccount, toAccountId,
-		); err != nil {
-			return
+		if source != nil {
+			sortedView = source.sortedViews
+		} else {
+			sortedView, err = sortedViewInfos(ctx, ses, bh, snapshotName, nil, viewMap, restoreAccount, toAccountId)
+			if err != nil {
+				return
+			}
 		}
 
 		if err = restoreViews(
@@ -1050,6 +1068,12 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	}
 	if stmt.Level == tree.RESTORELEVELACCOUNT && toAccountId == catalog.System_Account {
 		if err = seedMissingViewMetadataAfterCatalogReset(ctx, ses, bh); err != nil {
+			return stats, err
+		}
+	}
+
+	if partialPrivileges != nil {
+		if err = partialPrivileges.rebind(ctx, bh); err != nil {
 			return stats, err
 		}
 	}
@@ -1296,7 +1320,7 @@ func deleteCurFkTables(
 	}
 
 	// collect table infos which need to be dropped in current state; snapshotName must set to empty
-	curFkTableMap, err := getTableInfoMap(ctx, sid, bh, nil, dbName, tblName, sortedFkTbls)
+	curFkTableMap, err := getTableInfoMap(ctx, sid, bh, nil, dbName, tblName, sortedFkTbls, nil)
 	if err != nil {
 		return
 	}
@@ -1381,7 +1405,7 @@ func restoreToAccount(
 			snapshotTs,
 			restoreAccount,
 			isRestoreCluster,
-			subDbToRestore); err != nil {
+			subDbToRestore, nil); err != nil {
 			return
 		}
 	}
@@ -1435,6 +1459,7 @@ func restoreToDatabase(
 	restoreAccount uint32,
 	isRestoreCluster bool,
 	subDbToRestore map[string]*subDbRestoreRecord,
+	source *partialRestoreSource,
 ) (err error) {
 	getLogger(sid).Debug(fmt.Sprintf("[%s] start to restore db: %v, restore timestamp: %d", snapshotName, dbName, snapshotTs))
 	return restoreToDatabaseOrTable(ctx,
@@ -1449,7 +1474,7 @@ func restoreToDatabase(
 		snapshotTs,
 		restoreAccount,
 		isRestoreCluster,
-		subDbToRestore)
+		subDbToRestore, source)
 }
 
 func restoreToTable(
@@ -1463,7 +1488,9 @@ func restoreToTable(
 	fkTableMap map[string]*tableInfo,
 	viewMap map[string]*tableInfo,
 	snapshotTs int64,
-	restoreAccount uint32) (err error) {
+	restoreAccount uint32,
+	source *partialRestoreSource,
+) (err error) {
 	getLogger(sid).Debug(fmt.Sprintf("[%s] start to restore table: %v, restore timestamp: %d", snapshotName, tblName, snapshotTs))
 	return restoreToDatabaseOrTable(ctx,
 		sid,
@@ -1477,7 +1504,7 @@ func restoreToTable(
 		snapshotTs,
 		restoreAccount,
 		false,
-		nil)
+		nil, source)
 }
 
 func restoreToDatabaseOrTable(
@@ -1494,6 +1521,7 @@ func restoreToDatabaseOrTable(
 	restoreAccount uint32,
 	isRestoreCluster bool,
 	subDbToRestore map[string]*subDbRestoreRecord,
+	source *partialRestoreSource,
 ) (err error) {
 	if needSkipDb(dbName) {
 		getLogger(sid).Debug(fmt.Sprintf("[%s] skip restore db: %v", snapshotName, dbName))
@@ -1568,7 +1596,10 @@ func restoreToDatabaseOrTable(
 		// else skip restore the db
 
 		var isPubExist bool
-		isPubExist, _ = checkPubExistOrNot(toCtx, sid, bh, snapshotName, dbName, snapshotTs)
+		isPubExist, err = checkPubExistOrNot(toCtx, sid, bh, snapshotName, dbName, snapshotTs)
+		if err != nil {
+			return err
+		}
 		if !isPubExist {
 			getLogger(sid).Debug(fmt.Sprintf("[%s] skip restore db: %v, no publication", snapshotName, dbName))
 			return
@@ -1576,7 +1607,7 @@ func restoreToDatabaseOrTable(
 
 		// create db with publication
 		getLogger(sid).Debug(fmt.Sprintf("[%s] start to create db with pub: %v, create db sql: %s", snapshotName, dbName, createDbSql))
-		if err = bh.Exec(toCtx, createDbSql); err != nil {
+		if err = execRestoreCreateDatabase(toCtx, bh, dbName, createDbSql); err != nil {
 			return
 		}
 
@@ -1585,7 +1616,7 @@ func restoreToDatabaseOrTable(
 		createDbSql = createDatabaseIfNotExistsSQL(dbName)
 		// create db
 		getLogger(sid).Debug(fmt.Sprintf("[%s] start to create db: %v, create db sql: %s", snapshotName, dbName, createDbSql))
-		if err = bh.Exec(toCtx, createDbSql); err != nil {
+		if err = execRestoreCreateDatabase(toCtx, bh, dbName, createDbSql); err != nil {
 			return
 		}
 	}
@@ -1595,9 +1626,14 @@ func restoreToDatabaseOrTable(
 		Tenant: &plan.SnapshotTenant{TenantID: restoreAccount},
 	}
 
-	tableInfos, err := getTableInfos(ctx, sid, bh, tempSnap, dbName, tblName)
-	if err != nil {
-		return
+	var tableInfos []*tableInfo
+	if source != nil {
+		tableInfos = source.tables
+	} else {
+		tableInfos, err = getTableInfos(ctx, sid, bh, tempSnap, dbName, tblName)
+		if err != nil {
+			return
+		}
 	}
 
 	// if restore to table, expect only one table here
@@ -1682,9 +1718,12 @@ func restoreSystemDatabase(
 		}
 
 		getLogger(sid).Debug(fmt.Sprintf("[%s] start to restore system table: %v.%v", snapshotName, moCatalog, tblInfo.tblName))
-		tblInfo.createSql, err = getCreateTableSql(ctx, bh, tempSnap, dbName, tblInfo.tblName)
-		if err != nil {
-			return err
+		// Sequences use their CREATE definition; table schemas belong to CLONE.
+		if isSequence(tblInfo) {
+			tblInfo.createSql, err = getCreateTableSql(ctx, bh, tempSnap, dbName, tblInfo.tblName)
+			if err != nil {
+				return err
+			}
 		}
 
 		// checks if the given context has been canceled.
@@ -1713,15 +1752,22 @@ func restoreToSubDb(
 	// a cluster restore.
 	sourceCtx := defines.AttachAccountId(ctx, subDb.sourceAccount)
 	var isPubExist bool
-	isPubExist, _ = checkPubExistOrNot(sourceCtx, sid, bh, snapshotName, subDb.dbName, subDb.snapshotTs)
+	isPubExist, err = checkPubExistOrNot(sourceCtx, sid, bh, snapshotName, subDb.dbName, subDb.snapshotTs)
+	if err != nil {
+		return err
+	}
 	if !isPubExist {
 		getLogger(sid).Debug(fmt.Sprintf("[%s] skip restore db: %v, no publication", snapshotName, subDb.dbName))
 		return
 	}
 
 	targetCtx := defines.AttachAccountId(ctx, subDb.targetAccount)
+	targetCtx, err = prepareRestoreOwnership(targetCtx, bh, subDb.snapshotTs, subDb.sourceAccount, subDb.targetAccount, "", "", nil)
+	if err != nil {
+		return err
+	}
 	getLogger(sid).Debug(fmt.Sprintf("[%s] account %d start to create sub db: %v, create db sql: %s", snapshotName, subDb.targetAccount, subDb.dbName, subDb.createSql))
-	if err = bh.Exec(targetCtx, subDb.createSql); err != nil {
+	if err = execRestoreCreateDatabase(targetCtx, bh, subDb.dbName, subDb.createSql); err != nil {
 		return
 	}
 
@@ -1738,7 +1784,7 @@ func dropClusterTable(
 	getLogger(sid).Debug("start to drop exists cluster table")
 
 	// get all tables in mo_catalog
-	tableInfos, err := getTableInfos(ctx, sid, bh, nil, moCatalog, "")
+	tableInfos, err := showFullTables(ctx, sid, bh, nil, moCatalog, "")
 	if err != nil {
 		return
 	}
@@ -2007,17 +2053,9 @@ func sortedViewInfos(
 				// #27027 refusal lands here first and would abort the whole restore -- the
 				// skip further down never gets a chance.
 				//
-				// KEEP the vertex and mark the view instead of dropping it from the graph.
-				// Dropping it meant the restore loop never visited it, so it never ran the
-				// DROP either: wherever the target database is not rebuilt (a table-level
-				// restore, a restore into a live account), the OLD view object stayed behind
-				// and the restore reported success over it. Marked, it is dropped like any
-				// other restored view and only its CREATE is skipped, so the target ends up
-				// without the view rather than with a stale one.
-				//
-				// No dependency edges are added: its plan never built, so its dependencies
-				// are unknown. A view that depends on THIS one plans the same definition
-				// through it and trips the same refusal, so it is marked here too.
+				// Preserve the vertex and classification for execution. A marked
+				// view reaches neither DROP nor CREATE; an existing live view
+				// survives when its database is retained.
 				if markUnservableViewInSort(ses, snapshotName, viewEntry, &g, key, err) {
 					continue
 				}
@@ -2069,6 +2107,10 @@ func recreateTable(
 		return restoreUserDefinedFunctionCatalogWithCurrentSchema(
 			ctx, bh, sourceSnapshot, curAccountID, toAccountId,
 		)
+	}
+	ctx, err = restoreDDLContext(ctx, tblInfo.dbName, tblInfo.tblName)
+	if err != nil {
+		return err
 	}
 	if isSequence(tblInfo) {
 		curAccountID, accountErr := defines.GetAccountId(ctx)
@@ -2123,25 +2165,13 @@ func recreateTable(
 		return
 	}
 
-	if !isRestoreByCloneSql.MatchString(restoreTableDataByTsFmt) {
-		// create table
-		getLogger(sid).Debug(fmt.Sprintf("[%s] start to create table: %v, create table sql: %s", snapshotName, tblInfo.tblName, tblInfo.createSql))
-		if err = bh.Exec(ctx, tblInfo.createSql); err != nil {
-			if strings.Contains(err.Error(), "no such table") {
-				getLogger(sid).Debug(fmt.Sprintf("[%s] foreign key table %v referenced table not exists, skip restore", snapshotName, tblInfo.tblName))
-				err = nil
-			}
-			return
-		}
-	}
-
 	if curAccountId == toAccountId {
 		// insert data
 		insertIntoSql := restoreTableDataByTsSQL(tblInfo.dbName, tblInfo.tblName, snapshotTs)
 		beginTime := time.Now()
 		getLogger(sid).Debug(fmt.Sprintf("[%s] start to insert select table: %v, insert sql: %s", snapshotName, tblInfo.tblName, insertIntoSql))
 		if err = bh.Exec(ctx, insertIntoSql); err != nil {
-			if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) && !strings.Contains(err.Error(), tblInfo.tblName) {
+			if tblInfo.dbName != moCatalog && moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) && !strings.Contains(err.Error(), tblInfo.tblName) {
 				err = nil
 			} else {
 				return err
@@ -2911,6 +2941,10 @@ func parseViewCreateSQLForRestore(ctx context.Context, tblInfo *tableInfo, lower
 }
 
 func executeViewCreateSQLForRestore(ctx context.Context, bh BackgroundExec, tblInfo *tableInfo) error {
+	ctx, err := restoreDDLContext(ctx, tblInfo.dbName, tblInfo.tblName)
+	if err != nil {
+		return err
+	}
 	if err := requirePersistedViewProtocolForRestore(ctx, bh, tblInfo); err != nil {
 		return err
 	}
@@ -3193,6 +3227,7 @@ func getTableInfoMap(
 	dbName string,
 	tblName string,
 	tblKeys []string,
+	source *partialRestoreSource,
 ) (tblInfoMap map[string]*tableInfo, err error) {
 
 	tblInfoMap = make(map[string]*tableInfo)
@@ -3218,6 +3253,12 @@ func getTableInfoMap(
 			continue
 		}
 
+		if source != nil {
+			if info, ok := source.byName[restoreObjectName{d, t}]; ok {
+				tblInfoMap[key] = info
+			}
+			continue
+		}
 		if tblInfoMap[key], err = getTableInfo(ctx, sid, bh, snapshot, d, t); err != nil {
 			return
 		}
@@ -3832,6 +3873,11 @@ func restoreAccountUsingClusterSnapshotToNew(ctx context.Context,
 
 	getLogger(ses.GetService()).Debug(fmt.Sprintf("[%s] start to restore dropped account: %v, account id: %d to new account id: %d, restore timestamp: %d", snapshotName, account.accountName, account.accountId, toAccountId, snapshotTs))
 	fromAccount := account.accountId
+	ownershipCtx, err := prepareRestoreOwnership(ctx, bh, snapshotTs, uint32(fromAccount), uint32(toAccountId), "", "", nil)
+	if err != nil {
+		return err
+	}
+	ctx = ownershipCtx
 
 	// drop foreign key related tables first
 	if isNeedToCleanToDatabase {
@@ -4371,8 +4417,7 @@ func checkPubValid(
 	}
 
 	if !execResultArrayHasData(erArray) {
-		err = moerr.NewInternalErrorf(newCtx, "there is no publication account %s", pubAccountName)
-		return
+		return false, nil
 	}
 	if accId, err = erArray[0].GetInt64(newCtx, 0, 0); err != nil {
 		return
@@ -4385,8 +4430,7 @@ func checkPubValid(
 		return
 	}
 	if pubInfo == nil {
-		err = moerr.NewInternalErrorf(newCtx, "there is no publication %s", pubName)
-		return
+		return false, nil
 	}
 
 	return true, nil

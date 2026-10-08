@@ -127,7 +127,7 @@ func TestCopyFiles(t *testing.T) {
 		assert.NotNil(t, c)
 		defer c.Close()
 		ctx := context.Background()
-		var locations []string
+		locations := make([]string, 0, 1)
 		// invalid file name
 		fileName := fmt.Sprintf("%s_aaa", uuid.New().String())
 		location := fmt.Sprintf("%s_0_1_1_1_0_0", fileName)
@@ -155,7 +155,7 @@ func TestCopyFiles(t *testing.T) {
 		assert.NotNil(t, c)
 		defer c.Close()
 		ctx := context.Background()
-		var locations []string
+		locations := make([]string, 0, 1)
 		fileName := fmt.Sprintf("%s_00000", uuid.New().String())
 		location := fmt.Sprintf("%s_0_1_1_1_0_0", fileName)
 		locations = append(locations, location)

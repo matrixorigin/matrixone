@@ -263,7 +263,7 @@ func (e *testEngine) Databases(ctx context.Context, txnOp client.TxnOperator) ([
 		e.parent.state = e.parent.state - e.parent.step*e.parent.state
 	}
 
-	var a []string
+	a := make([]string, 0, 2)
 	a = append(a, "foo")
 	a = append(a, "bar")
 	return a, nil
@@ -480,10 +480,6 @@ func (o *testOperator) LockSkipped(tableID uint64, mode lock.LockMode) bool {
 }
 
 func (o *testOperator) TxnOptions() txn.TxnOptions {
-	panic("should not call")
-}
-
-func (o *testOperator) NextSequence() uint64 {
 	panic("should not call")
 }
 

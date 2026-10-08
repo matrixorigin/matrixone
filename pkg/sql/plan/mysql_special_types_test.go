@@ -301,7 +301,7 @@ func TestFindInSetPlannerPreservesSetContractAcrossQueryBoundary(t *testing.T) {
 		{name: "ordered derived empty member", sql: "select find_in_set('', s) from (select s from set_empty_member_t order by s) d", def: ",a", wantType: types.T_uint64},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			logicPlan, err := runOneExprStmt(newMySQLSpecialOrderMock(), t, tc.sql)
+			logicPlan, err := runOneExprStmt(newMySQLSpecialOrderMock(t), t, tc.sql)
 			require.NoError(t, err)
 			findInSet := findPlanFunctionExpr(logicPlan, "find_in_set")
 			require.NotNil(t, findInSet, logicPlan.String())
@@ -433,7 +433,7 @@ func TestPreparedGeometrySRIDPlanIsValueSpecialized(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	prepared, err := BuildPlan(NewMockCompilerContext(true), stmt, true)
+	prepared, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, true)
 	require.NoError(t, err)
 	require.NoError(t, NormalizePrepareParamRefs(ctx, prepared))
 	fn := findPlanFunctionExpr(prepared, "st_srid")
@@ -671,7 +671,7 @@ func TestFuncCastForGeometryTypeNull(t *testing.T) {
 
 func mockGeometryPreparedDMLPlan(t *testing.T, sql string, srid uint32, sridDefined bool) *plan.Plan {
 	t.Helper()
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	table := ctx.tables["emp"]
 	for _, col := range table.Cols {
 		if col.Name == "sal" {
@@ -690,7 +690,7 @@ func mockGeometryPreparedDMLPlan(t *testing.T, sql string, srid uint32, sridDefi
 
 func mockInetNtoaPreparedDMLPlan(t *testing.T, sql string) *plan.Plan {
 	t.Helper()
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	table := ctx.tables["emp"]
 	for _, col := range table.Cols {
 		if col.Name == "sal" {

@@ -122,7 +122,6 @@ func TestFilterODKUPhysicalRowsFastPathAndMalformedMetadata(t *testing.T) {
 
 func TestS3ODKUAffectedRowsTransferredToFlush(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	t.Cleanup(proc.Free)
 	analyzer := process.NewAnalyzer(0, false, false, "s3-affected-rows-test")
 
 	pending := uint64(9)

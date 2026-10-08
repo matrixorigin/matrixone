@@ -161,6 +161,9 @@ func PlanDefToCstrDef(tableDef *plan.TableDef) *ConstraintDef {
 }
 
 var PlanDefsToExeDefs = func(tableDef *plan.TableDef) ([]TableDef, *api.SchemaExtra, error) {
+	if err := plan.RequireLegacyCollations(tableDef); err != nil {
+		return nil, nil, err
+	}
 	planDefs := tableDef.GetDefs()
 	var exeDefs []TableDef
 	var propDef *PropertiesDef
@@ -184,12 +187,14 @@ var PlanDefsToExeDefs = func(tableDef *plan.TableDef) ([]TableDef, *api.SchemaEx
 		exeDefs = append(exeDefs, propDef)
 	}
 	extra := &api.SchemaExtra{
-		FeatureFlag:    tableDef.FeatureFlag,
-		AutoIncrOffset: tableDef.AutoIncrOffset,
-		AutoIncrEpoch:  tableDef.AutoIncrEpoch,
-		AutoIdCache:    tableDef.AutoIdCache,
-		Checks:         tableDef.Checks,
-		DefaultCharset: tableDef.DefaultCharset,
+		FeatureFlag:      tableDef.FeatureFlag,
+		AutoIncrOffset:   tableDef.AutoIncrOffset,
+		AutoIncrEpoch:    tableDef.AutoIncrEpoch,
+		AutoIdCache:      tableDef.AutoIdCache,
+		Checks:           tableDef.Checks,
+		DefaultCharset:   tableDef.DefaultCharset,
+		CollationVersion: tableDef.CollationVersion,
+		KeyFormat:        tableDef.KeyFormat,
 	}
 	propDef.Properties = append(
 		propDef.Properties,
@@ -243,9 +248,7 @@ func PlanColsToExeCols(planCols []*plan.ColDef) []TableDef {
 			alg = compress.Lz4
 		}
 		colTyp := col.GetTyp()
-		exeTyp := types.NewWithCharset(
-			types.T(colTyp.GetId()), colTyp.GetWidth(), colTyp.GetScale(), uint8(colTyp.GetCharset()),
-		)
+		exeTyp := types.MustTypeFromPlan(colTyp)
 		exeCols[i] = &AttributeDef{
 			Attr: Attribute{
 				Name:          col.GetOriginCaseName(),

@@ -3138,6 +3138,7 @@ var_assignment:
 |   charset_keyword charset_name
     {
         $$ = &tree.VarAssignmentExpr{
+            CharsetRequest: true,
             Name: strings.ToLower($1),
             Value: tree.NewNumVal($2, $2, false, tree.P_char),
         }
@@ -3145,6 +3146,7 @@ var_assignment:
 |   charset_keyword DEFAULT
     {
         $$ = &tree.VarAssignmentExpr{
+            CharsetRequest: true,
             Name: strings.ToLower($1),
             Value: &tree.DefaultVal{},
         }
@@ -4394,7 +4396,9 @@ alter_option:
     }
 |   default_opt charset_keyword equal_opt charset_name COLLATE equal_opt charset_name
     {
-        $$ = tree.NewTableOptionCharset($4)
+        opt := tree.NewTableOptionCharset($4)
+        opt.Collate = $7
+        $$ = opt
     }
 |   CONVERT TO CHARACTER SET charset_name
     {
@@ -4402,19 +4406,27 @@ alter_option:
     }
 |   CONVERT TO CHARACTER SET charset_name COLLATE equal_opt charset_name
     {
-        $$ = tree.NewTableOptionCharset($5)
+        opt := tree.NewTableOptionCharset($5)
+        opt.Collate = $8
+        $$ = opt
     }
 |   able_type KEYS
     {
-        $$ = tree.NewTableOptionCharset($1)
+        opt := tree.NewTableOptionCharset($1)
+        opt.NonCharsetSyntax = true
+        $$ = opt
     }
 |   space_type TABLESPACE
     {
-        $$ = tree.NewTableOptionCharset($1)
+        opt := tree.NewTableOptionCharset($1)
+        opt.NonCharsetSyntax = true
+        $$ = opt
     }
 |   FORCE
     {
-        $$ = tree.NewTableOptionCharset($1)
+        opt := tree.NewTableOptionCharset($1)
+        opt.NonCharsetSyntax = true
+        $$ = opt
     }
 |   LOCK equal_opt lock_type
     {
@@ -4422,7 +4434,9 @@ alter_option:
     }
 |   with_type VALIDATION
     {
-        $$ = tree.NewTableOptionCharset($1)
+        opt := tree.NewTableOptionCharset($1)
+        opt.NonCharsetSyntax = true
+        $$ = opt
     }
 
 rename_type:

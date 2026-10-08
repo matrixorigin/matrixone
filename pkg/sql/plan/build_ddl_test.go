@@ -184,7 +184,7 @@ func TestBuildRenameTableUsesPriorDestinationAsNextSource(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	delete(ctx.tables, "t2")
 	delete(ctx.tables, "t3")
 	delete(ctx.objects, "t2")
@@ -228,7 +228,7 @@ func TestBuildTableRenameIdentifierLength(t *testing.T) {
 
 	for _, testCase := range testCases {
 		t.Run(testCase.name+" accepts 64 characters", func(t *testing.T) {
-			_, err := runOneStmt(NewMockOptimizer(false), t, testCase.sql(validName))
+			_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, testCase.sql(validName))
 			require.NoError(t, err)
 		})
 
@@ -256,7 +256,7 @@ func TestBuildTableRenameIdentifierLength(t *testing.T) {
 
 		for _, invalidName := range invalidNames {
 			t.Run(testCase.name+" rejects "+invalidName.name, func(t *testing.T) {
-				mock := NewMockOptimizer(false)
+				mock := NewMockOptimizer(false, newPlanTestProcess(t))
 				_, err := runOneStmt(mock, t, testCase.sql(invalidName.make(mock)))
 				require.Error(t, err)
 				moErr, ok := err.(*moerr.Error)
@@ -328,7 +328,7 @@ func TestBuildRejectsCrossDatabaseTableRename(t *testing.T) {
 			require.NoError(t, err)
 			defer stmt.Free()
 
-			p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+			p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
 			if testCase.wantErrCode != 0 {
 				require.True(t, moerr.IsMoErrCode(err, testCase.wantErrCode), err)
 				if testCase.wantErrCode == moerr.ErrNotSupported {
@@ -418,7 +418,7 @@ func TestBuildCreateTablePreservesTextCharset(t *testing.T) {
 			require.NoError(t, err)
 			defer stmt.Free()
 
-			p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+			p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
 			require.NoError(t, err)
 			tableDef := p.GetDdl().GetCreateTable().GetTableDef()
 			cols := tableDef.GetCols()
@@ -441,7 +441,7 @@ func TestBuildCreateTableRejectsUnsupportedCollations(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			_, err = BuildPlan(NewMockCompilerContext(false), stmt, false)
+			_, err = BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
 			require.ErrorContains(t, err, "unsupported collation")
 		})
 	}
@@ -454,15 +454,15 @@ func TestBuildCreateTableAcceptsMySQL8DefaultCollationCompatibilityAlias(t *test
 			c_utf8mb4_ci varchar(100) character set utf8mb4 collate utf8mb4_0900_ai_ci null,
 			c_utf8mb4_bin varchar(100) character set utf8mb4 collate utf8mb4_bin null,
 			c_utf8mb4_general varchar(100) character set utf8mb4 collate utf8mb4_general_ci null,
-			c_latin1 varchar(100) character set latin1 collate latin1_swedish_ci null,
-			c_ascii varchar(100) character set ascii collate ascii_general_ci null,
+			c_utf8 varchar(100) character set utf8 collate utf8_general_ci null,
+			c_utf8mb3 varchar(100) character set utf8mb3 collate utf8mb3_general_ci null,
 			c_binary varbinary(100) null,
 			primary key (id)
 		) engine=InnoDB default charset=utf8mb4`, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	p, err := BuildPlan(ctx, stmt, false)
 	require.NoError(t, err)
 	tableDef := p.GetDdl().GetCreateTable().GetTableDef()
@@ -470,8 +470,8 @@ func TestBuildCreateTableAcceptsMySQL8DefaultCollationCompatibilityAlias(t *test
 	require.Equal(t, uint32(types.CharsetUTF8), FindColumn(tableDef.Cols, "c_utf8mb4_ci").Typ.Charset)
 	require.Equal(t, uint32(types.CharsetUTF8MB4Bin), FindColumn(tableDef.Cols, "c_utf8mb4_bin").Typ.Charset)
 	require.Equal(t, uint32(types.CharsetUTF8), FindColumn(tableDef.Cols, "c_utf8mb4_general").Typ.Charset)
-	require.Equal(t, uint32(types.CharsetUTF8), FindColumn(tableDef.Cols, "c_latin1").Typ.Charset)
-	require.Equal(t, uint32(types.CharsetUTF8), FindColumn(tableDef.Cols, "c_ascii").Typ.Charset)
+	require.Equal(t, uint32(types.CharsetUTF8), FindColumn(tableDef.Cols, "c_utf8").Typ.Charset)
+	require.Equal(t, uint32(types.CharsetUTF8), FindColumn(tableDef.Cols, "c_utf8mb3").Typ.Charset)
 	require.Equal(t, uint32(types.CharsetBinary), FindColumn(tableDef.Cols, "c_binary").Typ.Charset)
 
 	showSQL, _, err := ConstructCreateTableSQL(ctx, tableDef, nil, false, nil)
@@ -480,19 +480,62 @@ func TestBuildCreateTableAcceptsMySQL8DefaultCollationCompatibilityAlias(t *test
 	require.Contains(t, showSQL, "COLLATE utf8mb4_bin")
 }
 
+func TestBuildCreateTableAcceptsUTF32CompatibilityAliases(t *testing.T) {
+	testCases := []struct {
+		name      string
+		sql       string
+		wantTable uint32
+	}{
+		{
+			name:      "JeecgBoot column declaration",
+			sql:       "create table t_charset_alias (name varchar(20) character set utf32 collate utf32_general_ci)",
+			wantTable: uint32(types.CharsetUTF8),
+		},
+		{
+			name:      "table default",
+			sql:       "create table t_charset_alias (name varchar(20)) default character set utf32",
+			wantTable: uint32(types.CharsetUTF8),
+		},
+		{
+			name:      "binary collation",
+			sql:       "create table t_charset_alias (name varchar(20)) character set utf32 collate utf32_bin",
+			wantTable: uint32(types.CharsetUTF8MB4Bin),
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+			p, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			tableDef := p.GetDdl().GetCreateTable().GetTableDef()
+			require.Equal(t, tc.wantTable, tableDef.DefaultCharset)
+			require.Equal(t, tc.wantTable, tableDef.Cols[0].Typ.Charset)
+
+			showSQL, _, err := ConstructCreateTableSQL(ctx, tableDef, nil, false, nil)
+			require.NoError(t, err)
+			require.NotContains(t, strings.ToLower(showSQL), "utf32")
+		})
+	}
+}
+
 func TestUnsupportedLegacyCollationExplainsDumpReplacement(t *testing.T) {
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
 		"create table t(v varchar(8)) collate utf8mb4_unicode_ci", 1)
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	_, err = BuildPlan(NewMockCompilerContext(false), stmt, false)
+	_, err = BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
 	require.ErrorContains(t, err,
 		"replace it with 'utf8mb4_general_ci' when restoring legacy MatrixOne DDL")
 }
 
 func TestCreateTableInheritsEffectiveServerCollation(t *testing.T) {
-	mock := NewMockCompilerContext(false)
+	mock := NewMockCompilerContext(false, newPlanTestProcess(t))
 	mock.ResolveVariableFunc = func(name string, isSystem, isGlobal bool) (interface{}, error) {
 		if name == "collation_server" && isSystem && !isGlobal {
 			return "utf8mb4_bin", nil
@@ -518,7 +561,7 @@ func TestBuildCreateTableCharacterSetBinaryConvertsStringTypes(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+	p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
 	require.NoError(t, err)
 	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
 	require.GreaterOrEqual(t, len(cols), 3)
@@ -536,7 +579,7 @@ func TestBuildCreateTableBinaryDefaultConvertsUnqualifiedStringType(t *testing.T
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+	p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
 	require.NoError(t, err)
 	tableDef := p.GetDdl().GetCreateTable().GetTableDef()
 	require.Equal(t, uint32(types.CharsetBinary), tableDef.DefaultCharset)
@@ -548,14 +591,12 @@ func TestBuildCreateTableRejectsIncompatibleCharsetAndCollation(t *testing.T) {
 	for _, sql := range []string{
 		"create table t(v varchar(8)) character set utf8mb4 collate binary",
 		"create table t(v varchar(8) character set binary collate utf8mb4_bin)",
-		"create table t(v varchar(8)) character set latin1 collate ascii_general_ci",
-		"create table t(v varchar(8) character set ascii collate latin1_swedish_ci)",
 	} {
 		t.Run(sql, func(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			_, err = BuildPlan(NewMockCompilerContext(false), stmt, false)
+			_, err = BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
 			require.ErrorContains(t, err, "is not valid for CHARACTER SET")
 		})
 	}
@@ -572,53 +613,31 @@ func TestBuildCreateTableAcceptsUTF8MB3Aliases(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			_, err = BuildPlan(NewMockCompilerContext(false), stmt, false)
+			_, err = BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
 			require.NoError(t, err)
 		})
 	}
 }
 
-func TestBuildCreateTableAcceptsSingleByteCharsetCompatibilityAliases(t *testing.T) {
-	testCases := []struct {
-		name      string
-		sql       string
-		wantTable uint32
-	}{
-		{
-			name: "latin1 column",
-			sql: "create table t(v varchar(8) character set latin1 " +
-				"collate latin1_swedish_ci)",
-			wantTable: uint32(types.CharsetUTF8),
-		},
-		{
-			name: "ascii column case insensitive spelling",
-			sql: "create table t(v varchar(8) character set ASCII " +
-				"collate ASCII_GENERAL_CI)",
-			wantTable: uint32(types.CharsetUTF8),
-		},
-		{
-			name:      "latin1 table default",
-			sql:       "create table t(v varchar(8)) character set latin1 collate latin1_swedish_ci",
-			wantTable: uint32(types.CharsetUTF8),
-		},
-		{
-			name:      "ascii table default",
-			sql:       "create table t(v varchar(8)) character set ascii collate ascii_general_ci",
-			wantTable: uint32(types.CharsetUTF8),
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
+func TestBuildCreateTableRejectsDisabledCharsetDomains(t *testing.T) {
+	for _, sql := range []string{
+		"create table t(v varchar(8)) character set latin1 collate ascii_general_ci",
+		"create table t(v varchar(8) character set ascii collate latin1_swedish_ci)",
+		"create table t(v varchar(8) character set latin1 collate latin1_swedish_ci)",
+		"create table t(v varchar(8) character set ASCII collate ASCII_GENERAL_CI)",
+		"create table t(v varchar(8)) character set latin1 collate latin1_swedish_ci",
+		"create table t(v varchar(8)) character set ascii collate ascii_general_ci",
+		"create table t(v varchar(8)) collate latin1_bin",
+		"create table t(v varchar(8)) character set gbk",
+		"create database d character set latin1",
+		"create database d collate latin1_swedish_ci",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-
-			p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
-			require.NoError(t, err)
-			tableDef := p.GetDdl().GetCreateTable().GetTableDef()
-			require.Equal(t, tc.wantTable, tableDef.DefaultCharset)
-			require.Equal(t, uint32(types.CharsetUTF8), tableDef.Cols[0].Typ.Charset)
+			_, err = BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+			require.ErrorContains(t, err, "unsupported")
 		})
 	}
 }
@@ -628,7 +647,7 @@ func TestBuildDropTemporaryTableOnlyTargetsTemporaryTable(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	_, err = BuildPlan(ctx, stmt, false)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
 
@@ -644,7 +663,7 @@ func TestBuildDropTemporaryTableIfExistsDoesNotTargetPermanentTable(t *testing.T
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+	p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
 	require.NoError(t, err)
 	require.Nil(t, p.GetDdl().GetDropTable().GetTableDef())
 }
@@ -654,7 +673,7 @@ func TestBuildDropViewIfExistsDoesNotTargetBaseTable(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+	p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
 	require.NoError(t, err)
 	drop := p.GetDdl().GetDropTable()
 	require.Empty(t, drop.GetTable())
@@ -666,7 +685,7 @@ func TestBuildDropViewRejectsBaseTableWithoutIfExists(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	_, err = BuildPlan(NewMockCompilerContext(false), stmt, false)
+	_, err = BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrBadView), err)
 }
 
@@ -677,7 +696,7 @@ func TestBuildTruncateTemporaryTable(t *testing.T) {
 			require.NoError(t, err)
 			defer stmt.Free()
 
-			ctx := NewMockCompilerContext(false)
+			ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 			ctx.tables["nation"].IsTemporary = true
 
 			p, err := BuildPlan(ctx, stmt, prepare)
@@ -695,7 +714,7 @@ func TestBuildTruncateTableSkipsSelfReferenceMarker(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	ctx.tables["tree"] = &TableDef{
 		Name:         "tree",
 		TblId:        42,
@@ -714,7 +733,7 @@ func TestBuildTruncateTableSkipsSelfReferenceMarker(t *testing.T) {
 }
 
 func TestBuildTruncateMongoDBExternalTableRejectsReadOnlyDML(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	ctx.objects["mongo_events"] = &ObjectRef{
 		SchemaName: "tpch",
 		ObjName:    "mongo_events",
@@ -757,7 +776,7 @@ func TestBuildTruncateNonMongoExternalTableKeepsExistingBehavior(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	ctx.objects["external_events"] = &ObjectRef{SchemaName: "tpch", ObjName: "external_events"}
 	ctx.tables["external_events"] = &TableDef{
 		Name:      "external_events",
@@ -774,7 +793,7 @@ func TestBuildTruncateMalformedMongoDBExternalTableReturnsCatalogError(t *testin
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	ctx.objects["mongo_events"] = &ObjectRef{SchemaName: "tpch", ObjName: "mongo_events"}
 	ctx.tables["mongo_events"] = &TableDef{
 		Name:        "mongo_events",
@@ -798,7 +817,7 @@ func TestBuildAlterRenameColumnCarriesRewrittenChecks(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	ctx.tables["nation"].Checks = []*plan.CheckDef{{
 		Name:      "ck_nationkey",
 		OriginSql: "`n_nationkey` >= 0",
@@ -848,7 +867,7 @@ func TestBuildAlterRenameColumnRewritesComplexChecks(t *testing.T) {
 			require.NoError(t, err)
 			defer stmt.Free()
 
-			ctx := NewMockCompilerContext(false)
+			ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 			ctx.tables["nation"].Checks = []*plan.CheckDef{{
 				Name:      "ck_case",
 				OriginSql: tc.check,
@@ -897,7 +916,7 @@ func TestBuildAlterRenameColumnRecoversLegacyChecks(t *testing.T) {
 			require.NoError(t, err)
 			defer stmt.Free()
 
-			ctx := NewMockCompilerContext(false)
+			ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 			ctx.tables["nation"].Checks = nil
 			ctx.tables["nation"].Createsql = "create table nation(" +
 				"n_nationkey int, constraint ck_nationkey check (n_nationkey >= 0))"
@@ -917,7 +936,7 @@ func TestBuildAlterRenameColumnRecoversLegacyChecks(t *testing.T) {
 		stmt := parseRename(t)
 		defer stmt.Free()
 
-		ctx := NewMockCompilerContext(false)
+		ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 		ctx.tables["nation"].Checks = nil
 		ctx.tables["nation"].Createsql = "create table nation(" +
 			"n_nationkey int, constraint ck_nationkey check (n_nationkey >= 0))"
@@ -949,7 +968,7 @@ func TestBuildAlterRenameColumnRecoversLegacyChecks(t *testing.T) {
 		require.NoError(t, err)
 		defer stmt.Free()
 
-		ctx := NewMockCompilerContext(false)
+		ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 		ctx.tables["nation"].Checks = nil
 		ctx.tables["nation"].Createsql = "create table nation(" +
 			"n_nationkey int, constraint ck_nationkey check (n_nationkey >= 0))"
@@ -978,7 +997,7 @@ func TestBuildAlterRenameColumnRecoversLegacyChecks(t *testing.T) {
 		stmt := parseRename(t)
 		defer stmt.Free()
 
-		ctx := NewMockCompilerContext(false)
+		ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 		ctx.tables["nation"].Checks = nil
 		ctx.tables["nation"].Createsql = `create table nation(
 			n_nationkey int, n_name varchar(25), check (n_name = 'a\nb'))`
@@ -998,7 +1017,7 @@ func TestBuildAlterRenameColumnRecoversLegacyChecks(t *testing.T) {
 		require.NoError(t, err)
 		defer stmt.Free()
 
-		ctx := NewMockCompilerContext(false)
+		ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 		ctx.tables["nation"].Checks = nil
 		ctx.tables["nation"].Createsql = "create table fk_foreign_key_checks4.nation(" +
 			"n_nationkey int primary key, n_name varchar(25), " +
@@ -1202,8 +1221,8 @@ func TestBuildCreateOrReplaceViewRejectsRecursiveDefinition(t *testing.T) {
 			if test.lowerCaseMode != nil {
 				lowerCaseMode = *test.lowerCaseMode
 			}
-			mock := NewMockCompilerContext(false)
-			proc := testutil.NewProc(nil)
+			mock := NewMockCompilerContext(false, nil)
+			proc := newPlanTestProcess(t)
 			if !test.withoutTxn {
 				proc.Base.TxnOperator = viewReplacementTxnOperator{snapshotTS: currentTxnSnapshot}
 			}
@@ -1255,7 +1274,7 @@ func TestBuildCreateTableCheckConstraints(t *testing.T) {
 		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
 		defer stmt.Free()
-		p, err := BuildPlan(NewMockCompilerContext(false), stmt, prepare)
+		p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, prepare)
 		if err != nil {
 			return nil, err
 		}
@@ -1367,7 +1386,7 @@ func TestBuildCreateTableCheckConstraints(t *testing.T) {
 	})
 
 	t.Run("mixed version cluster rejects check ddl", func(t *testing.T) {
-		ctx := NewMockCompilerContext(false)
+		ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 		proc := ctx.GetProcess()
 		rt := moruntime.ServiceRuntime(proc.GetService())
 		old, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -1409,7 +1428,7 @@ func TestBuildCreateTableAutoIncrementOffset(t *testing.T) {
 			defer stmt.Free()
 
 			ctx := &autoIncrementOffsetCompilerContext{
-				MockCompilerContext: NewMockCompilerContext(false),
+				MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 				offset:              10,
 			}
 			p, err := BuildPlan(ctx, stmt, false)
@@ -2209,7 +2228,7 @@ func TestMaterializedViewRefreshCanWriteHiddenState(t *testing.T) {
 func TestGenViewTableDefCapturesRootSQLOnce(t *testing.T) {
 	const rootSQL = "create view v as select 1"
 	ctx := &rootSQLCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(false),
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		rootSQL:             rootSQL,
 	}
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
@@ -2240,7 +2259,7 @@ func TestGenViewTableDefCapturesRootSQLOnce(t *testing.T) {
 func TestGenViewTableDefPersistsExpandedStarSelectList(t *testing.T) {
 	const rootSQL = "create view v_star as select * from nation"
 	ctx := &rootSQLCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(false),
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		rootSQL:             rootSQL,
 	}
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
@@ -2290,7 +2309,7 @@ func TestGenViewTableDefPersistsExpandedStarSelectList(t *testing.T) {
 func TestGenViewTableDefExpandedStarFromDerivedAggregateCanRebind(t *testing.T) {
 	const rootSQL = "create view v_star_agg as select * from (select id,min(ti) from (select * from t1) t1 group by id) sub"
 	ctx := &rootSQLCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(false),
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		rootSQL:             rootSQL,
 	}
 	ctx.tables["t1"] = &plan.TableDef{
@@ -2339,7 +2358,7 @@ func TestGenViewTableDefExpandedStarFromDerivedAggregateCanRebind(t *testing.T) 
 func TestGenViewTableDefDoesNotRewriteCountStar(t *testing.T) {
 	const rootSQL = "create view v_count as select count(*) from nation"
 	ctx := &rootSQLCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(false),
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		rootSQL:             rootSQL,
 	}
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
@@ -2360,7 +2379,7 @@ func TestGenViewTableDefDoesNotRewriteCountStar(t *testing.T) {
 func TestGenViewTableDefFreezesSampleStar(t *testing.T) {
 	const rootSQL = "create view v_sample as select sample(*, 100 percent) from nation"
 	ctx := &rootSQLCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(false),
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		rootSQL:             rootSQL,
 	}
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
@@ -2397,7 +2416,7 @@ func TestGenViewTableDefFreezesSampleStar(t *testing.T) {
 func TestGenViewTableDefExpandsOuterStarWithNestedSample(t *testing.T) {
 	const rootSQL = "create view v_outer_sample as select * from nation where exists (select sample(*, 100 percent) from region)"
 	ctx := &rootSQLCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(false),
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		rootSQL:             rootSQL,
 	}
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
@@ -2436,7 +2455,7 @@ func TestGenViewTableDefExpandsOuterStarWithNestedSample(t *testing.T) {
 func TestGenViewTableDefRewritesSubqueryInsideSampleColumns(t *testing.T) {
 	const rootSQL = "create view v_sample_subquery as select sample((select * from one_col union all select 1), 1 rows) from nation"
 	ctx := &rootSQLCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(false),
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		rootSQL:             rootSQL,
 	}
 	addOneColViewStarTestTable(ctx.MockCompilerContext)
@@ -2468,7 +2487,7 @@ func TestGenViewTableDefRewritesSubqueryInsideSampleColumns(t *testing.T) {
 func TestGenViewTableDefExpandsMixedStarAndSample(t *testing.T) {
 	const rootSQL = "create view v_mixed_sample as select *, sample(*, 100 percent) from nation"
 	ctx := &rootSQLCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(false),
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		rootSQL:             rootSQL,
 	}
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
@@ -2509,7 +2528,7 @@ func TestGenViewTableDefExpandsGroupingSetStars(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := &rootSQLCompilerContext{
-				MockCompilerContext: NewMockCompilerContext(false),
+				MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 				rootSQL:             tt.stmt,
 			}
 			addOneColViewStarTestTable(ctx.MockCompilerContext)
@@ -2543,7 +2562,7 @@ func TestGenViewTableDefExpandsGroupingSetStars(t *testing.T) {
 func TestGenViewTableDefPersistsExpandedUnionStars(t *testing.T) {
 	const rootSQL = "create view v_union as select * from nation union all select * from nation"
 	ctx := &rootSQLCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(false),
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		rootSQL:             rootSQL,
 	}
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
@@ -2563,7 +2582,7 @@ func TestGenViewTableDefPersistsExpandedUnionStars(t *testing.T) {
 }
 
 func TestNormalSelectDoesNotCaptureExpandedStarList(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select * from nation", 1)
 	require.NoError(t, err)
 	defer stmt.Free()
@@ -2712,7 +2731,7 @@ func TestStableViewStarHelpersRewriteNestedTableExpressions(t *testing.T) {
 func TestGenViewTableDefPersistsExpandedCTEStars(t *testing.T) {
 	const rootSQL = "create view v_cte as with recursive c(n_nationkey,n_name,n_regionkey,n_comment) as (select * from nation union all select n_nationkey,n_name,n_regionkey,n_comment from c where false) select * from c"
 	ctx := &rootSQLCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(false),
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		rootSQL:             rootSQL,
 	}
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
@@ -2806,7 +2825,7 @@ func TestGenViewTableDefPersistsExpandedExpressionSubqueryStars(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := &rootSQLCompilerContext{
-				MockCompilerContext: NewMockCompilerContext(false),
+				MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 				rootSQL:             tt.rootSQL,
 			}
 			addOneColViewStarTestTable(ctx.MockCompilerContext)
@@ -2848,7 +2867,7 @@ func TestGenViewTableDefPersistsExpandedExpressionSubqueryStars(t *testing.T) {
 func TestBuildAlterViewPersistsExpandedJoinOnSubqueryStars(t *testing.T) {
 	const alterSQL = "alter view v_join_star as select n.n_nationkey from nation n join region r on n.n_regionkey = r.r_regionkey and n.n_nationkey in (select * from one_col)"
 	ctx := &rootSQLCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(false),
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		rootSQL:             alterSQL,
 	}
 	addOneColViewStarTestTable(ctx.MockCompilerContext)
@@ -2906,7 +2925,7 @@ func TestStableViewSQLWithExpandedStarsRewritesAlterExpressionSubquery(t *testin
 		subqueryClause: {{Expr: tree.NewUnresolvedColName("id")}},
 	}
 
-	got, rewritten := stableViewSQLWithExpandedStars(NewMockCompilerContext(false), alterView.AsSource, alterSQL, expanded)
+	got, rewritten := stableViewSQLWithExpandedStars(NewMockCompilerContext(false, newPlanTestProcess(t)), alterView.AsSource, alterSQL, expanded)
 	require.True(t, rewritten)
 	require.Contains(t, got, "create view")
 	require.NotContains(t, got, "*")
@@ -2958,7 +2977,7 @@ func TestStableViewSQLWithExpandedStarsRejectsUnsupportedInputs(t *testing.T) {
 	expanded := map[*tree.SelectClause]tree.SelectExprs{
 		clause: {{Expr: tree.NewUnresolvedColName("stable_col")}},
 	}
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 
 	got, rewritten := stableViewSQLWithExpandedStars(ctx, stmt, "", expanded)
 	require.Equal(t, "", got)
@@ -3012,7 +3031,7 @@ func TestBuildCreateViewExplicitColumnList(t *testing.T) {
 	t.Run("applies explicit names", func(t *testing.T) {
 		const rootSQL = "create view v (`alias#one`, alias_two) as select 1, 2"
 		ctx := &rootSQLCompilerContext{
-			MockCompilerContext: NewMockCompilerContext(false),
+			MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 			rootSQL:             rootSQL,
 		}
 		stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
@@ -3032,7 +3051,7 @@ func TestBuildCreateViewExplicitColumnList(t *testing.T) {
 	t.Run("rejects cardinality mismatch", func(t *testing.T) {
 		const rootSQL = "create view v (only_one) as select 1, 2"
 		ctx := &rootSQLCompilerContext{
-			MockCompilerContext: NewMockCompilerContext(false),
+			MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 			rootSQL:             rootSQL,
 		}
 		stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
@@ -3073,7 +3092,7 @@ func TestBuildCreateViewConsumesOutputColumnDefaultProvenance(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			rootSQL := "create view v " + test.viewColumns + " as " + test.selectSQL
 			ctx := &rootSQLCompilerContext{
-				MockCompilerContext: NewMockCompilerContext(false),
+				MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 				rootSQL:             rootSQL,
 			}
 			sourceCol := ctx.tables["nation"].Cols[0]
@@ -3126,7 +3145,7 @@ func TestBuildCreateViewDefaultProvenanceAcrossBoundaries(t *testing.T) {
 	}
 
 	t.Run("view of view", func(t *testing.T) {
-		ctx := NewMockCompilerContext(false)
+		ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 		ctx.tables["nation"].Cols[0].Typ.NotNullable = true
 		ctx.tables["nation"].Cols[0].Default = newDefault(7)
 		v1 := DeepCopyTableDef(buildView(t, ctx,
@@ -3144,7 +3163,7 @@ func TestBuildCreateViewDefaultProvenanceAcrossBoundaries(t *testing.T) {
 	})
 
 	t.Run("create or replace", func(t *testing.T) {
-		ctx := NewMockCompilerContext(false)
+		ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 		ctx.tables["nation"].Cols[0].Typ.NotNullable = true
 		ctx.tables["nation"].Cols[0].Default = newDefault(7)
 		const rootSQL = "create or replace view v_replace as select n_nationkey as qty from nation"
@@ -3159,7 +3178,7 @@ func TestBuildCreateViewDefaultProvenanceAcrossBoundaries(t *testing.T) {
 	})
 
 	t.Run("multi table exact bound source", func(t *testing.T) {
-		ctx := NewMockCompilerContext(false)
+		ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 		left := ctx.tables["nation"].Cols[0]
 		left.Typ.NotNullable = true
 		left.Default = newDefault(7)
@@ -3209,7 +3228,7 @@ func TestBuildCreateViewDefaultProvenanceAcrossBoundaries(t *testing.T) {
 }
 
 func TestBuildCreateViewPreservesDefaultKinds(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	ctx.tables["nation"].Cols = append(ctx.tables["nation"].Cols,
 		&plan.ColDef{
 			Name: "nullable_default_null",
@@ -3261,7 +3280,7 @@ func TestBuildCreateViewPreservesDefaultKinds(t *testing.T) {
 
 func TestGroupingExtensionsExposeNullableKeysInViewAndCTAS(t *testing.T) {
 	newContext := func(rootSQL string) *rootSQLCompilerContext {
-		ctx := NewMockCompilerContext(false)
+		ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 		for _, name := range []string{"n_nationkey", "n_regionkey"} {
 			col := ctx.tables["nation"].Cols[ctx.tables["nation"].Name2ColIndex[name]]
 			col.Typ.NotNullable = true
@@ -3383,7 +3402,7 @@ func TestGroupingExtensionQueryOutputKeysAreNullable(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			opt := NewMockOptimizer(false)
+			opt := NewMockOptimizer(false, newPlanTestProcess(t))
 			ctx := opt.CurrentContext().(*MockCompilerContext)
 			for _, name := range []string{"n_nationkey", "n_regionkey"} {
 				ctx.tables["nation"].Cols[ctx.tables["nation"].Name2ColIndex[name]].Typ.NotNullable = true
@@ -3403,7 +3422,7 @@ func TestGroupingExtensionQueryOutputKeysAreNullable(t *testing.T) {
 func TestOctNotNullSourceCTAS(t *testing.T) {
 	for _, typ := range []types.T{types.T_varchar, types.T_varbinary, types.T_int64} {
 		t.Run(typ.String(), func(t *testing.T) {
-			ctx := NewMockCompilerContext(false)
+			ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 			source := ctx.tables["nation"].Cols[0]
 			source.Typ = plan.Type{Id: int32(typ), Width: 10, NotNullable: true}
 			source.Default = &plan.Default{NullAbility: false}
@@ -3434,7 +3453,7 @@ func TestTypedDateConversionCTASAllowsSynthesizedNull(t *testing.T) {
 			{"year(l_shipdate)", false},
 		} {
 			t.Run(sourceType.String()+"/"+expression.sql, func(t *testing.T) {
-				opt := NewMockOptimizer(false)
+				opt := NewMockOptimizer(false, newPlanTestProcess(t))
 				ctx := opt.CurrentContext().(*MockCompilerContext)
 				source := ctx.tables["lineitem"].Cols[ctx.tables["lineitem"].Name2ColIndex["l_shipdate"]]
 				source.Typ.Id = int32(sourceType)
@@ -3453,7 +3472,7 @@ func TestTypedDateConversionCTASAllowsSynthesizedNull(t *testing.T) {
 func TestTemporalTextExtractionCTASAllowsSynthesizedNull(t *testing.T) {
 	for _, expression := range []string{"extract(year from n_name)", "year(n_name)", "month(n_name)", "quarter(n_name)", "from_days(n_nationkey)"} {
 		t.Run(expression, func(t *testing.T) {
-			ctx := NewMockCompilerContext(false)
+			ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 			for _, source := range ctx.tables["nation"].Cols {
 				source.Typ.NotNullable = true
 				source.Default = &plan.Default{NullAbility: false}
@@ -3472,7 +3491,7 @@ func TestTemporalTextExtractionCTASAllowsSynthesizedNull(t *testing.T) {
 }
 
 func TestBuildCTASFromViewUsesIndependentExecutableDefault(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	sourceCol := ctx.tables["nation"].Cols[0]
 	sourceCol.Typ.NotNullable = true
 	sourceCol.Default = &plan.Default{
@@ -3673,7 +3692,7 @@ func TestCTASViewDefaultPolicyMatrix(t *testing.T) {
 }
 
 func TestBuildNullableLOBCTASDefaultFromOrigin(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	for _, oid := range []types.T{types.T_text, types.T_blob} {
 		defaultDef, err := buildCTASDefaultFromOrigin(
 			ctx, plan.Type{Id: int32(oid)}, true, "('seed')")
@@ -3709,7 +3728,7 @@ func TestBuildCreateViewPreservesMySQLSpecialColumnTypes(t *testing.T) {
 	const rootSQL = "create view v (renamed_priority, renamed_flags, renamed_name) as " +
 		"select priority, flags, n_name from nation"
 	ctx := &rootSQLCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(false),
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		rootSQL:             rootSQL,
 	}
 	addMySQLSpecialTypeColumns(ctx.MockCompilerContext)
@@ -3778,7 +3797,7 @@ func TestBuildCreateViewTracksMySQLSpecialColumnTypeProvenance(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			rootSQL := "create view v as " + test.selectSQL
 			ctx := &rootSQLCompilerContext{
-				MockCompilerContext: NewMockCompilerContext(false),
+				MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 				rootSQL:             rootSQL,
 			}
 			addMySQLSpecialTypeColumns(ctx.MockCompilerContext)
@@ -3803,7 +3822,7 @@ func TestBuildCreateViewTracksMySQLSpecialColumnTypeProvenance(t *testing.T) {
 
 func TestBuildCTASPreservesMySQLSpecialColumnTypes(t *testing.T) {
 	const sql = "create table copied as select priority, flags, n_name from nation"
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	addMySQLSpecialTypeColumns(ctx)
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
@@ -3834,7 +3853,7 @@ func TestBuildCTASPreservesLosslessBinaryResultDomains(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+	p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
 	require.NoError(t, err)
 	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
 	require.GreaterOrEqual(t, len(cols), 6)
@@ -3867,7 +3886,7 @@ func TestBuildCTASNarrowsKnownExpandingStringResults(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+	p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
 	require.NoError(t, err)
 	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
 	require.GreaterOrEqual(t, len(cols), 11)
@@ -3895,7 +3914,7 @@ func TestBuildCTASPreservesJsonUnquoteTextBounds(t *testing.T) {
 		json_unquote(json_doc) as json_text_value,
 		json_unquote('"literal"') as literal_value
 		from nation`
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	ctx.tables["nation"].Cols = append(ctx.tables["nation"].Cols,
 		&plan.ColDef{Name: "json_text", Typ: plan.Type{Id: int32(types.T_text), Charset: uint32(types.CharsetUTF8)}},
 		&plan.ColDef{Name: "json_mediumtext", Typ: plan.Type{Id: int32(types.T_text), Width: types.MaxMediumTextLen, Charset: uint32(types.CharsetUTF8)}},
@@ -3930,7 +3949,7 @@ func TestBuildCTASPreservesFormattedScalarBounds(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+	p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
 	require.NoError(t, err)
 	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
 	require.GreaterOrEqual(t, len(cols), 3)
@@ -3944,7 +3963,7 @@ func TestBuildCTASPreservesFormattedScalarBounds(t *testing.T) {
 
 func TestViewRebindPreservesMySQLSpecialColumnSemantics(t *testing.T) {
 	const createViewSQL = "create view v_enum_set as select priority, flags, n_name from nation"
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	addMySQLSpecialTypeColumns(ctx)
 	createCtx := &rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createViewSQL}
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, createViewSQL, 1)
@@ -4083,7 +4102,7 @@ func TestViewRebindPreservesTransparentMySQLSpecialColumnTypes(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			createViewSQL := "create view v as " + test.selectSQL
-			ctx := NewMockCompilerContext(false)
+			ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 			addMySQLSpecialTypeColumns(ctx)
 			createCtx := &rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createViewSQL}
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, createViewSQL, 1)
@@ -4157,7 +4176,7 @@ func TestViewSpecialTypeBoundaryCanonicalizesSemanticResults(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			createViewSQL := "create view v_semantic_set as " + test.selectSQL
-			ctx := NewMockCompilerContext(false)
+			ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 			addMySQLSpecialTypeColumns(ctx)
 			createCtx := &rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createViewSQL}
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, createViewSQL, 1)
@@ -4213,7 +4232,7 @@ func TestViewSpecialTypeBoundaryCanonicalizesSemanticResults(t *testing.T) {
 }
 
 func TestOutputColumnProvenanceCarriesSourceAndClearsSemanticBoundaries(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	addMySQLSpecialTypeColumns(ctx)
 	ctx.tables["nation"].Cols[0].Default = &plan.Default{
 		Expr:         makePlan2Int32ConstExprWithType(7),
@@ -4262,7 +4281,7 @@ func TestOutputColumnProvenanceCarriesSourceAndClearsSemanticBoundaries(t *testi
 }
 
 func TestBuildCTASConsumesOutputColumnProvenance(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	sourceDefault := &plan.Default{
 		Expr:         makePlan2Int32ConstExprWithType(7),
 		OriginString: "7",
@@ -4303,7 +4322,7 @@ func TestBuildCTASConsumesOutputColumnProvenance(t *testing.T) {
 }
 
 func TestOutputColumnProvenanceSnapshotsCatalogMetadataOnce(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	addMySQLSpecialTypeColumns(ctx)
 	priorityCol := ctx.tables["nation"].Cols[len(ctx.tables["nation"].Cols)-2]
 	priorityCol.Default = &plan.Default{
@@ -4371,7 +4390,7 @@ func TestBuildCreateViewRejectsTemporaryTable(t *testing.T) {
 
 	for _, sql := range tests {
 		t.Run(sql, func(t *testing.T) {
-			ctx := NewMockCompilerContext(false)
+			ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 			ctx.tables["nation"].IsTemporary = true
 
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
@@ -4390,7 +4409,7 @@ func TestBuildCreateViewRejectsTemporaryTable(t *testing.T) {
 func TestBuildTemporaryTableMarksCatalogRelkind(t *testing.T) {
 	const rootSQL = "create temporary table temp_marked (id int, unique key uk_id (id))"
 	ctx := &rootSQLCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(false),
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		rootSQL:             rootSQL,
 	}
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
@@ -4414,7 +4433,7 @@ func TestBuildTemporaryTableMarksCatalogRelkind(t *testing.T) {
 func TestBuildCreateTablePreservesSingleStatementSQL(t *testing.T) {
 	const rootSQL = "/* before */ CREATE TABLE /* table */ t_check (id INT, CONSTRAINT chk_id CHECK (id > 0));"
 	ctx := &rootSQLCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(false),
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		rootSQL:             rootSQL,
 	}
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
@@ -4432,7 +4451,7 @@ func TestBuildCreateTableRejectsCaseInsensitiveDuplicateColumns(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	_, err = BuildPlan(NewMockCompilerContext(false), stmt, false)
+	_, err = BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrDupFieldName), err)
 }
@@ -4440,7 +4459,7 @@ func TestBuildCreateTableRejectsCaseInsensitiveDuplicateColumns(t *testing.T) {
 func TestBuildCreateTableLikePersistsExpandedSQL(t *testing.T) {
 	const rootSQL = "CREATE TABLE legacy_clone LIKE legacy_source"
 	ctx := &rootSQLCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(false),
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		rootSQL:             rootSQL,
 	}
 	ctx.tables["legacy_source"] = &plan.TableDef{
@@ -4471,7 +4490,7 @@ func TestBuildCreateTableLikeRestoresSubscriptionBeforePlanningTarget(t *testing
 	for _, prepared := range []bool{false, true} {
 		t.Run(fmt.Sprintf("prepared=%t", prepared), func(t *testing.T) {
 			const rootSQL = "CREATE TABLE localdb.clone LIKE subdb.source"
-			base := NewMockCompilerContext(false)
+			base := NewMockCompilerContext(false, newPlanTestProcess(t))
 			base.dbs["localdb"] = true
 			base.dbs["subdb"] = true
 			base.tables["source"] = &plan.TableDef{
@@ -4510,7 +4529,7 @@ func TestBuildCreateTableLikeRestoresSubscriptionBeforePlanningTarget(t *testing
 
 func TestBuildCreateTableLikeQualifiesSameDatabaseForeignKey(t *testing.T) {
 	const rootSQL = "CREATE TABLE like_fk_src.child_copy LIKE like_fk_src.child"
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	ctx.dbs["like_fk_src"] = true
 
 	parent := &plan.TableDef{
@@ -4575,7 +4594,7 @@ func TestBuildCreateTableLikeSubscriptionForeignKeysUseSourceOnlyContext(t *test
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			const rootSQL = "CREATE TABLE localdb.child_copy LIKE subdb.child"
-			base := NewMockCompilerContext(false)
+			base := NewMockCompilerContext(false, newPlanTestProcess(t))
 			base.ResolveVariableFunc = func(name string, _, _ bool) (interface{}, error) {
 				if name == "foreign_key_checks" {
 					return int64(0), nil
@@ -4639,7 +4658,7 @@ func TestBuildCreateTableLikeSubscriptionForeignKeysUseSourceOnlyContext(t *test
 }
 
 func TestConstructCreateTableSQLSubscriptionCloneMapsPublisherForeignKeyToTarget(t *testing.T) {
-	base := NewMockCompilerContext(false)
+	base := NewMockCompilerContext(false, newPlanTestProcess(t))
 	base.dbs["clone_fk_chain"] = true
 	parent := &plan.TableDef{
 		Name: "parent", DbName: "publisherdb", TblId: 101,
@@ -4696,7 +4715,7 @@ func TestBuildCreateTableLikeAndCloneReconcileLegacyIndexVisibility(t *testing.T
 		{name: "clone", sql: "CREATE TABLE visibility_clone CLONE legacy_visibility_source"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := NewMockCompilerContext(false)
+			ctx := NewMockCompilerContext(false, nil)
 			const sourceName = "legacy_visibility_source"
 			const sourceID = 272464
 
@@ -4738,8 +4757,7 @@ func TestBuildCreateTableLikeAndCloneReconcileLegacyIndexVisibility(t *testing.T
 			proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
 			ctx.GetProcessFunc = func() *process.Process { return proc }
 			visibilityQueries := 0
-			moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
-				moruntime.InternalSQLExecutor,
+			setPlanTestGlobalVariable(t, proc.GetService(), moruntime.InternalSQLExecutor,
 				executor.NewMemExecutor(func(sql string) (executor.Result, error) {
 					if sql != "SELECT name, is_visible FROM mo_catalog.mo_indexes WHERE table_id = 272464" {
 						return executor.Result{}, nil
@@ -4786,7 +4804,7 @@ func TestBuildCreateTableLikeAndCloneReconcileLegacyIndexVisibility(t *testing.T
 }
 
 func TestRunSqlWithSnapshotUsesSourceTenant(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, nil)
 	proc := testutil.NewProc(t)
 	proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
 	ctx.GetProcessFunc = func() *process.Process { return proc }
@@ -4794,8 +4812,7 @@ func TestRunSqlWithSnapshotUsesSourceTenant(t *testing.T) {
 	const sourceTenant = uint32(42)
 	var capturedAccountID uint32
 	var capturedContextAccountID uint32
-	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
-		moruntime.InternalSQLExecutor,
+	setPlanTestGlobalVariable(t, proc.GetService(), moruntime.InternalSQLExecutor,
 		&captureSQLExecutor{exec: func(
 			execCtx context.Context,
 			_ string,
@@ -4817,7 +4834,7 @@ func TestRunSqlWithSnapshotUsesSourceTenant(t *testing.T) {
 }
 
 func TestBuildCreateTableLikeAndCloneRejectsSequenceSource(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	const sequenceSQL = "CREATE SEQUENCE seq1 INCREMENT 2 START WITH 11 NO CYCLE"
 
 	sequenceStmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sequenceSQL, 1)
@@ -4859,7 +4876,7 @@ func TestBuildCreateTableLikeAndCloneRejectsSequenceSource(t *testing.T) {
 func TestBuildPartitionedTablePersistsCanonicalSingleStatementSQL(t *testing.T) {
 	const rootSQL = "/* before */ CREATE TABLE partitioned_t (category VARCHAR(20)) PARTITION BY LIST COLUMNS (category) (PARTITION p0 VALUES IN ('A'));"
 	ctx := &rootSQLCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(false),
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		rootSQL:             rootSQL,
 	}
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
@@ -4908,7 +4925,7 @@ func TestBuildCreateTablePersistsStatementCanonicalSQL(t *testing.T) {
 			}()
 
 			ctx := &rootSQLCompilerContext{
-				MockCompilerContext: NewMockCompilerContext(false),
+				MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 				rootSQL:             test.rootSQL,
 			}
 			for i, statement := range statements {
@@ -4950,7 +4967,7 @@ func TestBuildTemporaryTableIndexDDLKeepsIndexRelkind(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			ctx := NewMockCompilerContext(false)
+			ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 			catalog.MarkTableDefTemporary(ctx.tables["nation"])
 			// Resolve supplies this contextual bit for an existing temporary
 			// table; the durable-marker helper intentionally does not.
@@ -5239,12 +5256,7 @@ func TestBuildLockTables(t *testing.T) {
 }
 
 func TestBuildCreateTable(t *testing.T) {
-	mock := NewMockOptimizer(false)
-	rt := moruntime.DefaultRuntime()
-	moruntime.SetupServiceBasedRuntime("", rt)
-	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, executor.NewMemExecutor(func(sql string) (executor.Result, error) {
-		return executor.Result{}, nil
-	}))
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	sqls := []string{
 		`CREATE TABLE t3(
 					col1 INT NOT NULL,
@@ -5352,7 +5364,7 @@ func TestBuildCreateTable(t *testing.T) {
 }
 
 func TestBuildCreateTableIdentifierLength(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	validName := "表" + strings.Repeat("a", MaxIdentifierLength-1)
 	plan, err := runOneStmt(mock, t, fmt.Sprintf("create table `%s` (id int)", validName))
 	require.NoError(t, err)
@@ -5371,7 +5383,7 @@ func TestBuildCreateTableIdentifierLength(t *testing.T) {
 		require.Equal(t, fmt.Sprintf("Identifier name '%s' is too long", invalidName), moErr.Error())
 	}
 
-	internalMock := NewMockOptimizer(false)
+	internalMock := NewMockOptimizer(false, newPlanTestProcess(t))
 	internalMock.ctxt.SetContext(context.WithValue(
 		internalMock.ctxt.GetContext(),
 		defines.InternalExecutorKey{},
@@ -5382,7 +5394,7 @@ func TestBuildCreateTableIdentifierLength(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, internalName, plan.GetDdl().GetCreateTable().GetTableDef().GetName())
 
-	tempMock := NewMockOptimizer(false)
+	tempMock := NewMockOptimizer(false, newPlanTestProcess(t))
 	tempCtx := &rootSQLCompilerContext{
 		MockCompilerContext: &tempMock.ctxt,
 		rootSQL:             "delete from temp_table",
@@ -5496,11 +5508,11 @@ func TestBuildCatalogIdentifierLength(t *testing.T) {
 
 	for _, testCase := range testCases {
 		t.Run(testCase.name+" accepts 64 characters", func(t *testing.T) {
-			_, err := runOneStmt(NewMockOptimizer(false), t, testCase.sql(validName))
+			_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, testCase.sql(validName))
 			require.NoError(t, err)
 		})
 		t.Run(testCase.name+" rejects 65 characters", func(t *testing.T) {
-			_, err := runOneStmt(NewMockOptimizer(false), t, testCase.sql(invalidName))
+			_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, testCase.sql(invalidName))
 			require.Error(t, err)
 			moErr, ok := err.(*moerr.Error)
 			require.True(t, ok, "unexpected error type %T: %v", err, err)
@@ -5510,7 +5522,7 @@ func TestBuildCatalogIdentifierLength(t *testing.T) {
 	}
 
 	buildAlterView := func(t *testing.T, name string) error {
-		mock := NewMockOptimizer(false)
+		mock := NewMockOptimizer(false, newPlanTestProcess(t))
 		mock.ctxt.tables["v"] = &plan.TableDef{
 			Name:    "v",
 			ViewSql: &plan.ViewDef{View: `{"Stmt":"create view v as select 1","DefaultDatabase":"tpch"}`},
@@ -5544,7 +5556,7 @@ func TestBuildCreateTableAcceptsTextBlobDisplayLength(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			plan, err := runOneStmt(NewMockOptimizer(false), t,
+			plan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 				"create table display_length (value "+test.typeSQL+")")
 			require.NoError(t, err)
 
@@ -5563,7 +5575,7 @@ func TestBuildCreateTableAcceptsTextBlobDisplayLength(t *testing.T) {
 }
 
 func TestBuildCreateTableError(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	sqlerrs := []string{
 		`CREATE TABLE t1 (
 			col1 INT NOT NULL,
@@ -5626,7 +5638,7 @@ func TestBuildCreateTableError(t *testing.T) {
 }
 
 func TestBuildAlterTable(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	// should pass
 	sqls := []string{
 		"ALTER TABLE emp ADD UNIQUE idx1 (empno, ename);",
@@ -5641,7 +5653,7 @@ func TestBuildAlterTable(t *testing.T) {
 }
 
 func TestBuildCreateIndexOnExternalTableError(t *testing.T) {
-	mock := NewEmptyMockOptimizer()
+	mock := NewEmptyMockOptimizer(newPlanTestProcess(t))
 	ctx := mock.CurrentContext().(*MockCompilerContext)
 	ctx.objects["ext_idx"] = &plan.ObjectRef{
 		SchemaName: "tpch",
@@ -5673,7 +5685,7 @@ func TestBuildCreateIndexOnExternalTableError(t *testing.T) {
 }
 
 func TestBuildAlterTableRejectsMongoDBExternalTable(t *testing.T) {
-	mock := NewEmptyMockOptimizer()
+	mock := NewEmptyMockOptimizer(newPlanTestProcess(t))
 	ctx := mock.CurrentContext().(*MockCompilerContext)
 	ctx.objects["mongo_ext"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "mongo_ext"}
 	ctx.tables["mongo_ext"] = &plan.TableDef{
@@ -5707,7 +5719,7 @@ func TestBuildAlterTableRejectsMongoDBExternalTable(t *testing.T) {
 }
 
 func TestBuildMongoDBExternalTableRejectsCheckConstraints(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	ctx := mock.CurrentContext().(*MockCompilerContext)
 	ctx.SetContext(context.WithValue(context.Background(), config.ParameterUnitKey, &config.ParameterUnit{
 		SV: &config.FrontendParameters{MongoDB: config.MongoDBParameters{Enable: true}},
@@ -5732,7 +5744,7 @@ func TestBuildMongoDBExternalTableRejectsCheckConstraints(t *testing.T) {
 }
 
 func TestBuildMongoDBExternalTableRejectsGeneratedColumns(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	ctx := mock.CurrentContext().(*MockCompilerContext)
 	ctx.SetContext(context.WithValue(context.Background(), config.ParameterUnitKey, &config.ParameterUnit{
 		SV: &config.FrontendParameters{MongoDB: config.MongoDBParameters{Enable: true}},
@@ -5750,7 +5762,7 @@ func TestBuildMongoDBExternalTableRejectsGeneratedColumns(t *testing.T) {
 }
 
 func TestBuildMongoDBExternalTableRejectsOnUpdate(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	ctx := mock.CurrentContext().(*MockCompilerContext)
 	ctx.SetContext(context.WithValue(context.Background(), config.ParameterUnitKey, &config.ParameterUnit{
 		SV: &config.FrontendParameters{MongoDB: config.MongoDBParameters{Enable: true}},
@@ -5768,7 +5780,7 @@ func TestBuildMongoDBExternalTableRejectsOnUpdate(t *testing.T) {
 }
 
 func TestBuildMongoDBExternalTableRejectsForeignKeys(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	ctx := mock.CurrentContext().(*MockCompilerContext)
 	ctx.SetContext(context.WithValue(context.Background(), config.ParameterUnitKey, &config.ParameterUnit{
 		SV: &config.FrontendParameters{MongoDB: config.MongoDBParameters{Enable: true}},
@@ -5788,7 +5800,7 @@ func TestBuildMongoDBExternalTableRejectsForeignKeys(t *testing.T) {
 }
 
 func TestBuildMongoDBExternalTableRejectsAutoIncrementBeforeCatalogDDL(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	ctx := mock.CurrentContext().(*MockCompilerContext)
 	ctx.SetContext(context.WithValue(context.Background(), config.ParameterUnitKey, &config.ParameterUnit{
 		SV: &config.FrontendParameters{MongoDB: config.MongoDBParameters{Enable: true}},
@@ -5805,7 +5817,7 @@ func TestBuildMongoDBExternalTableRejectsAutoIncrementBeforeCatalogDDL(t *testin
 }
 
 func TestBuildMongoDBExternalTablePreservesNotNullMapping(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	ctx := mock.CurrentContext().(*MockCompilerContext)
 	ctx.SetContext(context.WithValue(context.Background(), config.ParameterUnitKey, &config.ParameterUnit{
 		SV: &config.FrontendParameters{MongoDB: config.MongoDBParameters{Enable: true}},
@@ -5842,7 +5854,7 @@ func TestBuildMongoDBExternalTablePreservesNotNullMapping(t *testing.T) {
 }
 
 func TestBuildMongoDBExternalTableRejectsSetColumns(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	ctx := mock.CurrentContext().(*MockCompilerContext)
 	ctx.SetContext(context.WithValue(context.Background(), config.ParameterUnitKey, &config.ParameterUnit{
 		SV: &config.FrontendParameters{MongoDB: config.MongoDBParameters{Enable: true}},
@@ -5882,7 +5894,7 @@ func TestBuildMongoDBExternalTableRejectsSetColumns(t *testing.T) {
 }
 
 func TestBuildMongoDBExternalTableAcceptsUnsignedBigInt(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	ctx := mock.CurrentContext().(*MockCompilerContext)
 	ctx.SetContext(context.WithValue(context.Background(), config.ParameterUnitKey, &config.ParameterUnit{
 		SV: &config.FrontendParameters{MongoDB: config.MongoDBParameters{Enable: true}},
@@ -5901,7 +5913,7 @@ func TestBuildMongoDBExternalTableAcceptsUnsignedBigInt(t *testing.T) {
 }
 
 func TestBuildCreateExternalTableInlineIndexError(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	sqls := []string{
 		"CREATE EXTERNAL TABLE ext_inline_col_key (id INT KEY) INFILE {'filepath'='data.txt', 'format'='csv'};",
 		"CREATE EXTERNAL TABLE ext_inline_col_unique (id INT UNIQUE) INFILE {'filepath'='data.txt', 'format'='csv'};",
@@ -5918,7 +5930,7 @@ func TestBuildCreateExternalTableInlineIndexError(t *testing.T) {
 }
 
 func TestBuildAlterTableError(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	// should pass
 	sqls := []string{
 		"ALTER TABLE emp ADD UNIQUE idx1 ((empno+1) DESC, ename);",
@@ -5929,7 +5941,7 @@ func TestBuildAlterTableError(t *testing.T) {
 }
 
 func TestBuildIndexAllowsEnumAndTextBlobPrefix(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	sqls := []string{
 		"CREATE TABLE enum_idx_ok1 (id VARCHAR(191) PRIMARY KEY, role ENUM('a','b','c'), INDEX idx_role(role));",
 		"CREATE TABLE enum_idx_ok2 (id VARCHAR(191) PRIMARY KEY, role ENUM('a','b','c'), UNIQUE INDEX uq_role(role));",
@@ -5942,7 +5954,7 @@ func TestBuildIndexAllowsEnumAndTextBlobPrefix(t *testing.T) {
 }
 
 func TestBuildIndexRejectsTextBlobPlainIndex(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	sqlerrs := []string{
 		"CREATE TABLE text_plain_err1 (id INT PRIMARY KEY, t TEXT, INDEX idx_t(t));",
 		"CREATE TABLE text_plain_err2 (id INT PRIMARY KEY, t TEXT, UNIQUE INDEX uq_t(t));",
@@ -5954,7 +5966,7 @@ func TestBuildIndexRejectsTextBlobPlainIndex(t *testing.T) {
 }
 
 func TestBuildRegularSecondaryIndexPersistsPrefixLengths(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	tests := []struct {
 		name   string
 		sql    string
@@ -5992,7 +6004,7 @@ func TestBuildRegularSecondaryIndexPersistsPrefixLengths(t *testing.T) {
 }
 
 func TestBuildIndexPersistsVisibility(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	tests := []struct {
 		name    string
 		sql     string
@@ -6042,7 +6054,7 @@ func TestBuildIndexPersistsVisibility(t *testing.T) {
 }
 
 func TestBuildPrefixIndexV2ProtocolGate(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	proc := mock.CurrentContext().GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -6071,7 +6083,7 @@ func TestBuildPrefixIndexV2ProtocolGate(t *testing.T) {
 }
 
 func TestBuildCompositeIndexMarksEncodedKeyBinary(t *testing.T) {
-	logicPlan, err := runOneStmt(NewMockOptimizer(false), t,
+	logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"create table composite_key_charset (id int primary key, a varchar(10), b varchar(10), index idx_ab(a, b))")
 	require.NoError(t, err)
 
@@ -6084,7 +6096,7 @@ func TestBuildCompositeIndexMarksEncodedKeyBinary(t *testing.T) {
 }
 
 func TestBuildVectorIndexAllowsIvfFlatOnly(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	sqls := []string{
 		"CREATE TABLE vec_idx_ok1 (id INT PRIMARY KEY, embedding VECF32(3), KEY idx_emb USING ivfflat (embedding) lists = 2 op_type 'vector_l2_ops');",
 		"CREATE TABLE vec_idx_ok2 (id INT PRIMARY KEY, embedding VECF64(3), KEY idx_emb USING ivfflat (embedding) lists = 2 op_type 'vector_l2_ops');",
@@ -6099,7 +6111,7 @@ func TestBuildVectorIndexAllowsIvfFlatOnly(t *testing.T) {
 }
 
 func TestBuildIndexAllowsRTreeGeometry(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	sqls := []string{
 		"CREATE TABLE geo_spatial_ok (id INT PRIMARY KEY, g POINT NOT NULL, KEY idx_g USING RTREE (g));",
 		"CREATE TABLE geo_spatial_nullable_ok (id INT PRIMARY KEY, g POINT, KEY idx_g USING RTREE (g));",
@@ -6108,12 +6120,7 @@ func TestBuildIndexAllowsRTreeGeometry(t *testing.T) {
 }
 
 func TestGeometryDDLGuardsSQLPaths(t *testing.T) {
-	mock := NewMockOptimizer(false)
-	rt := moruntime.DefaultRuntime()
-	moruntime.SetupServiceBasedRuntime("", rt)
-	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, executor.NewMemExecutor(func(sql string) (executor.Result, error) {
-		return executor.Result{}, nil
-	}))
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
 	sqlerrs := []string{
 		"CREATE TABLE geo_default_err (g GEOMETRY DEFAULT 'POINT(1 1)');",
@@ -6127,12 +6134,7 @@ func TestGeometryDDLGuardsSQLPaths(t *testing.T) {
 }
 
 func TestGeometryColumnValidationSQLPaths(t *testing.T) {
-	mock := NewMockOptimizer(false)
-	rt := moruntime.DefaultRuntime()
-	moruntime.SetupServiceBasedRuntime("", rt)
-	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, executor.NewMemExecutor(func(sql string) (executor.Result, error) {
-		return executor.Result{}, nil
-	}))
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
 	sqls := []string{
 		"CREATE TABLE geo_point_ok (g POINT);",
@@ -6143,7 +6145,7 @@ func TestGeometryColumnValidationSQLPaths(t *testing.T) {
 
 func TestCreateSingleTable(t *testing.T) {
 	sql := "create cluster table a (a int);"
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicPlan, err := buildSingleStmt(mock, t, sql)
 	if err != nil {
 		t.Fatalf("%+v", err)
@@ -6152,7 +6154,7 @@ func TestCreateSingleTable(t *testing.T) {
 }
 
 func TestBuildClusterTableInternalReplayRestoresAccountIDDefault(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicPlan, err := buildSingleStmt(mock, t, `
 		create cluster table cluster_replay (
 			id int not null,
@@ -6174,11 +6176,11 @@ func TestBuildClusterTableInternalReplayRestoresAccountIDDefault(t *testing.T) {
 
 	// SHOW CREATE exposes the physical account_id column, so only internal
 	// replay may accept the generated DDL.
-	_, err = runOneStmt(NewMockOptimizer(false), t, createSQL)
+	_, err = runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, createSQL)
 	require.ErrorContains(t, err,
 		"the attribute account_id in the cluster table can not be defined directly by the user")
 
-	internalMock := NewMockOptimizer(false)
+	internalMock := NewMockOptimizer(false, newPlanTestProcess(t))
 	internalMock.ctxt.SetContext(context.WithValue(
 		internalMock.ctxt.GetContext(),
 		defines.InternalExecutorKey{},
@@ -6200,13 +6202,13 @@ func TestBuildClusterTableInternalReplayRestoresAccountIDDefault(t *testing.T) {
 }
 
 func TestCreateTableAsSelect(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	sqls := []string{"CREATE TABLE t1 (a int, b char(5)); CREATE TABLE t2 (c float) as select b, a from t1"}
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
 func TestCTASTargetOnlyDefaultsUseTargetInsertPath(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicPlan, err := buildSingleStmt(mock, t, `
 		create table ctas_target_only (
 			a int default 1,
@@ -6238,7 +6240,7 @@ func TestCTASTargetOnlyDefaultsUseTargetInsertPath(t *testing.T) {
 }
 
 func TestCTASDoesNotProjectDestinationGeneratedColumns(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicPlan, err := buildSingleStmt(mock, t,
 		"create table ctas_generated (a int, b int, g int generated always as (a + b) stored, index ix_g(g)) "+
 			"as select n_nationkey as a, n_regionkey as b from nation")
@@ -6268,7 +6270,7 @@ func TestCTASDoesNotProjectDestinationGeneratedColumns(t *testing.T) {
 }
 
 func TestBuildCTASAggregateNullabilityAndDefaults(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicPlan, err := buildSingleStmt(mock, t, `
 		create table aggregate_metadata as
 		select count(n_name) as cnt,
@@ -6312,7 +6314,7 @@ func TestBuildCTASAggregateNullabilityAndDefaults(t *testing.T) {
 }
 
 func TestBuildCTASHLLAggregatesHaveNoExecutableDefault(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicPlan, err := buildSingleStmt(mock, t, `
 		create table hll_metadata as
 		select hll_add_agg(n_nationkey) as added,
@@ -6338,7 +6340,7 @@ func TestBuildCTASHLLAggregatesHaveNoExecutableDefault(t *testing.T) {
 }
 
 func TestBuildCTASDoesNotCopyAutoIncrement(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	ctx := &mock.ctxt
 	sourceCol := ctx.tables["nation"].Cols[0]
 	sourceCol.Typ.AutoIncr = true
@@ -6385,13 +6387,12 @@ func TestBuildCTASDoesNotCopyAutoIncrement(t *testing.T) {
 	ctx.objects[tableDef.Name] = &ObjectRef{SchemaName: "tpch", ObjName: tableDef.Name, Obj: int64(tableDef.TblId)}
 	ctx.tables[tableDef.Name] = tableDef
 	ctx.id2name[tableDef.TblId] = tableDef.Name
-	ctx.pks[tableDef.Name] = nil
 	_, err = runOneStmt(mock, t, "insert into copied(payload) values ('omitted-id')")
 	require.NoError(t, err)
 }
 
 func TestBuildCTASExplicitTargetDefaultOverridesAutoIncrementTypeDefault(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	sourceCol := ctx.tables["nation"].Cols[0]
 	sourceCol.Typ.AutoIncr = true
 	sourceCol.Default = nil
@@ -6468,7 +6469,7 @@ func TestCreateTableAsSelectPropagatesNullExtension(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			require.True(t, mock.ctxt.tables["nation"].Cols[0].Typ.NotNullable)
 			require.True(t, mock.ctxt.tables["region"].Cols[0].Typ.NotNullable)
 
@@ -6495,7 +6496,7 @@ func TestDynamicStringIntervalCanProduceNullInCTASAndView(t *testing.T) {
 		"from nation"
 
 	t.Run("CTAS", func(t *testing.T) {
-		mock := NewMockOptimizer(false)
+		mock := NewMockOptimizer(false, newPlanTestProcess(t))
 		logicPlan, err := buildSingleStmt(mock, t, "create table ctas_interval as "+selectSQL)
 		require.NoError(t, err)
 
@@ -6506,7 +6507,7 @@ func TestDynamicStringIntervalCanProduceNullInCTASAndView(t *testing.T) {
 	})
 
 	t.Run("view", func(t *testing.T) {
-		ctx := NewMockCompilerContext(false)
+		ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "create view interval_view as "+selectSQL, 1)
 		require.NoError(t, err)
 		defer stmt.Free()
@@ -6522,7 +6523,7 @@ func TestDynamicStringIntervalCanProduceNullInCTASAndView(t *testing.T) {
 }
 
 func TestCreateTableAsSelectPreservesSpecialTypeNullability(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	addMySQLSpecialTypeColumns(ctx)
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
 		"create table copied as select n.priority from nation n right join region r on n.n_regionkey = r.r_regionkey", 1)
@@ -6554,7 +6555,7 @@ func TestCreateTableAsSelectWithTemporalFractionalSeconds(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			sql := "create table ctas_" + test.name + " as select cast('" + test.literal + "' as " + test.castType + ") as " + test.columnName
 			plan, err := buildSingleStmt(mock, t, sql)
 			require.NoError(t, err)
@@ -6593,7 +6594,7 @@ func TestCreateTableAsSelectWithTimestampPairPrecision(t *testing.T) {
 		{name: "typed values fsp six", expression: "timestamp(cast('2024-01-15' as date), cast('12:30:00.123456' as time(6)))", wantFSP: 6},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			logicPlan, err := buildSingleStmt(mock, t,
 				"create table timestamp_pair_ctas as select "+test.expression+" as pair_value")
 			require.NoError(t, err)
@@ -6619,7 +6620,7 @@ func TestCreateTableAsSelectWithTimeFunctionPrecision(t *testing.T) {
 		{name: "integer", expression: "time(123)", wantFSP: 0},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			logicPlan, err := buildSingleStmt(mock, t,
 				"create table time_ctas as select "+test.expression+" as time_value")
 			require.NoError(t, err)
@@ -6632,7 +6633,7 @@ func TestCreateTableAsSelectWithTimeFunctionPrecision(t *testing.T) {
 }
 
 func TestCreateTableAsSelectPreservesTimeWindowMicrosecondBoundaryScale(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	mockTimeWindowScaleTable(t, mock, types.T_datetime.ToTypeWithScale(0))
 
 	logicPlan, err := buildSingleStmt(mock, t,
@@ -6666,7 +6667,7 @@ func TestCreateTableAsSelectTimeWindowBoundaryType(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			sql := "create table tw_rollup as " +
 				"select _wstart as ws, _wend as we, count(*) as c " +
 				"from (select 1 as k, cast('2026-01-01 00:00:01.123456' as " + test.castType + ") as event_ts) src " +
@@ -6686,7 +6687,7 @@ func TestCreateTableAsSelectTimeWindowBoundaryType(t *testing.T) {
 }
 
 func TestCreateTableAsSelectKeepsNonTemporalLiteralNotNull(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	plan, err := buildSingleStmt(mock, t, "create table ctas_literal as select 1 as n")
 	require.NoError(t, err)
 
@@ -6695,7 +6696,7 @@ func TestCreateTableAsSelectKeepsNonTemporalLiteralNotNull(t *testing.T) {
 }
 
 func TestCreateTableAsSelectTemporalInsertKeepsTargetScale(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	ctas, err := buildSingleStmt(mock, t, "create table ctas_datetime6 as select cast('2025-05-06 07:08:09.123456' as datetime(6)) as dt")
 	require.NoError(t, err)
 
@@ -6705,7 +6706,6 @@ func TestCreateTableAsSelectTemporalInsertKeepsTargetScale(t *testing.T) {
 	mock.ctxt.objects[tableDef.Name] = &ObjectRef{SchemaName: "tpch", ObjName: tableDef.Name, Obj: int64(tableDef.TblId)}
 	mock.ctxt.tables[tableDef.Name] = tableDef
 	mock.ctxt.id2name[tableDef.TblId] = tableDef.Name
-	mock.ctxt.pks[tableDef.Name] = nil
 
 	insertPlan, err := runOneStmt(mock, t, createTable.GetCreateAsSelectSql())
 	require.NoError(t, err)
@@ -6723,7 +6723,7 @@ func TestCreateTableAsSelectTemporalInsertKeepsTargetScale(t *testing.T) {
 }
 
 func TestPrepareCreateTableAsSelectWithParams(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
 	prepared, err := runOneStmt(mock, t, "prepare stmt_ctas from 'create table ctas_p as select ? as a, ? as b'")
 	require.NoError(t, err)
@@ -6752,7 +6752,7 @@ func TestPrepareCreateTableAsSelectWithParams(t *testing.T) {
 }
 
 func TestCreateTableAsSelectQuotesIdentifiers(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	tests := []struct {
 		name string
 		sql  string
@@ -6788,7 +6788,7 @@ func TestCreateTableAsSelectQuotesIdentifiers(t *testing.T) {
 }
 
 func TestCreateTableAsSelectPreservesGroupConcatOrderBy(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicPlan, err := buildSingleStmt(
 		mock,
 		t,
@@ -6876,7 +6876,7 @@ func TestCreateTableAsSelectPreservesIntervalSyntax(t *testing.T) {
 }
 
 func TestCreateTableAsSelectPreservesUnixTimePrecision(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicPlan, err := buildSingleStmt(mock, t, `create table ctas_unix_precision as select
 		from_unixtime(cast(1.123 as decimal(10,3))) d3,
 		from_unixtime(cast(1.123456789 as decimal(12,9))) d9,
@@ -6890,7 +6890,7 @@ func TestCreateTableAsSelectPreservesUnixTimePrecision(t *testing.T) {
 }
 
 func TestCreateTableAsSelectUsesTemporalASTSyntax(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicPlan, err := buildSingleStmt(mock, t, `
 		create table ctas_temporal_syntax as
 		select
@@ -7136,7 +7136,7 @@ func TestBuildCreatePitr(t *testing.T) {
 }
 
 func TestConstructAddedPartitionDefsErrors(t *testing.T) {
-	ctx := NewEmptyCompilerContext()
+	ctx := NewEmptyCompilerContext(newPlanTestProcess(t))
 	ctx.SetContext(context.Background())
 
 	makeTableDef := func() *plan.TableDef {
@@ -7258,7 +7258,7 @@ func TestConstructAddedPartitionDefsErrors(t *testing.T) {
 
 func TestPartitionCreateSQLIsModeIndependentForAddPartition(t *testing.T) {
 	ctx := &sqlModeMockCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(false),
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 		sqlMode:             "ANSI_QUOTES,NO_BACKSLASH_ESCAPES",
 	}
 	const createSQL = `create table "partition_mode" ("category" varchar(20)) partition by list columns ("category") (partition "select" values in ('A\\B')) cluster by ("category")`
@@ -7302,7 +7302,7 @@ func TestPartitionCreateSQLIsModeIndependentForAddPartition(t *testing.T) {
 }
 
 func TestCheckFkColsAreValidRecordsReferencedKey(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	ctx.SetContext(context.Background())
 	intType := plan.Type{Id: int32(types.T_int32)}
 	parent := &TableDef{
@@ -7350,14 +7350,13 @@ func TestCheckFkColsAreValidRecordsReferencedKey(t *testing.T) {
 }
 
 func TestCreateExistingTableDoesNotRebuildReverseForeignKeys(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, nil)
 	proc := testutil.NewProcess(t)
 	proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
 	mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
 
 	queriedReverseForeignKeys := false
-	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
-		moruntime.InternalSQLExecutor,
+	setPlanTestGlobalVariable(t, proc.GetService(), moruntime.InternalSQLExecutor,
 		executor.NewMemExecutor(func(sql string) (executor.Result, error) {
 			if strings.Contains(sql, "`mo_catalog`.`mo_foreign_keys`") {
 				queriedReverseForeignKeys = true
@@ -7390,7 +7389,7 @@ func TestDropSelectedForeignKeyIndexIsRejected(t *testing.T) {
 				"alter table test_idx drop index idx1",
 			} {
 				t.Run(sql, func(t *testing.T) {
-					mock := NewMockOptimizer(true)
+					mock := NewMockOptimizer(true, newPlanTestProcess(t))
 					parent := mock.ctxt.tables["test_idx"]
 					parent.TblId = 100
 					parent.Pkey = nil
@@ -7436,7 +7435,7 @@ func TestDropSelectedForeignKeyIndexIsRejected(t *testing.T) {
 }
 
 func TestAlterCanDropSelfForeignKeyAndItsSelectedIndexTogether(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	tableDef := mock.ctxt.tables["test_idx"]
 	tableDef.TblId = 100
 	tableDef.Pkey = nil
@@ -7459,7 +7458,7 @@ func TestAlterCanDropSelfForeignKeyAndItsSelectedIndexTogether(t *testing.T) {
 
 func TestDropReferencedPrimaryKeyIsRejected(t *testing.T) {
 	for _, referencedIndexName := range []string{"PRIMARY", ""} {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, nil)
 		parent := mock.ctxt.tables["test_idx"]
 		parent.TblId = 100
 		parent.RefChildTbls = []uint64{200}
@@ -7479,8 +7478,7 @@ func TestDropReferencedPrimaryKeyIsRejected(t *testing.T) {
 		proc := testutil.NewProc(t)
 		proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
 		mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
-		moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
-			moruntime.InternalSQLExecutor,
+		setPlanTestGlobalVariable(t, proc.GetService(), moruntime.InternalSQLExecutor,
 			executor.NewMemExecutor(func(sql string) (executor.Result, error) {
 				require.Equal(t,
 					"SELECT name, is_visible FROM mo_catalog.mo_indexes WHERE table_id = 100", sql)
@@ -7501,7 +7499,7 @@ func TestDropReferencedPrimaryKeyIsRejected(t *testing.T) {
 }
 
 func TestCreateForeignKeyUsesLegacyCatalogBeforeTenantUpgrade(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, nil)
 	legacyColumnNames := []string{
 		"constraint_name", "constraint_id", "db_name", "db_id", "table_name", "table_id",
 		"column_name", "column_id", "refer_db_name", "refer_db_id", "refer_table_name",
@@ -7517,8 +7515,7 @@ func TestCreateForeignKeyUsesLegacyCatalogBeforeTenantUpgrade(t *testing.T) {
 	proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
 	mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
 	var internalQueries []string
-	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
-		moruntime.InternalSQLExecutor,
+	setPlanTestGlobalVariable(t, proc.GetService(), moruntime.InternalSQLExecutor,
 		executor.NewMemExecutor(func(sql string) (executor.Result, error) {
 			internalQueries = append(internalQueries, sql)
 			return executor.Result{}, nil
@@ -7538,7 +7535,7 @@ func TestCreateForeignKeyUsesLegacyCatalogBeforeTenantUpgrade(t *testing.T) {
 }
 
 func TestForwardForeignKeyCatalogLifecycle(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	ctx.SetContext(context.Background())
 	ctx.tables[catalog.MOForeignKeys] = &TableDef{
 		Name: catalog.MOForeignKeys,

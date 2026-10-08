@@ -1820,7 +1820,8 @@ func TestSeedViewMetadataRevalidationPageIsBounded(t *testing.T) {
 		ids[i] = int32(i + 1)
 	}
 	require.NoError(t, executor.AppendFixedRows(accounts, 0, ids))
-	results := []executor.Result{marker.GetResult(), accounts.GetResult()}
+	results := make([]executor.Result, 0, 2+viewMetadataRecoveryPageSize+1)
+	results = append(results, marker.GetResult(), accounts.GetResult())
 	results = append(results, make([]executor.Result, viewMetadataRecoveryPageSize+1)...)
 	results[len(results)-1].AffectedRows = 1
 	exec := &viewMetadataCleanupRecordingExecutor{results: results}

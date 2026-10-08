@@ -218,7 +218,7 @@ func ExecuteIterationWithRuntime(
 
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	ctxWithoutTimeout := ctx
-	ctx, cancel := context.WithTimeoutCause(ctx, time.Hour, moerr.NewInternalErrorNoCtx("iscp iteration timeout"))
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Hour, moerr.CauseISCPIterationTimeout)
 	defer cancel()
 
 	nowTs := cnEngine.LatestLogtailAppliedTime()
@@ -951,7 +951,7 @@ var FlushJobStatusOnIterationState = func(
 ) (err error) {
 	jobStatuses = normalizeJobStatuses(jobStatuses, lsns)
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	ctx, cancel := context.WithTimeoutCause(ctx, time.Minute*5, moerr.NewInternalErrorNoCtx("iscp flush job status timeout"))
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Minute*5, moerr.CauseISCPFlushJobStatusTimeout)
 	defer cancel()
 	txnWriter, err := getTxn(ctx, cnEngine, cnTxnClient, "iscp iteration")
 	if err != nil {
@@ -1205,7 +1205,7 @@ func FlushPermanentErrorMessage(
 		zap.Any("jobIDs", jobIDs),
 		zap.String("errMsg", errMsg),
 	)
-	ctx, cancel := context.WithTimeoutCause(ctx, time.Minute*5, moerr.NewInternalErrorNoCtx("iscp flush permanent error message timeout"))
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Minute*5, moerr.CauseISCPFlushPermanentErrorMessageTimeout)
 	defer cancel()
 	jobStatuses = normalizeJobStatuses(jobStatuses, lsns)
 	for _, status := range jobStatuses {

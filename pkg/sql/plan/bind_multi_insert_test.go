@@ -35,7 +35,7 @@ func TestPreparedMultiInsertLockRowsMatchPrimaryKeyType(t *testing.T) {
 		"values (n_nationkey + ?, n_name, n_comment) else into test_idx (n_nationkey, n_name) " +
 		"values (n_nationkey + ?, n_name) select n_nationkey, n_name, n_comment from nation " +
 		"where n_nationkey >= ?"
-	logicPlan, err := runOneStmt(NewMockOptimizer(true), t, fmt.Sprintf("prepare stmt1 from '%s'", sql))
+	logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, fmt.Sprintf("prepare stmt1 from '%s'", sql))
 	require.NoError(t, err)
 	prepare := logicPlan.GetDcl().GetPrepare()
 	require.NotNil(t, prepare)
@@ -110,7 +110,7 @@ func collectFilterNodes(qry *plan.Query, root int32, out *[]*plan.Node) {
 }
 
 func TestMultiInsertUnconditionalFansOutOverOneSink(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t,
 		"insert all into dept into t2 (a, b) values (deptno, deptno + 1) select deptno, dname, loc from dept")
 	require.NoError(t, err)
@@ -145,7 +145,7 @@ func TestMultiInsertUnconditionalFansOutOverOneSink(t *testing.T) {
 }
 
 func TestMultiInsertFirstAndElseRouting(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t,
 		"insert first"+
 			" when deptno < 10 then into t2 (a, b) values (deptno, deptno)"+
@@ -198,7 +198,7 @@ func TestMultiInsertFirstAndElseRouting(t *testing.T) {
 // if(route >= 0, route, ...), and EvalIff evaluates a false branch only on the
 // rows whose condition was false.
 func TestMultiInsertFirstMasksLaterConditions(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t,
 		"insert first"+
 			" when deptno < 1 then into t3 (a) values (deptno)"+
@@ -295,7 +295,7 @@ func TestMultiInsertFirstMasksLaterConditions(t *testing.T) {
 // breaks INSERT FIRST partitioning and makes two INTOs of one WHEN disagree
 // whenever the predicate is volatile (rand()).
 func TestMultiInsertEvaluatesEachWhenOnce(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t,
 		"insert first"+
 			" when deptno < 10 then into t2 (a, b) values (deptno, deptno)"+
@@ -363,7 +363,7 @@ func TestMultiInsertEvaluatesEachWhenOnce(t *testing.T) {
 }
 
 func TestMultiInsertAllConditionalDoesNotExcludeEarlierBranches(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t,
 		"insert all"+
 			" when deptno < 10 then into t2 (a, b) values (deptno, deptno)"+
@@ -381,7 +381,7 @@ func TestMultiInsertAllConditionalDoesNotExcludeEarlierBranches(t *testing.T) {
 }
 
 func TestMultiInsertPositionalTargetUsesEverySourceColumn(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t,
 		"insert all into t3 into t2 (b, a) values (a + 1, a) select a from t3 where a > 0")
 	require.NoError(t, err)
@@ -389,7 +389,7 @@ func TestMultiInsertPositionalTargetUsesEverySourceColumn(t *testing.T) {
 }
 
 func TestMultiInsertWithClauseFeedsSource(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t,
 		"with s as (select deptno, dname from dept) insert all into t2 (a, b) values (deptno, deptno) select * from s")
 	require.NoError(t, err)
@@ -397,7 +397,7 @@ func TestMultiInsertWithClauseFeedsSource(t *testing.T) {
 }
 
 func TestMultiInsertRejectsUnsupportedTargets(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	tests := []struct {
 		sql string
 		msg string
@@ -435,7 +435,7 @@ func TestMultiInsertRejectsUnsupportedTargets(t *testing.T) {
 		require.Contains(t, err.Error(), test.msg, test.sql)
 	}
 
-	clusterMock := NewMockOptimizer(true)
+	clusterMock := NewMockOptimizer(true, newPlanTestProcess(t))
 	clusterMock.ctxt.tables["t2"].TableType = catalog.SystemClusterRel
 	_, err := runOneStmt(clusterMock, t,
 		"insert all into t2 (a, b) values (deptno, dname) select deptno, dname from dept")
@@ -443,7 +443,7 @@ func TestMultiInsertRejectsUnsupportedTargets(t *testing.T) {
 }
 
 func TestMultiInsertSameTableMergesIntoOneWritePipeline(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t,
 		"insert first"+
 			" when deptno < 10 then into dept (deptno, dname) values (deptno, dname)"+
@@ -480,7 +480,7 @@ func TestMultiInsertSameTableMergesIntoOneWritePipeline(t *testing.T) {
 }
 
 func TestMultiInsertSameTableMixedColumnListsRejectsMissingNotNull(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	// t2.b is NOT NULL without a default: a clause that leaves it out cannot be
 	// widened, exactly like "insert into t2 (a) ..." fails.
 	_, err := runOneStmt(mock, t,
@@ -490,7 +490,7 @@ func TestMultiInsertSameTableMixedColumnListsRejectsMissingNotNull(t *testing.T)
 }
 
 func TestMultiInsertKeepsIrregularIndexMaintenance(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	for _, sql := range []string{
 		// single clause
 		"insert all into docs_ft (id, body) values (deptno, dname) select deptno, dname from dept",
@@ -527,7 +527,7 @@ func TestMultiInsertKeepsIrregularIndexMaintenance(t *testing.T) {
 // the sink, so the branch SINK_SCAN has to be registered for positional repair.
 // Before that registration this shape produced an out-of-range panic at runtime.
 func TestMultiInsertBranchSinkScansAreRepositionedAfterSinkPruning(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	for _, sql := range []string{
 		// only the 2nd source column is written
 		"insert all into t3 (a) values (dname) select deptno, dname from dept",
@@ -588,7 +588,7 @@ func TestClassifyAutoIncrValue(t *testing.T) {
 }
 
 func TestMultiInsertRejectsTooManyTargets(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	clause := " into t3 (a) values (deptno)"
 	var sb strings.Builder
 	sb.WriteString("insert all")
@@ -618,7 +618,7 @@ func TestMultiInsertMergedAutoIncrRejectsGeneratedMixes(t *testing.T) {
 	}
 	for _, test := range rejected {
 		t.Run(test.name, func(t *testing.T) {
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			_, err := runOneStmt(mock, t, test.sql)
 			require.Error(t, err)
 			require.Contains(t, err.Error(), "auto_increment")
@@ -634,7 +634,7 @@ func TestMultiInsertMergedAutoIncrRejectsGeneratedMixes(t *testing.T) {
 	}
 	for _, test := range accepted {
 		t.Run(test.name, func(t *testing.T) {
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			_, err := runOneStmt(mock, t, test.sql)
 			require.NoError(t, err)
 		})
@@ -658,7 +658,7 @@ func TestMultiInsertMergedAutoIncrRejectsGeneratedMixes(t *testing.T) {
 // route expression is O(M + W).
 func TestMultiInsertFirstRoutingWorkIsLinear(t *testing.T) {
 	planWork := func(whens int) (exprs int, projects int, widest int) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		var sb strings.Builder
 		sb.WriteString("insert first")
 		for i := 0; i < whens; i++ {
@@ -776,12 +776,12 @@ func TestMultiInsertBranchSubqueriesObeyRewritePolicy(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// the control: without the rewrite the statement plans
-			_, err := runOneStmtWithRewriteHints(NewMockOptimizer(true), t, tc.sql)
+			_, err := runOneStmtWithRewriteHints(NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.sql)
 			require.NoError(t, err)
 
 			// under the rewrite the subquery reads the rewritten relation,
 			// which has no deptno, so planning must fail
-			_, err = runOneStmtWithRewriteHints(NewMockOptimizer(true), t, hint+tc.sql)
+			_, err = runOneStmtWithRewriteHints(NewMockOptimizer(true, newPlanTestProcess(t)), t, hint+tc.sql)
 			require.Error(t, err, "the branch subquery bypassed the rewrite policy")
 			require.Contains(t, err.Error(), "deptno")
 		})
@@ -811,7 +811,7 @@ func TestMultiInsertBranchSubqueriesSeeStatementCTEs(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.sql)
 			require.NoError(t, err)
 			testDeepCopy(logicPlan)
 		})
@@ -865,7 +865,7 @@ func TestMultiInsertBranchSubqueriesSeeStatementScopeOnly(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.sql)
 			if tc.wantErr == "" {
 				require.NoError(t, err, "a statement CTE must be visible to the branch")
 				testDeepCopy(logicPlan)
@@ -910,11 +910,11 @@ func TestMultiInsertStatementCTEObeysRewritePolicy(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// the control: without the policy the statement plans
-			_, err := runOneStmtWithRewriteHints(NewMockOptimizer(true), t, tc.sql)
+			_, err := runOneStmtWithRewriteHints(NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.sql)
 			require.NoError(t, err)
 
 			// under the policy the CTE body must not reach the raw base table
-			_, err = runOneStmtWithRewriteHints(NewMockOptimizer(true), t, tc.hint+tc.sql)
+			_, err = runOneStmtWithRewriteHints(NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.hint+tc.sql)
 			require.Error(t, err, "the statement CTE body bypassed the rewrite policy")
 		})
 	}

@@ -30,7 +30,7 @@ import (
 )
 
 func TestExpressionDefaultProtocolAdmission(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	proc := ctx.GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	old, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -56,7 +56,7 @@ func TestExpressionDefaultProtocolAdmission(t *testing.T) {
 }
 
 func TestCTASDefaultRebindAndReplay(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	stmt, err := mysql.ParseOne(context.Background(), "create table src(a bigint, b bigint default (a+a))", 1)
 	require.NoError(t, err)
 	p, err := BuildPlan(mock.CurrentContext(), stmt, false)
@@ -101,7 +101,7 @@ func TestCTASDefaultRebindAndReplay(t *testing.T) {
 // Only a changed operand type or an explicitly authored target DEFAULT should
 // bind under the target session's precision setting.
 func TestCTASInheritedDefaultKeepsBoundDivisionPrecision(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	// Keep the unrelated reverse-FK catalog lookup inside the mock.
 	mock.ctxt.tables["src"] = &planpb.TableDef{Name: "src"}
 	mock.ctxt.tables["dst"] = &planpb.TableDef{Name: "dst"}
@@ -225,7 +225,7 @@ func TestCTASInheritedDefaultKeepsBoundDivisionPrecision(t *testing.T) {
 
 func TestLoadDefaultMaterialization(t *testing.T) {
 	for _, parallel := range []bool{false, true} {
-		ctx := NewMockCompilerContext(true)
+		ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 		stmt, err := mysql.ParseOne(context.Background(),
 			"create table t(a bigint, b bigint, c bigint default (a+1), d bigint default (c+1))", 1)
 		require.NoError(t, err)
@@ -330,7 +330,7 @@ func TestExpressionDefaultBindsAgainstCompleteRowSchema(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+	p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
 	require.NoError(t, err)
 	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
 	require.Len(t, cols, 4)
@@ -347,7 +347,7 @@ func TestExpressionDefaultAllowsForwardReferenceToBaseColumn(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+	p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
 	require.NoError(t, err)
 	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
 	require.GreaterOrEqual(t, len(cols), 2)
@@ -400,7 +400,7 @@ func TestExpressionDefaultRejectsInvalidDependencyGraph(t *testing.T) {
 			require.NoError(t, err)
 			defer stmt.Free()
 
-			_, err = BuildPlan(NewMockCompilerContext(false), stmt, false)
+			_, err = BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
 			require.ErrorContains(t, err, tt.want)
 		})
 	}
@@ -443,7 +443,7 @@ func TestDefaultExprExpanderRejectsCycle(t *testing.T) {
 }
 
 func TestMaterializedDefaultProjectionKeepsDependencyBoundedAndStable(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	nodeCtx := NewBindContext(builder, nil)
 	intTyp := expressionDefaultIntType()
 	childID := builder.appendNode(&planpb.Node{
@@ -498,7 +498,7 @@ func TestMaterializedDefaultProjectionKeepsDependencyBoundedAndStable(t *testing
 }
 
 func TestMaterializedProjectionStagesVolatileGeneratedDependency(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	nodeCtx := NewBindContext(builder, nil)
 	floatTyp := planpb.Type{Id: int32(types.T_float64), Width: 64}
 	childID := builder.appendNode(&planpb.Node{
@@ -537,7 +537,7 @@ func TestMaterializedProjectionStagesVolatileGeneratedDependency(t *testing.T) {
 }
 
 func TestMaterializedProjectionGroupsIndependentDependencyLevels(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	nodeCtx := NewBindContext(builder, nil)
 	intTyp := expressionDefaultIntType()
 	childID := builder.appendNode(&planpb.Node{
@@ -611,7 +611,7 @@ func TestDefaultExprExpanderHonorsAggregateExpansionBudget(t *testing.T) {
 }
 
 func TestInsertExpressionDefaultReadsMaterializedVolatileDependency(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	const (
 		tableName = "expression_default_dml"
 		tableID   = uint64(29001)
@@ -691,7 +691,7 @@ func TestInsertExpressionDefaultReadsMaterializedVolatileDependency(t *testing.T
 }
 
 func TestSequentialUpdateDefaultReadsCurrentRowImage(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_UPDATE, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_UPDATE, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	nodeCtx := NewBindContext(builder, nil)
 	floatTyp := planpb.Type{Id: int32(types.T_float64), Width: 64}
 	rowIDTyp := planpb.Type{Id: int32(types.T_Rowid), Width: 16}

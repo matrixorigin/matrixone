@@ -964,7 +964,7 @@ func checkStrictJoinPred(onPred *plan.Expr) (bool, *ColRef, *ColRef) {
 }
 
 func splitPlanConjunctions(exprList []*plan.Expr) []*plan.Expr {
-	var exprs []*plan.Expr
+	exprs := make([]*plan.Expr, 0, len(exprList))
 	for _, expr := range exprList {
 		exprs = append(exprs, splitPlanConjunction(expr)...)
 	}
@@ -1835,43 +1835,27 @@ func ExprIsZonemappable(ctx context.Context, expr *plan.Expr) bool {
 }
 
 func exprIsZonemappable(ctx context.Context, expr *plan.Expr) bool {
-	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_F:
-		isConst := true
-		for _, arg := range exprImpl.F.Args {
-			if isRuntimeConstExpr(arg) {
-				continue
-			} else {
-				isConst = false
-			}
-			isZonemappable := exprIsZonemappable(ctx, arg)
-			if !isZonemappable {
+	if expr == nil {
+		return false
+	}
+	if fn := expr.GetF(); fn != nil {
+		kind := function.GetZoneMapEvaluation(fn)
+		if kind == function.ZoneMapUnsupported {
+			return false
+		}
+		if kind != function.ZoneMapConstant && kind != function.ZoneMapTemporal {
+			candidate, _ := function.GetFunctionIsZonemappableById(ctx, fn.Func.GetObj())
+			if !candidate {
 				return false
 			}
 		}
-		if isConst {
-			return true
-		}
-
-		if exprImpl.F.Func.ObjName == "cast" {
-			switch exprImpl.F.Args[0].Typ.Id {
-			case int32(types.T_date), int32(types.T_time), int32(types.T_datetime), int32(types.T_timestamp), int32(types.T_year):
-				if exprImpl.F.Args[1].Typ.Id == int32(types.T_timestamp) {
-					//this cast is monotonic, can safely pushdown to block filters
-					return true
-				}
+		for _, arg := range fn.Args {
+			if !exprIsZonemappable(ctx, arg) {
+				return false
 			}
 		}
-
-		isZonemappable, _ := function.GetFunctionIsZonemappableById(ctx, exprImpl.F.Func.GetObj())
-		if !isZonemappable {
-			return false
-		}
-
-		return true
-	default:
-		return true
 	}
+	return true
 }
 
 func GetSortOrderByName(tableDef *plan.TableDef, colName string) int {
@@ -1909,183 +1893,43 @@ func GetSortOrder(tableDef *plan.TableDef, colPos int32) int {
 	return GetSortOrderByName(tableDef, colName)
 }
 
-func checkOp(expr *plan.Expr) bool {
-	if expr == nil {
-		return false
-	}
-	if expr.GetCol() != nil || expr.GetLit() != nil {
-		return true
-	}
-
-	fn := expr.GetF()
-	if fn == nil {
-		return false
-	}
-
-	switch fn.Func.ObjName {
-	case "+", "-":
-		for _, childExpr := range fn.Args {
-			if !checkOp(childExpr) {
-				return false
-			}
-		}
-	default:
-		return false
-	}
-
-	return true
-}
-
-func getColRefCnt(expr *plan.Expr) int {
-	if expr == nil {
-		return 0
-	}
-
-	if colRef := expr.GetCol(); colRef != nil {
-		return 1
-	}
-
-	if fn := expr.GetF(); fn != nil {
-		cnt := 0
-		for _, arg := range fn.Args {
-			cnt += getColRefCnt(arg)
-		}
-		return cnt
-	}
-
-	return 0
-}
-
-func canTranspose(expr *plan.Expr) (can bool, leftCnt int, rightCnt int) {
-	fn := expr.GetF()
-	if fn == nil {
-		return false, 0, 0
-	}
-
-	switch fn.Func.ObjName {
-	case "=":
-		if len(fn.Args) != 2 {
-			return false, 0, 0
-		}
-
-		left, right := fn.Args[0], fn.Args[1]
-
-		if !checkOp(left) || !checkOp(right) {
-			return false, 0, 0
-		}
-
-		leftCnt = getColRefCnt(left)
-		rightCnt = getColRefCnt(right)
-		if !((leftCnt == 1 && rightCnt == 0) || (leftCnt == 0 && rightCnt == 1)) {
-			return false, 0, 0
-		}
-
-	default:
-		return false, 0, 0
-	}
-
-	return true, leftCnt, rightCnt
-}
-
-func getPath(expr *plan.Expr) []int {
-	if expr == nil {
-		return nil
-	}
-
-	if expr.GetCol() != nil {
-		return []int{}
-	}
-
-	fn := expr.GetF()
-	if fn == nil {
-		return nil
-	}
-
-	if colPath := getPath(fn.Args[0]); colPath != nil {
-		return append([]int{0}, colPath...)
-	}
-
-	if colPath := getPath(fn.Args[1]); colPath != nil {
-		return append([]int{1}, colPath...)
-	}
-
-	return nil
-}
-
+// ConstantTranspose canonicalizes native comparison direction without moving
+// arithmetic across an equality. Inverse arithmetic does not preserve floating
+// rounding or checked integer/decimal overflow.
 func ConstantTranspose(expr *plan.Expr, proc *process.Process) (*plan.Expr, error) {
-	can, leftCnt, rightCnt := canTranspose(expr)
-	if !can {
-		return expr, nil
-	}
+	return normalizeNativeRangeDirection(expr, proc)
+}
 
-	if leftCnt == 0 && rightCnt == 1 {
-		fn := expr.GetF()
-		left, right := fn.Args[0], fn.Args[1]
-		exchangedExpr, err := BindFuncExprImplByPlanExpr(proc.Ctx, fn.Func.ObjName, []*plan.Expr{right, left})
-		if err != nil {
-			return nil, err
-		}
-		expr = exchangedExpr
-	}
-
+// Normalize native comparison direction consistently at the root and inside
+// Boolean trees, retaining the original arithmetic evaluation domain.
+func normalizeNativeRangeDirection(expr *plan.Expr, proc *process.Process) (*plan.Expr, error) {
 	fn := expr.GetF()
-	curLeft, curRight := fn.Args[0], fn.Args[1]
-
-	colPath := getPath(curLeft)
-	if colPath == nil {
-		return expr, nil
-	}
-
-	for _, direction := range colPath {
-		f := curLeft.GetF()
-		if f == nil {
-			break
-		}
-
-		var colSide, constSide *plan.Expr
-		if direction == 0 {
-			colSide = f.Args[0]
-			constSide = f.Args[1]
-		} else {
-			colSide = f.Args[1]
-			constSide = f.Args[0]
-		}
-
-		switch f.Func.ObjName {
-		case "+":
-			newRight, err := BindFuncExprImplByPlanExpr(proc.Ctx, "-", []*plan.Expr{curRight, constSide})
-			if err != nil {
-				return nil, err
-			}
-			curLeft = colSide
-			curRight = newRight
-
-		case "-":
-			if direction == 0 {
-				// col - const = right    →    col = right + const
-				newRight, err := BindFuncExprImplByPlanExpr(proc.Ctx, "+", []*plan.Expr{curRight, constSide})
+	if hasNonNilFunctionArgs(fn, 2) {
+		if fn.Func.ObjName == "and" || fn.Func.ObjName == "or" {
+			var args []*plan.Expr
+			for i, arg := range fn.Args {
+				transposed, err := normalizeNativeRangeDirection(arg, proc)
 				if err != nil {
 					return nil, err
 				}
-				curLeft = colSide
-				curRight = newRight
-			} else {
-				// const - col = right    →    col = const - right
-				newRight, err := BindFuncExprImplByPlanExpr(proc.Ctx, "-", []*plan.Expr{constSide, curRight})
-				if err != nil {
-					return nil, err
+				if transposed != arg {
+					if args == nil {
+						args = append([]*plan.Expr(nil), fn.Args...)
+					}
+					args[i] = transposed
 				}
-				curLeft = colSide
-				curRight = newRight
 			}
+			if args == nil {
+				return expr, nil
+			}
+			return BindFuncExprImplByPlanExpr(proc.Ctx, fn.Func.ObjName, args)
+		}
+		// Scan consumers interpret native comparisons with the column on the left.
+		if (isRangeOp(fn) || fn.Func.ObjName == "=") && fn.Args[1].GetCol() != nil && isRuntimeConstExpr(fn.Args[0]) {
+			return BindFuncExprImplByPlanExpr(proc.Ctx, canonicalRangeOp(fn), []*plan.Expr{fn.Args[1], fn.Args[0]})
 		}
 	}
-	newExpr, err := BindFuncExprImplByPlanExpr(proc.Ctx, fn.Func.ObjName, []*plan.Expr{curLeft, curRight})
-	if err != nil {
-		return nil, err
-	}
-
-	return newExpr, nil
+	return expr, nil
 }
 
 func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varAndParamIsConst bool, foldInExpr bool) (*plan.Expr, error) {
@@ -2217,7 +2061,7 @@ func constantFoldWithPreparedExactSource(
 		foldExpr, errFold := constantFoldWithPreparedExactSource(
 			bat, fn.Args[i], proc, varAndParamIsConst, foldInExpr, preservePreparedExactSource)
 		if errFold != nil {
-			if functionID == function.CASE {
+			if functionID == function.CASE || functionID == function.IFF || functionID == function.COALESCE {
 				// Selection owns branch errors. Retain the failing subtree for
 				// runtime masking, but still fold safe constants in other branches
 				// so const-only consumers do not lose their input contract.
@@ -2268,10 +2112,11 @@ func constantFoldWithPreparedExactSource(
 
 		return &plan.Expr{
 			Typ: plan.Type{
-				Id:      int32(vec.GetType().Oid),
-				Scale:   vec.GetType().Scale,
-				Width:   vec.GetType().Width,
-				Charset: uint32(vec.GetType().Charset),
+				Id:               int32(vec.GetType().Oid),
+				Scale:            vec.GetType().Scale,
+				Width:            vec.GetType().Width,
+				Charset:          uint32(vec.GetType().Charset),
+				CollationVersion: uint32(vec.GetType().CollationVersion),
 			},
 			Expr: &plan.Expr_Vec{
 				Vec: &plan.LiteralVec{
@@ -2590,7 +2435,63 @@ func unwrapCast(expr *plan.Expr) *plan.Expr {
 	return expr
 }
 
+// decimalComparisonLiteralFloat uses the same decimal text conversion as CAST,
+// including its target floating range check. Unknown expressions are not proofs.
+func decimalComparisonLiteralFloat(expr *plan.Expr, bits int) (float64, bool) {
+	literal := expr.GetLit()
+	if literal == nil || literal.Isnull || !staticIntegerComparisonPeer(expr) {
+		return 0, false
+	}
+	var text string
+	switch value := literal.Value.(type) {
+	case *plan.Literal_Decimal64Val:
+		text = types.Decimal64(value.Decimal64Val.A).Format(expr.Typ.Scale)
+	case *plan.Literal_Decimal128Val:
+		text = (types.Decimal128{B0_63: uint64(value.Decimal128Val.A), B64_127: uint64(value.Decimal128Val.B)}).Format(expr.Typ.Scale)
+	default:
+		return 0, false
+	}
+	value, err := strconv.ParseFloat(text, bits)
+	return value, err == nil
+}
+
+// boundedFloatComparisonPreservesValue is an additional storage-metadata proof,
+// not a replacement for the source-domain checks in checkNoNeedCast.
+func boundedFloatComparisonPreservesValue(columnT types.Type, expr *plan.Expr) bool {
+	value, known := floatingComparisonConstant(expr)
+	if !known {
+		value, known = decimalComparisonLiteralFloat(expr, 64)
+	}
+	if literal := expr.GetLit(); !known && literal != nil && !literal.Isnull {
+		switch v := literal.Value.(type) {
+		case *plan.Literal_I64Val:
+			value, known = float64(v.I64Val), true
+		case *plan.Literal_U64Val:
+			value, known = float64(v.U64Val), true
+		}
+	}
+	if !known || math.IsNaN(value) || math.IsInf(value, 0) {
+		return false
+	}
+	if columnT.Oid == types.T_float32 && float64(float32(value)) != value {
+		return false
+	}
+	factor := math.Pow10(int(columnT.Scale))
+	maximum := math.Pow10(int(columnT.Width-columnT.Scale)) - 1/factor
+	rounded, outOfRange := function.ConvertToFixedFloat(value, factor, maximum)
+	if outOfRange || rounded != value {
+		return false
+	}
+	// A bounded FLOAT's promotion to DOUBLE uses the same CAST arithmetic.
+	// Keep its native comparison normalization invariant as well.
+	return columnT.Oid != types.T_float32 ||
+		types.NewFloat32ScaleNormalizer(columnT.Scale).Normalize(float32(value)) == float32(value)
+}
+
 func checkNoNeedCast(ctx context.Context, constT, columnT types.Type, constExpr *plan.Expr) bool {
+	if columnT.Oid.IsInteger() && constT.Oid.IsDecimal() {
+		return exactDecimalIntegerFits(constExpr, columnT.Oid)
+	}
 	if constExpr.GetP() != nil && columnT.IsNumeric() {
 		// An unresolved PREPARE marker has a provisional TEXT transport type.
 		// A resolved execution marker must satisfy the same source-domain
@@ -2604,6 +2505,23 @@ func checkNoNeedCast(ctx context.Context, constT, columnT types.Type, constExpr 
 	// row-dependent expressions merely because their declared types match.
 	if constT.Eq(columnT) && (rule.IsConstant(constExpr, false) || isCastOfConstant(constExpr)) {
 		return true
+	}
+
+	// Bounded floating CASTs must preserve the peer before the ordinary
+	// numeric-domain proof can justify keeping the column's native type.
+	if (columnT.Oid == types.T_float32 || columnT.Oid == types.T_float64) && columnT.Width > 0 && columnT.Scale >= 0 &&
+		!boundedFloatComparisonPreservesValue(columnT, constExpr) {
+		return false
+	}
+
+	if columnT.Oid.IsDecimal() && (constT.Oid == types.T_float32 || constT.Oid == types.T_float64) {
+		value, ok := floatingComparisonConstant(constExpr)
+		return ok && decimalFloatComparisonHasUniqueValue(value, columnT)
+	}
+
+	if columnT.Oid == types.T_float32 && constT.Oid == types.T_float64 {
+		value, ok := floatingComparisonConstant(constExpr)
+		return ok && !math.IsNaN(value) && !math.IsInf(value, 0) && float64(float32(value)) == value
 	}
 
 	lit := constExpr.GetLit()
@@ -2731,22 +2649,23 @@ func checkNoNeedCast(ctx context.Context, constT, columnT types.Type, constExpr 
 
 			return false
 		}
-		// Allow casting decimal constants to float columns only if precision is acceptable
-		// For FLOAT32: only allow if value has <= 7 significant digits
-		// For FLOAT64: only allow if value has <= 15 significant digits
+		// Preserve the established DECIMAL-constant coercion into a floating
+		// column's domain. This is distinct from narrowing an explicit DOUBLE
+		// peer, which must pass the exactness proof above. Bounded metadata
+		// has already passed its additional value-preservation check.
 		if columnT.Oid == types.T_float32 || columnT.Oid == types.T_float64 {
-			// TODO: Add precision check based on decimal value
-			// For now, conservatively return false to avoid precision loss
-			return false
+			bits := 64
+			if columnT.Oid == types.T_float32 {
+				bits = 32
+			}
+			_, ok := decimalComparisonLiteralFloat(constExpr, bits)
+			return ok
 		}
 		return false
 
 	case types.T_float32, types.T_float64:
-		// Allow casting float constants to float/decimal columns
+		// Float-to-decimal narrowing was checked by the shared proof above.
 		if columnT.Oid == types.T_float32 || columnT.Oid == types.T_float64 {
-			return true
-		}
-		if columnT.Oid == types.T_decimal64 || columnT.Oid == types.T_decimal128 {
 			return true
 		}
 		return false
@@ -3484,7 +3403,7 @@ func ResetAuxIdForExpr(expr *plan.Expr) {
 // }
 
 func ExprType2Type(typ *plan.Type) types.Type {
-	return types.NewWithCharset(types.T(typ.Id), typ.Width, typ.Scale, uint8(typ.Charset))
+	return types.MustTypeFromPlan(*typ)
 }
 
 func PkColByTableDef(tblDef *plan.TableDef) *plan.ColDef {
@@ -3967,6 +3886,9 @@ func getParamTypes(params []tree.Expr, ctx CompilerContext, isPrepareStmt bool) 
 
 // HasMoCtrl checks whether the expression has mo_ctrl(..,..,..)
 func HasMoCtrl(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		if exprImpl.F.Func.ObjName == "mo_ctl" || exprImpl.F.Func.ObjName == "fault_inject" {
@@ -3987,9 +3909,81 @@ func HasMoCtrl(expr *plan.Expr) bool {
 		}
 		return false
 
+	case *plan.Expr_W:
+		// A window entry carries its function and OVER partition/order-by as nested exprs, so a
+		// call hidden in `mo_ctl(...) OVER ()` or `MAX(mo_ctl(...)) OVER ()` must be seen too --
+		// WinSpecList holds Expr_W, not the bare Expr_F these Args recursions reach otherwise.
+		if exprImpl.W == nil {
+			return false
+		}
+		if HasMoCtrl(exprImpl.W.WindowFunc) {
+			return true
+		}
+		for _, p := range exprImpl.W.PartitionBy {
+			if HasMoCtrl(p) {
+				return true
+			}
+		}
+		for _, o := range exprImpl.W.OrderBy {
+			if o != nil && HasMoCtrl(o.Expr) {
+				return true
+			}
+		}
+		return false
+
 	default:
 		return false
 	}
+}
+
+// NodeHasMoCtrl reports whether any executable expression on the node contains mo_ctl / fault_inject.
+// The frontend privilege gate scans EVERY node with this (not just the SELECT projection), so a call
+// hidden in a WHERE/HAVING filter, a JOIN condition, GROUP BY / aggregate / window / ORDER BY /
+// LIMIT / OFFSET, a table-function argument, an ON UPDATE assignment, or an INSERT VALUES row cannot
+// bypass the sys-admin check by sitting outside ProjectList.
+func NodeHasMoCtrl(node *plan.Node) bool {
+	if node == nil {
+		return false
+	}
+	lists := [][]*plan.Expr{
+		node.ProjectList, node.FilterList, node.OnList, node.GroupBy, node.AggList,
+		node.WinSpecList, node.TblFuncExprList, node.OnUpdateExprs, node.FillVal,
+		node.TimeWindowPartitionBy, node.BlockFilterList,
+	}
+	for _, l := range lists {
+		for _, e := range l {
+			if HasMoCtrl(e) {
+				return true
+			}
+		}
+	}
+	singles := []*plan.Expr{
+		node.Limit, node.Offset, node.Interval, node.Sliding, node.Timestamp,
+		node.WEnd, node.GapFillStart, node.GapFillEnd,
+	}
+	for _, e := range singles {
+		if HasMoCtrl(e) {
+			return true
+		}
+	}
+	for _, o := range node.OrderBy {
+		if o != nil && HasMoCtrl(o.Expr) {
+			return true
+		}
+	}
+	if node.RowsetData != nil {
+		for _, col := range node.RowsetData.Cols {
+			if col == nil {
+				continue
+			}
+			for _, re := range col.Data {
+				if re != nil && HasMoCtrl(re.Expr) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // IsFkSelfRefer checks the foreign key referencing itself
@@ -7669,11 +7663,17 @@ func preparedSetOperationCommonType(
 	targetType := argTypes[0]
 	if len(castTypes) > 0 {
 		targetType = castTypes[0]
-		if targetType.Oid == types.T_datetime {
-			for i := range castTypes {
-				castTypes[i].Scale = 0
+		if targetType.Oid == types.T_datetime || targetType.Oid == types.T_time || targetType.Oid == types.T_timestamp {
+			for _, typ := range argTypes {
+				if typ.Scale > targetType.Scale {
+					targetType.Scale = typ.Scale
+				}
 			}
-			targetType = castTypes[0]
+			targetType.Width = targetType.Scale
+			for i := range castTypes {
+				castTypes[i].Scale = targetType.Scale
+				castTypes[i].Width = targetType.Width
+			}
 		}
 	} else if targetType.Oid == types.T_varchar || targetType.Oid == types.T_char {
 		for _, typ := range argTypes {
@@ -8225,6 +8225,14 @@ func refreshPreparedPlanProjectionTypes(
 				return plan.Type{}, false
 			}
 			switch node.NodeType {
+			case plan.Node_FUNCTION_SCAN, plan.Node_VECTOR_INDEX_SCAN, plan.Node_VECTOR_QUERY_SOURCE:
+				// These scans project their own result schema. A child supplies
+				// function inputs (for example a query vector), not output columns.
+				if col.RelPos == 0 && node.TableDef != nil && int(col.ColPos) < len(node.TableDef.Cols) &&
+					node.TableDef.Cols[col.ColPos] != nil {
+					return node.TableDef.Cols[col.ColPos].Typ, true
+				}
+				return plan.Type{}, false
 			case plan.Node_AGG:
 				switch col.RelPos {
 				case -1:
@@ -8524,6 +8532,12 @@ func ReplaceFoldExpr(proc *process.Process, expr *Expr, exes *[]colexec.Expressi
 	} else {
 		for i, canFold := range argFold {
 			if canFold {
+				// CAST target types are structural metadata, not runtime values.
+				// Keep them intact when only some arguments can fold; a wholly
+				// constant CAST remains foldable through the allCanFold path above.
+				if _, isTargetType := fn.Args[i].Expr.(*plan.Expr_T); isTargetType {
+					continue
+				}
 				folded, foldErr := ConstantFold(batch.EmptyForConstFoldBatch, fn.Args[i], proc, false, true)
 				if foldErr != nil {
 					return false, foldErr

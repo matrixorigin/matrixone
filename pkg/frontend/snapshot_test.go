@@ -920,7 +920,7 @@ func TestRestoreExternalTableSnapshotAndFromTS(t *testing.T) {
 			newMrsForRestoreStringRows([]string{"Table", "Create Table"}, [][]interface{}{{"hive_ext", "create external table hive_ext (id int)"}})
 		bh.sql2result[fmt.Sprintf(checkTableIsMasterFormat, quoteSQLStringLiteral(dbName), quoteSQLStringLiteral("base_t"))] = newMrsForRestoreStringRows([]string{"db_name"}, nil)
 
-		err := restoreToDatabaseOrTable(ctx, "", bh, snapshotName, dbName, "", uint32(sysAccountID), map[string]*tableInfo{}, map[string]*tableInfo{}, snapshotTs, uint32(sysAccountID), false, nil)
+		err := restoreToDatabaseOrTable(ctx, "", bh, snapshotName, dbName, "", uint32(sysAccountID), map[string]*tableInfo{}, map[string]*tableInfo{}, snapshotTs, uint32(sysAccountID), false, nil, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(restoreTestExecutedSQLContains(bh, restoreTableDataByTsSQL(dbName, "base_t", snapshotTs)), convey.ShouldBeTrue)
 		convey.So(restoreTestExecutedSQLContains(bh, "hive_ext` clone"), convey.ShouldBeFalse)
@@ -944,7 +944,7 @@ func TestRestoreExternalTableSnapshotAndFromTS(t *testing.T) {
 		bh.sql2result[fmt.Sprintf("show create table `%s`.`%s` {MO_TS = %d}", dbName, tblName, snapshotTs)] =
 			newMrsForRestoreStringRows([]string{"Table", "Create Table"}, [][]interface{}{{tblName, "create external table hive_ext (id int)"}})
 
-		err := restoreToDatabaseOrTable(ctx, "", bh, snapshotName, dbName, tblName, uint32(sysAccountID), map[string]*tableInfo{}, map[string]*tableInfo{}, snapshotTs, uint32(sysAccountID), false, nil)
+		err := restoreToDatabaseOrTable(ctx, "", bh, snapshotName, dbName, tblName, uint32(sysAccountID), map[string]*tableInfo{}, map[string]*tableInfo{}, snapshotTs, uint32(sysAccountID), false, nil, nil)
 		convey.So(err, convey.ShouldNotBeNil)
 		convey.So(err.Error(), convey.ShouldContainSubstring, "external table db1.hive_ext cannot be restored from snapshot")
 		convey.So(restoreTestExecutedSQLContains(bh, "hive_ext` clone"), convey.ShouldBeFalse)
@@ -1009,7 +1009,7 @@ func TestRestorePitrExternalTable(t *testing.T) {
 		bh.sql2result[fmt.Sprintf(checkTableIsMasterFormat, quoteSQLStringLiteral(dbName), quoteSQLStringLiteral("base_t"))] = newMrsForRestoreStringRows([]string{"db_name"}, nil)
 		bh.sql2result[getPubInfoWithPitr(ts, uint32(sysAccountID), dbName)] = newMrsForRestoreStringRows([]string{"account_id"}, nil)
 
-		err := restoreToDatabaseOrTableWithPitr(ctx, "", bh, pitrName, ts, dbName, "", map[string]*tableInfo{}, map[string]*tableInfo{}, uint32(sysAccountID))
+		err := restoreToDatabaseOrTableWithPitr(ctx, "", bh, pitrName, ts, dbName, "", map[string]*tableInfo{}, map[string]*tableInfo{}, uint32(sysAccountID), nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(restoreTestExecutedSQLContains(bh, restoreTableDataByTsSQL(dbName, "base_t", ts)), convey.ShouldBeTrue)
 		convey.So(restoreTestExecutedSQLContains(bh, "hive_ext` clone"), convey.ShouldBeFalse)
@@ -1033,7 +1033,7 @@ func TestRestorePitrExternalTable(t *testing.T) {
 		bh.sql2result[fmt.Sprintf("show create table `%s`.`%s` {MO_TS = %d}", dbName, tblName, ts)] =
 			newMrsForRestoreStringRows([]string{"Table", "Create Table"}, [][]interface{}{{tblName, "create external table hive_ext (id int)"}})
 
-		err := restoreToDatabaseOrTableWithPitr(ctx, "", bh, pitrName, ts, dbName, tblName, map[string]*tableInfo{}, map[string]*tableInfo{}, uint32(sysAccountID))
+		err := restoreToDatabaseOrTableWithPitr(ctx, "", bh, pitrName, ts, dbName, tblName, map[string]*tableInfo{}, map[string]*tableInfo{}, uint32(sysAccountID), nil)
 		convey.So(err, convey.ShouldNotBeNil)
 		convey.So(err.Error(), convey.ShouldContainSubstring, "external table db1.hive_ext cannot be restored from pitr")
 		convey.So(restoreTestExecutedSQLContains(bh, "hive_ext` clone"), convey.ShouldBeFalse)
@@ -1065,7 +1065,7 @@ func TestMarkedDatabaseRestoreRejectsBeforeDestructiveWorkBelowCapability(t *tes
 				return restoreToDatabaseOrTable(
 					ctx, "", bh, snapshotName, dbName, "", uint32(sysAccountID),
 					map[string]*tableInfo{}, map[string]*tableInfo{}, ts,
-					uint32(sysAccountID), false, nil,
+					uint32(sysAccountID), false, nil, nil,
 				)
 			},
 		},
@@ -1091,7 +1091,7 @@ func TestMarkedDatabaseRestoreRejectsBeforeDestructiveWorkBelowCapability(t *tes
 			run: func(bh BackgroundExec) error {
 				return restoreToDatabaseOrTableWithPitr(
 					ctx, "", bh, pitrName, ts, dbName, "",
-					map[string]*tableInfo{}, map[string]*tableInfo{}, uint32(sysAccountID),
+					map[string]*tableInfo{}, map[string]*tableInfo{}, uint32(sysAccountID), nil,
 				)
 			},
 		},
@@ -1315,7 +1315,7 @@ func TestMarkedDatabaseRestorePreservesIdentityAtCapability(t *testing.T) {
 				return restoreToDatabaseOrTable(
 					ctx, "", bh, snapshotName, dbName, "", uint32(sysAccountID),
 					map[string]*tableInfo{}, map[string]*tableInfo{}, ts,
-					uint32(sysAccountID), false, nil,
+					uint32(sysAccountID), false, nil, nil,
 				)
 			},
 		},
@@ -1347,7 +1347,7 @@ func TestMarkedDatabaseRestorePreservesIdentityAtCapability(t *testing.T) {
 			run: func(bh BackgroundExec) error {
 				return restoreToDatabaseOrTableWithPitr(
 					ctx, "", bh, pitrName, ts, dbName, "",
-					map[string]*tableInfo{}, map[string]*tableInfo{}, uint32(sysAccountID),
+					map[string]*tableInfo{}, map[string]*tableInfo{}, uint32(sysAccountID), nil,
 				)
 			},
 		},
@@ -2157,7 +2157,7 @@ func Test_dropExistsAccount_InRestoreTransaction(t *testing.T) {
 		sql = fmt.Sprintf(getPubInfoSql, 1) + " order by update_time desc, created_time desc"
 		bh.sql2result[sql] = newMrsForSqlForGetPubs([][]interface{}{})
 
-		sql = "select 1 from mo_catalog.mo_columns where att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
+		sql = "select 1 from mo_catalog.mo_columns where account_id = 0 and att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
 		bh.sql2result[sql] = newMrsForSqlForGetSubs([][]interface{}{{1}})
 
 		sql = getSubsSql + " and sub_account_id = 1"
@@ -3227,7 +3227,6 @@ func Test_handleInternalGetDdl_GoodPath(t *testing.T) {
 		mockTxnOp.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 		mockTxnOp.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
 		mockTxnOp.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
-		mockTxnOp.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 
 		// Setup TxnHandler with mock engine and txn
 		txnHandler := InitTxnHandler("", mockEng, ctx, mockTxnOp)

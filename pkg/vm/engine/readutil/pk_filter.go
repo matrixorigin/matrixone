@@ -19,6 +19,7 @@ import (
 	stdcmp "cmp"
 	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -69,12 +70,23 @@ func ConstructBlockPKFilter(
 		HasFakePK:       isFakePK,
 		ExactMembership: bf != nil && bf.Exact(),
 	}
-	// The scoped cache search must preserve the exact routing contract of the
-	// existing callbacks. Fake PK columns are not physically sorted even when
-	// the block carries the sorted flag, and membership filters may use a
-	// second key column. Keep both cases on the legacy owned-vector path.
+	// CachedSearch only handles the primary-key predicate, not membership on
+	// a second key column. Exact membership uses the separate closed descriptor
+	// below. Fake PK columns are not physically sorted even when the block carries
+	// the sorted flag, so they remain on the legacy owned-vector path.
 	if !isFakePK && bf == nil {
 		readFilter.CachedSearch = buildCachedPKSearch(basePKFilter)
+	}
+	if !isFakePK && readFilter.ExactMembership {
+		var pkSearch *objectio.ReadFilterSearch
+		if basePKFilter.Valid {
+			pkSearch = buildCachedPKSearch(basePKFilter)
+		}
+		if !basePKFilter.Valid || pkSearch != nil {
+			if member, ok := bf.(docfilter.MembershipFilter); ok {
+				readFilter.CachedMembership = objectio.NewReadFilterMembership(pkSearch, member)
+			}
+		}
 	}
 	if basePKFilter.cleanup != nil {
 		readFilter.Cleanup = basePKFilter.cleanup.run
@@ -1273,7 +1285,7 @@ func mergeBaseFilterInKind(
 }
 
 // mergeFixedInValues is the ordered set merge used for fixed-size types that
-// are not covered by constraints.Ordered (notably bool and UUID).
+// are not covered by cmp.Ordered (notably bool and UUID).
 func mergeFixedInValues[T types.FixedSizeTExceptStrType](
 	a, b []T,
 	ret *vector.Vector,

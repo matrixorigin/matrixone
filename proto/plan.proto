@@ -42,6 +42,12 @@ message Type {
   // Internal semantic marker for VARCHAR/TEXT values that can carry
   // representation-only CHAR padding through a transparent query boundary.
   bool pad_space = 9;
+  // Expression provenance; explicit COLLATE has coercibility zero.
+  uint32 collation_coercibility = 10;
+  bool collation_coercibility_set = 11;
+  bool collation_merge_conflict = 12;
+  // Zero retains the historical meaning of charset. New semantics stay gated.
+  uint32 collation_version = 13;
 }
 
 message msgHeader {
@@ -470,6 +476,8 @@ message IndexDef {
   // identity would misinterpret plans produced by versions that carried it.
   reserved 14;
   reserved "visibility_set";
+  // Physical format belongs to the index schema, never to an individual key.
+  uint32 key_format = 15;
 }
 
 message ForeignKeyDef {
@@ -599,6 +607,9 @@ message TableDef {
   uint32 default_charset = 39;
   // Zero inherits the service policy; one disables speculative ID reservation.
   uint64 auto_id_cache = 40;
+  uint32 key_format = 41;
+  // Semantic revision of default_charset, independent of physical key format.
+  uint32 collation_version = 42;
 }
 
 message TableFunction {
@@ -998,6 +1009,9 @@ message Node {
     TABLE_CLONE = 56;
     // Coordinator-local selector for bounded POST -> PRE -> FORCE Top-K candidates.
     ADAPTIVE_TOP = 57;
+    // Coordinator-local scalar query-vector selection and its materialized readers.
+    VECTOR_QUERY_TOP = 58;
+    VECTOR_QUERY_SOURCE = 59;
   }
 
   enum JoinType {
@@ -1177,8 +1191,7 @@ message Node {
 
   // compile time performance setting
   int64 spill_mem = 70;
-  repeated string origin_views = 71;
-  string direct_view = 72;
+  reserved 71, 72;
 
   // TIME_WINDOW only: the GROUP BY columns other than the window's own
   // timestamp key. The operator restarts its window state whenever these
@@ -1261,6 +1274,12 @@ message Node {
   // final candidate only when the initial candidate is empty. This is used by
   // explicit IVF POST fallback and preserves its partial-result behavior.
   bool adaptive_top_fallback_on_empty = 92;
+
+  // VECTOR_QUERY_TOP/SOURCE only: statement-local immutable provider identity.
+  int32 vector_query_source_id = 93;
+
+  // Ordered binding contexts used by view authorization.
+  repeated ViewStep view_path = 94;
 }
 
 message SnapshotExtraInfo {
@@ -1725,6 +1744,9 @@ message Query {
   // SHOW View column VALUES were bound using a mutable UDF catalog row.
   // Neither the View nor the UDF catalog table changes schema when that row is replaced.
   bool view_metadata_depends_on_udf = 17;
+
+  // Logical access paths, not grants or resolved security roles.
+  repeated ViewReference view_references = 18;
 }
 
 message TransationControl {
@@ -2401,4 +2423,18 @@ message VectorIndexScanWork {
 message UnresolvedIndexHint {
   ObjectRef table = 1;
   string index_name = 2;
+}
+
+// Bound view authorization survives executable-node elimination and plan reuse.
+message ViewReference {
+  reserved 1, 2, 3;
+  repeated ViewStep view_path = 4;
+}
+
+// Binding identity only: security definitions and grants are read at authorization.
+message ViewStep {
+  string database_name = 1;
+  string view_name = 2;
+  Snapshot snapshot = 3;
+  string subscription_name = 4;
 }

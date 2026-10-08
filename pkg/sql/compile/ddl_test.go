@@ -2786,7 +2786,7 @@ func TestDropDatabaseKeepsFixedSISnapshot(t *testing.T) {
 		txnOp.EXPECT().GetWorkspace().Return(ws).AnyTimes()
 		txnOp.EXPECT().Txn().Return(txnMeta).AnyTimes()
 		txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
-		txnOp.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+
 		txnOp.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
 		txnOp.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 		txnOp.EXPECT().Snapshot().Return(txn.CNTxnSnapshot{}, nil).AnyTimes()

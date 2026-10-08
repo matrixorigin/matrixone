@@ -16,11 +16,13 @@ package plan
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -123,7 +125,7 @@ func TestOptimizerConstantFoldsNegativeSecToTime(t *testing.T) {
 	stmt, err := mysql.ParseOne(t.Context(), "select sec_to_time(-2378)", 1)
 	require.NoError(t, err)
 
-	query, err := NewBaseOptimizer(NewMockCompilerContext(true)).Optimize(stmt, false)
+	query, err := NewBaseOptimizer(NewMockCompilerContext(true, newPlanTestProcess(t))).Optimize(stmt, false)
 	require.NoError(t, err)
 	require.NotEmpty(t, query.Steps)
 	root := query.Nodes[query.Steps[len(query.Steps)-1]]
@@ -280,7 +282,7 @@ func TestOptimizerPreservesByteIdenticalSerializedProvenance(t *testing.T) {
 			stmt, err := mysql.ParseOne(t.Context(), test.sql, 1)
 			require.NoError(t, err)
 
-			query, err := NewBaseOptimizer(NewMockCompilerContext(true)).Optimize(stmt, false)
+			query, err := NewBaseOptimizer(NewMockCompilerContext(true, newPlanTestProcess(t))).Optimize(stmt, false)
 			require.NoError(t, err)
 			require.NotEmpty(t, query.Steps)
 			root := query.Nodes[query.Steps[len(query.Steps)-1]]
@@ -316,7 +318,7 @@ func TestOptimizerPreservesSerializedListProvenance(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			stmt, err := mysql.ParseOne(t.Context(), test.sql, 1)
 			require.NoError(t, err)
-			query, err := NewBaseOptimizer(NewMockCompilerContext(true)).Optimize(stmt, false)
+			query, err := NewBaseOptimizer(NewMockCompilerContext(true, newPlanTestProcess(t))).Optimize(stmt, false)
 			require.NoError(t, err)
 
 			literalVecExpr := findFirstLiteralVecExpr(query)
@@ -352,7 +354,7 @@ func TestOptimizerDoesNotTreatSerializedProvenanceAsFilterValue(t *testing.T) {
 			)
 			require.NoError(t, err)
 
-			query, err := NewBaseOptimizer(NewMockCompilerContext(true)).Optimize(stmt, false)
+			query, err := NewBaseOptimizer(NewMockCompilerContext(true, newPlanTestProcess(t))).Optimize(stmt, false)
 			require.NoError(t, err)
 
 			seenScan := false
@@ -498,7 +500,7 @@ func TestConstantListFoldPreservesPerItemStringProvenance(t *testing.T) {
 }
 
 func TestConstantFoldPreservesExplicitCastSource(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	stmt, err := mysql.ParseOne(t.Context(), "select cast('x' as char)", 1)
 	require.NoError(t, err)
 	pl, err := BuildPlan(ctx, stmt, false)
@@ -587,7 +589,7 @@ func TestConstantFoldPreservesSelectedStringDomain(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			ctx := NewMockCompilerContext(true)
+			ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 			stmt, err := mysql.ParseOne(t.Context(), test.sql, 1)
 			require.NoError(t, err)
 			pl, err := BuildPlan(ctx, stmt, false)
@@ -633,7 +635,7 @@ func TestConstantFoldPreservesSelectedStringDomain(t *testing.T) {
 }
 
 func TestConstantFoldDynamicIPFunctionLosesFunctionNode(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	stmt, err := mysql.ParseOne(t.Context(), "select inet_ntoa('1.6')", 1)
 	require.NoError(t, err)
 	defer stmt.Free()
@@ -685,4 +687,88 @@ func findFirstLiteralVecExpr(query *planpb.Query) *planpb.Expr {
 		}
 	}
 	return found
+}
+
+func TestConstantFoldDefersGuardedKernelFailure(t *testing.T) {
+	for _, selector := range []struct {
+		name     string
+		constant bool
+	}{{"case", false}, {"case", true}, {"if", false}, {"coalesce", false}} {
+		name := selector.name
+		for _, public := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/constant=%t/public=%t", name, selector.constant, public), func(t *testing.T) {
+				proc := testutil.NewProcess(t)
+				t.Cleanup(func() {
+					defer proc.Free()
+					require.Equal(t, [2]int64{}, [2]int64{proc.Mp().CurrNB(), proc.Mp().OnHeapCurrNB()})
+				})
+				bind := func(name string, args ...*planpb.Expr) *planpb.Expr {
+					expr, err := BindFuncExprImplByPlanExpr(proc.Ctx, name, args)
+					require.NoError(t, err)
+					return expr
+				}
+				bad := bind("round", MakePlan2Int64ConstExprWithType(5000000000000000000), MakePlan2Int64ConstExprWithType(-19))
+				safe := bind("abs", MakePlan2Int64ConstExprWithType(-7))
+				input := batch.NewWithSize(1)
+				input.SetRowCount(1)
+				conditionType := types.T_bool
+				input.Vecs[0] = testutil.MakeBoolVector([]bool{false}, nil, proc.Mp())
+				if name == "coalesce" {
+					input.Vecs[0].Free(proc.Mp())
+					conditionType = types.T_int64
+					input.Vecs[0] = testutil.MakeInt64Vector([]int64{7}, nil, proc.Mp())
+				}
+				t.Cleanup(func() { input.Clean(proc.Mp()) })
+				condition := &planpb.Expr{Typ: planpb.Type{Id: int32(conditionType)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
+				if selector.constant {
+					condition = makePlan2BoolConstExprWithType(false)
+				}
+				expr := bind(name, condition, bad, safe)
+				var folded *planpb.Expr
+				if public {
+					var err error
+					folded, err = ConstantFold(batch.EmptyForConstFoldBatch, expr, proc, false, true)
+					require.NoError(t, err)
+				} else {
+					node := &planpb.Node{ProjectList: []*planpb.Expr{expr}}
+					rule.NewConstantFold(false).Apply(node, nil, proc)
+					folded = node.ProjectList[0]
+				}
+				require.NotNil(t, folded.GetF())
+				require.NotNil(t, folded.GetF().Args[1].GetF())
+				fid, _ := function.DecodeOverloadID(folded.GetF().Args[1].GetF().Func.Obj)
+				require.Equal(t, int32(function.ROUND), fid, "retain the failing subtree")
+				require.Equal(t, int64(7), folded.GetF().Args[2].GetLit().GetI64Val(), "safe sibling still folds")
+				baseline := [2]int64{proc.Mp().CurrNB(), proc.Mp().OnHeapCurrNB()}
+				func() {
+					result, free, err := colexec.GetReadonlyResultFromExpression(proc, folded, []*batch.Batch{input})
+					require.NoError(t, err)
+					defer free()
+					require.Equal(t, int64(7), vector.MustFixedColNoTypeCheck[int64](result)[0])
+				}()
+				require.Equal(t, baseline, [2]int64{proc.Mp().CurrNB(), proc.Mp().OnHeapCurrNB()})
+				if selector.constant {
+					folded.GetF().Args[0].GetLit().Value.(*planpb.Literal_Bval).Bval = true
+				} else if name == "coalesce" {
+					input.Vecs[0].GetNulls().Add(0)
+				} else {
+					vector.MustFixedColNoTypeCheck[bool](input.Vecs[0])[0] = true
+				}
+				baseline = [2]int64{proc.Mp().CurrNB(), proc.Mp().OnHeapCurrNB()}
+				var escaped any
+				func() {
+					defer func() { escaped = recover() }()
+					_, free, err := colexec.GetReadonlyResultFromExpression(proc, folded, []*batch.Batch{input})
+					if free != nil {
+						defer free()
+					}
+					require.NoError(t, err)
+				}()
+				panicErr, ok := escaped.(error)
+				require.True(t, ok, "selected ROUND must still fail")
+				require.True(t, moerr.IsMoErrCode(panicErr, moerr.ErrOutOfRange))
+				require.Equal(t, baseline, [2]int64{proc.Mp().CurrNB(), proc.Mp().OnHeapCurrNB()})
+			})
+		}
+	}
 }

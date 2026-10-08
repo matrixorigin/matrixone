@@ -375,7 +375,7 @@ func TestStCentroidResultNullTemplateModes(t *testing.T) {
 	run := func(t *testing.T, input FunctionTestInput, expected FunctionTestResult, selectList *FunctionSelectList) {
 		t.Helper()
 		tc := NewFunctionTestCase(proc, []FunctionTestInput{input}, expected, StCentroid).WithSelectList(selectList)
-		ok, info := tc.Run()
+		ok, info := tc.RunAndFree()
 		require.True(t, ok, info)
 	}
 	run(t, NewFunctionTestInput(types.T_geometry.ToType(), []string{}, nil), NewFunctionTestResult(types.T_geometry.ToType(), false, []string{}, nil), nil)

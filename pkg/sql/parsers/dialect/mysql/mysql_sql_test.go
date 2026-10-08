@@ -4886,10 +4886,10 @@ var (
 			output: "alter table t1 algorithm = COPY",
 		}, {
 			input:  "alter table t1 default CHARACTER SET = a COLLATE = b",
-			output: "alter table t1 charset = a",
+			output: "alter table t1 charset = a collate = b",
 		}, {
 			input:  "alter table t1 CONVERT TO CHARACTER SET a COLLATE b",
-			output: "alter table t1 charset = a",
+			output: "alter table t1 charset = a collate = b",
 		}, {
 			input:  "alter table t1 DISABLE KEYS",
 			output: "alter table t1 charset = DISABLE",

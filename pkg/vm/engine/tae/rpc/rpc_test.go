@@ -290,7 +290,6 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 		roleId:    0,
 	}
 	//var entries []*api.Entry
-	entries := make([]*api.Entry, 0)
 	txn := mock1PCTxn(handle.db)
 	dbTestID := IDAlloc.NextDB()
 	createDbEntries, err := makeCreateDatabaseEntries(
@@ -300,7 +299,6 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 		dbTestID,
 		handle.m)
 	assert.Nil(t, err)
-	entries = append(entries, createDbEntries...)
 	//create table from "dbtest"
 	defs, err := catalog.SchemaToDefs(schema)
 	for i := 0; i < len(defs); i++ {
@@ -336,6 +334,8 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 		defs,
 	)
 	assert.Nil(t, err)
+	entries := make([]*api.Entry, 0, len(createDbEntries)+len(createTbEntries)+len(objNames))
+	entries = append(entries, createDbEntries...)
 	entries = append(entries, createTbEntries...)
 
 	//add 100 * 50 blocks from S3 into "tbtest" table
