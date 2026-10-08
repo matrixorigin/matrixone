@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -83,7 +84,7 @@ func (r *issue27261BlockingRelation) BuildReaders(
 	_ *plan.Expr,
 	_ engine.RelData,
 	_ int,
-	_ int,
+	_ client.WorkspaceReadView,
 	_ bool,
 	_ engine.TombstoneApplyPolicy,
 	_ engine.FilterHint,
@@ -264,7 +265,7 @@ func TestParallelReaderBuildPreservesQueryCancellation(t *testing.T) {
 	scope := &Scope{
 		Proc:     rootProc.NewContextChildProc(0),
 		RootOp:   conn,
-		NodeInfo: engine.Node{Mcpu: 2},
+		NodeInfo: engine.Node{Mcpu: 2, CNCNT: 1},
 		DataSource: &Source{
 			Rel: relation,
 		},

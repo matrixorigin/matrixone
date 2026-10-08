@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	txnpb "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -89,7 +90,7 @@ func TestTxnTableDelegateRejectsDelegatedSnapshotReads(t *testing.T) {
 		t.Fatal("delegated snapshot must not enumerate the origin relation")
 		return nil
 	}), "delegated snapshot")
-	_, err = table.HasSnapshotTombstones(context.Background(), 0, types.TS{})
+	_, err = table.HasSnapshotTombstones(context.Background(), client.NoWorkspaceReadView(), types.TS{})
 	require.ErrorContains(t, err, "delegated snapshot")
 
 	table.shard.policy = shard.Policy_Partition
@@ -156,11 +157,12 @@ func TestTxnTableDelegate_Delete(t *testing.T) {
 
 func TestNonlocalStatsRejectLocalWorkspaceBound(t *testing.T) {
 	txn := newTransactionWithActivePKTableForTest(t, "pk")
-	origin := txn.tableOps.existAndActive(genTableKey(1, "tbl", 7, "db"))
+	origin := txn.workspace.activeTable(genTableKey(1, "tbl", 7, "db"))
 	tbl := &txnTableDelegate{origin: origin, isLocal: func() (bool, error) { return false, nil }}
 	bat := batch.NewWithSize(0)
 	bat.SetRowCount(5)
-	txn.writes = []Entry{{typ: INSERT, databaseId: 7, tableId: 42, bat: bat}}
+	txn.appendWorkspaceEntryLocked(Entry{typ: INSERT, accountId: 1, databaseId: 7, tableId: 42, bat: bat})
+	t.Cleanup(func() { closeWorkspaceForTest(t, txn) })
 	stats, err := tbl.Stats(context.Background(), false)
 	require.NoError(t, err)
 	require.Equal(t, float64(^uint64(0)), stats.TableCnt,
@@ -203,7 +205,7 @@ func TestRemoteStatsPreserveByteWidth(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			txn := newTransactionWithActivePKTableForTest(t, "pk")
-			origin := txn.tableOps.existAndActive(genTableKey(1, "tbl", 7, "db"))
+			origin := txn.workspace.activeTable(genTableKey(1, "tbl", 7, "db"))
 			op := txn.op.(*mock_frontend.MockTxnOperator)
 			op.EXPECT().Snapshot().Return(txnpb.CNTxnSnapshot{}, nil).AnyTimes()
 			op.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()

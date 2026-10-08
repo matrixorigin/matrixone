@@ -28,18 +28,29 @@ import (
 // Transaction workspace writes intentionally fail closed: they are visible to
 // the query but cannot have reached ISCP yet.
 func (tbl *txnTable) SourceCommitTS(ctx context.Context, mustExceed types.TS) (types.TS, error) {
-	// The workspace write list is guarded by the transaction mutex and re-sliced
-	// in place by concurrent dumps/compactions; read it under the lock.
 	txn := tbl.getTxn()
-	txn.Lock()
+	view := txn.workspace.currentReadView()
+	entries, err := txn.workspace.tableEntries(view, tbl.accountId, tbl.db.databaseId, tbl.tableId)
+	if err != nil {
+		return types.TS{}, err
+	}
+	defer entries.Close()
 	hasLocalWrite := false
-	for _, entry := range txn.writes {
-		if entry.tableId == tbl.tableId && entry.bat != nil && entry.bat.RowCount() > 0 {
+	for _, entry := range entries.entries {
+		if entry.visibleRowCount() > 0 {
 			hasLocalWrite = true
 			break
 		}
 	}
-	txn.Unlock()
+	if !hasLocalWrite {
+		objectDeletes, err := txn.workspace.tableObjectDeleteCount(
+			view, tbl.accountId, tbl.db.databaseId, tbl.tableId,
+		)
+		if err != nil {
+			return types.TS{}, err
+		}
+		hasLocalWrite = objectDeletes > 0
+	}
 	if hasLocalWrite {
 		return types.TS{}, moerr.NewInternalErrorNoCtx("source commit ts is unavailable with transaction-local writes")
 	}

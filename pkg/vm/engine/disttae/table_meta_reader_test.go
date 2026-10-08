@@ -86,17 +86,18 @@ func TestTableMetaReaderRecordsCloneObjectOwnership(t *testing.T) {
 
 func TestNewImmutableTableMetaReader(t *testing.T) {
 	tbl := newTxnTableForTest()
-	tbl.getTxn().proc = testutil.NewProcess(t)
-	tbl.getTxn().BindTxnOp(tbl.db.op)
-	tbl.getTxn().tableOps = newTableOps()
-	tbl.getTxn().tableOps.addCreatedInTxn(tbl.tableId, 0)
-	tbl.getTxn().engine.partitions = make(map[[2]uint64]*logtailreplay.Partition)
-	tbl.getTxn().engine.cloneTxnCache = newCloneTxnCache()
-	tbl.getTxn().SetCloneTxn(1)
+	txn := tbl.getTxn()
+	txn.proc = testutil.NewProcess(t)
+	txn.workspace = newTxnWorkspace()
+	txn.BindTxnOp(tbl.db.op)
+	require.NoError(t, txn.workspace.addCreatedTable(tbl.tableId))
+	txn.engine.partitions = make(map[[2]uint64]*logtailreplay.Partition)
+	txn.engine.cloneTxnCache = newCloneTxnCache()
+	txn.SetCloneTxn(1)
+	defer closeWorkspaceForTest(t, txn)
 	stats := mockStatsList(t, 1)
-	statsBat := cloneObjectStatsBatchForTest(t, tbl.getTxn().proc.Mp(), stats...)
-	defer statsBat.Clean(tbl.getTxn().proc.Mp())
-	tbl.getTxn().writes = append(tbl.getTxn().writes, Entry{
+	statsBat := cloneObjectStatsBatchForTest(t, txn.proc.Mp(), stats...)
+	txn.appendWorkspaceEntryLocked(Entry{
 		typ: INSERT, databaseId: tbl.db.databaseId, tableId: tbl.tableId,
 		fileName: stats[0].ObjectName().String(), bat: statsBat,
 	})
@@ -139,9 +140,8 @@ func TestNewImmutableTableMetaReader(t *testing.T) {
 
 	appendableStats := mockStatsList(t, 1)
 	objectio.WithAppendable()(&appendableStats[0])
-	appendableBat := cloneObjectStatsBatchForTest(t, tbl.getTxn().proc.Mp(), appendableStats...)
-	defer appendableBat.Clean(tbl.getTxn().proc.Mp())
-	tbl.getTxn().writes = append(tbl.getTxn().writes, Entry{
+	appendableBat := cloneObjectStatsBatchForTest(t, txn.proc.Mp(), appendableStats...)
+	txn.appendWorkspaceEntryLocked(Entry{
 		typ: INSERT, databaseId: tbl.db.databaseId, tableId: tbl.tableId,
 		fileName: appendableStats[0].ObjectName().String(), bat: appendableBat,
 	})
@@ -158,9 +158,9 @@ func TestImmutableTableMetaReaderDoesNotRetainCloneFilesAcrossStatements(t *test
 	tbl := newTxnTableForTest()
 	txn := tbl.getTxn()
 	txn.proc = testutil.NewProcess(t)
+	txn.workspace = newTxnWorkspace()
 	txn.BindTxnOp(tbl.db.op)
-	txn.tableOps = newTableOps()
-	txn.tableOps.addCreatedInTxn(tbl.tableId, 0)
+	require.NoError(t, txn.workspace.addCreatedTable(tbl.tableId))
 	txn.engine.partitions = make(map[[2]uint64]*logtailreplay.Partition)
 	txn.engine.cloneTxnCache = newCloneTxnCache()
 	txn.SetCloneTxn(1)
@@ -172,10 +172,10 @@ func TestImmutableTableMetaReaderDoesNotRetainCloneFilesAcrossStatements(t *test
 
 	stats := mockStatsList(t, 2)
 	mp := mpool.MustNewZero()
+	defer closeWorkspaceForTest(t, txn)
 	for statement := range stats {
 		statsBat := cloneObjectStatsBatchForTest(t, txn.proc.Mp(), stats[statement])
-		defer statsBat.Clean(txn.proc.Mp())
-		txn.writes = append(txn.writes, Entry{
+		txn.appendWorkspaceEntryLocked(Entry{
 			typ: INSERT, databaseId: tbl.db.databaseId, tableId: tbl.tableId,
 			fileName: stats[statement].ObjectName().String(), bat: statsBat,
 		})
@@ -210,7 +210,8 @@ func TestProtectCloneFilesDistinguishesExistingOwnership(t *testing.T) {
 	mp := mpool.MustNewZero()
 	bat := cloneObjectStatsBatchForTest(t, mp, stats[1])
 	defer bat.Clean(mp)
-	txn.writes = append(txn.writes, Entry{typ: INSERT, fileName: "load-meta", bat: bat})
+	txn.workspace = newTxnWorkspace()
+	txn.workspace.append(Entry{typ: INSERT, fileName: "load-meta", bat: bat})
 
 	txn.ProtectCloneFiles(stats[0].ObjectName().String(), stats[1].ObjectName().String())
 	txnID := txn.op.Txn().ID
@@ -224,8 +225,9 @@ func TestTrackLoadFilesDeletesOnlyRolledBackGeneration(t *testing.T) {
 	txnOp, closeFn := client.NewTestTxnOperator(ctx)
 	defer closeFn()
 	txn := &Transaction{
-		engine: &Engine{cloneTxnCache: newCloneTxnCache(), fs: fs},
-		op:     txnOp,
+		engine:    &Engine{cloneTxnCache: newCloneTxnCache(), fs: fs},
+		op:        txnOp,
+		workspace: newTxnWorkspace(),
 	}
 	txnOp.AddWorkspace(txn)
 	txn.SetCloneTxn(1)
@@ -234,15 +236,16 @@ func TestTrackLoadFilesDeletesOnlyRolledBackGeneration(t *testing.T) {
 	second := mockStatsList(t, 1)[0].ObjectName().String()
 	require.NoError(t, writeObjectToFS(ctx, fs, first))
 	require.NoError(t, writeObjectToFS(ctx, fs, second))
-	txn.statementID = 1
 	txn.TrackLoadFiles(first)
-	txn.statementID = 2
+	txn.workspace.advanceStatement()
 	txn.TrackLoadFiles(second)
 	require.True(t, txn.engine.cloneTxnCache.IsSharedFile(txnOp.Txn().ID, first))
 	require.True(t, txn.engine.cloneTxnCache.IsSharedFile(txnOp.Txn().ID, second))
 
-	statementID := 2
-	deleted, err := txn.deleteLoadFiles(ctx, &statementID)
+	rolledBack, err := txn.workspace.rollbackCurrentAttempt()
+	require.NoError(t, err)
+	defer rolledBack.Close()
+	deleted, err := txn.deleteLoadFiles(ctx, rolledBack.loadFiles)
 	txn.Lock()
 	txn.removeLoadFileProtectionsLocked(deleted)
 	txn.Unlock()
@@ -254,7 +257,7 @@ func TestTrackLoadFilesDeletesOnlyRolledBackGeneration(t *testing.T) {
 	require.False(t, txn.engine.cloneTxnCache.IsSharedFile(txnOp.Txn().ID, second))
 	require.True(t, txn.engine.cloneTxnCache.IsSharedFile(txnOp.Txn().ID, first))
 
-	deleted, err = txn.deleteLoadFiles(ctx, nil)
+	deleted, err = txn.deleteLoadFiles(ctx, txn.workspace.allLoadFiles())
 	txn.Lock()
 	txn.removeLoadFileProtectionsLocked(deleted)
 	txn.Unlock()
@@ -284,10 +287,14 @@ func TestLoadFileCleanupFailureDoesNotAbortTransactionTeardown(t *testing.T) {
 			}
 			txnOp, closeFn := client.NewTestTxnOperator(ctx)
 			defer closeFn()
+			proc := testutil.NewProc(t)
+			t.Cleanup(proc.Free)
 			colexec.NewServer("")
 			txn := &Transaction{
 				engine:             &Engine{cloneTxnCache: newCloneTxnCache(), fs: fs},
 				op:                 txnOp,
+				proc:               proc,
+				workspace:          newTxnWorkspace(),
 				loadCleanupTimeout: tc.timeout,
 			}
 			txnOp.AddWorkspace(txn)
@@ -337,10 +344,14 @@ func TestLoadFileCleanupRetriesBeforeTransactionTeardown(t *testing.T) {
 	}
 	txnOp, closeFn := client.NewTestTxnOperator(ctx)
 	defer closeFn()
+	proc := testutil.NewProc(t)
+	t.Cleanup(proc.Free)
 	colexec.NewServer("")
 	txn := &Transaction{
 		engine:             &Engine{cloneTxnCache: newCloneTxnCache(), fs: fs},
 		op:                 txnOp,
+		proc:               proc,
+		workspace:          newTxnWorkspace(),
 		loadCleanupTimeout: time.Second,
 	}
 	txnOp.AddWorkspace(txn)
@@ -370,8 +381,9 @@ func TestLoadFileCleanupDoesNotHoldTransactionMutex(t *testing.T) {
 	txnOp, closeFn := client.NewTestTxnOperator(ctx)
 	defer closeFn()
 	txn := &Transaction{
-		engine: &Engine{cloneTxnCache: newCloneTxnCache(), fs: fs},
-		op:     txnOp,
+		engine:    &Engine{cloneTxnCache: newCloneTxnCache(), fs: fs},
+		op:        txnOp,
+		workspace: newTxnWorkspace(),
 	}
 	txnOp.AddWorkspace(txn)
 	txn.SetCloneTxn(1)
@@ -379,7 +391,7 @@ func TestLoadFileCleanupDoesNotHoldTransactionMutex(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := txn.deleteLoadFiles(ctx, nil)
+		_, err := txn.deleteLoadFiles(ctx, txn.workspace.allLoadFiles())
 		done <- err
 	}()
 	<-fs.entered
@@ -413,7 +425,8 @@ func TestCloneTxnIntermediateGCKeepsTxnLocalSharedObjects(t *testing.T) {
 			gcPool:        gcPool,
 			fs:            fs,
 		},
-		op: txnOp,
+		op:        txnOp,
+		workspace: newTxnWorkspace(),
 	}
 	txnOp.AddWorkspace(txn)
 	txn.SetCloneTxn(1)
@@ -432,13 +445,17 @@ func TestCloneTxnIntermediateGCKeepsTxnLocalSharedObjects(t *testing.T) {
 		bat.Clean(mp)
 		require.Zero(t, mp.CurrNB())
 	}()
-	txn.writes = append(txn.writes, Entry{
+	txn.workspace = newTxnWorkspace()
+	txn.workspace.append(Entry{
 		typ:      INSERT,
 		fileName: "clone-meta",
 		bat:      bat,
 	})
 
-	require.NoError(t, txn.GCObjsByIdxRange(0, 0))
+	entries, err := txn.workspace.commitEntries()
+	require.NoError(t, err)
+	require.NoError(t, txn.gcWorkspaceEntries(entries.entries, cloneGCIntermediate))
+	entries.Close()
 	require.True(t, objectExistsInFS(ctx, fs, committedSourceName))
 	require.True(t, objectExistsInFS(ctx, fs, txnLocalName))
 }
@@ -460,7 +477,8 @@ func TestCloneTxnRollbackGCDeletesTxnLocalSharedObjects(t *testing.T) {
 			gcPool:        gcPool,
 			fs:            fs,
 		},
-		op: txnOp,
+		op:        txnOp,
+		workspace: newTxnWorkspace(),
 	}
 	txnOp.AddWorkspace(txn)
 	txn.SetCloneTxn(1)
@@ -479,13 +497,16 @@ func TestCloneTxnRollbackGCDeletesTxnLocalSharedObjects(t *testing.T) {
 		bat.Clean(mp)
 		require.Zero(t, mp.CurrNB())
 	}()
-	txn.writes = append(txn.writes, Entry{
+	txn.workspace.append(Entry{
 		typ:      INSERT,
 		fileName: "clone-meta",
 		bat:      bat,
 	})
 
-	require.NoError(t, txn.gcObjsByIdxRange(0, 0, cloneGCTxnRollback))
+	entries, err := txn.workspace.commitEntries()
+	require.NoError(t, err)
+	require.NoError(t, txn.gcWorkspaceEntries(entries.entries, cloneGCTxnRollback))
+	entries.Close()
 	require.Eventually(t, func() bool {
 		return objectExistsInFS(ctx, fs, committedSourceName) &&
 			!objectExistsInFS(ctx, fs, txnLocalName)
@@ -509,7 +530,8 @@ func TestCloneTxnCompactionGCDeletesUnreferencedTxnLocalSharedObject(t *testing.
 			gcPool:        gcPool,
 			fs:            fs,
 		},
-		op: txnOp,
+		op:        txnOp,
+		workspace: newTxnWorkspace(),
 	}
 	txnOp.AddWorkspace(txn)
 	txn.SetCloneTxn(1)
@@ -519,18 +541,7 @@ func TestCloneTxnCompactionGCDeletesUnreferencedTxnLocalSharedObject(t *testing.
 	require.NoError(t, writeObjectToFS(ctx, fs, name))
 	txn.engine.cloneTxnCache.AddTxnLocalSharedFile(txn.op.Txn().ID, name)
 
-	mp := mpool.MustNewZero()
-	bat := cloneObjectStatsBatchForTest(t, mp, stats...)
-	txn.writes = append(txn.writes, Entry{
-		typ:      INSERT,
-		fileName: name,
-		bat:      bat,
-	})
-	txn.writes[0].bat.Clean(mp)
-	txn.writes[0].bat = nil
-	require.Zero(t, mp.CurrNB())
-
-	txn.unprotectUnreferencedTxnLocalSharedFilesLocked(stats, nil)
+	require.NoError(t, txn.unprotectUnreferencedTxnLocalSharedFilesLocked(stats, nil))
 	require.False(t, txn.engine.cloneTxnCache.IsTxnLocalSharedFile(txn.op.Txn().ID, name))
 	require.NoError(t, txn.GCObjsByStats(stats...))
 	require.Eventually(t, func() bool {
@@ -555,7 +566,8 @@ func TestCloneTxnCompactionGCKeepsLiveTxnLocalSharedObject(t *testing.T) {
 			gcPool:        gcPool,
 			fs:            fs,
 		},
-		op: txnOp,
+		op:        txnOp,
+		workspace: newTxnWorkspace(),
 	}
 	txnOp.AddWorkspace(txn)
 	txn.SetCloneTxn(1)
@@ -568,16 +580,16 @@ func TestCloneTxnCompactionGCKeepsLiveTxnLocalSharedObject(t *testing.T) {
 	mp := mpool.MustNewZero()
 	liveBat := cloneObjectStatsBatchForTest(t, mp, stats...)
 	defer func() {
-		liveBat.Clean(mp)
+		require.NoError(t, txn.workspace.close(mp))
 		require.Zero(t, mp.CurrNB())
 	}()
-	txn.writes = append(txn.writes, Entry{
+	txn.workspace.append(Entry{
 		typ:      INSERT,
 		fileName: name,
 		bat:      liveBat,
 	})
 
-	txn.unprotectUnreferencedTxnLocalSharedFilesLocked(stats, nil)
+	require.NoError(t, txn.unprotectUnreferencedTxnLocalSharedFilesLocked(stats, nil))
 	require.True(t, txn.engine.cloneTxnCache.IsTxnLocalSharedFile(txn.op.Txn().ID, name))
 	require.NoError(t, txn.GCObjsByStats(stats...))
 	require.True(t, objectExistsInFS(ctx, fs, name))
@@ -602,13 +614,12 @@ func TestCloneTxnTablesInVainGCDeletesUnreferencedTxnLocalSharedObject(t *testin
 			gcPool:        gcPool,
 			fs:            fs,
 		},
-		op:              txnOp,
-		tablesInVain:    map[uint64]int{42: 1},
-		deletedBlocks:   &deletedBlocks{offsets: map[types.Blockid][]int64{}},
-		batchSelectList: make(map[*batch.Batch][]int64),
+		op:        txnOp,
+		workspace: newTxnWorkspace(),
 	}
 	txnOp.AddWorkspace(txn)
 	txn.SetCloneTxn(1)
+	require.NoError(t, txn.workspace.markTableDropped(0, 0, 42))
 
 	stats := mockStatsList(t, 1)
 	name := stats[0].ObjectName().String()
@@ -623,7 +634,7 @@ func TestCloneTxnTablesInVainGCDeletesUnreferencedTxnLocalSharedObject(t *testin
 	})
 
 	require.NoError(t, txn.mergeTxnWorkspaceLocked(ctx))
-	require.Nil(t, txn.writes[0].bat)
+	require.Zero(t, txn.workspace.activeMutationCount())
 	require.False(t, txn.engine.cloneTxnCache.IsTxnLocalSharedFile(txn.op.Txn().ID, name))
 	require.Eventually(t, func() bool {
 		return !objectExistsInFS(ctx, fs, name)
@@ -649,13 +660,12 @@ func TestCloneTxnTablesInVainGCKeepsLiveTxnLocalSharedObject(t *testing.T) {
 			gcPool:        gcPool,
 			fs:            fs,
 		},
-		op:              txnOp,
-		tablesInVain:    map[uint64]int{42: 1},
-		deletedBlocks:   &deletedBlocks{offsets: map[types.Blockid][]int64{}},
-		batchSelectList: make(map[*batch.Batch][]int64),
+		op:        txnOp,
+		workspace: newTxnWorkspace(),
 	}
 	txnOp.AddWorkspace(txn)
 	txn.SetCloneTxn(1)
+	require.NoError(t, txn.workspace.markTableDropped(0, 0, 42))
 
 	stats := mockStatsList(t, 1)
 	name := stats[0].ObjectName().String()
@@ -677,12 +687,14 @@ func TestCloneTxnTablesInVainGCKeepsLiveTxnLocalSharedObject(t *testing.T) {
 	})
 
 	require.NoError(t, txn.mergeTxnWorkspaceLocked(ctx))
-	require.Nil(t, txn.writes[0].bat)
-	require.NotNil(t, txn.writes[1].bat)
+	entries := workspaceEntriesForTest(t, txn)
+	require.Len(t, entries, 1)
+	require.Equal(t, uint64(43), entries[0].tableId)
+	require.NotNil(t, entries[0].bat)
 	require.True(t, txn.engine.cloneTxnCache.IsTxnLocalSharedFile(txn.op.Txn().ID, name))
 	require.True(t, objectExistsInFS(ctx, fs, name))
 
-	txn.releaseWorkspaceEntryBatchLocked(1)
+	retireWorkspaceMutationForTest(t, txn, 0)
 }
 
 func TestCloneTxnUnknownCommitReleasesLocalStateWithoutObjectGC(t *testing.T) {
@@ -705,10 +717,8 @@ func TestCloneTxnUnknownCommitReleasesLocalStateWithoutObjectGC(t *testing.T) {
 			gcPool:        gcPool,
 			fs:            fs,
 		},
-		op:              txnOp,
-		tablesInVain:    make(map[uint64]int),
-		deletedBlocks:   &deletedBlocks{offsets: map[types.Blockid][]int64{}},
-		batchSelectList: make(map[*batch.Batch][]int64),
+		op:        txnOp,
+		workspace: newTxnWorkspace(),
 	}
 	txnOp.AddWorkspace(txn)
 	txn.SetCloneTxn(1)
@@ -726,8 +736,7 @@ func TestCloneTxnUnknownCommitReleasesLocalStateWithoutObjectGC(t *testing.T) {
 
 	txn.FinalizeCommitWithUnknownResult(ctx)
 	require.True(t, txn.removed)
-	require.NotNil(t, txn.writes[0].bat)
-	require.Empty(t, txn.writes[0].bat.Vecs)
+	require.Zero(t, txn.workspace.activeMutationCount())
 	require.False(t, txn.engine.cloneTxnCache.IsTxnLocalSharedFile(txn.op.Txn().ID, name))
 	require.True(t, objectExistsInFS(ctx, fs, name))
 }

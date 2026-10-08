@@ -57,12 +57,12 @@ func (apply *Apply) Prepare(proc *process.Process) (err error) {
 			apply.Source = apply.TableFunction
 		} else if apply.VectorIndexScan != nil {
 			source := NewVectorSource(apply.VectorIndexScan, apply.VectorAttrs, apply.Typs).(*vectorSource)
-			source.txnOffset = apply.TxnOffset
+			source.txnReadView = apply.TxnReadView
 			apply.Source = source
 		}
 	}
 	if source, ok := apply.Source.(*vectorSource); ok {
-		source.txnOffset = apply.TxnOffset
+		source.txnReadView = apply.TxnReadView
 	}
 	if apply.Source == nil {
 		return moerr.NewInvalidState(proc.Ctx, "apply operator missing parameterized source")

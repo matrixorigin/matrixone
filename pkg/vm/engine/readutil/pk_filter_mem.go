@@ -70,6 +70,48 @@ func (f *MemPKFilter) Keys() [][]byte {
 	return f.packed
 }
 
+// PointKeys returns the complete finite set of encoded primary keys selected
+// by this filter. The boolean is false when the predicate also admits keys
+// outside that set, such as prefix or range predicates. Callers may therefore
+// use the returned keys for an index-only lookup without introducing false
+// negatives.
+func (f MemPKFilter) PointKeys() ([][]byte, bool) {
+	if !f.isValid {
+		return nil, false
+	}
+	if len(f.disjuncts) == 0 {
+		switch f.op {
+		case function.EQUAL:
+			if len(f.packed) != 1 {
+				return nil, false
+			}
+			return f.packed, true
+		case function.IN:
+			return f.packed, true
+		default:
+			return nil, false
+		}
+	}
+
+	keys := make([][]byte, 0)
+	seen := make(map[string]struct{})
+	for idx := range f.disjuncts {
+		disjunctKeys, ok := f.disjuncts[idx].PointKeys()
+		if !ok {
+			return nil, false
+		}
+		for _, key := range disjunctKeys {
+			encoded := string(key)
+			if _, exists := seen[encoded]; exists {
+				continue
+			}
+			seen[encoded] = struct{}{}
+			keys = append(keys, key)
+		}
+	}
+	return keys, true
+}
+
 func (f *MemPKFilter) Specs() []MemPKFilterSpec {
 	if !f.isValid {
 		return nil

@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/substrait"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -68,7 +69,7 @@ func (c *Compile) compileEmbeddedSiriusRead(ctx context.Context, queryPlan *plan
 		// Query.Run invokes this producer after successful native admission.
 		spec := siriusReaderSpec{
 			parent: c.proc, e: c.e, addr: c.addr, db: c.db, sql: c.sql,
-			tenant: c.tenant, uid: c.uid, txnOffset: c.TxnOffset,
+			tenant: c.tenant, uid: c.uid, txnReadView: c.TxnReadView,
 			ncpu: max(1, c.ncpu), node: plan2.DeepCopyNode(queryPlan.GetQuery().Nodes[read.NodeID]),
 			columns: columns,
 		}
@@ -114,7 +115,8 @@ type siriusReaderSpec struct {
 	parent                     *process.Process
 	e                          engine.Engine
 	addr, db, sql, tenant, uid string
-	txnOffset, ncpu            int
+	txnReadView                client.WorkspaceReadView
+	ncpu                       int
 	node                       *planpb.Node
 	columns                    []SiriusReadColumn
 }
@@ -128,7 +130,7 @@ func (s siriusReaderSpec) run(ctx context.Context, input SiriusInput) (err error
 	defer c.Release()
 	defer c.FreeOperator()
 	c.e, c.addr, c.db, c.sql, c.tenant, c.uid = s.e, s.addr, s.db, s.sql, s.tenant, s.uid
-	c.TxnOffset, c.ncpu, c.disableRetry = s.txnOffset, s.ncpu, true
+	c.TxnReadView, c.ncpu, c.disableRetry = s.txnReadView, s.ncpu, true
 	c.lockMeta = NewLockMeta()
 	proc.SetMessageBoard(c.MessageBoard)
 	c.planSnapshotTS, c.hasPlanSnapshotTS = proc.GetPlanSnapshotTS()

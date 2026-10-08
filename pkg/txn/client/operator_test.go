@@ -176,7 +176,6 @@ type trackingWorkspace struct {
 	finalizeCount   int
 	unknownCount    int
 	haveDDL         bool
-	snapshotOffset  int
 	sqlCount        uint64
 	boundTxn        TxnOperator
 	cloneSnapshotTS int64
@@ -245,19 +244,19 @@ func (w *trackingWorkspace) RollbackLastStatement(context.Context) error {
 	return nil
 }
 
-func (w *trackingWorkspace) UpdateSnapshotWriteOffset() {
-	w.snapshotOffset = len(w.commitRequests)
+func (w *trackingWorkspace) PublishReadView() WorkspaceReadView {
+	return NewWorkspaceReadView(1, 1, uint64(len(w.commitRequests)))
 }
 
-func (w *trackingWorkspace) GetSnapshotWriteOffset() int {
-	return w.snapshotOffset
+func (w *trackingWorkspace) CurrentReadView() WorkspaceReadView {
+	return NewWorkspaceReadView(1, 1, uint64(len(w.commitRequests)))
 }
 
-func (w *trackingWorkspace) WriteOffset() uint64 {
-	return uint64(len(w.commitRequests))
+func (w *trackingWorkspace) BeginWriteAttempt() WorkspaceWriteMark {
+	return NewWorkspaceWriteMark(1, 1, 1, uint64(len(w.commitRequests)), 1)
 }
 
-func (w *trackingWorkspace) Adjust(uint64) error {
+func (w *trackingWorkspace) Adjust(WorkspaceWriteMark) error {
 	return nil
 }
 

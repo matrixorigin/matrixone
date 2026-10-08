@@ -27,6 +27,7 @@ import (
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/stretchr/testify/require"
 	spb "github.com/substrait-io/substrait-protobuf/go/substraitpb"
 	"google.golang.org/protobuf/proto"
@@ -60,7 +61,7 @@ func TestEmbeddedSiriusAdmissionBindsWithoutStartingReaders(t *testing.T) {
 	execution := &siriusExecutionStub{}
 	backend := &embeddedAdmissionRecorder{execution: execution}
 	runtime := &SiriusRuntime{EmbeddedMO: true, Backend: backend, CleanupTimeout: time.Second, RequestTimeout: time.Minute}
-	c := &Compile{proc: proc, e: eng, ncpu: 2, TxnOffset: 3}
+	c := &Compile{proc: proc, e: eng, ncpu: 2, TxnReadView: client.NewWorkspaceReadView(1, 2, 3)}
 	ctx, cancel := context.WithTimeout(defines.AttachAccountId(t.Context(), 7), time.Second)
 	defer cancel()
 	offloaded, err := c.compileEmbeddedSiriusRead(ctx, plan, runtime)

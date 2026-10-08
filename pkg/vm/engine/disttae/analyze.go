@@ -31,6 +31,7 @@ import (
 	pbstats "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	analyzestats "github.com/matrixorigin/matrixone/pkg/statistics/analyze"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -108,9 +109,10 @@ func (tbl *txnTable) AnalyzeTable(
 	if err != nil {
 		return nil, err
 	}
+	readView := tbl.currentWorkspaceReadView()
 	ranges, err := tbl.Ranges(ctx, engine.RangesParam{
 		PreAllocBlocks:     int(min(request.MaxBlocks, uint64(math.MaxInt))),
-		TxnOffset:          0,
+		TxnReadView:        readView,
 		Policy:             engine.Policy_CollectAllData,
 		DontSupportRelData: false,
 	})
@@ -133,10 +135,11 @@ func (tbl *txnTable) AnalyzeTable(
 	}
 	var tombstones engine.Tombstoner
 	if request.FullScan {
-		tombstones, err = tbl.CollectTombstones(ctx, 0, engine.Policy_CollectAllTombstones)
+		tombstones, err = tbl.CollectTombstones(
+			ctx, readView, engine.Policy_CollectAllTombstones)
 	} else {
 		tombstones, err = tbl.collectTombstones(
-			ctx, 0, engine.Policy_CollectAllTombstones, selectedBlocks)
+			ctx, readView, engine.Policy_CollectAllTombstones, selectedBlocks)
 	}
 	if err != nil {
 		return nil, err
@@ -183,7 +186,7 @@ func (tbl *txnTable) AnalyzeTable(
 			states[i].zoneMap = index.NewZM(states[i].typ.Oid, states[i].typ.Scale)
 		}
 		passRows, passBytes, err := tbl.scanAnalyzeColumnGroup(
-			ctx, proc, selectedData, selected, states, request.Seed)
+			ctx, proc, selectedData, selected, states, request.Seed, readView)
 		if err != nil {
 			return nil, err
 		}
@@ -361,6 +364,7 @@ func (tbl *txnTable) scanAnalyzeColumnGroup(
 	selected []analyzeSelectedRange,
 	states []analyzeColumnState,
 	seed [32]byte,
+	readView client.WorkspaceReadView,
 ) (retainedRows, readBytes uint64, err error) {
 	attrs := make([]string, 0, len(states)+1)
 	attrTypes := make([]types.Type, 0, len(states)+1)
@@ -394,7 +398,7 @@ func (tbl *txnTable) scanAnalyzeColumnGroup(
 			nil,
 			selectedData.DataSlice(rangeIndex, rangeIndex+1),
 			1,
-			0,
+			readView,
 			false,
 			engine.Policy_CheckAll,
 			engine.FilterHint{},

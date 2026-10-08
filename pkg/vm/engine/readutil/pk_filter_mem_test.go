@@ -275,6 +275,74 @@ func TestNewMemPKFilter(t *testing.T) {
 	}
 }
 
+func TestMemPKFilterPointKeys(t *testing.T) {
+	key1 := []byte("key-1")
+	key2 := []byte("key-2")
+
+	for _, test := range []struct {
+		name string
+		make func() MemPKFilter
+		want [][]byte
+		ok   bool
+	}{
+		{
+			name: "equal",
+			make: func() MemPKFilter {
+				var filter MemPKFilter
+				filter.SetFullData(function.EQUAL, false, key1)
+				return filter
+			},
+			want: [][]byte{key1}, ok: true,
+		},
+		{
+			name: "in",
+			make: func() MemPKFilter {
+				var filter MemPKFilter
+				filter.SetFullData(function.IN, true, key2, key1)
+				return filter
+			},
+			want: [][]byte{key1, key2}, ok: true,
+		},
+		{
+			name: "point disjunction",
+			make: func() MemPKFilter {
+				var first, second MemPKFilter
+				first.SetFullData(function.EQUAL, false, key1)
+				second.SetFullData(function.IN, true, key1, key2)
+				return MemPKFilter{
+					disjuncts: []MemPKFilter{first, second},
+					isValid:   true,
+				}
+			},
+			want: [][]byte{key1, key2}, ok: true,
+		},
+		{
+			name: "prefix",
+			make: func() MemPKFilter {
+				var filter MemPKFilter
+				filter.SetFullData(function.PREFIX_EQ, false, key1)
+				return filter
+			},
+			ok: false,
+		},
+		{
+			name: "range",
+			make: func() MemPKFilter {
+				var filter MemPKFilter
+				filter.SetFullData(function.BETWEEN, false, key1, key2)
+				return filter
+			},
+			ok: false,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			keys, ok := test.make().PointKeys()
+			require.Equal(t, test.ok, ok)
+			require.Equal(t, test.want, keys)
+		})
+	}
+}
+
 func TestMemPKFilter_FilterVector(t *testing.T) {
 	lb, ub := 10, 20
 

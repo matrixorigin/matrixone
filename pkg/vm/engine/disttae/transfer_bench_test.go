@@ -45,15 +45,15 @@ func BenchmarkWorkspaceTombstoneTransfer(b *testing.B) {
 			proc := &process.Process{Base: &process.BaseProcess{FileService: fs}}
 			bat := batch.NewWithSize(0)
 			bat.SetRowCount(1)
-			txn := &Transaction{proc: proc, op: transferBenchmarkOperator{}, writes: make([]Entry, size)}
-			for i := range txn.writes {
-				txn.writes[i] = Entry{typ: INSERT, tableId: 1000, bat: bat}
+			txn := &Transaction{proc: proc, op: transferBenchmarkOperator{}, workspace: newTxnWorkspace()}
+			for range size {
+				txn.appendWorkspaceEntryLocked(Entry{typ: INSERT, tableId: 1000, bat: bat})
 			}
 			ctx := context.Background()
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				txn.transfer.lastTransferred = types.BuildTS(10, 0)
+				txn.workspace.journal.rc.lastTransferred = types.BuildTS(10, 0)
 				txn.Lock()
 				err := txn.transferTombstones(ctx)
 				txn.Unlock()

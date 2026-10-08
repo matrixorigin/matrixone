@@ -120,7 +120,7 @@ func (r *readerPathCaptureRelation) BuildReaders(
 	_ *plan.Expr,
 	relData engine.RelData,
 	_ int,
-	_ int,
+	_ client.WorkspaceReadView,
 	_ bool,
 	_ engine.TombstoneApplyPolicy,
 	filterHint engine.FilterHint,
@@ -334,6 +334,7 @@ func TestDecodedRemoteScopePreservesReaderContract(t *testing.T) {
 			remoteProc.Ctx = defines.AttachAccountId(remoteProc.Ctx, 99)
 			txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 			txnOperator.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
+			txnOperator.EXPECT().IsSnapOp().Return(false).AnyTimes()
 			remoteProc.Base.TxnOperator = txnOperator
 			decodeCtx := &scopeContext{regs: make(map[*process.WaitRegister]int32)}
 			decodeCtx.root = decodeCtx
@@ -404,6 +405,7 @@ func configureReaderPathTest(t *testing.T, c *Compile, s *Scope) *readerPathCapt
 	if s.IsRemote {
 		txn := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
 		txn.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
+		txn.EXPECT().IsSnapOp().Return(false).AnyTimes()
 		c.proc.Base.TxnOperator = txn
 	}
 	return ranges

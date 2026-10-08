@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/stretchr/testify/require"
@@ -289,9 +290,9 @@ type siriusSpecRelation struct {
 }
 
 func (r *siriusSpecRelation) GetTableDef(context.Context) *planpb.TableDef { return r.definition }
-func (r *siriusSpecRelation) BuildReaders(_ context.Context, _ any, _ *planpb.Expr, _ engine.RelData, count, offset int, _ bool, _ engine.TombstoneApplyPolicy, _ engine.FilterHint) ([]engine.Reader, error) {
-	if count != len(r.readers) || offset != 3 {
-		return nil, errors.New("reader DOP/statement offset changed")
+func (r *siriusSpecRelation) BuildReaders(_ context.Context, _ any, _ *planpb.Expr, _ engine.RelData, count int, readView client.WorkspaceReadView, _ bool, _ engine.TombstoneApplyPolicy, _ engine.FilterHint) ([]engine.Reader, error) {
+	if count != len(r.readers) || readView != client.NewWorkspaceReadView(1, 2, 3) {
+		return nil, errors.New("reader DOP/statement read view changed")
 	}
 	r.buildReadersCalls++
 	return r.readers, nil
@@ -301,6 +302,7 @@ func TestEmbeddedSiriusReaderReusesScanFilterProjectionAndFetch(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	ctrl := gomock.NewController(t)
 	tx := mock_frontend.NewMockTxnOperator(ctrl)
+	tx.EXPECT().IsSnapOp().Return(false).AnyTimes()
 	tx.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 	tx.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 	tx.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
@@ -319,7 +321,7 @@ func TestEmbeddedSiriusReaderReusesScanFilterProjectionAndFetch(t *testing.T) {
 	relation := &siriusSpecRelation{readerPathCaptureRelation: &readerPathCaptureRelation{rangesData: readutil.BuildEmptyRelData()}, definition: definition, readers: []engine.Reader{reader}}
 	db := &readerPathCaptureDatabase{relation: relation}
 	eng := &readerPathCaptureEngine{database: db}
-	spec := siriusReaderSpec{parent: proc, e: eng, addr: "cn:6001", ncpu: 1, txnOffset: 3, node: plan2.DeepCopyNode(node), columns: []SiriusReadColumn{{Type: intType}}}
+	spec := siriusReaderSpec{parent: proc, e: eng, addr: "cn:6001", ncpu: 1, txnReadView: client.NewWorkspaceReadView(1, 2, 3), node: plan2.DeepCopyNode(node), columns: []SiriusReadColumn{{Type: intType}}}
 	recorder := &siriusBatchRecorder{}
 	require.NoError(t, spec.run(t.Context(), recorder))
 	require.Equal(t, uint32(1), recorder.rows)
@@ -336,6 +338,7 @@ func TestEmbeddedSiriusReaderPreservesParallelScanAndCleanup(t *testing.T) {
 			proc := testutil.NewProcess(t)
 			ctrl := gomock.NewController(t)
 			tx := mock_frontend.NewMockTxnOperator(ctrl)
+			tx.EXPECT().IsSnapOp().Return(false).AnyTimes()
 			tx.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 			tx.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 			tx.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
@@ -352,7 +355,7 @@ func TestEmbeddedSiriusReaderPreservesParallelScanAndCleanup(t *testing.T) {
 			}
 			relation := &siriusSpecRelation{readerPathCaptureRelation: &readerPathCaptureRelation{rangesData: readutil.BuildEmptyRelData()}, definition: definition, readers: readers}
 			eng := &readerPathCaptureEngine{database: &readerPathCaptureDatabase{relation: relation}}
-			spec := siriusReaderSpec{parent: proc, e: eng, addr: "cn:6001", ncpu: dop, txnOffset: 3, node: node, columns: []SiriusReadColumn{{Type: intType}}}
+			spec := siriusReaderSpec{parent: proc, e: eng, addr: "cn:6001", ncpu: dop, txnReadView: client.NewWorkspaceReadView(1, 2, 3), node: node, columns: []SiriusReadColumn{{Type: intType}}}
 			var values []int64
 			recorder := &siriusBatchRecorder{onPublish: func(rows uint32, vectors []SiriusInputVector) error {
 				for i := range rows {

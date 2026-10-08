@@ -106,7 +106,7 @@ func TestCatalogReadResultsReleaseBatchOwnership(t *testing.T) {
 				wantCalls:   2,
 				wantErr:     context.Canceled,
 				verify: func(t *testing.T, txn *Transaction) {
-					require.Empty(t, txn.writes, "failed catalog write must not enter the workspace")
+					require.Empty(t, workspaceEntriesForTest(t, txn), "failed catalog write must not enter the workspace")
 				},
 			},
 		}
@@ -163,7 +163,7 @@ func TestCatalogReadResultsReleaseBatchOwnership(t *testing.T) {
 			return newRowIDResult(t, resultMP, types.RandomRowid(), types.RandomRowid()), nil
 		})
 		eng, db, txn, ctx := newResultOwnershipFixture(t, exec, false)
-		txn.databaseOps.addCreateDatabase(genDatabaseKey(1, "db"), 0, db)
+		require.NoError(t, txn.workspace.addDatabaseOp(genDatabaseKey(1, "db"), INSERT, db.databaseId, db))
 
 		require.PanicsWithValue(t, "delete table failed: query failed", func() {
 			_ = eng.Delete(ctx, "db", txn.op)
@@ -237,19 +237,16 @@ func newResultOwnershipFixture(
 		}
 	})
 	txn := &Transaction{
-		proc:        proc,
-		engine:      eng,
-		tableCache:  new(sync.Map),
-		tableOps:    newTableOps(),
-		databaseOps: newDbOps(),
-		tnStores:    []DNStore{{}},
+		proc:       proc,
+		engine:     eng,
+		tableCache: new(sync.Map),
+		workspace:  newTxnWorkspace(),
+		tnStores:   []DNStore{{}},
 	}
 	t.Cleanup(func() {
 		txn.Lock()
 		defer txn.Unlock()
-		for i := range txn.writes {
-			txn.releaseWorkspaceEntryBatchLocked(i)
-		}
+		closeWorkspaceForTest(t, txn)
 	})
 	op := newTxnOperatorForTestWithWorkspace(t, txn)
 	op.EXPECT().IsSnapOp().Return(false).AnyTimes()
@@ -261,9 +258,9 @@ func newResultOwnershipFixture(
 		databaseName: "db",
 	}
 	if withTable {
-		txn.tableOps.addCreateTable(
+		require.NoError(t, txn.workspace.addTableOp(
 			genTableKey(1, "tbl", 7, "db"),
-			0,
+			INSERT, 42,
 			&txnTable{
 				accountId: 1,
 				tableId:   42,
@@ -273,7 +270,7 @@ func newResultOwnershipFixture(
 					{Name: "c", OriginName: "c"},
 				}},
 			},
-		)
+		))
 	}
 	return eng, db, txn, defines.AttachAccountId(context.Background(), 1)
 }
@@ -306,9 +303,10 @@ func requireCatalogDeleteRowIDs(
 	columnRowID types.Rowid,
 ) {
 	t.Helper()
-	require.Len(t, txn.writes, 2)
-	require.Equal(t, uint64(catalog.MO_TABLES_ID), txn.writes[0].tableId)
-	require.Equal(t, tableRowID, vector.GetFixedAtNoTypeCheck[types.Rowid](txn.writes[0].bat.Vecs[0], 0))
-	require.Equal(t, uint64(catalog.MO_COLUMNS_ID), txn.writes[1].tableId)
-	require.Equal(t, columnRowID, vector.GetFixedAtNoTypeCheck[types.Rowid](txn.writes[1].bat.Vecs[0], 0))
+	entries := workspaceEntriesForTest(t, txn)
+	require.Len(t, entries, 2)
+	require.Equal(t, uint64(catalog.MO_TABLES_ID), entries[0].tableId)
+	require.Equal(t, tableRowID, vector.GetFixedAtNoTypeCheck[types.Rowid](entries[0].bat.Vecs[0], 0))
+	require.Equal(t, uint64(catalog.MO_COLUMNS_ID), entries[1].tableId)
+	require.Equal(t, columnRowID, vector.GetFixedAtNoTypeCheck[types.Rowid](entries[1].bat.Vecs[0], 0))
 }

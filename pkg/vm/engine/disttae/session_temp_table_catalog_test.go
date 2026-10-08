@@ -117,10 +117,13 @@ func tempCatalogIndex(session uuid.UUID, id uint64, alias, kind string) catalog.
 }
 
 func captureTempCatalogWorkspaceState(op client.TxnOperator, txn *Transaction) tempCatalogWorkspaceState {
+	w := txn.workspace
+	w.mu.RLock()
+	defer w.mu.RUnlock()
 	return tempCatalogWorkspaceState{
-		snapshot: op.SnapshotTS(), writes: len(txn.writes), workspaceSize: txn.workspaceSize,
-		statementID: txn.statementID, tableOps: len(txn.tableOps.names),
-		createdTables: len(txn.tableOps.creatdInTxn), databaseOps: len(txn.databaseOps.names),
+		snapshot: op.SnapshotTS(), writes: w.activeMutations.len(), workspaceSize: w.usage.totalBytes,
+		statementID: int(w.journal.current.statementID), tableOps: len(w.ddl.tables),
+		createdTables: len(w.ddl.createdTables), databaseOps: len(w.ddl.databases),
 	}
 }
 

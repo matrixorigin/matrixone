@@ -811,10 +811,11 @@ func logWaitersAdded(
 	}
 
 	if logger.Enabled(zap.DebugLevel) {
-		txns := make([][]byte, 0, len(holders.txns))
-		for _, txn := range holders.txns {
+		txns := make([][]byte, 0, holders.size())
+		holders.iter(func(txn pb.WaitTxn) bool {
 			txns = append(txns, txn.TxnID)
-		}
+			return true
+		})
 
 		logger.Log(
 			"new waiters added",

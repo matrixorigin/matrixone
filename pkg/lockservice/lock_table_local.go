@@ -1215,12 +1215,13 @@ func (l *localLockTable) handleLockConflictLocked(
 			(c.opts.Granularity == pb.Granularity_Range ||
 				c.opts.Mode == pb.LockMode_Exclusive)
 	c.w.notifyOnSharedHolderChange = waitForSharedHolderChange
-	for _, txn := range conflictWith.holders.txns {
+	conflictWith.holders.iter(func(txn pb.WaitTxn) bool {
 		if bytes.Equal(txn.TxnID, c.txn.txnID) {
-			continue
+			return true
 		}
 		c.w.waitFor = append(c.w.waitFor, txn.TxnID)
-	}
+		return true
+	})
 
 	conflictWith.addWaiter(l.logger, c.w)
 	// Set waiter to blocking before adding to events.mu.blockedWaiters so

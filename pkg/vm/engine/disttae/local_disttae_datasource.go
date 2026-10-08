@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"bytes"
-	"cmp"
 	"context"
 	"fmt"
 	"slices"
@@ -34,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
@@ -46,7 +46,7 @@ import (
 func NewLocalDataSource(
 	ctx context.Context,
 	table *txnTable,
-	txnOffset int,
+	readView client.WorkspaceReadView,
 	pState *logtailreplay.PartitionState,
 	rangesSlice objectio.BlockInfoSlice,
 	extraTombstones engine.Tombstoner,
@@ -54,6 +54,15 @@ func NewLocalDataSource(
 	policy engine.TombstoneApplyPolicy,
 	category engine.DataSourceType,
 ) (source *LocalDisttaeDataSource, err error) {
+	workspaceObjectDeletes, err := table.getTxn().workspace.tableObjectDeletes(
+		readView,
+		table.accountId,
+		table.db.databaseId,
+		table.tableId,
+	)
+	if err != nil {
+		return nil, err
+	}
 
 	source = &LocalDisttaeDataSource{}
 	source.category = category
@@ -79,7 +88,8 @@ func NewLocalDataSource(
 	}
 
 	source.table = table
-	source.txnOffset = txnOffset
+	source.readView = readView
+	source.workspaceDeletes.rawByBlock = workspaceObjectDeletes
 	source.snapshotTS = types.TimestampToTS(table.db.op.SnapshotTS())
 
 	source.iteratePhase = engine.InMem
@@ -111,13 +121,14 @@ type LocalDisttaeDataSource struct {
 	cachedBat *batch.Batch
 	sels      []int64
 
-	txnOffset int
+	readView                    client.WorkspaceReadView
+	workspaceEntries            *workspaceEntrySet
+	workspaceEntriesInitialized bool
 
 	// runtime config
 	rc struct {
 		prefetchDisabled    bool
 		batchPrefetchCursor int
-		WorkspaceLocked     bool
 		//SkipPStateDeletes   bool
 	}
 
@@ -142,10 +153,12 @@ type LocalDisttaeDataSource struct {
 
 	workspaceDeletes struct {
 		initialized bool
-		txnOffset   int
+		readView    client.WorkspaceReadView
 		entries     []workspaceDeleteEntry
 		byBlock     map[objectio.Blockid][]workspaceDeleteEntry
-		pointRows   map[objectio.Blockid][]uint64
+		rawByBlock  map[objectio.Blockid][]int64
+		objects     []objectio.ObjectStats
+		entrySet    *workspaceEntrySet
 	}
 
 	pStateTombstoneObjects struct {
@@ -161,8 +174,6 @@ type workspaceDeleteEntry struct {
 }
 
 const mergeWorkspaceDeleteEntriesThreshold = 1024
-const indexWorkspaceDeleteEntriesForBlockThreshold = 128
-const maxIndexedWorkspaceDeleteRowsPerBlock = 256
 
 // Building the tombstone range index has a fixed per-scan cost. Benchmarks
 // with the QA shape (700 tombstone objects) put its break-even point below 32
@@ -175,10 +186,11 @@ func (ls *LocalDisttaeDataSource) String() string {
 		blks[i] = ls.rangeSlice.Get(i)
 	}
 
-	return fmt.Sprintf("snapshot: %s, phase: %v, txnOffset: %d, rangeCursor: %d, state: %p, blk list: %v",
+	return fmt.Sprintf("snapshot: %s, phase: %v, workspace: %d, mutation: %d, rangeCursor: %d, state: %p, blk list: %v",
 		ls.table.db.op.Txn().DebugString(),
 		ls.iteratePhase,
-		ls.txnOffset,
+		ls.readView.WorkspaceID(),
+		ls.readView.MaxMutationID(),
 		ls.rangesCursor,
 		ls.pState,
 		blks)
@@ -412,6 +424,14 @@ func (ls *LocalDisttaeDataSource) Close() {
 		ls.pStateRows.insIter.Close()
 		ls.pStateRows.insIter = nil
 	}
+	if ls.workspaceEntries != nil {
+		ls.workspaceEntries.Close()
+		ls.workspaceEntries = nil
+	}
+	if ls.workspaceDeletes.entrySet != nil {
+		ls.workspaceDeletes.entrySet.Close()
+		ls.workspaceDeletes.entrySet = nil
+	}
 	ls.pStateTombstoneObjects.initialized = false
 	ls.pStateTombstoneObjects.index = tombstoneObjectIndex{}
 	ls.pStateTombstoneObjects.candidates = nil
@@ -599,7 +619,7 @@ func (ls *LocalDisttaeDataSource) iterateInMemData(
 
 func checkWorkspaceEntryType(
 	tbl *txnTable,
-	entry Entry,
+	entry workspaceEntryView,
 	isInsert bool,
 ) bool {
 	if entry.DatabaseId() != tbl.db.databaseId || entry.TableId() != tbl.tableId {
@@ -622,8 +642,7 @@ func checkWorkspaceEntryType(
 			entry.bat.Attrs[0] == catalog.BlockMeta_BlockInfo {
 			return false
 		}
-		if deleted, exist := tbl.getTxn().batchSelectList[entry.bat]; exist &&
-			len(deleted) == entry.bat.RowCount() {
+		if len(entry.selections) == entry.bat.RowCount() {
 			// all rows have deleted in this bat
 			return false
 		}
@@ -641,20 +660,16 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 	mp *mpool.MPool,
 	outBatch *batch.Batch,
 ) error {
-	if ls.wsCursor >= ls.txnOffset {
+	if err := ls.ensureWorkspaceInsertEntries(); err != nil {
+		return err
+	}
+	if ls.workspaceEntries == nil || ls.wsCursor >= len(ls.workspaceEntries.entries) {
 		return nil
 	}
-	ls.table.getTxn().Lock()
-	ls.rc.WorkspaceLocked = true
-	defer func() {
-		ls.table.getTxn().Unlock()
-		ls.rc.WorkspaceLocked = false
-	}()
 
 	rows := 0
-	writes := ls.table.getTxn().writes
 	//maxRows := objectio.BlockMaxRows
-	if len(writes) == 0 {
+	if len(ls.workspaceEntries.entries) == 0 {
 		return nil
 	}
 
@@ -666,7 +681,7 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 		retainedRowIds []objectio.Rowid
 	)
 
-	if ls.memPKFilter.Valid() && ls.wsCursor < ls.txnOffset {
+	if ls.memPKFilter.Valid() && ls.wsCursor < len(ls.workspaceEntries.entries) {
 		enableFilter = true
 		// __mo_rowid is the first
 		pkSeqNums++
@@ -710,11 +725,11 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 
 		}
 
-		if ls.wsCursor >= ls.txnOffset {
+		if ls.wsCursor >= len(ls.workspaceEntries.entries) {
 			break
 		}
 
-		entry := writes[ls.wsCursor]
+		entry := ls.workspaceEntries.entries[ls.wsCursor]
 
 		if ok := checkWorkspaceEntryType(ls.table, entry, true); !ok {
 			ls.wsCursor++
@@ -744,6 +759,19 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 					skipMask.Add(uint64(row))
 				}
 			})
+		}
+
+		// A later statement can delete only part of an in-memory INSERT batch.
+		// Those logical deletes belong to the pinned payload generation carried
+		// by entry, so merge them into the same row-position mask used by PK and
+		// bloom filters before converting rowids to source-batch offsets.
+		if len(entry.selections) != 0 {
+			if skipMask.IsEmpty() {
+				skipMask = objectio.GetReusableBitmap()
+			}
+			for _, row := range entry.selections {
+				skipMask.Add(uint64(row))
+			}
 		}
 
 		offsets = readutil.RowIdsToOffset(retainedRowIds, skipMask)
@@ -794,6 +822,36 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 	}
 
 	outBatch.SetRowCount(outBatch.Vecs[0].Length())
+	return nil
+}
+
+func (ls *LocalDisttaeDataSource) ensureWorkspaceInsertEntries() error {
+	if ls.workspaceEntriesInitialized {
+		return nil
+	}
+	if ls.workspaceEntries != nil {
+		ls.workspaceEntriesInitialized = true
+		return nil
+	}
+	ls.workspaceEntriesInitialized = true
+	if ls.memPKFilter != nil && ls.memPKFilter.Valid() {
+		if keys, pointPredicate := ls.memPKFilter.PointKeys(); pointPredicate {
+			entries, indexed, err := ls.table.workspacePointInsertEntries(
+				ls.readView, keys)
+			if err != nil {
+				return err
+			}
+			if indexed {
+				ls.workspaceEntries = entries
+				return nil
+			}
+		}
+	}
+	entries, err := ls.table.workspaceEntries(ls.readView)
+	if err != nil {
+		return err
+	}
+	ls.workspaceEntries = entries
 	return nil
 }
 
@@ -1039,7 +1097,10 @@ func (ls *LocalDisttaeDataSource) ApplyTombstones(
 
 	if ls.tombstonePolicy&engine.Policy_SkipUncommitedInMemory == 0 &&
 		dynamicPolicy&engine.Policy_SkipUncommitedInMemory == 0 {
-		rowsOffset = ls.applyWorkspaceEntryDeletes(bid, rowsOffset, nil)
+		rowsOffset, err = ls.applyWorkspaceEntryDeletes(bid, rowsOffset, nil)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if len(rowsOffset) == 0 {
 		return nil, nil
@@ -1099,7 +1160,10 @@ func (ls *LocalDisttaeDataSource) GetTombstones(
 	}
 
 	if ls.tombstonePolicy&engine.Policy_SkipUncommitedInMemory == 0 {
-		ls.applyWorkspaceEntryDeletes(bid, nil, &deletedRows)
+		if _, err = ls.applyWorkspaceEntryDeletes(bid, nil, &deletedRows); err != nil {
+			deletedRows.Release()
+			return
+		}
 	}
 	if ls.tombstonePolicy&engine.Policy_SkipUncommitedS3 == 0 {
 		if _, err = ls.applyWorkspaceFlushedS3Deletes(
@@ -1130,70 +1194,44 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceEntryDeletes(
 	bid *objectio.Blockid,
 	offsets []int64,
 	deletedRows *objectio.Bitmap,
-) (leftRows []int64) {
+) (leftRows []int64, err error) {
 
 	leftRows = offsets
-
-	// may have locked in `filterInMemUnCommittedInserts`
-	if !ls.rc.WorkspaceLocked {
-		ls.table.getTxn().Lock()
-		defer ls.table.getTxn().Unlock()
+	indexedOffsets, indexed, err := ls.table.workspaceMemoryDeleteOffsets(
+		ls.readView, *bid, offsets)
+	if err != nil {
+		return nil, err
+	}
+	if indexed {
+		readutil.FastApplyDeletesByRowOffsets(
+			&leftRows, deletedRows, indexedOffsets)
+		return leftRows, nil
 	}
 
-	// A bitmap or a multi-row scan can consume the existing batches directly.
-	pointRead := deletedRows == nil && len(leftRows) == 1
-	blockEntries := ls.workspaceDeleteEntriesForBlockLocked(bid)
-	if pointRead {
-		offset64 := uint64(leftRows[0])
-		if offset64 >= 1<<32 {
-			return leftRows
-		}
-		offset := uint32(offset64)
-		if rows := ls.workspaceDeletes.pointRows[*bid]; rows != nil {
-			if offset64 < objectio.BlockMaxRows && rows[offset/64]&(uint64(1)<<(offset%64)) != 0 {
-				return leftRows[:0]
-			}
-			return leftRows
-		}
-		// Every block entry contains only Rowids for bid. Compare offsets
-		// directly instead of rebuilding and comparing a full Rowid per batch.
-		for _, entry := range blockEntries {
-			if len(entry.rowIds) >= 32 && entry.sorted {
-				_, found := slices.BinarySearchFunc(entry.rowIds, offset, func(rowID objectio.Rowid, target uint32) int {
-					return cmp.Compare(rowID.GetRowOffset(), target)
-				})
-				if found {
-					return leftRows[:0]
-				}
-				continue
-			}
-			for _, rowID := range entry.rowIds {
-				if rowID.GetRowOffset() == offset {
-					return leftRows[:0]
-				}
-			}
-		}
-		if offset64 < objectio.BlockMaxRows {
-			ls.indexWorkspaceDeleteBlockAfterPointMissLocked(bid, blockEntries)
-		}
-		return leftRows
+	entries, err := ls.workspaceDeleteEntriesForBlockLocked(bid)
+	if err != nil {
+		return nil, err
 	}
-	for _, entry := range blockEntries {
+	for _, entry := range entries {
 		readutil.FastApplyDeletesByRowIds(bid, &leftRows, deletedRows, entry.rowIds, entry.sorted)
 
 		if leftRows != nil && len(leftRows) == 0 {
 			break
 		}
 	}
-	return leftRows
+
+	return leftRows, nil
 }
 
 func (ls *LocalDisttaeDataSource) workspaceDeleteEntriesForBlockLocked(
 	bid *objectio.Blockid,
-) []workspaceDeleteEntry {
-	entries := ls.workspaceDeleteEntriesLocked()
+) ([]workspaceDeleteEntry, error) {
+	entries, err := ls.workspaceDeleteEntriesLocked()
+	if err != nil {
+		return nil, err
+	}
 	if len(entries) == 0 {
-		return nil
+		return nil, nil
 	}
 	if ls.workspaceDeletes.byBlock == nil {
 		ls.workspaceDeletes.byBlock = make(map[objectio.Blockid][]workspaceDeleteEntry)
@@ -1201,49 +1239,7 @@ func (ls *LocalDisttaeDataSource) workspaceDeleteEntriesForBlockLocked(
 			ls.addWorkspaceDeleteEntryByBlock(entries[idx])
 		}
 	}
-	blockEntries := ls.workspaceDeletes.byBlock[*bid]
-	return blockEntries
-}
-
-func (ls *LocalDisttaeDataSource) indexWorkspaceDeleteBlockAfterPointMissLocked(
-	bid *objectio.Blockid,
-	blockEntries []workspaceDeleteEntry,
-) {
-	if len(blockEntries) < indexWorkspaceDeleteEntriesForBlockThreshold {
-		return
-	}
-	_, seen := ls.workspaceDeletes.pointRows[*bid]
-	if !seen {
-		totalRows := 0
-		for _, entry := range blockEntries {
-			totalRows += len(entry.rowIds)
-			if totalRows > maxIndexedWorkspaceDeleteRowsPerBlock {
-				return
-			}
-			for _, rowID := range entry.rowIds {
-				if rowID.GetRowOffset() >= objectio.BlockMaxRows {
-					return
-				}
-			}
-		}
-		// A nil entry records one full miss without making that first read
-		// allocate and populate an index it may never use.
-		if ls.workspaceDeletes.pointRows == nil {
-			ls.workspaceDeletes.pointRows = make(map[objectio.Blockid][]uint64)
-		}
-		ls.workspaceDeletes.pointRows[*bid] = nil
-		return
-	}
-	// Two full misses establish reuse. A block has at most 8192 row offsets,
-	// so its index uses 1 KiB and is cheaper to build than sorting Rowids.
-	rows := make([]uint64, objectio.BlockMaxRows/64)
-	for _, entry := range blockEntries {
-		for _, rowID := range entry.rowIds {
-			offset := rowID.GetRowOffset()
-			rows[offset/64] |= uint64(1) << (offset % 64)
-		}
-	}
-	ls.workspaceDeletes.pointRows[*bid] = rows
+	return ls.workspaceDeletes.byBlock[*bid], nil
 }
 
 func (ls *LocalDisttaeDataSource) addWorkspaceDeleteEntryByBlock(entry workspaceDeleteEntry) {
@@ -1270,20 +1266,92 @@ func (ls *LocalDisttaeDataSource) addWorkspaceDeleteEntryByBlock(entry workspace
 		workspaceDeleteEntry{rowIds: entry.rowIds[start:], sorted: true})
 }
 
-func (ls *LocalDisttaeDataSource) workspaceDeleteEntriesLocked() []workspaceDeleteEntry {
-	if ls.workspaceDeletes.initialized && ls.workspaceDeletes.txnOffset == ls.txnOffset {
-		return ls.workspaceDeletes.entries
+func (ls *LocalDisttaeDataSource) workspaceDeleteEntriesLocked() (
+	[]workspaceDeleteEntry,
+	error,
+) {
+	if err := ls.initializeWorkspaceDeletesLocked(); err != nil {
+		return nil, err
+	}
+	return ls.workspaceDeletes.entries, nil
+}
+
+func (ls *LocalDisttaeDataSource) workspaceTombstoneObjectsLocked() (
+	[]objectio.ObjectStats,
+	error,
+) {
+	objects, indexed, err := ls.table.workspaceTombstoneObjects(ls.readView)
+	if err != nil {
+		return nil, err
+	}
+	if indexed {
+		return objects, nil
+	}
+	if err = ls.initializeWorkspaceDeletesLocked(); err != nil {
+		return nil, err
+	}
+	return ls.workspaceDeletes.objects, nil
+}
+
+// initializeWorkspaceDeletesLocked materializes all uncommitted tombstones
+// from the datasource's generation-pinned table view. In-memory rowids and
+// persisted tombstone objects therefore share one visibility boundary and
+// cannot leak mutations published by a later statement.
+func (ls *LocalDisttaeDataSource) initializeWorkspaceDeletesLocked() error {
+	if ls.workspaceDeletes.initialized && ls.workspaceDeletes.readView == ls.readView {
+		return nil
+	}
+	if ls.workspaceDeletes.entrySet != nil && ls.workspaceDeletes.readView != ls.readView {
+		ls.workspaceDeletes.entrySet.Close()
+		ls.workspaceDeletes.entrySet = nil
 	}
 
 	entries := ls.workspaceDeletes.entries[:0]
-	writes := ls.table.getTxn().writes[:ls.txnOffset]
+	objects := ls.workspaceDeletes.objects[:0]
+	ls.workspaceDeletes.byBlock = nil
+	if ls.workspaceDeletes.entrySet == nil {
+		entrySet, err := ls.table.workspaceEntries(ls.readView)
+		if err != nil {
+			return err
+		}
+		ls.workspaceDeletes.entrySet = entrySet
+	}
+	if ls.workspaceDeletes.entrySet == nil {
+		ls.workspaceDeletes.initialized = true
+		ls.workspaceDeletes.readView = ls.readView
+		ls.workspaceDeletes.entries = entries
+		ls.workspaceDeletes.objects = objects
+		return nil
+	}
+	seenObjects := make(map[objectio.ObjectStats]struct{})
+	writes := ls.workspaceDeletes.entrySet.entries
 	for idx := range writes {
-		if ok := checkWorkspaceEntryType(ls.table, writes[idx], false); !ok {
+		entry := &writes[idx]
+		if entry.typ != DELETE || entry.bat == nil || entry.bat.IsEmpty() {
+			continue
+		}
+		if entry.forEachVisibleObjectStats(func(stats objectio.ObjectStats) {
+			if _, ok := seenObjects[stats]; ok {
+				return
+			}
+			seenObjects[stats] = struct{}{}
+			objects = append(objects, stats)
+		}) {
+			continue
+		}
+		if entry.fileName != "" || entry.bat.Vecs[0].GetType().Oid != types.T_Rowid {
 			continue
 		}
 
-		entryRowIds := vector.MustFixedColNoTypeCheck[objectio.Rowid](writes[idx].bat.Vecs[0])
-		sorted := writes[idx].bat.Vecs[0].GetSorted()
+		allRowIds := vector.MustFixedColNoTypeCheck[objectio.Rowid](entry.bat.Vecs[0])
+		entryRowIds := allRowIds
+		sorted := entry.bat.Vecs[0].GetSorted()
+		if len(entry.selections) != 0 {
+			entryRowIds = make([]objectio.Rowid, 0, entry.visibleRowCount())
+			entry.forEachVisibleRow(func(row int) {
+				entryRowIds = append(entryRowIds, allRowIds[row])
+			})
+		}
 		if !sorted {
 			if len(entryRowIds) <= 1 {
 				sorted = true
@@ -1317,11 +1385,10 @@ func (ls *LocalDisttaeDataSource) workspaceDeleteEntriesLocked() []workspaceDele
 	}
 
 	ls.workspaceDeletes.initialized = true
-	ls.workspaceDeletes.txnOffset = ls.txnOffset
+	ls.workspaceDeletes.readView = ls.readView
 	ls.workspaceDeletes.entries = entries
-	ls.workspaceDeletes.byBlock = nil
-	ls.workspaceDeletes.pointRows = nil
-	return entries
+	ls.workspaceDeletes.objects = objects
+	return nil
 }
 
 func (ls *LocalDisttaeDataSource) applyWorkspaceFlushedS3Deletes(
@@ -1332,13 +1399,10 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceFlushedS3Deletes(
 
 	leftRows = offsets
 
-	s3FlushedDeletes := ls.table.getTxn().cn_flushed_s3_tombstone_object_stats_list
-
-	var tombstones []objectio.ObjectStats
-	s3FlushedDeletes.Range(func(key, value any) bool {
-		tombstones = append(tombstones, key.(objectio.ObjectStats))
-		return true
-	})
+	tombstones, err := ls.workspaceTombstoneObjectsLocked()
+	if err != nil {
+		return nil, err
+	}
 
 	if len(tombstones) == 0 {
 		return
@@ -1389,11 +1453,11 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceRawRowIdDeletes(
 
 	leftRows = offsets
 
-	rawRowIdDeletes := ls.table.getTxn().deletedBlocks
-	rawRowIdDeletes.RWMutex.RLock()
-	defer rawRowIdDeletes.RWMutex.RUnlock()
-
-	readutil.FastApplyDeletesByRowOffsets(&leftRows, deletedRows, rawRowIdDeletes.offsets[*bid])
+	readutil.FastApplyDeletesByRowOffsets(
+		&leftRows,
+		deletedRows,
+		ls.workspaceDeletes.rawByBlock[*bid],
+	)
 
 	return leftRows
 }

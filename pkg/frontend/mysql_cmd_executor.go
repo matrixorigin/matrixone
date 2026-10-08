@@ -5339,7 +5339,7 @@ func executeStmtWithTxn(ses FeSession,
 ) (err error) {
 	ses.EnterFPrint(FPExecStmtWithTxn)
 	defer ses.ExitFPrint(FPExecStmtWithTxn)
-	if !ses.IsDerivedStmt() {
+	if !ses.IsDerivedStmt() && !isStatementBoundaryManagedExternally(ses) {
 		err = executeStmtWithWorkspace(ses, statsArr, execCtx)
 	} else {
 
@@ -5351,6 +5351,11 @@ func executeStmtWithTxn(ses FeSession,
 		recordSessionDDL(ses, execCtx, err)
 	}
 	return
+}
+
+func isStatementBoundaryManagedExternally(ses FeSession) bool {
+	backSes, ok := ses.(*backSession)
+	return ok && backSes.statementBoundaryManagedExternally
 }
 
 func effectiveStatementForTxn(
@@ -5576,7 +5581,6 @@ func executeStmtWithIncrStmt(ses FeSession,
 	execCtx *ExecCtx,
 	txnOp TxnOperator,
 ) (err error) {
-	var hasRecovered bool
 	ses.EnterFPrint(FPExecStmtWithIncrStmt)
 	defer ses.ExitFPrint(FPExecStmtWithIncrStmt)
 
@@ -5590,11 +5594,22 @@ func executeStmtWithIncrStmt(ses FeSession,
 	}
 	ses.EnterFPrint(FPExecStmtWithIncrStmtBeforeIncr)
 	defer ses.ExitFPrint(FPExecStmtWithIncrStmtBeforeIncr)
-	//3. increase statement id
+	if err = incrWorkspaceStatement(execCtx, txnOp); err != nil {
+		return err
+	}
+
+	err = dispatchStmt(ses, statsArr, execCtx)
+	return
+}
+
+// incrWorkspaceStatement advances the workspace once for its logical owner.
+// A Data Branch operation has one owner even when producer and consumer run
+// nested SQL concurrently.
+func incrWorkspaceStatement(execCtx *ExecCtx, txnOp TxnOperator) error {
 
 	crs := new(perfcounter.CounterSet)
 	newCtx := perfcounter.AttachS3RequestKey(execCtx.reqCtx, crs)
-	err, hasRecovered = ExecuteFuncWithRecover(func() error {
+	err, hasRecovered := ExecuteFuncWithRecover(func() error {
 		return txnOp.GetWorkspace().IncrStatementID(newCtx, false)
 	})
 	if err != nil || hasRecovered {
@@ -5609,21 +5624,7 @@ func executeStmtWithIncrStmt(ses FeSession,
 		Delete:    crs.FileService.S3.Delete.Load(),
 		DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
 	})
-
-	defer func() {
-		if ses.GetTxnHandler() == nil {
-			panic("need txn handler 3")
-		}
-
-		//!!!NOTE!!!: it does not work
-		//_, txnOp = ses.GetTxnHandler().GetTxn()
-		//if txnOp != nil {
-		//	err = rollbackLastStmt(execCtx, txnOp, err)
-		//}
-	}()
-
-	err = dispatchStmt(ses, statsArr, execCtx)
-	return
+	return nil
 }
 
 func rebuildStaleCachedStatements(ses FeSession, execCtx *ExecCtx) (err error) {

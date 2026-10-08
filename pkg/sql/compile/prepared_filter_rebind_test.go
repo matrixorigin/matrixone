@@ -34,6 +34,7 @@ func TestPreparedBlockPredicatesSurviveRebinding(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	ctrl := gomock.NewController(t)
 	tx := mock_frontend.NewMockTxnOperator(ctrl)
+	tx.EXPECT().IsSnapOp().Return(false).AnyTimes()
 	tx.EXPECT().GetWorkspace().Return(&disttae.Transaction{}).AnyTimes()
 	tx.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
 	tx.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()

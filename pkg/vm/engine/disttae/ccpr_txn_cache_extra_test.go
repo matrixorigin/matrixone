@@ -677,6 +677,7 @@ func TestTransactionFinalizeCommitUnknownCleansCCPRCache(t *testing.T) {
 		engine:    &Engine{ccprTxnCache: cache},
 		op:        txnOp,
 		isCCPRTxn: true,
+		workspace: newTxnWorkspace(),
 	}
 	txn.FinalizeCommitWithUnknownResult(ctx)
 

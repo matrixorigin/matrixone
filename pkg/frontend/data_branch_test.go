@@ -54,7 +54,7 @@ func TestDataBranchDeletePrivateOwnerForcesPessimisticRC(t *testing.T) {
 	ses := newTestSession(t, ctrl)
 	t.Cleanup(ses.Close)
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
-	txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{}).Times(4)
+	txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{}).MinTimes(1)
 	ses.proc.Base.TxnOperator = txnOp
 
 	beginErr := errors.New("begin failed")

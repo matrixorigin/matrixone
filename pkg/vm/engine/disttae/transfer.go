@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -34,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
@@ -42,11 +44,30 @@ import (
 	"go.uber.org/zap"
 )
 
-func transferInmemTombstones(
+type stagedTombstoneTransfer struct {
+	sources       []workspaceMutationTransitionSource
+	targets       []workspaceMutationTransitionTarget
+	objectStats   []objectio.ObjectStats
+	ownedBatches  []*batch.Batch
+	objectTargets []int
+	logs          [][]zap.Field
+}
+
+func (staged *stagedTombstoneTransfer) cleanMetadata(mp *mpool.MPool) {
+	for _, bat := range staged.ownedBatches {
+		if bat != nil {
+			bat.Clean(mp)
+		}
+	}
+	staged.ownedBatches = nil
+}
+
+func prepareInmemTombstones(
 	ctx context.Context,
 	txn *Transaction,
 	tables map[tombstoneTransferKey]tombstoneTransferTable,
 	start, end types.TS,
+	staged *stagedTombstoneTransfer,
 ) (err error) {
 
 	return txn.forEachTableHasDeletesLocked(
@@ -60,7 +81,7 @@ func transferInmemTombstones(
 			deleteObjs, createObjs := state.GetChangedObjsBetween(start, end)
 
 			if len(deleteObjs) > 0 {
-				if err := transferTombstones(
+				if err := prepareTombstones(
 					ctx,
 					tbl,
 					state,
@@ -68,6 +89,7 @@ func transferInmemTombstones(
 					createObjs,
 					txn.proc.Mp(),
 					txn.engine.fs,
+					staged,
 				); err != nil {
 					return err
 				}
@@ -76,40 +98,40 @@ func transferInmemTombstones(
 		})
 }
 
-func transferTombstoneObjects(
+func prepareTombstoneObjects(
 	ctx context.Context,
 	txn *Transaction,
 	tables map[tombstoneTransferKey]tombstoneTransferTable,
 	start, end types.TS,
+	staged *stagedTombstoneTransfer,
 ) (err error) {
 
-	var (
-		fs   fileservice.FileService
-		logs []zap.Field
-		flow *TransferFlow
-	)
-
+	var fs fileservice.FileService
 	return txn.forEachTableHasDeletesLocked(
 		tables, 1,
-		func(tbl *txnTable, writeName string) error {
+		func(tbl *txnTable, writeName string) (callbackErr error) {
 			if fs == nil {
-				if fs, err = colexec.GetSharedFSFromProc(txn.proc); err != nil {
-					return err
+				if fs, callbackErr = colexec.GetSharedFSFromProc(txn.proc); callbackErr != nil {
+					return callbackErr
 				}
 			}
 			now := time.Now()
-			if flow, logs, err = ConstructCNTombstoneObjectsTransferFlow(
-				ctx, start, end, tbl, txn, txn.proc.Mp(), fs); err != nil {
-				return err
+			flow, logs, callbackErr := ConstructCNTombstoneObjectsTransferFlow(
+				ctx, start, end, tbl, txn, txn.proc.Mp(), fs)
+			if callbackErr != nil {
+				return callbackErr
 			} else if flow == nil {
 				logutil.Info("CN-TRANSFER-TOMBSTONE-OBJ", logs...)
 				return nil
 			}
+			defer func() {
+				if closeErr := flow.Close(); callbackErr == nil {
+					callbackErr = closeErr
+				}
+			}()
 
-			defer flow.Close()
-
-			if err = flow.Process(ctx); err != nil {
-				return err
+			if callbackErr = flow.Process(ctx); callbackErr != nil {
+				return callbackErr
 			}
 
 			slist, tail := flow.GetResult()
@@ -119,38 +141,50 @@ func transferTombstoneObjects(
 			}
 
 			bat := colexec.AllocCNS3ResultBat(true)
-			defer bat.Clean(txn.proc.Mp())
-			if err = bat.PreExtend(txn.proc.Mp(), len(slist)); err != nil {
-				return err
+			if callbackErr = bat.PreExtend(txn.proc.Mp(), len(slist)); callbackErr != nil {
+				bat.Clean(txn.proc.Mp())
+				return callbackErr
 			}
 
 			obj := make([]string, 0, len(slist))
 			for i := range slist {
 				obj = append(obj, slist[i].ObjectName().ObjectId().ShortStringEx())
 
-				if err = vector.AppendBytes(
+				if callbackErr = vector.AppendBytes(
 					bat.GetVector(0),
 					slist[i].Marshal(),
 					false,
 					txn.proc.Mp(),
-				); err != nil {
-					return err
+				); callbackErr != nil {
+					bat.Clean(txn.proc.Mp())
+					return callbackErr
 				}
 
 				bat.SetRowCount(bat.Vecs[0].Length())
 			}
 
 			if bat.RowCount() > 0 {
+				staged.ownedBatches = append(staged.ownedBatches, bat)
 				fileName := slist[0].ObjectName().String()
-				if err = txn.writeFileLockedWithAutoIncrEpoch(
-					DELETE,
-					tbl.accountId, tbl.db.databaseId, tbl.tableId,
-					tbl.db.databaseName, writeName, fileName,
-					bat, txn.tnStores[0],
-					tbl.extraInfo.AutoIncrEpoch,
-				); err != nil {
-					return err
-				}
+				staged.objectTargets = append(staged.objectTargets, len(staged.targets))
+				staged.targets = append(staged.targets, workspaceMutationTransitionTarget{
+					entry: Entry{
+						typ:                DELETE,
+						accountId:          tbl.accountId,
+						databaseId:         tbl.db.databaseId,
+						tableId:            tbl.tableId,
+						databaseName:       tbl.db.databaseName,
+						tableName:          writeName,
+						fileName:           fileName,
+						bat:                bat,
+						tnStore:            txn.tnStores[0],
+						autoIncrEpoch:      tbl.extraInfo.AutoIncrEpoch,
+						autoIncrEpochKnown: true,
+					},
+				})
+				staged.objectStats = append(staged.objectStats, slist...)
+			} else {
+				bat.Clean(txn.proc.Mp())
 			}
 
 			logs = append(logs,
@@ -164,19 +198,20 @@ func transferTombstoneObjects(
 				zap.String("to", end.ToString()),
 				zap.String("transferred obj", fmt.Sprintf("%v", flow.transferred.objDetails)))
 
-			logutil.Info("CN-TRANSFER-TOMBSTONE-OBJ", logs...)
+			staged.logs = append(staged.logs, logs)
 
 			return nil
 		})
 }
 
-func transferTombstones(
+func prepareTombstones(
 	ctx context.Context,
 	table *txnTable,
 	pState *logtailreplay.PartitionState,
 	deletedObjects, createdObjects map[objectio.ObjectNameShort]struct{},
 	mp *mpool.MPool,
 	fs fileservice.FileService,
+	staged *stagedTombstoneTransfer,
 ) (err error) {
 	if len(deletedObjects) == 0 || len(createdObjects) == 0 {
 		return
@@ -216,19 +251,31 @@ func transferTombstones(
 		}
 	}
 
-	txnWrites := table.getTxn().writes
+	txn := table.getTxn()
+	view := txn.workspace.currentReadView()
+	entrySet, err := txn.workspace.tableEntries(
+		view,
+		table.accountId,
+		table.db.databaseId,
+		table.tableId,
+	)
+	if err != nil {
+		return err
+	}
+	defer entrySet.Close()
 
 	var (
 		transferIntents *vector.Vector
 		targetRowids    *vector.Vector
 		searchPKColumn  *vector.Vector
-		searchEntryPos  *vector.Vector
+		searchMutation  *vector.Vector
 		searchBatPos    *vector.Vector
 		readPKColumn    *vector.Vector
-
-		entryPosMask objectio.Bitmap
 	)
 
+	replacementBatches := make(map[workspaceMutationID]*batch.Batch)
+	oldBatches := make(map[workspaceMutationID]*batch.Batch)
+	sources := make(map[workspaceMutationID]workspaceEntryView)
 	defer func() {
 		if transferIntents != nil {
 			transferIntents.Free(mp)
@@ -242,8 +289,8 @@ func transferTombstones(
 			searchPKColumn.Free(mp)
 		}
 
-		if searchEntryPos != nil {
-			searchEntryPos.Free(mp)
+		if searchMutation != nil {
+			searchMutation.Free(mp)
 		}
 
 		if searchBatPos != nil {
@@ -254,13 +301,16 @@ func transferTombstones(
 			readPKColumn.Free(mp)
 		}
 
-		entryPosMask.Release()
+		if err != nil {
+			for _, bat := range replacementBatches {
+				bat.Clean(mp)
+			}
+		}
 	}()
 
-	entryPosMask = objectio.GetReusableBitmap()
-
 	// loop the transaction workspace to transfer all tombstones
-	for i, entry := range txnWrites {
+	for _, entryView := range entrySet.entries {
+		entry := entryView.Entry
 		// skip all entries not table-realted
 		// skip all non-delete entries
 		if entry.tableId != table.tableId ||
@@ -281,13 +331,22 @@ func transferTombstones(
 				continue
 			}
 
-			entryPosMask.Add(uint64(i))
+			mutationID := entry.workspaceMutationID
+			if replacementBatches[mutationID] == nil {
+				newBat, dupErr := entry.bat.Dup(mp)
+				if dupErr != nil {
+					return dupErr
+				}
+				replacementBatches[mutationID] = newBat
+				oldBatches[mutationID] = entry.bat
+				sources[mutationID] = entryView
+			}
 
 			if transferIntents == nil {
 				transferIntents = vector.NewVec(types.T_Rowid.ToType())
 				targetRowids = vector.NewVec(types.T_Rowid.ToType())
 				searchPKColumn = vector.NewVec(*pkColumn.GetType())
-				searchEntryPos = vector.NewVec(types.T_int32.ToType())
+				searchMutation = vector.NewVec(types.T_uint64.ToType())
 				searchBatPos = vector.NewVec(types.T_int32.ToType())
 				readPKColumn = vector.NewVec(*pkColumn.GetType())
 			}
@@ -296,7 +355,7 @@ func transferTombstones(
 				return
 			}
 
-			if err = vector.AppendFixed[int32](searchEntryPos, int32(i), false, mp); err != nil {
+			if err = vector.AppendFixed[uint64](searchMutation, uint64(mutationID), false, mp); err != nil {
 				return
 			}
 
@@ -309,17 +368,17 @@ func transferTombstones(
 			}
 
 			if transferBatchLimitReached(transferIntents.Length(),
-				transferIntents.Size()+searchPKColumn.Size()+searchEntryPos.Size()+searchBatPos.Size(), true) {
+				transferIntents.Size()+searchPKColumn.Size()+searchMutation.Size()+searchBatPos.Size(), true) {
 				transferCnt += transferIntents.Length()
 				if err = batchTransferToTombstones(
 					ctx,
 					table,
-					txnWrites,
+					replacementBatches,
 					objectList,
 					transferIntents,
 					targetRowids,
 					searchPKColumn,
-					searchEntryPos,
+					searchMutation,
 					searchBatPos,
 					readPKColumn,
 					mp,
@@ -337,12 +396,12 @@ func transferTombstones(
 		if err = batchTransferToTombstones(
 			ctx,
 			table,
-			txnWrites,
+			replacementBatches,
 			objectList,
 			transferIntents,
 			targetRowids,
 			searchPKColumn,
-			searchEntryPos,
+			searchMutation,
 			searchBatPos,
 			readPKColumn,
 			mp,
@@ -353,18 +412,44 @@ func transferTombstones(
 		}
 	}
 
-	iter := entryPosMask.Bitmap().Iterator()
-	for iter.HasNext() {
-		idx := iter.Next()
-		entry := txnWrites[idx]
-
-		if !catalog.IsSystemTable(entry.tableId) &&
-			entry.bat != nil && entry.bat.RowCount() > 1 {
-			if err = mergeutil.SortColumnsByIndex(entry.bat.Vecs, 0, mp); err != nil {
+	ids := make([]workspaceMutationID, 0, len(replacementBatches))
+	for id := range replacementBatches {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	for _, id := range ids {
+		bat := replacementBatches[id]
+		if !catalog.IsSystemTable(table.tableId) && bat.RowCount() > 1 {
+			if err = mergeutil.SortColumnsByIndex(bat.Vecs, 0, mp); err != nil {
 				return
 			}
 		}
 	}
+
+	for _, id := range ids {
+		source, found := sources[id]
+		if !found {
+			return moerr.NewInternalErrorNoCtx(
+				"workspace transfer source mutation disappeared")
+		}
+		targetEntry := source.Entry
+		targetEntry.workspaceMutationID = 0
+		targetEntry.bat = replacementBatches[id]
+		staged.sources = append(staged.sources, workspaceMutationTransitionSource{
+			mutationID: id,
+			oldBat:     oldBatches[id],
+			selections: source.selections,
+		})
+		staged.targets = append(staged.targets, workspaceMutationTransitionTarget{
+			entry:         targetEntry,
+			replacementOf: id,
+			selections:    source.selections,
+		})
+		staged.ownedBatches = append(staged.ownedBatches, replacementBatches[id])
+	}
+	// Ownership of every replacement has moved to the aggregate stage. The
+	// per-table error cleanup must no longer release it.
+	replacementBatches = nil
 
 	return nil
 }
@@ -372,12 +457,12 @@ func transferTombstones(
 func batchTransferToTombstones(
 	ctx context.Context,
 	table *txnTable,
-	txnWrites []Entry,
+	replacementBatches map[workspaceMutationID]*batch.Batch,
 	objectList []objectio.ObjectStats,
 	transferIntents *vector.Vector,
 	targetRowids *vector.Vector,
 	searchPKColumn *vector.Vector,
-	searchEntryPos *vector.Vector,
+	searchMutation *vector.Vector,
 	searchBatPos *vector.Vector,
 	readPKColumn *vector.Vector,
 	mp *mpool.MPool,
@@ -389,7 +474,7 @@ func batchTransferToTombstones(
 	}
 
 	if err = mergeutil.SortColumnsByIndex(
-		[]*vector.Vector{searchPKColumn, searchEntryPos, searchBatPos},
+		[]*vector.Vector{searchPKColumn, searchMutation, searchBatPos},
 		0,
 		mp,
 	); err != nil {
@@ -463,16 +548,19 @@ func batchTransferToTombstones(
 		}
 	}
 
-	entryPositions := vector.MustFixedColWithTypeCheck[int32](searchEntryPos)
+	mutationIDs := vector.MustFixedColWithTypeCheck[uint64](searchMutation)
 	batPositions := vector.MustFixedColWithTypeCheck[int32](searchBatPos)
 	rowids := vector.MustFixedColWithTypeCheck[types.Rowid](targetRowids)
 
 	for pos, endPos := 0, searchPKColumn.Length(); pos < endPos; pos++ {
-		entryIdx := entryPositions[pos]
-		entry := txnWrites[entryIdx]
+		bat := replacementBatches[workspaceMutationID(mutationIDs[pos])]
+		if bat == nil {
+			return moerr.NewInternalErrorNoCtx(
+				"workspace transfer replacement batch does not exist")
+		}
 
 		if err = vector.SetFixedAtWithTypeCheck[types.Rowid](
-			entry.bat.GetVector(0),
+			bat.GetVector(0),
 			int(batPositions[pos]),
 			rowids[pos],
 		); err != nil {
@@ -481,7 +569,7 @@ func batchTransferToTombstones(
 	}
 
 	searchPKColumn.Reset(*searchPKColumn.GetType())
-	searchEntryPos.Reset(*searchEntryPos.GetType())
+	searchMutation.Reset(*searchMutation.GetType())
 	searchBatPos.Reset(*searchBatPos.GetType())
 	targetRowids.Reset(*targetRowids.GetType())
 	transferIntents.Reset(*transferIntents.GetType())
@@ -513,7 +601,7 @@ func doTransferRowids(
 	rangesParam := engine.RangesParam{
 		BlockFilters:   []*plan.Expr{expr},
 		PreAllocBlocks: 2,
-		TxnOffset:      0,
+		TxnReadView:    client.NoWorkspaceReadView(),
 		Policy:         engine.Policy_CollectAllData,
 	}
 
@@ -552,7 +640,7 @@ func doTransferRowids(
 		expr,
 		relData,
 		1,
-		0,
+		client.NoWorkspaceReadView(),
 		false,
 		engine.Policy_CheckCommittedOnly,
 		engine.FilterHint{Must: true},

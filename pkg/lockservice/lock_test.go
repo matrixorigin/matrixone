@@ -243,3 +243,29 @@ func TestHoldersReplaceMigratesTxnKey(t *testing.T) {
 	assert.True(t, h.contains(to.TxnID))
 	assert.Equal(t, []pb.WaitTxn{to}, h.getTxnSlice())
 }
+
+func TestHoldersPromoteAndDemote(t *testing.T) {
+	h := newHolders()
+	txn1 := pb.WaitTxn{TxnID: []byte("1"), CreatedOn: "cn1"}
+	txn2 := pb.WaitTxn{TxnID: []byte("2"), CreatedOn: "cn2"}
+
+	h.add(txn1)
+	require.True(t, h.hasSingle)
+	require.Nil(t, h.multiple)
+
+	h.add(txn2)
+	require.False(t, h.hasSingle)
+	require.Len(t, h.multiple, 2)
+	require.True(t, h.contains(txn1.TxnID))
+	require.True(t, h.contains(txn2.TxnID))
+
+	h.remove(txn1.TxnID)
+	require.True(t, h.hasSingle)
+	require.Nil(t, h.multiple)
+	require.Equal(t, txn2, h.single)
+
+	h.clear()
+	require.Zero(t, h.size())
+	require.False(t, h.hasSingle)
+	require.Nil(t, h.multiple)
+}

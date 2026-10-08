@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/vectorscan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
@@ -31,13 +32,13 @@ import (
 )
 
 type vectorSource struct {
-	template  *plan.VectorIndexScan
-	execution *vectorscan.Execution
-	attrs     []string
-	types     []types.Type
-	txnOffset int
-	reader    engine.Reader
-	output    *batch.Batch
+	template    *plan.VectorIndexScan
+	execution   *vectorscan.Execution
+	attrs       []string
+	types       []types.Type
+	txnReadView client.WorkspaceReadView
+	reader      engine.Reader
+	output      *batch.Batch
 }
 
 var _ AppliedSource = (*vectorSource)(nil)
@@ -83,7 +84,7 @@ func (s *vectorSource) ApplyStart(row int, proc *process.Process, _ process.Anal
 		currentSnapshot = txn.Txn().SnapshotTS
 	}
 	identity, err := vectorscan.Identity(
-		s.execution.Spec(), currentSnapshot, s.txnOffset, 1, 0)
+		s.execution.Spec(), currentSnapshot, s.txnReadView, 1, 0)
 	if err != nil {
 		return err
 	}

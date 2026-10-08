@@ -21,19 +21,22 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
 func TestTombstoneTransferCandidates(t *testing.T) {
-	bat := batch.NewWithSize(0)
+	bat := newWorkspaceDeleteBatch(t, []types.Rowid{{}})
 	bat.SetRowCount(1)
 	empty := batch.NewWithSize(0)
 	base := Entry{typ: DELETE, bat: bat, tableId: catalog.MO_COLUMNS_ID,
 		databaseId: catalog.MO_CATALOG_ID, databaseName: catalog.MO_CATALOG,
 		tableName: catalog.MO_COLUMNS_UPDATE}
-	txn := &Transaction{}
-	require.Nil(t, txn.collectTombstoneTransferTablesLocked())
+	txn := &Transaction{workspace: newTxnWorkspace()}
+	tables, err := txn.collectTombstoneTransferTablesLocked()
+	require.NoError(t, err)
+	require.Nil(t, tables)
 	for _, modify := range []func(*Entry){
 		func(e *Entry) { e.typ = INSERT },
 		func(e *Entry) { e.bat = nil },
@@ -42,14 +45,17 @@ func TestTombstoneTransferCandidates(t *testing.T) {
 	} {
 		e := base
 		modify(&e)
-		txn.writes = append(txn.writes, e)
+		txn.appendWorkspaceEntryLocked(e)
 	}
-	require.Nil(t, txn.collectTombstoneTransferTablesLocked())
-	txn.writes = append(txn.writes, base, base)
+	tables, err = txn.collectTombstoneTransferTablesLocked()
+	require.NoError(t, err)
+	require.Nil(t, tables)
+	txn.appendWorkspaceEntryLocked(base)
+	txn.appendWorkspaceEntryLocked(base)
 	persisted := base
 	persisted.fileName = "tombstone"
 	persisted.tableName = catalog.MO_COLUMNS
-	txn.writes = append(txn.writes, persisted)
+	txn.appendWorkspaceEntryLocked(persisted)
 	for _, modify := range []func(*Entry){
 		func(e *Entry) { e.accountId++ },
 		func(e *Entry) { e.databaseId++ },
@@ -57,9 +63,10 @@ func TestTombstoneTransferCandidates(t *testing.T) {
 	} {
 		e := base
 		modify(&e)
-		txn.writes = append(txn.writes, e)
+		txn.appendWorkspaceEntryLocked(e)
 	}
-	tables := txn.collectTombstoneTransferTablesLocked()
+	tables, err = txn.collectTombstoneTransferTablesLocked()
+	require.NoError(t, err)
 	require.Len(t, tables, 4)
 	key := tombstoneTransferKey{base.accountId, base.databaseId, base.tableId}
 	mixed := tables[key]
@@ -67,7 +74,7 @@ func TestTombstoneTransferCandidates(t *testing.T) {
 	require.Equal(t, [2]string{catalog.MO_COLUMNS_UPDATE, catalog.MO_COLUMNS}, mixed.writeNames)
 	require.Equal(t, catalog.MO_COLUMNS, physicalCatalogTableName(key.databaseId, key.tableId, mixed.writeNames[0]))
 	// Appending/replacing workspace entries cannot invalidate collected metadata.
-	txn.writes = nil
+	txn.workspace = newTxnWorkspace()
 	require.Equal(t, catalog.MO_CATALOG, mixed.databaseName)
 }
 
@@ -104,8 +111,8 @@ func TestTombstoneTransferCallbacks(t *testing.T) {
 }
 
 func TestTombstoneTransferLookupReentry(t *testing.T) {
-	enableReenterSnapshotOffsetFault(t)
-	txn := &Transaction{engine: &Engine{}, op: transferBenchmarkOperator{},
+	enableReenterWorkspaceReadViewFault(t)
+	txn := &Transaction{engine: &Engine{}, workspace: newTxnWorkspace(), op: transferBenchmarkOperator{},
 		proc: &process.Process{Ctx: context.Background()}}
 	tables := map[tombstoneTransferKey]tombstoneTransferTable{
 		{tableId: 42}: {databaseName: "db", hasDeletes: [2]bool{true}, writeNames: [2]string{"tbl"}},
@@ -115,7 +122,7 @@ func TestTombstoneTransferLookupReentry(t *testing.T) {
 		t.Fatal("callback must not run after lookup failure")
 		return nil
 	})
-	require.ErrorContains(t, err, "reenter snapshot write offset")
+	require.ErrorContains(t, err, "reenter workspace read view")
 	require.False(t, txn.TryLock(), "lookup failure must return with workspace locked")
 	txn.Unlock()
 	require.True(t, txn.TryLock(), "no lock may remain after caller unlocks")
@@ -124,7 +131,8 @@ func TestTombstoneTransferLookupReentry(t *testing.T) {
 
 // Empty/insert-only workspaces must not require a process or SHARED FS.
 func TestTombstoneTransferWithoutDeletes(t *testing.T) {
-	txn := &Transaction{op: transferBenchmarkOperator{}, writes: []Entry{{typ: INSERT}}}
+	txn := &Transaction{op: transferBenchmarkOperator{}, workspace: newTxnWorkspace()}
+	txn.appendWorkspaceEntryLocked(Entry{typ: INSERT})
 	txn.Lock()
 	defer txn.Unlock()
 	require.NoError(t, txn.transferTombstones(context.Background()))
