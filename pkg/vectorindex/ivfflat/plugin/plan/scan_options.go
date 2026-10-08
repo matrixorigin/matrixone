@@ -12,11 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ivfflat
+package plan
 
 import (
-	"encoding/json"
-
+	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -39,7 +38,7 @@ type ScanOptions struct {
 
 // EncodeScanOptions returns the algo_options bytes of opts.
 func EncodeScanOptions(opts ScanOptions) ([]byte, error) {
-	return json.Marshal(opts)
+	return sonic.Marshal(opts)
 }
 
 // DecodeScanOptions returns the ScanOptions of algo_options bytes; empty bytes
@@ -49,7 +48,7 @@ func DecodeScanOptions(data []byte) (ScanOptions, error) {
 	if len(data) == 0 {
 		return opts, nil
 	}
-	if err := json.Unmarshal(data, &opts); err != nil {
+	if err := sonic.Unmarshal(data, &opts); err != nil {
 		return opts, moerr.NewInvalidInputNoCtxf("invalid ivfflat scan options: %v", err)
 	}
 	return opts, nil

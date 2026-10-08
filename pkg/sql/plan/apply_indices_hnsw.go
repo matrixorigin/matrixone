@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw"
 	hnswplan "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
@@ -146,7 +145,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, vecCtx *
 	// budget from k (#26869).
 	postFilterOverFetch := len(scanNode.FilterList) > 0
 
-	algoOptions, err := hnsw.EncodeScanOptions(hnsw.ScanOptions{ThreadsSearch: hnswCtx.nThread})
+	algoOptions, err := hnswplan.EncodeScanOptions(hnswplan.ScanOptions{ThreadsSearch: hnswCtx.nThread})
 	if err != nil {
 		return 0, err
 	}

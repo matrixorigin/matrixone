@@ -16,13 +16,13 @@ package plan
 
 import (
 	"context"
+	hnswplan "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/plan"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -533,7 +533,7 @@ func TestApplyIndicesForSortUsingHnswKeepsFiltersOnScan(t *testing.T) {
 		{Role: catalog.Hnsw_TblType_Metadata, Object: &plan.ObjectRef{SchemaName: "db", ObjName: "hnsw_meta"}},
 		{Role: catalog.Hnsw_TblType_Storage, Object: &plan.ObjectRef{SchemaName: "db", ObjName: "hnsw_index"}},
 	}, spec.HiddenTables)
-	opts, err := hnsw.DecodeScanOptions(spec.AlgoOptions)
+	opts, err := hnswplan.DecodeScanOptions(spec.AlgoOptions)
 	require.NoError(t, err)
 	require.Equal(t, int64(4), opts.ThreadsSearch)
 	require.Len(t, scanNode.FilterList, 2)

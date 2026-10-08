@@ -148,14 +148,13 @@ func TestHnswReaderFloat64AndEmptyBudget(t *testing.T) {
 	require.Equal(t, usearch.F64, (*created)[0].idxcfg.Usearch.Quantization)
 	require.NoError(t, s.Close())
 
-	// a zero budget searches nothing
-	empty, err := newSearcher(proc, hnswSpec(t.Name()+"_empty"), f32Request([]float32{1}, 0))
+	// a zero budget searches one candidate
+	one, err := newSearcher(proc, hnswSpec(t.Name()+"_one"), f32Request([]float32{1}, 0))
 	require.NoError(t, err)
-	chunk, more, err = empty.Next(context.Background())
+	_, more, err = one.Next(context.Background())
 	require.NoError(t, err)
 	require.False(t, more)
-	require.Nil(t, chunk.Keys)
-	require.Equal(t, []uint{4}, *limits)
+	require.Equal(t, []uint{4, 1}, *limits)
 
 	canceled, err := newSearcher(proc, hnswSpec(t.Name()+"_canceled"), f32Request([]float32{1}, 1))
 	require.NoError(t, err)

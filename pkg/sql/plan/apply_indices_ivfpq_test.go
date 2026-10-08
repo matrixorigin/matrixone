@@ -248,7 +248,7 @@ func TestPrepareIvfpqIndexContext_Success(t *testing.T) {
 	assert.Equal(t, "l2_distance", r.origFuncName)
 	assert.Equal(t, int32(0), r.partPos)
 	assert.Equal(t, int32(1), r.pkPos)
-	assert.Equal(t, algo, r.params)
+	assert.Equal(t, algo, r.idxDef.IndexAlgoParams)
 	assert.Equal(t, int64(8), r.nThread)
 	assert.Equal(t, int64(64), r.batchWindow)
 	assert.Equal(t, int64(15), r.nProbe)
@@ -378,8 +378,22 @@ func TestApplyIndicesForSortUsingIvfpq_Success(t *testing.T) {
 	join := builder.qry.Nodes[joinID]
 	require.Equal(t, plan.Node_JOIN, join.NodeType)
 	right := builder.qry.Nodes[join.Children[1]]
-	assert.Equal(t, plan.Node_FUNCTION_SCAN, right.NodeType)
-	assert.Equal(t, ivfpqplan.IVFPQSearchFuncName, right.TableDef.TblFunc.Name)
+	require.Equal(t, plan.Node_INDEX_SEARCH_SCAN, right.NodeType)
+	spec := right.IndexSearchScan
+	require.NotNil(t, spec)
+	assert.Equal(t, "l2_distance", spec.DistanceFunction)
+	assert.False(t, spec.PostFilterOverFetch)
+	assert.Equal(t, uint64(10), spec.CandidateLimit.GetLit().GetU64Val())
+	require.Len(t, spec.HiddenTables, 2)
+	assert.Equal(t, catalog.Ivfpq_TblType_Metadata, spec.HiddenTables[0].Role)
+	assert.Equal(t, "meta", spec.HiddenTables[0].Object.ObjName)
+	assert.Equal(t, catalog.Ivfpq_TblType_Storage, spec.HiddenTables[1].Role)
+	assert.Equal(t, "idx", spec.HiddenTables[1].Object.ObjName)
+	opts, err := ivfpqplan.DecodeScanOptions(spec.AlgoOptions)
+	require.NoError(t, err)
+	assert.Equal(t, int32(types.T_array_float32), opts.KeyPartType)
+	assert.Empty(t, opts.FilterJSON)
+	assert.Equal(t, uint(10), opts.Nprobe)
 }
 
 // TestApplyIndicesForSortUsingIvfpq_RichPushdown drives the optimizer through
@@ -539,9 +553,14 @@ func TestApplyIndicesForSortUsingIvfpq_RichPushdown(t *testing.T) {
 	sort := builder.qry.Nodes[sortID]
 	join := builder.qry.Nodes[sort.Children[0]]
 	tf := builder.qry.Nodes[join.Children[1]]
-	assert.Equal(t, plan.Node_FUNCTION_SCAN, tf.NodeType)
-	assert.Equal(t, 3, len(tf.TblFuncExprList), "expected predsJSON arg appended")
+	require.Equal(t, plan.Node_INDEX_SEARCH_SCAN, tf.NodeType)
+	assert.True(t, tf.IndexSearchScan.PostFilterOverFetch)
+	opts, err := ivfpqplan.DecodeScanOptions(tf.IndexSearchScan.AlgoOptions)
+	require.NoError(t, err)
+	assert.NotEmpty(t, opts.FilterJSON, "INCLUDE predicate should be pushed to the search")
+	// The distance filter moves onto the index search scan.
 	assert.NotEmpty(t, tf.FilterList)
+	assert.Len(t, scanNode.FilterList, 1)
 }
 
 func TestApplyIndicesForSortUsingIvfpq_Success_WithFiltersOverFetch(t *testing.T) {
@@ -630,4 +649,13 @@ func TestApplyIndicesForSortUsingIvfpq_Success_WithFiltersOverFetch(t *testing.T
 
 	_, err := builder.applyIndicesForSortUsingIvfpq(scanNodeID, vecCtx, mti, nil)
 	require.NoError(t, err)
+
+	sort := builder.qry.Nodes[vecCtx.projNode.Children[0]]
+	join := builder.qry.Nodes[sort.Children[0]]
+	right := builder.qry.Nodes[join.Children[1]]
+	require.Equal(t, plan.Node_INDEX_SEARCH_SCAN, right.NodeType)
+	assert.True(t, right.IndexSearchScan.PostFilterOverFetch)
+	// The candidate limit stays the raw k; execution over-fetches.
+	assert.NotNil(t, right.IndexSearchScan.CandidateLimit.GetCol())
+	assert.Nil(t, right.Limit)
 }

@@ -15,7 +15,7 @@
 package plan
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat"
+	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -282,7 +282,7 @@ func TestApplyIndicesForSortUsingIvfflat_PostModeBuildsEmptyFallback(t *testing.
 	require.Equal(t, uint64(2), tableFuncNode.IndexSearchScan.GetCandidateLimit().GetLit().GetU64Val())
 	require.True(t, tableFuncNode.IndexSearchScan.GetPostFilterOverFetch())
 	require.Empty(t, tableFuncNode.IndexSearchScan.PreFilters)
-	require.Zero(t, testAlgoExpr(tableFuncNode.IndexSearchScan, ivfflat.FirstRoundLimitExpr))
+	require.Zero(t, testAlgoExpr(tableFuncNode.IndexSearchScan, ivfflatplan.FirstRoundLimitExpr))
 	require.Zero(t, testIvfScanOptions(t, tableFuncNode.IndexSearchScan).BucketExpandStep)
 
 	require.Len(t, scanNode.FilterList, 2)
@@ -474,7 +474,7 @@ func TestApplyIndicesForSortUsingIvfflat_IncludeModePartialPushdownKeepsResidual
 	require.Len(t, tableFuncNode.IndexSearchScan.PreFilters, 1)
 	assert.Equal(t, int32(5), tableFuncNode.IndexSearchScan.PreFilters[0].GetF().Args[0].GetCol().ColPos)
 	assert.Equal(t, catalog.SystemSI_IVFFLAT_IncludeColPrefix+"category", tableFuncNode.IndexSearchScan.PreFilters[0].GetF().Args[0].GetCol().Name)
-	assert.Zero(t, testAlgoExpr(tableFuncNode.IndexSearchScan, ivfflat.FirstRoundLimitExpr))
+	assert.Zero(t, testAlgoExpr(tableFuncNode.IndexSearchScan, ivfflatplan.FirstRoundLimitExpr))
 	assert.Zero(t, testIvfScanOptions(t, tableFuncNode.IndexSearchScan).BucketExpandStep)
 	require.Len(t, tableFuncNode.RuntimeFilterProbeList, 1)
 	require.True(t, tableFuncNode.RuntimeFilterProbeList[0].UseMembershipFilter)
@@ -518,7 +518,7 @@ func TestApplyIndicesForSortUsingIvfflat_IncludeModeResidualOnlyUsesSingleRoundP
 	require.Equal(t, uint64(2), tableFuncNode.IndexSearchScan.GetCandidateLimit().GetLit().GetU64Val())
 	require.True(t, tableFuncNode.IndexSearchScan.GetPostFilterOverFetch())
 	require.Empty(t, tableFuncNode.IndexSearchScan.PreFilters)
-	require.Zero(t, testAlgoExpr(tableFuncNode.IndexSearchScan, ivfflat.FirstRoundLimitExpr))
+	require.Zero(t, testAlgoExpr(tableFuncNode.IndexSearchScan, ivfflatplan.FirstRoundLimitExpr))
 	require.Len(t, tableFuncNode.RuntimeFilterProbeList, 1)
 	require.True(t, tableFuncNode.RuntimeFilterProbeList[0].UseMembershipFilter)
 	require.True(t, tableFuncNode.Stats.GetForceOneCN())
@@ -745,7 +745,7 @@ func TestApplyIndicesForSortUsingIvfflat_IncludeModeIndexOnlyPushdownOverfetches
 	require.Equal(t, uint64(2), tableFuncNode.IndexSearchScan.GetCandidateLimit().GetLit().GetU64Val())
 	require.Equal(t, uint64(2), tableFuncNode.IndexSearchScan.GetCandidateLimit().GetLit().GetU64Val())
 	require.Len(t, tableFuncNode.IndexSearchScan.PreFilters, 1)
-	assert.Equal(t, uint64(12), testAlgoExpr(tableFuncNode.IndexSearchScan, ivfflat.FirstRoundLimitExpr).GetLit().GetU64Val())
+	assert.Equal(t, uint64(12), testAlgoExpr(tableFuncNode.IndexSearchScan, ivfflatplan.FirstRoundLimitExpr).GetLit().GetU64Val())
 }
 
 func TestApplyIndicesForSortUsingIvfflat_IncludeModePushdownRoundLimitUsesOffsetCompensatedK(t *testing.T) {
@@ -781,7 +781,7 @@ func TestApplyIndicesForSortUsingIvfflat_IncludeModePushdownRoundLimitUsesOffset
 	require.Equal(t, uint64(5), tableFuncNode.IndexSearchScan.GetCandidateLimit().GetLit().GetU64Val())
 	require.Equal(t, uint64(5), tableFuncNode.IndexSearchScan.GetCandidateLimit().GetLit().GetU64Val())
 	require.Len(t, tableFuncNode.IndexSearchScan.PreFilters, 1)
-	assert.Equal(t, uint64(25), testAlgoExpr(tableFuncNode.IndexSearchScan, ivfflat.FirstRoundLimitExpr).GetLit().GetU64Val())
+	assert.Equal(t, uint64(25), testAlgoExpr(tableFuncNode.IndexSearchScan, ivfflatplan.FirstRoundLimitExpr).GetLit().GetU64Val())
 	assert.Equal(t, uint32(10), testIvfScanOptions(t, tableFuncNode.IndexSearchScan).BucketExpandStep)
 }
 
@@ -802,6 +802,6 @@ func TestApplyIndicesForSortUsingIvfflat_IncludeModeWithoutFiltersDoesNotDoubleC
 	require.Equal(t, uint64(5), tableFuncNode.IndexSearchScan.GetCandidateLimit().GetLit().GetU64Val())
 	require.Equal(t, uint64(5), tableFuncNode.IndexSearchScan.GetCandidateLimit().GetLit().GetU64Val())
 	require.Empty(t, tableFuncNode.IndexSearchScan.PreFilters)
-	assert.Equal(t, uint64(5), testAlgoExpr(tableFuncNode.IndexSearchScan, ivfflat.FirstRoundLimitExpr).GetLit().GetU64Val())
+	assert.Equal(t, uint64(5), testAlgoExpr(tableFuncNode.IndexSearchScan, ivfflatplan.FirstRoundLimitExpr).GetLit().GetU64Val())
 	assert.Equal(t, uint32(10), testIvfScanOptions(t, tableFuncNode.IndexSearchScan).BucketExpandStep)
 }

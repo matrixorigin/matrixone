@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat"
 	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/overfetch"
@@ -795,7 +794,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflatWithContext(
 		}
 	}
 	typedPreFilters := rebindIvfPreFilters(typedPushdownFilters, scanNode, includeColumns)
-	algoOptions, err := ivfflat.EncodeScanOptions(ivfflat.ScanOptions{
+	algoOptions, err := ivfflatplan.EncodeScanOptions(ivfflatplan.ScanOptions{
 		InitialProbeCount: uint32(ivfCtx.nProbe),
 		BucketExpandStep:  uint32(bucketExpandStep),
 		ThreadsSearch:     ivfCtx.nThread,
@@ -807,7 +806,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflatWithContext(
 	var algoExprNames []string
 	if firstRoundLimitExpr != nil {
 		algoExprs = []*plan.Expr{firstRoundLimitExpr}
-		algoExprNames = []string{ivfflat.FirstRoundLimitExpr}
+		algoExprNames = []string{ivfflatplan.FirstRoundLimitExpr}
 	}
 
 	// Build an optimizer-visible vector-index access path.  The hidden table

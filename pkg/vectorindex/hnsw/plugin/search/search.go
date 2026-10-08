@@ -19,6 +19,7 @@ package search
 import (
 	"context"
 	"fmt"
+	hnswplan "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -78,7 +79,7 @@ func newSearcher(proc *process.Process, spec *plan.IndexSearchScan, req searchpl
 	if spec == nil || spec.Index == nil || spec.SourceTable == nil || spec.SourceTableDef == nil {
 		return nil, moerr.NewInvalidInputNoCtx("hnsw index search is missing source or index metadata")
 	}
-	idxcfg, err := hnsw.SearchIndexConfig(spec.Index.IndexAlgoParams)
+	idxcfg, err := hnswplan.SearchIndexConfig(spec.Index.IndexAlgoParams)
 	if err != nil {
 		return nil, err
 	}
@@ -87,7 +88,7 @@ func newSearcher(proc *process.Process, spec *plan.IndexSearchScan, req searchpl
 		return nil, err
 	}
 	idxcfg.Usearch.Dimensions = uint(req.QueryType.Width)
-	opts, err := hnsw.DecodeScanOptions(spec.AlgoOptions)
+	opts, err := hnswplan.DecodeScanOptions(spec.AlgoOptions)
 	if err != nil {
 		return nil, err
 	}
@@ -113,16 +114,13 @@ func newSearcher(proc *process.Process, spec *plan.IndexSearchScan, req searchpl
 		idxcfg:   idxcfg,
 		tblcfg:   tblcfg,
 		query:    req.QueryPayload,
-		limit:    req.CandidateBudget,
+		limit:    max(req.CandidateBudget, 1),
 		snapshot: spec.ScanSnapshot,
 	}, nil
 }
 
 // Next returns the whole result as one chunk.
 func (s *searcher) Next(ctx context.Context) (planreader.Chunk, bool, error) {
-	if s.limit == 0 {
-		return planreader.Chunk{}, false, nil
-	}
 	if err := ctx.Err(); err != nil {
 		return planreader.Chunk{}, false, err
 	}

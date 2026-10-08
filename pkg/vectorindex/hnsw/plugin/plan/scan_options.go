@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package hnsw
+package plan
 
 import (
-	"encoding/json"
 	"strconv"
 
+	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
@@ -31,7 +31,7 @@ type ScanOptions struct {
 
 // EncodeScanOptions returns the algo_options bytes of opts.
 func EncodeScanOptions(opts ScanOptions) ([]byte, error) {
-	return json.Marshal(opts)
+	return sonic.Marshal(opts)
 }
 
 // DecodeScanOptions returns the ScanOptions of algo_options bytes; empty bytes
@@ -41,7 +41,7 @@ func DecodeScanOptions(data []byte) (ScanOptions, error) {
 	if len(data) == 0 {
 		return opts, nil
 	}
-	if err := json.Unmarshal(data, &opts); err != nil {
+	if err := sonic.Unmarshal(data, &opts); err != nil {
 		return opts, moerr.NewInvalidInputNoCtxf("invalid hnsw scan options: %v", err)
 	}
 	return opts, nil
@@ -53,7 +53,7 @@ func SearchIndexConfig(algoParams string) (vectorindex.IndexConfig, error) {
 	var idxcfg vectorindex.IndexConfig
 	var param vectorindex.HnswParam
 	if len(algoParams) > 0 {
-		if err := json.Unmarshal([]byte(algoParams), &param); err != nil {
+		if err := sonic.Unmarshal([]byte(algoParams), &param); err != nil {
 			return idxcfg, err
 		}
 	}

@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"math"
 	"slices"
 	"sync"
@@ -2066,7 +2067,7 @@ func TestSearchPlanReaderValidatesRoundLimitsBeforeScanning(t *testing.T) {
 		req: searchplugin.Request{
 			CandidateBudget: 1,
 			AlgoValues: []searchplugin.AlgoValue{{
-				Name:  FirstRoundLimitExpr,
+				Name:  ivfflatplan.FirstRoundLimitExpr,
 				Value: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: math.MaxUint64}},
 			}},
 		},
@@ -2196,7 +2197,7 @@ func TestSearchPlanReaderUsesBoundedMembershipStorageTopK(t *testing.T) {
 		for _, requestFunction := range []string{cachedFunction, metric.DistFn_L2Distance, metric.DistFn_L2sqDistance, cachedFunction} {
 			currentFunction = requestFunction
 			r := &planReader{
-				opts: ScanOptions{InitialProbeCount: 1},
+				opts: ivfflatplan.ScanOptions{InitialProbeCount: 1},
 				spec: &plan.IndexSearchScan{
 					DistanceFunction: requestFunction,
 					IncludedColumns:  []string{"payload"},
@@ -2472,7 +2473,7 @@ func testTypedPlanReaders(t *testing.T, parallelism int, identity ...searchplugi
 		DistanceFunction: metric.DistFn_L2Distance,
 	}
 	r := &planReader{
-		opts: ScanOptions{InitialProbeCount: 1},
+		opts: ivfflatplan.ScanOptions{InitialProbeCount: 1},
 		proc: proc,
 		spec: spec,
 		req: searchplugin.Request{

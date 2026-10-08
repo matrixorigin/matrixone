@@ -15,6 +15,7 @@
 package search
 
 import (
+	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"strconv"
 
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
@@ -37,7 +38,7 @@ func (Hooks) NewReader(proc *process.Process, spec *plan.IndexSearchScan, req se
 // CanParallelize reports whether spec searches in one round; a multi-round
 // search expands buckets from the merged result of the previous round.
 func (Hooks) CanParallelize(spec *plan.IndexSearchScan) (bool, error) {
-	multiRound, err := ivfflat.MultiRound(spec)
+	multiRound, err := ivfflatplan.MultiRound(spec)
 	return !multiRound, err
 }
 
@@ -47,7 +48,7 @@ func (Hooks) NewReaders(proc *process.Process, spec *plan.IndexSearchScan, req s
 
 // ExplainSettings returns the first-round probe count.
 func (Hooks) ExplainSettings(spec *plan.IndexSearchScan) ([]string, error) {
-	opts, err := ivfflat.DecodeScanOptions(spec.GetAlgoOptions())
+	opts, err := ivfflatplan.DecodeScanOptions(spec.GetAlgoOptions())
 	if err != nil {
 		return nil, err
 	}

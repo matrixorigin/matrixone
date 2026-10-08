@@ -15,6 +15,7 @@
 package ivfflat
 
 import (
+	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"math"
 	"sync/atomic"
 
@@ -85,7 +86,7 @@ func NewPlanReaders(proc *process.Process, spec *plan.IndexSearchScan, req searc
 	if err != nil {
 		return nil, err
 	}
-	multiRound, err := MultiRound(spec)
+	multiRound, err := ivfflatplan.MultiRound(spec)
 	if err != nil {
 		return nil, err
 	}

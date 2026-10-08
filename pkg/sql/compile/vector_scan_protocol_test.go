@@ -286,6 +286,13 @@ func TestRequiredIVFWorkersRequireProtocol107(t *testing.T) {
 			c, client := vectorPlacementCompile(t, engine.Nodes{{Id: "a", Addr: "a:6001"}, {Id: "b", Addr: "b:6001"}})
 			moruntime.ServiceRuntime(c.proc.GetService()).SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion107)
 			client.version = defines.MORPCVersion107
+			// gpu_mode off: the IVF centroid search runs on CPU workers.
+			c.proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+				if name == "gpu_mode" {
+					return int8(0), nil
+				}
+				return nil, nil
+			})
 			typ := plan.Type{Id: int32(types.T_int64)}
 			col := func(rel int32) *plan.Expr {
 				return &plan.Expr{Typ: typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: rel, ColPos: 0}}}

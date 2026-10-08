@@ -16,6 +16,7 @@ package ivfflat
 
 import (
 	"context"
+	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -178,7 +179,7 @@ func TestPlanGenerationFailsClosedBeforeStorage(t *testing.T) {
 	for _, multiRound := range []func(*plan.IndexSearchScan){
 		func(s *plan.IndexSearchScan) {
 			s.AlgoExprs = []*plan.Expr{{}}
-			s.AlgoExprNames = []string{FirstRoundLimitExpr}
+			s.AlgoExprNames = []string{ivfflatplan.FirstRoundLimitExpr}
 		},
 		func(s *plan.IndexSearchScan) { s.AlgoOptions = []byte(`{"bucket_expand_step":2}`) },
 		func(s *plan.IndexSearchScan) { s.AlgoOptions = []byte(`{`) },

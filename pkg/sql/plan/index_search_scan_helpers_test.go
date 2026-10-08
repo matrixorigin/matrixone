@@ -15,17 +15,17 @@
 package plan
 
 import (
+	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat"
 	"github.com/stretchr/testify/require"
 )
 
 // testIvfScanOptions returns the ivfflat settings of spec.
-func testIvfScanOptions(t *testing.T, spec *plan.IndexSearchScan) ivfflat.ScanOptions {
+func testIvfScanOptions(t *testing.T, spec *plan.IndexSearchScan) ivfflatplan.ScanOptions {
 	t.Helper()
-	opts, err := ivfflat.DecodeScanOptions(spec.GetAlgoOptions())
+	opts, err := ivfflatplan.DecodeScanOptions(spec.GetAlgoOptions())
 	require.NoError(t, err)
 	return opts
 }
@@ -41,9 +41,9 @@ func testAlgoExpr(spec *plan.IndexSearchScan, name string) *plan.Expr {
 }
 
 // testIvfAlgoOptions returns the algo_options bytes of opts.
-func testIvfAlgoOptions(t *testing.T, opts ivfflat.ScanOptions) []byte {
+func testIvfAlgoOptions(t *testing.T, opts ivfflatplan.ScanOptions) []byte {
 	t.Helper()
-	data, err := ivfflat.EncodeScanOptions(opts)
+	data, err := ivfflatplan.EncodeScanOptions(opts)
 	require.NoError(t, err)
 	return data
 }

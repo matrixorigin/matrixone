@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"sort"
 	"strconv"
 	"strings"
@@ -51,7 +52,7 @@ type planReader struct {
 	proc        *process.Process
 	spec        *plan.IndexSearchScan
 	req         searchplugin.Request
-	opts        ScanOptions
+	opts        ivfflatplan.ScanOptions
 	scanner     *relationScanner
 	closed      bool
 	generation  *planSearchGeneration
@@ -85,7 +86,7 @@ func NewPlanReader(proc *process.Process, spec *plan.IndexSearchScan, req search
 	if req.CandidateBudget < req.ResultLimit {
 		return nil, moerr.NewInvalidInputNoCtx("ivfflat candidate budget is smaller than the result limit")
 	}
-	opts, err := DecodeScanOptions(spec.AlgoOptions)
+	opts, err := ivfflatplan.DecodeScanOptions(spec.AlgoOptions)
 	if err != nil {
 		return nil, err
 	}
@@ -484,7 +485,7 @@ func searchPlanReader[T types.RealNumbers](
 		return err
 	}
 
-	firstRound, hasFirstRound, err := FirstRoundLimit(r.req)
+	firstRound, hasFirstRound, err := ivfflatplan.FirstRoundLimit(r.req)
 	if err != nil {
 		return err
 	}
