@@ -18,10 +18,44 @@ import (
 	"bytes"
 	"encoding"
 	io "io"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
+
+// Median groups can write their existing wire representation directly. Other
+// aggregate states keep their BinaryMarshaler path.
+type runtimeAggGroupWriter interface {
+	MarshalBinarySize() (int, error)
+	MarshalBinaryTo(io.Writer) error
+}
+
+func writeRuntimeAggGroup(group encoding.BinaryMarshaler, writer io.Writer) error {
+	if streamed, ok := group.(runtimeAggGroupWriter); ok {
+		size, err := streamed.MarshalBinarySize()
+		if err != nil {
+			return err
+		}
+		if size < 0 || size > math.MaxInt32 {
+			return moerr.NewInvalidInputNoCtx("aggregate group exceeds marshal format")
+		}
+		prefix := int32(size)
+		written, err := writer.Write(types.EncodeInt32(&prefix))
+		if err != nil {
+			return err
+		}
+		if written != 4 {
+			return io.ErrShortWrite
+		}
+		return streamed.MarshalBinaryTo(writer)
+	}
+	data, err := group.MarshalBinary()
+	if err != nil {
+		return err
+	}
+	return types.WriteSizeBytes(data, writer)
+}
 
 func marshalRetAndGroupsToBuffer[T encoding.BinaryMarshaler](
 	cnt int64, flags [][]uint8, buf *bytes.Buffer,
@@ -42,11 +76,7 @@ func marshalRetAndGroupsToBuffer[T encoding.BinaryMarshaler](
 		for i := range flags {
 			for j := range flags[i] {
 				if flags[i][j] == 1 {
-					bs, err := groups[groupIdx].MarshalBinary()
-					if err != nil {
-						return err
-					}
-					if err = types.WriteSizeBytes(bs, buf); err != nil {
+					if err := writeRuntimeAggGroup(groups[groupIdx], buf); err != nil {
 						return err
 					}
 				}
@@ -87,11 +117,7 @@ func marshalChunkToBuffer[T encoding.BinaryMarshaler](
 	} else {
 		types.WriteInt64(buf, cnt)
 		for i := 0; i < chunkNGroup; i++ {
-			bs, err := groups[start+i].MarshalBinary()
-			if err != nil {
-				return err
-			}
-			if err = types.WriteSizeBytes(bs, buf); err != nil {
+			if err := writeRuntimeAggGroup(groups[start+i], buf); err != nil {
 				return err
 			}
 		}
