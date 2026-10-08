@@ -123,7 +123,7 @@ func TestWithRestoredJoinBat1VectorsRestoresOwnerOnError(t *testing.T) {
 func writeDedupSpillBatch(t *testing.T, proc *process.Process, name string, value int32) *os.File {
 	spillfs, err := proc.GetSpillFileService()
 	require.NoError(t, err)
-	fd, err := spillfs.CreateAndRemoveFile(proc.Ctx, name)
+	fd, err := spillfs.CreateFile(proc.Ctx, name)
 	require.NoError(t, err)
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{value}, nil, proc.Mp())
@@ -150,7 +150,14 @@ func newDedupSpillFile(t *testing.T, fd *os.File, rows int64) *message.SpillFile
 	t.Helper()
 	info, err := fd.Stat()
 	require.NoError(t, err)
-	return message.NewSpillFile(fd, rows, uint64(info.Size()), nil)
+	name := fd.Name()
+	require.NoError(t, fd.Close())
+	file := message.NewReopenableSpillFile(
+		func(context.Context) (*os.File, error) { return os.Open(name) },
+		func() error { return os.Remove(name) }, rows, uint64(info.Size()), nil,
+	)
+	t.Cleanup(func() { require.NoError(t, file.Close()) })
+	return file
 }
 
 func TestDedupSpillAdvancesAfterOutput(t *testing.T) {

@@ -1926,7 +1926,7 @@ func TestRemoveInMemoryBatchReleasesAccountedBatch(t *testing.T) {
 		batchList:     []*batch.Batch{input},
 		orderCols:     [][]*vector.Vector{{input.Vecs[0]}},
 		indexList:     []int64{17},
-		spillMemUsage: int64(input.Size()),
+		spillMemUsage: int64(input.Allocated()),
 	}
 	require.NoError(t, ctr.removeInMemoryBatch(proc, 0))
 	require.Nil(t, ctr.batchList[0])
