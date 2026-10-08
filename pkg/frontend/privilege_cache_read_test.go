@@ -15,7 +15,12 @@
 package frontend
 
 import (
+	"context"
+	"flag"
+	"os"
+	"os/exec"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -23,6 +28,23 @@ import (
 // Each authorization starts cold; unsuccessful probes must not retain empty
 // database/table trees for objects on which no privilege was found.
 func TestPrivilegeCacheMissDoesNotAllocate(t *testing.T) {
+	// AllocsPerRun counts process-wide allocations. Other frontend tests start
+	// background workers, so measure in the same instrumented binary alone.
+	const childEnv = "MO_TEST_PRIVILEGE_CACHE_ALLOCS_CHILD"
+	if os.Getenv(childEnv) != "1" {
+		binary, err := os.Executable()
+		require.NoError(t, err)
+		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, binary, "-test.run=^TestPrivilegeCacheMissDoesNotAllocate$", "-test.count=1")
+		if coverageDir := flag.Lookup("test.gocoverdir"); coverageDir != nil && coverageDir.Value.String() != "" {
+			cmd.Args = append(cmd.Args, "-test.gocoverdir="+coverageDir.Value.String())
+		}
+		cmd.Env = append(os.Environ(), childEnv+"=1")
+		output, err := cmd.CombinedOutput()
+		require.NoError(t, err, "isolated allocation check: %s", output)
+		return
+	}
 	for _, typ := range []objectType{objectTypeTable, objectTypeView, objectTypeDatabase} {
 		for _, level := range []privilegeLevelType{privilegeLevelDatabase, privilegeLevelDatabaseStar, privilegeLevelDatabaseTable, privilegeLevelTable} {
 			var cache privilegeCache

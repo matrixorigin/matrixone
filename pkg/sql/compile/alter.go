@@ -1102,6 +1102,11 @@ func (s *Scope) AlterTableCopy(c *Compile) (err error) {
 			retryErr = moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
 		}
 
+		// Rebuild the stale parent plan before resolving its hidden relations.
+		if retryErr != nil {
+			return retryErr
+		}
+
 		if qry.TableDef.Indexes != nil {
 			for _, indexdef := range qry.TableDef.Indexes {
 				if indexdef.TableExist {

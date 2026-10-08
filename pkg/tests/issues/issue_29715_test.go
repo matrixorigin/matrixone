@@ -18,12 +18,14 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"fmt"
+	"github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -400,5 +402,119 @@ func TestIssue29715QualifiedDropIndexWithoutSessionDatabase(t *testing.T) {
 		var count int
 		require.NoError(t, db.QueryRowContext(ctx, "select count(*) from "+database+".t").Scan(&count))
 		require.Equal(t, 2, count)
+	})
+}
+
+func TestIssue29715StaleAlterIndexGeneration(t *testing.T) {
+	testIssue29715StaleAlterIndexGeneration(t, "alter table issue29715stale.t add column z int")
+}
+func TestIssue29715StaleAlterIndexGenerationInplace(t *testing.T) {
+	testIssue29715StaleAlterIndexGeneration(t, "alter table issue29715stale.t add index keepidx(v)")
+}
+func testIssue29715StaleAlterIndexGeneration(t *testing.T, action string) {
+	t.Helper()
+	runAuthenticatedClusterTest(t, func(c embed.Cluster) {
+		ctx, stop := context.WithTimeout(t.Context(), 90*time.Second)
+		defer stop()
+		cn0, err := c.GetCNService(0)
+		require.NoError(t, err)
+		cn1, err := c.GetCNService(1)
+		require.NoError(t, err)
+		db := openIssue29715DB(t, cn0.GetServiceConfig().CN.Frontend.Port)
+		defer db.Close()
+		ddl, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/issue29715stale", cn1.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer ddl.Close()
+		execSQLRequire(t, ctx, db, "create database issue29715stale")
+		defer func() {
+			cc, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			execSQLMaybe(t, cc, db, "drop database if exists issue29715stale")
+		}()
+		execSQLRequire(t, ctx, db, "create table issue29715stale.t(id int primary key,u int,v int,unique uk(u))")
+		execSQLRequire(t, ctx, db, "insert into issue29715stale.t values(1,1,0)")
+		syncAuthenticatedClusterCommit(t, ctx, c)
+		paused, release := make(chan struct{}), make(chan struct{})
+		var once sync.Once
+		var first atomic.Bool
+		tc := moruntime.MustGetTestingContext(cn0.ServiceID())
+		tc.SetBeforeLockFunc(func(_ []byte, id uint64) {
+			if id == catalog.MO_TABLES_ID && first.CompareAndSwap(false, true) {
+				close(paused)
+				select {
+				case <-release:
+				case <-ctx.Done():
+				}
+			}
+		})
+		tc.SetAdjustLockResultFunc(func([]byte, uint64, *pblock.Result) {})
+		defer tc.SetBeforeLockFunc(nil)
+		defer tc.SetAdjustLockResultFunc(nil)
+		work, cancel := context.WithCancel(ctx)
+		defer cancel()
+		done := make(chan error, 1)
+		joined := false
+		defer func() {
+			cancel()
+			once.Do(func() { close(release) })
+			if !joined {
+				select {
+				case <-done:
+				case <-time.After(10 * time.Second):
+					t.Error("ADD worker did not stop")
+				}
+			}
+		}()
+		go func() { _, e := db.ExecContext(work, action); done <- e }()
+		select {
+		case <-paused:
+		case e := <-done:
+			joined = true
+			t.Fatalf("ADD did not reach admission: %v", e)
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
+		execSQLRequire(t, ctx, ddl, "alter table issue29715stale.t drop index uk")
+		syncAuthenticatedClusterCommit(t, ctx, c)
+		once.Do(func() { close(release) })
+		select {
+		case e := <-done:
+			joined = true
+			require.NoError(t, e, "stale ALTER must rebuild instead of exposing removed hidden-index generation")
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
+		var table, definition string
+		require.NoError(t, db.QueryRowContext(ctx, "show create table issue29715stale.t").Scan(&table, &definition))
+		if strings.Contains(action, "add column") {
+			var z sql.NullInt64
+			require.NoError(t, db.QueryRowContext(ctx, "select z from issue29715stale.t where id=1").Scan(&z))
+			require.False(t, z.Valid)
+		} else {
+			require.Contains(t, definition, "keepidx")
+		}
+		// A successful retry must apply the current schema, not resurrect UK.
+		execSQLRequire(t, ctx, db, "insert into issue29715stale.t(id,u,v) values(2,1,7)")
+		var rows, sum int
+		require.NoError(t, db.QueryRowContext(ctx, "select count(*),sum(v) from issue29715stale.t").Scan(&rows, &sum))
+		require.Equal(t, 2, rows)
+		require.Equal(t, 7, sum)
+
+		// A genuinely missing child of an unchanged parent must remain terminal.
+		execSQLRequire(t, ctx, db, "create table issue29715stale.corrupt(id int primary key,u int,v int,unique uk(u))")
+		var hidden string
+		require.NoError(t, db.QueryRowContext(ctx, "select index_table_name from mo_catalog.mo_indexes where name='uk' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase='issue29715stale' and relname='corrupt')").Scan(&hidden))
+		corruptTxn, err := db.BeginTx(ctx, nil)
+		require.NoError(t, err)
+		defer corruptTxn.Rollback()
+		_, err = corruptTxn.ExecContext(ctx, "drop table issue29715stale.`"+hidden+"`")
+		require.NoError(t, err)
+		terminalCtx, terminalCancel := context.WithTimeout(ctx, 10*time.Second)
+		defer terminalCancel()
+		_, err = corruptTxn.ExecContext(terminalCtx, strings.Replace(action, ".t ", ".corrupt ", 1))
+		var mysqlErr *mysql.MySQLError
+		require.ErrorAs(t, err, &mysqlErr, "missing child must terminate without retrying until the deadline")
+		require.Equal(t, uint16(1146), mysqlErr.Number)
+		require.NoError(t, corruptTxn.Rollback())
 	})
 }
