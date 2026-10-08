@@ -856,18 +856,10 @@ func LockWaitTimeoutFromTxn(op TxnOperator) time.Duration {
 }
 
 func (tc *txnOperator) notifyActive() {
-	tc.completeActiveWait(nil)
-}
-
-func (tc *txnOperator) failActiveWait(err error) {
-	tc.completeActiveWait(err)
-}
-
-func (tc *txnOperator) completeActiveWait(err error) {
 	if tc.reset.waiter == nil {
 		panic("BUG: notify active on non-waiter txn operator")
 	}
-	tc.reset.waiter.complete(err)
+	tc.reset.waiter.complete(nil)
 }
 
 func (tc *txnOperator) AddWorkspace(workspace Workspace) {
