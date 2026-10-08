@@ -1291,7 +1291,7 @@ func TestQueryBuilderBuildSortRollupPlan(t *testing.T) {
 		1,
 	)
 	require.NoError(t, err)
-	queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 	require.NoError(t, err)
 
 	query := queryPlan.GetQuery()
@@ -1352,7 +1352,7 @@ func TestQueryBuilderDirectSortRollupPlanModes(t *testing.T) {
 			rt.SetGlobalVariables("optimizer_hints", tc.hint)
 			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
-			queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+			queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 			require.NoError(t, err)
 
 			if tc.sort {
@@ -1421,7 +1421,7 @@ func TestQueryBuilderSortRollupFailsClosed(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, test.sql, 1)
 			require.NoError(t, err)
-			queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+			queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 			require.NoError(t, err)
 			for _, node := range queryPlan.GetQuery().Nodes {
 				require.False(t, node.NodeType == plan.Node_AGG &&
@@ -1445,7 +1445,7 @@ func TestQueryBuilderSortRollupFallsBackForUnprovenKeyTypes(t *testing.T) {
 
 	for _, oid := range []types.T{types.T_float32, types.T_float64, types.T_json} {
 		t.Run(oid.String(), func(t *testing.T) {
-			mock := NewMockCompilerContext(true)
+			mock := NewMockCompilerContext(true, newPlanTestProcess(t))
 			mock.tables["bind_select"].Cols[0].Typ.Id = int32(oid)
 			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL,
 				`select a, b, count(*) from select_test.bind_select
@@ -1478,7 +1478,7 @@ func TestQueryBuilderSortRollupFallsBackForDerivedSource(t *testing.T) {
 			(select a from select_test.bind_select) d
 			group by d.a with rollup`, 1)
 	require.NoError(t, err)
-	queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 	require.NoError(t, err)
 	for _, node := range queryPlan.GetQuery().Nodes {
 		require.False(t, node.NodeType == plan.Node_AGG &&
@@ -1505,7 +1505,7 @@ func TestQueryBuilderSortRollupFallsBackForNestedDerivedRollup(t *testing.T) {
 			group by a with rollup
 		) d`, 1)
 	require.NoError(t, err)
-	queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 	require.NoError(t, err)
 	require.False(t, planHasSortRollup(queryPlan.GetQuery()))
 }
@@ -1527,7 +1527,7 @@ func TestQueryBuilderSortRollupReusesOrderedDerivedSource(t *testing.T) {
 			(select a, b from select_test.bind_select order by a, b) d
 			group by d.a, d.b with rollup`, 1)
 	require.NoError(t, err)
-	queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 	require.NoError(t, err)
 
 	var rollupAgg *plan.Node
@@ -1577,7 +1577,7 @@ func TestQueryBuilderOrderedDerivedRollupPlanModes(t *testing.T) {
 			rt.SetGlobalVariables("optimizer_hints", tc.hint)
 			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1)
 			require.NoError(t, err)
-			queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+			queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 			require.NoError(t, err)
 
 			counts := make(map[plan.Node_NodeType]int)
@@ -1606,7 +1606,7 @@ func TestSortRollupTypeProbeDoesNotMutateAST(t *testing.T) {
 		 group by a, b with rollup`, 1)
 	require.NoError(t, err)
 	selectClause := stmt[0].(*tree.Select).Select.(*tree.SelectClause)
-	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, false)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, false)
 	ctx := NewBindContext(builder, nil)
 	ctx.defaultDatabase = "select_test"
 	ctx.lower = 1
@@ -1656,7 +1656,7 @@ func TestQueryBuilderSortRollupFilterIsAggregateBoundary(t *testing.T) {
 			group by a, b with rollup
 			having a = 1`, 1)
 	require.NoError(t, err)
-	queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 	require.NoError(t, err)
 
 	var aggregate *plan.Node
