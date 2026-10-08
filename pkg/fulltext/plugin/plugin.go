@@ -34,11 +34,13 @@ import (
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	idxcronplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/idxcron"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
+	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 
 	fulltextcompile "github.com/matrixorigin/matrixone/pkg/fulltext/plugin/compile"
 	fulltextidxcron "github.com/matrixorigin/matrixone/pkg/fulltext/plugin/idxcron"
 	fulltextplan "github.com/matrixorigin/matrixone/pkg/fulltext/plugin/plan"
 	fulltextruntime "github.com/matrixorigin/matrixone/pkg/fulltext/plugin/runtime"
+	fulltextsearch "github.com/matrixorigin/matrixone/pkg/fulltext/plugin/search"
 )
 
 // Plugin is the fulltext AlgoPlugin.
@@ -47,6 +49,7 @@ type Plugin struct {
 	compileHooks compileplugin.Hooks
 	planHooks    planplugin.Hooks
 	idxcronHooks idxcronplugin.Hooks
+	searchHooks  searchplugin.Hooks
 }
 
 func New() *Plugin {
@@ -55,6 +58,7 @@ func New() *Plugin {
 		compileHooks: fulltextcompile.Hooks{},
 		planHooks:    fulltextplan.Hooks{},
 		idxcronHooks: fulltextidxcron.Hooks{},
+		searchHooks:  fulltextsearch.Hooks{},
 	}
 }
 
@@ -63,9 +67,11 @@ func (p *Plugin) Catalog() catalogplugin.Hooks { return p.catalogHooks }
 func (p *Plugin) Compile() compileplugin.Hooks { return p.compileHooks }
 func (p *Plugin) Plan() planplugin.Hooks       { return p.planHooks }
 func (p *Plugin) Idxcron() idxcronplugin.Hooks { return p.idxcronHooks }
+func (p *Plugin) Search() searchplugin.Hooks   { return p.searchHooks }
 
 // Compile-time check that *Plugin satisfies the AlgoPlugin interface.
 var _ plugin.AlgoPlugin = (*Plugin)(nil)
+var _ plugin.SearchPlugin = (*Plugin)(nil)
 
 // init registers fulltext with the global plugin registry.
 func init() { plugin.Register(New()) }

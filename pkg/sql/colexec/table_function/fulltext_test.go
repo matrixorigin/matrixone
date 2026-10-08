@@ -17,7 +17,6 @@ package table_function
 import (
 	"context"
 	"math/rand"
-	goruntime "runtime"
 	"strings"
 	"testing"
 	"time"
@@ -28,11 +27,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fulltext"
+	ftsearch "github.com/matrixorigin/matrixone/pkg/fulltext/plugin/search"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -42,86 +41,6 @@ import (
 type fulltextTestCase struct {
 	arg  *TableFunction
 	proc *process.Process
-}
-
-func TestFulltextTopKLimitBounds(t *testing.T) {
-	maxLimit := ^uint64(0)
-	require.Equal(t, maxLimit, fulltextTopKLimit(maxLimit, true))
-	require.Equal(t, uint64(30), fulltextTopKLimit(10, true))
-	require.Equal(t, 1<<20, vectorindex.SearchResultPreallocate(maxLimit))
-
-	proc := testutil.NewProc(t)
-	state := &fulltextState{
-		batch:  batch.NewWithSize(1),
-		resbuf: []*vectorindex.SearchResultAnyKey{{Id: int64(7)}},
-	}
-	state.batch.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	result, err := state.returnResultFromBuffer(proc, maxLimit)
-	require.NoError(t, err)
-	require.Equal(t, 1, result.Batch.RowCount())
-	require.Empty(t, state.resbuf)
-	result.Batch.Clean(proc.Mp())
-}
-
-func TestFulltextResolveExecutionTarget(t *testing.T) {
-	proc := testutil.NewProc(t)
-
-	t.Run("direct call stays in current tenant", func(t *testing.T) {
-		state := &fulltextState{}
-		source, index, err := state.resolveExecutionTarget(proc, &TableFunction{}, "user_source", "user_index")
-		require.NoError(t, err)
-		require.Equal(t, "user_source", source)
-		require.Equal(t, "user_index", index)
-		require.Nil(t, state.publisherAccount)
-	})
-
-	t.Run("trusted refs select publisher and quote identifiers", func(t *testing.T) {
-		state := &fulltextState{}
-		tf := &TableFunction{
-			FulltextSourceRef: &plan.ObjectRef{
-				SchemaName: "pub`db", ObjName: "source`table", SubscriptionName: "sub_alias",
-				PubInfo: &plan.PubInfo{TenantId: 42},
-			},
-			FulltextIndexRef: &plan.ObjectRef{
-				SchemaName: "pub`db", ObjName: "index`table", SubscriptionName: "sub_alias",
-				PubInfo: &plan.PubInfo{TenantId: 42},
-			},
-		}
-		source, index, err := state.resolveExecutionTarget(proc, tf, "ignored", "ignored")
-		require.NoError(t, err)
-		require.Equal(t, "`pub``db`.`source``table`", source)
-		require.Equal(t, "`pub``db`.`index``table`", index)
-		require.Equal(t, uint32(42), *state.publisherAccount)
-		require.Equal(t, "pub`db", state.publisherDB)
-		require.Equal(t, uint32(42), *state.sqlProcess(proc).AccountIDOverride)
-	})
-
-	t.Run("incomplete or inconsistent refs are rejected", func(t *testing.T) {
-		valid := &plan.ObjectRef{
-			SchemaName: "publisher", ObjName: "source", SubscriptionName: "sub_alias",
-			PubInfo: &plan.PubInfo{TenantId: 42},
-		}
-		cases := []struct {
-			name  string
-			src   *plan.ObjectRef
-			index *plan.ObjectRef
-		}{
-			{name: "missing index", src: valid},
-			{name: "missing publisher", src: valid, index: &plan.ObjectRef{SchemaName: "publisher", ObjName: "index", SubscriptionName: "sub_alias"}},
-			{name: "different tenant", src: valid, index: &plan.ObjectRef{SchemaName: "publisher", ObjName: "index", SubscriptionName: "sub_alias", PubInfo: &plan.PubInfo{TenantId: 43}}},
-			{name: "different database", src: valid, index: &plan.ObjectRef{SchemaName: "other", ObjName: "index", SubscriptionName: "sub_alias", PubInfo: &plan.PubInfo{TenantId: 42}}},
-			{name: "different subscription", src: valid, index: &plan.ObjectRef{SchemaName: "publisher", ObjName: "index", SubscriptionName: "other_alias", PubInfo: &plan.PubInfo{TenantId: 42}}},
-		}
-		for _, tc := range cases {
-			t.Run(tc.name, func(t *testing.T) {
-				_, _, err := (&fulltextState{}).resolveExecutionTarget(proc, &TableFunction{
-					FulltextSourceRef: tc.src,
-					FulltextIndexRef:  tc.index,
-				}, "source", "index")
-				require.Error(t, err)
-			})
-		}
-	})
 }
 
 var (
@@ -244,8 +163,8 @@ func TestFullTextCall(t *testing.T) {
 	}
 
 	// stub runSql function
-	ft_runSql = fake_runSql
-	ft_runSql_streaming = fake_runSql_streaming
+	ftsearch.RunSql = fake_runSql
+	ftsearch.RunStreamingSql = fake_runSql_streaming
 
 	// start
 	err = ut.arg.ctr.state.start(ut.arg, ut.proc, 0, nil)
@@ -299,11 +218,11 @@ func TestFullTextCallWithLimitByRank(t *testing.T) {
 	}
 
 	// stub runSql function
-	ft_runSql = fake_runSql
-	ft_runSql_streaming = fake_runSql_streaming
+	ftsearch.RunSql = fake_runSql
+	ftsearch.RunStreamingSql = fake_runSql_streaming
 
 	// enable LIMIT BY RANK
-	ut.arg.ctr.state.(*fulltextState).ranking = true
+	ut.arg.ctr.state.(*fulltextState).scan.SetRanking(true)
 
 	// start
 	err = ut.arg.ctr.state.start(ut.arg, ut.proc, 0, nil)
@@ -357,8 +276,8 @@ func TestFullTextCallOneAttr(t *testing.T) {
 	}
 
 	// stub runSql function
-	ft_runSql = fake_runSql
-	ft_runSql_streaming = fake_runSql_streaming
+	ftsearch.RunSql = fake_runSql
+	ftsearch.RunStreamingSql = fake_runSql_streaming
 
 	// start
 	err = ut.arg.ctr.state.start(ut.arg, ut.proc, 0, nil)
@@ -412,8 +331,8 @@ func TestFullTextEarlyFree(t *testing.T) {
 	}
 
 	// stub runSql function
-	ft_runSql = fake_runSql
-	ft_runSql_streaming = fake_runSql_streaming
+	ftsearch.RunSql = fake_runSql
+	ftsearch.RunStreamingSql = fake_runSql_streaming
 
 	// start
 	err = ut.arg.ctr.state.start(ut.arg, ut.proc, 0, nil)
@@ -432,234 +351,6 @@ func TestFullTextEarlyFree(t *testing.T) {
 
 	// early free
 	ut.arg.ctr.state.free(ut.arg, ut.proc, false, nil)
-}
-
-func TestRunCountStarUsesCountOnlyForTFIDF(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	s := &fulltext.SearchAccum{TblName: "idx_table", ScoreAlgo: fulltext.ALGO_TFIDF}
-
-	prev := ft_runSql
-	defer func() { ft_runSql = prev }()
-
-	var gotSQL string
-	ft_runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
-		gotSQL = sql
-		return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeCountOnlyBatchFT(proc)}}, nil
-	}
-
-	_, err := runCountStar(&fulltextState{}, proc, s)
-	require.NoError(t, err)
-	require.Equal(t, "SELECT COUNT(*) from idx_table where word = '__DocLen'", gotSQL)
-	require.Equal(t, int64(100), s.Nrow)
-	require.Zero(t, s.AvgDocLen)
-}
-
-func TestRunCountStarUsesDedupedDocLenForBM25(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	s := &fulltext.SearchAccum{TblName: "idx_table", ScoreAlgo: fulltext.ALGO_BM25}
-
-	prev := ft_runSql
-	defer func() { ft_runSql = prev }()
-
-	var gotSQL string
-	ft_runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
-		gotSQL = sql
-		return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeCountBatchFT(proc)}}, nil
-	}
-
-	_, err := runCountStar(&fulltextState{}, proc, s)
-	require.NoError(t, err)
-	require.Equal(t, "SELECT COUNT(*), AVG(CAST(pos AS DOUBLE)) from (SELECT doc_id, MAX(pos) AS pos from idx_table where word = '__DocLen' GROUP BY doc_id) doc_len", gotSQL)
-	require.Equal(t, int64(100), s.Nrow)
-	require.InDelta(t, 10.6666, s.AvgDocLen, 1e-9)
-}
-
-func TestSortTopKReleasesAggregates(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	s, err := fulltext.NewSearchAccum("src", "index", "pattern", 0, "", fulltext.ALGO_TFIDF)
-	require.NoError(t, err)
-	s.Nrow = 100
-
-	st := &fulltextState{
-		agghtab:   make(map[any]uint64, 3),
-		aggcnt:    make([]int64, s.Nkeywords),
-		docLenMap: make(map[any]int32, 3),
-		mpool:     fulltext.NewFixedBytePool(proc, uint64(s.Nkeywords), 0, 0),
-	}
-	st.aggcnt[0] = 3
-
-	for i := 0; i < 3; i++ {
-		addr, docvec, allocErr := st.mpool.NewItem()
-		require.NoError(t, allocErr)
-		docvec[0] = uint8(i + 1)
-		st.agghtab[i] = addr
-		st.docLenMap[i] = int32(i + 1)
-	}
-
-	err = sort_topk(st, proc, s, 1)
-	require.NoError(t, err)
-	require.Len(t, st.minheap, 1)
-	require.Empty(t, st.agghtab)
-	require.Empty(t, st.docLenMap)
-}
-
-func TestReturnResultUsesCachedBinaryDocID(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	st := &fulltextState{
-		docIDMap: map[any]any{
-			"doc-key": []byte{0x01, 0x02, 0x03},
-		},
-		batch: batch.NewWithSize(2),
-	}
-	st.batch.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 256, 0))
-	st.batch.Vecs[1] = vector.NewVec(types.New(types.T_float32, 4, 0))
-
-	result, err := st.returnResult(proc, map[any]float32{"doc-key": 1.5})
-	require.NoError(t, err)
-	require.Equal(t, vm.ExecNext, result.Status)
-	require.Equal(t, []byte{0x01, 0x02, 0x03}, result.Batch.Vecs[0].GetBytesAt(0))
-	require.Equal(t, float32(1.5), vector.GetFixedAtWithTypeCheck[float32](result.Batch.Vecs[1], 0))
-	require.Empty(t, st.docIDMap)
-}
-
-func TestReturnResultUsesCachedBinaryDocIDWithOneAttr(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	st := &fulltextState{
-		docIDMap: map[any]any{
-			"doc-key": []byte{0x04, 0x05, 0x06},
-		},
-		batch: batch.NewWithSize(1),
-	}
-	st.batch.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 256, 0))
-
-	result, err := st.returnResult(proc, map[any]float32{"doc-key": 2.5})
-	require.NoError(t, err)
-	require.Equal(t, vm.ExecNext, result.Status)
-	require.Equal(t, []byte{0x04, 0x05, 0x06}, result.Batch.Vecs[0].GetBytesAt(0))
-	require.Empty(t, st.docIDMap)
-}
-
-func TestEvaluateKeepsBinaryDocIDUntilOutput(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	s, err := fulltext.NewSearchAccum("src", "index", "pattern", 0, "", fulltext.ALGO_TFIDF)
-	require.NoError(t, err)
-	s.Nrow = 100
-
-	st := &fulltextState{
-		agghtab:   make(map[any]uint64, 1),
-		aggcnt:    make([]int64, s.Nkeywords),
-		docLenMap: make(map[any]int32, 1),
-		docIDMap:  make(map[any]any, 1),
-		mpool:     fulltext.NewFixedBytePool(proc, uint64(s.Nkeywords), 0, 0),
-		batch:     batch.NewWithSize(2),
-	}
-	st.batch.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 256, 0))
-	st.batch.Vecs[1] = vector.NewVec(types.New(types.T_float32, 4, 0))
-	st.aggcnt[0] = 1
-
-	addr, docvec, err := st.mpool.NewItem()
-	require.NoError(t, err)
-	docvec[0] = 1
-	docID := st.normalizeDocID([]byte("doc-key"))
-	st.agghtab[docID] = addr
-	st.docLenMap[docID] = 3
-
-	scoremap, err := evaluate(st, proc, s)
-	require.NoError(t, err)
-	require.Contains(t, st.docIDMap, docID)
-
-	result, err := st.returnResult(proc, scoremap)
-	require.NoError(t, err)
-	require.Equal(t, vm.ExecNext, result.Status)
-	require.Equal(t, []byte("doc-key"), result.Batch.Vecs[0].GetBytesAt(0))
-	require.Empty(t, st.docIDMap)
-}
-
-func TestSortTopKPreservesBinaryDocIDUntilOutput(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	s, err := fulltext.NewSearchAccum("src", "index", "pattern", 0, "", fulltext.ALGO_TFIDF)
-	require.NoError(t, err)
-	s.Nrow = 100
-
-	st := &fulltextState{
-		agghtab:   make(map[any]uint64, 2),
-		aggcnt:    make([]int64, s.Nkeywords),
-		docLenMap: make(map[any]int32, 2),
-		docIDMap:  make(map[any]any, 2),
-		mpool:     fulltext.NewFixedBytePool(proc, uint64(s.Nkeywords), 0, 0),
-		batch:     batch.NewWithSize(2),
-	}
-	st.batch.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 256, 0))
-	st.batch.Vecs[1] = vector.NewVec(types.New(types.T_float32, 4, 0))
-	st.aggcnt[0] = 2
-
-	for i, doc := range [][]byte{[]byte("doc-a"), []byte("doc-b")} {
-		addr, docvec, allocErr := st.mpool.NewItem()
-		require.NoError(t, allocErr)
-		docvec[0] = uint8(2 - i)
-		docID := st.normalizeDocID(doc)
-		st.agghtab[docID] = addr
-		st.docLenMap[docID] = 4
-	}
-
-	err = sort_topk(st, proc, s, 1)
-	require.NoError(t, err)
-	require.Contains(t, st.docIDMap, "doc-a")
-
-	result, err := st.returnResultFromHeap(proc, 1)
-	require.NoError(t, err)
-	require.Equal(t, vm.ExecNext, result.Status)
-	require.Equal(t, []byte("doc-a"), result.Batch.Vecs[0].GetBytesAt(0))
-	require.Empty(t, st.docIDMap)
-}
-
-func TestSortTopKRankingReleasesFilteredDocs(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	s, err := fulltext.NewSearchAccum("src", "index", "+apple -banana", int64(tree.FULLTEXT_BOOLEAN), "", fulltext.ALGO_TFIDF)
-	require.NoError(t, err)
-	s.Nrow = 100
-
-	st := &fulltextState{
-		agghtab:   make(map[any]uint64, 2),
-		aggcnt:    make([]int64, s.Nkeywords),
-		docLenMap: make(map[any]int32, 2),
-		docIDMap:  make(map[any]any, 2),
-		mpool:     fulltext.NewFixedBytePool(proc, uint64(s.Nkeywords), 0, 0),
-		batch:     batch.NewWithSize(2),
-		ranking:   true,
-	}
-	st.batch.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 256, 0))
-	st.batch.Vecs[1] = vector.NewVec(types.New(types.T_float32, 4, 0))
-	st.aggcnt[0] = 2
-	st.aggcnt[1] = 1
-
-	keepAddr, keepVec, err := st.mpool.NewItem()
-	require.NoError(t, err)
-	keepVec[0] = 1
-	keepID := st.normalizeDocID([]byte("keep"))
-	st.agghtab[keepID] = keepAddr
-	st.docLenMap[keepID] = 4
-
-	dropAddr, dropVec, err := st.mpool.NewItem()
-	require.NoError(t, err)
-	dropVec[0] = 1
-	dropVec[1] = 1
-	dropID := st.normalizeDocID([]byte("drop"))
-	st.agghtab[dropID] = dropAddr
-	st.docLenMap[dropID] = 5
-
-	err = sort_topk(st, proc, s, 1)
-	require.NoError(t, err)
-	require.Empty(t, st.agghtab)
-	require.Empty(t, st.docLenMap)
-	require.Contains(t, st.docIDMap, keepID)
-	require.NotContains(t, st.docIDMap, dropID)
-
-	result, err := st.returnResultFromHeap(proc, 1)
-	require.NoError(t, err)
-	require.Equal(t, vm.ExecNext, result.Status)
-	require.Equal(t, []byte("keep"), result.Batch.Vecs[0].GetBytesAt(0))
-	require.Empty(t, st.docIDMap)
 }
 
 func TestFullTextCallWithLimitSingleKeywordFallsBackToStreaming(t *testing.T) {
@@ -687,15 +378,15 @@ func TestFullTextCallWithLimitSingleKeywordFallsBackToStreaming(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			prevRunSQL := ft_runSql
-			prevRunStreaming := ft_runSql_streaming
+			prevRunSQL := ftsearch.RunSql
+			prevRunStreaming := ftsearch.RunStreamingSql
 			defer func() {
-				ft_runSql = prevRunSQL
-				ft_runSql_streaming = prevRunStreaming
+				ftsearch.RunSql = prevRunSQL
+				ftsearch.RunStreamingSql = prevRunStreaming
 			}()
 
 			var streamingSQL string
-			ft_runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+			ftsearch.RunSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
 				if strings.Contains(sql, "COUNT(*) OVER()") {
 					return executor.Result{}, moerr.NewInternalError(sqlproc.Proc.Ctx, "single-keyword top-k SQL must not use a window function")
 				}
@@ -704,7 +395,7 @@ func TestFullTextCallWithLimitSingleKeywordFallsBackToStreaming(t *testing.T) {
 				}
 				return executor.Result{}, moerr.NewInternalErrorf(sqlproc.Proc.Ctx, "unexpected SQL: %s", sql)
 			}
-			ft_runSql_streaming = func(
+			ftsearch.RunStreamingSql = func(
 				ctx context.Context,
 				sqlproc *sqlexec.SqlProcess,
 				sql string,
@@ -747,15 +438,15 @@ func TestFullTextCallWithLimitZeroMatchStreams(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	prevRunSQL := ft_runSql
-	prevRunStreaming := ft_runSql_streaming
+	prevRunSQL := ftsearch.RunSql
+	prevRunStreaming := ftsearch.RunStreamingSql
 	defer func() {
-		ft_runSql = prevRunSQL
-		ft_runSql_streaming = prevRunStreaming
+		ftsearch.RunSql = prevRunSQL
+		ftsearch.RunStreamingSql = prevRunStreaming
 	}()
 
 	streamingCalled := false
-	ft_runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+	ftsearch.RunSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
 		if strings.Contains(sql, "COUNT(*) OVER()") {
 			return executor.Result{}, moerr.NewInternalError(sqlproc.Proc.Ctx, "zero-match LIMIT SQL must not use a window function")
 		}
@@ -764,7 +455,7 @@ func TestFullTextCallWithLimitZeroMatchStreams(t *testing.T) {
 		}
 		return executor.Result{}, moerr.NewInternalErrorf(sqlproc.Proc.Ctx, "unexpected SQL: %s", sql)
 	}
-	ft_runSql_streaming = func(
+	ftsearch.RunStreamingSql = func(
 		ctx context.Context,
 		sqlproc *sqlexec.SqlProcess,
 		sql string,
@@ -802,17 +493,17 @@ func TestFullTextCallWithLimitPropagatesMembershipFilterToStreamingSQL(t *testin
 
 	st := ut.arg.ctr.state.(*fulltextState)
 	wantMembershipFilter := []byte("fulltext-filter")
-	st.fulltextMembershipFilter = append([]byte(nil), wantMembershipFilter...)
+	st.scan.SetMembershipFilter(append([]byte(nil), wantMembershipFilter...))
 
-	prevRunSQL := ft_runSql
-	prevRunStreaming := ft_runSql_streaming
+	prevRunSQL := ftsearch.RunSql
+	prevRunStreaming := ftsearch.RunStreamingSql
 	defer func() {
-		ft_runSql = prevRunSQL
-		ft_runSql_streaming = prevRunStreaming
+		ftsearch.RunSql = prevRunSQL
+		ftsearch.RunStreamingSql = prevRunStreaming
 	}()
 
 	var streamingMembershipFilter []byte
-	ft_runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+	ftsearch.RunSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
 		switch {
 		case strings.Contains(sql, "COUNT(*) OVER()"):
 			return executor.Result{}, moerr.NewInternalError(sqlproc.Proc.Ctx, "single-keyword top-k SQL must not use a window function")
@@ -822,7 +513,7 @@ func TestFullTextCallWithLimitPropagatesMembershipFilterToStreamingSQL(t *testin
 			return executor.Result{}, moerr.NewInternalErrorf(sqlproc.Proc.Ctx, "unexpected SQL: %s", sql)
 		}
 	}
-	ft_runSql_streaming = func(
+	ftsearch.RunStreamingSql = func(
 		ctx context.Context,
 		sqlproc *sqlexec.SqlProcess,
 		sql string,
@@ -863,15 +554,15 @@ func TestFullTextCallWithLimitBooleanFallsBackToStreaming(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	prevRunSQL := ft_runSql
-	prevRunStreaming := ft_runSql_streaming
+	prevRunSQL := ftsearch.RunSql
+	prevRunStreaming := ftsearch.RunStreamingSql
 	defer func() {
-		ft_runSql = prevRunSQL
-		ft_runSql_streaming = prevRunStreaming
+		ftsearch.RunSql = prevRunSQL
+		ftsearch.RunStreamingSql = prevRunStreaming
 	}()
 
 	streamingCalled := false
-	ft_runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+	ftsearch.RunSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
 		switch {
 		case strings.Contains(sql, "COUNT(*) from index_table where word = '__DocLen'"):
 			return executor.Result{Mp: sqlproc.Proc.Mp(), Batches: []*batch.Batch{makeCountOnlyBatchFT(sqlproc.Proc)}}, nil
@@ -879,7 +570,7 @@ func TestFullTextCallWithLimitBooleanFallsBackToStreaming(t *testing.T) {
 			return executor.Result{}, moerr.NewInternalErrorf(sqlproc.Proc.Ctx, "unexpected SQL: %s", sql)
 		}
 	}
-	ft_runSql_streaming = func(
+	ftsearch.RunStreamingSql = func(
 		ctx context.Context,
 		sqlproc *sqlexec.SqlProcess,
 		sql string,
@@ -920,15 +611,15 @@ func TestFullTextCallWithLimitPhraseFallsBackToStreaming(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	prevRunSQL := ft_runSql
-	prevRunStreaming := ft_runSql_streaming
+	prevRunSQL := ftsearch.RunSql
+	prevRunStreaming := ftsearch.RunStreamingSql
 	defer func() {
-		ft_runSql = prevRunSQL
-		ft_runSql_streaming = prevRunStreaming
+		ftsearch.RunSql = prevRunSQL
+		ftsearch.RunStreamingSql = prevRunStreaming
 	}()
 
 	streamingCalled := false
-	ft_runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+	ftsearch.RunSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
 		switch {
 		case strings.Contains(sql, "COUNT(*) from index_table where word = '__DocLen'"):
 			return executor.Result{Mp: sqlproc.Proc.Mp(), Batches: []*batch.Batch{makeCountOnlyBatchFT(sqlproc.Proc)}}, nil
@@ -936,7 +627,7 @@ func TestFullTextCallWithLimitPhraseFallsBackToStreaming(t *testing.T) {
 			return executor.Result{}, moerr.NewInternalErrorf(sqlproc.Proc.Ctx, "unexpected SQL: %s", sql)
 		}
 	}
-	ft_runSql_streaming = func(
+	ftsearch.RunStreamingSql = func(
 		ctx context.Context,
 		sqlproc *sqlexec.SqlProcess,
 		sql string,
@@ -977,15 +668,15 @@ func TestFullTextCallWithQuotedPhraseFallsBackToStreaming(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	prevRunSQL := ft_runSql
-	prevRunStreaming := ft_runSql_streaming
+	prevRunSQL := ftsearch.RunSql
+	prevRunStreaming := ftsearch.RunStreamingSql
 	defer func() {
-		ft_runSql = prevRunSQL
-		ft_runSql_streaming = prevRunStreaming
+		ftsearch.RunSql = prevRunSQL
+		ftsearch.RunStreamingSql = prevRunStreaming
 	}()
 
 	streamingCalled := false
-	ft_runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+	ftsearch.RunSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
 		switch {
 		case strings.Contains(sql, "COUNT(*) from index_table where word = '__DocLen'"):
 			return executor.Result{Mp: sqlproc.Proc.Mp(), Batches: []*batch.Batch{makeCountOnlyBatchFT(sqlproc.Proc)}}, nil
@@ -993,7 +684,7 @@ func TestFullTextCallWithQuotedPhraseFallsBackToStreaming(t *testing.T) {
 			return executor.Result{}, moerr.NewInternalErrorf(sqlproc.Proc.Ctx, "unexpected SQL: %s", sql)
 		}
 	}
-	ft_runSql_streaming = func(
+	ftsearch.RunStreamingSql = func(
 		ctx context.Context,
 		sqlproc *sqlexec.SqlProcess,
 		sql string,
@@ -1033,15 +724,15 @@ func TestFullTextStartResetsStateForLaterRowsStreaming(t *testing.T) {
 	)
 	st := tf.ctr.state.(*fulltextState)
 
-	prevRunSQL := ft_runSql
-	prevRunStreaming := ft_runSql_streaming
+	prevRunSQL := ftsearch.RunSql
+	prevRunStreaming := ftsearch.RunStreamingSql
 	defer func() {
-		ft_runSql = prevRunSQL
-		ft_runSql_streaming = prevRunStreaming
+		ftsearch.RunSql = prevRunSQL
+		ftsearch.RunStreamingSql = prevRunStreaming
 	}()
 
 	var gotSQL []string
-	ft_runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+	ftsearch.RunSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
 		gotSQL = append(gotSQL, sql)
 		switch {
 		case strings.Contains(sql, "COUNT(*) from idx0 where word = '__DocLen'"),
@@ -1051,7 +742,7 @@ func TestFullTextStartResetsStateForLaterRowsStreaming(t *testing.T) {
 			return executor.Result{}, moerr.NewInternalErrorf(sqlproc.Proc.Ctx, "unexpected SQL: %s", sql)
 		}
 	}
-	ft_runSql_streaming = func(
+	ftsearch.RunStreamingSql = func(
 		ctx context.Context,
 		sqlproc *sqlexec.SqlProcess,
 		sql string,
@@ -1139,19 +830,19 @@ func TestFullTextStartRejectsInvalidDynamicPatternAndResetsState(t *testing.T) {
 			)
 			st := tf.ctr.state.(*fulltextState)
 
-			prevRunSQL := ft_runSql
-			prevRunStreaming := ft_runSql_streaming
+			prevRunSQL := ftsearch.RunSql
+			prevRunStreaming := ftsearch.RunStreamingSql
 			defer func() {
-				ft_runSql = prevRunSQL
-				ft_runSql_streaming = prevRunStreaming
+				ftsearch.RunSql = prevRunSQL
+				ftsearch.RunStreamingSql = prevRunStreaming
 			}()
 
 			var gotSQL []string
-			ft_runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+			ftsearch.RunSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
 				gotSQL = append(gotSQL, sql)
 				return executor.Result{Mp: sqlproc.Proc.Mp(), Batches: []*batch.Batch{makeCountOnlyBatchFT(sqlproc.Proc)}}, nil
 			}
-			ft_runSql_streaming = func(
+			ftsearch.RunStreamingSql = func(
 				ctx context.Context,
 				sqlproc *sqlexec.SqlProcess,
 				sql string,
@@ -1181,8 +872,7 @@ func TestFullTextStartRejectsInvalidDynamicPatternAndResetsState(t *testing.T) {
 				invalidErr = st.start(tf, ut.proc, 1, nil)
 			})
 			require.ErrorContains(t, invalidErr, test.wantErr)
-			require.False(t, st.streamingStarted)
-			require.Nil(t, st.sacc)
+			require.True(t, st.scan.Idle())
 
 			runValidRow(2)
 
@@ -1213,8 +903,7 @@ func TestFullTextStartRejectsConstNullPattern(t *testing.T) {
 		err = st.start(tf, ut.proc, 0, nil)
 	})
 	require.ErrorContains(t, err, "fulltext search pattern must not be NULL")
-	require.False(t, st.streamingStarted)
-	require.Nil(t, st.sacc)
+	require.True(t, st.scan.Idle())
 
 	requireStateFreeReturns(t, st, tf, ut.proc)
 }
@@ -1399,303 +1088,27 @@ func makeTextBatchFT(proc *process.Process) *batch.Batch {
 	return bat
 }
 
-// TestSortTopKBoundedUnspills is the #25692 review regression for partition
-// thrash: agghtab is a hash map whose iteration order has no relation to pool
-// partitions, so scoring in map order made GetItem evict and re-materialize a
-// whole partition per DOCUMENT once partitions had spilled (one diagnostic
-// showed 120 whole-partition reloads for 120 reads). sort_topk now scores in
-// partition order; each spilled partition must be materialized a bounded
-// number of times — at most once per pass — regardless of map hash order.
-func TestSortTopKBoundedUnspills(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	s, err := fulltext.NewSearchAccum("src", "index", "pattern", 0, "", fulltext.ALGO_TFIDF)
-	require.NoError(t, err)
-	s.Nrow = 1000
+// The table function decodes the index parameters once, and a runtime filter
+// that is not a membership filter leaves the scan unfiltered.
+func TestFullTextStartParamsAndNonMembershipFilter(t *testing.T) {
+	ut := newFTTestCase(t, mpool.MustNewZero(), ftdefaultAttrs, fulltext.ALGO_TFIDF, uint64(0))
+	require.NoError(t, ut.arg.Prepare(ut.proc))
+	tf := ut.arg
+	tf.ctr.argVecs = makeMultiRowArgVecsFT(ut.proc,
+		fulltextInputRow{source: "src", index: "idx", pattern: "apple", mode: int64(tree.FULLTEXT_NL)},
+	)
+	st := tf.ctr.state.(*fulltextState)
 
-	const ndoc = 64
-	// dsize = Nkeywords; 4 items per partition; mem_limit of 2 partitions forces
-	// spilling during the build phase and keeps a tiny resident set for scoring.
-	dsize := uint64(s.Nkeywords)
-	st := &fulltextState{
-		agghtab:   make(map[any]uint64, ndoc),
-		aggcnt:    make([]int64, s.Nkeywords),
-		docLenMap: make(map[any]int32, ndoc),
-		mpool:     fulltext.NewFixedBytePool(proc, dsize, 4*dsize, 2*4*dsize),
-	}
-	defer st.mpool.Close()
-	st.aggcnt[0] = ndoc
+	tf.Params = []byte("{bad")
+	require.Error(t, st.start(tf, ut.proc, 0, nil))
 
-	for i := 0; i < ndoc; i++ {
-		addr, docvec, allocErr := st.mpool.NewItem()
-		require.NoError(t, allocErr)
-		docvec[0] = uint8(i%250 + 1)
-		st.agghtab[i] = addr
-		st.docLenMap[i] = int32(i + 1)
-	}
-
-	npart := st.mpool.NumPartitions()
-	require.Greater(t, npart, 4, "test must span many partitions")
-
-	before := st.mpool.Unspills()
-	require.NoError(t, sort_topk(st, proc, s, 8))
-	reloads := st.mpool.Unspills() - before
-
-	// Partition-ordered scoring touches each spilled partition at most once. The
-	// old map-order traversal produced up to ~ndoc reloads here.
-	require.LessOrEqualf(t, reloads, uint64(npart),
-		"top-K scoring must not thrash: %d unspills for %d partitions", reloads, npart)
-	require.Len(t, st.minheap, 8)
-}
-
-// TestEvaluateMultiBatchBoundedWork is the #25692 review regression for the
-// zero-LIMIT scoring path: call() re-enters evaluate for every 8K output
-// batch, so the partition-ordered traversal must be built ONCE per scoring
-// phase and drained across batches. Rebuilding it per batch costs O(N)
-// workspace per batch, O(N^2/8192) traversal work overall, and re-materializes
-// spilled partitions on every batch. Asserts (a) every doc is scored exactly
-// once across multiple batches, (b) a key added after the first batch is NOT
-// discovered (a per-batch rebuild would score it), and (c) unspill I/O stays
-// bounded by the partition count across ALL batches.
-func TestEvaluateMultiBatchBoundedWork(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	s, err := fulltext.NewSearchAccum("src", "index", "pattern", 0, "", fulltext.ALGO_TFIDF)
-	require.NoError(t, err)
-	s.Nrow = 100000
-
-	const ndoc = 20000
-	// 2048 items per partition (~10 partitions), resident set of 2 partitions so
-	// the build phase spills and scoring has to unspill.
-	dsize := uint64(s.Nkeywords)
-	st := &fulltextState{
-		agghtab:   make(map[any]uint64, ndoc),
-		aggcnt:    make([]int64, s.Nkeywords),
-		docLenMap: make(map[any]int32, ndoc),
-		docIDMap:  make(map[any]any),
-		mpool:     fulltext.NewFixedBytePool(proc, dsize, 2048*dsize, 2*2048*dsize),
-	}
-	defer st.mpool.Close()
-	st.aggcnt[0] = ndoc
-
-	for i := 0; i < ndoc; i++ {
-		addr, docvec, allocErr := st.mpool.NewItem()
-		require.NoError(t, allocErr)
-		docvec[0] = uint8(i%250 + 1)
-		st.agghtab[i] = addr
-		st.docLenMap[i] = int32(i%100 + 1)
-	}
-	require.Greater(t, st.mpool.NumPartitions(), 4, "test must span several partitions")
-
-	before := st.mpool.Unspills()
-	seen := make(map[any]struct{}, ndoc)
-	batches := 0
-	injected := false
-	for {
-		scoremap, evalErr := evaluate(st, proc, s)
-		require.NoError(t, evalErr)
-		if len(scoremap) == 0 {
-			break
-		}
-		batches++
-		require.LessOrEqual(t, len(scoremap), 8192)
-		for k := range scoremap {
-			_, dup := seen[k]
-			require.Falsef(t, dup, "doc %v scored twice", k)
-			seen[k] = struct{}{}
-		}
-		if !injected {
-			// Inject a doc AFTER the first batch. The traversal was snapshot at
-			// the first evaluate call; a per-batch rebuild (the regression) would
-			// pick this key up and score it, the build-once contract never sees it.
-			addr, allocErr := func() (uint64, error) {
-				a, docvec, e := st.mpool.NewItem()
-				if e == nil {
-					docvec[0] = 1
-				}
-				return a, e
-			}()
-			require.NoError(t, allocErr)
-			st.agghtab["injected"] = addr
-			st.docLenMap["injected"] = 1
-			injected = true
-		}
-	}
-
-	require.Len(t, seen, ndoc, "every original doc scored exactly once across batches")
-	require.GreaterOrEqual(t, batches, 3, "test must span multiple evaluate batches")
-	_, stillThere := st.agghtab["injected"]
-	require.True(t, stillThere,
-		"ordering must be built once: a key added after the first batch must not be re-discovered by a rebuild")
-	require.Len(t, st.agghtab, 1)
-
-	// Each spilled partition materialized at most once across ALL batches (+1 for
-	// the unspill the injected NewItem itself may trigger on the tail partition).
-	npart := st.mpool.NumPartitions()
-	reloads := st.mpool.Unspills() - before
-	require.LessOrEqualf(t, reloads, uint64(npart)+1,
-		"multi-batch scoring must not thrash: %d unspills for %d partitions across all batches", reloads, npart)
-}
-
-// TestEvaluateOrderingBudgetGated: the partition-ordered traversal retains
-// ~16 bytes per remaining document OUTSIDE the pool's accounting, so building
-// it must be gated on the pool's heap budget instead of allocated
-// unconditionally (#25692 review).
-func TestEvaluateOrderingBudgetGated(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	s, err := fulltext.NewSearchAccum("src", "index", "pattern", 0, "", fulltext.ALGO_TFIDF)
-	require.NoError(t, err)
-	s.Nrow = 1000
-
-	dsize := uint64(s.Nkeywords)
-	st := &fulltextState{
-		agghtab:   make(map[any]uint64, 8),
-		aggcnt:    make([]int64, s.Nkeywords),
-		docLenMap: make(map[any]int32, 8),
-		docIDMap:  make(map[any]any),
-		mpool:     fulltext.NewFixedBytePool(proc, dsize, 4*dsize, 2*4*dsize),
-	}
-	defer st.mpool.Close()
-	st.aggcnt[0] = 8
-	for i := 0; i < 8; i++ {
-		addr, docvec, allocErr := st.mpool.NewItem()
-		require.NoError(t, allocErr)
-		docvec[0] = uint8(i + 1)
-		st.agghtab[i] = addr
-		st.docLenMap[i] = int32(i + 1)
-	}
-
-	old := fulltext.HeapBudgetPct
-	fulltext.HeapBudgetPct = 0 // every allocation is over budget
-	defer func() { fulltext.HeapBudgetPct = old }()
-
-	_, err = evaluate(st, proc, s)
-	require.Error(t, err, "ordering workspace must be budget-gated")
-	require.Contains(t, err.Error(), "budget")
-}
-
-// measureTotalAlloc returns the bytes allocated while f runs (monotonic
-// TotalAlloc delta, immune to intervening GC).
-func measureTotalAlloc(f func()) uint64 {
-	goruntime.GC()
-	var before, after goruntime.MemStats
-	goruntime.ReadMemStats(&before)
-	f()
-	goruntime.ReadMemStats(&after)
-	return after.TotalAlloc - before.TotalAlloc
-}
-
-// TestScoreTraversalWorkspaceExact is the #25692 review regression for the
-// traversal workspace: the heap-budget admission estimate must match the real
-// peak allocation. The previous append-grown buckets admitted 16 B/key but
-// allocated ~5.6x that (growth reallocation, slack capacity, uncounted
-// headers). The flat-buffer constructor allocates exactly what
-// scoreTraversalEstimate admits.
-func TestScoreTraversalWorkspaceExact(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	s, err := fulltext.NewSearchAccum("src", "index", "pattern", 0, "", fulltext.ALGO_TFIDF)
-	require.NoError(t, err)
-	s.Nrow = 1000000
-
-	const ndoc = 200000
-	dsize := uint64(s.Nkeywords)
-	st := &fulltextState{
-		agghtab:   make(map[any]uint64, ndoc),
-		aggcnt:    make([]int64, s.Nkeywords),
-		docLenMap: make(map[any]int32, ndoc),
-		docIDMap:  make(map[any]any),
-		// production-shaped pool: default partition capacity, no forced spilling
-		mpool: fulltext.NewFixedBytePool(proc, dsize, 0, 0),
-	}
-	defer st.mpool.Close()
-	st.aggcnt[0] = ndoc
-	for i := 0; i < ndoc; i++ {
-		addr, docvec, allocErr := st.mpool.NewItem()
-		require.NoError(t, allocErr)
-		docvec[0] = 1
-		st.agghtab[i] = addr
-		st.docLenMap[i] = 1
-	}
-
-	est := scoreTraversalEstimate(len(st.agghtab), st.mpool.NumPartitions())
-
-	// Byte bound: the real allocation must not exceed the admitted estimate
-	// (modulo a small fixed slack for allocator rounding and test noise).
-	var keys []any
-	measured := measureTotalAlloc(func() {
-		var buildErr error
-		keys, buildErr = partitionOrderedKeys(proc, st.agghtab, st.mpool)
-		require.NoError(t, buildErr)
-	})
-	require.Len(t, keys, ndoc)
-	const slack = 256 << 10
-	require.LessOrEqualf(t, measured, est+uint64(slack),
-		"traversal allocated %d bytes but the budget only admitted %d", measured, est)
-
-	// Structural bound: constant number of allocations — no append growth chains.
-	allocs := testing.AllocsPerRun(3, func() {
-		k, buildErr := partitionOrderedKeys(proc, st.agghtab, st.mpool)
-		require.NoError(t, buildErr)
-		_ = k
-	})
-	require.LessOrEqualf(t, allocs, 8.0,
-		"traversal must preallocate exactly, got %.0f allocations", allocs)
-}
-
-// TestEvaluateSparseScoreBounded is the #25692 review regression for sparse
-// results: a query whose candidates mostly produce NO score (e.g. boolean
-// +required words filtering the aggregated union) previously accumulated every
-// processed candidate in an ungated O(N) keys slice within a single evaluate
-// call. Candidates must be freed and deleted as they are consumed, so the
-// all-filtered call allocates only the (budget-admitted) traversal plus O(1).
-func TestEvaluateSparseScoreBounded(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	s, err := fulltext.NewSearchAccum("src", "index", "pattern", 0, "", fulltext.ALGO_TFIDF)
-	require.NoError(t, err)
-	s.Nrow = 1000000
-
-	const ndoc = 200000
-	dsize := uint64(s.Nkeywords)
-	st := &fulltextState{
-		agghtab:   make(map[any]uint64, ndoc),
-		aggcnt:    make([]int64, s.Nkeywords),
-		docLenMap: make(map[any]int32, ndoc),
-		docIDMap:  make(map[any]any),
-		mpool:     fulltext.NewFixedBytePool(proc, dsize, 0, 0),
-	}
-	defer st.mpool.Close()
-	st.aggcnt[0] = ndoc
-	for i := 0; i < ndoc; i++ {
-		addr, docvec, allocErr := st.mpool.NewItem()
-		require.NoError(t, allocErr)
-		docvec[0] = 0 // keyword count 0 -> Eval yields no score for ANY candidate
-		st.agghtab[i] = addr
-		st.docLenMap[i] = 1
-	}
-
-	est := scoreTraversalEstimate(len(st.agghtab), st.mpool.NumPartitions())
-
-	var scoremap map[any]float32
-	measured := measureTotalAlloc(func() {
-		var evalErr error
-		scoremap, evalErr = evaluate(st, proc, s)
-		require.NoError(t, evalErr)
-	})
-
-	// All candidates filtered: no results, and every candidate was consumed and
-	// released immediately rather than accumulated.
-	require.Empty(t, scoremap)
-	require.Empty(t, st.agghtab, "candidates must be deleted as they are consumed")
-	require.Empty(t, st.docLenMap)
-	require.Empty(t, st.docIDMap)
-
-	// Memory bound: the whole all-filtered pass allocates the traversal plus
-	// small constants — NOT a second O(N) interface buffer (the old keys slice
-	// added ~20 MB at this size).
-	const slack = 2 << 20
-	require.LessOrEqualf(t, measured, est+uint64(slack),
-		"sparse evaluate allocated %d bytes; traversal estimate is %d", measured, est)
-
-	// Traversal fully drained: the next call returns an empty batch.
-	scoremap, err = evaluate(st, proc, s)
-	require.NoError(t, err)
-	require.Empty(t, scoremap)
+	prevSQL, prevStreaming := ftsearch.RunSql, ftsearch.RunStreamingSql
+	defer func() { ftsearch.RunSql, ftsearch.RunStreamingSql = prevSQL, prevStreaming }()
+	ftsearch.RunSql = fake_runSql
+	ftsearch.RunStreamingSql = fake_runSql_streaming
+	tf.Params = nil
+	tf.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{{Tag: 1}}
+	require.NoError(t, st.start(tf, ut.proc, 0, nil))
+	require.Nil(t, st.scan.MembershipFilter())
+	requireStateFreeReturns(t, st, tf, ut.proc)
 }

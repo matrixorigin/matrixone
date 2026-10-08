@@ -111,6 +111,9 @@ func (m MarshalNodeImpl) GetNodeName(ctx context.Context) (string, error) {
 	if m.node.NodeType == plan.Node_PARTITION && m.node.PartitionAlgorithm == plan.Node_PARTITION_ALGORITHM_HASH {
 		return "Hash Partition", nil
 	}
+	if m.node.NodeType == plan.Node_INDEX_SEARCH_SCAN {
+		return IndexSearchScanLabel(m.node.IndexSearchScan), nil
+	}
 	if value, ok := nodeTypeToNameMap[m.node.NodeType]; ok {
 		return value, nil
 	} else {
@@ -238,7 +241,7 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 		if m.node.IndexSearchScan == nil || m.node.IndexSearchScan.Index == nil {
 			return "", moerr.NewInvalidInput(ctx, "Vector index scan metadata not found")
 		}
-		fmt.Fprintf(buf, "Vector Index Scan[%s]", m.node.IndexSearchScan.Index.IndexName)
+		fmt.Fprintf(buf, "%s[%s]", IndexSearchScanLabel(m.node.IndexSearchScan), m.node.IndexSearchScan.Index.IndexName)
 	case plan.Node_FUZZY_FILTER:
 		return "fuzzy_filter", nil
 	case plan.Node_SAMPLE:

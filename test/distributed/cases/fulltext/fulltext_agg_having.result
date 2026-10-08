@@ -39,7 +39,7 @@ select id from docs group by id, body having sum(match(body) against('alpha')) >
 6
 explain select id, max(match(body) against('alpha')) as score
 from docs group by id, body having score > 0 order by id;
--- @regex("fulltext_index_scan", true)
+-- @regex("Fulltext Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
@@ -55,7 +55,8 @@ Project  𝄀
                     Runtime Filter Build: #[-1,0]  𝄀
                     ->  Table Scan on ft_agg_having.docs  𝄀
                           Runtime Filter Probe: docs.id  𝄀
-                    ->  Table Function on fulltext_index_scan
+                    ->  Fulltext Index Scan on ft  𝄀
+                          Fulltext Index: ft
 select id from docs group by id, body having min(match(body) against('alpha')) > 0 order by id;
 not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
 create table cat_docs(id int primary key, cat int, body text);
@@ -108,7 +109,7 @@ insert into rd values
 create fulltext index rdft on rd(body);
 explain select cat, sum(round(match(body) against('alpha'), 2)) as total
 from rd group by cat having max(match(body) against('alpha')) > 0 order by cat;
--- @regex("fulltext_index_scan", true)
+-- @regex("Fulltext Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
@@ -123,7 +124,8 @@ Project  𝄀
                     Runtime Filter Build: #[-1,0]  𝄀
                     ->  Table Scan on ft_agg_having.rd  𝄀
                           Runtime Filter Probe: rd.id  𝄀
-                    ->  Table Function on fulltext_index_scan
+                    ->  Fulltext Index Scan on rdft  𝄀
+                          Fulltext Index: rdft
 select cat, sum(round(match(body) against('alpha'), 2)) as total
 from rd group by cat having max(match(body) against('alpha')) > 0 order by cat;
 ➤ cat[4,32,0]  ¦  total[8,53,31]  𝄀
@@ -143,7 +145,7 @@ having cast(cast(cast(max(match(body) against('alpha')) as signed) as char) as y
 not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
 explain select cat, sum(cast(match(body) against('alpha') as decimal(10,2))) as s
 from castrd group by cat having max(match(body) against('alpha')) > 0 order by cat;
--- @regex("fulltext_index_scan", true)
+-- @regex("Fulltext Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
@@ -158,7 +160,8 @@ Project  𝄀
                     Runtime Filter Build: #[-1,0]  𝄀
                     ->  Table Scan on ft_agg_having.castrd  𝄀
                           Runtime Filter Probe: castrd.id  𝄀
-                    ->  Table Function on fulltext_index_scan
+                    ->  Fulltext Index Scan on castft  𝄀
+                          Fulltext Index: castft
 select cat, sum(cast(match(body) against('alpha') as decimal(10,2))) as s
 from castrd group by cat having max(match(body) against('alpha')) > 0 order by cat;
 ➤ cat[4,32,0]  ¦  s[3,32,2]  𝄀

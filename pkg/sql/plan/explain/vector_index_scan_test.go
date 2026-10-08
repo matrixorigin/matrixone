@@ -54,3 +54,62 @@ func TestIndexSearchScanInfoIsTypedAndVisible(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, basic, "Estimated Scan Rows: 100, Blocks: 2, Vector Bytes/Row: 128, Objects: 2, Planned DOP: 2")
 }
+
+func fulltextSearchScanNode() *plan.Node {
+	return &plan.Node{
+		NodeType: plan.Node_INDEX_SEARCH_SCAN,
+		Stats:    &plan.Stats{Sql: "SELECT doc_id FROM idx"},
+		TableDef: &plan.TableDef{Cols: []*plan.ColDef{{Name: "doc_id"}, {Name: "score"}}},
+		IndexSearchScan: &plan.IndexSearchScan{
+			Index: &plan.IndexDef{IndexName: "ft_body", IndexAlgo: "fulltext2"},
+		},
+	}
+}
+
+// A fulltext index search scan is labelled by its family, has no metric, and
+// shows its candidate limit only when one is pushed.
+func TestFulltextIndexSearchScanExplain(t *testing.T) {
+	ctx := context.Background()
+	node := fulltextSearchScanNode()
+	desc := &NodeDescribeImpl{Node: node}
+
+	basic, err := desc.GetNodeBasicInfo(ctx, &ExplainOptions{Format: EXPLAIN_FORMAT_TEXT})
+	require.NoError(t, err)
+	require.Contains(t, basic, "Fulltext Index Scan on ft_body")
+	require.NotContains(t, basic, "[")
+
+	info, err := desc.GetExtraInfo(ctx, &ExplainOptions{})
+	require.NoError(t, err)
+	require.Equal(t, []string{"Fulltext Index: ft_body"}, info)
+
+	node.IndexSearchScan.CandidateLimit = plan2.MakePlan2Uint64ConstExprWithType(15)
+	info, err = desc.GetExtraInfo(ctx, &ExplainOptions{Verbose: true})
+	require.NoError(t, err)
+	require.Contains(t, info, "Sql: SELECT doc_id FROM idx")
+	require.Contains(t, info, "Fulltext Index: ft_body, Candidate Limit: 15")
+
+	require.Equal(t, "Vector Index Scan", IndexSearchScanLabel(&plan.IndexSearchScan{
+		Index: &plan.IndexDef{IndexAlgo: "not_registered"},
+	}))
+	require.Equal(t, "Vector Index Scan", IndexSearchScanLabel(nil))
+}
+
+func TestFulltextIndexSearchScanMarshal(t *testing.T) {
+	ctx := context.Background()
+	m := NewMarshalNodeImpl(fulltextSearchScanNode())
+	name, err := m.GetNodeName(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "Fulltext Index Scan", name)
+	title, err := m.GetNodeTitle(ctx, &ExplainOptions{})
+	require.NoError(t, err)
+	require.Equal(t, "Fulltext Index Scan[ft_body]", title)
+	labels, err := m.GetNodeLabels(ctx, &ExplainOptions{})
+	require.NoError(t, err)
+	require.Equal(t, "ft_body", labels[0].Value)
+
+	broken := NewMarshalNodeImpl(&plan.Node{NodeType: plan.Node_INDEX_SEARCH_SCAN, Stats: &plan.Stats{}})
+	_, err = broken.GetNodeTitle(ctx, &ExplainOptions{})
+	require.Error(t, err)
+	_, err = broken.GetNodeLabels(ctx, &ExplainOptions{})
+	require.Error(t, err)
+}

@@ -41,8 +41,12 @@ type ScanIdentity struct {
 // The plan specification passed beside it is immutable catalog/index metadata;
 // readers must not evaluate or mutate its dynamic expressions.
 type Request struct {
-	QueryPayload    []byte
-	QueryType       plan.Type
+	QueryPayload []byte
+	QueryType    plan.Type
+	// QueryIsNull means the query payload evaluated to NULL.
+	QueryIsNull bool
+	// ResultLimit is the folded IndexSearchScan.CandidateLimit; 0 when the
+	// scan carries no candidate limit.
 	ResultLimit     uint64
 	CandidateBudget uint64
 	// AlgoValues are the evaluated IndexSearchScan.AlgoExprs, by name, for this
@@ -57,6 +61,9 @@ type Request struct {
 	// MembershipFilterRequired means candidate limiting is only semantically
 	// valid after this exact membership predicate has been applied.
 	MembershipFilterRequired bool
+	// MembershipFilterPassed means a membership runtime filter was planned but
+	// its producer returned PASS, so no membership predicate is applied.
+	MembershipFilterPassed bool
 	// CollectExplainDiagnostics is enabled only for standalone scalar scans.
 	// Correlated APPLY executes one reader per provider row and must not retain
 	// per-round diagnostics with unbounded outer-row cardinality.
@@ -94,6 +101,14 @@ type ParallelHooks interface {
 	// CanParallelize reports whether spec can be split into partitioned readers.
 	CanParallelize(spec *plan.IndexSearchScan) (bool, error)
 	NewReaders(proc *process.Process, spec *plan.IndexSearchScan, req Request, parallelism int) ([]engine.Reader, error)
+}
+
+// EmptyScanHooks optionally checks a scan that returns no rows without
+// searching: its query payload is NULL (req.QueryIsNull) or a runtime filter
+// dropped it. It runs instead of NewReader; the scan stays empty unless it
+// errors.
+type EmptyScanHooks interface {
+	EmptyScan(proc *process.Process, spec *plan.IndexSearchScan, req Request) error
 }
 
 // ExplainHooks optionally describes the algorithm settings of a scan for

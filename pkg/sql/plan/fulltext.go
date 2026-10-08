@@ -17,9 +17,11 @@ package plan
 import (
 	"encoding/json"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fulltext"
+	ftplan "github.com/matrixorigin/matrixone/pkg/fulltext/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -112,6 +114,57 @@ func (builder *QueryBuilder) buildFullTextIndexScanNode(ctx *BindContext, exprs 
 		BindingTags:     []int32{builder.genNewBindTag()},
 		TblFuncExprList: exprs,
 		Children:        children,
+	}
+	return builder.appendNode(node, ctx), nil
+}
+
+// buildFullTextSearchScan builds the INDEX_SEARCH_SCAN of a MATCH resolved to the
+// classic fulltext index idxdef of scanNode, whose index table is idxObjRef. pattern is
+// the MATCH pattern expression, so a prepared-statement '?' parameter is bound and
+// evaluated at execution. guard, when not nil, is the zero-relevance guard of a score
+// threshold known only at execution. sql is the pre-compiled index-scan SQL of a
+// literal pattern, shown by EXPLAIN (Verbose).
+func (builder *QueryBuilder) buildFullTextSearchScan(
+	ctx *BindContext,
+	scanNode *plan.Node,
+	idxdef *plan.IndexDef,
+	idxObjRef *plan.ObjectRef,
+	opts ftplan.ScanOptions,
+	pattern, guard *plan.Expr,
+	sql string,
+) (int32, error) {
+	algoOptions, err := ftplan.EncodeScanOptions(opts)
+	if err != nil {
+		return -1, err
+	}
+	spec := &plan.IndexSearchScan{
+		SourceTable:    DeepCopyObjectRef(scanNode.ObjRef),
+		SourceTableDef: DeepCopyTableDef(scanNode.TableDef, true),
+		ScanSnapshot:   DeepCopySnapshot(scanNode.ScanSnapshot),
+		Index:          DeepCopyIndexDef(idxdef),
+		QueryPayload:   DeepCopyExpr(pattern),
+		AlgoOptions:    algoOptions,
+		HiddenTables: []*plan.IndexHiddenTableRef{
+			{Role: catalog.FullTextIndex_TblType, Object: DeepCopyObjectRef(idxObjRef)},
+		},
+	}
+	if guard != nil {
+		spec.AlgoExprs = []*plan.Expr{guard}
+		spec.AlgoExprNames = []string{fulltext.ZeroRelevanceGuardExpr}
+	}
+	node := &plan.Node{
+		NodeType: plan.Node_INDEX_SEARCH_SCAN,
+		Stats:    &plan.Stats{Sql: sql},
+		ObjRef:   DeepCopyObjectRef(scanNode.ObjRef),
+		TableDef: &plan.TableDef{
+			Name:      scanNode.TableDef.Name,
+			TableType: "fulltext_index_scan",
+			Cols:      DeepCopyColDefList(ftIndexColdefs),
+		},
+		BindingTags: []int32{builder.genNewBindTag()},
+		// Named-snapshot read TS; DeepCopySnapshot(nil) is nil (#27941).
+		ScanSnapshot:    DeepCopySnapshot(scanNode.ScanSnapshot),
+		IndexSearchScan: spec,
 	}
 	return builder.appendNode(node, ctx), nil
 }

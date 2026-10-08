@@ -131,7 +131,7 @@ select d.id, s.tag from lj_docs d left join lj_side s on d.id = s.id
 where match(d.title) against('alpha' in boolean mode) order by d.id;
 -- the preserved-side MATCH is served by the fulltext index scan, not a full table scan.
 -- @separator:table
--- @regex("fulltext_index_scan", true)
+-- @regex("Fulltext Index Scan on", true)
 explain select d.id, s.tag from lj_docs d left join lj_side s on d.id = s.id
 where match(d.title) against('alpha' in boolean mode) order by d.id;
 -- symmetric RIGHT join: the fulltext (preserved) table is the right child.

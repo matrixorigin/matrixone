@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
+	ft2plan "github.com/matrixorigin/matrixone/pkg/fulltext2/plugin/plan"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -564,9 +565,9 @@ func (builder *QueryBuilder) jsonProbeTailSQL(scanNode *plan.Node, whereSQL stri
 // guard. The probe and its tail see only COMMITTED rows, so a plan built in a clean txn and reused
 // in a txn that has since written uncommitted rows to the source would DROP them (the base scan sees
 // them, the probe does not, and the INNER JOIN discards them). Rebuilding re-runs that guard (and
-// re-checks that the index is built). A user MATCH also builds a fulltext2_search node but is
-// search-semantics (freshness-tolerant); the JSONProbeMode argument distinguishes the injected probe
-// and is required.
+// re-checks that the index is built). A user MATCH also builds a fulltext2 index search scan but is
+// search-semantics (freshness-tolerant); the JSONProbeMode scan option distinguishes the injected
+// probe and is required.
 func PreparedPlanDependsOnIndexCoverage(p *Plan) bool {
 	if p == nil {
 		return false
@@ -576,18 +577,13 @@ func PreparedPlanDependsOnIndexCoverage(p *Plan) bool {
 		return false
 	}
 	for _, node := range query.GetNodes() {
-		if node == nil || node.TableDef == nil || node.TableDef.TblFunc == nil ||
-			node.TableDef.TblFunc.Name != fulltext2_search_func_name {
+		spec := node.GetIndexSearchScan()
+		if node.GetNodeType() != plan.Node_INDEX_SEARCH_SCAN ||
+			!catalog.IsFullText2IndexAlgo(spec.GetIndex().GetIndexAlgo()) {
 			continue
 		}
-		args := node.GetTblFuncExprList()
-		if len(args) < 3 {
-			continue
-		}
-		if lit := args[2].GetLit(); lit != nil {
-			if v, ok := lit.Value.(*plan.Literal_I64Val); ok && v.I64Val == fulltext2.JSONProbeMode {
-				return true
-			}
+		if opts, err := ft2plan.DecodeScanOptions(spec.GetAlgoOptions()); err == nil && opts.Mode == fulltext2.JSONProbeMode {
+			return true
 		}
 	}
 	return false

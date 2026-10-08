@@ -52,14 +52,14 @@ func PrepareScalar(template *plan.IndexSearchScan, proc *process.Process) (*plan
 	if err != nil {
 		return nil, err
 	}
-	if err = foldExpr(&spec.QueryPayload, proc); err != nil {
+	if err = foldScalarExpr(&spec.QueryPayload, proc); err != nil {
 		return nil, err
 	}
-	if err = foldExpr(&spec.CandidateLimit, proc); err != nil {
+	if err = foldScalarExpr(&spec.CandidateLimit, proc); err != nil {
 		return nil, err
 	}
 	for i := range spec.AlgoExprs {
-		if err = foldExpr(&spec.AlgoExprs[i], proc); err != nil {
+		if err = foldScalarExpr(&spec.AlgoExprs[i], proc); err != nil {
 			return nil, err
 		}
 	}
@@ -73,6 +73,9 @@ func PrepareCorrelatedExecution(template *plan.IndexSearchScan, proc *process.Pr
 	if err != nil {
 		return nil, err
 	}
+	if spec.CandidateLimit == nil {
+		return nil, moerr.NewInvalidInput(proc.Ctx, "correlated index search scan has no candidate limit")
+	}
 	exprs := append([]*plan.Expr{spec.QueryPayload, spec.CandidateLimit}, spec.AlgoExprs...)
 	executors, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, exprs)
 	if err != nil {
@@ -82,7 +85,7 @@ func PrepareCorrelatedExecution(template *plan.IndexSearchScan, proc *process.Pr
 }
 
 func newGenerationSpec(template *plan.IndexSearchScan, proc *process.Process) (*plan.IndexSearchScan, error) {
-	if template == nil || template.Index == nil || template.QueryPayload == nil || template.CandidateLimit == nil {
+	if template == nil || template.Index == nil || template.QueryPayload == nil {
 		return nil, moerr.NewInvalidInput(proc.Ctx, "vector index scan has incomplete metadata")
 	}
 	if len(template.AlgoExprs) != len(template.AlgoExprNames) {
@@ -114,6 +117,36 @@ func foldExpr(expr **plan.Expr, proc *process.Process) error {
 		return err
 	}
 	*expr = folded
+	return nil
+}
+
+// foldScalarExpr folds a statement-level scalar expression to a literal. An
+// expression ConstantFold leaves unfolded, such as a bare parameter or variable
+// reference, is evaluated once.
+func foldScalarExpr(expr **plan.Expr, proc *process.Process) error {
+	if err := foldExpr(expr, proc); err != nil {
+		return err
+	}
+	if *expr == nil || (*expr).GetLit() != nil {
+		return nil
+	}
+	executor, err := colexec.NewExpressionExecutor(proc, *expr)
+	if err != nil {
+		return err
+	}
+	defer executor.Free()
+	vec, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+	if err != nil {
+		return err
+	}
+	if vec == nil || vec.Length() == 0 {
+		return nil
+	}
+	lit := rule.GetConstantValue(vec, true, 0)
+	if lit == nil {
+		return nil
+	}
+	*expr = &plan.Expr{Typ: (*expr).Typ, Expr: &plan.Expr_Lit{Lit: lit}}
 	return nil
 }
 
@@ -248,7 +281,8 @@ func Identity(
 }
 
 // RequestFromScalar extracts an already folded scalar specification. ok=false
-// represents a NULL query vector and therefore an empty reader.
+// represents a NULL query payload; req is still filled, with QueryIsNull set.
+// A nil CandidateLimit is a ResultLimit of 0.
 func RequestFromScalar(
 	spec *plan.IndexSearchScan,
 	identity searchplugin.ScanIdentity,
@@ -263,21 +297,31 @@ func RequestFromScalar(
 	if queryLit == nil {
 		return req, false, moerr.NewInvalidInputNoCtx("vector index query vector did not fold at execution")
 	}
-	if queryLit.Isnull {
-		return req, false, nil
+	var limit uint64
+	if spec.CandidateLimit != nil {
+		limitLit := spec.CandidateLimit.GetLit()
+		if limitLit == nil || limitLit.Isnull {
+			return req, false, moerr.NewInvalidInputNoCtx("vector index result limit did not fold at execution")
+		}
+		limitVal, isU64 := limitLit.Value.(*plan.Literal_U64Val)
+		if !isU64 {
+			return req, false, moerr.NewInvalidInputNoCtx("vector index result limit is not uint64")
+		}
+		limit = limitVal.U64Val
 	}
-	if spec.CandidateLimit == nil {
-		return req, false, moerr.NewInvalidInputNoCtx("vector index result limit did not fold at execution")
+	var payload []byte
+	if !queryLit.Isnull {
+		switch v := queryLit.Value.(type) {
+		case *plan.Literal_VecVal:
+			payload = []byte(v.VecVal)
+		case *plan.Literal_Sval:
+			payload = []byte(v.Sval)
+		default:
+			return req, false, moerr.NewInvalidInputNoCtx("index search query payload is neither a vector nor a string")
+		}
 	}
-	limitLit := spec.CandidateLimit.GetLit()
-	if limitLit == nil || limitLit.Isnull {
-		return req, false, moerr.NewInvalidInputNoCtx("vector index result limit did not fold at execution")
-	}
-	limit, ok := limitLit.Value.(*plan.Literal_U64Val)
-	if !ok {
-		return req, false, moerr.NewInvalidInputNoCtx("vector index result limit is not uint64")
-	}
-	req = requestForValues(spec, []byte(queryLit.GetVecVal()), spec.QueryPayload.Typ, limit.U64Val, identity)
+	req = requestForValues(spec, payload, spec.QueryPayload.Typ, limit, identity)
+	req.QueryIsNull = queryLit.Isnull
 	req.CollectExplainDiagnostics = true
 	req.MembershipFilter = append([]byte(nil), membership...)
 	req.HasMembershipFilter = hasMembership
@@ -294,7 +338,7 @@ func RequestFromScalar(
 		}
 		req.AlgoValues = append(req.AlgoValues, searchplugin.AlgoValue{Name: spec.AlgoExprNames[i], Value: lit})
 	}
-	return req, true, nil
+	return req, !queryLit.Isnull, nil
 }
 
 func requestForValues(

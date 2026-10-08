@@ -31,7 +31,7 @@ select id, round(match(body) against('hello'), 3) as r from docs where match(bod
 3  ¦  0.041  𝄀
 1  ¦  0.033
 explain select id, round(match(body) against('hello'), 3) as r from docs where match(body) against('hello');
--- @regex("Table Function on fulltext2_search", true)
+-- @regex("Fulltext Index Scan on", true)
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
@@ -42,7 +42,8 @@ Project  𝄀
               Runtime Filter Build: #[-1,0]  𝄀
               ->  Table Scan on ft2_wrapped.docs  𝄀
                     Runtime Filter Probe: docs.id  𝄀
-              ->  Table Function on fulltext2_search
+              ->  Fulltext Index Scan on ft  𝄀
+                    Fulltext Index: ft
 create view v as select id, match(body) against('hello') as sc from docs where match(body) against('hello');
 select id from v where sc > 0 order by id;              -- baseline: every match
 ➤ id[4,32,0]  𝄀
@@ -67,7 +68,7 @@ select id from v where round(cast(sc as double) * 2, 3) > 0.074 order by id;
 ➤ id[4,32,0]  𝄀
 3
 explain select id from v where round(sc, 4) > 0;
--- @regex("Table Function on fulltext2_search", true)
+-- @regex("Fulltext Index Scan on", true)
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
@@ -80,7 +81,8 @@ Project  𝄀
                     Runtime Filter Build: #[-1,0]  𝄀
                     ->  Table Scan on ft2_wrapped.docs  𝄀
                           Runtime Filter Probe: docs.id  𝄀
-                    ->  Table Function on fulltext2_search
+                    ->  Fulltext Index Scan on ft  𝄀
+                          Fulltext Index: ft
 select id from v where sc > 0.037 order by id;      -- only the higher-scoring row
 ➤ id[4,32,0]  𝄀
 3
@@ -163,7 +165,7 @@ select count(*) as n from two where match(body) against('hello') > 0.9;
 ➤ n[-5,64,0]  𝄀
 0
 explain select id from two where match(body) against('hello') > 0.0132;
--- @regex("Table Function on fulltext2_search", true)
+-- @regex("Fulltext Index Scan on", true)
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
@@ -177,7 +179,8 @@ Project  𝄀
                     Runtime Filter Build: #[-1,0]  𝄀
                     ->  Table Scan on ft2_wrapped.two  𝄀
                           Runtime Filter Probe: two.id  𝄀
-                    ->  Table Function on fulltext2_search
+                    ->  Fulltext Index Scan on ft_two  𝄀
+                          Fulltext Index: ft_two
 create table nodx(id int primary key, txt text);
 insert into nodx values (1,'hello');
 select id from nodx where match(txt) against('hello') > 0.1;
@@ -214,7 +217,7 @@ select id from two where match(body) against('hello') and (match(body) against('
 1  𝄀
 3
 explain select id from two where match(body) against('hello') and match(body) against('hello') > 0.0125;
--- @regex("Table Function on fulltext2_search", true)
+-- @regex("Fulltext Index Scan on", true)
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
@@ -228,7 +231,8 @@ Project  𝄀
                     Runtime Filter Build: #[-1,0]  𝄀
                     ->  Table Scan on ft2_wrapped.two  𝄀
                           Runtime Filter Probe: two.id  𝄀
-                    ->  Table Function on fulltext2_search
+                    ->  Fulltext Index Scan on ft_two  𝄀
+                          Fulltext Index: ft_two
 create table covpk(body varchar(100) primary key, tag int);
 insert into covpk values ('hello',1),('hello hello',2),('hello hello hello',3),('world',4);
 create fulltext2 index ci_covpk on covpk(body) include(tag);
@@ -243,12 +247,13 @@ hello  ¦  1  ¦  0.019  𝄀
 hello hello  ¦  2  ¦  0.021  𝄀
 hello hello hello  ¦  3  ¦  0.022
 explain select body, tag, round(match(body) against('hello'),3) as r from covpk where match(body) against('hello');
--- @regex("Table Function on fulltext2_search", true)
+-- @regex("Fulltext Index Scan on", true)
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
         Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
-        ->  Table Function on fulltext2_search
+        ->  Fulltext Index Scan on ci_covpk  𝄀
+              Fulltext Index: ci_covpk
 select id from two where match(body) against('hello') and match(body) against('hello') < 0.0118 limit 1;
 ➤ id[4,32,0]  𝄀
 5

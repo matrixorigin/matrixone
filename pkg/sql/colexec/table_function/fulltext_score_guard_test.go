@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	ftsearch "github.com/matrixorigin/matrixone/pkg/fulltext/plugin/search"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -164,7 +165,7 @@ func TestZeroRelevanceGuardPrecedesNullPatternPaths(t *testing.T) {
 	// fulltext_index_scan rejects a NULL pattern with its own error. The refusal the
 	// guard carries is the plan-time one, so it has to win.
 	t.Run("fulltext_index_scan refuses an unsafe threshold before the pattern error", func(t *testing.T) {
-		st := &fulltextState{inited: true}
+		st := &fulltextState{inited: true, scan: ftsearch.NewScan(0)}
 		tf := &TableFunction{}
 		// fulltext_index_scan(src, index, pattern, mode, guard)
 		tf.ctr.argVecs = []*vector.Vector{

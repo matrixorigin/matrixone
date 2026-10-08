@@ -19,7 +19,7 @@ from docs where match(body) against('alpha' in boolean mode) order by id;
 4  ¦  3
 explain select id, row_number() over (order by l2_distance(v,'[0,0,0]'), id) as rn
 from docs where match(body) against('alpha' in boolean mode) order by id;
--- @regex("fulltext_index_scan", true)
+-- @regex("Fulltext Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
@@ -32,7 +32,8 @@ Project  𝄀
                     Runtime Filter Build: #[-1,0]  𝄀
                     ->  Table Scan on ft_window.docs  𝄀
                           Runtime Filter Probe: docs.id  𝄀
-                    ->  Table Function on fulltext_index_scan
+                    ->  Fulltext Index Scan on ft  𝄀
+                          Fulltext Index: ft
 select id, row_number() over (order by match(body) against('alpha' in boolean mode) desc, id) as rn
 from docs where match(body) against('alpha' in boolean mode) order by id;
 ➤ id[-5,64,0]  ¦  rn[-5,64,0]  𝄀
@@ -47,7 +48,7 @@ from docs where match(body) against('alpha' in boolean mode) order by id;
 4  ¦  3
 explain select id, row_number() over (partition by body order by id) as rn
 from docs where match(body) against('alpha' in boolean mode) order by id;
--- @regex("fulltext_index_scan", true)
+-- @regex("Fulltext Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
@@ -62,7 +63,8 @@ Project  𝄀
                           Runtime Filter Build: #[-1,0]  𝄀
                           ->  Table Scan on ft_window.docs  𝄀
                                 Runtime Filter Probe: docs.id  𝄀
-                          ->  Table Function on fulltext_index_scan
+                          ->  Fulltext Index Scan on ft  𝄀
+                                Fulltext Index: ft
 select id, (match(body) against('alpha' in boolean mode) > 0) as hit,
 row_number() over (order by id) as rn
 from docs where match(body) against('alpha' in boolean mode) order by id;
@@ -99,7 +101,7 @@ select id, match(body) against('alpha' in boolean mode) as score,
 row_number() over (order by id) as rn
 from docs where match(body) against('alpha' in boolean mode)
 ) q where rn = 1 or score > 0 order by id;
--- @regex("fulltext_index_scan", true)
+-- @regex("Fulltext Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
@@ -113,7 +115,8 @@ Project  𝄀
                     Runtime Filter Build: #[-1,0]  𝄀
                     ->  Table Scan on ft_window.docs  𝄀
                           Runtime Filter Probe: docs.id  𝄀
-                    ->  Table Function on fulltext_index_scan
+                    ->  Fulltext Index Scan on ft  𝄀
+                          Fulltext Index: ft
 select id, rn from (
 select id, match(body) against('alpha' in boolean mode) as score,
 row_number() over (order by id) as rn
@@ -128,7 +131,7 @@ select id, match(body) against('alpha' in boolean mode) as score,
 row_number() over (order by id) as rn
 from docs where match(body) against('alpha' in boolean mode)
 ) q where score > 0 order by id;
--- @regex("fulltext_index_scan", true)
+-- @regex("Fulltext Index Scan on", true)
 -- @regex("fulltext_match", false)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
@@ -144,5 +147,6 @@ Project  𝄀
                           Runtime Filter Build: #[-1,0]  𝄀
                           ->  Table Scan on ft_window.docs  𝄀
                                 Runtime Filter Probe: docs.id  𝄀
-                          ->  Table Function on fulltext_index_scan
+                          ->  Fulltext Index Scan on ft  𝄀
+                                Fulltext Index: ft
 drop database ft_window;

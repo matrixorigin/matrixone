@@ -466,12 +466,12 @@ func (u *fulltext2SearchState) probeTailSpansSchema(proc *process.Process, searc
 	if !ok {
 		return true
 	}
-	atSearched, err1 := tableChangesTableDefAt(proc.Ctx, e, proc, u.tblcfg.DbName, u.tblcfg.SrcTable, types.BuildTS(searched, 0))
-	atRead, err2 := tableChangesTableDefAt(proc.Ctx, e, proc, u.tblcfg.DbName, u.tblcfg.SrcTable, types.TimestampToTS(u.tailSnap))
+	atSearched, err1 := engine.TableDefAt(proc.Ctx, e, proc.GetTxnOperator(), u.tblcfg.DbName, u.tblcfg.SrcTable, types.BuildTS(searched, 0))
+	atRead, err2 := engine.TableDefAt(proc.Ctx, e, proc.GetTxnOperator(), u.tblcfg.DbName, u.tblcfg.SrcTable, types.TimestampToTS(u.tailSnap))
 	if err1 != nil || err2 != nil {
 		return true
 	}
-	return !sameTableChangesSchema(atSearched, atRead)
+	return !engine.SameTableSchema(atSearched, atRead)
 }
 
 // startProbeStream launches sql on tailSp (which carries the read's snapshot/tenant) as a stream that

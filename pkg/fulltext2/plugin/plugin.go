@@ -31,11 +31,13 @@ import (
 	coverageplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/coverage"
 	idxcronplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/idxcron"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
+	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 
 	ft2compile "github.com/matrixorigin/matrixone/pkg/fulltext2/plugin/compile"
 	ft2idxcron "github.com/matrixorigin/matrixone/pkg/fulltext2/plugin/idxcron"
 	ft2plan "github.com/matrixorigin/matrixone/pkg/fulltext2/plugin/plan"
 	ft2runtime "github.com/matrixorigin/matrixone/pkg/fulltext2/plugin/runtime"
+	ft2search "github.com/matrixorigin/matrixone/pkg/fulltext2/plugin/search"
 )
 
 // Plugin is the fulltext2 AlgoPlugin.
@@ -44,6 +46,7 @@ type Plugin struct {
 	compileHooks compileplugin.Hooks
 	planHooks    planplugin.Hooks
 	idxcronHooks idxcronplugin.Hooks
+	searchHooks  searchplugin.Hooks
 }
 
 func New() *Plugin {
@@ -52,6 +55,7 @@ func New() *Plugin {
 		compileHooks: ft2compile.Hooks{},
 		planHooks:    ft2plan.Hooks{},
 		idxcronHooks: ft2idxcron.Hooks{},
+		searchHooks:  ft2search.Hooks{},
 	}
 }
 
@@ -60,6 +64,7 @@ func (p *Plugin) Catalog() catalogplugin.Hooks { return p.catalogHooks }
 func (p *Plugin) Compile() compileplugin.Hooks { return p.compileHooks }
 func (p *Plugin) Plan() planplugin.Hooks       { return p.planHooks }
 func (p *Plugin) Idxcron() idxcronplugin.Hooks { return p.idxcronHooks }
+func (p *Plugin) Search() searchplugin.Hooks   { return p.searchHooks }
 
 // Coverage implements the OPTIONAL indexplugin.CoveragePlugin capability.
 // fulltext2 is always-async, so the optimizer may only use it as a mandatory
@@ -67,6 +72,7 @@ func (p *Plugin) Idxcron() idxcronplugin.Hooks { return p.idxcronHooks }
 func (*Plugin) Coverage() coverageplugin.Hooks { return ft2coverage.Hooks{} }
 
 var _ indexplugin.AlgoPlugin = (*Plugin)(nil)
+var _ indexplugin.SearchPlugin = (*Plugin)(nil)
 
 // init registers fulltext2. CREATE FULLTEXT2 INDEX now creates the hidden tables;
 // build-from-source / MATCH search / CDC / reindex land in the following steps.

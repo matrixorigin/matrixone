@@ -70,7 +70,7 @@ select id from t where match(body) against('+alpha' in boolean mode) and ch = 'a
 
 -- the fulltext2 index is used (predicate pushed into the search), not a full scan.
 -- @separator:table
--- @regex("fulltext2_search", true)
+-- @regex("Fulltext Index Scan on", true)
 explain select id from t where match(body) against('+alpha' in boolean mode) and ch = 'a' order by id;
 
 drop database ft2_char_padding;

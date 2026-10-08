@@ -25,7 +25,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	ftplan "github.com/matrixorigin/matrixone/pkg/fulltext/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
+	ft2plan "github.com/matrixorigin/matrixone/pkg/fulltext2/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
@@ -646,53 +648,33 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 			if cfgErr != nil {
 				return -1, nil, nil, nil, cfgErr
 			}
-			exprs := []*plan.Expr{
-				makePlan2StringConstExprWithType(cfg),
-				DeepCopyExpr(fn.Args[0]), // pattern (may be a bound '?' parameter)
-				DeepCopyExpr(fn.Args[1]), // mode (a constant)
-			}
+			opts := ft2plan.ScanOptions{Config: cfg, Mode: mode}
 			// Push this stream's score bounds into the engine: fulltext2 scores documents
 			// itself, so it can drop out-of-range ones before they cross into the join. Taken
 			// from the predicates the lift moved above the join -- they stay there too, so the
 			// pushed (deliberately widened) range can only ever remove work, not rows.
-			var scoreRangeJSON string
 			if rng := builder.fulltext2ScoreRangeFromFilters(wrappedMatchFilters, fn); rng != nil {
 				rb, rerr := json.Marshal(rng)
 				if rerr != nil {
 					return -1, nil, nil, nil, rerr
 				}
-				scoreRangeJSON = string(rb)
+				opts.ScoreRange = string(rb)
 			}
-			// Attach the peeled INCLUDE/pk predicate JSON to the DRIVING TVF (i==0). With
+			// Attach the peeled INCLUDE/pk predicate JSON to the DRIVING scan (i==0). With
 			// multiple MATCHes the JOIN #1 doc_id intersection propagates the filter, so one
 			// filtered stream constrains the whole result — the predicate need only ride the
 			// driving stream.
-			// argVecs[3] is the INCLUDE/pk predicate JSON and argVecs[4] the score range;
-			// both optional, but positional, so an empty 3rd is passed when only 4 is needed.
-			preds := ""
 			if i == 0 {
-				preds = ft2PredsJSON
+				opts.IncludePreds = ft2PredsJSON
 			}
-			if preds != "" || scoreRangeJSON != "" {
-				exprs = append(exprs, makePlan2StringConstExprWithType(preds))
-			}
-			if scoreRangeJSON != "" {
-				exprs = append(exprs, makePlan2StringConstExprWithType(scoreRangeJSON))
-			}
-			// Optional 6th argument: the zero-relevance guard for a threshold only known
-			// at EXECUTE. Arguments are positional, so the two optional JSON slots are
-			// padded when only the guard is needed.
+			// The zero-relevance guard for a threshold only known at EXECUTE.
 			guard, gerr := builder.fulltextRuntimeScoreGuard(wrappedMatchFilters, fn)
 			if gerr != nil {
 				return -1, nil, nil, nil, gerr
 			}
-			if guard != nil {
-				for len(exprs) < 5 {
-					exprs = append(exprs, makePlan2StringConstExprWithType(""))
-				}
-				exprs = append(exprs, guard)
-			}
-			curr_ftnode_id, err = builder.buildFulltext2SearchNode(ctx, exprs, nil)
+			// pattern (fn.Args[0]) may be a bound '?' parameter.
+			curr_ftnode_id, err = builder.buildFulltext2SearchScan(
+				ctx, scanNode, idxdef, opts, fn.Args[0], guard, ft2SearchBaseColDefs())
 			if err != nil {
 				return -1, nil, nil, nil, err
 			}
@@ -708,32 +690,19 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 				sql = fullTextSQL
 			}
 
-			exprs := []*plan.Expr{
-				makePlan2StringConstExprWithType(srctblname),
-				makePlan2StringConstExprWithType(idxtblname),
-				DeepCopyExpr(fn.Args[0]),
-				DeepCopyExpr(fn.Args[1]),
-			}
-			// Optional 5th argument: the zero-relevance guard for a threshold only known
-			// at EXECUTE. See fulltextRuntimeScoreGuard.
+			// The zero-relevance guard for a threshold only known at EXECUTE. See
+			// fulltextRuntimeScoreGuard.
 			guard, gerr := builder.fulltextRuntimeScoreGuard(wrappedMatchFilters, fn)
 			if gerr != nil {
 				return -1, nil, nil, nil, gerr
 			}
-			if guard != nil {
-				exprs = append(exprs, guard)
-			}
-			curr_ftnode_id, err = builder.buildFullTextIndexScanNode(ctx, exprs, nil, params, sql)
+			// pattern (fn.Args[0]) may be a bound '?' parameter.
+			curr_ftnode_id, err = builder.buildFullTextSearchScan(ctx, scanNode, idxdef, idxObjRef,
+				ftplan.ScanOptions{SourceTable: srctblname, IndexTable: idxtblname, Mode: mode},
+				fn.Args[0], guard, sql)
 			if err != nil {
 				return -1, nil, nil, nil, err
 			}
-		}
-		// Named-snapshot read TS for the TVF; DeepCopySnapshot(nil) is nil (#27941).
-		builder.qry.Nodes[curr_ftnode_id].ScanSnapshot = DeepCopySnapshot(scanNode.ScanSnapshot)
-		if scanNode.ObjRef.PubInfo != nil {
-			fulltextFunc := builder.qry.Nodes[curr_ftnode_id].TableDef.TblFunc
-			fulltextFunc.FulltextSourceRef = DeepCopyObjectRef(scanNode.ObjRef)
-			fulltextFunc.FulltextIndexRef = DeepCopyObjectRef(idxObjRef)
 		}
 		// this scan answers ft_filters[i]; wrapped MATCHes equal to it now resolve to its score
 		served[i].nodeID = curr_ftnode_id
@@ -777,7 +746,7 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 
 		// pushdown limit
 		if limitExpr != nil {
-			curr_ftnode.Limit = DeepCopyExpr(limitExpr)
+			curr_ftnode.IndexSearchScan.CandidateLimit = DeepCopyExpr(limitExpr)
 		}
 
 		// change doc_id type to the primary type here
@@ -1309,20 +1278,16 @@ func (builder *QueryBuilder) tryApplyCoveredFulltext2(nodeID int32, projNode, so
 	if cfgErr != nil {
 		return false, cfgErr
 	}
-	exprs := []*plan.Expr{
-		makePlan2StringConstExprWithType(cfg),
-		DeepCopyExpr(fn.Args[0]), // pattern (may be a bound '?' parameter)
-		DeepCopyExpr(fn.Args[1]), // mode (a constant)
-	}
-	if ft2PredsJSON != "" {
-		exprs = append(exprs, makePlan2StringConstExprWithType(ft2PredsJSON))
-	}
-	ftnodeID, err := builder.buildFulltext2SearchNodeCovered(ctx, exprs, nil, scanNode, incCols)
+	colDefs, err := builder.ft2CoveredColDefs(scanNode, incCols)
 	if err != nil {
 		return false, err
 	}
-	// Snapshot read TS for the covered fast path too (#27941).
-	builder.qry.Nodes[ftnodeID].ScanSnapshot = DeepCopySnapshot(scanNode.ScanSnapshot)
+	// pattern (fn.Args[0]) may be a bound '?' parameter.
+	ftnodeID, err := builder.buildFulltext2SearchScan(ctx, scanNode, idxdef,
+		ft2plan.ScanOptions{Config: cfg, Mode: mode, IncludePreds: ft2PredsJSON}, fn.Args[0], nil, colDefs)
+	if err != nil {
+		return false, err
+	}
 	ftnode := builder.qry.Nodes[ftnodeID]
 	ftTag := ftnode.BindingTags[0]
 

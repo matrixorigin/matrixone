@@ -14,7 +14,7 @@
 
 package plan
 
-// ScanSnapshot propagation into the fulltext2_search FUNCTION_SCAN node built by the covered
+// ScanSnapshot propagation into the fulltext2 index search scan built by the covered
 // fast path (#27941).
 
 import (
@@ -99,8 +99,8 @@ func coveredFulltext2Fixture(t *testing.T, snapshot *plan.Snapshot) (
 	return
 }
 
-// The covered path's fulltext2_search TVF node carries a deep copy of the base scan's
-// snapshot.
+// The covered path's fulltext2 index search scan carries a deep copy of the base scan's
+// snapshot, on the node and on its IndexSearchScan.
 func TestTryApplyCoveredFulltext2PropagatesScanSnapshot(t *testing.T) {
 	snapshot := &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 1700000000, LogicalTime: 7}}
 	builder, nodeID, projNode, sortNode, scanNode, idxdef := coveredFulltext2Fixture(t, snapshot)
@@ -110,17 +110,19 @@ func TestTryApplyCoveredFulltext2PropagatesScanSnapshot(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, handled, "the fixture must clear every covered-path guard")
 
-	tvf := findCoveredFulltext2TVF(t, builder)
-	require.NotNil(t, tvf.ScanSnapshot, "the covered fulltext2 TVF must carry the base scan's snapshot")
-	require.NotNil(t, tvf.ScanSnapshot.TS)
-	assert.Equal(t, snapshot.TS.PhysicalTime, tvf.ScanSnapshot.TS.PhysicalTime)
-	assert.Equal(t, snapshot.TS.LogicalTime, tvf.ScanSnapshot.TS.LogicalTime)
-	assert.NotSame(t, snapshot, tvf.ScanSnapshot, "must be a deep copy, not the scan node's own Snapshot")
-	assert.NotSame(t, snapshot.TS, tvf.ScanSnapshot.TS, "the TS must be deep-copied too")
+	node := findCoveredFulltext2Scan(t, builder)
+	for _, got := range []*plan.Snapshot{node.ScanSnapshot, node.IndexSearchScan.ScanSnapshot} {
+		require.NotNil(t, got)
+		require.NotNil(t, got.TS)
+		assert.Equal(t, snapshot.TS.PhysicalTime, got.TS.PhysicalTime)
+		assert.Equal(t, snapshot.TS.LogicalTime, got.TS.LogicalTime)
+		assert.NotSame(t, snapshot, got, "must be a deep copy, not the scan node's own Snapshot")
+		assert.NotSame(t, snapshot.TS, got.TS, "the TS must be deep-copied too")
+	}
 }
 
-// No snapshot on the base scan leaves the TVF node's ScanSnapshot nil.
-func TestTryApplyCoveredFulltext2NoSnapshotLeavesTVFUnsnapshotted(t *testing.T) {
+// No snapshot on the base scan leaves the search scan's ScanSnapshot nil.
+func TestTryApplyCoveredFulltext2NoSnapshotLeavesSearchUnsnapshotted(t *testing.T) {
 	builder, nodeID, projNode, sortNode, scanNode, idxdef := coveredFulltext2Fixture(t, nil)
 
 	handled, err := builder.tryApplyCoveredFulltext2(nodeID, projNode, sortNode, scanNode,
@@ -128,19 +130,22 @@ func TestTryApplyCoveredFulltext2NoSnapshotLeavesTVFUnsnapshotted(t *testing.T) 
 	require.NoError(t, err)
 	require.True(t, handled)
 
-	assert.Nil(t, findCoveredFulltext2TVF(t, builder).ScanSnapshot)
+	node := findCoveredFulltext2Scan(t, builder)
+	assert.Nil(t, node.ScanSnapshot)
+	assert.Nil(t, node.IndexSearchScan.ScanSnapshot)
 }
 
-// findCoveredFulltext2TVF returns the single FUNCTION_SCAN node appended by the rewrite.
-func findCoveredFulltext2TVF(t *testing.T, builder *QueryBuilder) *plan.Node {
+// findCoveredFulltext2Scan returns the single fulltext2 index search scan appended by the
+// rewrite.
+func findCoveredFulltext2Scan(t *testing.T, builder *QueryBuilder) *plan.Node {
 	t.Helper()
 	var found *plan.Node
 	for _, n := range builder.qry.Nodes {
-		if n.NodeType == plan.Node_FUNCTION_SCAN {
-			require.Nil(t, found, "expected exactly one FUNCTION_SCAN node")
+		if isFulltext2SearchScan(n) {
+			require.Nil(t, found, "expected exactly one fulltext2 index search scan")
 			found = n
 		}
 	}
-	require.NotNil(t, found, "the covered rewrite must append a fulltext2_search FUNCTION_SCAN")
+	require.NotNil(t, found, "the covered rewrite must append a fulltext2 index search scan")
 	return found
 }

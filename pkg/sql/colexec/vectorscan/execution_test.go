@@ -323,9 +323,36 @@ func TestRequestFromScalarRejectsMalformedBoundExpressions(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, hasQuery)
 
+	// A NULL query still carries its evaluated algorithm values for EmptyScanHooks.
+	nullReq, hasQuery, err := RequestFromScalar(&plan.IndexSearchScan{
+		QueryPayload:  nullQuery.QueryPayload,
+		AlgoExprs:     []*plan.Expr{plan2.MakePlan2Uint64ConstExprWithType(3)},
+		AlgoExprNames: []string{"guard"},
+	}, identity, nil, false, false)
+	require.NoError(t, err)
+	require.False(t, hasQuery)
+	require.True(t, nullReq.QueryIsNull)
+	requireAlgoU64(t, nullReq, "guard", 3)
+
 	query := plan2.MakePlan2Vecf32ConstExprWithType("[1,2]", 2)
-	_, _, err = RequestFromScalar(&plan.IndexSearchScan{QueryPayload: query}, identity, nil, false, false)
-	require.ErrorContains(t, err, "result limit did not fold")
+	// No candidate limit is a ResultLimit of 0.
+	unlimited, ok, err := RequestFromScalar(&plan.IndexSearchScan{QueryPayload: query}, identity, nil, false, false)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Zero(t, unlimited.ResultLimit)
+	require.Zero(t, unlimited.CandidateBudget)
+
+	pattern, ok, err := RequestFromScalar(&plan.IndexSearchScan{
+		QueryPayload: plan2.MakePlan2StringConstExprWithType("apple"),
+	}, identity, nil, false, false)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, []byte("apple"), pattern.QueryPayload)
+
+	_, _, err = RequestFromScalar(&plan.IndexSearchScan{
+		QueryPayload: plan2.MakePlan2Int64ConstExprWithType(1),
+	}, identity, nil, false, false)
+	require.ErrorContains(t, err, "neither a vector nor a string")
 	_, _, err = RequestFromScalar(&plan.IndexSearchScan{
 		QueryPayload: query,
 		CandidateLimit: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
@@ -398,4 +425,28 @@ func TestExplainDiagnosticsAreEnabledOnlyForScalarScans(t *testing.T) {
 
 func searchIdentityForTest() searchplugin.ScanIdentity {
 	return searchplugin.ScanIdentity{PartitionCount: 1}
+}
+
+// A bare parameter reference has no function for ConstantFold to fold; it is
+// evaluated to its bound literal, as a fulltext pattern or a guard needs.
+func TestPrepareScalarEvaluatesBareParameterPayload(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	template := &plan.IndexSearchScan{
+		Index: &plan.IndexDef{IndexAlgo: "fulltext2"},
+		QueryPayload: &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_varchar), Width: 65535},
+			Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+		},
+	}
+	done := installStringParam(t, proc, "+needle")
+	spec, err := PrepareScalar(template, proc)
+	done()
+	require.NoError(t, err)
+	require.NotNil(t, template.QueryPayload.GetP(), "the template stays unfolded")
+	req, hasQuery, err := RequestFromScalar(spec, searchIdentityForTest(), nil, false, false)
+	require.NoError(t, err)
+	require.True(t, hasQuery)
+	require.Equal(t, []byte("+needle"), req.QueryPayload)
+	require.Zero(t, req.ResultLimit)
 }

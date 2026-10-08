@@ -41,6 +41,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fulltext"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -3445,6 +3447,24 @@ func TestVectorScanMembershipFilterExtractsInPayload(t *testing.T) {
 	require.Equal(t, payload, membership)
 }
 
+// noSearchTestAlgo is a registered index algorithm without a scan reader.
+const noSearchTestAlgo = "no_search_test"
+
+// noSearchPlugin has the hooks of the fulltext plugin but no Search.
+type noSearchPlugin struct{ indexplugin.AlgoPlugin }
+
+func (noSearchPlugin) Algo() string { return noSearchTestAlgo }
+
+// Registered from init(): indexplugin.Register panics on a duplicate algo and the
+// registry has no Unregister, so registering in a test body fails a -count=2 rerun.
+func init() {
+	fulltextPlugin, ok := indexplugin.Get(catalog.MOIndexFullTextAlgo.ToString())
+	if !ok {
+		panic("fulltext index plugin is not registered")
+	}
+	indexplugin.Register(noSearchPlugin{fulltextPlugin})
+}
+
 func TestBuildVectorIndexReadersRejectsIncompleteRuntimeState(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	newScopeFor := func(spec *plan.IndexSearchScan) *Scope {
@@ -3457,16 +3477,16 @@ func TestBuildVectorIndexReadersRejectsIncompleteRuntimeState(t *testing.T) {
 		}
 	}
 
-	_, err := newScopeFor(nil).buildVectorIndexReaders(nil)
+	_, err := newScopeFor(nil).buildVectorIndexReaders(nil, false)
 	require.ErrorContains(t, err, "missing index metadata")
-	_, err = newScopeFor(&plan.IndexSearchScan{}).buildVectorIndexReaders(nil)
+	_, err = newScopeFor(&plan.IndexSearchScan{}).buildVectorIndexReaders(nil, false)
 	require.ErrorContains(t, err, "missing index metadata")
 
 	nullQuery := &plan.IndexSearchScan{
 		Index:        &plan.IndexDef{IndexAlgo: "ivfflat"},
 		QueryPayload: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}},
 	}
-	readers, err := newScopeFor(nullQuery).buildVectorIndexReaders(nil)
+	readers, err := newScopeFor(nullQuery).buildVectorIndexReaders(nil, false)
 	require.NoError(t, err)
 	require.Len(t, readers, 1)
 
@@ -3481,7 +3501,7 @@ func TestBuildVectorIndexReadersRejectsIncompleteRuntimeState(t *testing.T) {
 		QueryPayload:   query,
 		CandidateLimit: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}},
 	}
-	_, err = newScopeFor(nullLimit).buildVectorIndexReaders(nil)
+	_, err = newScopeFor(nullLimit).buildVectorIndexReaders(nil, false)
 	require.ErrorContains(t, err, "result limit did not fold")
 
 	wrongLimitType := &plan.IndexSearchScan{
@@ -3489,15 +3509,15 @@ func TestBuildVectorIndexReadersRejectsIncompleteRuntimeState(t *testing.T) {
 		QueryPayload:   query,
 		CandidateLimit: plan2.MakePlan2Int64ConstExprWithType(1),
 	}
-	_, err = newScopeFor(wrongLimitType).buildVectorIndexReaders(nil)
+	_, err = newScopeFor(wrongLimitType).buildVectorIndexReaders(nil, false)
 	require.ErrorContains(t, err, "result limit is not uint64")
 
 	noReaderPlugin := &plan.IndexSearchScan{
-		Index:          &plan.IndexDef{IndexAlgo: "fulltext"},
+		Index:          &plan.IndexDef{IndexAlgo: noSearchTestAlgo},
 		QueryPayload:   query,
 		CandidateLimit: plan2.MakePlan2Uint64ConstExprWithType(1),
 	}
-	_, err = newScopeFor(noReaderPlugin).buildVectorIndexReaders(nil)
+	_, err = newScopeFor(noReaderPlugin).buildVectorIndexReaders(nil, false)
 	require.ErrorContains(t, err, "has no scan reader")
 
 	ivfflatPlugin := &plan.IndexSearchScan{
@@ -3505,7 +3525,7 @@ func TestBuildVectorIndexReadersRejectsIncompleteRuntimeState(t *testing.T) {
 		QueryPayload:   query,
 		CandidateLimit: plan2.MakePlan2Uint64ConstExprWithType(1),
 	}
-	_, err = newScopeFor(ivfflatPlugin).buildVectorIndexReaders(nil)
+	_, err = newScopeFor(ivfflatPlugin).buildVectorIndexReaders(nil, false)
 	require.ErrorContains(t, err, "requires a process, transaction, and storage engine")
 
 	unknownPlugin := &plan.IndexSearchScan{
@@ -3513,7 +3533,7 @@ func TestBuildVectorIndexReadersRejectsIncompleteRuntimeState(t *testing.T) {
 		QueryPayload:   query,
 		CandidateLimit: plan2.MakePlan2Uint64ConstExprWithType(1),
 	}
-	_, err = newScopeFor(unknownPlugin).buildVectorIndexReaders(nil)
+	_, err = newScopeFor(unknownPlugin).buildVectorIndexReaders(nil, false)
 	require.ErrorContains(t, err, "is not registered")
 
 	membership, hasMembership, required := vectorScanMembershipFilter(nil)
@@ -3604,4 +3624,64 @@ func TestAttachShuffleDispatchSourceFallsBackToFirstReceiver(t *testing.T) {
 	unmatched := []*Scope{{NodeInfo: engine.Node{Id: "cn-local", Addr: "cn-local:6001", Mcpu: 1}}}
 	attachShuffleDispatchSource(unmatched, remoteSource, false)
 	require.Empty(t, unmatched[0].PreScopes)
+}
+
+// A dropped scan and a NULL query return no rows without searching, after the
+// plugin's EmptyScanHooks checked the request.
+func TestBuildVectorIndexReadersRunsEmptyScanHooks(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	scope := func(spec *plan.IndexSearchScan) *Scope {
+		return &Scope{
+			Proc:       proc,
+			NodeInfo:   engine.Node{Mcpu: 2},
+			DataSource: &Source{node: &plan.Node{NodeType: plan.Node_INDEX_SEARCH_SCAN, IndexSearchScan: spec}},
+		}
+	}
+	spec := func(pattern *plan.Expr, guard bool) *plan.IndexSearchScan {
+		return &plan.IndexSearchScan{
+			Index:         &plan.IndexDef{IndexAlgo: catalog.MoIndexFullText2Algo.ToString()},
+			QueryPayload:  pattern,
+			AlgoExprs:     []*plan.Expr{{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Bval{Bval: guard}}}}},
+			AlgoExprNames: []string{fulltext.ZeroRelevanceGuardExpr},
+		}
+	}
+	pattern := plan2.MakePlan2StringConstExprWithType("apple")
+	nullPattern := &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}
+
+	readers, err := scope(spec(pattern, false)).buildVectorIndexReaders(nil, true)
+	require.NoError(t, err)
+	require.Len(t, readers, 2)
+	_, err = scope(spec(pattern, true)).buildVectorIndexReaders(nil, true)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "a dropped scan still checks the guard")
+
+	readers, err = scope(spec(nullPattern, false)).buildVectorIndexReaders(nil, false)
+	require.NoError(t, err)
+	require.Len(t, readers, 2)
+	_, err = scope(spec(nullPattern, true)).buildVectorIndexReaders(nil, false)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "a NULL query still checks the guard")
+}
+
+func TestHasMembershipFilterSpec(t *testing.T) {
+	require.False(t, hasMembershipFilterSpec(nil))
+	require.False(t, hasMembershipFilterSpec([]*plan.RuntimeFilterSpec{nil, {}}))
+	require.True(t, hasMembershipFilterSpec([]*plan.RuntimeFilterSpec{{}, {UseMembershipFilter: true}}))
+}
+
+func TestPrepareIndexSearchScanForExecutionRejects(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	_, err := prepareIndexSearchScanForExecution(nil, proc)
+	require.ErrorContains(t, err, "missing its specification")
+	_, err = prepareIndexSearchScanForExecution(&Source{node: &plan.Node{IndexSearchScan: &plan.IndexSearchScan{
+		Index:         &plan.IndexDef{},
+		QueryPayload:  plan2.MakePlan2StringConstExprWithType("apple"),
+		AlgoExprs:     []*plan.Expr{plan2.MakePlan2Uint64ConstExprWithType(1)},
+		AlgoExprNames: nil,
+	}}}, proc)
+	require.ErrorContains(t, err, "not all named")
+
+	c := &Compile{proc: proc}
+	err = c.compileIndexSearchScanDataSource(&Scope{DataSource: &Source{node: &plan.Node{}}})
+	require.ErrorContains(t, err, "missing its specification")
+	err = c.compileIndexSearchScanDataSource(&Scope{DataSource: &Source{node: &plan.Node{IndexSearchScan: &plan.IndexSearchScan{}}}})
+	require.Error(t, err)
 }

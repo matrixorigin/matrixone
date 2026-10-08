@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/fulltext"
+	ftsearch "github.com/matrixorigin/matrixone/pkg/fulltext/plugin/search"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/stretchr/testify/require"
 )
@@ -44,8 +45,8 @@ func TestFullTextCallBM25(t *testing.T) {
 	}
 
 	// stub runSql function
-	ft_runSql = fake_runSql
-	ft_runSql_streaming = fake_runSql_streaming
+	ftsearch.RunSql = fake_runSql
+	ftsearch.RunStreamingSql = fake_runSql_streaming
 
 	// start
 	err = ut.arg.ctr.state.start(ut.arg, ut.proc, 0, nil)
@@ -99,8 +100,8 @@ func TestFullTextCallOneAttrBM25(t *testing.T) {
 	}
 
 	// stub runSql function
-	ft_runSql = fake_runSql
-	ft_runSql_streaming = fake_runSql_streaming
+	ftsearch.RunSql = fake_runSql
+	ftsearch.RunStreamingSql = fake_runSql_streaming
 
 	// start
 	err = ut.arg.ctr.state.start(ut.arg, ut.proc, 0, nil)
@@ -154,8 +155,8 @@ func TestFullTextEarlyFreeBM25(t *testing.T) {
 	}
 
 	// stub runSql function
-	ft_runSql = fake_runSql
-	ft_runSql_streaming = fake_runSql_streaming
+	ftsearch.RunSql = fake_runSql
+	ftsearch.RunStreamingSql = fake_runSql_streaming
 
 	// start
 	err = ut.arg.ctr.state.start(ut.arg, ut.proc, 0, nil)
