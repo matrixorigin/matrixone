@@ -691,7 +691,7 @@ func TestInsertExpressionDefaultReadsMaterializedVolatileDependency(t *testing.T
 }
 
 func TestLegacyInsertMaterializesVolatileGeneratedDependency(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	const (
 		tableName = "expression_default_legacy_dml"
 		tableID   = uint64(29003)

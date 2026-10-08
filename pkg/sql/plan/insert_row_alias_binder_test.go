@@ -137,7 +137,7 @@ func TestInsertRowAliasBinderUsesVisibleTargetForCorrelation(t *testing.T) {
 }
 
 func TestInsertRowAliasCorrelatedSubqueryIsRejectedBeforeBuild(t *testing.T) {
-	_, err := runOneStmt(NewMockOptimizer(true), t,
+	_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
 		"insert into constraint_test.dept(deptno, dname, loc) values (1, 'Sales', 'NY') as n(id, name, location) "+
 			"on duplicate key update loc = (select cast(e.ename as json) from constraint_test.emp as e "+
 			"where e.deptno = constraint_test.dept.deptno)")
@@ -145,7 +145,7 @@ func TestInsertRowAliasCorrelatedSubqueryIsRejectedBeforeBuild(t *testing.T) {
 }
 
 func TestInsertRowAliasTargetCorrelatedSubqueryIsRejectedBeforeBuild(t *testing.T) {
-	_, err := runOneStmt(NewMockOptimizer(true), t,
+	_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
 		"insert into constraint_test.dept(deptno, dname, loc) values (999, 'Sales', 'NY') as n(id, name, location) "+
 			"on duplicate key update loc = (select e.ename from constraint_test.emp as e "+
 			"where e.deptno = coalesce(constraint_test.dept.deptno, 0))")
@@ -153,7 +153,7 @@ func TestInsertRowAliasTargetCorrelatedSubqueryIsRejectedBeforeBuild(t *testing.
 }
 
 func TestInsertRowAliasCandidateCorrelatedSubqueryIsRejectedBeforeBuild(t *testing.T) {
-	_, err := runOneStmt(NewMockOptimizer(true), t,
+	_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
 		"insert into constraint_test.dept(deptno, dname, loc) values (999, 'Sales', 'NY') as n(id, name, location) "+
 			"on duplicate key update loc = (select e.ename from constraint_test.emp as e "+
 			"where e.deptno = n.id)")
@@ -161,7 +161,7 @@ func TestInsertRowAliasCandidateCorrelatedSubqueryIsRejectedBeforeBuild(t *testi
 }
 
 func TestInsertRowAliasCandidateCorrelatedRejectsMultiRowInput(t *testing.T) {
-	_, err := runOneStmt(NewMockOptimizer(true), t,
+	_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
 		"insert into constraint_test.dept(deptno, dname, loc) values (1, 'Sales', 'NY'), (1, 'Marketing', 'LA') as n(id, name, location) "+
 			"on duplicate key update loc = (select max(e.ename) from constraint_test.emp as e "+
 			"where e.deptno = n.id)")
@@ -169,7 +169,7 @@ func TestInsertRowAliasCandidateCorrelatedRejectsMultiRowInput(t *testing.T) {
 }
 
 func TestInsertRowAliasNestedCandidateCorrelationIsRejected(t *testing.T) {
-	_, err := runOneStmt(NewMockOptimizer(true), t,
+	_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
 		"insert into constraint_test.dept(deptno, dname, loc) values (999, 'Sales', 'NY') as n(id, name, location) "+
 			"on duplicate key update loc = (select (select q.ename from constraint_test.emp as q) "+
 			"from constraint_test.emp as e where e.deptno = n.id)")
@@ -177,7 +177,7 @@ func TestInsertRowAliasNestedCandidateCorrelationIsRejected(t *testing.T) {
 }
 
 func TestLegacyOndupIgnoresLocalAliasMatchingTarget(t *testing.T) {
-	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
+	logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
 		"insert into constraint_test.dept(deptno, dname, loc) values (999, 'Sales', 'NY') "+
 			"on duplicate key update loc = (select dept.ename from constraint_test.emp as dept "+
 			"where dept.deptno = (select 1))")
@@ -186,7 +186,7 @@ func TestLegacyOndupIgnoresLocalAliasMatchingTarget(t *testing.T) {
 }
 
 func TestInsertRowAliasCorrelatedRejectsOrderedAssignmentComposition(t *testing.T) {
-	_, err := runOneStmt(NewMockOptimizer(true), t,
+	_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
 		"insert into constraint_test.dept(deptno, dname, loc) values (1, 'Sales', 'NY') as n(id, name, location) "+
 			"on duplicate key update dname = 'changed', loc = (select max(e.ename) from constraint_test.emp as e "+
 			"where e.deptno = constraint_test.dept.deptno)")
@@ -194,7 +194,7 @@ func TestInsertRowAliasCorrelatedRejectsOrderedAssignmentComposition(t *testing.
 }
 
 func TestInsertRowAliasCorrelatedRejectsMultiRowInput(t *testing.T) {
-	_, err := runOneStmt(NewMockOptimizer(true), t,
+	_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
 		"insert into constraint_test.dept(deptno, dname, loc) values (1, 'Sales', 'NY'), (1, 'Marketing', 'LA') as n(id, name, location) "+
 			"on duplicate key update loc = (select max(e.ename) from constraint_test.emp as e "+
 			"where e.deptno = constraint_test.dept.deptno)")
@@ -202,7 +202,7 @@ func TestInsertRowAliasCorrelatedRejectsMultiRowInput(t *testing.T) {
 }
 
 func TestInsertRowAliasTargetCorrelatedSubqueryWithUniqueConflictIsRejected(t *testing.T) {
-	_, err := runOneStmt(NewMockOptimizer(true), t,
+	_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
 		"insert into constraint_test.dept(deptno, dname, loc) values (999, 'Sales', 'NY') as n(id, name, location) "+
 			"on duplicate key update loc = (select e.ename from constraint_test.emp as e "+
 			"where e.deptno = constraint_test.dept.deptno)")
@@ -210,7 +210,7 @@ func TestInsertRowAliasTargetCorrelatedSubqueryWithUniqueConflictIsRejected(t *t
 }
 
 func TestInsertRowAliasTargetCorrelatedSubqueryWithFakePrimaryIsRejected(t *testing.T) {
-	_, err := runOneStmt(NewMockOptimizer(true), t,
+	_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
 		"insert into constraint_test.fake_pk_t(a, b) values (1, 'x') as n(k, v) "+
 			"on duplicate key update b = (select e.ename from constraint_test.emp as e "+
 			"where e.deptno = constraint_test.fake_pk_t.a)")
@@ -218,7 +218,7 @@ func TestInsertRowAliasTargetCorrelatedSubqueryWithFakePrimaryIsRejected(t *test
 }
 
 func TestInsertRowAliasNestedCorrelationIsRejected(t *testing.T) {
-	_, err := runOneStmt(NewMockOptimizer(true), t,
+	_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
 		"insert into constraint_test.dept(deptno, dname, loc) values (1, 'Sales', 'NY') as n(id, name, location) "+
 			"on duplicate key update loc = (select max(e.ename) from constraint_test.emp as e "+
 			"where e.deptno = (select max(e2.deptno) from constraint_test.emp as e2 "+
@@ -270,7 +270,7 @@ func TestOndupUpdateBinderDetectsNestedCandidateCorrelationBeforeBinding(t *test
 }
 
 func TestInsertRowAliasNestedBareCandidateCorrelationIsRejected(t *testing.T) {
-	_, err := runOneStmt(NewMockOptimizer(true), t,
+	_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
 		"insert into constraint_test.dept(deptno, dname, loc) values (1, 'Sales', 'NY'), (1, 'Marketing', 'LA') as n(k, incoming_a, incoming_b) "+
 			"on duplicate key update loc = (select (select q.ename from constraint_test.emp as q) "+
 			"from constraint_test.emp as s where s.deptno = k)")
@@ -278,7 +278,7 @@ func TestInsertRowAliasNestedBareCandidateCorrelationIsRejected(t *testing.T) {
 }
 
 func TestInsertRowAliasNestedBareCandidateCorrelationSingleRowIsRejected(t *testing.T) {
-	_, err := runOneStmt(NewMockOptimizer(true), t,
+	_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
 		"insert into constraint_test.dept(deptno, dname, loc) values (999, 'Sales', 'NY') as n(k, incoming_a, incoming_b) "+
 			"on duplicate key update loc = (select (select q.ename from constraint_test.emp as q) "+
 			"from constraint_test.emp as s where s.deptno = k)")
@@ -286,7 +286,7 @@ func TestInsertRowAliasNestedBareCandidateCorrelationSingleRowIsRejected(t *test
 }
 
 func TestLegacyOndupNestedBareLocalColumnDoesNotCountAsCandidate(t *testing.T) {
-	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
+	logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
 		"insert into constraint_test.dept(deptno, dname, loc) values (999, 'Sales', 'NY'), (1000, 'Marketing', 'LA') "+
 			"on duplicate key update loc = (select (select q.ename from constraint_test.emp as q) "+
 			"from constraint_test.emp as s where s.deptno = empno)")
@@ -295,7 +295,7 @@ func TestLegacyOndupNestedBareLocalColumnDoesNotCountAsCandidate(t *testing.T) {
 }
 
 func TestInsertRowAliasNestedBareTargetCorrelationIsRejected(t *testing.T) {
-	_, err := runOneStmt(NewMockOptimizer(true), t,
+	_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
 		"insert into constraint_test.single_idx_t(id, val) values (1, 10) as n(k, v) "+
 			"on duplicate key update val = (select (select q.empno from constraint_test.emp as q) "+
 			"from constraint_test.emp as s where s.empno = id)")
@@ -303,7 +303,7 @@ func TestInsertRowAliasNestedBareTargetCorrelationIsRejected(t *testing.T) {
 }
 
 func TestLegacyOndupNestedBareLocalColumnDoesNotCountAsTarget(t *testing.T) {
-	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
+	logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
 		"insert into constraint_test.single_idx_t(id, val) values (1, 10) "+
 			"on duplicate key update val = (select (select q.empno from constraint_test.emp as q) "+
 			"from constraint_test.self_ref as s where s.parent_id = id)")
@@ -344,7 +344,7 @@ func TestOndupUpdateBinderIgnoresLocalAliasMatchingTarget(t *testing.T) {
 }
 
 func TestInsertRowAliasGeneratedDefaultNoKeyFallbackBuilds(t *testing.T) {
-	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
+	logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
 		"insert into constraint_test.fake_pk_no_unique_gen(a, g) values (1, default) as n(x, y) "+
 			"on duplicate key update a = n.x")
 	require.NoError(t, err)
@@ -352,7 +352,7 @@ func TestInsertRowAliasGeneratedDefaultNoKeyFallbackBuilds(t *testing.T) {
 }
 
 func TestInsertRowAliasImplicitGeneratedDefaultNoKeyFallbackBuilds(t *testing.T) {
-	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
+	logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
 		"insert into constraint_test.fake_pk_no_unique_gen values (1, default) as n "+
 			"on duplicate key update a = n.a")
 	require.NoError(t, err)
@@ -364,14 +364,14 @@ func TestInsertRowAliasImplicitGeneratedColumnsRemainInAlias(t *testing.T) {
 		"insert into constraint_test.fake_pk_no_unique_gen values (1, default) as n(x, y) on duplicate key update a = n.x",
 		"insert into constraint_test.fake_pk_no_unique_gen values (1, default) as n on duplicate key update a = n.g",
 	} {
-		logicPlan, err := runOneStmt(NewMockOptimizer(true), t, sql)
+		logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, sql)
 		require.NoError(t, err, sql)
 		require.NotNil(t, logicPlan, sql)
 	}
 }
 
 func TestLegacyOndupUncorrelatedScalarSubqueryDoesNotAddTargetLookup(t *testing.T) {
-	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
+	logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
 		"insert into constraint_test.dept(deptno, dname, loc) values (999, 'Sales', 'NY') "+
 			"on duplicate key update loc = (select max(e.deptno) from constraint_test.emp as e)")
 	require.NoError(t, err)
@@ -387,7 +387,7 @@ func TestLegacyOndupUncorrelatedScalarSubqueryDoesNotAddTargetLookup(t *testing.
 }
 
 func TestInsertRowAliasTargetCorrelationThenUncorrelatedSubqueryKeepsBindings(t *testing.T) {
-	_, err := runOneStmt(NewMockOptimizer(true), t,
+	_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
 		"insert into constraint_test.emp(empno, ename, job, sal, comm) values (999, 'Sales', 'X', 1, 2) as n(id, name, role, salary, commission) "+
 			"on duplicate key update sal = (select max(e.sal) from constraint_test.emp as e "+
 			"where e.empno = constraint_test.emp.empno), comm = (select max(e.sal) from constraint_test.emp as e)")
@@ -488,7 +488,7 @@ func TestInsertRowAliasValidationEdges(t *testing.T) {
 }
 
 func TestInsertRowAliasSourceColumnResolutionEdges(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true), false, false)
+	builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, false)
 	tableDef := testInsertAliasTable()
 
 	columns, err := builder.getInsertColsForRowAlias(nil, tableDef)
@@ -691,7 +691,7 @@ func TestInsertRowAliasRejectsEveryRHSSubqueryBeforeFallback(t *testing.T) {
 				if rhs == "(select ?)" {
 					sql = "prepare rejected_alias from " + sql
 				}
-				_, err := runOneStmt(NewMockOptimizer(true), t, sql)
+				_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, sql)
 				require.Error(t, err)
 				require.True(t, moerr.IsMoErrCode(err, moerr.ErrUnsupportedDML), "%v", err)
 				require.EqualError(t, err, "unsupported DML: row-alias subqueries in on duplicate key update cannot be evaluated before duplicate-key action")
@@ -706,7 +706,7 @@ func TestInsertRowAliasDirectRHSAndLegacyNoKeySubqueryRemainSupported(t *testing
 		"prepare direct_alias from insert into constraint_test.insert_fk_no_key_c(id, pid) values (?, ?) as n on duplicate key update pid = coalesce(n.pid + ?, 0)",
 		"insert into constraint_test.insert_fk_no_key_c(id, pid) values (1, 2) on duplicate key update pid = (select 1)",
 	} {
-		p, err := runOneStmt(NewMockOptimizer(true), t, sql)
+		p, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, sql)
 		require.NoError(t, err, sql)
 		require.NotNil(t, p, sql)
 	}

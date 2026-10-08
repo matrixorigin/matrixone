@@ -995,7 +995,6 @@ func NewMockCompilerContext(isDml bool, proc *process.Process) *MockCompilerCont
 		},
 		pks:     []int{2},
 		genCols: map[int]int{1: 0},
-		outcnt:  4,
 	}
 
 	/*
