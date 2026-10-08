@@ -168,24 +168,6 @@ func NewService(
 		addressMgr:  address.NewAddressManager(cfg.ServiceHost, cfg.PortBase),
 		gossipNode:  gossipNode,
 	}
-	// Ownership transfers only when NewService returns the service. The engine
-	// is published during construction so failures can retire partial owners.
-	defer func() {
-		if result != nil {
-			return
-		}
-		srv.closeViewMetadataAdmission()
-		if srv.cancelMoServerFunc != nil {
-			srv.cancelMoServerFunc()
-		}
-		if closeErr := srv.closeStoreEngine(); closeErr != nil {
-			if err != nil {
-				err = errors.Join(err, closeErr)
-			} else {
-				logutil.Error("failed to retire CN engine construction", zap.Error(closeErr))
-			}
-		}
-	}()
 	srv.colexecServer = colexec.NewServer(cfg.UUID)
 	constructed := false
 	defer func() {
@@ -194,6 +176,9 @@ func NewService(
 		}
 		if closeErr := srv.Close(); closeErr != nil {
 			result = srv
+			if err != nil {
+				err = errors.Join(err, closeErr)
+			}
 			srv.logger.Error("failed to retire CN construction", zap.Error(closeErr))
 		}
 	}()

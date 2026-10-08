@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	goruntime "runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -304,6 +305,7 @@ func TestServiceCloseDoesNotHangOnNeverReadyClusterAfterEarlyError(t *testing.T)
 			defer ctrl.Finish()
 			ls := mock_lock.NewMockLockService(ctrl)
 			ls.EXPECT().Close().Times(0)
+			engineCloses := 0
 			sv := &service{
 				cfg:                &Config{UUID: t.Name()},
 				logger:             zap.NewNop(),
@@ -315,6 +317,10 @@ func TestServiceCloseDoesNotHangOnNeverReadyClusterAfterEarlyError(t *testing.T)
 				moCluster:          moCluster,
 				server:             closeOnlyRPCServer{},
 				lockService:        ls,
+				storeEngine: closableEngine{closeFn: func() error {
+					engineCloses++
+					return nil
+				}},
 			}
 
 			done := make(chan error, 1)
@@ -326,6 +332,7 @@ func TestServiceCloseDoesNotHangOnNeverReadyClusterAfterEarlyError(t *testing.T)
 			case err := <-done:
 				require.ErrorIs(t, err, frontendErr)
 				require.Equal(t, 0, hc.closed, "unknown producer failure must preserve dependencies")
+				require.Zero(t, engineCloses, "unknown producer failure must preserve the engine")
 				require.False(t, sv.CloseComplete())
 			case <-time.After(time.Second):
 				t.Fatal("service.Close blocked on never-ready cluster")
@@ -813,62 +820,95 @@ func TestServiceCloseWaitsForPipelineHandlers(t *testing.T) {
 }
 
 func TestServiceCloseDrainsAutoIncrementBeforeTxnClient(t *testing.T) {
-	moruntime.RunTest(
-		t.Name(),
-		func(rt moruntime.Runtime) {
-			ctrl := gomock.NewController(t)
-			defer ctrl.Finish()
-			ls := mock_lock.NewMockLockService(ctrl)
-			ls.EXPECT().Close().Return(nil).Times(1)
+	for _, engineErr := range []error{nil, errors.New("engine close failed")} {
+		t.Run(fmt.Sprintf("engine-error=%t", engineErr != nil), func(t *testing.T) {
+			moruntime.RunTest(
+				t.Name(),
+				func(rt moruntime.Runtime) {
+					ctrl := gomock.NewController(t)
+					defer ctrl.Finish()
+					ls := mock_lock.NewMockLockService(ctrl)
+					ls.EXPECT().Close().Return(nil).Times(1)
 
-			incrCloseStarted := make(chan struct{})
-			releaseIncrClose := make(chan struct{})
-			txnClientClosed := make(chan struct{})
-			s := &service{
-				cfg:                &Config{UUID: t.Name()},
-				logger:             zap.NewNop(),
-				stopper:            stopper.NewStopper("test-incr-close-order"),
-				mo:                 closeErrorMOServer{},
-				cancelMoServerFunc: func() {},
-				server:             closeOnlyRPCServer{},
-				lockService:        ls,
-				incrservice: closeOnlyIncrService{onClose: func() {
-					close(incrCloseStarted)
-					<-releaseIncrClose
-				}},
-				_txnClient: closeOnlyTxnClient{onClose: func() error {
-					close(txnClientClosed)
-					return nil
-				}},
-			}
+					incrCloseStarted := make(chan struct{})
+					releaseIncrClose := make(chan struct{})
+					t.Cleanup(func() {
+						select {
+						case <-releaseIncrClose:
+						default:
+							close(releaseIncrClose)
+						}
+					})
+					engineClosed := make(chan struct{})
+					txnClientClosed := make(chan struct{})
+					s := &service{
+						cfg:                &Config{UUID: t.Name()},
+						logger:             zap.NewNop(),
+						stopper:            stopper.NewStopper("test-incr-close-order"),
+						mo:                 closeErrorMOServer{},
+						cancelMoServerFunc: func() {},
+						server:             closeOnlyRPCServer{},
+						lockService:        ls,
+						incrservice: closeOnlyIncrService{onClose: func() {
+							close(incrCloseStarted)
+							<-releaseIncrClose
+						}},
+						storeEngine: closableEngine{closeFn: func() error {
+							select {
+							case <-releaseIncrClose:
+							default:
+								t.Error("engine closed before auto-increment producer drained")
+							}
+							close(engineClosed)
+							return engineErr
+						}},
+						_txnClient: closeOnlyTxnClient{onClose: func() error {
+							select {
+							case <-engineClosed:
+							default:
+								t.Error("transaction client closed before engine owner")
+							}
+							close(txnClientClosed)
+							return nil
+						}},
+					}
 
-			closeDone := make(chan error, 1)
-			go func() {
-				closeDone <- s.Close()
-			}()
+					closeDone := make(chan error, 1)
+					go func() {
+						closeDone <- s.Close()
+					}()
 
-			select {
-			case <-incrCloseStarted:
-			case <-time.After(time.Second):
-				t.Fatal("auto-increment service close did not start")
-			}
-			txnClientClosedEarly := false
-			select {
-			case <-txnClientClosed:
-				txnClientClosedEarly = true
-			default:
-			}
+					select {
+					case <-incrCloseStarted:
+					case <-time.After(time.Second):
+						t.Fatal("auto-increment service close did not start")
+					}
+					txnClientClosedEarly := false
+					select {
+					case <-txnClientClosed:
+						txnClientClosedEarly = true
+					default:
+					}
 
-			close(releaseIncrClose)
-			require.NoError(t, <-closeDone)
-			require.False(t, txnClientClosedEarly, "transaction client closed before auto-increment service drained")
-			select {
-			case <-txnClientClosed:
-			default:
-				t.Fatal("transaction client was not closed")
-			}
-		},
-	)
+					close(releaseIncrClose)
+					err := <-closeDone
+					if engineErr != nil {
+						require.ErrorIs(t, err, engineErr)
+					} else {
+						require.NoError(t, err)
+					}
+					require.Equal(t, engineErr == nil, s.CloseComplete())
+					require.Equal(t, err, s.Close(), "repeat Close must not replay engine retirement")
+					require.False(t, txnClientClosedEarly, "transaction client closed before auto-increment service drained")
+					select {
+					case <-txnClientClosed:
+					default:
+						t.Fatal("transaction client was not closed")
+					}
+				},
+			)
+		})
+	}
 }
 
 func TestServiceCloseDrainsQueryHandlersBeforeDependencies(t *testing.T) {
@@ -1434,7 +1474,7 @@ func (c *constructionFailureHAKeeper) AllocateIDByKey(ctx context.Context, _ str
 }
 
 func TestNewServiceFailureRetiresPublishedEngine(t *testing.T) {
-	for _, mode := range []string{"error", "cancel", "panic"} {
+	for _, mode := range []string{"error", "cancel", "panic", "goexit", "error-cleanup-success"} {
 		t.Run(mode, func(t *testing.T) {
 			sid := "00000000-0000-0000-0000-000000000077"
 			moruntime.RunTest(sid, func(rt moruntime.Runtime) {
@@ -1448,16 +1488,21 @@ func TestNewServiceFailureRetiresPublishedEngine(t *testing.T) {
 				require.NoError(t, err)
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
-				owner := &disttae.Engine{}
-				defer owner.Close()
-				require.NoError(t, owner.StartGCScheduler(ctx))
+				engineOwner := &disttae.Engine{}
+				defer engineOwner.Close()
+				require.NoError(t, engineOwner.StartGCScheduler(ctx))
+				var published Service
+				publish := func(owner Service) { published = owner }
 				primary := errors.New("construction failure")
-				cleanup := errors.New("cleanup failure")
+				var cleanup error
+				if mode != "error-cleanup-success" {
+					cleanup = errors.New("cleanup failure")
+				}
 				calls := 0
 				// Options run before stopper creation. Engine cleanup must tolerate that
 				// partially initialized service and preserve the original panic.
 				optionWithoutStop := func(s *service) {
-					s.storeEngine = closableEngine{closeFn: func() error { calls++; return errors.Join(owner.Close(), cleanup) }}
+					s.storeEngine = closableEngine{closeFn: func() error { calls++; return errors.Join(engineOwner.Close(), cleanup) }}
 					s.initHakeeperClientOnce.Do(func() {})
 					s._hakeeperClient = &constructionFailureHAKeeper{fail: func(ctx context.Context) (uint64, error) {
 						if mode == "cancel" {
@@ -1471,22 +1516,50 @@ func TestNewServiceFailureRetiresPublishedEngine(t *testing.T) {
 					if mode == "panic" {
 						panic(primary)
 					}
+					if mode == "goexit" {
+						goruntime.Goexit()
+					}
 				}
 				cfg := &Config{UUID: sid}
 				if mode == "panic" {
-					require.PanicsWithValue(t, primary, func() { _, _ = NewService(cfg, ctx, fs, nil, optionWithoutStop) })
+					require.PanicsWithValue(t, primary, func() { _, _ = NewService(cfg, ctx, fs, nil, publish, optionWithoutStop) })
+				} else if mode == "goexit" {
+					done := make(chan struct{})
+					returned := false
+					go func() {
+						defer close(done)
+						_, _ = NewService(cfg, ctx, fs, nil, publish, optionWithoutStop)
+						returned = true
+					}()
+					select {
+					case <-done:
+					case <-time.After(5 * time.Second):
+						t.Fatal("constructor Goexit cleanup did not finish")
+					}
+					require.False(t, returned)
 				} else {
-					result, err := NewService(cfg, ctx, fs, nil, optionWithoutStop)
-					require.Nil(t, result)
-					require.ErrorIs(t, err, cleanup)
+					result, err := NewService(cfg, ctx, fs, nil, publish, optionWithoutStop)
+					if cleanup != nil {
+						require.Same(t, published, result, "retain an incomplete cleanup owner")
+						require.ErrorIs(t, err, cleanup)
+					} else {
+						require.Nil(t, result)
+					}
 					if mode == "cancel" {
 						require.ErrorIs(t, err, context.Canceled)
 					} else {
 						require.ErrorIs(t, err, primary)
 					}
 				}
-				require.Equal(t, 1, calls, "the constructor must close its published engine before returning")
-				require.Error(t, owner.StartGCScheduler(context.Background()), "the actual owner must be retired")
+				require.NotNil(t, published)
+				require.Equal(t, cleanup == nil, published.(*service).CloseComplete())
+				if cleanup != nil {
+					require.ErrorIs(t, published.Close(), cleanup)
+				} else {
+					require.NoError(t, published.Close())
+				}
+				require.Equal(t, 1, calls, "construction unwind and repeated Close must retire the engine exactly once")
+				require.Error(t, engineOwner.StartGCScheduler(context.Background()), "the actual owner must be retired")
 			})
 		})
 	}
