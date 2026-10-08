@@ -275,9 +275,6 @@ func (s *Service) Start() error {
 func (s *Service) Close() (err error) {
 	s.closeOnce.Do(func() {
 		s.stopper.Stop()
-		if s.dataSync != nil {
-			s.closeErr = firstError(s.closeErr, s.dataSync.Close())
-		}
 		if s.haClient != nil {
 			s.closeErr = firstError(s.closeErr, s.haClient.Close())
 		}
@@ -292,6 +289,11 @@ func (s *Service) Close() (err error) {
 		s.task.RUnlock()
 		if ts != nil {
 			s.closeErr = firstError(s.closeErr, ts.Close())
+		}
+		// Log RPC handlers append to dataSync. Close the RPC ingress before
+		// retiring that consumer so no accepted request can use it after close.
+		if s.dataSync != nil {
+			s.closeErr = firstError(s.closeErr, s.dataSync.Close())
 		}
 	})
 	return s.closeErr
