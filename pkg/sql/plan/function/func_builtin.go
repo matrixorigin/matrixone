@@ -29,8 +29,10 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/matrixorigin/matrixone/pkg/common/collation"
+	"github.com/matrixorigin/matrixone/pkg/common/collation/encoding"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -4737,7 +4739,7 @@ func (op *opBuiltInRand) builtInRand(parameters []*vector.Vector, result vector.
 	return nil
 }
 
-func builtInConvertUsingCharset(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+func builtInConvertUsingCharset(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, parameters[0])
@@ -4790,14 +4792,27 @@ func builtInConvertUsingCharset(parameters []*vector.Vector, result vector.Funct
 				return err
 			}
 		}
-		if identity != collation.BinaryIdentity && !utf8.Valid(value) {
-			if err := rs.AppendMustNullForBytesResult(); err != nil {
-				return err
-			}
-			continue
+		dst := collation.CharsetUTF8MB4
+		if identity == collation.BinaryIdentity {
+			dst = collation.CharsetBinary
 		}
-
-		if err := rs.AppendMustBytesValue(value); err != nil {
+		// The existing evaluator interprets internal bytes in the target
+		// repertoire. SQL admission above still resolves utf8 aliases to MB4.
+		limit := mpool.MaxAllocationSize() - int64(len(rs.GetResultVector().GetArea()))
+		converted, owned, isNull, err := encoding.Convert(
+			proc.Ctx, proc.Mp(), collation.CharsetBinary, dst, encoding.ConvertUsing, value, limit)
+		if err != nil {
+			return err
+		}
+		if isNull {
+			err = rs.AppendMustNullForBytesResult()
+		} else {
+			err = rs.AppendMustBytesValue(converted)
+		}
+		if owned {
+			proc.Mp().Free(converted)
+		}
+		if err != nil {
 			return err
 		}
 	}

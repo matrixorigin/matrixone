@@ -15,6 +15,7 @@
 package function
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"strings"
@@ -1122,6 +1123,34 @@ func Test_MakeIntervalParamAny(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, null)
 	require.Zero(t, got)
+}
+
+func TestBuiltInConvertUsingCodecCancellation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	fc := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"\xff"}, []bool{false}),
+		NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"utf8mb4"}, []bool{false}),
+	}, NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil), builtInConvertUsingCharset)
+	t.Cleanup(fc.Free)
+	require.NoError(t, fc.result.PreExtendAndReset(fc.fnLength))
+	ctx, cancel := context.WithCancel(proc.Ctx)
+	defer cancel()
+	proc.Ctx = ctx
+	cancel()
+	// A cancellation is an error, not CONVERT's successful invalid-byte NULL.
+	require.ErrorIs(t, fc.fn(fc.parameters, fc.result, proc, fc.fnLength, nil), context.Canceled)
+	require.Zero(t, fc.result.GetResultVector().Length())
+}
+
+func TestBuiltInConvertUsingEmptyAndNUL(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	fc := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"", "\x00\xff", "\x00", "\ufffd", ""}, []bool{false, false, false, false, true}),
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"utf8mb4", "binary", "utf8mb3", "utf8", "utf8mb4"}, []bool{false, false, false, false, false}),
+	}, NewFunctionTestResult(types.T_varchar.ToType(), false,
+		[]string{"", "\x00\xff", "\x00", "\ufffd", ""}, []bool{false, false, false, false, true}), builtInConvertUsingCharset)
+	ok, info := fc.RunAndFree()
+	require.True(t, ok, info)
 }
 
 func TestBuiltInConvertUsingUTF8InvalidBytes(t *testing.T) {
