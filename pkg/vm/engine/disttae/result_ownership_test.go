@@ -207,7 +207,6 @@ func newResultOwnershipFixture(
 	procMP := mpool.MustNewZeroNoFixed()
 	t.Cleanup(func() { mpool.DeleteMPool(procMP) })
 	proc := testutil.NewProcessWithMPool(t, "", procMP)
-	t.Cleanup(proc.Free)
 
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	previous, hadPrevious := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)

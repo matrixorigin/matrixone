@@ -30,6 +30,8 @@ func TestLongTokenTruncationLookup(t *testing.T) {
 	a23 := strings.Repeat("a", 23)         // stored whole
 	ya12 := strings.Repeat("я", 12)        // 24 bytes -> stored as 11 я (22 bytes); я is Latin-class (<0x7FF)
 	aya12 := "a" + strings.Repeat("я", 12) // 25 bytes -> stored a+10я (21); mixed-width boundary (#29276)
+	ax8 := strings.Repeat("Ⱥ", 8)          // 8×U+023A: folds to 24B, re-capped to 7×ⱥ (21B); EXPANDING fold over the cap (#29271 P2)
+	ax7 := strings.Repeat("Ⱥ", 7)          // 7×U+023A: folds to 21B, fits the cap; folds to the SAME 7×ⱥ token
 	docs := []Doc{
 		{int64(1), []byte(b26)},
 		{int64(2), []byte(a23)},
@@ -37,6 +39,7 @@ func TestLongTokenTruncationLookup(t *testing.T) {
 		{int64(4), []byte("short")},
 		{int64(5), []byte(ya12)},
 		{int64(6), []byte(aya12)},
+		{int64(7), []byte(ax8)}, // the writer stores 7×ⱥ for this; see assertions below
 	}
 	seg := buildSeg(t, "cap", 0, docs)
 	idx := NewIndex([]*Segment{seg}, nil)
@@ -72,6 +75,21 @@ func TestLongTokenTruncationLookup(t *testing.T) {
 			require.ElementsMatch(t, []any{int64(6)}, bm25(aya12, parser),
 				"BM25 must reproduce the mixed-width stored token")
 
+			// Expanding fold (#29271 P2): 8×U+023A (Ⱥ) folds to 24 bytes, re-capped to 7×ⱥ (21). The
+			// query term is built with the same post-fold cap, so NL / quoted boolean / BM25 must find
+			// doc 7. Each returned NO rows before the reader was synchronized with the folded-token cap:
+			// the old path looked up the merely-lowercased 24-byte term the index never stored.
+			require.ElementsMatch(t, []any{int64(7)}, nlIDs(t, idx, parser, ax8),
+				"NL must look up the folded+re-capped token (#29271 P2)")
+			require.ElementsMatch(t, []any{int64(7)}, boolIDs(t, idx, parser, `"`+ax8+`"`),
+				"quoted boolean must look up the folded+re-capped token (#29271 P2)")
+			require.ElementsMatch(t, []any{int64(7)}, bm25(ax8, parser),
+				"BM25 must look up the folded+re-capped token (#29271 P2)")
+			// 7/8 boundary: 7×Ⱥ fits the cap and folds to the SAME 7×ⱥ token as the stored 8×Ⱥ run, so
+			// querying the 7-char form (which already worked) also finds doc 7.
+			require.ElementsMatch(t, []any{int64(7)}, nlIDs(t, idx, parser, ax7),
+				"7×Ⱥ folds to the same stored token (boundary control)")
+
 			// Controls that already worked.
 			require.ElementsMatch(t, []any{int64(2)}, nlIDs(t, idx, parser, a23),
 				"an exact 23-byte token still hits")
@@ -98,6 +116,13 @@ func TestNgramPhraseSlotsLatinMatchesStoredToken(t *testing.T) {
 		"a" + strings.Repeat("я", 12), // 25 bytes -> stored a+10я (21)
 		"a" + strings.Repeat("é", 13), // 27 bytes -> stored a+10é (21)
 		"MixedCASEword",               // lowercasing, under the cap
+		// Case folding EXPANDS these: U+023A (Ⱥ, 2 bytes) lowercases to U+2C65 (ⱥ, 3 bytes). outputLatin
+		// caps the raw run, lowercases, then RE-CAPS the folded bytes; ngramPhraseSlots must reproduce the
+		// re-cap or it looks up a longer, unstored token (#29271 P2). 7×Ⱥ fits (21B); 8×/9×Ⱥ fold past the
+		// cap and back up to the same 7×ⱥ (21B).
+		strings.Repeat("Ⱥ", 7), // raw 14B, folds to 21B -> fits the cap; 7/8 boundary control
+		strings.Repeat("Ⱥ", 8), // raw 16B, folds to 24B > cap -> re-capped to 7×ⱥ (21B)
+		strings.Repeat("Ⱥ", 9), // raw 18B, folds to 27B -> re-capped to 7×ⱥ (21B)
 	} {
 		terms, err := tokenizeToTerms([]byte(run), tok)
 		require.NoError(t, err)

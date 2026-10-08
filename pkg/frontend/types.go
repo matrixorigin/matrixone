@@ -1754,6 +1754,9 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 	if val, err = def.GetType().Convert(val); err != nil {
 		return err
 	}
+	if err = validateCharsetSystemVariable(name, val); err != nil {
+		return err
+	}
 	if isTransactionIsolationSystemVariable(name) {
 		if _, err = txnIsolationFromSystemValue(ctx, val); err != nil {
 			return err
@@ -1846,7 +1849,18 @@ func (ses *Session) GetSessionSysVar(name string) (interface{}, error) {
 	return gSysVarsDefs[canonicalSystemVariableName(name)].Default, nil
 }
 
-func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val interface{}) (err error) {
+func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val interface{}) error {
+	return ses.setSessionSysVar(ctx, name, val, false)
+}
+
+// restoreSessionSysVar preserves an already-decoded historical session snapshot.
+// A stored charset spelling is not a new charset request or permission to enable
+// a native collation. All normal variable validation and runtime hooks still run.
+func (ses *Session) restoreSessionSysVar(ctx context.Context, name string, val interface{}) error {
+	return ses.setSessionSysVar(ctx, name, val, true)
+}
+
+func (ses *Session) setSessionSysVar(ctx context.Context, name string, val interface{}, restoring bool) (err error) {
 	name = strings.ToLower(name)
 	groupConcatMaxLenOriginalValue := val
 	groupConcatMaxLenWasTruncated := false
@@ -1873,6 +1887,11 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 
 	if val, err = def.GetType().Convert(val); err != nil {
 		return
+	}
+	if !restoring {
+		if err = validateCharsetSystemVariable(name, val); err != nil {
+			return err
+		}
 	}
 	// These values shape bound defaults or constant-folded expressions.
 	// Compare converted values so equivalent SET spellings retain warm plans.

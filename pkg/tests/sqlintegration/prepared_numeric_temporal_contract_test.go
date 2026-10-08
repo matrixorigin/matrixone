@@ -60,6 +60,96 @@ func TestPreparedNumericTemporalContracts(t *testing.T) {
 			require.NoError(t, conn.QueryRowContext(ctx, q, args...).Scan(&s), q)
 			return s
 		}
+		t.Run("guarded integer ranges", func(t *testing.T) {
+			exec(t, "create table range_keys(id int primary key,k int,v int,key k_1(k),key kv_1(k,v))")
+			exec(t, "insert into range_keys values(1,-2147483648,0),(2,-1,0),(3,null,0),(4,0,0),(5,1,0),(6,1,0),(7,8,0),(8,2147483647,0)")
+			for _, path := range []struct{ name, projection, table, column string }{
+				{"covering", "id", "range_keys force index(k_1)", "k"},
+				{"backfill", "id+v", "range_keys force index(k_1)", "k"},
+				{"composite", "id", "range_keys force index(kv_1)", "k"},
+				{"explicit cast", "id", "range_keys", "cast(k as signed)"},
+				{"base scan", "id", "range_keys ignore index(k_1,kv_1)", "k"},
+			} {
+				t.Run(path.name, func(t *testing.T) {
+					q := fmt.Sprintf("select %s from %s where %s between ? and ? or %s between ? and ? order by id", path.projection, path.table, path.column, path.column)
+					explained, err := conn.QueryContext(ctx, "explain "+q, int64(0), int64(1), int64(8), int64(8))
+					require.NoError(t, err)
+					defer explained.Close()
+					var planText strings.Builder
+					for explained.Next() {
+						var line string
+						require.NoError(t, explained.Scan(&line))
+						planText.WriteString(line)
+						planText.WriteByte('\n')
+					}
+					require.NoError(t, explained.Err())
+					if strings.Contains(path.table, "force index") {
+						require.Contains(t, planText.String(), "Index Table Scan")
+						if path.name == "backfill" {
+							require.Contains(t, planText.String(), "Join Type: INDEX")
+							require.Contains(t, planText.String(), "Table Scan on "+schema+".range_keys")
+						}
+					} else {
+						require.NotContains(t, planText.String(), "Index Table Scan")
+					}
+					p, err := conn.PrepareContext(ctx, q)
+					require.NoError(t, err)
+					defer p.Close()
+					for _, tc := range []struct {
+						name   string
+						bounds []any
+						want   []int64
+					}{
+						{"closed endpoints", []any{int64(-2147483648), int64(-2147483648), int64(2147483647), int64(2147483647)}, []int64{1, 8}},
+						{"overlap and duplicate keys", []any{int64(0), int64(1), int64(1), int64(8)}, []int64{4, 5, 6, 7}},
+						{"reversed", []any{int64(8), int64(1), int64(9), int64(10)}, []int64{}},
+						{"lower outside domain", []any{int64(-2147483649), int64(-1), int64(2147483648), int64(2147483650)}, []int64{1, 2}},
+						{"upper outside domain", []any{int64(0), int64(2147483648), int64(1), int64(1)}, []int64{4, 5, 6, 7, 8}},
+						{"safe recovery", []any{int64(1), int64(1), int64(8), int64(8)}, []int64{5, 6, 7}},
+						{"NULL bound", []any{nil, int64(1), int64(8), int64(8)}, []int64{7}},
+						{"unsigned", []any{uint64(1), ^uint64(0), ^uint64(0), ^uint64(0)}, []int64{5, 6, 7, 8}},
+						{"fractional", []any{float64(0.5), float64(1.5), float64(8), float64(8)}, []int64{5, 6, 7}},
+						{"text fractions", []any{"0.5", "1.5", int64(8), int64(8)}, []int64{5, 6, 7}},
+						{"recovery after category changes", []any{int64(0), int64(0), int64(8), int64(8)}, []int64{4, 7}},
+					} {
+						got, err := readPreparedContractIDs(p.QueryContext(ctx, tc.bounds...))
+						if tc.name == "unsigned" && path.name != "explicit cast" {
+							// The existing unsigned comparison domain rejects negative
+							// column values. Signed admission must not hide that error.
+							require.ErrorContains(t, err, "data out of range")
+							continue
+						}
+						require.NoError(t, err, tc.name)
+						require.Equal(t, tc.want, got, tc.name)
+					}
+				})
+			}
+			for _, tc := range []struct {
+				name, predicate string
+				want            []int64
+				warn            bool
+			}{
+				{"active warning", "k between ? and ?", []int64{5, 6}, true},
+				{"inactive warning", "case when false then k between ? and ? else false end", []int64{}, false},
+				{"empty warning", "id<0 and k between ? and ?", []int64{}, false},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					p, err := conn.PrepareContext(ctx, "select id from range_keys where "+tc.predicate+" order by id")
+					require.NoError(t, err)
+					defer p.Close()
+					got, err := readPreparedContractIDs(p.QueryContext(ctx, "1tail", int64(2)))
+					require.NoError(t, err, tc.name)
+					require.Equal(t, tc.want, got, tc.name)
+					count, err := strconv.Atoi(scalar(t, "select @@warning_count"))
+					require.NoError(t, err)
+					wantWarnings := 0
+					if tc.warn {
+						wantWarnings = 1
+					}
+					require.Equal(t, wantWarnings, count, tc.name)
+				})
+			}
+		})
 		t.Run("persisted signed DML read budget", func(t *testing.T) {
 			// Same fixture, connection and tiny layout for public results and
 			// fresh-execution work. EXPLAIN does not prove cached reader work.
@@ -217,6 +307,148 @@ func TestPreparedNumericTemporalContracts(t *testing.T) {
 							}()
 						}
 					}
+				})
+			}
+		})
+		t.Run("ROUND TRUNCATE output cast", func(t *testing.T) {
+			type binding struct {
+				name, sqlValue string
+				value          any
+				want           [2]string
+			}
+			text := binding{"text", "'1.46'", "1.46", [2]string{"1.5", "1.4"}}
+			negative := binding{"negative text", "'-1.46'", "-1.46", [2]string{"-1.5", "-1.4"}}
+			exec(t, "create table output_cast_keys(c bigint primary key)")
+			exec(t, "insert into output_cast_keys values(-9999),(9999),(54321)")
+			typedReuse := []binding{
+				{"integer", "3", int64(3), [2]string{"3.0", "3.0"}},
+				text,
+				{"double", "cast(1.46 as double)", float64(1.46), [2]string{"1.5", "1.4"}},
+				negative,
+				{"NULL", "NULL", nil, [2]string{"NULL", "NULL"}},
+				{"text recovery", "'1.46'", "1.46", [2]string{"1.5", "1.4"}},
+			}
+			// Output scale must not be pushed through TRUNCATE into its input.
+			// Conversely an explicit input scale is part of the user's semantics:
+			// rounding 1.46 to DECIMAL(20,1) before TRUNCATE legitimately yields 1.5.
+			for _, protocol := range []string{"binary", "SQL"} {
+				t.Run(protocol, func(t *testing.T) {
+					for _, tc := range []struct {
+						name, input, output string
+						precision           int
+						bindings            []binding
+					}{
+						{"text first", "?", "decimal(20,1)", 1, []binding{text}},
+						{"typed reuse", "?", "decimal(20,1)", 1, typedReuse},
+						{"scalar input", "(select ?)", "decimal(20,1)", 1, []binding{text, negative}},
+						{"outer double", "?", "double", 1, []binding{text, negative}},
+						{"outer scale 2", "?", "decimal(20,2)", 1, []binding{
+							{"text", "'1.46'", "1.46", [2]string{"1.50", "1.40"}},
+							{"negative text", "'-1.46'", "-1.46", [2]string{"-1.50", "-1.40"}},
+						}},
+						{"explicit input scale 1", "cast(? as decimal(20,1))", "decimal(20,1)", 1, []binding{
+							{"text", "'1.46'", "1.46", [2]string{"1.5", "1.5"}},
+							{"negative text", "'-1.46'", "-1.46", [2]string{"-1.5", "-1.5"}},
+						}},
+						{"explicit input scale 2", "cast(? as decimal(20,2))", "decimal(20,1)", 1, []binding{text}},
+						{"explicit input double", "cast(? as double)", "decimal(20,1)", 1, []binding{text}},
+						{"double rounding", "?", "decimal(20,1)", 2, []binding{
+							{"text", "'1.449'", "1.449", [2]string{"1.5", "1.4"}},
+							{"negative text", "'-1.449'", "-1.449", [2]string{"-1.5", "-1.4"}},
+						}},
+					} {
+						t.Run(tc.name, func(t *testing.T) {
+							q := fmt.Sprintf("select cast(round(%s,%d) as %s),cast(truncate(%s,%d) as %s)", tc.input, tc.precision, tc.output, tc.input, tc.precision, tc.output)
+							var queryRow func(*testing.T, binding) *sql.Row
+							if protocol == "binary" {
+								stmt, err := conn.PrepareContext(ctx, q) //nolint:sqlclosecheck // closed by the deferred Close below; the queryRow closure captures stmt, which defeats the analyzer's tracking
+								require.NoError(t, err)
+								defer stmt.Close()
+								queryRow = func(_ *testing.T, b binding) *sql.Row {
+									return stmt.QueryRowContext(ctx, b.value, b.value)
+								}
+							} else {
+								exec(t, "prepare output_cast_contract from '"+q+"'")
+								defer func() {
+									cleanup, stop := context.WithTimeout(context.Background(), 10*time.Second)
+									defer stop()
+									_, err := conn.ExecContext(cleanup, "deallocate prepare output_cast_contract")
+									require.NoError(t, err)
+									_, err = conn.ExecContext(cleanup, "set @output_cast_value=NULL")
+									require.NoError(t, err)
+								}()
+								queryRow = func(t *testing.T, b binding) *sql.Row {
+									exec(t, "set @output_cast_value="+b.sqlValue)
+									return conn.QueryRowContext(ctx, "execute output_cast_contract using @output_cast_value,@output_cast_value")
+								}
+							}
+							for _, b := range tc.bindings {
+								t.Run(b.name, func(t *testing.T) {
+									// QueryRow.Scan closes its rows on both success and failure;
+									// no result can outlive the next binding on this connection.
+									var round, truncate sql.NullString
+									require.NoError(t, queryRow(t, b).Scan(&round, &truncate))
+									got := [2]string{"NULL", "NULL"}
+									for i, value := range []sql.NullString{round, truncate} {
+										if value.Valid {
+											got[i] = value.String
+										}
+									}
+									require.Equal(t, b.want, got, q)
+								})
+							}
+							if tc.name == "typed reuse" {
+								t.Run("recovery after invalid text", func(t *testing.T) {
+									invalid := binding{sqlValue: "'not-a-number'", value: "not-a-number"}
+									var round, truncate sql.NullString
+									err := queryRow(t, invalid).Scan(&round, &truncate)
+									var sqlErr *mysql.MySQLError
+									require.ErrorAs(t, err, &sqlErr, "invalid numeric text must be rejected by the server")
+									// Reuse the same handle after the server error; neither the
+									// failed value nor its conversion may poison the next execution.
+									require.NoError(t, queryRow(t, text).Scan(&round, &truncate))
+									require.True(t, round.Valid && truncate.Valid)
+									require.Equal(t, text.want, [2]string{round.String, truncate.String})
+								})
+							}
+						})
+					}
+					t.Run("explicit result narrowing predicate", func(t *testing.T) {
+						// Key lowering may use a proven result, but must still execute
+						// the explicit DECIMAL cast after ROUND (including saturation).
+						const q = "select c from output_cast_keys where c=cast(round(?,0) as decimal(4,0))"
+						var query func(*testing.T, string) (*sql.Rows, error)
+						if protocol == "binary" {
+							stmt, err := conn.PrepareContext(ctx, q)
+							require.NoError(t, err)
+							defer stmt.Close()
+							query = func(_ *testing.T, value string) (*sql.Rows, error) {
+								return stmt.QueryContext(ctx, value)
+							}
+						} else {
+							exec(t, "prepare output_cast_predicate from '"+q+"'")
+							defer func() {
+								cleanup, stop := context.WithTimeout(context.Background(), 10*time.Second)
+								defer stop()
+								_, err := conn.ExecContext(cleanup, "deallocate prepare output_cast_predicate")
+								require.NoError(t, err)
+								_, err = conn.ExecContext(cleanup, "set @output_cast_predicate_value=NULL")
+								require.NoError(t, err)
+							}()
+							query = func(t *testing.T, value string) (*sql.Rows, error) {
+								exec(t, "set @output_cast_predicate_value='"+value+"'")
+								return conn.QueryContext(ctx, "execute output_cast_predicate using @output_cast_predicate_value")
+							}
+						}
+						for _, tc := range []struct {
+							value string
+							want  int64
+						}{{"54321.0", 9999}, {"-54321.0", -9999}, {"54321.0", 9999}} {
+							got, err := readPreparedContractIDs(query(t, tc.value))
+							require.NoError(t, err)
+							require.Equal(t, []int64{tc.want}, got)
+						}
+					})
 				})
 			}
 		})

@@ -1063,8 +1063,8 @@ func informationSchemaCollationsDataSQL() string {
 func informationSchemaCharacterSetsDataSQL() string {
 	values := []string{
 		fmt.Sprintf("('binary','%s','Binary pseudo charset',1)", DefaultCollationForCharset("binary")),
-		fmt.Sprintf("('utf8','%s','UTF-8 Unicode',3)", DefaultCollationForCharset("utf8")),
-		fmt.Sprintf("('utf8mb4','%s','UTF-8 Unicode',4)", DefaultCollationForCharset("utf8mb4")),
+		fmt.Sprintf("('utf8','%s','UTF-8 Unicode',%d)", DefaultCollationForCharset("utf8"), characterSetMaxBytes("utf8")),
+		fmt.Sprintf("('utf8mb4','%s','UTF-8 Unicode',%d)", DefaultCollationForCharset("utf8mb4"), characterSetMaxBytes("utf8mb4")),
 	}
 	return "INSERT INTO information_schema.CHARACTER_SETS VALUES " + strings.Join(values, ",")
 }

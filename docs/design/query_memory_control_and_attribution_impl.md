@@ -37,6 +37,179 @@ There will be no shadow compatibility ledger. During migration a physical byte
 has one safety owner. An operator switches to allocation-accounted control only
 after its retained state, pressure response, and cleanup contract are closed.
 
+## PR #29646 amendment: adaptive execution policy
+
+Design revision: adaptive-execution-v1 (2026-10-06), proposed for
+[#29646](https://github.com/matrixorigin/matrixone/pull/29646).
+Implementation and existing validation revision:
+`0a647334ea9e6ab5270cac0fe70e4e8c1596ab09`.
+Design decision: **pending reviewer acceptance in this PR**. Successful CI is
+not a design approval. This amendment covers the policy/lifecycle delta, not
+completion of all the operator migrations below.
+
+### Default isolation and the four different memory facts
+
+The original M1 extraction preserved the implicit 40 GiB query cap. This
+follow-up changes that default; M1's unchanged-pressure gate remains a
+historical acceptance condition, not an assertion about #29646.
+
+| Fact | Meaning and authority |
+| --- | --- |
+| Accounted allocation capacity | Actual allocator capacity has one immutable allocation owner and one free path. `AllocationAccount` and `ExecutionResourceBudget` remain the admission/release boundary. Capacity is not RSS. |
+| Explicit query/CN ceiling | A positive `processLimitationSize` remains a hard query limit, capped by the CN ceiling. At zero, the query ceiling equals the CN ceiling instead of an implicit 40 GiB. Concurrent queries charge the same CN total. |
+| Sampled physical headroom | An additional hard rejection guard against available-memory pressure. It does not assign RSS to a query, replace exact accounting, or guarantee that untracked/native/shared memory cannot OOM. |
+| Participant retained target | An advisory spill/growth decision for cooperating operators. Reported retention and equal shares are not reservations, admission tickets, or a second exact ledger. |
+
+`ResolveExecutionMemoryCeiling` takes the smallest finite positive cgroup,
+host, and global-MPool limit. It subtracts a reserve requested as the maximum
+of 4 GiB, one fifth of that limit, and the fileservice cache hint. On a small CN
+the reserve is clamped to leave a positive execution allowance (normally at
+least 64 MiB or 5%). No finite source is an error, not an unlimited fallback.
+This configured ceiling differs from the live OS-available-memory sample.
+
+Why change the default rather than retain 40 GiB plus adaptive spill: a fixed
+cap rejects a valid large resident build on a large idle CN even when no spill
+algorithm is available; it also does not protect a smaller CN or bound the sum
+of concurrent queries. A static per-DOP division mistakes compiled workers for
+simultaneously retained owners. The chosen default uses CN capacity and active
+growth participants, while retaining explicit query isolation for deployments
+that require it. This is a trade-off, not a stronger fairness guarantee.
+
+A lone query can use most accounted execution capacity. A later small query
+has **no guaranteed minimum reservation or preemption right**: new participants
+lower subsequent cooperative growth targets, but do not evict already retained
+state. Resident-only operators may return controlled pressure errors; spillable
+operators reclaim/spill and retry only after progress. Sites requiring strict
+per-query isolation must configure it explicitly. Query admission/queuing,
+priority fairness, cluster-wide grants and opaque-memory accounting are not
+implemented by this amendment.
+
+### Participant and physical-sampling contract
+
+A participant belongs to one statement generation and registers before its
+retained-state policy is used. Registration, reports and query/CN counts are
+serialized by `budget.mu`. Reports are replaced, not accumulated; arithmetic
+overflow fails closed. Release is one-shot and removes the count and last
+report even after generation close. Released/closed participants cannot
+authorize further growth.
+
+The retained target is the minimum of the query remaining-pool share, CN
+remaining-pool share, and (when measured) this participant's current retention
+plus its share of physical growth headroom. For each pool, fixed use is exact
+budget use minus reported participant retention, bounded to keep it nonnegative.
+This subtraction estimates which use participates in growth sharing; it never
+subtracts anything from the hard ledger. Equal participant shares are a coarse
+policy, not equal query priority or a promise that an idle worker's share is
+immediately lent to another worker. Newly acquired capacity still passes hard
+admission, regardless of the advisory target.
+
+Sampling is cached for 100 ms by default. Refresh takes `headroomMu` before
+`budget.mu`; the backing snapshot and OS provider read occur while budget
+mutation is serialized. Admission using a valid cached sample does not take
+`headroomMu`. The provider performs local memory observation, not SQL/RPC or
+channel waits; its execution under `budget.mu` is a latency/contended-path
+cost that must be measured, not assumed free.
+
+Old sampled backing is only credited while that backing remains retained.
+Pending allocations, allocate-copy-free replacement capacity, unbacked capacity
+leases and unused recovery floors consume growth headroom; freeing sampled
+backing invalidates that credit. Refresh cannot manufacture headroom in the
+gap before an admitted allocation becomes backing. A runtime safety reserve
+is also subtracted. A failed physical observation disables that observation
+for the decision; finite exact query/CN admission remains in force. This
+fallback is not a whole-process OOM guarantee.
+
+### Recovery floor ownership and terminal ordering
+
+Recovery capacity uses the same generation budget, not a parallel estimated
+reservation ledger. The slot lock precedes the budget lock. A slot binds to
+one live generation; reuse requires retirement of the old binding.
+
+| Transition | Charge and owner obligation |
+| --- | --- |
+| Activate / ensure floor | Admit additional capacity before retaining input. Unused floor consumes budget even though it has no physical backing yet. |
+| Borrow for physical allocation | Transfer admitted unused floor to physical use; do not charge twice. Uncovered growth must first pass hard admission. |
+| Free borrowed backing | Return capacity to that slot's unused floor, not to another worker and not immediately to general headroom. |
+| Trim unused floor | Release only `capacity - borrowed`; borrowed capacity remains owned and charged. |
+| Close | Reject close while borrowing remains live; otherwise release unused capacity exactly once. Generation close seals new acquisition but allows old owners to return/free capacity. |
+
+Transport borrows references, not ownership of the source allocation. After
+every scope producer quiesces, terminal preparation closes/drains the attempt's
+captured message board, prevents new runtime-owner attachment, drains all
+transport borrowers, then clears allocation owners in reverse registration
+order. Only then may terminal accounting be completed/exported. Remote fragments
+close their shared board at the CN statement-group boundary, not when the first
+fragment finishes. Error/cancel uses the same cleanup path; teardown errors or
+panics become a failed terminal fact, not silent success. Attempt-local board
+capture and quiescent reset prevent old cleanup from draining the next attempt.
+
+Pipeline capacity notification is a bounded hint, not a reserved send slot.
+A waiter forwards the hint when room remains, including before its cancellation
+recheck, so a departing producer cannot consume the final wake-up of other live
+producers. Actual send still checks capacity, edge termination and context. A
+full channel consumes a stale hint and blocks again; no busy retry or unbounded
+notification queue is added. These local wake/drain changes introduce no new
+remote protocol or spill format.
+
+### Revision-qualified evidence and remaining controls
+
+Links below pin the production/test revision, rather than requiring a lab
+filesystem. [CI run 37427131266][adaptive-ci] completed successfully at that
+revision: SCA, Ubuntu UT, coverage, and pessimistic/proxy multi-CN BVT. A
+documentation-only amendment reuses this evidence only while its production
+and test trees remain identical to that revision.
+
+| Decision | Accessible executable evidence | Recorded result at the implementation revision |
+| --- | --- | --- |
+| Explicit/default ceiling and hard boundaries | [Configuration tests][adaptive-config-tests], [budget tests][adaptive-budget-tests] | Full process/mpool normal suite passes; finite ceiling, live refresh, isolation/close and capacity boundaries are executable assertions. |
+| Multiple owners and queries | [Growth tests][adaptive-growth-tests] (`SharesLiveHeadroom`, `UsesCNAggregateHeadroom`, `ParticipantsShareAcrossGenerations`, `Lifecycle`) | Full process normal/race suites pass. They test shared state/retirement, not production fairness or latency. |
+| Pending/replacement backing and refresh | [Growth tests][adaptive-growth-tests] (`RefreshPreservesPendingBacking`, `AdmissionConsumesCachedPhysicalHeadroom`, `RecoveryBorrowsAlreadyAdmittedPhysicalHeadroom`) | Full process normal/race suites pass; a reservation cannot be spent again after refresh. |
+| Recovery transfers, per-worker isolation and reuse | [Recovery tests][adaptive-recovery-tests] | Six focused cases cover 256 workers, activation, physical transfer, unused-floor trim, uncovered growth and isolation; included in normal/race package runs. |
+| Cancellation, reuse, terminal zero and errors | [Compile lifecycle tests][adaptive-lifecycle-tests], [Order account tests][adaptive-order-tests] | Full compile normal and process/order normal/race runs pass; terminal one-shot/failure, reset and EOF release are asserted. |
+| Multi-waiter wake-up and cleanup | [Spool tests][adaptive-spool-tests], [public multi-CN SQL][adaptive-multicn-tests] | Before fix only 1/4 producers woke; after fix 4/4, also 100 race repetitions. Real range-shuffle joins pass on both CN coordinators with automatic and explicit spill, including race/coverage modes. |
+| Spill resource/row preservation | [HashBuild spill tests][adaptive-spill-tests], [Order account tests][adaptive-order-tests] | Owning-package normal/race runs pass, including smaller sorted runs, controlled minimum-unit pressure and cleanup. This is functional evidence, not a spill-I/O cost comparison. |
+
+Additional local evidence is reproduced here as a bounded result record:
+normal tests passed in process, connector, dispatch, shuffle, order, hashbuild,
+spillio, issues, plan, compile and mpool (11 packages); race passed in the first
+seven owning/consumer packages. Capacity-wake stress ran `-race -count=100`;
+public multi-CN race ran once. Use
+`.agents/skills/mo-dev/scripts/mo-cgo-test` for the linked package tests; native
+artifacts must match the checkout. The successful CI run is the independently
+accessible repository-wide result.
+
+Not yet closed by these results: exact-base unchanged-path allocation latency,
+CN-lock contention under concurrent queries, OS-sample tail latency, and
+spill-byte/I/O amplification at the same resource profile. Existing allocation,
+resident HashBuild and automatic spill-projection benchmarks provide focused
+controls, but their existence is not a measured A/B result. The requested TPCH
+1T workflow run adds workload regression evidence; it cannot substitute for
+these controls or prove priority fairness. Historical TPC-DS timings with
+different layout/background work likewise do not close them.
+
+### Rollout and rollback
+
+Review the default isolation trade-off and pending controls explicitly in
+#29646; a reviewer decision on this exact amendment is recorded in that PR's
+review history, not inferred from CI. No design acceptance is recorded as of
+this revision. Keep explicit query/spill controls; an explicit 40 GiB limit
+restores the old query ceiling as an operational mitigation, but does not
+revert adaptive spill or lifecycle changes. A code rollback must restore the
+old policy together with dependent call sites; reverting owner migrations also
+requires their matching terminal/recovery cleanup changes. Do not revert drain-before-retire
+independently while transferred batches still borrow recovery backing.
+
+[adaptive-ci]: https://github.com/matrixorigin/matrixone/actions/runs/37427131266
+[adaptive-config-tests]: https://github.com/matrixorigin/matrixone/blob/0a647334ea9e6ab5270cac0fe70e4e8c1596ab09/pkg/config/configuration_test.go
+[adaptive-budget-tests]: https://github.com/matrixorigin/matrixone/blob/0a647334ea9e6ab5270cac0fe70e4e8c1596ab09/pkg/vm/process/execution_resource_budget_test.go
+[adaptive-growth-tests]: https://github.com/matrixorigin/matrixone/blob/0a647334ea9e6ab5270cac0fe70e4e8c1596ab09/pkg/vm/process/execution_memory_growth_test.go
+[adaptive-recovery-tests]: https://github.com/matrixorigin/matrixone/blob/0a647334ea9e6ab5270cac0fe70e4e8c1596ab09/pkg/vm/process/execution_recovery_capacity_test.go
+[adaptive-lifecycle-tests]: https://github.com/matrixorigin/matrixone/blob/0a647334ea9e6ab5270cac0fe70e4e8c1596ab09/pkg/sql/compile/allocation_account_lifecycle_test.go
+[adaptive-order-tests]: https://github.com/matrixorigin/matrixone/blob/0a647334ea9e6ab5270cac0fe70e4e8c1596ab09/pkg/sql/colexec/order/allocation_account_test.go
+[adaptive-spool-tests]: https://github.com/matrixorigin/matrixone/blob/0a647334ea9e6ab5270cac0fe70e4e8c1596ab09/pkg/vm/process/process_spoolr_test.go
+[adaptive-multicn-tests]: https://github.com/matrixorigin/matrixone/blob/0a647334ea9e6ab5270cac0fe70e4e8c1596ab09/pkg/tests/issues/shuffle_multicn_test.go
+[adaptive-spill-tests]: https://github.com/matrixorigin/matrixone/blob/0a647334ea9e6ab5270cac0fe70e4e8c1596ab09/pkg/sql/colexec/hashbuild/spill_test.go
+
 ## Completion target
 
 For every data-scaled execution owner in the supported scope, exactly one of

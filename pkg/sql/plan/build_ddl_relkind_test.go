@@ -50,7 +50,7 @@ func buildCreateTablePlan(t *testing.T, ctx context.Context, sql string) *plan.T
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	cc := NewMockCompilerContext(false)
+	cc := NewMockCompilerContext(false, newPlanTestProcess(t))
 	cc.SetContext(ctx)
 	p, err := BuildPlan(cc, stmt, false)
 	require.NoError(t, err)
@@ -129,7 +129,7 @@ func TestAlterTableAddColumnCopyCannotExpressRelKind(t *testing.T) {
 		catalog.SystemIndexRel,
 	} {
 		t.Run(kind, func(t *testing.T) {
-			mock := NewMockOptimizer(false)
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			mock.ctxt.tables["t1"].TableType = kind
 
 			logicPlan, err := buildSingleStmt(mock, t, "alter table t1 add column nrow bigint")
@@ -156,7 +156,7 @@ func TestAlterTableAddColumnCopyCannotExpressRelKind(t *testing.T) {
 // An ordinary table's kind is on the plan too, and it is the same "r" the replica's name
 // would have derived anyway, so carrying it changes nothing for ordinary tables.
 func TestAlterTableAddColumnOrdinaryTableKeepsOrdinaryKind(t *testing.T) {
-	mock := NewMockOptimizer(false)
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	mock.ctxt.tables["t1"].TableType = catalog.SystemOrdinaryRel
 
 	logicPlan, err := buildSingleStmt(mock, t, "alter table t1 add column d bigint")

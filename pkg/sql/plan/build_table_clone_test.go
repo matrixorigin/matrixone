@@ -72,7 +72,7 @@ func TestBuildCloneTableSnapshotResolutionErrors(t *testing.T) {
 			defer stmt.Free()
 
 			ctx := &cloneSnapshotCompilerContext{
-				MockCompilerContext: NewMockCompilerContext(false),
+				MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
 				snapshotErr:         test.snapshotErr,
 			}
 			_, err = BuildPlan(ctx, stmt, false)

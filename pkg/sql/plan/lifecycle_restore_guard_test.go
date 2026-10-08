@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -48,8 +47,8 @@ func TestValidateLifecycleRestoreTableAccess(t *testing.T) {
 }
 
 func TestBuildDDLReservesLifecycleRestoreStagingNamesForFrontend(t *testing.T) {
-	frontendContext := NewMockCompilerContext(false)
-	proc := testutil.NewProc(nil)
+	proc := newPlanTestProcess(t)
+	frontendContext := NewMockCompilerContext(false, proc)
 	proc.Base.IsFrontend = true
 	frontendContext.GetProcessFunc = func() *process.Process { return proc }
 
@@ -69,7 +68,7 @@ func TestBuildDDLReservesLifecycleRestoreStagingNamesForFrontend(t *testing.T) {
 		require.ErrorContains(t, err, "Lifecycle Restore staging")
 	}
 
-	internalContext := NewMockCompilerContext(false)
+	internalContext := NewMockCompilerContext(false, newPlanTestProcess(t))
 	stmt, err := parsers.ParseOne(
 		context.Background(),
 		dialect.MYSQL,

@@ -138,7 +138,7 @@ func TestStringIntegerArgumentPreparedReuse(t *testing.T) {
 	for _, consumer := range stringIntegerConsumers {
 		t.Run(consumer.name, func(t *testing.T) {
 			sql := "select " + fmt.Sprintf(strings.ReplaceAll(consumer.expression, "'", "\""), "?")
-			prepared, err := runOneStmt(NewMockOptimizer(false), t, "prepare string_integer from '"+sql+"'")
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "prepare string_integer from '"+sql+"'")
 			require.NoError(t, err)
 			original := prepared.GetDcl().GetPrepare().Plan
 			snapshot := proto.Clone(original)

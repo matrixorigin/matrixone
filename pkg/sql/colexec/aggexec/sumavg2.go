@@ -208,7 +208,37 @@ type sumAvgExec[T float64 | int64 | uint64, A types.Ints | types.UInts | types.F
 func (*sumAvgExec[T, A]) sourcePreservingMerge() {}
 
 func (exec *sumAvgExec[T, A]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
-	return exec.BatchFill(row, []uint64{uint64(groupIndex + 1)}, vectors)
+	if exec.IsDistinct() {
+		return exec.BatchFill(row, []uint64{uint64(groupIndex + 1)}, vectors)
+	}
+	vec := vectors[0]
+	if groupIndex == -1 || vec.IsNull(uint64(row)) {
+		return nil
+	}
+	if vec.IsConst() {
+		row = 0
+	}
+	// A scalar fill already knows its group; do not build BatchFill's local
+	// aggregation table for a single row (notably in cumulative windows).
+	x, y := groupIndex>>aggBatchSizeShift, uint64(groupIndex)&aggBatchSizeMask
+	value := T(vector.MustFixedColNoTypeCheck[A](vec)[row])
+	sums := chunkArr[T](exec.state[x].vecs[0])
+	// Keep NaN payload selection on the original arithmetic path. Compilers
+	// may commute a floating addition, selecting a different operand's NaN.
+	if value != value || sums[y] != sums[y] {
+		return exec.BatchFill(row, []uint64{uint64(groupIndex + 1)}, vectors)
+	}
+	result := sums[y] + value
+	if err := exec.ofCheck(sums[y], value, result); err != nil {
+		return err
+	}
+	sums[y] = result
+	if exec.isSum {
+		exec.state[x].vecs[0].UnsetNull(y)
+	} else {
+		vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[1])[y]++
+	}
+	return nil
 }
 
 func (exec *sumAvgExec[T, A]) windowSlidingSupported() bool {
@@ -1142,7 +1172,34 @@ type sumAvgDecExec[A sumAvgDecimalArg, S sumAvgDecimalState] struct {
 func (*sumAvgDecExec[A, S]) sourcePreservingMerge() {}
 
 func (exec *sumAvgDecExec[A, S]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
-	return exec.BatchFill(row, []uint64{uint64(groupIndex + 1)}, vectors)
+	if exec.IsDistinct() {
+		return exec.BatchFill(row, []uint64{uint64(groupIndex + 1)}, vectors)
+	}
+	vec := vectors[0]
+	if groupIndex == -1 || vec.IsNull(uint64(row)) {
+		return nil
+	}
+	if vec.IsConst() {
+		row = 0
+	}
+	x, y := groupIndex>>aggBatchSizeShift, uint64(groupIndex)&aggBatchSizeMask
+	value := decimalStateFromArg[A, S](
+		vector.MustFixedColNoTypeCheck[A](vec)[row], exec.aggInfo.argTypes[0].Scale)
+	sumVec := exec.state[x].vecs[0]
+	sums := chunkArr[S](sumVec)
+	if exec.isSum && sumVec.IsNull(y) {
+		sumVec.UnsetNull(y)
+		sums[y] = value
+	} else {
+		var err error
+		if sums[y], err = decimalStateAdd(sums[y], value); err != nil {
+			return err
+		}
+	}
+	if !exec.isSum {
+		vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[1])[y]++
+	}
+	return nil
 }
 
 func (exec *sumAvgDecExec[A, S]) windowSlidingSupported() bool {

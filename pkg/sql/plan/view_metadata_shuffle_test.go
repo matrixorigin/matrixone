@@ -95,7 +95,7 @@ func TestDetermineShuffleForScanRequiresSortKeyEvidence(t *testing.T) {
 				stats.MinValMap["k"], stats.MaxValMap["k"] = 1, 1_000_000
 				cache.Set(1234, stats)
 			}
-			ctx := &statsCacheCompilerContext{MockCompilerContext: NewMockCompilerContext(false), statsCache: cache}
+			ctx := &statsCacheCompilerContext{MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)), statsCache: cache}
 			builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
 			node := &planpb.Node{NodeType: planpb.Node_TABLE_SCAN, Stats: DefaultStats(),
 				TableDef: &TableDef{TblId: 1234, Pkey: tc.pkey, ClusterBy: tc.cluster,

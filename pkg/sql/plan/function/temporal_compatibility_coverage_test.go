@@ -294,6 +294,7 @@ func TestRawTimeIntervalDistinguishesNullInvalidAndOverflow(t *testing.T) {
 		[]types.Time{0, 0, 0, types.TimeFromClock(false, 12, 0, 1, 500000), 0},
 		[]bool{true, true, true, false, true})
 	caseDef := NewFunctionTestCase(proc, inputs, want, TimeAddRaw)
+	caseDef.expected.typ.Width = 6
 	ok, info := caseDef.RunAndFree()
 	require.True(t, ok, info)
 	require.Equal(t, []numericWarning{
@@ -673,6 +674,7 @@ func TestTemporalCompatibilityAdditionalExecutionBranches(t *testing.T) {
 			t.Run(tc.name, func(t *testing.T) {
 				caseDef := NewFunctionTestCase(proc, []FunctionTestInput{left, right},
 					NewFunctionTestResult(types.T_varchar.ToType(), false, tc.want, tc.null), tc.fn)
+				caseDef.expected.typ.Scale = 6
 				ok, info := caseDef.RunAndFree()
 				require.True(t, ok, info)
 			})

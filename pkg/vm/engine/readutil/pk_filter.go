@@ -1285,7 +1285,7 @@ func mergeBaseFilterInKind(
 }
 
 // mergeFixedInValues is the ordered set merge used for fixed-size types that
-// are not covered by constraints.Ordered (notably bool and UUID).
+// are not covered by cmp.Ordered (notably bool and UUID).
 func mergeFixedInValues[T types.FixedSizeTExceptStrType](
 	a, b []T,
 	ret *vector.Vector,

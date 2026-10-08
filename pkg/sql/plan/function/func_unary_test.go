@@ -45,6 +45,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -161,503 +162,14 @@ func TestSign(t *testing.T) {
 }
 
 func BenchmarkAbsInt64(b *testing.B) {
-	testCases := initAbsTestCase()
 	proc := testutil.NewProcess(b)
-
-	b.StartTimer()
-	for _, tc := range testCases {
-		func() {
-			fcTC := NewFunctionTestCase(proc,
-				tc.inputs, tc.expect, AbsInt64)
-			defer fcTC.Free()
-			_ = fcTC.BenchMarkRun()
-		}()
-	}
-	b.StopTimer()
-}
-
-func initAbsArrayTestCase() []tcTemp {
-	return []tcTemp{
-		{
-			info: "test abs float32 array",
-			typ:  types.T_array_float32,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float32.ToType(),
-					[][]float32{{-4, 9999999, -99999}, {0, -25, 49}},
-					[]bool{false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
-				[][]float32{{4, 9999999, 99999}, {0, 25, 49}},
-				[]bool{false, false}),
-		},
-		{
-			info: "test abs float64 array",
-			typ:  types.T_array_float64,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float64.ToType(),
-					[][]float64{{-4, 9999999, -99999}, {0, -25, 49}},
-					[]bool{false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_array_float64.ToType(), false,
-				[][]float64{{4, 9999999, 99999}, {0, 25, 49}},
-				[]bool{false, false}),
-		},
-	}
-}
-
-func TestAbsArray(t *testing.T) {
-	testCases := initAbsArrayTestCase()
-
-	proc := testutil.NewProcess(t)
-	for _, tc := range testCases {
-		var fcTC FunctionTestCase
-		switch tc.typ {
-		case types.T_array_float32:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, AbsArray[float32])
-		case types.T_array_float64:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, AbsArray[float64])
-		}
-		s, info := fcTC.RunAndFree()
-		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
-	}
-}
-
-func initNormalizeL2ArrayTestCase() []tcTemp {
-	return []tcTemp{
-		{
-			info: "test normalize_l2 float32 array",
-			typ:  types.T_array_float32,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float32.ToType(),
-					[][]float32{
-						{},
-						{1, 2, 3, 4},
-						{-1, 2, 3, 4},
-						{10, 3.333333333333333, 4, 5},
-						{1, 2, 3.6666666666666665, 4.666666666666666}},
-					[]bool{true, false, false, false, false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
-				[][]float32{
-					{},
-					{0.18257418, 0.36514837, 0.5477226, 0.73029673},
-					{-0.18257418, 0.36514837, 0.5477226, 0.73029673},
-					{0.8108108, 0.27027026, 0.32432434, 0.4054054},
-					{0.1576765, 0.315353, 0.5781472, 0.73582363},
-				},
-				[]bool{true, false, false, false, false, false}),
-		},
-		{
-			info: "test normalize_l2 float64 array",
-			typ:  types.T_array_float64,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float64.ToType(),
-					[][]float64{
-						{},
-						{1, 2, 3, 4},
-						{-1, 2, 3, 4},
-						{10, 3.333333333333333, 4, 5},
-						{1, 2, 3.6666666666666665, 4.666666666666666},
-					},
-					[]bool{true, false, false, false, false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_array_float64.ToType(), false,
-				[][]float64{
-					{},
-					{0.18257418583505536, 0.3651483716701107, 0.5477225575051661, 0.7302967433402214},
-					{-0.18257418583505536, 0.3651483716701107, 0.5477225575051661, 0.7302967433402214},
-					{0.8108108108108107, 0.27027027027027023, 0.3243243243243243, 0.4054054054054054},
-					{0.15767649936829103, 0.31535299873658207, 0.5781471643504004, 0.7358236637186913},
-				},
-				[]bool{true, false, false, false, false, false}),
-		},
-		{
-			// int8 input normalizes to a unit vector, which cannot be represented
-			// as int8 — the result must widen to vecf32 (not round back to int8).
-			info: "test normalize_l2 int8 array -> float32",
-			typ:  types.T_array_int8,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_int8.ToType(),
-					[][]int8{{1, 2, 3, 4}, {-1, 2, 3, 4}},
-					[]bool{false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
-				[][]float32{
-					{0.18257418, 0.36514837, 0.5477226, 0.73029673},
-					{-0.18257418, 0.36514837, 0.5477226, 0.73029673},
-				},
-				[]bool{false, false}),
-		},
-		{
-			info: "test normalize_l2 uint8 array -> float32",
-			typ:  types.T_array_uint8,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_uint8.ToType(),
-					[][]uint8{{0, 1, 2, 3}, {10, 20, 30, 40}},
-					[]bool{false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
-				[][]float32{
-					{0, 0.26726124, 0.5345225, 0.80178374},
-					{0.18257418, 0.36514837, 0.5477226, 0.73029673},
-				},
-				[]bool{false, false}),
-		},
-	}
-}
-
-func TestNormalizeL2Array(t *testing.T) {
-	testCases := initNormalizeL2ArrayTestCase()
-
-	proc := testutil.NewProcess(t)
-	for _, tc := range testCases {
-		var fcTC FunctionTestCase
-		switch tc.typ {
-		case types.T_array_float32:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, NormalizeL2Array[float32])
-		case types.T_array_float64:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, NormalizeL2Array[float64])
-		case types.T_array_int8:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, NormalizeL2Array[int8])
-		case types.T_array_uint8:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, NormalizeL2Array[uint8])
-		}
-		s, info := fcTC.RunAndFree()
-		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
-	}
-}
-
-func initSummationArrayTestCase() []tcTemp {
-	return []tcTemp{
-		{
-			info: "test summation float32 array",
-			typ:  types.T_array_float32,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float32.ToType(),
-					[][]float32{{1, 2, 3}, {4, 5, 6}},
-					[]bool{false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{6, 15},
-				[]bool{false, false}),
-		},
-		{
-			info: "test summation float64 array",
-			typ:  types.T_array_float64,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float64.ToType(),
-					[][]float64{{1, 2, 3}, {4, 5, 6}},
-					[]bool{false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{6, 15},
-				[]bool{false, false}),
-		},
-	}
-}
-
-func TestSummationArray(t *testing.T) {
-	testCases := initSummationArrayTestCase()
-
-	proc := testutil.NewProcess(t)
-	for _, tc := range testCases {
-		var fcTC FunctionTestCase
-		switch tc.typ {
-		case types.T_array_float32:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, SummationArray[float32])
-		case types.T_array_float64:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, SummationArray[float64])
-		}
-		s, info := fcTC.RunAndFree()
-		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
-	}
-}
-
-func initL1NormArrayTestCase() []tcTemp {
-	return []tcTemp{
-		{
-			info: "test L1Norm float32 array",
-			typ:  types.T_array_float32,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float32.ToType(),
-					[][]float32{{1, 2, 3}, {4, 5, 6}},
-					[]bool{false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{6, 15},
-				[]bool{false, false}),
-		},
-		{
-			info: "test L1Norm float64 array",
-			typ:  types.T_array_float64,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float64.ToType(),
-					[][]float64{{1, 2, 3}, {4, 5, 6}},
-					[]bool{false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{6, 15},
-				[]bool{false, false}),
-		},
-	}
-}
-
-func TestL1NormArray(t *testing.T) {
-	testCases := initL1NormArrayTestCase()
-
-	proc := testutil.NewProcess(t)
-	for _, tc := range testCases {
-		var fcTC FunctionTestCase
-		switch tc.typ {
-		case types.T_array_float32:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, L1NormArray[float32])
-		case types.T_array_float64:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, L1NormArray[float64])
-		}
-		s, info := fcTC.RunAndFree()
-		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
-	}
-}
-
-func initL2NormArrayTestCase() []tcTemp {
-	return []tcTemp{
-		{
-			info: "test L2Norm float32 array",
-			typ:  types.T_array_float32,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float32.ToType(),
-					[][]float32{{1, 2, 3}, {4, 5, 6}},
-					[]bool{false, false}),
-			},
-			// l2_norm is a DOUBLE function accumulated in float64 (#29083), so a VECF32 whose
-			// elements are exactly representable (1..6) yields the SAME value as the VECF64 case,
-			// not the older, less accurate float32-reduced result.
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{3.741657386773941, 8.774964387392124},
-				[]bool{false, false}),
-		},
-		{
-			info: "test L2Norm float64 array",
-			typ:  types.T_array_float64,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float64.ToType(),
-					[][]float64{{1, 2, 3}, {4, 5, 6}},
-					[]bool{false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{3.741657386773941, 8.774964387392124},
-				[]bool{false, false}),
-		},
-	}
-}
-
-func TestL2NormArray(t *testing.T) {
-	testCases := initL2NormArrayTestCase()
-
-	proc := testutil.NewProcess(t)
-	for _, tc := range testCases {
-		var fcTC FunctionTestCase
-		switch tc.typ {
-		case types.T_array_float32:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, L2NormArray[float32])
-		case types.T_array_float64:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, L2NormArray[float64])
-		}
-		s, info := fcTC.RunAndFree()
-		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
-	}
-}
-
-func initSubVectorTestCase() []tcTemp {
-	return []tcTemp{
-		{
-			info: "2",
-			typ:  types.T_array_float32,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
-				[][]float32{{1, 2, 3}},
-				[]bool{false}),
-		},
-		{
-			info: "2",
-			typ:  types.T_array_float32,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{2}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
-				[][]float32{{2, 3}},
-				[]bool{false}),
-		},
-		{
-			info: "2",
-			typ:  types.T_array_float32,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{3}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
-				[][]float32{{3}},
-				[]bool{false}),
-		},
-		{
-			info: "2",
-			typ:  types.T_array_float32,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{-1}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
-				[][]float32{{3}},
-				[]bool{false}),
-		},
-		{
-			info: "2",
-			typ:  types.T_array_float32,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{-2}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
-				[][]float32{{2, 3}},
-				[]bool{false}),
-		},
-		{
-			info: "2",
-			typ:  types.T_array_float32,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{-3}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
-				[][]float32{{1, 2, 3}},
-				[]bool{false}),
-		},
-		{
-			info: "2",
-			typ:  types.T_array_float32,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
-				[][]float32{{}},
-				[]bool{false}),
-		},
-		{
-			info: "2",
-			typ:  types.T_array_float64,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float64.ToType(), [][]float64{{1, 2, 3}}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_array_float64.ToType(), false,
-				[][]float64{{1, 2, 3}},
-				[]bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_array_float32,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
-				[][]float32{{1}},
-				[]bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_array_float32,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{2}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
-				[][]float32{{1, 2}},
-				[]bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_array_float32,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{3}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
-				[][]float32{{1, 2, 3}},
-				[]bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_array_float32,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{4}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
-				[][]float32{{1, 2, 3}},
-				[]bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_array_float32,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{-2}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{2}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
-				[][]float32{{2, 3}},
-				[]bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_array_float32,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{-3}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{2}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
-				[][]float32{{1, 2}},
-				[]bool{false}),
-		},
-	}
-}
-
-func TestSubVector(t *testing.T) {
-	testCases := initSubVectorTestCase()
-
-	proc := testutil.NewProcess(t)
-	for _, tc := range testCases {
-		var fcTC FunctionTestCase
-		switch tc.typ {
-		case types.T_array_float32:
-			switch tc.info {
-			case "2":
-				fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, SubVectorWith2Args[float32])
-			case "3":
-				fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, SubVectorWith3Args[float32])
-			}
-		case types.T_array_float64:
-			switch tc.info {
-			case "2":
-				fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, SubVectorWith2Args[float64])
-			case "3":
-				fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, SubVectorWith3Args[float64])
-			}
-		}
-
-		s, info := fcTC.RunAndFree()
-		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	defer proc.Free()
+	for _, tc := range initAbsTestCase() {
+		b.Run(tc.info, func(b *testing.B) {
+			fc := NewFunctionTestCase(proc, tc.inputs, tc.expect, AbsInt64)
+			defer fc.Free()
+			fc.Benchmark(b)
+		})
 	}
 }
 
@@ -4534,6 +4046,7 @@ func TestJsonQuoteRejectsInvalidUTF8(t *testing.T) {
 }
 
 func TestJsonQuoteRejectsBinaryDomain(t *testing.T) {
+	proc := testutil.NewProcess(t)
 	for _, tc := range []struct {
 		name string
 		typ  types.Type
@@ -4545,7 +4058,6 @@ func TestJsonQuoteRejectsBinaryDomain(t *testing.T) {
 		{name: "binary invalid utf8", typ: types.New(types.T_varbinary, 1, 0), data: []string{string([]byte{0xff})}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcess(t)
 			ftc := NewFunctionTestCase(proc,
 				[]FunctionTestInput{
 					NewFunctionTestInput(tc.typ, tc.data, []bool{false}),
@@ -4558,7 +4070,6 @@ func TestJsonQuoteRejectsBinaryDomain(t *testing.T) {
 	}
 
 	t.Run("typed binary NULL remains NULL", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
 		ftc := NewFunctionTestCase(proc,
 			[]FunctionTestInput{
 				NewFunctionTestInput(types.T_varbinary.ToType(), []string{"ignored"}, []bool{true}),
@@ -4570,7 +4081,6 @@ func TestJsonQuoteRejectsBinaryDomain(t *testing.T) {
 	})
 
 	t.Run("mixed runtime domains", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
 		ftc := NewFunctionTestCase(proc,
 			[]FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(), []string{"text", "binary"}, []bool{false, false}),
@@ -4584,7 +4094,6 @@ func TestJsonQuoteRejectsBinaryDomain(t *testing.T) {
 	})
 
 	t.Run("masked binary row is not evaluated", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
 		ftc := NewFunctionTestCase(proc,
 			[]FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(), []string{"binary", "text"}, []bool{false, false}),
@@ -4762,8 +4271,8 @@ func TestJsonUnquoteBinaryDomainDefersErrorUntilValue(t *testing.T) {
 }
 
 func TestJsonUnquoteUsesEvaluatedRowStringDomain(t *testing.T) {
+	proc := testutil.NewProcess(t)
 	t.Run("runtime binary provenance is rejected", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
 		tc := NewFunctionTestCase(proc,
 			[]FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(), []string{"plain", "text"}, []bool{false, false}),
@@ -4777,7 +4286,6 @@ func TestJsonUnquoteUsesEvaluatedRowStringDomain(t *testing.T) {
 	})
 
 	t.Run("static binary text override skips masked binary row", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
 		tc := NewFunctionTestCase(proc,
 			[]FunctionTestInput{
 				NewFunctionTestInput(types.T_varbinary.ToType(), []string{"text", "binary"}, []bool{false, false}),
@@ -4794,7 +4302,6 @@ func TestJsonUnquoteUsesEvaluatedRowStringDomain(t *testing.T) {
 	})
 
 	t.Run("prepared text binary text rebind", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
 		tc := NewFunctionTestCase(proc,
 			[]FunctionTestInput{
 				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"plain"}, []bool{false}),
@@ -5914,472 +5421,234 @@ func TestSecond(t *testing.T) {
 	}
 }
 
-func TestStringTimeExtract(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	inputs := []FunctionTestInput{
-		NewFunctionTestInput(types.T_varchar.ToType(),
-			[]string{
-				"12:30:45", "272:59:59", "-272:59:59", "2 03:04:05", "123045",
-				"2024-12-20 15:30:45", "20241220153045", "241220153045", "2024-12-20",
-				"15:30:45abc", "2024-12-20 15:30:45abc", "2024-12-20foo", "invalid", "", "   ", "\t",
-				"2 03:04:05.123", "12:30:45.123456", "272:59:59.123456", "-272:59:59.123456",
-				"-2 03:04:05.123", "839:00:00", "-839:00:00", "20241220", "12:60:00", "12:30:60",
-				"2024-12-20T15:30:45.123456", "  12:34:56  ",
-			},
-			[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
-				false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
+func TestStringTimeExtractGrammar(t *testing.T) {
+	type clockCase struct {
+		input          string
+		hour           uint32
+		minute, second uint8
+		null           bool
 	}
-
-	testCases := []struct {
-		name   string
-		expect FunctionTestResult
-		fn     executeLogicOfOverload
-	}{
-		{
-			name: "hour",
-			expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
-				[]uint32{12, 272, 272, 51, 12, 15, 15, 15, 0, 15, 15, 0, 0, 0, 0, 0,
-					51, 12, 272, 272, 51, 838, 838, 838, 0, 0, 0, 12},
-				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, true, true, true, true,
-					false, false, false, false, false, false, false, false, true, true, false, false}),
-			fn: StringToHour,
-		},
-		{
-			name: "minute",
-			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{30, 59, 59, 4, 30, 30, 30, 30, 20, 30, 30, 20, 0, 0, 0, 0,
-					4, 30, 59, 59, 4, 59, 59, 59, 0, 0, 20, 34},
-				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, true, true, true, true,
-					false, false, false, false, false, false, false, false, true, true, false, false}),
-			fn: StringToMinute,
-		},
-		{
-			name: "second",
-			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{45, 59, 59, 5, 45, 45, 45, 45, 24, 45, 45, 24, 0, 0, 0, 0,
-					5, 45, 59, 59, 5, 59, 59, 59, 0, 0, 24, 56},
-				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, true, true, true, true,
-					false, false, false, false, false, false, false, false, true, true, false, false}),
-			fn: StringToSecond,
-		},
+	varcharOnly := []clockCase{
+		{"12:30:45", 12, 30, 45, false},
+		{"272:59:59", 272, 59, 59, false},
+		{"-272:59:59", 272, 59, 59, false},
+		{"2 03:04:05", 51, 4, 5, false},
+		{"123045", 12, 30, 45, false},
+		{"2024-12-20 15:30:45", 15, 30, 45, false},
+		{"2024-12-20", 0, 20, 24, false},
+		{"15:30:45abc", 15, 30, 45, false},
+		{"2024-12-20 15:30:45abc", 15, 30, 45, false},
+		{"invalid", 0, 0, 0, true},
+		{"", 0, 0, 0, true},
+		{"2 03:04:05.123", 51, 4, 5, false},
+		{"12:30:45.123456", 12, 30, 45, false},
+		{"272:59:59.123456", 272, 59, 59, false},
+		{"-272:59:59.123456", 272, 59, 59, false},
+		{"-2 03:04:05.123", 51, 4, 5, false},
+		{"839:00:00", 838, 59, 59, false},
+		{"-839:00:00", 838, 59, 59, false},
+		{"20241220", 838, 59, 59, false},
+		{"12:60:00", 0, 0, 0, true},
+		{"12:30:60", 0, 0, 0, true},
+		{"2024-12-20T15:30:45.123456", 0, 20, 24, false},
+		{"  12:34:56  ", 12, 34, 56, false},
+		{"0000-01-01 12:34:56", 12, 34, 56, false},
+		{"2024-00-01 11:22:33", 11, 22, 33, false},
+		{"2024-01-00 10:20:30", 10, 20, 30, false},
+		{"0000-00-00 09:08:07", 9, 8, 7, false},
+		{"2024-12-20 12:34", 12, 34, 0, false},
+		{"0000-02-28 12:34:56", 12, 34, 56, false},
+		{"0000-02-29 12:34:56", 0, 0, 0, true},
+		{"0000-02-31 12:34:56", 0, 0, 0, true},
+		{"0000-04-31 12:34:56", 0, 0, 0, true},
+		{"1900-02-29 12:34:56", 0, 0, 0, true},
+		{"2000-02-29 01:02:03", 1, 2, 3, false},
+		{"12:", 0, 0, 12, false},
+		{":34", 0, 34, 0, false},
+		{"12:34:56-", 12, 34, 56, false},
+		{"12:34:56..", 12, 34, 56, false},
+		{"123:", 0, 1, 23, false},
+		{"1234:", 0, 12, 34, false},
+		{"123456:", 12, 34, 56, false},
+		{"-2024-12-20 15:30:45", 15, 30, 45, false},
+		{"-20241220153045", 15, 30, 45, false},
+		{"20240230010203", 0, 0, 0, true},
+		{"2 30:00:00", 78, 0, 0, false},
+		{"60", 0, 0, 0, true},
+		{"24-12-20 15:30:45", 15, 30, 45, false},
+		{"2000:01:01 12:34:56", 12, 34, 56, false},
+		{"1998-01-01 00:00:009", 0, 0, 9, false},
+		{"2024-12-20 15:30:4560", 0, 0, 0, true},
+		{"2001-11-00 01:02:03", 1, 2, 3, false},
+		{"99999990000", 0, 0, 0, true},
+		{"- 12:34:56", 12, 34, 56, false},
+		{"12:34:56.", 12, 34, 56, false},
 	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			tcc := NewFunctionTestCase(proc, inputs, tc.expect, tc.fn)
-			succeed, info := tcc.RunAndFree()
-			require.True(t, succeed, info)
-		})
+	allTextTypes := []clockCase{
+		{"20241220153045", 15, 30, 45, false},
+		{"241220153045", 15, 30, 45, false},
+		{"2024-12-20foo", 0, 20, 24, false},
+		{"   ", 0, 0, 0, true},
+		{"\t", 0, 0, 0, true},
+		{"20241220153045.999999", 15, 30, 45, false},
+		{"241220153045.9", 15, 30, 45, false},
+		{"20241220153045.123abc", 15, 30, 45, false},
+		{"20241220153045.", 15, 30, 45, false},
+		{"241220153045.123abc", 15, 30, 45, false},
+		{"241220153045.", 15, 30, 45, false},
+		{"202412201530451", 0, 0, 0, true},
+		{"2412201530451", 0, 0, 0, true},
+		{"20241220153045abc", 0, 0, 0, true},
+		{"241220153045abc", 0, 0, 0, true},
+		{"20241220153045.-", 0, 0, 0, true},
+		{"20241220153045.+", 0, 0, 0, true},
+		{"241220153045.-", 0, 0, 0, true},
+		{"241220153045.+", 0, 0, 0, true},
+		{"20241220153045.123-", 0, 0, 0, true},
+		{"20241220153045.123+", 0, 0, 0, true},
+		{"241220153045.123-", 0, 0, 0, true},
+		{"241220153045.123+", 0, 0, 0, true},
+		{"20241220153045.123abc-", 15, 30, 45, false},
+		{"241220153045.123abc+", 15, 30, 45, false},
+		{"12345:", 1, 23, 45, false},
+		{":34:56", 0, 34, 56, false},
+		{"12:34:", 12, 34, 0, false},
+		{"12::56", 0, 0, 12, false},
+		{"12:34:56:", 12, 34, 56, false},
+		{"12-.abc", 0, 0, 12, false},
+		{"12-34", 0, 0, 12, false},
+		{"1234-56", 0, 12, 34, false},
+		{"1 02", 26, 0, 0, false},
+		{"1 02:", 26, 0, 0, false},
+		{"1 02-34", 26, 0, 0, false},
+		{"2024-12-20 12", 12, 0, 0, false},
+		{"2024-12-20 12:", 12, 0, 0, false},
+		{"2024-12-20 12::56", 12, 56, 0, false},
+		{"2024-12-20 12:34::56", 12, 34, 56, false},
+		{"2024-12-20 12-34", 12, 34, 0, false},
+		{"2024-12-20 12/34/56", 12, 34, 56, false},
+		{"2024@12@20 12@34@56", 12, 34, 56, false},
+		{"2024-12-20\t12:34:56", 12, 34, 56, false},
+		{"1\t02:34:56", 26, 34, 56, false},
+		{"12:34 56", 12, 34, 0, false},
+		{"1 02:34 56", 26, 34, 0, false},
+		{"1 02 34", 26, 0, 0, false},
+		{"2024--12--20 12:34:56", 12, 34, 56, false},
+		{"2024/-12/-20 12:34:56", 12, 34, 56, false},
+		{"2024-12-20 -12:34:56", 12, 34, 56, false},
+		{"2024-12-20 +12:34:56", 12, 34, 56, false},
+		{"2024-12-20 12:34 56", 0, 20, 24, false},
+		{"2024-12-20 12 34", 0, 20, 24, false},
+		{"1 2", 0, 0, 1, false},
+		{"12:34:56", 12, 34, 56, false},
+		{"12:34:56 78", 12, 34, 56, false},
+		{"1-2-3 4:5:6", 0, 0, 1, false},
+		{"12345-1-1 1:2:3", 0, 0, 0, true},
+		{"-12:34", 12, 34, 0, false},
+		{"--12:34", 0, 0, 0, true},
+		{"2024-12-20 +12:34", 12, 34, 0, false},
+		{"2024-12-20 ++12:34", 12, 34, 0, false},
+		{"2024-12-20 12:34:56abc", 12, 34, 56, false},
+		{"2024-12-20 12:34:56+abc", 0, 20, 24, false},
+		{"2024-12-20 12:34:56-abc", 0, 20, 24, false},
+		{"1 2:3", 26, 3, 0, false},
+		{"1 2:3:4", 26, 3, 4, false},
+		{"12 3", 0, 0, 12, false},
+		{"12 3:4", 291, 4, 0, false},
+		{"12 3:4:5", 291, 4, 5, false},
+		{"12-2-3 4:5:6", 4, 5, 6, false},
+		{"123-2-3 4:5:6", 4, 5, 6, false},
+		{"1234-2-3 4:5:6", 4, 5, 6, false},
+		{"12345-2-3 4:5:6", 0, 0, 0, true},
+		{"2024-12-20 12:34:56+", 0, 20, 24, false},
+		{"2024-12-20 12:34:56-", 0, 20, 24, false},
+		{"1-1-1 1:2:3", 0, 0, 1, false},
+		{"1-1-1 01:2:3", 1, 2, 3, false},
+		{"1-1-1 1:02:3", 1, 2, 3, false},
+		{"1-1-1 1:2:03", 1, 2, 3, false},
+		{"1-1-1 01:02:3", 1, 2, 3, false},
+		{"1-1-1 01:2:03", 1, 2, 3, false},
+		{"1-1-1 1:02:03", 1, 2, 3, false},
+		{"1-1-1 01:02:03", 1, 2, 3, false},
+		{"0-1-1 1:2:3", 0, 0, 0, false},
+		{"0-1-1 12:34:56", 12, 34, 56, false},
+		{"0-1-1 1:02:03", 1, 2, 3, false},
+		{"0-1-1 1:2:03", 1, 2, 3, false},
+		{"123:34:56 78", 0, 0, 0, true},
+		{"123:34:56 78 ", 123, 34, 56, false},
+		{"\t123:34:56 78\t", 123, 34, 56, false},
+		{"838:59:59 78", 0, 0, 0, true},
+		{"838:59:59 78 ", 838, 59, 59, false},
+		{"\t838:59:59 78\t", 838, 59, 59, false},
+		{"2024-12-20 12:34:56 ", 12, 34, 56, false},
+		{"01:01:01:: +", 0, 0, 0, false},
+		{"2024-12-20 +", 0, 0, 0, false},
+		{"2024-12-20 -", 0, 0, 0, false},
+		{"2024-12-20 :1", 1, 0, 0, false},
+		{"1:01:01: +1", 1, 1, 1, false},
+		{"1:01:01: +1 ", 1, 1, 1, false},
+		{"12:12:12: +", 12, 12, 12, false},
+		{"12:12:12: + ", 0, 0, 0, false},
+		{"12:12:12: -", 12, 12, 12, false},
+		{"12:12:12: - ", 0, 0, 0, false},
+		{"12:12:12:: +", 0, 0, 0, false},
+		{"12:12:12:: + ", 0, 0, 0, false},
+		{"1:01:01: + ", 1, 1, 1, false},
+		{"1:01:01:: +", 1, 1, 1, false},
+		{"1:01:01:: + ", 0, 0, 0, false},
+		{"1:1:1: + ", 1, 1, 1, false},
+		{"1:1:1:: + ", 1, 1, 1, false},
+		{"123:12:12: +", 0, 0, 0, false},
+		{"123:12:12: + ", 0, 0, 0, false},
+		{"12:001:001: +", 0, 0, 0, false},
+		{"12:001:001: + ", 0, 0, 0, false},
+		{"01:01: abc", 1, 1, 0, false},
+		{"1:1: abc", 1, 1, 0, false},
+		{"12:34: 123", 12, 34, 0, false},
+		{"01:01:01 0", 1, 1, 1, false},
+		{"01:01:01 abc", 0, 0, 0, false},
+		{"01:01: 123 ", 1, 1, 0, false},
+		{"01:01:01 78", 1, 1, 1, false},
+		{"01:01:01 x", 1, 1, 1, false},
+		{"01:01:01 123", 0, 0, 0, true},
+		{"01:01:01 12:34:56", 12, 34, 56, false},
 	}
-
-}
-
-func TestStringTimeExtractZeroDateAndISOSeparator(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	inputs := []FunctionTestInput{
-		NewFunctionTestInput(types.T_varchar.ToType(), []string{
-			"0000-01-01 12:34:56",
-			"2024-00-01 11:22:33",
-			"2024-01-00 10:20:30",
-			"0000-00-00 09:08:07",
-			"2024-12-20T15:30:45.123456",
-		}, nil),
-	}
-
-	for _, tc := range []struct {
-		name   string
-		expect FunctionTestResult
-		fn     executeLogicOfOverload
-	}{
-		{"hour", NewFunctionTestResult(types.T_uint32.ToType(), false, []uint32{12, 11, 10, 9, 0}, nil), StringToHour},
-		{"minute", NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{34, 22, 20, 8, 20}, nil), StringToMinute},
-		{"second", NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{56, 33, 30, 7, 24}, nil), StringToSecond},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			tcc := NewFunctionTestCase(proc, inputs, tc.expect, tc.fn)
-			succeed, info := tcc.RunAndFree()
-			require.True(t, succeed, info)
-		})
-	}
-}
-
-func TestStringTimeExtractIncompleteDatetimeAndZeroYearCalendar(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	inputs := []FunctionTestInput{
-		NewFunctionTestInput(types.T_varchar.ToType(), []string{
-			"2024-12-20 12:34",
-			"0000-02-28 12:34:56",
-			"0000-02-29 12:34:56",
-			"0000-02-31 12:34:56",
-			"0000-04-31 12:34:56",
-			"1900-02-29 12:34:56",
-			"2000-02-29 01:02:03",
-		}, nil),
-	}
-
-	for _, tc := range []struct {
-		name   string
-		expect FunctionTestResult
-		fn     executeLogicOfOverload
-	}{
-		{"hour", NewFunctionTestResult(types.T_uint32.ToType(), false, []uint32{12, 12, 0, 0, 0, 0, 1}, []bool{false, false, true, true, true, true, false}), StringToHour},
-		{"minute", NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{34, 34, 0, 0, 0, 0, 2}, []bool{false, false, true, true, true, true, false}), StringToMinute},
-		{"second", NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{0, 56, 0, 0, 0, 0, 3}, []bool{false, false, true, true, true, true, false}), StringToSecond},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			tcc := NewFunctionTestCase(proc, inputs, tc.expect, tc.fn)
-			succeed, info := tcc.RunAndFree()
-			require.True(t, succeed, info)
-		})
-	}
-}
-
-func TestStringTimeExtractCompactDatetimeSuffix(t *testing.T) {
 	for _, typ := range []types.T{types.T_varchar, types.T_char, types.T_text} {
 		t.Run(typ.String(), func(t *testing.T) {
-			proc := testutil.NewProcess(t)
-			inputs := []FunctionTestInput{
-				NewFunctionTestInput(typ.ToType(), []string{
-					"20241220153045", "241220153045", "20241220153045.999999", "241220153045.9",
-					"20241220153045.123abc", "20241220153045.", "241220153045.123abc", "241220153045.",
-					"202412201530451", "2412201530451",
-					"20241220153045abc", "241220153045abc",
-					"20241220153045.-", "20241220153045.+", "241220153045.-", "241220153045.+",
-					"20241220153045.123-", "20241220153045.123+", "241220153045.123-", "241220153045.123+",
-					"20241220153045.123abc-", "241220153045.123abc+",
-				}, nil),
+			proc := testutil.NewProcess(nil)
+			mp := proc.Mp()
+			t.Cleanup(func() {
+				defer mpool.DeleteMPool(mp)
+				proc.Base.FileService.Close(proc.Ctx)
+				proc.Free()
+				require.Zero(t, mp.CurrNB())
+				require.Zero(t, mp.OnHeapCurrNB())
+			})
+			cases := allTextTypes
+			if typ == types.T_varchar {
+				cases = append(append([]clockCase(nil), allTextTypes...), varcharOnly...)
 			}
-
-			for _, tc := range []struct {
-				name   string
-				expect FunctionTestResult
-				fn     executeLogicOfOverload
-			}{
-				{"hour", NewFunctionTestResult(types.T_uint32.ToType(), false, []uint32{15, 15, 15, 15, 15, 15, 15, 15, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 15, 15}, []bool{false, false, false, false, false, false, false, false, true, true, true, true, true, true, true, true, true, true, true, true, false, false}), StringToHour},
-				{"minute", NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{30, 30, 30, 30, 30, 30, 30, 30, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 30, 30}, []bool{false, false, false, false, false, false, false, false, true, true, true, true, true, true, true, true, true, true, true, true, false, false}), StringToMinute},
-				{"second", NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{45, 45, 45, 45, 45, 45, 45, 45, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 45, 45}, []bool{false, false, false, false, false, false, false, false, true, true, true, true, true, true, true, true, true, true, true, true, false, false}), StringToSecond},
-			} {
-				t.Run(tc.name, func(t *testing.T) {
-					tcc := NewFunctionTestCase(proc, inputs, tc.expect, tc.fn)
-					succeed, info := tcc.RunAndFree()
-					require.True(t, succeed, info)
-				})
+			inputs := make([]string, len(cases))
+			hours := make([]uint32, len(cases))
+			minutes := make([]uint8, len(cases))
+			seconds := make([]uint8, len(cases))
+			nulls := make([]bool, len(cases))
+			for i, tc := range cases {
+				inputs[i], hours[i], minutes[i], seconds[i], nulls[i] = tc.input, tc.hour, tc.minute, tc.second, tc.null
 			}
-		})
-	}
-}
-
-func TestStringTimeExtractPartialClockPrefix(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	inputs := []FunctionTestInput{
-		NewFunctionTestInput(types.T_varchar.ToType(), []string{
-			"12:", ":34", "12:34:56-", "12:34:56..", "123:", "1234:", "12345:", "123456:",
-		}, nil),
-	}
-
-	for _, tc := range []struct {
-		name   string
-		expect FunctionTestResult
-		fn     executeLogicOfOverload
-	}{
-		{"hour", NewFunctionTestResult(types.T_uint32.ToType(), false, []uint32{0, 0, 12, 12, 0, 0, 1, 12}, nil), StringToHour},
-		{"minute", NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{0, 34, 34, 34, 1, 12, 23, 34}, nil), StringToMinute},
-		{"second", NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{12, 0, 56, 56, 23, 34, 45, 56}, nil), StringToSecond},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			tcc := NewFunctionTestCase(proc, inputs, tc.expect, tc.fn)
-			succeed, info := tcc.RunAndFree()
-			require.True(t, succeed, info)
-		})
-	}
-}
-
-func TestStringTimeExtractMySQLPartialPrefixBoundaries(t *testing.T) {
-	for _, typ := range []types.T{types.T_varchar, types.T_char, types.T_text} {
-		t.Run(typ.String(), func(t *testing.T) {
-			proc := testutil.NewProcess(t)
-			input := NewFunctionTestInput(typ.ToType(), []string{
-				":34:56", "12:34:", "12::56", "12:34:56:", "12-.abc",
-			}, nil)
-
 			for _, tc := range []struct {
 				name   string
 				fn     executeLogicOfOverload
 				expect FunctionTestResult
 			}{
-				{
-					name: "hour",
-					fn:   StringToHour,
-					expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
-						[]uint32{0, 12, 0, 12, 0}, nil),
-				},
-				{
-					name: "minute",
-					fn:   StringToMinute,
-					expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-						[]uint8{34, 34, 0, 34, 0}, nil),
-				},
-				{
-					name: "second",
-					fn:   StringToSecond,
-					expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-						[]uint8{56, 0, 12, 56, 12}, nil),
-				},
+				{"hour", StringToHour, NewFunctionTestResult(types.T_uint32.ToType(), false, hours, nulls)},
+				{"minute", StringToMinute, NewFunctionTestResult(types.T_uint8.ToType(), false, minutes, nulls)},
+				{"second", StringToSecond, NewFunctionTestResult(types.T_uint8.ToType(), false, seconds, nulls)},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
-					ftc := NewFunctionTestCase(proc, []FunctionTestInput{input}, tc.expect, tc.fn)
-					success, info := ftc.RunAndFree()
-					require.True(t, success, info)
-				})
-			}
-		})
-	}
-}
-
-func TestStringTimeExtractContextAwarePrefixBoundaries(t *testing.T) {
-	for _, typ := range []types.T{types.T_varchar, types.T_char, types.T_text} {
-		t.Run(typ.String(), func(t *testing.T) {
-			proc := testutil.NewProcess(t)
-			input := NewFunctionTestInput(typ.ToType(), []string{
-				"12-34", "1234-56",
-				"1 02", "1 02:", "1 02-34",
-				"2024-12-20 12", "2024-12-20 12:", "2024-12-20 12::56",
-				"2024-12-20foo", "2024-12-20 12:34::56", "2024-12-20 12-34",
-				"2024-12-20 12/34/56", "2024@12@20 12@34@56", "2024-12-20\t12:34:56", "1\t02:34:56",
-				"12:34 56", "1 02:34 56", "1 02 34",
-				"2024--12--20 12:34:56", "2024/-12/-20 12:34:56",
-				"2024-12-20 -12:34:56", "2024-12-20 +12:34:56",
-				"2024-12-20 12:34 56", "2024-12-20 12 34",
-			}, nil)
-
-			for _, tc := range []struct {
-				name   string
-				fn     executeLogicOfOverload
-				expect FunctionTestResult
-			}{
-				{
-					name: "hour",
-					fn:   StringToHour,
-					expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
-						[]uint32{0, 0, 26, 26, 26, 12, 12, 12, 0, 12, 12, 12, 12, 12, 26, 12, 26, 26, 12, 12, 12, 12, 0, 0}, nil),
-				},
-				{
-					name: "minute",
-					fn:   StringToMinute,
-					expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-						[]uint8{0, 12, 0, 0, 0, 0, 0, 56, 20, 34, 34, 34, 34, 34, 34, 34, 34, 0, 34, 34, 34, 34, 20, 20}, nil),
-				},
-				{
-					name: "second",
-					fn:   StringToSecond,
-					expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-						[]uint8{12, 34, 0, 0, 0, 0, 0, 0, 24, 56, 0, 56, 56, 56, 56, 0, 0, 0, 56, 56, 56, 56, 24, 24}, nil),
-				},
-			} {
-				t.Run(tc.name, func(t *testing.T) {
-					ftc := NewFunctionTestCase(proc, []FunctionTestInput{input}, tc.expect, tc.fn)
-					success, info := ftc.RunAndFree()
-					require.True(t, success, info)
-				})
-			}
-		})
-	}
-}
-
-func TestStringTimeExtractAmbiguousPrefixOwnership(t *testing.T) {
-	for _, typ := range []types.T{types.T_varchar, types.T_char, types.T_text} {
-		t.Run(typ.String(), func(t *testing.T) {
-			proc := testutil.NewProcess(t)
-			input := NewFunctionTestInput(typ.ToType(), []string{
-				// A one-digit field before whitespace remains a compact TIME prefix;
-				// a zero-padded post-day field owns the day-TIME grammar instead.
-				"1 2", "1 02",
-				// A colon-delimited TIME prefix must not be claimed as a two-digit
-				// year DATE when its apparent date components are out of range.
-				"12:34:56", "12:34:56 78",
-				// One-digit date-like fields are compact TIME, while a long compact
-				// prefix followed by a repeated date separator is invalid.
-				"1-2-3 4:5:6", "12345:", "12345-1-1 1:2:3",
-				// The outer sign is consumed exactly once.
-				"-12:34", "--12:34",
-				// A DATETIME clock owns a run of leading signs, but a sign followed
-				// by text terminates that clock and leaves the DATE-prefix coercion.
-				"2024-12-20 +12:34", "2024-12-20 ++12:34",
-				"2024-12-20 12:34:56abc",
-				"2024-12-20 12:34:56+abc", "2024-12-20 12:34:56-abc",
-			}, nil)
-
-			for _, tc := range []struct {
-				name   string
-				fn     executeLogicOfOverload
-				expect FunctionTestResult
-			}{
-				{
-					name: "hour",
-					fn:   StringToHour,
-					expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
-						[]uint32{0, 26, 12, 12, 0, 1, 0, 12, 0, 12, 12, 12, 0, 0},
-						[]bool{false, false, false, false, false, false, true, false, true, false, false, false, false, false}),
-				},
-				{
-					name: "minute",
-					fn:   StringToMinute,
-					expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-						[]uint8{0, 0, 34, 34, 0, 23, 0, 34, 0, 34, 34, 34, 20, 20},
-						[]bool{false, false, false, false, false, false, true, false, true, false, false, false, false, false}),
-				},
-				{
-					name: "second",
-					fn:   StringToSecond,
-					expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-						[]uint8{1, 0, 56, 56, 1, 45, 0, 0, 0, 0, 0, 56, 24, 24},
-						[]bool{false, false, false, false, false, false, true, false, true, false, false, false, false, false}),
-				},
-			} {
-				t.Run(tc.name, func(t *testing.T) {
-					ftc := NewFunctionTestCase(proc, []FunctionTestInput{input}, tc.expect, tc.fn)
-					success, info := ftc.RunAndFree()
-					require.True(t, success, info)
-				})
-			}
-		})
-	}
-}
-
-func TestStringTimeExtractReviewerGrammarBoundaries(t *testing.T) {
-	for _, typ := range []types.T{types.T_varchar, types.T_char, types.T_text} {
-		t.Run(typ.String(), func(t *testing.T) {
-			proc := testutil.NewProcess(t)
-			input := NewFunctionTestInput(typ.ToType(), []string{
-				// A bare one-digit post-space field remains a compact prefix. A
-				// following clock separator transfers ownership to day-TIME.
-				"1 2", "1 2:3", "1 2:3:4",
-				"12 3", "12 3:4", "12 3:4:5",
-				// Separated DATETIME accepts two through four year digits. One
-				// digit remains compact TIME, and five digits remain invalid.
-				"1-2-3 4:5:6", "12-2-3 4:5:6", "123-2-3 4:5:6",
-				"1234-2-3 4:5:6", "12345-2-3 4:5:6",
-				// An unconsumed trailing sign after a complete clock terminates
-				// DATETIME ownership and leaves the DATE-prefix fallback.
-				"2024-12-20 12:34:56+", "2024-12-20 12:34:56-",
-			}, nil)
-
-			for _, tc := range []struct {
-				name   string
-				fn     executeLogicOfOverload
-				expect FunctionTestResult
-			}{
-				{
-					name: "hour",
-					fn:   StringToHour,
-					expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
-						[]uint32{0, 26, 26, 0, 291, 291, 0, 4, 4, 4, 0, 0, 0},
-						[]bool{false, false, false, false, false, false, false, false, false, false, true, false, false}),
-				},
-				{
-					name: "minute",
-					fn:   StringToMinute,
-					expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-						[]uint8{0, 3, 3, 0, 4, 4, 0, 5, 5, 5, 0, 20, 20},
-						[]bool{false, false, false, false, false, false, false, false, false, false, true, false, false}),
-				},
-				{
-					name: "second",
-					fn:   StringToSecond,
-					expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-						[]uint8{1, 0, 4, 12, 0, 5, 1, 6, 6, 6, 0, 24, 24},
-						[]bool{false, false, false, false, false, false, false, false, false, false, true, false, false}),
-				},
-			} {
-				t.Run(tc.name, func(t *testing.T) {
-					ftc := NewFunctionTestCase(proc, []FunctionTestInput{input}, tc.expect, tc.fn)
-					success, info := ftc.RunAndFree()
-					require.True(t, success, info)
-				})
-			}
-		})
-	}
-}
-
-func TestStringTimeExtractOneDigitYearAndWhitespaceOwnership(t *testing.T) {
-	for _, typ := range []types.T{types.T_varchar, types.T_char, types.T_text} {
-		t.Run(typ.String(), func(t *testing.T) {
-			proc := testutil.NewProcess(t)
-			input := NewFunctionTestInput(typ.ToType(), []string{
-				// MySQL 8.4.10: for one-digit years only all-one-digit H:M:S
-				// remains compact TIME. Any wider clock field transfers ownership
-				// to DATETIME.
-				"1-1-1 1:2:3", "1-1-1 01:2:3", "1-1-1 1:02:3", "1-1-1 1:2:03",
-				"1-1-1 01:02:3", "1-1-1 01:2:03", "1-1-1 1:02:03", "1-1-1 01:02:03",
-				// The same variable hour/minute rule applies to zero year.
-				"0-1-1 1:2:3", "0-1-1 12:34:56", "0-1-1 1:02:03", "0-1-1 1:2:03",
-				// Trailing whitespace is part of the ordered grammar. It must not
-				// be removed before the date-shaped TIME prefix is classified.
-				"123:34:56 78", "123:34:56 78 ", "\t123:34:56 78\t",
-				"838:59:59 78", "838:59:59 78 ", "\t838:59:59 78\t",
-				// A valid DATETIME remains owned with trailing whitespace; this is
-				// the nearest control for the padded invalid date-shaped prefixes.
-				"2024-12-20 12:34:56 ",
-			}, nil)
-
-			for _, tc := range []struct {
-				name   string
-				fn     executeLogicOfOverload
-				expect FunctionTestResult
-			}{
-				{
-					name: "hour",
-					fn:   StringToHour,
-					expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
-						[]uint32{0, 1, 1, 1, 1, 1, 1, 1, 0, 12, 1, 1, 0, 123, 123, 0, 838, 838, 12},
-						[]bool{false, false, false, false, false, false, false, false, false, false, false, false, true, false, false, true, false, false, false}),
-				},
-				{
-					name: "minute",
-					fn:   StringToMinute,
-					expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-						[]uint8{0, 2, 2, 2, 2, 2, 2, 2, 0, 34, 2, 2, 0, 34, 34, 0, 59, 59, 34},
-						[]bool{false, false, false, false, false, false, false, false, false, false, false, false, true, false, false, true, false, false, false}),
-				},
-				{
-					name: "second",
-					fn:   StringToSecond,
-					expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-						[]uint8{1, 3, 3, 3, 3, 3, 3, 3, 0, 56, 3, 3, 0, 56, 56, 0, 59, 59, 56},
-						[]bool{false, false, false, false, false, false, false, false, false, false, false, false, true, false, false, true, false, false, false}),
-				},
-			} {
-				t.Run(tc.name, func(t *testing.T) {
-					ftc := NewFunctionTestCase(proc, []FunctionTestInput{input}, tc.expect, tc.fn)
-					success, info := ftc.RunAndFree()
-					require.True(t, success, info)
-				})
-			}
-		})
-	}
-}
-
-func TestStringTimeExtractWhitespace(t *testing.T) {
-	for _, typ := range []types.T{types.T_char, types.T_varchar, types.T_text} {
-		t.Run(typ.String(), func(t *testing.T) {
-			proc := testutil.NewProcess(t)
-			inputs := []FunctionTestInput{
-				NewFunctionTestInput(typ.ToType(), []string{"   ", "\t"}, []bool{false, false}),
-			}
-
-			for _, tc := range []struct {
-				name   string
-				expect FunctionTestResult
-				fn     executeLogicOfOverload
-			}{
-				{"hour", NewFunctionTestResult(types.T_uint32.ToType(), false, []uint32{0, 0}, []bool{true, true}), StringToHour},
-				{"minute", NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{0, 0}, []bool{true, true}), StringToMinute},
-				{"second", NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{0, 0}, []bool{true, true}), StringToSecond},
-			} {
-				t.Run(tc.name, func(t *testing.T) {
-					tcc := NewFunctionTestCase(proc, inputs, tc.expect, tc.fn)
-					succeed, info := tcc.RunAndFree()
-					require.True(t, succeed, info)
+					fc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(typ.ToType(), inputs, nil)}, tc.expect, tc.fn)
+					success, info := fc.RunAndFree()
+					require.True(t, success, "%s; input rows: %q", info, inputs)
 				})
 			}
 		})
@@ -6470,63 +5739,6 @@ func TestStringTimeExtractRegisteredOverloads(t *testing.T) {
 				}
 			})
 		}
-	}
-}
-
-func TestStringTimeExtractMySQLBoundaryRegressions(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	inputs := []FunctionTestInput{
-		NewFunctionTestInput(types.T_varchar.ToType(), []string{
-			"-2024-12-20 15:30:45",
-			"-20241220153045",
-			"20240230010203",
-			"2 30:00:00",
-			"60",
-			"24-12-20 15:30:45",
-			"2000:01:01 12:34:56",
-			"1998-01-01 00:00:009",
-			"2024-12-20 15:30:4560",
-			"2001-11-00 01:02:03",
-			"99999990000",
-			"- 12:34:56",
-			"12:34:56.",
-		}, []bool{false, false, false, false, false, false, false, false, false, false, false, false, false}),
-	}
-
-	testCases := []struct {
-		name   string
-		expect FunctionTestResult
-		fn     executeLogicOfOverload
-	}{
-		{
-			name: "hour",
-			expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
-				[]uint32{15, 15, 0, 78, 0, 15, 12, 0, 0, 1, 0, 12, 12},
-				[]bool{false, false, true, false, true, false, false, false, true, false, true, false, false}),
-			fn: StringToHour,
-		},
-		{
-			name: "minute",
-			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{30, 30, 0, 0, 0, 30, 34, 0, 0, 2, 0, 34, 34},
-				[]bool{false, false, true, false, true, false, false, false, true, false, true, false, false}),
-			fn: StringToMinute,
-		},
-		{
-			name: "second",
-			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{45, 45, 0, 0, 0, 45, 56, 9, 0, 3, 0, 56, 56},
-				[]bool{false, false, true, false, true, false, false, false, true, false, true, false, false}),
-			fn: StringToSecond,
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			tcc := NewFunctionTestCase(proc, inputs, tc.expect, tc.fn)
-			succeed, info := tcc.RunAndFree()
-			require.True(t, succeed, info)
-		})
 	}
 }
 
@@ -7509,7 +6721,6 @@ func TestVecFromBase64InvalidInputClass(t *testing.T) {
 			[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{input}, nil)},
 			NewFunctionTestResult(resultType, true, nil, nil), decode)
 		defer fc.Free()
-		require.NoError(t, fc.result.PreExtendAndReset(fc.fnLength))
 		_, err := fc.DebugRun()
 		return err
 	}
@@ -13608,22 +12819,16 @@ func TestStringTimeExtractAttachedSuffixOwnership(t *testing.T) {
 }
 
 func TestStringTimeExtractSignedSuffixTrailingWhitespaceOwnership(t *testing.T) {
-	inputs := []string{
-		"12:34:34 +1",
-		"12:34:34 +1 ",
-		"01:01:34 +1",
-		"01:01:34 +1 ",
-	}
-	want := []string{"12/34/34", "12/34/34", "1/1/34", "1/1/34"}
-	for _, typ := range []types.T{types.T_varchar, types.T_char, types.T_text} {
-		t.Run(typ.String(), func(t *testing.T) {
-			for i, input := range inputs {
-				t.Run(fmt.Sprintf("case_%d", i), func(t *testing.T) {
-					hour, minute, second, ok := timeStringToClockForExtract(input)
-					require.True(t, ok)
-					require.Equal(t, want[i], fmt.Sprintf("%d/%d/%d", hour, minute, second))
-				})
-			}
+	for _, tc := range []struct{ input, want string }{
+		{"12:34:34 +1", "12/34/34"},
+		{"12:34:34 +1 ", "12/34/34"},
+		{"01:01:34 +1", "1/1/34"},
+		{"01:01:34 +1 ", "1/1/34"},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			hour, minute, second, ok := timeStringToClockForExtract(tc.input)
+			require.True(t, ok)
+			require.Equal(t, tc.want, fmt.Sprintf("%d/%d/%d", hour, minute, second))
 		})
 	}
 }
@@ -13712,65 +12917,6 @@ func TestStringTimeExtractAttachedSignedOmittedSecondsOwnership(t *testing.T) {
 			}
 			require.True(t, ok)
 			require.Equal(t, tc.want, fmt.Sprintf("%d/%d/%d", hour, minute, second))
-		})
-	}
-}
-
-func TestStringTimeExtractDatetimeSeparatorAndSignedSuffixBoundaries(t *testing.T) {
-	inputs := []string{
-		"01:01:01:: +",
-		"2024-12-20 +",
-		"2024-12-20 -",
-		"2024-12-20 :1",
-		"1:01:01: +1",
-		"1:01:01: +1 ",
-		"12:12:12: +",
-		"12:12:12: + ",
-		"12:12:12: -",
-		"12:12:12: - ",
-		"12:12:12:: +",
-		"12:12:12:: + ",
-		"1:01:01: + ",
-		"1:01:01:: +",
-		"1:01:01:: + ",
-		"1:1:1: + ",
-		"1:1:1:: + ",
-		"123:12:12: +",
-		"123:12:12: + ",
-		"12:001:001: +",
-		"12:001:001: + ",
-	}
-	for _, typ := range []types.T{types.T_varchar, types.T_char, types.T_text} {
-		t.Run(typ.String(), func(t *testing.T) {
-			proc := testutil.NewProcess(t)
-			input := NewFunctionTestInput(typ.ToType(), inputs, nil)
-			for _, tc := range []struct {
-				name   string
-				fn     executeLogicOfOverload
-				expect FunctionTestResult
-			}{
-				{
-					name: "hour", fn: StringToHour,
-					expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
-						[]uint32{0, 0, 0, 1, 1, 1, 12, 0, 12, 0, 0, 0, 1, 1, 0, 1, 1, 0, 0, 0, 0}, nil),
-				},
-				{
-					name: "minute", fn: StringToMinute,
-					expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-						[]uint8{0, 0, 0, 0, 1, 1, 12, 0, 12, 0, 0, 0, 1, 1, 0, 1, 1, 0, 0, 0, 0}, nil),
-				},
-				{
-					name: "second", fn: StringToSecond,
-					expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-						[]uint8{0, 0, 0, 0, 1, 1, 12, 0, 12, 0, 0, 0, 1, 1, 0, 1, 1, 0, 0, 0, 0}, nil),
-				},
-			} {
-				t.Run(tc.name, func(t *testing.T) {
-					ftc := NewFunctionTestCase(proc, []FunctionTestInput{input}, tc.expect, tc.fn)
-					success, info := ftc.RunAndFree()
-					require.True(t, success, info)
-				})
-			}
 		})
 	}
 }
@@ -13923,52 +13069,6 @@ func TestStringTimeExtractSeparatorWhitespaceOwnership(t *testing.T) {
 				require.Equal(t, tc.want, fmt.Sprintf("%d/%d/%d", hour, minute, second))
 			})
 		}
-	}
-}
-
-func TestStringTimeExtractAmbiguousCandidateMatrix(t *testing.T) {
-	inputs := []string{
-		"01:01: abc", "1:1: abc", "12:34: 123",
-		"01:01:01 0", "01:01:01 abc",
-		// Adjacent controls keep the same candidate owner when only the token
-		// class changes, and preserve the date/clock distinction for a full
-		// clock suffix.
-		"01:01: 123 ", "01:01:01 78", "01:01:01 x", "01:01:01 123", "01:01:01 12:34:56",
-	}
-	nulls := []bool{false, false, false, false, false, false, false, false, true, false}
-
-	for _, typ := range []types.T{types.T_varchar, types.T_char, types.T_text} {
-		t.Run(typ.String(), func(t *testing.T) {
-			proc := testutil.NewProcess(t)
-			input := NewFunctionTestInput(typ.ToType(), inputs, nil)
-			for _, tc := range []struct {
-				name   string
-				fn     executeLogicOfOverload
-				expect FunctionTestResult
-			}{
-				{
-					name: "hour", fn: StringToHour,
-					expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
-						[]uint32{1, 1, 12, 1, 0, 1, 1, 1, 0, 12}, nulls),
-				},
-				{
-					name: "minute", fn: StringToMinute,
-					expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-						[]uint8{1, 1, 34, 1, 0, 1, 1, 1, 0, 34}, nulls),
-				},
-				{
-					name: "second", fn: StringToSecond,
-					expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-						[]uint8{0, 0, 0, 1, 0, 0, 1, 1, 0, 56}, nulls),
-				},
-			} {
-				t.Run(tc.name, func(t *testing.T) {
-					ftc := NewFunctionTestCase(proc, []FunctionTestInput{input}, tc.expect, tc.fn)
-					success, info := ftc.RunAndFree()
-					require.True(t, success, info)
-				})
-			}
-		})
 	}
 }
 

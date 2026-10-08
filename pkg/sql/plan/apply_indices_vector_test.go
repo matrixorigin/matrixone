@@ -826,3 +826,43 @@ func TestGetDistRangeFromFiltersPushesPreparedBound(t *testing.T) {
 		require.Equal(t, plan.BoundType_EXCLUSIVE, dr.UpperBoundType)
 	}
 }
+
+// Shared provider input shapes; each call returns fresh mutable plan objects.
+func vectorProviderScanNode() *plan.Node {
+	return &plan.Node{
+		TableDef: &plan.TableDef{
+			Name: "test_table",
+			Name2ColIndex: map[string]int32{
+				"vec_col": 0,
+				"id":      1,
+			},
+			Cols: []*plan.ColDef{
+				{Name: "vec_col", Typ: plan.Type{Id: int32(types.T_array_float32)}},
+				{Name: "id", Typ: plan.Type{Id: int32(types.T_int64), Width: 64}},
+			},
+			Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"},
+		},
+	}
+}
+
+func vectorProviderVecCtx(scanNode *plan.Node) *vectorSortContext {
+	limit := makePlan2Uint64ConstExprWithType(10)
+	return &vectorSortContext{
+		distFnExpr: &plan.Function{
+			Func: &ObjectRef{ObjName: "l2_distance"},
+			Args: []*plan.Expr{
+				{
+					Typ:  plan.Type{Id: int32(types.T_array_float32)},
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+				},
+				{
+					Typ:  plan.Type{Id: int32(types.T_array_float32)},
+					Expr: &plan.Expr_Lit{Lit: &plan.Literal{}},
+				},
+			},
+		},
+		scanNode:    scanNode,
+		limit:       DeepCopyExpr(limit),
+		resultLimit: limit,
+	}
+}

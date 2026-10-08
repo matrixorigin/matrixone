@@ -423,12 +423,12 @@ func (entry *mergeObjectsEntry) ApplyCommit(_ string) (err error) {
 }
 
 func (entry *mergeObjectsEntry) MakeCommand(csn uint32) (cmd txnif.TxnCmd, err error) {
-	droppedObjs := make([]*common.ID, 0)
+	droppedObjs := make([]*common.ID, 0, len(entry.droppedObjs))
 	for _, blk := range entry.droppedObjs {
 		id := blk.AsCommonID()
 		droppedObjs = append(droppedObjs, id)
 	}
-	createdObjs := make([]*common.ID, 0)
+	createdObjs := make([]*common.ID, 0, len(entry.createdObjs))
 	for _, blk := range entry.createdObjs {
 		id := blk.AsCommonID()
 		createdObjs = append(createdObjs, id)

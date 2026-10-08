@@ -555,16 +555,22 @@ func runJSONObjectAggregate(t *testing.T, mp *mpool.MPool, input *vector.Vector)
 	return result
 }
 
-func buildFixedVec[T types.FixedSizeTExceptStrType](t *testing.T, mp *mpool.MPool, typ types.Type, vals []T) *vector.Vector {
+func buildFixedVec[T types.FixedSizeTExceptStrType](t *testing.T, mp *mpool.MPool, typ types.Type, vals []T, onCreate ...func(*vector.Vector)) *vector.Vector {
 	t.Helper()
 	v := vector.NewVec(typ)
+	for _, own := range onCreate {
+		own(v)
+	}
 	require.NoError(t, vector.AppendFixedList[T](v, vals, nil, mp))
 	return v
 }
 
-func buildVarlenVec(t *testing.T, mp *mpool.MPool, typ types.Type, vals []string) *vector.Vector {
+func buildVarlenVec(t *testing.T, mp *mpool.MPool, typ types.Type, vals []string, onCreate ...func(*vector.Vector)) *vector.Vector {
 	t.Helper()
 	v := vector.NewVec(typ)
+	for _, own := range onCreate {
+		own(v)
+	}
 	for _, s := range vals {
 		require.NoError(t, vector.AppendBytes(v, []byte(s), false, mp))
 	}

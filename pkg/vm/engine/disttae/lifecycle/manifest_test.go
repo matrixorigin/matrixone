@@ -453,7 +453,7 @@ func TestArchiveManifestV1JSONScannerBoundsNestedInput(t *testing.T) {
 		{
 			name:  "truncated-array",
 			value: `[1,`,
-			match: "EOF",
+			match: "unexpected end of JSON input",
 		},
 	}
 	for _, test := range tests {

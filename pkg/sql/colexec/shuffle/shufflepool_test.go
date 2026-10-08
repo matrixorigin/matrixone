@@ -15,6 +15,7 @@
 package shuffle
 
 import (
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -31,7 +32,17 @@ import (
 )
 
 func writeSelectionsForTest(sp *ShufflePool, src *batch.Batch, sels [][]int32, proc *process.Process) (bool, error) {
-	_, _, _, done, err := sp.tryWrite(src, sels, 0, 0, proc)
+	return writeSelectionsForProducerForTest(sp, src, sels, 0, proc)
+}
+
+func writeSelectionsForProducerForTest(
+	sp *ShufflePool,
+	src *batch.Batch,
+	sels [][]int32,
+	producer int32,
+	proc *process.Process,
+) (bool, error) {
+	_, _, _, done, err := sp.tryWrite(src, sels, producer, 0, 0, proc)
 	return done, err
 }
 
@@ -144,7 +155,7 @@ func TestShufflePoolBoundsReadyBatchesAndResumes(t *testing.T) {
 		sels[0][i] = int32(i)
 	}
 
-	bucket, offset, waiter, done, err := sp.tryWrite(input, sels, 0, 0, proc)
+	bucket, offset, waiter, done, err := sp.tryWrite(input, sels, 0, 0, 0, proc)
 	require.NoError(t, err)
 	require.False(t, done)
 	require.Equal(t, 0, bucket)
@@ -161,7 +172,7 @@ func TestShufflePoolBoundsReadyBatchesAndResumes(t *testing.T) {
 		default:
 			t.Fatal("freeing a ready batch did not wake blocked writers")
 		}
-		bucket, offset, waiter, done, err = sp.tryWrite(input, sels, bucket, offset, proc)
+		bucket, offset, waiter, done, err = sp.tryWrite(input, sels, 0, bucket, offset, proc)
 		require.NoError(t, err)
 		require.LessOrEqual(t, sp.readyCount, sp.readyLimit)
 	}
@@ -233,6 +244,280 @@ func TestShufflePoolReservesReadyCreditForProvenanceChange(t *testing.T) {
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
+func TestShufflePoolKeepsIndependentProducerTails(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	defer proc.Free()
+	registry, err := mpool.NewAllocationAccountRegistry(2, 64)
+	require.NoError(t, err)
+
+	accounts := make([]*mpool.AllocationAccount, 2)
+	selections := make([]*vector.AllocationAccountSelection, 2)
+	inputs := make([]*batch.Batch, 2)
+	for producer := range inputs {
+		accounts[producer], err = registry.Open(1 << 20)
+		require.NoError(t, err)
+		selections[producer], err = vector.NewAllocationAccountSelection(
+			accounts[producer], 1, 1, 2, 3, 4,
+		)
+		require.NoError(t, err)
+		inputs[producer] = batch.NewWithSchema(
+			true,
+			nil,
+			[]types.Type{types.T_int64.ToType()},
+		)
+		require.NoError(t, inputs[producer].SetAllocationAccount(selections[producer]))
+		for row := range 2 {
+			require.NoError(t, vector.AppendFixed(
+				inputs[producer].Vecs[0], int64(producer*10+row), false, mp,
+			))
+		}
+		inputs[producer].SetRowCount(2)
+	}
+
+	sp := NewShufflePool(1, 2, false)
+	defer func() {
+		sp.abort(mp)
+		for _, input := range inputs {
+			input.Clean(mp)
+		}
+		for _, account := range accounts {
+			require.Zero(t, account.Seal().Used)
+			_, finalizeErr := registry.Finalize(account)
+			require.NoError(t, finalizeErr)
+		}
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	sels := [][]int32{{0, 1}}
+	for producer, input := range inputs {
+		done, writeErr := writeSelectionsForProducerForTest(
+			sp, input, sels, int32(producer), proc,
+		)
+		require.NoError(t, writeErr)
+		require.True(t, done)
+	}
+
+	require.Zero(t, sp.readyCount,
+		"switching producers must not publish their independent partial tails")
+	require.Nil(t, sp.getFullBatch(0))
+	for range inputs {
+		tail := sp.getLastBatch(0)
+		require.NotNil(t, tail)
+		require.Equal(t, 2, tail.RowCount())
+		sp.discardBatch(tail, mp)
+	}
+	require.Nil(t, sp.getLastBatch(0))
+
+	fullSels := make([]int32, objectio.BlockMaxRows)
+	for producer, input := range inputs {
+		for row := 2; row < objectio.BlockMaxRows; row++ {
+			require.NoError(t, vector.AppendFixed(
+				input.Vecs[0], int64(producer*objectio.BlockMaxRows+row), false, mp,
+			))
+		}
+		input.SetRowCount(objectio.BlockMaxRows)
+	}
+	for row := range fullSels {
+		fullSels[row] = int32(row)
+	}
+	for producer, input := range inputs {
+		done, writeErr := writeSelectionsForProducerForTest(
+			sp, input, [][]int32{fullSels}, int32(producer), proc,
+		)
+		require.NoError(t, writeErr)
+		require.True(t, done)
+	}
+	require.Equal(t, 2, sp.readyCount)
+	for producer := range inputs {
+		output := sp.getFullBatch(0)
+		require.NotNil(t, output)
+		require.Equal(t, objectio.BlockMaxRows, output.RowCount())
+		require.Same(t, selections[producer], output.AllocationAccountSelection())
+		sp.discardBatch(output, mp)
+	}
+	require.Nil(t, sp.getFullBatch(0))
+	require.Zero(t, sp.readyCount)
+}
+
+func TestShufflePoolMatchingProducersCoalesce(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		drainAll   bool
+		accounted  bool
+		vectorOnly bool
+	}{
+		{name: "fixed bucket"},
+		{name: "all buckets", drainAll: true},
+		{name: "same batch account", accounted: true},
+		{name: "same vector account", accounted: true, vectorOnly: true, drainAll: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const producers = 16
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			defer proc.Free()
+			sp := NewShufflePool(1, producers, tc.drainAll)
+			defer sp.abort(proc.Mp())
+			getFull := func() *batch.Batch { return sp.getFullBatch(0) }
+			if tc.drainAll {
+				getFull = sp.getAnyFullBatch
+			}
+			var registry *mpool.AllocationAccountRegistry
+			var account *mpool.AllocationAccount
+			defer func() {
+				sp.abort(proc.Mp())
+				if account != nil {
+					require.Zero(t, account.Seal().Used)
+					_, err := registry.Finalize(account)
+					require.NoError(t, err)
+				}
+			}()
+			input := batch.NewWithSchema(true, nil, []types.Type{types.T_int64.ToType()})
+			defer input.Clean(proc.Mp())
+			if tc.accounted {
+				var err error
+				registry, err = mpool.NewAllocationAccountRegistry(1, 64)
+				require.NoError(t, err)
+				account, err = registry.Open(1 << 20)
+				require.NoError(t, err)
+				selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+				require.NoError(t, err)
+				if tc.vectorOnly {
+					require.NoError(t, input.Vecs[0].SetAllocationAccount(selection))
+				} else {
+					require.NoError(t, input.SetAllocationAccount(selection))
+				}
+			}
+			sels := make([]int32, objectio.BlockMaxRows)
+			for row := range sels {
+				sels[row] = int32(row)
+				require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(row), false, proc.Mp()))
+			}
+			input.SetRowCount(objectio.BlockMaxRows)
+			var writers sync.WaitGroup
+			writers.Add(producers)
+			writeErrors := make(chan error, producers)
+			for producer := range producers {
+				go func() {
+					defer writers.Done()
+					start := producer * objectio.BlockMaxRows / producers
+					end := (producer + 1) * objectio.BlockMaxRows / producers
+					_, err := writeSelectionsForProducerForTest(
+						sp, input, [][]int32{sels[start:end]}, int32(producer), proc)
+					writeErrors <- err
+				}()
+			}
+			writers.Wait()
+			close(writeErrors)
+			for err := range writeErrors {
+				require.NoError(t, err)
+			}
+			output := getFull()
+			require.NotNil(t, output,
+				"inputs with identical allocation provenance can share one full-sized tail")
+			defer func() { sp.discardBatch(output, proc.Mp()) }()
+			require.Equal(t, objectio.BlockMaxRows, output.RowCount())
+			expected := slices.Clone(vector.MustFixedColNoTypeCheck[int64](input.Vecs[0]))
+			actual := vector.MustFixedColNoTypeCheck[int64](output.Vecs[0])
+			slices.Sort(expected)
+			slices.Sort(actual)
+			require.Equal(t, expected, actual)
+			sp.discardBatch(output, proc.Mp())
+			output = nil
+			require.Nil(t, getFull())
+			require.Nil(t, sp.getLastBatch(0))
+			require.Zero(t, sp.current.Load())
+
+			// The shared tail must also participate in final draining and early close.
+			for _, closeConsumer := range []bool{false, true} {
+				done, err := writeSelectionsForProducerForTest(
+					sp, input, [][]int32{{0}}, producers-1, proc)
+				require.NoError(t, err)
+				require.True(t, done)
+				if closeConsumer {
+					if tc.drainAll {
+						sp.abort(proc.Mp())
+					} else {
+						sp.closeConsumer(0, proc.Mp())
+					}
+					require.Nil(t, sp.getLastBatch(0))
+				} else {
+					tail := sp.getAnyLastBatch()
+					require.NotNil(t, tail)
+					defer func() { sp.discardBatch(tail, proc.Mp()) }()
+					require.Equal(t, 1, tail.RowCount())
+					sp.discardBatch(tail, proc.Mp())
+					tail = nil
+					require.Nil(t, sp.getAnyLastBatch())
+				}
+				require.Zero(t, sp.current.Load())
+			}
+		})
+	}
+}
+
+func TestShufflePoolSplitsInputsAtProducerLaneCapacity(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	sp := NewShufflePool(1, 16, false)
+	defer sp.abort(proc.Mp())
+	registry, err := mpool.NewAllocationAccountRegistry(1, 64)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	defer func() {
+		sp.abort(proc.Mp())
+		require.Zero(t, account.Seal().Used)
+		_, err := registry.Finalize(account)
+		require.NoError(t, err)
+	}()
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	require.NoError(t, err)
+	// Reserve the shared lane for a different provenance, then verify that
+	// accounted input still obeys the bounded producer-local fallback.
+	seed := batch.NewWithSchema(true, nil, []types.Type{types.T_int64.ToType()})
+	defer seed.Clean(proc.Mp())
+	seedSelection, err := vector.NewAllocationAccountSelection(account, 1, 5, 6, 7, 8)
+	require.NoError(t, err)
+	require.NoError(t, seed.Vecs[0].SetAllocationAccount(seedSelection))
+	require.NoError(t, vector.AppendFixed(seed.Vecs[0], int64(0), false, proc.Mp()))
+	seed.SetRowCount(1)
+	done, err := writeBatchToBucketForTest(sp, seed, proc, 0)
+	require.NoError(t, err)
+	require.True(t, done)
+	sp.discardBatch(sp.getLastBatch(0), proc.Mp())
+
+	rows := sp.producerBatchMaxRows * shuffleFixedBucketReadyLimit
+	input := batch.NewWithSchema(true, nil, []types.Type{types.T_int64.ToType()})
+	defer input.Clean(proc.Mp())
+	// Per-vector provenance matters even without a batch-level selection.
+	require.NoError(t, input.Vecs[0].SetAllocationAccount(selection))
+	for row := range rows {
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(row), false, proc.Mp()))
+	}
+	input.SetRowCount(rows)
+	sels := make([]int32, rows)
+	for row := range sels {
+		sels[row] = int32(row)
+	}
+
+	done, err = writeSelectionsForProducerForTest(
+		sp, input, [][]int32{sels}, 0, proc,
+	)
+	require.NoError(t, err)
+	require.True(t, done)
+	require.Equal(t, shuffleFixedBucketReadyLimit, sp.readyCount)
+	for range shuffleFixedBucketReadyLimit {
+		output := sp.getFullBatch(0)
+		require.NotNil(t, output)
+		require.Equal(t, sp.producerBatchMaxRows, output.RowCount())
+		require.Same(t, selection, output.Vecs[0].AllocationAccountSelection())
+		sp.discardBatch(output, proc.Mp())
+	}
+	require.Nil(t, sp.getFullBatch(0))
+	require.Zero(t, sp.readyCount)
+}
+
 func TestShufflePoolFixedBucketsHaveIndependentBackpressure(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
@@ -251,7 +536,7 @@ func TestShufflePoolFixedBucketsHaveIndependentBackpressure(t *testing.T) {
 		for i := range sels[0] {
 			sels[0][i] = int32(i)
 		}
-		_, _, waiter, done, err := sp.tryWrite(input, sels, 0, 0, proc)
+		_, _, waiter, done, err := sp.tryWrite(input, sels, 0, 0, 0, proc)
 		require.NoError(t, err)
 		if !done {
 			bucket0Waiter = waiter
@@ -430,7 +715,7 @@ func TestShufflePoolRecycleCacheReusesAcrossBucketLayouts(t *testing.T) {
 	}
 }
 
-func TestShufflePoolRecycleCacheWarmsColdShardOnce(t *testing.T) {
+func TestShufflePoolRecycleCacheFollowsProducerAcrossDestinations(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	sp := NewShufflePool(128, 16, false)
@@ -463,7 +748,7 @@ func TestShufflePoolRecycleCacheWarmsColdShardOnce(t *testing.T) {
 		sp.putBatchToPool(output, proc.Mp())
 	}
 
-	require.Equal(t, shuffleBatchPoolShardSize+1, sp.batchPoolLength())
+	require.Equal(t, shuffleBatchPoolShardSize, sp.batchPoolLength())
 	input.Clean(proc.Mp())
 	sp.abort(proc.Mp())
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -598,6 +883,124 @@ func BenchmarkShufflePoolRecycleCache(b *testing.B) {
 	b.Run("try-write-phased/multi-cn-128-buckets", func(b *testing.B) {
 		benchmarkShufflePoolTryWrite(b, 128, 16, false, true)
 	})
+}
+
+func BenchmarkShufflePoolProducerTails(b *testing.B) {
+	const (
+		producerCount = 16
+		bucketCount   = 16
+		rowsPerBatch  = 1024
+	)
+	for _, tc := range []struct {
+		name        string
+		sharedLane  bool
+		unaccounted bool
+		sameAccount bool
+	}{
+		{name: "shared-tail", sharedLane: true},
+		{name: "producer-tails"},
+		{name: "unaccounted-producer-tails", unaccounted: true},
+		{name: "same-account-producer-tails", sameAccount: true},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			mp := mpool.MustNewZero()
+			proc := testutil.NewProcessWithMPool(b, "", mp)
+			registry, err := mpool.NewAllocationAccountRegistry(
+				producerCount, 1<<20,
+			)
+			if err != nil {
+				b.Fatal(err)
+			}
+			accounts := make([]*mpool.AllocationAccount, producerCount)
+			inputs := make([]*batch.Batch, producerCount)
+			for producer := range inputs {
+				accounts[producer], err = registry.Open(64 << 20)
+				if err != nil {
+					b.Fatal(err)
+				}
+				account := accounts[producer]
+				if tc.sameAccount {
+					account = accounts[0]
+				}
+				selection, selectionErr := vector.NewAllocationAccountSelection(
+					account, 1, 1, 2, 3, 4,
+				)
+				if selectionErr != nil {
+					b.Fatal(selectionErr)
+				}
+				inputs[producer] = batch.NewWithSchema(
+					true,
+					nil,
+					[]types.Type{types.T_int64.ToType()},
+				)
+				if !tc.unaccounted {
+					if err = inputs[producer].SetAllocationAccount(selection); err != nil {
+						b.Fatal(err)
+					}
+				}
+				for row := range rowsPerBatch {
+					if err = vector.AppendFixed(
+						inputs[producer].Vecs[0], int64(row), false, mp,
+					); err != nil {
+						b.Fatal(err)
+					}
+				}
+				inputs[producer].SetRowCount(rowsPerBatch)
+			}
+
+			sels := make([][]int32, bucketCount)
+			for row := range rowsPerBatch {
+				bucket := row % bucketCount
+				sels[bucket] = append(sels[bucket], int32(row))
+			}
+			sp := NewShufflePool(bucketCount, producerCount, false)
+
+			b.ReportAllocs()
+			b.SetBytes(rowsPerBatch * 8)
+			b.ResetTimer()
+			for i := range b.N {
+				producer := i % producerCount
+				lane := int32(producer)
+				if tc.sharedLane {
+					lane = 0
+				}
+				done, writeErr := writeSelectionsForProducerForTest(
+					sp, inputs[producer], sels, lane, proc,
+				)
+				if writeErr != nil {
+					b.Fatal(writeErr)
+				}
+				if !done {
+					b.Fatal("shuffle benchmark was backpressured")
+				}
+				for bucket := range bucketCount {
+					for output := sp.getFullBatch(int32(bucket)); output != nil; output = sp.getFullBatch(int32(bucket)) {
+						output.CleanOnlyData()
+						sp.putBatchToPool(output, mp)
+					}
+				}
+			}
+			b.StopTimer()
+			b.ReportMetric(float64(sp.memoryPeak()), "peak-bytes")
+
+			sp.abort(mp)
+			for _, input := range inputs {
+				input.Clean(mp)
+			}
+			for _, account := range accounts {
+				if used := account.Seal().Used; used != 0 {
+					b.Fatalf("account retained %d bytes", used)
+				}
+				if _, err = registry.Finalize(account); err != nil {
+					b.Fatal(err)
+				}
+			}
+			proc.Free()
+			if current := mp.CurrNB(); current != 0 {
+				b.Fatalf("mpool retained %d bytes", current)
+			}
+		})
+	}
 }
 
 func benchmarkShufflePoolTryWrite(
@@ -778,7 +1181,7 @@ func TestShufflePoolRetainsOwnershipWhenBatchSetWriteFails(t *testing.T) {
 			},
 			check: func(t *testing.T, sp *ShufflePool) {
 				require.Equal(t, 1, sp.batchPoolLength())
-				require.Zero(t, sp.batchSets[0].Length())
+				require.Zero(t, sp.batchSets[0][0].Length())
 			},
 		},
 		{
@@ -793,7 +1196,7 @@ func TestShufflePoolRetainsOwnershipWhenBatchSetWriteFails(t *testing.T) {
 			},
 			check: func(t *testing.T, sp *ShufflePool) {
 				require.Zero(t, sp.batchPoolLength())
-				require.Equal(t, 1, sp.batchSets[0].Length())
+				require.Equal(t, 1, sp.batchSets[0][0].Length())
 			},
 		},
 	} {

@@ -847,7 +847,21 @@ func buildShowTarget(stmt *tree.ShowTarget, ctx CompilerContext) (*Plan, error) 
 	sql := ""
 	switch stmt.Type {
 	case tree.ShowCharset:
-		sql = "select '' as `Charset`, '' as `Description`, '' as `Default collation`, '' as `Maxlen` where 0"
+		// CHARACTER_SETS is populated from the shared collation capability owner.
+		// Do not maintain another charset registry or return the old empty stub.
+		sql = "SELECT CHARACTER_SET_NAME AS `Charset`, DESCRIPTION AS `Description`, " +
+			"DEFAULT_COLLATE_NAME AS `Default collation`, MAXLEN AS `Maxlen` " +
+			"FROM information_schema.character_sets ORDER BY CHARACTER_SET_NAME"
+		if stmt.Like != nil && stmt.Where != nil {
+			return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
+		}
+		if stmt.Where != nil {
+			return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
+		}
+		if stmt.Like != nil {
+			stmt.Like.Left = tree.NewUnresolvedColName("CHARACTER_SET_NAME")
+			return returnByLikeAndSQL(ctx, sql, stmt.Like, ddlType)
+		}
 	case tree.ShowTriggers:
 		return buildShowTriggers(stmt, ctx)
 	default:

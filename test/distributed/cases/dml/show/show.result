@@ -38,7 +38,10 @@ show full columns from t1 where Field ='id';
 id  ¦  INT(32)  ¦  null  ¦  NO  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦  
 drop database if exists test01;
 show charset;
-➤ Charset[1,0,0]  ¦  Description[1,0,0]  ¦  Default collation[1,0,0]  ¦  Maxlen[1,0,0]
+➤ Charset[12,64,0]  ¦  Description[12,2048,0]  ¦  Default collation[12,64,0]  ¦  Maxlen[4,32,0]  𝄀
+binary  ¦  Binary pseudo charset  ¦  binary  ¦  1  𝄀
+utf8  ¦  UTF-8 Unicode  ¦  utf8_general_ci  ¦  4  𝄀
+utf8mb4  ¦  UTF-8 Unicode  ¦  utf8mb4_general_ci  ¦  4
 drop database if exists test02;
 create database test02;
 use test02;

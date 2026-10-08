@@ -273,12 +273,13 @@ func TestViewMetadataSQLAcceptsQuotedIdentifiers(t *testing.T) {
 	require.Contains(t, metaSQL, "relname = "+escapeSQLString(viewName))
 	require.Contains(t, metaSQL, "reldatabase = "+escapeSQLString(dbName))
 
-	snapshotSQL, err := getSqlForCheckViewMetaWithSnapshot(ctx, dbName, viewName, 123)
+	snapshotSQL, err := getSqlForCheckViewMetaWithSnapshot(ctx, dbName, viewName, timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 7})
 	require.NoError(t, err)
+	require.Contains(t, snapshotSQL, "MO_TS = '123-7'")
 	require.Contains(t, snapshotSQL, "relname = "+escapeSQLString(viewName))
 	require.Contains(t, snapshotSQL, "reldatabase = "+escapeSQLString(dbName))
 
-	queries := []string{checkSQL, metaSQL, snapshotSQL}
+	queries := append(make([]string, 0, 9), checkSQL, metaSQL, snapshotSQL)
 	for _, build := range []func() (string, error){
 		func() (string, error) { return getSqlForCheckDatabase(ctx, dbName) },
 		func() (string, error) { return getSqlForCheckDatabaseByAccount(ctx, dbName) },
@@ -6215,7 +6216,9 @@ func TestExtractPrivilegeTipsFromPlanInsertDedupTargetScan(t *testing.T) {
 			}}}
 
 			got := make([]tipKey, 0, len(p.GetQuery().GetNodes()))
-			for _, tip := range extractPrivilegeTipsFromPlan(p) {
+			tips, err := extractPrivilegeTipsFromPlan(p)
+			require.NoError(t, err)
+			for _, tip := range tips {
 				got = append(got, tipKey{tip.typ, tip.databaseName, tip.tableName})
 			}
 			require.ElementsMatch(t, tc.want, got)
@@ -6258,8 +6261,10 @@ func TestExtractPrivilegeTipsFromPlanKeepsUserDedupJoinSources(t *testing.T) {
 		typ   PrivilegeType
 		table string
 	}
-	got := make([]tipKey, 0)
-	for _, tip := range extractPrivilegeTipsFromPlan(p) {
+	tips, err := extractPrivilegeTipsFromPlan(p)
+	require.NoError(t, err)
+	got := make([]tipKey, 0, len(tips))
+	for _, tip := range tips {
 		got = append(got, tipKey{typ: tip.typ, table: tip.tableName})
 	}
 	require.ElementsMatch(t, []tipKey{
@@ -6363,7 +6368,8 @@ func Test_extractPrivilegeTipsFromPlan_Subscription(t *testing.T) {
 			},
 		},
 	}
-	arr := extractPrivilegeTipsFromPlan(p)
+	arr, err := extractPrivilegeTipsFromPlan(p)
+	require.NoError(t, err)
 	assert.Equal(t, 1, len(arr))
 	assert.Equal(t, "sub2", arr[0].databaseName)
 	assert.Equal(t, "t1", arr[0].tableName)
@@ -6377,15 +6383,13 @@ func TestExtractPrivilegeTipsFromPlanIncludesMongoDBExternalScan(t *testing.T) {
 	)
 
 	for _, tc := range []struct {
-		name        string
-		originViews []string
-		directView  string
+		name     string
+		viewPath []*plan.ViewStep
 	}{
 		{name: "direct table"},
 		{
-			name:        "view",
-			originViews: []string{dbName + "." + viewName},
-			directView:  dbName + "." + viewName,
+			name:     "view",
+			viewPath: []*plan.ViewStep{{DatabaseName: dbName, ViewName: viewName, Snapshot: &plan.Snapshot{Tenant: &plan.SnapshotTenant{}}}},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -6407,22 +6411,22 @@ func TestExtractPrivilegeTipsFromPlanIncludesMongoDBExternalScan(t *testing.T) {
 										Collection: "events",
 									},
 								},
-								OriginViews: tc.originViews,
-								DirectView:  tc.directView,
+								ViewPath: tc.viewPath,
 							},
 						},
 					},
 				},
 			}
 
-			arr := extractPrivilegeTipsFromPlan(p)
+			arr, err := extractPrivilegeTipsFromPlan(p)
+
+			require.NoError(t, err)
 			require.Len(t, arr, 1)
 			require.Equal(t, PrivilegeTypeSelect, arr[0].typ)
 			require.Equal(t, objectTypeTable, arr[0].objType)
 			require.Equal(t, dbName, arr[0].databaseName)
 			require.Equal(t, tableName, arr[0].tableName)
-			require.Equal(t, tc.originViews, arr[0].originViews)
-			require.Equal(t, tc.directView, arr[0].directView)
+			require.Equal(t, tc.viewPath, arr[0].viewPath)
 		})
 	}
 }
@@ -6456,8 +6460,7 @@ func TestAuthenticateMongoDBExternalScanSelectPrivilege(t *testing.T) {
 
 	for _, tc := range []struct {
 		name           string
-		originViews    []string
-		directView     string
+		viewPath       []*plan.ViewStep
 		tableSelect    bool
 		addRevokedView bool
 		want           bool
@@ -6466,8 +6469,7 @@ func TestAuthenticateMongoDBExternalScanSelectPrivilege(t *testing.T) {
 		{name: "table select granted", tableSelect: true, want: true},
 		{
 			name:           "view select revoked",
-			originViews:    []string{dbName + "." + viewName},
-			directView:     dbName + "." + viewName,
+			viewPath:       []*plan.ViewStep{{DatabaseName: dbName, ViewName: viewName, Snapshot: &plan.Snapshot{Tenant: &plan.SnapshotTenant{}}}},
 			tableSelect:    true,
 			addRevokedView: true,
 		},
@@ -6515,8 +6517,7 @@ func TestAuthenticateMongoDBExternalScanSelectPrivilege(t *testing.T) {
 							Type:        int32(plan.ExternType_MONGODB_TB),
 							MongodbScan: &plan.MongoScan{},
 						},
-						OriginViews: tc.originViews,
-						DirectView:  tc.directView,
+						ViewPath: tc.viewPath,
 					},
 				},
 			}}}
@@ -6549,7 +6550,8 @@ func TestExtractPrivilegeTipsFromTableChanges(t *testing.T) {
 					TableDef: &plan2.TableDef{TableType: "func_table", TblFunc: &plan.TableFunction{Name: "table_changes"}},
 				}},
 			}}}
-			arr := extractPrivilegeTipsFromPlan(p)
+			arr, err := extractPrivilegeTipsFromPlan(p)
+			require.NoError(t, err)
 			require.Len(t, arr, 1)
 			assert.Equal(t, PrivilegeTypeSelect, arr[0].typ)
 			assert.Equal(t, tt.databaseName, arr[0].databaseName)
@@ -6649,7 +6651,9 @@ func Test_determineDML(t *testing.T) {
 
 			sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant, nil, nil, nil, nil, nil, nil, nil)
 
-			arr := extractPrivilegeTipsFromPlan(a.p)
+			arr, err := extractPrivilegeTipsFromPlan(a.p)
+
+			require.NoError(t, err)
 			convertPrivilegeTipsToPrivilege(priv, arr)
 
 			roleIds := []int{
@@ -6695,6 +6699,10 @@ func Test_determineDML(t *testing.T) {
 						tempEntry.privilegeEntryTyp = privilegeEntryTypeGeneral
 						tempEntry.compound = nil
 						makeSql(tempEntry)
+						for _, typ := range []PrivilegeType{PrivilegeTypeTableAll, PrivilegeTypeTableOwnership} {
+							tempEntry.privilegeId = typ
+							makeSql(tempEntry)
+						}
 					}
 				}
 			}
@@ -6734,7 +6742,9 @@ func Test_determineDML(t *testing.T) {
 
 			sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant, nil, nil, nil, roleIdsInMoRoleGrant, rowsOfMoRoleGrant, nil, nil)
 
-			arr := extractPrivilegeTipsFromPlan(a.p)
+			arr, err := extractPrivilegeTipsFromPlan(a.p)
+
+			require.NoError(t, err)
 			convertPrivilegeTipsToPrivilege(priv, arr)
 
 			//role 0 does not have the select
@@ -6788,6 +6798,10 @@ func Test_determineDML(t *testing.T) {
 						tempEntry.privilegeEntryTyp = privilegeEntryTypeGeneral
 						tempEntry.compound = nil
 						makeSql(tempEntry)
+						for _, typ := range []PrivilegeType{PrivilegeTypeTableAll, PrivilegeTypeTableOwnership} {
+							tempEntry.privilegeId = typ
+							makeSql(tempEntry)
+						}
 					}
 				}
 			}
@@ -6832,7 +6846,9 @@ func Test_determineDML(t *testing.T) {
 
 			sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant, nil, nil, nil, roleIdsInMoRoleGrant, rowsOfMoRoleGrant, nil, nil)
 
-			arr := extractPrivilegeTipsFromPlan(a.p)
+			arr, err := extractPrivilegeTipsFromPlan(a.p)
+
+			require.NoError(t, err)
 			convertPrivilegeTipsToPrivilege(priv, arr)
 
 			//role 0,1 does not have the select
@@ -6874,6 +6890,10 @@ func Test_determineDML(t *testing.T) {
 						tempEntry.privilegeEntryTyp = privilegeEntryTypeGeneral
 						tempEntry.compound = nil
 						makeSql(tempEntry)
+						for _, typ := range []PrivilegeType{PrivilegeTypeTableAll, PrivilegeTypeTableOwnership} {
+							tempEntry.privilegeId = typ
+							makeSql(tempEntry)
+						}
 					}
 				}
 			}
@@ -7060,7 +7080,8 @@ func TestExtractPrivilegeTipsFromPlanSkipsInvalidMultiUpdateCtx(t *testing.T) {
 	}
 
 	require.NotPanics(t, func() {
-		arr := extractPrivilegeTipsFromPlan(p)
+		arr, err := extractPrivilegeTipsFromPlan(p)
+		require.NoError(t, err)
 		require.Len(t, arr, 1)
 		require.Equal(t, PrivilegeTypeUpdate, arr[0].typ)
 		require.Equal(t, dbName, arr[0].databaseName)
@@ -7080,7 +7101,7 @@ func TestNamedWindowValidationDependencyRequiresSelectPrivilege(t *testing.T) {
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
 		"select 1 from nation window unused_w as (order by (select r_name from region limit 1))", 1)
 	require.NoError(t, err)
-	queryPlan, err := plan2.BuildPlan(plan2.NewMockCompilerContext(true), stmt, false)
+	queryPlan, err := plan2.BuildPlan(plan2.NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
 	require.NoError(t, err)
 	dependencies := queryPlan.GetQuery().GetCatalogDependencies()
 	require.Len(t, dependencies, 2)
@@ -7159,7 +7180,7 @@ func TestNamedWindowValidationSpecialScansRequireSelectPrivilege(t *testing.T) {
 
 	newCompilerContext := func() *namedWindowAuthorizationCompilerContext {
 		return &namedWindowAuthorizationCompilerContext{
-			MockCompilerContext: plan2.NewMockCompilerContext(true),
+			MockCompilerContext: plan2.NewMockCompilerContext(true, newPlanTestProcess(t)),
 			mongoObject: &plan.ObjectRef{
 				Db: 1, Obj: 2, SchemaName: "mongo_window_auth", ObjName: "events",
 			},
@@ -12096,7 +12117,7 @@ func Test_doDropAccount(t *testing.T) {
 		sql = fmt.Sprintf(getPubInfoSql, 1) + " order by update_time desc, created_time desc"
 		bh.sql2result[sql] = newMrsForSqlForGetPubs([][]interface{}{})
 
-		sql = "select 1 from mo_catalog.mo_columns where att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
+		sql = "select 1 from mo_catalog.mo_columns where account_id = 0 and att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
 		bh.sql2result[sql] = newMrsForSqlForGetSubs([][]interface{}{{1}})
 
 		sql = getSubsSql + " and sub_account_id = 1"
@@ -12330,7 +12351,7 @@ func Test_doDropAccount_InTransaction(t *testing.T) {
 			sql = fmt.Sprintf(getPubInfoSql, 1) + " order by update_time desc, created_time desc"
 			bh.sql2result[sql] = newMrsForSqlForGetPubs([][]interface{}{})
 
-			sql = "select 1 from mo_catalog.mo_columns where att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
+			sql = "select 1 from mo_catalog.mo_columns where account_id = 0 and att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
 			bh.sql2result[sql] = newMrsForSqlForGetSubs([][]interface{}{{1}})
 
 			sql = getSubsSql
@@ -12404,7 +12425,7 @@ func Test_doDropAccount_InTransaction(t *testing.T) {
 			sql = fmt.Sprintf(getPubInfoSql, 1) + " order by update_time desc, created_time desc"
 			bh.sql2result[sql] = newMrsForSqlForGetPubs([][]interface{}{})
 
-			sql = "select 1 from mo_catalog.mo_columns where att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
+			sql = "select 1 from mo_catalog.mo_columns where account_id = 0 and att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
 			bh.sql2result[sql] = newMrsForSqlForGetSubs([][]interface{}{{1}})
 
 			sql = getSubsSql
@@ -12494,7 +12515,7 @@ func Test_doDropAccount_AccountOwnedMetadataCleanupError(t *testing.T) {
 
 	sql = fmt.Sprintf(getPubInfoSql, 1) + " order by update_time desc, created_time desc"
 	bh.sql2result[sql] = newMrsForSqlForGetPubs([][]interface{}{})
-	sql = "select 1 from mo_catalog.mo_columns where att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
+	sql = "select 1 from mo_catalog.mo_columns where account_id = 0 and att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
 	bh.sql2result[sql] = newMrsForSqlForGetSubs([][]interface{}{{1}})
 	sql = getSubsSql + " and sub_account_id = 1"
 	bh.sql2result[sql] = newMrsForSqlForGetSubs([][]interface{}{})
@@ -19282,4 +19303,84 @@ func filterExecutedSQLsForTest(sqls []string, prefix string) []string {
 		}
 	}
 	return result
+}
+
+func TestLogicalViewPrivilegeCoverage(t *testing.T) {
+	step := func(name string, ts int64, tenant uint32) *plan.ViewStep {
+		snapshot := &plan.Snapshot{Tenant: &plan.SnapshotTenant{TenantID: tenant}}
+		if ts != 0 {
+			snapshot.TS = &timestamp.Timestamp{PhysicalTime: ts}
+		}
+		return &plan.ViewStep{DatabaseName: "db", ViewName: name, Snapshot: snapshot}
+	}
+	outer, inner := step("outer", 0, 0), step("inner", 42, 0)
+	otherTime, otherTenant := step("inner", 43, 0), step("inner", 42, 1)
+	otherLogical := step("inner", 42, 0)
+	otherLogical.Snapshot.TS.LogicalTime = 1
+	otherGrant := step("inner", 42, 0)
+	otherGrant.SubscriptionName = "subscription"
+	provenance := step("inner", 42, 0)
+	provenance.Snapshot.ExtraInfo = &plan.SnapshotExtraInfo{Name: "alias"}
+	ref := func(path ...*plan.ViewStep) *plan.ViewReference { return &plan.ViewReference{ViewPath: path} }
+	physical := privilegeTipsArray{{typ: PrivilegeTypeSelect, viewPath: []*plan.ViewStep{outer, inner}}}
+	for _, tc := range []struct {
+		name       string
+		physical   privilegeTipsArray
+		references []*plan.ViewReference
+		want       [][]*plan.ViewStep
+	}{
+		{name: "plain select"},
+		{name: "constant nested", references: []*plan.ViewReference{ref(outer), ref(outer, inner)}, want: [][]*plan.ViewStep{{outer, inner}}},
+		{name: "scan covers complete path", physical: physical, references: []*plan.ViewReference{ref(outer), ref(outer, inner)}},
+		{name: "unscanned sibling", physical: physical, references: []*plan.ViewReference{ref(outer, step("sibling", 0, 0))}, want: [][]*plan.ViewStep{{outer, step("sibling", 0, 0)}}},
+		{name: "distinct outer role path", references: []*plan.ViewReference{ref(outer, inner), ref(step("other", 0, 0), inner)}, want: [][]*plan.ViewStep{{outer, inner}, {step("other", 0, 0), inner}}},
+		{name: "duplicate", references: []*plan.ViewReference{ref(outer), ref(outer)}, want: [][]*plan.ViewStep{{outer}}},
+		{name: "inner timestamp differs", physical: physical, references: []*plan.ViewReference{ref(outer, otherTime)}, want: [][]*plan.ViewStep{{outer, otherTime}}},
+		{name: "inner tenant differs", physical: physical, references: []*plan.ViewReference{ref(outer, otherTenant)}, want: [][]*plan.ViewStep{{outer, otherTenant}}},
+		{name: "inner logical timestamp differs", physical: physical, references: []*plan.ViewReference{ref(outer, otherLogical)}, want: [][]*plan.ViewStep{{outer, otherLogical}}},
+		{name: "grant namespace differs", physical: physical, references: []*plan.ViewReference{ref(outer, otherGrant)}, want: [][]*plan.ViewStep{{outer, otherGrant}}},
+		{name: "snapshot alias is equivalent", physical: physical, references: []*plan.ViewReference{ref(outer, provenance)}},
+		{name: "literal timestamp identifier", references: []*plan.ViewReference{ref(step("v@ts=42", 0, 0))}, want: [][]*plan.ViewStep{{step("v@ts=42", 0, 0)}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			q := &plan.Query{ViewReferences: tc.references}
+			original := plan2.DeepCopyQuery(q)
+			tips, err := appendLogicalViewPrivilegeTips(tc.physical, q)
+			require.NoError(t, err)
+			require.Len(t, tips, len(tc.physical)+len(tc.want))
+			for i, path := range tc.want {
+				tip := tips[len(tc.physical)+i]
+				require.Equal(t, objectTypeView, tip.objType)
+				require.Equal(t, PrivilegeTypeSelect, tip.typ)
+				require.Equal(t, path, tip.viewPath)
+			}
+			require.Equal(t, original.ViewReferences, q.ViewReferences, "authorization must not mutate cached binding contexts")
+		})
+	}
+	for _, reference := range []*plan.ViewReference{nil, {}, ref(nil), ref(&plan.ViewStep{DatabaseName: "db", ViewName: "v"}), ref(&plan.ViewStep{DatabaseName: "db", ViewName: "v", Snapshot: &plan.Snapshot{}})} {
+		_, err := appendLogicalViewPrivilegeTips(physical, &plan.Query{ViewReferences: []*plan.ViewReference{reference}})
+		require.Error(t, err, "malformed logical metadata must not disappear behind physical coverage")
+	}
+}
+
+func TestCompoundObjectPrivilegesDoNotAuthorizeSibling(t *testing.T) {
+	ses := newTestSession(t, gomock.NewController(t))
+	t.Cleanup(ses.Close)
+	ses.SetTenantInfo(getDefaultAccount())
+	cache := ses.GetPrivilegeCache()
+	tips := privilegeTipsArray{
+		{typ: PrivilegeTypeSelect, objType: objectTypeTable, databaseName: "app", tableName: "owned"},
+		{typ: PrivilegeTypeSelect, objType: objectTypeTable, databaseName: "app", tableName: "protected"},
+	}
+	priv := &privilege{objType: objectTypeTable}
+	convertPrivilegeTipsToPrivilege(priv, tips)
+	require.Len(t, priv.entries, 1)
+	cache.add(objectTypeTable, privilegeLevelDatabaseTable, "app", "owned", PrivilegeTypeTableOwnership)
+	allowed, err := checkPrivilegeInCache(t.Context(), ses, priv, true)
+	require.NoError(t, err)
+	require.False(t, allowed)
+	cache.add(objectTypeTable, privilegeLevelDatabaseTable, "app", "protected", PrivilegeTypeTableAll)
+	allowed, err = checkPrivilegeInCache(t.Context(), ses, priv, true)
+	require.NoError(t, err)
+	require.True(t, allowed, "object-level alternatives still authorize each object")
 }

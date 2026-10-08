@@ -26,7 +26,7 @@ import (
 )
 
 func TestLifecycleCleanupRootUsesExistingClusterTenantFilter(t *testing.T) {
-	optimizer := NewMockOptimizer(false)
+	optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 	createPlan, err := buildSingleStmt(
 		optimizer,
 		t,
@@ -64,7 +64,7 @@ func TestLifecycleCleanupRootUsesExistingClusterTenantFilter(t *testing.T) {
 		accountColumn.GetDefault().GetExpr().GetLit().GetU32Val(),
 	)
 
-	optimizer = NewMockOptimizer(false)
+	optimizer = NewMockOptimizer(false, newPlanTestProcess(t))
 	optimizer.ctxt.GetAccountIdFunc = func() (uint32, error) {
 		return 17, nil
 	}
