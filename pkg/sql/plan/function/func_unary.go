@@ -6404,7 +6404,7 @@ func TimestampToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWr
 }
 
 func DateStringToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryStrToFixedWithErrorCheck[types.Timestamp](ivecs, result, proc, length, func(v string) (types.Timestamp, error) {
+	return opUnaryStrToFixedWithErrorCheck[types.Timestamp](ivecs, result, proc, length, func(v string, _ uint64) (types.Timestamp, error) {
 		val, err := types.ParseTimestamp(proc.GetSessionInfo().TimeZone, v, 6)
 		if err != nil {
 			return 0, err
@@ -11341,7 +11341,7 @@ func RemoveFaultPoint(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 		return moerr.NewInvalidArg(proc.Ctx, "RemoveFaultPoint", "not scalar")
 	}
 
-	return opUnaryStrToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v string) (bool, error) {
+	return opUnaryStrToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v string, _ uint64) (bool, error) {
 		_, err = fault.RemoveFaultPoint(proc.Ctx, v)
 		return true, err
 	}, selectList)
