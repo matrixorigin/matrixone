@@ -68,7 +68,7 @@ func benchmarkStringMathOwnerPlan(projects ...*planpb.Expr) *planpb.Plan {
 }
 
 func benchmarkStringMathMixedRolePlan() *planpb.Plan {
-	projects := make([]*planpb.Expr, 128)
+	projects := make([]*planpb.Expr, 128, 133)
 	for i := range projects {
 		projects[i] = benchmarkStringMathIntLiteral(int64(i))
 	}
