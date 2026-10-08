@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -40,4 +41,19 @@ func TestEngineGCSchedulerRejectsCanceledContext(t *testing.T) {
 
 	require.ErrorIs(t, e.StartGCScheduler(ctx), context.Canceled)
 	require.NoError(t, e.Close())
+}
+
+func TestEngineCloseStopsGCSchedulerBeforePushClient(t *testing.T) {
+	e := &Engine{}
+	done := make(chan struct{})
+	var pushClientClosed atomic.Bool
+	e.gcSchedulerCancel = func() {
+		pushClientClosed.Store(e.pClient.closed.Load())
+		close(done)
+	}
+	e.gcSchedulerDone = done
+
+	require.NoError(t, e.Close())
+	require.False(t, pushClientClosed.Load())
+	require.True(t, e.pClient.closed.Load())
 }

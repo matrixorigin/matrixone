@@ -234,6 +234,18 @@ func (e *Engine) Close() error {
 		// resource. A callback must not start work after engine teardown begins.
 		e.dynamicCtx.closed.Store(true)
 
+		// The scheduler reads pClient and snapshotMgr. Stop and join it before
+		// retiring either dependency so a tick already in flight cannot use a
+		// closed resource.
+		e.gcSchedulerMu.Lock()
+		cancel := e.gcSchedulerCancel
+		done := e.gcSchedulerDone
+		e.gcSchedulerMu.Unlock()
+		if cancel != nil {
+			cancel()
+			<-done
+		}
+
 		if err := e.pClient.Close(); err != nil {
 			e.closeErr = err
 		}
@@ -242,15 +254,6 @@ func (e *Engine) Close() error {
 		}
 		if e.snapshotMgr != nil {
 			e.snapshotMgr.Close()
-		}
-
-		e.gcSchedulerMu.Lock()
-		cancel := e.gcSchedulerCancel
-		done := e.gcSchedulerDone
-		e.gcSchedulerMu.Unlock()
-		if cancel != nil {
-			cancel()
-			<-done
 		}
 
 		if e.globalStats != nil {
