@@ -174,7 +174,7 @@ func TestIssue29463PreparedCompositeKeyDomains(t *testing.T) {
 		mustExec(t, ctx, conn, "insert into string_key values(1,'02'),(1,'2'),(1,'3'),(1,'invalid'),(2,'2')")
 		strings, err := conn.PrepareContext(ctx, "select count(*) from string_key where k1=? and k2=?")
 		require.NoError(t, err)
-		defer strings.Close()
+		defer func() { require.NoError(t, strings.Close()) }()
 		var count int
 		strictErr := strings.QueryRowContext(ctx, int64(1), int64(2)).Scan(&count)
 		require.ErrorContains(t, strictErr, `"invalid" is invalid numeric string`,
