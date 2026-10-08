@@ -74,7 +74,7 @@ func TestLoadQuantizeBounds(t *testing.T) {
 	defer func() { runSql = sqlexec.RunSql }()
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 	var tblcfg vectorindex.IndexTableConfig
 
@@ -112,7 +112,7 @@ func TestLoadQuantizeBounds(t *testing.T) {
 
 func TestLoadQuantizeBoundsDirectScanCarriesTypedFilter(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	scanner := &scriptedRelationScanner{t: t}
 	scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
 		require.Equal(t, int32(1), req.PartitionCount)
@@ -137,7 +137,7 @@ func TestLoadQuantizeBoundsDirectScanCarriesTypedFilter(t *testing.T) {
 
 func TestDirectCentroidLoadFeedsRankAndProbeSearch(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	scanner := &scriptedRelationScanner{t: t}
 	scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
 		require.Equal(t, "centroids", req.Table)
@@ -243,7 +243,7 @@ func TestCentroidAndExactSearchHelpersHandleBoundaryStates(t *testing.T) {
 
 func TestIvfflatSearchLifecycleWrappers(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	scanner := &scriptedRelationScanner{t: t}
 	scanner.run = func(sqlexec.RelationScanRequest) executor.Result {
 		return executor.Result{Mp: mp}
@@ -439,7 +439,7 @@ func TestIncludeExactPkSearchAppliesQueryQuantizerAndRestoresDistance(t *testing
 	var capturedSQL string
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
 		capturedSQL = sql
 		bat := batch.NewWithSize(3)

@@ -1456,7 +1456,7 @@ func TestConsumeNextStabilizesSelfAliasedVarlenSources(t *testing.T) {
 func TestConsumeNextReleasesSnapshotOnAllocationFailure(t *testing.T) {
 	mp, err := mpool.NewMPool("fill-next-snapshot-oom", mpool.MB, mpool.NoFixed)
 	require.NoError(t, err)
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	defer proc.Free()
 
 	vec := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
@@ -1486,7 +1486,7 @@ func TestConsumeNextReleasesSnapshotOnAllocationFailure(t *testing.T) {
 func TestConsumeNextReleasesSnapshotOnWriteFailure(t *testing.T) {
 	mp, err := mpool.NewMPool("fill-next-write-error", 0, mpool.NoFixed)
 	require.NoError(t, err)
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	defer proc.Free()
 
 	payload := bytes.Repeat([]byte("b"), types.VarlenaInlineSize+1)

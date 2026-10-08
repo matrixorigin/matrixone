@@ -445,7 +445,7 @@ func BenchmarkHashPartition(b *testing.B) {
 			b.Run(fmt.Sprintf("rows=%d/ndv=%d", rows, ndv), func(b *testing.B) {
 				for i := 0; i < b.N; i++ {
 					mp := mpool.MustNewZero()
-					proc := testutil.NewProcessWithMPool(b, "", mp)
+					proc := testutil.NewProcessWithOwnedMPool(b, "", mp)
 					keys := make([]int32, rows)
 					payload := make([]int64, rows)
 					for row := range keys {
@@ -501,7 +501,7 @@ func BenchmarkWindowPartitionAlgorithms(b *testing.B) {
 
 func runWindowPartitionBenchmark(b *testing.B, rows, ndv, keyCount int, varlen, useHash bool) int64 {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(b, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(b, "", mp)
 	input, specs := makeWindowPartitionBenchmarkInput(b, proc, rows, ndv, keyCount, varlen)
 	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
 	arg := &Partition{OrderBySpecs: specs}

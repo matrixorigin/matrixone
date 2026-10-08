@@ -1426,7 +1426,7 @@ func TestDedupBuildIgnoreRebuildsAfterOwnerReplacement(t *testing.T) {
 func TestBuildHashmapErrorDoesNotLeakIterators(t *testing.T) {
 	hb := newTestHashmapBuilder(t)
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_int32.ToType())}, -1, -1, nil, proc))
 

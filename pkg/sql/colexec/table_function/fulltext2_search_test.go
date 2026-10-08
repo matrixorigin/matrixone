@@ -271,7 +271,7 @@ func TestFulltext2ScoreAlgo(t *testing.T) {
 	mp := mpool.MustNewZero()
 
 	// default (resolve returns nil) → BM25.
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return nil, nil })
 	require.Equal(t, fulltext2.BM25, fulltext2ScoreAlgo(proc))
 
@@ -293,7 +293,7 @@ func TestFulltext2ScoreAlgo(t *testing.T) {
 
 func TestFulltext2SearchStartValidation(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	tf := newFT2TF([]string{"doc_id", "score"}, ft2SearchRets())
 	patVec := vector.NewVec(types.T_varchar.ToType())
 	require.NoError(t, vector.AppendBytes(patVec, []byte("pat"), false, mp))
@@ -345,7 +345,7 @@ func TestFulltext2SearchStartValidation(t *testing.T) {
 // keys/distances are drained into result batches, then an empty batch stops.
 func TestFulltext2SearchCallMaterialized(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	st := &fulltext2SearchState{
 		limit: 10,
@@ -383,7 +383,7 @@ func TestFulltext2SearchCallMaterialized(t *testing.T) {
 // mapped by segPos — the pull-path mirror of the streaming covered consumer, NULL-aware.
 func TestFulltext2SearchCallMaterializedCovered(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	// One include col ("prio" int64): [10, NULL, 30] — placeholder + Nulls flag (the
 	// fillInclude layout). segPos 0 in the FULL include list.
@@ -453,7 +453,7 @@ func TestFulltext2SearchMaterializedAppendError(t *testing.T) {
 	// offHeap and the pool is given a real (2 MiB) cap.
 	mp, err := mpool.NewMPool("ft2_append_fail", 2<<20, mpool.NoFixed)
 	require.NoError(t, err)
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	st := &fulltext2SearchState{limit: 10}
 	st.batch = batch.NewWithSize(2)
@@ -501,7 +501,7 @@ func TestFulltext2SearchMaterializedAppendError(t *testing.T) {
 // streamCh are decoded via the box-free ColumnBuffer, and channel close surfaces errCh.
 func TestFulltext2SearchCallStreaming(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	newState := func() *fulltext2SearchState {
 		st := &fulltext2SearchState{streaming: true}
@@ -557,7 +557,7 @@ func TestFulltext2SearchCallStreaming(t *testing.T) {
 // preserving NULLs. Mirrors what start() builds for `SELECT id, tag ... covered`.
 func TestFulltext2SearchCallStreamingCovered(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	st := &fulltext2SearchState{streaming: true}
 	st.batch = batch.NewWithSize(3)
@@ -627,7 +627,7 @@ func stubTailSpansSchema(t *testing.T, spans bool) {
 // emitProbeTail pages one streamed result into u.batch as (doc_id=pk, score=0), then ends on close.
 func TestFulltext2SearchProbeTailStreams(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	stubTailSpansSchema(t, false) // single schema version in (searched, S] -> tail, not fallback
 
 	orig := ft2RunStreamingSql
@@ -676,7 +676,7 @@ func TestFulltext2SearchProbeTailStreams(t *testing.T) {
 // every row the read sees -- start no stream, emit nothing, run no tail query.
 func TestFulltext2SearchProbeTailCaughtUp(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	orig := ft2RunStreamingSql
 	defer func() { ft2RunStreamingSql = orig }()
@@ -702,7 +702,7 @@ func TestFulltext2SearchProbeTailCaughtUp(t *testing.T) {
 // skip it -- a physical-only `searched >= bar` compare would drop the (P, L) row at the mandatory join.
 func TestFulltext2SearchProbeTailLogicalBoundary(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	stubTailSpansSchema(t, false) // single schema version -> the behind branch runs the tail
 
 	orig := ft2RunStreamingSql
@@ -730,7 +730,7 @@ func TestFulltext2SearchProbeTailLogicalBoundary(t *testing.T) {
 // so the operator falls back to a full pk scan of the source (SELECT <pk> FROM <db>.<src>, no WHERE).
 func TestFulltext2SearchProbeTailNewerFallback(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	orig := ft2RunStreamingSql
 	defer func() { ft2RunStreamingSql = orig }()
@@ -761,7 +761,7 @@ func TestFulltext2SearchProbeTailNewerFallback(t *testing.T) {
 // discriminating: without the tie fallback the single-schema window would run the tail.
 func TestFulltext2SearchProbeTailPhysicalTieFallback(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	stubTailSpansSchema(t, false)
 
 	orig := ft2RunStreamingSql
@@ -787,7 +787,7 @@ func TestFulltext2SearchProbeTailPhysicalTieFallback(t *testing.T) {
 // table_changes cannot span the window -- fall back to a full pk scan.
 func TestFulltext2SearchProbeTailSchemaSpanFallback(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	stubTailSpansSchema(t, true) // a schema-version change sits in the gap
 
 	orig := ft2RunStreamingSql

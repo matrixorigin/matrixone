@@ -181,7 +181,7 @@ func TestSqlProcessExecutionIdentityOverrideFromProcess(t *testing.T) {
 func TestSqlTxnError(t *testing.T) {
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := NewSqlProcess(proc)
 	assert.Panics(t, func() {
 		RunTxn(sqlproc, func(exec executor.TxnExecutor) error {
@@ -202,7 +202,7 @@ func TestSqlTxn(t *testing.T) {
 	moruntime.SetupServiceBasedRuntime(uuid, rt)
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	proc.Base.SessionInfo.Buf = buffer.New()
 	proc.Ctx = context.Background()
 	proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(0))

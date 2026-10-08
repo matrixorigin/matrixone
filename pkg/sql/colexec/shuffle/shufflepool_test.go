@@ -195,7 +195,7 @@ func TestShufflePoolBoundsReadyBatchesAndResumes(t *testing.T) {
 
 func TestShufflePoolReservesReadyCreditForProvenanceChange(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	defer proc.Free()
 	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
 	require.NoError(t, err)
@@ -246,7 +246,7 @@ func TestShufflePoolReservesReadyCreditForProvenanceChange(t *testing.T) {
 
 func TestShufflePoolKeepsIndependentProducerTails(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	defer proc.Free()
 	registry, err := mpool.NewAllocationAccountRegistry(2, 64)
 	require.NoError(t, err)
@@ -904,7 +904,7 @@ func BenchmarkShufflePoolProducerTails(b *testing.B) {
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			mp := mpool.MustNewZero()
-			proc := testutil.NewProcessWithMPool(b, "", mp)
+			proc := testutil.NewProcessWithOwnedMPool(b, "", mp)
 			registry, err := mpool.NewAllocationAccountRegistry(
 				producerCount, 1<<20,
 			)

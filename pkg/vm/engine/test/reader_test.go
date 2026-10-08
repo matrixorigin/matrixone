@@ -1339,7 +1339,7 @@ func Test_ShardingLocalReader(t *testing.T) {
 
 func Test_SimpleReader(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
-	proc := testutil3.NewProcessWithMPool(t, "", mp)
+	proc := testutil3.NewProcessWithOwnedMPool(t, "", mp)
 	pkType := types.T_int32.ToType()
 	bat1 := readutil.NewCNTombstoneBatch(
 		&pkType,

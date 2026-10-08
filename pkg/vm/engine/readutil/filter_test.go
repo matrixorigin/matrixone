@@ -311,7 +311,7 @@ func foldExpressionForTest(t *testing.T, proc *process.Process, expr *plan.Expr)
 
 func Test_ConstructBasePKFilter(t *testing.T) {
 	m := mpool.MustNew(t.Name())
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	var needFreeVecs []*vector.Vector
 	var exes []colexec.ExpressionExecutor
 	t.Cleanup(func() {
@@ -1114,7 +1114,7 @@ func encodeIntToUUID(x int32) types.Uuid {
 
 func TestConstructBasePKFilterWithOr(t *testing.T) {
 	m := mpool.MustNew(t.Name())
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 
 	tableDef := &plan.TableDef{
 		Name: "test",
@@ -3897,7 +3897,7 @@ func TestMergedInFilterCleanupHandoff(t *testing.T) {
 
 func TestConstructBasePKFilterOrFallbackRetainsMergedDisjunct(t *testing.T) {
 	mp := mpool.MustNew(t.Name())
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	t.Cleanup(func() {
 		proc.GetFileService().Close(proc.Ctx)
 		proc.Free()
@@ -4196,7 +4196,7 @@ func TestCompileFilterExpr_PrefixInRangeAllFlags(t *testing.T) {
 			plan2.MakePlan2Uint8ConstExprWithType(tc.flag),
 		})
 
-		proc := testutil.NewProcessWithMPool(t, "", m)
+		proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 		var exes []colexec.ExpressionExecutor
 		plan2.ReplaceFoldExpr(proc, expr, &exes)
 		plan2.EvalFoldExpr(proc, expr, &exes)
@@ -4369,7 +4369,7 @@ func TestCompileFilterExprsPreservesSupportedConjuncts(t *testing.T) {
 		MakeColExprForTest(0, types.T_int64, "id"),
 	})
 	mp := mpool.MustNew(t.Name())
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	var executors []colexec.ExpressionExecutor
 	plan2.ReplaceFoldExpr(proc, supported, &executors)
 	plan2.EvalFoldExpr(proc, supported, &executors)
@@ -4438,7 +4438,7 @@ func TestCompileFilterExpr_Between(t *testing.T) {
 	})
 
 	m := mpool.MustNew(t.Name())
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	var exes []colexec.ExpressionExecutor
 	plan2.ReplaceFoldExpr(proc, expr, &exes)
 	plan2.EvalFoldExpr(proc, expr, &exes)
@@ -4499,7 +4499,7 @@ func TestCompileFilterExpr_InRange(t *testing.T) {
 			plan2.MakePlan2Uint8ConstExprWithType(tc.flag),
 		})
 
-		proc := testutil.NewProcessWithMPool(t, "", m)
+		proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 		var exes []colexec.ExpressionExecutor
 		plan2.ReplaceFoldExpr(proc, expr, &exes)
 		plan2.EvalFoldExpr(proc, expr, &exes)
@@ -4549,7 +4549,7 @@ func TestConstructBasePKFilter_InvalidRangeFlagNotValid(t *testing.T) {
 				plan2.MakePlan2Uint8ConstExprWithType(99), // invalid
 			})
 
-			proc := testutil.NewProcessWithMPool(t, "", m)
+			proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 			var exes []colexec.ExpressionExecutor
 			plan2.ReplaceFoldExpr(proc, expr, &exes)
 			plan2.EvalFoldExpr(proc, expr, &exes)
@@ -4599,7 +4599,7 @@ func TestCompileFilterExpr_PrefixSortedSeekOps(t *testing.T) {
 
 	for name, expr := range exprs {
 		t.Run(name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", m)
+			proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 			var exes []colexec.ExpressionExecutor
 			plan2.ReplaceFoldExpr(proc, expr, &exes)
 			plan2.EvalFoldExpr(proc, expr, &exes)

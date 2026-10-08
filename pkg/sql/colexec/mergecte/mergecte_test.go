@@ -437,7 +437,7 @@ func TestMergeCTECopyAndReconcileFailuresAreAtomic(t *testing.T) {
 	t.Run("copy failure", func(t *testing.T) {
 		limited, err := mpool.NewMPool(t.Name(), 1<<20, mpool.NoFixed)
 		require.NoError(t, err)
-		proc := testutil.NewProcessWithMPool(t, "", limited)
+		proc := testutil.NewProcessWithOwnedMPool(t, "", limited)
 		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return int64(0), nil })
 		arg := &MergeCTE{NodeCnt: 1}
 		require.NoError(t, arg.Prepare(proc))

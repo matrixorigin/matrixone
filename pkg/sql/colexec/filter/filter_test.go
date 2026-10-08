@@ -494,7 +494,7 @@ func MakeFilterMockBatchs(mp *mpool.MPool) *batch.Batch {
 
 func TestIssue18454(t *testing.T) {
 	mp := mpool.MustNew("")
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	proc.SetBaseProcessRunningStatus(true)
 	newParamForFoldCase2(proc)
 	expr := generateFoldCase2()
@@ -529,7 +529,7 @@ func TestIssue18454(t *testing.T) {
 
 func BenchmarkPlanConstandFold1(b *testing.B) {
 	mp := mpool.MustNew("test")
-	proc := testutil.NewProcessWithMPool(b, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(b, "", mp)
 	expr := generateFoldCase1()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -544,7 +544,7 @@ func BenchmarkPlanConstandFold1(b *testing.B) {
 
 func BenchmarkExecutorConstandFold1(b *testing.B) {
 	mp := mpool.MustNew("")
-	proc := testutil.NewProcessWithMPool(b, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(b, "", mp)
 	expr := generateFoldCase1()
 	proc.SetBaseProcessRunningStatus(true)
 	b.ResetTimer()
@@ -558,7 +558,7 @@ func BenchmarkExecutorConstandFold1(b *testing.B) {
 
 func BenchmarkExecutorConstandFold2_Reuse(b *testing.B) {
 	mp := mpool.MustNew("test")
-	proc := testutil.NewProcessWithMPool(b, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(b, "", mp)
 	proc.SetBaseProcessRunningStatus(true)
 	newParamForFoldCase2(proc)
 	expr := generateFoldCase2()
@@ -582,7 +582,7 @@ func BenchmarkExecutorConstandFold2_Reuse(b *testing.B) {
 
 func BenchmarkExecutorConstandFold2_NoFree(b *testing.B) {
 	mp := mpool.MustNew("test")
-	proc := testutil.NewProcessWithMPool(b, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(b, "", mp)
 	newParamForFoldCase2(proc)
 	expr := generateFoldCase2()
 	proc.SetBaseProcessRunningStatus(true)
@@ -835,7 +835,7 @@ func TestConstantTranspose(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
 
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	int32Type := types.T_int32.ToType()
 	boolType := types.T_bool.ToType()
 

@@ -3347,7 +3347,7 @@ func TestWindowResetReleasesInheritedAccountedBuffers(t *testing.T) {
 	}
 	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
 	arg.AppendChild(child)
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	require.NoError(t, arg.Prepare(proc))
 	result, err := arg.Call(proc)
 	require.NoError(t, err)
@@ -4724,7 +4724,7 @@ func TestWindowTimestampRangeUsesSessionTimeZone(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
-			proc := testutil.NewProcessWithMPool(t, "", mp)
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 			defer func() {
 				proc.Free()
 				require.Equal(t, int64(0), mp.CurrNB())
@@ -4899,7 +4899,7 @@ func TestWindowTimestampRangeFoldMembership(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
-			proc := testutil.NewProcessWithMPool(t, "", mp)
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 			defer func() {
 				proc.Free()
 				require.Equal(t, int64(0), mp.CurrNB())
@@ -4984,7 +4984,7 @@ func TestWindowTimestampRangeFoldMembershipDetectsSparseTransitions(t *testing.T
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
-			proc := testutil.NewProcessWithMPool(t, "", mp)
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 			defer func() {
 				proc.Free()
 				require.Zero(t, mp.CurrNB())
@@ -5020,7 +5020,7 @@ func TestWindowTimestampRangeFoldMembershipDetectsSparseTransitions(t *testing.T
 
 func TestWindowTimestampRangeFoldMembershipRefreshesMaterializedOrderVector(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	defer func() {
 		proc.Free()
 		require.Zero(t, mp.CurrNB())
@@ -5096,7 +5096,7 @@ func TestWindowTimestampRangeFoldMembershipRefreshesMaterializedOrderVector(t *t
 
 func TestWindowTimestampRangeFoldIndexHonorsCancellation(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	defer func() {
 		proc.Free()
 		require.Zero(t, mp.CurrNB())
@@ -5132,7 +5132,7 @@ func TestWindowTimestampRangeFoldIndexHonorsCancellation(t *testing.T) {
 
 func TestWindowTimestampRangeFoldAggregateMembership(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	defer func() {
 		proc.Free()
 		require.Equal(t, int64(0), mp.CurrNB())
@@ -5194,7 +5194,7 @@ func TestWindowTimestampRangeFoldAggregateMembership(t *testing.T) {
 
 func TestWindowTimestampRangeFoldAggregateMembershipHandlesConstOrderVector(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	defer func() {
 		proc.Free()
 		require.Zero(t, mp.CurrNB())
@@ -5324,7 +5324,7 @@ func TestWindowTimestampRangeFoldAggregateMembershipPreservesUnboundedNullPeers(
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
-			proc := testutil.NewProcessWithMPool(t, "", mp)
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 			defer func() {
 				proc.Free()
 				require.Zero(t, mp.CurrNB())
@@ -5424,7 +5424,7 @@ func TestWindowTimestampRangeFoldAggregateMembershipSmallPartitions(t *testing.T
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
-			proc := testutil.NewProcessWithMPool(t, "", mp)
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 			defer func() {
 				proc.Free()
 				require.Zero(t, mp.CurrNB())
@@ -5479,7 +5479,7 @@ func TestWindowTimestampRangeFoldAggregateMembershipAfterOrderMaterialization(t 
 	}
 
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	defer func() {
 		proc.Free()
 		require.Zero(t, mp.CurrNB())
@@ -5531,7 +5531,7 @@ func TestWindowTimestampRangeFoldAggregateMembershipAfterOrderMaterialization(t 
 
 func TestWindowTimestampRangeFoldAggregateMembershipPreservesMultiKeyOrder(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	defer func() {
 		proc.Free()
 		require.Zero(t, mp.CurrNB())
@@ -5624,7 +5624,7 @@ func TestWindowTimestampRangeFoldValueMembership(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
-			proc := testutil.NewProcessWithMPool(t, "", mp)
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 			defer func() {
 				proc.Free()
 				require.Zero(t, mp.CurrNB())
@@ -5691,7 +5691,7 @@ func BenchmarkWindowTimestampRangeFoldUnboundedValue(b *testing.B) {
 	for _, size := range []int{1000, 2000, 4000} {
 		b.Run(fmt.Sprintf("rows=%d", size), func(b *testing.B) {
 			mp := mpool.MustNewZero()
-			proc := testutil.NewProcessWithMPool(b, "", mp)
+			proc := testutil.NewProcessWithOwnedMPool(b, "", mp)
 			defer func() {
 				proc.Free()
 				require.Zero(b, mp.CurrNB())

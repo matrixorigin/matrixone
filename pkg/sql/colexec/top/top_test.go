@@ -464,7 +464,7 @@ func testTopSpillOutputUsesRowAndByteBounds(t *testing.T, limit int, orderedOutp
 
 func TestTopSpillPrepareParamMetadata(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	arg := &Top{
 		Limit: plan2.MakePlan2Uint64ConstExprWithType(topSpillThreshold + 1),
 		Fs: []*plan.OrderBySpec{{

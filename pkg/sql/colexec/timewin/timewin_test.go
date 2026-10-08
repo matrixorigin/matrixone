@@ -180,7 +180,7 @@ func TestIntervalResultPreservesAccountedInputVectors(t *testing.T) {
 		i:      1,
 		aggVec: [][][]*vector.Vector{{{value}}},
 	}
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	require.NoError(t, ctr.calResForInterval(&TimeWin{}, proc))
 	require.Same(t, value, ctr.bat.Vecs[0])
 	require.Equal(t, []int64{42}, vector.MustFixedColWithTypeCheck[int64](ctr.bat.Vecs[0]))
@@ -216,7 +216,7 @@ func TestTimeWinResetReleasesInheritedAccountedInput(t *testing.T) {
 	input.SetVector(1, value)
 	input.SetRowCount(1)
 
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	arg := &TimeWin{
 		Types:    []types.Type{types.T_int32.ToType()},
 		Aggs:     []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(function.AggSumOverloadID, false, []*plan.Expr{newExpression(1)}, nil)},

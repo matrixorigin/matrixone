@@ -270,7 +270,7 @@ func TestFuzzyRuntimeFilterCopyFailureFailsOpen(t *testing.T) {
 		mpool.NoFixed,
 	)
 	require.NoError(t, err)
-	proc := testutil.NewProcessWithMPool(t, "", limited)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", limited)
 	proc.SetMessageBoard(message.NewMessageBoard())
 	arg := newArgument(typ)
 	arg.N = 1
@@ -333,7 +333,7 @@ func TestFuzzyRuntimeFilterClosureFailureFailsOpen(t *testing.T) {
 		mpool.NoFixed,
 	)
 	require.NoError(t, err)
-	proc := testutil.NewProcessWithMPool(t, "", limited)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", limited)
 	proc.SetMessageBoard(message.NewMessageBoard())
 	arg := newArgument(typ)
 	arg.N = 1

@@ -1672,7 +1672,7 @@ func TestRangeShuffleJoinSingleBucketSkewedBatch(t *testing.T) {
 	require.Nil(t, arg.ShuffleRangeInt64)
 
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	input := batch.NewWithSize(1)
 	input.Vecs[0] = testutil.MakeScalarInt64(key, rowCount, mp)
 	input.SetRowCount(rowCount)

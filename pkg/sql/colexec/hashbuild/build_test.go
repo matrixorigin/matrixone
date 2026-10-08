@@ -1284,7 +1284,7 @@ func TestHashBuildFloatRuntimeFilterClosesSignedZero(t *testing.T) {
 func TestHashBuildFloatRuntimeFilterAllocationFailureFallsBackToPass(t *testing.T) {
 	mp, err := mpool.NewMPool(t.Name(), 1<<20, mpool.NoFixed)
 	require.NoError(t, err)
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	proc.SetMessageBoard(message.NewMessageBoard())
 
 	typ := types.T_float32.ToType()
@@ -1854,7 +1854,7 @@ func makeSerializedRuntimeFilterSpec(
 func TestHashBuildSerializedRuntimeFilterCastAllocationFailureFallsBackToPass(t *testing.T) {
 	mp, err := mpool.NewMPool(t.Name(), 1<<20, mpool.NoFixed)
 	require.NoError(t, err)
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	proc.SetMessageBoard(message.NewMessageBoard())
 
 	sourceType := types.T_int64.ToType()

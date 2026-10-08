@@ -324,7 +324,7 @@ func TestWaitUniqueJoinKeysWithStatus(t *testing.T) {
 
 func TestBuildExactPkFilter(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	ctx := context.Background()
 
 	t.Run("int64 values", func(t *testing.T) {
@@ -416,7 +416,7 @@ func TestAppendHex(t *testing.T) {
 
 func TestAppendVectorSQLLiteral(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	ctx := context.Background()
 
 	t.Run("bool", func(t *testing.T) {

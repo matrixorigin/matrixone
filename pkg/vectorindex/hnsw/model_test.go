@@ -157,7 +157,7 @@ func TestModelStreamError(t *testing.T) {
 	var err error
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	// stub runSql function
@@ -271,7 +271,7 @@ func TestModelFromBuffer(t *testing.T) {
 	fp32a := []float32{0, 1, 2}
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	// stub runSql function
@@ -317,7 +317,7 @@ func TestModelFromFileViewTrue(t *testing.T) {
 	fp32a := []float32{0, 1, 2}
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	// stub runSql function
@@ -364,7 +364,7 @@ func TestModel(t *testing.T) {
 	v1000 := []float32{1000, 2000, 3000}
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	// stub runSql function
@@ -571,7 +571,7 @@ func TestNewHnswModelForBuild(t *testing.T) {
 // TestLoadIndex_EmptyChecksum covers the "checksum is empty" guard (lines 657-660).
 func TestLoadIndex_EmptyChecksum(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
@@ -589,7 +589,7 @@ func TestLoadIndex_EmptyChecksum(t *testing.T) {
 // TestLoadIndex_NewlyCreated covers the FileSize==0 + Path=="" → initIndex path (lines 652-655).
 func TestLoadIndex_NewlyCreated(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
@@ -631,7 +631,7 @@ func TestSearch_WrongDimension(t *testing.T) {
 // must be drained and closed after an error cancels the producer.
 func TestStreamingDrain(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	runSql = mock_runSql
@@ -672,7 +672,7 @@ func TestStreamingDrain(t *testing.T) {
 
 func TestTempFileCleanup_ChecksumMismatch(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	// Good streaming so the file is written, but we corrupt the checksum.
@@ -719,7 +719,7 @@ func TestTempFileCleanup_ChecksumMismatch(t *testing.T) {
 // valid usearch index (e.g. disk corruption, truncated write).
 func TestCorruptedIndexFile(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
