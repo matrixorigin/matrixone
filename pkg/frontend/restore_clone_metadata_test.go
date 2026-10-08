@@ -57,6 +57,15 @@ func TestCatalogRestoreMetadataOwnership(t *testing.T) {
 						{"mo_user_defined_function", "BASE TABLE", catalog.SystemOrdinaryRel, ""},
 						{"mo_tables", "BASE TABLE", catalog.SystemOrdinaryRel, ""},
 					})
+					// Routine-catalog restore obtains the source schema before copying
+					// rows. The three restore families use slightly different SHOW
+					// CREATE forms, so provide the historical DDL for each form.
+					sourceDDL := newMrsForRestoreStringRows([]string{"table", "create"}, [][]interface{}{
+						{"mo_user_defined_function", MoCatalogMoUserDefinedFunctionDDL},
+					})
+					bh.sql2result[fmt.Sprintf("show create table %s.%s {MO_TS = 123}",
+						quoteIdentifierForSQL(moCatalog), quoteIdentifierForSQL("mo_user_defined_function"))] = sourceDDL
+					bh.sql2result[showCreateTableSQL(moCatalog, "mo_user_defined_function")+" {MO_TS = 123}"] = sourceDDL
 					if scenario == "enumeration failure" {
 						failure := moerr.NewInternalErrorNoCtx("catalog enumeration failed")
 						bh.sql2err[list] = failure
@@ -78,6 +87,12 @@ func TestCatalogRestoreMetadataOwnership(t *testing.T) {
 						require.NoError(t, family.restore(ctx, bh))
 						require.Contains(t, bh.executedSQLs, clone)
 						require.Contains(t, bh.executedSQLs, MoCatalogMoUserDefinedFunctionDDL)
+						sourceQuery := showCreateTableSQL(moCatalog, "mo_user_defined_function") + " {MO_TS = 123}"
+						if family.name == "snapshot" {
+							sourceQuery = fmt.Sprintf("show create table %s.%s {MO_TS = 123}",
+								quoteIdentifierForSQL(moCatalog), quoteIdentifierForSQL("mo_user_defined_function"))
+						}
+						require.Contains(t, bh.executedSQLs, sourceQuery)
 						require.NotContains(t, bh.executedSQLs, restoreTableDataByTsSQL(moCatalog, "mo_tables", 123))
 					} else {
 						failureSQL := clone
@@ -93,7 +108,7 @@ func TestCatalogRestoreMetadataOwnership(t *testing.T) {
 							require.Equal(t, []string{list, failureSQL}, bh.executedSQLs)
 						}
 					}
-					if scenario != "sequence read failure" {
+					if scenario != "sequence read failure" && scenario != "ordinary and UDF" {
 						for _, sql := range bh.executedSQLs {
 							require.NotContains(t, sql, "show create")
 						}
