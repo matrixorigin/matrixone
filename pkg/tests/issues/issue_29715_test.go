@@ -18,11 +18,13 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -30,6 +32,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	pblock "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/status"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/stretchr/testify/require"
 )
@@ -69,7 +73,7 @@ func TestIssue29715ODKUConcurrentDropIndex(t *testing.T) {
 				const odku = "insert into issue_29715.t values (1,1,1) on duplicate key update v=v+1"
 				const drop = "alter table issue_29715.t drop index uk"
 				if terminal == "late admission" {
-					testIssue29715LateAdmission(t, ctx, writer, ddlDB, writerCN.ServiceID(), odku, drop)
+					testIssue29715LateAdmission(t, ctx, writer, writerDB, ddlDB, writerCN, odku, drop)
 				} else {
 					var tableID uint64
 					require.NoError(t, writerDB.QueryRowContext(ctx,
@@ -163,16 +167,58 @@ func issue29715BaseMetadataHeld(services []lockservice.LockService, txnID, key [
 	return found
 }
 
-func testIssue29715LateAdmission(t *testing.T, ctx context.Context, writer *sql.Conn, ddlDB *sql.DB, sid, odku, drop string) {
+func testIssue29715LateAdmission(t *testing.T, ctx context.Context, writer *sql.Conn, writerDB, ddlDB *sql.DB, writerCN embed.ServiceOperator, odku, drop string) {
 	t.Helper()
+	sid := writerCN.ServiceID()
+	provider, ok := writerCN.RawService().(interface {
+		SessionMgr() *queryservice.SessionManager
+	})
+	require.True(t, ok)
+	sessionManager := provider.SessionMgr()
+	require.NotNil(t, sessionManager)
+	var writerConnectionID uint32
+	require.NoError(t, writer.QueryRowContext(ctx, "select connection_id()").Scan(&writerConnectionID))
+
+	execSQLRequire(t, ctx, writerDB, "create table issue_29715.probe(id int primary key, v int)")
+	defer func() {
+		cleanupCtx, stop := context.WithTimeout(context.Background(), 10*time.Second)
+		defer stop()
+		execSQLMaybe(t, cleanupCtx, writerDB, "drop table if exists issue_29715.probe")
+	}()
+	probe, err := writerDB.Conn(ctx)
+	require.NoError(t, err)
+	defer probe.Close()
+	var probeConnectionID uint32
+	require.NoError(t, probe.QueryRowContext(ctx, "select connection_id()").Scan(&probeConnectionID))
+	require.NotEqual(t, writerConnectionID, probeConnectionID)
+	require.NoError(t, execIssue27487(ctx, probe, "begin"))
+	defer func() {
+		cleanupCtx, stop := context.WithTimeout(context.Background(), 10*time.Second)
+		defer stop()
+		_, _ = probe.ExecContext(cleanupCtx, "rollback")
+	}()
+	execProbe := func(statement string) {
+		probeCtx, stop := context.WithTimeout(ctx, 10*time.Second)
+		defer stop()
+		require.NoError(t, execIssue27487(probeCtx, probe, statement))
+	}
+
 	paused, release := make(chan struct{}), make(chan struct{})
 	var first atomic.Bool
 	var releaseOnce sync.Once
 	var admissions atomic.Int32
+	var probeAdmissions atomic.Int32
 	var owner atomic.Value
 	tc := moruntime.MustGetTestingContext(sid)
 	tc.SetBeforeLockFunc(func(txnID []byte, tableID uint64) {
-		if tableID == catalog.MO_TABLES_ID && first.CompareAndSwap(false, true) {
+		if tableID != catalog.MO_TABLES_ID {
+			return
+		}
+		sessions := sessionManager.GetAllSessions()
+		if issue29715TxnBelongsToConnection(sessions, sid, probeConnectionID, txnID) {
+			probeAdmissions.Add(1)
+		}
+		if issue29715TxnBelongsToConnection(sessions, sid, writerConnectionID, txnID) && first.CompareAndSwap(false, true) {
 			owner.Store(bytes.Clone(txnID))
 			close(paused)
 			select {
@@ -193,13 +239,12 @@ func testIssue29715LateAdmission(t *testing.T, ctx context.Context, writer *sql.
 	defer tc.SetAdjustLockResultFunc(nil)
 	workCtx, stop := context.WithCancel(ctx)
 	defer stop()
-	done := make(chan error, 1)
-	go func() { done <- execIssue27487(workCtx, writer, odku) }()
+	var done chan error
 	joined := false
 	defer func() {
 		stop()
 		releaseOnce.Do(func() { close(release) })
-		if !joined {
+		if done != nil && !joined {
 			select {
 			case <-done:
 			case <-time.After(10 * time.Second):
@@ -207,6 +252,20 @@ func testIssue29715LateAdmission(t *testing.T, ctx context.Context, writer *sql.
 			}
 		}
 	}()
+	// A real CN0 transaction reaches the same hooks first, but must neither
+	// capture the writer barrier nor contribute to its retry count.
+	execProbe("insert into issue_29715.probe values (1,0)")
+	execProbe("update issue_29715.probe set v=v+1 where id=1")
+	require.GreaterOrEqual(t, probeAdmissions.Load(), int32(2))
+	require.Nil(t, owner.Load())
+	require.Zero(t, admissions.Load())
+	select {
+	case <-paused:
+		t.Fatal("unrelated transaction captured the writer barrier")
+	default:
+	}
+	done = make(chan error, 1)
+	go func() { done <- execIssue27487(workCtx, writer, odku) }()
 	select {
 	case <-paused:
 	case err := <-done:
@@ -215,6 +274,14 @@ func testIssue29715LateAdmission(t *testing.T, ctx context.Context, writer *sql.
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}
+	probeBefore := probeAdmissions.Load()
+	execProbe("update issue_29715.probe set v=v+1 where id=1")
+	require.Greater(t, probeAdmissions.Load(), probeBefore)
+	require.Zero(t, admissions.Load(), "only the paused writer may contribute admissions")
+	execProbe("commit")
+	var probeValue int
+	require.NoError(t, probe.QueryRowContext(ctx, "select v from issue_29715.probe where id=1").Scan(&probeValue))
+	require.Equal(t, 2, probeValue)
 	execSQLRequire(t, ctx, ddlDB, drop)
 	releaseOnce.Do(func() { close(release) })
 	select {
@@ -226,4 +293,70 @@ func testIssue29715LateAdmission(t *testing.T, ctx context.Context, writer *sql.
 	}
 	require.GreaterOrEqual(t, admissions.Load(), int32(2),
 		"stale metadata admission must refresh and rebuild before the second admission")
+}
+
+// Project only the active callback actor's identity. Full StatusSession reads
+// unrelated mutable statement fields; the transaction UUID getter is locked.
+func issue29715TxnBelongsToConnection(sessions []queryservice.Session, sid string, connectionID uint32, txnID []byte) bool {
+	var identities []*status.Session
+	for _, session := range sessions {
+		identity, ok := session.(interface {
+			GetTxnId() uuid.UUID
+			GetConnectionID() uint32
+			GetService() string
+		})
+		if !ok {
+			continue
+		}
+		id := identity.GetTxnId()
+		if id == (uuid.UUID{}) || !bytes.Equal(id[:], txnID) {
+			continue
+		}
+		identities = append(identities, &status.Session{
+			NodeID: identity.GetService(),
+			ConnID: identity.GetConnectionID(),
+			TxnID:  hex.EncodeToString(id[:]),
+		})
+	}
+	id, err := issue26068SessionTxnID(identities, sid, connectionID)
+	return err == nil && bytes.Equal(id, txnID)
+}
+
+func TestIssue29715TxnBelongsToConnection(t *testing.T) {
+	actor := &issue29715IdentitySession{txnID: uuid.UUID{1}, sid: "cn0", connectionID: 7}
+	sessions := []queryservice.Session{
+		&issue29715IdentitySession{},                    // idle; connection getters must not be called
+		&issue29715IdentitySession{txnID: uuid.UUID{2}}, // another active transaction
+		actor,
+	}
+	require.True(t, issue29715TxnBelongsToConnection(sessions, "cn0", 7, actor.txnID[:]))
+	require.False(t, issue29715TxnBelongsToConnection(sessions, "cn1", 7, actor.txnID[:]))
+	require.False(t, issue29715TxnBelongsToConnection(sessions, "cn0", 8, actor.txnID[:]))
+	oldID := actor.txnID
+	actor.txnID = uuid.UUID{3}
+	require.False(t, issue29715TxnBelongsToConnection(sessions, "cn0", 7, oldID[:]))
+	require.True(t, issue29715TxnBelongsToConnection(sessions, "cn0", 7, actor.txnID[:]))
+}
+
+type issue29715IdentitySession struct {
+	queryservice.Session
+	txnID        uuid.UUID
+	sid          string
+	connectionID uint32
+}
+
+func (s *issue29715IdentitySession) GetTxnId() uuid.UUID { return s.txnID }
+
+func (s *issue29715IdentitySession) GetConnectionID() uint32 {
+	if s.connectionID == 0 {
+		panic("connection identity read for unrelated session")
+	}
+	return s.connectionID
+}
+
+func (s *issue29715IdentitySession) GetService() string {
+	if s.sid == "" {
+		panic("service identity read for unrelated session")
+	}
+	return s.sid
 }
