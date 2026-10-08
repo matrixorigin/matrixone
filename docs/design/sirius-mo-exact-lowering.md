@@ -203,11 +203,22 @@ is an acceptable substitute. D remains dependent on merged and validated C.
 The user approved the prerequisite fix PRs on 2026-10-09. Importer
 [duckdb-substrait #5](https://github.com/matrixorigin/duckdb-substrait/pull/5)
 adds a query-scoped opaque-carrier policy and bounds both root-name consumers;
-it is ready for review. The Sirius callback and width-preserving following-column
+it is ready for review with distribution CI limits recorded. The Sirius callback and width-preserving following-column
 regression are prepared in draft
 [Sirius #28](https://github.com/matrixorigin/sirius/pull/28). Its importer pin
 remains at the prior merged revision until #5 merges. Joint development binding
-validation passes 999 assertions in 84 cases, including 147 assertions in three
+validation passes 1009 assertions in 84 cases, including 157 assertions in three
 canonical importer cases. Pinned changed-file Sirius hooks pass. These results
 are not full C native/public acceptance or proof that the draft builds against
 its old importer pin. Merge and pin dependencies in order before C delivery.
+CI found an overly strict trailing cursor check; corrected importer head
+`6693c3a4d779fb0e15fa07e4ce4166f0572f3952` retains legacy final-STRUCT
+headings and checks every actual name read. Its independent value/name regression
+passes. Corrected distribution CI has seven failures: the clean base's known
+STRUCT field-selection failure/crash and five later failures now independently
+reproduced at clean importer `95d9ce8d78490db3991ab6145653716aa3ec42c9`
+and its bundled DuckDB `d8cdaa33fda8df955cc76ef58a280f68f4cd43fa`.
+The five explicitly selected cases reproduce DISTINCT_FROM, CTE (TPCH/TPCDS),
+the old user-defined-literal expected-message mismatch and an empty-plan root
+failure. Full distribution CI is not green; C-unit CI remains pending. No SQL
+assertion is relaxed, skipped or changed to obtain these results.
