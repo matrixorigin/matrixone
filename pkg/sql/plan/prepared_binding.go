@@ -507,6 +507,42 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 				Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: source.GetP().Pos}}}
 			continue
 		}
+		if len(args) == 2 && state.selectStatement && isDecimalComparisonOperator(name) &&
+			binding.Type.Oid.IsInteger() && args[1-i] != nil && args[1-i].GetCol() != nil &&
+			types.T(args[1-i].Typ.Id).IsDecimal() {
+			// Reuse the column's exact domain only while the current integer
+			// fits it. The existing conversion probe guards future EXECUTEs;
+			// wide fallbacks must not replace a reusable native plan.
+			wasValueDependent := state.valueDependent
+			if value, present := preparedConfigurationValue(ctx, source); present && value != nil {
+				witness, exact, err := makePlan2ExactDecimalStringExprWithType(ctx, preparedNumericValueSpelling(value))
+				if err != nil {
+					return nil, err
+				}
+				if exact {
+					column := args[1-i]
+					target, fits := mergeExactDecimalComparisonType(column.Typ, witness.Typ)
+					if fits && sameDecimalComparisonType(target, column.Typ) {
+						converted, err := makePlan2CastExpr(ctx, source, column.Typ)
+						if err != nil {
+							return nil, err
+						}
+						// Integer-to-DECIMAL conversion does not check declared
+						// precision. Probe the exact transport spelling instead.
+						transport := DeepCopyExpr(source)
+						transport.Typ = makeSimplePlan2Type(types.T_text)
+						guard, err := makePlan2CastExpr(ctx, transport, column.Typ)
+						if err != nil {
+							return nil, err
+						}
+						state.diagnosticCandidates = append(state.diagnosticCandidates, guard)
+						state.valueDependent = wasValueDependent
+						args[i] = converted
+						continue
+					}
+				}
+			}
+		}
 		if len(args) == 2 && isPreparedNumericComparisonContext(name) &&
 			args[1-i] != nil && args[1-i].Typ.Id == int32(types.T_float32) &&
 			binding.Type.IsNumeric() && int(source.GetP().Pos) < len(state.values) {

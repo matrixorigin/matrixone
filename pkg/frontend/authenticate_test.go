@@ -12117,7 +12117,7 @@ func Test_doDropAccount(t *testing.T) {
 		sql = fmt.Sprintf(getPubInfoSql, 1) + " order by update_time desc, created_time desc"
 		bh.sql2result[sql] = newMrsForSqlForGetPubs([][]interface{}{})
 
-		sql = "select 1 from mo_catalog.mo_columns where att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
+		sql = "select 1 from mo_catalog.mo_columns where account_id = 0 and att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
 		bh.sql2result[sql] = newMrsForSqlForGetSubs([][]interface{}{{1}})
 
 		sql = getSubsSql + " and sub_account_id = 1"
@@ -12351,7 +12351,7 @@ func Test_doDropAccount_InTransaction(t *testing.T) {
 			sql = fmt.Sprintf(getPubInfoSql, 1) + " order by update_time desc, created_time desc"
 			bh.sql2result[sql] = newMrsForSqlForGetPubs([][]interface{}{})
 
-			sql = "select 1 from mo_catalog.mo_columns where att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
+			sql = "select 1 from mo_catalog.mo_columns where account_id = 0 and att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
 			bh.sql2result[sql] = newMrsForSqlForGetSubs([][]interface{}{{1}})
 
 			sql = getSubsSql
@@ -12425,7 +12425,7 @@ func Test_doDropAccount_InTransaction(t *testing.T) {
 			sql = fmt.Sprintf(getPubInfoSql, 1) + " order by update_time desc, created_time desc"
 			bh.sql2result[sql] = newMrsForSqlForGetPubs([][]interface{}{})
 
-			sql = "select 1 from mo_catalog.mo_columns where att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
+			sql = "select 1 from mo_catalog.mo_columns where account_id = 0 and att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
 			bh.sql2result[sql] = newMrsForSqlForGetSubs([][]interface{}{{1}})
 
 			sql = getSubsSql
@@ -12515,7 +12515,7 @@ func Test_doDropAccount_AccountOwnedMetadataCleanupError(t *testing.T) {
 
 	sql = fmt.Sprintf(getPubInfoSql, 1) + " order by update_time desc, created_time desc"
 	bh.sql2result[sql] = newMrsForSqlForGetPubs([][]interface{}{})
-	sql = "select 1 from mo_catalog.mo_columns where att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
+	sql = "select 1 from mo_catalog.mo_columns where account_id = 0 and att_database = 'mo_catalog' and att_relname = 'mo_subs' and attname = 'sub_account_name'"
 	bh.sql2result[sql] = newMrsForSqlForGetSubs([][]interface{}{{1}})
 	sql = getSubsSql + " and sub_account_id = 1"
 	bh.sql2result[sql] = newMrsForSqlForGetSubs([][]interface{}{})

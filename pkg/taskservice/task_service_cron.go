@@ -88,53 +88,60 @@ func (s *taskService) fetchCronTasks(ctx context.Context) {
 			return
 		case <-ticker.C:
 		}
-		c, cancel := context.WithTimeoutCause(ctx, time.Second*10, moerr.CauseFetchCronTasks)
-		tasks, err := s.QueryCronTask(c)
-		err = moerr.AttachCause(c, err)
-		cancel()
-		if err != nil {
-			s.rt.Logger().Error("query cron tasks failed",
-				zap.Error(err))
-			continue
-		}
+		s.fetchCronTasksOnce(ctx)
+	}
+}
 
-		s.rt.Logger().Debug("new cron tasks fetched",
-			zap.Int("current-count", len(s.crons.entries)),
-			zap.Int("fetch-count", len(tasks)))
+// fetchCronTasksOnce reconciles the persisted cron tasks with the in-memory
+// scheduler. Keeping reconciliation separate from its ticker makes the owner
+// of task discovery testable without changing the production scheduling path.
+func (s *taskService) fetchCronTasksOnce(ctx context.Context) {
+	c, cancel := context.WithTimeoutCause(ctx, time.Second*10, moerr.CauseFetchCronTasks)
+	tasks, err := s.QueryCronTask(c)
+	err = moerr.AttachCause(c, err)
+	cancel()
+	if err != nil {
+		s.rt.Logger().Error("query cron tasks failed",
+			zap.Error(err))
+		return
+	}
 
-		currentTasks := make(map[uint64]struct{}, len(tasks))
-		// add new cron tasks to cron scheduler
-		for _, v := range tasks {
-			currentTasks[v.ID] = struct{}{}
-			if job, ok := s.crons.jobs[v.ID]; !ok {
-				s.addCronTask(v)
-			} else {
-				if job.state.canUpdate() {
-					if job.task.TriggerTimes != v.TriggerTimes {
-						s.rt.Logger().Info("cron task updated",
-							zap.String("cause", "trigger-times changed"),
-							zap.Uint64("old-trigger-times", job.task.TriggerTimes),
-							zap.Uint64("new-trigger-times", v.TriggerTimes),
-							zap.String("task", v.DebugString()))
-						s.replaceCronTask(v)
-					} else if job.task.CronExpr != v.CronExpr {
-						s.rt.Logger().Info("cron task updated",
-							zap.String("cause", "cron expr changed"),
-							zap.String("old-cron-expr", job.task.CronExpr),
-							zap.String("new-cron-expr", v.CronExpr),
-							zap.String("task", v.DebugString()))
-						s.replaceCronTask(v)
-					}
-					job.state.endUpdate()
+	s.rt.Logger().Debug("new cron tasks fetched",
+		zap.Int("current-count", len(s.crons.entries)),
+		zap.Int("fetch-count", len(tasks)))
+
+	currentTasks := make(map[uint64]struct{}, len(tasks))
+	// add new cron tasks to cron scheduler
+	for _, v := range tasks {
+		currentTasks[v.ID] = struct{}{}
+		if job, ok := s.crons.jobs[v.ID]; !ok {
+			s.addCronTask(v)
+		} else {
+			if job.state.canUpdate() {
+				if job.task.TriggerTimes != v.TriggerTimes {
+					s.rt.Logger().Info("cron task updated",
+						zap.String("cause", "trigger-times changed"),
+						zap.Uint64("old-trigger-times", job.task.TriggerTimes),
+						zap.Uint64("new-trigger-times", v.TriggerTimes),
+						zap.String("task", v.DebugString()))
+					s.replaceCronTask(v)
+				} else if job.task.CronExpr != v.CronExpr {
+					s.rt.Logger().Info("cron task updated",
+						zap.String("cause", "cron expr changed"),
+						zap.String("old-cron-expr", job.task.CronExpr),
+						zap.String("new-cron-expr", v.CronExpr),
+						zap.String("task", v.DebugString()))
+					s.replaceCronTask(v)
 				}
+				job.state.endUpdate()
 			}
 		}
+	}
 
-		// remove deleted cron tasks
-		for id := range s.crons.entries {
-			if _, ok := currentTasks[id]; !ok {
-				s.removeCronTask(id)
-			}
+	// remove deleted cron tasks
+	for id := range s.crons.entries {
+		if _, ok := currentTasks[id]; !ok {
+			s.removeCronTask(id)
 		}
 	}
 }

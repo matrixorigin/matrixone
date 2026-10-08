@@ -4,6 +4,48 @@ This document records cases where MatrixOne behavior differs from MySQL, includi
 
 ---
 
+## 🕰️ Zero DATE/DATETIME/TIMESTAMP Writes (Issue #29207)
+
+**Category:** MySQL `sql_mode` / temporal assignment
+
+MatrixOne preserves MySQL's mode-dependent handling of zero temporal values.
+The default session mode includes both `STRICT_TRANS_TABLES` and `NO_ZERO_DATE`.
+Consequently, a direct assignment such as
+`'0000-00-00 00:00:00'` to a `DATE`, `DATETIME`, or `TIMESTAMP` column is
+rejected with a truncated-value error. A nullable column does not disable this
+validation; nullable means that `NULL` is allowed, not that a zero date is
+always valid.
+
+Applications that intentionally use legacy zero dates must configure every
+connection that loads or writes that data with a permissive session mode before
+the statement runs:
+
+```sql
+SET SESSION sql_mode = 'NO_ENGINE_SUBSTITUTION';
+```
+
+With strict mode or `NO_ZERO_DATE` absent, MatrixOne preserves the zero
+temporal sentinel. `INSERT IGNORE` also preserves direct zero temporal values
+when strict `NO_ZERO_DATE` mode would otherwise reject them. The effective
+session mode is evaluated for each execution, including reused prepared DML;
+changing `sql_mode` after prepare therefore changes the write result.
+
+This is an explicit configuration contract, not transparent compatibility for
+applications that omit the session setting. In particular, the original YShop
+SQL that relies on `0000-00-00 00:00:00` still does not run unchanged under the
+default strict mode unless the connection or deployment supplies the permissive
+`sql_mode` above. Replacing the sentinel with `1970-01-01` is not an equivalent
+workaround when the zero date has application meaning. A server-level switch to
+accept and retain zero dates without connection configuration is not introduced
+by this document and requires a separate compatibility design.
+
+For new schemas, use `NULL` for an unknown or unavailable nullable datetime
+instead of relying on the legacy zero-date sentinel. The regression matrix for
+these rules is maintained in
+[`mysql_compat_temporal_zero.test`](../../test/distributed/cases/dtype/mysql_compat_temporal_zero.test).
+
+---
+
 ## 🧭 Recursive CTE Behavior Differences
 
 ### ID-CTE-001: `cte_max_recursion_depth` excludes empty convergence rounds
@@ -66,6 +108,7 @@ SELECT TIMEDIFF('15:30:45', '2000-01-01 15:30:45') AS mixed_format;
 |----------|-------------|--------|
 | [#29138](https://github.com/matrixorigin/matrixone/issues/29138) | `cte_max_recursion_depth` and empty convergence rounds | MatrixOne intentionally counts only productive recursive levels |
 | [#23464](https://github.com/matrixorigin/matrixone/issues/23464) | TIMEDIFF() and SUBTIME() results incompatible with MySQL | TIMEDIFF: MO behavior is more reasonable |
+| [#29207](https://github.com/matrixorigin/matrixone/issues/29207) | Zero DATETIME literals and application schema loading | This document defines the session-mode contract; unchanged applications still require a permissive connection/deployment configuration |
 
 ---
 
