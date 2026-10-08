@@ -59,9 +59,10 @@ bit for bit. The only difference is NaN encoding (Go keeps the sign for FP8 and 
 NaN to +0; CUDA returns `0x7f` / `0x7`); non-finite values are never stored.
 
 **Quantizer (ours, not NVIDIA's).** NVFP4 and MXFP8 define how a cell decodes, not how
-its scales are chosen; a cell written here decodes identically on the CPU and the tensor
-cores, but it is not byte-identical to what NVIDIA's quantizers (TensorRT Model
-Optimizer, Transformer Engine) or the OCP MX reference produce for the same input:
+its scales are chosen; a cell written here decodes the same way on the CPU and the tensor
+cores (up to float32 rounding; see the decoded-value rule below), but it is not byte-identical
+to what NVIDIA's quantizers (TensorRT Model Optimizer, Transformer Engine) or the OCP MX
+reference produce for the same input:
 
 - Block scales round up: the smallest unsigned E4M3 (vecf4) or E8M0 (vecf8) scale whose
   product with the element maximum (6 or 448) covers the block's largest magnitude, so no
@@ -76,10 +77,15 @@ Optimizer, Transformer Engine) or the OCP MX reference produce for the same inpu
   the decode preserves any value representable as a float32 subnormal: an intermediate float32
   product (e.g. `global × blockScale` for a subnormal global) must not underflow an element to zero
   when its fully-scaled value is representable. So the zero/nonzero classification — and therefore
-  the zero-vector convention (self cosine distance 1 for the zero vector, 0 for a nonzero one) — is
-  a property of the cell: identical on the CPU and the tensor cores (which apply the global in
-  double) and the same whichever executor runs. The CPU finishes such a decode in float64; this is
-  a decode-value rule at the type owner, not a per-query fallback.
+  the zero-vector convention (self cosine distance 1 for the zero vector, ~0 for a nonzero one) — is
+  a property of the cell, agreed on the CPU and the tensor cores (which apply the global in double)
+  within the domain below, not an artifact of which executor runs. The CPU finishes such a decode in float64; this is
+  a decode-value rule at the type owner, not a per-query fallback. The agreement domain is every
+  value representable as a float32 — which is every encoder-produced cell, since the encoder's inputs
+  and outputs are float32 (nonzero magnitudes are ≥ 2^-149). A hand-built cell whose fully-scaled
+  value is **below** float32 range (e.g. 2^-159) correctly rounds to 0 on the CPU (it returns one
+  float32 per element) while the tensor path, applying the global in double on the row norm, may keep
+  it nonzero: a float32 representability boundary, not reachable from encoded data, not a decode error.
 
 ## Cell format
 
@@ -809,7 +815,8 @@ cosine divides the norm out and squared L2 includes it.
     vectors are close the terms cancel and that rounding is what remains. The scalar
     functions do not have this: `Σ(xᵢ − qᵢ)²` subtracts first, a difference of close values
     is exact, and the result's error is relative to the distance itself; the CPU's cosine
-    takes `x·q` and the norms by the same operations, so equal vectors give exactly 0.
+    takes `x·q` and the norms by the same operations, so equal vectors give 0 up to float32
+    rounding (never below 0) — exactly 0 for squared L2, which subtracts first.
   - *Decision.* The GPU's cosine and squared L2 are the expansion's: within fp32
     summation-order tolerance of the scalar function, relative to the squared norms. The
     GEMM is kept in the fp32 range by exact power-of-two rescaling (rows outside

@@ -51,7 +51,13 @@ func TestVecBlockSubnormalSelfCosine29554(t *testing.T) {
 				op, _ := vecBlockTestOperand(t, types.BlockScaledNVFP4, v)
 				d, err := VecBlockCosineDistance(op, op)
 				require.NoError(t, err)
-				require.Equalf(t, tc.want, d, "dim=%d fill=%v self cosine distance", dim, tc.fill)
+				// A zero vector is exactly 1; a nonzero vector is ~0 (not exactly 0: the self cosine is
+				// 1 - dot/sqrt(nx*ny) and sqrt(nx)^2 != nx in general). The contract is the
+				// classification, so assert distance==1 iff the want is the zero-vector 1.
+				require.Equalf(t, tc.want == 1, d == 1, "dim=%d fill=%v: zero-vector classification (self distance=%v)", dim, tc.fill, d)
+				if tc.want == 0 {
+					require.InDeltaf(t, 0, d, 1e-5, "dim=%d fill=%v: nonzero vector self cosine distance must be ~0, got %v", dim, tc.fill, d)
+				}
 			})
 		}
 	}
