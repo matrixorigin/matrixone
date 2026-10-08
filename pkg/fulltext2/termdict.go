@@ -132,6 +132,40 @@ func (d *termDict) prefixTerms(prefix string) ([]string, error) {
 	return out, nil
 }
 
+// forEachPrefixPosting visits a prefix's postings in dictionary order. On a
+// loaded segment the iterator already carries the posting-directory offset:
+// resolving the same key with FST.Get again needlessly walks the FST a second
+// time. The callback must not retain the transient posting or its mmap views
+// beyond the segment's lifetime.
+func (s *Segment) forEachPrefixPosting(prefix string, fn func(string, *termPostings)) error {
+	if s.dict == nil {
+		for _, term := range s.PrefixRange(prefix) {
+			if pl, ok := s.lookup(term); ok {
+				fn(term, pl)
+			}
+		}
+		return nil
+	}
+	it, ok, err := s.dict.prefixIter(prefix)
+	if err != nil || !ok {
+		return err
+	}
+	defer func() { _ = it.Close() }()
+	for {
+		term, off := it.Current()
+		if off < uint64(len(s.ranking)) {
+			if pl, valid := s.decodeTermEntry(int(off)); valid {
+				fn(string(term), pl)
+			}
+		}
+		if err := it.Next(); err == vellum.ErrIteratorDone {
+			return nil
+		} else if err != nil {
+			return err
+		}
+	}
+}
+
 // forEachTermInRange streams every term in the inclusive [lo,hi] range through fn
 // WITHOUT materializing the range as a []string the way rangeTerms does. For a
 // high-cardinality key an inequality's range IS most of that key's vocabulary,

@@ -462,30 +462,26 @@ func (s *Segment) evalClause(c clause, algo ScoreAlgo, avgDocLen float64, gs *gl
 			raw[h.ord] = s.scoreTerm(algo, float64(h.tf), idf2, h.ord, avgDocLen)
 		}
 	case clausePrefix:
-		terms, err := s.prefixTerms(c.terms[0])
-		if err != nil {
-			return nil, err
-		}
-		for _, t := range terms { // combined impact = MAX over expanded terms (§6)
-			pl, ok := s.lookup(t)
-			if !ok {
-				continue
-			}
+		err := s.forEachPrefixPosting(c.terms[0], func(t string, pl *termPostings) {
+			// Combined impact = MAX over expanded terms (§6).
 			docs := pl.materializeDocIDs()
 			if !scored {
 				for _, ord := range docs {
 					raw[ord] = 0
 				}
-				continue
+				return
 			}
 			idf2 := gs.idfFor(s, t, pl)
 			tfs := pl.materializeTfs()
 			for i, ord := range docs {
-				sc := s.scoreTerm(algo, float64(tfs[i]), idf2, ord, avgDocLen) // tf-aware (see clauseTerm)
+				sc := s.scoreTerm(algo, float64(tfs[i]), idf2, ord, avgDocLen)
 				if cur, seen := raw[ord]; !seen || sc > cur {
 					raw[ord] = sc
 				}
 			}
+		})
+		if err != nil {
+			return nil, err
 		}
 	case clauseGroup:
 		for _, ch := range c.children { // OR of children, score = MAX (§6)
