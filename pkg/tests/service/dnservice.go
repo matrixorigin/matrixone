@@ -71,6 +71,9 @@ func (ds *tnService) Start() error {
 	ds.Lock()
 	defer ds.Unlock()
 
+	if ds.status == ServiceClosed || ds.closeErr != nil || ds.svc == nil {
+		return moerr.NewNoServiceNoCtx(ds.uuid)
+	}
 	if ds.status == ServiceInitialized {
 		err := ds.svc.Start()
 		if err != nil {
@@ -85,6 +88,10 @@ func (ds *tnService) Start() error {
 func (ds *tnService) Close() error {
 	ds.Lock()
 	defer ds.Unlock()
+	return ds.closeLocked()
+}
+
+func (ds *tnService) closeLocked() error {
 	ds.closeOnce.Do(func() {
 		if ds.svc != nil {
 			ds.closeErr = ds.svc.Close()
@@ -112,7 +119,7 @@ func (ds *tnService) StartTNReplica(shard metadata.TNShard) error {
 	ds.Lock()
 	defer ds.Unlock()
 
-	if ds.status != ServiceStarted {
+	if ds.status != ServiceStarted || ds.closeErr != nil {
 		return moerr.NewNoServiceNoCtx(ds.uuid)
 	}
 
@@ -123,7 +130,7 @@ func (ds *tnService) CloseTNReplica(shard metadata.TNShard) error {
 	ds.Lock()
 	defer ds.Unlock()
 
-	if ds.status != ServiceStarted {
+	if ds.status != ServiceStarted || ds.closeErr != nil {
 		return moerr.NewNoServiceNoCtx(ds.uuid)
 	}
 
@@ -131,6 +138,11 @@ func (ds *tnService) CloseTNReplica(shard metadata.TNShard) error {
 }
 
 func (ds *tnService) GetTaskService() (taskservice.TaskService, bool) {
+	ds.Lock()
+	defer ds.Unlock()
+	if ds.status == ServiceClosed || ds.closeErr != nil || ds.svc == nil {
+		return nil, false
+	}
 	return ds.svc.GetTaskService()
 }
 
@@ -148,8 +160,17 @@ func newTNService(
 	ds := &tnService{status: ServiceInitialized, uuid: cfg.UUID}
 	ds.Lock()
 	defer ds.Unlock()
-	publish(ds)
+	constructed := false
+	defer func() {
+		if !constructed {
+			ds.closeLocked()
+		}
+	}()
+	if publish != nil {
+		publish(ds)
+	}
 	_, err := tnservice.NewService(cfg, rt, fs, nil, func(owner tnservice.Service) { ds.svc = owner }, opts...)
+	constructed = err == nil
 	return ds, err
 }
 

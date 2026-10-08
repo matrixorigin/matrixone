@@ -24,6 +24,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
@@ -52,8 +53,6 @@ type CNService interface {
 	GetSQLExecutor() executor.SQLExecutor
 	// GetBootstrapService returns bootstrap service
 	GetBootstrapService() bootstrap.Service
-	//SetCancel sets CancelFunc to stop GetClusterDetailsFromHAKeeper
-	SetCancel(context.CancelFunc)
 }
 
 // cnService wraps cnservice.Service.
@@ -75,6 +74,9 @@ func (c *cnService) Start() error {
 	c.Lock()
 	defer c.Unlock()
 
+	if c.status == ServiceClosed || c.closeErr != nil || c.svc == nil {
+		return moerr.NewNoServiceNoCtx(c.cfg.UUID)
+	}
 	if c.status == ServiceInitialized {
 		err := c.svc.Start()
 		if err != nil {
@@ -90,12 +92,16 @@ func (c *cnService) Close() error {
 	c.Lock()
 	defer c.Unlock()
 
+	return c.closeLocked()
+}
+
+func (c *cnService) closeLocked() error {
 	c.closeOnce.Do(func() {
+		if c.cancel != nil {
+			defer c.cancel()
+		}
 		if c.svc != nil {
 			c.closeErr = c.svc.Close()
-		}
-		if c.cancel != nil {
-			c.cancel()
 		}
 		complete := c.closeErr == nil
 		if !complete {
@@ -125,27 +131,53 @@ func (c *cnService) ID() string {
 }
 
 func (c *cnService) SQLAddress() string {
+	c.Lock()
+	defer c.Unlock()
+	if c.status == ServiceClosed || c.closeErr != nil || c.svc == nil {
+		return ""
+	}
+
 	return fmt.Sprintf("127.0.0.1:%d", c.cfg.Frontend.Port)
 }
 
 func (c *cnService) GetTaskRunner() taskservice.TaskRunner {
+	c.Lock()
+	defer c.Unlock()
+	if c.status == ServiceClosed || c.closeErr != nil || c.svc == nil {
+		return nil
+	}
+
 	return c.svc.GetTaskRunner()
 }
 
 func (c *cnService) GetTaskService() (taskservice.TaskService, bool) {
+	c.Lock()
+	defer c.Unlock()
+	if c.status == ServiceClosed || c.closeErr != nil || c.svc == nil {
+		return nil, false
+	}
+
 	return c.svc.GetTaskService()
 }
 
 func (c *cnService) GetSQLExecutor() executor.SQLExecutor {
+	c.Lock()
+	defer c.Unlock()
+	if c.status == ServiceClosed || c.closeErr != nil || c.svc == nil {
+		return nil
+	}
+
 	return c.svc.GetSQLExecutor()
 }
 
 func (c *cnService) GetBootstrapService() bootstrap.Service {
-	return c.svc.GetBootstrapService()
-}
+	c.Lock()
+	defer c.Unlock()
+	if c.status == ServiceClosed || c.closeErr != nil || c.svc == nil {
+		return nil
+	}
 
-func (c *cnService) SetCancel(cancel context.CancelFunc) {
-	c.cancel = cancel
+	return c.svc.GetBootstrapService()
 }
 
 // cnOptions is options for a cn service.
@@ -155,32 +187,28 @@ type cnOptions []cnservice.Option
 func newCNService(
 	cfg *cnservice.Config,
 	ctx context.Context,
+	cancel context.CancelFunc,
 	fileService fileservice.FileService,
 	publish func(CNService),
 	options cnOptions,
 ) (CNService, error) {
-	holder := &cnService{status: ServiceInitialized, cfg: cfg}
+	holder := &cnService{status: ServiceInitialized, cfg: cfg, cancel: cancel}
+	holder.Lock()
+	defer holder.Unlock()
+	constructed := false
+	defer func() {
+		if !constructed {
+			holder.closeLocked()
+		}
+	}()
+	// Publication retains cleanup authority; operational access waits for handoff.
 	if publish != nil {
 		publish(holder)
 	}
-	srv, err := cnservice.NewService(
-		cfg,
-		ctx,
-		fileService,
-		nil,
-		func(owner cnservice.Service) { holder.svc = owner },
-		options...,
-	)
-	if err != nil {
-		if srv != nil {
-			holder.svc = srv
-			return holder, err
-		}
-		return holder, err
-	}
-
-	holder.svc = srv
-	return holder, nil
+	_, err := cnservice.NewService(cfg, ctx, fileService, nil,
+		func(owner cnservice.Service) { holder.svc = owner }, options...)
+	constructed = err == nil
+	return holder, err
 }
 
 func buildCNConfig(index int, opt Options, address *serviceAddresses) *cnservice.Config {

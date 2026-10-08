@@ -60,9 +60,10 @@ type lifecycleTN struct {
 	startErr error
 	closeErr error
 	closes   int
+	starts   int
 }
 
-func (s *lifecycleTN) Start() error { return s.startErr }
+func (s *lifecycleTN) Start() error { s.starts++; return s.startErr }
 func (s *lifecycleTN) Close() error { s.closes++; return s.closeErr }
 
 func TestTNWrapperClosesAcquiredBackend(t *testing.T) {
@@ -87,6 +88,10 @@ func TestTNWrapperClosesAcquiredBackend(t *testing.T) {
 				require.Equal(t, tc.closeErr, owner.Close())
 			}
 			require.Equal(t, 1, backend.closes)
+			require.Error(t, owner.Start())
+			task, ok := owner.GetTaskService()
+			require.Nil(t, task)
+			require.False(t, ok)
 			if tc.closeErr == nil {
 				require.Equal(t, ServiceClosed, owner.Status())
 			} else {

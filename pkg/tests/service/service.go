@@ -1066,7 +1066,7 @@ func (c *testCluster) WaitLogStoreReportedIndexed(ctx context.Context, index int
 // The following are implements for interface `ClusterAwareness`.
 // --------------------------------------------------------------
 func (c *testCluster) ListTNServices() []string {
-	ids := make([]string, 0, len(c.tn.svcs))
+	ids := make([]string, 0, len(c.tn.cfgs))
 	for _, cfg := range c.tn.cfgs {
 		ids = append(ids, cfg.UUID)
 	}
@@ -1082,8 +1082,11 @@ func (c *testCluster) ListLogServices() []string {
 }
 
 func (c *testCluster) ListCnServices() []string {
-	ids := make([]string, 0, len(c.cn.svcs))
-	for _, svc := range c.cn.svcs {
+	c.cn.Lock()
+	svcs := append([]CNService(nil), c.cn.svcs...)
+	c.cn.Unlock()
+	ids := make([]string, 0, len(svcs))
+	for _, svc := range svcs {
 		ids = append(ids, svc.ID())
 	}
 	return ids
@@ -1097,9 +1100,9 @@ func (c *testCluster) GetTNService(uuid string) (TNService, error) {
 	c.tn.Lock()
 	defer c.tn.Unlock()
 
-	for i, cfg := range c.tn.cfgs {
-		if cfg.UUID == uuid {
-			return c.tn.svcs[i], nil
+	for _, svc := range c.tn.svcs {
+		if svc.ID() == uuid {
+			return svc, nil
 		}
 	}
 	return nil, moerr.NewNoServiceNoCtx(uuid)
@@ -1118,10 +1121,11 @@ func (c *testCluster) GetLogService(uuid string) (LogService, error) {
 }
 
 func (c *testCluster) GetCNService(uuid string) (CNService, error) {
-	c.log.Lock()
-	defer c.log.Unlock()
+	c.cn.Lock()
+	svcs := append([]CNService(nil), c.cn.svcs...)
+	c.cn.Unlock()
 
-	for _, svc := range c.cn.svcs {
+	for _, svc := range svcs {
 		if svc.ID() == uuid {
 			return svc, nil
 		}
@@ -1150,8 +1154,8 @@ func (c *testCluster) GetLogServiceIndexed(index int) (LogService, error) {
 }
 
 func (c *testCluster) GetCNServiceIndexed(index int) (CNService, error) {
-	c.log.Lock()
-	defer c.log.Unlock()
+	c.cn.Lock()
+	defer c.cn.Unlock()
 
 	if index >= len(c.cn.svcs) || index < 0 {
 		return nil, moerr.NewInvalidServiceIndexNoCtx(index)
@@ -1268,6 +1272,11 @@ func (c *testCluster) StartCNServiceIndexed(index int) error {
 }
 
 func (c *testCluster) StartCNServices(n int) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.mu.running {
+		return moerr.NewInternalErrorNoCtx("cannot expand a stopped cluster")
+	}
 	offset := len(c.cn.svcs)
 	c.buildCNConfigs(n)
 	c.initCNServices(c.fileservices, offset)
@@ -1468,9 +1477,10 @@ func (c *testCluster) initCNServices(
 			panic(err)
 		}
 		ctx, cancel := context.WithCancel(context.Background())
-		cs, err := newCNService(
+		_, err = newCNService(
 			cfg,
 			ctx,
+			cancel,
 			fs,
 			func(owner CNService) {
 				c.cn.Lock()
@@ -1482,7 +1492,6 @@ func (c *testCluster) initCNServices(
 		if err != nil {
 			panic(err)
 		}
-		cs.SetCancel(cancel)
 
 		c.logger.Info(
 			"cn service initialized",

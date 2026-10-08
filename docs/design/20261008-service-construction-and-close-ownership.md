@@ -17,7 +17,9 @@ This changes internal Go construction and lifecycle contracts, not SQL behavior 
 
 ## Construction protocol and owners
 
-CN, TN, lock allocator, shard service and shard server constructors require an owner-publication callback. Validate owner-independent arguments first; after allocating the partial aggregate, install its deferred rollback before calling the callback or options. The callback retains that same object in the caller's existing authoritative holder; it must not start, close, or concurrently expose the partially constructed service. Successful construction commits the aggregate; unsuccessful return, panic or Goexit runs the same nil-safe Close. Defers do not handle process termination such as `os.Exit`.
+CN, TN, lock allocator, shard service and shard server constructors require an owner-publication callback. Validate owner-independent arguments first; after allocating the partial aggregate, install its deferred rollback before calling the callback or options. The callback retains that same object in the caller's existing authoritative holder; it must not start, close, or concurrently expose the partially constructed backend. Successful construction commits the aggregate; unsuccessful return, panic or Goexit runs the same nil-safe Close. Defers do not handle process termination such as `os.Exit`.
+
+Retained standalone CN/TN wrappers keep their existing mutex through construction and failure cleanup. Publication grants cleanup ownership, not operational readiness. Cancellation is installed before CN publication; failed wrappers reject Start and expose no backend getters. Cluster expansion shares the parent lifecycle lock so teardown cannot retire its dependencies mid-construction.
 
 | Boundary | Acquisition and retirement authority |
 | --- | --- |
