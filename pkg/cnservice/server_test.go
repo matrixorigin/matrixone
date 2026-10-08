@@ -1359,7 +1359,7 @@ func TestHandleRequestPropagatesConfiguredRPCMaxMessageSize(t *testing.T) {
 		_ lockservice.LockService,
 		_ qclient.QueryClient,
 		_ logservice.CNHAKeeperClient,
-		_ udf.Service,
+		_ udf.Runtime,
 		_ client.TxnClient,
 		_ *defines.AutoIncrCacheManager,
 		_ func() morpc.Message,
