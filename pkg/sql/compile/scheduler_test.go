@@ -23,6 +23,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	mock_lock "github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
@@ -538,7 +539,9 @@ func TestScheduleQueryWorkersKeepsIvfCurrentParticipantAtOrdinalZero(t *testing.
 	c.ncpu = 6
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
-		Nodes: []*plan.Node{{NodeType: plan.Node_INDEX_SEARCH_SCAN}},
+		Nodes: []*plan.Node{{NodeType: plan.Node_INDEX_SEARCH_SCAN, IndexSearchScan: &plan.IndexSearchScan{
+			Index: &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()},
+		}}},
 	}}}
 	c.e = &schedulerTestEngine{
 		nodes: engine.Nodes{
@@ -560,7 +563,9 @@ func TestScheduleQueryWorkersDoesNotUseClusterWideMixedCommitProxyForIvf(t *test
 	c.ncpu = 6
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
-		Nodes: []*plan.Node{{NodeType: plan.Node_INDEX_SEARCH_SCAN}},
+		Nodes: []*plan.Node{{NodeType: plan.Node_INDEX_SEARCH_SCAN, IndexSearchScan: &plan.IndexSearchScan{
+			Index: &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()},
+		}}},
 	}}}
 	c.e = &schedulerProviderTestEngine{
 		schedulerTestEngine: &schedulerTestEngine{},
@@ -587,7 +592,9 @@ func TestScheduleQueryWorkersKeepsCurrentCNFirstForIvfEntriesScan(t *testing.T) 
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.proc.Base.QueryClient = fakeQueryClient{}
 	c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
-		Nodes: []*plan.Node{{NodeType: plan.Node_INDEX_SEARCH_SCAN}},
+		Nodes: []*plan.Node{{NodeType: plan.Node_INDEX_SEARCH_SCAN, IndexSearchScan: &plan.IndexSearchScan{
+			Index: &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()},
+		}}},
 	}}}
 	c.e = &schedulerTestEngine{nodes: engine.Nodes{
 		{Id: "remote", Addr: "a-remote:6001", Mcpu: 4},
@@ -611,7 +618,9 @@ func TestScheduleQueryWorkersCanonicalizesIvfIngressByServiceID(t *testing.T) {
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.proc.Base.LockService = lockSvc
 	c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
-		Nodes: []*plan.Node{{NodeType: plan.Node_INDEX_SEARCH_SCAN}},
+		Nodes: []*plan.Node{{NodeType: plan.Node_INDEX_SEARCH_SCAN, IndexSearchScan: &plan.IndexSearchScan{
+			Index: &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()},
+		}}},
 	}}}
 	c.e = &schedulerProviderTestEngine{
 		schedulerTestEngine: &schedulerTestEngine{},

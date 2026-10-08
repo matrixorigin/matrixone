@@ -402,7 +402,7 @@ func (c *Compile) evaluateQueryPlacement(
 		if c.pn != nil {
 			qry = c.pn.GetQuery()
 		}
-		if queryHasIndexSearchScan(qry) {
+		if queryHasPartitionedIndexSearchScan(qry) {
 			// The local partition is the only one that can see the coordinator's
 			// appendable IVF ranges. This is an execution invariant, not a
 			// user-selectable current-CN preference, so give it the same identity
@@ -700,12 +700,14 @@ func droppedWorkerReasonCounts(dropped schedule.DroppedWorkers) map[string]int {
 	return counts
 }
 
-func queryHasIndexSearchScan(qry *plan.Query) bool {
+// queryHasPartitionedIndexSearchScan reports whether qry has an index search scan that is
+// partitioned across CNs.
+func queryHasPartitionedIndexSearchScan(qry *plan.Query) bool {
 	if qry == nil {
 		return false
 	}
 	for _, node := range qry.GetNodes() {
-		if node.GetNodeType() == plan.Node_INDEX_SEARCH_SCAN {
+		if node.GetNodeType() == plan.Node_INDEX_SEARCH_SCAN && plan2.IndexSearchScanPartitioned(node.GetIndexSearchScan()) {
 			return true
 		}
 	}

@@ -20,8 +20,9 @@ one plan node, `INDEX_SEARCH_SCAN`, carrying `plan.IndexSearchScan`:
 | `algo_exprs`, `algo_expr_names` | per-algorithm row-dependent expressions, evaluated by name |
 | `scan_snapshot` | snapshot read timestamp |
 
-The proto carries no algorithm-specific field. A remote CN below `MORPCVersion107`
-cannot receive the node: dispatch to it fails instead of misreading the plan.
+The proto carries no algorithm-specific field. The node has a dedicated MORPC protocol
+version, one bump for all six index algorithms. A remote CN below that version cannot
+receive the node: dispatch to it fails instead of misreading the plan.
 
 ## Execution
 
@@ -43,6 +44,10 @@ cannot receive the node: dispatch to it fails instead of misreading the plan.
 batches. Each plugin's reader is a port of its former table function's executor.
 
 cagra and ivfpq register only in the GPU build (`pkg/indexplugin/all/all_gpu.go`).
+
+A partitioned scan (a plugin implementing `ParallelHooks`: ivfflat) pins its query to
+the current CN, whose partition sees the coordinator's appendable ranges. Other index
+search scans run as one local scope and do not pin.
 
 ## Planning
 
@@ -70,6 +75,9 @@ rewrite admits an algorithm for such a query only if it may serve that restricti
 - **hnsw, cagra, ivfpq** only post-filter their candidates, which can drop rows of the
   Top-K, so they skip a scan with a MATCH filter. The late fulltext pass serves the MATCH
   and the Top-K is an exact sort over the fulltext hits.
+- **A MATCH only in the projection** of the Top-K is served by the fulltext rewrite of
+  that projection, which needs the scan directly under it, so no algorithm rewrites the
+  scan; the Top-K is an exact sort over the fulltext hits.
 
 hnsw, cagra and ivfpq implement `BuildLogicalSearch`; the gate is the only thing that
 keeps them off a scan with a MATCH filter.
@@ -106,6 +114,7 @@ with a MATCH filter (classic fulltext or fulltext2) and
 | 1 | A hybrid query on an ivfflat table uses both the fulltext index and the vector index: the plan has a `Fulltext Index Scan` and a `Vector Index Scan`. Shapes: natural-language MATCH; boolean MATCH with a scalar filter; a far query vector; the MATCH score projected; a selective MATCH; a query vector from a single-row provider table. | `cases/vector/vector_hybrid_fulltext.sql` |
 | 2 | On ivfflat, hybrid results are post-filtered vector candidates: every returned row satisfies the MATCH and the scalar filters; a selective MATCH can return fewer than k rows. With a MATCH that keeps one third of the rows and k = 3, results equal the same query without a vector index. | same case: `outside_exact` = 0 on a MATCH of 4 of 200 rows; other queries followed by their `t_ref_*` reference |
 | 3 | A hybrid query on an hnsw, cagra or ivfpq table uses the fulltext index and no vector index, and returns exactly the rows of the same query without a vector index, for all the claim 1 shapes including the selective MATCH (provider shape: hnsw). | `cases/vector/vector_hybrid_fulltext.sql` (hnsw), `gpu_cases/vector/vector_hybrid_fulltext_gpu.sql` (cagra, ivfpq) |
+| 3a | A Top-K whose only MATCH is in the projection uses the fulltext index and no vector index, for ivfflat, hnsw, cagra and ivfpq, and returns exactly the rows of the same query without a vector index. | `cases/vector/vector_hybrid_fulltext.sql`, `gpu_cases/vector/vector_hybrid_fulltext_gpu.sql` |
 | 4 | `hnsw_search`, `ivfpq_search`, `cagra_search`, `fulltext2_search` and `fulltext_index_scan` are not callable from SQL. | `cases/vector/vector_hybrid_fulltext.sql`, `cases/publication_subscription/pub_sub_fulltext.sql` |
 | 5 | A subscriber's MATCH on a published table searches the publisher's fulltext index (table and database publications, two subscribers, publisher DML visible, prepared statement invalidated by revoke/drop). | `cases/publication_subscription/pub_sub_fulltext.sql` |
 | 6 | Moving hnsw, cagra and ivfpq to the early pass leaves the plans and results of their existing cases unchanged. | the 77 case files creating an hnsw, cagra or ivfpq index under `cases/` and `gpu_cases/`; the 8 of them with a MATCH rerun with the gate |

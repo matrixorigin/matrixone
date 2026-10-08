@@ -2070,12 +2070,33 @@ func (builder *QueryBuilder) detectVectorGuardFromSort(sortNode *plan.Node) []in
 // vectorIndexSupportsContext reports whether algo may serve vecCtx. A membership join or a
 // fulltext MATCH filter on the scan restricts the Top-K to a key set. Algorithms other than
 // ivfflat only post-filter their candidates, which can drop rows of that Top-K, so they leave
-// such a query to the exact sort.
+// such a query to the exact sort. A MATCH only in the projection of the Top-K is served by
+// the fulltext rewrite of that projection, which needs the scan directly under it, so no
+// algorithm rewrites the scan.
 func (builder *QueryBuilder) vectorIndexSupportsContext(vecCtx *vectorSortContext, algo string) bool {
-	if vecCtx == nil || algo == catalog.MoIndexIvfFlatAlgo.ToString() {
+	if vecCtx == nil || vecCtx.scanNode == nil {
 		return true
 	}
-	return !vecCtx.hasMembership && !builder.scanHasMatchedFullTextFilter(vecCtx.scanNode)
+	ivfflat := algo == catalog.MoIndexIvfFlatAlgo.ToString()
+	if builder.scanHasMatchedFullTextFilter(vecCtx.scanNode) {
+		return ivfflat
+	}
+	if builder.projectionMatchesScan(vecCtx) {
+		return false
+	}
+	return ivfflat || !vecCtx.hasMembership
+}
+
+// projectionMatchesScan reports whether the project above or below the Top-K of vecCtx
+// holds a MATCH the fulltext rewrite serves from vecCtx's scan.
+func (builder *QueryBuilder) projectionMatchesScan(vecCtx *vectorSortContext) bool {
+	for _, proj := range []*plan.Node{vecCtx.projNode, vecCtx.childNode} {
+		if proj != nil && proj.NodeType == plan.Node_PROJECT &&
+			containsInt32(builder.detectFullTextGuard(proj), vecCtx.scanNode.NodeId) {
+			return true
+		}
+	}
+	return false
 }
 
 func (builder *QueryBuilder) detectVectorGuardForContext(vecCtx *vectorSortContext) []int32 {

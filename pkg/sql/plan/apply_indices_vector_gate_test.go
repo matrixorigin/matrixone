@@ -52,3 +52,15 @@ func TestVectorIndexSupportsContext(t *testing.T) {
 		})
 	}
 }
+
+// A MATCH only in the projection of the Top-K keeps every vector index off the scan.
+func TestVectorIndexSupportsContextProjectedMatch(t *testing.T) {
+	builder, scanID, projID := buildWrappedMatchGuardPlan(t, true)
+	scan, proj := builder.qry.Nodes[scanID], builder.qry.Nodes[projID]
+	for _, algo := range []string{catalog.MoIndexIvfFlatAlgo.ToString(), catalog.MoIndexHnswAlgo.ToString()} {
+		require.False(t, builder.vectorIndexSupportsContext(&vectorSortContext{scanNode: scan, projNode: proj}, algo), algo)
+		require.False(t, builder.vectorIndexSupportsContext(&vectorSortContext{scanNode: scan, childNode: proj}, algo), algo)
+	}
+	plainProj := &planpb.Node{NodeType: planpb.Node_PROJECT, Children: []int32{scanID}}
+	require.True(t, builder.vectorIndexSupportsContext(&vectorSortContext{scanNode: scan, projNode: plainProj}, catalog.MoIndexHnswAlgo.ToString()))
+}
