@@ -1,0 +1,22 @@
+DROP DATABASE IF EXISTS issue_28164_collation_gate;
+CREATE DATABASE issue_28164_collation_gate;
+USE issue_28164_collation_gate;
+CREATE TABLE legacy (id INT PRIMARY KEY, name VARCHAR(20) COLLATE utf8mb4_general_ci, token VARCHAR(20) COLLATE utf8mb4_bin) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+INSERT INTO legacy VALUES (1, 'Alpha', 'Alpha'), (2, 'alpha', 'alpha');
+SELECT id FROM legacy WHERE name COLLATE utf8mb4_general_ci = 'alpha' ORDER BY id;
+id
+2
+CREATE TABLE native_column (name VARCHAR(20) COLLATE utf8mb4_0900_bin);
+not supported: versioned collation semantics and key formats are disabled until the cluster activation gate is complete
+CREATE TABLE native_default (id INT) COLLATE utf8mb4_0900_bin;
+not supported: versioned collation semantics and key formats are disabled until the cluster activation gate is complete
+ALTER TABLE legacy DEFAULT COLLATE utf8mb4_0900_bin;
+invalid input: unsupported alter option in inplace mode: Collate = utf8mb4_0900_bin
+ALTER TABLE legacy CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin;
+not supported: versioned collation semantics and key formats are disabled until the cluster activation gate is complete
+SELECT 'a' COLLATE utf8mb4_0900_bin;
+not supported: versioned collation semantics and key formats are disabled until the cluster activation gate is complete
+SHOW TABLES;
+Tables_in_issue_28164_collation_gate
+legacy
+DROP DATABASE issue_28164_collation_gate;
