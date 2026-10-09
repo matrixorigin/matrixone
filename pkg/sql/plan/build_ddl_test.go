@@ -1621,7 +1621,7 @@ func TestMaterializedViewRefreshSQLIsReparseable(t *testing.T) {
 
 	refreshSQL := materializedViewRefreshSQL(stmt.(*tree.CreateView).AsSource)
 	require.Contains(t, refreshSQL, "date_trunc('minute'")
-	require.Contains(t, refreshSQL, "status >= 500")
+	require.Contains(t, strings.ReplaceAll(refreshSQL, "`", ""), "status >= 500")
 	reparsed, err := parsers.ParseOne(t.Context(), dialect.MYSQL, refreshSQL, 1)
 	require.NoError(t, err)
 	reparsed.Free()
@@ -1806,6 +1806,7 @@ func TestMaterializedViewIncrementalSpecRequiresCompleteSemantics(t *testing.T) 
 				outputCols[i] = &ColDef{Name: name, Typ: Type{Id: int32(types.T_float64)}}
 			}
 			spec, stateCols, refreshSQL := buildMaterializedViewIncrementalPlan(stmt.(*tree.Select), outputCols, "__state")
+			assertSQL := strings.ReplaceAll(strings.ToLower(refreshSQL), "`", "")
 			require.Equal(t, tc.eligible, spec != "")
 			if !tc.eligible {
 				if tc.name == "inner join" {
@@ -1820,15 +1821,15 @@ func TestMaterializedViewIncrementalSpecRequiresCompleteSemantics(t *testing.T) 
 			var desc materializedViewIncrementalDescription
 			require.NoError(t, json.Unmarshal(decoded, &desc))
 			require.NotEmpty(t, desc.RowCountColumn)
-			require.Contains(t, refreshSQL, "count(*)")
+			require.Contains(t, assertSQL, "count(*)")
 			require.Equal(t, 2, desc.Version)
 			if tc.name == "time bucket avg conditional" {
 				require.Equal(t, "region = 'us'", desc.Filter)
 				require.Len(t, desc.Groups, 2)
 				require.Len(t, desc.Aggregates, 3)
 				require.Equal(t, "avg", desc.Aggregates[2].Kind)
-				require.Contains(t, refreshSQL, "sum(duration)")
-				require.Contains(t, refreshSQL, "count(duration)")
+				require.Contains(t, assertSQL, "sum(duration)")
+				require.Contains(t, assertSQL, "count(duration)")
 			}
 			if tc.name == "min max" {
 				require.Equal(t, "hybrid-affected-group", desc.Strategy)
@@ -1847,8 +1848,8 @@ func TestMaterializedViewIncrementalSpecRequiresCompleteSemantics(t *testing.T) 
 				require.NotEmpty(t, desc.Aggregates[0].StateSumColumn)
 				require.NotEmpty(t, desc.Aggregates[0].StateCountColumn)
 				require.Positive(t, desc.Aggregates[0].StateIndex)
-				require.Contains(t, strings.ToLower(refreshSQL), "sum(distinct bytes) as "+desc.Aggregates[0].StateSumColumn)
-				require.Contains(t, strings.ToLower(refreshSQL), "count(distinct bytes) as "+desc.Aggregates[0].StateCountColumn)
+				require.Contains(t, assertSQL, "sum(distinct bytes) as "+strings.ToLower(desc.Aggregates[0].StateSumColumn))
+				require.Contains(t, assertSQL, "count(distinct bytes) as "+strings.ToLower(desc.Aggregates[0].StateCountColumn))
 			}
 			if tc.name == "having" {
 				require.Equal(t, "hybrid-affected-group", desc.Strategy)
@@ -1857,21 +1858,21 @@ func TestMaterializedViewIncrementalSpecRequiresCompleteSemantics(t *testing.T) 
 			}
 			if tc.name == "having-only-input" {
 				require.Equal(t, "hybrid-affected-group", desc.Strategy)
-				require.Equal(t, "sum(status) > 1", desc.Having)
+				require.Equal(t, "sum(status) > 1", strings.ReplaceAll(desc.Having, "`", ""))
 				require.Equal(t, "__state", desc.StateTable)
 				require.Contains(t, desc.SourceColumns, "status")
 			}
 			if tc.name == "select distinct rows" {
 				require.Empty(t, desc.StateTable)
 				require.Empty(t, desc.Aggregates)
-				require.Contains(t, strings.ToLower(refreshSQL), "group by service, region")
-				require.NotContains(t, strings.ToLower(refreshSQL), "select distinct")
+				require.Contains(t, assertSQL, "group by service, region")
+				require.NotContains(t, assertSQL, "select distinct")
 			}
 			if tc.name == "direct aggregate" {
 				require.Empty(t, desc.StateTable)
 			}
 			for _, stateCol := range stateCols {
-				require.Contains(t, refreshSQL, "as "+stateCol.Name)
+				require.Contains(t, assertSQL, "as "+strings.ToLower(stateCol.Name))
 			}
 		})
 	}
