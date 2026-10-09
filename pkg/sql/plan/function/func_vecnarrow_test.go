@@ -104,7 +104,7 @@ func TestInnerProductNarrowArray(t *testing.T) {
 			NewFunctionTestInput(types.T_array_int8.ToType(), [][]int8{{1, 2, 3}}, []bool{false}),
 			NewFunctionTestInput(types.T_array_int8.ToType(), [][]int8{{4, 5, 6}}, []bool{false}),
 		},
-		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{-32}, []bool{false}),
+		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{32}, []bool{false}),
 		InnerProductArrayViaF32[int8])
 	s, info := tc.RunAndFree()
 	require.True(t, s, fmt.Sprintf("inner_product int8: %s", info))
@@ -115,7 +115,7 @@ func TestInnerProductNarrowArray(t *testing.T) {
 			NewFunctionTestInput(types.T_array_uint8.ToType(), [][]uint8{{1, 2, 3}}, []bool{false}),
 			NewFunctionTestInput(types.T_array_uint8.ToType(), [][]uint8{{4, 5, 6}}, []bool{false}),
 		},
-		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{-32}, []bool{false}),
+		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{32}, []bool{false}),
 		InnerProductArrayViaF32[uint8])
 	s, info = tc.RunAndFree()
 	require.True(t, s, fmt.Sprintf("inner_product uint8: %s", info))

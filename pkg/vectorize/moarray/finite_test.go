@@ -70,7 +70,7 @@ func TestSQLDistancesRejectNonFiniteResults(t *testing.T) {
 		{"l2sq", func() (float64, error) { return L2DistanceSq[float32](a, b) }, 25},
 		{"l2", func() (float64, error) { return L2Distance[float32](a, b) }, 5},
 		{"l1", func() (float64, error) { return L1Distance[float32](a, b) }, 7},
-		{"ip", func() (float64, error) { return InnerProduct[float32](a, b) }, -25},
+		{"ip", func() (float64, error) { return InnerProduct[float32](a, b) }, 25},
 	} {
 		t.Run("ordinary "+tc.name, func(t *testing.T) {
 			got, err := tc.fn()

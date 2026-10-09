@@ -527,6 +527,138 @@ func TestUserDefinedVarRepeatedMigrationDoesNotReevaluateExpressions(t *testing.
 	}
 }
 
+func TestUserVariableNullRegexpHistoryMigration(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name       string
+		previous   any
+		typed      types.T
+		wantString bool
+		wantReplay bool
+	}{
+		{"first NULL", nil, types.T_any, true, true},
+		{"string then NULL", "abc", types.T_any, true, true},
+		{"numeric then NULL", int64(1), types.T_any, false, false},
+		{"typed decimal NULL", nil, types.T_decimal128, false, true},
+		{"typed double NULL", nil, types.T_float64, false, true},
+		{"typed string NULL", nil, types.T_varchar, true, true},
+		{"typed JSON NULL", nil, types.T_json, true, true},
+		{"typed date NULL", nil, types.T_date, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ses := &Session{userDefinedVars: make(map[string]*UserDefinedVar)}
+			if tc.previous != nil {
+				valueSQL := "1"
+				if _, text := tc.previous.(string); text {
+					valueSQL = "'abc'"
+				}
+				require.NoError(t, ses.setUserDefinedVarWithTypeAndKindAndReplayability(
+					"history", tc.previous, "set @history = "+valueSQL, false, inferUserDefinedVarType(tc.previous), vector.PrepareParamNone, true))
+			}
+			typ := plan.Type{Id: int32(tc.typed)}
+			assignmentSQL := "set @history = null"
+			switch tc.typed {
+			case types.T_decimal128:
+				typ.Width, typ.Scale = 38, 2
+				assignmentSQL = "set @history = cast(null as decimal(38,2))"
+			case types.T_float64:
+				assignmentSQL = "set @history = cast(null as double)"
+			case types.T_varchar:
+				typ.Width = 8
+				assignmentSQL = "set @history = cast(null as char(8))"
+			case types.T_json:
+				assignmentSQL = "set @history = cast(null as json)"
+			case types.T_date:
+				assignmentSQL = "set @history = cast(null as date)"
+			}
+			require.NoError(t, ses.setUserDefinedVarWithTypeAndKindAndReplayability(
+				"history", nil, assignmentSQL, false, typ, vector.PrepareParamNone, true))
+			require.Equal(t, !tc.wantReplay, ses.hasUnreplayableMigrationUserVars())
+			for i := 0; i < 3; i++ {
+				variable, err := ses.GetUserDefinedVar("history")
+				require.NoError(t, err)
+				require.Equal(t, int32(tc.typed), variable.Type.Id, "current assignment type must not encode regexp history")
+				require.Equal(t, tc.wantString, variable.RegexpStringResult)
+				snapshot, err := ses.snapshotUserDefinedVars(ctx)
+				require.NoError(t, err, "NULL snapshot migration remains supported")
+				require.Len(t, snapshot, 1)
+				// The existing protobuf shape and NULL value decoder are unchanged.
+				payload, err := snapshot[0].Marshal()
+				require.NoError(t, err)
+				wire := &query.MigrateUserDefinedVar{}
+				require.NoError(t, wire.Unmarshal(payload))
+				value, err := decodeUserDefinedVarValue(ctx, wire.Value)
+				require.NoError(t, err)
+				require.Nil(t, value)
+				restored, err := decodeUserDefinedVars(ctx, []*query.MigrateUserDefinedVar{wire}, true)
+				require.NoError(t, err)
+				require.Equal(t, tc.wantReplay, restored["history"].Replayable)
+				ses.installUserDefinedVars(restored)
+			}
+			// A further literal NULL retains only the regexp category, not the
+			// typed NULL's old ordinary DECIMAL/DOUBLE/VARCHAR conversion type.
+			require.NoError(t, ses.SetUserDefinedVar("history", nil, ""))
+			variable, err := ses.GetUserDefinedVar("history")
+			require.NoError(t, err)
+			require.Equal(t, int32(types.T_any), variable.Type.Id)
+			require.Equal(t, tc.wantString, variable.RegexpStringResult)
+		})
+	}
+}
+
+func TestUserVariableNullRegexpHistoryMigrationProtocol(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	rt := runtime.ServiceRuntime(ses.proc.GetService())
+	previous, present := rt.GetGlobalVariables(runtime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if present {
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion105)
+			rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion106)
+			rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion107)
+			rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion108)
+		}
+	})
+	require.NoError(t, ses.setUserDefinedVarWithTypeAndKindAndReplayability(
+		"fresh", nil, "set @fresh = null", false, plan.Type{}, vector.PrepareParamNone, true))
+	for _, version := range []int64{defines.MORPCVersion105, defines.MORPCVersion106, defines.MORPCVersion107} {
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, version)
+		_, err := ses.snapshotUserDefinedVars(context.Background())
+		require.ErrorContains(t, err, "requires MORPC protocol version 108")
+		require.True(t, ses.hasUnreplayableMigrationUserVars())
+	}
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion108)
+	_, err := ses.snapshotUserDefinedVars(context.Background())
+	require.NoError(t, err)
+	require.False(t, ses.hasUnreplayableMigrationUserVars())
+	// No new state is needed for numeric-history NULL or explicitly typed NULL.
+	require.NoError(t, ses.SetUserDefinedVar("fresh", int64(1), ""))
+	require.NoError(t, ses.SetUserDefinedVar("fresh", nil, ""))
+	require.NoError(t, ses.setUserDefinedVarWithType("typed", nil, "", false, plan.Type{Id: int32(types.T_text)}))
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion106)
+	_, err = ses.snapshotUserDefinedVars(context.Background())
+	require.NoError(t, err)
+}
+
+func TestMigratedLegacyNullRegexpHistoryFallback(t *testing.T) {
+	ctx := context.Background()
+	value, err := encodeUserDefinedVarValue(ctx, nil, false)
+	require.NoError(t, err)
+	for _, oid := range []types.T{types.T_any, types.T_text} {
+		restored, err := decodeUserDefinedVars(ctx, []*query.MigrateUserDefinedVar{{
+			Name: "legacy", Value: value, Type: &plan.Type{Id: int32(oid)},
+		}}, true)
+		require.NoError(t, err)
+		require.Equal(t, oid == types.T_text, restored["legacy"].RegexpStringResult)
+		require.Equal(t, oid == types.T_text, restored["legacy"].Replayable,
+			"unknown non-string history cannot be reconstructed by final SET NULL replay")
+		require.Equal(t, int32(oid), restored["legacy"].Type.Id)
+	}
+}
+
 func TestMigratedLegacyTextNullUsesPreparedSourceBinding(t *testing.T) {
 	ses, prepared, cw, ec := newPreparedExecuteEnvForSQL(t, 320, "select cast('00:00:01' as time(0)) * ?")
 	defer func() { cw.proc.SetPrepareParams(nil); prepared.Close() }()
