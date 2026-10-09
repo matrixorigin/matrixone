@@ -808,15 +808,19 @@ func TestCDCTargetSetupTransientDiagnosticOnMO(t *testing.T) {
 		aborted := false
 		checkpoint := ""
 		var injectionErr error
+		var collectedFrom, collectedTo, failedFrom, failedTo types.TS
 		var replayFrom []types.TS
 		faulted, recovery, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
 		var recoveryOnce, releaseOnce sync.Once
 		releaseRecovery = func() { releaseOnce.Do(func() { close(release) }) }
 		defer releaseRecovery()
-		restoreCollect = cdc.SetCDCCollectBoundaryHookForTest(func(from, _ types.TS) {
+		// This phase has one task/table reader. Its collection hook runs before
+		// target execution, so the failing INSERT belongs to the latest range.
+		restoreCollect = cdc.SetCDCCollectBoundaryHookForTest(func(from, to types.TS) {
 			mu.Lock()
 			defer mu.Unlock()
-			if aborted {
+			collectedFrom, collectedTo = from, to
+			if aborted && len(replayFrom) == 0 {
 				replayFrom = append(replayFrom, from)
 			}
 		})
@@ -839,6 +843,7 @@ func TestCDCTargetSetupTransientDiagnosticOnMO(t *testing.T) {
 				mu.Unlock()
 				return nil
 			}
+			failedFrom, failedTo = collectedFrom, collectedTo
 			aborted = true
 			mu.Unlock()
 			_, wm, readErr := readProgress("cdc_retry_task")
@@ -942,26 +947,36 @@ func TestCDCTargetSetupTransientDiagnosticOnMO(t *testing.T) {
 			}, 30*time.Second, 100*time.Millisecond)
 			mu.Lock()
 			wm, probeErr := checkpoint, injectionErr
+			from, to := failedFrom, failedTo
+			observed := append([]types.TS(nil), replayFrom...)
 			mu.Unlock()
 			require.NoError(t, probeErr)
 			require.NotEmpty(t, wm)
+			require.False(t, from.IsEmpty(), "failed range must have been collected")
+			require.True(t, from.LT(&to), "failed range must be nonempty")
+			require.NotEmpty(t, observed, "recovery must recollect before beginning its target transaction")
+			require.Equal(t, from, observed[0], "first recovery must recollect the failed range")
 			rows, readErr := readRows()
 			require.NoError(t, readErr)
 			require.Equal(t, []int{1}, rows)
 			_, current, readErr := readProgress("cdc_retry_task")
 			require.NoError(t, readErr)
-			require.Equal(t, wm, current, "failed attempt must retain durable progress")
+			require.NotEmpty(t, current)
+			// Earlier successful rounds may still flush while recovery is blocked.
+			// Durable progress can reach the failed range's start, but not enter it.
+			atFault, whileBlocked := types.StringToTS(wm), types.StringToTS(current)
+			require.True(t, atFault.LE(&whileBlocked), "durable progress must not regress")
+			require.True(t, whileBlocked.LE(&from), "failed attempt must not advance durable progress")
 			releaseRecovery()
 			require.Eventually(t, func() bool { rows, readErr := readRows(); return readErr == nil && reflect.DeepEqual(rows, []int{2}) }, 60*time.Second, 100*time.Millisecond)
 			require.Eventually(t, func() bool {
 				_, current, readErr := readProgress("cdc_retry_task")
-				return readErr == nil && current != wm
+				if readErr != nil || current == "" {
+					return false
+				}
+				progress := types.StringToTS(current)
+				return progress.GE(&to)
 			}, 30*time.Second, 100*time.Millisecond)
-			from := types.StringToTS(wm)
-			mu.Lock()
-			observed := append([]types.TS(nil), replayFrom...)
-			mu.Unlock()
-			require.Contains(t, observed, from, "recovery must recollect from the retained checkpoint")
 		}) {
 			return
 		}
