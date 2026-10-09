@@ -2251,8 +2251,8 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	if proc != nil {
 		protocolVersion, hasProtocolVersion = remoteMORPCProtocolVersion(proc.GetService())
 	}
-	if features.PythonRoutineContract && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion108) {
-		return moerr.NewNotSupportedNoCtx("Python routine execution requires MORPC protocol version 108")
+	if features.PythonRoutineContract && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion109) {
+		return moerr.NewNotSupportedNoCtx("Python routine execution requires MORPC protocol version 109")
 	}
 	if features.JSONScalarLiteralContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion104) {
 		return moerr.NewNotSupportedNoCtx("typed JSON scalar literals require MORPC protocol version 104")
