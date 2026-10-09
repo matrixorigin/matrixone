@@ -57,7 +57,7 @@ func transferInmemTombstones(
 				return err
 			}
 
-			deleteObjs, createObjs := state.GetChangedObjsBetween(start, end)
+			deleteObjs, createObjs := state.GetChangedObjsBetweenForTombstoneTransfer(start, end)
 
 			if len(deleteObjs) > 0 {
 				if err := transferTombstones(
@@ -203,18 +203,6 @@ func transferTombstones(
 	}()
 
 	var objectList []objectio.ObjectStats
-	for name := range createdObjects {
-		if obj, ok := pState.GetObject(name); ok {
-			objectList = append(objectList, obj.ObjectStats)
-		}
-	}
-
-	if len(objectList) >= 10 {
-		proc := table.proc.Load()
-		for _, obj := range objectList {
-			ioutil.Prefetch(proc.GetService(), fs, obj.ObjectLocation())
-		}
-	}
 
 	txnWrites := table.getTxn().writes
 
@@ -284,6 +272,20 @@ func transferTombstones(
 			entryPosMask.Add(uint64(i))
 
 			if transferIntents == nil {
+				// Prepare targets only when a workspace RowID needs transfer.
+				for name := range createdObjects {
+					if obj, ok := pState.GetObject(name); ok {
+						objectList = append(objectList, obj.ObjectStats)
+					}
+				}
+
+				if len(objectList) >= 10 {
+					proc := table.proc.Load()
+					for _, obj := range objectList {
+						ioutil.Prefetch(proc.GetService(), fs, obj.ObjectLocation())
+					}
+				}
+
 				transferIntents = vector.NewVec(types.T_Rowid.ToType())
 				targetRowids = vector.NewVec(types.T_Rowid.ToType())
 				searchPKColumn = vector.NewVec(*pkColumn.GetType())
