@@ -1,0 +1,64 @@
+drop database if exists vec_inner_product_semantics;
+create database vec_inner_product_semantics;
+use vec_inner_product_semantics;
+select inner_product('[1,2,3]', '[4,5,6]') as dot,
+inner_product('[1,2,3]', '[1,2,3]') as self_dot,
+inner_product('[1,2,3]', '[-4,-5,-6]') as negative_dot,
+inner_product('[1,2,3]', '[0,0,0]') as zero_dot;
+➤ dot[8,53,31]  ¦  self_dot[8,53,31]  ¦  negative_dot[8,53,31]  ¦  zero_dot[8,53,31]  𝄀
+32.0  ¦  14.0  ¦  -32.0  ¦  0.0
+select inner_product(cast('[1,2,3]' as vecf64(3)), cast('[4,5,6]' as vecf64(3))) as dot64,
+inner_product(cast('[1,2,3]' as vecbf16(3)), cast('[4,5,6]' as vecbf16(3))) as dotbf,
+inner_product(cast('[1,2,3]' as vecf16(3)), cast('[4,5,6]' as vecf16(3))) as dot16,
+inner_product(cast('[1,2,3]' as vecint8(3)), cast('[4,5,6]' as vecint8(3))) as doti8,
+inner_product(cast('[1,2,3]' as vecuint8(3)), cast('[4,5,6]' as vecuint8(3))) as dotu8;
+➤ dot64[8,53,31]  ¦  dotbf[8,53,31]  ¦  dot16[8,53,31]  ¦  doti8[8,53,31]  ¦  dotu8[8,53,31]  𝄀
+32.0  ¦  32.0  ¦  32.0  ¦  32.0  ¦  32.0
+create table ip_values(id int primary key, v vecf32(3), v64 vecf64(3));
+insert into ip_values values (1,'[4,5,6]','[4,5,6]'), (2,'[1,2,3]','[1,2,3]'),
+(3,'[-4,-5,-6]','[-4,-5,-6]'), (4,'[0,0,0]','[0,0,0]');
+select id, inner_product(v,'[1,2,3]') as dot, inner_product('[1,2,3]',v) as reversed_dot,
+inner_product(v64,cast('[1,2,3]' as vecf64(3))) as dot64 from ip_values order by id;
+➤ id[4,32,0]  ¦  dot[8,53,31]  ¦  reversed_dot[8,53,31]  ¦  dot64[8,53,31]  𝄀
+1  ¦  32.0  ¦  32.0  ¦  32.0  𝄀
+2  ¦  14.0  ¦  14.0  ¦  14.0  𝄀
+3  ¦  -32.0  ¦  -32.0  ¦  -32.0  𝄀
+4  ¦  0.0  ¦  0.0  ¦  0.0
+select a.id, inner_product(a.v,b.v) as dot from ip_values a join ip_values b on b.id=2 order by a.id;
+➤ id[4,32,0]  ¦  dot[8,53,31]  𝄀
+1  ¦  32.0  𝄀
+2  ¦  14.0  𝄀
+3  ¦  -32.0  𝄀
+4  ¦  0.0
+select id, inner_product(v,v) as self_dot from ip_values order by id;
+➤ id[4,32,0]  ¦  self_dot[8,53,31]  𝄀
+1  ¦  77.0  𝄀
+2  ¦  14.0  𝄀
+3  ¦  77.0  𝄀
+4  ¦  0.0
+select id, inner_product(v,'[1,2,3]') as dot from ip_values order by inner_product(v,'[1,2,3]') desc limit 2;
+➤ id[4,32,0]  ¦  dot[8,53,31]  𝄀
+1  ¦  32.0  𝄀
+2  ¦  14.0
+select id, inner_product(v,'[1,2,3]') as dot from ip_values order by inner_product(v,'[1,2,3]') asc limit 2;
+➤ id[4,32,0]  ¦  dot[8,53,31]  𝄀
+3  ¦  -32.0  𝄀
+4  ¦  0.0
+select l2_distance('[1,2,3]','[4,5,6]') > 0 as l2_positive,
+cosine_similarity('[1,2,3]','[4,5,6]') > 0 as cosine_positive;
+➤ l2_positive[-7,1,0]  ¦  cosine_positive[-7,1,0]  𝄀
+1  ¦  1
+insert into ip_values values (5,null,null);
+select id, inner_product(v,'[1,2,3]') as dot from ip_values order by id;
+➤ id[4,32,0]  ¦  dot[8,53,31]  𝄀
+1  ¦  32.0  𝄀
+2  ¦  14.0  𝄀
+3  ¦  -32.0  𝄀
+4  ¦  0.0  𝄀
+5  ¦  null
+select inner_product(null,'[1,2,3]') as null_dot;
+➤ null_dot[8,53,31]  𝄀
+null
+select inner_product('[1,2,3]','[4,5]');
+internal error: vector dimension not matched
+drop database vec_inner_product_semantics;
