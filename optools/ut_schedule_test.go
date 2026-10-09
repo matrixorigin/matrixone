@@ -239,6 +239,8 @@ func TestHeavyPlanSchedulesEngineBeforeResourceWave(t *testing.T) {
 		{"heavy-failure", "3", "1", "1", "0", "8", "0", "1"},
 		{"plan-failure", "3", "1", "1", "0", "0", "9", "1"},
 		{"plan-undrained", "3", "1", "1", "0", "0", "125", "1"},
+		{"plan-undrained-sequential", "3", "0", "1", "0", "0", "125", "1"},
+		{"engine-undrained", "3", "1", "1", "125", "0", "0", "1"},
 		{"sequential-baseline", "3", "0", "1", "0", "0", "0", "0"},
 		{"one-slot", "1", "1", "1", "0", "0", "0", "0"},
 		{"two-slots", "2", "1", "1", "0", "0", "0", "0"},
@@ -291,6 +293,7 @@ function go() {
 	 [[ "${2:-}" == "${EXPECTED_ENGINE_SHARDS}" ]] || return 96
 	 printf 'engine\n' > "$ENGINE_RACE_REPORT"
 	 touch "$CASE_DIR/engine-finished"
+ if [[ "$ENGINE_STATUS" == 125 ]]; then touch "$ENGINE_RACE_TEST_BINARY"; fi
  return "$ENGINE_STATUS"
 }
 	function run_plan_race_shards() {
@@ -303,11 +306,22 @@ function go() {
  return "$PLAN_STATUS"
 }
 run_tests
-if [[ "$PLAN_STATUS" == 125 ]]; then
- [[ "$UT_TEST_STATUS" == 1 && -f "$PLAN_RACE_TEST_BINARY" && -s "$PLAN_RACE_REPORT" ]] || exit 99
- [[ ! -e "$CASE_DIR/final-memory" ]] || exit 100
- printf 'UNDRAINED_RETAINED\n'
- exit 0
+if [[ "$PLAN_STATUS" == 125 || "$ENGINE_STATUS" == 125 ]]; then
+ [[ "$UT_TEST_STATUS" == 1 && ! -e "$CASE_DIR/final-memory" ]] || exit 99
+ if [[ "$ENGINE_STATUS" == 125 ]]; then
+  retained_binary=$ENGINE_RACE_TEST_BINARY
+  retained_report=$ENGINE_RACE_REPORT
+  [[ ! -e "$CASE_DIR/plan-started" && ! -e "$CASE_DIR/heavy-started" ]] || exit 100
+ else
+  retained_binary=$PLAN_RACE_TEST_BINARY
+  retained_report=$PLAN_RACE_REPORT
+ fi
+ [[ -f "$retained_binary" && -s "$retained_report" && -z "$ENGINE_RACE_JOB_PID$PLAN_RACE_JOB_PID" ]] || exit 101
+ start_plan_race example/plan; [[ "$?" == 125 ]] || exit 102
+ start_engine_race example/engine 1; [[ "$?" == 125 ]] || exit 103
+ trap 'status=$?; [[ -f "$retained_binary" && -s "$retained_report" ]] || status=104; printf "UNDRAINED_RETAINED\n"; exit "$status"' EXIT
+ kill -TERM "$$"
+ exit 105
 fi
 [[ "$UT_TEST_STATUS" == "$EXPECTED_STATUS" ]] || exit 93
 [[ -d "$CASE_DIR/engine-once" && -d "$CASE_DIR/plan-once" ]] || exit 94
@@ -317,7 +331,7 @@ printf '\nREPORT\n'
 	cat "$UT_REPORT"
 `
 			transform := func(text string) string {
-				const anchor = "            wait \"${ENGINE_RACE_JOB_PID}\"\n            engine_status=$?\n"
+				const anchor = "            join_ut_owner ENGINE_RACE_JOB_PID ENGINE_RACE_DRAIN_FAILED\n            engine_status=$?\n"
 				if got := strings.Count(text, anchor); got != 1 {
 					t.Fatalf("engine join anchor count = %d, want 1", got)
 				}
@@ -336,14 +350,18 @@ printf '\nREPORT\n'
 				expectedEngineShards = "1"
 			}
 			out, err := scheduleHarnessWithDefaultMockTransform(t, script, transform, "HEAVY_RACE_PARALLEL="+tc.budget, "UT_OVERLAP_PLAN="+tc.overlap, "PLAN_RACE_PARALLEL="+tc.planParallel, "ENGINE_STATUS="+tc.engine, "HEAVY_STATUS="+tc.heavy, "PLAN_STATUS="+tc.plan, "EXPECTED_STATUS="+tc.expected, "EXPECT_OVERLAP="+expectedOverlap, "EXPECT_ENGINE_BEFORE_HEAVY=1", "EXPECTED_ENGINE_SHARDS="+expectedEngineShards, "EXPECTED_PLAN_PARALLEL="+tc.planParallel, "EXPECTED_HEAVY_PARALLEL="+expectedHeavyParallel)
-			if err != nil {
-				t.Fatalf("schedule: %v\n%s", err, out)
-			}
-			if tc.plan == "125" {
+			if tc.plan == "125" || tc.engine == "125" {
+				exit, ok := err.(*exec.ExitError)
+				if !ok || exit.ExitCode() != 125 {
+					t.Fatalf("failed-drain schedule: %v\n%s", err, out)
+				}
 				if !strings.Contains(string(out), "UNDRAINED_RETAINED") {
 					t.Fatalf("lost undrained plan artifact: %s", out)
 				}
 				return
+			}
+			if err != nil {
+				t.Fatalf("schedule: %v\n%s", err, out)
 			}
 			if !strings.HasSuffix(string(out), "REPORT\nengine\nheavy-start\nheavy-end\nplan\n") {
 				t.Fatalf("lost or duplicated report events:\n%s", out)
@@ -1013,6 +1031,7 @@ exit 99
 	}{
 		{name: "success", lightStatus: "0", serialStatus: "0"},
 		{name: "light-failure", lightStatus: "7", serialStatus: "0"},
+		{name: "light-undrained", lightStatus: "125", serialStatus: "0"},
 		{name: "serial-failure", lightStatus: "0", serialStatus: "9"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1033,13 +1052,31 @@ light_status=0
 finish_light_race || light_status=$?
 [[ "$serial_status" == "$SERIAL_STATUS" ]] || exit 90
 [[ "$light_status" == "$LIGHT_STATUS" ]] || exit 91
+if [[ "$LIGHT_STATUS" == 125 ]]; then
+ retained_report=$LIGHT_RACE_REPORT
+ UT_LINK_DIR="$CASE_DIR/link-slots"
+ UT_LINK_PARALLEL=1
+ mkdir "$UT_LINK_DIR"
+ touch "$UT_LINK_DIR/slot-0"
+ [[ -z "$CURRENT_UT_PID$LIGHT_RACE_JOB_PID" && -s "$retained_report" ]] || exit 94
+ cleanup_light_link_gate; [[ "$?" == 125 ]] || exit 95
+ start_light_race example/light-package 2; [[ "$?" == 125 ]] || exit 96
+ trap 'status=$?; [[ -s "$retained_report" && -f "$UT_LINK_DIR/slot-0" && "$(cat "$UT_REPORT")" == $'"'"'serial-start\nserial-end'"'"' ]] || status=97; exit "$status"' EXIT
+ kill -TERM "$$"
+ exit 98
+fi
 [[ -z "$CURRENT_UT_PID$LIGHT_RACE_JOB_PID$LIGHT_RACE_REPORT" ]] || exit 92
 report=$(cat "$UT_REPORT")
 [[ "$report" == $'serial-start\nserial-end\nlight-start\nlight-end' ]] || { printf 'REPORT=%q\n' "$report"; exit 93; }
 `
 			out, err := scheduleHarnessWithMock(t, script, mock,
 				"LIGHT_STATUS="+tc.lightStatus, "SERIAL_STATUS="+tc.serialStatus)
-			if err != nil {
+			if tc.lightStatus == "125" {
+				exit, ok := err.(*exec.ExitError)
+				if !ok || exit.ExitCode() != 125 {
+					t.Fatalf("undrained overlap: %v\n%s", err, out)
+				}
+			} else if err != nil {
 				t.Fatalf("overlap: %v\n%s", err, out)
 			}
 		})

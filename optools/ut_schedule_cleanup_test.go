@@ -443,7 +443,7 @@ function cleanup_check() {
  if [[ "$MODE" == failed-drain ]]; then
   [[ -e "$(<"$CASE_DIR/artifact")" && ! -e "$CASE_DIR/joined" ]] || status=92
  fi
- [[ "$(wc -l < "$CASE_DIR/drains")" == 1 ]] || status=93
+ (( $(wc -l < "$CASE_DIR/drains") == 1 )) || status=93
  printf 'OWNERSHIP %s\n' "$status"
  exit "$status"
 }
@@ -542,9 +542,16 @@ fi
 [[ "$status" == 125 ]] || exit 90
 [[ -f "$CLUSTER_PREBUILD_REPORT.build.0" && -d "$CLUSTER_PREBUILD_DIR" ]] || exit 91
 [[ ! -e "$CASE_DIR/fallback" && -z "$CLUSTER_PREBUILD_JOB_PID" ]] || exit 92
+run_embedded_tests example/a 1; [[ "$?" == 125 ]] || exit 93
+start_embedded_prebuild example/a 1; [[ "$?" == 125 ]] || exit 94
+trap 'status=$?; [[ -f "$CLUSTER_PREBUILD_REPORT.build.0" && -d "$CLUSTER_PREBUILD_DIR" && ! -e "$CASE_DIR/fallback" ]] || status=95; exit "$status"' EXIT
+trap handle_ut_termination TERM
+kill -TERM "$$"
+exit 96
 `
 			out, err := scheduleHarness(t, script, "CONSUMER="+consumer)
-			if err != nil {
+			exit, ok := err.(*exec.ExitError)
+			if !ok || exit.ExitCode() != 125 {
 				t.Fatalf("failed-drain consumer %s: %v\n%s", consumer, err, out)
 			}
 		})

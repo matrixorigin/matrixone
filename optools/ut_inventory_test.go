@@ -292,7 +292,9 @@ handle_ut_termination
 }
 
 func TestOuterCancellationKeepsReportForFailedDrainHelper(t *testing.T) {
-	script := `source ./run_ut.sh UT
+	for _, phase := range []string{"active", "captured", "released", "joined", "raw-status"} {
+		t.Run(phase, func(t *testing.T) {
+			script := `source ./run_ut.sh UT
 function logger() { :; }
 function checkpoint_ut_event() { :; }
 function stop_ut_heartbeat() { :; }
@@ -323,12 +325,38 @@ trap cleanup EXIT
 (exit 125) &
 CURRENT_UT_PID=$!
 CURRENT_UT_LABEL='batched issues'
-handle_ut_termination
+if [[ "$PHASE" == active ]]; then
+ handle_ut_termination
+elif [[ "$PHASE" == raw-status ]]; then
+ builtin wait "$CURRENT_UT_PID" || true
+ CURRENT_UT_PID=""
+ handle_ut_join_term 125 0 CURRENT_UT_DRAIN_FAILED
+else
+ finish_ut_command; [[ "$?" == 125 && -z "$CURRENT_UT_PID" ]] || exit 96
+ start_ut_command serial retry true; [[ "$?" == 125 ]] || exit 97
+ trap handle_ut_termination TERM
+ kill -TERM "$$"
+fi
 `
-	out, err := scheduleHarnessWithMock(t, script, scheduleHarnessMock())
-	exit, ok := err.(*exec.ExitError)
-	if !ok || exit.ExitCode() != 125 {
-		t.Fatalf("failed-drain helper must retain report ownership: %v\n%s", err, out)
+			transform := func(text string) string {
+				anchor := "        wait \"${!pid_name}\" || join_status=$?\n"
+				if phase == "released" {
+					anchor = "        printf -v \"${pid_name}\" '%s' ''\n"
+				}
+				if phase == "captured" || phase == "released" {
+					if strings.Count(text, anchor) != 1 {
+						t.Fatal("missing unique owner join boundary")
+					}
+					return strings.Replace(text, anchor, anchor+"        kill -TERM \"$$\"\n", 1)
+				}
+				return text
+			}
+			out, err := scheduleHarnessWithMockTransform(t, script, scheduleHarnessMock(), transform, "PHASE="+phase)
+			exit, ok := err.(*exec.ExitError)
+			if !ok || exit.ExitCode() != 125 {
+				t.Fatalf("failed-drain helper must retain report ownership: %v\n%s", err, out)
+			}
+		})
 	}
 }
 
