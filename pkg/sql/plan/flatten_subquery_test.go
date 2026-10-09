@@ -93,7 +93,7 @@ func TestFlattenOuterJoinConditionSubqueriesList(t *testing.T) {
 	}
 
 	leftID, rightID, rewritten, err := builder.flattenOuterJoinConditionSubqueries(
-		1, 2, expr, nil, nil, nil, nil, JoinSideLeft, true)
+		1, 2, expr, nil, nil, nil, nil, JoinSideLeft, true, false)
 	require.NoError(t, err)
 	require.Equal(t, int32(1), leftID)
 	require.Equal(t, int32(2), rightID)

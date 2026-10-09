@@ -96,7 +96,7 @@ func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int
 
 func requiredExpressionContractProtocolVersion(features plan.RemoteExpressionFeatures) int64 {
 	if features.JSONValueContract {
-		return defines.MORPCVersion107
+		return defines.MORPCVersion108
 	}
 	if features.JSONScalarLiteralContracts {
 		return defines.MORPCVersion104

@@ -1167,7 +1167,7 @@ func TestJSONValuePersistedFloorComposesWithLandedJSONContracts(t *testing.T) {
 	require.True(t, features.JSONInputContracts)
 	required, err := RequiredPersistedExpressionProtocolVersion(owner)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion107, required)
+	require.Equal(t, defines.MORPCVersion108, required)
 }
 
 func TestJSONValuePersistedProtocolAdmissionAcrossOwners(t *testing.T) {
@@ -1237,27 +1237,27 @@ func TestJSONValuePersistedProtocolAdmissionAcrossOwners(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			required, err := RequiredPersistedExpressionProtocolVersion(tc.owner)
 			require.NoError(t, err)
-			require.Equal(t, int64(defines.MORPCVersion107), required)
+			require.Equal(t, int64(defines.MORPCVersion108), required)
 
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion106)
-			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion106))
-			require.ErrorContains(t,
-				RequirePersistedExpressionProtocol(proc.Ctx, proc, tc.owner), "protocol version 107")
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion107)
 			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion107))
+			require.ErrorContains(t,
+				RequirePersistedExpressionProtocol(proc.Ctx, proc, tc.owner), "protocol version 108")
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion108)
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion108))
 			require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, tc.owner))
 		})
 	}
 
 	for _, tc := range owners {
 		owner := tc.owner
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion107)
-		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion107))
-		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion106))
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion108)
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion108))
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion107))
 		require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, owner))
 		require.ErrorContains(t,
-			RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, owner), "protocol version 107")
-		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion107))
+			RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, owner), "protocol version 108")
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion108))
 		require.NoError(t, RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, owner))
 	}
 
@@ -1313,9 +1313,9 @@ func TestJSONValuePersistedSQLAdmission(t *testing.T) {
 		protocol, authoring int64
 		allowed             bool
 	}{
-		{"old CN", defines.MORPCVersion106, defines.MORPCVersion106, false},
-		{"read only admission", defines.MORPCVersion107, defines.MORPCVersion106, false},
-		{"authoring admitted", defines.MORPCVersion107, defines.MORPCVersion107, true},
+		{"old CN", defines.MORPCVersion107, defines.MORPCVersion107, false},
+		{"read only admission", defines.MORPCVersion108, defines.MORPCVersion107, false},
+		{"authoring admitted", defines.MORPCVersion108, defines.MORPCVersion108, true},
 	} {
 		t.Run(state.name, func(t *testing.T) {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, state.protocol)
@@ -1328,14 +1328,14 @@ func TestJSONValuePersistedSQLAdmission(t *testing.T) {
 					defer stmt.Free()
 					built, err := BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: sql}, stmt, false)
 					if !state.allowed {
-						require.ErrorContains(t, err, "protocol version 107")
+						require.ErrorContains(t, err, "protocol version 108")
 						return
 					}
 					require.NoError(t, err)
 					if table := built.GetDdl().GetCreateTable(); table != nil && table.GetTableDef().GetName() == "jv_index" {
 						required, err := RequiredPersistedExpressionProtocolVersion(table.GetTableDef())
 						require.NoError(t, err)
-						require.Equal(t, int64(defines.MORPCVersion107), required)
+						require.Equal(t, int64(defines.MORPCVersion108), required)
 						require.Len(t, table.GetIndexTables(), 1)
 						// The SQL builder's physical index stores materialized
 						// keys, not the generated expression owned by its table.
@@ -1347,7 +1347,7 @@ func TestJSONValuePersistedSQLAdmission(t *testing.T) {
 						var data ViewData
 						require.NoError(t, json.Unmarshal([]byte(view.GetTableDef().GetViewSql().GetView()), &data))
 						require.NotNil(t, data.RequiredProtocolVersion)
-						require.Equal(t, int64(defines.MORPCVersion107), *data.RequiredProtocolVersion)
+						require.Equal(t, int64(defines.MORPCVersion108), *data.RequiredProtocolVersion)
 					}
 				})
 			}

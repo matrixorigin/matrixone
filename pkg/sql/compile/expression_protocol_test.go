@@ -50,8 +50,8 @@ func TestJSONValueProtocolFloorComposesWithLandedContracts(t *testing.T) {
 		JSONInputContracts:         true,
 		JSONScalarLiteralContracts: true,
 	}
-	require.Equal(t, defines.MORPCVersion107, requiredExpressionContractProtocolVersion(features))
-	require.Equal(t, defines.MORPCVersion107, remoteExpressionProtocolVersion(features))
+	require.Equal(t, defines.MORPCVersion108, requiredExpressionContractProtocolVersion(features))
+	require.Equal(t, defines.MORPCVersion108, remoteExpressionProtocolVersion(features))
 	features.JSONValueContract = false
 	require.Equal(t, defines.MORPCVersion104, requiredExpressionContractProtocolVersion(features))
 }

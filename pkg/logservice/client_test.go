@@ -213,6 +213,16 @@ func TestClientCreationFallsBackFromUnreachableReplicaAddress(t *testing.T) {
 	logServiceConnectFallbackDelay = 50 * time.Millisecond
 	defer func() { logServiceConnectFallbackDelay = origFallbackDelay }()
 
+	// CONNECT proposes the TN lease, so replica startup must finish before
+	// measuring address fallback rather than Raft election.
+	readyCtx, cancelReady := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelReady()
+	readyClient, err := connectToLogServiceAddress(readyCtx, "", cfg.LogServiceServiceAddr(), scfg)
+	cancelReady()
+	require.NoError(t, err)
+	require.NotNil(t, readyClient)
+	require.NoError(t, readyClient.close())
+
 	timeout := 5 * time.Second
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()

@@ -63,33 +63,38 @@ values are not automatically recomputed. Upgrade validation covers views,
 generated columns, indexes, values over the 512-character boundary, and the
 explicit rebuild procedure.
 
-### Versioned compatibility decision (candidate revision 6, 2026-10-08)
+### Versioned compatibility decision (candidate revision 7, 2026-10-09)
 
 Status: independent maintainer approval pending. This candidate updates revision
-5 with the agreed landing order and shutdown-upgrade acceptance scope;
+6 after an intervening main allocation, retaining shutdown-upgrade acceptance;
 superseded details remain in PR history rather than this contract.
 Approval must identify
 this revision's immutable commit and an independent approver. Author replies,
 thread resolution and approvals of earlier revisions do not approve this one.
 
-The current source is a provisional MORPC v107 validation candidate for
+The current source is a provisional MORPC v108 validation candidate for
 JSON_VALUE function ID 462, overload 2, based on
-`bab4b3286a0dd5683a9b291763817722233e586c` (v106). It is not the final landing
+`c2c1031d0ba4b1034849f6bd3d267252a11eb6c9` (v107). It preserves main's
+functional-index metadata and generated-key maintenance capability at v107;
+v107 nodes must still reject this candidate's seven-argument JSON_VALUE contract.
+It is not the final landing
 build. The [maintainer landing decision](https://github.com/matrixorigin/matrixone/pull/28275#issuecomment-6054197734)
-orders #28935, #28947, then this PR, with conditional targets v107, v108, v109.
-The final executable must include both preceding landed capabilities from
-verified main before this PR can advertise v109. Intervening allocations require
-a refreshed decision. Do not replace 107 with 109, reserve empty numbers, or
-mix independent v107 candidate binaries. The source gates, immediate-predecessor
+ordered #28935, #28947, then this PR against the former v106 base. Its conditional
+v107/v108/v109 assignments are superseded by the actual functional-index landing
+in #29472. A refreshed maintainer decision is required before final landing;
+neither unmerged predecessor capability is implied by this conflict repair.
+The final executable must include the actually preceding landed capabilities
+from verified main. Do not reserve empty numbers or mix independent candidate
+binaries. The source gates, immediate-predecessor
 tests, final design and earlier-capability preservation tests move together
 after cumulative integration. No independent design approval is carried forward.
 
-The planner requires the deployment-wide MOProtocolVersion to be at least 107
+The planner requires the deployment-wide MOProtocolVersion to be at least 108
 for RETURNING, ON EMPTY or ON ERROR. Bare two-argument calls keep the legacy
 plan and its NULL-document short circuit. In the new clause-bearing contract,
 a non-NULL invalid path is a hard error even when the document is SQL NULL.
 
-Both current sender and receiver validate overload 2 against v107 before remote
+Both current sender and receiver validate overload 2 against v108 before remote
 execution. Those checks do not retrofit an old receiver. The accepted deployment
 scope is a shutdown upgrade: stop all old processes, replace the binaries with
 the final cumulative build, then start and admit the deployment before authoring
@@ -108,7 +113,7 @@ The SQL grammar rejects JSON_VALUE in ON UPDATE; internal owner-walk coverage
 does not imply SQL support for that combination. Prepared execution is tested separately; a session prepared statement is not
 assumed to be a durable catalog object.
 
-Do not admit pre-v107 CNs after committing a v107 durable floor. The existing
+Do not admit pre-v108 CNs after committing a v108 durable floor. The existing
 floor advances monotonically; deleting views/generated expressions or indexes
 does not by itself lower it. In-place rollback below that floor is unsupported
 unless a separately supported, validated floor-lowering procedure exists.
@@ -156,8 +161,8 @@ upgrade and rollback restriction, and retained validation/performance dispositio
 
 ### Persistence acceptance for shutdown upgrade
 
-Let V be the final integrated JSON_VALUE capability, conditionally v109, and
-P its actual immediate predecessor, conditionally v108. The provisional v106/v107
+Let V be the final integrated JSON_VALUE capability under the refreshed landing
+decision and P its actual immediate predecessor. The provisional v107/v108
 fixture is not a substitute for the final P/V pair. Retain the predecessor data
 directory and backup; record both binary SHAs, catalog/floor state, SQL results
 and process shutdown/start evidence. The deployment operator owns the stop/replace/
@@ -216,7 +221,7 @@ at immutable source `88c5d3e65be9a887a5094ae584d371d35d4e95d2`; they are not
 new-head PASS evidence. In particular, admitted-extraction benchmarks exclude
 generic vector ingestion/unmarshal and cannot answer their regression cost.
 
-Current source tests the merged grammar and provisional protocol107 predecessor106
+Current source tests the merged grammar and provisional protocol108 predecessor107
 boundaries separately. Final cumulative integration, predecessor-data shutdown
 upgrade, durable floor restart/restore, deployment QA and independent approval
 remain required and are not claimed complete. A focused base/head ingestion/unmarshal

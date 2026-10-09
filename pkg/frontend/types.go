@@ -417,6 +417,7 @@ type PrepareStmt struct {
 	runtimeSpecializationKey    string
 	runtimePlan                 *plan.Plan
 	runtimeDiagnosticCandidates []*plan.Expr
+	runtimeColDefData           [][]byte
 	runtimeCompile              *compile.Compile
 
 	// schedulingSQLMode freezes the lexical mode used when Sql was prepared.
@@ -828,6 +829,7 @@ func (prepareStmt *PrepareStmt) installRuntimeSpecializationCache(
 	runtimePlan *plan.Plan,
 	runtimeCompile *compile.Compile,
 	diagnosticCandidates []*plan.Expr,
+	colDefData [][]byte,
 ) *compile.Compile {
 	oldRuntimeCompile := prepareStmt.runtimeCompile
 	// AP scopes contain execution-specific placement and scan state. Cache only
@@ -841,6 +843,7 @@ func (prepareStmt *PrepareStmt) installRuntimeSpecializationCache(
 	prepareStmt.runtimeSpecializationKey = key
 	prepareStmt.runtimePlan = runtimePlan
 	prepareStmt.runtimeDiagnosticCandidates = diagnosticCandidates
+	prepareStmt.runtimeColDefData = colDefData
 	prepareStmt.runtimeCompile = runtimeCompile
 	if oldRuntimeCompile == runtimeCompile {
 		return nil
@@ -856,6 +859,7 @@ func (prepareStmt *PrepareStmt) clearRuntimeSpecializationCache() {
 	prepareStmt.runtimeSpecializationKey = ""
 	prepareStmt.runtimePlan = nil
 	prepareStmt.runtimeDiagnosticCandidates = nil
+	prepareStmt.runtimeColDefData = nil
 	prepareStmt.runtimeCompile = nil
 	prepareStmt.releaseRuntimeCompile(oldRuntimeCompile)
 }
