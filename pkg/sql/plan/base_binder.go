@@ -2910,6 +2910,26 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 		return nil, moerr.NewNYIf(b.GetContext(), "function expr '%v'", astExpr)
 	}
 	funcName := funcRef.ColName()
+	if strings.EqualFold(funcName, "collate") {
+		// The parser retains the clause so that a new native identity cannot
+		// silently fall back to the old SQL behavior. This metadata-only stage
+		// has no executable native comparison; legacy clauses remain no-ops.
+		if len(astExpr.Exprs) != 2 {
+			return nil, moerr.NewInvalidArg(b.GetContext(), "COLLATE", len(astExpr.Exprs))
+		}
+		name, ok := astExpr.Exprs[1].(*tree.NumVal)
+		if !ok || name.ValType != tree.P_char {
+			return nil, moerr.NewInvalidInput(b.GetContext(), "COLLATE requires a collation name")
+		}
+		charset, ok := collationForName(name.String())
+		if !ok {
+			return nil, unsupportedCollationError(b.GetContext(), name.String())
+		}
+		if collationSemanticVersion(charset) != uint32(types.CollationVersionLegacy) {
+			return nil, moerr.NewNotSupportedNoCtx(native0900AdmissionError)
+		}
+		return b.impl.BindExpr(astExpr.Exprs[0], depth, isRoot)
+	}
 	if strings.EqualFold(funcName, "grouping") {
 		return b.bindGroupingFuncExpr(astExpr)
 	}
