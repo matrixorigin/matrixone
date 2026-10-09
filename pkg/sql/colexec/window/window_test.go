@@ -200,7 +200,7 @@ func (c *cancelAfterDoneChecksContext) Err() error {
 func makeTestCases(t *testing.T) []winTestCase {
 	return []winTestCase{
 		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero()),
 			arg: &Window{
 				WinSpecList: []*plan.Expr{makeWindowSpec()},
 				Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
@@ -210,7 +210,7 @@ func makeTestCases(t *testing.T) []winTestCase {
 			// Multi-argument window aggregate (json_objectagg): the operator must
 			// derive one argument type per argument. Guards against regressing the
 			// fix for issue #25483 where only a single type was passed to MakeAgg.
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero()),
 			arg: &Window{
 				WinSpecList: []*plan.Expr{makeAggWindowSpec("json_objectagg")},
 				Aggs:        []aggexec.AggFuncExecExpression{newJsonObjectAggExpr(t)},
@@ -255,7 +255,7 @@ func TestWin(t *testing.T) {
 }
 
 func TestWindowFrameEvaluationHonorsCancellation(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	const rows = cancellationCheckInterval * 2
 	values := make([]int32, rows)
 	bat := batch.NewWithSize(1)
@@ -295,7 +295,7 @@ func TestWindowFrameEvaluationHonorsCancellation(t *testing.T) {
 }
 
 func TestCumulativeWindowCancellationReleasesState(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	const rows = cancellationCheckInterval * 2
 	values := make([]int32, rows)
 	bat := makeInt32Batch(proc.Mp(), values)
@@ -323,7 +323,7 @@ func TestCumulativeWindowCancellationReleasesState(t *testing.T) {
 }
 
 func TestBoundedSlidingWindowCancellationReleasesState(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	const rows = cancellationCheckInterval * 2
 	values := make([]int32, rows)
 	for i := range values {
@@ -354,7 +354,7 @@ func TestBoundedSlidingWindowCancellationReleasesState(t *testing.T) {
 }
 
 func TestBoundedSlidingRangeWindowCancellationReleasesState(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	const rows = 128
 	values := make([]int32, rows)
 	for i := range values {
@@ -391,7 +391,7 @@ func TestBoundedSlidingRangeWindowCancellationReleasesState(t *testing.T) {
 }
 
 func TestWindowCallHonorsPreCancellation(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	ctx, cancel := context.WithCancel(proc.Ctx)
 	proc.Ctx = ctx
 	cancel()
@@ -562,7 +562,7 @@ func requirePreparedRowsBoundUnchanged(t *testing.T, expr *plan.Expr, pos int32)
 }
 
 func TestWindowPrepareMaterializesRowsFrameBounds(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	planned := makePreparedRowsFrame(t, 0, 1)
 	arg := makeWindowWithFrame(planned)
 	firstParams := setWindowPrepareParams(t, proc, stringPtr("1"), stringPtr("2"))
@@ -596,7 +596,7 @@ func TestWindowPrepareMaterializesRowsFrameBounds(t *testing.T) {
 }
 
 func TestWindowPrepareMaterializesRangeFrameBounds(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	planned := makePreparedRangeFrame(t, 0, 1, types.T_int32.ToType())
 	arg := makeWindowWithFrame(planned)
 	firstParams := setWindowPrepareParams(t, proc, stringPtr("1"), stringPtr("2"))
@@ -651,7 +651,7 @@ func TestWindowPrepareValidatesRowsFrameBounds(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			planned := makePreparedRowsFrame(t, 0, 0)
 			arg := makeWindowWithFrame(planned)
 			var params *vector.Vector
@@ -709,7 +709,7 @@ func TestWindowPrepareValidatesRangeFrameBounds(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			planned := makePreparedRangeFrame(t, 0, 0, types.T_int32.ToType())
 			arg := makeWindowWithFrame(planned)
 			var params *vector.Vector
@@ -818,7 +818,7 @@ func TestValidateRangeFrameBound(t *testing.T) {
 }
 
 func TestWindowPrepareClearsPartialRowsFrameBoundsOnError(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	valid := makePreparedRowsFrame(t, 0, 0)
 	invalid := makePreparedRowsFrame(t, 1, 1)
 	arg := makeWindowWithFrame(valid)
@@ -841,7 +841,7 @@ func TestWindowPrepareClearsPartialRowsFrameBoundsOnError(t *testing.T) {
 }
 
 func TestWindowPrepareHandlesNilAndLiteralFrameBounds(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	literal := &plan.FrameClause{
 		Type: plan.FrameClause_ROWS,
 		Start: &plan.FrameBound{
@@ -875,7 +875,7 @@ func TestWindowPrepareHandlesNilAndLiteralFrameBounds(t *testing.T) {
 }
 
 func TestWindowPreparePreservesRangeIntervalBounds(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	interval := &plan.Expr{
 		Typ: plan.Type{Id: int32(types.T_interval)},
 		Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{
@@ -904,7 +904,7 @@ func TestWindowPreparePreservesRangeIntervalBounds(t *testing.T) {
 }
 
 func TestWindowPrepareFrameBoundsStayUnpublishedAfterLaterError(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	planned := makePreparedRowsFrame(t, 0, 0)
 	arg := makeWindowWithFrame(planned)
 	aggID := arg.Aggs[0].GetAggID()
@@ -924,7 +924,7 @@ func TestWindowPrepareFrameBoundsStayUnpublishedAfterLaterError(t *testing.T) {
 }
 
 func TestWindowPrepareFrameBoundsFeedAggregateConsumer(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	planned := makePreparedRowsFrame(t, 0, 1)
 	arg := makeWindowWithFrame(planned)
 	bat := makeInt32Batch(proc.Mp(), []int32{10, 20, 30, 40})
@@ -949,7 +949,7 @@ func TestWindowPrepareFrameBoundsFeedAggregateConsumer(t *testing.T) {
 }
 
 func TestWindowPrepareRangeFrameBoundsFeedAggregateConsumer(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	planned := makePreparedRangeFrame(t, 0, 1, types.T_int32.ToType())
 	spec := &plan.Expr{
 		Expr: &plan.Expr_W{W: &plan.WindowSpec{
@@ -991,7 +991,7 @@ func TestWindowPrepareRangeFrameBoundsFeedAggregateConsumer(t *testing.T) {
 }
 
 func TestWindowPreparedCumulativeBoundUsesRuntimeValue(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	planned := &plan.FrameClause{
 		Type: plan.FrameClause_ROWS,
 		Start: &plan.FrameBound{
@@ -1023,7 +1023,7 @@ func TestWindowPreparedCumulativeBoundUsesRuntimeValue(t *testing.T) {
 }
 
 func TestWindowPreparedBoundedSlidingSumUsesRuntimeValue(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	planned := &plan.FrameClause{
 		Type: plan.FrameClause_ROWS,
 		Start: &plan.FrameBound{
@@ -1066,7 +1066,7 @@ func TestWindowPrepareFrameBoundsFeedValueConsumers(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			planned := makePreparedRowsFrame(t, 0, 1)
 			spec := makeValueWindowSpecWithName(test.name, int32(types.T_int32))
 			spec.GetW().Frame = planned
@@ -1386,7 +1386,7 @@ func makeKeyValBatch(mp *mpool.MPool, keys []string, keyNullPos []uint64, vals [
 // two-argument aggregate and asserts the actual JSON output, so a regression in
 // multi-argument passing (issue #25483) cannot pass silently.
 func TestWindowJsonObjectAggOutput(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	bat := makeKeyValBatch(proc.Mp(), []string{"k1", "k2", "k3"}, nil, []int32{10, 20, 30})
 
 	spec := makeAggWindowSpec("json_objectagg")
@@ -1446,7 +1446,7 @@ func TestWindowOrderedPercentileOutput(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			bat := batch.NewWithSize(1)
 			bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 3, 5, 7}, nil, proc.Mp())
 			bat.SetRowCount(4)
@@ -1483,7 +1483,7 @@ func TestWindowOrderedPercentileOutput(t *testing.T) {
 }
 
 func TestWindowOrderedPercentileFullPartitionBroadcasts(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	makePartition := func(values []int32, key int32) *batch.Batch {
 		bat := batch.NewWithSize(2)
 		bat.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
@@ -1531,7 +1531,7 @@ func TestWindowOrderedPercentileFullPartitionBroadcasts(t *testing.T) {
 }
 
 func TestWindowOrderedPercentileSpills(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	const rows = 20_000
 	values := make([]int32, rows)
 	for i := range values {
@@ -1590,7 +1590,7 @@ func TestWindowOrderedPercentileSpills(t *testing.T) {
 }
 
 func TestWindowOrderedPercentileFinalizationHonorsCancellation(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	bat := makeInt32Batch(proc.Mp(), []int32{1, 3, 5, 7})
 	arg := &Window{
 		WinSpecList: []*plan.Expr{makeAggWindowSpec("percentile_cont")},
@@ -1616,7 +1616,7 @@ func TestWindowOrderedPercentileFinalizationHonorsCancellation(t *testing.T) {
 }
 
 func TestWindowOrderedPercentileSpilledMergeCancellationClosesAndReuses(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	trackingFS := installTrackingSpillFileService(t, proc)
 	const rows = 20_000
 	values := make([]int32, rows)
@@ -1677,7 +1677,7 @@ func TestWindowOrderedPercentileSpilledMergeCancellationClosesAndReuses(t *testi
 }
 
 func TestWindowOrderedPercentilePartitionCrossesOutputChunk(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	const (
 		firstPartitionRows = colexec.DefaultBatchSize + 8
 		rows               = firstPartitionRows + 1800
@@ -1737,7 +1737,7 @@ func TestWindowOrderedPercentilePartitionCrossesOutputChunk(t *testing.T) {
 }
 
 func TestWindowOrderedPercentileCacheReleasesOnReset(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	values := make([]int32, colexec.DefaultBatchSize+1)
 	for i := range values {
 		values[i] = int32(i)
@@ -1788,7 +1788,7 @@ func TestWindowOrderedPercentileCacheReleasesOnReset(t *testing.T) {
 // (json_objectagg key cannot be NULL) mid-aggregation and asserts that the
 // chunk-local aggregator is released immediately.
 func TestWindowJsonObjectAggNullKeyNoLeak(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	// Row 1 has a NULL key: json_objectagg errors while filling the frame.
 	bat := makeKeyValBatch(proc.Mp(), []string{"k1", ""}, []uint64{1}, []int32{10, 20})
 
@@ -1840,7 +1840,7 @@ func collectFixedWindowColumn[T types.FixedSizeT](
 // TestWindowAggResultAcrossChunks verifies that a cumulative aggregate retains
 // its running state across bounded output batches.
 func TestWindowAggResultAcrossChunks(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	rows := aggexec.AggBatchSize + 17
 	values := make([]int32, rows)
 	for i := range values {
@@ -1886,7 +1886,7 @@ func TestWindowAggResultAcrossChunks(t *testing.T) {
 // null bits in unused capacity, which must not make a fully populated output
 // look nullable to downstream operators.
 func TestWindowAggregateResultDropsTailNulls(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	rows := aggexec.AggBatchSize - 12
 	values := make([]int32, rows)
 	for i := range values {
@@ -1927,7 +1927,7 @@ func TestWindowAggregateResultDropsTailNulls(t *testing.T) {
 }
 
 func TestWindowAggregateResultKeepsLogicalNulls(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 0, 3}, []uint64{1}, proc.Mp())
 	bat.SetRowCount(3)
@@ -1961,7 +1961,7 @@ func TestWindowAggregateResultKeepsLogicalNulls(t *testing.T) {
 }
 
 func TestWindowSkipsEmptyInputBatch(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	empty := batch.NewWithSize(1)
 	empty.Vecs[0] = vector.NewVec(types.T_int32.ToType())
 	nonEmpty := makeInt32Batch(proc.Mp(), []int32{7})
@@ -1991,7 +1991,7 @@ func TestWindowSkipsEmptyInputBatch(t *testing.T) {
 // path. The upstream Partition operator guarantees one logical partition per
 // input batch; the constant first column models that contract here.
 func TestWindowPartitionedAggResultAcrossChunks(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	rows := aggexec.AggBatchSize + 17
 	values := make([]int32, rows)
 	for i := range values {
@@ -2032,7 +2032,7 @@ func TestWindowPartitionedAggResultAcrossChunks(t *testing.T) {
 // TestWindowDecimalAggResultAcrossChunks matches the DECIMAL(20,2) SUM shape
 // from issue #25813 and exercises the decimal aggregate implementation.
 func TestWindowDecimalAggResultAcrossChunks(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	rows := aggexec.AggBatchSize + 17
 	typ := types.New(types.T_decimal128, 20, 2)
 	values := make([]types.Decimal128, rows)
@@ -2071,7 +2071,7 @@ func TestWindowDecimalAggResultAcrossChunks(t *testing.T) {
 // TestWindowOrderResultAcrossChunks covers bounded rank-family output and the
 // row-number fast path across an output boundary.
 func TestWindowOrderResultAcrossChunks(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	rows := aggexec.AggBatchSize + 17
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = testutil.MakeInt32Vector(make([]int32, rows), nil, proc.Mp())
@@ -2106,7 +2106,7 @@ func TestWindowOrderResultAcrossChunks(t *testing.T) {
 }
 
 func TestWindowRankPeerAcrossChunks(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	rows := colexec.DefaultBatchSize + 17
 	values := make([]int32, rows)
 	for i := range values {
@@ -2146,7 +2146,7 @@ func TestWindowRankPeerAcrossChunks(t *testing.T) {
 }
 
 func TestWindowRankTreatsFloatNaNsAsLastPeerGroup(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = vector.NewVec(types.T_float64.ToType())
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []float64{
@@ -2182,7 +2182,7 @@ func TestWindowRankTreatsFloatNaNsAsLastPeerGroup(t *testing.T) {
 }
 
 func TestWindowPartitionedRankTreatsFloatNaNsAsPeers(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	bat := batch.NewWithSize(2)
 	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1, 1, 1}, nil, proc.Mp())
 	bat.Vecs[1] = vector.NewVec(types.T_float64.ToType())
@@ -2221,7 +2221,7 @@ func TestWindowPartitionedRankTreatsFloatNaNsAsPeers(t *testing.T) {
 }
 
 func TestWindowPartitionedFloatNaNPeersUseLaterOrderKey(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	bat := batch.NewWithSize(3)
 	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1, 1}, nil, proc.Mp())
 	bat.Vecs[1] = vector.NewVec(types.T_float64.ToType())
@@ -2269,7 +2269,7 @@ func TestWindowPartitionedFloatNaNPeersUseLaterOrderKey(t *testing.T) {
 }
 
 func TestWindowValueResultAcrossChunks(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	rows := colexec.DefaultBatchSize + 17
 	values := make([]int32, rows)
 	for i := range values {
@@ -2319,7 +2319,7 @@ func TestWindowValueResultAcrossChunks(t *testing.T) {
 }
 
 func TestWindowOrderFunctionsUsePeerBoundaries(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{10, 10, 20, 30}, nil, proc.Mp())
 	bat.SetRowCount(4)
@@ -2392,7 +2392,7 @@ func TestNtileBucketCountRejectsNull(t *testing.T) {
 }
 
 func TestWindowResetBeforeAllChunksReleasesState(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	rows := colexec.DefaultBatchSize * 2
 	values := make([]int32, rows)
 	for i := range values {
@@ -2433,7 +2433,7 @@ func TestWindowResetBeforeAllChunksReleasesState(t *testing.T) {
 }
 
 func TestCumulativeAggregateResetsAtPartitionBoundary(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	bat := makeInt32Batch(proc.Mp(), []int32{1, 2, 10, 20})
 	spec := makeWindowSpec()
 	spec.GetW().Frame = makeFiniteCumulativeFrame(1)
@@ -2460,7 +2460,7 @@ func TestCumulativeAggregateResetsAtPartitionBoundary(t *testing.T) {
 }
 
 func TestCumulativeMaxUsesRunningAggregateAcrossChunks(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	values := make([]int32, 512)
 	want := make([]int32, len(values))
 	for i := range values {
@@ -2547,7 +2547,7 @@ func TestCumulativePrefixWithinOutputChunk(t *testing.T) {
 		{"varlen-control", "max", types.T_varchar.ToType(), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			bat := batch.NewWithSize(1)
 			bat.Vecs[0] = vector.NewVec(tc.typ)
 			input := bat.Vecs[0]
@@ -2625,7 +2625,7 @@ func TestCumulativePrefixWithinOutputChunk(t *testing.T) {
 func BenchmarkCumulativeSmallPartitions(b *testing.B) {
 	for _, rows := range []int{1, 2, 16, 64, 128, 256} {
 		b.Run(fmt.Sprintf("partition_rows=%d", rows), func(b *testing.B) {
-			proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(b, "", mpool.MustNewZero())
 			defer proc.Free()
 			values := make([]int32, 256)
 			for i := range values {
@@ -2654,7 +2654,7 @@ func BenchmarkCumulativeSmallPartitions(b *testing.B) {
 }
 
 func TestBoundedSlidingSumAcrossOutputChunks(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	rows := colexec.DefaultBatchSize*2 + 17
 	values := make([]int32, rows)
 	for i := range values {
@@ -2688,7 +2688,7 @@ func TestBoundedSlidingSumAcrossOutputChunks(t *testing.T) {
 }
 
 func TestBoundedSlidingSumRejectsNonSequentialOutput(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	bat := makeInt32Batch(proc.Mp(), []int32{1, 2, 3})
 	spec := makeWindowSpec()
 	spec.GetW().Frame = makeFiniteCumulativeFrame(1)
@@ -2718,7 +2718,7 @@ func TestBoundedSlidingSumRejectsNonSequentialOutput(t *testing.T) {
 }
 
 func TestBoundedSlidingSumResetsAtPartitionBoundary(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	bat := makeInt32Batch(proc.Mp(), []int32{1, 2, 3, 4, 10, 20, 30, 40})
 	spec := makeWindowSpec()
 	spec.GetW().Frame = makeFiniteCumulativeFrame(1)
@@ -2745,7 +2745,7 @@ func TestBoundedSlidingSumResetsAtPartitionBoundary(t *testing.T) {
 }
 
 func TestBoundedSlidingSumPreservesNullSemantics(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 0, 0, 4}, []uint64{1, 2}, proc.Mp())
 	bat.SetRowCount(4)
@@ -2776,7 +2776,7 @@ func TestBoundedSlidingSumPreservesNullSemantics(t *testing.T) {
 }
 
 func TestBoundedSlidingSumSupportsInt64Arguments(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = testutil.NewInt64Vector(
 		4, types.T_int64.ToType(), proc.Mp(), false, nil, []int64{1, 2, 3, 4})
@@ -2808,7 +2808,7 @@ func TestBoundedSlidingSumSupportsInt64Arguments(t *testing.T) {
 }
 
 func TestBoundedSlidingSumSupportsDecimal64Arguments(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	typ := types.New(types.T_decimal64, 18, 2)
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = testutil.NewDecimal64Vector(
@@ -2849,7 +2849,7 @@ func TestBoundedSlidingSumSupportsDecimal64Arguments(t *testing.T) {
 }
 
 func TestBoundedSlidingRangeAvgAcrossPeersAndOutputChunks(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	values := []int32{1, 1, 2, 4, 4, 7}
 	bat := makeInt32Batch(proc.Mp(), values)
 	spec := makeWindowSpec()
@@ -2929,7 +2929,7 @@ func TestBoundedSlidingRangeAvgOrderShapes(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			bat := batch.NewWithSize(2)
 			bat.Vecs[0] = testutil.MakeInt32Vector(test.aggValues, nil, proc.Mp())
 			bat.Vecs[1] = testutil.MakeInt32Vector(test.orderValue, test.orderNulls, proc.Mp())
@@ -2989,7 +2989,7 @@ func TestBoundedSlidingRangeSumUint8MaximumBoundary(t *testing.T) {
 		{name: "descending", values: []uint8{255, 254, 253, 252}, desc: true, want: []uint64{762, 1014, 1014, 759}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			bat := batch.NewWithSize(1)
 			bat.Vecs[0] = testutil.MakeUint8Vector(test.values, nil, proc.Mp())
 			bat.SetRowCount(len(test.values))
@@ -3021,7 +3021,7 @@ func TestBoundedSlidingRangeSumUint8MaximumBoundary(t *testing.T) {
 }
 
 func TestCumulativeAggregatePreservesNullSemantics(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 0, 3}, []uint64{1}, proc.Mp())
 	bat.SetRowCount(3)
@@ -3049,7 +3049,7 @@ func TestCumulativeAggregatePreservesNullSemantics(t *testing.T) {
 }
 
 func TestWindowOrdersPartitionedInput(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	bat := batch.NewWithSize(2)
 	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{2, 1, 2, 1}, nil, proc.Mp())
 	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{20, 10, 10, 20}, nil, proc.Mp())
@@ -3097,7 +3097,7 @@ func TestWindowOrdersPartitionedInput(t *testing.T) {
 }
 
 func TestWindowPartitionTopNCoalescesAndResetsRowNumber(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	first := batch.NewWithSize(2)
 	first.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1}, nil, proc.Mp())
 	first.Vecs[1] = testutil.MakeInt32Vector([]int32{20, 10}, nil, proc.Mp())
@@ -3144,7 +3144,7 @@ func TestWindowPartitionTopNCoalescesAndResetsRowNumber(t *testing.T) {
 }
 
 func TestWindowPartitionTopNSeparatesGroupingNullFromEmptyString(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	input := batch.NewWithSize(2)
 	input.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
 	require.NoError(t, vector.AppendStringList(input.Vecs[0], []string{"", "", ""}, nil, proc.Mp()))
@@ -3184,7 +3184,7 @@ func TestWindowPartitionTopNSeparatesGroupingNullFromEmptyString(t *testing.T) {
 }
 
 func TestWindowPartitionTopNUsesSQLOrderForFloatNaNPeers(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	makeBatch := func(partitionValue int32) *batch.Batch {
 		bat := batch.NewWithSize(3)
 		bat.Vecs[0] = testutil.MakeInt32Vector(
@@ -3244,7 +3244,7 @@ func TestWindowPartitionTopNReducerUsesSQLOrderForFloatNaNs(t *testing.T) {
 		{name: "desc", flag: plan.OrderBySpec_DESC, want: []int32{60, 40}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			input := batch.NewWithSize(3)
 			input.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1, 1, 1, 1, 1, 1}, nil, proc.Mp())
 			input.Vecs[1] = vector.NewVec(types.T_float64.ToType())
@@ -3347,7 +3347,7 @@ func TestWindowResetReleasesInheritedAccountedBuffers(t *testing.T) {
 	}
 	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
 	arg.AppendChild(child)
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	require.NoError(t, arg.Prepare(proc))
 	result, err := arg.Call(proc)
 	require.NoError(t, err)
@@ -3385,7 +3385,7 @@ func TestWindowOrderHonorsCancellation(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			bat := batch.NewWithSize(2)
 			bat.Vecs[0] = testutil.MakeInt32Vector([]int32{2, 1, 2, 1}, nil, proc.Mp())
 			bat.Vecs[1] = testutil.MakeInt32Vector([]int32{20, 10, 10, 20}, nil, proc.Mp())
@@ -3770,7 +3770,7 @@ func TestBuildRangeIntervalVarcharPeers(t *testing.T) {
 }
 
 func TestWindowRangeVarcharOrderBy(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	bat := batch.NewWithSize(2)
 	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{200, 100, 50}, nil, proc.Mp())
 	bat.Vecs[1] = testutil.MakeVarcharVector([]string{"2026-02", "2026-01", "2026-02"}, nil, proc.Mp())
@@ -4724,7 +4724,7 @@ func TestWindowTimestampRangeUsesSessionTimeZone(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
-			proc := testutil.NewProcessWithMPool(t, "", mp)
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 			defer func() {
 				proc.Free()
 				require.Equal(t, int64(0), mp.CurrNB())
@@ -4899,7 +4899,7 @@ func TestWindowTimestampRangeFoldMembership(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
-			proc := testutil.NewProcessWithMPool(t, "", mp)
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 			defer func() {
 				proc.Free()
 				require.Equal(t, int64(0), mp.CurrNB())
@@ -4984,7 +4984,7 @@ func TestWindowTimestampRangeFoldMembershipDetectsSparseTransitions(t *testing.T
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
-			proc := testutil.NewProcessWithMPool(t, "", mp)
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 			defer func() {
 				proc.Free()
 				require.Zero(t, mp.CurrNB())
@@ -5020,7 +5020,7 @@ func TestWindowTimestampRangeFoldMembershipDetectsSparseTransitions(t *testing.T
 
 func TestWindowTimestampRangeFoldMembershipRefreshesMaterializedOrderVector(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	defer func() {
 		proc.Free()
 		require.Zero(t, mp.CurrNB())
@@ -5096,7 +5096,7 @@ func TestWindowTimestampRangeFoldMembershipRefreshesMaterializedOrderVector(t *t
 
 func TestWindowTimestampRangeFoldIndexHonorsCancellation(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	defer func() {
 		proc.Free()
 		require.Zero(t, mp.CurrNB())
@@ -5132,7 +5132,7 @@ func TestWindowTimestampRangeFoldIndexHonorsCancellation(t *testing.T) {
 
 func TestWindowTimestampRangeFoldAggregateMembership(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	defer func() {
 		proc.Free()
 		require.Equal(t, int64(0), mp.CurrNB())
@@ -5194,7 +5194,7 @@ func TestWindowTimestampRangeFoldAggregateMembership(t *testing.T) {
 
 func TestWindowTimestampRangeFoldAggregateMembershipHandlesConstOrderVector(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	defer func() {
 		proc.Free()
 		require.Zero(t, mp.CurrNB())
@@ -5324,7 +5324,7 @@ func TestWindowTimestampRangeFoldAggregateMembershipPreservesUnboundedNullPeers(
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
-			proc := testutil.NewProcessWithMPool(t, "", mp)
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 			defer func() {
 				proc.Free()
 				require.Zero(t, mp.CurrNB())
@@ -5424,7 +5424,7 @@ func TestWindowTimestampRangeFoldAggregateMembershipSmallPartitions(t *testing.T
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
-			proc := testutil.NewProcessWithMPool(t, "", mp)
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 			defer func() {
 				proc.Free()
 				require.Zero(t, mp.CurrNB())
@@ -5479,7 +5479,7 @@ func TestWindowTimestampRangeFoldAggregateMembershipAfterOrderMaterialization(t 
 	}
 
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	defer func() {
 		proc.Free()
 		require.Zero(t, mp.CurrNB())
@@ -5531,7 +5531,7 @@ func TestWindowTimestampRangeFoldAggregateMembershipAfterOrderMaterialization(t 
 
 func TestWindowTimestampRangeFoldAggregateMembershipPreservesMultiKeyOrder(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	defer func() {
 		proc.Free()
 		require.Zero(t, mp.CurrNB())
@@ -5624,7 +5624,7 @@ func TestWindowTimestampRangeFoldValueMembership(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
-			proc := testutil.NewProcessWithMPool(t, "", mp)
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 			defer func() {
 				proc.Free()
 				require.Zero(t, mp.CurrNB())
@@ -5691,7 +5691,7 @@ func BenchmarkWindowTimestampRangeFoldUnboundedValue(b *testing.B) {
 	for _, size := range []int{1000, 2000, 4000} {
 		b.Run(fmt.Sprintf("rows=%d", size), func(b *testing.B) {
 			mp := mpool.MustNewZero()
-			proc := testutil.NewProcessWithMPool(b, "", mp)
+			proc := testutil.NewProcessWithOwnedMPool(b, "", mp)
 			defer func() {
 				proc.Free()
 				require.Zero(b, mp.CurrNB())

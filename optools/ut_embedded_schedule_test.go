@@ -24,6 +24,8 @@ const embeddedSetup = `source ./run_ut.sh UT
 function logger() { :; }
 trap handle_ut_termination TERM
 [[ "$UT_PREBUILD_EMBEDDED" == 1 && "$UT_HARD_TIMEOUT" == 120m ]] || exit 80
+# These fixtures require compilation; exercise the low-disk fallback separately.
+export UT_PREBUILD_MIN_FREE_KB=1
 scope=$'example/a\nexample/b\nexample/c'
 mkfifo "$CASE_DIR/release-a" "$CASE_DIR/ready" "$CASE_DIR/hold"
 exec 7<>"$CASE_DIR/release-a"
@@ -124,9 +126,13 @@ source ./run_ut.sh UT
 		t.Fatalf("embedded prebuild default-on control: %v\n%s", err, out)
 	}
 
-	for _, mode := range []string{"success", "reclaim", "build-failure", "no-binary", "metadata-failure", "off", "test-failure"} {
+	for _, mode := range []string{"success", "reclaim", "build-failure", "no-binary", "metadata-failure", "low-disk", "off", "test-failure"} {
 		t.Run(mode, func(t *testing.T) {
 			script := embeddedSetup + `
+if [[ "$MODE" == low-disk ]]; then
+ # Force the production disk guard independently of the host filesystem.
+ function df() { printf 'Filesystem 1024-blocks Used Available Capacity Mounted\nmock 1 1 0 100%% /\n'; }
+fi
 if [[ "$MODE" != off ]]; then start_embedded_prebuild "$scope" 2; fi
 artifact_dir=$CLUSTER_PREBUILD_DIR
 status=0
@@ -137,14 +143,16 @@ if [[ "$MODE" == test-failure ]]; then
 else
  [[ "$status" == 0 ]] || exit 91
 fi
-if [[ "$MODE" == off || "$MODE" == build-failure || "$MODE" == no-binary || "$MODE" == metadata-failure ]]; then
+if [[ "$MODE" == off || "$MODE" == low-disk || "$MODE" == build-failure || "$MODE" == no-binary || "$MODE" == metadata-failure ]]; then
  [[ -d "$CASE_DIR/authoritative" && "$(grep -c '^authoritative$' "$UT_REPORT")" == 1 ]] || exit 92
  for p in a b c; do [[ ! -d "$CASE_DIR/executed-$p" ]] || exit 106; done
 else
  [[ ! -d "$CASE_DIR/authoritative" ]] || exit 107
  for p in a b c; do [[ -d "$CASE_DIR/executed-$p" ]] || exit 108; done
 fi
-if [[ "$MODE" != off ]]; then
+if [[ "$MODE" == low-disk ]]; then
+ for p in a b c; do [[ ! -d "$CASE_DIR/compiled-$p" ]] || exit 109; done
+elif [[ "$MODE" != off ]]; then
  for p in a b c; do
   [[ -d "$CASE_DIR/compiled-$p" ]] || exit 93
   [[ "$(grep -c "^build-$p$" "$UT_STDERR")" == 1 ]] || exit 94
@@ -206,6 +214,7 @@ function ut_test_prebuild_spawned() {
 }
 start_embedded_prebuild "$scope" 2
 artifact_dir=$CLUSTER_PREBUILD_DIR
+[[ -n "$CLUSTER_PREBUILD_JOB_PID" && -d "$artifact_dir" ]] || exit 96
 read -r _ <&8
 read -r _ <&8
 kill -TERM "$$"
@@ -253,6 +262,7 @@ UT_HELPER_TERM_GRACE_TICKS=4
 export RUNNER_PID=$$
 start_embedded_prebuild "$scope" 2
 artifact_dir=$CLUSTER_PREBUILD_DIR
+[[ -n "$CLUSTER_PREBUILD_JOB_PID" && -d "$artifact_dir" ]] || exit 96
 read -r _ <&8
 read -r _ <&8
 start_ut_command serial issues bash -c '

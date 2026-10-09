@@ -1811,7 +1811,7 @@ func TestUniqueIndexRuntimeFilterUsesSelectedHashSlot(t *testing.T) {
 		spec.KeyEncoding)
 	require.Equal(t, int32(1), spec.BuildExpr.GetCol().ColPos)
 
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.SetMessageBoard(message.NewMessageBoard())
 	first := testutil.MakeInt32Vector([]int32{901, 902, 903}, nil, proc.Mp())
 	selected := testutil.MakeInt32Vector([]int32{11, 12, 13}, nil, proc.Mp())
@@ -1897,7 +1897,7 @@ func TestIndexJoinGeneratedSerializedRuntimeFilterExecutesEndToEnd(t *testing.T)
 	require.NotNil(t, spec.BuildExpr)
 	require.True(t, spec.MatchPrefix)
 
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.SetMessageBoard(message.NewMessageBoard())
 	values := make([]int32, 37)
 	for i := range values {

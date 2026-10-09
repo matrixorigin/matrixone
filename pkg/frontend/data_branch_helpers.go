@@ -617,6 +617,10 @@ func formatValIntoStringWithFloatCast(
 		if t.Oid == types.T_binary || t.Oid == types.T_varbinary || t.Oid == types.T_blob {
 			writeBytes = writeSQLHexLiteral
 		}
+		if t.Oid == types.T_binary {
+			// Decode with the column type so replay preserves already stored bytes.
+			buf.WriteString("serial_extract(serial(")
+		}
 		switch x := val.(type) {
 		case []byte:
 			writeBytes(buf, x)
@@ -624,6 +628,11 @@ func formatValIntoStringWithFloatCast(
 			writeBytes(buf, []byte(x))
 		default:
 			return moerr.NewInternalErrorNoCtxf("formatValIntoString: unexpected string type %T", val)
+		}
+		if t.Oid == types.T_binary {
+			buf.WriteString("),0 as ")
+			buf.WriteString(t.DescString())
+			buf.WriteByte(')')
 		}
 	case types.T_datalink:
 		buf.WriteString("cast(")

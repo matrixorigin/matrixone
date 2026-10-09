@@ -37,7 +37,7 @@ import (
 // not depending on which was called. It now sits at each native boundary instead, and no consumer
 // of this package reads its distances (ivfflat probes for ids, ProductL2 for the winning key).
 func TestSearchRejectsOutOfDomainDistances(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	idx := &GoBruteForceIndex[float32, float32]{
