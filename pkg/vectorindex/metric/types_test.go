@@ -122,20 +122,21 @@ func TestDistanceTransformHnsw(t *testing.T) {
 	out = DistanceTransformHnsw(in, Metric_L2sqDistance, usearch.L2sq)
 	require.Equal(t, in, out)
 
-	// usearch 返回 1-dot，SQL 返回数学点积。
-	require.InDelta(t, -8.0, DistanceTransformHnsw(in, Metric_InnerProduct, usearch.InnerProduct), 1e-9)
-	require.InDelta(t, -8.0, DistanceTransformHnsw(in, Metric_L2Distance, usearch.InnerProduct), 1e-9)
-	require.InDelta(t, 200.0, DistanceTransformHnsw(-199.0, Metric_InnerProduct, usearch.InnerProduct), 1e-9)
+	// usearch's IP metric is 1 - a·b; MO's inner_product SQL function is -a·b, so the
+	// raw distance must come back one lower. Without this an HNSW vector_ip_ops index
+	// reported every score exactly 1 above the brute-force value (ordering intact, so
+	// only the number was wrong). Independent of origMetricType: the query function is
+	// inner_product either way.
+	require.InDelta(t, 8.0, DistanceTransformHnsw(in, Metric_InnerProduct, usearch.InnerProduct), 1e-9)
+	require.InDelta(t, 8.0, DistanceTransformHnsw(in, Metric_L2Distance, usearch.InnerProduct), 1e-9)
+	// -a·b for a·b = 200 is -200; usearch hands us 1 - 200 = -199.
+	require.InDelta(t, -200.0, DistanceTransformHnsw(-199.0, Metric_InnerProduct, usearch.InnerProduct), 1e-9)
 
 	// Cosine already agrees with cosine_distance (both 1 - cos_sim) — no rescale.
 	require.Equal(t, in, DistanceTransformHnsw(in, Metric_CosineDistance, usearch.Cosine))
 }
 
 func TestDistanceTransformIvfflat(t *testing.T) {
-	for _, dot := range []float64{32, -32, 0} {
-		require.Equal(t, dot, DistanceTransformIvfflat(-dot, Metric_InnerProduct, Metric_InnerProduct))
-		require.Equal(t, dot, DistanceTransformHnsw(1-dot, Metric_InnerProduct, usearch.InnerProduct))
-	}
 	in := 16.0
 	out := DistanceTransformIvfflat(in, Metric_L2Distance, Metric_L2sqDistance)
 	require.InDelta(t, 4.0, out, 1e-9)

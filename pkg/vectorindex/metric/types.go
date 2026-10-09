@@ -217,25 +217,35 @@ func MaxFloat[T types.RealNumbers]() T {
 	}
 }
 
-// DistanceTransformHnsw 在候选堆排序完成后，将 usearch 距离转换为 SQL 分数。
-// 内积从 1-dot 转成 dot，因此该转换反转分数大小，但不改变已经选出的近邻。
-// SQL 内积近邻查询必须使用 DESC，其他距离使用 ASC。精度仍为 float32 域。
-// cosine 的零/次正规向量问题不能通过分数转换修复，planner 保留其精确路径。
+// DistanceTransformHnsw converts a raw usearch distance to the value MO's SQL distance
+// function named by the QUERY returns, so an index-served score and the scalar distance
+// agree in the float32 domain both live in (see RoundDistanceToElemDomain for why that is
+// float32-domain agreement, not bitwise equality). Every conversion is monotonic and the
+// caller applies it after the result heap is ordered, so ranking is unaffected.
+//
+// usearch is the only backend needing this HERE: the Go CPU kernels already return MO's
+// convention (InnerProduct returns -a·b), and cuVS output is negated inside cgo/cuvs
+// (index_base.hpp search path, distance.hpp / distance_c.cpp pairwise) before it reaches
+// Go. (Note: the gpu-tagged pairwise wait in gpu.go negates IP a SECOND time on top of
+// the cgo flip — a separate, pre-existing GPU-only defect, not something this transform
+// compensates for.) Within usearch only inner product differs — its IP metric is 1 - a·b against MO's
+// -a·b, so an untranslated score is exactly 1 too high; ordering stays correct, which is
+// why only a value comparison catches it. Cosine is deliberately not repaired here:
+// usearch's cosine score can be wrong for zero and subnormal vectors, and this function
+// has neither the vectors nor the candidate set needed to recompute a correct score.
+// The HNSW planner therefore keeps cosine queries on the exact SQL path.
 func DistanceTransformHnsw(dist float64, origMetricType MetricType, metricType usearch.Metric) float64 {
 	if origMetricType == Metric_L2Distance && metricType == usearch.L2sq {
 		// metric is l2sq but origin is l2_distance
 		return RoundDistanceToElemDomain(math.Sqrt(dist))
 	}
 	if metricType == usearch.InnerProduct {
-		return RoundDistanceToElemDomain(1 - dist)
+		return RoundDistanceToElemDomain(dist - 1)
 	}
 	return RoundDistanceToElemDomain(dist)
 }
 
 func DistanceTransformIvfflat(dist float64, origMetricType, metricType MetricType) float64 {
-	if origMetricType == Metric_InnerProduct && metricType == Metric_InnerProduct {
-		return RoundDistanceToElemDomain(-dist)
-	}
 	if origMetricType == Metric_L2Distance && metricType == Metric_L2sqDistance {
 		// metric is l2sq but origin is l2_distance
 		return RoundDistanceToElemDomain(math.Sqrt(dist))
