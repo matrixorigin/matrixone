@@ -305,11 +305,9 @@ func (idx *UsearchBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries 
 		return
 	}
 
-	// Same rebase HNSW applies at its usearch boundary (hnsw/search.go): usearch's IP
-	// metric is 1 - a·b where MO's inner_product is -a·b, and an l2_distance query off an
-	// L2sq index must be sqrt-ed. Both are monotonic, so the order usearch returned is
-	// preserved. Without this the two usearch consumers would disagree by exactly 1 on
-	// inner product — the same silent value error, one layer down.
+	// usearch 的 IP 距离为 1-dot；此内部 API 返回与 Go/GPU 一致的 -dot。
+	// SQL 对外分数转换为 dot 后在此反号，保持路由距离及近邻次序。
+	// L2Distance 仍需对 usearch 的平方距离开方。
 	//
 	// The metric the caller built the index with is the authority here — not
 	// rt.OrigFuncName, which the index search paths populate but a direct brute-force
@@ -317,6 +315,10 @@ func (idx *UsearchBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries 
 	distances = make([]float64, len(distances_f32))
 	for i, dist := range distances_f32 {
 		distances[i] = metric.DistanceTransformHnsw(float64(dist), idx.MoMetric, idx.Metric)
+		if idx.MoMetric == metric.Metric_InnerProduct {
+			// 此内部搜索也用于 IVF 质心路由，必须与 Go/GPU 的负点积距离一致。
+			distances[i] = -distances[i]
+		}
 	}
 
 	keys_i64 := make([]int64, len(keys_ui64))

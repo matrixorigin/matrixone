@@ -228,7 +228,7 @@ func TestCentroidAndExactSearchHelpersHandleBoundaryStates(t *testing.T) {
 
 	keys, distances, data, nulls := sortAndLimitExactResults(
 		[]any{int64(3), int64(1), int64(2)}, []float64{3, 1, 2}, []string{"payload"},
-		map[string][]any{"payload": {"c", "a", "b"}}, map[string][]bool{"payload": {false, true, false}}, 2)
+		map[string][]any{"payload": {"c", "a", "b"}}, map[string][]bool{"payload": {false, true, false}}, 2, false)
 	require.Equal(t, []any{int64(1), int64(2)}, keys)
 	require.Equal(t, []float64{1, 2}, distances)
 	require.Equal(t, []any{"a", "b"}, data["payload"])

@@ -34,11 +34,11 @@ a
 1
 3
 select a, round(l2_distance(v, cast('[1,2,3]' as vecbf16(3))),4) as l2, round(l2_distance_sq(v, cast('[1,2,3]' as vecbf16(3))),4) as l2sq, round(inner_product(v, cast('[1,2,3]' as vecbf16(3))),4) as ip, round(cosine_distance(v, cast('[1,2,3]' as vecbf16(3))),4) as cd, round(cosine_similarity(v, cast('[1,2,3]' as vecbf16(3))),4) as cs from b order by a;
-a    l2    l2sq    ip    cd    cs
-1    0.0    0.0    -14.0    0.0    1.0
-2    5.1962    27.0    -32.0    0.0254    0.9746
-3    0.0    0.0    -14.0    0.0    1.0
-4    10.3923    108.0    -50.0    0.0406    0.9594
+➤ a[4,32,0]  ¦  l2[8,53,31]  ¦  l2sq[8,53,31]  ¦  ip[8,53,31]  ¦  cd[8,53,31]  ¦  cs[8,53,31]  𝄀
+1  ¦  0.0  ¦  0.0  ¦  14.0  ¦  0.0  ¦  1.0  𝄀
+2  ¦  5.1962  ¦  27.0  ¦  32.0  ¦  0.0254  ¦  0.9746  𝄀
+3  ¦  0.0  ¦  0.0  ¦  14.0  ¦  0.0  ¦  1.0  𝄀
+4  ¦  10.3923  ¦  108.0  ¦  50.0  ¦  0.0406  ¦  0.9594
 select v + v from b;
 invalid argument operator +, bad value [VECBF16 VECBF16]
 select v - v from b;
@@ -67,10 +67,10 @@ v    c
 [1, 2, 3]    2
 [4, 5, 6]    1
 select a, round(l2_distance_sq(v, cast('[1,2,3]' as vecf16(3))),4) as l2sq, round(inner_product(v, cast('[1,2,3]' as vecf16(3))),4) as ip from f order by a;
-a    l2sq    ip
-1    0.0    -14.0
-2    27.0    -32.0
-3    0.0    -14.0
+➤ a[4,32,0]  ¦  l2sq[8,53,31]  ¦  ip[8,53,31]  𝄀
+1  ¦  0.0  ¦  14.0  𝄀
+2  ¦  27.0  ¦  32.0  𝄀
+3  ¦  0.0  ¦  14.0
 select v * 2 from f;
 invalid argument operator *, bad value [VECF16 BIGINT]
 create table i(a int, v vecint8(3));
@@ -89,10 +89,10 @@ v    c
 [1, 2, 3]    2
 [4, 5, 6]    1
 select a, round(l2_distance_sq(v, cast('[1,2,3]' as vecint8(3))),4) as l2sq, round(inner_product(v, cast('[1,2,3]' as vecint8(3))),4) as ip from i order by a;
-a    l2sq    ip
-1    0.0    -14.0
-2    27.0    -32.0
-3    0.0    -14.0
+➤ a[4,32,0]  ¦  l2sq[8,53,31]  ¦  ip[8,53,31]  𝄀
+1  ¦  0.0  ¦  14.0  𝄀
+2  ¦  27.0  ¦  32.0  𝄀
+3  ¦  0.0  ¦  14.0
 select v + v from i;
 invalid argument operator +, bad value [VECINT8 VECINT8]
 drop database nvops;
