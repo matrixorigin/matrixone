@@ -6038,53 +6038,84 @@ func TestReplacementChecksConcurrentDestinationKey(t *testing.T) {
 
 func TestReplacementRejectsCompetingPredecessor(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	ctx := context.Background()
-	tae := testutil.NewTestEngine(ctx, ModuleName, t, config.WithLongScanAndCKPOpts(nil))
-	defer tae.Close()
-	schema := catalog.NewEmptySchema("replacement")
-	schema.AppendPKCol("name", types.T_varchar.ToType(), 0)
-	schema.AppendCol("offset", types.T_uint32.ToType())
-	schema.Finalize(false)
-	tae.BindSchema(schema)
-	bat := catalog.MockBatch(schema, 1)
-	defer bat.Close()
-	bat.Vecs[1].Update(0, uint32(0), false)
-	tae.CreateRelAndAppend2(bat, true)
-	filter := handle.NewEQFilter(bat.Vecs[0].Get(0))
-	first, firstRel := tae.GetRelation()
-	defer first.Rollback(ctx)
-	second, secondRel := tae.GetRelation()
-	defer second.Rollback(ctx)
-	stage := func(rel handle.Relation) {
-		id, offset, err := rel.GetByFilter(ctx, filter)
-		require.NoError(t, err)
-		value, _, err := rel.GetValue(id, offset, 1, false)
-		require.NoError(t, err)
-		require.Equal(t, uint32(0), value)
-		require.NoError(t, rel.RangeDelete(id, offset, offset, handle.DT_Normal))
-		clone := bat.CloneWindow(0, 1)
-		defer clone.Close()
-		clone.Vecs[1].Update(0, uint32(1), false)
-		require.NoError(t, rel.Append(ctx, clone))
-	}
-	stage(firstRel)
-	stage(secondRel)
-	require.NoError(t, first.Commit(ctx))
-	err := second.Commit(ctx)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) || moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry), "unexpected commit result: %v", err)
-	_ = second.Rollback(ctx)
-	for i := 0; i < 2; i++ {
-		func() {
-			txn, rel := tae.GetRelation()
-			defer txn.Rollback(ctx)
-			value, _, err := rel.GetValueByFilter(ctx, filter, 1)
-			require.NoError(t, err)
-			require.Equal(t, uint32(1), value)
-			require.NoError(t, txn.Commit(ctx))
-		}()
-		if i == 0 {
-			tae.Restart(ctx)
+	for _, transferred := range []bool{false, true} {
+		name := "ordinary"
+		if transferred {
+			name = "transferred-delete"
 		}
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			tae := testutil.NewTestEngine(ctx, ModuleName, t, config.WithLongScanAndCKPOpts(nil))
+			defer tae.Close()
+			schema := catalog.NewEmptySchema("replacement")
+			schema.AppendPKCol("name", types.T_varchar.ToType(), 0)
+			schema.AppendCol("offset", types.T_uint32.ToType())
+			schema.Finalize(false)
+			tae.BindSchema(schema)
+			bat := catalog.MockBatch(schema, 1)
+			defer bat.Close()
+			bat.Vecs[1].Update(0, uint32(0), false)
+			tae.CreateRelAndAppend2(bat, true)
+			if transferred {
+				tae.CompactBlocks(false)
+			}
+			filter := handle.NewEQFilter(bat.Vecs[0].Get(0))
+			first, firstRel := tae.GetRelation()
+			defer first.Rollback(ctx)
+			second, secondRel := tae.GetRelation()
+			defer second.Rollback(ctx)
+			stage := func(rel handle.Relation) {
+				id, offset, err := rel.GetByFilter(ctx, filter)
+				require.NoError(t, err)
+				value, _, err := rel.GetValue(id, offset, 1, false)
+				require.NoError(t, err)
+				require.Equal(t, uint32(0), value)
+				require.NoError(t, rel.RangeDelete(id, offset, offset, handle.DT_Normal))
+				clone := bat.CloneWindow(0, 1)
+				defer clone.Close()
+				clone.Vecs[1].Update(0, uint32(1), false)
+				require.NoError(t, rel.Append(ctx, clone))
+			}
+			stage(firstRel)
+			stage(secondRel)
+
+			var mergeTxn txnif.AsyncTxn
+			if transferred {
+				var mergeRel handle.Relation
+				mergeTxn, mergeRel = tae.GetRelation()
+				defer mergeTxn.Rollback(ctx)
+				metas := testutil.GetAllBlockMetas(mergeRel, false)
+				require.Len(t, metas, 1)
+				task, err := jobs.NewMergeObjectsTask(nil, mergeTxn, metas, tae.Runtime, 0, false)
+				require.NoError(t, err)
+				require.NoError(t, task.OnExec(ctx))
+			}
+			require.NoError(t, first.Commit(ctx))
+			if transferred {
+				// Flush the winner, then publish the rewrite carrying its predecessor delete.
+				tae.CompactBlocks(false)
+				require.NoError(t, mergeTxn.Commit(ctx))
+			}
+			err := second.Commit(ctx)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) || moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry), "unexpected commit result: %v", err)
+			_ = second.Rollback(ctx)
+			for i := 0; i < 2; i++ {
+				func() {
+					txn, rel := tae.GetRelation()
+					defer txn.Rollback(ctx)
+					value, _, err := rel.GetValueByFilter(ctx, filter, 1)
+					require.NoError(t, err)
+					require.Equal(t, uint32(1), value)
+
+					// A point lookup can hide duplicate PK rows; count the independent scan.
+					require.Equal(t, 1, testutil.GetColumnRowsByScan(t, rel, 0, true))
+					require.NoError(t, txn.Commit(ctx))
+				}()
+				if i == 0 {
+					tae.Restart(ctx)
+				}
+			}
+		})
 	}
 }
 
