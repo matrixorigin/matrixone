@@ -1149,6 +1149,24 @@ func (tcc *TxnCompilerContext) ResolveVariableType(varName string, isSystemVar, 
 	return inferUserDefinedVarType(udVar.Value), nil
 }
 
+// ResolveVariableRegexpStringResult exposes compatibility-only history without
+// changing ResolveVariableType or general numeric/parameter binding.
+func (tcc *TxnCompilerContext) ResolveVariableRegexpStringResult(varName string) (bool, error) {
+	if tcc.execCtx != nil {
+		if value, typ, declared, ok := resolveStoredProcedureVariableWithType(tcc.execCtx.reqCtx, varName); ok {
+			if !declared {
+				typ = inferUserDefinedVarType(value)
+			}
+			return userVariableRegexpStringResult(typ), nil
+		}
+	}
+	variable, err := tcc.GetSession().GetUserDefinedVar(varName)
+	if err != nil {
+		return false, nil // An absent variable has no assignment history.
+	}
+	return variable.RegexpStringResult || userVariableRegexpStringResult(variable.Type), nil
+}
+
 func (tcc *TxnCompilerContext) ResolveVariableIsBin(varName string, isSystemVar, _ bool) (bool, error) {
 	if tcc.execCtx != nil {
 		if _, ok := resolveStoredProcedureVariable(tcc.execCtx.reqCtx, varName); ok {
