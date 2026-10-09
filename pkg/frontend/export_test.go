@@ -1768,6 +1768,26 @@ func Test_ParquetWriter_FlushPublishesBufferedSize(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestParquetWriterYearColumnNormalizesDateVector(t *testing.T) {
+	mp := mpool.MustNewZero()
+	mrs := &MysqlResultSet{}
+	col := new(MysqlColumn)
+	col.SetName("year_val")
+	col.SetColumnType(defines.MYSQL_TYPE_YEAR)
+	mrs.AddColumn(col)
+
+	pw, err := NewParquetWriter(context.Background(), mrs)
+	require.NoError(t, err)
+	vec := vector.NewVec(types.T_date.ToType())
+	require.NoError(t, vector.AppendFixed(vec, types.DateFromCalendar(2024, 1, 1), false, mp))
+	defer vec.Free(mp)
+
+	value, err := pw.vectorValueToParquet(vec, 0, 0, time.UTC)
+	require.NoError(t, err)
+	require.Equal(t, "2024", value)
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestParquetWriterSplitSingleBatchPreservesRows(t *testing.T) {
 	mp := mpool.MustNewZero()
 	mrs := &MysqlResultSet{}
