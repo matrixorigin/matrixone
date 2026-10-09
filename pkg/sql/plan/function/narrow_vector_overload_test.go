@@ -87,12 +87,7 @@ func TestNarrowVectorFunctionOverloads(t *testing.T) {
 	}
 
 	// --- binary distance/similarity builtins -------------------------------
-	// Asserted as PARITY WITH VECF32 rather than against hardcoded constants:
-	// vecf32 is the reference these overloads were added to match, and a literal
-	// would encode my guess at the convention instead of the engine's. That
-	// distinction is not academic here — inner_product returns the NEGATED dot
-	// product (-32, not 32) because it is used as a distance where smaller means
-	// closer, and a hand-written 32.0 would have "found" a bug that isn't one.
+	// 检查窄类型与 vecf32 的结果一致；内积的独立数学 oracle 由专门测试覆盖。
 	f32t := types.T_array_float32.ToType()
 	for _, fn := range []string{
 		"l1_distance", "l2_distance", "l2_distance_sq", "inner_product",

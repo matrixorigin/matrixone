@@ -46,7 +46,9 @@ WITH qn AS (select SUMMATION(vecf32_3),SUMMATION(vecf32_5) from vtab32) SELECT *
 
 select inner_product(vecf32_3,"[1,1,1]") from vtab32;
 select inner_product(vecf32_3,"[0,0,-1]") from vtab32;
-select inner_product(vecf32_3,vecf32_3), inner_product(vecf32_5,vecf32_5) from vtab32;
+-- 五维 float32 点积允许不同 SIMD 归约顺序产生尾数差异。
+-- 独立参考采用 float64 逐元素乘法与 SUMMATION；1e-6 覆盖五项 float32 归约误差，仍拒绝反号和错误量级。
+select id, inner_product(vecf32_3,vecf32_3), abs(inner_product(vecf32_5,vecf32_5) - summation(cast(vecf32_5 as vecf64(5)) * cast(vecf32_5 as vecf64(5)))) <= 1e-6 * summation(cast(vecf32_5 as vecf64(5)) * cast(vecf32_5 as vecf64(5))) as self5_ok from vtab32 order by id;
 select inner_product(vecf64_3,vecf64_3), inner_product(vecf64_5,vecf64_5) from vtab64;
 select inner_product("[0.45052445,2.19845265,9.579752]","[1,1,1]");
 select inner_product(1,1);
@@ -58,9 +60,9 @@ select * from vtab32 where inner_product(vecf32_3,vecf32_3) = 675766.8704508307;
 select * from vtab32 where inner_product(vecf32_3,vecf32_3) <= 1.3494319015309593;
 select distinct(inner_product(vecf32_3,vecf32_3)) from vtab32;
 select sum(inner_product(vecf32_3,vecf32_3)) from vtab32;
-select min(inner_product(vecf32_5,vecf32_5)) from vtab32;
+select abs(min(inner_product(vecf32_5,vecf32_5)) - min(summation(cast(vecf32_5 as vecf64(5)) * cast(vecf32_5 as vecf64(5))))) <= 1e-6 * min(summation(cast(vecf32_5 as vecf64(5)) * cast(vecf32_5 as vecf64(5)))) as min_self5_ok from vtab32;
 select max(inner_product(vecf32_3,vecf32_3)) from vtab32;
-select avg(inner_product(vecf32_5,vecf32_5)) from vtab32;
+select abs(avg(inner_product(vecf32_5,vecf32_5)) - avg(summation(cast(vecf32_5 as vecf64(5)) * cast(vecf32_5 as vecf64(5))))) <= 1e-6 * avg(summation(cast(vecf32_5 as vecf64(5)) * cast(vecf32_5 as vecf64(5)))) as avg_self5_ok from vtab32;
 select count(inner_product(vecf32_5,vecf32_5)) from vtab32;
 select sin(inner_product(vecf64_3,vecf64_3)) from vtab64;
 select cos(inner_product(vecf64_5,vecf64_5)) from vtab64;
@@ -68,9 +70,9 @@ select inner_product(normalize_l2(vecf32_3),normalize_l2(vecf32_3)), inner_produ
 select inner_product(normalize_l2(vecf32_3),normalize_l2(vecf32_3)) * inner_product(normalize_l2(vecf32_5),normalize_l2(vecf32_5)) from vtab32;
 select inner_product(vecf64_3,vecf64_3) + inner_product(vecf64_5,vecf64_5) from vtab64;
 select inner_product(vecf64_3,vecf64_3) / inner_product(vecf64_5,vecf64_5) from vtab64;
-select * from (select inner_product(vecf32_3,vecf32_3),inner_product(vecf32_5,vecf32_5) from vtab32) as vectors;
+select * from (select id, inner_product(vecf32_3,vecf32_3), abs(inner_product(vecf32_5,vecf32_5) - summation(cast(vecf32_5 as vecf64(5)) * cast(vecf32_5 as vecf64(5)))) <= 1e-6 * summation(cast(vecf32_5 as vecf64(5)) * cast(vecf32_5 as vecf64(5))) as self5_ok from vtab32) as vectors order by id;
 select inner_product(vecf64_3,vecf64_3), inner_product(vecf64_5,vecf64_5) from (select * from vtab64) as vectors;
-WITH qn AS (select inner_product(vecf32_3,vecf32_3),inner_product(vecf32_5,vecf32_5) from vtab32) SELECT * FROM qn;
+WITH qn AS (select id, inner_product(vecf32_3,vecf32_3), abs(inner_product(vecf32_5,vecf32_5) - summation(cast(vecf32_5 as vecf64(5)) * cast(vecf32_5 as vecf64(5)))) <= 1e-6 * summation(cast(vecf32_5 as vecf64(5)) * cast(vecf32_5 as vecf64(5))) as self5_ok from vtab32) SELECT * FROM qn order by id;
 
 
 
