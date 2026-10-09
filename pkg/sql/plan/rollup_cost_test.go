@@ -22,6 +22,7 @@ import (
 
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -47,13 +48,15 @@ func TestSortRollupCostModelSelectsFromKnownStats(t *testing.T) {
 	require.False(t, planHasSortRollup(large.GetQuery()),
 		"the measured high-cardinality shape should retain hash as the baseline")
 
-	small := buildAutoRollupPlanWithStats(t, 100, "a, b, c")
+	small := buildAutoRollupPlanSQLWithStats(t, 100,
+		`select a, b, c, count(*) from select_test.bind_select
+		 group by a, b, c with rollup`, 1, 1, 1)
 	require.True(t, planHasSortRollup(small.GetQuery()),
 		"one scan plus sort should win for a small three-level input")
 }
 
 func TestRollupAlgorithmVariableControlsPlanner(t *testing.T) {
-	cost := buildAutoRollupPlanWithAlgorithm(t, 100, "a, b, c", "COST")
+	cost := buildAutoRollupPlanWithAlgorithm(t, 100, "a, b, c", "COST", 1, 1, 1)
 	require.True(t, planHasSortRollup(cost.GetQuery()))
 
 	forcedSort := buildAutoRollupPlanWithAlgorithm(t, 500_000, "a, b", "SORT")
@@ -89,21 +92,44 @@ func TestSortRollupCostModelUsesFilterCardinality(t *testing.T) {
 func TestSortRollupCostModelUsesOrderedDerivedSource(t *testing.T) {
 	rt := moruntime.ServiceRuntime("")
 	oldHints, hadHints := rt.GetGlobalVariables("optimizer_hints")
+	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	defer func() {
 		if hadHints {
 			rt.SetGlobalVariables("optimizer_hints", oldHints)
 		} else {
 			rt.SetGlobalVariables("optimizer_hints", "")
 		}
+		if hadProtocol {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
+		}
 	}()
 	rt.SetGlobalVariables("optimizer_hints", "determineShuffle=2")
-
-	queryPlan := buildAutoRollupPlanSQLWithStats(t, 1_000_000,
-		`select d.a, d.b, d.c, count(*) from
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	const sql = `select d.a, d.b, d.c, count(*) from
 			(select a, b, c from select_test.bind_select order by a, b, c) d
-			group by d.a, d.b, d.c with rollup`)
-	require.True(t, planHasSortRollup(queryPlan.GetQuery()),
-		"known ordered input should make streaming rollup cheaper at 1M rows")
+			group by d.a, d.b, d.c with rollup`
+	for _, tc := range []struct {
+		name     string
+		ndv      float64
+		wantSort bool
+	}{
+		{name: "low-NDV", ndv: 4, wantSort: true},
+		{name: "unique-keys", ndv: 100_000, wantSort: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			query := buildAutoRollupPlanSQLWithStats(t, 100_000,
+				sql, tc.ndv, tc.ndv, tc.ndv).GetQuery()
+			require.Equal(t, tc.wantSort, planHasSortRollup(query),
+				"order reuse must preserve the low-NDV win while rejecting expensive group finalization")
+			shape := reachableGroupingSetShape(query)
+			require.Equal(t, 1, shape.tableScans)
+			require.Equal(t, 1, shape.aggregates)
+			if !tc.wantSort {
+				require.Equal(t, 1, shape.expandProjects,
+					"the high-NDV HASH control must use the current shared topology")
+			}
+		})
+	}
 }
 
 func TestSortRollupCostModelHonorsHashOverride(t *testing.T) {
@@ -278,6 +304,38 @@ func TestSortRollupCostModelMatchesMeasuredShapeBoundary(t *testing.T) {
 			"unexpected selection for measured shape %s (sort=%.1f hash=%.1f)",
 			tc.name, estimate.SortCost, estimate.HashCost)
 	}
+}
+
+func TestSortRollupCostModelChargesOrderedHighNDVFinalization(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, false)
+	probe := &sortRollupProbe{
+		builder: builder,
+		source: &Node{Stats: &Stats{
+			TableCnt: 100001,
+			Outcnt:   100000,
+			Cost:     100001,
+			Rowsize:  64,
+		}},
+		groupExprs: []*Expr{
+			{Typ: plan.Type{Id: int32(types.T_int32)}, Ndv: 100000,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}},
+			{Typ: plan.Type{Id: int32(types.T_int32)}, Ndv: 100000,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}}},
+			{Typ: plan.Type{Id: int32(types.T_int32)}, Ndv: 100000,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 2}}},
+		},
+		orderedInput:                   true,
+		hashGroupingSetSharingMayApply: true,
+	}
+
+	estimate, ok := estimateSortRollupCost(probe, nil)
+	require.True(t, ok)
+	require.Greater(t, estimate.SortGroupFinalizeWork, 250000.0,
+		"the ordered high-NDV estimate must include completed-group lifecycle work")
+	require.Less(t, estimate.SortCost-estimate.SortGroupFinalizeWork, estimate.HashCost*rollupSortSelectFactor,
+		"omitting group finalization would incorrectly select SORT against shared HASH")
+	require.GreaterOrEqual(t, estimate.SortCost, estimate.HashCost*rollupSortSelectFactor,
+		"ordered high-NDV input must retain HASH when group finalization dominates")
 }
 
 func TestSortRollupCostModelAccountsForOrderedInputReuse(t *testing.T) {
@@ -656,7 +714,7 @@ func buildAutoRollupPlanWithStats(t *testing.T, rows float64, grouping string, s
 		grouping, where, grouping))
 }
 
-func buildAutoRollupPlanSQLWithStats(t *testing.T, rows float64, sql string) *Plan {
+func buildAutoRollupPlanSQLWithStats(t *testing.T, rows float64, sql string, ndvs ...float64) *Plan {
 	t.Helper()
 	mock := NewMockCompilerContext(true, newPlanTestProcess(t))
 	table := mock.tables["bind_select"]
@@ -671,6 +729,12 @@ func buildAutoRollupPlanSQLWithStats(t *testing.T, rows float64, sql string) *Pl
 	stats.NdvMap["a"] = 1000
 	stats.NdvMap["b"] = 100
 	stats.NdvMap["c"] = 10
+	if len(ndvs) != 0 {
+		require.Len(t, ndvs, 3)
+		for i, column := range []string{"a", "b", "c"} {
+			stats.NdvMap[column] = ndvs[i]
+		}
+	}
 	statsCache.Set(table.TblId, stats)
 	ctx := &fixedStatsCompilerContext{statsCacheCompilerContext: &statsCacheCompilerContext{
 		MockCompilerContext: mock,
@@ -698,7 +762,7 @@ func (ctx *rollupAlgorithmStatsCompilerContext) ResolveVariable(
 }
 
 func buildAutoRollupPlanWithAlgorithm(
-	t *testing.T, rows float64, grouping, algorithm string,
+	t *testing.T, rows float64, grouping, algorithm string, ndvs ...float64,
 ) *Plan {
 	t.Helper()
 	rt := moruntime.ServiceRuntime("")
@@ -727,6 +791,12 @@ func buildAutoRollupPlanWithAlgorithm(
 	stats.NdvMap["a"] = 1000
 	stats.NdvMap["b"] = 100
 	stats.NdvMap["c"] = 10
+	if len(ndvs) != 0 {
+		require.Len(t, ndvs, 3)
+		for i, column := range []string{"a", "b", "c"} {
+			stats.NdvMap[column] = ndvs[i]
+		}
+	}
 	statsCache.Set(table.TblId, stats)
 	ctx := &rollupAlgorithmStatsCompilerContext{
 		fixedStatsCompilerContext: &fixedStatsCompilerContext{

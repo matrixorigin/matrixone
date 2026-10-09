@@ -48,10 +48,15 @@ const (
 	// Shared grouping-set input materializes one row for every grouping set.
 	// Keep that projection work explicit so the shared baseline does not make
 	// small inputs look artificially cheaper than streaming SORT.
-	rollupHashExpandCost        = 0.40
-	rollupSortCompareCost       = 0.15
-	rollupSortBoundaryCost      = 0.02
-	rollupSortAggCost           = 0.12
+	rollupHashExpandCost   = 0.40
+	rollupSortCompareCost  = 0.15
+	rollupSortBoundaryCost = 0.02
+	rollupSortAggCost      = 0.12
+	// Every completed grouping prefix is flushed, freed, and recreated by the
+	// streaming executor.  Charge that lifecycle work explicitly; otherwise an
+	// already ordered high-NDV input looks almost free even though it emits and
+	// recreates one aggregate state per completed prefix.
+	rollupSortGroupFinalizeCost = 1.0
 	rollupSortStartupCost       = 16.0
 	rollupHashBranchStartupCost = 100.0
 	rollupHashWorkWeight        = 0.70
@@ -144,6 +149,7 @@ type sortRollupCostEstimate struct {
 	BranchCount                    int
 	HashWork                       float64
 	SortWork                       float64
+	SortGroupFinalizeWork          float64
 	PrefixGroups                   float64
 	KeyWidth                       float64
 	AggregateCost                  float64
@@ -336,6 +342,12 @@ func estimateSortRollupCost(
 			rowsForCPU*rollupSortBoundaryCost*float64(levels) +
 			rowsForCPU*rollupSortAggCost*aggregateCost*float64(branches)
 	}
+	// prefixGroups is the estimated number of completed output groups across
+	// all rollup levels, including the grand total.  It is also the number of
+	// times the executor performs the appendOutputRow/resetLevel lifecycle;
+	// include that work for both ordered input and input that is sorted here.
+	sortGroupFinalizeWork := prefixGroups * rollupSortGroupFinalizeCost * aggregateCost
+	sortWork += sortGroupFinalizeWork
 	sortCost := sortWork
 	sortFeasible := aggregateStateBounded && sortOutputBounded
 	if aggSpillMem > 0 {
@@ -360,7 +372,8 @@ func estimateSortRollupCost(
 	if !finiteRollupCost(hashMemory) || !finiteRollupCost(sortMemory) ||
 		!finiteRollupCost(sortAggMemory) || !finiteRollupCost(sortGroupUpperBound) ||
 		!finiteRollupCost(hashCost) || !finiteRollupCost(sortCost) ||
-		!finiteRollupCost(hashWork) || !finiteRollupCost(sortWork) {
+		!finiteRollupCost(hashWork) || !finiteRollupCost(sortWork) ||
+		!finiteRollupCost(sortGroupFinalizeWork) {
 		return estimate, false
 	}
 
@@ -378,6 +391,7 @@ func estimateSortRollupCost(
 		BranchCount:                    branches,
 		HashWork:                       hashWork,
 		SortWork:                       sortWork,
+		SortGroupFinalizeWork:          sortGroupFinalizeWork,
 		PrefixGroups:                   prefixGroups,
 		KeyWidth:                       keyWidth,
 		AggregateCost:                  aggregateCost,

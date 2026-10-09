@@ -77,6 +77,11 @@ func BenchmarkRollupAlgorithms(b *testing.B) {
 		{name: "large_ordered_many_levels", rows: 100000, ndv: 2, keyCount: 12, ordered: true},
 		{name: "large_ordered_wider_ndv", rows: 100000, ndv: 4, keyCount: 12, ordered: true},
 		{name: "large_ordered_high_ndv", rows: 100000, ndv: 64, keyCount: 12, ordered: true},
+		// Unlike the correlated NDV=64 fixture above, every complete key in
+		// this three-column input is distinct. It makes the ordered path pay
+		// for the completed-group flush/free/recreate lifecycle.
+		{name: "large_ordered_unique_keys", rows: 100000, ndv: 100000, keyCount: 3, ordered: true},
+		{name: "large_derived_order_unique_keys", rows: 100000, ndv: 100000, keyCount: 3, derivedOrder: true},
 		{name: "large_ordered_avg_many_levels", rows: 100000, ndv: 2, keyCount: 12, ordered: true, aggregate: "avg"},
 		{name: "large_ordered_very_many_levels", rows: 100000, ndv: 2, keyCount: 20, ordered: true},
 		{name: "large_ordered_extreme_levels", rows: 100000, ndv: 2, keyCount: 32, ordered: true},
@@ -392,7 +397,6 @@ func (runner *rollupBenchmarkRunner) runHashShared() (int64, error) {
 	}
 	groupBy = append(groupBy, colExpr(int32(setIDPos), types.T_int64))
 	group := newGroupOp(source.proc, groupBy, runner.aggs)
-	group.NeedEval = false
 	group.DynamicGrouping = true
 	group.SpillMem = 1 << 30
 	group.AppendChild(expand)
