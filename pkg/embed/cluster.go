@@ -180,11 +180,11 @@ func (c *cluster) Start() (err error) {
 		}
 		admissionStarted := time.Now()
 		admission, acquireErr := clusteradmission.Acquire(context.Background(), mode)
-		c.testAdmission = admission
 		if acquireErr != nil {
 			c.logTestSetup("admission-acquire", time.Since(admissionStarted), acquireErr)
 			return acquireErr
 		}
+		c.testAdmission = admission
 		timing := admission.Timing()
 		c.logTestSetup("admission-acquire", timing.WaitDuration, nil)
 	}

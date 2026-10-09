@@ -153,41 +153,22 @@ func (m *manager) acquire(ctx context.Context, mode Mode) (*Lease, error) {
 		if mode != AllowConcurrent {
 			return nil, moerr.NewInvalidStateNoCtx("another complete test cluster is already active in this process")
 		}
-		if m.lock == nil || !m.lock.Locked() {
-			return nil, moerr.NewInvalidStateNoCtx("test cluster admission cleanup is incomplete")
-		}
 		m.references++
 		return &Lease{manager: m, requested: requested, acquired: time.Now()}, nil
 	}
 
-	m.lock = flock.New(m.path)
-	locked, err := m.lock.TryLockContext(ctx, m.retryDelay)
-	if err == nil && !locked {
-		err = moerr.NewInvalidStateNoCtxf("test cluster admission %s was not acquired", m.path)
+	lock := flock.New(m.path)
+	// TryLockContext succeeds with a held lock or returns an error after the
+	// dependency has cleaned up the unheld handle. Publish only a real owner.
+	if _, err := lock.TryLockContext(ctx, m.retryDelay); err != nil {
+		return nil, errors.Join(
+			moerr.NewInternalErrorNoCtxf("acquire test cluster admission %s", m.path),
+			err,
+		)
 	}
-	if err != nil {
-		cleanupErr := m.closeLock()
-		cause := errors.Join(moerr.NewInternalErrorNoCtxf("acquire test cluster admission %s", m.path), err, cleanupErr)
-		if cleanupErr != nil {
-			// Retain the cleanup owner when rollback fails, without granting admission.
-			m.references = 1
-			return &Lease{manager: m, requested: requested}, cause
-		}
-		return nil, cause
-	}
+	m.lock = lock
 	m.references = 1
 	return &Lease{manager: m, requested: requested, acquired: time.Now()}, nil
-}
-
-func (m *manager) closeLock() error {
-	if m.lock == nil {
-		return nil
-	}
-	if err := m.lock.Close(); err != nil {
-		return err
-	}
-	m.lock = nil
-	return nil
 }
 
 func (m *manager) release() error {
@@ -200,12 +181,13 @@ func (m *manager) release() error {
 		m.references--
 		return nil
 	}
-	if err := m.closeLock(); err != nil {
+	if err := m.lock.Close(); err != nil {
 		return errors.Join(
 			moerr.NewInternalErrorNoCtxf("release test cluster admission %s", m.path),
 			err,
 		)
 	}
+	m.lock = nil
 	m.references = 0
 	return nil
 }

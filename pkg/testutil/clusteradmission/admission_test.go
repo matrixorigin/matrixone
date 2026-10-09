@@ -143,20 +143,6 @@ func runAdmissionHelper(t *testing.T, path, mode string) {
 	require.NoError(t, err, string(output))
 }
 
-func TestAdmissionIncompleteCleanupCannotBorrow(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "cluster.lock")
-	owner := newManager(path, time.Millisecond)
-	lease, err := owner.acquire(t.Context(), Exclusive)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, lease.Release()) })
-	// A cleanup-only lease has no acquired lock and must never admit a borrower.
-	require.NoError(t, owner.lock.Close())
-	_, err = owner.acquire(t.Context(), AllowConcurrent)
-	require.ErrorContains(t, err, "cleanup is incomplete")
-	require.NoError(t, lease.Release())
-	runAdmissionHelper(t, path, "acquired")
-}
-
 func TestProcessDeathReleasesAdmission(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "cluster.lock")
 	readyRead, readyWrite, err := os.Pipe()

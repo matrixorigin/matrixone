@@ -1,13 +1,14 @@
 # Race UT critical path: bounded execution at existing owners
 
-Design revision: `pr29760-design-v1` (2026-10-09).
+Design revision: `pr29760-design-v2` (2026-10-09).
 Tracking: [#29562](https://github.com/matrixorigin/matrixone/issues/29562),
 [#29752](https://github.com/matrixorigin/matrixone/issues/29752).
 Implementation: [#29760](https://github.com/matrixorigin/matrixone/pull/29760).
 
-The correction was approved for implementation by `gpt-6.1-sol`, reasoning
-`xhigh`, in design session `/root/design_pr29760_delivery`, against source
-`1c35457140ae46492069eaa44f2d20a0b27b6867` and base
+The correction and single-lock cleanup amendment were approved for implementation
+by `gpt-6.1-sol`, reasoning `xhigh`, in design session
+`/root/design_pr29760_delivery`, against source
+`817a2e053e4e89dda4a61af0ebd7801818e5008e` and base
 `aee2a0b3764781a8ca908618548dfef75e336263`. The final implementation requires
 its own overall review and validation. This revision supersedes the scheduling
 snapshot assumption in [UT racing owner costs](ut-race-owner-costs.md).
@@ -66,11 +67,12 @@ been redesigned. No lock files are unlinked while an owner can still hold them.
 
 One process owns one exclusive OS-backed cluster-lifecycle lock. Existing
 AllowConcurrent permits intentional same-process borrowing, never a second
-process. Acquisition checks cancellation before changing references. A lease
-without an acquired lock cannot authorize borrowing. If acquisition and rollback
-both fail, Acquire returns a cleanup-only lease with the error; embed and service
-callers retain it so Close can retry. Failed release retains ownership; the final
-successful release or process exit releases the lock.
+process. Acquisition checks cancellation before changing references. The pinned
+flock v0.8.1 TryLockContext either acquires the fresh lock or returns an error
+with no held lock; failed attempts close their unheld handles. Only successful
+acquisition publishes a lock and lease to the manager and embed/service callers.
+Failed release retains ownership for retry; the final successful release or
+process exit releases the lock.
 
 Embedded execution stays serial at its original CPU and test parallelism.
 Compile-only overlap starts no cluster. The engine fixture owns its notifier
@@ -103,7 +105,7 @@ no new worker, cache, queue, schema, transaction owner or retention budget.
   cancellation; expiry; failed drain; interrupted report publication and helper
   status 125, using the existing isolated harness and `optools -race`.
 - Admission: process exclusion/death, borrowed lease retention, cancelled
-  acquisition and incomplete cleanup; embed/service Start/Close rollback owners.
+  acquisition and repeated release; embed/service Start/Close rollback owners.
 - CDC: barrier-controlled ACK versus legacy publication, malformed/absent durable
   tuples, generation ordering and owner replacement; existing real generation
   replacement consumer under race mode.
