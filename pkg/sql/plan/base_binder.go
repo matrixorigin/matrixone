@@ -3032,6 +3032,15 @@ func (b *baseBinder) bindExplicitCollationExpr(astExpr *tree.FuncExpr, depth int
 	if !ok {
 		return nil, unsupportedCollationError(b.GetContext(), collationName.String())
 	}
+	// Before native identities were introduced, the parser accepted recognized
+	// legacy COLLATE clauses but ignored their effect on expressions. Preserve
+	// that behavior for strings, numbers, and NULL alike.
+	if !types.IsNative0900Collation(uint8(charset)) {
+		return b.impl.BindExpr(astExpr.Exprs[0], depth, false)
+	}
+	if !native0900AdmissionAllowed(nil) {
+		return nil, moerr.NewNotSupportedNoCtx(native0900AdmissionError)
+	}
 	expr, err := b.impl.BindExpr(astExpr.Exprs[0], depth, false)
 	if err != nil {
 		return nil, err

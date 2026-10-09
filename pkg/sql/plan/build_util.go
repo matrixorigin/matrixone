@@ -736,6 +736,9 @@ func buildDefaultExprWithColumns(
 	if err != nil {
 		return nil, err
 	}
+	if err = requireNative0900ExpressionAdmission(proc, planExpr); err != nil {
+		return nil, err
+	}
 	if err = preservePersistedFormatCompatibility(proc.Ctx, planExpr); err != nil {
 		return nil, err
 	}

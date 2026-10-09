@@ -180,6 +180,31 @@ func TestAlterTableCharsetConversionRebuildsNativePhysicalKeys(t *testing.T) {
 	require.Equal(t, uint32(types.LegacyKeyFormat), table.Indexes[0].KeyFormat)
 }
 
+func TestAlterTableConvertBinaryRetainsDeclaredWidth(t *testing.T) {
+	option := tree.NewTableOptionCharsetConversion("binary")
+	for _, tc := range []struct {
+		name   string
+		source types.T
+		target types.T
+		width  int32
+		want   int32
+	}{
+		{name: "varchar utf8mb4", source: types.T_varchar, target: types.T_varbinary, width: 2, want: 2},
+		{name: "char utf8mb4", source: types.T_char, target: types.T_binary, width: 2, want: 2},
+		{name: "varchar near limit", source: types.T_varchar, target: types.T_varbinary, width: types.MaxVarBinaryLen, want: types.MaxVarBinaryLen},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			table := &plan.TableDef{DefaultCharset: uint32(types.CharsetUTF8),
+				Cols: []*plan.ColDef{{Name: "v", Typ: plan.Type{Id: int32(tc.source), Width: tc.width,
+					Charset: uint32(types.CharsetUTF8)}, Default: &plan.Default{NullAbility: true}}}}
+			err := applyAlterTableCharsetConversion(context.Background(), table, option)
+			require.NoError(t, err)
+			require.Equal(t, int32(tc.target), table.Cols[0].Typ.Id)
+			require.Equal(t, tc.want, table.Cols[0].Typ.Width)
+		})
+	}
+}
+
 func TestAlterTableCharsetConversionRequiresCopy(t *testing.T) {
 	option := tree.NewTableOptionCharsetConversionWithCollation("utf8mb4", "utf8mb4_0900_ai_ci")
 	algorithm, err := ResolveAlterTableAlgorithm(context.Background(),

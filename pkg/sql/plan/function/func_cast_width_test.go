@@ -50,6 +50,35 @@ func runStrToStrWidth(t *testing.T, mp *mpool.MPool, proc *process.Process, inpu
 	return string(got), null, nil
 }
 
+func TestBinaryStringAssignmentChecksBytes(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcess(t)
+	for _, tc := range []struct {
+		name    string
+		target  types.Type
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{name: "varbinary exact bytes", target: types.New(types.T_varbinary, 8, 0), input: "中文", want: "中文"},
+		{name: "varbinary excess bytes", target: types.New(types.T_varbinary, 8, 0), input: "好好好", wantErr: true},
+		{name: "binary exact bytes padded", target: types.New(types.T_binary, 8, 0), input: "中文", want: "中文\x00\x00"},
+		{name: "binary excess bytes", target: types.New(types.T_binary, 8, 0), input: "好好好", wantErr: true},
+		{name: "text still counts characters", target: types.New(types.T_varchar, 2, 0), input: "中文", want: "中文"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, null, err := runStrToStrWidth(t, mp, proc, tc.input, tc.target, true, true)
+			if tc.wantErr {
+				require.ErrorContains(t, err, "Src length 9 is larger than Dest length 8")
+				return
+			}
+			require.NoError(t, err)
+			require.False(t, null)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
 // TestStrToStrWidthEnforcement covers the CHAR/VARCHAR over-length matrix:
 // strict vs non-strict, and the trailing-space exemption (allowTrailingSpaceTrim).
 func TestStrToStrWidthEnforcement(t *testing.T) {

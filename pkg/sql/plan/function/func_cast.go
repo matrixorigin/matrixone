@@ -9012,6 +9012,9 @@ func strToStr(
 					return formatDataTruncationError(ctx, from.GetSourceVector(), totype, fmt.Sprintf(
 						"Src length %v is larger than Dest length %v", len(v), destLen), reportDataTooLong)
 				}
+			} else if (toType.Oid == types.T_binary || toType.Oid == types.T_varbinary) && len(v) > destLen {
+				return formatDataTruncationError(ctx, from.GetSourceVector(), totype, fmt.Sprintf(
+					"Src length %v is larger than Dest length %v", len(v), destLen), reportDataTooLong)
 			} else if utf8.RuneCountInString(s) > destLen {
 				return formatDataTruncationError(ctx, from.GetSourceVector(), totype, fmt.Sprintf(
 					"Src length %v is larger than Dest length %v", len(s), destLen))
