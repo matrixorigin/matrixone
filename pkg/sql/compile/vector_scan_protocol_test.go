@@ -101,7 +101,7 @@ func TestVectorScanProtocolCheckReportsReceivingInstanceVersion(t *testing.T) {
 	}
 }
 
-func TestIndexSearchScanPlacementRequiresProtocol107(t *testing.T) {
+func TestIndexSearchScanPlacementRequiresProtocol(t *testing.T) {
 	workers := engine.Nodes{{Id: "b", Addr: "b:6001"}, {Id: "a", Addr: "a:6001"}}
 	for _, mode := range []string{"supported", "old worker", "old coordinator", "unknown worker", "probe failure", "canceled", "forced local"} {
 		t.Run(mode, func(t *testing.T) {
@@ -281,7 +281,7 @@ func TestRequiredIVFProtocolCoversEveryPartitionAndNestedFragment(t *testing.T) 
 	require.Equal(t, 1, stream.sentCnt)
 }
 
-func TestRequiredIVFWorkersRequireProtocol107(t *testing.T) {
+func TestRequiredIVFWorkersRequireProtocol(t *testing.T) {
 	for _, mode := range []string{"supported", "old", "unknown", "canceled"} {
 		t.Run(mode, func(t *testing.T) {
 			c, client := vectorPlacementCompile(t, engine.Nodes{{Id: "a", Addr: "a:6001"}, {Id: "b", Addr: "b:6001"}})
@@ -345,7 +345,7 @@ func TestRequiredIVFWorkersRequireProtocol107(t *testing.T) {
 	}
 }
 
-func TestApplyIndexSearchScanRequiresProtocol107(t *testing.T) {
+func TestApplyIndexSearchScanRequiresProtocol(t *testing.T) {
 	apply := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{
 		{Apply: &pipeline.Apply{IndexSearchScan: &plan.IndexSearchScan{}}},
 	}}

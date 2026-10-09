@@ -226,6 +226,83 @@ explain select id, match(body) against('needle') as s from t_ft2_ivfpq order by 
 select id, match(body) against('needle') as s from t_ft2_ivfpq order by l2_distance(v,'[0,0,0]') limit 3;
 select id, match(body) against('needle') as s from t_ref_ft2 order by l2_distance(v,'[0,0,0]') limit 3;
 
+create table meta(id bigint primary key, grp int);
+insert into meta select result, result % 2 from generate_series(1, 200) g;
+create table query_vectors(name varchar(10) primary key, v vecf32(3) not null);
+insert into query_vectors values ('lo', '[0,0,0]'), ('hi', '[100,101,102]');
+
+-- Top-K over a join with another table: cagra uses no vector index, with or without a MATCH
+-- @separator:table
+-- @regex("Vector Index Scan on", false)
+explain select d.id from t_ft_cagra d join meta m on m.id = d.id order by l2_distance(d.v,'[0,0,0]') limit 3;
+select d.id from t_ft_cagra d join meta m on m.id = d.id order by l2_distance(d.v,'[0,0,0]') limit 3;
+select d.id from t_ref_ft d join meta m on m.id = d.id order by l2_distance(d.v,'[0,0,0]') limit 3;
+-- @separator:table
+-- @regex("Fulltext Index Scan on", true)
+-- @regex("Vector Index Scan on", false)
+explain select d.id from t_ft_cagra d join meta m on m.id = d.id where match(d.body) against('needle') order by l2_distance(d.v,'[0,0,0]') limit 3;
+select d.id from t_ft_cagra d join meta m on m.id = d.id where match(d.body) against('needle') order by l2_distance(d.v,'[0,0,0]') limit 3;
+select d.id from t_ref_ft d join meta m on m.id = d.id where match(d.body) against('needle') order by l2_distance(d.v,'[0,0,0]') limit 3;
+-- query vector from a single-row provider: cagra uses no vector index, with or without a MATCH
+-- @separator:table
+-- @regex("Vector Index Scan on", false)
+explain select d.id from t_ft_cagra d join query_vectors q on q.name = 'lo' order by l2_distance(d.v, q.v) limit 3;
+select d.id from t_ft_cagra d join query_vectors q on q.name = 'lo' order by l2_distance(d.v, q.v) limit 3;
+select d.id from t_ref_ft d join query_vectors q on q.name = 'lo' order by l2_distance(d.v, q.v) limit 3;
+-- @separator:table
+-- @regex("Fulltext Index Scan on", true)
+-- @regex("Vector Index Scan on", false)
+explain select d.id from t_ft_cagra d join query_vectors q on q.name = 'hi' where match(d.body) against('needle') order by l2_distance(d.v, q.v) limit 3;
+select d.id from t_ft_cagra d join query_vectors q on q.name = 'hi' where match(d.body) against('needle') order by l2_distance(d.v, q.v) limit 3;
+select d.id from t_ref_ft d join query_vectors q on q.name = 'hi' where match(d.body) against('needle') order by l2_distance(d.v, q.v) limit 3;
+-- rank mode clause: cagra plans and returns the same with mode=pre, mode=post and no clause
+-- @separator:table
+-- @regex("Join Type: SEMI", false)
+-- @regex("Vector Index Scan on", true)
+explain select id from t_ft_cagra where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=pre';
+-- @separator:table
+-- @regex("Join Type: SEMI", false)
+-- @regex("Vector Index Scan on", true)
+explain select id from t_ft_cagra where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=post';
+select (select group_concat(id order by id) from (select id from t_ft_cagra where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=pre') x) = (select group_concat(id order by id) from (select id from t_ft_cagra where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3) x) as same_pre;
+select (select group_concat(id order by id) from (select id from t_ft_cagra where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=post') x) = (select group_concat(id order by id) from (select id from t_ft_cagra where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3) x) as same_post;
+
+-- Top-K over a join with another table: ivfpq uses no vector index, with or without a MATCH
+-- @separator:table
+-- @regex("Vector Index Scan on", false)
+explain select d.id from t_ft_ivfpq d join meta m on m.id = d.id order by l2_distance(d.v,'[0,0,0]') limit 3;
+select d.id from t_ft_ivfpq d join meta m on m.id = d.id order by l2_distance(d.v,'[0,0,0]') limit 3;
+select d.id from t_ref_ft d join meta m on m.id = d.id order by l2_distance(d.v,'[0,0,0]') limit 3;
+-- @separator:table
+-- @regex("Fulltext Index Scan on", true)
+-- @regex("Vector Index Scan on", false)
+explain select d.id from t_ft_ivfpq d join meta m on m.id = d.id where match(d.body) against('needle') order by l2_distance(d.v,'[0,0,0]') limit 3;
+select d.id from t_ft_ivfpq d join meta m on m.id = d.id where match(d.body) against('needle') order by l2_distance(d.v,'[0,0,0]') limit 3;
+select d.id from t_ref_ft d join meta m on m.id = d.id where match(d.body) against('needle') order by l2_distance(d.v,'[0,0,0]') limit 3;
+-- query vector from a single-row provider: ivfpq uses no vector index, with or without a MATCH
+-- @separator:table
+-- @regex("Vector Index Scan on", false)
+explain select d.id from t_ft_ivfpq d join query_vectors q on q.name = 'lo' order by l2_distance(d.v, q.v) limit 3;
+select d.id from t_ft_ivfpq d join query_vectors q on q.name = 'lo' order by l2_distance(d.v, q.v) limit 3;
+select d.id from t_ref_ft d join query_vectors q on q.name = 'lo' order by l2_distance(d.v, q.v) limit 3;
+-- @separator:table
+-- @regex("Fulltext Index Scan on", true)
+-- @regex("Vector Index Scan on", false)
+explain select d.id from t_ft_ivfpq d join query_vectors q on q.name = 'hi' where match(d.body) against('needle') order by l2_distance(d.v, q.v) limit 3;
+select d.id from t_ft_ivfpq d join query_vectors q on q.name = 'hi' where match(d.body) against('needle') order by l2_distance(d.v, q.v) limit 3;
+select d.id from t_ref_ft d join query_vectors q on q.name = 'hi' where match(d.body) against('needle') order by l2_distance(d.v, q.v) limit 3;
+-- rank mode clause: ivfpq plans and returns the same with mode=pre, mode=post and no clause
+-- @separator:table
+-- @regex("Join Type: SEMI", false)
+-- @regex("Vector Index Scan on", true)
+explain select id from t_ft_ivfpq where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=pre';
+-- @separator:table
+-- @regex("Join Type: SEMI", false)
+-- @regex("Vector Index Scan on", true)
+explain select id from t_ft_ivfpq where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=post';
+select (select group_concat(id order by id) from (select id from t_ft_ivfpq where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=pre') x) = (select group_concat(id order by id) from (select id from t_ft_ivfpq where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3) x) as same_pre;
+select (select group_concat(id order by id) from (select id from t_ft_ivfpq where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=post') x) = (select group_concat(id order by id) from (select id from t_ft_ivfpq where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3) x) as same_post;
+
 drop database hybrid_ft_vec_gpu;
 set experimental_fulltext_index = 0;
 set experimental_fulltext2_index = 0;

@@ -43,13 +43,17 @@ receive the node: dispatch to it fails instead of misreading the plan.
 
 `pkg/indexplugin/search/planreader` is the shared reader: a plugin implements
 `Searcher.Next(ctx) → Chunk{Keys, Scores, Include}` and the shared reader emits
-batches. Each plugin's reader is a port of its former table function's executor.
+batches. The hnsw, cagra, ivfpq, fulltext2 and classic fulltext readers port the executors of
+their former table functions.
 
 cagra and ivfpq register only in the GPU build (`pkg/indexplugin/all/all_gpu.go`).
 
-A partitioned scan (a plugin implementing `ParallelHooks`: ivfflat) pins its query to
-the current CN, whose partition sees the coordinator's appendable ranges. Other index
-search scans run as one local scope and do not pin.
+A query with a partitioned scan (a plugin implementing `ParallelHooks`: ivfflat) requires the
+current CN among its workers, as worker 0: that CN's partition reads the coordinator's
+appendable ranges, and the other partitions run on other CNs. `TestQueryHasPartitionedIndexSearchScan`
+covers which scans are partitioned; the worker-0 assignment rests on code review
+(`pkg/sql/compile/scheduler.go`); claim 7 runs a partitioned scan on two CNs. Other index
+search scans run as one local scope.
 
 ## Planning
 
@@ -81,11 +85,11 @@ rewrite admits an algorithm for such a query only if it may serve that restricti
   that projection, which needs the scan directly under it, so no algorithm rewrites the
   scan; the Top-K is an exact sort over the fulltext hits.
 
-hnsw, cagra and ivfpq implement `BuildLogicalSearch`; the gate is the only thing that
-keeps them off a scan with a MATCH filter.
+hnsw, cagra and ivfpq implement `BuildLogicalSearch`; `vectorIndexSupportsContext` keeps
+them off a scan with a MATCH filter (claim 3).
 
 The `BY RANK WITH OPTION 'mode=...'` clause is honored by ivfflat only; hnsw, cagra and
-ivfpq ignore it, so the hybrid claims are stated without it.
+ivfpq ignore it (claim 10), so the hybrid claims are stated without it.
 
 ## Compatibility and rollout
 
@@ -95,8 +99,8 @@ a query whose plan needs an index search fails until every CN runs this version.
 | Case | Behavior | Evidence |
 |---|---|---|
 | New coordinator, a CN below the scan's protocol version | `compileIndexSearchScan` refuses the placement before dispatch: "index search scan requires MORPC protocol version N on every CN" | claim 7 (multi-CN, black box) |
-| Older coordinator, newer CN, ivfflat search | the receiver refuses, in `decodeScope`, an index search scan without `algo_options` (every planner of this version sets them): "index search scan from an older version is not supported"; it also refuses one below the CN's protocol version (`MOProtocolVersion`) | unit test `TestRemoteIndexSearchScanFromOlderVersionIsRefused`; no mixed-binary test |
-| Older coordinator, newer CN, hnsw/cagra/ivfpq/fulltext search | the older plan carries a removed search table function: "table function ... not supported" | claim 8 (the same error on a direct call); no mixed-binary test |
+| Older coordinator, newer CN, ivfflat search | the receiver refuses, in `decodeScope`, an index search scan without `algo_options` (every planner of this version sets them): "index search scan from an older version is not supported"; it also refuses one below the CN's protocol version (`MOProtocolVersion`) | unit tests `TestRemoteIndexSearchScanFromOlderVersionIsRefused`, `TestVectorScanPartitionTransportAndRollback`; no mixed-binary test |
+| Older coordinator, newer CN, hnsw/cagra/ivfpq/fulltext search | a pipeline carrying a removed search table function fails to prepare: "table function NAME is not supported" | unit test `TestPrepareRemovedSearchTableFunction`; no mixed-binary test |
 | Rollback to the older version | the rows above, with the roles reversed | no mixed-binary test |
 
 The removed search table functions (`hnsw_search`, `cagra_search`, `ivfpq_search`,
@@ -114,9 +118,10 @@ black-box test: each item names the unit test that covers it, or says it rests o
   so no reader is opened (`TestBuildVectorIndexReadersRunsEmptyScanHooks`). When a parallel
   factory returns the wrong reader count, every reader it opened is closed (code review).
 - **Shared reader** (`pkg/indexplugin/search/planreader`): a cancelled context ends `Read` with
-  the cancellation (`TestReaderStopsOnCancellationAndEmpty`); a searcher error is returned and
-  the reader still closes (`TestReaderRejectsMalformedResults`). `Close` is idempotent, closes
-  the searcher exactly once, and a `Read` after `Close` returns end of data (code review).
+  the cancellation, and `Close` then closes the searcher once
+  (`TestReaderStopsOnCancellationAndEmpty`); a searcher error or a malformed chunk is returned
+  from `Read` (`TestReaderRejectsMalformedResults`). `Close` is idempotent, and a `Read` after
+  `Close` returns end of data (code review).
 - **Correlated APPLY** (`pkg/sql/colexec/apply/vector_source.go`): each row closes the previous
   reader before opening the next; end of data closes the reader; `End`, `Reset` and `Free`
   close the reader and then the execution, both idempotent (code review).
@@ -126,13 +131,17 @@ black-box test: each item names the unit test that covers it, or says it rests o
 - **No-LIMIT and probe-tail buffering**: fulltext2 streams bounded batches through a channel of
   capacity 4 (`TestReadStreaming`, `TestReadStreamingCovered`); `Close` cancels and drains the
   stream and the probe-tail producer (`TestCloseDrains`, `TestProbeTailStreamError`); classic
-  fulltext joins its search goroutine on every exit (`TestClassicCloseEarly`).
+  fulltext `Close` returns before any read and after a partial read (`TestClassicCloseEarly`);
+  that it joins its search goroutine on every exit rests on code review.
 
 ## Performance
 
 Each reader calls the same index cache, cuVS and fulltext engine paths as the table function
-it replaces. The one native change is the cuVS host post-filter for a search with deleted
-rows and no filter: a per-row lookup into the deleted bitset.
+it replaces. The native change is in cuVS brute force, IVF-Flat and IVF-PQ: a search that
+runs with a bitset (a filter or deleted rows) re-tests each returned row on the host, against
+the filter mask or by a per-row lookup into the deleted bitset, and replaces a failing row with
+a sentinel. This was IVF-PQ's post-filter, moved to the shared base. A search with no filter
+and no deleted rows skips it (`cgo/cuvs/test/*_test.cu`).
 
 IVF-PQ, 1M wiki_all rows, dim 768, INCLUDE `file_id`, lists 1024, m 192, k=20,
 probe_limit 16, concurrency 8, 5000 queries, RTX 5070 Laptop. Baseline: main on
@@ -188,12 +197,15 @@ with a MATCH filter (classic fulltext or fulltext2) and
 | 7 | An index search that would be placed on a CN reporting a protocol version below the scan's fails the query ("index search scan requires MORPC protocol version N on every CN"); with that CN at the current version the same query, run on both CNs, returns the exact rows. | `pkg/tests/sqlintegration/multicn/index_search_protocol_test.go` |
 | 8 | The removed search table functions fail with "table function ... not supported" when called directly and when used in CREATE VIEW. | `cases/vector/index_search_scan_contract.sql`, `cases/vector/vector_hybrid_fulltext.sql` |
 | 9 | Re-executing a prepared ivfflat, hnsw, classic fulltext or fulltext2 search with different parameters returns, at every execution, the rows of the same search on a table without the index. | `cases/vector/index_search_scan_contract.sql` |
+| 10 | With a scalar filter, ivfflat `mode=pre` adds a membership join and `mode=post` does not; hnsw, cagra and ivfpq plan without a membership join under `mode=pre`, `mode=post` and no clause, and return the same rows under all three. | `cases/vector/vector_hybrid_fulltext.sql` (ivfflat, hnsw), `gpu_cases/vector/vector_hybrid_fulltext_gpu.sql` (cagra, ivfpq) |
+| 11 | A vector Top-K over a join with another table uses the vector index on ivfflat and none on hnsw, cagra and ivfpq, with or without a MATCH; a query vector from a provider table uses none on cagra and ivfpq, with or without a MATCH. Where no vector index is used, results equal the same query without a vector index. | same files |
 
 ## Scope
 
-These shapes plan the same with and without a MATCH, and neither uses the vector index:
-a vector Top-K over a join with another table (`JOIN meta m ON m.id = d.id`), and a
-query vector from a provider table for cagra and ivfpq.
+On hnsw, cagra and ivfpq these shapes use no vector index, with or without a MATCH: a
+vector Top-K over a join with another table (`JOIN meta m ON m.id = d.id`), and, for cagra
+and ivfpq, a query vector from a provider table (claim 11). ivfflat uses its vector index
+for the join shape.
 
 ## Decision log
 

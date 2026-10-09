@@ -256,6 +256,50 @@ explain select d.id from t_ft2_hnsw d join query_vectors q on q.name = 'hi' wher
 select d.id from t_ft2_hnsw d join query_vectors q on q.name = 'hi' where match(d.body) against('needle') order by l2_distance(d.v, q.v) limit 3;
 select d.id from t_ref_ft2 d join query_vectors q on q.name = 'hi' where match(d.body) against('needle') order by l2_distance(d.v, q.v) limit 3;
 
+create table meta(id bigint primary key, grp int);
+insert into meta select result, result % 2 from generate_series(1, 200) g;
+
+-- Top-K over a join with another table: ivfflat uses its vector index
+-- @separator:table
+-- @regex("Vector Index Scan on", true)
+explain select d.id from t_ft_ivfflat d join meta m on m.id = d.id order by l2_distance(d.v,'[0,0,0]') limit 3;
+-- @separator:table
+-- @regex("Fulltext Index Scan on", true)
+-- @regex("Vector Index Scan on", true)
+explain select d.id from t_ft_ivfflat d join meta m on m.id = d.id where match(d.body) against('needle') order by l2_distance(d.v,'[0,0,0]') limit 3;
+-- Top-K over a join with another table: hnsw uses no vector index, with or without a MATCH
+-- @separator:table
+-- @regex("Vector Index Scan on", false)
+explain select d.id from t_ft_hnsw d join meta m on m.id = d.id order by l2_distance(d.v,'[0,0,0]') limit 3;
+select d.id from t_ft_hnsw d join meta m on m.id = d.id order by l2_distance(d.v,'[0,0,0]') limit 3;
+select d.id from t_ref_ft d join meta m on m.id = d.id order by l2_distance(d.v,'[0,0,0]') limit 3;
+-- @separator:table
+-- @regex("Fulltext Index Scan on", true)
+-- @regex("Vector Index Scan on", false)
+explain select d.id from t_ft_hnsw d join meta m on m.id = d.id where match(d.body) against('needle') order by l2_distance(d.v,'[0,0,0]') limit 3;
+select d.id from t_ft_hnsw d join meta m on m.id = d.id where match(d.body) against('needle') order by l2_distance(d.v,'[0,0,0]') limit 3;
+select d.id from t_ref_ft d join meta m on m.id = d.id where match(d.body) against('needle') order by l2_distance(d.v,'[0,0,0]') limit 3;
+
+-- rank mode clause: ivfflat mode=pre adds a membership join, mode=post does not
+-- @separator:table
+-- @regex("Join Type: SEMI", true)
+explain select id from t_ft_ivfflat where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=pre';
+-- @separator:table
+-- @regex("Join Type: SEMI", false)
+-- @regex("Vector Index Scan on", true)
+explain select id from t_ft_ivfflat where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=post';
+-- rank mode clause: hnsw plans and returns the same with mode=pre, mode=post and no clause
+-- @separator:table
+-- @regex("Join Type: SEMI", false)
+-- @regex("Vector Index Scan on", true)
+explain select id from t_ft_hnsw where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=pre';
+-- @separator:table
+-- @regex("Join Type: SEMI", false)
+-- @regex("Vector Index Scan on", true)
+explain select id from t_ft_hnsw where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=post';
+select (select group_concat(id order by id) from (select id from t_ft_hnsw where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=pre') x) = (select group_concat(id order by id) from (select id from t_ft_hnsw where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3) x) as same_pre;
+select (select group_concat(id order by id) from (select id from t_ft_hnsw where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=post') x) = (select group_concat(id order by id) from (select id from t_ft_hnsw where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3) x) as same_post;
+
 -- the search table functions are not callable from SQL
 select * from hnsw_search('{}', '{}', '[0,0,0]');
 select * from ivfpq_search('{}', '{}', '[0,0,0]');
