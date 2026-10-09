@@ -175,6 +175,13 @@ func (c *cluster) Start() (err error) {
 				"embedded test cluster cleanup is incomplete",
 			)
 		}
+		// The race-UT scheduler opts complete test processes into a bounded
+		// admission pool through the environment. Apply that policy at the
+		// cluster lifecycle owner so both StartTestCluster and direct
+		// NewCluster(WithTesting()) callers use the same admission contract.
+		if concurrentTestClusterProcessesEnabled() {
+			c.options.allowConcurrentTestClusterProcesses = true
+		}
 		mode := clusteradmission.Exclusive
 		if c.options.allowConcurrentTestClusterProcesses {
 			mode = clusteradmission.AllowConcurrentProcesses

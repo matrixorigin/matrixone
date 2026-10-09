@@ -53,6 +53,14 @@ if [[ "$1" == tool && "$2" == test2json ]]; then
  leaf=${package##*/}
  [[ "$PWD" -ef "$CASE_DIR/package-$leaf" ]] || exit 107
  mkdir "$CASE_DIR/executed-$leaf" || exit 108
+ if [[ "$MODE" == pool ]]; then
+  [[ "$MO_TEST_CLUSTER_ADMISSION_POOL_SIZE" == 2 ]] || exit 109
+  touch "$CASE_DIR/active-$leaf"
+  active=$(find "$CASE_DIR" -maxdepth 1 -name 'active-*' -type f | wc -l)
+  printf 'pool=%s active=%s\n' "$MO_TEST_CLUSTER_ADMISSION_POOL_SIZE" "$active" >> "$CASE_DIR/pool-events"
+  sleep 0.15
+  rm -f "$CASE_DIR/active-$leaf"
+ fi
  if [[ "$MODE" == execute-cancel && "$leaf" == a ]]; then
   trap 'touch "$CASE_DIR/stopped-execute-a"; exit 143' TERM
   printf '%s\n' "$$" > "$CASE_DIR/pid-execute-a"
@@ -189,6 +197,26 @@ fi
 				t.Fatalf("embedded %s: %v\n%s", mode, err, out)
 			}
 		})
+	}
+}
+
+func TestEmbeddedPrebuiltExecutionUsesBoundedProcessPool(t *testing.T) {
+	script := embeddedSetup + `
+start_embedded_prebuild "$scope" 1
+artifact_dir=$CLUSTER_PREBUILD_DIR
+status=0
+UT_EMBEDDED_PACKAGE_PARALLEL=2 run_embedded_tests "$scope" || status=$?
+[[ "$status" == 0 ]] || exit 90
+[[ "$(grep -c '^pool=2 ' "$CASE_DIR/pool-events")" == 3 ]] || exit 91
+max_active=$(awk -F'[ =]' '{ if ($4 > max) max=$4 } END { print max+0 }' "$CASE_DIR/pool-events")
+[[ "$max_active" -le 2 ]] || exit 92
+[[ -z "$CLUSTER_PREBUILD_JOB_PID$CURRENT_UT_PID" ]] || exit 93
+[[ ! -d "$artifact_dir" ]] || exit 94
+`
+	out, err := scheduleHarnessWithMockTransform(t, script, embeddedGoMock, nil,
+		"MODE=pool", "UT_PREBUILD_EMBEDDED=1", "UT_HARD_TIMEOUT=")
+	if err != nil {
+		t.Fatalf("embedded bounded process pool: %v\n%s", err, out)
 	}
 }
 

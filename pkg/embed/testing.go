@@ -525,9 +525,6 @@ func startBasicCluster(
 		WithCNCount(cnCount),
 		WithPreStart(adjustBasicClusterService),
 	}
-	if concurrentTestClusterProcessesEnabled() {
-		options = append(options, WithConcurrentTestClusterProcesses())
-	}
 	c, err := StartTestCluster(options...)
 	if trace != nil {
 		trace("cluster-start", time.Since(started), err)
