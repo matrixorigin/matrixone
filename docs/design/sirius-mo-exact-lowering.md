@@ -369,3 +369,43 @@ authoritative MO main `0eb746f37c22f57d2081331b25bf379c80168c81`, pass:
 These checks establish merged-native delivery evidence. They do not replace
 the remaining merged-kernel integration/CI gate, D's full-data campaign,
 actual-memory/process baselines, or any performance acceptance gate.
+
+## Merged kernel integration (2026-10-10)
+
+Kernel #29775 merged as `af3f7232a31879a2d6ed590785c8e9a560361c3f`.
+C executable head `ad61b5b5d3c2794928dac9afc548d30e0ce769a8` inherits
+that fix and the MORPC shutdown-test correction merged in #29794. The latter
+removes global ants-pool reboot from the inline rejection test; the exact test
+passes 100 race repetitions. C's earlier histogram-export assertion failure is
+also fixed by waiting for its two asynchronous full-batch sends.
+
+Final local integration on this merged base passes:
+
+- Default, Sirius-only and combined Sirius/cuVS release builds, with the clean
+  merged #29 SDK, all 73 fingerprints and normal package/provenance guards.
+- All four C-owning packages plus frontend in default normal/race modes;
+  Sirius native-tag owning checks and the full combined bridge suite, including
+  cuVS-before/Sirius/cuVS-after in one process.
+- All 22 native preparations without reader or GPU-task admission, followed by
+  the complete public MySQL numeric fixture. Its 31 terminal events have
+  capability 31, the exact profile, completed GPU tasks, no fallback, healthy
+  cleanup and zero retained input/result credit.
+- All nine prepared-metadata/saved-result public cases, including an actual
+  persisted-batch failure followed by successful save/replay on the same
+  physical connection. Normal mode and three race repetitions pass.
+- Native data/cancellation passes 68 race repetitions in one process
+  (measured 0.44 seconds; 30-second budget). Full pre-push SCA passes.
+
+The host now has matching loaded and installed NVIDIA 615.78.08 drivers;
+these GPU checks use the installed driver directly. The local native fixture
+uses 256 MiB GPU capacity and 2 GiB host capacity. Its initial 512 MiB host
+configuration correctly rejected larger preparation graphs at the existing
+progress-window reservation boundary; only that local fixture was corrected.
+Per-input/result windows and all production limits/assertions are unchanged.
+
+The eight SDK-exporter tests, sixteen MO SDK-verifier tests and independent C99
+consumer evidence above retain their unchanged native/script/ABI/artifact
+scope. This integration does not establish D's SF1/SF10, actual-memory/process
+or performance gates. The kernel merge prerequisite and local integration are
+complete; readiness still requires passing required CI on the delivered C
+head. D begins after C merges, and #28966/#28968 remain open.
