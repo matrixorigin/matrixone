@@ -2236,6 +2236,58 @@ func TestNative0900AILikeWithEmptyAndMultibyteEscape(t *testing.T) {
 	}
 }
 
+func TestNative0900AILikeNullEscapeKeepsDefaultBackslash(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	native := types.NewWithCharsetVersion(
+		types.T_varchar, types.MaxVarcharLen, 0,
+		types.CharsetUTF8MB40900AI, types.CollationVersionV1)
+	for _, tc := range []struct {
+		name, value, pattern string
+	}{
+		{name: "case folding", value: "A", pattern: "a"},
+		{name: "escaped underscore", value: "a_b", pattern: `a\_b`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(native, []string{tc.value}, nil),
+				NewFunctionTestConstInput(native, []string{tc.pattern}, nil),
+				NewFunctionTestConstInput(native, []string{""}, []bool{true}),
+			}, NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true}, nil),
+				newOpBuiltInRegexp().likeFn)
+			succeed, errInfo := tcc.Run()
+			require.True(t, succeed, errInfo)
+		})
+	}
+	for _, tc := range []struct {
+		name, value, pattern   string
+		valueNull, patternNull bool
+	}{
+		{name: "null value", pattern: "a", valueNull: true},
+		{name: "null pattern", value: "A", patternNull: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(native, []string{tc.value}, []bool{tc.valueNull}),
+				NewFunctionTestConstInput(native, []string{tc.pattern}, []bool{tc.patternNull}),
+				NewFunctionTestConstInput(native, []string{""}, []bool{true}),
+			}, NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, []bool{true}),
+				newOpBuiltInRegexp().likeFn)
+			succeed, errInfo := tcc.Run()
+			require.True(t, succeed, errInfo)
+		})
+	}
+	modeProc := testutil.NewProcess(t)
+	modeProc.GetSessionInfo().SqlMode = "NO_BACKSLASH_ESCAPES"
+	modeCase := NewFunctionTestCase(modeProc, []FunctionTestInput{
+		NewFunctionTestInput(native, []string{"a_b"}, nil),
+		NewFunctionTestConstInput(native, []string{`a\_b`}, nil),
+		NewFunctionTestConstInput(native, []string{""}, []bool{true}),
+	}, NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true}, nil),
+		newOpBuiltInRegexp().likeFn)
+	succeed, errInfo := modeCase.Run()
+	require.True(t, succeed, errInfo)
+}
+
 func Test_BuiltIn_RegularMatchForLikeOpWithEscape(t *testing.T) {
 	op := newOpBuiltInRegexp()
 

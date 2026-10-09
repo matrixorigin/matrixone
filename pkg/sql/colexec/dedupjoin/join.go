@@ -1363,7 +1363,11 @@ func odkuValuesEqual(left, right *vector.Vector) bool {
 	}
 	if left.GetType().Oid.IsMySQLString() &&
 		types.NeedsCollationKey(*left.GetType(), types.PADSpaceKeyV1) {
-		return types.CompareStringValues(*left.GetType(), left.GetBytesAt(0), right.GetBytesAt(0)) == 0
+		// ODKU is comparing the stored row image after an assignment, not
+		// deciding whether two values conflict on a collation-aware key.
+		// Native key equality may fold case or accents while the assigned
+		// spelling still needs to be written.
+		return bytes.Equal(left.GetBytesAt(0), right.GetBytesAt(0))
 	}
 
 	switch left.GetType().Oid {

@@ -151,10 +151,15 @@ func (op *opBuiltInRegexp) likeFnWithEscape(
 	if !escapeIsNull && (!utf8.Valid(escapeBytes) || utf8.RuneCount(escapeBytes) > 1) {
 		return moerr.NewInvalidInputNoCtx("Incorrect arguments to ESCAPE")
 	}
-	if len(parameters) >= 2 && parameters[0].GetType().Charset == types.CharsetUTF8MB40900AI &&
-		!escapeIsNull {
+	if len(parameters) >= 2 && parameters[0].GetType().Charset == types.CharsetUTF8MB40900AI {
 		var escape rune
-		if escapeEnabled {
+		if escapeIsNull {
+			// MySQL treats a NULL ESCAPE clause as the default backslash.
+			// Keep native text on the UCA matcher; the legacy matcher retains
+			// its existing NULL ESCAPE behavior below.
+			escape = '\\'
+			escapeEnabled = true
+		} else if escapeEnabled {
 			escape, _ = utf8.DecodeRune(escapeBytes)
 		}
 		return op.likeNative0900AI(parameters[:2], result, length, selectList, escape, escapeEnabled)
