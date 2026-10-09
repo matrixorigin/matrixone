@@ -195,7 +195,7 @@ func TestCallPropagatesLoadLockTableBindCheckError(t *testing.T) {
 	require.Equal(t, 1, op.calls)
 }
 
-func TestGetColDataParallelLoadEmptyNumericAsZero(t *testing.T) {
+func TestGetColDataParallelLoadEmptyNumericAndJSONNull(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 
@@ -241,8 +241,7 @@ func TestGetColDataParallelLoadEmptyNumericAsZero(t *testing.T) {
 		proc,
 	)
 	require.NoError(t, err)
-	require.False(t, bat.Vecs[0].GetNulls().Contains(0))
-	require.Equal(t, "0", string(bat.Vecs[0].GetBytesAt(0)))
+	require.True(t, bat.Vecs[0].GetNulls().Contains(0))
 
 	bat.CleanOnlyData()
 	err = getColData(

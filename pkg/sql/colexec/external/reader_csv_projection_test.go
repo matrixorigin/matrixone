@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -73,6 +74,50 @@ func TestJSONLineObjectProjectionUsesPhysicalFieldIndex(t *testing.T) {
 
 			require.NoError(t, getOneRowData(proc, bat, line, 0, param))
 			require.Equal(t, values[fieldIdx], string(bat.Vecs[0].GetBytesAt(0)))
+		})
+	}
+}
+
+func TestJSONLineNullRemainsNullWithParallelLoad(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		jsonData string
+		line     string
+	}{
+		{name: "object", jsonData: tree.OBJECT, line: `{"d":null}`},
+		{name: "array", jsonData: tree.ARRAY, line: `[null]`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+
+			attrs := []plan.ExternAttr{{ColName: "d", ColIndex: 0, ColFieldIndex: 0}}
+			cols := []*plan.ColDef{{Name: "d", Typ: plan.Type{Id: int32(types.T_int32)}}}
+			reader := &CsvReader{}
+			line, err := reader.transJson2Lines(proc.Ctx, tc.line, attrs, cols, tc.jsonData)
+			require.NoError(t, err)
+			require.Equal(t, []csvparser.Field{{IsNull: true}}, line)
+
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+			defer bat.Clean(proc.Mp())
+
+			param := &ExternalParam{
+				ExParamConst: ExParamConst{
+					ParallelLoad:  true,
+					ColumnListLen: 1,
+					Attrs:         attrs,
+					Cols:          cols,
+					Extern: &tree.ExternParam{
+						ExParamConst: tree.ExParamConst{Format: tree.JSONLINE},
+						ExParam:      tree.ExParam{ExternType: int32(plan.ExternType_LOAD), JsonData: tc.jsonData},
+					},
+				},
+				ExParam: ExParam{Fileparam: &ExFileparam{}},
+			}
+
+			require.NoError(t, getOneRowData(proc, bat, line, 0, param))
+			require.True(t, bat.Vecs[0].GetNulls().Contains(0))
 		})
 	}
 }
