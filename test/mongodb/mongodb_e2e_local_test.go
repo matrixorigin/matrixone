@@ -570,6 +570,17 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 		AddRow("mongodb_ci", "seeds", "SCRAM-SHA-256", "disabled", "primary", "majority", 3, 0))
 	mock.ExpectQuery("show create table").WillReturnRows(sqlmock.NewRows([]string{"table", "ddl"}).AddRow(
 		"events", "CREATE EXTERNAL TABLE events (id CHAR(24) MONGODB_PATH '_id') ENGINE = MONGODB WITH ('connection'='mongodb_ci')"))
+	fixtureRows := func() *sqlmock.Rows {
+		rows := sqlmock.NewRows([]string{"id", "device_id", "site_id", "ts", "measurement", "source_batch"})
+		for _, row := range manifest.Rows {
+			require.Len(t, row, 6)
+			rows.AddRow(row[0], row[1], row[2], row[3], row[4], row[5])
+		}
+		return rows
+	}
+	mock.ExpectExec("create table mongodb_ci.events_copy as select").WillReturnResult(sqlmock.NewResult(0, 5))
+	mock.ExpectQuery("select mongo_id.*from mongodb_ci.events_copy").WillReturnRows(fixtureRows())
+	mock.ExpectQuery("select e.mongo_id.*join mongodb_ci.events_copy").WillReturnRows(fixtureRows())
 	expectMongoDBE2EScalar(mock, "STRING")
 	expectMongoDBE2EScalar(mock, "text")
 	expectMongoDBE2EScalar(mock, "2")
@@ -580,14 +591,6 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	mock.ExpectQuery("truncate table mongodb_ci.events").WillReturnError(
 		errors.New("invalid input: cannot insert/update/delete from external table"))
 	expectMongoDBE2EScalar(mock, "5")
-	fixtureRows := func() *sqlmock.Rows {
-		rows := sqlmock.NewRows([]string{"id", "device_id", "site_id", "ts", "measurement", "source_batch"})
-		for _, row := range manifest.Rows {
-			require.Len(t, row, 6)
-			rows.AddRow(row[0], row[1], row[2], row[3], row[4], row[5])
-		}
-		return rows
-	}
 	aggregateRows := func() *sqlmock.Rows {
 		return sqlmock.NewRows([]string{"device_id", "site_id", "window_start", "measurement"}).
 			AddRow("device-001", "site-east", "2026-07-27 10:00:00", "12").
@@ -717,6 +720,7 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 		"secret-backed-ddl",
 		"show-connections-admin-metadata-redaction",
 		"show-create-redaction-roundtrip",
+		"materialize-and-join-exact-rows",
 		"json-relaxed-extended-conversion",
 		"fixed-binary-padding",
 		"truncate-read-only-source-preserved",
@@ -760,6 +764,15 @@ func TestMongoDBLocalE2ERunPropagatesRelaxedJSONQueryFailures(t *testing.T) {
 			require.NoError(t, os.Chdir(repoRoot))
 			t.Cleanup(func() { require.NoError(t, os.Chdir(previous)) })
 
+			manifest, err := loadFixtureManifest("test/mongodb/fixture_manifest.json")
+			require.NoError(t, err)
+			fixtureRows := func() *sqlmock.Rows {
+				rows := sqlmock.NewRows([]string{"id", "device_id", "site_id", "ts", "measurement", "source_batch"})
+				for _, row := range manifest.Rows {
+					rows.AddRow(row[0], row[1], row[2], row[3], row[4], row[5])
+				}
+				return rows
+			}
 			db, mock := newMongoDBE2ESQLMock(t)
 			for range 10 {
 				mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(0, 1))
@@ -770,6 +783,9 @@ func TestMongoDBLocalE2ERunPropagatesRelaxedJSONQueryFailures(t *testing.T) {
 			}).AddRow("mongodb_ci", "seeds", "SCRAM-SHA-256", "disabled", "primary", "majority", 3, 0))
 			mock.ExpectQuery("show create table").WillReturnRows(sqlmock.NewRows([]string{"table", "ddl"}).AddRow(
 				"events", "CREATE EXTERNAL TABLE events (id CHAR(24) MONGODB_PATH '_id') ENGINE = MONGODB WITH ('connection'='mongodb_ci')"))
+			mock.ExpectExec("create table mongodb_ci.events_copy as select").WillReturnResult(sqlmock.NewResult(0, 5))
+			mock.ExpectQuery("select mongo_id.*from mongodb_ci.events_copy").WillReturnRows(fixtureRows())
+			mock.ExpectQuery("select e.mongo_id.*join mongodb_ci.events_copy").WillReturnRows(fixtureRows())
 			expectMongoDBE2EScalar(mock, "STRING")
 			expectMongoDBE2EScalar(mock, "text")
 			if tc.failedQuery == "json_contains" {

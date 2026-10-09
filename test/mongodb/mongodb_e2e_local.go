@@ -143,6 +143,10 @@ func runWithDSNAndTransferMonitor(ctx context.Context, db *sql.DB, dsn, host str
 		}
 		r.Cases = append(r.Cases, "authorized-non-admin-scan", "non-admin-marker-injection-boundary")
 	}
+	if err := verifyMaterializeAndJoin(ctx, db, manifest.Rows); err != nil {
+		return err
+	}
+	r.Cases = append(r.Cases, "materialize-and-join-exact-rows")
 	if err := expectScalar(ctx, db, "select json_type(value) from mongodb_ci.json_scalar", "STRING"); err != nil {
 		return err
 	}
@@ -719,6 +723,24 @@ func loadFixtureManifest(path string) (fixtureManifest, error) {
 		return fixtureManifest{}, fmt.Errorf("MongoDB fixture manifest has no rows")
 	}
 	return manifest, nil
+}
+
+func verifyMaterializeAndJoin(ctx context.Context, db *sql.DB, expectedRows [][]string) error {
+	// Check MongoDB scan as a source for ordinary MO DDL and a cross-engine
+	// join. Compare complete rows with the independent fixture, including NULLs.
+	if _, err := db.ExecContext(ctx, "create table mongodb_ci.events_copy as select mongo_id,device_id,site_id,ts,measurement,source_batch from mongodb_ci.events"); err != nil {
+		return fmt.Errorf("materialize MongoDB source: %w", err)
+	}
+	const eventColumns = "mongo_id,device_id,site_id,cast(ts as char),coalesce(cast(measurement as char),'NULL'),coalesce(source_batch,'NULL')"
+	if err := expectRows(ctx, db, "select "+eventColumns+" from mongodb_ci.events_copy order by mongo_id", expectedRows); err != nil {
+		return fmt.Errorf("materialized MongoDB rows: %w", err)
+	}
+	if err := expectRows(ctx, db,
+		"select e.mongo_id,e.device_id,e.site_id,cast(e.ts as char),coalesce(cast(e.measurement as char),'NULL'),coalesce(e.source_batch,'NULL') from mongodb_ci.events e join mongodb_ci.events_copy c on e.mongo_id=c.mongo_id order by e.mongo_id",
+		expectedRows); err != nil {
+		return fmt.Errorf("MongoDB and local table join: %w", err)
+	}
+	return nil
 }
 
 func verifyReadOnlyInsert(ctx context.Context, db *sql.DB, expectedRows [][]string) error {
