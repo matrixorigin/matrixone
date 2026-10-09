@@ -744,14 +744,16 @@ func TestCDCTargetSetupTransientDiagnosticOnMO(t *testing.T) {
 	originalOpen := cdc.OpenDbConn
 	restoreCollect := func() {}
 	releaseRecovery := func() {}
-	defer func() {
+	// Register before Run so its failure-quarantine cleanup closes the cluster
+	// before restoring globals used by CDC workers.
+	t.Cleanup(func() {
 		releaseRecovery()
 		closeErr := CloseSingleCNBaseClusterTests()
 		cdc.OpenDbConn = originalOpen
 		restoreCollect()
 		cdc.ResetCDCWatermarkUpdaterForTest()
 		require.NoError(t, closeErr)
-	}()
+	})
 	RunSingleCNBaseClusterTests(t, func(cluster Cluster) {
 		cn, err := cluster.GetCNService(0)
 		require.NoError(t, err)
