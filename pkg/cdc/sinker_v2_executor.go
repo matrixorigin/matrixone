@@ -337,6 +337,7 @@ func (e *Executor) ExecSQL(
 		}
 
 		if err != nil {
+			v2.CdcMysqlSinkErrorCounter.Inc()
 			e.logFailedSQL(err, sqlBuf)
 		}
 		return err
@@ -439,7 +440,6 @@ func (e *Executor) execWithRetry(
 			zap.Error(err),
 			zap.String("reason", reason),
 		)
-		v2.CdcMysqlSinkErrorCounter.Inc()
 		v2.CdcSinkerRetryCounter.WithLabelValues(sinkLabel, reason, "failed").Inc()
 
 		if e.circuitBreaker != nil {

@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	mysql "github.com/matrixorigin/mysql"
 	"github.com/stretchr/testify/require"
 )
@@ -228,6 +229,7 @@ func TestExecutorTransactionalFailureAndStandaloneRetry(t *testing.T) {
 		cause error
 		retry bool
 	}{
+		{"success", nil, false},
 		{"wire loss", &mysql.MySQLError{Number: 2013}, true}, {"EOF", io.EOF, true}, {"deadline", context.DeadlineExceeded, true},
 		{"syntax", &mysql.MySQLError{Number: 1064}, false}, {"permission", &mysql.MySQLError{Number: 1045}, false},
 		{"cancelled", context.Canceled, false}, {"owner lost", &OwnerFenceLostError{}, false},
@@ -241,32 +243,70 @@ func TestExecutorTransactionalFailureAndStandaloneRetry(t *testing.T) {
 			e.retryPolicy.Backoff = nil
 			mock.ExpectBegin()
 			require.NoError(t, e.BeginTx(t.Context()))
-			mock.ExpectExec("fakeSql").WillReturnError(tc.cause)
+			defer func() {
+				mock.ExpectRollback()
+				require.NoError(t, e.RollbackTx(context.Background()))
+				require.NoError(t, mock.ExpectationsWereMet())
+			}()
+			wantErrors := float64(0)
+			if tc.cause == nil {
+				mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 1))
+			} else {
+				mock.ExpectExec("fakeSql").WillReturnError(tc.cause)
+				wantErrors = 1
+			}
+			before := readCounterValue(t, v2.CdcMysqlSinkErrorCounter)
 			err = e.ExecSQL(t.Context(), nil, []byte("     INSERT INTO t VALUES (1)"), true)
-			require.ErrorIs(t, err, tc.cause)
+			if tc.cause == nil {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, tc.cause)
+			}
+			require.Equal(t, wantErrors, readCounterValue(t, v2.CdcMysqlSinkErrorCounter)-before)
 			s := &mysqlSinker2{}
 			s.SetError(err)
 			require.Equal(t, tc.retry, (&TableChangeStream{}).determineRetryable(s.Error()))
 			if tc.retry || errors.Is(tc.cause, context.Canceled) || IsOwnerFenceLostError(tc.cause) {
 				require.ErrorIs(t, s.Error(), tc.cause)
 			}
-			mock.ExpectRollback()
-			require.NoError(t, e.RollbackTx(t.Context()))
+		})
+	}
+	for _, tc := range []struct {
+		name      string
+		needRetry bool
+		failures  int
+	}{
+		{"standalone success", true, 0},
+		{"standalone retries", true, 1},
+		{"standalone retries twice", true, 2},
+		{"single attempt success", false, 0},
+		{"single attempt failure", false, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			defer db.Close()
+			e := &Executor{conn: db, retryTimes: 2, retryDuration: time.Minute}
+			e.initRetryPolicy()
+			e.retryPolicy.Backoff = nil
+			cause := &mysql.MySQLError{Number: 1213}
+			for range tc.failures {
+				mock.ExpectExec("fakeSql").WillReturnError(cause)
+			}
+			if tc.needRetry || tc.failures == 0 {
+				mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 1))
+			}
+			before := readCounterValue(t, v2.CdcMysqlSinkErrorCounter)
+			err = e.ExecSQL(t.Context(), nil, []byte("     SELECT 1"), tc.needRetry)
+			if tc.needRetry || tc.failures == 0 {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, cause)
+			}
+			require.Equal(t, float64(tc.failures), readCounterValue(t, v2.CdcMysqlSinkErrorCounter)-before)
 			require.NoError(t, mock.ExpectationsWereMet())
 		})
 	}
-	t.Run("standalone retries", func(t *testing.T) {
-		db, mock, err := sqlmock.New()
-		require.NoError(t, err)
-		defer db.Close()
-		e := &Executor{conn: db, retryTimes: 1, retryDuration: time.Minute}
-		e.initRetryPolicy()
-		e.retryPolicy.Backoff = nil
-		mock.ExpectExec("fakeSql").WillReturnError(&mysql.MySQLError{Number: 1213})
-		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 1))
-		require.NoError(t, e.ExecSQL(t.Context(), nil, []byte("     SELECT 1"), true))
-		require.NoError(t, mock.ExpectationsWereMet())
-	})
 	for _, control := range []string{"context", "pause", "cancel"} {
 		t.Run("stopped/"+control, func(t *testing.T) {
 			db, mock, err := sqlmock.New()
@@ -275,6 +315,11 @@ func TestExecutorTransactionalFailureAndStandaloneRetry(t *testing.T) {
 			e := &Executor{conn: db}
 			mock.ExpectBegin()
 			require.NoError(t, e.BeginTx(t.Context()))
+			defer func() {
+				mock.ExpectRollback()
+				require.NoError(t, e.RollbackTx(context.Background()))
+				require.NoError(t, mock.ExpectationsWereMet())
+			}()
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			ar := NewCdcActiveRoutine()
@@ -286,10 +331,9 @@ func TestExecutorTransactionalFailureAndStandaloneRetry(t *testing.T) {
 			case "cancel":
 				close(ar.Cancel)
 			}
+			before := readCounterValue(t, v2.CdcMysqlSinkErrorCounter)
 			require.Error(t, e.ExecSQL(ctx, ar, []byte("     SELECT 1"), true))
-			mock.ExpectRollback()
-			require.NoError(t, e.RollbackTx(t.Context()))
-			require.NoError(t, mock.ExpectationsWereMet())
+			require.Equal(t, before, readCounterValue(t, v2.CdcMysqlSinkErrorCounter))
 		})
 	}
 }

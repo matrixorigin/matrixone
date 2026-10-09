@@ -961,6 +961,7 @@ func TestExecutor_execWithRetry_CircuitBreakerOpens(t *testing.T) {
 
 	v2.CdcSinkerRetryCounter.Reset()
 	v2.CdcSinkerCircuitStateGauge.Reset()
+	sqlErrorsBefore := readCounterValue(t, v2.CdcMysqlSinkErrorCounter)
 
 	attempts := 0
 	err := executor.execWithRetry(context.Background(), nil, func() error {
@@ -999,6 +1000,8 @@ func TestExecutor_execWithRetry_CircuitBreakerOpens(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 2, attempts)
 	require.False(t, executor.circuitBreaker.IsOpen())
+	// Retry callbacks and circuit rejection do not dispatch SQL themselves.
+	require.Equal(t, sqlErrorsBefore, readCounterValue(t, v2.CdcMysqlSinkErrorCounter))
 }
 
 func TestExecutor_ExecSQL(t *testing.T) {
@@ -1073,10 +1076,12 @@ func TestExecutor_ExecSQL(t *testing.T) {
 			Pause:  make(chan struct{}),
 			Cancel: make(chan struct{}),
 		}
+		before := readCounterValue(t, v2.CdcMysqlSinkErrorCounter)
 		err = executor.ExecSQL(ctx, ar, sqlBuf, false)
 
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "too short")
+		require.Equal(t, before, readCounterValue(t, v2.CdcMysqlSinkErrorCounter))
 	})
 
 	t.Run("ExecSQLReestablishesConnectionWhenNil", func(t *testing.T) {
