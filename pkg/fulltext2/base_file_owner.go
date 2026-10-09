@@ -122,9 +122,18 @@ func (o *baseFileOwner) runOperation(ctx context.Context, fn func(context.Contex
 		o.mu.Unlock()
 		return errBaseFileOwnerClosed
 	}
-	if err := o.pool.mappingAdmissionError(); err != nil {
-		o.mu.Unlock()
+	p := o.pool
+	o.mu.Unlock()
+	// Pool admission can wait for retained-file cleanup. Never carry the
+	// owner lock through that wait: cancelOperations must issue cancellation
+	// before any pool/OS cleanup wait. Recheck ownership after the pool gate.
+	if err := p.mappingAdmissionError(); err != nil {
 		return err
+	}
+	o.mu.Lock()
+	if o.closing || o.pool != p {
+		o.mu.Unlock()
+		return errBaseFileOwnerClosed
 	}
 	opCtx, cancel := context.WithCancel(ctx)
 	o.nextOp++

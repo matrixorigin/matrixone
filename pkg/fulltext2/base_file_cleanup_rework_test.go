@@ -11,9 +11,11 @@ import (
 	"errors"
 	"os"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -316,4 +318,81 @@ func deferredSegmentCharge(p *baseFilePool) int64 {
 func requireDeferredSegmentCharge(t *testing.T, p *baseFilePool, want int64) {
 	t.Helper()
 	require.Equal(t, want, deferredSegmentCharge(p))
+}
+
+// Hold the actual cleanup lock until cancellation is observed. Stack inspection
+// establishes the stable wait phase; it is not the cancellation oracle.
+func TestBaseFileCleanupAdmissionDoesNotDelayCancellation(t *testing.T) {
+	sp, _ := mockSqlProcWithIdentity(t, "cleanup-admission")
+	owner := newBaseFileOwner(1024, 2)
+	pool, err := owner.poolForSearch()
+	require.NoError(t, err)
+	entered, observed, rescue := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var enteredOnce, observedOnce sync.Once
+	swapRunSql(t, func(proc *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+		enteredOnce.Do(func() { close(entered) })
+		select {
+		case <-proc.GetTopContext().Done():
+			observedOnce.Do(func() { close(observed) })
+			return executor.Result{}, context.Cause(proc.GetTopContext())
+		case <-rescue:
+			return executor.Result{}, context.Canceled
+		}
+	})
+	first := newFulltext2SearchWithBaseOwner(testStorageCfg(), owner)
+	second := newFulltext2SearchWithBaseOwner(testStorageCfg(), owner)
+	var workers sync.WaitGroup
+	firstDone, secondDone, cancelDone := make(chan error, 1), make(chan error, 1), make(chan struct{})
+	locked := false
+	t.Cleanup(func() {
+		if locked {
+			pool.mu.Unlock()
+		}
+		close(rescue)
+		owner.cancelOperations()
+		workers.Wait()
+		first.Destroy()
+		second.Destroy()
+		require.NoError(t, owner.close())
+	})
+	workers.Add(1)
+	go func() { defer workers.Done(); firstDone <- first.Load(sp) }()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first real Search.Load did not enter SQL")
+	}
+	pool.mu.Lock()
+	locked = true
+	workers.Add(1)
+	go func() { defer workers.Done(); secondDone <- second.Load(sp) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		stack := make([]byte, 1<<20)
+		n := runtime.Stack(stack, true)
+		if strings.Contains(string(stack[:n]), "(*baseFilePool).mappingAdmissionError(") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("second Search.Load did not reach controlled pool wait")
+		}
+		runtime.Gosched()
+	}
+	workers.Add(1)
+	go func() { defer workers.Done(); owner.cancelOperations(); close(cancelDone) }()
+	select {
+	case <-cancelDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancellation phase waited for pool cleanup mutex")
+	}
+	select {
+	case <-observed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("admitted Search.Load did not observe owner cancellation")
+	}
+	pool.mu.Unlock()
+	locked = false
+	require.ErrorIs(t, <-firstDone, context.Canceled)
+	require.ErrorIs(t, <-secondDone, errBaseFileOwnerClosed)
+	workers.Wait()
 }
