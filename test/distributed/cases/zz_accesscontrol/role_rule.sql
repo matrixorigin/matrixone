@@ -65,6 +65,10 @@ alter role non_existent_role add rule "select * from db1.t1" on table db1.t1;
 alter role test_rule_role add rule "select * from db1.t1 where age > 50" on table db1.t1;
 show rules on role test_rule_role;
 
+create database db2;
+create table db2.t2(a int, age int);
+insert into db2.t2 values (10,10),(20,35),(200,60);
+
 -- 4. Multiple rules merge verification
 alter role test_rule_role add rule "select id from db2.t2_new" on table db2.t2;
 show rules on role test_rule_role;
@@ -165,9 +169,6 @@ select id, tenant_id from db1.t_rename_rule_dependency order by id;
 -- @session
 
 -- 12. SET SECONDARY ROLE ALL merges select * rewrite rules from all active roles
-create database db2;
-create table db2.t2(a int, age int);
-insert into db2.t2 values (10,10),(20,35),(200,60);
 create role test_rule_role_multi_a;
 create role test_rule_role_multi_b;
 alter role test_rule_role_multi_a add rule "select * from db1.t1 where age > 1" on table db1.t1;
