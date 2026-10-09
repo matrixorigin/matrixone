@@ -565,6 +565,89 @@ func TestExportCSVUnlimitedBatchUsesSingleWrite(t *testing.T) {
 	require.Equal(t, uint64(3), ep.Rows)
 }
 
+func TestExportCSVFiniteSplitGroupsRowsIntoOneWrite(t *testing.T) {
+	ep := &ExportConfig{
+		userConfig: &tree.ExportParam{ExportFormat: "csv", SplitSize: 8},
+	}
+	var writes []string
+	stubs := gostub.Stub(&writeDataToCSVFile, func(ep *ExportConfig, output []byte) error {
+		writes = append(writes, string(output))
+		ep.CurFileSize += uint64(len(output))
+		return nil
+	})
+	defer stubs.Reset()
+	stubs.Stub(&Close, func(*ExportConfig) error { return nil })
+	stubs.Stub(&openNewFile, func(_ context.Context, ep *ExportConfig, _ *MysqlResultSet) error {
+		ep.CurFileSize = 0
+		ep.hasCSVData = false
+		return nil
+	})
+
+	require.NoError(t, writeExportBatchToFile(ep, makeCSVTestBatch("1,a\n", "2,b\n", "3,c\n")))
+	require.Equal(t, []string{"1,a\n2,b\n", "3,c\n"}, writes)
+	require.Equal(t, uint64(3), ep.Rows)
+}
+
+func TestExportCSVBatchSplitsAreIndependentOfBatchDistribution(t *testing.T) {
+	records := []string{"1,a\n", "2,b\n", "3,c\n"}
+	export := func(name string, batches [][]string) [][]byte {
+		ep := newCSVBatchTestExport(t, filepath.Join(t.TempDir(), name+"_%02d.csv"), 8, false)
+		for _, batchRecords := range batches {
+			require.NoError(t, writeExportBatchToFile(ep, makeCSVTestBatch(batchRecords...)))
+		}
+		require.NoError(t, Close(ep))
+		paths, err := filepath.Glob(filepath.Join(filepath.Dir(ep.userConfig.FilePath), name+"_*.csv"))
+		require.NoError(t, err)
+		files := make([][]byte, 0, len(paths))
+		for _, path := range paths {
+			data, err := os.ReadFile(path)
+			require.NoError(t, err)
+			files = append(files, data)
+		}
+		return files
+	}
+
+	wholeBatch := export("whole", [][]string{records})
+	onePerBatch := export("one_per_batch", [][]string{{records[0]}, {records[1]}, {records[2]}})
+	twoThenOne := export("two_then_one", [][]string{records[:2], records[2:]})
+	require.Equal(t, wholeBatch, onePerBatch)
+	require.Equal(t, wholeBatch, twoThenOne)
+}
+
+func TestExportCSVBatchWriteErrorPreservesCompletedProgress(t *testing.T) {
+	writeErr := moerr.NewInternalError(context.Background(), "injected CSV write failure")
+	ep := &ExportConfig{
+		userConfig: &tree.ExportParam{ExportFormat: "csv", SplitSize: 4},
+		ByteChan:   make(chan *BatchByte, 1),
+		BatchMap:   make(map[int32]*BatchByte),
+	}
+	ep.Index.Store(1)
+	batch := makeCSVTestBatch("1,a\n", "2,b\n")
+	batch.index = 1
+	ep.ByteChan <- batch
+	writes := 0
+	stubs := gostub.Stub(&writeDataToCSVFile, func(ep *ExportConfig, output []byte) error {
+		writes++
+		if writes == 2 {
+			return writeErr
+		}
+		ep.CurFileSize += uint64(len(output))
+		return nil
+	})
+	defer stubs.Reset()
+	stubs.Stub(&Close, func(*ExportConfig) error { return nil })
+	stubs.Stub(&openNewFile, func(_ context.Context, ep *ExportConfig, _ *MysqlResultSet) error {
+		ep.CurFileSize = 0
+		ep.hasCSVData = false
+		return nil
+	})
+
+	require.ErrorIs(t, exportDataFromBatchToCSVFile(ep), writeErr)
+	require.Equal(t, 2, writes)
+	require.Equal(t, uint64(1), ep.Rows)
+	require.Equal(t, int32(0), ep.WriteIndex.Load())
+}
+
 func newCSVBatchTestExport(t *testing.T, path string, splitSize uint64, header bool) *ExportConfig {
 	t.Helper()
 	ctx := context.Background()
