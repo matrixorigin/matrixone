@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/vectorscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/stretchr/testify/require"
 )
@@ -138,10 +139,10 @@ func TestIndexSearchScanRefusesOlderCN(t *testing.T) {
 	require.GreaterOrEqual(t, strings.Count(plans, "DataSource: "+schema+".t[pkid score]"), 2,
 		"the index search must run on both CNs:\n%s", plans)
 
-	olderRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion109-1)
+	olderRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, vectorscan.IndexSearchScanProtocolVersion-1)
 	_, err = query(search)
 	require.Error(t, err, "an index search dispatched to an older CN must fail")
-	require.ErrorContains(t, err, fmt.Sprintf("index search scan requires MORPC protocol version %d on every CN", defines.MORPCVersion109))
+	require.ErrorContains(t, err, fmt.Sprintf("index search scan requires MORPC protocol version %d on every CN", vectorscan.IndexSearchScanProtocolVersion))
 
 	restore()
 	got, err := query(search)

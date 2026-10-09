@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -30,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/vectorscan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	motestutil "github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -130,7 +132,7 @@ func TestIndexSearchScanPlacementRequiresProtocol(t *testing.T) {
 				return
 			}
 			if mode != "supported" && mode != "forced local" {
-				require.ErrorContains(t, err, "MORPC protocol version 109")
+				require.ErrorContains(t, err, fmt.Sprintf("MORPC protocol version %d", vectorscan.IndexSearchScanProtocolVersion))
 				require.Empty(t, scopes)
 				return
 			}
@@ -163,7 +165,7 @@ func TestVectorScanPartitionTransportAndRollback(t *testing.T) {
 	var requiredVectorProtocol int64
 	data, err := encodeRemoteScopeWithVectorProtocol(remote, c.proc, &requiredVectorProtocol)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion109, requiredVectorProtocol, "the encoded remote index search scan needs a bound handshake")
+	require.Equal(t, vectorscan.IndexSearchScanProtocolVersion, requiredVectorProtocol, "the encoded remote index search scan needs a bound handshake")
 	c.proc.Base.TxnOperator = fakeTxnOperator{}
 	c.proc.Base.SessionInfo.TimeZone = time.UTC
 	c.proc.Ctx = defines.AttachAccountId(context.Background(), 0)
@@ -173,7 +175,7 @@ func TestVectorScanPartitionTransportAndRollback(t *testing.T) {
 	requiredVectorProtocol = 0
 	_, _, _, _, err = prepareRemoteRunSendingDataWithVectorProtocol("", remote, c.proc, nil, uuid.Nil, &requiredVectorProtocol)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion109, requiredVectorProtocol, "remoteRun must receive the post-folded pipeline's protocol requirement")
+	require.Equal(t, vectorscan.IndexSearchScanProtocolVersion, requiredVectorProtocol, "remoteRun must receive the post-folded pipeline's protocol requirement")
 	decoded, err := decodeScope(data, c.proc, true, nil)
 	require.NoError(t, err)
 	t.Cleanup(decoded.release)
@@ -188,28 +190,28 @@ func TestVectorScanPartitionTransportAndRollback(t *testing.T) {
 	require.Equal(t, "a", remote.NodeInfo.Id)
 	require.Zero(t, remote.NodeInfo.CNIDX)
 	require.Equal(t, client.calls, client.releases)
-	client.version = defines.MORPCVersion109
+	client.version = vectorscan.IndexSearchScanProtocolVersion
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion106)
 	_, err = decodeScope(data, c.proc, true, nil)
-	require.ErrorContains(t, err, "version 109")
+	require.ErrorContains(t, err, fmt.Sprintf("version %d", vectorscan.IndexSearchScanProtocolVersion))
 	_, err = encodeRemoteScope(remote, c.proc)
 	require.ErrorContains(t, err, "remote destination")
 
-	// Local decoding needs no capability; every remote partition needs 109.
+	// Local decoding needs no capability; every remote partition needs vectorscan.IndexSearchScanProtocolVersion.
 	local, err := decodeScope(data, c.proc, false, nil)
 	require.NoError(t, err)
 	t.Cleanup(local.release)
 	require.False(t, local.IsRemote)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion109)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, vectorscan.IndexSearchScanProtocolVersion)
 	remote.NodeInfo.CNIDX = 1
 	nonzero, err := encodeRemoteScopeWithVectorProtocol(remote, c.proc, &requiredVectorProtocol)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion109, requiredVectorProtocol, "a nonzero partition needs the handshake too")
+	require.Equal(t, vectorscan.IndexSearchScanProtocolVersion, requiredVectorProtocol, "a nonzero partition needs the handshake too")
 	requiredVectorProtocol = 0
 	_, _, _, _, err = prepareRemoteRunSendingDataWithVectorProtocol("", remote, c.proc, nil, uuid.Nil, &requiredVectorProtocol)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion109, requiredVectorProtocol)
+	require.Equal(t, vectorscan.IndexSearchScanProtocolVersion, requiredVectorProtocol)
 	decodedNonzero, err := decodeScope(nonzero, c.proc, true, nil)
 	require.NoError(t, err)
 	t.Cleanup(decodedNonzero.release)
@@ -227,10 +229,10 @@ func TestVectorScanPartitionProtocolNestedScopes(t *testing.T) {
 		Node:     &pipeline.NodeInfo{Id: "a", Addr: "a:6001"},
 		Children: []*pipeline.Pipeline{nil, {Children: []*pipeline.Pipeline{leaf}}},
 	}
-	require.Equal(t, defines.MORPCVersion109, minimumRemoteVectorProtocol(root))
+	require.Equal(t, vectorscan.IndexSearchScanProtocolVersion, minimumRemoteVectorProtocol(root))
 	var requiredVectorProtocol int64
 	require.NoError(t, validateVectorPartitionDestinationWithResult(c.proc, root, &requiredVectorProtocol))
-	require.Equal(t, defines.MORPCVersion109, requiredVectorProtocol, "a nested index search scan needs the execution-stream handshake")
+	require.Equal(t, vectorscan.IndexSearchScanProtocolVersion, requiredVectorProtocol, "a nested index search scan needs the execution-stream handshake")
 	require.NoError(t, validateRemoteVectorPartitionProtocol(c.proc, root))
 	ctx, cancel := context.WithCancel(c.proc.Ctx)
 	cancel()
@@ -241,7 +243,7 @@ func TestVectorScanPartitionProtocolNestedScopes(t *testing.T) {
 	root.Node = nil
 	require.Error(t, validateVectorPartitionDestination(c.proc, root))
 	leaf.Node.CnCnt = 1
-	require.Error(t, validateRemoteVectorPartitionProtocol(nil, root), "an unpartitioned remote index search scan needs 109 too")
+	require.Error(t, validateRemoteVectorPartitionProtocol(nil, root), "an unpartitioned remote index search scan needs the version too")
 	leaf.Node.CnCnt = 2
 	leaf.DataSource.Node.NodeType = plan.Node_TABLE_SCAN
 	require.NoError(t, validateVectorPartitionDestinationWithResult(nil, root, &requiredVectorProtocol))
@@ -257,14 +259,14 @@ func TestRequiredIVFProtocolCoversEveryPartitionAndNestedFragment(t *testing.T) 
 		node.RuntimeFilterProbeList = []*plan.RuntimeFilterSpec{{Tag: 7, MustApply: true, UseMembershipFilter: true}}
 		child := &pipeline.Pipeline{Node: &pipeline.NodeInfo{Id: "b", Addr: "b:6001", CnCnt: 2, CnIdx: ordinal}, DataSource: &pipeline.Source{Node: node}}
 		root := &pipeline.Pipeline{Node: child.Node, Children: []*pipeline.Pipeline{child}}
-		require.Equal(t, defines.MORPCVersion109, minimumRemoteVectorProtocol(root))
-		for _, version := range []int64{defines.MORPCVersion103, defines.MORPCVersion106, defines.MORPCVersion107, defines.MORPCVersion108, defines.MORPCVersion109} {
+		require.Equal(t, vectorscan.IndexSearchScanProtocolVersion, minimumRemoteVectorProtocol(root))
+		for _, version := range []int64{defines.MORPCVersion103, defines.MORPCVersion106, vectorscan.IndexSearchScanProtocolVersion - 1, vectorscan.IndexSearchScanProtocolVersion} {
 			runtime.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 			client.version = version
 			var required int64
 			err := validateVectorPartitionDestinationWithResult(c.proc, root, &required)
-			require.Equal(t, defines.MORPCVersion109, required)
-			if version < defines.MORPCVersion109 {
+			require.Equal(t, vectorscan.IndexSearchScanProtocolVersion, required)
+			if version < vectorscan.IndexSearchScanProtocolVersion {
 				require.Error(t, err)
 				require.Error(t, validateRemoteVectorPartitionProtocol(c.proc, root))
 			} else {
@@ -277,7 +279,7 @@ func TestRequiredIVFProtocolCoversEveryPartitionAndNestedFragment(t *testing.T) 
 	ch := make(chan morpc.Message, 1)
 	ch <- &pipeline.Message{Id: 0, Cmd: pipeline.Method_PipelineProtocolCheck, Sid: pipeline.Status_Last, ProtocolVersion: defines.MORPCVersion106}
 	sender := &messageSenderOnClient{ctx: context.Background(), streamSender: stream, receiveCh: ch}
-	require.Error(t, sender.confirmProtocolOnStream(defines.MORPCVersion109))
+	require.Error(t, sender.confirmProtocolOnStream(vectorscan.IndexSearchScanProtocolVersion))
 	require.Equal(t, 1, stream.sentCnt)
 }
 
@@ -285,8 +287,8 @@ func TestRequiredIVFWorkersRequireProtocol(t *testing.T) {
 	for _, mode := range []string{"supported", "old", "unknown", "canceled"} {
 		t.Run(mode, func(t *testing.T) {
 			c, client := vectorPlacementCompile(t, engine.Nodes{{Id: "a", Addr: "a:6001"}, {Id: "b", Addr: "b:6001"}})
-			moruntime.ServiceRuntime(c.proc.GetService()).SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion109)
-			client.version = defines.MORPCVersion109
+			moruntime.ServiceRuntime(c.proc.GetService()).SetGlobalVariables(moruntime.MOProtocolVersion, vectorscan.IndexSearchScanProtocolVersion)
+			client.version = vectorscan.IndexSearchScanProtocolVersion
 			// gpu_mode off: the IVF centroid search runs on CPU workers.
 			c.proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
 				if name == "gpu_mode" {
@@ -335,7 +337,7 @@ func TestRequiredIVFWorkersRequireProtocol(t *testing.T) {
 				return
 			}
 			if mode != "supported" {
-				require.ErrorContains(t, err, "MORPC protocol version 109")
+				require.ErrorContains(t, err, fmt.Sprintf("MORPC protocol version %d", vectorscan.IndexSearchScanProtocolVersion))
 				return
 			}
 			require.NoError(t, err)
@@ -350,7 +352,7 @@ func TestApplyIndexSearchScanRequiresProtocol(t *testing.T) {
 		{Apply: &pipeline.Apply{IndexSearchScan: &plan.IndexSearchScan{}}},
 	}}
 	root := &pipeline.Pipeline{Children: []*pipeline.Pipeline{apply}}
-	require.Equal(t, defines.MORPCVersion109, minimumRemoteVectorProtocol(root))
+	require.Equal(t, vectorscan.IndexSearchScanProtocolVersion, minimumRemoteVectorProtocol(root))
 	apply.InstructionList[0].Apply.IndexSearchScan = nil
 	require.Zero(t, minimumRemoteVectorProtocol(root))
 	apply.InstructionList[0].Apply = nil
