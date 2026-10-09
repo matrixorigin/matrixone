@@ -469,6 +469,9 @@ func (builder *QueryBuilder) collectSpecialIndexGuards(nodeID int32) {
 		if scanIDs := builder.detectVectorGuard(node); len(scanIDs) > 0 {
 			builder.registerProjectGuard(node.NodeId, specialIndexKindVector, scanIDs)
 		}
+		if scanIDs := builder.detectEquiVectorJoinGuard(node); len(scanIDs) > 0 {
+			builder.registerProjectGuard(node.NodeId, specialIndexKindVector, scanIDs)
+		}
 		// This pre-pass visits a node before its children, so claiming the Top-K here
 		// settles the anchor for both the guard below and applyIndicesForSort.
 		if len(node.Children) == 1 && builder.qry.Nodes[node.Children[0]].NodeType == plan.Node_SORT {
@@ -703,6 +706,9 @@ func (builder *QueryBuilder) applyVectorIndicesEarly(
 
 	switch node.NodeType {
 	case plan.Node_PROJECT:
+		if id, applied, err := builder.applyVectorIndexForEquiJoin(nodeID, true); applied || err != nil {
+			return id, err
+		}
 		vecCtx := builder.buildVectorSortContext(node)
 		if vecCtx == nil {
 			vecCtx = builder.buildVectorSortContextThroughJoin(node)
@@ -998,6 +1004,9 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 	// compatible with SQL_CALC_FOUND_ROWS, which must count the complete exact
 	// result before the top-level LIMIT. Keep the exact scan+sort plan instead.
 	if !builder.sqlCalcFoundRows {
+		if id, applied, err := builder.applyVectorIndexForEquiJoin(nodeID, false); applied || err != nil {
+			return id, err
+		}
 		vecCtx := builder.buildVectorSortContext(projNode)
 		if vecCtx == nil {
 			vecCtx = builder.buildVectorSortContextThroughJoin(projNode)
@@ -2279,6 +2288,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	if len(node.FilterList) == 0 || len(node.TableDef.Indexes) == 0 {
 		return nodeID
 	}
+	builder.addFunctionalIndexFilters(node)
 
 	forceIndex := builder.scanHintsForceIndexes(node)
 	for i := range node.FilterList { // if already have filter on first pk column and have a good selectivity, no need to go index
@@ -2391,6 +2401,9 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 					filterType: EqualIndexCondition, filterIdx: filterIdx,
 				})
 			}
+		}
+		if functionalIndexColumn(node.TableDef, idxDef) != nil {
+			continue
 		}
 		if filterIdx := costCtx.matchRangeBackfill(idxDef); len(filterIdx) > 0 {
 			filterType := NonEqualIndexCondition
@@ -3876,6 +3889,9 @@ func (builder *QueryBuilder) matchRegularIndexOnlyScan(
 	if regularIndexHasDeclaredPrefix(idxDef) {
 		return nil, false
 	}
+	if functionalIndexColumn(node.TableDef, idxDef) != nil {
+		return nil, false
+	}
 	if !costCtx.indexCoversRequiredColumns(idxDef) {
 		return nil, false
 	}
@@ -3964,6 +3980,10 @@ func (builder *QueryBuilder) matchRegularIndexOnlyScan(
 }
 
 func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr, scanSnapshot *Snapshot) int32 {
+	// Functional indexes currently require a base-row residual evaluation.
+	if functionalIndexColumn(node.TableDef, idxDef) != nil {
+		return -1
+	}
 	costCtx := builder.newEncodedRegularIndexCostContext(node, colRefCnt)
 	match, ok := builder.matchRegularIndexOnlyScan(idxDef, node, costCtx)
 	if !ok {
