@@ -1,7 +1,7 @@
 - Status: draft
 - Start Date: 2026-09-04
 - Authors: VioletQwQ-0
-- Implementation PR: pending
+- Implementation PR: #28274
 - Issue for this RFC: #28053
 
 # Functional Indexes on Deterministic Expressions
@@ -168,8 +168,8 @@ access is disabled for functional indexes in the first release. Missing or
 malformed metadata fails closed to a normal table scan.
 
 Functional-index creation is gated on the cluster's oldest-live protocol
-capability. The implementation reserves the next available MORPC capability
-(version 46 at the start of this work) so a mixed-version CN cannot publish
+capability. The implementation reserves MORPC capability version 107 (the
+validated target main already uses versions through 106) so a mixed-version CN cannot publish
 metadata it cannot render or safely alter.
 
 ### DDL foundation from #28052

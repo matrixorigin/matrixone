@@ -37,6 +37,11 @@ const (
 	Row_ID           = objectio.PhysicalAddr_Attr
 	PrefixPriColName = "__mo_cpkey_"
 	PrefixCBColName  = "__mo_cbkey_"
+	// FunctionalIndexColumnPrefix identifies the generated column owned by a
+	// functional index.  The column is persisted in the catalog so the normal
+	// generated-column and secondary-index maintenance paths can be reused, but
+	// it is never part of the user-visible schema.
+	FunctionalIndexColumnPrefix = "__mo_fi_"
 
 	// Wildcard characters for partition subtable name
 	PartitionSubTableWildcard = "\\%!\\%%\\%!\\%%"
@@ -245,6 +250,12 @@ func IsReservedExternalColName(name string) bool {
 		return true
 	}
 	return false
+}
+
+// IsFunctionalIndexColumnName reports whether name belongs to the reserved
+// namespace used for hidden functional-index generated columns.
+func IsFunctionalIndexColumnName(name string) bool {
+	return strings.HasPrefix(strings.ToLower(name), FunctionalIndexColumnPrefix)
 }
 
 func IsHiddenTable(name string) bool {

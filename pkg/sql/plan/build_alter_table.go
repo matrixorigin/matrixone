@@ -255,6 +255,9 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx, schemaName, tableName)
 	}
+	if err := validateFunctionalIndexMetadata(ctx, tableDef); err != nil {
+		return nil, err
+	}
 
 	if tableDef.IsTemporary {
 		tableDef = DeepCopyTableDef(tableDef, true)
@@ -361,10 +364,39 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 			switch option.Typ {
 			case tree.AlterTableDropColumn:
 				pkAffected, err = DropColumn(cctx, alterTablePlan, string(option.Name), alterTableCtx)
+				rebuildTableColumnIndex(copyTableDef)
 				affectedCols = append(affectedCols, string(option.Name))
 			case tree.AlterTableDropPrimaryKey:
 				err = DropPrimaryKey(cctx, alterTablePlan, alterTableCtx)
 				affectedAllIdxCols()
+			case tree.AlterTableDropIndex, tree.AlterTableDropKey:
+				resolvedName, found := resolveIndexName(copyTableDef.Indexes, string(option.Name))
+				if !found {
+					return nil, moerr.NewErrCantDropFieldOrKey(ctx, string(option.Name))
+				}
+				var target *plan.IndexDef
+				for _, idx := range copyTableDef.Indexes {
+					if idx != nil && idx.IndexName == resolvedName {
+						target = idx
+						break
+					}
+				}
+				if !isFunctionalIndexDef(copyTableDef, target) {
+					return nil, moerr.NewInvalidInputf(ctx, unsupportedErrorFmt, formatTreeNode(option))
+				}
+				hiddenName := catalog.ResolveAlias(target.Parts[0])
+				copyTableDef.Indexes = RemoveIf(copyTableDef.Indexes, func(idx *plan.IndexDef) bool {
+					return idx != nil && idx.IndexName == resolvedName
+				})
+				hidden := FindColumn(copyTableDef.Cols, hiddenName)
+				if hidden == nil || !hidden.Hidden || hidden.GeneratedCol == nil {
+					return nil, moerr.NewInternalErrorf(ctx, "functional index '%s' has incomplete generated-column metadata", resolvedName)
+				}
+				if err = handleDropColumnPosition(ctx, copyTableDef, hidden); err != nil {
+					return nil, err
+				}
+				rebuildTableColumnIndex(copyTableDef)
+				affectedIndexes = append(affectedIndexes, resolvedName)
 			default:
 				// various indexes\fks dropping are handled in inplace mode.
 				return nil, moerr.NewInvalidInputf(ctx,
@@ -372,6 +404,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 			}
 		case *tree.AlterAddCol:
 			pkAffected, err = AddColumn(cctx, alterTablePlan, option, alterTableCtx)
+			rebuildTableColumnIndex(copyTableDef)
 			affectedCols = append(affectedCols, option.Column.Name.ColName())
 		case *tree.AlterTableModifyColumnClause:
 			sourceColumn, hasSource, sourceErr := originalAlterSourceColumn(
@@ -767,6 +800,21 @@ func buildAlterCopyAddIndex(
 		}
 
 	case *tree.Index:
+		indexName = index.Name
+		if hasFunctionalIndexKeyPart(index.KeyParts) {
+			if indexName == "" {
+				setEmptyIndexName(currentIndexNames, index)
+				indexName = index.Name
+			}
+			lowered, err := lowerFunctionalIndex(ctx, index, copyTableDef)
+			if err != nil {
+				return nil, "", err
+			}
+			index = lowered
+			for _, col := range copyTableDef.Cols {
+				colMap[col.Name] = col
+			}
+		}
 		if err := checkIndexKeypartSupportability(ctx.GetContext(), index.KeyParts); err != nil {
 			return nil, "", err
 		}
@@ -1267,6 +1315,9 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	if err := validateTableIndexDefinitions(tableDef); err != nil {
 		return nil, err
 	}
+	if err := validateFunctionalIndexMetadata(ctx.GetContext(), tableDef); err != nil {
+		return nil, err
+	}
 	if err := validateAlterTableIdentifierDestinations(ctx.GetContext(), stmt.Options); err != nil {
 		return nil, err
 	}
@@ -1475,7 +1526,11 @@ Loop:
 			case *tree.UniqueIndex:
 				algorithm = plan.AlterTable_INPLACE
 			case *tree.Index:
-				algorithm = plan.AlterTable_INPLACE
+				if index, ok := option.Def.(*tree.Index); ok && hasFunctionalIndexKeyPart(index.KeyParts) {
+					algorithm = plan.AlterTable_COPY
+				} else {
+					algorithm = plan.AlterTable_INPLACE
+				}
 			default:
 				algorithm = plan.AlterTable_INPLACE
 			}
@@ -1483,10 +1538,23 @@ Loop:
 			switch option.Typ {
 			case tree.AlterTableDropColumn:
 				algorithm = plan.AlterTable_COPY
-			case tree.AlterTableDropIndex:
-				algorithm = plan.AlterTable_INPLACE
-			case tree.AlterTableDropKey:
-				algorithm = plan.AlterTable_INPLACE
+			case tree.AlterTableDropIndex, tree.AlterTableDropKey:
+				functionalDrop := false
+				if tableDef != nil {
+					if resolved, found := resolveIndexName(tableDef.Indexes, string(option.Name)); found {
+						for _, indexDef := range tableDef.Indexes {
+							if indexDef != nil && indexDef.IndexName == resolved && hasFunctionalIndexColumnPart(indexDef) {
+								functionalDrop = true
+								break
+							}
+						}
+					}
+				}
+				if functionalDrop {
+					algorithm = plan.AlterTable_COPY
+				} else {
+					algorithm = plan.AlterTable_INPLACE
+				}
 			case tree.AlterTableDropPrimaryKey:
 				algorithm = plan.AlterTable_COPY
 			case tree.AlterTableDropForeignKey:
