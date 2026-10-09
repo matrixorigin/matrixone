@@ -209,8 +209,9 @@ func (p *PartitionState) GetChangedTombstoneObjsBetween(from types.TS) (objs []o
 
 // GetChangedObjsBetween gets object changes in (begin, end]. Objects at begin
 // are already part of the transaction snapshot. An object created and deleted
-// wholly inside the interval is ignored because the transaction cannot have a
-// tombstone that references it.
+// wholly inside the interval is ignored by this snapshot-based projection.
+// In-memory tombstone transfer uses its own projection below because retained
+// RowIDs may have already been rewritten into intermediate objects.
 func (p *PartitionState) GetChangedObjsBetween(
 	begin types.TS,
 	end types.TS,
