@@ -145,6 +145,7 @@ func Test_writeToCSVFile(t *testing.T) {
 		var output = []byte{'1', '2'}
 		ep.userConfig.MaxFileSize = 1
 		ep.Rows = 1
+		ep.hasCSVData = true
 
 		stubs := gostub.StubFunc(&Close, moerr.NewInternalError(context.TODO(), "Close error"))
 		defer stubs.Reset()
@@ -442,6 +443,63 @@ func TestExportCSVBatchSplitPreservesRows(t *testing.T) {
 		gotIDs = append(gotIDs, records[1][0])
 	}
 	require.Equal(t, []string{"1", "10", "100"}, gotIDs)
+}
+
+func TestExportCSVEmptyEncodedRecordDoesNotCreateTrailingFile(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		batches [][]string
+	}{
+		{name: "empty after oversized record", batches: [][]string{{"xxxxx", ""}}},
+		{name: "empty before oversized record", batches: [][]string{{"", "xxxxx"}}},
+		{name: "empty batch before oversized record", batches: [][]string{{""}, {"xxxxx"}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			mp := mpool.MustNewZero()
+			mrs := &MysqlResultSet{}
+			column := new(MysqlColumn)
+			column.SetName("value")
+			mrs.AddColumn(column)
+			ep := &ExportConfig{
+				userConfig: &tree.ExportParam{
+					FilePath:  filepath.Join(t.TempDir(), "empty_record_%02d.csv"),
+					SplitSize: 4,
+					Fields:    tree.NewFields("", false, 0, 0),
+					Lines:     tree.NewLines("", ""),
+				},
+				ctx: ctx,
+				mrs: mrs,
+			}
+			initExportFileParam(ep, mrs)
+			ep.init()
+			require.NoError(t, openNewFile(ctx, ep, mrs))
+			t.Cleanup(func() {
+				if ep.AsyncWriter != nil {
+					_ = Close(ep)
+				}
+			})
+
+			ses := &backSession{feSessionImpl: feSessionImpl{pool: mp}}
+			for _, values := range test.batches {
+				bat := batch.NewWithSize(1)
+				bat.Vecs[0] = testutil.NewVector(len(values), types.T_varchar.ToType(), mp, false, values)
+				bat.SetRowCount(len(values))
+				index := ep.Index.Add(1)
+				constructByte(ctx, ses, bat, index, ep.ByteChan, ep)
+				require.NoError(t, exportDataFromBatchToCSVFile(ep))
+			}
+			require.NoError(t, Close(ep))
+
+			paths, err := filepath.Glob(filepath.Join(filepath.Dir(ep.userConfig.FilePath), "empty_record_*.csv"))
+			require.NoError(t, err)
+			require.Len(t, paths, 1)
+			data, err := os.ReadFile(paths[0])
+			require.NoError(t, err)
+			require.Equal(t, "xxxxx", string(data))
+			require.True(t, ep.hasCSVData)
+		})
+	}
 }
 
 func TestExportCSVBatchSplitExactFitAndOversizedRecord(t *testing.T) {

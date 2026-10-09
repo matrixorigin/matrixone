@@ -52,6 +52,7 @@ type ExportConfig struct {
 
 	// curFileSize
 	CurFileSize uint64
+	hasCSVData  bool // True when this file has accepted non-empty CSV data bytes.
 	Rows        uint64
 	FileCnt     uint
 	ColumnFlag  []bool
@@ -142,6 +143,7 @@ var openNewFile = func(ctx context.Context, ep *ExportConfig, mrs *MysqlResultSe
 	var err error
 	var filePath string
 	ep.CurFileSize = 0
+	ep.hasCSVData = false
 
 	// For parquet format, we don't use pipe-based writing
 	// Parquet data is accumulated in memory and written at the end
@@ -312,8 +314,9 @@ func getEffectiveMaxFileSize(ep *ExportConfig) uint64 {
 // writeToCSVFile function may create a new file. Make sure the output buffer contains the complete CSV row to keep the CSV parser happy.
 func writeToCSVFile(ep *ExportConfig, output []byte) error {
 	maxSize := getEffectiveMaxFileSize(ep)
+	isCSV := ep.getExportFormat() == "csv"
 	if maxSize != 0 && exceedsFileSize(ep.CurFileSize, uint64(len(output)), maxSize) &&
-		(ep.getExportFormat() != "csv" || ep.Rows > 0) {
+		(!isCSV || (ep.hasCSVData && len(output) > 0)) {
 		if err := Close(ep); err != nil {
 			return err
 		}
@@ -324,6 +327,9 @@ func writeToCSVFile(ep *ExportConfig, output []byte) error {
 
 	if err := writeDataToCSVFile(ep, output); err != nil {
 		return err
+	}
+	if isCSV && len(output) > 0 {
+		ep.hasCSVData = true
 	}
 	return nil
 }
