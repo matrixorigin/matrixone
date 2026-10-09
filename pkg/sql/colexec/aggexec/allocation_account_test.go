@@ -1304,6 +1304,54 @@ func TestDistinctFillPreflightUsesPublishedNodeFootprints(t *testing.T) {
 	require.Zero(t, count, "failed admission must not publish distinct keys")
 }
 
+func TestNativeDistinctTuplePreflightBudgetFailureIsPublicationFree(t *testing.T) {
+	textType := types.NewWithCharsetVersion(
+		types.T_varchar, 32, 0, types.CharsetUTF8MB40900AI, types.CollationVersionV1)
+	run := func(limit uint64) (used uint64, count uint32, err error) {
+		mp := mpool.MustNewZero()
+		registry, openErr := mpool.NewAllocationAccountRegistry(1, 512)
+		require.NoError(t, openErr)
+		account, openErr := registry.Open(limit)
+		require.NoError(t, openErr)
+		allocation, openErr := NewAllocationAccount(
+			account, mpool.AllocationOwnerGroup, AllocationAccountSites{
+				VectorData: 1, VectorArea: 2, VectorNulls: 3,
+				VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+			})
+		require.NoError(t, openErr)
+		exec, makeErr := MakeAgg(mp, AggIdOfCountColumn, true, textType, types.T_int64.ToType())
+		require.NoError(t, makeErr)
+		owner := exec.(AllocationAccountOwner)
+		require.NoError(t, owner.SetAllocationAccount(allocation))
+		texts := vector.NewVec(textType)
+		ints := vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendBytes(texts, []byte("A"), false, mp))
+		require.NoError(t, vector.AppendFixed(ints, int64(7), false, mp))
+		require.NoError(t, exec.GroupGrow(1))
+		err = exec.(BatchCapacityPreflight).PreflightBatchFill(
+			0, []uint64{1}, []*vector.Vector{texts, ints})
+		used = account.Snapshot().Used
+		if err == nil {
+			err = exec.BatchFill(0, []uint64{1}, []*vector.Vector{texts, ints})
+			require.Equal(t, used, account.Snapshot().Used)
+		}
+		count = exec.(*countColumnExec).state[0].argCnt[0]
+		texts.Free(mp)
+		ints.Free(mp)
+		exec.Free()
+		require.NoError(t, owner.ClearAllocationAccount(allocation))
+		finishTestAggregateAllocation(t, registry, account)
+		require.Zero(t, mp.CurrNB())
+		return
+	}
+	exact, count, err := run(128 << 20)
+	require.NoError(t, err)
+	require.Equal(t, uint32(1), count)
+	_, count, err = run(exact - 1)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	require.Zero(t, count)
+}
+
 func TestAccountedSavedArgumentsPreserveConstLogicalRows(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Zero(t, mp.CurrNB()) }()

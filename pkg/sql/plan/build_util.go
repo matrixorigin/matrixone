@@ -474,17 +474,15 @@ func applyTextCharsetToPlanType(typ *plan.Type, charset uint32) {
 	switch types.T(typ.Id) {
 	case types.T_char, types.T_varchar, types.T_text:
 		typ.Charset = charset
-		// A non-binary text identity authored by the current planner uses the
-		// versioned comparison contract. Legacy catalog types retain zero and
-		// are never upgraded merely because their Charset name matches.
+		// Existing collation spellings retain their legacy comparison contract.
+		// Only new 0900 identities opt into versioned semantics.
 		typ.CollationVersion = collationSemanticVersion(charset)
 	}
 }
 
 func collationSemanticVersion(charset uint32) uint32 {
 	switch uint8(charset) {
-	case types.CharsetUTF8MB4Bin, types.CharsetUTF8,
-		types.CharsetUTF8MB40900AI, types.CharsetUTF8MB40900Bin:
+	case types.CharsetUTF8MB40900AI, types.CharsetUTF8MB40900Bin:
 		return uint32(types.CollationVersionV1)
 	default:
 		return uint32(types.CollationVersionLegacy)

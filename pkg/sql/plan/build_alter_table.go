@@ -50,6 +50,9 @@ func skipPkDedup(old, new *TableDef, sourceColumns map[string]selectExpr) bool {
 	if noOldPk {
 		return false
 	}
+	if old.KeyFormat != new.KeyFormat || old.CollationVersion != new.CollationVersion {
+		return false
+	}
 
 	// The copy INSERT can skip PK dedup only when every target key value is
 	// guaranteed to be identical to its source value. Matching column names are
@@ -81,6 +84,8 @@ func skipUniqueIdxDedup(old, new *TableDef, sourceColumns map[string]selectExpr)
 				slices.Equal(idx.Parts, oldidx.Parts) &&
 				oldidx.IndexAlgo == idx.IndexAlgo &&
 				oldidx.IndexAlgoParams == idx.IndexAlgoParams &&
+				oldidx.KeyFormat == idx.KeyFormat &&
+				old.CollationVersion == new.CollationVersion &&
 				alterCopyKeyPartsValueUnchanged(old, new, idx.Parts, sourceColumns) {
 				if skip == nil {
 					skip = make(map[string]bool)
@@ -135,7 +140,10 @@ func alterCopyKeyColumnValueUnchanged(oldCol, newCol *ColDef) bool {
 		oldTyp.Width == newTyp.Width &&
 		oldTyp.Scale == newTyp.Scale &&
 		oldTyp.Table == newTyp.Table &&
-		oldTyp.Enumvalues == newTyp.Enumvalues
+		oldTyp.Enumvalues == newTyp.Enumvalues &&
+		oldTyp.Charset == newTyp.Charset &&
+		oldTyp.CollationVersion == newTyp.CollationVersion &&
+		oldTyp.PadSpace == newTyp.PadSpace
 }
 
 func tableHasAutoIncrementColumn(tableDef *TableDef) bool {
@@ -1055,6 +1063,9 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 		return buildAlterTableInplace(stmt, ctx)
 	}
 
+	if err := validateAlterTableCharsetAdmission(ctx, stmt.Options); err != nil {
+		return nil, err
+	}
 	algorithm, err := ResolveAlterTableAlgorithm(ctx.GetContext(), stmt.Options, tableDef)
 	if err != nil {
 		return nil, err
@@ -1069,6 +1080,42 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	} else {
 		return buildAlterTableInplace(stmt, ctx)
 	}
+}
+
+// ALTER's historical charset options are not yet implemented as a metadata
+// or data conversion. Reject a newly named native identity before the
+// INPLACE compatibility path can silently discard it.
+func validateAlterTableCharsetAdmission(ctx CompilerContext, options []tree.AlterTableOption) error {
+	for _, option := range options {
+		charsetOption, ok := option.(*tree.TableOptionCharset)
+		if !ok {
+			continue
+		}
+		if strings.EqualFold(charsetOption.Charset, "enable") ||
+			strings.EqualFold(charsetOption.Charset, "disable") {
+			continue // ENABLE/DISABLE KEYS share this AST node.
+		}
+		charset, ok := charsetForName(charsetOption.Charset)
+		if !ok {
+			return moerr.NewInvalidInputf(ctx.GetContext(),
+				"unsupported character set '%s'", charsetOption.Charset)
+		}
+		if charsetOption.Collate != "" {
+			if !charsetAndCollationCompatible(charsetOption.Charset, charsetOption.Collate) {
+				return moerr.NewInvalidInputf(ctx.GetContext(),
+					"COLLATION '%s' is not valid for CHARACTER SET '%s'",
+					charsetOption.Collate, charsetOption.Charset)
+			}
+			charset, ok = collationForName(charsetOption.Collate)
+			if !ok {
+				return unsupportedCollationError(ctx.GetContext(), charsetOption.Collate)
+			}
+		}
+		if collationSemanticVersion(charset) != uint32(types.CollationVersionLegacy) {
+			return moerr.NewNotSupportedNoCtx(native0900AdmissionError)
+		}
+	}
+	return nil
 }
 
 func validateAlterTableIdentifierDestinations(ctx context.Context, options []tree.AlterTableOption) error {

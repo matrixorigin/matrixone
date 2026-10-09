@@ -30,3 +30,7 @@ func isVersionedCollationType(typ Type) bool {
 	)
 	return types.NeedsCollationKey(runtimeType, types.PADSpaceKeyV1)
 }
+
+func isNative0900Type(typ Type) bool {
+	return isVersionedCollationType(typ)
+}

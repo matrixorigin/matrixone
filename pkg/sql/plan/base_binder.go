@@ -6938,6 +6938,18 @@ func collationSensitiveFunction(name string) bool {
 	}
 }
 
+func sameFunctionArgumentTypes(left, right []types.Type) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if !left[i].Eq(right[i]) {
+			return false
+		}
+	}
+	return true
+}
+
 // refineDecimalRoundingReturnType applies the exact-numeric metadata rules
 // which depend on a constant digits argument and therefore cannot be expressed
 // by an overload's type-only return callback.
