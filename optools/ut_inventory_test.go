@@ -412,12 +412,15 @@ run_issues_race_batches example/issues "$CASE_DIR/issues-exhausted.test" 4 || st
 
 func TestIssuesBatchesUseBoundedProcessPool(t *testing.T) {
 	script := `source ./run_ut.sh UT
-function logger() { :; }
+PREBUILT_RACE_REPORT="$CASE_DIR/issues-report"
+function logger() { printf '%s\n' "$*"; }
 UT_ISSUES_BATCH_PARALLEL=2
 printf 'package fixture\n' > "$CASE_DIR/TestFile.go"
 mock_binary="$CASE_DIR/issues.test"
 status=0
-run_issues_race_batches example/issues "$mock_binary" 2 || status=$?
+run_ut_command serial issues run_issues_race_batches example/issues "$mock_binary" 2 || status=$?
+consume_race_report PREBUILT_RACE_REPORT
+cat "$UT_REPORT"
 [[ "$status" == 0 ]] || exit 90
 for name in one two; do
  [[ "$(<"$CASE_DIR/pool-$name")" == 2 ]] || exit 91
@@ -454,7 +457,10 @@ fi
 printf '%s\n' "${MO_TEST_CLUSTER_ADMISSION_POOL_SIZE:-unset}" > "$CASE_DIR/pool-$name"
 touch "$CASE_DIR/start-$name"
 for _ in $(seq 1 100); do
- [[ -e "$CASE_DIR/start-one" && -e "$CASE_DIR/start-two" ]] && exit 0
+ if [[ -e "$CASE_DIR/start-one" && -e "$CASE_DIR/start-two" ]]; then
+ printf '{"Action":"pass","Package":"example/issues"}\n'
+ exit 0
+fi
  sleep 0.01
 done
 exit 7
@@ -474,6 +480,13 @@ esac
 	out, err := scheduleHarnessWithMock(t, script, mock)
 	if err != nil {
 		t.Fatalf("issues batches did not run two admitted processes: %v\n%s", err, out)
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("want two batch events: %s", out)
+	}
+	for _, line := range lines {
+		assertScheduleJSONReport(t, []byte(line), map[string]string{"example/issues": "pass"})
 	}
 }
 

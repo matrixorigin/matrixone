@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"sync"
@@ -68,6 +69,26 @@ type completedCloseService struct {
 }
 
 func (s *completedCloseService) CloseComplete() bool { return s.complete }
+
+func TestClusterAdmissionRejectsInvalidPoolBeforeStartup(t *testing.T) {
+	// Admission is process scoped: run before another test owns a shared fixture.
+	if os.Getenv("MO_EMBED_INVALID_POOL_HELPER") != "1" {
+		cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestClusterAdmissionRejectsInvalidPoolBeforeStartup$")
+		cmd.Env = append(os.Environ(), "MO_EMBED_INVALID_POOL_HELPER=1", "TMPDIR="+t.TempDir())
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "%s", out)
+		return
+	}
+	t.Setenv(clusteradmission.ProcessPoolSizeEnv, "invalid")
+	starts := 0
+	c := &cluster{services: []*operator{{serviceType: metadata.ServiceType_CN}}}
+	c.options.testing = true
+	c.startFn = func(*operator) error { starts++; return nil }
+	t.Cleanup(func() { require.NoError(t, c.Close()) })
+	require.ErrorContains(t, c.Start(), clusteradmission.ProcessPoolSizeEnv)
+	require.Zero(t, starts)
+	require.Nil(t, c.testAdmission)
+}
 
 func TestClusterCloseCompletedErrorReleasesOwnership(t *testing.T) {
 	failure := errors.New("final metadata withdrawal failed")
@@ -138,6 +159,7 @@ func TestOperatorStartPreservesIncompleteOwnership(t *testing.T) {
 }
 
 func TestClusterStartRollbackCompletedErrorReleasesAdmission(t *testing.T) {
+	t.Setenv(clusteradmission.ProcessPoolSizeEnv, "2")
 	failure := errors.New("startup and withdrawal failed")
 	svc := &completedCloseService{closeTrackingService: closeTrackingService{closeErr: failure}, complete: true}
 	op := &operator{serviceType: metadata.ServiceType_CN}
@@ -602,6 +624,16 @@ func TestClusterRejectsNegativeCNCounts(t *testing.T) {
 }
 
 func TestClusterAdmissionCoversFullLifecycle(t *testing.T) {
+	for _, poolSize := range []string{"1", "2"} {
+		t.Run("pool="+poolSize, func(t *testing.T) {
+			t.Setenv(clusteradmission.ProcessPoolSizeEnv, poolSize)
+			testClusterAdmissionLifecycle(t)
+		})
+	}
+}
+
+func testClusterAdmissionLifecycle(t *testing.T) {
+	t.Helper()
 	portLease, err := acquireClusterPortLease()
 	require.NoError(t, err)
 	c := &cluster{
@@ -615,6 +647,7 @@ func TestClusterAdmissionCoversFullLifecycle(t *testing.T) {
 	// lifecycle while the package's shared base cluster may be alive.
 	c.options.allowConcurrentTestClusters = true
 	t.Cleanup(func() {
+		require.NoError(t, c.Close())
 		if c.portLease != nil {
 			require.NoError(t, c.releasePortLeaseLocked())
 		}

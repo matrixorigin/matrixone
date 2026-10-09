@@ -2096,12 +2096,10 @@ function run_prebuilt_embedded_tests(){
         package_index=$((package_index + 1))
     done <<< "${package_scope}"
     if (( 10#${package_parallel} > 1 )); then
-        logger "INF" "Run embedded packages with bounded parallelism ${package_parallel}"
-        (
-            export MO_TEST_CLUSTER_ADMISSION_POOL_SIZE="${package_parallel}"
+        logger "INF" "Run embedded packages with bounded parallelism ${package_parallel}" >&2
+        MO_TEST_CLUSTER_ADMISSION_POOL_SIZE="${package_parallel}" \
             run_prebuilt_race_commands embedded "${PREBUILT_RACE_REPORT:-${report_base}-execution}" \
                 "${package_parallel}" "${hard_timeout_seconds}"
-        )
     else
         run_prebuilt_race_commands embedded "${PREBUILT_RACE_REPORT:-${report_base}-execution}" \
             1 "${hard_timeout_seconds}"
@@ -2242,12 +2240,10 @@ function run_issues_race_batches(){
     # The process pool is enabled only for this exact prebuilt batch wave.
     # Ordinary packages keep the exclusive cluster admission contract.
     if (( 10#${UT_ISSUES_BATCH_PARALLEL} > 1 )); then
-        logger "INF" "Run ${batches} issues batches with bounded parallelism ${UT_ISSUES_BATCH_PARALLEL}"
-        (
-            export MO_TEST_CLUSTER_ADMISSION_POOL_SIZE="${UT_ISSUES_BATCH_PARALLEL}"
+        logger "INF" "Run ${batches} issues batches with bounded parallelism ${UT_ISSUES_BATCH_PARALLEL}" >&2
+        MO_TEST_CLUSTER_ADMISSION_POOL_SIZE="${UT_ISSUES_BATCH_PARALLEL}" \
             run_prebuilt_race_commands serial "${PREBUILT_RACE_REPORT}" \
                 "${UT_ISSUES_BATCH_PARALLEL}" "$((10#${UT_TIMEOUT} * 60 + 120))"
-        )
     else
         run_prebuilt_race_commands serial "${PREBUILT_RACE_REPORT}" 1 "$((10#${UT_TIMEOUT} * 60 + 120))"
     fi

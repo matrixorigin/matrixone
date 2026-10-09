@@ -15,6 +15,8 @@
 package optools
 
 import (
+	"encoding/json"
+	"fmt"
 	"os/exec"
 	"strings"
 	"testing"
@@ -83,9 +85,12 @@ if [[ "$1" == tool && "$2" == test2json ]]; then
   trap '' TERM
   while :; do read -r -t 0.01 _ <&9 || true; done
  fi
+ if [[ "$MODE" == test-failure && "$leaf" == b ]]; then
+  printf '{"Action":"fail","Package":"%s"}\n' "$package"
+  exit 7
+ fi
  printf '{"Action":"pass","Package":"%s"}\n' "$package"
- [[ "$MODE" != test-failure || "$leaf" != b ]]
- exit
+ exit 0
 fi
 [[ "$1" == test ]] || exit 81
 [[ " $* " == *' -race '* && " $* " == *' -short '* && " $* " == *' -tags matrixone_test '* && " $* " == *' -timeout 17m '* && " $* " == *' -mod=readonly '* && " $* " == *' -vet=off '* ]] || exit 82
@@ -413,11 +418,29 @@ grep -q 'UT runner hard timeout' "$UT_REPORT" || exit 92
 }
 
 func TestEmbeddedPrebuiltOuterCancellationKillsResistantGroup(t *testing.T) {
-	script := embeddedSetup + `
+	for _, parallel := range []string{"1", "2"} {
+		for _, drain := range []string{"complete", "failed"} {
+			t.Run("parallel="+parallel+"/drain="+drain, func(t *testing.T) {
+				script := embeddedSetup + `
+if [[ "$DRAIN" == failed ]]; then
+ original_stop=$(declare -f terminate_ut_process_groups)
+ eval "${original_stop/terminate_ut_process_groups/real_terminate_ut_process_groups}"
+ function terminate_ut_process_groups() {
+  real_terminate_ut_process_groups "$@" || return $?
+  # Stop the fixture safely, then model a descendant whose drainage cannot be proven.
+  return 125
+ }
+fi
 cleanup_check() {
  status=$?
- ! kill -0 -- "-$(<"$CASE_DIR/pgid-execute-resistant-a")" 2>/dev/null || status=90
- [[ ! -d "$artifact_dir" ]] || status=91
+ if [[ "$DRAIN" == failed ]]; then
+  ! kill -0 "$(<"$CASE_DIR/pid-execute-a")" 2>/dev/null || status=90
+  [[ "$status" == 125 ]] || status=93
+  [[ -d "$artifact_dir" && -f "$PREBUILT_RACE_REPORT.00" ]] || status=94
+ else
+  ! kill -0 -- "-$(<"$CASE_DIR/pgid-execute-resistant-a")" 2>/dev/null || status=90
+  [[ ! -d "$artifact_dir" ]] || status=91
+ fi
  [[ -z "$CLUSTER_PREBUILD_JOB_PID$CURRENT_UT_PID" ]] || status=92
  printf 'RESISTANT_CANCELLED %s\n' "$status"
  exit "$status"
@@ -428,27 +451,69 @@ artifact_dir=$CLUSTER_PREBUILD_DIR
 (read -r _ <&8; kill -TERM $$) &
 run_embedded_tests "$scope" 2
 `
-	out, err := scheduleHarnessWithMockTransform(t, script, embeddedGoMock, nil,
-		"MODE=execute-cancel-resistant", "UT_PREBUILD_EMBEDDED=1", "UT_HARD_TIMEOUT=")
-	exit, ok := err.(*exec.ExitError)
-	if !ok || exit.ExitCode() != 143 || !strings.Contains(string(out), "RESISTANT_CANCELLED 143") {
-		t.Fatalf("embedded resistant outer cancellation: %v\n%s", err, out)
+				mode := "execute-cancel-resistant"
+				if drain == "failed" {
+					mode = "execute-cancel"
+				}
+				out, err := scheduleHarnessWithMockTransform(t, script, embeddedGoMock, nil,
+					"MODE="+mode, "UT_PREBUILD_EMBEDDED=1", "UT_HARD_TIMEOUT=",
+					"UT_EMBEDDED_PACKAGE_PARALLEL="+parallel, "DRAIN="+drain)
+				want := 143
+				if drain == "failed" {
+					want = 125
+				}
+				exit, ok := err.(*exec.ExitError)
+				if !ok || exit.ExitCode() != want || !strings.Contains(string(out), fmt.Sprintf("RESISTANT_CANCELLED %d", want)) {
+					t.Fatalf("embedded resistant outer cancellation: %v\n%s", err, out)
+				}
+			})
+		}
 	}
 }
 
 func TestEmbeddedPrebuiltFailureKeepsReportJSONOnly(t *testing.T) {
-	script := embeddedSetup + `
+	for _, parallel := range []string{"1", "2"} {
+		t.Run("parallel="+parallel, func(t *testing.T) {
+			script := embeddedSetup + `
 function logger() { printf '%s\n' "$*"; }
 start_embedded_prebuild "$scope" 1
 status=0
-run_embedded_tests "$scope" 2 || status=$?
+run_embedded_tests "$scope" 2 > "$CASE_DIR/outer-log" || status=$?
 [[ "$status" != 0 ]] || exit 90
-awk 'substr($0, 1, 1) != "{" { exit 1 }' "$UT_REPORT" || exit 91
+cat "$UT_REPORT"
+
 grep -q 'prebuilt embedded package example/b failed' "$UT_STDERR" || exit 92
 `
-	out, err := scheduleHarnessWithMockTransform(t, script, embeddedGoMock, nil,
-		"MODE=test-failure", "UT_PREBUILD_EMBEDDED=1", "UT_HARD_TIMEOUT=")
-	if err != nil {
-		t.Fatalf("embedded failure JSON report: %v\n%s", err, out)
+			out, err := scheduleHarnessWithMockTransform(t, script, embeddedGoMock, nil,
+				"MODE=test-failure", "UT_PREBUILD_EMBEDDED=1", "UT_HARD_TIMEOUT=", "UT_EMBEDDED_PACKAGE_PARALLEL="+parallel)
+			if err != nil {
+				t.Fatalf("embedded failure JSON report: %v\n%s", err, out)
+			}
+			assertScheduleJSONReport(t, out, map[string]string{"example/a": "pass", "example/b": "fail", "example/c": "pass"})
+		})
+	}
+}
+
+// Parse the actual runner output, rather than accepting a line that merely
+// starts with a brace. Every fixture package must retain its terminal event.
+func assertScheduleJSONReport(t *testing.T, report []byte, expected map[string]string) {
+	t.Helper()
+	lines := strings.Split(strings.TrimSpace(string(report)), "\n")
+	if len(lines) != len(expected) {
+		t.Fatalf("want %d report events, got %d: %s", len(expected), len(lines), report)
+	}
+	seen := make(map[string]bool)
+	for _, line := range lines {
+		var event struct {
+			Action  string
+			Package string
+		}
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatalf("invalid report JSON: %v: %s", err, line)
+		}
+		if expected[event.Package] != event.Action || seen[event.Package] {
+			t.Fatalf("unexpected terminal event: %s", line)
+		}
+		seen[event.Package] = true
 	}
 }

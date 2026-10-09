@@ -124,7 +124,9 @@ func TestAdmissionProcessPoolIsBoundedAndExcludesExclusive(t *testing.T) {
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 
 	exclusiveManager := newManager(path, time.Millisecond)
-	_, err = exclusiveManager.acquire(ctx, Exclusive)
+	exclusiveCtx, exclusiveCancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer exclusiveCancel()
+	_, err = exclusiveManager.acquire(exclusiveCtx, Exclusive)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 
 	require.NoError(t, first.Release())
@@ -240,4 +242,45 @@ func TestProcessDeathReleasesAdmission(t *testing.T) {
 	runAdmissionHelper(t, path, "blocked")
 	stop()
 	runAdmissionHelper(t, path, "acquired")
+}
+
+func TestAdmissionProcessPoolEnvironment(t *testing.T) {
+	for _, value := range []string{"", "0", "1", "invalid", "2"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv(ProcessPoolSizeEnv, value)
+			m := newManager(filepath.Join(t.TempDir(), "cluster.lock"), time.Millisecond)
+			lease, err := m.acquire(t.Context(), AllowConcurrentProcesses)
+			if value != "2" {
+				require.ErrorContains(t, err, ProcessPoolSizeEnv)
+				require.Nil(t, lease)
+				return
+			}
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, lease.Release()) })
+			require.NoError(t, lease.Release())
+			// An ordinary exclusive lease must work again after the pool releases.
+			next, err := m.acquire(t.Context(), Exclusive)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, next.Release()) })
+		})
+	}
+}
+
+func TestAdmissionProcessPoolBlockedByExclusive(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cluster.lock")
+	owner := newManager(path, time.Millisecond)
+	lease, err := owner.acquire(t.Context(), Exclusive)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, lease.Release()) })
+	contender := newPooledManager(path, time.Millisecond, 2)
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+	_, err = contender.acquire(ctx, AllowConcurrentProcesses)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Nil(t, contender.lock)
+	require.Nil(t, contender.gate)
+	require.NoError(t, lease.Release())
+	next, err := contender.acquire(t.Context(), AllowConcurrentProcesses)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, next.Release()) })
 }

@@ -85,15 +85,14 @@ type cluster struct {
 	testAdmission  *clusteradmission.Lease
 
 	options struct {
-		dataPath                            string
-		cn                                  int
-		withProxy                           bool
-		preStart                            func(ServiceOperator)
-		testing                             bool
-		allowConcurrentTestClusters         bool
-		allowConcurrentTestClusterProcesses bool
-		heartbeatTimeout                    time.Duration
-		storeTimeout                        time.Duration
+		dataPath                    string
+		cn                          int
+		withProxy                   bool
+		preStart                    func(ServiceOperator)
+		testing                     bool
+		allowConcurrentTestClusters bool
+		heartbeatTimeout            time.Duration
+		storeTimeout                time.Duration
 	}
 
 	ports struct {
@@ -175,15 +174,10 @@ func (c *cluster) Start() (err error) {
 				"embedded test cluster cleanup is incomplete",
 			)
 		}
-		// The race-UT scheduler opts complete test processes into a bounded
-		// admission pool through the environment. Apply that policy at the
-		// cluster lifecycle owner so both StartTestCluster and direct
-		// NewCluster(WithTesting()) callers use the same admission contract.
-		if concurrentTestClusterProcessesEnabled() {
-			c.options.allowConcurrentTestClusterProcesses = true
-		}
+		// The scheduler selects process admission at the lifecycle owner, covering
+		// both StartTestCluster and direct NewCluster(WithTesting()) callers.
 		mode := clusteradmission.Exclusive
-		if c.options.allowConcurrentTestClusterProcesses {
+		if concurrentTestClusterProcessesEnabled() {
 			mode = clusteradmission.AllowConcurrentProcesses
 		} else if c.options.allowConcurrentTestClusters {
 			mode = clusteradmission.AllowConcurrent

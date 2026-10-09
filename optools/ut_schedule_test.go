@@ -107,7 +107,7 @@ func scheduleHarnessWithMockTransform(t *testing.T, script, mock string, transfo
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = 3 * time.Second
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"), "UT_WORKDIR="+root, "CASE_DIR="+root, "UT_LINK_PARALLEL=0")
+	cmd.Env = append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"), "UT_WORKDIR="+root, "CASE_DIR="+root, "UT_LINK_PARALLEL=0", "GOFLAGS=", "UT_ISSUES_BATCH_PARALLEL=1", "UT_EMBEDDED_PACKAGE_PARALLEL=1")
 	cmd.Env = append(cmd.Env, variables...)
 	out, err := cmd.CombinedOutput()
 	if ctx.Err() != nil {
