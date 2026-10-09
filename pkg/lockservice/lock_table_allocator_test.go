@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	goruntime "runtime"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -848,10 +849,13 @@ func runValidBenchmark(b *testing.B, name string, tables int) {
 			require.NoError(b, removeTestSocketDir(testSocketDir))
 		}()
 		testSockets := testSocketAddress(testSocketDir, "allocator.sock")
-		a := NewLockTableAllocator("", testSockets, time.Hour, morpc.Config{})
+		var a LockTableAllocator
 		defer func() {
-			assert.NoError(b, a.Close())
+			if a != nil {
+				assert.NoError(b, a.Close())
+			}
 		}()
+		NewLockTableAllocator("", testSockets, time.Hour, morpc.Config{}, func(owner LockTableAllocator) { a = owner })
 		var binds []pb.LockTable
 		for i := 0; i < tables; i++ {
 			binds = append(binds, a.Get(fmt.Sprintf("s-%d", i), 0, uint64(i), 0, pb.Sharding_None))
@@ -909,13 +913,85 @@ func runLockTableAllocatorTest(
 				runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.ClusterService, cluster)
 				defer cluster.Close()
 
-				a := NewLockTableAllocator(sid, testSockets, timeout, morpc.Config{}, opts...)
+				var a LockTableAllocator
 				defer func() {
-					assert.NoError(t, a.Close())
+					if a != nil {
+						assert.NoError(t, a.Close())
+					}
 				}()
+				NewLockTableAllocator(sid, testSockets, timeout, morpc.Config{}, func(owner LockTableAllocator) { a = owner }, opts...)
 				fn(a.(*lockTableAllocator))
 			})
 		},
 	)
 
+}
+
+// allocatorConstructorClient observes retirement of the real acquired transport.
+type allocatorConstructorClient struct {
+	Client
+	closes int
+}
+
+func (c *allocatorConstructorClient) Close() error {
+	c.closes++
+	return c.Client.Close()
+}
+
+func TestAllocatorConstructorUnwind(t *testing.T) {
+	sentinel := errors.New("allocator option refused")
+	for _, tc := range []struct {
+		name    string
+		payload any
+		goexit  bool
+	}{
+		{name: "error panic", payload: sentinel},
+		{name: "string panic", payload: "allocator option refused"},
+		{name: "goexit", goexit: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runtime.RunTest(t.Name(), func(rt runtime.Runtime) {
+				cluster := clusterservice.NewMOCluster(t.Name(), nil, 0, clusterservice.WithDisableRefresh())
+				rt.SetGlobalVariables(runtime.ClusterService, cluster)
+				defer cluster.Close()
+				var allocator LockTableAllocator
+				defer func() {
+					if allocator != nil {
+						require.NoError(t, allocator.Close())
+					}
+				}()
+				var client *allocatorConstructorClient
+				var recovered any
+				var returned, published bool
+				done := make(chan struct{})
+				go func() {
+					defer close(done)
+					defer func() { recovered = recover() }()
+					NewLockTableAllocator(t.Name(), "127.0.0.1:0", time.Hour, morpc.Config{},
+						func(owner LockTableAllocator) { allocator = owner; published = true },
+						func(owner *lockTableAllocator) {
+							if !published {
+								panic("option ran before ownership publication")
+							}
+							client = &allocatorConstructorClient{Client: owner.client}
+							owner.client = client
+							if tc.goexit {
+								goruntime.Goexit()
+							}
+							panic(tc.payload)
+						})
+					returned = true
+				}()
+				<-done
+				require.False(t, returned)
+				require.Equal(t, tc.payload, recovered)
+				require.NotNil(t, allocator)
+				require.NotNil(t, client)
+				require.Equal(t, 1, client.closes)
+				require.ErrorIs(t, allocator.(*lockTableAllocator).stopper.RunTask(func(context.Context) {}), stopper.ErrUnavailable)
+				require.NoError(t, allocator.Close())
+				require.Equal(t, 1, client.closes)
+			})
+		})
+	}
 }

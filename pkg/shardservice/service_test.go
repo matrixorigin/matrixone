@@ -20,6 +20,7 @@ import (
 	"io"
 	"net"
 	"os"
+	goruntime "runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -67,11 +68,21 @@ func TestServiceCloseListener(t *testing.T) {
 
 type closeTestShardServer struct {
 	morpc.MethodBasedServer[*pb.Request, *pb.Response]
-	err   error
-	calls int
+	err         error
+	calls       int
+	beforeClose func()
 }
 
-func (s *closeTestShardServer) Close() error { s.calls++; return s.err }
+func (s *closeTestShardServer) Close() error {
+	s.calls++
+	if s.beforeClose != nil {
+		s.beforeClose()
+	}
+	if s.MethodBasedServer != nil {
+		return errors.Join(s.MethodBasedServer.Close(), s.err)
+	}
+	return s.err
+}
 
 type closeTestShardClient struct {
 	morpc.MethodBasedClient[*pb.Request, *pb.Response]
@@ -80,6 +91,162 @@ type closeTestShardClient struct {
 }
 
 func (c *closeTestShardClient) Close() error { c.calls++; return c.err }
+
+type fixtureCloseReporter struct {
+	diagnostics int
+}
+
+func (r *fixtureCloseReporter) Errorf(string, ...any) { r.diagnostics++ }
+func (r *fixtureCloseReporter) FailNow()              { goruntime.Goexit() }
+
+type fixtureTimestampWaiter struct {
+	client.TimestampWaiter
+	name  string
+	order *[]string
+	calls int
+}
+
+func (w *fixtureTimestampWaiter) Close() {
+	w.calls++
+	*w.order = append(*w.order, w.name+".waiter")
+	w.TimestampWaiter.Close()
+}
+
+func TestServicesFixtureCleanup(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		diagnostic bool
+		fatal      bool
+		unwind     string
+	}{
+		{name: "healthy"},
+		{name: "close-error", diagnostic: true},
+		{name: "fatal-report", diagnostic: true, fatal: true},
+		{name: "constructor-panic", diagnostic: true, unwind: "panic"},
+		{name: "constructor-goexit", diagnostic: true, unwind: "goexit"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			type witness struct {
+				service *service
+				server  *closeTestShardServer
+				waiter  *fixtureTimestampWaiter
+			}
+			var acquired []*witness
+			var order, observedOrder []string
+			var reported []error
+			var closeCounts, waiterCounts []int
+			var listenerOpen []bool
+			var recovered any
+			var admitted, returned bool
+			sink := &fixtureCloseReporter{}
+			diagnostic := errors.New("completed shard close diagnostic")
+			constructorPanic := errors.New("second shard constructor refused")
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				// Fallback follows the observations, so it cannot hide a fixture
+				// regression and still retires resources after a failed assertion.
+				defer func() {
+					for _, w := range acquired {
+						_ = w.service.Close()
+						w.waiter.Close()
+					}
+				}()
+				defer func() {
+					recovered = recover()
+					observedOrder = append([]string(nil), order...)
+					for _, w := range acquired {
+						closeCounts = append(closeCounts, w.server.calls)
+						waiterCounts = append(waiterCounts, w.waiter.calls)
+						conn, err := net.DialTimeout("unix", w.service.cfg.ListenAddress[7:], time.Second)
+						listenerOpen = append(listenerOpen, err == nil)
+						if conn != nil {
+							assert.NoError(t, conn.Close())
+						}
+					}
+				}()
+				wrapRPCs := func() {
+					for _, w := range acquired {
+						w.server = &closeTestShardServer{
+							MethodBasedServer: w.service.remote.server,
+							beforeClose: func() {
+								assert.Zero(t, w.waiter.calls, "service must drain before its borrowed waiter")
+								order = append(order, w.service.cfg.ServiceID+".service")
+							},
+						}
+						w.service.remote.server = w.server
+					}
+					if tc.diagnostic {
+						acquired[1].server.err = diagnostic
+					}
+				}
+				proveListener := func(s *service) {
+					conn, err := net.DialTimeout("unix", s.cfg.ListenAddress[7:], time.Second)
+					assert.NoError(t, err, "control must reach a live listener")
+					if conn != nil {
+						assert.NoError(t, conn.Close())
+					}
+				}
+				runServicesTestWithCloseReporter(t, "cn1,cn2", func(_ context.Context, _ *server, services []*service) {
+					admitted = true
+					for _, s := range services {
+						proveListener(s)
+					}
+					wrapRPCs()
+				}, func(cfg *Config) []Option {
+					return []Option{func(s *service) {
+						store := s.storage.(*MemShardStorage)
+						waiter := &fixtureTimestampWaiter{TimestampWaiter: store.waiter, name: cfg.ServiceID, order: &order}
+						store.waiter = waiter
+						acquired = append(acquired, &witness{service: s, waiter: waiter})
+						if cfg.ServiceID == "cn2" && tc.unwind != "" {
+							proveListener(acquired[0].service)
+							wrapRPCs()
+							if tc.unwind == "panic" {
+								panic(constructorPanic)
+							}
+							goruntime.Goexit()
+						}
+					}}
+				}, func(err error) {
+					if err != nil {
+						reported = append(reported, err)
+					}
+					if tc.fatal {
+						require.NoError(sink, err)
+					} else {
+						assert.NoError(sink, err)
+					}
+				})
+				returned = true
+			}()
+			select {
+			case <-done:
+			case <-time.After(10 * time.Second):
+				t.Fatal("fixture cleanup did not finish")
+			}
+			require.Equal(t, []int{1, 1}, closeCounts)
+			require.Equal(t, []int{1, 1}, waiterCounts)
+			require.Equal(t, []bool{false, false}, listenerOpen)
+			require.Equal(t, []string{"cn2.service", "cn2.waiter", "cn1.service", "cn1.waiter"}, observedOrder)
+			require.Equal(t, tc.unwind == "", admitted)
+			require.Equal(t, !tc.fatal && tc.unwind == "", returned)
+			if tc.unwind == "panic" {
+				require.Same(t, constructorPanic, recovered)
+			} else {
+				require.Nil(t, recovered)
+			}
+			if tc.diagnostic {
+				require.Len(t, reported, 1)
+				require.ErrorIs(t, reported[0], diagnostic)
+				require.Equal(t, 1, sink.diagnostics)
+			} else {
+				require.Empty(t, reported)
+				require.Zero(t, sink.diagnostics)
+			}
+		})
+	}
+}
 
 func TestServiceCloseErrors(t *testing.T) {
 	serverErr, clientErr := errors.New("server close failed"), errors.New("client close failed")
@@ -111,6 +278,28 @@ func TestServiceCloseErrors(t *testing.T) {
 			require.ErrorIs(t, s.stopper.RunTask(func(context.Context) {}), stopper.ErrUnavailable)
 		})
 	}
+}
+
+func TestServiceConstructorUnwind(t *testing.T) {
+	runtime.RunTest(t.Name(), func(rt runtime.Runtime) {
+		cluster := clusterservice.NewMOCluster(t.Name(), nil, 0, clusterservice.WithDisableRefresh())
+		rt.SetGlobalVariables(runtime.ClusterService, cluster)
+		defer cluster.Close()
+
+		var owner ShardService
+		sentinel := errors.New("shard service option refused")
+		require.PanicsWithValue(t, sentinel, func() {
+			NewService(
+				Config{ServiceID: t.Name()},
+				NewMemShardStorage(rt.Logger()),
+				func(value ShardService) { owner = value },
+				func(*service) { panic(sentinel) },
+			)
+		})
+		require.NotNil(t, owner)
+		require.ErrorIs(t, owner.(*service).stopper.RunTask(func(context.Context) {}), stopper.ErrUnavailable)
+		require.NoError(t, owner.Close())
+	})
 }
 
 func TestServiceWaitCNReported(t *testing.T) {
@@ -934,6 +1123,20 @@ func runServicesTest(
 	fn func(context.Context, *server, []*service),
 	adjustConfigFunc func(*Config) []Option,
 ) {
+	t.Helper()
+	runServicesTestWithCloseReporter(t, cluster, fn, adjustConfigFunc, func(err error) {
+		assert.NoError(t, err)
+	})
+}
+
+func runServicesTestWithCloseReporter(
+	t *testing.T,
+	cluster string,
+	fn func(context.Context, *server, []*service),
+	adjustConfigFunc func(*Config) []Option,
+	reportClose func(error),
+) {
+	t.Helper()
 	defer leaktest.AfterTest(t)()
 	cns, tn := initTestCluster(cluster)
 	defer clusterservice.GetMOCluster(sid).Close()
@@ -947,8 +1150,13 @@ func runServicesTest(
 	if adjustConfigFunc != nil {
 		adjustConfigFunc(&cfg)
 	}
-	server := NewShardServer(cfg, runtime.ServiceRuntime(sid).Logger()).(*server)
-	defer func() { assert.NoError(t, server.Close()) }()
+	var shardServer *server
+	defer func() {
+		if shardServer != nil {
+			reportClose(shardServer.Close())
+		}
+	}()
+	NewShardServer(cfg, runtime.ServiceRuntime(sid).Logger(), func(owner ShardServer) { shardServer = owner.(*server) })
 
 	services := make([]*service, 0, len(cns))
 	for _, cn := range cns {
@@ -970,14 +1178,27 @@ func runServicesTest(
 		}
 
 		store := NewMemShardStorage(runtime.ServiceRuntime(sid).Logger()).(*MemShardStorage)
-		defer store.waiter.Close()
-		s := NewService(cfg, store, opts...)
-		defer func() { assert.NoError(t, s.Close()) }()
-		services = append(services, s.(*service))
+		var owned *service
+		defer func() {
+			// Keep the borrowed waiter alive until its service has drained, even
+			// when closing or reporting an earlier owner unwinds this fixture.
+			defer store.waiter.Close()
+			if owned != nil {
+				reportClose(owned.Close())
+			}
+		}()
+		NewService(
+			cfg,
+			store,
+			func(owner ShardService) { owned = owner.(*service) },
+			opts...,
+		)
+		services = append(services, owned)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
 
-	fn(ctx, server, services)
+	fn(ctx, shardServer, services)
+
 }
