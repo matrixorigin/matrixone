@@ -1,9 +1,9 @@
 # Partitioned classic FULLTEXT maintenance contract
 
-Revision: R2, 2026-10-08. Issue #28311 / PR #28477.
+Revision: R2 resource clarification, 2026-10-09. Issue #28311 / PR #28477.
 
 Status: **proposal, approval required**. This document describes the local
-maintenance candidate based on `bab4b3286a0dd5683a9b291763817722233e586c`.
+maintenance candidate based on `23d8f61252f3017dff218b530817a240206fd762`.
 It is not an approval record. The earlier ODKU-only contract does not authorize
 the UPDATE, REPLACE, partition routing, or wire changes described here.
 
@@ -163,12 +163,31 @@ once across at most min(P,B) batches: O(P) group pointers, O(B*C) element-copy
 work plus variable payload bytes. Targets are processed sequentially; grouping is not a second
 copy per partition of every row.
 
-Relation caches can retain O(P*H) references per target. Writer identities are
-unique per target/physical relation, so the statement envelope is bounded by
-the physical relations touched across its targets, not one writer globally.
-Existing writer buffering controls still apply per writer. There is no new
-aggregate memory cap here; high partition/index counts can multiply buffering.
-These are source-derived bounds, **not measured overhead or an OOM proof**.
+Relation caches can retain O(P*H) references per target. Writer identity is
+scoped by target, physical relation, and action/phase: `s3WriterAction` derives
+delete, insert, or combined-update behavior from the captured contexts, and
+`writerID` includes that action in the target's key. A same-partition update
+can therefore retain separate delete and insert delegates; physical relation
+count alone is not the delegate count. With A distinct actions per physical
+relation, the per-target envelope includes O(A*P) delegates and their per-index
+resources, not one writer globally. Active and drained delegates remain owned
+until Reset/Free; count both when measuring the live-writer high water.
+
+There is existing shared admission, not only independent writer thresholds.
+Each delegate obtains the service's `CNMemoryThrottler`. After appending, it
+accounts input-vector bytes selected by `checkSizeCols`; reaching its flush
+threshold invokes `sortAndSync`. Below that threshold, a failed shared
+`Acquire(increment)` also invokes `sortAndSync` rather than retaining the batch
+for a later call. Successful grants accumulate in the delegate and are released
+by its cleanup path. See [writer identity](../../pkg/sql/colexec/multi_update/multi_update_partition.go)
+and [delegate admission/cleanup](../../pkg/sql/colexec/multi_update/s3writer_delegate.go).
+
+This proposal adds no separate statement-wide budget for metadata, grouping,
+all delegates, and their other allocations. The existing shared throttler and
+flush behavior do not establish a hard bound on that complete footprint;
+fan-out, copies, allocations before admission, and concurrent CN consumers
+still require measurement. These are source-derived bounds and accounting
+paths, **not measured overhead or an OOM proof**.
 
 Re-evaluating a parent partition expression against token rows loses the parent
 row layout; writing the logical hidden index loses the physical partition.
@@ -192,12 +211,16 @@ MORPC gate is the repository's admission contract. Existing SQL transaction
 atomicity is the required user-visible contract. No new external protocol or
 compatibility guarantee is asserted by this proposal.
 
-The resource model has no statement-wide cap on all writer buffers. Design
-review must either accept the existing per-writer admission with a measured
-deployment envelope or require an aggregate budget change. Measure P/I fan-out,
-actual serialized T, total grouped vector bytes and live writer high-water
-memory; asymptotic bounds alone cannot settle that decision. Token expansion
-also changes B relative to parent-row count, so report both cardinalities.
+Design review must accept the existing ownership, per-writer thresholds and
+shared CN admission against a measured deployment envelope, or request a
+specifically justified change. Lack of a new statement budget is not absence
+of shared admission and does not by itself require a new limiter. Measure P/I/H
+and action/phase fan-out, actual serialized T, grouping allocations/copy cost,
+total grouped vector bytes, live active/drained writer high-water memory, and
+throughput/latency with equivalent controls and variation. Record the shared
+throttler configuration and other CN load; asymptotic bounds cannot settle the
+trade-off. Token expansion changes B relative to parent-row count, so report
+both cardinalities. No measurement or reviewer acceptance is asserted here.
 
 ## Acceptance still required
 
