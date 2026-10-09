@@ -163,6 +163,56 @@ must exercise both the Unicode path and the binary/legacy fast path.  A result
 that changes SQL equivalence, loses NULL/grouping semantics, or exceeds the
 per-value bounds is a correctness failure even if its microbenchmark is fast.
 
+### Exact-head consumer report
+
+The following report was recorded on the exact PR head after adding the
+consumer harnesses `BenchmarkUnicodeCollationSortConsumers`,
+`BenchmarkUnicodeCollationHashConsumers`, and
+`BenchmarkUnicodeCollationShuffleConsumers`:
+
+```text
+./.agents/skills/mo-dev/scripts/mo-cgo-test -run '^$' \
+  -bench '^BenchmarkUnicodeCollation(Sort|Hash|Shuffle)Consumers$' \
+  -benchmem -benchtime=100ms \
+  ./pkg/sort ./pkg/sql/colexec/partition ./pkg/sql/colexec/shuffle
+```
+
+This run used Go 1.27.1 on an Apple M5 arm64 host.  Each cell below is
+`ns/op / B/op / allocs/op`; `L/rows` is the input byte length and row count.
+The legacy and binary controls take the existing bytewise fast path.  The
+Unicode column exercises the UCA key path.  Hash rows include expression
+evaluation, hash grouping and final materialization; the operator is created
+and released on every benchmark iteration.  Sort and shuffle retain their
+prepared input vector across iterations and release it after the case.
+
+| Consumer | `L/rows` | legacy | binary | Unicode UCA |
+| --- | ---: | ---: | ---: | ---: |
+| sort | 8/256 | 7,263 / 0 / 0 | 7,125 / 0 / 0 | 416,522 / 587,328 / 19,152 |
+| sort | 64/256 | 8,472 / 0 / 0 | 8,437 / 0 / 0 | 1,969,826 / 3,140,931 / 31,920 |
+| sort | 1024/64 | 2,669 / 0 / 0 | 2,685 / 0 / 0 | 5,753,347 / 14,282,552 / 14,196 |
+| grouping/hash | 8/256 | 169,884 / 105,260 / 526 | 160,420 / 104,802 / 526 | 282,435 / 280,924 / 6,157 |
+| grouping/hash | 64/256 | 171,810 / 216,598 / 538 | 173,100 / 216,601 / 538 | 773,159 / 1,156,775 / 10,265 |
+| grouping/hash | 1024/64 | 209,972 / 590,246 / 346 | 204,357 / 590,251 / 346 | 2,318,393 / 5,721,338 / 5,593 |
+| shuffle | 8/256 | 1,409 / 0 / 0 | 1,354 / 0 / 0 | 36,928 / 47,104 / 1,536 |
+| shuffle | 64/256 | 1,784 / 0 / 0 | 1,699 / 0 / 0 | 160,206 / 251,916 / 2,560 |
+| shuffle | 1024/64 | 1,806 / 0 / 0 | 1,791 / 0 / 0 | 541,351 / 1,352,196 / 1,344 |
+
+The Unicode allocations and bytes scale with both `L` and the number of rows;
+the controls remain allocation-free in the prepared sort/shuffle path.  The
+release checks are reproducible with:
+
+```text
+./.agents/skills/mo-dev/scripts/mo-cgo-test \
+  -run 'TestUnicodeCollation(Sort|Hash|Shuffle)ConsumerRelease' -count=1 \
+  ./pkg/sort ./pkg/sql/colexec/partition ./pkg/sql/colexec/shuffle
+```
+
+All three release tests pass and assert `mp.CurrNB() == 0` after every
+operator/vector release (16 repetitions for each control).  Thus the report
+records bounded per-value workspace, the retained-row/key scaling of the hash
+consumer, and no retained-memory growth after release; it does not claim
+bytewise performance parity for native UCA keys.
+
 ## Integration and rollout gates
 
 PR #29601 is the integration point for the metadata/tuple, SQL-consumer, and

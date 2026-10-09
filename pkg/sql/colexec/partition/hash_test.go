@@ -474,6 +474,124 @@ func BenchmarkHashPartition(b *testing.B) {
 	}
 }
 
+// BenchmarkUnicodeCollationHashConsumers measures the hash window-partition
+// consumer, including expression evaluation, collation-aware hash-key
+// normalization, grouping, and final materialization. It deliberately uses
+// the same size/row matrix as the sort and shuffle consumer benchmarks.
+func BenchmarkUnicodeCollationHashConsumers(b *testing.B) {
+	for _, size := range []int{8, 64, 1024} {
+		rows := 256
+		if size == 1024 {
+			rows = 64
+		}
+		for _, tc := range []struct {
+			name    string
+			charset uint8
+		}{
+			{name: "legacy", charset: types.CharsetLegacy},
+			{name: "binary", charset: types.CharsetBinary},
+			{name: "unicode", charset: types.CharsetUTF8MB4UnicodeCI},
+		} {
+			b.Run(fmt.Sprintf("%s/%dB/%drows", tc.name, size, rows), func(b *testing.B) {
+				b.ReportAllocs()
+				b.SetBytes(int64(size * rows))
+				for b.Loop() {
+					mp := mpool.MustNewZero()
+					proc := testutil.NewProcessWithOwnedMPool(b, "", mp)
+					input := makeStringHashPartitionBatch(b, proc, size, rows, tc.charset)
+					child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+					arg := newStringHashPartitionArgument(size, tc.charset)
+					arg.AppendChild(child)
+					require.NoError(b, arg.Prepare(proc))
+					for {
+						result, err := arg.Call(proc)
+						require.NoError(b, err)
+						if result.Status == vm.ExecStop {
+							break
+						}
+					}
+					arg.Free(proc, false, nil)
+					child.Free(proc, false, nil)
+					proc.Free()
+					if got := mp.CurrNB(); got != 0 {
+						b.Fatalf("hash consumer retained %d bytes after operator release", got)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestUnicodeCollationHashConsumerRelease(t *testing.T) {
+	for _, charset := range []uint8{types.CharsetLegacy, types.CharsetBinary, types.CharsetUTF8MB4UnicodeCI} {
+		for repeat := 0; repeat < 16; repeat++ {
+			mp := mpool.MustNewZero()
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+			input := makeStringHashPartitionBatch(t, proc, 64, 64, charset)
+			child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+			arg := newStringHashPartitionArgument(64, charset)
+			arg.AppendChild(child)
+			require.NoError(t, arg.Prepare(proc))
+			for {
+				result, err := arg.Call(proc)
+				require.NoError(t, err)
+				if result.Status == vm.ExecStop {
+					break
+				}
+			}
+			arg.Free(proc, false, nil)
+			child.Free(proc, false, nil)
+			proc.Free()
+			require.Zero(t, mp.CurrNB(), "hash consumer retained bytes for charset %d", charset)
+		}
+	}
+}
+
+func makeStringHashPartitionBatch(t testing.TB, proc *process.Process, size, rows int, charset uint8) *batch.Batch {
+	t.Helper()
+	typ := types.NewWithCharset(types.T_varchar, int32(size), 0, charset)
+	bat := batch.New([]string{"k", "v"})
+	key := vector.NewVec(typ)
+	values := make([][]byte, rows)
+	for row := range values {
+		value := make([]byte, size)
+		for i := range value {
+			value[i] = byte('a' + (row+i)%26)
+		}
+		value[size-1] = byte('a' + row%26)
+		values[row] = value
+	}
+	require.NoError(t, vector.AppendBytesList(key, values, nil, proc.Mp()))
+	payload := vector.NewVec(types.T_int64.ToType())
+	ids := make([]int64, rows)
+	for row := range ids {
+		ids[row] = int64(row)
+	}
+	require.NoError(t, vector.AppendFixedList(payload, ids, nil, proc.Mp()))
+	bat.Vecs = []*vector.Vector{key, payload}
+	bat.SetRowCount(rows)
+	return bat
+}
+
+func newStringHashPartitionArgument(size int, charset uint8) *Partition {
+	typ := types.NewWithCharset(types.T_varchar, int32(size), 0, charset)
+	return &Partition{
+		Algorithm: plan.Node_PARTITION_ALGORITHM_HASH,
+		SpillMem:  1 << 30,
+		OrderBySpecs: []*plan.OrderBySpec{{
+			Expr: &plan.Expr{
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+				Typ: plan.Type{
+					Id:               int32(typ.Oid),
+					Width:            typ.Width,
+					Charset:          uint32(typ.Charset),
+					CollationVersion: uint32(typ.CollationVersion),
+				},
+			},
+		}},
+	}
+}
+
 func BenchmarkWindowPartitionAlgorithms(b *testing.B) {
 	// This measures the Partition prerequisite itself. The SQL BVT covers the
 	// downstream Window contract independently; it would be misleading to claim
