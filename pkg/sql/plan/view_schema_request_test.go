@@ -32,6 +32,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -46,14 +48,29 @@ func (p viewSchemaTestProvider) OpenViewSchemaBinding(ctx context.Context) (*Vie
 // objects. The request itself must protect them from binder and caller writes.
 type viewSchemaTestCompiler struct {
 	*MockCompilerContext
-	snapshot      *Snapshot
-	namedSnapshot *Snapshot
-	resolve       func(context.Context, string, string, *Snapshot) error
-	lookups       atomic.Int64
-	lower         int64
+	snapshot        *Snapshot
+	namedSnapshot   *Snapshot
+	resolve         func(context.Context, string, string, *Snapshot) error
+	lookups         atomic.Int64
+	lower           int64
+	defaultDatabase *string
+	rootSQL         string
 }
 
 func (c *viewSchemaTestCompiler) GetLowerCaseTableNames() int64 { return c.lower }
+func (c *viewSchemaTestCompiler) GetRootSql() string {
+	if c.rootSQL != "" {
+		return c.rootSQL
+	}
+	return c.MockCompilerContext.GetRootSql()
+}
+
+func (c *viewSchemaTestCompiler) DefaultDatabase() string {
+	if c.defaultDatabase != nil {
+		return *c.defaultDatabase
+	}
+	return c.MockCompilerContext.DefaultDatabase()
+}
 
 func (c *viewSchemaTestCompiler) GetSnapshot() *Snapshot { return c.snapshot }
 func (c *viewSchemaTestCompiler) SetSnapshot(snapshot *Snapshot) {
@@ -729,13 +746,80 @@ func TestViewSchemaRequestRequiresPersistedDefaultDatabase(t *testing.T) {
 							if result != nil {
 								result.Release()
 							}
-							require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
-							require.ErrorContains(t, err, "LEGACY_CONTEXT_UNAVAILABLE")
-							require.ErrorContains(t, err, "DefaultDatabase")
+							if field == "empty" {
+								require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoDB), "%v", err)
+							} else {
+								require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+								require.ErrorContains(t, err, "LEGACY_CONTEXT_UNAVAILABLE")
+								require.ErrorContains(t, err, "DefaultDatabase")
+							}
 							require.Nil(t, result)
 							require.Empty(t, r.memo)
 							require.Empty(t, r.nestedMemo, "failed derivation must not populate nested memo")
 						}
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestViewSchemaRequestNoUseCreationContext(t *testing.T) {
+	for _, nested := range []bool{false, true} {
+		for _, disabled := range []bool{false, true} {
+			for _, projection := range []string{"n_name as label from tpch.nation", "1 as label"} {
+				t.Run(fmt.Sprintf("nested=%t/memoOff=%t/select=%s", nested, disabled, projection), func(t *testing.T) {
+					f := newViewSchemaTestFixture(t)
+					empty := ""
+					f.compiler.defaultDatabase = &empty
+					f.compiler.rootSQL = "create view tpch.source_v as select " + projection
+					statement, err := mysql.ParseOne(t.Context(), f.compiler.rootSQL, 1)
+					require.NoError(t, err)
+					defer statement.Free()
+					created, err := buildCreateView(statement.(*tree.CreateView), f.compiler)
+					require.NoError(t, err, "qualified/no-table CREATE VIEW must work without USE")
+					persisted := created.GetDdl().GetCreateView().TableDef
+					var metadata map[string]any
+					require.NoError(t, json.Unmarshal([]byte(persisted.ViewSql.View), &metadata))
+					require.Equal(t, "", metadata["DefaultDatabase"], "CREATE must save the known empty context")
+					def := f.addView(t, "source_v", "select 1")
+					def.ViewSql = persisted.ViewSql
+					// The caller has a selected database at Describe time. It must
+					// not replace the known empty historical creation context.
+					f.compiler.defaultDatabase = nil
+					name := "source_v"
+					if nested {
+						f.addView(t, "first_v", "select label from source_v")
+						f.addView(t, "second_v", "select label from source_v")
+						name = "first_v"
+					}
+					r := f.request(t)
+					r.memoDisabled = disabled
+					for i := 0; i < 2; i++ {
+						if nested && i == 1 {
+							name = "second_v"
+						}
+						result := viewSchemaTestResult(t, r, name)
+						columns, err := result.Columns()
+						require.NoError(t, err)
+						require.Equal(t, persisted.Cols, columns,
+							"Describe must reproduce authoritative no-USE CREATE output")
+						dependencies, err := result.Dependencies()
+						require.NoError(t, err)
+						if strings.Contains(projection, "nation") {
+							found := false
+							for _, dep := range dependencies {
+								if dep.RelationName == "nation" {
+									found = true
+									require.Equal(t, "tpch", dep.DatabaseName)
+								}
+							}
+							require.True(t, found)
+						}
+						result.Release()
+					}
+					if !disabled && (!nested || strings.Contains(projection, "nation")) {
+						require.Positive(t, r.hits, "known no-USE context must also work on memo hits")
 					}
 				})
 			}
@@ -756,10 +840,10 @@ func TestViewSchemaRequestMissingDefaultDatabaseCannotUseWarmMemo(t *testing.T) 
 			if nested {
 				name, def = "second_v", source
 			}
-			var data ViewData
-			require.NoError(t, json.Unmarshal([]byte(def.ViewSql.View), &data))
-			data.DefaultDatabase = ""
-			encoded, err := json.Marshal(data)
+			var metadata map[string]any
+			require.NoError(t, json.Unmarshal([]byte(def.ViewSql.View), &metadata))
+			delete(metadata, "DefaultDatabase")
+			encoded, err := json.Marshal(metadata)
 			require.NoError(t, err)
 			def.ViewSql.View = string(encoded)
 			beforeHits := r.hits

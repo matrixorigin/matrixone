@@ -28,7 +28,7 @@ import (
 // the SQL text; the ordinary public binder retains its compatibility fallback.
 func requireViewSchemaCreationContext(ctx context.Context, definition string) error {
 	var metadata struct {
-		DefaultDatabase     string
+		DefaultDatabase     *string
 		LowerCaseTableNames *int64 `json:"lower_case_table_names"`
 	}
 	if err := json.Unmarshal([]byte(definition), &metadata); err != nil {
@@ -37,7 +37,9 @@ func requireViewSchemaCreationContext(ctx context.Context, definition string) er
 	if metadata.LowerCaseTableNames == nil {
 		return moerr.NewNotSupported(ctx, "LEGACY_CONTEXT_UNAVAILABLE: persisted View has no creation-time lower_case_table_names")
 	}
-	if metadata.DefaultDatabase == "" {
+	// An explicitly saved empty string is the known no-USE environment.
+	// Only an absent/null field leaves the creation context unknown.
+	if metadata.DefaultDatabase == nil {
 		return moerr.NewNotSupported(ctx, "LEGACY_CONTEXT_UNAVAILABLE: persisted View has no creation-time DefaultDatabase")
 	}
 	return nil

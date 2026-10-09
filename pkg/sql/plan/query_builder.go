@@ -12487,6 +12487,13 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			schema = ctx.defaultDatabase
 		}
 
+		// A persisted no-USE View has a known empty default database. Do not
+		// resolve its unqualified sources in the enclosing View/caller's
+		// database. Qualified sources and CTEs have already selected a scope.
+		if schema == "" && builder.GetContext().Value(viewSchemaContextKey{}) != nil {
+			return 0, moerr.NewNoDB(builder.GetContext())
+		}
+
 		if ctx.remapOption != nil {
 			// The map key must contain a database to prevent the following situation
 			// /*+ { “rewrites” : {
