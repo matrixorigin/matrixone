@@ -156,6 +156,13 @@ func formattedScalarStringType(typ types.Type) types.Type {
 	return result
 }
 
+// StringResultByteBound exposes the planner's declared/formatted byte bound.
+// known distinguishes an exact zero-width result from an unbounded declaration.
+func StringResultByteBound(typ types.Type) (bytes uint64, known bool) {
+	bound := formattedStringByteBound(typ)
+	return bound.bytes, !bound.unknown
+}
+
 func binaryStringResultType(bound stringResultBound) types.Type {
 	if bound.unknown || bound.bytes > uint64(types.MaxVarBinaryLen) {
 		return types.T_blob.ToType()

@@ -1101,6 +1101,31 @@ func TestBuildPlanRegexpStaticStringDomainMatrix(t *testing.T) {
 		"select regexp_substr(_binary'abc123', '[0-9]+')",
 		"select regexp_replace(_binary'abc123', _binary'[0-9]+', 'X')",
 		"select regexp_replace('abc123', '[0-9]+', _binary'X')",
+		"select cast(null as binary) regexp 'a'",
+		"select 'a' not regexp cast(null as binary(3))",
+		"select regexp_like(cast(null as binary), 'a')",
+		"select regexp_instr('abc', cast(null as binary))",
+		"select regexp_substr(cast(null as binary), 'a')",
+		"select regexp_replace('abc', 'a', cast(null as binary))",
+		"select cast('abc' as binary) regexp 'a'",
+		"select 'abc' regexp cast('a' as binary(1))",
+		"select regexp_like(cast('abc' as binary(3)), 'a')",
+		"select regexp_instr('abc', cast('b' as binary))",
+		"select regexp_substr(cast('abc' as binary), 'a')",
+		"select regexp_replace(cast('abc' as binary), 'a', 'X')",
+		"select regexp_like(cast(@v as binary(3)), 'a')",
+		"select regexp_like(cast(@int_var as binary), 'a')",
+		"select regexp_like(cast(@unset_var as binary), 'a')",
+		"select regexp_like(cast(@v as binary(0)), 'a')",
+		"select regexp_like((select cast('a' as binary)), 'a')",
+		"select regexp_like(v, 'a') from (select cast('a' as binary) v) s",
+		"select regexp_like((select cast(null as binary)), 'a')",
+		"select regexp_like(v, 'a') from (select cast(null as binary) v) s",
+		"select regexp_like(v, 'a') from (select cast(@v as binary(3)) v) s",
+		"select regexp_like(v, 'a') from (select v from (select cast('a' as binary) v) s) t",
+		"select regexp_instr('abc', (select cast('a' as binary)))",
+		"select regexp_instr(regexp_substr((select 'a'), 'a'), _binary'a')",
+		"select regexp_replace('abc', 'a', (select cast(null as binary)))",
 	} {
 		t.Run(sql, func(t *testing.T) {
 			statements, err := mysql.Parse(ctx, sql, 1)
@@ -1118,14 +1143,114 @@ func TestBuildPlanRegexpStaticStringDomainMatrix(t *testing.T) {
 		"select _binary'abc' regexp _binary'a'",
 		"select regexp_like(null, 'a')",
 		"select regexp_instr(123, _binary'2')",
-		"select cast(null as binary) regexp 'a'",
+		"select cast(null as binary) regexp _binary'a'",
+		"select cast('abc' as binary(3)) regexp _binary'a'",
+		"select regexp_substr(_binary'abc', cast('a' as binary))",
+		"select regexp_replace(cast('abc' as binary), _binary'a', _binary'X')",
+		"select regexp_like(cast(@v as binary), 'a')",
+		"select regexp_like((select cast(@v as binary)), 'a')",
+		"select regexp_like(v, 'a') from (select cast(@v as binary) v) s",
+		"select regexp_like(v, 'a') from (select v from (select cast(@v as binary) v) s) t",
+		"select regexp_like((select cast('a' as binary)), _binary'a')",
+		"select regexp_like(v, _binary'a') from (select cast('a' as binary) v) s",
 	} {
 		t.Run("accepted_"+sql, func(t *testing.T) {
 			statements, err := mysql.Parse(ctx, sql, 1)
 			require.NoError(t, err)
-			_, err = buildPlan(ctx, nil, plan2.NewEmptyCompilerContext(newPlanTestProcess(t)), statements[0])
+			compiler := plan2.NewEmptyCompilerContext(newPlanTestProcess(t))
+			compiler.ResolveVariableTypeFunc = func(name string, _, _ bool) (plan2.Type, error) {
+				if name == "v" {
+					return plan2.Type{Id: int32(types.T_text)}, nil
+				}
+				return plan2.Type{}, nil
+			}
+			_, err = buildPlan(ctx, nil, compiler, statements[0])
 			require.NoError(t, err)
 		})
+	}
+}
+
+func TestBuildPlanRegexpUserVariableNullHistory(t *testing.T) {
+	ctx := defines.AttachAccount(context.Background(), sysAccountID, rootID, moAdminRoleID)
+	for _, tc := range []struct {
+		name     string
+		assigned bool
+		previous any
+		wantErr  bool
+	}{
+		{"unassigned", false, nil, true},
+		{"first NULL assignment", true, nil, false},
+		{"string then NULL", true, "abc", false},
+		{"numeric then NULL", true, int64(123), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ses := &Session{userDefinedVars: make(map[string]*UserDefinedVar)}
+			if tc.previous != nil {
+				require.NoError(t, ses.SetUserDefinedVar("history", tc.previous, ""))
+			}
+			if tc.assigned {
+				require.NoError(t, ses.SetUserDefinedVar("history", nil, ""))
+			}
+			resolver := &TxnCompilerContext{execCtx: &ExecCtx{reqCtx: ctx, ses: ses}}
+			compiler := plan2.NewEmptyCompilerContext(newPlanTestProcess(t))
+			compiler.ResolveVariableTypeFunc = resolver.ResolveVariableType
+			compiler.ResolveVariableRegexpStringResultFunc = resolver.ResolveVariableRegexpStringResult
+			for migration := 0; migration < 2; migration++ {
+				if migration != 0 {
+					snapshot, err := ses.snapshotUserDefinedVars(ctx)
+					require.NoError(t, err)
+					restored, err := decodeUserDefinedVars(ctx, snapshot, false)
+					require.NoError(t, err)
+					ses.installUserDefinedVars(restored)
+				}
+				for _, sql := range []string{
+					"select regexp_like(cast(@history as binary), 'a')",
+					"select regexp_like(cast((select @history) as binary), 'a')",
+					"select regexp_like(cast(v as binary), 'a') from (select @history v) s",
+					"select regexp_like(cast(v as binary), 'a') from (select v from (select @history v) s) t",
+				} {
+					for _, prepare := range []bool{false, true} {
+						statements, err := mysql.Parse(ctx, sql, 1)
+						require.NoError(t, err)
+						var stmt tree.Statement = statements[0]
+						if prepare {
+							stmt = tree.NewPrepareString(tree.Identifier("history_cast"), sql)
+						}
+						_, err = buildPlan(ctx, nil, compiler, stmt)
+						if prepare {
+							stmt.Free()
+						}
+						statements[0].Free()
+						if tc.wantErr {
+							require.True(t, moerr.IsMoErrCode(err, moerr.ErrCharacterSetMismatch), err, sql)
+						} else {
+							require.NoError(t, err, sql)
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestUserVariableNullTypeDoesNotLeakHistoryToExecuteParams(t *testing.T) {
+	ses, prepareStmt, cw, _ := newPreparedExecuteEnv(t, 106)
+	defer prepareStmt.Close()
+	for _, previous := range []any{int64(1), "abc", nil} {
+		if previous != nil {
+			require.NoError(t, ses.SetUserDefinedVar("parameter", previous, ""))
+		}
+		require.NoError(t, ses.SetUserDefinedVar("parameter", nil, ""))
+		func() {
+			params, values, _, _, _, _, err := buildExecuteUserParamsWithMemberOfPositions(cw.proc,
+				[]*plan.Expr{{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "parameter"}}}}, nil, nil)
+			require.NoError(t, err)
+			defer params.Free(cw.proc.Mp())
+			value := values[0].(plan2.ParamValue)
+			require.Nil(t, value.Value)
+			require.False(t, value.HasSourceType, "literal NULL has no current conversion type, regardless of history")
+			require.Equal(t, vector.PrepareParamNone, value.PrepareParamKind)
+		}()
 	}
 }
 
@@ -1148,6 +1273,13 @@ func TestBuildPlanRegexpDefersOnlyRuntimeStringDomains(t *testing.T) {
 	}
 
 	for _, sql := range []string{
+		"select regexp_instr(cast(? as binary), 'a')",
+		"select regexp_like((select cast('a' as binary)), 'a')",
+		"select regexp_like((select cast(null as binary)), 'a')",
+		"select regexp_like((select cast(? as binary)), 'a')",
+		"select regexp_like(v, 'a') from (select cast(? as binary) v) s",
+		"select regexp_instr('abc', cast(? as binary(1)))",
+		"select regexp_replace('abc', 'a', cast(? as binary))",
 		"select regexp_instr(cast(? as char), cast(_binary'中' as varbinary(3)), 2)",
 		"select regexp_instr(hex(?), cast(_binary'中' as varbinary(3)), 2)",
 		"select regexp_instr(concat(hex(?), ''), cast(_binary'中' as varbinary(3)), 2)",
@@ -1269,9 +1401,10 @@ func TestPreparedRegexpTypedNullRetainsStaticDomainAtExecuteRebind(t *testing.T)
 			value: plan2.ParamValue{Value: "a", IsBinaryProtocol: true},
 		},
 		{
-			name:  "binary null with text direct marker",
-			query: "select regexp_instr(cast(NULL as binary), ?)",
-			value: plan2.ParamValue{Value: "a", IsBinaryProtocol: true},
+			name:    "binary null with text direct marker",
+			query:   "select regexp_instr(cast(NULL as binary), ?)",
+			value:   plan2.ParamValue{Value: "a", IsBinaryProtocol: true},
+			wantErr: true,
 		},
 		{
 			name:  "binary null with binary direct marker",
@@ -6259,7 +6392,7 @@ func TestInitExecuteStmtParamBinaryConstructorMemberOf(t *testing.T) {
 }
 
 func TestInitExecuteStmtParamDirectBinaryConstructor(t *testing.T) {
-	for _, constructor := range []string{"json_array(?)", "json_object('k', ?)", "json_set('{}', '$.k', ?)", "json_insert('{}', '$.k', ?)", "json_replace('{\"k\":0}', '$.k', ?)", "json_array_append('[]', '$', ?)"} {
+	for _, constructor := range []string{"json_array(?)", "json_object('k', ?)", "json_set('{}', '$.k', ?)", "json_insert('{}', '$.k', ?)", "json_replace('{\"k\":0}', '$.k', ?)", "json_array_append('[]', '$', ?)", "json_array_insert('[0]', '$[0]', ?)"} {
 		t.Run(constructor, func(t *testing.T) {
 			for _, version := range []int64{defines.MORPCVersion51, defines.MORPCVersion52} {
 				t.Run(fmt.Sprint(version), func(t *testing.T) {
@@ -6304,6 +6437,7 @@ func TestInitExecuteStmtParamDirectBinaryConstructor(t *testing.T) {
 								prepared.clearBinaryParamState(cw.proc)
 								continue
 							}
+							require.False(t, result.IsNull(0))
 							want := "[\"base64:type252:YWI=\"]"
 							if input.value == "cd" {
 								want = "[\"base64:type252:Y2Q=\"]"
@@ -6311,7 +6445,11 @@ func TestInitExecuteStmtParamDirectBinaryConstructor(t *testing.T) {
 							if input.null {
 								want = "[null]"
 							}
-							if constructor != "json_array(?)" && constructor != "json_array_append('[]', '$', ?)" {
+							if constructor == "json_array_insert('[0]', '$[0]', ?)" {
+								want = want[:len(want)-1] + ", 0]"
+							}
+							if constructor != "json_array(?)" && constructor != "json_array_append('[]', '$', ?)" &&
+								constructor != "json_array_insert('[0]', '$[0]', ?)" {
 								want = "{\"k\": " + want[1:len(want)-1] + "}"
 							}
 							require.Equal(t, want, types.DecodeJson(result.GetBytesAt(0)).String())

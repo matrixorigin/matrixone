@@ -64,6 +64,11 @@ if [[ "$1" == tool && "$2" == test2json ]]; then
   trap '' TERM
   while :; do read -r -t 0.01 _ <&9 || true; done
  fi
+ if [[ "$MODE" == execute-timeout-zero && "$leaf" == a ]]; then
+  ps -o pgid= -p $$ | tr -d ' ' > "$CASE_DIR/pgid-execute-timeout-zero-a"
+  trap 'printf "{\"Action\":\"pass\",\"Package\":\"%s\"}\\n" "$package"; exit 0' TERM
+  while :; do read -r -t 0.01 _ <&9 || true; done
+ fi
  if [[ "$MODE" == execute-cancel-resistant && "$leaf" == a ]]; then
   ps -o pgid= -p $$ | tr -d ' ' > "$CASE_DIR/pgid-execute-resistant-a"
   printf 'ready\n' >&8
@@ -317,7 +322,7 @@ run_embedded_tests "$scope" 2
 			switch phase {
 			case "active-publication":
 				transform = func(text string) string {
-					const anchor = "        active_pid=$!\n"
+					const anchor = "            test_pids[index]=$!\n"
 					if strings.Count(text, anchor) != 1 {
 						t.Fatal("missing active pid publication")
 					}
@@ -325,7 +330,7 @@ run_embedded_tests "$scope" 2
 				}
 			case "watchdog-publication":
 				transform = func(text string) string {
-					const anchor = "        watchdog_pid=$!\n"
+					const anchor = "            watchdog_pids[index]=$!\n"
 					if strings.Count(text, anchor) != 1 {
 						t.Fatal("missing watchdog pid publication")
 					}
@@ -360,6 +365,22 @@ grep -q 'prebuilt embedded package example/a failed' "$UT_STDERR" || exit 94
 		"MODE=execute-timeout", "UT_PREBUILD_EMBEDDED=1", "UT_EMBEDDED_HARD_TIMEOUT_SECONDS=1", "UT_HARD_TIMEOUT=")
 	if err != nil {
 		t.Fatalf("embedded execution hard timeout: %v\n%s", err, out)
+	}
+}
+
+func TestEmbeddedPrebuiltTimeoutAddsFailureEvent(t *testing.T) {
+	script := embeddedSetup + `
+start_embedded_prebuild "$scope" 1
+status=0
+run_embedded_tests "$scope" 2 || status=$?
+[[ "$status" != 0 ]] || exit 90
+grep -q '"Action":"fail"' "$UT_REPORT" || exit 91
+grep -q 'UT runner hard timeout' "$UT_REPORT" || exit 92
+`
+	out, err := scheduleHarnessWithMockTransform(t, script, embeddedGoMock, nil,
+		"MODE=execute-timeout-zero", "UT_PREBUILD_EMBEDDED=1", "UT_EMBEDDED_HARD_TIMEOUT_SECONDS=1", "UT_HARD_TIMEOUT=")
+	if err != nil {
+		t.Fatalf("embedded timeout JSON failure event: %v\n%s", err, out)
 	}
 }
 
