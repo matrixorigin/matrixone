@@ -64,7 +64,7 @@ func init() {
 }
 
 // arg list [param, hnsw.IndexTableConfig (JSON), pkid, vec]
-func buildHnswCreate(pb planplugin.PlanBuilder, tbl *tree.TableFunction, ctx planplugin.BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
+func buildHnswCreate(pb planplugin.PlanBuilder, tbl *tree.TableFunction, ctx planplugin.BindContext, exprs []*plan.Expr, children []int32, _ *plan.Node) (int32, error) {
 	if len(exprs) < 4 {
 		return 0, moerr.NewInvalidInput(pb.GetContext(), "Invalid number of arguments (NARGS < 4).")
 	}

@@ -13559,14 +13559,18 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 
 	id := tbl.Id()
 
-	// Plugin-registered table functions (hnsw_create / ivf_create /
-	// cagra_create / ivfpq_create) live under
-	// pkg/vectorindex/<algo>/plugin/plan/tablefunc.go. The plugin
-	// registers each builder via planplugin.RegisterTableFunc at init
-	// time; this lookup routes the parser-side dispatch through that
-	// registry before the hardcoded switch below.
+	// Index plugins register their table functions (hnsw_create, ivf_create,
+	// cagra_create, ivfpq_create, fulltext2_create, fulltext2_compact,
+	// fulltext_index_tokenize) in <algo>/plugin/plan/tablefunc.go via
+	// planplugin.RegisterTableFunc at init time; this lookup routes the
+	// parser-side dispatch through that registry before the hardcoded switch
+	// below. The input relation's node is planning metadata for the builder.
 	if b, ok := planplugin.TableFunc(id); ok {
-		nodeId, err = b(builder, tbl, ctx, exprs, nil)
+		var inputNode *plan.Node
+		if input != nil && input.nodeID >= 0 && int(input.nodeID) < len(builder.qry.Nodes) {
+			inputNode = builder.qry.Nodes[input.nodeID]
+		}
+		nodeId, err = b(builder, tbl, ctx, exprs, nil, inputNode)
 	} else {
 		switch id {
 		case "unnest":
@@ -13607,12 +13611,6 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 			nodeId, err = builder.buildViewColumns(tbl, ctx, exprs, nil)
 		case subscriptionColumnsFunctionName:
 			nodeId, err = builder.buildSubscriptionColumns(tbl, ctx, exprs, nil)
-		case "fulltext_index_tokenize":
-			inputNodeID := int32(-1)
-			if input != nil {
-				inputNodeID = input.nodeID
-			}
-			nodeId, err = builder.buildFullTextIndexTokenize(tbl, ctx, exprs, nil, inputNodeID)
 		case "stage_list":
 			nodeId, err = builder.buildStageList(tbl, ctx, exprs, nil)
 		case "moplugin_table":

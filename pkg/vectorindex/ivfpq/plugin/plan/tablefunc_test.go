@@ -131,7 +131,7 @@ func TestGetIvfpqParams_Error(t *testing.T) {
 
 func TestBuildIvfpqCreate_TooFewArgs(t *testing.T) {
 	b := newStubPlanBuilder()
-	_, err := buildIvfpqCreate(b, makeNumValTblFunc(`{}`), nil, makeBuildArgs(3), nil)
+	_, err := buildIvfpqCreate(b, makeNumValTblFunc(`{}`), nil, makeBuildArgs(3), nil, nil)
 	require.Error(t, err)
 }
 
@@ -139,13 +139,13 @@ func TestBuildIvfpqCreate_BadParams(t *testing.T) {
 	b := newStubPlanBuilder()
 	un := tree.NewUnresolvedName(tree.NewCStr("x", 0))
 	tbl := &tree.TableFunction{Func: &tree.FuncExpr{Exprs: tree.Exprs{un}}}
-	_, err := buildIvfpqCreate(b, tbl, nil, makeBuildArgs(4), nil)
+	_, err := buildIvfpqCreate(b, tbl, nil, makeBuildArgs(4), nil, nil)
 	require.Error(t, err)
 }
 
 func TestBuildIvfpqCreate_OK(t *testing.T) {
 	b := newStubPlanBuilder()
-	id, err := buildIvfpqCreate(b, makeNumValTblFunc(`{"lists":"4"}`), nil, makeBuildArgs(4), nil)
+	id, err := buildIvfpqCreate(b, makeNumValTblFunc(`{"lists":"4"}`), nil, makeBuildArgs(4), nil, nil)
 	require.NoError(t, err)
 	node := b.nodes[id]
 	require.Equal(t, plan.Node_FUNCTION_SCAN, node.NodeType)

@@ -313,12 +313,12 @@ func TestGetHnswParams_Error(t *testing.T) {
 }
 
 func TestBuildHnswCreate_TooFewArgs(t *testing.T) {
-	_, err := buildHnswCreate(newStubPlanBuilder(), makeNumValTblFunc(`{}`), nil, makeBuildArgs(3), nil)
+	_, err := buildHnswCreate(newStubPlanBuilder(), makeNumValTblFunc(`{}`), nil, makeBuildArgs(3), nil, nil)
 	require.Error(t, err)
 }
 
 func TestBuildHnswCreate_BadParams(t *testing.T) {
-	_, err := buildHnswCreate(newStubPlanBuilder(), nonLiteralTblFunc(), nil, makeBuildArgs(4), nil)
+	_, err := buildHnswCreate(newStubPlanBuilder(), nonLiteralTblFunc(), nil, makeBuildArgs(4), nil, nil)
 	require.Error(t, err)
 }
 
@@ -326,7 +326,7 @@ func TestBuildHnswCreate_BadParams(t *testing.T) {
 // and marks the node single-threaded.
 func TestBuildHnswCreate_OK(t *testing.T) {
 	b := newStubPlanBuilder()
-	id, err := buildHnswCreate(b, makeNumValTblFunc(`{"m":"48"}`), nil, makeBuildArgs(4), nil)
+	id, err := buildHnswCreate(b, makeNumValTblFunc(`{"m":"48"}`), nil, makeBuildArgs(4), nil, nil)
 	require.NoError(t, err)
 	node := b.nodes[id]
 	require.Equal(t, planpb.Node_FUNCTION_SCAN, node.NodeType)

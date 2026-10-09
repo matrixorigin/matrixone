@@ -149,7 +149,7 @@ func TestGetCagraParams_Error(t *testing.T) {
 
 func TestBuildCagraCreate_TooFewArgs(t *testing.T) {
 	b := newStubPlanBuilder()
-	_, err := buildCagraCreate(b, makeNumValTblFunc(`{}`), nil, makeBuildArgs(3), nil)
+	_, err := buildCagraCreate(b, makeNumValTblFunc(`{}`), nil, makeBuildArgs(3), nil, nil)
 	require.Error(t, err)
 }
 
@@ -158,13 +158,13 @@ func TestBuildCagraCreate_BadParams(t *testing.T) {
 	b := newStubPlanBuilder()
 	un := tree.NewUnresolvedName(tree.NewCStr("x", 0))
 	tbl := &tree.TableFunction{Func: &tree.FuncExpr{Exprs: tree.Exprs{un}}}
-	_, err := buildCagraCreate(b, tbl, nil, makeBuildArgs(4), nil)
+	_, err := buildCagraCreate(b, tbl, nil, makeBuildArgs(4), nil, nil)
 	require.Error(t, err)
 }
 
 func TestBuildCagraCreate_OK(t *testing.T) {
 	b := newStubPlanBuilder()
-	id, err := buildCagraCreate(b, makeNumValTblFunc(`{"m":"32"}`), nil, makeBuildArgs(4), nil)
+	id, err := buildCagraCreate(b, makeNumValTblFunc(`{"m":"32"}`), nil, makeBuildArgs(4), nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, int32(0), id)
 	node := b.nodes[id]

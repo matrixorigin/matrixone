@@ -49,7 +49,7 @@ func init() {
 }
 
 // buildFullText2Create — arg list: [param, TableConfig(JSON), pk, cols...].
-func buildFullText2Create(pb planplugin.PlanBuilder, tbl *tree.TableFunction, ctx planplugin.BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
+func buildFullText2Create(pb planplugin.PlanBuilder, tbl *tree.TableFunction, ctx planplugin.BindContext, exprs []*plan.Expr, children []int32, _ *plan.Node) (int32, error) {
 	if len(exprs) < 4 {
 		return 0, moerr.NewInvalidInput(pb.GetContext(), "fulltext2_create: invalid number of arguments (NARGS < 4)")
 	}
@@ -84,7 +84,7 @@ func buildFullText2Create(pb planplugin.PlanBuilder, tbl *tree.TableFunction, ct
 // passed through as-is (no leading param strip). Mirrors the create
 // registration so the plan-side dispatch routes through the plugin registry
 // (query_builder.go) instead of a hardcoded switch case.
-func buildFullText2Compact(pb planplugin.PlanBuilder, tbl *tree.TableFunction, ctx planplugin.BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
+func buildFullText2Compact(pb planplugin.PlanBuilder, tbl *tree.TableFunction, ctx planplugin.BindContext, exprs []*plan.Expr, children []int32, _ *plan.Node) (int32, error) {
 	colDefs := planplugin.DeepCopyColDefList(fulltext2CompactColDefs)
 	node := &plan.Node{
 		NodeType: plan.Node_FUNCTION_SCAN,

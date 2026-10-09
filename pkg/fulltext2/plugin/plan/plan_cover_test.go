@@ -486,19 +486,19 @@ func TestGetFullText2Params_Error(t *testing.T) {
 
 func TestBuildFullText2Create_TooFewArgs(t *testing.T) {
 	b := newStubPlanBuilder()
-	_, err := buildFullText2Create(b, numValTblFunc(`{}`), nil, makeArgs(3), nil)
+	_, err := buildFullText2Create(b, numValTblFunc(`{}`), nil, makeArgs(3), nil, nil)
 	require.Error(t, err)
 }
 
 func TestBuildFullText2Create_BadParams(t *testing.T) {
 	b := newStubPlanBuilder()
-	_, err := buildFullText2Create(b, nonNumValTblFunc(), nil, makeArgs(4), nil)
+	_, err := buildFullText2Create(b, nonNumValTblFunc(), nil, makeArgs(4), nil, nil)
 	require.Error(t, err)
 }
 
 func TestBuildFullText2Create_OK(t *testing.T) {
 	b := newStubPlanBuilder()
-	id, err := buildFullText2Create(b, numValTblFunc(`{"parser":"ngram"}`), nil, makeArgs(4), nil)
+	id, err := buildFullText2Create(b, numValTblFunc(`{"parser":"ngram"}`), nil, makeArgs(4), nil, nil)
 	require.NoError(t, err)
 	node := b.nodes[id]
 	require.Equal(t, plan.Node_FUNCTION_SCAN, node.NodeType)
@@ -513,7 +513,7 @@ func TestBuildFullText2Create_OK(t *testing.T) {
 
 func TestBuildFullText2Compact_OK(t *testing.T) {
 	b := newStubPlanBuilder()
-	id, err := buildFullText2Compact(b, numValTblFunc(`{}`), nil, makeArgs(4), nil)
+	id, err := buildFullText2Compact(b, numValTblFunc(`{}`), nil, makeArgs(4), nil, nil)
 	require.NoError(t, err)
 	node := b.nodes[id]
 	require.Equal(t, plan.Node_FUNCTION_SCAN, node.NodeType)
