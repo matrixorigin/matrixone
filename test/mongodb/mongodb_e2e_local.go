@@ -106,10 +106,10 @@ func runWithDSN(ctx context.Context, db *sql.DB, dsn, host string, r *report) er
 	}
 	r.Cases = append(r.Cases, "show-create-redaction-roundtrip")
 	if dsn != "" {
-		if err := verifyAuthorizationBoundary(ctx, db, dsn); err != nil {
+		if err := verifyAuthorizationBoundary(ctx, db, dsn, manifest.Rows); err != nil {
 			return err
 		}
-		r.Cases = append(r.Cases, "non-admin-marker-injection-boundary")
+		r.Cases = append(r.Cases, "authorized-non-admin-scan", "non-admin-marker-injection-boundary")
 	}
 
 	if err := expectScalar(ctx, db, "select count(*) from mongodb_ci.events", "5"); err != nil {
@@ -127,6 +127,47 @@ func runWithDSN(ctx context.Context, db *sql.DB, dsn, host string, r *report) er
 		return err
 	}
 	r.Cases = append(r.Cases, "scan-projection-pushdown-null-conversion")
+	// Materialization exercises MongoDB scan as a source for ordinary MO DDL,
+	// then the join checks that the external and local execution paths agree on
+	// every fixture row rather than merely returning the same row count.
+	if _, err := db.ExecContext(ctx, "create table mongodb_ci.events_copy as select mongo_id,device_id,site_id,ts,measurement,source_batch from mongodb_ci.events"); err != nil {
+		return fmt.Errorf("materialize MongoDB source: %w", err)
+	}
+	const eventColumns = "mongo_id,device_id,site_id,cast(ts as char),coalesce(cast(measurement as char),'NULL'),coalesce(source_batch,'NULL')"
+	if err := expectRows(ctx, db, "select "+eventColumns+" from mongodb_ci.events_copy order by mongo_id", manifest.Rows); err != nil {
+		return fmt.Errorf("materialized MongoDB rows: %w", err)
+	}
+	if err := expectRows(ctx, db,
+		"select e.mongo_id,e.device_id,e.site_id,cast(e.ts as char),coalesce(cast(e.measurement as char),'NULL'),coalesce(e.source_batch,'NULL') from mongodb_ci.events e join mongodb_ci.events_copy c on e.mongo_id=c.mongo_id order by e.mongo_id",
+		manifest.Rows); err != nil {
+		return fmt.Errorf("MongoDB and local table join: %w", err)
+	}
+	r.Cases = append(r.Cases, "materialize-and-join-exact-rows")
+
+	// A duplicate target key must abort the entire INSERT ... SELECT, including
+	// any rows scanned before the conflicting source document.
+	if _, err := db.ExecContext(ctx, "create table mongodb_ci.unique_sink(mongo_id char(24) primary key, device_id varchar(20))"); err != nil {
+		return fmt.Errorf("create constrained MongoDB target: %w", err)
+	}
+	if _, err := db.ExecContext(ctx, "insert into mongodb_ci.unique_sink values('64b000000000000000000002','seed')"); err != nil {
+		return fmt.Errorf("seed constrained MongoDB target: %w", err)
+	}
+	if _, err := db.ExecContext(ctx, "insert into mongodb_ci.unique_sink select mongo_id,device_id from mongodb_ci.events"); err == nil {
+		return fmt.Errorf("MongoDB ingestion with duplicate target key unexpectedly succeeded")
+	} else if !strings.Contains(strings.ToLower(err.Error()), "duplicate") {
+		return fmt.Errorf("MongoDB ingestion failed for an unrelated reason: %w", err)
+	}
+	if err := expectScalar(ctx, db, "select count(*) from mongodb_ci.unique_sink", "1"); err != nil {
+		return fmt.Errorf("constrained MongoDB target changed after rejected ingestion: %w", err)
+	}
+	if err := expectScalar(ctx, db, "select device_id from mongodb_ci.unique_sink where mongo_id='64b000000000000000000002'", "seed"); err != nil {
+		return fmt.Errorf("constrained MongoDB target seed changed after rejected ingestion: %w", err)
+	}
+	r.Cases = append(r.Cases, "target-unique-conflict-atomic-rollback")
+	if err := verifyReadOnlyInsert(ctx, db, manifest.Rows); err != nil {
+		return err
+	}
+	r.Cases = append(r.Cases, "read-only-insert-source-preserved")
 
 	// BSON DateTime preserves milliseconds, while DATETIME(0) truncates them.
 	// The source predicate must therefore remain residual-only: an exact MongoDB
@@ -154,7 +195,7 @@ func runWithDSN(ctx context.Context, db *sql.DB, dsn, host string, r *report) er
 	if err := expectScalar(ctx, db, "select count(*) from mongodb_ci.events", "5"); err != nil {
 		return fmt.Errorf("scan after cancellation: %w", err)
 	}
-	r.Cases = append(r.Cases, "multi-batch-cancel-recovery")
+	r.Cases = append(r.Cases, "pre-canceled-scan-recovery")
 
 	windowSQL := "select count(*) from (select _wstart, device_id, site_id, avg(measurement) from mongodb_ci.events where device_id='device-001' group by device_id,site_id interval(ts,1,minute) gapfill(partition) fill(null)) x"
 	if err := expectScalar(ctx, db, windowSQL, "4"); err != nil {
@@ -188,6 +229,9 @@ func runWithDSN(ctx context.Context, db *sql.DB, dsn, host string, r *report) er
 	if err := expectScalar(ctx, db, "select cast(high as char) from mongodb_ci.ingest_watermark where id=1", "2026-07-27 10:03:00"); err != nil {
 		return err
 	}
+	if err := verifyAggregateFixture(ctx, db); err != nil {
+		return fmt.Errorf("bounded ingestion result: %w", err)
+	}
 	r.Cases = append(r.Cases, "atomic-aggregate-watermark")
 
 	// The fixture contains one malformed numeric value. A strict mapping must
@@ -196,10 +240,11 @@ func runWithDSN(ctx context.Context, db *sql.DB, dsn, host string, r *report) er
 	if _, err := db.ExecContext(ctx, "create external table mongodb_ci.events_strict(mongo_id char(24) mongodb_path '_id', device_id varchar(20), site_id varchar(10), ts datetime(3), measurement double) engine=mongodb with ('connection'='mongodb_ci','database'='mongodb_source','collection'='events','schema_mode'='explicit','conversion_mode'='strict','max_parallelism'='1')"); err != nil {
 		return fmt.Errorf("create strict mapping: %w", err)
 	}
-	var targetBefore, watermarkBefore string
-	if err := db.QueryRowContext(ctx, "select count(*) from mongodb_ci.minute_aggregate").Scan(&targetBefore); err != nil {
+	targetBefore, err := readAggregateRows(ctx, db)
+	if err != nil {
 		return err
 	}
+	var watermarkBefore string
 	if err := db.QueryRowContext(ctx, "select cast(high as char) from mongodb_ci.ingest_watermark where id=1").Scan(&watermarkBefore); err != nil {
 		return err
 	}
@@ -213,7 +258,7 @@ func runWithDSN(ctx context.Context, db *sql.DB, dsn, host string, r *report) er
 		return fmt.Errorf("strict MongoDB conversion unexpectedly succeeded")
 	}
 	_ = failedTx.Rollback()
-	if err := expectScalar(ctx, db, "select count(*) from mongodb_ci.minute_aggregate", targetBefore); err != nil {
+	if err := expectAggregateRows(ctx, db, targetBefore); err != nil {
 		return fmt.Errorf("target rollback: %w", err)
 	}
 	if err := expectScalar(ctx, db, "select cast(high as char) from mongodb_ci.ingest_watermark where id=1", watermarkBefore); err != nil {
@@ -237,8 +282,14 @@ func runWithDSN(ctx context.Context, db *sql.DB, dsn, host string, r *report) er
 	if err = idempotentTx.Commit(); err != nil {
 		return err
 	}
-	if err := expectScalar(ctx, db, "select count(*) from mongodb_ci.minute_aggregate", targetBefore); err != nil {
+	if err := expectAggregateRows(ctx, db, targetBefore); err != nil {
 		return err
+	}
+	if err := expectScalar(ctx, db, "select cast(high as char) from mongodb_ci.ingest_watermark where id=1", watermarkBefore); err != nil {
+		return fmt.Errorf("watermark after idempotent replay: %w", err)
+	}
+	if err := verifyAggregateFixture(ctx, db); err != nil {
+		return fmt.Errorf("idempotent replay result: %w", err)
 	}
 	r.Cases = append(r.Cases, "bounded-idempotent-replay")
 
@@ -269,7 +320,7 @@ func runWithDSN(ctx context.Context, db *sql.DB, dsn, host string, r *report) er
 	return nil
 }
 
-func verifyAuthorizationBoundary(ctx context.Context, adminDB *sql.DB, dsn string) error {
+func verifyAuthorizationBoundary(ctx context.Context, adminDB *sql.DB, dsn string, expectedRows [][]string) error {
 	const (
 		roleName = "mongodb_ci_creator"
 		userName = "mongodb_ci_user"
@@ -282,6 +333,7 @@ func verifyAuthorizationBoundary(ctx context.Context, adminDB *sql.DB, dsn strin
 		"create user " + userName + " identified by '" + password + "' default role " + roleName,
 		"grant connect on account * to " + roleName,
 		"grant create table on database mongodb_ci to " + roleName,
+		"grant select on table mongodb_ci.events to " + roleName,
 	} {
 		if _, err := adminDB.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("authorization boundary setup %s: %w", statement, err)
@@ -308,6 +360,11 @@ func verifyAuthorizationBoundary(ctx context.Context, adminDB *sql.DB, dsn strin
 	defer userDB.Close()
 	if err := userDB.PingContext(ctx); err != nil {
 		return fmt.Errorf("connect non-admin MatrixOne session: %w", err)
+	}
+	if err := expectRows(ctx, userDB,
+		"select mongo_id,device_id,site_id,cast(ts as char),coalesce(cast(measurement as char),'NULL'),coalesce(source_batch,'NULL') from mongodb_ci.events order by mongo_id",
+		expectedRows); err != nil {
+		return fmt.Errorf("authorized non-admin MongoDB scan: %w", err)
 	}
 
 	if _, err := userDB.ExecContext(ctx,
@@ -351,6 +408,79 @@ func loadFixtureManifest(path string) (fixtureManifest, error) {
 		return fixtureManifest{}, fmt.Errorf("MongoDB fixture manifest has no rows")
 	}
 	return manifest, nil
+}
+
+func verifyReadOnlyInsert(ctx context.Context, db *sql.DB, expectedRows [][]string) error {
+	statement := "insert into mongodb_ci.events(mongo_id,device_id,site_id,ts,measurement) values('64b000000000000000000099','device-999','site-east','2026-07-27 10:00:00',99)"
+	_, err := db.ExecContext(ctx, statement)
+	if err == nil {
+		return fmt.Errorf("read-only MongoDB source accepted %s", statement)
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "cannot insert/update/delete from external table") {
+		return fmt.Errorf("read-only MongoDB insert failed for an unrelated reason: %w", err)
+	}
+	// A rejected write must not change the external collection. Check it
+	// immediately, before another operation could hide partial mutations.
+	if err := expectRows(ctx, db,
+		"select mongo_id,device_id,site_id,cast(ts as char),coalesce(cast(measurement as char),'NULL'),coalesce(source_batch,'NULL') from mongodb_ci.events order by mongo_id",
+		expectedRows); err != nil {
+		return fmt.Errorf("source changed after rejected insert: %w", err)
+	}
+	return nil
+}
+
+const aggregateRowsSQL = "select device_id,site_id,cast(window_start as char),coalesce(cast(measurement as char),'NULL') from mongodb_ci.minute_aggregate order by device_id,site_id,window_start"
+
+func readAggregateRows(ctx context.Context, db *sql.DB) ([][]string, error) {
+	rows, err := db.QueryContext(ctx, aggregateRowsSQL)
+	if err != nil {
+		return nil, fmt.Errorf("read aggregate rows: %w", err)
+	}
+	defer rows.Close()
+	var result [][]string
+	for rows.Next() {
+		row := make([]string, 4)
+		if err := rows.Scan(&row[0], &row[1], &row[2], &row[3]); err != nil {
+			return nil, fmt.Errorf("scan aggregate row: %w", err)
+		}
+		result = append(result, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate aggregate rows: %w", err)
+	}
+	return result, nil
+}
+
+func expectAggregateRows(ctx context.Context, db *sql.DB, expected [][]string) error {
+	actual, err := readAggregateRows(ctx, db)
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(actual, expected) {
+		return fmt.Errorf("aggregate rows changed: expected %v, got %v", expected, actual)
+	}
+	return nil
+}
+
+func verifyAggregateFixture(ctx context.Context, db *sql.DB) error {
+	// The five expected keys and values are derived from the independent
+	// MongoDB fixture, not from another execution of the ingestion query.
+	checks := []struct{ predicate string }{
+		{"device_id='device-001' and site_id='site-east' and window_start='2026-07-27 10:00:00' and measurement=12"},
+		{"device_id='device-001' and site_id='site-east' and window_start='2026-07-27 10:01:00' and measurement is null"},
+		{"device_id='device-001' and site_id='site-east' and window_start='2026-07-27 10:02:00' and measurement=20"},
+		{"device_id='device-001' and site_id='site-west' and window_start='2026-07-27 10:00:00' and measurement=30"},
+		{"device_id='device-002' and site_id='site-east' and window_start='2026-07-27 10:01:00' and measurement is null"},
+	}
+	if err := expectScalar(ctx, db, "select count(*) from mongodb_ci.minute_aggregate", "5"); err != nil {
+		return err
+	}
+	for _, check := range checks {
+		if err := expectScalar(ctx, db, "select count(*) from mongodb_ci.minute_aggregate where "+check.predicate, "1"); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func expectRows(ctx context.Context, db *sql.DB, query string, expected [][]string) error {
