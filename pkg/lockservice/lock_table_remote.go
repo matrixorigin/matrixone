@@ -22,6 +22,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"syscall"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -850,7 +851,10 @@ func retryRemoteLockError(err error) bool {
 	if errors.As(err, &netErr) && netErr.Timeout() {
 		return true
 	}
-	if errors.Is(err, io.EOF) ||
+	if errors.Is(err, syscall.EPIPE) ||
+		errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, net.ErrClosed) ||
+		errors.Is(err, io.EOF) ||
 		errors.Is(err, io.ErrUnexpectedEOF) ||
 		errors.Is(err, os.ErrDeadlineExceeded) ||
 		errors.Is(err, context.DeadlineExceeded) ||
