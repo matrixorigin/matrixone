@@ -370,6 +370,18 @@ func TestRewriteCheckpointCanonicalizesBackupTombstone(t *testing.T) {
 		backupTS,
 	)
 	require.ErrorContains(t, err, "checkpoint data read failure")
+	softDeletes := make(map[string]bool)
+	baseTS := types.TS{}
+	_, _, err = LoadCheckpointEntriesFromKey(
+		ctx,
+		"backup-test",
+		failingSourceFS,
+		checkpointLocation,
+		CheckpointCurrentVersion,
+		&softDeletes,
+		&baseTS,
+	)
+	require.ErrorContains(t, err, "checkpoint data read failure")
 	rewrittenLocation, _, _, err := ReWriteCheckpointAndBlockFromKey(
 		ctx,
 		"backup-test",
