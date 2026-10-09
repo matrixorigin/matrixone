@@ -432,7 +432,6 @@ func TestBuildCreateTableRejectsUnsupportedCollations(t *testing.T) {
 	for _, sql := range []string{
 		"create table t(v varchar(8)) collate utf8mb4_de_pb_0900_ai_ci",
 		"create table t(v varchar(8)) collate utf8mb4_unicode_ci",
-		"create table t(v varchar(8) collate utf8mb4_0900_bin)",
 		"create table t(v varchar(8) collate utf8_unicode_ci)",
 	} {
 		t.Run(sql, func(t *testing.T) {
@@ -445,7 +444,17 @@ func TestBuildCreateTableRejectsUnsupportedCollations(t *testing.T) {
 	}
 }
 
-func TestBuildCreateTableAcceptsMySQL8DefaultCollationCompatibilityAlias(t *testing.T) {
+func TestBuildCreateTableRejectsRecognizedNativeCollationWithoutAdmission(t *testing.T) {
+	native0900AdmissionDisabled(t)
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"create table t(v varchar(8) collate utf8mb4_0900_bin)", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	_, err = BuildPlan(NewMockCompilerContext(false), stmt, false)
+	require.ErrorContains(t, err, native0900AdmissionError)
+}
+
+func TestBuildCreateTablePreservesMySQL80900IdentityUnderTestAdmission(t *testing.T) {
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, `
 		create table t_charset_mix (
 			id bigint not null auto_increment,
@@ -465,7 +474,7 @@ func TestBuildCreateTableAcceptsMySQL8DefaultCollationCompatibilityAlias(t *test
 	require.NoError(t, err)
 	tableDef := p.GetDdl().GetCreateTable().GetTableDef()
 	require.Equal(t, uint32(types.CharsetUTF8), tableDef.DefaultCharset)
-	require.Equal(t, uint32(types.CharsetUTF8), FindColumn(tableDef.Cols, "c_utf8mb4_ci").Typ.Charset)
+	require.Equal(t, uint32(types.CharsetUTF8MB40900AI), FindColumn(tableDef.Cols, "c_utf8mb4_ci").Typ.Charset)
 	require.Equal(t, uint32(types.CharsetUTF8MB4Bin), FindColumn(tableDef.Cols, "c_utf8mb4_bin").Typ.Charset)
 	require.Equal(t, uint32(types.CharsetUTF8), FindColumn(tableDef.Cols, "c_utf8mb4_general").Typ.Charset)
 	require.Equal(t, uint32(types.CharsetUTF8), FindColumn(tableDef.Cols, "c_latin1").Typ.Charset)
@@ -474,7 +483,7 @@ func TestBuildCreateTableAcceptsMySQL8DefaultCollationCompatibilityAlias(t *test
 
 	showSQL, _, err := ConstructCreateTableSQL(ctx, tableDef, nil, false, nil)
 	require.NoError(t, err)
-	require.NotContains(t, showSQL, "0900")
+	require.Contains(t, showSQL, "0900")
 	require.Contains(t, showSQL, "COLLATE utf8mb4_bin")
 }
 
