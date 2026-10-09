@@ -1768,6 +1768,50 @@ func groupConcatDistinctIdentityFromPayload(
 	return identity, nil
 }
 
+// writeGroupConcatDistinctIdentity keeps the retained identity and temporary
+// collation key in accounted off-heap buffers. The sorted entry stores only
+// offsets, so it never hides the sole Go reference to a heap slice from GC.
+func writeGroupConcatDistinctIdentity(
+	payload []byte,
+	argTypes []types.Type,
+	identities, keyScratch *mpool.AccountedBuffer,
+) error {
+	return payloadFieldIterator(payload, len(argTypes), func(i int, isNull bool, data []byte) error {
+		if isNull {
+			return identities.WriteByte(0)
+		}
+		value := data
+		if types.NeedsCollationKey(argTypes[i], types.PADSpaceKeyV1) {
+			part, err := types.ResolveStringKeyPart(argTypes[i], types.PADSpaceKeyV1)
+			if err != nil {
+				return err
+			}
+			bound, err := part.KeySizeUpperBound(len(data))
+			if err != nil {
+				return err
+			}
+			if err = keyScratch.Resize(bound); err != nil {
+				return err
+			}
+			value, err = part.Key(keyScratch.Bytes()[:0], data)
+			if err != nil {
+				return err
+			}
+		}
+		if uint64(len(value)) > math.MaxUint32 {
+			return mpool.ErrAllocationAllocatorLimit
+		}
+		if err := identities.WriteByte(1); err != nil {
+			return err
+		}
+		if err := identities.WriteUint32(uint32(len(value))); err != nil {
+			return err
+		}
+		_, err := identities.Write(value)
+		return err
+	})
+}
+
 func encodeGroupConcatSourcePayload(payload []byte, sourceRow uint64) []byte {
 	encoded := make([]byte, groupConcatSourcePayloadHeaderSize+len(payload))
 	copy(encoded, groupConcatSourcePayloadMagic)
@@ -1895,9 +1939,11 @@ type groupConcatOrderedEntry struct {
 }
 
 type groupConcatDistinctOrder struct {
-	entry    int64
-	rank     int64
-	identity []byte
+	entry          int64
+	rank           int64
+	identityOffset int
+	identityLength int
+	borrowed       bool
 }
 
 type groupConcatSpillRun struct {
@@ -2491,21 +2537,51 @@ func (exec *groupConcatExec) flushOrderedGroupAccounted(
 			return err
 		}
 		defer mpool.FreeSlice(exec.mp, dedup)
+		identities, err := exec.allocation.newArgumentBuffer(exec.mp)
+		if err != nil {
+			return err
+		}
+		defer identities.Free()
+		keyScratch, err := exec.allocation.newArgumentBuffer(exec.mp)
+		if err != nil {
+			return err
+		}
+		defer keyScratch.Free()
+		argTypes := exec.concatTypes()
+		transformed := false
+		for _, typ := range argTypes {
+			transformed = transformed || types.NeedsCollationKey(typ, types.PADSpaceKeyV1)
+		}
 		for rank, entry := range selectors {
-			identity, err := groupConcatDistinctIdentityFromPayload(
-				entries[entry].concatPayload, exec.concatTypes())
-			if err != nil {
-				return err
+			payload := entries[entry].concatPayload
+			item := groupConcatDistinctOrder{entry: entry, rank: int64(rank)}
+			if !transformed {
+				// Legacy framing is already the identity. Its backing belongs to
+				// the resident aggregate state throughout this flush.
+				if err := payloadFieldIterator(payload, len(argTypes),
+					func(int, bool, []byte) error { return nil }); err != nil {
+					return err
+				}
+				item.borrowed = true
+			} else {
+				item.identityOffset = identities.Len()
+				if err := writeGroupConcatDistinctIdentity(
+					payload, argTypes, identities, keyScratch); err != nil {
+					return err
+				}
+				item.identityLength = identities.Len() - item.identityOffset
 			}
-			dedup[rank] = groupConcatDistinctOrder{
-				entry:    entry,
-				rank:     int64(rank),
-				identity: identity,
+			dedup[rank] = item
+		}
+		identityAt := func(item groupConcatDistinctOrder) []byte {
+			if item.borrowed {
+				return entries[item.entry].concatPayload
 			}
+			return identities.Bytes()[item.identityOffset : item.identityOffset+item.identityLength]
 		}
 		slices.SortFunc(dedup, func(left, right groupConcatDistinctOrder) int {
 			if cmp := bytes.Compare(
-				left.identity, right.identity); cmp != 0 {
+				identityAt(left), identityAt(right)); cmp != 0 {
 				return cmp
 			}
 			return int(left.rank - right.rank)
@@ -2513,7 +2589,7 @@ func (exec *groupConcatExec) flushOrderedGroupAccounted(
 		kept := 0
 		for _, candidate := range dedup {
 			if kept > 0 && bytes.Equal(
-				dedup[kept-1].identity, candidate.identity) {
+				identityAt(dedup[kept-1]), identityAt(candidate)) {
 				continue
 			}
 			dedup[kept] = candidate

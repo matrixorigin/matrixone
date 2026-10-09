@@ -764,6 +764,13 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 	if builder.isScanProtected(node.NodeId) {
 		return nodeID
 	}
+	// Master and regular indexes store the column's physical collation domain.
+	// An explicit different domain cannot be probed without losing matches.
+	for _, filter := range node.FilterList {
+		if indexFilterHasMismatchedNativeDomain(filter, node.TableDef) {
+			return nodeID
+		}
+	}
 
 	// 1. Master Index Check
 	{
@@ -2240,7 +2247,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	// No index probe can recover rows excluded by comparing those byte strings;
 	// keep the original scan and residual filter in that case.
 	for _, filter := range node.FilterList {
-		if regularIndexFilterHasMismatchedNativeDomain(filter, node.TableDef) {
+		if indexFilterHasMismatchedNativeDomain(filter, node.TableDef) {
 			return nodeID
 		}
 	}
@@ -2416,7 +2423,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	return nodeID
 }
 
-func regularIndexFilterHasMismatchedNativeDomain(filter *plan.Expr, table *plan.TableDef) bool {
+func indexFilterHasMismatchedNativeDomain(filter *plan.Expr, table *plan.TableDef) bool {
 	if filter == nil || table == nil {
 		return false
 	}
@@ -2454,7 +2461,7 @@ func regularIndexFilterHasMismatchedNativeDomain(filter *plan.Expr, table *plan.
 		}
 	}
 	for _, arg := range fn.Args {
-		if regularIndexFilterHasMismatchedNativeDomain(arg, table) {
+		if indexFilterHasMismatchedNativeDomain(arg, table) {
 			return true
 		}
 	}

@@ -222,6 +222,120 @@ func TestCountDistinctNative0900MultiArgumentPreflight(t *testing.T) {
 	}
 }
 
+func TestCountDistinctNative0900CharHashedPreflightMatchesResidentIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		charset uint8
+		last    string
+		want    int64
+	}{
+		{"ai-ci equivalent", types.CharsetUTF8MB40900AI, "A", 8},
+		{"bin no-pad space", types.CharsetUTF8MB40900Bin, "a ", 9},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			registry, account, allocation := newTestAggregateAllocation(t)
+			typ := types.NewWithCharsetVersion(types.T_char, 64, 0,
+				tc.charset, types.CollationVersionV1)
+			items := []string{"a", "b", "c", "d", "e", "f", "g", "h", tc.last}
+			values := testutil.NewStringVector(len(items), typ, mp, false, nil, items)
+			firstHash, err := distinctArgumentRowHash(1, []*vector.Vector{values}, 0, nil)
+			require.NoError(t, err)
+			lastHash, err := distinctArgumentRowHash(1, []*vector.Vector{values}, 8, nil)
+			require.NoError(t, err)
+			if tc.want == 8 {
+				require.Equal(t, firstHash, lastHash)
+			} else {
+				require.NotEqual(t, firstHash, lastHash)
+			}
+			exec := newCountColumnExec(mp, AggIdOfCountColumn, true, []types.Type{typ})
+			require.NoError(t, exec.(AllocationAccountOwner).SetAllocationAccount(allocation))
+			require.NoError(t, exec.GroupGrow(1))
+			groups := []uint64{1, 1, 1, 1, 1, 1, 1, 1, 1}
+			require.NoError(t, exec.(BatchCapacityPreflight).PreflightBatchFill(
+				0, groups, []*vector.Vector{values}))
+			require.NoError(t, exec.BatchFill(0, groups, []*vector.Vector{values}))
+			result, err := exec.Flush()
+			require.NoError(t, err)
+			require.Equal(t, tc.want, vector.MustFixedColNoTypeCheck[int64](result[0])[0])
+			result[0].Free(mp)
+			values.Free(mp)
+			exec.Free()
+			require.NoError(t, exec.(AllocationAccountOwner).ClearAllocationAccount(allocation))
+			finishTestAggregateAllocation(t, registry, account)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
+func TestCountDistinctNative0900CharEquivalentHashedBudget(t *testing.T) {
+	typ := types.NewWithCharsetVersion(types.T_char, 512, 0,
+		types.CharsetUTF8MB40900AI, types.CollationVersionV1)
+	suffix := strings.Repeat("x", 511)
+	run := func(last string, limit uint64, preload int) (uint64, error) {
+		mp := mpool.MustNewZero()
+		registry, err := mpool.NewAllocationAccountRegistry(1, 512)
+		require.NoError(t, err)
+		account, err := registry.Open(limit)
+		require.NoError(t, err)
+		allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup,
+			AllocationAccountSites{VectorData: 1, VectorArea: 2, VectorNulls: 3,
+				VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6})
+		require.NoError(t, err)
+		items := make([]string, 0, 9)
+		for ch := byte('a'); ch <= 'h'; ch++ {
+			items = append(items, string(ch)+suffix)
+		}
+		items = append(items, last+suffix)
+		values := testutil.NewStringVector(len(items), typ, mp, false, nil, items)
+		exec := newCountColumnExec(mp, AggIdOfCountColumn, true, []types.Type{typ})
+		require.NoError(t, exec.(AllocationAccountOwner).SetAllocationAccount(allocation))
+		require.NoError(t, exec.GroupGrow(1))
+		if preload > 0 {
+			seedItems := make([]string, preload)
+			seedGroups := make([]uint64, preload)
+			for i := range seedItems {
+				seedItems[i] = strconv.Itoa(i) + "-" + strings.Repeat("s", 500)
+				seedGroups[i] = 1
+			}
+			seeds := testutil.NewStringVector(preload, typ, mp, false, nil, seedItems)
+			err = exec.(BatchCapacityPreflight).PreflightBatchFill(
+				0, seedGroups, []*vector.Vector{seeds})
+			if err == nil {
+				err = exec.BatchFill(0, seedGroups, []*vector.Vector{seeds})
+			}
+			seeds.Free(mp)
+			require.NoError(t, err)
+		}
+		groups := []uint64{1, 1, 1, 1, 1, 1, 1, 1, 1}
+		err = exec.(BatchCapacityPreflight).PreflightBatchFill(
+			0, groups, []*vector.Vector{values})
+		used := account.Snapshot().Peak
+		values.Free(mp)
+		exec.Free()
+		require.NoError(t, exec.(AllocationAccountOwner).ClearAllocationAccount(allocation))
+		finishTestAggregateAllocation(t, registry, account)
+		require.Zero(t, mp.CurrNB())
+		return used, err
+	}
+	// 34 published seeds place the resident arena at a relocation boundary:
+	// a real ninth key grows it, while an equivalent CHAR does not.
+	const preload = 34
+	exact, err := run("a", 128<<20, preload)
+	require.NoError(t, err)
+	unique, err := run("z", 128<<20, preload)
+	require.NoError(t, err)
+	require.Greater(t, unique, exact)
+	equivalent, err := run("A", 128<<20, preload)
+	require.NoError(t, err)
+	require.Equal(t, exact, equivalent,
+		"an equivalent CHAR must not reserve a ninth resident DISTINCT key")
+	_, err = run("A", exact, preload)
+	require.NoError(t, err)
+	_, err = run("z", exact, preload)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+}
+
 func TestCountDistinctFloat64SignedZeroSurvivesIntermediateMerge(t *testing.T) {
 	mp := mpool.MustNewZero()
 	makePartial := func(value float64) []byte {

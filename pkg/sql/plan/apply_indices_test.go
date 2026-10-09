@@ -9927,7 +9927,7 @@ func TestNative0900SecondaryIndexRejectsDifferentQueryDomain(t *testing.T) {
 	require.NoError(t, err)
 	storedFilter, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*planpb.Expr{storedColumnKey, storedValueKey})
 	require.NoError(t, err)
-	require.False(t, regularIndexFilterHasMismatchedNativeDomain(storedFilter, table))
+	require.False(t, indexFilterHasMismatchedNativeDomain(storedFilter, table))
 
 	queryColumnKey, err := makeNativeCollationKeyExpr(ctx.GetContext(), DeepCopyExpr(column), query)
 	require.NoError(t, err)
@@ -9935,10 +9935,67 @@ func TestNative0900SecondaryIndexRejectsDifferentQueryDomain(t *testing.T) {
 	require.NoError(t, err)
 	queryFilter, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*planpb.Expr{queryColumnKey, queryValueKey})
 	require.NoError(t, err)
-	require.True(t, regularIndexFilterHasMismatchedNativeDomain(queryFilter, table))
+	require.True(t, indexFilterHasMismatchedNativeDomain(queryFilter, table))
 	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, true)
 	node := &planpb.Node{NodeId: 7, TableDef: table, FilterList: []*planpb.Expr{queryFilter}}
 	require.Equal(t, int32(7), builder.applyIndicesForFiltersRegularIndex(7, node, nil, nil))
+}
+
+func TestNative0900MasterIndexRejectsDifferentQueryDomain(t *testing.T) {
+	stored := planpb.Type{Id: int32(types.T_varchar), Width: 32,
+		Charset:          uint32(types.CharsetUTF8MB40900AI),
+		CollationVersion: uint32(types.CollationVersionV1)}
+	queryBin := stored
+	queryBin.Charset = uint32(types.CharsetUTF8MB40900Bin)
+	planAccess := func(queryType planpb.Type) (int32, int32) {
+		ctx := NewMockCompilerContext(true)
+		builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, true)
+		bindCtx := NewBindContext(builder, nil)
+		tag := builder.genNewBindTag()
+		table := &planpb.TableDef{
+			Name: "t",
+			Cols: []*planpb.ColDef{
+				{Name: "name", Typ: stored, Seqnum: 0},
+				{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}, Seqnum: 1},
+			},
+			Name2ColIndex: map[string]int32{"name": 0, "id": 1},
+			Pkey:          &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+			KeyFormat:     uint32(types.PADSpaceKeyV1),
+			Indexes: []*planpb.IndexDef{{
+				IndexName: "idx_master", IndexAlgo: catalog.MOIndexMasterAlgo.ToString(),
+				IndexTableName: "__mo_master_idx", Parts: []string{"name"},
+				KeyFormat: uint32(types.PADSpaceKeyV1), TableExist: true,
+			}},
+		}
+		registerMockIndexTable(t, builder, "__mo_master_idx")
+		column := GetColExpr(stored, tag, 0)
+		column.GetCol().Name = "name"
+		value := MakePlan2StringConstExprWithType("A")
+		value.Typ = stored
+		columnKey, err := makeNativeCollationKeyExpr(ctx.GetContext(), column, queryType)
+		require.NoError(t, err)
+		valueKey, err := makeNativeCollationKeyExpr(ctx.GetContext(), value, queryType)
+		require.NoError(t, err)
+		filter, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*planpb.Expr{columnKey, valueKey})
+		require.NoError(t, err)
+		require.True(t, indexPhysicalKeyFormatUsable(table.Indexes[0], table))
+		require.NotNil(t, indexFilterColumn(filter.GetF().Args[0]))
+		require.True(t, isRuntimeConstExpr(filter.GetF().Args[1]))
+		scanID := builder.appendNode(&planpb.Node{
+			NodeType: planpb.Node_TABLE_SCAN,
+			ObjRef:   &planpb.ObjectRef{SchemaName: "test", ObjName: "t"},
+			TableDef: table, BindingTags: []int32{tag},
+			FilterList: []*planpb.Expr{filter},
+		}, bindCtx)
+		return scanID, builder.applyIndicesForFilters(scanID,
+			builder.qry.Nodes[scanID], nil, nil)
+	}
+	storedScan, storedAccess := planAccess(stored)
+	require.NotEqual(t, storedScan, storedAccess,
+		"same-domain master index must remain eligible")
+	binScan, binAccess := planAccess(queryBin)
+	require.Equal(t, binScan, binAccess,
+		"different-domain master probe must fall back to the scan")
 }
 
 func TestCanonicalRangeOp(t *testing.T) {

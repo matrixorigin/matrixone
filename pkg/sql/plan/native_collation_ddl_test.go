@@ -10,26 +10,52 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 )
 
-func TestExplicitTableCollationUsesVersionedSemanticIdentity(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
-	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL,
-		"create table t (name varchar(32)) collate utf8mb4_general_ci", 1)
-	require.NoError(t, err)
-	p, err := BuildPlan(ctx, stmt, false)
-	require.NoError(t, err)
-	def := p.GetDdl().GetCreateTable().GetTableDef()
-	require.NotNil(t, def)
-	require.Equal(t, uint32(types.CollationVersionV1), def.Cols[0].Typ.CollationVersion)
+func TestExplicitTableCollationUsesRequestedSemanticIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		version uint8
+	}{
+		{"utf8mb4_general_ci", types.CollationVersionLegacy},
+		{"utf8mb4_bin", types.CollationVersionLegacy},
+		{"utf8mb4_0900_ai_ci", types.CollationVersionV1},
+		{"utf8mb4_0900_bin", types.CollationVersionV1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := NewMockCompilerContext(true)
+			stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL,
+				"create table t (name varchar(32)) collate "+tc.name, 1)
+			require.NoError(t, err)
+			p, err := BuildPlan(ctx, stmt, false)
+			stmt.Free()
+			require.NoError(t, err)
+			def := p.GetDdl().GetCreateTable().GetTableDef()
+			require.NotNil(t, def)
+			require.Equal(t, uint32(tc.version), def.Cols[0].Typ.CollationVersion)
+		})
+	}
 }
 
-func TestExplicitColumnCollationUsesVersionedSemanticIdentity(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
-	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL,
-		"create table t (name varchar(32) collate utf8mb4_general_ci)", 1)
-	require.NoError(t, err)
-	p, err := BuildPlan(ctx, stmt, false)
-	require.NoError(t, err)
-	def := p.GetDdl().GetCreateTable().GetTableDef()
-	require.NotNil(t, def)
-	require.Equal(t, uint32(types.CollationVersionV1), def.Cols[0].Typ.CollationVersion)
+func TestExplicitColumnCollationUsesRequestedSemanticIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		version uint8
+	}{
+		{"utf8mb4_general_ci", types.CollationVersionLegacy},
+		{"utf8mb4_bin", types.CollationVersionLegacy},
+		{"utf8mb4_0900_ai_ci", types.CollationVersionV1},
+		{"utf8mb4_0900_bin", types.CollationVersionV1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := NewMockCompilerContext(true)
+			stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL,
+				"create table t (name varchar(32) collate "+tc.name+")", 1)
+			require.NoError(t, err)
+			p, err := BuildPlan(ctx, stmt, false)
+			stmt.Free()
+			require.NoError(t, err)
+			def := p.GetDdl().GetCreateTable().GetTableDef()
+			require.NotNil(t, def)
+			require.Equal(t, uint32(tc.version), def.Cols[0].Typ.CollationVersion)
+		})
+	}
 }

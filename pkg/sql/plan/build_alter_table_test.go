@@ -166,18 +166,18 @@ func TestAlterTableCharsetConversionRebuildsNativePhysicalKeys(t *testing.T) {
 	legacy := tree.NewTableOptionCharsetConversionWithCollation("utf8mb4", "utf8mb4_general_ci")
 	require.NoError(t, applyAlterTableCharsetConversion(context.Background(), table, legacy))
 	require.Equal(t, uint32(types.CharsetUTF8), table.DefaultCharset)
-	require.Equal(t, uint32(types.CollationVersionV1), table.CollationVersion)
+	require.Equal(t, uint32(types.CollationVersionLegacy), table.CollationVersion)
 	require.Equal(t, uint32(types.CharsetUTF8), FindColumn(table.Cols, "name").Typ.Charset)
-	// general-ci is part of the corrected V1 delivery, so converting from
-	// native 0900 keeps a hidden physical key and the same tuple format.
-	require.NotNil(t, table.Pkey.CompPkeyCol)
-	require.True(t, table.Pkey.CompPkeyCol.Hidden)
-	require.Equal(t, catalog.CPrimaryKeyColName, table.Pkey.PkeyColName)
+	require.Equal(t, uint32(types.CollationVersionLegacy), FindColumn(table.Cols, "name").Typ.CollationVersion)
+	// A single legacy text PK returns to its direct physical representation.
+	require.Nil(t, table.Pkey.CompPkeyCol)
+	require.Equal(t, "name", table.Pkey.PkeyColName)
 	require.Equal(t, int32(1), table.Name2ColIndex["name"])
-	require.Equal(t, int32(2), table.Name2ColIndex[catalog.CPrimaryKeyColName])
-	require.False(t, FindColumn(table.Cols, "name").Primary)
-	require.Equal(t, uint32(types.PADSpaceKeyV1), table.KeyFormat)
-	require.Equal(t, uint32(types.PADSpaceKeyV1), table.Indexes[0].KeyFormat)
+	_, hiddenNamePresent := table.Name2ColIndex[catalog.CPrimaryKeyColName]
+	require.False(t, hiddenNamePresent)
+	require.True(t, FindColumn(table.Cols, "name").Primary)
+	require.Equal(t, uint32(types.LegacyKeyFormat), table.KeyFormat)
+	require.Equal(t, uint32(types.LegacyKeyFormat), table.Indexes[0].KeyFormat)
 }
 
 func TestAlterTableCharsetConversionRequiresCopy(t *testing.T) {
