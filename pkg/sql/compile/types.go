@@ -345,7 +345,7 @@ type Compile struct {
 	// resultMetadataFrozen is set once a streaming consumer has materialized or
 	// sent the current result schema. A definition retry may continue only when
 	// the rebuilt logical plan exposes identical result metadata.
-	resultMetadataFrozen bool
+	resultMetadataFrozen atomic.Bool
 	// planGenerationRebuilt is sticky for this Compile. Once a retry rebuilds
 	// its logical plan, any frontend-owned prepared plan or physical topology
 	// from the previous generation must not be reused.
