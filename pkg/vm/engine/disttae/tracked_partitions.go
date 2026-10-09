@@ -15,6 +15,7 @@
 package disttae
 
 import (
+	"context"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -50,6 +51,13 @@ type SnapshotManager struct {
 	config  SnapshotGCConfig
 	state   SnapshotGCState
 	metrics SnapshotMetrics
+
+	lifecycleMu sync.Mutex
+	ctx         context.Context
+	cancel      context.CancelFunc
+	closeOnce   sync.Once
+	closed      atomic.Bool
+	workers     sync.WaitGroup
 }
 
 // NewTrackedPartition creates a new TrackedPartition
@@ -86,10 +94,26 @@ func (tp *TrackedPartition) GetAge() time.Duration {
 
 // NewSnapshotManager creates a new SnapshotManager
 func NewSnapshotManager() *SnapshotManager {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &SnapshotManager{
 		tables: make(map[[2]uint64]*TrackedPartitions),
 		config: DefaultSnapshotGCConfig(),
+		ctx:    ctx,
+		cancel: cancel,
 	}
+}
+
+func (sm *SnapshotManager) Close() {
+	sm.closeOnce.Do(func() {
+		sm.lifecycleMu.Lock()
+		sm.closed.Store(true)
+		cancel := sm.cancel
+		sm.lifecycleMu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+		sm.workers.Wait()
+	})
 }
 
 // Init initializes the snapshot manager with configuration
@@ -286,34 +310,41 @@ func (sm *SnapshotManager) Add(
 
 // MaybeStartGC checks if GC should run and starts it if needed
 func (sm *SnapshotManager) MaybeStartGC() {
-	if !sm.config.Enabled {
+	sm.lifecycleMu.Lock()
+	defer sm.lifecycleMu.Unlock()
+	if sm.closed.Load() || !sm.config.Enabled {
 		return
 	}
 
-	// Check if enough time has passed since last GC
+	// Check if enough time has passed since last GC.
 	lastGCTime := time.Unix(0, sm.state.lastGCTime.Load())
 	if time.Since(lastGCTime) < sm.config.GCInterval {
 		return
 	}
 
-	// Check if GC is already running
-	if sm.state.gcRunning.Load() {
+	// Admission and the running bit are one transition. A Load followed by a
+	// Store allows concurrent callers to launch duplicate GC workers.
+	if !sm.state.gcRunning.CompareAndSwap(false, true) {
 		return
 	}
-
-	// Update last GC time and mark as running
 	sm.state.lastGCTime.Store(time.Now().UnixNano())
-	sm.state.gcRunning.Store(true)
+	sm.workers.Add(1)
+	ownerCtx := sm.ctx
 
-	// Run GC asynchronously
+	// Run GC asynchronously.
 	go func() {
+		defer sm.workers.Done()
 		defer sm.state.gcRunning.Store(false)
-		sm.RunGC()
+		sm.runGC(ownerCtx)
 	}()
 }
 
 // RunGC performs garbage collection on all tracked partitions
 func (sm *SnapshotManager) RunGC() {
+	sm.runGC(context.Background())
+}
+
+func (sm *SnapshotManager) runGC(ctx context.Context) {
 	startTime := time.Now()
 	maxAge := sm.config.MaxAge
 
@@ -338,6 +369,10 @@ func (sm *SnapshotManager) RunGC() {
 
 	// Process each table
 	for _, tableKey := range tables {
+		if err := ctx.Err(); err != nil {
+			logutil.Info("Snapshot-GC-Canceled", zap.Error(err))
+			return
+		}
 		sm.Lock()
 		tblSnaps, exists := sm.tables[tableKey]
 		sm.Unlock()
