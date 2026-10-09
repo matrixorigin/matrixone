@@ -981,6 +981,22 @@ func NewMockCompilerContext(isDml bool, proc *process.Process) *MockCompilerCont
 		pks: []int{0},
 	}
 
+	// A synthetic-PK table without any usable unique key exercises the legacy
+	// plain-insert fallback.  The stored generated column lets planner tests
+	// verify that an INSERT ... (generated_col) VALUES(DEFAULT) source is
+	// trimmed consistently before that fallback is built.
+	constraintTestSchema["fake_pk_no_unique_gen"] = &Schema{
+		tblId: 88903,
+		cols: []col{
+			{"a", types.T_int32, true, 32, 0},
+			{"g", types.T_int32, true, 32, 0},
+			{catalog.FakePrimaryKeyColName, types.T_uint64, false, 0, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks:     []int{2},
+		genCols: map[int]int{1: 0},
+	}
+
 	/*
 		create table fake_pk_comp (
 			a int,
