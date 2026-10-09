@@ -275,7 +275,7 @@ func (c *Compile) SetPlanGenerationReused(reused bool) {
 // frontend or another streaming consumer.
 func (c *Compile) FreezeResultMetadata() {
 	if c != nil {
-		c.resultMetadataFrozen = true
+		c.resultMetadataFrozen.Store(true)
 	}
 }
 
@@ -312,7 +312,7 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	c.clearLoadUniqueIndexPromotion()
 	c.executionGeneration = 0
 	c.retryTimes = 0
-	c.resultMetadataFrozen = false
+	c.resultMetadataFrozen.Store(false)
 	c.anal.Reset(c.isPrepare, c.IsTpQuery())
 
 	if c.lockMeta != nil {
@@ -523,7 +523,7 @@ func (c *Compile) clear() {
 	c.planGenerationReused = false
 	c.stringShuffleHashAlgorithm = process.StringShuffleHashLegacy
 	c.stringShuffleHashAlgorithmFrozen = false
-	c.resultMetadataFrozen = false
+	c.resultMetadataFrozen.Store(false)
 	c.planGenerationRebuilt = false
 	c.sequenceState = sequenceStatementState{}
 
@@ -7196,8 +7196,17 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 		return rs
 	}
 
-	if rs[0].RootOp.OpType() == vm.Product {
-		return c.compileSharedBroadcastProduct(node, rs, buildScopes[0])
+	stageNodes := c.queryWorkerStageNodes()
+	probeScopeGroups := c.groupBroadcastProbeScopesByCN(rs, stageNodes)
+	probeType := rs[0].RootOp.OpType()
+	// A HashBuild shared by independent colocated probes cannot belong to
+	// one consumer: that consumer may finish without calling its child, while
+	// a peer still needs the build. Reuse the common producer-region owner.
+	// Limit the extension to the HashJoin/LoopJoin lifecycle domain; other
+	// operators keep their existing ownership and execution placement.
+	if probeType == vm.Product ||
+		((probeType == vm.HashJoin || probeType == vm.LoopJoin) && hasMultiScopeGroup(probeScopeGroups)) {
+		return c.compileSharedBroadcastJoin(node, rs, buildScopes[0], probeScopeGroups)
 	}
 
 	buildScopeAttached := false
@@ -7212,9 +7221,7 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 		rs[0].PreScopes = append(rs[0].PreScopes, buildScopes[0])
 	}
 
-	stageNodes := c.queryWorkerStageNodes()
 	buildOpScopes := make([]*Scope, 0, len(stageNodes))
-	probeScopeGroups := c.groupBroadcastProbeScopesByCN(rs, stageNodes)
 
 	if len(rs) > len(stageNodes) || hasMultiScopeGroup(probeScopeGroups) {
 		for _, tmp := range probeScopeGroups {
@@ -7270,7 +7277,7 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 	return rs
 }
 
-// pendingProductBuild owns detached producers only during compilation.
+// pendingProductBuild owns detached shared HashBuild producers only during compilation.
 // Probe templates are non-owning references used to finalize worker counts.
 type pendingProductBuild struct {
 	source *Scope
@@ -7280,8 +7287,7 @@ type pendingProductBuild struct {
 
 // Keep the data plane parallel; choose producer ownership only after downstream
 // Group, Limit, Sort and Join placement is complete.
-func (c *Compile) compileSharedBroadcastProduct(node *plan.Node, probes []*Scope, source *Scope) []*Scope {
-	groups := c.groupBroadcastProbeScopesByCN(probes, c.queryWorkerStageNodes())
+func (c *Compile) compileSharedBroadcastJoin(node *plan.Node, probes []*Scope, source *Scope, groups [][]*Scope) []*Scope {
 	pending := &pendingProductBuild{source: source, groups: groups}
 	c.pendingProductBuilds = append(c.pendingProductBuilds, pending)
 	for _, group := range groups {
@@ -7294,16 +7300,33 @@ func (c *Compile) compileSharedBroadcastProduct(node *plan.Node, probes []*Scope
 		build.setRootOperator(constructJoinBuildOperator(c, group[0].RootOp, 0, node.RuntimeFilterBuildList))
 		pending.builds = append(pending.builds, build)
 	}
-	// Dispatch is wired now, while the Product still owns the join-node analysis.
-	// Run dispatch locally so independent remote build/probe fragments share only
-	// the existing statement MessageBoard, never a foreign in-process receiver.
-	if !sameExecutionNode(source.NodeInfo, toEngineNode(c.currentCNWorker())) {
+	// Dispatch is wired now, while the probe still owns the join-node analysis.
+	// Preserve the existing Product placement. HashJoin/LoopJoin keep the source
+	// on its original CN instead of relaying the build payload via the coordinator.
+	isProduct := probes[0].RootOp.OpType() == vm.Product
+	if isProduct && !sameExecutionNode(source.NodeInfo, toEngineNode(c.currentCNWorker())) {
 		source = c.newMergeScope([]*Scope{source})
 		pending.source = source
 	}
 	dispatchOp := constructDispatch(0, pending.builds, source, node, false)
 	dispatchOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
 	source.setRootOperator(dispatchOp)
+	if !isProduct {
+		// A build, unlike a probe, must consume the source to completion. Put
+		// the source under the independent build on the same CN (or the first
+		// build when no probe uses that CN, as in the original placement). The
+		// local Dispatch receiver then stays in the same RemoteRun scope tree.
+		owner := pending.builds[0]
+		for _, build := range pending.builds {
+			if sameExecutionNode(source.NodeInfo, build.NodeInfo) {
+				owner = build
+				break
+			}
+		}
+		owner.PreScopes = append(owner.PreScopes, source)
+		owner.ConcurrentPreScopes = true
+		pending.source = nil // ownership transferred to pending.builds
+	}
 	return probes
 }
 
@@ -7356,7 +7379,9 @@ func (c *Compile) finishProductBuilds(scopes []*Scope, mergeResults bool) []*Sco
 		// Build connectors belong to the job, not to the result receiver set. Thus
 		// ordinary/ordered/partial result merges retain their existing semantics.
 		job := c.newMergeScope(pending.builds)
-		job.PreScopes = append(job.PreScopes, pending.source)
+		if pending.source != nil {
+			job.PreScopes = append(job.PreScopes, pending.source)
+		}
 		job.ConcurrentPreScopes = true
 		if c.auxiliaryProductScopes == nil {
 			c.auxiliaryProductScopes = make(map[*Scope]bool)

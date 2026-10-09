@@ -284,7 +284,7 @@ type scopeContext struct {
 // Compile contains all the information needed for compilation.
 type Compile struct {
 	scopes []*Scope
-	// Shared Product producers are attached after downstream placement.
+	// Shared broadcast HashBuild producers are attached after downstream placement.
 	pendingProductBuilds []*pendingProductBuild
 	// Non-owning producer regions: true marks an independent auxiliary job;
 	// false marks its result owner for original-error arbitration.
@@ -345,7 +345,7 @@ type Compile struct {
 	// resultMetadataFrozen is set once a streaming consumer has materialized or
 	// sent the current result schema. A definition retry may continue only when
 	// the rebuilt logical plan exposes identical result metadata.
-	resultMetadataFrozen bool
+	resultMetadataFrozen atomic.Bool
 	// planGenerationRebuilt is sticky for this Compile. Once a retry rebuilds
 	// its logical plan, any frontend-owned prepared plan or physical topology
 	// from the previous generation must not be reused.

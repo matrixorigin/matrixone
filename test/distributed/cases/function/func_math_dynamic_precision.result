@@ -57,5 +57,27 @@ select a,d,round(a,d),truncate(a,d),round(b,d),truncate(b,d),round(c,d),truncate
 1.00  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
 149.55  ¦  -1  ¦  150.00  ¦  140.00  ¦  150.00  ¦  140.00  ¦  150.00  ¦  140.00  𝄀
 9999999999999999.99  ¦  2  ¦  9999999999999999.99  ¦  9999999999999999.99  ¦  999999999999999999999999999999999999.99  ¦  999999999999999999999999999999999999.99  ¦  999999999999999999999999999999999999999999999999999999999999999.99  ¦  999999999999999999999999999999999999999999999999999999999999999.99
+create table precision_decimal_int(a decimal(10,4), d int);
+insert into precision_decimal_int values (1.2345,2),(1.2395,2),(123.4567,-1),(2.9876,null);
+select a,d,truncate(a,d) from precision_decimal_int order by a;
+➤ a[3,10,4]  ¦  d[4,32,0]  ¦  truncate(a, d)[3,10,4]  𝄀
+1.2345  ¦  2  ¦  1.2300  𝄀
+1.2395  ¦  2  ¦  1.2300  𝄀
+2.9876  ¦  null  ¦  null  𝄀
+123.4567  ¦  -1  ¦  120.0000
+select a,d,truncate(a,d + 0) from precision_decimal_int order by a;
+➤ a[3,10,4]  ¦  d[4,32,0]  ¦  truncate(a, d + 0)[3,10,4]  𝄀
+1.2345  ¦  2  ¦  1.2300  𝄀
+1.2395  ¦  2  ¦  1.2300  𝄀
+2.9876  ¦  null  ¦  null  𝄀
+123.4567  ¦  -1  ¦  120.0000
+select sum(case
+when d = 2 and truncate(a,d) = 1.2300 and truncate(a,d + 0) = 1.2300 then 0
+when d = -1 and truncate(a,d) = 120.0000 and truncate(a,d + 0) = 120.0000 then 0
+when d is null and truncate(a,d) is null and truncate(a,d + 0) is null then 0
+else 1
+end) as mismatches from precision_decimal_int;
+➤ mismatches[3,38,0]  𝄀
+0
 set optimizer_hints = @saved_optimizer_hints;
 drop database math_dynamic_precision;

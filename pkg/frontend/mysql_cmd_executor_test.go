@@ -3850,7 +3850,7 @@ func Test_GetComputationWrapper(t *testing.T) {
 	convey.Convey("GetComputationWrapper succ", t, func() {
 		db, sql, user := "T", "SHOW TABLES", "root"
 		var eng engine.Engine
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 		sysVars := make(map[string]interface{})
 		for name, sysVar := range gSysVarsDefs {
@@ -3873,7 +3873,7 @@ func Test_GetComputationWrapper(t *testing.T) {
 }
 
 func TestGetComputationWrapperBypassesCacheForSetExpression(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	sysVars := make(map[string]interface{})
 	for name, sysVar := range gSysVarsDefs {
 		sysVars[name] = sysVar.Default
@@ -3911,7 +3911,7 @@ func TestGetComputationWrapperKeepsSchedulingSQLPerStatement(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	execCtx := newTestExecCtx(ctx, ctrl)
 	execCtx.ses = ses
 	execCtx.input = &UserInput{sql: "select /*+ SET_VAR(query_max_workers=1) */ 1;; " +
@@ -3946,7 +3946,7 @@ func TestGetComputationWrapperKeepsExecutableCommentStatementWhole(t *testing.T)
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	execCtx := newTestExecCtx(ctx, ctrl)
 	execCtx.ses = ses
 	const sql = "/*!40101 use mysql_ddl_test_db_3; */"
@@ -3969,7 +3969,7 @@ func TestGetComputationWrapperKeepsRemapPerStatement(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
 	require.NoError(t, ses.SetSessionSysVar(ctx, "enable_remap_hint", int64(1)))
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 	tests := []struct {
 		name string
@@ -4032,7 +4032,7 @@ func TestGetComputationWrapperUsesRequestRewriteSnapshot(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
 	ses.rewriteEnabled.Store(false)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 	execCtx := newTestExecCtx(ctx, ctrl)
 	execCtx.ses = ses
@@ -4212,7 +4212,7 @@ func TestGetComputationWrapperRestoresStatementRemapOnPlanCacheHit(t *testing.T)
 	ses := newTestSession(t, ctrl)
 	ses.planCache = newPlanCache(1)
 	require.NoError(t, ses.SetSessionSysVar(ctx, "enable_remap_hint", int64(1)))
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	sql := `/*+ {"remapdb":{"src":"first_db"}} */ select * from src.t; ` +
 		`/*+ {"remapdb":{"src":"second_db"}} */ /* cloud_nonuser */ select * from src.t`
 	input := &UserInput{sql: sql}
@@ -4273,7 +4273,7 @@ func TestRebuildStaleCachedStatementsTransfersOwnership(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			ses := newTestSession(t, ctrl)
 			ses.planCache = newPlanCache(2)
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			input := &UserInput{sql: testCase.cachedSQL}
 			input.genHash()
 
@@ -4368,7 +4368,7 @@ func TestGetComputationWrapperRestoresCachedPlanGenerationSnapshot(t *testing.T)
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
 	ses.planCache = newPlanCache(1)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	input := &UserInput{sql: "select 1"}
 	input.genHash()
 	stmt := &trackedStatement{}
@@ -4567,7 +4567,7 @@ func TestGetComputationWrapperRestoresPreparedStatementRemap(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	stmt := &tree.Select{}
 	prepareString := tree.NewPrepareString("stmt1", "select 1")
 	preparePlan, err := buildPlan(ctx, nil, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), prepareString)
@@ -4610,7 +4610,7 @@ func Test_GetComputationWrapper_ShowVariablesGlobal(t *testing.T) {
 	convey.Convey("GetComputationWrapper show global variables", t, func() {
 		sql := "show global variables like 'interactive_timeout'"
 		var eng engine.Engine
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 		sysVars := make(map[string]interface{})
 		for name, sysVar := range gSysVarsDefs {
@@ -4643,7 +4643,7 @@ func Test_GetComputationWrapper_InternalCmds(t *testing.T) {
 	convey.Convey("GetComputationWrapper internal commands", t, func() {
 		db, user := "T", "root"
 		var eng engine.Engine
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 		sysVars := make(map[string]interface{})
 		for name, sysVar := range gSysVarsDefs {
@@ -11774,13 +11774,6 @@ func TestWriteExplainJSONMalformedLiteralHasNoResult(t *testing.T) {
 	require.Equal(t, uint64(0), ses.GetMysqlResultSet().GetColumnCount())
 }
 
-type statsAdmissionStopResponse struct {
-	Responser
-	err error
-}
-
-func (r *statsAdmissionStopResponse) RespPreMeta(*ExecCtx, any) error { return r.err }
-
 func TestOrdinaryCacheStatsAdmissionUsesGenerationBaseline(t *testing.T) {
 	for _, tc := range []struct {
 		name, sql string
@@ -11802,8 +11795,6 @@ func TestOrdinaryCacheStatsAdmissionUsesGenerationBaseline(t *testing.T) {
 			ses.SetDatabaseName("tpch")
 			ses.GetTxnCompileCtx().SetDatabase("tpch")
 			defer ses.GetTxnCompileCtx().Close()
-			stop := fmt.Errorf("stop after compile before result execution")
-			ec.resper = &statsAdmissionStopResponse{Responser: ses.GetResponser(), err: stop}
 			_, table, err := base.Resolve("tpch", "nation", nil)
 			require.NoError(t, err)
 			installStatsAdmissionStorage(t, ses, table, func() *pbstats.StatsInfo { return ctx.stats })
@@ -11832,8 +11823,12 @@ func TestOrdinaryCacheStatsAdmissionUsesGenerationBaseline(t *testing.T) {
 			require.True(t, cw.planGenerationReused)
 			ec.cw, ec.cws, ec.stmt = cw, cws, cw.GetAst()
 			ctx.stats.TableCnt = tc.rows
-			err = dispatchStmt(ses, statistic.NewStatsArray(), ec)
-			require.ErrorIs(t, err, stop)
+			// Validate the real admission phase before Compile. The storage mock
+			// cannot execute a pipeline, and metadata is published only during Run.
+			require.NoError(t, checkCachedStatementPlan(ses, ec))
+			compiled, err := cw.Compile(ec, ses.GetOutputCallback(ec))
+			require.NoError(t, err)
+			defer compiled.(*compile.Compile).Release()
 			if tc.rebuild {
 				require.NotSame(t, cached, cw.Plan())
 				require.False(t, cw.planGenerationReused)

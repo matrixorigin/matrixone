@@ -29,7 +29,7 @@ import (
 
 func TestScheduleSQLTaskCatchUpPersistsTriggerState(t *testing.T) {
 	oldFetchInterval := fetchInterval
-	fetchInterval = 100 * time.Millisecond
+	fetchInterval = 10 * time.Millisecond
 	t.Cleanup(func() {
 		fetchInterval = oldFetchInterval
 	})
@@ -90,7 +90,7 @@ func TestScheduleSQLTaskCatchUpPersistsTriggerState(t *testing.T) {
 
 func TestScheduleSQLTaskSkipsManualOnlyTask(t *testing.T) {
 	oldFetchInterval := fetchInterval
-	fetchInterval = 100 * time.Millisecond
+	fetchInterval = 10 * time.Millisecond
 	t.Cleanup(func() {
 		fetchInterval = oldFetchInterval
 	})

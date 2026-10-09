@@ -1704,13 +1704,13 @@ func writeCSV(
 				}
 				return
 			}
-			ep.BatchMap[bb.index] = bb.writeByte
+			ep.BatchMap[bb.index] = bb
 			for {
 				value, ok := ep.BatchMap[ep.WriteIndex.Load()+1]
 				if !ok {
 					break
 				}
-				if err2 := writeToCSVFile(ep, value); err2 != nil {
+				if err2 := writeExportBatchToFile(ep, value); err2 != nil {
 					select {
 					case writerErr <- err2:
 					default:

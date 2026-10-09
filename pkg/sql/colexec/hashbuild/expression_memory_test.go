@@ -167,7 +167,7 @@ func TestRecoveryProjectionUsesIncrementalPartialTail(t *testing.T) {
 }
 
 func TestExpressionRecoveryIncludesReplacementOverlap(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	expr := makeIssue26454ConcatKey(t, proc)
 	peak, err := expressionVectorPeak(proc, expr, 1024, false)

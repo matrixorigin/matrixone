@@ -643,14 +643,33 @@ func (ses *Session) setUserDefinedVarWithTypeAndKindAndReplayability(
 	}
 	ses.mu.Lock()
 	key := strings.ToLower(name)
-	if previous := ses.userDefinedVars[key]; previous != nil && !previous.Replayable {
+	previous := ses.userDefinedVars[key]
+	if previous != nil && !previous.Replayable {
 		replayable = false
+	}
+	regexpStringResult := userVariableRegexpStringResult(typ)
+	if value == nil && types.T(typ.Id) == types.T_any {
+		// MySQL retains result-category history for literal NULL, but that
+		// history must not become the current SQL conversion/parameter type.
+		regexpStringResult = true // First assignment starts as STRING_RESULT.
+		if previous != nil {
+			regexpStringResult = previous.RegexpStringResult || userVariableRegexpStringResult(previous.Type)
+			if previous.Type.Id == 0 && previous.Value != nil {
+				regexpStringResult = userVariableRegexpStringResult(inferUserDefinedVarType(previous.Value))
+			}
+		}
+		// Final SET NULL replay on a fresh session loses non-string history.
+		// Snapshot migration transports it independently and remains allowed.
+		if !regexpStringResult {
+			replayable = false
+		}
 	}
 	ses.userDefinedVars[key] = &UserDefinedVar{
 		Value:               value,
 		Sql:                 sql,
 		IsBin:               isBin,
 		Type:                typ,
+		RegexpStringResult:  regexpStringResult,
 		PrepareParamKind:    kind,
 		RuntimeStringDomain: runtimeDomain,
 		Replayable:          replayable,
@@ -2620,6 +2639,11 @@ func (ses *Session) GetOutputCallback(execCtx *ExecCtx) func(*batch.Batch, *perf
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return func(bat *batch.Batch, crs *perfcounter.CounterSet) error {
+		if execCtx != nil && execCtx.resultMetadata != nil && bat != nil && bat.RowCount() > 0 {
+			if err := execCtx.resultMetadata.publish(); err != nil {
+				return err
+			}
+		}
 		if execCtx != nil && execCtx.input != nil && execCtx.input.isCursorExecute {
 			if err := capturePreparedCursorBatch(ses, execCtx, bat); err != nil {
 				return err
