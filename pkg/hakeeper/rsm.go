@@ -66,6 +66,8 @@ type StateQuery struct {
 	// StateOnly omits the cluster snapshot for assertions that only consume State.
 	// The zero value retains the complete independent checker snapshot.
 	StateOnly bool
+	// Scheduling omits display-only configuration while retaining WAL recovery status.
+	Scheduling bool
 }
 type ScheduleCommandQuery struct{ UUID string }
 type CommandDeliveryStateQuery struct{}
@@ -1737,7 +1739,7 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 	}
 }
 
-func (s *stateMachine) handleStateQuery() interface{} {
+func (s *stateMachine) handleStateQuery(scheduling bool) interface{} {
 	internal := &pb.CheckerState{
 		Tick:                         s.state.Tick,
 		ClusterInfo:                  s.state.ClusterInfo,
@@ -1756,6 +1758,47 @@ func (s *stateMachine) handleStateQuery() interface{} {
 		IDWatermarkRestoreGeneration: s.state.IDWatermarkRestoreGeneration,
 		LogServiceRecoveryPrepared:   s.state.LogServiceRecoveryPrepared,
 		LogServiceRecoveryCompleted:  s.state.LogServiceRecoveryCompleted,
+	}
+	if scheduling {
+		// Copy records before projecting: the replicated authority and full
+		// configuration queries must remain unchanged. DeepCopy below detaches
+		// all remaining maps, items and protobuf unknown fields.
+		if len(s.state.CNState.Stores) != 0 {
+			internal.CNState.Stores = make(map[string]pb.CNStoreInfo, len(s.state.CNState.Stores))
+			for id, info := range s.state.CNState.Stores {
+				info.ConfigData = nil
+				internal.CNState.Stores[id] = info
+			}
+		}
+		if len(s.state.TNState.Stores) != 0 {
+			internal.TNState.Stores = make(map[string]pb.TNStoreInfo, len(s.state.TNState.Stores))
+			for id, info := range s.state.TNState.Stores {
+				info.ConfigData = nil
+				internal.TNState.Stores[id] = info
+			}
+		}
+		if len(s.state.ProxyState.Stores) != 0 {
+			internal.ProxyState.Stores = make(map[string]pb.ProxyStore, len(s.state.ProxyState.Stores))
+			for id, info := range s.state.ProxyState.Stores {
+				info.ConfigData = nil
+				internal.ProxyState.Stores[id] = info
+			}
+		}
+		if len(s.state.LogState.Stores) != 0 {
+			internal.LogState.Stores = make(map[string]pb.LogStoreInfo, len(s.state.LogState.Stores))
+			for id, info := range s.state.LogState.Stores {
+				config := info.ConfigData
+				info.ConfigData = nil
+				if config != nil {
+					if item, ok := config.Content[pb.WALRecoveryStatusConfigKey]; ok {
+						info.ConfigData = &pb.ConfigData{Content: map[string]*pb.ConfigItem{
+							pb.WALRecoveryStatusConfigKey: item,
+						}}
+					}
+				}
+				internal.LogState.Stores[id] = info
+			}
+		}
 	}
 	copied := deepcopy.Copy(internal)
 	result, ok := copied.(*pb.CheckerState)
@@ -1930,7 +1973,7 @@ func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
 		if q != nil && q.StateOnly {
 			return &pb.CheckerState{State: s.state.State}, nil
 		}
-		return s.handleStateQuery(), nil
+		return s.handleStateQuery(q != nil && q.Scheduling), nil
 	} else if q, ok := query.(*ScheduleCommandQuery); ok {
 		return s.handleScheduleCommandQuery(q.UUID), nil
 	} else if _, ok := query.(*CommandDeliveryStateQuery); ok {

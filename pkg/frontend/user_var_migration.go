@@ -47,6 +47,10 @@ func (ses *Session) hasUnreplayableMigrationUserVars() bool {
 		if variable == nil || !variable.Replayable {
 			return true
 		}
+		if variable.Value == nil && types.T(variable.Type.Id) == types.T_any &&
+			(!variable.RegexpStringResult || currentProtocolVersion(ses.proc) < defines.MORPCVersion108) {
+			return true // Legacy replay cannot preserve this result-category state.
+		}
 	}
 	return false
 }
@@ -92,6 +96,19 @@ func (ses *Session) snapshotUserDefinedVars(ctx context.Context) ([]*query.Migra
 		value, err := encodeUserDefinedVarValue(ctx, variable.Value, variable.IsBin)
 		if err != nil {
 			return nil, err
+		}
+		if variable.Value == nil && types.T(variable.Type.Id) == types.T_any && variable.RegexpStringResult {
+			if currentProtocolVersion(ses.proc) < defines.MORPCVersion108 {
+				// Older decoders accept typed NULL but drop this category on a
+				// subsequent snapshot. Do not silently lose history during upgrade.
+				return nil, moerr.NewNotSupportedf(ctx,
+					"user-variable NULL regexp history requires MORPC protocol version %d", defines.MORPCVersion108)
+			}
+			// The value and ordinary assignment type are separate wire fields.
+			// A typed NULL value preserves regexp STRING_RESULT history while
+			// item.Type remains ANY. Legacy value decoders already accept typed
+			// NULL and return nil before consulting its type.
+			value.Typ = plan.Type{Id: int32(types.T_text)}
 		}
 		typ := *plan2.DeepCopyType(&variable.Type)
 		item := &query.MigrateUserDefinedVar{
@@ -229,14 +246,19 @@ func decodeUserDefinedVars(
 		if typ.Id == 0 {
 			typ = inferUserDefinedVarType(value)
 		}
+		regexpStringResult := userVariableRegexpStringResult(typ)
+		if value == nil && types.T(typ.Id) == types.T_any && item.Value.GetLit().GetIsnull() {
+			regexpStringResult = types.T(item.Value.Typ.Id).IsMySQLString()
+		}
 		result[name] = &UserDefinedVar{
+			RegexpStringResult:  regexpStringResult,
 			Value:               value,
 			Sql:                 item.Sql,
 			IsBin:               item.IsBin,
 			Type:                typ,
 			PrepareParamKind:    vector.PrepareParamKind(item.PrepareParamKind),
 			RuntimeStringDomain: runtimeDomain,
-			Replayable:          replayable,
+			Replayable:          replayable && (value != nil || types.T(typ.Id) != types.T_any || regexpStringResult),
 		}
 	}
 	return result, nil
