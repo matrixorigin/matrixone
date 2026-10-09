@@ -11,6 +11,11 @@ Semantic authority remains #29449 document blob
 Native B, Sirius #27, merged as
 `5ea60cd31955d0dced2adcbcd3df0772207b79ef`, is the native dependency.
 
+Current delivery gate: C remains draft pending
+[Sirius #29](https://github.com/matrixorigin/sirius/pull/29), then a pin to its
+merged revision and final release validation. Joint development validation now
+passes all 22 native preparations and the complete public numeric fixture.
+
 ## Decision and invariant
 
 For each admitted embedded SELECT, validation, serialization, MO read
@@ -138,7 +143,7 @@ No direct-TAE, storage/directory-lock, Docker image/base or fallback work is
 introduced here. #28968 remains open until D acceptance; #28966 remains open
 through cutover, verified release availability and retirement.
 
-## Implementation evidence (2026-10-09)
+## Historical implementation evidence (2026-10-09)
 
 The implementation base is `83d82b8ee0cd694e0c6a7146902d74ae4dfb415a`.
 The selected native SDK is generated from clean merged Sirius
@@ -185,7 +190,8 @@ this change adds no shared mutable state, worker, wait or accumulating registry.
 The independent public error/reuse cases close the new error-class path without
 changing general frontend error policy.
 
-**Merge blocker:** `TestExactEmbeddedTPCHNativePreparation/q1` crashes in the
+**Original merge blocker, resolved by importer #5 / Sirius #28:**
+`TestExactEmbeddedTPCHNativePreparation/q1` crashed in the
 pinned importer's `SubstraitToDuckDB::TransformRootOp`. Its root-name iterator
 uses `SkipColumnNames` on DuckDB carrier types. Decimal256's private aliased
 four-field STRUCT carrier is an opaque Substrait user-defined scalar, so its
@@ -273,3 +279,42 @@ private STRUCT carrier. Correct that in the native expression owner using its
 top-level validity mask and the caller's stream/resource, then publish a
 separate prerequisite Sirius fix. Keep the public NULL-predicate assertion and
 merged-pin delivery gate; do not substitute a SQL rewrite or fallback.
+
+## Joint consumer validation and remaining delivery gate (2026-10-09)
+
+[Sirius #29](https://github.com/matrixorigin/sirius/pull/29), clean head
+`2a39339beb0c2312dc4b71fbdd472e822450637c`, fixes both remaining native
+consumers: exact NULL predicates use the canonical validity mask, and literal
+TRUE joins use constant equality keys in the existing GPU join. C retains its
+original JoinRel emission. Native tests cover INNER/LEFT/RIGHT/FULL joins,
+duplicate/NULL high-limb payloads and empty sides; FALSE/NULL predicates remain
+rejected before work starts. Native decimal inequality keys remain unsupported.
+
+The joint MO consumer at `6ef0aadea257eb5c7fa3988674b9c81902261a4d`
+passes all 22 native preparations with no reader/GPU work started and the full
+public MySQL numeric fixture. The fixture checks exact values and public
+metadata across all widths, arithmetic/aggregates/joins/sorting, NULL predicates,
+DATE extraction, empty/all-NULL scalar joins, operation-owned errors, healthy
+reuse, masked errors and prepared division increments 0/4/10/30/4. Its 31
+terminal events show capability 31, exact profile, real completed GPU tasks,
+no fallback, healthy cleanup and zero retained input/result credit.
+
+That joint check used an explicitly marked development SDK from merged #28
+plus the source now committed in #29. C's delivered gitlink remains merged
+`af4dc60152b3e14f263c7fe863b29ac7e154de30`; no unmerged native pin is
+delivered. At #29's clean head, production C ABI checks pass 1964 assertions /
+10 cases, exact/ordinary GPU controls pass 14879 / 11, and binding checks pass
+852 / 81. Eight SDK exporter tests, an independent C99 consumer and all 73
+clean SDK fingerprints pass. These local results do not imply compiler CI is
+green or establish D's SF1/SF10, lifecycle/resource or performance acceptance.
+
+The host's installed driver libraries differed from its loaded kernel driver.
+Local GPU validation used the matching official NVIDIA 615.71.09 CUDA/NVML
+libraries through a temporary test launcher. Their archive SHA-256 is
+`8cd4b1fb55057db60342dd8e8f16a01f84486b46ab88185bfc19046a1e996772`.
+Host packages were unchanged; these driver libraries are outside the repository
+and release artifacts. Normal SDK/source/artifact checks remained enabled.
+
+Next merge order: #29, C's merged pin plus release/owning-package/static
+delivery checks, then C. D begins after C merges; E/F remain behind their
+separate recovery-readiness design. Keep #28968 and #28966 open.
