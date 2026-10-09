@@ -282,7 +282,7 @@ func TestExplicitCastPreparedNumericTextUsesSourceKind(t *testing.T) {
 				},
 				NewFunctionTestResult(types.T_int64.ToType(), false, want, nil), NewExplicitCast)
 			testCase.parameters[0].SetPrepareParamKind(kind)
-			succeed, info := testCase.Run()
+			succeed, info := testCase.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -297,7 +297,7 @@ func TestExplicitCastPreparedNumericTextUsesSourceKind(t *testing.T) {
 				},
 				NewFunctionTestResult(types.T_uint64.ToType(), false, want, nil), NewExplicitCast)
 			testCase.parameters[0].SetPrepareParamKind(kind)
-			succeed, info := testCase.Run()
+			succeed, info := testCase.RunAndFree()
 			require.True(t, succeed, info)
 		})
 	}
@@ -329,7 +329,7 @@ func TestExplicitCastPreparedNumericTextUsesSourceKind(t *testing.T) {
 		testCase.parameters[0].SetPrepareParamKinds([]vector.PrepareParamKind{
 			vector.PrepareParamFloat, vector.PrepareParamDecimal, vector.PrepareParamNone,
 		})
-		succeed, info := testCase.Run()
+		succeed, info := testCase.RunAndFree()
 		require.True(t, succeed, info)
 	})
 }
@@ -351,6 +351,7 @@ func TestExplicitCastPreparedFloatOverflowKeepsRangeError(t *testing.T) {
 					NewFunctionTestInput(test.target, test.zero, nil),
 				},
 				NewFunctionTestResult(test.target, true, test.zero, nil), NewExplicitCast)
+			defer testCase.Free()
 			testCase.parameters[0].SetPrepareParamKind(vector.PrepareParamFloat)
 			require.NoError(t, testCase.result.PreExtendAndReset(testCase.fnLength))
 			err := testCase.fn(testCase.parameters, testCase.result, testCase.proc,
