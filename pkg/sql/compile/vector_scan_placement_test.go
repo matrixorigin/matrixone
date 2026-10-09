@@ -58,7 +58,7 @@ func vectorPlacementNode() *plan.Node {
 		ObjRef:          &plan.ObjectRef{SchemaName: "db", ObjName: "docs"},
 		TableDef:        &plan.TableDef{Name: "docs"},
 		Stats:           &plan.Stats{Outcnt: 10},
-		IndexSearchScan: &plan.IndexSearchScan{Index: &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()}},
+		IndexSearchScan: &plan.IndexSearchScan{Index: &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()}, AlgoOptions: []byte(`{}`)},
 	}
 }
 

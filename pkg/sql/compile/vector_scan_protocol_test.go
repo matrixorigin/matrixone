@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	motestutil "github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
@@ -308,7 +309,7 @@ func TestRequiredIVFWorkersRequireProtocol107(t *testing.T) {
 			v := vectorPlacementNode()
 			v.TableDef = &plan.TableDef{Cols: []*plan.ColDef{{Name: "pkid", Typ: typ}}}
 			v.ProjectList = []*plan.Expr{col(0)}
-			v.IndexSearchScan = &plan.IndexSearchScan{SourceTable: obj, SourceTableDef: def, Index: &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(), IndexAlgoParams: `{}`, Parts: []string{"v"}}, QueryPayload: &plan.Expr{Typ: def.Cols[1].Typ, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_VecVal{VecVal: "[0]"}}}}, ScanWork: &plan.IndexSearchScanWork{Objects: 2, Blocks: 2, Rows: 10, VectorBytesPerRow: 512}}
+			v.IndexSearchScan = &plan.IndexSearchScan{SourceTable: obj, SourceTableDef: def, Index: &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(), IndexAlgoParams: `{}`, Parts: []string{"v"}}, QueryPayload: &plan.Expr{Typ: def.Cols[1].Typ, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_VecVal{VecVal: "[0]"}}}}, ScanWork: &plan.IndexSearchScanWork{Objects: 2, Blocks: 2, Rows: 10, VectorBytesPerRow: 512}, AlgoOptions: []byte(`{}`)}
 			rf := &plan.RuntimeFilterSpec{Tag: 7, MustApply: true, UseMembershipFilter: true, Expr: col(0)}
 			v.RuntimeFilterProbeList = []*plan.RuntimeFilterSpec{rf}
 			q := &plan.Query{StmtType: plan.Query_SELECT, Steps: []int32{4}, Nodes: []*plan.Node{scan(), v, scan(), {NodeType: plan.Node_JOIN, JoinType: plan.Node_SEMI, Children: []int32{1, 2}, ProjectList: []*plan.Expr{col(0)}, OnList: eq(), RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{rf}}, {NodeType: plan.Node_JOIN, JoinType: plan.Node_INNER, Children: []int32{0, 3}, OnList: eq()}}}
@@ -354,4 +355,31 @@ func TestApplyIndexSearchScanRequiresProtocol107(t *testing.T) {
 	require.Zero(t, minimumRemoteVectorProtocol(root))
 	apply.InstructionList[0].Apply = nil
 	require.Zero(t, minimumRemoteVectorProtocol(root))
+}
+
+// An index search scan without algo_options was planned by an older version and is
+// refused even when the protocol version check passes.
+func TestRemoteIndexSearchScanFromOlderVersionIsRefused(t *testing.T) {
+	proc := motestutil.NewProcess(t)
+	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	source := func(opts []byte) *pipeline.Pipeline {
+		return &pipeline.Pipeline{DataSource: &pipeline.Source{Node: &plan.Node{
+			NodeType: plan.Node_INDEX_SEARCH_SCAN, IndexSearchScan: &plan.IndexSearchScan{AlgoOptions: opts},
+		}}}
+	}
+	applied := func(opts []byte) *pipeline.Pipeline {
+		return &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{
+			{Apply: &pipeline.Apply{IndexSearchScan: &plan.IndexSearchScan{AlgoOptions: opts}}},
+		}}
+	}
+	for name, p := range map[string]*pipeline.Pipeline{
+		"data source": source(nil),
+		"apply":       applied(nil),
+		"nested":      {Children: []*pipeline.Pipeline{source(nil)}},
+	} {
+		err := validateRemoteVectorPartitionProtocol(proc, p)
+		require.ErrorContains(t, err, "from an older version", name)
+	}
+	require.NoError(t, validateRemoteVectorPartitionProtocol(proc, source([]byte(`{}`))))
+	require.NoError(t, validateRemoteVectorPartitionProtocol(proc, applied([]byte(`{}`))))
 }

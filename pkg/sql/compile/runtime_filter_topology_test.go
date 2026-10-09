@@ -415,6 +415,7 @@ func TestRequiredIVFTopologyBroadcastAndRemoteFragment(t *testing.T) {
 		consumer := makeRuntimeFilterConsumerScope(tag, cn)
 		consumer.Proc = c.proc.NewNoContextChildProc(0)
 		consumer.DataSource.node.NodeType = plan.Node_INDEX_SEARCH_SCAN
+		consumer.DataSource.node.IndexSearchScan = &plan.IndexSearchScan{AlgoOptions: []byte(`{}`)}
 		consumer.DataSource.node.RuntimeFilterProbeList[0].MustApply = true
 		consumer.DataSource.node.RuntimeFilterProbeList[0].UseMembershipFilter = true
 		consumer.RootOp = table_scan.NewArgument()

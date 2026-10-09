@@ -1,8 +1,10 @@
 # Index search scan: vector and fulltext as one
 
-Owner issue: #27453. Branch `bug_27453`. The issue body is the original proposal;
-this document is the design as built, plus hybrid fulltext + vector planning.
+Owner issue: #27453. Branch `bug_27453`, PR #29746. The issue body is the original
+proposal; this document is the design as built, plus hybrid fulltext + vector planning.
 Every claim in "Claims" names the black-box test that proves it.
+
+Status: awaiting design approval from fengttt.
 
 ## Plan node
 
@@ -85,6 +87,53 @@ keeps them off a scan with a MATCH filter.
 The `BY RANK WITH OPTION 'mode=...'` clause is honored by ivfflat only; hnsw, cagra and
 ivfpq ignore it, so the hybrid claims are stated without it.
 
+## Compatibility and rollout
+
+Mixed-version operation is not supported, in either direction, and there is no fallback:
+a query whose plan needs an index search fails until every CN runs this version.
+
+| Case | Behavior | Evidence |
+|---|---|---|
+| New coordinator, a CN below the scan's protocol version | `compileIndexSearchScan` refuses the placement before dispatch: "index search scan requires MORPC protocol version N on every CN" | claim 7 (multi-CN, black box) |
+| Older coordinator, newer CN, ivfflat search | the receiver refuses, in `decodeScope`, an index search scan without `algo_options` (every planner of this version sets them): "index search scan from an older version is not supported"; it also refuses one below the CN's protocol version (`MOProtocolVersion`) | unit test `TestRemoteIndexSearchScanFromOlderVersionIsRefused`; no mixed-binary test |
+| Older coordinator, newer CN, hnsw/cagra/ivfpq/fulltext search | the older plan carries a removed search table function: "table function ... not supported" | claim 8 (the same error on a direct call); no mixed-binary test |
+| Rollback to the older version | the rows above, with the roles reversed | no mixed-binary test |
+
+The removed search table functions (`hnsw_search`, `cagra_search`, `ivfpq_search`,
+`fulltext2_search`, `fulltext_index_scan`) were built by the planner for index rewrites;
+they have no deprecation or migration path. A statement or view that calls one fails with
+"table function ... not supported" (claim 8).
+
+## Reader lifecycle
+
+The readers port the table-function executors; each guarantee lives in one owner. None has a
+black-box test: each item names the unit test that covers it, or says it rests on code review.
+
+- **Skipped scans** (`pkg/sql/compile/scope.go`, `buildVectorIndexReaders`): a dropped
+  runtime filter or a NULL query runs the plugin's `EmptyScan` check and builds empty readers,
+  so no reader is opened (`TestBuildVectorIndexReadersRunsEmptyScanHooks`). When a parallel
+  factory returns the wrong reader count, every reader it opened is closed (code review).
+- **Shared reader** (`pkg/indexplugin/search/planreader`): a cancelled context ends `Read` with
+  the cancellation (`TestReaderStopsOnCancellationAndEmpty`); a searcher error is returned and
+  the reader still closes (`TestReaderRejectsMalformedResults`). `Close` is idempotent, closes
+  the searcher exactly once, and a `Read` after `Close` returns end of data (code review).
+- **Correlated APPLY** (`pkg/sql/colexec/apply/vector_source.go`): each row closes the previous
+  reader before opening the next; end of data closes the reader; `End`, `Reset` and `Free`
+  close the reader and then the execution, both idempotent (code review).
+- **Prepared reuse** (`prepareIndexSearchScanForExecution`, `pkg/sql/compile/compile.go`): each
+  execution builds from the unchanged plan template (code review; claim 9 checks the results of
+  re-executions).
+- **No-LIMIT and probe-tail buffering**: fulltext2 streams bounded batches through a channel of
+  capacity 4 (`TestReadStreaming`, `TestReadStreamingCovered`); `Close` cancels and drains the
+  stream and the probe-tail producer (`TestCloseDrains`, `TestProbeTailStreamError`); classic
+  fulltext joins its search goroutine on every exit (`TestClassicCloseEarly`).
+
+## Performance
+
+The search kernels are unchanged: each reader calls the same index cache, cuVS and fulltext
+engine paths as the table function it replaces. No benchmark against main is recorded for
+this PR.
+
 ## Removed
 
 The search table functions `hnsw_search`, `cagra_search`, `ivfpq_search`,
@@ -118,6 +167,9 @@ with a MATCH filter (classic fulltext or fulltext2) and
 | 4 | `hnsw_search`, `ivfpq_search`, `cagra_search`, `fulltext2_search` and `fulltext_index_scan` are not callable from SQL. | `cases/vector/vector_hybrid_fulltext.sql`, `cases/publication_subscription/pub_sub_fulltext.sql` |
 | 5 | A subscriber's MATCH on a published table searches the publisher's fulltext index (table and database publications, two subscribers, publisher DML visible, prepared statement invalidated by revoke/drop). | `cases/publication_subscription/pub_sub_fulltext.sql` |
 | 6 | Moving hnsw, cagra and ivfpq to the early pass leaves the plans and results of their existing cases unchanged. | the 77 case files creating an hnsw, cagra or ivfpq index under `cases/` and `gpu_cases/`; the 8 of them with a MATCH rerun with the gate |
+| 7 | An index search that would be placed on a CN reporting a protocol version below the scan's fails the query ("index search scan requires MORPC protocol version N on every CN"); with that CN at the current version the same query, run on both CNs, returns the exact rows. | `pkg/tests/sqlintegration/multicn/index_search_protocol_test.go` |
+| 8 | The removed search table functions fail with "table function ... not supported" when called directly and when used in CREATE VIEW. | `cases/vector/index_search_scan_contract.sql`, `cases/vector/vector_hybrid_fulltext.sql` |
+| 9 | Re-executing a prepared ivfflat, hnsw, classic fulltext or fulltext2 search with different parameters returns, at every execution, the rows of the same search on a table without the index. | `cases/vector/index_search_scan_contract.sql` |
 
 ## Scope
 
@@ -136,6 +188,8 @@ query vector from a provider table for cagra and ivfpq.
 - **Composition, not a hybrid operator.** Hybrid search is the early vector rewrite
   followed by the late fulltext rewrite on the same scan; no node or hook is specific
   to the combination.
+- **No mixed-version operation** (Eric, 2026-10-09). Index search fails until every CN
+  runs this version; there is no fallback in either direction.
 - **Rank-mode clause.** `BY RANK WITH OPTION 'mode=...'` is honored by ivfflat only;
   hnsw, cagra and ivfpq ignore it.
 - **Publisher identity on the node.** The fulltext readers take publisher identity

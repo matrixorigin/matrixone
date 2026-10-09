@@ -62,10 +62,38 @@ func validateRemoteVectorPartitionProtocol(proc *process.Process, p *pipeline.Pi
 	if proc != nil {
 		version, known := remoteMORPCProtocolVersion(proc.GetService())
 		if known && version >= required {
+			if hasIndexSearchScanWithoutAlgoOptions(p) {
+				return moerr.NewNotSupportedNoCtx("index search scan from an older version is not supported")
+			}
 			return nil
 		}
 	}
 	return moerr.NewNotSupportedNoCtx(fmt.Sprintf("remote vector partition requires MORPC protocol version %d", required))
+}
+
+// hasIndexSearchScanWithoutAlgoOptions reports whether p holds an index search
+// scan without algo_options. Every planner of this version sets them, so such a
+// scan was planned by an older version, whose node fields this version reserves.
+func hasIndexSearchScanWithoutAlgoOptions(p *pipeline.Pipeline) bool {
+	if p == nil {
+		return false
+	}
+	if p.DataSource != nil && p.DataSource.Node != nil &&
+		p.DataSource.Node.NodeType == plan.Node_INDEX_SEARCH_SCAN &&
+		len(p.DataSource.Node.GetIndexSearchScan().GetAlgoOptions()) == 0 {
+		return true
+	}
+	for _, in := range p.InstructionList {
+		if spec := in.GetApply().GetIndexSearchScan(); spec != nil && len(spec.GetAlgoOptions()) == 0 {
+			return true
+		}
+	}
+	for _, child := range p.Children {
+		if hasIndexSearchScanWithoutAlgoOptions(child) {
+			return true
+		}
+	}
+	return false
 }
 
 func validateVectorPartitionDestination(proc *process.Process, p *pipeline.Pipeline) error {
