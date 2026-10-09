@@ -23,18 +23,26 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type dummyCollect struct {
 	dummySwitch
 	sync.Mutex
-	mfs [][]*pb.MetricFamily
+	mfs  [][]*pb.MetricFamily
+	sent chan struct{}
 }
 
 func (e *dummyCollect) SendMetrics(ctx context.Context, mfs []*pb.MetricFamily) error {
 	e.Lock()
 	defer e.Unlock()
 	e.mfs = append(e.mfs, mfs)
+	if e.sent != nil {
+		select {
+		case e.sent <- struct{}{}:
+		default:
+		}
+	}
 	return nil
 }
 
@@ -93,7 +101,7 @@ func TestExporterCommonInfo(t *testing.T) {
 }
 
 func TestExporter(t *testing.T) {
-	dumCollect := &dummyCollect{}
+	dumCollect := &dummyCollect{sent: make(chan struct{}, 2)}
 	dumClock := makeDummyClock(1)
 	var exp *metricExporter
 
@@ -119,9 +127,20 @@ func TestExporter(t *testing.T) {
 			h.Observe(float64(i))
 		}
 
-		// Two full raw-histogram batches were sent synchronously by Observe.
-		// Gather twice to flush the remaining samples and exercise the regular
-		// counter/gauge export path without relying on a ticker or wall-clock wait.
+		// Observe dispatches full batches asynchronously. Wait for both sends
+		// while the five-sample limit still applies, before gathering the tail
+		// or inspecting the clock and payloads.
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		defer cancel()
+		for range 2 {
+			select {
+			case <-dumCollect.sent:
+			case <-ctx.Done():
+				require.NoError(t, ctx.Err(), "full raw-histogram batches did not finish")
+			}
+		}
+		// Gather twice to flush remaining samples and exercise counter/gauge
+		// export without relying on a ticker or scheduler timing.
 		exp.gatherAndSend()
 		exp.gatherAndSend()
 	})
