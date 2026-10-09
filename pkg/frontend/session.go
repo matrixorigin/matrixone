@@ -257,9 +257,10 @@ type Session struct {
 
 	errInfo *errInfo
 
-	cache       *privilegeCache
-	ruleCache   map[string]string // rewrite rule cache, nil means not loaded
-	ruleCacheMu sync.RWMutex      // protects ruleCache
+	cache               *privilegeCache
+	ruleCache           map[string]string // rewrite rule cache, nil means not loaded
+	ruleCacheGeneration uint64            // increments whenever the cache is invalidated
+	ruleCacheMu         sync.RWMutex      // protects ruleCache and ruleCacheGeneration
 
 	// foreignConns caches connections to foreign data sources (Elasticsearch,
 	// external SQL databases) opened by esql_tvf_connect / sql_tvf_connect and
@@ -2528,6 +2529,7 @@ func (ses *Session) InvalidatePrivilegeCache() {
 	// Clear rule cache with proper locking
 	ses.ruleCacheMu.Lock()
 	ses.ruleCache = nil
+	ses.ruleCacheGeneration++
 	ses.ruleCacheMu.Unlock()
 }
 

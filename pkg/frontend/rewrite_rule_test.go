@@ -20,8 +20,10 @@ import (
 	"math/rand"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"testing/quick"
+	"time"
 	"unicode/utf8"
 
 	"github.com/golang/mock/gomock"
@@ -47,6 +49,27 @@ func (bt *backgroundExecTest) execWithProcessHook(
 	_ backExecProcessHook,
 ) error {
 	return bt.Exec(ctx, sql)
+}
+
+// ruleCacheLoadBarrierExec pauses after selecting the catalog result and
+// before returning it to loadRuleCache. This makes the invalidation/load
+// interleaving deterministic without changing the production loader.
+type ruleCacheLoadBarrierExec struct {
+	*backgroundExecTest
+	entered chan struct{}
+	resume  chan struct{}
+	once    sync.Once
+}
+
+func (bt *ruleCacheLoadBarrierExec) GetExecResultSet() []interface{} {
+	result := bt.backgroundExecTest.GetExecResultSet()
+	if strings.Contains(bt.currentSql, "mo_role_rule") {
+		bt.once.Do(func() {
+			close(bt.entered)
+			<-bt.resume
+		})
+	}
+	return result
 }
 
 // Feature: role-rewrite-rules, Property 9: Hint 序列化往返一致性
@@ -454,6 +477,94 @@ func TestConcurrentRuleCacheAccess(t *testing.T) {
 	if finalCache != nil {
 		t.Errorf("Expected cache to be nil after concurrent invalidations, got: %v", finalCache)
 	}
+}
+
+func TestCaptureRewritePolicyReloadsAfterInFlightInvalidation(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(10)] =
+		newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+	ruleSQL := getSqlForRoleRulesOfRoleIDs([]int64{10})
+	oldRules := newMrsForRewriteRules([][]interface{}{
+		{10, "db.t", "select * from db.t where version = 1"},
+	})
+	newRules := newMrsForRewriteRules([][]interface{}{
+		{10, "db.t", "select * from db.t where version = 2"},
+	})
+	bh.sql2result[ruleSQL] = oldRules
+	barrier := &ruleCacheLoadBarrierExec{
+		backgroundExecTest: bh,
+		entered:            make(chan struct{}),
+		resume:             make(chan struct{}),
+	}
+	stub := gostub.StubFunc(&NewBackgroundExec, barrier)
+	defer stub.Reset()
+
+	ses := newSes(&privilege{}, ctrl)
+	ses.SetTenantInfo(&TenantInfo{
+		Tenant:        sysAccountName,
+		User:          "test_rule_user",
+		DefaultRole:   "role10",
+		TenantID:      sysAccountID,
+		UserID:        42,
+		DefaultRoleID: 10,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	type captureResult struct {
+		policy *rewritePolicySnapshot
+		err    error
+	}
+	resultCh := make(chan captureResult, 1)
+	go func() {
+		policy, err := captureRewritePolicy(ctx, ses)
+		resultCh <- captureResult{policy: policy, err: err}
+	}()
+
+	select {
+	case <-barrier.entered:
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for the loader to read the old catalog result")
+	}
+
+	// The old result has been selected but has not been returned to the
+	// loader. Complete invalidation first, then let the in-flight load resume.
+	ses.invalidateRoleRuleCache()
+	bh.sql2result[ruleSQL] = newRules
+	close(barrier.resume)
+
+	var captured captureResult
+	select {
+	case captured = <-resultCh:
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for cache reload")
+	}
+	require.NoError(t, captured.err)
+	require.Equal(t, "select * from db.t where version = 2", captured.policy.roleRules["db.t"])
+
+	// The stale in-flight result must not have been published. The next
+	// request uses the fresh cache without another catalog read.
+	ruleQueryCount := 0
+	for _, sql := range bh.executedSQLs {
+		if sql == ruleSQL {
+			ruleQueryCount++
+		}
+	}
+	require.Equal(t, 2, ruleQueryCount)
+	policy, err := captureRewritePolicy(ctx, ses)
+	require.NoError(t, err)
+	require.Equal(t, "select * from db.t where version = 2", policy.roleRules["db.t"])
+	ruleQueryCountAfter := 0
+	for _, sql := range bh.executedSQLs {
+		if sql == ruleSQL {
+			ruleQueryCountAfter++
+		}
+	}
+	require.Equal(t, ruleQueryCount, ruleQueryCountAfter)
 }
 
 // TestRuleCacheDoubleCheckLocking tests the double-check locking pattern
