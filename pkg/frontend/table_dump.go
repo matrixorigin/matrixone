@@ -67,6 +67,10 @@ const (
 	// The high synthetic table ID follows the existing user-level-lock
 	// namespace and serializes installs until the owning transaction ends.
 	tableDumpObjectInstallLockTableID uint64 = (1 << 62) + 1
+	// Stage-backed fileservices do not provide an exclusive create token for
+	// publishing a table dump. Serialize DUMP publication across CNs with a
+	// separate synthetic table lock until the owning transaction ends.
+	tableDumpPublicationLockTableID uint64 = (1 << 62) + 2
 )
 
 type tableDumpManifest struct {
@@ -1236,7 +1240,48 @@ func dumpTableRelationObjects(
 	return result, written, nil
 }
 
+func lockTableDumpPublication(ctx context.Context, ses *Session) error {
+	proc := ses.GetProc()
+	if proc == nil || proc.GetTxnOperator() == nil {
+		return moerr.NewInternalErrorNoCtx("DUMP TABLE requires an active transaction process")
+	}
+	if !proc.GetTxnOperator().Txn().IsPessimistic() {
+		return moerr.NewNotSupportedNoCtx("DUMP TABLE in optimistic transactions")
+	}
+	return lockTableForTableDump(
+		ctx,
+		ses.GetTxnHandler().GetStorage(),
+		proc,
+		tableDumpPublicationLockTableID,
+		types.T_varchar.ToType(),
+		false,
+	)
+}
+
+func checkTableDumpDestinationAvailable(ctx context.Context, dumpFS fileservice.FileService) error {
+	for _, name := range []string{tableDumpManifestName, tableDumpReadyName} {
+		if _, err := dumpFS.StatFile(ctx, name); err == nil {
+			return moerr.NewFileAlreadyExistsNoCtx(name)
+		} else if !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+			return err
+		}
+	}
+	return nil
+}
+
 func handleDumpTable(ctx context.Context, ses *Session, stmt *tree.DumpTable) error {
+	dumpFS, closeDumpFS, err := openTableDumpFS(ctx, ses, stmt.Path)
+	if err != nil {
+		return err
+	}
+	defer closeDumpFS()
+	if err = lockTableDumpPublication(ctx, ses); err != nil {
+		return err
+	}
+	if err = checkTableDumpDestinationAvailable(ctx, dumpFS); err != nil {
+		return err
+	}
+
 	dbName, tableName, rel, err := getTableForDump(ctx, ses, stmt.Table)
 	if err != nil {
 		return err
@@ -1278,20 +1323,15 @@ func handleDumpTable(ctx context.Context, ses *Session, stmt *tree.DumpTable) er
 			}
 		}
 	}
-	dumpFS, closeDumpFS, err := openTableDumpFS(ctx, ses, stmt.Path)
-	if err != nil {
-		return err
-	}
-	defer closeDumpFS()
 	sourceFS, err := GetObjectFSProvider(ses)
 	if err != nil {
 		return err
 	}
 
-	// A stage path can be targeted concurrently by multiple CNs, and object
-	// stores do not give this workflow an exclusive create token. Do not delete
-	// copied fixture objects on failure: that could remove files published by a
-	// concurrent successful DUMP. Failed fixtures are reclaimed with the stage
+	// The publication lock is held through object copying and marker creation,
+	// preventing another CN from changing this destination before DUMP returns.
+	// Do not delete copied fixture objects on failure: that could remove files
+	// used by another DUMP. Failed fixtures are reclaimed with the stage
 	// fixture lifecycle.
 	objectCount := 0
 	for _, ref := range refs {

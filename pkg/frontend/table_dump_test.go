@@ -32,6 +32,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -84,7 +85,7 @@ func (f *testAmbiguousWriteFileService) Write(ctx context.Context, vector filese
 	return errors.New("write response lost after destination was created")
 }
 
-func TestLockTableDumpLoadTargetsUsesRequestContext(t *testing.T) {
+func TestTableDumpLocksUseRequestContext(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
 	defer ses.Close()
@@ -131,12 +132,87 @@ func TestLockTableDumpLoadTargetsUsesRequestContext(t *testing.T) {
 	})
 	defer stub.Reset()
 
-	err := lockTableDumpLoadTargets(requestCtx, ses, []tableDumpRelationRef{{relation: rel}}, true)
+	err := lockTableDumpPublication(requestCtx, ses)
+	require.NoError(t, err)
+	err = lockTableDumpLoadTargets(requestCtx, ses, []tableDumpRelationRef{{relation: rel}}, true)
 	require.NoError(t, err)
 	require.Equal(t, []lockCall{
+		{tableID: tableDumpPublicationLockTableID, changeDef: false},
 		{tableID: 42, changeDef: true},
 		{tableID: tableDumpObjectInstallLockTableID, changeDef: false},
 	}, locked)
+}
+
+func stubTableDumpPublicationLock(t *testing.T, ses *Session, txnOp *mock_frontend.MockTxnOperator) {
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{Mode: txn.TxnMode_Pessimistic}).AnyTimes()
+	ses.proc.Base.TxnOperator = txnOp
+	ses.txnHandler.txnOp = txnOp
+	stub := gostub.Stub(&lockTableForTableDump, func(
+		ctx context.Context,
+		_ engine.Engine,
+		_ *process.Process,
+		tableID uint64,
+		primaryKeyType types.Type,
+		changeDef bool,
+	) error {
+		require.NoError(t, ctx.Err())
+		require.Equal(t, tableDumpPublicationLockTableID, tableID)
+		require.Equal(t, types.T_varchar.ToType(), primaryKeyType)
+		require.False(t, changeDef)
+		return nil
+	})
+	t.Cleanup(stub.Reset)
+}
+
+func TestLockTableDumpPublicationRejectsOptimisticTransaction(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{Mode: txn.TxnMode_Optimistic})
+	ses.proc.Base.TxnOperator = txnOp
+
+	err := lockTableDumpPublication(context.Background(), ses)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+}
+
+func TestHandleDumpTablePropagatesPublicationLockError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{Mode: txn.TxnMode_Pessimistic}).AnyTimes()
+	ses.proc.Base.TxnOperator = txnOp
+	wantErr := errors.New("publication lock failed")
+	stub := gostub.Stub(&lockTableForTableDump, func(
+		context.Context, engine.Engine, *process.Process, uint64, types.Type, bool,
+	) error {
+		return wantErr
+	})
+	t.Cleanup(stub.Reset)
+
+	err := handleDumpTable(context.Background(), ses, &tree.DumpTable{
+		Table: tree.NewTableName("source", tree.ObjectNamePrefix{}, nil),
+		Path:  t.TempDir(),
+	})
+	require.ErrorIs(t, err, wantErr)
+}
+
+func TestCheckTableDumpDestinationAvailableRejectsExistingMarkers(t *testing.T) {
+	for _, marker := range []string{tableDumpManifestName, tableDumpReadyName} {
+		t.Run(marker, func(t *testing.T) {
+			fs, err := fileservice.NewLocalETLFS("dump", t.TempDir())
+			require.NoError(t, err)
+			defer fs.Close(context.Background())
+			require.NoError(t, fs.Write(context.Background(), fileservice.IOVector{
+				FilePath: marker,
+				Entries:  []fileservice.IOEntry{{Offset: 0, Size: 1, Data: []byte("x")}},
+			}))
+
+			err = checkTableDumpDestinationAvailable(context.Background(), fs)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists), "%v", err)
+		})
+	}
 }
 
 func (c *testConcurrentTableDumpObjectCopier) CopyObject(
@@ -923,6 +999,7 @@ func TestHandleDumpTable(t *testing.T) {
 	workspace := newTestWorkspace()
 	ses.txnHandler.storage = eng
 	ses.txnHandler.txnOp = txnOp
+	stubTableDumpPublicationLock(t, ses, txnOp)
 	eng.EXPECT().Database(gomock.Any(), "tpch", txnOp).Return(db, nil).Times(2)
 	db.EXPECT().Relation(gomock.Any(), "orders", nil).Return(rel, nil)
 
@@ -935,7 +1012,6 @@ func TestHandleDumpTable(t *testing.T) {
 	}
 	rel.EXPECT().GetTableDef(gomock.Any()).Return(def).AnyTimes()
 	rel.EXPECT().GetTableName().Return("orders")
-	txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 	txnOp.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
 
 	object := newTableDumpTestObject(t, false)
@@ -977,6 +1053,14 @@ func TestHandleDumpTable(t *testing.T) {
 	require.Equal(t, object.Name, manifest.Relations[0].Objects[0].Name)
 	_, err = dumpFS.StatFile(context.Background(), tableDumpReadyName)
 	require.NoError(t, err)
+
+	// A published destination is immutable. A retry must fail before reading
+	// the source table or replacing the manifest with another source's metadata.
+	err = handleDumpTable(context.Background(), ses, stmt)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists), "%v", err)
+	manifestAfterRetry, err := readTableDumpManifest(context.Background(), dumpFS)
+	require.NoError(t, err)
+	require.Equal(t, manifest, manifestAfterRetry)
 }
 
 func TestDumpLoadLegacyTinyTextUpgrade(t *testing.T) {
@@ -995,6 +1079,7 @@ func TestDumpLoadLegacyTinyTextUpgrade(t *testing.T) {
 	workspace := newTestWorkspace()
 	ses.txnHandler.storage = eng
 	ses.txnHandler.txnOp = txnOp
+	stubTableDumpPublicationLock(t, ses, txnOp)
 	eng.EXPECT().Database(gomock.Any(), "tpch", txnOp).Return(db, nil).Times(4)
 	db.EXPECT().Relation(gomock.Any(), "source", nil).Return(source, nil)
 	db.EXPECT().Relation(gomock.Any(), "source", nil).Return(target, nil)
@@ -1031,7 +1116,6 @@ func TestDumpLoadLegacyTinyTextUpgrade(t *testing.T) {
 	})
 	defer fsStub.Reset()
 
-	txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 	txnOp.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
 	lockStub := gostub.Stub(&lockTableDumpLoadTargets, func(_ context.Context, _ *Session, refs []tableDumpRelationRef, install bool) error {
 		require.Len(t, refs, 1)
@@ -1115,6 +1199,8 @@ func TestHandleDumpTableRejectsUnsupportedSchemas(t *testing.T) {
 			ses := newTestSession(t, ctrl)
 			defer ses.Close()
 			ses.SetDatabaseName("tpch")
+			txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+			stubTableDumpPublicationLock(t, ses, txnOp)
 			eng := mock_frontend.NewMockEngine(ctrl)
 			db := mock_frontend.NewMockDatabase(ctrl)
 			rel := mock_frontend.NewMockRelation(ctrl)
