@@ -36,6 +36,19 @@ select id from t where l2_distance(v,'[1,1,1]') <= 1.7320508 order by l2_distanc
 -- the remaining scalar/distance columns while preserving the empty entry slot.
 select id from t where l2_distance(v,'[1,1,1]') <= 1.73205077 order by l2_distance(v,'[1,1,1]') limit 4;
 
+-- #29077: an unrecognized distance-range predicate must not run after a
+-- candidate-limited vector scan.  The only matching row is outside the
+-- nearest-K prefix, so every indexed mode must agree with the exact control.
+select id from t where l2_distance(v,'[1,1,1]') between 13 and 14 order by l2_distance(v,'[1,1,1]') limit 1 by rank with option 'mode=force';
+select id from t where l2_distance(v,'[1,1,1]') between 13 and 14 order by l2_distance(v,'[1,1,1]') limit 1 by rank with option 'mode=pre';
+select id from t where l2_distance(v,'[1,1,1]') between 13 and 14 order by l2_distance(v,'[1,1,1]') limit 1 by rank with option 'mode=post';
+select id from t where l2_distance(v,'[1,1,1]') between 13 and 14 order by l2_distance(v,'[1,1,1]') limit 1 by rank with option 'mode=auto';
+prepare between_stmt from 'select id from t where l2_distance(v,''[1,1,1]'') between ? and ? order by l2_distance(v,''[1,1,1]'') limit 1 by rank with option ''mode=pre''';
+set @between_lo=13;
+set @between_hi=14;
+execute between_stmt using @between_lo,@between_hi;
+deallocate prepare between_stmt;
+
 create table u(id int primary key, v vecf32(3), lim double);
 insert into u values (1,'[1,1,1]',5),(2,'[2,2,2]',5),(3,'[9,9,9]',0.5),(4,'[10,10,10]',100);
 create index uidx using ivfflat on u(v) lists=1 op_type 'vector_l2_ops';

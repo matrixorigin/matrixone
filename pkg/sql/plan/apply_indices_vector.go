@@ -980,9 +980,14 @@ func (builder *QueryBuilder) resolveProjectedVectorSortTiebreak(projectNode *pla
 // three bits of context needed to recognize its own `distfn(col, vec_lit)`
 // expression.
 func (builder *QueryBuilder) getDistRangeFromFilters(
-	filters []*plan.Expr, partPos int32, origFuncName string, vecLitArg *plan.Expr,
+	filters []*plan.Expr, partPos int32, origFuncName string, vecLitArg *plan.Expr, scanTags ...int32,
 ) ([]*plan.Expr, *plan.DistRange) {
 	var distRange *plan.DistRange
+	var scanTag int32
+	hasScanTag := len(scanTags) > 0
+	if hasScanTag {
+		scanTag = scanTags[0]
+	}
 
 	currIdx := 0
 	for _, filter := range filters {
@@ -1001,7 +1006,8 @@ func (builder *QueryBuilder) getDistRangeFromFilters(
 			goto NO_RANGE
 		}
 
-		if partCol := fdist.Args[0].GetCol(); partCol == nil || partCol.ColPos != partPos {
+		if partCol := fdist.Args[0].GetCol(); partCol == nil || partCol.ColPos != partPos ||
+			(hasScanTag && partCol.RelPos != scanTag) {
 			goto NO_RANGE
 		}
 
@@ -1073,6 +1079,94 @@ func (builder *QueryBuilder) getDistRangeFromFilters(
 	}
 
 	return filters[:currIdx], distRange
+}
+
+// filtersContainIndexedDistanceExpr reports whether a residual filter still
+// depends on the distance expression that drives the vector-index rewrite.
+// Such a predicate cannot run after the index has truncated its candidate
+// stream: rows outside the nearest K candidates would be lost before the
+// predicate is evaluated.  The walk is deliberately recursive so wrappers
+// such as BETWEEN, NOT, OR, and reversed comparisons are covered without
+// trying to normalize their SQL three-valued semantics into a range.
+func filtersContainIndexedDistanceExpr(
+	filters []*plan.Expr,
+	scanTag, partPos int32,
+	origFuncName string,
+	vecLitArg *plan.Expr,
+) bool {
+	for _, filter := range filters {
+		if exprContainsIndexedDistanceExpr(filter, scanTag, partPos, origFuncName, vecLitArg) {
+			return true
+		}
+	}
+	return false
+}
+
+func exprContainsIndexedDistanceExpr(
+	expr *plan.Expr,
+	scanTag, partPos int32,
+	origFuncName string,
+	vecLitArg *plan.Expr,
+) bool {
+	if expr == nil {
+		return false
+	}
+	if fn := expr.GetF(); fn != nil {
+		if indexedDistanceExprMatches(fn, scanTag, partPos, origFuncName, vecLitArg) {
+			return true
+		}
+		for _, arg := range fn.Args {
+			if exprContainsIndexedDistanceExpr(arg, scanTag, partPos, origFuncName, vecLitArg) {
+				return true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if exprContainsIndexedDistanceExpr(item, scanTag, partPos, origFuncName, vecLitArg) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func indexedDistanceExprMatches(
+	fn *plan.Function,
+	scanTag, partPos int32,
+	origFuncName string,
+	vecLitArg *plan.Expr,
+) bool {
+	if fn == nil || fn.Func == nil || fn.Func.ObjName != origFuncName || len(fn.Args) != 2 {
+		return false
+	}
+
+	queryArg := (*plan.Expr)(nil)
+	for i, arg := range fn.Args {
+		col := arg.GetCol()
+		if col != nil && col.RelPos == scanTag && col.ColPos == partPos {
+			queryArg = fn.Args[1-i]
+			break
+		}
+	}
+	if queryArg == nil {
+		return false
+	}
+
+	// A query vector that cannot be canonically decoded is conservatively
+	// treated as a match.  The planner cannot prove that it differs from the
+	// indexed vector, so retaining a bounded candidate rewrite would risk
+	// evaluating an exact distance predicate after truncation.
+	if vecLitArg == nil {
+		return true
+	}
+	elemType := types.T(vecLitArg.Typ.GetId())
+	expectedKey, expectedOK := vecFloatKey(vecLitArg, elemType)
+	actualKey, actualOK := vecFloatKey(queryArg, elemType)
+	if !expectedOK || !actualOK {
+		return true
+	}
+	return expectedKey == actualKey
 }
 
 // mergeUpperBound folds a new upper bound into dr, keeping the tighter (smaller,

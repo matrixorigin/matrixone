@@ -577,6 +577,13 @@ func TestGetDistRangeFromFilters_NonMatching(t *testing.T) {
 	require.Len(t, rem, 1)
 	require.Nil(t, dr)
 
+	// A same-position column from another relation must stay residual when the
+	// caller supplies the scan binding. ColPos alone is not a sufficient binding.
+	wrongRelation := makeDistFnFilter("<", "l2_distance", scanTag+1, partPos, "[1,2,3]", f32Lit(0.5))
+	rem, dr = b.getDistRangeFromFilters([]*plan.Expr{wrongRelation}, partPos, "l2_distance", vecLitArg, scanTag)
+	require.Len(t, rem, 1)
+	require.Nil(t, dr)
+
 	// Mismatched vec literal → kept.
 	bad3 := makeDistFnFilter("<", "l2_distance", scanTag, partPos, "[9,9,9]", f32Lit(0.5))
 	rem, dr = b.getDistRangeFromFilters([]*plan.Expr{bad3}, partPos, "l2_distance", vecLitArg)
@@ -593,6 +600,65 @@ func TestGetDistRangeFromFilters_NonMatching(t *testing.T) {
 	rem, dr = b.getDistRangeFromFilters([]*plan.Expr{f32Lit(0.5)}, partPos, "l2_distance", vecLitArg)
 	require.Len(t, rem, 1)
 	require.Nil(t, dr)
+}
+
+func TestFiltersContainIndexedDistanceExpr_ResidualShapes(t *testing.T) {
+	const scanTag int32 = 11
+	const partPos int32 = 1
+	vecVal := string(types.ArrayToBytes([]float32{1, 2, 3}))
+	differentVecVal := string(types.ArrayToBytes([]float32{9, 9, 9}))
+	vecLitArg := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_array_float32)},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_VecVal{VecVal: vecVal}}},
+	}
+	match := func(expr *plan.Expr) bool {
+		return filtersContainIndexedDistanceExpr(
+			[]*plan.Expr{expr}, scanTag, partPos, "l2_distance", vecLitArg)
+	}
+	function := func(name string, args ...*plan.Expr) *plan.Expr {
+		return &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_bool)},
+			Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: name}, Args: args}},
+		}
+	}
+	distance := makeDistFnFilter("=", "l2_distance", scanTag, partPos, vecVal, f32Lit(0)).GetF().Args[0]
+	between := function("between", distance, f32Lit(489.5), f32Lit(501.5))
+	reversed := function(">", f32Lit(489.5), distance)
+	nestedNot := function("not", between)
+	nestedOr := function("or", reversed, makeDistFnFilter("<", "l2_distance", scanTag, partPos, vecVal, f32Lit(501.5)))
+
+	for _, tc := range []struct {
+		name string
+		expr *plan.Expr
+	}{
+		{name: "between", expr: between},
+		{name: "reversed comparison", expr: reversed},
+		{name: "not", expr: nestedNot},
+		{name: "or", expr: nestedOr},
+		{name: "different vector", expr: makeDistFnFilter("<", "l2_distance", scanTag, partPos, differentVecVal, f32Lit(1))},
+		{name: "different metric", expr: makeDistFnFilter("<", "cosine_distance", scanTag, partPos, vecVal, f32Lit(1))},
+		{name: "different column", expr: makeDistFnFilter("<", "l2_distance", scanTag, partPos+1, vecVal, f32Lit(1))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.name == "between" || tc.name == "reversed comparison" || tc.name == "not" || tc.name == "or", match(tc.expr))
+		})
+	}
+
+	// A canonical comparison is removed into DistRange before the residual
+	// guard runs, so the exact distance expression is no longer present.
+	canonical := makeDistFnFilter(">=", "l2_distance", scanTag, partPos, vecVal, f32Lit(489.5))
+	remaining, _ := (&QueryBuilder{}).getDistRangeFromFilters(
+		DeepCopyExprList([]*plan.Expr{canonical}), partPos, "l2_distance", vecLitArg)
+	require.Empty(t, remaining)
+	require.False(t, filtersContainIndexedDistanceExpr(remaining, scanTag, partPos, "l2_distance", vecLitArg))
+
+	// The extraction probe must not compact the original filter backing array;
+	// the planner may still need it when AUTO falls back to the exact subtree.
+	original := []*plan.Expr{between, canonical}
+	snapshot := DeepCopyExprList(original)
+	copyForProbe := DeepCopyExprList(original)
+	_, _ = (&QueryBuilder{}).getDistRangeFromFilters(copyForProbe, partPos, "l2_distance", vecLitArg)
+	require.Equal(t, snapshot, original)
 }
 
 // Multiple same-side distance bounds must fold into the tightest bound (the
