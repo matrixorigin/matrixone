@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
@@ -67,6 +68,33 @@ func TestAttachInternalExecutorCompilerContext(t *testing.T) {
 		attachInternalExecutorCompilerContext(ctx, nil)); got != nil {
 		t.Fatalf("expected nil compiler context, got %v", got)
 	}
+}
+
+func TestAttachInternalExecutorRewriteOption(t *testing.T) {
+	ctx := context.Background()
+	option := &tree.RewriteOption{}
+	attached := attachInternalExecutorRewriteOption(ctx, option)
+	if got := getInternalExecutorRewriteOption(attached); got != option {
+		t.Fatalf("expected attached rewrite option, got %p", got)
+	}
+	if got := getInternalExecutorRewriteOption(nil); got != nil {
+		t.Fatalf("expected nil rewrite option for nil context, got %p", got)
+	}
+	if got := getInternalExecutorRewriteOption(
+		attachInternalExecutorRewriteOption(ctx, nil)); got != nil {
+		t.Fatalf("expected nil rewrite option after nil attach, got %p", got)
+	}
+
+	inner := &tree.Select{}
+	insert := &tree.Insert{Rows: &tree.Select{
+		Select: &tree.ParenSelect{Select: inner},
+	}}
+	attachRewriteOptionToStatement(insert, option)
+	if insert.Rows.RewriteOption != option || inner.RewriteOption != option {
+		t.Fatal("expected CTAS INSERT source and parenthesized source to share rewrite option")
+	}
+	attachRewriteOptionToStatement(&tree.Select{}, option)
+	attachRewriteOptionToStatement(insert, nil)
 }
 
 func TestAttachInternalExecutorPrivilegeCheck(t *testing.T) {
