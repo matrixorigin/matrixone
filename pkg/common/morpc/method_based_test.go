@@ -214,18 +214,23 @@ func TestMethodBasedServerCloseJoinsHandlers(t *testing.T) {
 			if tc.mixed {
 				s.RegisterMethod(2, func(context.Context, *testMethodBasedMessage, *testMethodBasedMessage, *Buffer) error { return nil }, false)
 			}
+			if tc.inline {
+				// Reject submission without closing or rebooting the shared pool.
+				closedPool, err := ants.NewPool(1, ants.WithDisablePurge(true))
+				require.NoError(t, err)
+				t.Cleanup(closedPool.Release)
+				require.NoError(t, closedPool.ReleaseTimeout(time.Second))
+				require.ErrorIs(t, closedPool.Submit(func() {}), ants.ErrPoolClosed)
+				s.rpc.RegisterRequestHandler(func(ctx context.Context, request RPCMessage, sequence uint64, cs ClientSession) error {
+					return s.onMessageWithSubmit(ctx, request, sequence, cs, closedPool.Submit)
+				})
+			}
 			require.NoError(t, s.Start())
 			client, err := (Config{ClientOptions: []ClientOption{WithClientEnableAutoCreateBackend()}}).NewClient("", "close-test", func() Message { return &testMethodBasedMessage{} })
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, client.Close()) })
 			ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 			t.Cleanup(cancel)
-			if tc.inline {
-				// Reboot requires the old worker generation to have fully retired.
-				require.NoError(t, ants.ReleaseTimeout(time.Second))
-				t.Cleanup(ants.Reboot)
-				require.ErrorIs(t, ants.Submit(func() {}), ants.ErrPoolClosed)
-			}
 			future, err := client.Send(ctx, addr, &testMethodBasedMessage{method: 1})
 			require.NoError(t, err)
 			t.Cleanup(future.Close)
