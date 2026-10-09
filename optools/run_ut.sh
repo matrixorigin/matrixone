@@ -1078,7 +1078,8 @@ function start_engine_race(){
 }
 
 function handle_ut_termination(){
-    trap - TERM
+    # A second TERM must not replace the owner while it drains independent groups.
+    trap '' TERM
     if (( UT_TERMINATING != 0 )); then
         exit 143
     fi
@@ -1286,8 +1287,7 @@ function run_engine_race_shards(){
         set +m
         restore_ut_term_trap "${saved_term_trap}"
         if (( term_pending != 0 )); then
-            terminate_ut_process_groups 20 "${child_pids[@]}"
-            wait 2>/dev/null || true
+            drain_engine_shards || return 125
             return 143
         fi
         return 0
@@ -1309,7 +1309,17 @@ function run_engine_race_shards(){
 
     checkpoint_ut_event "start" "engine" "${engine_package}" "" "shards=${engine_race_shards}"
     previous_term_trap=$(trap -p TERM)
-    trap 'terminate_ut_process_groups 20 "${child_pids[@]}"; wait 2>/dev/null || true; rm -f "${metadata_file}"; exit 143' TERM
+    function drain_engine_shards(){
+        trap '' TERM
+        terminate_ut_process_groups 20 "${child_pids[@]}" || return 125
+        wait 2>/dev/null || true
+        rm -f "${metadata_file}"
+    }
+    function cancel_engine_shards(){
+        drain_engine_shards || exit 125
+        exit 143
+    }
+    trap cancel_engine_shards TERM
     start_engine_child 0 go list ${GO_MODULE_MODE} \
         -f '{{.Dir}}{{"\t"}}{{.ImportPath}}' "${engine_package}" \
         > "${metadata_file}" 2>&1
@@ -1473,10 +1483,20 @@ function run_plan_race_shards(){
     # process-group cleanup local to this helper so a cancelled parent cannot
     # strand the test binary after the helper's shell exits.
     previous_term_trap=$(trap -p TERM)
-    # A TERM can arrive while the helper is transitioning from one child
-    # group to the next. Bound each cleanup pass so two independent groups
-    # finish before the parent helper's 15-second cancellation window.
-    trap 'if [[ -n "${plan_child_pid:-}" ]]; then terminate_ut_process_groups "${plan_term_grace_ticks:-20}" "${plan_child_pid}"; fi; if [[ -n "${shard_pids+x}" ]] && (( ${#shard_pids[@]} > 0 )); then terminate_ut_process_groups "${plan_term_grace_ticks:-20}" "${shard_pids[@]}"; fi; if [[ -n "${shard_pids+x}" ]]; then for pid in "${shard_pids[@]}"; do [[ -n "${pid}" ]] && wait "${pid}" 2>/dev/null || true; done; fi; wait 2>/dev/null || true; if [[ -n "${plan_test_binary:-}" ]]; then rm -f "${plan_test_binary}"; fi; exit 143' TERM
+    # Drain scalar and shard groups together under one common deadline before
+    # joining children or removing their artifacts.
+    function cancel_plan_shards(){
+        trap '' TERM
+        terminate_ut_process_groups "${plan_term_grace_ticks}" "${plan_child_pid}" \
+            ${shard_pids[@]+"${shard_pids[@]}"} || exit 125
+        wait 2>/dev/null || true
+        rm -f "${plan_test_binary}"
+        exit 143
+    }
+    trap cancel_plan_shards TERM
+    local plan_term_trap
+    local term_pending=0
+    plan_term_trap=$(trap -p TERM)
     if [[ -z "${PLAN_RACE_REPORT}" ]]; then
         PLAN_RACE_REPORT="${G_WKSP}/${G_TS}-plan-race-report.out"
     fi
@@ -1485,12 +1505,16 @@ function run_plan_race_shards(){
     # Resolve both metadata fields through one cancellable child. Keeping the
     # PID in plan_child_pid makes TERM ownership identical to build and shard
     # execution.
+    term_pending=0
+    trap 'term_pending=1' TERM
     set -m
     go list ${GO_MODULE_MODE} \
         -f '{{.Dir}}{{"\t"}}{{.ImportPath}}' "${plan_package}" \
         > "${metadata_file}" 2>&1 &
     plan_child_pid=$!
     set +m
+    restore_ut_term_trap "${plan_term_trap}"
+    if (( term_pending != 0 )); then cancel_plan_shards; fi
     wait "${plan_child_pid}"
     metadata_status=$?
     plan_child_pid=""
@@ -1511,6 +1535,8 @@ function run_plan_race_shards(){
     # runs in a fresh process, preserving race-detector and package-global
     # isolation without repeating the same link action for every shard.
     PLAN_RACE_TEST_BINARY="${plan_test_binary}"
+    term_pending=0
+    trap 'term_pending=1' TERM
     set -m
     LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
         CGO_CFLAGS="${CGO_CFLAGS}" \
@@ -1519,6 +1545,8 @@ function run_plan_race_shards(){
         -p 1 -c -o "${plan_test_binary}" "${plan_package}" > "${build_log}" 2>&1 &
     plan_child_pid=$!
     set +m
+    restore_ut_term_trap "${plan_term_trap}"
+    if (( term_pending != 0 )); then cancel_plan_shards; fi
     wait "${plan_child_pid}"
     build_status=$?
     plan_child_pid=""
@@ -1534,6 +1562,8 @@ function run_plan_race_shards(){
 
     # Test binaries normally execute with the package source directory as cwd.
     # Preserve that contract for both discovery and shard execution.
+    term_pending=0
+    trap 'term_pending=1' TERM
     set -m
     (
         cd "${plan_package_dir}" || exit 2
@@ -1543,6 +1573,8 @@ function run_plan_race_shards(){
     ) > "${test_list}" 2>&1 &
     plan_child_pid=$!
     set +m
+    restore_ut_term_trap "${plan_term_trap}"
+    if (( term_pending != 0 )); then cancel_plan_shards; fi
     wait "${plan_child_pid}"
     list_status=$?
     plan_child_pid=""
@@ -1588,6 +1620,8 @@ function run_plan_race_shards(){
             fi
             logger "INF" "Run ${plan_package} race shard $(( shard + 1 ))/${PLAN_RACE_SHARDS} (${shard_counts[shard]} tests)"
             mark_ut_stage "plan" "${plan_package} shard $(( shard + 1 ))/${PLAN_RACE_SHARDS}" start "" "tests=${shard_counts[shard]}"
+            term_pending=0
+            trap 'term_pending=1' TERM
             (
                 cd "${plan_package_dir}" || exit 2
                 LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
@@ -1598,6 +1632,8 @@ function run_plan_race_shards(){
                     -test.run="${shard_patterns[shard]}"
             ) > "${shard_reports[shard]}" 2>> "${UT_STDERR}" &
             shard_pids[shard]=$!
+            restore_ut_term_trap "${plan_term_trap}"
+            if (( term_pending != 0 )); then cancel_plan_shards; fi
             active_count=$(( active_count + 1 ))
             checkpoint_ut_event "pid-start" "plan" "${plan_package} shard $(( shard + 1 ))/${PLAN_RACE_SHARDS}" "" "child_pid=${shard_pids[shard]} tests=${shard_counts[shard]}"
         done
@@ -1733,7 +1769,7 @@ function run_embedded_prebuild(){
     previous_term_trap=$(trap -p TERM)
     function cancel_embedded_wave(){
         trap '' TERM
-        terminate_ut_process_groups 20 "${child_pids[@]}"
+        terminate_ut_process_groups 20 "${child_pids[@]}" || exit 125
         wait 2>/dev/null || true
         exit 143
     }
@@ -1746,7 +1782,11 @@ function run_embedded_prebuild(){
             output_path="${report_base}.package.${package_index}.test"
             package_report="${report_base}.build.${package_index}"
             if ! : > "${package_report}"; then
-                terminate_ut_process_groups 20 "${child_pids[@]}"
+                trap '' TERM
+                if ! terminate_ut_process_groups 20 "${child_pids[@]}"; then
+                    restore_ut_term_trap "${previous_term_trap}"
+                    return 125
+                fi
                 wait 2>/dev/null || true
                 restore_ut_term_trap "${previous_term_trap}"
                 return 1
@@ -1883,7 +1923,7 @@ function cleanup_embedded_prebuild(){
 # reaped; otherwise a compiler or light test can outlive the runner and keep a
 # cluster port, report, or link lease alive.
 function stop_race_companions(){
-    local status=0 pid
+    local status=0 prebuild_status=0 pid
     if [[ -n "${LIGHT_RACE_JOB_PID}" ]]; then
         pid=${LIGHT_RACE_JOB_PID}
         terminate_ut_process_group "${pid}" TERM
@@ -1902,8 +1942,12 @@ function stop_race_companions(){
         if ! wait_for_ut_process_group "${pid}" "${UT_HELPER_TERM_GRACE_TICKS}"; then
             status=125
         else
-            finish_embedded_prebuild || true
-            cleanup_embedded_prebuild || status=125
+            finish_embedded_prebuild || prebuild_status=$?
+            if (( prebuild_status == 125 )); then
+                status=125
+            else
+                cleanup_embedded_prebuild || status=125
+            fi
         fi
     fi
     return "${status}"
@@ -2242,6 +2286,7 @@ function run_embedded_tests(){
     if [[ -n "${CLUSTER_PREBUILD_JOB_PID}" ]]; then
         finish_embedded_prebuild
         prebuild_status=$?
+        if (( prebuild_status == 125 )); then return 125; fi
     fi
     if (( prebuild_status == 0 )) && [[ -n "${report_base}" ]]; then
         local package=""
@@ -2783,6 +2828,7 @@ function run_tests(){
                 plan_status=$?
                 PLAN_RACE_JOB_PID=""
             fi
+            if (( plan_status == 125 )); then UT_TEST_STATUS=1; return 0; fi
             consume_plan_race_report
             report_status=$?
             if (( report_status != 0 )); then

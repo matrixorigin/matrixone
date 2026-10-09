@@ -21,7 +21,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -104,14 +103,15 @@ func scheduleHarnessWithMockTransform(t *testing.T, script, mock string, transfo
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "bash", "-c", script)
-	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
-	cmd.WaitDelay = 3 * time.Second
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"), "UT_WORKDIR="+root, "CASE_DIR="+root, "UT_LINK_PARALLEL=0")
 	cmd.Env = append(cmd.Env, variables...)
-	out, err := cmd.CombinedOutput()
+	out, err, diagnostic := runScheduleHarnessCommand(ctx, cmd, root)
+	if diagnostic != "" {
+		t.Log(diagnostic)
+	}
 	if ctx.Err() != nil {
-		t.Fatalf("runner harness timed out: %s", out)
+		t.Fatalf("runner harness timed out: %v\n%s\n%s", err, out, diagnostic)
 	}
 	return out, err
 }
@@ -238,6 +238,7 @@ func TestHeavyPlanSchedulesEngineBeforeResourceWave(t *testing.T) {
 		{"engine-failure", "3", "1", "1", "7", "0", "0", "1"},
 		{"heavy-failure", "3", "1", "1", "0", "8", "0", "1"},
 		{"plan-failure", "3", "1", "1", "0", "0", "9", "1"},
+		{"plan-undrained", "3", "1", "1", "0", "0", "125", "1"},
 		{"sequential-baseline", "3", "0", "1", "0", "0", "0", "0"},
 		{"one-slot", "1", "1", "1", "0", "0", "0", "0"},
 		{"two-slots", "2", "1", "1", "0", "0", "0", "0"},
@@ -298,9 +299,16 @@ function go() {
 	 [[ -e "$CASE_DIR/engine-finished" ]] || return 92
  printf 'plan\n' > "$PLAN_RACE_REPORT"
  touch "$CASE_DIR/plan-started"
+ if [[ "$PLAN_STATUS" == 125 ]]; then touch "$PLAN_RACE_TEST_BINARY"; fi
  return "$PLAN_STATUS"
 }
 run_tests
+if [[ "$PLAN_STATUS" == 125 ]]; then
+ [[ "$UT_TEST_STATUS" == 1 && -f "$PLAN_RACE_TEST_BINARY" && -s "$PLAN_RACE_REPORT" ]] || exit 99
+ [[ ! -e "$CASE_DIR/final-memory" ]] || exit 100
+ printf 'UNDRAINED_RETAINED\n'
+ exit 0
+fi
 [[ "$UT_TEST_STATUS" == "$EXPECTED_STATUS" ]] || exit 93
 [[ -d "$CASE_DIR/engine-once" && -d "$CASE_DIR/plan-once" ]] || exit 94
 [[ -z "$CURRENT_UT_PID$ENGINE_RACE_JOB_PID$PLAN_RACE_JOB_PID" ]] || exit 95
@@ -330,6 +338,12 @@ printf '\nREPORT\n'
 			out, err := scheduleHarnessWithDefaultMockTransform(t, script, transform, "HEAVY_RACE_PARALLEL="+tc.budget, "UT_OVERLAP_PLAN="+tc.overlap, "PLAN_RACE_PARALLEL="+tc.planParallel, "ENGINE_STATUS="+tc.engine, "HEAVY_STATUS="+tc.heavy, "PLAN_STATUS="+tc.plan, "EXPECTED_STATUS="+tc.expected, "EXPECT_OVERLAP="+expectedOverlap, "EXPECT_ENGINE_BEFORE_HEAVY=1", "EXPECTED_ENGINE_SHARDS="+expectedEngineShards, "EXPECTED_PLAN_PARALLEL="+tc.planParallel, "EXPECTED_HEAVY_PARALLEL="+expectedHeavyParallel)
 			if err != nil {
 				t.Fatalf("schedule: %v\n%s", err, out)
+			}
+			if tc.plan == "125" {
+				if !strings.Contains(string(out), "UNDRAINED_RETAINED") {
+					t.Fatalf("lost undrained plan artifact: %s", out)
+				}
+				return
 			}
 			if !strings.HasSuffix(string(out), "REPORT\nengine\nheavy-start\nheavy-end\nplan\n") {
 				t.Fatalf("lost or duplicated report events:\n%s", out)

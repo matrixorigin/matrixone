@@ -295,7 +295,7 @@ run_embedded_tests "$scope"
 }
 
 func TestEmbeddedPrebuiltExecutionCancellation(t *testing.T) {
-	for _, phase := range []string{"running", "active-publication", "watchdog-publication"} {
+	for _, phase := range []string{"running", "active-publication", "watchdog-publication", "cleanup"} {
 		t.Run(phase, func(t *testing.T) {
 			script := embeddedSetup + `
 cleanup_check() {
@@ -313,6 +313,16 @@ function ut_test_execution_spawned() {
  kill -TERM $$
 }
 trap cleanup_check EXIT
+if [[ "$PHASE" == cleanup ]]; then
+ mkfifo "$CASE_DIR/cleanup-ready" "$CASE_DIR/cleanup-release"
+ exec 11<>"$CASE_DIR/cleanup-ready" 12<>"$CASE_DIR/cleanup-release"
+ eval "$(declare -f checkpoint_ut_event | sed '1s/checkpoint_ut_event/original_checkpoint_ut_event/')"
+ function checkpoint_ut_event() {
+  if [[ "$1" == cancel ]]; then printf 'ready\n' >&11; read -r _ <&12; fi
+  original_checkpoint_ut_event "$@"
+ }
+ (read -r _ <&8; kill -TERM $$; read -r _ <&11; kill -TERM $$; printf 'release\n' >&12) &
+fi
 start_embedded_prebuild "$scope" 1
 artifact_dir=$CLUSTER_PREBUILD_DIR
 if [[ "$PHASE" == running ]]; then (read -r _ <&8; kill -TERM $$) & fi
