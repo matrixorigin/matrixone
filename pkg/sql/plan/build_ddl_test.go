@@ -4848,6 +4848,16 @@ func TestBuildCreateTableError(t *testing.T) {
 	runTestShouldError(mock, t, sqlerrs)
 }
 
+func TestBuildCreateTableRejectsMediumInt(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "CREATE TABLE t (m MEDIUMINT)")
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNYI), err)
+	require.Contains(t, strings.ToLower(err.Error()), "mediumint")
+
+	_, err = runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "CREATE TABLE t (m INT)")
+	require.NoError(t, err)
+}
+
 func TestBuildAlterTable(t *testing.T) {
 	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	// should pass
