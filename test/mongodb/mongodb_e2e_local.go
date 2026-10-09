@@ -127,6 +127,43 @@ func runWithDSN(ctx context.Context, db *sql.DB, dsn, host string, r *report) er
 		return err
 	}
 	r.Cases = append(r.Cases, "scan-projection-pushdown-null-conversion")
+	// Materialization exercises MongoDB scan as a source for ordinary MO DDL,
+	// then the join checks that the external and local execution paths agree on
+	// every fixture row rather than merely returning the same row count.
+	if _, err := db.ExecContext(ctx, "create table mongodb_ci.events_copy as select mongo_id,device_id,site_id,ts,measurement,source_batch from mongodb_ci.events"); err != nil {
+		return fmt.Errorf("materialize MongoDB source: %w", err)
+	}
+	const eventColumns = "mongo_id,device_id,site_id,cast(ts as char),coalesce(cast(measurement as char),'NULL'),coalesce(source_batch,'NULL')"
+	if err := expectRows(ctx, db, "select "+eventColumns+" from mongodb_ci.events_copy order by mongo_id", manifest.Rows); err != nil {
+		return fmt.Errorf("materialized MongoDB rows: %w", err)
+	}
+	if err := expectRows(ctx, db,
+		"select e.mongo_id,e.device_id,e.site_id,cast(e.ts as char),coalesce(cast(e.measurement as char),'NULL'),coalesce(e.source_batch,'NULL') from mongodb_ci.events e join mongodb_ci.events_copy c on e.mongo_id=c.mongo_id order by e.mongo_id",
+		manifest.Rows); err != nil {
+		return fmt.Errorf("MongoDB and local table join: %w", err)
+	}
+	r.Cases = append(r.Cases, "materialize-and-join-exact-rows")
+
+	// A duplicate target key must abort the entire INSERT ... SELECT, including
+	// any rows scanned before the conflicting source document.
+	if _, err := db.ExecContext(ctx, "create table mongodb_ci.unique_sink(mongo_id char(24) primary key, device_id varchar(20))"); err != nil {
+		return fmt.Errorf("create constrained MongoDB target: %w", err)
+	}
+	if _, err := db.ExecContext(ctx, "insert into mongodb_ci.unique_sink values('64b000000000000000000002','seed')"); err != nil {
+		return fmt.Errorf("seed constrained MongoDB target: %w", err)
+	}
+	if _, err := db.ExecContext(ctx, "insert into mongodb_ci.unique_sink select mongo_id,device_id from mongodb_ci.events"); err == nil {
+		return fmt.Errorf("MongoDB ingestion with duplicate target key unexpectedly succeeded")
+	} else if !strings.Contains(strings.ToLower(err.Error()), "duplicate") {
+		return fmt.Errorf("MongoDB ingestion failed for an unrelated reason: %w", err)
+	}
+	if err := expectScalar(ctx, db, "select count(*) from mongodb_ci.unique_sink", "1"); err != nil {
+		return fmt.Errorf("constrained MongoDB target changed after rejected ingestion: %w", err)
+	}
+	if err := expectScalar(ctx, db, "select device_id from mongodb_ci.unique_sink where mongo_id='64b000000000000000000002'", "seed"); err != nil {
+		return fmt.Errorf("constrained MongoDB target seed changed after rejected ingestion: %w", err)
+	}
+	r.Cases = append(r.Cases, "target-unique-conflict-atomic-rollback")
 	if err := verifyReadOnlyInsert(ctx, db, manifest.Rows); err != nil {
 		return err
 	}

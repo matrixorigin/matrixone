@@ -85,6 +85,14 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	mock.ExpectQuery("select mongo_id").WillReturnRows(fixtureRows())
 	expectMongoDBE2EScalar(mock, "3")
 	expectMongoDBE2EScalar(mock, "3")
+	mock.ExpectExec("create table mongodb_ci.events_copy as select").WillReturnResult(sqlmock.NewResult(0, 5))
+	mock.ExpectQuery("select mongo_id.*from mongodb_ci.events_copy").WillReturnRows(fixtureRows())
+	mock.ExpectQuery("select e.mongo_id.*join mongodb_ci.events_copy").WillReturnRows(fixtureRows())
+	mock.ExpectExec("create table mongodb_ci.unique_sink").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("insert into mongodb_ci.unique_sink values").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("insert into mongodb_ci.unique_sink select").WillReturnError(errors.New("Duplicate entry for key PRIMARY"))
+	expectMongoDBE2EScalar(mock, "1")
+	expectMongoDBE2EScalar(mock, "seed")
 	mock.ExpectExec("insert into mongodb_ci.events").WillReturnError(errors.New("cannot insert/update/delete from external table"))
 	mock.ExpectQuery("select mongo_id").WillReturnRows(fixtureRows())
 	expectMongoDBE2EScalar(mock, "1")
@@ -136,6 +144,8 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 		"secret-backed-ddl",
 		"show-create-redaction-roundtrip",
 		"scan-projection-pushdown-null-conversion",
+		"materialize-and-join-exact-rows",
+		"target-unique-conflict-atomic-rollback",
 		"read-only-insert-source-preserved",
 		"low-precision-temporal-residual",
 		"decoded-vector-budget-enforced",
