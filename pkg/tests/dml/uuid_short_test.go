@@ -16,7 +16,9 @@ package dml
 
 import (
 	"context"
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/stretchr/testify/require"
 	"testing"
 	"time"
@@ -81,6 +83,11 @@ func TestUUIDShortSQL(t *testing.T) {
 		}
 		db := openRetestSQLDB(t, c)
 		defer db.Close()
+		rows := objectio.BlockMaxRows + 1
+		var total, distinct int
+		require.NoError(t, db.QueryRowContext(ctx, fmt.Sprintf("select count(*),count(distinct uuid_short()) from generate_series(1,%d) g", rows)).Scan(&total, &distinct))
+		require.Equal(t, rows, total)
+		require.Equal(t, rows, distinct)
 		execSQLDB(t, ctx, db, "create database uuid_short_metadata")
 		defer cleanupTestDatabases(t, db, "uuid_short_metadata")
 		execSQLDB(t, ctx, db, "create table uuid_short_metadata.t as select uuid_short() as id")

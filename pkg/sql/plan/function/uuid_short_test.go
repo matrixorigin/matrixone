@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 	"math"
@@ -29,11 +30,11 @@ import (
 
 type uuidShortClient struct {
 	logservice.CNHAKeeperClient
-	allocate func(context.Context, string) (uint64, error)
+	allocate func(context.Context, string, uint64) (uint64, error)
 }
 
-func (c *uuidShortClient) AllocateIDByKey(ctx context.Context, key string) (uint64, error) {
-	return c.allocate(ctx, key)
+func (c *uuidShortClient) AllocateIDByKeyWithBatch(ctx context.Context, key string, batch uint64) (uint64, error) {
+	return c.allocate(ctx, key, batch)
 }
 
 func TestUUIDShort(t *testing.T) {
@@ -59,8 +60,9 @@ func TestUUIDShort(t *testing.T) {
 			require.NoError(t, result.PreExtendAndReset(tc.length))
 			calls := 0
 			var child context.Context
-			proc.Base.Hakeeper = &uuidShortClient{allocate: func(ctx context.Context, key string) (uint64, error) {
+			proc.Base.Hakeeper = &uuidShortClient{allocate: func(ctx context.Context, key string, batch uint64) (uint64, error) {
 				require.Equal(t, uuidShortAllocationKey, key)
+				require.Equal(t, uint64(objectio.BlockMaxRows), batch)
 				_, ok := ctx.Deadline()
 				require.True(t, ok)
 				child = ctx
@@ -91,8 +93,8 @@ func TestUUIDShort(t *testing.T) {
 		want   error
 	}{
 		{"nil", nil, nil},
-		{"zero", &uuidShortClient{allocate: func(context.Context, string) (uint64, error) { return 0, nil }}, nil},
-		{"failure", &uuidShortClient{allocate: func(context.Context, string) (uint64, error) { return 0, injected }}, injected},
+		{"zero", &uuidShortClient{allocate: func(context.Context, string, uint64) (uint64, error) { return 0, nil }}, nil},
+		{"failure", &uuidShortClient{allocate: func(context.Context, string, uint64) (uint64, error) { return 0, injected }}, injected},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			proc.Base.Hakeeper = tc.client
@@ -111,7 +113,7 @@ func TestUUIDShort(t *testing.T) {
 	parent, cancel := context.WithCancel(proc.Ctx)
 	cancel()
 	proc.Ctx = parent
-	proc.Base.Hakeeper = &uuidShortClient{allocate: func(ctx context.Context, _ string) (uint64, error) { return 0, ctx.Err() }}
+	proc.Base.Hakeeper = &uuidShortClient{allocate: func(ctx context.Context, _ string, _ uint64) (uint64, error) { return 0, ctx.Err() }}
 	r := vector.NewFunctionResultWrapper(types.T_uint64.ToType(), proc.Mp())
 	defer r.Free()
 	require.NoError(t, r.PreExtendAndReset(1))

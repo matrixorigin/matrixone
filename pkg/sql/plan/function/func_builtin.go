@@ -41,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -2247,6 +2248,9 @@ func builtInUUID(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *
 // All accounts and CNs share one durable namespace, separate from internal IDs.
 const uuidShortAllocationKey = "__mo_sql_uuid_short"
 
+// Reserve one normal block of IDs to amortize SQL allocation refills.
+const uuidShortAllocationBatchSize uint64 = objectio.BlockMaxRows
+
 func builtInUUIDShort(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[uint64](result)
 	var ctx context.Context
@@ -2266,7 +2270,7 @@ func builtInUUIDShort(_ []*vector.Vector, result vector.FunctionResultWrapper, p
 			ctx, cancel = context.WithTimeout(proc.Ctx, 30*time.Second)
 			defer cancel()
 		}
-		id, err := client.AllocateIDByKey(ctx, uuidShortAllocationKey)
+		id, err := client.AllocateIDByKeyWithBatch(ctx, uuidShortAllocationKey, uuidShortAllocationBatchSize)
 		if err != nil {
 			return err
 		}

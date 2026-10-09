@@ -2348,42 +2348,25 @@ func TestAllocateIDByKeyWaiterRetriesAfterRefillFailure(t *testing.T) {
 
 func TestAllocateIDConsumesEntireBatch(t *testing.T) {
 	originalSend := sendCNAllocateIDFunc
-	defer func() {
-		sendCNAllocateIDFunc = originalSend
-	}()
+	t.Cleanup(func() { sendCNAllocateIDFunc = originalSend })
 
 	tests := []struct {
-		name        string
-		key         string
-		allocateIDs func(context.Context, *managedHAKeeperClient) ([]uint64, error)
+		name       string
+		key        string
+		configured uint64
+		allocateID func(*managedHAKeeperClient, context.Context) (uint64, error)
 	}{
 		{
-			name: "shared",
-			allocateIDs: func(ctx context.Context, c *managedHAKeeperClient) ([]uint64, error) {
-				ids := make([]uint64, 0, 3)
-				for range 3 {
-					id, err := c.AllocateID(ctx)
-					if err != nil {
-						return nil, err
-					}
-					ids = append(ids, id)
-				}
-				return ids, nil
-			},
+			name:       "shared",
+			configured: 3,
+			allocateID: (*managedHAKeeperClient).AllocateID,
 		},
 		{
-			name: "keyed",
-			key:  "key",
-			allocateIDs: func(ctx context.Context, c *managedHAKeeperClient) ([]uint64, error) {
-				ids := make([]uint64, 0, 3)
-				for range 3 {
-					id, err := c.AllocateIDByKeyWithBatch(ctx, "key", 3)
-					if err != nil {
-						return nil, err
-					}
-					ids = append(ids, id)
-				}
-				return ids, nil
+			name:       "keyed_explicit_batch",
+			key:        "key",
+			configured: 1,
+			allocateID: func(c *managedHAKeeperClient, ctx context.Context) (uint64, error) {
+				return c.AllocateIDByKeyWithBatch(ctx, "key", 3)
 			},
 		},
 	}
@@ -2404,17 +2387,22 @@ func TestAllocateIDConsumesEntireBatch(t *testing.T) {
 			}
 
 			c := &managedHAKeeperClient{
-				cfg: HAKeeperClientConfig{AllocateIDBatch: 3},
+				cfg: HAKeeperClientConfig{AllocateIDBatch: tt.configured},
 			}
 			c.mu.client = &hakeeperClient{}
-			c.allocMu.allocIDByKey = make(map[string]*allocID)
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
 
-			ids, err := tt.allocateIDs(ctx, c)
-			require.NoError(t, err)
-			require.Equal(t, []uint64{1, 2, 3}, ids)
-			require.Equal(t, 1, sendCalls)
+			for want := uint64(1); want <= 4; want++ {
+				id, err := tt.allocateID(c, ctx)
+				require.NoError(t, err)
+				require.Equal(t, want, id)
+				if want <= 3 {
+					require.Equal(t, 1, sendCalls)
+				} else {
+					require.Equal(t, 2, sendCalls)
+				}
+			}
 		})
 	}
 }
