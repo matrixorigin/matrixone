@@ -212,6 +212,13 @@ lower-envelope estimate: `S = 1` when the protocol 49+ sharing possibility gate
 is open, otherwise `S = B` for the legacy fallback. The possibility gate does
 not prove that the later detailed rewrite will succeed; a rejected rewrite
 executes the legacy branches and therefore costs more than this envelope.
+Let `G` be the estimated number of completed output groups across all prefixes,
+including the grand total: `G = 1 + sum_i min(N, product_{j<=i}(NDV_j))`.
+`F` is the fixed relative cost of flushing a completed prefix, freeing its
+aggregate state, and recreating the single-group executor. The runtime performs
+this lifecycle for every completed prefix even when input order is already
+proven, so ordered high-NDV input must pay `F * G * A` rather than being modeled
+as boundary checks alone.
 For each prefix, `K_i` is its key-width factor and `A` is the aggregate update
 factor derived from the selected aggregate functions:
 
@@ -225,11 +232,13 @@ SortWork(unordered) = ScanCost
          + N * log2(N + 1) * compare-cost * full-key-factor
          + N * boundary-cost * L
          + N * aggregate-cost * A * B
+         + finalize-cost * G * A
          + sort-startup-cost
 
 SortWork(ordered) = ScanCost
          + N * boundary-cost * L
          + N * aggregate-cost * A * B
+         + finalize-cost * G * A
 ```
 
 Hash branches may overlap in wall time, so the estimate combines total CPU/IO
@@ -250,7 +259,8 @@ removed. Configured sort workspace and aggregate-state limits add bounded
 penalties. Both ordered and unordered sort paths check the same bounded
 streaming state: the active `L+1` prefix states plus fixed per-input-batch
 scratch. Unordered input additionally pays for its sort workspace and can spill
-there; it does not materialize one aggregate state per emitted group. `N_cap`,
+there; it does not materialize one aggregate state per emitted group, but it
+still pays the append/flush/free/recreate lifecycle represented by `G`. `N_cap`,
 retained below as a diagnostic output-group upper bound, is the larger of the
 filtered input estimate and the table-row estimate so stale or optimistic
 filtered `Outcnt` cannot make diagnostics look artificially small.
@@ -281,7 +291,7 @@ The reproducible operator benchmark is:
 
 ```text
 go test -mod=mod ./pkg/sql/colexec/group -run '^$' \
-  -bench 'BenchmarkRollupAlgorithms/(large_ordered_low_ndv|large_unordered_low_ndv|large_ordered_one_key|large_ordered_single_group|large_ordered_many_levels|large_ordered_wider_ndv|large_ordered_high_ndv|large_ordered_avg_many_levels|large_ordered_very_many_levels|large_ordered_extreme_levels|million_ordered_low_ndv)/(sort|hash-shared|hash-serial|hash-parallel)$' \
+  -bench 'BenchmarkRollupAlgorithms/(large_ordered_low_ndv|large_unordered_low_ndv|large_ordered_one_key|large_ordered_single_group|large_ordered_many_levels|large_ordered_wider_ndv|large_ordered_high_ndv|large_ordered_unique_keys|large_derived_order_unique_keys|large_ordered_avg_many_levels|large_ordered_very_many_levels|large_ordered_extreme_levels|million_ordered_low_ndv)/(sort|hash-shared|hash-serial|hash-parallel)$' \
   -benchtime=5x -count=3
 ```
 
@@ -309,6 +319,8 @@ shape                              sort          hash-serial       hash-parallel
 100000 rows, 12 keys, NDV=2        3.73–3.91 ms   36.67–37.50 ms     10.66–11.44 ms
 100000 rows, 12 keys, NDV=4        3.85–4.03 ms   36.68–36.95 ms     11.37–12.44 ms
 100000 rows, 12 keys, NDV=64       5.58–6.12 ms   38.40–39.01 ms     10.76–12.24 ms
+100000 rows, 3 unique keys          2164–2218 ms   65.8–97.1 ms       40.8–44.3 ms
+100000 rows, 3 unique keys + ORDER  2225–2279 ms   239.4–263.0 ms     56.2–94.8 ms
 100000 rows, 12 keys, AVG          6.37–6.52 ms   39.51–39.67 ms     11.26–12.25 ms
 100000 rows, 20 keys, NDV=2        6.63–6.86 ms   87.39–91.03 ms     22.72–24.37 ms
 100000 rows, 32 keys, NDV=2       10.19–10.60 ms  202.27–205.88 ms     46.93–53.68 ms
@@ -329,6 +341,8 @@ shape                              hash-shared
 1000000 rows, 3 keys, NDV=4       2379–2487 ms
 1000000 rows, child ORDER BY      2292–2545 ms
 1000000 rows, child ORDER BY + AVG 1348–1450 ms
+100000 rows, 3 unique keys         151.5–206.4 ms
+100000 rows, 3 unique keys + ORDER 184.4–208.4 ms
 ```
 
 The shared path keeps one input scan and one aggregate state, but its
@@ -361,15 +375,16 @@ GROUP BY d.a, d.b, d.c WITH ROLLUP;
 ```
 
 For this shape, the forced SORT plan contains one table scan, one sort, and one
-streaming aggregate. The shared HASH plan contains one child `ORDER BY`, one
-grouping-set expansion, and one grouping-aware aggregate; the unshared fallback
-expands to four table scans, four sorts, five aggregates, and three `UNION ALL`
-nodes. The derived-order benchmark therefore charges the child `ORDER BY` once
-for SORT and shared HASH, or once per grouping-set branch for the unshared
-fallback. It is a comparison of the current physical plan shapes, not a claim
-that an arbitrary unordered ROLLUP should always sort. The additional `AVG`
-row uses two grouping keys plus a third measure column and matches the issue's
-`AVG(x)` shape.
+streaming aggregate. At the current sharing protocol, the reachable shared HASH
+plan contains one child `ORDER BY`, one grouping-set expansion, and one
+grouping-aware aggregate. If sharing admission rejects the shape, the legacy
+fallback expands to four table scans, four sorts, five aggregates, and three
+`UNION ALL` nodes. The derived-order benchmark therefore charges the child
+`ORDER BY` once for SORT and shared HASH, or once per grouping-set branch for the
+unshared fallback. It is a comparison of these physical plan shapes, not a
+claim that an arbitrary unordered ROLLUP should always sort. The additional
+`AVG` row uses two grouping keys plus a third measure column and matches the
+issue's `AVG(x)` shape.
 
 The aggregate marker is carried in `ExtraOptions`, which is already part of
 the plan representation. The final group is compiled only after the global
