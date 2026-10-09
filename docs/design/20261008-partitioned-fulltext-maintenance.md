@@ -1,9 +1,11 @@
 # Partitioned classic FULLTEXT maintenance contract
 
-Revision: R2 resource clarification, 2026-10-09. Issue #28311 / PR #28477.
+Revision: R3 functional-index integration, 2026-10-09. Issue #28311 / PR #28477.
 
 Status: **proposal, approval required**. This document describes the local
-maintenance candidate based on `23d8f61252f3017dff218b530817a240206fd762`.
+maintenance merge candidate integrating actual main
+`c2c1031d0ba4b1034849f6bd3d267252a11eb6c9` (#29472) into PR head
+`4bcf6bbf2a94bdb247d837b549440e6bd6ec4c7d`.
 It is not an approval record. The earlier ODKU-only contract does not authorize
 the UPDATE, REPLACE, partition routing, or wire changes described here.
 
@@ -29,7 +31,7 @@ The candidate must preserve four invariants:
 
 The complete PR crosses planner, allocation, physical-index ownership and remote
 protocol boundaries, so the design gate remains applicable despite narrowing
-the earlier non-partitioned PK-update expansion. R2 specifies a proposal for
+the earlier non-partitioned PK-update expansion. R3 retains the proposal for
 those boundaries; design approval and distributed acceptance remain separate
 blocking decisions. It does not introduce another transaction owner.
 
@@ -133,19 +135,25 @@ existing persisted block and catalog formats, not a new posting format.
 
 ## Cumulative compatibility
 
-Base main owns MORPC 101-106, including vector-cache control at 102. The new
-route capability must not reuse 102. This candidate uses **proposed 107** for
-route-preserving PRE_INSERT and partition-index MULTI_UPDATE. It is neither an
-exclusive reservation nor an approved protocol allocation; integration must
-recheck the target registry and coordinate the final allocation.
+Integrated main owns MORPC 101-107, including vector-cache control at 102 and
+functional-index metadata/generated-key maintenance at 107 (#29472). The
+functional-index creation and 4.0.13 tenant-upgrade floors stay at 107; they
+must not be renumbered or treated as FULLTEXT-route support. This candidate
+uses **proposed 108** for route-preserving PRE_INSERT and partition-index
+MULTI_UPDATE only because actual main's 107 implementation is now integrated.
+It is neither an exclusive reservation nor an approved final landing number.
+Integration must recheck landing main and competing open protocol owners,
+and refresh maintainer ordering before publication/acceptance. Unmerged
+CRC/JSON_STORAGE_VALUE proposals are not capabilities implemented or admitted
+by this candidate.
 
 New fields are additive: plan UpdateCtx.partition_index_ctx=20,
 plan PreInsertCtx.preserve_input=15, pipeline PreInsert.preserve_input=19.
 Main's existing fields and protocol meanings are retained. The existing
 MultiUpdate wire operator is used; decoding restores its partition wrapper.
 Sender conversion and recursive remote-scope validation must reject routed
-payloads below the new capability. Actual predecessor 106 and historical
-102-105 are negative controls, while ordinary payloads retain their prior
+payloads below the new capability. Actual predecessor 107 and historical
+102-106 are negative controls, while ordinary payloads retain their prior
 admission. Correct mixed-version refusal is required; silently dropping route
 metadata is not a compatibility strategy. The sender checks both route fields
 through the complete lowered child tree and probes the actual destination on
@@ -227,8 +235,9 @@ both cardinalities. No measurement or reviewer acceptance is asserted here.
 1. Explicit review of this versioned scope, field ownership, cumulative
    capability, and resource trade-offs by the blocking design reviewers.
 2. Execute focused planner/operator/codec tests on this candidate and exact
-   base, including 106 refusal / proposed-107 acceptance, unchanged ordinary
-   admission, partitioned key moves, and non-partitioned/vector rejection.
+   base, including actual-main 107 refusal / proposed-108 acceptance,
+   unchanged ordinary admission, partitioned key moves, and
+   non-partitioned/vector rejection.
 3. Execute the canonical partition FULLTEXT BVT plus unchanged ordinary
    FULLTEXT PK-update/consistency controls; record SHA, environment and results.
 4. In a real multi-CN deployment, prove the producer selects WriteS3 and the
@@ -318,8 +327,8 @@ a capacity risk until its memory envelope is accepted.
 
 | Open decision | Owner / decision point | Status |
 | --- | --- | --- |
-| R2 ownership/placement/supported scope | Blocking design reviewers, before implementation approval | Approval required |
-| Final cumulative route capability | Integrator and protocol owners, against landing main | Proposed 107 only |
+| R3 ownership/placement/supported scope | Blocking design reviewers, before implementation approval | Approval required |
+| Final cumulative route capability and ordering | Integrator and protocol owners, against landing main and competing open owners | Proposed 108 only; maintainer ordering pending |
 | Multi-CN WriteS3 failure/cancel/visibility/reuse | Allocated deployment validation owner, before acceptance | NOT_RUN |
 | Payload/copy/writer budget and comparative cost | Design reviewers and validation owner, before rollout | Unmeasured / unaccepted |
 
@@ -332,10 +341,21 @@ fulltext_partition (124), fulltext_update_pk (21), fulltext_update_consistency
 (71), returning (64), and partition3 (105) each pass twice, with zero failed,
 ignored, or abnormal statements. Inputs/results are byte-identical to the
 current canonical files; ordinary FULLTEXT controls retain main's semantics.
-These are current single-CN results, not distributed/old-binary acceptance.
+These are historical single-CN results, not execution of this merged candidate
+or distributed/old-binary acceptance.
 Focused PRE_INSERT route preservation and partition target/failure/reset/S3
 writer/free race validation passes 16 tests/subtests, with no detected race.
 
-Explicit design acceptance, final capability allocation, actual multi-CN/S3
-transaction/cleanup acceptance, and measured cost items remain NOT_RUN or
-unaccepted. No previous-head execution receipt is promoted to this candidate.
+Current merged-candidate focused validation passed on Go 1.27.1 darwin/arm64
+with matching native provenance: 20 test roots across compile, planner and
+4.0.13 upgrade controls, plus the three published authenticated/bulk-write
+fixture roots. Configured incremental lint and both source/base diff checks
+passed. Current full owning-package, race, canonical BVT and deployment
+validation remain NOT_RUN; the earlier independent resource failures remain
+unresolved. These results do not promote earlier green evidence or pending CI
+to whole-feature acceptance.
+
+Explicit design acceptance, maintainer ordering/final capability allocation,
+actual multi-CN/S3 transaction/cleanup acceptance, and measured cost items
+remain NOT_RUN or unaccepted. No previous-head execution receipt is promoted
+to this candidate.

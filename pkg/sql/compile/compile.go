@@ -8615,7 +8615,7 @@ func supportsRemotePartitionFulltextRoute(service string) bool {
 		return false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion107
+	return ok && protocolVersion >= defines.MORPCVersion108
 }
 
 func supportsRemoteApproxPercentile(service string) bool {

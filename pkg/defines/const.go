@@ -142,8 +142,9 @@ const (
 	MORPCVersion104    int64 = 104 // preserve typed JSON scalar literals across CNs
 	MORPCVersion105    int64 = 105 // instance-bound lock-service drain confirmation
 	MORPCVersion106    int64 = 106 // CDC durable target identity and generation-aware task admission
-	MORPCVersion107    int64 = 107 // candidate: route-preserving PRE_INSERT and partition-index MULTI_UPDATE
-	MORPCLatestVersion       = MORPCVersion107
+	MORPCVersion107    int64 = 107 // functional-index metadata and generated-key maintenance
+	MORPCVersion108    int64 = 108 // candidate: route-preserving PRE_INSERT and partition-index MULTI_UPDATE
+	MORPCLatestVersion       = MORPCVersion108
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

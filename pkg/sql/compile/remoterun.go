@@ -2216,7 +2216,7 @@ func validateRemotePartitionFulltextRouteProtocol(
 	}
 	if proc == nil || !supportsRemotePartitionFulltextRoute(proc.GetService()) {
 		return moerr.NewNotSupportedNoCtx(
-			"partitioned FULLTEXT routing requires MORPC protocol version 107",
+			"partitioned FULLTEXT routing requires MORPC protocol version 108",
 		)
 	}
 	return nil
