@@ -142,8 +142,9 @@ const (
 	MORPCVersion104    int64 = 104 // preserve typed JSON scalar literals across CNs
 	MORPCVersion105    int64 = 105 // instance-bound lock-service drain confirmation
 	MORPCVersion106    int64 = 106 // CDC durable target identity and generation-aware task admission
-	MORPCVersion107    int64 = 107 // materialized-view ISCP capability and durable envelope
-	MORPCLatestVersion       = MORPCVersion107
+	MORPCVersion107    int64 = 107 // functional-index metadata and generated-key maintenance
+	MORPCVersion108    int64 = 108 // materialized-view ISCP capability and durable envelope
+	MORPCLatestVersion       = MORPCVersion108
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

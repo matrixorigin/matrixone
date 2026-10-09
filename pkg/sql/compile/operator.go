@@ -889,7 +889,10 @@ func constructPreInsert(nodes []*plan.Node, node *plan.Node, eng engine.Engine, 
 	ctx := proc.GetTopContext()
 	writeMVState := plan2.CanWriteMaterializedViewHiddenColumns(ctx, preCtx.TableDef)
 	for _, col := range preCtx.TableDef.Cols {
-		if col.Hidden && col.Name != catalog.FakePrimaryKeyColName && !(writeMVState && col.Name != catalog.Row_ID) {
+		// Hidden generated values (functional index backing columns) have
+		// already been materialized in the input, unlike synthesized keys.
+		if col.Hidden && col.Name != catalog.FakePrimaryKeyColName &&
+			!((writeMVState && col.Name != catalog.Row_ID) || col.GeneratedCol != nil) {
 			continue
 		}
 		attrs = append(attrs, col.GetOriginCaseName())
