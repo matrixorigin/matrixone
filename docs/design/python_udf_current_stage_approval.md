@@ -5,7 +5,7 @@
 | Record | `python-udf-current-stage-r1-2026-09-24-approval` |
 | Issue | [MatrixOne #28132](https://github.com/matrixorigin/matrixone/issues/28132) |
 | Implementation PR | [MatrixOne #29152](https://github.com/matrixorigin/matrixone/pull/29152) |
-| Current-stage proposal | [`python-udf-current-stage-r4-2026-10-09`](python_udf_current_stage.md); historical r1 approval retained below |
+| Current-stage proposal | [`python-udf-current-stage-r5-2026-10-09`](python_udf_current_stage.md); historical r1 approval retained below |
 | Scope | Explicitly enabled test/development adapter; no production rollout or production-readiness claim |
 
 This record separates the immutable current-stage design artifact, the feature
@@ -81,3 +81,17 @@ Code review and passing tests do not substitute for those independent decisions.
 ## r4 rebase maintenance addendum (2026-10-09)
 
 Against upstream `9df2c4006142a0593f9bb4c40019ee1a8cd2cde7`, the current repair catalog is 4.0.13 with minimum direct source 4.0.12. Upstream 4.0.12 owns the charset metadata refresh and remains unchanged. The shared-function repair replays its nine entries only in the new handler, so already-upgraded 4.0.12 tenants are scheduled. Protocol admission remains 107, immediate predecessor 106. This mechanical rebase correction and the historical-schema lookup correction for snapshot/TS/PITR restore remain within the existing development scope; independent approval remains pending.
+
+## r5 rebase maintenance addendum (2026-10-09)
+
+Official main `d7621ea017db4e43dbde9e5a855ba7b2ad920784` has allocated
+MORPC 107 and catalog 4.0.13 to functional-index metadata and its STATISTICS
+refresh. This proposal uses the next MORPC 108 and a separate catalog 4.0.14
+repair (minimum direct source 4.0.13), preserving the upstream handler unchanged.
+The nine idempotent shared-function entries are replayed only by the new handler;
+already-upgraded 4.0.13 tenants remain eligible. Sender, receiver, prepared reuse,
+physical execution and status RPC admission move together; protocol 107 is the
+immediate predecessor rejection case. This is a mechanical compatibility
+correction within the existing test/development scope. Independent Architecture
+and SQL/Planner approval remains pending; no approval is inferred from this
+addendum or validation.
