@@ -660,31 +660,25 @@ func (u *CDCWatermarkUpdater) execReadWM() (errMsg string, err error) {
 		}
 	}
 
-	// for each job in the getOrAddCommittedBuffer, if the watermark is found,
-	// notify the job with the watermark, otherwise, add the job to the addCommittedBuffer
-	// and clear the getOrAddCommittedBuffer
-	// the jobs in the addCommittedBuffer will be processed in the `execAddWM`
-	u.Lock()
-	defer u.Unlock()
+	// Batch scratch belongs to the queue worker. Reconcile each legacy result
+	// once before publishing it: an ACK may install owned progress while the
+	// SQL read is in flight, including a lower replay timestamp for a new source.
 	for key, result := range u.readKeysBuffer {
-		if result.Ok {
-			u.cacheCommitted[key] = result.Watermark
-			// The legacy projection does not carry source_table_id. Stable
-			// admission immediately follows with GetWatermarkProgress, which
-			// atomically installs both fields.
-			delete(u.cacheCommittedGeneration, key)
+		if !result.Ok {
+			continue
 		}
+		watermark, publishErr := u.publishLegacyWatermark(ctx, key, result.Watermark)
+		if publishErr != nil {
+			return "publish legacy watermark", publishErr
+		}
+		result.Watermark = watermark
+		u.readKeysBuffer[key] = result
 	}
 	for i, job := range u.getOrAddCommittedBuffer {
 		if _, deleted := u.deletedTasks.Load(job.Key.TaskId); deleted {
 			job.DoneWithErr(nil)
-			u.getOrAddCommittedBuffer[i] = nil
-			continue
-		}
-		if u.readKeysBuffer[*job.Key].Ok {
-			u.cacheCommitted[*job.Key] = u.readKeysBuffer[*job.Key].Watermark
-			delete(u.cacheCommittedGeneration, *job.Key)
-			job.DoneWithResult(u.readKeysBuffer[*job.Key].Watermark)
+		} else if result := u.readKeysBuffer[*job.Key]; result.Ok {
+			job.DoneWithResult(result.Watermark)
 		} else {
 			u.addCommittedBuffer = append(u.addCommittedBuffer, job)
 		}
@@ -1315,6 +1309,31 @@ func (u *CDCWatermarkUpdater) constructBatchUpdateWMErrMsgSQLs(
 		CDCSQLBuilder.GuardedOwnedWatermarkErrorUpdateSQL)...)
 }
 
+// publishLegacyWatermark reconciles an unversioned batch result with the
+// authoritative owned progress. Caller-owned scratch never participates in
+// cache synchronization; only the updater mutex protects published tuples.
+func (u *CDCWatermarkUpdater) publishLegacyWatermark(
+	ctx context.Context, key WatermarkKey, candidate types.TS,
+) (types.TS, error) {
+	u.Lock()
+	current, found := u.cacheCommitted[key]
+	owned := u.activeWatermarkFence[key] != nil || (found && u.cacheCommittedGeneration[key] > 0)
+	if !owned {
+		u.cacheCommitted[key] = candidate
+		delete(u.cacheCommittedGeneration, key)
+		u.Unlock()
+		return candidate, nil
+	}
+	u.Unlock()
+	if found {
+		return current, nil
+	}
+	// A pending owner may not have published progress yet. A legacy projection
+	// cannot establish its generation, so use the existing durable tuple read.
+	watermark, _, err := u.GetWatermarkProgress(ctx, &key)
+	return watermark, err
+}
+
 func (u *CDCWatermarkUpdater) execAddWM() (errMsg string, err error) {
 	if len(u.addCommittedBuffer) == 0 {
 		return "", nil
@@ -1340,20 +1359,16 @@ func (u *CDCWatermarkUpdater) execAddWM() (errMsg string, err error) {
 		errMsg = watermarkBatchError("add", failedBatch, addSQLs)
 		return
 	}
-	u.Lock()
-	defer u.Unlock()
 	for i, job := range u.addCommittedBuffer {
 		if _, deleted := u.deletedTasks.Load(job.Key.TaskId); deleted {
 			job.DoneWithErr(nil)
-			u.addCommittedBuffer[i] = nil
-			continue
+		} else {
+			watermark, publishErr := u.publishLegacyWatermark(ctx, *job.Key, job.Watermark)
+			if publishErr != nil {
+				return "publish added watermark", publishErr
+			}
+			job.DoneWithResult(watermark)
 		}
-		// add the watermark to the cacheCommitted
-		u.cacheCommitted[*job.Key] = job.Watermark
-		delete(u.cacheCommittedGeneration, *job.Key)
-		// notify the job with the watermark
-		job.DoneWithResult(job.Watermark)
-		// clear the addCommittedBuffer
 		u.addCommittedBuffer[i] = nil
 	}
 	// clear the addCommittedBuffer
@@ -1544,8 +1559,14 @@ func (u *CDCWatermarkUpdater) getWatermarkProgress(
 		return types.TS{}, 0, false, err
 	}
 	u.Lock()
-	u.cacheCommitted[*key] = watermark
-	u.cacheCommittedGeneration[*key] = generation
+	if current, found := u.cacheCommitted[*key]; found &&
+		(u.activeWatermarkFence[*key] != nil || u.cacheCommittedGeneration[*key] > 0) &&
+		watermarkProgressIsNewer(u.cacheCommittedGeneration[*key], current, generation, watermark) {
+		watermark, generation = current, u.cacheCommittedGeneration[*key]
+	} else {
+		u.cacheCommitted[*key] = watermark
+		u.cacheCommittedGeneration[*key] = generation
+	}
 	u.Unlock()
 	return watermark, generation, true, nil
 }
@@ -1629,8 +1650,14 @@ func (u *CDCWatermarkUpdater) ClaimWatermarkOwner(
 		return types.TS{}, 0, &OwnerFenceLostError{err: moerr.NewInvalidTask(
 			ctx, "CDC watermark owner was superseded locally", ownerGeneration)}
 	}
-	u.cacheCommitted[*key] = watermark
-	u.cacheCommittedGeneration[*key] = generation
+	if current, found := u.cacheCommitted[*key]; found &&
+		(u.activeWatermarkFence[*key] != nil || u.cacheCommittedGeneration[*key] > 0) &&
+		watermarkProgressIsNewer(u.cacheCommittedGeneration[*key], current, generation, watermark) {
+		watermark, generation = current, u.cacheCommittedGeneration[*key]
+	} else {
+		u.cacheCommitted[*key] = watermark
+		u.cacheCommittedGeneration[*key] = generation
+	}
 	u.Unlock()
 	return watermark, generation, nil
 }
@@ -1767,7 +1794,6 @@ func (u *CDCWatermarkUpdater) finishTargetAcknowledgement(
 	delete(u.cacheCommitting, *key)
 	delete(u.cacheCommittingGeneration, *key)
 	delete(u.cacheCommittingFence, *key)
-	delete(u.readKeysBuffer, *key)
 	u.cacheCommitted[*key] = actual
 	u.cacheCommittedGeneration[*key] = generation
 	u.Unlock()
@@ -2723,11 +2749,10 @@ func (u *CDCWatermarkUpdater) GetOrAddCommitted(
 				return types.TS{}, nil
 			}
 			if watermark != nil {
-				u.Lock()
-				u.cacheCommitted[*key] = *watermark
-				delete(u.cacheCommittedGeneration, *key)
-				u.Unlock()
-				ret = *watermark
+				ret, err = u.publishLegacyWatermark(ctx, *key, *watermark)
+				if err != nil {
+					return types.TS{}, err
+				}
 			}
 			if u.shouldLogFallback(key) {
 				fields := []zap.Field{

@@ -116,9 +116,15 @@ type watermarkProgressExecutor struct {
 
 type watermarkReadExecutor struct {
 	watermark string
+	onQuery   func()
+	onExec    func()
+	missing   bool
 }
 
 func (m *watermarkReadExecutor) Exec(context.Context, string, ie.SessionOverrideOptions) error {
+	if m.onExec != nil {
+		m.onExec()
+	}
 	return nil
 }
 
@@ -127,9 +133,14 @@ func (m *watermarkReadExecutor) Query(
 	_ string,
 	_ ie.SessionOverrideOptions,
 ) ie.InternalExecResult {
-	return &InternalExecResultForTest{resultSet: &MysqlResultSetForTest{Data: [][]interface{}{
-		{"7", "task", "db", "tbl", m.watermark},
-	}}}
+	if m.onQuery != nil {
+		m.onQuery()
+	}
+	rows := [][]interface{}{}
+	if !m.missing {
+		rows = append(rows, []interface{}{"7", "task", "db", "tbl", m.watermark})
+	}
+	return &InternalExecResultForTest{resultSet: &MysqlResultSetForTest{Data: rows}}
 }
 
 func (m *watermarkReadExecutor) ApplySessionOverride(ie.SessionOverrideOptions) {}
@@ -1956,6 +1967,84 @@ func TestCDCWatermarkUpdaterLegacyReadMaintainsProgressTupleInvariant(t *testing
 		_, hasGeneration := updater.cacheCommittedGeneration[*key]
 		require.False(t, hasGeneration)
 	})
+	for _, old := range []types.TS{types.BuildTS(5, 0), types.BuildTS(50, 0)} {
+		t.Run("ACK supersedes delayed legacy read "+old.ToString(), func(t *testing.T) {
+			entered, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+			var scratchSurvived bool
+			var updater *CDCWatermarkUpdater
+			exec := &watermarkReadExecutor{watermark: old.ToString(), onQuery: func() {
+				close(entered)
+				<-release
+				_, scratchSurvived = updater.readKeysBuffer[*key]
+			}}
+			updater = NewCDCWatermarkUpdater(t.Name(), exec)
+			fence := NewOwnerFenceForGeneration(time.UnixMicro(10), func(context.Context) error { return nil })
+			updater.activeWatermarkFence[*key] = fence
+			job := NewGetOrAddCommittedWMJob(t.Context(), key, &candidate)
+			var once sync.Once
+			unblock := func() { once.Do(func() { close(release) }) }
+			go func() { defer close(done); updater.onJobs(job) }()
+			t.Cleanup(func() {
+				unblock()
+				select {
+				case <-done:
+				case <-time.After(5 * time.Second):
+					t.Error("watermark worker did not finish")
+				}
+			})
+			select {
+			case <-entered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("legacy read did not start")
+			}
+			replay := types.BuildTS(20, 0)
+			require.NoError(t, updater.finishTargetAcknowledgement(t.Context(), key, fence, replay, 42))
+			unblock()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("legacy read did not finish")
+			}
+			require.True(t, scratchSurvived, "ACK must not mutate worker scratch")
+			require.NoError(t, job.GetResult().Err)
+			require.Equal(t, replay, job.GetResult().Res)
+			require.Equal(t, replay, updater.cacheCommitted[*key])
+			require.Equal(t, uint64(42), updater.cacheCommittedGeneration[*key])
+			require.Same(t, fence, updater.activeWatermarkFence[*key])
+			require.Empty(t, updater.readKeysBuffer)
+		})
+	}
+
+	t.Run("ACK supersedes completed legacy insert", func(t *testing.T) {
+		exec := &watermarkReadExecutor{missing: true}
+		updater := NewCDCWatermarkUpdater(t.Name(), exec)
+		fence := NewOwnerFenceForGeneration(time.UnixMicro(10), func(context.Context) error { return nil })
+		updater.activeWatermarkFence[*key] = fence
+		replay := types.BuildTS(20, 0)
+		exec.onExec = func() {
+			require.NoError(t, updater.finishTargetAcknowledgement(t.Context(), key, fence, replay, 42))
+		}
+		job := NewGetOrAddCommittedWMJob(t.Context(), key, &candidate)
+		updater.onJobs(job)
+		require.NoError(t, job.GetResult().Err)
+		require.Equal(t, replay, job.GetResult().Res)
+		require.Equal(t, replay, updater.cacheCommitted[*key])
+		require.Equal(t, uint64(42), updater.cacheCommittedGeneration[*key])
+	})
+
+	t.Run("closed queue preserves owned progress", func(t *testing.T) {
+		updater := NewCDCWatermarkUpdater(t.Name(), &retryableMockExecutor{})
+		updater.Start()
+		updater.Stop()
+		replay, later := types.BuildTS(20, 0), types.BuildTS(50, 0)
+		updater.cacheCommitted[*key] = replay
+		updater.cacheCommittedGeneration[*key] = 42
+		actual, err := updater.GetOrAddCommitted(t.Context(), key, &later)
+		require.NoError(t, err)
+		require.Equal(t, replay, actual)
+		require.Equal(t, uint64(42), updater.cacheCommittedGeneration[*key])
+	})
+
 }
 
 func TestCDCWatermarkUpdaterRejectsInvalidDurableProgress(t *testing.T) {
