@@ -408,21 +408,34 @@ func TestCDCTargetSetupRetryAdmission(t *testing.T) {
 			var exec *CDCTaskExecutor
 			stubs.Stub(&cdc.OpenDbConn, func(context.Context, string, string, string, int, string) (*sql.DB, error) {
 				opens++
-				if tc.name == "cancelled callback" {
-					exec.callbackCancel()
-				}
-				if tc.name == "obsolete callback" {
-					exec.callbackMu.Lock()
-					exec.callbackGeneration.Add(1)
-					exec.callbackMu.Unlock()
-				}
-				if tc.name != "release deadline" {
-					return nil, tc.cause
-				}
-				db, mock, err := sqlmock.New()
+				db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherFunc(func(expected, actual string) error {
+					// Cancel after the capability/identity transactions have ended;
+					// database/sql's automatic rollback must not race fixture cleanup.
+					if tc.name == "cancelled callback" && strings.Contains(actual, "SELECT RELEASE_LOCK") {
+						exec.callbackCancel()
+					}
+					if tc.name == "obsolete callback" && strings.Contains(actual, "CALL mo_cdc_target_guard_capability") {
+						exec.callbackMu.Lock()
+						exec.callbackGeneration.Add(1)
+						exec.callbackMu.Unlock()
+					}
+					return sqlmock.QueryMatcherRegexp.Match(expected, actual)
+				})))
 				require.NoError(t, err)
+				t.Cleanup(func() {
+					defer db.Close()
+					require.NoError(t, mock.ExpectationsWereMet())
+					require.Zero(t, db.Stats().OpenConnections)
+				})
 				mock.ExpectQuery("SELECT GET_LOCK").WillReturnRows(sqlmock.NewRows([]string{"locked"}).AddRow(1))
 				mock.ExpectBegin()
+				if tc.name != "release deadline" && tc.name != "cancelled callback" {
+					mock.ExpectExec("CALL mo_cdc_target_guard_capability").WillReturnError(tc.cause)
+					mock.ExpectRollback()
+					mock.ExpectQuery("SELECT RELEASE_LOCK").WillReturnRows(sqlmock.NewRows([]string{"released"}).AddRow(1))
+					mock.ExpectClose()
+					return db, nil
+				}
 				mock.ExpectExec("CALL mo_cdc_target_guard_capability").WillReturnResult(sqlmock.NewResult(0, 0))
 				mock.ExpectRollback()
 				mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 0))
@@ -433,7 +446,6 @@ func TestCDCTargetSetupRetryAdmission(t *testing.T) {
 				mock.ExpectRollback()
 				mock.ExpectQuery("SELECT RELEASE_LOCK").WillReturnError(tc.cause)
 				mock.ExpectClose()
-				t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()); require.Zero(t, db.Stats().OpenConnections) })
 				return db, nil
 			})
 			ctrl := gomock.NewController(t)
@@ -459,10 +471,11 @@ func TestCDCTargetSetupRetryAdmission(t *testing.T) {
 				require.Error(t, exec.handleNewTables(tables))
 				require.Equal(t, 1, opens)
 				catalog.mu.Lock()
-				require.Empty(t, catalog.errMsg)
-				require.Equal(t, uint64(42), catalog.source)
-				require.Equal(t, "10-0", catalog.watermark)
+				diagnostic, source, watermark := catalog.errMsg, catalog.source, catalog.watermark
 				catalog.mu.Unlock()
+				require.Empty(t, diagnostic)
+				require.Equal(t, uint64(42), source)
+				require.Equal(t, "10-0", watermark)
 				return
 			}
 			attempts := 1

@@ -343,13 +343,39 @@ func (e *Executor) ExecSQL(
 	}
 
 	start := time.Now()
-	if !needRetry {
+	// A statement failure can roll back the whole server transaction without
+	// invalidating sql.Tx. The caller must roll back and replay the complete
+	// transaction; retrying only this statement can silently lose earlier writes.
+	if !needRetry || e.tx != nil {
+		if needRetry {
+			if err := checkExecutorStop(ctx, ar); err != nil {
+				return err
+			}
+		}
 		err := execFunc()
 		v2.CdcSendSqlDurationHistogram.Observe(time.Since(start).Seconds())
 		return err
 	}
 
 	return e.execWithRetry(ctx, ar, execFunc)
+}
+
+func checkExecutorStop(ctx context.Context, ar *ActiveRoutine) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	if ar != nil {
+		select {
+		case <-ar.Pause:
+			return moerr.NewInternalError(ctx, "task paused")
+		case <-ar.Cancel:
+			return moerr.NewInternalError(ctx, "task cancelled")
+		default:
+		}
+	}
+	return nil
 }
 
 func (e *Executor) execWithRetry(
@@ -385,20 +411,8 @@ func (e *Executor) execWithRetry(
 	err := policy.Do(ctx, func() error {
 		attempt++
 
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		if ar != nil {
-			select {
-			case <-ar.Pause:
-				return moerr.NewInternalError(ctx, "task paused")
-			case <-ar.Cancel:
-				return moerr.NewInternalError(ctx, "task cancelled")
-			default:
-			}
+		if err := checkExecutorStop(ctx, ar); err != nil {
+			return err
 		}
 
 		if e.retryDuration > 0 && attempt > 1 && time.Since(start) >= e.retryDuration {
