@@ -152,9 +152,12 @@ func (op *opBuiltInRegexp) likeFnWithEscape(
 		return moerr.NewInvalidInputNoCtx("Incorrect arguments to ESCAPE")
 	}
 	if len(parameters) >= 2 && parameters[0].GetType().Charset == types.CharsetUTF8MB40900AI &&
-		!escapeIsNull && len(escapeBytes) == 1 {
-		escape, _ := utf8.DecodeRune(escapeBytes)
-		return op.likeNative0900AI(parameters[:2], result, length, selectList, escape, true)
+		!escapeIsNull {
+		var escape rune
+		if escapeEnabled {
+			escape, _ = utf8.DecodeRune(escapeBytes)
+		}
+		return op.likeNative0900AI(parameters[:2], result, length, selectList, escape, escapeEnabled)
 	}
 	var escape rune
 	if escapeEnabled {

@@ -2209,6 +2209,31 @@ func TestNative0900AILikeUsesCollationAwareWildcard(t *testing.T) {
 	require.True(t, succeed, errInfo)
 }
 
+func TestNative0900AILikeWithEmptyAndMultibyteEscape(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	native := types.NewWithCharsetVersion(
+		types.T_varchar, types.MaxVarcharLen, 0,
+		types.CharsetUTF8MB40900AI, types.CollationVersionV1)
+	for _, tc := range []struct {
+		name, value, pattern, escape string
+	}{
+		{"empty", "É", "e", ""},
+		{"multibyte", "É", "e", "€"},
+		{"escaped wildcard", "a_b", "a€_b", "€"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(native, []string{tc.value}, nil),
+				NewFunctionTestConstInput(native, []string{tc.pattern}, nil),
+				NewFunctionTestConstInput(native, []string{tc.escape}, nil),
+			}, NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true}, nil),
+				newOpBuiltInRegexp().likeFn)
+			succeed, errInfo := tcc.Run()
+			require.True(t, succeed, errInfo)
+		})
+	}
+}
+
 func Test_BuiltIn_RegularMatchForLikeOpWithEscape(t *testing.T) {
 	op := newOpBuiltInRegexp()
 

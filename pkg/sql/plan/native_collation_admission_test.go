@@ -35,11 +35,68 @@ func TestBuildPlanAllowsUnqualifiedLegacyTextByDefault(t *testing.T) {
 	require.Zero(t, p.GetDdl().GetCreateTable().GetTableDef().Cols[0].Typ.CollationVersion)
 }
 
+func TestLegacyExplicitCollationRemainsAdmitted(t *testing.T) {
+	native0900AdmissionDisabled(t)
+	for _, sql := range []string{
+		"create table t (name varchar(32) collate utf8mb4_general_ci)",
+		"create table t (name varchar(32) collate utf8mb4_bin)",
+		"create table t (name varchar(32) character set utf8mb4)",
+		"create table t (name varchar(32)) collate utf8mb4_general_ci",
+		"select 'a' collate utf8mb4_bin",
+		"select 'a' collate utf8mb4_general_ci",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			ctx := NewMockCompilerContext(true)
+			stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			plan, err := BuildPlan(ctx, stmt, false)
+			stmt.Free()
+			require.NoError(t, err)
+			if ddl := plan.GetDdl(); ddl != nil && ddl.GetCreateTable() != nil {
+				require.Zero(t, ddl.GetCreateTable().GetTableDef().Cols[0].Typ.CollationVersion)
+			}
+		})
+	}
+	ctx := NewMockCompilerContext(true)
+	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL,
+		"select 'a' collate utf8mb4_0900_ai_ci", 1)
+	require.NoError(t, err)
+	_, err = BuildPlan(ctx, stmt, false)
+	stmt.Free()
+	require.ErrorContains(t, err, native0900AdmissionError)
+}
+
 func TestTableDefaultTextKeepsLegacySemanticVersion(t *testing.T) {
 	typ := &planpb.Type{Id: int32(types.T_varchar)}
 	applyTableDefaultCharsetToPlanType(typ, uint32(types.CharsetUTF8))
 	require.Equal(t, uint32(types.CharsetUTF8), typ.Charset)
 	require.Zero(t, typ.CollationVersion)
+}
+
+func TestDefaultOnlyNativeCollationIsNotAdmitted(t *testing.T) {
+	native0900AdmissionDisabled(t)
+	for _, collation := range []string{"utf8mb4_0900_ai_ci", "utf8mb4_0900_bin"} {
+		for _, columns := range []string{
+			"id int",
+			"id int, name varchar(32) collate utf8mb4_general_ci",
+		} {
+			t.Run(collation+"/"+columns, func(t *testing.T) {
+				ctx := NewMockCompilerContext(true)
+				stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL,
+					"create table t ("+columns+") collate "+collation, 1)
+				require.NoError(t, err)
+				_, err = BuildPlan(ctx, stmt, false)
+				stmt.Free()
+				require.ErrorContains(t, err, native0900AdmissionError)
+			})
+		}
+	}
+	table := &planpb.TableDef{DefaultCharset: 260}
+	plan := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		Nodes: []*planpb.Node{{TableDef: table}},
+	}}}
+	require.ErrorContains(t, requireNative0900PlanAdmission(context.Background(), nil, plan),
+		"unsupported table default collation identity")
 }
 
 func TestNativeCollationRelationFormatIsRejectedByDefault(t *testing.T) {

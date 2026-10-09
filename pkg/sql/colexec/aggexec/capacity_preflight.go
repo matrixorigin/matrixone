@@ -789,11 +789,13 @@ func (ag *aggState) preparePreflightArgumentKey(
 		}
 		raw := vectors[0].GetRawBytesAt(row)
 		if distinct {
-			if _, err := copyCanonicalDistinctArgument(key[off:], vectors[0], row); err != nil {
+			value, err := copyCanonicalDistinctArgument(key[off:], vectors[0], row)
+			if err != nil {
 				return nil, err
 			}
+			off += value
 		} else {
-			copy(key[off:], raw)
+			off += copy(key[off:], raw)
 		}
 	} else {
 		for _, vec := range vectors {
@@ -825,7 +827,7 @@ func (ag *aggState) preparePreflightArgumentKey(
 			}
 		}
 	}
-	return key, nil
+	return key[:off], nil
 }
 
 type argumentTargetProgress struct {

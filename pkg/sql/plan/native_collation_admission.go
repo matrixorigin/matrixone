@@ -29,6 +29,10 @@ func tableUsesVersionedCollation(table *TableDef) bool {
 	if table == nil {
 		return false
 	}
+	if table.DefaultCharset == uint32(types.CharsetUTF8MB40900AI) ||
+		table.DefaultCharset == uint32(types.CharsetUTF8MB40900Bin) {
+		return true
+	}
 	if table.KeyFormat != uint32(types.LegacyKeyFormat) || table.CollationVersion != uint32(types.CollationVersionLegacy) {
 		return true
 	}

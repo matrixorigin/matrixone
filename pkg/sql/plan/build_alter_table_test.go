@@ -385,6 +385,31 @@ func TestAlterTableAddColumns(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
+func TestAlterCharsetAdmissionDoesNotDiscardNativeIdentity(t *testing.T) {
+	for _, sql := range []string{
+		"alter table t1 default character set utf8mb4 collate utf8mb4_0900_ai_ci",
+		"alter table t1 convert to character set utf8mb4 collate utf8mb4_0900_bin",
+		"alter table t1 default character set utf8mb4 collate utf8mb4_0900_ai_ci, algorithm=inplace",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			_, err := buildSingleStmt(NewMockOptimizer(false), t, sql)
+			require.ErrorContains(t, err, native0900AdmissionError)
+		})
+	}
+	_, err := buildSingleStmt(NewMockOptimizer(false), t,
+		"alter table t1 default character set utf8mb4 collate utf8mb4_unknown_ci")
+	require.ErrorContains(t, err, "unsupported collation")
+	for _, sql := range []string{
+		"alter table t1 default character set utf8mb4 collate utf8mb4_general_ci",
+		"alter table t1 enable keys",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			_, err := buildSingleStmt(NewMockOptimizer(false), t, sql)
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestAlterTableAddColumnInheritsTableDefaultCharset(t *testing.T) {
 	testCases := []struct {
 		name string

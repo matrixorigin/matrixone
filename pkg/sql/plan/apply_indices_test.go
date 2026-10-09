@@ -9902,6 +9902,45 @@ func TestNative0900IndexFilterUsesTransformedColumnAndDoesNotDoubleTransform(t *
 	require.Nil(t, lookup.GetF().Args[0].GetF(), "the stored native key must not be transformed again")
 }
 
+func TestNative0900SecondaryIndexRejectsDifferentQueryDomain(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	stored := planpb.Type{
+		Id: int32(types.T_varchar), Width: 32,
+		Charset:          uint32(types.CharsetUTF8MB40900AI),
+		CollationVersion: uint32(types.CollationVersionV1),
+	}
+	query := stored
+	query.Charset = uint32(types.CharsetUTF8MB40900Bin)
+	table := &planpb.TableDef{
+		Cols:    []*planpb.ColDef{{Name: "name", Typ: stored}},
+		Indexes: []*planpb.IndexDef{{IndexName: "name_idx", Parts: []string{"name"}, TableExist: true}},
+	}
+	column := &planpb.Expr{
+		Typ:  stored,
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 1, ColPos: 0, Name: "name"}},
+	}
+	value := MakePlan2StringConstExprWithType("A")
+	value.Typ = stored
+	storedColumnKey, err := makeNativeCollationKeyExpr(ctx.GetContext(), DeepCopyExpr(column), stored)
+	require.NoError(t, err)
+	storedValueKey, err := makeNativeCollationKeyExpr(ctx.GetContext(), DeepCopyExpr(value), stored)
+	require.NoError(t, err)
+	storedFilter, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*planpb.Expr{storedColumnKey, storedValueKey})
+	require.NoError(t, err)
+	require.False(t, regularIndexFilterHasMismatchedNativeDomain(storedFilter, table))
+
+	queryColumnKey, err := makeNativeCollationKeyExpr(ctx.GetContext(), DeepCopyExpr(column), query)
+	require.NoError(t, err)
+	queryValueKey, err := makeNativeCollationKeyExpr(ctx.GetContext(), DeepCopyExpr(value), query)
+	require.NoError(t, err)
+	queryFilter, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*planpb.Expr{queryColumnKey, queryValueKey})
+	require.NoError(t, err)
+	require.True(t, regularIndexFilterHasMismatchedNativeDomain(queryFilter, table))
+	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, true)
+	node := &planpb.Node{NodeId: 7, TableDef: table, FilterList: []*planpb.Expr{queryFilter}}
+	require.Equal(t, int32(7), builder.applyIndicesForFiltersRegularIndex(7, node, nil, nil))
+}
+
 func TestCanonicalRangeOp(t *testing.T) {
 	colExpr := makeSpatialColExpr(1)
 	constExpr := makeInt64LiteralExpr(5)

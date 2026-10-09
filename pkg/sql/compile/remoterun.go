@@ -2177,6 +2177,18 @@ func validateRemoteExpressionPipelineProtocol(
 			"signed INT ASCII results require MORPC protocol version 65",
 		)
 	}
+	if features.StringNumericResultContracts &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion80) {
+		return moerr.NewNotSupportedNoCtx(
+			"corrected string numeric result contracts require MORPC protocol version 80",
+		)
+	}
+	if features.IPFunctionSemantics &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion72) {
+		return moerr.NewNotSupportedNoCtx(
+			"corrected IP function semantics require MORPC protocol version 72",
+		)
+	}
 	// CollationKeyV1 is introduced together with the native collation
 	// implementation in this branch.  The historical MORPC v68 check cannot
 	// be used as an activation gate: live-main nodes at v81 still do not have

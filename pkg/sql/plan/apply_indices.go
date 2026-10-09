@@ -2235,6 +2235,15 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	if len(node.FilterList) == 0 || len(node.TableDef.Indexes) == 0 {
 		return nodeID
 	}
+	// A secondary index stores weights in the column's physical collation
+	// domain. An explicit COLLATE may select a different domain for a query.
+	// No index probe can recover rows excluded by comparing those byte strings;
+	// keep the original scan and residual filter in that case.
+	for _, filter := range node.FilterList {
+		if regularIndexFilterHasMismatchedNativeDomain(filter, node.TableDef) {
+			return nodeID
+		}
+	}
 
 	forceIndex := builder.scanHintsForceIndexes(node)
 	for i := range node.FilterList { // if already have filter on first pk column and have a good selectivity, no need to go index
@@ -2405,6 +2414,51 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 
 	//no index applied
 	return nodeID
+}
+
+func regularIndexFilterHasMismatchedNativeDomain(filter *plan.Expr, table *plan.TableDef) bool {
+	if filter == nil || table == nil {
+		return false
+	}
+	fn := filter.GetF()
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	switch fn.Func.ObjName {
+	case "=", "<", "<=", ">", ">=", "in", "between":
+		if len(fn.Args) < 2 {
+			return false
+		}
+		if col := nativeComparisonColumn(fn.Args[0]); col != nil &&
+			col.ColPos >= 0 && int(col.ColPos) < len(table.Cols) {
+			if table.Cols[col.ColPos] == nil {
+				return true
+			}
+			typ := table.Cols[col.ColPos].Typ
+			if isNative0900PlanType(typ) {
+				expected := nativeCollationIdentity{
+					charset: uint8(typ.Charset), version: uint8(typ.CollationVersion),
+				}
+				if !nativeFilterUsesPhysicalIdentity(filter, expected) {
+					return true
+				}
+			}
+		}
+		// A reversed range operand cannot be used as an index probe unless
+		// the normalizer establishes the same physical identity.
+		if col := nativeComparisonColumn(fn.Args[1]); col != nil &&
+			col.ColPos >= 0 && int(col.ColPos) < len(table.Cols) &&
+			table.Cols[col.ColPos] != nil &&
+			isNative0900PlanType(table.Cols[col.ColPos].Typ) {
+			return true
+		}
+	}
+	for _, arg := range fn.Args {
+		if regularIndexFilterHasMismatchedNativeDomain(arg, table) {
+			return true
+		}
+	}
+	return false
 }
 
 func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *plan.Node, idxTableNode *plan.Node, filterIdx []int32) {

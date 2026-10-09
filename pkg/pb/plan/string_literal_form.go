@@ -374,6 +374,10 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 		if err := validatePlanTableCollationMetadata(table); err != nil {
 			return err
 		}
+		if table.DefaultCharset == 4 || table.DefaultCharset == 5 {
+			features.NativeCollationV1 = true
+			features.NativeCollationSchemaV1 = true
+		}
 		if table.KeyFormat != 0 || table.CollationVersion != 0 {
 			features.NativeCollationV1 = true
 			features.NativeCollationSchemaV1 = true
@@ -414,6 +418,9 @@ func validatePlanCollationType(typ Type) error {
 }
 
 func validatePlanTableCollationMetadata(table *TableDef) error {
+	if table.DefaultCharset > 5 {
+		return moerr.NewInvalidInputNoCtxf("unsupported table default collation identity %d", table.DefaultCharset)
+	}
 	if table.KeyFormat > 1 {
 		return moerr.NewInvalidInputNoCtxf("unsupported collation key format %d", table.KeyFormat)
 	}
