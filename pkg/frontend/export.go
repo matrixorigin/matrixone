@@ -356,7 +356,7 @@ func writeExportBatchToFile(ep *ExportConfig, batch *BatchByte) error {
 		return nil
 	}
 
-	chunkStart, chunkEnd, chunkRows, previousEnd := 0, 0, 0, 0
+	chunkStart, chunkEnd, chunkRows := 0, 0, 0
 	flushChunk := func() error {
 		if chunkRows == 0 {
 			return nil
@@ -371,23 +371,22 @@ func writeExportBatchToFile(ep *ExportConfig, batch *BatchByte) error {
 	}
 
 	for _, rowEnd := range batch.rowEnds {
-		rowSize := uint64(rowEnd - previousEnd)
-		if chunkRows > 0 && exceedsFileSize(ep.CurFileSize, uint64(rowEnd-chunkStart), maxSize) {
+		if chunkRows == 0 || exceedsFileSize(ep.CurFileSize, uint64(rowEnd-chunkStart), maxSize) {
 			if err := flushChunk(); err != nil {
 				return err
 			}
-		}
-		if chunkRows == 0 && rowSize > 0 && ep.hasCSVData && exceedsFileSize(ep.CurFileSize, rowSize, maxSize) {
-			if err := Close(ep); err != nil {
-				return err
-			}
-			if err := openNewFile(ep.ctx, ep, ep.mrs); err != nil {
-				return err
+			rowSize := uint64(rowEnd - chunkStart)
+			if rowSize > 0 && ep.hasCSVData && exceedsFileSize(ep.CurFileSize, rowSize, maxSize) {
+				if err := Close(ep); err != nil {
+					return err
+				}
+				if err := openNewFile(ep.ctx, ep, ep.mrs); err != nil {
+					return err
+				}
 			}
 		}
 		chunkEnd = rowEnd
 		chunkRows++
-		previousEnd = rowEnd
 	}
 	return flushChunk()
 }
