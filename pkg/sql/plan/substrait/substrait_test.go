@@ -2433,9 +2433,34 @@ func TestBoundCharacterSubstringResultWidths(t *testing.T) {
 }
 
 func TestCharacterSubstringExportDomainProof(t *testing.T) {
-	query := boundSQLQuery(t, "select substring(substring(c_phone, 1, 5), 1, 2) as prefix from tpch.customer")
-	buildSubstraitPlan(t, query)
-	query = boundSQLQuery(t, "select substring(case when c_custkey > 1 then c_phone else c_phone end, 1, 2) as prefix from tpch.customer")
+	for _, tc := range []struct {
+		name     string
+		source   string
+		eligible bool
+	}{
+		{"column", "c_phone", true},
+		{"nested", "substring(c_phone, 1, 5)", true},
+		{"three slices", "substring(substring(c_phone, 1, 8), 1, 5)", true},
+		// Full cast admission still requires the exact overload result width;
+		// the non-narrowing type predicate alone is not an export proof.
+		{"undeclared widening cast", "cast(substring(c_phone, 1, 5) as varchar(15))", false},
+		{"text case", "case when c_custkey > 1 then substring(c_phone, 1, 5) else substring(c_phone, 1, 5) end", true},
+		{"binary", "substring(cast(c_phone as binary), 1, 5)", false},
+		{"mixed case", "case when c_custkey > 1 then c_phone else cast(c_phone as binary) end", false},
+		{"truncating cast", "substring(cast(c_phone as varchar(3)), 1, 2)", false},
+		{"truncating after slice", "cast(substring(c_phone, 1, 5) as varchar(3))", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			query := boundSQLQuery(t, "select substring("+tc.source+", 1, 2) as prefix from tpch.customer")
+			if tc.eligible {
+				buildSubstraitPlan(t, query)
+			} else {
+				_, err := Export(query)
+				require.True(t, IsNotEligible(err), err)
+			}
+		})
+	}
+	query := boundSQLQuery(t, "select substring(case when c_custkey > 1 then c_phone else c_phone end, 1, 2) as prefix from tpch.customer")
 	buildSubstraitPlan(t, query)
 	caseSource := boundNode(t, query, planpb.Node_PROJECT).ProjectList[0].GetF().Args[0]
 	require.True(t, tpchCharacterSliceSourceIsText(caseSource))
@@ -2457,6 +2482,21 @@ func TestCharacterSubstringExportDomainProof(t *testing.T) {
 	bound, err := planbuilder.BindFuncExprImplByPlanExpr(context.Background(), "substring", []*planpb.Expr{source, i64(1), i64(2)})
 	require.NoError(t, err)
 	binary := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varbinary), Width: 15}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}
+	for _, tc := range []struct {
+		name   string
+		source *planpb.Expr
+		text   bool
+	}{
+		{"retained text", source, true},
+		{"retained binary", binary, false},
+		{"declaration without value", &planpb.Expr{Typ: source.Typ, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Isnull: true}}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			boundary := planbuilder.DeepCopyExpr(source)
+			boundary.PreparedNumeric = &planpb.PreparedNumericMetadata{StringDomainSource: tc.source}
+			require.Equal(t, tc.text, tpchCharacterSliceSourceIsText(boundary), "columns still require retained input provenance")
+		})
+	}
 	for _, mutate := range []func(*planpb.Expr){
 		func(e *planpb.Expr) { e.Typ.Charset = uint32(types.CharsetBinary) },
 		func(e *planpb.Expr) { e.Typ.Charset = 256 },
