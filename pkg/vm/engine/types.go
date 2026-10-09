@@ -1193,6 +1193,13 @@ type RelationHandleFactory interface {
 	NewRelationHandle() Relation
 }
 
+// RelationCreatedInCurrentTxn reports whether the relation was created by the
+// transaction bound to the relation. Engines without a transaction-local
+// relation cache do not implement it.
+type RelationCreatedInCurrentTxn interface {
+	CreatedInCurrentTxn(context.Context) (bool, error)
+}
+
 // SourceCommitTSProvider is an optional relation capability used by async
 // indexes that must prove their source-table coverage.  It is intentionally not
 // part of Relation: engines without a logtail partition state simply do not

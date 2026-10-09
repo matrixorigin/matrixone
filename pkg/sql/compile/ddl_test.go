@@ -3573,25 +3573,6 @@ func TestTruncateLocksLifecycleBeforeTable(t *testing.T) {
 func TestAlterCopyAndTruncateSerializeBeforeTableLocks(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	ctrl := gomock.NewController(t)
-	eng := newStubEngine()
-	db := newStubDatabase("test")
-	db.rels["t"] = newStubRelation("t")
-	eng.dbs["test"] = db
-
-	newCompile := func(sql string) *Compile {
-		proc := testutil.NewProcess(t)
-		proc.Base.SessionInfo.Buf = buffer.New()
-		proc.Ctx = defines.AttachAccountId(ctx, catalog.System_Account)
-		proc.ReplaceTopCtx(proc.Ctx)
-		txnClient, txnOp := newTestTxnClientAndOpWithPessimistic(ctrl)
-		proc.Base.TxnClient = txnClient
-		proc.Base.TxnOperator = txnOp
-		return NewCompile("test", "test", sql, "", "", eng, proc, nil, false, nil, time.Now())
-	}
-	alterCompile := newCompile("alter table t add column a int")
-	defer alterCompile.Release()
-	truncateCompile := newCompile("truncate table t")
-	defer truncateCompile.Release()
 
 	var mu sync.Mutex
 	var order []string
@@ -3609,8 +3590,12 @@ func TestAlterCopyAndTruncateSerializeBeforeTableLocks(t *testing.T) {
 	var gateCalls atomic.Int32
 	stop := errors.New("stop after table lock")
 	exec := &recordingInternalSQLExecutor{mocker: func(sql string) (executor.Result, error) {
+		if sql == "insert into dept_copy select * from dept" {
+			record("alter physical")
+			return executor.Result{}, nil
+		}
 		if sql != databranchutils.LineageOwnerLifecyclePessimisticLockSQL() {
-			return executor.Result{}, fmt.Errorf("unexpected lifecycle SQL: %s", sql)
+			return executor.Result{}, nil
 		}
 		switch gateCalls.Add(1) {
 		case 1:
@@ -3636,6 +3621,15 @@ func TestAlterCopyAndTruncateSerializeBeforeTableLocks(t *testing.T) {
 			return executor.Result{}, errors.New("unexpected lifecycle lock")
 		}
 	}}
+	alterScope, alterCompile := newAlterCopyPessimisticGateConcurrencyFixture(
+		t, ctrl, exec, "alter-truncate", 0,
+	)
+	defer alterCompile.Release()
+	truncateCompile := NewCompile(
+		"test", "test", "truncate table dept", "", "", alterCompile.e, alterCompile.proc,
+		nil, false, nil, time.Now(),
+	)
+	defer truncateCompile.Release()
 	rt := moruntime.ServiceRuntime(alterCompile.proc.GetService())
 	previous, hadPrevious := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
 	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, exec)
@@ -3663,14 +3657,9 @@ func TestAlterCopyAndTruncateSerializeBeforeTableLocks(t *testing.T) {
 	})
 	defer lockTableStub.Reset()
 
-	alterScope := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
-		Definition: &plan2.DataDefinition_AlterTable{AlterTable: &plan2.AlterTable{
-			Database: "test", TableDef: &plan2.TableDef{Name: "t"},
-		}},
-	}}}}
 	truncateScope := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
 		Definition: &plan2.DataDefinition_TruncateTable{TruncateTable: &plan2.TruncateTable{
-			Database: "test", Table: "t", TableId: 1,
+			Database: "test", Table: "dept", TableId: 1,
 		}},
 	}}}}
 	var workers sync.WaitGroup
@@ -3726,7 +3715,8 @@ func TestAlterCopyAndTruncateSerializeBeforeTableLocks(t *testing.T) {
 	got := append([]string(nil), order...)
 	mu.Unlock()
 	require.Equal(t, []string{
-		"alter gate", "alter database", "alter table", "truncate gate", "truncate table",
+		"alter physical", "alter gate", "alter database",
+		"alter table", "truncate gate", "truncate table",
 	}, got)
 }
 
