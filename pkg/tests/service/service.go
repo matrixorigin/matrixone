@@ -369,10 +369,13 @@ func (c *testCluster) acquireAdmissionLocked() error {
 		context.Background(),
 		clusteradmission.Exclusive,
 	)
+	// Acquire can return a cleanup-only lease when acquisition failed and
+	// rollback also failed. Retain that lease so Close can retry cleanup rather
+	// than poisoning process-wide admission for later service clusters.
+	c.mu.admission = admission
 	if err != nil {
 		return err
 	}
-	c.mu.admission = admission
 	return nil
 }
 
