@@ -1688,6 +1688,9 @@ func buildCTASDefaultFromOrigin(
 	if err != nil {
 		return nil, err
 	}
+	if err = requireNative0900ExpressionAdmission(ctx.GetProcess(), defaultExpr); err != nil {
+		return nil, err
+	}
 	if err = preservePersistedFormatCompatibility(ctx.GetContext(), defaultExpr); err != nil {
 		return nil, err
 	}

@@ -63,6 +63,22 @@ func requireNative0900Admission(ctx context.Context, proc *process.Process, tabl
 	return moerr.NewNotSupportedNoCtx(native0900AdmissionError)
 }
 
+// Check catalog-bound expressions before constant folding can erase a native
+// cast or key function from a numeric, boolean, or binary result.
+func requireNative0900ExpressionAdmission(proc *process.Process, owner any) error {
+	if native0900AdmissionAllowed(proc) {
+		return nil
+	}
+	features, err := planpb.RequiredRemoteExpressionFeatures(owner)
+	if err != nil {
+		return err
+	}
+	if features.CollationKeyV1 || features.NativeCollationV1 || features.NativeCollationSchemaV1 {
+		return moerr.NewNotSupportedNoCtx(native0900AdmissionError)
+	}
+	return nil
+}
+
 // requireNative0900PlanAdmission is the final local planner fence.  DDL
 // checks protect new catalog objects, while this check also rejects a query
 // which only carries an explicit COLLATE expression or reaches a relation
