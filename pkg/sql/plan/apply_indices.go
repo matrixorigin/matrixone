@@ -2279,6 +2279,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	if len(node.FilterList) == 0 || len(node.TableDef.Indexes) == 0 {
 		return nodeID
 	}
+	builder.addFunctionalIndexFilters(node)
 
 	forceIndex := builder.scanHintsForceIndexes(node)
 	for i := range node.FilterList { // if already have filter on first pk column and have a good selectivity, no need to go index
@@ -2391,6 +2392,9 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 					filterType: EqualIndexCondition, filterIdx: filterIdx,
 				})
 			}
+		}
+		if functionalIndexColumn(node.TableDef, idxDef) != nil {
+			continue
 		}
 		if filterIdx := costCtx.matchRangeBackfill(idxDef); len(filterIdx) > 0 {
 			filterType := NonEqualIndexCondition
@@ -3876,6 +3880,9 @@ func (builder *QueryBuilder) matchRegularIndexOnlyScan(
 	if regularIndexHasDeclaredPrefix(idxDef) {
 		return nil, false
 	}
+	if functionalIndexColumn(node.TableDef, idxDef) != nil {
+		return nil, false
+	}
 	if !costCtx.indexCoversRequiredColumns(idxDef) {
 		return nil, false
 	}
@@ -3964,6 +3971,10 @@ func (builder *QueryBuilder) matchRegularIndexOnlyScan(
 }
 
 func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr, scanSnapshot *Snapshot) int32 {
+	// Functional indexes currently require a base-row residual evaluation.
+	if functionalIndexColumn(node.TableDef, idxDef) != nil {
+		return -1
+	}
 	costCtx := builder.newEncodedRegularIndexCostContext(node, colRefCnt)
 	match, ok := builder.matchRegularIndexOnlyScan(idxDef, node, costCtx)
 	if !ok {
