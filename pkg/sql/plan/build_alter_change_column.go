@@ -67,7 +67,7 @@ func ChangeColumn(
 
 	// If renaming the column, check if any generated column depends on it
 	if newColName != oldColName {
-		if err := checkColumnWithGeneratedDependency(ctx, tableDef, oldColName); err != nil {
+		if err := renameFunctionalColumnDependencies(ctx, tableDef, oldColName, newColNameOrigin); err != nil {
 			return false, err
 		}
 		if err := checkColumnWithDefaultDependency(ctx, tableDef, oldColName); err != nil {

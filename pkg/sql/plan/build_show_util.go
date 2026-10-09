@@ -395,7 +395,7 @@ func constructCreateTableSQL(
 				indexStr += "("
 				rewriteIndexStr += "("
 				i := 0
-				for _, part := range indexdef.Parts {
+				for ordinal, part := range indexdef.Parts {
 					if catalog.IsAlias(part) {
 						continue
 					}
@@ -404,6 +404,16 @@ func constructCreateTableSQL(
 						rewriteIndexStr += ","
 					}
 
+					if col := functionalIndexPartColumn(tableDef, indexdef, ordinal); col != nil {
+						if err := validateFunctionalTable(ctx.GetContext(), tableDef); err != nil {
+							return "", nil, err
+						}
+						expressionPart := "(" + col.GeneratedCol.OriginString + ")"
+						indexStr += expressionPart
+						rewriteIndexStr += expressionPart
+						i++
+						continue
+					}
 					originPart := colNameToOriginName[part]
 					indexStr += sqlquote.Ident(originPart)
 					rewriteIndexStr += sqlquote.Ident(originPart)
