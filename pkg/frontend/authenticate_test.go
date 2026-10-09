@@ -805,7 +805,7 @@ func Test_initFunction(t *testing.T) {
 					FamilyString: "INT",
 					Width:        24,
 					Locale:       &locale,
-					Oid:          uint32(defines.MYSQL_TYPE_INT24),
+					Oid:          uint32(defines.MYSQL_TYPE_LONG),
 				},
 			}),
 			Body:     "",

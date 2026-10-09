@@ -18,12 +18,20 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 )
 
-var tenantUpgEntries = []versions.UpgradeEntry{upgradeInformationSchemaColumns()}
+// The v4.0.14 repair replays both the native COLUMNS view migration introduced
+// by the upstream branch and the idempotent Python UDF revision catalog repair.
+// Keep these entries in one version so tenants that already recorded v4.0.13
+// receive either or both repairs on the same upgrade attempt.
+var tenantUpgEntries = append(
+	[]versions.UpgradeEntry{upgradeInformationSchemaColumns()},
+	v4_0_7.PythonRevisionUpgradeEntries()...,
+)
 
 // upgradeInformationSchemaColumns refreshes the persisted COLUMNS view for
 // tenants that already passed the protocol-100 view migration. The current
