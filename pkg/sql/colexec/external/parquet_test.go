@@ -2255,6 +2255,44 @@ func TestParquetTimestampMillisOverflowInFastPath(t *testing.T) {
 	}
 }
 
+func TestParquetStringSetAndYearMappings(t *testing.T) {
+	proc := testutil.NewProc(t)
+	t.Cleanup(func() {
+		bytes, objects := proc.Mp().OnHeapOutstanding()
+		require.Equal(t, [3]int64{}, [3]int64{proc.Mp().CurrNB(), bytes, objects})
+	})
+
+	fSet, pageSet := writeDictAndGetPage(t, parquet.String(), []parquet.Value{
+		parquet.ByteArrayValue([]byte("a,b")),
+		parquet.ByteArrayValue([]byte("b")),
+	})
+	var h ParquetHandler
+	setMapper := h.getMapper(fSet.Root().Column("c"), plan.Type{
+		Id:          int32(types.T_uint64),
+		Enumvalues:  "a,b,c",
+		NotNullable: true,
+	})
+	require.NotNil(t, setMapper)
+	setVec := vector.NewVec(types.T_uint64.ToType())
+	t.Cleanup(func() { setVec.Free(proc.Mp()) })
+	require.NoError(t, setMapper.mapping(pageSet, proc, setVec))
+	require.Equal(t, []uint64{3, 2}, vector.MustFixedColWithTypeCheck[uint64](setVec))
+
+	fYear, pageYear := writeDictAndGetPage(t, parquet.String(), []parquet.Value{
+		parquet.ByteArrayValue([]byte("2024")),
+		parquet.ByteArrayValue([]byte("0000")),
+	})
+	yearMapper := h.getMapper(fYear.Root().Column("c"), plan.Type{
+		Id:          int32(types.T_year),
+		NotNullable: true,
+	})
+	require.NotNil(t, yearMapper)
+	yearVec := vector.NewVec(types.T_year.ToType())
+	t.Cleanup(func() { yearVec.Free(proc.Mp()) })
+	require.NoError(t, yearMapper.mapping(pageYear, proc, yearVec))
+	require.Equal(t, []types.MoYear{2024, 0}, vector.MustFixedColWithTypeCheck[types.MoYear](yearVec))
+}
+
 // fakeFS is a minimal ETL-compatible FileService for testing fsReaderAt.
 type fakeFS struct {
 	b           []byte
