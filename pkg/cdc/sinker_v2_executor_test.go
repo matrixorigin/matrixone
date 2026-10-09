@@ -604,12 +604,17 @@ func TestExecutorTargetOwnershipLock(t *testing.T) {
 			context.Background(), "account/task/db/table",
 			func(context.Context) error { return nil }, nil,
 		))
-		releaseErr := errors.New("release response lost")
+		releaseErr := context.DeadlineExceeded
 		mock.ExpectQuery("SELECT RELEASE_LOCK").
 			WithArgs(sqlmock.AnyArg()).
 			WillReturnError(releaseErr)
-		require.ErrorIs(t, executor.ReleaseTargetLock(), releaseErr)
+		mock.ExpectClose()
+		err = executor.ReleaseTargetLock()
+		require.ErrorIs(t, err, releaseErr)
+		require.ErrorIs(t, err, sql.ErrConnDone)
 		require.Nil(t, executor.targetLockConn)
+		require.Empty(t, executor.targetLockName)
+		require.Zero(t, db.Stats().OpenConnections)
 
 		require.NoError(t, executor.Close())
 		require.NoError(t, mock.ExpectationsWereMet())

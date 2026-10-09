@@ -16,26 +16,35 @@ package frontend
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	gomysql "github.com/go-sql-driver/mysql"
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	frontendmock "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	mysql "github.com/matrixorigin/mysql"
+	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 )
 
 type futureCDCAdmissionCatalog struct {
+	mu            sync.Mutex
 	owner, source uint64
 	watermark     string
 	statements    []string
@@ -67,14 +76,27 @@ func (c *cdcSourceKeyCatalog) Query(context.Context, string, ie.SessionOverrideO
 func (*cdcSourceKeyCatalog) ApplySessionOverride(ie.SessionOverrideOptions) {}
 
 func (c *futureCDCAdmissionCatalog) Exec(_ context.Context, sql string, _ ie.SessionOverrideOptions) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.statements = append(c.statements, sql)
 	if match := regexp.MustCompile(`'([^']*)' AS err_msg`).FindStringSubmatch(sql); match != nil {
-		c.errMsg = match[1]
+		owner := regexp.MustCompile(`([0-9]+) AS owner_generation`).FindStringSubmatch(sql)
+		if owner != nil && owner[1] == strconv.FormatUint(c.owner, 10) {
+			c.errMsg = match[1]
+		}
 	}
 	return nil
 }
 
 func (c *futureCDCAdmissionCatalog) Query(_ context.Context, sql string, _ ie.SessionOverrideOptions) ie.InternalExecResult {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if strings.HasPrefix(sql, "SELECT snapshot_epoch") {
+		return &claimLossWatermarkResult{}
+	}
+	if strings.HasPrefix(sql, "SELECT account_id, task_id, db_name, table_name, watermark") {
+		return &claimLossWatermarkResult{rows: [][]string{{"1", "task", "db", "t", c.watermark}}}
+	}
 	if strings.Contains(sql, "SELECT err_msg") {
 		return &claimLossWatermarkResult{rows: [][]string{{c.errMsg}}}
 	}
@@ -339,7 +361,7 @@ func TestCDCSourceGuardRetryContract(t *testing.T) {
 			}
 			// Follow the admission error through the real owned watermark writer
 			// and the next callback's catalog consumer, without a live cluster.
-			catalog := &futureCDCAdmissionCatalog{}
+			catalog := &futureCDCAdmissionCatalog{owner: 123}
 			updater := cdc.NewCDCWatermarkUpdater(t.Name(), catalog)
 			updater.Start()
 			defer updater.Stop()
@@ -355,6 +377,118 @@ func TestCDCSourceGuardRetryContract(t *testing.T) {
 			hasError, readErr := GetTableErrMsg(context.Background(), 1, catalog, "task", &cdc.DbTableInfo{SourceDbName: "db", SourceTblName: "t"})
 			require.NoError(t, readErr)
 			require.Equal(t, !tc.retry, hasError, "a transient admission failure must allow the next callback")
+		})
+	}
+}
+
+// Exercise the real callback, factory, owned diagnostic writer and next-callback gate.
+// Only the target connection and source engine dependencies are simulated.
+func TestCDCTargetSetupRetryAdmission(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		cause error
+		retry bool
+	}{
+		{"production wire timeout", &mysql.MySQLError{Number: 2013, Message: "target setup connection lost"}, true},
+		{"production wire syntax", &mysql.MySQLError{Number: 1064, Message: "target setup syntax error"}, false},
+		{"release deadline", context.DeadlineExceeded, true},
+		{"cancelled callback", &mysql.MySQLError{Number: 2013}, true},
+		{"obsolete callback", &mysql.MySQLError{Number: 2013}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stubs := gostub.Stub(&cdc.GetTxnOp, func(context.Context, engine.Engine, client.TxnClient, string) (client.TxnOperator, error) {
+				return nil, nil
+			})
+			defer stubs.Reset()
+			stubs.Stub(&cdc.FinishTxnOp, func(context.Context, error, client.TxnOperator, engine.Engine) {})
+			stubs.Stub(&cdc.GetTableDef, func(context.Context, client.TxnOperator, engine.Engine, uint64) (*plan.TableDef, error) {
+				return &plan.TableDef{Cols: []*plan.ColDef{{Name: "id", Default: &plan.Default{}, Typ: plan.Type{Id: int32(types.T_int32)}}}, Pkey: &plan.PrimaryKeyDef{Names: []string{"id"}}, Name2ColIndex: map[string]int32{"id": 0}}, nil
+			})
+			opens := 0
+			var exec *CDCTaskExecutor
+			stubs.Stub(&cdc.OpenDbConn, func(context.Context, string, string, string, int, string) (*sql.DB, error) {
+				opens++
+				if tc.name == "cancelled callback" {
+					exec.callbackCancel()
+				}
+				if tc.name == "obsolete callback" {
+					exec.callbackMu.Lock()
+					exec.callbackGeneration.Add(1)
+					exec.callbackMu.Unlock()
+				}
+				if tc.name != "release deadline" {
+					return nil, tc.cause
+				}
+				db, mock, err := sqlmock.New()
+				require.NoError(t, err)
+				mock.ExpectQuery("SELECT GET_LOCK").WillReturnRows(sqlmock.NewRows([]string{"locked"}).AddRow(1))
+				mock.ExpectBegin()
+				mock.ExpectExec("CALL mo_cdc_target_guard_capability").WillReturnResult(sqlmock.NewResult(0, 0))
+				mock.ExpectRollback()
+				mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 0))
+				mock.ExpectBegin()
+				mock.ExpectQuery("CALL mo_cdc_target_identity").WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(42))
+				mock.ExpectQuery("SELECT column_name, column_type").WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "collation_name", "numeric_scale"}).AddRow("id", "int", nil, nil))
+				mock.ExpectQuery("SELECT index_name, non_unique").WillReturnRows(sqlmock.NewRows([]string{"index_name", "non_unique", "seq_in_index", "column_name", "sub_part"}).AddRow("PRIMARY", 0, 1, "id", nil))
+				mock.ExpectRollback()
+				mock.ExpectQuery("SELECT RELEASE_LOCK").WillReturnError(tc.cause)
+				mock.ExpectClose()
+				t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()); require.Zero(t, db.Stats().OpenConnections) })
+				return db, nil
+			})
+			ctrl := gomock.NewController(t)
+			eng := frontendmock.NewMockEngine(ctrl)
+			eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+			fence := cdc.NewOwnerFenceForGeneration(time.UnixMicro(123), func(context.Context) error { return nil })
+			catalog := &futureCDCAdmissionCatalog{owner: fence.GenerationToken(), source: 42, watermark: "10-0"}
+			updater := cdc.NewCDCWatermarkUpdater(t.Name(), catalog)
+			updater.Start()
+			defer updater.Stop()
+			exec = &CDCTaskExecutor{
+				spec:     &task.CreateCdcDetails{TaskId: "task", TaskName: "task", Accounts: []*task.Account{{Id: 1}}},
+				tables:   cdc.PatternTuples{Pts: []*cdc.PatternTuple{{Source: cdc.PatternTable{Database: "db", Table: "t"}, Sink: cdc.PatternTable{Database: "sink", Table: "t"}}}},
+				cnEngine: eng, ie: catalog, watermarkUpdater: updater, claimFence: fence,
+				additionalConfig: map[string]any{cdc.CDCTaskExtraOptions_MaxSqlLength: float64(cdc.CDCDefaultTaskExtra_MaxSQLLen), cdc.CDCTaskExtraOptions_SendSqlTimeout: cdc.CDCDefaultSendSqlTimeout},
+				noFull:           true, startTs: types.BuildTS(10, 0), sinkUri: cdc.UriInfo{SinkTyp: cdc.CDCSinkType_MO},
+				activeRoutine: cdc.NewCdcActiveRoutine(), runningReaders: &sync.Map{}, holdCh: make(chan int, 1), stateMachine: NewExecutorStateMachine(),
+			}
+			require.NoError(t, exec.stateMachine.Transition(TransitionStart))
+			require.NoError(t, exec.stateMachine.Transition(TransitionStartSuccess))
+			tables := map[uint32]cdc.TblMap{1: {"db.t": {SourceDbName: "db", SourceTblName: "t", SourceTblId: 42, HasUserPrimaryKey: true}}}
+			if tc.name == "cancelled callback" || tc.name == "obsolete callback" {
+				require.Error(t, exec.handleNewTables(tables))
+				require.Equal(t, 1, opens)
+				catalog.mu.Lock()
+				require.Empty(t, catalog.errMsg)
+				require.Equal(t, uint64(42), catalog.source)
+				require.Equal(t, "10-0", catalog.watermark)
+				catalog.mu.Unlock()
+				return
+			}
+			attempts := 1
+			if tc.retry {
+				attempts = 4
+			}
+			for attempt := 1; attempt <= attempts; attempt++ {
+				require.Error(t, exec.handleNewTables(tables))
+				require.Equal(t, attempt, opens)
+				catalog.mu.Lock()
+				diagnostic := catalog.errMsg
+				watermark := catalog.watermark
+				catalog.mu.Unlock()
+				require.Contains(t, diagnostic, tc.cause.Error())
+				require.Equal(t, "10-0", watermark)
+				if tc.retry && attempt < 4 {
+					require.True(t, strings.HasPrefix(diagnostic, fmt.Sprintf("R:%d:", attempt)), diagnostic)
+				} else {
+					require.True(t, strings.HasPrefix(diagnostic, "N:"), diagnostic)
+				}
+				require.Equal(t, StateRunning, exec.stateMachine.State())
+				exec.runningReaders.Range(func(_, _ any) bool { t.Fatal("failed setup published a reader"); return false })
+			}
+			require.Error(t, exec.handleNewTables(tables))
+			require.Equal(t, attempts, opens, "permanent gate must precede target setup")
+			require.Equal(t, StateFailed, exec.stateMachine.State())
 		})
 	}
 }

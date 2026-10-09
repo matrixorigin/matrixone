@@ -21,6 +21,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -31,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	productionmysql "github.com/matrixorigin/mysql"
 	"github.com/stretchr/testify/require"
 )
 
@@ -674,4 +676,62 @@ func TestCDCTargetGuardRejectsOptimisticModeBeforeTargetCreate(t *testing.T) {
 	require.NoError(t, activeTx.Rollback())
 	_, err = db.ExecContext(ctx, "DROP TABLE cdc_optimistic_probe.renamed")
 	require.NoError(t, err)
+}
+
+func TestCDCTargetSetupTransientDiagnosticOnMO(t *testing.T) {
+	originalOpen := cdc.OpenDbConn
+	defer func() {
+		closeErr := CloseSingleCNBaseClusterTests()
+		cdc.OpenDbConn = originalOpen
+		require.NoError(t, closeErr)
+		cdc.ResetCDCWatermarkUpdaterForTest()
+	}()
+	RunSingleCNBaseClusterTests(t, func(cluster Cluster) {
+		cn, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		cdc.ResetTableDetectorForTest(cn.ServiceID())
+		cdc.ResetCDCWatermarkUpdaterForTest()
+		port := cn.GetServiceConfig().CN.Frontend.Port
+		root, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
+		require.NoError(t, err)
+		defer root.Close()
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+		defer cancel()
+		_, err = root.ExecContext(ctx, "CREATE ACCOUNT cdc_retry_probe ADMIN_NAME 'admin' IDENTIFIED BY '111'")
+		require.NoError(t, err)
+		defer func() {
+			_, cleanupErr := root.Exec("DROP ACCOUNT IF EXISTS cdc_retry_probe")
+			require.NoError(t, cleanupErr)
+		}()
+		account, err := sql.Open("mysql", fmt.Sprintf("cdc_retry_probe#admin:111@tcp(127.0.0.1:%d)/", port))
+		require.NoError(t, err)
+		defer account.Close()
+		for _, statement := range []string{
+			"CREATE DATABASE cdc_retry_src",
+			"CREATE TABLE cdc_retry_src.t (id INT PRIMARY KEY)",
+			"CREATE PITR cdc_retry_pitr FOR DATABASE cdc_retry_src RANGE 2 'h'",
+		} {
+			_, err = account.ExecContext(ctx, statement)
+			require.NoError(t, err)
+		}
+		defer func() { _, cleanupErr := account.Exec("DROP PITR cdc_retry_pitr"); require.NoError(t, cleanupErr) }()
+		var calls atomic.Int32
+		// CREATE CDC performs two synchronous connection checks. Subsequent opens
+		// belong to background admission; inject the concrete production driver error.
+		cdc.OpenDbConn = func(ctx context.Context, user, password, ip string, port int, timeout string) (*sql.DB, error) {
+			if calls.Add(1) <= 2 {
+				return originalOpen(ctx, user, password, ip, port, timeout)
+			}
+			return nil, &productionmysql.MySQLError{Number: 2013, Message: "controlled target admission loss"}
+		}
+		uri := fmt.Sprintf("mysql://cdc_retry_probe#admin:111@127.0.0.1:%d", port)
+		_, err = account.ExecContext(ctx, fmt.Sprintf("CREATE CDC cdc_retry_task '%s' 'matrixone' '%s' 'cdc_retry_src:cdc_retry_dst' {'Level'='database'}", uri, uri))
+		require.NoError(t, err)
+		defer func() { _, cleanupErr := account.Exec("DROP CDC TASK cdc_retry_task"); require.NoError(t, cleanupErr) }()
+		require.Eventually(t, func() bool {
+			var diagnostic string
+			readErr := root.QueryRowContext(ctx, "SELECT w.err_msg FROM mo_catalog.mo_cdc_watermark AS w JOIN mo_catalog.mo_cdc_task AS t ON t.account_id = w.account_id AND t.task_id = w.task_id WHERE t.task_name = 'cdc_retry_task' AND w.db_name = 'cdc_retry_src' AND w.table_name = 't'").Scan(&diagnostic)
+			return readErr == nil && strings.HasPrefix(diagnostic, "R:") && strings.Contains(diagnostic, "controlled target admission loss")
+		}, 90*time.Second, 100*time.Millisecond, "public catalog must expose retryable target admission diagnosis")
+	})
 }
