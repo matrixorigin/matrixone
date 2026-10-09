@@ -32,6 +32,7 @@ var errBaseFilePoolCapacity = errors.New("fulltext2 base file pool capacity admi
 // failure may fall back to the ordinary loader, while a closed owner or a
 // source-side error must be returned to the query unchanged.
 var (
+	errBaseFileCleanupPending     = errors.New("fulltext2 base cleanup is pending")
 	errBaseFilePoolClosed         = errors.New("fulltext2 base file pool is closed")
 	errBaseFilePoolLeaderCanceled = errors.New("fulltext2 base file fill leader canceled")
 	errBaseFilePoolReadyCorrupt   = errors.New("fulltext2 ready base file is corrupt")
@@ -140,12 +141,13 @@ type baseFilePool struct {
 	// reservedFiles remains charged from FILLING admission until the fill's
 	// handle has actually been closed.  In particular, a failed fill must not
 	// open a second FD while its first handle is still in closeHandle.
-	reservedFiles    int
-	seq              uint64
-	closed           bool
-	entries          map[baseFileKey]*baseFileEntry
-	deferredSegments map[*Segment]struct{}
-	deferredMappings map[*deferredBaseMapping]struct{}
+	reservedFiles        int
+	seq                  uint64
+	closed               bool
+	entries              map[baseFileKey]*baseFileEntry
+	deferredSegmentBytes int64
+	deferredSegments     map[*Segment]int64
+	deferredMappings     map[*deferredBaseMapping]struct{}
 }
 
 func newBaseFilePool(maxBytes int64, maxFiles int) *baseFilePool {
@@ -159,7 +161,7 @@ func newBaseFilePool(maxBytes int64, maxFiles int) *baseFilePool {
 		maxBytes:         maxBytes,
 		maxFiles:         maxFiles,
 		entries:          make(map[baseFileKey]*baseFileEntry),
-		deferredSegments: make(map[*Segment]struct{}),
+		deferredSegments: make(map[*Segment]int64),
 		deferredMappings: make(map[*deferredBaseMapping]struct{}),
 	}
 }
@@ -186,6 +188,10 @@ func (p *baseFilePool) acquire(ctx context.Context, key baseFileKey, fill func(c
 		if p.closed {
 			p.mu.Unlock()
 			return nil, errBaseFilePoolClosed
+		}
+		if len(p.deferredSegments) != 0 {
+			p.mu.Unlock()
+			return nil, errBaseFileCleanupPending
 		}
 		if e := p.entries[key]; e != nil {
 			if e.state == baseFileReady {
@@ -392,12 +398,38 @@ func (p *baseFilePool) fileCountLocked() int {
 	return p.openFiles + p.reservedFiles
 }
 
+// mappingAdmissionError quarantines new experiment mappings while cleanup
+// retains resources no longer charged by a live cache entry. Capacity fallback
+// must not bypass this error. Existing admitted work can finish and transfer its
+// finite resources; cleanup success reopens admission without a worker or timer.
+func (p *baseFilePool) mappingAdmissionError() error {
+	if p == nil {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		return errBaseFilePoolClosed
+	}
+	if len(p.deferredSegments) != 0 {
+		return errBaseFileCleanupPending
+	}
+	return nil
+}
+
 func (p *baseFilePool) deferSegment(s *Segment) {
 	if p == nil || s == nil {
 		return
 	}
 	p.mu.Lock()
-	p.deferredSegments[s] = struct{}{}
+	// Preserve the same mapping + per-doc charge used by cache admission
+	// after the cache entry has been removed. Repeated failed retries must
+	// neither duplicate the charge nor permit new READY/fallback mappings.
+	if _, exists := p.deferredSegments[s]; !exists {
+		charge := int64(len(s.mmapData)) + max(s.N, 0)*estBytesPerDocHeap
+		p.deferredSegments[s] = charge
+		p.deferredSegmentBytes += charge
+	}
 	p.mu.Unlock()
 }
 
@@ -406,7 +438,10 @@ func (p *baseFilePool) undeferSegment(s *Segment) {
 		return
 	}
 	p.mu.Lock()
-	delete(p.deferredSegments, s)
+	if charge, exists := p.deferredSegments[s]; exists {
+		delete(p.deferredSegments, s)
+		p.deferredSegmentBytes -= charge
+	}
 	p.mu.Unlock()
 }
 
@@ -501,6 +536,9 @@ func (l *baseFileLease) MapReadOnly() ([]byte, error) {
 	}
 	if l.mapped {
 		return l.data, l.err
+	}
+	if err := l.pool.mappingAdmissionError(); err != nil {
+		return nil, err
 	}
 	l.mapped = true
 	l.entry.mapMu.Lock()

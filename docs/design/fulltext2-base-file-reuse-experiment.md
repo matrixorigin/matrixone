@@ -62,15 +62,16 @@ permanent per-UUID tombstone is introduced.
 
 | Condition | Outcome |
 |---|---|
-| Retention capacity/FD/pinned/deferred admission refusal | One ordinary load under original resource admission |
+| Retention capacity/FD/pinned/validation-byte admission refusal | One ordinary load under original resource admission |
 | Healthy waiter whose fill leader was canceled | One ordinary load with waiter's context and transaction |
+| Unresolved deferred Segment cleanup | Typed pending error before READY or ordinary mapping admission; no fallback |
 | Waiter cancellation or closed owner/pool | Error; no resurrection through fallback |
 | Published READY size/checksum/decode corruption | Retire, then one ordinary load, without refilling the pool |
 | First fill source/permission/checksum/decode failure | Original error, no automatic retry |
 
 Owner cancellation covers complete Preload/Load and nested ordinary fallback,
-without replacing execution identity, snapshot or transaction. The pool stores
-files, never decoded Segments. The first fill retains the existing validation
+without replacing execution identity, snapshot or transaction. The pool reuses immutable
+files, never shares decoded Segments. The first fill retains the existing validation
 decode followed by the first caller's decode; this extra work is measured, not
 hidden or optimized in this change.
 
@@ -81,6 +82,17 @@ released: transient conservative double charging is allowed, undercharging is
 not. Successful Search destruction releases its mappings/leases; idle files may
 remain. Successful owner shutdown requires all files, mappings, deferred resources
 and reservations to be zero; permanent OS cleanup failure remains explicit pending.
+
+Experimental ordinary fallbacks bind the same retry owner as pooled Segments
+immediately after mmap, before checksum/decode validation or publication. Failed
+Segment release preserves its mapping plus the cache's per-doc heap-model charge
+under that owner after eviction. While any such cleanup remains pending, complete
+owner operations and both READY and ordinary materialization reject new work with
+a distinct pending error. Existing admitted work can finish and transfer its finite
+resources under the original governor/tenant admission; capacity fallback cannot
+bypass this quarantine. Successful retry removes each retained charge once and
+reopens an otherwise open owner. No background retry worker or new resource budget
+is introduced. Default ordinary loading keeps its previous semantics.
 
 ## Alternatives and decision record
 

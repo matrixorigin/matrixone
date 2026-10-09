@@ -265,7 +265,8 @@ func (s *Fulltext2Search) load(sqlproc *sqlexec.SqlProcess) error {
 		freeSegs(bases) // munmap the base segments on a tail-load error (don't leak the mappings)
 		return err
 	}
-	segs := append(bases, tails...)
+	segs := bases
+	segs = append(segs, tails...)
 	s.idx = NewIndex(segs, deletes)
 	s.loaded = true
 	s.baseSegs = len(bases)

@@ -640,6 +640,16 @@ func LoadFromStorage(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string) (*
 }
 
 func loadFromStorageWithContext(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string, ctx context.Context) (*Segment, error) {
+	return loadFromStorageWithCleanupPool(sqlproc, cfg, id, ctx, nil)
+}
+
+// Only experimental fallback supplies a retry owner. Ordinary default loads
+// retain their existing admission and lifecycle semantics.
+func loadFromStorageWithCleanupPool(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string, ctx context.Context, retryPool *baseFilePool) (*Segment, error) {
+	if err := retryPool.mappingAdmissionError(); err != nil {
+		return nil, err
+	}
+
 	checksum, filesize, recency, found, err := readMetadataWithContext(sqlproc, cfg, id, ctx)
 	if err != nil {
 		return nil, err
@@ -683,20 +693,30 @@ func loadFromStorageWithContext(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id
 		}
 		return nil, err
 	}
+	// Install the cleanup owner before validation can fail. A failed unmap
+	// must remain reachable even when no Segment is returned to Search.
+	m := &Segment{Id: id, mmapData: data, mmapPath: path, mmapRetryPool: retryPool}
 	// Checksum the mapped bytes (the anonymous SSD file has no path to CheckSum).
 	if vectorindex.CheckSumFromBuffer(data) != checksum {
-		_ = munmap(data)
-		if path != "" {
-			os.Remove(path)
+		if retryPool == nil {
+			_ = munmap(data)
+			if path != "" {
+				_ = os.Remove(path)
+			}
+		} else {
+			m.Free()
 		}
 		return nil, moerr.NewInternalError(sqlproc.GetContext(), fmt.Sprintf("fulltext2 index %s checksum mismatch", id))
 	}
 	// The Segment OWNS the mapping (+ path for the /tmp fallback): Free() munmaps and,
 	// if linked, deletes it.
-	m := &Segment{Id: id, mmapData: data, mmapPath: path}
 	if err := m.decodeSegment(data); err != nil {
 		m.Free()
 		return nil, err
+	}
+	if retryPool != nil && ctx != nil && ctx.Err() != nil {
+		m.Free()
+		return nil, context.Cause(ctx)
 	}
 	m.Recency = recency
 	return m, nil
@@ -710,10 +730,6 @@ func loadFromStorageWithOwner(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id s
 	return fileOwner.run(sqlproc.GetTopContext(), func(ctx context.Context) (*Segment, error) {
 		return loadFromStorageWithPoolOwnerContext(sqlproc, cfg, id, pool, fileOwner, ctx)
 	})
-}
-
-func loadFromStorageWithPoolOwner(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string, pool *baseFilePool, fileOwner *baseFileOwner) (*Segment, error) {
-	return loadFromStorageWithPoolOwnerContext(sqlproc, cfg, id, pool, fileOwner, sqlproc.GetTopContext())
 }
 
 func loadFromStorageWithPoolOwnerContext(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string, pool *baseFilePool, fileOwner *baseFileOwner, ctx context.Context) (*Segment, error) {
@@ -738,7 +754,7 @@ func loadFromStorageWithPoolOwnerContext(sqlproc *sqlexec.SqlProcess, cfg TableC
 		if fileOwner != nil && fileOwner.isClosing() {
 			return nil, errBaseFileOwnerClosed
 		}
-		return loadFromStorageWithContext(sqlproc, cfg, id, ctx)
+		return loadFromStorageWithCleanupPool(sqlproc, cfg, id, ctx, pool)
 	}
 	key := baseFileKey{
 		owner: owner, account: account, db: cfg.DbName, src: cfg.SrcTable,
@@ -806,7 +822,7 @@ func loadFromStorageWithPoolOwnerContext(sqlproc *sqlexec.SqlProcess, cfg TableC
 			if fileOwner != nil && fileOwner.isClosing() {
 				return nil, errBaseFileOwnerClosed
 			}
-			return loadFromStorageWithContext(sqlproc, cfg, id, ctx)
+			return loadFromStorageWithCleanupPool(sqlproc, cfg, id, ctx, pool)
 		}
 		if errors.Is(err, errBaseFilePoolLeaderCanceled) {
 			// The leader must observe its own cancellation. A healthy waiter may
@@ -818,7 +834,7 @@ func loadFromStorageWithPoolOwnerContext(sqlproc *sqlexec.SqlProcess, cfg TableC
 			if fileOwner != nil && fileOwner.isClosing() {
 				return nil, errBaseFileOwnerClosed
 			}
-			return loadFromStorageWithContext(sqlproc, cfg, id, ctx)
+			return loadFromStorageWithCleanupPool(sqlproc, cfg, id, ctx, pool)
 		}
 		return nil, err
 	}
@@ -829,7 +845,7 @@ func loadFromStorageWithPoolOwnerContext(sqlproc *sqlexec.SqlProcess, cfg TableC
 			if fileOwner != nil && fileOwner.isClosing() {
 				return nil, errBaseFileOwnerClosed
 			}
-			return loadFromStorageWithContext(sqlproc, cfg, id, ctx)
+			return loadFromStorageWithCleanupPool(sqlproc, cfg, id, ctx, pool)
 		}
 		return nil, err
 	}
@@ -843,7 +859,7 @@ func loadFromStorageWithPoolOwnerContext(sqlproc *sqlexec.SqlProcess, cfg TableC
 		if fileOwner != nil && fileOwner.isClosing() {
 			return nil, errBaseFileOwnerClosed
 		}
-		return loadFromStorageWithContext(sqlproc, cfg, id, ctx)
+		return loadFromStorageWithCleanupPool(sqlproc, cfg, id, ctx, pool)
 	}
 	m.Recency = recency
 	return m, nil

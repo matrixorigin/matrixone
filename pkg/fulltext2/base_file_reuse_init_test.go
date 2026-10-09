@@ -683,7 +683,7 @@ func TestExperimentalGlobalDestroyCancelsAllOwnersBeforePoolCleanup(t *testing.T
 	veccache.Cache = cache
 	t.Cleanup(func() { veccache.Cache = previousCache })
 	var workers sync.WaitGroup
-	var unblock []func()
+	unblock := make([]func(), 0, 2)
 	var unlockOnce sync.Once
 	unlock := func() {
 		unlockOnce.Do(func() {
@@ -693,8 +693,8 @@ func TestExperimentalGlobalDestroyCancelsAllOwnersBeforePoolCleanup(t *testing.T
 		})
 	}
 	source, cancelSource := context.WithCancel(context.Background())
-	var tokens []*BaseFileReuseOwnerToken
-	var canceled []chan struct{}
+	tokens := make([]*BaseFileReuseOwnerToken, 0, 2)
+	canceled := make([]chan struct{}, 0, 2)
 	t.Cleanup(func() {
 		unlock()
 		cancelSource()

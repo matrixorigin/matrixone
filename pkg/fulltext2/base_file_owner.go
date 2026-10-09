@@ -122,6 +122,10 @@ func (o *baseFileOwner) runOperation(ctx context.Context, fn func(context.Contex
 		o.mu.Unlock()
 		return errBaseFileOwnerClosed
 	}
+	if err := o.pool.mappingAdmissionError(); err != nil {
+		o.mu.Unlock()
+		return err
+	}
 	opCtx, cancel := context.WithCancel(ctx)
 	o.nextOp++
 	opID := o.nextOp
@@ -159,7 +163,7 @@ func (o *baseFileOwner) hasResources() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.bytes != 0 || p.reserved != 0 || p.reservedFiles != 0 || p.deferredBytes != 0 ||
-		p.openFiles != 0 || len(p.entries) != 0 ||
+		p.openFiles != 0 || p.deferredSegmentBytes != 0 || len(p.entries) != 0 ||
 		len(p.deferredSegments) != 0 || len(p.deferredMappings) != 0
 }
 
