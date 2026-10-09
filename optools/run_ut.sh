@@ -1967,43 +1967,6 @@ function cleanup_embedded_prebuild(){
 # caller may discard artifacts only after every companion owner has been
 # reaped; otherwise a compiler or light test can outlive the runner and keep a
 # cluster port, report, or link lease alive.
-function stop_race_companions(){
-    local status=0 prebuild_status=0 light_status=0 pid
-    if ut_drain_failed; then status=125; fi
-    if [[ -n "${LIGHT_RACE_JOB_PID}" ]]; then
-        pid=${LIGHT_RACE_JOB_PID}
-        terminate_ut_process_group "${pid}" TERM
-        if ! wait_for_ut_process_group "${pid}" "${UT_HELPER_TERM_GRACE_TICKS}"; then
-            LIGHT_RACE_DRAIN_FAILED=1
-            status=125
-        else
-            join_ut_owner LIGHT_RACE_JOB_PID LIGHT_RACE_DRAIN_FAILED || light_status=$?
-            if (( light_status == 125 )); then
-                status=125
-            else
-                consume_light_race_report || status=125
-                cleanup_light_link_gate || status=125
-            fi
-        fi
-    fi
-    if [[ -n "${CLUSTER_PREBUILD_JOB_PID}" ]]; then
-        pid=${CLUSTER_PREBUILD_JOB_PID}
-        terminate_ut_process_group "${pid}" TERM
-        if ! wait_for_ut_process_group "${pid}" "${UT_HELPER_TERM_GRACE_TICKS}"; then
-            CLUSTER_PREBUILD_DRAIN_FAILED=1
-            status=125
-        else
-            finish_embedded_prebuild || prebuild_status=$?
-            if (( prebuild_status == 125 )); then
-                status=125
-            else
-                cleanup_embedded_prebuild || status=125
-            fi
-        fi
-    fi
-    return "${status}"
-}
-
 # Callers prepare race_packages, race_dirs, race_binaries, race_patterns and
 # race_deadlines in their local scope. A nonzero deadline is shared by all
 # batches of that package; zero retains the ordinary per-package timeout.
@@ -2780,14 +2743,7 @@ function run_tests(){
                     run_ut_command serial "batched exclusive race-test package ${package}" \
                         run_issues_race_batches "${package}" "${PREBUILT_RACE_TEST_BINARY}" "${UT_ISSUES_BATCHES}"
                     package_status=$?
-                    if (( package_status == 125 )); then
-                        if ! stop_race_companions; then
-                            logger "ERR" "issues infrastructure failure left a companion owner undrained; retaining diagnostics"
-                            exit 125
-                        fi
-                        UT_TEST_STATUS=1
-                        return 0
-                    fi
+                    if ut_drain_failed; then UT_TEST_STATUS=1; return 0; fi
                     consume_race_report PREBUILT_RACE_REPORT PREBUILT_RACE_TEST_BINARY || package_status=1
                 else
                     run_ut_command "serial" "exclusive race-test package ${package}" env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p 1 -timeout "${UT_TIMEOUT}m" -race "${package}"

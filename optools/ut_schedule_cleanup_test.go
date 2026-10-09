@@ -521,9 +521,7 @@ run_embedded_prebuild $'example/a\nexample/b' 2 "$CASE_DIR/prebuild" || status=$
 }
 
 func TestPrebuildFailedDrainBlocksConsumers(t *testing.T) {
-	for _, consumer := range []string{"embedded", "companions"} {
-		t.Run(consumer, func(t *testing.T) {
-			script := `source ./run_ut.sh UT
+	script := `source ./run_ut.sh UT
 function logger() { :; }
 CLUSTER_PREBUILD_DIR="$CASE_DIR/artifacts"
 CLUSTER_PREBUILD_REPORT="$CLUSTER_PREBUILD_DIR/report"
@@ -534,11 +532,7 @@ printf 'retained\n' > "$CLUSTER_PREBUILD_REPORT.build.0"
 CLUSTER_PREBUILD_JOB_PID=$!
 function run_ut_command() { touch "$CASE_DIR/fallback"; return 0; }
 status=0
-if [[ "$CONSUMER" == embedded ]]; then
- run_embedded_tests example/a 1 || status=$?
-else
- stop_race_companions || status=$?
-fi
+run_embedded_tests example/a 1 || status=$?
 [[ "$status" == 125 ]] || exit 90
 [[ -f "$CLUSTER_PREBUILD_REPORT.build.0" && -d "$CLUSTER_PREBUILD_DIR" ]] || exit 91
 [[ ! -e "$CASE_DIR/fallback" && -z "$CLUSTER_PREBUILD_JOB_PID" ]] || exit 92
@@ -549,10 +543,139 @@ trap handle_ut_termination TERM
 kill -TERM "$$"
 exit 96
 `
-			out, err := scheduleHarness(t, script, "CONSUMER="+consumer)
+	out, err := scheduleHarness(t, script)
+	exit, ok := err.(*exec.ExitError)
+	if !ok || exit.ExitCode() != 125 {
+		t.Fatalf("failed-drain embedded consumer: %v\n%s", err, out)
+	}
+}
+
+func TestIssuesRootDispatchDrainsHeartbeat(t *testing.T) {
+	data, err := os.ReadFile("run_ut.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	index := strings.Index(text, "if [[ 'SCA' == $TEST_TYPE ]]; then")
+	if index < 0 {
+		t.Fatal("missing runner dispatch")
+	}
+	for _, tc := range []struct {
+		name, companion, status string
+		want                    int
+	}{
+		{"failed-drain", "none", "125", 125},
+		{"failed-drain-light", "light", "125", 125},
+		{"failed-drain-prebuild", "prebuild", "125", 125},
+		{"ordinary-failure", "none", "7", 1},
+		{"success", "none", "0", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// The outer pipeline cannot exit until the independent reader gets
+			// natural EOF. exec.WaitDelay closing its own pipes cannot satisfy it.
+			script := `cat > "$CASE_DIR/root.sh" <<'ROOT'
+source ./run_ut.sh UT
+function logger() { :; }
+function make() { :; }
+function egrep() { echo fixture.pb.go; }
+function report_cgroup_memory_usage() { :; }
+MO_CL_CUDA=1
+UT_SHARD=issues
+UT_PREBUILD_EMBEDDED=0
+UT_ISSUES_BATCHES=4
+UT_HEARTBEAT_INTERVAL=60
+UT_PREBUILD_MIN_FREE_KB=1
+fixture_companion_pid=""
+mkfifo "$CASE_DIR/timer-ready" "$CASE_DIR/companion-ready" "$CASE_DIR/companion-hold"
+exec 7<> "$CASE_DIR/timer-ready" 8<> "$CASE_DIR/companion-ready" 9<> "$CASE_DIR/companion-hold"
+function run_embedded_prebuild() {
+ trap 'touch "$CASE_DIR/companion-stopped"; exit 0' TERM
+ printf 'ready\n' >&8
+ read -r _ <&9
+}
+function prepare_ut_native() {
+ case "$COMPANION" in
+ light) start_light_race example/light 1; fixture_companion_pid="$LIGHT_RACE_JOB_PID" ;;
+ prebuild) start_embedded_prebuild example/embedded 1; fixture_companion_pid="$CLUSTER_PREBUILD_JOB_PID" ;;
+ esac
+}
+function go() {
+ if [[ "$1" == clean ]]; then return 0; fi
+ if [[ "$1" != list ]]; then return 0; fi
+ shift 2
+ if [[ "$1" == ./... ]]; then
+  printf '%s\n' github.com/matrixorigin/matrixone/pkg/{sql/plan,vm/engine/test,vectorindex/hnsw,tests/issues,backup,fileservice,sql/plan/function,vm/engine/tae/db/test}
+ else
+  for package in "$@"; do echo "github.com/matrixorigin/matrixone/${package#./}"; done
+ fi
+}
+function list_embedded_cluster_test_packages() { :; }
+# Only expensive child work is replaced: scheduling, joining, root dispatch,
+# heartbeat and companion launch/shutdown remain the production functions.
+function run_issues_race_batches() {
+ read -r -t 5 timer_pid <&7 || return 90
+ printf '%s\n' "$timer_pid" > "$CASE_DIR/timer.pid"
+ if [[ "$COMPANION" != none ]]; then read -r -t 5 _ <&8 || return 91; fi
+ printf 'retained\n' > "$PREBUILT_RACE_REPORT.build.0"
+ touch "$PREBUILT_RACE_TEST_BINARY"
+ return "$ISSUES_STATUS"
+}
+function post_test() { touch "$CASE_DIR/post-test"; }
+function ut_summary() { touch "$CASE_DIR/summary"; exit "$UT_TEST_STATUS"; }
+function check_root_exit() {
+ local status=$? heartbeat_pid timer_pid
+ heartbeat_pid=$(sed -n 's/.*event=heartbeat-start .*detail=pid=\([0-9]*\).*/\1/p' "$UT_CHECKPOINT")
+ timer_pid=$(cat "$CASE_DIR/timer.pid")
+ [[ -n "$heartbeat_pid" && -n "$timer_pid" ]] || exit 92
+ if kill -0 "$heartbeat_pid" 2>/dev/null || kill -0 "$timer_pid" 2>/dev/null; then exit 93; fi
+ if [[ "$COMPANION" != none ]]; then
+  [[ -n "$fixture_companion_pid" && -e "$CASE_DIR/companion-stopped" ]] || exit 94
+  if kill -0 "$fixture_companion_pid" 2>/dev/null; then exit 95; fi
+ fi
+ if [[ "$ISSUES_STATUS" == 125 ]]; then
+  [[ -f "$PREBUILT_RACE_REPORT.build.0" && -f "$PREBUILT_RACE_TEST_BINARY" ]] || exit 96
+  [[ ! -e "$CASE_DIR/post-test" && ! -e "$CASE_DIR/summary" ]] || exit 97
+  if [[ "$COMPANION" == prebuild ]]; then
+   [[ -d "$CLUSTER_PREBUILD_DIR" && -f "$CLUSTER_PREBUILD_REPORT" ]] || exit 98
+  fi
+ else
+  [[ -e "$CASE_DIR/post-test" && -e "$CASE_DIR/summary" ]] || exit 99
+  [[ ! -e "$G_WKSP/$G_TS-issues-race-report.out.build.0" && ! -e "$G_WKSP/$G_TS-issues-race.test" ]] || exit 100
+ fi
+ exit "$status"
+}
+trap check_root_exit EXIT
+` + text[index:] + `
+ROOT
+set -o pipefail
+bash "$CASE_DIR/root.sh" 2>&1 | cat
+`
+			mock := `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+trap 'touch "$CASE_DIR/companion-stopped"; exit 0' TERM
+printf 'ready\n' >&8
+read -r _ <&9
+`
+			transform := func(source string) string {
+				const anchor = "            heartbeat_sleep_pid=$!\n"
+				if strings.Count(source, anchor) != 1 {
+					t.Fatal("missing unique heartbeat timer publication")
+				}
+				return strings.Replace(source, anchor, anchor+"            printf '%s\\n' \"$heartbeat_sleep_pid\" >&7\n", 1)
+			}
+			out, err := scheduleHarnessWithMockTransform(t, script, mock, transform,
+				"COMPANION="+tc.companion, "ISSUES_STATUS="+tc.status)
+			if tc.want == 0 {
+				if err != nil {
+					t.Fatalf("root success: %v\n%s", err, out)
+				}
+				return
+			}
+			// Emergency fixture reclamation joins a distinct error; accepting
+			// only the bare exit ensures it cannot conceal a leaked process.
 			exit, ok := err.(*exec.ExitError)
-			if !ok || exit.ExitCode() != 125 {
-				t.Fatalf("failed-drain consumer %s: %v\n%s", consumer, err, out)
+			if !ok || exit.ExitCode() != tc.want {
+				t.Fatalf("root status: want %d, got %v\n%s", tc.want, err, out)
 			}
 		})
 	}
