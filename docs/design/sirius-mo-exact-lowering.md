@@ -11,10 +11,13 @@ Semantic authority remains #29449 document blob
 Native B, Sirius #27, merged as
 `5ea60cd31955d0dced2adcbcd3df0772207b79ef`, is the native dependency.
 
-Current delivery gate: C remains draft pending
-[Sirius #29](https://github.com/matrixorigin/sirius/pull/29), then a pin to its
-merged revision and final release validation. Joint development validation now
-passes all 22 native preparations and the complete public numeric fixture.
+Current delivery gate: C pins merged
+[Sirius #29](https://github.com/matrixorigin/sirius/pull/29) at
+`908ffc75a58b3be496b2172795e416326416e7ec`. C remains draft pending the
+merged kernel prerequisite [#29775](https://github.com/matrixorigin/matrixone/pull/29775)
+and final release/public/owning-package validation and required CI. Joint
+development validation passes all 22 native preparations and the complete
+public numeric fixture.
 
 ## Decision and invariant
 
@@ -315,6 +318,32 @@ libraries through a temporary test launcher. Their archive SHA-256 is
 Host packages were unchanged; these driver libraries are outside the repository
 and release artifacts. Normal SDK/source/artifact checks remained enabled.
 
-Next merge order: #29, C's merged pin plus release/owning-package/static
-delivery checks, then C. D begins after C merges; E/F remain behind their
-separate recovery-readiness design. Keep #28968 and #28966 open.
+At this checkpoint, the remaining merge order was #29, C's merged pin plus
+release/owning-package/static delivery checks, then C.
+
+## Merged native delivery and kernel prerequisite (2026-10-09)
+
+Sirius #29 merged as `908ffc75a58b3be496b2172795e416326416e7ec`
+on the authoritative `upstream-dev-merge` branch. C now pins that merged
+revision. Its source tree is identical to the independently validated clean
+`2a39339beb0c2312dc4b71fbdd472e822450637c` tree; regenerate the release
+SDK and verify its merged source/artifact identity before using it for delivery.
+The importer remains merged #5 at
+`99c7ca3b6f8f3159239e119ed2982d42f98c4690`.
+
+C's pessimistic Compose BVT at head `8284b77a` exposed premature prepared
+result-schema freezing when DDL commits after execute-time binding. The failure
+also reproduces on clean main with an inert phase point. Independent kernel
+PR [#29775](https://github.com/matrixorigin/matrixone/pull/29775) publishes
+metadata from the actual executed generation before its first positive row,
+or after successful zero-row completion; incompatible retries after publication
+remain rejected. It also finalizes saved metadata after whole-query success.
+Its eight public cases, complete frontend/compiler normal and race suites,
+focused race stress and full pre-push SCA pass. Exact-head CI now passes,
+including pessimistic Compose BVT, overall coverage and CI Required.
+
+Inherit the kernel fix only after #29775 merges, then complete C's final
+merged-pin release/public/owning validation and required CI before readiness.
+D implementation begins after C merges and stays one complete public campaign
+PR. E/F remain behind their separate recovery-readiness design. Keep #28968
+and #28966 open.
