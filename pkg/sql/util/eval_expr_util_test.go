@@ -374,15 +374,20 @@ func TestSetInsertValueStringBinaryHexPadding(t *testing.T) {
 	}
 }
 
-func TestSetInsertValueStringBinaryStringKeepsLegacyWidthBehavior(t *testing.T) {
+func TestSetInsertValueStringBinaryStringChecksByteWidth(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	typ := types.New(types.T_binary, 2, 0)
 	numVal := tree.NewNumVal("时", "时", false, tree.P_char)
 
-	canInsert, got, err := SetInsertValueString(proc, numVal, &typ)
+	canInsert, _, err := SetInsertValueString(proc, numVal, &typ)
+	require.ErrorContains(t, err, "Src length 3 is larger than Dest length 2")
+	require.False(t, canInsert)
+
+	fit := tree.NewNumVal("ab", "ab", false, tree.P_char)
+	canInsert, got, err := SetInsertValueString(proc, fit, &typ)
 	require.NoError(t, err)
 	require.True(t, canInsert)
-	require.Equal(t, []byte("时"), got)
+	require.Equal(t, []byte("ab"), got)
 }
 
 func TestBinaryToInt(t *testing.T) {

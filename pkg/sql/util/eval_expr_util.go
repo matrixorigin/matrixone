@@ -814,7 +814,7 @@ func SetInsertValueBool(proc *process.Process, numVal *tree.NumVal) (canInsert b
 func SetInsertValueString(proc *process.Process, numVal *tree.NumVal, typ *types.Type) (canInsert bool, val []byte, err error) {
 	canInsert = true
 
-	checkStrLen := func(s string, binaryLiteral bool) ([]byte, error) {
+	checkStrLen := func(s string) ([]byte, error) {
 		destLen := int(typ.Width)
 		// CHAR/VARCHAR width is enforced at runtime by the assignment cast
 		// (cast_assign), which honors sql_mode, the trailing-space exemption and
@@ -822,10 +822,10 @@ func SetInsertValueString(proc *process.Process, numVal *tree.NumVal, typ *types
 		// hard rejection that would ignore sql_mode.
 		checkWidth := typ.Oid != types.T_char && typ.Oid != types.T_varchar &&
 			typ.Oid != types.T_text && typ.Oid != types.T_datalink &&
-			(typ.Oid != types.T_binary || binaryLiteral) && destLen != 0 && !typ.Oid.IsArrayRelate()
+			destLen != 0 && !typ.Oid.IsArrayRelate()
 		if checkWidth {
 			srcLen := utf8.RuneCountInString(s)
-			if binaryLiteral && (typ.Oid == types.T_binary || typ.Oid == types.T_varbinary) {
+			if typ.Oid == types.T_binary || typ.Oid == types.T_varbinary {
 				srcLen = len(s)
 			}
 			if srcLen > destLen {
@@ -941,14 +941,14 @@ func SetInsertValueString(proc *process.Process, numVal *tree.NumVal, typ *types
 		} else {
 			s = "0"
 		}
-		if val, err = checkStrLen(s, false); err != nil {
+		if val, err = checkStrLen(s); err != nil {
 			canInsert = false
 		}
 		return
 
 	case tree.P_int64, tree.P_uint64, tree.P_char, tree.P_decimal, tree.P_float64:
 		s := numVal.String()
-		if val, err = checkStrLen(s, false); err != nil {
+		if val, err = checkStrLen(s); err != nil {
 			canInsert = false
 		}
 		return
@@ -962,7 +962,7 @@ func SetInsertValueString(proc *process.Process, numVal *tree.NumVal, typ *types
 			canInsert = false
 			return
 		}
-		if val, err = checkStrLen(string(val), true); err != nil {
+		if val, err = checkStrLen(string(val)); err != nil {
 			canInsert = false
 		}
 		return
@@ -971,6 +971,12 @@ func SetInsertValueString(proc *process.Process, numVal *tree.NumVal, typ *types
 		s := numVal.String()[2:]
 		if val, err = DecodeBinaryString(s); err != nil {
 			canInsert = false
+			return
+		}
+		if typ.Oid == types.T_binary || typ.Oid == types.T_varbinary {
+			if val, err = checkStrLen(string(val)); err != nil {
+				canInsert = false
+			}
 		}
 		return
 
