@@ -57,7 +57,7 @@ func transferInmemTombstones(
 				return err
 			}
 
-			deleteObjs, createObjs := state.GetChangedObjsBetween(start, end)
+			deleteObjs, createObjs := state.GetChangedObjsBetweenForTombstoneTransfer(start, end)
 
 			if len(deleteObjs) > 0 {
 				if err := transferTombstones(

@@ -218,6 +218,21 @@ func (p *PartitionState) GetChangedObjsBetween(
 	deleted map[objectio.ObjectNameShort]struct{},
 	inserted map[objectio.ObjectNameShort]struct{},
 ) {
+	return p.getChangedObjsBetween(begin, end, false)
+}
+
+// GetChangedObjsBetweenForTombstoneTransfer includes deleted intermediate
+// objects: in-memory RowIDs can reference them after a statement rollback
+// because an earlier transfer rewrites retained batches in place.
+func (p *PartitionState) GetChangedObjsBetweenForTombstoneTransfer(
+	begin, end types.TS,
+) (deleted, inserted map[objectio.ObjectNameShort]struct{}) {
+	return p.getChangedObjsBetween(begin, end, true)
+}
+
+func (p *PartitionState) getChangedObjsBetween(
+	begin, end types.TS, includeIntermediateDeletes bool,
+) (deleted, inserted map[objectio.ObjectNameShort]struct{}) {
 	inserted = make(map[objectio.ObjectNameShort]struct{})
 	deleted = make(map[objectio.ObjectNameShort]struct{})
 
@@ -237,12 +252,10 @@ func (p *PartitionState) GetChangedObjsBetween(
 		}
 
 		if entry.IsDelete {
-			// if the object is inserted and deleted between [begin, end], it will be ignored.
-			if _, ok := inserted[entry.ShortObjName]; !ok {
+			if _, created := inserted[entry.ShortObjName]; !created || includeIntermediateDeletes {
 				deleted[entry.ShortObjName] = struct{}{}
-			} else {
-				delete(inserted, entry.ShortObjName)
 			}
+			delete(inserted, entry.ShortObjName)
 		} else {
 			inserted[entry.ShortObjName] = struct{}{}
 		}
