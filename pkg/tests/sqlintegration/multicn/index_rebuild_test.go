@@ -145,14 +145,46 @@ func TestIssue29566IndexRebuildCoordinator(t *testing.T) {
 	}
 
 	for _, tc := range []struct {
-		name, table, index, algo, match, want, search, metaType string
+		name, table, index, algo, match, want, wantAfterDML, search, metaType string
+		mutations                                                             []string
 	}{
-		{"fulltext2", "docs", "ft", "fulltext2", "select id from docs where match(body) against('bbbbbbbbbbbbbbbbbbbbbbbbbb') order by id", "1\n3", "Fulltext Index Scan", catalog.FullText2Index_TblType_Metadata},
-		{"hnsw", "vectors", "hx", "hnsw", "select id from vectors order by l2_distance(v,'[0,0]') limit 3 by rank with option 'mode=post'", "1\n2\n3", "Vector Index Scan", catalog.Hnsw_TblType_Metadata},
+		{
+			name:         "fulltext2",
+			table:        "docs",
+			index:        "ft",
+			algo:         "fulltext2",
+			match:        "select id from docs where match(body) against('bbbbbbbbbbbbbbbbbbbbbbbbbb') order by id",
+			want:         "1\n3",
+			wantAfterDML: "2\n3\n4",
+			search:       "Fulltext Index Scan",
+			metaType:     catalog.FullText2Index_TblType_Metadata,
+			mutations: []string{
+				"update docs set body='bbbbbbbbbbbbbbbbbbbbbbbbbb' where id=2",
+				"delete from docs where id=1",
+				"insert into docs values(4,'bbbbbbbbbbbbbbbbbbbbbbbbbb')",
+			},
+		},
+		{
+			name:         "hnsw",
+			table:        "vectors",
+			index:        "hx",
+			algo:         "hnsw",
+			match:        "select id from vectors order by l2_distance(v,'[0,0]') limit 3 by rank with option 'mode=post'",
+			want:         "1\n2\n3",
+			wantAfterDML: "4\n3\n1",
+			search:       "Vector Index Scan",
+			metaType:     catalog.Hnsw_TblType_Metadata,
+			mutations: []string{
+				"update vectors set v='[9,0]' where id=1",
+				"delete from vectors where id=2",
+				"insert into vectors values(4,'[0.5,0]')",
+			},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			conn = conns[0]
-			require.Equal(t, tc.want, strings.Join(query(t, tc.match), "\n"))
+			want := tc.want
+			require.Equal(t, want, strings.Join(query(t, tc.match), "\n"))
 			require.Contains(t, strings.Join(query(t, "explain "+tc.match), "\n"), tc.search)
 			metadataTable := query(t, "select index_table_name from mo_catalog.mo_indexes where table_id=(select rel_id from mo_catalog.mo_tables where reldatabase='"+schema+"' and relname='"+tc.table+"') and algo_table_type='"+tc.metaType+"'")
 			require.Len(t, metadataTable, 1)
@@ -178,7 +210,7 @@ func TestIssue29566IndexRebuildCoordinator(t *testing.T) {
 					require.Contains(t, physical, peer, "source scans must use both CNs")
 				}
 				rebuild()
-				require.Equal(t, tc.want, strings.Join(query(t, tc.match), "\n"), "successful rebuild on CN%d must commit replacement index writes", i)
+				require.Equal(t, want, strings.Join(query(t, tc.match), "\n"), "successful rebuild on CN%d must commit replacement index writes", i)
 				after := query(t, "select max(build_ts) from "+meta)
 				require.NotEqual(t, []string{"NULL"}, after)
 				require.NotEqual(t, before, after, "successful rebuild must publish a new generation")
@@ -192,8 +224,17 @@ func TestIssue29566IndexRebuildCoordinator(t *testing.T) {
 					require.Empty(t, query(t, tc.match))
 					require.Equal(t, []string{"NULL"}, query(t, "select max(build_ts) from "+meta))
 					exec(t, "rollback")
-					require.Equal(t, tc.want, strings.Join(query(t, tc.match), "\n"))
+					require.Equal(t, want, strings.Join(query(t, tc.match), "\n"))
 					require.Equal(t, after, query(t, "select max(build_ts) from "+meta), "rollback must preserve the prior committed generation")
+
+					// Rebuild the next generation from a persisted source snapshot that
+					// contains an UPDATE, DELETE and INSERT. This distinguishes a real
+					// replacement from accidentally re-publishing the previous model.
+					for _, statement := range tc.mutations {
+						exec(t, statement)
+					}
+					exec(t, "select mo_ctl('dn','flush','"+schema+"."+tc.table+"')")
+					want = tc.wantAfterDML
 				}
 			}
 		})

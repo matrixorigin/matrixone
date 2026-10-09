@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
@@ -390,11 +391,13 @@ func startCNService(
 		defer cancelRole()
 		cfg.initMetaCache()
 		commonConfigKVMap, _ := dumpCommonConfig(*cfg)
+		var published cnservice.Service
 		s, err := cnservice.NewService(
 			&c,
 			ctx,
 			fileService,
 			gossipNode,
+			func(owner cnservice.Service) { published = owner },
 			cnservice.WithLogger(logutil.GetGlobalLogger().Named("cn-service").With(zap.String("uuid", cfg.CN.UUID))),
 			cnservice.WithMessageHandle(compile.CnServerMessageHandler),
 			cnservice.WithConfigData(commonConfigKVMap),
@@ -403,6 +406,7 @@ func startCNService(
 			panic(err)
 		}
 		if err := s.Start(); err != nil {
+			closeErr = errors.Join(err, published.Close())
 			panic(err)
 		}
 
@@ -448,7 +452,19 @@ func startTNService(
 	}
 	err := stopper.RunNamedTask("tn-service", func(ctx context.Context) {
 		var closeErr error
-		defer func() { finishTask(closeErr) }()
+		var owner tnservice.Service
+		completed := false
+		defer func() {
+			if !completed && closeErr == nil {
+				closeErr = moerr.NewInvalidStateNoCtx("TN startup task interrupted")
+			}
+			if owner != nil {
+				err := owner.Close()
+				closeErr = errors.Join(closeErr, err)
+			}
+			finishTask(closeErr)
+			serviceLifecycle.notifyFatal(closeErr)
+		}()
 		roleCtx, cancelRole := serviceLifecycle.roleContext(ctx, serviceRoleTN)
 		defer cancelRole()
 		cfg.initMetaCache()
@@ -461,19 +477,21 @@ func startTNService(
 			mustGetRuntime(cfg),
 			fileService,
 			shutdownC,
+			func(value tnservice.Service) {
+				owner = value
+			},
 			tnservice.WithConfigData(commonConfigKVMap))
 		if err != nil {
-			panic(err)
+			closeErr = err
+			return
 		}
 		if err := s.Start(); err != nil {
-			panic(err)
+			closeErr = err
+			return
 		}
 
 		<-roleCtx.Done()
-		if err := s.Close(); err != nil {
-			closeErr = err
-			logutil.GetGlobalLogger().Error("failed to close tn service", zap.Error(err))
-		}
+		completed = true
 	})
 	if err != nil {
 		finishTask(err)
