@@ -134,6 +134,38 @@ func TestConsumeCheckpointWithTableID(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, dataEntries)
 	require.Equal(t, 1, tombstoneEntries)
+
+	meta := ckputil.NewMetaBatch()
+	defer meta.Clean(proc.Mp())
+	for _, ranges := range [][]ckputil.TableRange{dataRanges, tombstoneRanges} {
+		for _, r := range ranges {
+			require.NoError(t, r.AppendTo(meta, proc.Mp()))
+		}
+	}
+	writer := ioutil.ConstructWriter(0, ckputil.MetaSeqnums, -1, false, false, fs)
+	_, err = writer.WriteBatch(meta)
+	require.NoError(t, err)
+	_, _, err = writer.Sync(context.Background())
+	require.NoError(t, err)
+	stats := writer.GetObjectStats()
+	location := stats.ObjectLocation()
+	dataEntries, tombstoneEntries = 0, 0
+	reader := NewCKPReaderWithTableID_V2(CheckpointCurrentVersion, location, 1, proc.Mp(), fs)
+	require.NoError(t, reader.ReadMeta(context.Background()))
+	err = reader.ConsumeCheckpointWithTableID(
+		context.Background(),
+		func(_ context.Context, _ fileservice.FileService, _ objectio.ObjectEntry, isTombstone bool) error {
+			if isTombstone {
+				tombstoneEntries++
+			} else {
+				dataEntries++
+			}
+			return nil
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1, dataEntries)
+	require.Equal(t, 1, tombstoneEntries)
 }
 
 func TestConsumeCheckpointWithTableIDPropagatesIteratorError(t *testing.T) {
@@ -580,6 +612,7 @@ type checkpointMetaReadFS struct {
 	failure                                            error
 	leases, releases                                   atomic.Int64
 	selectedReads                                      int
+	beforeSelectedRead                                 func()
 }
 
 func (fs *checkpointMetaReadFS) Read(ctx context.Context, v *fileservice.IOVector) error {
@@ -587,6 +620,9 @@ func (fs *checkpointMetaReadFS) Read(ctx context.Context, v *fileservice.IOVecto
 	selected := len(v.Entries) == len(ckputil.MetaSeqnums)
 	if selected {
 		fs.selectedReads++
+		if fs.beforeSelectedRead != nil {
+			fs.beforeSelectedRead()
+		}
 	}
 	if (ids && fs.failIDs) || (selected && fs.failSelected) {
 		return fs.failure
@@ -657,6 +693,27 @@ func TestReadMetaWithTableIDFailureCleanup(t *testing.T) {
 	_, _, err = readMetaWithTableID(canceled, loc, 1, mp, fs)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Zero(t, mp.CurrNB())
+	t.Run("canceled with ID lease held", func(t *testing.T) {
+		canceled, cancel := context.WithCancel(ctx)
+		defer cancel()
+		wrapped := &checkpointMetaReadFS{FileService: fs}
+		wrapped.beforeSelectedRead = func() {
+			require.Greater(t, wrapped.leases.Load(), wrapped.releases.Load())
+			cancel()
+		}
+		data, tombstone, err := readMetaWithTableID(canceled, loc, 1, mp, wrapped)
+		require.ErrorIs(t, err, context.Canceled)
+		require.Nil(t, data)
+		require.Nil(t, tombstone)
+		require.Equal(t, 1, wrapped.selectedReads)
+		require.Positive(t, wrapped.leases.Load())
+		require.Equal(t, wrapped.leases.Load(), wrapped.releases.Load())
+		require.Zero(t, mp.CurrNB())
+		data, tombstone, err = readMetaWithTableID(ctx, loc, 1, mp, fs)
+		require.NoError(t, err)
+		require.Len(t, data, 1)
+		require.Len(t, tombstone, 1)
+	})
 	wrapped := &checkpointMetaReadFS{FileService: fs}
 	data, tombstone, err := readMetaWithTableID(ctx, loc, 2, mp, wrapped)
 	require.NoError(t, err)
