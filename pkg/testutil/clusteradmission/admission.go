@@ -21,7 +21,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strconv"
 	"sync"
 	"time"
 
@@ -34,23 +33,7 @@ const (
 	retryDelay   = 50 * time.Millisecond
 )
 
-// ParticipantEnv is set only by the bounded embedded test wave. Other test
-// processes retain exclusive admission on the same global lifecycle gate.
-const ParticipantEnv = "MO_UT_CLUSTER_PARTICIPANT"
-
-var processAdmission = newProcessManager()
-
-func newProcessManager() *manager {
-	m := newManager(filepath.Join(os.TempDir(), lockFilename), retryDelay)
-	switch value := os.Getenv(ParticipantEnv); value {
-	case "":
-	case "1":
-		m.participant = true
-	default:
-		m.configErr = moerr.NewInvalidInputNoCtxf("%s must be empty or 1, got %q", ParticipantEnv, value)
-	}
-	return m
-}
+var processAdmission = newManager(filepath.Join(os.TempDir(), lockFilename), retryDelay)
 
 // Mode controls whether a test deliberately starts another complete cluster in
 // the same test process. The default must be Exclusive: accidental overlap is
@@ -144,14 +127,11 @@ func (l *Lease) timingLocked(now time.Time) Timing {
 }
 
 type manager struct {
-	mu          sync.Mutex
-	path        string
-	retryDelay  time.Duration
-	lock        *flock.Flock
-	references  int
-	participant bool
-	configErr   error
-	slot        *flock.Flock
+	mu         sync.Mutex
+	path       string
+	retryDelay time.Duration
+	lock       *flock.Flock
+	references int
 }
 
 func newManager(path string, delay time.Duration) *manager {
@@ -166,9 +146,6 @@ func (m *manager) acquire(ctx context.Context, mode Mode) (*Lease, error) {
 	requested := time.Now()
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.configErr != nil {
-		return nil, m.configErr
-	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -176,19 +153,23 @@ func (m *manager) acquire(ctx context.Context, mode Mode) (*Lease, error) {
 		if mode != AllowConcurrent {
 			return nil, moerr.NewInvalidStateNoCtx("another complete test cluster is already active in this process")
 		}
-		if m.lock == nil || (!m.participant && !m.lock.Locked()) || (m.participant && (m.slot == nil || !m.slot.Locked() || !m.lock.RLocked())) {
+		if m.lock == nil || !m.lock.Locked() {
 			return nil, moerr.NewInvalidStateNoCtx("test cluster admission cleanup is incomplete")
 		}
 		m.references++
 		return &Lease{manager: m, requested: requested, acquired: time.Now()}, nil
 	}
 
-	if err := m.acquireHandles(ctx); err != nil {
-		cleanupErr := m.closeHandles()
+	m.lock = flock.New(m.path)
+	locked, err := m.lock.TryLockContext(ctx, m.retryDelay)
+	if err == nil && !locked {
+		err = moerr.NewInvalidStateNoCtxf("test cluster admission %s was not acquired", m.path)
+	}
+	if err != nil {
+		cleanupErr := m.closeLock()
 		cause := errors.Join(moerr.NewInternalErrorNoCtxf("acquire test cluster admission %s", m.path), err, cleanupErr)
 		if cleanupErr != nil {
-			// Return the remaining cleanup owner even though no usable admission
-			// was granted. The cluster must retain this lease and retry Release.
+			// Retain the cleanup owner when rollback fails, without granting admission.
 			m.references = 1
 			return &Lease{manager: m, requested: requested}, cause
 		}
@@ -198,78 +179,28 @@ func (m *manager) acquire(ctx context.Context, mode Mode) (*Lease, error) {
 	return &Lease{manager: m, requested: requested, acquired: time.Now()}, nil
 }
 
-func (m *manager) acquireHandles(ctx context.Context) error {
-	for {
-		m.lock = flock.New(m.path)
-		if !m.participant {
-			locked, err := m.lock.TryLockContext(ctx, m.retryDelay)
-			if err != nil {
-				return err
-			}
-			if !locked {
-				return moerr.NewInvalidStateNoCtxf("test cluster admission %s was not acquired", m.path)
-			}
-			return nil
-		}
-		if _, err := m.lock.TryRLockContext(ctx, m.retryDelay); err != nil {
-			return err
-		}
-		for index := 0; index < 2; index++ {
-			m.slot = flock.New(m.path + ".slot-" + strconv.Itoa(index))
-			locked, err := m.slot.TryLock()
-			if err != nil {
-				return err
-			}
-			if locked {
-				return nil
-			}
-			if err := m.slot.Close(); err != nil {
-				return err
-			}
-			m.slot = nil
-		}
-		// A waiter without a slot must not keep the shared gate and prevent an
-		// ordinary exclusive owner from making progress.
-		if err := m.closeHandles(); err != nil {
-			return err
-		}
-		timer := time.NewTimer(m.retryDelay)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		case <-timer.C:
-		}
+func (m *manager) closeLock() error {
+	if m.lock == nil {
+		return nil
 	}
-}
-
-func (m *manager) closeHandles() error {
-	if m.slot != nil {
-		if err := m.slot.Close(); err != nil {
-			return err
-		}
-		m.slot = nil
+	if err := m.lock.Close(); err != nil {
+		return err
 	}
-	if m.lock != nil {
-		if err := m.lock.Close(); err != nil {
-			return err
-		}
-		m.lock = nil
-	}
+	m.lock = nil
 	return nil
 }
 
 func (m *manager) release() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.references <= 0 || (m.lock == nil && m.slot == nil) {
+	if m.references <= 0 || m.lock == nil {
 		return moerr.NewInvalidStateNoCtxf("test cluster admission %s has no active lease", m.path)
 	}
 	if m.references > 1 {
 		m.references--
 		return nil
 	}
-	if err := m.closeHandles(); err != nil {
+	if err := m.closeLock(); err != nil {
 		return errors.Join(
 			moerr.NewInternalErrorNoCtxf("release test cluster admission %s", m.path),
 			err,

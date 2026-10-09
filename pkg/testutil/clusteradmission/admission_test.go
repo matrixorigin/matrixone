@@ -111,7 +111,6 @@ func TestAdmissionSubprocessHelper(t *testing.T) {
 		return
 	}
 	manager := newManager(os.Getenv(helperPathEnv), time.Millisecond)
-	manager.participant = os.Getenv(ParticipantEnv) == "1"
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	lease, err := manager.acquire(ctx, Exclusive)
@@ -144,67 +143,21 @@ func runAdmissionHelper(t *testing.T, path, mode string) {
 	require.NoError(t, err, string(output))
 }
 
-func TestParticipantCapacityPreservesExclusiveGateAndBorrowedLease(t *testing.T) {
+func TestAdmissionIncompleteCleanupCannotBorrow(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "cluster.lock")
-	first, second := newManager(path, time.Millisecond), newManager(path, time.Millisecond)
-	first.participant, second.participant = true, true
-	a, err := first.acquire(t.Context(), Exclusive)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, a.Release()) })
-	b, err := second.acquire(t.Context(), Exclusive)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, b.Release()) })
-	borrowed, err := first.acquire(t.Context(), AllowConcurrent)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, borrowed.Release()) })
-	// Both a normal process and a third participant must remain excluded.
-	t.Setenv(ParticipantEnv, "")
-	runAdmissionHelper(t, path, "blocked")
-	t.Setenv(ParticipantEnv, "1")
-	runAdmissionHelper(t, path, "blocked")
-	require.NoError(t, a.Release())
-	runAdmissionHelper(t, path, "blocked")
-	require.NoError(t, borrowed.Release())
-	runAdmissionHelper(t, path, "acquired")
-	require.NoError(t, b.Release())
-	t.Setenv(ParticipantEnv, "")
-	runAdmissionHelper(t, path, "acquired")
-}
-
-func TestParticipantAcquireFailureReleasesGate(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "cluster.lock")
-	require.NoError(t, os.Mkdir(path+".slot-0", 0700))
-	participant := newManager(path, time.Millisecond)
-	participant.participant = true
-	lease, err := participant.acquire(t.Context(), Exclusive)
-	require.Error(t, err)
-	require.Nil(t, lease)
-	ordinary := newManager(path, time.Millisecond)
-	lease, err = ordinary.acquire(t.Context(), Exclusive)
-	require.NoError(t, err)
-	require.NoError(t, lease.Release())
-}
-
-func TestParticipantIncompleteReleaseCannotBorrow(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "cluster.lock")
-	participant := newManager(path, time.Millisecond)
-	participant.participant = true
-	lease, err := participant.acquire(t.Context(), Exclusive)
+	owner := newManager(path, time.Millisecond)
+	lease, err := owner.acquire(t.Context(), Exclusive)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, lease.Release()) })
-	// The state after slot release but before gate cleanup must retain its
-	// cleanup owner, without admitting another cluster through that owner.
-	require.NoError(t, participant.slot.Close())
-	participant.slot = nil
-	_, err = participant.acquire(t.Context(), AllowConcurrent)
+	// A cleanup-only lease has no acquired lock and must never admit a borrower.
+	require.NoError(t, owner.lock.Close())
+	_, err = owner.acquire(t.Context(), AllowConcurrent)
 	require.ErrorContains(t, err, "cleanup is incomplete")
-	t.Setenv(ParticipantEnv, "")
-	runAdmissionHelper(t, path, "blocked")
 	require.NoError(t, lease.Release())
 	runAdmissionHelper(t, path, "acquired")
 }
 
-func TestParticipantProcessDeathReleasesAdmission(t *testing.T) {
+func TestProcessDeathReleasesAdmission(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "cluster.lock")
 	readyRead, readyWrite, err := os.Pipe()
 	require.NoError(t, err)
@@ -215,7 +168,7 @@ func TestParticipantProcessDeathReleasesAdmission(t *testing.T) {
 	defer inputRead.Close()
 	defer inputWrite.Close()
 	cmd := exec.Command(os.Args[0], "-test.run=^TestAdmissionSubprocessHelper$")
-	cmd.Env = append(os.Environ(), helperModeEnv+"=hold", helperPathEnv+"="+path, ParticipantEnv+"=1")
+	cmd.Env = append(os.Environ(), helperModeEnv+"=hold", helperPathEnv+"="+path)
 	cmd.Stdin, cmd.Stdout = inputRead, readyWrite
 	require.NoError(t, cmd.Start())
 	var stopped sync.Once
@@ -226,24 +179,7 @@ func TestParticipantProcessDeathReleasesAdmission(t *testing.T) {
 	message, err := bufio.NewReader(readyRead).ReadString('\n')
 	require.NoError(t, err)
 	require.Equal(t, "ready\n", message)
-	t.Setenv(ParticipantEnv, "")
 	runAdmissionHelper(t, path, "blocked")
 	stop()
 	runAdmissionHelper(t, path, "acquired")
-}
-
-func TestParticipantConfigurationIsExplicit(t *testing.T) {
-	for _, value := range []string{"", "1", "2", "invalid"} {
-		t.Run(value, func(t *testing.T) {
-			t.Setenv(ParticipantEnv, value)
-			manager := newProcessManager()
-			require.Equal(t, value == "1", manager.participant)
-			if value == "" || value == "1" {
-				require.NoError(t, manager.configErr)
-			} else {
-				_, err := manager.acquire(t.Context(), Exclusive)
-				require.ErrorContains(t, err, "must be empty or 1")
-			}
-		})
-	}
 }

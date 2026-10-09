@@ -55,7 +55,6 @@ UT_SHARD=${UT_SHARD:-"all"}
 # without admitting a second cluster process. A failed prebuild falls back to
 # the complete-scope go test before any prebuilt binary is executed.
 UT_PREBUILD_EMBEDDED=${UT_PREBUILD_EMBEDDED:-"1"}
-UT_EMBEDDED_PARALLEL=${UT_EMBEDDED_PARALLEL:-"1"}
 UT_ISSUES_BATCHES=${UT_ISSUES_BATCHES:-"1"}
 # Nine race binaries currently occupy several GiB. Preserve enough workspace
 # headroom for Go's build cache, reports, and the running issues fixture.
@@ -1919,15 +1918,6 @@ function run_prebuilt_race_commands(){
     local previous_term_trap execution_term_trap term_pending=0
     local -a child_pids=() test_pids=() watchdog_pids=()
     local -a reports=() expired=()
-    local -a runtime_flags=() runtime_env=()
-
-    # This opt-in wave targets the eight-core CI budget. Preserve the original
-    # eight simultaneous test goroutines while dividing runtime CPU ownership.
-    if (( parallel == 2 )) && [[ "${stage}" == embedded ]]; then
-        [[ "${GOMAXPROCS:-}" == 8 ]] || return 2
-        runtime_env=(GOMAXPROCS=4 MO_UT_CLUSTER_PARTICIPANT=1)
-        runtime_flags=(-test.parallel=8)
-    fi
     previous_term_trap=$(trap -p TERM)
     function stop_prebuilt_race_commands(){
         trap '' TERM
@@ -1991,11 +1981,11 @@ function run_prebuilt_race_commands(){
             set -m
             (
                 cd "${race_dirs[index]}" || exit 2
-                env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" ${runtime_env[@]+"${runtime_env[@]}"} \
+                env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
                     go tool test2json -t -p "${race_packages[index]}" \
                     "${race_binaries[index]}" -test.short=true -test.v=test2json \
                     -test.paniconexit0=true -test.count=1 -test.timeout="${remaining}s" \
-                    ${runtime_flags[@]+"${runtime_flags[@]}"} -test.run="${race_patterns[index]}"
+                    -test.run="${race_patterns[index]}"
             ) >&7 &
             test_pids[index]=$!
             child_pids[index*2]=${test_pids[index]}
@@ -2103,7 +2093,7 @@ function run_prebuilt_embedded_tests(){
         package_index=$((package_index + 1))
     done <<< "${package_scope}"
     run_prebuilt_race_commands embedded "${PREBUILT_RACE_REPORT:-${report_base}-execution}" \
-        "${UT_EMBEDDED_PARALLEL}" "${hard_timeout_seconds}"
+        1 "${hard_timeout_seconds}"
 }
 
 function run_race_inventory_with_deadline(){
@@ -2389,10 +2379,8 @@ function run_tests(){
         return 0
     fi
     if ! [[ "${UT_TIMEOUT}" =~ ^[1-9][0-9]*$ ]] ||
-        [[ "${UT_ISSUES_BATCHES}" != 1 && "${UT_ISSUES_BATCHES}" != 4 ]] ||
-        [[ "${UT_EMBEDDED_PARALLEL}" != 1 && "${UT_EMBEDDED_PARALLEL}" != 2 ]] ||
-        { [[ "${UT_EMBEDDED_PARALLEL}" == 2 ]] && [[ "${GOMAXPROCS:-}" != 8 ]]; }; then
-        logger "ERR" "race batching requires UT_ISSUES_BATCHES=1|4; embedded parallelism=1|2 (two requires GOMAXPROCS=8)"
+        [[ "${UT_ISSUES_BATCHES}" != 1 && "${UT_ISSUES_BATCHES}" != 4 ]]; then
+        logger "ERR" "race batching requires UT_ISSUES_BATCHES=1|4"
         UT_TEST_STATUS=1
         mark_ut_stage "routing" "validate shard and package partition" finish 1
         return 0
