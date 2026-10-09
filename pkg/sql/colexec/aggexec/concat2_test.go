@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -630,6 +631,107 @@ func TestGroupConcatAccountedDistinctNative0900UsesComparisonIdentity(t *testing
 	values.Free(mp)
 	exec.Free()
 	require.NoError(t, exec.ClearAllocationAccount(allocation))
+	finishTestAggregateAllocation(t, registry, account)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestGroupConcatAccountedOrderedDistinctOwnsIdentityAcrossGC(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		typ    types.Type
+		values []string
+		want   []string
+	}{
+		{
+			name:   "legacy borrowed identity",
+			typ:    types.T_varchar.ToType(),
+			values: []string{"Alpha", "alpha", "Beta", "Echo", "echo", "Zulu"},
+			want:   []string{"alpha,Alpha,Beta", "echo,Echo,Zulu"},
+		},
+		{
+			name: "native accounted identity",
+			typ: types.NewWithCharsetVersion(types.T_varchar, 64, 0,
+				types.CharsetUTF8MB40900AI, types.CollationVersionV1),
+			values: []string{"Alpha", "alpha", "Beta", "Écho", "echo", "Zulu"},
+			want:   []string{"alpha,Beta", "echo,Zulu"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			registry, account, allocation := newTestAggregateAllocation(t)
+			argTypes := []types.Type{tc.typ, types.T_int64.ToType()}
+			exec := newGroupConcatExec(mp, multiAggInfo{
+				aggID: AggIdOfGroupConcat, distinct: true,
+				argTypes: argTypes, retType: GroupConcatReturnType([]types.Type{tc.typ}),
+				emptyNull: true,
+			}, ",").(*groupConcatExec)
+			require.NoError(t, exec.SetExtraInformation(
+				testGroupConcatOrderConfig(1, []byte{groupConcatOrderAsc}, ","), 0))
+			require.NoError(t, exec.SetAllocationAccount(allocation))
+			require.NoError(t, exec.GroupGrow(2))
+			values := buildVarlenVec(t, mp, tc.typ, tc.values)
+			orderKeys := vector.NewVec(types.T_int64.ToType())
+			require.NoError(t, vector.AppendFixedList(orderKeys,
+				[]int64{2, 1, 3, 2, 1, 3}, nil, mp))
+			vectors := []*vector.Vector{values, orderKeys}
+			groups := []uint64{1, 1, 1, 2, 2, 2}
+			require.NoError(t, exec.PreflightBatchFill(0, groups, vectors))
+			require.NoError(t, exec.BatchFill(0, groups, vectors))
+			residentUsed := account.Snapshot().Used
+			runtime.GC()
+			result, err := exec.FlushWithContext(context.Background())
+			require.NoError(t, err)
+			require.Len(t, result, 1)
+			for i, want := range tc.want {
+				require.Equal(t, want, string(result[0].GetBytesAt(i)))
+			}
+			result[0].Free(mp)
+			require.Equal(t, residentUsed, account.Snapshot().Used,
+				"Flush scratch and output ownership must be released")
+			cancelled, cancel := context.WithCancel(context.Background())
+			cancel()
+			_, err = exec.FlushWithContext(cancelled)
+			require.ErrorIs(t, err, context.Canceled)
+			require.Equal(t, residentUsed, account.Snapshot().Used)
+			result, err = exec.FlushWithContext(context.Background())
+			require.NoError(t, err)
+			for i, want := range tc.want {
+				require.Equal(t, want, string(result[0].GetBytesAt(i)))
+			}
+			result[0].Free(mp)
+			require.Equal(t, residentUsed, account.Snapshot().Used)
+			values.Free(mp)
+			orderKeys.Free(mp)
+			exec.Free()
+			require.NoError(t, exec.ClearAllocationAccount(allocation))
+			finishTestAggregateAllocation(t, registry, account)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
+func TestGroupConcatAccountedIdentityBudgetFailureReleasesScratch(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 512)
+	require.NoError(t, err)
+	account, err := registry.Open(256)
+	require.NoError(t, err)
+	allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup,
+		AllocationAccountSites{VectorData: 1, VectorArea: 2, VectorNulls: 3,
+			VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6})
+	require.NoError(t, err)
+	identities, err := allocation.newArgumentBuffer(mp)
+	require.NoError(t, err)
+	keyScratch, err := allocation.newArgumentBuffer(mp)
+	require.NoError(t, err)
+	typ := types.NewWithCharsetVersion(types.T_varchar, 256, 0,
+		types.CharsetUTF8MB40900AI, types.CollationVersionV1)
+	payload := appendPayloadField(nil, []byte(strings.Repeat("A", 128)), false)
+	require.ErrorIs(t, writeGroupConcatDistinctIdentity(
+		payload, []types.Type{typ}, identities, keyScratch),
+		mpool.ErrAllocationAccountCapacity)
+	identities.Free()
+	keyScratch.Free()
 	finishTestAggregateAllocation(t, registry, account)
 	require.Zero(t, mp.CurrNB())
 }

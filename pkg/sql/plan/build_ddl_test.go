@@ -432,7 +432,6 @@ func TestBuildCreateTableRejectsUnsupportedCollations(t *testing.T) {
 	for _, sql := range []string{
 		"create table t(v varchar(8)) collate utf8mb4_de_pb_0900_ai_ci",
 		"create table t(v varchar(8)) collate utf8mb4_unicode_ci",
-		"create table t(v varchar(8) collate utf8mb4_0900_bin)",
 		"create table t(v varchar(8) collate utf8_unicode_ci)",
 	} {
 		t.Run(sql, func(t *testing.T) {
@@ -443,6 +442,16 @@ func TestBuildCreateTableRejectsUnsupportedCollations(t *testing.T) {
 			require.ErrorContains(t, err, "unsupported collation")
 		})
 	}
+}
+
+func TestBuildCreateTableRejectsRecognizedNativeCollationWithoutAdmission(t *testing.T) {
+	native0900AdmissionDisabled(t)
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"create table t(v varchar(8) collate utf8mb4_0900_bin)", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	_, err = BuildPlan(NewMockCompilerContext(false), stmt, false)
+	require.ErrorContains(t, err, native0900AdmissionError)
 }
 
 func TestBuildCreateTablePreservesNative0900CollationIdentity(t *testing.T) {

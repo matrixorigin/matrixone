@@ -647,32 +647,32 @@ func distinctArgumentRowHash(
 		typ := *vec.GetType()
 		raw := vec.GetRawBytesAt(row)
 		var value []byte
-		switch typ.Oid {
-		case types.T_float32:
-			encoded := keycodec.NewFloat32Codec(typ.Scale).CanonicalBytes(
-				vector.MustFixedColNoTypeCheck[float32](vec)[row])
-			value = encoded[:]
-		case types.T_float64:
-			encoded := keycodec.CanonicalFloat64Bytes(
-				vector.MustFixedColNoTypeCheck[float64](vec)[row])
-			value = encoded[:]
-		case types.T_char:
-			value = keycodec.CanonicalCharValue(raw)
-		case types.T_json, types.T_array_float32, types.T_array_float64,
-			types.T_array_bf16, types.T_array_float16:
-			scratch = keycodec.AppendCanonicalValue(scratch[:0], typ, raw)
-			value = scratch
-		default:
-			if types.NeedsCollationKey(typ, types.PADSpaceKeyV1) {
-				part, partErr := types.ResolveStringKeyPart(typ, types.PADSpaceKeyV1)
-				if partErr != nil {
-					return 0, partErr
-				}
-				value, err = part.Key(scratch[:0], raw)
-				if err != nil {
-					return 0, err
-				}
-			} else {
+		if types.NeedsCollationKey(typ, types.PADSpaceKeyV1) {
+			part, partErr := types.ResolveStringKeyPart(typ, types.PADSpaceKeyV1)
+			if partErr != nil {
+				return 0, partErr
+			}
+			value, err = part.Key(scratch[:0], raw)
+			if err != nil {
+				return 0, err
+			}
+		} else {
+			switch typ.Oid {
+			case types.T_float32:
+				encoded := keycodec.NewFloat32Codec(typ.Scale).CanonicalBytes(
+					vector.MustFixedColNoTypeCheck[float32](vec)[row])
+				value = encoded[:]
+			case types.T_float64:
+				encoded := keycodec.CanonicalFloat64Bytes(
+					vector.MustFixedColNoTypeCheck[float64](vec)[row])
+				value = encoded[:]
+			case types.T_char:
+				value = keycodec.CanonicalCharValue(raw)
+			case types.T_json, types.T_array_float32, types.T_array_float64,
+				types.T_array_bf16, types.T_array_float16:
+				scratch = keycodec.AppendCanonicalValue(scratch[:0], typ, raw)
+				value = scratch
+			default:
 				value = raw
 			}
 		}
@@ -741,11 +741,24 @@ func (ae *aggExec) distinctArgumentHashScratch(
 		if err != nil {
 			return nil, err
 		}
-		if vec.IsNull(uint64(row)) || !canonicalValueNeedsScratch(*vec.GetType()) {
+		typ := *vec.GetType()
+		if vec.IsNull(uint64(row)) ||
+			!canonicalValueNeedsScratch(typ) &&
+				!types.NeedsCollationKey(typ, types.PADSpaceKeyV1) {
 			continue
 		}
-		size := keycodec.CanonicalValueSize(
-			*vec.GetType(), vec.GetRawBytesAt(row))
+		raw := vec.GetRawBytesAt(row)
+		size := keycodec.CanonicalValueSize(typ, raw)
+		if types.NeedsCollationKey(typ, types.PADSpaceKeyV1) {
+			part, err := types.ResolveStringKeyPart(typ, types.PADSpaceKeyV1)
+			if err != nil {
+				return nil, err
+			}
+			size, err = part.KeySizeUpperBound(len(raw))
+			if err != nil {
+				return nil, err
+			}
+		}
 		if size > maxSize {
 			maxSize = size
 		}

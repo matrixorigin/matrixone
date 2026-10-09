@@ -54,6 +54,11 @@ func UCA0900BinCollate(left, right []byte) int {
 // UCA0900AIMatch applies the collation-aware SQL wildcard matcher. It keeps
 // LIKE in character space; converting the pattern itself to a weight string
 // would make '%' and '_' lose their wildcard meaning.
-func UCA0900AIMatch(pattern, value []byte, escape rune) bool {
+func UCA0900AIMatch(pattern, value []byte, escape rune, escapeEnabled bool) bool {
+	if !escapeEnabled {
+		// Vitess treats zero as the default backslash escape. A negative rune
+		// cannot be decoded from a UTF-8 pattern and disables escaping.
+		escape = -1
+	}
 	return uca0900AI.Wildcard(pattern, 0, 0, escape).Match(value)
 }

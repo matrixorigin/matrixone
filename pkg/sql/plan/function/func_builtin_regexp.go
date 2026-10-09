@@ -214,7 +214,7 @@ func (op *opBuiltInRegexp) likeNative0900AI(
 			if !constantPattern || cachedMatch == nil || !bytes.Equal(cachedPattern, pattern) {
 				cachedPattern = append(cachedPattern[:0], pattern...)
 				cachedMatch = func(input []byte) bool {
-					return collation.UCA0900AIMatch(cachedPattern, input, escape)
+					return collation.UCA0900AIMatch(cachedPattern, input, escape, escapeEnabled)
 				}
 			}
 			matched = cachedMatch(value)

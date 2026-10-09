@@ -2218,6 +2218,8 @@ func TestNative0900AILikeWithEmptyAndMultibyteEscape(t *testing.T) {
 		name, value, pattern, escape string
 	}{
 		{"empty", "É", "e", ""},
+		{"empty keeps backslash literal", `a\Xb`, `a\_b`, ""},
+		{"backslash escape remains enabled", "a_b", `a\_b`, `\`},
 		{"multibyte", "É", "e", "€"},
 		{"escaped wildcard", "a_b", "a€_b", "€"},
 	} {
