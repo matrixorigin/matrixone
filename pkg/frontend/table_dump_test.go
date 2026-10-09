@@ -737,13 +737,13 @@ func TestValidateTableDumpSchemaRejectsMaterializedViewRelations(t *testing.T) {
 
 	target := &plan.TableDef{
 		TableType: catalog.SystemMaterializedRel,
-		Props:     []*plan.Property{{Key: "mv_definition", Value: "finalized"}},
+		Props:     []*plan.PropertyDef{{Key: "mv_definition", Value: "finalized"}},
 	}
 	require.ErrorContains(t, validateTableDumpSchema(target), "materialized view")
 
 	state := &plan.TableDef{
 		TableType: "i",
-		Props:     []*plan.Property{{Key: "mv_owner", Value: "finalized"}},
+		Props:     []*plan.PropertyDef{{Key: "mv_owner", Value: "finalized"}},
 	}
 	require.ErrorContains(t, validateTableDumpSchema(state), "materialized view")
 }
