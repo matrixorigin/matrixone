@@ -607,7 +607,13 @@ func regexpStringDomainFixedTypeMatchN(
 		if mode == StringDomainCheckDeferred || mode == StringDomainCheckDomainless {
 			continue
 		}
-		domain := types.StaticStringDomain(inputs[i])
+		operand := inputs[i]
+		if mode == StringDomainCheckBinaryCast {
+			operand.Oid, operand.Charset = types.T_varbinary, types.CharsetBinary
+		} else if mode == StringDomainCheckBinaryBlob {
+			operand.Oid, operand.Charset = types.T_blob, types.CharsetBinary
+		}
+		domain := types.StaticStringDomain(operand)
 		if domain == types.StringDomainNone {
 			// T_any is the binder-visible representation of both an ordinary
 			// untyped NULL and a parameter marker. Non-string scalars are also
@@ -618,25 +624,26 @@ func regexpStringDomainFixedTypeMatchN(
 		case types.StringDomainText:
 			if hasBinaryTrigger {
 				return newCheckResultWithCharacterSetMismatch(
-					regexpCharsetName(firstBinaryTrigger), regexpCharsetName(inputs[i]))
+					regexpCharsetName(firstBinaryTrigger), regexpCharsetName(operand))
 			}
 			if !hasText {
-				firstText, hasText = inputs[i], true
+				firstText, hasText = operand, true
 			}
 		case types.StringDomainBinary:
 			// MySQL's is_binary_string() is narrower than its binary-compatible
 			// domain: only MYSQL_TYPE_VARCHAR with the binary charset is a 3995
-			// trigger. BINARY (MYSQL_TYPE_STRING), BLOB, and direct PARAM_ITEM
-			// values remain byte-domain operands without making text peers illegal.
-			if mode == StringDomainCheckParamMarker || inputs[i].Oid != types.T_varbinary {
+			// trigger. Physical BINARY (MYSQL_TYPE_STRING), BLOB, and direct
+			// PARAM_ITEM values do not trigger it. CAST AS BINARY is a VARCHAR
+			// expression in MySQL even though MO executes it with T_binary.
+			if mode == StringDomainCheckParamMarker || operand.Oid != types.T_varbinary {
 				continue
 			}
 			if hasText {
 				return newCheckResultWithCharacterSetMismatch(
-					regexpCharsetName(firstText), regexpCharsetName(inputs[i]))
+					regexpCharsetName(firstText), regexpCharsetName(operand))
 			}
 			if !hasBinaryTrigger {
-				firstBinaryTrigger, hasBinaryTrigger = inputs[i], true
+				firstBinaryTrigger, hasBinaryTrigger = operand, true
 			}
 		default:
 			continue

@@ -33,10 +33,7 @@ const (
 	retryDelay   = 50 * time.Millisecond
 )
 
-var processAdmission = newManager(
-	filepath.Join(os.TempDir(), lockFilename),
-	retryDelay,
-)
+var processAdmission = newManager(filepath.Join(os.TempDir(), lockFilename), retryDelay)
 
 // Mode controls whether a test deliberately starts another complete cluster in
 // the same test process. The default must be Exclusive: accidental overlap is
@@ -149,29 +146,24 @@ func (m *manager) acquire(ctx context.Context, mode Mode) (*Lease, error) {
 	requested := time.Now()
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if m.references > 0 {
 		if mode != AllowConcurrent {
-			return nil, moerr.NewInvalidStateNoCtx(
-				"another complete test cluster is already active in this process",
-			)
+			return nil, moerr.NewInvalidStateNoCtx("another complete test cluster is already active in this process")
 		}
 		m.references++
 		return &Lease{manager: m, requested: requested, acquired: time.Now()}, nil
 	}
 
 	lock := flock.New(m.path)
-	locked, err := lock.TryLockContext(ctx, m.retryDelay)
-	if err != nil {
+	// TryLockContext succeeds with a held lock or returns an error after the
+	// dependency has cleaned up the unheld handle. Publish only a real owner.
+	if _, err := lock.TryLockContext(ctx, m.retryDelay); err != nil {
 		return nil, errors.Join(
 			moerr.NewInternalErrorNoCtxf("acquire test cluster admission %s", m.path),
 			err,
-			lock.Close(),
-		)
-	}
-	if !locked {
-		return nil, errors.Join(
-			moerr.NewInvalidStateNoCtxf("test cluster admission %s was not acquired", m.path),
-			lock.Close(),
 		)
 	}
 	m.lock = lock
