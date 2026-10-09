@@ -1625,6 +1625,21 @@ func TestMaterializedViewRefreshSQLIsReparseable(t *testing.T) {
 	reparsed, err := parsers.ParseOne(t.Context(), dialect.MYSQL, refreshSQL, 1)
 	require.NoError(t, err)
 	reparsed.Free()
+
+	quotedStmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"create materialized view mv_quoted as select `a-b`, count(*) c from src group by `a-b`", 1)
+	require.NoError(t, err)
+	defer quotedStmt.Free()
+	quotedCreate := quotedStmt.(*tree.CreateView)
+	quotedRefresh := materializedViewRefreshSQL(quotedCreate.AsSource)
+	require.Contains(t, quotedRefresh, "`a-b`")
+	quotedReparsed, err := parsers.ParseOne(t.Context(), dialect.MYSQL, quotedRefresh, 1)
+	require.NoError(t, err)
+	defer quotedReparsed.Free()
+	originalClause := quotedCreate.AsSource.Select.(*tree.SelectClause)
+	reparsedClause := quotedReparsed.(*tree.Select).Select.(*tree.SelectClause)
+	require.IsType(t, &tree.UnresolvedName{}, originalClause.Exprs[0].Expr)
+	require.IsType(t, &tree.UnresolvedName{}, reparsedClause.Exprs[0].Expr)
 }
 
 func TestBuildMaterializedViewRefreshModes(t *testing.T) {

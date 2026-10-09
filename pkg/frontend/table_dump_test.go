@@ -731,6 +731,23 @@ func TestSubmitTableDumpObjects(t *testing.T) {
 	require.ElementsMatch(t, []string{objects[0].Name, objects[1].Name}, submitted)
 }
 
+func TestValidateTableDumpSchemaRejectsMaterializedViewRelations(t *testing.T) {
+	ordinary := &plan.TableDef{TableType: catalog.SystemOrdinaryRel}
+	require.NoError(t, validateTableDumpSchema(ordinary))
+
+	target := &plan.TableDef{
+		TableType: catalog.SystemMaterializedRel,
+		Props:     []*plan.Property{{Key: "mv_definition", Value: "finalized"}},
+	}
+	require.ErrorContains(t, validateTableDumpSchema(target), "materialized view")
+
+	state := &plan.TableDef{
+		TableType: "i",
+		Props:     []*plan.Property{{Key: "mv_owner", Value: "finalized"}},
+	}
+	require.ErrorContains(t, validateTableDumpSchema(state), "materialized view")
+}
+
 func TestSubmitTableDumpObjectsRejectsInvalidMetadata(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	rel := mock_frontend.NewMockRelation(ctrl)

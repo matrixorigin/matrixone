@@ -2212,7 +2212,7 @@ type materializedViewIncrementalDescription = mvdefinition.Incremental
 type materializedViewIncrementalBranch = mvdefinition.Branch
 
 func materializedViewRefreshSQL(stmt *tree.Select) string {
-	return tree.StringWithOpts(stmt, dialect.MYSQL, tree.WithSingleQuoteString())
+	return tree.StringWithOpts(stmt, dialect.MYSQL, tree.WithSingleQuoteString(), tree.WithQuoteIdentifier())
 }
 
 func materializedViewIncrementalPrimaryKey(encoded string) []string {

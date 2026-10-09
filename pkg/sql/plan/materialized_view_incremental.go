@@ -474,7 +474,7 @@ func materializedViewRefreshSQLWithStateForMode(
 }
 
 func materializedViewIncrementalExprSQL(expr tree.Expr) string {
-	return tree.StringWithOpts(expr, dialect.MYSQL, tree.WithSingleQuoteString())
+	return tree.StringWithOpts(expr, dialect.MYSQL, tree.WithSingleQuoteString(), tree.WithQuoteIdentifier())
 }
 
 func materializedViewIncrementalFunctionName(fn *tree.FuncExpr) string {

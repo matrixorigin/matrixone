@@ -98,7 +98,7 @@ func buildMaterializedViewDefinition(ctx CompilerContext, stmt *tree.CreateView,
 	target := createView.TableDef
 	d := &mvdefinition.Definition{Format: mvdefinition.Format, RequiredCapability: mvdefinition.RequiredCapability, AccountID: accountID,
 		Target: mvdefinition.Relation{Database: createView.Database, Name: target.Name}, Generation: 1,
-		CreateSQL: tree.String(stmt, dialect.MYSQL), RefreshSQL: materializedViewRefreshSQL(stmt.AsSource),
+		CreateSQL: tree.StringWithOpts(stmt, dialect.MYSQL, tree.WithSingleQuoteString(), tree.WithQuoteIdentifier()), RefreshSQL: materializedViewRefreshSQL(stmt.AsSource),
 		Method: materializedViewRefreshMethodName(stmt.RefreshMethod), Timing: materializedViewRefreshTimingName(stmt.RefreshTiming)}
 	for _, column := range target.Cols {
 		if !column.Hidden {
