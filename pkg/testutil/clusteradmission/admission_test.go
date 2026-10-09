@@ -15,11 +15,14 @@
 package clusteradmission
 
 import (
+	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -115,6 +118,12 @@ func TestAdmissionSubprocessHelper(t *testing.T) {
 	switch mode {
 	case "blocked":
 		require.ErrorIs(t, err, context.DeadlineExceeded)
+	case "hold":
+		require.NoError(t, err)
+		fmt.Println("ready")
+		var buffer [1]byte
+		_, _ = os.Stdin.Read(buffer[:])
+		require.NoError(t, lease.Release())
 	case "acquired":
 		require.NoError(t, err)
 		require.NoError(t, lease.Release())
@@ -132,4 +141,31 @@ func runAdmissionHelper(t *testing.T, path, mode string) {
 	)
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, string(output))
+}
+
+func TestProcessDeathReleasesAdmission(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cluster.lock")
+	readyRead, readyWrite, err := os.Pipe()
+	require.NoError(t, err)
+	defer readyRead.Close()
+	defer readyWrite.Close()
+	inputRead, inputWrite, err := os.Pipe()
+	require.NoError(t, err)
+	defer inputRead.Close()
+	defer inputWrite.Close()
+	cmd := exec.Command(os.Args[0], "-test.run=^TestAdmissionSubprocessHelper$")
+	cmd.Env = append(os.Environ(), helperModeEnv+"=hold", helperPathEnv+"="+path)
+	cmd.Stdin, cmd.Stdout = inputRead, readyWrite
+	require.NoError(t, cmd.Start())
+	var stopped sync.Once
+	stop := func() { stopped.Do(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }) }
+	t.Cleanup(stop)
+	require.NoError(t, readyWrite.Close())
+	require.NoError(t, readyRead.SetReadDeadline(time.Now().Add(5*time.Second)))
+	message, err := bufio.NewReader(readyRead).ReadString('\n')
+	require.NoError(t, err)
+	require.Equal(t, "ready\n", message)
+	runAdmissionHelper(t, path, "blocked")
+	stop()
+	runAdmissionHelper(t, path, "acquired")
 }

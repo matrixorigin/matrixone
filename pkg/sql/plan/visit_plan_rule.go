@@ -2815,7 +2815,13 @@ func preparedRegexpLookupDomains(ctx context.Context, name string, args []*Expr,
 		if err != nil {
 			return nil, nil, err
 		}
-		if domainless {
+		declared := regexpDeclaredStringType(args[i])
+		if regexpOwnsBinaryCast(args[i]) && declared.Oid == types.T_varbinary &&
+			!preparedRegexpMarkerOperand(args[i]) {
+			modes[i] = planfunction.StringDomainCheckBinaryCast
+		} else if regexpOwnsBinaryCast(args[i]) && declared.Oid == types.T_blob {
+			modes[i] = planfunction.StringDomainCheckBinaryBlob
+		} else if domainless {
 			modes[i] = planfunction.StringDomainCheckDomainless
 		} else if _, direct := preparedParamPosition(args[i]); direct ||
 			(preparedBindingState(ctx) != nil && preparedRegexpMarkerOperand(args[i])) {

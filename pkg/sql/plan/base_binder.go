@@ -418,11 +418,24 @@ func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot 
 func (b *baseBinder) baseBindVar(astExpr *tree.VarExpr, depth int32, isRoot bool) (expr *plan.Expr, err error) {
 	typ := types.T_text.ToType()
 	var boundStringDomain uint32
+	var nonStringNull bool
 	if !astExpr.System {
 		if resolved, ok := b.resolveUserVariableType(astExpr); ok {
 			typ = makeTypeByPlan2Type(resolved)
 		}
 		if typ.Oid == types.T_any {
+			if preparedBindingState(b.GetContext()) == nil {
+				stringResult := false
+				if b.builder != nil {
+					if resolver, ok := b.builder.compCtx.(UserVariableRegexpCastResolver); ok {
+						stringResult, err = resolver.ResolveVariableRegexpStringResult(astExpr.Name)
+						if err != nil {
+							return nil, err
+						}
+					}
+				}
+				nonStringNull = !stringResult
+			}
 			// A domainless user-variable NULL is still a TEXT expression in
 			// ordinary SQL. Prepared marker binding keeps the untyped source
 			// separately and lets each consumer choose its domain.
@@ -459,6 +472,15 @@ func (b *baseBinder) baseBindVar(astExpr *tree.VarExpr, depth int32, isRoot bool
 				BoundStringDomain: boundStringDomain,
 			},
 		},
+	}
+	if nonStringNull {
+		// Retain the zero-bound declaration before the ordinary TEXT envelope
+		// crosses projection/folding boundaries. This NULL witness is metadata
+		// only: it never supplies a value or changes numeric conversion types.
+		ensurePreparedNumericMetadata(variable).StringDomainSource = &Expr{
+			Typ:  makeSimplePlan2Type(types.T_varchar),
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}},
+		}
 	}
 	if !astExpr.System && b.numericParamType != nil {
 		// User variables are text-backed when their assignment came from a
@@ -5484,6 +5506,7 @@ func bindFuncExprAndConstFoldInternal(
 	if err != nil {
 		return nil, err
 	}
+	annotateStringLengthSource(retExpr, proc)
 	if observer != nil {
 		if err := observer(retExpr); err != nil {
 			return nil, err
@@ -5990,6 +6013,12 @@ func (b *baseBinder) annotateStringDomainSource(
 				source = outputs[col.ColPos]
 			}
 		}
+		if fn := source.GetF(); fn != nil && fn.Func != nil && len(fn.Args) == 1 &&
+			(strings.EqualFold(fn.Func.ObjName, "max") || strings.EqualFold(fn.Func.ObjName, "min")) {
+			// MIN/MAX preserve the selected input's domain and CAST ownership.
+			// Do not summarize an aggregate as an unrelated generic function.
+			source = fn.Args[0]
+		}
 		key := [2]int32{col.RelPos, col.ColPos}
 		if witness, ok := memo[key]; ok {
 			if witness != nil {
@@ -6058,6 +6087,31 @@ func (b *baseBinder) annotateStringDomainSource(
 	}
 	if sub := expr.GetSub(); sub != nil {
 		b.annotateStringDomainSource(sub.Child, visited, memo)
+		if !types.T(expr.Typ.Id).IsMySQLString() || sub.Typ != plan.SubqueryRef_SCALAR ||
+			b.builder == nil || b.builder.qry == nil || sub.NodeId < 0 || int(sub.NodeId) >= len(b.builder.qry.Nodes) {
+			return
+		}
+		key := [2]int32{sub.NodeId, -1}
+		if _, seen := visited[key]; seen {
+			return
+		}
+		visited[key] = struct{}{}
+		defer delete(visited, key)
+		node := b.builder.qry.Nodes[sub.NodeId]
+		if node == nil || len(node.ProjectList) == 0 {
+			return
+		}
+		source := node.ProjectList[0]
+		b.annotateStringDomainSource(source, visited, memo)
+		if (source.GetCol() != nil || source.GetSub() != nil) &&
+			source.GetPreparedNumeric().GetStringDomainSource() == nil {
+			return // A physical field, including a nested scalar projection, stays compatible.
+		}
+		if domains := possibleStringDomainsForExpr(source); domains != 0 {
+			// Keep static CAST provenance too: it must be checked even before
+			// PREPARE or constant folding, rather than deferred until EXECUTE.
+			ensurePreparedNumericMetadata(expr).StringDomainSource = stringDomainSourceWitness(source, domains)
+		}
 	}
 }
 
@@ -6071,7 +6125,8 @@ func (b *baseBinder) markPreparedStringDomainSubquerySource(
 	if expr == nil || isExplicitPreparedCast(expr) {
 		return false
 	}
-	if expr.GetP() != nil || expr.GetV() != nil || expr.GetPreparedNumeric().GetStringDomainSource() != nil {
+	if expr.GetP() != nil || expr.GetV() != nil ||
+		(expr.GetF() == nil && expr.GetPreparedNumeric().GetStringDomainSource() != nil) {
 		return true
 	}
 	if fn := expr.GetF(); fn != nil {
@@ -6272,6 +6327,15 @@ func stringDomainSourceWitness(source *Expr, domains uint8) *Expr {
 		return DeepCopyExpr(source)
 	}
 	if domains == possibleStringDomainText|possibleStringDomainBinary {
+		if declared := regexpDeclaredStringType(source); declared.Oid == types.T_varbinary && regexpOwnsBinaryCast(source) {
+			// A proven binary CAST declaration is execution-invariant. Preserve
+			// its bound/ownership rather than replacing it with unbounded empty
+			// text/binary leaves. Execution still retains every real marker.
+			witness := makePlan2VarBinaryConstExprWithType("")
+			witness.Typ = makePlan2Type(&declared)
+			witness.Typ.Id = int32(types.T_binary)
+			return witness
+		}
 		if witness, ok := stringDomainSourceFunctionWitness(source); ok {
 			return witness
 		}
@@ -6305,13 +6369,20 @@ func stringDomainSourceWitness(source *Expr, domains uint8) *Expr {
 		if len(args) == 1 {
 			return args[0]
 		}
-		return &Expr{
+		witness := &Expr{
 			Typ: source.Typ,
 			Expr: &plan.Expr_F{F: &plan.Function{
 				Func: &plan.ObjectRef{ObjName: "coalesce"},
 				Args: args,
 			}},
 		}
+		if source.GetPreparedNumeric().GetStringDomainSource() != nil {
+			// Preserve an owned declaration alongside runtime domain choices.
+			// Synthetic leaves cannot reconstruct a slice's proven bound, and
+			// an unregistered function's execution type is not such a proof.
+			ensurePreparedNumericMetadata(witness).StringDomainSource = stringDeclarationWitnessArg(source)
+		}
+		return witness
 	}
 	witness := makePlan2StringConstExprWithType("")
 	witness.Typ = stringDomainWitnessType(source, domains)
@@ -6354,13 +6425,19 @@ func stringDomainSourceFunctionWitness(source *Expr) (*Expr, bool) {
 		}
 		args[i] = compactStringDomainWitnessArg(arg)
 	}
-	return &Expr{
+	witness := &Expr{
 		Typ: source.Typ,
 		Expr: &plan.Expr_F{F: &plan.Function{
 			Func: &plan.ObjectRef{ObjName: fn.Func.GetObjName()},
 			Args: args,
 		}},
-	}, true
+	}
+	// Missing-input boundaries need runtime lineage and the independent local
+	// declaration. Function metadata never contains that lineage itself.
+	if declaration := source.GetPreparedNumeric().GetStringDomainSource(); declaration != nil {
+		ensurePreparedNumericMetadata(witness).StringDomainSource = DeepCopyExpr(declaration)
+	}
+	return witness, true
 }
 
 func preparedStringDomainSourceIndex(name string, arity int) int {
@@ -6395,15 +6472,34 @@ func compactStringDomainWitnessArg(arg *Expr) *Expr {
 	if arg.GetLit() != nil {
 		return DeepCopyExpr(arg)
 	}
-	// The witness is never evaluated. A typed literal is enough for function
-	// overload resolution and avoids retaining an unrelated expression graph.
-	placeholder := makePlan2Int64ConstExprWithType(0)
-	placeholder.Typ = arg.Typ
-	return placeholder
+	if value, signed, ok := regexpConstantInteger(arg); ok {
+		var constant *Expr
+		if signed {
+			constant = makePlan2Int64ConstExprWithType(int64(value))
+		} else {
+			constant = makePlan2Uint64ConstExprWithType(value)
+		}
+		constant.Typ = arg.Typ
+		return constant
+	}
+	// The witness is never evaluated. NULL marks an unknown value: a synthetic
+	// zero would falsely prove a constant SUBSTRING/LEFT/RIGHT length.
+	return stringDeclarationWitnessArg(arg)
 }
 
 func stringDomainWitnessType(source *Expr, domains uint8) plan.Type {
 	typ := source.Typ
+	declared := regexpDeclaredStringType(source)
+	if declared.Oid.IsMySQLString() {
+		// Retain the logical length class too, not just the current value's
+		// domain. Variable/function BLOB declarations must survive projection.
+		typ = makePlan2Type(&declared)
+		if declared.Oid == types.T_varbinary && types.T(source.Typ.Id) == types.T_binary {
+			// T_binary expression literals are the compact CAST ownership tag;
+			// ordinary specialized VARBINARY parameter literals are not CASTs.
+			typ.Id = int32(types.T_binary)
+		}
+	}
 	if domains == possibleStringDomainText &&
 		types.StaticStringDomain(makeTypeByPlan2Expr(source)) == types.StringDomainBinary {
 		typ.Id = int32(types.T_varchar)
@@ -6463,7 +6559,7 @@ func (c *stringDomainWitnessCollector) collect(expr *Expr, visited map[*Expr]str
 		return
 	}
 	visited[expr] = struct{}{}
-	if metadata := expr.GetPreparedNumeric(); metadata != nil && metadata.StringDomainSource != nil {
+	if metadata := expr.GetPreparedNumeric(); expr.GetF() == nil && metadata != nil && metadata.StringDomainSource != nil {
 		c.collect(metadata.StringDomainSource, visited)
 		return
 	}
@@ -6600,8 +6696,12 @@ func preparedExprStringDomainDependsOnRuntime(expr *plan.Expr) bool {
 	if expr == nil || isExplicitPreparedCast(expr) {
 		return false
 	}
+	// Real functions keep runtime dependencies in Args; their metadata is
+	// only a local declaration, not another dependency tree.
+	if source := expr.GetPreparedNumeric().GetStringDomainSource(); expr.GetF() == nil && source != nil {
+		return preparedExprStringDomainDependsOnRuntime(source)
+	}
 	return expr.GetP() != nil || expr.GetV() != nil ||
-		expr.GetPreparedNumeric().GetStringDomainSource() != nil ||
 		preparedFunctionStringDomainDependsOnRuntimeParam(expr)
 }
 
@@ -6629,8 +6729,8 @@ func preparedFunctionStringDomainDependsOnRuntimeParam(expr *plan.Expr) bool {
 	if expr == nil {
 		return false
 	}
-	if expr.GetPreparedNumeric().GetStringDomainSource() != nil {
-		return true
+	if source := expr.GetPreparedNumeric().GetStringDomainSource(); expr.GetF() == nil && source != nil {
+		return preparedExprStringDomainDependsOnRuntime(source)
 	}
 	fn := expr.GetF()
 	if fn == nil || fn.Func == nil || len(fn.Args) == 0 {
@@ -7573,6 +7673,24 @@ func bindFuncExprImplByPlanExpr(
 			stringDomainModes = preparedRegexpStringDomainCheckModes(name, args)
 		}
 	}
+	for i := 0; i < preparedRegexpCompatibilityStringOperandCount(name, len(args)); i++ {
+		if !regexpOwnsBinaryCast(args[i]) || (i < len(stringDomainModes) &&
+			stringDomainModes[i] == function.StringDomainCheckParamMarker) {
+			continue
+		}
+		declared := regexpDeclaredStringType(args[i])
+		if declared.Oid != types.T_varbinary && declared.Oid != types.T_blob {
+			continue
+		}
+		// A fixed result declaration dominates runtime branch/value provenance.
+		if stringDomainModes == nil {
+			stringDomainModes = make([]function.StringDomainCheckMode, len(args))
+		}
+		stringDomainModes[i] = function.StringDomainCheckBinaryCast
+		if declared.Oid == types.T_blob {
+			stringDomainModes[i] = function.StringDomainCheckBinaryBlob
+		}
+	}
 	if stringDomainModes != nil {
 		fGet, err = function.GetFunctionByNameWithStringDomainCheckModes(
 			ctx, name, lookupTypes, stringDomainModes)
@@ -8209,7 +8327,7 @@ func bindFuncExprImplByPlanExpr(
 			}
 		}
 	}
-	return &Expr{
+	result := &Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
 				Func: getFunctionObjRef(funcID, name),
@@ -8217,7 +8335,8 @@ func bindFuncExprImplByPlanExpr(
 			},
 		},
 		Typ: Typ,
-	}, nil
+	}
+	return result, nil
 }
 
 // XPath configuration is execution-invariant, not merely constant within one
@@ -8560,7 +8679,7 @@ func possibleStringDomainsForExpr(expr *plan.Expr) uint8 {
 		return domains
 	}
 
-	if metadata := expr.GetPreparedNumeric(); metadata != nil && metadata.StringDomainSource != nil {
+	if metadata := expr.GetPreparedNumeric(); expr.GetF() == nil && metadata != nil && metadata.StringDomainSource != nil {
 		sourceDomains := possibleStringDomainsForExpr(metadata.StringDomainSource)
 		if sourceDomains != 0 {
 			return sourceDomains
