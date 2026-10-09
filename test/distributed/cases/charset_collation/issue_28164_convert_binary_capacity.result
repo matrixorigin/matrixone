@@ -1,0 +1,91 @@
+DROP DATABASE IF EXISTS issue_28164_binary_convert;
+CREATE DATABASE issue_28164_binary_convert;
+USE issue_28164_binary_convert;
+SET SESSION sql_mode = 'STRICT_TRANS_TABLES';
+CREATE TABLE rejected (id INT PRIMARY KEY, v VARCHAR(2));
+INSERT INTO rejected VALUES (1, '中文');
+SELECT id, HEX(v), LENGTH(v), CHAR_LENGTH(v) FROM rejected ORDER BY id;
+➤ id[4,32,0]  ¦  HEX(v)[12,16,0]  ¦  LENGTH(v)[-5,64,0]  ¦  CHAR_LENGTH(v)[-5,64,0]  𝄀
+1  ¦  E4B8ADE69687  ¦  6  ¦  2
+ALTER TABLE rejected CONVERT TO CHARACTER SET binary;
+internal error: Can't cast column from VARCHAR type to VARBINARY type because of one or more values in that column. Src length 6 is larger than Dest length 2
+SHOW CREATE TABLE rejected;
+➤ Table[12,8,0]  ¦  Create Table[12,100,0]  𝄀
+rejected  ¦  CREATE TABLE `rejected` (
+  `id` int NOT NULL,
+  `v` varchar(2) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+)
+SHOW TABLES;
+➤ Tables_in_issue_28164_binary_convert[12,5000,0]  𝄀
+rejected
+SELECT id, HEX(v), LENGTH(v), CHAR_LENGTH(v) FROM rejected ORDER BY id;
+➤ id[4,32,0]  ¦  HEX(v)[12,16,0]  ¦  LENGTH(v)[-5,64,0]  ¦  CHAR_LENGTH(v)[-5,64,0]  𝄀
+1  ¦  E4B8ADE69687  ¦  6  ¦  2
+INSERT INTO rejected VALUES (2, 'ab');
+SELECT id, HEX(v), LENGTH(v) FROM rejected ORDER BY id;
+➤ id[4,32,0]  ¦  HEX(v)[12,16,0]  ¦  LENGTH(v)[-5,64,0]  𝄀
+1  ¦  E4B8ADE69687  ¦  6  𝄀
+2  ¦  6162  ¦  2
+CREATE TABLE converted (id INT PRIMARY KEY, v VARCHAR(2));
+INSERT INTO converted VALUES (1, 'ab');
+ALTER TABLE converted CONVERT TO CHARACTER SET binary;
+SHOW CREATE TABLE converted;
+➤ Table[12,9,0]  ¦  Create Table[12,124,0]  𝄀
+converted  ¦  CREATE TABLE `converted` (
+  `id` int NOT NULL,
+  `v` varbinary(2) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) CHARACTER SET=binary
+SELECT id, HEX(v), LENGTH(v) FROM converted ORDER BY id;
+➤ id[4,32,0]  ¦  HEX(v)[12,4,0]  ¦  LENGTH(v)[-5,64,0]  𝄀
+1  ¦  6162  ¦  2
+INSERT INTO converted VALUES (2, '中');
+internal error: Can't cast '中' to VARBINARY type. Src length 3 is larger than Dest length 2
+INSERT INTO converted VALUES (2, 'xy');
+INSERT INTO converted VALUES (3, NULL);
+CREATE TABLE source (v VARBINARY(3));
+INSERT INTO source VALUES ('中');
+INSERT INTO converted SELECT 4, v FROM source;
+internal error: Can't cast column from VARBINARY type to VARBINARY type because of one or more values in that column. Src length 3 is larger than Dest length 2
+INSERT INTO converted VALUES (4, 'zz');
+SELECT id, HEX(v), LENGTH(v) FROM converted ORDER BY id;
+➤ id[4,32,0]  ¦  HEX(v)[12,4,0]  ¦  LENGTH(v)[-5,64,0]  𝄀
+1  ¦  6162  ¦  2  𝄀
+2  ¦  7879  ¦  2  𝄀
+3  ¦  null  ¦  null  𝄀
+4  ¦  7A7A  ¦  2
+CREATE TABLE existing (id INT PRIMARY KEY, b VARBINARY(2), v VARCHAR(2) CHARACTER SET ascii);
+INSERT INTO existing VALUES (1, X'6162', 'ab');
+ALTER TABLE existing CONVERT TO CHARACTER SET binary;
+SHOW CREATE TABLE existing;
+➤ Table[12,8,0]  ¦  Create Table[12,156,0]  𝄀
+existing  ¦  CREATE TABLE `existing` (
+  `id` int NOT NULL,
+  `b` varbinary(2) DEFAULT NULL,
+  `v` varbinary(2) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) CHARACTER SET=binary
+SELECT id, HEX(b), LENGTH(b), HEX(v), LENGTH(v) FROM existing ORDER BY id;
+➤ id[4,32,0]  ¦  HEX(b)[12,4,0]  ¦  LENGTH(b)[-5,64,0]  ¦  HEX(v)[12,4,0]  ¦  LENGTH(v)[-5,64,0]  𝄀
+1  ¦  6162  ¦  2  ¦  6162  ¦  2
+CREATE TABLE fixed (id INT PRIMARY KEY, v CHAR(2));
+INSERT INTO fixed VALUES (1, 'ab');
+ALTER TABLE fixed CONVERT TO CHARACTER SET binary;
+SHOW CREATE TABLE fixed;
+➤ Table[12,5,0]  ¦  Create Table[12,117,0]  𝄀
+fixed  ¦  CREATE TABLE `fixed` (
+  `id` int NOT NULL,
+  `v` binary(2) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) CHARACTER SET=binary
+INSERT INTO fixed VALUES (2, 'a');
+INSERT INTO fixed VALUES (3, NULL);
+INSERT INTO fixed VALUES (4, '中');
+internal error: Can't cast '中' to BINARY type. Src length 3 is larger than Dest length 2
+SELECT id, HEX(v), LENGTH(v) FROM fixed ORDER BY id;
+➤ id[4,32,0]  ¦  HEX(v)[12,4,0]  ¦  LENGTH(v)[-5,64,0]  𝄀
+1  ¦  6162  ¦  2  𝄀
+2  ¦  6100  ¦  2  𝄀
+3  ¦  null  ¦  null
+DROP DATABASE issue_28164_binary_convert;
