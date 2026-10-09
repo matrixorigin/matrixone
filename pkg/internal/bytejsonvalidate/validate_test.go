@@ -140,6 +140,43 @@ func TestContainerMutableValueTable(t *testing.T) {
 				}
 			})
 		}
+		for _, tp := range []byte{typeInt64, typeUint64, typeFloat64} {
+			for _, rejectLast := range []bool{false, true} {
+				t.Run(fmt.Sprintf("stored=%v/numeric-borrow/type=%x/reject=%v", stored, tp, rejectLast), func(t *testing.T) {
+					data := testScalarArray([]byte{tp, tp}, [][]byte{{1, 0, 0, 0, 0, 0, 0, 0}, {2, 0, 0, 0, 0, 0, 0, 0}})
+					visits := 0
+					predicate := func(got byte, scalar []byte) bool {
+						if visits >= 2 {
+							t.Fatal("extra numeric callback")
+						}
+						want := uint64(1)
+						if visits == 1 {
+							want = 3
+						}
+						wantCap := cap(data) - (headerSize + 2*valEntrySize + visits*numberSize)
+						if got != tp || len(scalar) != numberSize || cap(scalar) != wantCap || binary.LittleEndian.Uint64(scalar) != want {
+							t.Fatalf("numeric callback %d: type=%x len=%d cap=%d data=%x", visits, got, len(scalar), cap(scalar), scalar)
+						}
+						if visits == 0 {
+							// Exact length is not a capacity fence. Mutating the
+							// next payload must be visible to its later callback.
+							scalar[:cap(scalar)][numberSize] = 3
+						}
+						visits++
+						return !rejectLast || visits != 2
+					}
+					valid, depthExceeded := false, false
+					if stored {
+						valid, depthExceeded = StoredContainer(typeArray, data, predicate, 5)
+					} else {
+						valid = Container(typeArray, data, predicate)
+					}
+					if valid == rejectLast || depthExceeded || visits != 2 {
+						t.Fatalf("numeric borrowed callback: valid=%v depth=%v visits=%d", valid, depthExceeded, visits)
+					}
+				})
+			}
+		}
 	}
 }
 

@@ -3543,11 +3543,97 @@ func TestJsonArrayInsert(t *testing.T) {
 			[]FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"arr":[1]}`}, nil),
 				NewFunctionTestInput(types.T_varchar.ToType(), []string{"$.arr[0]"}, nil),
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, []bool{true}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, []bool{true}),
 			},
 			types.T_json.ToType(), newOpBuiltInJsonSet().buildJsonArrayInsert, nil)
 
+		require.False(t, vec.IsNull(0))
 		require.Equal(t, `{"arr": [null, 1]}`, jsonVectorRowString(t, vec, 0))
+	})
+
+	t.Run("later SQL NULL value preserves earlier insertion", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"arr":[1]}`}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"$.arr[0]"}, nil),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{9}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"$.arr[0]"}, nil),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, []bool{true}),
+			},
+			types.T_json.ToType(), newOpBuiltInJsonSet().buildJsonArrayInsert, nil)
+
+		require.False(t, vec.IsNull(0))
+		require.Equal(t, `{"arr": [null, 9, 1]}`, jsonVectorRowString(t, vec, 0))
+	})
+
+	t.Run("JSON null value remains a JSON value", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"arr":[1]}`}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"$.arr[0]"}, nil),
+				NewFunctionTestInput(types.T_json.ToType(), []string{mustJsonBinaryString(t, `null`)}, nil),
+			},
+			types.T_json.ToType(), newOpBuiltInJsonSet().buildJsonArrayInsert, nil)
+
+		require.False(t, vec.IsNull(0))
+		require.Equal(t, `{"arr": [null, 1]}`, jsonVectorRowString(t, vec, 0))
+	})
+
+	t.Run("nullable column values do not contaminate adjacent rows", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"arr":[1]}`, `{"arr":[1]}`, `{"arr":[1]}`}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"$.arr[0]"}, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{9, 0, 8}, []bool{false, true, false}),
+			},
+			types.T_json.ToType(), newOpBuiltInJsonSet().buildJsonArrayInsert, nil)
+
+		for row, want := range []string{`{"arr": [9, 1]}`, `{"arr": [null, 1]}`, `{"arr": [8, 1]}`} {
+			require.False(t, vec.IsNull(uint64(row)))
+			require.Equal(t, want, jsonVectorRowString(t, vec, uint64(row)))
+		}
+	})
+
+	t.Run("SQL NULL value keeps no-op documents", func(t *testing.T) {
+		for _, typ := range []types.Type{types.T_varchar.ToType(), types.T_json.ToType()} {
+			for _, tc := range []struct{ doc, path, want string }{
+				{`{"arr":[1]}`, "$.missing[0]", `{"arr": [1]}`},
+				{`{"value":1}`, "$.value[0]", `{"value": 1}`},
+				{`null`, "$[0]", `null`},
+			} {
+				doc := tc.doc
+				if typ.Oid == types.T_json {
+					doc = mustJsonBinaryString(t, doc)
+				}
+				vec := runJsonFunctionWithSelectList(t, proc, []FunctionTestInput{
+					NewFunctionTestInput(typ, []string{doc}, nil),
+					NewFunctionTestConstInput(types.T_varchar.ToType(), []string{tc.path}, nil),
+					NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, []bool{true}),
+				}, types.T_json.ToType(), newOpBuiltInJsonSet().buildJsonArrayInsert, nil)
+				require.False(t, vec.IsNull(0))
+				require.Equal(t, tc.want, jsonVectorRowString(t, vec, 0), tc.path)
+			}
+		}
+	})
+
+	t.Run("SQL NULL value does not suppress invalid inputs", func(t *testing.T) {
+		for _, tc := range []struct{ name, doc, path string }{
+			{"invalid document", "not json", "$[0]"},
+			{"root path", `[1]`, "$"},
+			{"member terminal", `{"arr":[1]}`, "$.arr"},
+			{"wildcard", `{"arr":[1]}`, "$.arr[*]"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				fcTC := NewFunctionTestCase(proc, []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.doc}, nil),
+					NewFunctionTestConstInput(types.T_varchar.ToType(), []string{tc.path}, nil),
+					NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, []bool{true}),
+				}, NewFunctionTestResult(types.T_json.ToType(), true, nil, nil), newOpBuiltInJsonSet().buildJsonArrayInsert)
+				t.Cleanup(fcTC.Free)
+				s, info := fcTC.Run()
+				require.True(t, s, info)
+			})
+		}
 	})
 
 	t.Run("JSON null document remains JSON null on no-op", func(t *testing.T) {

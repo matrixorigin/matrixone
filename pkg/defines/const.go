@@ -143,8 +143,9 @@ const (
 	MORPCVersion105    int64 = 105 // instance-bound lock-service drain confirmation
 	MORPCVersion106    int64 = 106 // CDC durable target identity and generation-aware task admission
 	MORPCVersion107    int64 = 107 // functional-index metadata and generated-key maintenance
-	MORPCVersion108    int64 = 108 // candidate seven-argument JSON_VALUE plan contract
-	MORPCLatestVersion       = MORPCVersion108
+	MORPCVersion108    int64 = 108 // isolated user-variable NULL regexp history in connection migration
+	MORPCVersion109    int64 = 109 // candidate seven-argument JSON_VALUE plan contract
+	MORPCLatestVersion       = MORPCVersion109
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

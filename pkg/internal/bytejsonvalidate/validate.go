@@ -153,9 +153,20 @@ func container(tp byte, data []byte, validScalar func(byte, []byte) bool, depth 
 		if childOffset < payloadStart || childOffset >= documentSize {
 			return false
 		}
-		childData, ok := childValue(childType, data[childOffset:])
-		if !ok {
-			return false
+		childData := data[childOffset:]
+		if childType >= typeInt64 && childType <= typeFloat64 {
+			// Keep common fixed-width framing here; scalar semantics still
+			// run through the caller's predicate below, including rejection.
+			if len(childData) < numberSize {
+				return false
+			}
+			childData = childData[:numberSize]
+		} else {
+			var ok bool
+			childData, ok = childValue(childType, childData)
+			if !ok {
+				return false
+			}
 		}
 		if storedWork != nil {
 			if childOffset < previousRangeEnd {
