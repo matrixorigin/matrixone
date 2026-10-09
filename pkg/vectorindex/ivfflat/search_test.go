@@ -497,6 +497,7 @@ func TestSortAndLimitExactResultsKeepsIncludeNullsAligned(t *testing.T) {
 		includeData,
 		includeNulls,
 		2,
+		false,
 	)
 
 	require.Equal(t, []any{int64(2), int64(1)}, sortedKeys)

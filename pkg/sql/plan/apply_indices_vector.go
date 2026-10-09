@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
 func decodeVectorIndexAlgoParams(value string) (map[string]json.RawMessage, error) {
@@ -793,15 +794,11 @@ func (builder *QueryBuilder) validateVectorIndexSortRewrite(vecCtx *vectorSortCo
 	if vecCtx == nil {
 		return true, nil
 	}
-	if !isDescendingVectorSort(vecCtx.sortDirection) {
-		return true, nil
-	}
-
-	// IVF/HNSW candidate generation is nearest-neighbor oriented: using it for
-	// DESC would pick near candidates first and then reverse-sort the reduced set,
-	// which is not equivalent to a true farthest-neighbor query. Keep the original
-	// execution path so the query naturally falls back to the exact/force behavior.
-	return false, nil
+	// 候选生成总是选近邻：普通距离取最小值，数学内积取最大值。
+	// 相反方向必须保留完整精确路径，不能把近邻候选集反排当作远邻。
+	innerProduct := vecCtx.distFnExpr != nil && vecCtx.distFnExpr.Func != nil &&
+		vecCtx.distFnExpr.Func.ObjName == metric.DistFn_InnerProduct
+	return isDescendingVectorSort(vecCtx.sortDirection) == innerProduct, nil
 }
 
 // spliceVectorRewrite attaches the rewritten Top-K subtree (newRootID) where the original

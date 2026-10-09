@@ -134,130 +134,129 @@ null  ¦  null  𝄀
 33.89660960435867  ¦  4771.603164553642  𝄀
 837.3288311958313  ¦  9376.918968319893
 select inner_product(vecf32_3,"[1,1,1]") from vtab32;
-➤ inner_product(vecf32_3, [1,1,1])[8,54,0]  𝄀
+➤ inner_product(vecf32_3, [1,1,1])[8,53,31]  𝄀
 null  𝄀
--1.9714266657829285  𝄀
--33.89660960435867  𝄀
--837.3288311958313
+1.9714267253875732  𝄀
+33.896610260009766  𝄀
+837.328857421875
 select inner_product(vecf32_3,"[0,0,-1]") from vtab32;
-➤ inner_product(vecf32_3, [0,0,-1])[8,54,0]  𝄀
+➤ inner_product(vecf32_3, [0,0,-1])[8,53,31]  𝄀
 null  𝄀
-0.4886152148246765  𝄀
-30.433094024658203  𝄀
-821.977783203125
-select inner_product(vecf32_3,vecf32_3), inner_product(vecf32_5,vecf32_5) from vtab32;
-➤ inner_product(vecf32_3, vecf32_3)[8,54,0]  ¦  inner_product(vecf32_5, vecf32_5)[8,54,0]  𝄀
-null  ¦  null  𝄀
--1.3494319915771484  ¦  null  𝄀
--937.032958984375  ¦  -2.1506858E7  𝄀
--675766.875  ¦  -7.6586256E7
+-0.4886152148246765  𝄀
+-30.433094024658203  𝄀
+-821.977783203125
+select id, inner_product(vecf32_3,vecf32_3), abs(inner_product(vecf32_5,vecf32_5) - summation(cast(vecf32_5 as vecf64(5)) * cast(vecf32_5 as vecf64(5)))) <= 1e-6 * summation(cast(vecf32_5 as vecf64(5)) * cast(vecf32_5 as vecf64(5))) as self5_ok from vtab32 order by id;
+➤ id[4,32,0]  ¦  inner_product(vecf32_3, vecf32_3)[8,53,31]  ¦  self5_ok[-7,1,0]  𝄀
+1  ¦  null  ¦  null  𝄀
+2  ¦  1.3494319915771484  ¦  null  𝄀
+3  ¦  937.032958984375  ¦  1  𝄀
+4  ¦  675766.875  ¦  1
 select inner_product(vecf64_3,vecf64_3), inner_product(vecf64_5,vecf64_5) from vtab64;
-➤ inner_product(vecf64_3, vecf64_3)[8,54,0]  ¦  inner_product(vecf64_5, vecf64_5)[8,54,0]  𝄀
+➤ inner_product(vecf64_3, vecf64_3)[8,53,31]  ¦  inner_product(vecf64_5, vecf64_5)[8,53,31]  𝄀
 null  ¦  null  𝄀
--1.349431853018031  ¦  null  𝄀
--675766.8454601857  ¦  -7.65862682686195E7  𝄀
--0.9327473068927187  ¦  -115390.02486670813
+1.3494318723678589  ¦  null  𝄀
+675766.875  ¦  7.6586272E7  𝄀
+0.9327473044395447  ¦  115390.0234375
 select inner_product("[0.45052445,2.19845265,9.579752]","[1,1,1]");
-➤ inner_product([0.45052445,2.19845265,9.579752], [1,1,1])[8,54,0]  𝄀
--12.228729248046875
+➤ inner_product([0.45052445,2.19845265,9.579752], [1,1,1])[8,53,31]  𝄀
+12.228729248046875
 select inner_product(1,1);
 invalid argument function inner_product, bad value [BIGINT BIGINT]
 select inner_product(NULL,NULL);
-➤ inner_product(null, null)[8,54,0]  𝄀
+➤ inner_product(null, null)[8,53,31]  𝄀
 null
 select id, inner_product(vecf32_3,vecf32_3) from vtab32 group by id order by id;
-➤ id[4,32,0]  ¦  inner_product(vecf32_3, vecf32_3)[8,54,0]  𝄀
+➤ id[4,32,0]  ¦  inner_product(vecf32_3, vecf32_3)[8,53,31]  𝄀
 1  ¦  null  𝄀
-2  ¦  -1.3494319915771484  𝄀
-3  ¦  -937.032958984375  𝄀
-4  ¦  -675766.875
+2  ¦  1.3494319915771484  𝄀
+3  ¦  937.032958984375  𝄀
+4  ¦  675766.875
 select count(*), inner_product(vecf32_3,vecf32_3) from vtab32 group by inner_product(vecf32_3,vecf32_3) Having inner_product(vecf32_3,vecf32_3) > 937.0329415976587 order by inner_product(vecf32_3,vecf32_3) desc ;
-➤ count(*)[-5,64,0]  ¦  inner_product(vecf32_3, vecf32_3)[8,54,0]
+➤ count(*)[-5,64,0]  ¦  inner_product(vecf32_3, vecf32_3)[8,53,31]  𝄀
+1  ¦  675766.875  𝄀
+1  ¦  937.032958984375
 select * from vtab32 where inner_product(vecf32_3,vecf32_3) is null;
 ➤ id[4,32,0]  ¦  vecf32_3[12,3,0]  ¦  vecf32_5[12,5,0]  𝄀
 1  ¦  null  ¦  null
 select * from vtab32 where inner_product(vecf32_3,vecf32_3) = 675766.8704508307;
 ➤ id[4,32,0]  ¦  vecf32_3[12,3,0]  ¦  vecf32_5[12,5,0]
 select * from vtab32 where inner_product(vecf32_3,vecf32_3) <= 1.3494319015309593;
-➤ id[4,32,0]  ¦  vecf32_3[12,3,0]  ¦  vecf32_5[12,5,0]  𝄀
-2  ¦  [0.8166459, 0.66616553, 0.4886152]  ¦  null  𝄀
-3  ¦  [0.1726299, 3.2908857, 30.433094]  ¦  [0.45052445, 2.1984527, 9.579752, 123.48039, 4635.894]  𝄀
-4  ¦  [8.560689, 6.790359, 821.9778]  ¦  [0.46323407, 23.498016, 563.923, 56.076736, 8732.958]
+➤ id[4,32,0]  ¦  vecf32_3[12,3,0]  ¦  vecf32_5[12,5,0]
 select distinct(inner_product(vecf32_3,vecf32_3)) from vtab32;
-➤ inner_product(vecf32_3, vecf32_3)[8,54,0]  𝄀
+➤ inner_product(vecf32_3, vecf32_3)[8,53,31]  𝄀
 null  𝄀
--1.3494319915771484  𝄀
--937.032958984375  𝄀
--675766.875
+1.3494319915771484  𝄀
+937.032958984375  𝄀
+675766.875
 select sum(inner_product(vecf32_3,vecf32_3)) from vtab32;
-➤ sum(inner_product(vecf32_3, vecf32_3))[8,54,0]  𝄀
--676705.257390976
-select min(inner_product(vecf32_5,vecf32_5)) from vtab32;
-➤ min(inner_product(vecf32_5, vecf32_5))[8,54,0]  𝄀
--7.6586256E7
+➤ sum(inner_product(vecf32_3, vecf32_3))[8,53,31]  𝄀
+676705.257390976
+select abs(min(inner_product(vecf32_5,vecf32_5)) - min(summation(cast(vecf32_5 as vecf64(5)) * cast(vecf32_5 as vecf64(5))))) <= 1e-6 * min(summation(cast(vecf32_5 as vecf64(5)) * cast(vecf32_5 as vecf64(5)))) as min_self5_ok from vtab32;
+➤ min_self5_ok[-7,1,0]  𝄀
+1
 select max(inner_product(vecf32_3,vecf32_3)) from vtab32;
-➤ max(inner_product(vecf32_3, vecf32_3))[8,54,0]  𝄀
--1.3494319915771484
-select avg(inner_product(vecf32_5,vecf32_5)) from vtab32;
-➤ avg(inner_product(vecf32_5, vecf32_5))[8,54,0]  𝄀
--4.9046557E7
+➤ max(inner_product(vecf32_3, vecf32_3))[8,53,31]  𝄀
+675766.875
+select abs(avg(inner_product(vecf32_5,vecf32_5)) - avg(summation(cast(vecf32_5 as vecf64(5)) * cast(vecf32_5 as vecf64(5))))) <= 1e-6 * avg(summation(cast(vecf32_5 as vecf64(5)) * cast(vecf32_5 as vecf64(5)))) as avg_self5_ok from vtab32;
+➤ avg_self5_ok[-7,1,0]  𝄀
+1
 select count(inner_product(vecf32_5,vecf32_5)) from vtab32;
 ➤ count(inner_product(vecf32_5, vecf32_5))[-5,64,0]  𝄀
 2
 select sin(inner_product(vecf64_3,vecf64_3)) from vtab64;
-➤ sin(inner_product(vecf64_3, vecf64_3))[8,54,0]  𝄀
+➤ sin(inner_product(vecf64_3, vecf64_3))[8,53,31]  𝄀
 null  𝄀
--0.9755987766161661  𝄀
-0.7646092834977731  𝄀
--0.8032593455871644
+0.9755987766161661  𝄀
+-0.7646092834977731  𝄀
+0.8032593455871644
 select cos(inner_product(vecf64_5,vecf64_5)) from vtab64;
-➤ cos(inner_product(vecf64_5, vecf64_5))[8,54,0]  𝄀
+➤ cos(inner_product(vecf64_5, vecf64_5))[8,53,31]  𝄀
 null  𝄀
 null  𝄀
 0.0739509745349585  𝄀
 0.7808763613980533
 select inner_product(normalize_l2(vecf32_3),normalize_l2(vecf32_3)), inner_product(normalize_l2(vecf32_5),normalize_l2(vecf32_5)),  inner_product(normalize_l2(vecf32_3),normalize_l2(vecf32_3)) - inner_product(normalize_l2(vecf32_5),normalize_l2(vecf32_5)) from vtab32;
-➤ inner_product(normalize_l2(vecf32_3), normalize_l2(vecf32_3))[8,54,0]  ¦  inner_product(normalize_l2(vecf32_5), normalize_l2(vecf32_5))[8,54,0]  ¦  inner_product(normalize_l2(vecf32_3), normalize_l2(vecf32_3)) - inner_product(normalize_l2(vecf32_5), normalize_l2(vecf32_5))[8,54,0]  𝄀
+➤ inner_product(normalize_l2(vecf32_3), normalize_l2(vecf32_3))[8,53,31]  ¦  inner_product(normalize_l2(vecf32_5), normalize_l2(vecf32_5))[8,53,31]  ¦  inner_product(normalize_l2(vecf32_3), normalize_l2(vecf32_3)) - inner_product(normalize_l2(vecf32_5), normalize_l2(vecf32_5))[8,53,31]  𝄀
 null  ¦  null  ¦  null  𝄀
--1.0  ¦  null  ¦  null  𝄀
--1.0  ¦  -1.0  ¦  0.0  𝄀
--1.0  ¦  -1.0  ¦  0.0
+1.0  ¦  null  ¦  null  𝄀
+1.0  ¦  1.0  ¦  0.0  𝄀
+1.0  ¦  1.0  ¦  0.0
 select inner_product(normalize_l2(vecf32_3),normalize_l2(vecf32_3)) * inner_product(normalize_l2(vecf32_5),normalize_l2(vecf32_5)) from vtab32;
-➤ inner_product(normalize_l2(vecf32_3), normalize_l2(vecf32_3)) * inner_product(normalize_l2(vecf32_5), normalize_l2(vecf32_5))[8,54,0]  𝄀
+➤ inner_product(normalize_l2(vecf32_3), normalize_l2(vecf32_3)) * inner_product(normalize_l2(vecf32_5), normalize_l2(vecf32_5))[8,53,31]  𝄀
 null  𝄀
 null  𝄀
 1.0  𝄀
 1.0
 select inner_product(vecf64_3,vecf64_3) + inner_product(vecf64_5,vecf64_5) from vtab64;
-➤ inner_product(vecf64_3, vecf64_3) + inner_product(vecf64_5, vecf64_5)[8,54,0]  𝄀
+➤ inner_product(vecf64_3, vecf64_3) + inner_product(vecf64_5, vecf64_5)[8,53,31]  𝄀
 null  𝄀
 null  𝄀
--7.726203511407968E7  𝄀
--115390.95761401503
+7.7262038875E7  𝄀
+115390.95618480444
 select inner_product(vecf64_3,vecf64_3) / inner_product(vecf64_5,vecf64_5) from vtab64;
-➤ inner_product(vecf64_3, vecf64_3) / inner_product(vecf64_5, vecf64_5)[8,54,0]  𝄀
+➤ inner_product(vecf64_3, vecf64_3) / inner_product(vecf64_5, vecf64_5)[8,53,31]  𝄀
 null  𝄀
 null  𝄀
-0.008823603248169682  𝄀
-8.083431024216991E-6
-select * from (select inner_product(vecf32_3,vecf32_3),inner_product(vecf32_5,vecf32_5) from vtab32) as vectors;
-➤ inner_product(vecf32_3, vecf32_3)[8,54,0]  ¦  inner_product(vecf32_5, vecf32_5)[8,54,0]  𝄀
-null  ¦  null  𝄀
--1.3494319915771484  ¦  null  𝄀
--937.032958984375  ¦  -2.1506858E7  𝄀
--675766.875  ¦  -7.6586256E7
+0.008823603203978906  𝄀
+8.083431103077634E-6
+select * from (select id, inner_product(vecf32_3,vecf32_3), abs(inner_product(vecf32_5,vecf32_5) - summation(cast(vecf32_5 as vecf64(5)) * cast(vecf32_5 as vecf64(5)))) <= 1e-6 * summation(cast(vecf32_5 as vecf64(5)) * cast(vecf32_5 as vecf64(5))) as self5_ok from vtab32) as vectors order by id;
+➤ id[4,32,0]  ¦  inner_product(vecf32_3, vecf32_3)[8,53,31]  ¦  self5_ok[-7,1,0]  𝄀
+1  ¦  null  ¦  null  𝄀
+2  ¦  1.3494319915771484  ¦  null  𝄀
+3  ¦  937.032958984375  ¦  1  𝄀
+4  ¦  675766.875  ¦  1
 select inner_product(vecf64_3,vecf64_3), inner_product(vecf64_5,vecf64_5) from (select * from vtab64) as vectors;
-➤ inner_product(vecf64_3, vecf64_3)[8,54,0]  ¦  inner_product(vecf64_5, vecf64_5)[8,54,0]  𝄀
+➤ inner_product(vecf64_3, vecf64_3)[8,53,31]  ¦  inner_product(vecf64_5, vecf64_5)[8,53,31]  𝄀
 null  ¦  null  𝄀
--1.349431853018031  ¦  null  𝄀
--675766.8454601857  ¦  -7.65862682686195E7  𝄀
--0.9327473068927187  ¦  -115390.02486670813
-WITH qn AS (select inner_product(vecf32_3,vecf32_3),inner_product(vecf32_5,vecf32_5) from vtab32) SELECT * FROM qn;
-➤ inner_product(vecf32_3, vecf32_3)[8,54,0]  ¦  inner_product(vecf32_5, vecf32_5)[8,54,0]  𝄀
-null  ¦  null  𝄀
--1.3494319915771484  ¦  null  𝄀
--937.032958984375  ¦  -2.1506858E7  𝄀
--675766.875  ¦  -7.6586256E7
+1.3494318723678589  ¦  null  𝄀
+675766.875  ¦  7.6586272E7  𝄀
+0.9327473044395447  ¦  115390.0234375
+WITH qn AS (select id, inner_product(vecf32_3,vecf32_3), abs(inner_product(vecf32_5,vecf32_5) - summation(cast(vecf32_5 as vecf64(5)) * cast(vecf32_5 as vecf64(5)))) <= 1e-6 * summation(cast(vecf32_5 as vecf64(5)) * cast(vecf32_5 as vecf64(5))) as self5_ok from vtab32) SELECT * FROM qn order by id;
+➤ id[4,32,0]  ¦  inner_product(vecf32_3, vecf32_3)[8,53,31]  ¦  self5_ok[-7,1,0]  𝄀
+1  ¦  null  ¦  null  𝄀
+2  ¦  1.3494319915771484  ¦  null  𝄀
+3  ¦  937.032958984375  ¦  1  𝄀
+4  ¦  675766.875  ¦  1
 select l1_norm(vecf32_3), l1_norm(vecf32_5) from vtab32;
 ➤ l1_norm(vecf32_3)[8,54,0]  ¦  l1_norm(vecf32_5)[8,54,0]  𝄀
 null  ¦  null  𝄀
