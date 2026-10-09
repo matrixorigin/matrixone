@@ -215,6 +215,16 @@ func TestValidateVectorIndexSortRewrite(t *testing.T) {
 	ok, err = b.validateVectorIndexSortRewrite(desc)
 	require.NoError(t, err)
 	require.False(t, ok)
+
+	// 数学内积的近邻排序方向相反；NULL 标志不能改变此判断。
+	for _, flag := range []plan.OrderBySpec_OrderByFlag{plan.OrderBySpec_ASC, plan.OrderBySpec_DESC,
+		plan.OrderBySpec_DESC | plan.OrderBySpec_NULLS_LAST, plan.OrderBySpec_INTERNAL} {
+		ctx := &vectorSortContext{sortDirection: flag,
+			distFnExpr: &plan.Function{Func: &plan.ObjectRef{ObjName: "inner_product"}}}
+		allowed, err := b.validateVectorIndexSortRewrite(ctx)
+		require.NoError(t, err)
+		require.Equal(t, flag&plan.OrderBySpec_DESC != 0, allowed)
+	}
 }
 
 func TestReplaceDistFnInExpr_Substitutes(t *testing.T) {
