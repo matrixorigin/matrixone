@@ -108,6 +108,8 @@ func (e *blockingWatermarkSQLExecutor) Exec(
 }
 
 type watermarkProgressExecutor struct {
+	mu         sync.Mutex
+	onQuery    func()
 	watermark  string
 	generation string
 	queryErr   error
@@ -150,21 +152,22 @@ func (m *watermarkProgressExecutor) Exec(context.Context, string, ie.SessionOver
 }
 
 func (m *watermarkProgressExecutor) Query(
-	_ context.Context,
-	sql string,
-	_ ie.SessionOverrideOptions,
+	_ context.Context, sql string, _ ie.SessionOverrideOptions,
 ) ie.InternalExecResult {
+	m.mu.Lock()
 	m.lastQuery = sql
-	if m.queryErr != nil {
-		return &InternalExecResultForTest{err: m.queryErr}
-	}
+	err := m.queryErr
 	data := make([][]interface{}, 0, 1)
 	if m.watermark != "" {
 		data = append(data, []interface{}{m.watermark, m.generation})
 	}
-	return &InternalExecResultForTest{
-		resultSet: &MysqlResultSetForTest{Data: data},
+	callback := m.onQuery
+	m.onQuery = nil
+	m.mu.Unlock()
+	if callback != nil {
+		callback()
 	}
+	return &InternalExecResultForTest{err: err, resultSet: &MysqlResultSetForTest{Data: data}}
 }
 
 func (m *watermarkProgressExecutor) ApplySessionOverride(ie.SessionOverrideOptions) {}
@@ -2053,6 +2056,7 @@ func TestCDCWatermarkUpdaterRejectsInvalidDurableProgress(t *testing.T) {
 	t.Run("missing row is retryable", func(t *testing.T) {
 		updater := NewCDCWatermarkUpdater(t.Name(), &watermarkProgressExecutor{})
 		_, _, err := updater.GetWatermarkProgress(context.Background(), key)
+		require.Empty(t, updater.progressReads)
 		require.True(t, IsRetryableSnapshotEpochError(err))
 	})
 
@@ -2060,6 +2064,7 @@ func TestCDCWatermarkUpdaterRejectsInvalidDurableProgress(t *testing.T) {
 		backendErr := errors.New("catalog unavailable")
 		updater := NewCDCWatermarkUpdater(t.Name(), &watermarkProgressExecutor{queryErr: backendErr})
 		_, _, err := updater.GetWatermarkProgress(context.Background(), key)
+		require.Empty(t, updater.progressReads)
 		require.ErrorIs(t, err, backendErr)
 		require.True(t, IsRetryableSnapshotEpochError(err))
 	})
@@ -2069,6 +2074,7 @@ func TestCDCWatermarkUpdaterRejectsInvalidDurableProgress(t *testing.T) {
 			queryErr: context.Canceled,
 		})
 		_, _, err := updater.GetWatermarkProgress(context.Background(), key)
+		require.Empty(t, updater.progressReads)
 		require.ErrorIs(t, err, context.Canceled)
 		require.False(t, IsRetryableSnapshotEpochError(err))
 	})
@@ -2080,6 +2086,7 @@ func TestCDCWatermarkUpdaterRejectsInvalidDurableProgress(t *testing.T) {
 				generation: "19",
 			})
 			_, _, err := updater.GetWatermarkProgress(context.Background(), key)
+			require.Empty(t, updater.progressReads)
 			require.Error(t, err)
 			require.False(t, IsRetryableSnapshotEpochError(err))
 		})
@@ -4204,4 +4211,123 @@ func TestCDCWatermarkUpdater_wrapCronJob_NoKeysToRemove(t *testing.T) {
 	_, exists := updater.cacheCommitted[key]
 	updater.RUnlock()
 	require.True(t, exists)
+}
+
+func TestDurableProgressConcurrentReadersDrainIndependently(t *testing.T) {
+	for _, retire := range []bool{false, true} {
+		t.Run(fmt.Sprintf("retire=%t", retire), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			t.Cleanup(cancel)
+			key := &WatermarkKey{AccountId: 1, TaskId: "task", DBName: "db", TableName: "t"}
+			exec := &watermarkProgressExecutor{watermark: "100-0", generation: "11"}
+			u := NewCDCWatermarkUpdater(t.Name(), exec)
+			owner := NewOwnerFenceForGeneration(time.UnixMicro(100), func(context.Context) error { return nil })
+			u.Lock()
+			require.True(t, u.activateWatermarkFenceLocked(*key, owner))
+			u.Unlock()
+			entered, release := make(chan struct{}), make(chan struct{})
+			exec.onQuery = func() {
+				close(entered)
+				select {
+				case <-release:
+				case <-ctx.Done():
+				}
+			}
+			var once sync.Once
+			unblock := func() { once.Do(func() { close(release) }) }
+			done := make(chan error, 1)
+			joined := false
+			t.Cleanup(func() {
+				unblock()
+				if !joined {
+					<-done
+				}
+			})
+			go func() {
+				watermark, generation, err := u.GetWatermarkProgress(ctx, key)
+				if retire {
+					if !IsRetryableSnapshotEpochError(err) {
+						err = fmt.Errorf("retired read returned %s/%d: %v", watermark.ToString(), generation, err)
+					} else {
+						err = nil
+					}
+				} else if err == nil && (watermark != types.BuildTS(20, 0) || generation != 12) {
+					err = fmt.Errorf("delayed read returned %s/%d", watermark.ToString(), generation)
+				}
+				done <- err
+			}()
+			select {
+			case <-entered:
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			if retire {
+				u.Lock()
+				u.retireWatermarkProgressLocked(*key)
+				u.Unlock()
+				// Hold the replacement observation open while the retired reader exits.
+				replacementEntered, replacementRelease, replacementDone := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+				exec.mu.Lock()
+				exec.watermark, exec.generation = "20-0", "12"
+				exec.onQuery = func() {
+					close(replacementEntered)
+					select {
+					case <-replacementRelease:
+					case <-ctx.Done():
+					}
+				}
+				exec.mu.Unlock()
+				var replacementOnce sync.Once
+				unblockReplacement := func() { replacementOnce.Do(func() { close(replacementRelease) }) }
+				replacementJoined := false
+				t.Cleanup(func() {
+					unblockReplacement()
+					if !replacementJoined {
+						<-replacementDone
+					}
+				})
+				go func() { _, _, err := u.GetWatermarkProgress(ctx, key); replacementDone <- err }()
+				select {
+				case <-replacementEntered:
+				case <-ctx.Done():
+					t.Fatal(ctx.Err())
+				}
+				unblock()
+				err := <-done
+				joined = true
+				require.NoError(t, err)
+				u.RLock()
+				observation := u.progressReads[*key]
+				readers := 0
+				if observation != nil {
+					readers = observation.readers
+				}
+				u.RUnlock()
+				require.Equal(t, 1, readers, "retired release must retain the replacement observation")
+				unblockReplacement()
+				err = <-replacementDone
+				replacementJoined = true
+				require.NoError(t, err)
+			} else {
+				// The second reader finishes while the first still owns an observation.
+				_, _, err := u.GetWatermarkProgress(ctx, key)
+				require.NoError(t, err)
+				u.RLock()
+				readers := u.progressReads[*key].readers
+				u.RUnlock()
+				require.Equal(t, 1, readers)
+				exec.mu.Lock()
+				exec.watermark, exec.generation = "20-0", "12"
+				exec.mu.Unlock()
+				require.NoError(t, u.finishTargetAcknowledgement(ctx, key, owner, types.BuildTS(20, 0), 12))
+				unblock()
+				err = <-done
+				joined = true
+				require.NoError(t, err)
+			}
+			require.Empty(t, u.progressReads)
+			require.Equal(t, types.BuildTS(20, 0), u.cacheCommitted[*key])
+			require.Equal(t, uint64(12), u.cacheCommittedGeneration[*key])
+		})
+	}
 }

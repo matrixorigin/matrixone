@@ -1,6 +1,6 @@
 # Race UT critical path: bounded execution at existing owners
 
-Design revision: `pr29760-design-v2` (2026-10-09).
+Design revision: `pr29760-design-v3` (2026-10-09).
 Tracking: [#29562](https://github.com/matrixorigin/matrixone/issues/29562),
 [#29752](https://github.com/matrixorigin/matrixone/issues/29752).
 Implementation: [#29760](https://github.com/matrixorigin/matrixone/pull/29760).
@@ -93,11 +93,28 @@ by store cardinality; temporary store maps replace configuration traversal.
 
 The CDC queue worker exclusively owns batch scratch. The updater mutex owns
 published timestamp/source-generation tuples; ACK does not mutate scratch.
-Legacy read, insert and stopped-queue fallback preserve owned progress. Delayed
-typed reads/claims compare the existing generation/timestamp ordering before
-publishing. Durable SQL and owner fences retain their existing authority. SQL,
-callbacks and durable fallback reads execute outside the cache mutex. There is
-no new worker, cache, queue, schema, transaction owner or retention budget.
+Legacy read, insert and stopped-queue fallback preserve owned progress.
+
+A successful guarded checkpoint can be a durable no-op after a remote owner
+claim, so its completed-write cache is optimistic. Fresh typed reads and owner
+claims publish the database tuple rather than taking a maximum with that cache.
+Outstanding reads share only a reader count, publication revision and retirement
+marker. ACK and local owner transitions invalidate the revision under the same
+mutex as publication. An overlap discards the delayed result and permits one
+additional SELECT within the original deadline; the claim UPDATE is not repeated.
+A second conflict returns a retryable error. Retirement and claim-loss eviction
+invalidate and detach observations, and task deletion blocks publication.
+The last reader removes its entry; no idle-key history or second progress store
+is retained. Normal reads, claims and checkpoint flushes add no SQL statements.
+SQL and fence callbacks execute outside the cache mutex.
+
+This amendment was approved by `gpt-6.1-sol / xhigh` against head
+`79e10abff459f4d3a4121194639052e8caa3991c` in CLI session
+`01a11f9f-c469-7a63-be78-f3b489af1d8e`. It replaces v2's assumption that
+source-generation/timestamp ordering establishes durability. The regression
+control models another CN winning ownership between the fence check and guarded
+SQL: durable progress stays 100 while the old updater caches attempted 200.
+Both a fresh read and replacement claim must return and install 100.
 
 ## Acceptance and validation
 
@@ -107,7 +124,8 @@ no new worker, cache, queue, schema, transaction owner or retention budget.
 - Admission: process exclusion/death, borrowed lease retention, cancelled
   acquisition and repeated release; embed/service Start/Close rollback owners.
 - CDC: barrier-controlled ACK versus legacy publication, malformed/absent durable
-  tuples, generation ordering and owner replacement; existing real generation
+  tuples, remote guarded no-op, delayed typed read/claim versus ACK, retirement,
+  bounded conflicts and owner replacement; existing real generation
   replacement consumer under race mode.
 - HAKeeper: independent full/projected snapshots and unknown fields, equal WAL
   pending/coordinator decisions, leader checker and remote recovery bootstrap.

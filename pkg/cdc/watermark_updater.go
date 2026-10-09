@@ -337,7 +337,7 @@ type CDCWatermarkUpdater struct {
 	// Read priority: cacheUncommitted -> cacheCommitting -> cacheCommitted
 	cacheUncommitted map[WatermarkKey]types.TS // Write buffer, not yet persisted
 	cacheCommitting  map[WatermarkKey]types.TS // Being persisted to database
-	cacheCommitted   map[WatermarkKey]types.TS // Synchronized with database
+	cacheCommitted   map[WatermarkKey]types.TS // Completed writes; guarded updates may be durable no-ops
 	// Stable watermarks are ordered first by source table generation and then
 	// by timestamp. Missing entries are legacy generation zero.
 	cacheUncommittedGeneration map[WatermarkKey]uint64
@@ -349,6 +349,8 @@ type CDCWatermarkUpdater struct {
 	cacheUncommittedFence map[WatermarkKey]*OwnerFence
 	cacheCommittingFence  map[WatermarkKey]*OwnerFence
 	activeWatermarkFence  map[WatermarkKey]*OwnerFence
+	// Observations exist only while durable progress reads are outstanding.
+	progressReads map[WatermarkKey]*watermarkProgressRead
 
 	// Error metadata cache (similar to watermark cache)
 	// Cached in memory to avoid synchronous SQL queries in RecordError()
@@ -407,6 +409,7 @@ func NewCDCWatermarkUpdater(
 		cacheUncommittedGeneration: make(map[WatermarkKey]uint64),
 		cacheCommittingGeneration:  make(map[WatermarkKey]uint64),
 		cacheCommittedGeneration:   make(map[WatermarkKey]uint64),
+		progressReads:              make(map[WatermarkKey]*watermarkProgressRead),
 		cacheUncommittedFence:      make(map[WatermarkKey]*OwnerFence),
 		cacheCommittingFence:       make(map[WatermarkKey]*OwnerFence),
 		activeWatermarkFence:       make(map[WatermarkKey]*OwnerFence),
@@ -1458,7 +1461,7 @@ func (u *CDCWatermarkUpdater) getFromCacheWithGeneration(
 // Lookup Priority (from newest to oldest):
 // 1. cacheUncommitted - most recent updates, not yet persisted
 // 2. cacheCommitting  - updates being persisted to database
-// 3. cacheCommitted   - synchronized with database
+// 3. cacheCommitted   - completed writes, potentially optimistic for guarded SQL
 //
 // Returns ErrNoWatermarkFound if the key doesn't exist in any cache tier.
 // This can happen when:
@@ -1530,45 +1533,37 @@ func (u *CDCWatermarkUpdater) getWatermarkProgress(
 		ctx, snapshotEpochPersistenceTimeout, moerr.CauseWatermarkRead)
 	defer cancel()
 	readCtx = defines.AttachAccountId(readCtx, catalog.System_Account)
-	res := u.ie.Query(
-		readCtx,
-		CDCSQLBuilder.GetWatermarkProgressSQL(key),
-		ie.SessionOverrideOptions{},
-	)
-	if err := res.Error(); err != nil {
-		return types.TS{}, 0, false, classifySnapshotEpochBackendError(err)
-	}
-	if res.RowCount() == 0 {
-		return types.TS{}, 0, false, nil
-	}
-	if res.RowCount() != 1 {
-		return types.TS{}, 0, false, &RetryableSnapshotEpochError{err: moerr.NewInternalErrorf(
-			ctx, "CDC watermark generation has multiple rows for %s", key.String())}
-	}
-	watermarkString, err := res.GetString(readCtx, 0, 0)
-	if err != nil {
-		return types.TS{}, 0, false, err
-	}
-	watermark, err := parseWatermarkTS(watermarkString)
-	if err != nil {
-		return types.TS{}, 0, false, moerr.NewInternalErrorf(
-			ctx, "invalid CDC watermark %q for %s: %v", watermarkString, key.String(), err)
-	}
-	generation, err := res.GetUint64(readCtx, 0, 1)
-	if err != nil {
-		return types.TS{}, 0, false, err
-	}
-	u.Lock()
-	if current, found := u.cacheCommitted[*key]; found &&
-		(u.activeWatermarkFence[*key] != nil || u.cacheCommittedGeneration[*key] > 0) &&
-		watermarkProgressIsNewer(u.cacheCommittedGeneration[*key], current, generation, watermark) {
-		watermark, generation = current, u.cacheCommittedGeneration[*key]
-	} else {
-		u.cacheCommitted[*key] = watermark
-		u.cacheCommittedGeneration[*key] = generation
-	}
-	u.Unlock()
-	return watermark, generation, true, nil
+	return u.loadWatermarkProgress(readCtx, key, nil, func() (types.TS, uint64, bool, error) {
+		res := u.ie.Query(
+			readCtx,
+			CDCSQLBuilder.GetWatermarkProgressSQL(key),
+			ie.SessionOverrideOptions{},
+		)
+		if err := res.Error(); err != nil {
+			return types.TS{}, 0, false, classifySnapshotEpochBackendError(err)
+		}
+		if res.RowCount() == 0 {
+			return types.TS{}, 0, false, nil
+		}
+		if res.RowCount() != 1 {
+			return types.TS{}, 0, false, &RetryableSnapshotEpochError{err: moerr.NewInternalErrorf(
+				ctx, "CDC watermark generation has multiple rows for %s", key.String())}
+		}
+		watermarkString, err := res.GetString(readCtx, 0, 0)
+		if err != nil {
+			return types.TS{}, 0, false, err
+		}
+		watermark, err := parseWatermarkTS(watermarkString)
+		if err != nil {
+			return types.TS{}, 0, false, moerr.NewInternalErrorf(
+				ctx, "invalid CDC watermark %q for %s: %v", watermarkString, key.String(), err)
+		}
+		generation, err := res.GetUint64(readCtx, 0, 1)
+		if err != nil {
+			return types.TS{}, 0, false, err
+		}
+		return watermark, generation, true, nil
+	})
 }
 
 // ClaimWatermarkOwner durably publishes the daemon generation that is allowed
@@ -1602,64 +1597,142 @@ func (u *CDCWatermarkUpdater) ClaimWatermarkOwner(
 		return types.TS{}, 0, classifySnapshotEpochBackendError(err)
 	}
 
-	res := u.ie.Query(
-		claimCtx,
-		CDCSQLBuilder.GetWatermarkOwnerProgressSQL(key),
-		ie.SessionOverrideOptions{},
-	)
-	if err := res.Error(); err != nil {
-		return types.TS{}, 0, classifySnapshotEpochBackendError(err)
-	}
-	if res.RowCount() != 1 {
-		return types.TS{}, 0, NewRetryableSnapshotEpochError(moerr.NewInternalErrorf(
-			ctx, "CDC watermark owner row is missing for %s", key.String()))
-	}
-	currentOwner, err := res.GetUint64(claimCtx, 0, 0)
-	if err != nil {
-		return types.TS{}, 0, err
-	}
-	if currentOwner > ownerGeneration {
-		return types.TS{}, 0, &OwnerFenceLostError{err: moerr.NewInvalidTask(
-			ctx, "CDC watermark owner was superseded", ownerGeneration)}
-	}
-	if currentOwner < ownerGeneration {
-		return types.TS{}, 0, NewRetryableSnapshotEpochError(moerr.NewInternalErrorf(
-			ctx, "CDC watermark owner claim %d was not durable for %s (found %d)",
-			ownerGeneration, key.String(), currentOwner))
-	}
-	watermarkText, err := res.GetString(claimCtx, 0, 1)
-	if err != nil {
-		return types.TS{}, 0, err
-	}
-	watermark, err := parseWatermarkTS(watermarkText)
-	if err != nil {
-		return types.TS{}, 0, moerr.NewInternalErrorf(
-			ctx, "invalid CDC watermark %q for %s: %v", watermarkText, key.String(), err)
-	}
-	generation, err := res.GetUint64(claimCtx, 0, 2)
-	if err != nil {
-		return types.TS{}, 0, err
-	}
-	if err = fence.Check(ctx); err != nil {
-		return types.TS{}, 0, err
-	}
+	watermark, generation, _, err := u.loadWatermarkProgress(claimCtx, key, fence, func() (types.TS, uint64, bool, error) {
+		res := u.ie.Query(
+			claimCtx,
+			CDCSQLBuilder.GetWatermarkOwnerProgressSQL(key),
+			ie.SessionOverrideOptions{},
+		)
+		if err := res.Error(); err != nil {
+			return types.TS{}, 0, false, classifySnapshotEpochBackendError(err)
+		}
+		if res.RowCount() != 1 {
+			return types.TS{}, 0, false, NewRetryableSnapshotEpochError(moerr.NewInternalErrorf(
+				ctx, "CDC watermark owner row is missing for %s", key.String()))
+		}
+		currentOwner, err := res.GetUint64(claimCtx, 0, 0)
+		if err != nil {
+			return types.TS{}, 0, false, err
+		}
+		if currentOwner > ownerGeneration {
+			return types.TS{}, 0, false, &OwnerFenceLostError{err: moerr.NewInvalidTask(
+				ctx, "CDC watermark owner was superseded", ownerGeneration)}
+		}
+		if currentOwner < ownerGeneration {
+			return types.TS{}, 0, false, NewRetryableSnapshotEpochError(moerr.NewInternalErrorf(
+				ctx, "CDC watermark owner claim %d was not durable for %s (found %d)",
+				ownerGeneration, key.String(), currentOwner))
+		}
+		watermarkText, err := res.GetString(claimCtx, 0, 1)
+		if err != nil {
+			return types.TS{}, 0, false, err
+		}
+		watermark, err := parseWatermarkTS(watermarkText)
+		if err != nil {
+			return types.TS{}, 0, false, moerr.NewInternalErrorf(
+				ctx, "invalid CDC watermark %q for %s: %v", watermarkText, key.String(), err)
+		}
+		generation, err := res.GetUint64(claimCtx, 0, 2)
+		if err != nil {
+			return types.TS{}, 0, false, err
+		}
+		if err = fence.Check(ctx); err != nil {
+			return types.TS{}, 0, false, err
+		}
 
+		return watermark, generation, true, nil
+	})
+	return watermark, generation, err
+}
+
+// watermarkProgressRead tracks publication events, not cached progress. A
+// successful guarded checkpoint need not have updated its durable row.
+type watermarkProgressRead struct {
+	readers  int
+	revision uint64
+	retired  bool
+}
+
+// loadWatermarkProgress publishes a fresh durable tuple only if no ACK, owner
+// transition or retirement overlapped its observation. A conflict permits one
+// reread within the caller's original deadline; retirement never rereads.
+func (u *CDCWatermarkUpdater) loadWatermarkProgress(
+	ctx context.Context, key *WatermarkKey, fence *OwnerFence,
+	read func() (types.TS, uint64, bool, error),
+) (types.TS, uint64, bool, error) {
 	u.Lock()
-	if !u.activateWatermarkFenceLocked(*key, fence) {
+	if _, deleted := u.deletedTasks.Load(key.TaskId); deleted {
 		u.Unlock()
-		return types.TS{}, 0, &OwnerFenceLostError{err: moerr.NewInvalidTask(
-			ctx, "CDC watermark owner was superseded locally", ownerGeneration)}
+		return types.TS{}, 0, false, NewRetryableSnapshotEpochError(moerr.NewInternalErrorf(ctx, "CDC watermark task was deleted for %s", key.String()))
 	}
-	if current, found := u.cacheCommitted[*key]; found &&
-		(u.activeWatermarkFence[*key] != nil || u.cacheCommittedGeneration[*key] > 0) &&
-		watermarkProgressIsNewer(u.cacheCommittedGeneration[*key], current, generation, watermark) {
-		watermark, generation = current, u.cacheCommittedGeneration[*key]
-	} else {
-		u.cacheCommitted[*key] = watermark
-		u.cacheCommittedGeneration[*key] = generation
+	observation := u.progressReads[*key]
+	if observation == nil {
+		observation = &watermarkProgressRead{}
+		u.progressReads[*key] = observation
 	}
+	observation.readers++
+	revision := observation.revision
 	u.Unlock()
-	return watermark, generation, nil
+	defer func() {
+		u.Lock()
+		observation.readers--
+		if observation.readers == 0 && u.progressReads[*key] == observation {
+			delete(u.progressReads, *key)
+		}
+		u.Unlock()
+	}()
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return types.TS{}, 0, false, classifySnapshotEpochBackendError(err)
+		}
+		watermark, generation, found, err := read()
+		if err != nil {
+			return types.TS{}, 0, false, err
+		}
+		if err := ctx.Err(); err != nil {
+			return types.TS{}, 0, false, classifySnapshotEpochBackendError(err)
+		}
+		u.Lock()
+		if _, deleted := u.deletedTasks.Load(key.TaskId); deleted {
+			u.Unlock()
+			return types.TS{}, 0, false, NewRetryableSnapshotEpochError(moerr.NewInternalErrorf(ctx, "CDC watermark task was deleted for %s", key.String()))
+		}
+		if observation.retired || u.progressReads[*key] != observation {
+			u.Unlock()
+			return types.TS{}, 0, false, NewRetryableSnapshotEpochError(moerr.NewInternalErrorf(ctx,
+				"CDC watermark progress was retired for %s", key.String()))
+		}
+		if observation.revision != revision {
+			revision = observation.revision
+			u.Unlock()
+			continue
+		}
+		if fence != nil && !u.activateWatermarkFenceLocked(*key, fence) {
+			u.Unlock()
+			return types.TS{}, 0, false, &OwnerFenceLostError{err: moerr.NewInvalidTask(ctx,
+				"CDC watermark owner was superseded locally", fence.GenerationToken())}
+		}
+		if found {
+			u.cacheCommitted[*key] = watermark
+			u.cacheCommittedGeneration[*key] = generation
+		}
+		u.Unlock()
+		return watermark, generation, found, nil
+	}
+	return types.TS{}, 0, false, NewRetryableSnapshotEpochError(moerr.NewInternalErrorf(ctx,
+		"CDC watermark progress changed during both reads for %s", key.String()))
+}
+
+// The caller holds u.Lock. Retirement detaches the entry so separately admitted
+// readers can start afresh; existing readers retain the terminal marker.
+func (u *CDCWatermarkUpdater) invalidateProgressReadLocked(key WatermarkKey, retire bool) {
+	if observation := u.progressReads[key]; observation != nil {
+		observation.revision++
+		if retire {
+			observation.retired = true
+			delete(u.progressReads, key)
+		}
+	}
 }
 
 type WatermarkTargetState struct {
@@ -1794,6 +1867,7 @@ func (u *CDCWatermarkUpdater) finishTargetAcknowledgement(
 	delete(u.cacheCommitting, *key)
 	delete(u.cacheCommittingGeneration, *key)
 	delete(u.cacheCommittingFence, *key)
+	u.invalidateProgressReadLocked(*key, false)
 	u.cacheCommitted[*key] = actual
 	u.cacheCommittedGeneration[*key] = generation
 	u.Unlock()
@@ -2231,6 +2305,9 @@ func (u *CDCWatermarkUpdater) activateWatermarkFenceLocked(key WatermarkKey, fen
 		clearWatermarkErrorGauge(key)
 	}
 	u.resetWatermarkCircuitLocked(key)
+	if u.activeWatermarkFence[key] != fence {
+		u.invalidateProgressReadLocked(key, false)
+	}
 	u.activeWatermarkFence[key] = fence
 	return true
 }
@@ -2295,6 +2372,7 @@ func (u *CDCWatermarkUpdater) resetWatermarkCircuitLocked(key WatermarkKey) {
 // activeWatermarkFence alone: those have distinct lifecycle owners. The caller
 // must hold u.Lock.
 func (u *CDCWatermarkUpdater) retireWatermarkProgressLocked(key WatermarkKey) bool {
+	u.invalidateProgressReadLocked(key, true)
 	_, inCommitted := u.cacheCommitted[key]
 	delete(u.cacheUncommitted, key)
 	delete(u.cacheCommitting, key)
@@ -2501,6 +2579,7 @@ func (u *CDCWatermarkUpdater) DeleteTaskWatermarks(
 	collectTaskWatermarkKeys(keysToClean, u.cacheUncommittedFence, accountID, taskID)
 	collectTaskWatermarkKeys(keysToClean, u.cacheCommittingFence, accountID, taskID)
 	collectTaskWatermarkKeys(keysToClean, u.activeWatermarkFence, accountID, taskID)
+	collectTaskWatermarkKeys(keysToClean, u.progressReads, accountID, taskID)
 	collectTaskWatermarkKeys(keysToClean, u.errorMetadataCache, accountID, taskID)
 	collectTaskWatermarkKeys(keysToClean, u.commitFailureCount, accountID, taskID)
 	collectTaskWatermarkKeys(keysToClean, u.commitCircuitOpen, accountID, taskID)
@@ -2563,6 +2642,7 @@ func (u *CDCWatermarkUpdater) EvictTaskLocalStateForOwner(
 	collectTaskWatermarkKeys(keys, u.cacheUncommittedFence, accountID, taskID)
 	collectTaskWatermarkKeys(keys, u.cacheCommittingFence, accountID, taskID)
 	collectTaskWatermarkKeys(keys, u.activeWatermarkFence, accountID, taskID)
+	collectTaskWatermarkKeys(keys, u.progressReads, accountID, taskID)
 	collectTaskWatermarkKeys(keys, u.errorMetadataCache, accountID, taskID)
 	collectTaskWatermarkKeys(keys, u.commitFailureCount, accountID, taskID)
 	collectTaskWatermarkKeys(keys, u.commitCircuitOpen, accountID, taskID)
@@ -2585,6 +2665,7 @@ func (u *CDCWatermarkUpdater) EvictTaskLocalStateForOwner(
 		}
 
 		if !newerOwner {
+			u.invalidateProgressReadLocked(key, true)
 			// Keep the last committed progress in the process-wide updater. CN
 			// services in an embedded cluster share this updater, so deleting the
 			// committed tier here can erase the replacement reader's local view
