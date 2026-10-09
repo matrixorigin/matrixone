@@ -956,3 +956,51 @@ EXECUTE repeat_unknown USING @repeat_count;
 ➤ REGEXP_LIKE(cast(REPEAT(, ?) as binary), a)[-7,1,0]  𝄀
 0
 DEALLOCATE PREPARE repeat_unknown;
+SET @substring_source = 'abc';
+SELECT REGEXP_LIKE(CAST(SUBSTRING(@substring_source,0) AS BINARY),'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(CAST(SUBSTRING(CAST('abc' AS CHAR(3)),-20000) AS BINARY),'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(CAST(SUBSTRING(@substring_source,0,NULL) AS BINARY),'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(CAST(SUBSTRING(REPEAT(CAST('abc' AS CHAR(3)),7000),20000) AS BINARY),'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(CAST(SUBSTRING(REPEAT(CAST('abc' AS CHAR(3)),7000),20000,20000) AS BINARY),'a');
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+PREPARE substring_start FROM 'SELECT REGEXP_LIKE(CAST(SUBSTRING(@substring_source,0) AS BINARY),''a'')';
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+PREPARE substring_start FROM 'SELECT REGEXP_LIKE(CAST(SUBSTRING(CAST(''abc'' AS CHAR(3)),-20000) AS BINARY),''a'')';
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+PREPARE substring_start FROM 'SELECT REGEXP_LIKE(CAST(SUBSTRING(@substring_source,0,NULL) AS BINARY),''a'')';
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+PREPARE substring_start FROM 'SELECT REGEXP_LIKE(CAST(SUBSTRING(REPEAT(CAST(''abc'' AS CHAR(3)),7000),20000) AS BINARY),''a'')';
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+PREPARE substring_start FROM 'SELECT REGEXP_LIKE(CAST(SUBSTRING(REPEAT(CAST(''abc'' AS CHAR(3)),7000),20000,20000) AS BINARY),''a'')';
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE(CAST(SUBSTRING(@substring_source,1) AS BINARY),'a');
+➤ REGEXP_LIKE(cast(SUBSTRING(@substring_source, 1) as binary), a)[-7,1,0]  𝄀
+1
+SELECT REGEXP_LIKE(CAST(SUBSTRING(@substring_source,1,NULL) AS BINARY),'a');
+➤ REGEXP_LIKE(cast(SUBSTRING(@substring_source, 1, null) as binary), a)[-7,1,0]  𝄀
+null
+SELECT REGEXP_LIKE(CAST(SUBSTRING(@substring_source,NULL,3) AS BINARY),'a');
+➤ REGEXP_LIKE(cast(SUBSTRING(@substring_source, null, 3) as binary), a)[-7,1,0]  𝄀
+null
+SELECT REGEXP_LIKE(CAST(SUBSTRING(REPEAT(CAST('abc' AS CHAR(3)),7000),1,NULL) AS BINARY),'a');
+➤ REGEXP_LIKE(cast(SUBSTRING(REPEAT(cast(abc as char(3)), 7000), 1, null) as binary), a)[-7,1,0]  𝄀
+null
+SELECT SUBSTRING('abc',0), SUBSTRING('abc',-20000), SUBSTRING('abc',2,3), SUBSTRING('abc',0,NULL);
+➤ SUBSTRING(abc, 0)[12,3,0]  ¦  SUBSTRING(abc, -20000)[12,3,0]  ¦  SUBSTRING(abc, 2, 3)[12,3,0]  ¦  SUBSTRING(abc, 0, null)[12,3,0]  𝄀
+  ¦    ¦  bc  ¦  null
+PREPARE substring_dynamic FROM 'SELECT SUBSTRING(@substring_source,?,?)';
+SET @substring_start = 0;
+SET @substring_length = NULL;
+EXECUTE substring_dynamic USING @substring_start, @substring_length;
+➤ SUBSTRING(@substring_source, ?, ?)[12,65535,0]  𝄀
+null
+SET @substring_start = -2;
+SET @substring_length = 3;
+EXECUTE substring_dynamic USING @substring_start, @substring_length;
+➤ SUBSTRING(@substring_source, ?, ?)[12,65535,0]  𝄀
+bc
+DEALLOCATE PREPARE substring_dynamic;

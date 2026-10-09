@@ -176,19 +176,47 @@ func regexpDeclaredStringType(expr *Expr) types.Type {
 	lengthIndex := -1
 	switch name {
 	case "substring", "substr", "sub_str", "mid":
-		if len(fn.Args) == 3 {
-			lengthIndex = 2
-		} else if len(fn.Args) == 2 {
-			if position, signed, known := regexpConstantInteger(fn.Args[1]); known && signed && int64(position) < 0 {
-				// A negative start can retain at most its distance from the end.
-				// Unsigned subtraction also handles MinInt64 without overflow.
-				bound := uint64(0) - position
-				if bound <= uint64(types.MaxVarcharLen) {
-					if types.StaticStringDomain(typ) == types.StringDomainBinary {
-						return regexpBinaryTypeForBound(bound, true)
-					}
-					return types.NewWithCharset(types.T_varchar, int32(bound), 0, typ.Charset)
+		if len(fn.Args) == 2 || len(fn.Args) == 3 {
+			// MySQL Item_func_substr::resolve_type composes source, start and
+			// length in that order. Runtime NULL/emptiness is not a declaration.
+			bound, bounded := regexpDeclaredCharacterBound(parameters[0])
+			if !bounded {
+				bound = math.MaxUint32 // MySQL MAX_BLOB_WIDTH, in characters.
+				if types.StaticStringDomain(parameters[0]) != types.StringDomainBinary {
+					bound /= 4 // utf8mb4's maximum encoded bytes per character.
 				}
+			}
+			nullStart := stringLengthDeclarationNull(fn.Args[1])
+			if position, signed, known := regexpConstantInteger(fn.Args[1]); known &&
+				(!signed || int64(position) > math.MinInt32) &&
+				((signed && int64(position) < 0) || position <= math.MaxInt32) {
+				if signed && int64(position) < 0 {
+					distance := uint64(0) - position
+					if distance > bound {
+						bound = 0
+					} else {
+						bound = distance
+					}
+				} else if position == 0 {
+					bound = 0
+				} else {
+					bound -= min(position-1, bound)
+				}
+			}
+			if len(fn.Args) == 3 && !nullStart {
+				if length, signed, known := regexpConstantInteger(fn.Args[2]); known {
+					if signed && int64(length) < 0 {
+						bound = 0
+					} else if length <= math.MaxInt32 {
+						bound = min(bound, length)
+					}
+				}
+			}
+			if bound <= uint64(types.MaxVarcharLen) {
+				if types.StaticStringDomain(typ) == types.StringDomainBinary {
+					return regexpBinaryTypeForBound(bound, true)
+				}
+				return types.NewWithCharset(types.T_varchar, int32(bound), 0, typ.Charset)
 			}
 		}
 	case "left", "right":

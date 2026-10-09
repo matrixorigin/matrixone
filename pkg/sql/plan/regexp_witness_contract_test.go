@@ -52,6 +52,31 @@ func TestRegexpWitnessDeclarationConservation(t *testing.T) {
 		{"repeat('abc',-1)", false},
 		{"repeat(@str_var,-1)", false},
 		{"repeat(cast(null as char(0)),-1)", true},
+		// MySQL 8.4.8 Item_func_substr::resolve_type applies start before length.
+		{"substring(@str_var,0)", true},
+		{"substring(cast('abc' as char(3)),-20000)", true},
+		{"substring(@str_var,0,null)", true},
+		{"substring(repeat(cast('abc' as char(3)),7000),20000)", true},
+		{"substring(repeat(cast('abc' as char(3)),7000),20000,20000)", true},
+		{"substring(@str_var,1)", false},
+		{"substring(@str_var,1,null)", false},
+		{"substring(repeat(cast('abc' as char(3)),7000),1,null)", false},
+		{"substring(@str_var,null,3)", false},
+		{"substring(@str_var,cast(null as signed),3)", false},
+		{"substring(@str_var,@n,3)", true},
+		{"substring(@str_var,0,@n)", true},
+		{"substring(@str_var,-2147483648)", false},
+		{"substring(repeat(cast('abc' as char(3)),7000),2147483648)", false},
+		{"substring(@str_var,1,2147483648)", false},
+		{"substring(@str_var,0,2147483648)", true},
+		{"mid(@str_var,0,null)", true},
+		{"substr(cast('abc' as char(3)),-20000,3)", true},
+		{"substring(@str_var,1,cast(18446744073709551615 as unsigned))", false},
+		{"substring(@str_var,cast(18446744073709551615 as unsigned),3)", true},
+		{"(select substring(@str_var,0,null))", true},
+		{"(select v from (select substring(@str_var,0,null) v) s)", true},
+		{"max(substring(@str_var,0,null))", true},
+		{"max(substring(@str_var,0,null)) over()", true},
 	} {
 		for _, consumer := range []string{"regexp_like(cast(%s as binary),'a')", "regexp_instr(cast(%s as binary),'a')", "regexp_substr(cast(%s as binary),'a')", "regexp_replace(cast(%s as binary),'a','x')"} {
 			sql := "select " + fmt.Sprintf(consumer, tc.source)
@@ -70,6 +95,30 @@ func TestRegexpWitnessDeclarationConservation(t *testing.T) {
 				})
 			}
 		}
+	}
+}
+
+func TestRegexpSubstringUnknownPrepare(t *testing.T) {
+	for _, tc := range []struct {
+		source   string
+		mismatch bool
+	}{
+		{"substring(@str_var,?,?)", false},
+		{"substring(@str_var,?,3)", true},
+		{"substring(@str_var,0,?)", true},
+		{"substring(@str_var,null,?)", false},
+		{"(select substring(?,0,null))", true},
+		{"(select v from (select substring(?,0,null) v) s)", true},
+	} {
+		query := "prepare substring_unknown from 'select regexp_like(cast(" + tc.source + " as binary),''a'')'"
+		t.Run(tc.source, func(t *testing.T) {
+			_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, query)
+			if tc.mismatch {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrCharacterSetMismatch), err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
 	}
 }
 
@@ -117,6 +166,20 @@ func TestStringDeclarationWitnessBounds(t *testing.T) {
 		{"substring(left(@str_var,3),1,ceil(3.1))", 3},
 		{"repeat('',-1)", 0},
 		{"repeat(left(@str_var,0),-1)", 0},
+		{"substring(@str_var,0)", 0},
+		{"substring(cast('abc' as char(3)),-20000)", 0},
+		{"substring(@str_var,0,null)", 0},
+		{"substring(repeat(cast('abc' as char(3)),7000),20000)", 1001},
+		{"substring(repeat(cast('abc' as char(3)),7000),20000,20000)", 1001},
+		{"substring(repeat(cast('abc' as char(3)),7000),20000,null)", 1001},
+		{"substring(cast('abc' as char(3)),-2,3)", 2},
+		{"substring(cast('abc' as char(3)),2,3)", 2},
+		{"substring(cast('abc' as char(3)),2147483647)", 0},
+		{"substring(@str_var,2147483647)", 0},
+		{"substring(@str_var,-2147483647)", 0},
+		{"substring(cast('abc' as char(3)),null,0)", 3},
+		{"substring(cast('abc' as char(3)),cast(null as signed),-1)", 3},
+		{"substring(cast('abc' as char(3)),2147483648)", 3},
 	} {
 		t.Run(tc.source, func(t *testing.T) {
 			p, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "select "+tc.source)
@@ -127,6 +190,12 @@ func TestStringDeclarationWitnessBounds(t *testing.T) {
 			declared := regexpDeclaredStringType(expr)
 			require.Equal(t, types.T_varchar, declared.Oid)
 			require.Equal(t, tc.width, declared.Width)
+			require.Equal(t, declared, regexpDeclaredStringType(DeepCopyExpr(expr)))
+			encoded, err := proto.Marshal(expr)
+			require.NoError(t, err)
+			decoded := new(Expr)
+			require.NoError(t, proto.Unmarshal(encoded, decoded))
+			require.Equal(t, declared, regexpDeclaredStringType(decoded))
 			copy := stringDeclarationWitnessArg(expr)
 			require.Equal(t, declared, regexpDeclaredStringType(copy))
 			require.Nil(t, copy.GetPreparedNumeric())
@@ -151,6 +220,12 @@ func witnessFamilySQL(kind string, depth int, prepare bool) string {
 			source = "lpad(" + source + ",ceil(2.1),'x')"
 		case "substring":
 			source = "substring(" + source + ",1,ceil(2.1))"
+		case "substring-unknown":
+			scalar := "@n"
+			if prepare {
+				scalar = "?"
+			}
+			source = "substring(" + source + "," + scalar + "," + scalar + ")"
 		case "repeat":
 			source = "repeat(" + source + ",ceil(0.1))"
 		}
@@ -163,7 +238,7 @@ func witnessFamilySQL(kind string, depth int, prepare bool) string {
 }
 
 func TestStringWitnessFamiliesLinearSpace(t *testing.T) {
-	for _, kind := range []string{"lpad", "substring", "repeat", "mixed"} {
+	for _, kind := range []string{"lpad", "substring", "substring-unknown", "repeat", "mixed"} {
 		for _, prepare := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/prepare=%t", kind, prepare), func(t *testing.T) {
 				previous := 0

@@ -6187,13 +6187,20 @@ func stringDomainSourceWitness(source *Expr, domains uint8) *Expr {
 		if len(args) == 1 {
 			return args[0]
 		}
-		return &Expr{
+		witness := &Expr{
 			Typ: source.Typ,
 			Expr: &plan.Expr_F{F: &plan.Function{
 				Func: &plan.ObjectRef{ObjName: "coalesce"},
 				Args: args,
 			}},
 		}
+		if source.GetPreparedNumeric().GetStringDomainSource() != nil {
+			// Preserve an owned declaration alongside runtime domain choices.
+			// Synthetic leaves cannot reconstruct a slice's proven bound, and
+			// an unregistered function's execution type is not such a proof.
+			ensurePreparedNumericMetadata(witness).StringDomainSource = stringDeclarationWitnessArg(source)
+		}
+		return witness
 	}
 	witness := makePlan2StringConstExprWithType("")
 	witness.Typ = stringDomainWitnessType(source, domains)

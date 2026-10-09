@@ -36,48 +36,61 @@ func annotateStringLengthSource(expr *Expr, proc *process.Process) {
 	if fn == nil || fn.Func == nil {
 		return
 	}
-	index := -1
+	var indexes []int
 	switch strings.ToLower(fn.Func.ObjName) {
 	case "left", "right", "repeat", "lpad", "rpad":
 		if len(fn.Args) >= 2 {
-			index = 1
+			indexes = []int{1}
 		}
 	case "substring", "substr", "sub_str", "mid":
 		if len(fn.Args) == 3 {
-			index = 2
+			indexes = []int{1, 2}
 		} else if len(fn.Args) == 2 {
-			index = 1
+			indexes = []int{1}
 		}
 	}
-	if index < 0 || !stringLengthConstantCandidate(fn.Args[index]) {
+	if len(indexes) == 0 {
 		return
 	}
-	vec, free, warned, err := rule.EvaluateConstantExpression(proc, DeepCopyExpr(fn.Args[index]), batch.EmptyForConstFoldBatch)
-	if err != nil {
-		return
-	}
-	defer free()
-	if warned || vec == nil {
-		return
-	}
-	lit := rule.GetConstantValue(vec, false, 0)
-	if lit == nil || lit.Isnull {
-		return
-	}
-	folded := &Expr{Typ: makePlan2Type(vec.GetType()), Expr: &planpb.Expr_Lit{Lit: lit}}
-	// A successful closed evaluation is the authoritative constant. Keeping Src
-	// would send declaration consumers back through the unevaluated expression.
-	folded.GetLit().Src = nil
-	folded.PreparedNumeric = nil
-	folded.GetLit().StringSource = uint32(types.StringSourceExpression)
 	// This owner stores only local declaration facts. Runtime dependencies stay
 	// in the real function args, and are summarized only at missing-input
 	// boundaries (folded values/columns/subqueries). No ancestor copies a chain.
 	args := make([]*Expr, len(fn.Args))
+	proved := false
+	for _, index := range indexes {
+		// An unknown scalar has no literal. This distinguishes it from a
+		// closed SQL NULL start, which skips SUBSTRING's length refinement.
+		args[index] = &Expr{Typ: fn.Args[index].Typ}
+		if !stringLengthConstantCandidate(fn.Args[index]) && !stringLengthDeclarationNull(fn.Args[index]) {
+			continue
+		}
+		func() {
+			vec, free, warned, err := rule.EvaluateConstantExpression(proc, DeepCopyExpr(fn.Args[index]), batch.EmptyForConstFoldBatch)
+			if err != nil {
+				return
+			}
+			defer free()
+			if warned || vec == nil {
+				return
+			}
+			lit := rule.GetConstantValue(vec, false, 0)
+			if lit == nil {
+				return
+			}
+			// Retain only the evaluated local scalar, never its value tree.
+			lit.Src = nil
+			lit.StringSource = uint32(types.StringSourceExpression)
+			args[index] = &Expr{Typ: makePlan2Type(vec.GetType()), Expr: &planpb.Expr_Lit{Lit: lit}}
+			proved = true
+		}()
+	}
+	if !proved {
+		return
+	}
+	// Do not infer a source subtree unless this owner has a scalar fact to
+	// publish. All-dynamic chains otherwise re-traverse every ancestor.
 	for i, arg := range fn.Args {
-		if i == index {
-			args[i] = folded
-		} else {
+		if args[i] == nil {
 			args[i] = stringDeclarationWitnessArg(arg)
 		}
 	}
@@ -113,6 +126,21 @@ func stringDeclarationWitnessArg(arg *Expr) *Expr {
 		}
 	}
 	return witness
+}
+
+// A closed SQL NULL is declaration-relevant without being a numeric constant.
+// Unknown scalar witnesses have no literal; variable/history literals retain
+// their distinct provenance and must never enter this path.
+func stringLengthDeclarationNull(expr *Expr) bool {
+	if expr == nil || expr.PreparedNumeric != nil {
+		return false
+	}
+	lit := expr.GetLit()
+	if lit == nil || !lit.Isnull || lit.Src != nil {
+		return false
+	}
+	source := types.StringSource(lit.StringSource)
+	return source == types.StringSourceExpression || source == types.StringSourceLiteral
 }
 
 // Registered foldable builtins exclude arbitrary user functions, real-time
