@@ -17,6 +17,7 @@ package morpc
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -78,10 +79,25 @@ func (c *handleFuncCtx[REQ, RESP]) call(
 
 type methodBasedServer[REQ, RESP MethodBasedMessage] struct {
 	logger   *log.MOLogger
-	cfg      *Config
 	rpc      RPCServer
 	pool     MessagePool[REQ, RESP]
 	handlers map[uint32]handleFuncCtx[REQ, RESP]
+
+	// Async handlers are submitted to the process-wide ants pool, so the
+	// underlying RPC server cannot join them when it closes. Keep a local
+	// admission gate and join count for this method server; its parent may
+	// otherwise destroy dependencies while an accepted handler is still using
+	// them.
+	asyncMu        sync.Mutex
+	asyncWG        sync.WaitGroup
+	closeOnce      sync.Once
+	closeErr       error
+	closed         bool
+	requestCtx     context.Context
+	cancelRequests context.CancelFunc
+	// A conservative capability cache of the existing handler registrations.
+	// Once mixed, future frames retain independent synchronous contexts.
+	hasSyncHandlers atomic.Bool
 
 	// respReleaseFunc is the function to release response.
 	respReleaseFunc func(Message)
@@ -90,6 +106,8 @@ type methodBasedServer[REQ, RESP MethodBasedMessage] struct {
 		filter func(REQ) bool
 	}
 }
+
+type methodServerContextKey struct{}
 
 // WithHandleMessageFilter set filter func. Requests can be modified or filtered out by the filter
 // before they are processed by the handler.
@@ -117,11 +135,10 @@ func NewMessageHandler[REQ, RESP MethodBasedMessage](
 ) (MethodBasedServer[REQ, RESP], error) {
 	s := &methodBasedServer[REQ, RESP]{
 		logger:   getLogger(sid),
-		cfg:      &cfg,
 		pool:     pool,
 		handlers: make(map[uint32]handleFuncCtx[REQ, RESP]),
 	}
-	s.cfg.Adjust()
+	cfg.Adjust()
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -132,7 +149,23 @@ func NewMessageHandler[REQ, RESP MethodBasedMessage](
 		}
 	}
 
-	rpc, err := s.cfg.NewServer(
+	// Native all-async frames reuse the codec timeout child for shutdown.
+	// Mixed frames retain the existing independent context contract.
+	s.requestCtx, s.cancelRequests = context.WithCancel(context.Background())
+	s.requestCtx = context.WithValue(s.requestCtx, methodServerContextKey{}, s)
+	defer func() {
+		if s.rpc == nil {
+			s.cancelRequests()
+		}
+	}()
+	cfg.CodecOptions = append(append([]CodecOption(nil), cfg.CodecOptions...),
+		withCodecDecodeParent(func() context.Context {
+			if s.hasSyncHandlers.Load() {
+				return nil
+			}
+			return s.requestCtx
+		}))
+	rpc, err := cfg.NewServer(
 		sid,
 		name,
 		address,
@@ -153,7 +186,17 @@ func (s *methodBasedServer[REQ, RESP]) Start() error {
 }
 
 func (s *methodBasedServer[REQ, RESP]) Close() error {
-	return s.rpc.Close()
+	s.closeOnce.Do(func() {
+		s.asyncMu.Lock()
+		s.closed = true
+		s.asyncMu.Unlock()
+
+		// Cancel before closing ingress, which may itself wait on inline work.
+		s.cancelRequests()
+		s.closeErr = s.rpc.Close()
+		s.asyncWG.Wait()
+	})
+	return s.closeErr
 }
 
 func (s *methodBasedServer[REQ, RESP]) RegisterMethod(
@@ -161,6 +204,9 @@ func (s *methodBasedServer[REQ, RESP]) RegisterMethod(
 	h HandleFunc[REQ, RESP],
 	async bool,
 ) MethodBasedServer[REQ, RESP] {
+	if !async {
+		s.hasSyncHandlers.Store(true)
+	}
 	s.handlers[method] = handleFuncCtx[REQ, RESP]{handleFunc: h, async: async, logger: s.logger}
 	return s
 }
@@ -199,35 +245,71 @@ func (s *methodBasedServer[REQ, RESP]) onMessage(
 		return cs.Write(ctx, resp)
 	}
 
-	fn := func(request RPCMessage) error {
-		defer request.Cancel()
-		req, ok := request.Message.(REQ)
-		if !ok {
-			s.logger.Fatal("received invalid message",
-				zap.Any("message", request))
-		}
-
-		buf := NewBuffer()
-		defer buf.Close()
-
-		defer s.pool.ReleaseRequest(req)
-		handlerCtx.call(
-			ctx,
-			req,
-			resp,
-			buf,
-		)
-		return cs.Write(ctx, resp)
-	}
-
+	cancelRequest := request.Cancel
 	if handlerCtx.async {
-		return ants.Submit(
-			func() {
-				fn(request)
-			},
-		)
+		s.asyncMu.Lock()
+		if s.closed {
+			s.asyncMu.Unlock()
+			if request.Cancel != nil {
+				request.Cancel()
+			}
+			s.pool.ReleaseRequest(req)
+			if s.respReleaseFunc != nil {
+				s.respReleaseFunc(resp)
+			} else {
+				s.pool.ReleaseResponse(resp)
+			}
+			return nil
+		}
+		var stopCancel func() bool
+		if request.Cancel != nil && !(request.nativeContextDone != nil &&
+			ctx.Done() == request.nativeContextDone && ctx.Value(methodServerContextKey{}) == s) {
+			// Mixed, detached or unverified contexts need the existing removable
+			// linkage. A native frame keeps its provenance across capability changes.
+			stopCancel = context.AfterFunc(s.requestCtx, request.Cancel)
+		}
+		s.asyncWG.Add(1)
+		s.asyncMu.Unlock()
+
+		run := func() {
+			defer s.asyncWG.Done()
+			if stopCancel != nil {
+				defer stopCancel()
+			}
+			s.handleRequest(ctx, req, cancelRequest, resp, handlerCtx, cs)
+		}
+		if err := ants.Submit(run); err != nil {
+			// The request is already admitted. Run it on the current callback
+			// when the shared pool rejects submission so its request/response
+			// ownership is still completed before Close can return.
+			run()
+		}
+		return nil
 	}
-	return fn(request)
+	return s.handleRequest(ctx, req, cancelRequest, resp, handlerCtx, cs)
+}
+
+func (s *methodBasedServer[REQ, RESP]) handleRequest(
+	ctx context.Context,
+	req REQ,
+	cancelRequest context.CancelFunc,
+	resp RESP,
+	handlerCtx handleFuncCtx[REQ, RESP],
+	cs ClientSession,
+) error {
+	defer cancelRequest()
+
+	buf := NewBuffer()
+	defer buf.Close()
+
+	defer s.pool.ReleaseRequest(req)
+	handlerCtx.call(
+		ctx,
+		req,
+		resp,
+		buf,
+	)
+	return cs.Write(ctx, resp)
 }
 
 func (s *methodBasedServer[REQ, RESP]) getHandleFunc(
