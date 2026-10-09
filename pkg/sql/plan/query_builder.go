@@ -11969,14 +11969,21 @@ func (builder *QueryBuilder) bindView(
 
 	defaultDatabase := viewData.DefaultDatabase
 	if obj.PubInfo != nil {
-		defaultDatabase = obj.SubscriptionName
 		subscription := builder.compCtx.GetQueryingSubscription()
-		if subscription == nil || subscription.AccountId != obj.PubInfo.TenantId {
-			subscription = &SubscriptionMeta{
-				AccountId: obj.PubInfo.TenantId,
-				DbName:    viewData.DefaultDatabase,
-				SubName:   obj.SubscriptionName,
-				Tables:    pubsub.TableAll,
+		if builder.GetContext().Value(viewSchemaContextKey{}) != nil {
+			subscription, defaultDatabase, err = viewSchemaSubscriptionContext(builder.GetContext(), obj, subscription, defaultDatabase)
+			if err != nil {
+				return 0, err
+			}
+		} else {
+			defaultDatabase = obj.SubscriptionName
+			if subscription == nil || subscription.AccountId != obj.PubInfo.TenantId {
+				subscription = &SubscriptionMeta{
+					AccountId: obj.PubInfo.TenantId,
+					DbName:    viewData.DefaultDatabase,
+					SubName:   obj.SubscriptionName,
+					Tables:    pubsub.TableAll,
+				}
 			}
 		}
 		previousSubscription := builder.compCtx.GetQueryingSubscription()

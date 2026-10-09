@@ -55,6 +55,13 @@ type viewSchemaTestCompiler struct {
 	lower           int64
 	defaultDatabase *string
 	rootSQL         string
+	subscription    *SubscriptionMeta
+	resolveCatalog  func(string, string, *Snapshot) (*ObjectRef, *TableDef, error)
+}
+
+func (c *viewSchemaTestCompiler) GetQueryingSubscription() *SubscriptionMeta { return c.subscription }
+func (c *viewSchemaTestCompiler) SetQueryingSubscription(sub *SubscriptionMeta) {
+	c.subscription = sub
 }
 
 func (c *viewSchemaTestCompiler) GetLowerCaseTableNames() int64 { return c.lower }
@@ -88,6 +95,9 @@ func (c *viewSchemaTestCompiler) Resolve(database, name string, snapshot *Snapsh
 		if err := c.resolve(c.GetContext(), database, name, snapshot); err != nil {
 			return nil, nil, err
 		}
+	}
+	if c.resolveCatalog != nil {
+		return c.resolveCatalog(database, name, snapshot)
 	}
 	if def := c.tables[database+"."+name]; def != nil {
 		return c.objects[database+"."+name], def, nil
@@ -762,6 +772,134 @@ func TestViewSchemaRequestRequiresPersistedDefaultDatabase(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestViewSchemaRequestSubscriptionPublisherIsNotCreationDatabase(t *testing.T) {
+	for _, nested := range []bool{false, true} {
+		for _, creationDatabase := range []string{"", "elsewhere"} {
+			for _, shadow := range []bool{false, true} {
+				for _, disabled := range []bool{false, true} {
+					t.Run(fmt.Sprintf("nested=%t/creation=%q/shadow=%t/memoOff=%t", nested, creationDatabase, shadow, disabled), func(t *testing.T) {
+						f := newViewSchemaTestFixture(t)
+						published := f.addDefinition(t, "source_v", "create view pub.source_v as select n_name as label from pub.nation")
+						published.DbName, published.DbId = "pub", 8
+						var data ViewData
+						require.NoError(t, json.Unmarshal([]byte(published.ViewSql.View), &data))
+						data.DefaultDatabase = creationDatabase
+						encoded, err := json.Marshal(data)
+						require.NoError(t, err)
+						published.ViewSql.View = string(encoded)
+						publishedRef := &ObjectRef{Db: 8, Obj: int64(published.TblId), SchemaName: "pub", ObjName: "source_v", SubscriptionName: "sub", PubInfo: &planpb.PubInfo{TenantId: 17}}
+						publisherSource := proto.Clone(f.compiler.tables["nation"]).(*TableDef)
+						publisherSource.DbName, publisherSource.DbId = "pub", 8
+						publisherSource.TblId, publisherSource.LogicalId = 99, 199
+						publisherSource.Cols[1].Typ = planpb.Type{Id: int32(types.T_int64)}
+						publisherRef := &ObjectRef{Db: 8, Obj: 99, SchemaName: "pub", ObjName: "nation", SubscriptionName: "sub", PubInfo: &planpb.PubInfo{TenantId: 17}}
+						for _, root := range []string{"first_v", "second_v"} {
+							f.addView(t, root, "select label from sub.source_v")
+						}
+						// Match frontend's GetSubscriptionMeta routing: qualified
+						// publisher names select that tenant only when DbName matches
+						// the publication. Otherwise lookup stays subscriber-local.
+						f.compiler.resolveCatalog = func(database, name string, _ *Snapshot) (*ObjectRef, *TableDef, error) {
+							if database == "sub" && name == "source_v" {
+								return publishedRef, published, nil
+							}
+							if database == "pub" && name == "nation" {
+								sub := f.compiler.GetQueryingSubscription()
+								if sub != nil && sub.AccountId == 17 && sub.DbName == "pub" && sub.SubName == "sub" {
+									return publisherRef, publisherSource, nil
+								}
+								if shadow {
+									return f.compiler.objects["nation"], f.compiler.tables["nation"], nil
+								}
+								return nil, nil, nil
+							}
+							return f.compiler.objects[name], f.compiler.tables[name], nil
+						}
+						r := f.request(t)
+						r.memoDisabled = disabled
+						for i := 0; i < 2; i++ {
+							database, name := "sub", "source_v"
+							if nested {
+								database, name = "tpch", []string{"first_v", "second_v"}[i]
+							}
+							result, err := r.Describe(database, name, nil)
+							if result != nil {
+								t.Cleanup(result.Release)
+							}
+							require.NoError(t, err)
+							columns, err := result.Columns()
+							require.NoError(t, err)
+							require.Equal(t, int32(types.T_int64), columns[0].Typ.Id, "never bind subscriber's VARCHAR shadow")
+							dependencies, err := result.Dependencies()
+							require.NoError(t, err)
+							found := false
+							for _, dep := range dependencies {
+								if dep.RelationName == "nation" {
+									found = true
+									require.Equal(t, uint32(17), dep.AccountID)
+									require.Equal(t, "pub", dep.DatabaseName)
+									require.Equal(t, uint64(99), dep.RelationID)
+								}
+							}
+							require.True(t, found)
+							result.Release()
+							require.Nil(t, f.compiler.GetQueryingSubscription(), "restore borrowed compiler's subscription on return")
+						}
+						injected := errors.New("publisher catalog failure")
+						f.compiler.resolve = func(_ context.Context, database, name string, _ *Snapshot) error {
+							if database == "pub" && name == "nation" {
+								return injected
+							}
+							return nil
+						}
+						r.memoDisabled = true
+						database, name := "sub", "source_v"
+						if nested {
+							database, name = "tpch", "first_v"
+						}
+						result, err := r.Describe(database, name, nil)
+						if result != nil {
+							result.Release()
+						}
+						require.ErrorIs(t, err, injected)
+						require.Nil(t, result)
+						require.Nil(t, f.compiler.GetQueryingSubscription(), "restore subscription on binding failure too")
+					})
+				}
+			}
+		}
+	}
+}
+
+func TestViewSchemaSubscriptionContextRequiresMatchingIdentity(t *testing.T) {
+	obj := &ObjectRef{SchemaName: "pub", SubscriptionName: "sub", PubInfo: &planpb.PubInfo{TenantId: 17}}
+	for _, previous := range []*SubscriptionMeta{
+		{AccountId: 17, DbName: "pub", SubName: "sub", Tables: "source_v,nation"},
+		{AccountId: 18, DbName: "pub", SubName: "sub"},
+		{AccountId: 17, DbName: "different_publication", SubName: "sub"},
+		{AccountId: 17, DbName: "PUB", SubName: "sub"},
+		{AccountId: 17, DbName: "pub", SubName: "different_subscription"},
+	} {
+		sub, database, err := viewSchemaSubscriptionContext(t.Context(), obj, previous, "")
+		require.NoError(t, err)
+		require.Empty(t, database, "publisher routing must not erase known no-USE context")
+		require.Equal(t, int32(17), sub.AccountId)
+		require.Equal(t, "pub", sub.DbName)
+		require.Equal(t, "sub", sub.SubName)
+		if previous.AccountId == 17 && previous.DbName == "pub" && previous.SubName == "sub" {
+			require.Same(t, previous, sub, "retain an exact context and its publication membership")
+		} else {
+			require.NotSame(t, previous, sub)
+		}
+	}
+	_, database, err := viewSchemaSubscriptionContext(t.Context(), obj, nil, "pub")
+	require.NoError(t, err)
+	require.Equal(t, "sub", database)
+	obj.SchemaName = ""
+	_, _, err = viewSchemaSubscriptionContext(t.Context(), obj, nil, "")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 }
 
 func TestViewSchemaRequestNoUseCreationContext(t *testing.T) {

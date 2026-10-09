@@ -28,6 +28,27 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+// viewSchemaSubscriptionContext keeps publisher identity separate from the
+// View's creation environment. Resolve supplies the publisher schema; a saved
+// no-USE (or different) default database cannot identify that publication.
+func viewSchemaSubscriptionContext(ctx context.Context, obj *ObjectRef, previous *SubscriptionMeta, defaultDatabase string) (*SubscriptionMeta, string, error) {
+	if obj.SchemaName == "" || obj.SubscriptionName == "" {
+		return nil, "", moerr.NewInvalidInput(ctx, "subscription View has no resolved publisher database or subscription name")
+	}
+	subscription := previous
+	if subscription == nil || subscription.AccountId != obj.PubInfo.TenantId ||
+		subscription.DbName != obj.SchemaName || subscription.SubName != obj.SubscriptionName {
+		subscription = &SubscriptionMeta{
+			AccountId: obj.PubInfo.TenantId, DbName: obj.SchemaName,
+			SubName: obj.SubscriptionName, Tables: pubsub.TableAll,
+		}
+	}
+	if defaultDatabase == obj.SchemaName {
+		defaultDatabase = obj.SubscriptionName
+	}
+	return subscription, defaultDatabase, nil
+}
+
 type viewSchemaContextKey struct{}
 type viewSchemaDerivation struct {
 	requiredProtocol                                    int64
@@ -220,13 +241,13 @@ func (s *viewSchemaDerivation) describe(database, name string, snapshot *Snapsho
 	}
 	if obj.PubInfo != nil {
 		previousSub := s.compiler.GetQueryingSubscription()
-		subscription := previousSub
-		if subscription == nil || subscription.AccountId != obj.PubInfo.TenantId {
-			subscription = &SubscriptionMeta{AccountId: obj.PubInfo.TenantId, DbName: parsed.data.DefaultDatabase, SubName: obj.SubscriptionName, Tables: pubsub.TableAll}
+		subscription, defaultDatabase, err := viewSchemaSubscriptionContext(s.compiler.ctx, obj, previousSub, parsed.data.DefaultDatabase)
+		if err != nil {
+			return nil, err
 		}
 		s.compiler.SetQueryingSubscription(subscription)
 		defer s.compiler.SetQueryingSubscription(previousSub)
-		parsed.ctx.defaultDatabase = obj.SubscriptionName
+		parsed.ctx.defaultDatabase = defaultDatabase
 	}
 	s.lower = parsed.ctx.lowerCaseTableNames
 	s.memoEligible = transparentViewProjection(parsed.selectStmt) && obj.PubInfo == nil && s.compiler.GetQueryingSubscription() == nil
