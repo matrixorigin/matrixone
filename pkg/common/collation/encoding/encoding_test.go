@@ -99,7 +99,11 @@ func TestConvertOwnershipAndPolicies(t *testing.T) {
 		{"binary-result", collation.CharsetBinary, collation.CharsetASCII, Result, "\x00\xff", "\x00\xff", false, false},
 		{"binary-destination", collation.CharsetUTF8MB4, collation.CharsetBinary, ConvertUsing, "\xff", "\xff", false, false},
 		{"convert-invalid", collation.CharsetBinary, collation.CharsetUTF8MB4, ConvertUsing, "\xff", "", false, true},
-		{"convert-ascii-invalid", collation.CharsetBinary, collation.CharsetASCII, ConvertUsing, "\x80", "", false, true},
+		{"convert-binary-ascii-replacement", collation.CharsetBinary, collation.CharsetASCII, ConvertUsing, "\x80", "?", true, false},
+		{"convert-binary-ascii-byte-units", collation.CharsetBinary, collation.CharsetASCII, ConvertUsing, "é😀", "??????", true, false},
+		{"convert-binary-ascii-boundary", collation.CharsetBinary, collation.CharsetASCII, ConvertUsing, "\x00\x7f\xff", "\x00\x7f?", true, false},
+		{"convert-binary-ascii-borrow", collation.CharsetBinary, collation.CharsetASCII, ConvertUsing, "a\x00\x7f", "a\x00\x7f", false, false},
+		{"convert-binary-ascii-empty", collation.CharsetBinary, collation.CharsetASCII, ConvertUsing, "", "", false, false},
 		{"convert-valid", collation.CharsetBinary, collation.CharsetUTF8MB4, ConvertUsing, "é😀", "é😀", false, false},
 		{"connection-replacement", collation.CharsetUTF8MB4, collation.CharsetASCII, Connection, "é😀", "??", true, false},
 		{"result-replacement", collation.CharsetUTF8MB4, collation.CharsetASCII, Result, "é😀", "??", true, false},
@@ -160,6 +164,9 @@ func TestConvertFailureCleanup(t *testing.T) {
 		{"negative-limit", context.Background(), mp, collation.CharsetUTF8MB4, collation.CharsetASCII, Result, "a", -1},
 		{"identity-limit", context.Background(), mp, collation.CharsetBinary, collation.CharsetBinary, Identity, "ab", 1},
 		{"conversion-limit", context.Background(), mp, collation.CharsetUTF8MB4, collation.CharsetASCII, Result, "éé", 1},
+		{"binary-ascii-conversion-limit", context.Background(), mp, collation.CharsetBinary, collation.CharsetASCII, ConvertUsing, "\x80", 0},
+		{"binary-ascii-nil-pool", context.Background(), nil, collation.CharsetBinary, collation.CharsetASCII, ConvertUsing, "\x80", 1},
+		{"binary-ascii-cancel-after-allocation", &cancelOnCheck{Context: context.Background(), cancelAt: 4}, mp, collation.CharsetBinary, collation.CharsetASCII, ConvertUsing, "\x80", 1},
 		{"nil-pool", context.Background(), nil, collation.CharsetUTF8MB4, collation.CharsetASCII, Result, "é", 2},
 		{"unsupported-source", context.Background(), mp, collation.CharsetGBK, collation.CharsetASCII, Result, "", 0},
 		{"unsupported-target", context.Background(), mp, collation.CharsetBinary, collation.CharsetUTF8MB3, ConvertUsing, "", 0},
@@ -250,7 +257,7 @@ func TestConvertMySQLOracle(t *testing.T) {
 			query := append(append([]byte("SELECT '"), input...), '\'')
 			if tc.Policy == ConvertUsing {
 				if tc.Src == collation.CharsetBinary {
-					query = []byte("SELECT CONVERT(_binary x'" + tc.Input + "' USING utf8mb4)")
+					query = []byte("SELECT CONVERT(_binary x'" + tc.Input + "' USING " + tc.Dst.Name() + ")")
 				} else {
 					query = append([]byte("SELECT CONVERT(_"+tc.Src.Name()+"'"), input...)
 					query = append(query, []byte("' USING "+tc.Dst.Name()+")")...)

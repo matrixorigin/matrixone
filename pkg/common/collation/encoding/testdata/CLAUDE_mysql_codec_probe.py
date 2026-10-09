@@ -16,7 +16,7 @@ SPEC.loader.exec_module(P)
 INPUTS = (
     "ff", "ff41", "ff4142", "ff414243", "f5414243", "f8414243",
     "c3", "c341", "e2", "e241", "e24142", "f0", "f041", "f04142", "f0414243",
-    "80", "80414243", "41ff42", "41c342", "41e28242", "41eda08042",
+    "", "7f", "80", "80414243", "41ff42", "41c342", "41e28242", "41eda08042",
     "41f490808042", "418042", "41c08042", "c3a9f09f9880", "7f80ff", "00",
 )
 # 枚举来自 metadata.go / encoding.go，不使用第二份名称准入表。
@@ -27,6 +27,7 @@ BOUNDARIES = (
     ("ascii-source", 2, 4, 1, b"SET NAMES utf8mb4; SET character_set_client=ascii"),
     ("convert-utf8-ascii", 4, 2, 3, b"SET NAMES utf8mb4"),
     ("convert-ascii-utf8", 2, 4, 3, b"SET NAMES utf8mb4"),
+    ("convert-binary-ascii", 1, 2, 3, b"SET NAMES utf8mb4"),
 )
 
 
@@ -54,8 +55,9 @@ def capture():
                 state = P.query(conn, "set", setting)
                 if any("error" in item for item in state["result"]):
                     raise RuntimeError("参考会话设置失败")
-                if name == "convert":
-                    sql = b"SELECT CONVERT(_binary x'" + raw.encode("ascii") + b"' USING utf8mb4)"
+                if src == 1:
+                    target = b"ascii" if dst == 2 else b"utf8mb4"
+                    sql = b"SELECT CONVERT(_binary x'" + raw.encode("ascii") + b"' USING " + target + b")"
                 elif name == "convert-utf8-ascii":
                     sql = b"SELECT CONVERT(_utf8mb4'" + bytes.fromhex(raw) + b"' USING ascii)"
                 elif name == "convert-ascii-utf8":

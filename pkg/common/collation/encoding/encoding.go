@@ -105,9 +105,9 @@ func Validate(ctx context.Context, charset collation.Charset, input []byte) erro
 // an allocation. limit bounds output bytes, including borrowed output.
 //
 // Binary destinations and same-encoding connection/result paths preserve bytes.
-// CONVERT from binary interprets those bytes in the target repertoire and yields
-// NULL on invalid input. Other cross-encoding paths replace unrepresentable or
-// malformed characters, stopping at an incomplete source sequence, as MySQL
+// CONVERT from binary to UTF8MB4 yields NULL on invalid UTF-8; to ASCII it
+// replaces each high-bit byte with '?'. Other cross-encoding paths replace
+// unrepresentable or malformed characters, stopping at an incomplete source sequence, as MySQL
 // does. Strict MB3 conversion and GBK are deliberately not activated here.
 func Convert(ctx context.Context, pool *mpool.MPool, src, dst collation.Charset, policy Policy, input []byte, limit int64) (output []byte, owned bool, isNull bool, err error) {
 	if err = ctx.Err(); err != nil {
@@ -122,7 +122,7 @@ func Convert(ctx context.Context, pool *mpool.MPool, src, dst collation.Charset,
 	if limit > mpool.MaxAllocationSize() {
 		limit = mpool.MaxAllocationSize()
 	}
-	if policy == ConvertUsing && src == collation.CharsetBinary && dst != collation.CharsetBinary {
+	if policy == ConvertUsing && src == collation.CharsetBinary && dst == collation.CharsetUTF8MB4 {
 		if err = Validate(ctx, dst, input); err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
 				return nil, false, true, nil
@@ -130,7 +130,8 @@ func Convert(ctx context.Context, pool *mpool.MPool, src, dst collation.Charset,
 			return nil, false, false, err
 		}
 	}
-	if src == dst || src == collation.CharsetBinary || dst == collation.CharsetBinary {
+	binaryASCIIConvert := policy == ConvertUsing && src == collation.CharsetBinary && dst == collation.CharsetASCII
+	if !binaryASCIIConvert && (src == dst || src == collation.CharsetBinary || dst == collation.CharsetBinary) {
 		if int64(len(input)) > limit {
 			return nil, false, false, moerr.NewInvalidInput(ctx, "encoding output exceeds limit")
 		}
@@ -187,7 +188,9 @@ func transcode(ctx context.Context, src, dst collation.Charset, input, output []
 		}
 		r, width := rune(input[offset]), 1
 		replace := false
-		if src == collation.CharsetASCII {
+		if src == collation.CharsetASCII || src == collation.CharsetBinary {
+			// Binary-to-ASCII CONVERT treats each byte as one source unit,
+			// including bytes that together form a valid UTF-8 character.
 			replace = r > 0x7f
 		} else {
 			expected := 1
