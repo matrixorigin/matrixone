@@ -1330,7 +1330,7 @@ function run_engine_race_shards(){
         set +m
         restore_ut_term_trap "${saved_term_trap}"
         if (( term_pending != 0 )); then
-            drain_engine_shards || return 125
+            drain_engine_shards || exit 125
             return 143
         fi
         return 0
@@ -1827,8 +1827,7 @@ function run_embedded_prebuild(){
             if ! : > "${package_report}"; then
                 trap '' TERM
                 if ! terminate_ut_process_groups 20 "${child_pids[@]}"; then
-                    restore_ut_term_trap "${previous_term_trap}"
-                    return 125
+                    exit 125
                 fi
                 wait 2>/dev/null || true
                 restore_ut_term_trap "${previous_term_trap}"
@@ -1978,16 +1977,23 @@ function run_prebuilt_race_commands(){
     local -a reports=() expired=()
     previous_term_trap=$(trap -p TERM)
     function stop_prebuilt_race_commands(){
+        # Failed ownership is terminal: keep TERM ignored until the parent
+        # receives 125, rather than restoring a trap that can replace it.
         trap '' TERM
-        if ! terminate_ut_process_groups 20 ${child_pids[@]+"${child_pids[@]}"} >&2; then return 125; fi
+        if ! terminate_ut_process_groups 20 ${child_pids[@]+"${child_pids[@]}"} >&2; then exit 125; fi
         wait 2>/dev/null || true
     }
     function cancel_prebuilt_race_commands(){
-        local cancel_status=143
-        stop_prebuilt_race_commands || cancel_status=125
+        local expired_file
+        stop_prebuilt_race_commands
+        # Watchdogs are now joined: a published failure remains authoritative
+        # even when cancellation interrupted its normal-loop consumption.
+        for expired_file in ${expired[@]+"${expired[@]}"}; do
+            if [[ -e "${expired_file}.drain" ]]; then exit 125; fi
+        done
         # Parent consumes the joined per-command JSON through append_ut_report.
         # No partial merge or success marker can hide interrupted commands.
-        exit "${cancel_status}"
+        exit 143
     }
     trap cancel_prebuilt_race_commands TERM
     execution_term_trap=$(trap -p TERM)
@@ -2027,10 +2033,9 @@ function run_prebuilt_race_commands(){
                 break
             fi
             if ! exec 7>"${reports[index]}"; then
-                child_status=1
-                stop_prebuilt_race_commands || child_status=125
+                stop_prebuilt_race_commands
                 restore_ut_term_trap "${previous_term_trap}"
-                return "${child_status}"
+                return 1
             fi
             checkpoint_ut_event start "${stage}" "${race_packages[index]}" "" \
                 "package_index=${index} prebuilt=true parallel=${parallel}"
@@ -2077,10 +2082,9 @@ function run_prebuilt_race_commands(){
         for (( index=0; index<next; index++ )); do
             [[ "${test_pids[index]:-0}" != 0 ]] || continue
             if [[ -e "${expired[index]}.drain" ]]; then
-                stop_prebuilt_race_commands || child_status=125
-                restore_ut_term_trap "${previous_term_trap}"
+                stop_prebuilt_race_commands
                 rm -f "${expired[index]}.drain"
-                return 125
+                exit 125
             fi
             # Poll all owned groups, including the one-process path. A direct
             # wait can block forever while a descendant retains the pipe; the
@@ -2092,18 +2096,16 @@ function run_prebuilt_race_commands(){
             child_status=0
             wait "${test_pids[index]}" || child_status=$?
             if ! wait_for_ut_process_group "${test_pids[index]}" 20 >&2; then
-                child_status=1
-                stop_prebuilt_race_commands || child_status=125
+                stop_prebuilt_race_commands
                 restore_ut_term_trap "${previous_term_trap}"
-                return "${child_status}"
+                return 1
             fi
             child_pids[index*2]=0
             terminate_ut_process_group "${watchdog_pids[index]}" TERM
             if ! wait_for_ut_process_group "${watchdog_pids[index]}" 20 >&2; then
-                child_status=1
-                stop_prebuilt_race_commands || child_status=125
+                stop_prebuilt_race_commands
                 restore_ut_term_trap "${previous_term_trap}"
-                return "${child_status}"
+                return 1
             fi
             wait "${watchdog_pids[index]}" 2>/dev/null || true
             child_pids[index*2+1]=0
@@ -2167,9 +2169,9 @@ function run_race_inventory_with_deadline(){
         local abort_status=$1
         terminate_ut_process_group "${pid}" TERM
         if ! wait_for_ut_process_group "${pid}" 20 >&2; then
+            trap '' TERM
             logger "ERR" "race inventory process group ${pid} did not drain; retaining ${inventory}"
-            restore_ut_term_trap "${previous_term_trap}"
-            return 125
+            exit 125
         fi
         wait "${pid}" 2>/dev/null || true
         restore_ut_term_trap "${previous_term_trap}"

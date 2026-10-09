@@ -557,29 +557,99 @@ exit 97
 }
 
 func TestEngineRaceShardReportOpenFailureDrainsEarlierShard(t *testing.T) {
-	transform := func(text string) string {
-		const anchor = "            if ! exec 7>\"${reports[index]}\"; then\n"
-		if got := strings.Count(text, anchor); got != 1 {
-			t.Fatalf("shard report open anchor count = %d, want 1", got)
-		}
-		return strings.Replace(text, anchor,
-			"        if (( index == 1 )); then while [[ ! -f \"${CASE_DIR}/engine-tool-ready\" ]]; do sleep 0.01; done; mkdir -p \"${CASE_DIR}/blocked-report\"; reports[index]=\"${CASE_DIR}/blocked-report\"; fi\n"+anchor, 1)
-	}
-	script := `source ./run_ut.sh UT
+	for _, mode := range []string{"drained", "failed-drain", "failed-drain-term", "marker-drain-term", "marker-cancel-term"} {
+		t.Run(mode, func(t *testing.T) {
+			transform := func(text string) string {
+				const anchor = "            if ! exec 7>\"${reports[index]}\"; then\n"
+				if strings.Count(text, anchor) != 1 {
+					t.Fatal("missing unique shard report-open boundary")
+				}
+				text = strings.Replace(text, anchor, `            if (( index == 1 )); then
+                read -r -t 5 _ <&8 || exit 89
+                if [[ "$MODE" == marker-* ]]; then
+                    touch "${expired[0]}.drain"
+                    if [[ "$MODE" == marker-cancel-term ]]; then
+                        touch "$CASE_DIR/term-sent"
+                        kill -TERM "$$"
+                    fi
+                else
+                    mkdir "$CASE_DIR/blocked-report"
+                    reports[index]="$CASE_DIR/blocked-report"
+                fi
+            fi
+`+anchor, 1)
+				for _, pid := range []string{"test_pids", "watchdog_pids"} {
+					anchor := "            " + pid + "[index]=$!\n"
+					if strings.Count(text, anchor) != 1 {
+						t.Fatal("missing unique execution owner publication")
+					}
+					text = strings.Replace(text, anchor, anchor+"            printf '%s\\n' \"$!\" >> \"$CASE_DIR/owned-pids\"\n", 1)
+				}
+				return text
+			}
+			script := `source ./run_ut.sh UT
+function logger() { :; }
+mkfifo "$CASE_DIR/ready"
+exec 8<>"$CASE_DIR/ready"
+cat > "$CASE_DIR/helper.sh" <<'CHILD'
+cd "$CASE_DIR/optools"
+source ./run_ut.sh UT
 function logger() { :; }
 ENGINE_RACE_REPORT="$CASE_DIR/engine-report"
 ENGINE_RACE_REPORT_READY="$ENGINE_RACE_REPORT.ready"
 ENGINE_RACE_TEST_BINARY="$CASE_DIR/engine.test"
+function exit() {
+ if [[ "$1" == 125 && "$MODE" == *-term ]]; then
+  touch "$CASE_DIR/term-sent"
+  kill -TERM "$$"
+ fi
+ builtin exit "$@"
+}
+if [[ "$MODE" == failed-drain* ]]; then
+ function terminate_ut_process_groups() {
+  function wait() { touch "$CASE_DIR/forbidden-join"; builtin wait "$@"; }
+  return 1
+ }
+fi
 run_engine_race_shards example/engine 2
 status=$?
-[[ "$status" == 1 ]] || exit 90
-[[ -s "$CASE_DIR/engine-tool.pid" ]] || exit 91
-tool_pid=$(<"$CASE_DIR/engine-tool.pid")
-if kill -0 "$tool_pid" 2>/dev/null || kill -0 -- -"$tool_pid" 2>/dev/null; then
-    exit 92
+touch "$CASE_DIR/helper-returned"
+exit "$status"
+CHILD
+function run_engine_race_shards() { exec bash "$CASE_DIR/helper.sh"; }
+function cleanup_check() {
+ local status=$? pid
+ if [[ -f "$CASE_DIR/owned-pids" ]]; then
+  while read -r pid; do
+   terminate_ut_process_group "$pid" KILL
+   wait_for_ut_process_group "$pid" 1 || status=92
+  done < "$CASE_DIR/owned-pids"
+ fi
+ exit "$status"
+}
+trap cleanup_check EXIT
+ENGINE_RACE_REPORT="$CASE_DIR/engine-report"
+ENGINE_RACE_REPORT_READY="$ENGINE_RACE_REPORT.ready"
+ENGINE_RACE_TEST_BINARY="$CASE_DIR/engine.test"
+start_engine_race example/engine 2
+status=0
+join_ut_owner ENGINE_RACE_JOB_PID ENGINE_RACE_DRAIN_FAILED || status=$?
+[[ -z "$ENGINE_RACE_JOB_PID" ]] || exit 90
+if [[ "$MODE" == drained ]]; then
+ [[ "$status" == 1 && -e "$CASE_DIR/helper-returned" ]] || exit 91
+ if ut_process_group_alive "$(<"$CASE_DIR/engine-tool.pid")"; then exit 92; fi
+ exit 0
 fi
+[[ "$status" == 125 && -f "$ENGINE_RACE_TEST_BINARY" && -f "$ENGINE_RACE_REPORT.00" && ! -e "$CASE_DIR/helper-returned" && ! -e "$CASE_DIR/forbidden-join" ]] || exit 93
+if [[ "$MODE" == failed-drain* ]]; then ut_process_group_alive "$(<"$CASE_DIR/engine-tool.pid")" || exit 94; fi
+if [[ "$MODE" == *-term ]]; then [[ -f "$CASE_DIR/term-sent" ]] || exit 95; fi
+consume_engine_race_report; [[ "$?" == 125 ]] || exit 96
+start_plan_race example/plan; [[ "$?" == 125 ]] || exit 97
+trap handle_ut_termination TERM
+kill -TERM "$$"
+exit 98
 `
-	mock := `#!/bin/bash
+			mock := `#!/bin/bash
 if [[ "$1" == version ]]; then exit 0; fi
 if [[ "$1" == list ]]; then
     printf '%s\t%s\n' "$CASE_DIR" 'example/engine'
@@ -598,15 +668,24 @@ if [[ "$1" == test && "$*" == *' -c '* ]]; then
 fi
 if [[ "$1" == tool ]]; then
     printf '%s\n' "$$" > "$CASE_DIR/engine-tool.pid"
-    touch "$CASE_DIR/engine-tool-ready"
+    printf 'ready\n' >&8
     trap 'exit 143' TERM
     while :; do sleep 0.01; done
 fi
 exit 99
 `
-	out, err := scheduleHarnessWithMockTransform(t, script, mock, transform)
-	if err != nil {
-		t.Fatalf("engine shard report-open failure: %v\n%s", err, out)
+			out, err := scheduleHarnessWithMockTransform(t, script, mock, transform, "MODE="+mode)
+			if mode == "drained" {
+				if err != nil {
+					t.Fatalf("drained report-open failure: %v\n%s", err, out)
+				}
+				return
+			}
+			exit, ok := err.(*exec.ExitError)
+			if !ok || exit.ExitCode() != 125 {
+				t.Fatalf("prebuilt failed-drain transfer: %v\n%s", err, out)
+			}
+		})
 	}
 }
 

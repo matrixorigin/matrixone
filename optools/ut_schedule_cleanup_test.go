@@ -444,9 +444,10 @@ function cleanup_check() {
   [[ -e "$(<"$CASE_DIR/artifact")" && ! -e "$CASE_DIR/joined" ]] || status=92
  fi
  (( $(wc -l < "$CASE_DIR/drains") == 1 )) || status=93
- printf 'OWNERSHIP %s\n' "$status"
+ printf 'OWNERSHIP %s\n' "$status" >&7
  exit "$status"
 }
+exec 7>&1
 trap cleanup_check EXIT
 eval "$(declare -f terminate_ut_process_groups | sed '1s/terminate_ut_process_groups/original_terminate_ut_process_groups/')"
 function terminate_ut_process_groups() {
@@ -487,36 +488,167 @@ esac
 	}
 }
 
-func TestPrebuildReportOpenFailureRetainsUndrainedArtifacts(t *testing.T) {
-	transform := func(text string) string {
-		const anchor = "            child_pids[package_index]=$!\n"
-		if strings.Count(text, anchor) != 1 {
-			t.Fatal("missing prebuild publication")
+func TestHelperFailedDrainKeepsParentOwnership(t *testing.T) {
+	for _, helper := range []string{"engine", "prebuild", "inventory"} {
+		modes := []string{"failed-drain", "failed-drain-term"}
+		if helper == "prebuild" {
+			modes = append(modes, "drained")
 		}
-		return strings.Replace(text, anchor, anchor+"            ut_test_prebuild_registered\n", 1)
-	}
-	script := `source ./run_ut.sh UT
+		for _, mode := range modes {
+			t.Run(helper+"/"+mode, func(t *testing.T) {
+				transform := func(text string) string {
+					anchor, hook := "        child_pid=$!\n", "        ut_test_publication \"$!\" \"$*\"\n"
+					if helper == "prebuild" {
+						anchor = "            child_pids[package_index]=$!\n"
+						hook = "            ut_test_publication \"$!\" ''\n"
+					}
+					if helper == "inventory" {
+						anchor = "    pid=$!\n    set +m\n"
+						hook = "    pid=$!\n    ut_test_publication \"$pid\" \"\"\n    set +m\n"
+					}
+					if strings.Count(text, anchor) != 1 {
+						t.Fatal("missing unique helper publication")
+					}
+					if helper == "inventory" {
+						return strings.Replace(text, anchor, hook, 1)
+					}
+					return strings.Replace(text, anchor, hook+anchor, 1)
+				}
+				script := `source ./run_ut.sh UT
 function logger() { :; }
 mkfifo "$CASE_DIR/ready" "$CASE_DIR/hold"
 exec 8<>"$CASE_DIR/ready" 9<>"$CASE_DIR/hold"
-function ut_test_prebuild_registered() {
- read -r _ <&8
- printf '%s\n' "${child_pids[package_index]}" > "$CASE_DIR/child.pid"
- # Fail the second report open after the first child is admitted.
- mkdir "$CASE_DIR/prebuild.build.1"
- function wait() { touch "$CASE_DIR/joined"; builtin wait "$@"; }
+cat > "$CASE_DIR/helper.sh" <<'CHILD'
+cd "$CASE_DIR/optools"
+source ./run_ut.sh UT
+function logger() { :; }
+ENGINE_RACE_REPORT="$PROBE_REPORT"
+ENGINE_RACE_TEST_BINARY="$PROBE_BINARY"
+# Both the old restored-trap return and the new terminal exit reach this
+# injection. Require the marker so removing the old window cannot empty it.
+function exit() {
+ if [[ "$1" == 125 && "$MODE" == failed-drain-term ]]; then
+  touch "$CASE_DIR/term-sent"
+  kill -TERM "$$"
+ fi
+ builtin exit "$@"
+}
+function wait_for_ut_process_group() {
+ touch "$CASE_DIR/drain-checked"
+ function wait() { touch "$CASE_DIR/forbidden-join"; builtin wait "$@"; }
+ return 1
 }
 eval "$(declare -f terminate_ut_process_groups | sed '1s/terminate_ut_process_groups/original_terminate_ut_process_groups/')"
-function terminate_ut_process_groups() { original_terminate_ut_process_groups "$@" || return $?; return 1; }
-status=0
-run_embedded_prebuild $'example/a\nexample/b' 2 "$CASE_DIR/prebuild" || status=$?
-[[ "$status" == 125 && ! -e "$CASE_DIR/joined" ]] || exit 90
-[[ -f "$CASE_DIR/prebuild.build.0" && -f "$CASE_DIR/prebuild.package.0.test" ]] || exit 91
-! ut_process_group_alive "$(<"$CASE_DIR/child.pid")" || exit 92
+function terminate_ut_process_groups() {
+ if [[ "$MODE" == drained ]]; then original_terminate_ut_process_groups "$@"; return $?; fi
+ touch "$CASE_DIR/drain-checked"
+ function wait() { touch "$CASE_DIR/forbidden-join"; builtin wait "$@"; }
+ return 1
+}
+function ut_test_publication() {
+ if [[ "$HELPER" == engine && "$2" != *'go test'* ]]; then return; fi
+ read -r -t 5 _ <&8 || exit 90
+ printf '%s\n' "$1" > "$CASE_DIR/child.pid"
+ if [[ "$HELPER" == engine || "$HELPER" == inventory ]]; then
+  printf 'retained\n' > "$ENGINE_RACE_REPORT"
+  kill -TERM "$$"
+ else
+  # Fail report2 after admitting the first compiler, whose binary is live.
+  mkdir "$report_base.build.1"
+ fi
+}
+if [[ "$HELPER" == engine ]]; then
+ run_engine_race_shards example/engine 1
+elif [[ "$HELPER" == prebuild ]]; then
+ run_embedded_prebuild $'example/a\nexample/b' 2 "$PROBE_REPORT"
+else
+ cat > "$CASE_DIR/list.sh" <<'LIST'
+#!/bin/bash
+trap '' TERM
+printf 'discovery diagnostic\n'
+printf 'ready\n' >&8
+read -r _ <&9
+LIST
+ chmod +x "$CASE_DIR/list.sh"
+ run_race_inventory_with_deadline "$CASE_DIR" "$CASE_DIR/list.sh" "$CASE_DIR/inventory" "$(( $(date +%s) + 10 ))"
+fi
+status=$?
+touch "$CASE_DIR/helper-returned"
+exit "$status"
+CHILD
+function run_engine_race_shards() {
+ export PROBE_REPORT="$ENGINE_RACE_REPORT" PROBE_BINARY="$ENGINE_RACE_TEST_BINARY"
+ exec bash "$CASE_DIR/helper.sh"
+}
+function run_embedded_prebuild() {
+ export PROBE_REPORT="$CLUSTER_PREBUILD_REPORT" PROBE_BINARY=""
+ exec bash "$CASE_DIR/helper.sh"
+}
+function cleanup_check() {
+ local status=$? pid
+ if [[ -f "$CASE_DIR/child.pid" ]]; then
+  pid=$(<"$CASE_DIR/child.pid")
+  # Retention is observed while the actual independently owned writer lives.
+  if [[ "$MODE" != drained ]]; then ut_process_group_alive "$pid" || status=91; fi
+  terminate_ut_process_group "$pid" KILL
+  wait_for_ut_process_group "$pid" 1 || status=92
+ fi
+ exit "$status"
+}
+trap cleanup_check EXIT
+if [[ "$HELPER" == engine ]]; then
+ ENGINE_RACE_REPORT="$CASE_DIR/engine-report"
+ ENGINE_RACE_TEST_BINARY="$CASE_DIR/engine.test"
+ start_engine_race example/engine 1
+ status=0
+ join_ut_owner ENGINE_RACE_JOB_PID ENGINE_RACE_DRAIN_FAILED || status=$?
+ [[ "$status" == 125 && -z "$ENGINE_RACE_JOB_PID" ]] || exit 93
+ retained_binary=$ENGINE_RACE_TEST_BINARY
+ consume_engine_race_report; [[ "$?" == 125 ]] || exit 94
+elif [[ "$HELPER" == inventory ]]; then
+ export PROBE_REPORT="$CASE_DIR/report" PROBE_BINARY="$CASE_DIR/list.sh"
+ retained_binary="$PROBE_BINARY"
+ start_ut_command serial inventory bash "$CASE_DIR/helper.sh"
+ status=0
+ finish_ut_command || status=$?
+ [[ "$status" == 125 && -z "$CURRENT_UT_PID" ]] || exit 93
+ grep -qx 'discovery diagnostic' "$CASE_DIR/inventory" || exit 94
+else
+ UT_PREBUILD_MIN_FREE_KB=1
+ start_embedded_prebuild $'example/a\nexample/b' 2
+ retained_binary="$CLUSTER_PREBUILD_REPORT.package.0.test"
+ function run_ut_command() { touch "$CASE_DIR/fallback"; return 0; }
+ status=0
+ run_embedded_tests $'example/a\nexample/b' || status=$?
+ if [[ "$MODE" == drained ]]; then
+  [[ "$status" == 0 && -z "$CLUSTER_PREBUILD_JOB_PID" && ! -e "$retained_binary" && -e "$CASE_DIR/fallback" && -e "$CASE_DIR/helper-returned" ]] || exit 95
+  ! ut_process_group_alive "$(<"$CASE_DIR/child.pid")" || exit 96
+  exit 0
+ fi
+ [[ "$status" == 125 && -z "$CLUSTER_PREBUILD_JOB_PID" ]] || exit 95
+fi
+[[ -f "$CASE_DIR/drain-checked" && -f "$retained_binary" && ! -e "$CASE_DIR/fallback" && ! -e "$CASE_DIR/helper-returned" && ! -e "$CASE_DIR/forbidden-join" ]] || exit 96
+if [[ "$MODE" == failed-drain-term ]]; then [[ -f "$CASE_DIR/term-sent" ]] || exit 97; fi
+start_ut_command heavy after-failure touch "$CASE_DIR/admitted"; [[ "$?" == 125 ]] || exit 98
+[[ ! -e "$CASE_DIR/admitted" ]] || exit 99
+trap handle_ut_termination TERM
+kill -TERM "$$"
+exit 100
 `
-	out, err := scheduleHarnessWithMockTransform(t, script, cancellationGoMock, transform, "PHASE=build")
-	if err != nil {
-		t.Fatalf("partial prebuild admission cleanup: %v\n%s", err, out)
+				out, err := scheduleHarnessWithMockTransform(t, script, cancellationGoMock, transform,
+					"HELPER="+helper, "MODE="+mode, "PHASE=build")
+				if mode == "drained" {
+					if err != nil {
+						t.Fatalf("drained prebuild fallback: %v\n%s", err, out)
+					}
+					return
+				}
+				exit, ok := err.(*exec.ExitError)
+				if !ok || exit.ExitCode() != 125 {
+					t.Fatalf("failed-drain parent ownership: %v\n%s", err, out)
+				}
+			})
+		}
 	}
 }
 
