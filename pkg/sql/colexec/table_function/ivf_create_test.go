@@ -47,7 +47,7 @@ func TestIvfCreateStart_Error(t *testing.T) {
 		{
 			name:    "Invalid params json",
 			params:  `{"lists":"1"`,
-			wantErr: "Syntax error",
+			wantErr: "invalid ivf index params json",
 		},
 		{
 			name:    "Missing lists",
@@ -143,7 +143,7 @@ func TestIvfCreateStart_Error(t *testing.T) {
 			ivf_runSql = tt.sqlFn
 
 			m := mpool.MustNewZero()
-			proc := testutil.NewProcessWithMPool(t, "", m)
+			proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 			proc.Ctx = context.Background()
 
 			arg := &TableFunction{

@@ -80,7 +80,6 @@ func (r *siriusBatchRecorder) Publish(_ context.Context, rows uint32, vs []Siriu
 
 func TestSiriusBatchPublicationLayoutAndOwnership(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	t.Cleanup(proc.Free)
 	bat := batch.NewWithSize(3)
 	t.Cleanup(func() { bat.Clean(proc.Mp()) })
 	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
@@ -125,7 +124,6 @@ func TestSiriusBatchPublicationLayoutAndOwnership(t *testing.T) {
 
 func TestSiriusSlicesBoundLogicalExpansion(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	t.Cleanup(proc.Free)
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 9, proc.Mp())
 	bat.SetRowCount(9)
@@ -142,7 +140,6 @@ func TestSiriusSlicesBoundLogicalExpansion(t *testing.T) {
 
 func TestSiriusSplitAndConstantVarlenaPublication(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	t.Cleanup(proc.Free)
 	columns := []SiriusReadColumn{{Type: planpb.Type{Id: int32(types.T_varchar)}}}
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
@@ -190,7 +187,6 @@ func TestSiriusNativeElementSizesAndBatchRejections(t *testing.T) {
 	_, err := siriusElementSize(types.T_decimal256)
 	require.Error(t, err, "wide types stay declined until numeric support is delivered")
 	proc := testutil.NewProcess(t)
-	t.Cleanup(proc.Free)
 	bat := batch.NewWithSize(1)
 	t.Cleanup(func() { bat.Clean(proc.Mp()) })
 	bat.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 1, proc.Mp())
@@ -303,7 +299,6 @@ func (r *siriusSpecRelation) BuildReaders(_ context.Context, _ any, _ *planpb.Ex
 
 func TestEmbeddedSiriusReaderReusesScanFilterProjectionAndFetch(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	t.Cleanup(proc.Free)
 	ctrl := gomock.NewController(t)
 	tx := mock_frontend.NewMockTxnOperator(ctrl)
 	tx.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
@@ -339,7 +334,6 @@ func TestEmbeddedSiriusReaderPreservesParallelScanAndCleanup(t *testing.T) {
 	for _, dop := range []int{1, 2} {
 		t.Run(fmt.Sprintf("DOP%d_without_fetch", dop), func(t *testing.T) {
 			proc := testutil.NewProcess(t)
-			t.Cleanup(proc.Free)
 			ctrl := gomock.NewController(t)
 			tx := mock_frontend.NewMockTxnOperator(ctrl)
 			tx.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()

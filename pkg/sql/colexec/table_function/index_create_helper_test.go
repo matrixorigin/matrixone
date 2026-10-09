@@ -40,7 +40,7 @@ func makeCountBatch(proc *process.Process, n int64) *batch.Batch {
 }
 
 func TestFetchSrcTableRowCount(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 	t.Run("happy path returns count", func(t *testing.T) {
 		var capturedSQL string
@@ -117,7 +117,6 @@ func TestBuildSnapshotTSUnknownWithoutTxn(t *testing.T) {
 	require.EqualValues(t, 0, buildSnapshotTS(nil), "no process => unknown")
 
 	proc := testutil.NewProc(t)
-	t.Cleanup(proc.Free)
 	proc.Base.TxnOperator = nil
 	require.EqualValues(t, 0, buildSnapshotTS(proc), "no transaction => unknown")
 }

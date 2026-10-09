@@ -36,11 +36,12 @@ func newTestIvfflatTableDef(pkName string, pkType types.T, vecColName string, ve
 		vecColName: 1,
 		"dummy":    2, // Add another col to make sure pk/vec col indices are used
 	}
-	cols := []*plan.ColDef{
-		{Name: pkName, Typ: plan.Type{Id: int32(pkType)}},
-		{Name: vecColName, Typ: plan.Type{Id: int32(vecType), Width: vecWidth}},
-		{Name: "dummy", Typ: plan.Type{Id: int32(types.T_int32)}},
-	}
+	cols := make([]*plan.ColDef, 0, 3+len(includeCols))
+	cols = append(cols,
+		&plan.ColDef{Name: pkName, Typ: plan.Type{Id: int32(pkType)}},
+		&plan.ColDef{Name: vecColName, Typ: plan.Type{Id: int32(vecType), Width: vecWidth}},
+		&plan.ColDef{Name: "dummy", Typ: plan.Type{Id: int32(types.T_int32)}},
+	)
 	includedColumns := make([]string, 0, len(includeCols))
 	for _, includeCol := range includeCols {
 		name2ColIndex[includeCol.name] = int32(len(cols))

@@ -42,7 +42,7 @@
 # in optools/gpu/README.md. CPU-only builds do not require Pixi.
 
 # Go toolchain (override with `make GO=/path/to/go ...`); defaults to `go`.
-# Requires Go 1.26+ for the arch-specific SIMD kernels (built by default on x86_64).
+# Requires Go 1.27+ for the arch-specific SIMD kernels (built by default on x86_64 and arm64).
 ifeq ($(GO),)
 	GO=go
 endif
@@ -239,22 +239,38 @@ NATIVE_PROVENANCE_ACCELERATOR = $(if $(filter 1,$(MO_CL_CUDA)),gpu,cpu)
 NATIVE_PROVENANCE_OPTIMIZATION = $(if $(filter debug,$(CGO_DEBUG_OPT)),debug,release)
 NATIVE_PROVENANCE_SIMSIMD = $(if $(filter 1,$(MO_CL_SIMSIMD)),1,0)
 
-# Env-var prefix for the build command. On x86_64 the arch-specific SIMD kernels in
-# pkg/vectorindex/metric are compiled by default (ARCHSIMD=1): GOAMD64 defaults to v3
-# (Haswell baseline -- AVX2/FMA/BMI, required by the Go simd experiment) and
-# GOEXPERIMENT defaults to simd (enables the goexperiment.simd build tag on Go 1.26+).
+# Env-var prefix for the build command. The arch-specific SIMD kernels in
+# pkg/vectorindex/metric are compiled by default (ARCHSIMD=1) on both x86_64 and
+# arm64; GOEXPERIMENT defaults to simd, which enables the goexperiment.simd build
+# tag. On x86_64 GOAMD64 additionally defaults to v3 (Haswell baseline --
+# AVX2/FMA/BMI, required by the Go simd experiment); arm64 needs no equivalent
+# knob because NEON is ARMv8 baseline.
 # Disable the SIMD kernels with:
-#   make ARCHSIMD=0 build                       # plain x86 build, no SIMD kernels
+#   make ARCHSIMD=0 build                       # plain build, no SIMD kernels
 # Either default can still be overridden individually, e.g. `make GOAMD64=v4 build`.
+#
+# NOTE the kernels require Go 1.27+: simd/archsimd gained arm64 (NEON) types in
+# 1.27, and the same release renamed the amd64 slice loaders, so the build tags
+# on those files are `go1.27`, not `go1.26`.
 GOEXPERIMENT_OPT ?=
+ARCHSIMD_ARCH :=
 ifeq ("$(UNAME_M)", "x86_64")
+  ARCHSIMD_ARCH := amd64
+endif
+ifneq ($(filter arm64 aarch64,$(UNAME_M)),)
+  ARCHSIMD_ARCH := arm64
+endif
+
+ifneq ($(ARCHSIMD_ARCH),)
   ARCHSIMD ?= 1
   ifeq ($(ARCHSIMD),1)
-	# DECISION (owner: cpegeric): raising the default x86 baseline to v3 (Haswell:
-	# AVX2/FMA/BMI) is intentional. The narrow-vector (bf16/f16/int8/uint8) SIMD
-	# kernels in pkg/vectorindex/metric require it, and the Go simd experiment
-	# mandates a v3 baseline. Pre-Haswell CPUs must build with `make ARCHSIMD=0`.
-	GOAMD64 ?= v3
+	ifeq ($(ARCHSIMD_ARCH),amd64)
+	  # DECISION (owner: cpegeric): raising the default x86 baseline to v3 (Haswell:
+	  # AVX2/FMA/BMI) is intentional. The narrow-vector (bf16/f16/int8/uint8) SIMD
+	  # kernels in pkg/vectorindex/metric require it, and the Go simd experiment
+	  # mandates a v3 baseline. Pre-Haswell CPUs must build with `make ARCHSIMD=0`.
+	  GOAMD64 ?= v3
+	endif
 	GOEXPERIMENT_SIMD ?= simd
   endif
   ifneq ($(GOAMD64),)
@@ -1495,7 +1511,7 @@ fmt:
 
 .PHONY: install-static-check-tools
 install-static-check-tools:
-	@GOBIN="$(GOPATH)/bin" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.6.2
+	@GOBIN="$(GOPATH)/bin" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
 	@go install github.com/matrixorigin/linter/cmd/molint@v0.0.0-20260602145143-222a0b8adf07
 	@go install github.com/apache/skywalking-eyes/cmd/license-eye@v0.4.0
 

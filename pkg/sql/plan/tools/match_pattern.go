@@ -56,7 +56,7 @@ func TTableScan(tableName string, colRefs UnorderedMap[string, string]) *MatchPa
 
 func TStrictTableScan(tableName string, colRefs UnorderedMap[string, string]) *MatchPattern {
 	ret := TTableScan(tableName, colRefs)
-	newColRes := make([]RValueMatcher, 0)
+	newColRes := make([]RValueMatcher, 0, len(colRefs))
 	for _, val := range colRefs {
 		newColRes = append(newColRes, TColumnRef(tableName, val))
 	}
@@ -96,7 +96,7 @@ func TProject(assigns UnorderedMap[string, *ExprMatcher], child *MatchPattern) *
 
 func TStrictProject(assigns UnorderedMap[string, *ExprMatcher], child *MatchPattern) *MatchPattern {
 	ret := TProject(assigns, child)
-	matchers := make([]RValueMatcher, 0)
+	matchers := make([]RValueMatcher, 0, len(assigns))
 	for _, matcher := range assigns {
 		matchers = append(matchers, matcher)
 	}
@@ -213,7 +213,7 @@ func (pattern *MatchPattern) WithExactOutputs(outputs ...string) *MatchPattern {
 		&SymbolsMatcher{
 			GetFunc: func(builder *plan.QueryBuilder, node *plan2.Node) []VarRef {
 				AssertFunc(node.NodeType == plan2.Node_PROJECT, "must be project node")
-				ret := make([]VarRef, 0)
+				ret := make([]VarRef, 0, len(node.ProjectList))
 				for _, expr := range node.ProjectList {
 					col := expr.GetCol()
 					ret = append(ret, VarRef{

@@ -122,4 +122,14 @@ var (
 		},
 		[]string{"type"},
 	)
+
+	CAllocatorTrimCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "mem",
+			Name:      "c_allocator_trim_total",
+			Help:      "Process-wide libc arena trim attempts, labeled by whether pages were released.",
+		},
+		[]string{"result"},
+	)
 )

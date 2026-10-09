@@ -35,6 +35,54 @@ import (
 	"go.uber.org/zap"
 )
 
+func TestServerPreHandlerCancellationOwnership(t *testing.T) {
+	for _, name := range []string{"session failure", "invalid stream", "internal ping", "delegated"} {
+		t.Run(name, func(t *testing.T) {
+			dir, err := os.MkdirTemp("/tmp", "pre-handler-")
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, os.RemoveAll(dir)) })
+			owner, err := NewRPCServer("cancel-owner", "unix://"+dir+"/s.sock", newTestCodec(), WithServerDisableAutoCancelContext())
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, owner.Close()) })
+			s := owner.(*server)
+			handlerCalls, cancelCalls := 0, 0
+			s.RegisterRequestHandler(func(ctx context.Context, _ RPCMessage, _ uint64, _ ClientSession) error {
+				handlerCalls++
+				require.NoError(t, ctx.Err())
+				return nil
+			})
+			ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+			defer cancel()
+			request := RPCMessage{Ctx: ctx, Message: newTestMessage(1), Cancel: func() { cancelCalls++; cancel() }}
+			switch name {
+			case "session failure":
+				s.stopper.Stop()
+			case "invalid stream":
+				request.stream = true
+				request.streamSequence = 2
+			case "internal ping":
+				request.internal = true
+				request.Message = &flagOnlyMessage{flag: flagPing, id: 1}
+			}
+			err = s.onMessage(newTestIOSession(nil, nil), request, 0)
+			if name == "session failure" || name == "invalid stream" {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			if name == "delegated" {
+				require.Equal(t, 1, handlerCalls)
+				require.Zero(t, cancelCalls)
+				require.NoError(t, ctx.Err())
+			} else {
+				require.Zero(t, handlerCalls)
+				require.Equal(t, 1, cancelCalls)
+				require.ErrorIs(t, ctx.Err(), context.Canceled)
+			}
+		})
+	}
+}
+
 func TestCreateServerWithOptions(t *testing.T) {
 	testRPCServer(t, func(rs *server) {
 		assert.Equal(t, 100, rs.options.batchSendSize)
@@ -1788,7 +1836,8 @@ func testRPCServer(t assert.TestingT, testFunc func(*server), options ...ServerO
 func newTestClient(t assert.TestingT, options ...ClientOption) RPCClient {
 	bf := NewGoettyBasedBackendFactory(newTestCodec())
 	// Add auto-create by default for tests
-	defaultOptions := []ClientOption{WithClientEnableAutoCreateBackend()}
+	defaultOptions := make([]ClientOption, 0, 1+len(options))
+	defaultOptions = append(defaultOptions, WithClientEnableAutoCreateBackend())
 	defaultOptions = append(defaultOptions, options...)
 	c, err := NewClient(
 		"",

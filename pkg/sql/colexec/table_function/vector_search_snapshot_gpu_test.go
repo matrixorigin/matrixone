@@ -86,7 +86,7 @@ func runGpuSnapshotSearch(
 	t.Helper()
 
 	ctrl := gomock.NewController(t)
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	// Only Txn() is reachable: MockSearch.Load runs no SQL, so CloneSnapshotOp is not called.
 	txnOp.EXPECT().Txn().Return(txn.TxnMeta{

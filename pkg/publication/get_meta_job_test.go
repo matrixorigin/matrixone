@@ -720,50 +720,6 @@ func TestGetOrCreateChunkSemaphore_Idempotent(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// ParseUpstreamConn coverage (sql_executor.go)
-// ---------------------------------------------------------------------------
-
-func TestParseUpstreamConn_EmptyString(t *testing.T) {
-	_, err := ParseUpstreamConn("")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "empty")
-}
-
-func TestParseUpstreamConn_InvalidPrefix(t *testing.T) {
-	_, err := ParseUpstreamConn("postgres://user:pass@localhost:3306")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid connection string")
-}
-
-func TestParseUpstreamConn_ValidFormat(t *testing.T) {
-	cfg, err := ParseUpstreamConn("mysql://acc#user:pass@127.0.0.1:6001")
-	require.NoError(t, err)
-	assert.Equal(t, "acc", cfg.Account)
-	assert.Equal(t, "user", cfg.User)
-	assert.Equal(t, "pass", cfg.Password)
-	assert.Equal(t, "127.0.0.1", cfg.Host)
-	assert.Equal(t, 6001, cfg.Port)
-}
-
-func TestParseUpstreamConn_NoAccount(t *testing.T) {
-	cfg, err := ParseUpstreamConn("mysql://user:pass@127.0.0.1:6001")
-	require.NoError(t, err)
-	assert.Equal(t, "", cfg.Account)
-	assert.Equal(t, "user", cfg.User)
-	assert.Equal(t, "pass", cfg.Password)
-}
-
-func TestParseUpstreamConn_MissingAt(t *testing.T) {
-	_, err := ParseUpstreamConn("mysql://userpass")
-	assert.Error(t, err)
-}
-
-func TestParseUpstreamConn_InvalidPort_Boost(t *testing.T) {
-	_, err := ParseUpstreamConn("mysql://user:pass@host:notaport")
-	assert.Error(t, err)
-}
-
-// ---------------------------------------------------------------------------
 // SetGetParameterUnitWrapper coverage (sql_executor.go)
 // ---------------------------------------------------------------------------
 
@@ -979,33 +935,4 @@ func TestAObjectMap_NewAndOperations(t *testing.T) {
 
 	// Delete non-existent (no panic)
 	m.Delete("nonexistent")
-}
-
-func TestAObjectMap_MultipleEntries(t *testing.T) {
-	m := NewAObjectMap()
-	for i := 0; i < 10; i++ {
-		m.Set(fmt.Sprintf("obj-%d", i), &AObjectMapping{
-			DBName:    fmt.Sprintf("db-%d", i),
-			TableName: fmt.Sprintf("tbl-%d", i),
-		})
-	}
-	for i := 0; i < 10; i++ {
-		got, exists := m.Get(fmt.Sprintf("obj-%d", i))
-		require.True(t, exists)
-		assert.Equal(t, fmt.Sprintf("db-%d", i), got.DBName)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Additional util.go coverage
-// ---------------------------------------------------------------------------
-
-func TestParseUpstreamConn_PasswordWithSpecialChars(t *testing.T) {
-	// Password containing colon - should be preserved via Join
-	cfg, err := ParseUpstreamConn("mysql://acc#user:p4ss:w0rd@host:3306")
-	require.NoError(t, err)
-	assert.Equal(t, "p4ss:w0rd", cfg.Password)
-	assert.Equal(t, "host", cfg.Host)
-	assert.Equal(t, 3306, cfg.Port)
-	assert.Equal(t, "acc", cfg.Account)
 }

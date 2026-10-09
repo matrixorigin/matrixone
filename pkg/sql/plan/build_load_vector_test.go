@@ -45,7 +45,7 @@ func TestMakeCastExprKeepsDirectParallelLoadVector(t *testing.T) {
 func TestParallelLoadBlobTextAssignmentUsesOriginalPayload(t *testing.T) {
 	for _, oid := range []types.T{types.T_text, types.T_blob} {
 		t.Run(oid.String(), func(t *testing.T) {
-			builder := NewQueryBuilder(plan.Query_INSERT, NewMockCompilerContext(true), false, false)
+			builder := NewQueryBuilder(plan.Query_INSERT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, false)
 			proc := builder.compCtx.GetProcess()
 			sink := &loadAssignmentWarningSink{}
 			proc.WarningSink = sink

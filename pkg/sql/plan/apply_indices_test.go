@@ -42,7 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -90,13 +89,14 @@ func TestCheckIndexFilterRejectsSignedZeroFloatColumns(t *testing.T) {
 			)
 			setIndexFilterArgumentType(orFilter.GetF().Args[0], planType)
 			setIndexFilterArgumentType(orFilter.GetF().Args[1], planType)
-			filters := []*planpb.Expr{
+			filters := make([]*planpb.Expr, 0, 6)
+			filters = append(filters,
 				makeEqFilterExpr(1),
 				makeParamInFilterExpr(0, 1, 2),
 				makeParamBetweenFilterExpr(0, 1, 0, 1),
 				makeParamRangeFilterExpr(0, 1, ">=", 0),
 				orFilter,
-			}
+			)
 			inRange := makeParamBetweenFilterExpr(0, 1, 0, 1)
 			inRange.GetF().Func.ObjName = "in_range"
 			filters = append(filters, inRange)
@@ -119,7 +119,7 @@ func TestCheckIndexFilterRejectsSignedZeroFloatColumns(t *testing.T) {
 func TestIndexHintNonExecutingConsumers(t *testing.T) {
 	for _, prefix := range []string{"explain ", "create view v as ", "create table ctas as "} {
 		t.Run(prefix, func(t *testing.T) {
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			_, err := runOneStmt(mock, t, prefix+"select val from single_idx_t force index(idx_missing)")
 			var moErr *moerr.Error
 			require.ErrorAs(t, err, &moErr)
@@ -131,7 +131,7 @@ func TestIndexHintNonExecutingConsumers(t *testing.T) {
 }
 
 func TestIndexHintMissingIndexDefersPermanentTableValidation(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	queryPlan, err := runOneStmt(mock, t, "select val from single_idx_t force index(idx_missing) where val = 1")
 	require.NoError(t, err)
 	require.Len(t, queryPlan.GetQuery().GetUnresolvedIndexHints(), 1)
@@ -148,7 +148,7 @@ func TestIndexHintMissingIndexDefersPermanentTableValidation(t *testing.T) {
 }
 
 func TestIndexVisibilityMetadataDoesNotRejectHint(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	indexDef := mock.ctxt.tables["single_idx_t"].Indexes[0]
 	indexDef.Visible = false
 
@@ -157,7 +157,7 @@ func TestIndexVisibilityMetadataDoesNotRejectHint(t *testing.T) {
 }
 
 func TestSingleColumnUniqueDecimalRangeUsesIndex(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	addIndexHintChoiceTableForTest(mock)
 	decimalType := planpb.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 2}
 	mainTable := mock.ctxt.tables["index_hint_t"]
@@ -184,7 +184,7 @@ func TestSingleColumnUniqueDecimalRangeUsesIndex(t *testing.T) {
 }
 
 func TestDirectUniqueDecimalRangeResidualFilterUsesDirectKey(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	addIndexHintChoiceTableForTest(mock)
 	decimalType := planpb.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 2}
 	mainTable := mock.ctxt.tables["index_hint_t"]
@@ -238,7 +238,7 @@ func TestDirectUniqueDecimalRangeResidualFilterUsesDirectKey(t *testing.T) {
 
 func TestEncodedRegularIndexCostRejectsRoundingDecimalRange(t *testing.T) {
 	makeOptimizer := func() *MockOptimizer {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		addIndexHintChoiceTableForTest(mock)
 		mock.ctxt.tables["index_hint_t"].Cols[1].Typ = planpb.Type{
 			Id: int32(types.T_decimal64), Width: 10, Scale: 2,
@@ -281,7 +281,7 @@ func TestApplyExtraFiltersOnIndexUsesPhysicalKeyEncoding(t *testing.T) {
 	}
 
 	t.Run("serialized index part", func(t *testing.T) {
-		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 		baseTag := builder.genNewBindTag()
 		indexTag := builder.genNewBindTag()
 		filter := makeTypedInt64RangeFilterExpr(baseTag, 1, ">=", 10, intType)
@@ -309,7 +309,7 @@ func TestApplyExtraFiltersOnIndexUsesPhysicalKeyEncoding(t *testing.T) {
 	})
 
 	t.Run("all serialized residuals", func(t *testing.T) {
-		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 		baseTag := builder.genNewBindTag()
 		indexTag := builder.genNewBindTag()
 		node := &planpb.Node{
@@ -339,7 +339,7 @@ func TestApplyExtraFiltersOnIndexUsesPhysicalKeyEncoding(t *testing.T) {
 	})
 
 	t.Run("composite primary key part", func(t *testing.T) {
-		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 		baseTag := builder.genNewBindTag()
 		indexTag := builder.genNewBindTag()
 		filter := makeTypedInt64RangeFilterExpr(baseTag, 0, ">=", 10, intType)
@@ -382,7 +382,7 @@ func TestApplyExtraFiltersOnIndexUsesPhysicalKeyEncoding(t *testing.T) {
 	})
 
 	t.Run("invalid serialized key metadata skips optional pushdown", func(t *testing.T) {
-		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 		baseTag := builder.genNewBindTag()
 		indexTag := builder.genNewBindTag()
 		node := &planpb.Node{
@@ -560,7 +560,7 @@ func TestFilterRegularIndexesByScanHints(t *testing.T) {
 }
 
 func TestRecordIndexHintsValidatesNames(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	tableDef := &planpb.TableDef{
 		Name: "t",
 		Pkey: &planpb.PrimaryKeyDef{
@@ -597,7 +597,7 @@ func TestRecordIndexHintsValidatesNames(t *testing.T) {
 
 func TestRecordIndexHintsDefersMissingPermanentIndex(t *testing.T) {
 	newBuilder := func(isTemporary bool) *QueryBuilder {
-		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 		builder.qry.Nodes = []*planpb.Node{{
 			NodeId: 0,
 			ObjRef: &planpb.ObjectRef{
@@ -711,7 +711,7 @@ func TestRecordIndexHintsMySQLCompatibility(t *testing.T) {
 	}
 
 	t.Run("unscoped hint applies to all scopes", func(t *testing.T) {
-		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 		err := builder.recordIndexHints(1, tableDef, []*tree.IndexHint{
 			{HintType: tree.HintUse, HintScope: tree.HintForScan, IndexNames: []string{"idx_al"}},
 		})
@@ -728,7 +728,7 @@ func TestRecordIndexHintsMySQLCompatibility(t *testing.T) {
 	})
 
 	t.Run("force and ignore reject empty list", func(t *testing.T) {
-		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 		require.Error(t, builder.recordIndexHints(1, tableDef, []*tree.IndexHint{
 			{HintType: tree.HintForce, HintScope: tree.HintForJoin},
 		}))
@@ -738,7 +738,7 @@ func TestRecordIndexHintsMySQLCompatibility(t *testing.T) {
 	})
 
 	t.Run("use and force conflict", func(t *testing.T) {
-		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 		err := builder.recordIndexHints(1, tableDef, []*tree.IndexHint{
 			{HintType: tree.HintUse, HintScope: tree.HintForJoin, IndexNames: []string{"idx_alpha"}},
 			{HintType: tree.HintForce, HintScope: tree.HintForJoin, IndexNames: []string{"idx_beta"}},
@@ -747,7 +747,7 @@ func TestRecordIndexHintsMySQLCompatibility(t *testing.T) {
 	})
 
 	t.Run("use and force conflict across scopes", func(t *testing.T) {
-		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 		err := builder.recordIndexHints(1, tableDef, []*tree.IndexHint{
 			{HintType: tree.HintUse, HintScope: tree.HintForJoin, IndexNames: []string{"idx_alpha"}},
 			{HintType: tree.HintForce, HintScope: tree.HintForOrderBy, IndexNames: []string{"idx_beta"}},
@@ -756,7 +756,7 @@ func TestRecordIndexHintsMySQLCompatibility(t *testing.T) {
 	})
 
 	t.Run("ambiguous prefix", func(t *testing.T) {
-		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 		err := builder.recordIndexHints(1, tableDef, []*tree.IndexHint{
 			{HintType: tree.HintUse, HintScope: tree.HintForJoin, IndexNames: []string{"idx_"}},
 		})
@@ -765,7 +765,7 @@ func TestRecordIndexHintsMySQLCompatibility(t *testing.T) {
 }
 
 func TestIndexHintAffectsRegularIndexChoice(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	addIndexHintChoiceTableForTest(mock)
 
 	plan, err := runOneStmt(mock, t, "select a from index_hint_t use index(idx_ab) where a = 1")
@@ -787,7 +787,7 @@ func TestIndexHintRuntimeConstantSelectors(t *testing.T) {
 	} {
 		for _, reverse := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/reverse=%t", tc.name, reverse), func(t *testing.T) {
-				mock := NewMockOptimizer(true)
+				mock := NewMockOptimizer(true, newPlanTestProcess(t))
 				t.Cleanup(mock.ctxt.GetProcess().Free)
 				addIndexHintChoiceTableForTest(mock)
 				// Avoid an implicit widening cast on the indexed column.
@@ -810,7 +810,7 @@ func TestIndexHintRuntimeConstantSelectors(t *testing.T) {
 }
 
 func TestIndexHintUseEmptyDisablesRegularIndexChoice(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	addIndexHintChoiceTableForTest(mock)
 
 	plan, err := runOneStmt(mock, t, "select a from index_hint_t use index() where a = 1")
@@ -819,7 +819,7 @@ func TestIndexHintUseEmptyDisablesRegularIndexChoice(t *testing.T) {
 }
 
 func TestIndexHintOrderScopeSelectsCoveringIndexWithoutFilter(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	addIndexHintChoiceTableForTest(mock)
 
 	queryPlan, err := runOneStmt(mock, t, "select a from index_hint_t force index for order by(idx_a) order by a limit 10")
@@ -832,7 +832,7 @@ func TestIndexHintOrderScopeSelectsCoveringIndexWithoutFilter(t *testing.T) {
 }
 
 func TestForceIndexForOrderSQLCalcFoundRowsSkipsOrderedLimit(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	addIndexHintChoiceTableForTest(mock)
 
 	queryPlan, err := runOneStmt(mock, t,
@@ -846,7 +846,7 @@ func TestForceIndexForOrderSQLCalcFoundRowsSkipsOrderedLimit(t *testing.T) {
 }
 
 func TestIndexHintOrderScopeKeepsFloatSortLogical(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	addIndexHintChoiceTableForTest(mock)
 	mock.ctxt.tables["index_hint_t"].Cols[1].Typ = planpb.Type{Id: int32(types.T_float64)}
 
@@ -862,7 +862,7 @@ func TestIndexHintOrderScopeKeepsFloatSortLogical(t *testing.T) {
 }
 
 func TestIndexHintOrderScopePreservesCoveringIndexFilters(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	addIndexHintChoiceTableForTest(mock)
 
 	queryPlan, err := runOneStmt(mock, t, "select id,a,b from index_hint_t force index for order by(idx_ab) where b = 1 order by a limit 1")
@@ -897,7 +897,7 @@ func TestForceIndexOrderAcceptsEqualityFixedLeadingPrefix(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			addIndexHintChoiceTableForTest(mock)
 			addIndexHintPayloadColumnForTest(mock)
 
@@ -1005,7 +1005,7 @@ func TestPlainForceIndexRetainsAccessWhenOrderIsIncompatible(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			addIndexHintChoiceTableForTest(mock)
 			addIndexHintPayloadColumnForTest(mock)
 
@@ -1030,7 +1030,7 @@ func TestForceIndexOrderIncompatibleControls(t *testing.T) {
 		{name: "volatile left operand", predicate: "floor(rand() * 2) = a"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			addIndexHintChoiceTableForTest(mock)
 			mock.ctxt.tables["index_hint_t"].Cols[1].Typ = planpb.Type{Id: int32(types.T_float64)}
 
@@ -1043,7 +1043,7 @@ func TestForceIndexOrderIncompatibleControls(t *testing.T) {
 	}
 
 	t.Run("order-scoped force does not become scan force", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		addIndexHintChoiceTableForTest(mock)
 
 		queryPlan, err := runOneStmt(mock, t,
@@ -1054,7 +1054,7 @@ func TestForceIndexOrderIncompatibleControls(t *testing.T) {
 	})
 
 	t.Run("ordinary optimizer remains unforced", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		addIndexHintChoiceTableForTest(mock)
 
 		queryPlan, err := runOneStmt(mock, t,
@@ -1065,7 +1065,7 @@ func TestForceIndexOrderIncompatibleControls(t *testing.T) {
 	})
 
 	t.Run("invalid plain force defers permanent-table validation", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		addIndexHintChoiceTableForTest(mock)
 
 		queryPlan, err := runOneStmt(mock, t,
@@ -1077,7 +1077,7 @@ func TestForceIndexOrderIncompatibleControls(t *testing.T) {
 }
 
 func TestIgnoreIndexForOrderByBlocksCoveringIndexOrderedRead(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	addIndexHintChoiceTableForTest(mock)
 
 	queryPlan, err := runOneStmt(mock, t, `
@@ -1122,7 +1122,7 @@ func hasMessageType(messages []planpb.MsgHeader, msgType int32) bool {
 }
 
 func TestIndexHintOrderScopeBuildsNonCoveringBackfillJoin(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	addIndexHintChoiceTableForTest(mock)
 
 	queryPlan, err := runOneStmt(mock, t, "select b from index_hint_t force index for order by(idx_a) order by a")
@@ -1132,7 +1132,7 @@ func TestIndexHintOrderScopeBuildsNonCoveringBackfillJoin(t *testing.T) {
 }
 
 func TestIndexHintOrderScopeFindsScanBelowJoin(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	addIndexHintChoiceTableForTest(mock)
 
 	queryPlan, err := runOneStmt(mock, t, "select t1.a from index_hint_t t1 force index for order by(idx_a) join index_hint_t t2 on t1.id = t2.id order by t1.a")
@@ -1141,7 +1141,7 @@ func TestIndexHintOrderScopeFindsScanBelowJoin(t *testing.T) {
 }
 
 func TestIndexHintPrimaryOrderAndGroupScopes(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	addIndexHintChoiceTableForTest(mock)
 
 	queryPlan, err := runOneStmt(mock, t, "select id from index_hint_t force index for order by(primary) order by id")
@@ -1158,7 +1158,7 @@ func TestIndexHintPrimaryOrderAndGroupScopes(t *testing.T) {
 }
 
 func TestIndexHintGroupScopeSelectsAndIgnoresCoveringIndex(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	addIndexHintChoiceTableForTest(mock)
 
 	queryPlan, err := runOneStmt(mock, t, "select a, count(*) from index_hint_t where a = 1 group by a")
@@ -1203,7 +1203,7 @@ func TestIndexHintGroupScopeSelectsAndIgnoresCoveringIndex(t *testing.T) {
 }
 
 func TestSecondaryIndexHiddenDependenciesSurviveGroupedJoinRemap(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	addGroupedJoinIndexTablesForTest(mock)
 
 	tests := []struct {
@@ -1384,7 +1384,7 @@ func TestGroupedJoinForceIndexCandidateClosure(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			addGroupedJoinIndexTablesForTest(mock)
 			addGroupedJoinAlternativeIndexForTest(mock)
 			queryPlan, err := runOneStmt(mock, t, fmt.Sprintf(`
@@ -1409,7 +1409,7 @@ func TestGroupedJoinForceIndexCandidateClosure(t *testing.T) {
 }
 
 func TestIndexHintRejectsInvalidCombinations(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	addIndexHintChoiceTableForTest(mock)
 
 	_, err := runOneStmt(mock, t, "select a from index_hint_t force index() where a = 1")
@@ -1443,7 +1443,7 @@ func TestHintedIndexAccessReturnsMetadataErrors(t *testing.T) {
 		{name: "nil metadata", nilMetadata: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := &indexHintResolveFailureContext{MockCompilerContext: NewMockCompilerContext(true), nilMetadata: tc.nilMetadata}
+			ctx := &indexHintResolveFailureContext{MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t)), nilMetadata: tc.nilMetadata}
 			builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, true)
 			tag := builder.genNewBindTag()
 			idxDef := &planpb.IndexDef{
@@ -1577,6 +1577,69 @@ func TestIndexJoinBuildsVersionedSerializedRuntimeFilter(t *testing.T) {
 	indexScan := builder.qry.Nodes[indexJoin.Children[1]]
 	require.Len(t, indexScan.RuntimeFilterProbeList, 1)
 	require.Equal(t, buildSpec.Tag, indexScan.RuntimeFilterProbeList[0].Tag)
+}
+
+func TestIndexJoinBackfillRuntimeFilterUsesBasePrimaryKey(t *testing.T) {
+	for _, pkName := range []string{"id", catalog.FakePrimaryKeyColName} {
+		t.Run(pkName, func(t *testing.T) {
+			builder, _, scanID, tableDef := makeIndexHintJoinBuilder(t)
+			scan := builder.qry.Nodes[scanID]
+			if pkName == catalog.FakePrimaryKeyColName {
+				tableDef.Cols = append(tableDef.Cols, &planpb.ColDef{
+					Name: pkName, Typ: planpb.Type{Id: int32(types.T_uint64)},
+				})
+				tableDef.Name2ColIndex[pkName] = int32(len(tableDef.Cols) - 1)
+				tableDef.Pkey = &planpb.PrimaryKeyDef{PkeyColName: pkName, Names: []string{pkName}}
+			}
+			indexDef := tableDef.Indexes[0]
+			indexDef.Parts = []string{"a"}
+			indexTable := builder.compCtx.(*fullTextJoinMockCompilerContext).tables["idx_join_a_table"]
+			indexTable.Cols[1].Typ = tableDef.Cols[tableDef.Name2ColIndex[pkName]].Typ
+			scan.FilterList = []*planpb.Expr{ftjMakeEqExpr(t,
+				ftjColExpr(tableDef, scan.BindingTags[0], tableDef.Name2ColIndex["a"]),
+				makePlan2Int32ConstExprWithType(7))}
+
+			joinID, indexScanID := builder.applyIndexJoin(
+				indexDef, scan, EqualIndexCondition, []int32{0}, nil)
+			require.NotEqual(t, scanID, joinID)
+			indexScan := builder.qry.Nodes[indexScanID]
+			require.Equal(t, catalog.IndexTableIndexColName,
+				indexScan.FilterList[0].GetF().Args[0].GetCol().Name)
+			join := builder.qry.Nodes[joinID]
+			join.Stats = &planpb.Stats{HashmapStats: &planpb.HashMapStats{HashmapSize: 1, HashOnPK: true}}
+			builder.generateRuntimeFilters(joinID)
+
+			require.Len(t, scan.RuntimeFilterProbeList, 1)
+			probe := scan.RuntimeFilterProbeList[0]
+			require.False(t, probe.NotOnPk)
+			require.Equal(t, pkName, probe.Expr.GetCol().Name)
+		})
+	}
+}
+
+func TestNoPKIndexJoinPrefixInNamesIndexTablePrimaryKey(t *testing.T) {
+	builder, _, scanID, tableDef := makeIndexHintJoinBuilder(t)
+	scan := builder.qry.Nodes[scanID]
+	tableDef.Cols = append(tableDef.Cols, &planpb.ColDef{
+		Name: catalog.FakePrimaryKeyColName, Typ: planpb.Type{Id: int32(types.T_uint64)},
+	})
+	tableDef.Name2ColIndex[catalog.FakePrimaryKeyColName] = int32(len(tableDef.Cols) - 1)
+	tableDef.Pkey = &planpb.PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName}
+	idxDef := tableDef.Indexes[0]
+	idxDef.Parts = []string{"a", catalog.FakePrimaryKeyColName}
+	indexTable := builder.compCtx.(*fullTextJoinMockCompilerContext).tables["idx_join_a_table"]
+	indexTable.Pkey = &planpb.PrimaryKeyDef{PkeyColName: catalog.IndexTableIndexColName}
+	scan.FilterList = []*planpb.Expr{makeParamInFilterExpr(
+		scan.BindingTags[0], tableDef.Name2ColIndex["a"], 10)}
+
+	joinID, indexScanID := builder.applyIndexJoin(
+		idxDef, scan, NonEqualIndexCondition, []int32{0}, nil)
+	require.NotEqual(t, scanID, joinID)
+	indexScan := builder.qry.Nodes[indexScanID]
+	require.Equal(t, "prefix_in", indexScan.FilterList[0].GetF().Func.ObjName)
+	probeCol := indexScan.FilterList[0].GetF().Args[0].GetCol()
+	require.Equal(t, int32(0), probeCol.ColPos)
+	require.Equal(t, indexScan.TableDef.Pkey.PkeyColName, probeCol.Name)
 }
 
 func TestEnumIndexJoinsRemainEligible(t *testing.T) {
@@ -1748,7 +1811,7 @@ func TestUniqueIndexRuntimeFilterUsesSelectedHashSlot(t *testing.T) {
 		spec.KeyEncoding)
 	require.Equal(t, int32(1), spec.BuildExpr.GetCol().ColPos)
 
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.SetMessageBoard(message.NewMessageBoard())
 	first := testutil.MakeInt32Vector([]int32{901, 902, 903}, nil, proc.Mp())
 	selected := testutil.MakeInt32Vector([]int32{11, 12, 13}, nil, proc.Mp())
@@ -1834,7 +1897,7 @@ func TestIndexJoinGeneratedSerializedRuntimeFilterExecutesEndToEnd(t *testing.T)
 	require.NotNil(t, spec.BuildExpr)
 	require.True(t, spec.MatchPrefix)
 
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.SetMessageBoard(message.NewMessageBoard())
 	values := make([]int32, 37)
 	for i := range values {
@@ -2140,7 +2203,7 @@ func TestForceIndexForJoinPreservesMatchingIndexAccess(t *testing.T) {
 }
 
 func TestForceIndexForJoinReplacesRealCoveringFilterScan(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	addIndexHintChoiceTableForTest(mock)
 	tableDef := mock.ctxt.tables["index_hint_t"]
 	tableDef.Indexes = append([]*planpb.IndexDef{
@@ -2217,7 +2280,7 @@ func TestForceIndexForJoinReturnsMetadataErrorsAtomically(t *testing.T) {
 	for _, nilMetadata := range []bool{false, true} {
 		builder, joinID, leftScanID, leftDef := makeIndexHintJoinBuilder(t)
 		builder.compCtx = &indexHintResolveFailureContext{
-			MockCompilerContext: NewMockCompilerContext(true), nilMetadata: nilMetadata,
+			MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t)), nilMetadata: nilMetadata,
 		}
 		require.NoError(t, builder.recordIndexHints(leftScanID, leftDef, []*tree.IndexHint{{
 			HintType: tree.HintForce, HintScope: tree.HintForJoin, IndexNames: []string{"idx_a"},
@@ -2239,7 +2302,7 @@ func TestForceIndexForJoinReturnsMetadataErrorsAtomically(t *testing.T) {
 
 func TestRightForceIndexForJoinRollsBackSwapOnMetadataError(t *testing.T) {
 	builder, joinID, _, _ := makeIndexHintJoinBuilder(t)
-	builder.compCtx = &indexHintResolveFailureContext{MockCompilerContext: NewMockCompilerContext(true)}
+	builder.compCtx = &indexHintResolveFailureContext{MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t))}
 	joinNode := builder.qry.Nodes[joinID]
 	rightScanID := joinNode.Children[1]
 	rightScan := builder.qry.Nodes[rightScanID]
@@ -2300,7 +2363,7 @@ func findIndexScanNameForTable(query *planpb.Query, table string) string {
 }
 
 func TestForceIndexForJoinDoesNotBlockOuterJoinFilterAccess(t *testing.T) {
-	mock := NewMockOptimizer(true)
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	addIndexHintChoiceTableForTest(mock)
 	addOuterJoinHintTable := func(name, indexName string, tableID uint64) {
 		tableDef := DeepCopyTableDef(mock.ctxt.tables["index_hint_t"], true)
@@ -2313,7 +2376,6 @@ func TestForceIndexForJoinDoesNotBlockOuterJoinFilterAccess(t *testing.T) {
 		mock.ctxt.objects[name] = &ObjectRef{SchemaName: "tpch", ObjName: name, Obj: int64(tableID)}
 		mock.ctxt.tables[name] = tableDef
 		mock.ctxt.id2name[tableID] = name
-		mock.ctxt.pks[name] = []int{0}
 	}
 	addOuterJoinHintTable("left_hint_t", "idx_left_a", 25361)
 	addOuterJoinHintTable("right_hint_t", "idx_right_a", 25362)
@@ -2373,7 +2435,7 @@ func TestForceIndexForJoinIsConsumedInsideThreeTableTree(t *testing.T) {
 }
 
 func TestForceIndexPrepassStopsAtQueryBlockBoundary(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	outerCtx := NewBindContext(builder, nil)
 	innerCtx := NewBindContext(builder, outerCtx)
 	scanTag := builder.genNewBindTag()
@@ -2420,7 +2482,7 @@ func TestForceIndexPrepassStopsAtQueryBlockBoundary(t *testing.T) {
 }
 
 func makeIndexHintJoinBuilder(t *testing.T) (*QueryBuilder, int32, int32, *planpb.TableDef) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(t), false, true)
 	ctx := NewBindContext(builder, nil)
 	leftTag := builder.genNewBindTag()
 	rightTag := builder.genNewBindTag()
@@ -2450,7 +2512,7 @@ func makeIndexHintJoinBuilder(t *testing.T) (*QueryBuilder, int32, int32, *planp
 }
 
 func TestIndexHintOrderScopeControlsTopSortRewrite(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	tag := builder.genNewBindTag()
 	indexScan := &planpb.Node{
 		NodeId:      1,
@@ -2561,7 +2623,6 @@ func addIndexHintChoiceTableForTest(mock *MockOptimizer) {
 	mock.ctxt.objects["index_hint_t"] = &ObjectRef{SchemaName: "tpch", ObjName: "index_hint_t", Obj: 25356}
 	mock.ctxt.tables["index_hint_t"] = mainTable
 	mock.ctxt.id2name[25356] = "index_hint_t"
-	mock.ctxt.pks["index_hint_t"] = []int{0}
 	addIndexHintIndexTableForTest(mock, "idx_hint_a", 25357)
 	addIndexHintIndexTableForTest(mock, "idx_hint_ab", 25358)
 	addIndexHintIndexTableForTest(mock, "uk_hint_ab", 25359)
@@ -2661,9 +2722,6 @@ func addGroupedJoinIndexTablesForTest(mock *MockOptimizer) {
 		mock.ctxt.tables[tableDef.Name] = tableDef
 		mock.ctxt.id2name[tableDef.TblId] = tableDef.Name
 	}
-	mock.ctxt.pks[parent.Name] = []int{0, 1}
-	mock.ctxt.pks[child.Name] = []int{0, 1, 2}
-	mock.ctxt.pks[indexTable.Name] = []int{0}
 }
 
 func addGroupedJoinAlternativeIndexForTest(mock *MockOptimizer) {
@@ -2683,7 +2741,6 @@ func addGroupedJoinAlternativeIndexForTest(mock *MockOptimizer) {
 	}
 	mock.ctxt.tables[indexTable.Name] = indexTable
 	mock.ctxt.id2name[indexTable.TblId] = indexTable.Name
-	mock.ctxt.pks[indexTable.Name] = []int{0}
 }
 
 func addIndexHintPayloadColumnForTest(mock *MockOptimizer) {
@@ -2723,7 +2780,6 @@ func addIndexHintIndexTableForTest(mock *MockOptimizer, name string, tableID uin
 	mock.ctxt.objects[name] = &ObjectRef{SchemaName: "tpch", ObjName: name, Obj: int64(tableID)}
 	mock.ctxt.tables[name] = tableDef
 	mock.ctxt.id2name[tableID] = name
-	mock.ctxt.pks[name] = []int{0}
 }
 
 func findFirstIndexScanName(p *Plan) string {
@@ -2773,7 +2829,7 @@ func planHasSort(p *Plan) bool {
 func TestTryIndexOnlyScan_RandomRangesNotRejected(t *testing.T) {
 	// Exercise the pure candidate matcher with a node that simulates sysbench
 	// random_ranges (10M rows, outcnt=10000, selectivity=0.001).
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 
 	idxDef := &IndexDef{
 		IndexName:      "idx_k",
@@ -2861,7 +2917,7 @@ func TestTryIndexOnlyScan_RandomRangesNotRejected(t *testing.T) {
 }
 
 func TestTryIndexOnlyScanRejectsBroadEncodedEquality(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	ctx := NewBindContext(builder, nil)
 	bindTag := builder.genNewBindTag()
 	idxDef := &planpb.IndexDef{
@@ -2983,7 +3039,7 @@ func newEncodedIndexCostTestCase(
 ) (*QueryBuilder, int32, *planpb.IndexDef, map[[2]int32]int) {
 	t.Helper()
 
-	baseCtx := NewMockCompilerContext(true)
+	baseCtx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	statsCache := NewStatsCache()
 	statsInfo := NewStatsInfo()
 	statsInfo.TableCnt = 800_000
@@ -3784,13 +3840,13 @@ func BenchmarkEncodedIndexCostWideTableMultiIndex(b *testing.B) {
 	}
 }
 
-func newEncodedExistsPlanTestContext(stateNDV float64) *encodedIndexPlanTestContext {
+func newEncodedExistsPlanTestContext(t testing.TB, stateNDV float64) *encodedIndexPlanTestContext {
 	const (
 		activityTableID uint64 = 20_001
 		tagsTableID     uint64 = 20_002
 		indexTableID    uint64 = 20_003
 	)
-	baseCtx := NewMockCompilerContext(true)
+	baseCtx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	intType := planpb.Type{Id: int32(types.T_int32), NotNullable: true}
 	bigintType := planpb.Type{Id: int32(types.T_int64), NotNullable: true}
 	stateType := planpb.Type{Id: int32(types.T_varchar), Width: 12, NotNullable: true}
@@ -3873,9 +3929,6 @@ func newEncodedExistsPlanTestContext(stateNDV float64) *encodedIndexPlanTestCont
 		baseCtx.tables[tableDef.Name] = tableDef
 		baseCtx.id2name[tableDef.TblId] = tableDef.Name
 	}
-	baseCtx.pks[activity.Name] = []int{0, 1}
-	baseCtx.pks[tags.Name] = []int{0, 1, 2}
-	baseCtx.pks[indexTable.Name] = []int{0}
 
 	activityStats := NewStatsInfo()
 	activityStats.TableCnt = 600_000
@@ -3952,7 +4005,6 @@ func addCostActivityRegularIndex(t testing.TB, ctx *encodedIndexPlanTestContext,
 	ctx.objects[indexTable.Name] = &planpb.ObjectRef{SchemaName: "tpch", ObjName: indexTable.Name, Obj: int64(indexTable.TblId)}
 	ctx.tables[indexTable.Name] = indexTable
 	ctx.id2name[indexTable.TblId] = indexTable.Name
-	ctx.pks[indexTable.Name] = []int{0}
 	stats := NewStatsInfo()
 	stats.TableCnt = 600_000
 	stats.BlockNumber = 120
@@ -3978,7 +4030,7 @@ func TestEncodedIndexCostChoosesProfitableSiblingIndependentOfDDLOrder(t *testin
 				order = "narrow first"
 			}
 			t.Run(query.name+"/"+order, func(t *testing.T) {
-				ctx := newEncodedExistsPlanTestContext(6)
+				ctx := newEncodedExistsPlanTestContext(t, 6)
 				addCostActivityRegularIndex(t, ctx, "idx_state_narrow", narrowParts, narrowFirst)
 				optimizer := &encodedIndexPlanTestOptimizer{ctx: ctx}
 				queryPlan, err := runOneStmt(optimizer, t, query.sql)
@@ -4002,7 +4054,7 @@ func TestEncodedIndexCostChoosesNarrowCoveringSiblingIndependentOfDDLOrder(t *te
 			order = "narrow first"
 		}
 		t.Run(order, func(t *testing.T) {
-			ctx := newEncodedExistsPlanTestContext(100)
+			ctx := newEncodedExistsPlanTestContext(t, 100)
 			ctx.tables["cost_activity"].Indexes = nil
 			addCostActivityRegularIndex(t, ctx, "idx_state_narrow_covering", narrowParts, narrowFirst)
 			addCostActivityRegularIndex(t, ctx, "idx_state_wide_covering", wideParts, !narrowFirst)
@@ -4017,7 +4069,7 @@ func TestEncodedIndexCostChoosesNarrowCoveringSiblingIndependentOfDDLOrder(t *te
 }
 
 func TestEncodedIndexCostChoosesAcrossCoveringAndBackfill(t *testing.T) {
-	ctx := newEncodedExistsPlanTestContext(50)
+	ctx := newEncodedExistsPlanTestContext(t, 50)
 	ctx.tables["cost_activity"].Indexes = nil
 	addCostActivityRegularIndex(t, ctx, "idx_state_wide_covering", []string{
 		"state", "tenant_id", "created_at", "activity_id", "amount",
@@ -4035,7 +4087,7 @@ func TestEncodedIndexCostChoosesAcrossCoveringAndBackfill(t *testing.T) {
 }
 
 func TestEncodedIndexCostChoosesAcrossPointAndRange(t *testing.T) {
-	ctx := newEncodedExistsPlanTestContext(6)
+	ctx := newEncodedExistsPlanTestContext(t, 6)
 	activity := ctx.tables["cost_activity"]
 	activity.Indexes = nil
 	stats := ctx.statsByID[activity.TblId]
@@ -4066,7 +4118,7 @@ func TestEncodedIndexCostPreparedRangeDoesNotOutrankEqualityByHeuristic(t *testi
 			order = "equality index first"
 		}
 		t.Run(order, func(t *testing.T) {
-			ctx := newEncodedExistsPlanTestContext(10)
+			ctx := newEncodedExistsPlanTestContext(t, 10)
 			activity := ctx.tables["cost_activity"]
 			activity.Indexes = nil
 			stats := ctx.statsByID[activity.TblId]
@@ -4121,7 +4173,7 @@ func TestEncodedIndexCostPreparedRangeDoesNotOutrankEqualityByHeuristic(t *testi
 
 func TestEncodedIndexCostPreparedRangesUseUncertaintyFromPublicPlan(t *testing.T) {
 	const tableCnt = 2_000_000
-	ctx := newEncodedExistsPlanTestContext(10)
+	ctx := newEncodedExistsPlanTestContext(t, 10)
 	activity := ctx.tables["cost_activity"]
 	activity.Indexes = nil
 	stats := ctx.statsByID[activity.TblId]
@@ -4169,7 +4221,7 @@ func TestEncodedIndexCostPreparedRangesUseUncertaintyFromPublicPlan(t *testing.T
 
 func TestEncodedIndexCostPreparedRangeStillUsesNonCoveringIndex(t *testing.T) {
 	const tableCnt = 2_000_000
-	ctx := newEncodedExistsPlanTestContext(10)
+	ctx := newEncodedExistsPlanTestContext(t, 10)
 	activity := ctx.tables["cost_activity"]
 	activity.Indexes = nil
 	stats := ctx.statsByID[activity.TblId]
@@ -4195,7 +4247,7 @@ func TestEncodedIndexCostPreparedRangeStillUsesNonCoveringIndex(t *testing.T) {
 
 func TestEncodedIndexCostPreparedMixedOrPreservesKnownWorkFromPublicPlan(t *testing.T) {
 	const tableCnt = 600_000
-	ctx := newEncodedExistsPlanTestContext(10)
+	ctx := newEncodedExistsPlanTestContext(t, 10)
 	activity := ctx.tables["cost_activity"]
 	activity.Indexes = nil
 	stats := ctx.statsByID[activity.TblId]
@@ -4225,7 +4277,7 @@ func TestEncodedIndexCostPreparedMixedOrPreservesKnownWorkFromPublicPlan(t *test
 }
 
 func TestEncodedIndexRangeLowerSelectivityComposesStableOrBranches(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	knownNarrow := makeIntBetweenFilterExpr(0, 0, 1, 10)
 	knownNarrow.Selectivity = 0.2
 	knownWide := makeIntBetweenFilterExpr(0, 0, 1, 20)
@@ -4252,7 +4304,7 @@ func TestEncodedIndexRangeLowerSelectivityComposesStableOrBranches(t *testing.T)
 func TestEncodedIndexCostKeepsCatalogOrderOnEqualScore(t *testing.T) {
 	for _, first := range []string{"idx_state_a", "idx_state_b"} {
 		t.Run(first, func(t *testing.T) {
-			ctx := newEncodedExistsPlanTestContext(100)
+			ctx := newEncodedExistsPlanTestContext(t, 100)
 			ctx.tables["cost_activity"].Indexes = nil
 			second := "idx_state_b"
 			if first == second {
@@ -4281,7 +4333,7 @@ func TestEncodedIndexCostPrefersValidCandidateOverUnscorable(t *testing.T) {
 			order = "invalid first"
 		}
 		t.Run(order, func(t *testing.T) {
-			ctx := newEncodedExistsPlanTestContext(600_000)
+			ctx := newEncodedExistsPlanTestContext(t, 600_000)
 			ctx.tables["cost_activity"].Indexes = nil
 			stats := ctx.statsByID[ctx.tables["cost_activity"].TblId]
 			stats.NdvMap["amount"] = 600_000
@@ -4315,7 +4367,7 @@ func TestEncodedIndexCostDoesNotFallbackToUnscorableWhenValidCandidateRejects(t 
 			order = "invalid first"
 		}
 		t.Run(order, func(t *testing.T) {
-			ctx := newEncodedExistsPlanTestContext(1_000)
+			ctx := newEncodedExistsPlanTestContext(t, 1_000)
 			ctx.tables["cost_activity"].Indexes = nil
 			stats := ctx.statsByID[ctx.tables["cost_activity"].TblId]
 			stats.NdvMap["amount"] = 10
@@ -4342,7 +4394,7 @@ func TestEncodedIndexCostDoesNotFallbackToUnscorableWhenValidCandidateRejects(t 
 }
 
 func TestEncodedIndexCostKeepsCatalogFallbackWhenAllCandidatesUnscorable(t *testing.T) {
-	ctx := newEncodedExistsPlanTestContext(600_000)
+	ctx := newEncodedExistsPlanTestContext(t, 600_000)
 	ctx.tables["cost_activity"].Indexes = nil
 	stats := ctx.statsByID[ctx.tables["cost_activity"].TblId]
 	stats.NdvMap["amount"] = 600_000
@@ -4363,7 +4415,7 @@ func TestEncodedIndexCostKeepsCatalogFallbackWhenAllCandidatesUnscorable(t *test
 }
 
 func TestEncodedIndexCostChargesBaseRecheckedPushablePredicates(t *testing.T) {
-	ctx := newEncodedExistsPlanTestContext(3.5)
+	ctx := newEncodedExistsPlanTestContext(t, 3.5)
 	activity := ctx.tables["cost_activity"]
 	activity.Indexes = nil
 	stats := ctx.statsByID[activity.TblId]
@@ -4385,7 +4437,7 @@ func TestEncodedIndexCostChargesBaseRecheckedPushablePredicates(t *testing.T) {
 }
 
 func TestEncodedIndexDuplicatePartsUseCanonicalFilterMapping(t *testing.T) {
-	ctx := newEncodedExistsPlanTestContext(1_000)
+	ctx := newEncodedExistsPlanTestContext(t, 1_000)
 	ctx.tables["cost_activity"].Indexes = nil
 	addCostActivityRegularIndex(t, ctx, "idx_state_repeated", []string{
 		"state", "state", "activity_id", catalog.CreateAlias(catalog.CPrimaryKeyColName),
@@ -4447,7 +4499,7 @@ func countExprFunctionCalls(exprs []*planpb.Expr, name string) int {
 
 func newEncodedPaginationPlanTestContext(t testing.TB, stateNDV float64) *encodedIndexPlanTestContext {
 	t.Helper()
-	ctx := newEncodedExistsPlanTestContext(stateNDV)
+	ctx := newEncodedExistsPlanTestContext(t, stateNDV)
 	activity := ctx.tables["cost_activity"]
 	activity.Indexes = nil
 	stats := ctx.statsByID[activity.TblId]
@@ -4698,7 +4750,7 @@ func TestEncodedIndexCostChargesSerializedSimplePKResidual(t *testing.T) {
 }
 
 func TestEncodedIndexCostCountsConsumersAfterProjectionElimination(t *testing.T) {
-	optimizer := &encodedIndexPlanTestOptimizer{ctx: newEncodedExistsPlanTestContext(20)}
+	optimizer := &encodedIndexPlanTestOptimizer{ctx: newEncodedExistsPlanTestContext(t, 20)}
 	queryPlan, err := runOneStmt(optimizer, t, `
 		select activity_alias, activity_alias, activity_alias, activity_alias, activity_alias
 		from (
@@ -4856,7 +4908,7 @@ func firstIndexLookupSerialArgCount(queryPlan *Plan) int {
 }
 
 func TestEncodedIndexCostChargesUnpushableResidualFromPublicPlan(t *testing.T) {
-	ctx := newEncodedExistsPlanTestContext(5)
+	ctx := newEncodedExistsPlanTestContext(t, 5)
 	activity := ctx.tables["cost_activity"]
 	activity.Indexes = nil
 	stats := ctx.statsByID[activity.TblId]
@@ -4876,7 +4928,7 @@ func TestEncodedIndexCostChargesUnpushableResidualFromPublicPlan(t *testing.T) {
 }
 
 func TestEncodedIndexCostChargesCompoundPKExtractionFromPublicPlan(t *testing.T) {
-	ctx := newEncodedExistsPlanTestContext(1_000)
+	ctx := newEncodedExistsPlanTestContext(t, 1_000)
 	activity := ctx.tables["cost_activity"]
 	activity.Indexes = nil
 	stats := ctx.statsByID[activity.TblId]
@@ -4898,7 +4950,7 @@ func TestEncodedIndexCostChargesCompoundPKExtractionFromPublicPlan(t *testing.T)
 }
 
 func TestEncodedIndexCostDeduplicatesRepeatedLeadingPartFromPublicPlan(t *testing.T) {
-	ctx := newEncodedExistsPlanTestContext(10)
+	ctx := newEncodedExistsPlanTestContext(t, 10)
 	activity := ctx.tables["cost_activity"]
 	activity.Indexes = nil
 	ctx.statsByID[activity.TblId].NdvMap["amount"] = 100
@@ -4943,7 +4995,7 @@ func TestEncodedIndexCostIsReachableFromExistsPlan(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			optimizer := &encodedIndexPlanTestOptimizer{ctx: newEncodedExistsPlanTestContext(test.stateNDV)}
+			optimizer := &encodedIndexPlanTestOptimizer{ctx: newEncodedExistsPlanTestContext(t, test.stateNDV)}
 			queryPlan, err := runOneStmt(optimizer, t, query)
 			require.NoError(t, err)
 			if test.wantIndex {
@@ -4958,7 +5010,7 @@ func TestEncodedIndexCostIsReachableFromExistsPlan(t *testing.T) {
 }
 
 func TestEncodedIndexCostPreparedExistsStillRejectsBroadEncodedAccess(t *testing.T) {
-	optimizer := &encodedIndexPlanTestOptimizer{ctx: newEncodedExistsPlanTestContext(2)}
+	optimizer := &encodedIndexPlanTestOptimizer{ctx: newEncodedExistsPlanTestContext(t, 2)}
 	preparePlan, err := runOneStmt(optimizer, t, `
 		prepare cost_exists_range from '
 			select count(*), coalesce(sum(a.activity_id), 0)
@@ -4980,7 +5032,7 @@ func TestEncodedIndexCostPreparedExistsStillRejectsBroadEncodedAccess(t *testing
 }
 
 func TestEncodedIndexCostPreparedUnpushableResidualStillRejectsBroadBackfill(t *testing.T) {
-	ctx := newEncodedExistsPlanTestContext(4)
+	ctx := newEncodedExistsPlanTestContext(t, 4)
 	ctx.tables["cost_activity"].Indexes = nil
 	addCostActivityRegularIndex(t, ctx, "idx_state_time_pk", []string{
 		"state", "created_at", catalog.CreateAlias(catalog.CPrimaryKeyColName),
@@ -5025,7 +5077,7 @@ func TestEncodedIndexCostRejectsBroadBackfillSiblingFromPublicPlan(t *testing.T)
 		{name: "selective predicate keeps backfill index join", stateNDV: 1000, wantIndex: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			optimizer := &encodedIndexPlanTestOptimizer{ctx: newEncodedExistsPlanTestContext(test.stateNDV)}
+			optimizer := &encodedIndexPlanTestOptimizer{ctx: newEncodedExistsPlanTestContext(t, test.stateNDV)}
 			queryPlan, err := runOneStmt(optimizer, t, query)
 			require.NoError(t, err)
 			if test.wantIndex {
@@ -5050,7 +5102,7 @@ func TestEncodedIndexCostKeepsExactLeadingPaginationFromPublicPlan(t *testing.T)
 		{name: "limit with offset", pagination: "limit 1000 offset 500", wantOffset: 500},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			ctx := newEncodedExistsPlanTestContext(20)
+			ctx := newEncodedExistsPlanTestContext(t, 20)
 			ctx.tables["cost_activity"].Indexes = nil
 			addCostActivityRegularIndex(t, ctx, "idx_amount_activity", []string{
 				"amount", "activity_id", catalog.CreateAlias(catalog.CPrimaryKeyColName),
@@ -5077,7 +5129,7 @@ func TestEncodedIndexCostKeepsExactLeadingPaginationFromPublicPlan(t *testing.T)
 }
 
 func TestEncodedIndexCostDoesNotCapByteStringPrefixResidualFromPublicPlan(t *testing.T) {
-	optimizer := &encodedIndexPlanTestOptimizer{ctx: newEncodedExistsPlanTestContext(20)}
+	optimizer := &encodedIndexPlanTestOptimizer{ctx: newEncodedExistsPlanTestContext(t, 20)}
 	queryPlan, err := runOneStmt(optimizer, t,
 		"select activity_id from cost_activity where state = 'READY' limit 1000 offset 500")
 	require.NoError(t, err)
@@ -5134,7 +5186,7 @@ func TestTryIndexOnlyScanChargesResidualExtractionOnLeadingCandidates(t *testing
 }
 
 func TestSuspendScanProtection_RestoresExactCount(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	const scanID int32 = 42
 
 	builder.protectedScans[scanID] = 3
@@ -5148,7 +5200,7 @@ func TestSuspendScanProtection_RestoresExactCount(t *testing.T) {
 }
 
 func TestSuspendScanProtection_NoExistingProtection(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	const scanID int32 = 24
 
 	restore := builder.suspendScanProtection(scanID)
@@ -5161,7 +5213,7 @@ func TestSuspendScanProtection_NoExistingProtection(t *testing.T) {
 }
 
 func TestSuspendScanProtection_DoesNotDeleteNewProtection(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	const scanID int32 = 88
 
 	restore := builder.suspendScanProtection(scanID)
@@ -5173,7 +5225,7 @@ func TestSuspendScanProtection_DoesNotDeleteNewProtection(t *testing.T) {
 }
 
 func TestSuspendScanProtection_PreservesNewProtectionAlongsideOriginal(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	const scanID int32 = 89
 
 	builder.protectedScans[scanID] = 3
@@ -5186,7 +5238,7 @@ func TestSuspendScanProtection_PreservesNewProtectionAlongsideOriginal(t *testin
 }
 
 func TestWithSuspendedScanProtection_RestoresAfterPanic(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	const scanID int32 = 64
 
 	builder.protectedScans[scanID] = 2
@@ -5672,7 +5724,7 @@ func TestFullTextScanProtectionSkipsRegularIndexRule(t *testing.T) {
 }
 
 func TestRegularIndexRuleSkipsIrregularIndexes(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindTag := builder.genNewBindTag()
 	nodeID := int32(12)
 	node := &planpb.Node{
@@ -5722,7 +5774,7 @@ func TestRegularIndexRuleSkipsIrregularIndexes(t *testing.T) {
 }
 
 func TestApplyIndicesForJoinsSkipsIrregularIndexes(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	ctx := NewBindContext(builder, nil)
 	leftTag := builder.genNewBindTag()
 	rightTag := builder.genNewBindTag()
@@ -5799,7 +5851,7 @@ func TestApplyIndicesForJoinsSkipsIrregularIndexes(t *testing.T) {
 }
 
 func TestFindMatchFullTextIndexRequiresScanBindingAndConstantMode(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	ftDef := makeFullTextJoinTestTableDef("ft", true)
 	ftDef.Indexes[0].Visible = false
 	ftTag := builder.genNewBindTag()
@@ -5840,7 +5892,7 @@ func TestFindMatchFullTextIndexRequiresScanBindingAndConstantMode(t *testing.T) 
 func buildFullTextJoinRewriteTestPlan(t *testing.T, leftFullText, rightFullText, leftExtraFilter bool) (*QueryBuilder, int32, int32, int32) {
 	t.Helper()
 
-	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(t), false, true)
 	ctx := NewBindContext(builder, nil)
 
 	leftTag := builder.genNewBindTag()
@@ -5885,8 +5937,11 @@ type fullTextJoinMockCompilerContext struct {
 	fulltextBloomFilterPushdown int8
 }
 
-func newFullTextJoinMockCompilerContext() *fullTextJoinMockCompilerContext {
-	return &fullTextJoinMockCompilerContext{MockCompilerContext: NewMockCompilerContext(true)}
+func newFullTextJoinMockCompilerContext(t testing.TB) *fullTextJoinMockCompilerContext {
+	proc := newPlanTestProcess(t)
+	ctx := &fullTextJoinMockCompilerContext{MockCompilerContext: NewMockCompilerContext(true, proc)}
+	proc.SetResolveVariableFunc(ctx.ResolveVariable)
+	return ctx
 }
 
 func (m *fullTextJoinMockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
@@ -5897,12 +5952,6 @@ func (m *fullTextJoinMockCompilerContext) ResolveVariable(varName string, isSyst
 		return m.fulltextBloomFilterPushdown, nil
 	}
 	return m.MockCompilerContext.ResolveVariable(varName, isSystemVar, isGlobalVar)
-}
-
-func (m *fullTextJoinMockCompilerContext) GetProcess() *process.Process {
-	proc := m.MockCompilerContext.GetProcess()
-	proc.SetResolveVariableFunc(m.ResolveVariable)
-	return proc
 }
 
 func registerFullTextJoinRegularIndexTable(builder *QueryBuilder, indexTableName string) {
@@ -5989,10 +6038,11 @@ func makeJoinIndexTestScan(tableDef *planpb.TableDef, tag int32) *planpb.Node {
 }
 
 func makeFullTextMatchExpr(pattern string, mode int64, tableDef *planpb.TableDef, tag int32, colPositions []int32) *planpb.Expr {
-	args := []*planpb.Expr{
+	args := make([]*planpb.Expr, 0, 2+len(colPositions))
+	args = append(args,
 		makePlan2StringConstExprWithType(pattern, false),
 		makePlan2Int64ConstExprWithType(mode),
-	}
+	)
 	for _, pos := range colPositions {
 		args = append(args, ftjColExpr(tableDef, tag, pos))
 	}
@@ -6160,7 +6210,7 @@ func makeTestRegularIndexProjectBuilder(
 ) (*QueryBuilder, int32) {
 	t.Helper()
 
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	builder.nameByColRef[[2]int32{200, 0}] = "id"
 
 	scanNode := &planpb.Node{
@@ -6237,7 +6287,7 @@ func makeTestRegularIndexMessageBuilder(
 ) (*QueryBuilder, int32) {
 	t.Helper()
 
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 
 	scanNode := &planpb.Node{
 		NodeType: planpb.Node_TABLE_SCAN,
@@ -6563,7 +6613,7 @@ func TestHandleMessageFromTopToScanSkipsOrderedLimitForFloatSortKey(t *testing.T
 }
 
 func TestHandleMessageFromTopToScanThroughDirectProjection(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	ctx := NewBindContext(builder, nil)
 	scanTag := builder.genNewBindTag()
 	projectTag := builder.genNewBindTag()
@@ -6630,7 +6680,7 @@ func TestHandleMessageFromTopToScanPushesRegularIndexLimitThroughDirectProjectio
 }
 
 func TestHandleMessageFromTopToScanSkipsSortWithoutOrderKey(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	builder.qry.Nodes = []*planpb.Node{
 		{NodeType: planpb.Node_TABLE_SCAN, NodeId: 0},
 		{NodeType: planpb.Node_SORT, NodeId: 1, Children: []int32{0}, Limit: makePlan2Uint64ConstExprWithType(1)},
@@ -6641,7 +6691,7 @@ func TestHandleMessageFromTopToScanSkipsSortWithoutOrderKey(t *testing.T) {
 }
 
 func TestHandleMessageFromTopToScanPreservesShuffleOnRejectedPath(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	leftTag := builder.genNewBindTag()
 	rightTag := builder.genNewBindTag()
 	left := &planpb.Node{NodeType: planpb.Node_TABLE_SCAN, NodeId: 0, BindingTags: []int32{leftTag}}
@@ -6675,7 +6725,7 @@ func TestHandleMessageFromTopToScanPreservesShuffleOnRejectedPath(t *testing.T) 
 }
 
 func TestHandleMessageFromTopToScanDisablesShuffleOnAcceptedPath(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	leftTag := builder.genNewBindTag()
 	rightTag := builder.genNewBindTag()
 	left := &planpb.Node{NodeType: planpb.Node_TABLE_SCAN, NodeId: 0, BindingTags: []int32{leftTag}}
@@ -6760,7 +6810,7 @@ func TestHandleMessageFromTopToScanPushesCompositePrimaryKeyOrderedLimit(t *test
 	})
 	require.NoError(t, err)
 
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	scanNode := &planpb.Node{
 		NodeType:    planpb.Node_TABLE_SCAN,
 		NodeId:      0,
@@ -6809,7 +6859,7 @@ func TestHandleMessageFromTopToScanPushesCompositePrimaryKeyOrderedLimit(t *test
 			Args: []*planpb.Expr{DeepCopyExpr(pkExpr), runtimeBound},
 		}},
 	}
-	rejectBuilder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	rejectBuilder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	rejectScanNode := &planpb.Node{
 		NodeType:    planpb.Node_TABLE_SCAN,
 		NodeId:      0,
@@ -6846,7 +6896,7 @@ func TestHandleMessageFromTopToScanRejectsCompositePrimaryKeyOrderedLimitWithRes
 	})
 	require.NoError(t, err)
 
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	scanNode := &planpb.Node{
 		NodeType:    planpb.Node_TABLE_SCAN,
 		NodeId:      0,
@@ -6983,7 +7033,7 @@ func TestRegularIndexFullPrefixEqualityRequiresComparisonSerial(t *testing.T) {
 }
 
 func TestRewriteRegularIndexCursorRangeFilter(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	scanNode := &planpb.Node{
 		BindingTags: []int32{100},
 		TableDef: &planpb.TableDef{
@@ -7239,7 +7289,7 @@ func TestRegularIndexOnlyMatchRequiresContiguousPrefix(t *testing.T) {
 }
 
 func TestGetIndexForNonEquiCond_DetectsPairedRangeOnIndexColumn(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindTag := builder.genNewBindTag()
 	idxDef := &IndexDef{
 		IndexName:      "idx_price",
@@ -7274,7 +7324,7 @@ func TestGetIndexForNonEquiCond_DetectsPairedRangeOnIndexColumn(t *testing.T) {
 }
 
 func TestGetIndexForNonEquiCondSkipsNonEqualityOnDeclaredPrefix(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindTag := builder.genNewBindTag()
 	prefixParams := `{"prefix_lengths":"name:3"}`
 	makeIndex := func(unique bool, parts []string, params string) *planpb.IndexDef {
@@ -7405,7 +7455,7 @@ func TestGetIndexForNonEquiCondSkipsNonEqualityOnDeclaredPrefix(t *testing.T) {
 }
 
 func TestGetIndexForNonEquiCondUsesCompleteRangeIndexAlternative(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindTag := builder.genNewBindTag()
 	prefixIdx := &planpb.IndexDef{
 		IndexName:       "idx_name_prefix",
@@ -7469,7 +7519,7 @@ func TestScopedForceHintsRejectLossyPrefixIndex(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			addIndexHintChoiceTableForTest(mock)
 			tableDef := mock.ctxt.tables["index_hint_t"]
 			tableDef.Cols[1].Typ = planpb.Type{Id: int32(types.T_varchar), Width: 32}
@@ -7482,7 +7532,7 @@ func TestScopedForceHintsRejectLossyPrefixIndex(t *testing.T) {
 	}
 }
 func TestGetIndexForNonEquiCond_SkipsLargePairedRangeByStats(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindTag := builder.genNewBindTag()
 	idxDef := &IndexDef{
 		IndexName:      "idx_price",
@@ -7575,7 +7625,7 @@ func TestRegularIndexPrefixMetadataUsable(t *testing.T) {
 }
 
 func TestGetIndexForNonEquiCondSkipsDeclaredPrefixIndexes(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindTag := builder.genNewBindTag()
 	node := &planpb.Node{
 		BindingTags: []int32{bindTag},
@@ -7627,7 +7677,7 @@ func TestGetIndexForNonEquiCondSkipsDeclaredPrefixIndexes(t *testing.T) {
 }
 
 func TestMakeIndexLookupPartExprDoesNotFailOpen(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	idxDef := &planpb.IndexDef{
 		Parts:           []string{"name"},
 		IndexAlgoParams: `{"prefix_lengths":"name:0"}`,
@@ -7639,7 +7689,7 @@ func TestMakeIndexLookupPartExprDoesNotFailOpen(t *testing.T) {
 }
 
 func TestReplaceEqualConditionUsesNullPropagatingSerialForNonUniqueCompositeIndex(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	idxDef := &planpb.IndexDef{
 		Parts:  []string{"status", "due", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
 		Unique: false,
@@ -7656,7 +7706,7 @@ func TestReplaceEqualConditionUsesNullPropagatingSerialForNonUniqueCompositeInde
 }
 
 func TestReplaceEqualConditionKeepsSerialForUniqueCompositeIndex(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	idxDef := &planpb.IndexDef{
 		Parts:  []string{"status", "due"},
 		Unique: true,
@@ -7676,7 +7726,7 @@ func TestReplaceEqualConditionKeepsSerialForUniqueCompositeIndex(t *testing.T) {
 }
 
 func TestReplaceEqualConditionTruncatesPrefixIndexLookupPart(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	prefixParams, err := catalog.IndexParamsMapToJsonString(map[string]string{
 		catalog.IndexAlgoParamPrefixLengths: "status:4",
 	})
@@ -7694,6 +7744,7 @@ func TestReplaceEqualConditionTruncatesPrefixIndexLookupPart(t *testing.T) {
 
 	require.NotNil(t, expr.GetF())
 	require.Equal(t, "prefix_eq", expr.GetF().Func.ObjName)
+	require.Equal(t, catalog.IndexTableIndexColName, expr.GetF().Args[0].GetCol().Name)
 	require.True(t, exprContainsFuncName(expr, "substring"))
 	serialFn := expr.GetF().Args[1].GetF()
 	require.NotNil(t, serialFn)
@@ -7712,7 +7763,7 @@ func TestReplaceEqualConditionTruncatesPrefixIndexLookupPart(t *testing.T) {
 }
 
 func TestReplaceEqualConditionTruncatesSinglePartPrefixIndexLookup(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	prefixParams, err := catalog.IndexParamsMapToJsonString(map[string]string{
 		catalog.IndexAlgoParamPrefixLengths: "status:4",
 	})
@@ -7729,6 +7780,7 @@ func TestReplaceEqualConditionTruncatesSinglePartPrefixIndexLookup(t *testing.T)
 
 	require.NotNil(t, expr.GetF())
 	require.Equal(t, "=", expr.GetF().Func.ObjName)
+	require.Equal(t, catalog.IndexTableIndexColName, expr.GetF().Args[0].GetCol().Name)
 	require.True(t, exprContainsFuncName(expr.GetF().Args[1], "substring"))
 }
 
@@ -7773,7 +7825,7 @@ func TestApplyExtraFiltersOnIndexUsesPhysicalKeyShape(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+			builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 			baseTag := builder.genNewBindTag()
 			indexTag := builder.genNewBindTag()
 			node := &planpb.Node{
@@ -7816,7 +7868,7 @@ func TestApplyExtraFiltersOnIndexUsesPhysicalKeyShape(t *testing.T) {
 }
 
 func TestReplaceNonEqualConditionUsesNullPropagatingSerialForNonUniqueCompositeIndexIn(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	idxDef := &planpb.IndexDef{
 		Parts:  []string{"status", "due", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
 		Unique: false,
@@ -7831,7 +7883,7 @@ func TestReplaceNonEqualConditionUsesNullPropagatingSerialForNonUniqueCompositeI
 }
 
 func TestReplaceNonEqualConditionWrapsEachPreparedInListItemWithSerial(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	idxDef := &planpb.IndexDef{
 		Parts:  []string{"b", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
 		Unique: false,
@@ -7852,7 +7904,7 @@ func TestReplaceNonEqualConditionWrapsEachPreparedInListItemWithSerial(t *testin
 }
 
 func TestReplaceNonEqualConditionWidensByteStringOpenLowerBound(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	idxDef := &planpb.IndexDef{
 		Parts:  []string{"b", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
 		Unique: false,
@@ -7883,7 +7935,7 @@ func TestReplaceNonEqualConditionWidensByteStringOpenLowerBound(t *testing.T) {
 }
 
 func TestIndexOnlyResidualDetectsNestedByteStringPrefixLookup(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	idxDef := &planpb.IndexDef{
 		Parts:  []string{"b", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
 		Unique: false,
@@ -7912,7 +7964,7 @@ func TestIndexOnlyResidualDetectsNestedByteStringPrefixLookup(t *testing.T) {
 }
 
 func TestIndexOnlyResidualLeadingFilterPositionsAreMinimal(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	idxDef := &planpb.IndexDef{
 		Parts:  []string{"first", "last", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
 		Unique: false,
@@ -7975,7 +8027,7 @@ func TestTryIndexOnlyScanRejectsLossyPrefixIndex(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+			builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 			ctx := NewBindContext(builder, nil)
 			bindTag := builder.genNewBindTag()
 			idxDef := &planpb.IndexDef{
@@ -8022,7 +8074,7 @@ func TestApplyIndicesForFiltersUsesIndexJoinForPrefixIndex(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	ctx := NewBindContext(builder, nil)
 	bindTag := builder.genNewBindTag()
 	idxDef := &planpb.IndexDef{
@@ -8070,7 +8122,7 @@ func TestApplyIndicesForFiltersUsesIndexJoinForPrefixIndex(t *testing.T) {
 }
 
 func TestApplyIndicesForFiltersIgnoresVisibilityMetadata(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	ctx := NewBindContext(builder, nil)
 	bindTag := builder.genNewBindTag()
 	idxDef := &planpb.IndexDef{
@@ -8171,7 +8223,7 @@ func TestTryIndexOnlyScanUsesComparisonNullSemanticsAndMinimalResiduals(t *testi
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+			builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 			ctx := NewBindContext(builder, nil)
 			bindTag := builder.genNewBindTag()
 			idxDef := &planpb.IndexDef{
@@ -8285,7 +8337,7 @@ func TestIndexFilterNeedsDecodedNullResidual(t *testing.T) {
 
 func TestNullableStrictUpperBoundRegularIndexPlans(t *testing.T) {
 	t.Run("one-part covering limit scan keeps decoded residual", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		addIndexHintChoiceTableForTest(mock)
 
 		queryPlan, err := runOneStmt(mock, t, "select id, a from index_hint_t force index(idx_a) where a < 10 limit 1")
@@ -8304,7 +8356,7 @@ func TestNullableStrictUpperBoundRegularIndexPlans(t *testing.T) {
 	})
 
 	t.Run("safe or keeps decoded residual", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		addIndexHintChoiceTableForTest(mock)
 
 		queryPlan, err := runOneStmt(mock, t, "select id from index_hint_t force index(idx_a) where a < 10 or a >= 100")
@@ -8323,7 +8375,7 @@ func TestNullableStrictUpperBoundRegularIndexPlans(t *testing.T) {
 	})
 
 	t.Run("non-nullable strict upper bound skips residual", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		addIndexHintChoiceTableForTest(mock)
 		mock.ctxt.tables["index_hint_t"].Cols[1].Typ.NotNullable = true
 
@@ -8335,7 +8387,7 @@ func TestNullableStrictUpperBoundRegularIndexPlans(t *testing.T) {
 	})
 
 	t.Run("backfill join keeps base residual", func(t *testing.T) {
-		mock := NewMockOptimizer(true)
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		addIndexHintChoiceTableForTest(mock)
 		tableDef := mock.ctxt.tables["index_hint_t"]
 		payloadPos := int32(len(tableDef.Cols))
@@ -8367,7 +8419,7 @@ func TestNullableStrictUpperBoundRegularIndexPlans(t *testing.T) {
 		"select id from index_hint_t where a > 10",
 	} {
 		t.Run("unsafe prefix comparison stays on base scan "+sql, func(t *testing.T) {
-			mock := NewMockOptimizer(true)
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			addIndexHintChoiceTableForTest(mock)
 
 			queryPlan, err := runOneStmt(mock, t, sql)
@@ -8412,7 +8464,7 @@ func TestTryIndexOnlyScanPreservesVarcharResidualForPrefixPredicates(t *testing.
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+			builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 			ctx := NewBindContext(builder, nil)
 			bindTag := builder.genNewBindTag()
 			idxDef := &planpb.IndexDef{
@@ -8554,7 +8606,7 @@ func TestTryIndexOnlyScanHandlesByteStringPrefixLookups(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+			builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 			ctx := NewBindContext(builder, nil)
 			bindTag := builder.genNewBindTag()
 			idxDef := &planpb.IndexDef{
@@ -8655,7 +8707,7 @@ func TestIndexOnlyResidualLeadingFilterPositionsRecognizesNestedPrefixRange(t *t
 }
 
 func TestReplaceRangePairCondition_UsesPrefixBetweenForSecondaryIndex(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindTag := builder.genNewBindTag()
 	idxDef := &planpb.IndexDef{
 		Parts:  []string{"price", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
@@ -8685,6 +8737,7 @@ func TestReplaceRangePairCondition_UsesPrefixBetweenForSecondaryIndex(t *testing
 	require.NoError(t, err)
 	require.NotNil(t, expr.GetF())
 	require.Equal(t, "prefix_between", expr.GetF().Func.ObjName)
+	require.Equal(t, catalog.IndexTableIndexColName, expr.GetF().Args[0].GetCol().Name)
 	assert.Equal(t, "serial", wrappedSerialFuncName(t, expr.GetF().Args[1]))
 	assert.Equal(t, "serial", wrappedSerialFuncName(t, expr.GetF().Args[2]))
 	require.InDelta(t, 0.12, expr.Selectivity, 1e-9)
@@ -8693,7 +8746,7 @@ func TestReplaceRangePairCondition_UsesPrefixBetweenForSecondaryIndex(t *testing
 func TestTryIndexOnlyScanCoalescesRangePair(t *testing.T) {
 	makeScan := func(t *testing.T, columnType planpb.Type, filters []*planpb.Expr) (*QueryBuilder, int32, *planpb.IndexDef) {
 		t.Helper()
-		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 		ctx := NewBindContext(builder, nil)
 		bindTag := builder.genNewBindTag()
 		idxDef := &planpb.IndexDef{
@@ -8765,7 +8818,7 @@ func TestTryIndexOnlyScanCoalescesRangePair(t *testing.T) {
 }
 
 func TestReplaceRangePairConditionWidensByteStringOpenLowerBound(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	idxDef := &planpb.IndexDef{
 		Parts:  []string{"b", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
 		Unique: false,
@@ -8794,7 +8847,7 @@ func TestReplaceRangePairConditionWidensByteStringOpenLowerBound(t *testing.T) {
 }
 
 func TestIndexRangeSerializationNormalizesDecimalBounds(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindTag := builder.genNewBindTag()
 	idxDef := &planpb.IndexDef{
 		Parts:  []string{"price", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
@@ -9001,7 +9054,7 @@ func TestIndexRangeSerializationNormalizesDecimalBounds(t *testing.T) {
 }
 
 func TestGetIndexForNonEquiCond_PrefersFirstPairedRangeByFilterOrder(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindTag := builder.genNewBindTag()
 	idxPrice := &IndexDef{
 		IndexName:      "idx_price",
@@ -9046,7 +9099,7 @@ func TestGetIndexForNonEquiCond_PrefersFirstPairedRangeByFilterOrder(t *testing.
 }
 
 func TestGetIndexForNonEquiCond_KeepsEarlierNonPairedFilterPriority(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindTag := builder.genNewBindTag()
 	idxPrice := &IndexDef{
 		IndexName:      "idx_price",
@@ -9794,7 +9847,7 @@ func TestFindSpatialIndexFilterSkipsGeodeticEnvelope(t *testing.T) {
 }
 
 func TestSpatialIndexOnlyScanInheritsOrderHints(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	ctx := NewBindContext(builder, nil)
 	tag := builder.genNewBindTag()
 	idxDef := &planpb.IndexDef{

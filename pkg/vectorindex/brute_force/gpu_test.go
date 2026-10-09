@@ -77,7 +77,7 @@ func TestGpuBruteForce(t *testing.T) {
 func TestGpuBruteForceConcurrent(t *testing.T) {
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 	dimension := uint(128)
 	ncpu := uint(8)
@@ -137,7 +137,7 @@ func TestGpuBruteForceConcurrent(t *testing.T) {
 
 func TestGpuSearchFloat32(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	dimension := uint(16)

@@ -44,21 +44,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const (
-	Rows          = 10     // default rows
-	BenchmarkRows = 100000 // default rows for benchmark
-)
-
-// add unit tests for cases
-type joinTestCase struct {
-	arg    *DedupJoin
-	flgs   []bool // flgs[i] == true: nullable
-	types  []types.Type
-	proc   *process.Process
-	cancel context.CancelFunc
-	barg   *hashbuild.HashBuild
-}
-
 func newDedupTestSpillEngine(
 	t *testing.T,
 	cfg spillutil.SpillEngineConfig,
@@ -84,7 +69,7 @@ func newDedupTestSpillEngine(
 }
 
 func TestDedupFinalizeCleansConsumedBuffer(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	baseline := proc.Mp().CurrNB()
 
 	bat := batch.NewOffHeapWithSize(1)
@@ -112,7 +97,7 @@ func TestDedupFinalizeCleansConsumedBuffer(t *testing.T) {
 }
 
 func TestWithRestoredJoinBat1VectorsRestoresOwnerOnError(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	baseline := proc.Mp().CurrNB()
 	original := testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
 	executorOwned := testutil.MakeInt32Vector([]int32{2}, nil, proc.Mp())
@@ -138,7 +123,7 @@ func TestWithRestoredJoinBat1VectorsRestoresOwnerOnError(t *testing.T) {
 func writeDedupSpillBatch(t *testing.T, proc *process.Process, name string, value int32) *os.File {
 	spillfs, err := proc.GetSpillFileService()
 	require.NoError(t, err)
-	fd, err := spillfs.CreateAndRemoveFile(proc.Ctx, name)
+	fd, err := spillfs.CreateFile(proc.Ctx, name)
 	require.NoError(t, err)
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{value}, nil, proc.Mp())
@@ -165,11 +150,18 @@ func newDedupSpillFile(t *testing.T, fd *os.File, rows int64) *message.SpillFile
 	t.Helper()
 	info, err := fd.Stat()
 	require.NoError(t, err)
-	return message.NewSpillFile(fd, rows, uint64(info.Size()), nil)
+	name := fd.Name()
+	require.NoError(t, fd.Close())
+	file := message.NewReopenableSpillFile(
+		func(context.Context) (*os.File, error) { return os.Open(name) },
+		func() error { return os.Remove(name) }, rows, uint64(info.Size()), nil,
+	)
+	t.Cleanup(func() { require.NoError(t, file.Close()) })
+	return file
 }
 
 func TestDedupSpillAdvancesAfterOutput(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	baseline := proc.Mp().CurrNB()
 	typ := types.T_int32.ToType()
 	conditions := [][]*plan.Expr{{newExpr(0, typ)}, {newExpr(0, typ)}}
@@ -220,7 +212,7 @@ func TestDedupSpillAdvancesAfterOutput(t *testing.T) {
 }
 
 func TestDedupResetClearsBucketState(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	arg := &DedupJoin{}
 	arg.ctr.batches = []*batch.Batch{batch.EmptyBatch}
 	arg.ctr.batchRowCount = 1
@@ -254,7 +246,7 @@ func TestDedupShuffleWorkersFinalizeTheirOwnPartitions(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			baseline := proc.Mp().CurrNB()
 			typ := types.T_int32.ToType()
 			bat := batch.NewOffHeapWithSize(1)
@@ -320,7 +312,7 @@ func TestDedupResetNotifiesOnlySharedBuildMerger(t *testing.T) {
 		{name: "shuffle worker owns its partition", isShuffle: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			mailbox := NewWorkerJoinMailbox(2)
 			arg := &DedupJoin{
 				NumCPU:    2,
@@ -343,8 +335,7 @@ func TestDedupResetNotifiesOnlySharedBuildMerger(t *testing.T) {
 }
 
 func TestDedupResetReportsWorkerFailure(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	t.Cleanup(proc.Free)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	mailbox := NewWorkerJoinMailbox(2)
 	arg := &DedupJoin{
 		NumCPU:   2,
@@ -361,7 +352,7 @@ func TestDedupResetReportsWorkerFailure(t *testing.T) {
 }
 
 func TestDedupPrepareFailureCanRetry(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	typ := types.T_int32.ToType()
 	valid := newExpr(0, typ)
 	invalid := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int32)}}
@@ -390,154 +381,102 @@ var (
 	tag int32
 )
 
-func makeTestCases(t *testing.T) []joinTestCase {
-	return []joinTestCase{
-		newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []int32{0},
-			[][]*plan.Expr{
-				{
-					newExpr(0, types.T_int32.ToType()),
-				},
-				{
-					newExpr(0, types.T_int32.ToType()),
-				},
-			}),
-		newTestCase(t, []bool{true}, []types.Type{types.T_int32.ToType()}, []int32{1},
-			[][]*plan.Expr{
-				{
-					newExpr(0, types.T_int32.ToType()),
-				},
-				{
-					newExpr(0, types.T_int32.ToType()),
-				},
-			}),
-	}
-}
-
 func TestString(t *testing.T) {
-	buf := new(bytes.Buffer)
-	for _, tc := range makeTestCases(t) {
-		tc.arg.String(buf)
-	}
+	var buf bytes.Buffer
+	arg := &DedupJoin{}
+	arg.String(&buf)
+	require.Equal(t, "dedup_join: dedup join ", buf.String())
 }
 
 func TestDedupJoin(t *testing.T) {
-	for _, tc := range makeTestCases(t) {
-		resetChildren(tc.arg, tc.proc.Mp())
-		resetHashBuildChildren(tc.barg, tc.proc.Mp())
-		err := tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-		tc.barg.IsDedup = true
-		tc.barg.DelColIdx = -1
-		err = tc.barg.Prepare(tc.proc)
-		require.NoError(t, err)
-
-		res, err := vm.Exec(tc.barg, tc.proc)
-		require.NoError(t, err)
-		require.Equal(t, res.Batch == nil, true)
-		res, err = vm.Exec(tc.barg, tc.proc)
-		require.NoError(t, err)
-		require.Equal(t, true, res.Batch == nil)
-
-		tc.arg.Reset(tc.proc, false, nil)
-		tc.barg.Reset(tc.proc, false, nil)
-
-		resetChildren(tc.arg, tc.proc.Mp())
-		resetHashBuildChildren(tc.barg, tc.proc.Mp())
-		tc.proc.GetMessageBoard().Reset()
-		err = tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-		tc.barg.IsDedup = true
-		err = tc.barg.Prepare(tc.proc)
-		require.NoError(t, err)
-
-		res, err = vm.Exec(tc.barg, tc.proc)
-		require.NoError(t, err)
-		require.Equal(t, res.Batch == nil, true)
-		res, err = vm.Exec(tc.barg, tc.proc)
-		require.NoError(t, err)
-		require.Equal(t, true, res.Batch == nil)
-
-		tc.arg.Reset(tc.proc, false, nil)
-		tc.barg.Reset(tc.proc, false, nil)
-
-		tc.arg.Free(tc.proc, false, nil)
-		tc.barg.Free(tc.proc, false, nil)
-
-		resetChildren(tc.arg, tc.proc.Mp())
-		resetHashBuildChildren(tc.barg, tc.proc.Mp())
-		tc.proc.GetMessageBoard().Reset()
-		tc.arg.OnDuplicateAction = plan.Node_IGNORE
-		err = tc.arg.Prepare(tc.proc)
-		require.NoError(t, err)
-		tc.barg.IsDedup = true
-		tc.barg.OnDuplicateAction = plan.Node_IGNORE
-		err = tc.barg.Prepare(tc.proc)
-		require.NoError(t, err)
-
-		res, err = vm.Exec(tc.barg, tc.proc)
-		require.NoError(t, err)
-		require.Equal(t, res.Batch == nil, true)
-		res, err = vm.Exec(tc.barg, tc.proc)
-		require.NoError(t, err)
-		require.Equal(t, true, res.Batch == nil)
-
-		tc.arg.Reset(tc.proc, false, nil)
-		tc.barg.Reset(tc.proc, false, nil)
-
-		tc.arg.Free(tc.proc, false, nil)
-		tc.barg.Free(tc.proc, false, nil)
-
-		tc.proc.Free()
-		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+	proc, _ := newCaptureTestProc(t)
+	typ := types.T_int32.ToType()
+	conditions := [][]*plan.Expr{{newExpr(0, typ)}, {newExpr(0, typ)}}
+	tag++
+	curTag := tag
+	arg := &DedupJoin{
+		LeftTypes:  []types.Type{typ},
+		RightTypes: []types.Type{typ},
+		Conditions: conditions,
+		Result:     []colexec.ResultPos{{Rel: 1, Pos: 0}},
+		JoinMapTag: curTag,
+	}
+	buildArg := &hashbuild.HashBuild{
+		NeedHashMap:      true,
+		NeedBatches:      true,
+		NeedAllocateSels: true,
+		IsDedup:          true,
+		DelColIdx:        -1,
+		Conditions:       conditions[1],
+		JoinMapTag:       curTag,
+		JoinMapRefCnt:    1,
+	}
+	installTestAllocation(t, arg, buildArg)
+	t.Cleanup(func() {
+		arg.Free(proc, false, nil)
+		buildArg.Free(proc, false, nil)
+		require.Zero(t, proc.Mp().CurrNB())
+		require.Zero(t, proc.Mp().OnHeapCurrNB())
+	})
+	for generation, action := range []plan.Node_OnDuplicateAction{plan.Node_FAIL, plan.Node_FAIL, plan.Node_IGNORE} {
+		if generation == 2 {
+			arg.Free(proc, false, nil)
+			buildArg.Free(proc, false, nil)
+		}
+		arg.OnDuplicateAction = action
+		buildArg.OnDuplicateAction = action
+		func() {
+			inputs := []*batch.Batch{batch.NewWithSize(1), batch.NewWithSize(1)}
+			defer func() {
+				arg.Reset(proc, false, nil)
+				buildArg.Reset(proc, false, nil)
+				usedAfterReset := arg.allocationAccount.Snapshot().Used
+				for _, input := range inputs {
+					input.Clean(proc.Mp())
+				}
+				proc.GetMessageBoard().Reset()
+				require.Zero(t, usedAfterReset)
+				require.Zero(t, proc.Mp().CurrNB())
+				require.Zero(t, proc.Mp().OnHeapCurrNB())
+			}()
+			for _, input := range inputs {
+				input.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1000}, nil, proc.Mp())
+				input.SetRowCount(2)
+			}
+			arg.SetChildren([]vm.Operator{colexec.NewMockOperator().WithBatchs(inputs[:1])})
+			buildArg.SetChildren([]vm.Operator{colexec.NewMockOperator().WithBatchs(inputs[1:])})
+			require.NoError(t, arg.Prepare(proc))
+			require.NoError(t, buildArg.Prepare(proc))
+			res, err := vm.Exec(buildArg, proc)
+			require.NoError(t, err)
+			require.Equal(t, vm.ExecStop, res.Status)
+			require.Nil(t, res.Batch)
+			var values []int32
+			stopped := false
+			for calls := 0; calls < 4; calls++ {
+				res, err = vm.Exec(arg, proc)
+				require.NoError(t, err)
+				if res.Batch != nil && res.Batch.RowCount() > 0 {
+					require.Len(t, res.Batch.Vecs, 1)
+					require.Equal(t, types.T_int32, res.Batch.Vecs[0].GetType().Oid)
+					require.Zero(t, res.Batch.Vecs[0].GetNulls().Count())
+					values = append(values, vector.MustFixedColNoTypeCheck[int32](res.Batch.Vecs[0])...)
+				}
+				if res.Status == vm.ExecStop {
+					stopped = true
+					break
+				}
+			}
+			require.True(t, stopped, "join must reach its terminal state")
+			if action == plan.Node_IGNORE {
+				require.Empty(t, values)
+			} else {
+				require.Equal(t, []int32{1, 1000}, values)
+			}
+		}()
 	}
 }
 
-/*
-	func BenchmarkJoin(b *testing.B) {
-		for i := 0; i < b.N; i++ {
-			tcs = []joinTestCase{
-				newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, []int32{0},
-					[][]*plan.Expr{
-						{
-							newExpr(0, types.T_int8.ToType()),
-						},
-						{
-							newExpr(0, types.T_int8.ToType()),
-						},
-					}),
-				newTestCase([]bool{true}, []types.Type{types.T_int8.ToType()}, []int32{0},
-					[][]*plan.Expr{
-						{
-							newExpr(0, types.T_int8.ToType()),
-						},
-						{
-							newExpr(0, types.T_int8.ToType()),
-						},
-					}),
-			}
-			t := new(testing.T)
-			for _, tc := range tcs {
-				bats := hashBuild(t, tc)
-				err := tc.arg.Prepare(tc.proc)
-				require.NoError(t, err)
-				tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-				tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(batch.EmptyBatch)
-				tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-				tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-				tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewRegMsg(newBatch(tc.types, tc.proc, Rows))
-				tc.proc.Reg.MergeReceivers[0].Ch <- nil
-				tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(bats[0])
-				tc.proc.Reg.MergeReceivers[1].Ch <- testutil.NewRegMsg(bats[1])
-				for {
-					ok, err := tc.arg.Call(tc.proc)
-					if ok.Status == vm.ExecStop || err != nil {
-						break
-					}
-				}
-			}
-		}
-	}
-*/
 func newExpr(pos int32, typ types.Type) *plan.Expr {
 	return &plan.Expr{
 		Typ: plan.Type{
@@ -553,92 +492,12 @@ func newExpr(pos int32, typ types.Type) *plan.Expr {
 	}
 }
 
-func newTestCase(t *testing.T, flgs []bool, ts []types.Type, rp []int32, cs [][]*plan.Expr) joinTestCase {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	proc.SetMessageBoard(message.NewMessageBoard())
-	_, cancel := context.WithCancel(context.Background())
-	//args := make([]*plan.Expr, 0, 2)
-	//args = append(args, &plan.Expr{
-	//	Typ: plan.Type{
-	//		Id: int32(ts[0].Oid),
-	//	},
-	//	Expr: &plan.Expr_Col{
-	//		Col: &plan.ColRef{
-	//			RelPos: 0,
-	//			ColPos: 0,
-	//		},
-	//	},
-	//})
-	//args = append(args, &plan.Expr{
-	//	Typ: plan.Type{
-	//		Id: int32(ts[0].Oid),
-	//	},
-	//	Expr: &plan.Expr_Col{
-	//		Col: &plan.ColRef{
-	//			RelPos: 1,
-	//			ColPos: 0,
-	//		},
-	//	},
-	//})
-	tag++
-	tc := joinTestCase{
-		types:  ts,
-		flgs:   flgs,
-		proc:   proc,
-		cancel: cancel,
-		arg: &DedupJoin{
-			RightTypes: ts,
-			Conditions: cs,
-			OperatorBase: vm.OperatorBase{
-				OperatorInfo: vm.OperatorInfo{
-					Idx:     0,
-					IsFirst: false,
-					IsLast:  false,
-				},
-			},
-			JoinMapTag: tag,
-		},
-		barg: &hashbuild.HashBuild{
-			NeedHashMap: true,
-			Conditions:  cs[1],
-			OperatorBase: vm.OperatorBase{
-				OperatorInfo: vm.OperatorInfo{
-					Idx:     0,
-					IsFirst: false,
-					IsLast:  false,
-				},
-			},
-			NeedAllocateSels: true,
-			JoinMapTag:       tag,
-			JoinMapRefCnt:    1,
-		},
-	}
-	installTestAllocation(t, tc.arg, tc.barg)
-	return tc
-}
-
-func resetChildren(arg *DedupJoin, m *mpool.MPool) {
-	bat := colexec.MakeMockBatchs(m)
-	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
-	arg.Children = nil
-	arg.AppendChild(op)
-}
-
-func resetHashBuildChildren(arg *hashbuild.HashBuild, m *mpool.MPool) {
-	bat := colexec.MakeMockBatchs(m)
-	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
-	arg.Children = nil
-	arg.AppendChild(op)
-}
-
-// newCaptureTestProc creates a process with a mock TxnOperator, which is
-// required by probe() since it calls proc.GetTxnOperator().Txn().IsPessimistic().
 func newCaptureTestProc(t *testing.T) (*process.Process, *gomock.Controller) {
 	ctrl := gomock.NewController(t)
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.SetMessageBoard(message.NewMessageBoard())
 	proc.Base.TxnOperator = txnOp
 	return proc, ctrl
@@ -1183,8 +1042,7 @@ func TestReceiveWorkerMsg_RejectsMissingMailboxAndNilStatus(t *testing.T) {
 
 func TestDedupFinalizeWorkerPublicationBoundaries(t *testing.T) {
 	t.Run("missing mailbox", func(t *testing.T) {
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-		t.Cleanup(proc.Free)
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 		worker := &DedupJoin{
 			NumCPU:   2,
 			IsMerger: false,
@@ -1195,8 +1053,7 @@ func TestDedupFinalizeWorkerPublicationBoundaries(t *testing.T) {
 	})
 
 	t.Run("canceled before publication", func(t *testing.T) {
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-		t.Cleanup(proc.Free)
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 		ctx, cancel := context.WithCancel(proc.Ctx)
 		cancel()
 		proc.Ctx = ctx
@@ -1212,8 +1069,7 @@ func TestDedupFinalizeWorkerPublicationBoundaries(t *testing.T) {
 	})
 
 	t.Run("merger already stopped", func(t *testing.T) {
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-		t.Cleanup(proc.Free)
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 		mailbox := NewWorkerJoinMailbox(2)
 		mailbox.stopAndDrain(proc)
 		worker := &DedupJoin{
@@ -1228,8 +1084,7 @@ func TestDedupFinalizeWorkerPublicationBoundaries(t *testing.T) {
 	})
 
 	t.Run("full mailbox", func(t *testing.T) {
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-		t.Cleanup(proc.Free)
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 		mailbox := NewWorkerJoinMailbox(1)
 		sent, stopped, _ := mailbox.trySend(&WorkerJoinMsg{})
 		require.True(t, sent)
@@ -1249,7 +1104,7 @@ func TestDedupFinalizeWorkerPublicationBoundaries(t *testing.T) {
 }
 
 func TestWorkerJoinMailboxStopAndSendHaveSingleCaptureOwner(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	baseline := proc.Mp().CurrNB()
 	t.Cleanup(proc.Free)
 
@@ -1288,8 +1143,7 @@ func TestWorkerJoinMailboxStopAndSendHaveSingleCaptureOwner(t *testing.T) {
 }
 
 func TestWorkerJoinMailboxReopensAfterCompleteResetGeneration(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	t.Cleanup(proc.Free)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	mailbox := NewWorkerJoinMailbox(2)
 
 	mailbox.stopAndDrain(proc)
@@ -1310,7 +1164,7 @@ func TestWorkerJoinMailboxReopensAfterCompleteResetGeneration(t *testing.T) {
 }
 
 func TestDedupFinalizeMissingWorkerHonorsCancellation(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	arg := &DedupJoin{
 		NumCPU:            2,
 		IsMerger:          true,
@@ -1336,7 +1190,7 @@ func TestDedupFinalizeMissingWorkerHonorsCancellation(t *testing.T) {
 }
 
 func TestDedupFinalizeConcurrentCancellationReturns(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	arg := &DedupJoin{
 		NumCPU:            2,
 		IsMerger:          true,
@@ -1383,7 +1237,7 @@ func TestDedupFinalizeConcurrentCancellationReturns(t *testing.T) {
 }
 
 func TestDedupFinalizeWorkerFailureCleansTransferredMessages(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	baseline := proc.Mp().CurrNB()
 	captured := vector.NewOffHeapVecWithType(types.T_int32.ToType())
 	require.NoError(t, vector.AppendFixed(captured, int32(1), false, proc.Mp()))
@@ -1420,7 +1274,7 @@ func TestDedupFinalizeWorkerFailureCleansTransferredMessages(t *testing.T) {
 }
 
 func TestDedupFinalizeWorkerFailureDoesNotWaitForMissingWorker(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	workerErr := moerr.NewInternalErrorNoCtx("worker failed")
 	mailbox := NewWorkerJoinMailbox(3)
 	arg := &DedupJoin{
@@ -1467,7 +1321,7 @@ func TestDedupFinalizeWorkerFailureDoesNotWaitForMissingWorker(t *testing.T) {
 }
 
 func TestDedupFinalizeNormalAbortDoesNotHideCancellation(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	mailbox := NewWorkerJoinMailbox(2)
 	sent, stopped, _ := mailbox.trySend(&WorkerJoinMsg{aborted: true})
 	require.True(t, sent)
@@ -1495,8 +1349,7 @@ func TestDedupFinalizeNormalAbortDoesNotHideCancellation(t *testing.T) {
 }
 
 func TestDedupFinalizeMailboxSupportsMultipleSpillBuckets(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	t.Cleanup(proc.Free)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	mailbox := NewWorkerJoinMailbox(3)
 	workers := []*DedupJoin{
 		{
@@ -1557,8 +1410,7 @@ func TestDedupFinalizeMailboxSupportsMultipleSpillBuckets(t *testing.T) {
 }
 
 func TestDedupFinalizeResetPublishesAbortForNextSpillBucket(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	t.Cleanup(proc.Free)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 	mailbox := NewWorkerJoinMailbox(2)
 	worker := &DedupJoin{
@@ -1605,7 +1457,7 @@ func TestDedupFinalizeResetPublishesAbortForNextSpillBucket(t *testing.T) {
 }
 
 func TestDedupFinalizeCancellationAfterPublishDoesNotDuplicateStatus(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	ctx, cancel := context.WithCancel(proc.Ctx)
 	proc.Ctx = ctx
 	t.Cleanup(proc.Free)
@@ -1635,7 +1487,7 @@ func TestDedupFinalizeCancellationAfterPublishDoesNotDuplicateStatus(t *testing.
 }
 
 func TestDedupFinalizeNormalWorkerAbortStopsWithoutPartialOutput(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	baseline := proc.Mp().CurrNB()
 	typ := types.T_int32.ToType()
 	build := batch.NewOffHeapWithSize(1)
@@ -1679,7 +1531,7 @@ func TestDedupFinalizeNormalWorkerAbortStopsWithoutPartialOutput(t *testing.T) {
 }
 
 func TestDedupFinalizeParallelMergePreservesDataAcrossReset(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	baseline := proc.Mp().CurrNB()
 	mailbox := NewWorkerJoinMailbox(2)
 	arg := &DedupJoin{

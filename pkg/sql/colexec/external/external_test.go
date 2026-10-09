@@ -128,7 +128,6 @@ func (r *checkLockTableBindsReader) Close() error {
 
 func newTestCase(t *testing.T, format, jsondata string) externalTestCase {
 	proc := testutil.NewProcess(t)
-	proc.Base.FileService = testutil.NewFS(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	return externalTestCase{
 		proc:  proc,
@@ -1427,6 +1426,7 @@ func TestIcebergParquetProfileStats(t *testing.T) {
 
 func TestReadFileOffsetCompressedUnsafe(t *testing.T) {
 	fs := testutil.NewFS(t)
+	t.Cleanup(func() { fs.Close(context.Background()) })
 	content := []byte("0,0,1,2,0,0,3,4,0,0,abc,2024-01-01,2024-01-01 00:00:01,2024-01-01 00:00:01,1,1.23,txt,aaa,bbb,ccc\n")
 	var buf bytes.Buffer
 	zw := zlib.NewWriter(&buf)

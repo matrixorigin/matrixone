@@ -560,28 +560,25 @@ func runTNStoreTestBeforeStart(
 	testFn func(*store),
 	opts ...Option) {
 	runTNStoreTestWithSetup(t, beforeStart, testFn, func(name string) (*fileservice.FileServices, error) {
-		local, err := fileservice.NewMemoryFS(
-			defines.LocalFileServiceName,
-			fileservice.DisabledCacheConfig, nil,
-		)
-		if err != nil {
-			return nil, err
+		var acquired []fileservice.FileService
+		complete := false
+		defer func() {
+			if !complete {
+				for _, fs := range acquired {
+					fs.Close(context.Background())
+				}
+			}
+		}()
+		for _, serviceName := range []string{defines.LocalFileServiceName, defines.SharedFileServiceName, defines.ETLFileServiceName} {
+			fs, err := fileservice.NewMemoryFS(serviceName, fileservice.DisabledCacheConfig, nil)
+			if err != nil {
+				return nil, err
+			}
+			acquired = append(acquired, fs)
 		}
-		s3, err := fileservice.NewMemoryFS(
-			defines.SharedFileServiceName,
-			fileservice.DisabledCacheConfig, nil,
-		)
-		if err != nil {
-			return nil, err
-		}
-		etl, err := fileservice.NewMemoryFS(
-			defines.ETLFileServiceName,
-			fileservice.DisabledCacheConfig, nil,
-		)
-		if err != nil {
-			return nil, err
-		}
-		return fileservice.NewFileServices(name, local, s3, etl)
+		fs, err := fileservice.NewFileServices(name, acquired...)
+		complete = err == nil
+		return fs, err
 	}, opts...)
 }
 
@@ -678,7 +675,7 @@ func newTestStore(
 	}
 	c.LogtailServer.ListenAddress = testTNLogtailAddress
 	fs, err := fsFactory(defines.LocalFileServiceName)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 
 	rt := runtime.NewRuntime(
 		metadata.ServiceType_TN,
@@ -688,13 +685,24 @@ func newTestStore(
 			clock.NewHLCClock(
 				func() int64 { return time.Now().UTC().UnixNano() },
 				time.Duration(math.MaxInt64))))
+	var owner Service
+	t.Cleanup(func() {
+		if owner != nil {
+			if closeErr := owner.Close(); closeErr != nil {
+				t.Errorf("retain TN file service after incomplete close: %v", closeErr)
+				return
+			}
+		}
+		fs.Close(context.Background())
+	})
 	s, err := NewService(
 		c,
 		rt,
 		fs,
 		nil,
+		func(value Service) { owner = value },
 		options...)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	return s.(*store)
 }
 

@@ -190,7 +190,7 @@ func TestCompileJoinFallsBackForUnprovenMaterializedMarkKey(t *testing.T) {
 }
 
 func TestCompileBroadcastCompositeMarkExpressionsUseHashJoin(t *testing.T) {
-	compilerCtx := plan2.NewMockCompilerContext(true)
+	compilerCtx := plan2.NewMockCompilerContext(true, newPlanTestProcess(t))
 	statements, err := mysql.Parse(
 		compilerCtx.GetContext(),
 		`select (n.n_nationkey + 0, n.n_regionkey + 0) in (
@@ -273,7 +273,7 @@ func TestCompileBroadcastCompositeMarkExpressionsUseHashJoin(t *testing.T) {
 }
 
 func TestCompileNullableNotExistsAntiJoinUsesHashJoin(t *testing.T) {
-	compilerCtx := plan2.NewMockCompilerContext(true)
+	compilerCtx := plan2.NewMockCompilerContext(true, newPlanTestProcess(t))
 	statements, err := mysql.Parse(
 		compilerCtx.GetContext(),
 		`select n.n_nationkey

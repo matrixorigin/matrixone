@@ -52,7 +52,7 @@ func TestPreparedIntervalMarkerRebindsInternalDateFunction(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			for _, name := range []string{"date_add", "date_sub"} {
 				t.Run(name, func(t *testing.T) {
-					prepared, err := runOneStmt(NewMockOptimizer(false), t,
+					prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 						"prepare stmt_interval from select "+name+"('2026-01-01', interval ? "+tc.unit+")")
 					require.NoError(t, err)
 
@@ -88,7 +88,7 @@ func TestPreparedIntervalMarkerRebindsInternalDateFunction(t *testing.T) {
 
 func TestPreparedIntervalMarkerRepeatedExecutionsDoNotMutatePlan(t *testing.T) {
 	ctx := context.Background()
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare stmt_interval_reuse from select date_add('2026-01-01', interval ? second)")
 	require.NoError(t, err)
 	preparedPlan := prepared.GetDcl().GetPrepare().GetPlan()
@@ -120,7 +120,7 @@ func TestPreparedTimeIntervalMarkerKeepsNumericSource(t *testing.T) {
 		for _, unit := range []string{"microsecond", "second_microsecond", "hour_minute"} {
 			for _, name := range []string{"date_add", "date_sub"} {
 				t.Run(tc.name+"/"+name+"/"+unit, func(t *testing.T) {
-					prepared, err := runOneStmt(NewMockOptimizer(false), t,
+					prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 						"prepare stmt_time_interval from select "+name+"(time '12:00:00', interval ? "+unit+")")
 					require.NoError(t, err)
 					filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(),
@@ -147,7 +147,7 @@ func TestPreparedImplicitTemporalCastTracksNestedFSP(t *testing.T) {
 		{"explicit", "prepare p from select unix_timestamp(cast(from_unixtime(?) as timestamp(0)))", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t, tc.sql)
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, tc.sql)
 			require.NoError(t, err)
 			original := prepared.GetDcl().GetPrepare().GetPlan()
 			filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), original,
@@ -290,7 +290,7 @@ func TestDateArithmeticNumericSourcesPreserveTheirUnitAndPrecision(t *testing.T)
 }
 
 func TestPrepareKeepsMalformedDatetimeInInactiveBranch(t *testing.T) {
-	_, err := runOneStmt(NewMockOptimizer(false), t,
+	_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"PREPARE p FROM 'SELECT CASE WHEN ? THEN CAST(''123 -12:34:56.000000'' AS DATETIME) ELSE CAST(''2024-01-01'' AS DATETIME) END'")
 	require.NoError(t, err)
 }
@@ -365,19 +365,19 @@ func TestTimeCalendarIntervalRejectedAcrossSyntaxes(t *testing.T) {
 		{"minus operator", "cast('12:00:00' as time) - interval ? day", "bad value [TIME INTERVAL]"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := runOneStmt(NewMockOptimizer(false), t,
+			_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 				"prepare stmt_time_unit from select "+tc.sql)
 			require.ErrorContains(t, err, tc.wantErr)
 		})
 	}
 	for _, name := range []string{"date_add", "date_sub"} {
-		prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 			"prepare stmt_time_hour from select "+name+"(cast('12:00:00' as time), interval ? hour)")
 		require.NoError(t, err)
 		fn := findPlanFunctionExpr(prepared.GetDcl().GetPrepare().GetPlan(), name)
 		require.NotNil(t, fn)
 		require.Equal(t, int32(types.T_time), fn.Typ.Id)
-		prepared, err = runOneStmt(NewMockOptimizer(false), t,
+		prepared, err = runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 			"prepare stmt_time_compound from select "+name+"(cast('12:00:00' as time), interval ? hour_second)")
 		require.NoError(t, err)
 		fn = findPlanFunctionExpr(prepared.GetDcl().GetPrepare().GetPlan(), name)
@@ -401,7 +401,7 @@ func TestPreparedIntervalMarkerRelatedSyntaxes(t *testing.T) {
 		{name: "minus operator", sql: "'2026-01-01' - interval ? second", functionName: "date_sub"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t,
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 				"prepare stmt_interval_syntax from select "+tc.sql)
 			require.NoError(t, err)
 

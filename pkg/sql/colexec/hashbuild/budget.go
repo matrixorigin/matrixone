@@ -15,6 +15,8 @@
 package hashbuild
 
 import (
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -24,6 +26,53 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+// EstimatedHashMapBytes returns a conservative cell-capacity projection for
+// the retained row count. Distinct-key statistics are not required: using the
+// row count as the NDV upper bound prevents physical-memory safety from
+// depending on stale or absent table statistics.
+func (hb *HashmapBuilder) EstimatedHashMapBytes(rowCount int64) (uint64, error) {
+	if hb == nil || rowCount < 0 {
+		return 0, process.ErrExecutionResourceInvalid
+	}
+	if rowCount == 0 {
+		return 0, nil
+	}
+	return estimatedHashMapBytes(rowCount, hb.keyWidth <= 8 && !hb.hasGroupingKey())
+}
+
+// estimatedHashMapBytes separates the capacity calculation from inspecting
+// retained data. Streaming ingress supplies its incrementally observed key kind.
+func estimatedHashMapBytes(rowCount int64, useIntHashMap bool) (uint64, error) {
+	if rowCount < 0 {
+		return 0, process.ErrExecutionResourceInvalid
+	}
+	if rowCount == 0 {
+		return 0, nil
+	}
+	cardinality := uint64(rowCount)
+	if useIntHashMap {
+		return hashtable.EstimateInt64HashMapSize(cardinality), nil
+	}
+	return hashtable.EstimateStringHashMapSize(cardinality), nil
+}
+
+// EstimatedResidentBuildBytes adds the retained build relation to the
+// worst-case hash-cell projection. The saturating result is safe to compare
+// with an admission limit even for corrupt or overflow-sized metadata.
+func (hb *HashmapBuilder) EstimatedResidentBuildBytes(
+	retained uint64,
+	rowCount int64,
+) (uint64, error) {
+	mapBytes, err := hb.EstimatedHashMapBytes(rowCount)
+	if err != nil {
+		return 0, err
+	}
+	if mapBytes > math.MaxUint64-retained {
+		return math.MaxUint64, nil
+	}
+	return retained + mapBytes, nil
+}
 
 // setBudget retains the statement generation for non-memory resource ledgers
 // such as spill files and disk. Physical memory admission is exclusively

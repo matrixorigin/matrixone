@@ -27,7 +27,7 @@ import (
 )
 
 func TestPreparedNumericContextKeepsExplicitDecimalThroughWeakLiteral(t *testing.T) {
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare stmt_decimal_weak_literal from 'select cast(abs(? + 0.5) as decimal(20,2))'")
 	require.NoError(t, err)
 
@@ -39,7 +39,7 @@ func TestPreparedNumericContextKeepsExplicitDecimalThroughWeakLiteral(t *testing
 		require.Equal(t, int32(2), typ.Scale)
 	}
 
-	doublePrepared, err := runOneStmt(NewMockOptimizer(false), t,
+	doublePrepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare stmt_double_weak_literal from 'select cast(abs(? + 0.5) as double)'")
 	require.NoError(t, err)
 	doubleParamTypes := collectUniquePlanParamTypes(t, doublePrepared.GetDcl().GetPrepare().Plan)
@@ -117,7 +117,7 @@ func TestPreparedNumericContextUsesInsertValuesTarget(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			optimizer := NewMockOptimizer(false)
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 			stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), test.sql, 1)
 			require.NoError(t, err)
 
@@ -150,7 +150,7 @@ func TestNumericValuesFunctionWithoutParamsKeepsOwnArgDomain(t *testing.T) {
 
 	for _, sql := range tests {
 		t.Run(sql, func(t *testing.T) {
-			optimizer := NewMockOptimizer(false)
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 			stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), sql, 1)
 			require.NoError(t, err)
 
@@ -161,7 +161,7 @@ func TestNumericValuesFunctionWithoutParamsKeepsOwnArgDomain(t *testing.T) {
 }
 
 func TestPreparedNumericReturningFunctionKeepsIndependentArgDomain(t *testing.T) {
-	optimizer := NewMockOptimizer(false)
+	optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 	stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(),
 		"insert into constraint_test.emp (empno) values (field(?, ?, ?))", 1)
 	require.NoError(t, err)
@@ -788,7 +788,7 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			optimizer := NewMockOptimizer(false)
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 			stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), test.sql, 1)
 			require.NoError(t, err)
 
@@ -809,7 +809,7 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 }
 
 func TestPreparedNumericFunctionControlArgUsesOverloadType(t *testing.T) {
-	optimizer := NewMockOptimizer(false)
+	optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 	stmts, err := mysql.Parse(
 		optimizer.CurrentContext().GetContext(),
 		"insert into constraint_test.emp (sal) select round(?, ?)",
@@ -826,7 +826,7 @@ func TestPreparedNumericFunctionControlArgUsesOverloadType(t *testing.T) {
 }
 
 func TestPreparedNumericAggregateReachesCorrelatedDerivedTable(t *testing.T) {
-	optimizer := NewMockOptimizer(true)
+	optimizer := NewMockOptimizer(true, newPlanTestProcess(t))
 	// SUM seeds a float64 target for d.x before the correlated derived source is
 	// bound, exercising the numeric-projection buildTable entry.
 	stmt, err := mysql.ParseOne(
@@ -915,7 +915,7 @@ func TestPreparedNumericContextUsesClusterTableStarVisibility(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			optimizer := NewMockOptimizer(false)
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 			optimizer.ctxt.GetAccountIdFunc = func() (uint32, error) {
 				return test.accountID, nil
 			}
@@ -947,7 +947,7 @@ func TestPreparedNumericContextUsesClusterTableStarVisibility(t *testing.T) {
 }
 
 func TestPreparedNumericContextUsesClusterTableStarVisibilityInScalarLineage(t *testing.T) {
-	optimizer := NewMockOptimizer(false)
+	optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 	optimizer.ctxt.GetAccountIdFunc = func() (uint32, error) {
 		return 1, nil
 	}
@@ -981,7 +981,7 @@ func TestPreparedNumericContextUsesClusterTableStarVisibilityInScalarLineage(t *
 }
 
 func TestPreparedNumericContextDoesNotPropagateThroughExistsSubquery(t *testing.T) {
-	optimizer := NewMockOptimizer(false)
+	optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 	stmt, err := mysql.ParseOne(
 		optimizer.CurrentContext().GetContext(),
 		"insert into constraint_test.emp (sal) select (select ? + ? where exists(select ? + ?))",
@@ -1003,7 +1003,7 @@ func TestPreparedNumericContextDoesNotPropagateThroughExistsSubquery(t *testing.
 }
 
 func TestPreparedNumericContextKeepsIndependentGroupByParameters(t *testing.T) {
-	optimizer := NewMockOptimizer(false)
+	optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 	stmt, err := mysql.ParseOne(
 		optimizer.CurrentContext().GetContext(),
 		"insert into constraint_test.emp (sal) select ? + ? from nation group by ? + ?",
@@ -1025,7 +1025,7 @@ func TestPreparedNumericContextKeepsIndependentGroupByParameters(t *testing.T) {
 }
 
 func TestPreparedNumericContextReusesGroupByAliasParameters(t *testing.T) {
-	optimizer := NewMockOptimizer(false)
+	optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 	stmt, err := mysql.ParseOne(
 		optimizer.CurrentContext().GetContext(),
 		"insert into constraint_test.emp (sal) select ? + ? as x from nation group by x",
@@ -1123,7 +1123,7 @@ func TestPreparedNumericContextHandlesMergedJoinStarColumns(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			optimizer := NewMockOptimizer(false)
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 			stmt, err := mysql.ParseOne(optimizer.CurrentContext().GetContext(), test.sql, 1)
 			require.NoError(t, err)
 
@@ -1148,7 +1148,7 @@ func TestPreparedNumericContextHandlesMergedJoinStarColumns(t *testing.T) {
 }
 
 func TestPreparedNumericContextUsesSampleSuffixTarget(t *testing.T) {
-	optimizer := NewMockOptimizer(false)
+	optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 	stmt, err := mysql.ParseOne(
 		optimizer.CurrentContext().GetContext(),
 		"insert into constraint_test.emp (sal, deptno, comm) "+
@@ -1170,7 +1170,7 @@ func TestPreparedNumericContextUsesSampleSuffixTarget(t *testing.T) {
 }
 
 func TestPreparedNumericContextUsesLegacyInsertSelectTarget(t *testing.T) {
-	optimizer := NewMockOptimizer(false)
+	optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 	stmt, err := mysql.ParseOne(
 		optimizer.CurrentContext().GetContext(),
 		"insert into ext(v) select ? + ? from nation",
@@ -1321,7 +1321,7 @@ func TestPreparedNonNumericAssignmentKeepsTargetType(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			optimizer := NewMockOptimizer(false)
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 			stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), test.sql, 1)
 			require.NoError(t, err)
 
@@ -1347,7 +1347,7 @@ func TestNumericAssignmentTargetKeepsGroupedProjection(t *testing.T) {
 	}
 	for _, sql := range tests {
 		t.Run(sql, func(t *testing.T) {
-			optimizer := NewMockOptimizer(false)
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 			stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), sql, 1)
 			require.NoError(t, err)
 
@@ -1358,7 +1358,7 @@ func TestNumericAssignmentTargetKeepsGroupedProjection(t *testing.T) {
 }
 
 func TestParameterizedGroupingSetsKeepDistinctPositions(t *testing.T) {
-	optimizer := NewMockOptimizer(false)
+	optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 	stmts, err := mysql.Parse(
 		optimizer.CurrentContext().GetContext(),
 		"select count(*) from nation group by grouping sets "+
@@ -1399,7 +1399,7 @@ func TestNumericConditionalContextSkipsPredicateParams(t *testing.T) {
 	}
 	for _, sql := range tests {
 		t.Run(sql, func(t *testing.T) {
-			optimizer := NewMockOptimizer(false)
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 			stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), sql, 1)
 			require.NoError(t, err)
 
@@ -1413,7 +1413,7 @@ func TestNumericConditionalContextSkipsPredicateParams(t *testing.T) {
 }
 
 func TestValuesExprIsFuncCall(t *testing.T) {
-	optimizer := NewMockOptimizer(false)
+	optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 	sql := "insert into constraint_test.emp (sal) values " +
 		"(1), (-1), (mod(1, 2)), ((mod(1, 2))), (abs(1)), ((abs(1))), (cast(abs(1) as double))"
 	stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), sql, 1)
@@ -1432,7 +1432,7 @@ func TestValuesExprIsFuncCall(t *testing.T) {
 }
 
 func TestBindProjectionListWithSampleFunc(t *testing.T) {
-	optimizer := NewMockOptimizer(false)
+	optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 	sql := "select n_name, sample(n_nationkey, 10 rows) from nation group by n_name"
 	stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), sql, 1)
 	require.NoError(t, err)
@@ -1633,7 +1633,7 @@ func TestPreparedNumericContextUsesUpdateTarget(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			optimizer := NewMockOptimizer(false)
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 			stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(), test.sql, 1)
 			require.NoError(t, err)
 

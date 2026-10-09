@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -174,7 +175,7 @@ func testWindowValidationBinder() *stubWindowBinder {
 const preparedWindowFrameSQL = "select sum(n_nationkey) over (order by n_nationkey rows between ? preceding and ? following) from nation"
 
 func TestPreparedWindowFrameMarkers(t *testing.T) {
-	optimizer := NewMockOptimizer(false)
+	optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 	stmts, err := parsers.Parse(optimizer.CurrentContext().GetContext(), dialect.MYSQL, preparedWindowFrameSQL, 1)
 	require.NoError(t, err)
 
@@ -186,7 +187,7 @@ func TestPreparedWindowFrameMarkers(t *testing.T) {
 }
 
 func TestBuildPlanRejectsNegativeTemporalWindowBounds(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	units := []string{"microsecond", "second", "minute", "hour", "day", "month", "year"}
 	for _, unit := range units {
 		t.Run(unit, func(t *testing.T) {
@@ -200,7 +201,7 @@ func TestBuildPlanRejectsNegativeTemporalWindowBounds(t *testing.T) {
 }
 
 func TestNthValueRequiresConstantPositiveOffset(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	tests := []struct {
 		name    string
 		sql     string
@@ -244,7 +245,7 @@ func TestNthValueRequiresConstantPositiveOffset(t *testing.T) {
 }
 
 func TestLagLeadRejectInvalidConstantOffset(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	for _, name := range []string{"lag", "lead"} {
 		for _, offset := range []string{
 			"-1",
@@ -281,7 +282,7 @@ func TestLagLeadRejectInvalidConstantOffset(t *testing.T) {
 }
 
 func TestPreparedNthValueAcceptsPositionalOffset(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	stmt, err := parsers.ParseOne(
 		context.Background(),
 		dialect.MYSQL,
@@ -331,7 +332,7 @@ func TestPreparedNthValueAcceptsPositionalOffset(t *testing.T) {
 	require.Equal(t, "2", firstWindowSpec(t, binaryFilled).WindowFunc.GetF().Args[1].GetLit().GetSval())
 
 	logicPlan, err := runOneStmt(
-		NewMockOptimizer(false),
+		NewMockOptimizer(false, newPlanTestProcess(t)),
 		t,
 		"prepare nth_param from 'select nth_value(a, ?) over (order by a) from select_test.bind_select'",
 	)
@@ -345,7 +346,7 @@ func TestPreparedNthValueAcceptsPositionalOffset(t *testing.T) {
 }
 
 func TestPreparedWindowRangeFrameMarkers(t *testing.T) {
-	optimizer := NewMockOptimizer(false)
+	optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 	stmts, err := parsers.Parse(
 		optimizer.CurrentContext().GetContext(),
 		dialect.MYSQL,
@@ -363,7 +364,7 @@ func TestPreparedWindowRangeFrameMarkers(t *testing.T) {
 }
 
 func TestPreparedWindowRangeFrameMarkersInBothBounds(t *testing.T) {
-	optimizer := NewMockOptimizer(false)
+	optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 	stmts, err := parsers.Parse(
 		optimizer.CurrentContext().GetContext(),
 		dialect.MYSQL,
@@ -380,7 +381,7 @@ func TestPreparedWindowRangeFrameMarkersInBothBounds(t *testing.T) {
 }
 
 func TestPreparedWindowRangeFrameMarkerRequiresNumericOrder(t *testing.T) {
-	optimizer := NewMockOptimizer(false)
+	optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 	stmts, err := parsers.Parse(
 		optimizer.CurrentContext().GetContext(),
 		dialect.MYSQL,
@@ -396,7 +397,7 @@ func TestPreparedWindowRangeFrameMarkerRequiresNumericOrder(t *testing.T) {
 func TestPreparedWindowIntervalFrameMarkersAreUnsupported(t *testing.T) {
 	for _, frameType := range []string{"rows", "range"} {
 		t.Run(frameType, func(t *testing.T) {
-			optimizer := NewMockOptimizer(false)
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 			stmts, err := parsers.Parse(
 				optimizer.CurrentContext().GetContext(),
 				dialect.MYSQL,
@@ -414,7 +415,7 @@ func TestPreparedWindowIntervalFrameMarkersAreUnsupported(t *testing.T) {
 func TestPreparedWindowNestedIntervalFrameMarkersAreUnsupported(t *testing.T) {
 	for _, frameType := range []string{"rows", "range"} {
 		t.Run(frameType, func(t *testing.T) {
-			optimizer := NewMockOptimizer(false)
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 			stmts, err := parsers.Parse(
 				optimizer.CurrentContext().GetContext(),
 				dialect.MYSQL,
@@ -553,7 +554,7 @@ func buildNamedWindowPlan(t *testing.T, sql string) (*planpb.Plan, error) {
 	if err != nil {
 		return nil, err
 	}
-	return BuildPlan(NewMockCompilerContext(true), stmt, false)
+	return BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
 }
 
 func TestNamedWindowSpecHelpers(t *testing.T) {
@@ -834,7 +835,7 @@ func TestPreparedNamedWindowParameterMetadata(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			logicPlan, err := runOneStmt(
-				NewMockOptimizer(false),
+				NewMockOptimizer(false, newPlanTestProcess(t)),
 				t,
 				"prepare named_window_param from '"+test.sql+"'",
 			)
@@ -848,7 +849,7 @@ func TestPreparedNamedWindowParameterMetadata(t *testing.T) {
 
 	t.Run("nested definitions are globally deduplicated", func(t *testing.T) {
 		logicPlan, err := runOneStmt(
-			NewMockOptimizer(false),
+			NewMockOptimizer(false, newPlanTestProcess(t)),
 			t,
 			`prepare nested_named_window_param from '
 				select 1 from nation
@@ -887,7 +888,7 @@ func TestNamedWindowValidationRetainsDependencies(t *testing.T) {
 
 	t.Run("prepare schema invalidation", func(t *testing.T) {
 		logicPlan, err := runOneStmt(
-			NewMockOptimizer(false), t,
+			NewMockOptimizer(false, newPlanTestProcess(t)), t,
 			"prepare unused_named_window_dependency from '"+sql+"'",
 		)
 		require.NoError(t, err)
@@ -902,8 +903,8 @@ func TestNamedWindowValidationRetainsDependencies(t *testing.T) {
 }
 
 func TestWindowValidationPrivilegeCarriersAreCompactAndDeduplicated(t *testing.T) {
-	owner := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
-	validation := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	owner := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
+	validation := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	wideTable := &planpb.TableDef{
 		TableType: "ordinary",
 		Cols:      make([]*planpb.ColDef, 1024),
@@ -955,14 +956,20 @@ func TestWindowValidationPrivilegeCarriersAreCompactAndDeduplicated(t *testing.T
 	// A different view path is a distinct authorization context, even for the
 	// same relation and snapshot.
 	validation.qry.Nodes = []*planpb.Node{{
-		NodeType:    planpb.Node_TABLE_SCAN,
-		ObjRef:      ordinary.ObjRef,
-		TableDef:    wideTable,
-		OriginViews: []string{"tpch.region_view"},
-		DirectView:  "tpch.region_view",
+		NodeType: planpb.Node_TABLE_SCAN,
+		ObjRef:   ordinary.ObjRef,
+		TableDef: wideTable,
+		ViewPath: []*planpb.ViewStep{{DatabaseName: "tpch", ViewName: "region_view", Snapshot: &planpb.Snapshot{Tenant: &planpb.SnapshotTenant{}}}},
 	}}
 	appendWindowValidationPrivilegeScans(owner, validation)
 	require.Len(t, owner.windowValidationScans, 4)
+	// An inner snapshot difference cannot disappear when compacting carriers.
+	validation.qry.Nodes[0].ViewPath[0].Snapshot.TS = &timestamp.Timestamp{PhysicalTime: 42, LogicalTime: 7}
+	appendWindowValidationPrivilegeScans(owner, validation)
+	require.Len(t, owner.windowValidationScans, 5)
+	validation.qry.Nodes[0].ViewPath[0].Snapshot.TS.LogicalTime = 8
+	require.Equal(t, uint32(7), owner.windowValidationScans[4].ViewPath[0].Snapshot.TS.LogicalTime)
+
 }
 
 func namedWindowsSQL(prefix string, count int) string {
@@ -1025,7 +1032,7 @@ func TestNamedWindowLimitPerQueryBlock(t *testing.T) {
 }
 
 func TestSnapshotWindowValidationCTEState(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	ctx := NewBindContext(builder, nil)
 	declarationCtx := NewBindContext(builder, nil)
 	declarationCtx.views = []string{"original_view"}
@@ -1169,7 +1176,7 @@ func requirePreparedWindowFrameParam(t *testing.T, expr *planpb.Expr, typ types.
 }
 
 func TestProjectionAndHavingBinderBindExprOnWindowAlias(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindCtx := NewBindContext(builder, nil)
 	bindCtx.windowTag = builder.GenNewBindTag()
 
@@ -1192,7 +1199,7 @@ func TestProjectionAndHavingBinderBindExprOnWindowAlias(t *testing.T) {
 }
 
 func TestProjectionBinderBindWinFuncCachesWindowExpr(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindCtx := NewBindContext(builder, nil)
 	bindCtx.windowTag = builder.GenNewBindTag()
 
@@ -1222,7 +1229,7 @@ func TestProjectionBinderBindWinFuncCachesWindowExpr(t *testing.T) {
 }
 
 func TestProjectionBinderRejectsNestedWindowFuncFromSQL(t *testing.T) {
-	builder, bindCtx := genBuilderAndCtx()
+	builder, bindCtx := genBuilderAndCtx(t)
 	bindCtx.windowTag = builder.GenNewBindTag()
 
 	havingBinder := NewHavingBinder(builder, bindCtx)
@@ -1242,7 +1249,7 @@ func TestProjectionBinderRejectsNestedWindowFuncFromSQL(t *testing.T) {
 }
 
 func TestBuildPlanWindowDependencyValidation(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 
 	tests := []struct {
 		name    string
@@ -1300,7 +1307,7 @@ func TestBuildPlanWindowDependencyValidation(t *testing.T) {
 
 func TestHavingBinderBindWinFuncCoversFrameAndGuard(t *testing.T) {
 	t.Run("inside aggregate rejects window func", func(t *testing.T) {
-		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 		bindCtx := NewBindContext(builder, nil)
 		bindCtx.windowTag = builder.GenNewBindTag()
 
@@ -1312,7 +1319,7 @@ func TestHavingBinderBindWinFuncCoversFrameAndGuard(t *testing.T) {
 	})
 
 	t.Run("range frame binds frame constants", func(t *testing.T) {
-		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 		bindCtx := NewBindContext(builder, nil)
 		bindCtx.windowTag = builder.GenNewBindTag()
 
@@ -1828,7 +1835,7 @@ func TestResetWindowIntervalExprRejectsNegativeValues(t *testing.T) {
 }
 
 func TestBinderMakeFrameConstValueWrappers(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindCtx := NewBindContext(builder, nil)
 
 	havingBinder := NewHavingBinder(builder, bindCtx)

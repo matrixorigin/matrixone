@@ -190,23 +190,27 @@ func caseConversionReturnType(parameters []types.Type) types.Type {
 		return types.T_varchar.ToType()
 	}
 	source := parameters[0]
+	withRevision := func(result types.Type) types.Type {
+		result.CollationVersion = source.CollationVersion
+		return result
+	}
 	if types.StaticStringDomain(source) == types.StringDomainBinary {
-		return binaryStringResultType(declaredStringByteBound(source))
+		return withRevision(binaryStringResultType(declaredStringByteBound(source)))
 	}
 	switch source.Oid {
 	case types.T_char, types.T_varchar:
-		return textStringResultType(declaredTextCharacterBound(source), source.Charset)
+		return withRevision(textStringResultType(declaredTextCharacterBound(source), source.Charset))
 	case types.T_text:
 		if source.Width == types.MaxTinyTextLen {
 			// Case conversion preserves rune count. Express bounded TINYTEXT as
 			// VARCHAR characters instead of inventing a non-persistable TEXT width.
-			return types.NewWithCharset(types.T_varchar, source.Width, 0, source.Charset)
+			return withRevision(types.NewWithCharset(types.T_varchar, source.Width, 0, source.Charset))
 		}
 		// Wider TEXT families cannot express the potentially expanded byte bound
 		// with a standard persistent subtype marker. Unknown is safer than a cap.
 		result := types.T_text.ToType()
 		result.Charset = source.Charset
-		return result
+		return withRevision(result)
 	default:
 		return types.T_varchar.ToType()
 	}
@@ -2968,6 +2972,26 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `json_array_insert`
+	{
+		functionId: JSON_ARRAY_INSERT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    jsonSetCheckFn,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_json, types.T_varchar, types.T_any},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_json.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInJsonSet().buildJsonArrayInsert
+				},
+			},
+		},
+	},
+
 	// function `json_remove`
 	{
 		functionId: JSON_REMOVE,
@@ -3876,7 +3900,12 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 0,
 				retType: func(parameters []types.Type) types.Type {
-					return parameters[2]
+					result := parameters[2]
+					// BINARY's -1 scale requests padding for CAST, not tuple decoding.
+					if result.Oid == types.T_binary && result.Scale == -1 {
+						result.Scale = 0
+					}
+					return result
 				},
 				newOp: func() executeLogicOfOverload {
 					return builtInSerialExtract

@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -23,215 +24,40 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
+	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	log "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service"
 )
-
-/*
-func mockLogtail(table api.TableID, ts timestamp.Timestamp) logtail.TableLogtail {
-	return logtail.TableLogtail{
-		CkpLocation: "",
-		Table:       &table,
-		Ts:          &ts,
-		Commands: []api.Entry{
-			{
-				DatabaseId:   table.DbId,
-				TableId:      table.TbId,
-				TableName:    table.TbName,
-				DatabaseName: table.DbName,
-			},
-		},
-	}
-}
-
-type logtailer struct {
-	tables []api.TableID
-}
-
-func mockLocktailer(tables ...api.TableID) taelogtail.Logtailer {
-	return &logtailer{
-		tables: tables,
-	}
-}
-
-func (m *logtailer) RangeLogtail(
-	ctx context.Context, from, to timestamp.Timestamp,
-) ([]logtail.TableLogtail, []func(), error) {
-	tails := make([]logtail.TableLogtail, 0, len(m.tables))
-	for _, table := range m.tables {
-		tails = append(tails, mockLogtail(table, to))
-	}
-	return tails, nil, nil
-}
-
-func (m *logtailer) RegisterCallback(cb func(from, to timestamp.Timestamp, closeCB func(), tails ...logtail.TableLogtail) error) {
-}
-
-func (m *logtailer) ReadBarrier(context.Context) (timestamp.Timestamp, error) {
-	frontier, _ := m.Now()
-	return frontier, nil
-}
-
-func (m *logtailer) TableLogtail(
-	ctx context.Context, table api.TableID, from, to timestamp.Timestamp,
-) (logtail.TableLogtail, func(), error) {
-	for _, t := range m.tables {
-		if t.String() == table.String() {
-			return mockLogtail(table, to), nil, nil
-		}
-	}
-	table.DbName = "d1"
-	table.TbName = "t2"
-	return logtail.TableLogtail{
-		CkpLocation: "",
-		Table:       &table,
-		Ts:          &to,
-		Commands: []api.Entry{
-			{
-				DatabaseId:   table.DbId,
-				TableId:      table.TbId,
-				TableName:    table.TbName,
-				DatabaseName: table.DbName,
-			},
-		},
-	}, nil, nil
-}
-
-func (m *logtailer) Now() (timestamp.Timestamp, timestamp.Timestamp) {
-	panic("not implemented")
-}
-
-func startLogtailServer(
-	t *testing.T, address string, rt runtime.Runtime, tables ...api.TableID,
-) func() {
-	logtailer := mockLocktailer(tables...)
-
-	// construct logtail server
-	logtailServer, err := service.NewLogtailServer(
-		address, options.NewDefaultLogtailServerCfg(), logtailer, rt, nil,
-		service.WithServerCollectInterval(20*time.Millisecond),
-		service.WithServerSendTimeout(5*time.Second),
-		service.WithServerEnableChecksum(true),
-		service.WithServerMaxMessageSize(32+7),
-	)
-	require.NoError(t, err)
-
-	// start logtail server
-	err = logtailServer.Start()
-	require.NoError(t, err)
-
-	// generate incremental logtail
-	go func() {
-		from := timestamp.Timestamp{}
-
-		for {
-			now, _ := rt.Clock().Now()
-
-			tails := make([]logtail.TableLogtail, 0, len(tables))
-			for _, table := range tables {
-				tails = append(tails, mockLogtail(table, now))
-			}
-
-			err := logtailServer.NotifyLogtail(from, now, nil, tails...)
-			if err != nil {
-				return
-			}
-			from = now
-
-			time.Sleep(10 * time.Millisecond)
-		}
-	}()
-
-	stop := func() {
-		err := logtailServer.Close()
-		require.NoError(t, err)
-	}
-	return stop
-}
-
-func runTestWithLogTailServer(t *testing.T, test func(ctx context.Context, e *Engine)) {
-	defer leaktest.AfterTest(t)()
-	tempDir := os.TempDir()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	sid := "s1"
-	rt := runtime.DefaultRuntime()
-	runtime.SetupServiceBasedRuntime(sid, rt)
-
-	serverAddr := fmt.Sprintf("unix://%s/%d.sock", tempDir, time.Now().Nanosecond())
-	assert.NoError(t, os.RemoveAll(serverAddr))
-	clusterClient := &testHAKeeperClient{}
-	clusterClient.addTN(log.NormalState, "tn1", serverAddr)
-
-	cluster := clusterservice.NewMOCluster(
-		sid,
-		clusterClient,
-		time.Hour,
-	)
-	defer cluster.Close()
-	cluster.ForceRefresh(true)
-	rt.SetGlobalVariables(runtime.ClusterService, cluster)
-	lk := lockservice.NewLockService(lockservice.Config{
-		ServiceID: sid,
-	})
-	defer lk.Close()
-	rt.SetGlobalVariables(runtime.LockService, lk)
-	mp, err := mpool.NewMPool(sid, 1024*1024, 0)
-	catalog.SetupDefines(sid)
-	assert.NoError(t, err)
-	sender, err := rpc.NewSender(rpc.Config{}, rt)
-	require.NoError(t, err)
-	cli := client.NewTxnClient(sid, sender)
-	defer cli.Close()
-	e := New(
-		ctx,
-		sid,
-		mp,
-		nil,
-		cli,
-		nil,
-		nil,
-		4,
-	)
-	e.skipConsume = true
-	defer e.Close()
-
-	colexec.NewServer("")
-
-	stop := startLogtailServer(t, serverAddr, rt)
-	defer stop()
-
-	tw := client.NewTimestampWaiter(runtime.ServiceRuntime(sid).Logger())
-	defer tw.Close()
-	assert.NoError(t, e.InitLogTailPushModel(ctx, tw))
-	defer e.PushClient().Disconnect()
-	test(ctx, e)
-}
-*/
 
 type barrierTimestampWaiter struct {
 	get func(context.Context, timestamp.Timestamp) (timestamp.Timestamp, error)
@@ -438,18 +264,22 @@ func TestGetLogTailServiceAddr(t *testing.T) {
 	t.Run("ok1", func(t *testing.T) {
 		clusterClient := &testHAKeeperClient{}
 		moc := clusterservice.NewMOCluster("", clusterClient, time.Hour)
+		t.Cleanup(moc.Close)
 		runtime.ServiceRuntime("").SetGlobalVariables(
 			runtime.ClusterService,
 			moc,
 		)
 		clusterClient.addTN(log.NormalState, "tn1", "a")
 		moc.ForceRefresh(true)
-		assert.Equal(t, "a", e.getLogTailServiceAddr())
+		addr, err := e.getLogTailServiceAddr(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, "a", addr)
 	})
 
 	t.Run("ok2", func(t *testing.T) {
 		clusterClient := &testHAKeeperClient{}
 		moc := clusterservice.NewMOCluster("", clusterClient, time.Hour)
+		t.Cleanup(moc.Close)
 		runtime.ServiceRuntime("").SetGlobalVariables(
 			runtime.ClusterService,
 			moc,
@@ -459,7 +289,9 @@ func TestGetLogTailServiceAddr(t *testing.T) {
 			clusterClient.addTN(log.NormalState, "tn1", "a")
 			moc.ForceRefresh(true)
 		}()
-		assert.Equal(t, "a", e.getLogTailServiceAddr())
+		addr, err := e.getLogTailServiceAddr(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, "a", addr)
 	})
 
 	t.Run("fail, empty addr", func(t *testing.T) {
@@ -470,6 +302,7 @@ func TestGetLogTailServiceAddr(t *testing.T) {
 		}()
 		clusterClient := &testHAKeeperClient{}
 		moc := clusterservice.NewMOCluster("", clusterClient, time.Hour)
+		t.Cleanup(moc.Close)
 		runtime.ServiceRuntime("").SetGlobalVariables(
 			runtime.ClusterService,
 			moc,
@@ -477,7 +310,7 @@ func TestGetLogTailServiceAddr(t *testing.T) {
 		clusterClient.addTN(log.NormalState, "tn1", "")
 		moc.ForceRefresh(true)
 		assert.Panics(t, func() {
-			e.getLogTailServiceAddr()
+			e.getLogTailServiceAddr(context.Background())
 		})
 	})
 
@@ -489,12 +322,13 @@ func TestGetLogTailServiceAddr(t *testing.T) {
 		}()
 		clusterClient := &testHAKeeperClient{}
 		moc := clusterservice.NewMOCluster("", clusterClient, time.Hour)
+		t.Cleanup(moc.Close)
 		runtime.ServiceRuntime("").SetGlobalVariables(
 			runtime.ClusterService,
 			moc,
 		)
 		assert.Panics(t, func() {
-			e.getLogTailServiceAddr()
+			e.getLogTailServiceAddr(context.Background())
 		})
 	})
 }
@@ -519,7 +353,7 @@ func TestWaitServerReady(t *testing.T) {
 		defer func() {
 			assert.NoError(t, l.Close())
 		}()
-		waitServerReady(remoteAddr)
+		waitServerReady(context.Background(), remoteAddr)
 	})
 
 	t.Run("retry", func(t *testing.T) {
@@ -537,7 +371,7 @@ func TestWaitServerReady(t *testing.T) {
 			}()
 			<-c
 		}()
-		waitServerReady(remoteAddr)
+		waitServerReady(context.Background(), remoteAddr)
 		c <- struct{}{}
 	})
 
@@ -547,58 +381,15 @@ func TestWaitServerReady(t *testing.T) {
 		remoteAddr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
 		assert.NoError(t, os.RemoveAll(remoteAddr))
 		assert.Panics(t, func() {
-			waitServerReady(remoteAddr)
+			waitServerReady(context.Background(), remoteAddr)
 		})
-	})
-}
-
-/*
-func TestPushClient_UnsubscribeTable(t *testing.T) {
-	runTestWithLogTailServer(t, func(ctx context.Context, e *Engine) {
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		pClient := e.PushClient()
-		assert.NoError(t, pClient.subscriber.waitReady(ctx))
-		e.PushClient().UnsubscribeTable(ctx, 1, 2)
-		time.Sleep(time.Second * 2)
-	})
-}
-*/
-
-func TestPushClient_UnusedTableGCTicker(t *testing.T) {
-	orig := unsubscribeProcessTicker
-	unsubscribeProcessTicker = time.Millisecond
-	defer func() {
-		unsubscribeProcessTicker = orig
-	}()
-	t.Run("subscriber nil", func(t *testing.T) {
-		var c PushClient
-		ctx, cancel := context.WithCancel(context.Background())
-		done := startTickerForTest(t, func() {
-			c.unusedTableGCTicker(ctx)
-		})
-		time.Sleep(time.Millisecond * 10)
-		cancel()
-		waitTickerStopped(t, done)
-	})
-
-	t.Run("context done", func(t *testing.T) {
-		var c PushClient
-		c.subscriber = &logTailSubscriber{}
-		ctx, cancel := context.WithCancel(context.Background())
-		done := startTickerForTest(t, func() {
-			c.unusedTableGCTicker(ctx)
-		})
-		time.Sleep(time.Millisecond * 10)
-		cancel()
-		waitTickerStopped(t, done)
 	})
 }
 
 func TestPushClient_DoGCUnusedTable(t *testing.T) {
 	initFn := func(ctx context.Context, c *PushClient) {
 		c.eng = &Engine{}
-		c.eng.globalStats = NewGlobalStats(ctx, c.eng, nil)
+		c.eng.globalStats = newTestGlobalStats(ctx, c.eng, nil)
 		c.subscriber = &logTailSubscriber{}
 		c.subscriber.mu.cond = sync.NewCond(&c.subscriber.mu)
 		c.subscriber.setReady()
@@ -698,7 +489,6 @@ func TestPushClient_PartitionStateGCTicker(t *testing.T) {
 		var c PushClient
 		ctx, cancel := context.WithCancel(context.Background())
 		done := startPStateGCTicker(t, &c, ctx)
-		time.Sleep(time.Millisecond * 10)
 		cancel()
 		waitTickerStopped(t, done)
 	})
@@ -709,8 +499,6 @@ func TestPushClient_PartitionStateGCTicker(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 
 		done := startPStateGCTicker(t, &c, ctx)
-
-		time.Sleep(time.Millisecond * 10)
 		cancel()
 		waitTickerStopped(t, done)
 	})
@@ -765,15 +553,6 @@ func TestPushClient_DoGCPartitionState(t *testing.T) {
 	state.HandleRowsInsert(ctx, ibat, 0, packer, m)
 	assert.Equal(t, 3, state.ApproxInMemRows())
 	state.UpdateDuration(types.BuildTS(10, 10), types.MaxTs())
-	/*
-		state.HandleDataObjectList(ctx, &api.Entry{
-			EntryType:  api.Entry_Insert,
-			TableName:  "_300_data_meta",
-			DatabaseId: 200,
-			TableId:    300,
-			Bat:        &api.Batch{},
-		}, nil, m)
-	*/
 	c.eng.partitions[[2]uint64{200, 300}] = ps
 	c.doGCPartitionState(ctx, c.eng)
 	assert.Equal(t, 3, state.ApproxInMemRows())
@@ -813,7 +592,8 @@ func TestPushClient_LoadAndConsumeLatestCkp(t *testing.T) {
 	defer cli.Close()
 
 	// Create Engine
-	e := New(
+	var e *Engine
+	e = New(
 		ctx,
 		sid,
 		mp,
@@ -822,6 +602,7 @@ func TestPushClient_LoadAndConsumeLatestCkp(t *testing.T) {
 		nil,
 		nil,
 		4,
+		func(owner *Engine) { e = owner },
 	)
 	defer e.Close()
 
@@ -883,6 +664,37 @@ func TestPushClient_LoadAndConsumeLatestCkp(t *testing.T) {
 	state, err = c.loadAndConsumeLatestCkp(ctx, 0, tableID3, "table3", dbID3, "db3")
 	assert.NoError(t, err)
 	assert.Equal(t, Unsubscribing, state)
+}
+
+func TestPushClientCloseJoinsOwnedWorkers(t *testing.T) {
+	c := &PushClient{}
+	ctx := c.start(context.Background())
+	workerDone := make(chan struct{})
+	c.runOwned(func() {
+		<-ctx.Done()
+		close(workerDone)
+	})
+
+	require.NoError(t, c.Close())
+	select {
+	case <-workerDone:
+	default:
+		t.Fatal("push client close returned before its worker observed cancellation")
+	}
+	require.NoError(t, c.Close())
+}
+
+func TestRoutineControllerCloseStopsBlockedSend(t *testing.T) {
+	c := &PushClient{consumeErrC: make(chan error, 1)}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rc := c.createRoutineToConsumeLogTails(ctx, 0, 1, nil)
+	rc.close()
+	rc.wait()
+
+	// The consumer owns the lifecycle of its signal channel. A late dispatch
+	// must observe the completed owner instead of blocking on a full queue.
+	rc.sendTableLogTail(logtail.TableLogtail{}, time.Now())
 }
 
 // TestRoutineControllerSendMethods verifies that routine controller send methods work correctly
@@ -1115,36 +927,73 @@ func TestDispatchUpdateResponseCoalescesTimestampCommands(t *testing.T) {
 }
 
 func TestDispatchUpdateResponseAdvancesTimestampAfterLastLogtail(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
 	tw := client.NewTimestampWaiter(runtime.GetLogger(""))
 	defer tw.Close()
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	packer := types.NewPacker()
+	t.Cleanup(packer.Close)
 
 	e := &Engine{
 		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
 		globalStats: &GlobalStats{tailC: make(chan *logtail.TableLogtail, 8)},
-		skipConsume: true,
+		mp:          mp,
+		packerPool: fileservice.NewPool(1,
+			func() *types.Packer { return packer },
+			func(p *types.Packer) { p.Reset() }, nil),
 	}
+	e.catalog.Store(cache.NewCatalog())
 	e.pClient.subscribed = subscribedTable{
 		eng: e,
 		m: map[uint64]*subEntry{
 			101: {dbID: 10, state: Subscribed},
 			105: {dbID: 10, state: Subscribed},
+			109: {dbID: 10, state: Subscribing},
 		},
 	}
 	e.pClient.receivedLogTailTime.initLogTailTimestamp(tw)
+	e.pClient.receivedLogTailTime.ready.Store(true)
+	rowBatch := &batch.Batch{
+		Vecs:  []*vector.Vector{testutil.MakeVarcharVector([]string{"a"}, nil, mp)},
+		Attrs: []string{"pk"},
+	}
+	t.Cleanup(func() { rowBatch.Clean(mp) })
+	rowBatch.SetRowCount(1)
+	rows, err := fillRandomRowidAndZeroTs(rowBatch, mp)
+	require.NoError(t, err)
 
 	recRoutines := newTestRoutineControllers(8)
 	to := timestamp.Timestamp{PhysicalTime: 200, LogicalTime: 1}
 	response := &logtail.UpdateResponse{
 		To: &to,
 		LogtailList: []logtail.TableLogtail{
-			{Table: &api.TableID{DbId: 10, TbId: 101, DbName: "db", TbName: "t1"}},
-			{Table: &api.TableID{DbId: 10, TbId: 105, DbName: "db", TbName: "t2"}},
+			{Table: &api.TableID{DbId: 10, TbId: 101, DbName: "db", TbName: "t1"},
+				Commands: []api.Entry{{EntryType: api.Entry_Insert, TableId: 101, TableName: "t1", Bat: rows}}},
+			{Table: &api.TableID{DbId: 10, TbId: 105, DbName: "db", TbName: "t2"},
+				Commands: []api.Entry{{EntryType: api.Entry_Insert, TableId: 105, TableName: "t2", Bat: rows}}},
 		},
 	}
 	require.NoError(t, dispatchUpdateResponse(ctx, e, response, recRoutines, time.Now()))
 	assert.True(t, e.pClient.subscribed.hasPendingUpdate(10, 101))
 	assert.True(t, e.pClient.subscribed.hasPendingUpdate(10, 105))
+	// A subscription advances every consumer only after its preceding payloads.
+	subscribedAt := timestamp.Timestamp{PhysicalTime: 300}
+	require.NoError(t, dispatchSubscribeResponse(ctx, e, &logtail.SubscribeResponse{
+		Logtail: logtail.TableLogtail{
+			Ts: &subscribedAt, Table: &api.TableID{DbId: 10, TbId: 109, DbName: "db", TbName: "t3"},
+		},
+	}, recRoutines, time.Now()))
+	for i, controller := range recRoutines {
+		if i == 1 {
+			continue
+		}
+		for len(controller.signalChan) > 0 {
+			require.NoError(t, (<-controller.signalChan).action(ctx, e, controller))
+		}
+	}
+	require.True(t, tw.LatestTS().IsEmpty(), "queued payloads must prevent early snapshot admission")
 
 	cmd := (<-recRoutines[1].signalChan).(*cmdToConsumeLog)
 	require.False(t, cmd.notifyApplied)
@@ -1154,6 +1003,7 @@ func TestDispatchUpdateResponseAdvancesTimestampAfterLastLogtail(t *testing.T) {
 	expectedApplied := types.TimestampToTS(to)
 	applied := e.GetOrCreateLatestPart(ctx, 0, 10, 101).Snapshot().GetAppliedTo()
 	assert.True(t, applied.EQ(&expectedApplied))
+	assert.Equal(t, 1, e.GetOrCreateLatestPart(ctx, 0, 10, 101).Snapshot().ApproxInMemRows())
 	assert.Equal(t, timestamp.Timestamp{}, e.pClient.receivedLogTailTime.tList[1].Load().(timestamp.Timestamp))
 
 	cmd = (<-recRoutines[1].signalChan).(*cmdToConsumeLog)
@@ -1162,11 +1012,20 @@ func TestDispatchUpdateResponseAdvancesTimestampAfterLastLogtail(t *testing.T) {
 	assert.False(t, e.pClient.subscribed.hasPendingUpdate(10, 105))
 	applied = e.GetOrCreateLatestPart(ctx, 0, 10, 105).Snapshot().GetAppliedTo()
 	assert.True(t, applied.EQ(&expectedApplied))
+	assert.Equal(t, 1, e.GetOrCreateLatestPart(ctx, 0, 10, 105).Snapshot().ApproxInMemRows())
 	assert.Equal(t, to, e.pClient.receivedLogTailTime.tList[1].Load().(timestamp.Timestamp))
 
-	timeCmd := (<-recRoutines[0].signalChan).(*cmdToUpdateTime)
-	require.NoError(t, timeCmd.action(ctx, e, recRoutines[0]))
-	assert.Equal(t, to, e.pClient.receivedLogTailTime.tList[0].Load().(timestamp.Timestamp))
+	snapshot, err := tw.GetTimestamp(ctx, to)
+	require.NoError(t, err)
+	require.Equal(t, to.Next(), snapshot)
+	e.pClient.validLogTailMustApplied(snapshot)
+	require.NoError(t, (<-recRoutines[1].signalChan).action(ctx, e, recRoutines[1]))
+	require.Equal(t, to, e.pClient.receivedLogTailTime.getTimestamp(), "subscription must precede its progress")
+	require.NoError(t, (<-recRoutines[1].signalChan).action(ctx, e, recRoutines[1]))
+	snapshot, err = tw.GetTimestamp(ctx, subscribedAt)
+	require.NoError(t, err)
+	require.Equal(t, subscribedAt.Next(), snapshot)
+	e.pClient.validLogTailMustApplied(snapshot)
 }
 
 func TestCanServeTableSnapshotBlocksPendingUpdate(t *testing.T) {
@@ -1900,7 +1759,7 @@ func TestDoGCUnusedTable_ConcurrentAccess(t *testing.T) {
 	c.subscribed.m = make(map[uint64]*subEntry)
 	c.eng = &Engine{
 		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
-		globalStats: NewGlobalStats(ctx, nil, nil),
+		globalStats: newTestGlobalStats(ctx, nil, nil),
 	}
 	c.subscriber = &logTailSubscriber{}
 	c.subscriber.mu.cond = sync.NewCond(&c.subscriber.mu)
@@ -1978,7 +1837,7 @@ func TestDoGCUnusedTable_RaceWithIsSubscribed(t *testing.T) {
 	c.subscribed.m = make(map[uint64]*subEntry)
 	c.eng = &Engine{
 		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
-		globalStats: NewGlobalStats(ctx, nil, nil),
+		globalStats: newTestGlobalStats(ctx, nil, nil),
 	}
 	c.subscriber = &logTailSubscriber{}
 	c.subscriber.mu.cond = sync.NewCond(&c.subscriber.mu)
@@ -2107,6 +1966,85 @@ func TestIsSubscribed_NotFound(t *testing.T) {
 	assert.Equal(t, Unsubscribed, state)
 }
 
+func TestPushClientDisconnectDoesNotRetireOwner(t *testing.T) {
+	c := &PushClient{}
+	require.NoError(t, c.Disconnect())
+	require.False(t, c.closed.Load())
+	require.NoError(t, c.Close())
+}
+
+type closeRaceStream struct {
+	recv   chan morpc.Message
+	closed chan struct{}
+	once   sync.Once
+}
+
+func newCloseRaceStream() *closeRaceStream {
+	return &closeRaceStream{
+		recv:   make(chan morpc.Message),
+		closed: make(chan struct{}),
+	}
+}
+
+func (s *closeRaceStream) ID() uint64 { return 1 }
+
+func (s *closeRaceStream) Send(context.Context, morpc.Message) error { return nil }
+
+func (s *closeRaceStream) Receive() (chan morpc.Message, error) { return s.recv, nil }
+
+func (s *closeRaceStream) Close(bool) error {
+	s.once.Do(func() {
+		close(s.closed)
+		close(s.recv)
+	})
+	return nil
+}
+
+func TestPushClientCloseRacingInitDoesNotPublishTransport(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	stream := newCloseRaceStream()
+	c := &PushClient{}
+	ownerCtx := c.start(context.Background())
+	t.Cleanup(func() { unblock(); _ = c.Close() })
+	c.LogtailRPCClientFactory = func(
+		context.Context,
+		string,
+		string,
+		morpc.RPCClient,
+	) (morpc.RPCClient, morpc.Stream, error) {
+		close(started)
+		<-release
+		return nil, stream, nil
+	}
+
+	initDone := make(chan error, 1)
+	go func() {
+		initDone <- c.init(ownerCtx, "addr", nil, &Engine{service: "test"})
+	}()
+	<-started
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- c.Close() }()
+	<-ownerCtx.Done()
+	select {
+	case <-closeDone:
+		t.Fatal("close returned before admitted initialization finished")
+	default:
+	}
+	unblock()
+
+	require.ErrorIs(t, <-initDone, context.Canceled)
+	require.NoError(t, <-closeDone)
+	select {
+	case <-stream.closed:
+	default:
+		t.Fatal("transport was published after owner close")
+	}
+}
+
 // TestIsSubscribed_DifferentStates tests isSubscribed with different states
 func TestIsSubscribed_DifferentStates(t *testing.T) {
 	ctx := context.Background()
@@ -2166,7 +2104,7 @@ func TestDoGCUnusedTable_ProtectedTables(t *testing.T) {
 	c.subscribed.m = make(map[uint64]*subEntry)
 	c.eng = &Engine{
 		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
-		globalStats: NewGlobalStats(ctx, nil, nil),
+		globalStats: newTestGlobalStats(ctx, nil, nil),
 	}
 	c.subscriber = &logTailSubscriber{}
 	c.subscriber.mu.cond = sync.NewCond(&c.subscriber.mu)
@@ -2195,7 +2133,7 @@ func TestDoGCUnusedTable_NonSubscribedState(t *testing.T) {
 	c.subscribed.m = make(map[uint64]*subEntry)
 	c.eng = &Engine{
 		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
-		globalStats: NewGlobalStats(ctx, nil, nil),
+		globalStats: newTestGlobalStats(ctx, nil, nil),
 	}
 	c.subscriber = &logTailSubscriber{}
 	c.subscriber.mu.cond = sync.NewCond(&c.subscriber.mu)
@@ -2228,7 +2166,7 @@ func TestGC_ConcurrentWithSubscribe(t *testing.T) {
 	c.subscribed.m = make(map[uint64]*subEntry)
 	c.eng = &Engine{
 		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
-		globalStats: NewGlobalStats(ctx, nil, nil),
+		globalStats: newTestGlobalStats(ctx, nil, nil),
 	}
 	c.subscriber = &logTailSubscriber{}
 	c.subscriber.mu.cond = sync.NewCond(&c.subscriber.mu)
@@ -2290,7 +2228,7 @@ func TestGC_ConcurrentWithUnsubscribe(t *testing.T) {
 	c.subscribed.m = make(map[uint64]*subEntry)
 	c.eng = &Engine{
 		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
-		globalStats: NewGlobalStats(ctx, nil, nil),
+		globalStats: newTestGlobalStats(ctx, nil, nil),
 	}
 	c.subscribed.eng = c.eng
 	c.subscriber = &logTailSubscriber{}
@@ -2416,7 +2354,7 @@ func TestGC_TimestampUpdateBetweenPhases(t *testing.T) {
 	c.subscribed.m = make(map[uint64]*subEntry)
 	c.eng = &Engine{
 		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
-		globalStats: NewGlobalStats(ctx, nil, nil),
+		globalStats: newTestGlobalStats(ctx, nil, nil),
 	}
 	c.subscriber = &logTailSubscriber{}
 	c.subscriber.mu.cond = sync.NewCond(&c.subscriber.mu)
@@ -2456,7 +2394,7 @@ func TestEmptyMap_Operations(t *testing.T) {
 	c.subscribed.m = make(map[uint64]*subEntry)
 	c.eng = &Engine{
 		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
-		globalStats: NewGlobalStats(ctx, nil, nil),
+		globalStats: newTestGlobalStats(ctx, nil, nil),
 	}
 	c.subscriber = &logTailSubscriber{}
 	c.subscriber.mu.cond = sync.NewCond(&c.subscriber.mu)
@@ -2488,7 +2426,7 @@ func TestHighConcurrency_StressTest(t *testing.T) {
 	c.subscribed.m = make(map[uint64]*subEntry)
 	c.eng = &Engine{
 		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
-		globalStats: NewGlobalStats(ctx, nil, nil),
+		globalStats: newTestGlobalStats(ctx, nil, nil),
 	}
 	c.subscribed.eng = c.eng
 	c.subscriber = &logTailSubscriber{}
@@ -2536,7 +2474,7 @@ func TestGC_FailedUnsubscribe(t *testing.T) {
 	c.subscribed.m = make(map[uint64]*subEntry)
 	c.eng = &Engine{
 		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
-		globalStats: NewGlobalStats(ctx, nil, nil),
+		globalStats: newTestGlobalStats(ctx, nil, nil),
 	}
 	c.subscriber = &logTailSubscriber{}
 	c.subscriber.mu.cond = sync.NewCond(&c.subscriber.mu)
@@ -2600,7 +2538,7 @@ func TestConcurrent_GC_Subscribe_Unsubscribe_Read(t *testing.T) {
 	c.subscribed.m = make(map[uint64]*subEntry)
 	c.eng = &Engine{
 		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
-		globalStats: NewGlobalStats(ctx, nil, nil),
+		globalStats: newTestGlobalStats(ctx, nil, nil),
 	}
 	c.subscribed.eng = c.eng
 	c.subscriber = &logTailSubscriber{}
@@ -3065,7 +3003,7 @@ func TestConcurrent_ReadWrite_SameTable(t *testing.T) {
 	c.subscribed.m = make(map[uint64]*subEntry)
 	c.eng = &Engine{
 		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
-		globalStats: NewGlobalStats(ctx, nil, nil),
+		globalStats: newTestGlobalStats(ctx, nil, nil),
 	}
 	c.subscribed.eng = c.eng
 	c.subscriber = &logTailSubscriber{}
@@ -3206,7 +3144,7 @@ func TestAllWriteOperations_Concurrent(t *testing.T) {
 	c.subscribed.m = make(map[uint64]*subEntry)
 	c.eng = &Engine{
 		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
-		globalStats: NewGlobalStats(ctx, nil, nil),
+		globalStats: newTestGlobalStats(ctx, nil, nil),
 	}
 	c.subscribed.eng = c.eng
 	c.subscriber = &logTailSubscriber{}
@@ -3373,7 +3311,7 @@ func TestGC_FailureRetry(t *testing.T) {
 	c.subscribed.m = make(map[uint64]*subEntry)
 	c.eng = &Engine{
 		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
-		globalStats: NewGlobalStats(ctx, nil, nil),
+		globalStats: newTestGlobalStats(ctx, nil, nil),
 	}
 	c.subscribed.eng = c.eng
 	c.subscriber = &logTailSubscriber{}
@@ -3429,7 +3367,7 @@ func TestGC_PartialFailure(t *testing.T) {
 	c.subscribed.m = make(map[uint64]*subEntry)
 	c.eng = &Engine{
 		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
-		globalStats: NewGlobalStats(ctx, nil, nil),
+		globalStats: newTestGlobalStats(ctx, nil, nil),
 	}
 	c.subscribed.eng = c.eng
 	c.subscriber = &logTailSubscriber{}
@@ -3585,4 +3523,261 @@ func TestWaitCanServeTableSnapshotCancellation(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	require.False(t, ready)
 	require.Nil(t, state, "cancellation cannot admit a stale pre-apply snapshot")
+}
+
+// Closing the owner must release readiness waits even when their producers
+// have not published a timestamp or service inventory.
+func TestPushClientCloseCancelsTimestampWait(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := &PushClient{}
+		ctx := c.start(context.Background())
+		result := make(chan error, 1)
+		require.True(t, c.runOwned(func() { result <- c.waitTimestamp(ctx) }))
+		synctest.Wait()
+		require.NoError(t, c.Close())
+		require.ErrorIs(t, <-result, context.Canceled)
+	})
+}
+
+func TestPushClientReadinessCancellation(t *testing.T) {
+	t.Run("missing cluster", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			e := &Engine{service: t.Name()}
+			result := make(chan error, 1)
+			go func() { _, err := e.getLogTailServiceAddr(ctx); result <- err }()
+			synctest.Wait()
+			cancel()
+			require.ErrorIs(t, <-result, context.Canceled)
+		})
+	})
+	t.Run("canceled startup", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		e := &Engine{service: t.Name()}
+		require.ErrorIs(t, e.InitLogTailPushModel(ctx, nil), context.Canceled)
+		require.Nil(t, e.pClient.subscriber)
+		require.NoError(t, e.pClient.Close())
+	})
+	t.Run("server", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		require.ErrorIs(t, waitServerReady(ctx, FakeLogtailServerAddress), context.Canceled)
+		require.NoError(t, waitServerReady(context.Background(), FakeLogtailServerAddress))
+	})
+}
+
+func TestPushClientCloseDuringConsumerPublication(t *testing.T) {
+	c := &PushClient{receiver: make([]*routineController, consumerNumber)}
+	ctx := c.start(context.Background())
+	publish := make(chan struct{})
+	require.True(t, c.runOwned(func() {
+		<-publish
+		c.startConsumers(ctx, &Engine{})
+	}))
+	close(publish)
+	require.NoError(t, c.Close())
+	for _, receiver := range c.receiver {
+		require.NotNil(t, receiver)
+		select {
+		case <-receiver.done:
+		default:
+			t.Fatal("consumer survived terminal close")
+		}
+	}
+}
+
+func TestPushClientInitAfterCloseRejectsTransport(t *testing.T) {
+	c := &PushClient{}
+	ctx := c.start(context.Background())
+	require.NoError(t, c.Close())
+	c.LogtailRPCClientFactory = func(context.Context, string, string, morpc.RPCClient) (morpc.RPCClient, morpc.Stream, error) {
+		t.Fatal("closed owner admitted transport initialization")
+		return nil, nil, nil
+	}
+	require.ErrorIs(t, c.init(ctx, "addr", nil, &Engine{}), context.Canceled)
+	require.Nil(t, c.subscriber)
+}
+
+func TestPushClientTimestampReadiness(t *testing.T) {
+	t.Run("published", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			c := &PushClient{}
+			c.receivedLogTailTime.initLogTailTimestamp(nil)
+			for i := range c.receivedLogTailTime.tList {
+				c.receivedLogTailTime.tList[i].Store(timestamp.Timestamp{PhysicalTime: 1})
+			}
+			require.NoError(t, c.waitTimestamp(context.Background()))
+		})
+	})
+	t.Run("live owner timeout", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			c := &PushClient{}
+			require.PanicsWithValue(t, "cannot receive timestamp", func() {
+				_ = c.waitTimestamp(context.Background())
+			})
+		})
+	})
+}
+
+func TestWaitServerReadyDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	require.ErrorIs(t, waitServerReady(ctx, t.TempDir()+"/missing.sock"), context.DeadlineExceeded)
+}
+
+// Leave the built-in cluster's first refresh pending until its owner closes.
+// This reaches the readiness wait below the address poll, not only its ticker.
+type pendingLogtailClusterClient struct {
+	*testHAKeeperClient
+	started chan struct{}
+}
+
+func (c *pendingLogtailClusterClient) GetClusterDetails(ctx context.Context) (log.ClusterDetails, error) {
+	close(c.started)
+	<-ctx.Done()
+	return log.ClusterDetails{}, ctx.Err()
+}
+
+func TestLogtailInventoryWaitCancellation(t *testing.T) {
+	for _, initialRefresh := range []bool{false, true} {
+		t.Run(fmt.Sprintf("initial refresh pending=%v", initialRefresh), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				sid := t.Name()
+				rt := runtime.NewRuntime(metadata.ServiceType_CN, sid, logutil.GetGlobalLogger())
+				runtime.SetupServiceBasedRuntime(sid, rt)
+				client := &pendingLogtailClusterClient{testHAKeeperClient: &testHAKeeperClient{}, started: make(chan struct{})}
+				var opts []clusterservice.Option
+				if !initialRefresh {
+					opts = append(opts, clusterservice.WithDisableRefresh())
+				}
+				cluster := clusterservice.NewMOCluster(sid, client, time.Hour, opts...)
+				t.Cleanup(cluster.Close)
+				rt.SetGlobalVariables(runtime.ClusterService, cluster)
+				if initialRefresh {
+					<-client.started
+				}
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				result := make(chan error, 1)
+				go func() { _, err := (&Engine{service: sid}).getLogTailServiceAddr(ctx); result <- err }()
+				synctest.Wait()
+				cancel()
+				require.ErrorIs(t, <-result, context.Canceled)
+			})
+		})
+	}
+}
+
+func TestLogtailStreamFailurePreservesClientOwnership(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	t.Run("acquired client", func(t *testing.T) {
+		gauge := v2.NewRPCClientActiveGaugeByName("logtail-client")
+		before := promtestutil.ToFloat64(gauge)
+		rpcClient, stream, err := DefaultNewRpcStreamToTnLogTailService(ctx, "", "unused", nil)
+		require.ErrorIs(t, err, context.Canceled)
+		require.Nil(t, rpcClient)
+		require.Nil(t, stream)
+		require.Equal(t, before, promtestutil.ToFloat64(gauge), "failed creation retained an acquired RPC client")
+	})
+	t.Run("incoming client", func(t *testing.T) {
+		// Cancellation is checked before backend creation, so this control
+		// requires no backend or socket. Only its caller may close the client.
+		client, err := morpc.NewClient("logtail-unwind-control", nil)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, client.Close()) })
+		gauge := v2.NewRPCClientActiveGaugeByName("logtail-unwind-control")
+		before := promtestutil.ToFloat64(gauge)
+		_, _, err = DefaultNewRpcStreamToTnLogTailService(ctx, "", "unused", client)
+		require.ErrorIs(t, err, context.Canceled)
+		require.Equal(t, before, promtestutil.ToFloat64(gauge), "stream failure closed the caller's RPC client")
+	})
+}
+
+// Retired generations share consumeErrC. Reconnect consumes one error to
+// trigger recovery, but does not drain the remaining consumerNumber-1 errors.
+// Use a real update command blocked on the real partition lock; owner close
+// cancels that lock acquisition, producing a real consumer error.
+func TestEngineCloseWithPriorGenerationConsumerErrors(t *testing.T) {
+	for _, pending := range []int{0, consumerNumber - 1} {
+		t.Run(fmt.Sprint(pending), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				e := &Engine{partitions: make(map[[2]uint64]*logtailreplay.Partition)}
+				c := &e.pClient
+				ctx := c.start(context.Background())
+				e.globalStats = &GlobalStats{ctx: ctx}
+				c.consumeErrC = make(chan error, consumerNumber)
+				for range pending {
+					c.consumeErrC <- errors.New("previous generation apply failure")
+				}
+				part := logtailreplay.NewPartition("", nil, 0, 10, 20, nil)
+				e.partitions[[2]uint64{10, 20}] = part
+				require.NoError(t, part.Lock(context.Background()))
+				defer part.Unlock()
+				for i := 0; i < 2; i++ {
+					rc := c.createRoutineToConsumeLogTails(ctx, i, 1, e)
+					rc.sendTableLogTail(logtail.TableLogtail{Table: &api.TableID{DbId: 10, TbId: 20}}, time.Now())
+				}
+				synctest.Wait() // Both production actions are blocked in Partition.Lock.
+				done := make(chan error, 1)
+				go func() { done <- e.Close() }()
+				synctest.Wait()
+				blocked := false
+				select {
+				case err := <-done:
+					require.NoError(t, err)
+				default:
+					blocked = true
+				}
+				// Retire every test worker even when the contract is violated.
+				if blocked {
+					for {
+						select {
+						case err := <-done:
+							require.NoError(t, err)
+							t.Errorf("Engine.Close blocked on consumer error reporting after owner cancellation, prior errors=%d", pending)
+							return
+						case <-c.consumeErrC:
+						}
+					}
+				}
+			})
+		})
+	}
+}
+
+// Inject the command failure only; production consumers own reporting and retirement.
+type failingConsumerCommand func() error
+
+func (cmd failingConsumerCommand) action(context.Context, *Engine, *routineController) error {
+	return cmd()
+}
+
+func TestLogtailConsumerPreservesLiveOwnerError(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := &PushClient{consumeErrC: make(chan error, 1)}
+		ctx := c.start(context.Background())
+		defer c.Close()
+		prior := errors.New("previous consumer failure")
+		failure := errors.New("current apply failure")
+		c.consumeErrC <- prior
+		rc := c.createRoutineToConsumeLogTails(ctx, 0, 1, nil)
+		applied := 0
+		require.True(t, rc.send(failingConsumerCommand(func() error { return failure })))
+		synctest.Wait() // Error reporting is blocked on the full queue, not cancellation.
+		require.True(t, rc.send(failingConsumerCommand(func() error { applied++; return nil })))
+		require.ErrorIs(t, <-c.consumeErrC, prior)
+		synctest.Wait()
+		select {
+		case err := <-c.consumeErrC:
+			require.ErrorIs(t, err, failure)
+		default:
+			t.Fatal("live-owner apply error was discarded")
+		}
+		require.Zero(t, applied, "consumer must stop applying commands after failure")
+		rc.close()
+		rc.wait()
+	})
 }

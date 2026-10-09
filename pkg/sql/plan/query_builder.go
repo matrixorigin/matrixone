@@ -29,7 +29,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/objectkey"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -311,7 +310,7 @@ func (builder *QueryBuilder) buildRemapErrorMessage(
 	// Available columns
 	if len(colMap) > 0 {
 		sb.WriteString("✅ Available Columns in Context:\n")
-		var keyPairs []string
+		keyPairs := make([]string, 0, len(colMap))
 		for k := range colMap {
 			name := builder.nameByColRef[k]
 			if name == "" {
@@ -3068,7 +3067,7 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 
 	case plan.Node_PROJECT, plan.Node_MATERIAL:
 		projectTag := node.BindingTags[0]
-		_, groupingSetExpand := DecodeGroupingSetExpandOption(node.ExtraOptions)
+		groupingSetCount, groupingSetExpand := DecodeGroupingSetExpandOption(node.ExtraOptions)
 
 		var neededProj []int32
 
@@ -3110,6 +3109,10 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			}
 
 			refreshExprNullabilityFromInputs(expr, childProjList)
+			if groupingSetExpand {
+				expr.Typ = groupingSetExpandOutputType(
+					expr.Typ, node.GroupingFlag, groupingSetCount, needed)
+			}
 
 			globalRef := [2]int32{projectTag, needed}
 			remapping.addColRef(globalRef)
@@ -3949,7 +3952,7 @@ func (builder *QueryBuilder) rewriteStarApproxCount(nodeID int32) {
 							},
 						}
 
-						var exprs []*plan.Expr
+						exprs := make([]*plan.Expr, 0, 2)
 						str := child.ObjRef.SchemaName + "." + child.TableDef.Name
 						exprs = append(exprs, makePlan2StringConstExprWithType(str))
 						str = child.TableDef.Cols[0].Name
@@ -4681,12 +4684,33 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		utIdx := i - 1
 		lastTag = builder.genNewBindTag()
 		leftNodeTag := builder.qry.Nodes[lastNodeID].BindingTags[0]
+		previousNode := builder.qry.Nodes[lastNodeID]
 
 		lastNodeID, err = appendSetOperationNode(
 			newUnionType[utIdx], lastNodeID, newNodes[i], leftNodeTag, lastTag,
 		)
 		if err != nil {
 			return 0, err
+		}
+		// Every branch already has the same common type. In a consecutive
+		// UNION chain the final DISTINCT also removes the preceding UNION's
+		// duplicates. Only demote a node made by this loop, never an independently
+		// bound branch with its own casts, ordering, limit or multiplicity rules.
+		// Keep variable-width/equality-key domains and prepared plans whose
+		// types can specialize at execution on their existing paths.
+		if !builder.isPrepareStatement && i > 1 && newUnionType[utIdx] == plan.Node_UNION &&
+			previousNode.NodeType == plan.Node_UNION &&
+			len(previousNode.PhysicalEqualityKeyList) == 0 {
+			fixedWidth := true
+			for _, expr := range previousNode.ProjectList {
+				if !types.T(expr.Typ.Id).IsFixedLen() {
+					fixedWidth = false
+					break
+				}
+			}
+			if fixedWidth {
+				previousNode.NodeType = plan.Node_UNION_ALL
+			}
 		}
 	}
 
@@ -5626,6 +5650,10 @@ func (builder *QueryBuilder) bindCte(
 			return 0, err
 		}
 	}
+	if builder.localCTERoots == nil {
+		builder.localCTERoots = make(map[int32]bool)
+	}
+	builder.localCTERoots[nodeID] = true
 	// The declaration context is detached from the use-site context for name
 	// resolution, so forward root-owned view dependencies explicitly.
 	ctx.recordViews(cteRef.declarationCtx.views[viewCount:])
@@ -6076,6 +6104,13 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			return
 		}
 	}
+	// SELECT projection subqueries are flattened before this pagination is
+	// attached to their plan. The cloned CTE domain may otherwise evaluate a
+	// row that the final Top never consumes. Keep the demand scoped to this
+	// bind rather than relying on the not-yet-present node.Limit/Offset.
+	previousPagination := ctx.outerPaginationPending
+	ctx.outerPaginationPending = previousPagination || boundCountExpr != nil || boundOffsetExpr != nil || rankOption != nil
+	defer func() { ctx.outerPaginationPending = previousPagination }()
 
 	// Keep the lock target collection in bindSelectClause, but attach the
 	// LOCK_OP only after any row-level HAVING rewrite has been applied.  A
@@ -8659,9 +8694,35 @@ func (builder *QueryBuilder) bindWhere(
 	// walking it so the optimization is independent of SQL predicate order.
 	// The list is replaced with the flattened predicates below.
 	ctx.whereFilters = whereList
+	// Apply total, subquery-independent conjuncts before building the domain
+	// of a dependent subquery. Otherwise replay can start recursive partitions
+	// for rows that these conjuncts remove. Keep unsafe predicates in place:
+	// determinism alone does not make early evaluation harmless.
+	var domainFilters, remaining []*plan.Expr
+	hasDependent := false
+	for _, cond := range whereList {
+		hasDependent = hasDependent || builder.hasLocalCTEConsumer(cond)
+	}
+	if hasDependent {
+		for _, cond := range whereList {
+			if !hasSubquery(cond) && !hasCorrCol(cond) && localCTEGuardedPredicateSafe(cond) {
+				domainFilters = append(domainFilters, cond)
+			} else {
+				remaining = append(remaining, cond)
+			}
+		}
+		if len(domainFilters) > 0 {
+			nodeID = builder.appendNode(&plan.Node{NodeType: plan.Node_FILTER,
+				Children: []int32{nodeID}, FilterList: DeepCopyExprList(domainFilters), FilterIsBarrier: true}, ctx)
+			boundFilterList = append(boundFilterList, domainFilters...)
+			whereList = remaining
+		}
+	}
 	var expr *plan.Expr
 	for _, cond := range whereList {
-		if nodeID, expr, err = builder.flattenFilterSubqueries(nodeID, cond, ctx); err != nil {
+		// Each split conjunct can run before its siblings have filtered the
+		// outer rows. A replayed local CTE must not depend on that filtering.
+		if nodeID, expr, err = builder.flattenFilterSubqueriesGuarded(nodeID, cond, ctx, len(whereList) > 1); err != nil {
 			return
 		}
 		boundFilterList = append(boundFilterList, expr)
@@ -10475,7 +10536,7 @@ func (builder *QueryBuilder) appendNonAggregateHavingNode(
 	newFilterList := make([]*plan.Expr, 0, len(boundHavingList))
 	for _, cond := range boundHavingList {
 		var expr *plan.Expr
-		if nodeID, expr, err = builder.flattenFilterSubqueries(nodeID, cond, ctx); err != nil {
+		if nodeID, expr, err = builder.flattenFilterSubqueriesGuarded(nodeID, cond, ctx, len(boundHavingList) > 1); err != nil {
 			return
 		}
 		newFilterList = append(newFilterList, expr)
@@ -10500,7 +10561,7 @@ func (builder *QueryBuilder) appendSampleNode(
 		var expr *plan.Expr
 
 		for _, cond := range boundHavingList {
-			if nodeID, expr, err = builder.flattenFilterSubqueries(nodeID, cond, ctx); err != nil {
+			if nodeID, expr, err = builder.flattenFilterSubqueriesGuarded(nodeID, cond, ctx, len(boundHavingList) > 1); err != nil {
 				return
 			}
 
@@ -10590,7 +10651,7 @@ func (builder *QueryBuilder) appendAggNode(
 		var expr *plan.Expr
 
 		for _, cond := range preWindowHavingList {
-			if nodeID, expr, err = builder.flattenFilterSubqueries(nodeID, cond, ctx); err != nil {
+			if nodeID, expr, err = builder.flattenFilterSubqueriesGuarded(nodeID, cond, ctx, len(boundHavingList) > 1); err != nil {
 				return
 			}
 
@@ -10765,7 +10826,7 @@ func (builder *QueryBuilder) appendWindowNode(
 		var expr *plan.Expr
 
 		for _, cond := range postWindowHavingList {
-			if nodeID, expr, err = builder.flattenFilterSubqueries(nodeID, cond, ctx); err != nil {
+			if nodeID, expr, err = builder.flattenFilterSubqueriesGuarded(nodeID, cond, ctx, len(boundHavingList) > 1); err != nil {
 				return
 			}
 
@@ -11590,13 +11651,8 @@ func (builder *QueryBuilder) appendStep(nodeID int32) int32 {
 
 func (builder *QueryBuilder) appendNode(node *plan.Node, ctx *BindContext) int32 {
 	nodeID := int32(len(builder.qry.Nodes))
-	if ctx != nil && len(ctx.viewChain) > 0 {
-		if len(node.OriginViews) == 0 {
-			node.OriginViews = append([]string{}, ctx.viewChain...)
-		}
-		if node.DirectView == "" {
-			node.DirectView = ctx.directView
-		}
+	if ctx != nil && len(node.ViewPath) == 0 {
+		node.ViewPath = append([]*plan.ViewStep(nil), ctx.viewPath...)
 	}
 	node.NodeId = nodeID
 	builder.qry.Nodes = append(builder.qry.Nodes, node)
@@ -11887,25 +11943,41 @@ func (builder *QueryBuilder) bindView(
 		defer builder.compCtx.SetQueryingSubscription(previousSubscription)
 	}
 	viewCtx.defaultDatabase = defaultDatabase
-	viewKey := objectkey.Encode(schema, table)
-	viewKeyWithSnapshot := viewKey
-	if IsSnapshotValid(snapshot) {
-		viewKeyWithSnapshot = FormatViewKeyWithSnapshot(viewKey, snapshot)
-	}
 	viewDependencyKey, err := FormatViewDependencyKey(schema, table, snapshot)
 	if err != nil {
 		return 0, err
 	}
-	if ctx != nil && ctx.directView != "" {
-		viewCtx.directView = ctx.directView
-	} else {
-		viewCtx.directView = viewKeyWithSnapshot
+	accountID, err := builder.compCtx.GetAccountId()
+	if err != nil {
+		return 0, err
 	}
-	if ctx != nil && len(ctx.viewChain) > 0 {
-		viewCtx.viewChain = append(append([]string{}, ctx.viewChain...), viewKey)
-	} else {
-		viewCtx.viewChain = []string{viewKey}
+	if resolver, ok := builder.compCtx.(ViewDependencyIdentityResolver); ok {
+		accountID, err = resolver.ResolveViewDependencyAccount(obj, tableDef, snapshot)
+		if err != nil {
+			return 0, err
+		}
+	} else if snapshot != nil && snapshot.Tenant != nil {
+		accountID = snapshot.Tenant.TenantID
 	}
+	viewSnapshot := DeepCopySnapshot(snapshot)
+	if viewSnapshot == nil {
+		viewSnapshot = &plan.Snapshot{}
+	}
+	if viewSnapshot.Tenant == nil {
+		viewSnapshot.Tenant = &plan.SnapshotTenant{}
+	}
+	viewSnapshot.Tenant.TenantID = accountID
+	step := &plan.ViewStep{
+		DatabaseName: schema, ViewName: table, Snapshot: viewSnapshot,
+		SubscriptionName: obj.SubscriptionName,
+	}
+	if obj.SchemaName != "" {
+		step.DatabaseName = obj.SchemaName
+	}
+	if obj.ObjName != "" {
+		step.ViewName = obj.ObjName
+	}
+	viewCtx.viewPath = append(append([]*plan.ViewStep(nil), ctx.viewPath...), step)
 
 	if viewCtx.viewInBinding(schema, table, viewStmt) {
 		return 0, moerr.NewParseErrorf(builder.GetContext(), "view %s reference itself", table)
@@ -11976,6 +12048,11 @@ func (builder *QueryBuilder) bindView(
 		builder.qry.CatalogDependencies,
 		prepareSchemaRefWithSnapshot(obj, tableDef, snapshot),
 	)
+	// Authorization belongs to the bound query, including views whose entire
+	// executable subtree is removed by optimization.
+	builder.qry.ViewReferences = append(builder.qry.ViewReferences, &plan.ViewReference{
+		ViewPath: append([]*plan.ViewStep(nil), viewCtx.viewPath...),
+	})
 	ctx.recordViews([]string{viewDependencyKey})
 	ctx.recordViews(viewCtx.views)
 	return
@@ -12448,7 +12525,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 
 		var subMeta *SubscriptionMeta
 		subMeta, err = builder.compCtx.GetSubscriptionMeta(schema, snapshot)
-		if err == nil && builder.isSkipResolveTableDef && ctx.directView == "" && snapshot == nil && subMeta == nil {
+		if err == nil && builder.isSkipResolveTableDef && len(ctx.viewPath) == 0 && snapshot == nil && subMeta == nil {
 			var tableDef *TableDef
 			tableDef, err = builder.compCtx.BuildTableDefByMoColumns(schema, table)
 			if err != nil {
@@ -13306,7 +13383,7 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 			var onConds, filterConds []*plan.Expr
 			for _, cond := range joinConds {
 				if hasSubquery(cond) {
-					nodeID, cond, err = builder.flattenFilterSubqueries(nodeID, cond, ctx)
+					nodeID, cond, err = builder.flattenFilterSubqueriesGuarded(nodeID, cond, ctx, len(joinConds) > 1)
 					if err != nil {
 						return 0, err
 					}
@@ -13333,7 +13410,7 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 			for i, cond := range joinConds {
 				leftChildID, rightChildID, joinConds[i], err = builder.flattenOuterJoinConditionSubqueries(
 					leftChildID, rightChildID, cond,
-					leftCtx, rightCtx, leftTags, rightTags, defaultSide, true,
+					leftCtx, rightCtx, leftTags, rightTags, defaultSide, true, len(joinConds) > 1,
 				)
 				if err != nil {
 					return 0, err

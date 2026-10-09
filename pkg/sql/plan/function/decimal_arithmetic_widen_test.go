@@ -19,6 +19,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
@@ -139,47 +140,90 @@ func TestMixedDecimalArithmeticWidensFromOriginalDomains(t *testing.T) {
 	require.Equal(t, types.New(types.T_decimal128, 38, 0), resolved.retType)
 }
 
-func TestDecimal256MultiplyHonorsPublishedPrecision(t *testing.T) {
+// Published precision is owned by the common arithmetic wrapper, independently
+// of kernel dispatch. Inputs below are legal in their declared SQL domains.
+func TestDecimal256ArithmeticPublishedPrecision(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	leftType := types.New(types.T_decimal256, 38, 0)
-	resultType := types.New(types.T_decimal256, 65, 0)
-	left, err := types.ParseDecimal256(strings.Repeat("9", 38), leftType.Width, leftType.Scale)
-	require.NoError(t, err)
-
-	for _, test := range []struct {
-		name      string
-		rightSize int
-		wantErr   bool
+	defer proc.Free()
+	whole := "-57896044618658097711785492504343953926634992332820282019728792003"
+	fraction := "-0.956564819968"
+	max65 := strings.Repeat("9", 65)
+	for _, tc := range []struct {
+		name                            string
+		fn                              executeLogicOfOverload
+		leftType, rightType, resultType types.Type
+		left, right, want               []string
+		leftNulls, wantNulls            []bool
+		leftConst, rightConst           bool
+		selection                       *FunctionSelectList
+		rawWant                         []types.Decimal256
+		wantErr                         string
 	}{
-		{name: "65 digit boundary succeeds", rightSize: 27},
-		{name: "66 digit result overflows", rightSize: 28, wantErr: true},
+		{name: "multiply 65 digits", fn: multiFn,
+			leftType: types.New(types.T_decimal256, 38, 0), rightType: types.New(types.T_decimal256, 27, 0), resultType: types.New(types.T_decimal256, 65, 0),
+			left: []string{strings.Repeat("9", 38)}, right: []string{strings.Repeat("9", 27)}, want: []string{"99999999999999999999999999899999999999000000000000000000000000001"}},
+		{name: "multiply overflow", fn: multiFn,
+			leftType: types.New(types.T_decimal256, 38, 0), rightType: types.New(types.T_decimal256, 28, 0), resultType: types.New(types.T_decimal256, 65, 0),
+			left: []string{strings.Repeat("9", 38)}, right: []string{strings.Repeat("9", 28)}, wantErr: "exceeds DECIMAL(65,0)"},
+		{name: "negative boundary succeeds", fn: plusFn,
+			leftType: types.New(types.T_decimal256, 65, 0), rightType: types.New(types.T_decimal256, 65, 0), resultType: types.New(types.T_decimal256, 65, 0),
+			left: []string{"-" + max65}, right: []string{"0"}, want: []string{"-" + max65}},
+		{name: "positive boundary overflows", fn: plusFn,
+			leftType: types.New(types.T_decimal256, 65, 0), rightType: types.New(types.T_decimal256, 65, 0), resultType: types.New(types.T_decimal256, 65, 0),
+			left: []string{max65}, right: []string{"1"}, wantErr: "exceeds DECIMAL(65,0)"},
+		{name: "negative boundary overflows", fn: minusFn,
+			leftType: types.New(types.T_decimal256, 65, 0), rightType: types.New(types.T_decimal256, 65, 0), resultType: types.New(types.T_decimal256, 65, 0),
+			left: []string{"-" + max65}, right: []string{"1"}, wantErr: "exceeds DECIMAL(65,0)"},
+		{name: "minimum vector vector", fn: plusFn,
+			leftType: types.New(types.T_decimal256, 65, 0), rightType: types.New(types.T_decimal256, 65, 12), resultType: types.New(types.T_decimal256, 65, 12),
+			left: []string{"0", whole}, right: []string{"0", fraction}, wantErr: "exceeds DECIMAL(65,12)"},
+		{name: "minimum scalar vector", fn: plusFn, leftConst: true,
+			leftType: types.New(types.T_decimal256, 65, 12), rightType: types.New(types.T_decimal256, 65, 0), resultType: types.New(types.T_decimal256, 65, 12),
+			left: []string{fraction}, right: []string{"0", whole}, wantErr: "exceeds DECIMAL(65,12)"},
+		{name: "minimum vector scalar", fn: minusFn, rightConst: true,
+			leftType: types.New(types.T_decimal256, 65, 0), rightType: types.New(types.T_decimal256, 65, 12), resultType: types.New(types.T_decimal256, 65, 12),
+			left: []string{"0", whole}, right: []string{"0.956564819968"}, wantErr: "exceeds DECIMAL(65,12)"},
+		{name: "physical carrier preserves minimum", fn: plusFn,
+			leftType: types.New(types.T_decimal256, 65, 0), rightType: types.New(types.T_decimal256, 65, 12), resultType: types.New(types.T_decimal256, 76, 12),
+			left: []string{"0", whole}, right: []string{"0", fraction}, rawWant: []types.Decimal256{{}, {B192_255: uint64(1) << 63}}},
+		{name: "minimum NULL row ignored", fn: plusFn,
+			leftType: types.New(types.T_decimal256, 65, 0), rightType: types.New(types.T_decimal256, 65, 12), resultType: types.New(types.T_decimal256, 65, 12),
+			left: []string{"1", whole}, right: []string{"0", fraction}, leftNulls: []bool{false, true}, want: []string{"1", "0"}, wantNulls: []bool{false, true}},
+		{name: "minimum filtered row ignored", fn: plusFn,
+			leftType: types.New(types.T_decimal256, 65, 0), rightType: types.New(types.T_decimal256, 65, 12), resultType: types.New(types.T_decimal256, 65, 12),
+			left: []string{"1", whole}, right: []string{"0", fraction}, selection: &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}, want: []string{"1", "0"}, wantNulls: []bool{false, true}},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			rightType := types.New(types.T_decimal256, int32(test.rightSize), 0)
-			right, parseErr := types.ParseDecimal256(strings.Repeat("9", test.rightSize), rightType.Width, rightType.Scale)
-			require.NoError(t, parseErr)
-			var expected any
-			if !test.wantErr {
-				want, parseErr := types.ParseDecimal256("99999999999999999999999999899999999999000000000000000000000000001", resultType.Width, resultType.Scale)
-				require.NoError(t, parseErr)
-				expected = []types.Decimal256{want}
+		t.Run(tc.name, func(t *testing.T) {
+			parse := func(values []string, typ types.Type) []types.Decimal256 {
+				out := make([]types.Decimal256, len(values))
+				for i, value := range values {
+					var err error
+					out[i], err = types.ParseDecimal256(value, typ.Width, typ.Scale)
+					require.NoError(t, err)
+				}
+				return out
 			}
-			testCase := NewFunctionTestCase(proc,
-				[]FunctionTestInput{
-					NewFunctionTestInput(leftType, []types.Decimal256{left}, nil),
-					NewFunctionTestInput(rightType, []types.Decimal256{right}, nil),
-				},
-				NewFunctionTestResult(resultType, test.wantErr, expected, nil),
-				multiFn)
-			defer testCase.Free()
-			if test.wantErr {
-				require.NoError(t, testCase.result.PreExtendAndReset(testCase.fnLength))
-				evalErr := multiFn(testCase.parameters, testCase.result, proc, testCase.fnLength, nil)
-				require.ErrorContains(t, evalErr, "exceeds DECIMAL(65,0)")
+			left := NewFunctionTestInput(tc.leftType, parse(tc.left, tc.leftType), tc.leftNulls)
+			left.isConst = tc.leftConst
+			right := NewFunctionTestInput(tc.rightType, parse(tc.right, tc.rightType), nil)
+			right.isConst = tc.rightConst
+			want := tc.rawWant
+			if want == nil {
+				want = parse(tc.want, tc.resultType)
+			}
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{left, right},
+				NewFunctionTestResult(tc.resultType, tc.wantErr != "", want, tc.wantNulls), tc.fn).WithSelectList(tc.selection)
+			defer fc.Free()
+			fc.fnLength = max(len(tc.left), len(tc.right))
+			if tc.wantErr != "" {
+				_, err := fc.DebugRun()
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), "error: %v", err)
+				require.ErrorContains(t, err, tc.wantErr)
 				return
 			}
-			succeeded, info := testCase.Run()
-			require.True(t, succeeded, info)
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+			require.Equal(t, tc.resultType, *fc.GetResultVectorDirectly().GetType())
 		})
 	}
 }

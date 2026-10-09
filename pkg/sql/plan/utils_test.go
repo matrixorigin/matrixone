@@ -197,6 +197,7 @@ func TestPreparedJSONConstructorValueParamPositions(t *testing.T) {
 		{"json_insert", []int32{2, 4}},
 		{"json_replace", []int32{2, 4}},
 		{"json_array_append", []int32{2, 4}},
+		{"json_array_insert", []int32{2, 4}},
 		{"concat", []int32{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1069,7 +1070,7 @@ func TestPreparedPlanDirectResultParamPositions(t *testing.T) {
 		{name: "predicate control", sql: "prepare predicate_only from 'select 1 where ? = 1'"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
 			require.NoError(t, err)
 			planUnderTest := prepared.GetDcl().GetPrepare().GetPlan()
 			got := PreparedPlanDirectResultParamPositions(planUnderTest)
@@ -1095,7 +1096,7 @@ func TestPreparedPlanConversionParamPositions(t *testing.T) {
 		{name: "no conversion", sql: "prepare no_conversion from 'select abs(?)'", want: nil},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
 			require.NoError(t, err)
 			planUnderTest := prepared.GetDcl().GetPrepare().GetPlan()
 			require.Equal(t, test.want, PreparedPlanConversionParamPositions(planUnderTest))
@@ -1120,7 +1121,7 @@ func TestPreparedPlanInetNtoaParamPositions(t *testing.T) {
 		{name: "other function", sql: "prepare inet_other from 'select inet_aton(?)'", want: nil},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
 			require.NoError(t, err)
 			planUnderTest := prepared.GetDcl().GetPrepare().GetPlan()
 			require.Equal(t, test.want, PreparedPlanInetNtoaParamPositions(planUnderTest))
@@ -1141,7 +1142,7 @@ func TestPreparedDirectResultSpecializationUpdatesVisibleType(t *testing.T) {
 		{name: "distinct row source", sql: "prepare runtime_distinct_rows from 'select distinct ? as result from nation'"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
 			require.NoError(t, err)
 			filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
 				context.Background(), prepared.GetDcl().GetPrepare().GetPlan(), []any{ParamValue{
@@ -1197,7 +1198,7 @@ func TestPreparedDirectDecimal256RestoresRuntimeParamRef(t *testing.T) {
 	require.Equal(t, int32(0), restoredParam.Pos)
 
 	prepared, err := runOneStmt(
-		NewMockOptimizer(false), t,
+		NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare decimal256_order from 'select ? as result order by result'")
 	require.NoError(t, err)
 	filled, specialized, err = FillValuesOfParamsInPlanWithSpecialization(
@@ -1390,7 +1391,7 @@ func TestFillValuesOfParamsInPlanRejectsControlStatements(t *testing.T) {
 func TestValidatePreparedPaginationParams(t *testing.T) {
 	buildPreparedPlan := func(t *testing.T, sql string) *plan.Plan {
 		t.Helper()
-		prepared, err := runOneStmt(NewMockOptimizer(false), t, fmt.Sprintf("prepare stmt1 from '%s'", sql))
+		prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, fmt.Sprintf("prepare stmt1 from '%s'", sql))
 		require.NoError(t, err)
 		queryPlan := prepared.GetDcl().GetPrepare().GetPlan()
 		require.NotNil(t, queryPlan)
@@ -1506,13 +1507,13 @@ func TestValidatePreparedPaginationParams(t *testing.T) {
 }
 
 func TestPreparedDirectResultParamUsesRuntimeNumericType(t *testing.T) {
-	prepared, err := runOneStmt(NewMockOptimizer(false), t, "prepare stmt1 from 'select ? as result'")
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "prepare stmt1 from 'select ? as result'")
 	require.NoError(t, err)
 	queryPlan := prepared.GetDcl().GetPrepare().GetPlan()
 	require.True(t, PreparedPlanHasDirectResultParams(queryPlan))
 	require.Equal(t, []int32{0}, PreparedPlanDirectResultParamPositions(queryPlan))
 
-	functionPrepared, err := runOneStmt(NewMockOptimizer(false), t, "prepare stmt2 from 'select abs(?)'")
+	functionPrepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "prepare stmt2 from 'select abs(?)'")
 	require.NoError(t, err)
 	require.False(t, PreparedPlanHasDirectResultParams(functionPrepared.GetDcl().GetPrepare().GetPlan()))
 	require.Empty(t, PreparedPlanDirectResultParamPositions(functionPrepared.GetDcl().GetPrepare().GetPlan()))
@@ -1532,7 +1533,7 @@ func TestPreparedDirectResultParamUsesRuntimeNumericType(t *testing.T) {
 }
 
 func TestPreparedDirectResultSpecializationIsPositionScoped(t *testing.T) {
-	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare stmt_direct_scope from 'select ? as direct_text, ? as direct_number, abs(?) as nested_number'")
 	require.NoError(t, err)
 	original := prepared.GetDcl().GetPrepare().GetPlan()
@@ -1703,7 +1704,7 @@ func TestPreparedPlanHasDirectResultParamsBoundaries(t *testing.T) {
 		{name: "numeric function only", sql: "prepare direct_abs from 'select abs(?)'", want: nil},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
 			require.NoError(t, err)
 			got := PreparedPlanDirectResultParamPositions(prepared.GetDcl().GetPrepare().GetPlan())
 			require.Equal(t, test.want, got)
@@ -3333,7 +3334,7 @@ func TestConstantTransposeArithmeticSemantics(t *testing.T) {
 		{name: "integer overflow", op: "+", overflow: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cc := NewMockCompilerContext(false)
+			cc := NewMockCompilerContext(false, newPlanTestProcess(t))
 			proc := cc.GetProcess()
 			typ := types.T_float64.ToType()
 			literal := MakePlan2Float64ConstExprWithType(1)

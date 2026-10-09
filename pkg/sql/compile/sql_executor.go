@@ -578,6 +578,7 @@ func (exec *txnExecutor) Exec(
 	c.ignorePublish = statementOption.IgnorePublish()
 	c.ignoreCheckExperimental = statementOption.IgnoreCheckExperimental()
 	c.disableLock = statementOption.DisableLock()
+	c.prePipelineLockTableID = statementOption.PrePipelineLockTable()
 
 	defer c.Release()
 

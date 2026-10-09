@@ -157,6 +157,7 @@ func TestMakeTimeBinarySecondsColumns(t *testing.T) {
 
 func TestSpecialIntegerArgumentPreparedReuse(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	planProc := newPlanTestProcess(t)
 	for _, tc := range []struct {
 		sql  string
 		want [3]string
@@ -168,7 +169,7 @@ func TestSpecialIntegerArgumentPreparedReuse(t *testing.T) {
 		{"cast(maketime(1,?,1.25) as varchar)", [3]string{"01:01:01.25", "01:02:01.25", "01:03:01.25"}},
 	} {
 		t.Run(tc.sql, func(t *testing.T) {
-			prepared, err := runOneStmt(NewMockOptimizer(false), t, "prepare special_integer from 'select "+tc.sql+"'")
+			prepared, err := runOneStmt(NewMockOptimizer(false, planProc), t, "prepare special_integer from 'select "+tc.sql+"'")
 			require.NoError(t, err)
 			original := prepared.GetDcl().GetPrepare().Plan
 			snapshot := proto.Clone(original)
