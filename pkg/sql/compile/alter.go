@@ -1244,6 +1244,9 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 			lineageSnapshotAdvanced = true
 		}
 	}
+	if err = c.rejectBoundLifecycleDDL(oldId, "ALTER TABLE COPY"); err != nil {
+		return err
+	}
 	if !isTemp {
 		// The stable row exists even when no owner does. Snapshot and PITR creation
 		// cross the same write barrier before choosing their timestamp and retain

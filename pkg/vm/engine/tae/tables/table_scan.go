@@ -95,6 +95,82 @@ func TombstoneRangeScanByObject(
 	mp *mpool.MPool,
 	vpool *containers.VectorPool,
 ) (bat *containers.Batch, err error) {
+	return TombstoneRangeScanByObjectWithMaxRows(
+		ctx,
+		tableEntry,
+		objectID,
+		start,
+		end,
+		mp,
+		vpool,
+		0,
+	)
+}
+
+// TombstoneRangeScanByObjectWithMaxRows reuses the ordinary Merge scanner but
+// stops after maxRows matching rows. A zero limit preserves the ordinary Merge
+// behavior. Lifecycle uses an N+1 probe to enforce its per-attempt row budget
+// without introducing a second tombstone reader.
+func TombstoneRangeScanByObjectWithMaxRows(
+	ctx context.Context,
+	tableEntry *catalog.TableEntry,
+	objectID objectio.ObjectId,
+	start, end types.TS,
+	mp *mpool.MPool,
+	vpool *containers.VectorPool,
+	maxRows uint64,
+) (bat *containers.Batch, err error) {
+	return tombstoneRangeScanByObject(
+		ctx,
+		tableEntry,
+		objectID,
+		start,
+		end,
+		mp,
+		vpool,
+		maxRows,
+	)
+}
+
+// HasTombstoneInRangeByObject is the bounded existence form used by
+// Lifecycle Whole retirement. Whole must abort on the first post-snapshot
+// delete, so materializing the complete Tombstone set would add memory cost
+// without adding information. The ordinary Merge scanner above remains
+// unlimited and otherwise unchanged.
+func HasTombstoneInRangeByObject(
+	ctx context.Context,
+	tableEntry *catalog.TableEntry,
+	objectID objectio.ObjectId,
+	start, end types.TS,
+	mp *mpool.MPool,
+	vpool *containers.VectorPool,
+) (found bool, err error) {
+	bat, err := tombstoneRangeScanByObject(
+		ctx,
+		tableEntry,
+		objectID,
+		start,
+		end,
+		mp,
+		vpool,
+		1,
+	)
+	if bat == nil {
+		return false, err
+	}
+	defer bat.Close()
+	return bat.Length() != 0, err
+}
+
+func tombstoneRangeScanByObject(
+	ctx context.Context,
+	tableEntry *catalog.TableEntry,
+	objectID objectio.ObjectId,
+	start, end types.TS,
+	mp *mpool.MPool,
+	vpool *containers.VectorPool,
+	maxRows uint64,
+) (bat *containers.Batch, err error) {
 	tableEntry.WaitTombstoneObjectCommitted(end)
 	it := tableEntry.MakeTombstoneObjectIt()
 	defer it.Release()
@@ -162,9 +238,21 @@ func TombstoneRangeScanByObject(
 			}
 			// TODO: Bloomfilter
 		}
-		err = tombstone.GetObjectData().CollectObjectTombstoneInRange(ctx, start, end, &objectID, &bat, mp, vpool)
+		err = tombstone.GetObjectData().CollectObjectTombstoneInRange(
+			ctx,
+			start,
+			end,
+			&objectID,
+			&bat,
+			mp,
+			vpool,
+			maxRows,
+		)
 		if err != nil {
 			return nil, err
+		}
+		if maxRows != 0 && bat != nil && uint64(bat.Length()) >= maxRows {
+			return bat, nil
 		}
 	}
 	return

@@ -42,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/idxcron"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	lifecyclepkg "github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/lifecycle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"go.uber.org/zap"
 )
@@ -345,6 +346,17 @@ func (s *service) registerExecutorsLocked() {
 	s.task.runner.RegisterExecutor(
 		task.TaskCode_MetricStorageUsage,
 		mometric.GetMetricStorageUsageExecutor(s.cfg.UUID, ieFactory))
+	s.task.runner.RegisterExecutor(
+		task.TaskCode_LifecycleCoordinator,
+		disttae.LifecycleTaskExecutorFactory(
+			s.storeEngine,
+			s._txnClient,
+			s.sqlExecutor,
+			s.fileService,
+			lifecyclepkg.MOFaultInjector{},
+		),
+	)
+
 	cdcExecutor := frontend.CDCTaskExecutorFactory(
 		s.logger,
 		ieFactory,
@@ -408,6 +420,22 @@ func (s *service) registerExecutorsLocked() {
 	}); err != nil {
 		if !s.viewMetadataGenerationRevoked.Load() {
 			s.logger.Error("failed to start lineage GC cron registration", zap.Error(err))
+		}
+	}
+	if err := s.stopper.RunNamedTask("register lifecycle cron", func(ctx context.Context) {
+		if !s.task.runnerReady.Load() || s.viewMetadataGenerationRevoked.Load() {
+			return
+		}
+		attempt, cancel := context.WithTimeoutCause(ctx, 30*time.Second,
+			moerr.NewInternalErrorNoCtx("Lifecycle cron registration timed out"))
+		defer cancel()
+		attempt = defines.AttachAccount(attempt, catalog.System_Account, catalog.System_User, catalog.System_Role)
+		if err := ts.CreateCronTask(attempt, lifecyclepkg.CoordinatorTaskMetadata(), lifecyclepkg.CoordinatorTaskCronExpr); err != nil && ctx.Err() == nil {
+			s.logger.Error("failed to create TAE object lifecycle task", zap.Error(err))
+		}
+	}); err != nil {
+		if !s.viewMetadataGenerationRevoked.Load() {
+			s.logger.Error("failed to start lifecycle cron registration", zap.Error(err))
 		}
 	}
 }

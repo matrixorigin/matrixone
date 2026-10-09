@@ -318,6 +318,15 @@ func (s *Scope) DropDatabase(c *Compile) error {
 			return err
 		}
 		resolvedRelations[r] = t
+		// Restore staging names are reserved from frontend SQL. DROP DATABASE
+		// must nevertheless preserve ordinary owner-drop semantics; skip the
+		// nested frontend DROP TABLE and let the existing database delete own it,
+		// just as it already owns partition/index child relations.
+		if catalog.IsLifecycleRestoreStagingTable(r) {
+			ignoreTables[r] = struct{}{}
+			continue
+		}
+
 		if features.IsPartition(t.GetExtraInfo().FeatureFlag) ||
 			features.IsIndexTable(t.GetExtraInfo().FeatureFlag) {
 			ignoreTables[r] = struct{}{}
@@ -387,6 +396,21 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	}
 	if err != nil {
 		return err
+	}
+
+	// DROP TABLE normally removes each Binding while walking the database.
+	// Delete by database identity as a final, same-transaction backstop for
+	// already-missing relations and interrupted historical metadata. Provider
+	// cleanup remains asynchronous through the system-owned Cleanup Root. Use
+	// the locked, resolved database identity, just as privilege/index cleanup
+	// does: the planned ID may predate a same-name database replacement.
+	if droppedDatabaseID != 0 {
+		if err = c.detachLifecycleBindingsForDatabaseDrop(
+			accountId,
+			droppedDatabaseID,
+		); err != nil {
+			return err
+		}
 	}
 
 	err = c.e.Delete(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
@@ -949,6 +973,7 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 
 	if c.proc.GetTxnOperator().Txn().IsPessimistic() {
 		var retryErr error
+		var addFKParents []lifecycleForeignKeyParent
 		// 0. lock origin database metadata in catalog
 		if err = lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
 			return err
@@ -1084,12 +1109,38 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 					}
 					retryErr = moerr.NewTxnNeedRetryWithDefChangedNoCtx()
 				}
+				addFKParents = append(addFKParents, lifecycleForeignKeyParent{
+					databaseName: parentDB,
+					tableName:    parentTable,
+				})
 			}
 		}
 
 		if retryErr != nil {
 			return retryErr
 		}
+		if c.proc.Base.IsFrontend && len(addFKParents) > 0 {
+			accountID, err := defines.GetAccountId(c.proc.Ctx)
+			if err != nil {
+				return err
+			}
+			// The parent catalog and data locks above already serialize FK
+			// publication with SET LIFECYCLE. Probe only after all snapshot
+			// refreshes have succeeded; do not acquire a second set of locks.
+			if accountID != 0 {
+				for _, parent := range addFKParents {
+					if err = c.rejectLifecycleForeignKeyParentAfterLock(
+						parent.databaseName,
+						parent.tableName,
+					); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
+	if err = c.rejectBoundLifecycleDDL(tblId, "ALTER TABLE"); err != nil {
+		return err
 	}
 
 	initialForeignKeyParents := foreignKeyParentIDs(oTableDef.Fkeys)
@@ -1719,6 +1770,15 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 			if err != nil {
 				return err
 			}
+			// The parent mo_tables row was locked and probed before this
+			// mutation. Keep this post-update check as a fail-closed backstop if
+			// a future FK call path reaches the shared mutation helper directly.
+			if err = c.rejectBoundLifecycleDDL(
+				fkRelation.GetTableID(c.proc.Ctx),
+				"ADD FOREIGN KEY referencing",
+			); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -1904,6 +1964,17 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 				zap.Error(err),
 			)
 			return err
+		}
+		ignoreForeignKey, _ := c.proc.Ctx.Value(defines.IgnoreForeignKey{}).(bool)
+		if !ignoreForeignKey && len(qry.GetFkTables()) > 0 {
+			if err = c.lockAndRejectLifecycleForeignKeyParents(
+				dbName,
+				tblName,
+				qry.GetFkDbs(),
+				qry.GetFkTables(),
+			); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -2113,7 +2184,17 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 			}
 		}
 
-		if err = addChildTableIDToDistinctParents(c.proc.Ctx, parentRelations, tblId); err != nil {
+		if err = addChildTableIDToDistinctParents(
+			c.proc.Ctx,
+			parentRelations,
+			tblId,
+			func(parent engine.Relation) error {
+				return c.rejectBoundLifecycleDDL(
+					parent.GetTableID(c.proc.Ctx),
+					"ADD FOREIGN KEY referencing",
+				)
+			},
+		); err != nil {
 			c.proc.Info(c.proc.Ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
@@ -3169,6 +3250,12 @@ func (s *Scope) CreateIndex(c *Compile) error {
 			return err
 		}
 	}
+	if err := c.rejectBoundLifecycleDDL(
+		r.GetTableID(c.proc.Ctx),
+		"CREATE INDEX",
+	); err != nil {
+		return err
+	}
 
 	ps := c.proc.GetPartitionService()
 	if !ps.Enabled() ||
@@ -3728,6 +3815,7 @@ func addChildTableIDToDistinctParents(
 	ctx context.Context,
 	parentRelations []engine.Relation,
 	childTableID uint64,
+	afterUpdate func(engine.Relation) error,
 ) error {
 	updatedParents := make(map[uint64]struct{}, len(parentRelations))
 	for _, parentRelation := range parentRelations {
@@ -3737,6 +3825,11 @@ func addChildTableIDToDistinctParents(
 		}
 		if err := AddChildTblIdToParentTable(ctx, parentRelation, childTableID); err != nil {
 			return err
+		}
+		if afterUpdate != nil {
+			if err := afterUpdate(parentRelation); err != nil {
+				return err
+			}
 		}
 		updatedParents[parentTableID] = struct{}{}
 	}
@@ -4021,6 +4114,9 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		if err != nil {
 			return err
 		}
+	}
+	if err := c.rejectBoundLifecycleDDL(oldID, "TRUNCATE TABLE"); err != nil {
+		return err
 	}
 
 	// TRUNCATE is a copy-and-swap rebuild: it creates a replacement relation
@@ -4662,6 +4758,11 @@ func (s *Scope) dropTableSingleResolved(
 		!isTemp &&
 		c.proc.GetTxnOperator().Txn().IsPessimistic() {
 		if err = lockDroppedRelation(c, dbName, tblName, rel, !isView && !isSource); err != nil {
+			return err
+		}
+	}
+	if !isTemp && !isView && !isSource {
+		if err := c.detachLifecycleBindingForDrop(droppedRelationID); err != nil {
 			return err
 		}
 	}
@@ -6329,11 +6430,9 @@ func (s *Scope) CreatePitr(c *Compile) error {
 		return err
 	}
 
-	// INTERNAL PITR creation bypasses the frontend path. Cross the same stable
-	// publication barrier as frontend snapshot/PITR creation before refreshing
-	// the target object ID, and retain the write until the PITR row commits.
-	// This prevents COPY ALTER from swapping the table generation between
-	// planning and publication.
+	// INTERNAL PITR creation bypasses the frontend path. Cross the existing Data
+	// Branch lineage publication lock before refreshing the target object ID.
+	// Lifecycle does not add a second cross-feature barrier here.
 	pitrObjectID, err := preparePitrPublication(
 		c.lockDataBranchLineageOwnerLifecycle,
 		func() error {
@@ -6353,7 +6452,6 @@ func (s *Scope) CreatePitr(c *Compile) error {
 	if err != nil {
 		return err
 	}
-
 	// check pitr if exists（pitr_name + create_account）
 	checkExistSql := getSqlForCheckPitrExists(pitrName, accountId)
 	existRes, err := c.runSqlWithResultAndOptions(checkExistSql, int32(sysAccountId), executor.StatementOption{}.WithDisableLog())

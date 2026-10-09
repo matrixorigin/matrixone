@@ -52,6 +52,26 @@ func TestInformationSchemaMetadataViewsHideTemporaryTables(t *testing.T) {
 	}
 }
 
+func TestInformationSchemaMetadataViewsHideLifecycleRestoreStaging(t *testing.T) {
+	for _, ddl := range []string{
+		InformationSchemaTablesDDL,
+		InformationSchemaColumnsDDL,
+		InformationSchemaStatisticsDDL,
+		InformationSchemaTableConstraintsDDL,
+		InformationSchemaTableConstraintsLegacyDDL,
+	} {
+		assert.Contains(t, ddl, catalog.LifecycleRestoreTableSQLRegexpPattern)
+	}
+	// The current definitions include both local and subscription metadata.
+	// Every derived branch must retain the same staging-name exclusion.
+	assert.Equal(t, 2, strings.Count(InformationSchemaTablesDDL,
+		"not regexp_like(lower(tbl.relname), '"+catalog.LifecycleRestoreTableSQLRegexpPattern+"')"))
+	assert.Equal(t, 3, strings.Count(InformationSchemaColumnsDDL,
+		"not regexp_like(lower(mt.relname), '"+catalog.LifecycleRestoreTableSQLRegexpPattern+"')"))
+	assert.Equal(t, 1, strings.Count(InformationSchemaColumnsDDL,
+		"not regexp_like(lower(mc.att_relname), '"+catalog.LifecycleRestoreTableSQLRegexpPattern+"')"))
+}
+
 func TestInformationSchemaMetadataViewsEnforceObjectPrivileges(t *testing.T) {
 	tests := []struct {
 		name string

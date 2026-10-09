@@ -985,7 +985,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 		pitrExist                bool
 		sortedFkTbls             []string
 		fkTableMap               map[string]*tableInfo
-		accountRecord            *accountRecord
+		sourceAccountRecord      *accountRecord
 		retiredMongoDBAccountIDs []uint32
 	)
 	// resolve timestamp
@@ -1048,19 +1048,38 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 	if err = checkPitrInValidDurtion(ts, pitr); err != nil {
 		return stats, err
 	}
+	rejectSourceAccountLifecycle := func(record *accountRecord) error {
+		if record == nil {
+			return moerr.NewInternalError(ctx, "PITR source account record is missing")
+		}
+		return rejectLifecycleArchiveRestoreScope(
+			ctx,
+			bh,
+			lifecycleArchiveRestoreScope{
+				level:             tree.RESTORELEVELACCOUNT,
+				accountID:         uint32(record.accountId),
+				snapshotTS:        ts,
+				rejectTTLBindings: true,
+			},
+			"RESTORE PITR",
+		)
+	}
 
 	if stmt.Level == tree.RESTORELEVELACCOUNT && len(accountName) > 0 {
 		fromAccount := string(stmt.SrcAccountName)
 		if len(fromAccount) == 0 {
 			fromAccount = pitr.accountName
 		}
-		accountRecord, err = getAccountRecordByTs(ctx, ses, bh, pitrName, ts, fromAccount)
+		sourceAccountRecord, err = getAccountRecordByTs(ctx, ses, bh, pitrName, ts, fromAccount)
 		if err != nil {
 			return stats, err
 		}
 		if err = preflightRestorePitrEntry(
-			ctx, ses.GetService(), bh, pitrName, ts, stmt.Level, "", uint32(accountRecord.accountId),
+			ctx, ses.GetService(), bh, pitrName, ts, stmt.Level, "", uint32(sourceAccountRecord.accountId),
 		); err != nil {
+			return stats, err
+		}
+		if err = rejectSourceAccountLifecycle(sourceAccountRecord); err != nil {
 			return stats, err
 		}
 
@@ -1073,11 +1092,11 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 				getLogger(ses.GetService()).Info("restore to the same account", zap.String("fromAccount", accountName), zap.String("toAccount", accountName))
 				toAccountId, rtnErr = getAccountId(ctx, bh, accountName)
 				if rtnErr != nil {
-					if rtnErr = createDroppedAccount(ctx, ses, bh, pitrName, *accountRecord); rtnErr != nil {
+					if rtnErr = createDroppedAccount(ctx, ses, bh, pitrName, *sourceAccountRecord); rtnErr != nil {
 						return
 					}
 
-					if toAccountId, rtnErr = getAccountId(ctx, bh, accountRecord.accountName); rtnErr != nil {
+					if toAccountId, rtnErr = getAccountId(ctx, bh, sourceAccountRecord.accountName); rtnErr != nil {
 						return
 					}
 				}
@@ -1089,6 +1108,18 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 				}
 			}
 
+			if rtnErr = rejectLifecycleArchiveRestoreScope(
+				ctx,
+				bh,
+				lifecycleArchiveRestoreScope{
+					level:             tree.RESTORELEVELACCOUNT,
+					accountID:         toAccountId,
+					rejectTTLBindings: true,
+				},
+				"RESTORE PITR",
+			); rtnErr != nil {
+				return rtnErr
+			}
 			if rtnErr = invalidateAccountViewMetadata(ctx, ses, bh, toAccountId); rtnErr != nil {
 				return rtnErr
 			}
@@ -1101,7 +1132,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 				bh,
 				pitrName,
 				ts,
-				*accountRecord,
+				*sourceAccountRecord,
 				uint64(toAccountId),
 				nil,
 				isClusterRestore,
@@ -1140,6 +1171,16 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 		return stats, moerr.NewInternalErrorf(ctx, "account `%s` does not exists at timestamp: %v", tenantInfo.GetTenant(), nanoTimeFormat(ts))
 	}
 	if restoreLevel == tree.RESTORELEVELCLUSTER {
+		if err = rejectLifecycleArchiveClusterRestore(
+			ctx,
+			ses,
+			bh,
+			pitrName,
+			ts,
+			"RESTORE PITR",
+		); err != nil {
+			return stats, err
+		}
 		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelCluster)
 		if err = restoreToCluster(ctx, ses, bh, pitrName, ts, &retiredMongoDBAccountIDs); err != nil {
 			return stats, err
@@ -1148,6 +1189,21 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 	}
 	if err = preflightRestorePitrEntry(
 		ctx, ses.GetService(), bh, pitrName, ts, restoreLevel, dbName, tenantInfo.TenantID,
+	); err != nil {
+		return stats, err
+	}
+	if err = rejectLifecycleArchiveRestoreScope(
+		ctx,
+		bh,
+		lifecycleArchiveRestoreScope{
+			level:             restoreLevel,
+			accountID:         tenantInfo.GetTenantID(),
+			databaseName:      dbName,
+			tableName:         tblName,
+			snapshotTS:        ts,
+			rejectTTLBindings: restoreLevel == tree.RESTORELEVELACCOUNT,
+		},
+		"RESTORE PITR",
 	); err != nil {
 		return stats, err
 	}
