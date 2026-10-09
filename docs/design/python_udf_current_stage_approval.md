@@ -84,13 +84,13 @@ Against upstream `9df2c4006142a0593f9bb4c40019ee1a8cd2cde7`, the current repair 
 
 ## r5 rebase maintenance addendum (2026-10-09)
 
-Official main `d7621ea017db4e43dbde9e5a855ba7b2ad920784` has allocated
-MORPC 107 and catalog 4.0.13 to functional-index metadata and its STATISTICS
-refresh. This proposal uses the next MORPC 108 and a separate catalog 4.0.14
+Official main `72d4a49db7d750520e1a1654cb6091fc7169882b` has allocated
+MORPC 108 to the user-variable NULL regexp migration contract while retaining
+catalog 4.0.13. This proposal uses the next MORPC 109 and a separate catalog 4.0.14
 repair (minimum direct source 4.0.13), preserving the upstream handler unchanged.
 The nine idempotent shared-function entries are replayed only by the new handler;
 already-upgraded 4.0.13 tenants remain eligible. Sender, receiver, prepared reuse,
-physical execution and status RPC admission move together; protocol 107 is the
+physical execution and status RPC admission move together; protocol 108 is the
 immediate predecessor rejection case. This is a mechanical compatibility
 correction within the existing test/development scope. Independent Architecture
 and SQL/Planner approval remains pending; no approval is inferred from this
