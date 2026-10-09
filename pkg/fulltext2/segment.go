@@ -399,10 +399,12 @@ type Segment struct {
 	// releases the file lease after this Segment's private mapping is gone.
 	// Ordinary storage loads leave it nil and keep their existing ownership.
 	mmapRelease func()
-	// mmapRetryPool retains this Segment when munmap fails during Destroy or a
+	// mmapRetryPool retains this Segment when munmap/unlink fails during Destroy or a
 	// decode-failure cleanup. The pool is the explicit owner for a later retry;
-	// it is nil on ordinary and build-side segments.
-	mmapRetryPool *baseFilePool
+	// it is nil on default ordinary and build-side segments.
+	mmapRetryPool      *baseFilePool
+	mmapFallbackPinned bool
+	mmapFileSize       int64
 }
 
 // numDocs is the segment's document count, valid for both a build-side segment (== len(pks))
@@ -704,8 +706,12 @@ func (s *Segment) Free() {
 		s.mmapData = nil
 	}
 	if s.mmapPath != "" {
-		_ = os.Remove(s.mmapPath)
+		if err := os.Remove(s.mmapPath); err != nil && !os.IsNotExist(err) && s.mmapRetryPool != nil {
+			s.mmapRetryPool.deferSegment(s)
+			return
+		}
 		s.mmapPath = ""
+		s.mmapFileSize = 0
 	}
 	if s.mmapRelease != nil {
 		release := s.mmapRelease
@@ -714,6 +720,10 @@ func (s *Segment) Free() {
 	}
 	if s.mmapRetryPool != nil {
 		pool := s.mmapRetryPool
+		if s.mmapFallbackPinned {
+			s.mmapFallbackPinned = false
+			pool.releaseFallback()
+		}
 		s.mmapRetryPool = nil
 		pool.undeferSegment(s)
 	}

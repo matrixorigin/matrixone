@@ -148,12 +148,14 @@ func TestSQLWarmSearchCNCloseRestart(t *testing.T) {
 		return found
 	}
 	want := query()
+	require.Contains(t, want, int64(1))
+	require.Contains(t, want, int64(4))
 	first := resident()
 	require.NotEmpty(t, first, "SQL must leave a real experimental Search resident")
 	require.Equal(t, want, query())
 	require.Equal(t, first, resident(), "warm query must reuse Search handles")
 	// Drive a real CDC Tail, not a no-op MERGE of an unchanged source. Keep
-	// alpha TF and document length unchanged so its independent score oracle
+	// alpha TF and document length unchanged so its cross-phase score oracle
 	// remains valid after the update is made live.
 	require.Len(t, first, 1)
 	var storage string
@@ -207,6 +209,25 @@ func TestSQLWarmSearchCNCloseRestart(t *testing.T) {
 		}
 	}()
 	require.Equal(t, first, resident(), "CDC flush must not evict the warm Search")
+	require.Equal(t, beforeMerge, baseIDs(), "Tail update must keep the Base build identity")
+	termIDs := func(term string) []int64 {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		rows, err := db.QueryContext(ctx, "select id from docs where match(body) against('"+term+"' in bm25 mode) order by id")
+		require.NoError(t, err)
+		defer rows.Close()
+		ids := []int64{}
+		for rows.Next() {
+			var id int64
+			require.NoError(t, rows.Scan(&id))
+			ids = append(ids, id)
+		}
+		require.NoError(t, rows.Err())
+		return ids
+	}
+	require.Empty(t, termIDs("changed"), "resident Search keeps its original Tail")
+	require.Equal(t, []int64{1, 2, 3}, termIDs("gamma"))
 	// Release only this service's observed entries, not the process-wide cache.
 	for key := range first {
 		veccache.Cache.Remove(key)
@@ -215,6 +236,11 @@ func TestSQLWarmSearchCNCloseRestart(t *testing.T) {
 	for key, search := range resident() {
 		require.NotSame(t, first[key], search)
 	}
+	require.Equal(t, beforeMerge, baseIDs(), "reload must reuse the same published Base identity")
+	require.Equal(t, []int64{1}, termIDs("changed"), "new Search sees the persisted Tail term")
+	require.Equal(t, []int64{2, 3}, termIDs("gamma"), "new Search suppresses the replaced old term")
+	// File-hit and capacity mechanisms are asserted separately by real-materializer
+	// component tests; SQL here asserts Search replacement and Tail visibility.
 	// Rebuild and merge must select newly published metadata, not a prior Base.
 	exec("alter table docs alter reindex ft fulltext2 merge force_sync")
 	require.NotEqual(t, beforeMerge, baseIDs(), "MERGE must publish a new Base build")

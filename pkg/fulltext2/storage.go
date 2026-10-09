@@ -670,9 +670,13 @@ func loadFromStorageWithCleanupPool(sqlproc *sqlexec.SqlProcess, cfg TableConfig
 		return nil, err
 	}
 	cleanup := func() {
-		fp.Close()
-		if path != "" {
-			os.Remove(path)
+		if retryPool != nil {
+			retryPool.closeHandle(&baseFileHandle{file: fp, path: path}, filesize)
+		} else {
+			fp.Close()
+			if path != "" {
+				os.Remove(path)
+			}
 		}
 	}
 	if err = fp.Truncate(filesize); err != nil {
@@ -688,14 +692,22 @@ func loadFromStorageWithCleanupPool(sqlproc *sqlexec.SqlProcess, cfg TableConfig
 	data, err := mmapReadOnly(fp)
 	fp.Close()
 	if err != nil {
-		if path != "" {
+		if retryPool != nil {
+			retryPool.mu.Lock()
+			retryPool.removeFileLocked(path, filesize)
+			retryPool.mu.Unlock()
+		} else if path != "" {
 			os.Remove(path)
 		}
 		return nil, err
 	}
 	// Install the cleanup owner before validation can fail. A failed unmap
 	// must remain reachable even when no Segment is returned to Search.
-	m := &Segment{Id: id, mmapData: data, mmapPath: path, mmapRetryPool: retryPool}
+	m := &Segment{Id: id, mmapData: data, mmapPath: path, mmapFileSize: filesize, mmapRetryPool: retryPool}
+	if retryPool != nil {
+		retryPool.pinFallback()
+		m.mmapFallbackPinned = true
+	}
 	// Checksum the mapped bytes (the anonymous SSD file has no path to CheckSum).
 	if vectorindex.CheckSumFromBuffer(data) != checksum {
 		if retryPool == nil {
@@ -766,35 +778,25 @@ func loadFromStorageWithPoolOwnerContext(sqlproc *sqlexec.SqlProcess, cfg TableC
 		if ferr != nil {
 			return nil, ferr
 		}
-		cleanup := func() {
-			_ = fp.Close()
-			if path != "" {
-				_ = os.Remove(path)
-			}
-		}
 		if ferr = fp.Truncate(filesize); ferr != nil {
-			cleanup()
-			return nil, ferr
+			return &baseFileHandle{file: fp, path: path}, ferr
 		}
 		if ferr = streamChunksToFileContext(fillCtx, sqlproc, cfg, id, filesize, fp); ferr != nil {
-			cleanup()
-			return nil, ferr
+			return &baseFileHandle{file: fp, path: path}, ferr
 		}
 		// Validate checksum and decodability before publishing READY. The
 		// validation mapping is short-lived; every successful lease maps the
 		// immutable file independently.
 		data, ferr := mmapReadOnly(fp)
 		if ferr != nil {
-			cleanup()
-			return nil, ferr
+			return &baseFileHandle{file: fp, path: path}, ferr
 		}
 		if vectorindex.CheckSumFromBuffer(data) != checksum {
 			unmapErr := munmap(data)
 			if unmapErr != nil {
 				return &baseFileHandle{file: fp, path: path, validationData: data}, fmt.Errorf("fulltext2 base validation mmap release: %w", unmapErr)
 			}
-			cleanup()
-			return nil, moerr.NewInternalError(sqlproc.GetContext(), fmt.Sprintf("fulltext2 index %s checksum mismatch", id))
+			return &baseFileHandle{file: fp, path: path}, moerr.NewInternalError(sqlproc.GetContext(), fmt.Sprintf("fulltext2 index %s checksum mismatch", id))
 		}
 		probe := &Segment{Id: id}
 		ferr = probe.decodeSegment(data)
@@ -809,8 +811,7 @@ func loadFromStorageWithPoolOwnerContext(sqlproc *sqlexec.SqlProcess, cfg TableC
 			return &baseFileHandle{file: fp, path: path, validationData: data}, ferr
 		}
 		if ferr != nil {
-			cleanup()
-			return nil, ferr
+			return &baseFileHandle{file: fp, path: path}, ferr
 		}
 		return &baseFileHandle{file: fp, path: path, validated: true}, nil
 	})
@@ -915,7 +916,8 @@ func createLocalSpillFile(sqlproc *sqlexec.SqlProcess, prefix string) (*os.File,
 // CreateAndRemoveFile the JOIN spill uses — an ANONYMOUS file (unlinked; the fd +
 // mapping keep the inode alive, Free just munmaps, no os.Remove). Falls back to
 // os.CreateTemp (/tmp, linked → Free deletes by path) when no process/fileservice
-// is attached (tests / one-shot tools). Returns (file, path, err); path=="" for the
+// is attached or LOCAL lookup/directory/file creation fails. Returns
+// (file, path, err); path=="" for the
 // anonymous SSD file. name is the caller-chosen file-name prefix.
 func createLocalTempFile(sqlproc *sqlexec.SqlProcess, name string) (*os.File, string, error) {
 	if sqlproc != nil && sqlproc.Proc != nil {

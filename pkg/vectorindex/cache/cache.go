@@ -1613,7 +1613,9 @@ func (c *VectorIndexCache) RemovePrefix(prefix string) {
 // The map entry is removed before Destroy, just like ordinary eviction, so a
 // concurrent cache miss cannot observe a half-destroyed object.  Destroy may
 // wait for an in-flight search; callers use this only after service request
-// admission has been drained.
+// admission has been drained. This scan does not join evictions already
+// removed from IndexMap. Resource owners must retain consumer lifetime pins
+// through successful release before reporting complete cleanup.
 func (c *VectorIndexCache) DestroyByService(service string) int {
 	if c == nil || service == "" {
 		return 0

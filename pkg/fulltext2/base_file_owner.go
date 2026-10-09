@@ -173,12 +173,15 @@ func (o *baseFileOwner) hasResources() bool {
 	defer p.mu.Unlock()
 	return p.bytes != 0 || p.reserved != 0 || p.reservedFiles != 0 || p.deferredBytes != 0 ||
 		p.openFiles != 0 || p.deferredSegmentBytes != 0 || len(p.entries) != 0 ||
-		len(p.deferredSegments) != 0 || len(p.deferredMappings) != 0
+		len(p.deferredSegments) != 0 || len(p.deferredMappings) != 0 ||
+		p.liveFallbacks != 0 || len(p.deferredFiles) != 0 || p.deferredFileBytes != 0
 }
 
 // close is idempotent. A close that cannot finish returns a typed pending
 // error; a later close after Search handles release their leases retries the
-// same owner rather than losing the only cleanup reference.
+// same owner rather than losing the only cleanup reference. Ordinary mappings
+// retain a lifetime pin through successful Free, including cache eviction
+// already removed from the map but not yet inside Destroy.
 func (o *baseFileOwner) close() error {
 	if o == nil {
 		return nil

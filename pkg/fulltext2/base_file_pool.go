@@ -124,9 +124,10 @@ type baseFileHandle struct {
 }
 
 // baseFilePool is a deliberately small, request-independent pool of immutable
-// Base files.  It owns files, not decoded Segments.  The mutex protects only
+// Base files.  It owns files, not decoded Segments.  The mutex protects
 // the directory, byte/FD accounting and lease state; SQL, checksum and mmap
-// work happens outside it.
+// work happens outside it. Close/remove retain the existing bounded mutex
+// boundary; cancellation never holds the owner mutex while waiting here.
 type baseFilePool struct {
 	mu       sync.Mutex
 	retryMu  sync.Mutex
@@ -148,6 +149,11 @@ type baseFilePool struct {
 	deferredSegmentBytes int64
 	deferredSegments     map[*Segment]int64
 	deferredMappings     map[*deferredBaseMapping]struct{}
+	// Live ordinary mappings pin the cleanup owner even after cache removal.
+	liveFallbacks int
+	// Linked paths whose FD is already closed retain disk debt, never FD debt.
+	deferredFiles     map[string]int64
+	deferredFileBytes int64
 }
 
 func newBaseFilePool(maxBytes int64, maxFiles int) *baseFilePool {
@@ -163,6 +169,7 @@ func newBaseFilePool(maxBytes int64, maxFiles int) *baseFilePool {
 		entries:          make(map[baseFileKey]*baseFileEntry),
 		deferredSegments: make(map[*Segment]int64),
 		deferredMappings: make(map[*deferredBaseMapping]struct{}),
+		deferredFiles:    make(map[string]int64),
 	}
 }
 
@@ -189,7 +196,7 @@ func (p *baseFilePool) acquire(ctx context.Context, key baseFileKey, fill func(c
 			p.mu.Unlock()
 			return nil, errBaseFilePoolClosed
 		}
-		if len(p.deferredSegments) != 0 {
+		if len(p.deferredSegments) != 0 || len(p.deferredFiles) != 0 {
 			p.mu.Unlock()
 			return nil, errBaseFileCleanupPending
 		}
@@ -287,7 +294,7 @@ func (p *baseFilePool) acquire(ctx context.Context, key baseFileKey, fill func(c
 		}
 		p.mu.Unlock()
 		if closed {
-			p.closeHandle(handle)
+			p.closeHandle(handle, key.size)
 			p.mu.Lock()
 			p.reserved -= key.size
 			p.reservedFiles--
@@ -326,7 +333,7 @@ func (p *baseFilePool) finishFill(e *baseFileEntry, handle *baseFileHandle, err 
 		close(e.done)
 	}
 	p.mu.Unlock()
-	p.closeHandle(handle)
+	p.closeHandle(handle, e.key.size)
 	// Keep both byte and FD reservations until closeHandle has returned.  A
 	// failing fill may already own an open file even though its directory entry
 	// is gone, so releasing either budget earlier admits an actual overage.
@@ -338,7 +345,7 @@ func (p *baseFilePool) finishFill(e *baseFileEntry, handle *baseFileHandle, err 
 }
 
 func (p *baseFilePool) makeRoomLocked(need int64) error {
-	for p.bytes+p.reserved+p.deferredBytes+need > p.maxBytes || p.fileCountLocked()+1 > p.maxFiles {
+	for p.bytes+p.reserved+p.deferredBytes+p.deferredFileBytes+need > p.maxBytes || p.fileCountLocked()+1 > p.maxFiles {
 		var victim *baseFileEntry
 		for _, e := range p.entries {
 			if e.state != baseFileReady || e.users != 0 {
@@ -354,6 +361,9 @@ func (p *baseFilePool) makeRoomLocked(need int64) error {
 		delete(p.entries, victim.key)
 		victim.retired = true
 		p.closeEntryLocked(victim)
+		if len(p.deferredFiles) != 0 {
+			return errBaseFileCleanupPending
+		}
 	}
 	return nil
 }
@@ -372,9 +382,7 @@ func (p *baseFilePool) closeEntryLocked(e *baseFileEntry) {
 		e.handle.validationData = nil
 	}
 	_ = e.handle.file.Close()
-	if e.handle.path != "" {
-		_ = os.Remove(e.handle.path)
-	}
+	p.removeFileLocked(e.handle.path, e.key.size)
 }
 
 func (p *baseFilePool) retire(e *baseFileEntry) {
@@ -399,7 +407,7 @@ func (p *baseFilePool) fileCountLocked() int {
 }
 
 // mappingAdmissionError quarantines new experiment mappings while cleanup
-// retains resources no longer charged by a live cache entry. Capacity fallback
+// retains failed Segment or linked-file resources. Capacity fallback
 // must not bypass this error. Existing admitted work can finish and transfer its
 // finite resources; cleanup success reopens admission without a worker or timer.
 func (p *baseFilePool) mappingAdmissionError() error {
@@ -411,7 +419,7 @@ func (p *baseFilePool) mappingAdmissionError() error {
 	if p.closed {
 		return errBaseFilePoolClosed
 	}
-	if len(p.deferredSegments) != 0 {
+	if len(p.deferredSegments) != 0 || len(p.deferredFiles) != 0 {
 		return errBaseFileCleanupPending
 	}
 	return nil
@@ -426,7 +434,11 @@ func (p *baseFilePool) deferSegment(s *Segment) {
 	// after the cache entry has been removed. Repeated failed retries must
 	// neither duplicate the charge nor permit new READY/fallback mappings.
 	if _, exists := p.deferredSegments[s]; !exists {
-		charge := int64(len(s.mmapData)) + max(s.N, 0)*estBytesPerDocHeap
+		mappingBytes := int64(len(s.mmapData))
+		if s.mmapPath != "" {
+			mappingBytes = max(mappingBytes, s.mmapFileSize)
+		}
+		charge := mappingBytes + max(s.N, 0)*estBytesPerDocHeap
 		p.deferredSegments[s] = charge
 		p.deferredSegmentBytes += charge
 	}
@@ -459,7 +471,7 @@ func (p *baseFilePool) deferMappingLocked(data []byte) {
 // FD is released so a second acquisition can observe the reservation.
 var baseFilePoolBeforeCloseHandle func()
 
-func (p *baseFilePool) closeHandle(handle *baseFileHandle) {
+func (p *baseFilePool) closeHandle(handle *baseFileHandle, size int64) {
 	if handle == nil {
 		return
 	}
@@ -477,13 +489,39 @@ func (p *baseFilePool) closeHandle(handle *baseFileHandle) {
 	if handle.file != nil {
 		_ = handle.file.Close()
 	}
-	if handle.path != "" {
-		_ = os.Remove(handle.path)
+	p.mu.Lock()
+	p.removeFileLocked(handle.path, size)
+	p.mu.Unlock()
+}
+
+// removeFileLocked transfers failed unlink to retry ownership before the caller
+// releases its byte reservation. The descriptor has already been closed.
+func (p *baseFilePool) removeFileLocked(path string, size int64) {
+	if path == "" {
+		return
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		if _, exists := p.deferredFiles[path]; !exists {
+			p.deferredFiles[path] = size
+			p.deferredFileBytes += size
+		}
 	}
 }
 
-// retryDeferred retries mappings and Segment frees outside the pool mutex. A failed
-// munmap remains owned by the pool and is retried on the next Destroy/Close boundary.
+func (p *baseFilePool) pinFallback() {
+	p.mu.Lock()
+	p.liveFallbacks++
+	p.mu.Unlock()
+}
+
+func (p *baseFilePool) releaseFallback() {
+	p.mu.Lock()
+	p.liveFallbacks--
+	p.mu.Unlock()
+}
+
+// retryDeferred retries mappings, Segment frees and linked paths outside the
+// pool mutex. Failed cleanup remains owned for the next Destroy/Close boundary.
 func (p *baseFilePool) retryDeferred() {
 	if p == nil {
 		return
@@ -498,6 +536,10 @@ func (p *baseFilePool) retryDeferred() {
 	mappings := make([]*deferredBaseMapping, 0, len(p.deferredMappings))
 	for m := range p.deferredMappings {
 		mappings = append(mappings, m)
+	}
+	files := make(map[string]int64, len(p.deferredFiles))
+	for path, size := range p.deferredFiles {
+		files[path] = size
 	}
 	p.mu.Unlock()
 
@@ -517,12 +559,22 @@ func (p *baseFilePool) retryDeferred() {
 			p.mu.Unlock()
 		}
 	}
+	for path, size := range files {
+		if err := os.Remove(path); err == nil || os.IsNotExist(err) {
+			p.mu.Lock()
+			if _, exists := p.deferredFiles[path]; exists {
+				delete(p.deferredFiles, path)
+				p.deferredFileBytes -= size
+			}
+			p.mu.Unlock()
+		}
+	}
 }
 
 func (p *baseFilePool) deferredCount() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return len(p.deferredSegments) + len(p.deferredMappings)
+	return len(p.deferredSegments) + len(p.deferredMappings) + len(p.deferredFiles)
 }
 
 func (l *baseFileLease) MapReadOnly() ([]byte, error) {

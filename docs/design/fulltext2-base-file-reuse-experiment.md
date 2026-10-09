@@ -64,7 +64,7 @@ permanent per-UUID tombstone is introduced.
 |---|---|
 | Retention capacity/FD/pinned/validation-byte admission refusal | One ordinary load under original resource admission |
 | Healthy waiter whose fill leader was canceled | One ordinary load with waiter's context and transaction |
-| Unresolved deferred Segment cleanup | Typed pending error before READY or ordinary mapping admission; no fallback |
+| Unresolved deferred Segment or linked-file cleanup | Typed pending error before READY or ordinary mapping admission; no fallback |
 | Waiter cancellation or closed owner/pool | Error; no resurrection through fallback |
 | Published READY size/checksum/decode corruption | Retire, then one ordinary load, without refilling the pool |
 | First fill source/permission/checksum/decode failure | Original error, no automatic retry |
@@ -72,8 +72,9 @@ permanent per-UUID tombstone is introduced.
 Owner cancellation covers complete Preload/Load and nested ordinary fallback,
 without replacing execution identity, snapshot or transaction. The pool reuses immutable
 files, never shares decoded Segments. The first fill retains the existing validation
-decode followed by the first caller's decode; this extra work is measured, not
-hidden or optimized in this change.
+decode followed by the first caller's decode. Historical measurements belong
+to the earlier revision described below; final-head net performance remains
+unaccepted. This change retains that cost without introducing a handoff state machine.
 
 Retired pinned files retain byte/FD charges. Failed FILLING cleanup keeps its FD
 reservation until close. Failed munmap retains a reachable deferred Segment or
@@ -82,6 +83,19 @@ released: transient conservative double charging is allowed, undercharging is
 not. Successful Search destruction releases its mappings/leases; idle files may
 remain. Successful owner shutdown requires all files, mappings, deferred resources
 and reservations to be zero; permanent OS cleanup failure remains explicit pending.
+
+Experimental ordinary fallbacks pin the cleanup owner from initial mmap until
+successful Free, independently of cache map residence. An eviction already removed
+from the generic cache cannot make service cleanup report complete before that
+consumer releases its mapping/path. Live pins do not authorize pool cleanup to
+free a live Search; only failed releases enter the deferred retry collection.
+
+Linked pool files whose unlink fails retain their exact path and disk-byte debt
+after their descriptor is closed once. Failed fill passes the real handle to the
+same cleanup owner. These debts quarantine new materialization, remain charged
+to retention bytes, and are retried at later cleanup boundaries; successful
+unlink or an already absent path clears debt once. No closed FD is charged or
+reclosed. LOCAL absence or failure can reach this linked path in production.
 
 Experimental ordinary fallbacks bind the same retry owner as pooled Segments
 immediately after mmap, before checksum/decode validation or publication. Failed
@@ -106,12 +120,12 @@ is introduced. Default ordinary loading keeps its previous semantics.
   first load, restart or capacity misses. Each independent mmap remains charged by
   the existing search governor, even when file backing is shared.
 
-Design review for this Draft follows the user-approved immutable-file/lease plan
-and subsequent bounded fallback/service lifecycle refinements. The 2026-10-08
-closure review accepts the above ownership and default-off boundaries, specifically
-rejects accumulating closed UUID entries and query-side owner creation, and retains
-double decode rather than extending the handoff state machine. No production
-enablement or full performance acceptance is implied by that review.
+The current repair scope accepts this default-off immutable-file architecture
+and the bounded fallback/service lifecycle obligations. The task evidence
+`trusted-design-scope-acceptance.json` records that current engineering decision;
+it does not establish a historical human approval on 2026-10-08. Closed UUID
+tombstones and query-side owner creation remain rejected. Production enablement
+and final-head performance acceptance remain separate gates.
 
 ## Verification and rollout gates
 
@@ -119,10 +133,16 @@ Package tests cover single fill/private mappings, ordinary fallback, corruption,
 context/transaction identity, canceled loads, quota/deferred ownership, cache drain,
 old tokens, repeated cleanup and reclaimed/pending registry entries. Concurrent
 tests use phase barriers and rescue/join before restoring mocks. The tagged embedded
-SQL test covers warm residence, CDC, reload, nonempty MERGE, REBUILD, same-name
+SQL test covers fixed initial PKs {1,4}, cross-phase alpha score stability, warm
+residence, old-versus-new Tail terms and unchanged Base identity across a new
+Search reload, nonempty MERGE, REBUILD, same-name
 recreation, snapshot/restore, accounts and actual CN close/restart. The canonical
 snapshot BVT additionally checks current versus historical results across recreation
-and REBUILD; it does not prove a file hit or count resources.
+and REBUILD; neither SQL test nor BVT proves a file hit or capacity fallback.
+A separate real-materializer component fixture compares fixed PKs and exact
+score bits against an independently materialized ordinary loader, and counts
+actual Base source streams for a new READY Segment and capacity fallback.
+This is fixture equivalence, not complete ranking or performance acceptance.
 
 Two historical Linux D->R pairs on the earlier `986ca0a7` source avoided 2,079,538,688
 bytes of Base streaming and successful writes per reload, with 64 hits / 22 capacity
