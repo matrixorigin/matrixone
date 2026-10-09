@@ -357,6 +357,28 @@ func (c *viewSchemaCompilerContext) Resolve(database, table string, snapshot *pl
 	return c.TxnCompilerContext.Resolve(database, table, viewSchemaPublisherSnapshot(snapshot, uint32(sub.AccountId)))
 }
 
+func (c *viewSchemaCompilerContext) ResolveById(id uint64, snapshot *plan.Snapshot) (*pb.ObjectRef, *pb.TableDef, error) {
+	sub := c.GetQueryingSubscription()
+	if sub == nil {
+		return c.TxnCompilerContext.ResolveById(id, snapshot)
+	}
+	previous := c.GetContext()
+	c.SetContext(defines.AttachAccountId(previous, uint32(sub.AccountId)))
+	defer c.SetContext(previous)
+	return c.TxnCompilerContext.ResolveById(id, viewSchemaPublisherSnapshot(snapshot, uint32(sub.AccountId)))
+}
+
+func (c *viewSchemaCompilerContext) ResolveIndexTableByRef(ref *pb.ObjectRef, table string, snapshot *plan.Snapshot) (*pb.ObjectRef, *pb.TableDef, error) {
+	sub := c.GetQueryingSubscription()
+	if sub == nil {
+		return c.TxnCompilerContext.ResolveIndexTableByRef(ref, table, snapshot)
+	}
+	previous := c.GetContext()
+	c.SetContext(defines.AttachAccountId(previous, uint32(sub.AccountId)))
+	defer c.SetContext(previous)
+	return c.TxnCompilerContext.ResolveIndexTableByRef(ref, table, viewSchemaPublisherSnapshot(snapshot, uint32(sub.AccountId)))
+}
+
 func (c *viewSchemaCompilerContext) ResolveViewDependencyAccount(obj *pb.ObjectRef, def *pb.TableDef, snapshot *plan.Snapshot) (uint32, error) {
 	sub := c.GetQueryingSubscription()
 	if sub == nil {

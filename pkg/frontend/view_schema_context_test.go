@@ -185,8 +185,8 @@ func TestViewSchemaSubscriptionDatabaseLookupRestoresContext(t *testing.T) {
 
 func TestViewSchemaSubscriptionSourceResolveUsesPublisherAccount(t *testing.T) {
 	for _, tc := range []struct {
-		name, database, wantDatabase                   string
-		historical, failure, cancel, plain, tempShadow bool
+		name, database, wantDatabase                                                 string
+		historical, failure, cancel, plain, tempShadow, byID, index, foreignSnapshot bool
 	}{
 		{name: "current cross database", database: "other", wantDatabase: "other"},
 		{name: "historical cross database", database: "other", wantDatabase: "other", historical: true},
@@ -198,6 +198,16 @@ func TestViewSchemaSubscriptionSourceResolveUsesPublisherAccount(t *testing.T) {
 		{name: "ordinary historical source", database: "other", wantDatabase: "other", plain: true, historical: true},
 		{name: "subscriber temporary shadow", database: "other", wantDatabase: "other", tempShadow: true},
 		{name: "ordinary temporary source remains visible", database: "other", wantDatabase: "other", plain: true, tempShadow: true},
+		{name: "current ID source", database: "other", wantDatabase: "other", byID: true},
+		{name: "historical ID source", database: "other", wantDatabase: "other", byID: true, historical: true},
+		{name: "ordinary ID source", database: "other", wantDatabase: "other", byID: true, plain: true},
+		{name: "ordinary historical ID source", database: "other", wantDatabase: "other", byID: true, plain: true, historical: true},
+		{name: "foreign historical ID source", database: "other", wantDatabase: "other", byID: true, plain: true, historical: true, foreignSnapshot: true},
+		{name: "ID catalog error", database: "other", wantDatabase: "other", byID: true, historical: true, failure: true},
+		{name: "current index source", database: "other", wantDatabase: "other", index: true},
+		{name: "historical index source", database: "other", wantDatabase: "other", index: true, historical: true},
+		{name: "ordinary index source", database: "other", wantDatabase: "other", index: true, plain: true},
+		{name: "subscriber temporary index shadow", database: "other", wantDatabase: "other", index: true, tempShadow: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newViewSchemaOwnedFixture(t)
@@ -237,6 +247,10 @@ func TestViewSchemaSubscriptionSourceResolveUsesPublisherAccount(t *testing.T) {
 			var snapshot, beforeSnapshot *plan.Snapshot
 			if tc.historical {
 				snapshot = &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 50}, Tenant: &pb.SnapshotTenant{TenantID: 7}}
+				if tc.foreignSnapshot {
+					snapshot.Tenant.TenantID = 99
+					wantAccount, wantType = 99, types.T_int64
+				}
 				beforeSnapshot = plan.DeepCopySnapshot(snapshot)
 			}
 			var readAccounts []uint32
@@ -259,30 +273,56 @@ func TestViewSchemaSubscriptionSourceResolveUsesPublisherAccount(t *testing.T) {
 			if tc.plain && tc.tempShadow {
 				physicalName = "__mo_tmp_subscriber"
 			}
-			database.EXPECT().Relation(gomock.Any(), physicalName, gomock.Any()).DoAndReturn(
-				func(got context.Context, _ string, _ any) (engine.Relation, error) {
-					if tc.cancel {
-						cancel()
-						return nil, context.Cause(got)
-					}
-					if tc.failure {
-						return nil, injected
-					}
-					return relation, nil
-				})
+			if tc.byID {
+				storage.EXPECT().GetRelationById(gomock.Any(), gomock.Any(), uint64(42)).DoAndReturn(
+					func(got context.Context, op client.TxnOperator, _ uint64) (string, string, engine.Relation, error) {
+						account, err := defines.GetAccountId(got)
+						require.NoError(t, err)
+						readAccounts = append(readAccounts, account)
+						if tc.historical {
+							require.True(t, op.IsSnapOp())
+							require.Equal(t, *snapshot.TS, op.SnapshotTS())
+						}
+						if tc.failure {
+							return "", "", nil, injected
+						}
+						return tc.wantDatabase, "source", relation, nil
+					})
+			} else {
+				database.EXPECT().Relation(gomock.Any(), physicalName, gomock.Any()).DoAndReturn(
+					func(got context.Context, _ string, _ any) (engine.Relation, error) {
+						if tc.cancel {
+							cancel()
+							return nil, context.Cause(got)
+						}
+						if tc.failure {
+							return nil, injected
+						}
+						return relation, nil
+					})
+			}
 			if !tc.failure && !tc.cancel {
-				relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(42))
+				relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(42)).AnyTimes()
 				relation.EXPECT().GetTableDef(gomock.Any()).DoAndReturn(func(got context.Context) *pb.TableDef {
 					account, err := defines.GetAccountId(got)
 					require.NoError(t, err)
 					id := types.T_int64
-					if account != 23 {
+					if account != 23 && account != 99 {
 						id = types.T_varchar // Same-named subscriber shadow.
 					}
 					return &pb.TableDef{Name: physicalName, DbName: tc.wantDatabase, Cols: []*pb.ColDef{{Name: "x", Typ: pb.Type{Id: int32(id)}}}}
 				})
 			}
-			obj, def, err := child.Resolve(tc.database, "source", snapshot)
+			var obj *pb.ObjectRef
+			var def *pb.TableDef
+			switch {
+			case tc.byID:
+				obj, def, err = child.ResolveById(42, snapshot)
+			case tc.index:
+				obj, def, err = child.ResolveIndexTableByRef(&pb.ObjectRef{SchemaName: tc.wantDatabase, ObjName: "source"}, "source", snapshot)
+			default:
+				obj, def, err = child.Resolve(tc.database, "source", snapshot)
+			}
 			switch {
 			case tc.cancel:
 				require.ErrorIs(t, err, context.Canceled)

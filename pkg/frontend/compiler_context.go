@@ -828,10 +828,13 @@ func (tcc *TxnCompilerContext) ResolveIndexTableByRef(
 		}
 	}
 
-	// Check if it is a temporary table in the current session
-	realName, isTmpTable := tcc.GetSession().GetTempTable(ref.SchemaName, tblName)
-	if isTmpTable {
-		tblName = realName
+	// The caller's temporary index names cannot replace a foreign publisher's
+	// physical index relation in a private View read.
+	if !tcc.viewSchemaRead || tcc.resolvePhysicalObjectAccount(ref, nil, snapshot) == tcc.GetSession().GetAccountId() {
+		realName, isTmpTable := tcc.GetSession().GetTempTable(ref.SchemaName, tblName)
+		if isTmpTable {
+			tblName = realName
+		}
 	}
 
 	ctx, table, err := tcc.getRelation(ref.SchemaName, tblName, subMeta, snapshot)
