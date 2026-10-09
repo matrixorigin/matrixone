@@ -58,9 +58,13 @@ if [[ "$1" == tool && "$2" == test2json ]]; then
  if [[ "$MODE" == pool ]]; then
   [[ "$MO_TEST_CLUSTER_ADMISSION_POOL_SIZE" == 2 ]] || exit 109
   touch "$CASE_DIR/active-$leaf"
-  active=$(find "$CASE_DIR" -maxdepth 1 -name 'active-*' -type f | wc -l)
-  printf 'pool=%s active=%s\n' "$MO_TEST_CLUSTER_ADMISSION_POOL_SIZE" "$active" >> "$CASE_DIR/pool-events"
-  sleep 0.15
+  printf 'pool=%s package=%s\n' "$MO_TEST_CLUSTER_ADMISSION_POOL_SIZE" "$package" >> "$CASE_DIR/pool-events"
+  printf '%s %s\n' "$leaf" "$$" >&8
+  case "$leaf" in
+   a) read -r _ <&10 ;;
+   b) read -r _ <&11 ;;
+   c) read -r _ <&12 ;;
+  esac
   rm -f "$CASE_DIR/active-$leaf"
  fi
  if [[ "$MODE" == execute-cancel && "$leaf" == a ]]; then
@@ -209,20 +213,79 @@ func TestEmbeddedPrebuiltExecutionUsesBoundedProcessPool(t *testing.T) {
 	script := embeddedSetup + `
 start_embedded_prebuild "$scope" 1
 artifact_dir=$CLUSTER_PREBUILD_DIR
+mkfifo "$CASE_DIR/pool-release-a" "$CASE_DIR/pool-release-b" "$CASE_DIR/pool-release-c"
+exec 10<>"$CASE_DIR/pool-release-a"
+exec 11<>"$CASE_DIR/pool-release-b"
+exec 12<>"$CASE_DIR/pool-release-c"
+release_pool_children() {
+ printf 'release\n' >&10
+ printf 'release\n' >&11
+ printf 'release\n' >&12
+}
+pool_driver_pid=""
+cleanup_pool_driver() {
+ release_pool_children
+ if [[ -n "$pool_driver_pid" ]]; then
+  kill -TERM "$pool_driver_pid" 2>/dev/null || true
+  wait "$pool_driver_pid" 2>/dev/null || true
+ fi
+}
+trap cleanup_pool_driver EXIT
+(
+ trap release_pool_children EXIT
+ trap 'exit 143' TERM INT
+ read -r -t 3 first first_pid <&8 || exit 100
+ read -r -t 3 second second_pid <&8 || exit 101
+ [[ "$first $second" == 'a b' || "$first $second" == 'b a' ]] || exit 102
+ [[ "$first_pid" != "$second_pid" ]] || exit 103
+ kill -0 "$first_pid" && kill -0 "$second_pid" || exit 104
+ [[ -e "$CASE_DIR/active-a" && -e "$CASE_DIR/active-b" && ! -e "$CASE_DIR/executed-c" ]] || exit 105
+ printf 'release\n' >&10
+ read -r -t 3 third third_pid <&8 || exit 106
+ [[ "$third" == c && "$third_pid" != "$first_pid" && "$third_pid" != "$second_pid" ]] || exit 107
+ kill -0 "$third_pid" || exit 108
+ [[ ! -e "$CASE_DIR/active-a" && -e "$CASE_DIR/active-b" && -e "$CASE_DIR/active-c" ]] || exit 109
+) &
+pool_driver_pid=$!
 status=0
 UT_EMBEDDED_PACKAGE_PARALLEL=2 run_embedded_tests "$scope" || status=$?
-[[ "$status" == 0 ]] || exit 90
+driver_status=0
+wait "$pool_driver_pid" || driver_status=$?
+pool_driver_pid=""
+[[ "$status" == 0 && "$driver_status" == 0 ]] || exit 90
 [[ "$(grep -c '^pool=2 ' "$CASE_DIR/pool-events")" == 3 ]] || exit 91
-max_active=$(awk -F'[ =]' '{ if ($4 > max) max=$4 } END { print max+0 }' "$CASE_DIR/pool-events")
-[[ "$max_active" -le 2 ]] || exit 92
+# Indexed execution checkpoints exclude the outer command and compile events.
+awk '
+$5 == "stage=embedded" && $6 ~ /^label=example\/[abc]$/ && /detail=package_index=[0-2] .*prebuilt=true/ {
+ package=substr($6,7)
+ if ($4 == "event=start") {
+  if (started[package]++) bad=1
+  starts++; active++
+  if (active > peak) peak=active
+  start_at[package]=NR
+ } else if ($4 == "event=finish") {
+  if (!started[package] || finished[package]++ || $7 != "status=0") bad=1
+  if (!finishes && starts != 2) bad=1
+  finishes++; active--
+  finish_at[package]=NR
+ }
+ if (active < 0 || active > 2) bad=1
+}
+END {
+ if (bad || starts != 3 || finishes != 3 || active != 0 || peak != 2 ||
+     !(finish_at["example/a"] < start_at["example/c"] && start_at["example/c"] < finish_at["example/b"])) exit 1
+}' "$UT_CHECKPOINT" || { cat "$UT_CHECKPOINT" >&2; exit 92; }
 [[ -z "$CLUSTER_PREBUILD_JOB_PID$CURRENT_UT_PID" ]] || exit 93
 [[ ! -d "$artifact_dir" ]] || exit 94
+for leaf in a b c; do [[ ! -e "$CASE_DIR/active-$leaf" ]] || exit 95; done
+cat "$UT_REPORT"
 `
 	out, err := scheduleHarnessWithMockTransform(t, script, embeddedGoMock, nil,
 		"MODE=pool", "UT_PREBUILD_EMBEDDED=1", "UT_HARD_TIMEOUT=")
 	if err != nil {
 		t.Fatalf("embedded bounded process pool: %v\n%s", err, out)
 	}
+	assertScheduleJSONReport(t, out, map[string]string{"example/a": "pass", "example/b": "pass", "example/c": "pass"})
 }
 
 func TestEmbeddedPrebuildCancellation(t *testing.T) {

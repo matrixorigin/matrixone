@@ -116,6 +116,59 @@ func scheduleHarnessWithMockTransform(t *testing.T, script, mock string, transfo
 	return out, err
 }
 
+func TestMakeUTProcessPoolConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		name, want string
+		args       []string
+		accepted   bool
+	}{
+		{name: "serial-default", want: "4 1 1", accepted: true},
+		{name: "single-batch-rollback", args: []string{"UT_ISSUES_BATCHES=1"}, want: "1 1 1", accepted: true},
+		{name: "pool-opt-in", args: []string{"UT_ISSUES_BATCH_PARALLEL=2", "UT_EMBEDDED_PACKAGE_PARALLEL=2"}, want: "4 2 2", accepted: true},
+		{name: "invalid-single-batch-pool", args: []string{"UT_ISSUES_BATCHES=1", "UT_ISSUES_BATCH_PARALLEL=2"}, want: "1 2 1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := append([]string{"--no-print-directory", "-s", "-f", "Makefile", "-f", "-", "print-ut-pool-config", "UNAME_S=linux"}, tc.args...)
+			cmd := exec.Command("make", args...)
+			cmd.Dir = ".."
+			cmd.Stdin = strings.NewReader(".PHONY: print-ut-pool-config\nprint-ut-pool-config:\n\t@printf '%s %s %s\\n' \"$$UT_ISSUES_BATCHES\" \"$$UT_ISSUES_BATCH_PARALLEL\" \"$$UT_EMBEDDED_PACKAGE_PARALLEL\"\n")
+			// Test Make's defaults, not the enclosing UT's scheduling overrides.
+			for _, value := range os.Environ() {
+				key, _, _ := strings.Cut(value, "=")
+				switch key {
+				case "UT_ISSUES_BATCHES", "UT_ISSUES_BATCH_PARALLEL", "UT_EMBEDDED_PACKAGE_PARALLEL", "MAKEFLAGS", "MFLAGS", "MAKEOVERRIDES":
+					continue
+				}
+				cmd.Env = append(cmd.Env, value)
+			}
+			out, err := cmd.CombinedOutput()
+			if err != nil || strings.TrimSpace(string(out)) != tc.want {
+				t.Fatalf("Make config: want %q, got %q: %v", tc.want, out, err)
+			}
+			values := strings.Fields(string(out))
+			script := `source ./run_ut.sh UT
+function logger() { printf '%s\n' "$*" >> "$CASE_DIR/validation-log"; }
+# Stop at the existing post-validation boundary, before cache/native work.
+function mark_ut_stage() {
+ if [[ "$1" == prepare && "$3" == start ]]; then
+  [[ "$EXPECT_ACCEPTED" == true ]] || exit 90
+  exit 0
+ fi
+}
+run_tests
+[[ "$EXPECT_ACCEPTED" == false && "$UT_TEST_STATUS" == 1 ]] || exit 91
+grep -q 'UT_ISSUES_BATCH_PARALLEL must be' "$CASE_DIR/validation-log" || exit 92
+`
+			out, err = scheduleHarness(t, script,
+				"UT_ISSUES_BATCHES="+values[0], "UT_ISSUES_BATCH_PARALLEL="+values[1],
+				"UT_EMBEDDED_PACKAGE_PARALLEL="+values[2], "EXPECT_ACCEPTED="+strconv.FormatBool(tc.accepted))
+			if err != nil {
+				t.Fatalf("runner config: %v\n%s", err, out)
+			}
+		})
+	}
+}
+
 func TestResolveCgroupMemoryBoundary(t *testing.T) {
 	for _, tc := range []struct {
 		name, limitFile, rootLimit, parentLimit, leafLimit, wantScope, wantLimit, wantComplete string

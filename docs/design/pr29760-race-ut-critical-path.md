@@ -1,6 +1,6 @@
 # Race UT critical path: bounded execution at existing owners
 
-Design revision: `pr29760-design-v4` (2026-10-09).
+Design revision: `pr29760-design-v4` with `pr29795-opt-in-v1` amendment (2026-10-09).
 Tracking: [#29562](https://github.com/matrixorigin/matrixone/issues/29562),
 [#29752](https://github.com/matrixorigin/matrixone/issues/29752).
 Implementation: [#29760](https://github.com/matrixorigin/matrixone/pull/29760).
@@ -12,6 +12,78 @@ by `gpt-6.1-sol`, reasoning `xhigh`, in design session
 `aee2a0b3764781a8ca908618548dfef75e336263`. The final implementation requires
 its own overall review and validation. This revision supersedes the scheduling
 snapshot assumption in [UT racing owner costs](ut-race-owner-costs.md).
+
+## PR29795 amendment: optional bounded process waves
+
+Implementation: [#29795](https://github.com/matrixorigin/matrixone/pull/29795).
+The correction design was approved before implementation by `gpt-6.1-sol`,
+reasoning `xhigh`, in CLI session `01a12177-99a4-71b1-804b-41dc42f57512`,
+against source `0094ef382a04a50773948cd8b5ab585b3e3ce53d` and base
+`d2a0055ebe1a0b2423368e046c1812c18f6face8`. Final implementation review and
+validation are separate gates.
+
+This amendment supersedes only v4's removal of optional two-process execution
+and exclusive-only process admission below. The serial default, inventory,
+deadline, report, cleanup, CDC, HAKeeper and engine-fixture contracts remain.
+Four serial issues batches measured 515.1 -> 407.8 seconds in PR29760; that
+benefit does not belong to the new pool. A historical embedded prototype subset
+(embed and sqlintegration) measured 545.5 -> 372.3 seconds with two processes.
+The historical 1057-second full serial wave included an arrowload failure.
+Neither record establishes successful, matched full-wave savings on this branch;
+no full-job savings estimate is an acceptance claim.
+
+| Choice | Decision |
+|---|---|
+| Serial batching only | Lowest complexity; retains the established batching benefit. |
+| Serial default with optional bounded pool | Selected; permits controlled overlap using the existing dispatcher and admission owner. |
+| Two-process default | Deferred until matched successful final-wave timing and CPU/memory evidence justify adoption. |
+
+Make defaults `UT_ISSUES_BATCH_PARALLEL` and `UT_EMBEDDED_PACKAGE_PARALLEL` to
+one on every platform. Each accepts an explicit value of two; the issues pool
+requires four batches. `UT_ISSUES_BATCHES=1` retains the single-process rollback.
+Invalid combinations fail before preparation. Preparation failure falls back
+before execution; runtime failure never reruns completed roots.
+
+The existing dispatcher owns children, watchdogs and reports for both wave
+types. It admits at most the configured number of commands, reaps completed
+owners before refilling, and preserves the existing package deadlines. Pooled
+children receive `MO_TEST_CLUSTER_ADMISSION_POOL_SIZE=2`. The admission manager
+uses that environment as its only pool-size source: it takes a shared gate and
+one exclusive slot, then publishes the lease. Ordinary exclusive owners exclude
+the whole pool. Unsuccessful attempts close their handles; cancellation ends
+retry waits. Same-process borrowing increments references, so the bound counts
+processes rather than clusters. Final release closes the slot and gate; lock
+files are not unlinked while a holder can exist.
+
+`cluster.Start` is the single admission boundary before services start. Close
+and failed-Start rollback retain admission until service cleanup finishes. Each
+wave uses one lock namespace and fixed pool size while leases live; manual
+mixed-size pools and live reconfiguration are outside this contract. Process
+exit releases OS locks. There is no new persistent, wire or SQL contract.
+Cancellation and timeout keep bounded TERM/KILL drainage; unproven drainage
+preserves status 125 and artifacts. Scheduler diagnostics go to stderr while
+the authoritative report remains Go test NDJSON.
+
+Acceptance uses the real Make-to-runner boundary for defaults, rollback and
+invalid overrides. The existing three-package mock uses phase barriers to prove
+two distinct live children, refill while the second remains blocked, and a
+checkpoint-derived maximum of two outstanding commands. It verifies exactly
+three terminal pass events and artifact cleanup; forcing serial dispatch must
+fail the regression. Existing admission tests use the real environment parser
+and cover cross-process slots, exclusive competition, cancellation and reuse.
+Run affected normal/race packages and incremental static checks; reuse unchanged
+embed lifecycle evidence. No new cluster fixture or SQL BVT is needed.
+
+The extra slot locks and retry work apply only to opted-in test startup. Existing
+subset measurements motivate experimentation, not a default resource budget.
+Default adoption requires matched successful serial/pool waves with elapsed,
+CPU and peak memory results on the intended runner. This requirement does not
+block optional execution with the deterministic correctness evidence above.
+
+## Original PR29760 design (v4)
+
+The following sections retain the original decision and evidence; the scoped
+PR29795 amendment above governs optional scheduling and process admission.
 
 ## Problem and selected boundaries
 

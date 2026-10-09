@@ -22,7 +22,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -33,7 +32,6 @@ import (
 const (
 	helperModeEnv = "MO_CLUSTER_ADMISSION_HELPER_MODE"
 	helperPathEnv = "MO_CLUSTER_ADMISSION_HELPER_PATH"
-	helperPoolEnv = "MO_CLUSTER_ADMISSION_HELPER_POOL"
 )
 
 func TestAdmissionRejectsImplicitReentrancyAndAllowsExplicitConcurrency(t *testing.T) {
@@ -108,15 +106,18 @@ func TestAdmissionIsExclusiveAcrossProcesses(t *testing.T) {
 }
 
 func TestAdmissionProcessPoolIsBoundedAndExcludesExclusive(t *testing.T) {
+	t.Setenv(ProcessPoolSizeEnv, "2")
 	path := filepath.Join(t.TempDir(), "cluster.lock")
-	firstManager := newPooledManager(path, time.Millisecond, 2)
-	secondManager := newPooledManager(path, time.Millisecond, 2)
-	thirdManager := newPooledManager(path, time.Millisecond, 2)
+	firstManager := newManager(path, time.Millisecond)
+	secondManager := newManager(path, time.Millisecond)
+	thirdManager := newManager(path, time.Millisecond)
 
 	first, err := firstManager.acquire(context.Background(), AllowConcurrentProcesses)
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, first.Release()) })
 	second, err := secondManager.acquire(context.Background(), AllowConcurrentProcesses)
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, second.Release()) })
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -132,19 +133,15 @@ func TestAdmissionProcessPoolIsBoundedAndExcludesExclusive(t *testing.T) {
 	require.NoError(t, first.Release())
 	next, err := thirdManager.acquire(context.Background(), AllowConcurrentProcesses)
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, next.Release()) })
 	require.NoError(t, next.Release())
 	require.NoError(t, second.Release())
 }
 
-func TestAdmissionProcessPoolRejectsInvalidSize(t *testing.T) {
-	manager := newPooledManager(filepath.Join(t.TempDir(), "cluster.lock"), time.Millisecond, 1)
-	_, err := manager.acquire(context.Background(), AllowConcurrentProcesses)
-	require.ErrorContains(t, err, "at least two slots")
-}
-
 func TestAdmissionProcessPoolWorksAcrossProcesses(t *testing.T) {
+	t.Setenv(ProcessPoolSizeEnv, "2")
 	path := filepath.Join(t.TempDir(), "cluster.lock")
-	owner := newPooledManager(path, time.Millisecond, 2)
+	owner := newManager(path, time.Millisecond)
 	lease, err := owner.acquire(context.Background(), AllowConcurrentProcesses)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, lease.Release()) })
@@ -152,7 +149,7 @@ func TestAdmissionProcessPoolWorksAcrossProcesses(t *testing.T) {
 	// The subprocess must take the second slot rather than wait for the
 	// owner's shared gate. This exercises the same file-lock boundary used by
 	// two concurrent race-UT batch processes.
-	runAdmissionHelperWithPool(t, path, "pooled-acquired", 2)
+	runAdmissionHelper(t, path, "pooled-acquired")
 }
 
 func TestAdmissionSubprocessHelper(t *testing.T) {
@@ -161,11 +158,6 @@ func TestAdmissionSubprocessHelper(t *testing.T) {
 		return
 	}
 	manager := newManager(os.Getenv(helperPathEnv), time.Millisecond)
-	if poolValue := os.Getenv(helperPoolEnv); poolValue != "" {
-		poolSize, err := strconv.Atoi(poolValue)
-		require.NoError(t, err)
-		manager = newPooledManager(os.Getenv(helperPathEnv), time.Millisecond, poolSize)
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	modeValue := Exclusive
@@ -200,18 +192,6 @@ func runAdmissionHelper(t *testing.T, path, mode string) {
 	cmd.Env = append(os.Environ(),
 		helperModeEnv+"="+mode,
 		helperPathEnv+"="+path,
-	)
-	output, err := cmd.CombinedOutput()
-	require.NoError(t, err, string(output))
-}
-
-func runAdmissionHelperWithPool(t *testing.T, path, mode string, poolSize int) {
-	t.Helper()
-	cmd := exec.Command(os.Args[0], "-test.run=^TestAdmissionSubprocessHelper$")
-	cmd.Env = append(os.Environ(),
-		helperModeEnv+"="+mode,
-		helperPathEnv+"="+path,
-		helperPoolEnv+"="+strconv.Itoa(poolSize),
 	)
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, string(output))
@@ -267,12 +247,13 @@ func TestAdmissionProcessPoolEnvironment(t *testing.T) {
 }
 
 func TestAdmissionProcessPoolBlockedByExclusive(t *testing.T) {
+	t.Setenv(ProcessPoolSizeEnv, "2")
 	path := filepath.Join(t.TempDir(), "cluster.lock")
 	owner := newManager(path, time.Millisecond)
 	lease, err := owner.acquire(t.Context(), Exclusive)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, lease.Release()) })
-	contender := newPooledManager(path, time.Millisecond, 2)
+	contender := newManager(path, time.Millisecond)
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
 	defer cancel()
 	_, err = contender.acquire(ctx, AllowConcurrentProcesses)

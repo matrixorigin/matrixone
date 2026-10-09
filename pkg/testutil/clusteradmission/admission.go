@@ -143,15 +143,10 @@ type manager struct {
 	lock       *flock.Flock
 	gate       *flock.Flock
 	references int
-	poolSize   int
 }
 
 func newManager(path string, delay time.Duration) *manager {
 	return &manager{path: path, retryDelay: delay}
-}
-
-func newPooledManager(path string, delay time.Duration, poolSize int) *manager {
-	return &manager{path: path, retryDelay: delay, poolSize: poolSize}
 }
 
 func (m *manager) acquire(ctx context.Context, mode Mode) (*Lease, error) {
@@ -191,7 +186,7 @@ func (m *manager) acquire(ctx context.Context, mode Mode) (*Lease, error) {
 }
 
 func (m *manager) acquireFromProcessPool(ctx context.Context, requested time.Time) (*Lease, error) {
-	poolSize, err := m.processPoolSize()
+	poolSize, err := processPoolSize()
 	if err != nil {
 		return nil, err
 	}
@@ -247,13 +242,7 @@ func (m *manager) acquireFromProcessPool(ctx context.Context, requested time.Tim
 	}
 }
 
-func (m *manager) processPoolSize() (int, error) {
-	if m.poolSize != 0 {
-		if m.poolSize < 2 {
-			return 0, moerr.NewInvalidInputNoCtx("concurrent process admission pool must have at least two slots")
-		}
-		return m.poolSize, nil
-	}
+func processPoolSize() (int, error) {
 	value := os.Getenv(ProcessPoolSizeEnv)
 	poolSize, err := strconv.Atoi(value)
 	if err != nil || poolSize < 2 {
