@@ -125,7 +125,7 @@ func TestV4013LoginRepairsLegacyRoutineCatalog(t *testing.T) {
 			db, err := sql.Open("mysql", tenantDSN)
 			require.NoError(t, err)
 			defer db.Close()
-			require.ErrorContains(t, db.PingContext(ctx), "upgrade requires all CNs to support protocol version 107")
+			require.ErrorContains(t, db.PingContext(ctx), "upgrade requires all CNs to support protocol version 108")
 		}()
 		checkCatalog("4.0.12", false)
 		tenantDB, err := sql.Open("mysql", tenantDSN)
