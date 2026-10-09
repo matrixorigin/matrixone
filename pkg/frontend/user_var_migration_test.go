@@ -619,17 +619,18 @@ func TestUserVariableNullRegexpHistoryMigrationProtocol(t *testing.T) {
 			rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion105)
 			rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion106)
 			rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion107)
+			rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion108)
 		}
 	})
 	require.NoError(t, ses.setUserDefinedVarWithTypeAndKindAndReplayability(
 		"fresh", nil, "set @fresh = null", false, plan.Type{}, vector.PrepareParamNone, true))
-	for _, version := range []int64{defines.MORPCVersion105, defines.MORPCVersion106} {
+	for _, version := range []int64{defines.MORPCVersion105, defines.MORPCVersion106, defines.MORPCVersion107} {
 		rt.SetGlobalVariables(runtime.MOProtocolVersion, version)
 		_, err := ses.snapshotUserDefinedVars(context.Background())
-		require.ErrorContains(t, err, "requires MORPC protocol version 107")
+		require.ErrorContains(t, err, "requires MORPC protocol version 108")
 		require.True(t, ses.hasUnreplayableMigrationUserVars())
 	}
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion107)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion108)
 	_, err := ses.snapshotUserDefinedVars(context.Background())
 	require.NoError(t, err)
 	require.False(t, ses.hasUnreplayableMigrationUserVars())
