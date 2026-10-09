@@ -506,7 +506,7 @@ func (s *Segment) evalClause(c clause, algo ScoreAlgo, avgDocLen float64, gs *gl
 
 // forEachTermInRange visits the terms of an inclusive [lo,hi] range one at a
 // time, over the loaded FST when present and the build-side sorted key list
-// otherwise — the same dual representation prefixTerms handles. A loaded segment
+// otherwise. A loaded segment
 // has NO sortedTerms (build-side only), so a range that consulted just that
 // slice would silently return nothing for every persisted segment.
 //
@@ -531,15 +531,6 @@ func (s *Segment) forEachTermInRange(lo, hi string, fn func(term string) (bool, 
 		}
 	}
 	return nil
-}
-
-// prefixTerms expands a word* prefix to its matching terms, over the loaded FST
-// or the build-side sorted key list.
-func (s *Segment) prefixTerms(prefix string) ([]string, error) {
-	if s.dict != nil {
-		return s.dict.prefixTerms(prefix)
-	}
-	return s.PrefixRange(prefix), nil
 }
 
 // SearchBooleanText parses query in boolean mode (tokenizing with tok, the index's

@@ -23,12 +23,44 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/blevesearch/vellum"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 var prefixPostingBenchSink int
+
+// Keep the independent legacy expansion test-only: its callers build the
+// old-path oracle and benchmark instead of using forEachPrefixPosting.
+// prefixTerms expands a word* prefix over the loaded FST or build-side key list.
+func (s *Segment) prefixTerms(prefix string) ([]string, error) {
+	if s.dict != nil {
+		return s.dict.prefixTerms(prefix)
+	}
+	return s.PrefixRange(prefix), nil
+}
+
+// prefixTerms collects every term with the given prefix into an ascending slice
+// (the `word*` expansion, materialized). Empty prefix returns all terms.
+func (d *termDict) prefixTerms(prefix string) ([]string, error) {
+	it, ok, err := d.prefixIter(prefix)
+	if err != nil || !ok {
+		return nil, err
+	}
+	defer func() { _ = it.Close() }()
+	var out []string
+	for {
+		term, _ := it.Current()
+		out = append(out, string(term))
+		if err := it.Next(); err == vellum.ErrIteratorDone {
+			break
+		} else if err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
 
 func prefixPostingRepresentations(t *testing.T, parser string) []*Segment {
 	t.Helper()
