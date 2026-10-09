@@ -16,12 +16,14 @@ package logtail
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -30,6 +32,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/stretchr/testify/require"
 )
+
+type failingReadFileService struct {
+	fileservice.FileService
+	failPath string
+}
+
+func (fs *failingReadFileService) Read(ctx context.Context, vector *fileservice.IOVector) error {
+	if vector.FilePath == fs.failPath {
+		return errors.New("checkpoint data read failure")
+	}
+	return fs.FileService.Read(ctx, vector)
+}
 
 func TestCanonicalizeBackupTombstone(t *testing.T) {
 	for _, test := range []struct {
@@ -341,6 +355,21 @@ func TestRewriteCheckpointCanonicalizesBackupTombstone(t *testing.T) {
 		backupTS,
 	)
 	require.ErrorContains(t, err, "checkpoint reader failure")
+	failingSourceFS := &failingReadFileService{
+		FileService: srcFS,
+		failPath:    lastReader.GetLocations()[0].Name().UnsafeString(),
+	}
+	_, _, _, err = ReWriteCheckpointAndBlockFromKey(
+		ctx,
+		"backup-test",
+		failingSourceFS,
+		dstFS,
+		checkpointLocation,
+		lastReader,
+		CheckpointCurrentVersion,
+		backupTS,
+	)
+	require.ErrorContains(t, err, "checkpoint data read failure")
 	rewrittenLocation, _, _, err := ReWriteCheckpointAndBlockFromKey(
 		ctx,
 		"backup-test",
