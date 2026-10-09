@@ -88,6 +88,32 @@ func TestTableDefaultTextKeepsLegacySemanticVersion(t *testing.T) {
 	require.Zero(t, typ.CollationVersion)
 }
 
+func TestDefaultOnlyNativeCollationIsNotAdmitted(t *testing.T) {
+	native0900AdmissionDisabled(t)
+	for _, collation := range []string{"utf8mb4_0900_ai_ci", "utf8mb4_0900_bin"} {
+		for _, columns := range []string{
+			"id int",
+			"id int, name varchar(32) collate utf8mb4_general_ci",
+		} {
+			t.Run(collation+"/"+columns, func(t *testing.T) {
+				ctx := NewMockCompilerContext(true)
+				stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL,
+					"create table t ("+columns+") collate "+collation, 1)
+				require.NoError(t, err)
+				_, err = BuildPlan(ctx, stmt, false)
+				stmt.Free()
+				require.ErrorContains(t, err, native0900AdmissionError)
+			})
+		}
+	}
+	table := &planpb.TableDef{DefaultCharset: 260}
+	plan := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		Nodes: []*planpb.Node{{TableDef: table}},
+	}}}
+	require.ErrorContains(t, requireNative0900PlanAdmission(context.Background(), nil, plan),
+		"unsupported table default collation identity")
+}
+
 func TestNativeCollationRelationFormatIsRejectedByDefault(t *testing.T) {
 	native0900AdmissionDisabled(t)
 	p := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{

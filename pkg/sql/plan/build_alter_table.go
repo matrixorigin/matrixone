@@ -1055,6 +1055,9 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 		return buildAlterTableInplace(stmt, ctx)
 	}
 
+	if err := validateAlterTableCharsetAdmission(ctx, stmt.Options); err != nil {
+		return nil, err
+	}
 	algorithm, err := ResolveAlterTableAlgorithm(ctx.GetContext(), stmt.Options, tableDef)
 	if err != nil {
 		return nil, err
@@ -1069,6 +1072,42 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	} else {
 		return buildAlterTableInplace(stmt, ctx)
 	}
+}
+
+// ALTER's historical charset options are not yet implemented as a metadata
+// or data conversion. Reject a newly named native identity before the
+// INPLACE compatibility path can silently discard it.
+func validateAlterTableCharsetAdmission(ctx CompilerContext, options []tree.AlterTableOption) error {
+	for _, option := range options {
+		charsetOption, ok := option.(*tree.TableOptionCharset)
+		if !ok {
+			continue
+		}
+		if strings.EqualFold(charsetOption.Charset, "enable") ||
+			strings.EqualFold(charsetOption.Charset, "disable") {
+			continue // ENABLE/DISABLE KEYS share this AST node.
+		}
+		charset, ok := charsetForName(charsetOption.Charset)
+		if !ok {
+			return moerr.NewInvalidInputf(ctx.GetContext(),
+				"unsupported character set '%s'", charsetOption.Charset)
+		}
+		if charsetOption.Collate != "" {
+			if !charsetAndCollationCompatible(charsetOption.Charset, charsetOption.Collate) {
+				return moerr.NewInvalidInputf(ctx.GetContext(),
+					"COLLATION '%s' is not valid for CHARACTER SET '%s'",
+					charsetOption.Collate, charsetOption.Charset)
+			}
+			charset, ok = collationForName(charsetOption.Collate)
+			if !ok {
+				return unsupportedCollationError(ctx.GetContext(), charsetOption.Collate)
+			}
+		}
+		if collationSemanticVersion(charset) != uint32(types.CollationVersionLegacy) {
+			return moerr.NewNotSupportedNoCtx(native0900AdmissionError)
+		}
+	}
+	return nil
 }
 
 func validateAlterTableIdentifierDestinations(ctx context.Context, options []tree.AlterTableOption) error {
