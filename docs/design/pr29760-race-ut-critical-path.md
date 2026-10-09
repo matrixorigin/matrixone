@@ -1,6 +1,6 @@
 # Race UT critical path: bounded execution at existing owners
 
-Design revision: `pr29760-design-v3` (2026-10-09).
+Design revision: `pr29760-design-v4` (2026-10-09).
 Tracking: [#29562](https://github.com/matrixorigin/matrixone/issues/29562),
 [#29752](https://github.com/matrixorigin/matrixone/issues/29752).
 Implementation: [#29760](https://github.com/matrixorigin/matrixone/pull/29760).
@@ -98,14 +98,15 @@ Legacy read, insert and stopped-queue fallback preserve owned progress.
 A successful guarded checkpoint can be a durable no-op after a remote owner
 claim, so its completed-write cache is optimistic. Fresh typed reads and owner
 claims publish the database tuple rather than taking a maximum with that cache.
-Outstanding reads share only a reader count, publication revision and retirement
-marker. ACK and local owner transitions invalidate the revision under the same
-mutex as publication. An overlap discards the delayed result and permits one
-additional SELECT within the original deadline; the claim UPDATE is not repeated.
-A second conflict returns a retryable error. Retirement and claim-loss eviction
-invalidate and detach observations, and task deletion blocks publication.
-The last reader removes its entry; no idle-key history or second progress store
-is retained. Normal reads, claims and checkpoint flushes add no SQL statements.
+Outstanding reads share a reader count and publication revision; map entry
+identity defines their lifetime. ACK and non-retiring local owner transitions
+advance revision under the publication mutex. A revision conflict permits one
+additional SELECT within the original deadline, without repeating the claim
+UPDATE; a second conflict returns a retryable error. Retirement and claim-loss
+eviction detach observations. Identity mismatch is terminal and never rereads.
+Task deletion blocks admission and publication. Final release removes only the
+matching current entry; no idle-key history or second progress store is retained.
+Normal reads, claims and checkpoint flushes add no SQL statements.
 SQL and fence callbacks execute outside the cache mutex.
 
 This amendment was approved by `gpt-6.1-sol / xhigh` against head
@@ -115,6 +116,13 @@ source-generation/timestamp ordering establishes durability. The regression
 control models another CN winning ownership between the fence check and guarded
 SQL: durable progress stays 100 while the old updater caches attempted 200.
 Both a fresh read and replacement claim must return and install 100.
+
+The v4 cleanup removes the redundant retirement flag and unobservable retirement
+revision update. Map identity already supplies the terminal check, and outstanding
+readers retain the old object while replacement admission allocates a fresh one.
+This cleanup was approved by `gpt-6.1-sol / xhigh` against head
+`755216934e9917aca9bd66fb7d7333401fe64349` in CLI session
+`01a11ffd-0e30-7023-a940-fd129e8bd155`.
 
 ## Acceptance and validation
 

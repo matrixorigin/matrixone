@@ -1650,7 +1650,6 @@ func (u *CDCWatermarkUpdater) ClaimWatermarkOwner(
 type watermarkProgressRead struct {
 	readers  int
 	revision uint64
-	retired  bool
 }
 
 // loadWatermarkProgress publishes a fresh durable tuple only if no ACK, owner
@@ -1697,7 +1696,7 @@ func (u *CDCWatermarkUpdater) loadWatermarkProgress(
 			u.Unlock()
 			return types.TS{}, 0, false, NewRetryableSnapshotEpochError(moerr.NewInternalErrorf(ctx, "CDC watermark task was deleted for %s", key.String()))
 		}
-		if observation.retired || u.progressReads[*key] != observation {
+		if u.progressReads[*key] != observation {
 			u.Unlock()
 			return types.TS{}, 0, false, NewRetryableSnapshotEpochError(moerr.NewInternalErrorf(ctx,
 				"CDC watermark progress was retired for %s", key.String()))
@@ -1723,14 +1722,14 @@ func (u *CDCWatermarkUpdater) loadWatermarkProgress(
 		"CDC watermark progress changed during both reads for %s", key.String()))
 }
 
-// The caller holds u.Lock. Retirement detaches the entry so separately admitted
-// readers can start afresh; existing readers retain the terminal marker.
+// The caller holds u.Lock. Retirement detaches the entry; existing readers
+// fail the map-identity check, and newly admitted readers get a fresh entry.
 func (u *CDCWatermarkUpdater) invalidateProgressReadLocked(key WatermarkKey, retire bool) {
 	if observation := u.progressReads[key]; observation != nil {
-		observation.revision++
 		if retire {
-			observation.retired = true
 			delete(u.progressReads, key)
+		} else {
+			observation.revision++
 		}
 	}
 }
