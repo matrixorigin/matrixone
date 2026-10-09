@@ -340,6 +340,45 @@ func (c *viewSchemaCompilerContext) CheckTimeStampValid(ts int64) (bool, error) 
 	return execResultArrayHasData(results), err
 }
 
+// Resolve keeps every View source lookup in the publisher's catalog domain,
+// including databases other than the publication database. Ordinary Resolve
+// only switches tenants when the database itself is a subscription.
+func (c *viewSchemaCompilerContext) Resolve(database, table string, snapshot *plan.Snapshot) (*pb.ObjectRef, *pb.TableDef, error) {
+	sub := c.GetQueryingSubscription()
+	if sub == nil {
+		return c.TxnCompilerContext.Resolve(database, table, snapshot)
+	}
+	if database == sub.SubName {
+		database = sub.DbName
+	}
+	previous := c.GetContext()
+	c.SetContext(defines.AttachAccountId(previous, uint32(sub.AccountId)))
+	defer c.SetContext(previous)
+	return c.TxnCompilerContext.Resolve(database, table, viewSchemaPublisherSnapshot(snapshot, uint32(sub.AccountId)))
+}
+
+func (c *viewSchemaCompilerContext) ResolveViewDependencyAccount(obj *pb.ObjectRef, def *pb.TableDef, snapshot *plan.Snapshot) (uint32, error) {
+	sub := c.GetQueryingSubscription()
+	if sub == nil {
+		return c.TxnCompilerContext.ResolveViewDependencyAccount(obj, def, snapshot)
+	}
+	// Resolve has restored the caller context before dependency capture. Retain
+	// its effective publisher domain without changing the caller's snapshot.
+	previous := c.GetContext()
+	c.SetContext(defines.AttachAccountId(previous, uint32(sub.AccountId)))
+	defer c.SetContext(previous)
+	return c.TxnCompilerContext.ResolveViewDependencyAccount(obj, def, viewSchemaPublisherSnapshot(snapshot, uint32(sub.AccountId)))
+}
+
+func viewSchemaPublisherSnapshot(snapshot *plan.Snapshot, publisher uint32) *plan.Snapshot {
+	if snapshot == nil {
+		return nil
+	}
+	owned := plan.DeepCopySnapshot(snapshot)
+	owned.Tenant = &pb.SnapshotTenant{TenantID: publisher}
+	return owned
+}
+
 // A View source database belongs to its publisher, even when the entry point
 // uses the subscriber's local alias. Only this isolated child changes context;
 // root authorization and the parent session keep the subscriber identity.
@@ -354,11 +393,7 @@ func (c *viewSchemaCompilerContext) GetDatabaseId(name string, snapshot *plan.Sn
 	previous := c.GetContext()
 	c.SetContext(defines.AttachAccountId(previous, uint32(sub.AccountId)))
 	defer c.SetContext(previous)
-	if snapshot != nil {
-		snapshot = plan.DeepCopySnapshot(snapshot)
-		snapshot.Tenant = &pb.SnapshotTenant{TenantID: uint32(sub.AccountId)}
-	}
-	return c.TxnCompilerContext.GetDatabaseId(name, snapshot)
+	return c.TxnCompilerContext.GetDatabaseId(name, viewSchemaPublisherSnapshot(snapshot, uint32(sub.AccountId)))
 }
 
 func (c *viewSchemaCompilerContext) ResolveViewUdf(name string, args []*pb.Expr, database string) (*function.Udf, error) {

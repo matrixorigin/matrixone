@@ -22,6 +22,8 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -176,6 +178,142 @@ func TestViewSchemaSubscriptionDatabaseLookupRestoresContext(t *testing.T) {
 				require.ErrorIs(t, binding.Check(), context.Canceled)
 			} else {
 				require.NoError(t, binding.Check(), "成功和错误返回均应恢复可继续读取的subscriber上下文")
+			}
+		})
+	}
+}
+
+func TestViewSchemaSubscriptionSourceResolveUsesPublisherAccount(t *testing.T) {
+	for _, tc := range []struct {
+		name, database, wantDatabase                   string
+		historical, failure, cancel, plain, tempShadow bool
+	}{
+		{name: "current cross database", database: "other", wantDatabase: "other"},
+		{name: "historical cross database", database: "other", wantDatabase: "other", historical: true},
+		{name: "current alias", database: "sub", wantDatabase: "pub"},
+		{name: "historical alias", database: "sub", wantDatabase: "pub", historical: true},
+		{name: "catalog error", database: "other", wantDatabase: "other", historical: true, failure: true},
+		{name: "cancel during source read", database: "other", wantDatabase: "other", historical: true, cancel: true},
+		{name: "ordinary current source", database: "other", wantDatabase: "other", plain: true},
+		{name: "ordinary historical source", database: "other", wantDatabase: "other", plain: true, historical: true},
+		{name: "subscriber temporary shadow", database: "other", wantDatabase: "other", tempShadow: true},
+		{name: "ordinary temporary source remains visible", database: "other", wantDatabase: "other", plain: true, tempShadow: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newViewSchemaOwnedFixture(t)
+			f.op.SetSnapshotTS(timestamp.Timestamp{PhysicalTime: 100})
+			wantAccount, wantType := uint32(23), types.T_int64
+			if tc.plain {
+				wantAccount, wantType = 7, types.T_varchar
+			} else {
+				f.parent.SetQueryingSubscription(&pb.SubscriptionMeta{AccountId: 23, SubName: "sub", DbName: "pub", Tables: "*"})
+			}
+			ctrl := gomock.NewController(t)
+			storage := mock_frontend.NewMockEngine(ctrl)
+			database := mock_frontend.NewMockDatabase(ctrl)
+			relation := mock_frontend.NewMockRelation(ctrl)
+			f.session.txnHandler.storage = storage
+			f.session.respr = &NullResp{database: "binding_db"}
+			f.session.pool = f.proc.Mp()
+			if tc.tempShadow {
+				f.session.tempTables = make(map[string]string)
+				f.session.tempTablesRev = make(map[string]string)
+				f.session.AddTempTable("other", "source", "__mo_tmp_subscriber")
+			}
+			previousPU := getPuIfPresent(f.session.GetService())
+			sv := &config.FrontendParameters{}
+			sv.SetDefaultValues()
+			setPu(f.session.GetService(), config.NewParameterUnit(sv, storage, nil, nil))
+			t.Cleanup(func() { setPu(f.session.GetService(), previousPU) })
+			ctx, cancel := context.WithCancel(f.ctx)
+			defer cancel()
+			provider := &viewSchemaProvider{parent: f.parent, authorize: func(context.Context, string, string, *plan.Snapshot) error { return nil }}
+			binding, err := provider.OpenViewSchemaBinding(ctx)
+			require.NoError(t, err)
+			t.Cleanup(binding.Close)
+			child := binding.Compiler.(*viewSchemaCompilerContext)
+			beforeCtx, beforeProcCtx := child.GetContext(), child.GetProcess().Ctx
+			parentCtx, parentProcCtx := f.parent.GetContext(), f.proc.Ctx
+			var snapshot, beforeSnapshot *plan.Snapshot
+			if tc.historical {
+				snapshot = &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 50}, Tenant: &pb.SnapshotTenant{TenantID: 7}}
+				beforeSnapshot = plan.DeepCopySnapshot(snapshot)
+			}
+			var readAccounts []uint32
+			database.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
+			storage.EXPECT().Database(gomock.Any(), tc.wantDatabase, gomock.Any()).DoAndReturn(
+				func(got context.Context, _ string, op client.TxnOperator) (engine.Database, error) {
+					account, err := defines.GetAccountId(got)
+					require.NoError(t, err)
+					readAccounts = append(readAccounts, account)
+					if tc.historical {
+						require.True(t, op.IsSnapOp())
+						require.Equal(t, *snapshot.TS, op.SnapshotTS())
+					} else {
+						require.Same(t, f.op, op)
+					}
+					return database, nil
+				}).AnyTimes()
+			injected := errors.New("publisher relation lookup failed")
+			physicalName := "source"
+			if tc.plain && tc.tempShadow {
+				physicalName = "__mo_tmp_subscriber"
+			}
+			database.EXPECT().Relation(gomock.Any(), physicalName, gomock.Any()).DoAndReturn(
+				func(got context.Context, _ string, _ any) (engine.Relation, error) {
+					if tc.cancel {
+						cancel()
+						return nil, context.Cause(got)
+					}
+					if tc.failure {
+						return nil, injected
+					}
+					return relation, nil
+				})
+			if !tc.failure && !tc.cancel {
+				relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(42))
+				relation.EXPECT().GetTableDef(gomock.Any()).DoAndReturn(func(got context.Context) *pb.TableDef {
+					account, err := defines.GetAccountId(got)
+					require.NoError(t, err)
+					id := types.T_int64
+					if account != 23 {
+						id = types.T_varchar // Same-named subscriber shadow.
+					}
+					return &pb.TableDef{Name: physicalName, DbName: tc.wantDatabase, Cols: []*pb.ColDef{{Name: "x", Typ: pb.Type{Id: int32(id)}}}}
+				})
+			}
+			obj, def, err := child.Resolve(tc.database, "source", snapshot)
+			switch {
+			case tc.cancel:
+				require.ErrorIs(t, err, context.Canceled)
+			case tc.failure:
+				require.ErrorIs(t, err, injected)
+			default:
+				require.NoError(t, err)
+				require.Equal(t, int32(wantType), def.Cols[0].Typ.Id)
+				require.Equal(t, tc.plain && tc.tempShadow, def.IsTemporary)
+				account, err := child.ResolveViewDependencyAccount(obj, def, snapshot)
+				require.NoError(t, err)
+				require.Equal(t, wantAccount, account, "capture physical identity after Resolve restores caller context")
+				systemAccount, err := child.ResolveViewDependencyAccount(&pb.ObjectRef{SchemaName: catalog.MO_SYSTEM, ObjName: catalog.MO_STATEMENT}, nil, snapshot)
+				require.NoError(t, err)
+				require.Zero(t, systemAccount, "forced system-table ownership still overrides the publisher")
+			}
+			require.NotEmpty(t, readAccounts)
+			for _, account := range readAccounts {
+				require.Equal(t, wantAccount, account, "metadata and actual relation lookup must share the same physical domain")
+			}
+			require.Equal(t, beforeSnapshot, snapshot)
+			require.Same(t, beforeCtx, child.GetContext())
+			require.Same(t, beforeProcCtx, child.GetProcess().Ctx)
+			require.Same(t, parentCtx, f.parent.GetContext())
+			require.Same(t, parentProcCtx, f.proc.Ctx)
+			require.Equal(t, uint32(7), f.session.GetAccountId())
+			require.Equal(t, uint32(7), f.session.GetTenantInfo().GetTenantID())
+			if tc.tempShadow {
+				physical, present := f.session.GetTempTable("other", "source")
+				require.True(t, present)
+				require.Equal(t, "__mo_tmp_subscriber", physical, "publisher reads must not mutate caller temporary mappings")
 			}
 		})
 	}

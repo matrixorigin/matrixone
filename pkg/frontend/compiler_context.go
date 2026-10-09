@@ -745,10 +745,23 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 		}
 	}
 
-	// Check if it is a temporary table in the current session
-	realName, isTmpTable := tcc.GetSession().GetTempTable(dbName, tableName)
-	if isTmpTable {
-		tableName = realName
+	// Session temporary names belong to its account, not to a publisher (or
+	// historical foreign tenant) whose catalog this private View reader uses.
+	useSessionTemporary := true
+	if tcc.viewSchemaRead {
+		identity := &plan2.ObjectRef{SchemaName: dbName, ObjName: tableName}
+		if sub != nil {
+			identity.SchemaName = sub.DbName
+			identity.PubInfo = &plan.PubInfo{TenantId: sub.AccountId}
+		}
+		useSessionTemporary = tcc.resolvePhysicalObjectAccount(identity, nil, snapshot) == tcc.GetSession().GetAccountId()
+	}
+	isTmpTable := false
+	if useSessionTemporary {
+		realName, temporary := tcc.GetSession().GetTempTable(dbName, tableName)
+		if temporary {
+			tableName, isTmpTable = realName, true
+		}
 	}
 
 	ctx, table, err := tcc.getRelation(dbName, tableName, sub, snapshot)
@@ -763,7 +776,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 		return nil, nil, err
 	}
 	ownedTemporary := false
-	if owner, ok := tcc.GetSession().(process.TemporaryTableDDL); ok {
+	if owner, ok := tcc.GetSession().(process.TemporaryTableDDL); ok && useSessionTemporary {
 		ownedTemporary = owner.OwnsTemporaryTable(dbName, tableName)
 	}
 	tableDef.IsTemporary = isTmpTable || ownedTemporary
