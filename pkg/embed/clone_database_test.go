@@ -26,6 +26,7 @@ import (
 )
 
 func TestCloneDatabaseForeignKeySourceInventory(t *testing.T) {
+	defer func() { require.NoError(t, CloseBaseClusterTests()) }()
 	RunBaseClusterTests(t, func(cluster Cluster) {
 		cn, err := cluster.GetCNService(0)
 		require.NoError(t, err)
