@@ -1134,6 +1134,11 @@ func TestLeastGreatestHighPriorityResolution(t *testing.T) {
 }
 
 func TestLeastGreatestSupportedOidResolution(t *testing.T) {
+	for _, oid := range []types.T{types.T_int64, types.T_varbinary, types.T_json, types.T_datetime} {
+		_, ok := resolveLeastGreatestType([]types.Type{types.T_uuid.ToType(), oid.ToType()})
+		require.False(t, ok, oid.String())
+	}
+
 	sameOidCases := []struct {
 		name string
 		typ  types.Type
@@ -1153,8 +1158,14 @@ func TestLeastGreatestSupportedOidResolution(t *testing.T) {
 			require.Empty(t, resolution.castTypes)
 		})
 		t.Run(tc.name+" mixed oid", func(t *testing.T) {
-			_, ok := resolveLeastGreatestType([]types.Type{tc.typ, types.T_varchar.ToType()})
-			require.False(t, ok)
+			resolution, ok := resolveLeastGreatestType([]types.Type{tc.typ, types.T_varchar.ToType()})
+			if tc.typ.Oid == types.T_uuid {
+				require.True(t, ok)
+				require.Equal(t, types.T_varchar, resolution.resultType.Oid)
+				require.GreaterOrEqual(t, resolution.resultType.Width, int32(36))
+			} else {
+				require.False(t, ok)
+			}
 		})
 	}
 
