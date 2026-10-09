@@ -91,6 +91,58 @@ func TestContainerScalarCallbacks(t *testing.T) {
 	}
 }
 
+func TestContainerMutableValueTable(t *testing.T) {
+	for _, stored := range []bool{false, true} {
+		for _, change := range []string{"next-literal", "next-type", "header-count"} {
+			t.Run(fmt.Sprintf("stored=%v/%s", stored, change), func(t *testing.T) {
+				data := testLiteralArray()
+				visits := 0
+				predicate := func(tp byte, scalar []byte) bool {
+					if visits >= 2 {
+						t.Fatal("extra callback")
+					}
+					want := byte(0)
+					if visits == 1 && change == "next-literal" {
+						want = 2
+					}
+					wantCap := cap(data) - headerSize - visits*valEntrySize - valTypeSize
+					if tp != typeLiteral || len(scalar) != 1 || cap(scalar) != wantCap || scalar[0] != want {
+						t.Fatalf("callback %d: type=%x len=%d cap=%d data=%x", visits, tp, len(scalar), cap(scalar), scalar)
+					}
+					if visits == 0 {
+						// The callback can reslice its borrowed bytes into the next
+						// entry. Later entries must not be copied or prefetched.
+						switch change {
+						case "next-literal":
+							scalar[:cap(scalar)][valEntrySize] = 2
+						case "next-type":
+							scalar[:cap(scalar)][valEntrySize-valTypeSize] = 0xfd
+						case "header-count":
+							// The original walk captures the count before callbacks.
+							binary.LittleEndian.PutUint32(data, 0)
+						}
+					}
+					visits++
+					return true
+				}
+				valid, depthExceeded := false, false
+				if stored {
+					valid, depthExceeded = StoredContainer(typeArray, data, predicate, 3)
+				} else {
+					valid = Container(typeArray, data, predicate)
+				}
+				wantValid, wantVisits := change != "next-type", 2
+				if !wantValid {
+					wantVisits = 1
+				}
+				if valid != wantValid || depthExceeded || visits != wantVisits {
+					t.Fatalf("valid=%v depthExceeded=%v visits=%d want=%v/%d", valid, depthExceeded, visits, wantValid, wantVisits)
+				}
+			})
+		}
+	}
+}
+
 func TestContainerScalarBounds(t *testing.T) {
 	for _, tp := range []byte{typeInt64, typeUint64, typeFloat64, typeString, typeDecimal, typeDate, typeTime, typeDatetime, typeBlob, typeOpaque, typeBit, typeArray, typeObject, 0xfd} {
 		t.Run(fmt.Sprintf("type=%x", tp), func(t *testing.T) {

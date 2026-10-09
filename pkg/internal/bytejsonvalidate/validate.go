@@ -137,16 +137,19 @@ func container(tp byte, data []byte, validScalar func(byte, []byte) bool, depth 
 		}
 	}
 
-	for i := uint64(0); i < count; i++ {
-		entryOffset := valueTableStart + i*uint64(valEntrySize)
-		childType := data[entryOffset]
+	// The checked table has exactly count entries. Keep its views borrowed so
+	// callbacks still observe the original backing bytes.
+	valueTable := data[valueTableStart:payloadStart]
+	for entryOffset := 0; entryOffset < len(valueTable); entryOffset += valEntrySize {
+		entry := valueTable[entryOffset : entryOffset+valEntrySize]
+		childType := entry[0]
 		if childType == typeLiteral {
-			if !validScalar(childType, data[entryOffset+valTypeSize:entryOffset+valTypeSize+1]) {
+			if !validScalar(childType, entry[valTypeSize:valTypeSize+1]) {
 				return false
 			}
 			continue
 		}
-		childOffset := uint64(binary.LittleEndian.Uint32(data[entryOffset+valTypeSize:]))
+		childOffset := uint64(binary.LittleEndian.Uint32(entry[valTypeSize:]))
 		if childOffset < payloadStart || childOffset >= documentSize {
 			return false
 		}
