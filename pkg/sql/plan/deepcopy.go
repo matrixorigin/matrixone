@@ -16,6 +16,7 @@ package plan
 
 import (
 	"bytes"
+	"maps"
 	"slices"
 
 	"github.com/gogo/protobuf/proto"
@@ -713,7 +714,7 @@ func DeepCopyTableDef(table *plan.TableDef, withCols bool) *plan.TableDef {
 		Checks:           make([]*plan.CheckDef, len(table.Checks)),
 		Props:            make([]*plan.PropertyDef, len(table.Props)),
 		Defs:             make([]*plan.TableDef_DefType, len(table.Defs)),
-		Name2ColIndex:    table.Name2ColIndex,
+		Name2ColIndex:    maps.Clone(table.Name2ColIndex),
 		IsLocked:         table.IsLocked,
 		TableLockType:    table.TableLockType,
 		IsTemporary:      table.IsTemporary,

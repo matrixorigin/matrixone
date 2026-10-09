@@ -47,8 +47,8 @@ func vectorPlacementCompile(t *testing.T, workers engine.Nodes) (*Compile, *expr
 			ServiceID: worker.Id, PipelineServiceAddress: worker.Addr, QueryAddress: worker.Addr,
 		})
 	}
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion107)
-	client.version = defines.MORPCVersion107
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion108)
+	client.version = defines.MORPCVersion108
 	return c, client
 }
 

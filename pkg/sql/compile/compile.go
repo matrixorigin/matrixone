@@ -5406,13 +5406,13 @@ func (c *Compile) compileIndexSearchScan(node *plan.Node) ([]*Scope, error) {
 				CNIDX: int32(i),
 			}
 		}
-		supported, err := remoteWorkersSupportProtocol(c.proc, nodes, defines.MORPCVersion107)
+		supported, err := remoteWorkersSupportProtocol(c.proc, nodes, defines.MORPCVersion108)
 		if err != nil {
 			return nil, err
 		}
 		if !supported {
 			return nil, moerr.NewNotSupportedNoCtxf(
-				"index search scan requires MORPC protocol version %d on every CN", defines.MORPCVersion107)
+				"index search scan requires MORPC protocol version %d on every CN", defines.MORPCVersion108)
 		}
 		// Keep the query's coordinator-first list intact for other scans.
 		// Object owners depend only on the selected identities, not ingress.
