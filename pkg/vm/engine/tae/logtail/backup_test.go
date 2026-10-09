@@ -326,6 +326,21 @@ func TestRewriteCheckpointCanonicalizesBackupTombstone(t *testing.T) {
 		CheckpointCurrentVersion,
 	)
 	require.NoError(t, err)
+	failingLastReader := &CKPReader{
+		mp:            common.CheckpointAllocator,
+		ckpDataReader: &scriptedCKPDataReader{failAt: 0},
+	}
+	_, _, _, err = ReWriteCheckpointAndBlockFromKey(
+		ctx,
+		"backup-test",
+		srcFS,
+		dstFS,
+		checkpointLocation,
+		failingLastReader,
+		CheckpointCurrentVersion,
+		backupTS,
+	)
+	require.ErrorContains(t, err, "checkpoint reader failure")
 	rewrittenLocation, _, _, err := ReWriteCheckpointAndBlockFromKey(
 		ctx,
 		"backup-test",
