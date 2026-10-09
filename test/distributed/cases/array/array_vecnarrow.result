@@ -72,9 +72,9 @@ l2_distance_sq(bf, [1,2,3])
 0.0
 27.0
 select inner_product(bf, "[1,2,3]") from nvec order by a;
-➤ inner_product(bf, [1,2,3])[8,53,31]  𝄀
-14.0  𝄀
-32.0
+inner_product(bf, [1,2,3])
+-14.0
+-32.0
 select cosine_distance(bf, "[1,2,3]") from nvec order by a;
 cosine_distance(bf, [1,2,3])
 0.0
@@ -92,9 +92,9 @@ l2_distance(f16, [1,2,3])
 0.0
 5.196152210235596
 select inner_product(f16, "[1,2,3]") from nvec order by a;
-➤ inner_product(f16, [1,2,3])[8,53,31]  𝄀
-14.0  𝄀
-32.0
+inner_product(f16, [1,2,3])
+-14.0
+-32.0
 select cosine_distance(f16, "[1,2,3]") from nvec order by a;
 cosine_distance(f16, [1,2,3])
 0.0
@@ -108,9 +108,9 @@ l2_distance(i8, [1,2,3])
 0.0
 5.196152210235596
 select inner_product(i8, "[1,2,3]") from nvec order by a;
-➤ inner_product(i8, [1,2,3])[8,53,31]  𝄀
-14.0  𝄀
-32.0
+inner_product(i8, [1,2,3])
+-14.0
+-32.0
 select cosine_distance(i8, "[1,2,3]") from nvec order by a;
 cosine_distance(i8, [1,2,3])
 0.0
@@ -132,9 +132,9 @@ a
 1
 2
 select a FROM nvec ORDER BY inner_product(i8, '[1,2,3]') LIMIT 5;
-➤ a[4,32,0]  𝄀
-1  𝄀
+a
 2
+1
 select * from nvec where i8 = "[1,2,3]";
 a    bf    f16    i8
 1    [1, 2, 3]    [1, 2, 3]    [1, 2, 3]
