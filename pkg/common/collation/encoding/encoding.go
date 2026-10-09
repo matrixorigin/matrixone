@@ -99,6 +99,66 @@ func Validate(ctx context.Context, charset collation.Charset, input []byte) erro
 	return ctx.Err()
 }
 
+// BorrowedConvertUsing stages binary-source CONVERT values for the existing
+// binary/UTF8MB4 consumers. It is local to one sequential batch, not shared.
+// Call Finish before publishing the batch. Cancellation is checked before the
+// first value, within 4096 input bytes (empty values count as one), during large
+// UTF8 scans, and at batch publication. No allocation or input mutation occurs.
+// Single-value Convert uses the same owner with immediate publication.
+type BorrowedConvertUsing struct {
+	ctx       context.Context
+	remaining int
+	started   bool
+}
+
+func NewBorrowedConvertUsing(ctx context.Context) BorrowedConvertUsing {
+	return BorrowedConvertUsing{ctx: ctx}
+}
+
+// Borrow returns whether input represents SQL NULL, rather than an owned slice.
+// The caller may copy non-NULL input into its staged destination, but must not
+// publish it until Finish succeeds. Limits include borrowed output bytes.
+func (c *BorrowedConvertUsing) Borrow(dst collation.Charset, input []byte, limit int64) (isNull bool, err error) {
+	cost := max(1, len(input))
+	if !c.started || cost > c.remaining {
+		if err = c.ctx.Err(); err != nil {
+			return false, err
+		}
+		c.started = true
+		c.remaining = 4096
+	}
+	c.remaining -= min(cost, 4096)
+	if dst != collation.CharsetBinary && dst != collation.CharsetUTF8MB4 {
+		return false, moerr.NewInvalidInput(c.ctx, "unsupported borrowed encoding conversion")
+	}
+	if limit < 0 {
+		return false, moerr.NewInvalidInput(c.ctx, "negative encoding output limit")
+	}
+	if dst == collation.CharsetUTF8MB4 {
+		if len(input) <= 4096 {
+			if !utf8.Valid(input) {
+				return true, nil
+			}
+		} else if err = Validate(c.ctx, dst, input); err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
+				return true, nil
+			}
+			return false, err
+		}
+	}
+	if int64(len(input)) > min(limit, mpool.MaxAllocationSize()) {
+		return false, moerr.NewInvalidInput(c.ctx, "encoding output exceeds limit")
+	}
+	return false, nil
+}
+
+func (c *BorrowedConvertUsing) Finish() error {
+	if c.started {
+		return c.ctx.Err()
+	}
+	return nil
+}
+
 // Convert never modifies input. owned=false borrows input (possibly a prefix);
 // owned=true transfers one pool allocation, which the caller must Free with the
 // same pool after copying into its destination. NULL and failure never transfer
@@ -110,6 +170,21 @@ func Validate(ctx context.Context, charset collation.Charset, input []byte) erro
 // unrepresentable or malformed characters, stopping at an incomplete source sequence, as MySQL
 // does. Strict MB3 conversion and GBK are deliberately not activated here.
 func Convert(ctx context.Context, pool *mpool.MPool, src, dst collation.Charset, policy Policy, input []byte, limit int64) (output []byte, owned bool, isNull bool, err error) {
+	if policy == ConvertUsing && src == collation.CharsetBinary &&
+		(dst == collation.CharsetBinary || dst == collation.CharsetUTF8MB4) {
+		borrower := NewBorrowedConvertUsing(ctx)
+		isNull, err = borrower.Borrow(dst, input, limit)
+		if err == nil {
+			err = borrower.Finish()
+		}
+		if err != nil {
+			return nil, false, false, err
+		}
+		if isNull {
+			return nil, false, true, nil
+		}
+		return input, false, false, nil
+	}
 	if err = ctx.Err(); err != nil {
 		return nil, false, false, err
 	}
@@ -121,14 +196,6 @@ func Convert(ctx context.Context, pool *mpool.MPool, src, dst collation.Charset,
 	}
 	if limit > mpool.MaxAllocationSize() {
 		limit = mpool.MaxAllocationSize()
-	}
-	if policy == ConvertUsing && src == collation.CharsetBinary && dst == collation.CharsetUTF8MB4 {
-		if err = Validate(ctx, dst, input); err != nil {
-			if moerr.IsMoErrCode(err, moerr.ErrInvalidInput) {
-				return nil, false, true, nil
-			}
-			return nil, false, false, err
-		}
 	}
 	binaryASCIIConvert := policy == ConvertUsing && src == collation.CharsetBinary && dst == collation.CharsetASCII
 	if !binaryASCIIConvert && (src == dst || src == collation.CharsetBinary || dst == collation.CharsetBinary) {

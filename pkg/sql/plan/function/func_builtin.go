@@ -4760,6 +4760,7 @@ func builtInConvertUsingCharset(parameters []*vector.Vector, result vector.Funct
 			}
 		}
 	}
+	borrower := encoding.NewBorrowedConvertUsing(proc.Ctx)
 	for i := uint64(0); i < uint64(length); i++ {
 		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(i) {
 			if err := rs.AppendMustNullForBytesResult(); err != nil {
@@ -4802,24 +4803,20 @@ func builtInConvertUsingCharset(parameters []*vector.Vector, result vector.Funct
 		if len(value) > types.VarlenaInlineSize {
 			limit -= int64(len(rs.GetResultVector().GetArea()))
 		}
-		converted, owned, isNull, err := encoding.Convert(
-			proc.Ctx, proc.Mp(), collation.CharsetBinary, dst, encoding.ConvertUsing, value, limit)
+		isNull, err := borrower.Borrow(dst, value, limit)
 		if err != nil {
 			return err
 		}
 		if isNull {
 			err = rs.AppendMustNullForBytesResult()
 		} else {
-			err = rs.AppendMustBytesValue(converted)
-		}
-		if owned {
-			proc.Mp().Free(converted)
+			err = rs.AppendMustBytesValue(value)
 		}
 		if err != nil {
 			return err
 		}
 	}
-	return nil
+	return borrower.Finish()
 }
 
 func resolveConvertCharset(charset []byte) (collation.Identity, error) {

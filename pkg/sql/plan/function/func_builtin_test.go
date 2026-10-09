@@ -1142,6 +1142,53 @@ func TestBuiltInConvertUsingCodecCancellation(t *testing.T) {
 	require.Zero(t, fc.result.GetResultVector().Length())
 }
 
+type convertCancelAtPublication struct {
+	context.Context
+	checks int
+}
+
+func (ctx *convertCancelAtPublication) Err() error {
+	ctx.checks++
+	if ctx.checks == 1 {
+		return nil
+	}
+	return context.Canceled
+}
+
+func TestBuiltInConvertUsingBatchPublication(t *testing.T) {
+	for _, target := range []string{"binary", "utf8mb4"} {
+		t.Run(target, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			values := make([]string, 128)
+			for i := range values {
+				values[i] = "abcdefgh"
+			}
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), values, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{target}, nil),
+			}, NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil), builtInConvertUsingCharset)
+			t.Cleanup(fc.Free)
+			require.NoError(t, fc.result.PreExtendAndReset(fc.fnLength))
+			ctx := &convertCancelAtPublication{Context: proc.Ctx}
+			proc.Ctx = ctx
+			require.ErrorIs(t, fc.fn(fc.parameters, fc.result, proc, fc.fnLength, nil), context.Canceled)
+			// Values are staged, not a successful result: publication must fail.
+			require.Equal(t, 128, fc.result.GetResultVector().Length())
+			require.Equal(t, 2, ctx.checks)
+			fn, err := GetFunctionByName(ctx.Context, "convert", []types.Type{
+				types.T_varchar.ToType(), types.T_varchar.ToType(),
+			})
+			require.NoError(t, err)
+			proc.Ctx = &convertCancelAtPublication{Context: ctx.Context}
+			before := proc.Mp().CurrNB()
+			out, err := RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), fc.parameters, fc.fnLength)
+			require.ErrorIs(t, err, context.Canceled)
+			require.Nil(t, out) // The public consumer must discard staged values.
+			require.Equal(t, before, proc.Mp().CurrNB())
+		})
+	}
+}
+
 func TestBuiltInConvertUsingEmptyAndNUL(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	inline := strings.Repeat("a", types.VarlenaInlineSize)
@@ -3253,6 +3300,42 @@ func TestBuiltInExpOverflowAllocationsDoNotScaleWithRows(t *testing.T) {
 	require.LessOrEqual(t, batchAllocs, oneRowAllocs+16,
 		"EXP overflow handling must not allocate per row: one row=%v, 8192 rows=%v",
 		oneRowAllocs, batchAllocs)
+}
+
+// Keep setup, capacity growth and input construction outside the timer. The
+// same benchmark can run against the base/review/fixed evaluator revisions.
+func BenchmarkBuiltInConvertUsingBorrowedBatch(b *testing.B) {
+	const rows = 128
+	for _, charset := range []string{"binary", "utf8mb4"} {
+		b.Run(charset, func(b *testing.B) {
+			proc := testutil.NewProcess(b)
+			values := make([]string, rows)
+			for i := range values {
+				values[i] = "abcdefgh"
+			}
+			input := newVectorByType(proc.Mp(), types.T_varchar.ToType(), values, nil)
+			defer input.Free(proc.Mp())
+			target, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte(charset), rows, proc.Mp())
+			require.NoError(b, err)
+			defer target.Free(proc.Mp())
+			parameters := []*vector.Vector{input, target}
+			result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+			defer result.Free()
+			require.NoError(b, result.PreExtendAndReset(rows))
+			require.NoError(b, builtInConvertUsingCharset(parameters, result, proc, rows, nil))
+			b.ReportAllocs()
+			b.SetBytes(rows * 8)
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if err := result.PreExtendAndReset(rows); err != nil {
+					b.Fatal(err)
+				}
+				if err := builtInConvertUsingCharset(parameters, result, proc, rows, nil); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
 }
 
 func BenchmarkBuiltInExpOverflowBatch(b *testing.B) {

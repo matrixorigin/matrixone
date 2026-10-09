@@ -20,6 +20,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -201,6 +202,70 @@ func TestConvertFailureCleanup(t *testing.T) {
 	require.False(t, owned)
 	require.False(t, null)
 	require.Zero(t, limited.CurrNB())
+}
+
+func TestBorrowedConvertUsing(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		dst        collation.Charset
+		input      string
+		limit      int64
+		null, fail bool
+	}{
+		{"binary", collation.CharsetBinary, "\x00\xff", 2, false, false},
+		{"utf8", collation.CharsetUTF8MB4, "é😀", 6, false, false},
+		{"invalid", collation.CharsetUTF8MB4, "\xff", 0, true, false},
+		{"empty", collation.CharsetUTF8MB4, "", 0, false, false},
+		{"large-valid", collation.CharsetUTF8MB4, strings.Repeat("é", 2049), 4098, false, false},
+		{"large-invalid", collation.CharsetUTF8MB4, strings.Repeat("a", 4096) + "\xff", 0, true, false},
+		{"large-limit", collation.CharsetUTF8MB4, strings.Repeat("a", 4097), 4096, false, true},
+		{"limit", collation.CharsetBinary, "ab", 1, false, true},
+		{"negative", collation.CharsetUTF8MB4, "\xff", -1, false, true},
+		{"unsupported", collation.CharsetASCII, "a", 1, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input := []byte(tc.input)
+			c := NewBorrowedConvertUsing(context.Background())
+			null, err := c.Borrow(tc.dst, input, tc.limit)
+			require.Equal(t, tc.null, null)
+			require.Equal(t, tc.fail, err != nil)
+			require.NoError(t, c.Finish())
+			require.Equal(t, tc.input, string(input))
+		})
+	}
+	for _, input := range [][]byte{[]byte("abcdefgh"), nil} {
+		ctx := &cancelOnCheck{Context: context.Background(), cancelAt: 2}
+		c := NewBorrowedConvertUsing(ctx)
+		for i := 0; i < 4096/max(1, len(input)); i++ {
+			null, err := c.Borrow(collation.CharsetUTF8MB4, input, 8)
+			require.NoError(t, err)
+			require.False(t, null)
+		}
+		require.Equal(t, 1, ctx.checks)
+		_, err := c.Borrow(collation.CharsetUTF8MB4, input, 8)
+		require.ErrorIs(t, err, context.Canceled)
+	}
+	ctx := &cancelOnCheck{Context: context.Background(), cancelAt: 2}
+	c := NewBorrowedConvertUsing(ctx)
+	_, err := c.Borrow(collation.CharsetUTF8MB4, bytes.Repeat([]byte("a"), 4093), 4093)
+	require.NoError(t, err)
+	_, err = c.Borrow(collation.CharsetUTF8MB4, []byte("abcd"), 4)
+	require.ErrorIs(t, err, context.Canceled) // Poll before crossing the byte budget.
+	ctx = &cancelOnCheck{Context: context.Background(), cancelAt: 2}
+	c = NewBorrowedConvertUsing(ctx)
+	require.NoError(t, c.Finish()) // No actual conversion: masked/NULL batch.
+	_, err = c.Borrow(collation.CharsetBinary, []byte("a"), 1)
+	require.NoError(t, err)
+	require.ErrorIs(t, c.Finish(), context.Canceled)
+	ctx = &cancelOnCheck{Context: context.Background(), cancelAt: 1}
+	c = NewBorrowedConvertUsing(ctx)
+	_, err = c.Borrow(collation.CharsetBinary, nil, 0)
+	require.ErrorIs(t, err, context.Canceled)
+	ctx = &cancelOnCheck{Context: context.Background(), cancelAt: 3}
+	c = NewBorrowedConvertUsing(ctx)
+	null, err := c.Borrow(collation.CharsetUTF8MB4, bytes.Repeat([]byte("a"), 8192), 8192)
+	require.ErrorIs(t, err, context.Canceled)
+	require.False(t, null)
 }
 
 func TestConvertCancellationAndBounds(t *testing.T) {
