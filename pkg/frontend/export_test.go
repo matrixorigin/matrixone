@@ -17,7 +17,10 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"encoding/csv"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -141,6 +144,7 @@ func Test_writeToCSVFile(t *testing.T) {
 
 		var output = []byte{'1', '2'}
 		ep.userConfig.MaxFileSize = 1
+		ep.Rows = 1
 
 		stubs := gostub.StubFunc(&Close, moerr.NewInternalError(context.TODO(), "Close error"))
 		defer stubs.Reset()
@@ -373,6 +377,186 @@ func TestConstructByteFormatsUnscaledFloat64WithFullPrecision(t *testing.T) {
 		convey.So(result.err, convey.ShouldBeNil)
 		convey.So(string(result.writeByte), convey.ShouldEqual, "3.14159265358979\n")
 	})
+}
+
+func TestExportCSVBatchSplitPreservesRows(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	values := []int32{1, 10, 100}
+	payload := strings.Repeat("x", 24) + "\n,y"
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = testutil.NewVector(len(values), types.T_int32.ToType(), mp, false, values)
+	bat.Vecs[1] = testutil.NewVector(len(values), types.T_varchar.ToType(), mp, false, []string{payload, payload, payload})
+	bat.SetRowCount(len(values))
+
+	mrs := &MysqlResultSet{}
+	for _, name := range []string{"id", "payload"} {
+		column := new(MysqlColumn)
+		column.SetName(name)
+		mrs.AddColumn(column)
+	}
+	ep := &ExportConfig{
+		userConfig: &tree.ExportParam{
+			FilePath:   filepath.Join(t.TempDir(), "out_%02d.csv"),
+			SplitSize:  64,
+			Header:     true,
+			ForceQuote: []string{"payload"},
+			Fields: tree.NewFields(
+				tree.DefaultFieldsTerminated,
+				false,
+				tree.DefaultFieldsEnclosedBy[0],
+				tree.DefaultFieldsEscapedBy[0],
+			),
+			Lines: tree.NewLines("", "\n"),
+		},
+		ctx: ctx,
+		mrs: mrs,
+	}
+	initExportFileParam(ep, mrs)
+	ep.init()
+	ep.Index.Add(1)
+	require.NoError(t, openNewFile(ctx, ep, mrs))
+	t.Cleanup(func() {
+		if ep.AsyncWriter != nil {
+			_ = Close(ep)
+		}
+	})
+
+	constructByte(ctx, &backSession{feSessionImpl: feSessionImpl{pool: mp}}, bat, ep.Index.Load(), ep.ByteChan, ep)
+	require.NoError(t, exportDataFromBatchToCSVFile(ep))
+	require.NoError(t, Close(ep))
+
+	paths, err := filepath.Glob(filepath.Join(filepath.Dir(ep.userConfig.FilePath), "out_*.csv"))
+	require.NoError(t, err)
+	require.Len(t, paths, len(values))
+	var gotIDs []string
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		require.NoError(t, err)
+		require.LessOrEqual(t, len(data), int(ep.userConfig.SplitSize))
+		records, err := csv.NewReader(bytes.NewReader(data)).ReadAll()
+		require.NoError(t, err)
+		require.Len(t, records, 2, "each file should contain one header and one data record")
+		require.Equal(t, []string{"id", "payload"}, records[0])
+		require.Equal(t, payload, records[1][1])
+		gotIDs = append(gotIDs, records[1][0])
+	}
+	require.Equal(t, []string{"1", "10", "100"}, gotIDs)
+}
+
+func TestExportCSVBatchSplitExactFitAndOversizedRecord(t *testing.T) {
+	ep := newCSVBatchTestExport(t, filepath.Join(t.TempDir(), "boundary_%02d.csv"), 15, true)
+	batch := makeCSVTestBatch("1,a\n", "2,0123456789\n", "3,b\n")
+
+	require.NoError(t, writeExportBatchToFile(ep, batch))
+	require.Equal(t, uint64(1), ep.Rows)
+	require.NoError(t, Close(ep))
+
+	paths, err := filepath.Glob(filepath.Join(filepath.Dir(ep.userConfig.FilePath), "boundary_*.csv"))
+	require.NoError(t, err)
+	require.Len(t, paths, 3)
+	wantIDs := []string{"1", "2", "3"}
+	wantSizes := []int{15, 24, 15}
+	for i, path := range paths {
+		data, err := os.ReadFile(path)
+		require.NoError(t, err)
+		require.Len(t, data, wantSizes[i])
+		records, err := csv.NewReader(bytes.NewReader(data)).ReadAll()
+		require.NoError(t, err)
+		require.Len(t, records, 2)
+		require.Equal(t, wantIDs[i], records[1][0])
+	}
+}
+
+func TestExportCSVFinalDrainPreservesOutOfOrderBatchMetadata(t *testing.T) {
+	ep := newCSVBatchTestExport(t, filepath.Join(t.TempDir(), "ordered_%02d.csv"), 17, true)
+	ep.Index.Add(2)
+	ep.ByteChan <- makeIndexedCSVTestBatch(2, "2,b\n")
+	ep.ByteChan <- makeIndexedCSVTestBatch(1, "1,a\n")
+
+	require.NoError(t, exportAllDataFromBatches(ep))
+	require.NoError(t, Close(ep))
+	paths, err := filepath.Glob(filepath.Join(filepath.Dir(ep.userConfig.FilePath), "ordered_*.csv"))
+	require.NoError(t, err)
+	require.Len(t, paths, 2)
+	for i, path := range paths {
+		data, err := os.ReadFile(path)
+		require.NoError(t, err)
+		records, err := csv.NewReader(bytes.NewReader(data)).ReadAll()
+		require.NoError(t, err)
+		require.Len(t, records, 2)
+		require.Equal(t, []string{"1", "2"}[i], records[1][0])
+	}
+}
+
+func TestExportCSVUnlimitedBatchUsesSingleWrite(t *testing.T) {
+	ep := &ExportConfig{
+		userConfig: &tree.ExportParam{ExportFormat: "csv"},
+	}
+	batch := makeCSVTestBatch("1,a\n", "2,b\n", "3,c\n")
+	writes := 0
+	stub := gostub.Stub(&writeDataToCSVFile, func(ep *ExportConfig, output []byte) error {
+		writes++
+		ep.CurFileSize += uint64(len(output))
+		return nil
+	})
+	defer stub.Reset()
+
+	require.NoError(t, writeExportBatchToFile(ep, batch))
+	require.Equal(t, 1, writes)
+	require.Equal(t, uint64(3), ep.Rows)
+}
+
+func newCSVBatchTestExport(t *testing.T, path string, splitSize uint64, header bool) *ExportConfig {
+	t.Helper()
+	ctx := context.Background()
+	mrs := &MysqlResultSet{}
+	for _, name := range []string{"id", "payload"} {
+		column := new(MysqlColumn)
+		column.SetName(name)
+		mrs.AddColumn(column)
+	}
+	ep := &ExportConfig{
+		userConfig: &tree.ExportParam{
+			FilePath:  path,
+			SplitSize: splitSize,
+			Header:    header,
+			Fields: tree.NewFields(
+				tree.DefaultFieldsTerminated,
+				false,
+				tree.DefaultFieldsEnclosedBy[0],
+				tree.DefaultFieldsEscapedBy[0],
+			),
+			Lines: tree.NewLines("", "\n"),
+		},
+		ctx: ctx,
+		mrs: mrs,
+	}
+	initExportFileParam(ep, mrs)
+	ep.init()
+	require.NoError(t, openNewFile(ctx, ep, mrs))
+	t.Cleanup(func() {
+		if ep.AsyncWriter != nil {
+			_ = Close(ep)
+		}
+	})
+	return ep
+}
+
+func makeCSVTestBatch(records ...string) *BatchByte {
+	var output []byte
+	rowEnds := make([]int, 0, len(records))
+	for _, record := range records {
+		output = append(output, record...)
+		rowEnds = append(rowEnds, len(output))
+	}
+	return &BatchByte{writeByte: output, rowEnds: rowEnds}
+}
+
+func makeIndexedCSVTestBatch(index int32, record string) *BatchByte {
+	batch := makeCSVTestBatch(record)
+	batch.index = index
+	return batch
 }
 
 func TestExportWorkerBatchEndsStatementAllocationOwnership(t *testing.T) {

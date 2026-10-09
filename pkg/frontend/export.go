@@ -79,12 +79,13 @@ type writeParam struct {
 	Index      atomic.Int32
 	WriteIndex atomic.Int32
 	ByteChan   chan *BatchByte
-	BatchMap   map[int32][]byte
+	BatchMap   map[int32]*BatchByte
 }
 
 type BatchByte struct {
 	index     int32
 	writeByte []byte
+	rowEnds   []int
 	err       error
 }
 
@@ -311,7 +312,8 @@ func getEffectiveMaxFileSize(ep *ExportConfig) uint64 {
 // writeToCSVFile function may create a new file. Make sure the output buffer contains the complete CSV row to keep the CSV parser happy.
 func writeToCSVFile(ep *ExportConfig, output []byte) error {
 	maxSize := getEffectiveMaxFileSize(ep)
-	if maxSize != 0 && ep.CurFileSize+uint64(len(output)) > maxSize {
+	if maxSize != 0 && exceedsFileSize(ep.CurFileSize, uint64(len(output)), maxSize) &&
+		(ep.getExportFormat() != "csv" || ep.Rows > 0) {
 		if err := Close(ep); err != nil {
 			return err
 		}
@@ -324,6 +326,58 @@ func writeToCSVFile(ep *ExportConfig, output []byte) error {
 		return err
 	}
 	return nil
+}
+
+func exceedsFileSize(currentSize, additionalSize, maxSize uint64) bool {
+	return currentSize > maxSize || additionalSize > maxSize-currentSize
+}
+
+func writeExportBatchToFile(ep *ExportConfig, batch *BatchByte) error {
+	if ep.getExportFormat() != "csv" {
+		return writeToCSVFile(ep, batch.writeByte)
+	}
+	if len(batch.rowEnds) == 0 {
+		return nil
+	}
+
+	maxSize := getEffectiveMaxFileSize(ep)
+	if maxSize == 0 {
+		if err := writeToCSVFile(ep, batch.writeByte); err != nil {
+			return err
+		}
+		ep.Rows += uint64(len(batch.rowEnds))
+		return nil
+	}
+
+	chunkStart, chunkEnd, chunkRows, previousEnd := 0, 0, 0, 0
+	flushChunk := func() error {
+		if chunkRows == 0 {
+			return nil
+		}
+		if err := writeToCSVFile(ep, batch.writeByte[chunkStart:chunkEnd]); err != nil {
+			return err
+		}
+		ep.Rows += uint64(chunkRows)
+		chunkStart = chunkEnd
+		chunkRows = 0
+		return nil
+	}
+
+	for _, rowEnd := range batch.rowEnds {
+		rowSize := uint64(rowEnd - previousEnd)
+		chunkSize := uint64(chunkEnd - chunkStart)
+		if chunkRows > 0 && exceedsFileSize(ep.CurFileSize, chunkSize+rowSize, maxSize) {
+			if err := flushChunk(); err != nil {
+				return err
+			}
+			chunkStart = previousEnd
+			chunkEnd = previousEnd
+		}
+		chunkEnd = rowEnd
+		chunkRows++
+		previousEnd = rowEnd
+	}
+	return flushChunk()
 }
 
 var writeDataToCSVFile = func(ep *ExportConfig, output []byte) error {
@@ -417,6 +471,7 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 
 	buffer := &bytes.Buffer{}
 
+	rowEnds := make([]int, 0, bat.RowCount())
 	for i := 0; i < bat.RowCount(); i++ {
 		for j, vec := range bat.Vecs {
 			if vec.GetNulls().Contains(uint64(i)) {
@@ -585,6 +640,7 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 				return
 			}
 		}
+		rowEnds = append(rowEnds, buffer.Len())
 	}
 
 	// copy data. byteBuffer.Bytes() is not able to pass to channel
@@ -596,6 +652,7 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 	if !sendExportBatchByte(ctx, ByteChan, &BatchByte{
 		index:     index,
 		writeByte: result,
+		rowEnds:   rowEnds,
 		err:       nil,
 	}) {
 		bat.Clean(mp)
@@ -838,7 +895,7 @@ func exportDataFromBatchToCSVFile(ep *ExportConfig) error {
 		if tmp.err != nil {
 			return tmp.err
 		}
-		ep.BatchMap[tmp.index] = tmp.writeByte
+		ep.BatchMap[tmp.index] = tmp
 	}
 
 	value, ok := ep.BatchMap[ep.WriteIndex.Load()+1]
@@ -846,7 +903,7 @@ func exportDataFromBatchToCSVFile(ep *ExportConfig) error {
 		return nil
 	}
 
-	err := writeToCSVFile(ep, value)
+	err := writeExportBatchToFile(ep, value)
 	if err != nil {
 		return err
 	}
@@ -875,14 +932,14 @@ func exportAllDataFromBatches(ep *ExportConfig) error {
 			if tmp.err != nil {
 				return tmp.err
 			}
-			ep.BatchMap[tmp.index] = tmp.writeByte
+			ep.BatchMap[tmp.index] = tmp
 		}
 
 		value, ok := ep.BatchMap[ep.WriteIndex.Load()+1]
 		if !ok {
 			continue
 		}
-		if err := writeToCSVFile(ep, value); err != nil {
+		if err := writeExportBatchToFile(ep, value); err != nil {
 			return err
 		}
 		ep.WriteIndex.Add(1)
@@ -946,7 +1003,7 @@ var _ CsvWriter = &ExportConfig{}
 
 func (ec *ExportConfig) init() {
 	ec.ByteChan = make(chan *BatchByte, 10)
-	ec.BatchMap = make(map[int32][]byte)
+	ec.BatchMap = make(map[int32]*BatchByte)
 	ec.Index.Store(0)
 	ec.WriteIndex.Store(0)
 }
