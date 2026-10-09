@@ -1977,20 +1977,20 @@ function run_prebuilt_race_commands(){
     local -a reports=() expired=()
     previous_term_trap=$(trap -p TERM)
     function stop_prebuilt_race_commands(){
+        local expired_file
         # Failed ownership is terminal: keep TERM ignored until the parent
         # receives 125, rather than restoring a trap that can replace it.
         trap '' TERM
         if ! terminate_ut_process_groups 20 ${child_pids[@]+"${child_pids[@]}"} >&2; then exit 125; fi
         wait 2>/dev/null || true
-    }
-    function cancel_prebuilt_race_commands(){
-        local expired_file
-        stop_prebuilt_race_commands
         # Watchdogs are now joined: a published failure remains authoritative
-        # even when cancellation interrupted its normal-loop consumption.
+        # after a later successful sweep or another error.
         for expired_file in ${expired[@]+"${expired[@]}"}; do
             if [[ -e "${expired_file}.drain" ]]; then exit 125; fi
         done
+    }
+    function cancel_prebuilt_race_commands(){
+        stop_prebuilt_race_commands
         # Parent consumes the joined per-command JSON through append_ut_report.
         # No partial merge or success marker can hide interrupted commands.
         exit 143
@@ -2083,8 +2083,6 @@ function run_prebuilt_race_commands(){
             [[ "${test_pids[index]:-0}" != 0 ]] || continue
             if [[ -e "${expired[index]}.drain" ]]; then
                 stop_prebuilt_race_commands
-                rm -f "${expired[index]}.drain"
-                exit 125
             fi
             # Poll all owned groups, including the one-process path. A direct
             # wait can block forever while a descendant retains the pipe; the
@@ -2108,6 +2106,9 @@ function run_prebuilt_race_commands(){
                 return 1
             fi
             wait "${watchdog_pids[index]}" 2>/dev/null || true
+            # The watchdog can publish after the early poll check. Join it
+            # before deciding whether this command completed normally.
+            if [[ -e "${expired[index]}.drain" ]]; then stop_prebuilt_race_commands; fi
             child_pids[index*2+1]=0
             if [[ -e "${expired[index]}" ]]; then
                 child_status=1

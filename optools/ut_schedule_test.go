@@ -557,7 +557,7 @@ exit 97
 }
 
 func TestEngineRaceShardReportOpenFailureDrainsEarlierShard(t *testing.T) {
-	for _, mode := range []string{"drained", "failed-drain", "failed-drain-term", "marker-drain-term", "marker-cancel-term"} {
+	for _, mode := range []string{"drained", "failed-drain", "failed-drain-term", "marker-drain-term", "marker-cancel-term", "marker-report-open", "marker-completion"} {
 		t.Run(mode, func(t *testing.T) {
 			transform := func(text string) string {
 				const anchor = "            if ! exec 7>\"${reports[index]}\"; then\n"
@@ -566,18 +566,35 @@ func TestEngineRaceShardReportOpenFailureDrainsEarlierShard(t *testing.T) {
 				}
 				text = strings.Replace(text, anchor, `            if (( index == 1 )); then
                 read -r -t 5 _ <&8 || exit 89
-                if [[ "$MODE" == marker-* ]]; then
+                if [[ "$MODE" == marker-completion ]]; then
+                    :
+                elif [[ "$MODE" == marker-drain-term || "$MODE" == marker-cancel-term ]]; then
                     touch "${expired[0]}.drain"
                     if [[ "$MODE" == marker-cancel-term ]]; then
                         touch "$CASE_DIR/term-sent"
                         kill -TERM "$$"
                     fi
                 else
+                    if [[ "$MODE" == marker-report-open ]]; then touch "${expired[0]}.drain"; fi
                     mkdir "$CASE_DIR/blocked-report"
                     reports[index]="$CASE_DIR/blocked-report"
                 fi
             fi
 `+anchor, 1)
+				const completionAnchor = "\n            if ut_process_group_alive \"${test_pids[index]}\"; then\n"
+				if strings.Count(text, completionAnchor) != 1 {
+					t.Fatal("missing unique command completion poll")
+				}
+				text = strings.Replace(text, completionAnchor, `
+            if [[ "$MODE" == marker-completion && "$index" == 0 ]]; then
+                # Shard0's readiness was consumed at shard1 admission above.
+                # Observe shard1 active before publishing a late failure for shard0.
+                read -r -t 5 _ <&8 || exit 89
+                touch "${expired[index]}" "${expired[index]}.drain"
+                terminate_ut_process_group "${test_pids[index]}" KILL
+                wait_for_ut_process_group "${test_pids[index]}" 1 || exit 89
+            fi
+`+completionAnchor, 1)
 				for _, pid := range []string{"test_pids", "watchdog_pids"} {
 					anchor := "            " + pid + "[index]=$!\n"
 					if strings.Count(text, anchor) != 1 {
@@ -599,7 +616,7 @@ ENGINE_RACE_REPORT="$CASE_DIR/engine-report"
 ENGINE_RACE_REPORT_READY="$ENGINE_RACE_REPORT.ready"
 ENGINE_RACE_TEST_BINARY="$CASE_DIR/engine.test"
 function exit() {
- if [[ "$1" == 125 && "$MODE" == *-term ]]; then
+ if [[ "$1" == 125 && ( "$MODE" == *-term || "$MODE" == marker-* ) ]]; then
   touch "$CASE_DIR/term-sent"
   kill -TERM "$$"
  fi
@@ -642,7 +659,13 @@ if [[ "$MODE" == drained ]]; then
 fi
 [[ "$status" == 125 && -f "$ENGINE_RACE_TEST_BINARY" && -f "$ENGINE_RACE_REPORT.00" && ! -e "$CASE_DIR/helper-returned" && ! -e "$CASE_DIR/forbidden-join" ]] || exit 93
 if [[ "$MODE" == failed-drain* ]]; then ut_process_group_alive "$(<"$CASE_DIR/engine-tool.pid")" || exit 94; fi
-if [[ "$MODE" == *-term ]]; then [[ -f "$CASE_DIR/term-sent" ]] || exit 95; fi
+if [[ "$MODE" == *-term || "$MODE" == marker-* ]]; then [[ -f "$CASE_DIR/term-sent" ]] || exit 95; fi
+if [[ "$MODE" == marker-* ]]; then [[ -f "$ENGINE_RACE_REPORT-expired.0.drain" ]] || exit 95; fi
+if [[ "$MODE" == marker-completion ]]; then
+ # The production stop must drain the other admitted shard and watchdog;
+ # fixture reclamation cannot satisfy this oracle after the fact.
+ while read -r pid; do ! ut_process_group_alive "$pid" || exit 94; done < "$CASE_DIR/owned-pids"
+fi
 consume_engine_race_report; [[ "$?" == 125 ]] || exit 96
 start_plan_race example/plan; [[ "$?" == 125 ]] || exit 97
 trap handle_ut_termination TERM
