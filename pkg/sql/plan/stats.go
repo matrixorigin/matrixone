@@ -1831,10 +1831,6 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		} else {
 			applyLimitToStats(node.Stats, node.Limit, builder)
 		}
-	} else if node.NodeType == plan.Node_FUNCTION_SCAN && node.IndexReaderParam != nil {
-		if node.IndexReaderParam.Limit != nil {
-			applyLimitToStats(node.Stats, node.IndexReaderParam.Limit, builder)
-		}
 	}
 }
 

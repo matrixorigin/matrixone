@@ -45,7 +45,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightdedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
 	windowop "github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
@@ -1917,23 +1916,6 @@ func makeTimeWindowIntervalExpr(value int64, unit string) *plan.Expr {
 			},
 		},
 	}
-}
-
-func TestDupOperatorTableFunctionPreservesProbeState(t *testing.T) {
-	op := table_function.NewArgument()
-	op.FuncName = "unnest"
-	op.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{
-		{Tag: 8, UseMembershipFilter: true},
-	}
-	op.IndexReaderParam = &plan.IndexReaderParam{
-		Limit:        plan2.MakePlan2Uint64ConstExprWithType(7),
-		OrigFuncName: "l2_distance",
-	}
-
-	dup := dupOperator(op, 0, 1).(*table_function.TableFunction)
-	require.Equal(t, op.RuntimeFilterSpecs, dup.RuntimeFilterSpecs)
-	require.Equal(t, uint64(7), dup.IndexReaderParam.GetLimit().GetLit().GetU64Val())
-	require.Equal(t, "l2_distance", dup.IndexReaderParam.GetOrigFuncName())
 }
 
 func TestPreInsertEstimatedRowsAreOnlyBoundedPrefetchHints(t *testing.T) {

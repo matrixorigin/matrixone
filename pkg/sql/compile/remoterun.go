@@ -1019,14 +1019,12 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 	case *table_function.TableFunction:
 		in.TableFunction = &pipeline.TableFunction{
-			Attrs:                  t.Attrs,
-			Rets:                   t.Rets,
-			Args:                   t.Args,
-			Params:                 t.Params,
-			Name:                   t.FuncName,
-			IsSingle:               t.IsSingle,
-			IndexReaderParam:       t.IndexReaderParam,
-			RuntimeFilterProbeList: t.RuntimeFilterSpecs,
+			Attrs:    t.Attrs,
+			Rets:     t.Rets,
+			Args:     t.Args,
+			Params:   t.Params,
+			Name:     t.FuncName,
+			IsSingle: t.IsSingle,
 		}
 		in.Limit = t.Limit
 
@@ -1202,14 +1200,12 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 		if t.TableFunction != nil {
 			in.TableFunction = &pipeline.TableFunction{
-				Attrs:                  t.TableFunction.Attrs,
-				Rets:                   t.TableFunction.Rets,
-				Args:                   t.TableFunction.Args,
-				Params:                 t.TableFunction.Params,
-				Name:                   t.TableFunction.FuncName,
-				IsSingle:               t.TableFunction.IsSingle,
-				IndexReaderParam:       t.TableFunction.IndexReaderParam,
-				RuntimeFilterProbeList: t.TableFunction.RuntimeFilterSpecs,
+				Attrs:    t.TableFunction.Attrs,
+				Rets:     t.TableFunction.Rets,
+				Args:     t.TableFunction.Args,
+				Params:   t.TableFunction.Params,
+				Name:     t.TableFunction.FuncName,
+				IsSingle: t.TableFunction.IsSingle,
 			}
 		}
 	case *multi_update.MultiUpdate:
@@ -1685,8 +1681,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.FuncName = opr.TableFunction.Name
 		arg.Params = opr.TableFunction.Params
 		arg.IsSingle = opr.TableFunction.IsSingle
-		arg.IndexReaderParam = opr.TableFunction.IndexReaderParam
-		arg.RuntimeFilterSpecs = opr.TableFunction.RuntimeFilterProbeList
 		arg.Limit = opr.Limit
 		op = arg
 	case vm.External:
@@ -1859,8 +1853,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 			arg.TableFunction.FuncName = opr.TableFunction.Name
 			arg.TableFunction.Params = opr.TableFunction.Params
 			arg.TableFunction.IsSingle = opr.TableFunction.IsSingle
-			arg.TableFunction.IndexReaderParam = opr.TableFunction.IndexReaderParam
-			arg.TableFunction.RuntimeFilterSpecs = opr.TableFunction.RuntimeFilterProbeList
 		}
 		op = arg
 	case vm.MultiUpdate:

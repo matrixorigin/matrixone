@@ -437,8 +437,6 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.Params = t.Params
 		op.IsSingle = t.IsSingle
 		op.Limit = t.Limit
-		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
-		op.IndexReaderParam = t.IndexReaderParam
 		op.SetInfo(&info)
 		if op.FuncName == "generate_series" {
 			op.GenerateSeriesCtrNumState(t.OffsetTotal[index][0], t.OffsetTotal[index][1], t.GetGenerateSeriesCtrNumStateStep(), t.OffsetTotal[index][0])
@@ -661,8 +659,6 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 			op.TableFunction.Params = t.TableFunction.Params
 			op.TableFunction.IsSingle = t.TableFunction.IsSingle
 			op.TableFunction.Limit = t.TableFunction.Limit
-			op.TableFunction.RuntimeFilterSpecs = t.TableFunction.RuntimeFilterSpecs
-			op.TableFunction.IndexReaderParam = t.TableFunction.IndexReaderParam
 			op.TableFunction.SetInfo(&info)
 		}
 		op.SetInfo(&info)
@@ -1529,9 +1525,6 @@ func constructTableFunction(node *plan.Node, qry *plan.Query) *table_function.Ta
 	arg.IsSingle = node.TableDef.TblFunc.IsSingle
 	arg.ScanSnapshot = node.ScanSnapshot
 	arg.Limit = node.Limit
-	// probe side runtime filter specs
-	arg.RuntimeFilterSpecs = node.RuntimeFilterProbeList
-	arg.IndexReaderParam = node.IndexReaderParam
 	return arg
 }
 

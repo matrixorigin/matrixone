@@ -43,11 +43,6 @@ type TableFunction struct {
 	// the planner only, never from TVF arguments (#27941).
 	ScanSnapshot *plan.Snapshot
 
-	// probe side runtime filter specs
-	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
-
-	IndexReaderParam *plan.IndexReaderParam
-
 	OffsetTotal [][2]int64
 	CanOpt      bool
 

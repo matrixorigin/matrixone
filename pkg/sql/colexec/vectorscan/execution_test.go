@@ -16,6 +16,8 @@ package vectorscan
 
 import (
 	"context"
+	"math"
+	"strconv"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -26,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	_ "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/overfetch"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -449,4 +452,66 @@ func TestPrepareScalarEvaluatesBareParameterPayload(t *testing.T) {
 	require.True(t, hasQuery)
 	require.Equal(t, []byte("+needle"), req.QueryPayload)
 	require.Zero(t, req.ResultLimit)
+}
+
+// The candidate budget of a scalar request is the result limit without a
+// post-filter; with one it is the plugin's budget (hnsw) or the filtered
+// post-mode budget (ivfflat), saturating at MaxUint64.
+func TestRequestFromScalarCandidateBudget(t *testing.T) {
+	limits := []uint64{0, 1, 9, 10, 49, 50, 99, 100, 199, 200, 1000, math.MaxUint64 - 10, math.MaxUint64}
+	for _, tc := range []struct {
+		algo   string
+		budget func(uint64) uint64
+	}{
+		{"hnsw", overfetch.PostFilterLimit},
+		{"ivfflat", overfetch.FilteredPostModeLimit},
+	} {
+		for _, k := range limits {
+			for _, postFilter := range []bool{false, true} {
+				spec := &plan.IndexSearchScan{
+					Index:               &plan.IndexDef{IndexAlgo: tc.algo},
+					QueryPayload:        plan2.MakePlan2Vecf32ConstExprWithType("[1,2]", 2),
+					CandidateLimit:      plan2.MakePlan2Uint64ConstExprWithType(k),
+					PostFilterOverFetch: postFilter,
+				}
+				req, ok, err := RequestFromScalar(spec, searchIdentityForTest(), nil, false, false)
+				require.NoError(t, err)
+				require.True(t, ok)
+				require.Equal(t, k, req.ResultLimit, "%s k=%d", tc.algo, k)
+				want := k
+				if postFilter {
+					want = tc.budget(k)
+				}
+				require.Equal(t, want, req.CandidateBudget, "%s k=%d post-filter=%v", tc.algo, k, postFilter)
+			}
+		}
+	}
+	require.Equal(t, uint64(math.MaxUint64), overfetch.PostFilterLimit(math.MaxUint64))
+	require.Zero(t, overfetch.PostFilterLimit(0))
+}
+
+// A prepared LIMIT ? is resolved by PrepareScalar and over-fetched at execution.
+func TestPrepareScalarResolvesPreparedLimitBudget(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	template := &plan.IndexSearchScan{
+		Index:        &plan.IndexDef{IndexAlgo: "hnsw"},
+		QueryPayload: plan2.MakePlan2Vecf32ConstExprWithType("[1,2]", 2),
+		CandidateLimit: &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_uint64)},
+			Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+		},
+		PostFilterOverFetch: true,
+	}
+	for _, k := range []uint64{3, 51, math.MaxUint64} {
+		done := installStringParam(t, proc, strconv.FormatUint(k, 10))
+		spec, err := PrepareScalar(template, proc)
+		done()
+		require.NoError(t, err)
+		require.NotNil(t, template.CandidateLimit.GetP(), "the template stays unfolded")
+		req, _, err := RequestFromScalar(spec, searchIdentityForTest(), nil, false, false)
+		require.NoError(t, err)
+		require.Equal(t, k, req.ResultLimit)
+		require.Equal(t, overfetch.PostFilterLimit(k), req.CandidateBudget)
+	}
 }

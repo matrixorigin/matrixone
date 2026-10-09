@@ -209,6 +209,15 @@ fulltext_source_ref` / `fulltext_index_ref` are removed and their proto numbers
 reserved: publisher identity travels on `IndexSearchScan.source_table` /
 `hidden_tables`.
 
+The search table functions' candidate-budget path is removed with them: the planner's SQL
+over-fetch expression (`BuildOverFetchLimitExpr`), `IndexTableConfig.PostFilterOverFetch`, the
+table-function operator's `IndexReaderParam` / `RuntimeFilterSpecs` and their pipeline
+encoding (`pipeline.TableFunction` fields 7 and 8, now reserved), and the FUNCTION_SCAN LIMIT
+branch in plan stats. The budget is computed at execution only: `vectorscan` resolves the
+result limit, then takes the plugin's `CandidateBudgetHooks` budget or ivfflat's filtered
+post-mode budget from `pkg/vectorindex/overfetch` (`TestRequestFromScalarCandidateBudget`,
+`TestPrepareScalarResolvesPreparedLimitBudget`).
+
 ## Divergence from the proposal
 
 | Proposal | As built |
