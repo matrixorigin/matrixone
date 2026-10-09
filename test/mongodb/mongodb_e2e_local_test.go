@@ -580,14 +580,28 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	mock.ExpectQuery("truncate table mongodb_ci.events").WillReturnError(
 		errors.New("invalid input: cannot insert/update/delete from external table"))
 	expectMongoDBE2EScalar(mock, "5")
-	fixtureRows := sqlmock.NewRows([]string{"id", "device_id", "site_id", "ts", "measurement", "source_batch"})
-	for _, row := range manifest.Rows {
-		require.Len(t, row, 6)
-		fixtureRows.AddRow(row[0], row[1], row[2], row[3], row[4], row[5])
+	fixtureRows := func() *sqlmock.Rows {
+		rows := sqlmock.NewRows([]string{"id", "device_id", "site_id", "ts", "measurement", "source_batch"})
+		for _, row := range manifest.Rows {
+			require.Len(t, row, 6)
+			rows.AddRow(row[0], row[1], row[2], row[3], row[4], row[5])
+		}
+		return rows
 	}
-	mock.ExpectQuery("select mongo_id").WillReturnRows(fixtureRows)
+	aggregateRows := func() *sqlmock.Rows {
+		return sqlmock.NewRows([]string{"device_id", "site_id", "window_start", "measurement"}).
+			AddRow("device-001", "site-east", "2026-07-27 10:00:00", "12").
+			AddRow("device-001", "site-east", "2026-07-27 10:01:00", "NULL").
+			AddRow("device-001", "site-east", "2026-07-27 10:02:00", "20").
+			AddRow("device-001", "site-west", "2026-07-27 10:00:00", "30").
+			AddRow("device-002", "site-east", "2026-07-27 10:01:00", "NULL")
+	}
+	mock.ExpectQuery("select mongo_id").WillReturnRows(fixtureRows())
 	expectMongoDBE2EScalar(mock, "3")
 	expectMongoDBE2EScalar(mock, "3")
+	mock.ExpectQuery("insert into mongodb_ci.events\\(").WillReturnError(
+		errors.New("invalid input: cannot insert/update/delete from external table"))
+	mock.ExpectQuery("select mongo_id").WillReturnRows(fixtureRows())
 	prepared := mock.ExpectPrepare("select count")
 	prepared.ExpectQuery().WithArgs(int64(13)).WillReturnRows(
 		sqlmock.NewRows([]string{"count(*)"}).AddRow("3"))
@@ -654,19 +668,28 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	mock.ExpectExec("update mongodb_ci.ingest_watermark").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 	expectMongoDBE2EScalar(mock, "2026-07-27 10:03:00")
+	expectMongoDBE2EScalar(mock, "5")
+	for range 5 {
+		expectMongoDBE2EScalar(mock, "1")
+	}
 	mock.ExpectExec("create external table mongodb_ci.events_strict").WillReturnResult(sqlmock.NewResult(0, 0))
-	expectMongoDBE2EScalar(mock, "4")
+	mock.ExpectQuery("select device_id,site_id,cast\\(window_start").WillReturnRows(aggregateRows())
 	expectMongoDBE2EScalar(mock, "2026-07-27 10:03:00")
 	mock.ExpectBegin()
 	mock.ExpectExec("replace into mongodb_ci.minute_aggregate.*events_strict").WillReturnError(errors.New("strict conversion failed"))
 	mock.ExpectRollback()
-	expectMongoDBE2EScalar(mock, "4")
+	mock.ExpectQuery("select device_id,site_id,cast\\(window_start").WillReturnRows(aggregateRows())
 	expectMongoDBE2EScalar(mock, "2026-07-27 10:03:00")
 	mock.ExpectBegin()
 	mock.ExpectExec("replace into mongodb_ci.minute_aggregate").WillReturnResult(sqlmock.NewResult(0, 4))
 	mock.ExpectExec("update mongodb_ci.ingest_watermark").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
-	expectMongoDBE2EScalar(mock, "4")
+	mock.ExpectQuery("select device_id,site_id,cast\\(window_start").WillReturnRows(aggregateRows())
+	expectMongoDBE2EScalar(mock, "2026-07-27 10:03:00")
+	expectMongoDBE2EScalar(mock, "5")
+	for range 5 {
+		expectMongoDBE2EScalar(mock, "1")
+	}
 	mock.ExpectExec("alter mongodb connection mongodb_ci set").WillReturnResult(sqlmock.NewResult(0, 1))
 	expectMongoDBE2EScalar(mock, "5")
 	mock.ExpectExec("alter mongodb connection mongodb_ci disable").WillReturnResult(sqlmock.NewResult(0, 1))
@@ -698,6 +721,7 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 		"fixed-binary-padding",
 		"truncate-read-only-source-preserved",
 		"scan-projection-pushdown-null-conversion",
+		"read-only-insert-source-preserved",
 		"prepared-scan-binary-and-text-reuse-recovery-metadata",
 		"explicit-filter-residual",
 		"explicit-filter-and-query-column",
@@ -709,7 +733,7 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 		"date-format-order-by",
 		"low-precision-temporal-residual",
 		"decoded-vector-budget-enforced",
-		"multi-batch-cancel-recovery",
+		"pre-canceled-scan-recovery",
 		"mongoscan-timewin-gapfill",
 		"atomic-aggregate-watermark",
 		"conversion-error-atomic-rollback",

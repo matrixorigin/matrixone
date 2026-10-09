@@ -58,11 +58,15 @@ type testCursor struct {
 	err      error
 	closed   int
 	blocked  bool
+	entered  chan struct{}
 	closeErr error
 }
 
 func (c *testCursor) Next(ctx context.Context) bool {
 	if c.blocked {
+		if c.entered != nil {
+			close(c.entered)
+		}
 		<-ctx.Done()
 		c.err = context.Cause(ctx)
 		return false
@@ -556,7 +560,7 @@ func TestMongoScanRejectsUnimplementedSplitBeforeConnecting(t *testing.T) {
 }
 
 func TestMongoScanCancelBlockedGetMore(t *testing.T) {
-	cursor := &testCursor{blocked: true}
+	cursor := &testCursor{blocked: true, entered: make(chan struct{})}
 	deps, _ := testScanDependencies(cursor)
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	ctx, cancel := context.WithCancel(defines.AttachAccountId(proc.Ctx, 7))
@@ -566,8 +570,24 @@ func TestMongoScanCancelBlockedGetMore(t *testing.T) {
 	scan := NewArgument().WithScan(spec)
 	scan.Dependencies = deps
 	require.NoError(t, scan.Prepare(proc))
+	callDone := make(chan error, 1)
+	go func() {
+		_, err := scan.Call(proc)
+		callDone <- err
+	}()
+	select {
+	case <-cursor.entered:
+	case <-time.After(5 * time.Second):
+		cancel()
+		t.Fatal("MongoDB cursor did not enter a blocked GetMore")
+	}
 	cancel()
-	_, err := scan.Call(proc)
+	var err error
+	select {
+	case err = <-callDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("canceled MongoDB cursor did not return")
+	}
 	require.Error(t, err)
 	scan.Free(proc, true, err)
 	require.Equal(t, 1, cursor.closed)
