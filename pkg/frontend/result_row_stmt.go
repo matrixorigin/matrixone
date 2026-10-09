@@ -417,6 +417,15 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			fault.TriggerFaultWithContext(execCtx.reqCtx, "prepared-result-metadata-bound")
 		}
 		cursorExecute := execCtx.input != nil && execCtx.input.isCursorExecute
+		queryResultFinalized := false
+		defer func() {
+			// A producer or terminal step can fail after batches were saved.
+			// Cursor staging has its own abort owner; ordinary SELECT must clear
+			// its session state before another statement can save a result.
+			if !cursorExecute && !queryResultFinalized {
+				resetQueryResultState(ses)
+			}
+		}()
 		if cursorExecute {
 			columns, colDefs, err = getSelectColumnsAndResultColumns(execCtx.reqCtx, execCtx.cw)
 			if err != nil {
@@ -460,6 +469,7 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			if err = finalizeQueryResult(execCtx); err != nil {
 				return err
 			}
+			queryResultFinalized = true
 		}
 		// Cursor metadata is retained above for decoding, but its wire response
 		// is emitted by respStreamResultRow after transaction finalization. This

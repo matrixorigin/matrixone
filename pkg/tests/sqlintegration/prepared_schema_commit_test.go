@@ -249,4 +249,42 @@ func TestPreparedSchemaCommitBeforeMetadata(t *testing.T) {
 			}
 		})
 	}
+	t.Run("saved_result/late_failure_and_same_connection_reuse", func(t *testing.T) {
+		var before, after uint64
+		require.NoError(t, second.QueryRowContext(ctx, "select connection_id()").Scan(&before))
+		wasEnabled := fault.Status()
+		fault.Enable()
+		t.Cleanup(func() {
+			_, err := fault.RemoveFaultPoint(context.Background(), "saved-result-after-batch")
+			require.NoError(t, err)
+			if !wasEnabled {
+				fault.Disable()
+			}
+		})
+		require.NoError(t, fault.AddFaultPoint(ctx, "saved-result-after-batch", ":::", "return", 0, "", false))
+		rows, queryErr := second.QueryContext(ctx,
+			"/* save_result */ select b from text_rows_after_binding limit 1")
+		if queryErr == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var value int64
+				require.NoError(t, rows.Scan(&value))
+			}
+			queryErr = errors.Join(rows.Err(), rows.Close())
+		}
+		require.ErrorContains(t, queryErr, "injected saved-result batch failure")
+		_, err := fault.RemoveFaultPoint(ctx, "saved-result-after-batch")
+		require.NoError(t, err)
+		require.NoError(t, second.QueryRowContext(ctx, "select connection_id()").Scan(&after))
+		require.Equal(t, before, after)
+		// A fresh statement owns exactly one saved block; stale blockIdx would
+		// make its metadata reference a second, nonexistent result object.
+		var value int64
+		require.NoError(t, second.QueryRowContext(ctx,
+			"/* save_result */ select b from text_rows_after_binding limit 1").Scan(&value))
+		require.Equal(t, int64(2147483648), value)
+		require.NoError(t, second.QueryRowContext(ctx,
+			"select b from result_scan(last_query_id()) as r").Scan(&value))
+		require.Equal(t, int64(2147483648), value)
+	})
 }

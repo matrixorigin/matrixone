@@ -247,3 +247,37 @@ func TestSelectResultSaverFinalizesAfterRun(t *testing.T) {
 	require.ErrorIs(t, finalizeQueryResult(ec), wantErr)
 	require.Equal(t, 1, saver.calls)
 }
+
+func TestSelectResultFailureResetsSavedState(t *testing.T) {
+	for _, wantErr := range []error{errors.New("late producer failure"), context.Canceled} {
+		t.Run(wantErr.Error(), func(t *testing.T) {
+			ses := &Session{feSessionImpl: feSessionImpl{txnHandler: &TxnHandler{}}}
+			stmt := &tree.Select{}
+			ec := &ExecCtx{reqCtx: context.Background(), ses: ses, stmt: stmt,
+				cw: &TxnComputationWrapper{stmt: stmt, plan: newResultColumnTestPlan(1)}}
+			ec.resper = &selectMetadataTestResponder{
+				before: func(*ExecCtx, any) error { return nil },
+				finish: func(*ExecCtx) error { t.Fatal("failed Run must not finalize saved metadata"); return nil },
+			}
+			ses.outputCallback = func(FeSession, *ExecCtx, *batch.Batch, *perfcounter.CounterSet) error {
+				// Model the session state owned by an already persisted batch.
+				ses.blockIdx = 1
+				ses.p = ec.cw.Plan()
+				ses.curResultSize = 1
+				ses.savedRowCount = 1
+				ses.queryRowCount = 1
+				return nil
+			}
+			callback := ses.GetOutputCallback(ec)
+			ec.runner = &mockCompile{runFunc: func(uint64) (*util.RunResult, error) {
+				bat := batch.NewWithSize(0)
+				bat.SetRowCount(1)
+				require.NoError(t, callback(bat, nil))
+				require.Equal(t, 1, ses.blockIdx)
+				return nil, wantErr
+			}, getPlanFunc: func() *plan.Plan { return ec.cw.Plan() }}
+			require.ErrorIs(t, executeResultRowStmt(ses, ec), wantErr)
+			requirePerformResultStateReset(t, ses)
+		})
+	}
+}
