@@ -508,6 +508,10 @@ func TestExperimentalOwnerRegistryRetainsPendingResources(t *testing.T) {
 
 func TestExperimentalDispatcherRetainsPendingAndReclaimsCleanOwners(t *testing.T) {
 	withExperimentalOwnerState(t, nil, "", false)
+	previousCache := veccache.Cache
+	cache := veccache.NewVectorIndexCache()
+	veccache.Cache = cache
+	t.Cleanup(func() { veccache.Cache = previousCache })
 	pending, err := InitializeBaseFileReuseOwner("cn-dispatch-pending")
 	require.NoError(t, err)
 	clean, err := InitializeBaseFileReuseOwner("cn-dispatch-clean")
@@ -517,7 +521,7 @@ func TestExperimentalDispatcherRetainsPendingAndReclaimsCleanOwners(t *testing.T
 	lease, err := pool.acquire(context.Background(), testPoolKey("dispatch-pinned", 8, "abcdefgh"), testPoolFill(t, new(atomic.Int32), "abcdefgh"))
 	require.NoError(t, err)
 	t.Cleanup(func() { lease.Release(); _ = CloseBaseFileReuseOwner(pending) })
-	experimentalOwnerLifecycleHook(true)
+	cache.Destroy()
 	experimentalOwnerState.Lock()
 	pendingEntry := experimentalOwnerState.owners["cn-dispatch-pending"]
 	cleanEntry := experimentalOwnerState.owners["cn-dispatch-clean"]
@@ -527,7 +531,7 @@ func TestExperimentalDispatcherRetainsPendingAndReclaimsCleanOwners(t *testing.T
 	_, err = clean.owner.poolForSearch()
 	require.ErrorIs(t, err, errBaseFileOwnerClosed)
 	lease.Release()
-	experimentalOwnerLifecycleHook(true)
+	cache.Destroy()
 	experimentalOwnerState.Lock()
 	count := len(experimentalOwnerState.owners)
 	experimentalOwnerState.Unlock()
@@ -566,4 +570,197 @@ func TestExperimentalClosedOwnerlessSearchStaysClosedAfterDestroy(t *testing.T) 
 		"Destroy must not erase the closed marker when no owner pointer was available")
 	require.ErrorIs(t, search.Preload(nil), errBaseFileOwnerClosed)
 	require.ErrorIs(t, search.Load(nil), errBaseFileOwnerClosed)
+}
+
+// operationOwnerSearch follows production Load's complete-operation context.
+// Cancellation is observed while the real cache entry write lock is held;
+// release is an independent rescue and also holds teardown open for assertions.
+type operationOwnerSearch struct {
+	fillingOwnerSearch
+	source    context.Context
+	canceled  chan struct{}
+	release   chan struct{}
+	destroyed atomic.Bool
+}
+
+func (s *operationOwnerSearch) Load(*sqlexec.SqlProcess) error {
+	return s.owner.runOperation(s.source, func(opCtx context.Context) error {
+		close(s.started)
+		select {
+		case <-opCtx.Done():
+			close(s.canceled)
+		case <-s.release:
+			return opCtx.Err()
+		}
+		<-s.release
+		return opCtx.Err()
+	})
+}
+
+func (s *operationOwnerSearch) Destroy() { s.destroyed.Store(true) }
+
+func TestExperimentalGlobalDestroyCancelsBeforeEntryDrain(t *testing.T) {
+	withExperimentalOwnerState(t, nil, "", false)
+	const service = "cn-global-operation-close"
+	token, err := InitializeBaseFileReuseOwner(service)
+	require.NoError(t, err)
+	owner := experimentalOwnerForSQL(service).owner
+	previousCache := veccache.Cache
+	cache := veccache.NewVectorIndexCache()
+	veccache.Cache = cache
+	t.Cleanup(func() { veccache.Cache = previousCache })
+
+	source, cancelSource := context.WithCancel(context.Background())
+	algo := &operationOwnerSearch{
+		fillingOwnerSearch: fillingOwnerSearch{owner: owner, service: service, started: make(chan struct{})},
+		source:             source, canceled: make(chan struct{}), release: make(chan struct{}),
+	}
+	entry := &veccache.VectorIndexSearch{Algo: algo}
+	entry.Cond = sync.NewCond(entry.Mutex.RLocker())
+	const key = "global-operation-close-entry"
+	cache.IndexMap.Store(key, entry)
+	var workers sync.WaitGroup
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(algo.release) }) }
+	// Registered before either worker: failed assertions cannot strand workers
+	// or restore process globals while a worker still uses them.
+	t.Cleanup(func() {
+		release()
+		cancelSource()
+		workers.Wait()
+		cache.Destroy()
+		_ = owner.close()
+	})
+	loadDone := make(chan error, 1)
+	workers.Add(1)
+	go func() { defer workers.Done(); loadDone <- entry.Load(nil) }()
+	select {
+	case <-algo.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Load did not enter the complete owner operation")
+	}
+	destroyDone := make(chan struct{})
+	workers.Add(1)
+	go func() { defer workers.Done(); cache.Destroy(); close(destroyDone) }()
+	select {
+	case <-algo.canceled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("global Destroy waited for entry Load before canceling its owner operation")
+	}
+	require.NoError(t, source.Err(), "source cancellation must not provide the shutdown oracle")
+	require.False(t, algo.destroyed.Load(), "Load must still hold the entry lock")
+	require.True(t, experimentalOwnerForSQL(service).closed)
+	require.ErrorIs(t, initializeExperimentalOwnerService("cn-during-global-close"), errExperimentalOwnerShutdown)
+	require.ErrorIs(t, owner.runOperation(context.Background(), func(context.Context) error {
+		t.Error("shutdown admitted another complete operation")
+		return nil
+	}), errBaseFileOwnerClosed)
+	release()
+	select {
+	case <-destroyDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("global Destroy did not complete after the load released its lock")
+	}
+	require.ErrorIs(t, <-loadDone, context.Canceled)
+	require.True(t, algo.destroyed.Load())
+	_, present := cache.IndexMap.Load(key)
+	require.False(t, present)
+	require.Equal(t, int32(veccache.STATUS_DESTROYED), entry.Status.Load())
+	require.ErrorIs(t, owner.runOperation(context.Background(), func(context.Context) error { return nil }), errBaseFileOwnerClosed)
+	require.NoError(t, CloseBaseFileReuseOwner(token), "dedicated close remains idempotent after global shutdown")
+	replacement, err := InitializeBaseFileReuseOwner(service)
+	require.NoError(t, err)
+	require.NotSame(t, token.owner, replacement.owner)
+	require.NoError(t, CloseBaseFileReuseOwner(token), "old token must not close the replacement")
+	require.False(t, replacement.owner.isClosing())
+	require.NoError(t, CloseBaseFileReuseOwner(replacement))
+}
+
+func TestExperimentalGlobalDestroyCancelsAllOwnersBeforePoolCleanup(t *testing.T) {
+	withExperimentalOwnerState(t, nil, "", false)
+	previousCache := veccache.Cache
+	cache := veccache.NewVectorIndexCache()
+	veccache.Cache = cache
+	t.Cleanup(func() { veccache.Cache = previousCache })
+	var workers sync.WaitGroup
+	var unblock []func()
+	var unlockOnce sync.Once
+	unlock := func() {
+		unlockOnce.Do(func() {
+			for _, fn := range unblock {
+				fn()
+			}
+		})
+	}
+	source, cancelSource := context.WithCancel(context.Background())
+	var tokens []*BaseFileReuseOwnerToken
+	var canceled []chan struct{}
+	t.Cleanup(func() {
+		unlock()
+		cancelSource()
+		workers.Wait()
+		for _, token := range tokens {
+			_ = CloseBaseFileReuseOwner(token)
+		}
+	})
+	for _, service := range []string{"cn-global-all-a", "cn-global-all-b"} {
+		token, err := InitializeBaseFileReuseOwner(service)
+		require.NoError(t, err)
+		tokens = append(tokens, token)
+		pool, err := token.owner.poolForSearch()
+		require.NoError(t, err)
+		// Either registry iteration order must cancel both owners before the
+		// first pool retry/OS cleanup can block.
+		pool.retryMu.Lock()
+		unblock = append(unblock, pool.retryMu.Unlock)
+		entered, canceledOwner := make(chan struct{}), make(chan struct{})
+		canceled = append(canceled, canceledOwner)
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			_ = token.owner.runOperation(source, func(opCtx context.Context) error {
+				close(entered)
+				<-opCtx.Done()
+				close(canceledOwner)
+				return opCtx.Err()
+			})
+		}()
+		select {
+		case <-entered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("owner operation did not enter")
+		}
+	}
+	done := make(chan struct{})
+	workers.Add(1)
+	go func() { defer workers.Done(); cache.Destroy(); close(done) }()
+	for _, canceledOwner := range canceled {
+		select {
+		case <-canceledOwner:
+		case <-time.After(5 * time.Second):
+			t.Fatal("pool cleanup blocked cancellation of another owner")
+		}
+	}
+	require.NoError(t, source.Err())
+	for _, token := range tokens {
+		require.True(t, token.owner.isClosing())
+		require.True(t, experimentalOwnerForSQL(token.service).closed)
+	}
+	// A competing dedicated close waits only in cleanup; it must not reopen
+	// admission or remove a replacement generation.
+	closeDone := make(chan error, 1)
+	workers.Add(1)
+	go func() { defer workers.Done(); closeDone <- CloseBaseFileReuseOwner(tokens[0]) }()
+	require.ErrorIs(t, initializeExperimentalOwnerService("cn-global-all-new"), errExperimentalOwnerShutdown)
+	unlock()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("global cleanup did not finish after pool retry release")
+	}
+	require.NoError(t, <-closeDone)
+	experimentalOwnerState.Lock()
+	count := len(experimentalOwnerState.owners)
+	experimentalOwnerState.Unlock()
+	require.Zero(t, count)
 }

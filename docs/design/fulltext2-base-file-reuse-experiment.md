@@ -51,7 +51,12 @@ Successful owner cleanup removes the registry entry. Pending entries remain owne
 and charged until a later close succeeds. SQL factory never initializes an owner,
 including when the registry is empty: only explicit CN Start can do so. The stable
 process shutdown dispatcher is registered once and does not retain historical
-owner closures. No cleanup worker or permanent per-UUID tombstone is introduced.
+owner closures. Global cache Destroy first closes registry/operation admission
+and cancels every current owner's complete-operation context, before waiting for
+the cache serve loop or entry locks. This prephase performs no pool cleanup or
+drain; the post-eviction dispatcher drains/releases resources and retains pending
+owners for retry. Housekeeping does not close admission. No cleanup worker or
+permanent per-UUID tombstone is introduced.
 
 ## Failure and resource rules
 

@@ -15,6 +15,7 @@
 package cache
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -421,3 +422,108 @@ func TestVectorIndexCacheEvictEntrySkipsRenewedTTLAfterHousekeepingCheck(t *test
 
 // BuildTS stubs (fulltext2 async-freshness interface method).
 func (m *observerMock) BuildTS() int64 { return 0 }
+
+// The stop receiver waits for the prephase, proving that cancellation can run
+// before the unbuffered done send. No real ticker or scheduling delay is needed.
+func TestVectorIndexCachePreShutdownOrdering(t *testing.T) {
+	for _, started := range []bool{false, true} {
+		t.Run(fmt.Sprintf("started=%v", started), func(t *testing.T) {
+			lifecycleHooks.Lock()
+			previousPre, previousPost := lifecycleHooks.beforeShutdown, lifecycleHooks.hooks
+			lifecycleHooks.beforeShutdown, lifecycleHooks.hooks = nil, nil
+			lifecycleHooks.Unlock()
+			t.Cleanup(func() {
+				lifecycleHooks.Lock()
+				lifecycleHooks.beforeShutdown, lifecycleHooks.hooks = previousPre, previousPost
+				lifecycleHooks.Unlock()
+			})
+			pre := make(chan struct{})
+			release := make(chan struct{})
+			var workers sync.WaitGroup
+			var post, preCalled atomic.Bool
+			RegisterPreShutdownHook(func() {
+				preCalled.Store(true)
+				close(pre)
+			})
+			RegisterLifecycleHook(func(shutdown bool) {
+				if shutdown {
+					post.Store(true)
+				}
+			})
+			c := NewVectorIndexCache()
+			if started {
+				c.started.Store(true)
+				c.done = make(chan bool)
+				workers.Add(1)
+				go func() {
+					defer workers.Done()
+					select {
+					case <-pre:
+					case <-release:
+					}
+					<-c.done
+					c.exited.Store(true)
+				}()
+			}
+			// Rescue and join precede hook restoration even on assertion failure.
+			t.Cleanup(func() { close(release); workers.Wait() })
+			done := make(chan struct{})
+			workers.Add(1)
+			go func() { defer workers.Done(); c.Destroy(); close(done) }()
+			select {
+			case <-pre:
+			case <-time.After(5 * time.Second):
+				t.Fatal("pre-shutdown hook did not run before the stop-loop wait")
+			}
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("shutdown phases did not complete")
+			}
+			require.True(t, preCalled.Load(), "empty-map shutdown must run the prephase")
+			require.True(t, post.Load(), "empty-map shutdown must run the postphase")
+		})
+	}
+}
+
+func TestVectorIndexCachePreShutdownPanicAndHousekeeping(t *testing.T) {
+	lifecycleHooks.Lock()
+	previousPre, previousPost := lifecycleHooks.beforeShutdown, lifecycleHooks.hooks
+	lifecycleHooks.beforeShutdown, lifecycleHooks.hooks = nil, nil
+	lifecycleHooks.Unlock()
+	t.Cleanup(func() {
+		lifecycleHooks.Lock()
+		lifecycleHooks.beforeShutdown, lifecycleHooks.hooks = previousPre, previousPost
+		lifecycleHooks.Unlock()
+	})
+	var events []string
+	RegisterPreShutdownHook(nil)
+	RegisterPreShutdownHook(func() { panic("synthetic pre-shutdown panic") })
+	RegisterPreShutdownHook(func() {
+		// Registration within a callback proves registry locks are not held.
+		RegisterPreShutdownHook(func() {})
+		events = append(events, "pre")
+	})
+	RegisterLifecycleHook(func(shutdown bool) {
+		if shutdown {
+			events = append(events, "post")
+		} else {
+			events = append(events, "housekeeping")
+		}
+	})
+	c := NewVectorIndexCache()
+	houseKeepingSync(t, c)
+	require.Equal(t, []string{"housekeeping"}, events, "housekeeping must never pre-close admission")
+	entry := &VectorIndexSearch{Algo: &shutdownOrderSearch{MockSearch: MockSearch{}, onDestroy: func() { events = append(events, "entry") }}}
+	entry.Cond = sync.NewCond(entry.Mutex.RLocker())
+	c.IndexMap.Store("shutdown-order", entry)
+	require.NotPanics(t, c.Destroy)
+	require.Equal(t, []string{"housekeeping", "pre", "entry", "post"}, events)
+}
+
+type shutdownOrderSearch struct {
+	MockSearch
+	onDestroy func()
+}
+
+func (s *shutdownOrderSearch) Destroy() { s.onDestroy() }

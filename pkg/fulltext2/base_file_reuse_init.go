@@ -71,14 +71,22 @@ func init() {
 func installExperimentalOwnerHook() {
 	experimentalOwnerHookOnce.Do(func() {
 		atomic.AddUint32(&experimentalOwnerHookInstallCount, 1)
+		veccache.RegisterPreShutdownHook(experimentalOwnerBeforeShutdown)
 		veccache.RegisterLifecycleHook(experimentalOwnerLifecycleHook)
 	})
 }
 
-func experimentalOwnerLifecycleHook(shutdown bool) {
-	if !shutdown {
-		return
+// experimentalOwnerBeforeShutdown publishes the registry barrier before
+// invoking cancellations, outside the registry lock. No entry close mutex,
+// cache drain, pool retry, or OS cleanup may run in this phase.
+func experimentalOwnerBeforeShutdown() {
+	owners := markExperimentalOwnersClosing()
+	for _, entry := range owners {
+		entry.owner.cancelOperations()
 	}
+}
+
+func markExperimentalOwnersClosing() map[string]*experimentalOwnerEntry {
 	experimentalOwnerState.Lock()
 	experimentalOwnerState.globalClosed = true
 	experimentalOwnerState.shutdownInProgress = true
@@ -90,6 +98,25 @@ func experimentalOwnerLifecycleHook(shutdown bool) {
 		entry.closed = true
 		entry.shutdownInProgress = true
 		owners[service] = entry
+	}
+	experimentalOwnerState.Unlock()
+	return owners
+}
+
+func experimentalOwnerLifecycleHook(shutdown bool) {
+	if !shutdown {
+		return
+	}
+	// Direct service/test callers retain the complete shutdown contract. In
+	// Cache.Destroy the prephase has already sealed the registry, so replacement
+	// generations cannot be admitted between this snapshot and finalization.
+	experimentalOwnerBeforeShutdown()
+	experimentalOwnerState.Lock()
+	owners := make(map[string]*experimentalOwnerEntry, len(experimentalOwnerState.owners))
+	for service, entry := range experimentalOwnerState.owners {
+		if entry != nil {
+			owners[service] = entry
+		}
 	}
 	experimentalOwnerState.Unlock()
 	for service, entry := range owners {

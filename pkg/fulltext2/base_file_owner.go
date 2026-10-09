@@ -60,20 +60,15 @@ func (o *baseFileOwner) isClosing() bool {
 	return o.closing || o.pool == nil
 }
 
-// beginClose publishes the admission barrier before a service-scoped cache
-// drain starts.  A cache retry can run while Destroy is waiting for an entry's
-// write lock; it must observe the closing owner and fail closed rather than
-// start a new load between eviction and pool.Close.
-func (o *baseFileOwner) beginClose() {
+// cancelOperations closes admission and cancels complete operations without
+// waiting for cache entries, active work, or pool/OS cleanup. Global shutdown
+// must cancel every owner before starting any of those destructive waits.
+func (o *baseFileOwner) cancelOperations() {
 	if o == nil {
 		return
 	}
 	o.mu.Lock()
-	var p *baseFilePool
-	if o.pool != nil {
-		o.closing = true
-		p = o.pool
-	}
+	o.closing = true
 	cancels := make([]context.CancelFunc, 0, len(o.operations))
 	for _, cancel := range o.operations {
 		cancels = append(cancels, cancel)
@@ -82,10 +77,18 @@ func (o *baseFileOwner) beginClose() {
 	for _, cancel := range cancels {
 		cancel()
 	}
-	// Cancel FILLING operations before a service-scoped cache drain waits for
-	// Search.Destroy to acquire its write lock. A load may be holding that lock
-	// while it waits on storage; delaying pool.Close until after the drain would
-	// leave the only cancellation path behind the wait.
+}
+
+// beginClose preserves the dedicated service-close pool-fill cancellation
+// contract, in addition to closing complete-operation admission before drain.
+func (o *baseFileOwner) beginClose() {
+	if o == nil {
+		return
+	}
+	o.cancelOperations()
+	o.mu.Lock()
+	p := o.pool
+	o.mu.Unlock()
 	if p != nil {
 		p.Close()
 	}

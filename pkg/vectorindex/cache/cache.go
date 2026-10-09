@@ -131,7 +131,8 @@ func IsRetryableLoadError(err error) bool {
 
 var lifecycleHooks struct {
 	sync.RWMutex
-	hooks []func(shutdown bool)
+	hooks          []func(shutdown bool)
+	beforeShutdown []func(shutdown bool)
 }
 
 // RegisterLifecycleHook lets an algorithm-owned pool attach cleanup to the
@@ -146,10 +147,33 @@ func RegisterLifecycleHook(hook func(shutdown bool)) {
 	lifecycleHooks.Unlock()
 }
 
+// RegisterPreShutdownHook registers admission/cancellation work that must run
+// before Destroy waits for its serve loop or any cache entry. It is shutdown-only;
+// callbacks must not drain entries or wait for the work they cancel.
+func RegisterPreShutdownHook(hook func()) {
+	if hook == nil {
+		return
+	}
+	lifecycleHooks.Lock()
+	lifecycleHooks.beforeShutdown = append(lifecycleHooks.beforeShutdown, func(bool) { hook() })
+	lifecycleHooks.Unlock()
+}
+
+func runPreShutdownHooks() {
+	lifecycleHooks.RLock()
+	hooks := append([]func(bool){}, lifecycleHooks.beforeShutdown...)
+	lifecycleHooks.RUnlock()
+	runLifecycleCallbacks(hooks, true)
+}
+
 func runLifecycleHooks(shutdown bool) {
 	lifecycleHooks.RLock()
 	hooks := append([]func(bool){}, lifecycleHooks.hooks...)
 	lifecycleHooks.RUnlock()
+	runLifecycleCallbacks(hooks, shutdown)
+}
+
+func runLifecycleCallbacks(hooks []func(bool), shutdown bool) {
 	for _, hook := range hooks {
 		func() {
 			defer func() {
@@ -1221,6 +1245,7 @@ func (c *VectorIndexCache) checkStale() {
 
 // destroy the cache
 func (c *VectorIndexCache) Destroy() {
+	runPreShutdownHooks()
 	if c.started.Load() {
 		//c.ticker.Stop()
 		if !c.exited.Load() {
