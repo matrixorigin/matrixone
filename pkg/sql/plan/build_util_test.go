@@ -253,6 +253,57 @@ func TestGetTypeFromAstAssignsExplicitStringCharset(t *testing.T) {
 	}
 }
 
+func TestGetTypeFromAstRejectsMediumIntAliases(t *testing.T) {
+	testCases := []struct {
+		definition string
+		wantError  string
+	}{
+		{definition: "mediumint", wantError: "mediumint"},
+		{definition: "mediumint unsigned", wantError: "mediumint unsigned"},
+		{definition: "int3", wantError: "int3"},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.definition, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(),
+				"create table t (v "+testCase.definition+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			column := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
+			_, err = getTypeFromAst(context.Background(), column.Type)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNYI), err)
+			require.Contains(t, strings.ToLower(err.Error()), testCase.wantError)
+		})
+	}
+
+	for _, definition := range []string{"int", "int unsigned"} {
+		t.Run(definition+" remains supported", func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(),
+				"create table t (v "+definition+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			column := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
+			typ, err := getTypeFromAst(context.Background(), column.Type)
+			require.NoError(t, err)
+			if strings.Contains(definition, "unsigned") {
+				require.Equal(t, int32(types.T_uint32), typ.Id)
+			} else {
+				require.Equal(t, int32(types.T_int32), typ.Id)
+			}
+		})
+	}
+}
+
+func TestBuildCastToMediumIntIsRejected(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "SELECT CAST(1 AS MEDIUMINT)")
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNYI), err)
+	require.Contains(t, strings.ToLower(err.Error()), "mediumint")
+}
+
 func TestGetTypeFromAstGeometrySubtype(t *testing.T) {
 	stmt, err := mysql.ParseOne(context.Background(), "create table t (g point)", 1)
 	require.NoError(t, err)

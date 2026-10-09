@@ -54,15 +54,15 @@ insert into t_ip values
 (1, '[1,0,0,0]'),(2, '[0.8,0.6,0,0]'),(3, '[0,1,0,0]'),(4, '[-0.2,0,0,0]');
 create index idx_ip_b using ivfflat on t_ip(b) lists=4 op_type 'vector_ip_ops';
 select group_concat(a order by a) as ip_ids, count(*) as row_count, count(distinct a) as distinct_count
-from (select a from t_ip order by inner_product(b, normalize_l2('[1,0.1,0,0]')) asc limit 3) s;
+from (select a from t_ip order by inner_product(b, normalize_l2('[1,0.1,0,0]')) desc limit 3) s;
 ➤ ip_ids[-1,16383,0]  ¦  row_count[-5,64,0]  ¦  distinct_count[-5,64,0]  𝄀
 1,2,3  ¦  3  ¦  3
 select count(*) as empty_count
-from (select a from t_ip where a < 0 order by inner_product(b, normalize_l2('[1,0.1,0,0]')) asc limit 3) s;
+from (select a from t_ip where a < 0 order by inner_product(b, normalize_l2('[1,0.1,0,0]')) desc limit 3) s;
 ➤ empty_count[-5,64,0]  𝄀
 0
 select group_concat(a order by a) as ip_followup_ids, count(*) as row_count, count(distinct a) as distinct_count
-from (select a from t_ip order by inner_product(b, normalize_l2('[1,0.1,0,0]')) asc limit 2) s;
+from (select a from t_ip order by inner_product(b, normalize_l2('[1,0.1,0,0]')) desc limit 2) s;
 ➤ ip_followup_ids[-1,16383,0]  ¦  row_count[-5,64,0]  ¦  distinct_count[-5,64,0]  𝄀
 1,2  ¦  2  ¦  2
 create table t_str(a varchar(8) primary key, b vecf32(4));
