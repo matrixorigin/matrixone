@@ -6126,7 +6126,7 @@ func (b *baseBinder) markPreparedStringDomainSubquerySource(
 		return false
 	}
 	if expr.GetP() != nil || expr.GetV() != nil ||
-		(expr.GetF() == nil && expr.GetPreparedNumeric().GetStringDomainSource() != nil) {
+		preparedStringDomainDependencyWitness(expr) != nil {
 		return true
 	}
 	if fn := expr.GetF(); fn != nil {
@@ -6263,7 +6263,7 @@ func stringDomainSourceWitness(source *Expr, domains uint8) *Expr {
 	if domains == 0 {
 		return nil
 	}
-	if provenance := source.GetPreparedNumeric().GetStringDomainSource(); provenance != nil {
+	if provenance := preparedStringDomainDependencyWitness(source); provenance != nil {
 		return stringDomainSourceWitness(provenance, domains)
 	}
 	if fn := source.GetF(); fn != nil && fn.Func != nil && len(fn.Args) > 0 {
@@ -6387,6 +6387,7 @@ func stringDomainSourceWitness(source *Expr, domains uint8) *Expr {
 	witness := makePlan2StringConstExprWithType("")
 	witness.Typ = stringDomainWitnessType(source, domains)
 	lit := witness.GetLit()
+	lit.StringSource = uint32(types.StringSourceExpression)
 	switch domains {
 	case possibleStringDomainText:
 		lit.LiteralForm = plan.StringLiteralForm_STRING_LITERAL_TEXT
@@ -6559,8 +6560,8 @@ func (c *stringDomainWitnessCollector) collect(expr *Expr, visited map[*Expr]str
 		return
 	}
 	visited[expr] = struct{}{}
-	if metadata := expr.GetPreparedNumeric(); expr.GetF() == nil && metadata != nil && metadata.StringDomainSource != nil {
-		c.collect(metadata.StringDomainSource, visited)
+	if source := preparedStringDomainDependencyWitness(expr); source != nil {
+		c.collect(source, visited)
 		return
 	}
 	if expr.GetP() != nil || expr.GetV() != nil {
@@ -6692,13 +6693,26 @@ func (c *stringDomainWitnessCollector) collect(expr *Expr, visited map[*Expr]str
 	c.staticDomains |= possibleStringDomainsForType(makeTypeByPlan2Expr(expr))
 }
 
+// Ordinary function metadata owns a local declaration, not its dependency
+// tree. Lowered NULLIF/CASE and implicit resolved-domain casts retain their
+// separate binder-owned return witnesses.
+func preparedStringDomainDependencyWitness(expr *Expr) *Expr {
+	if expr == nil {
+		return nil
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func != nil && (fn.Func.ObjName == "case" ||
+		fn.Func.ObjName == "cast" && !isExplicitPreparedCast(expr)) {
+		return expr.GetPreparedNumeric().GetStringDomainSource()
+	}
+	return nil
+}
+
 func preparedExprStringDomainDependsOnRuntime(expr *plan.Expr) bool {
 	if expr == nil || isExplicitPreparedCast(expr) {
 		return false
 	}
-	// Real functions keep runtime dependencies in Args; their metadata is
-	// only a local declaration, not another dependency tree.
-	if source := expr.GetPreparedNumeric().GetStringDomainSource(); expr.GetF() == nil && source != nil {
+	if source := preparedStringDomainDependencyWitness(expr); source != nil {
 		return preparedExprStringDomainDependsOnRuntime(source)
 	}
 	return expr.GetP() != nil || expr.GetV() != nil ||
@@ -6729,7 +6743,7 @@ func preparedFunctionStringDomainDependsOnRuntimeParam(expr *plan.Expr) bool {
 	if expr == nil {
 		return false
 	}
-	if source := expr.GetPreparedNumeric().GetStringDomainSource(); expr.GetF() == nil && source != nil {
+	if source := preparedStringDomainDependencyWitness(expr); source != nil {
 		return preparedExprStringDomainDependsOnRuntime(source)
 	}
 	fn := expr.GetF()
@@ -8679,8 +8693,8 @@ func possibleStringDomainsForExpr(expr *plan.Expr) uint8 {
 		return domains
 	}
 
-	if metadata := expr.GetPreparedNumeric(); expr.GetF() == nil && metadata != nil && metadata.StringDomainSource != nil {
-		sourceDomains := possibleStringDomainsForExpr(metadata.StringDomainSource)
+	if source := preparedStringDomainDependencyWitness(expr); source != nil {
+		sourceDomains := possibleStringDomainsForExpr(source)
 		if sourceDomains != 0 {
 			return sourceDomains
 		}

@@ -5119,7 +5119,7 @@ func preparedFieldOperandComparisonType(ctx context.Context, expr *Expr, lookup 
 	// retains this boundary's comparison contract. Do not copy NULLIF's entire
 	// duplicated CASE executable just to replace it with its compact witness.
 	probeSource := expr
-	if source := expr.GetPreparedNumeric().GetStringDomainSource(); source != nil {
+	if source := preparedStringDomainDependencyWitness(expr); source != nil {
 		probeSource = source
 	}
 	probe := DeepCopyExpr(probeSource)
@@ -5143,7 +5143,7 @@ func preparedFieldOperandComparisonType(ctx context.Context, expr *Expr, lookup 
 	// to TEXT. Recover its literal domain only in this private type probe.
 	if err := plan.VisitExprTree(probe, func(value *Expr) error {
 		if !isExplicitPreparedCast(value) {
-			if source := value.GetPreparedNumeric().GetStringDomainSource(); source != nil {
+			if source := preparedStringDomainDependencyWitness(value); source != nil {
 				*value = *DeepCopyExpr(source)
 			}
 		}
