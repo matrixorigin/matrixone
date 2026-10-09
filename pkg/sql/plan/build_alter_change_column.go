@@ -67,7 +67,7 @@ func ChangeColumn(
 
 	// If renaming the column, check if any generated column depends on it
 	if newColName != oldColName {
-		if err := checkColumnWithGeneratedDependency(ctx, tableDef, oldColName); err != nil {
+		if err := renameFunctionalColumnDependencies(ctx, tableDef, oldColName, newColNameOrigin); err != nil {
 			return false, err
 		}
 		if err := checkColumnWithDefaultDependency(ctx, tableDef, oldColName); err != nil {
@@ -163,11 +163,6 @@ func buildColumnAndConstraint(
 			return nil, err
 		}
 	}
-	for _, check := range targetTableDef.Checks {
-		if err := validateLegacyCRC32GeneratedInputs(ctx.GetContext(), check.GetCheck(), defaultScope); err != nil {
-			return nil, moerr.NewNotSupported(ctx.GetContext(), "changing a legacy CRC32 JSON check constraint requires an explicit table rebuild")
-		}
-	}
 
 	// If the column null property is not specified, it defaults to allowing null
 	hasNullFlag := false
@@ -251,6 +246,9 @@ func buildColumnAndConstraint(
 			}
 			newCol.OnUpdate = onUpdateExpr
 		case *tree.AttributeGeneratedAlways:
+			if err := validateGeneratedColumnAttributes(ctx.GetContext(), specNewColumn); err != nil {
+				return nil, err
+			}
 			if preserved, handled, preserveErr := preserveLegacyCRC32Generated(ctx.GetContext(), oldCol, attribute, colType); handled {
 				if preserveErr != nil {
 					return nil, preserveErr

@@ -125,7 +125,7 @@ func TestSqlProcessExecutionIdentityOverrideFromProcess(t *testing.T) {
 	key := contextKey{}
 	subscriberCtx := context.WithValue(context.Background(), key, "subscriber")
 	subscriberCtx = defines.AttachAccountId(subscriberCtx, 7)
-	proc := testutil.NewProcessWithMPool(t, uuid, mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, uuid, mpool.MustNewZero())
 	proc.Base.LockService = lockService
 	proc.Ctx = subscriberCtx
 	proc.ReplaceTopCtx(subscriberCtx)
@@ -181,7 +181,7 @@ func TestSqlProcessExecutionIdentityOverrideFromProcess(t *testing.T) {
 func TestSqlTxnError(t *testing.T) {
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := NewSqlProcess(proc)
 	assert.Panics(t, func() {
 		RunTxn(sqlproc, func(exec executor.TxnExecutor) error {
@@ -202,7 +202,7 @@ func TestSqlTxn(t *testing.T) {
 	moruntime.SetupServiceBasedRuntime(uuid, rt)
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	proc.Base.SessionInfo.Buf = buffer.New()
 	proc.Ctx = context.Background()
 	proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(0))
@@ -275,7 +275,7 @@ func TestFinishTxnWithCleanupContextCommitsWithFreshContext(t *testing.T) {
 // cache freshness check (captured at load to re-query in the background).
 func TestSqlProcessServiceAndAccount(t *testing.T) {
 	// Proc-backed: just exercise the branch (values depend on the test proc).
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	sp := NewSqlProcess(proc)
 	_ = sp.GetService()
 	_, _ = sp.GetAccountID()

@@ -76,10 +76,12 @@ func (s *service) closeViewMetadataAdmission() {
 		return
 	}
 	s.viewMetadataEpochFence.Close()
-	runtime.ServiceRuntime(s.cfg.UUID).CompareAndDeleteGlobalVariables(
-		compile.ViewMetadataEpochFenceRuntimeKey,
-		s.viewMetadataEpochFence,
-	)
+	if rt := runtime.ServiceRuntime(s.cfg.UUID); rt != nil {
+		rt.CompareAndDeleteGlobalVariables(
+			compile.ViewMetadataEpochFenceRuntimeKey,
+			s.viewMetadataEpochFence,
+		)
+	}
 }
 
 func (s *service) notifyViewMetadataAdmissionUpdated() {

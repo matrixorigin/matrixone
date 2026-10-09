@@ -679,7 +679,7 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 			var writeDeadline time.Time
 			written := messages[:0]
 			for idx, f := range messages {
-				rb.metrics.writeLatencyDurationHistogram.Observe(start.Sub(f.send.createAt).Seconds())
+				rb.metrics.writeLatencyDurationHistogram.Observe(start.Sub(f.createAt).Seconds())
 
 				id := f.getSendMessageID()
 				if stopped {
@@ -1663,9 +1663,9 @@ func (rb *remoteBackend) pendingRequestReadWindow() int64 {
 				continue
 			}
 			// Admitted/queued/write-in-progress: the window starts at admission.
-			// f.send is published by addFuture's lock and cleared only under the
+			// createAt is published by addFuture's lock and cleared only under the
 			// same lock in releaseFuture, so this read is synchronized.
-			start = f.send.createAt.Sub(rb.livenessEpoch).Nanoseconds() + 1
+			start = f.createAt.Sub(rb.livenessEpoch).Nanoseconds() + 1
 		}
 		if oldest == 0 || start < oldest {
 			oldest = start

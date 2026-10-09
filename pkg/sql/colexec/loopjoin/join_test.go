@@ -139,7 +139,7 @@ func installLoopJoinTestAllocation(
 }
 
 func TestLoopJoinResultBatchUsesAllocationAccount(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	arg := &LoopJoin{
 		ResultCols: []colexec.ResultPos{{Rel: 0, Pos: 0}},
@@ -161,7 +161,7 @@ func TestLoopJoinResultBatchUsesAllocationAccount(t *testing.T) {
 }
 
 func TestLoopJoinResultBatchHonorsAllocationCapacity(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
 	require.NoError(t, err)
@@ -215,7 +215,7 @@ func TestString(t *testing.T) {
 }
 
 func TestResetRebuildsExpressionForNextAllocationGeneration(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	join := &LoopJoin{
 		NonEqCond: &plan.Expr{
@@ -463,7 +463,7 @@ func TestLoopJoinResetAfterEmptyProbe(t *testing.T) {
 }
 
 func TestLoopJoinResetClearsResumeGeneration(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	join := &LoopJoin{}
 	join.ctr.state = Probe
 	join.ctr.probeIdx = 7
@@ -579,7 +579,7 @@ func TestLoopJoinSingleRejectsMultipleRows(t *testing.T) {
 }
 
 func TestLoopJoinFinalizeResetsAfterPreviousEmptyProbe(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.SetMessageBoard(message.NewMessageBoard())
 
 	int32Type := types.T_int32.ToType()
@@ -652,7 +652,7 @@ func TestLoopJoinFinalizeResetsAfterPreviousEmptyProbe(t *testing.T) {
 }
 
 func TestMarkJoinEmitsOneRowPerProbeRowAcrossBuildBatches(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.SetMessageBoard(message.NewMessageBoard())
 
 	int32Type := types.T_int32.ToType()
@@ -738,7 +738,7 @@ func TestMarkJoinEmitsOneRowPerProbeRowAcrossBuildBatches(t *testing.T) {
 }
 
 func TestMarkJoinResumesAfterDefaultBatchSize(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.SetMessageBoard(message.NewMessageBoard())
 
 	int32Type := types.T_int32.ToType()
@@ -833,7 +833,7 @@ func TestMarkJoinResumesAfterDefaultBatchSize(t *testing.T) {
 }
 
 func TestLoopJoinNoCondSplitsLargeBuildBatch(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 	const extraRows = 17
 	buildValues := make([]string, colexec.DefaultBatchSize+extraRows)
@@ -886,7 +886,7 @@ func TestLoopJoinNoCondSplitsLargeBuildBatch(t *testing.T) {
 }
 
 func TestLoopJoinNonEqCondSplitsLargeBuildBatch(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 	const extraRows = colexec.DefaultBatchSize
 	buildValues := make([]int32, colexec.DefaultBatchSize+extraRows)
@@ -952,7 +952,7 @@ func TestLoopJoinNonEqCondSplitsLargeBuildBatch(t *testing.T) {
 }
 
 func TestLoopJoinConditionEvaluationWindowsOnlyOversizedBuildBatches(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	buildValues := make([]int32, loopJoinConditionMaxWindowRows+1)
 	buildBat := batch.New([]string{"id"})
 	buildBat.Vecs[0] = testutil.MakeInt32Vector(
@@ -1023,7 +1023,7 @@ func TestLoopJoinConditionWindowAccountsForWideNullableBatches(t *testing.T) {
 }
 
 func TestLoopJoinNoCondSplitsWideRowsByBytes(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 	const byteLimit = 1024
 	buildValues := make([]string, 20)
@@ -1082,7 +1082,7 @@ func TestLoopJoinNoCondSplitsWideRowsByBytes(t *testing.T) {
 }
 
 func TestLoopJoinNonEqCondSplitsWideRowsByBytes(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 	const byteLimit = 1024
 	value := strings.Repeat("x", 128)
@@ -1152,7 +1152,7 @@ func TestLoopJoinNonEqCondSplitsWideRowsByBytes(t *testing.T) {
 }
 
 func TestLoopJoinEmptyBuildSplitsWideRowsByBytes(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 	const byteLimit = 1024
 	probeValues := make([]string, 20)
@@ -1199,7 +1199,7 @@ func TestLoopJoinEmptyBuildSplitsWideRowsByBytes(t *testing.T) {
 }
 
 func TestLoopJoinSemiAdmitsEachWideProbeRow(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 	const byteLimit = 1024
 	probeValues := []string{
@@ -1244,7 +1244,7 @@ func TestLoopJoinSemiAdmitsEachWideProbeRow(t *testing.T) {
 }
 
 func TestLoopJoinBoundedProbeReusesScanAcrossAdmissionYield(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	const byteLimit = 1024
 	probeValues := []string{
 		strings.Repeat("a", 700),
@@ -1300,7 +1300,7 @@ func TestLoopJoinBoundedProbeReusesScanAcrossAdmissionYield(t *testing.T) {
 }
 
 func TestLoopJoinEvalErrorInvalidatesResumeGeneration(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	buildBat := makeInt32LoopJoinBatch(proc.Mp(), []int32{1})
 	joinMap := message.NewJoinMap(
 		message.GroupSels{}, nil, nil, nil, []*batch.Batch{buildBat}, proc.Mp())
@@ -1346,7 +1346,7 @@ func TestLoopJoinEvalErrorInvalidatesResumeGeneration(t *testing.T) {
 }
 
 func TestLoopJoinSingleRejectsRowsAcrossBuildBatches(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	buildBatches := []*batch.Batch{
 		makeInt32LoopJoinBatch(proc.Mp(), []int32{1}),
 		makeInt32LoopJoinBatch(proc.Mp(), []int32{2}),
@@ -1418,7 +1418,7 @@ func TestLoopJoinResultBatchAdmissionMatrix(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			const byteLimit = 1024
 			probeValues := []string{
 				strings.Repeat("a", 700),
@@ -1507,7 +1507,7 @@ func makeVarcharLoopJoinBatch(mp *mpool.MPool, vals []string) *batch.Batch {
 }
 
 func newTestCase(t *testing.T, ts []types.Type, rp []colexec.ResultPos) joinTestCase {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.SetMessageBoard(message.NewMessageBoard())
 	ctx, cancel := context.WithCancel(context.Background())
 	fr, _ := function.GetFunctionByName(ctx, "=", ts)

@@ -10,7 +10,7 @@ PR data.
 | Identity | Binding and execution |
 | --- | --- |
 | CRC32 overload 0 | Existing catalog/wire expressions hash binary JSON; ordinary non-JSON calls retain their original bytes and scalar casts. |
-| CRC32 overload 1 | New JSON or unresolved bindings hash normalized MarshalJSON bytes for JSON; requires candidate MORPC v107. |
+| CRC32 overload 1 | New JSON or unresolved bindings hash normalized MarshalJSON bytes for JSON; requires candidate MORPC v109. |
 
 The result stays UINT64; the executor also retains the historic UINT32 wrapper.
 A stored legacy generated value can intentionally differ from a freshly bound
@@ -20,7 +20,7 @@ INSERT, UPDATE, REPLACE, ODKU, prepared rebinding and index maintenance.
 ## Boundaries
 
 Placement checks workers and falls back to one CN. Sending rechecks the actual
-worker at candidate v107; receiving checks the new identity. Old coordinators send identity
+worker at candidate v109; receiving checks the new identity. Old coordinators send identity
 0, which new workers still implement. Unknown capabilities fail closed.
 
 Catalog read and authoring use the existing separate durable admission floors.
@@ -39,21 +39,41 @@ is not a lossless way to preserve a legacy generated expression's algorithm.
 
 ## Upgrade and rollback
 
-Supported sources include main through v106 and supported released versions, not
+Supported sources include main through v108 and supported released versions, not
 earlier unmerged experiment binaries that changed overload 0 in place. Such data
 cannot be distinguished by identity and must not be admitted as a supported
-upgrade source. The maintenance candidate integrates main
-`bab4b3286a0dd5683a9b291763817722233e586c`, preserving all contracts through v106,
-including v101's JSON source domains for CONCAT and JSON_DEPTH. CRC32 uses
-candidate v107. This number is not claimed unique among other unmerged maintenance
+upgrade source. The current maintenance candidate integrates main
+`d2a0055ebe1a0b2423368e046c1812c18f6face8`, preserving all contracts through v108,
+including v101's JSON source domains, v107's functional-index contracts and
+v108's isolated user-variable NULL regexp history during migration. CRC32 uses
+candidate v109. This number is not claimed unique among other unmerged maintenance
 candidates. Before landing, reallocate it against the actual cumulative main and
 rerun the predecessor/admission tests; a higher number cannot advertise missing
 predecessor capabilities. Cross-PR allocation coordination remains open.
 
-Publishing new persisted expressions requires the durable candidate v107 authoring barrier.
+Publishing new persisted expressions requires the durable candidate v109 authoring barrier.
 Once the durable floor is raised, old CNs must stay excluded, including after
 restart. A failed activation does not imply the floor can be lowered. Rollback
 must respect the existing admission mechanism; this change adds no floor reset.
+
+Connection migration carries PREPARE SQL, not its bound overload identity. Source
+export therefore pins JSON/ANY CRC32 and uncertain statements until DEALLOCATE;
+the new destination checks the entire SQL payload before USE, state restoration
+or PREPARE, including payloads from old sources. Both checks use parsed AST and
+the source additionally checks bound plans and folded Literal.Src. No wire field
+is added. Only closed scalar SELECTs with explicitly understood expressions are
+replayable: ordinary literal CRC32(text/numeric) remains overload zero, while
+CRC32(parameters/variables/casts) is conservatively pinned. Views, table-dependent
+queries, UDFs and unrecognized forms can hide a CRC identity and are also pinned;
+this intentional availability restriction does not assert they all contain CRC.
+Evaluated typed numeric user-variable snapshots remain values, regardless of the
+assignment SQL retained for diagnostics. Actual source EXECUTE after rejection,
+destination zero-replay effects and mixed-version migration require new evidence.
+The destination parses with the typed source sql_mode before installing it. When
+legacy SET replay cannot supply that mode as a value, it must prove the closed
+statement safe under all 64 combinations of the six existing parser flags; it
+does not evaluate SET SQL to discover the mode. This adds bounded parsing work
+only on that legacy path, not to normal expression execution.
 
 ## Validation obligations
 
@@ -65,6 +85,47 @@ The function BVT covers generated columns, indexes, DML, prepared reads and ALTE
 Real two-binary rolling upgrade, persistent old-table DML after restart and
 post-floor downgrade rejection remain separate environment acceptance tests;
 mock version values and same-version CI do not prove them.
+
+## Current main integration candidate on 2026-10-09
+
+The normal merge preserves the actual v107 functional-index and v108 migration
+capabilities rather than merely advertising a higher version. CRC32 placement,
+send, receive, persisted read and durable authoring admission now require v109.
+Focused tests reject the immediate v108 predecessor; destination tests also
+retain older v100/v101/v106/v107 boundaries. Existing overload-zero identities
+remain unchanged. Main's regexp binary-cast/blob domain changes are preserved.
+
+The reachable v4.0.11 CDC upgrade repairs `source_table_id` and
+`owner_generation` before the two dependent columns, retaining their original
+unsigned types/defaults and the common-writer v106 gate. The new regression
+covers released and partial catalogs, injected prerequisite failure, retry and
+idempotence. The canonical CRC32 BVT requires all four catalog columns.
+
+- PASS (exact pre-commit content, Linux/amd64, genuine Go 1.27.1/CGo):
+  selected owning planner regression tests, 18 roots / 65 named tests,
+  including both generated-attribute orders and catalog-source preservation.
+  The same new fixture on the pre-repair candidate produces the expected
+  illegal-attribute acceptance failure (2 roots / 17 named tests), without
+  parser failures. Generated identity preservation cannot silently discard
+  DEFAULT, ON UPDATE or AUTO_INCREMENT.
+- PASS: the unchanged compiled owning receiver test group, 1 root / 27 named
+  tests, including immediate v108 rejection and v109 sender/receiver admission.
+  Earlier selected identity tests (26 roots / 68 named tests) and unchanged
+  planner/frontend/upgrade evidence (26 roots / 101 named tests) retain their
+  original content scope; these counts are not whole-package execution claims.
+- PASS: a genuine new production build of the repaired candidate, binary
+  SHA256 cd92727345b2ff565e56bebb5f35eaa2315a6309e4f1abffebf25fbfc803b9fa,
+  actual SQL/ISCP readiness, and canonical CRC32 (169 statements), CDC (11)
+  and CDC syntax (4), each twice: 368 runner statements with zero failed,
+  ignored or abnormal comparisons. Canonical expected files were not
+  regenerated. Pre-next SQL cleanup, graceful TERM exit, exact container
+  cessation, empty cgroup, stopped deadline units and zero OOM were
+  independently verified.
+- NOT_RUN: whole owning-package suites and race on this integrated content;
+  selected tests and same-version BVT do not establish deployment acceptance.
+- NOT_RUN: supported-release upgrade/restart/restore/downgrade and mixed-CN
+  rolling execution for this integrated candidate. Earlier evidence below
+  retains its original exact-content scope; it is not final-v109 acceptance.
 
 ## Validation before main integration on 2026-09-28
 
@@ -111,8 +172,10 @@ Normal merge preserves main's unified expression placement and send validation
 and its legacy TIMESTAMP defaults. CRC32 participates in the unified maximum
 floor and single destination probe. Mixed persisted owners also take the maximum:
 a v101 JSON source contract cannot lower the candidate CRC32 v107 requirement.
-The latest v4.0.12 bootstrap handler carries the candidate floor; the historical
-v4.0.10 View-metadata handler remains at v100. The embedded prepared test waits
+The v4.0.12 CHARACTER_SETS handler retains its historical v106 requirement;
+CRC activation uses the existing durable latest-floor admission chain, not a
+relabeled historical bootstrap handler. The historical v4.0.10 View-metadata
+handler remains at v100. The embedded prepared test waits
 for the actual CRC32 authoring floor, rather than the older View-metadata floor.
 
 - PASS: focused codec, CRC32 execution, planner/catalog, placement/send, and

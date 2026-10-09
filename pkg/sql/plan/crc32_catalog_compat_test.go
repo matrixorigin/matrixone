@@ -91,6 +91,74 @@ func TestCRC32LegacyCheckCopyReplay(t *testing.T) {
 	}
 }
 
+func TestCRC32LegacyCheckCopyClauseOrder(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		clauses string
+		reject  bool
+	}{
+		{"move_then_modify_other", "modify column j json after x, modify column x int", false},
+		{"modify_other_then_move", "modify column x int, modify column j json after x", false},
+		{"move_then_convert_input", "modify column j json after x, modify column j bigint", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			created, err := runOneStmt(mock, t, "create table tpch.crc32_check_order(id int primary key, j json, x int)")
+			require.NoError(t, err)
+			base := created.GetDdl().GetCreateTable().TableDef
+			for i, col := range base.Cols {
+				col.ColId = uint64(i + 1)
+			}
+			// Model a persisted legacy expression, not a new CRC binding or an
+			// actual old-release deployment. All SQL planning uses real entry points.
+			legacy := legacyCRC32Expr()
+			legacy.GetF().Args[0].Typ = base.Cols[1].Typ
+			legacy.GetF().Args[0].GetCol().ColPos = 1
+			check, err := BindFuncExprImplByPlanExpr(mock.ctxt.GetContext(), ">", []*Expr{legacy, MakePlan2Uint64ConstExprWithType(0)})
+			require.NoError(t, err)
+			base.Checks = []*planpb.CheckDef{{Name: "ck", Check: check, OriginSql: "crc32(j) > 0"}}
+			original := proto.Clone(base).(*planpb.TableDef)
+			mock.ctxt.tables[base.Name] = base
+			mock.ctxt.objects[base.Name] = &planpb.ObjectRef{SchemaName: "tpch", ObjName: base.Name}
+
+			built, err := runOneStmt(mock, t, "alter table tpch.crc32_check_order "+tc.clauses)
+			require.True(t, proto.Equal(original, base), "ALTER must not mutate source catalog metadata")
+			if tc.reject {
+				require.ErrorContains(t, err, "changing a legacy CRC32 JSON check constraint requires an explicit table rebuild")
+				require.Nil(t, built)
+				return
+			}
+			require.NoError(t, err)
+			alter := built.GetDdl().GetAlterTable()
+			require.Equal(t, planpb.AlterTable_COPY, alter.AlgorithmType)
+			target := alter.CopyTableDef
+			for i, name := range []string{"id", "x", "j"} {
+				require.Equal(t, name, target.Cols[i].Name)
+			}
+			require.Len(t, target.Checks, 1)
+			require.True(t, proto.Equal(original.Checks[0], alter.TableDef.Checks[0]))
+			require.True(t, proto.Equal(original.Checks[0], target.Checks[0]), "COPY skeleton must keep original CHECK coordinates")
+
+			ctx := context.WithValue(mock.ctxt.GetContext(), defines.CRC32CopyExpressionsKey{}, target)
+			mock.ctxt.SetContext(WithPersistedDDLReplay(ctx, alter.TableDef, target))
+			rebuilt, err := runOneStmt(mock, t, alter.CreateTmpTableSql)
+			require.NoError(t, err)
+			checks := rebuilt.GetDdl().GetCreateTable().TableDef.Checks
+			require.Len(t, checks, 1)
+			want := DeepCopyExpr(original.Checks[0].Check)
+			want.GetF().Args[0].GetF().Args[0].GetCol().ColPos = 2
+			require.True(t, proto.Equal(want, checks[0].Check), "both clause orders must rebuild the same mapped CRC0(j)")
+			crc := checks[0].Check.GetF().Args[0].GetF()
+			require.Equal(t, function.EncodeOverloadID(function.CRC32, function.CRC32LegacyOverload), crc.Func.Obj)
+			require.Equal(t, int32(2), crc.Args[0].GetCol().ColPos)
+			require.Equal(t, "j", crc.Args[0].GetCol().Name)
+			crc.Args[0].GetCol().ColPos = 99
+			require.True(t, proto.Equal(original, base), "replayed CHECK must not alias source metadata")
+			require.True(t, proto.Equal(original.Checks[0], target.Checks[0]))
+		})
+	}
+}
+
 func TestCRC32LegacyCheckAlterRejectsInputConversion(t *testing.T) {
 	for _, sql := range []string{
 		`alter table constraint_test.t_on_update_gen modify column val bigint`,
@@ -271,7 +339,7 @@ func TestCRC32PersistedDDLAdmissionBeforeFold(t *testing.T) {
 		`create view crc32_gate_view as select crc32(cast('{"a":1}' as json)) as c`,
 	} {
 		_, err := runOneStmt(mock, t, sql)
-		require.ErrorContains(t, err, "protocol version 107", sql)
+		require.ErrorContains(t, err, "protocol version 109", sql)
 	}
 }
 
@@ -389,7 +457,7 @@ func TestCRC32FoldedDefaultRetainsCapability(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got.Expr.GetLit())
 	require.Equal(t, uint64(4012824821), got.Expr.GetLit().GetU64Val())
-	required, err := planpb.RequiresMORPCVersion107CRC32JSONTextBytes(got)
+	required, err := planpb.RequiresMORPCVersion109CRC32JSONTextBytes(got)
 	require.NoError(t, err)
 	require.True(t, required)
 }

@@ -133,6 +133,29 @@ select id from crc32_check_copy order by id;
 drop table crc32_check_like;
 drop table crc32_check_copy;
 
+-- Current-binary public controls for multi-clause COPY with different column types.
+-- Legacy CRC0 catalog identity is covered by the planner regression, not manufactured by this BVT.
+drop table if exists crc32_check_clauses;
+drop table if exists crc32_check_reverse;
+create table crc32_check_clauses(id int primary key,j json,x int,constraint ck_crc32_clauses check(crc32(j)=2212294583));
+insert into crc32_check_clauses values(1,'1',2);
+alter table crc32_check_clauses modify column j json after x,modify column x int;
+insert into crc32_check_clauses(id,j,x) values(2,'1',3);
+insert into crc32_check_clauses(id,j,x) values(3,'2',1);
+update crc32_check_clauses set x=4 where id=1;
+update crc32_check_clauses set j='2' where id=1;
+select id,x from crc32_check_clauses order by id;
+create table crc32_check_reverse(id int primary key,j json,x int,constraint ck_crc32_clauses check(crc32(j)=2212294583));
+insert into crc32_check_reverse values(1,'1',2);
+alter table crc32_check_reverse modify column x int,modify column j json after x;
+insert into crc32_check_reverse(id,j,x) values(2,'1',3);
+insert into crc32_check_reverse(id,j,x) values(3,'2',1);
+update crc32_check_reverse set x=4 where id=1;
+update crc32_check_reverse set j='2' where id=1;
+select id,x from crc32_check_reverse order by id;
+drop table crc32_check_reverse;
+drop table crc32_check_clauses;
+
 drop table if exists crc32_binary;
 create table crc32_binary(id int, b varbinary(2));
 insert into crc32_binary values (1,X'00FF'),(2,X'00'),(3,X'FF'),(4,X''),(5,NULL);
@@ -216,4 +239,14 @@ insert into job values
 select crc32(jobTitle) from job;
 drop table job;
 
+-- Release upgrades must reach a complete CDC catalog before CRC32's durable admission.
+select count(*) as cdc_upgrade_prerequisite_columns from mo_catalog.mo_columns where account_id = 0 and att_database = 'mo_catalog' and att_relname = 'mo_cdc_watermark' and attname in ('source_table_id', 'owner_generation', 'pending_source_table_id', 'target_identity');
+
+create table crc32_gen_attributes(j json, g bigint unsigned generated always as (crc32(j)) stored);
+insert into crc32_gen_attributes(j) values ('{"t1":"a"}');
+alter table crc32_gen_attributes modify column g bigint unsigned generated always as (crc32(j)) stored default 0;
+alter table crc32_gen_attributes change column g g bigint unsigned generated always as (crc32(j)) stored on update current_timestamp;
+alter table crc32_gen_attributes modify column g bigint unsigned generated always as (crc32(j)) stored auto_increment;
+select g from crc32_gen_attributes;
+drop table crc32_gen_attributes;
 drop database test;

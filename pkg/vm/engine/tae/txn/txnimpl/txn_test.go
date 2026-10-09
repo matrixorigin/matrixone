@@ -1645,3 +1645,93 @@ func TestReplayAppendNodeCreateTS(t *testing.T) {
 	node.TxnMVCCNode.End = types.TS{}
 	assert.Equal(t, prepareTS, replayAppendNodeCreateTS(node))
 }
+
+// dedupRangeObjectData observes the real incremental object traversal without I/O.
+type dedupRangeObjectData struct {
+	containsObjectData
+	visit func(types.TS, types.TS) error
+}
+
+func (d *dedupRangeObjectData) GetDuplicatedRows(
+	_ context.Context, _ txnif.TxnReader, _ containers.Vector, _ index.ZM,
+	from, to types.TS, _ containers.Vector, _ *mpool.MPool,
+) error {
+	return d.visit(from, to)
+}
+
+func TestPrePrepareDedupStreamCoverage(t *testing.T) {
+	for _, tc := range []struct {
+		name, phase string
+		first       bool
+	}{
+		{"freeze", txnif.FreezePhase, false},
+		{"preprepare", txnif.PrePreparePhase, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			start, phaseTS := types.BuildTS(2, 0), types.BuildTS(10, 0)
+			schema := catalog.NewEmptySchema("data")
+			require.NoError(t, schema.AppendPKCol("pk", types.T_int64.ToType(), 0))
+			require.NoError(t, schema.Finalize(false))
+			tombSchema := catalog.GetTombstoneSchema(schema)
+			entry := catalog.MockStaloneTableEntry(1, schema)
+			pool := containers.NewVectorPool(t.Name(), 4)
+			defer pool.Destory()
+			txn := txnbase.MockTxnReaderWithStartTS(start)
+			txn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
+			rt := dbutils.NewRuntime(dbutils.WithRuntimeSmallPool(pool))
+			rt.Now = func() types.TS { return phaseTS }
+			tbl := &txnTable{entry: entry, store: &txnStore{ctx: ctx, txn: txn, rt: rt}}
+			tbl.dataTable = newBaseTable(schema, false, tbl)
+			tbl.tombstoneTable = newBaseTable(tombSchema, true, tbl)
+			calls := map[bool]int{}
+			failSecond := false
+			conflict := moerr.NewTxnWWConflictNoCtx(0, "")
+			for _, isTombstone := range []bool{false, true} {
+				base := tbl.getBaseTable(isTombstone)
+				bat := containers.BuildBatch(base.schema.Attrs(), base.schema.Types(), containers.Options{Allocator: common.DefaultAllocator})
+				defer bat.Close()
+				for _, vec := range bat.Vecs {
+					vec.Append(nil, true)
+				}
+				if isTombstone {
+					bat.Vecs[0].Update(0, types.Rowid{}, false)
+				} else {
+					bat.Vecs[0].Update(0, int64(1), false)
+				}
+				base.tableSpace = &tableSpace{node: &anode{data: bat, rows: 1}}
+				oid := objectio.NewObjectid()
+				stats := objectio.NewObjectStatsWithObjectID(&oid, false, false, false)
+				obj := catalog.MockObjectEntry(entry, stats, isTombstone, func(*catalog.ObjectEntry) data.Object {
+					return &dedupRangeObjectData{
+						containsObjectData: containsObjectData{contains: func(containers.Vector) error { return nil }},
+						visit: func(from, to types.TS) error {
+							calls[isTombstone]++
+							require.Equal(t, start.Next(), from)
+							require.Equal(t, phaseTS, to)
+							if failSecond && isTombstone != tc.first {
+								return conflict
+							}
+							return nil
+						},
+					}
+				}, types.BuildTS(5, 0))
+				entry.AddEntryLocked(obj)
+			}
+			require.NoError(t, tbl.PrePrepareDedup(ctx, tc.first, tc.phase, phaseTS))
+			require.Equal(t, 1, calls[tc.first])
+			require.Equal(t, phaseTS, tbl.getBaseTable(tc.first).dedupTS)
+			require.True(t, tbl.getBaseTable(!tc.first).dedupTS.IsEmpty())
+			failSecond = true
+			require.ErrorIs(t, tbl.PrePrepareDedup(ctx, !tc.first, tc.phase, phaseTS), conflict)
+			require.Equal(t, 1, calls[!tc.first])
+			require.Equal(t, start, tbl.getBaseTable(!tc.first).dedupTS, "failed check must not advance coverage")
+			failSecond = false
+			require.NoError(t, tbl.PrePrepareDedup(ctx, !tc.first, tc.phase, phaseTS))
+			require.Equal(t, 2, calls[!tc.first])
+			require.Equal(t, phaseTS, tbl.getBaseTable(!tc.first).dedupTS)
+			used, _ := pool.Used(false)
+			require.Zero(t, used)
+		})
+	}
+}

@@ -1849,7 +1849,7 @@ func txnAdmissionCounts(c TxnClient) (int, int64, int) {
 	client := c.(*txnClient)
 	client.mu.RLock()
 	users := client.mu.users
-	waiting := len(client.mu.waitActiveTxns)
+	waiting := client.mu.waitActiveTxns.size
 	client.mu.RUnlock()
 	return users, client.atomic.activeTxnCount.Load(), waiting
 }

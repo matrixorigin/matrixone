@@ -37,7 +37,7 @@ func TestCharacterSetsUpgradeMetadata(t *testing.T) {
 	require.Equal(t, "4.0.11", m.MinUpgradeVersion)
 	require.Equal(t, versions.Yes, m.UpgradeTenant)
 	require.Equal(t, versions.No, m.UpgradeCluster)
-	require.Equal(t, defines.MORPCVersion107, m.RequiredProtocolVersion)
+	require.Equal(t, defines.MORPCVersion106, m.RequiredProtocolVersion)
 	require.Equal(t, uint32(1), m.VersionOffset)
 	check := sysview.InformationSchemaCharacterSetsCheckSQL()
 	require.Contains(t, check, "(SELECT COUNT(*) FROM information_schema.CHARACTER_SETS) = 3")

@@ -168,7 +168,7 @@ func getTypeFromAstWithoutCharset(ctx context.Context, typ tree.ResolvableTypeRe
 				return plan.Type{Id: int32(types.T_uint16), Width: n.InternalType.Width, Scale: -1}, nil
 			}
 			return plan.Type{Id: int32(types.T_int16), Width: n.InternalType.Width, Scale: -1}, nil
-		case defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_INT24:
+		case defines.MYSQL_TYPE_LONG:
 			if n.InternalType.Unsigned {
 				return plan.Type{Id: int32(types.T_uint32), Width: n.InternalType.Width, Scale: -1}, nil
 			}
@@ -867,7 +867,7 @@ func buildDefaultExprWithColumns(
 		}
 	}
 
-	crc32Text, err := plan.RequiresMORPCVersion107CRC32JSONTextBytes(defaultExpr)
+	crc32Text, err := plan.RequiresMORPCVersion109CRC32JSONTextBytes(defaultExpr)
 	if err != nil {
 		return nil, err
 	}
@@ -973,8 +973,36 @@ func getColumnNullAbility(col *tree.ColumnTableDef) bool {
 	return true
 }
 
+// Identity preservation must not bypass the existing generated-column
+// attribute contract or silently discard an illegal DEFAULT/ON UPDATE clause.
+func validateGeneratedColumnAttributes(bindCtx context.Context, col *tree.ColumnTableDef) error {
+	colNameOrigin := col.Name.ColNameOrigin()
+	// Validate: generated column cannot have DEFAULT
+	for _, attr := range col.Attributes {
+		if _, ok := attr.(*tree.AttributeDefault); ok {
+			return moerr.NewInvalidInputf(bindCtx, "generated column '%s' cannot have a default value", colNameOrigin)
+		}
+	}
+	// Validate: generated column cannot have ON UPDATE
+	for _, attr := range col.Attributes {
+		if _, ok := attr.(*tree.AttributeOnUpdate); ok {
+			return moerr.NewInvalidInputf(bindCtx, "generated column '%s' cannot have ON UPDATE", colNameOrigin)
+		}
+	}
+	// Validate: generated column cannot have AUTO_INCREMENT
+	for _, attr := range col.Attributes {
+		if _, ok := attr.(*tree.AttributeAutoIncrement); ok {
+			return moerr.NewInvalidInputf(bindCtx, "generated column '%s' cannot have AUTO_INCREMENT", colNameOrigin)
+		}
+	}
+	return nil
+}
+
 func buildGeneratedExpr(bindCtx context.Context, col *tree.ColumnTableDef, typ plan.Type, existingCols []*ColDef, proc *process.Process, sources ...*ColDef) (*plan.GeneratedCol, error) {
 	if source := crc32SourceColumn(proc.Ctx, col.Name.ColName(), sources); source != nil && source.GeneratedCol != nil && containsLegacyCRC32(source.GeneratedCol.Expr) {
+		if err := validateGeneratedColumnAttributes(bindCtx, col); err != nil {
+			return nil, err
+		}
 		if err := validateLegacyCRC32GeneratedInputs(bindCtx, source.GeneratedCol.Expr, existingCols); err != nil {
 			return nil, err
 		}
@@ -998,23 +1026,8 @@ func buildGeneratedExpr(bindCtx context.Context, col *tree.ColumnTableDef, typ p
 
 	colNameOrigin := col.Name.ColNameOrigin()
 
-	// Validate: generated column cannot have DEFAULT
-	for _, attr := range col.Attributes {
-		if _, ok := attr.(*tree.AttributeDefault); ok {
-			return nil, moerr.NewInvalidInputf(bindCtx, "generated column '%s' cannot have a default value", colNameOrigin)
-		}
-	}
-	// Validate: generated column cannot have ON UPDATE
-	for _, attr := range col.Attributes {
-		if _, ok := attr.(*tree.AttributeOnUpdate); ok {
-			return nil, moerr.NewInvalidInputf(bindCtx, "generated column '%s' cannot have ON UPDATE", colNameOrigin)
-		}
-	}
-	// Validate: generated column cannot have AUTO_INCREMENT
-	for _, attr := range col.Attributes {
-		if _, ok := attr.(*tree.AttributeAutoIncrement); ok {
-			return nil, moerr.NewInvalidInputf(bindCtx, "generated column '%s' cannot have AUTO_INCREMENT", colNameOrigin)
-		}
+	if err := validateGeneratedColumnAttributes(bindCtx, col); err != nil {
+		return nil, err
 	}
 
 	// Collect column names and types from existing (non-generated or already-defined generated) columns

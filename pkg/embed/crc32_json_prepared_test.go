@@ -22,8 +22,13 @@ import (
 	"time"
 
 	"github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/stretchr/testify/require"
 )
 
@@ -83,7 +88,7 @@ func TestCRC32JSONBinaryPrepared(t *testing.T) {
 			}
 			value, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor)
 			floor, valid := value.(int64)
-			return ok && valid && floor >= defines.MORPCVersion107
+			return ok && valid && floor >= defines.MORPCVersion109
 		}, 90*time.Second, 100*time.Millisecond, "durable CRC32 catalog authoring admission did not complete")
 		exec("create table generated_crc(id int primary key,j json,c bigint unsigned generated always as (crc32(j)) stored,index idx_crc(c))")
 		exec(`insert into generated_crc(id,j) values(1,'{"t1":"a"}')`)
@@ -115,5 +120,108 @@ func TestCRC32JSONBinaryPrepared(t *testing.T) {
 		var count int
 		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from generated_crc").Scan(&count))
 		require.Equal(t, 2, count)
+
+		// Real SQL/binary PREPARE -> CN query RPC -> frontend lifecycle entry.
+		// This is one current binary, not evidence of a real old/new rollout.
+		queryClient, err := qclient.NewQueryClient(cn.ServiceID(), cn.GetServiceConfig().CN.RPC)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, queryClient.Close()) }()
+		// PortBase configurations advertise the address allocated by the running
+		// CN, not the legacy query-service config field. Use its admitted identity.
+		cluster, err := clusterservice.GetMOClusterWithContext(ctx, cn.ServiceID())
+		require.NoError(t, err)
+		var queryAddress string
+		require.NoError(t, clusterservice.GetCNServiceWithoutWorkingStateWithContext(
+			ctx, cluster, clusterservice.NewServiceIDSelector(cn.ServiceID()), func(service metadata.CNService) bool {
+				queryAddress = service.QueryAddress
+				return false
+			}))
+		require.NotEmpty(t, queryAddress, "running CN query endpoint was not advertised")
+		var sourceID uint32
+		require.NoError(t, conn.QueryRowContext(ctx, "select connection_id()").Scan(&sourceID))
+		export := func() (*query.Response, error) {
+			request := queryClient.NewRequest(query.CmdMethod_MigrateConnFrom)
+			request.MigrateConnFromRequest = &query.MigrateConnFromRequest{
+				ConnID: sourceID, TempTableMigrationSupported: true, LastInsertIDMigrationSupported: true,
+			}
+			return queryClient.SendMessage(ctx, queryAddress, request)
+		}
+		_, err = export() // the live COM_STMT prepared crc32(j)
+		require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer), "binary CRC32 migration rejection: %v", err)
+		check(1, 4012824821) // rejection must leave the original handle executable
+		require.NoError(t, stmt.Close())
+		exec(`prepare crc32_migration from 'select crc32(cast(''{"t1":"a"}'' as json))'`)
+		_, err = export()
+		require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer), "SQL CRC32 migration rejection: %v", err)
+		var checksum uint64
+		require.NoError(t, conn.QueryRowContext(ctx, "execute crc32_migration").Scan(&checksum))
+		require.Equal(t, uint64(4012824821), checksum)
+		exec("deallocate prepare crc32_migration")
+		plain, err := conn.PrepareContext(ctx, "select crc32('abc')")
+		require.NoError(t, err)
+		defer plain.Close()
+		exec(`set @digest=crc32(cast('{"t1":"a"}' as json))`)
+		snapshot, err := export()
+		require.NoError(t, err)
+		func() {
+			defer queryClient.Release(snapshot)
+			require.NotNil(t, snapshot.MigrateConnFromResponse)
+			require.Len(t, snapshot.MigrateConnFromResponse.PrepareStmts, 1)
+			foundDigest := false
+			for _, variable := range snapshot.MigrateConnFromResponse.UserDefinedVars {
+				if variable.Name == "digest" {
+					foundDigest = true
+					require.NotNil(t, variable.Value.GetLit())
+					require.Equal(t, uint64(4012824821), variable.Value.GetLit().GetU64Val())
+				}
+			}
+			require.True(t, foundDigest)
+		}()
+		require.NoError(t, plain.Close())
+
+		// An identity-less old-source payload is sent to an actual target routine.
+		// It must reject the later unsafe statement before even the earlier USE
+		// or safe PREPARE. No old binary or protocol value is manufactured here.
+		exec("create table migration_identity(id bigint unsigned auto_increment primary key, marker int)")
+		targetDB, err := sql.Open("mysql", cfg.FormatDSN())
+		require.NoError(t, err)
+		defer targetDB.Close()
+		targetDB.SetMaxOpenConns(1)
+		target, err := targetDB.Conn(ctx)
+		require.NoError(t, err)
+		defer target.Close()
+		_, err = target.ExecContext(ctx, "set @keep=42")
+		require.NoError(t, err)
+		// MatrixOne supports the zero-argument last_insert_id() reader. Seed the
+		// real session counter through INSERT without selecting a target database.
+		_, err = target.ExecContext(ctx, "insert into crc32_prepared_contract.migration_identity(marker) values(1)")
+		require.NoError(t, err)
+		var targetID uint32
+		var initialLastInsertID uint64
+		var initialDatabase sql.NullString
+		require.NoError(t, target.QueryRowContext(ctx, "select database(),connection_id(),last_insert_id()").Scan(&initialDatabase, &targetID, &initialLastInsertID))
+		// Keep USE observable even if an unselected database is represented by
+		// a non-NULL empty string instead of SQL NULL.
+		require.NotEqual(t, "crc32_prepared_contract", initialDatabase.String)
+		require.Equal(t, uint64(1), initialLastInsertID)
+		request := queryClient.NewRequest(query.CmdMethod_MigrateConnTo)
+		request.MigrateConnToRequest = &query.MigrateConnToRequest{
+			ConnID: targetID, DB: "crc32_prepared_contract", LastInsertIDExported: true, LastInsertID: 91,
+			PrepareStmts: []*query.PrepareStmt{
+				{Name: "safe_first", SQL: "select 1"}, {Name: "unsafe_later", SQL: "select crc32(cast(? as json))"},
+			},
+		}
+		_, err = queryClient.SendMessage(ctx, queryAddress, request)
+		require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer), "receiver CRC32 migration rejection: %v", err)
+		var database sql.NullString
+		var keep int64
+		require.NoError(t, target.QueryRowContext(ctx, "select database(),@keep,last_insert_id()").Scan(&database, &keep, &checksum))
+		require.Equal(t, initialDatabase, database, "rejection must precede USE")
+		require.Equal(t, int64(42), keep)
+		require.Equal(t, initialLastInsertID, checksum, "rejection must precede counter restoration")
+		_, err = target.ExecContext(ctx, "deallocate prepare safe_first")
+		var sqlErr *mysql.MySQLError
+		require.ErrorAs(t, err, &sqlErr)
+		require.Equal(t, uint16(1243), sqlErr.Number, "the earlier safe handle must not have been installed")
 	})
 }

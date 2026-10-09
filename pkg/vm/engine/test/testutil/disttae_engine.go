@@ -117,7 +117,6 @@ func NewTestDisttaeEngine(
 
 	initRuntime()
 
-	wait := make(chan struct{})
 	de.timestampWaiter = client.NewTimestampWaiter(runtime.GetLogger(""))
 
 	txnSender := service.NewTestSender(storage)
@@ -160,29 +159,39 @@ func NewTestDisttaeEngine(
 		de.txnClient,
 		hakeeper,
 		nil,
-		1, engineOpts...)
+		1,
+		func(owner *disttae.Engine) { de.Engine = owner },
+		engineOpts...)
 
 	de.Engine.PushClient().LogtailRPCClientFactory = rpcAgent.MockLogtailRPCClientFactory
 
+	// The bootstrap notifier belongs to this construction attempt, not the
+	// returned engine. Join it on success and every failure before its waiter
+	// can be closed by fixture cleanup.
+	notifyCtx, cancelNotify := context.WithCancel(de.ctx)
+	notifyDone := make(chan struct{})
+	stopNotify := func() { cancelNotify(); <-notifyDone }
 	go func() {
-		done := false
-		for !done {
+		defer close(notifyDone)
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		de.timestampWaiter.NotifyLatestCommitTS(de.Now())
+		for {
 			select {
-			case <-wait:
-				done = true
-			default:
+			case <-notifyCtx.Done():
+				return
+			case <-ticker.C:
 				de.timestampWaiter.NotifyLatestCommitTS(de.Now())
-				time.Sleep(time.Millisecond * 100)
 			}
 		}
 	}()
+	defer stopNotify()
 
 	op, err := de.txnClient.New(de.ctx, types.TS{}.ToTimestamp())
+	stopNotify()
 	if err != nil {
 		return nil, err
 	}
-
-	close(wait)
 
 	de.txnOperator = op
 	if err = de.Engine.New(de.ctx, op); err != nil {
@@ -224,8 +233,10 @@ func NewTestDisttaeEngine(
 		return de, err
 	}
 
-	// Start unified GC scheduler
-	go de.Engine.RunGCScheduler(de.ctx)
+	// Start the engine-owned GC scheduler. Engine.Close joins it.
+	if err = de.Engine.StartGCScheduler(de.ctx); err != nil {
+		return de, err
+	}
 
 	//err = de.prevSubscribeSysTables(ctx, rpcAgent)
 	return de, nil

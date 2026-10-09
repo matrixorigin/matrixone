@@ -29,8 +29,7 @@ import (
 
 // Already-upgraded tenants must run the charset metadata refresh. An offset
 // change is insufficient: old tenant workers compare only ToVersion. Keep the
-// preceding semantic upgrade. Candidate v107 also fences CRC32 JSON-text identity;
-// its allocation must be rechecked against cumulative main before landing.
+// preceding semantic upgrade and its protocol floor; no new key format is enabled.
 var Handler = &versionHandle{
 	metadata: versions.Version{
 		Version:                 "4.0.12",
@@ -38,7 +37,7 @@ var Handler = &versionHandle{
 		UpgradeCluster:          versions.No,
 		UpgradeTenant:           versions.Yes,
 		VersionOffset:           uint32(len(tenantUpgEntries)),
-		RequiredProtocolVersion: defines.MORPCVersion107,
+		RequiredProtocolVersion: defines.MORPCVersion106,
 	},
 }
 
