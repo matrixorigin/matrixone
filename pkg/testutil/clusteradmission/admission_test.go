@@ -35,32 +35,71 @@ const (
 )
 
 func TestAdmissionRejectsImplicitReentrancyAndAllowsExplicitConcurrency(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "cluster.lock")
-	owner := newManager(path, time.Millisecond)
-	contender := newManager(path, time.Millisecond)
-
-	first, err := owner.acquire(context.Background(), Exclusive)
-	require.NoError(t, err)
-	_, err = owner.acquire(context.Background(), Exclusive)
-	require.ErrorContains(t, err, "another complete test cluster")
-	second, err := owner.acquire(context.Background(), AllowConcurrent)
-	require.NoError(t, err)
-
-	tryContender := func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-		defer cancel()
-		_, err := contender.acquire(ctx, Exclusive)
-		require.ErrorIs(t, err, context.DeadlineExceeded)
+	t.Setenv(ProcessPoolSizeEnv, "2")
+	for _, initial := range []struct {
+		name string
+		mode Mode
+	}{
+		{"exclusive", Exclusive},
+		{"pooled", AllowConcurrentProcesses},
+	} {
+		t.Run(initial.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "cluster.lock")
+			owner := newManager(path, time.Millisecond)
+			contender := newManager(path, time.Millisecond)
+			first, err := owner.acquire(t.Context(), initial.mode)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, first.Release()) })
+			for _, next := range []struct {
+				name   string
+				mode   Mode
+				borrow bool
+			}{
+				{"exclusive", Exclusive, false},
+				{"local", AllowConcurrent, true},
+				{"process", AllowConcurrentProcesses, false},
+				{"local-and-process", AllowConcurrent | AllowConcurrentProcesses, true},
+			} {
+				t.Run(next.name, func(t *testing.T) {
+					lease, err := owner.acquire(t.Context(), next.mode)
+					if !next.borrow {
+						require.ErrorContains(t, err, "another complete test cluster")
+						require.Nil(t, lease)
+						require.Equal(t, 1, owner.references)
+						return
+					}
+					require.NoError(t, err)
+					t.Cleanup(func() { require.NoError(t, lease.Release()) })
+					require.NoError(t, lease.Release())
+					require.Equal(t, 1, owner.references)
+				})
+			}
+			canceled, cancel := context.WithCancel(t.Context())
+			cancel()
+			_, err = owner.acquire(canceled, AllowConcurrent|AllowConcurrentProcesses)
+			require.ErrorIs(t, err, context.Canceled)
+			require.Equal(t, 1, owner.references)
+			second, err := owner.acquire(t.Context(), AllowConcurrent)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, second.Release()) })
+			tryContender := func() {
+				ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+				defer cancel()
+				lease, err := contender.acquire(ctx, Exclusive)
+				require.ErrorIs(t, err, context.DeadlineExceeded)
+				require.Nil(t, lease)
+			}
+			tryContender()
+			require.NoError(t, first.Release())
+			tryContender()
+			require.NoError(t, second.Release())
+			next, err := contender.acquire(t.Context(), Exclusive)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, next.Release()) })
+			require.NoError(t, next.Release())
+			require.NoError(t, next.Release())
+		})
 	}
-	tryContender()
-	require.NoError(t, first.Release())
-	tryContender()
-	require.NoError(t, second.Release())
-
-	next, err := contender.acquire(context.Background(), Exclusive)
-	require.NoError(t, err)
-	require.NoError(t, next.Release())
-	require.NoError(t, next.Release())
 }
 
 func TestAcquireRejectsInvalidContexts(t *testing.T) {
@@ -112,7 +151,7 @@ func TestAdmissionProcessPoolIsBoundedAndExcludesExclusive(t *testing.T) {
 	secondManager := newManager(path, time.Millisecond)
 	thirdManager := newManager(path, time.Millisecond)
 
-	first, err := firstManager.acquire(context.Background(), AllowConcurrentProcesses)
+	first, err := firstManager.acquire(context.Background(), AllowConcurrent|AllowConcurrentProcesses)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, first.Release()) })
 	second, err := secondManager.acquire(context.Background(), AllowConcurrentProcesses)
@@ -130,7 +169,15 @@ func TestAdmissionProcessPoolIsBoundedAndExcludesExclusive(t *testing.T) {
 	_, err = exclusiveManager.acquire(exclusiveCtx, Exclusive)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 
+	borrowed, err := firstManager.acquire(t.Context(), AllowConcurrent|AllowConcurrentProcesses)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, borrowed.Release()) })
 	require.NoError(t, first.Release())
+	retainedCtx, retainedCancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer retainedCancel()
+	_, err = thirdManager.acquire(retainedCtx, AllowConcurrentProcesses)
+	require.ErrorIs(t, err, context.DeadlineExceeded, "borrower retains the first process slot")
+	require.NoError(t, borrowed.Release())
 	next, err := thirdManager.acquire(context.Background(), AllowConcurrentProcesses)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, next.Release()) })

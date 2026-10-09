@@ -51,8 +51,10 @@ children receive `MO_TEST_CLUSTER_ADMISSION_POOL_SIZE=2`. The admission manager
 uses that environment as its only pool-size source: it takes a shared gate and
 one exclusive slot, then publishes the lease. Ordinary exclusive owners exclude
 the whole pool. Unsuccessful attempts close their handles; cancellation ends
-retry waits. Same-process borrowing increments references, so the bound counts
-processes rather than clusters. Final release closes the slot and gate; lock
+retry waits. Process admission and same-process borrowing are independent
+permissions. A second cluster must explicitly opt into local borrowing even
+inside the pool; borrowing retains the active lock mode and increments
+references, so the bound counts processes rather than clusters. Final release closes the slot and gate; lock
 files are not unlinked while a holder can exist.
 
 `cluster.Start` is the single admission boundary before services start. Close

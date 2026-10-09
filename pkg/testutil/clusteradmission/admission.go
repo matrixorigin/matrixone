@@ -41,16 +41,15 @@ const (
 
 var processAdmission = newManager(filepath.Join(os.TempDir(), lockFilename), retryDelay)
 
-// Mode controls whether a test deliberately starts another complete cluster.
-// The default must be Exclusive: accidental overlap is otherwise invisible to
-// the runner-wide file lock and can starve HAKeeper. AllowConcurrentProcesses
-// is reserved for a bounded scheduler that supplies a process-pool size.
+// Mode combines independent permissions for same-process cluster borrowing
+// and bounded cross-process admission. Process scheduling never permits local
+// overlap by itself; accidental overlap must fail fast.
 type Mode uint8
 
 const (
-	Exclusive Mode = iota
-	AllowConcurrent
-	AllowConcurrentProcesses
+	Exclusive                Mode = 0
+	AllowConcurrent          Mode = 1 << 0
+	AllowConcurrentProcesses Mode = 1 << 1
 )
 
 // Lease represents one complete test cluster owned by the current process.
@@ -82,6 +81,8 @@ type Timing struct {
 // into AllowConcurrent for a test whose subject is multi-cluster behavior.
 // AllowConcurrentProcesses uses a shared gate and one of a bounded set of
 // slot locks, so ordinary Exclusive admission still excludes the whole pool.
+// Combine both permissions for intentional borrowing in a pooled process.
+// Borrowing retains the active lease's lock mode and does not acquire a slot.
 func Acquire(ctx context.Context, mode Mode) (*Lease, error) {
 	return processAdmission.acquire(ctx, mode)
 }
@@ -161,13 +162,13 @@ func (m *manager) acquire(ctx context.Context, mode Mode) (*Lease, error) {
 		return nil, err
 	}
 	if m.references > 0 {
-		if mode != AllowConcurrent && mode != AllowConcurrentProcesses {
+		if mode&AllowConcurrent == 0 {
 			return nil, moerr.NewInvalidStateNoCtx("another complete test cluster is already active in this process")
 		}
 		m.references++
 		return &Lease{manager: m, requested: requested, acquired: time.Now()}, nil
 	}
-	if mode == AllowConcurrentProcesses {
+	if mode&AllowConcurrentProcesses != 0 {
 		return m.acquireFromProcessPool(ctx, requested)
 	}
 

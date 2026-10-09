@@ -561,22 +561,69 @@ grep -q 'prebuilt embedded package example/b failed' "$UT_STDERR" || exit 92
 // starts with a brace. Every fixture package must retain its terminal event.
 func assertScheduleJSONReport(t *testing.T, report []byte, expected map[string]string) {
 	t.Helper()
-	lines := strings.Split(strings.TrimSpace(string(report)), "\n")
-	if len(lines) != len(expected) {
-		t.Fatalf("want %d report events, got %d: %s", len(expected), len(lines), report)
+	if err := checkScheduleJSONReport(report, expected); err != nil {
+		t.Fatalf("%v: %s", err, report)
 	}
+}
+
+func checkScheduleJSONReport(report []byte, expected map[string]string) error {
 	seen := make(map[string]bool)
-	for _, line := range lines {
+	for _, line := range strings.Split(strings.TrimSpace(string(report)), "\n") {
 		var event struct {
 			Action  string
 			Package string
 		}
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
-			t.Fatalf("invalid report JSON: %v: %s", err, line)
+			return fmt.Errorf("invalid report JSON: %w", err)
 		}
-		if expected[event.Package] != event.Action || seen[event.Package] {
-			t.Fatalf("unexpected terminal event: %s", line)
+		want, ok := expected[event.Package]
+		if event.Package == "" || event.Action == "" || !ok || want != event.Action || seen[event.Package] {
+			return fmt.Errorf("unexpected terminal event: %s", line)
 		}
 		seen[event.Package] = true
+	}
+	if len(seen) != len(expected) {
+		return fmt.Errorf("want %d report events, got %d", len(expected), len(seen))
+	}
+	return nil
+}
+
+func TestScheduleJSONReportValidation(t *testing.T) {
+	expected := map[string]string{"example/a": "pass", "example/b": "fail"}
+	const pass = `{"Package":"example/a","Action":"pass"}`
+	const fail = `{"Package":"example/b","Action":"fail"}`
+	for _, tc := range []struct {
+		name, report string
+		valid        bool
+	}{
+		{"complete", pass + "\n" + fail, true},
+		{"reordered-with-metadata", `{"Package":"example/b","Action":"fail","Elapsed":1}` + "\n" + pass, true},
+		{"empty-object", "{}\n" + fail, false},
+		{"foreign-without-action", `{"Package":"foreign/package"}` + "\n" + fail, false},
+		{"missing-package", `{"Action":"pass"}` + "\n" + fail, false},
+		{"empty-package", `{"Package":"","Action":"pass"}` + "\n" + fail, false},
+		{"null-package", `{"Package":null,"Action":"pass"}` + "\n" + fail, false},
+		{"missing-action", `{"Package":"example/a"}` + "\n" + fail, false},
+		{"empty-action", `{"Package":"example/a","Action":""}` + "\n" + fail, false},
+		{"null-action", `{"Package":"example/a","Action":null}` + "\n" + fail, false},
+		{"unknown-package", `{"Package":"foreign/package","Action":"pass"}` + "\n" + fail, false},
+		{"duplicate", pass + "\n" + pass, false},
+		{"wrong-action", `{"Package":"example/a","Action":"fail"}` + "\n" + fail, false},
+		{"malformed", "{\n" + fail, false},
+		{"trailing-json", pass + "{}\n" + fail, false},
+		{"wrong-package-type", `{"Package":42,"Action":"pass"}` + "\n" + fail, false},
+		{"wrong-action-type", `{"Package":"example/a","Action":true}` + "\n" + fail, false},
+		{"missing-event", pass, false},
+		{"empty-report", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := checkScheduleJSONReport([]byte(tc.report), expected)
+			if tc.valid && err != nil {
+				t.Fatalf("valid terminal report rejected: %v", err)
+			}
+			if !tc.valid && err == nil {
+				t.Fatal("invalid terminal report accepted")
+			}
+		})
 	}
 }
