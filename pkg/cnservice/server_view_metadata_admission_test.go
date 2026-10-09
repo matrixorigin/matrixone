@@ -576,6 +576,8 @@ func TestViewMetadataCatalogFenceRetryable(t *testing.T) {
 			upgradeOwnerActive: true,
 			want:               true,
 		},
+		{name: "unknown commit without owner", err: moerr.NewTxnUnknown(context.Background(), "fence"), want: false},
+		{name: "unknown commit with owner", err: moerr.NewTxnUnknown(context.Background(), "fence"), upgradeOwnerActive: true, want: false},
 		{name: "owner cancellation", err: context.Canceled, upgradeOwnerActive: true, want: false},
 		{name: "other failure", err: errors.New("executor failed"), upgradeOwnerActive: true, want: false},
 		{

@@ -2405,17 +2405,14 @@ function run_tests(){
         mark_ut_stage "routing" "validate shard and package partition" finish 1
         return 0
     fi
-    if ! [[ "${UT_ISSUES_BATCH_PARALLEL}" =~ ^[1-9][0-9]*$ ]] ||
-        (( 10#${UT_ISSUES_BATCH_PARALLEL} > 2 )) ||
-        (( UT_ISSUES_BATCHES == 1 && UT_ISSUES_BATCH_PARALLEL != 1 )) ||
-        (( 10#${UT_ISSUES_BATCH_PARALLEL} > 10#${UT_ISSUES_BATCHES} )); then
+    if [[ "${UT_ISSUES_BATCH_PARALLEL}" != 1 && "${UT_ISSUES_BATCH_PARALLEL}" != 2 ]] ||
+        [[ "${UT_ISSUES_BATCHES}" == 1 && "${UT_ISSUES_BATCH_PARALLEL}" != 1 ]]; then
         logger "ERR" "UT_ISSUES_BATCH_PARALLEL must be 1..2 and no greater than UT_ISSUES_BATCHES (1 requires parallel=1), got '${UT_ISSUES_BATCH_PARALLEL}'"
         UT_TEST_STATUS=1
         mark_ut_stage "routing" "validate shard and package partition" finish 1
         return 0
     fi
-    if ! [[ "${UT_EMBEDDED_PACKAGE_PARALLEL}" =~ ^[1-9][0-9]*$ ]] ||
-        (( 10#${UT_EMBEDDED_PACKAGE_PARALLEL} > 2 )); then
+    if [[ "${UT_EMBEDDED_PACKAGE_PARALLEL}" != 1 && "${UT_EMBEDDED_PACKAGE_PARALLEL}" != 2 ]]; then
         logger "ERR" "UT_EMBEDDED_PACKAGE_PARALLEL must be 1..2, got '${UT_EMBEDDED_PACKAGE_PARALLEL}'"
         UT_TEST_STATUS=1
         mark_ut_stage "routing" "validate shard and package partition" finish 1

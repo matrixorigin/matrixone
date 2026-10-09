@@ -273,10 +273,7 @@ func (m *manager) release() error {
 		m.references--
 		return nil
 	}
-	var releaseErr error
-	if m.lock != nil {
-		releaseErr = errors.Join(releaseErr, m.lock.Close())
-	}
+	releaseErr := m.lock.Close()
 	if m.gate != nil {
 		releaseErr = errors.Join(releaseErr, m.gate.Close())
 	}
