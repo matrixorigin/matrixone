@@ -18,16 +18,12 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
-	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 )
 
-var tenantUpgEntries = append(
-	[]versions.UpgradeEntry{upgradeInformationSchemaStatistics()},
-	v4_0_7.PythonRevisionUpgradeEntries()...,
-)
+var tenantUpgEntries = []versions.UpgradeEntry{upgradeInformationSchemaStatistics()}
 
 func upgradeInformationSchemaStatistics() versions.UpgradeEntry {
 	return versions.UpgradeEntry{

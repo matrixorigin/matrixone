@@ -14,6 +14,44 @@
 
 package v4_0_14
 
-import "github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+import (
+	"fmt"
 
-var tenantUpgEntries = []versions.UpgradeEntry{versions.InformationSchemaColumnsUpgradeEntry()}
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
+)
+
+// The v4.0.14 repair replays both the native COLUMNS view migration introduced
+// by the upstream branch and the idempotent Python UDF revision catalog repair.
+// Keep these entries in one version so tenants that already recorded v4.0.13
+// receive either or both repairs on the same upgrade attempt.
+var tenantUpgEntries = append(
+	[]versions.UpgradeEntry{upgradeInformationSchemaColumns()},
+	v4_0_7.PythonRevisionUpgradeEntries()...,
+)
+
+// upgradeInformationSchemaColumns refreshes the persisted COLUMNS view for
+// tenants that already passed the protocol-100 view migration. The current
+// definition adds the native UCA 4.0.0 charset/collation identities (selector
+// values 4 and 5); changing the old v4.0.10 entry would not reach tenants that
+// have already recorded a later tenant version.
+func upgradeInformationSchemaColumns() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:                  sysview.InformationDBConst,
+		TableName:               "COLUMNS",
+		UpgType:                 versions.MODIFY_VIEW,
+		UpgSql:                  sysview.InformationSchemaColumnsDDL,
+		RequiredProtocolVersion: defines.MORPCVersion109,
+		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+			exists, definition, err := versions.CheckViewDefinition(txn, accountID, sysview.InformationDBConst, "COLUMNS")
+			if err == nil && !exists {
+				exists, definition, err = versions.CheckViewDefinition(txn, accountID, sysview.InformationDBConst, "columns")
+			}
+			return exists && definition == sysview.InformationSchemaColumnsDDL, err
+		},
+		PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.COLUMNS;", sysview.InformationDBConst),
+	}
+}
