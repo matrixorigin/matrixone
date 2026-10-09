@@ -135,27 +135,52 @@ func TestRaceInventoryCancellationRetainsFailedDrainDiagnostics(t *testing.T) {
 	}
 	script := `source ./run_ut.sh UT
 function logger() { :; }
-function ut_test_inventory_after_pid() { kill -TERM "$$"; }
+original_drain_helper=$(declare -f wait_for_ut_process_group)
+owned_pid=""
+function ut_test_inventory_after_pid() {
+ owned_pid=$pid
+ IFS= read -r -t 5 ready <&9 || exit 94
+ [[ "$ready" == ready ]] || exit 94
+ kill -TERM "$$"
+}
 function wait_for_ut_process_group() { touch "$CASE_DIR/drain-checked"; return 1; }
 export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
-cat > "$CASE_DIR/list.sh" <<'EOF'
-#!/bin/bash
-printf '%s\n' "$$" > "$CASE_DIR/list-pid"
-trap '' TERM
-while :; do sleep 0.01; done
-EOF
-chmod +x "$CASE_DIR/list.sh"
+mkfifo "$CASE_DIR/list-ready" "$CASE_DIR/list-hold"
+exec 8<>"$CASE_DIR/list-hold" 9<>"$CASE_DIR/list-ready"
 cleanup() {
- if [[ -s "$CASE_DIR/list-pid" ]]; then
-  kill -KILL "$(<"$CASE_DIR/list-pid")" 2>/dev/null || true
+ local result=$?
+ if [[ -n "$owned_pid" ]]; then
+  printf 'release\n' >&8
+  terminate_ut_process_group "$owned_pid" KILL
+  eval "$original_drain_helper"
+  if wait_for_ut_process_group "$owned_pid" 1; then
+   wait "$owned_pid" 2>/dev/null || true
+  else
+   result=96
+  fi
  fi
+ exec 8>&- 9>&-
+ exit "$result"
 }
 trap cleanup EXIT
+trap 'touch "$CASE_DIR/term-restored"' TERM
+cat > "$CASE_DIR/list.sh" <<'EOF'
+#!/bin/bash
+trap '' TERM
+printf 'discovery diagnostic\n'
+printf 'ready\n' >&9
+IFS= read -r _ <&8
+EOF
+chmod +x "$CASE_DIR/list.sh"
 status=0
 run_race_inventory_with_deadline "$CASE_DIR" "$CASE_DIR/list.sh" "$CASE_DIR/inventory" "$(( $(date +%s) + 10 ))" || status=$?
 [[ "$status" == 125 ]] || exit 90
 [[ -e "$CASE_DIR/drain-checked" ]] || exit 91
-[[ -e "$CASE_DIR/inventory" ]] || exit 92
+grep -qx 'discovery diagnostic' "$CASE_DIR/inventory" || exit 92
+# Failed drainage returns without joining or deleting the live writer's output.
+ut_process_group_alive "$owned_pid" || exit 93
+kill -TERM "$$"
+[[ -e "$CASE_DIR/term-restored" ]] || exit 95
 `
 	out, err := scheduleHarnessWithMockTransform(t, script, scheduleHarnessMock(), transform)
 	if err != nil {
