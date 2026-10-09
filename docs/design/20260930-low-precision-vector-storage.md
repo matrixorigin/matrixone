@@ -80,7 +80,10 @@ reference produce for the same input:
   the zero-vector convention (self cosine distance 1 for the zero vector, ~0 for a nonzero one) — is
   a property of the cell, agreed on the CPU and the tensor cores (which apply the global in double)
   within the domain below, not an artifact of which executor runs. The CPU finishes such a decode in float64; this is
-  a decode-value rule at the type owner, not a per-query fallback. The agreement domain is every
+  a decode-value rule at the type owner, not a per-query fallback. Every CPU consumer applies it:
+  `At`, `Dequantize`, and the generated full-unit metric kernels, which decode a vecf4 unit whose
+  `global × blockScale` is below the float32 normal range through `At`
+  (`TestVecBlockMetricsUseAtDecode`; BVT `dtype/vecblock`). The agreement domain is every
   value representable as a float32 — which is every encoder-produced cell, since the encoder's inputs
   and outputs are float32 (nonzero magnitudes are ≥ 2^-149). A hand-built cell whose fully-scaled
   value is **below** float32 range (e.g. 2^-159) correctly rounds to 0 on the CPU (it returns one

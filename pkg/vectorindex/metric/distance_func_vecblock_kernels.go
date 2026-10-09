@@ -94,10 +94,73 @@ func vecBlockDotF4F4(x *types.BlockScaledCell, y *types.BlockScaledCell, units i
 	_, _, _ = f8, e8, f4
 	for u := 0; u < units; u++ {
 		off := u * 16
-		xs := x.Global * f8[x.Scales[off>>4]]
+		xbs := f8[x.Scales[off>>4]]
+		xs := x.Global * xbs
 		xe := (*[8]byte)(x.Elems[off>>1 : off>>1+8])
-		ys := y.Global * f8[y.Scales[off>>4]]
+		ybs := f8[y.Scales[off>>4]]
+		ys := y.Global * ybs
 		ye := (*[8]byte)(y.Elems[off>>1 : off>>1+8])
+		if (xs < 0x1p-126 && x.Global != 0 && xbs != 0) || (ys < 0x1p-126 && y.Global != 0 && ybs != 0) {
+			var xd [16]float32
+			for i := range xd {
+				xd[i] = x.At(off + i)
+			}
+			var yd [16]float32
+			for i := range yd {
+				yd[i] = y.At(off + i)
+			}
+			var t0, t1, t2, t3 float32
+			x0 := xd[0]
+			x1 := xd[1]
+			x2 := xd[2]
+			x3 := xd[3]
+			y0 := yd[0]
+			y1 := yd[1]
+			y2 := yd[2]
+			y3 := yd[3]
+			t0 += x0 * y0
+			t1 += x1 * y1
+			t2 += x2 * y2
+			t3 += x3 * y3
+			x4 := xd[4]
+			x5 := xd[5]
+			x6 := xd[6]
+			x7 := xd[7]
+			y4 := yd[4]
+			y5 := yd[5]
+			y6 := yd[6]
+			y7 := yd[7]
+			t0 += x4 * y4
+			t1 += x5 * y5
+			t2 += x6 * y6
+			t3 += x7 * y7
+			x8 := xd[8]
+			x9 := xd[9]
+			x10 := xd[10]
+			x11 := xd[11]
+			y8 := yd[8]
+			y9 := yd[9]
+			y10 := yd[10]
+			y11 := yd[11]
+			t0 += x8 * y8
+			t1 += x9 * y9
+			t2 += x10 * y10
+			t3 += x11 * y11
+			x12 := xd[12]
+			x13 := xd[13]
+			x14 := xd[14]
+			x15 := xd[15]
+			y12 := yd[12]
+			y13 := yd[13]
+			y14 := yd[14]
+			y15 := yd[15]
+			t0 += x12 * y12
+			t1 += x13 * y13
+			t2 += x14 * y14
+			t3 += x15 * y15
+			r += float64(t0+t1) + float64(t2+t3)
+			continue
+		}
 		var t0, t1, t2, t3 float32
 		xp0, xp2 := &f4[xe[0]], &f4[xe[1]]
 		x0 := float32(xp0[0] * xs)
@@ -229,9 +292,67 @@ func vecBlockDotF4F32(x *types.BlockScaledCell, y []float32, units int) (r float
 	_, _, _ = f8, e8, f4
 	for u := 0; u < units; u++ {
 		off := u * 16
-		xs := x.Global * f8[x.Scales[off>>4]]
+		xbs := f8[x.Scales[off>>4]]
+		xs := x.Global * xbs
 		xe := (*[8]byte)(x.Elems[off>>1 : off>>1+8])
 		yv := (*[16]float32)(y[off : off+16])
+		if xs < 0x1p-126 && x.Global != 0 && xbs != 0 {
+			var xd [16]float32
+			for i := range xd {
+				xd[i] = x.At(off + i)
+			}
+			var t0, t1, t2, t3 float32
+			x0 := xd[0]
+			x1 := xd[1]
+			x2 := xd[2]
+			x3 := xd[3]
+			y0 := yv[0]
+			y1 := yv[1]
+			y2 := yv[2]
+			y3 := yv[3]
+			t0 += x0 * y0
+			t1 += x1 * y1
+			t2 += x2 * y2
+			t3 += x3 * y3
+			x4 := xd[4]
+			x5 := xd[5]
+			x6 := xd[6]
+			x7 := xd[7]
+			y4 := yv[4]
+			y5 := yv[5]
+			y6 := yv[6]
+			y7 := yv[7]
+			t0 += x4 * y4
+			t1 += x5 * y5
+			t2 += x6 * y6
+			t3 += x7 * y7
+			x8 := xd[8]
+			x9 := xd[9]
+			x10 := xd[10]
+			x11 := xd[11]
+			y8 := yv[8]
+			y9 := yv[9]
+			y10 := yv[10]
+			y11 := yv[11]
+			t0 += x8 * y8
+			t1 += x9 * y9
+			t2 += x10 * y10
+			t3 += x11 * y11
+			x12 := xd[12]
+			x13 := xd[13]
+			x14 := xd[14]
+			x15 := xd[15]
+			y12 := yv[12]
+			y13 := yv[13]
+			y14 := yv[14]
+			y15 := yv[15]
+			t0 += x12 * y12
+			t1 += x13 * y13
+			t2 += x14 * y14
+			t3 += x15 * y15
+			r += float64(t0+t1) + float64(t2+t3)
+			continue
+		}
 		var t0, t1, t2, t3 float32
 		xp0, xp2 := &f4[xe[0]], &f4[xe[1]]
 		x0 := float32(xp0[0] * xs)
@@ -298,8 +419,70 @@ func vecBlockDotF8F4(x *types.BlockScaledCell, y *types.BlockScaledCell, units i
 		off := u * 16
 		xs := x.Global * e8[x.Scales[off>>5]]
 		xe := (*[16]byte)(x.Elems[off : off+16])
-		ys := y.Global * f8[y.Scales[off>>4]]
+		ybs := f8[y.Scales[off>>4]]
+		ys := y.Global * ybs
 		ye := (*[8]byte)(y.Elems[off>>1 : off>>1+8])
+		if ys < 0x1p-126 && y.Global != 0 && ybs != 0 {
+			var xd [16]float32
+			for i := range xd {
+				xd[i] = x.At(off + i)
+			}
+			var yd [16]float32
+			for i := range yd {
+				yd[i] = y.At(off + i)
+			}
+			var t0, t1, t2, t3 float32
+			x0 := xd[0]
+			x1 := xd[1]
+			x2 := xd[2]
+			x3 := xd[3]
+			y0 := yd[0]
+			y1 := yd[1]
+			y2 := yd[2]
+			y3 := yd[3]
+			t0 += x0 * y0
+			t1 += x1 * y1
+			t2 += x2 * y2
+			t3 += x3 * y3
+			x4 := xd[4]
+			x5 := xd[5]
+			x6 := xd[6]
+			x7 := xd[7]
+			y4 := yd[4]
+			y5 := yd[5]
+			y6 := yd[6]
+			y7 := yd[7]
+			t0 += x4 * y4
+			t1 += x5 * y5
+			t2 += x6 * y6
+			t3 += x7 * y7
+			x8 := xd[8]
+			x9 := xd[9]
+			x10 := xd[10]
+			x11 := xd[11]
+			y8 := yd[8]
+			y9 := yd[9]
+			y10 := yd[10]
+			y11 := yd[11]
+			t0 += x8 * y8
+			t1 += x9 * y9
+			t2 += x10 * y10
+			t3 += x11 * y11
+			x12 := xd[12]
+			x13 := xd[13]
+			x14 := xd[14]
+			x15 := xd[15]
+			y12 := yd[12]
+			y13 := yd[13]
+			y14 := yd[14]
+			y15 := yd[15]
+			t0 += x12 * y12
+			t1 += x13 * y13
+			t2 += x14 * y14
+			t3 += x15 * y15
+			r += float64(t0+t1) + float64(t2+t3)
+			continue
+		}
 		var t0, t1, t2, t3 float32
 		x0 := float32(f8[xe[0]] * xs)
 		x1 := float32(f8[xe[1]] * xs)
@@ -444,10 +627,89 @@ func vecBlockL2SqF4F4(x *types.BlockScaledCell, y *types.BlockScaledCell, units 
 	_, _, _ = f8, e8, f4
 	for u := 0; u < units; u++ {
 		off := u * 16
-		xs := x.Global * f8[x.Scales[off>>4]]
+		xbs := f8[x.Scales[off>>4]]
+		xs := x.Global * xbs
 		xe := (*[8]byte)(x.Elems[off>>1 : off>>1+8])
-		ys := y.Global * f8[y.Scales[off>>4]]
+		ybs := f8[y.Scales[off>>4]]
+		ys := y.Global * ybs
 		ye := (*[8]byte)(y.Elems[off>>1 : off>>1+8])
+		if (xs < 0x1p-126 && x.Global != 0 && xbs != 0) || (ys < 0x1p-126 && y.Global != 0 && ybs != 0) {
+			var xd [16]float32
+			for i := range xd {
+				xd[i] = x.At(off + i)
+			}
+			var yd [16]float32
+			for i := range yd {
+				yd[i] = y.At(off + i)
+			}
+			var t0, t1, t2, t3 float32
+			x0 := xd[0]
+			x1 := xd[1]
+			x2 := xd[2]
+			x3 := xd[3]
+			y0 := yd[0]
+			y1 := yd[1]
+			y2 := yd[2]
+			y3 := yd[3]
+			d0 := x0 - y0
+			t0 += d0 * d0
+			d1 := x1 - y1
+			t1 += d1 * d1
+			d2 := x2 - y2
+			t2 += d2 * d2
+			d3 := x3 - y3
+			t3 += d3 * d3
+			x4 := xd[4]
+			x5 := xd[5]
+			x6 := xd[6]
+			x7 := xd[7]
+			y4 := yd[4]
+			y5 := yd[5]
+			y6 := yd[6]
+			y7 := yd[7]
+			d4 := x4 - y4
+			t0 += d4 * d4
+			d5 := x5 - y5
+			t1 += d5 * d5
+			d6 := x6 - y6
+			t2 += d6 * d6
+			d7 := x7 - y7
+			t3 += d7 * d7
+			x8 := xd[8]
+			x9 := xd[9]
+			x10 := xd[10]
+			x11 := xd[11]
+			y8 := yd[8]
+			y9 := yd[9]
+			y10 := yd[10]
+			y11 := yd[11]
+			d8 := x8 - y8
+			t0 += d8 * d8
+			d9 := x9 - y9
+			t1 += d9 * d9
+			d10 := x10 - y10
+			t2 += d10 * d10
+			d11 := x11 - y11
+			t3 += d11 * d11
+			x12 := xd[12]
+			x13 := xd[13]
+			x14 := xd[14]
+			x15 := xd[15]
+			y12 := yd[12]
+			y13 := yd[13]
+			y14 := yd[14]
+			y15 := yd[15]
+			d12 := x12 - y12
+			t0 += d12 * d12
+			d13 := x13 - y13
+			t1 += d13 * d13
+			d14 := x14 - y14
+			t2 += d14 * d14
+			d15 := x15 - y15
+			t3 += d15 * d15
+			r += float64(t0+t1) + float64(t2+t3)
+			continue
+		}
 		var t0, t1, t2, t3 float32
 		xp0, xp2 := &f4[xe[0]], &f4[xe[1]]
 		x0 := float32(xp0[0] * xs)
@@ -611,9 +873,83 @@ func vecBlockL2SqF4F32(x *types.BlockScaledCell, y []float32, units int) (r floa
 	_, _, _ = f8, e8, f4
 	for u := 0; u < units; u++ {
 		off := u * 16
-		xs := x.Global * f8[x.Scales[off>>4]]
+		xbs := f8[x.Scales[off>>4]]
+		xs := x.Global * xbs
 		xe := (*[8]byte)(x.Elems[off>>1 : off>>1+8])
 		yv := (*[16]float32)(y[off : off+16])
+		if xs < 0x1p-126 && x.Global != 0 && xbs != 0 {
+			var xd [16]float32
+			for i := range xd {
+				xd[i] = x.At(off + i)
+			}
+			var t0, t1, t2, t3 float32
+			x0 := xd[0]
+			x1 := xd[1]
+			x2 := xd[2]
+			x3 := xd[3]
+			y0 := yv[0]
+			y1 := yv[1]
+			y2 := yv[2]
+			y3 := yv[3]
+			d0 := x0 - y0
+			t0 += d0 * d0
+			d1 := x1 - y1
+			t1 += d1 * d1
+			d2 := x2 - y2
+			t2 += d2 * d2
+			d3 := x3 - y3
+			t3 += d3 * d3
+			x4 := xd[4]
+			x5 := xd[5]
+			x6 := xd[6]
+			x7 := xd[7]
+			y4 := yv[4]
+			y5 := yv[5]
+			y6 := yv[6]
+			y7 := yv[7]
+			d4 := x4 - y4
+			t0 += d4 * d4
+			d5 := x5 - y5
+			t1 += d5 * d5
+			d6 := x6 - y6
+			t2 += d6 * d6
+			d7 := x7 - y7
+			t3 += d7 * d7
+			x8 := xd[8]
+			x9 := xd[9]
+			x10 := xd[10]
+			x11 := xd[11]
+			y8 := yv[8]
+			y9 := yv[9]
+			y10 := yv[10]
+			y11 := yv[11]
+			d8 := x8 - y8
+			t0 += d8 * d8
+			d9 := x9 - y9
+			t1 += d9 * d9
+			d10 := x10 - y10
+			t2 += d10 * d10
+			d11 := x11 - y11
+			t3 += d11 * d11
+			x12 := xd[12]
+			x13 := xd[13]
+			x14 := xd[14]
+			x15 := xd[15]
+			y12 := yv[12]
+			y13 := yv[13]
+			y14 := yv[14]
+			y15 := yv[15]
+			d12 := x12 - y12
+			t0 += d12 * d12
+			d13 := x13 - y13
+			t1 += d13 * d13
+			d14 := x14 - y14
+			t2 += d14 * d14
+			d15 := x15 - y15
+			t3 += d15 * d15
+			r += float64(t0+t1) + float64(t2+t3)
+			continue
+		}
 		var t0, t1, t2, t3 float32
 		xp0, xp2 := &f4[xe[0]], &f4[xe[1]]
 		x0 := float32(xp0[0] * xs)
@@ -696,8 +1032,86 @@ func vecBlockL2SqF8F4(x *types.BlockScaledCell, y *types.BlockScaledCell, units 
 		off := u * 16
 		xs := x.Global * e8[x.Scales[off>>5]]
 		xe := (*[16]byte)(x.Elems[off : off+16])
-		ys := y.Global * f8[y.Scales[off>>4]]
+		ybs := f8[y.Scales[off>>4]]
+		ys := y.Global * ybs
 		ye := (*[8]byte)(y.Elems[off>>1 : off>>1+8])
+		if ys < 0x1p-126 && y.Global != 0 && ybs != 0 {
+			var xd [16]float32
+			for i := range xd {
+				xd[i] = x.At(off + i)
+			}
+			var yd [16]float32
+			for i := range yd {
+				yd[i] = y.At(off + i)
+			}
+			var t0, t1, t2, t3 float32
+			x0 := xd[0]
+			x1 := xd[1]
+			x2 := xd[2]
+			x3 := xd[3]
+			y0 := yd[0]
+			y1 := yd[1]
+			y2 := yd[2]
+			y3 := yd[3]
+			d0 := x0 - y0
+			t0 += d0 * d0
+			d1 := x1 - y1
+			t1 += d1 * d1
+			d2 := x2 - y2
+			t2 += d2 * d2
+			d3 := x3 - y3
+			t3 += d3 * d3
+			x4 := xd[4]
+			x5 := xd[5]
+			x6 := xd[6]
+			x7 := xd[7]
+			y4 := yd[4]
+			y5 := yd[5]
+			y6 := yd[6]
+			y7 := yd[7]
+			d4 := x4 - y4
+			t0 += d4 * d4
+			d5 := x5 - y5
+			t1 += d5 * d5
+			d6 := x6 - y6
+			t2 += d6 * d6
+			d7 := x7 - y7
+			t3 += d7 * d7
+			x8 := xd[8]
+			x9 := xd[9]
+			x10 := xd[10]
+			x11 := xd[11]
+			y8 := yd[8]
+			y9 := yd[9]
+			y10 := yd[10]
+			y11 := yd[11]
+			d8 := x8 - y8
+			t0 += d8 * d8
+			d9 := x9 - y9
+			t1 += d9 * d9
+			d10 := x10 - y10
+			t2 += d10 * d10
+			d11 := x11 - y11
+			t3 += d11 * d11
+			x12 := xd[12]
+			x13 := xd[13]
+			x14 := xd[14]
+			x15 := xd[15]
+			y12 := yd[12]
+			y13 := yd[13]
+			y14 := yd[14]
+			y15 := yd[15]
+			d12 := x12 - y12
+			t0 += d12 * d12
+			d13 := x13 - y13
+			t1 += d13 * d13
+			d14 := x14 - y14
+			t2 += d14 * d14
+			d15 := x15 - y15
+			t3 += d15 * d15
+			r += float64(t0+t1) + float64(t2+t3)
+			continue
+		}
 		var t0, t1, t2, t3 float32
 		x0 := float32(f8[xe[0]] * xs)
 		x1 := float32(f8[xe[1]] * xs)
@@ -842,10 +1256,73 @@ func vecBlockL1F4F4(x *types.BlockScaledCell, y *types.BlockScaledCell, units in
 	_, _, _ = f8, e8, f4
 	for u := 0; u < units; u++ {
 		off := u * 16
-		xs := x.Global * f8[x.Scales[off>>4]]
+		xbs := f8[x.Scales[off>>4]]
+		xs := x.Global * xbs
 		xe := (*[8]byte)(x.Elems[off>>1 : off>>1+8])
-		ys := y.Global * f8[y.Scales[off>>4]]
+		ybs := f8[y.Scales[off>>4]]
+		ys := y.Global * ybs
 		ye := (*[8]byte)(y.Elems[off>>1 : off>>1+8])
+		if (xs < 0x1p-126 && x.Global != 0 && xbs != 0) || (ys < 0x1p-126 && y.Global != 0 && ybs != 0) {
+			var xd [16]float32
+			for i := range xd {
+				xd[i] = x.At(off + i)
+			}
+			var yd [16]float32
+			for i := range yd {
+				yd[i] = y.At(off + i)
+			}
+			var t0, t1, t2, t3 float32
+			x0 := xd[0]
+			x1 := xd[1]
+			x2 := xd[2]
+			x3 := xd[3]
+			y0 := yd[0]
+			y1 := yd[1]
+			y2 := yd[2]
+			y3 := yd[3]
+			t0 += math.Float32frombits(math.Float32bits(x0-y0) &^ (1 << 31))
+			t1 += math.Float32frombits(math.Float32bits(x1-y1) &^ (1 << 31))
+			t2 += math.Float32frombits(math.Float32bits(x2-y2) &^ (1 << 31))
+			t3 += math.Float32frombits(math.Float32bits(x3-y3) &^ (1 << 31))
+			x4 := xd[4]
+			x5 := xd[5]
+			x6 := xd[6]
+			x7 := xd[7]
+			y4 := yd[4]
+			y5 := yd[5]
+			y6 := yd[6]
+			y7 := yd[7]
+			t0 += math.Float32frombits(math.Float32bits(x4-y4) &^ (1 << 31))
+			t1 += math.Float32frombits(math.Float32bits(x5-y5) &^ (1 << 31))
+			t2 += math.Float32frombits(math.Float32bits(x6-y6) &^ (1 << 31))
+			t3 += math.Float32frombits(math.Float32bits(x7-y7) &^ (1 << 31))
+			x8 := xd[8]
+			x9 := xd[9]
+			x10 := xd[10]
+			x11 := xd[11]
+			y8 := yd[8]
+			y9 := yd[9]
+			y10 := yd[10]
+			y11 := yd[11]
+			t0 += math.Float32frombits(math.Float32bits(x8-y8) &^ (1 << 31))
+			t1 += math.Float32frombits(math.Float32bits(x9-y9) &^ (1 << 31))
+			t2 += math.Float32frombits(math.Float32bits(x10-y10) &^ (1 << 31))
+			t3 += math.Float32frombits(math.Float32bits(x11-y11) &^ (1 << 31))
+			x12 := xd[12]
+			x13 := xd[13]
+			x14 := xd[14]
+			x15 := xd[15]
+			y12 := yd[12]
+			y13 := yd[13]
+			y14 := yd[14]
+			y15 := yd[15]
+			t0 += math.Float32frombits(math.Float32bits(x12-y12) &^ (1 << 31))
+			t1 += math.Float32frombits(math.Float32bits(x13-y13) &^ (1 << 31))
+			t2 += math.Float32frombits(math.Float32bits(x14-y14) &^ (1 << 31))
+			t3 += math.Float32frombits(math.Float32bits(x15-y15) &^ (1 << 31))
+			r += float64(t0+t1) + float64(t2+t3)
+			continue
+		}
 		var t0, t1, t2, t3 float32
 		xp0, xp2 := &f4[xe[0]], &f4[xe[1]]
 		x0 := float32(xp0[0] * xs)
@@ -977,9 +1454,67 @@ func vecBlockL1F4F32(x *types.BlockScaledCell, y []float32, units int) (r float6
 	_, _, _ = f8, e8, f4
 	for u := 0; u < units; u++ {
 		off := u * 16
-		xs := x.Global * f8[x.Scales[off>>4]]
+		xbs := f8[x.Scales[off>>4]]
+		xs := x.Global * xbs
 		xe := (*[8]byte)(x.Elems[off>>1 : off>>1+8])
 		yv := (*[16]float32)(y[off : off+16])
+		if xs < 0x1p-126 && x.Global != 0 && xbs != 0 {
+			var xd [16]float32
+			for i := range xd {
+				xd[i] = x.At(off + i)
+			}
+			var t0, t1, t2, t3 float32
+			x0 := xd[0]
+			x1 := xd[1]
+			x2 := xd[2]
+			x3 := xd[3]
+			y0 := yv[0]
+			y1 := yv[1]
+			y2 := yv[2]
+			y3 := yv[3]
+			t0 += math.Float32frombits(math.Float32bits(x0-y0) &^ (1 << 31))
+			t1 += math.Float32frombits(math.Float32bits(x1-y1) &^ (1 << 31))
+			t2 += math.Float32frombits(math.Float32bits(x2-y2) &^ (1 << 31))
+			t3 += math.Float32frombits(math.Float32bits(x3-y3) &^ (1 << 31))
+			x4 := xd[4]
+			x5 := xd[5]
+			x6 := xd[6]
+			x7 := xd[7]
+			y4 := yv[4]
+			y5 := yv[5]
+			y6 := yv[6]
+			y7 := yv[7]
+			t0 += math.Float32frombits(math.Float32bits(x4-y4) &^ (1 << 31))
+			t1 += math.Float32frombits(math.Float32bits(x5-y5) &^ (1 << 31))
+			t2 += math.Float32frombits(math.Float32bits(x6-y6) &^ (1 << 31))
+			t3 += math.Float32frombits(math.Float32bits(x7-y7) &^ (1 << 31))
+			x8 := xd[8]
+			x9 := xd[9]
+			x10 := xd[10]
+			x11 := xd[11]
+			y8 := yv[8]
+			y9 := yv[9]
+			y10 := yv[10]
+			y11 := yv[11]
+			t0 += math.Float32frombits(math.Float32bits(x8-y8) &^ (1 << 31))
+			t1 += math.Float32frombits(math.Float32bits(x9-y9) &^ (1 << 31))
+			t2 += math.Float32frombits(math.Float32bits(x10-y10) &^ (1 << 31))
+			t3 += math.Float32frombits(math.Float32bits(x11-y11) &^ (1 << 31))
+			x12 := xd[12]
+			x13 := xd[13]
+			x14 := xd[14]
+			x15 := xd[15]
+			y12 := yv[12]
+			y13 := yv[13]
+			y14 := yv[14]
+			y15 := yv[15]
+			t0 += math.Float32frombits(math.Float32bits(x12-y12) &^ (1 << 31))
+			t1 += math.Float32frombits(math.Float32bits(x13-y13) &^ (1 << 31))
+			t2 += math.Float32frombits(math.Float32bits(x14-y14) &^ (1 << 31))
+			t3 += math.Float32frombits(math.Float32bits(x15-y15) &^ (1 << 31))
+			r += float64(t0+t1) + float64(t2+t3)
+			continue
+		}
 		var t0, t1, t2, t3 float32
 		xp0, xp2 := &f4[xe[0]], &f4[xe[1]]
 		x0 := float32(xp0[0] * xs)
@@ -1046,8 +1581,70 @@ func vecBlockL1F8F4(x *types.BlockScaledCell, y *types.BlockScaledCell, units in
 		off := u * 16
 		xs := x.Global * e8[x.Scales[off>>5]]
 		xe := (*[16]byte)(x.Elems[off : off+16])
-		ys := y.Global * f8[y.Scales[off>>4]]
+		ybs := f8[y.Scales[off>>4]]
+		ys := y.Global * ybs
 		ye := (*[8]byte)(y.Elems[off>>1 : off>>1+8])
+		if ys < 0x1p-126 && y.Global != 0 && ybs != 0 {
+			var xd [16]float32
+			for i := range xd {
+				xd[i] = x.At(off + i)
+			}
+			var yd [16]float32
+			for i := range yd {
+				yd[i] = y.At(off + i)
+			}
+			var t0, t1, t2, t3 float32
+			x0 := xd[0]
+			x1 := xd[1]
+			x2 := xd[2]
+			x3 := xd[3]
+			y0 := yd[0]
+			y1 := yd[1]
+			y2 := yd[2]
+			y3 := yd[3]
+			t0 += math.Float32frombits(math.Float32bits(x0-y0) &^ (1 << 31))
+			t1 += math.Float32frombits(math.Float32bits(x1-y1) &^ (1 << 31))
+			t2 += math.Float32frombits(math.Float32bits(x2-y2) &^ (1 << 31))
+			t3 += math.Float32frombits(math.Float32bits(x3-y3) &^ (1 << 31))
+			x4 := xd[4]
+			x5 := xd[5]
+			x6 := xd[6]
+			x7 := xd[7]
+			y4 := yd[4]
+			y5 := yd[5]
+			y6 := yd[6]
+			y7 := yd[7]
+			t0 += math.Float32frombits(math.Float32bits(x4-y4) &^ (1 << 31))
+			t1 += math.Float32frombits(math.Float32bits(x5-y5) &^ (1 << 31))
+			t2 += math.Float32frombits(math.Float32bits(x6-y6) &^ (1 << 31))
+			t3 += math.Float32frombits(math.Float32bits(x7-y7) &^ (1 << 31))
+			x8 := xd[8]
+			x9 := xd[9]
+			x10 := xd[10]
+			x11 := xd[11]
+			y8 := yd[8]
+			y9 := yd[9]
+			y10 := yd[10]
+			y11 := yd[11]
+			t0 += math.Float32frombits(math.Float32bits(x8-y8) &^ (1 << 31))
+			t1 += math.Float32frombits(math.Float32bits(x9-y9) &^ (1 << 31))
+			t2 += math.Float32frombits(math.Float32bits(x10-y10) &^ (1 << 31))
+			t3 += math.Float32frombits(math.Float32bits(x11-y11) &^ (1 << 31))
+			x12 := xd[12]
+			x13 := xd[13]
+			x14 := xd[14]
+			x15 := xd[15]
+			y12 := yd[12]
+			y13 := yd[13]
+			y14 := yd[14]
+			y15 := yd[15]
+			t0 += math.Float32frombits(math.Float32bits(x12-y12) &^ (1 << 31))
+			t1 += math.Float32frombits(math.Float32bits(x13-y13) &^ (1 << 31))
+			t2 += math.Float32frombits(math.Float32bits(x14-y14) &^ (1 << 31))
+			t3 += math.Float32frombits(math.Float32bits(x15-y15) &^ (1 << 31))
+			r += float64(t0+t1) + float64(t2+t3)
+			continue
+		}
 		var t0, t1, t2, t3 float32
 		x0 := float32(f8[xe[0]] * xs)
 		x1 := float32(f8[xe[1]] * xs)
@@ -1210,10 +1807,107 @@ func vecBlockCosF4F4(x *types.BlockScaledCell, y *types.BlockScaledCell, units i
 	_, _, _ = f8, e8, f4
 	for u := 0; u < units; u++ {
 		off := u * 16
-		xs := x.Global * f8[x.Scales[off>>4]]
+		xbs := f8[x.Scales[off>>4]]
+		xs := x.Global * xbs
 		xe := (*[8]byte)(x.Elems[off>>1 : off>>1+8])
-		ys := y.Global * f8[y.Scales[off>>4]]
+		ybs := f8[y.Scales[off>>4]]
+		ys := y.Global * ybs
 		ye := (*[8]byte)(y.Elems[off>>1 : off>>1+8])
+		if (xs < 0x1p-126 && x.Global != 0 && xbs != 0) || (ys < 0x1p-126 && y.Global != 0 && ybs != 0) {
+			var xd [16]float32
+			for i := range xd {
+				xd[i] = x.At(off + i)
+			}
+			var yd [16]float32
+			for i := range yd {
+				yd[i] = y.At(off + i)
+			}
+			var td0, td1, tx0, tx1, ty0, ty1 float32
+			x0 := xd[0]
+			x1 := xd[1]
+			x2 := xd[2]
+			x3 := xd[3]
+			y0 := yd[0]
+			y1 := yd[1]
+			y2 := yd[2]
+			y3 := yd[3]
+			td0 += x0 * y0
+			tx0 += x0 * x0
+			ty0 += y0 * y0
+			td1 += x1 * y1
+			tx1 += x1 * x1
+			ty1 += y1 * y1
+			td0 += x2 * y2
+			tx0 += x2 * x2
+			ty0 += y2 * y2
+			td1 += x3 * y3
+			tx1 += x3 * x3
+			ty1 += y3 * y3
+			x4 := xd[4]
+			x5 := xd[5]
+			x6 := xd[6]
+			x7 := xd[7]
+			y4 := yd[4]
+			y5 := yd[5]
+			y6 := yd[6]
+			y7 := yd[7]
+			td0 += x4 * y4
+			tx0 += x4 * x4
+			ty0 += y4 * y4
+			td1 += x5 * y5
+			tx1 += x5 * x5
+			ty1 += y5 * y5
+			td0 += x6 * y6
+			tx0 += x6 * x6
+			ty0 += y6 * y6
+			td1 += x7 * y7
+			tx1 += x7 * x7
+			ty1 += y7 * y7
+			x8 := xd[8]
+			x9 := xd[9]
+			x10 := xd[10]
+			x11 := xd[11]
+			y8 := yd[8]
+			y9 := yd[9]
+			y10 := yd[10]
+			y11 := yd[11]
+			td0 += x8 * y8
+			tx0 += x8 * x8
+			ty0 += y8 * y8
+			td1 += x9 * y9
+			tx1 += x9 * x9
+			ty1 += y9 * y9
+			td0 += x10 * y10
+			tx0 += x10 * x10
+			ty0 += y10 * y10
+			td1 += x11 * y11
+			tx1 += x11 * x11
+			ty1 += y11 * y11
+			x12 := xd[12]
+			x13 := xd[13]
+			x14 := xd[14]
+			x15 := xd[15]
+			y12 := yd[12]
+			y13 := yd[13]
+			y14 := yd[14]
+			y15 := yd[15]
+			td0 += x12 * y12
+			tx0 += x12 * x12
+			ty0 += y12 * y12
+			td1 += x13 * y13
+			tx1 += x13 * x13
+			ty1 += y13 * y13
+			td0 += x14 * y14
+			tx0 += x14 * x14
+			ty0 += y14 * y14
+			td1 += x15 * y15
+			tx1 += x15 * x15
+			ty1 += y15 * y15
+			dot += float64(td0 + td1)
+			nx += float64(tx0 + tx1)
+			ny += float64(ty0 + ty1)
+			continue
+		}
 		var td0, td1, tx0, tx1, ty0, ty1 float32
 		xp0, xp2 := &f4[xe[0]], &f4[xe[1]]
 		x0 := float32(xp0[0] * xs)
@@ -1413,9 +2107,101 @@ func vecBlockCosF4F32(x *types.BlockScaledCell, y []float32, units int) (dot, nx
 	_, _, _ = f8, e8, f4
 	for u := 0; u < units; u++ {
 		off := u * 16
-		xs := x.Global * f8[x.Scales[off>>4]]
+		xbs := f8[x.Scales[off>>4]]
+		xs := x.Global * xbs
 		xe := (*[8]byte)(x.Elems[off>>1 : off>>1+8])
 		yv := (*[16]float32)(y[off : off+16])
+		if xs < 0x1p-126 && x.Global != 0 && xbs != 0 {
+			var xd [16]float32
+			for i := range xd {
+				xd[i] = x.At(off + i)
+			}
+			var td0, td1, tx0, tx1, ty0, ty1 float32
+			x0 := xd[0]
+			x1 := xd[1]
+			x2 := xd[2]
+			x3 := xd[3]
+			y0 := yv[0]
+			y1 := yv[1]
+			y2 := yv[2]
+			y3 := yv[3]
+			td0 += x0 * y0
+			tx0 += x0 * x0
+			ty0 += y0 * y0
+			td1 += x1 * y1
+			tx1 += x1 * x1
+			ty1 += y1 * y1
+			td0 += x2 * y2
+			tx0 += x2 * x2
+			ty0 += y2 * y2
+			td1 += x3 * y3
+			tx1 += x3 * x3
+			ty1 += y3 * y3
+			x4 := xd[4]
+			x5 := xd[5]
+			x6 := xd[6]
+			x7 := xd[7]
+			y4 := yv[4]
+			y5 := yv[5]
+			y6 := yv[6]
+			y7 := yv[7]
+			td0 += x4 * y4
+			tx0 += x4 * x4
+			ty0 += y4 * y4
+			td1 += x5 * y5
+			tx1 += x5 * x5
+			ty1 += y5 * y5
+			td0 += x6 * y6
+			tx0 += x6 * x6
+			ty0 += y6 * y6
+			td1 += x7 * y7
+			tx1 += x7 * x7
+			ty1 += y7 * y7
+			x8 := xd[8]
+			x9 := xd[9]
+			x10 := xd[10]
+			x11 := xd[11]
+			y8 := yv[8]
+			y9 := yv[9]
+			y10 := yv[10]
+			y11 := yv[11]
+			td0 += x8 * y8
+			tx0 += x8 * x8
+			ty0 += y8 * y8
+			td1 += x9 * y9
+			tx1 += x9 * x9
+			ty1 += y9 * y9
+			td0 += x10 * y10
+			tx0 += x10 * x10
+			ty0 += y10 * y10
+			td1 += x11 * y11
+			tx1 += x11 * x11
+			ty1 += y11 * y11
+			x12 := xd[12]
+			x13 := xd[13]
+			x14 := xd[14]
+			x15 := xd[15]
+			y12 := yv[12]
+			y13 := yv[13]
+			y14 := yv[14]
+			y15 := yv[15]
+			td0 += x12 * y12
+			tx0 += x12 * x12
+			ty0 += y12 * y12
+			td1 += x13 * y13
+			tx1 += x13 * x13
+			ty1 += y13 * y13
+			td0 += x14 * y14
+			tx0 += x14 * x14
+			ty0 += y14 * y14
+			td1 += x15 * y15
+			tx1 += x15 * x15
+			ty1 += y15 * y15
+			dot += float64(td0 + td1)
+			nx += float64(tx0 + tx1)
+			ny += float64(ty0 + ty1)
+			continue
+		}
 		var td0, td1, tx0, tx1, ty0, ty1 float32
 		xp0, xp2 := &f4[xe[0]], &f4[xe[1]]
 		x0 := float32(xp0[0] * xs)
@@ -1516,8 +2302,104 @@ func vecBlockCosF8F4(x *types.BlockScaledCell, y *types.BlockScaledCell, units i
 		off := u * 16
 		xs := x.Global * e8[x.Scales[off>>5]]
 		xe := (*[16]byte)(x.Elems[off : off+16])
-		ys := y.Global * f8[y.Scales[off>>4]]
+		ybs := f8[y.Scales[off>>4]]
+		ys := y.Global * ybs
 		ye := (*[8]byte)(y.Elems[off>>1 : off>>1+8])
+		if ys < 0x1p-126 && y.Global != 0 && ybs != 0 {
+			var xd [16]float32
+			for i := range xd {
+				xd[i] = x.At(off + i)
+			}
+			var yd [16]float32
+			for i := range yd {
+				yd[i] = y.At(off + i)
+			}
+			var td0, td1, tx0, tx1, ty0, ty1 float32
+			x0 := xd[0]
+			x1 := xd[1]
+			x2 := xd[2]
+			x3 := xd[3]
+			y0 := yd[0]
+			y1 := yd[1]
+			y2 := yd[2]
+			y3 := yd[3]
+			td0 += x0 * y0
+			tx0 += x0 * x0
+			ty0 += y0 * y0
+			td1 += x1 * y1
+			tx1 += x1 * x1
+			ty1 += y1 * y1
+			td0 += x2 * y2
+			tx0 += x2 * x2
+			ty0 += y2 * y2
+			td1 += x3 * y3
+			tx1 += x3 * x3
+			ty1 += y3 * y3
+			x4 := xd[4]
+			x5 := xd[5]
+			x6 := xd[6]
+			x7 := xd[7]
+			y4 := yd[4]
+			y5 := yd[5]
+			y6 := yd[6]
+			y7 := yd[7]
+			td0 += x4 * y4
+			tx0 += x4 * x4
+			ty0 += y4 * y4
+			td1 += x5 * y5
+			tx1 += x5 * x5
+			ty1 += y5 * y5
+			td0 += x6 * y6
+			tx0 += x6 * x6
+			ty0 += y6 * y6
+			td1 += x7 * y7
+			tx1 += x7 * x7
+			ty1 += y7 * y7
+			x8 := xd[8]
+			x9 := xd[9]
+			x10 := xd[10]
+			x11 := xd[11]
+			y8 := yd[8]
+			y9 := yd[9]
+			y10 := yd[10]
+			y11 := yd[11]
+			td0 += x8 * y8
+			tx0 += x8 * x8
+			ty0 += y8 * y8
+			td1 += x9 * y9
+			tx1 += x9 * x9
+			ty1 += y9 * y9
+			td0 += x10 * y10
+			tx0 += x10 * x10
+			ty0 += y10 * y10
+			td1 += x11 * y11
+			tx1 += x11 * x11
+			ty1 += y11 * y11
+			x12 := xd[12]
+			x13 := xd[13]
+			x14 := xd[14]
+			x15 := xd[15]
+			y12 := yd[12]
+			y13 := yd[13]
+			y14 := yd[14]
+			y15 := yd[15]
+			td0 += x12 * y12
+			tx0 += x12 * x12
+			ty0 += y12 * y12
+			td1 += x13 * y13
+			tx1 += x13 * x13
+			ty1 += y13 * y13
+			td0 += x14 * y14
+			tx0 += x14 * x14
+			ty0 += y14 * y14
+			td1 += x15 * y15
+			tx1 += x15 * x15
+			ty1 += y15 * y15
+			dot += float64(td0 + td1)
+			nx += float64(tx0 + tx1)
+			ny += float64(ty0 + ty1)
+			continue
+		}
 		var td0, td1, tx0, tx1, ty0, ty1 float32
 		x0 := float32(f8[xe[0]] * xs)
 		x1 := float32(f8[xe[1]] * xs)
