@@ -493,11 +493,17 @@ func BenchmarkUnicodeCollationHashConsumers(b *testing.B) {
 			{name: "unicode", charset: types.CharsetUTF8MB4UnicodeCI},
 		} {
 			b.Run(fmt.Sprintf("%s/%dB/%drows", tc.name, size, rows), func(b *testing.B) {
+				mp := mpool.MustNewZero()
+				proc := testutil.NewProcessWithOwnedMPool(nil, "", mp)
+				fileService := proc.Base.FileService
+				b.Cleanup(func() {
+					proc.Free()
+					fileService.Close(context.Background())
+					mpool.DeleteMPool(mp)
+				})
 				b.ReportAllocs()
 				b.SetBytes(int64(size * rows))
 				for b.Loop() {
-					mp := mpool.MustNewZero()
-					proc := testutil.NewProcessWithOwnedMPool(b, "", mp)
 					input := makeStringHashPartitionBatch(b, proc, size, rows, tc.charset)
 					child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
 					arg := newStringHashPartitionArgument(size, tc.charset)
@@ -512,7 +518,6 @@ func BenchmarkUnicodeCollationHashConsumers(b *testing.B) {
 					}
 					arg.Free(proc, false, nil)
 					child.Free(proc, false, nil)
-					proc.Free()
 					if got := mp.CurrNB(); got != 0 {
 						b.Fatalf("hash consumer retained %d bytes after operator release", got)
 					}
@@ -525,24 +530,29 @@ func BenchmarkUnicodeCollationHashConsumers(b *testing.B) {
 func TestUnicodeCollationHashConsumerRelease(t *testing.T) {
 	for _, charset := range []uint8{types.CharsetLegacy, types.CharsetBinary, types.CharsetUTF8MB4UnicodeCI} {
 		for repeat := 0; repeat < 16; repeat++ {
-			mp := mpool.MustNewZero()
-			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
-			input := makeStringHashPartitionBatch(t, proc, 64, 64, charset)
-			child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
-			arg := newStringHashPartitionArgument(64, charset)
-			arg.AppendChild(child)
-			require.NoError(t, arg.Prepare(proc))
-			for {
-				result, err := arg.Call(proc)
-				require.NoError(t, err)
-				if result.Status == vm.ExecStop {
-					break
+			func() {
+				mp := mpool.MustNewZero()
+				defer mpool.DeleteMPool(mp)
+				proc := testutil.NewProcessWithOwnedMPool(nil, "", mp)
+				fileService := proc.Base.FileService
+				defer fileService.Close(context.Background())
+				input := makeStringHashPartitionBatch(t, proc, 64, 64, charset)
+				child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+				arg := newStringHashPartitionArgument(64, charset)
+				arg.AppendChild(child)
+				require.NoError(t, arg.Prepare(proc))
+				for {
+					result, err := arg.Call(proc)
+					require.NoError(t, err)
+					if result.Status == vm.ExecStop {
+						break
+					}
 				}
-			}
-			arg.Free(proc, false, nil)
-			child.Free(proc, false, nil)
-			proc.Free()
-			require.Zero(t, mp.CurrNB(), "hash consumer retained bytes for charset %d", charset)
+				arg.Free(proc, false, nil)
+				child.Free(proc, false, nil)
+				proc.Free()
+				require.Zero(t, mp.CurrNB(), "hash consumer retained bytes for charset %d", charset)
+			}()
 		}
 	}
 }

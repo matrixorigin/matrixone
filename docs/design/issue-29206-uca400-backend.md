@@ -158,10 +158,14 @@ The acceptance requirement is linear scaling in input bytes and bounded peak
 workspace, not parity with bytewise comparison.  A review run records
 `ns/op`, `B/op` and `allocs/op` for representative 8/64/1024-byte values and
 256/64-row batches for the sort, grouping/hash and shuffle consumers.  The run
-must show no retained-memory growth after the operator/vector is released and
-must exercise both the Unicode path and the binary/legacy fast path.  A result
-that changes SQL equivalence, loses NULL/grouping semantics, or exceeds the
-per-value bounds is a correctness failure even if its microbenchmark is fast.
+must show no retained owner-accounted memory after the operator/vector is
+released and must exercise both the Unicode path and the binary/legacy fast
+path.  UCA comparison-key and weight scratch is currently ordinary Go-heap
+memory rather than mpool-owned memory; this report therefore does not claim
+that the Go heap has no retention after release.  A separate heap-lifetime
+profile is required before making that stronger claim.  A result that changes
+SQL equivalence, loses NULL/grouping semantics, or exceeds the per-value
+bounds is a correctness failure even if its microbenchmark is fast.
 
 ### Exact-head consumer report
 
@@ -181,21 +185,23 @@ This run used Go 1.27.1 on an Apple M5 arm64 host.  Each cell below is
 `ns/op / B/op / allocs/op`; `L/rows` is the input byte length and row count.
 The legacy and binary controls take the existing bytewise fast path.  The
 Unicode column exercises the UCA key path.  Hash rows include expression
-evaluation, hash grouping and final materialization; the operator is created
-and released on every benchmark iteration.  Sort and shuffle retain their
-prepared input vector across iterations and release it after the case.
+evaluation, hash grouping and final materialization; the process and
+memory/file-service fixtures are created once outside the timer, while the
+input batch/operator are created and released on every benchmark iteration.
+Sort and shuffle retain their prepared input vector across iterations and
+release it after the case.
 
 | Consumer | `L/rows` | legacy | binary | Unicode UCA |
 | --- | ---: | ---: | ---: | ---: |
-| sort | 8/256 | 7,349 / 0 / 0 | 7,112 / 0 / 0 | 421,627 / 587,328 / 19,152 |
-| sort | 64/256 | 8,496 / 0 / 0 | 8,483 / 0 / 0 | 1,917,472 / 3,140,932 / 31,920 |
-| sort | 1024/64 | 2,697 / 0 / 0 | 2,682 / 0 / 0 | 5,573,219 / 14,282,552 / 14,196 |
-| grouping/hash | 8/256 | 165,868 / 105,260 / 526 | 159,864 / 104,770 / 526 | 288,899 / 280,930 / 6,157 |
-| grouping/hash | 64/256 | 180,934 / 216,599 / 538 | 181,752 / 216,599 / 538 | 959,459 / 1,156,801 / 10,264 |
-| grouping/hash | 1024/64 | 208,956 / 590,238 / 346 | 244,372 / 590,214 / 346 | 3,003,728 / 5,721,292 / 5,593 |
-| shuffle | 8/256 | 1,345 / 0 / 0 | 1,316 / 0 / 0 | 34,617 / 47,104 / 1,536 |
-| shuffle | 64/256 | 1,678 / 0 / 0 | 1,678 / 0 / 0 | 157,729 / 251,908 / 2,560 |
-| shuffle | 1024/64 | 1,777 / 0 / 0 | 1,779 / 0 / 0 | 546,343 / 1,352,195 / 1,344 |
+| sort | 8/256 | 7,082 / 0 / 0 | 6,931 / 0 / 0 | 416,585 / 587,329 / 19,152 |
+| sort | 64/256 | 8,315 / 0 / 0 | 8,289 / 0 / 0 | 1,917,458 / 3,140,931 / 31,920 |
+| sort | 1024/64 | 2,677 / 0 / 0 | 2,665 / 0 / 0 | 5,607,619 / 14,282,546 / 14,196 |
+| grouping/hash | 8/256 | 27,818 / 93,520 / 418 | 27,211 / 93,511 / 418 | 156,361 / 269,653 / 6,050 |
+| grouping/hash | 64/256 | 42,330 / 205,328 / 430 | 41,956 / 205,328 / 430 | 657,939 / 1,145,443 / 10,158 |
+| grouping/hash | 1024/64 | 73,418 / 578,924 / 238 | 73,008 / 578,925 / 238 | 2,195,942 / 5,709,596 / 5,486 |
+| shuffle | 8/256 | 1,350 / 0 / 0 | 1,352 / 0 / 0 | 34,582 / 47,104 / 1,536 |
+| shuffle | 64/256 | 1,709 / 0 / 0 | 1,707 / 0 / 0 | 157,344 / 251,908 / 2,560 |
+| shuffle | 1024/64 | 1,763 / 0 / 0 | 1,761 / 0 / 0 | 543,414 / 1,352,196 / 1,344 |
 
 The Unicode allocations and bytes scale with both `L` and the number of rows;
 the controls remain allocation-free in the prepared sort/shuffle path.  The
@@ -208,10 +214,14 @@ release checks are reproducible with:
 ```
 
 All three release tests pass and assert `mp.CurrNB() == 0` after every
-operator/vector release (16 repetitions for each control).  Thus the report
-records bounded per-value workspace, the retained-row/key scaling of the hash
-consumer, and no retained-memory growth after release; it does not claim
-bytewise performance parity for native UCA keys.
+operator/vector release (16 repetitions for each control), then delete the
+caller-owned pool.  The hash benchmark reuses one explicitly owned
+process/file-service fixture outside the timed loop and deletes it after the
+subbenchmark.  Thus the report records bounded per-value workspace, the
+retained-row/key scaling of the hash consumer, and no retained mpool-owned
+bytes after release.  Go-heap scratch lifetime is intentionally not claimed
+by this report, and it does not claim bytewise performance parity for native
+UCA keys.
 
 ## Integration and rollout gates
 

@@ -27,16 +27,19 @@ import (
 func TestUnicodeCollationShuffleConsumerRelease(t *testing.T) {
 	for _, charset := range []uint8{types.CharsetLegacy, types.CharsetBinary, types.CharsetUTF8MB4UnicodeCI} {
 		for repeat := 0; repeat < 16; repeat++ {
-			mp := mpool.MustNewZero()
-			vec := vector.NewVec(types.NewWithCharset(types.T_varchar, 64, 0, charset))
-			require.NoError(t, vector.AppendBytesList(vec, makeShuffleConsumerValues(64, 64), nil, mp))
-			col, area := vector.MustVarlenaRawData(vec)
-			arg := &Shuffle{}
-			arg.ctr.stableStringHash = true
-			sels := make([][]int32, 16)
-			appendStringHashSels(arg, sels, vec, col, area, uint64(len(sels)), false)
-			vec.Free(mp)
-			require.Zero(t, mp.CurrNB(), "shuffle consumer retained bytes for charset %d", charset)
+			func() {
+				mp := mpool.MustNewZero()
+				defer mpool.DeleteMPool(mp)
+				vec := vector.NewVec(types.NewWithCharset(types.T_varchar, 64, 0, charset))
+				require.NoError(t, vector.AppendBytesList(vec, makeShuffleConsumerValues(64, 64), nil, mp))
+				col, area := vector.MustVarlenaRawData(vec)
+				arg := &Shuffle{}
+				arg.ctr.stableStringHash = true
+				sels := make([][]int32, 16)
+				appendStringHashSels(arg, sels, vec, col, area, uint64(len(sels)), false)
+				vec.Free(mp)
+				require.Zero(t, mp.CurrNB(), "shuffle consumer retained bytes for charset %d", charset)
+			}()
 		}
 	}
 }
@@ -83,6 +86,7 @@ func BenchmarkUnicodeCollationShuffleConsumers(b *testing.B) {
 				if got := mp.CurrNB(); got != 0 {
 					b.Fatalf("shuffle consumer retained %d bytes after vector release", got)
 				}
+				mpool.DeleteMPool(mp)
 			})
 		}
 	}

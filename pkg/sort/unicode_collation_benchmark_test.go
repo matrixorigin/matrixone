@@ -27,16 +27,19 @@ import (
 func TestUnicodeCollationSortConsumerRelease(t *testing.T) {
 	for _, charset := range []uint8{types.CharsetLegacy, types.CharsetBinary, types.CharsetUTF8MB4UnicodeCI} {
 		for repeat := 0; repeat < 16; repeat++ {
-			mp := mpool.MustNewZero()
-			vec := vector.NewVec(types.NewWithCharset(types.T_varchar, 64, 0, charset))
-			require.NoError(t, vector.AppendBytesList(vec, makeUnicodeConsumerValues(64, 64), nil, mp))
-			selectors := make([]int64, 64)
-			for i := range selectors {
-				selectors[i] = int64(i)
-			}
-			SortForSQLOrder(false, false, false, selectors, vec)
-			vec.Free(mp)
-			require.Zero(t, mp.CurrNB(), "sort consumer retained bytes for charset %d", charset)
+			func() {
+				mp := mpool.MustNewZero()
+				defer mpool.DeleteMPool(mp)
+				vec := vector.NewVec(types.NewWithCharset(types.T_varchar, 64, 0, charset))
+				require.NoError(t, vector.AppendBytesList(vec, makeUnicodeConsumerValues(64, 64), nil, mp))
+				selectors := make([]int64, 64)
+				for i := range selectors {
+					selectors[i] = int64(i)
+				}
+				SortForSQLOrder(false, false, false, selectors, vec)
+				vec.Free(mp)
+				require.Zero(t, mp.CurrNB(), "sort consumer retained bytes for charset %d", charset)
+			}()
 		}
 	}
 }
@@ -81,6 +84,7 @@ func BenchmarkUnicodeCollationSortConsumers(b *testing.B) {
 				if got := mp.CurrNB(); got != 0 {
 					b.Fatalf("sort consumer retained %d bytes after vector release", got)
 				}
+				mpool.DeleteMPool(mp)
 			})
 		}
 	}
