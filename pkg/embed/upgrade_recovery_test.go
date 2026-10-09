@@ -38,6 +38,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const recoveryAdminUser = "upgrade_recovery_admin"
+
 // The catalog and CN generations are destructive test inputs, so this fixture
 // cannot share the package's reusable SQL cluster. Three CNs compete for the
 // same real transactions; only one user tenant and one sentinel row are needed.
@@ -46,12 +48,32 @@ func TestCrossTargetUpgradeRecovery(t *testing.T) {
 	// destructive catalog generations and must use exclusive cluster admission.
 	require.NoError(t, CloseBaseClusterTests())
 	require.NoError(t, CloseSingleCNBaseClusterTests())
-	for _, final := range []bootstrap.VersionHandle{v4_0_12.Handler, v4_0_13.Handler} {
-		t.Run(final.Metadata().Version, func(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		final  bootstrap.VersionHandle
+		manual bool
+	}{
+		{name: "4.0.12", final: v4_0_12.Handler},
+		{name: "4.0.13", final: v4_0_13.Handler},
+		{name: "manual-4.0.13", final: v4_0_13.Handler, manual: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			final := tc.final
+			var retainedHandler bootstrap.VersionHandle = v4_0_11.Handler
+			cnCount, retainedSteps, pendingState := 3, 1, int32(versions.StateCreated)
+			if tc.manual {
+				// One CN proves recovery does not borrow a worker from a peer.
+				cnCount, retainedSteps, pendingState = 1, 2, versions.StateUpgradingTenant
+				retainedHandler = v4_0_12.Handler
+				// Use the supported bootstrap admin for the recovery command:
+				// ordinary logins try to upgrade their tenant before accepting SQL.
+				t.Setenv("mo_admin_user", recoveryAdminUser)
+				t.Setenv("mo_admin_password", "111")
+			}
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
 			defer cancel()
 			started := time.Now()
-			c, err := NewCluster(WithTesting(), WithCNCount(3), WithPreStart(func(svc ServiceOperator) {
+			c, err := NewCluster(WithTesting(), WithCNCount(cnCount), WithPreStart(func(svc ServiceOperator) {
 				adjustBasicClusterService(svc)
 				if svc.ServiceType() == metadata.ServiceType_CN {
 					svc.Adjust(func(cfg *ServiceConfig) { cfg.CN.AutomaticUpgrade = true })
@@ -94,43 +116,74 @@ func TestCrossTargetUpgradeRecovery(t *testing.T) {
 			}
 			require.NoError(t, c.Close())
 
-			interrupted := &interruptedUpgradeHandler{VersionHandle: v4_0_11.Handler, entered: make(chan struct{})}
-			setRecoveryCNHandles(c, []bootstrap.VersionHandle{v4_0_10.Handler, interrupted})
+			interrupted := &interruptedUpgradeHandler{VersionHandle: retainedHandler, entered: make(chan struct{}), tenant: tc.manual}
+			retainedHandles := []bootstrap.VersionHandle{v4_0_10.Handler}
+			if tc.manual {
+				retainedHandles = append(retainedHandles, v4_0_11.Handler)
+			}
+			setRecoveryCNHandles(c, append(retainedHandles, interrupted), true)
 			require.NoError(t, c.Start())
 			select {
 			case <-interrupted.entered:
 			case <-ctx.Done():
 				t.Fatal("retained upgrade did not reach the injected interruption", ctx.Err())
 			}
-			retained, steps := readRecoveryCatalog(t, ctx, cn, v4_0_11.Handler.Metadata())
+			retained, steps := readRecoveryCatalog(t, ctx, cn, retainedHandler.Metadata())
 			require.Equal(t, versions.StateCreated, retained.State)
-			require.Len(t, steps, 1)
-			require.Equal(t, versions.StateCreated, steps[0].State)
-			retainedStepID := steps[0].ID
+			require.Len(t, steps, retainedSteps)
+			require.Equal(t, pendingState, steps[len(steps)-1].State)
+			retainedStepIDs := make([]uint64, len(steps))
+			for i, step := range steps {
+				retainedStepIDs[i] = step.ID
+			}
+			var retainedTasks []uint64
+			if tc.manual {
+				require.Equal(t, final.Metadata().VersionOffset, retained.VersionOffset)
+				require.Equal(t, int32(2), steps[len(steps)-1].TotalTenant)
+				require.Zero(t, steps[len(steps)-1].ReadyTenant)
+				retainedTasks = recoveryTenantTaskIDs(t, ctx, cn, steps[len(steps)-1].ID, versions.No)
+				require.NotEmpty(t, retainedTasks) // CN configuration determines the account range batch size.
+			}
 			require.NoError(t, c.Close())
 
 			handles := []bootstrap.VersionHandle{v4_0_10.Handler, v4_0_11.Handler, v4_0_12.Handler}
 			if final.Metadata().Version != v4_0_12.Handler.Metadata().Version {
 				handles = append(handles, final)
 			}
-			setRecoveryCNHandles(c, handles)
-			// Start uses concurrent CN startup against the persisted interrupted
-			// target. No version/task records are manually rewritten for recovery.
+			setRecoveryCNHandles(c, handles, !tc.manual)
+			// No version/task records are manually rewritten for recovery.
 			require.NoError(t, c.Start())
+			if tc.manual {
+				func() {
+					db := recoverySQLClientWithUser(t, cn, recoveryAdminUser)
+					defer db.Close()
+					var newerTargets int
+					require.NoError(t, db.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_version where version = ?", final.Metadata().Version).Scan(&newerTargets))
+					require.Zero(t, newerTargets, "automatic upgrade must remain disabled")
+					_, err := db.ExecContext(ctx, "upgrade account 'recovery_tenant' with retry 1")
+					require.ErrorContains(t, err, "Please try again later", "do not accept a single-tenant retry with no consumer for the retained tasks")
+				}()
+			}
 			checkRecovered := func() {
 				t.Helper()
-				for i := 0; i < 3; i++ {
+				for i := 0; i < cnCount; i++ {
 					cn, err := c.GetCNService(i)
 					require.NoError(t, err)
 					checkRecoverySQL(t, ctx, cn, final.Metadata())
 				}
-				retained, steps = readRecoveryCatalog(t, ctx, cn, v4_0_11.Handler.Metadata())
+				retained, steps = readRecoveryCatalog(t, ctx, cn, retainedHandler.Metadata())
 				require.Equal(t, versions.StateReady, retained.State)
-				require.Len(t, steps, 1)
-				require.Equal(t, retainedStepID, steps[0].ID, "recovery must reuse the retained route")
-				require.Equal(t, versions.StateReady, steps[0].State)
+				require.Len(t, steps, retainedSteps)
+				for i, step := range steps {
+					require.Equal(t, retainedStepIDs[i], step.ID, "recovery must reuse the retained route")
+					require.Equal(t, versions.StateReady, step.State)
+					require.Equal(t, step.TotalTenant, step.ReadyTenant)
+				}
+				if tc.manual {
+					require.Equal(t, retainedTasks, recoveryTenantTaskIDs(t, ctx, cn, steps[len(steps)-1].ID, versions.Yes))
+				}
 				_, current := readRecoveryCatalog(t, ctx, cn, final.Metadata())
-				require.Len(t, current, len(handles)-2)
+				require.Len(t, current, len(handles)-1-retainedSteps)
 				for i, step := range current {
 					require.Equal(t, int32(i), step.UpgradeOrder)
 					require.Equal(t, versions.StateReady, step.State)
@@ -139,10 +192,18 @@ func TestCrossTargetUpgradeRecovery(t *testing.T) {
 				}
 			}
 			checkRecovered()
+			if tc.manual {
+				func() {
+					db := recoverySQLClientWithUser(t, cn, recoveryAdminUser)
+					defer db.Close()
+					_, err := db.ExecContext(ctx, "upgrade account 'recovery_tenant' with retry 1")
+					require.NoError(t, err)
+				}()
+			}
 			require.NoError(t, c.Close())
 			require.NoError(t, c.Start())
 			checkRecovered()
-			t.Logf("three-CN interrupted upgrade and restart: %s", time.Since(started))
+			t.Logf("%d-CN interrupted upgrade and restart (manual=%t): %s", cnCount, tc.manual, time.Since(started))
 		})
 	}
 }
@@ -151,13 +212,28 @@ type interruptedUpgradeHandler struct {
 	bootstrap.VersionHandle
 	entered chan struct{}
 	once    sync.Once
+	tenant  bool
 }
 
-func (h *interruptedUpgradeHandler) HandleClusterUpgrade(context.Context, executor.TxnExecutor) error {
+func (h *interruptedUpgradeHandler) HandleClusterUpgrade(ctx context.Context, txn executor.TxnExecutor) error {
+	if h.tenant {
+		return h.VersionHandle.HandleClusterUpgrade(ctx, txn)
+	}
+	return h.interrupt()
+}
+
+func (h *interruptedUpgradeHandler) HandleTenantUpgrade(ctx context.Context, id int32, txn executor.TxnExecutor) error {
+	if !h.tenant {
+		return h.VersionHandle.HandleTenantUpgrade(ctx, id, txn)
+	}
+	return h.interrupt()
+}
+
+func (h *interruptedUpgradeHandler) interrupt() error {
 	h.once.Do(func() { close(h.entered) })
 	// A retryable failure leaves the transaction rolled back and the already
 	// committed route intact. It never blocks service shutdown behind a barrier.
-	return errors.New("test interruption before retained cluster DDL")
+	return errors.New("test interruption before retained upgrade DDL")
 }
 
 func recoveryCNOptions(handles []bootstrap.VersionHandle) []cnservice.Option {
@@ -170,13 +246,14 @@ func recoveryCNOptions(handles []bootstrap.VersionHandle) []cnservice.Option {
 	)}
 }
 
-func setRecoveryCNHandles(c Cluster, handles []bootstrap.VersionHandle) {
+func setRecoveryCNHandles(c Cluster, handles []bootstrap.VersionHandle, automatic bool) {
 	c.ForeachServices(func(svc ServiceOperator) bool {
 		if svc.ServiceType() == metadata.ServiceType_CN {
 			op := svc.(*operator)
 			op.Lock()
 			op.testingCNOptions = recoveryCNOptions(handles)
 			op.Unlock()
+			svc.Adjust(func(cfg *ServiceConfig) { cfg.CN.AutomaticUpgrade = automatic })
 		}
 		return true
 	})
@@ -184,7 +261,12 @@ func setRecoveryCNHandles(c Cluster, handles []bootstrap.VersionHandle) {
 
 func recoverySQLClient(t *testing.T, cn ServiceOperator) *sql.DB {
 	t.Helper()
-	db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
+	return recoverySQLClientWithUser(t, cn, "dump")
+}
+
+func recoverySQLClientWithUser(t *testing.T, cn ServiceOperator, user string) *sql.DB {
+	t.Helper()
+	db, err := sql.Open("mysql", fmt.Sprintf("%s:111@tcp(127.0.0.1:%d)/", user, cn.GetServiceConfig().CN.Frontend.Port))
 	require.NoError(t, err)
 	return db
 }
@@ -207,6 +289,23 @@ func readRecoveryCatalog(t *testing.T, ctx context.Context, cn ServiceOperator, 
 	}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).WithWaitCommittedLogApplied())
 	require.NoError(t, err)
 	return target, steps
+}
+
+func recoveryTenantTaskIDs(t *testing.T, ctx context.Context, cn ServiceOperator, upgradeID uint64, ready int32) []uint64 {
+	t.Helper()
+	db := recoverySQLClientWithUser(t, cn, recoveryAdminUser)
+	defer db.Close()
+	rows, err := db.QueryContext(ctx, "select id from mo_catalog.mo_upgrade_tenant where upgrade_id = ? and ready = ? order by id", upgradeID, ready)
+	require.NoError(t, err)
+	defer rows.Close()
+	var ids []uint64
+	for rows.Next() {
+		var id uint64
+		require.NoError(t, rows.Scan(&id))
+		ids = append(ids, id)
+	}
+	require.NoError(t, rows.Err())
+	return ids
 }
 
 func checkRecoverySQL(t *testing.T, ctx context.Context, cn ServiceOperator, final versions.Version) {

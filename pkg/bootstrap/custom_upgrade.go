@@ -232,6 +232,7 @@ func GetAccountIdByName(accountName string, txn executor.TxnExecutor) (int32, er
 // UpgradePreCheck Manual upgrade environment pre check, check if there are any unready upgrade tasks in upgrade environment.
 // If there are, the unready upgrade tasks need to be processed first
 func (s *service) UpgradePreCheck(ctx context.Context) error {
+	var unReady bool
 	opts := executor.Options{}.
 		WithDatabase(catalog.MO_CATALOG).
 		WithMinCommittedTS(s.now()).
@@ -251,40 +252,39 @@ func (s *service) UpgradePreCheck(ctx context.Context) error {
 			}
 
 			final := s.getFinalVersionHandle().Metadata()
-			unReady, err := checkUpgradePerVersionUnready(txn, final)
+			unReady, err = checkUpgradePerVersionUnready(txn, final)
 			if err != nil {
-				s.logger.Error("failed to check task status in pgrade environment", zap.Error(err))
-				return err
+				s.logger.Error("failed to check task status in upgrade environment", zap.Error(err))
 			}
-
-			if unReady {
-				s.logger.Info("There are unexecuted tenant upgrade tasks in upgrade environment, start asynchronous supplementary execution")
-				s.adjustUpgrade()
-				if err := s.stopper.RunTask(s.asyncUpgradeTask); err != nil {
-					return err
-				}
-				for i := 0; i < s.upgrade.upgradeTenantTasks; i++ {
-					if err := s.stopper.RunTask(s.asyncUpgradeTenantTask); err != nil {
-						return err
-					}
-				}
-				return moerr.NewInternalError(ctx, "There is an untrigged upgrade tasks in the system, execution started, Please try again later")
-			}
-			return nil
+			return err
 		},
 		opts)
-	return err
+	if err != nil || !unReady {
+		return err
+	}
+
+	// A retained route needs both cluster and tenant consumers, even when
+	// automatic upgrade is disabled. Validate it through the normal admission
+	// path, outside the completed pre-check transaction, before starting workers.
+	s.logger.Info("There are unfinished upgrade tasks in upgrade environment, start asynchronous supplementary execution")
+	if err := s.BootstrapUpgrade(ctx); err != nil {
+		return err
+	}
+	return moerr.NewInternalError(ctx, "There is an untrigged upgrade tasks in the system, execution started, Please try again later")
 }
 
-// checkUpgradeEnvUnReady Check if the upgrade environment is ready
+// Check for unfinished routes belonging to a different (version, offset).
+// Created steps also need recovery: the cluster worker may not have published
+// their tenant tasks yet, and a single-tenant request does not start consumers.
 func checkUpgradePerVersionUnready(txn executor.TxnExecutor, final versions.Version) (bool, error) {
 	sql := fmt.Sprintf("select id, from_version, to_version, final_version, final_version_offset from %s.%s "+
-		"where state = 1 and final_version != '%s' and final_version_offset != %d",
-		catalog.MO_CATALOG, catalog.MOUpgradeTable, final.Version, final.VersionOffset)
+		"where state != %d and (final_version != '%s' or final_version_offset != %d)",
+		catalog.MO_CATALOG, catalog.MOUpgradeTable, versions.StateReady, final.Version, final.VersionOffset)
 	res, err := txn.Exec(sql, executor.StatementOption{})
 	if err != nil {
 		return false, err
 	}
+	defer res.Close()
 
 	var loaded bool
 	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
