@@ -287,7 +287,7 @@ type scopeContext struct {
 // Compile contains all the information needed for compilation.
 type Compile struct {
 	scopes []*Scope
-	// Shared Product producers are attached after downstream placement.
+	// Shared broadcast HashBuild producers are attached after downstream placement.
 	pendingProductBuilds []*pendingProductBuild
 	// Non-owning producer regions: true marks an independent auxiliary job;
 	// false marks its result owner for original-error arbitration.

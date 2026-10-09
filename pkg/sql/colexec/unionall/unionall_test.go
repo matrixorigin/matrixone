@@ -67,7 +67,7 @@ func (c *cancelOnNthDoneContext) Value(any) any { return nil }
 
 func newSequentialUnionAllTest(t *testing.T) (*UnionAll, *merge.Merge, *process.Process) {
 	t.Helper()
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.Reg.MergeReceivers = []*process.WaitRegister{{}, {}}
 	for _, reg := range proc.Reg.MergeReceivers {
 		reg.ResetForReuse(2, 1)

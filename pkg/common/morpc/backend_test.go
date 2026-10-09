@@ -599,22 +599,22 @@ func TestReadTimeoutDoesNotChargeIdleTimeToNewRequest(t *testing.T) {
 		context.Background(), context.DeadlineExceeded),
 		"internal traffic must not extend the user-request read window")
 	oneWay := &Future{oneWay: true}
-	oneWay.send.createAt = time.Now()
+	oneWay.createAt = time.Now()
 	rb.mu.futures = map[uint64]*Future{1: oneWay}
 	require.False(t, rb.keepDataConnectionAfterReadTimeout(
 		context.Background(), context.DeadlineExceeded),
 		"one-way traffic must not create a response read window")
 	inFlight := &Future{}
-	inFlight.send.createAt = time.Now()
+	inFlight.createAt = time.Now()
 	rb.mu.futures = map[uint64]*Future{1: inFlight}
 	require.True(t, rb.keepDataConnectionAfterReadTimeout(
 		context.Background(), context.DeadlineExceeded),
 		"an admitted request must not inherit the remainder of an idle read window")
-	inFlight.send.createAt = time.Now().Add(-rb.options.readTimeout)
+	inFlight.createAt = time.Now().Add(-rb.options.readTimeout)
 	require.False(t, rb.keepDataConnectionAfterReadTimeout(
 		context.Background(), context.DeadlineExceeded),
 		"a request stuck before flush must not renew the connection beyond one admission window")
-	inFlight.send.createAt = time.Now()
+	inFlight.createAt = time.Now()
 	inFlight.waiting.Store(true)
 	require.False(t, rb.keepDataConnectionAfterReadTimeout(
 		context.Background(), context.DeadlineExceeded),
@@ -644,7 +644,7 @@ func TestReadTimeoutDoesNotChargeIdleTimeToNewRequest(t *testing.T) {
 		context.Background(), context.DeadlineExceeded),
 		"fresh stream traffic must not rescue a generation with an expired unary request")
 	fresh := &Future{}
-	fresh.send.createAt = time.Now()
+	fresh.createAt = time.Now()
 	rb.mu.futures[2] = fresh
 	require.False(t, rb.keepDataConnectionAfterReadTimeout(
 		context.Background(), context.DeadlineExceeded),

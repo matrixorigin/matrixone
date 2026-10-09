@@ -7,13 +7,12 @@ Owner: MatrixOne query planning and Sirius execution.
 Tracking: [#28968](https://github.com/matrixorigin/matrixone/issues/28968).
 Parent migration: [#28966](https://github.com/matrixorigin/matrixone/issues/28966).
 
-Status: proposed for exact-revision design re-review. N0's executable
-exporter inventory remains the baseline; implementation PRs must rerun it
-against their exact base. The later review of its first design revision
-identified overflow, division, and error-carrier contradictions. This
-revision resolves those contracts; it is not approval to lower another
-numeric signature, change eligibility, or enable embedded execution by
-default.
+Status: semantic revision `42a89f09a1d168d02b9583cb3ea7b4de6dbb5634`
+approved in #29449. Later delivery-map updates preserve that semantic contract;
+implementation PRs link the approved revision and rerun the executable inventory
+against their exact base. Merged Sirius #25 supplies representations, codecs
+and scalar primitives. Importer #3 and its unity-test correction #4 are merged.
+These milestones do not enable numeric admission or embedded execution by default.
 
 ## 1. Decision and invariant
 
@@ -428,12 +427,22 @@ Numeric work is separate from the ten-PR embedding map in
 
 1. **N0:** design and exact Q1-Q22 exporter inventory, followed by this
    exact-revision semantic correction and its independent technical review.
-2. **Native contract:** Sirius type/function extension, fixed-width buffers,
-   exact kernels, aggregate state, errors, and capability advertisement.
-3. **MO lowering:** exporter and bridge support after the native contract is
+2. **Native A:** scoped import, typed binding, literal/clone fidelity and scalar
+   GPU evaluation, based on merged Sirius #25 and importer #4. The complete
+   capability stays disabled and production exact admission remains closed.
+3. **Native B:** exact SUM/AVG/MIN/MAX, grouping/join/sort keys, spillable partial
+   states, complete preparation validation, statuses 12/13 and capability 16u.
+   Requires merged Native A; no partial family is advertised.
+4. **MO lowering:** exporter and bridge support after the native contract is
    merged and pinned.
-4. **Parity and rollout:** public SQL differential evidence, all-22 TPC-H,
+5. **Parity and rollout:** public SQL differential evidence, all-22 TPC-H,
    metadata, GPU, failure, and performance gates.
+
+The owner approved this two-PR native split on 2026-10-08. It does not reduce
+the full-family capability or acceptance gates. The remaining six-PR sequence,
+including MO cutover and sidecar retirement, is recorded in the parent migration
+design. Implementation branches begin from merged predecessors, not cumulative
+unmerged stacks.
 
 There is a hard approval gate between N0 and production lowering. Before any
 MO or Sirius production path emits or accepts `mo_exact_decimal`, reviewers

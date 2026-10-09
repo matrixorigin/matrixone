@@ -59,7 +59,7 @@ func TestPreparedRuntimeAPCacheReusesPlanNotTopology(t *testing.T) {
 			oldTP := compile.NewCompile("", "", prepared.Sql, "", "", nil,
 				cw.proc, prepared.PrepareStmt, false, nil, time.Now())
 			prepared.installRuntimeSpecializationCache("previous-category",
-				prepared.PreparePlan.GetDcl().GetPrepare().Plan, oldTP, nil)
+				prepared.PreparePlan.GetDcl().GetPrepare().Plan, oldTP, nil, nil)
 			newCompiler := func() (*compile.Compile, func()) {
 				c := compile.NewCompile("ingress:6001", "", prepared.Sql, "", "",
 					&successfulSchedulingPreviewEngine{}, cw.proc, prepared.PrepareStmt, false, nil, time.Now())

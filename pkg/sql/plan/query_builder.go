@@ -5648,6 +5648,10 @@ func (builder *QueryBuilder) bindCte(
 			return 0, err
 		}
 	}
+	if builder.localCTERoots == nil {
+		builder.localCTERoots = make(map[int32]bool)
+	}
+	builder.localCTERoots[nodeID] = true
 	// The declaration context is detached from the use-site context for name
 	// resolution, so forward root-owned view dependencies explicitly.
 	ctx.recordViews(cteRef.declarationCtx.views[viewCount:])
@@ -6098,6 +6102,13 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			return
 		}
 	}
+	// SELECT projection subqueries are flattened before this pagination is
+	// attached to their plan. The cloned CTE domain may otherwise evaluate a
+	// row that the final Top never consumes. Keep the demand scoped to this
+	// bind rather than relying on the not-yet-present node.Limit/Offset.
+	previousPagination := ctx.outerPaginationPending
+	ctx.outerPaginationPending = previousPagination || boundCountExpr != nil || boundOffsetExpr != nil || rankOption != nil
+	defer func() { ctx.outerPaginationPending = previousPagination }()
 
 	// Keep the lock target collection in bindSelectClause, but attach the
 	// LOCK_OP only after any row-level HAVING rewrite has been applied.  A
@@ -8681,9 +8692,35 @@ func (builder *QueryBuilder) bindWhere(
 	// walking it so the optimization is independent of SQL predicate order.
 	// The list is replaced with the flattened predicates below.
 	ctx.whereFilters = whereList
+	// Apply total, subquery-independent conjuncts before building the domain
+	// of a dependent subquery. Otherwise replay can start recursive partitions
+	// for rows that these conjuncts remove. Keep unsafe predicates in place:
+	// determinism alone does not make early evaluation harmless.
+	var domainFilters, remaining []*plan.Expr
+	hasDependent := false
+	for _, cond := range whereList {
+		hasDependent = hasDependent || builder.hasLocalCTEConsumer(cond)
+	}
+	if hasDependent {
+		for _, cond := range whereList {
+			if !hasSubquery(cond) && !hasCorrCol(cond) && localCTEGuardedPredicateSafe(cond) {
+				domainFilters = append(domainFilters, cond)
+			} else {
+				remaining = append(remaining, cond)
+			}
+		}
+		if len(domainFilters) > 0 {
+			nodeID = builder.appendNode(&plan.Node{NodeType: plan.Node_FILTER,
+				Children: []int32{nodeID}, FilterList: DeepCopyExprList(domainFilters), FilterIsBarrier: true}, ctx)
+			boundFilterList = append(boundFilterList, domainFilters...)
+			whereList = remaining
+		}
+	}
 	var expr *plan.Expr
 	for _, cond := range whereList {
-		if nodeID, expr, err = builder.flattenFilterSubqueries(nodeID, cond, ctx); err != nil {
+		// Each split conjunct can run before its siblings have filtered the
+		// outer rows. A replayed local CTE must not depend on that filtering.
+		if nodeID, expr, err = builder.flattenFilterSubqueriesGuarded(nodeID, cond, ctx, len(whereList) > 1); err != nil {
 			return
 		}
 		boundFilterList = append(boundFilterList, expr)
@@ -10499,7 +10536,7 @@ func (builder *QueryBuilder) appendNonAggregateHavingNode(
 	newFilterList := make([]*plan.Expr, 0, len(boundHavingList))
 	for _, cond := range boundHavingList {
 		var expr *plan.Expr
-		if nodeID, expr, err = builder.flattenFilterSubqueries(nodeID, cond, ctx); err != nil {
+		if nodeID, expr, err = builder.flattenFilterSubqueriesGuarded(nodeID, cond, ctx, len(boundHavingList) > 1); err != nil {
 			return
 		}
 		newFilterList = append(newFilterList, expr)
@@ -10524,7 +10561,7 @@ func (builder *QueryBuilder) appendSampleNode(
 		var expr *plan.Expr
 
 		for _, cond := range boundHavingList {
-			if nodeID, expr, err = builder.flattenFilterSubqueries(nodeID, cond, ctx); err != nil {
+			if nodeID, expr, err = builder.flattenFilterSubqueriesGuarded(nodeID, cond, ctx, len(boundHavingList) > 1); err != nil {
 				return
 			}
 
@@ -10614,7 +10651,7 @@ func (builder *QueryBuilder) appendAggNode(
 		var expr *plan.Expr
 
 		for _, cond := range preWindowHavingList {
-			if nodeID, expr, err = builder.flattenFilterSubqueries(nodeID, cond, ctx); err != nil {
+			if nodeID, expr, err = builder.flattenFilterSubqueriesGuarded(nodeID, cond, ctx, len(boundHavingList) > 1); err != nil {
 				return
 			}
 
@@ -10789,7 +10826,7 @@ func (builder *QueryBuilder) appendWindowNode(
 		var expr *plan.Expr
 
 		for _, cond := range postWindowHavingList {
-			if nodeID, expr, err = builder.flattenFilterSubqueries(nodeID, cond, ctx); err != nil {
+			if nodeID, expr, err = builder.flattenFilterSubqueriesGuarded(nodeID, cond, ctx, len(boundHavingList) > 1); err != nil {
 				return
 			}
 
@@ -13352,7 +13389,7 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 			var onConds, filterConds []*plan.Expr
 			for _, cond := range joinConds {
 				if hasSubquery(cond) {
-					nodeID, cond, err = builder.flattenFilterSubqueries(nodeID, cond, ctx)
+					nodeID, cond, err = builder.flattenFilterSubqueriesGuarded(nodeID, cond, ctx, len(joinConds) > 1)
 					if err != nil {
 						return 0, err
 					}
@@ -13379,7 +13416,7 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 			for i, cond := range joinConds {
 				leftChildID, rightChildID, joinConds[i], err = builder.flattenOuterJoinConditionSubqueries(
 					leftChildID, rightChildID, cond,
-					leftCtx, rightCtx, leftTags, rightTags, defaultSide, true,
+					leftCtx, rightCtx, leftTags, rightTags, defaultSide, true, len(joinConds) > 1,
 				)
 				if err != nil {
 					return 0, err
