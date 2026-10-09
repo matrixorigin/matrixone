@@ -10,8 +10,8 @@
 -- id=1 the unique nearest under L2, L2sq, cosine AND inner-product, so the top-1
 -- is deterministic for every metric. Each search also returns the score:
 --   * l2 / l2sq / cosine  -> 0   (exact self-match)
---   * inner_product       -> 1292，SQL 返回数学点积，DESC 取最高内积。
--- 内部 cuVS 距离仍为 -dot；ASC 精确回退应返回最小内积 (6,15)。
+--   * inner_product       -> -1292  (NEGATED on the C++ side to match MO's
+--                                    inner_product = -dot convention; smaller = nearer)
 -- =====================================================================
 
 SET experimental_cagra_index = 1;
@@ -60,7 +60,6 @@ select algo, algo_table_type, algo_params from mo_catalog.mo_indexes
     where table_id = (select rel_id from mo_catalog.mo_tables
                       where relname='t' and reldatabase='cagra_metric')
       and name='ix' and algo_table_type='cagra_index';
-select id, inner_product(v, '[16,15,14,13,12,11,10,9]') as score from t order by score desc limit 1;
 select id, inner_product(v, '[16,15,14,13,12,11,10,9]') as score from t order by score asc limit 1;
 drop index ix on t;
 

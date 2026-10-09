@@ -194,7 +194,6 @@ func Divide[T types.RealNumbers](p, q []T) ([]T, error) {
 
 /* ------------ [START] Performance critical functions. ------- */
 
-// InnerProduct 返回数学点积；内部 metric 内核仍采用越小越近的负点积距离。
 func InnerProduct[T types.RealNumbers](v1, v2 []T) (float64, error) {
 
 	ret, err := metric.InnerProduct(v1, v2)
@@ -207,7 +206,7 @@ func InnerProduct[T types.RealNumbers](v1, v2 []T) (float64, error) {
 	// domain too, keeping the scalar and the index in the same precision (#29040 / #29050).
 	// This is float32-domain agreement, not bitwise equality -- see metric.RoundDistanceToElemDomain
 	// for the residual float32-ULP boundary case. No-op for a float32 base.
-	return metric.CheckFiniteDist(metric.RoundDistanceToElemDomain(-float64(ret)), metric.MetricWhat(metric.Metric_InnerProduct))
+	return metric.CheckFiniteDist(metric.RoundDistanceToElemDomain(float64(ret)), metric.MetricWhat(metric.Metric_InnerProduct))
 }
 
 // L1Distance returns the Manhattan distance sum|a-b|. Like its L2 siblings it checks the
