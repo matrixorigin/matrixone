@@ -191,8 +191,7 @@ func caseConversionReturnType(parameters []types.Type) types.Type {
 	}
 	source := parameters[0]
 	withRevision := func(result types.Type) types.Type {
-		result.CollationVersion = source.CollationVersion
-		return result
+		return types.MergeStringCollationMetadata(result, []types.Type{source})
 	}
 	if types.StaticStringDomain(source) == types.StringDomainBinary {
 		return withRevision(binaryStringResultType(declaredStringByteBound(source)))
@@ -288,7 +287,7 @@ func insertStringReturnType(parameters []types.Type) types.Type {
 func commonConditionalStringType(result types.Type, source []types.Type) types.Type {
 	switch result.Oid {
 	case types.T_char, types.T_varchar, types.T_text:
-		result.Charset = types.MergeStringCharset(source, result.Charset)
+		result = types.MergeStringCollationMetadata(result, source)
 	default:
 		return result
 	}

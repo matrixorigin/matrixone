@@ -250,6 +250,27 @@ func MergeStringCharset(parameters []Type, fallback uint8) uint8 {
 	return result
 }
 
+// MergeStringCollationMetadata derives a common string type's collation
+// identity and revision together. Native Unicode identities are versioned;
+// rebuilding a type with only Charset would silently create a revision-zero
+// plan type that the executor cannot resolve.
+func MergeStringCollationMetadata(result Type, parameters []Type) Type {
+	result.Charset = MergeStringCharset(parameters, result.Charset)
+	result.CollationVersion = CollationVersionLegacy
+	for _, parameter := range parameters {
+		if parameter.Charset == result.Charset && parameter.CollationVersion != CollationVersionLegacy {
+			result.CollationVersion = parameter.CollationVersion
+			break
+		}
+	}
+	// Native identities currently use V1. A native source decoded from a
+	// legacy zero-valued plan still implies the current executable revision.
+	if result.CollationVersion == CollationVersionLegacy && IsUnicodeCollation(result.Charset) {
+		result.CollationVersion = CollationVersionV1
+	}
+	return result
+}
+
 // ProtoSize is used by gogoproto.
 func (t *Type) ProtoSize() int {
 	return 2*4 + 4*3

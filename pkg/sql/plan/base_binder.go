@@ -8651,9 +8651,11 @@ func refineKnownStringResultType(returnType *types.Type, width uint64, binary bo
 	}
 	if width <= uint64(types.MaxVarcharLen) {
 		charset := returnType.Charset
-		*returnType = types.T_varchar.ToType()
-		returnType.Width = int32(width)
-		returnType.Charset = charset
+		version := returnType.CollationVersion
+		*returnType = types.NewWithCharset(types.T_varchar, int32(width), 0, charset)
+		if version != types.CollationVersionLegacy {
+			returnType.CollationVersion = version
+		}
 	}
 }
 

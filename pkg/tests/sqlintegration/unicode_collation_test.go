@@ -92,6 +92,20 @@ func TestUnicodeCollationConsumerContract(t *testing.T) {
 		exec("create table words (id int primary key, s varchar(64) collate utf8mb4_unicode_ci)")
 		exec("insert into words values (1,'Z'),(2,'a'),(3,'A'),(4,'b')")
 		require.Equal(t, 2, queryCount("select count(*) from words where lower(s)='a'"))
+		// Conditional and ordered string expressions must carry the native
+		// Unicode revision through their rebuilt result type. Include mixed-width
+		// branches and typed NULLs so a revision-zero intermediate is observable
+		// at the comparison boundary.
+		require.Equal(t, 2, queryCount("select count(*) from words where coalesce(s,'x')='a'"))
+		require.Equal(t, 0, queryCount("select count(*) from words where coalesce('x',s)='a'"))
+		require.Equal(t, 2, queryCount("select count(*) from words where coalesce(s,cast(null as varchar(1)))='a'"))
+		require.Equal(t, 3, queryCount("select count(*) from words where case when id=1 then 'a' else s end='a'"))
+		require.Equal(t, 2, queryCount("select count(*) from words where case when id=1 then cast(null as varchar(1)) else s end='a'"))
+		require.Equal(t, 3, queryCount("select count(*) from words where if(id=1,s,'a')='a'"))
+		require.Equal(t, 2, queryCount("select count(*) from words where if(id=1,cast(null as varchar(1)),s)='a'"))
+		require.Equal(t, 2, queryCount("select count(*) from words where least(s,'z')='a'"))
+		require.Equal(t, 2, queryCount("select count(*) from words where greatest(s,'0')='a'"))
+		require.Equal(t, 2, queryCount("select count(*) from words where repeat(s,1)='a'"))
 		require.Equal(t, []string{"2", "3"}, queryStrings("select id from words where s='a' order by id"))
 		require.Equal(t, []string{"2", "3"}, queryStrings("select id from words where s in ('a','zz') order by id"))
 		require.Equal(t, []string{"1", "4"}, queryStrings("select id from words where s not in ('a','zz') order by id"))
