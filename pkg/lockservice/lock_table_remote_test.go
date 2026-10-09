@@ -21,6 +21,7 @@ import (
 	"net"
 	"os"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -63,6 +64,30 @@ func (c *deterministicUnlockErrorClient) AsyncSend(
 }
 
 func (c *deterministicUnlockErrorClient) Close() error { return nil }
+
+type connectionUnlockErrorClient struct {
+	deterministicUnlockErrorClient
+	bind        pb.LockTable
+	bindCalls   atomic.Int32
+	failUnlocks int32
+}
+
+func (c *connectionUnlockErrorClient) Send(ctx context.Context, req *pb.Request) (*pb.Response, error) {
+	switch req.Method {
+	case pb.Method_Unlock:
+		if c.calls.Add(1) <= c.failUnlocks {
+			return nil, c.err
+		}
+		return &pb.Response{}, nil
+	case pb.Method_GetBind:
+		c.bindCalls.Add(1)
+		resp := &pb.Response{}
+		resp.GetBind.LockTable = c.bind
+		return resp, nil
+	default:
+		return nil, errors.New("unexpected request")
+	}
+}
 
 func TestIsRetryErrorTreatsLocalBackendGenerationErrorsAsAmbiguous(t *testing.T) {
 	tests := []struct {
@@ -121,11 +146,15 @@ func (c *blockingUnlockClient) Close() error { return nil }
 
 type blockingBindRefreshClient struct {
 	bindRefreshStarted chan struct{}
+	unlockError        error
 }
 
 func (c *blockingBindRefreshClient) Send(ctx context.Context, req *pb.Request) (*pb.Response, error) {
 	switch req.Method {
 	case pb.Method_Unlock, pb.Method_GetTxnLock:
+		if c.unlockError != nil {
+			return nil, c.unlockError
+		}
 		return nil, io.ErrUnexpectedEOF
 	case pb.Method_GetBind:
 		select {
@@ -1748,10 +1777,62 @@ func TestRemoteUnlockReturnsDeterministicOwnerErrorWithoutRetryLoop(t *testing.T
 		"a deterministic owner rejection must be returned, not replayed forever")
 }
 
+func TestRemoteUnlockConnectionFailureRefreshesBind(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+	}{
+		{"broken pipe", &net.OpError{Op: "write", Net: "tcp", Err: &os.SyscallError{Syscall: "write", Err: syscall.EPIPE}}},
+		{"connection reset", &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}},
+		{"wrapped broken pipe", errors.Join(errors.New("RPC send failed"), syscall.EPIPE)},
+		{"typed connection reset", moerr.NewConnectionReset(context.Background())},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, changed := range []bool{false, true} {
+				name := "same owner retry"
+				if changed {
+					name = "reassigned owner cleanup"
+				}
+				t.Run(name, func(t *testing.T) {
+					bind := pb.LockTable{ServiceID: "s2", Table: 1, OriginTable: 1, Valid: true, Version: 1}
+					newBind := bind
+					if changed {
+						newBind.ServiceID = "s1"
+						newBind.Version++
+					}
+					client := &connectionUnlockErrorClient{
+						deterministicUnlockErrorClient: deterministicUnlockErrorClient{err: test.err},
+						bind:                           newBind, failUnlocks: 1,
+					}
+					var replacements []pb.LockTable
+					remote := newRemoteLockTable("s1", time.Second, bind, client,
+						func(b pb.LockTable) { replacements = append(replacements, b) }, getLogger(""))
+					txn := newActiveTxn([]byte("transport-unlock"), "s1", newFixedSlicePool(8), "")
+					defer reuse.Free(txn, nil)
+					ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+					defer cancel()
+					require.NoError(t, remote.unlockWithContext(ctx, txn, nil, timestamp.Timestamp{}))
+					require.Equal(t, int32(1), client.bindCalls.Load())
+					if changed {
+						require.Equal(t, int32(1), client.calls.Load())
+						require.Equal(t, []pb.LockTable{newBind}, replacements)
+					} else {
+						require.Equal(t, int32(2), client.calls.Load())
+						require.Empty(t, replacements)
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestRemoteUnlockWithContextCancelsBindRefresh(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
-	client := &blockingBindRefreshClient{bindRefreshStarted: make(chan struct{}, 1)}
+	client := &blockingBindRefreshClient{
+		bindRefreshStarted: make(chan struct{}, 1),
+		unlockError:        &net.OpError{Op: "write", Net: "unix", Err: syscall.EPIPE},
+	}
 	remote := newRemoteLockTable(
 		"s1",
 		time.Second,
@@ -1764,6 +1845,7 @@ func TestRemoteUnlockWithContextCancelsBindRefresh(t *testing.T) {
 	txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(8), "")
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	done := make(chan error, 1)
 	go func() {
 		done <- remote.unlockWithContext(ctx, txn, nil, timestamp.Timestamp{})
