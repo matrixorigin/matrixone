@@ -101,3 +101,44 @@ func TestInternalCTASRewriteHintAttachesToSource(t *testing.T) {
 	require.NotNil(t, insert.Rows.RewriteOption)
 	require.Contains(t, insert.Rows.RewriteOption.Rewrites, "db1.t1")
 }
+
+func TestAttachRewriteOptionToStatementVariants(t *testing.T) {
+	option := &tree.RewriteOption{}
+
+	selectStmt := &tree.Select{}
+	attachRewriteOptionToStatement(selectStmt, option)
+	require.Same(t, option, selectStmt.RewriteOption)
+
+	paren := &tree.ParenSelect{Select: &tree.Select{}}
+	paren.Select.Select = &tree.ParenSelect{Select: &tree.Select{}}
+	attachRewriteOptionToStatement(paren, option)
+	require.Same(t, option, paren.Select.RewriteOption)
+	require.Same(t, option, paren.Select.Select.(*tree.ParenSelect).Select.RewriteOption)
+
+	insert := &tree.Insert{Rows: &tree.Select{}}
+	attachRewriteOptionToStatement(insert, option)
+	require.Same(t, option, insert.Rows.RewriteOption)
+	attachRewriteOptionToStatement(&tree.Insert{}, option)
+
+	multiInsert := &tree.MultiInsert{Source: &tree.Select{}}
+	attachRewriteOptionToStatement(multiInsert, option)
+	require.Same(t, option, multiInsert.Source.RewriteOption)
+
+	createTable := &tree.CreateTable{AsSource: &tree.Select{}}
+	attachRewriteOptionToStatement(createTable, option)
+	require.Same(t, option, createTable.AsSource.RewriteOption)
+
+	attachRewriteOptionToStatement(nil, option)
+	attachRewriteOptionToStatement(selectStmt, nil)
+}
+
+func TestCTASRewriteOption(t *testing.T) {
+	option := &tree.RewriteOption{}
+	c := &Compile{stmt: &tree.CreateTable{AsSource: &tree.Select{RewriteOption: option}}}
+	require.Same(t, option, c.ctasRewriteOption())
+
+	c.stmt = &tree.CreateTable{}
+	require.Nil(t, c.ctasRewriteOption())
+	c.stmt = &tree.Select{}
+	require.Nil(t, c.ctasRewriteOption())
+}
