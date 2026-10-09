@@ -430,7 +430,7 @@ func TestExportCSVBatchSplitPreservesRows(t *testing.T) {
 	paths, err := filepath.Glob(filepath.Join(filepath.Dir(ep.userConfig.FilePath), "out_*.csv"))
 	require.NoError(t, err)
 	require.Len(t, paths, len(values))
-	var gotIDs []string
+	gotIDs := make([]string, 0, len(paths))
 	for _, path := range paths {
 		data, err := os.ReadFile(path)
 		require.NoError(t, err)
