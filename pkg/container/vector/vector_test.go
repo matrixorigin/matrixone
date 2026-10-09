@@ -6538,7 +6538,7 @@ func TestUnionOneEmptyMarkerSets(t *testing.T) {
 }
 
 func TestUnionOneSourceMarkerLookup(t *testing.T) {
-	for _, scenario := range []string{"source_null", "source_all_null", "source_grouping", "null_prefix", "grouping_prefix", "source_const", "destination_const", "nil_mpool"} {
+	for _, scenario := range []string{"source_null", "source_all_null", "source_grouping", "null_prefix", "grouping_prefix", "source_const", "source_const_null", "source_const_null_with_data", "destination_const", "nil_mpool"} {
 		t.Run(scenario, func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
@@ -6566,11 +6566,17 @@ func TestUnionOneSourceMarkerLookup(t *testing.T) {
 				require.NoError(t, AppendFixed(destination, int64(44), false, mp))
 				destination.GetGrouping().Set(0)
 				offset = 1
-			case "source_const":
+			case "source_const_null":
+				source.Free(mp)
+				source = NewConstNull(types.T_int64.ToType(), 3, mp)
+			case "source_const", "source_const_null_with_data":
 				source.Free(mp)
 				var err error
 				source, err = NewConstFixed(types.T_int64.ToType(), int64(77), 3, mp)
 				require.NoError(t, err)
+				if scenario == "source_const_null_with_data" {
+					source.GetNulls().Set(0)
+				}
 			case "destination_const":
 				destination.SetClass(CONSTANT)
 			case "nil_mpool":
