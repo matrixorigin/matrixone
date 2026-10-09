@@ -6298,13 +6298,13 @@ func TestInitExecuteStmtParamDirectBinaryConstructor(t *testing.T) {
 							require.ErrorContains(t, err, "MORPC protocol version 52")
 						} else {
 							require.NoError(t, err)
-							if (constructor == "json_array_append('[]', '$', ?)" ||
-								constructor == "json_array_insert('[0]', '$[0]', ?)") && input.null {
-								require.True(t, result.IsNull(0), "array modification functions keep their SQL NULL value contract")
+							if constructor == "json_array_append('[]', '$', ?)" && input.null {
+								require.True(t, result.IsNull(0), "ARRAY_APPEND keeps its SQL NULL value contract")
 								executor.Free()
 								prepared.clearBinaryParamState(cw.proc)
 								continue
 							}
+							require.False(t, result.IsNull(0))
 							want := "[\"base64:type252:YWI=\"]"
 							if input.value == "cd" {
 								want = "[\"base64:type252:Y2Q=\"]"
@@ -6312,7 +6312,7 @@ func TestInitExecuteStmtParamDirectBinaryConstructor(t *testing.T) {
 							if input.null {
 								want = "[null]"
 							}
-							if constructor == "json_array_insert('[0]', '$[0]', ?)" && !input.null {
+							if constructor == "json_array_insert('[0]', '$[0]', ?)" {
 								want = want[:len(want)-1] + ", 0]"
 							}
 							if constructor != "json_array(?)" && constructor != "json_array_append('[]', '$', ?)" &&

@@ -45,19 +45,40 @@ SELECT JSON_ARRAY_INSERT('{"value":1}', '$.value[0]', 9) AS result;
 {"value": 1}
 SELECT JSON_ARRAY_INSERT('{"arr":[1]}', '$.arr[0]', NULL) AS result;
 ➤ result[-1,2147483647,0]  𝄀
-NULL
+{"arr": [null, 1]}
 SELECT JSON_ARRAY_INSERT('{"arr":[1]}', '$.arr[0]', 9, '$.arr[0]', NULL) AS result;
 ➤ result[-1,2147483647,0]  𝄀
-NULL
+{"arr": [null, 9, 1]}
 SELECT JSON_ARRAY_INSERT('{"arr":[1]}', '$.arr[0]', CAST('null' AS JSON)) AS result;
 ➤ result[-1,2147483647,0]  𝄀
 {"arr": [null, 1]}
+SELECT JSON_ARRAY_INSERT('{"arr":[1]}', '$.missing[0]', NULL) AS result;
+➤ result[-1,2147483647,0]  𝄀
+{"arr": [1]}
+SELECT JSON_ARRAY_INSERT('{"value":1}', '$.value[0]', NULL) AS result;
+➤ result[-1,2147483647,0]  𝄀
+{"value": 1}
+SELECT JSON_ARRAY_INSERT('null', '$[0]', NULL) AS result;
+➤ result[-1,2147483647,0]  𝄀
+null
+SELECT JSON_ARRAY_INSERT('not json', '$[0]', NULL) AS result;
+invalid input: json text not json
+SELECT JSON_ARRAY_INSERT('[1]', '$', NULL) AS result;
+invalid argument invalid json array insert path, bad value $
+SELECT JSON_ARRAY_INSERT('{"arr":[1]}', '$.arr', NULL) AS result;
+invalid argument invalid json array insert path, bad value $."arr"
 SELECT JSON_ARRAY_INSERT(NULL, '$[0]', 9) AS result;
 ➤ result[-1,2147483647,0]  𝄀
 NULL
 SELECT JSON_ARRAY_INSERT('[1]', NULL, 9) AS result;
 ➤ result[-1,2147483647,0]  𝄀
 NULL
+SELECT JSON_ARRAY_INSERT(NULL, '$[0]', 9) IS NULL AS sql_null;
+➤ sql_null[-7,1,0]  𝄀
+1
+SELECT JSON_ARRAY_INSERT('[1]', NULL, 9) IS NULL AS sql_null;
+➤ sql_null[-7,1,0]  𝄀
+1
 SELECT JSON_ARRAY_INSERT('{"arr":[1]}', '$.arr', 9) AS result;
 invalid argument invalid json array insert path, bad value $."arr"
 SELECT JSON_ARRAY_INSERT('{"arr":[1]}', '$.arr[*]', 9) AS result;
@@ -70,19 +91,36 @@ SELECT JSON_ARRAY_INSERT('{"arr":[1]}', '$.arr[0]', CAST('{"x":1}' AS JSON)) AS 
 DROP TABLE IF EXISTS json_array_insert_docs;
 CREATE TABLE json_array_insert_docs (
 id INT PRIMARY KEY,
-doc JSON,
+doc JSON NOT NULL,
 value INT NULL
 );
-INSERT INTO json_array_insert_docs VALUES (1, '{"arr":[1,2]}', 9), (2, '{"arr":[1,2]}', NULL);
+INSERT INTO json_array_insert_docs VALUES (1, '{"arr":[1,2]}', 9), (2, '{"arr":[1,2]}', NULL), (3, '{"arr":[1,2]}', 8);
 UPDATE json_array_insert_docs
 SET doc = JSON_ARRAY_INSERT(doc, '$.arr[1]', 9)
 WHERE id = 1;
 SELECT id, doc FROM json_array_insert_docs ORDER BY id;
 ➤ id[4,32,0]  ¦  doc[-1,2147483647,0]  𝄀
 1  ¦  {"arr": [1, 9, 2]}  𝄀
-2  ¦  {"arr": [1, 2]}
+2  ¦  {"arr": [1, 2]}  𝄀
+3  ¦  {"arr": [1, 2]}
 SELECT id, JSON_ARRAY_INSERT(doc, '$.arr[0]', value) AS inserted FROM json_array_insert_docs ORDER BY id;
 ➤ id[4,32,0]  ¦  inserted[-1,2147483647,0]  𝄀
 1  ¦  {"arr": [9, 1, 9, 2]}  𝄀
-2  ¦  NULL
+2  ¦  {"arr": [null, 1, 2]}  𝄀
+3  ¦  {"arr": [8, 1, 2]}
+UPDATE json_array_insert_docs SET doc = JSON_ARRAY_INSERT(doc, '$.arr[0]', value);
+SELECT id, doc, doc IS NULL AS sql_null FROM json_array_insert_docs ORDER BY id;
+➤ id[4,32,0]  ¦  doc[-1,2147483647,0]  ¦  sql_null[-7,1,0]  𝄀
+1  ¦  {"arr": [9, 1, 9, 2]}  ¦  0  𝄀
+2  ¦  {"arr": [null, 1, 2]}  ¦  0  𝄀
+3  ¦  {"arr": [8, 1, 2]}  ¦  0
+UPDATE json_array_insert_docs SET doc = JSON_ARRAY_INSERT('not json', '$[0]', value) WHERE id = 2;
+invalid input: json text not json
+SELECT doc FROM json_array_insert_docs WHERE id = 2;
+➤ doc[-1,2147483647,0]  𝄀
+{"arr": [null, 1, 2]}
+UPDATE json_array_insert_docs SET doc = JSON_ARRAY_INSERT(doc, '$.missing[0]', value) WHERE id = 2;
+SELECT doc FROM json_array_insert_docs WHERE id = 2;
+➤ doc[-1,2147483647,0]  𝄀
+{"arr": [null, 1, 2]}
 DROP TABLE json_array_insert_docs;
