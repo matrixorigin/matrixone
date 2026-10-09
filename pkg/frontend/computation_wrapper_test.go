@@ -6259,7 +6259,7 @@ func TestInitExecuteStmtParamBinaryConstructorMemberOf(t *testing.T) {
 }
 
 func TestInitExecuteStmtParamDirectBinaryConstructor(t *testing.T) {
-	for _, constructor := range []string{"json_array(?)", "json_object('k', ?)", "json_set('{}', '$.k', ?)", "json_insert('{}', '$.k', ?)", "json_replace('{\"k\":0}', '$.k', ?)", "json_array_append('[]', '$', ?)"} {
+	for _, constructor := range []string{"json_array(?)", "json_object('k', ?)", "json_set('{}', '$.k', ?)", "json_insert('{}', '$.k', ?)", "json_replace('{\"k\":0}', '$.k', ?)", "json_array_append('[]', '$', ?)", "json_array_insert('[0]', '$[0]', ?)"} {
 		t.Run(constructor, func(t *testing.T) {
 			for _, version := range []int64{defines.MORPCVersion51, defines.MORPCVersion52} {
 				t.Run(fmt.Sprint(version), func(t *testing.T) {
@@ -6298,8 +6298,9 @@ func TestInitExecuteStmtParamDirectBinaryConstructor(t *testing.T) {
 							require.ErrorContains(t, err, "MORPC protocol version 52")
 						} else {
 							require.NoError(t, err)
-							if constructor == "json_array_append('[]', '$', ?)" && input.null {
-								require.True(t, result.IsNull(0), "ARRAY_APPEND keeps its SQL NULL value contract")
+							if (constructor == "json_array_append('[]', '$', ?)" ||
+								constructor == "json_array_insert('[0]', '$[0]', ?)") && input.null {
+								require.True(t, result.IsNull(0), "array modification functions keep their SQL NULL value contract")
 								executor.Free()
 								prepared.clearBinaryParamState(cw.proc)
 								continue
@@ -6311,7 +6312,11 @@ func TestInitExecuteStmtParamDirectBinaryConstructor(t *testing.T) {
 							if input.null {
 								want = "[null]"
 							}
-							if constructor != "json_array(?)" && constructor != "json_array_append('[]', '$', ?)" {
+							if constructor == "json_array_insert('[0]', '$[0]', ?)" && !input.null {
+								want = want[:len(want)-1] + ", 0]"
+							}
+							if constructor != "json_array(?)" && constructor != "json_array_append('[]', '$', ?)" &&
+								constructor != "json_array_insert('[0]', '$[0]', ?)" {
 								want = "{\"k\": " + want[1:len(want)-1] + "}"
 							}
 							require.Equal(t, want, types.DecodeJson(result.GetBytesAt(0)).String())
