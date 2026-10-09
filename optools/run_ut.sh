@@ -56,6 +56,7 @@ UT_SHARD=${UT_SHARD:-"all"}
 # the complete-scope go test before any prebuilt binary is executed.
 UT_PREBUILD_EMBEDDED=${UT_PREBUILD_EMBEDDED:-"1"}
 UT_ISSUES_BATCHES=${UT_ISSUES_BATCHES:-"1"}
+UT_ISSUES_BATCH_PARALLEL=${UT_ISSUES_BATCH_PARALLEL:-"1"}
 # Nine race binaries currently occupy several GiB. Preserve enough workspace
 # headroom for Go's build cache, reports, and the running issues fixture.
 UT_PREBUILD_MIN_FREE_KB=${UT_PREBUILD_MIN_FREE_KB:-"6291456"}
@@ -2227,7 +2228,18 @@ function run_issues_race_batches(){
         race_patterns+=("${shard_patterns[index]}")
         race_deadlines+=("${deadline}")
     done
-    run_prebuilt_race_commands serial "${PREBUILT_RACE_REPORT}" 1 "$((10#${UT_TIMEOUT} * 60 + 120))"
+    # The process pool is enabled only for this exact prebuilt batch wave.
+    # Ordinary packages keep the exclusive cluster admission contract.
+    if (( 10#${UT_ISSUES_BATCH_PARALLEL} > 1 )); then
+        logger "INF" "Run ${batches} issues batches with bounded parallelism ${UT_ISSUES_BATCH_PARALLEL}"
+        (
+            export MO_TEST_CLUSTER_ADMISSION_POOL_SIZE="${UT_ISSUES_BATCH_PARALLEL}"
+            run_prebuilt_race_commands serial "${PREBUILT_RACE_REPORT}" \
+                "${UT_ISSUES_BATCH_PARALLEL}" "$((10#${UT_TIMEOUT} * 60 + 120))"
+        )
+    else
+        run_prebuilt_race_commands serial "${PREBUILT_RACE_REPORT}" 1 "$((10#${UT_TIMEOUT} * 60 + 120))"
+    fi
 }
 
 function run_embedded_tests(){
@@ -2381,6 +2393,15 @@ function run_tests(){
     if ! [[ "${UT_TIMEOUT}" =~ ^[1-9][0-9]*$ ]] ||
         [[ "${UT_ISSUES_BATCHES}" != 1 && "${UT_ISSUES_BATCHES}" != 4 ]]; then
         logger "ERR" "race batching requires UT_ISSUES_BATCHES=1|4"
+        UT_TEST_STATUS=1
+        mark_ut_stage "routing" "validate shard and package partition" finish 1
+        return 0
+    fi
+    if ! [[ "${UT_ISSUES_BATCH_PARALLEL}" =~ ^[1-9][0-9]*$ ]] ||
+        (( 10#${UT_ISSUES_BATCH_PARALLEL} > 2 )) ||
+        (( UT_ISSUES_BATCHES == 1 && UT_ISSUES_BATCH_PARALLEL != 1 )) ||
+        (( 10#${UT_ISSUES_BATCH_PARALLEL} > 10#${UT_ISSUES_BATCHES} )); then
+        logger "ERR" "UT_ISSUES_BATCH_PARALLEL must be 1..2 and no greater than UT_ISSUES_BATCHES (1 requires parallel=1), got '${UT_ISSUES_BATCH_PARALLEL}'"
         UT_TEST_STATUS=1
         mark_ut_stage "routing" "validate shard and package partition" finish 1
         return 0

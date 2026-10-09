@@ -521,10 +521,14 @@ func startBasicCluster(
 	trace func(phase string, duration time.Duration, err error),
 ) (Cluster, error) {
 	started := time.Now()
-	c, err := StartTestCluster(
+	options := []Option{
 		WithCNCount(cnCount),
 		WithPreStart(adjustBasicClusterService),
-	)
+	}
+	if concurrentTestClusterProcessesEnabled() {
+		options = append(options, WithConcurrentTestClusterProcesses())
+	}
+	c, err := StartTestCluster(options...)
 	if trace != nil {
 		trace("cluster-start", time.Since(started), err)
 	}

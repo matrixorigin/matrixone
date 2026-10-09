@@ -14,7 +14,12 @@
 
 package embed
 
-import "time"
+import (
+	"os"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/testutil/clusteradmission"
+)
 
 const (
 	// Test clusters run under the race detector and may lose several seconds to
@@ -70,6 +75,21 @@ func WithConcurrentTestClusters() Option {
 	return func(c *cluster) {
 		c.options.allowConcurrentTestClusters = true
 	}
+}
+
+// WithConcurrentTestClusterProcesses opts one test cluster into the bounded
+// runner-wide process pool. It is reserved for a scheduler that has measured
+// independent test processes and supplies the pool size through the admission
+// environment; ordinary tests must keep the default exclusive admission.
+func WithConcurrentTestClusterProcesses() Option {
+	return func(c *cluster) {
+		c.options.allowConcurrentTestClusterProcesses = true
+	}
+}
+
+func concurrentTestClusterProcessesEnabled() bool {
+	value := os.Getenv(clusteradmission.ProcessPoolSizeEnv)
+	return value != "" && value != "0" && value != "1"
 }
 
 // WithHAKeeperHeartbeatTimeout overrides the CN and TN HAKeeper heartbeat RPC

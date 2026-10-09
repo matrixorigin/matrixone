@@ -19,8 +19,10 @@ package clusteradmission
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -31,18 +33,24 @@ import (
 const (
 	lockFilename = "mo-test-cluster-lifecycle.lock"
 	retryDelay   = 50 * time.Millisecond
+	// ProcessPoolSizeEnv is set only by the bounded race-UT scheduler. A pool
+	// uses shared admission plus one exclusive slot lock per process, so a
+	// normal exclusive test still excludes the whole pool.
+	ProcessPoolSizeEnv = "MO_TEST_CLUSTER_ADMISSION_POOL_SIZE"
 )
 
 var processAdmission = newManager(filepath.Join(os.TempDir(), lockFilename), retryDelay)
 
-// Mode controls whether a test deliberately starts another complete cluster in
-// the same test process. The default must be Exclusive: accidental overlap is
-// otherwise invisible to the runner-wide file lock and can starve HAKeeper.
+// Mode controls whether a test deliberately starts another complete cluster.
+// The default must be Exclusive: accidental overlap is otherwise invisible to
+// the runner-wide file lock and can starve HAKeeper. AllowConcurrentProcesses
+// is reserved for a bounded scheduler that supplies a process-pool size.
 type Mode uint8
 
 const (
 	Exclusive Mode = iota
 	AllowConcurrent
+	AllowConcurrentProcesses
 )
 
 // Lease represents one complete test cluster owned by the current process.
@@ -72,6 +80,8 @@ type Timing struct {
 // Acquire waits until this test process has runner-wide admission. A second
 // cluster in the same process is rejected unless the caller explicitly opts
 // into AllowConcurrent for a test whose subject is multi-cluster behavior.
+// AllowConcurrentProcesses uses a shared gate and one of a bounded set of
+// slot locks, so ordinary Exclusive admission still excludes the whole pool.
 func Acquire(ctx context.Context, mode Mode) (*Lease, error) {
 	return processAdmission.acquire(ctx, mode)
 }
@@ -131,11 +141,17 @@ type manager struct {
 	path       string
 	retryDelay time.Duration
 	lock       *flock.Flock
+	gate       *flock.Flock
 	references int
+	poolSize   int
 }
 
 func newManager(path string, delay time.Duration) *manager {
 	return &manager{path: path, retryDelay: delay}
+}
+
+func newPooledManager(path string, delay time.Duration, poolSize int) *manager {
+	return &manager{path: path, retryDelay: delay, poolSize: poolSize}
 }
 
 func (m *manager) acquire(ctx context.Context, mode Mode) (*Lease, error) {
@@ -150,11 +166,14 @@ func (m *manager) acquire(ctx context.Context, mode Mode) (*Lease, error) {
 		return nil, err
 	}
 	if m.references > 0 {
-		if mode != AllowConcurrent {
+		if mode != AllowConcurrent && mode != AllowConcurrentProcesses {
 			return nil, moerr.NewInvalidStateNoCtx("another complete test cluster is already active in this process")
 		}
 		m.references++
 		return &Lease{manager: m, requested: requested, acquired: time.Now()}, nil
+	}
+	if mode == AllowConcurrentProcesses {
+		return m.acquireFromProcessPool(ctx, requested)
 	}
 
 	lock := flock.New(m.path)
@@ -171,6 +190,90 @@ func (m *manager) acquire(ctx context.Context, mode Mode) (*Lease, error) {
 	return &Lease{manager: m, requested: requested, acquired: time.Now()}, nil
 }
 
+func (m *manager) acquireFromProcessPool(ctx context.Context, requested time.Time) (*Lease, error) {
+	poolSize, err := m.processPoolSize()
+	if err != nil {
+		return nil, err
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
+		// Shared gate admission excludes ordinary Exclusive leases while
+		// allowing the bounded pool members to coexist.
+		gate := flock.New(m.path)
+		locked, err := gate.TryRLock()
+		if err != nil {
+			return nil, errors.Join(
+				moerr.NewInternalErrorNoCtxf("acquire test cluster admission gate %s", m.path),
+				err,
+			)
+		}
+		if !locked {
+			_ = gate.Close()
+			if err := waitAdmissionRetry(ctx, m.retryDelay); err != nil {
+				return nil, err
+			}
+			continue
+		}
+
+		for slotIndex := 0; slotIndex < poolSize; slotIndex++ {
+			slotPath := fmt.Sprintf("%s.slot.%d", m.path, slotIndex)
+			slot := flock.New(slotPath)
+			locked, err := slot.TryLock()
+			if err != nil {
+				_ = slot.Close()
+				_ = gate.Close()
+				return nil, errors.Join(
+					moerr.NewInternalErrorNoCtxf("acquire test cluster admission slot %s", slotPath),
+					err,
+				)
+			}
+			if !locked {
+				_ = slot.Close()
+				continue
+			}
+			m.gate = gate
+			m.lock = slot
+			m.references = 1
+			return &Lease{manager: m, requested: requested, acquired: time.Now()}, nil
+		}
+
+		_ = gate.Close()
+		if err := waitAdmissionRetry(ctx, m.retryDelay); err != nil {
+			return nil, err
+		}
+	}
+}
+
+func (m *manager) processPoolSize() (int, error) {
+	if m.poolSize != 0 {
+		if m.poolSize < 2 {
+			return 0, moerr.NewInvalidInputNoCtx("concurrent process admission pool must have at least two slots")
+		}
+		return m.poolSize, nil
+	}
+	value := os.Getenv(ProcessPoolSizeEnv)
+	poolSize, err := strconv.Atoi(value)
+	if err != nil || poolSize < 2 {
+		return 0, moerr.NewInvalidInputNoCtxf(
+			"%s must be an integer greater than one, got %q", ProcessPoolSizeEnv, value)
+	}
+	return poolSize, nil
+}
+
+func waitAdmissionRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
 func (m *manager) release() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -181,13 +284,21 @@ func (m *manager) release() error {
 		m.references--
 		return nil
 	}
-	if err := m.lock.Close(); err != nil {
+	var releaseErr error
+	if m.lock != nil {
+		releaseErr = errors.Join(releaseErr, m.lock.Close())
+	}
+	if m.gate != nil {
+		releaseErr = errors.Join(releaseErr, m.gate.Close())
+	}
+	if releaseErr != nil {
 		return errors.Join(
 			moerr.NewInternalErrorNoCtxf("release test cluster admission %s", m.path),
-			err,
+			releaseErr,
 		)
 	}
 	m.lock = nil
+	m.gate = nil
 	m.references = 0
 	return nil
 }

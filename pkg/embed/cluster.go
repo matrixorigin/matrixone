@@ -85,14 +85,15 @@ type cluster struct {
 	testAdmission  *clusteradmission.Lease
 
 	options struct {
-		dataPath                    string
-		cn                          int
-		withProxy                   bool
-		preStart                    func(ServiceOperator)
-		testing                     bool
-		allowConcurrentTestClusters bool
-		heartbeatTimeout            time.Duration
-		storeTimeout                time.Duration
+		dataPath                            string
+		cn                                  int
+		withProxy                           bool
+		preStart                            func(ServiceOperator)
+		testing                             bool
+		allowConcurrentTestClusters         bool
+		allowConcurrentTestClusterProcesses bool
+		heartbeatTimeout                    time.Duration
+		storeTimeout                        time.Duration
 	}
 
 	ports struct {
@@ -175,7 +176,9 @@ func (c *cluster) Start() (err error) {
 			)
 		}
 		mode := clusteradmission.Exclusive
-		if c.options.allowConcurrentTestClusters {
+		if c.options.allowConcurrentTestClusterProcesses {
+			mode = clusteradmission.AllowConcurrentProcesses
+		} else if c.options.allowConcurrentTestClusters {
 			mode = clusteradmission.AllowConcurrent
 		}
 		admissionStarted := time.Now()

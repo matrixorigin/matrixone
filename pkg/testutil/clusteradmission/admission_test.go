@@ -22,6 +22,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -32,6 +33,7 @@ import (
 const (
 	helperModeEnv = "MO_CLUSTER_ADMISSION_HELPER_MODE"
 	helperPathEnv = "MO_CLUSTER_ADMISSION_HELPER_PATH"
+	helperPoolEnv = "MO_CLUSTER_ADMISSION_HELPER_POOL"
 )
 
 func TestAdmissionRejectsImplicitReentrancyAndAllowsExplicitConcurrency(t *testing.T) {
@@ -105,15 +107,70 @@ func TestAdmissionIsExclusiveAcrossProcesses(t *testing.T) {
 	runAdmissionHelper(t, path, "acquired")
 }
 
+func TestAdmissionProcessPoolIsBoundedAndExcludesExclusive(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cluster.lock")
+	firstManager := newPooledManager(path, time.Millisecond, 2)
+	secondManager := newPooledManager(path, time.Millisecond, 2)
+	thirdManager := newPooledManager(path, time.Millisecond, 2)
+
+	first, err := firstManager.acquire(context.Background(), AllowConcurrentProcesses)
+	require.NoError(t, err)
+	second, err := secondManager.acquire(context.Background(), AllowConcurrentProcesses)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	_, err = thirdManager.acquire(ctx, AllowConcurrentProcesses)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+
+	exclusiveManager := newManager(path, time.Millisecond)
+	_, err = exclusiveManager.acquire(ctx, Exclusive)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+
+	require.NoError(t, first.Release())
+	next, err := thirdManager.acquire(context.Background(), AllowConcurrentProcesses)
+	require.NoError(t, err)
+	require.NoError(t, next.Release())
+	require.NoError(t, second.Release())
+}
+
+func TestAdmissionProcessPoolRejectsInvalidSize(t *testing.T) {
+	manager := newPooledManager(filepath.Join(t.TempDir(), "cluster.lock"), time.Millisecond, 1)
+	_, err := manager.acquire(context.Background(), AllowConcurrentProcesses)
+	require.ErrorContains(t, err, "at least two slots")
+}
+
+func TestAdmissionProcessPoolWorksAcrossProcesses(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cluster.lock")
+	owner := newPooledManager(path, time.Millisecond, 2)
+	lease, err := owner.acquire(context.Background(), AllowConcurrentProcesses)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, lease.Release()) })
+
+	// The subprocess must take the second slot rather than wait for the
+	// owner's shared gate. This exercises the same file-lock boundary used by
+	// two concurrent race-UT batch processes.
+	runAdmissionHelperWithPool(t, path, "pooled-acquired", 2)
+}
+
 func TestAdmissionSubprocessHelper(t *testing.T) {
 	mode := os.Getenv(helperModeEnv)
 	if mode == "" {
 		return
 	}
 	manager := newManager(os.Getenv(helperPathEnv), time.Millisecond)
+	if poolValue := os.Getenv(helperPoolEnv); poolValue != "" {
+		poolSize, err := strconv.Atoi(poolValue)
+		require.NoError(t, err)
+		manager = newPooledManager(os.Getenv(helperPathEnv), time.Millisecond, poolSize)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	lease, err := manager.acquire(ctx, Exclusive)
+	modeValue := Exclusive
+	if mode == "pooled-acquired" {
+		modeValue = AllowConcurrentProcesses
+	}
+	lease, err := manager.acquire(ctx, modeValue)
 
 	switch mode {
 	case "blocked":
@@ -127,6 +184,9 @@ func TestAdmissionSubprocessHelper(t *testing.T) {
 	case "acquired":
 		require.NoError(t, err)
 		require.NoError(t, lease.Release())
+	case "pooled-acquired":
+		require.NoError(t, err)
+		require.NoError(t, lease.Release())
 	default:
 		t.Fatalf("unknown helper mode %q", mode)
 	}
@@ -138,6 +198,18 @@ func runAdmissionHelper(t *testing.T, path, mode string) {
 	cmd.Env = append(os.Environ(),
 		helperModeEnv+"="+mode,
 		helperPathEnv+"="+path,
+	)
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, string(output))
+}
+
+func runAdmissionHelperWithPool(t *testing.T, path, mode string, poolSize int) {
+	t.Helper()
+	cmd := exec.Command(os.Args[0], "-test.run=^TestAdmissionSubprocessHelper$")
+	cmd.Env = append(os.Environ(),
+		helperModeEnv+"="+mode,
+		helperPathEnv+"="+path,
+		helperPoolEnv+"="+strconv.Itoa(poolSize),
 	)
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, string(output))
