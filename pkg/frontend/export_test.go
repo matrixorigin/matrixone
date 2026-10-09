@@ -565,6 +565,50 @@ func TestExportCSVUnlimitedBatchUsesSingleWrite(t *testing.T) {
 	require.Equal(t, uint64(3), ep.Rows)
 }
 
+func TestConstructByteOmitsRowOffsetsWhenCSVIsUnlimited(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	mrs := &MysqlResultSet{}
+	column := new(MysqlColumn)
+	column.SetName("value")
+	mrs.AddColumn(column)
+	ep := &ExportConfig{
+		userConfig: &tree.ExportParam{
+			ExportFormat: "csv",
+			Fields:       tree.NewFields("", false, 0, 0),
+			Lines:        tree.NewLines("", ""),
+		},
+		ctx: ctx,
+		mrs: mrs,
+	}
+	initExportFileParam(ep, mrs)
+	ep.init()
+	ep.Index.Add(1)
+
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.NewVector(3, types.T_varchar.ToType(), mp, false, []string{"a", "", "bc"})
+	bat.SetRowCount(3)
+	ses := &backSession{feSessionImpl: feSessionImpl{pool: mp}}
+	constructByte(ctx, ses, bat, ep.Index.Load(), ep.ByteChan, ep)
+	encoded := <-ep.ByteChan
+	require.NoError(t, encoded.err)
+	require.Equal(t, "abc", string(encoded.writeByte))
+
+	var written []byte
+	stub := gostub.Stub(&writeDataToCSVFile, func(ep *ExportConfig, output []byte) error {
+		written = append(written, output...)
+		ep.CurFileSize += uint64(len(output))
+		return nil
+	})
+	defer stub.Reset()
+	ep.ByteChan <- encoded
+	require.NoError(t, exportDataFromBatchToCSVFile(ep))
+	require.Equal(t, "abc", string(written))
+	require.Equal(t, uint64(3), ep.Rows, "empty encoded rows must still count")
+	require.Equal(t, int32(1), ep.WriteIndex.Load())
+	require.Empty(t, encoded.rowEnds, "unlimited CSV batches should not retain per-row offsets")
+}
+
 func TestExportCSVFiniteSplitGroupsRowsIntoOneWrite(t *testing.T) {
 	ep := &ExportConfig{
 		userConfig: &tree.ExportParam{ExportFormat: "csv", SplitSize: 8},
@@ -587,6 +631,37 @@ func TestExportCSVFiniteSplitGroupsRowsIntoOneWrite(t *testing.T) {
 	require.NoError(t, writeExportBatchToFile(ep, makeCSVTestBatch("1,a\n", "2,b\n", "3,c\n")))
 	require.Equal(t, []string{"1,a\n2,b\n", "3,c\n"}, writes)
 	require.Equal(t, uint64(1), ep.Rows)
+}
+
+func TestExportCSVFiniteSplitCoalescesRowsAfterRotation(t *testing.T) {
+	ep := &ExportConfig{
+		userConfig: &tree.ExportParam{ExportFormat: "csv", SplitSize: 8},
+		ctx:        context.Background(),
+		mrs:        &MysqlResultSet{},
+	}
+	var writes []string
+	rotations := 0
+	stubs := gostub.Stub(&writeDataToCSVFile, func(ep *ExportConfig, output []byte) error {
+		writes = append(writes, string(output))
+		ep.CurFileSize += uint64(len(output))
+		return nil
+	})
+	defer stubs.Reset()
+	stubs.Stub(&Close, func(*ExportConfig) error {
+		rotations++
+		return nil
+	})
+	stubs.Stub(&openNewFile, func(_ context.Context, ep *ExportConfig, _ *MysqlResultSet) error {
+		ep.CurFileSize = 0
+		ep.hasCSVData = false
+		ep.Rows = 0
+		return nil
+	})
+
+	records := []string{"1,a\n", "2,b\n", "3,c\n", "4,d\n", "5,e\n", "6,f\n"}
+	require.NoError(t, writeExportBatchToFile(ep, makeCSVTestBatch(records...)))
+	require.Equal(t, []string{"1,a\n2,b\n", "3,c\n4,d\n", "5,e\n6,f\n"}, writes)
+	require.Equal(t, 2, rotations)
 }
 
 func TestExportCSVBatchSplitsAreIndependentOfBatchDistribution(t *testing.T) {
@@ -652,6 +727,67 @@ func TestExportCSVBatchWriteErrorPreservesCompletedProgress(t *testing.T) {
 	require.Equal(t, int32(0), ep.WriteIndex.Load())
 }
 
+func TestExportCSVRotationErrorsPreserveCompletedProgress(t *testing.T) {
+	for _, failAt := range []string{"close", "open"} {
+		t.Run(failAt, func(t *testing.T) {
+			rotationErr := moerr.NewInternalError(context.Background(), "injected CSV rotation failure")
+			ep := &ExportConfig{
+				userConfig: &tree.ExportParam{ExportFormat: "csv", SplitSize: 4},
+				ctx:        context.Background(),
+				mrs:        &MysqlResultSet{},
+				ByteChan:   make(chan *BatchByte, 1),
+				BatchMap:   make(map[int32]*BatchByte),
+			}
+			ep.Index.Store(1)
+			batch := makeCSVTestBatch("1,a\n", "2,b\n")
+			batch.index = 1
+			ep.ByteChan <- batch
+
+			writes, closes, opens := 0, 0, 0
+			stubs := gostub.Stub(&writeDataToCSVFile, func(ep *ExportConfig, output []byte) error {
+				writes++
+				ep.CurFileSize += uint64(len(output))
+				return nil
+			})
+			defer stubs.Reset()
+			stubs.Stub(&Close, func(*ExportConfig) error {
+				closes++
+				if failAt == "close" {
+					return rotationErr
+				}
+				return nil
+			})
+			stubs.Stub(&openNewFile, func(_ context.Context, _ *ExportConfig, _ *MysqlResultSet) error {
+				opens++
+				ep.CurFileSize = 0
+				ep.hasCSVData = false
+				if failAt == "open" {
+					return rotationErr
+				}
+				ep.Rows = 0
+				return nil
+			})
+
+			wantOpens := 0
+			if failAt == "open" {
+				wantOpens = 1
+			}
+			require.ErrorIs(t, exportDataFromBatchToCSVFile(ep), rotationErr)
+			require.Equal(t, 1, writes, "the row that requested rotation must not be written")
+			require.Equal(t, 1, closes)
+			require.Equal(t, wantOpens, opens)
+			require.Equal(t, uint64(1), ep.Rows)
+			require.Equal(t, failAt == "close", ep.hasCSVData)
+			if failAt == "close" {
+				require.Equal(t, uint64(4), ep.CurFileSize)
+			} else {
+				require.Zero(t, ep.CurFileSize, "openNewFile resets CurFileSize before failing")
+			}
+			require.Equal(t, int32(0), ep.WriteIndex.Load())
+		})
+	}
+}
+
 func newCSVBatchTestExport(t *testing.T, path string, splitSize uint64, header bool) *ExportConfig {
 	t.Helper()
 	ctx := context.Background()
@@ -695,7 +831,7 @@ func makeCSVTestBatch(records ...string) *BatchByte {
 		output = append(output, record...)
 		rowEnds = append(rowEnds, len(output))
 	}
-	return &BatchByte{writeByte: output, rowEnds: rowEnds}
+	return &BatchByte{writeByte: output, rowEnds: rowEnds, rowCount: len(records)}
 }
 
 func makeIndexedCSVTestBatch(index int32, record string) *BatchByte {

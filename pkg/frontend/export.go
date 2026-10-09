@@ -87,6 +87,7 @@ type BatchByte struct {
 	index     int32
 	writeByte []byte
 	rowEnds   []int
+	rowCount  int
 	err       error
 }
 
@@ -342,7 +343,7 @@ func writeExportBatchToFile(ep *ExportConfig, batch *BatchByte) error {
 	if ep.getExportFormat() != "csv" {
 		return writeToCSVFile(ep, batch.writeByte)
 	}
-	if len(batch.rowEnds) == 0 {
+	if batch.rowCount == 0 {
 		return nil
 	}
 
@@ -351,7 +352,7 @@ func writeExportBatchToFile(ep *ExportConfig, batch *BatchByte) error {
 		if err := writeToCSVFile(ep, batch.writeByte); err != nil {
 			return err
 		}
-		ep.Rows += uint64(len(batch.rowEnds))
+		ep.Rows += uint64(batch.rowCount)
 		return nil
 	}
 
@@ -371,13 +372,18 @@ func writeExportBatchToFile(ep *ExportConfig, batch *BatchByte) error {
 
 	for _, rowEnd := range batch.rowEnds {
 		rowSize := uint64(rowEnd - previousEnd)
-		chunkSize := uint64(chunkEnd - chunkStart)
-		if chunkRows > 0 && exceedsFileSize(ep.CurFileSize, chunkSize+rowSize, maxSize) {
+		if chunkRows > 0 && exceedsFileSize(ep.CurFileSize, uint64(rowEnd-chunkStart), maxSize) {
 			if err := flushChunk(); err != nil {
 				return err
 			}
-			chunkStart = previousEnd
-			chunkEnd = previousEnd
+		}
+		if chunkRows == 0 && rowSize > 0 && ep.hasCSVData && exceedsFileSize(ep.CurFileSize, rowSize, maxSize) {
+			if err := Close(ep); err != nil {
+				return err
+			}
+			if err := openNewFile(ep.ctx, ep, ep.mrs); err != nil {
+				return err
+			}
 		}
 		chunkEnd = rowEnd
 		chunkRows++
@@ -477,8 +483,12 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 
 	buffer := &bytes.Buffer{}
 
-	rowEnds := make([]int, 0, bat.RowCount())
-	for i := 0; i < bat.RowCount(); i++ {
+	rowCount := bat.RowCount()
+	var rowEnds []int
+	if getEffectiveMaxFileSize(ep) != 0 {
+		rowEnds = make([]int, 0, rowCount)
+	}
+	for i := 0; i < rowCount; i++ {
 		for j, vec := range bat.Vecs {
 			if vec.GetNulls().Contains(uint64(i)) {
 				formatOutputString(ep, []byte("\\N"), symbol[j], closeby, flag[j], buffer)
@@ -646,7 +656,9 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 				return
 			}
 		}
-		rowEnds = append(rowEnds, buffer.Len())
+		if rowEnds != nil {
+			rowEnds = append(rowEnds, buffer.Len())
+		}
 	}
 
 	// copy data. byteBuffer.Bytes() is not able to pass to channel
@@ -659,6 +671,7 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 		index:     index,
 		writeByte: result,
 		rowEnds:   rowEnds,
+		rowCount:  rowCount,
 		err:       nil,
 	}) {
 		bat.Clean(mp)
