@@ -374,23 +374,23 @@ func TestArrayMath(t *testing.T) {
 				[]bool{true, false}),
 		},
 		{
-			name: "inner_product/f32/negated_dot", function: "inner_product",
+			name: "inner_product/f32/dot", function: "inner_product",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}, {4, 5, 6}, {1, 2}}, nil),
 				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}, {4, 5, 6}, {-3, 5}}, nil),
 			},
 			expected: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{-14, -77, -7},
+				[]float64{14, 77, 7},
 				nil),
 		},
 		{
-			name: "inner_product/f64/negated_dot", function: "inner_product",
+			name: "inner_product/f64/dot", function: "inner_product",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_array_float64.ToType(), [][]float64{{1, 2, 3}, {4, 5, 6}, {1, 2}}, nil),
 				NewFunctionTestInput(types.T_array_float64.ToType(), [][]float64{{1, 2, 3}, {4, 5, 6}, {-3, 5}}, nil),
 			},
 			expected: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{-14, -77, -7},
+				[]float64{14, 77, 7},
 				nil),
 		},
 		{
