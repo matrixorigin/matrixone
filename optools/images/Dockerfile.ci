@@ -7,6 +7,7 @@ FROM ${BUILDER_IMAGE} AS native
 
 ARG GOPROXY="https://proxy.golang.org,direct"
 ENV GOWORK=off
+ENV GOTOOLCHAIN=auto
 RUN go env -w GOPROXY="${GOPROXY}"
 
 WORKDIR /go/src/github.com/matrixorigin/matrixone
@@ -21,6 +22,7 @@ FROM ${NATIVE_IMAGE} AS builder
 
 ARG GOPROXY="https://proxy.golang.org,direct"
 ENV GOWORK=off
+ENV GOTOOLCHAIN=auto
 RUN go env -w GOPROXY="${GOPROXY}"
 
 WORKDIR /go/src/github.com/matrixorigin/matrixone
