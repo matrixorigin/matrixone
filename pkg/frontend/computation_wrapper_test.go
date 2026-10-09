@@ -6392,7 +6392,7 @@ func TestInitExecuteStmtParamBinaryConstructorMemberOf(t *testing.T) {
 }
 
 func TestInitExecuteStmtParamDirectBinaryConstructor(t *testing.T) {
-	for _, constructor := range []string{"json_array(?)", "json_object('k', ?)", "json_set('{}', '$.k', ?)", "json_insert('{}', '$.k', ?)", "json_replace('{\"k\":0}', '$.k', ?)", "json_array_append('[]', '$', ?)"} {
+	for _, constructor := range []string{"json_array(?)", "json_object('k', ?)", "json_set('{}', '$.k', ?)", "json_insert('{}', '$.k', ?)", "json_replace('{\"k\":0}', '$.k', ?)", "json_array_append('[]', '$', ?)", "json_array_insert('[0]', '$[0]', ?)"} {
 		t.Run(constructor, func(t *testing.T) {
 			for _, version := range []int64{defines.MORPCVersion51, defines.MORPCVersion52} {
 				t.Run(fmt.Sprint(version), func(t *testing.T) {
@@ -6437,6 +6437,7 @@ func TestInitExecuteStmtParamDirectBinaryConstructor(t *testing.T) {
 								prepared.clearBinaryParamState(cw.proc)
 								continue
 							}
+							require.False(t, result.IsNull(0))
 							want := "[\"base64:type252:YWI=\"]"
 							if input.value == "cd" {
 								want = "[\"base64:type252:Y2Q=\"]"
@@ -6444,7 +6445,11 @@ func TestInitExecuteStmtParamDirectBinaryConstructor(t *testing.T) {
 							if input.null {
 								want = "[null]"
 							}
-							if constructor != "json_array(?)" && constructor != "json_array_append('[]', '$', ?)" {
+							if constructor == "json_array_insert('[0]', '$[0]', ?)" {
+								want = want[:len(want)-1] + ", 0]"
+							}
+							if constructor != "json_array(?)" && constructor != "json_array_append('[]', '$', ?)" &&
+								constructor != "json_array_insert('[0]', '$[0]', ?)" {
 								want = "{\"k\": " + want[1:len(want)-1] + "}"
 							}
 							require.Equal(t, want, types.DecodeJson(result.GetBytesAt(0)).String())
