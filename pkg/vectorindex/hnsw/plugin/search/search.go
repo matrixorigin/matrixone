@@ -48,6 +48,11 @@ func (Hooks) PostFilterCandidateBudget(resultLimit uint64) uint64 {
 }
 
 func (Hooks) NewReader(proc *process.Process, spec *plan.IndexSearchScan, req searchplugin.Request) (engine.Reader, error) {
+	// The search does not apply a membership key set, so a request whose candidate
+	// limit is only valid under one is refused rather than answered without it.
+	if req.MembershipFilterRequired {
+		return nil, moerr.NewNotSupported(proc.Ctx, "hnsw index search with a required membership filter")
+	}
 	s, err := newSearcher(proc, spec, req)
 	if err != nil {
 		return nil, err
