@@ -138,15 +138,21 @@ func captureRewritePolicy(ctx context.Context, ses *Session) (*rewritePolicySnap
 	// Role rules are mandatory access control: load them even when the
 	// optional enable_remap_hint switch is off, so a session SET cannot
 	// bypass the role-rule rewrite path (issue #29142).
-	ses.ruleCacheMu.RLock()
-	policy.generation = ses.rewritePolicyGeneration
-	cacheLoaded := ses.ruleCache != nil
-	if cacheLoaded {
-		policy.roleRules = cloneRewriteMap(ses.ruleCache)
-	}
-	ses.ruleCacheMu.RUnlock()
+	cacheReloaded := false
+	for {
+		ses.ruleCacheMu.RLock()
+		cacheLoaded := ses.ruleCache != nil
+		policy.generation = ses.rewritePolicyGeneration
+		generation := policy.generation
+		if cacheLoaded {
+			policy.roleRules = cloneRewriteMap(ses.ruleCache)
+		}
+		ses.ruleCacheMu.RUnlock()
+		if cacheLoaded {
+			break
+		}
 
-	if !cacheLoaded {
+		cacheReloaded = true
 		rules, err := loadRuleCache(ctx, ses)
 		if err != nil {
 			ses.Error(ctx, "failed to load rewrite rule cache", logutil.ErrorField(err))
@@ -155,17 +161,21 @@ func captureRewritePolicy(ctx context.Context, ses *Session) (*rewritePolicySnap
 		}
 
 		ses.ruleCacheMu.Lock()
-		if ses.rewritePolicyGeneration != policy.generation {
-			ses.ruleCacheMu.Unlock()
-			err := moerr.NewInvalidState(ctx, "rewrite policy changed while loading")
-			ses.validatePreparedStatementsAfterRewritePolicyRefresh(nil, err)
-			return nil, err
-		}
-		if ses.ruleCache == nil {
+		if ses.ruleCache == nil && ses.rewritePolicyGeneration == generation {
 			ses.ruleCache = rules
 		}
-		policy.roleRules = cloneRewriteMap(ses.ruleCache)
+		if ses.ruleCache != nil {
+			policy.generation = ses.rewritePolicyGeneration
+			policy.roleRules = cloneRewriteMap(ses.ruleCache)
+		}
+		cacheLoaded = ses.ruleCache != nil
 		ses.ruleCacheMu.Unlock()
+		if cacheLoaded {
+			break
+		}
+		// The cache was invalidated while this load was in flight. Retry so the
+		// request observes the catalog state after the invalidation instead of
+		// publishing or using a pre-invalidation snapshot.
 	}
 
 	// Optional session layers are still gated by enable_remap_hint.
@@ -176,7 +186,7 @@ func captureRewritePolicy(ctx context.Context, ses *Session) (*rewritePolicySnap
 	}
 
 	policy.enabled = sessionEnabled || len(policy.roleRules) > 0
-	if !cacheLoaded {
+	if cacheReloaded {
 		// Every cache reload, including one after a failed SET ROLE, closes the
 		// generation boundary for handles published under the previous policy.
 		ses.validatePreparedStatementsAfterRewritePolicyRefresh(policy, nil)
@@ -1316,9 +1326,7 @@ type roleRuleCacheInvalidator interface {
 }
 
 func (ses *Session) invalidateRoleRuleCache() {
-	ses.ruleCacheMu.Lock()
-	ses.ruleCache = nil
-	ses.ruleCacheMu.Unlock()
+	ses.invalidateRewriteRuleCache()
 }
 
 // invalidateRoleRuleCaches invalidates every active session cache on this CN.
