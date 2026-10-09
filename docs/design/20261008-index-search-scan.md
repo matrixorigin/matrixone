@@ -161,6 +161,32 @@ The main baseline records one p50/p99 per run; this PR's are pass 1 / pass 2. Pa
 not changed by this PR. The run has no deleted rows and no filter, so the changed
 post-filter path is not exercised.
 
+Classic fulltext and fulltext2, ranked Top-K: `SELECT id FROM t WHERE MATCH(body)
+AGAINST('<2-4 terms>' IN BOOLEAN MODE) LIMIT k`, 200 queries (half common terms, half rare)
+on one connection, gojieba parser. Corpus: the first 50,000 1024-word chunks of English
+Wikipedia dump part 1 (`enwiki-latest-pages-articles-multistream1.xml-p1p41242`). Harness:
+`fulltext/retrieval_topk_3way.py` from mo_vector_benchmark. main = `d2a0055ebe`, the main
+merged into this PR; this PR = `4f8ad9ed7c` (later commits change no search code). Each binary ran twice on a fresh instance (round 1: main first; round 2:
+this PR first). Average latency in ms, round 1 / round 2:
+
+| | k | main | this PR |
+|---|---|---|---|
+| fulltext | 10 | 10.35 / 11.35 | 10.06 / 10.88 |
+| fulltext | 100 | 10.76 / 12.32 | 10.27 / 11.93 |
+| fulltext | 1000 | 12.63 / 16.78 | 11.86 / 14.84 |
+| fulltext2 | 10 | 1.14 / 1.17 | 1.07 / 1.13 |
+| fulltext2 | 100 | 1.46 / 1.33 | 1.75 / 1.33 |
+| fulltext2 | 1000 | 5.47 / 3.42 | 3.02 / 3.24 |
+| fulltext build until searchable, s | | 28.4 / 35.7 | 28.2 / 33.5 |
+| fulltext2 build until searchable, s | | 22.8 / 26.3 | 22.6 / 26.6 |
+
+Each latency of this PR is within the range of main's two rounds or below it, except
+fulltext2 at k=100 in round 1 (1.75 ms against main's 1.46 ms; 1.33 ms on both in round 2).
+Build times differ from main's by at most 2.2 s.
+
+ivfflat is not benchmarked: its search calls are unchanged, and the change on its path is
+decoding its settings from `algo_options` once per reader (`NewPlanReader`).
+
 ## Removed
 
 The search table functions `hnsw_search`, `cagra_search`, `ivfpq_search`,
@@ -220,6 +246,9 @@ for the join shape.
   to the combination.
 - **No mixed-version operation** (Eric, 2026-10-09). Index search fails until every CN
   runs this version; there is no fallback in either direction.
+- **No ivfflat benchmark** (Eric, 2026-10-09). ivfflat's search calls are unchanged; the
+  benchmarks cover the paths whose code changed: cuVS (IVF-PQ) and the ported fulltext
+  readers.
 - **Rank-mode clause.** `BY RANK WITH OPTION 'mode=...'` is honored by ivfflat only;
   hnsw, cagra and ivfpq ignore it.
 - **Publisher identity on the node.** The fulltext readers take publisher identity
