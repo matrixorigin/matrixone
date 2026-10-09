@@ -916,8 +916,21 @@ func (e *Engine) LazyLoadLatestCkp(
 	dbName string) (*logtailreplay.Partition, error) {
 
 	part := e.GetOrCreateLatestPart(ctx, accId, dbID, tableID)
+	if err := e.consumeLatestCkp(ctx, part, tableID, tableName, dbID, dbName); err != nil {
+		return nil, err
+	}
+	return part, nil
+}
 
-	if err := part.ConsumeCheckpoints(
+func (e *Engine) consumeLatestCkp(
+	ctx context.Context,
+	part *logtailreplay.Partition,
+	tableID uint64,
+	tableName string,
+	dbID uint64,
+	dbName string,
+) error {
+	return part.ConsumeCheckpoints(
 		ctx,
 		func(checkpoint string, state *logtailreplay.PartitionState) error {
 			err := logtail.ConsumeCheckpointEntries(
@@ -936,9 +949,5 @@ func (e *Engine) LazyLoadLatestCkp(
 			}
 			return nil
 		},
-	); err != nil {
-		return nil, err
-	}
-
-	return part, nil
+	)
 }

@@ -14,6 +14,9 @@
 
 package logservice
 
+// WALRecoveryStatusConfigKey identifies the recovery state consumed by HAKeeper scheduling.
+const WALRecoveryStatusConfigKey = "logservice.internal.wal-recovery-status"
+
 // DeepCopy implements the existing deepcopy hook used by HAKeeper snapshots.
 // Configuration contains immutable strings; only maps, items and unknown bytes
 // need independent storage. Avoid reflecting over every configuration field on

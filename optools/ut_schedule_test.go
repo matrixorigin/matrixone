@@ -526,12 +526,12 @@ exit 97
 
 func TestEngineRaceShardReportOpenFailureDrainsEarlierShard(t *testing.T) {
 	transform := func(text string) string {
-		const anchor = "        if ! exec 7>\"${shard_reports[shard]}\"; then\n"
+		const anchor = "            if ! exec 7>\"${reports[index]}\"; then\n"
 		if got := strings.Count(text, anchor); got != 1 {
 			t.Fatalf("shard report open anchor count = %d, want 1", got)
 		}
 		return strings.Replace(text, anchor,
-			"        if (( shard == 1 )); then while [[ ! -f \"${CASE_DIR}/engine-tool-ready\" ]]; do sleep 0.01; done; mkdir -p \"${CASE_DIR}/blocked-report\"; shard_reports[shard]=\"${CASE_DIR}/blocked-report\"; fi\n"+anchor, 1)
+			"        if (( index == 1 )); then while [[ ! -f \"${CASE_DIR}/engine-tool-ready\" ]]; do sleep 0.01; done; mkdir -p \"${CASE_DIR}/blocked-report\"; reports[index]=\"${CASE_DIR}/blocked-report\"; fi\n"+anchor, 1)
 	}
 	script := `source ./run_ut.sh UT
 function logger() { :; }
