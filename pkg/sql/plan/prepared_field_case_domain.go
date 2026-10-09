@@ -74,6 +74,11 @@ func bindPreparedFieldCaseDomains(ctx context.Context, p *Plan, domains map[int3
 				return nil
 			}
 			target, found := pending[key]
+			// T_any records a completed native protocol resolution, without a
+			// consumer override. Absence alone cannot mean first execution.
+			if found && target.Oid == types.T_any {
+				return nil
+			}
 			current := makeTypeByPlan2Expr(subject)
 			// String-origin changes are assignable to an already resolved type.
 			// A numeric binding can instead reprepare a string CASE or widen an
@@ -105,6 +110,20 @@ func bindPreparedFieldCaseDomains(ctx context.Context, p *Plan, domains map[int3
 				}
 			}
 			if nullAdmissionOnly && !found && !nullFirst {
+				for _, marker := range collector.args {
+					pos := int(marker.GetP().Pos)
+					if pos < 0 || pos >= len(values) {
+						return nil
+					}
+				}
+				if !copied {
+					pending = make(map[int32]types.Type, len(domains)+1)
+					for pos, typ := range domains {
+						pending[pos] = typ
+					}
+					copied = true
+				}
+				pending[key] = types.T_any.ToType()
 				return nil
 			}
 			reparseNumeric := numericSource && current.IsNumeric() && (!found || target.Oid.IsMySQLString() ||
@@ -308,7 +327,7 @@ func preparedFieldBoundCaseValues(expr *Expr, collector *stringDomainWitnessColl
 		return false, false, true
 	}
 	name := fn.Func.ObjName
-	if name == "cast" && len(fn.Args) > 0 {
+	if (name == "cast" || name == "max" || name == "min" || name == "any_value") && len(fn.Args) > 0 {
 		return preparedFieldBoundCaseValues(fn.Args[0], collector)
 	}
 	if name != "case" && name != "coalesce" && name != "ifnull" && name != "if" && name != "iff" {
@@ -322,4 +341,35 @@ func preparedFieldBoundCaseValues(expr *Expr, collector *stringDomainWitnessColl
 		marker, nullValue, other = marker || m, nullValue || n, other || o
 	}
 	return
+}
+
+// CASE resolution ownership survives a numeric common type chosen for an
+// all-NULL binding. Preserve only returned markers, one NULL and one control
+// marker; no executable producer or relational graph is retained.
+func preparedFieldBoundCaseContractWitness(source *Expr) *Expr {
+	condition := preparedFieldNullCaseCondition(source)
+	if condition == nil {
+		return nil
+	}
+	values := stringDomainWitnessCollector{seen: make(map[string]struct{})}
+	marker, nullValue, other := preparedFieldBoundCaseValues(source, &values)
+	if !marker || !nullValue || other {
+		return nil
+	}
+	controls := stringDomainWitnessCollector{seen: make(map[string]struct{})}
+	_ = planpb.VisitExprTree(condition, func(expr *Expr) error {
+		controls.addMarker(expr)
+		return nil
+	})
+	if len(controls.args) == 0 {
+		return nil
+	}
+	returned := &Expr{Typ: source.Typ, Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{ObjName: "coalesce"},
+		Args: append(values.args, makePlan2NullConstExprWithType()),
+	}}}
+	return &Expr{Typ: source.Typ, Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{ObjName: "case"},
+		Args: []*Expr{controls.args[0], makePlan2NullConstExprWithType(), returned},
+	}}}
 }

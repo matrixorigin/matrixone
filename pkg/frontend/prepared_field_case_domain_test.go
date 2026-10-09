@@ -15,45 +15,109 @@
 package frontend
 
 import (
+	"maps"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/stretchr/testify/require"
 )
 
 func TestPreparedBinaryFieldCaseNullFirst(t *testing.T) {
-	ses, prepared, cw, execCtx := newPreparedExecuteEnvForSQL(t, 1, "select field(case when ? then null else ? end,?)")
-	defer func() { cw.proc.SetPrepareParams(nil); prepared.Close() }()
-	for _, wireType := range []defines.MysqlType{defines.MYSQL_TYPE_NULL, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_BLOB} {
-		func() {
-			cw.proc.SetPrepareParams(nil)
-			if prepared.params != nil {
-				prepared.params.Free(cw.proc.Mp())
+	for _, order := range []struct {
+		name    string
+		types   []defines.MysqlType
+		results []int64
+	}{
+		{"null_text_bytes", []defines.MysqlType{defines.MYSQL_TYPE_NULL, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_BLOB}, []int64{0, 0, 0}},
+		{"text_null_text", []defines.MysqlType{defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_NULL, defines.MYSQL_TYPE_VAR_STRING}, []int64{1, 0, 1}},
+	} {
+		t.Run(order.name, func(t *testing.T) {
+			ses, prepared, cw, execCtx := newPreparedExecuteEnvForSQL(t, 1, "select field(case when ? then null else ? end,?)")
+			defer func() {
+				cw.proc.SetPrepareParams(nil)
+				prepared.Close()
+				require.Nil(t, prepared.fieldCaseDomains)
+				require.Zero(t, prepared.fieldCaseRevision)
+			}()
+			template := prepared.PreparePlan.String()
+			cacheHits := 0
+			for index, wireType := range order.types {
+				for repeat := 0; repeat < 2; repeat++ {
+					func() {
+						cw.proc.SetPrepareParams(nil)
+						if prepared.params != nil {
+							prepared.params.Free(cw.proc.Mp())
+						}
+						prepared.params = vector.NewVec(types.T_text.ToType())
+						require.NoError(t, vector.AppendBytes(prepared.params, []byte("0"), false, cw.proc.Mp()))
+						require.NoError(t, vector.AppendBytes(prepared.params, []byte("A"), wireType == defines.MYSQL_TYPE_NULL, cw.proc.Mp()))
+						require.NoError(t, vector.AppendBytes(prepared.params, []byte("a"), false, cw.proc.Mp()))
+						prepared.ParamTypes = []byte{byte(defines.MYSQL_TYPE_LONGLONG), 0, byte(wireType), 0, byte(defines.MYSQL_TYPE_VAR_STRING), 0}
+						cached := prepared.runtimePlan
+						var cachedBefore string
+						if cached != nil {
+							cachedBefore = cached.String()
+						}
+						_, runtime, stmt, _, owned, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepared.Name)
+						require.NoError(t, err)
+						if owned && stmt != nil {
+							defer stmt.Free()
+						}
+						query := runtime.GetQuery()
+						project := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList[0]
+						executor, err := colexec.NewExpressionExecutor(cw.proc, project)
+						require.NoError(t, err)
+						defer executor.Free()
+						result, err := executor.Eval(cw.proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+						require.NoError(t, err)
+						require.Equal(t, order.results[index], vector.GetFixedAtWithTypeCheck[int64](result, 0), project.String())
+						require.Equal(t, template, prepared.PreparePlan.String())
+						if cached != nil {
+							require.Equal(t, cachedBefore, cached.String())
+						}
+						require.Len(t, prepared.fieldCaseDomains, 1)
+						if order.name == "text_null_text" {
+							require.Equal(t, types.T_any, prepared.fieldCaseDomains[1].Oid)
+						}
+						if prepared.runtimePlan != nil && runtime == prepared.runtimePlan {
+							cacheHits++
+						}
+						if cw.runtimeCachePlan != nil {
+							prepared.installRuntimeSpecializationCache(cw.runtimeCacheKey, cw.runtimeCachePlan, nil, cw.runtimeCacheDiagnostics, cw.runtimeCacheColDefData)
+							cw.discardRuntimeCacheCandidate()
+						}
+					}()
+				}
 			}
-			prepared.params = vector.NewVec(types.T_text.ToType())
-			require.NoError(t, vector.AppendBytes(prepared.params, []byte("0"), false, cw.proc.Mp()))
-			require.NoError(t, vector.AppendBytes(prepared.params, []byte("A"), wireType == defines.MYSQL_TYPE_NULL, cw.proc.Mp()))
-			require.NoError(t, vector.AppendBytes(prepared.params, []byte("a"), false, cw.proc.Mp()))
-			prepared.ParamTypes = []byte{byte(defines.MYSQL_TYPE_LONGLONG), 0, byte(wireType), 0, byte(defines.MYSQL_TYPE_VAR_STRING), 0}
-			_, runtime, stmt, _, owned, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepared.Name)
-			require.NoError(t, err)
-			if owned && stmt != nil {
-				defer stmt.Free()
-			}
-			query := runtime.GetQuery()
-			project := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList[0]
-			executor, err := colexec.NewExpressionExecutor(cw.proc, project)
-			require.NoError(t, err)
-			defer executor.Free()
-			result, err := executor.Eval(cw.proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
-			require.NoError(t, err)
-			require.Equal(t, int64(0), vector.GetFixedAtWithTypeCheck[int64](result, 0), project.String())
-		}()
+			require.Positive(t, cacheHits, "COM state must also survive real logical-cache hits")
+			published, revision := maps.Clone(prepared.fieldCaseDomains), prepared.fieldCaseRevision
+			func() {
+				execCtx.input.isBinaryProtExecute = false
+				params := prepared.params
+				prepared.params = nil
+				defer func() {
+					execCtx.input.isBinaryProtExecute = true
+					prepared.params = params
+				}()
+				_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, &plan.Execute{Name: prepared.Name, Args: []*plan.Expr{{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "missing"}}}}}, "")
+				require.Error(t, err, "failed argument admission must not replace native resolution state")
+			}()
+			require.Equal(t, published, prepared.fieldCaseDomains)
+			require.Equal(t, revision, prepared.fieldCaseRevision)
+			rt := &Routine{mc: newMigrateController()}
+			rt.setSession(ses)
+			resp := &query.MigrateConnFromResponse{}
+			require.True(t, moerr.IsMoErrCode(rt.migrateConnectionFrom(resp), moerr.OkExpectedNotSafeToStartTransfer))
+			require.Empty(t, resp.PrepareStmts)
+			require.Equal(t, published, prepared.fieldCaseDomains)
+		})
 	}
 }
 
@@ -186,7 +250,7 @@ func TestPreparedSQLFieldCaseDomainLifetime(t *testing.T) {
 						// AP execution caches only its logical plan. Use the same
 						// install path without an operator to exercise subsequent hits.
 						if cw.runtimeCachePlan != nil {
-							prepared.installRuntimeSpecializationCache(cw.runtimeCacheKey, cw.runtimeCachePlan, nil, cw.runtimeCacheDiagnostics)
+							prepared.installRuntimeSpecializationCache(cw.runtimeCacheKey, cw.runtimeCachePlan, nil, cw.runtimeCacheDiagnostics, cw.runtimeCacheColDefData)
 							cw.discardRuntimeCacheCandidate()
 						}
 					}()

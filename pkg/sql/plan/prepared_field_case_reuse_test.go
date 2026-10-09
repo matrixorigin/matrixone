@@ -62,7 +62,31 @@ func TestPreparedFieldCaseNullFirstAdmission(t *testing.T) {
 		require.NoError(t, err)
 		domains, _, err := BindPreparedFieldNullFirstCaseDomains(ctx, bound.Plan, nil, bindings, values)
 		require.NoError(t, err)
-		require.Empty(t, domains, "typed NULL retains the protocol's existing rules")
+		require.Equal(t, types.T_any, domains[1].Oid, "typed NULL records native resolution, not a consumer override")
+		missing, _, err := BindPreparedFieldNullFirstCaseDomains(ctx, DeepCopyPlan(bound.Plan), nil, bindings, nil)
+		require.NoError(t, err)
+		require.Empty(t, missing, "native resolution also requires an actual execution value")
+		published := domains[1]
+		for _, source := range []types.T{types.T_any, types.T_varchar} {
+			bindings[1].Type = source.ToType()
+			var value any = "A"
+			if source == types.T_any {
+				value = nil
+			}
+			values[1] = ParamValue{Value: value, SourceType: bindings[1].Type, HasSourceType: true}
+			bound, err = BuildPreparedExecutionPlan(&mock.ctxt, stmt, bindings, values)
+			require.NoError(t, err)
+			next, _, err := BindPreparedFieldNullFirstCaseDomains(ctx, bound.Plan, domains, bindings, values)
+			require.NoError(t, err)
+			require.Equal(t, published, domains[1], "reuse must not mutate the published resolution fact")
+			require.Equal(t, published, next[1], "a later NULL must not become a first-NULL override")
+			if source == types.T_varchar {
+				consumer := findPlanFunctionExpr(bound.Plan, "field")
+				require.NotNil(t, consumer)
+				require.Equal(t, types.StringDomainText, types.StaticStringDomain(makeTypeByPlan2Expr(consumer.GetF().Args[0])))
+			}
+			domains = next
+		}
 	}
 }
 

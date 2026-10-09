@@ -6006,10 +6006,12 @@ func (b *baseBinder) annotateStringDomainSource(
 			memo[key] = nil
 			return
 		}
-		// Numeric and other non-string projections cannot carry a runtime string
-		// domain. Skip them before walking their lineage; this keeps ordinary
-		// derived arithmetic out of the provenance path entirely.
-		if possibleStringDomainsForExpr(source) == 0 {
+		// A non-string value normally cannot carry a runtime string domain.
+		// All-NULL CASE can nevertheless have a numeric common type without
+		// losing its resolution contract. Follow aliases to its first owner;
+		// still stop at ordinary arithmetic and explicit type boundaries.
+		caseWitness := preparedFieldBoundCaseContractWitness(source)
+		if source.GetCol() == nil && possibleStringDomainsForExpr(source) == 0 && caseWitness == nil {
 			memo[key] = nil
 			return
 		}
@@ -6022,7 +6024,11 @@ func (b *baseBinder) annotateStringDomainSource(
 			return
 		}
 		domains := possibleStringDomainsForExpr(source)
-		if domains != 0 {
+		caseWitness = preparedFieldBoundCaseContractWitness(source)
+		if caseWitness != nil {
+			memo[key] = caseWitness
+			ensurePreparedNumericMetadata(expr).StringDomainSource = DeepCopyExpr(caseWitness)
+		} else if domains != 0 {
 			// Keep only the domain summary, not a recursively copied expression
 			// graph. Derived projections can be chained or referenced repeatedly;
 			// copying their full annotated source at every boundary makes plan
@@ -6078,10 +6084,10 @@ func (b *baseBinder) markPreparedStringDomainSubquerySource(
 			case "max", "min", "any_value":
 				// These aggregates return their value operand's domain, not an
 				// independent numeric result like COUNT/SUM.
-				return dynamic && possibleStringDomainsForExpr(fn.Args[0]) != 0
+				return preparedFieldBoundCaseContractWitness(expr) != nil || dynamic && possibleStringDomainsForExpr(fn.Args[0]) != 0
 			}
 		}
-		return dynamic && (preparedFunctionStringDomainDependsOnRuntimeParam(expr) || preparedFieldOnlyMarkerAndNull(expr))
+		return preparedFieldBoundCaseContractWitness(expr) != nil || dynamic && (preparedFunctionStringDomainDependsOnRuntimeParam(expr) || preparedFieldOnlyMarkerAndNull(expr))
 	}
 	if list := expr.GetList(); list != nil {
 		dynamic := false
@@ -6193,7 +6199,13 @@ func preparedNullifDomainWitness(source *Expr) *Expr {
 }
 
 func stringDomainSourceWitness(source *Expr, domains uint8) *Expr {
-	if source == nil || domains == 0 {
+	if source == nil {
+		return nil
+	}
+	if witness := preparedFieldBoundCaseContractWitness(source); witness != nil {
+		return witness
+	}
+	if domains == 0 {
 		return nil
 	}
 	if provenance := source.GetPreparedNumeric().GetStringDomainSource(); provenance != nil {

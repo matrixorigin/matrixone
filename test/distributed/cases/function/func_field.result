@@ -590,6 +590,65 @@ execute field_explicit_binary_peer using @field_subject, @field_candidate;
 0
 deallocate prepare field_explicit_binary_peer;
 set @field_condition = null;
+set @c=0,@a=null,@b='a';
+prepare field_rel_scalar from 'select field((select case when ? then null else ? end from (select 1 union all select 2) seed limit 1),?) as scalar_case';
+prepare field_rel_derived from 'select field(v,?) as derived_case from (select case when ? then null else ? end as v from (select 1 union all select 2) seed limit 1) s';
+prepare field_rel_aggregate from 'select field(max(case when ? then null else ? end),?) as aggregate_case from (select 1 union all select 2) seed';
+prepare field_rel_window from 'select distinct field(v,?) as window_case from (select max(case when ? then null else ? end) over () as v from (select 1 union all select 2) seed) s';
+execute field_rel_scalar using @c,@a,@b;
+➤ scalar_case[-5,64,0]  𝄀
+0
+execute field_rel_derived using @b,@c,@a;
+➤ derived_case[-5,64,0]  𝄀
+0
+execute field_rel_aggregate using @c,@a,@b;
+➤ aggregate_case[-5,64,0]  𝄀
+0
+prepare field_rel_window_multiple from 'select field(v,?) as multiple_window_case from (select max(case when ? then null else ? end) over () as v,max(cast(''A'' as binary)) over () as fixed,row_number() over (order by n) as rn from (select 1 n union all select 2) seed) s where rn=1 and fixed=cast(''A'' as binary)';
+execute field_rel_window using @b,@c,@a;
+➤ window_case[-5,64,0]  𝄀
+0
+execute field_rel_window_multiple using @b,@c,@a;
+➤ multiple_window_case[-5,64,0]  𝄀
+0
+set @a='A';
+execute field_rel_scalar using @c,@a,@b;
+➤ scalar_case[-5,64,0]  𝄀
+0
+execute field_rel_derived using @b,@c,@a;
+➤ derived_case[-5,64,0]  𝄀
+0
+execute field_rel_aggregate using @c,@a,@b;
+➤ aggregate_case[-5,64,0]  𝄀
+0
+execute field_rel_window using @b,@c,@a;
+➤ window_case[-5,64,0]  𝄀
+0
+execute field_rel_window_multiple using @b,@c,@a;
+➤ multiple_window_case[-5,64,0]  𝄀
+0
+set @a=X'41',@b=X'61';
+execute field_rel_scalar using @c,@a,@b;
+➤ scalar_case[-5,64,0]  𝄀
+0
+execute field_rel_derived using @b,@c,@a;
+➤ derived_case[-5,64,0]  𝄀
+0
+execute field_rel_aggregate using @c,@a,@b;
+➤ aggregate_case[-5,64,0]  𝄀
+0
+execute field_rel_window using @b,@c,@a;
+➤ window_case[-5,64,0]  𝄀
+0
+execute field_rel_window_multiple using @b,@c,@a;
+➤ multiple_window_case[-5,64,0]  𝄀
+0
+deallocate prepare field_rel_window_multiple;
+deallocate prepare field_rel_scalar;
+deallocate prepare field_rel_derived;
+deallocate prepare field_rel_aggregate;
+deallocate prepare field_rel_window;
+set @c=null,@a=null,@b=null;
 set @field_subject = _binary 'a';
 prepare field_binary_stmt from 'select field(cast(? as binary), ''A'', ''a'', X''FE'', X''FF'') as prepared_field';
 execute field_binary_stmt using @field_subject;
