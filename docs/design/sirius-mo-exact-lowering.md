@@ -240,3 +240,35 @@ The recorded MO pin remains merged Native B until Sirius #28 merges. Then
 advance C to that merged Sirius revision and rerun all-22 native preparation
 and the full public numeric fixture. No unmerged native pin or full acceptance
 is claimed, and D still follows merged, validated C.
+
+## Consumer corrections after Sirius #28 (2026-10-09)
+
+Sirius #28 merged as `af4dc60152b3e14f263c7fe863b29ac7e154de30`;
+C now pins that clean merged revision and merged importer #5. The original
+root-name crash is closed. Full native preparation exposed two remaining MO
+wire omissions: absent constant fetch bounds and declared nullability on
+decimal column references. Emit both constant fetch modes for embedded plans,
+using count -1 and offset 0 for absent bounds. Preserve each MO-bound decimal
+column descriptor with the existing checked exact cast function: Substrait
+field selections alone cannot carry the projected descriptor, and a grouped
+aggregate's required internal value can be exposed by a nullable MO projection.
+This retains physical width, precision and scale and leaves the result schema
+comparison intact. Legacy Flight emission retains its existing wire shape.
+
+Emit condition-free embedded INNER joins as Substrait CrossRel. MO has already
+placed their predicates in surrounding filters; JOIN ON true otherwise binds
+as DuckDB ANY_JOIN when the exact path intentionally skips its ordinary
+optimizer. This changes no join order, multiplicity, predicate or numeric join
+key admission and introduces no new native operator.
+
+For embedded DATE extraction, lower the already admitted year/month/day fields
+to their direct native functions. DuckDB's generic date_part function is not a
+supported Sirius GPU expression. Quarter must decline before readers start
+until the native executor supports it. Do not broaden the DATE-only semantic
+admission to time durations, session-zone timestamps or tolerant text parsing.
+
+The full public numeric fixture also exposed cuDF AST IS_NULL on Decimal256's
+private STRUCT carrier. Correct that in the native expression owner using its
+top-level validity mask and the caller's stream/resource, then publish a
+separate prerequisite Sirius fix. Keep the public NULL-predicate assertion and
+merged-pin delivery gate; do not substitute a SQL rewrite or fallback.

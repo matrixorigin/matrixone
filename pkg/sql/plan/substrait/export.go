@@ -601,6 +601,12 @@ func (e *exporter) join(n *planpb.Node) (*spb.Rel, error) {
 		return nil, notEligiblef(EligibilityOperator, "node %d uses unsupported join type %s", n.NodeId, n.JoinType.String())
 	}
 	relation := &spb.Rel{RelType: &spb.Rel_Join{Join: &spb.JoinRel{Left: left, Right: right, Expression: condition, Type: joinType}}}
+	if (e.embeddedMO || e.embeddedBindings != nil) && n.JoinType == planpb.Node_INNER && len(n.OnList) == 0 {
+		// Exact preparation retains MO's optimized graph. Represent its
+		// Cartesian product directly instead of relying on DuckDB's ordinary
+		// optimizer to turn JOIN ... ON true into a cross product.
+		relation = &spb.Rel{RelType: &spb.Rel_Cross{Cross: &spb.CrossRel{Left: left, Right: right}}}
+	}
 	relation, err = e.applyFilter(relation, n.FilterList, projectInputs)
 	if err != nil {
 		return nil, err
@@ -855,6 +861,12 @@ func (e *exporter) fetch(input *spb.Rel, n *planpb.Node) (*spb.Rel, error) {
 		return input, nil
 	}
 	fetch := &spb.FetchRel{Input: input}
+	if e.embeddedMO {
+		// ABI-v1 preparation requires both constant modes to be explicit.
+		// Substrait's absent count means all rows and absent offset means zero.
+		fetch.CountMode = &spb.FetchRel_Count{Count: -1}
+		fetch.OffsetMode = &spb.FetchRel_Offset{Offset: 0}
+	}
 	if n.Limit != nil {
 		count, err := nonnegativeIntLiteral(n.Limit, 0)
 		if err != nil {
@@ -910,6 +922,15 @@ func (e *exporter) expr(x *planpb.Expr, inputs []int) (*spb.Expression, error) {
 		ordinal, err := fieldOrdinal(v.Col, inputs)
 		if err != nil {
 			return nil, err
+		}
+		if e.profile.exactDecimalV1 && exactDecimalBits(&x.Typ) != 0 {
+			if _, err := e.substraitType(&x.Typ); err != nil {
+				return nil, err
+			}
+			// A field selection has no declared output type. Retain MO's
+			// descriptor, including a projection's nullable view of a required
+			// grouped aggregate, through the checked exact function.
+			return e.scalar("mo_decimal_cast", &x.Typ, field(ordinal)), nil
 		}
 		return field(ordinal), nil
 	case *planpb.Expr_Lit:
@@ -1195,6 +1216,9 @@ func (e *exporter) extractExpr(result *planpb.Expr, call *planpb.Function, input
 	default:
 		return nil, notEligiblef(EligibilityExpression, "extract field %q has no declared Sirius semantic equivalence", unit)
 	}
+	if e.embeddedMO && unit == "quarter" {
+		return nil, notEligiblef(EligibilityExpression, "embedded extract field %q has no native GPU function", unit)
+	}
 	supported, err := e.hasSemanticCapability(semanticScalar, "extract", call.Func, call.Args, &result.Typ)
 	if err != nil {
 		return nil, err
@@ -1205,6 +1229,11 @@ func (e *exporter) extractExpr(result *planpb.Expr, call *planpb.Function, input
 	value, err := e.expr(call.Args[1], inputs)
 	if err != nil {
 		return nil, err
+	}
+	if e.embeddedMO {
+		// The generic importer lowers extract to date_part, which has no
+		// Sirius GPU expression. These DATE fields have direct equivalents.
+		return e.scalar(unit, &result.Typ, value), nil
 	}
 	output, err := e.substraitType(&result.Typ)
 	if err != nil {

@@ -80,6 +80,9 @@ func TestExactEmbeddedTPCHNativePreparation(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 			defer cancel()
 			query, err := runtime.Prepare(ctx, request)
+			if err != nil {
+				t.Logf("admitted output descriptors: %+v", request.Columns)
+			}
 			require.NoError(t, err)
 			t.Cleanup(func() {
 				cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

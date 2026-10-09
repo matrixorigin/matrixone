@@ -90,6 +90,7 @@ func TestEmbeddedSiriusPublicMOReader(t *testing.T) {
 		for _, statement := range []string{
 			"select id,a,b,c from d order by id",
 			"select id,a+a,b-b,c+c,-c,a*b,c/c,c div c,c mod c from d order by id",
+			"select id,a is null,a is not null,b is null,b is not null,c is null,c is not null from d order by id",
 			"select id,case when c>0 then c else -c end,coalesce(c,0),c is null,c is not null from d order by id",
 			"select sum(a),avg(a),min(a),max(a),sum(b),avg(b),min(b),max(b),sum(c),avg(c),min(c),max(c),count(c) from d",
 			"select sum(c),avg(c),min(c),max(c),count(c) from d where id=3",
@@ -107,6 +108,11 @@ func TestEmbeddedSiriusPublicMOReader(t *testing.T) {
 				t.Logf("embedded decimal query_id=%s", queryID)
 			})
 		}
+	})
+	t.Run("DATE extraction values and metadata", func(t *testing.T) {
+		execSQLRequire(t, ctx, db, "create table date_input (id int not null primary key, v date)")
+		execSQLRequire(t, ctx, db, "insert into date_input values (1,'0001-01-01'),(2,'2000-02-29'),(3,'9999-12-31'),(4,NULL)")
+		compare("select id,extract(year from v),extract(month from v),extract(day from v) from date_input order by id")
 	})
 	t.Run("numeric errors and healthy reuse", func(t *testing.T) {
 		execSQLRequire(t, ctx, db, "create table numeric_errors (id int not null primary key, v decimal(38,0), c decimal(65,0))")

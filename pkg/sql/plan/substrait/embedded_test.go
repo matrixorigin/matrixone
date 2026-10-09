@@ -121,12 +121,12 @@ func TestBuildEmbeddedSupportsMultipleMOReads(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	join := embeddedPlan(t, wire).Relations[0].GetRoot().Input.GetJoin()
-	require.NotNil(t, join)
-	require.Equal(t, []string{embeddedNamedTable, "1"}, join.Left.GetRead().GetNamedTable().Names)
-	require.Equal(t, []string{"col_0"}, join.Left.GetRead().BaseSchema.Names)
-	require.Equal(t, []string{embeddedNamedTable, "2"}, join.Right.GetRead().GetNamedTable().Names)
-	require.Equal(t, []string{"col_0"}, join.Right.GetRead().BaseSchema.Names)
+	cross := embeddedPlan(t, wire).Relations[0].GetRoot().Input.GetCross()
+	require.NotNil(t, cross)
+	require.Equal(t, []string{embeddedNamedTable, "1"}, cross.Left.GetRead().GetNamedTable().Names)
+	require.Equal(t, []string{"col_0"}, cross.Left.GetRead().BaseSchema.Names)
+	require.Equal(t, []string{embeddedNamedTable, "2"}, cross.Right.GetRead().GetNamedTable().Names)
+	require.Equal(t, []string{"col_0"}, cross.Right.GetRead().BaseSchema.Names)
 }
 
 func TestBuildEmbeddedRejectsInvalidBindings(t *testing.T) {
@@ -257,4 +257,62 @@ func embeddedPlan(t *testing.T, wire []byte) *spb.Plan {
 	plan := new(spb.Plan)
 	require.NoError(t, proto.Unmarshal(wire, plan))
 	return plan
+}
+
+func TestEmbeddedConditionFreeInnerJoinIsCrossProduct(t *testing.T) {
+	query := embeddedJoinQuery(false)
+	candidate, err := ExportEmbeddedMO(query, NewEmbeddedExportProfile(31))
+	require.NoError(t, err)
+	wire, err := candidate.BuildEmbedded(map[int32]EmbeddedReadBinding{
+		0: {BindingID: 1, Source: EmbeddedReadMO}, 1: {BindingID: 2, Source: EmbeddedReadMO},
+	})
+	require.NoError(t, err)
+	cross := embeddedPlan(t, wire).Relations[0].GetRoot().Input.GetCross()
+	require.NotNil(t, cross)
+	require.Equal(t, []string{"__sirius_embedded_v1", "1"}, cross.Left.GetRead().GetNamedTable().Names)
+	require.Equal(t, []string{"__sirius_embedded_v1", "2"}, cross.Right.GetRead().GetNamedTable().Names)
+	legacy, err := Export(query)
+	require.NoError(t, err)
+	wire, err = legacy.Build(map[int32][]byte{0: {1}, 1: {2}})
+	require.NoError(t, err)
+	join := embeddedPlan(t, wire).Relations[0].GetRoot().Input.GetJoin()
+	require.NotNil(t, join)
+	require.True(t, join.Expression.GetLiteral().GetBoolean())
+}
+
+func TestEmbeddedFetchIncludesBothConstantBounds(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		limit, offset *planpb.Expr
+		count, start  int64
+	}{
+		{name: "limit only", limit: u64(5), count: 5},
+		{name: "offset only", offset: u64(3), count: -1, start: 3},
+		{name: "zero limit", limit: u64(0)},
+		{name: "both", limit: u64(5), offset: u64(3), count: 5, start: 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := exporter{embeddedMO: true}
+			relation, err := e.fetch(&spb.Rel{}, &planpb.Node{Limit: tc.limit, Offset: tc.offset})
+			require.NoError(t, err)
+			wire, err := proto.Marshal(relation)
+			require.NoError(t, err)
+			decoded := new(spb.Rel)
+			require.NoError(t, proto.Unmarshal(wire, decoded))
+			fetch := decoded.GetFetch()
+			require.IsType(t, &spb.FetchRel_Count{}, fetch.CountMode)
+			require.IsType(t, &spb.FetchRel_Offset{}, fetch.OffsetMode)
+			require.Equal(t, tc.count, fetch.GetCount())
+			require.Equal(t, tc.start, fetch.GetOffset())
+		})
+	}
+	input := &spb.Rel{}
+	e := exporter{embeddedMO: true}
+	unchanged, err := e.fetch(input, &planpb.Node{})
+	require.NoError(t, err)
+	require.Same(t, input, unchanged)
+	e.embeddedMO = false
+	flight, err := e.fetch(input, &planpb.Node{Limit: u64(5)})
+	require.NoError(t, err)
+	require.Nil(t, flight.GetFetch().OffsetMode, "preserve ordinary Flight emission")
 }

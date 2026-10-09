@@ -64,6 +64,31 @@ func TestExactDecimalProfilePreservesPhysicalDescriptor(t *testing.T) {
 	require.True(t, IsNotEligible(err))
 }
 
+func TestExactColumnReferencesRetainDeclaredDescriptor(t *testing.T) {
+	for _, oid := range []types.T{types.T_decimal64, types.T_decimal128, types.T_decimal256} {
+		for _, required := range []bool{false, true} {
+			e := exporter{profile: NewEmbeddedExportProfile(31)}
+			typ := planpb.Type{Id: int32(oid), Width: 15, Scale: 2, NotNullable: required}
+			x := &planpb.Expr{Typ: typ, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
+			wire, err := e.expr(x, []int{1})
+			require.NoError(t, err)
+			cast := wire.GetScalarFunction()
+			require.NotNil(t, cast)
+			require.Equal(t, e.functions["mo_decimal_cast"], cast.FunctionReference)
+			declared := cast.OutputType.GetUserDefined()
+			require.Equal(t, []int64{int64(exactDecimalBits(&typ)), 15, 2}, []int64{
+				declared.TypeParameters[0].GetInteger(), declared.TypeParameters[1].GetInteger(), declared.TypeParameters[2].GetInteger(),
+			})
+			require.Equal(t, required, declared.Nullability == spb.Type_NULLABILITY_REQUIRED)
+			require.Equal(t, int32(0), cast.Arguments[0].GetValue().GetSelection().GetDirectReference().GetStructField().Field)
+			legacy := exporter{}
+			wire, err = legacy.expr(x, []int{1})
+			require.NoError(t, err)
+			require.NotNil(t, wire.GetSelection())
+		}
+	}
+}
+
 func TestExactCandidateRetainsProfileThroughReadAndBuild(t *testing.T) {
 	query := embeddedProjectedScanQuery()
 	for _, column := range query.Nodes[0].TableDef.Cols {

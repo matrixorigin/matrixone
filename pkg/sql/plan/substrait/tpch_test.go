@@ -129,6 +129,14 @@ func TestExportExtractSemanticBoundary(t *testing.T) {
 				require.True(t, ok)
 				require.Equal(t, EligibilityExpression, reason)
 			}
+			embedded, embeddedErr := ExportEmbeddedMO(query, NewEmbeddedExportProfile(31))
+			if tc.eligible && tc.expression != "extract(quarter from l_shipdate)" {
+				require.NoError(t, embeddedErr)
+				require.NotNil(t, embedded)
+			} else {
+				require.Nil(t, embedded)
+				require.True(t, IsNotEligible(embeddedErr), "%v", embeddedErr)
+			}
 		})
 	}
 }
