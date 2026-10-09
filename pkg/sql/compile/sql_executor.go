@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -39,7 +38,6 @@ import (
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
@@ -434,12 +432,6 @@ func (exec *txnExecutor) Exec(
 		// CTAS carries the effective policy as typed AST state from the outer
 		// statement. Never recover execution semantics from redacted originSQL.
 		attachRewriteOptionToStatement(stmts[0], rewriteOption)
-	} else if hasLeadingRewriteHint(sql) {
-		if err = parsers.AddRewriteHintsWithSQLModeAndLowerCaseTableNames(
-			exec.ctx, stmts, sql, internalExecutorSQLMode(exec.ctx), lower,
-		); err != nil {
-			return executor.Result{}, err
-		}
 	}
 
 	// TODO(volgariver6): we got a duplicate code logic in `func (cwft *TxnComputationWrapper) Compile`,
@@ -698,44 +690,6 @@ func (exec *txnExecutor) Exec(
 	result.AffectedRows = runResult.AffectRows
 	result.LogicalPlan = pn.GetQuery()
 	return result, nil
-}
-
-func internalExecutorSQLMode(ctx context.Context) string {
-	compilerContext := getInternalExecutorCompilerContext(ctx)
-	if compilerContext == nil || compilerContext.GetProcess() == nil ||
-		compilerContext.GetProcess().GetSessionInfo() == nil {
-		return ""
-	}
-	return mysql.SessionSQLModeForParser(compilerContext.GetProcess().GetSessionInfo().SqlMode)
-}
-
-func hasLeadingRewriteHint(sql string) bool {
-	_, ok := leadingRewriteHint(sql)
-	return ok
-}
-
-// leadingRewriteHint returns the complete leading JSON rewrite hint. The
-// parser accepts whitespace between the hint opener and the JSON object, so
-// transport and detection must do the same.
-func leadingRewriteHint(sql string) (string, bool) {
-	trimmed := strings.TrimSpace(sql)
-	markerLen := 0
-	switch {
-	case strings.HasPrefix(trimmed, "/*+"):
-		markerLen = len("/*+")
-	case strings.HasPrefix(trimmed, "/*!+"):
-		markerLen = len("/*!+")
-	default:
-		return "", false
-	}
-	if !strings.HasPrefix(strings.TrimSpace(trimmed[markerLen:]), "{") {
-		return "", false
-	}
-	relEnd := strings.Index(trimmed[markerLen:], "*/")
-	if relEnd < 0 {
-		return "", false
-	}
-	return trimmed[:markerLen+relEnd+2], true
 }
 
 func cloneInternalExecutorResultBatch(

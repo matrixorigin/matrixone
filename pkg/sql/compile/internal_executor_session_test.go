@@ -18,9 +18,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/stretchr/testify/require"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
@@ -70,26 +67,6 @@ func TestAttachInternalExecutorCompilerContext(t *testing.T) {
 		attachInternalExecutorCompilerContext(ctx, nil)); got != nil {
 		t.Fatalf("expected nil compiler context, got %v", got)
 	}
-}
-
-func TestInternalExecutorSQLModeWithoutCompilerContext(t *testing.T) {
-	require.Empty(t, internalExecutorSQLMode(nil))
-
-	ctx := attachInternalExecutorCompilerContext(context.Background(), &plan.MockCompilerContext{})
-	require.Empty(t, internalExecutorSQLMode(ctx))
-}
-
-func TestInternalExecutorRewriteOptionContextAndSQLMode(t *testing.T) {
-	option := &tree.RewriteOption{}
-	ctx := attachInternalExecutorRewriteOption(context.Background(), option)
-	require.Same(t, option, getInternalExecutorRewriteOption(ctx))
-	require.Nil(t, getInternalExecutorRewriteOption(nil))
-
-	proc := newPlanTestProcess(t)
-	proc.GetSessionInfo().SqlMode = "NO_BACKSLASH_ESCAPES"
-	compilerContext := plan.NewMockCompilerContext(false, proc)
-	ctx = attachInternalExecutorCompilerContext(context.Background(), compilerContext)
-	require.Equal(t, "NO_BACKSLASH_ESCAPES", internalExecutorSQLMode(ctx))
 }
 
 func TestAttachInternalExecutorPrivilegeCheck(t *testing.T) {
