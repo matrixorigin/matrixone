@@ -28,13 +28,17 @@ import (
 type dummyCollect struct {
 	dummySwitch
 	sync.Mutex
-	mfs [][]*pb.MetricFamily
+	mfs  [][]*pb.MetricFamily
+	sent chan struct{}
 }
 
 func (e *dummyCollect) SendMetrics(ctx context.Context, mfs []*pb.MetricFamily) error {
 	e.Lock()
 	defer e.Unlock()
 	e.mfs = append(e.mfs, mfs)
+	if e.sent != nil {
+		e.sent <- struct{}{}
+	}
 	return nil
 }
 
@@ -93,7 +97,7 @@ func TestExporterCommonInfo(t *testing.T) {
 }
 
 func TestExporter(t *testing.T) {
-	dumCollect := &dummyCollect{}
+	dumCollect := &dummyCollect{sent: make(chan struct{}, 4)}
 	dumClock := makeDummyClock(1)
 	var exp *metricExporter
 
@@ -119,7 +123,17 @@ func TestExporter(t *testing.T) {
 			h.Observe(float64(i))
 		}
 
-		// Two full raw-histogram batches were sent synchronously by Observe.
+		// Observe dispatches full raw-histogram batches asynchronously. Wait for
+		// both sends before gathering or restoring the global buffer limit.
+		deadline := time.NewTimer(5 * time.Second)
+		defer deadline.Stop()
+		for i := 0; i < 2; i++ {
+			select {
+			case <-dumCollect.sent:
+			case <-deadline.C:
+				t.Fatal("full raw-histogram batches did not reach the collector")
+			}
+		}
 		// Gather twice to flush the remaining samples and exercise the regular
 		// counter/gauge export path without relying on a ticker or wall-clock wait.
 		exp.gatherAndSend()
