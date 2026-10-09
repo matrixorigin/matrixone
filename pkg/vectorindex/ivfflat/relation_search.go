@@ -110,10 +110,6 @@ func (idx *IvfflatSearchIndex[T]) scanEntriesInDomain(
 	if rangeEmpty {
 		return executor.Result{Mp: sqlproc.Proc.Mp()}, nil
 	}
-	if metricType == metric.Metric_InnerProduct && sqlproc.IndexReaderParam.GetDistRange() != nil {
-		// SQL 的正内积范围不可直接用于负距离堆。保留 filter-before-Top-K 路径。
-		rangeSupported = false
-	}
 	storageTopK := canUseStorageTopK(sqlproc, centroidIDs, filters, limit, rangeSupported)
 	filteredStorageTopK := canUseFilteredStorageTopK(sqlproc, centroidIDs, filters, limit, rangeSupported)
 	if allCentroids && sqlproc.IvfHasMembershipFilter {
@@ -422,19 +418,10 @@ func (idx *IvfflatSearchIndex[T]) storageDistanceRange(
 }
 
 func ivfOrderFlag(param *plan.IndexReaderParam) plan.OrderBySpec_OrderByFlag {
-	flag := plan.OrderBySpec_ASC
 	if param != nil && len(param.OrderBy) > 0 && param.OrderBy[0] != nil {
-		flag = param.OrderBy[0].Flag
+		return param.OrderBy[0].Flag
 	}
-	if param != nil && param.OrigFuncName == metric.DistFn_InnerProduct {
-		// 此处排序的是内部负点积，而不是 SQL 点积；保留 NULL 等其他标志。
-		if flag&plan.OrderBySpec_DESC != 0 {
-			flag = flag&^plan.OrderBySpec_DESC | plan.OrderBySpec_ASC
-		} else {
-			flag = flag&^plan.OrderBySpec_ASC | plan.OrderBySpec_DESC
-		}
-	}
-	return flag
+	return plan.OrderBySpec_ASC
 }
 
 func ivfCentroidPrefixFilter(
@@ -706,13 +693,6 @@ func appendEntryDistances(
 		queryVec.Free(res.Mp)
 		if err != nil {
 			return err
-		}
-		if distanceFunction == metric.DistFn_InnerProduct {
-			// 标量 SQL 返回正内积，后续内部 Top-K 仍比较负距离。
-			distances := vector.MustFixedColNoTypeCheck[float64](distVec)
-			for row := range distances {
-				distances[row] = -distances[row]
-			}
 		}
 		bat.Vecs = append(bat.Vecs, distVec)
 	}

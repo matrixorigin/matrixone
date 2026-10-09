@@ -672,6 +672,30 @@ func TestCompilerContextResolveVariableDelegatesToAttachedSession(t *testing.T) 
 	require.Equal(t, plan.Type{}, declared)
 }
 
+func TestCompilerContextDelegatesRegexpNullHistory(t *testing.T) {
+	delegate := plan.NewMockCompilerContext(false, testutil.NewProcess(t))
+	delegate.ResolveVariableRegexpStringResultFunc = func(name string) (bool, error) {
+		if name == "history" {
+			return true, nil
+		}
+		return false, moerr.NewInternalErrorNoCtx("history resolver failed")
+	}
+	attached := &compilerContext{ctx: attachInternalExecutorCompilerContext(context.Background(), delegate)}
+	stringResult, err := attached.ResolveVariableRegexpStringResult("history")
+	require.NoError(t, err)
+	require.True(t, stringResult)
+	_, err = attached.ResolveVariableRegexpStringResult("other")
+	require.ErrorContains(t, err, "history resolver failed")
+	detached := &compilerContext{ctx: context.Background()}
+	stringResult, err = detached.ResolveVariableRegexpStringResult("history")
+	require.NoError(t, err)
+	require.False(t, stringResult)
+	detached.ctx = attachInternalExecutorCompilerContext(context.Background(), detached)
+	stringResult, err = detached.ResolveVariableRegexpStringResult("history")
+	require.NoError(t, err)
+	require.False(t, stringResult)
+}
+
 func TestInternalCompilerPlanConsumesScopedDOP(t *testing.T) {
 	ctx := defines.AttachAccountId(t.Context(), 0)
 	proc := testutil.NewProcess(t)

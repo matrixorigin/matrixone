@@ -354,7 +354,7 @@ func runIssue28378IVF(t *testing.T, cluster embed.Cluster, state *ivfRunState,
 			{"l2", "v", "l2_distance", "vector_l2_ops", queryVector, false, true},
 			{"cosine", "v", "cosine_distance", "vector_cosine_ops", queryVector, false, false},
 			{"normalized_l2", "n", "l2_distance", "vector_l2_ops", normalizedQuery, false, false},
-			{"ip_normalized", "v", "inner_product", "vector_ip_ops", "normalize_l2(" + queryVector + ")", true, false},
+			{"ip_normalized", "v", "inner_product", "vector_ip_ops", "normalize_l2(" + queryVector + ")", false, false},
 		}
 		for _, tc := range cases[:3] {
 			if err := prepareIndex(tc); err != nil {

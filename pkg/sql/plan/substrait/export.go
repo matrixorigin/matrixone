@@ -1897,7 +1897,10 @@ func tpchCharacterSliceSourceIsText(expr *planpb.Expr) bool {
 	default:
 		return false
 	}
-	if metadata := expr.GetPreparedNumeric(); metadata != nil && metadata.StringDomainSource != nil &&
+	// A real function keeps its executable source in Args. Its metadata may
+	// contain only declaration facts with NULL placeholders, not input values.
+	// Missing-input boundaries still require the retained provenance check.
+	if metadata := expr.GetPreparedNumeric(); expr.GetF() == nil && metadata != nil && metadata.StringDomainSource != nil &&
 		!tpchCharacterSliceSourceIsText(metadata.StringDomainSource) {
 		return false
 	}
