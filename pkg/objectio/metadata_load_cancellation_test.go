@@ -342,6 +342,181 @@ func TestDedupLoadReelectsOneOwnerAcrossCanceledGenerations(t *testing.T) {
 	require.False(t, pending)
 }
 
+// Pause after observing the abandoned generation and missing its cache result,
+// but before the next election. Only the dedupLoad goroutine calls Err.
+type metadataReelectionContext struct {
+	*dedupLoadWaiterContext
+	checks int
+	paused chan struct{}
+	resume chan struct{}
+}
+
+func (c *metadataReelectionContext) Err() error {
+	c.checks++
+	if c.checks == 3 {
+		close(c.paused)
+		<-c.resume
+	}
+	return c.Context.Err()
+}
+
+func TestDedupLoadLateWaiterSharesCompletedTakeover(t *testing.T) {
+	storageErr := errors.New("takeover storage failure")
+	for _, tc := range []struct {
+		name       string
+		capacity   int64
+		loadErr    error
+		newerOwner bool
+	}{
+		{name: "cached", capacity: 1024},
+		{name: "cache admission rejected", capacity: 1},
+		{name: "independent later owner", capacity: 1, newerOwner: true},
+		{name: "takeover error", capacity: 1, loadErr: storageErr, newerOwner: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			oldCache := metaCache
+			metaCache = newMetaCache(fscache.ConstCapacity(tc.capacity))
+			t.Cleanup(func() { metaCache = oldCache })
+			var key mataCacheKey
+			key[0] = 103
+			ownerCtx, cancelOwner := context.WithCancel(context.Background())
+			started, ownerDone := make(chan struct{}), make(chan struct{})
+			var ownerErr error
+			go func() {
+				defer close(ownerDone)
+				_, ownerErr = dedupLoad(ownerCtx, key, func() ([]byte, error) {
+					close(started)
+					<-ownerCtx.Done()
+					return nil, ownerCtx.Err()
+				})
+			}()
+			t.Cleanup(func() { cancelOwner(); require.True(t, waitForDedupLoadCompletion(ownerDone)) })
+			require.True(t, waitForDedupLoadCompletion(started))
+
+			fastCtx, cancelFast := newDedupLoadWaiterContext()
+			fastDone, release := make(chan struct{}), make(chan struct{})
+			var releaseOnce sync.Once
+			releaseFast := func() { releaseOnce.Do(func() { close(release) }) }
+			var fastValue []byte
+			var fastErr error
+			var fastLoads atomic.Int32
+			value := []byte("takeover metadata")
+			go func() {
+				defer close(fastDone)
+				fastValue, fastErr = dedupLoad(fastCtx, key, func() ([]byte, error) {
+					fastLoads.Add(1)
+					select {
+					case <-release:
+						return value, tc.loadErr
+					case <-fastCtx.Context.Done():
+						return nil, fastCtx.Err()
+					}
+				})
+			}()
+			t.Cleanup(func() {
+				cancelFast()
+				releaseFast()
+				require.True(t, waitForDedupLoadCompletion(fastDone))
+			})
+			require.True(t, waitForDedupLoadCompletion(fastCtx.admitted))
+
+			baseSlow, cancelSlow := newDedupLoadWaiterContext()
+			slowCtx := &metadataReelectionContext{
+				dedupLoadWaiterContext: baseSlow, paused: make(chan struct{}), resume: make(chan struct{}),
+			}
+			var resumeOnce sync.Once
+			resumeSlow := func() { resumeOnce.Do(func() { close(slowCtx.resume) }) }
+			slowDone := make(chan struct{})
+			var slowValue []byte
+			var slowErr error
+			var slowLoads atomic.Int32
+			go func() {
+				defer close(slowDone)
+				slowValue, slowErr = dedupLoad(slowCtx, key, func() ([]byte, error) {
+					slowLoads.Add(1)
+					return nil, errors.New("redundant late I/O must not run")
+				})
+			}()
+			t.Cleanup(func() {
+				cancelSlow()
+				resumeSlow()
+				require.True(t, waitForDedupLoadCompletion(slowDone))
+			})
+			require.True(t, waitForDedupLoadCompletion(slowCtx.admitted))
+			cancelOwner()
+			require.True(t, waitForDedupLoadCompletion(ownerDone))
+			require.ErrorIs(t, ownerErr, context.Canceled)
+			require.True(t, waitForDedupLoadCompletion(slowCtx.paused))
+			releaseFast()
+			require.True(t, waitForDedupLoadCompletion(fastDone))
+			require.ErrorIs(t, fastErr, tc.loadErr)
+			require.Equal(t, int32(1), fastLoads.Load())
+			_, cached := metaCache.Get(context.Background(), key)
+			require.Equal(t, tc.capacity > int64(len(value)) && tc.loadErr == nil, cached)
+
+			// A terminal cohort must not retain a negative cache or let an old
+			// participant's cleanup delete an independent new owner's record.
+			laterCtx, cancelLater := context.WithCancel(context.Background())
+			t.Cleanup(cancelLater)
+			laterStarted, laterDone := make(chan struct{}), make(chan struct{})
+			if tc.newerOwner {
+				go func() {
+					defer close(laterDone)
+					_, _ = dedupLoad(laterCtx, key, func() ([]byte, error) {
+						close(laterStarted)
+						<-laterCtx.Done()
+						return nil, laterCtx.Err()
+					})
+				}()
+				t.Cleanup(func() { cancelLater(); require.True(t, waitForDedupLoadCompletion(laterDone)) })
+				require.True(t, waitForDedupLoadCompletion(laterStarted))
+			}
+			metaLoadMu.Lock()
+			laterCall := metaLoadCalls[key]
+			metaLoadMu.Unlock()
+			resumeSlow()
+			require.True(t, waitForDedupLoadCompletion(slowDone))
+			require.Zero(t, slowLoads.Load(), "a late waiter must consume the completed takeover, not perform I/O")
+			require.ErrorIs(t, slowErr, tc.loadErr)
+			if tc.loadErr == nil {
+				require.Equal(t, value, fastValue)
+				require.Equal(t, value, slowValue)
+			}
+			if tc.newerOwner {
+				metaLoadMu.Lock()
+				current := metaLoadCalls[key]
+				metaLoadMu.Unlock()
+				require.Same(t, laterCall, current)
+				cancelLater()
+				require.True(t, waitForDedupLoadCompletion(laterDone))
+			}
+			metaLoadMu.Lock()
+			_, pending := metaLoadCalls[key]
+			metaLoadMu.Unlock()
+			require.False(t, pending)
+		})
+	}
+}
+
+func TestDedupLoadRechecksCacheBeforeElection(t *testing.T) {
+	oldCache := metaCache
+	metaCache = newMetaCache(fscache.ConstCapacity(1024))
+	t.Cleanup(func() { metaCache = oldCache })
+	var key mataCacheKey
+	key[0] = 104
+	ctx := context.Background()
+	value := []byte("already cached metadata")
+	metaCache.Set(ctx, key, value, int64(len(value)))
+	loads := 0
+	got, err := dedupLoad(ctx, key, func() ([]byte, error) {
+		loads++
+		return nil, errors.New("redundant I/O after an earlier cache miss")
+	})
+	require.Zero(t, loads)
+	require.NoError(t, err)
+	require.Equal(t, value, got)
+}
+
 type canceledMetadataReadFS struct {
 	fileservice.FileService
 	owner   context.Context

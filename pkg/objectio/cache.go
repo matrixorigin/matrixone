@@ -85,11 +85,20 @@ var (
 	metaCachePressureDeadline      atomic.Int64
 )
 
-// metaLoadGroup deduplicates concurrent loads for the same cache key,
+// metaLoadCalls deduplicates concurrent loads for the same cache key,
 // preventing cache stampede when many goroutines miss the same entry simultaneously.
 // Uses mutex+map instead of sync.Map so entries are fully reclaimed after deletion.
 var metaLoadMu sync.Mutex
-var metaLoadCalls = make(map[mataCacheKey]*loadCall)
+var metaLoadCalls = make(map[mataCacheKey]*loadGroup)
+
+// A group keeps its latest generation reachable by all admitted callers, even
+// after completion removes it from metaLoadCalls. Both fields use metaLoadMu.
+// It holds no history chain: abandoned generations can be reclaimed as their
+// waiters advance. users bounds the lifetime of an abandoned map entry.
+type loadGroup struct {
+	current *loadCall
+	users   int
+}
 
 type loadCall struct {
 	done      chan struct{}
@@ -347,16 +356,41 @@ func LoadBFWithMeta(
 // share the result. This prevents cache stampede under high concurrency.
 //
 // Uses mutex+map (not sync.Map) so the map shrinks naturally when keys are
-// deleted. Waiters read through metaCache after the load finishes so they do
-// not keep per-call copies of large metadata buffers.
+// deleted. Waiters share the group's latest result even if cache admission fails.
+// A caller executes its I/O closure at most once; owner errors are not retried.
 func dedupLoad(ctx context.Context, key mataCacheKey, load func() ([]byte, error)) ([]byte, error) {
-	var call *loadCall
+	var group *loadGroup
+	var call, abandoned *loadCall
+	defer func() {
+		if group != nil {
+			metaLoadMu.Lock()
+			group.users--
+			if group.users == 0 && metaLoadCalls[key] == group {
+				delete(metaLoadCalls, key)
+			}
+			metaLoadMu.Unlock()
+		}
+	}()
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		metaLoadMu.Lock()
-		if pending, ok := metaLoadCalls[key]; ok {
+		// A previous miss may predate a completed load. Serialize this check
+		// with election so it cannot grant ownership after that publication.
+		if v, ok := metaCache.Get(ctx, key); ok {
+			metaLoadMu.Unlock()
+			return v, nil
+		}
+		if group == nil {
+			group = metaLoadCalls[key]
+			if group == nil {
+				group = &loadGroup{}
+				metaLoadCalls[key] = group
+			}
+			group.users++
+		}
+		if pending := group.current; pending != abandoned {
 			metaLoadMu.Unlock()
 			select {
 			case <-pending.done:
@@ -368,8 +402,9 @@ func dedupLoad(ctx context.Context, key mataCacheKey, load func() ([]byte, error
 				}
 				if pending.abandoned {
 					// Cancellation belongs to the loader, not to its live waiters.
-					// Elect one of them to load under its own context. A caller
-					// executes its I/O closure at most once; owner errors are not retried.
+					// Replace only the generation we observed as abandoned. A
+					// peer may already have completed its replacement uncached.
+					abandoned = pending
 					continue
 				}
 				if pending.err != nil {
@@ -384,7 +419,7 @@ func dedupLoad(ctx context.Context, key mataCacheKey, load func() ([]byte, error
 			}
 		}
 		call = &loadCall{done: make(chan struct{})}
-		metaLoadCalls[key] = call
+		group.current = call
 		metaLoadMu.Unlock()
 		break
 	}
@@ -392,7 +427,11 @@ func dedupLoad(ctx context.Context, key mataCacheKey, load func() ([]byte, error
 	defer func() {
 		metaLoadMu.Lock()
 		close(call.done)
-		delete(metaLoadCalls, key)
+		if !call.abandoned {
+			// New callers may start a separate load after a terminal result;
+			// existing callers retain this group's result, not the new one's.
+			delete(metaLoadCalls, key)
+		}
 		metaLoadMu.Unlock()
 	}()
 
