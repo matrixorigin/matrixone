@@ -16,6 +16,7 @@ package objectio
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -95,6 +96,7 @@ type loadCall struct {
 	val       []byte
 	err       error
 	completed bool
+	abandoned bool
 }
 
 func metaCacheSize() int64 {
@@ -348,28 +350,44 @@ func LoadBFWithMeta(
 // deleted. Waiters read through metaCache after the load finishes so they do
 // not keep per-call copies of large metadata buffers.
 func dedupLoad(ctx context.Context, key mataCacheKey, load func() ([]byte, error)) ([]byte, error) {
-	metaLoadMu.Lock()
-	if call, ok := metaLoadCalls[key]; ok {
-		metaLoadMu.Unlock()
-		select {
-		case <-call.done:
-			if v, ok := metaCache.Get(ctx, key); ok {
-				return v, nil
-			}
-			if call.err != nil {
-				return nil, call.err
-			}
-			if !call.completed {
-				return nil, moerr.NewInternalErrorNoCtx("dedup load did not complete")
-			}
-			return call.val, nil
-		case <-ctx.Done():
-			return nil, ctx.Err()
+	var call *loadCall
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
+		metaLoadMu.Lock()
+		if pending, ok := metaLoadCalls[key]; ok {
+			metaLoadMu.Unlock()
+			select {
+			case <-pending.done:
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+				if v, ok := metaCache.Get(ctx, key); ok {
+					return v, nil
+				}
+				if pending.abandoned {
+					// Cancellation belongs to the loader, not to its live waiters.
+					// Elect one of them to load under its own context. A caller
+					// executes its I/O closure at most once; owner errors are not retried.
+					continue
+				}
+				if pending.err != nil {
+					return nil, pending.err
+				}
+				if !pending.completed {
+					return nil, moerr.NewInternalErrorNoCtx("dedup load did not complete")
+				}
+				return pending.val, nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		call = &loadCall{done: make(chan struct{})}
+		metaLoadCalls[key] = call
+		metaLoadMu.Unlock()
+		break
 	}
-	call := &loadCall{done: make(chan struct{})}
-	metaLoadCalls[key] = call
-	metaLoadMu.Unlock()
 
 	defer func() {
 		metaLoadMu.Lock()
@@ -379,6 +397,7 @@ func dedupLoad(ctx context.Context, key mataCacheKey, load func() ([]byte, error
 	}()
 
 	call.val, call.err = load()
+	call.abandoned = isMetadataLoadCancellation(call.err, ctx.Err())
 	call.completed = true
 	if call.err == nil {
 		if target, ok := metaCachePressureTarget(metaCache.Capacity()); ok &&
@@ -389,6 +408,33 @@ func dedupLoad(ctx context.Context, key mataCacheKey, load func() ([]byte, error
 		metaCache.Set(ctx, key, call.val, int64(len(call.val)))
 	}
 	return call.val, call.err
+}
+
+// isMetadataLoadCancellation requires every error leaf to belong to the
+// loader's cancellation. A joined storage failure or independent deadline
+// must not be discarded when that loader also happens to be canceled.
+func isMetadataLoadCancellation(err, contextErr error) bool {
+	if err == nil || contextErr == nil {
+		return false
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		children := joined.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			if !isMetadataLoadCancellation(child, contextErr) {
+				return false
+			}
+		}
+		return true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		if child := wrapped.Unwrap(); child != nil {
+			return isMetadataLoadCancellation(child, contextErr)
+		}
+	}
+	return errors.Is(err, contextErr)
 }
 
 func FastLoadObjectMeta(
