@@ -54,8 +54,8 @@ ts timestamp
 );
 load data infile {'filepath'='stage://parquet_outfile_stage/typed.parquet', 'format'='parquet'} into table typed_copy;
 select id, cast(bits as unsigned), tags, vector_dims(v32), vector_dims(v64), year_val, unix_timestamp(ts) from typed_copy;
-➤ id[-5,64,0]  ¦  cast(bits as unsigned)[-5,64,0]  ¦  tags[12,3,0]  ¦  vector_dims(v32)[-5,64,0]  ¦  vector_dims(v64)[-5,64,0]  ¦  year_val[4,4,0]  ¦  unix_timestamp(ts)[-5,64,0]  𝄀
-18446744073709551615  ¦  170  ¦  a,b  ¦  2  ¦  2  ¦  2024  ¦  1704038400
+➤ id[-5,64,0]  ¦  cast(bits as unsigned)[-5,64,0]  ¦  tags[12,3,0]  ¦  vector_dims(v32)[-5,64,0]  ¦  vector_dims(v64)[-5,64,0]  ¦  year_val[91,4,0]  ¦  unix_timestamp(ts)[-5,64,0]  𝄀
+18446744073709551615  ¦  170  ¦  a,b  ¦  2  ¦  2  ¦  2024-01-01  ¦  1704038400
 set time_zone = @parquet_old_time_zone;
 select id as duplicate_name, id as duplicate_name from split_src
 into outfile 'stage://parquet_outfile_stage/duplicate.parquet' format 'parquet';
